@@ -37,6 +37,13 @@ function(atlas_add_library target)
         PUBLIC $<BUILD_INTERFACE:${CMAKE_SOURCE_DIR}/src/lib>
     )
 
+    # Treat warnings as errors in production code
+    if(MSVC)
+        target_compile_options(${target} PRIVATE /WX)
+    else()
+        target_compile_options(${target} PRIVATE -Werror)
+    endif()
+
     set_target_properties(${target} PROPERTIES
         FOLDER "Libraries"
     )
@@ -64,6 +71,13 @@ function(atlas_add_executable target)
 
     if(ARG_DEPS)
         target_link_libraries(${target} PRIVATE ${ARG_DEPS})
+    endif()
+
+    # Treat warnings as errors in production code
+    if(MSVC)
+        target_compile_options(${target} PRIVATE /WX)
+    else()
+        target_compile_options(${target} PRIVATE -Werror)
     endif()
 
     set_target_properties(${target} PROPERTIES
@@ -101,13 +115,6 @@ function(atlas_add_test target)
             GTest::gtest_main
             ${ARG_DEPS}
     )
-
-    # Warnings are informational in tests, not fatal
-    if(MSVC)
-        target_compile_options(${target} PRIVATE /WX-)
-    else()
-        target_compile_options(${target} PRIVATE -Wno-error)
-    endif()
 
     set_target_properties(${target} PROPERTIES
         FOLDER "Tests"

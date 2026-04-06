@@ -5,7 +5,6 @@
 if(MSVC)
     add_compile_options(
         /W4
-        /WX
         /permissive-
         /utf-8
         /Zc:__cplusplus      # Report correct __cplusplus value
@@ -24,7 +23,6 @@ else()
         -Wall
         -Wextra
         -Wpedantic
-        -Werror
         -Wno-unused-parameter
         -Wconversion
         -Wnon-virtual-dtor
