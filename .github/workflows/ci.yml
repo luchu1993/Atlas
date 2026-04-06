@@ -39,13 +39,13 @@ jobs:
         if: runner.os == 'Linux'
         run: sudo apt-get install -y ninja-build
 
-      - name: Install GCC 12 (Linux)
+      - name: Install GCC 13 (Linux)
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y gcc-12 g++-12
-          sudo update-alternatives --install /usr/bin/gcc gcc /usr/bin/gcc-12 100
-          sudo update-alternatives --install /usr/bin/g++ g++ /usr/bin/g++-12 100
+          sudo apt-get install -y gcc-13 g++-13
+          sudo update-alternatives --install /usr/bin/gcc gcc /usr/bin/gcc-13 100
+          sudo update-alternatives --install /usr/bin/g++ g++ /usr/bin/g++-13 100
 
       - name: Configure (Windows)
         if: runner.os == 'Windows'
