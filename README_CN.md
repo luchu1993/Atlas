@@ -1,6 +1,6 @@
 # Atlas Engine
 
-Atlas 是一个基于 **C++20** 的现代分布式 MMO 游戏服务器框架，采用 **Python 3** 作为脚本层，支持 **Windows / Linux** 跨平台运行。
+Atlas 是一个基于 **C++20** 与 **Python 3** 的现代分布式 MMO 游戏服务器框架，灵感来自 **BigWorld 引擎**架构，支持多进程分布式设计、负载均衡、空间分区与容错恢复，并提供 **Windows / Linux** 跨平台运行支持。
 
 **[English](README.md)**
 

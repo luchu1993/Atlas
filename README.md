@@ -1,6 +1,6 @@
 # Atlas Engine
 
-A modern distributed MMO game server framework built with **C++20** and **Python 3** scripting, supporting **Windows** and **Linux** cross-platform deployment.
+A modern distributed MMO game server framework written in **C++20** with **Python 3** scripting, inspired by the **BigWorld Engine** architecture. Features multi-process distributed design with load balancing, spatial partitioning, and fault tolerance, supporting **Windows** and **Linux** cross-platform deployment.
 
 **[中文文档](README_CN.md)**
 
