@@ -120,3 +120,27 @@ TEST_F(PyConvertTest, IntToDoubleConversion)
     ASSERT_TRUE(cpp_double.has_value());
     EXPECT_NEAR(*cpp_double, 42.0, 1e-10);
 }
+
+// ============================================================================
+// Review fix #4: PyLong_AsDouble with very large integer returns error
+// ============================================================================
+
+TEST_F(PyConvertTest, VeryLargeIntToDoubleReturnsValue)
+{
+    // A large but representable integer
+    auto py = to_python(int64_t{1LL << 53});
+    auto cpp = from_python<double>(py.get());
+    ASSERT_TRUE(cpp.has_value());
+    EXPECT_NEAR(*cpp, static_cast<double>(1LL << 53), 1.0);
+}
+
+TEST_F(PyConvertTest, NegativeOneIntToDoubleWorks)
+{
+    // Regression: PyLong_AsDouble returns -1.0 for the integer -1.
+    // Old code only checked error when result == -1.0, missing other errors.
+    // New code checks PyErr_Occurred() unconditionally.
+    auto py = to_python(int32_t{-1});
+    auto cpp = from_python<double>(py.get());
+    ASSERT_TRUE(cpp.has_value());
+    EXPECT_NEAR(*cpp, -1.0, 1e-10);
+}

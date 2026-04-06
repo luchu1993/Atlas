@@ -132,3 +132,39 @@ TEST_F(PyObjectTest, ReprAndStr)
     EXPECT_EQ(obj.repr(), "42");
     EXPECT_EQ(obj.str(), "42");
 }
+
+// ============================================================================
+// Review fix #6: get_attr on nonexistent attribute returns null and clears
+// the Python exception (no lingering AttributeError)
+// ============================================================================
+
+TEST_F(PyObjectTest, GetAttrNonexistentReturnsNullAndClearsException)
+{
+    auto sys = PyInterpreter::import("sys");
+    ASSERT_TRUE(sys.has_value());
+
+    auto attr = sys->get_attr("nonexistent_attr_xyz");
+    EXPECT_FALSE(static_cast<bool>(attr));
+    EXPECT_EQ(attr.get(), nullptr);
+
+    // Crucially: no Python exception should be lingering
+    EXPECT_FALSE(PyErr_Occurred()) << "get_attr should clear AttributeError";
+}
+
+// ============================================================================
+// Review fix #6: set_attr failure returns Error (not crash)
+// ============================================================================
+
+TEST_F(PyObjectTest, SetAttrOnImmutableFails)
+{
+    // Try to set an attribute on an integer (immutable, should fail)
+    PyObjectPtr num(PyLong_FromLong(42));
+    PyObjectPtr value(PyLong_FromLong(99));
+
+    auto result = num.set_attr("x", value);
+    EXPECT_FALSE(result.has_value());
+    EXPECT_EQ(result.error().code(), ErrorCode::ScriptError);
+
+    // No lingering Python exception
+    EXPECT_FALSE(PyErr_Occurred());
+}
