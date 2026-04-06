@@ -7,6 +7,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstring>
+#include <format>
 
 namespace atlas
 {
@@ -50,8 +51,15 @@ auto ReliableUdpChannel::send_reliable() -> Result<void>
         return Error(ErrorCode::WouldBlock, "Send window full");
     }
 
-    auto seq = next_send_seq_++;
     auto payload = bundle_.finalize();
+
+    // Auto-fragment if payload exceeds max UDP payload
+    if (payload.size() > rudp::kMaxUdpPayload)
+    {
+        return send_fragmented(payload);
+    }
+
+    auto seq = next_send_seq_++;
 
     uint8_t flags = rudp::kFlagReliable | rudp::kFlagHasSeq;
     if (remote_seq_ > 0)
@@ -145,7 +153,8 @@ auto ReliableUdpChannel::do_send(std::span<const std::byte> data) -> Result<size
 // ============================================================================
 
 auto ReliableUdpChannel::build_packet(uint8_t flags, SeqNum seq,
-                                      std::span<const std::byte> payload)
+                                      std::span<const std::byte> payload,
+                                      const FragmentHeader* frag)
     -> std::vector<std::byte>
 {
     BinaryWriter header;
@@ -160,6 +169,13 @@ auto ReliableUdpChannel::build_packet(uint8_t flags, SeqNum seq,
     {
         header.write<uint32_t>(remote_seq_);
         header.write<uint32_t>(recv_ack_bits_);
+    }
+
+    if ((flags & rudp::kFlagFragment) && frag)
+    {
+        header.write<uint16_t>(frag->fragment_id);
+        header.write<uint8_t>(frag->fragment_index);
+        header.write<uint8_t>(frag->fragment_count);
     }
 
     auto hdr = header.data();
@@ -212,7 +228,22 @@ void ReliableUdpChannel::on_datagram_received(std::span<const std::byte> data)
         process_ack(*ack_num, *ack_bits);
     }
 
-    // Remaining data is the bundle payload
+    // Read fragment header if present
+    FragmentHeader frag_hdr{};
+    bool is_fragment = (flags & rudp::kFlagFragment) != 0;
+    if (is_fragment)
+    {
+        auto fid = reader.read<uint16_t>();
+        auto fidx = reader.read<uint8_t>();
+        auto fcnt = reader.read<uint8_t>();
+        if (!fid || !fidx || !fcnt)
+        {
+            return;
+        }
+        frag_hdr = {*fid, *fidx, *fcnt};
+    }
+
+    // Remaining data is the payload
     auto remaining = reader.remaining();
     if (remaining == 0)
     {
@@ -238,8 +269,16 @@ void ReliableUdpChannel::on_datagram_received(std::span<const std::byte> data)
     }
 
     bytes_received_ += remaining;
-    on_data_received(*payload);
-    dispatch_messages(*payload);
+
+    if (is_fragment)
+    {
+        on_fragment_received(frag_hdr, *payload);
+    }
+    else
+    {
+        on_data_received(*payload);
+        dispatch_messages(*payload);
+    }
 }
 
 // ============================================================================
@@ -413,12 +452,151 @@ auto ReliableUdpChannel::is_duplicate(SeqNum seq) const -> bool
 }
 
 // ============================================================================
+// send_fragmented — split payload into MTU-sized reliable fragments
+// ============================================================================
+
+auto ReliableUdpChannel::send_fragmented(std::span<const std::byte> payload) -> Result<void>
+{
+    auto frag_payload_size = rudp::kMaxUdpPayload;
+    auto total = (payload.size() + frag_payload_size - 1) / frag_payload_size;
+
+    if (total > rudp::kMaxFragments)
+    {
+        return Error(ErrorCode::MessageTooLarge,
+            std::format("Message too large for fragmentation: {} bytes ({} fragments, max {})",
+                payload.size(), total, rudp::kMaxFragments));
+    }
+
+    if (unacked_.size() + total > send_window_)
+    {
+        return Error(ErrorCode::WouldBlock, "Send window too small for fragmented message");
+    }
+
+    auto frag_id = next_fragment_id_++;
+    auto frag_count = static_cast<uint8_t>(total);
+
+    for (uint8_t i = 0; i < frag_count; ++i)
+    {
+        auto offset = static_cast<std::size_t>(i) * frag_payload_size;
+        auto chunk_size = std::min(frag_payload_size, payload.size() - offset);
+        auto chunk = payload.subspan(offset, chunk_size);
+
+        auto seq = next_send_seq_++;
+
+        uint8_t flags = rudp::kFlagReliable | rudp::kFlagHasSeq | rudp::kFlagFragment;
+        if (remote_seq_ > 0)
+        {
+            flags |= rudp::kFlagHasAck;
+        }
+
+        FragmentHeader fhdr{frag_id, i, frag_count};
+        auto packet = build_packet(flags, seq, chunk, &fhdr);
+
+        unacked_[seq] = UnackedPacket{packet, Clock::now(), 1};
+
+        auto result = shared_socket_.send_to(packet, remote_);
+        if (!result)
+        {
+            return result.error();
+        }
+        bytes_sent_ += *result;
+    }
+
+    start_resend_timer();
+    return Result<void>{};
+}
+
+// ============================================================================
+// on_fragment_received — buffer and reassemble fragments
+// ============================================================================
+
+void ReliableUdpChannel::on_fragment_received(const FragmentHeader& hdr,
+                                               std::span<const std::byte> payload)
+{
+    if (hdr.fragment_count == 0 || hdr.fragment_index >= hdr.fragment_count)
+    {
+        ATLAS_LOG_WARNING("Invalid fragment header from {}", remote_.to_string());
+        return;
+    }
+
+    auto& group = pending_fragments_[hdr.fragment_id];
+
+    // Initialize group on first fragment
+    if (group.expected_count == 0)
+    {
+        group.expected_count = hdr.fragment_count;
+        group.fragments.resize(hdr.fragment_count);
+        group.first_received = Clock::now();
+
+        // Memory protection: limit concurrent fragment groups
+        if (pending_fragments_.size() > kMaxPendingFragmentGroups)
+        {
+            cleanup_stale_fragments();
+        }
+    }
+    else if (group.expected_count != hdr.fragment_count)
+    {
+        ATLAS_LOG_WARNING("Fragment count mismatch for id={}", hdr.fragment_id);
+        return;
+    }
+
+    // Store fragment (skip if already received — duplicate)
+    if (group.fragments[hdr.fragment_index].empty())
+    {
+        group.fragments[hdr.fragment_index].assign(payload.begin(), payload.end());
+        group.received_count++;
+    }
+
+    // Check if all fragments received
+    if (group.received_count == group.expected_count)
+    {
+        // Reassemble
+        std::vector<std::byte> full_payload;
+        std::size_t total_size = 0;
+        for (const auto& frag : group.fragments)
+        {
+            total_size += frag.size();
+        }
+        full_payload.reserve(total_size);
+        for (const auto& frag : group.fragments)
+        {
+            full_payload.insert(full_payload.end(), frag.begin(), frag.end());
+        }
+
+        pending_fragments_.erase(hdr.fragment_id);
+
+        // Dispatch the reassembled message
+        on_data_received(full_payload);
+        dispatch_messages(full_payload);
+    }
+}
+
+// ============================================================================
+// cleanup_stale_fragments — remove incomplete groups older than timeout
+// ============================================================================
+
+void ReliableUdpChannel::cleanup_stale_fragments()
+{
+    auto now = Clock::now();
+    std::erase_if(pending_fragments_, [now](const auto& pair)
+    {
+        return (now - pair.second.first_received) >= rudp::kFragmentTimeout;
+    });
+}
+
+// ============================================================================
 // check_resends
 // ============================================================================
 
 void ReliableUdpChannel::check_resends()
 {
     auto now = Clock::now();
+
+    // Periodically clean up stale fragment groups
+    if (!pending_fragments_.empty())
+    {
+        cleanup_stale_fragments();
+    }
 
     for (auto& [seq, pkt] : unacked_)
     {

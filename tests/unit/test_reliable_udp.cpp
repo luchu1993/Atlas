@@ -301,3 +301,140 @@ TEST_F(ReliableUdpTest, FastResendConfiguration)
     channel_a.set_nodelay(true);
     EXPECT_TRUE(channel_a.nodelay());
 }
+
+// ============================================================================
+// Fragmentation tests
+// ============================================================================
+
+// A large message that exceeds MTU
+struct LargeMsg
+{
+    std::vector<uint8_t> data;
+
+    static auto descriptor() -> const MessageDesc&
+    {
+        static const MessageDesc desc{301, "LargeMsg", MessageLengthStyle::Variable, -1};
+        return desc;
+    }
+
+    void serialize(BinaryWriter& w) const
+    {
+        w.write<uint32_t>(static_cast<uint32_t>(data.size()));
+        for (auto b : data)
+        {
+            w.write<uint8_t>(b);
+        }
+    }
+
+    static auto deserialize(BinaryReader& r) -> Result<LargeMsg>
+    {
+        auto sz = r.read<uint32_t>();
+        if (!sz) return sz.error();
+        LargeMsg msg;
+        msg.data.resize(*sz);
+        for (uint32_t i = 0; i < *sz; ++i)
+        {
+            auto b = r.read<uint8_t>();
+            if (!b) return b.error();
+            msg.data[i] = *b;
+        }
+        return msg;
+    }
+};
+
+TEST_F(ReliableUdpTest, FragmentedSendAndReceive)
+{
+    auto sock_a = Socket::create_udp();
+    ASSERT_TRUE(sock_a.has_value());
+    ASSERT_TRUE(sock_a->bind(Address("127.0.0.1", 0)).has_value());
+    auto addr_a = sock_a->local_address().value();
+
+    auto sock_b = Socket::create_udp();
+    ASSERT_TRUE(sock_b.has_value());
+    ASSERT_TRUE(sock_b->bind(Address("127.0.0.1", 0)).has_value());
+    auto addr_b = sock_b->local_address().value();
+
+    // Create a payload larger than MTU (~1455 bytes max payload)
+    LargeMsg orig;
+    orig.data.resize(5000);
+    for (uint32_t i = 0; i < 5000; ++i)
+    {
+        orig.data[i] = static_cast<uint8_t>(i % 256);
+    }
+
+    bool received = false;
+    std::vector<uint8_t> received_data;
+    table_.register_typed_handler<LargeMsg>(
+        [&](const Address&, Channel*, const LargeMsg& msg)
+        {
+            received = true;
+            received_data = msg.data;
+        });
+
+    ReliableUdpChannel channel_a(dispatcher_, table_, *sock_a, addr_b);
+    channel_a.activate();
+
+    ReliableUdpChannel channel_b(dispatcher_, table_, *sock_b, addr_a);
+    channel_b.activate();
+
+    // Send — should auto-fragment since 5000 > kMaxUdpPayload
+    channel_a.bundle().add_message(orig);
+    auto send_result = channel_a.send_reliable();
+    ASSERT_TRUE(send_result.has_value()) << send_result.error().message();
+
+    // Should have sent multiple packets (fragments)
+    EXPECT_GT(channel_a.unacked_count(), 1u);
+
+    // Receive all fragments
+    std::this_thread::sleep_for(std::chrono::milliseconds(50));
+    pump_datagrams(*sock_b, channel_b);
+
+    // All fragments should have been reassembled and dispatched
+    EXPECT_TRUE(received);
+    ASSERT_EQ(received_data.size(), 5000u);
+    for (uint32_t i = 0; i < 5000; ++i)
+    {
+        EXPECT_EQ(received_data[i], static_cast<uint8_t>(i % 256))
+            << "Mismatch at byte " << i;
+    }
+}
+
+TEST_F(ReliableUdpTest, SmallMessageNotFragmented)
+{
+    auto sock_a = Socket::create_udp();
+    ASSERT_TRUE(sock_a.has_value());
+    ASSERT_TRUE(sock_a->bind(Address("127.0.0.1", 0)).has_value());
+    auto addr_b = Address("127.0.0.1", 9999);
+
+    ReliableUdpChannel channel_a(dispatcher_, table_, *sock_a, addr_b);
+    channel_a.activate();
+
+    // Send a small message — should NOT fragment
+    channel_a.bundle().add_message(RudpTestMsg{42});
+    auto result = channel_a.send_reliable();
+    ASSERT_TRUE(result.has_value());
+
+    // Only 1 packet (not fragmented)
+    EXPECT_EQ(channel_a.unacked_count(), 1u);
+}
+
+TEST_F(ReliableUdpTest, MessageTooLargeReturnsError)
+{
+    auto sock_a = Socket::create_udp();
+    ASSERT_TRUE(sock_a.has_value());
+    ASSERT_TRUE(sock_a->bind(Address("127.0.0.1", 0)).has_value());
+    auto addr_b = Address("127.0.0.1", 9999);
+
+    ReliableUdpChannel channel_a(dispatcher_, table_, *sock_a, addr_b);
+    channel_a.activate();
+
+    // Create a message so large it exceeds 255 fragments
+    // 255 * ~1455 ≈ 371KB. Need > that.
+    LargeMsg huge;
+    huge.data.resize(400'000);  // ~400KB > 255 * 1455
+
+    channel_a.bundle().add_message(huge);
+    auto result = channel_a.send_reliable();
+    EXPECT_FALSE(result.has_value());
+    EXPECT_EQ(result.error().code(), ErrorCode::MessageTooLarge);
+}

@@ -8,6 +8,7 @@
 
 #include <cstdint>
 #include <map>
+#include <unordered_map>
 #include <vector>
 
 namespace atlas
@@ -16,10 +17,17 @@ namespace atlas
 // Reliable UDP wire format flags
 namespace rudp
 {
-    inline constexpr uint8_t kFlagReliable = 0x01;
-    inline constexpr uint8_t kFlagHasSeq   = 0x02;
-    inline constexpr uint8_t kFlagHasAck   = 0x04;
-    inline constexpr std::size_t kMaxUdpPayload = 1472 - 13;  // MTU - max header overhead
+    inline constexpr uint8_t kFlagReliable  = 0x01;
+    inline constexpr uint8_t kFlagHasSeq    = 0x02;
+    inline constexpr uint8_t kFlagHasAck    = 0x04;
+    inline constexpr uint8_t kFlagFragment  = 0x08;  // has fragment header (4 bytes)
+
+    // Header overhead: flags(1) + seq(4) + ack(4) + ack_bits(4) + frag(4) = 17
+    inline constexpr std::size_t kMaxHeaderSize = 17;
+    inline constexpr std::size_t kMtu = 1472;
+    inline constexpr std::size_t kMaxUdpPayload = kMtu - kMaxHeaderSize;
+    inline constexpr std::size_t kMaxFragments = 255;
+    inline constexpr Duration kFragmentTimeout = std::chrono::seconds(30);
 }
 
 class ReliableUdpChannel : public Channel
@@ -66,9 +74,26 @@ private:
         uint32_t skip_count{0};   // fast retransmit: incremented when later packets are ACK'd
     };
 
+    // Fragment header (4 bytes, present when kFlagFragment is set)
+    struct FragmentHeader
+    {
+        uint16_t fragment_id;     // identifies the fragmented message
+        uint8_t  fragment_index;  // 0-based position
+        uint8_t  fragment_count;  // total fragments
+    };
+
+    // Fragment reassembly
+    struct FragmentGroup
+    {
+        uint8_t expected_count{0};
+        uint8_t received_count{0};
+        std::vector<std::vector<std::byte>> fragments;  // indexed by fragment_index
+        TimePoint first_received;
+    };
+
     // Build packet header and prepend to payload
-    auto build_packet(uint8_t flags, SeqNum seq, std::span<const std::byte> payload)
-        -> std::vector<std::byte>;
+    auto build_packet(uint8_t flags, SeqNum seq, std::span<const std::byte> payload,
+                      const FragmentHeader* frag = nullptr) -> std::vector<std::byte>;
 
     // ACK processing
     void process_ack(SeqNum ack_num, uint32_t ack_bits);
@@ -82,6 +107,11 @@ private:
     // Receive tracking
     void record_received_seq(SeqNum seq);
     auto is_duplicate(SeqNum seq) const -> bool;
+
+    // Fragmentation
+    auto send_fragmented(std::span<const std::byte> payload) -> Result<void>;
+    void on_fragment_received(const FragmentHeader& hdr, std::span<const std::byte> payload);
+    void cleanup_stale_fragments();
 
     Socket& shared_socket_;
 
@@ -102,6 +132,11 @@ private:
     // KCP-inspired optimizations
     bool nodelay_{false};                 // true: 1.5x backoff, 30ms min RTO
     uint32_t fast_resend_thresh_{2};      // fast retransmit after N skip-ACKs (0=disabled)
+
+    // Fragmentation state
+    uint16_t next_fragment_id_{1};
+    std::unordered_map<uint16_t, FragmentGroup> pending_fragments_;
+    static constexpr std::size_t kMaxPendingFragmentGroups = 64;
 
     // Resend timer
     TimerHandle resend_timer_;
