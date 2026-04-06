@@ -258,24 +258,33 @@ void ReliableUdpChannel::on_datagram_received(std::span<const std::byte> data)
 
     if (flags & rudp::kFlagHasSeq)
     {
-        // Reliable packet -- check duplicate
+        // Reliable packet -- check duplicate and receive window
         if (is_duplicate(seq))
         {
             ATLAS_LOG_DEBUG("Duplicate packet seq={} from {}",
                 seq, remote_.to_string());
             return;
         }
+
+        // Receive window check: drop if too far ahead of delivery frontier
+        if (seq_greater_than(seq, rcv_nxt_ + rcv_wnd_))
+        {
+            ATLAS_LOG_DEBUG("Packet seq={} outside receive window (nxt={}, wnd={})",
+                seq, rcv_nxt_, rcv_wnd_);
+            return;
+        }
+
         record_received_seq(seq);
-    }
+        bytes_received_ += remaining;
 
-    bytes_received_ += remaining;
-
-    if (is_fragment)
-    {
-        on_fragment_received(frag_hdr, *payload);
+        // Enqueue for ordered delivery instead of immediate dispatch
+        enqueue_for_delivery(seq, *payload, is_fragment, frag_hdr);
+        flush_receive_buffer();
     }
     else
     {
+        // Unreliable packet — dispatch immediately (no ordering guarantee)
+        bytes_received_ += remaining;
         on_data_received(*payload);
         dispatch_messages(*payload);
     }
@@ -449,6 +458,67 @@ auto ReliableUdpChannel::is_duplicate(SeqNum seq) const -> bool
         return true;  // exact duplicate
     }
     return false;  // new packet
+}
+
+// ============================================================================
+// enqueue_for_delivery — store in receive buffer for ordered delivery
+// ============================================================================
+
+void ReliableUdpChannel::enqueue_for_delivery(SeqNum seq,
+                                               std::span<const std::byte> payload,
+                                               bool is_fragment,
+                                               const FragmentHeader& frag_hdr)
+{
+    // Already delivered (seq < rcv_nxt_) — should have been caught by is_duplicate
+    if (seq_less_than(seq, rcv_nxt_))
+    {
+        return;
+    }
+
+    // Already in buffer
+    if (rcv_buf_.count(seq) != 0)
+    {
+        return;
+    }
+
+    rcv_buf_[seq] = RecvEntry{
+        std::vector<std::byte>(payload.begin(), payload.end()),
+        is_fragment,
+        frag_hdr
+    };
+}
+
+// ============================================================================
+// flush_receive_buffer — deliver consecutive packets starting from rcv_nxt_
+// ============================================================================
+
+void ReliableUdpChannel::flush_receive_buffer()
+{
+    while (true)
+    {
+        auto it = rcv_buf_.find(rcv_nxt_);
+        if (it == rcv_buf_.end())
+        {
+            break;  // gap — waiting for rcv_nxt_ to arrive
+        }
+
+        auto entry = std::move(it->second);
+        rcv_buf_.erase(it);
+        rcv_nxt_++;
+
+        if (entry.is_fragment)
+        {
+            // Buffer the fragment for reassembly
+            on_fragment_received(entry.frag_hdr,
+                std::span<const std::byte>(entry.payload));
+        }
+        else
+        {
+            // Non-fragment: dispatch immediately
+            on_data_received(entry.payload);
+            dispatch_messages(entry.payload);
+        }
+    }
 }
 
 // ============================================================================

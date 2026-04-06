@@ -399,6 +399,222 @@ TEST_F(ReliableUdpTest, FragmentedSendAndReceive)
     }
 }
 
+// ============================================================================
+// Ordered delivery tests
+// ============================================================================
+
+TEST_F(ReliableUdpTest, OrderedDelivery)
+{
+    // Verify messages are dispatched in order even if received out-of-order.
+    // We simulate this by having channel A send 3 messages, then feeding them
+    // to channel B in reversed order. B should still dispatch in seq order.
+
+    auto sock_a = Socket::create_udp();
+    ASSERT_TRUE(sock_a.has_value());
+    ASSERT_TRUE(sock_a->bind(Address("127.0.0.1", 0)).has_value());
+    auto addr_a = sock_a->local_address().value();
+
+    auto sock_b = Socket::create_udp();
+    ASSERT_TRUE(sock_b.has_value());
+    ASSERT_TRUE(sock_b->bind(Address("127.0.0.1", 0)).has_value());
+    auto addr_b = sock_b->local_address().value();
+
+    std::vector<uint32_t> received_order;
+    table_.register_typed_handler<RudpTestMsg>(
+        [&](const Address&, Channel*, const RudpTestMsg& msg)
+        {
+            received_order.push_back(msg.value);
+        });
+
+    ReliableUdpChannel channel_a(dispatcher_, table_, *sock_a, addr_b);
+    channel_a.activate();
+
+    // Send 3 messages (seq 1, 2, 3)
+    for (uint32_t i = 1; i <= 3; ++i)
+    {
+        channel_a.bundle().add_message(RudpTestMsg{i});
+        (void)channel_a.send_reliable();
+    }
+
+    // Collect the 3 datagrams from sock_b
+    std::this_thread::sleep_for(std::chrono::milliseconds(50));
+
+    std::vector<std::vector<std::byte>> datagrams;
+    std::array<std::byte, 2048> buf{};
+    while (true)
+    {
+        auto result = sock_b->recv_from(buf);
+        if (!result || result->first == 0) break;
+        datagrams.emplace_back(buf.data(), buf.data() + result->first);
+    }
+    ASSERT_EQ(datagrams.size(), 3u);
+
+    // Feed to channel B in REVERSE order (seq 3, 2, 1)
+    ReliableUdpChannel channel_b(dispatcher_, table_, *sock_b, addr_a);
+    channel_b.activate();
+
+    channel_b.on_datagram_received(datagrams[2]);  // seq 3
+    channel_b.on_datagram_received(datagrams[1]);  // seq 2
+    channel_b.on_datagram_received(datagrams[0]);  // seq 1
+
+    // Despite receiving out of order, dispatch should be in order: 1, 2, 3
+    ASSERT_EQ(received_order.size(), 3u);
+    EXPECT_EQ(received_order[0], 1u);
+    EXPECT_EQ(received_order[1], 2u);
+    EXPECT_EQ(received_order[2], 3u);
+}
+
+TEST_F(ReliableUdpTest, OrderedDeliveryWaitsForGap)
+{
+    // Send seq 1, 2, 3. Feed seq 1 and 3 (skip 2).
+    // Only seq 1 should be dispatched. Then feed seq 2 — all three dispatch.
+
+    auto sock_a = Socket::create_udp();
+    ASSERT_TRUE(sock_a.has_value());
+    ASSERT_TRUE(sock_a->bind(Address("127.0.0.1", 0)).has_value());
+    auto addr_a = sock_a->local_address().value();
+
+    auto sock_b = Socket::create_udp();
+    ASSERT_TRUE(sock_b.has_value());
+    ASSERT_TRUE(sock_b->bind(Address("127.0.0.1", 0)).has_value());
+    auto addr_b = sock_b->local_address().value();
+
+    std::vector<uint32_t> received_order;
+    table_.register_typed_handler<RudpTestMsg>(
+        [&](const Address&, Channel*, const RudpTestMsg& msg)
+        {
+            received_order.push_back(msg.value);
+        });
+
+    ReliableUdpChannel channel_a(dispatcher_, table_, *sock_a, addr_b);
+    channel_a.activate();
+
+    for (uint32_t i = 1; i <= 3; ++i)
+    {
+        channel_a.bundle().add_message(RudpTestMsg{i * 10});
+        (void)channel_a.send_reliable();
+    }
+
+    std::this_thread::sleep_for(std::chrono::milliseconds(50));
+
+    std::vector<std::vector<std::byte>> datagrams;
+    std::array<std::byte, 2048> buf{};
+    while (true)
+    {
+        auto result = sock_b->recv_from(buf);
+        if (!result || result->first == 0) break;
+        datagrams.emplace_back(buf.data(), buf.data() + result->first);
+    }
+    ASSERT_EQ(datagrams.size(), 3u);
+
+    ReliableUdpChannel channel_b(dispatcher_, table_, *sock_b, addr_a);
+    channel_b.activate();
+
+    // Feed seq 1 and 3, skip 2
+    channel_b.on_datagram_received(datagrams[0]);  // seq 1 → delivered
+    channel_b.on_datagram_received(datagrams[2]);  // seq 3 → buffered (waiting for 2)
+
+    ASSERT_EQ(received_order.size(), 1u);
+    EXPECT_EQ(received_order[0], 10u);
+    EXPECT_EQ(channel_b.recv_buf_count(), 1u);  // seq 3 in buffer
+
+    // Now feed seq 2 — should flush both 2 and 3
+    channel_b.on_datagram_received(datagrams[1]);  // seq 2
+
+    ASSERT_EQ(received_order.size(), 3u);
+    EXPECT_EQ(received_order[1], 20u);
+    EXPECT_EQ(received_order[2], 30u);
+    EXPECT_EQ(channel_b.recv_buf_count(), 0u);
+}
+
+TEST_F(ReliableUdpTest, RecvWindowDropsExcessivePackets)
+{
+    auto sock_a = Socket::create_udp();
+    ASSERT_TRUE(sock_a.has_value());
+    ASSERT_TRUE(sock_a->bind(Address("127.0.0.1", 0)).has_value());
+    auto addr_a = sock_a->local_address().value();
+
+    auto sock_b = Socket::create_udp();
+    ASSERT_TRUE(sock_b.has_value());
+    ASSERT_TRUE(sock_b->bind(Address("127.0.0.1", 0)).has_value());
+    auto addr_b = sock_b->local_address().value();
+
+    table_.register_typed_handler<RudpTestMsg>(
+        [](const Address&, Channel*, const RudpTestMsg&) {});
+
+    ReliableUdpChannel channel_a(dispatcher_, table_, *sock_a, addr_b);
+    channel_a.activate();
+
+    ReliableUdpChannel channel_b(dispatcher_, table_, *sock_b, addr_a);
+    channel_b.set_recv_window(4);  // tiny window
+    channel_b.activate();
+
+    // Send 10 messages
+    for (uint32_t i = 0; i < 10; ++i)
+    {
+        channel_a.bundle().add_message(RudpTestMsg{i});
+        (void)channel_a.send_reliable();
+    }
+
+    std::this_thread::sleep_for(std::chrono::milliseconds(50));
+
+    // Collect all datagrams
+    std::vector<std::vector<std::byte>> datagrams;
+    std::array<std::byte, 2048> buf{};
+    while (true)
+    {
+        auto result = sock_b->recv_from(buf);
+        if (!result || result->first == 0) break;
+        datagrams.emplace_back(buf.data(), buf.data() + result->first);
+    }
+    ASSERT_EQ(datagrams.size(), 10u);
+
+    // Feed seq 1 (delivered) then skip to seq 7+ (should be dropped by window)
+    // rcv_nxt=1, wnd=4, so acceptable: seq 1..5, dropped: seq 6+
+    channel_b.on_datagram_received(datagrams[0]);  // seq 1 → delivered, rcv_nxt=2
+    channel_b.on_datagram_received(datagrams[5]);  // seq 6 → accept (nxt=2, wnd=4, limit=6)
+    channel_b.on_datagram_received(datagrams[8]);  // seq 9 → drop (> 2+4=6)
+
+    // Only seq 1 delivered, seq 6 buffered, seq 9 dropped
+    EXPECT_EQ(channel_b.recv_next_seq(), 2u);
+    EXPECT_LE(channel_b.recv_buf_count(), 1u);
+}
+
+TEST_F(ReliableUdpTest, UnreliableBypassesOrdering)
+{
+    auto sock_a = Socket::create_udp();
+    ASSERT_TRUE(sock_a.has_value());
+    ASSERT_TRUE(sock_a->bind(Address("127.0.0.1", 0)).has_value());
+    auto addr_a = sock_a->local_address().value();
+
+    auto sock_b = Socket::create_udp();
+    ASSERT_TRUE(sock_b.has_value());
+    ASSERT_TRUE(sock_b->bind(Address("127.0.0.1", 0)).has_value());
+    auto addr_b = sock_b->local_address().value();
+
+    bool received = false;
+    table_.register_typed_handler<RudpTestMsg>(
+        [&](const Address&, Channel*, const RudpTestMsg&)
+        {
+            received = true;
+        });
+
+    ReliableUdpChannel channel_a(dispatcher_, table_, *sock_a, addr_b);
+    channel_a.activate();
+    ReliableUdpChannel channel_b(dispatcher_, table_, *sock_b, addr_a);
+    channel_b.activate();
+
+    // Send unreliable — should be dispatched immediately regardless of rcv_nxt
+    channel_a.bundle().add_message(RudpTestMsg{99});
+    (void)channel_a.send_unreliable();
+
+    std::this_thread::sleep_for(std::chrono::milliseconds(50));
+    pump_datagrams(*sock_b, channel_b);
+
+    EXPECT_TRUE(received);
+    EXPECT_EQ(channel_b.recv_next_seq(), 1u);  // rcv_nxt unchanged (no seq tracking)
+}
+
 TEST_F(ReliableUdpTest, SmallMessageNotFragmented)
 {
     auto sock_a = Socket::create_udp();

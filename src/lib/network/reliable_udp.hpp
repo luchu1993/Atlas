@@ -55,11 +55,20 @@ public:
     // Fast retransmit threshold: retransmit after this many skip-ACKs (0 = disabled)
     void set_fast_resend_thresh(uint32_t thresh) { fast_resend_thresh_ = thresh; }
 
+    // Receive window size (max out-of-order buffered packets)
+    void set_recv_window(uint32_t wnd) { rcv_wnd_ = wnd; }
+    [[nodiscard]] auto recv_window() const -> uint32_t { return rcv_wnd_; }
+
     // Stats
     [[nodiscard]] auto rtt() const -> Duration { return rtt_; }
     [[nodiscard]] auto unacked_count() const -> uint32_t
     {
         return static_cast<uint32_t>(unacked_.size());
+    }
+    [[nodiscard]] auto recv_next_seq() const -> SeqNum { return rcv_nxt_; }
+    [[nodiscard]] auto recv_buf_count() const -> uint32_t
+    {
+        return static_cast<uint32_t>(rcv_buf_.size());
     }
 
 protected:
@@ -113,6 +122,11 @@ private:
     void on_fragment_received(const FragmentHeader& hdr, std::span<const std::byte> payload);
     void cleanup_stale_fragments();
 
+    // Ordered delivery
+    void enqueue_for_delivery(SeqNum seq, std::span<const std::byte> payload,
+                              bool is_fragment, const FragmentHeader& frag_hdr);
+    void flush_receive_buffer();
+
     Socket& shared_socket_;
 
     // Sending state
@@ -120,9 +134,20 @@ private:
     std::map<SeqNum, UnackedPacket> unacked_;
     uint32_t send_window_{256};
 
-    // Receiving state
+    // Receiving state — ACK tracking (tracks what we received, for telling sender)
     SeqNum remote_seq_{0};       // highest received seq from peer
     uint32_t recv_ack_bits_{0};  // bitmask of received before remote_seq_
+
+    // Receiving state — ordered delivery (KCP-style rcv_buf → rcv_queue)
+    struct RecvEntry
+    {
+        std::vector<std::byte> payload;
+        bool is_fragment{false};
+        FragmentHeader frag_hdr{};
+    };
+    std::map<SeqNum, RecvEntry> rcv_buf_;  // out-of-order receive buffer
+    SeqNum rcv_nxt_{1};                    // next expected seq for ordered delivery
+    uint32_t rcv_wnd_{256};                // receive window size
 
     // RTT estimation (Jacobson/Karels per RFC 6298)
     Duration rtt_{Milliseconds(200)};
