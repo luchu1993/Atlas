@@ -248,6 +248,9 @@ void ReliableUdpChannel::on_datagram_received(std::span<const std::byte> data)
 
 void ReliableUdpChannel::process_ack(SeqNum ack_num, uint32_t ack_bits)
 {
+    // Collect ACK'd sequence numbers first
+    std::vector<SeqNum> acked_seqs;
+
     auto it = unacked_.begin();
     while (it != unacked_.end())
     {
@@ -259,6 +262,7 @@ void ReliableUdpChannel::process_ack(SeqNum ack_num, uint32_t ack_bits)
                 auto sample = Clock::now() - it->second.sent_at;
                 update_rtt(sample);
             }
+            acked_seqs.push_back(it->first);
             it = unacked_.erase(it);
         }
         else if (seq_less_than(it->first, ack_num) &&
@@ -270,6 +274,39 @@ void ReliableUdpChannel::process_ack(SeqNum ack_num, uint32_t ack_bits)
         else
         {
             ++it;
+        }
+    }
+
+    // Fast retransmit: for remaining unacked packets, if a LATER packet
+    // was just ACK'd, increment the skip count. When skip_count reaches
+    // the threshold, retransmit immediately without waiting for RTO.
+    if (fast_resend_thresh_ > 0 && !acked_seqs.empty())
+    {
+        for (auto& [seq, pkt] : unacked_)
+        {
+            for (auto acked : acked_seqs)
+            {
+                if (seq_less_than(seq, acked))
+                {
+                    pkt.skip_count++;
+                    break;  // only count once per ACK batch
+                }
+            }
+
+            if (pkt.skip_count >= fast_resend_thresh_)
+            {
+                // Fast retransmit!
+                auto result = shared_socket_.send_to(pkt.data, remote_);
+                if (result)
+                {
+                    bytes_sent_ += *result;
+                }
+                pkt.sent_at = Clock::now();
+                pkt.send_count++;
+                pkt.skip_count = 0;
+
+                ATLAS_LOG_DEBUG("Fast resend seq={} to {}", seq, remote_.to_string());
+            }
         }
     }
 
@@ -301,7 +338,8 @@ void ReliableUdpChannel::update_rtt(Duration sample)
     }
 
     double rto = r + v * 4.0;
-    rto = std::clamp(rto, 0.2, 5.0);
+    double min_rto = nodelay_ ? 0.03 : 0.2;  // 30ms in nodelay, 200ms normal
+    rto = std::clamp(rto, min_rto, 5.0);
 
     rtt_ = std::chrono::duration_cast<Duration>(
         std::chrono::duration<double>(r));
@@ -384,11 +422,19 @@ void ReliableUdpChannel::check_resends()
 
     for (auto& [seq, pkt] : unacked_)
     {
-        // Exponential backoff: rto * 2^(send_count - 1), capped at 30s
+        // Backoff: nodelay uses 1.5x (KCP-style), normal uses 2x
+        // Capped at 5 doublings (~30s max)
         auto backoff = rto_;
         for (uint32_t i = 1; i < pkt.send_count && i < 5; ++i)
         {
-            backoff *= 2;
+            if (nodelay_)
+            {
+                backoff = backoff * 3 / 2;  // 1.5x
+            }
+            else
+            {
+                backoff *= 2;
+            }
         }
 
         if (now - pkt.sent_at >= backoff)
@@ -418,7 +464,8 @@ void ReliableUdpChannel::start_resend_timer()
         return;  // already running
     }
 
-    auto interval = std::max(rto_, Duration(Milliseconds(50)));
+    auto min_interval = nodelay_ ? Milliseconds(10) : Milliseconds(50);
+    auto interval = std::max(rto_, Duration(min_interval));
     resend_timer_ = dispatcher_.add_repeating_timer(
         interval,
         [this](TimerHandle) { check_resends(); });

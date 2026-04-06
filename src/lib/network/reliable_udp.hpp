@@ -40,6 +40,13 @@ public:
     // Called by NetworkInterface when a datagram arrives from this peer
     void on_datagram_received(std::span<const std::byte> data);
 
+    // Configuration
+    void set_nodelay(bool enable) { nodelay_ = enable; }
+    [[nodiscard]] auto nodelay() const -> bool { return nodelay_; }
+
+    // Fast retransmit threshold: retransmit after this many skip-ACKs (0 = disabled)
+    void set_fast_resend_thresh(uint32_t thresh) { fast_resend_thresh_ = thresh; }
+
     // Stats
     [[nodiscard]] auto rtt() const -> Duration { return rtt_; }
     [[nodiscard]] auto unacked_count() const -> uint32_t
@@ -56,6 +63,7 @@ private:
         std::vector<std::byte> data;
         TimePoint sent_at;
         uint32_t send_count{1};
+        uint32_t skip_count{0};   // fast retransmit: incremented when later packets are ACK'd
     };
 
     // Build packet header and prepend to payload
@@ -90,6 +98,10 @@ private:
     Duration rtt_{Milliseconds(200)};
     Duration rtt_var_{Milliseconds(100)};
     Duration rto_{std::chrono::seconds(1)};
+
+    // KCP-inspired optimizations
+    bool nodelay_{false};                 // true: 1.5x backoff, 30ms min RTO
+    uint32_t fast_resend_thresh_{2};      // fast retransmit after N skip-ACKs (0=disabled)
 
     // Resend timer
     TimerHandle resend_timer_;

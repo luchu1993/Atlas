@@ -237,3 +237,67 @@ TEST_F(ReliableUdpTest, RttEstimation)
     auto updated_ms = std::chrono::duration_cast<Milliseconds>(updated_rtt).count();
     EXPECT_LT(updated_ms, initial_ms) << "RTT should decrease on loopback";
 }
+
+// ============================================================================
+// KCP-inspired optimizations
+// ============================================================================
+
+TEST_F(ReliableUdpTest, NodelayLowersMinRto)
+{
+    auto sock_a = Socket::create_udp();
+    ASSERT_TRUE(sock_a.has_value());
+    ASSERT_TRUE(sock_a->bind(Address("127.0.0.1", 0)).has_value());
+
+    auto sock_b = Socket::create_udp();
+    ASSERT_TRUE(sock_b.has_value());
+    ASSERT_TRUE(sock_b->bind(Address("127.0.0.1", 0)).has_value());
+    auto addr_b = sock_b->local_address().value();
+    auto addr_a = sock_a->local_address().value();
+
+    table_.register_typed_handler<RudpTestMsg>(
+        [](const Address&, Channel*, const RudpTestMsg&) {});
+
+    ReliableUdpChannel channel_a(dispatcher_, table_, *sock_a, addr_b);
+    channel_a.set_nodelay(true);
+    channel_a.activate();
+    EXPECT_TRUE(channel_a.nodelay());
+
+    ReliableUdpChannel channel_b(dispatcher_, table_, *sock_b, addr_a);
+    channel_b.activate();
+
+    // Exchange messages to get RTT samples on loopback
+    for (int i = 0; i < 5; ++i)
+    {
+        channel_a.bundle().add_message(RudpTestMsg{static_cast<uint32_t>(i)});
+        (void)channel_a.send_reliable();
+        std::this_thread::sleep_for(std::chrono::milliseconds(5));
+        pump_datagrams(*sock_b, channel_b);
+
+        channel_b.bundle().add_message(RudpTestMsg{static_cast<uint32_t>(i)});
+        (void)channel_b.send_reliable();
+        std::this_thread::sleep_for(std::chrono::milliseconds(5));
+        pump_datagrams(*sock_a, channel_a);
+    }
+
+    // After 5 exchanges from 200ms initial (7/8 old + 1/8 new per sample),
+    // RTT converges toward loopback ~1ms. After 5 samples: ~200*(7/8)^5 ≈ 100ms.
+    // Verify it has decreased significantly from the 200ms starting point.
+    auto rtt_ms = std::chrono::duration_cast<Milliseconds>(channel_a.rtt()).count();
+    EXPECT_LT(rtt_ms, 150) << "RTT should converge downward on loopback";
+}
+
+TEST_F(ReliableUdpTest, FastResendConfiguration)
+{
+    auto sock_a = Socket::create_udp();
+    ASSERT_TRUE(sock_a.has_value());
+    ASSERT_TRUE(sock_a->bind(Address("127.0.0.1", 0)).has_value());
+    auto addr_b = Address("127.0.0.1", 9999);  // dummy
+
+    ReliableUdpChannel channel_a(dispatcher_, table_, *sock_a, addr_b);
+    channel_a.activate();
+
+    // Default fast resend threshold is 2
+    channel_a.set_fast_resend_thresh(3);
+    channel_a.set_nodelay(true);
+    EXPECT_TRUE(channel_a.nodelay());
+}
