@@ -1,8 +1,9 @@
-#include <gtest/gtest.h>
+#include "foundation/containers/flat_map.hpp"
+#include "foundation/containers/object_pool.hpp"
 #include "foundation/containers/ring_buffer.hpp"
 #include "foundation/containers/slot_map.hpp"
-#include "foundation/containers/object_pool.hpp"
-#include "foundation/containers/flat_map.hpp"
+
+#include <gtest/gtest.h>
 
 #include <algorithm>
 #include <string>
@@ -298,6 +299,8 @@ TEST(ObjectPool, IterationAfterMixedCreateDestroy)
     auto h2 = pool.create(20);
     auto h3 = pool.create(30);
     auto h4 = pool.create(40);
+    (void)h1;
+    (void)h4;
 
     pool.destroy(h2);
     pool.destroy(h3);
