@@ -2,8 +2,8 @@
 
 #include "foundation/time.hpp"
 #include "foundation/timer_queue.hpp"
-#include "platform/io_poller.hpp"
 #include "network/frequent_task.hpp"
+#include "platform/io_poller.hpp"
 
 #include <memory>
 #include <string_view>
@@ -32,7 +32,8 @@ public:
 
     // Timer registration
     [[nodiscard]] auto add_timer(Duration delay, TimerQueue::Callback callback) -> TimerHandle;
-    [[nodiscard]] auto add_repeating_timer(Duration interval, TimerQueue::Callback callback) -> TimerHandle;
+    [[nodiscard]] auto add_repeating_timer(Duration interval, TimerQueue::Callback callback)
+        -> TimerHandle;
     auto cancel_timer(TimerHandle handle) -> bool;
 
     // Frequent tasks
@@ -65,4 +66,4 @@ private:
     Duration max_poll_wait_{Milliseconds(100)};
 };
 
-} // namespace atlas
+}  // namespace atlas

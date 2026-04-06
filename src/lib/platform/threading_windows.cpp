@@ -2,8 +2,8 @@
 
 #if ATLAS_PLATFORM_WINDOWS
 
-#include <windows.h>
 #include <processthreadsapi.h>
+#include <windows.h>
 
 namespace atlas
 {
@@ -20,6 +20,6 @@ void set_thread_name(std::jthread& thread, std::string_view name)
     SetThreadDescription(thread.native_handle(), wname.c_str());
 }
 
-} // namespace atlas
+}  // namespace atlas
 
-#endif // ATLAS_PLATFORM_WINDOWS
+#endif  // ATLAS_PLATFORM_WINDOWS

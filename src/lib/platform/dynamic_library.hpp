@@ -23,8 +23,7 @@ public:
     DynamicLibrary(DynamicLibrary&& other) noexcept;
     DynamicLibrary& operator=(DynamicLibrary&& other) noexcept;
 
-    [[nodiscard]] static auto load(const std::filesystem::path& path)
-        -> Result<DynamicLibrary>;
+    [[nodiscard]] static auto load(const std::filesystem::path& path) -> Result<DynamicLibrary>;
 
     template <typename FuncPtr>
     [[nodiscard]] auto get_symbol(std::string_view name) -> Result<FuncPtr>
@@ -33,7 +32,7 @@ public:
         if (!sym)
         {
             return Error{ErrorCode::NotFound,
-                std::string("Symbol not found: ") + std::string(name)};
+                         std::string("Symbol not found: ") + std::string(name)};
         }
         return reinterpret_cast<FuncPtr>(sym);
     }
@@ -48,4 +47,4 @@ private:
     void* handle_{nullptr};
 };
 
-} // namespace atlas
+}  // namespace atlas

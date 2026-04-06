@@ -12,8 +12,8 @@ class UdpChannel : public Channel
 {
 public:
     // Does NOT own the socket — NetworkInterface owns the UDP socket.
-    UdpChannel(EventDispatcher& dispatcher, InterfaceTable& table,
-               Socket& shared_socket, const Address& remote);
+    UdpChannel(EventDispatcher& dispatcher, InterfaceTable& table, Socket& shared_socket,
+               const Address& remote);
     ~UdpChannel() override = default;
 
     [[nodiscard]] auto fd() const -> FdHandle override { return shared_socket_.fd(); }
@@ -28,4 +28,4 @@ private:
     Socket& shared_socket_;
 };
 
-} // namespace atlas
+}  // namespace atlas

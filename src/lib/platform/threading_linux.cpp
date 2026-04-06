@@ -2,10 +2,9 @@
 
 #if ATLAS_PLATFORM_LINUX
 
-#include <pthread.h>
-
 #include <algorithm>
 #include <cstddef>
+#include <pthread.h>
 
 namespace atlas
 {
@@ -29,6 +28,6 @@ void set_thread_name(std::jthread& thread, std::string_view name)
     pthread_setname_np(thread.native_handle(), buf);
 }
 
-} // namespace atlas
+}  // namespace atlas
 
-#endif // ATLAS_PLATFORM_LINUX
+#endif  // ATLAS_PLATFORM_LINUX

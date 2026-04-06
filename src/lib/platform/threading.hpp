@@ -36,10 +36,7 @@ public:
         }
     }
 
-    void unlock() noexcept
-    {
-        flag_.clear(std::memory_order_release);
-    }
+    void unlock() noexcept { flag_.clear(std::memory_order_release); }
 
     [[nodiscard]] auto try_lock() noexcept -> bool
     {
@@ -87,4 +84,4 @@ private:
     std::unique_ptr<Impl> impl_;
 };
 
-} // namespace atlas
+}  // namespace atlas

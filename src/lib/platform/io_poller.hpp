@@ -28,11 +28,11 @@ inline constexpr FdHandle kInvalidFd = static_cast<FdHandle>(-1);
 
 enum class IOEvent : uint8_t
 {
-    None      = 0x00,
-    Readable  = 0x01,
-    Writable  = 0x02,
-    Error     = 0x04,
-    HangUp    = 0x08,
+    None = 0x00,
+    Readable = 0x01,
+    Writable = 0x02,
+    Error = 0x04,
+    HangUp = 0x08,
 };
 
 constexpr auto operator|(IOEvent a, IOEvent b) -> IOEvent
@@ -85,4 +85,4 @@ public:
     [[nodiscard]] static auto create() -> std::unique_ptr<IOPoller>;
 };
 
-} // namespace atlas
+}  // namespace atlas

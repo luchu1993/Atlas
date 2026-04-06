@@ -1,7 +1,7 @@
 #pragma once
 
-#include "pyscript/py_object.hpp"
 #include "foundation/error.hpp"
+#include "pyscript/py_object.hpp"
 
 #include <atomic>
 #include <filesystem>
@@ -28,11 +28,11 @@ class PyInterpreter
 public:
     struct Config
     {
-        std::filesystem::path python_home;          // PYTHONHOME override
-        std::vector<std::filesystem::path> paths;   // Additional sys.path entries
-        std::string program_name{"atlas"};           // sys.executable name
-        bool isolated{true};                         // Isolated interpreter mode
-        bool install_signal_handlers{false};          // Install Python signal handlers
+        std::filesystem::path python_home;         // PYTHONHOME override
+        std::vector<std::filesystem::path> paths;  // Additional sys.path entries
+        std::string program_name{"atlas"};         // sys.executable name
+        bool isolated{true};                       // Isolated interpreter mode
+        bool install_signal_handlers{false};       // Install Python signal handlers
     };
 
     [[nodiscard]] static auto initialize(const Config& config = {}) -> Result<void>;
@@ -50,4 +50,4 @@ private:
     static std::atomic<bool> initialized_;
 };
 
-} // namespace atlas
+}  // namespace atlas

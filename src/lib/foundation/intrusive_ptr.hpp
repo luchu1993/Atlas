@@ -11,7 +11,10 @@ namespace atlas
 {
 
 // Tag for adopting an existing reference (don't increment)
-struct adopt_ref_t { explicit adopt_ref_t() = default; };
+struct adopt_ref_t
+{
+    explicit adopt_ref_t() = default;
+};
 inline constexpr adopt_ref_t adopt_ref{};
 
 template <IntrusiveRefCounted T>
@@ -43,10 +46,7 @@ public:
     }
 
     // Move
-    IntrusivePtr(IntrusivePtr&& other) noexcept : ptr_(other.ptr_)
-    {
-        other.ptr_ = nullptr;
-    }
+    IntrusivePtr(IntrusivePtr&& other) noexcept : ptr_(other.ptr_) { other.ptr_ = nullptr; }
 
     // Implicit upcast from derived
     template <IntrusiveRefCounted U>
@@ -61,7 +61,9 @@ public:
 
     template <IntrusiveRefCounted U>
         requires std::is_convertible_v<U*, T*>
-    IntrusivePtr(IntrusivePtr<U>&& other) noexcept : ptr_(other.detach()) {}
+    IntrusivePtr(IntrusivePtr<U>&& other) noexcept : ptr_(other.detach())
+    {
+    }
 
     ~IntrusivePtr()
     {
@@ -116,10 +118,7 @@ public:
         return p;
     }
 
-    void swap(IntrusivePtr& other) noexcept
-    {
-        std::swap(ptr_, other.ptr_);
-    }
+    void swap(IntrusivePtr& other) noexcept { std::swap(ptr_, other.ptr_); }
 
     // Comparison
     [[nodiscard]] auto operator==(const IntrusivePtr& other) const noexcept -> bool
@@ -132,10 +131,7 @@ public:
         return ptr_ <=> other.ptr_;
     }
 
-    [[nodiscard]] auto operator==(std::nullptr_t) const noexcept -> bool
-    {
-        return ptr_ == nullptr;
-    }
+    [[nodiscard]] auto operator==(std::nullptr_t) const noexcept -> bool { return ptr_ == nullptr; }
 
 private:
     T* ptr_{nullptr};
@@ -155,7 +151,7 @@ void swap(IntrusivePtr<T>& a, IntrusivePtr<T>& b) noexcept
     a.swap(b);
 }
 
-} // namespace atlas
+}  // namespace atlas
 
 template <atlas::IntrusiveRefCounted T>
 struct std::hash<atlas::IntrusivePtr<T>>

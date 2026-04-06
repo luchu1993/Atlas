@@ -38,8 +38,7 @@ class LogSink
 {
 public:
     virtual ~LogSink() = default;
-    virtual void write(LogLevel level, std::string_view category,
-                       std::string_view message,
+    virtual void write(LogLevel level, std::string_view category, std::string_view message,
                        const std::source_location& location) = 0;
     virtual void flush() = 0;
 };
@@ -57,8 +56,7 @@ public:
     void add_sink(std::shared_ptr<LogSink> sink);
     void clear_sinks();
 
-    void log(LogLevel level, std::string_view category,
-             std::string_view message,
+    void log(LogLevel level, std::string_view category, std::string_view message,
              const std::source_location& location = std::source_location::current());
 
     void flush();
@@ -85,9 +83,7 @@ public:
         auto& logger = Logger::instance();
         if (static_cast<uint8_t>(level_) >= static_cast<uint8_t>(logger.level()))
         {
-            logger.log(level_, category_,
-                std::format(fmt, std::forward<Args>(args)...),
-                location_);
+            logger.log(level_, category_, std::format(fmt, std::forward<Args>(args)...), location_);
         }
     }
 
@@ -97,25 +93,24 @@ private:
     std::source_location location_;
 };
 
-} // namespace atlas
+}  // namespace atlas
 
 // Logging macros with compile-time and runtime level filtering.
 // Arguments are NOT evaluated if filtered at compile time.
 
-#define ATLAS_LOG(level, category, ...) \
-    do \
-    { \
-        if constexpr (static_cast<uint8_t>(level) >= \
-                      static_cast<uint8_t>(::atlas::kCompileTimeMinLevel)) \
-        { \
-            ::atlas::LogProxy(level, category, \
-                std::source_location::current())(__VA_ARGS__); \
-        } \
+#define ATLAS_LOG(level, category, ...)                                                       \
+    do                                                                                        \
+    {                                                                                         \
+        if constexpr (static_cast<uint8_t>(level) >=                                          \
+                      static_cast<uint8_t>(::atlas::kCompileTimeMinLevel))                    \
+        {                                                                                     \
+            ::atlas::LogProxy(level, category, std::source_location::current())(__VA_ARGS__); \
+        }                                                                                     \
     } while (false)
 
-#define ATLAS_LOG_TRACE(...)    ATLAS_LOG(::atlas::LogLevel::Trace,    "", __VA_ARGS__)
-#define ATLAS_LOG_DEBUG(...)    ATLAS_LOG(::atlas::LogLevel::Debug,    "", __VA_ARGS__)
-#define ATLAS_LOG_INFO(...)     ATLAS_LOG(::atlas::LogLevel::Info,     "", __VA_ARGS__)
-#define ATLAS_LOG_WARNING(...)  ATLAS_LOG(::atlas::LogLevel::Warning,  "", __VA_ARGS__)
-#define ATLAS_LOG_ERROR(...)    ATLAS_LOG(::atlas::LogLevel::Error,    "", __VA_ARGS__)
+#define ATLAS_LOG_TRACE(...) ATLAS_LOG(::atlas::LogLevel::Trace, "", __VA_ARGS__)
+#define ATLAS_LOG_DEBUG(...) ATLAS_LOG(::atlas::LogLevel::Debug, "", __VA_ARGS__)
+#define ATLAS_LOG_INFO(...) ATLAS_LOG(::atlas::LogLevel::Info, "", __VA_ARGS__)
+#define ATLAS_LOG_WARNING(...) ATLAS_LOG(::atlas::LogLevel::Warning, "", __VA_ARGS__)
+#define ATLAS_LOG_ERROR(...) ATLAS_LOG(::atlas::LogLevel::Error, "", __VA_ARGS__)
 #define ATLAS_LOG_CRITICAL(...) ATLAS_LOG(::atlas::LogLevel::Critical, "", __VA_ARGS__)

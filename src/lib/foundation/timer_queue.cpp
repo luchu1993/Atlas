@@ -22,7 +22,8 @@ auto TimerQueue::schedule(TimePoint when, Callback callback) -> TimerHandle
     return TimerHandle(node->id);
 }
 
-auto TimerQueue::schedule_repeating(TimePoint first_fire, Duration interval, Callback callback) -> TimerHandle
+auto TimerQueue::schedule_repeating(TimePoint first_fire, Duration interval, Callback callback)
+    -> TimerHandle
 {
     auto* node = new Node{next_id_++, first_fire, interval, std::move(callback), false};
     heap_.push_back(node);
@@ -120,4 +121,4 @@ void TimerQueue::purge_cancelled()
     // Handled inline during process()
 }
 
-} // namespace atlas
+}  // namespace atlas

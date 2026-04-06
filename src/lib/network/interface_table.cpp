@@ -1,4 +1,5 @@
 #include "network/interface_table.hpp"
+
 #include "foundation/log.hpp"
 
 #include <format>
@@ -8,27 +9,24 @@ namespace atlas
 {
 
 auto InterfaceTable::register_handler(MessageID id, const MessageDesc& desc,
-                                       std::shared_ptr<MessageHandler> handler)
-    -> Result<void>
+                                      std::shared_ptr<MessageHandler> handler) -> Result<void>
 {
     if (entries_.contains(id))
     {
-        return Error(ErrorCode::AlreadyExists,
-            std::format("Message ID {} already registered", id));
+        return Error(ErrorCode::AlreadyExists, std::format("Message ID {} already registered", id));
     }
 
     entries_.emplace(id, Entry{desc, std::move(handler)});
     return {};
 }
 
-auto InterfaceTable::dispatch(const Address& source, Channel* channel,
-                               MessageID id, BinaryReader& data) -> Result<void>
+auto InterfaceTable::dispatch(const Address& source, Channel* channel, MessageID id,
+                              BinaryReader& data) -> Result<void>
 {
     auto it = entries_.find(id);
     if (it == entries_.end())
     {
-        return Error(ErrorCode::NotFound,
-            std::format("Unknown message ID: {}", id));
+        return Error(ErrorCode::NotFound, std::format("Unknown message ID: {}", id));
     }
 
     try
@@ -74,4 +72,4 @@ auto InterfaceTable::handler_count() const -> size_t
     return entries_.size();
 }
 
-} // namespace atlas
+}  // namespace atlas

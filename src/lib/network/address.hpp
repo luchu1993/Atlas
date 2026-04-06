@@ -2,8 +2,8 @@
 
 #include "foundation/error.hpp"
 
-#include <cstdint>
 #include <compare>
+#include <cstdint>
 #include <functional>
 #include <string>
 #include <string_view>
@@ -19,7 +19,9 @@ public:
     constexpr Address() = default;
     Address(std::string_view ip, uint16_t port);
     constexpr Address(uint32_t ip_network_order, uint16_t port_host_order)
-        : ip_(ip_network_order), port_(port_host_order) {}
+        : ip_(ip_network_order), port_(port_host_order)
+    {
+    }
     explicit Address(const sockaddr_in& sa);
 
     [[nodiscard]] constexpr auto ip() const -> uint32_t { return ip_; }
@@ -28,8 +30,7 @@ public:
     [[nodiscard]] auto to_string() const -> std::string;
     [[nodiscard]] auto to_sockaddr() const -> sockaddr_in;
 
-    [[nodiscard]] static auto resolve(std::string_view hostname, uint16_t port)
-        -> Result<Address>;
+    [[nodiscard]] static auto resolve(std::string_view hostname, uint16_t port) -> Result<Address>;
 
     constexpr auto operator==(const Address& other) const -> bool = default;
     constexpr auto operator<=>(const Address& other) const = default;
@@ -37,11 +38,11 @@ public:
     static const Address NONE;
 
 private:
-    uint32_t ip_{0};      // network byte order
-    uint16_t port_{0};    // host byte order
+    uint32_t ip_{0};    // network byte order
+    uint16_t port_{0};  // host byte order
 };
 
-} // namespace atlas
+}  // namespace atlas
 
 template <>
 struct std::hash<atlas::Address>

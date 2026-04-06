@@ -5,11 +5,7 @@
 namespace atlas
 {
 
-GameClock::GameClock()
-    : real_start_(Clock::now())
-    , real_last_tick_(real_start_)
-{
-}
+GameClock::GameClock() : real_start_(Clock::now()), real_last_tick_(real_start_) {}
 
 void GameClock::tick()
 {
@@ -72,4 +68,4 @@ void GameClock::reset()
     time_scale_ = 1.0;
 }
 
-} // namespace atlas
+}  // namespace atlas

@@ -1,8 +1,9 @@
 #include "network/reliable_udp.hpp"
+
+#include "foundation/log.hpp"
 #include "network/event_dispatcher.hpp"
 #include "network/interface_table.hpp"
 #include "serialization/binary_stream.hpp"
-#include "foundation/log.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -16,12 +17,9 @@ namespace atlas
 // Construction / Destruction
 // ============================================================================
 
-ReliableUdpChannel::ReliableUdpChannel(EventDispatcher& dispatcher,
-                                       InterfaceTable& table,
-                                       Socket& shared_socket,
-                                       const Address& remote)
-    : Channel(dispatcher, table, remote)
-    , shared_socket_(shared_socket)
+ReliableUdpChannel::ReliableUdpChannel(EventDispatcher& dispatcher, InterfaceTable& table,
+                                       Socket& shared_socket, const Address& remote)
+    : Channel(dispatcher, table, remote), shared_socket_(shared_socket)
 {
 }
 
@@ -81,8 +79,8 @@ auto ReliableUdpChannel::send_reliable() -> Result<void>
         flags |= rudp::kFlagHasAck;
     }
 
-    auto packet = build_packet(flags, seq,
-        std::span<const std::byte>(payload.data(), payload.size()));
+    auto packet =
+        build_packet(flags, seq, std::span<const std::byte>(payload.data(), payload.size()));
 
     // Store for potential retransmission
     unacked_[seq] = UnackedPacket{packet, Clock::now(), 1};
@@ -122,8 +120,8 @@ auto ReliableUdpChannel::send_unreliable() -> Result<void>
         flags |= rudp::kFlagHasAck;  // piggyback ACK even on unreliable
     }
 
-    auto packet = build_packet(flags, 0,
-        std::span<const std::byte>(payload.data(), payload.size()));
+    auto packet =
+        build_packet(flags, 0, std::span<const std::byte>(payload.data(), payload.size()));
 
     auto result = shared_socket_.send_to(packet, remote_);
     if (!result)
@@ -166,10 +164,8 @@ auto ReliableUdpChannel::do_send(std::span<const std::byte> data) -> Result<size
 // build_packet
 // ============================================================================
 
-auto ReliableUdpChannel::build_packet(uint8_t flags, SeqNum seq,
-                                      std::span<const std::byte> payload,
-                                      const FragmentHeader* frag)
-    -> std::vector<std::byte>
+auto ReliableUdpChannel::build_packet(uint8_t flags, SeqNum seq, std::span<const std::byte> payload,
+                                      const FragmentHeader* frag) -> std::vector<std::byte>
 {
     BinaryWriter header;
     header.write<uint8_t>(flags);
@@ -275,16 +271,15 @@ void ReliableUdpChannel::on_datagram_received(std::span<const std::byte> data)
         // Reliable packet -- check duplicate and receive window
         if (is_duplicate(seq))
         {
-            ATLAS_LOG_DEBUG("Duplicate packet seq={} from {}",
-                seq, remote_.to_string());
+            ATLAS_LOG_DEBUG("Duplicate packet seq={} from {}", seq, remote_.to_string());
             return;
         }
 
         // Receive window check: drop if too far ahead of delivery frontier
         if (seq_greater_than(seq, rcv_nxt_ + rcv_wnd_))
         {
-            ATLAS_LOG_DEBUG("Packet seq={} outside receive window (nxt={}, wnd={})",
-                seq, rcv_nxt_, rcv_wnd_);
+            ATLAS_LOG_DEBUG("Packet seq={} outside receive window (nxt={}, wnd={})", seq, rcv_nxt_,
+                            rcv_wnd_);
             return;
         }
 
@@ -327,8 +322,7 @@ void ReliableUdpChannel::process_ack(SeqNum ack_num, uint32_t ack_bits)
             acked_seqs.push_back(it->first);
             it = unacked_.erase(it);
         }
-        else if (seq_less_than(it->first, ack_num) &&
-                 seq_diff(ack_num, it->first) > 32)
+        else if (seq_less_than(it->first, ack_num) && seq_diff(ack_num, it->first) > 32)
         {
             // Too old, outside ack_bits window -- consider lost
             it = unacked_.erase(it);
@@ -416,12 +410,9 @@ void ReliableUdpChannel::update_rtt(Duration sample)
     double min_rto = nodelay_ ? 0.03 : 0.2;  // 30ms in nodelay, 200ms normal
     rto = std::clamp(rto, min_rto, 5.0);
 
-    rtt_ = std::chrono::duration_cast<Duration>(
-        std::chrono::duration<double>(r));
-    rtt_var_ = std::chrono::duration_cast<Duration>(
-        std::chrono::duration<double>(v));
-    rto_ = std::chrono::duration_cast<Duration>(
-        std::chrono::duration<double>(rto));
+    rtt_ = std::chrono::duration_cast<Duration>(std::chrono::duration<double>(r));
+    rtt_var_ = std::chrono::duration_cast<Duration>(std::chrono::duration<double>(v));
+    rto_ = std::chrono::duration_cast<Duration>(std::chrono::duration<double>(rto));
 }
 
 // ============================================================================
@@ -491,10 +482,8 @@ auto ReliableUdpChannel::is_duplicate(SeqNum seq) const -> bool
 // enqueue_for_delivery — store in receive buffer for ordered delivery
 // ============================================================================
 
-void ReliableUdpChannel::enqueue_for_delivery(SeqNum seq,
-                                               std::span<const std::byte> payload,
-                                               bool is_fragment,
-                                               const FragmentHeader& frag_hdr)
+void ReliableUdpChannel::enqueue_for_delivery(SeqNum seq, std::span<const std::byte> payload,
+                                              bool is_fragment, const FragmentHeader& frag_hdr)
 {
     // Already delivered (seq < rcv_nxt_) — should have been caught by is_duplicate
     if (seq_less_than(seq, rcv_nxt_))
@@ -508,11 +497,8 @@ void ReliableUdpChannel::enqueue_for_delivery(SeqNum seq,
         return;
     }
 
-    rcv_buf_[seq] = RecvEntry{
-        std::vector<std::byte>(payload.begin(), payload.end()),
-        is_fragment,
-        frag_hdr
-    };
+    rcv_buf_[seq] =
+        RecvEntry{std::vector<std::byte>(payload.begin(), payload.end()), is_fragment, frag_hdr};
 }
 
 // ============================================================================
@@ -536,8 +522,7 @@ void ReliableUdpChannel::flush_receive_buffer()
         if (entry.is_fragment)
         {
             // Buffer the fragment for reassembly
-            on_fragment_received(entry.frag_hdr,
-                std::span<const std::byte>(entry.payload));
+            on_fragment_received(entry.frag_hdr, std::span<const std::byte>(entry.payload));
         }
         else
         {
@@ -559,9 +544,10 @@ auto ReliableUdpChannel::send_fragmented(std::span<const std::byte> payload) -> 
 
     if (total > rudp::kMaxFragments)
     {
-        return Error(ErrorCode::MessageTooLarge,
+        return Error(
+            ErrorCode::MessageTooLarge,
             std::format("Message too large for fragmentation: {} bytes ({} fragments, max {})",
-                payload.size(), total, rudp::kMaxFragments));
+                        payload.size(), total, rudp::kMaxFragments));
     }
 
     if (unacked_.size() + total > effective_window())
@@ -608,7 +594,7 @@ auto ReliableUdpChannel::send_fragmented(std::span<const std::byte> payload) -> 
 // ============================================================================
 
 void ReliableUdpChannel::on_fragment_received(const FragmentHeader& hdr,
-                                               std::span<const std::byte> payload)
+                                              std::span<const std::byte> payload)
 {
     if (hdr.fragment_count == 0 || hdr.fragment_index >= hdr.fragment_count)
     {
@@ -676,9 +662,7 @@ void ReliableUdpChannel::cleanup_stale_fragments()
 {
     auto now = Clock::now();
     std::erase_if(pending_fragments_, [now](const auto& pair)
-    {
-        return (now - pair.second.first_received) >= rudp::kFragmentTimeout;
-    });
+                  { return (now - pair.second.first_received) >= rudp::kFragmentTimeout; });
 }
 
 // ============================================================================
@@ -725,8 +709,8 @@ void ReliableUdpChannel::check_resends()
             // RTO timeout → aggressive cwnd reduction
             on_loss_cwnd_update(true);
 
-            ATLAS_LOG_DEBUG("Resend seq={} attempt={} to {}",
-                seq, pkt.send_count, remote_.to_string());
+            ATLAS_LOG_DEBUG("Resend seq={} attempt={} to {}", seq, pkt.send_count,
+                            remote_.to_string());
         }
     }
 }
@@ -758,8 +742,8 @@ void ReliableUdpChannel::on_ack_cwnd_update(uint32_t acked_count)
             {
                 cwnd_incr_ = rudp::kMtu;
             }
-            cwnd_incr_ += static_cast<uint32_t>(
-                rudp::kMtu * rudp::kMtu / cwnd_incr_ + rudp::kMtu / 16);
+            cwnd_incr_ +=
+                static_cast<uint32_t>(rudp::kMtu * rudp::kMtu / cwnd_incr_ + rudp::kMtu / 16);
 
             // cwnd = incr / mss
             auto new_cwnd = cwnd_incr_ / static_cast<uint32_t>(rudp::kMtu);
@@ -817,9 +801,8 @@ void ReliableUdpChannel::start_resend_timer()
 
     auto min_interval = nodelay_ ? Milliseconds(10) : Milliseconds(50);
     auto interval = std::max(rto_, Duration(min_interval));
-    resend_timer_ = dispatcher_.add_repeating_timer(
-        interval,
-        [this](TimerHandle) { check_resends(); });
+    resend_timer_ =
+        dispatcher_.add_repeating_timer(interval, [this](TimerHandle) { check_resends(); });
 }
 
 void ReliableUdpChannel::stop_resend_timer()
@@ -831,4 +814,4 @@ void ReliableUdpChannel::stop_resend_timer()
     }
 }
 
-} // namespace atlas
+}  // namespace atlas

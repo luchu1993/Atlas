@@ -1,7 +1,7 @@
 #pragma once
 
-#include "pyscript/py_object.hpp"
 #include "foundation/error.hpp"
+#include "pyscript/py_object.hpp"
 
 #include <string>
 
@@ -27,4 +27,4 @@ void clear_python_error();
 // Set a Python exception from an Atlas Error.
 void set_python_error(const Error& error);
 
-} // namespace atlas
+}  // namespace atlas

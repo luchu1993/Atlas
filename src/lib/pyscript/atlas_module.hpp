@@ -10,4 +10,4 @@ namespace atlas
 // Must be called after PyInterpreter::initialize().
 [[nodiscard]] auto register_atlas_module() -> Result<PyObjectPtr>;
 
-} // namespace atlas
+}  // namespace atlas

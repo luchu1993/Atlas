@@ -1,6 +1,7 @@
 #include "serialization/data_section.hpp"
-#include "serialization/xml_parser.hpp"
+
 #include "serialization/json_parser.hpp"
+#include "serialization/xml_parser.hpp"
 
 #include <algorithm>
 #include <cctype>
@@ -15,14 +16,10 @@ namespace stdfs = std::filesystem;
 // Constructors
 // ============================================================================
 
-DataSection::DataSection(std::string name)
-    : name_(std::move(name))
-{
-}
+DataSection::DataSection(std::string name) : name_(std::move(name)) {}
 
 DataSection::DataSection(std::string name, std::string value)
-    : name_(std::move(name))
-    , value_(std::move(value))
+    : name_(std::move(name)), value_(std::move(value))
 {
 }
 
@@ -30,7 +27,8 @@ DataSection::DataSection(std::string name, std::string value)
 // Typed read helpers
 // ============================================================================
 
-auto DataSection::read_string(std::string_view key, std::string_view default_val) const -> std::string
+auto DataSection::read_string(std::string_view key, std::string_view default_val) const
+    -> std::string
 {
     auto c = child(key);
     if (c)
@@ -101,7 +99,7 @@ auto DataSection::read_bool(std::string_view key, bool default_val) const -> boo
 
     std::string val(c->value());
     std::transform(val.begin(), val.end(), val.begin(),
-        [](unsigned char ch) { return static_cast<char>(std::tolower(ch)); });
+                   [](unsigned char ch) { return static_cast<char>(std::tolower(ch)); });
 
     if (val == "true" || val == "1" || val == "yes")
     {
@@ -195,4 +193,4 @@ auto DataSection::from_json_string(std::string_view json) -> Result<Ptr>
     return json::parse_string(json);
 }
 
-} // namespace atlas
+}  // namespace atlas

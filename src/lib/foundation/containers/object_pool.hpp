@@ -11,8 +11,7 @@ class ObjectPool
 public:
     using Handle = SlotHandle;
 
-    explicit ObjectPool(std::size_t initial_capacity = 64)
-        : map_(initial_capacity) {}
+    explicit ObjectPool(std::size_t initial_capacity = 64) : map_(initial_capacity) {}
 
     template <typename... Args>
     auto create(Args&&... args) -> Handle
@@ -37,4 +36,4 @@ private:
     SlotMap<T> map_;
 };
 
-} // namespace atlas
+}  // namespace atlas

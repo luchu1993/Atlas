@@ -1,7 +1,7 @@
 #pragma once
 
-#include <cstdint>
 #include <compare>
+#include <cstdint>
 #include <limits>
 #include <optional>
 #include <vector>
@@ -61,7 +61,8 @@ public:
 
     auto remove(SlotHandle handle) -> bool
     {
-        if (!contains(handle)) return false;
+        if (!contains(handle))
+            return false;
 
         auto& slot = slots_[handle.index];
         auto dense_idx = slot.dense_index;
@@ -89,13 +90,15 @@ public:
 
     [[nodiscard]] auto get(SlotHandle handle) -> T*
     {
-        if (!contains(handle)) return nullptr;
+        if (!contains(handle))
+            return nullptr;
         return &dense_[slots_[handle.index].dense_index];
     }
 
     [[nodiscard]] auto get(SlotHandle handle) const -> const T*
     {
-        if (!contains(handle)) return nullptr;
+        if (!contains(handle))
+            return nullptr;
         return &dense_[slots_[handle.index].dense_index];
     }
 
@@ -152,4 +155,4 @@ private:
     uint32_t free_head_{kNullIndex};
 };
 
-} // namespace atlas
+}  // namespace atlas

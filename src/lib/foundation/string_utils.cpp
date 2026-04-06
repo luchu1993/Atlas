@@ -26,7 +26,8 @@ namespace atlas::string_utils
     return result;
 }
 
-[[nodiscard]] auto split(std::string_view str, std::string_view delimiter) -> std::vector<std::string_view>
+[[nodiscard]] auto split(std::string_view str, std::string_view delimiter)
+    -> std::vector<std::string_view>
 {
     std::vector<std::string_view> result;
 
@@ -82,7 +83,7 @@ namespace atlas::string_utils
 {
     std::string result{str};
     std::transform(result.begin(), result.end(), result.begin(),
-        [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+                   [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
     return result;
 }
 
@@ -90,7 +91,7 @@ namespace atlas::string_utils
 {
     std::string result{str};
     std::transform(result.begin(), result.end(), result.begin(),
-        [](unsigned char c) { return static_cast<char>(std::toupper(c)); });
+                   [](unsigned char c) { return static_cast<char>(std::toupper(c)); });
     return result;
 }
 
@@ -113,7 +114,8 @@ namespace atlas::string_utils
     return true;
 }
 
-[[nodiscard]] auto join(const std::vector<std::string_view>& parts, std::string_view separator) -> std::string
+[[nodiscard]] auto join(const std::vector<std::string_view>& parts, std::string_view separator)
+    -> std::string
 {
     std::string result;
 
@@ -129,7 +131,8 @@ namespace atlas::string_utils
     return result;
 }
 
-[[nodiscard]] auto replace_all(std::string_view str, std::string_view from, std::string_view to) -> std::string
+[[nodiscard]] auto replace_all(std::string_view str, std::string_view from, std::string_view to)
+    -> std::string
 {
     if (from.empty())
     {
@@ -155,4 +158,4 @@ namespace atlas::string_utils
     return result;
 }
 
-} // namespace atlas::string_utils
+}  // namespace atlas::string_utils

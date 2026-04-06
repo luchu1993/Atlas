@@ -4,10 +4,10 @@
 #include <sstream>
 
 #if ATLAS_PLATFORM_WINDOWS
-#   include <windows.h>
+#include <windows.h>
 #elif ATLAS_PLATFORM_LINUX
-#   include <unistd.h>
-#   include <linux/limits.h>
+#include <linux/limits.h>
+#include <unistd.h>
 #endif
 
 namespace atlas::fs
@@ -55,7 +55,8 @@ namespace atlas::fs
     return ss.str();
 }
 
-[[nodiscard]] auto write_file(const stdfs::path& path, std::span<const std::byte> data) -> Result<void>
+[[nodiscard]] auto write_file(const stdfs::path& path, std::span<const std::byte> data)
+    -> Result<void>
 {
     std::ofstream file(path, std::ios::binary);
     if (!file)
@@ -63,7 +64,8 @@ namespace atlas::fs
         return Error{ErrorCode::IoError, "Failed to open file for writing: " + path.string()};
     }
 
-    file.write(reinterpret_cast<const char*>(data.data()), static_cast<std::streamsize>(data.size()));
+    file.write(reinterpret_cast<const char*>(data.data()),
+               static_cast<std::streamsize>(data.size()));
 
     if (!file)
     {
@@ -73,7 +75,8 @@ namespace atlas::fs
     return Result<void>{};
 }
 
-[[nodiscard]] auto write_text_file(const stdfs::path& path, std::string_view content) -> Result<void>
+[[nodiscard]] auto write_text_file(const stdfs::path& path, std::string_view content)
+    -> Result<void>
 {
     std::ofstream file(path);
     if (!file)
@@ -130,7 +133,8 @@ namespace atlas::fs
     return removed;
 }
 
-[[nodiscard]] auto list_directory(const stdfs::path& path) -> Result<std::vector<stdfs::directory_entry>>
+[[nodiscard]] auto list_directory(const stdfs::path& path)
+    -> Result<std::vector<stdfs::directory_entry>>
 {
     std::error_code ec;
     std::vector<stdfs::directory_entry> entries;
@@ -177,4 +181,4 @@ namespace atlas::fs
     return stdfs::temp_directory_path();
 }
 
-} // namespace atlas::fs
+}  // namespace atlas::fs

@@ -51,12 +51,12 @@ public:
     void clear();
 
 private:
-    std::vector<std::byte> buffer_;        // accumulated wire data
-    BinaryWriter payload_writer_;          // for current message payload
+    std::vector<std::byte> buffer_;  // accumulated wire data
+    BinaryWriter payload_writer_;    // for current message payload
     uint32_t message_count_{0};
-    bool writing_message_{false};          // between start/end
+    bool writing_message_{false};  // between start/end
     MessageLengthStyle current_style_{};
-    std::size_t payload_start_{0};         // offset where payload begins
+    std::size_t payload_start_{0};  // offset where payload begins
 };
 
-} // namespace atlas
+}  // namespace atlas

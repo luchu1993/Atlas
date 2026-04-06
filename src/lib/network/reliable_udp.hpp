@@ -1,10 +1,10 @@
 #pragma once
 
+#include "foundation/time.hpp"
+#include "foundation/timer_queue.hpp"
 #include "network/channel.hpp"
 #include "network/seq_num.hpp"
 #include "network/socket.hpp"
-#include "foundation/time.hpp"
-#include "foundation/timer_queue.hpp"
 
 #include <cstdint>
 #include <map>
@@ -17,25 +17,25 @@ namespace atlas
 // Reliable UDP wire format flags
 namespace rudp
 {
-    inline constexpr uint8_t kFlagReliable  = 0x01;
-    inline constexpr uint8_t kFlagHasSeq    = 0x02;
-    inline constexpr uint8_t kFlagHasAck    = 0x04;
-    inline constexpr uint8_t kFlagFragment  = 0x08;  // has fragment header (4 bytes)
+inline constexpr uint8_t kFlagReliable = 0x01;
+inline constexpr uint8_t kFlagHasSeq = 0x02;
+inline constexpr uint8_t kFlagHasAck = 0x04;
+inline constexpr uint8_t kFlagFragment = 0x08;  // has fragment header (4 bytes)
 
-    // Header overhead: flags(1) + seq(4) + ack(4) + ack_bits(4) + frag(4) = 17
-    inline constexpr std::size_t kMaxHeaderSize = 17;
-    inline constexpr std::size_t kMtu = 1472;
-    inline constexpr std::size_t kMaxUdpPayload = kMtu - kMaxHeaderSize;
-    inline constexpr std::size_t kMaxFragments = 255;
-    inline constexpr Duration kFragmentTimeout = std::chrono::seconds(30);
-}
+// Header overhead: flags(1) + seq(4) + ack(4) + ack_bits(4) + frag(4) = 17
+inline constexpr std::size_t kMaxHeaderSize = 17;
+inline constexpr std::size_t kMtu = 1472;
+inline constexpr std::size_t kMaxUdpPayload = kMtu - kMaxHeaderSize;
+inline constexpr std::size_t kMaxFragments = 255;
+inline constexpr Duration kFragmentTimeout = std::chrono::seconds(30);
+}  // namespace rudp
 
 // Thread safety: NOT thread-safe. Used from EventDispatcher's thread only.
 class ReliableUdpChannel : public Channel
 {
 public:
-    ReliableUdpChannel(EventDispatcher& dispatcher, InterfaceTable& table,
-                       Socket& shared_socket, const Address& remote);
+    ReliableUdpChannel(EventDispatcher& dispatcher, InterfaceTable& table, Socket& shared_socket,
+                       const Address& remote);
     ~ReliableUdpChannel() override;
 
     [[nodiscard]] auto fd() const -> FdHandle override { return shared_socket_.fd(); }
@@ -88,15 +88,15 @@ private:
         std::vector<std::byte> data;
         TimePoint sent_at;
         uint32_t send_count{1};
-        uint32_t skip_count{0};   // fast retransmit: incremented when later packets are ACK'd
+        uint32_t skip_count{0};  // fast retransmit: incremented when later packets are ACK'd
     };
 
     // Fragment header (4 bytes, present when kFlagFragment is set)
     struct FragmentHeader
     {
-        uint16_t fragment_id;     // identifies the fragmented message
-        uint8_t  fragment_index;  // 0-based position
-        uint8_t  fragment_count;  // total fragments
+        uint16_t fragment_id;    // identifies the fragmented message
+        uint8_t fragment_index;  // 0-based position
+        uint8_t fragment_count;  // total fragments
     };
 
     // Fragment reassembly
@@ -131,8 +131,8 @@ private:
     void cleanup_stale_fragments();
 
     // Ordered delivery
-    void enqueue_for_delivery(SeqNum seq, std::span<const std::byte> payload,
-                              bool is_fragment, const FragmentHeader& frag_hdr);
+    void enqueue_for_delivery(SeqNum seq, std::span<const std::byte> payload, bool is_fragment,
+                              const FragmentHeader& frag_hdr);
     void flush_receive_buffer();
 
     // Congestion control
@@ -167,14 +167,14 @@ private:
     Duration rto_{std::chrono::seconds(1)};
 
     // KCP-inspired optimizations
-    bool nodelay_{false};                 // true: 1.5x backoff, 30ms min RTO
-    uint32_t fast_resend_thresh_{2};      // fast retransmit after N skip-ACKs (0=disabled)
+    bool nodelay_{false};             // true: 1.5x backoff, 30ms min RTO
+    uint32_t fast_resend_thresh_{2};  // fast retransmit after N skip-ACKs (0=disabled)
 
     // Congestion control (KCP-style: slow start + congestion avoidance)
-    bool nocwnd_{false};                  // true: disable congestion control (for LAN)
-    uint32_t cwnd_{1};                    // congestion window (packets)
-    uint32_t ssthresh_{16};              // slow start threshold
-    uint32_t cwnd_incr_{0};              // byte-level increment for congestion avoidance
+    bool nocwnd_{false};     // true: disable congestion control (for LAN)
+    uint32_t cwnd_{1};       // congestion window (packets)
+    uint32_t ssthresh_{16};  // slow start threshold
+    uint32_t cwnd_incr_{0};  // byte-level increment for congestion avoidance
 
     // Fragmentation state
     uint16_t next_fragment_id_{1};
@@ -185,4 +185,4 @@ private:
     TimerHandle resend_timer_;
 };
 
-} // namespace atlas
+}  // namespace atlas

@@ -22,18 +22,50 @@ struct Vector2
     constexpr auto operator/(float s) const -> Vector2 { return {x / s, y / s}; }
     constexpr auto operator-() const -> Vector2 { return {-x, -y}; }
 
-    constexpr auto operator+=(const Vector2& v) -> Vector2& { x += v.x; y += v.y; return *this; }
-    constexpr auto operator-=(const Vector2& v) -> Vector2& { x -= v.x; y -= v.y; return *this; }
-    constexpr auto operator*=(float s) -> Vector2& { x *= s; y *= s; return *this; }
-    constexpr auto operator/=(float s) -> Vector2& { x /= s; y /= s; return *this; }
+    constexpr auto operator+=(const Vector2& v) -> Vector2&
+    {
+        x += v.x;
+        y += v.y;
+        return *this;
+    }
+    constexpr auto operator-=(const Vector2& v) -> Vector2&
+    {
+        x -= v.x;
+        y -= v.y;
+        return *this;
+    }
+    constexpr auto operator*=(float s) -> Vector2&
+    {
+        x *= s;
+        y *= s;
+        return *this;
+    }
+    constexpr auto operator/=(float s) -> Vector2&
+    {
+        x /= s;
+        y /= s;
+        return *this;
+    }
 
     [[nodiscard]] constexpr auto dot(const Vector2& v) const -> float { return x * v.x + y * v.y; }
     [[nodiscard]] auto length() const -> float { return std::sqrt(x * x + y * y); }
     [[nodiscard]] constexpr auto length_squared() const -> float { return x * x + y * y; }
-    [[nodiscard]] auto normalized() const -> Vector2 { auto l = length(); return l > kEpsilon ? Vector2{x / l, y / l} : Vector2{}; }
+    [[nodiscard]] auto normalized() const -> Vector2
+    {
+        auto l = length();
+        return l > kEpsilon ? Vector2{x / l, y / l} : Vector2{};
+    }
 
-    constexpr auto operator[](std::size_t i) -> float& { assert(i < 2); return i == 0 ? x : y; }
-    constexpr auto operator[](std::size_t i) const -> float { assert(i < 2); return i == 0 ? x : y; }
+    constexpr auto operator[](std::size_t i) -> float&
+    {
+        assert(i < 2);
+        return i == 0 ? x : y;
+    }
+    constexpr auto operator[](std::size_t i) const -> float
+    {
+        assert(i < 2);
+        return i == 0 ? x : y;
+    }
 
     constexpr auto operator==(const Vector2& v) const -> bool { return x == v.x && y == v.y; }
     constexpr auto operator!=(const Vector2& v) const -> bool { return !(*this == v); }
@@ -42,6 +74,9 @@ struct Vector2
     static constexpr auto one() -> Vector2 { return {1, 1}; }
 };
 
-constexpr auto operator*(float s, const Vector2& v) -> Vector2 { return v * s; }
+constexpr auto operator*(float s, const Vector2& v) -> Vector2
+{
+    return v * s;
+}
 
-} // namespace atlas::math
+}  // namespace atlas::math

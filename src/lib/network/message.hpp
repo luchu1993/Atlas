@@ -41,14 +41,13 @@ class MessageHandler
 {
 public:
     virtual ~MessageHandler() = default;
-    virtual void handle_message(const Address& source, Channel* channel,
-                                MessageID id, BinaryReader& data) = 0;
+    virtual void handle_message(const Address& source, Channel* channel, MessageID id,
+                                BinaryReader& data) = 0;
 };
 
 // C++20 concept: a type is a NetworkMessage if it provides these
 template <typename T>
-concept NetworkMessage = requires(const T& msg, BinaryWriter& w, BinaryReader& r)
-{
+concept NetworkMessage = requires(const T& msg, BinaryWriter& w, BinaryReader& r) {
     { T::descriptor() } -> std::same_as<const MessageDesc&>;
     { msg.serialize(w) } -> std::same_as<void>;
     { T::deserialize(r) } -> std::same_as<Result<T>>;
@@ -61,13 +60,10 @@ class TypedMessageHandler : public MessageHandler
 public:
     using Callback = std::function<void(const Address&, Channel*, const Msg&)>;
 
-    explicit TypedMessageHandler(Callback callback)
-        : callback_(std::move(callback))
-    {
-    }
+    explicit TypedMessageHandler(Callback callback) : callback_(std::move(callback)) {}
 
-    void handle_message(const Address& source, Channel* channel,
-                        MessageID id, BinaryReader& data) override
+    void handle_message(const Address& source, Channel* channel, MessageID id,
+                        BinaryReader& data) override
     {
         auto result = Msg::deserialize(data);
         if (result.has_value())
@@ -89,4 +85,4 @@ template <NetworkMessage Msg>
     return std::make_shared<TypedMessageHandler<Msg>>(std::move(callback));
 }
 
-} // namespace atlas
+}  // namespace atlas

@@ -1,7 +1,8 @@
 #include "network/bg_task_manager.hpp"
+
+#include "foundation/log.hpp"
 #include "network/event_dispatcher.hpp"
 #include "platform/threading.hpp"
-#include "foundation/log.hpp"
 
 namespace atlas
 {
@@ -31,10 +32,7 @@ struct BgTaskManager::Impl
     std::vector<std::unique_ptr<BackgroundTask>> completed;
     std::atomic<uint32_t> in_flight{0};
 
-    Impl(EventDispatcher& d, uint32_t threads)
-        : dispatcher(d), pool(threads)
-    {
-    }
+    Impl(EventDispatcher& d, uint32_t threads) : dispatcher(d), pool(threads) {}
 };
 
 BgTaskManager::BgTaskManager(EventDispatcher& dispatcher, uint32_t num_threads)
@@ -56,31 +54,31 @@ void BgTaskManager::add_task(std::unique_ptr<BackgroundTask> task)
     impl_->in_flight.fetch_add(1, std::memory_order_relaxed);
 
     auto* raw = task.release();  // ThreadPool takes ownership via lambda
-    impl_->pool.submit([this, raw]()
-    {
-        std::unique_ptr<BackgroundTask> owned(raw);
-        try
+    impl_->pool.submit(
+        [this, raw]()
         {
-            owned->do_background_task();
-        }
-        catch (const std::exception& e)
-        {
-            ATLAS_LOG_WARNING("Background task exception: {}", e.what());
-        }
-        catch (...)
-        {
-            ATLAS_LOG_WARNING("Background task unknown exception");
-        }
+            std::unique_ptr<BackgroundTask> owned(raw);
+            try
+            {
+                owned->do_background_task();
+            }
+            catch (const std::exception& e)
+            {
+                ATLAS_LOG_WARNING("Background task exception: {}", e.what());
+            }
+            catch (...)
+            {
+                ATLAS_LOG_WARNING("Background task unknown exception");
+            }
 
-        {
-            std::lock_guard lock(impl_->completed_mutex);
-            impl_->completed.push_back(std::move(owned));
-        }
-    });
+            {
+                std::lock_guard lock(impl_->completed_mutex);
+                impl_->completed.push_back(std::move(owned));
+            }
+        });
 }
 
-void BgTaskManager::add_task(std::function<void()> bg_work,
-                              std::function<void()> main_callback)
+void BgTaskManager::add_task(std::function<void()> bg_work, std::function<void()> main_callback)
 {
     add_task(std::make_unique<LambdaTask>(std::move(bg_work), std::move(main_callback)));
 }
@@ -121,4 +119,4 @@ void BgTaskManager::do_task()
     }
 }
 
-} // namespace atlas
+}  // namespace atlas

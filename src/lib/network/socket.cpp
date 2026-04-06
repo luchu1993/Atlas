@@ -1,20 +1,21 @@
 #include "network/socket.hpp"
+
 #include "foundation/log.hpp"
 
 #include <format>
 
 #if ATLAS_PLATFORM_WINDOWS
-#   include <winsock2.h>
-#   include <ws2tcpip.h>
-#   pragma comment(lib, "ws2_32.lib")
+#include <winsock2.h>
+#include <ws2tcpip.h>
+#pragma comment(lib, "ws2_32.lib")
 #else
-#   include <arpa/inet.h>
-#   include <fcntl.h>
-#   include <netinet/in.h>
-#   include <netinet/tcp.h>
-#   include <sys/socket.h>
-#   include <unistd.h>
-#   include <cerrno>
+#include <arpa/inet.h>
+#include <cerrno>
+#include <fcntl.h>
+#include <netinet/in.h>
+#include <netinet/tcp.h>
+#include <sys/socket.h>
+#include <unistd.h>
 #endif
 
 namespace
@@ -73,14 +74,13 @@ auto map_socket_error() -> atlas::Error
         case WSAEALREADY:
             return atlas::Error(atlas::ErrorCode::WouldBlock, "Operation in progress");
         default:
-            return atlas::Error(atlas::ErrorCode::IoError,
-                std::format("Socket error: {}", err));
+            return atlas::Error(atlas::ErrorCode::IoError, std::format("Socket error: {}", err));
     }
 #else
     int err = errno;
     switch (err)
     {
-        case EWOULDBLOCK: // same as EAGAIN on most systems
+        case EWOULDBLOCK:  // same as EAGAIN on most systems
         case EINPROGRESS:
             return atlas::Error(atlas::ErrorCode::WouldBlock, "Operation would block");
         case ECONNREFUSED:
@@ -94,8 +94,7 @@ auto map_socket_error() -> atlas::Error
         case EMSGSIZE:
             return atlas::Error(atlas::ErrorCode::MessageTooLarge, "Message too large");
         default:
-            return atlas::Error(atlas::ErrorCode::IoError,
-                std::format("Socket error: {}", err));
+            return atlas::Error(atlas::ErrorCode::IoError, std::format("Socket error: {}", err));
     }
 #endif
 }
@@ -113,7 +112,7 @@ void close_socket(atlas::FdHandle fd)
 #endif
 }
 
-} // anonymous namespace
+}  // anonymous namespace
 
 namespace atlas
 {
@@ -130,8 +129,7 @@ Socket::~Socket()
     }
 }
 
-Socket::Socket(Socket&& other) noexcept
-    : fd_(other.fd_)
+Socket::Socket(Socket&& other) noexcept : fd_(other.fd_)
 {
     other.fd_ = kInvalidFd;
 }
@@ -222,10 +220,8 @@ auto Socket::create_udp() -> Result<Socket>
 auto Socket::bind(const Address& addr) -> Result<void>
 {
     auto sa = addr.to_sockaddr();
-    int result = ::bind(
-        static_cast<decltype(::socket(0, 0, 0))>(fd_),
-        reinterpret_cast<const sockaddr*>(&sa),
-        sizeof(sa));
+    int result = ::bind(static_cast<decltype(::socket(0, 0, 0))>(fd_),
+                        reinterpret_cast<const sockaddr*>(&sa), sizeof(sa));
 
     if (result != 0)
     {
@@ -236,9 +232,7 @@ auto Socket::bind(const Address& addr) -> Result<void>
 
 auto Socket::listen(int backlog) -> Result<void>
 {
-    int result = ::listen(
-        static_cast<decltype(::socket(0, 0, 0))>(fd_),
-        backlog);
+    int result = ::listen(static_cast<decltype(::socket(0, 0, 0))>(fd_), backlog);
 
     if (result != 0)
     {
@@ -253,20 +247,15 @@ auto Socket::accept() -> Result<std::pair<Socket, Address>>
     socklen_t len = sizeof(client_addr);
 
 #if ATLAS_PLATFORM_WINDOWS
-    SOCKET client_raw = ::accept(
-        static_cast<SOCKET>(fd_),
-        reinterpret_cast<sockaddr*>(&client_addr),
-        &len);
+    SOCKET client_raw =
+        ::accept(static_cast<SOCKET>(fd_), reinterpret_cast<sockaddr*>(&client_addr), &len);
     if (client_raw == INVALID_SOCKET)
     {
         return map_socket_error();
     }
     auto client_fd = static_cast<FdHandle>(client_raw);
 #else
-    int client_raw = ::accept(
-        fd_,
-        reinterpret_cast<sockaddr*>(&client_addr),
-        &len);
+    int client_raw = ::accept(fd_, reinterpret_cast<sockaddr*>(&client_addr), &len);
     if (client_raw == -1)
     {
         return map_socket_error();
@@ -288,10 +277,8 @@ auto Socket::accept() -> Result<std::pair<Socket, Address>>
 auto Socket::connect(const Address& addr) -> Result<void>
 {
     auto sa = addr.to_sockaddr();
-    int result = ::connect(
-        static_cast<decltype(::socket(0, 0, 0))>(fd_),
-        reinterpret_cast<const sockaddr*>(&sa),
-        sizeof(sa));
+    int result = ::connect(static_cast<decltype(::socket(0, 0, 0))>(fd_),
+                           reinterpret_cast<const sockaddr*>(&sa), sizeof(sa));
 
     if (result != 0)
     {
@@ -320,21 +307,14 @@ auto Socket::connect(const Address& addr) -> Result<void>
 auto Socket::send(std::span<const std::byte> data) -> Result<size_t>
 {
 #if ATLAS_PLATFORM_WINDOWS
-    int sent = ::send(
-        static_cast<SOCKET>(fd_),
-        reinterpret_cast<const char*>(data.data()),
-        static_cast<int>(data.size()),
-        0);
+    int sent = ::send(static_cast<SOCKET>(fd_), reinterpret_cast<const char*>(data.data()),
+                      static_cast<int>(data.size()), 0);
     if (sent == SOCKET_ERROR)
     {
         return map_socket_error();
     }
 #else
-    auto sent = ::send(
-        fd_,
-        data.data(),
-        data.size(),
-        0);
+    auto sent = ::send(fd_, data.data(), data.size(), 0);
     if (sent == -1)
     {
         return map_socket_error();
@@ -347,21 +327,14 @@ auto Socket::send(std::span<const std::byte> data) -> Result<size_t>
 auto Socket::recv(std::span<std::byte> buffer) -> Result<size_t>
 {
 #if ATLAS_PLATFORM_WINDOWS
-    int received = ::recv(
-        static_cast<SOCKET>(fd_),
-        reinterpret_cast<char*>(buffer.data()),
-        static_cast<int>(buffer.size()),
-        0);
+    int received = ::recv(static_cast<SOCKET>(fd_), reinterpret_cast<char*>(buffer.data()),
+                          static_cast<int>(buffer.size()), 0);
     if (received == SOCKET_ERROR)
     {
         return map_socket_error();
     }
 #else
-    auto received = ::recv(
-        fd_,
-        buffer.data(),
-        buffer.size(),
-        0);
+    auto received = ::recv(fd_, buffer.data(), buffer.size(), 0);
     if (received == -1)
     {
         return map_socket_error();
@@ -380,25 +353,16 @@ auto Socket::send_to(std::span<const std::byte> data, const Address& dest) -> Re
     auto sa = dest.to_sockaddr();
 
 #if ATLAS_PLATFORM_WINDOWS
-    int sent = ::sendto(
-        static_cast<SOCKET>(fd_),
-        reinterpret_cast<const char*>(data.data()),
-        static_cast<int>(data.size()),
-        0,
-        reinterpret_cast<const sockaddr*>(&sa),
-        sizeof(sa));
+    int sent = ::sendto(static_cast<SOCKET>(fd_), reinterpret_cast<const char*>(data.data()),
+                        static_cast<int>(data.size()), 0, reinterpret_cast<const sockaddr*>(&sa),
+                        sizeof(sa));
     if (sent == SOCKET_ERROR)
     {
         return map_socket_error();
     }
 #else
-    auto sent = ::sendto(
-        fd_,
-        data.data(),
-        data.size(),
-        0,
-        reinterpret_cast<const sockaddr*>(&sa),
-        sizeof(sa));
+    auto sent = ::sendto(fd_, data.data(), data.size(), 0, reinterpret_cast<const sockaddr*>(&sa),
+                         sizeof(sa));
     if (sent == -1)
     {
         return map_socket_error();
@@ -414,25 +378,16 @@ auto Socket::recv_from(std::span<std::byte> buffer) -> Result<std::pair<size_t, 
     socklen_t len = sizeof(src);
 
 #if ATLAS_PLATFORM_WINDOWS
-    int received = ::recvfrom(
-        static_cast<SOCKET>(fd_),
-        reinterpret_cast<char*>(buffer.data()),
-        static_cast<int>(buffer.size()),
-        0,
-        reinterpret_cast<sockaddr*>(&src),
-        &len);
+    int received =
+        ::recvfrom(static_cast<SOCKET>(fd_), reinterpret_cast<char*>(buffer.data()),
+                   static_cast<int>(buffer.size()), 0, reinterpret_cast<sockaddr*>(&src), &len);
     if (received == SOCKET_ERROR)
     {
         return map_socket_error();
     }
 #else
-    auto received = ::recvfrom(
-        fd_,
-        buffer.data(),
-        buffer.size(),
-        0,
-        reinterpret_cast<sockaddr*>(&src),
-        &len);
+    auto received =
+        ::recvfrom(fd_, buffer.data(), buffer.size(), 0, reinterpret_cast<sockaddr*>(&src), &len);
     if (received == -1)
     {
         return map_socket_error();
@@ -467,43 +422,27 @@ void Socket::set_non_blocking(bool enable)
 void Socket::set_reuse_addr(bool enable)
 {
     int optval = enable ? 1 : 0;
-    ::setsockopt(
-        static_cast<decltype(::socket(0, 0, 0))>(fd_),
-        SOL_SOCKET,
-        SO_REUSEADDR,
-        reinterpret_cast<const char*>(&optval),
-        sizeof(optval));
+    ::setsockopt(static_cast<decltype(::socket(0, 0, 0))>(fd_), SOL_SOCKET, SO_REUSEADDR,
+                 reinterpret_cast<const char*>(&optval), sizeof(optval));
 }
 
 void Socket::set_no_delay(bool enable)
 {
     int optval = enable ? 1 : 0;
-    ::setsockopt(
-        static_cast<decltype(::socket(0, 0, 0))>(fd_),
-        IPPROTO_TCP,
-        TCP_NODELAY,
-        reinterpret_cast<const char*>(&optval),
-        sizeof(optval));
+    ::setsockopt(static_cast<decltype(::socket(0, 0, 0))>(fd_), IPPROTO_TCP, TCP_NODELAY,
+                 reinterpret_cast<const char*>(&optval), sizeof(optval));
 }
 
 void Socket::set_send_buffer_size(int size)
 {
-    ::setsockopt(
-        static_cast<decltype(::socket(0, 0, 0))>(fd_),
-        SOL_SOCKET,
-        SO_SNDBUF,
-        reinterpret_cast<const char*>(&size),
-        sizeof(size));
+    ::setsockopt(static_cast<decltype(::socket(0, 0, 0))>(fd_), SOL_SOCKET, SO_SNDBUF,
+                 reinterpret_cast<const char*>(&size), sizeof(size));
 }
 
 void Socket::set_recv_buffer_size(int size)
 {
-    ::setsockopt(
-        static_cast<decltype(::socket(0, 0, 0))>(fd_),
-        SOL_SOCKET,
-        SO_RCVBUF,
-        reinterpret_cast<const char*>(&size),
-        sizeof(size));
+    ::setsockopt(static_cast<decltype(::socket(0, 0, 0))>(fd_), SOL_SOCKET, SO_RCVBUF,
+                 reinterpret_cast<const char*>(&size), sizeof(size));
 }
 
 // ============================================================================
@@ -515,10 +454,8 @@ auto Socket::local_address() const -> Result<Address>
     sockaddr_in sa{};
     socklen_t len = sizeof(sa);
 
-    int result = ::getsockname(
-        static_cast<decltype(::socket(0, 0, 0))>(fd_),
-        reinterpret_cast<sockaddr*>(&sa),
-        &len);
+    int result = ::getsockname(static_cast<decltype(::socket(0, 0, 0))>(fd_),
+                               reinterpret_cast<sockaddr*>(&sa), &len);
 
     if (result != 0)
     {
@@ -527,4 +464,4 @@ auto Socket::local_address() const -> Result<Address>
     return Address(sa);
 }
 
-} // namespace atlas
+}  // namespace atlas

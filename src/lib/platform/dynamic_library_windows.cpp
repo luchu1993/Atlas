@@ -20,8 +20,7 @@ DynamicLibrary::~DynamicLibrary()
     }
 }
 
-DynamicLibrary::DynamicLibrary(DynamicLibrary&& other) noexcept
-    : handle_(other.handle_)
+DynamicLibrary::DynamicLibrary(DynamicLibrary&& other) noexcept : handle_(other.handle_)
 {
     other.handle_ = nullptr;
 }
@@ -41,16 +40,14 @@ DynamicLibrary& DynamicLibrary::operator=(DynamicLibrary&& other) noexcept
 // Loading
 // ============================================================================
 
-auto DynamicLibrary::load(const std::filesystem::path& path)
-    -> Result<DynamicLibrary>
+auto DynamicLibrary::load(const std::filesystem::path& path) -> Result<DynamicLibrary>
 {
     HMODULE module = LoadLibraryW(path.wstring().c_str());
     if (!module)
     {
         DWORD err = GetLastError();
         return Error{ErrorCode::IoError,
-            "LoadLibrary failed (error " + std::to_string(err) + "): "
-            + path.string()};
+                     "LoadLibrary failed (error " + std::to_string(err) + "): " + path.string()};
     }
     return DynamicLibrary{static_cast<void*>(module)};
 }
@@ -66,8 +63,7 @@ auto DynamicLibrary::get_symbol_raw(std::string_view name) -> void*
         return nullptr;
     }
     std::string name_str(name);
-    return reinterpret_cast<void*>(
-        GetProcAddress(static_cast<HMODULE>(handle_), name_str.c_str()));
+    return reinterpret_cast<void*>(GetProcAddress(static_cast<HMODULE>(handle_), name_str.c_str()));
 }
 
 // ============================================================================
@@ -83,6 +79,6 @@ void DynamicLibrary::unload()
     }
 }
 
-} // namespace atlas
+}  // namespace atlas
 
-#endif // ATLAS_PLATFORM_WINDOWS
+#endif  // ATLAS_PLATFORM_WINDOWS

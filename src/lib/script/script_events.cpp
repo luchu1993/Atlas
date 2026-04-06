@@ -1,13 +1,13 @@
 #include "script/script_events.hpp"
+
+#include "foundation/log.hpp"
 #include "pyscript/py_convert.hpp"
 #include "pyscript/py_error.hpp"
-#include "foundation/log.hpp"
 
 namespace atlas
 {
 
-ScriptEvents::ScriptEvents(PyObjectPtr personality_module)
-    : module_(std::move(personality_module))
+ScriptEvents::ScriptEvents(PyObjectPtr personality_module) : module_(std::move(personality_module))
 {
 }
 
@@ -94,4 +94,4 @@ void ScriptEvents::fire_event(std::string_view event, PyObjectPtr args)
     }
 }
 
-} // namespace atlas
+}  // namespace atlas

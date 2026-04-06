@@ -1,7 +1,7 @@
 #pragma once
 
-#include "pyscript/py_object.hpp"
 #include "foundation/error.hpp"
+#include "pyscript/py_object.hpp"
 
 #include <cstdint>
 #include <string>
@@ -52,15 +52,14 @@ namespace atlas::py_convert
 
 [[nodiscard]] inline auto to_python(std::string_view val) -> PyObjectPtr
 {
-    return PyObjectPtr(PyUnicode_FromStringAndSize(
-        val.data(), static_cast<Py_ssize_t>(val.size())));
+    return PyObjectPtr(
+        PyUnicode_FromStringAndSize(val.data(), static_cast<Py_ssize_t>(val.size())));
 }
 
 [[nodiscard]] inline auto to_python(const std::vector<std::byte>& val) -> PyObjectPtr
 {
-    return PyObjectPtr(PyBytes_FromStringAndSize(
-        reinterpret_cast<const char*>(val.data()),
-        static_cast<Py_ssize_t>(val.size())));
+    return PyObjectPtr(PyBytes_FromStringAndSize(reinterpret_cast<const char*>(val.data()),
+                                                 static_cast<Py_ssize_t>(val.size())));
 }
 
 // ============================================================================
@@ -164,8 +163,7 @@ template <>
 }
 
 template <>
-[[nodiscard]] inline auto from_python<std::string>(PyObject* obj)
-    -> Result<std::string>
+[[nodiscard]] inline auto from_python<std::string>(PyObject* obj) -> Result<std::string>
 {
     if (!obj)
     {
@@ -184,8 +182,7 @@ template <>
     }
     if (PyBytes_Check(obj))
     {
-        return std::string(PyBytes_AsString(obj),
-            static_cast<std::size_t>(PyBytes_Size(obj)));
+        return std::string(PyBytes_AsString(obj), static_cast<std::size_t>(PyBytes_Size(obj)));
     }
     return Error(ErrorCode::ScriptTypeError, "Expected str or bytes");
 }
@@ -203,4 +200,4 @@ template <>
     return std::vector<std::byte>(data, data + size);
 }
 
-} // namespace atlas::py_convert
+}  // namespace atlas::py_convert

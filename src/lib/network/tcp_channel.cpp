@@ -1,6 +1,7 @@
 #include "network/tcp_channel.hpp"
-#include "network/event_dispatcher.hpp"
+
 #include "foundation/log.hpp"
+#include "network/event_dispatcher.hpp"
 
 #include <array>
 #include <cstring>
@@ -8,10 +9,9 @@
 namespace atlas
 {
 
-TcpChannel::TcpChannel(EventDispatcher& dispatcher, InterfaceTable& table,
-                       Socket socket, const Address& remote)
-    : Channel(dispatcher, table, remote)
-    , socket_(std::move(socket))
+TcpChannel::TcpChannel(EventDispatcher& dispatcher, InterfaceTable& table, Socket socket,
+                       const Address& remote)
+    : Channel(dispatcher, table, remote), socket_(std::move(socket))
 {
 }
 
@@ -36,8 +36,8 @@ void TcpChannel::on_readable()
             {
                 break;  // no more data available
             }
-            ATLAS_LOG_WARNING("TcpChannel recv error from {}: {}",
-                remote_.to_string(), result.error().message());
+            ATLAS_LOG_WARNING("TcpChannel recv error from {}: {}", remote_.to_string(),
+                              result.error().message());
             on_disconnect();
             return;
         }
@@ -55,8 +55,7 @@ void TcpChannel::on_readable()
         // Backpressure: if recv buffer too large, condemn
         if (recv_buffer_.size() > kMaxRecvBufferSize)
         {
-            ATLAS_LOG_ERROR("TcpChannel recv buffer overflow from {}",
-                remote_.to_string());
+            ATLAS_LOG_ERROR("TcpChannel recv buffer overflow from {}", remote_.to_string());
             on_disconnect();
             return;
         }
@@ -83,8 +82,8 @@ void TcpChannel::process_recv_buffer()
         // Sanity check
         if (frame_length > kMaxBundleSize)
         {
-            ATLAS_LOG_ERROR("TcpChannel oversized frame {} from {}",
-                frame_length, remote_.to_string());
+            ATLAS_LOG_ERROR("TcpChannel oversized frame {} from {}", frame_length,
+                            remote_.to_string());
             on_disconnect();
             return;
         }
@@ -117,8 +116,7 @@ auto TcpChannel::do_send(std::span<const std::byte> data) -> Result<size_t>
     uint32_t frame_length = endian::to_little(static_cast<uint32_t>(data.size()));
     auto* header_bytes = reinterpret_cast<const std::byte*>(&frame_length);
 
-    write_buffer_.insert(write_buffer_.end(), header_bytes,
-                         header_bytes + sizeof(uint32_t));
+    write_buffer_.insert(write_buffer_.end(), header_bytes, header_bytes + sizeof(uint32_t));
     write_buffer_.insert(write_buffer_.end(), data.begin(), data.end());
 
     try_flush_write_buffer();
@@ -139,8 +137,8 @@ void TcpChannel::try_flush_write_buffer()
                 update_write_interest();
                 return;
             }
-            ATLAS_LOG_WARNING("TcpChannel send error to {}: {}",
-                remote_.to_string(), result.error().message());
+            ATLAS_LOG_WARNING("TcpChannel send error to {}: {}", remote_.to_string(),
+                              result.error().message());
             on_disconnect();
             return;
         }
@@ -166,8 +164,8 @@ void TcpChannel::update_write_interest()
         auto result = dispatcher_.modify_interest(socket_.fd(), interest);
         if (!result)
         {
-            ATLAS_LOG_ERROR("Failed to set write interest for {}: {}",
-                remote_.to_string(), result.error().message());
+            ATLAS_LOG_ERROR("Failed to set write interest for {}: {}", remote_.to_string(),
+                            result.error().message());
             on_disconnect();
             return;
         }
@@ -178,8 +176,8 @@ void TcpChannel::update_write_interest()
         auto result = dispatcher_.modify_interest(socket_.fd(), IOEvent::Readable);
         if (!result)
         {
-            ATLAS_LOG_ERROR("Failed to clear write interest for {}: {}",
-                remote_.to_string(), result.error().message());
+            ATLAS_LOG_ERROR("Failed to clear write interest for {}: {}", remote_.to_string(),
+                            result.error().message());
             on_disconnect();
             return;
         }
@@ -187,4 +185,4 @@ void TcpChannel::update_write_interest()
     }
 }
 
-} // namespace atlas
+}  // namespace atlas

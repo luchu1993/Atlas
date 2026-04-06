@@ -44,4 +44,4 @@ private:
     std::unordered_map<std::string, std::vector<PyObjectPtr>> listeners_;
 };
 
-} // namespace atlas
+}  // namespace atlas

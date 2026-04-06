@@ -79,4 +79,4 @@ void PoolAllocator::deallocate(void* ptr)
     --in_use_;
 }
 
-} // namespace atlas
+}  // namespace atlas

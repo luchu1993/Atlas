@@ -13,12 +13,12 @@ template <typename T>
 class RingBuffer
 {
 public:
-    explicit RingBuffer(std::size_t capacity)
-        : buffer_(capacity), capacity_(capacity) {}
+    explicit RingBuffer(std::size_t capacity) : buffer_(capacity), capacity_(capacity) {}
 
     auto push_back(const T& item) -> bool
     {
-        if (full()) return false;
+        if (full())
+            return false;
         buffer_[tail_] = item;
         tail_ = (tail_ + 1) % capacity_;
         ++size_;
@@ -27,7 +27,8 @@ public:
 
     auto push_back(T&& item) -> bool
     {
-        if (full()) return false;
+        if (full())
+            return false;
         buffer_[tail_] = std::move(item);
         tail_ = (tail_ + 1) % capacity_;
         ++size_;
@@ -36,7 +37,8 @@ public:
 
     auto pop_front() -> std::optional<T>
     {
-        if (empty()) return std::nullopt;
+        if (empty())
+            return std::nullopt;
         T value = std::move(buffer_[head_]);
         head_ = (head_ + 1) % capacity_;
         --size_;
@@ -65,12 +67,14 @@ public:
         return buffer_[(head_ + index) % capacity_];
     }
 
-    auto operator[](std::size_t index) -> T&
-    {
-        return buffer_[(head_ + index) % capacity_];
-    }
+    auto operator[](std::size_t index) -> T& { return buffer_[(head_ + index) % capacity_]; }
 
-    void clear() { head_ = 0; tail_ = 0; size_ = 0; }
+    void clear()
+    {
+        head_ = 0;
+        tail_ = 0;
+        size_ = 0;
+    }
 
 private:
     std::vector<T> buffer_;
@@ -80,4 +84,4 @@ private:
     std::size_t size_{0};
 };
 
-} // namespace atlas
+}  // namespace atlas

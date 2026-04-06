@@ -89,4 +89,4 @@ private:
     PoolAllocator pool_;
 };
 
-} // namespace atlas
+}  // namespace atlas

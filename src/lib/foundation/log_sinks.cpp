@@ -11,8 +11,7 @@ namespace atlas
 // ConsoleSink
 // ---------------------------------------------------------------------------
 
-void ConsoleSink::write(LogLevel level, std::string_view category,
-                        std::string_view message,
+void ConsoleSink::write(LogLevel level, std::string_view category, std::string_view message,
                         const std::source_location& location)
 {
     const char* filename = location.file_name();
@@ -21,15 +20,13 @@ void ConsoleSink::write(LogLevel level, std::string_view category,
     if (category.empty())
     {
         oss << "[" << log_level_name(level) << "] "
-            << "[" << filename << ":" << location.line() << "] "
-            << message << "\n";
+            << "[" << filename << ":" << location.line() << "] " << message << "\n";
     }
     else
     {
         oss << "[" << log_level_name(level) << "] "
             << "[" << category << "] "
-            << "[" << filename << ":" << location.line() << "] "
-            << message << "\n";
+            << "[" << filename << ":" << location.line() << "] " << message << "\n";
     }
 
     std::string formatted = oss.str();
@@ -59,21 +56,18 @@ struct FileSink::Impl
     std::ofstream file_;
 };
 
-FileSink::FileSink(const std::filesystem::path& path)
-    : impl_(std::make_unique<Impl>())
+FileSink::FileSink(const std::filesystem::path& path) : impl_(std::make_unique<Impl>())
 {
     impl_->file_.open(path, std::ios::app);
     if (!impl_->file_.is_open())
     {
-        fprintf(stderr, "[WARNING] Failed to open log file: %s\n",
-                path.string().c_str());
+        fprintf(stderr, "[WARNING] Failed to open log file: %s\n", path.string().c_str());
     }
 }
 
 FileSink::~FileSink() = default;
 
-void FileSink::write(LogLevel level, std::string_view category,
-                     std::string_view message,
+void FileSink::write(LogLevel level, std::string_view category, std::string_view message,
                      const std::source_location& location)
 {
     if (!impl_->file_.is_open())
@@ -88,15 +82,13 @@ void FileSink::write(LogLevel level, std::string_view category,
         if (category.empty())
         {
             impl_->file_ << "[" << log_level_name(level) << "] "
-                          << "[" << filename << ":" << location.line() << "] "
-                          << message << "\n";
+                         << "[" << filename << ":" << location.line() << "] " << message << "\n";
         }
         else
         {
             impl_->file_ << "[" << log_level_name(level) << "] "
-                          << "[" << category << "] "
-                          << "[" << filename << ":" << location.line() << "] "
-                          << message << "\n";
+                         << "[" << category << "] "
+                         << "[" << filename << ":" << location.line() << "] " << message << "\n";
         }
     }
     catch (...)
@@ -122,4 +114,4 @@ void FileSink::flush()
     }
 }
 
-} // namespace atlas
+}  // namespace atlas

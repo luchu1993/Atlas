@@ -20,8 +20,7 @@ DynamicLibrary::~DynamicLibrary()
     }
 }
 
-DynamicLibrary::DynamicLibrary(DynamicLibrary&& other) noexcept
-    : handle_(other.handle_)
+DynamicLibrary::DynamicLibrary(DynamicLibrary&& other) noexcept : handle_(other.handle_)
 {
     other.handle_ = nullptr;
 }
@@ -41,15 +40,14 @@ DynamicLibrary& DynamicLibrary::operator=(DynamicLibrary&& other) noexcept
 // Loading
 // ============================================================================
 
-auto DynamicLibrary::load(const std::filesystem::path& path)
-    -> Result<DynamicLibrary>
+auto DynamicLibrary::load(const std::filesystem::path& path) -> Result<DynamicLibrary>
 {
     void* handle = dlopen(path.string().c_str(), RTLD_NOW);
     if (!handle)
     {
         const char* err = dlerror();
         return Error{ErrorCode::IoError,
-            std::string("dlopen failed: ") + (err ? err : "unknown error")};
+                     std::string("dlopen failed: ") + (err ? err : "unknown error")};
     }
     return DynamicLibrary{handle};
 }
@@ -81,6 +79,6 @@ void DynamicLibrary::unload()
     }
 }
 
-} // namespace atlas
+}  // namespace atlas
 
-#endif // ATLAS_PLATFORM_LINUX
+#endif  // ATLAS_PLATFORM_LINUX

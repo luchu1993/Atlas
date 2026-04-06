@@ -14,20 +14,19 @@ namespace atlas
 
 struct ThreadPool::Impl
 {
-    std::vector<std::jthread>           workers;
-    std::queue<std::function<void()>>   tasks;
-    std::mutex                          mutex;
-    std::condition_variable             cv;
-    std::atomic<bool>                   stopped{false};
-    std::atomic<uint32_t>               pending{0};
+    std::vector<std::jthread> workers;
+    std::queue<std::function<void()>> tasks;
+    std::mutex mutex;
+    std::condition_variable cv;
+    std::atomic<bool> stopped{false};
+    std::atomic<uint32_t> pending{0};
 };
 
 // ============================================================================
 // ThreadPool
 // ============================================================================
 
-ThreadPool::ThreadPool(uint32_t num_threads)
-    : impl_(std::make_unique<Impl>())
+ThreadPool::ThreadPool(uint32_t num_threads) : impl_(std::make_unique<Impl>())
 {
     if (num_threads == 0)
     {
@@ -42,40 +41,41 @@ ThreadPool::ThreadPool(uint32_t num_threads)
 
     for (uint32_t i = 0; i < num_threads; ++i)
     {
-        impl_->workers.emplace_back([this](std::stop_token /*stop_token*/)
-        {
-            while (true)
+        impl_->workers.emplace_back(
+            [this](std::stop_token /*stop_token*/)
             {
-                std::function<void()> task;
-
+                while (true)
                 {
-                    std::unique_lock lock(impl_->mutex);
-                    impl_->cv.wait(lock, [this]()
-                    {
-                        return !impl_->tasks.empty()
-                               || impl_->stopped.load(std::memory_order_relaxed);
-                    });
+                    std::function<void()> task;
 
-                    // Exit only when stopped AND no remaining tasks (drain queue)
-                    if (impl_->stopped.load(std::memory_order_relaxed)
-                        && impl_->tasks.empty())
                     {
-                        return;
+                        std::unique_lock lock(impl_->mutex);
+                        impl_->cv.wait(lock,
+                                       [this]()
+                                       {
+                                           return !impl_->tasks.empty() ||
+                                                  impl_->stopped.load(std::memory_order_relaxed);
+                                       });
+
+                        // Exit only when stopped AND no remaining tasks (drain queue)
+                        if (impl_->stopped.load(std::memory_order_relaxed) && impl_->tasks.empty())
+                        {
+                            return;
+                        }
+
+                        if (impl_->tasks.empty())
+                        {
+                            continue;
+                        }
+
+                        task = std::move(impl_->tasks.front());
+                        impl_->tasks.pop();
                     }
 
-                    if (impl_->tasks.empty())
-                    {
-                        continue;
-                    }
-
-                    task = std::move(impl_->tasks.front());
-                    impl_->tasks.pop();
+                    task();
+                    impl_->pending.fetch_sub(1, std::memory_order_relaxed);
                 }
-
-                task();
-                impl_->pending.fetch_sub(1, std::memory_order_relaxed);
-            }
-        });
+            });
     }
 }
 
@@ -119,4 +119,4 @@ auto ThreadPool::pending_tasks() const -> uint32_t
     return impl_->pending.load(std::memory_order_relaxed);
 }
 
-} // namespace atlas
+}  // namespace atlas

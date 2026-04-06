@@ -11,8 +11,7 @@ namespace atlas
 class ConsoleSink : public LogSink
 {
 public:
-    void write(LogLevel level, std::string_view category,
-               std::string_view message,
+    void write(LogLevel level, std::string_view category, std::string_view message,
                const std::source_location& location) override;
     void flush() override;
 };
@@ -26,8 +25,7 @@ public:
     FileSink(const FileSink&) = delete;
     FileSink& operator=(const FileSink&) = delete;
 
-    void write(LogLevel level, std::string_view category,
-               std::string_view message,
+    void write(LogLevel level, std::string_view category, std::string_view message,
                const std::source_location& location) override;
     void flush() override;
 
@@ -36,4 +34,4 @@ private:
     std::unique_ptr<Impl> impl_;
 };
 
-} // namespace atlas
+}  // namespace atlas

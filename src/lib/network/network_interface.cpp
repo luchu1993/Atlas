@@ -1,8 +1,9 @@
 #include "network/network_interface.hpp"
+
+#include "foundation/log.hpp"
 #include "network/event_dispatcher.hpp"
 #include "network/tcp_channel.hpp"
 #include "network/udp_channel.hpp"
-#include "foundation/log.hpp"
 
 #include <algorithm>
 #include <array>
@@ -14,8 +15,7 @@ namespace atlas
 // Constructor / Destructor
 // ============================================================================
 
-NetworkInterface::NetworkInterface(EventDispatcher& dispatcher)
-    : dispatcher_(dispatcher)
+NetworkInterface::NetworkInterface(EventDispatcher& dispatcher) : dispatcher_(dispatcher)
 {
     dispatcher_.add_frequent_task(this);
 }
@@ -80,7 +80,7 @@ auto NetworkInterface::start_tcp_server(const Address& addr) -> Result<void>
 
     // Register for accept events
     auto reg = dispatcher_.register_reader(tcp_listen_socket_->fd(),
-        [this](FdHandle, IOEvent) { on_tcp_accept(); });
+                                           [this](FdHandle, IOEvent) { on_tcp_accept(); });
     if (!reg)
     {
         return reg.error();
@@ -115,28 +115,27 @@ auto NetworkInterface::connect_tcp(const Address& addr) -> Result<TcpChannel*>
         return conn.error();
     }
 
-    auto channel = std::make_unique<TcpChannel>(
-        dispatcher_, interface_table_, std::move(*sock), addr);
+    auto channel =
+        std::make_unique<TcpChannel>(dispatcher_, interface_table_, std::move(*sock), addr);
 
     auto reg = dispatcher_.register_reader(channel->fd(),
-        [ch = channel.get()](FdHandle, IOEvent events)
-        {
-            if ((events & IOEvent::Readable) != IOEvent::None)
-            {
-                ch->on_readable();
-            }
-            if ((events & IOEvent::Writable) != IOEvent::None)
-            {
-                ch->on_writable();
-            }
-        });
+                                           [ch = channel.get()](FdHandle, IOEvent events)
+                                           {
+                                               if ((events & IOEvent::Readable) != IOEvent::None)
+                                               {
+                                                   ch->on_readable();
+                                               }
+                                               if ((events & IOEvent::Writable) != IOEvent::None)
+                                               {
+                                                   ch->on_writable();
+                                               }
+                                           });
     if (!reg)
     {
         return reg.error();
     }
 
-    channel->set_disconnect_callback(
-        [this](Channel& ch) { on_channel_disconnect(ch); });
+    channel->set_disconnect_callback([this](Channel& ch) { on_channel_disconnect(ch); });
     channel->activate();
 
     auto* raw = channel.get();
@@ -175,7 +174,7 @@ auto NetworkInterface::start_udp(const Address& addr) -> Result<void>
     udp_socket_ = std::move(*sock);
 
     auto reg = dispatcher_.register_reader(udp_socket_->fd(),
-        [this](FdHandle, IOEvent) { on_udp_readable(); });
+                                           [this](FdHandle, IOEvent) { on_udp_readable(); });
     if (!reg)
     {
         return reg.error();
@@ -248,7 +247,7 @@ void NetworkInterface::prepare_for_shutdown()
     }
 
     ATLAS_LOG_INFO("NetworkInterface preparing for shutdown, {} channels condemned",
-        condemned_.size());
+                   condemned_.size());
 }
 
 // ============================================================================
@@ -284,8 +283,7 @@ void NetworkInterface::on_tcp_accept()
         // Rate check
         if (rate_limit_ > 0 && !check_rate_limit(peer_addr.ip()))
         {
-            ATLAS_LOG_WARNING("Rate limited connection from {}",
-                peer_addr.to_string());
+            ATLAS_LOG_WARNING("Rate limited connection from {}", peer_addr.to_string());
             continue;  // Socket destructor closes it
         }
 
@@ -294,34 +292,32 @@ void NetworkInterface::on_tcp_accept()
             continue;
         }
 
-        auto channel = std::make_unique<TcpChannel>(
-            dispatcher_, interface_table_, std::move(peer_sock), peer_addr);
+        auto channel = std::make_unique<TcpChannel>(dispatcher_, interface_table_,
+                                                    std::move(peer_sock), peer_addr);
 
-        auto reg = dispatcher_.register_reader(channel->fd(),
-            [ch = channel.get()](FdHandle, IOEvent events)
-            {
-                if ((events & IOEvent::Readable) != IOEvent::None)
-                {
-                    ch->on_readable();
-                }
-                if ((events & IOEvent::Writable) != IOEvent::None)
-                {
-                    ch->on_writable();
-                }
-            });
+        auto reg =
+            dispatcher_.register_reader(channel->fd(),
+                                        [ch = channel.get()](FdHandle, IOEvent events)
+                                        {
+                                            if ((events & IOEvent::Readable) != IOEvent::None)
+                                            {
+                                                ch->on_readable();
+                                            }
+                                            if ((events & IOEvent::Writable) != IOEvent::None)
+                                            {
+                                                ch->on_writable();
+                                            }
+                                        });
         if (!reg)
         {
-            ATLAS_LOG_ERROR("Failed to register channel fd: {}",
-                reg.error().message());
+            ATLAS_LOG_ERROR("Failed to register channel fd: {}", reg.error().message());
             continue;
         }
 
-        channel->set_disconnect_callback(
-            [this](Channel& ch) { on_channel_disconnect(ch); });
+        channel->set_disconnect_callback([this](Channel& ch) { on_channel_disconnect(ch); });
         channel->activate();
 
-        ATLAS_LOG_INFO("Accepted TCP connection from {}",
-            peer_addr.to_string());
+        ATLAS_LOG_INFO("Accepted TCP connection from {}", peer_addr.to_string());
         channels_[peer_addr] = std::move(channel);
     }
 }
@@ -363,19 +359,16 @@ void NetworkInterface::on_udp_readable()
                 continue;
             }
 
-            auto channel = std::make_unique<UdpChannel>(
-                dispatcher_, interface_table_, *udp_socket_, src_addr);
-            channel->set_disconnect_callback(
-                [this](Channel& ch) { on_channel_disconnect(ch); });
+            auto channel =
+                std::make_unique<UdpChannel>(dispatcher_, interface_table_, *udp_socket_, src_addr);
+            channel->set_disconnect_callback([this](Channel& ch) { on_channel_disconnect(ch); });
             channel->activate();
-            auto [inserted_it, _] = channels_.emplace(
-                src_addr, std::move(channel));
+            auto [inserted_it, _] = channels_.emplace(src_addr, std::move(channel));
             it = inserted_it;
         }
 
         auto* udp_ch = static_cast<UdpChannel*>(it->second.get());
-        udp_ch->on_datagram_received(
-            std::span<const std::byte>(buf.data(), bytes));
+        udp_ch->on_datagram_received(std::span<const std::byte>(buf.data(), bytes));
     }
 }
 
@@ -410,9 +403,7 @@ void NetworkInterface::process_condemned_channels()
 {
     auto now = Clock::now();
     std::erase_if(condemned_, [now](const CondemnedEntry& entry)
-    {
-        return (now - entry.condemned_at) >= kCondemnTimeout;
-    });
+                  { return (now - entry.condemned_at) >= kCondemnTimeout; });
 }
 
 // ============================================================================
@@ -435,4 +426,4 @@ auto NetworkInterface::check_rate_limit(uint32_t ip) -> bool
     return tracker.count <= rate_limit_;
 }
 
-} // namespace atlas
+}  // namespace atlas

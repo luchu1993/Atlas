@@ -1,7 +1,7 @@
 #pragma once
 
-#include "pyscript/py_object.hpp"
 #include "foundation/error.hpp"
+#include "pyscript/py_object.hpp"
 
 #include <functional>
 #include <memory>
@@ -23,8 +23,7 @@ namespace atlas
 
 struct PyWrapperObject
 {
-    PyObject_HEAD
-    void* cpp_instance;
+    PyObject_HEAD void* cpp_instance;
     void (*destructor)(void*);
 };
 
@@ -35,7 +34,8 @@ struct PyWrapperObject
 template <typename T>
 [[nodiscard]] auto py_unwrap(PyObject* obj) -> T*
 {
-    if (!obj) return nullptr;
+    if (!obj)
+        return nullptr;
     auto* wrapper = reinterpret_cast<PyWrapperObject*>(obj);
     return static_cast<T*>(wrapper->cpp_instance);
 }
@@ -47,8 +47,7 @@ template <typename T>
 // If own=true, the wrapper will delete the C++ object when Python GC
 // collects it. For proper typed destruction, use py_wrap_owned<T>.
 
-[[nodiscard]] auto py_wrap(PyTypeObject* type, void* instance, bool own = false)
-    -> PyObjectPtr;
+[[nodiscard]] auto py_wrap(PyTypeObject* type, void* instance, bool own = false) -> PyObjectPtr;
 
 // ============================================================================
 // py_wrap_owned — wrap with type-safe destructor
@@ -98,20 +97,18 @@ public:
     // Add a method. The function must have signature:
     //   PyObject*(PyObject* self, PyObject* args)
     // Use py_unwrap<T>(self) inside to get the C++ instance.
-    auto add_method(std::string_view name, PyCFunction func,
-                    int flags = METH_VARARGS,
+    auto add_method(std::string_view name, PyCFunction func, int flags = METH_VARARGS,
                     std::string_view doc = "") -> PyTypeBuilder&;
 
     // Add a property with getter and optional setter.
     // getter: PyObject*(PyObject* self, void* closure)
     // setter: int(PyObject* self, PyObject* value, void* closure) -- null for readonly
-    auto add_property(std::string_view name,
-                      getter get_func, setter set_func = nullptr,
+    auto add_property(std::string_view name, getter get_func, setter set_func = nullptr,
                       std::string_view doc = "") -> PyTypeBuilder&;
 
     // Add a read-only property
-    auto add_readonly(std::string_view name, getter get_func,
-                      std::string_view doc = "") -> PyTypeBuilder&;
+    auto add_readonly(std::string_view name, getter get_func, std::string_view doc = "")
+        -> PyTypeBuilder&;
 
     // Build and return the new type. The type is a heap type (Py_TPFLAGS_HEAPTYPE).
     // Returns the type object or an error.
@@ -126,4 +123,4 @@ private:
     std::unique_ptr<Impl> impl_;
 };
 
-} // namespace atlas
+}  // namespace atlas

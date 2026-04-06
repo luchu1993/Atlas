@@ -1,6 +1,6 @@
 #pragma once
 
-#include "pyscript/py_object.hpp"    // pulls in Python.h
+#include "pyscript/py_object.hpp"  // pulls in Python.h
 
 namespace atlas
 {
@@ -20,10 +20,7 @@ class GILGuard
 public:
     GILGuard() noexcept : state_(PyGILState_Ensure()) {}
 
-    ~GILGuard()
-    {
-        PyGILState_Release(state_);
-    }
+    ~GILGuard() { PyGILState_Release(state_); }
 
     GILGuard(const GILGuard&) = delete;
     GILGuard& operator=(const GILGuard&) = delete;
@@ -47,10 +44,7 @@ class GILRelease
 public:
     GILRelease() noexcept : state_(PyEval_SaveThread()) {}
 
-    ~GILRelease()
-    {
-        PyEval_RestoreThread(state_);
-    }
+    ~GILRelease() { PyEval_RestoreThread(state_); }
 
     GILRelease(const GILRelease&) = delete;
     GILRelease& operator=(const GILRelease&) = delete;
@@ -61,4 +55,4 @@ private:
     PyThreadState* state_;
 };
 
-} // namespace atlas
+}  // namespace atlas

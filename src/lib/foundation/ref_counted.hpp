@@ -10,8 +10,7 @@ namespace atlas
 
 // C++20 concept for intrusive ref counting
 template <typename T>
-concept IntrusiveRefCounted = requires(const T& obj)
-{
+concept IntrusiveRefCounted = requires(const T& obj) {
     { obj.add_ref() } -> std::same_as<uint32_t>;
     { obj.release() } -> std::same_as<uint32_t>;
     { obj.ref_count() } -> std::same_as<uint32_t>;
@@ -21,10 +20,7 @@ concept IntrusiveRefCounted = requires(const T& obj)
 class RefCounted
 {
 public:
-    auto add_ref() const -> uint32_t
-    {
-        return ++ref_count_;
-    }
+    auto add_ref() const -> uint32_t { return ++ref_count_; }
 
     auto release() const -> uint32_t
     {
@@ -36,10 +32,7 @@ public:
         return count;
     }
 
-    [[nodiscard]] auto ref_count() const -> uint32_t
-    {
-        return ref_count_;
-    }
+    [[nodiscard]] auto ref_count() const -> uint32_t { return ref_count_; }
 
 protected:
     RefCounted() = default;
@@ -89,4 +82,4 @@ private:
     mutable std::atomic<uint32_t> ref_count_{0};
 };
 
-} // namespace atlas
+}  // namespace atlas

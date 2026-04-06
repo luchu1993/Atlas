@@ -7,11 +7,11 @@ namespace atlas
 {
 
 // Central time types
-using Clock     = std::chrono::steady_clock;
+using Clock = std::chrono::steady_clock;
 using TimePoint = Clock::time_point;
-using Duration  = Clock::duration;
+using Duration = Clock::duration;
 
-using Seconds      = std::chrono::duration<double>;
+using Seconds = std::chrono::duration<double>;
 using Milliseconds = std::chrono::milliseconds;
 using Microseconds = std::chrono::microseconds;
 
@@ -46,4 +46,4 @@ private:
     double time_scale_{1.0};
 };
 
-} // namespace atlas
+}  // namespace atlas

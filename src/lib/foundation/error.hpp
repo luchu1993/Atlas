@@ -6,9 +6,9 @@
 #include <source_location>
 #include <string>
 #include <string_view>
-#include <variant>
 #include <type_traits>
 #include <utility>
+#include <variant>
 
 namespace atlas
 {
@@ -58,22 +58,13 @@ enum class ErrorCode : uint32_t
 class Error
 {
 public:
-    constexpr Error() noexcept
-        : code_(ErrorCode::None)
-    {
-    }
+    constexpr Error() noexcept : code_(ErrorCode::None) {}
 
-    constexpr explicit Error(ErrorCode code) noexcept
-        : code_(code)
-    {
-    }
+    constexpr explicit Error(ErrorCode code) noexcept : code_(code) {}
 
     Error(ErrorCode code, std::string message) noexcept;
 
-    [[nodiscard]] constexpr auto code() const noexcept -> ErrorCode
-    {
-        return code_;
-    }
+    [[nodiscard]] constexpr auto code() const noexcept -> ErrorCode { return code_; }
 
     [[nodiscard]] auto message() const noexcept -> std::string_view;
 
@@ -96,23 +87,15 @@ class Result
 {
 public:
     // Implicit construction from value or error
-    Result(const T& value) noexcept(std::is_nothrow_copy_constructible_v<T>)
-        : storage_(value)
+    Result(const T& value) noexcept(std::is_nothrow_copy_constructible_v<T>) : storage_(value) {}
+
+    Result(T&& value) noexcept(std::is_nothrow_move_constructible_v<T>) : storage_(std::move(value))
     {
     }
 
-    Result(T&& value) noexcept(std::is_nothrow_move_constructible_v<T>)
-        : storage_(std::move(value))
-    {
-    }
+    Result(const E& error) noexcept(std::is_nothrow_copy_constructible_v<E>) : storage_(error) {}
 
-    Result(const E& error) noexcept(std::is_nothrow_copy_constructible_v<E>)
-        : storage_(error)
-    {
-    }
-
-    Result(E&& error) noexcept(std::is_nothrow_move_constructible_v<E>)
-        : storage_(std::move(error))
+    Result(E&& error) noexcept(std::is_nothrow_move_constructible_v<E>) : storage_(std::move(error))
     {
     }
 
@@ -121,57 +104,27 @@ public:
         return std::holds_alternative<T>(storage_);
     }
 
-    [[nodiscard]] explicit operator bool() const noexcept
-    {
-        return has_value();
-    }
+    [[nodiscard]] explicit operator bool() const noexcept { return has_value(); }
 
-    [[nodiscard]] auto value() & -> T&
-    {
-        return std::get<T>(storage_);
-    }
+    [[nodiscard]] auto value() & -> T& { return std::get<T>(storage_); }
 
-    [[nodiscard]] auto value() const & -> const T&
-    {
-        return std::get<T>(storage_);
-    }
+    [[nodiscard]] auto value() const& -> const T& { return std::get<T>(storage_); }
 
-    [[nodiscard]] auto value() && -> T&&
-    {
-        return std::get<T>(std::move(storage_));
-    }
+    [[nodiscard]] auto value() && -> T&& { return std::get<T>(std::move(storage_)); }
 
-    [[nodiscard]] auto error() const & -> const E&
-    {
-        return std::get<E>(storage_);
-    }
+    [[nodiscard]] auto error() const& -> const E& { return std::get<E>(storage_); }
 
-    [[nodiscard]] auto operator->() -> T*
-    {
-        return &std::get<T>(storage_);
-    }
+    [[nodiscard]] auto operator->() -> T* { return &std::get<T>(storage_); }
 
-    [[nodiscard]] auto operator->() const -> const T*
-    {
-        return &std::get<T>(storage_);
-    }
+    [[nodiscard]] auto operator->() const -> const T* { return &std::get<T>(storage_); }
 
-    [[nodiscard]] auto operator*() & -> T&
-    {
-        return std::get<T>(storage_);
-    }
+    [[nodiscard]] auto operator*() & -> T& { return std::get<T>(storage_); }
 
-    [[nodiscard]] auto operator*() const & -> const T&
-    {
-        return std::get<T>(storage_);
-    }
+    [[nodiscard]] auto operator*() const& -> const T& { return std::get<T>(storage_); }
 
-    [[nodiscard]] auto operator*() && -> T&&
-    {
-        return std::get<T>(std::move(storage_));
-    }
+    [[nodiscard]] auto operator*() && -> T&& { return std::get<T>(std::move(storage_)); }
 
-    [[nodiscard]] auto value_or(T default_val) const & -> T
+    [[nodiscard]] auto value_or(T default_val) const& -> T
     {
         if (has_value())
         {
@@ -190,7 +143,7 @@ public:
     }
 
     template <typename F>
-    [[nodiscard]] auto and_then(F&& func) const & -> std::invoke_result_t<F, const T&>
+    [[nodiscard]] auto and_then(F&& func) const& -> std::invoke_result_t<F, const T&>
     {
         if (has_value())
         {
@@ -210,8 +163,7 @@ public:
     }
 
     template <typename F>
-    [[nodiscard]] auto transform(F&& func) const &
-        -> Result<std::invoke_result_t<F, const T&>, E>
+    [[nodiscard]] auto transform(F&& func) const& -> Result<std::invoke_result_t<F, const T&>, E>
     {
         if (has_value())
         {
@@ -221,8 +173,7 @@ public:
     }
 
     template <typename F>
-    [[nodiscard]] auto transform(F&& func) &&
-        -> Result<std::invoke_result_t<F, T&&>, E>
+    [[nodiscard]] auto transform(F&& func) && -> Result<std::invoke_result_t<F, T&&>, E>
     {
         if (has_value())
         {
@@ -243,97 +194,75 @@ template <typename E>
 class Result<void, E>
 {
 public:
-    Result() noexcept
-        : has_value_(true)
-    {
-    }
+    Result() noexcept : has_value_(true) {}
 
     Result(const E& error) noexcept(std::is_nothrow_copy_constructible_v<E>)
-        : error_(error)
-        , has_value_(false)
+        : error_(error), has_value_(false)
     {
     }
 
     Result(E&& error) noexcept(std::is_nothrow_move_constructible_v<E>)
-        : error_(std::move(error))
-        , has_value_(false)
+        : error_(std::move(error)), has_value_(false)
     {
     }
 
-    [[nodiscard]] auto has_value() const noexcept -> bool
-    {
-        return has_value_;
-    }
+    [[nodiscard]] auto has_value() const noexcept -> bool { return has_value_; }
 
-    [[nodiscard]] explicit operator bool() const noexcept
-    {
-        return has_value_;
-    }
+    [[nodiscard]] explicit operator bool() const noexcept { return has_value_; }
 
-    [[nodiscard]] auto error() const & -> const E&
-    {
-        return error_;
-    }
+    [[nodiscard]] auto error() const& -> const E& { return error_; }
 
 private:
     E error_;
     bool has_value_;
 };
 
-} // namespace atlas
+}  // namespace atlas
 
 // ============================================================================
 // Assertion support
 // ============================================================================
 
-using AssertHandler = void (*)(
-    std::string_view expr,
-    std::string_view msg,
-    std::source_location loc);
+using AssertHandler = void (*)(std::string_view expr, std::string_view msg,
+                               std::source_location loc);
 
 void set_assert_handler(AssertHandler handler);
 
-[[noreturn]] void default_assert_handler(
-    std::string_view expr,
-    std::string_view msg,
-    std::source_location loc);
+[[noreturn]] void default_assert_handler(std::string_view expr, std::string_view msg,
+                                         std::source_location loc);
 
 // ============================================================================
 // Assertion macros
 // ============================================================================
 
 #if ATLAS_DEBUG
-    #define ATLAS_ASSERT(expr)                                          \
-        do                                                              \
-        {                                                               \
-            if (!(expr))                                                \
-            {                                                           \
-                default_assert_handler(                                 \
-                    #expr, "",                                          \
-                    std::source_location::current());                   \
-            }                                                           \
-        } while (false)
+#define ATLAS_ASSERT(expr)                                                      \
+    do                                                                          \
+    {                                                                           \
+        if (!(expr))                                                            \
+        {                                                                       \
+            default_assert_handler(#expr, "", std::source_location::current()); \
+        }                                                                       \
+    } while (false)
 
-    #define ATLAS_ASSERT_MSG(expr, msg)                                 \
-        do                                                              \
-        {                                                               \
-            if (!(expr))                                                \
-            {                                                           \
-                default_assert_handler(                                 \
-                    #expr, (msg),                                       \
-                    std::source_location::current());                   \
-            }                                                           \
-        } while (false)
+#define ATLAS_ASSERT_MSG(expr, msg)                                                \
+    do                                                                             \
+    {                                                                              \
+        if (!(expr))                                                               \
+        {                                                                          \
+            default_assert_handler(#expr, (msg), std::source_location::current()); \
+        }                                                                          \
+    } while (false)
 #else
-    #define ATLAS_ASSERT(expr)          ((void)0)
-    #define ATLAS_ASSERT_MSG(expr, msg) ((void)0)
+#define ATLAS_ASSERT(expr) ((void)0)
+#define ATLAS_ASSERT_MSG(expr, msg) ((void)0)
 #endif
 
-#define ATLAS_CHECK(expr, error_val)                                    \
-    do                                                                  \
-    {                                                                   \
-        if (!(expr))                                                    \
-        {                                                               \
-            return (error_val);                                         \
-        }                                                               \
+#define ATLAS_CHECK(expr, error_val) \
+    do                               \
+    {                                \
+        if (!(expr))                 \
+        {                            \
+            return (error_val);      \
+        }                            \
     } while (false)

@@ -1,4 +1,5 @@
 #include "math/matrix4.hpp"
+
 #include "math/quaternion.hpp"
 
 namespace atlas::math
@@ -126,35 +127,31 @@ auto Matrix4::transposed() const -> Matrix4
 auto Matrix4::determinant() const -> float
 {
     // Cofactor expansion along row 0
-    float a00 = m[0],  a01 = m[1],  a02 = m[2],  a03 = m[3];
-    float a10 = m[4],  a11 = m[5],  a12 = m[6],  a13 = m[7];
-    float a20 = m[8],  a21 = m[9],  a22 = m[10], a23 = m[11];
+    float a00 = m[0], a01 = m[1], a02 = m[2], a03 = m[3];
+    float a10 = m[4], a11 = m[5], a12 = m[6], a13 = m[7];
+    float a20 = m[8], a21 = m[9], a22 = m[10], a23 = m[11];
     float a30 = m[12], a31 = m[13], a32 = m[14], a33 = m[15];
 
-    float c00 = a11 * (a22 * a33 - a23 * a32)
-              - a12 * (a21 * a33 - a23 * a31)
-              + a13 * (a21 * a32 - a22 * a31);
+    float c00 = a11 * (a22 * a33 - a23 * a32) - a12 * (a21 * a33 - a23 * a31) +
+                a13 * (a21 * a32 - a22 * a31);
 
-    float c01 = a10 * (a22 * a33 - a23 * a32)
-              - a12 * (a20 * a33 - a23 * a30)
-              + a13 * (a20 * a32 - a22 * a30);
+    float c01 = a10 * (a22 * a33 - a23 * a32) - a12 * (a20 * a33 - a23 * a30) +
+                a13 * (a20 * a32 - a22 * a30);
 
-    float c02 = a10 * (a21 * a33 - a23 * a31)
-              - a11 * (a20 * a33 - a23 * a30)
-              + a13 * (a20 * a31 - a21 * a30);
+    float c02 = a10 * (a21 * a33 - a23 * a31) - a11 * (a20 * a33 - a23 * a30) +
+                a13 * (a20 * a31 - a21 * a30);
 
-    float c03 = a10 * (a21 * a32 - a22 * a31)
-              - a11 * (a20 * a32 - a22 * a30)
-              + a12 * (a20 * a31 - a21 * a30);
+    float c03 = a10 * (a21 * a32 - a22 * a31) - a11 * (a20 * a32 - a22 * a30) +
+                a12 * (a20 * a31 - a21 * a30);
 
     return a00 * c00 - a01 * c01 + a02 * c02 - a03 * c03;
 }
 
 auto Matrix4::inversed() const -> Matrix4
 {
-    float a00 = m[0],  a01 = m[1],  a02 = m[2],  a03 = m[3];
-    float a10 = m[4],  a11 = m[5],  a12 = m[6],  a13 = m[7];
-    float a20 = m[8],  a21 = m[9],  a22 = m[10], a23 = m[11];
+    float a00 = m[0], a01 = m[1], a02 = m[2], a03 = m[3];
+    float a10 = m[4], a11 = m[5], a12 = m[6], a13 = m[7];
+    float a20 = m[8], a21 = m[9], a22 = m[10], a23 = m[11];
     float a30 = m[12], a31 = m[13], a32 = m[14], a33 = m[15];
 
     float s0 = a00 * a11 - a10 * a01;
@@ -182,25 +179,25 @@ auto Matrix4::inversed() const -> Matrix4
 
     Matrix4 result;
 
-    result.m[0]  = ( a11 * c5 - a12 * c4 + a13 * c3) * inv_det;
-    result.m[1]  = (-a01 * c5 + a02 * c4 - a03 * c3) * inv_det;
-    result.m[2]  = ( a31 * s5 - a32 * s4 + a33 * s3) * inv_det;
-    result.m[3]  = (-a21 * s5 + a22 * s4 - a23 * s3) * inv_det;
+    result.m[0] = (a11 * c5 - a12 * c4 + a13 * c3) * inv_det;
+    result.m[1] = (-a01 * c5 + a02 * c4 - a03 * c3) * inv_det;
+    result.m[2] = (a31 * s5 - a32 * s4 + a33 * s3) * inv_det;
+    result.m[3] = (-a21 * s5 + a22 * s4 - a23 * s3) * inv_det;
 
-    result.m[4]  = (-a10 * c5 + a12 * c2 - a13 * c1) * inv_det;
-    result.m[5]  = ( a00 * c5 - a02 * c2 + a03 * c1) * inv_det;
-    result.m[6]  = (-a30 * s5 + a32 * s2 - a33 * s1) * inv_det;
-    result.m[7]  = ( a20 * s5 - a22 * s2 + a23 * s1) * inv_det;
+    result.m[4] = (-a10 * c5 + a12 * c2 - a13 * c1) * inv_det;
+    result.m[5] = (a00 * c5 - a02 * c2 + a03 * c1) * inv_det;
+    result.m[6] = (-a30 * s5 + a32 * s2 - a33 * s1) * inv_det;
+    result.m[7] = (a20 * s5 - a22 * s2 + a23 * s1) * inv_det;
 
-    result.m[8]  = ( a10 * c4 - a11 * c2 + a13 * c0) * inv_det;
-    result.m[9]  = (-a00 * c4 + a01 * c2 - a03 * c0) * inv_det;
-    result.m[10] = ( a30 * s4 - a31 * s2 + a33 * s0) * inv_det;
+    result.m[8] = (a10 * c4 - a11 * c2 + a13 * c0) * inv_det;
+    result.m[9] = (-a00 * c4 + a01 * c2 - a03 * c0) * inv_det;
+    result.m[10] = (a30 * s4 - a31 * s2 + a33 * s0) * inv_det;
     result.m[11] = (-a20 * s4 + a21 * s2 - a23 * s0) * inv_det;
 
     result.m[12] = (-a10 * c3 + a11 * c1 - a12 * c0) * inv_det;
-    result.m[13] = ( a00 * c3 - a01 * c1 + a02 * c0) * inv_det;
+    result.m[13] = (a00 * c3 - a01 * c1 + a02 * c0) * inv_det;
     result.m[14] = (-a30 * s3 + a31 * s1 - a32 * s0) * inv_det;
-    result.m[15] = ( a20 * s3 - a21 * s1 + a22 * s0) * inv_det;
+    result.m[15] = (a20 * s3 - a21 * s1 + a22 * s0) * inv_det;
 
     return result;
 }
@@ -213,4 +210,4 @@ auto Matrix4::get_scale() const -> Vector3
     return {sx, sy, sz};
 }
 
-} // namespace atlas::math
+}  // namespace atlas::math

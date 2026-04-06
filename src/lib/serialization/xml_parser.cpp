@@ -36,9 +36,8 @@ void populate_section(DataSection::Ptr& section, const pugi::xml_node& node)
         if (!child_has_elements)
         {
             // Leaf — store text as value
-            child_section = section->add_child(
-                std::string(child.name()),
-                std::string(child.text().as_string()));
+            child_section = section->add_child(std::string(child.name()),
+                                               std::string(child.text().as_string()));
         }
         else
         {
@@ -48,7 +47,7 @@ void populate_section(DataSection::Ptr& section, const pugi::xml_node& node)
     }
 }
 
-} // anonymous namespace
+}  // anonymous namespace
 
 // ============================================================================
 // Public API
@@ -154,4 +153,4 @@ auto parse_string(std::string_view xml) -> Result<DataSection::Ptr>
     return root;
 }
 
-} // namespace atlas::xml
+}  // namespace atlas::xml

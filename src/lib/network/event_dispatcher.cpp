@@ -1,4 +1,5 @@
 #include "network/event_dispatcher.hpp"
+
 #include "foundation/log.hpp"
 
 #include <algorithm>
@@ -6,9 +7,7 @@
 namespace atlas
 {
 
-EventDispatcher::EventDispatcher(std::string_view name)
-    : name_(name)
-    , poller_(IOPoller::create())
+EventDispatcher::EventDispatcher(std::string_view name) : name_(name), poller_(IOPoller::create())
 {
 }
 
@@ -41,7 +40,8 @@ auto EventDispatcher::add_timer(Duration delay, TimerQueue::Callback callback) -
     return timers_.schedule(Clock::now() + delay, std::move(callback));
 }
 
-auto EventDispatcher::add_repeating_timer(Duration interval, TimerQueue::Callback callback) -> TimerHandle
+auto EventDispatcher::add_repeating_timer(Duration interval, TimerQueue::Callback callback)
+    -> TimerHandle
 {
     return timers_.schedule_repeating(Clock::now() + interval, interval, std::move(callback));
 }
@@ -138,4 +138,4 @@ void EventDispatcher::set_max_poll_wait(Duration max_wait)
     max_poll_wait_ = max_wait;
 }
 
-} // namespace atlas
+}  // namespace atlas

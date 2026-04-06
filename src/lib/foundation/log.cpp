@@ -7,13 +7,20 @@ auto log_level_name(LogLevel level) -> std::string_view
 {
     switch (level)
     {
-        case LogLevel::Trace:    return "TRACE";
-        case LogLevel::Debug:    return "DEBUG";
-        case LogLevel::Info:     return "INFO";
-        case LogLevel::Warning:  return "WARNING";
-        case LogLevel::Error:    return "ERROR";
-        case LogLevel::Critical: return "CRITICAL";
-        case LogLevel::Off:      return "OFF";
+        case LogLevel::Trace:
+            return "TRACE";
+        case LogLevel::Debug:
+            return "DEBUG";
+        case LogLevel::Info:
+            return "INFO";
+        case LogLevel::Warning:
+            return "WARNING";
+        case LogLevel::Error:
+            return "ERROR";
+        case LogLevel::Critical:
+            return "CRITICAL";
+        case LogLevel::Off:
+            return "OFF";
     }
     return "UNKNOWN";
 }
@@ -50,8 +57,7 @@ void Logger::clear_sinks()
     sinks_.clear();
 }
 
-void Logger::log(LogLevel level, std::string_view category,
-                 std::string_view message,
+void Logger::log(LogLevel level, std::string_view category, std::string_view message,
                  const std::source_location& location)
 {
     std::vector<std::shared_ptr<LogSink>> sinks_copy;
@@ -74,4 +80,4 @@ void Logger::flush()
     }
 }
 
-} // namespace atlas
+}  // namespace atlas

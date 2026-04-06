@@ -27,16 +27,22 @@ struct Quaternion
     [[nodiscard]] auto normalized() const -> Quaternion;
     void normalize();
 
-    [[nodiscard]] constexpr auto dot(const Quaternion& q) const -> float { return x * q.x + y * q.y + z * q.z + w * q.w; }
+    [[nodiscard]] constexpr auto dot(const Quaternion& q) const -> float
+    {
+        return x * q.x + y * q.y + z * q.z + w * q.w;
+    }
     [[nodiscard]] auto length() const -> float { return std::sqrt(dot(*this)); }
     [[nodiscard]] constexpr auto length_squared() const -> float { return dot(*this); }
 
     [[nodiscard]] auto rotate(const Vector3& v) const -> Vector3;
     [[nodiscard]] auto to_matrix() const -> Matrix4;
 
-    constexpr auto operator==(const Quaternion& q) const -> bool { return x == q.x && y == q.y && z == q.z && w == q.w; }
+    constexpr auto operator==(const Quaternion& q) const -> bool
+    {
+        return x == q.x && y == q.y && z == q.z && w == q.w;
+    }
 };
 
 [[nodiscard]] auto slerp(const Quaternion& a, const Quaternion& b, float t) -> Quaternion;
 
-} // namespace atlas::math
+}  // namespace atlas::math

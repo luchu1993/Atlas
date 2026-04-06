@@ -2,20 +2,20 @@
 
 // Suppress deprecation warnings from rapidjson (uses deprecated std::iterator)
 #if defined(_MSC_VER)
-#   pragma warning(push)
-#   pragma warning(disable: 4996 5054)
+#pragma warning(push)
+#pragma warning(disable : 4996 5054)
 #elif defined(__GNUC__) || defined(__clang__)
-#   pragma GCC diagnostic push
-#   pragma GCC diagnostic ignored "-Wdeprecated-declarations"
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wdeprecated-declarations"
 #endif
 
 #include <rapidjson/document.h>
 #include <rapidjson/error/en.h>
 
 #if defined(_MSC_VER)
-#   pragma warning(pop)
+#pragma warning(pop)
 #elif defined(__GNUC__) || defined(__clang__)
-#   pragma GCC diagnostic pop
+#pragma GCC diagnostic pop
 #endif
 
 #include <fstream>
@@ -71,8 +71,7 @@ auto value_to_string(const rapidjson::Value& val) -> std::string
     return "";
 }
 
-void convert_value(DataSection::Ptr& parent, const std::string& key,
-    const rapidjson::Value& val)
+void convert_value(DataSection::Ptr& parent, const std::string& key, const rapidjson::Value& val)
 {
     if (val.IsObject())
     {
@@ -116,7 +115,7 @@ void populate_from_value(DataSection::Ptr& section, const rapidjson::Value& val)
     }
 }
 
-} // anonymous namespace
+}  // anonymous namespace
 
 // ============================================================================
 // Public API
@@ -127,8 +126,7 @@ auto parse_file(const std::filesystem::path& path) -> Result<DataSection::Ptr>
     std::ifstream file(path, std::ios::in | std::ios::binary);
     if (!file.is_open())
     {
-        return Error(ErrorCode::IoError,
-            "Failed to open JSON file: " + path.string());
+        return Error(ErrorCode::IoError, "Failed to open JSON file: " + path.string());
     }
 
     std::ostringstream oss;
@@ -155,4 +153,4 @@ auto parse_string(std::string_view json) -> Result<DataSection::Ptr>
     return root;
 }
 
-} // namespace atlas::json
+}  // namespace atlas::json

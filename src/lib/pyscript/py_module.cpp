@@ -1,4 +1,5 @@
 #include "pyscript/py_module.hpp"
+
 #include "foundation/log.hpp"
 
 namespace atlas
@@ -51,17 +52,15 @@ struct PyModuleBuilder::Impl
 // PyModuleBuilder
 // ============================================================================
 
-PyModuleBuilder::PyModuleBuilder(std::string_view name)
-    : impl_(std::make_unique<Impl>())
+PyModuleBuilder::PyModuleBuilder(std::string_view name) : impl_(std::make_unique<Impl>())
 {
     impl_->name = name;
 }
 
 PyModuleBuilder::~PyModuleBuilder() = default;
 
-auto PyModuleBuilder::add_function(std::string_view name, PyCFunction func,
-                                    int flags, std::string_view doc)
-    -> PyModuleBuilder&
+auto PyModuleBuilder::add_function(std::string_view name, PyCFunction func, int flags,
+                                   std::string_view doc) -> PyModuleBuilder&
 {
     impl_->method_names.emplace_back(name);
     impl_->method_docs.emplace_back(doc);
@@ -70,28 +69,25 @@ auto PyModuleBuilder::add_function(std::string_view name, PyCFunction func,
     def.ml_name = nullptr;  // fixed up in build()
     def.ml_meth = func;
     def.ml_flags = flags;
-    def.ml_doc = nullptr;   // fixed up in build()
+    def.ml_doc = nullptr;  // fixed up in build()
     impl_->methods.push_back(def);
 
     return *this;
 }
 
-auto PyModuleBuilder::add_type(std::string_view name, PyTypeObject* type)
-    -> PyModuleBuilder&
+auto PyModuleBuilder::add_type(std::string_view name, PyTypeObject* type) -> PyModuleBuilder&
 {
     impl_->types.push_back({std::string(name), type});
     return *this;
 }
 
-auto PyModuleBuilder::add_int_constant(std::string_view name, long value)
-    -> PyModuleBuilder&
+auto PyModuleBuilder::add_int_constant(std::string_view name, long value) -> PyModuleBuilder&
 {
     impl_->int_constants.push_back({std::string(name), value});
     return *this;
 }
 
-auto PyModuleBuilder::add_string_constant(std::string_view name,
-                                           std::string_view value)
+auto PyModuleBuilder::add_string_constant(std::string_view name, std::string_view value)
     -> PyModuleBuilder&
 {
     impl_->string_constants.push_back({std::string(name), std::string(value)});
@@ -127,23 +123,22 @@ auto PyModuleBuilder::build() -> Result<PyObjectPtr>
     auto* mod = PyModule_Create(&impl->module_def);
     if (!mod)
     {
-        if (PyErr_Occurred()) PyErr_Clear();
-        return Error(ErrorCode::ScriptError,
-            "Failed to create module: " + impl->name);
+        if (PyErr_Occurred())
+            PyErr_Clear();
+        return Error(ErrorCode::ScriptError, "Failed to create module: " + impl->name);
     }
 
     // Add types
     for (auto& entry : impl->types)
     {
         Py_INCREF(entry.type);
-        if (PyModule_AddObject(mod, entry.name.c_str(),
-                               reinterpret_cast<PyObject*>(entry.type)) < 0)
+        if (PyModule_AddObject(mod, entry.name.c_str(), reinterpret_cast<PyObject*>(entry.type)) <
+            0)
         {
             Py_DECREF(entry.type);
             Py_DECREF(mod);
             return Error(ErrorCode::ScriptError,
-                "Failed to add type '" + entry.name + "' to module '"
-                + impl->name + "'");
+                         "Failed to add type '" + entry.name + "' to module '" + impl->name + "'");
         }
     }
 
@@ -180,4 +175,4 @@ void PyModuleBuilder::finalize_all()
     get_registry().clear();
 }
 
-} // namespace atlas
+}  // namespace atlas

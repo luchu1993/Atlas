@@ -66,4 +66,4 @@ void Bundle::clear()
     writing_message_ = false;
 }
 
-} // namespace atlas
+}  // namespace atlas

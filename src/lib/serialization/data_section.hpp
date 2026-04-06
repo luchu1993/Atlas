@@ -25,7 +25,8 @@ public:
     [[nodiscard]] auto value() const -> std::string_view { return value_; }
 
     // Typed read: search children by key, return child's value converted to type
-    [[nodiscard]] auto read_string(std::string_view key, std::string_view default_val = "") const -> std::string;
+    [[nodiscard]] auto read_string(std::string_view key, std::string_view default_val = "") const
+        -> std::string;
     [[nodiscard]] auto read_int(std::string_view key, int32_t default_val = 0) const -> int32_t;
     [[nodiscard]] auto read_uint(std::string_view key, uint32_t default_val = 0) const -> uint32_t;
     [[nodiscard]] auto read_float(std::string_view key, float default_val = 0.0f) const -> float;
@@ -53,4 +54,4 @@ private:
     std::vector<Ptr> children_;
 };
 
-} // namespace atlas
+}  // namespace atlas

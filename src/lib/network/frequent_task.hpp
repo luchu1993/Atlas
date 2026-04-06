@@ -10,4 +10,4 @@ public:
     virtual void do_task() = 0;
 };
 
-} // namespace atlas
+}  // namespace atlas

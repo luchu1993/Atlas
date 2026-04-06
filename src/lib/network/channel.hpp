@@ -1,10 +1,10 @@
 #pragma once
 
+#include "foundation/time.hpp"
+#include "foundation/timer_queue.hpp"
 #include "network/address.hpp"
 #include "network/bundle.hpp"
 #include "platform/io_poller.hpp"
-#include "foundation/time.hpp"
-#include "foundation/timer_queue.hpp"
 
 #include <cstdint>
 #include <functional>
@@ -28,8 +28,7 @@ enum class ChannelState : uint8_t
 class Channel
 {
 public:
-    Channel(EventDispatcher& dispatcher, InterfaceTable& table,
-            const Address& remote);
+    Channel(EventDispatcher& dispatcher, InterfaceTable& table, const Address& remote);
     virtual ~Channel();
 
     // Non-copyable, non-movable
@@ -39,8 +38,7 @@ public:
     // Sending
     [[nodiscard]] auto bundle() -> Bundle& { return bundle_; }
     [[nodiscard]] auto send() -> Result<void>;
-    [[nodiscard]] auto send_message(MessageID id, std::span<const std::byte> data)
-        -> Result<void>;
+    [[nodiscard]] auto send_message(MessageID id, std::span<const std::byte> data) -> Result<void>;
 
     // Convenience: send a typed message
     template <NetworkMessage Msg>
@@ -96,4 +94,4 @@ protected:
     TimerHandle inactivity_timer_;
 };
 
-} // namespace atlas
+}  // namespace atlas

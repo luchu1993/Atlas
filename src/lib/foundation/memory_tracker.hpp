@@ -33,4 +33,4 @@ private:
     std::atomic<std::size_t> total_deallocs_{0};
 };
 
-} // namespace atlas
+}  // namespace atlas

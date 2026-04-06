@@ -1,10 +1,10 @@
 #pragma once
 
-#include "network/address.hpp"
-#include "network/interface_table.hpp"
-#include "network/frequent_task.hpp"
-#include "network/socket.hpp"
 #include "foundation/time.hpp"
+#include "network/address.hpp"
+#include "network/frequent_task.hpp"
+#include "network/interface_table.hpp"
+#include "network/socket.hpp"
 
 #include <cstdint>
 #include <memory>
@@ -103,9 +103,9 @@ private:
         TimePoint window_start;
     };
     std::unordered_map<uint32_t, RateTracker> rate_trackers_;  // keyed by IP (net order)
-    uint32_t rate_limit_{0};  // 0 = disabled
+    uint32_t rate_limit_{0};                                   // 0 = disabled
 
     bool shutting_down_{false};
 };
 
-} // namespace atlas
+}  // namespace atlas

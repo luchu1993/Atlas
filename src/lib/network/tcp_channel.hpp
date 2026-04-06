@@ -15,8 +15,8 @@ public:
     static constexpr std::size_t kFrameHeaderSize = sizeof(uint32_t);
     static constexpr std::size_t kMaxRecvBufferSize = 1024 * 1024;  // 1 MB backpressure limit
 
-    TcpChannel(EventDispatcher& dispatcher, InterfaceTable& table,
-               Socket socket, const Address& remote);
+    TcpChannel(EventDispatcher& dispatcher, InterfaceTable& table, Socket socket,
+               const Address& remote);
     ~TcpChannel() override;
 
     [[nodiscard]] auto fd() const -> FdHandle override { return socket_.fd(); }
@@ -41,4 +41,4 @@ private:
     bool write_registered_{false};
 };
 
-} // namespace atlas
+}  // namespace atlas

@@ -38,7 +38,8 @@ public:
     [[nodiscard]] auto recv(std::span<std::byte> buffer) -> Result<size_t>;
 
     // Datagram I/O (UDP)
-    [[nodiscard]] auto send_to(std::span<const std::byte> data, const Address& dest) -> Result<size_t>;
+    [[nodiscard]] auto send_to(std::span<const std::byte> data, const Address& dest)
+        -> Result<size_t>;
     [[nodiscard]] auto recv_from(std::span<std::byte> buffer) -> Result<std::pair<size_t, Address>>;
 
     // Options
@@ -60,4 +61,4 @@ private:
     FdHandle fd_{kInvalidFd};
 };
 
-} // namespace atlas
+}  // namespace atlas

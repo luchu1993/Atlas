@@ -1,4 +1,5 @@
 #include "math/quaternion.hpp"
+
 #include "math/matrix4.hpp"
 
 namespace atlas::math
@@ -30,12 +31,8 @@ auto Quaternion::from_euler(float pitch, float yaw, float roll) -> Quaternion
     float sr = std::sin(hr);
     float cr = std::cos(hr);
 
-    return {
-        cr * sp * cy + sr * cp * sy,
-        cr * cp * sy - sr * sp * cy,
-        sr * cp * cy - cr * sp * sy,
-        cr * cp * cy + sr * sp * sy
-    };
+    return {cr * sp * cy + sr * cp * sy, cr * cp * sy - sr * sp * cy, sr * cp * cy - cr * sp * sy,
+            cr * cp * cy + sr * sp * sy};
 }
 
 auto Quaternion::from_matrix(const Matrix4& mat) -> Quaternion
@@ -49,7 +46,10 @@ auto Quaternion::from_matrix(const Matrix4& mat) -> Quaternion
     if (trace > 0.0f)
     {
         float s = std::sqrt(trace + 1.0f) * 2.0f;
-        if (s < kEpsilon) { return identity(); }
+        if (s < kEpsilon)
+        {
+            return identity();
+        }
         float inv_s = 1.0f / s;
         q.w = 0.25f * s;
         q.x = (mat(2, 1) - mat(1, 2)) * inv_s;
@@ -59,7 +59,10 @@ auto Quaternion::from_matrix(const Matrix4& mat) -> Quaternion
     else if (m00 > m11 && m00 > m22)
     {
         float s = std::sqrt(1.0f + m00 - m11 - m22) * 2.0f;
-        if (s < kEpsilon) { return identity(); }
+        if (s < kEpsilon)
+        {
+            return identity();
+        }
         float inv_s = 1.0f / s;
         q.w = (mat(2, 1) - mat(1, 2)) * inv_s;
         q.x = 0.25f * s;
@@ -69,7 +72,10 @@ auto Quaternion::from_matrix(const Matrix4& mat) -> Quaternion
     else if (m11 > m22)
     {
         float s = std::sqrt(1.0f + m11 - m00 - m22) * 2.0f;
-        if (s < kEpsilon) { return identity(); }
+        if (s < kEpsilon)
+        {
+            return identity();
+        }
         float inv_s = 1.0f / s;
         q.w = (mat(0, 2) - mat(2, 0)) * inv_s;
         q.x = (mat(0, 1) + mat(1, 0)) * inv_s;
@@ -79,7 +85,10 @@ auto Quaternion::from_matrix(const Matrix4& mat) -> Quaternion
     else
     {
         float s = std::sqrt(1.0f + m22 - m00 - m11) * 2.0f;
-        if (s < kEpsilon) { return identity(); }
+        if (s < kEpsilon)
+        {
+            return identity();
+        }
         float inv_s = 1.0f / s;
         q.w = (mat(1, 0) - mat(0, 1)) * inv_s;
         q.x = (mat(0, 2) + mat(2, 0)) * inv_s;
@@ -92,12 +101,8 @@ auto Quaternion::from_matrix(const Matrix4& mat) -> Quaternion
 
 auto Quaternion::operator*(const Quaternion& q) const -> Quaternion
 {
-    return {
-        w * q.x + x * q.w + y * q.z - z * q.y,
-        w * q.y - x * q.z + y * q.w + z * q.x,
-        w * q.z + x * q.y - y * q.x + z * q.w,
-        w * q.w - x * q.x - y * q.y - z * q.z
-    };
+    return {w * q.x + x * q.w + y * q.z - z * q.y, w * q.y - x * q.z + y * q.w + z * q.x,
+            w * q.z + x * q.y - y * q.x + z * q.w, w * q.w - x * q.x - y * q.y - z * q.z};
 }
 
 auto Quaternion::inversed() const -> Quaternion
@@ -191,12 +196,8 @@ auto slerp(const Quaternion& a, const Quaternion& b, float t) -> Quaternion
     // If very close, use normalized linear interpolation
     if (cos_theta > 0.9999f)
     {
-        Quaternion result{
-            a.x + t * (b_adj.x - a.x),
-            a.y + t * (b_adj.y - a.y),
-            a.z + t * (b_adj.z - a.z),
-            a.w + t * (b_adj.w - a.w)
-        };
+        Quaternion result{a.x + t * (b_adj.x - a.x), a.y + t * (b_adj.y - a.y),
+                          a.z + t * (b_adj.z - a.z), a.w + t * (b_adj.w - a.w)};
         return result.normalized();
     }
 
@@ -205,12 +206,8 @@ auto slerp(const Quaternion& a, const Quaternion& b, float t) -> Quaternion
     float wa = std::sin((1.0f - t) * theta) / sin_theta;
     float wb = std::sin(t * theta) / sin_theta;
 
-    return Quaternion{
-        wa * a.x + wb * b_adj.x,
-        wa * a.y + wb * b_adj.y,
-        wa * a.z + wb * b_adj.z,
-        wa * a.w + wb * b_adj.w
-    };
+    return Quaternion{wa * a.x + wb * b_adj.x, wa * a.y + wb * b_adj.y, wa * a.z + wb * b_adj.z,
+                      wa * a.w + wb * b_adj.w};
 }
 
-} // namespace atlas::math
+}  // namespace atlas::math

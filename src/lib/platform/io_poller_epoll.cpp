@@ -2,9 +2,9 @@
 
 #if ATLAS_PLATFORM_LINUX
 
-#include <unordered_map>
 #include <sys/epoll.h>
 #include <unistd.h>
+#include <unordered_map>
 
 namespace atlas
 {
@@ -16,10 +16,7 @@ namespace atlas
 class EpollPoller final : public IOPoller
 {
 public:
-    EpollPoller()
-        : epfd_(::epoll_create1(EPOLL_CLOEXEC))
-    {
-    }
+    EpollPoller() : epfd_(::epoll_create1(EPOLL_CLOEXEC)) {}
 
     ~EpollPoller() override
     {
@@ -217,6 +214,6 @@ std::unique_ptr<IOPoller> create_epoll_poller()
     return std::make_unique<EpollPoller>();
 }
 
-} // namespace atlas
+}  // namespace atlas
 
-#endif // ATLAS_PLATFORM_LINUX
+#endif  // ATLAS_PLATFORM_LINUX

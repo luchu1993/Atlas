@@ -5,10 +5,9 @@
 namespace atlas
 {
 
-UdpChannel::UdpChannel(EventDispatcher& dispatcher, InterfaceTable& table,
-                       Socket& shared_socket, const Address& remote)
-    : Channel(dispatcher, table, remote)
-    , shared_socket_(shared_socket)
+UdpChannel::UdpChannel(EventDispatcher& dispatcher, InterfaceTable& table, Socket& shared_socket,
+                       const Address& remote)
+    : Channel(dispatcher, table, remote), shared_socket_(shared_socket)
 {
 }
 
@@ -30,4 +29,4 @@ auto UdpChannel::do_send(std::span<const std::byte> data) -> Result<size_t>
     return *result;
 }
 
-} // namespace atlas
+}  // namespace atlas

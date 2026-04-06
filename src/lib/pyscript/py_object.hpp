@@ -4,20 +4,20 @@
 // On MSVC debug builds, Python.h tries to link python3XX_d.lib which is
 // typically not available. Temporarily undefine _DEBUG to link release Python.
 #if defined(_MSC_VER)
-#   pragma warning(push)
-#   pragma warning(disable: 4100 4244 4996)
-#   if defined(_DEBUG)
-#       undef _DEBUG
-#       include <Python.h>
-#       define _DEBUG
-#   else
-#       include <Python.h>
-#   endif
+#pragma warning(push)
+#pragma warning(disable : 4100 4244 4996)
+#if defined(_DEBUG)
+#undef _DEBUG
+#include <Python.h>
+#define _DEBUG
 #else
-#   include <Python.h>
+#include <Python.h>
+#endif
+#else
+#include <Python.h>
 #endif
 #if defined(_MSC_VER)
-#   pragma warning(pop)
+#pragma warning(pop)
 #endif
 
 #include "foundation/error.hpp"
@@ -89,10 +89,7 @@ public:
     }
 
     // Move: transfer ownership
-    PyObjectPtr(PyObjectPtr&& other) noexcept : ptr_(other.ptr_)
-    {
-        other.ptr_ = nullptr;
-    }
+    PyObjectPtr(PyObjectPtr&& other) noexcept : ptr_(other.ptr_) { other.ptr_ = nullptr; }
 
     PyObjectPtr& operator=(PyObjectPtr&& other) noexcept
     {
@@ -141,8 +138,7 @@ public:
         if (PyObject_SetAttrString(ptr_, name_str.c_str(), value.ptr_) < 0)
         {
             PyErr_Clear();
-            return Error(ErrorCode::ScriptError,
-                "Failed to set attribute: " + name_str);
+            return Error(ErrorCode::ScriptError, "Failed to set attribute: " + name_str);
         }
         return Result<void>{};
     }
@@ -162,15 +158,13 @@ public:
     }
 
     // Call with args and kwargs.
-    [[nodiscard]] auto call(const PyObjectPtr& args,
-                            const PyObjectPtr& kwargs) const -> PyObjectPtr
+    [[nodiscard]] auto call(const PyObjectPtr& args, const PyObjectPtr& kwargs) const -> PyObjectPtr
     {
         return PyObjectPtr(PyObject_Call(ptr_, args.ptr_, kwargs.ptr_));
     }
 
     // Call a named method with optional args tuple.
-    [[nodiscard]] auto call_method(std::string_view name,
-                                   const PyObjectPtr& args = {}) const
+    [[nodiscard]] auto call_method(std::string_view name, const PyObjectPtr& args = {}) const
         -> PyObjectPtr
     {
         auto method = get_attr(name);
@@ -239,4 +233,4 @@ private:
     PyObject* ptr_{nullptr};
 };
 
-} // namespace atlas
+}  // namespace atlas

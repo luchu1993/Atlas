@@ -43,8 +43,7 @@ public:
     void add_task(std::unique_ptr<BackgroundTask> task);
 
     // Lambda convenience: bg_work runs on pool, main_callback runs on dispatcher thread
-    void add_task(std::function<void()> bg_work,
-                  std::function<void()> main_callback);
+    void add_task(std::function<void()> bg_work, std::function<void()> main_callback);
 
     // Query
     [[nodiscard]] auto pending_count() const -> uint32_t;
@@ -58,4 +57,4 @@ private:
     std::unique_ptr<Impl> impl_;
 };
 
-} // namespace atlas
+}  // namespace atlas

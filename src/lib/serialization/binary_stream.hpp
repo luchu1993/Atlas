@@ -37,22 +37,16 @@ namespace endian
 
 [[nodiscard]] constexpr auto byte_swap(uint32_t v) -> uint32_t
 {
-    return ((v & 0xFF000000u) >> 24) |
-           ((v & 0x00FF0000u) >> 8)  |
-           ((v & 0x0000FF00u) << 8)  |
+    return ((v & 0xFF000000u) >> 24) | ((v & 0x00FF0000u) >> 8) | ((v & 0x0000FF00u) << 8) |
            ((v & 0x000000FFu) << 24);
 }
 
 [[nodiscard]] constexpr auto byte_swap(uint64_t v) -> uint64_t
 {
-    return ((v & 0xFF00000000000000ULL) >> 56) |
-           ((v & 0x00FF000000000000ULL) >> 40) |
-           ((v & 0x0000FF0000000000ULL) >> 24) |
-           ((v & 0x000000FF00000000ULL) >> 8)  |
-           ((v & 0x00000000FF000000ULL) << 8)  |
-           ((v & 0x0000000000FF0000ULL) << 24) |
-           ((v & 0x000000000000FF00ULL) << 40) |
-           ((v & 0x00000000000000FFULL) << 56);
+    return ((v & 0xFF00000000000000ULL) >> 56) | ((v & 0x00FF000000000000ULL) >> 40) |
+           ((v & 0x0000FF0000000000ULL) >> 24) | ((v & 0x000000FF00000000ULL) >> 8) |
+           ((v & 0x00000000FF000000ULL) << 8) | ((v & 0x0000000000FF0000ULL) << 24) |
+           ((v & 0x000000000000FF00ULL) << 40) | ((v & 0x00000000000000FFULL) << 56);
 }
 
 template <Trivial T>
@@ -149,7 +143,7 @@ template <Trivial T>
     return to_big(value);
 }
 
-} // namespace endian
+}  // namespace endian
 
 // ============================================================================
 // BinaryWriter
@@ -220,10 +214,7 @@ public:
     void skip(std::size_t bytes);
     void reset();
 
-    [[nodiscard]] auto has_error() const -> bool
-    {
-        return error_;
-    }
+    [[nodiscard]] auto has_error() const -> bool { return error_; }
 
 private:
     std::span<const std::byte> data_;
@@ -231,4 +222,4 @@ private:
     bool error_{false};
 };
 
-} // namespace atlas
+}  // namespace atlas

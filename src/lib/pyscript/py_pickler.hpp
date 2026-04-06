@@ -1,7 +1,7 @@
 #pragma once
 
-#include "pyscript/py_object.hpp"
 #include "foundation/error.hpp"
+#include "pyscript/py_object.hpp"
 
 #include <atomic>
 #include <cstddef>
@@ -42,4 +42,4 @@ private:
     static PyObjectPtr loads_;
 };
 
-} // namespace atlas
+}  // namespace atlas

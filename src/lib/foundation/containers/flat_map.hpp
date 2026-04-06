@@ -60,7 +60,8 @@ public:
     auto erase(const Key& key) -> bool
     {
         auto it = find(key);
-        if (it == data_.end()) return false;
+        if (it == data_.end())
+            return false;
         data_.erase(it);
         return true;
     }
@@ -78,10 +79,7 @@ public:
         return it->second;
     }
 
-    [[nodiscard]] auto contains(const Key& key) const -> bool
-    {
-        return find(key) != data_.end();
-    }
+    [[nodiscard]] auto contains(const Key& key) const -> bool { return find(key) != data_.end(); }
 
     [[nodiscard]] auto size() const -> std::size_t { return data_.size(); }
     [[nodiscard]] auto empty() const -> bool { return data_.empty(); }
@@ -97,23 +95,19 @@ private:
     auto lower_bound(const Key& key) -> iterator
     {
         return std::lower_bound(data_.begin(), data_.end(), key,
-            [this](const value_type& elem, const Key& k)
-            {
-                return comp_(elem.first, k);
-            });
+                                [this](const value_type& elem, const Key& k)
+                                { return comp_(elem.first, k); });
     }
 
     auto lower_bound(const Key& key) const -> const_iterator
     {
         return std::lower_bound(data_.begin(), data_.end(), key,
-            [this](const value_type& elem, const Key& k)
-            {
-                return comp_(elem.first, k);
-            });
+                                [this](const value_type& elem, const Key& k)
+                                { return comp_(elem.first, k); });
     }
 
     std::vector<value_type> data_;
     Compare comp_;
 };
 
-} // namespace atlas
+}  // namespace atlas

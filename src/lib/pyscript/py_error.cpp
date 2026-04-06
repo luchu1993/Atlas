@@ -110,4 +110,4 @@ void set_python_error(const Error& error)
     PyErr_SetString(exception_type, msg.c_str());
 }
 
-} // namespace atlas
+}  // namespace atlas

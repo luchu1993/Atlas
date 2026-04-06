@@ -1,18 +1,16 @@
 #include "network/channel.hpp"
+
+#include "foundation/log.hpp"
 #include "network/event_dispatcher.hpp"
 #include "network/interface_table.hpp"
-#include "foundation/log.hpp"
 
 #include <cassert>
 
 namespace atlas
 {
 
-Channel::Channel(EventDispatcher& dispatcher, InterfaceTable& table,
-                 const Address& remote)
-    : dispatcher_(dispatcher)
-    , interface_table_(table)
-    , remote_(remote)
+Channel::Channel(EventDispatcher& dispatcher, InterfaceTable& table, const Address& remote)
+    : dispatcher_(dispatcher), interface_table_(table), remote_(remote)
 {
 }
 
@@ -68,8 +66,7 @@ auto Channel::send() -> Result<void>
     return Result<void>{};
 }
 
-auto Channel::send_message(MessageID id, std::span<const std::byte> data)
-    -> Result<void>
+auto Channel::send_message(MessageID id, std::span<const std::byte> data) -> Result<void>
 {
     MessageDesc desc{id, "", MessageLengthStyle::Variable, -1};
     if (auto* found = interface_table_.find(id))
@@ -98,11 +95,11 @@ void Channel::reset_inactivity_timer()
     {
         dispatcher_.cancel_timer(inactivity_timer_);
     }
-    inactivity_timer_ = dispatcher_.add_timer(inactivity_timeout_,
+    inactivity_timer_ = dispatcher_.add_timer(
+        inactivity_timeout_,
         [this](TimerHandle)
         {
-            ATLAS_LOG_WARNING("Channel to {} timed out due to inactivity",
-                remote_.to_string());
+            ATLAS_LOG_WARNING("Channel to {} timed out due to inactivity", remote_.to_string());
             on_disconnect();
         });
 }
@@ -171,8 +168,8 @@ void Channel::dispatch_messages(std::span<const std::byte> frame_data)
         auto dispatch_result = interface_table_.dispatch(remote_, this, id, msg_reader);
         if (!dispatch_result)
         {
-            ATLAS_LOG_WARNING("Failed to dispatch message {}: {}",
-                id, dispatch_result.error().message());
+            ATLAS_LOG_WARNING("Failed to dispatch message {}: {}", id,
+                              dispatch_result.error().message());
         }
     }
 }
@@ -182,4 +179,4 @@ void Channel::set_disconnect_callback(DisconnectCallback cb)
     disconnect_callback_ = std::move(cb);
 }
 
-} // namespace atlas
+}  // namespace atlas

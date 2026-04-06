@@ -1,8 +1,9 @@
 #include "pyscript/atlas_module.hpp"
-#include "pyscript/py_module.hpp"
-#include "pyscript/py_convert.hpp"
+
 #include "foundation/log.hpp"
 #include "foundation/time.hpp"
+#include "pyscript/py_convert.hpp"
+#include "pyscript/py_module.hpp"
 
 namespace atlas
 {
@@ -81,4 +82,4 @@ auto register_atlas_module() -> Result<PyObjectPtr>
         .build();
 }
 
-} // namespace atlas
+}  // namespace atlas

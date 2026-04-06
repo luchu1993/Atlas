@@ -3,13 +3,13 @@
 #include <format>
 
 #if ATLAS_PLATFORM_WINDOWS
-#   include <winsock2.h>
-#   include <ws2tcpip.h>
+#include <winsock2.h>
+#include <ws2tcpip.h>
 #else
-#   include <arpa/inet.h>
-#   include <netinet/in.h>
-#   include <netdb.h>
-#   include <sys/socket.h>
+#include <arpa/inet.h>
+#include <netdb.h>
+#include <netinet/in.h>
+#include <sys/socket.h>
 #endif
 
 namespace
@@ -31,15 +31,14 @@ void ensure_network_init()
 #endif
 }
 
-} // anonymous namespace
+}  // anonymous namespace
 
 namespace atlas
 {
 
 const Address Address::NONE{};
 
-Address::Address(std::string_view ip, uint16_t port)
-    : port_(port)
+Address::Address(std::string_view ip, uint16_t port) : port_(port)
 {
     std::string ip_str(ip);
     struct in_addr sin_addr{};
@@ -47,17 +46,12 @@ Address::Address(std::string_view ip, uint16_t port)
     ip_ = sin_addr.s_addr;
 }
 
-Address::Address(const sockaddr_in& sa)
-    : ip_(sa.sin_addr.s_addr)
-    , port_(ntohs(sa.sin_port))
-{
-}
+Address::Address(const sockaddr_in& sa) : ip_(sa.sin_addr.s_addr), port_(ntohs(sa.sin_port)) {}
 
 auto Address::to_string() const -> std::string
 {
     const auto* bytes = reinterpret_cast<const uint8_t*>(&ip_);
-    return std::format("{}.{}.{}.{}:{}",
-        bytes[0], bytes[1], bytes[2], bytes[3], port_);
+    return std::format("{}.{}.{}.{}:{}", bytes[0], bytes[1], bytes[2], bytes[3], port_);
 }
 
 auto Address::to_sockaddr() const -> sockaddr_in
@@ -69,8 +63,7 @@ auto Address::to_sockaddr() const -> sockaddr_in
     return sa;
 }
 
-auto Address::resolve(std::string_view hostname, uint16_t port)
-    -> Result<Address>
+auto Address::resolve(std::string_view hostname, uint16_t port) -> Result<Address>
 {
     ensure_network_init();
     std::string hostname_str(hostname);
@@ -84,7 +77,7 @@ auto Address::resolve(std::string_view hostname, uint16_t port)
     if (rc != 0 || result == nullptr)
     {
         return Error(ErrorCode::NotFound,
-            std::format("Failed to resolve hostname: {}", hostname_str));
+                     std::format("Failed to resolve hostname: {}", hostname_str));
     }
 
     auto* sa = reinterpret_cast<const sockaddr_in*>(result->ai_addr);
@@ -95,4 +88,4 @@ auto Address::resolve(std::string_view hostname, uint16_t port)
     return addr;
 }
 
-} // namespace atlas
+}  // namespace atlas

@@ -77,10 +77,7 @@ auto BinaryWriter::detach() -> std::vector<std::byte>
 // BinaryReader
 // ============================================================================
 
-BinaryReader::BinaryReader(std::span<const std::byte> data)
-    : data_(data)
-{
-}
+BinaryReader::BinaryReader(std::span<const std::byte> data) : data_(data) {}
 
 auto BinaryReader::read_bytes(std::size_t count) -> Result<std::span<const std::byte>>
 {
@@ -110,9 +107,7 @@ auto BinaryReader::read_string() -> Result<std::string>
     }
 
     auto bytes = bytes_result.value();
-    return std::string(
-        reinterpret_cast<const char*>(bytes.data()),
-        bytes.size());
+    return std::string(reinterpret_cast<const char*>(bytes.data()), bytes.size());
 }
 
 auto BinaryReader::read_packed_int() -> Result<uint32_t>
@@ -168,4 +163,4 @@ void BinaryReader::reset()
     error_ = false;
 }
 
-} // namespace atlas
+}  // namespace atlas

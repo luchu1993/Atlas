@@ -3,12 +3,12 @@
 #include <unordered_map>
 
 #if ATLAS_PLATFORM_WINDOWS
-    #include <winsock2.h>
-    #include <ws2tcpip.h>
-    #pragma comment(lib, "ws2_32.lib")
+#include <winsock2.h>
+#include <ws2tcpip.h>
+#pragma comment(lib, "ws2_32.lib")
 #else
-    #include <sys/select.h>
-    #include <sys/time.h>
+#include <sys/select.h>
+#include <sys/time.h>
 #endif
 
 namespace atlas
@@ -104,7 +104,7 @@ public:
         }
 
         struct timeval tv;
-        tv.tv_sec  = static_cast<long>(usec / 1'000'000);
+        tv.tv_sec = static_cast<long>(usec / 1'000'000);
         tv.tv_usec = static_cast<long>(usec % 1'000'000);
 
 #if ATLAS_PLATFORM_WINDOWS
@@ -186,4 +186,4 @@ std::unique_ptr<IOPoller> create_select_poller()
     return std::make_unique<SelectPoller>();
 }
 
-} // namespace atlas
+}  // namespace atlas

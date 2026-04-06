@@ -35,4 +35,4 @@ template <typename T>
     return diff >= -epsilon && diff <= epsilon;
 }
 
-} // namespace atlas::math
+}  // namespace atlas::math

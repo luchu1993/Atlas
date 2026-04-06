@@ -63,14 +63,14 @@ void c_signal_handler(int signum)
 {
     switch (signum)
     {
-    case SIGINT:
-        dispatch_signal(Signal::Interrupt);
-        break;
-    case SIGTERM:
-        dispatch_signal(Signal::Terminate);
-        break;
-    default:
-        break;
+        case SIGINT:
+            dispatch_signal(Signal::Interrupt);
+            break;
+        case SIGTERM:
+            dispatch_signal(Signal::Terminate);
+            break;
+        default:
+            break;
     }
 }
 
@@ -78,19 +78,19 @@ BOOL WINAPI console_ctrl_handler(DWORD ctrl_type)
 {
     switch (ctrl_type)
     {
-    case CTRL_C_EVENT:
-        dispatch_signal(Signal::Interrupt);
-        return TRUE;
-    case CTRL_CLOSE_EVENT:
-    case CTRL_LOGOFF_EVENT:
-    case CTRL_SHUTDOWN_EVENT:
-        dispatch_signal(Signal::Hangup);
-        return TRUE;
-    case CTRL_BREAK_EVENT:
-        dispatch_signal(Signal::Terminate);
-        return TRUE;
-    default:
-        return FALSE;
+        case CTRL_C_EVENT:
+            dispatch_signal(Signal::Interrupt);
+            return TRUE;
+        case CTRL_CLOSE_EVENT:
+        case CTRL_LOGOFF_EVENT:
+        case CTRL_SHUTDOWN_EVENT:
+            dispatch_signal(Signal::Hangup);
+            return TRUE;
+        case CTRL_BREAK_EVENT:
+            dispatch_signal(Signal::Terminate);
+            return TRUE;
+        default:
+            return FALSE;
     }
 }
 
@@ -100,28 +100,28 @@ void platform_install(Signal sig)
 {
     switch (sig)
     {
-    case Signal::Interrupt:
-        std::signal(SIGINT, c_signal_handler);
-        if (!g_console_handler_installed)
-        {
-            SetConsoleCtrlHandler(console_ctrl_handler, TRUE);
-            g_console_handler_installed = true;
-        }
-        break;
-    case Signal::Terminate:
-        std::signal(SIGTERM, c_signal_handler);
-        break;
-    case Signal::Hangup:
-        if (!g_console_handler_installed)
-        {
-            SetConsoleCtrlHandler(console_ctrl_handler, TRUE);
-            g_console_handler_installed = true;
-        }
-        break;
-    case Signal::User1:
-    case Signal::User2:
-        // Not supported on Windows
-        break;
+        case Signal::Interrupt:
+            std::signal(SIGINT, c_signal_handler);
+            if (!g_console_handler_installed)
+            {
+                SetConsoleCtrlHandler(console_ctrl_handler, TRUE);
+                g_console_handler_installed = true;
+            }
+            break;
+        case Signal::Terminate:
+            std::signal(SIGTERM, c_signal_handler);
+            break;
+        case Signal::Hangup:
+            if (!g_console_handler_installed)
+            {
+                SetConsoleCtrlHandler(console_ctrl_handler, TRUE);
+                g_console_handler_installed = true;
+            }
+            break;
+        case Signal::User1:
+        case Signal::User2:
+            // Not supported on Windows
+            break;
     }
 }
 
@@ -129,18 +129,18 @@ void platform_remove(Signal sig)
 {
     switch (sig)
     {
-    case Signal::Interrupt:
-        std::signal(SIGINT, SIG_DFL);
-        break;
-    case Signal::Terminate:
-        std::signal(SIGTERM, SIG_DFL);
-        break;
-    case Signal::Hangup:
-        // Console handler is shared; only remove if no Interrupt handler either
-        break;
-    case Signal::User1:
-    case Signal::User2:
-        break;
+        case Signal::Interrupt:
+            std::signal(SIGINT, SIG_DFL);
+            break;
+        case Signal::Terminate:
+            std::signal(SIGTERM, SIG_DFL);
+            break;
+        case Signal::Hangup:
+            // Console handler is shared; only remove if no Interrupt handler either
+            break;
+        case Signal::User1:
+        case Signal::User2:
+            break;
     }
 }
 
@@ -154,11 +154,16 @@ void platform_remove(Signal sig)
 {
     switch (sig)
     {
-    case Signal::Interrupt: return SIGINT;
-    case Signal::Terminate: return SIGTERM;
-    case Signal::Hangup:    return SIGHUP;
-    case Signal::User1:     return SIGUSR1;
-    case Signal::User2:     return SIGUSR2;
+        case Signal::Interrupt:
+            return SIGINT;
+        case Signal::Terminate:
+            return SIGTERM;
+        case Signal::Hangup:
+            return SIGHUP;
+        case Signal::User1:
+            return SIGUSR1;
+        case Signal::User2:
+            return SIGUSR2;
     }
     return -1;
 }
@@ -167,12 +172,18 @@ void platform_remove(Signal sig)
 {
     switch (signum)
     {
-    case SIGINT:  return Signal::Interrupt;
-    case SIGTERM: return Signal::Terminate;
-    case SIGHUP:  return Signal::Hangup;
-    case SIGUSR1: return Signal::User1;
-    case SIGUSR2: return Signal::User2;
-    default:      return Signal::Interrupt; // fallback
+        case SIGINT:
+            return Signal::Interrupt;
+        case SIGTERM:
+            return Signal::Terminate;
+        case SIGHUP:
+            return Signal::Hangup;
+        case SIGUSR1:
+            return Signal::User1;
+        case SIGUSR2:
+            return Signal::User2;
+        default:
+            return Signal::Interrupt;  // fallback
     }
 }
 
@@ -213,7 +224,7 @@ void platform_remove(Signal sig)
 
 #endif
 
-} // anonymous namespace
+}  // anonymous namespace
 
 // ============================================================================
 // Public API
@@ -233,4 +244,4 @@ void remove_signal_handler(Signal sig)
     platform_remove(sig);
 }
 
-} // namespace atlas
+}  // namespace atlas

@@ -1,6 +1,7 @@
 #include "pyscript/py_pickler.hpp"
-#include "pyscript/py_error.hpp"
+
 #include "foundation/log.hpp"
+#include "pyscript/py_error.hpp"
 
 #include <cassert>
 
@@ -87,8 +88,7 @@ auto PyPickler::unpickle(std::span<const std::byte> data) -> Result<PyObjectPtr>
     }
 
     auto py_bytes = PyObjectPtr(PyBytes_FromStringAndSize(
-        reinterpret_cast<const char*>(data.data()),
-        static_cast<Py_ssize_t>(data.size())));
+        reinterpret_cast<const char*>(data.data()), static_cast<Py_ssize_t>(data.size())));
     if (!py_bytes)
     {
         return Error(ErrorCode::ScriptError, "Failed to create bytes for unpickle");
@@ -107,4 +107,4 @@ auto PyPickler::unpickle(std::span<const std::byte> data) -> Result<PyObjectPtr>
     return result;
 }
 
-} // namespace atlas
+}  // namespace atlas

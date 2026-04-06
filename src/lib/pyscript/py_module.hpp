@@ -1,7 +1,7 @@
 #pragma once
 
-#include "pyscript/py_object.hpp"
 #include "foundation/error.hpp"
+#include "pyscript/py_object.hpp"
 
 #include <memory>
 #include <string>
@@ -35,8 +35,7 @@ public:
     PyModuleBuilder& operator=(const PyModuleBuilder&) = delete;
 
     // Add a function to the module
-    auto add_function(std::string_view name, PyCFunction func,
-                      int flags = METH_VARARGS,
+    auto add_function(std::string_view name, PyCFunction func, int flags = METH_VARARGS,
                       std::string_view doc = "") -> PyModuleBuilder&;
 
     // Add a type to the module
@@ -46,8 +45,7 @@ public:
     auto add_int_constant(std::string_view name, long value) -> PyModuleBuilder&;
 
     // Add string constant
-    auto add_string_constant(std::string_view name,
-                             std::string_view value) -> PyModuleBuilder&;
+    auto add_string_constant(std::string_view name, std::string_view value) -> PyModuleBuilder&;
 
     // Build and return the module object
     [[nodiscard]] auto build() -> Result<PyObjectPtr>;
@@ -61,4 +59,4 @@ private:
     std::unique_ptr<Impl> impl_;
 };
 
-} // namespace atlas
+}  // namespace atlas

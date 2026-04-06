@@ -41,7 +41,8 @@ inline constexpr void ack_bits_set(uint32_t& bits, SeqNum ack_num, SeqNum seq)
 [[nodiscard]] inline constexpr auto ack_bits_test(uint32_t bits, SeqNum ack_num, SeqNum seq) -> bool
 {
     auto diff = static_cast<int32_t>(ack_num - seq);
-    if (diff == 0) return true;  // ack_num itself is always ACK'd
+    if (diff == 0)
+        return true;  // ack_num itself is always ACK'd
     if (diff >= 1 && diff <= 32)
     {
         return (bits & (1u << (diff - 1))) != 0;
@@ -49,4 +50,4 @@ inline constexpr void ack_bits_set(uint32_t& bits, SeqNum ack_num, SeqNum seq)
     return false;
 }
 
-} // namespace atlas
+}  // namespace atlas

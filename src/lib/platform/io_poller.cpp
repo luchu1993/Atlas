@@ -19,4 +19,4 @@ auto IOPoller::create() -> std::unique_ptr<IOPoller>
 #endif
 }
 
-} // namespace atlas
+}  // namespace atlas

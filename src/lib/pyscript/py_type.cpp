@@ -1,4 +1,5 @@
 #include "pyscript/py_type.hpp"
+
 #include "foundation/log.hpp"
 
 #include <cstring>
@@ -47,7 +48,7 @@ PyObject* wrapper_new(PyTypeObject* type, PyObject*, PyObject*)
     return self;
 }
 
-} // anonymous namespace
+}  // anonymous namespace
 
 // ============================================================================
 // py_wrap
@@ -56,7 +57,8 @@ PyObject* wrapper_new(PyTypeObject* type, PyObject*, PyObject*)
 auto py_wrap(PyTypeObject* type, void* instance, bool own) -> PyObjectPtr
 {
     auto* obj = type->tp_alloc(type, 0);
-    if (!obj) return {};
+    if (!obj)
+        return {};
 
     auto* wrapper = reinterpret_cast<PyWrapperObject*>(obj);
     wrapper->cpp_instance = instance;
@@ -93,8 +95,7 @@ struct PyTypeBuilder::Impl
 // PyTypeBuilder
 // ============================================================================
 
-PyTypeBuilder::PyTypeBuilder(std::string_view name)
-    : impl_(std::make_unique<Impl>())
+PyTypeBuilder::PyTypeBuilder(std::string_view name) : impl_(std::make_unique<Impl>())
 {
     impl_->name = name;
     // Pre-allocate to reduce reallocation during add_method/add_property
@@ -120,8 +121,8 @@ auto PyTypeBuilder::set_base(PyTypeObject* base) -> PyTypeBuilder&
     return *this;
 }
 
-auto PyTypeBuilder::add_method(std::string_view name, PyCFunction func,
-                                int flags, std::string_view doc) -> PyTypeBuilder&
+auto PyTypeBuilder::add_method(std::string_view name, PyCFunction func, int flags,
+                               std::string_view doc) -> PyTypeBuilder&
 {
     impl_->method_names.emplace_back(name);
     impl_->method_docs.emplace_back(doc);
@@ -132,15 +133,14 @@ auto PyTypeBuilder::add_method(std::string_view name, PyCFunction func,
     def.ml_name = nullptr;  // fixed up in build()
     def.ml_meth = func;
     def.ml_flags = flags;
-    def.ml_doc = nullptr;   // fixed up in build()
+    def.ml_doc = nullptr;  // fixed up in build()
     impl_->methods.push_back(def);
 
     return *this;
 }
 
-auto PyTypeBuilder::add_property(std::string_view name,
-                                  getter get_func, setter set_func,
-                                  std::string_view doc) -> PyTypeBuilder&
+auto PyTypeBuilder::add_property(std::string_view name, getter get_func, setter set_func,
+                                 std::string_view doc) -> PyTypeBuilder&
 {
     impl_->prop_names.emplace_back(name);
     impl_->prop_docs.emplace_back(doc);
@@ -149,15 +149,15 @@ auto PyTypeBuilder::add_property(std::string_view name,
     def.name = nullptr;  // fixed up in build()
     def.get = get_func;
     def.set = set_func;
-    def.doc = nullptr;   // fixed up in build()
+    def.doc = nullptr;  // fixed up in build()
     def.closure = nullptr;
     impl_->getsets.push_back(def);
 
     return *this;
 }
 
-auto PyTypeBuilder::add_readonly(std::string_view name, getter get_func,
-                                  std::string_view doc) -> PyTypeBuilder&
+auto PyTypeBuilder::add_readonly(std::string_view name, getter get_func, std::string_view doc)
+    -> PyTypeBuilder&
 {
     return add_property(name, get_func, nullptr, doc);
 }
@@ -217,8 +217,7 @@ auto PyTypeBuilder::build() -> Result<PyTypeObject*>
         bases = PyTuple_Pack(1, impl_->base);
     }
 
-    auto* type = reinterpret_cast<PyTypeObject*>(
-        PyType_FromSpecWithBases(&spec, bases));
+    auto* type = reinterpret_cast<PyTypeObject*>(PyType_FromSpecWithBases(&spec, bases));
     Py_XDECREF(bases);
 
     if (!type)
@@ -236,7 +235,12 @@ auto PyTypeBuilder::build() -> Result<PyTypeObject*>
                 if (s)
                 {
                     const char* cs = PyUnicode_AsUTF8(s);
-                    if (cs) { err_msg += " ("; err_msg += cs; err_msg += ")"; }
+                    if (cs)
+                    {
+                        err_msg += " (";
+                        err_msg += cs;
+                        err_msg += ")";
+                    }
                     Py_DECREF(s);
                 }
             }
@@ -265,4 +269,4 @@ void PyTypeBuilder::finalize_all()
     get_registry().clear();
 }
 
-} // namespace atlas
+}  // namespace atlas

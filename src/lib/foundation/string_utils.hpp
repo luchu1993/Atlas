@@ -10,7 +10,8 @@ namespace atlas::string_utils
 
 // Splitting
 [[nodiscard]] auto split(std::string_view str, char delimiter) -> std::vector<std::string_view>;
-[[nodiscard]] auto split(std::string_view str, std::string_view delimiter) -> std::vector<std::string_view>;
+[[nodiscard]] auto split(std::string_view str, std::string_view delimiter)
+    -> std::vector<std::string_view>;
 
 // Trimming (whitespace)
 [[nodiscard]] auto trim(std::string_view str) -> std::string_view;
@@ -23,10 +24,12 @@ namespace atlas::string_utils
 [[nodiscard]] auto iequals(std::string_view a, std::string_view b) -> bool;
 
 // Joining
-[[nodiscard]] auto join(const std::vector<std::string_view>& parts, std::string_view separator) -> std::string;
+[[nodiscard]] auto join(const std::vector<std::string_view>& parts, std::string_view separator)
+    -> std::string;
 
 // Replace
-[[nodiscard]] auto replace_all(std::string_view str, std::string_view from, std::string_view to) -> std::string;
+[[nodiscard]] auto replace_all(std::string_view str, std::string_view from, std::string_view to)
+    -> std::string;
 
 // Prefix/suffix
 [[nodiscard]] constexpr auto starts_with(std::string_view str, std::string_view prefix) -> bool
@@ -54,10 +57,10 @@ namespace atlas::string_utils
 // String literal operator
 namespace literals
 {
-    consteval auto operator""_hash(const char* str, std::size_t len) -> uint64_t
-    {
-        return hash_fnv1a(std::string_view{str, len});
-    }
+consteval auto operator""_hash(const char* str, std::size_t len) -> uint64_t
+{
+    return hash_fnv1a(std::string_view{str, len});
 }
+}  // namespace literals
 
-} // namespace atlas::string_utils
+}  // namespace atlas::string_utils

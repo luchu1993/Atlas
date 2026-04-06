@@ -37,7 +37,8 @@ public:
     TimerQueue& operator=(const TimerQueue&) = delete;
 
     [[nodiscard]] auto schedule(TimePoint when, Callback callback) -> TimerHandle;
-    [[nodiscard]] auto schedule_repeating(TimePoint first_fire, Duration interval, Callback callback) -> TimerHandle;
+    [[nodiscard]] auto schedule_repeating(TimePoint first_fire, Duration interval,
+                                          Callback callback) -> TimerHandle;
 
     auto cancel(TimerHandle handle) -> bool;
     auto process(TimePoint now) -> uint32_t;
@@ -73,4 +74,4 @@ private:
     void purge_cancelled();
 };
 
-} // namespace atlas
+}  // namespace atlas
