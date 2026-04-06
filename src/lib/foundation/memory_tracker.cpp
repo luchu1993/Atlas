@@ -19,8 +19,8 @@ void MemoryTracker::record_alloc(std::size_t bytes)
     std::size_t peak = peak_bytes_.load(std::memory_order_relaxed);
     while (current > peak)
     {
-        if (peak_bytes_.compare_exchange_weak(peak, current,
-                std::memory_order_relaxed, std::memory_order_relaxed))
+        if (peak_bytes_.compare_exchange_weak(peak, current, std::memory_order_relaxed,
+                                              std::memory_order_relaxed))
         {
             break;
         }
@@ -51,4 +51,4 @@ void MemoryTracker::reset()
     total_deallocs_.store(0, std::memory_order_relaxed);
 }
 
-} // namespace atlas
+}  // namespace atlas
