@@ -49,10 +49,20 @@ auto PyInterpreter::initialize(const Config& config) -> Result<void>
         }
     }
 
-    // Set Python home if specified
-    if (!config.python_home.empty())
+    // Set Python home. In isolated mode Python ignores the PYTHONHOME environment
+    // variable, so we read it explicitly and pass it via PyConfig.home.
+    // Priority: explicit config.python_home > PYTHONHOME env var.
+    std::filesystem::path effective_home = config.python_home;
+    if (effective_home.empty())
     {
-        auto whome = config.python_home.wstring();
+        if (const char* env_home = std::getenv("PYTHONHOME"); env_home && *env_home)
+        {
+            effective_home = env_home;
+        }
+    }
+    if (!effective_home.empty())
+    {
+        auto whome = effective_home.wstring();
         auto status = PyConfig_SetString(&config_py, &config_py.home, whome.c_str());
         if (PyStatus_Exception(status))
         {
