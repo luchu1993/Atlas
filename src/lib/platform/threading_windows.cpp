@@ -2,8 +2,10 @@
 
 #if ATLAS_PLATFORM_WINDOWS
 
+// clang-format off
+#include <windows.h>         // Must precede all other Windows SDK headers
 #include <processthreadsapi.h>
-#include <windows.h>
+// clang-format on
 
 namespace atlas
 {
