@@ -4,16 +4,17 @@
 #include "pyscript/py_error.hpp"
 #include "foundation/log.hpp"
 
+#include <cassert>
 #include <format>
 
 namespace atlas
 {
 
-bool PyInterpreter::initialized_ = false;
+std::atomic<bool> PyInterpreter::initialized_{false};
 
 auto PyInterpreter::initialize(const Config& config) -> Result<void>
 {
-    if (initialized_)
+    if (initialized_.load(std::memory_order_acquire))
     {
         return Error(ErrorCode::AlreadyExists,
             "Python interpreter is already initialized");
@@ -36,15 +37,29 @@ auto PyInterpreter::initialize(const Config& config) -> Result<void>
     auto* wname = Py_DecodeLocale(config.program_name.c_str(), nullptr);
     if (wname)
     {
-        PyConfig_SetString(&config_py, &config_py.program_name, wname);
+        auto status = PyConfig_SetString(&config_py,
+            &config_py.program_name, wname);
         PyMem_RawFree(wname);
+        if (PyStatus_Exception(status))
+        {
+            PyConfig_Clear(&config_py);
+            return Error(ErrorCode::ScriptError,
+                "Failed to set Python program name");
+        }
     }
 
     // Set Python home if specified
     if (!config.python_home.empty())
     {
         auto whome = config.python_home.wstring();
-        PyConfig_SetString(&config_py, &config_py.home, whome.c_str());
+        auto status = PyConfig_SetString(&config_py,
+            &config_py.home, whome.c_str());
+        if (PyStatus_Exception(status))
+        {
+            PyConfig_Clear(&config_py);
+            return Error(ErrorCode::ScriptError,
+                "Failed to set Python home");
+        }
     }
 
     // Initialize the interpreter
@@ -69,14 +84,14 @@ auto PyInterpreter::initialize(const Config& config) -> Result<void>
         }
     }
 
-    initialized_ = true;
+    initialized_.store(true, std::memory_order_release);
     ATLAS_LOG_INFO("Python {} initialized", version());
     return Result<void>{};
 }
 
 void PyInterpreter::finalize()
 {
-    if (!initialized_)
+    if (!initialized_.load(std::memory_order_acquire))
     {
         return;
     }
@@ -89,25 +104,29 @@ void PyInterpreter::finalize()
         ATLAS_LOG_WARNING("Python finalization reported errors");
     }
 
-    initialized_ = false;
+    initialized_.store(false, std::memory_order_release);
     ATLAS_LOG_INFO("Python interpreter finalized");
 }
 
 auto PyInterpreter::is_initialized() -> bool
 {
-    return initialized_;
+    return initialized_.load(std::memory_order_acquire);
 }
 
 auto PyInterpreter::exec(std::string_view code) -> Result<void>
 {
+    assert(PyGILState_Check() && "GIL must be held when calling exec()");
+
     std::string code_str(code);
     int result = PyRun_SimpleString(code_str.c_str());
     if (result != 0)
     {
-        auto err = check_python_error();
-        if (!err)
+        // Check if Python set an exception with details
+        if (PyErr_Occurred())
         {
-            return err;
+            auto msg = format_python_error();
+            PyErr_Clear();
+            return Error(ErrorCode::ScriptError, std::move(msg));
         }
         return Error(ErrorCode::ScriptError,
             "Python exec failed (no exception details available)");
@@ -117,19 +136,22 @@ auto PyInterpreter::exec(std::string_view code) -> Result<void>
 
 auto PyInterpreter::import(std::string_view module_name) -> Result<PyObjectPtr>
 {
+    assert(PyGILState_Check() && "GIL must be held when calling import()");
+
     std::string name(module_name);
     PyObject* mod = PyImport_ImportModule(name.c_str());
     if (!mod)
     {
-        auto err = check_python_error();
-        if (!err)
+        if (PyErr_Occurred())
         {
-            return err.error();
+            auto msg = format_python_error();
+            PyErr_Clear();
+            return Error(ErrorCode::ScriptImportError, std::move(msg));
         }
         return Error(ErrorCode::ScriptImportError,
             std::format("Failed to import module '{}'", name));
     }
-    return PyObjectPtr(mod);  // steals the new reference
+    return PyObjectPtr(mod);
 }
 
 auto PyInterpreter::add_sys_path(const std::filesystem::path& path)

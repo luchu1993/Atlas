@@ -127,7 +127,12 @@ public:
     [[nodiscard]] auto get_attr(std::string_view name) const -> PyObjectPtr
     {
         std::string name_str(name);
-        return PyObjectPtr(PyObject_GetAttrString(ptr_, name_str.c_str()));
+        auto* attr = PyObject_GetAttrString(ptr_, name_str.c_str());
+        if (!attr)
+        {
+            PyErr_Clear();  // Clear AttributeError; caller checks for null
+        }
+        return PyObjectPtr(attr);
     }
 
     auto set_attr(std::string_view name, const PyObjectPtr& value) -> Result<void>

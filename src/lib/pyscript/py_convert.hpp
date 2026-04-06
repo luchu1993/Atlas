@@ -142,7 +142,7 @@ template <>
     if (PyLong_Check(obj))
     {
         double val = PyLong_AsDouble(obj);
-        if (val == -1.0 && PyErr_Occurred())
+        if (PyErr_Occurred())
         {
             PyErr_Clear();
             return Error(ErrorCode::ScriptValueError, "Float conversion failed");

@@ -3,6 +3,7 @@
 #include "pyscript/py_object.hpp"
 #include "foundation/error.hpp"
 
+#include <atomic>
 #include <filesystem>
 #include <string>
 #include <string_view>
@@ -46,7 +47,7 @@ public:
     PyInterpreter() = delete;
 
 private:
-    static bool initialized_;
+    static std::atomic<bool> initialized_;
 };
 
 } // namespace atlas
