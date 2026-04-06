@@ -114,10 +114,14 @@ auto PyModuleBuilder::build() -> Result<PyObjectPtr>
     get_registry().push_back(std::move(impl_));
 
     // Set up PyModuleDef (stored inside Impl, which now lives in the registry)
+#if defined(__GNUC__) && !defined(__clang__)
 #pragma GCC diagnostic push
 #pragma GCC diagnostic ignored "-Wconversion-null"
+#endif
     impl->module_def = PyModuleDef_HEAD_INIT;
+#if defined(__GNUC__) && !defined(__clang__)
 #pragma GCC diagnostic pop
+#endif
     impl->module_def.m_name = impl->name.c_str();
     impl->module_def.m_doc = nullptr;
     impl->module_def.m_size = -1;
