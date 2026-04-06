@@ -140,6 +140,7 @@ template <>
     }
     if (PyLong_Check(obj))
     {
+        PyErr_Clear();  // Clear any stale error before calling PyLong_AsDouble
         double val = PyLong_AsDouble(obj);
         if (PyErr_Occurred())
         {
