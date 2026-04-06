@@ -143,3 +143,13 @@ atlas_add_test(test_py_gil
     SOURCES test_py_gil.cpp
     DEPS atlas_pyscript
 )
+
+atlas_add_test(test_py_type
+    SOURCES test_py_type.cpp
+    DEPS atlas_pyscript
+)
+
+atlas_add_test(test_py_module
+    SOURCES test_py_module.cpp
+    DEPS atlas_pyscript
+)
