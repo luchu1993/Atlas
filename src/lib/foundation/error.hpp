@@ -30,6 +30,16 @@ enum class ErrorCode : uint32_t
     PermissionDenied,
     NotSupported,
     InternalError,
+
+    // Network error codes
+    ConnectionRefused,
+    ConnectionReset,
+    AddressInUse,
+    WouldBlock,
+    NetworkUnreachable,
+    MessageTooLarge,
+    RateLimited,
+    ChannelCondemned,
 };
 
 [[nodiscard]] auto error_code_name(ErrorCode code) -> std::string_view;

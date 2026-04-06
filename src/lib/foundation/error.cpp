@@ -25,6 +25,14 @@ auto error_code_name(ErrorCode code) -> std::string_view
         case ErrorCode::PermissionDenied: return "PermissionDenied";
         case ErrorCode::NotSupported:     return "NotSupported";
         case ErrorCode::InternalError:    return "InternalError";
+        case ErrorCode::ConnectionRefused: return "ConnectionRefused";
+        case ErrorCode::ConnectionReset:   return "ConnectionReset";
+        case ErrorCode::AddressInUse:      return "AddressInUse";
+        case ErrorCode::WouldBlock:        return "WouldBlock";
+        case ErrorCode::NetworkUnreachable: return "NetworkUnreachable";
+        case ErrorCode::MessageTooLarge:   return "MessageTooLarge";
+        case ErrorCode::RateLimited:       return "RateLimited";
+        case ErrorCode::ChannelCondemned:  return "ChannelCondemned";
     }
     return "Unknown";
 }

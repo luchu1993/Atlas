@@ -128,10 +128,12 @@ public:
             return 0;
         }
 
-        // Dispatch callbacks
+        // Snapshot entries before dispatch — callbacks may call add/remove/modify
+        // which would invalidate iterators if we iterated entries_ directly.
+        auto snapshot = entries_;
         int dispatched = 0;
 
-        for (const auto& [fd, entry] : entries_)
+        for (const auto& [fd, entry] : snapshot)
         {
             IOEvent events = IOEvent::None;
 
@@ -150,8 +152,12 @@ public:
 
             if (events != IOEvent::None)
             {
-                entry.callback(fd, events);
-                ++dispatched;
+                // Verify fd still registered (callback might have removed it)
+                if (entries_.count(fd) != 0)
+                {
+                    entry.callback(fd, events);
+                    ++dispatched;
+                }
             }
         }
 

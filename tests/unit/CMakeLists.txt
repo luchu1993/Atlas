@@ -73,3 +73,18 @@ atlas_add_test(test_math
     SOURCES test_math.cpp
     DEPS atlas_math
 )
+
+atlas_add_test(test_address
+    SOURCES test_address.cpp
+    DEPS atlas_network
+)
+
+atlas_add_test(test_socket
+    SOURCES test_socket.cpp
+    DEPS atlas_network
+)
+
+atlas_add_test(test_event_dispatcher
+    SOURCES test_event_dispatcher.cpp
+    DEPS atlas_network
+)

@@ -130,21 +130,25 @@ public:
             return Error(ErrorCode::IoError, "epoll_wait() failed");
         }
 
-        // Dispatch callbacks
+        // Dispatch callbacks — a callback may call add/remove/modify,
+        // so we must re-lookup after each callback invocation.
         int dispatched = 0;
 
         for (int i = 0; i < result; ++i)
         {
             FdHandle fd = static_cast<FdHandle>(events[i].data.fd);
 
+            // Re-lookup each time — previous callback may have removed this fd
             auto it = entries_.find(fd);
             if (it == entries_.end())
             {
                 continue;
             }
 
+            // Copy callback before invoking (callback may erase this entry)
+            auto callback = it->second.callback;
             IOEvent io_events = from_epoll_events(events[i].events);
-            it->second.callback(fd, io_events);
+            callback(fd, io_events);
             ++dispatched;
         }
 
