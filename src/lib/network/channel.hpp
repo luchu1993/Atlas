@@ -1,0 +1,98 @@
+#pragma once
+
+#include "network/address.hpp"
+#include "network/bundle.hpp"
+#include "platform/io_poller.hpp"
+#include "foundation/time.hpp"
+#include "foundation/timer_queue.hpp"
+
+#include <cstdint>
+#include <functional>
+#include <memory>
+#include <span>
+
+namespace atlas
+{
+
+class EventDispatcher;
+class InterfaceTable;
+
+enum class ChannelState : uint8_t
+{
+    Created,
+    Active,
+    Condemned,
+};
+
+class Channel
+{
+public:
+    Channel(EventDispatcher& dispatcher, InterfaceTable& table,
+            const Address& remote);
+    virtual ~Channel();
+
+    // Non-copyable, non-movable
+    Channel(const Channel&) = delete;
+    Channel& operator=(const Channel&) = delete;
+
+    // Sending
+    [[nodiscard]] auto bundle() -> Bundle& { return bundle_; }
+    [[nodiscard]] auto send() -> Result<void>;
+    [[nodiscard]] auto send_message(MessageID id, std::span<const std::byte> data)
+        -> Result<void>;
+
+    // Convenience: send a typed message
+    template <NetworkMessage Msg>
+    [[nodiscard]] auto send_message(const Msg& msg) -> Result<void>
+    {
+        bundle_.add_message(msg);
+        return send();
+    }
+
+    // State
+    [[nodiscard]] auto state() const -> ChannelState { return state_; }
+    [[nodiscard]] auto remote_address() const -> const Address& { return remote_; }
+    [[nodiscard]] auto is_connected() const -> bool { return state_ == ChannelState::Active; }
+
+    void activate();
+    void condemn();
+
+    // Inactivity detection
+    void set_inactivity_timeout(Duration timeout);
+    void reset_inactivity_timer();
+
+    // Statistics
+    [[nodiscard]] auto bytes_sent() const -> uint64_t { return bytes_sent_; }
+    [[nodiscard]] auto bytes_received() const -> uint64_t { return bytes_received_; }
+
+    // Disconnect callback
+    using DisconnectCallback = std::function<void(Channel&)>;
+    void set_disconnect_callback(DisconnectCallback cb);
+
+    // Access underlying fd for IOPoller registration
+    [[nodiscard]] virtual auto fd() const -> FdHandle = 0;
+
+protected:
+    // Subclass hooks
+    virtual auto do_send(std::span<const std::byte> data) -> Result<size_t> = 0;
+    void on_data_received(std::span<const std::byte> data);
+    void on_disconnect();
+
+    // Message parsing helper: parse messages from a complete frame
+    void dispatch_messages(std::span<const std::byte> frame_data);
+
+    EventDispatcher& dispatcher_;
+    InterfaceTable& interface_table_;
+    Address remote_;
+    ChannelState state_{ChannelState::Created};
+    Bundle bundle_;
+
+    uint64_t bytes_sent_{0};
+    uint64_t bytes_received_{0};
+
+    DisconnectCallback disconnect_callback_;
+    Duration inactivity_timeout_{};
+    TimerHandle inactivity_timer_;
+};
+
+} // namespace atlas

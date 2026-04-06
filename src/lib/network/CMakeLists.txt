@@ -5,6 +5,11 @@ atlas_add_library(atlas_network
         address.cpp
         socket.cpp
         event_dispatcher.cpp
+        interface_table.cpp
+        bundle.cpp
+        channel.cpp
+        tcp_channel.cpp
+        udp_channel.cpp
     DEPS
         atlas_foundation
         atlas_platform

@@ -88,3 +88,18 @@ atlas_add_test(test_event_dispatcher
     SOURCES test_event_dispatcher.cpp
     DEPS atlas_network
 )
+
+atlas_add_test(test_message
+    SOURCES test_message.cpp
+    DEPS atlas_network
+)
+
+atlas_add_test(test_bundle
+    SOURCES test_bundle.cpp
+    DEPS atlas_network
+)
+
+atlas_add_test(test_channel
+    SOURCES test_channel.cpp
+    DEPS atlas_network
+)

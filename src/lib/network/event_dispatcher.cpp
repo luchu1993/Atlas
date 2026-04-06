@@ -24,6 +24,11 @@ auto EventDispatcher::register_writer(FdHandle fd, IOCallback callback) -> Resul
     return poller_->add(fd, IOEvent::Writable, std::move(callback));
 }
 
+auto EventDispatcher::modify_interest(FdHandle fd, IOEvent interest) -> Result<void>
+{
+    return poller_->modify(fd, interest);
+}
+
 auto EventDispatcher::deregister(FdHandle fd) -> Result<void>
 {
     if (polling_)

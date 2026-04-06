@@ -25,6 +25,7 @@ public:
     // IO registration
     [[nodiscard]] auto register_reader(FdHandle fd, IOCallback callback) -> Result<void>;
     [[nodiscard]] auto register_writer(FdHandle fd, IOCallback callback) -> Result<void>;
+    [[nodiscard]] auto modify_interest(FdHandle fd, IOEvent interest) -> Result<void>;
     [[nodiscard]] auto deregister(FdHandle fd) -> Result<void>;
 
     // Timer registration
