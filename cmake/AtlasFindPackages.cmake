@@ -29,15 +29,17 @@ FetchContent_Declare(
 FetchContent_MakeAvailable(pugixml)
 
 # ── rapidjson (JSON parsing, header-only) ────────────────────────────────────
+# Disable rapidjson's own targets — we only need the headers.
+set(RAPIDJSON_BUILD_DOC      OFF CACHE BOOL "" FORCE)
+set(RAPIDJSON_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
+set(RAPIDJSON_BUILD_TESTS    OFF CACHE BOOL "" FORCE)
 FetchContent_Declare(
     rapidjson
     GIT_REPOSITORY https://github.com/Tencent/rapidjson.git
     GIT_TAG        v1.1.0
     GIT_SHALLOW    TRUE
-    CONFIGURE_COMMAND ""
-    BUILD_COMMAND ""
 )
-FetchContent_Populate(rapidjson)
+FetchContent_MakeAvailable(rapidjson)
 
 # ── Python 3 (for scripting) ─────────────────────────────────────────────────
 find_package(Python3 REQUIRED COMPONENTS Development Interpreter)
