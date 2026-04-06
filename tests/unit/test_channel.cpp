@@ -223,3 +223,41 @@ TEST_F(ChannelTest, RemoteAddressReturned)
 
     EXPECT_EQ(channel.remote_address(), remote);
 }
+
+// ============================================================================
+// Review issue #2: TcpChannel write buffer — verify bytes_sent increases
+// after a successful send over a connected TCP pair.
+// ============================================================================
+
+TEST_F(ChannelTest, BytesSentIncreasesAfterSend)
+{
+    // Set up server
+    auto server_sock = Socket::create_tcp();
+    ASSERT_TRUE(server_sock.has_value());
+    ASSERT_TRUE(server_sock->bind(Address("127.0.0.1", 0)).has_value());
+    ASSERT_TRUE(server_sock->listen().has_value());
+    auto server_addr = server_sock->local_address().value();
+
+    // Client connects
+    auto client_sock = Socket::create_tcp();
+    ASSERT_TRUE(client_sock.has_value());
+    (void)client_sock->connect(server_addr);
+
+    std::this_thread::sleep_for(std::chrono::milliseconds(50));
+
+    // Accept
+    auto accepted = server_sock->accept();
+    ASSERT_TRUE(accepted.has_value());
+
+    TcpChannel channel(dispatcher_, table_, std::move(*client_sock), server_addr);
+    channel.activate();
+
+    EXPECT_EQ(channel.bytes_sent(), 0u);
+
+    // Send a message
+    auto send_result = channel.send_message(ChannelTestMsg{1, "payload"});
+    ASSERT_TRUE(send_result.has_value()) << send_result.error().message();
+
+    // bytes_sent should now be > 0
+    EXPECT_GT(channel.bytes_sent(), 0u);
+}

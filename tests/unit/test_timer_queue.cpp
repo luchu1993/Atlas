@@ -162,3 +162,68 @@ TEST_F(TimerQueueTest, ManyTimersCorrectOrder)
         EXPECT_EQ(order[i], i);
     }
 }
+
+// ============================================================================
+// Review issue #3: TimerQueue reentrancy safety — schedule() during process()
+// callback is safe because pop-before-callback + push_heap maintains heap
+// invariant.
+// ============================================================================
+
+TEST_F(TimerQueueTest, ScheduleDuringProcessCallback)
+{
+    int first_fired = 0;
+    int nested_fired = 0;
+
+    auto handle = queue.schedule(base, [&](TimerHandle)
+    {
+        ++first_fired;
+        // Schedule a new timer from within the callback that fires immediately
+        auto nested = queue.schedule(base, [&](TimerHandle)
+        {
+            ++nested_fired;
+        });
+        (void)nested;
+    });
+    (void)handle;
+
+    // First process: fires the original timer, which schedules the nested one
+    queue.process(base);
+    EXPECT_EQ(first_fired, 1);
+
+    // The nested timer was scheduled during process(). It may or may not fire
+    // in the same process() call depending on implementation. Either way, a
+    // second process() call should ensure it fires.
+    queue.process(base);
+    EXPECT_EQ(nested_fired, 1);
+}
+
+// ============================================================================
+// Review issue #4: TimerQueue cancel during process — cancel() during
+// process() callback sets cancelled flag so second timer does NOT fire.
+// ============================================================================
+
+TEST_F(TimerQueueTest, CancelOtherTimerDuringProcessCallback)
+{
+    int first_fired = 0;
+    int second_fired = 0;
+    TimerHandle second_handle;
+
+    // Schedule two timers at the same time. The first cancels the second.
+    auto h1 = queue.schedule(base, [&](TimerHandle)
+    {
+        ++first_fired;
+        queue.cancel(second_handle);
+    });
+    (void)h1;
+
+    second_handle = queue.schedule(base, [&](TimerHandle)
+    {
+        ++second_fired;
+    });
+
+    // Process both — the first should fire and cancel the second
+    queue.process(base);
+
+    EXPECT_EQ(first_fired, 1);
+    EXPECT_EQ(second_fired, 0);  // cancelled by first timer's callback
+}

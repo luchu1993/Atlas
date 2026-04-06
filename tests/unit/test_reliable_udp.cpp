@@ -758,3 +758,66 @@ TEST_F(ReliableUdpTest, MessageTooLargeReturnsError)
     EXPECT_FALSE(result.has_value());
     EXPECT_EQ(result.error().code(), ErrorCode::MessageTooLarge);
 }
+
+// ============================================================================
+// Review issue #10: cwnd=1 correctly limits initial sends, and after first
+// ACK exchange cwnd grows to 2 allowing a second send.
+// ============================================================================
+
+TEST_F(ReliableUdpTest, CwndGrowsAfterFirstAckAllowsSecondSend)
+{
+    auto sock_a = Socket::create_udp();
+    ASSERT_TRUE(sock_a.has_value());
+    ASSERT_TRUE(sock_a->bind(Address("127.0.0.1", 0)).has_value());
+    auto addr_a = sock_a->local_address().value();
+
+    auto sock_b = Socket::create_udp();
+    ASSERT_TRUE(sock_b.has_value());
+    ASSERT_TRUE(sock_b->bind(Address("127.0.0.1", 0)).has_value());
+    auto addr_b = sock_b->local_address().value();
+
+    table_.register_typed_handler<RudpTestMsg>(
+        [](const Address&, Channel*, const RudpTestMsg&) {});
+
+    ReliableUdpChannel channel_a(dispatcher_, table_, *sock_a, addr_b);
+    channel_a.activate();
+    ReliableUdpChannel channel_b(dispatcher_, table_, *sock_b, addr_a);
+    channel_b.activate();
+
+    // Verify initial cwnd is 1
+    EXPECT_EQ(channel_a.cwnd(), 1u);
+
+    // First send succeeds (cwnd=1, 0 in flight)
+    channel_a.bundle().add_message(RudpTestMsg{1});
+    auto r1 = channel_a.send_reliable();
+    ASSERT_TRUE(r1.has_value());
+
+    // Second send blocked (cwnd=1, 1 in flight)
+    channel_a.bundle().add_message(RudpTestMsg{2});
+    auto r2 = channel_a.send_reliable();
+    EXPECT_FALSE(r2.has_value());
+    EXPECT_EQ(r2.error().code(), ErrorCode::WouldBlock);
+
+    // B receives and sends ACK back via reply
+    std::this_thread::sleep_for(std::chrono::milliseconds(50));
+    pump_datagrams(*sock_b, channel_b);
+
+    channel_b.bundle().add_message(RudpTestMsg{100});
+    (void)channel_b.send_reliable();
+
+    std::this_thread::sleep_for(std::chrono::milliseconds(50));
+    pump_datagrams(*sock_a, channel_a);
+
+    // After ACK, cwnd should have grown (slow start: +1 per ACK)
+    EXPECT_GE(channel_a.cwnd(), 2u);
+    EXPECT_EQ(channel_a.unacked_count(), 0u);
+
+    // Now we should be able to send two messages before blocking
+    channel_a.bundle().add_message(RudpTestMsg{3});
+    auto r3 = channel_a.send_reliable();
+    ASSERT_TRUE(r3.has_value()) << "First send after cwnd growth should succeed";
+
+    channel_a.bundle().add_message(RudpTestMsg{4});
+    auto r4 = channel_a.send_reliable();
+    ASSERT_TRUE(r4.has_value()) << "Second send should succeed with cwnd>=2";
+}

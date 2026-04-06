@@ -31,11 +31,8 @@ auto EventDispatcher::modify_interest(FdHandle fd, IOEvent interest) -> Result<v
 
 auto EventDispatcher::deregister(FdHandle fd) -> Result<void>
 {
-    if (polling_)
-    {
-        pending_deregistrations_.push_back(fd);
-        return {};
-    }
+    // Safe to call during poll dispatch — IOPoller implementations use
+    // snapshot/copy-before-invoke patterns that tolerate concurrent removal.
     return poller_->remove(fd);
 }
 
@@ -95,16 +92,6 @@ void EventDispatcher::process_frequent_tasks()
     std::erase(tasks_, nullptr);
 }
 
-void EventDispatcher::process_pending_deregistrations()
-{
-    for (auto fd : pending_deregistrations_)
-    {
-        // Ignore errors — fd might have been re-added during polling
-        (void)poller_->remove(fd);
-    }
-    pending_deregistrations_.clear();
-}
-
 void EventDispatcher::process_once()
 {
     // 1. Frequent tasks
@@ -123,13 +110,7 @@ void EventDispatcher::process_once()
     }
 
     // 4. Poll IO
-    polling_ = true;
     auto result = poller_->poll(timeout);
-    polling_ = false;
-
-    // 5. Process deferred deregistrations
-    process_pending_deregistrations();
-
     if (!result)
     {
         ATLAS_LOG_ERROR("EventDispatcher poll error: {}", result.error().message());

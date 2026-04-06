@@ -138,3 +138,50 @@ TEST_F(LogTest, MultipleSinksReceiveMessages)
     EXPECT_EQ(sink_->messages[0], "broadcast");
     EXPECT_EQ(second_sink->messages[0], "broadcast");
 }
+
+// ============================================================================
+// Review issue #7: Logger snapshot isolation — sinks are snapshot-copied
+// before invocation, so clear_sinks() during log() is safe.
+// ============================================================================
+
+class ClearingSink : public atlas::LogSink
+{
+public:
+    int write_count{0};
+    std::string last_message;
+
+    void write(atlas::LogLevel level, std::string_view category,
+               std::string_view message, const std::source_location& loc) override
+    {
+        ++write_count;
+        last_message = std::string(message);
+
+        // Clear all sinks during the write callback.
+        // This should NOT crash or deadlock because Logger copies the sink
+        // list before invoking write(), so modifying the original list is safe.
+        atlas::Logger::instance().clear_sinks();
+    }
+
+    void flush() override {}
+};
+
+TEST_F(LogTest, ClearSinksDuringLogDoesNotCrashOrDeadlock)
+{
+    auto& logger = Logger::instance();
+    logger.clear_sinks();
+
+    auto clearing_sink = std::make_shared<ClearingSink>();
+    logger.add_sink(clearing_sink);
+
+    // This should NOT crash or deadlock
+    ATLAS_LOG_INFO("snapshot isolation test");
+
+    // The sink should have received the message before clear_sinks() took effect
+    EXPECT_EQ(clearing_sink->write_count, 1);
+    EXPECT_EQ(clearing_sink->last_message, "snapshot isolation test");
+
+    // After the log call, sinks should be cleared (the sink cleared them)
+    // Logging again should not reach the sink
+    ATLAS_LOG_INFO("after clear");
+    EXPECT_EQ(clearing_sink->write_count, 1);  // no new writes
+}

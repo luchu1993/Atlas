@@ -182,6 +182,66 @@ TEST(Bundle, FinalizeReturnsEmptyOnEmptyBundle)
     EXPECT_TRUE(b.empty());
 }
 
+// ============================================================================
+// Review issue #8: Bundle writer() lifetime — writer() reference is valid
+// only between start_message() and end_message(). Verify second message
+// is independent.
+// ============================================================================
+
+TEST(Bundle, WriterLifetimeBetweenMessages)
+{
+    Bundle b;
+    MessageDesc desc{20, "Manual", MessageLengthStyle::Variable, -1};
+
+    // First message
+    b.start_message(desc);
+    auto& writer1 = b.writer();
+    writer1.write<uint32_t>(11111);
+    b.end_message();
+
+    auto size_after_first = b.total_size();
+    EXPECT_GT(size_after_first, 0u);
+
+    // Second message — start fresh
+    b.start_message(desc);
+    auto& writer2 = b.writer();
+    writer2.write<uint32_t>(22222);
+    b.end_message();
+
+    // Bundle should have 2 independent messages
+    EXPECT_EQ(b.message_count(), 2u);
+    auto total = b.total_size();
+    EXPECT_GT(total, size_after_first);
+
+    // Finalize and parse back both messages to verify independence
+    auto data = b.finalize();
+    BinaryReader reader{std::span<const std::byte>{data}};
+
+    // First message
+    auto id1 = reader.read<uint16_t>();
+    ASSERT_TRUE(id1.has_value());
+    EXPECT_EQ(*id1, 20u);
+    auto len1 = reader.read_packed_int();
+    ASSERT_TRUE(len1.has_value());
+    EXPECT_EQ(*len1, 4u);
+    auto val1 = reader.read<uint32_t>();
+    ASSERT_TRUE(val1.has_value());
+    EXPECT_EQ(*val1, 11111u);
+
+    // Second message
+    auto id2 = reader.read<uint16_t>();
+    ASSERT_TRUE(id2.has_value());
+    EXPECT_EQ(*id2, 20u);
+    auto len2 = reader.read_packed_int();
+    ASSERT_TRUE(len2.has_value());
+    EXPECT_EQ(*len2, 4u);
+    auto val2 = reader.read<uint32_t>();
+    ASSERT_TRUE(val2.has_value());
+    EXPECT_EQ(*val2, 22222u);
+
+    EXPECT_EQ(reader.remaining(), 0u);
+}
+
 TEST(Bundle, MultipleFinalizeRoundTrips)
 {
     Bundle b;

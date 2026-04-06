@@ -5,6 +5,8 @@
 #include <array>
 #include <chrono>
 #include <cstddef>
+#include <functional>
+#include <thread>
 
 using namespace atlas;
 
@@ -160,6 +162,139 @@ TEST(EventDispatcher, IoReadNotification)
     // Process — should detect readable
     dispatcher.process_once();
     EXPECT_TRUE(read_triggered);
+
+    (void)dispatcher.deregister(receiver->fd());
+}
+
+// ============================================================================
+// Review issue #1: SelectPoller callback freshness — re-registration during
+// callback should use the new callback, not the stale snapshot.
+// ============================================================================
+
+TEST(EventDispatcher, ReRegisterDuringCallbackDoesNotCrash)
+{
+    EventDispatcher dispatcher("test");
+    dispatcher.set_max_poll_wait(Milliseconds(50));
+
+    auto sock = Socket::create_udp();
+    ASSERT_TRUE(sock.has_value());
+    ASSERT_TRUE(sock->bind(Address("127.0.0.1", 0)).has_value());
+    auto sock_addr = sock->local_address().value();
+
+    auto sender = Socket::create_udp();
+    ASSERT_TRUE(sender.has_value());
+
+    bool callback_a_called = false;
+    bool callback_b_called = false;
+    bool reregister_ok = false;
+
+    // Register callback A. Inside A, deregister then re-register with callback B.
+    auto reg = dispatcher.register_reader(sock->fd(),
+        [&](FdHandle fd, IOEvent)
+        {
+            callback_a_called = true;
+
+            // Drain the data so socket is no longer ready after this
+            std::array<std::byte, 64> drain{};
+            (void)sock->recv_from(drain);
+
+            // Deregister and re-register with a different callback
+            auto dereg = dispatcher.deregister(fd);
+            if (dereg.has_value())
+            {
+                auto reg2 = dispatcher.register_reader(fd,
+                    [&](FdHandle, IOEvent)
+                    {
+                        callback_b_called = true;
+                        std::array<std::byte, 64> drain2{};
+                        (void)sock->recv_from(drain2);
+                    });
+                reregister_ok = reg2.has_value();
+            }
+        });
+    ASSERT_TRUE(reg.has_value());
+
+    // Send data to trigger callback A
+    std::array<std::byte, 1> data = {std::byte{0xAA}};
+    (void)sender->send_to(data, sock_addr);
+
+    dispatcher.process_once();
+    EXPECT_TRUE(callback_a_called);
+    EXPECT_TRUE(reregister_ok) << "Re-registration during callback should succeed";
+
+    // Send again to trigger callback B
+    (void)sender->send_to(data, sock_addr);
+    std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    dispatcher.process_once();
+    EXPECT_TRUE(callback_b_called);
+
+    (void)dispatcher.deregister(sock->fd());
+}
+
+// ============================================================================
+// Review issue #5: EventDispatcher re-registration during callback — verify
+// deregister + re-register with new callback during poll is safe via deferred
+// deregistration, and the NEW callback is used on next poll.
+// ============================================================================
+
+TEST(EventDispatcher, ReRegisterNewCallbackUsedOnNextPoll)
+{
+    EventDispatcher dispatcher("test");
+    dispatcher.set_max_poll_wait(Milliseconds(50));
+
+    auto receiver = Socket::create_udp();
+    ASSERT_TRUE(receiver.has_value());
+    ASSERT_TRUE(receiver->bind(Address("127.0.0.1", 0)).has_value());
+    auto recv_addr = receiver->local_address().value();
+
+    auto sender = Socket::create_udp();
+    ASSERT_TRUE(sender.has_value());
+
+    int callback_a_count = 0;
+    int callback_b_count = 0;
+
+    // Shared lambda for callback B (captured by reference)
+    std::function<void(FdHandle, IOEvent)> callback_b =
+        [&](FdHandle, IOEvent)
+        {
+            ++callback_b_count;
+            std::array<std::byte, 64> drain{};
+            (void)receiver->recv_from(drain);
+        };
+
+    // Callback A: deregister self, re-register with callback B, then send
+    // more data so B gets triggered on next process_once().
+    auto reg = dispatcher.register_reader(receiver->fd(),
+        [&](FdHandle fd, IOEvent)
+        {
+            ++callback_a_count;
+            std::array<std::byte, 64> drain{};
+            (void)receiver->recv_from(drain);
+
+            // Swap to callback B
+            (void)dispatcher.deregister(fd);
+            auto reg2 = dispatcher.register_reader(fd, callback_b);
+            (void)reg2;
+
+            // Send more data so fd is ready on next poll
+            std::array<std::byte, 1> pkt = {std::byte{0xBB}};
+            (void)sender->send_to(pkt, recv_addr);
+        });
+    ASSERT_TRUE(reg.has_value());
+
+    // Trigger callback A
+    std::array<std::byte, 1> data = {std::byte{0xAA}};
+    (void)sender->send_to(data, recv_addr);
+    dispatcher.process_once();
+
+    EXPECT_EQ(callback_a_count, 1);
+    EXPECT_EQ(callback_b_count, 0);
+
+    // Next process_once() should invoke callback B (not A)
+    dispatcher.process_once();
+
+    EXPECT_EQ(callback_a_count, 1);  // A should NOT be called again
+    EXPECT_EQ(callback_b_count, 1);  // B should be called
 
     (void)dispatcher.deregister(receiver->fd());
 }

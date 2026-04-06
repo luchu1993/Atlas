@@ -4,6 +4,8 @@
 
 #include <set>
 #include <string>
+#include <thread>
+#include <vector>
 
 using namespace atlas;
 
@@ -90,4 +92,43 @@ TEST(MemoryTracker, RecordAllocDealloc)
     EXPECT_EQ(stats.total_deallocations, 1u);
 
     tracker.reset();
+}
+
+// ============================================================================
+// Review issue #9: PoolAllocator thread safety — allocate/deallocate are
+// mutex-protected. Concurrent access should not crash or corrupt state.
+// ============================================================================
+
+TEST(PoolAllocator, ConcurrentAllocateAndDeallocate)
+{
+    PoolAllocator pool(64, 8);
+
+    constexpr int kNumThreads = 4;
+    constexpr int kOpsPerThread = 100;
+
+    auto worker = [&]()
+    {
+        for (int i = 0; i < kOpsPerThread; ++i)
+        {
+            void* p = pool.allocate();
+            ASSERT_NE(p, nullptr);
+            // Simulate brief use
+            std::this_thread::yield();
+            pool.deallocate(p);
+        }
+    };
+
+    std::vector<std::thread> threads;
+    threads.reserve(kNumThreads);
+    for (int i = 0; i < kNumThreads; ++i)
+    {
+        threads.emplace_back(worker);
+    }
+    for (auto& t : threads)
+    {
+        t.join();
+    }
+
+    // All blocks should have been returned
+    EXPECT_EQ(pool.blocks_in_use(), 0u);
 }

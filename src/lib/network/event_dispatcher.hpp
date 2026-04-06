@@ -53,17 +53,12 @@ public:
 
 private:
     void process_frequent_tasks();
-    void process_pending_deregistrations();
 
     std::string name_;
     std::unique_ptr<IOPoller> poller_;
     TimerQueue timers_;
     std::vector<FrequentTask*> tasks_;
     bool iterating_tasks_{false};
-
-    // Deferred deregistration for re-entrancy safety
-    std::vector<FdHandle> pending_deregistrations_;
-    bool polling_{false};
 
     bool running_{false};
     bool stop_requested_{false};

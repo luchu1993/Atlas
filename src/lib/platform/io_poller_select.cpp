@@ -152,12 +152,13 @@ public:
 
             if (events != IOEvent::None)
             {
-                // Use current callback from entries_ (not snapshot) in case
-                // a prior callback re-registered this fd with a new handler.
+                // Copy the current callback before invoking — the callback may
+                // call remove() which destroys the Entry containing the callback.
                 auto current_it = entries_.find(fd);
                 if (current_it != entries_.end())
                 {
-                    current_it->second.callback(fd, events);
+                    auto cb = current_it->second.callback;
+                    cb(fd, events);
                     ++dispatched;
                 }
             }

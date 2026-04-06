@@ -42,21 +42,22 @@ ThreadPool::ThreadPool(uint32_t num_threads)
 
     for (uint32_t i = 0; i < num_threads; ++i)
     {
-        impl_->workers.emplace_back([this](std::stop_token stop_token)
+        impl_->workers.emplace_back([this](std::stop_token /*stop_token*/)
         {
-            while (!stop_token.stop_requested())
+            while (true)
             {
                 std::function<void()> task;
 
                 {
                     std::unique_lock lock(impl_->mutex);
-                    impl_->cv.wait(lock, [this, &stop_token]()
+                    impl_->cv.wait(lock, [this]()
                     {
-                        return !impl_->tasks.empty() || impl_->stopped.load(std::memory_order_relaxed)
-                               || stop_token.stop_requested();
+                        return !impl_->tasks.empty()
+                               || impl_->stopped.load(std::memory_order_relaxed);
                     });
 
-                    if ((impl_->stopped.load(std::memory_order_relaxed) || stop_token.stop_requested())
+                    // Exit only when stopped AND no remaining tasks (drain queue)
+                    if (impl_->stopped.load(std::memory_order_relaxed)
                         && impl_->tasks.empty())
                     {
                         return;
@@ -100,16 +101,11 @@ void ThreadPool::shutdown()
         return;  // Already shut down
     }
 
+    // Wake all workers so they see stopped=true and drain remaining tasks
     impl_->cv.notify_all();
 
-    for (auto& worker : impl_->workers)
-    {
-        worker.request_stop();
-    }
-
-    impl_->cv.notify_all();
-
-    // jthread destructor will join automatically
+    // jthread destructor joins — workers will process all queued tasks
+    // before exiting (they only exit when stopped && tasks.empty())
     impl_->workers.clear();
 }
 
