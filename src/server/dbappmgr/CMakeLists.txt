@@ -1,0 +1,1 @@
+# dbappmgr — DBApp cluster manager

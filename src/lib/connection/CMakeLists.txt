@@ -1,0 +1,1 @@
+# atlas_connection — Client-server and inter-server protocol definitions

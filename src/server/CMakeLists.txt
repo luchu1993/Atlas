@@ -1,0 +1,10 @@
+# Atlas server applications
+add_subdirectory(machined)
+add_subdirectory(loginapp)
+add_subdirectory(baseappmgr)
+add_subdirectory(cellappmgr)
+add_subdirectory(dbappmgr)
+add_subdirectory(baseapp)
+add_subdirectory(cellapp)
+add_subdirectory(dbapp)
+add_subdirectory(reviver)

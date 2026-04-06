@@ -1,0 +1,143 @@
+{
+    "version": 6,
+    "cmakeMinimumRequired": {
+        "major": 3,
+        "minor": 20,
+        "patch": 0
+    },
+    "configurePresets": [
+        {
+            "name": "base",
+            "hidden": true,
+            "binaryDir": "${sourceDir}/build/${presetName}",
+            "cacheVariables": {
+                "ATLAS_BUILD_TESTS": "ON",
+                "ATLAS_BUILD_SERVER": "ON",
+                "ATLAS_BUILD_CLIENT_SDK": "ON"
+            }
+        },
+        {
+            "name": "debug-windows",
+            "displayName": "Debug (Windows/MSVC)",
+            "inherits": "base",
+            "generator": "Visual Studio 17 2022",
+            "architecture": {
+                "value": "x64",
+                "strategy": "set"
+            },
+            "cacheVariables": {
+                "CMAKE_BUILD_TYPE": "Debug"
+            },
+            "condition": {
+                "type": "equals",
+                "lhs": "${hostSystemName}",
+                "rhs": "Windows"
+            }
+        },
+        {
+            "name": "release-windows",
+            "displayName": "Release (Windows/MSVC)",
+            "inherits": "base",
+            "generator": "Visual Studio 17 2022",
+            "architecture": {
+                "value": "x64",
+                "strategy": "set"
+            },
+            "cacheVariables": {
+                "CMAKE_BUILD_TYPE": "Release"
+            },
+            "condition": {
+                "type": "equals",
+                "lhs": "${hostSystemName}",
+                "rhs": "Windows"
+            }
+        },
+        {
+            "name": "debug-linux",
+            "displayName": "Debug (Linux/GCC)",
+            "inherits": "base",
+            "generator": "Unix Makefiles",
+            "cacheVariables": {
+                "CMAKE_BUILD_TYPE": "Debug",
+                "CMAKE_C_COMPILER": "gcc",
+                "CMAKE_CXX_COMPILER": "g++"
+            },
+            "condition": {
+                "type": "equals",
+                "lhs": "${hostSystemName}",
+                "rhs": "Linux"
+            }
+        },
+        {
+            "name": "release-linux",
+            "displayName": "Release (Linux/GCC)",
+            "inherits": "base",
+            "generator": "Unix Makefiles",
+            "cacheVariables": {
+                "CMAKE_BUILD_TYPE": "Release",
+                "CMAKE_C_COMPILER": "gcc",
+                "CMAKE_CXX_COMPILER": "g++"
+            },
+            "condition": {
+                "type": "equals",
+                "lhs": "${hostSystemName}",
+                "rhs": "Linux"
+            }
+        },
+        {
+            "name": "debug-ninja",
+            "displayName": "Debug (Ninja)",
+            "inherits": "base",
+            "generator": "Ninja",
+            "cacheVariables": {
+                "CMAKE_BUILD_TYPE": "Debug"
+            }
+        },
+        {
+            "name": "release-ninja",
+            "displayName": "Release (Ninja)",
+            "inherits": "base",
+            "generator": "Ninja",
+            "cacheVariables": {
+                "CMAKE_BUILD_TYPE": "Release"
+            }
+        }
+    ],
+    "buildPresets": [
+        {
+            "name": "debug-windows",
+            "configurePreset": "debug-windows",
+            "configuration": "Debug"
+        },
+        {
+            "name": "release-windows",
+            "configurePreset": "release-windows",
+            "configuration": "Release"
+        },
+        {
+            "name": "debug-ninja",
+            "configurePreset": "debug-ninja"
+        },
+        {
+            "name": "release-ninja",
+            "configurePreset": "release-ninja"
+        }
+    ],
+    "testPresets": [
+        {
+            "name": "debug-windows",
+            "configurePreset": "debug-windows",
+            "configuration": "Debug",
+            "output": {
+                "outputOnFailure": true
+            }
+        },
+        {
+            "name": "debug-ninja",
+            "configurePreset": "debug-ninja",
+            "output": {
+                "outputOnFailure": true
+            }
+        }
+    ]
+}

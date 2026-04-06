@@ -1,0 +1,32 @@
+---
+Language: Cpp
+BasedOnStyle: Google
+
+# Atlas customizations
+IndentWidth: 4
+TabWidth: 4
+UseTab: Never
+ColumnLimit: 100
+
+AccessModifierOffset: -4
+AlignAfterOpenBracket: Align
+AllowShortFunctionsOnASingleLine: Inline
+AllowShortIfStatementsOnASingleLine: Never
+AllowShortLoopsOnASingleLine: false
+BreakBeforeBraces: Allman
+NamespaceIndentation: None
+PointerAlignment: Left
+SortIncludes: CaseInsensitive
+IncludeBlocks: Regroup
+
+# Include ordering
+IncludeCategories:
+  - Regex: '^"'
+    Priority: 1
+  - Regex: '^<atlas/'
+    Priority: 2
+  - Regex: '^<gtest/'
+    Priority: 3
+  - Regex: '^<'
+    Priority: 4
+...
