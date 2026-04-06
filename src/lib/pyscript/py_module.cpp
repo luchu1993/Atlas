@@ -10,8 +10,6 @@ namespace atlas
 // because PyMethodDef arrays and module name are referenced by the module.
 // ============================================================================
 
-// Registry is a function-local static inside build() to access private Impl
-
 // ============================================================================
 // PyModuleBuilder::Impl
 // ============================================================================
@@ -65,32 +63,30 @@ auto PyModuleBuilder::add_function(std::string_view name, PyCFunction func, int 
     impl_->method_names.emplace_back(name);
     impl_->method_docs.emplace_back(doc);
 
-    PyMethodDef def{};
-    def.ml_name = nullptr;  // fixed up in build()
-    def.ml_meth = func;
-    def.ml_flags = flags;
-    def.ml_doc = nullptr;  // fixed up in build()
-    impl_->methods.push_back(def);
+    // ml_name and ml_doc are raw pointers into method_names/method_docs;
+    // fixed up in build() after all additions are complete.
+    impl_->methods.push_back(PyMethodDef{nullptr, func, flags, nullptr});
 
     return *this;
 }
 
 auto PyModuleBuilder::add_type(std::string_view name, PyTypeObject* type) -> PyModuleBuilder&
 {
-    impl_->types.push_back({std::string(name), type});
+    impl_->types.emplace_back(Impl::TypeEntry{std::string(name), type});
     return *this;
 }
 
 auto PyModuleBuilder::add_int_constant(std::string_view name, long value) -> PyModuleBuilder&
 {
-    impl_->int_constants.push_back({std::string(name), value});
+    impl_->int_constants.emplace_back(Impl::IntConstant{std::string(name), value});
     return *this;
 }
 
 auto PyModuleBuilder::add_string_constant(std::string_view name, std::string_view value)
     -> PyModuleBuilder&
 {
-    impl_->string_constants.push_back({std::string(name), std::string(value)});
+    impl_->string_constants.emplace_back(
+        Impl::StringConstant{std::string(name), std::string(value)});
     return *this;
 }
 
@@ -123,15 +119,13 @@ auto PyModuleBuilder::build() -> Result<PyObjectPtr>
 #pragma GCC diagnostic pop
 #endif
     impl->module_def.m_name = impl->name.c_str();
-    impl->module_def.m_doc = nullptr;
     impl->module_def.m_size = -1;
     impl->module_def.m_methods = impl->methods.data();
 
     auto* mod = PyModule_Create(&impl->module_def);
     if (!mod)
     {
-        if (PyErr_Occurred())
-            PyErr_Clear();
+        PyErr_Clear();
         return Error(ErrorCode::ScriptError, "Failed to create module: " + impl->name);
     }
 
@@ -152,13 +146,23 @@ auto PyModuleBuilder::build() -> Result<PyObjectPtr>
     // Add int constants
     for (auto& c : impl->int_constants)
     {
-        PyModule_AddIntConstant(mod, c.name.c_str(), c.value);
+        if (PyModule_AddIntConstant(mod, c.name.c_str(), c.value) < 0)
+        {
+            Py_DECREF(mod);
+            return Error(ErrorCode::ScriptError, "Failed to add int constant '" + c.name +
+                                                     "' to module '" + impl->name + "'");
+        }
     }
 
     // Add string constants
     for (auto& c : impl->string_constants)
     {
-        PyModule_AddStringConstant(mod, c.name.c_str(), c.value.c_str());
+        if (PyModule_AddStringConstant(mod, c.name.c_str(), c.value.c_str()) < 0)
+        {
+            Py_DECREF(mod);
+            return Error(ErrorCode::ScriptError, "Failed to add string constant '" + c.name +
+                                                     "' to module '" + impl->name + "'");
+        }
     }
 
     // Register module in sys.modules so it can be imported
