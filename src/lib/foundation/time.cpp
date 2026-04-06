@@ -11,7 +11,8 @@ void GameClock::tick()
 {
     auto real_now = Clock::now();
     auto real_delta = real_now - real_last_tick_;
-    auto scaled = Duration(static_cast<Duration::rep>(real_delta.count() * time_scale_));
+    auto scaled =
+        Duration(static_cast<Duration::rep>(static_cast<double>(real_delta.count()) * time_scale_));
 
     game_elapsed_ += scaled;
     frame_delta_ = scaled;
@@ -21,7 +22,8 @@ void GameClock::tick()
 
 void GameClock::tick(Duration delta)
 {
-    auto scaled = Duration(static_cast<Duration::rep>(delta.count() * time_scale_));
+    auto scaled =
+        Duration(static_cast<Duration::rep>(static_cast<double>(delta.count()) * time_scale_));
     frame_delta_ = scaled;
     game_elapsed_ += scaled;
     ++frame_count_;
