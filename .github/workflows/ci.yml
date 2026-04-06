@@ -65,7 +65,10 @@ jobs:
 
       - name: Test (Windows)
         if: runner.os == 'Windows'
-        run: ctest --preset ${{ matrix.test-preset }}
+        shell: pwsh
+        run: |
+          $env:PYTHONHOME = python -c "import sys; print(sys.prefix)"
+          ctest --preset ${{ matrix.test-preset }}
 
       - name: Test (Linux)
         if: runner.os == 'Linux'
