@@ -164,18 +164,26 @@ void TcpChannel::update_write_interest()
     {
         auto interest = IOEvent::Readable | IOEvent::Writable;
         auto result = dispatcher_.modify_interest(socket_.fd(), interest);
-        if (result)
+        if (!result)
         {
-            write_registered_ = true;
+            ATLAS_LOG_ERROR("Failed to set write interest for {}: {}",
+                remote_.to_string(), result.error().message());
+            on_disconnect();
+            return;
         }
+        write_registered_ = true;
     }
     else if (!need_write && write_registered_)
     {
         auto result = dispatcher_.modify_interest(socket_.fd(), IOEvent::Readable);
-        if (result)
+        if (!result)
         {
-            write_registered_ = false;
+            ATLAS_LOG_ERROR("Failed to clear write interest for {}: {}",
+                remote_.to_string(), result.error().message());
+            on_disconnect();
+            return;
         }
+        write_registered_ = false;
     }
 }
 

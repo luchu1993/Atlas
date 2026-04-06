@@ -152,10 +152,12 @@ public:
 
             if (events != IOEvent::None)
             {
-                // Verify fd still registered (callback might have removed it)
-                if (entries_.count(fd) != 0)
+                // Use current callback from entries_ (not snapshot) in case
+                // a prior callback re-registered this fd with a new handler.
+                auto current_it = entries_.find(fd);
+                if (current_it != entries_.end())
                 {
-                    entry.callback(fd, events);
+                    current_it->second.callback(fd, events);
                     ++dispatched;
                 }
             }
