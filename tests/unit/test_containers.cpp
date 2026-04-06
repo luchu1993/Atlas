@@ -299,8 +299,6 @@ TEST(ObjectPool, IterationAfterMixedCreateDestroy)
     auto h2 = pool.create(20);
     auto h3 = pool.create(30);
     auto h4 = pool.create(40);
-    (void)h1;
-    (void)h4;
 
     pool.destroy(h2);
     pool.destroy(h3);
