@@ -31,6 +31,19 @@ ReliableUdpChannel::~ReliableUdpChannel()
 }
 
 // ============================================================================
+// effective_window — min(send_window, cwnd) or just send_window if nocwnd
+// ============================================================================
+
+auto ReliableUdpChannel::effective_window() const -> uint32_t
+{
+    if (nocwnd_)
+    {
+        return send_window_;
+    }
+    return std::min(send_window_, cwnd_);
+}
+
+// ============================================================================
 // send_reliable
 // ============================================================================
 
@@ -46,7 +59,8 @@ auto ReliableUdpChannel::send_reliable() -> Result<void>
         return Result<void>{};
     }
 
-    if (unacked_.size() >= send_window_)
+    auto eff_wnd = effective_window();
+    if (unacked_.size() >= eff_wnd)
     {
         return Error(ErrorCode::WouldBlock, "Send window full");
     }
@@ -325,9 +339,16 @@ void ReliableUdpChannel::process_ack(SeqNum ack_num, uint32_t ack_bits)
         }
     }
 
+    // Congestion window growth on successful ACKs
+    if (!acked_seqs.empty())
+    {
+        on_ack_cwnd_update(static_cast<uint32_t>(acked_seqs.size()));
+    }
+
     // Fast retransmit: for remaining unacked packets, if a LATER packet
     // was just ACK'd, increment the skip count. When skip_count reaches
     // the threshold, retransmit immediately without waiting for RTO.
+    bool fast_resent = false;
     if (fast_resend_thresh_ > 0 && !acked_seqs.empty())
     {
         for (auto& [seq, pkt] : unacked_)
@@ -354,7 +375,13 @@ void ReliableUdpChannel::process_ack(SeqNum ack_num, uint32_t ack_bits)
                 pkt.skip_count = 0;
 
                 ATLAS_LOG_DEBUG("Fast resend seq={} to {}", seq, remote_.to_string());
+                fast_resent = true;
             }
+        }
+
+        if (fast_resent)
+        {
+            on_loss_cwnd_update(false);  // fast retransmit loss
         }
     }
 
@@ -537,7 +564,7 @@ auto ReliableUdpChannel::send_fragmented(std::span<const std::byte> payload) -> 
                 payload.size(), total, rudp::kMaxFragments));
     }
 
-    if (unacked_.size() + total > send_window_)
+    if (unacked_.size() + total > effective_window())
     {
         return Error(ErrorCode::WouldBlock, "Send window too small for fragmented message");
     }
@@ -695,9 +722,85 @@ void ReliableUdpChannel::check_resends()
             pkt.sent_at = now;
             pkt.send_count++;
 
+            // RTO timeout → aggressive cwnd reduction
+            on_loss_cwnd_update(true);
+
             ATLAS_LOG_DEBUG("Resend seq={} attempt={} to {}",
                 seq, pkt.send_count, remote_.to_string());
         }
+    }
+}
+
+// ============================================================================
+// Congestion control (KCP-style: slow start + congestion avoidance)
+// ============================================================================
+
+void ReliableUdpChannel::on_ack_cwnd_update(uint32_t acked_count)
+{
+    if (nocwnd_)
+    {
+        return;
+    }
+
+    for (uint32_t i = 0; i < acked_count; ++i)
+    {
+        if (cwnd_ < ssthresh_)
+        {
+            // Slow start: cwnd grows by 1 per ACK (doubles per RTT)
+            cwnd_++;
+            cwnd_incr_ += rudp::kMtu;
+        }
+        else
+        {
+            // Congestion avoidance (KCP formula):
+            // incr += mss * mss / incr + mss / 16
+            if (cwnd_incr_ == 0)
+            {
+                cwnd_incr_ = rudp::kMtu;
+            }
+            cwnd_incr_ += static_cast<uint32_t>(
+                rudp::kMtu * rudp::kMtu / cwnd_incr_ + rudp::kMtu / 16);
+
+            // cwnd = incr / mss
+            auto new_cwnd = cwnd_incr_ / static_cast<uint32_t>(rudp::kMtu);
+            if (new_cwnd > cwnd_)
+            {
+                cwnd_ = new_cwnd;
+            }
+        }
+    }
+
+    // Cap at send_window_
+    if (cwnd_ > send_window_)
+    {
+        cwnd_ = send_window_;
+        cwnd_incr_ = send_window_ * static_cast<uint32_t>(rudp::kMtu);
+    }
+}
+
+void ReliableUdpChannel::on_loss_cwnd_update(bool is_timeout)
+{
+    if (nocwnd_)
+    {
+        return;
+    }
+
+    auto in_flight = static_cast<uint32_t>(unacked_.size());
+
+    if (is_timeout)
+    {
+        // RTO timeout: aggressive reduction (TCP Tahoe style)
+        ssthresh_ = std::max(cwnd_ / 2, 2u);
+        cwnd_ = 1;
+        cwnd_incr_ = rudp::kMtu;
+    }
+    else
+    {
+        // Fast retransmit: moderate reduction (TCP Reno style)
+        // ssthresh = max(in_flight / 2, 2)
+        ssthresh_ = std::max(in_flight / 2, 2u);
+        cwnd_ = ssthresh_ + fast_resend_thresh_;
+        cwnd_incr_ = cwnd_ * static_cast<uint32_t>(rudp::kMtu);
     }
 }
 

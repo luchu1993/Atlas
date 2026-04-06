@@ -59,6 +59,10 @@ public:
     void set_recv_window(uint32_t wnd) { rcv_wnd_ = wnd; }
     [[nodiscard]] auto recv_window() const -> uint32_t { return rcv_wnd_; }
 
+    // Congestion control: disable to use fixed send_window_ (for LAN)
+    void set_nocwnd(bool enable) { nocwnd_ = enable; }
+    [[nodiscard]] auto nocwnd() const -> bool { return nocwnd_; }
+
     // Stats
     [[nodiscard]] auto rtt() const -> Duration { return rtt_; }
     [[nodiscard]] auto unacked_count() const -> uint32_t
@@ -70,6 +74,9 @@ public:
     {
         return static_cast<uint32_t>(rcv_buf_.size());
     }
+    [[nodiscard]] auto cwnd() const -> uint32_t { return cwnd_; }
+    [[nodiscard]] auto ssthresh() const -> uint32_t { return ssthresh_; }
+    [[nodiscard]] auto effective_window() const -> uint32_t;
 
 protected:
     auto do_send(std::span<const std::byte> data) -> Result<size_t> override;
@@ -127,6 +134,10 @@ private:
                               bool is_fragment, const FragmentHeader& frag_hdr);
     void flush_receive_buffer();
 
+    // Congestion control
+    void on_ack_cwnd_update(uint32_t acked_count);
+    void on_loss_cwnd_update(bool is_timeout);
+
     Socket& shared_socket_;
 
     // Sending state
@@ -157,6 +168,12 @@ private:
     // KCP-inspired optimizations
     bool nodelay_{false};                 // true: 1.5x backoff, 30ms min RTO
     uint32_t fast_resend_thresh_{2};      // fast retransmit after N skip-ACKs (0=disabled)
+
+    // Congestion control (KCP-style: slow start + congestion avoidance)
+    bool nocwnd_{false};                  // true: disable congestion control (for LAN)
+    uint32_t cwnd_{1};                    // congestion window (packets)
+    uint32_t ssthresh_{16};              // slow start threshold
+    uint32_t cwnd_incr_{0};              // byte-level increment for congestion avoidance
 
     // Fragmentation state
     uint16_t next_fragment_id_{1};

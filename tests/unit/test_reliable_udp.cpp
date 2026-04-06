@@ -372,6 +372,7 @@ TEST_F(ReliableUdpTest, FragmentedSendAndReceive)
         });
 
     ReliableUdpChannel channel_a(dispatcher_, table_, *sock_a, addr_b);
+    channel_a.set_nocwnd(true);  // fragmentation sends multiple packets at once
     channel_a.activate();
 
     ReliableUdpChannel channel_b(dispatcher_, table_, *sock_b, addr_a);
@@ -427,6 +428,7 @@ TEST_F(ReliableUdpTest, OrderedDelivery)
         });
 
     ReliableUdpChannel channel_a(dispatcher_, table_, *sock_a, addr_b);
+    channel_a.set_nocwnd(true);  // send multiple without ACK exchange
     channel_a.activate();
 
     // Send 3 messages (seq 1, 2, 3)
@@ -487,6 +489,7 @@ TEST_F(ReliableUdpTest, OrderedDeliveryWaitsForGap)
         });
 
     ReliableUdpChannel channel_a(dispatcher_, table_, *sock_a, addr_b);
+    channel_a.set_nocwnd(true);
     channel_a.activate();
 
     for (uint32_t i = 1; i <= 3; ++i)
@@ -543,6 +546,7 @@ TEST_F(ReliableUdpTest, RecvWindowDropsExcessivePackets)
         [](const Address&, Channel*, const RudpTestMsg&) {});
 
     ReliableUdpChannel channel_a(dispatcher_, table_, *sock_a, addr_b);
+    channel_a.set_nocwnd(true);  // send 10 packets without ACK
     channel_a.activate();
 
     ReliableUdpChannel channel_b(dispatcher_, table_, *sock_b, addr_a);
@@ -613,6 +617,106 @@ TEST_F(ReliableUdpTest, UnreliableBypassesOrdering)
 
     EXPECT_TRUE(received);
     EXPECT_EQ(channel_b.recv_next_seq(), 1u);  // rcv_nxt unchanged (no seq tracking)
+}
+
+// ============================================================================
+// Congestion control tests
+// ============================================================================
+
+TEST_F(ReliableUdpTest, CwndStartsAtOne)
+{
+    auto sock = Socket::create_udp();
+    ASSERT_TRUE(sock.has_value());
+    ASSERT_TRUE(sock->bind(Address("127.0.0.1", 0)).has_value());
+
+    ReliableUdpChannel channel(dispatcher_, table_, *sock, Address("127.0.0.1", 9999));
+    channel.activate();
+
+    EXPECT_EQ(channel.cwnd(), 1u);
+    EXPECT_EQ(channel.ssthresh(), 16u);
+    EXPECT_EQ(channel.effective_window(), 1u);  // min(send_window=256, cwnd=1)
+}
+
+TEST_F(ReliableUdpTest, CwndGrowsOnAck)
+{
+    auto sock_a = Socket::create_udp();
+    ASSERT_TRUE(sock_a.has_value());
+    ASSERT_TRUE(sock_a->bind(Address("127.0.0.1", 0)).has_value());
+    auto addr_a = sock_a->local_address().value();
+
+    auto sock_b = Socket::create_udp();
+    ASSERT_TRUE(sock_b.has_value());
+    ASSERT_TRUE(sock_b->bind(Address("127.0.0.1", 0)).has_value());
+    auto addr_b = sock_b->local_address().value();
+
+    table_.register_typed_handler<RudpTestMsg>(
+        [](const Address&, Channel*, const RudpTestMsg&) {});
+
+    ReliableUdpChannel channel_a(dispatcher_, table_, *sock_a, addr_b);
+    channel_a.activate();
+    ReliableUdpChannel channel_b(dispatcher_, table_, *sock_b, addr_a);
+    channel_b.activate();
+
+    auto initial_cwnd = channel_a.cwnd();
+    EXPECT_EQ(initial_cwnd, 1u);
+
+    // Exchange messages: A sends, B receives and sends back (piggybacking ACK)
+    for (int i = 0; i < 5; ++i)
+    {
+        channel_a.bundle().add_message(RudpTestMsg{static_cast<uint32_t>(i)});
+        (void)channel_a.send_reliable();
+        std::this_thread::sleep_for(std::chrono::milliseconds(5));
+        pump_datagrams(*sock_b, channel_b);
+
+        channel_b.bundle().add_message(RudpTestMsg{static_cast<uint32_t>(i)});
+        (void)channel_b.send_reliable();
+        std::this_thread::sleep_for(std::chrono::milliseconds(5));
+        pump_datagrams(*sock_a, channel_a);
+    }
+
+    // cwnd should have grown (slow start: +1 per ACK)
+    EXPECT_GT(channel_a.cwnd(), initial_cwnd);
+    EXPECT_GT(channel_a.effective_window(), 1u);
+}
+
+TEST_F(ReliableUdpTest, NocwndDisablesCongestionControl)
+{
+    auto sock = Socket::create_udp();
+    ASSERT_TRUE(sock.has_value());
+    ASSERT_TRUE(sock->bind(Address("127.0.0.1", 0)).has_value());
+
+    ReliableUdpChannel channel(dispatcher_, table_, *sock, Address("127.0.0.1", 9999));
+    channel.set_nocwnd(true);
+    channel.activate();
+
+    // With nocwnd, effective window = send_window (ignores cwnd=1)
+    EXPECT_EQ(channel.cwnd(), 1u);
+    EXPECT_EQ(channel.effective_window(), 256u);  // send_window_
+    EXPECT_TRUE(channel.nocwnd());
+}
+
+TEST_F(ReliableUdpTest, EffectiveWindowRespectsCwnd)
+{
+    auto sock = Socket::create_udp();
+    ASSERT_TRUE(sock.has_value());
+    ASSERT_TRUE(sock->bind(Address("127.0.0.1", 0)).has_value());
+
+    ReliableUdpChannel channel(dispatcher_, table_, *sock, Address("127.0.0.1", 9999));
+    channel.activate();
+
+    // cwnd=1, send_window=256 → effective=1
+    EXPECT_EQ(channel.effective_window(), 1u);
+
+    // First send should work (cwnd=1 allows 1 in flight)
+    channel.bundle().add_message(RudpTestMsg{1});
+    auto r1 = channel.send_reliable();
+    ASSERT_TRUE(r1.has_value());
+
+    // Second send should fail (cwnd=1, already 1 in flight)
+    channel.bundle().add_message(RudpTestMsg{2});
+    auto r2 = channel.send_reliable();
+    EXPECT_FALSE(r2.has_value());
+    EXPECT_EQ(r2.error().code(), ErrorCode::WouldBlock);
 }
 
 TEST_F(ReliableUdpTest, SmallMessageNotFragmented)
