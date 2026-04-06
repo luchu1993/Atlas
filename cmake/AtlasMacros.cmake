@@ -102,6 +102,14 @@ function(atlas_add_test target)
             ${ARG_DEPS}
     )
 
+    # Suppress unused-variable warnings in test code — common in GTest fixtures
+    if(NOT MSVC)
+        target_compile_options(${target} PRIVATE
+            -Wno-unused-variable
+            -Wno-unused-but-set-variable
+        )
+    endif()
+
     set_target_properties(${target} PROPERTIES
         FOLDER "Tests"
         RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin/tests"
