@@ -1,6 +1,7 @@
 #include "foundation/timer_queue.hpp"
 
 #include <algorithm>
+#include <exception>
 
 namespace atlas
 {
@@ -58,7 +59,15 @@ auto TimerQueue::process(TimePoint now) -> uint32_t
             continue;
         }
 
-        node->callback(TimerHandle(node->id));
+        try
+        {
+            node->callback(TimerHandle(node->id));
+        }
+        catch (...)
+        {
+            delete node;
+            throw;
+        }
 
         if (node->interval > Duration::zero())
         {

@@ -31,7 +31,8 @@ template <typename T>
 
 [[nodiscard]] constexpr auto almost_equal(float a, float b, float epsilon = kEpsilon) -> bool
 {
-    return (a - b) < epsilon && (b - a) < epsilon;
+    float diff = a - b;
+    return diff >= -epsilon && diff <= epsilon;
 }
 
 } // namespace atlas::math

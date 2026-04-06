@@ -54,8 +54,12 @@ void Logger::log(LogLevel level, std::string_view category,
                  std::string_view message,
                  const std::source_location& location)
 {
-    std::lock_guard lock(mutex_);
-    for (auto& sink : sinks_)
+    std::vector<std::shared_ptr<LogSink>> sinks_copy;
+    {
+        std::lock_guard lock(mutex_);
+        sinks_copy = sinks_;
+    }
+    for (auto& sink : sinks_copy)
     {
         sink->write(level, category, message, location);
     }

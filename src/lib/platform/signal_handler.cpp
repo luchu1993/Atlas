@@ -29,7 +29,12 @@ std::mutex g_mutex;
 
 [[nodiscard]] auto signal_index(Signal sig) -> std::size_t
 {
-    return static_cast<std::size_t>(sig);
+    auto idx = static_cast<std::size_t>(sig);
+    if (idx >= k_signal_count)
+    {
+        idx = 0;
+    }
+    return idx;
 }
 
 void dispatch_signal(Signal sig)

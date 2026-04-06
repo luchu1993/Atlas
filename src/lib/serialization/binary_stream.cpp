@@ -19,6 +19,10 @@ void BinaryWriter::write_bytes(std::span<const std::byte> data)
 
 void BinaryWriter::write_bytes(const void* data, std::size_t size)
 {
+    if (data == nullptr || size == 0)
+    {
+        return;
+    }
     const auto* bytes = static_cast<const std::byte*>(data);
     buffer_.insert(buffer_.end(), bytes, bytes + size);
 }

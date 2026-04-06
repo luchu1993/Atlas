@@ -2,6 +2,7 @@
 
 #include "math/math_types.hpp"
 
+#include <cassert>
 #include <cmath>
 #include <cstddef>
 
@@ -44,8 +45,8 @@ struct Vector3
     [[nodiscard]] auto distance(const Vector3& v) const -> float { return (*this - v).length(); }
     [[nodiscard]] constexpr auto distance_squared(const Vector3& v) const -> float { return (*this - v).length_squared(); }
 
-    constexpr auto operator[](std::size_t i) -> float& { return i == 0 ? x : (i == 1 ? y : z); }
-    constexpr auto operator[](std::size_t i) const -> float { return i == 0 ? x : (i == 1 ? y : z); }
+    constexpr auto operator[](std::size_t i) -> float& { assert(i < 3); return i == 0 ? x : (i == 1 ? y : z); }
+    constexpr auto operator[](std::size_t i) const -> float { assert(i < 3); return i == 0 ? x : (i == 1 ? y : z); }
 
     constexpr auto operator==(const Vector3& v) const -> bool { return x == v.x && y == v.y && z == v.z; }
     constexpr auto operator!=(const Vector3& v) const -> bool { return !(*this == v); }

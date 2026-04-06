@@ -6,6 +6,10 @@ namespace atlas::math
 
 auto Quaternion::from_axis_angle(const Vector3& axis, float radians) -> Quaternion
 {
+    if (axis.length_squared() < kEpsilon)
+    {
+        return identity();
+    }
     Vector3 n = axis.normalized();
     float half = radians * 0.5f;
     float s = std::sin(half);
@@ -45,6 +49,7 @@ auto Quaternion::from_matrix(const Matrix4& mat) -> Quaternion
     if (trace > 0.0f)
     {
         float s = std::sqrt(trace + 1.0f) * 2.0f;
+        if (s < kEpsilon) { return identity(); }
         float inv_s = 1.0f / s;
         q.w = 0.25f * s;
         q.x = (mat(2, 1) - mat(1, 2)) * inv_s;
@@ -54,6 +59,7 @@ auto Quaternion::from_matrix(const Matrix4& mat) -> Quaternion
     else if (m00 > m11 && m00 > m22)
     {
         float s = std::sqrt(1.0f + m00 - m11 - m22) * 2.0f;
+        if (s < kEpsilon) { return identity(); }
         float inv_s = 1.0f / s;
         q.w = (mat(2, 1) - mat(1, 2)) * inv_s;
         q.x = 0.25f * s;
@@ -63,6 +69,7 @@ auto Quaternion::from_matrix(const Matrix4& mat) -> Quaternion
     else if (m11 > m22)
     {
         float s = std::sqrt(1.0f + m11 - m00 - m22) * 2.0f;
+        if (s < kEpsilon) { return identity(); }
         float inv_s = 1.0f / s;
         q.w = (mat(0, 2) - mat(2, 0)) * inv_s;
         q.x = (mat(0, 1) + mat(1, 0)) * inv_s;
@@ -72,6 +79,7 @@ auto Quaternion::from_matrix(const Matrix4& mat) -> Quaternion
     else
     {
         float s = std::sqrt(1.0f + m22 - m00 - m11) * 2.0f;
+        if (s < kEpsilon) { return identity(); }
         float inv_s = 1.0f / s;
         q.w = (mat(1, 0) - mat(0, 1)) * inv_s;
         q.x = (mat(0, 2) + mat(2, 0)) * inv_s;

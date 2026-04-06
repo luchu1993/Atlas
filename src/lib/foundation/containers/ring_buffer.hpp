@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cassert>
 #include <cstddef>
 #include <optional>
 #include <stdexcept>
@@ -44,11 +45,13 @@ public:
 
     [[nodiscard]] auto front() const -> const T&
     {
+        assert(!empty());
         return buffer_[head_];
     }
 
     [[nodiscard]] auto back() const -> const T&
     {
+        assert(!empty());
         return buffer_[(tail_ + capacity_ - 1) % capacity_];
     }
 

@@ -2,6 +2,7 @@
 
 #include "math/math_types.hpp"
 
+#include <cassert>
 #include <cmath>
 #include <cstddef>
 
@@ -33,10 +34,12 @@ struct Vector4
 
     constexpr auto operator[](std::size_t i) -> float&
     {
+        assert(i < 4);
         return i == 0 ? x : (i == 1 ? y : (i == 2 ? z : w));
     }
     constexpr auto operator[](std::size_t i) const -> float
     {
+        assert(i < 4);
         return i == 0 ? x : (i == 1 ? y : (i == 2 ? z : w));
     }
 
