@@ -27,7 +27,6 @@ else()
         -Werror
         -Wno-unused-parameter
         -Wconversion
-        -Wshadow
         -Wnon-virtual-dtor
     )
 endif()
