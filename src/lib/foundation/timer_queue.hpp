@@ -23,6 +23,7 @@ private:
     uint64_t id_{0};
 };
 
+// Thread safety: NOT thread-safe. Reentrant: callbacks may call schedule/cancel.
 class TimerQueue
 {
 public:

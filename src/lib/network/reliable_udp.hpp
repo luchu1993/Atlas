@@ -30,6 +30,7 @@ namespace rudp
     inline constexpr Duration kFragmentTimeout = std::chrono::seconds(30);
 }
 
+// Thread safety: NOT thread-safe. Used from EventDispatcher's thread only.
 class ReliableUdpChannel : public Channel
 {
 public:
@@ -79,7 +80,7 @@ public:
     [[nodiscard]] auto effective_window() const -> uint32_t;
 
 protected:
-    auto do_send(std::span<const std::byte> data) -> Result<size_t> override;
+    [[nodiscard]] auto do_send(std::span<const std::byte> data) -> Result<size_t> override;
 
 private:
     struct UnackedPacket

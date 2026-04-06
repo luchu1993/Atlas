@@ -27,6 +27,9 @@ public:
     virtual void do_main_thread_task() = 0;
 };
 
+// Thread safety: add_task() is safe to call from any thread.
+// do_main_thread_task() callbacks run on the EventDispatcher thread only.
+// Must outlive all submitted tasks (destructor waits for completion).
 class BgTaskManager : public FrequentTask
 {
 public:

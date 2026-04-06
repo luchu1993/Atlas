@@ -44,6 +44,8 @@ public:
     virtual void flush() = 0;
 };
 
+// Thread safety: Thread-safe. Sinks are snapshot-copied before invocation
+// to avoid deadlock if a sink calls back into the logger.
 class Logger
 {
 public:

@@ -28,7 +28,7 @@ public:
     void on_writable();
 
 protected:
-    auto do_send(std::span<const std::byte> data) -> Result<size_t> override;
+    [[nodiscard]] auto do_send(std::span<const std::byte> data) -> Result<size_t> override;
 
 private:
     void process_recv_buffer();

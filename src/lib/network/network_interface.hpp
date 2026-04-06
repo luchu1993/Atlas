@@ -20,6 +20,7 @@ class Channel;
 class TcpChannel;
 class UdpChannel;
 
+// Thread safety: NOT thread-safe. All calls must originate from EventDispatcher's thread.
 class NetworkInterface : public FrequentTask
 {
 public:

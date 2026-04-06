@@ -9,6 +9,7 @@
 namespace atlas
 {
 
+// Thread safety: Thread-safe (mutex-protected allocate/deallocate).
 // Fixed-size block allocator with free-list
 class PoolAllocator
 {

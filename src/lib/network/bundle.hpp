@@ -20,7 +20,8 @@ public:
     // Start writing a new message. Must call end_message() before start_message() again.
     void start_message(const MessageDesc& desc);
 
-    // Get writer for the current message payload
+    // Get writer for the current message payload.
+    // The returned reference is valid only between start_message() and end_message().
     [[nodiscard]] auto writer() -> BinaryWriter&;
 
     // Finish the current message (patches length prefix for variable-length messages)

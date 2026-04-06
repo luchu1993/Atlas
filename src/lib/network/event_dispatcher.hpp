@@ -12,6 +12,8 @@
 namespace atlas
 {
 
+// Thread safety: NOT thread-safe. All calls must originate from the same thread.
+// Callbacks may safely call register/deregister/add_timer/cancel_timer/stop.
 class EventDispatcher
 {
 public:

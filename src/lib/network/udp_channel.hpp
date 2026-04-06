@@ -22,7 +22,7 @@ public:
     void on_datagram_received(std::span<const std::byte> data);
 
 protected:
-    auto do_send(std::span<const std::byte> data) -> Result<size_t> override;
+    [[nodiscard]] auto do_send(std::span<const std::byte> data) -> Result<size_t> override;
 
 private:
     Socket& shared_socket_;

@@ -24,6 +24,7 @@ enum class ChannelState : uint8_t
     Condemned,
 };
 
+// Thread safety: NOT thread-safe. Used from EventDispatcher's thread only.
 class Channel
 {
 public:
@@ -74,7 +75,7 @@ public:
 
 protected:
     // Subclass hooks
-    virtual auto do_send(std::span<const std::byte> data) -> Result<size_t> = 0;
+    [[nodiscard]] virtual auto do_send(std::span<const std::byte> data) -> Result<size_t> = 0;
     void on_data_received(std::span<const std::byte> data);
     void on_disconnect();
 
