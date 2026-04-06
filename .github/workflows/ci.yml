@@ -14,17 +14,11 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - name: Windows (MSVC)
+          - name: Windows (MSVC + Ninja)
             os: windows-latest
-            configure-preset: debug-windows
-            build-preset: debug-windows
-            test-preset: debug-windows
 
-          - name: Linux (GCC)
+          - name: Linux (GCC 13 + Ninja)
             os: ubuntu-latest
-            configure-preset: debug-linux
-            build-preset: debug-ninja
-            test-preset: debug-ninja
 
     steps:
       - name: Checkout
@@ -35,32 +29,24 @@ jobs:
         with:
           python-version: '3.10'
 
-      - name: Install Ninja (Linux)
-        if: runner.os == 'Linux'
-        run: sudo apt-get install -y ninja-build
+      - name: Setup MSVC environment (Windows)
+        if: runner.os == 'Windows'
+        uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x64
 
-      - name: Install GCC 13 (Linux)
+      - name: Install dependencies (Linux)
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y gcc-13 g++-13
+          sudo apt-get install -y ninja-build gcc-13 g++-13
           sudo update-alternatives --install /usr/bin/gcc gcc /usr/bin/gcc-13 100
           sudo update-alternatives --install /usr/bin/g++ g++ /usr/bin/g++-13 100
 
-      - name: Configure (Windows)
-        if: runner.os == 'Windows'
-        run: cmake --preset ${{ matrix.configure-preset }}
-
-      - name: Configure (Linux)
-        if: runner.os == 'Linux'
+      - name: Configure
         run: cmake --preset debug-ninja
 
-      - name: Build (Windows)
-        if: runner.os == 'Windows'
-        run: cmake --build --preset ${{ matrix.build-preset }}
-
-      - name: Build (Linux)
-        if: runner.os == 'Linux'
+      - name: Build
         run: cmake --build --preset debug-ninja
 
       - name: Test (Windows)
@@ -68,7 +54,7 @@ jobs:
         shell: pwsh
         run: |
           $env:PYTHONHOME = (python -c "import sys; print(sys.prefix)").Trim()
-          ctest --preset ${{ matrix.test-preset }}
+          ctest --preset debug-ninja
 
       - name: Test (Linux)
         if: runner.os == 'Linux'
