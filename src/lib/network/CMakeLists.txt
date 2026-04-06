@@ -10,6 +10,7 @@ atlas_add_library(atlas_network
         bundle.cpp
         channel.cpp
         network_interface.cpp
+        reliable_udp.cpp
         tcp_channel.cpp
         udp_channel.cpp
     DEPS

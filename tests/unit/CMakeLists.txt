@@ -113,3 +113,13 @@ atlas_add_test(test_bg_task_manager
     SOURCES test_bg_task_manager.cpp
     DEPS atlas_network
 )
+
+atlas_add_test(test_seq_num
+    SOURCES test_seq_num.cpp
+    DEPS atlas_network
+)
+
+atlas_add_test(test_reliable_udp
+    SOURCES test_reliable_udp.cpp
+    DEPS atlas_network
+)
