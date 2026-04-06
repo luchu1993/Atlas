@@ -293,3 +293,21 @@ TEST_F(PyTypeTest, ManyMethodsNoPointerCorruption)
     auto ro_val = obj.get_attr("ro_value");
     EXPECT_EQ(PyLong_AsLong(ro_val.get()), 0);
 }
+
+// ============================================================================
+// Review fix: finalize_all clears static registry without crash
+// ============================================================================
+
+TEST_F(PyTypeTest, FinalizeAllDoesNotCrash)
+{
+    // Build a type (adds to registry)
+    auto type_result = PyTypeBuilder("FinalizeTestType").build();
+    ASSERT_TRUE(type_result.has_value());
+
+    // finalize_all should not crash
+    PyTypeBuilder::finalize_all();
+
+    // Can still build new types after finalize_all
+    auto type_result2 = PyTypeBuilder("FinalizeTestType2").build();
+    EXPECT_TRUE(type_result2.has_value());
+}

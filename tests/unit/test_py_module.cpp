@@ -200,3 +200,24 @@ TEST_F(PyModuleTest, CallFunctionFromExec)
     ASSERT_TRUE(py_result.is_string());
     EXPECT_STREQ(PyUnicode_AsUTF8(py_result.get()), "Hello, World!");
 }
+
+// ============================================================================
+// Review fix: finalize_all clears static registry without crash
+// ============================================================================
+
+TEST_F(PyModuleTest, FinalizeAllDoesNotCrash)
+{
+    auto result = PyModuleBuilder("finalize_test_mod")
+        .add_function("add", my_add, METH_VARARGS)
+        .build();
+    ASSERT_TRUE(result.has_value());
+
+    // finalize_all should not crash
+    PyModuleBuilder::finalize_all();
+
+    // Can still build new modules after finalize_all
+    auto result2 = PyModuleBuilder("finalize_test_mod2")
+        .add_function("add", my_add, METH_VARARGS)
+        .build();
+    EXPECT_TRUE(result2.has_value());
+}

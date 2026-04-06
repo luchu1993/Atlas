@@ -46,7 +46,8 @@ void ScriptEvents::on_init(bool is_reload)
 void ScriptEvents::on_tick(float dt)
 {
     auto py_dt = py_convert::to_python(dt);
-    auto args = PyObjectPtr(PyTuple_Pack(1, py_dt.release()));
+    // PyTuple_Pack borrows the ref — py_dt must stay alive until after call
+    auto args = PyObjectPtr(PyTuple_Pack(1, py_dt.get()));
     call_module_method("onTick", args);
 }
 

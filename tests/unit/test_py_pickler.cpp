@@ -99,3 +99,42 @@ TEST_F(PyPicklerTest, UnpickleInvalidDataFails)
     auto result = PyPickler::unpickle(garbage);
     EXPECT_FALSE(result.has_value());
 }
+
+// ============================================================================
+// Review fix: double-init is safe (returns immediately)
+// ============================================================================
+
+TEST_F(PyPicklerTest, DoubleInitializeIsSafe)
+{
+    // Already initialized in SetUp — second call should succeed silently
+    auto result = PyPickler::initialize();
+    EXPECT_TRUE(result.has_value());
+}
+
+// ============================================================================
+// Review fix: pickle/unpickle with complex nested structure
+// ============================================================================
+
+TEST_F(PyPicklerTest, PickleUnpickleNestedStructure)
+{
+    (void)PyInterpreter::exec(
+        "nested = {'key': [1, 2.5, 'text', None, True], 'count': 42}");
+    auto main = PyInterpreter::import("__main__");
+    auto nested = main->get_attr("nested");
+    ASSERT_TRUE(nested.is_dict());
+
+    auto data = PyPickler::pickle(nested.get());
+    ASSERT_TRUE(data.has_value());
+
+    auto result = PyPickler::unpickle(*data);
+    ASSERT_TRUE(result.has_value());
+    EXPECT_TRUE(result->is_dict());
+
+    // Verify round-trip preserves structure via Python assertion
+    // Store unpickled result back in __main__ and compare
+    auto set_result = main->set_attr("unpickled", *result);
+    EXPECT_TRUE(set_result.has_value());
+
+    auto verify = PyInterpreter::exec("assert unpickled == nested");
+    EXPECT_TRUE(verify.has_value()) << verify.error().message();
+}

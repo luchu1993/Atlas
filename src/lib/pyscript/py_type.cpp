@@ -97,6 +97,13 @@ PyTypeBuilder::PyTypeBuilder(std::string_view name)
     : impl_(std::make_unique<Impl>())
 {
     impl_->name = name;
+    // Pre-allocate to reduce reallocation during add_method/add_property
+    impl_->method_names.reserve(8);
+    impl_->method_docs.reserve(8);
+    impl_->methods.reserve(8);
+    impl_->prop_names.reserve(8);
+    impl_->prop_docs.reserve(8);
+    impl_->getsets.reserve(8);
 }
 
 PyTypeBuilder::~PyTypeBuilder() = default;

@@ -2,6 +2,8 @@
 #include "pyscript/py_error.hpp"
 #include "foundation/log.hpp"
 
+#include <cassert>
+
 namespace atlas
 {
 
@@ -44,6 +46,8 @@ void PyPickler::finalize()
 
 auto PyPickler::pickle(PyObject* obj) -> Result<std::vector<std::byte>>
 {
+    assert(PyGILState_Check() && "GIL must be held when calling pickle()");
+
     if (!dumps_)
     {
         return Error(ErrorCode::ScriptError, "PyPickler not initialized");
@@ -75,6 +79,8 @@ auto PyPickler::pickle(PyObject* obj) -> Result<std::vector<std::byte>>
 
 auto PyPickler::unpickle(std::span<const std::byte> data) -> Result<PyObjectPtr>
 {
+    assert(PyGILState_Check() && "GIL must be held when calling unpickle()");
+
     if (!loads_)
     {
         return Error(ErrorCode::ScriptError, "PyPickler not initialized");
