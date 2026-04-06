@@ -35,7 +35,7 @@ public:
         bool install_signal_handlers{false};       // Install Python signal handlers
     };
 
-    [[nodiscard]] static auto initialize(const Config& config = {}) -> Result<void>;
+    [[nodiscard]] static auto initialize(const Config& config = Config{}) -> Result<void>;
     static void finalize();
     [[nodiscard]] static auto is_initialized() -> bool;
 

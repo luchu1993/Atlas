@@ -14,5 +14,5 @@ atlas_add_library(atlas_serialization
 
 # rapidjson is header-only, fetched via FetchContent_Populate
 target_include_directories(atlas_serialization
-    PRIVATE ${rapidjson_SOURCE_DIR}/include
+    SYSTEM PRIVATE ${rapidjson_SOURCE_DIR}/include
 )

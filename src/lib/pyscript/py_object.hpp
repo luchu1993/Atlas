@@ -163,8 +163,19 @@ public:
         return PyObjectPtr(PyObject_Call(ptr_, args.ptr_, kwargs.ptr_));
     }
 
-    // Call a named method with optional args tuple.
-    [[nodiscard]] auto call_method(std::string_view name, const PyObjectPtr& args = {}) const
+    // Call a named method with no args.
+    [[nodiscard]] auto call_method(std::string_view name) const -> PyObjectPtr
+    {
+        auto method = get_attr(name);
+        if (!method)
+        {
+            return {};
+        }
+        return method.call();
+    }
+
+    // Call a named method with positional args tuple.
+    [[nodiscard]] auto call_method(std::string_view name, const PyObjectPtr& args) const
         -> PyObjectPtr
     {
         auto method = get_attr(name);
@@ -172,11 +183,7 @@ public:
         {
             return {};
         }
-        if (args)
-        {
-            return method.call(args);
-        }
-        return method.call();
+        return method.call(args);
     }
 
     // ---- Type checks ----
