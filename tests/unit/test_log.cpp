@@ -84,3 +84,57 @@ TEST_F(LogTest, LazyEvaluation)
     ATLAS_LOG_INFO("should not reach sink");
     EXPECT_TRUE(sink_->messages.empty());
 }
+
+// ============================================================================
+// Review issue: Logger deadlock prevention (recursive logging)
+// ============================================================================
+
+class RecursiveSink : public atlas::LogSink
+{
+public:
+    int call_count{0};
+    void write(atlas::LogLevel level, std::string_view category,
+               std::string_view message, const std::source_location& loc) override
+    {
+        ++call_count;
+        // In old code, this would deadlock because Logger::log() held the lock
+        // while calling sink->write(). Now it copies sinks and releases the lock
+        // before invoking, so this should be safe (but the recursive message
+        // won't reach this sink since we're iterating a snapshot).
+        if (call_count == 1)
+        {
+            // Try to log from within a sink callback
+            atlas::Logger::instance().log(atlas::LogLevel::Warning, "",
+                "recursive log from sink");
+        }
+    }
+    void flush() override {}
+};
+
+TEST_F(LogTest, RecursiveLoggingDoesNotDeadlock)
+{
+    auto& logger = Logger::instance();
+    logger.clear_sinks();
+    auto recursive_sink = std::make_shared<RecursiveSink>();
+    logger.add_sink(recursive_sink);
+
+    // This should NOT deadlock
+    ATLAS_LOG_INFO("trigger recursive");
+    EXPECT_GE(recursive_sink->call_count, 1);
+}
+
+// ============================================================================
+// Review issue: multiple sinks receive messages
+// ============================================================================
+
+TEST_F(LogTest, MultipleSinksReceiveMessages)
+{
+    auto second_sink = std::make_shared<TestSink>();
+    Logger::instance().add_sink(second_sink);
+
+    ATLAS_LOG_INFO("broadcast");
+    EXPECT_EQ(sink_->messages.size(), 1u);
+    EXPECT_EQ(second_sink->messages.size(), 1u);
+    EXPECT_EQ(sink_->messages[0], "broadcast");
+    EXPECT_EQ(second_sink->messages[0], "broadcast");
+}

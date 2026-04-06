@@ -247,3 +247,203 @@ TEST(MathConstants, PiAndDegToRad)
     EXPECT_NEAR(deg_to_rad(90.0f), kHalfPi, 1e-5f);
     EXPECT_NEAR(rad_to_deg(kPi), 180.0f, 1e-5f);
 }
+
+// ============================================================================
+// Review issue: almost_equal() with negative differences
+// ============================================================================
+
+TEST(MathConstants, AlmostEqualPositiveDifference)
+{
+    EXPECT_TRUE(almost_equal(1.0f, 1.0f));
+    EXPECT_TRUE(almost_equal(1.0f, 1.0f + kEpsilon * 0.5f));
+    EXPECT_FALSE(almost_equal(1.0f, 1.0f + kEpsilon * 2.0f));
+}
+
+TEST(MathConstants, AlmostEqualNegativeDifference)
+{
+    // This was the bug: a < b case was not handled correctly
+    EXPECT_TRUE(almost_equal(1.0f, 1.0f - kEpsilon * 0.5f));
+    EXPECT_FALSE(almost_equal(1.0f, 1.0f - kEpsilon * 2.0f));
+    EXPECT_TRUE(almost_equal(0.0f, -kEpsilon * 0.5f));
+    EXPECT_FALSE(almost_equal(0.0f, -kEpsilon * 2.0f));
+}
+
+TEST(MathConstants, AlmostEqualSymmetric)
+{
+    // Must be symmetric: almost_equal(a, b) == almost_equal(b, a)
+    float a = 1.0f;
+    float b = 1.0f + kEpsilon * 0.5f;
+    EXPECT_EQ(almost_equal(a, b), almost_equal(b, a));
+
+    float c = 5.0f;
+    float d = 5.0f + kEpsilon * 2.0f;
+    EXPECT_EQ(almost_equal(c, d), almost_equal(d, c));
+}
+
+TEST(MathConstants, AlmostEqualCustomEpsilon)
+{
+    EXPECT_TRUE(almost_equal(1.0f, 1.1f, 0.2f));
+    EXPECT_FALSE(almost_equal(1.0f, 1.3f, 0.2f));
+}
+
+// ============================================================================
+// Review issue: Quaternion from zero axis
+// ============================================================================
+
+TEST(Quaternion, FromAxisAngleZeroAxisReturnsIdentity)
+{
+    auto q = Quaternion::from_axis_angle(Vector3::zero(), kHalfPi);
+    EXPECT_NEAR(q.x, 0.0f, 1e-5f);
+    EXPECT_NEAR(q.y, 0.0f, 1e-5f);
+    EXPECT_NEAR(q.z, 0.0f, 1e-5f);
+    EXPECT_NEAR(q.w, 1.0f, 1e-5f);
+}
+
+// ============================================================================
+// Review issue: Quaternion from_matrix division by zero
+// ============================================================================
+
+TEST(Quaternion, FromMatrixIdentity)
+{
+    auto m = Matrix4::identity();
+    auto q = Quaternion::from_matrix(m);
+    EXPECT_NEAR(q.length(), 1.0f, 1e-5f);
+    // Identity matrix should produce identity quaternion
+    auto v = q.rotate(Vector3::unit_x());
+    EXPECT_NEAR(v.x, 1.0f, 1e-5f);
+    EXPECT_NEAR(v.y, 0.0f, 1e-5f);
+    EXPECT_NEAR(v.z, 0.0f, 1e-5f);
+}
+
+TEST(Quaternion, FromMatrixRotationRoundTrip)
+{
+    // Create quaternion -> matrix -> quaternion, verify rotation is preserved
+    auto q_orig = Quaternion::from_axis_angle(Vector3{1, 1, 0}.normalized(), deg_to_rad(60.0f));
+    auto m = q_orig.to_matrix();
+    auto q_back = Quaternion::from_matrix(m);
+
+    // Verify they produce the same rotation (q and -q are equivalent)
+    auto v_orig = q_orig.rotate(Vector3::unit_x());
+    auto v_back = q_back.rotate(Vector3::unit_x());
+    EXPECT_NEAR(v_orig.x, v_back.x, 1e-4f);
+    EXPECT_NEAR(v_orig.y, v_back.y, 1e-4f);
+    EXPECT_NEAR(v_orig.z, v_back.z, 1e-4f);
+}
+
+// ============================================================================
+// Review issue: Matrix4 inverse of singular matrix
+// ============================================================================
+
+TEST(Matrix4, InverseSingularMatrixReturnsIdentity)
+{
+    // A zero matrix has determinant 0 — inverse should return identity
+    Matrix4 zero_mat{};
+    auto inv = zero_mat.inversed();
+    auto id = Matrix4::identity();
+    for (int i = 0; i < 4; ++i)
+    {
+        for (int j = 0; j < 4; ++j)
+        {
+            EXPECT_NEAR(inv(i, j), id(i, j), 1e-5f);
+        }
+    }
+}
+
+TEST(Matrix4, InverseRotationRoundTrip)
+{
+    // Rotation matrix inverse = transpose for orthogonal matrices
+    auto rot = Matrix4::rotation_z(deg_to_rad(45.0f));
+    auto inv = rot.inversed();
+    auto product = rot * inv;
+    auto id = Matrix4::identity();
+    for (int i = 0; i < 4; ++i)
+    {
+        for (int j = 0; j < 4; ++j)
+        {
+            EXPECT_NEAR(product(i, j), id(i, j), 1e-5f);
+        }
+    }
+}
+
+TEST(Matrix4, InverseScaleRoundTrip)
+{
+    auto s = Matrix4::scale({2, 3, 4});
+    auto inv = s.inversed();
+    auto product = s * inv;
+    auto id = Matrix4::identity();
+    for (int i = 0; i < 4; ++i)
+    {
+        for (int j = 0; j < 4; ++j)
+        {
+            EXPECT_NEAR(product(i, j), id(i, j), 1e-5f);
+        }
+    }
+}
+
+// ============================================================================
+// Review issue: Vector normalize zero-length vector
+// ============================================================================
+
+TEST(Vector3, NormalizeZeroVector)
+{
+    auto n = Vector3::zero().normalized();
+    EXPECT_NEAR(n.x, 0.0f, 1e-5f);
+    EXPECT_NEAR(n.y, 0.0f, 1e-5f);
+    EXPECT_NEAR(n.z, 0.0f, 1e-5f);
+}
+
+TEST(Vector2, NormalizeZeroVector)
+{
+    auto n = Vector2::zero().normalized();
+    EXPECT_NEAR(n.x, 0.0f, 1e-5f);
+    EXPECT_NEAR(n.y, 0.0f, 1e-5f);
+}
+
+// ============================================================================
+// Review issue: Quaternion slerp at midpoint and with normalized inputs
+// ============================================================================
+
+TEST(Quaternion, SlerpMidpoint)
+{
+    auto a = Quaternion::identity();
+    auto b = Quaternion::from_axis_angle(Vector3::unit_z(), kHalfPi);
+    auto mid = slerp(a, b, 0.5f);
+
+    // At t=0.5, rotation should be 45 degrees around Z
+    auto v = mid.rotate(Vector3::unit_x());
+    float expected_x = std::cos(kHalfPi * 0.5f);
+    float expected_y = std::sin(kHalfPi * 0.5f);
+    EXPECT_NEAR(v.x, expected_x, 1e-4f);
+    EXPECT_NEAR(v.y, expected_y, 1e-4f);
+    EXPECT_NEAR(v.z, 0.0f, 1e-4f);
+}
+
+TEST(Quaternion, SlerpNearlyParallel)
+{
+    // When quaternions are nearly identical, slerp should use nlerp fallback
+    auto a = Quaternion::identity();
+    auto b = Quaternion::from_axis_angle(Vector3::unit_y(), 1e-7f);
+    auto result = slerp(a, b, 0.5f);
+    EXPECT_NEAR(result.length(), 1.0f, 1e-4f);
+}
+
+// ============================================================================
+// Review issue: float equality in Vector operator==
+// ============================================================================
+
+TEST(Vector3, EqualityExact)
+{
+    Vector3 a{1.0f, 2.0f, 3.0f};
+    Vector3 b{1.0f, 2.0f, 3.0f};
+    Vector3 c{1.0f, 2.0f, 3.001f};
+    EXPECT_TRUE(a == b);
+    EXPECT_FALSE(a == c);
+}
+
+TEST(Vector3, DistanceAndDistanceSquared)
+{
+    Vector3 a{1, 0, 0};
+    Vector3 b{4, 0, 0};
+    EXPECT_NEAR(a.distance(b), 3.0f, 1e-5f);
+    EXPECT_NEAR(a.distance_squared(b), 9.0f, 1e-5f);
+}

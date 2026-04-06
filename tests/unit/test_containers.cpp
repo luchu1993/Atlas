@@ -195,3 +195,120 @@ TEST(FlatMap, ContainsEmptySize)
     EXPECT_EQ(map.size(), 1u);
     EXPECT_TRUE(map.contains(1));
 }
+
+// ============================================================================
+// Review issue: RingBuffer pop empty returns nullopt
+// ============================================================================
+
+TEST(RingBuffer, PopEmptyReturnsNullopt)
+{
+    RingBuffer<int> rb(4);
+    auto val = rb.pop_front();
+    EXPECT_FALSE(val.has_value());
+}
+
+TEST(RingBuffer, ClearResetsState)
+{
+    RingBuffer<int> rb(4);
+    rb.push_back(1);
+    rb.push_back(2);
+    rb.clear();
+    EXPECT_TRUE(rb.empty());
+    EXPECT_EQ(rb.size(), 0u);
+
+    // Should be able to push again after clear
+    EXPECT_TRUE(rb.push_back(3));
+    EXPECT_EQ(*rb.pop_front(), 3);
+}
+
+// ============================================================================
+// Review issue: SlotMap generation bump on remove
+// ============================================================================
+
+TEST(SlotMap, SlotReuseWithNewGeneration)
+{
+    SlotMap<int> map;
+    auto h1 = map.insert(100);
+    map.remove(h1);
+
+    // Insert again — reuses the same slot index but with bumped generation
+    auto h2 = map.insert(200);
+    EXPECT_TRUE(h2.is_valid());
+    EXPECT_NE(h1.generation, h2.generation);  // generation should differ
+
+    // Old handle should not work
+    EXPECT_FALSE(map.contains(h1));
+    EXPECT_EQ(map.get(h1), nullptr);
+
+    // New handle should work
+    EXPECT_TRUE(map.contains(h2));
+    EXPECT_EQ(*map.get(h2), 200);
+}
+
+TEST(SlotMap, ClearInvalidatesAllHandles)
+{
+    SlotMap<int> map;
+    auto h1 = map.insert(1);
+    auto h2 = map.insert(2);
+    auto h3 = map.insert(3);
+
+    map.clear();
+    EXPECT_EQ(map.size(), 0u);
+    EXPECT_FALSE(map.contains(h1));
+    EXPECT_FALSE(map.contains(h2));
+    EXPECT_FALSE(map.contains(h3));
+
+    // Can insert again after clear
+    auto h4 = map.insert(4);
+    EXPECT_TRUE(map.contains(h4));
+    EXPECT_EQ(*map.get(h4), 4);
+}
+
+// ============================================================================
+// Review issue: FlatMap duplicate insert
+// ============================================================================
+
+TEST(FlatMap, DuplicateInsertReturnsFalse)
+{
+    FlatMap<int, std::string> map;
+    auto [it1, ok1] = map.insert(1, "first");
+    EXPECT_TRUE(ok1);
+
+    auto [it2, ok2] = map.insert(1, "second");
+    EXPECT_FALSE(ok2);
+    EXPECT_EQ(it2->second, "first");  // original value preserved
+}
+
+TEST(FlatMap, InsertOrAssignUpdatesExisting)
+{
+    FlatMap<int, std::string> map;
+    map.insert_or_assign(1, "first");
+    map.insert_or_assign(1, "updated");
+    EXPECT_EQ(map.find(1)->second, "updated");
+}
+
+// ============================================================================
+// Review issue: ObjectPool dense iteration after multiple create/destroy
+// ============================================================================
+
+TEST(ObjectPool, IterationAfterMixedCreateDestroy)
+{
+    ObjectPool<int> pool;
+    auto h1 = pool.create(10);
+    auto h2 = pool.create(20);
+    auto h3 = pool.create(30);
+    auto h4 = pool.create(40);
+
+    pool.destroy(h2);
+    pool.destroy(h3);
+
+    std::vector<int> values;
+    for (auto& v : pool)
+    {
+        values.push_back(v);
+    }
+    EXPECT_EQ(values.size(), 2u);
+    std::sort(values.begin(), values.end());
+    EXPECT_EQ(values[0], 10);
+    EXPECT_EQ(values[1], 40);
+}

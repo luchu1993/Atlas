@@ -119,3 +119,104 @@ TEST_F(IntrusivePtrTest, UpcastFromDerived)
     EXPECT_EQ(base->value, 80);
     EXPECT_EQ(base->ref_count(), 2u);
 }
+
+// ============================================================================
+// Review issue: AtomicRefCounted thread safety
+// ============================================================================
+
+namespace
+{
+
+class AtomicObj : public AtomicRefCounted
+{
+public:
+    static std::atomic<int> live_count;
+    AtomicObj() { ++live_count; }
+    ~AtomicObj() override { --live_count; }
+};
+
+std::atomic<int> AtomicObj::live_count{0};
+
+} // namespace
+
+TEST(AtomicIntrusivePtr, ThreadSafety)
+{
+    AtomicObj::live_count = 0;
+    {
+        auto p = IntrusivePtr<AtomicObj>(new AtomicObj());
+
+        std::vector<std::thread> threads;
+        for (int i = 0; i < 10; ++i)
+        {
+            threads.emplace_back([p]() mutable
+            {
+                // Each thread copies and destroys the pointer many times
+                for (int j = 0; j < 1000; ++j)
+                {
+                    auto copy = p;
+                    (void)copy->ref_count();
+                }
+            });
+        }
+        for (auto& t : threads)
+        {
+            t.join();
+        }
+
+        EXPECT_EQ(p->ref_count(), 1u);
+        EXPECT_EQ(AtomicObj::live_count.load(), 1);
+    }
+    EXPECT_EQ(AtomicObj::live_count.load(), 0);
+}
+
+// ============================================================================
+// Review issue: RefCounted copy semantics
+// ============================================================================
+
+TEST(RefCounted, CopyDoesNotCopyRefCount)
+{
+    // Test that copying a RefCounted object does NOT copy the ref count
+    // Use a minimal class to avoid the TestObj live_count tracking issue
+    struct Obj : RefCounted
+    {
+        int val;
+        explicit Obj(int v) : val(v) {}
+    };
+
+    auto p = make_intrusive<Obj>(90);
+    EXPECT_EQ(p->ref_count(), 1u);
+
+    // Copy the object itself (not the pointer)
+    Obj copy(*p);
+    // Copied object should start with ref_count 0
+    EXPECT_EQ(copy.ref_count(), 0u);
+    EXPECT_EQ(copy.val, 90);
+    // Original unchanged
+    EXPECT_EQ(p->ref_count(), 1u);
+}
+
+// ============================================================================
+// Review issue: swap and reset
+// ============================================================================
+
+TEST_F(IntrusivePtrTest, SwapExchangesPointers)
+{
+    auto p1 = make_intrusive<TestObj>(1);
+    auto p2 = make_intrusive<TestObj>(2);
+
+    swap(p1, p2);  // free function swap
+
+    EXPECT_EQ(p1->value, 2);
+    EXPECT_EQ(p2->value, 1);
+}
+
+TEST_F(IntrusivePtrTest, ResetReleasesOldAndAcquiresNew)
+{
+    auto p = make_intrusive<TestObj>(1);
+    EXPECT_EQ(TestObj::live_count, 1);
+
+    auto* raw = new TestObj(2);
+    p.reset(raw);
+    EXPECT_EQ(TestObj::live_count, 1);  // old deleted, new acquired
+    EXPECT_EQ(p->value, 2);
+}
