@@ -74,7 +74,7 @@ public:
     {
         if (ptr_)
         {
-            Py_XINCREF(ptr_);
+            Py_INCREF(ptr_);  // ptr_ already checked non-null above
         }
     }
 

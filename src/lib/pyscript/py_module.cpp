@@ -114,9 +114,8 @@ auto PyModuleBuilder::build() -> Result<PyObjectPtr>
     impl_->methods.push_back({nullptr, nullptr, 0, nullptr});
 
     // Move Impl into static registry so it outlives the module object.
-    static std::vector<std::unique_ptr<Impl>> s_registry;
     auto* impl = impl_.get();
-    s_registry.push_back(std::move(impl_));
+    get_registry().push_back(std::move(impl_));
 
     // Set up PyModuleDef (stored inside Impl, which now lives in the registry)
     impl->module_def = PyModuleDef_HEAD_INIT;
@@ -168,6 +167,17 @@ auto PyModuleBuilder::build() -> Result<PyObjectPtr>
     }
 
     return PyObjectPtr(mod);  // steals the new reference from PyModule_Create
+}
+
+auto PyModuleBuilder::get_registry() -> std::vector<std::unique_ptr<Impl>>&
+{
+    static std::vector<std::unique_ptr<Impl>> s_registry;
+    return s_registry;
+}
+
+void PyModuleBuilder::finalize_all()
+{
+    get_registry().clear();
 }
 
 } // namespace atlas

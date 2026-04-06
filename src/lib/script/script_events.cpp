@@ -57,6 +57,11 @@ void ScriptEvents::on_shutdown()
 
 void ScriptEvents::register_listener(std::string_view event, PyObjectPtr callback)
 {
+    if (!callback || !callback.is_callable())
+    {
+        ATLAS_LOG_WARNING("ScriptEvents: ignoring non-callable listener for '{}'", event);
+        return;
+    }
     listeners_[std::string(event)].push_back(std::move(callback));
 }
 

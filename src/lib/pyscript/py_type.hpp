@@ -117,8 +117,12 @@ public:
     // Returns the type object or an error.
     [[nodiscard]] auto build() -> Result<PyTypeObject*>;
 
+    // Release all stored Impl objects. Call from PyInterpreter::finalize().
+    static void finalize_all();
+
 private:
     struct Impl;
+    static auto get_registry() -> std::vector<std::unique_ptr<Impl>>&;
     std::unique_ptr<Impl> impl_;
 };
 

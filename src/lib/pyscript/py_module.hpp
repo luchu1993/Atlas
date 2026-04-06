@@ -52,8 +52,12 @@ public:
     // Build and return the module object
     [[nodiscard]] auto build() -> Result<PyObjectPtr>;
 
+    // Release all stored Impl objects. Call from PyInterpreter::finalize().
+    static void finalize_all();
+
 private:
     struct Impl;
+    static auto get_registry() -> std::vector<std::unique_ptr<Impl>>&;
     std::unique_ptr<Impl> impl_;
 };
 

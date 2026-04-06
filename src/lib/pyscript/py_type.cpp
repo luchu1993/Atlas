@@ -242,10 +242,20 @@ auto PyTypeBuilder::build() -> Result<PyTypeObject*>
 
     // Move Impl into static registry so it outlives the type object.
     // PyMethodDef and PyGetSetDef arrays are referenced by the type.
-    static std::vector<std::unique_ptr<Impl>> s_registry;
-    s_registry.push_back(std::move(impl_));
+    get_registry().push_back(std::move(impl_));
 
     return type;
+}
+
+auto PyTypeBuilder::get_registry() -> std::vector<std::unique_ptr<Impl>>&
+{
+    static std::vector<std::unique_ptr<Impl>> s_registry;
+    return s_registry;
+}
+
+void PyTypeBuilder::finalize_all()
+{
+    get_registry().clear();
 }
 
 } // namespace atlas

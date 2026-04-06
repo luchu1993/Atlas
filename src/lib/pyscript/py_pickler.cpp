@@ -5,11 +5,17 @@
 namespace atlas
 {
 
+std::atomic<bool> PyPickler::initialized_{false};
 PyObjectPtr PyPickler::dumps_;
 PyObjectPtr PyPickler::loads_;
 
 auto PyPickler::initialize() -> Result<void>
 {
+    if (initialized_.load(std::memory_order_acquire))
+    {
+        return Result<void>{};
+    }
+
     auto mod = PyObjectPtr(PyImport_ImportModule("pickle"));
     if (!mod)
     {
@@ -25,7 +31,15 @@ auto PyPickler::initialize() -> Result<void>
         return Error(ErrorCode::ScriptError, "Failed to get pickle.dumps/loads");
     }
 
+    initialized_.store(true, std::memory_order_release);
     return Result<void>{};
+}
+
+void PyPickler::finalize()
+{
+    dumps_ = {};
+    loads_ = {};
+    initialized_.store(false, std::memory_order_release);
 }
 
 auto PyPickler::pickle(PyObject* obj) -> Result<std::vector<std::byte>>
