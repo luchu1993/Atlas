@@ -12,6 +12,11 @@ namespace atlas
 
 std::atomic<bool> PyInterpreter::initialized_{false};
 
+auto PyInterpreter::initialize() -> Result<void>
+{
+    return initialize(Config{});
+}
+
 auto PyInterpreter::initialize(const Config& config) -> Result<void>
 {
     if (initialized_.load(std::memory_order_acquire))
