@@ -6,6 +6,8 @@ atlas_add_library(atlas_pyscript
         py_error.cpp
         py_type.cpp
         py_module.cpp
+        py_pickler.cpp
+        atlas_module.cpp
     DEPS
         atlas_foundation
         atlas_platform
