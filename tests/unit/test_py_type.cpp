@@ -229,3 +229,67 @@ TEST_F(PyTypeTest, TypeWithDocstring)
     // Type object exists and is valid
     EXPECT_NE(*type_result, nullptr);
 }
+
+// ============================================================================
+// Review fix: vector reallocation dangling pointer.
+// Adding many methods triggers vector reallocation in method_names/methods.
+// The fix defers c_str() pointer assignment to build() after all insertions.
+// ============================================================================
+
+// Additional trampolines for the stress test
+static PyObject* counter_reset(PyObject* self, PyObject*)
+{
+    auto* c = py_unwrap<Counter>(self);
+    if (!c) { PyErr_SetString(PyExc_RuntimeError, "null"); return nullptr; }
+    c->reset();
+    Py_RETURN_NONE;
+}
+
+static PyObject* counter_get(PyObject* self, PyObject*)
+{
+    auto* c = py_unwrap<Counter>(self);
+    if (!c) { PyErr_SetString(PyExc_RuntimeError, "null"); return nullptr; }
+    return PyLong_FromLong(c->get());
+}
+
+TEST_F(PyTypeTest, ManyMethodsNoPointerCorruption)
+{
+    // Adding 5+ methods forces multiple vector reallocations.
+    // Before the fix, method name pointers would dangle after reallocation.
+    auto type_result = PyTypeBuilder("StressType")
+        .add_method("increment", counter_increment, METH_NOARGS)
+        .add_method("add", counter_add, METH_VARARGS)
+        .add_method("reset", counter_reset, METH_NOARGS)
+        .add_method("get", counter_get, METH_NOARGS)
+        .add_property("value", counter_get_value, counter_set_value)
+        .add_readonly("ro_value", counter_get_value)
+        .build();
+    ASSERT_TRUE(type_result.has_value()) << type_result.error().message();
+
+    Counter c;
+    c.value = 0;
+    auto obj = py_wrap(*type_result, &c, false);
+    ASSERT_TRUE(static_cast<bool>(obj));
+
+    // Call each method to verify name pointers are valid
+    (void)obj.get_attr("increment").call();
+    EXPECT_EQ(c.value, 1);
+
+    PyObjectPtr args3(PyTuple_Pack(1, PyLong_FromLong(9)));
+    (void)obj.get_attr("add").call(args3);
+    EXPECT_EQ(c.value, 10);
+
+    auto get_result = obj.get_attr("get").call();
+    ASSERT_TRUE(get_result.is_int());
+    EXPECT_EQ(PyLong_AsLong(get_result.get()), 10);
+
+    (void)obj.get_attr("reset").call();
+    EXPECT_EQ(c.value, 0);
+
+    // Properties should also work
+    auto val = obj.get_attr("value");
+    EXPECT_EQ(PyLong_AsLong(val.get()), 0);
+
+    auto ro_val = obj.get_attr("ro_value");
+    EXPECT_EQ(PyLong_AsLong(ro_val.get()), 0);
+}

@@ -128,6 +128,57 @@ TEST_F(PyModuleTest, ModuleWithType)
     EXPECT_TRUE(PyType_Check(type_obj.get()));
 }
 
+// ============================================================================
+// Review fix: vector reallocation dangling pointer in PyModuleBuilder.
+// Same fix as PyTypeBuilder — c_str() pointers deferred to build().
+// ============================================================================
+
+static PyObject* my_multiply(PyObject*, PyObject* args)
+{
+    int a = 0, b = 0;
+    if (!PyArg_ParseTuple(args, "ii", &a, &b)) return nullptr;
+    return PyLong_FromLong(a * b);
+}
+
+static PyObject* my_negate(PyObject*, PyObject* args)
+{
+    int a = 0;
+    if (!PyArg_ParseTuple(args, "i", &a)) return nullptr;
+    return PyLong_FromLong(-a);
+}
+
+TEST_F(PyModuleTest, ManyFunctionsNoPointerCorruption)
+{
+    auto result = PyModuleBuilder("test_stress_mod")
+        .add_function("add", my_add, METH_VARARGS)
+        .add_function("greet", my_greet, METH_VARARGS)
+        .add_function("multiply", my_multiply, METH_VARARGS)
+        .add_function("negate", my_negate, METH_VARARGS)
+        .add_int_constant("CONST1", 100)
+        .add_string_constant("CONST2", "test")
+        .build();
+    ASSERT_TRUE(result.has_value()) << result.error().message();
+
+    auto mod = PyInterpreter::import("test_stress_mod");
+    ASSERT_TRUE(mod.has_value());
+
+    // Verify all functions are callable with correct names
+    PyObjectPtr args_add(PyTuple_Pack(2, PyLong_FromLong(3), PyLong_FromLong(4)));
+    auto add_result = mod->get_attr("add").call(args_add);
+    ASSERT_TRUE(add_result.is_int());
+    EXPECT_EQ(PyLong_AsLong(add_result.get()), 7);
+
+    PyObjectPtr args_mul(PyTuple_Pack(2, PyLong_FromLong(5), PyLong_FromLong(6)));
+    auto mul_result = mod->get_attr("multiply").call(args_mul);
+    ASSERT_TRUE(mul_result.is_int());
+    EXPECT_EQ(PyLong_AsLong(mul_result.get()), 30);
+
+    PyObjectPtr args_neg(PyTuple_Pack(1, PyLong_FromLong(42)));
+    auto neg_result = mod->get_attr("negate").call(args_neg);
+    ASSERT_TRUE(neg_result.is_int());
+    EXPECT_EQ(PyLong_AsLong(neg_result.get()), -42);
+}
+
 TEST_F(PyModuleTest, CallFunctionFromExec)
 {
     // Build module
