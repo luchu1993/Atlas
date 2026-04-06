@@ -103,3 +103,13 @@ atlas_add_test(test_channel
     SOURCES test_channel.cpp
     DEPS atlas_network
 )
+
+atlas_add_test(test_network_interface
+    SOURCES test_network_interface.cpp
+    DEPS atlas_network
+)
+
+atlas_add_test(test_bg_task_manager
+    SOURCES test_bg_task_manager.cpp
+    DEPS atlas_network
+)

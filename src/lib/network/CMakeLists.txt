@@ -3,11 +3,13 @@
 atlas_add_library(atlas_network
     SOURCES
         address.cpp
+        bg_task_manager.cpp
         socket.cpp
         event_dispatcher.cpp
         interface_table.cpp
         bundle.cpp
         channel.cpp
+        network_interface.cpp
         tcp_channel.cpp
         udp_channel.cpp
     DEPS
