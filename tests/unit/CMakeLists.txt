@@ -123,3 +123,23 @@ atlas_add_test(test_reliable_udp
     SOURCES test_reliable_udp.cpp
     DEPS atlas_network
 )
+
+atlas_add_test(test_py_interpreter
+    SOURCES test_py_interpreter.cpp
+    DEPS atlas_pyscript
+)
+
+atlas_add_test(test_py_object
+    SOURCES test_py_object.cpp
+    DEPS atlas_pyscript
+)
+
+atlas_add_test(test_py_convert
+    SOURCES test_py_convert.cpp
+    DEPS atlas_pyscript
+)
+
+atlas_add_test(test_py_gil
+    SOURCES test_py_gil.cpp
+    DEPS atlas_pyscript
+)

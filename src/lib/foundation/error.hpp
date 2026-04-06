@@ -40,6 +40,13 @@ enum class ErrorCode : uint32_t
     MessageTooLarge,
     RateLimited,
     ChannelCondemned,
+
+    // Script error codes
+    ScriptError,
+    ScriptTypeError,
+    ScriptValueError,
+    ScriptImportError,
+    ScriptRuntimeError,
 };
 
 [[nodiscard]] auto error_code_name(ErrorCode code) -> std::string_view;

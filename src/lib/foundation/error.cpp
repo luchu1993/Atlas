@@ -33,6 +33,11 @@ auto error_code_name(ErrorCode code) -> std::string_view
         case ErrorCode::MessageTooLarge:   return "MessageTooLarge";
         case ErrorCode::RateLimited:       return "RateLimited";
         case ErrorCode::ChannelCondemned:  return "ChannelCondemned";
+        case ErrorCode::ScriptError:       return "ScriptError";
+        case ErrorCode::ScriptTypeError:   return "ScriptTypeError";
+        case ErrorCode::ScriptValueError:  return "ScriptValueError";
+        case ErrorCode::ScriptImportError: return "ScriptImportError";
+        case ErrorCode::ScriptRuntimeError: return "ScriptRuntimeError";
     }
     return "Unknown";
 }
