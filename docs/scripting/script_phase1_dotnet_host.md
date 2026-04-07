@@ -1,4 +1,4 @@
-# ScriptPhase 1: .NET 10 运行时嵌入
+# ScriptPhase 1: .NET 9 运行时嵌入
 
 > 预估周期: 2–3 周 | 前置依赖: ScriptPhase 0 完成
 
@@ -6,7 +6,7 @@
 
 ## 目标
 
-1. 在 C++ 进程中嵌入 .NET 10 CoreCLR 运行时（通过 `hostfxr`）
+1. 在 C++ 进程中嵌入 .NET 9 CoreCLR 运行时（通过 `hostfxr`）
 2. 实现 C++ → C# 的基本调用: 获取 `[UnmanagedCallersOnly]` 方法的函数指针并调用
 3. 配置 Server GC、分层编译等运行时参数
 4. 建立 CMake 中 .NET SDK 发现和 C# 项目编译流程
@@ -544,10 +544,10 @@ auto ClrHost::load_hostfxr() -> Result<void>
 ```json
 {
   "runtimeOptions": {
-    "tfm": "net10.0",
+    "tfm": "net9.0",
     "framework": {
       "name": "Microsoft.NETCore.App",
-      "version": "10.0.0"
+      "version": "9.0.0"
     },
     "configProperties": {
       "System.GC.Server": true,
@@ -572,7 +572,7 @@ auto ClrHost::load_hostfxr() -> Result<void>
 | `System.GC.DynamicAdaptationMode` | `1` | DATAS: 动态自适应 GC，根据应用负载自动调整堆大小和回收频率（.NET 8+） |
 | `TieredCompilation` | `true` | 分层编译: 先快速 JIT → 后台优化重编译热路径 |
 | `QuickJit` | `true` | 首次 JIT 使用快速模式，减少启动延迟 |
-| `QuickJitForLoops` | `true` | 含循环的方法也使用 QuickJit（.NET 10 默认） |
+| `QuickJitForLoops` | `true` | 含循环的方法也使用 QuickJit（.NET 9 默认） |
 | `ThreadPool.MinThreads` | `4` | 线程池最小线程数，避免冷启动延迟 |
 | `HeapHardLimitPercent` | `80` | GC 堆上限为进程可用内存的 80%，预留空间给 C++ 分配 |
 
@@ -630,7 +630,7 @@ add_subdirectory(clrscript)
 ```xml
 <Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
-    <TargetFramework>net10.0</TargetFramework>
+    <TargetFramework>net9.0</TargetFramework>
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
     <EnableDefaultItems>true</EnableDefaultItems>
   </PropertyGroup>

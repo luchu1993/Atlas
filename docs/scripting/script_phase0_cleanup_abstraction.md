@@ -159,7 +159,7 @@ class ScriptValue;
 // ============================================================================
 //
 // Concrete implementations:
-//   - ClrScriptEngine (.NET 10 / CoreCLR)  [ScriptPhase 1-3]
+//   - ClrScriptEngine (.NET 9 / CoreCLR)  [ScriptPhase 1-3]
 //
 // Lifecycle: initialize() → [load_module()* → on_tick()*] → finalize()
 

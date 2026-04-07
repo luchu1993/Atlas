@@ -1,12 +1,12 @@
 # Atlas Engine — C# 脚本层迁移规划
 
-> 版本 1.0 | 目标运行时: .NET 10 | 策略: 全面放弃 Python，Source Generator 零反射
+> 版本 1.0 | 目标运行时: .NET 9 | 策略: 全面放弃 Python，Source Generator 零反射
 
 ---
 
 ## 1. 目标
 
-将 Atlas Engine 的服务端脚本语言从 **Python 3** 完全迁移到 **C# (.NET 10)**，实现：
+将 Atlas Engine 的服务端脚本语言从 **Python 3** 完全迁移到 **C# (.NET 9)**，实现：
 
 1. 服务端与 Unity 客户端通过 `Atlas.Shared` 共享实体定义和业务逻辑
 2. 深度使用 C# Source Generator，**零反射、零动态代码生成**，完全兼容 Unity IL2CPP
@@ -16,7 +16,7 @@
 
 ## 2. 核心架构决策
 
-### 2.1 为什么选择 .NET 10
+### 2.1 为什么选择 .NET 9
 
 | 特性 | 收益 |
 |------|------|
@@ -60,7 +60,7 @@ Unity IL2CPP（AOT 编译）的限制：
                ▼                       ▼
         ┌──────────────┐      ┌──────────────┐
         │  服务端       │      │  Unity 客户端 │
-        │  .NET 10 CLR │      │  IL2CPP (AOT)│
+        │  .NET 9 CLR │      │  IL2CPP (AOT)│
         │  JIT + 热重载 │      │  零反射限制   │
         └──────┬───────┘      └──────────────┘
                │
@@ -94,7 +94,7 @@ src/lib/
 
 **核心问题**: `script_events.hpp` 第 2 行 `#include "pyscript/py_object.hpp"` 直接耦合 Python。
 
-## 4. 目标架构（.NET 10 + Source Generator）
+## 4. 目标架构（.NET 9 + Source Generator）
 
 ### 4.1 C++ 侧
 
@@ -135,7 +135,7 @@ src/csharp/
 ├── Atlas.Generators.Rpc/         # Source Generator: RPC 系统
 ├── Atlas.Generators.Events/      # Source Generator: 事件系统
 ├── Atlas.Shared/                 # 共享库 (netstandard2.1, IL2CPP 安全)
-├── Atlas.Runtime/                # 服务端运行时 (net10.0)
+├── Atlas.Runtime/                # 服务端运行时 (net9.0)
 └── Atlas.Runtime.Tests/          # xUnit 测试
 ```
 
@@ -144,7 +144,7 @@ src/csharp/
 | 阶段 | 名称 | 预估周期 | 关键交付物 |
 |------|------|----------|-----------|
 | 0 | 清理 Python + 建立抽象层 | 1.5-2 周 | `ScriptEngine` / `ScriptValue` 接口; pyscript 删除 |
-| 1 | .NET 10 运行时嵌入 | 2-3 周 | `ClrHost`; C++ 进程能调用 C# 方法 |
+| 1 | .NET 9 运行时嵌入 | 2-3 周 | `ClrHost`; C++ 进程能调用 C# 方法 |
 | 2 | C++ ↔ C# 互操作层 | 4-5 周 | `ClrMarshal` / `ClrObject`; `Atlas.Generators.Interop` |
 | 3† | Atlas 引擎 C# 绑定 | 3-4 周 | `Atlas.Runtime`; `ClrScriptEngine`; 日志/时间/实体回调 |
 | 4 | 共享程序集 + Source Generator | 3-4 周 | `Atlas.Shared`; Entity/Rpc/Events Generator |
@@ -162,7 +162,7 @@ src/csharp/
 | **M1: .NET 可加载** | C++ 进程能加载 CoreCLR 并调用 C# `[UnmanagedCallersOnly]` 方法返回正确结果 |
 | **M2: 双向互操作** | C++ 可调用 C# 方法, C# 可调用 C++ 导出函数; 支持基本类型 + string + byte[]; Interop Generator 生成可用代码 |
 | **M3: 引擎可脚本化** | C# 脚本中可调用 `Atlas.Log.Info()`, `Atlas.Time.ServerTime`; Entity 生命周期回调工作 |
-| **M4: 跨端共享** | 同一 `Atlas.Shared.dll` 在服务端 (.NET 10) 和 Unity IL2CPP 上编译运行; Source Generator 输出零反射代码 |
+| **M4: 跨端共享** | 同一 `Atlas.Shared.dll` 在服务端 (.NET 9) 和 Unity IL2CPP 上编译运行; Source Generator 输出零反射代码 |
 | **M5: 热重载可用** | 修改 C# 脚本后无需重启服务端进程即可生效 |
 | **M6: 生产就绪** | 全部测试通过; 10K 实体压测无内存泄漏; GC 暂停 < 5ms@p99 |
 
@@ -197,7 +197,7 @@ src/csharp/
 各阶段的完整任务分解请参阅:
 
 - [ScriptPhase 0: 清理 Python + 建立抽象层](script_phase0_cleanup_abstraction.md)
-- [ScriptPhase 1: .NET 10 运行时嵌入](script_phase1_dotnet_host.md)
+- [ScriptPhase 1: .NET 9 运行时嵌入](script_phase1_dotnet_host.md)
 - [ScriptPhase 2: C++ ↔ C# 互操作层](script_phase2_interop_layer.md)
 - [ScriptPhase 3: Atlas 引擎 C# 绑定](script_phase3_engine_bindings.md) ← 含序列化对齐
 - [ScriptPhase 4: 共享程序集 + Source Generator](script_phase4_shared_generators.md) ← 含 Mailbox + EntityDef

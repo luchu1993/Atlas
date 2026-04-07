@@ -53,7 +53,7 @@ src/csharp/Atlas.Runtime/
 ```xml
 <Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
-    <TargetFramework>net10.0</TargetFramework>
+    <TargetFramework>net9.0</TargetFramework>
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
     <LangVersion>latest</LangVersion>
     <Nullable>enable</Nullable>
@@ -375,7 +375,7 @@ public:
         std::span<const ScriptValue> args) -> Result<ScriptValue> override;
     [[nodiscard]] auto runtime_name() const -> std::string_view override
     {
-        return "CLR (.NET 10)";
+        return "CLR (.NET 9)";
     }
 
     // --- ClrScriptEngine 特有方法 ---
@@ -543,7 +543,7 @@ public static class Log
 - [ ] C++ `atlas_log_message` 导出函数实现（已在 Phase 2 `clr_native_api.cpp` 中定义）
 - [ ] C# `Log` 类通过 `NativeApi.LogMessage` 调用
 - [ ] UTF-8 编码字符串传递: `Encoding.UTF8.GetBytes` → `ReadOnlySpan<byte>` → `fixed` → P/Invoke
-- [ ] **性能优化（后续 TODO）**: 当前 `GetBytes(string)` 每次分配 `byte[]`，高频日志有 GC 压力。改用 `stackalloc` + `Encoding.UTF8.GetBytes(string, Span<byte>)` 消除分配；或使用 .NET 10 `Utf8.TryWrite`
+- [ ] **性能优化（后续 TODO）**: 当前 `GetBytes(string)` 每次分配 `byte[]`，高频日志有 GC 压力。改用 `stackalloc` + `Encoding.UTF8.GetBytes(string, Span<byte>)` 消除分配；或使用 .NET 9 `Utf8.TryWrite`
 
 ---
 

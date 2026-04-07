@@ -165,7 +165,7 @@ deploy/
 ├── CellApp.exe             (薄壳, ~50KB)
 ├── DBApp.exe               (薄壳, ~50KB)
 ├── atlas_engine.dll         (引擎核心, ~2-5MB)
-├── dotnet/                  (.NET 10 运行时)
+├── dotnet/                  (.NET 9 运行时)
 ├── scripts/
 │   ├── Atlas.Runtime.dll    (C# 引擎运行时)
 │   ├── Atlas.Shared.dll     (C# 共享定义)
@@ -825,7 +825,7 @@ public static void SendClientRpc(
 
 ```
 ScriptPhase 0                ScriptPhase 1                   ScriptPhase 2
-清理 Python                  .NET 10 嵌入                     C++ ↔ C# 互操作层
+清理 Python                  .NET 9 嵌入                     C++ ↔ C# 互操作层
                                 │
                                 ├── 方案 A: CMake 共享库 ←─── atlas_* 导出函数需要宿主
                                 │   (与 Phase 1 并行)

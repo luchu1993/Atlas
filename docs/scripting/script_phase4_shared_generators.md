@@ -12,7 +12,7 @@
 
 ## 验收标准 (M4)
 
-- [ ] `Atlas.Shared.dll` 在 .NET 10 和 Unity IL2CPP 上均可编译运行
+- [ ] `Atlas.Shared.dll` 在 .NET 9 和 Unity IL2CPP 上均可编译运行
 - [ ] Entity Source Generator 生成序列化、脏标记、工厂代码
 - [ ] RPC Source Generator 生成发送存根和接收分发代码
 - [ ] Events Source Generator 生成事件注册代码
@@ -96,7 +96,7 @@ src/csharp/Atlas.Shared/
 > **推荐方案**: 不定义 `ISerializable` 接口。Source Generator 直接在 partial class 上生成
 > `Serialize(ref SpanWriter)` 和 `Deserialize(ref SpanReader)` 方法（duck-typing）。
 > 热重载和迁移代码通过 Generator 生成的已知方法名调用，无需接口约束。
-> 如果需要编译期约束，可改用 abstract class 或将接口放在 `Atlas.Runtime`（net10.0，支持 C# 13）中。
+> 如果需要编译期约束，可改用 abstract class 或将接口放在 `Atlas.Runtime`（net9.0，支持 C# 13）中。
 
 ```csharp
 namespace Atlas.Entity;
@@ -106,7 +106,7 @@ namespace Atlas.Entity;
 /// 用于状态持久化、热重载状态迁移、实体跨进程迁移等场景。
 ///
 /// 注意: 如 Atlas.Shared 使用 netstandard2.1 且不支持 C# 13 allows ref struct，
-/// 此接口需移至 Atlas.Runtime (net10.0) 或改用 duck-typing（见上方说明）。
+/// 此接口需移至 Atlas.Runtime (net9.0) 或改用 duck-typing（见上方说明）。
 /// </summary>
 public interface ISerializable
 {
