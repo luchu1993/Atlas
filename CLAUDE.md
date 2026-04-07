@@ -4,7 +4,7 @@ This file provides guidance to Claude Code when working with the Atlas Engine co
 
 ## What is Atlas Engine?
 
-Atlas is a modern distributed MMO game server framework written in C++20 with Python 3 scripting. It is inspired by the BigWorld Engine architecture, featuring a distributed multi-process server design with load balancing, scalability, and fault tolerance.
+Atlas is a modern distributed MMO game server framework written in C++20 with C# (.NET 9) scripting. It is inspired by the BigWorld Engine architecture, featuring a distributed multi-process server design with load balancing, scalability, and fault tolerance. The scripting layer embeds CoreCLR via hostfxr and uses [UnmanagedCallersOnly] for zero-overhead C++ ↔ C# interop.
 
 ## Build System (CMake)
 

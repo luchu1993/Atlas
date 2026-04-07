@@ -1,6 +1,6 @@
 # Atlas Engine
 
-A modern distributed MMO game server framework written in **C++20** with **Python 3** scripting, inspired by the **BigWorld Engine** architecture. Features multi-process distributed design with load balancing, spatial partitioning, and fault tolerance, supporting **Windows** and **Linux** cross-platform deployment.
+A modern distributed MMO game server framework written in **C++20** with **C# (.NET 9)** scripting, inspired by the **BigWorld Engine** architecture. Features multi-process distributed design with load balancing, spatial partitioning, and fault tolerance, supporting **Windows** and **Linux** cross-platform deployment.
 
 **[中文文档](README_CN.md)**
 
@@ -8,7 +8,7 @@ A modern distributed MMO game server framework written in **C++20** with **Pytho
 
 - **Distributed Multi-Process Architecture** — LoginApp, BaseApp, CellApp, DBApp and more, with load balancing and fault tolerance
 - **Entity System** — Entities distributed across Base / Cell / Client, communicating via Mailbox RPC
-- **Python 3 Scripting** — Unified Python scripting for both server and client game logic
+- **C# (.NET 9) Scripting** — High-performance C# scripting via embedded CoreCLR; zero-overhead interop with `[UnmanagedCallersOnly]`
 - **Cross-Platform** — Full OS API abstraction, unified build on Windows and Linux
 - **Pluggable Database** — MySQL (production) and XML (development) backends
 - **Client SDK** — Lightweight connection SDK, not tied to any specific game client engine
@@ -39,7 +39,7 @@ Client ──► LoginApp ──► BaseAppMgr ──► BaseApp ◄──► Ce
 
 - CMake 3.20+
 - C++20 compiler: MSVC 2022+ / GCC 10+ / Clang 12+
-- Python 3.10+ (scripting layer, enabled in later phases)
+- .NET 9 SDK (scripting layer)
 
 ### Compile
 
@@ -68,14 +68,15 @@ ctest --test-dir build --build-config Debug --output-on-failure
 ```
 atlas/
 ├── cmake/                  CMake modules
+├── runtime/                .NET runtime configuration
 ├── src/
 │   ├── lib/                Core libraries
 │   │   ├── platform/         OS abstraction layer
 │   │   ├── foundation/       Core utilities (logging, memory, containers, time)
 │   │   ├── network/          Networking
 │   │   ├── serialization/    Serialization
-│   │   ├── script/           Script abstraction layer
-│   │   ├── pyscript/         Python 3 integration
+│   │   ├── script/           Script abstraction layer (ScriptEngine / ScriptValue)
+│   │   ├── clrscript/        .NET 9 CoreCLR embedding (ClrHost)
 │   │   ├── entitydef/        Entity definition system
 │   │   ├── connection/       Communication protocols
 │   │   ├── db/               Database abstraction
@@ -88,9 +89,10 @@ atlas/
 │   │   ├── dbapp/
 │   │   └── ...
 │   └── client_sdk/         Client connection SDK
-├── tests/                  Tests
-├── scripts/                Python game scripts
-├── tools/                  Operations tools (Python)
+├── tests/
+│   ├── unit/               C++ unit tests (Google Test)
+│   └── csharp/             C# smoke tests
+├── tools/                  Operations tools
 └── docker/                 Container deployment
 ```
 
