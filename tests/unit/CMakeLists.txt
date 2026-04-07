@@ -124,49 +124,14 @@ atlas_add_test(test_reliable_udp
     DEPS atlas_network
 )
 
-atlas_add_test(test_py_interpreter
-    SOURCES test_py_interpreter.cpp
-    DEPS atlas_pyscript
-)
-
-atlas_add_test(test_py_object
-    SOURCES test_py_object.cpp
-    DEPS atlas_pyscript
-)
-
-atlas_add_test(test_py_convert
-    SOURCES test_py_convert.cpp
-    DEPS atlas_pyscript
-)
-
-atlas_add_test(test_py_gil
-    SOURCES test_py_gil.cpp
-    DEPS atlas_pyscript
-)
-
-atlas_add_test(test_py_type
-    SOURCES test_py_type.cpp
-    DEPS atlas_pyscript
-)
-
-atlas_add_test(test_py_module
-    SOURCES test_py_module.cpp
-    DEPS atlas_pyscript
-)
-
 atlas_add_test(test_script_events
     SOURCES test_script_events.cpp
     DEPS atlas_script
 )
 
-atlas_add_test(test_py_pickler
-    SOURCES test_py_pickler.cpp
-    DEPS atlas_pyscript
-)
-
-atlas_add_test(test_atlas_module
-    SOURCES test_atlas_module.cpp
-    DEPS atlas_pyscript
+atlas_add_test(test_script_value
+    SOURCES test_script_value.cpp
+    DEPS atlas_script
 )
 
 atlas_add_test(test_machined_types

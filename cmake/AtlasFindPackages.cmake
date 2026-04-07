@@ -43,9 +43,6 @@ FetchContent_Declare(
 )
 FetchContent_MakeAvailable(rapidjson)
 
-# ── Python 3 (for scripting) ─────────────────────────────────────────────────
-find_package(Python3 REQUIRED COMPONENTS Development Interpreter)
-
 # ── OpenSSL (optional at Phase 2) ────────────────────────────────────────────
 # find_package(OpenSSL REQUIRED)
 

@@ -1,53 +1,40 @@
 #include "script/script_events.hpp"
 
 #include "foundation/log.hpp"
-#include "pyscript/py_convert.hpp"
-#include "pyscript/py_error.hpp"
 
 namespace atlas
 {
 
-ScriptEvents::ScriptEvents(PyObjectPtr personality_module) : module_(std::move(personality_module))
+ScriptEvents::ScriptEvents(std::shared_ptr<ScriptObject> personality_module)
+    : module_(std::move(personality_module))
 {
 }
 
-void ScriptEvents::call_module_method(std::string_view name, PyObjectPtr args)
+void ScriptEvents::call_module_method(std::string_view name, std::span<const ScriptValue> args)
 {
-    auto method = module_.get_attr(name);
-    if (!method || !method.is_callable())
-    {
-        return;  // method doesn't exist -- silently skip
-    }
+    if (!module_ || module_->is_none())
+        return;
 
-    PyObjectPtr result;
-    if (args)
-    {
-        result = method.call(args);
-    }
-    else
-    {
-        result = method.call();
-    }
+    auto method = module_->get_attr(name);
+    if (!method || !method->is_callable())
+        return;
 
+    auto result = method->call(args);
     if (!result)
     {
-        auto err = format_python_error();
-        clear_python_error();
-        ATLAS_LOG_ERROR("Script callback '{}' failed: {}", name, err);
+        ATLAS_LOG_ERROR("Script callback '{}' failed: {}", name, result.error().message());
     }
 }
 
 void ScriptEvents::on_init(bool is_reload)
 {
-    auto args = PyObjectPtr(PyTuple_Pack(1, is_reload ? Py_True : Py_False));
+    ScriptValue args[] = {ScriptValue(is_reload)};
     call_module_method("onInit", args);
 }
 
 void ScriptEvents::on_tick(float dt)
 {
-    auto py_dt = py_convert::to_python(dt);
-    // PyTuple_Pack borrows the ref — py_dt must stay alive until after call
-    auto args = PyObjectPtr(PyTuple_Pack(1, py_dt.get()));
+    ScriptValue args[] = {ScriptValue::from_float(dt)};
     call_module_method("onTick", args);
 }
 
@@ -56,9 +43,9 @@ void ScriptEvents::on_shutdown()
     call_module_method("onShutdown");
 }
 
-void ScriptEvents::register_listener(std::string_view event, PyObjectPtr callback)
+void ScriptEvents::register_listener(std::string_view event, Callback callback)
 {
-    if (!callback || !callback.is_callable())
+    if (!callback || !callback->is_callable())
     {
         ATLAS_LOG_WARNING("ScriptEvents: ignoring non-callable listener for '{}'", event);
         return;
@@ -66,30 +53,18 @@ void ScriptEvents::register_listener(std::string_view event, PyObjectPtr callbac
     listeners_[std::string(event)].push_back(std::move(callback));
 }
 
-void ScriptEvents::fire_event(std::string_view event, PyObjectPtr args)
+void ScriptEvents::fire_event(std::string_view event, std::span<const ScriptValue> args)
 {
     auto it = listeners_.find(std::string(event));
     if (it == listeners_.end())
-    {
         return;
-    }
 
     for (auto& cb : it->second)
     {
-        PyObjectPtr result;
-        if (args)
-        {
-            result = cb.call(args);
-        }
-        else
-        {
-            result = cb.call();
-        }
+        auto result = cb->call(args);
         if (!result)
         {
-            auto err = format_python_error();
-            clear_python_error();
-            ATLAS_LOG_WARNING("Event '{}' listener failed: {}", event, err);
+            ATLAS_LOG_WARNING("Event '{}' listener failed: {}", event, result.error().message());
         }
     }
 }

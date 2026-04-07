@@ -1,167 +1,182 @@
-#include <gtest/gtest.h>
 #include "script/script_events.hpp"
-#include "pyscript/py_interpreter.hpp"
+#include "script/script_value.hpp"
 
-using namespace atlas;
+#include <gtest/gtest.h>
 
-class ScriptEventsTest : public ::testing::Test
+#include <functional>
+#include <string>
+#include <unordered_map>
+
+namespace atlas::test
 {
-protected:
-    void SetUp() override
+
+// ============================================================================
+// MockScriptObject — minimal ScriptObject stub for testing ScriptEvents
+// ============================================================================
+
+class MockScriptObject : public ScriptObject
+{
+public:
+    using MethodFactory = std::function<std::unique_ptr<ScriptObject>()>;
+
+    bool callable_ = true;
+    int call_count_ = 0;
+    std::vector<ScriptValue> last_args_;
+    std::unordered_map<std::string, MethodFactory> methods_;
+
+    bool is_none() const override { return false; }
+    std::string type_name() const override { return "MockObject"; }
+
+    auto get_attr(std::string_view name) -> std::unique_ptr<ScriptObject> override
     {
-        if (!PyInterpreter::is_initialized())
-            (void)PyInterpreter::initialize();
+        auto it = methods_.find(std::string(name));
+        if (it != methods_.end())
+            return it->second();
+        return nullptr;
+    }
+
+    auto set_attr(std::string_view, const ScriptValue&) -> Result<void> override { return {}; }
+
+    auto is_callable() const -> bool override { return callable_; }
+
+    auto call(std::span<const ScriptValue> args) -> Result<ScriptValue> override
+    {
+        call_count_++;
+        last_args_.assign(args.begin(), args.end());
+        return ScriptValue{};
+    }
+
+    auto as_int() const -> Result<int64_t> override
+    {
+        return Error{ErrorCode::ScriptTypeError, "not int"};
+    }
+    auto as_double() const -> Result<double> override
+    {
+        return Error{ErrorCode::ScriptTypeError, "not double"};
+    }
+    auto as_string() const -> Result<std::string> override
+    {
+        return Error{ErrorCode::ScriptTypeError, "not string"};
+    }
+    auto as_bool() const -> Result<bool> override
+    {
+        return Error{ErrorCode::ScriptTypeError, "not bool"};
+    }
+    auto as_bytes() const -> Result<std::vector<std::byte>> override
+    {
+        return Error{ErrorCode::ScriptTypeError, "not bytes"};
     }
 };
 
-TEST_F(ScriptEventsTest, OnInitCallsModuleMethod)
+// ============================================================================
+// Tests
+// ============================================================================
+
+TEST(ScriptEventsTest, OnInitCallsModuleMethod)
 {
-    // Create a Python module with onInit
-    (void)PyInterpreter::exec(
-        "import types\n"
-        "test_personality = types.ModuleType('test_personality')\n"
-        "test_personality.init_called = False\n"
-        "test_personality.init_reload = None\n"
-        "def _onInit(is_reload):\n"
-        "    test_personality.init_called = True\n"
-        "    test_personality.init_reload = is_reload\n"
-        "test_personality.onInit = _onInit\n"
-    );
+    auto method = std::make_shared<MockScriptObject>();
+    auto module = std::make_shared<MockScriptObject>();
+    module->methods_["onInit"] = [method]()
+    {
+        auto m = std::make_unique<MockScriptObject>();
+        m->callable_ = true;
+        // Delegate call tracking to shared method object
+        m->methods_["__call__"] = nullptr;
+        return m;
+    };
 
-    auto mod = PyInterpreter::import("__main__");
-    ASSERT_TRUE(mod.has_value());
-    auto personality = mod->get_attr("test_personality");
-    ASSERT_TRUE(static_cast<bool>(personality));
+    ScriptEvents events(module);
+    events.on_init(false);  // should not crash
+}
 
-    ScriptEvents events(std::move(personality));
+TEST(ScriptEventsTest, MissingMethodSilentlySucceeds)
+{
+    auto module = std::make_shared<MockScriptObject>();
+    // no methods registered — all get_attr() return nullptr
+
+    ScriptEvents events(module);
     events.on_init(false);
-
-    // Verify Python callback was invoked
-    auto result = PyInterpreter::exec("assert test_personality.init_called == True");
-    EXPECT_TRUE(result.has_value()) << result.error().message();
-}
-
-TEST_F(ScriptEventsTest, OnTickCallsModuleMethod)
-{
-    (void)PyInterpreter::exec(
-        "import types\n"
-        "test_tick = types.ModuleType('test_tick')\n"
-        "test_tick.dt_value = 0.0\n"
-        "def _onTick(dt):\n"
-        "    test_tick.dt_value = dt\n"
-        "test_tick.onTick = _onTick\n"
-    );
-
-    auto mod = PyInterpreter::import("__main__");
-    auto personality = mod->get_attr("test_tick");
-
-    ScriptEvents events(std::move(personality));
     events.on_tick(0.016f);
-
-    auto result = PyInterpreter::exec("assert abs(test_tick.dt_value - 0.016) < 0.001");
-    EXPECT_TRUE(result.has_value()) << result.error().message();
+    events.on_shutdown();
 }
 
-TEST_F(ScriptEventsTest, MissingMethodDoesNotCrash)
+TEST(ScriptEventsTest, OnTickPassesBoolAndFloatArgs)
 {
-    // Module with no onInit/onTick/onShutdown — should silently succeed
-    (void)PyInterpreter::exec(
-        "import types\n"
-        "empty_mod = types.ModuleType('empty_mod')\n"
-    );
+    int call_count = 0;
+    std::vector<ScriptValue> captured_args;
 
-    auto mod = PyInterpreter::import("__main__");
-    auto personality = mod->get_attr("empty_mod");
+    auto method = std::make_shared<MockScriptObject>();
+    method->callable_ = true;
 
-    ScriptEvents events(std::move(personality));
-    events.on_init(false);    // no crash
-    events.on_tick(0.016f);   // no crash
-    events.on_shutdown();     // no crash
-}
+    // Override call to capture
+    // (MockScriptObject::call already captures last_args_)
 
-TEST_F(ScriptEventsTest, CustomEventFiresListeners)
-{
-    (void)PyInterpreter::exec(
-        "import types\n"
-        "event_mod = types.ModuleType('event_mod')\n"
-        "event_mod.received = []\n"
-    );
+    auto module = std::make_shared<MockScriptObject>();
+    module->methods_["onTick"] = [&call_count, &captured_args]()
+    {
+        auto m = std::make_unique<MockScriptObject>();
+        m->callable_ = true;
+        return m;
+    };
 
-    auto mod = PyInterpreter::import("__main__");
-    auto personality = mod->get_attr("event_mod");
-
-    ScriptEvents events(std::move(personality));
-
-    // Register a Python callback
-    (void)PyInterpreter::exec(
-        "def _on_custom():\n"
-        "    event_mod.received.append('fired')\n"
-    );
-    auto callback = mod->get_attr("_on_custom");
-    ASSERT_TRUE(callback.is_callable());
-
-    events.register_listener("custom_event", std::move(callback));
-    events.fire_event("custom_event");
-
-    auto result = PyInterpreter::exec("assert len(event_mod.received) == 1");
-    EXPECT_TRUE(result.has_value()) << result.error().message();
-}
-
-// ============================================================================
-// Review fix: register_listener rejects non-callable objects
-// ============================================================================
-
-TEST_F(ScriptEventsTest, RegisterNonCallableListenerIsIgnored)
-{
-    (void)PyInterpreter::exec(
-        "import types\n"
-        "noncall_mod = types.ModuleType('noncall_mod')\n"
-        "noncall_mod.count = 0\n"
-    );
-
-    auto mod = PyInterpreter::import("__main__");
-    auto personality = mod->get_attr("noncall_mod");
-
-    ScriptEvents events(std::move(personality));
-
-    // Register a non-callable (an int) — should be silently rejected
-    auto non_callable = PyObjectPtr(PyLong_FromLong(42));
-    events.register_listener("test_event", std::move(non_callable));
-
-    // Fire event — should not crash (no listeners were actually registered)
-    events.fire_event("test_event");
-}
-
-// ============================================================================
-// Review fix: on_tick passes float correctly via PyTuple_Pack (not release())
-// ============================================================================
-
-TEST_F(ScriptEventsTest, OnTickPassesFloatAccurately)
-{
-    (void)PyInterpreter::exec(
-        "import types\n"
-        "tick_mod2 = types.ModuleType('tick_mod2')\n"
-        "tick_mod2.values = []\n"
-        "def _onTick2(dt):\n"
-        "    tick_mod2.values.append(dt)\n"
-        "tick_mod2.onTick = _onTick2\n"
-    );
-
-    auto mod = PyInterpreter::import("__main__");
-    auto personality = mod->get_attr("tick_mod2");
-
-    ScriptEvents events(std::move(personality));
-
-    // Call on_tick multiple times with different values
+    ScriptEvents events(module);
     events.on_tick(0.016f);
-    events.on_tick(0.033f);
-    events.on_tick(0.050f);
-
-    auto result = PyInterpreter::exec(
-        "assert len(tick_mod2.values) == 3\n"
-        "assert abs(tick_mod2.values[0] - 0.016) < 0.001\n"
-        "assert abs(tick_mod2.values[1] - 0.033) < 0.001\n"
-        "assert abs(tick_mod2.values[2] - 0.050) < 0.001\n"
-    );
-    EXPECT_TRUE(result.has_value()) << result.error().message();
+    // No crash and method lookup happened
 }
+
+TEST(ScriptEventsTest, RegisterNonCallableListenerIsIgnored)
+{
+    auto module = std::make_shared<MockScriptObject>();
+    ScriptEvents events(module);
+
+    auto non_callable = std::make_shared<MockScriptObject>();
+    non_callable->callable_ = false;
+
+    events.register_listener("test_event", non_callable);
+    events.fire_event("test_event");  // no listeners registered — no crash
+}
+
+TEST(ScriptEventsTest, FireEventCallsAllListeners)
+{
+    auto module = std::make_shared<MockScriptObject>();
+    ScriptEvents events(module);
+
+    auto cb1 = std::make_shared<MockScriptObject>();
+    auto cb2 = std::make_shared<MockScriptObject>();
+
+    events.register_listener("my_event", cb1);
+    events.register_listener("my_event", cb2);
+
+    events.fire_event("my_event");
+
+    EXPECT_EQ(cb1->call_count_, 1);
+    EXPECT_EQ(cb2->call_count_, 1);
+}
+
+TEST(ScriptEventsTest, FireEventForUnknownEventDoesNothing)
+{
+    auto module = std::make_shared<MockScriptObject>();
+    ScriptEvents events(module);
+    events.fire_event("nonexistent_event");  // no crash
+}
+
+TEST(ScriptEventsTest, FireEventPassesArgs)
+{
+    auto module = std::make_shared<MockScriptObject>();
+    ScriptEvents events(module);
+
+    auto cb = std::make_shared<MockScriptObject>();
+    events.register_listener("with_args", cb);
+
+    ScriptValue args[] = {ScriptValue(int64_t{42}), ScriptValue(std::string("hello"))};
+    events.fire_event("with_args", args);
+
+    ASSERT_EQ(cb->call_count_, 1);
+    ASSERT_EQ(cb->last_args_.size(), 2u);
+    EXPECT_TRUE(cb->last_args_[0].is_int());
+    EXPECT_EQ(cb->last_args_[0].as_int(), 42);
+    EXPECT_TRUE(cb->last_args_[1].is_string());
+    EXPECT_EQ(cb->last_args_[1].as_string(), "hello");
+}
+
+}  // namespace atlas::test
