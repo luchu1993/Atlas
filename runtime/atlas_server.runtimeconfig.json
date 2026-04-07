@@ -1,0 +1,19 @@
+{
+  "runtimeOptions": {
+    "tfm": "net9.0",
+    "framework": {
+      "name": "Microsoft.NETCore.App",
+      "version": "9.0.0"
+    },
+    "configProperties": {
+      "System.GC.Server": true,
+      "System.GC.Concurrent": true,
+      "System.GC.DynamicAdaptationMode": 1,
+      "System.Runtime.TieredCompilation": true,
+      "System.Runtime.TieredCompilation.QuickJit": true,
+      "System.Runtime.TieredCompilation.QuickJitForLoops": true,
+      "System.Threading.ThreadPool.MinThreads": 4,
+      "System.GC.HeapHardLimitPercent": 80
+    }
+  }
+}

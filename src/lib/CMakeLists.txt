@@ -8,7 +8,7 @@ add_subdirectory(serialization)
 add_subdirectory(resmgr)
 add_subdirectory(network)
 add_subdirectory(script)
-# add_subdirectory(clrscript)  # ScriptPhase 1 时启用
+add_subdirectory(clrscript)
 add_subdirectory(entitydef)
 add_subdirectory(connection)
 add_subdirectory(db)

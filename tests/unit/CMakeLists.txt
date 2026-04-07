@@ -153,3 +153,21 @@ atlas_add_test(test_dynamic_library
     SOURCES test_dynamic_library.cpp
     DEPS atlas_platform
 )
+
+# ── ScriptPhase 1: CLR host smoke test ───────────────────────────────────────
+
+# Build the C# smoke test assembly before running the C++ test
+atlas_build_csharp_project(tests/csharp/Atlas.SmokeTest)
+
+atlas_add_test(test_clr_host
+    SOURCES test_clr_host.cpp
+    DEPS atlas_clrscript
+)
+
+target_compile_definitions(test_clr_host PRIVATE
+    ATLAS_SOURCE_DIR="${CMAKE_SOURCE_DIR}"
+    ATLAS_BINARY_DIR="${CMAKE_BINARY_DIR}"
+)
+
+# Ensure the C# assembly is built before the C++ test runs
+add_dependencies(test_clr_host csharp_tests_csharp_Atlas_SmokeTest)

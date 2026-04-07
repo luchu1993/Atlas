@@ -50,6 +50,10 @@ __pycache__/
 .Python
 *.egg-info/
 
+# C# build artifacts
+tests/csharp/**/obj/
+tests/csharp/**/bin/
+
 # Editor backups
 *~
 *.swp

@@ -43,6 +43,9 @@ FetchContent_Declare(
 )
 FetchContent_MakeAvailable(rapidjson)
 
+# ── .NET SDK (for CLR scripting) ─────────────────────────────────────────────
+include(${CMAKE_SOURCE_DIR}/cmake/FindDotNet.cmake)
+
 # ── OpenSSL (optional at Phase 2) ────────────────────────────────────────────
 # find_package(OpenSSL REQUIRED)
 
