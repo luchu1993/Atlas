@@ -21,3 +21,4 @@ target_link_libraries(atlas_clrscript
 target_include_directories(atlas_clrscript
     PRIVATE ${DOTNET_HOSTFXR_INCLUDE}
 )
+

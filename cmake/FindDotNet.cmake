@@ -119,8 +119,9 @@ else()
         "(run: dotnet workload restore).")
 endif()
 
-# ── Locate nethost static library (provides get_hostfxr_path) ────────────────
-# On Windows: nethost.lib  On Linux/macOS: libnethost.a or libnethost.so
+# ── Locate nethost import library (provides get_hostfxr_path) ────────────────
+# On Windows: link nethost.lib (import lib for nethost.dll).
+# On Linux/macOS: link libnethost.a (static) or libnethost.so.
 
 if(WIN32)
     find_file(DOTNET_NETHOST_LIB
@@ -143,6 +144,19 @@ if(NOT DOTNET_NETHOST_LIB)
 endif()
 
 message(STATUS "Found nethost lib: ${DOTNET_NETHOST_LIB}")
+
+# On Windows, nethost.lib is an import library — nethost.dll must be deployed
+# alongside any executable that uses atlas_clrscript.
+if(WIN32)
+    find_file(DOTNET_NETHOST_DLL
+        NAMES nethost.dll
+        PATHS "${DOTNET_HOSTFXR_INCLUDE}"
+        NO_DEFAULT_PATH
+    )
+    if(DOTNET_NETHOST_DLL)
+        message(STATUS "Found nethost dll: ${DOTNET_NETHOST_DLL}")
+    endif()
+endif()
 
 set(DOTNET_FOUND TRUE)
 

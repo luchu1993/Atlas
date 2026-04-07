@@ -171,3 +171,14 @@ target_compile_definitions(test_clr_host PRIVATE
 
 # Ensure the C# assembly is built before the C++ test runs
 add_dependencies(test_clr_host csharp_tests_csharp_Atlas_SmokeTest)
+
+# On Windows, copy nethost.dll next to the test binary so gtest_discover_tests
+# and ctest can find it without requiring it to be on the system PATH.
+if(WIN32 AND DOTNET_NETHOST_DLL)
+    add_custom_command(TARGET test_clr_host POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "${DOTNET_NETHOST_DLL}"
+            "$<TARGET_FILE_DIR:test_clr_host>/nethost.dll"
+        COMMENT "Copying nethost.dll alongside test_clr_host"
+    )
+endif()
