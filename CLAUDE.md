@@ -64,7 +64,7 @@ Distributed multi-process architecture:
 - **foundation** — core utilities (logging, memory, containers, time)
 - **network** — sockets, event dispatcher, channels, messages
 - **serialization** — binary streams, XML/JSON parsing
-- **script / pyscript** — Python 3 scripting integration
+- **script** — language-agnostic scripting abstraction (ScriptEngine / ScriptValue / ScriptObject)
 - **entitydef** — entity type definitions, data types, mailbox
 - **connection** — client-server protocol definitions
 - **db / db_mysql / db_xml** — database abstraction and backends
@@ -98,3 +98,28 @@ ctest --test-dir build
 # Run specific test
 ./build/bin/tests/test_hello
 ```
+
+## Pre-Commit Requirements
+
+Before every commit, ensure the following two checks pass:
+
+**1. All unit tests pass**
+
+```bash
+ctest --test-dir build --output-on-failure
+```
+
+**2. clang-format has no violations**
+
+```bash
+# Check (dry-run)
+clang-format --dry-run --Werror <changed files>
+
+# Fix in place
+clang-format -i <changed files>
+```
+
+On Windows, clang-format is at:
+`C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Tools\Llvm\x64\bin\clang-format.exe`
+
+Do not commit if either check fails. Fix the issues first, then re-stage and commit.
