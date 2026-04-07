@@ -154,6 +154,27 @@ atlas_add_test(test_dynamic_library
     DEPS atlas_platform
 )
 
+# ── ScriptPhase 2: NativeApi provider + atlas_engine shared library ──────────
+
+atlas_add_test(test_native_api_provider
+    SOURCES test_native_api_provider.cpp
+    DEPS atlas_clrscript
+)
+
+atlas_add_test(test_native_api_exports
+    SOURCES test_native_api_exports.cpp
+    DEPS atlas_platform
+)
+
+# Use $<TARGET_FILE_DIR:atlas_engine> so the path is correct for both
+# single-config generators (Ninja: bin/) and multi-config (MSVC: bin/Debug/).
+target_compile_definitions(test_native_api_exports PRIVATE
+    ATLAS_ENGINE_DIR="$<TARGET_FILE_DIR:atlas_engine>"
+)
+
+# Ensure atlas_engine is built before the export-check test runs.
+add_dependencies(test_native_api_exports atlas_engine)
+
 # ── ScriptPhase 1: CLR host smoke test ───────────────────────────────────────
 
 # Build the C# smoke test assembly before running the C++ test
