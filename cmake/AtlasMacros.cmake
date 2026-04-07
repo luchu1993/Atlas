@@ -124,5 +124,6 @@ function(atlas_add_test target)
     include(GoogleTest)
     gtest_discover_tests(${target}
         DISCOVERY_TIMEOUT 30
+        DISCOVERY_MODE PRE_TEST
     )
 endfunction()
