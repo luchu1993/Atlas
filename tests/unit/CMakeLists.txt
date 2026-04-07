@@ -154,6 +154,13 @@ atlas_add_test(test_dynamic_library
     DEPS atlas_platform
 )
 
+# ── ScriptPhase 2: Marshal layer ─────────────────────────────────────────────
+
+atlas_add_test(test_clr_marshal
+    SOURCES test_clr_marshal.cpp
+    DEPS atlas_clrscript
+)
+
 # ── ScriptPhase 2: NativeApi provider + atlas_engine shared library ──────────
 
 atlas_add_test(test_native_api_provider

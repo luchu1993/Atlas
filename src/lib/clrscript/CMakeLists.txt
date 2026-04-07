@@ -6,9 +6,11 @@ atlas_add_library(atlas_clrscript
         $<$<PLATFORM_ID:Windows>:clr_host_windows.cpp>
         $<$<PLATFORM_ID:Linux>:clr_host_linux.cpp>
         native_api_provider.cpp
+        clr_marshal.cpp
     DEPS
         atlas_foundation
         atlas_platform
+        atlas_math
         atlas_script
 )
 
