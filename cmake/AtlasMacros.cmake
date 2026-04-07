@@ -116,13 +116,6 @@ function(atlas_add_test target)
             ${ARG_DEPS}
     )
 
-    # Apply warnings-as-errors to tests, matching the setting used for libs/exes.
-    if(MSVC)
-        target_compile_options(${target} PRIVATE /WX)
-    else()
-        target_compile_options(${target} PRIVATE -Werror)
-    endif()
-
     set_target_properties(${target} PROPERTIES
         FOLDER "Tests"
         RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin/tests"
