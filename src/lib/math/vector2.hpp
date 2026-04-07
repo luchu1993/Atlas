@@ -19,7 +19,11 @@ struct Vector2
     constexpr auto operator+(const Vector2& v) const -> Vector2 { return {x + v.x, y + v.y}; }
     constexpr auto operator-(const Vector2& v) const -> Vector2 { return {x - v.x, y - v.y}; }
     constexpr auto operator*(float s) const -> Vector2 { return {x * s, y * s}; }
-    constexpr auto operator/(float s) const -> Vector2 { return {x / s, y / s}; }
+    constexpr auto operator/(float s) const -> Vector2
+    {
+        assert(s != 0.0f && "Vector2 division by zero");
+        return {x / s, y / s};
+    }
     constexpr auto operator-() const -> Vector2 { return {-x, -y}; }
 
     constexpr auto operator+=(const Vector2& v) -> Vector2&

@@ -11,6 +11,10 @@
 #include <string_view>
 #include <thread>
 
+#if defined(_MSC_VER)
+#include <intrin.h>
+#endif
+
 namespace atlas
 {
 
@@ -32,7 +36,19 @@ public:
     {
         while (flag_.test_and_set(std::memory_order_acquire))
         {
-            // Spin -- optionally add _mm_pause / yield hint
+            // Inner loop re-reads without a costly test_and_set until the flag
+            // looks free, then retries the atomic exchange.  The pause hint
+            // reduces pipeline pressure and improves hyper-thread throughput.
+            while (flag_.test(std::memory_order_relaxed))
+            {
+#if defined(_MSC_VER)
+                _mm_pause();
+#elif defined(__x86_64__) || defined(__i386__)
+                __builtin_ia32_pause();
+#else
+                std::this_thread::yield();
+#endif
+            }
         }
     }
 

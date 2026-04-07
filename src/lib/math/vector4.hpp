@@ -25,7 +25,11 @@ struct Vector4
         return {x - v.x, y - v.y, z - v.z, w - v.w};
     }
     constexpr auto operator*(float s) const -> Vector4 { return {x * s, y * s, z * s, w * s}; }
-    constexpr auto operator/(float s) const -> Vector4 { return {x / s, y / s, z / s, w / s}; }
+    constexpr auto operator/(float s) const -> Vector4
+    {
+        assert(s != 0.0f && "Vector4 division by zero");
+        return {x / s, y / s, z / s, w / s};
+    }
     constexpr auto operator-() const -> Vector4 { return {-x, -y, -z, -w}; }
 
     constexpr auto operator+=(const Vector4& v) -> Vector4&

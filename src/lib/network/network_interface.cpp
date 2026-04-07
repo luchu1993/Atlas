@@ -54,8 +54,10 @@ auto NetworkInterface::start_tcp_server(const Address& addr) -> Result<void>
         return sock.error();
     }
 
-    sock->set_reuse_addr(true);
-    sock->set_non_blocking(true);
+    if (auto r = sock->set_reuse_addr(true); !r)
+        return r.error();
+    if (auto r = sock->set_non_blocking(true); !r)
+        return r.error();
 
     auto bind_result = sock->bind(addr);
     if (!bind_result)
@@ -107,7 +109,8 @@ auto NetworkInterface::connect_tcp(const Address& addr) -> Result<TcpChannel*>
         return sock.error();
     }
 
-    sock->set_non_blocking(true);
+    if (auto r = sock->set_non_blocking(true); !r)
+        return r.error();
 
     auto conn = sock->connect(addr);
     if (!conn && conn.error().code() != ErrorCode::WouldBlock)
@@ -155,8 +158,10 @@ auto NetworkInterface::start_udp(const Address& addr) -> Result<void>
         return sock.error();
     }
 
-    sock->set_reuse_addr(true);
-    sock->set_non_blocking(true);
+    if (auto r = sock->set_reuse_addr(true); !r)
+        return r.error();
+    if (auto r = sock->set_non_blocking(true); !r)
+        return r.error();
 
     auto bind_result = sock->bind(addr);
     if (!bind_result)
@@ -257,6 +262,16 @@ void NetworkInterface::prepare_for_shutdown()
 void NetworkInterface::do_task()
 {
     process_condemned_channels();
+
+    if (rate_limit_ > 0)
+    {
+        auto now = Clock::now();
+        if (now - last_rate_cleanup_ >= kRateCleanupInterval)
+        {
+            cleanup_stale_rate_trackers();
+            last_rate_cleanup_ = now;
+        }
+    }
 }
 
 // ============================================================================
@@ -424,6 +439,14 @@ auto NetworkInterface::check_rate_limit(uint32_t ip) -> bool
 
     ++tracker.count;
     return tracker.count <= rate_limit_;
+}
+
+void NetworkInterface::cleanup_stale_rate_trackers()
+{
+    // Remove entries whose window started more than 2 seconds ago (i.e. inactive IPs).
+    auto now = Clock::now();
+    std::erase_if(rate_trackers_, [now](const auto& kv)
+                  { return (now - kv.second.window_start) > std::chrono::seconds(2); });
 }
 
 }  // namespace atlas

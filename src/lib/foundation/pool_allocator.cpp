@@ -1,5 +1,6 @@
 #include "foundation/pool_allocator.hpp"
 
+#include <cassert>
 #include <cstdlib>
 #include <cstring>
 
@@ -14,6 +15,10 @@ PoolAllocator::PoolAllocator(std::size_t block_size, std::size_t initial_blocks)
 
 PoolAllocator::~PoolAllocator()
 {
+    // In debug builds, catch callers that destroy the pool while blocks are
+    // still live.  This indicates a lifetime bug in the caller.
+    assert(in_use_ == 0 && "PoolAllocator destroyed with blocks still in use");
+
     Chunk* chunk = chunks_;
     while (chunk)
     {

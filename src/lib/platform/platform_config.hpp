@@ -1,5 +1,6 @@
 #pragma once
 
+#include <bit>
 #include <cstddef>
 
 // ============================================================================
@@ -65,7 +66,7 @@ inline constexpr bool is_msvc = static_cast<bool>(ATLAS_COMPILER_MSVC);
 inline constexpr bool is_clang = static_cast<bool>(ATLAS_COMPILER_CLANG);
 inline constexpr bool is_gcc = static_cast<bool>(ATLAS_COMPILER_GCC);
 
-inline constexpr bool is_little_endian = true;
+inline constexpr bool is_little_endian = (std::endian::native == std::endian::little);
 inline constexpr std::size_t cache_line_size = 64;
 
 }  // namespace atlas::platform

@@ -4,6 +4,7 @@
 
 #include <cstdint>
 #include <functional>
+#include <unordered_map>
 #include <vector>
 
 namespace atlas
@@ -69,6 +70,8 @@ private:
     };
 
     std::vector<Node*> heap_;
+    // O(1) lookup for cancel(): id → Node* (does not own the node)
+    std::unordered_map<uint64_t, Node*> index_;
     uint64_t next_id_{1};
 
     void purge_cancelled();

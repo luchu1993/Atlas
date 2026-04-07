@@ -1,5 +1,6 @@
 #pragma once
 
+#include <algorithm>
 #include <cmath>
 #include <numbers>
 
@@ -29,10 +30,12 @@ template <typename T>
     return val < lo ? lo : (val > hi ? hi : val);
 }
 
-[[nodiscard]] constexpr auto almost_equal(float a, float b, float epsilon = kEpsilon) -> bool
+// Uses relative + absolute epsilon to handle both large and very small values.
+[[nodiscard]] inline auto almost_equal(float a, float b, float rel_eps = 1e-5f,
+                                       float abs_eps = kEpsilon) -> bool
 {
-    float diff = a - b;
-    return diff >= -epsilon && diff <= epsilon;
+    float diff = std::abs(a - b);
+    return diff <= std::max(std::abs(a), std::abs(b)) * rel_eps + abs_eps;
 }
 
 }  // namespace atlas::math

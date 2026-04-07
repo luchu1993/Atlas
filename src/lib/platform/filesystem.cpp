@@ -25,6 +25,11 @@ namespace atlas::fs
     auto size = file.tellg();
     file.seekg(0, std::ios::beg);
 
+    if (size < 0)
+    {
+        return Error{ErrorCode::IoError, "Failed to determine file size: " + path.string()};
+    }
+
     std::vector<std::byte> buffer(static_cast<std::size_t>(size));
     file.read(reinterpret_cast<char*>(buffer.data()), size);
 

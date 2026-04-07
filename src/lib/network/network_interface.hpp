@@ -72,6 +72,7 @@ private:
 
     // Rate limiting
     auto check_rate_limit(uint32_t ip) -> bool;
+    void cleanup_stale_rate_trackers();
 
     EventDispatcher& dispatcher_;
     InterfaceTable interface_table_;
@@ -104,6 +105,8 @@ private:
     };
     std::unordered_map<uint32_t, RateTracker> rate_trackers_;  // keyed by IP (net order)
     uint32_t rate_limit_{0};                                   // 0 = disabled
+    TimePoint last_rate_cleanup_{};
+    static constexpr Duration kRateCleanupInterval = std::chrono::seconds(60);
 
     bool shutting_down_{false};
 };

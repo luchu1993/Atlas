@@ -1,6 +1,7 @@
-#include <gtest/gtest.h>
-#include "foundation/pool_allocator.hpp"
 #include "foundation/memory_tracker.hpp"
+#include "foundation/pool_allocator.hpp"
+
+#include <gtest/gtest.h>
 
 #include <set>
 #include <string>
@@ -29,6 +30,8 @@ TEST(PoolAllocator, ReuseAfterDeallocation)
     void* p2 = pool.allocate();
     EXPECT_NE(p2, nullptr);
     EXPECT_EQ(pool.blocks_in_use(), 1u);
+    pool.deallocate(p2);
+    EXPECT_EQ(pool.blocks_in_use(), 0u);
 }
 
 TEST(PoolAllocator, GrowBeyondInitialCapacity)

@@ -36,8 +36,10 @@ set(RAPIDJSON_BUILD_TESTS    OFF CACHE BOOL "" FORCE)
 FetchContent_Declare(
     rapidjson
     GIT_REPOSITORY https://github.com/Tencent/rapidjson.git
-    GIT_TAG        v1.1.0
-    GIT_SHALLOW    TRUE
+    # v1.1.0 (2016) is outdated; master has decades of bug fixes and C++11 improvements.
+    # Pin to a known-good commit for reproducible builds.
+    GIT_TAG        ab1842a2dae061284c0a62dca1cc6d5e7e37e346
+    GIT_SHALLOW    FALSE
 )
 FetchContent_MakeAvailable(rapidjson)
 

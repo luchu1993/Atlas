@@ -38,8 +38,11 @@ public:
 
 private:
     static std::atomic<bool> initialized_;
-    static PyObjectPtr dumps_;
-    static PyObjectPtr loads_;
+    // Raw pointers: no destructor, so static cleanup never touches a dead
+    // interpreter.  finalize() is the sole owner and must Py_XDECREF them
+    // before Py_Finalize() is called.
+    static PyObject* dumps_;
+    static PyObject* loads_;
 };
 
 }  // namespace atlas

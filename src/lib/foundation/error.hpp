@@ -194,27 +194,28 @@ template <typename E>
 class Result<void, E>
 {
 public:
-    Result() noexcept : has_value_(true) {}
+    // Success: no E is constructed.
+    Result() noexcept : storage_(std::in_place_index<0>) {}
 
     Result(const E& error) noexcept(std::is_nothrow_copy_constructible_v<E>)
-        : error_(error), has_value_(false)
+        : storage_(std::in_place_index<1>, error)
     {
     }
 
     Result(E&& error) noexcept(std::is_nothrow_move_constructible_v<E>)
-        : error_(std::move(error)), has_value_(false)
+        : storage_(std::in_place_index<1>, std::move(error))
     {
     }
 
-    [[nodiscard]] auto has_value() const noexcept -> bool { return has_value_; }
+    [[nodiscard]] auto has_value() const noexcept -> bool { return storage_.index() == 0; }
 
-    [[nodiscard]] explicit operator bool() const noexcept { return has_value_; }
+    [[nodiscard]] explicit operator bool() const noexcept { return has_value(); }
 
-    [[nodiscard]] auto error() const& -> const E& { return error_; }
+    [[nodiscard]] auto error() const& -> const E& { return std::get<1>(storage_); }
 
 private:
-    E error_;
-    bool has_value_;
+    // index 0 = success (monostate), index 1 = error
+    std::variant<std::monostate, E> storage_;
 };
 
 }  // namespace atlas

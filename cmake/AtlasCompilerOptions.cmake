@@ -44,7 +44,14 @@ else()
 endif()
 
 # ── Sanitizers ───────────────────────────────────────────────────────────────
-if(NOT MSVC)
+if(MSVC)
+    if(ATLAS_ENABLE_ASAN)
+        # MSVC ASan support (VS 2019 16.9+)
+        add_compile_options(/fsanitize=address)
+        # MSVC ASan does not require separate link flags
+    endif()
+    # MSVC does not support TSan or UBSan
+else()
     if(ATLAS_ENABLE_ASAN)
         add_compile_options(-fsanitize=address -fno-omit-frame-pointer)
         add_link_options(-fsanitize=address)

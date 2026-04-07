@@ -26,4 +26,9 @@ using SignalCallback = std::function<void(Signal)>;
 void install_signal_handler(Signal sig, SignalCallback callback);
 void remove_signal_handler(Signal sig);
 
+// Must be called periodically from the main event loop (e.g. EventDispatcher).
+// The OS signal handlers only set a pending flag; this function dispatches the
+// registered callbacks in a safe (non-signal) context.
+void dispatch_pending_signals();
+
 }  // namespace atlas

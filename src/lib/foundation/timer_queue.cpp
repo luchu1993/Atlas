@@ -1,7 +1,8 @@
 #include "foundation/timer_queue.hpp"
 
+#include "foundation/callback_utils.hpp"
+
 #include <algorithm>
-#include <exception>
 
 namespace atlas
 {
@@ -19,6 +20,7 @@ auto TimerQueue::schedule(TimePoint when, Callback callback) -> TimerHandle
     auto* node = new Node{next_id_++, when, Duration::zero(), std::move(callback), false};
     heap_.push_back(node);
     std::push_heap(heap_.begin(), heap_.end(), HeapCompare{});
+    index_[node->id] = node;
     return TimerHandle(node->id);
 }
 
@@ -28,20 +30,21 @@ auto TimerQueue::schedule_repeating(TimePoint first_fire, Duration interval, Cal
     auto* node = new Node{next_id_++, first_fire, interval, std::move(callback), false};
     heap_.push_back(node);
     std::push_heap(heap_.begin(), heap_.end(), HeapCompare{});
+    index_[node->id] = node;
     return TimerHandle(node->id);
 }
 
 auto TimerQueue::cancel(TimerHandle handle) -> bool
 {
-    for (auto* node : heap_)
+    // O(1) lookup via index instead of O(N) heap scan
+    auto it = index_.find(handle.id());
+    if (it == index_.end())
     {
-        if (node->id == handle.id())
-        {
-            node->cancelled = true;
-            return true;
-        }
+        return false;
     }
-    return false;
+    it->second->cancelled = true;
+    index_.erase(it);
+    return true;
 }
 
 auto TimerQueue::process(TimePoint now) -> uint32_t
@@ -56,28 +59,23 @@ auto TimerQueue::process(TimePoint now) -> uint32_t
 
         if (node->cancelled)
         {
+            // Already removed from index_ in cancel()
             delete node;
             continue;
         }
 
-        try
-        {
-            node->callback(TimerHandle(node->id));
-        }
-        catch (...)
-        {
-            delete node;
-            throw;
-        }
+        safe_invoke("TimerQueue callback", [&] { node->callback(TimerHandle(node->id)); });
 
         if (node->interval > Duration::zero())
         {
             node->fire_time += node->interval;
             heap_.push_back(node);
             std::push_heap(heap_.begin(), heap_.end(), HeapCompare{});
+            // node stays in index_ — it can still be cancelled
         }
         else
         {
+            index_.erase(node->id);
             delete node;
         }
 
@@ -114,6 +112,7 @@ void TimerQueue::clear()
         delete node;
     }
     heap_.clear();
+    index_.clear();
 }
 
 void TimerQueue::purge_cancelled()

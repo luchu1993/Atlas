@@ -5,7 +5,8 @@
 
 #include <algorithm>
 #include <cctype>
-#include <stdexcept>
+#include <charconv>
+#include <cstring>
 
 namespace atlas
 {
@@ -45,14 +46,14 @@ auto DataSection::read_int(std::string_view key, int32_t default_val) const -> i
     {
         return default_val;
     }
-    try
-    {
-        return std::stoi(std::string(c->value()));
-    }
-    catch (...)
+    auto sv = c->value();
+    int32_t result{};
+    auto [ptr, ec] = std::from_chars(sv.data(), sv.data() + sv.size(), result);
+    if (ec != std::errc{})
     {
         return default_val;
     }
+    return result;
 }
 
 auto DataSection::read_uint(std::string_view key, uint32_t default_val) const -> uint32_t
@@ -62,14 +63,14 @@ auto DataSection::read_uint(std::string_view key, uint32_t default_val) const ->
     {
         return default_val;
     }
-    try
-    {
-        return static_cast<uint32_t>(std::stoul(std::string(c->value())));
-    }
-    catch (...)
+    auto sv = c->value();
+    uint32_t result{};
+    auto [ptr, ec] = std::from_chars(sv.data(), sv.data() + sv.size(), result);
+    if (ec != std::errc{})
     {
         return default_val;
     }
+    return result;
 }
 
 auto DataSection::read_float(std::string_view key, float default_val) const -> float
@@ -79,14 +80,14 @@ auto DataSection::read_float(std::string_view key, float default_val) const -> f
     {
         return default_val;
     }
-    try
-    {
-        return std::stof(std::string(c->value()));
-    }
-    catch (...)
+    auto sv = c->value();
+    float result{};
+    auto [ptr, ec] = std::from_chars(sv.data(), sv.data() + sv.size(), result);
+    if (ec != std::errc{})
     {
         return default_val;
     }
+    return result;
 }
 
 auto DataSection::read_bool(std::string_view key, bool default_val) const -> bool

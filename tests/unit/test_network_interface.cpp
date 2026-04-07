@@ -1,8 +1,9 @@
-#include <gtest/gtest.h>
-#include "network/network_interface.hpp"
 #include "network/event_dispatcher.hpp"
-#include "network/tcp_channel.hpp"
 #include "network/message.hpp"
+#include "network/network_interface.hpp"
+#include "network/tcp_channel.hpp"
+
+#include <gtest/gtest.h>
 
 #include <array>
 #include <chrono>
@@ -27,10 +28,28 @@ struct NetTestMsg
     static auto deserialize(BinaryReader& r) -> Result<NetTestMsg>
     {
         auto v = r.read<uint32_t>();
-        if (!v) return v.error();
+        if (!v)
+            return v.error();
         return NetTestMsg{*v};
     }
 };
+
+// Poll dispatcher until predicate returns true or timeout expires.
+// Avoids flaky sleep_for patterns.
+template <typename Pred>
+static bool poll_until(EventDispatcher& dispatcher, Pred pred,
+                       std::chrono::milliseconds timeout = std::chrono::milliseconds(500))
+{
+    auto deadline = std::chrono::steady_clock::now() + timeout;
+    while (std::chrono::steady_clock::now() < deadline)
+    {
+        dispatcher.process_once();
+        if (pred())
+            return true;
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+    return false;
+}
 
 class NetworkInterfaceTest : public ::testing::Test
 {
@@ -38,10 +57,7 @@ protected:
     EventDispatcher dispatcher_{"test"};
     NetworkInterface ni_{dispatcher_};
 
-    void SetUp() override
-    {
-        dispatcher_.set_max_poll_wait(Milliseconds(1));
-    }
+    void SetUp() override { dispatcher_.set_max_poll_wait(Milliseconds(1)); }
 };
 
 TEST_F(NetworkInterfaceTest, StartTcpServer)
@@ -67,12 +83,8 @@ TEST_F(NetworkInterfaceTest, TcpConnectAndAccept)
     ASSERT_TRUE(connect_result.has_value()) << connect_result.error().message();
     EXPECT_NE(*connect_result, nullptr);
 
-    // Wait for connection and process accept
-    std::this_thread::sleep_for(std::chrono::milliseconds(50));
-    dispatcher_.process_once();
-
-    // Should have at least the outgoing channel
-    EXPECT_GE(ni_.channel_count(), 1u);
+    // Poll until the accept event is processed (≥1 channel)
+    EXPECT_TRUE(poll_until(dispatcher_, [&] { return ni_.channel_count() >= 1u; }));
 }
 
 TEST_F(NetworkInterfaceTest, TcpMessageDispatch)
@@ -83,24 +95,22 @@ TEST_F(NetworkInterfaceTest, TcpMessageDispatch)
     auto server_addr = ni_.tcp_address();
 
     // Register handler
-    bool received = false;
-    uint32_t received_value = 0;
+    std::atomic<bool> received{false};
+    std::atomic<uint32_t> received_value{0};
     ni_.interface_table().register_typed_handler<NetTestMsg>(
         [&](const Address&, Channel*, const NetTestMsg& msg)
         {
-            received = true;
-            received_value = msg.value;
+            received_value.store(msg.value, std::memory_order_relaxed);
+            received.store(true, std::memory_order_release);
         });
 
-    // Create a client socket, connect, and send a message
+    // Create a client socket and connect
     auto client_sock = Socket::create_tcp();
     ASSERT_TRUE(client_sock.has_value());
     (void)client_sock->connect(server_addr);
 
-    std::this_thread::sleep_for(std::chrono::milliseconds(50));
-    dispatcher_.process_once();  // accept
-
-    std::this_thread::sleep_for(std::chrono::milliseconds(50));
+    // Poll until accept event processed (channel appears on server side)
+    ASSERT_TRUE(poll_until(dispatcher_, [&] { return ni_.channel_count() >= 1u; }));
 
     // Build and send a framed message from client
     Bundle bundle;
@@ -117,11 +127,10 @@ TEST_F(NetworkInterfaceTest, TcpMessageDispatch)
     auto sent = client_sock->send(frame);
     ASSERT_TRUE(sent.has_value()) << sent.error().message();
 
-    std::this_thread::sleep_for(std::chrono::milliseconds(50));
-    dispatcher_.process_once();  // receive and dispatch
+    // Poll until the message handler fires
+    ASSERT_TRUE(poll_until(dispatcher_, [&] { return received.load(std::memory_order_acquire); }));
 
-    EXPECT_TRUE(received);
-    EXPECT_EQ(received_value, 42u);
+    EXPECT_EQ(received_value.load(), 42u);
 }
 
 TEST_F(NetworkInterfaceTest, FindChannel)
@@ -142,26 +151,64 @@ TEST_F(NetworkInterfaceTest, PrepareForShutdown)
 
 TEST_F(NetworkInterfaceTest, RateLimitRejectsExcess)
 {
-    ni_.set_rate_limit(2);  // 2 packets per second per IP
+    ni_.set_rate_limit(2);  // max 2 packets per second per IP
 
     auto result = ni_.start_udp(Address("127.0.0.1", 0));
     ASSERT_TRUE(result.has_value());
     auto udp_addr = ni_.udp_address();
 
-    // Send 5 UDP packets rapidly from a sender
     auto sender = Socket::create_udp();
     ASSERT_TRUE(sender.has_value());
 
-    std::array<std::byte, 4> data = {std::byte{0}, std::byte{0}, std::byte{0}, std::byte{0}};
-    for (int i = 0; i < 5; ++i)
+    // Burst 10 packets instantly — rate limiter should cap accepted channels at 2
+    std::array<std::byte, 4> data{};
+    for (int i = 0; i < 10; ++i)
     {
         (void)sender->send_to(data, udp_addr);
     }
 
-    std::this_thread::sleep_for(std::chrono::milliseconds(50));
-    dispatcher_.process_once();
+    // Drain the receive buffer
+    poll_until(dispatcher_, [&] { return false; }, std::chrono::milliseconds(50));
 
-    // With rate limit of 2, only 2 should create channels or be processed
-    // (exact behavior depends on how fast packets arrive, but channel count should be limited)
-    // At minimum, this should not crash
+    // channel_count reflects accepted UDP "sessions" — must not exceed rate limit
+    EXPECT_LE(ni_.channel_count(), 2u);
+}
+
+// ============================================================================
+// Shutdown: connect_tcp must fail after prepare_for_shutdown
+// ============================================================================
+
+TEST_F(NetworkInterfaceTest, ConnectAfterShutdownReturnsError)
+{
+    auto result = ni_.start_tcp_server(Address("127.0.0.1", 0));
+    ASSERT_TRUE(result.has_value());
+
+    ni_.prepare_for_shutdown();
+
+    auto conn = ni_.connect_tcp(ni_.tcp_address());
+    EXPECT_FALSE(conn.has_value());
+}
+
+// ============================================================================
+// Channel lifecycle: condemn removes channel, count returns to 0
+// ============================================================================
+
+TEST_F(NetworkInterfaceTest, ChannelCountAfterDisconnect)
+{
+    auto server_result = ni_.start_tcp_server(Address("127.0.0.1", 0));
+    ASSERT_TRUE(server_result.has_value());
+
+    auto conn = ni_.connect_tcp(ni_.tcp_address());
+    ASSERT_TRUE(conn.has_value());
+
+    // Wait for accept
+    ASSERT_TRUE(poll_until(dispatcher_, [&] { return ni_.channel_count() >= 1u; }));
+
+    // Calling prepare_for_shutdown condemns all channels
+    ni_.prepare_for_shutdown();
+
+    // After draining, condemned channels should be cleaned up
+    poll_until(dispatcher_, [&] { return false; }, std::chrono::milliseconds(100));
+
+    EXPECT_EQ(ni_.channel_count(), 0u);
 }

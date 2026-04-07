@@ -24,6 +24,10 @@ TcpChannel::~TcpChannel()
     }
 }
 
+// ============================================================================
+// Receive path
+// ============================================================================
+
 void TcpChannel::on_readable()
 {
     std::array<std::byte, 8192> temp{};
@@ -34,7 +38,7 @@ void TcpChannel::on_readable()
         {
             if (result.error().code() == ErrorCode::WouldBlock)
             {
-                break;  // no more data available
+                break;
             }
             ATLAS_LOG_WARNING("TcpChannel recv error from {}: {}", remote_.to_string(),
                               result.error().message());
@@ -44,7 +48,6 @@ void TcpChannel::on_readable()
 
         if (*result == 0)
         {
-            // Peer closed connection (orderly shutdown)
             on_disconnect();
             return;
         }
@@ -52,8 +55,8 @@ void TcpChannel::on_readable()
         recv_buffer_.insert(recv_buffer_.end(), temp.data(), temp.data() + *result);
         on_data_received(std::span<const std::byte>(temp.data(), *result));
 
-        // Backpressure: if recv buffer too large, condemn
-        if (recv_buffer_.size() > kMaxRecvBufferSize)
+        // Backpressure: if unread recv data too large, condemn
+        if (recv_buffer_.size() - recv_read_pos_ > kMaxRecvBufferSize)
         {
             ATLAS_LOG_ERROR("TcpChannel recv buffer overflow from {}", remote_.to_string());
             on_disconnect();
@@ -68,18 +71,19 @@ void TcpChannel::process_recv_buffer()
 {
     while (true)
     {
-        // Need at least frame header (4 bytes)
-        if (recv_buffer_.size() < kFrameHeaderSize)
+        std::size_t available = recv_buffer_.size() - recv_read_pos_;
+
+        if (available < kFrameHeaderSize)
         {
             break;
         }
 
-        // Read frame length (first 4 bytes, little-endian)
+        const std::byte* head = recv_buffer_.data() + recv_read_pos_;
+
         uint32_t frame_length;
-        std::memcpy(&frame_length, recv_buffer_.data(), sizeof(uint32_t));
+        std::memcpy(&frame_length, head, sizeof(uint32_t));
         frame_length = endian::from_little(frame_length);
 
-        // Sanity check
         if (frame_length > kMaxBundleSize)
         {
             ATLAS_LOG_ERROR("TcpChannel oversized frame {} from {}", frame_length,
@@ -88,22 +92,30 @@ void TcpChannel::process_recv_buffer()
             return;
         }
 
-        // Check if we have the full frame
         std::size_t total = kFrameHeaderSize + frame_length;
-        if (recv_buffer_.size() < total)
+        if (available < total)
         {
-            break;  // wait for more data
+            break;
         }
 
-        // Extract frame and dispatch messages
-        auto* frame_start = recv_buffer_.data() + kFrameHeaderSize;
+        const std::byte* frame_start = head + kFrameHeaderSize;
         dispatch_messages(std::span<const std::byte>(frame_start, frame_length));
 
-        // Consume from recv buffer
-        recv_buffer_.erase(recv_buffer_.begin(),
-                           recv_buffer_.begin() + static_cast<std::ptrdiff_t>(total));
+        recv_read_pos_ += total;
+
+        // Compact: once the consumed prefix exceeds half the buffer, shift.
+        if (recv_read_pos_ > recv_buffer_.size() / 2)
+        {
+            recv_buffer_.erase(recv_buffer_.begin(),
+                               recv_buffer_.begin() + static_cast<std::ptrdiff_t>(recv_read_pos_));
+            recv_read_pos_ = 0;
+        }
     }
 }
+
+// ============================================================================
+// Write path
+// ============================================================================
 
 void TcpChannel::on_writable()
 {
@@ -112,7 +124,6 @@ void TcpChannel::on_writable()
 
 auto TcpChannel::do_send(std::span<const std::byte> data) -> Result<size_t>
 {
-    // Prepend frame header: [uint32 frame_length LE]
     uint32_t frame_length = endian::to_little(static_cast<uint32_t>(data.size()));
     auto* header_bytes = reinterpret_cast<const std::byte*>(&frame_length);
 
@@ -126,14 +137,16 @@ auto TcpChannel::do_send(std::span<const std::byte> data) -> Result<size_t>
 
 void TcpChannel::try_flush_write_buffer()
 {
-    while (!write_buffer_.empty())
+    while (write_read_pos_ < write_buffer_.size())
     {
-        auto result = socket_.send(write_buffer_);
+        std::span<const std::byte> unsent(write_buffer_.data() + write_read_pos_,
+                                          write_buffer_.size() - write_read_pos_);
+
+        auto result = socket_.send(unsent);
         if (!result)
         {
             if (result.error().code() == ErrorCode::WouldBlock)
             {
-                // Register for write events to flush later
                 update_write_interest();
                 return;
             }
@@ -143,12 +156,22 @@ void TcpChannel::try_flush_write_buffer()
             return;
         }
 
-        // Erase sent bytes
-        write_buffer_.erase(write_buffer_.begin(),
-                            write_buffer_.begin() + static_cast<std::ptrdiff_t>(*result));
+        write_read_pos_ += *result;
+
+        // Compact once consumed prefix exceeds half the buffer.
+        if (write_read_pos_ > write_buffer_.size() / 2)
+        {
+            write_buffer_.erase(
+                write_buffer_.begin(),
+                write_buffer_.begin() + static_cast<std::ptrdiff_t>(write_read_pos_));
+            write_read_pos_ = 0;
+        }
     }
 
-    // All data flushed - remove write interest if registered
+    // All data flushed — reset to empty state without reallocation.
+    write_buffer_.clear();
+    write_read_pos_ = 0;
+
     if (write_registered_)
     {
         update_write_interest();
@@ -157,7 +180,7 @@ void TcpChannel::try_flush_write_buffer()
 
 void TcpChannel::update_write_interest()
 {
-    bool need_write = !write_buffer_.empty();
+    bool need_write = (write_read_pos_ < write_buffer_.size());
     if (need_write && !write_registered_)
     {
         auto interest = IOEvent::Readable | IOEvent::Writable;

@@ -12,6 +12,18 @@ namespace atlas::xml
 namespace
 {
 
+// Store XML attributes as child nodes with the "@name" naming convention,
+// mirroring the BigWorld .def file format expectations.
+void add_attributes(DataSection::Ptr& section, const pugi::xml_node& node)
+{
+    for (auto attr = node.first_attribute(); attr; attr = attr.next_attribute())
+    {
+        std::string key = "@";
+        key += attr.name();
+        section->add_child(std::move(key), std::string(attr.value()));
+    }
+}
+
 void populate_section(DataSection::Ptr& section, const pugi::xml_node& node)
 {
     for (auto child = node.first_child(); child; child = child.next_sibling())
@@ -35,7 +47,6 @@ void populate_section(DataSection::Ptr& section, const pugi::xml_node& node)
         DataSection::Ptr child_section;
         if (!child_has_elements)
         {
-            // Leaf — store text as value
             child_section = section->add_child(std::string(child.name()),
                                                std::string(child.text().as_string()));
         }
@@ -44,7 +55,49 @@ void populate_section(DataSection::Ptr& section, const pugi::xml_node& node)
             child_section = section->add_child(std::string(child.name()));
             populate_section(child_section, child);
         }
+
+        add_attributes(child_section, child);
     }
+}
+
+// Shared post-parse logic: build a DataSection tree from a loaded document.
+auto build_section_from_doc(pugi::xml_document& doc) -> Result<DataSection::Ptr>
+{
+    auto root_node = doc.first_child();
+    while (root_node && root_node.type() != pugi::node_element)
+    {
+        root_node = root_node.next_sibling();
+    }
+
+    if (!root_node)
+    {
+        return Error(ErrorCode::InvalidArgument, "XML document has no root element");
+    }
+
+    auto root = std::make_shared<DataSection>(std::string(root_node.name()));
+
+    bool has_element_children = false;
+    for (auto child = root_node.first_child(); child; child = child.next_sibling())
+    {
+        if (child.type() == pugi::node_element)
+        {
+            has_element_children = true;
+            break;
+        }
+    }
+
+    if (!has_element_children)
+    {
+        root->set_value(root_node.text().as_string());
+    }
+    else
+    {
+        populate_section(root, root_node);
+    }
+
+    add_attributes(root, root_node);
+
+    return root;
 }
 
 }  // anonymous namespace
@@ -67,41 +120,7 @@ auto parse_file(const std::filesystem::path& path) -> Result<DataSection::Ptr>
         return Error(ErrorCode::IoError, std::move(msg));
     }
 
-    auto root_node = doc.first_child();
-    // Skip declaration nodes
-    while (root_node && root_node.type() != pugi::node_element)
-    {
-        root_node = root_node.next_sibling();
-    }
-
-    if (!root_node)
-    {
-        return Error(ErrorCode::InvalidArgument, "XML document has no root element");
-    }
-
-    auto root = std::make_shared<DataSection>(std::string(root_node.name()));
-
-    // If root has text but no element children, set value
-    bool has_element_children = false;
-    for (auto child = root_node.first_child(); child; child = child.next_sibling())
-    {
-        if (child.type() == pugi::node_element)
-        {
-            has_element_children = true;
-            break;
-        }
-    }
-
-    if (!has_element_children)
-    {
-        root->set_value(root_node.text().as_string());
-    }
-    else
-    {
-        populate_section(root, root_node);
-    }
-
-    return root;
+    return build_section_from_doc(doc);
 }
 
 auto parse_string(std::string_view xml) -> Result<DataSection::Ptr>
@@ -118,39 +137,7 @@ auto parse_string(std::string_view xml) -> Result<DataSection::Ptr>
         return Error(ErrorCode::InvalidArgument, std::move(msg));
     }
 
-    auto root_node = doc.first_child();
-    while (root_node && root_node.type() != pugi::node_element)
-    {
-        root_node = root_node.next_sibling();
-    }
-
-    if (!root_node)
-    {
-        return Error(ErrorCode::InvalidArgument, "XML document has no root element");
-    }
-
-    auto root = std::make_shared<DataSection>(std::string(root_node.name()));
-
-    bool has_element_children = false;
-    for (auto child = root_node.first_child(); child; child = child.next_sibling())
-    {
-        if (child.type() == pugi::node_element)
-        {
-            has_element_children = true;
-            break;
-        }
-    }
-
-    if (!has_element_children)
-    {
-        root->set_value(root_node.text().as_string());
-    }
-    else
-    {
-        populate_section(root, root_node);
-    }
-
-    return root;
+    return build_section_from_doc(doc);
 }
 
 }  // namespace atlas::xml

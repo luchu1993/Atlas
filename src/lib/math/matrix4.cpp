@@ -204,9 +204,11 @@ auto Matrix4::inversed() const -> Matrix4
 
 auto Matrix4::get_scale() const -> Vector3
 {
-    float sx = Vector3{m[0], m[4], m[8]}.length();
-    float sy = Vector3{m[1], m[5], m[9]}.length();
-    float sz = Vector3{m[2], m[6], m[10]}.length();
+    // Row-major: row i is m[i*4 .. i*4+3]. Scale is the length of each row's
+    // xyz part (i.e., the basis vectors stored in rows 0-2).
+    float sx = Vector3{m[0], m[1], m[2]}.length();
+    float sy = Vector3{m[4], m[5], m[6]}.length();
+    float sz = Vector3{m[8], m[9], m[10]}.length();
     return {sx, sy, sz};
 }
 

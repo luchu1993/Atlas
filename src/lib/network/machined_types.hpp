@@ -136,6 +136,12 @@ struct QueryResponse
         if (!count)
             return count.error();
 
+        constexpr uint32_t kMaxProcesses = 10000;
+        if (*count > kMaxProcesses)
+        {
+            return Error{ErrorCode::InvalidArgument, "QueryResponse: process count exceeds limit"};
+        }
+
         QueryResponse resp;
         resp.processes.reserve(*count);
         for (uint32_t i = 0; i < *count; ++i)

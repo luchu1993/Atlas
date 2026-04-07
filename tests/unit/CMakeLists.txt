@@ -168,3 +168,23 @@ atlas_add_test(test_atlas_module
     SOURCES test_atlas_module.cpp
     DEPS atlas_pyscript
 )
+
+atlas_add_test(test_machined_types
+    SOURCES test_machined_types.cpp
+    DEPS atlas_network
+)
+
+atlas_add_test(test_signal_handler
+    SOURCES test_signal_handler.cpp
+    DEPS atlas_platform
+)
+
+atlas_add_test(test_log_sinks
+    SOURCES test_log_sinks.cpp
+    DEPS atlas_foundation
+)
+
+atlas_add_test(test_dynamic_library
+    SOURCES test_dynamic_library.cpp
+    DEPS atlas_platform
+)

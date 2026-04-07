@@ -305,66 +305,82 @@ void ReliableUdpChannel::on_datagram_received(std::span<const std::byte> data)
 
 void ReliableUdpChannel::process_ack(SeqNum ack_num, uint32_t ack_bits)
 {
-    // Collect ACK'd sequence numbers first
+    // --- Phase 1: Process explicit ACKs via direct map lookup ---
+    //
+    // The ACK window covers ack_num and the 32 packets before it.
+    // Instead of iterating all N unacked entries and testing each,
+    // iterate the (at most 33) possible ACK'd seq numbers and find()
+    // directly in the map — O(33·log N) vs O(N).
     std::vector<SeqNum> acked_seqs;
+    auto now = Clock::now();
 
-    auto it = unacked_.begin();
-    while (it != unacked_.end())
+    // ack_num itself is always ACK'd
+    for (int32_t diff = 0; diff <= 32; ++diff)
     {
-        if (ack_bits_test(ack_bits, ack_num, it->first))
+        SeqNum candidate = ack_num - static_cast<SeqNum>(diff);
+        if (diff > 0 && !(ack_bits & (1u << (diff - 1))))
         {
-            // ACK'd -- update RTT if first send (Karn's algorithm)
-            if (it->second.send_count == 1)
-            {
-                auto sample = Clock::now() - it->second.sent_at;
-                update_rtt(sample);
-            }
-            acked_seqs.push_back(it->first);
-            it = unacked_.erase(it);
+            continue;  // bit not set — not ACK'd
         }
-        else if (seq_less_than(it->first, ack_num) && seq_diff(ack_num, it->first) > 32)
+
+        auto it = unacked_.find(candidate);
+        if (it == unacked_.end())
         {
-            // Too old, outside ack_bits window -- consider lost
-            it = unacked_.erase(it);
+            continue;
         }
-        else
+
+        // ACK'd — update RTT with Karn's algorithm (first send only)
+        if (it->second.send_count == 1)
         {
-            ++it;
+            update_rtt(now - it->second.sent_at);
         }
+        acked_seqs.push_back(candidate);
+        unacked_.erase(it);
     }
 
-    // Congestion window growth on successful ACKs
+    // --- Phase 2: Purge entries too old for the ACK window (O(N)) ---
+    // These are sequences more than 32 behind ack_num — considered lost.
+    std::erase_if(unacked_, [ack_num](const auto& kv)
+                  { return seq_less_than(kv.first, ack_num) && seq_diff(ack_num, kv.first) > 32; });
+
+    // Congestion window growth
     if (!acked_seqs.empty())
     {
         on_ack_cwnd_update(static_cast<uint32_t>(acked_seqs.size()));
     }
 
-    // Fast retransmit: for remaining unacked packets, if a LATER packet
-    // was just ACK'd, increment the skip count. When skip_count reaches
-    // the threshold, retransmit immediately without waiting for RTO.
+    // --- Phase 3: Fast retransmit ---
+    // For each remaining unacked packet, if ANY newer packet was just ACK'd
+    // (i.e., seq < max(acked_seqs)), increment its skip_count once.
+    // Using the max is O(N + |acked|) instead of O(N × |acked|).
     bool fast_resent = false;
     if (fast_resend_thresh_ > 0 && !acked_seqs.empty())
     {
+        // Find the newest acked sequence (highest in wrapping sense)
+        SeqNum max_acked = acked_seqs[0];
+        for (SeqNum s : acked_seqs)
+        {
+            if (seq_less_than(max_acked, s))
+            {
+                max_acked = s;
+            }
+        }
+
         for (auto& [seq, pkt] : unacked_)
         {
-            for (auto acked : acked_seqs)
+            if (seq_less_than(seq, max_acked))
             {
-                if (seq_less_than(seq, acked))
-                {
-                    pkt.skip_count++;
-                    break;  // only count once per ACK batch
-                }
+                pkt.skip_count++;
             }
 
             if (pkt.skip_count >= fast_resend_thresh_)
             {
-                // Fast retransmit!
                 auto result = shared_socket_.send_to(pkt.data, remote_);
                 if (result)
                 {
                     bytes_sent_ += *result;
                 }
-                pkt.sent_at = Clock::now();
+                pkt.sent_at = now;
                 pkt.send_count++;
                 pkt.skip_count = 0;
 
@@ -375,7 +391,7 @@ void ReliableUdpChannel::process_ack(SeqNum ack_num, uint32_t ack_bits)
 
         if (fast_resent)
         {
-            on_loss_cwnd_update(false);  // fast retransmit loss
+            on_loss_cwnd_update(false);
         }
     }
 

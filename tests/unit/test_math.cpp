@@ -1,10 +1,11 @@
-#include <gtest/gtest.h>
+#include "math/math_types.hpp"
+#include "math/matrix4.hpp"
+#include "math/quaternion.hpp"
 #include "math/vector2.hpp"
 #include "math/vector3.hpp"
 #include "math/vector4.hpp"
-#include "math/matrix4.hpp"
-#include "math/quaternion.hpp"
-#include "math/math_types.hpp"
+
+#include <gtest/gtest.h>
 
 #include <cmath>
 
@@ -254,18 +255,21 @@ TEST(MathConstants, PiAndDegToRad)
 
 TEST(MathConstants, AlmostEqualPositiveDifference)
 {
+    // For values near 1.0, tolerance ≈ rel_eps(1e-5) * 1.0 + abs_eps(1e-6) ≈ 1.1e-5.
+    // A difference of 1e-7 is well within tolerance; a difference of 1e-3 is clearly outside.
     EXPECT_TRUE(almost_equal(1.0f, 1.0f));
-    EXPECT_TRUE(almost_equal(1.0f, 1.0f + kEpsilon * 0.5f));
-    EXPECT_FALSE(almost_equal(1.0f, 1.0f + kEpsilon * 2.0f));
+    EXPECT_TRUE(almost_equal(1.0f, 1.0f + 1e-7f));
+    EXPECT_FALSE(almost_equal(1.0f, 1.0f + 1e-3f));
 }
 
 TEST(MathConstants, AlmostEqualNegativeDifference)
 {
-    // This was the bug: a < b case was not handled correctly
-    EXPECT_TRUE(almost_equal(1.0f, 1.0f - kEpsilon * 0.5f));
-    EXPECT_FALSE(almost_equal(1.0f, 1.0f - kEpsilon * 2.0f));
-    EXPECT_TRUE(almost_equal(0.0f, -kEpsilon * 0.5f));
-    EXPECT_FALSE(almost_equal(0.0f, -kEpsilon * 2.0f));
+    // Symmetric with the positive case.
+    EXPECT_TRUE(almost_equal(1.0f, 1.0f - 1e-7f));
+    EXPECT_FALSE(almost_equal(1.0f, 1.0f - 1e-3f));
+    // Near zero: only abs_eps governs, so kEpsilon * 0.5 (5e-7) passes, 1e-3 fails.
+    EXPECT_TRUE(almost_equal(0.0f, 5e-7f));
+    EXPECT_FALSE(almost_equal(0.0f, 1e-3f));
 }
 
 TEST(MathConstants, AlmostEqualSymmetric)
@@ -446,4 +450,256 @@ TEST(Vector3, DistanceAndDistanceSquared)
     Vector3 b{4, 0, 0};
     EXPECT_NEAR(a.distance(b), 3.0f, 1e-5f);
     EXPECT_NEAR(a.distance_squared(b), 9.0f, 1e-5f);
+}
+
+// ============================================================================
+// Matrix4::get_scale  (row-major correctness regression)
+// ============================================================================
+
+TEST(Matrix4, GetScaleUniform)
+{
+    auto m = Matrix4::scale({3.0f, 3.0f, 3.0f});
+    auto s = m.get_scale();
+    EXPECT_NEAR(s.x, 3.0f, 1e-5f);
+    EXPECT_NEAR(s.y, 3.0f, 1e-5f);
+    EXPECT_NEAR(s.z, 3.0f, 1e-5f);
+}
+
+TEST(Matrix4, GetScaleNonUniform)
+{
+    auto m = Matrix4::scale({2.0f, 3.0f, 5.0f});
+    auto s = m.get_scale();
+    EXPECT_NEAR(s.x, 2.0f, 1e-5f);
+    EXPECT_NEAR(s.y, 3.0f, 1e-5f);
+    EXPECT_NEAR(s.z, 5.0f, 1e-5f);
+}
+
+TEST(Matrix4, GetScaleFromTRS)
+{
+    // Translation * Scale: scale must survive the composition
+    auto t = Matrix4::translation({10.0f, 20.0f, 30.0f});
+    auto sc = Matrix4::scale({4.0f, 4.0f, 4.0f});
+    auto trs = t * sc;
+    auto extracted = trs.get_scale();
+    EXPECT_NEAR(extracted.x, 4.0f, 1e-5f);
+    EXPECT_NEAR(extracted.y, 4.0f, 1e-5f);
+    EXPECT_NEAR(extracted.z, 4.0f, 1e-5f);
+}
+
+// ============================================================================
+// Quaternion::slerp  (cos_theta clamp — no NaN on identical quaternions)
+// ============================================================================
+
+TEST(Quaternion, SlerpIdenticalNonNaN)
+{
+    // Identical unit quaternions → dot = 1.0 exactly (or > 1.0 due to FP).
+    // Before the clamp fix, acos(>1) returned NaN.
+    auto q = Quaternion::from_axis_angle({0, 1, 0}, 1.0f);
+    auto r = slerp(q, q, 0.5f);
+
+    EXPECT_FALSE(std::isnan(r.x));
+    EXPECT_FALSE(std::isnan(r.y));
+    EXPECT_FALSE(std::isnan(r.z));
+    EXPECT_FALSE(std::isnan(r.w));
+    // Result should equal the input quaternion
+    EXPECT_NEAR(r.x, q.x, 1e-5f);
+    EXPECT_NEAR(r.y, q.y, 1e-5f);
+    EXPECT_NEAR(r.z, q.z, 1e-5f);
+    EXPECT_NEAR(r.w, q.w, 1e-5f);
+}
+
+TEST(Quaternion, SlerpHalfwayIsNormalized)
+{
+    auto a = Quaternion::identity();
+    auto b = Quaternion::from_axis_angle({0, 1, 0}, 1.5708f);  // ~90 deg
+    auto mid = slerp(a, b, 0.5f);
+    float len = std::sqrt(mid.x * mid.x + mid.y * mid.y + mid.z * mid.z + mid.w * mid.w);
+    EXPECT_NEAR(len, 1.0f, 1e-5f);
+}
+
+// ============================================================================
+// Matrix4::look_at
+// ============================================================================
+
+TEST(Matrix4, LookAtForwardIsNegativeZ)
+{
+    // Camera at origin looking toward +Z (standard OpenGL/row-major convention:
+    // forward stored as -Z in the view row).
+    auto m = Matrix4::look_at({0, 0, 0}, {0, 0, 1}, {0, 1, 0});
+    // The third row (row 2) of a look_at encodes -forward in our convention.
+    Vector3 neg_forward{m(2, 0), m(2, 1), m(2, 2)};
+    EXPECT_NEAR(neg_forward.x, 0.0f, 1e-5f);
+    EXPECT_NEAR(neg_forward.y, 0.0f, 1e-5f);
+    EXPECT_NEAR(neg_forward.z, -1.0f, 1e-5f);
+}
+
+TEST(Matrix4, LookAtTransformsEyeToOrigin)
+{
+    Vector3 eye{3, 4, 5};
+    auto m = Matrix4::look_at(eye, {0, 0, 0}, {0, 1, 0});
+    // The view matrix should map the eye position to (0,0,0) in view space.
+    auto p = m.transform_point(eye);
+    EXPECT_NEAR(p.x, 0.0f, 1e-4f);
+    EXPECT_NEAR(p.y, 0.0f, 1e-4f);
+    EXPECT_NEAR(p.z, 0.0f, 1e-4f);
+}
+
+TEST(Matrix4, LookAtRightVectorIsOrthogonalToUp)
+{
+    auto m = Matrix4::look_at({1, 2, 3}, {4, 5, 6}, {0, 1, 0});
+    // Row 0 is "right", row 1 is "up" in our look_at
+    Vector3 right{m(0, 0), m(0, 1), m(0, 2)};
+    Vector3 up{m(1, 0), m(1, 1), m(1, 2)};
+    EXPECT_NEAR(right.dot(up), 0.0f, 1e-5f);
+}
+
+// ============================================================================
+// Matrix4::transposed
+// ============================================================================
+
+TEST(Matrix4, TransposedSwapsRowAndColumn)
+{
+    auto m = Matrix4::translation({1, 2, 3});
+    auto t = m.transposed();
+    for (int row = 0; row < 4; ++row)
+    {
+        for (int col = 0; col < 4; ++col)
+        {
+            EXPECT_NEAR(t(row, col), m(col, row), 1e-6f) << "at [" << row << "," << col << "]";
+        }
+    }
+}
+
+TEST(Matrix4, TransposedTwiceIsOriginal)
+{
+    auto m = Matrix4::rotation_z(0.7f);
+    auto tt = m.transposed().transposed();
+    for (int row = 0; row < 4; ++row)
+    {
+        for (int col = 0; col < 4; ++col)
+        {
+            EXPECT_NEAR(tt(row, col), m(row, col), 1e-6f);
+        }
+    }
+}
+
+TEST(Matrix4, TransposedIdentityIsIdentity)
+{
+    auto id = Matrix4::identity();
+    auto t = id.transposed();
+    for (int i = 0; i < 4; ++i)
+    {
+        for (int j = 0; j < 4; ++j)
+        {
+            EXPECT_NEAR(t(i, j), id(i, j), 1e-6f);
+        }
+    }
+}
+
+// ============================================================================
+// Quaternion::operator*  (composition)
+// ============================================================================
+
+TEST(Quaternion, MultiplyRotationsCompose)
+{
+    // 90° around Z twice = 180° around Z
+    auto q90 = Quaternion::from_axis_angle(Vector3::unit_z(), kHalfPi);
+    auto q180 = q90 * q90;
+
+    // Rotating unit_x by 180° around Z should yield -unit_x
+    auto v = q180.rotate(Vector3::unit_x());
+    EXPECT_NEAR(v.x, -1.0f, 1e-4f);
+    EXPECT_NEAR(v.y, 0.0f, 1e-4f);
+    EXPECT_NEAR(v.z, 0.0f, 1e-4f);
+}
+
+TEST(Quaternion, MultiplyByIdentityIsNoop)
+{
+    auto q = Quaternion::from_axis_angle({1, 1, 0}, deg_to_rad(45.0f));
+    auto result = q * Quaternion::identity();
+    EXPECT_NEAR(result.x, q.x, 1e-5f);
+    EXPECT_NEAR(result.y, q.y, 1e-5f);
+    EXPECT_NEAR(result.z, q.z, 1e-5f);
+    EXPECT_NEAR(result.w, q.w, 1e-5f);
+}
+
+TEST(Quaternion, MultiplyResultIsNormalized)
+{
+    auto a = Quaternion::from_axis_angle(Vector3::unit_x(), deg_to_rad(30.0f));
+    auto b = Quaternion::from_axis_angle(Vector3::unit_y(), deg_to_rad(60.0f));
+    auto c = a * b;
+    EXPECT_NEAR(c.length(), 1.0f, 1e-5f);
+}
+
+// ============================================================================
+// Quaternion::inversed
+// ============================================================================
+
+TEST(Quaternion, InversedTimesOriginalIsIdentity)
+{
+    auto q = Quaternion::from_axis_angle({1, 1, 1}, deg_to_rad(72.0f));
+    auto q_inv = q.inversed();
+    auto product = q * q_inv;
+
+    EXPECT_NEAR(product.x, 0.0f, 1e-5f);
+    EXPECT_NEAR(product.y, 0.0f, 1e-5f);
+    EXPECT_NEAR(product.z, 0.0f, 1e-5f);
+    EXPECT_NEAR(product.w, 1.0f, 1e-5f);
+}
+
+TEST(Quaternion, InversedOfIdentityIsIdentity)
+{
+    auto id = Quaternion::identity();
+    auto inv = id.inversed();
+    EXPECT_NEAR(inv.x, 0.0f, 1e-5f);
+    EXPECT_NEAR(inv.y, 0.0f, 1e-5f);
+    EXPECT_NEAR(inv.z, 0.0f, 1e-5f);
+    EXPECT_NEAR(inv.w, 1.0f, 1e-5f);
+}
+
+TEST(Quaternion, InversedRevertsRotation)
+{
+    auto q = Quaternion::from_axis_angle(Vector3::unit_y(), deg_to_rad(90.0f));
+    auto q_inv = q.inversed();
+    // Rotate then un-rotate should return the original vector
+    Vector3 v{1, 0, 0};
+    auto rotated = q.rotate(v);
+    auto restored = q_inv.rotate(rotated);
+    EXPECT_NEAR(restored.x, v.x, 1e-4f);
+    EXPECT_NEAR(restored.y, v.y, 1e-4f);
+    EXPECT_NEAR(restored.z, v.z, 1e-4f);
+}
+
+// ============================================================================
+// Quaternion::from_euler
+// ============================================================================
+
+TEST(Quaternion, FromEulerPureYawMatchesAxisAngle)
+{
+    // Pure yaw (rotation around Y) should match from_axis_angle(unit_y, angle)
+    float angle = deg_to_rad(45.0f);
+    auto q_euler = Quaternion::from_euler(0.0f, angle, 0.0f);
+    auto q_axis = Quaternion::from_axis_angle(Vector3::unit_y(), angle);
+
+    // Both should rotate unit_x the same way
+    auto v_euler = q_euler.rotate(Vector3::unit_x());
+    auto v_axis = q_axis.rotate(Vector3::unit_x());
+    EXPECT_NEAR(v_euler.x, v_axis.x, 1e-4f);
+    EXPECT_NEAR(v_euler.y, v_axis.y, 1e-4f);
+    EXPECT_NEAR(v_euler.z, v_axis.z, 1e-4f);
+}
+
+TEST(Quaternion, FromEulerZeroAnglesIsIdentity)
+{
+    auto q = Quaternion::from_euler(0.0f, 0.0f, 0.0f);
+    EXPECT_NEAR(q.x, 0.0f, 1e-5f);
+    EXPECT_NEAR(q.y, 0.0f, 1e-5f);
+    EXPECT_NEAR(q.z, 0.0f, 1e-5f);
+    EXPECT_NEAR(q.w, 1.0f, 1e-5f);
+}
+
+TEST(Quaternion, FromEulerResultIsNormalized)
+{
+    auto q = Quaternion::from_euler(0.3f, 0.7f, 1.2f);
+    EXPECT_NEAR(q.length(), 1.0f, 1e-5f);
 }

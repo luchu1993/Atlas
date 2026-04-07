@@ -2,6 +2,8 @@
 
 #include "math/matrix4.hpp"
 
+#include <algorithm>
+
 namespace atlas::math
 {
 
@@ -192,6 +194,9 @@ auto slerp(const Quaternion& a, const Quaternion& b, float t) -> Quaternion
         b_adj = {-b.x, -b.y, -b.z, -b.w};
         cos_theta = -cos_theta;
     }
+
+    // Clamp to [-1, 1] to guard against floating-point error causing acos(NaN)
+    cos_theta = std::clamp(cos_theta, -1.0f, 1.0f);
 
     // If very close, use normalized linear interpolation
     if (cos_theta > 0.9999f)

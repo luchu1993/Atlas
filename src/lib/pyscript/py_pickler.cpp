@@ -9,8 +9,8 @@ namespace atlas
 {
 
 std::atomic<bool> PyPickler::initialized_{false};
-PyObjectPtr PyPickler::dumps_;
-PyObjectPtr PyPickler::loads_;
+PyObject* PyPickler::dumps_{nullptr};
+PyObject* PyPickler::loads_{nullptr};
 
 auto PyPickler::initialize() -> Result<void>
 {
@@ -26,13 +26,20 @@ auto PyPickler::initialize() -> Result<void>
         return Error(ErrorCode::ScriptImportError, "Failed to import pickle module");
     }
 
-    dumps_ = mod.get_attr("dumps");
-    loads_ = mod.get_attr("loads");
+    auto dumps_ptr = mod.get_attr("dumps");
+    auto loads_ptr = mod.get_attr("loads");
 
-    if (!dumps_ || !loads_)
+    if (!dumps_ptr || !loads_ptr)
     {
         return Error(ErrorCode::ScriptError, "Failed to get pickle.dumps/loads");
     }
+
+    // Transfer ownership to raw pointers. Increment ref count because
+    // PyObjectPtr will release its own reference on destruction.
+    dumps_ = dumps_ptr.get();
+    Py_INCREF(dumps_);
+    loads_ = loads_ptr.get();
+    Py_INCREF(loads_);
 
     initialized_.store(true, std::memory_order_release);
     return Result<void>{};
@@ -40,8 +47,13 @@ auto PyPickler::initialize() -> Result<void>
 
 void PyPickler::finalize()
 {
-    dumps_ = {};
-    loads_ = {};
+    // Must be called while the interpreter is still alive (before Py_Finalize).
+    // After this, the static pointers are null so their (trivial) static
+    // destructor at program exit is a safe no-op.
+    Py_XDECREF(dumps_);
+    dumps_ = nullptr;
+    Py_XDECREF(loads_);
+    loads_ = nullptr;
     initialized_.store(false, std::memory_order_release);
 }
 
@@ -55,10 +67,9 @@ auto PyPickler::pickle(PyObject* obj) -> Result<std::vector<std::byte>>
     }
 
     // Call pickle.dumps(obj, protocol=5)
-    // Protocol 5 supports out-of-band data (Python 3.8+)
     auto py_protocol = PyObjectPtr(PyLong_FromLong(5));
     auto args = PyObjectPtr(PyTuple_Pack(2, obj, py_protocol.get()));
-    auto result = dumps_.call(args);
+    auto result = PyObjectPtr(PyObject_CallObject(dumps_, args.get()));
 
     if (!result)
     {
@@ -67,7 +78,6 @@ auto PyPickler::pickle(PyObject* obj) -> Result<std::vector<std::byte>>
         return Error(ErrorCode::ScriptError, "pickle.dumps failed: " + err);
     }
 
-    // Result is bytes in Python 3
     if (!PyBytes_Check(result.get()))
     {
         return Error(ErrorCode::ScriptTypeError, "pickle.dumps did not return bytes");
@@ -95,7 +105,7 @@ auto PyPickler::unpickle(std::span<const std::byte> data) -> Result<PyObjectPtr>
     }
 
     auto args = PyObjectPtr(PyTuple_Pack(1, py_bytes.get()));
-    auto result = loads_.call(args);
+    auto result = PyObjectPtr(PyObject_CallObject(loads_, args.get()));
 
     if (!result)
     {

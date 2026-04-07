@@ -48,24 +48,26 @@ auto Logger::level() const -> LogLevel
 void Logger::add_sink(std::shared_ptr<LogSink> sink)
 {
     std::lock_guard lock(mutex_);
-    sinks_.push_back(std::move(sink));
+    // Copy current list, append, publish atomically.
+    auto old = sinks_.load(std::memory_order_acquire);
+    auto next = std::make_shared<SinkList>(*old);
+    next->push_back(std::move(sink));
+    sinks_.store(std::move(next), std::memory_order_release);
 }
 
 void Logger::clear_sinks()
 {
     std::lock_guard lock(mutex_);
-    sinks_.clear();
+    sinks_.store(std::make_shared<SinkList>(), std::memory_order_release);
 }
 
 void Logger::log(LogLevel level, std::string_view category, std::string_view message,
                  const std::source_location& location)
 {
-    std::vector<std::shared_ptr<LogSink>> sinks_copy;
-    {
-        std::lock_guard lock(mutex_);
-        sinks_copy = sinks_;
-    }
-    for (auto& sink : sinks_copy)
+    // Lock-free snapshot load: no mutex, no per-sink atomic refcount churn
+    // beyond the single shared_ptr load.
+    auto snapshot = sinks_.load(std::memory_order_acquire);
+    for (auto& sink : *snapshot)
     {
         sink->write(level, category, message, location);
     }
@@ -73,8 +75,8 @@ void Logger::log(LogLevel level, std::string_view category, std::string_view mes
 
 void Logger::flush()
 {
-    std::lock_guard lock(mutex_);
-    for (auto& sink : sinks_)
+    auto snapshot = sinks_.load(std::memory_order_acquire);
+    for (auto& sink : *snapshot)
     {
         sink->flush();
     }

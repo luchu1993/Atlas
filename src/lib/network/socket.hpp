@@ -42,12 +42,12 @@ public:
         -> Result<size_t>;
     [[nodiscard]] auto recv_from(std::span<std::byte> buffer) -> Result<std::pair<size_t, Address>>;
 
-    // Options
-    void set_non_blocking(bool enable);
-    void set_reuse_addr(bool enable);
-    void set_no_delay(bool enable);
-    void set_send_buffer_size(int size);
-    void set_recv_buffer_size(int size);
+    // Options — return Result<void> so callers can detect and handle failures.
+    [[nodiscard]] auto set_non_blocking(bool enable) -> Result<void>;
+    [[nodiscard]] auto set_reuse_addr(bool enable) -> Result<void>;
+    [[nodiscard]] auto set_no_delay(bool enable) -> Result<void>;
+    [[nodiscard]] auto set_send_buffer_size(int size) -> Result<void>;
+    [[nodiscard]] auto set_recv_buffer_size(int size) -> Result<void>;
 
     // Accessors
     [[nodiscard]] auto fd() const noexcept -> FdHandle { return fd_; }

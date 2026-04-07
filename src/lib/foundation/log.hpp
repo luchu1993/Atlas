@@ -2,6 +2,7 @@
 
 #include "platform/platform_config.hpp"
 
+#include <atomic>
 #include <cstdint>
 #include <format>
 #include <memory>
@@ -63,9 +64,13 @@ public:
 
 private:
     Logger();
+
+    // Sinks are published as an immutable snapshot via atomic shared_ptr.
+    // log() does a single lock-free load; writers serialize with mutex_.
+    using SinkList = std::vector<std::shared_ptr<LogSink>>;
     mutable std::mutex mutex_;
     LogLevel runtime_level_{LogLevel::Trace};
-    std::vector<std::shared_ptr<LogSink>> sinks_;
+    std::atomic<std::shared_ptr<SinkList>> sinks_{std::make_shared<SinkList>()};
 };
 
 // Proxy object to forward format args to std::format properly (avoids MSVC macro issues)

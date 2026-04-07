@@ -1,5 +1,6 @@
-#include <gtest/gtest.h>
 #include "network/socket.hpp"
+
+#include <gtest/gtest.h>
 
 #include <array>
 #include <chrono>
@@ -96,10 +97,8 @@ TEST(Socket, TcpSendRecvLoopback)
     auto& [peer, peer_addr] = *accepted;
 
     // Send data from client
-    std::array<std::byte, 5> send_data = {
-        std::byte{0x48}, std::byte{0x45}, std::byte{0x4C},
-        std::byte{0x4C}, std::byte{0x4F}
-    };
+    std::array<std::byte, 5> send_data = {std::byte{0x48}, std::byte{0x45}, std::byte{0x4C},
+                                          std::byte{0x4C}, std::byte{0x4F}};
 
     // Wait for connection to establish fully
     std::this_thread::sleep_for(std::chrono::milliseconds(50));
@@ -156,7 +155,7 @@ TEST(Socket, BindConflictReturnsAddressInUse)
     auto sock2 = Socket::create_tcp();
     ASSERT_TRUE(sock2.has_value());
     // Disable reuse for this test
-    sock2->set_reuse_addr(false);
+    (void)sock2->set_reuse_addr(false);
     auto result = sock2->bind(addr);
     // On some systems with SO_REUSEADDR this may still succeed for TCP,
     // but for the same exact address it should fail

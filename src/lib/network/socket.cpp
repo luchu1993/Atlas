@@ -182,8 +182,10 @@ auto Socket::create_tcp() -> Result<Socket>
 #endif
 
     Socket sock(fd);
-    sock.set_non_blocking(true);
-    sock.set_reuse_addr(true);
+    if (auto r = sock.set_non_blocking(true); !r)
+        return r.error();
+    if (auto r = sock.set_reuse_addr(true); !r)
+        return r.error();
     return sock;
 }
 
@@ -208,8 +210,10 @@ auto Socket::create_udp() -> Result<Socket>
 #endif
 
     Socket sock(fd);
-    sock.set_non_blocking(true);
-    sock.set_reuse_addr(true);
+    if (auto r = sock.set_non_blocking(true); !r)
+        return r.error();
+    if (auto r = sock.set_reuse_addr(true); !r)
+        return r.error();
     return sock;
 }
 
@@ -264,7 +268,8 @@ auto Socket::accept() -> Result<std::pair<Socket, Address>>
 #endif
 
     Socket client_sock(client_fd);
-    client_sock.set_non_blocking(true);
+    if (auto r = client_sock.set_non_blocking(true); !r)
+        return r.error();
 
     Address client_address(client_addr);
     return std::pair<Socket, Address>{std::move(client_sock), client_address};
@@ -401,48 +406,69 @@ auto Socket::recv_from(std::span<std::byte> buffer) -> Result<std::pair<size_t, 
 // Socket options
 // ============================================================================
 
-void Socket::set_non_blocking(bool enable)
+auto Socket::set_non_blocking(bool enable) -> Result<void>
 {
 #if ATLAS_PLATFORM_WINDOWS
     u_long mode = enable ? 1 : 0;
-    ioctlsocket(static_cast<SOCKET>(fd_), FIONBIO, &mode);
+    if (ioctlsocket(static_cast<SOCKET>(fd_), FIONBIO, &mode) != 0)
+    {
+        return Error{ErrorCode::InternalError, "ioctlsocket(FIONBIO) failed"};
+    }
 #else
     int flags = fcntl(fd_, F_GETFL, 0);
-    if (enable)
+    if (flags < 0)
     {
-        fcntl(fd_, F_SETFL, flags | O_NONBLOCK);
+        return Error{ErrorCode::InternalError, "fcntl(F_GETFL) failed"};
     }
-    else
+    int new_flags = enable ? (flags | O_NONBLOCK) : (flags & ~O_NONBLOCK);
+    if (fcntl(fd_, F_SETFL, new_flags) < 0)
     {
-        fcntl(fd_, F_SETFL, flags & ~O_NONBLOCK);
+        return Error{ErrorCode::InternalError, "fcntl(F_SETFL) failed"};
     }
 #endif
+    return Result<void>{};
 }
 
-void Socket::set_reuse_addr(bool enable)
+auto Socket::set_reuse_addr(bool enable) -> Result<void>
 {
     int optval = enable ? 1 : 0;
-    ::setsockopt(static_cast<decltype(::socket(0, 0, 0))>(fd_), SOL_SOCKET, SO_REUSEADDR,
-                 reinterpret_cast<const char*>(&optval), sizeof(optval));
+    if (::setsockopt(static_cast<decltype(::socket(0, 0, 0))>(fd_), SOL_SOCKET, SO_REUSEADDR,
+                     reinterpret_cast<const char*>(&optval), sizeof(optval)) != 0)
+    {
+        return Error{ErrorCode::InternalError, "setsockopt(SO_REUSEADDR) failed"};
+    }
+    return Result<void>{};
 }
 
-void Socket::set_no_delay(bool enable)
+auto Socket::set_no_delay(bool enable) -> Result<void>
 {
     int optval = enable ? 1 : 0;
-    ::setsockopt(static_cast<decltype(::socket(0, 0, 0))>(fd_), IPPROTO_TCP, TCP_NODELAY,
-                 reinterpret_cast<const char*>(&optval), sizeof(optval));
+    if (::setsockopt(static_cast<decltype(::socket(0, 0, 0))>(fd_), IPPROTO_TCP, TCP_NODELAY,
+                     reinterpret_cast<const char*>(&optval), sizeof(optval)) != 0)
+    {
+        return Error{ErrorCode::InternalError, "setsockopt(TCP_NODELAY) failed"};
+    }
+    return Result<void>{};
 }
 
-void Socket::set_send_buffer_size(int size)
+auto Socket::set_send_buffer_size(int size) -> Result<void>
 {
-    ::setsockopt(static_cast<decltype(::socket(0, 0, 0))>(fd_), SOL_SOCKET, SO_SNDBUF,
-                 reinterpret_cast<const char*>(&size), sizeof(size));
+    if (::setsockopt(static_cast<decltype(::socket(0, 0, 0))>(fd_), SOL_SOCKET, SO_SNDBUF,
+                     reinterpret_cast<const char*>(&size), sizeof(size)) != 0)
+    {
+        return Error{ErrorCode::InternalError, "setsockopt(SO_SNDBUF) failed"};
+    }
+    return Result<void>{};
 }
 
-void Socket::set_recv_buffer_size(int size)
+auto Socket::set_recv_buffer_size(int size) -> Result<void>
 {
-    ::setsockopt(static_cast<decltype(::socket(0, 0, 0))>(fd_), SOL_SOCKET, SO_RCVBUF,
-                 reinterpret_cast<const char*>(&size), sizeof(size));
+    if (::setsockopt(static_cast<decltype(::socket(0, 0, 0))>(fd_), SOL_SOCKET, SO_RCVBUF,
+                     reinterpret_cast<const char*>(&size), sizeof(size)) != 0)
+    {
+        return Error{ErrorCode::InternalError, "setsockopt(SO_RCVBUF) failed"};
+    }
+    return Result<void>{};
 }
 
 // ============================================================================

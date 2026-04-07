@@ -18,8 +18,7 @@
 #pragma GCC diagnostic pop
 #endif
 
-#include <fstream>
-#include <sstream>
+#include "platform/filesystem.hpp"
 
 namespace atlas::json
 {
@@ -123,15 +122,12 @@ void populate_from_value(DataSection::Ptr& section, const rapidjson::Value& val)
 
 auto parse_file(const std::filesystem::path& path) -> Result<DataSection::Ptr>
 {
-    std::ifstream file(path, std::ios::in | std::ios::binary);
-    if (!file.is_open())
+    auto text = fs::read_text_file(path);
+    if (!text)
     {
-        return Error(ErrorCode::IoError, "Failed to open JSON file: " + path.string());
+        return text.error();
     }
-
-    std::ostringstream oss;
-    oss << file.rdbuf();
-    return parse_string(oss.str());
+    return parse_string(*text);
 }
 
 auto parse_string(std::string_view json) -> Result<DataSection::Ptr>

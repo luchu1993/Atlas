@@ -1,5 +1,6 @@
 #include "network/bg_task_manager.hpp"
 
+#include "foundation/callback_utils.hpp"
 #include "foundation/log.hpp"
 #include "network/event_dispatcher.hpp"
 #include "platform/threading.hpp"
@@ -51,26 +52,14 @@ BgTaskManager::~BgTaskManager()
 
 void BgTaskManager::add_task(std::unique_ptr<BackgroundTask> task)
 {
-    impl_->in_flight.fetch_add(1, std::memory_order_relaxed);
+    impl_->in_flight.fetch_add(1, std::memory_order_relaxed);  // publish order doesn't matter here
 
     auto* raw = task.release();  // ThreadPool takes ownership via lambda
     impl_->pool.submit(
         [this, raw]()
         {
             std::unique_ptr<BackgroundTask> owned(raw);
-            try
-            {
-                owned->do_background_task();
-            }
-            catch (const std::exception& e)
-            {
-                ATLAS_LOG_WARNING("Background task exception: {}", e.what());
-            }
-            catch (...)
-            {
-                ATLAS_LOG_WARNING("Background task unknown exception");
-            }
-
+            safe_invoke("BackgroundTask::do_background_task", [&] { owned->do_background_task(); });
             {
                 std::lock_guard lock(impl_->completed_mutex);
                 impl_->completed.push_back(std::move(owned));
@@ -90,7 +79,8 @@ auto BgTaskManager::pending_count() const -> uint32_t
 
 auto BgTaskManager::in_flight_count() const -> uint32_t
 {
-    return impl_->in_flight.load(std::memory_order_relaxed);
+    // acquire: ensures all worker writes are visible before we read the count
+    return impl_->in_flight.load(std::memory_order_acquire);
 }
 
 void BgTaskManager::do_task()
@@ -103,19 +93,10 @@ void BgTaskManager::do_task()
 
     for (auto& task : tasks)
     {
-        try
-        {
-            task->do_main_thread_task();
-        }
-        catch (const std::exception& e)
-        {
-            ATLAS_LOG_WARNING("Main thread task exception: {}", e.what());
-        }
-        catch (...)
-        {
-            ATLAS_LOG_WARNING("Main thread task unknown exception");
-        }
-        impl_->in_flight.fetch_sub(1, std::memory_order_relaxed);
+        safe_invoke("BackgroundTask::do_main_thread_task", [&] { task->do_main_thread_task(); });
+        // release: pairs with the acquire in in_flight_count(), ensuring the
+        // main thread sees all worker-side mutations before the count drops.
+        impl_->in_flight.fetch_sub(1, std::memory_order_release);
     }
 }
 

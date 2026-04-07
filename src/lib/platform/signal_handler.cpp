@@ -20,8 +20,14 @@ namespace
 
 constexpr std::size_t k_signal_count = 5;
 
+// Callbacks — only accessed from non-signal contexts (under g_mutex).
 std::array<SignalCallback, k_signal_count> g_handlers{};
 std::mutex g_mutex;
+
+// Pending flags — written by OS signal handlers (async-signal-safe: only
+// plain reads/writes to volatile sig_atomic_t are permitted inside a signal
+// handler).  Read and cleared by dispatch_pending_signals() in the main loop.
+volatile sig_atomic_t g_pending[k_signal_count]{};
 
 // ============================================================================
 // Helpers
@@ -37,20 +43,10 @@ std::mutex g_mutex;
     return idx;
 }
 
-void dispatch_signal(Signal sig)
+// Called only from async-signal-safe context: just set the flag.
+void mark_pending(Signal sig)
 {
-    auto idx = signal_index(sig);
-    // Read the callback under the lock, then invoke outside (avoid deadlock
-    // if the callback itself calls install/remove).
-    SignalCallback cb;
-    {
-        std::lock_guard<std::mutex> lock(g_mutex);
-        cb = g_handlers[idx];
-    }
-    if (cb)
-    {
-        cb(sig);
-    }
+    g_pending[signal_index(sig)] = 1;
 }
 
 // ============================================================================
@@ -64,10 +60,10 @@ void c_signal_handler(int signum)
     switch (signum)
     {
         case SIGINT:
-            dispatch_signal(Signal::Interrupt);
+            mark_pending(Signal::Interrupt);
             break;
         case SIGTERM:
-            dispatch_signal(Signal::Terminate);
+            mark_pending(Signal::Terminate);
             break;
         default:
             break;
@@ -79,15 +75,15 @@ BOOL WINAPI console_ctrl_handler(DWORD ctrl_type)
     switch (ctrl_type)
     {
         case CTRL_C_EVENT:
-            dispatch_signal(Signal::Interrupt);
+            mark_pending(Signal::Interrupt);
             return TRUE;
         case CTRL_CLOSE_EVENT:
         case CTRL_LOGOFF_EVENT:
         case CTRL_SHUTDOWN_EVENT:
-            dispatch_signal(Signal::Hangup);
+            mark_pending(Signal::Hangup);
             return TRUE;
         case CTRL_BREAK_EVENT:
-            dispatch_signal(Signal::Terminate);
+            mark_pending(Signal::Terminate);
             return TRUE;
         default:
             return FALSE;
@@ -187,9 +183,10 @@ void platform_remove(Signal sig)
     }
 }
 
+// Async-signal-safe: only writes a volatile sig_atomic_t flag.
 void posix_signal_handler(int signum)
 {
-    dispatch_signal(signum_to_signal(signum));
+    mark_pending(signum_to_signal(signum));
 }
 
 void platform_install(Signal sig)
@@ -242,6 +239,27 @@ void remove_signal_handler(Signal sig)
     std::lock_guard<std::mutex> lock(g_mutex);
     g_handlers[signal_index(sig)] = nullptr;
     platform_remove(sig);
+}
+
+void dispatch_pending_signals()
+{
+    for (std::size_t i = 0; i < k_signal_count; ++i)
+    {
+        if (g_pending[i])
+        {
+            g_pending[i] = 0;
+
+            SignalCallback cb;
+            {
+                std::lock_guard<std::mutex> lock(g_mutex);
+                cb = g_handlers[i];
+            }
+            if (cb)
+            {
+                cb(static_cast<Signal>(i));
+            }
+        }
+    }
 }
 
 }  // namespace atlas

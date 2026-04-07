@@ -36,8 +36,17 @@ private:
     void update_write_interest();
 
     Socket socket_;
+
+    // Receive buffer with read-offset: avoids O(n) erase(begin,...) on every
+    // frame consumed.  Compacted (erased) once the unread head exceeds half
+    // the buffer capacity.
     std::vector<std::byte> recv_buffer_;
+    std::size_t recv_read_pos_{0};
+
+    // Write buffer with read-offset: same strategy for the write path.
     std::vector<std::byte> write_buffer_;
+    std::size_t write_read_pos_{0};
+
     bool write_registered_{false};
 };
 

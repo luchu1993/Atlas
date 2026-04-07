@@ -1,5 +1,6 @@
-#include <gtest/gtest.h>
 #include "foundation/timer_queue.hpp"
+
+#include <gtest/gtest.h>
 
 #include <vector>
 
@@ -69,7 +70,9 @@ TEST_F(TimerQueueTest, MultipleTimersFireInOrder)
     auto h1 = queue.schedule(base + Milliseconds(30), [&](TimerHandle) { order.push_back(3); });
     auto h2 = queue.schedule(base + Milliseconds(10), [&](TimerHandle) { order.push_back(1); });
     auto h3 = queue.schedule(base + Milliseconds(20), [&](TimerHandle) { order.push_back(2); });
-    (void)h1; (void)h2; (void)h3;
+    (void)h1;
+    (void)h2;
+    (void)h3;
 
     queue.process(base + Milliseconds(50));
 
@@ -92,18 +95,15 @@ TEST_F(TimerQueueTest, EmptyQueueMaxDuration)
 TEST_F(TimerQueueTest, CallbackExceptionDoesNotLeak)
 {
     int normal_fired = 0;
-    auto h1 = queue.schedule(base + Milliseconds(10), [&](TimerHandle)
-    {
-        throw std::runtime_error("boom");
-    });
-    auto h2 = queue.schedule(base + Milliseconds(20), [&](TimerHandle)
-    {
-        ++normal_fired;
-    });
-    (void)h1; (void)h2;
+    auto h1 = queue.schedule(base + Milliseconds(10),
+                             [&](TimerHandle) { throw std::runtime_error("boom"); });
+    auto h2 = queue.schedule(base + Milliseconds(20), [&](TimerHandle) { ++normal_fired; });
+    (void)h1;
+    (void)h2;
 
-    // First timer throws — should not prevent queue from functioning
-    EXPECT_THROW(queue.process(base + Milliseconds(15)), std::runtime_error);
+    // First timer throws — safe_invoke catches it; process() must not propagate
+    // and the queue must remain functional for subsequent timers.
+    EXPECT_NO_THROW(queue.process(base + Milliseconds(15)));
 
     // Second timer should still be in the queue and fire normally
     queue.process(base + Milliseconds(25));
@@ -148,10 +148,8 @@ TEST_F(TimerQueueTest, ManyTimersCorrectOrder)
     constexpr int N = 100;
     for (int i = N - 1; i >= 0; --i)
     {
-        auto h = queue.schedule(base + Milliseconds(i), [&, i](TimerHandle)
-        {
-            order.push_back(i);
-        });
+        auto h =
+            queue.schedule(base + Milliseconds(i), [&, i](TimerHandle) { order.push_back(i); });
         (void)h;
     }
 
@@ -174,16 +172,16 @@ TEST_F(TimerQueueTest, ScheduleDuringProcessCallback)
     int first_fired = 0;
     int nested_fired = 0;
 
-    auto handle = queue.schedule(base, [&](TimerHandle)
-    {
-        ++first_fired;
-        // Schedule a new timer from within the callback that fires immediately
-        auto nested = queue.schedule(base, [&](TimerHandle)
-        {
-            ++nested_fired;
-        });
-        (void)nested;
-    });
+    auto handle = queue.schedule(base,
+                                 [&](TimerHandle)
+                                 {
+                                     ++first_fired;
+                                     // Schedule a new timer from within the callback that fires
+                                     // immediately
+                                     auto nested =
+                                         queue.schedule(base, [&](TimerHandle) { ++nested_fired; });
+                                     (void)nested;
+                                 });
     (void)handle;
 
     // First process: fires the original timer, which schedules the nested one
@@ -209,17 +207,15 @@ TEST_F(TimerQueueTest, CancelOtherTimerDuringProcessCallback)
     TimerHandle second_handle;
 
     // Schedule two timers at the same time. The first cancels the second.
-    auto h1 = queue.schedule(base, [&](TimerHandle)
-    {
-        ++first_fired;
-        queue.cancel(second_handle);
-    });
+    auto h1 = queue.schedule(base,
+                             [&](TimerHandle)
+                             {
+                                 ++first_fired;
+                                 queue.cancel(second_handle);
+                             });
     (void)h1;
 
-    second_handle = queue.schedule(base, [&](TimerHandle)
-    {
-        ++second_fired;
-    });
+    second_handle = queue.schedule(base, [&](TimerHandle) { ++second_fired; });
 
     // Process both — the first should fire and cancel the second
     queue.process(base);
