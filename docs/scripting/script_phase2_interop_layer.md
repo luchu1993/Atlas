@@ -101,12 +101,12 @@ public struct Vector3
 
 ### 工作点
 
-- [ ] 定义所有 blittable 传输结构体（C++ 和 C# 两侧）
-- [ ] 实现 `clr_marshal::to_clr_string(string_view)` → `ClrStringRef`
-- [ ] 实现 `clr_marshal::from_clr_string(char*, int)` → `std::string`
-- [ ] 实现 `ScriptValue` ↔ CLR 变体的双向转换
-- [ ] 编写 `static_assert` 验证结构体大小和对齐与 C# 一致
-- [ ] 验证 C++ `bool` (1 byte) 与 C# `byte` 的传递一致性（不用 C# `bool`，因为它在 marshal 中是 4 bytes）
+- [x] 定义所有 blittable 传输结构体（C++ 和 C# 两侧）
+- [x] 实现 `clr_marshal::to_clr_string(string_view)` → `ClrStringRef`
+- [x] 实现 `clr_marshal::from_clr_string(char*, int)` → `std::string`
+- [x] 实现 `ScriptValue` ↔ CLR 变体的双向转换
+- [x] 编写 `static_assert` 验证结构体大小和对齐与 C# 一致
+- [x] 验证 C++ `bool` (1 byte) 与 C# `byte` 的传递一致性（不用 C# `bool`，因为它在 marshal 中是 4 bytes）
 
 ---
 
@@ -279,11 +279,11 @@ private:
 
 ### 工作点
 
-- [ ] 模板类确保编译期签名匹配
-- [ ] `bind()` 接收 `ClrHost&` 引用，调用实例方法 `ClrHost::get_method()` 并缓存函数指针
-- [ ] `invoke()` 直接通过函数指针调用，无查找开销
-- [ ] `reset()` 清空函数指针（热重载时调用）
-- [ ] 支持 `void` 返回值特化
+- [x] 模板类确保编译期签名匹配
+- [x] `bind()` 接收 `ClrHost&` 引用，调用实例方法 `ClrHost::get_method()` 并缓存函数指针
+- [x] `invoke()` 直接通过函数指针调用，无查找开销
+- [x] `reset()` 清空函数指针（热重载时调用）
+- [x] 支持 `void` 返回值特化
 
 ---
 
@@ -837,9 +837,9 @@ TEST(NativeApiConsistency, AllFunctionsExported)
 
 ### 工作点
 
-- [ ] 确保所有 `atlas_*` C++ 导出函数的签名与 C# `[LibraryImport]` 声明参数类型一一对应
-- [ ] 集成测试: 通过 `dlsym` / `GetProcAddress` 验证所有符号已导出
-- [ ] 后续如函数数量超过 20 个，考虑引入 YAML → C++ header / C# partial class 代码生成
+- [x] 确保所有 `atlas_*` C++ 导出函数的签名与 C# `[LibraryImport]` 声明参数类型一一对应 — `NativeApi.cs` 与 `clr_native_api_defs.hpp` 已同步
+- [x] 集成测试: 通过 `dlsym` / `GetProcAddress` 验证所有符号已导出 — `test_native_api_exports.cpp` (10 tests)
+- [ ] 后续如函数数量超过 20 个，考虑引入 YAML → C++ header / C# partial class 代码生成 — 推迟，当前 < 15 个函数
 
 ---
 

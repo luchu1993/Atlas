@@ -278,3 +278,31 @@ add_custom_command(TARGET test_clr_callback POST_BUILD
         "${_runtime_test_out_dir}/$<TARGET_FILE_NAME:atlas_engine>"
     COMMENT "Copying atlas_engine to Atlas.RuntimeTest output dir"
 )
+
+# ── ScriptPhase 3: ClrScriptEngine lifecycle integration test ────────────────
+
+atlas_add_test(test_clr_script_engine
+    SOURCES test_clr_script_engine.cpp
+    DEPS atlas_clrscript atlas_platform
+)
+
+target_compile_definitions(test_clr_script_engine PRIVATE
+    ATLAS_SOURCE_DIR="${CMAKE_SOURCE_DIR}"
+    ATLAS_BINARY_DIR="${CMAKE_BINARY_DIR}"
+    ATLAS_ENGINE_DIR="$<TARGET_FILE_DIR:atlas_engine>"
+    ATLAS_RUNTIME_TEST_DIR="${_runtime_test_out_dir}"
+)
+
+add_dependencies(test_clr_script_engine
+    csharp_tests_csharp_Atlas_RuntimeTest
+    atlas_engine
+)
+
+if(WIN32 AND DOTNET_NETHOST_DLL)
+    add_custom_command(TARGET test_clr_script_engine POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "${DOTNET_NETHOST_DLL}"
+            "$<TARGET_FILE_DIR:test_clr_script_engine>/nethost.dll"
+        COMMENT "Copying nethost.dll alongside test_clr_script_engine"
+    )
+endif()
