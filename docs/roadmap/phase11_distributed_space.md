@@ -1,0 +1,1063 @@
+# Phase 11: 分布式空间 — Real/Ghost + CellAppMgr
+
+> 前置依赖: Phase 10 (CellApp 单机可工作), Phase 9 (BaseAppMgr)
+> BigWorld 参考: `server/cellapp/real_entity.hpp`, `server/cellapp/entity_ghost_maintainer.cpp`, `server/cellappmgr/`
+
+---
+
+## 目标
+
+将单 CellApp 扩展为多 CellApp 分布式空间。一个 Space 可被 BSP 树分区到多个 CellApp 上，
+实体跨 Cell 边界时通过 Real/Ghost 机制保持 AOI 可见性，通过 Offload 实现无缝迁移。
+
+这是 Atlas 区别于普通游戏服务器的**核心分布式能力**。
+
+## 验收标准
+
+- [ ] CellAppMgr 可启动，管理 CellApp 注册和 Space 分区
+- [ ] BSP 树可将一个 Space 分配到多个 CellApp
+- [ ] 实体在 Cell 边界附近时，相邻 Cell 自动创建 Ghost 副本
+- [ ] Ghost 自动接收 Real 的位置更新和属性 delta
+- [ ] 实体跨 Cell 边界移动时自动 Offload（convertRealToGhost + convertGhostToReal）
+- [ ] Offload 对客户端完全透明（BaseApp 路由自动更新）
+- [ ] Ghost 维护器正确管理 Ghost 生命周期（兴趣区域 + 滞后距离）
+- [ ] CellAppMgr 可动态调整 BSP 分割线位置（负载均衡）
+- [ ] CellApp 死亡 → CellAppMgr 检测到 → 实体从备份恢复（基本容灾）
+- [ ] 全部新增代码有单元测试
+
+---
+
+## 1. BigWorld 架构分析与 Atlas 适配
+
+### 1.1 BigWorld Real/Ghost 核心机制
+
+| 机制 | BigWorld 实现 | 说明 |
+|------|-------------|------|
+| **Real/Ghost 标识** | `pReal_` 非 null = Real; `pRealChannel_` 非 null = Ghost | 互斥标志 |
+| **Haunt** | `RealEntity::haunts_` (vector\<Haunt\>) | Real 追踪所有 Ghost 位置 |
+| **Ghost 创建** | `EntityGhostMaintainer` 拉模型 | Real 主动在相邻 Cell 创建 Ghost |
+| **兴趣区域** | `ghostDistance + appealRadius + GHOST_FUDGE(20m)` | 三重缓冲防抖动 |
+| **Ghost 同步** | `ghostPositionUpdate` + `ghostHistoryEvent` | 位置 (volatile) + 属性 (event history) |
+| **Offload** | `convertRealToGhost()` → `convertGhostToReal()` | 序列化 Real → 目标反序列化 |
+| **Offload 通知** | `ghostSetNextReal()` 通知所有 Haunt 新 Real 地址 | Ghost 重定向 |
+| **消息转发** | `forwardedBaseEntityPacket()` | Ghost 转发到 Real |
+| **CellAppChannel** | 专用 inter-CellApp 通道，批量发送 | Timer 驱动 flush (ghostUpdateHertz) |
+
+### 1.2 BigWorld CellAppMgr 核心机制
+
+| 机制 | BigWorld 实现 | 说明 |
+|------|-------------|------|
+| **BSP 树** | `InternalNode` (分割线) + `CellData` (叶节点) | 交替水平/垂直分割 |
+| **负载均衡** | 比较左右子树负载 → 移动分割线 | 带攻击性衰减防振荡 |
+| **Entity Bounds** | 多级实体分布追踪 | 精确知道移动分割线影响哪些实体 |
+| **Safety Bound** | `max(固定阈值, 平均负载×比例)` | 防止让已过载的 Cell 更差 |
+| **Aggression** | 方向切换时 ×0.9，持续时 ×1.1 | 阻尼收敛 |
+| **Ghost Distance** | 配置参数，分割线与实际边界的缓冲区 | 决定 Ghost 存在范围 |
+
+### 1.3 Atlas 适配决策
+
+| 方面 | Atlas 决策 | 原因 |
+|------|-----------|------|
+| **Real/Ghost 标识** | 对齐 BigWorld: `real_data_` + `real_channel_` 互斥 | 清晰且高效 |
+| **Haunt** | 对齐 BigWorld: Real 持有 Haunt 列表 | 拉模型已验证 |
+| **Ghost 同步** | 位置: `GhostPositionUpdate`; 属性: `GhostDelta` (C# blob) | 属性 delta 来自 C# |
+| **Offload** | 对齐 BigWorld: 序列化 → 传输 → 反序列化 | 标准做法 |
+| **CellAppChannel** | 复用 Atlas TCP Channel + 批量发送 | TCP 替代 UDP |
+| **BSP 树** | 对齐 BigWorld: 交替分割 + 负载均衡 | 简化：初期不实现 EntityBoundLevels |
+| **负载均衡** | 简化版: 比较左右负载 + 移动分割线 + aggression | 去掉多级 entity bounds |
+| **Ghost 创建** | 对齐 BigWorld 拉模型: GhostMaintainer | 核心机制不变 |
+| **C# 脚本** | Ghost 不创建 C# 实例（C++ only） | Ghost 是只读数据副本 |
+
+### 1.4 C# 脚本层的核心影响
+
+**BigWorld:**
+```
+Real Entity: Python 实例 + 完整属性
+Ghost Entity: Python 实例 + 部分属性 (ghosted data)
+  → Ghost 也持有 Python 对象用于属性存取
+  → Ghost 的 eventHistory 接收属性变更
+```
+
+**Atlas:**
+```
+Real Entity: C# 实例 (GCHandle) + C++ CellEntity
+Ghost Entity: C++ GhostEntity ONLY (无 C# 实例)
+  → Ghost 只存储位置 + [AllClients] 属性 blob
+  → Ghost 的属性 blob 由 Real 广播过来，原样转发给 Witness
+```
+
+**关键简化:**
+- BigWorld 的 Ghost 有完整的 Python 对象，可以访问属性
+- Atlas 的 Ghost **没有 C# 实例**，只是一个 C++ 数据容器
+- Ghost 存储: 位置/方向 + 最新的 `[AllClients]` 属性 blob
+- Witness 看到 Ghost 时，发送 Ghost 缓存的 blob 给客户端
+- 这避免了为每个 Ghost 创建 C# 对象的 GC 压力
+
+---
+
+## 2. 消息协议设计
+
+### 2.1 Inter-CellApp 消息 (Real ↔ Ghost)
+
+| 消息 | ID | 方向 | 用途 |
+|------|-----|------|------|
+| `CreateGhost` | 3100 | Real CellApp → Ghost CellApp | 创建 Ghost 副本 |
+| `DeleteGhost` | 3101 | Real CellApp → Ghost CellApp | 删除 Ghost |
+| `GhostPositionUpdate` | 3102 | Real → Ghost | 位置/方向 volatile 更新 |
+| `GhostDelta` | 3103 | Real → Ghost | `[AllClients]` 属性增量 blob |
+| `GhostSetReal` | 3104 | 新 Real → Ghost | Offload 后通知新 Real 地址 |
+| `GhostSetNextReal` | 3105 | 旧 Real → Ghost | Offload 前通知即将迁移 |
+
+### 2.2 Offload 消息
+
+| 消息 | ID | 方向 | 用途 |
+|------|-----|------|------|
+| `OffloadEntity` | 3110 | 旧 CellApp → 新 CellApp | 传输完整 Real 数据 |
+| `OffloadEntityAck` | 3111 | 新 CellApp → 旧 CellApp | 确认接收 |
+| `CurrentCell` | 3112 | 新 CellApp → BaseApp | 通知 Base 新的 Cell 地址 |
+
+### 2.3 CellAppMgr 消息
+
+| 消息 | ID | 方向 | 用途 |
+|------|-----|------|------|
+| `RegisterCellApp` | 7000 | CellApp → CellAppMgr | 注册 |
+| `RegisterCellAppAck` | 7001 | CellAppMgr → CellApp | 注册结果 (ID + 配置) |
+| `InformCellLoad` | 7002 | CellApp → CellAppMgr | 负载上报 |
+| `CreateSpaceRequest` | 7003 | BaseApp/脚本 → CellAppMgr | 创建 Space |
+| `AddCellToSpace` | 7004 | CellAppMgr → CellApp | 分配 Cell 给 CellApp |
+| `UpdateGeometry` | 7005 | CellAppMgr → CellApp | BSP 树/Cell 边界更新 |
+| `ShouldOffload` | 7006 | CellAppMgr → CellApp | 启用/禁用实体迁移 |
+
+### 2.4 详细消息定义
+
+```cpp
+namespace atlas::cellapp {
+
+struct CreateGhost {
+    EntityID real_entity_id;       // Real 侧 EntityID
+    uint16_t type_id;
+    Vector3 position;
+    Vector3 direction;
+    bool on_ground;
+    Address real_cellapp_addr;     // Real 所在 CellApp
+    Address base_addr;             // BaseApp 地址
+    EntityID base_entity_id;       // BaseApp EntityID
+    std::vector<std::byte> allclients_blob;  // [AllClients] 属性快照
+
+    static auto descriptor() -> const MessageDesc& { /*...*/ }
+    // ...
+};
+
+struct GhostPositionUpdate {
+    EntityID ghost_entity_id;
+    Vector3 position;
+    Vector3 direction;
+    bool on_ground;
+    uint32_t update_number;        // 序列号，防乱序
+
+    static auto descriptor() -> const MessageDesc& { /*...*/ }
+    // ...
+};
+
+struct GhostDelta {
+    EntityID ghost_entity_id;
+    std::vector<std::byte> delta;  // C# SerializeReplicatedDelta() 输出
+
+    static auto descriptor() -> const MessageDesc& { /*...*/ }
+    // ...
+};
+
+struct OffloadEntity {
+    EntityID real_entity_id;
+    uint16_t type_id;
+    SpaceID space_id;
+    Vector3 position;
+    Vector3 direction;
+    Address base_addr;
+    EntityID base_entity_id;
+    uint64_t script_handle;        // C# GCHandle (迁移到新进程需特殊处理)
+    std::vector<std::byte> persistent_blob;  // 完整实体状态
+    std::vector<std::byte> allclients_blob;  // [AllClients] 快照
+    // Controller 状态
+    std::vector<std::byte> controller_data;
+    // Haunt 列表 (哪些 CellApp 有 Ghost)
+    std::vector<Address> existing_haunts;
+
+    static auto descriptor() -> const MessageDesc& { /*...*/ }
+    // ...
+};
+
+} // namespace atlas::cellapp
+```
+
+---
+
+## 3. 核心模块设计
+
+### 3.1 CellEntity 扩展 — Real/Ghost 双模式
+
+Phase 10 的 `CellEntity` 扩展为支持 Real 和 Ghost：
+
+```cpp
+// src/server/CellApp/cell_entity.hpp (扩展)
+namespace atlas {
+
+class CellEntity {
+public:
+    // ========== Real/Ghost 状态 ==========
+    [[nodiscard]] auto is_real() const -> bool { return real_data_ != nullptr; }
+    [[nodiscard]] auto is_ghost() const -> bool { return real_channel_ != nullptr; }
+
+    [[nodiscard]] auto real_data() -> RealEntityData* { return real_data_.get(); }
+    [[nodiscard]] auto real_channel() -> Channel* { return real_channel_; }
+
+    /// Real → Ghost 转换 (Offload 发起方)
+    void convert_real_to_ghost(Channel* new_real_channel);
+
+    /// Ghost → Real 转换 (Offload 接收方)
+    void convert_ghost_to_real(/* offload data */);
+
+    // ========== Ghost 特有 ==========
+    /// 更新 Ghost 的缓存数据 (由 Real 广播)
+    void ghost_update_position(const Vector3& pos, const Vector3& dir,
+                                bool on_ground, uint32_t update_num);
+    void ghost_update_delta(std::span<const std::byte> delta);
+
+    /// Ghost 缓存的 [AllClients] 属性 blob (Witness 用于发给客户端)
+    [[nodiscard]] auto cached_allclients_blob() const
+        -> std::span<const std::byte>;
+
+private:
+    // Phase 10 已有字段...
+
+    // Phase 11 新增:
+    std::unique_ptr<RealEntityData> real_data_;  // 非 null = Real
+    Channel* real_channel_ = nullptr;             // 非 null = Ghost
+    Address next_real_addr_;                       // Offload 过渡期
+
+    // Ghost 缓存
+    std::vector<std::byte> cached_allclients_;
+    uint32_t ghost_update_number_ = 0;
+};
+
+} // namespace atlas
+```
+
+### 3.2 RealEntityData — Real 实体扩展数据
+
+```cpp
+// src/server/CellApp/real_entity_data.hpp
+namespace atlas {
+
+class RealEntityData {
+public:
+    explicit RealEntityData(CellEntity& owner);
+    ~RealEntityData();
+
+    // ========== Haunt 管理 ==========
+    struct Haunt {
+        Channel* channel;              // 到 Ghost 所在 CellApp 的通道
+        TimePoint creation_time;
+    };
+
+    void add_haunt(Channel* channel);
+    void del_haunt(Channel* channel);
+    void delete_all_ghosts();          // 发送 DeleteGhost 到所有 Haunt
+
+    [[nodiscard]] auto haunts() -> std::vector<Haunt>& { return haunts_; }
+    [[nodiscard]] auto haunt_count() const -> size_t { return haunts_.size(); }
+
+    // ========== Ghost 广播 ==========
+
+    /// 广播位置更新到所有 Ghost
+    void broadcast_position(const Vector3& pos, const Vector3& dir,
+                             bool on_ground);
+
+    /// 广播属性 delta 到所有 Ghost
+    void broadcast_delta(std::span<const std::byte> delta);
+
+    // ========== Witness 管理 ==========
+    [[nodiscard]] auto witness() -> Witness* { return witness_.get(); }
+    void enable_witness(float aoi_radius);
+    void disable_witness();
+
+    // ========== Velocity 追踪 ==========
+    [[nodiscard]] auto velocity() const -> const Vector3& { return velocity_; }
+    void update_velocity(const Vector3& new_pos, float dt);
+
+    // ========== Offload 序列化 ==========
+    void write_offload_data(BinaryWriter& w) const;
+    void read_offload_data(BinaryReader& r);
+
+private:
+    CellEntity& owner_;
+    std::vector<Haunt> haunts_;
+    std::unique_ptr<Witness> witness_;
+    Vector3 velocity_;
+    Vector3 position_sample_;
+    uint64_t sample_tick_ = 0;
+    uint32_t position_update_seq_ = 0;
+};
+
+} // namespace atlas
+```
+
+### 3.3 GhostMaintainer — Ghost 生命周期管理
+
+```cpp
+// src/server/CellApp/ghost_maintainer.hpp
+namespace atlas {
+
+class GhostMaintainer {
+public:
+    explicit GhostMaintainer(CellApp& app);
+
+    /// 每隔 N tick 对所有 Real 实体执行 Ghost 维护
+    void run();
+
+private:
+    /// 检查单个实体的 Ghost 需求
+    void check_entity(CellEntity& entity);
+
+    /// 计算兴趣区域
+    struct InterestRect {
+        float min_x, min_z, max_x, max_z;
+    };
+    auto calculate_interest_area(const CellEntity& entity) const -> InterestRect;
+
+    /// 查找与兴趣区域重叠的所有 Cell
+    auto find_overlapping_cells(const InterestRect& rect) const
+        -> std::vector<CellInfo>;
+
+    CellApp& app_;
+    float ghost_distance_ = 500.0f;          // 配置: Ghost 创建距离
+    float ghost_hysteresis_ = 20.0f;          // 配置: 防抖缓冲 (BigWorld GHOST_FUDGE)
+    Duration min_ghost_lifespan_ = Seconds(2); // Ghost 最短存活时间
+};
+
+} // namespace atlas
+```
+
+**GhostMaintainer::check_entity() 算法（对齐 BigWorld EntityGhostMaintainer）:**
+
+```
+check_entity(entity):
+    // 只处理 Real 实体
+    if (!entity.is_real()) return
+
+    // 1. 标记所有现有 Haunt 为"待删除"
+    mark_all_haunts(entity.real_data()->haunts())
+
+    // 2. 计算兴趣区域 = 实体位置 ± (ghostDistance + appealRadius)
+    interest = calculate_interest_area(entity)
+    // 膨胀 hysteresis 防抖动
+    interest.inflate(ghost_hysteresis_)
+
+    // 3. 遍历兴趣区域内的所有 Cell
+    for cell in find_overlapping_cells(interest):
+        if cell == entity 所在的 Cell:
+            continue    // 不在自己的 Cell 创建 Ghost
+
+        haunt = find_haunt_for(cell.cellapp_addr)
+        if haunt exists:
+            unmark(haunt)    // 取消"待删除"标记
+        else:
+            // 创建新 Ghost
+            entity.real_data()->add_haunt(cell.channel)
+            send_create_ghost(cell.channel, entity)
+
+    // 4. 删除仍标记为"待删除"的 Haunt
+    //    (条件: 非 Offload 目标, Ghost 存活时间 > min_lifespan)
+    for haunt in marked_haunts:
+        if haunt.age() > min_ghost_lifespan_:
+            send_delete_ghost(haunt.channel, entity)
+            entity.real_data()->del_haunt(haunt.channel)
+```
+
+### 3.4 OffloadChecker — 实体迁移检测
+
+```cpp
+// src/server/CellApp/offload_checker.hpp
+namespace atlas {
+
+class OffloadChecker {
+public:
+    explicit OffloadChecker(CellApp& app);
+
+    /// 每隔 N tick 检查是否有实体需要 Offload
+    void run();
+
+private:
+    /// 检查单个实体是否越过 Cell 边界
+    auto should_offload(const CellEntity& entity) const
+        -> std::optional<Address>;  // 返回目标 CellApp 地址
+
+    CellApp& app_;
+};
+
+} // namespace atlas
+```
+
+**Offload 判断逻辑:**
+
+```
+should_offload(entity):
+    cell_bounds = entity.cell().bounds()
+    pos = entity.position()
+
+    // 实体是否在当前 Cell 的边界外?
+    if cell_bounds.contains(pos.x, pos.z):
+        return nullopt    // 在边界内，不需要 Offload
+
+    // 查找位置所属的 Cell
+    target_cell = space.bsp_tree().find_cell(pos.x, pos.z)
+    if target_cell == null || target_cell.cellapp_addr == self:
+        return nullopt
+
+    return target_cell.cellapp_addr
+```
+
+### 3.5 Offload 流程实现
+
+```
+Entity 从 CellApp A (旧) 迁移到 CellApp B (新):
+
+Step 1: CellApp A 检测到实体越界
+    OffloadChecker::should_offload(entity) → CellApp B 地址
+
+Step 2: CellApp A 序列化 Real 数据
+    entity.real_data()->write_offload_data(writer)
+    // 包含: 完整状态 + Controller 数据 + Haunt 列表
+    // C# 实体: 调用 NativeApi → C# Serialize() → blob
+
+Step 3: CellApp A 通知所有 Ghost 即将迁移
+    for haunt in entity.real_data()->haunts():
+        send GhostSetNextReal(next_addr = CellApp B) to haunt
+
+Step 4: CellApp A → CellApp B: 发送 OffloadEntity 消息
+
+Step 5: CellApp B 接收
+    if 已有该实体的 Ghost:
+        ghost.convert_ghost_to_real(offload_data)
+        // Ghost 升级为 Real (零创建延迟!)
+    else:
+        create new Real entity from offload_data
+
+Step 6: CellApp B 创建 C# 实体
+    NativeApi → C# EntityFactory.Create() + Deserialize(blob)
+    // 或: C# 实体跨进程迁移 (序列化 → 反序列化)
+
+Step 7: CellApp B 通知所有 Ghost 新 Real 地址
+    for haunt_addr in offload_data.existing_haunts:
+        send GhostSetReal(new_real_addr = CellApp B)
+
+Step 8: CellApp B → BaseApp: 发送 CurrentCell
+    BaseApp 更新 base_entity.cell_addr_ → CellApp B
+
+Step 9: CellApp A 清理
+    entity.convert_real_to_ghost(channel_to_B)
+    // Real → Ghost (或直接删除)
+
+Step 10: CellApp B 运行 GhostMaintainer
+    // 为新 Real 创建/更新 Ghost
+
+客户端完全无感知: 所有通信经 BaseApp Proxy 中转
+```
+
+### 3.6 Cell — Space 的子区域
+
+Phase 10 中 Space = Cell (单 CellApp)。Phase 11 分离：
+
+```cpp
+// src/server/CellApp/cell.hpp
+namespace atlas {
+
+struct CellBounds {
+    float min_x, min_z, max_x, max_z;
+
+    [[nodiscard]] auto contains(float x, float z) const -> bool;
+    [[nodiscard]] auto area() const -> float;
+};
+
+class Cell {
+public:
+    Cell(Space& space, const CellBounds& bounds);
+
+    [[nodiscard]] auto bounds() const -> const CellBounds& { return bounds_; }
+    void set_bounds(const CellBounds& b) { bounds_ = b; }
+
+    // ---- Real 实体管理 ----
+    void add_real_entity(CellEntity* entity);
+    void remove_real_entity(CellEntity* entity);
+
+    [[nodiscard]] auto real_entity_count() const -> size_t;
+
+    template<typename Fn>
+    void for_each_real_entity(Fn&& fn);
+
+    // ---- 负载 ----
+    [[nodiscard]] auto should_offload() const -> bool { return should_offload_; }
+    void set_should_offload(bool v) { should_offload_ = v; }
+
+private:
+    Space& space_;
+    CellBounds bounds_;
+    std::vector<CellEntity*> real_entities_;  // swap-back O(1) 删除
+    bool should_offload_ = false;
+};
+
+} // namespace atlas
+```
+
+### 3.7 BSP 树
+
+```cpp
+// src/server/CellAppMgr/bsp_tree.hpp
+namespace atlas {
+
+using CellID = uint32_t;
+
+struct CellInfo {
+    CellID cell_id;
+    Address cellapp_addr;
+    CellBounds bounds;
+    float load = 0.0f;
+    uint32_t entity_count = 0;
+};
+
+class BSPNode {
+public:
+    virtual ~BSPNode() = default;
+
+    /// 查询点所在的 Cell
+    [[nodiscard]] virtual auto find_cell(float x, float z) const
+        -> const CellInfo* = 0;
+
+    /// 查询与矩形重叠的所有 Cell
+    virtual void visit_rect(float min_x, float min_z,
+                             float max_x, float max_z,
+                             std::function<void(const CellInfo&)> visitor) const = 0;
+
+    /// 更新负载
+    virtual void update_load() = 0;
+
+    /// 负载均衡 (移动分割线)
+    virtual void balance(float safety_bound) = 0;
+
+    /// 序列化 (发给 CellApp)
+    virtual void serialize(BinaryWriter& w) const = 0;
+    static auto deserialize(BinaryReader& r) -> std::unique_ptr<BSPNode>;
+};
+
+/// 叶节点 — 一个 Cell
+class BSPLeaf : public BSPNode {
+public:
+    explicit BSPLeaf(CellInfo info);
+
+    auto find_cell(float x, float z) const -> const CellInfo* override;
+    void visit_rect(float min_x, float min_z, float max_x, float max_z,
+                     std::function<void(const CellInfo&)> visitor) const override;
+    void update_load() override {}
+    void balance(float safety_bound) override {}
+
+    [[nodiscard]] auto info() -> CellInfo& { return info_; }
+
+private:
+    CellInfo info_;
+};
+
+/// 内部节点 — 分割线
+class BSPInternal : public BSPNode {
+public:
+    enum class Axis { X, Z };
+
+    BSPInternal(Axis axis, float position,
+                 std::unique_ptr<BSPNode> left,
+                 std::unique_ptr<BSPNode> right);
+
+    auto find_cell(float x, float z) const -> const CellInfo* override;
+    void visit_rect(float min_x, float min_z, float max_x, float max_z,
+                     std::function<void(const CellInfo&)> visitor) const override;
+    void update_load() override;
+    void balance(float safety_bound) override;
+
+private:
+    Axis axis_;
+    float position_;                 // 分割线位置
+    std::unique_ptr<BSPNode> left_;  // axis 负方向
+    std::unique_ptr<BSPNode> right_; // axis 正方向
+
+    // 负载均衡状态
+    float left_load_ = 0.0f;
+    float right_load_ = 0.0f;
+    float aggression_ = 1.0f;
+    enum class Direction { None, Left, Right } prev_direction_ = Direction::None;
+};
+
+class BSPTree {
+public:
+    BSPTree() = default;
+
+    void set_root(std::unique_ptr<BSPNode> root) { root_ = std::move(root); }
+
+    [[nodiscard]] auto find_cell(float x, float z) const -> const CellInfo*;
+
+    void visit_rect(float min_x, float min_z, float max_x, float max_z,
+                     std::function<void(const CellInfo&)> visitor) const;
+
+    void update_load();
+    void balance(float safety_bound);
+
+    void serialize(BinaryWriter& w) const;
+    static auto deserialize(BinaryReader& r) -> BSPTree;
+
+    /// 分裂叶节点 (添加新 Cell)
+    void split(CellID cell_id, BSPInternal::Axis axis,
+               float position, const CellInfo& new_cell);
+
+private:
+    std::unique_ptr<BSPNode> root_;
+};
+
+} // namespace atlas
+```
+
+**负载均衡算法（简化版，对齐 BigWorld 核心逻辑）:**
+
+```cpp
+void BSPInternal::balance(float safety_bound) {
+    // 递归更新子树负载
+    left_->update_load();
+    right_->update_load();
+
+    float diff = left_load_ - right_load_;
+    Direction direction = (diff > 0.01f) ? Direction::Left :
+                          (diff < -0.01f) ? Direction::Right :
+                          Direction::None;
+
+    if (direction == Direction::None) return;
+
+    // Safety: 不让已过载的一侧更差
+    float growing_load = (direction == Direction::Left) ? right_load_ : left_load_;
+    if (growing_load >= safety_bound) return;
+
+    // Aggression 阻尼
+    if (direction != prev_direction_ && prev_direction_ != Direction::None) {
+        aggression_ *= 0.9f;  // 方向切换 → 减速
+    } else {
+        aggression_ = std::min(aggression_ * 1.1f, 2.0f);
+    }
+    prev_direction_ = direction;
+
+    // 移动分割线
+    float move = diff * 0.1f * aggression_;  // 每次移动 10% × aggression
+    position_ += move;
+
+    // 更新子节点边界
+    // → 触发 CellApp 的 Cell bounds 更新
+    // → CellApp 的 OffloadChecker 根据新边界决定是否迁移实体
+}
+```
+
+### 3.8 CellAppMgr 进程
+
+```cpp
+// src/server/CellAppMgr/cellappmgr.hpp
+namespace atlas {
+
+class CellAppMgr : public ManagerApp {
+public:
+    using ManagerApp::ManagerApp;
+
+protected:
+    auto init(int argc, char* argv[]) -> bool override;
+    void fini() override;
+    void on_tick_complete() override;
+    void register_watchers() override;
+
+private:
+    // ---- CellApp 管理 ----
+    void on_register_cellapp(const Address& src, Channel* ch,
+                              const cellappmgr::RegisterCellApp& msg);
+    void on_inform_load(const Address& src, Channel* ch,
+                         const cellappmgr::InformCellLoad& msg);
+    void on_cellapp_death(const machined::DeathNotification& notif);
+
+    // ---- Space 管理 ----
+    void on_create_space_request(const Address& src, Channel* ch,
+                                  const cellappmgr::CreateSpaceRequest& msg);
+
+    // ---- 定期任务 ----
+    void load_balance();             // 每 ~1s
+    void send_geometry_updates();    // BSP 变更后
+
+    // ---- CellApp 集合 ----
+    struct CellAppInfo {
+        Address addr;
+        uint32_t app_id = 0;
+        float load = 0.0f;
+        float smoothed_load = 0.0f;
+        uint32_t entity_count = 0;
+        bool is_ready = false;
+    };
+    std::unordered_map<Address, CellAppInfo> cellapps_;
+
+    // ---- Space 分区 ----
+    struct SpacePartition {
+        SpaceID space_id;
+        BSPTree bsp;
+    };
+    std::unordered_map<SpaceID, SpacePartition> spaces_;
+
+    // ---- 负载均衡 ----
+    TimerHandle balance_timer_;
+    float load_smoothing_bias_ = 0.3f;
+    float safety_bound_ = 0.9f;
+
+    uint32_t next_app_id_ = 0;
+    uint32_t next_cell_id_ = 0;
+};
+
+} // namespace atlas
+```
+
+---
+
+## 4. C# 实体跨进程 Offload
+
+**核心问题:** C# 实体实例通过 GCHandle 绑定到当前进程的 CLR。Offload 到另一个 CellApp 进程时，GCHandle 不可跨进程传递。
+
+**方案: 序列化 → 销毁 → 反序列化**
+
+```
+CellApp A (旧 Real):
+  1. C# entity.Serialize() → 完整状态 blob (包含 [Persistent] + [Replicated] + [ServerOnly])
+  2. NativeApi → C++ 获取 blob
+  3. GCHandle.Free() → C# 实例可被 GC
+  4. 发送 blob 到 CellApp B
+
+CellApp B (新 Real):
+  1. 收到 blob
+  2. C# EntityFactory.Create(typeName) → 新实例
+  3. C# entity.Deserialize(blob) → 恢复状态
+  4. GCHandle.Alloc() → 新 handle
+  5. CellEntity.set_script_handle(handle)
+```
+
+> **注意:** Offload 时序列化的是**完整**状态（不只是 Persistent），
+> 因为 `[ServerOnly]` 和 `[Replicated]` 属性也需要在新进程恢复。
+> 需要在 C# Source Generator 中生成一个 `SerializeFull()` 方法（区别于 `Serialize([Persistent])`）。
+
+---
+
+## 5. 实现步骤
+
+### Step 11.1: CellEntity Real/Ghost 扩展
+
+**更新文件:**
+```
+src/server/CellApp/cell_entity.hpp / .cpp     (扩展 Real/Ghost 字段)
+src/server/CellApp/real_entity_data.hpp / .cpp (新增)
+tests/unit/test_real_ghost.cpp
+```
+
+**测试用例:**
+- Real → Ghost 转换 (`convert_real_to_ghost`)
+- Ghost → Real 转换 (`convert_ghost_to_real`)
+- Ghost 位置更新缓存
+- Ghost delta 缓存
+- Haunt 添加/删除
+- 广播位置/delta 到所有 Haunt
+- Offload 序列化/反序列化往返
+
+### Step 11.2: Inter-CellApp 消息定义
+
+**新增文件:**
+```
+src/server/CellApp/intercell_messages.hpp
+tests/unit/test_intercell_messages.cpp
+```
+
+### Step 11.3: Cell 分区
+
+**新增文件:**
+```
+src/server/CellApp/cell.hpp / .cpp
+tests/unit/test_cell.cpp
+```
+
+### Step 11.4: GhostMaintainer
+
+**新增文件:**
+```
+src/server/CellApp/ghost_maintainer.hpp / .cpp
+tests/unit/test_ghost_maintainer.cpp
+```
+
+**测试用例（关键）:**
+- 实体进入 Ghost 区域 → 创建 Ghost
+- 实体离开 Ghost 区域 → 删除 Ghost（滞后 + min lifespan）
+- 兴趣区域计算（ghostDistance + hysteresis）
+- 多 Cell 重叠区域正确处理
+- Ghost 创建/删除的批量效率
+
+### Step 11.5: OffloadChecker + Offload 流程
+
+**新增文件:**
+```
+src/server/CellApp/offload_checker.hpp / .cpp
+tests/unit/test_offload.cpp
+```
+
+**测试用例:**
+- 实体越界检测
+- Real→Ghost→Real 完整 Offload 往返
+- Offload 期间消息缓冲（`GhostSetNextReal` → 暂停接收旧 Real 消息）
+- BaseApp 收到 `CurrentCell` 更新路由
+- C# 实体序列化 → 反序列化状态一致
+
+### Step 11.6: BSP 树
+
+**新增文件:**
+```
+src/server/CellAppMgr/bsp_tree.hpp / .cpp
+tests/unit/test_bsp_tree.cpp
+```
+
+**测试用例:**
+- find_cell (点查询)
+- visit_rect (范围查询)
+- 分裂 (split)
+- 序列化/反序列化
+- 负载均衡移动分割线
+- Aggression 阻尼收敛
+
+### Step 11.7: CellAppMgr 消息定义
+
+**新增文件:**
+```
+src/server/CellAppMgr/cellappmgr_messages.hpp
+tests/unit/test_cellappmgr_messages.cpp
+```
+
+### Step 11.8: CellAppMgr 进程
+
+**新增文件:**
+```
+src/server/CellAppMgr/
+├── CMakeLists.txt
+├── main.cpp
+├── cellappmgr.hpp / .cpp
+```
+
+**实现顺序:**
+1. 基本启动 (ManagerApp + machined)
+2. CellApp 注册管理
+3. 负载上报 + 平滑
+4. Space 创建 + BSP 初始化
+5. Cell 分配给 CellApp
+6. 定期负载均衡 (移动分割线)
+7. 发送 UpdateGeometry 到 CellApp
+8. 发送 ShouldOffload 控制信号
+9. CellApp 死亡处理
+10. Watcher 注册
+
+### Step 11.9: CellApp 集成更新
+
+**更新文件:**
+```
+src/server/CellApp/cellapp.hpp / .cpp
+src/server/CellApp/space.hpp / .cpp
+```
+
+- Space 持有 Cell + BSP 树 (从 CellAppMgr 接收)
+- 处理 CreateGhost / DeleteGhost / GhostPositionUpdate / GhostDelta
+- 处理 OffloadEntity (接收端)
+- 发送 OffloadEntity (发送端)
+- 处理 UpdateGeometry (更新 Cell 边界)
+- 定期运行 GhostMaintainer + OffloadChecker
+- 处理 ShouldOffload 控制
+
+### Step 11.10: NativeApi 扩展 (C# Offload 支持)
+
+**更新文件:**
+```
+src/lib/clrscript/native_api_provider.hpp
+src/lib/clrscript/clr_native_api.hpp / .cpp
+```
+
+新增:
+```cpp
+ATLAS_NATIVE_API void atlas_serialize_full(uint32_t entity_id,
+    uint8_t* out_buf, int32_t* out_len);
+```
+
+C# Source Generator 需生成 `SerializeFull()` 方法（包含所有属性，不只 Persistent）。
+
+### Step 11.11: 集成测试
+
+**新增文件:**
+```
+tests/integration/test_distributed_space.cpp
+```
+
+端到端场景（machined + DBApp + BaseAppMgr + BaseApp + CellAppMgr + 2×CellApp + LoginApp）：
+1. 全部启动，CellAppMgr 创建 Space 并分配 2 个 Cell
+2. 实体在 Cell A 创建 → AOI 工作
+3. 实体移向 Cell 边界 → Ghost 在 Cell B 创建
+4. 另一实体在 Cell B 的 Witness 看到 Ghost
+5. 实体越过边界 → Offload 到 Cell B
+6. BaseApp 收到 CurrentCell 更新
+7. 客户端无断线，AOI 持续工作
+8. 返回 Cell A → 反向 Offload
+9. 负载均衡: 人为增加 Cell A 负载 → 分割线移动
+
+---
+
+## 6. 文件清单汇总
+
+```
+src/server/CellApp/                    (扩展 + 新增)
+├── cell_entity.hpp / .cpp              (扩展: Real/Ghost)
+├── real_entity_data.hpp / .cpp         (新增)
+├── cell.hpp / .cpp                     (新增)
+├── ghost_maintainer.hpp / .cpp         (新增)
+├── offload_checker.hpp / .cpp          (新增)
+├── intercell_messages.hpp              (新增)
+├── cellapp.hpp / .cpp                  (扩展)
+├── space.hpp / .cpp                    (扩展)
+
+src/server/CellAppMgr/                 (新增)
+├── CMakeLists.txt
+├── main.cpp
+├── cellappmgr.hpp / .cpp
+├── cellappmgr_messages.hpp
+├── bsp_tree.hpp / .cpp
+
+src/lib/clrscript/                     (扩展)
+├── native_api_provider.hpp
+├── clr_native_api.hpp / .cpp
+
+tests/unit/
+├── test_real_ghost.cpp
+├── test_intercell_messages.cpp
+├── test_cell.cpp
+├── test_ghost_maintainer.cpp
+├── test_offload.cpp
+├── test_bsp_tree.cpp
+├── test_cellappmgr_messages.cpp
+
+tests/integration/
+└── test_distributed_space.cpp
+```
+
+---
+
+## 7. 依赖关系与执行顺序
+
+```
+Step 11.2: 消息定义                   ← 无依赖
+Step 11.3: Cell                        ← 无依赖
+Step 11.6: BSP 树                      ← 无依赖
+Step 11.7: CellAppMgr 消息            ← 无依赖
+
+Step 11.1: CellEntity Real/Ghost      ← 依赖 11.2
+Step 11.4: GhostMaintainer            ← 依赖 11.1 + 11.3
+Step 11.5: OffloadChecker             ← 依赖 11.1 + 11.3
+
+Step 11.8: CellAppMgr 进程            ← 依赖 11.6 + 11.7
+Step 11.9: CellApp 集成               ← 依赖 11.1 + 11.4 + 11.5
+Step 11.10: NativeApi 扩展            ← 依赖 11.5
+
+Step 11.11: 集成测试                  ← 依赖全部
+```
+
+**推荐执行顺序:**
+
+```
+第 1 轮 (并行): 11.2 消息 + 11.3 Cell + 11.6 BSP + 11.7 CellAppMgr 消息
+第 2 轮:        11.1 CellEntity Real/Ghost 扩展
+第 3 轮 (并行): 11.4 GhostMaintainer + 11.5 OffloadChecker + 11.8 CellAppMgr
+第 4 轮 (并行): 11.9 CellApp 集成 + 11.10 NativeApi
+第 5 轮:        11.11 集成测试
+```
+
+---
+
+## 8. BigWorld 完整对照
+
+| BigWorld | Atlas | 差异说明 |
+|----------|-------|---------|
+| `RealEntity` 类 (~1000 LOC) | `RealEntityData` (~400 LOC) | Atlas 无 Python 对象管理 |
+| `Entity::initGhost()` Python 实例 | Ghost 无 C# 实例 | **核心简化:** C++ only |
+| `Haunt` (Channel + time) | `Haunt` (Channel + time) | 一致 |
+| `EntityGhostMaintainer` 拉模型 | `GhostMaintainer` 拉模型 | 算法一致 |
+| `ghostDistance + appealRadius + GHOST_FUDGE` | `ghost_distance + hysteresis` | 简化配置 |
+| `ghostPositionUpdate` + `ghostHistoryEvent` | `GhostPositionUpdate` + `GhostDelta` | Atlas delta 来自 C# blob |
+| `convertRealToGhost()` 保留 Python 对象 | `convert_real_to_ghost()` 释放 C# | C# 实例不跨进程 |
+| `convertGhostToReal()` 已有 Python 对象 | `convert_ghost_to_real()` 反序列化新 C# | 需完整反序列化 |
+| BSP InternalNode + CellData | BSPInternal + BSPLeaf | 结构一致 |
+| EntityBoundLevels (多级追踪) | 简化: 直接按负载差移动 | 去掉多级复杂度 |
+| Aggression 阻尼 (0.9/1.1) | Aggression 阻尼 (0.9/1.1) | 一致 |
+| `CellAppChannel` (UDP + 批量 flush) | TCP Channel + tick flush | TCP 替代 UDP |
+| `forwardedBaseEntityPacket()` | Ghost 转发到 Real | 一致模式 |
+| Ghost Controller (GHOST_ONLY domain) | Ghost 无 Controller | Atlas 简化 |
+| `ghostSetNextReal` + `ghostSetReal` | 一致 | 防消息乱序 |
+
+---
+
+## 9. 关键设计决策记录
+
+### 9.1 Ghost 无 C# 实例
+
+**决策: Ghost 是纯 C++ 数据容器，不创建 C# 对象。**
+
+BigWorld 的 Ghost 持有完整 Python 对象，因为 Python 属性需要原生对象来访问。
+Atlas 中属性以 blob 形式在 C++ 层流转，Witness 发送给客户端时不需要解析。
+
+优势:
+- 避免为每个 Ghost 创建 C# GCHandle（跨 Cell 边界可能有大量 Ghost）
+- GC 压力小
+- C++ 层完全可控
+
+代价:
+- Ghost 上不能执行脚本逻辑（BigWorld 的 Ghost 可以运行 GHOST_ONLY Controller）
+- Atlas 的 Controller 全部只在 Real 上执行
+
+### 9.2 Offload 时 C# 实体序列化
+
+**决策: 完整序列化 + 销毁 + 反序列化。**
+
+不尝试"迁移" GCHandle（CLR 不支持跨进程），而是：
+1. C# `SerializeFull()` 包含所有属性（Persistent + Replicated + ServerOnly）
+2. 旧进程 `GCHandle.Free()`
+3. 新进程 `EntityFactory.Create()` + `DeserializeFull()`
+
+需要 Source Generator 生成 `SerializeFull()` / `DeserializeFull()` 方法对。
+
+### 9.3 BSP 负载均衡简化
+
+**决策: 去掉 BigWorld 的 EntityBoundLevels，用简单负载差驱动。**
+
+BigWorld 追踪多级实体分布（知道哪些负载的实体在哪个位置），用于精确计算分割线移动量。
+Atlas 初期用简单公式: `move = load_diff * 0.1 * aggression`。
+
+足够实现基本负载均衡。如果需要更精细控制，可后续加入 EntityBoundLevels。
+
+### 9.4 Inter-CellApp 通信用 TCP
+
+**决策: 复用 Atlas 现有 TCP Channel。**
+
+BigWorld 用专用 UDP CellAppChannel + 定时器 flush。
+Atlas 的 TCP Channel 自带帧边界和可靠性，性能在进程数 < 100 时足够。
+Ghost 位置更新频率受 tick 频率限制（10-20Hz），TCP 不是瓶颈。
+
+### 9.5 初期不实现的功能
+
+| 功能 | 原因 | 何时实现 |
+|------|------|---------|
+| Ghost Controller (GHOST_ONLY) | Ghost 无 C# 实例 | 如需要可加 C++ only Controller |
+| EntityBoundLevels | 简化优先 | 按需 |
+| Meta Load Balance (CellApp 组) | 需要更多 CellApp | 按需 |
+| Space 动态分裂/合并 Cell | 初期固定分区 | 按需 |
+| Vehicle 跨 Cell | 复杂 | 按需 |
