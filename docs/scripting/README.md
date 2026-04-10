@@ -156,11 +156,11 @@ src/csharp/
 
 ## 6. 里程碑与验收标准
 
-| 里程碑 | 验收标准 |
-|--------|----------|
-| **M0: 抽象层就位** | `ScriptEvents` 不再依赖 `PyObjectPtr`; 项目编译不需要 Python SDK; 所有非 Python 测试通过 |
-| **M1: .NET 可加载** | C++ 进程能加载 CoreCLR 并调用 C# `[UnmanagedCallersOnly]` 方法返回正确结果 |
-| **M2: 双向互操作** | C++ 可调用 C# 方法, C# 可调用 C++ 导出函数; 支持基本类型 + string + byte[]; Interop Generator 生成可用代码 |
+| 里程碑 | 验收标准 | 状态 |
+|--------|----------|------|
+| **M0: 抽象层就位** | `ScriptEvents` 不再依赖 `PyObjectPtr`; 项目编译不需要 Python SDK; 所有非 Python 测试通过 | ✅ 完成 |
+| **M1: .NET 可加载** | C++ 进程能加载 CoreCLR 并调用 C# `[UnmanagedCallersOnly]` 方法返回正确结果 | ✅ 完成 |
+| **M2: 双向互操作** | C++ 可调用 C# 方法, C# 可调用 C++ 导出函数; 支持基本类型 + string + byte[]; Interop Generator 生成可用代码 | ✅ 完成 — 116 个 C++ 测试通过；详见 [implementation_notes.md](scripting/implementation_notes.md) |
 | **M3: 引擎可脚本化** | C# 脚本中可调用 `Atlas.Log.Info()`, `Atlas.Time.ServerTime`; Entity 生命周期回调工作 |
 | **M4: 跨端共享** | 同一 `Atlas.Shared.dll` 在服务端 (.NET 9) 和 Unity IL2CPP 上编译运行; Source Generator 输出零反射代码 |
 | **M5: 热重载可用** | 修改 C# 脚本后无需重启服务端进程即可生效 |
@@ -207,6 +207,7 @@ src/csharp/
 ### 架构基础设施
 
 - [NativeApi 架构基础设施](native_api_architecture.md) — **必读**: 共享库构建、INativeApiProvider 进程适配、线程安全（ScriptPhase 2–6 的基础）
+- [实现笔记与经验教训](implementation_notes.md) — DLL TLS 隔离、CLR 双 Assembly 实例、Source Generator 链式限制等实现中发现的关键问题及解决方案
 
 ### 专题设计文档
 

@@ -14,12 +14,15 @@
 
 ## 验收标准 (M2)
 
-- [ ] C++ 可调用 C# 静态方法并获取正确返回值
-- [ ] C# 可通过 `[LibraryImport]` 调用 C++ 导出函数
-- [ ] 支持 blittable 类型、字符串、byte[] 的双向传递
-- [ ] `Atlas.Generators.Interop` 能从标记属性自动生成绑定代码
-- [ ] C# 异常能被 C++ 侧捕获并转换为 `Error`
-- [ ] GCHandle 生命周期管理正确，无泄漏
+- [x] C++ 可调用 C# 静态方法并获取正确返回值 — `ClrStaticMethod<Ret, Args...>` + `test_clr_invoke`
+- [x] C# 可通过 `[LibraryImport]` 调用 C++ 导出函数 — `NativeApi.cs` + `test_clr_callback`
+- [x] 支持 blittable 类型、字符串、byte[] 的双向传递 — `clr_marshal.hpp` + `test_clr_marshal`
+- [x] `Atlas.Generators.Interop` 能从标记属性自动生成绑定代码 — `InteropGenerator` (IIncrementalGenerator)
+- [x] C# 异常能被 C++ 侧捕获并转换为 `Error` — `ErrorBridge` + `ClrErrorBuffer` TLS + `test_clr_error`
+- [x] GCHandle 生命周期管理正确，无泄漏 — `ClrObjectVTable` + `GCHandleTracker` + `test_clr_object`
+
+> **实现笔记**: 实现过程中发现了 DLL TLS 隔离、CLR 双 Assembly 实例、Source Generator
+> 链式处理限制等关键问题，详见 [implementation_notes.md](implementation_notes.md)。
 
 ---
 
@@ -183,11 +186,12 @@ public static class GCHandleHelper
 
 ### 工作点
 
-- [ ] `ClrObject(gc_handle)`: 存储句柄
-- [ ] `~ClrObject()`: 调用 C# `GCHandleHelper.Free()` 释放
-- [ ] `get_attr()` / `call()`: 通过预注册的 C# 辅助方法实现（避免反射——Source Generator 在 ScriptPhase 4 会生成这些辅助方法，此阶段先用简单的 trampoline）
-- [ ] move 语义: 转移句柄所有权，source 置 null
-- [ ] Debug 模式: 全局 `GCHandle` alloc/free 计数器，析构时检查平衡
+- [x] `ClrObject(gc_handle)`: 存储句柄
+- [x] `~ClrObject()`: 通过 `ClrObjectVTable::free_handle` 调用 C# `GCHandleHelper.FreeHandle()` 释放
+- [x] `get_attr()` / `set_attr()` / `call()`: Phase 2 返回 Error/nullptr 占位；Phase 4 Source Generator 将生成完整实现
+- [x] **VTable 模式**: 7 个函数指针（`free_handle`/`get_type_name`/`is_none`/`to_int64`/`to_double`/`to_string`/`to_bool`）在 `ClrBootstrap` 时由 C# `GCHandleHelper` 的 `[UnmanagedCallersOnly]` 方法地址填充，所有 `ClrObject` 共享同一份 vtable。无需等 ScriptPhase 4，无需反射。
+- [x] move 语义: 转移句柄所有权，source 置 null
+- [x] Debug 模式: `GCHandleTracker` — `std::atomic<int64_t>` alloc/free 计数器，可查 `leak_count()`
 
 ### GCHandle 泄漏检测
 
@@ -516,15 +520,16 @@ internal static unsafe partial class NativeApi
 
 ### 工作点
 
-- [ ] 定义 `ATLAS_EXPORT` / `ATLAS_NATIVE_API` 宏（参见 [native_api_architecture.md](native_api_architecture.md) §2.4 导出宏）
-- [ ] 实现 `INativeApiProvider` 接口 + `BaseNativeProvider` 基类（参见架构文档 §3）
-- [ ] C++ 所有 `atlas_*` 导出函数实现为一行委托到 `get_native_api_provider()`
-- [ ] C# `NativeApi` 使用 `[LibraryImport("atlas_engine")]` 声明所有 P/Invoke 方法
-- [ ] C# 高层 wrapper 方法处理 `ReadOnlySpan<byte>` → `byte*` + `int` 转换（`fixed` 语句）
-- [ ] C# 高层 wrapper 方法（除 LogMessage 外）添加 `ThreadGuard.EnsureMainThread()` 调用（参见架构文档 §4）
-- [ ] `free_gc_handle` **不在此处**——它是 C++ → C# 方向的调用。C++ `ClrObject` 析构时通过缓存的 `ClrStaticMethod<void, void*>` 调用 C# `GCHandleHelper.Free()`
-- [ ] **扩展规则**: 新增函数需同步: ① C++ 导出函数 ② INativeApiProvider 虚方法 ③ C# LibraryImport 声明
-- [ ] 确保所有导出函数名加 `atlas_` 前缀避免全局符号冲突
+- [x] 定义 `ATLAS_EXPORT` / `ATLAS_NATIVE_API` 宏 — `clr_export.hpp`
+- [x] 实现 `INativeApiProvider` 接口 + `BaseNativeProvider` 基类 — `native_api_provider.hpp/cpp`, `base_native_provider.hpp/cpp`
+- [x] C++ 所有 `atlas_*` 导出函数通过 `ATLAS_NATIVE_API_TABLE` X-Macro 一行委托到 `get_native_api_provider()` — `clr_native_api_defs.hpp` 为**单一定义源**
+- [x] C# `NativeApi` 使用 `[LibraryImport("atlas_engine")]` 声明所有 P/Invoke 方法 — `NativeApi.cs`
+- [x] C# 高层 wrapper 方法处理 `ReadOnlySpan<byte>` → `byte*` + `int` 转换（`fixed` 语句）
+- [ ] ~~C# 高层 wrapper 方法添加 `ThreadGuard.EnsureMainThread()` 调用~~ — **推迟至 ScriptPhase 3**，线程安全由 `AtlasSynchronizationContext` 统一处理（参见架构文档 §4）
+- [x] `free_gc_handle` 通过 `ClrObjectVTable::free_handle` 函数指针调用 C# `GCHandleHelper.FreeHandle()`（不再使用 `ClrStaticMethod` 缓存）
+- [x] **扩展规则**: 新增函数只需编辑 `clr_native_api_defs.hpp`，四个消费文件自动展开（`clr_native_api.hpp/cpp`, `native_api_provider.hpp`, `base_native_provider.hpp/cpp`）。C# 侧对应更新 `NativeApi.cs`
+- [x] 所有导出函数名加 `atlas_` 前缀
+- [x] **额外导出**: `atlas_set_native_api_provider()` + error bridge 查询函数（解决 DLL TLS 隔离问题，详见 [implementation_notes.md](implementation_notes.md) §1）
 
 ---
 
@@ -632,11 +637,12 @@ if (*result == -1)
 
 ### 工作点
 
-- [ ] `ClrErrorBuffer` 使用 `thread_local` 避免并发冲突
-- [ ] C# `ErrorBridge` 使用 `[ThreadStatic]` 对应
-- [ ] `read_clr_error()`: 调用 C# `GetLastError` + `GetLastErrorCode`，构造 `Error` 对象
-- [ ] 错误消息超过 1024 字节时截断
-- [ ] `clear_clr_error()`: 在每次成功调用后清除，避免残留
+- [x] `ClrErrorBuffer` 使用 `thread_local` 避免并发冲突 — `clr_error.hpp/cpp`
+- [x] C# `ErrorBridge` 使用**静态函数指针字段**（`delegate* unmanaged`），通过 `ClrBootstrapArgs` 从 C++ 注入 `clr_error_set/clear/get_code` 地址。不使用 `[ThreadStatic]`——TLS 在 C++ 侧管理。
+- [x] `read_clr_error()`: 从 `t_clr_error` 读取 error_code + message，构造 `Error` 对象，自动清除缓冲区
+- [x] 错误消息超过 1024 字节时截断（`std::min(msg_len, kBufSize)`）
+- [x] `clear_clr_error()`: `t_clr_error = ClrErrorBuffer{}`
+- [x] **⚠️ DLL TLS 隔离**: 需要通过 `atlas_get_clr_error_set_fn()` 获取 DLL 内的函数指针传给 C# — 详见 [implementation_notes.md](implementation_notes.md) §1
 
 ---
 
@@ -744,34 +750,33 @@ public static partial class NativeApi
 
 ### Generator 实现要点
 
-- [ ] 实现 `IIncrementalGenerator` 接口
-- [ ] 扫描带 `[NativeImport]` 的 `static partial` 方法
-- [ ] 根据参数类型决定生成模式:
+- [x] 实现 `IIncrementalGenerator` 接口 — `InteropGenerator.cs`
+- [x] 使用 `ForAttributeWithMetadataName` 高效扫描 `[NativeImport]` 标记的 `static partial` 方法
+- [x] 根据参数类型决定生成模式:
 
 | C# 参数类型 | 生成策略 | 说明 |
 |-------------|---------|------|
-| `int` / `long` / `float` / `double` / `byte` | 直通 | 直接生成 `[LibraryImport]` 为 public 方法 |
-| `uint` / `ushort` 等 unsigned | 直通 | 同上 |
-| `IntPtr` / `nuint` | 直通 | 同上 |
-| `ReadOnlySpan<byte>` | 拆分 | 生成 private `_Method(byte*, int)` + public wrapper with `fixed` |
-| `string` | UTF-8 转换 | 生成 private `_Method(byte*, int)` + `Encoding.UTF8.GetBytes` 转换 |
-| blittable struct | 直通 | by value 传递 |
+| `int` / `long` / `float` / `double` / `byte` 等 | 直通 | private `[DllImport] extern` + public 转发 |
+| `IntPtr` / `nuint` / unmanaged struct | 直通 | 同上 |
+| `ReadOnlySpan<byte>` | 拆分 | private `_Method(byte*, int)` + public wrapper with `fixed` |
+| `string` | UTF-8 转换 | private `_Method(byte*, int)` + `Encoding.UTF8.GetBytes` + `fixed` |
 
-- [ ] 全参数 blittable 的方法: 直接生成 `[LibraryImport]` 为 public partial 方法（无需 wrapper）
-- [ ] 含 Span/string 参数的方法: 生成 private `[LibraryImport]` + public wrapper
-- [ ] 生成编译期诊断:
-  - `ATLAS_INTEROP001`: 类未标记 `partial`
-  - `ATLAS_INTEROP002`: 方法未标记 `partial`
-  - `ATLAS_INTEROP003`: 参数类型不支持（非 blittable 且非 Span/string）
-  - `ATLAS_INTEROP004`: `[NativeImport]` entryPoint 重复
+- [x] **所有方法**统一生成 private `[DllImport] extern _Method` + public partial wrapper body（包括纯 blittable 方法）
+- [x] 生成编译期诊断 ATLAS_INTEROP001–004 — `DiagnosticDescriptors.cs`
+- [x] 增量缓存正确性: `EquatableArray<T>` 包装 `ImmutableArray<T>` 实现值语义相等
+
+> **⚠️ 设计偏差**: 原计划生成 `[LibraryImport]` partial 方法，但 Roslyn Source Generator
+> 的输出**不会被其他 Source Generator 处理**（`LibraryImportGenerator` 不会扫描我们
+> 生成的代码）。因此改用 `[DllImport]` + `static extern`。对全 blittable 参数零开销，
+> IL2CPP 安全。详见 [implementation_notes.md](implementation_notes.md) §3。
 
 ### IL2CPP 安全验证
 
-- [ ] 生成的代码全部基于 `[LibraryImport]` (source-generated P/Invoke)，编译期生成 marshalling，无运行时代码生成
-- [ ] 无 `Marshal.GetDelegateForFunctionPointer`
-- [ ] 无 `Delegate.DynamicInvoke`
-- [ ] 无 `Activator.CreateInstance`
-- [ ] 无 `MethodInfo.Invoke`
+- [x] 生成的 P/Invoke 基于 `[DllImport]` + 全 blittable 参数（`byte*`、`int` 等），无运行时 marshaling 开销
+- [x] 无 `Marshal.GetDelegateForFunctionPointer`
+- [x] 无 `Delegate.DynamicInvoke`
+- [x] 无 `Activator.CreateInstance`
+- [x] 无 `MethodInfo.Invoke`
 
 ---
 
@@ -821,31 +826,23 @@ TEST(NativeApiConsistency, AllFunctionsExported)
 
 ## 任务 2.8: 单元测试
 
-### 测试矩阵
+### C++ 测试矩阵（全部已实现）
 
-| 测试文件 | 核心用例 |
-|---------|---------|
-| `test_clr_marshal.cpp` | blittable 类型往返; 空字符串/Unicode 字符串/超长字符串; byte[] 空/大; Vector3/Quaternion 精度 |
-| `test_clr_object.cpp` | GCHandle 分配/释放; move 后源为空; 双重释放保护; Debug 模式泄漏计数 |
-| `test_clr_invoke.cpp` | 绑定成功/调用正确; 绑定不存在方法→Error; 未绑定就调用→Error; void 返回值 |
-| `test_clr_callback.cpp` | C# 通过 LibraryImport 调用 C++ atlas_log_message; C# 调用 atlas_server_time; atlas_engine 共享库符号解析正确 |
-| `test_clr_error.cpp` | C# 抛异常→C++ 读取 Error; 嵌套异常; 超长消息截断; 清除后无残留 |
+| 测试文件 | 测试数 | 核心用例 |
+|---------|--------|---------|
+| `test_clr_marshal.cpp` | 41 | blittable 结构体布局/偏移; 字符串/byte[] 往返; ScriptValue 全类型 |
+| `test_clr_object.cpp` | 21 | GCHandle 分配/释放; move 语义; vtable 方法调用; 错误传播; Debug 泄漏计数 |
+| `test_clr_invoke.cpp` | 12 | 绑定/调用; int error convention; void/float 返回值; move 语义 |
+| `test_clr_callback.cpp` | 6 | **CLR 集成测试**: ABI 版本; LogMessage; ServerTime; ErrorBridge 异常传播; GCHandle 生命周期; ProcessPrefix |
+| `test_clr_error.cpp` | 12 | TLS 缓冲区读写; 截断; 线程隔离; clear/get_code |
+| `test_native_api_provider.cpp` | 14 | Provider 注册/获取; BaseNativeProvider 默认行为 |
+| `test_native_api_exports.cpp` | 10 | atlas_engine.dll 符号导出验证（dlsym/GetProcAddress） |
+| **总计** | **116** | |
 
-### Generator 测试 (C# xUnit)
+### Generator 测试
 
-```
-tests/csharp/Atlas.Generators.Interop.Tests/
-├── InteropGeneratorTests.cs    # 验证 Generator 输出正确
-└── SnapshotTests/              # 快照测试 — 生成代码与期望文件比对
-```
-
-| 用例 | 验证内容 |
-|------|---------|
-| `GeneratesLibraryImport` | 标记 `[NativeImport]` → 生成 `[LibraryImport]` 声明 |
-| `BlittableParam_DirectPassthrough` | blittable 参数 → 直接生成 public partial 方法 |
-| `SpanParam_GeneratesWrapper` | `ReadOnlySpan<byte>` 参数 → 生成 private P/Invoke + public wrapper with `fixed` |
-| `DiagnosticOnNonPartialClass` | 非 partial 类 → `ATLAS_INTEROP001` 诊断 |
-| `DiagnosticOnDuplicateEntryPoint` | 重复 entryPoint → `ATLAS_INTEROP004` 诊断 |
+Generator 通过 `dotnet build -p:EmitCompilerGeneratedFiles=true` 验证。
+C# xUnit 测试（`CSharpGeneratorDriver` 快照测试）计划在 ScriptPhase 6 测试稳定化阶段添加。
 
 ---
 
