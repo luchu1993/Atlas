@@ -158,6 +158,34 @@ protected:
         return true;
     }
 
+    /// RAII helper: calls EngineInit on construction, EngineShutdown on destruction.
+    struct EngineScope
+    {
+        ClrFallibleMethod<> init;
+        ClrFallibleMethod<> shutdown;
+        ClrScriptEngineTest& test;
+        bool ok = false;
+
+        explicit EngineScope(ClrScriptEngineTest& t) : test(t)
+        {
+            ok = test.bind(init, "EngineInit") && test.bind(shutdown, "EngineShutdown");
+            if (ok)
+            {
+                auto r = init.invoke();
+                ok = r.has_value();
+                if (!ok)
+                    ADD_FAILURE() << "EngineInit failed: " << r.error().message();
+            }
+        }
+        ~EngineScope()
+        {
+            if (ok)
+                (void)shutdown.invoke();
+        }
+        EngineScope(const EngineScope&) = delete;
+        EngineScope& operator=(const EngineScope&) = delete;
+    };
+
     struct TestProvider : BaseNativeProvider
     {
     };
@@ -179,20 +207,16 @@ ClrScriptEngineTest::TestProvider ClrScriptEngineTest::s_provider{};
 
 TEST_F(ClrScriptEngineTest, FullLifecycle)
 {
-    ClrFallibleMethod<> engine_init;
+    EngineScope scope(*this);
+    ASSERT_TRUE(scope.ok);
+
     ClrFallibleMethod<uint8_t> on_init;
     ClrFallibleMethod<float> on_tick;
     ClrFallibleMethod<> on_shutdown;
-    ClrFallibleMethod<> engine_shutdown;
 
-    ASSERT_TRUE(bind(engine_init, "EngineInit"));
     ASSERT_TRUE(bind(on_init, "OnInit"));
     ASSERT_TRUE(bind(on_tick, "OnTick"));
     ASSERT_TRUE(bind(on_shutdown, "OnShutdown"));
-    ASSERT_TRUE(bind(engine_shutdown, "EngineShutdown"));
-
-    auto r1 = engine_init.invoke();
-    ASSERT_TRUE(r1.has_value()) << r1.error().message();
 
     auto r2 = on_init.invoke(uint8_t{0});
     ASSERT_TRUE(r2.has_value()) << r2.error().message();
@@ -205,9 +229,6 @@ TEST_F(ClrScriptEngineTest, FullLifecycle)
 
     auto r4 = on_shutdown.invoke();
     ASSERT_TRUE(r4.has_value()) << r4.error().message();
-
-    auto r5 = engine_shutdown.invoke();
-    ASSERT_TRUE(r5.has_value()) << r5.error().message();
 }
 
 // ============================================================================
@@ -242,28 +263,21 @@ TEST_F(ClrScriptEngineTest, DeltaTimeQuery)
 }
 
 // ============================================================================
-// Test 4: EntityManager.Count is 0 after init
+// Test 4: EntityManager.Count is 0 after init (clean state via EngineScope)
 // ============================================================================
 
 TEST_F(ClrScriptEngineTest, EntityCountAfterInit)
 {
-    ClrFallibleMethod<> engine_init;
+    EngineScope scope(*this);
+    ASSERT_TRUE(scope.ok);
+
     ClrStaticMethod<int, int*> get_count;
-    ClrFallibleMethod<> engine_shutdown;
-
-    ASSERT_TRUE(bind(engine_init, "EngineInit"));
     ASSERT_TRUE(bind(get_count, "GetEntityCount"));
-    ASSERT_TRUE(bind(engine_shutdown, "EngineShutdown"));
-
-    // EngineInit may already have been called in previous tests; accept both OK and error.
-    (void)engine_init.invoke();
 
     int count = -1;
     auto r = get_count.invoke(&count);
     ASSERT_TRUE(r.has_value()) << r.error().message();
     EXPECT_EQ(count, 0);
-
-    (void)engine_shutdown.invoke();
 }
 
 }  // namespace atlas::test

@@ -23,6 +23,22 @@ auto ClrScriptEngine::initialize() -> Result<void>
     if (!configured_)
         return Error{ErrorCode::InvalidArgument, "configure() must be called before initialize()"};
 
+    // RAII rollback: on any failure, reset methods and shut down the CLR host.
+    bool committed = false;
+    struct Rollback
+    {
+        ClrScriptEngine& self;
+        bool& committed;
+        ~Rollback()
+        {
+            if (!committed)
+            {
+                self.reset_all_methods();
+                self.host_.finalize();
+            }
+        }
+    } rollback{*this, committed};
+
     // 1. Start the CLR host.
     auto host_result = host_.initialize(config_.runtime_config_path);
     if (!host_result)
@@ -32,11 +48,8 @@ auto ClrScriptEngine::initialize() -> Result<void>
     // 2. Run Phase 2 bootstrap (error bridge + vtable).
     auto bootstrap_result = clr_bootstrap(host_, config_.runtime_assembly_path);
     if (!bootstrap_result)
-    {
-        host_.finalize();
         return Error{ErrorCode::ScriptError, std::format("ClrScriptEngine: bootstrap failed: {}",
                                                          bootstrap_result.error().message())};
-    }
 
     // 3. Bind Phase 3 lifecycle methods.
     const auto& asm_path = config_.runtime_assembly_path;
@@ -53,54 +66,27 @@ auto ClrScriptEngine::initialize() -> Result<void>
 
     auto r = bind(engine_init_, "EngineInit");
     if (!r)
-    {
-        reset_all_methods();
-        host_.finalize();
         return r.error();
-    }
-
     r = bind(engine_shutdown_, "EngineShutdown");
     if (!r)
-    {
-        reset_all_methods();
-        host_.finalize();
         return r.error();
-    }
-
     r = bind(on_init_, "OnInit");
     if (!r)
-    {
-        reset_all_methods();
-        host_.finalize();
         return r.error();
-    }
-
     r = bind(on_tick_, "OnTick");
     if (!r)
-    {
-        reset_all_methods();
-        host_.finalize();
         return r.error();
-    }
-
     r = bind(on_shutdown_, "OnShutdown");
     if (!r)
-    {
-        reset_all_methods();
-        host_.finalize();
         return r.error();
-    }
 
     // 4. Call C# EngineInit (sets up EngineContext, EntityManager, etc.)
     auto init_result = engine_init_.invoke();
     if (!init_result)
-    {
-        reset_all_methods();
-        host_.finalize();
         return Error{ErrorCode::ScriptError, std::format("ClrScriptEngine: EngineInit failed: {}",
                                                          init_result.error().message())};
-    }
 
+    committed = true;
     initialized_ = true;
     ATLAS_LOG_INFO("ClrScriptEngine initialized ({})", runtime_name());
     return {};

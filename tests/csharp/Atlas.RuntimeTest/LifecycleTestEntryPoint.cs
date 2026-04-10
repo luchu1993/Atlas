@@ -9,9 +9,9 @@ namespace Atlas.RuntimeTest;
 // LifecycleTestEntryPoint — forwarding [UnmanagedCallersOnly] entry points
 // ============================================================================
 //
-// These methods forward to Lifecycle / EntityManager / Log / Time classes
-// in Atlas.Runtime.  They must live in Atlas.RuntimeTest to avoid the
-// dual-Assembly-instance issue (see implementation_notes.md §2).
+// These methods forward to Lifecycle.DoXxx() in Atlas.Runtime.
+// They must live in Atlas.RuntimeTest to avoid the dual-Assembly-instance
+// issue (see implementation_notes.md §2).
 
 public static class LifecycleTestEntryPoint
 {
@@ -22,7 +22,7 @@ public static class LifecycleTestEntryPoint
     {
         try
         {
-            EngineContext.Initialize();
+            Lifecycle.DoEngineInit();
             return 0;
         }
         catch (Exception ex)
@@ -37,8 +37,7 @@ public static class LifecycleTestEntryPoint
     {
         try
         {
-            EntityManager.Instance.OnShutdownAll();
-            EngineContext.Shutdown();
+            Lifecycle.DoEngineShutdown();
             return 0;
         }
         catch (Exception ex)
@@ -53,7 +52,7 @@ public static class LifecycleTestEntryPoint
     {
         try
         {
-            EntityManager.Instance.OnInitAll(isReload != 0);
+            Lifecycle.DoOnInit(isReload != 0);
             return 0;
         }
         catch (Exception ex)
@@ -68,7 +67,7 @@ public static class LifecycleTestEntryPoint
     {
         try
         {
-            EntityManager.Instance.OnTickAll(deltaTime);
+            Lifecycle.DoOnTick(deltaTime);
             return 0;
         }
         catch (Exception ex)
@@ -83,7 +82,7 @@ public static class LifecycleTestEntryPoint
     {
         try
         {
-            EntityManager.Instance.OnShutdownAll();
+            Lifecycle.DoOnShutdown();
             return 0;
         }
         catch (Exception ex)

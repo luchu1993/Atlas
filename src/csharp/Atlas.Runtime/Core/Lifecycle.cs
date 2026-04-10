@@ -12,16 +12,50 @@ namespace Atlas.Core;
 /// <remarks>
 /// <see cref="Bootstrap.Initialize"/> handles the low-level CLR setup
 /// (error bridge, vtable). These methods handle the engine-level lifecycle.
+///
+/// Shutdown sequence (called by ClrScriptEngine):
+///   1. OnShutdown()     — calls OnDestroy on all entities
+///   2. EngineShutdown() — tears down EngineContext (does NOT touch entities)
 /// </remarks>
-internal static unsafe class Lifecycle
+internal static class Lifecycle
 {
+    // ---- Non-[UnmanagedCallersOnly] core logic (shared with test forwarders) ----
+
+    internal static void DoEngineInit()
+    {
+        EngineContext.Initialize();
+        Log.Info("Atlas C# runtime initialized");
+    }
+
+    internal static void DoEngineShutdown()
+    {
+        Log.Info("Atlas C# runtime shutting down");
+        EngineContext.Shutdown();
+    }
+
+    internal static void DoOnInit(bool isReload)
+    {
+        EntityManager.Instance.OnInitAll(isReload);
+    }
+
+    internal static void DoOnTick(float deltaTime)
+    {
+        EntityManager.Instance.OnTickAll(deltaTime);
+    }
+
+    internal static void DoOnShutdown()
+    {
+        EntityManager.Instance.OnShutdownAll();
+    }
+
+    // ---- [UnmanagedCallersOnly] entry points (C++ calls these) ----
+
     [UnmanagedCallersOnly]
     public static int EngineInit()
     {
         try
         {
-            EngineContext.Initialize();
-            Log.Info("Atlas C# runtime initialized");
+            DoEngineInit();
             return 0;
         }
         catch (Exception ex)
@@ -36,9 +70,7 @@ internal static unsafe class Lifecycle
     {
         try
         {
-            Log.Info("Atlas C# runtime shutting down");
-            EntityManager.Instance.OnShutdownAll();
-            EngineContext.Shutdown();
+            DoEngineShutdown();
             return 0;
         }
         catch (Exception ex)
@@ -53,7 +85,7 @@ internal static unsafe class Lifecycle
     {
         try
         {
-            EntityManager.Instance.OnInitAll(isReload != 0);
+            DoOnInit(isReload != 0);
             return 0;
         }
         catch (Exception ex)
@@ -68,7 +100,7 @@ internal static unsafe class Lifecycle
     {
         try
         {
-            EntityManager.Instance.OnTickAll(deltaTime);
+            DoOnTick(deltaTime);
             return 0;
         }
         catch (Exception ex)
@@ -83,7 +115,7 @@ internal static unsafe class Lifecycle
     {
         try
         {
-            EntityManager.Instance.OnShutdownAll();
+            DoOnShutdown();
             return 0;
         }
         catch (Exception ex)

@@ -76,9 +76,28 @@ public sealed class EntityManager
 
     internal void OnShutdownAll()
     {
+        _iterating = true;
         foreach (var entity in _entities.Values)
             entity.OnDestroy();
+        _iterating = false;
+        _pendingCreates.Clear();
+        _pendingDestroys.Clear();
         _entities.Clear();
+    }
+
+    /// <summary>
+    /// Full reset: clear entities, reset ID sequence and process prefix.
+    /// Called by <see cref="Atlas.Core.EngineContext.Shutdown"/> to ensure
+    /// a clean slate for re-initialization within the same process.
+    /// </summary>
+    internal void Reset()
+    {
+        _entities.Clear();
+        _pendingCreates.Clear();
+        _pendingDestroys.Clear();
+        _localSeq = 1;
+        _processPrefix = 0;
+        _iterating = false;
     }
 
     /// <summary>Get all entities (used by hot-reload serialization).</summary>
