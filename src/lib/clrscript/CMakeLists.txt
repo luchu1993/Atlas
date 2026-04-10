@@ -3,9 +3,12 @@
 atlas_add_library(atlas_clrscript
     SOURCES
         base_native_provider.cpp
+        clr_bootstrap.cpp
+        clr_error.cpp
         clr_host.cpp
         $<$<PLATFORM_ID:Windows>:clr_host_windows.cpp>
         $<$<PLATFORM_ID:Linux>:clr_host_linux.cpp>
+        clr_object.cpp
         native_api_provider.cpp
         clr_marshal.cpp
     DEPS

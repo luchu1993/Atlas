@@ -182,6 +182,23 @@ target_compile_definitions(test_native_api_exports PRIVATE
 # Ensure atlas_engine is built before the export-check test runs.
 add_dependencies(test_native_api_exports atlas_engine)
 
+# ── ScriptPhase 2: ClrError / ClrInvoke / ClrObject ─────────────────────────
+
+atlas_add_test(test_clr_error
+    SOURCES test_clr_error.cpp
+    DEPS atlas_clrscript
+)
+
+atlas_add_test(test_clr_invoke
+    SOURCES test_clr_invoke.cpp
+    DEPS atlas_clrscript
+)
+
+atlas_add_test(test_clr_object
+    SOURCES test_clr_object.cpp
+    DEPS atlas_clrscript
+)
+
 # ── ScriptPhase 1: CLR host smoke test ───────────────────────────────────────
 
 # Build the C# smoke test assembly before running the C++ test
@@ -210,3 +227,58 @@ if(WIN32 AND DOTNET_NETHOST_DLL)
         COMMENT "Copying nethost.dll alongside test_clr_host"
     )
 endif()
+
+# ── ScriptPhase 2: C# → C++ callback integration test ───────────────────────
+
+# Build Interop Source Generator (must be ready before Atlas.Runtime's dotnet build)
+atlas_build_csharp_project(src/csharp/Atlas.Generators.Interop)
+
+# Build Atlas.Runtime (src/csharp) — produces Atlas.Runtime.dll
+atlas_build_csharp_project(src/csharp/Atlas.Runtime)
+add_dependencies(csharp_src_csharp_Atlas_Runtime csharp_src_csharp_Atlas_Generators_Interop)
+
+# Build Atlas.RuntimeTest — produces Atlas.RuntimeTest.dll + copies Atlas.Runtime.dll
+atlas_build_csharp_project(tests/csharp/Atlas.RuntimeTest)
+
+# RuntimeTest project-references Atlas.Runtime, so build Atlas.Runtime first.
+add_dependencies(csharp_tests_csharp_Atlas_RuntimeTest csharp_src_csharp_Atlas_Runtime)
+
+atlas_add_test(test_clr_callback
+    SOURCES test_clr_callback.cpp
+    DEPS atlas_clrscript atlas_platform
+)
+
+set(_runtime_test_out_dir
+    "${CMAKE_BINARY_DIR}/csharp/tests/csharp/Atlas.RuntimeTest")
+
+target_compile_definitions(test_clr_callback PRIVATE
+    ATLAS_SOURCE_DIR="${CMAKE_SOURCE_DIR}"
+    ATLAS_BINARY_DIR="${CMAKE_BINARY_DIR}"
+    ATLAS_ENGINE_DIR="$<TARGET_FILE_DIR:atlas_engine>"
+    ATLAS_RUNTIME_TEST_DIR="${_runtime_test_out_dir}"
+)
+
+add_dependencies(test_clr_callback
+    csharp_tests_csharp_Atlas_RuntimeTest
+    atlas_engine
+)
+
+# Copy nethost.dll and atlas_engine.dll next to the test binary / managed assembly.
+if(WIN32 AND DOTNET_NETHOST_DLL)
+    add_custom_command(TARGET test_clr_callback POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "${DOTNET_NETHOST_DLL}"
+            "$<TARGET_FILE_DIR:test_clr_callback>/nethost.dll"
+        COMMENT "Copying nethost.dll alongside test_clr_callback"
+    )
+endif()
+
+# Copy atlas_engine.dll into the Atlas.RuntimeTest output dir so that both
+# DynamicLibrary::load() and C# [LibraryImport("atlas_engine")] resolve to
+# the same DLL instance (avoiding duplicate global state from two DLL copies).
+add_custom_command(TARGET test_clr_callback POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+        "$<TARGET_FILE:atlas_engine>"
+        "${_runtime_test_out_dir}/$<TARGET_FILE_NAME:atlas_engine>"
+    COMMENT "Copying atlas_engine to Atlas.RuntimeTest output dir"
+)

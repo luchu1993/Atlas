@@ -1,0 +1,15 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net9.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <AssemblyName>Atlas.RuntimeTest</AssemblyName>
+    <RootNamespace>Atlas.RuntimeTest</RootNamespace>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\..\src\csharp\Atlas.Runtime\Atlas.Runtime.csproj" />
+  </ItemGroup>
+
+</Project>

@@ -1,0 +1,20 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net9.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <Optimize>true</Optimize>
+    <!-- Suppress IL2026/IL3050 for intentional unsafe patterns -->
+    <NoWarn>$(NoWarn);IL2026;IL3050</NoWarn>
+    <AssemblyName>Atlas.Runtime</AssemblyName>
+    <RootNamespace>Atlas</RootNamespace>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="../Atlas.Generators.Interop/Atlas.Generators.Interop.csproj"
+                      OutputItemType="Analyzer"
+                      ReferenceOutputAssembly="false" />
+  </ItemGroup>
+
+</Project>
