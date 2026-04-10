@@ -11,7 +11,9 @@
 #include <string>
 #include <vector>
 
-using namespace atlas;
+namespace atlas::test
+{
+
 using namespace atlas::clr_marshal;
 
 // ============================================================================
@@ -444,3 +446,5 @@ TEST(ClrMarshalBounds, ToSpanRefNormalSpanWorks)
     EXPECT_EQ(ref.data, buf.data());
     EXPECT_EQ(ref.length, static_cast<int32_t>(buf.size()));
 }
+
+}  // namespace atlas::test

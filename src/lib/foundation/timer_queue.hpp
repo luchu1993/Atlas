@@ -1,5 +1,6 @@
 #pragma once
 
+#include "foundation/pool_allocator.hpp"
 #include "foundation/time.hpp"
 
 #include <cstdint>
@@ -68,6 +69,10 @@ private:
             return a->fire_time > b->fire_time;  // std::greater for min-heap
         }
     };
+
+    // Pool allocator for Node objects — avoids per-timer heap allocation.
+    // 64 pre-allocated slots; doubles on each grow.
+    TypedPool<Node> node_pool_{64};
 
     std::vector<Node*> heap_;
     // O(1) lookup for cancel(): id → Node* (does not own the node)

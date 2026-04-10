@@ -37,14 +37,15 @@ struct BgTaskManager::Impl
 };
 
 BgTaskManager::BgTaskManager(EventDispatcher& dispatcher, uint32_t num_threads)
-    : impl_(std::make_unique<Impl>(dispatcher, num_threads))
+    : impl_(std::make_unique<Impl>(dispatcher, num_threads)),
+      registration_(impl_->dispatcher.add_frequent_task(this))
 {
-    impl_->dispatcher.add_frequent_task(this);
 }
 
 BgTaskManager::~BgTaskManager()
 {
-    impl_->dispatcher.remove_frequent_task(this);
+    // registration_ destructor removes us from the dispatcher automatically.
+    registration_.reset();
     impl_->pool.shutdown();
     // Process any remaining completed tasks
     do_task();

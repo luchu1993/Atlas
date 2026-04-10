@@ -1,48 +1,28 @@
 #pragma once
 
 #include "clrscript/clr_export.hpp"
+#include "clrscript/clr_native_api_defs.hpp"
 
 #include <cstddef>
 #include <cstdint>
 
 // ============================================================================
-// atlas_* C-linkage export functions
+// atlas_* C-linkage export function declarations
 // ============================================================================
 //
-// These functions are exported by atlas_engine.dll/.so.  C# calls them via
-// [LibraryImport("atlas_engine")].
+// Generated from ATLAS_NATIVE_API_TABLE in clr_native_api_defs.hpp.
+// To add a new export, edit clr_native_api_defs.hpp ONLY — this file and
+// clr_native_api.cpp update automatically.
 //
-// Each function delegates to the INativeApiProvider registered for the
-// current process type.  They are implemented in clr_native_api.cpp which is
-// compiled exclusively into the atlas_engine shared library.
-//
-// Naming convention: atlas_ prefix + snake_case, matching the C# entrypoints.
+// atlas_get_abi_version() is declared separately (not in the table) because it
+// does not delegate to INativeApiProvider.
 
-// ---- Logging ----------------------------------------------------------------
+#define X(ret, name, params, call) ATLAS_NATIVE_API ret atlas_##name params;
+ATLAS_NATIVE_API_TABLE(X)
+#undef X
 
-ATLAS_NATIVE_API void atlas_log_message(int32_t level, const char* msg, int32_t len);
+// ---- ABI version ------------------------------------------------------------
+// C# startup code calls this to verify the native/managed struct layouts match.
+// Returns atlas::kAtlasAbiVersion.
 
-// ---- Time -------------------------------------------------------------------
-
-ATLAS_NATIVE_API double atlas_server_time();
-ATLAS_NATIVE_API float atlas_delta_time();
-
-// ---- Process identity -------------------------------------------------------
-
-ATLAS_NATIVE_API uint8_t atlas_get_process_prefix();
-
-// ---- RPC dispatch -----------------------------------------------------------
-
-ATLAS_NATIVE_API void atlas_send_client_rpc(uint32_t entity_id, uint32_t rpc_id, uint8_t target,
-                                            const uint8_t* payload, int32_t len);
-
-ATLAS_NATIVE_API void atlas_send_cell_rpc(uint32_t entity_id, uint32_t rpc_id,
-                                          const uint8_t* payload, int32_t len);
-
-ATLAS_NATIVE_API void atlas_send_base_rpc(uint32_t entity_id, uint32_t rpc_id,
-                                          const uint8_t* payload, int32_t len);
-
-// ---- Entity type registry ---------------------------------------------------
-
-ATLAS_NATIVE_API void atlas_register_entity_type(const uint8_t* data, int32_t len);
-ATLAS_NATIVE_API void atlas_unregister_all_entity_types();
+ATLAS_NATIVE_API uint32_t atlas_get_abi_version();

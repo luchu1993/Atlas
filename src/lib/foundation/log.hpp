@@ -68,8 +68,10 @@ private:
     // Sinks are published as an immutable snapshot via atomic shared_ptr.
     // log() does a single lock-free load; writers serialize with mutex_.
     using SinkList = std::vector<std::shared_ptr<LogSink>>;
-    mutable std::mutex mutex_;
-    LogLevel runtime_level_{LogLevel::Trace};
+    mutable std::mutex mutex_;  // guards sink list mutations only
+    // runtime_level_ is read on every log call — use atomic to avoid mutex
+    // contention on the hot path.  LogLevel is uint8_t so this is lock-free.
+    std::atomic<LogLevel> runtime_level_{LogLevel::Trace};
     std::atomic<std::shared_ptr<SinkList>> sinks_{std::make_shared<SinkList>()};
 };
 

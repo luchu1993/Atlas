@@ -12,6 +12,65 @@
 namespace atlas
 {
 
+class EventDispatcher;
+
+// ============================================================================
+// FrequentTaskRegistration — RAII token returned by add_frequent_task()
+// ============================================================================
+//
+// Destructor automatically calls remove_frequent_task() on the dispatcher.
+// Store as a member in objects that register a FrequentTask — they will be
+// deregistered when the owner is destroyed, with no manual remove_frequent_task()
+// calls needed in the destructor.
+//
+// IMPORTANT: The registration must be destroyed before the referenced
+// EventDispatcher.  Declare it as a member AFTER any dispatcher reference so
+// that member destruction order (reverse of declaration) is safe.
+
+class FrequentTaskRegistration
+{
+public:
+    FrequentTaskRegistration() = default;
+
+    ~FrequentTaskRegistration();
+
+    // Move-only: copying would lead to double-removal.
+    FrequentTaskRegistration(const FrequentTaskRegistration&) = delete;
+    FrequentTaskRegistration& operator=(const FrequentTaskRegistration&) = delete;
+
+    FrequentTaskRegistration(FrequentTaskRegistration&& other) noexcept
+        : dispatcher_(other.dispatcher_), task_(other.task_)
+    {
+        other.dispatcher_ = nullptr;
+        other.task_ = nullptr;
+    }
+
+    FrequentTaskRegistration& operator=(FrequentTaskRegistration&& other) noexcept
+    {
+        if (this != &other)
+        {
+            reset();
+            dispatcher_ = other.dispatcher_;
+            task_ = other.task_;
+            other.dispatcher_ = nullptr;
+            other.task_ = nullptr;
+        }
+        return *this;
+    }
+
+    [[nodiscard]] auto is_valid() const -> bool { return dispatcher_ != nullptr; }
+
+    // Explicitly release the registration early (calls remove_frequent_task).
+    void reset();
+
+private:
+    friend class EventDispatcher;
+    FrequentTaskRegistration(EventDispatcher* d, FrequentTask* t) : dispatcher_(d), task_(t) {}
+
+    EventDispatcher* dispatcher_{nullptr};
+    FrequentTask* task_{nullptr};
+};
+
 // Thread safety: NOT thread-safe. All calls must originate from the same thread.
 // Callbacks may safely call register/deregister/add_timer/cancel_timer/stop.
 class EventDispatcher
@@ -36,8 +95,13 @@ public:
         -> TimerHandle;
     auto cancel_timer(TimerHandle handle) -> bool;
 
-    // Frequent tasks
-    void add_frequent_task(FrequentTask* task);
+    // Frequent tasks — returns a RAII token that deregisters on destruction.
+    // Store the returned FrequentTaskRegistration as a member (declared after
+    // any EventDispatcher reference) to guarantee automatic cleanup.
+    [[nodiscard]] auto add_frequent_task(FrequentTask* task) -> FrequentTaskRegistration;
+
+    // Internal removal — called by FrequentTaskRegistration::reset().
+    // May also be called directly when manual lifetime control is needed.
     void remove_frequent_task(FrequentTask* task);
 
     // Main loop

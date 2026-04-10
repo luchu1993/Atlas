@@ -100,6 +100,12 @@ enum class ClrScriptValueType : int32_t
     String = 4,  // ClrStringRef — points into C++ std::string storage
     Bytes = 5,   // ClrSpanRef   — points into C++ std::vector<byte> storage
     Object = 6,  // void*        — opaque GCHandle; ownership managed by ClrObject (Phase 2.2)
+
+    // Range [100, 199] is reserved for future composite types.
+    // Extend here to preserve ABI compatibility with existing values.
+    // Array    = 100,
+    // Map      = 101,
+    // EntityRef = 102,
 };
 
 struct ClrScriptValue

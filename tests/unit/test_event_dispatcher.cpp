@@ -1,6 +1,7 @@
-#include <gtest/gtest.h>
 #include "network/event_dispatcher.hpp"
 #include "network/socket.hpp"
+
+#include <gtest/gtest.h>
 
 #include <array>
 #include <chrono>
@@ -23,10 +24,7 @@ TEST(EventDispatcher, TimerFires)
     dispatcher.set_max_poll_wait(Milliseconds(1));
 
     int fired = 0;
-    auto handle = dispatcher.add_timer(Milliseconds(0), [&](TimerHandle)
-    {
-        ++fired;
-    });
+    auto handle = dispatcher.add_timer(Milliseconds(0), [&](TimerHandle) { ++fired; });
     (void)handle;
 
     dispatcher.process_once();
@@ -39,14 +37,15 @@ TEST(EventDispatcher, RepeatingTimerMultipleFires)
     dispatcher.set_max_poll_wait(Milliseconds(1));
 
     int count = 0;
-    auto handle = dispatcher.add_repeating_timer(Milliseconds(1), [&](TimerHandle)
-    {
-        ++count;
-        if (count >= 3)
-        {
-            // Will be cancelled externally
-        }
-    });
+    auto handle = dispatcher.add_repeating_timer(Milliseconds(1),
+                                                 [&](TimerHandle)
+                                                 {
+                                                     ++count;
+                                                     if (count >= 3)
+                                                     {
+                                                         // Will be cancelled externally
+                                                     }
+                                                 });
 
     // Process several times
     for (int i = 0; i < 10; ++i)
@@ -71,7 +70,7 @@ TEST(EventDispatcher, FrequentTaskRunsEveryIteration)
     };
 
     CountTask task;
-    dispatcher.add_frequent_task(&task);
+    auto reg = dispatcher.add_frequent_task(&task);
 
     dispatcher.process_once();
     dispatcher.process_once();
@@ -79,7 +78,7 @@ TEST(EventDispatcher, FrequentTaskRunsEveryIteration)
 
     EXPECT_EQ(task.count, 3);
 
-    dispatcher.remove_frequent_task(&task);
+    reg.reset();  // explicit deregistration
     dispatcher.process_once();
     EXPECT_EQ(task.count, 3);  // no longer called
 }
@@ -105,7 +104,7 @@ TEST(EventDispatcher, FrequentTaskSafeRemovalDuringIteration)
 
     SelfRemovingTask task;
     task.disp = &dispatcher;
-    dispatcher.add_frequent_task(&task);
+    auto reg = dispatcher.add_frequent_task(&task);
 
     dispatcher.process_once();  // count=1
     dispatcher.process_once();  // count=2, self-remove
@@ -119,10 +118,7 @@ TEST(EventDispatcher, StopDuringRun)
     dispatcher.set_max_poll_wait(Milliseconds(1));
 
     // Timer that stops the loop after 1 fire
-    auto handle = dispatcher.add_timer(Milliseconds(0), [&](TimerHandle)
-    {
-        dispatcher.stop();
-    });
+    auto handle = dispatcher.add_timer(Milliseconds(0), [&](TimerHandle) { dispatcher.stop(); });
     (void)handle;
 
     dispatcher.run();  // should return after timer fires and calls stop()
@@ -145,13 +141,13 @@ TEST(EventDispatcher, IoReadNotification)
 
     bool read_triggered = false;
     auto reg = dispatcher.register_reader(receiver->fd(),
-        [&](FdHandle, IOEvent events)
-        {
-            if ((events & IOEvent::Readable) != IOEvent::None)
-            {
-                read_triggered = true;
-            }
-        });
+                                          [&](FdHandle, IOEvent events)
+                                          {
+                                              if ((events & IOEvent::Readable) != IOEvent::None)
+                                              {
+                                                  read_triggered = true;
+                                              }
+                                          });
     ASSERT_TRUE(reg.has_value());
 
     // Send data to trigger read event
@@ -190,28 +186,31 @@ TEST(EventDispatcher, ReRegisterDuringCallbackDoesNotCrash)
 
     // Register callback A. Inside A, deregister then re-register with callback B.
     auto reg = dispatcher.register_reader(sock->fd(),
-        [&](FdHandle fd, IOEvent)
-        {
-            callback_a_called = true;
+                                          [&](FdHandle fd, IOEvent)
+                                          {
+                                              callback_a_called = true;
 
-            // Drain the data so socket is no longer ready after this
-            std::array<std::byte, 64> drain{};
-            (void)sock->recv_from(drain);
+                                              // Drain the data so socket is no longer ready after
+                                              // this
+                                              std::array<std::byte, 64> drain{};
+                                              (void)sock->recv_from(drain);
 
-            // Deregister and re-register with a different callback
-            auto dereg = dispatcher.deregister(fd);
-            if (dereg.has_value())
-            {
-                auto reg2 = dispatcher.register_reader(fd,
-                    [&](FdHandle, IOEvent)
-                    {
-                        callback_b_called = true;
-                        std::array<std::byte, 64> drain2{};
-                        (void)sock->recv_from(drain2);
-                    });
-                reregister_ok = reg2.has_value();
-            }
-        });
+                                              // Deregister and re-register with a different
+                                              // callback
+                                              auto dereg = dispatcher.deregister(fd);
+                                              if (dereg.has_value())
+                                              {
+                                                  auto reg2 = dispatcher.register_reader(
+                                                      fd,
+                                                      [&](FdHandle, IOEvent)
+                                                      {
+                                                          callback_b_called = true;
+                                                          std::array<std::byte, 64> drain2{};
+                                                          (void)sock->recv_from(drain2);
+                                                      });
+                                                  reregister_ok = reg2.has_value();
+                                              }
+                                          });
     ASSERT_TRUE(reg.has_value());
 
     // Send data to trigger callback A
@@ -254,32 +253,32 @@ TEST(EventDispatcher, ReRegisterNewCallbackUsedOnNextPoll)
     int callback_b_count = 0;
 
     // Shared lambda for callback B (captured by reference)
-    std::function<void(FdHandle, IOEvent)> callback_b =
-        [&](FdHandle, IOEvent)
-        {
-            ++callback_b_count;
-            std::array<std::byte, 64> drain{};
-            (void)receiver->recv_from(drain);
-        };
+    std::function<void(FdHandle, IOEvent)> callback_b = [&](FdHandle, IOEvent)
+    {
+        ++callback_b_count;
+        std::array<std::byte, 64> drain{};
+        (void)receiver->recv_from(drain);
+    };
 
     // Callback A: deregister self, re-register with callback B, then send
     // more data so B gets triggered on next process_once().
     auto reg = dispatcher.register_reader(receiver->fd(),
-        [&](FdHandle fd, IOEvent)
-        {
-            ++callback_a_count;
-            std::array<std::byte, 64> drain{};
-            (void)receiver->recv_from(drain);
+                                          [&](FdHandle fd, IOEvent)
+                                          {
+                                              ++callback_a_count;
+                                              std::array<std::byte, 64> drain{};
+                                              (void)receiver->recv_from(drain);
 
-            // Swap to callback B
-            (void)dispatcher.deregister(fd);
-            auto reg2 = dispatcher.register_reader(fd, callback_b);
-            (void)reg2;
+                                              // Swap to callback B
+                                              (void)dispatcher.deregister(fd);
+                                              auto reg2 =
+                                                  dispatcher.register_reader(fd, callback_b);
+                                              (void)reg2;
 
-            // Send more data so fd is ready on next poll
-            std::array<std::byte, 1> pkt = {std::byte{0xBB}};
-            (void)sender->send_to(pkt, recv_addr);
-        });
+                                              // Send more data so fd is ready on next poll
+                                              std::array<std::byte, 1> pkt = {std::byte{0xBB}};
+                                              (void)sender->send_to(pkt, recv_addr);
+                                          });
     ASSERT_TRUE(reg.has_value());
 
     // Trigger callback A
@@ -315,12 +314,13 @@ TEST(EventDispatcher, DeregisterDuringCallback)
 
     bool callback_called = false;
     auto reg = dispatcher.register_reader(sock2->fd(),
-        [&](FdHandle fd, IOEvent)
-        {
-            callback_called = true;
-            // Deregister self during callback — should be safe (deferred)
-            (void)dispatcher.deregister(fd);
-        });
+                                          [&](FdHandle fd, IOEvent)
+                                          {
+                                              callback_called = true;
+                                              // Deregister self during callback — should be safe
+                                              // (deferred)
+                                              (void)dispatcher.deregister(fd);
+                                          });
     ASSERT_TRUE(reg.has_value());
 
     // Send data to trigger

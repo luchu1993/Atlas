@@ -1,8 +1,8 @@
 #include "foundation/log_sinks.hpp"
 
 #include <cstdio>
+#include <format>
 #include <fstream>
-#include <sstream>
 
 namespace atlas
 {
@@ -14,31 +14,22 @@ namespace atlas
 void ConsoleSink::write(LogLevel level, std::string_view category, std::string_view message,
                         const std::source_location& location)
 {
-    const char* filename = location.file_name();
-
-    std::ostringstream oss;
+    std::string formatted;
     if (category.empty())
     {
-        oss << "[" << log_level_name(level) << "] "
-            << "[" << filename << ":" << location.line() << "] " << message << "\n";
+        formatted = std::format("[{}] [{}:{}] {}\n", log_level_name(level), location.file_name(),
+                                location.line(), message);
     }
     else
     {
-        oss << "[" << log_level_name(level) << "] "
-            << "[" << category << "] "
-            << "[" << filename << ":" << location.line() << "] " << message << "\n";
+        formatted = std::format("[{}] [{}] [{}:{}] {}\n", log_level_name(level), category,
+                                location.file_name(), location.line(), message);
     }
-
-    std::string formatted = oss.str();
 
     if (level >= LogLevel::Error)
-    {
-        fprintf(stderr, "%s", formatted.c_str());
-    }
+        std::fwrite(formatted.data(), 1, formatted.size(), stderr);
     else
-    {
-        fprintf(stdout, "%s", formatted.c_str());
-    }
+        std::fwrite(formatted.data(), 1, formatted.size(), stdout);
 }
 
 void ConsoleSink::flush()
@@ -75,26 +66,19 @@ void FileSink::write(LogLevel level, std::string_view category, std::string_view
         return;
     }
 
-    const char* filename = location.file_name();
+    std::string formatted;
+    if (category.empty())
+    {
+        formatted = std::format("[{}] [{}:{}] {}\n", log_level_name(level), location.file_name(),
+                                location.line(), message);
+    }
+    else
+    {
+        formatted = std::format("[{}] [{}] [{}:{}] {}\n", log_level_name(level), category,
+                                location.file_name(), location.line(), message);
+    }
 
-    try
-    {
-        if (category.empty())
-        {
-            impl_->file_ << "[" << log_level_name(level) << "] "
-                         << "[" << filename << ":" << location.line() << "] " << message << "\n";
-        }
-        else
-        {
-            impl_->file_ << "[" << log_level_name(level) << "] "
-                         << "[" << category << "] "
-                         << "[" << filename << ":" << location.line() << "] " << message << "\n";
-        }
-    }
-    catch (...)
-    {
-        // Silently ignore ofstream failures
-    }
+    impl_->file_.write(formatted.data(), static_cast<std::streamsize>(formatted.size()));
 }
 
 void FileSink::flush()

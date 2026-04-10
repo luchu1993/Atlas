@@ -7,6 +7,8 @@
 #include <ws2tcpip.h>
 #pragma comment(lib, "ws2_32.lib")
 #else
+#include <cerrno>
+#include <cstring>
 #include <sys/select.h>
 #include <sys/time.h>
 #endif
@@ -124,9 +126,11 @@ public:
         if (result < 0)
         {
 #if ATLAS_PLATFORM_WINDOWS
-            return Error(ErrorCode::IoError, "select() failed");
+            int err = ::WSAGetLastError();
+            return Error(ErrorCode::IoError, std::format("select() failed: WSA error {}", err));
 #else
-            return Error(ErrorCode::IoError, "select() failed");
+            return Error(ErrorCode::IoError, std::format("select() failed: {} (errno={})",
+                                                         std::strerror(errno), errno));
 #endif
         }
 
@@ -135,39 +139,35 @@ public:
             return 0;
         }
 
-        // Snapshot entries before dispatch — callbacks may call add/remove/modify
-        // which would invalidate iterators if we iterated entries_ directly.
-        auto snapshot = entries_;
-        int dispatched = 0;
-
-        for (const auto& [fd, entry] : snapshot)
+        // Collect only the ready {fd, events} pairs into a lightweight snapshot
+        // (O(ready) pairs, not O(n) full map copy with std::function heap allocs).
+        // ready_fds_ is a member to reuse its buffer across poll() calls.
+        ready_fds_.clear();
+        for (const auto& [fd, entry] : entries_)
         {
             IOEvent events = IOEvent::None;
-
             if (FD_ISSET(fd, &read_set))
-            {
                 events |= IOEvent::Readable;
-            }
             if (FD_ISSET(fd, &write_set))
-            {
                 events |= IOEvent::Writable;
-            }
             if (FD_ISSET(fd, &except_set))
-            {
                 events |= IOEvent::Error;
-            }
-
             if (events != IOEvent::None)
+                ready_fds_.push_back({fd, events});
+        }
+
+        int dispatched = 0;
+        for (auto [fd, events] : ready_fds_)
+        {
+            // Re-lookup in case a prior callback called remove() on this fd.
+            // Copy the callback before invoking — callback may call remove()
+            // which destroys the Entry that owns the std::function.
+            auto current_it = entries_.find(fd);
+            if (current_it != entries_.end())
             {
-                // Copy the current callback before invoking — the callback may
-                // call remove() which destroys the Entry containing the callback.
-                auto current_it = entries_.find(fd);
-                if (current_it != entries_.end())
-                {
-                    auto cb = current_it->second.callback;
-                    cb(fd, events);
-                    ++dispatched;
-                }
+                auto cb = current_it->second.callback;
+                cb(fd, events);
+                ++dispatched;
             }
         }
 
@@ -181,7 +181,15 @@ private:
         IOCallback callback;
     };
 
+    // Reused across poll() calls to avoid per-call heap allocation.
+    struct ReadyFd
+    {
+        FdHandle fd;
+        IOEvent events;
+    };
+
     std::unordered_map<FdHandle, Entry> entries_;
+    std::vector<ReadyFd> ready_fds_;
 };
 
 // ============================================================================

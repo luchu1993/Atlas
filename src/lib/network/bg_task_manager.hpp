@@ -1,5 +1,6 @@
 #pragma once
 
+#include "network/event_dispatcher.hpp"
 #include "network/frequent_task.hpp"
 
 #include <atomic>
@@ -55,6 +56,9 @@ private:
 
     struct Impl;
     std::unique_ptr<Impl> impl_;
+    // IMPORTANT: registration_ must be declared after impl_ so the destructor
+    // removes the task before impl_ (which owns the dispatcher reference) is torn down.
+    FrequentTaskRegistration registration_;
 };
 
 }  // namespace atlas

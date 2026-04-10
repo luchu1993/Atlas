@@ -6,6 +6,7 @@
 #include <filesystem>
 #include <optional>
 #include <string_view>
+#include <type_traits>
 
 namespace atlas
 {
@@ -54,6 +55,20 @@ public:
     [[nodiscard]] auto get_method(const std::filesystem::path& assembly_path,
                                   std::string_view type_name, std::string_view method_name)
         -> Result<void*>;
+
+    // Type-safe wrapper around get_method. FuncPtr must be a function pointer type.
+    // Example: auto fn = host.get_method_as<void(*)(int)>(asm, type, method);
+    template <typename FuncPtr>
+        requires std::is_pointer_v<FuncPtr> && std::is_function_v<std::remove_pointer_t<FuncPtr>>
+    [[nodiscard]] auto get_method_as(const std::filesystem::path& assembly_path,
+                                     std::string_view type_name, std::string_view method_name)
+        -> Result<FuncPtr>
+    {
+        auto result = get_method(assembly_path, type_name, method_name);
+        if (!result)
+            return result.error();
+        return reinterpret_cast<FuncPtr>(*result);
+    }
 
     [[nodiscard]] auto is_initialized() const -> bool { return initialized_; }
 

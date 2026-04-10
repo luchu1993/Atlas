@@ -132,7 +132,7 @@ TEST(ScriptEventsTest, RegisterNonCallableListenerIsIgnored)
     auto non_callable = std::make_shared<MockScriptObject>();
     non_callable->callable_ = false;
 
-    events.register_listener("test_event", non_callable);
+    (void)events.register_listener("test_event", non_callable);
     events.fire_event("test_event");  // no listeners registered — no crash
 }
 
@@ -144,8 +144,8 @@ TEST(ScriptEventsTest, FireEventCallsAllListeners)
     auto cb1 = std::make_shared<MockScriptObject>();
     auto cb2 = std::make_shared<MockScriptObject>();
 
-    events.register_listener("my_event", cb1);
-    events.register_listener("my_event", cb2);
+    (void)events.register_listener("my_event", cb1);
+    (void)events.register_listener("my_event", cb2);
 
     events.fire_event("my_event");
 
@@ -166,7 +166,7 @@ TEST(ScriptEventsTest, FireEventPassesArgs)
     ScriptEvents events(module);
 
     auto cb = std::make_shared<MockScriptObject>();
-    events.register_listener("with_args", cb);
+    (void)events.register_listener("with_args", cb);
 
     ScriptValue args[] = {ScriptValue(int64_t{42}), ScriptValue(std::string("hello"))};
     events.fire_event("with_args", args);
@@ -205,7 +205,7 @@ public:
     {
         ++call_count_;
         if (events_ && new_listener_)
-            events_->register_listener(event_name_, new_listener_);
+            (void)events_->register_listener(event_name_, new_listener_);
         return ScriptValue{};
     }
 
@@ -245,8 +245,8 @@ TEST(ScriptEventsTest, RegisterDuringFireDoesNotCrash)
     // Pre-fill the vector close to a power-of-two boundary to maximise the
     // chance that push_back triggers a reallocation during fire_event.
     for (int i = 0; i < 3; ++i)
-        events.register_listener("reentrant", std::make_shared<MockScriptObject>());
-    events.register_listener("reentrant", registering);
+        (void)events.register_listener("reentrant", std::make_shared<MockScriptObject>());
+    (void)events.register_listener("reentrant", registering);
 
     // Must not crash (no iterator invalidation with the index-based fix).
     ASSERT_NO_FATAL_FAILURE(events.fire_event("reentrant"));

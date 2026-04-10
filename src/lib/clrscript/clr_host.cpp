@@ -7,11 +7,13 @@
 #include <format>
 #include <hostfxr.h>
 
-#ifdef _WIN32
+#if ATLAS_PLATFORM_WINDOWS
 #include <windows.h>
+#endif
 
 namespace
 {
+#if ATLAS_PLATFORM_WINDOWS
 // Converts a UTF-8 string_view to a UTF-16 wstring for use with Windows APIs.
 // std::wstring(begin, end) widens each byte independently and is incorrect for
 // multi-byte UTF-8 sequences (e.g. CJK characters in type/method names).
@@ -30,18 +32,30 @@ auto utf8_to_wide(std::string_view utf8) -> std::wstring
                           needed);
     return result;
 }
-}  // namespace
 #endif
+
+// Type-safe casts from void* to the hostfxr function pointer types.
+// Inline functions instead of macros: IDE-navigable, type-checked, no #undef.
+auto as_init_fn(void* p) -> hostfxr_initialize_for_runtime_config_fn
+{
+    return reinterpret_cast<hostfxr_initialize_for_runtime_config_fn>(p);
+}
+auto as_delegate_fn(void* p) -> hostfxr_get_runtime_delegate_fn
+{
+    return reinterpret_cast<hostfxr_get_runtime_delegate_fn>(p);
+}
+auto as_close_fn(void* p) -> hostfxr_close_fn
+{
+    return reinterpret_cast<hostfxr_close_fn>(p);
+}
+auto as_load_fn(void* p) -> load_assembly_and_get_function_pointer_fn
+{
+    return reinterpret_cast<load_assembly_and_get_function_pointer_fn>(p);
+}
+}  // namespace
 
 namespace atlas
 {
-
-// Convenience casts from the void* members to the typed hostfxr function pointers
-#define FN_INIT_CONFIG reinterpret_cast<hostfxr_initialize_for_runtime_config_fn>(fn_init_config_)
-#define FN_GET_DELEGATE reinterpret_cast<hostfxr_get_runtime_delegate_fn>(fn_get_delegate_)
-#define FN_CLOSE reinterpret_cast<hostfxr_close_fn>(fn_close_)
-#define FN_LOAD_ASSEMBLY \
-    reinterpret_cast<load_assembly_and_get_function_pointer_fn>(fn_load_assembly_)
 
 ClrHost::~ClrHost()
 {
@@ -102,14 +116,14 @@ auto ClrHost::initialize(const std::filesystem::path& runtime_config_path) -> Re
 
 // Step 2: Initialize CoreCLR with the supplied runtimeconfig.json
 // char_t = wchar_t on Windows, char on Linux/macOS
-#ifdef _WIN32
+#if ATLAS_PLATFORM_WINDOWS
     auto config_str = runtime_config_path.wstring();
 #else
     auto config_str = runtime_config_path.string();
 #endif
 
     hostfxr_handle ctx = nullptr;
-    int rc = FN_INIT_CONFIG(config_str.c_str(), nullptr, &ctx);
+    int rc = as_init_fn(fn_init_config_)(config_str.c_str(), nullptr, &ctx);
     if (rc != 0 || ctx == nullptr)
     {
         return Error{ErrorCode::ScriptError,
@@ -119,11 +133,12 @@ auto ClrHost::initialize(const std::filesystem::path& runtime_config_path) -> Re
 
     // Step 3: Obtain the load_assembly_and_get_function_pointer delegate
     void* load_assembly_fn = nullptr;
-    rc = FN_GET_DELEGATE(static_cast<hostfxr_handle>(host_context_),
-                         hdt_load_assembly_and_get_function_pointer, &load_assembly_fn);
+    rc = as_delegate_fn(fn_get_delegate_)(static_cast<hostfxr_handle>(host_context_),
+                                          hdt_load_assembly_and_get_function_pointer,
+                                          &load_assembly_fn);
     if (rc != 0 || load_assembly_fn == nullptr)
     {
-        FN_CLOSE(static_cast<hostfxr_handle>(host_context_));
+        as_close_fn(fn_close_)(static_cast<hostfxr_handle>(host_context_));
         host_context_ = nullptr;
         return Error{ErrorCode::ScriptError,
                      std::format("hostfxr_get_runtime_delegate failed: 0x{:08X}", rc)};
@@ -144,16 +159,21 @@ void ClrHost::finalize()
 
     if (host_context_)
     {
-        FN_CLOSE(static_cast<hostfxr_handle>(host_context_));
+        // as_close_fn() still valid here: fn_close_ is nulled below, after the call.
+        as_close_fn(fn_close_)(static_cast<hostfxr_handle>(host_context_));
         host_context_ = nullptr;
     }
 
-    // hostfxr_lib_ destructor unloads the shared library — must happen last.
-    hostfxr_lib_.reset();
-
+    // Null all function pointers that point into the shared library BEFORE
+    // unloading it, eliminating any window of dangling function pointers.
     fn_init_config_ = nullptr;
     fn_get_delegate_ = nullptr;
     fn_close_ = nullptr;
+
+    // hostfxr_lib_ destructor unloads the shared library — must happen after
+    // all function pointers referencing library symbols are cleared.
+    hostfxr_lib_.reset();
+
     initialized_ = false;
 
     ATLAS_LOG_INFO("ClrHost: CoreCLR finalized");
@@ -167,22 +187,22 @@ auto ClrHost::get_method(const std::filesystem::path& assembly_path, std::string
 
     void* method_ptr = nullptr;
 
-#ifdef _WIN32
+#if ATLAS_PLATFORM_WINDOWS
     // char_t = wchar_t on Windows
     auto w_assembly = assembly_path.wstring();
     auto w_type = utf8_to_wide(type_name);
     auto w_method = utf8_to_wide(method_name);
 
-    int rc = FN_LOAD_ASSEMBLY(w_assembly.c_str(), w_type.c_str(), w_method.c_str(),
-                              UNMANAGEDCALLERSONLY_METHOD, nullptr, &method_ptr);
+    int rc = as_load_fn(fn_load_assembly_)(w_assembly.c_str(), w_type.c_str(), w_method.c_str(),
+                                           UNMANAGEDCALLERSONLY_METHOD, nullptr, &method_ptr);
 #else
     // char_t = char on Linux/macOS
     auto s_assembly = assembly_path.string();
     auto s_type = std::string(type_name);
     auto s_method = std::string(method_name);
 
-    int rc = FN_LOAD_ASSEMBLY(s_assembly.c_str(), s_type.c_str(), s_method.c_str(),
-                              UNMANAGEDCALLERSONLY_METHOD, nullptr, &method_ptr);
+    int rc = as_load_fn(fn_load_assembly_)(s_assembly.c_str(), s_type.c_str(), s_method.c_str(),
+                                           UNMANAGEDCALLERSONLY_METHOD, nullptr, &method_ptr);
 #endif
 
     if (rc != 0 || method_ptr == nullptr)
@@ -194,10 +214,5 @@ auto ClrHost::get_method(const std::filesystem::path& assembly_path, std::string
 
     return method_ptr;
 }
-
-#undef FN_INIT_CONFIG
-#undef FN_GET_DELEGATE
-#undef FN_CLOSE
-#undef FN_LOAD_ASSEMBLY
 
 }  // namespace atlas

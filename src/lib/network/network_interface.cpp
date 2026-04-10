@@ -15,14 +15,16 @@ namespace atlas
 // Constructor / Destructor
 // ============================================================================
 
-NetworkInterface::NetworkInterface(EventDispatcher& dispatcher) : dispatcher_(dispatcher)
+NetworkInterface::NetworkInterface(EventDispatcher& dispatcher)
+    : dispatcher_(dispatcher), registration_(dispatcher_.add_frequent_task(this))
 {
-    dispatcher_.add_frequent_task(this);
 }
 
 NetworkInterface::~NetworkInterface()
 {
-    dispatcher_.remove_frequent_task(this);
+    // registration_ destructor automatically calls dispatcher_.remove_frequent_task(this).
+    // Explicitly reset here to ensure removal happens before channel teardown.
+    registration_.reset();
 
     channels_.clear();
     condemned_.clear();
@@ -412,6 +414,16 @@ void NetworkInterface::condemn_channel(const Address& addr)
     channel->condemn();
 
     condemned_.push_back({std::move(channel), Clock::now()});
+
+    // Enforce the cap: force-close the oldest entry if we are over the limit.
+    while (condemned_.size() > kMaxCondemnedChannels)
+    {
+        ATLAS_LOG_WARNING(
+            "NetworkInterface: condemned channel list at capacity ({}), "
+            "force-closing oldest entry",
+            kMaxCondemnedChannels);
+        condemned_.erase(condemned_.begin());
+    }
 }
 
 void NetworkInterface::process_condemned_channels()

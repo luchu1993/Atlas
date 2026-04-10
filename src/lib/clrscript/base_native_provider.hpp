@@ -1,9 +1,9 @@
 #pragma once
 
 #include "clrscript/native_api_provider.hpp"
-#include "foundation/log.hpp"
 
-#include <string_view>
+#include <cstddef>
+#include <cstdint>
 
 namespace atlas
 {
@@ -27,93 +27,28 @@ class BaseNativeProvider : public INativeApiProvider
 {
 public:
     // ---- Logging --------------------------------------------------------
-
-    void log_message(int32_t level, const char* msg, int32_t len) override
-    {
-        // Guard against bad inputs from across the C#/C++ boundary.
-        if (msg == nullptr || len <= 0)
-            return;
-
-        std::string_view message(msg, static_cast<std::size_t>(len));
-        switch (static_cast<LogLevel>(level))
-        {
-            case LogLevel::Trace:
-                ATLAS_LOG_TRACE("{}", message);
-                break;
-            case LogLevel::Debug:
-                ATLAS_LOG_DEBUG("{}", message);
-                break;
-            case LogLevel::Info:
-                ATLAS_LOG_INFO("{}", message);
-                break;
-            case LogLevel::Warning:
-                ATLAS_LOG_WARNING("{}", message);
-                break;
-            case LogLevel::Error:
-                ATLAS_LOG_ERROR("{}", message);
-                break;
-            case LogLevel::Critical:
-                ATLAS_LOG_CRITICAL("{}", message);
-                break;
-            default:
-                ATLAS_LOG_DEBUG("{}", message);
-                break;
-        }
-    }
+    void log_message(int32_t level, const char* msg, int32_t len) override;
 
     // ---- Time (stub — override in concrete provider) --------------------
-
-    double server_time() override { return 0.0; }
-    float delta_time() override { return 0.0f; }
+    double server_time() override;
+    float delta_time() override;
 
     // ---- Process identity (stub) ----------------------------------------
-
-    uint8_t get_process_prefix() override
-    {
-        ATLAS_LOG_ERROR("get_process_prefix() not implemented for this process type");
-        return 0;
-    }
+    uint8_t get_process_prefix() override;
 
     // ---- RPC (default: log error + no-op) --------------------------------
+    void send_client_rpc(uint32_t entity_id, uint32_t rpc_id, uint8_t target,
+                         const std::byte* payload, int32_t len) override;
 
-    void send_client_rpc(uint32_t entity_id, uint32_t /*rpc_id*/, uint8_t /*target*/,
-                         const std::byte* /*payload*/, int32_t /*len*/) override
-    {
-        ATLAS_LOG_ERROR(
-            "send_client_rpc() not supported on this process type "
-            "(entity_id={})",
-            entity_id);
-    }
+    void send_cell_rpc(uint32_t entity_id, uint32_t rpc_id, const std::byte* payload,
+                       int32_t len) override;
 
-    void send_cell_rpc(uint32_t entity_id, uint32_t /*rpc_id*/, const std::byte* /*payload*/,
-                       int32_t /*len*/) override
-    {
-        ATLAS_LOG_ERROR(
-            "send_cell_rpc() not supported on this process type "
-            "(entity_id={})",
-            entity_id);
-    }
-
-    void send_base_rpc(uint32_t entity_id, uint32_t /*rpc_id*/, const std::byte* /*payload*/,
-                       int32_t /*len*/) override
-    {
-        ATLAS_LOG_ERROR(
-            "send_base_rpc() not supported on this process type "
-            "(entity_id={})",
-            entity_id);
-    }
+    void send_base_rpc(uint32_t entity_id, uint32_t rpc_id, const std::byte* payload,
+                       int32_t len) override;
 
     // ---- Entity type registry (stub — override when EntityDef is ready) --
-
-    void register_entity_type(const std::byte* /*data*/, int32_t /*len*/) override
-    {
-        ATLAS_LOG_ERROR("register_entity_type() not implemented for this process type");
-    }
-
-    void unregister_all_entity_types() override
-    {
-        ATLAS_LOG_ERROR("unregister_all_entity_types() not implemented for this process type");
-    }
+    void register_entity_type(const std::byte* data, int32_t len) override;
+    void unregister_all_entity_types() override;
 
 protected:
     BaseNativeProvider() = default;

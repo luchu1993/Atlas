@@ -332,7 +332,7 @@ void ReliableUdpChannel::process_ack(SeqNum ack_num, uint32_t ack_bits)
         // ACK'd — update RTT with Karn's algorithm (first send only)
         if (it->second.send_count == 1)
         {
-            update_rtt(now - it->second.sent_at);
+            rtt_.update(now - it->second.sent_at);
         }
         acked_seqs.push_back(candidate);
         unacked_.erase(it);
@@ -399,36 +399,6 @@ void ReliableUdpChannel::process_ack(SeqNum ack_num, uint32_t ack_bits)
     {
         stop_resend_timer();
     }
-}
-
-// ============================================================================
-// update_rtt (Jacobson/Karels per RFC 6298)
-// ============================================================================
-
-void ReliableUdpChannel::update_rtt(Duration sample)
-{
-    double s = std::chrono::duration<double>(sample).count();
-    double r = std::chrono::duration<double>(rtt_).count();
-    double v = std::chrono::duration<double>(rtt_var_).count();
-
-    if (r < 1e-9)
-    {
-        r = s;
-        v = s / 2.0;
-    }
-    else
-    {
-        v = v * 0.75 + std::abs(r - s) * 0.25;
-        r = r * 0.875 + s * 0.125;
-    }
-
-    double rto = r + v * 4.0;
-    double min_rto = nodelay_ ? 0.03 : 0.2;  // 30ms in nodelay, 200ms normal
-    rto = std::clamp(rto, min_rto, 5.0);
-
-    rtt_ = std::chrono::duration_cast<Duration>(std::chrono::duration<double>(r));
-    rtt_var_ = std::chrono::duration_cast<Duration>(std::chrono::duration<double>(v));
-    rto_ = std::chrono::duration_cast<Duration>(std::chrono::duration<double>(rto));
 }
 
 // ============================================================================
@@ -699,10 +669,10 @@ void ReliableUdpChannel::check_resends()
     {
         // Backoff: nodelay uses 1.5x (KCP-style), normal uses 2x
         // Capped at 5 doublings (~30s max)
-        auto backoff = rto_;
+        auto backoff = rtt_.rto();
         for (uint32_t i = 1; i < pkt.send_count && i < 5; ++i)
         {
-            if (nodelay_)
+            if (rtt_.nodelay())
             {
                 backoff = backoff * 3 / 2;  // 1.5x
             }
@@ -815,8 +785,8 @@ void ReliableUdpChannel::start_resend_timer()
         return;  // already running
     }
 
-    auto min_interval = nodelay_ ? Milliseconds(10) : Milliseconds(50);
-    auto interval = std::max(rto_, Duration(min_interval));
+    auto min_interval = rtt_.nodelay() ? Milliseconds(10) : Milliseconds(50);
+    auto interval = std::max(rtt_.rto(), Duration(min_interval));
     resend_timer_ =
         dispatcher_.add_repeating_timer(interval, [this](TimerHandle) { check_resends(); });
 }

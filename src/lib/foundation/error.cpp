@@ -1,5 +1,6 @@
 #include "foundation/error.hpp"
 
+#include <atomic>
 #include <cstdio>
 #include <cstdlib>
 
@@ -90,19 +91,28 @@ auto Error::message() const noexcept -> std::string_view
 // Assertion support
 // ============================================================================
 
-static AssertHandler s_assert_handler = nullptr;
+static std::atomic<AssertHandler> s_assert_handler{nullptr};
 
 void set_assert_handler(AssertHandler handler)
 {
-    s_assert_handler = handler;
+    s_assert_handler.store(handler, std::memory_order_release);
 }
 
 [[noreturn]] void default_assert_handler(std::string_view expr, std::string_view msg,
                                          std::source_location loc)
 {
-    if (s_assert_handler)
+    auto handler = s_assert_handler.load(std::memory_order_acquire);
+    if (handler)
     {
-        s_assert_handler(expr, msg, loc);
+        // Custom handler is a full replacement — it must terminate (abort, throw,
+        // or longjmp).  If it returns, we abort with a diagnostic to satisfy the
+        // [[noreturn]] contract and prevent silent continuation after an assertion.
+        handler(expr, msg, loc);
+        std::fprintf(stderr,
+                     "FATAL: Custom assert handler returned instead of terminating.\n"
+                     "  Assertion: %.*s\n",
+                     static_cast<int>(expr.size()), expr.data());
+        std::abort();
     }
 
     std::fprintf(stderr,

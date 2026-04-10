@@ -51,13 +51,37 @@ auto EventDispatcher::cancel_timer(TimerHandle handle) -> bool
     return timers_.cancel(handle);
 }
 
-void EventDispatcher::add_frequent_task(FrequentTask* task)
+// ============================================================================
+// FrequentTaskRegistration out-of-line definitions
+// ============================================================================
+
+FrequentTaskRegistration::~FrequentTaskRegistration()
+{
+    reset();
+}
+
+void FrequentTaskRegistration::reset()
+{
+    if (dispatcher_ && task_)
+    {
+        dispatcher_->remove_frequent_task(task_);
+        dispatcher_ = nullptr;
+        task_ = nullptr;
+    }
+}
+
+// ============================================================================
+// Frequent task management
+// ============================================================================
+
+auto EventDispatcher::add_frequent_task(FrequentTask* task) -> FrequentTaskRegistration
 {
     auto it = std::find(tasks_.begin(), tasks_.end(), task);
     if (it == tasks_.end())
     {
         tasks_.push_back(task);
     }
+    return FrequentTaskRegistration(this, task);
 }
 
 void EventDispatcher::remove_frequent_task(FrequentTask* task)

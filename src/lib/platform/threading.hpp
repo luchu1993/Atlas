@@ -75,6 +75,8 @@ public:
 
     ThreadPool(const ThreadPool&) = delete;
     ThreadPool& operator=(const ThreadPool&) = delete;
+    ThreadPool(ThreadPool&&) = delete;
+    ThreadPool& operator=(ThreadPool&&) = delete;
 
     template <typename F, typename... Args>
         requires std::invocable<F, Args...>

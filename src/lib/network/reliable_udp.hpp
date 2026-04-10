@@ -3,6 +3,7 @@
 #include "foundation/time.hpp"
 #include "foundation/timer_queue.hpp"
 #include "network/channel.hpp"
+#include "network/rtt_estimator.hpp"
 #include "network/seq_num.hpp"
 #include "network/socket.hpp"
 
@@ -50,8 +51,8 @@ public:
     void on_datagram_received(std::span<const std::byte> data);
 
     // Configuration
-    void set_nodelay(bool enable) { nodelay_ = enable; }
-    [[nodiscard]] auto nodelay() const -> bool { return nodelay_; }
+    void set_nodelay(bool enable) { rtt_.set_nodelay(enable); }
+    [[nodiscard]] auto nodelay() const -> bool { return rtt_.nodelay(); }
 
     // Fast retransmit threshold: retransmit after this many skip-ACKs (0 = disabled)
     void set_fast_resend_thresh(uint32_t thresh) { fast_resend_thresh_ = thresh; }
@@ -65,7 +66,7 @@ public:
     [[nodiscard]] auto nocwnd() const -> bool { return nocwnd_; }
 
     // Stats
-    [[nodiscard]] auto rtt() const -> Duration { return rtt_; }
+    [[nodiscard]] auto rtt() const -> Duration { return rtt_.rtt(); }
     [[nodiscard]] auto unacked_count() const -> uint32_t
     {
         return static_cast<uint32_t>(unacked_.size());
@@ -114,7 +115,6 @@ private:
 
     // ACK processing
     void process_ack(SeqNum ack_num, uint32_t ack_bits);
-    void update_rtt(Duration sample);
 
     // Resend logic
     void check_resends();
@@ -161,13 +161,10 @@ private:
     SeqNum rcv_nxt_{1};                    // next expected seq for ordered delivery
     uint32_t rcv_wnd_{256};                // receive window size
 
-    // RTT estimation (Jacobson/Karels per RFC 6298)
-    Duration rtt_{Milliseconds(200)};
-    Duration rtt_var_{Milliseconds(100)};
-    Duration rto_{std::chrono::seconds(1)};
+    // RTT estimation (Jacobson/Karels per RFC 6298) — extracted to RttEstimator
+    RttEstimator rtt_;
 
     // KCP-inspired optimizations
-    bool nodelay_{false};             // true: 1.5x backoff, 30ms min RTO
     uint32_t fast_resend_thresh_{2};  // fast retransmit after N skip-ACKs (0=disabled)
 
     // Congestion control (KCP-style: slow start + congestion avoidance)

@@ -2,6 +2,7 @@
 
 #include <atomic>
 #include <cstdio>
+#include <cstdlib>
 
 namespace atlas
 {

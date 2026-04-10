@@ -1,6 +1,7 @@
 #include "foundation/timer_queue.hpp"
 
 #include "foundation/callback_utils.hpp"
+#include "foundation/error.hpp"
 
 #include <algorithm>
 
@@ -11,13 +12,15 @@ TimerQueue::~TimerQueue()
 {
     for (auto* node : heap_)
     {
-        delete node;
+        node_pool_.destroy(node);
     }
 }
 
 auto TimerQueue::schedule(TimePoint when, Callback callback) -> TimerHandle
 {
-    auto* node = new Node{next_id_++, when, Duration::zero(), std::move(callback), false};
+    auto* node =
+        node_pool_.construct(next_id_++, when, Duration::zero(), std::move(callback), false);
+    ATLAS_ASSERT_MSG(node != nullptr, "TimerQueue: node_pool_ OOM");
     heap_.push_back(node);
     std::push_heap(heap_.begin(), heap_.end(), HeapCompare{});
     index_[node->id] = node;
@@ -27,7 +30,8 @@ auto TimerQueue::schedule(TimePoint when, Callback callback) -> TimerHandle
 auto TimerQueue::schedule_repeating(TimePoint first_fire, Duration interval, Callback callback)
     -> TimerHandle
 {
-    auto* node = new Node{next_id_++, first_fire, interval, std::move(callback), false};
+    auto* node = node_pool_.construct(next_id_++, first_fire, interval, std::move(callback), false);
+    ATLAS_ASSERT_MSG(node != nullptr, "TimerQueue: node_pool_ OOM");
     heap_.push_back(node);
     std::push_heap(heap_.begin(), heap_.end(), HeapCompare{});
     index_[node->id] = node;
@@ -52,7 +56,7 @@ auto TimerQueue::cancel(TimerHandle handle) -> bool
     while (!heap_.empty() && heap_.front()->cancelled)
     {
         std::pop_heap(heap_.begin(), heap_.end(), HeapCompare{});
-        delete heap_.back();
+        node_pool_.destroy(heap_.back());
         heap_.pop_back();
     }
 
@@ -72,7 +76,7 @@ auto TimerQueue::process(TimePoint now) -> uint32_t
         if (node->cancelled)
         {
             // Already removed from index_ in cancel()
-            delete node;
+            node_pool_.destroy(node);
             continue;
         }
 
@@ -88,7 +92,7 @@ auto TimerQueue::process(TimePoint now) -> uint32_t
         else
         {
             index_.erase(node->id);
-            delete node;
+            node_pool_.destroy(node);
         }
 
         ++count;
@@ -121,7 +125,7 @@ void TimerQueue::clear()
 {
     for (auto* node : heap_)
     {
-        delete node;
+        node_pool_.destroy(node);
     }
     heap_.clear();
     index_.clear();

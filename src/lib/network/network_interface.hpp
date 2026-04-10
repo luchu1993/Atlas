@@ -2,6 +2,7 @@
 
 #include "foundation/time.hpp"
 #include "network/address.hpp"
+#include "network/event_dispatcher.hpp"
 #include "network/frequent_task.hpp"
 #include "network/interface_table.hpp"
 #include "network/socket.hpp"
@@ -15,7 +16,6 @@
 namespace atlas
 {
 
-class EventDispatcher;
 class Channel;
 class TcpChannel;
 class UdpChannel;
@@ -75,6 +75,9 @@ private:
     void cleanup_stale_rate_trackers();
 
     EventDispatcher& dispatcher_;
+    // IMPORTANT: registration_ must be declared after dispatcher_ so that its
+    // destructor (which calls dispatcher_.remove_frequent_task) runs first.
+    FrequentTaskRegistration registration_;
     InterfaceTable interface_table_;
 
     // TCP server
@@ -96,6 +99,10 @@ private:
     };
     std::vector<CondemnedEntry> condemned_;
     static constexpr Duration kCondemnTimeout = std::chrono::seconds(60);
+    // Cap the condemned list to prevent unbounded growth under DDoS-style
+    // connect/disconnect floods.  Entries over this limit are force-closed
+    // immediately (oldest first) rather than waiting for the timeout.
+    static constexpr std::size_t kMaxCondemnedChannels = 4096;
 
     // Rate limiting
     struct RateTracker

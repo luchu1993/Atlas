@@ -1,7 +1,7 @@
 #include "clrscript/clr_host.hpp"
 #include "foundation/log.hpp"
 
-#ifdef _WIN32
+#if ATLAS_PLATFORM_WINDOWS
 
 #include <hostfxr.h>
 #include <nethost.h>

@@ -6,6 +6,7 @@ atlas_add_library(atlas_foundation
         string_utils.cpp
         log.cpp
         log_sinks.cpp
+        runtime.cpp
         time.cpp
         timer_queue.cpp
         pool_allocator.cpp

@@ -1,5 +1,7 @@
 #include "clrscript/clr_marshal.hpp"
 
+#include "foundation/log.hpp"
+
 namespace atlas::clr_marshal
 {
 
@@ -56,12 +58,14 @@ auto to_script_value(const ScriptValue& sv) -> ClrScriptValue
     }
     else if (sv.is_object())
     {
-        // Phase 2.2: ClrObject stores a GCHandle as void*.  Until ClrObject
-        // is implemented, pass the raw ScriptObject* as an opaque handle.
-        // This value is informational only — do not dereference on the C# side
-        // without the full GCHandle machinery in place.
-        cv.type = ClrScriptValueType::Object;
-        cv.object_val = sv.as_object().get();
+        // Phase 2.2: Implement GCHandle machinery (ClrObjectRegistry) before
+        // enabling Object transfer.  Passing a raw ScriptObject* is unsafe:
+        // the shared_ptr may expire before C# uses the pointer, causing a
+        // use-after-free.  Return None + log a warning until Phase 2.2.
+        ATLAS_LOG_WARNING(
+            "to_script_value: Object type not supported until Phase 2.2 "
+            "(GCHandle), converting to None");
+        cv.type = ClrScriptValueType::None;
     }
 
     return cv;

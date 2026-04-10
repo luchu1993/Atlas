@@ -35,14 +35,12 @@ Logger::Logger() = default;
 
 void Logger::set_level(LogLevel level)
 {
-    std::lock_guard lock(mutex_);
-    runtime_level_ = level;
+    runtime_level_.store(level, std::memory_order_release);
 }
 
 auto Logger::level() const -> LogLevel
 {
-    std::lock_guard lock(mutex_);
-    return runtime_level_;
+    return runtime_level_.load(std::memory_order_acquire);
 }
 
 void Logger::add_sink(std::shared_ptr<LogSink> sink)
