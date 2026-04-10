@@ -175,3 +175,34 @@ TEST(BaseNativeProvider, DefaultTimeStubs)
     EXPECT_DOUBLE_EQ(p.server_time(), 0.0);
     EXPECT_FLOAT_EQ(p.delta_time(), 0.0f);
 }
+
+// ============================================================================
+// BUG-08: log_message must safely ignore null msg or non-positive len instead
+// of constructing a string_view with invalid arguments (UB / out-of-bounds).
+// ============================================================================
+
+TEST(BaseNativeProvider, LogMessageNullMsgIsIgnored)
+{
+    ConcreteProvider p;
+    EXPECT_NO_FATAL_FAILURE(p.log_message(2 /*Info*/, nullptr, 5));
+}
+
+TEST(BaseNativeProvider, LogMessageNegativeLenIsIgnored)
+{
+    ConcreteProvider p;
+    EXPECT_NO_FATAL_FAILURE(p.log_message(2 /*Info*/, "hello", -1));
+}
+
+TEST(BaseNativeProvider, LogMessageZeroLenIsIgnored)
+{
+    ConcreteProvider p;
+    EXPECT_NO_FATAL_FAILURE(p.log_message(2 /*Info*/, "hello", 0));
+}
+
+TEST(BaseNativeProvider, LogMessageValidMsgStillWorks)
+{
+    // Sanity-check that valid inputs still reach the logging path without crashing.
+    ConcreteProvider p;
+    const char* msg = "valid message";
+    EXPECT_NO_FATAL_FAILURE(p.log_message(2 /*Info*/, msg, static_cast<int32_t>(std::strlen(msg))));
+}

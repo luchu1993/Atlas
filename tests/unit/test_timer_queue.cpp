@@ -196,6 +196,39 @@ TEST_F(TimerQueueTest, ScheduleDuringProcessCallback)
 }
 
 // ============================================================================
+// BUG-05: time_until_next() must skip cancelled heap-top nodes and return the
+// deadline of the next *valid* timer, not Duration::max().
+// ============================================================================
+
+TEST_F(TimerQueueTest, TimeUntilNextSkipsCancelledFront)
+{
+    // A fires first (t+10), B fires second (t+50)
+    auto ha = queue.schedule(base + Milliseconds(10), [](TimerHandle) {});
+    auto hb = queue.schedule(base + Milliseconds(50), [](TimerHandle) {});
+    (void)hb;
+
+    // Cancel A — it was the heap front.  B should now be the effective front.
+    queue.cancel(ha);
+
+    // time_until_next() must reflect B (50 ms), not return Duration::max().
+    auto dt = queue.time_until_next(base);
+    EXPECT_EQ(dt, Milliseconds(50));
+}
+
+TEST_F(TimerQueueTest, TimeUntilNextAfterAllCancelledIsMax)
+{
+    auto ha = queue.schedule(base + Milliseconds(10), [](TimerHandle) {});
+    auto hb = queue.schedule(base + Milliseconds(20), [](TimerHandle) {});
+
+    queue.cancel(ha);
+    queue.cancel(hb);
+
+    // All timers cancelled — must return max.
+    EXPECT_EQ(queue.time_until_next(base), Duration::max());
+    EXPECT_TRUE(queue.empty());
+}
+
+// ============================================================================
 // Review issue #4: TimerQueue cancel during process — cancel() during
 // process() callback sets cancelled flag so second timer does NOT fire.
 // ============================================================================

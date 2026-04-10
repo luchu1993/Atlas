@@ -23,6 +23,13 @@ class SelectPoller final : public IOPoller
 public:
     auto add(FdHandle fd, IOEvent interest, IOCallback callback) -> Result<void> override
     {
+#if !ATLAS_PLATFORM_WINDOWS
+        if (static_cast<int>(fd) >= FD_SETSIZE)
+        {
+            return Error(ErrorCode::OutOfRange,
+                         std::format("fd {} exceeds FD_SETSIZE ({})", fd, FD_SETSIZE));
+        }
+#endif
         if (entries_.count(fd) != 0)
         {
             return Error(ErrorCode::AlreadyExists, "fd already registered with poller");

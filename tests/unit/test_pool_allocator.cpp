@@ -135,3 +135,56 @@ TEST(PoolAllocator, ConcurrentAllocateAndDeallocate)
     // All blocks should have been returned
     EXPECT_EQ(pool.blocks_in_use(), 0u);
 }
+
+// ============================================================================
+// BUG-07: TypedPool must allocate blocks that satisfy alignof(T).
+// Without the fix, the Chunk header (8 bytes) shifts the first block to an
+// 8-byte offset from a 16-byte-aligned malloc result, breaking alignas(16).
+// ============================================================================
+
+TEST(TypedPool, AllocatedPointersAreAligned)
+{
+    struct alignas(16) Aligned16
+    {
+        float v[4];
+    };
+
+    TypedPool<Aligned16> pool(8);
+    std::vector<Aligned16*> ptrs;
+
+    for (int i = 0; i < 10; ++i)
+    {
+        auto* p = pool.construct();
+        ASSERT_NE(p, nullptr);
+        EXPECT_EQ(reinterpret_cast<std::uintptr_t>(p) % 16, 0u)
+            << "pointer " << p << " is not 16-byte aligned";
+        ptrs.push_back(p);
+    }
+
+    for (auto* p : ptrs)
+        pool.destroy(p);
+}
+
+// ============================================================================
+// BUG-06: PoolAllocator::grow() must not throw; allocate() returns nullptr OOM.
+// ============================================================================
+
+TEST(PoolAllocator, GrowBeyondInitialCapacityDoesNotThrow)
+{
+    // Start with 1 block; force multiple grows by allocating many more.
+    PoolAllocator pool(32, 1);
+    std::vector<void*> ptrs;
+
+    EXPECT_NO_THROW({
+        for (int i = 0; i < 64; ++i)
+        {
+            void* p = pool.allocate();
+            ASSERT_NE(p, nullptr);
+            ptrs.push_back(p);
+        }
+    });
+
+    EXPECT_EQ(pool.blocks_in_use(), 64u);
+    for (void* p : ptrs)
+        pool.deallocate(p);
+}

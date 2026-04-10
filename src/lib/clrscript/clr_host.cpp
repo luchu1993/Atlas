@@ -7,6 +7,32 @@
 #include <format>
 #include <hostfxr.h>
 
+#ifdef _WIN32
+#include <windows.h>
+
+namespace
+{
+// Converts a UTF-8 string_view to a UTF-16 wstring for use with Windows APIs.
+// std::wstring(begin, end) widens each byte independently and is incorrect for
+// multi-byte UTF-8 sequences (e.g. CJK characters in type/method names).
+auto utf8_to_wide(std::string_view utf8) -> std::wstring
+{
+    if (utf8.empty())
+        return {};
+
+    int needed =
+        ::MultiByteToWideChar(CP_UTF8, 0, utf8.data(), static_cast<int>(utf8.size()), nullptr, 0);
+    if (needed <= 0)
+        return {};
+
+    std::wstring result(static_cast<std::size_t>(needed), L'\0');
+    ::MultiByteToWideChar(CP_UTF8, 0, utf8.data(), static_cast<int>(utf8.size()), result.data(),
+                          needed);
+    return result;
+}
+}  // namespace
+#endif
+
 namespace atlas
 {
 
@@ -144,8 +170,8 @@ auto ClrHost::get_method(const std::filesystem::path& assembly_path, std::string
 #ifdef _WIN32
     // char_t = wchar_t on Windows
     auto w_assembly = assembly_path.wstring();
-    auto w_type = std::wstring(type_name.begin(), type_name.end());
-    auto w_method = std::wstring(method_name.begin(), method_name.end());
+    auto w_type = utf8_to_wide(type_name);
+    auto w_method = utf8_to_wide(method_name);
 
     int rc = FN_LOAD_ASSEMBLY(w_assembly.c_str(), w_type.c_str(), w_method.c_str(),
                               UNMANAGEDCALLERSONLY_METHOD, nullptr, &method_ptr);

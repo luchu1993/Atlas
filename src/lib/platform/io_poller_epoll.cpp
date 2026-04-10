@@ -2,6 +2,7 @@
 
 #if ATLAS_PLATFORM_LINUX
 
+#include <limits>
 #include <sys/epoll.h>
 #include <unistd.h>
 #include <unordered_map>

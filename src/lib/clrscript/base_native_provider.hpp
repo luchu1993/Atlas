@@ -30,6 +30,10 @@ public:
 
     void log_message(int32_t level, const char* msg, int32_t len) override
     {
+        // Guard against bad inputs from across the C#/C++ boundary.
+        if (msg == nullptr || len <= 0)
+            return;
+
         std::string_view message(msg, static_cast<std::size_t>(len));
         switch (static_cast<LogLevel>(level))
         {

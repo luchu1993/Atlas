@@ -59,8 +59,13 @@ void ScriptEvents::fire_event(std::string_view event, std::span<const ScriptValu
     if (it == listeners_.end())
         return;
 
-    for (auto& cb : it->second)
+    // Snapshot the count before dispatch: new listeners registered during a
+    // callback are not called in the same round (prevents infinite loops) and
+    // avoids iterator invalidation when push_back reallocates the vector.
+    const auto count = it->second.size();
+    for (std::size_t i = 0; i < count; ++i)
     {
+        auto cb = it->second[i];  // copy shared_ptr — keeps object alive across reallocation
         auto result = cb->call(args);
         if (!result)
         {

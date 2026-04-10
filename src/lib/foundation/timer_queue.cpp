@@ -44,6 +44,18 @@ auto TimerQueue::cancel(TimerHandle handle) -> bool
     }
     it->second->cancelled = true;
     index_.erase(it);
+
+    // Eagerly purge cancelled nodes from the heap top so that time_until_next()
+    // always reflects the earliest *valid* timer without needing heap mutation
+    // in a const method.  The cost is O(k) where k = consecutive cancelled
+    // entries at the front, which is typically 0 or 1.
+    while (!heap_.empty() && heap_.front()->cancelled)
+    {
+        std::pop_heap(heap_.begin(), heap_.end(), HeapCompare{});
+        delete heap_.back();
+        heap_.pop_back();
+    }
+
     return true;
 }
 

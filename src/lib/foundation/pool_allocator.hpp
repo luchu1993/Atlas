@@ -15,7 +15,8 @@ namespace atlas
 class PoolAllocator
 {
 public:
-    explicit PoolAllocator(std::size_t block_size, std::size_t initial_blocks = 64);
+    explicit PoolAllocator(std::size_t block_size, std::size_t initial_blocks = 64,
+                           std::size_t alignment = alignof(std::max_align_t));
     ~PoolAllocator();
 
     PoolAllocator(const PoolAllocator&) = delete;
@@ -39,11 +40,13 @@ private:
         Chunk* next;
     };
 
-    void grow(std::size_t count);
+    // Returns false on OOM instead of throwing (no-exception policy).
+    auto grow(std::size_t count) -> bool;
 
     FreeNode* free_list_{nullptr};
     Chunk* chunks_{nullptr};
     std::size_t block_size_;
+    std::size_t alignment_;
     std::size_t in_use_{0};
     std::size_t total_{0};
     std::mutex mutex_;
@@ -55,7 +58,11 @@ class TypedPool
 {
 public:
     explicit TypedPool(std::size_t initial_count = 64)
-        : pool_(std::max(sizeof(T), sizeof(void*)), initial_count)
+        : pool_(
+              // Round block_size up to alignof(T) so every block in the slab
+              // is naturally aligned, regardless of Chunk header size.
+              (std::max(sizeof(T), sizeof(void*)) + alignof(T) - 1) & ~(alignof(T) - 1),
+              initial_count, alignof(T))
     {
     }
 
@@ -63,6 +70,9 @@ public:
     [[nodiscard]] auto construct(Args&&... args) -> T*
     {
         void* mem = pool_.allocate();
+        if (!mem)
+            return nullptr;  // OOM — caller must check
+
         try
         {
             return ::new (mem) T(std::forward<Args>(args)...);

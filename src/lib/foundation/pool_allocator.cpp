@@ -7,9 +7,22 @@
 namespace atlas
 {
 
-PoolAllocator::PoolAllocator(std::size_t block_size, std::size_t initial_blocks)
-    : block_size_(block_size < sizeof(FreeNode) ? sizeof(FreeNode) : block_size)
+namespace
 {
+constexpr auto align_up(std::size_t n, std::size_t alignment) -> std::size_t
+{
+    return (n + alignment - 1) & ~(alignment - 1);
+}
+}  // namespace
+
+PoolAllocator::PoolAllocator(std::size_t block_size, std::size_t initial_blocks,
+                             std::size_t alignment)
+    : alignment_(alignment < alignof(FreeNode) ? alignof(FreeNode) : alignment)
+{
+    // block_size must be at least sizeof(FreeNode) AND a multiple of alignment
+    // so that every block in the slab starts at an aligned address.
+    std::size_t min_size = block_size < sizeof(FreeNode) ? sizeof(FreeNode) : block_size;
+    block_size_ = align_up(min_size, alignment_);
     grow(initial_blocks);
 }
 
@@ -28,20 +41,23 @@ PoolAllocator::~PoolAllocator()
     }
 }
 
-void PoolAllocator::grow(std::size_t count)
+auto PoolAllocator::grow(std::size_t count) -> bool
 {
-    std::size_t raw_size = sizeof(Chunk) + block_size_ * count;
+    // Round the chunk header size up to alignment_ so the first block starts
+    // at an aligned offset (malloc guarantees alignof(max_align_t) = 16 bytes
+    // for the raw allocation, but sizeof(Chunk) = 8 which would misalign types
+    // with alignof > 8 without this adjustment).
+    std::size_t header_size = align_up(sizeof(Chunk), alignment_);
+    std::size_t raw_size = header_size + block_size_ * count;
     void* raw = std::malloc(raw_size);
     if (!raw)
-    {
-        throw std::bad_alloc();
-    }
+        return false;  // OOM — caller decides what to do
 
     Chunk* chunk = static_cast<Chunk*>(raw);
     chunk->next = chunks_;
     chunks_ = chunk;
 
-    char* start = reinterpret_cast<char*>(chunk) + sizeof(Chunk);
+    char* start = reinterpret_cast<char*>(chunk) + header_size;
     for (std::size_t i = 0; i < count; ++i)
     {
         FreeNode* node = reinterpret_cast<FreeNode*>(start + i * block_size_);
@@ -50,6 +66,7 @@ void PoolAllocator::grow(std::size_t count)
     }
 
     total_ += count;
+    return true;
 }
 
 auto PoolAllocator::allocate() -> void*
@@ -59,7 +76,8 @@ auto PoolAllocator::allocate() -> void*
     if (!free_list_)
     {
         std::size_t grow_count = total_ > 0 ? total_ : 64;
-        grow(grow_count);
+        if (!grow(grow_count))
+            return nullptr;  // OOM
     }
 
     FreeNode* node = free_list_;

@@ -44,6 +44,7 @@ auto to_script_value(const ScriptValue& sv) -> ClrScriptValue
     else if (sv.is_string())
     {
         const auto& s = sv.as_string();
+        ATLAS_ASSERT(s.size() <= static_cast<std::size_t>(INT32_MAX));
         cv.type = ClrScriptValueType::String;
         cv.string_val = {s.data(), static_cast<int32_t>(s.size())};
     }

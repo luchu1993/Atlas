@@ -415,3 +415,32 @@ TEST(ClrScriptValueRoundtrip, FullScriptValueToClrAndBack)
     ASSERT_TRUE(recovered.is_string());
     EXPECT_EQ(recovered.as_string(), "end-to-end");
 }
+
+// ============================================================================
+// BUG-09: to_string_ref / to_span_ref must not silently truncate values whose
+// size exceeds INT32_MAX.  The fix adds an ATLAS_ASSERT (fires in Debug).
+// These tests verify normal-size inputs still work correctly after the fix.
+// ============================================================================
+
+TEST(ClrMarshalBounds, ToStringRefNormalStringWorks)
+{
+    std::string s{"hello, world"};
+    auto ref = to_string_ref(s);
+    EXPECT_EQ(ref.data, s.data());
+    EXPECT_EQ(ref.length, static_cast<int32_t>(s.size()));
+}
+
+TEST(ClrMarshalBounds, ToStringRefEmptyStringWorks)
+{
+    std::string_view sv{};
+    auto ref = to_string_ref(sv);
+    EXPECT_EQ(ref.length, 0);
+}
+
+TEST(ClrMarshalBounds, ToSpanRefNormalSpanWorks)
+{
+    std::vector<std::byte> buf(16, std::byte{0xAB});
+    auto ref = to_span_ref(buf);
+    EXPECT_EQ(ref.data, buf.data());
+    EXPECT_EQ(ref.length, static_cast<int32_t>(buf.size()));
+}

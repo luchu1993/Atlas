@@ -1,9 +1,11 @@
 #pragma once
 
+#include "foundation/error.hpp"
 #include "math/quaternion.hpp"
 #include "math/vector3.hpp"
 #include "script/script_value.hpp"
 
+#include <climits>
 #include <cstddef>
 #include <cstdint>
 #include <span>
@@ -164,6 +166,7 @@ namespace clr_marshal
 // The returned ClrStringRef is valid only while sv is alive.
 [[nodiscard]] inline auto to_string_ref(std::string_view sv) -> ClrStringRef
 {
+    ATLAS_ASSERT(sv.size() <= static_cast<std::size_t>(INT32_MAX));
     return {sv.data(), static_cast<int32_t>(sv.size())};
 }
 
@@ -175,6 +178,7 @@ namespace clr_marshal
 // Zero-copy: returns a non-owning view into bytes' storage.
 [[nodiscard]] inline auto to_span_ref(std::span<const std::byte> bytes) -> ClrSpanRef
 {
+    ATLAS_ASSERT(bytes.size() <= static_cast<std::size_t>(INT32_MAX));
     return {bytes.data(), static_cast<int32_t>(bytes.size())};
 }
 
