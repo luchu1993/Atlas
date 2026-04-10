@@ -11,10 +11,5 @@
     <RootNamespace>Atlas</RootNamespace>
   </PropertyGroup>
 
-  <ItemGroup>
-    <ProjectReference Include="../Atlas.Generators.Interop/Atlas.Generators.Interop.csproj"
-                      OutputItemType="Analyzer"
-                      ReferenceOutputAssembly="false" />
-  </ItemGroup>
 
 </Project>

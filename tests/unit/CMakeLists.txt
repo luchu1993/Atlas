@@ -230,12 +230,8 @@ endif()
 
 # ── ScriptPhase 2: C# → C++ callback integration test ───────────────────────
 
-# Build Interop Source Generator (must be ready before Atlas.Runtime's dotnet build)
-atlas_build_csharp_project(src/csharp/Atlas.Generators.Interop)
-
 # Build Atlas.Runtime (src/csharp) — produces Atlas.Runtime.dll
 atlas_build_csharp_project(src/csharp/Atlas.Runtime)
-add_dependencies(csharp_src_csharp_Atlas_Runtime csharp_src_csharp_Atlas_Generators_Interop)
 
 # Build Atlas.RuntimeTest — produces Atlas.RuntimeTest.dll + copies Atlas.Runtime.dll
 atlas_build_csharp_project(tests/csharp/Atlas.RuntimeTest)

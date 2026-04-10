@@ -110,49 +110,43 @@ C++ 测试通过 `Atlas.RuntimeTest.dll` 的 `RunBootstrap` 启动 bootstrap，
 
 ---
 
-## 3. Source Generator 不能链式处理
+## 3. Interop Source Generator 的尝试与移除
 
-### 问题描述
+### 背景
 
-Roslyn Source Generator 的输出**不会被其他 Source Generator 处理**。
-`[LibraryImport]` 本身就是一个 Source Generator（`LibraryImportGenerator`），
-它扫描用户代码中标记了 `[LibraryImport]` 的 `partial` 方法并生成实现体。
+曾实现了 `Atlas.Generators.Interop`（IIncrementalGenerator），用 `[NativeImport]`
+属性自动生成 `[LibraryImport]` / `[DllImport]` 声明和 Span wrapper 代码。
 
-如果 `Atlas.Generators.Interop` 生成的代码中包含 `[LibraryImport] partial` 方法，
-`LibraryImportGenerator` **不会看到这些生成的方法**——它只处理原始用户代码。
-结果是生成的 `partial` 方法没有实现体 → CS8795 编译错误。
+### 遇到的问题
 
-### 解决方案
+1. **Roslyn 链式限制**: Source Generator 的输出不会被其他 Source Generator 处理。
+   `[LibraryImport]` 本身就是 Source Generator，我们生成的 `[LibraryImport] partial`
+   方法不被 `LibraryImportGenerator` 扫描 → CS8795。改用 `[DllImport] extern`
+   绕过了此问题，但丢失了 `[LibraryImport]` 的编译期 marshalling 优势。
 
-生成的 P/Invoke 使用 `[DllImport]` + `static extern`（传统 P/Invoke），
-而非 `[LibraryImport]` + `partial`：
+2. **Custom Marshaller 限制**: .NET 7+ 的 `[MarshalUsing]` 是一对一参数映射，
+   无法将 `ReadOnlySpan<byte>` 展开为 `(byte*, int)` 两个原生参数。C++ 函数签名
+   是分离式的 `(const char* msg, int32_t len)`，Custom Marshaller 无法适配。
 
-```csharp
-// 生成代码
-[DllImport("atlas_engine", EntryPoint = "atlas_server_time", ExactSpelling = true)]
-private static extern double _ServerTime();
+3. **收益 vs 成本**: 当前 `atlas_*` 导出函数 < 15 个。Generator 引入了
+   netstandard2.0 项目、EquatableArray、诊断系统等大量基础设施，维护成本远超手写。
 
-public static partial double ServerTime()
-{
-    return _ServerTime();
-}
-```
+### 最终决策
 
-**为什么这是安全的**：
+**移除 `Atlas.Generators.Interop`**，保留手写的 `NativeApi.cs`。
 
-- 所有生成的 private P/Invoke 方法的参数都是 blittable 类型（`int`、`float`、
-  `byte*`、`uint` 等）——`[DllImport]` 对 blittable 参数零 marshaling 开销。
-- `[LibraryImport]` 的优势在于**非 blittable 类型的编译期 marshaling**（如
-  `string` → UTF-16/UTF-8 转换）。我们的 generator 已在 wrapper 方法中手动
-  处理了 `ReadOnlySpan<byte>` → `byte*` + `int` 和 `string` → UTF-8 bytes 的
-  转换，传给 P/Invoke 的参数始终是 blittable 的。
-- IL2CPP 兼容：`[DllImport]` + blittable 参数在 IL2CPP 上完全安全。
+`NativeApi.cs` 已经使用 `[LibraryImport]`（.NET 官方 source-generated P/Invoke），
+对 Span 参数用手写 `fixed` wrapper 处理 → `byte* + int`。这是官方推荐的标准模式，
+IL2CPP / Unity 2023.1+ 完全兼容，代码清晰且无额外依赖。
 
-### 替代方案（未采用）
+### 经验教训
 
-- 不使用 Source Generator，保持手写 `[LibraryImport]` 声明（放弃自动化）
-- 在 generator 内部完全模拟 `LibraryImportGenerator` 的 marshaling 代码生成
-  （复杂度过高，收益不大）
+- Source Generator 适合**大量重复模式**（Entity 序列化、RPC 分发等），
+  不适合 < 20 个函数的简单声明性任务。
+- 自定义 Generator 的 Roslyn 链式限制是**设计时必须验证**的约束，
+  不能假设生成的代码会被其他 Generator 处理。
+- `[LibraryImport]` + 手写 Span wrapper 是 P/Invoke 的最佳实践，
+  没有比它更简洁的官方方案。
 
 ---
 

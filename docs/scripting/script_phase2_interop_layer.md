@@ -646,21 +646,38 @@ if (*result == -1)
 
 ---
 
-## 任务 2.6: `Atlas.Generators.Interop` Source Generator
+## 任务 2.6: ~~`Atlas.Generators.Interop` Source Generator~~ → 已移除
 
-### 新建目录: `src/csharp/Atlas.Generators.Interop/`
+> **状态**: 已实现后移除。经过实现验证和方案对比，决定不使用自定义 Source Generator。
 
-**说明**: 这是第一个 Source Generator，用于自动生成 C# 侧的 Native 函数绑定代码。替代手写的 `[LibraryImport]` 声明和 Span → pointer 转换样板代码。
+### 移除原因
 
-### 项目结构
+1. **Roslyn 链式限制**: Source Generator 的输出不会被其他 Source Generator 处理。
+   `[LibraryImport]` 本身就是 Source Generator，我们生成的 `[LibraryImport] partial`
+   方法不会被 `LibraryImportGenerator` 扫描到（CS8795 编译错误）。
 
-```
-src/csharp/Atlas.Generators.Interop/
-├── Atlas.Generators.Interop.csproj    # netstandard2.0 (Roslyn 要求)
-├── Attributes/
-│   └── NativeImportAttribute.cs       # [NativeImport]
-└── InteropGenerator.cs                # IIncrementalGenerator
-```
+2. **Custom Marshaller 限制**: .NET 7+ 的 `[MarshalUsing]` Custom Marshaller 是
+   一对一参数映射，无法将 `ReadOnlySpan<byte>` 展开为 `(byte*, int)` 两个原生参数。
+   我们的 C++ 函数签名是分离式的 `(const char* msg, int32_t len)`。
+
+3. **收益不足**: 当前 `atlas_*` 导出函数 < 15 个，手写 `[LibraryImport]` + `fixed`
+   wrapper 的工作量很小且代码清晰。自定义 Generator 引入了 netstandard2.0 项目、
+   增量缓存（EquatableArray）、诊断系统等大量基础设施，维护成本高于收益。
+
+### 最终方案
+
+直接在 `NativeApi.cs` 中使用 `[LibraryImport("atlas_engine")]`：
+- **blittable 参数**: 直接声明为 `public static partial` 方法
+- **Span 参数**: 手写 private `[LibraryImport]` (byte\* + int) + public wrapper (fixed)
+- 这是 .NET 官方推荐的 Span/P/Invoke 模式，IL2CPP 安全
+
+详见 [implementation_notes.md](implementation_notes.md) §3。
+
+### 原设计文档（以下为历史记录）
+
+<details>
+<summary>点击展开原始 Task 2.6 设计（已废弃）</summary>
+
 
 ### 属性定义
 
@@ -777,6 +794,8 @@ public static partial class NativeApi
 - [x] 无 `Delegate.DynamicInvoke`
 - [x] 无 `Activator.CreateInstance`
 - [x] 无 `MethodInfo.Invoke`
+
+</details>
 
 ---
 
