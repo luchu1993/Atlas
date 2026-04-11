@@ -139,6 +139,19 @@ TEST(EntityManager, DuplicateDbidAssignmentIsRejected)
     EXPECT_EQ(mgr.find_by_dbid(77), a);
 }
 
+TEST(EntityManager, CreateRejectsDuplicateDbid)
+{
+    EntityManager mgr;
+
+    auto* first = mgr.create(1, false, 1234);
+    ASSERT_NE(first, nullptr);
+
+    auto* second = mgr.create(2, false, 1234);
+    EXPECT_EQ(second, nullptr);
+    EXPECT_EQ(mgr.find_by_dbid(1234), first);
+    EXPECT_EQ(mgr.size(), 1u);
+}
+
 TEST(EntityManager, NonProxyFindProxy)
 {
     EntityManager mgr;

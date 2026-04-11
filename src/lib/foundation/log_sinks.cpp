@@ -34,7 +34,6 @@ void ConsoleSink::write(LogLevel level, std::string_view category, std::string_v
     else
     {
         std::fwrite(formatted.data(), 1, formatted.size(), stdout);
-        std::fflush(stdout);
     }
 }
 

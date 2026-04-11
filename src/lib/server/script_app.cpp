@@ -6,8 +6,10 @@
 #include "clrscript/clr_script_engine.hpp"
 #include "foundation/log.hpp"
 
+#include <array>
 #include <chrono>
 #include <filesystem>
+#include <format>
 
 namespace atlas
 {
@@ -41,6 +43,9 @@ auto ScriptApp::init(int argc, char* argv[]) -> bool
 
     using SetNativeApiProviderFn = void (*)(void*);
     using GetClrBridgeFn = void* (*)();
+    using HasClrErrorFn = int32_t (*)();
+    using ReadClrErrorFn = int32_t (*)(char*, int32_t);
+    using ClearClrErrorFn = void (*)();
 
 #if ATLAS_PLATFORM_WINDOWS
     constexpr auto kNativeApiModuleName = "atlas_engine.dll";
@@ -79,6 +84,21 @@ auto ScriptApp::init(int argc, char* argv[]) -> bool
         ATLAS_LOG_ERROR("ScriptApp: failed to resolve DLL CLR error bridge exports");
         return false;
     }
+
+    auto has_error_result = native_api_library_->get_symbol<HasClrErrorFn>("atlas_has_clr_error");
+    auto read_error_result =
+        native_api_library_->get_symbol<ReadClrErrorFn>("atlas_read_clr_error");
+    auto clear_error_api_result =
+        native_api_library_->get_symbol<ClearClrErrorFn>("atlas_clear_clr_error");
+    if (!has_error_result || !read_error_result || !clear_error_api_result)
+    {
+        ATLAS_LOG_ERROR("ScriptApp: failed to resolve DLL CLR error query exports");
+        return false;
+    }
+    native_api_error_exports_.has_error = *has_error_result;
+    native_api_error_exports_.read_error = *read_error_result;
+    native_api_error_exports_.clear_error = *clear_error_api_result;
+    clear_native_api_error();
 
     ClrBootstrapArgs bootstrap_args;
     bootstrap_args.error_set =
@@ -157,6 +177,7 @@ void ScriptApp::fini()
             (*set_provider_result)(nullptr);
         native_api_library_.reset();
     }
+    native_api_error_exports_ = NativeApiErrorExports{};
 
     set_native_api_provider(nullptr);
     native_provider_.reset();
@@ -198,6 +219,37 @@ void ScriptApp::reload_scripts()
     // reload_module would go here once ClrScriptEngine exposes it
     script_engine_->on_init(true);
     on_script_ready();
+}
+
+void ScriptApp::clear_native_api_error()
+{
+    if (native_api_error_exports_.is_valid())
+    {
+        native_api_error_exports_.clear_error();
+    }
+}
+
+auto ScriptApp::consume_native_api_error() -> std::optional<std::string>
+{
+    if (!native_api_error_exports_.is_valid() || native_api_error_exports_.has_error() == 0)
+    {
+        return std::nullopt;
+    }
+
+    std::array<char, 1024> buffer{};
+    const int32_t code = native_api_error_exports_.read_error(
+        buffer.data(), static_cast<int32_t>(buffer.size() - 1));
+    std::string message(buffer.data());
+    if (message.empty())
+    {
+        message = std::format("managed callback failed with CLR error code {}", code);
+    }
+    else
+    {
+        message = std::format("{} (CLR error code {})", message, code);
+    }
+
+    return message;
 }
 
 }  // namespace atlas

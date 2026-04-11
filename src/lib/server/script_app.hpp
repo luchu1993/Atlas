@@ -7,6 +7,8 @@
 
 #include <memory>
 #include <optional>
+#include <string>
+#include <string_view>
 
 namespace atlas
 {
@@ -69,8 +71,28 @@ protected:
     // Trigger assembly reload: on_shutdown → reload → on_init(true) → on_script_ready.
     void reload_scripts();
 
+    void clear_native_api_error();
+    [[nodiscard]] auto consume_native_api_error() -> std::optional<std::string>;
+
 private:
+    struct NativeApiErrorExports
+    {
+        using HasErrorFn = int32_t (*)();
+        using ReadErrorFn = int32_t (*)(char*, int32_t);
+        using ClearErrorFn = void (*)();
+
+        HasErrorFn has_error{nullptr};
+        ReadErrorFn read_error{nullptr};
+        ClearErrorFn clear_error{nullptr};
+
+        [[nodiscard]] auto is_valid() const -> bool
+        {
+            return has_error != nullptr && read_error != nullptr && clear_error != nullptr;
+        }
+    };
+
     std::optional<DynamicLibrary> native_api_library_;
+    NativeApiErrorExports native_api_error_exports_;
     std::unique_ptr<ScriptEngine> script_engine_;
     std::unique_ptr<INativeApiProvider> native_provider_;
     float last_dt_{0.0f};  // seconds, updated each tick

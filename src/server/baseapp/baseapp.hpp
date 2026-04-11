@@ -8,6 +8,8 @@
 #include "server/entity_types.hpp"
 
 #include <memory>
+#include <span>
+#include <string_view>
 #include <unordered_map>
 
 namespace atlas
@@ -113,16 +115,6 @@ private:
     void register_internal_handlers();
     void send_to_dbapp(Channel*& dbapp_ch, auto&& msg);
     void maybe_request_more_ids();
-    auto capture_entity_snapshot(EntityID entity_id, std::vector<std::byte>& out) -> bool;
-    void begin_force_logoff_persist(uint32_t force_request_id, EntityID entity_id);
-    void continue_login_after_force_logoff(uint32_t force_request_id);
-    void finalize_force_logoff(EntityID entity_id);
-    auto resolve_internal_channel(const Address& addr) -> Channel*;
-    auto resolve_client_channel(EntityID entity_id) -> Channel*;
-    auto bind_client(EntityID entity_id, const Address& client_addr) -> bool;
-    void unbind_client(EntityID entity_id);
-    void on_external_client_disconnect(Channel& ch);
-    void send_prepare_login_result(const Address& reply_addr, const login::PrepareLoginResult& msg);
 
     // ---- State ----------------------------------------------------------
     NetworkInterface& external_network_;
@@ -141,6 +133,7 @@ private:
         DatabaseID dbid{kInvalidDBID};
         SessionKey session_key;
         TimePoint created_at{};
+        bool reply_sent{false};
     };
     std::unordered_map<uint32_t, PendingLogin> pending_logins_;
     uint32_t next_prepare_request_id_{1};
@@ -151,6 +144,7 @@ private:
     {
         uint32_t force_request_id{0};
         EntityID entity_id{kInvalidEntityID};
+        TimePoint created_at{};
     };
     std::unordered_map<uint32_t, PendingForceLogoffWrite> pending_force_logoff_writes_;
     std::unordered_map<EntityID, Address> entity_client_index_;
@@ -158,7 +152,30 @@ private:
     uint64_t auth_success_total_{0};
     uint64_t auth_fail_total_{0};
     uint64_t force_logoff_total_{0};
+    static constexpr Duration kPendingTimeout = std::chrono::seconds(30);
     bool id_range_requested_{false};
+
+    void cleanup_expired_pending_requests();
+    void fail_all_dbapp_pending_requests(std::string_view reason);
+    void fail_pending_prepare_login(PendingLogin& pending, std::string_view reason);
+    void fail_pending_prepare_login(uint32_t request_id, std::string_view reason);
+    void fail_pending_force_logoff(PendingLogin& pending, std::string_view reason);
+    void fail_pending_force_logoff(uint32_t request_id, std::string_view reason);
+    void release_checkout(DatabaseID dbid, uint16_t type_id);
+    [[nodiscard]] auto restore_managed_entity(EntityID entity_id, uint16_t type_id, DatabaseID dbid,
+                                              std::span<const std::byte> blob) -> bool;
+    [[nodiscard]] auto notify_managed_entity_destroyed(EntityID entity_id, std::string_view context)
+        -> bool;
+    auto capture_entity_snapshot(EntityID entity_id, std::vector<std::byte>& out) -> bool;
+    void begin_force_logoff_persist(uint32_t force_request_id, EntityID entity_id);
+    void continue_login_after_force_logoff(uint32_t force_request_id);
+    [[nodiscard]] auto finalize_force_logoff(EntityID entity_id) -> bool;
+    auto resolve_internal_channel(const Address& addr) -> Channel*;
+    auto resolve_client_channel(EntityID entity_id) -> Channel*;
+    auto bind_client(EntityID entity_id, const Address& client_addr) -> bool;
+    void unbind_client(EntityID entity_id);
+    void on_external_client_disconnect(Channel& ch);
+    void send_prepare_login_result(const Address& reply_addr, const login::PrepareLoginResult& msg);
 };
 
 }  // namespace atlas

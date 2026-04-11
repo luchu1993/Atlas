@@ -29,6 +29,19 @@ auto EntityManager::allocate_id() -> EntityID
 
 auto EntityManager::create(uint16_t type_id, bool has_client, DatabaseID dbid) -> BaseEntity*
 {
+    if (dbid != kInvalidDBID)
+    {
+        auto existing = dbid_index_.find(dbid);
+        if (existing != dbid_index_.end())
+        {
+            ATLAS_LOG_ERROR(
+                "EntityManager: cannot create entity type {} with duplicate DBID {} "
+                "(already bound to entity {})",
+                type_id, dbid, existing->second);
+            return nullptr;
+        }
+    }
+
     EntityID id = allocate_id();
     if (id == kInvalidEntityID)
     {

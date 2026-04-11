@@ -164,8 +164,8 @@ void LoginApp::on_login_request(const Address& src, Channel* ch, const login::Lo
 {
     (void)ch;
     ++login_requests_total_;
-    ATLAS_LOG_INFO("LoginApp: login request user='{}' from {}:{}", msg.username, src.ip(),
-                   src.port());
+    ATLAS_LOG_DEBUG("LoginApp: login request user='{}' from {}:{}", msg.username, src.ip(),
+                    src.port());
 
     if (is_rate_limited(src))
     {
@@ -216,13 +216,13 @@ void LoginApp::on_auth_login_result(const Address& /*src*/, Channel* /*ch*/,
         return;
     }
     PendingLogin& pending = it->second;
-    ATLAS_LOG_INFO("LoginApp: auth result request_id={} success={} status={}", msg.request_id,
-                   msg.success, static_cast<int>(msg.status));
+    ATLAS_LOG_DEBUG("LoginApp: auth result request_id={} success={} status={}", msg.request_id,
+                    msg.success, static_cast<int>(msg.status));
 
     if (!msg.success)
     {
-        ATLAS_LOG_INFO("LoginApp: auth failed for '{}' status={}", pending.username,
-                       static_cast<int>(msg.status));
+        ATLAS_LOG_DEBUG("LoginApp: auth failed for '{}' status={}", pending.username,
+                        static_cast<int>(msg.status));
         send_login_error(pending.client_addr, msg.status, "auth_failed");
         pending_.erase(it);
         return;
@@ -262,8 +262,8 @@ void LoginApp::on_allocate_baseapp_result(const Address& /*src*/, Channel* /*ch*
         return;
     }
     PendingLogin& pending = it->second;
-    ATLAS_LOG_INFO("LoginApp: allocate baseapp result request_id={} success={} internal={}:{}",
-                   msg.request_id, msg.success, msg.internal_addr.ip(), msg.internal_addr.port());
+    ATLAS_LOG_DEBUG("LoginApp: allocate baseapp result request_id={} success={} internal={}:{}",
+                    msg.request_id, msg.success, msg.internal_addr.ip(), msg.internal_addr.port());
 
     if (!msg.success)
     {
@@ -313,7 +313,7 @@ void LoginApp::on_prepare_login_result(const Address& /*src*/, Channel* /*ch*/,
         return;
     }
     PendingLogin& pending = it->second;
-    ATLAS_LOG_INFO(
+    ATLAS_LOG_DEBUG(
         "LoginApp: prepare login result request_id={} success={} entity_id={} error='{}'",
         msg.request_id, msg.success, msg.entity_id, msg.error);
 
@@ -334,9 +334,9 @@ void LoginApp::on_prepare_login_result(const Address& /*src*/, Channel* /*ch*/,
     if (auto* client_ch = network().find_channel(pending.client_addr))
         (void)client_ch->send_message(result);
 
-    ATLAS_LOG_INFO("LoginApp: login complete for '{}' entity={} baseapp={}:{}", pending.username,
-                   msg.entity_id, pending.baseapp_external_addr.ip(),
-                   pending.baseapp_external_addr.port());
+    ATLAS_LOG_DEBUG("LoginApp: login complete for '{}' entity={} baseapp={}:{}", pending.username,
+                    msg.entity_id, pending.baseapp_external_addr.ip(),
+                    pending.baseapp_external_addr.port());
     pending_.erase(it);
 }
 

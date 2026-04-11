@@ -183,8 +183,8 @@ void BaseAppMgr::on_inform_load(const Address& src, Channel* /*ch*/,
 void BaseAppMgr::on_allocate_baseapp(const Address& src, Channel* ch,
                                      const login::AllocateBaseApp& msg)
 {
-    ATLAS_LOG_INFO("BaseAppMgr: allocate request_id={} type_id={} dbid={} from {}:{}",
-                   msg.request_id, msg.type_id, msg.dbid, src.ip(), src.port());
+    ATLAS_LOG_DEBUG("BaseAppMgr: allocate request_id={} type_id={} dbid={} from {}:{}",
+                    msg.request_id, msg.type_id, msg.dbid, src.ip(), src.port());
     login::AllocateBaseAppResult result;
     result.request_id = msg.request_id;
 

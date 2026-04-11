@@ -244,8 +244,8 @@ void DBApp::on_checkout_entity(const Address& src, Channel* ch, const dbapp::Che
     if (ch == nullptr)
         return;
 
-    ATLAS_LOG_INFO("DBApp: checkout request_id={} dbid={} type_id={} from {}:{}", msg.request_id,
-                   msg.dbid, msg.type_id, src.ip(), src.port());
+    ATLAS_LOG_DEBUG("DBApp: checkout request_id={} dbid={} type_id={} from {}:{}", msg.request_id,
+                    msg.dbid, msg.type_id, src.ip(), src.port());
 
     CheckoutInfo owner;
     owner.base_addr = src;
@@ -348,7 +348,7 @@ void DBApp::on_checkout_entity(const Address& src, Channel* ch, const dbapp::Che
 void DBApp::on_checkin_entity(const Address& /*src*/, Channel* /*ch*/,
                               const dbapp::CheckinEntity& msg)
 {
-    ATLAS_LOG_INFO("DBApp: checkin dbid={} type_id={}", msg.dbid, msg.type_id);
+    ATLAS_LOG_DEBUG("DBApp: checkin dbid={} type_id={}", msg.dbid, msg.type_id);
     checkout_mgr_.checkin(msg.dbid, msg.type_id);
     database_->clear_checkout(msg.dbid, msg.type_id, [](bool) {});
 }
@@ -425,8 +425,8 @@ void DBApp::on_baseapp_death(const Address& internal_addr, std::string_view name
 
 void DBApp::on_auth_login(const Address& src, Channel* ch, const login::AuthLogin& msg)
 {
-    ATLAS_LOG_INFO("DBApp: auth login request_id={} user='{}' from {}:{}", msg.request_id,
-                   msg.username, src.ip(), src.port());
+    ATLAS_LOG_DEBUG("DBApp: auth login request_id={} user='{}' from {}:{}", msg.request_id,
+                    msg.username, src.ip(), src.port());
     if (!database_)
     {
         login::AuthLoginResult reply;
