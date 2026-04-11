@@ -1,1 +1,11 @@
-# atlas_db — Database abstraction interface (IDatabase)
+# atlas_db — Database abstraction interface (IDatabase) + factory
+
+atlas_add_library(atlas_db
+    SOURCES
+        database_factory.cpp
+    DEPS
+        atlas_foundation
+        atlas_network
+        atlas_entitydef
+        atlas_db_xml
+)

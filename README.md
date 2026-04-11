@@ -33,6 +33,32 @@ Client ──► LoginApp ──► BaseAppMgr ──► BaseApp ◄──► Ce
 | **Reviver** | Crash detection and automatic recovery |
 | **machined** | Machine daemon, service registration and discovery |
 
+## Server Framework (`src/lib/server/`)
+
+The `server` library provides the base class hierarchy shared by all Atlas server processes:
+
+```
+ServerApp
+├── ManagerApp          — manager/daemon processes (no scripting)
+│   ├── BaseAppMgr
+│   ├── CellAppMgr
+│   ├── DBAppMgr
+│   ├── machined
+│   └── EchoApp         — minimal verification app
+└── ScriptApp           — ServerApp + CoreCLR scripting layer
+    └── EntityApp       — ScriptApp + entity definitions + background task pool
+        ├── BaseApp
+        └── CellApp
+```
+
+Key components provided by `ServerApp`:
+
+- **`ServerConfig`** — loads process configuration from CLI flags and JSON
+- **`MachinedClient`** — TCP connection to machined for registration, heartbeats, service discovery, and Birth/Death notifications
+- **`WatcherRegistry`** — hierarchical path-based registry for observable process metrics (read/write via path strings)
+- **`Updatable` / `Updatables`** — level-ordered per-tick callback system; safe for add/remove during iteration
+- **`SignalDispatchTask`** — dispatches OS signals (SIGINT, SIGTERM, etc.) into the event loop
+
 ## Building
 
 ### Requirements
@@ -79,16 +105,22 @@ atlas/
 │   │   ├── clrscript/        .NET 9 CoreCLR embedding (ClrHost)
 │   │   ├── entitydef/        Entity definition system
 │   │   ├── connection/       Communication protocols
-│   │   ├── db/               Database abstraction
+│   │   ├── db/               Database abstraction (IDatabase + DatabaseFactory)
+│   │   ├── db_mysql/         MySQL backend
+│   │   ├── db_xml/           XML backend
 │   │   ├── server/           Server framework base classes
 │   │   └── ...
 │   ├── server/             Server applications
 │   │   ├── loginapp/
 │   │   ├── baseapp/
-│   │   ├── cellapp/
+│   │   ├── baseappmgr/
 │   │   ├── dbapp/
+│   │   ├── machined/
+│   │   ├── EchoApp/          Minimal verification app
 │   │   └── ...
 │   └── client_sdk/         Client connection SDK
+├── src/tools/              Developer tools
+│   └── atlas_tool/
 ├── tests/
 │   ├── unit/               C++ unit tests (Google Test)
 │   └── csharp/             C# smoke tests

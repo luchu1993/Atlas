@@ -20,16 +20,40 @@ enum class MessageLengthStyle : uint8_t
     Variable,  // packed-int length prefix before payload
 };
 
+// Reliability hint embedded in the message descriptor.
+//
+// Reliable   — the channel must guarantee delivery and ordering (default).
+//              On ReliableUdpChannel this uses the ACK/retransmit path.
+//              On TcpChannel it is always reliable regardless of this flag.
+//
+// Unreliable — delivery is best-effort; lost packets are NOT retransmitted.
+//              Use for high-frequency state updates (position, AoI deltas)
+//              where staleness is worse than loss.
+//              On non-RUDP channels (TCP, plain UDP) the channel falls back
+//              to its natural send path (TCP is always reliable; plain UDP
+//              never retransmits).
+enum class MessageReliability : uint8_t
+{
+    Reliable,
+    Unreliable,
+};
+
 struct MessageDesc
 {
     MessageID id;
     std::string_view name;
     MessageLengthStyle length_style;
-    int32_t fixed_length;  // bytes, only meaningful for Fixed style
+    int32_t fixed_length;                                          // bytes, only for Fixed style
+    MessageReliability reliability{MessageReliability::Reliable};  // delivery guarantee
 
     [[nodiscard]] constexpr auto is_fixed() const -> bool
     {
         return length_style == MessageLengthStyle::Fixed;
+    }
+
+    [[nodiscard]] constexpr auto is_unreliable() const -> bool
+    {
+        return reliability == MessageReliability::Unreliable;
     }
 };
 

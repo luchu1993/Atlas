@@ -81,4 +81,20 @@ void BaseNativeProvider::unregister_all_entity_types()
     EntityDefRegistry::instance().clear();
 }
 
+void BaseNativeProvider::write_to_db(uint32_t entity_id, const std::byte* /*entity_data*/,
+                                     int32_t /*len*/)
+{
+    ATLAS_LOG_ERROR("write_to_db() not supported on this process type (entity_id={})", entity_id);
+}
+
+void BaseNativeProvider::give_client_to(uint32_t src_entity_id, uint32_t /*dest_entity_id*/)
+{
+    ATLAS_LOG_ERROR("give_client_to() not supported on this process type (src={})", src_entity_id);
+}
+
+void BaseNativeProvider::set_native_callbacks(const void* /*native_callbacks*/, int32_t /*len*/)
+{
+    // Default: silently ignore.  Processes without C# scripting never receive callbacks.
+}
+
 }  // namespace atlas

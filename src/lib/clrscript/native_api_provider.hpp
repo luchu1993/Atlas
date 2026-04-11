@@ -53,6 +53,22 @@ public:
     // data is a serialised entity-type descriptor.
     virtual void register_entity_type(const std::byte* data, int32_t len) = 0;
     virtual void unregister_all_entity_types() = 0;
+
+    // ---- Persistence (BaseApp / CellApp) --------------------------------
+    // Trigger an async write of the entity's persistent properties to DBApp.
+    // entity_data: serialised property blob produced by C# Atlas.Runtime.
+    virtual void write_to_db(uint32_t entity_id, const std::byte* entity_data, int32_t len) = 0;
+
+    // ---- Client transfer ------------------------------------------------
+    // Transfer the client connection attached to src_entity_id to
+    // dest_entity_id (may live on a different BaseApp).
+    virtual void give_client_to(uint32_t src_entity_id, uint32_t dest_entity_id) = 0;
+
+    // ---- C# → C++ callback table ----------------------------------------
+    // Called by C# Atlas.Runtime once at startup to supply function pointers
+    // for C++ → C# calls.  The native_callbacks blob is a packed array of
+    // function pointer values whose layout is defined in clr_native_api.h.
+    virtual void set_native_callbacks(const void* native_callbacks, int32_t len) = 0;
 };
 
 // Register the provider for this process.  Must be called before

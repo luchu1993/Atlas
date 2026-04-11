@@ -39,9 +39,12 @@ public:
     // Sending
     [[nodiscard]] auto bundle() -> Bundle& { return bundle_; }
     [[nodiscard]] auto send() -> Result<void>;
+    // Both overloads honour Msg::descriptor().reliability (or the registered
+    // InterfaceTable entry for the raw-ID variant):
+    //   Reliable   → send()            (ACK + retransmit on RUDP, always on TCP)
+    //   Unreliable → send_unreliable() (best-effort on RUDP, natural path on TCP/UDP)
     [[nodiscard]] auto send_message(MessageID id, std::span<const std::byte> data) -> Result<void>;
 
-    // Convenience: send a typed message
     template <NetworkMessage Msg>
     void queue_message(const Msg& msg)
     {
@@ -52,8 +55,14 @@ public:
     [[nodiscard]] auto send_message(const Msg& msg) -> Result<void>
     {
         bundle_.add_message(msg);
+        if (Msg::descriptor().is_unreliable())
+            return send_unreliable();
         return send();
     }
+
+    // Best-effort send — subclasses override to use unreliable path when available.
+    // Default implementation falls back to send() (TCP is always reliable).
+    [[nodiscard]] virtual auto send_unreliable() -> Result<void>;
 
     // State
     [[nodiscard]] auto state() const -> ChannelState { return state_; }

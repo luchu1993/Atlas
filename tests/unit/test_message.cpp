@@ -1,5 +1,6 @@
-#include <gtest/gtest.h>
 #include "network/message.hpp"
+
+#include <gtest/gtest.h>
 
 using namespace atlas;
 
@@ -24,9 +25,11 @@ struct TestMsg
     static auto deserialize(BinaryReader& r) -> Result<TestMsg>
     {
         auto v = r.read<uint32_t>();
-        if (!v) return v.error();
+        if (!v)
+            return v.error();
         auto t = r.read_string();
-        if (!t) return t.error();
+        if (!t)
+            return t.error();
         return TestMsg{*v, std::move(*t)};
     }
 };
@@ -50,7 +53,8 @@ struct PingMsg
     static auto deserialize(BinaryReader& r) -> Result<PingMsg>
     {
         auto s = r.read<uint32_t>();
-        if (!s) return s.error();
+        if (!s)
+            return s.error();
         return PingMsg{*s};
     }
 };
@@ -123,11 +127,8 @@ TEST(Message, TypedHandlerDispatch)
 TEST(Message, TypedHandlerMalformedData)
 {
     bool called = false;
-    auto handler = make_handler<TestMsg>(
-        [&](const Address&, Channel*, const TestMsg&)
-        {
-            called = true;
-        });
+    auto handler =
+        make_handler<TestMsg>([&](const Address&, Channel*, const TestMsg&) { called = true; });
 
     // Feed garbage data — too short for TestMsg
     BinaryWriter w;
@@ -174,4 +175,61 @@ TEST(Message, MessageDescIsFixedHelper)
 
     EXPECT_FALSE(variable.is_fixed());
     EXPECT_TRUE(fixed.is_fixed());
+}
+
+// ---------------------------------------------------------------------------
+// MessageReliability
+// ---------------------------------------------------------------------------
+
+// Default reliability is Reliable when not specified.
+struct ReliableMsg
+{
+    static auto descriptor() -> const MessageDesc&
+    {
+        static const MessageDesc desc{20, "ReliableMsg", MessageLengthStyle::Fixed, 0};
+        return desc;
+    }
+    void serialize(BinaryWriter&) const {}
+    static auto deserialize(BinaryReader&) -> Result<ReliableMsg> { return ReliableMsg{}; }
+};
+static_assert(NetworkMessage<ReliableMsg>);
+
+// Explicitly marked unreliable.
+struct UnreliableMsg
+{
+    static auto descriptor() -> const MessageDesc&
+    {
+        static const MessageDesc desc{21, "UnreliableMsg", MessageLengthStyle::Fixed, 0,
+                                      MessageReliability::Unreliable};
+        return desc;
+    }
+    void serialize(BinaryWriter&) const {}
+    static auto deserialize(BinaryReader&) -> Result<UnreliableMsg> { return UnreliableMsg{}; }
+};
+static_assert(NetworkMessage<UnreliableMsg>);
+
+TEST(Message, DefaultReliabilityIsReliable)
+{
+    EXPECT_EQ(ReliableMsg::descriptor().reliability, MessageReliability::Reliable);
+    EXPECT_FALSE(ReliableMsg::descriptor().is_unreliable());
+}
+
+TEST(Message, ExplicitUnreliableFlag)
+{
+    EXPECT_EQ(UnreliableMsg::descriptor().reliability, MessageReliability::Unreliable);
+    EXPECT_TRUE(UnreliableMsg::descriptor().is_unreliable());
+}
+
+TEST(Message, DescConstructorDefaultReliability)
+{
+    // Four-argument constructor keeps backward compatibility — reliability defaults to Reliable.
+    MessageDesc desc{30, "Compat", MessageLengthStyle::Variable, -1};
+    EXPECT_FALSE(desc.is_unreliable());
+}
+
+TEST(Message, DescConstructorExplicitReliability)
+{
+    MessageDesc desc{31, "Unreliable", MessageLengthStyle::Variable, -1,
+                     MessageReliability::Unreliable};
+    EXPECT_TRUE(desc.is_unreliable());
 }

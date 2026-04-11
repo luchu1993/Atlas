@@ -79,6 +79,13 @@ auto Channel::send() -> Result<void>
     return Result<void>{};
 }
 
+auto Channel::send_unreliable() -> Result<void>
+{
+    // Default: TCP (and other reliable-only channels) have no unreliable path —
+    // fall back to the normal reliable send so callers need no channel-type check.
+    return send();
+}
+
 auto Channel::send_message(MessageID id, std::span<const std::byte> data) -> Result<void>
 {
     MessageDesc desc{id, "", MessageLengthStyle::Variable, -1};
@@ -89,6 +96,8 @@ auto Channel::send_message(MessageID id, std::span<const std::byte> data) -> Res
     bundle_.start_message(desc);
     bundle_.writer().write_bytes(data);
     bundle_.end_message();
+    if (desc.is_unreliable())
+        return send_unreliable();
     return send();
 }
 

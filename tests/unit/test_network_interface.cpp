@@ -1,6 +1,7 @@
 #include "network/event_dispatcher.hpp"
 #include "network/message.hpp"
 #include "network/network_interface.hpp"
+#include "network/reliable_udp.hpp"
 #include "network/tcp_channel.hpp"
 
 #include <gtest/gtest.h>
@@ -211,4 +212,77 @@ TEST_F(NetworkInterfaceTest, ChannelCountAfterDisconnect)
     poll_until(dispatcher_, [&] { return false; }, std::chrono::milliseconds(100));
 
     EXPECT_EQ(ni_.channel_count(), 0u);
+}
+
+// ============================================================================
+// RUDP tests
+// ============================================================================
+
+TEST_F(NetworkInterfaceTest, StartRudpServer)
+{
+    auto result = ni_.start_rudp_server(Address("127.0.0.1", 0));
+    ASSERT_TRUE(result.has_value()) << result.error().message();
+    EXPECT_NE(ni_.rudp_address().port(), 0);
+}
+
+TEST_F(NetworkInterfaceTest, ConnectRudpCreatesChannel)
+{
+    // Server NI
+    EventDispatcher server_disp{"rudp_server"};
+    server_disp.set_max_poll_wait(Milliseconds(1));
+    NetworkInterface server_ni(server_disp);
+
+    auto sr = server_ni.start_rudp_server(Address("127.0.0.1", 0));
+    ASSERT_TRUE(sr.has_value()) << sr.error().message();
+
+    // Client NI connects to server
+    auto cr = ni_.connect_rudp(server_ni.rudp_address());
+    ASSERT_TRUE(cr.has_value()) << cr.error().message();
+    EXPECT_NE(*cr, nullptr);
+    EXPECT_EQ(ni_.channel_count(), 1u);
+}
+
+TEST_F(NetworkInterfaceTest, RudpServerAutoCreatesChannelOnFirstDatagram)
+{
+    auto sr = ni_.start_rudp_server(Address("127.0.0.1", 0));
+    ASSERT_TRUE(sr.has_value());
+    auto server_addr = ni_.rudp_address();
+
+    // Send a raw datagram to the server from a plain UDP socket
+    auto sender = Socket::create_udp();
+    ASSERT_TRUE(sender.has_value());
+    Address any(0, 0);
+    (void)sender->bind(any);
+
+    // Minimal RUDP packet: flags=0x02 (kFlagHasSeq), seq=1, no ack bits
+    std::array<std::byte, 9> pkt{};
+    pkt[0] = std::byte{rudp::kFlagHasSeq};  // flags
+    pkt[1] = std::byte{0};
+    pkt[2] = std::byte{0};  // seq hi
+    pkt[3] = std::byte{0};
+    pkt[4] = std::byte{1};  // seq lo (=1)
+    pkt[5] = std::byte{0};
+    pkt[6] = std::byte{0};  // ack hi
+    pkt[7] = std::byte{0};
+    pkt[8] = std::byte{0};  // ack lo
+
+    (void)sender->send_to(pkt, server_addr);
+
+    // Dispatcher should accept the datagram and create a channel
+    EXPECT_TRUE(poll_until(dispatcher_, [&] { return ni_.channel_count() >= 1u; }));
+}
+
+TEST_F(NetworkInterfaceTest, ConnectRudpIsIdempotent)
+{
+    EventDispatcher server_disp{"rudp_idem"};
+    server_disp.set_max_poll_wait(Milliseconds(1));
+    NetworkInterface server_ni(server_disp);
+    ASSERT_TRUE(server_ni.start_rudp_server(Address("127.0.0.1", 0)).has_value());
+
+    auto cr1 = ni_.connect_rudp(server_ni.rudp_address());
+    auto cr2 = ni_.connect_rudp(server_ni.rudp_address());
+    ASSERT_TRUE(cr1.has_value());
+    ASSERT_TRUE(cr2.has_value());
+    EXPECT_EQ(*cr1, *cr2);  // same channel reused
+    EXPECT_EQ(ni_.channel_count(), 1u);
 }

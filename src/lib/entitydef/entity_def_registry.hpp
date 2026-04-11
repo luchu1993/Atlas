@@ -1,8 +1,11 @@
 #pragma once
 
 #include "entitydef/entity_type_descriptor.hpp"
+#include "foundation/error.hpp"
 
+#include <array>
 #include <cstddef>
+#include <filesystem>
 #include <span>
 #include <string>
 #include <string_view>
@@ -23,6 +26,10 @@ public:
     /// Deserialize a binary entity type descriptor from C# and register it.
     /// Returns true on success.
     bool register_type(const std::byte* data, int32_t len);
+
+    /// Load entity definitions from an entity_defs.json file (used by DBApp).
+    [[nodiscard]] static auto from_json_file(const std::filesystem::path& path)
+        -> Result<EntityDefRegistry>;
 
     /// Find descriptor by type name.
     [[nodiscard]] const EntityTypeDescriptor* find_by_name(std::string_view name) const;
@@ -47,10 +54,19 @@ public:
     /// Number of registered types.
     [[nodiscard]] size_t type_count() const { return types_.size(); }
 
+    /// Iterate all registered types (read-only).
+    [[nodiscard]] auto all_types() const -> const std::vector<EntityTypeDescriptor>&
+    {
+        return types_;
+    }
+
+    /// MD5 digest over all persistent property descriptors (type_id, name, data_type, identifier).
+    /// Used to verify BaseApp and DBApp have the same entity definitions.
+    [[nodiscard]] auto persistent_properties_digest() const -> std::array<uint8_t, 16>;
+
     /// Clear all registered types (used during hot-reload).
     void clear();
 
-private:
     EntityDefRegistry() = default;
 
     std::vector<EntityTypeDescriptor> types_;

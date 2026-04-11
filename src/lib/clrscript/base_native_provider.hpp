@@ -49,6 +49,15 @@ public:
     void register_entity_type(const std::byte* data, int32_t len) override;
     void unregister_all_entity_types() override;
 
+    // ---- Persistence (default: log error + no-op) -----------------------
+    void write_to_db(uint32_t entity_id, const std::byte* entity_data, int32_t len) override;
+
+    // ---- Client transfer (default: log error + no-op) -------------------
+    void give_client_to(uint32_t src_entity_id, uint32_t dest_entity_id) override;
+
+    // ---- Callback table (default: no-op) --------------------------------
+    void set_native_callbacks(const void* native_callbacks, int32_t len) override;
+
 protected:
     BaseNativeProvider() = default;
 };

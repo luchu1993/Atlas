@@ -2,6 +2,7 @@
 
 #include "foundation/log.hpp"
 #include "network/event_dispatcher.hpp"
+#include "network/reliable_udp.hpp"
 #include "network/tcp_channel.hpp"
 #include "network/udp_channel.hpp"
 
@@ -41,6 +42,13 @@ NetworkInterface::~NetworkInterface()
         (void)dispatcher_.deregister(udp_socket_->fd());
         udp_socket_->close();
         udp_socket_.reset();
+    }
+
+    if (rudp_socket_)
+    {
+        (void)dispatcher_.deregister(rudp_socket_->fd());
+        rudp_socket_->close();
+        rudp_socket_.reset();
     }
 }
 
@@ -112,6 +120,8 @@ auto NetworkInterface::connect_tcp(const Address& addr) -> Result<TcpChannel*>
     }
 
     if (auto r = sock->set_non_blocking(true); !r)
+        return r.error();
+    if (auto r = sock->set_no_delay(true); !r)
         return r.error();
 
     auto conn = sock->connect(addr);
@@ -191,6 +201,31 @@ auto NetworkInterface::start_udp(const Address& addr) -> Result<void>
     return Result<void>{};
 }
 
+auto NetworkInterface::connect_udp(const Address& addr) -> Result<UdpChannel*>
+{
+    if (shutting_down_)
+        return Error(ErrorCode::ChannelCondemned, "Shutting down");
+
+    // Open shared UDP socket on first use (bind to any port)
+    if (!udp_socket_)
+    {
+        if (auto r = start_udp(Address(0, 0)); !r)
+            return r.error();
+    }
+
+    // Re-use existing channel if already targeting this peer
+    if (auto it = channels_.find(addr); it != channels_.end())
+        return static_cast<UdpChannel*>(it->second.get());
+
+    auto channel = std::make_unique<UdpChannel>(dispatcher_, interface_table_, *udp_socket_, addr);
+    channel->set_disconnect_callback([this](Channel& ch) { on_channel_disconnect(ch); });
+    channel->activate();
+
+    auto* raw = static_cast<UdpChannel*>(channel.get());
+    channels_[addr] = std::move(channel);
+    return raw;
+}
+
 // ============================================================================
 // Channel access
 // ============================================================================
@@ -224,6 +259,121 @@ auto NetworkInterface::udp_address() const -> Address
     return udp_address_;
 }
 
+auto NetworkInterface::rudp_address() const -> Address
+{
+    return rudp_address_;
+}
+
+// ============================================================================
+// RUDP server / client
+// ============================================================================
+
+auto NetworkInterface::start_rudp_server(const Address& addr) -> Result<void>
+{
+    if (rudp_socket_)
+    {
+        return Error(ErrorCode::AlreadyExists, "RUDP socket already open");
+    }
+
+    auto sock = Socket::create_udp();
+    if (!sock)
+        return sock.error();
+
+    if (auto r = sock->set_reuse_addr(true); !r)
+        return r.error();
+    if (auto r = sock->set_non_blocking(true); !r)
+        return r.error();
+    if (auto r = sock->set_recv_buffer_size(4 * 1024 * 1024); !r)
+        ATLAS_LOG_WARNING("RUDP: failed to set recv buffer size: {}", r.error().message());
+    if (auto r = sock->set_send_buffer_size(4 * 1024 * 1024); !r)
+        ATLAS_LOG_WARNING("RUDP: failed to set send buffer size: {}", r.error().message());
+
+    if (auto r = sock->bind(addr); !r)
+        return r.error();
+
+    auto local = sock->local_address();
+    if (!local)
+        return local.error();
+    rudp_address_ = *local;
+
+    rudp_socket_ = std::move(*sock);
+    rudp_server_mode_ = true;
+
+    auto reg = dispatcher_.register_reader(rudp_socket_->fd(),
+                                           [this](FdHandle, IOEvent) { on_rudp_readable(); });
+    if (!reg)
+        return reg.error();
+
+    ATLAS_LOG_INFO("RUDP server listening on {}", rudp_address_.to_string());
+    return Result<void>{};
+}
+
+auto NetworkInterface::connect_rudp(const Address& addr) -> Result<ReliableUdpChannel*>
+{
+    if (shutting_down_)
+        return Error(ErrorCode::ChannelCondemned, "Shutting down");
+
+    // Open shared RUDP socket on first use (client side: bind to any port)
+    if (!rudp_socket_)
+    {
+        auto sock = Socket::create_udp();
+        if (!sock)
+            return sock.error();
+
+        if (auto r = sock->set_non_blocking(true); !r)
+            return r.error();
+        if (auto r = sock->set_recv_buffer_size(4 * 1024 * 1024); !r)
+            ATLAS_LOG_WARNING("RUDP: failed to set recv buffer size: {}", r.error().message());
+        if (auto r = sock->set_send_buffer_size(4 * 1024 * 1024); !r)
+            ATLAS_LOG_WARNING("RUDP: failed to set send buffer size: {}", r.error().message());
+
+        Address any_addr(0, 0);
+        if (auto r = sock->bind(any_addr); !r)
+            return r.error();
+
+        auto local = sock->local_address();
+        if (!local)
+            return local.error();
+        rudp_address_ = *local;
+
+        rudp_socket_ = std::move(*sock);
+
+        auto reg = dispatcher_.register_reader(rudp_socket_->fd(),
+                                               [this](FdHandle, IOEvent) { on_rudp_readable(); });
+        if (!reg)
+            return reg.error();
+    }
+
+    // Re-use existing channel if already connected to this peer
+    if (auto it = channels_.find(addr); it != channels_.end())
+    {
+        return static_cast<ReliableUdpChannel*>(it->second.get());
+    }
+
+    auto channel =
+        std::make_unique<ReliableUdpChannel>(dispatcher_, interface_table_, *rudp_socket_, addr);
+    channel->set_disconnect_callback([this](Channel& ch) { on_channel_disconnect(ch); });
+    channel->activate();
+
+    auto* raw = static_cast<ReliableUdpChannel*>(channel.get());
+    channels_[addr] = std::move(channel);
+    return raw;
+}
+
+auto NetworkInterface::connect_rudp_nocwnd(const Address& addr) -> Result<ReliableUdpChannel*>
+{
+    // Re-use existing channel without changing its nocwnd flag
+    if (auto it = channels_.find(addr); it != channels_.end())
+        return static_cast<ReliableUdpChannel*>(it->second.get());
+
+    auto result = connect_rudp(addr);
+    if (!result)
+        return result;
+
+    (*result)->set_nocwnd(true);
+    return result;
+}
+
 // ============================================================================
 // Rate limiting
 // ============================================================================
@@ -231,6 +381,11 @@ auto NetworkInterface::udp_address() const -> Address
 void NetworkInterface::set_rate_limit(uint32_t max_per_second)
 {
     rate_limit_ = max_per_second;
+}
+
+void NetworkInterface::set_accept_callback(AcceptCallback cb)
+{
+    accept_callback_ = std::move(cb);
 }
 
 // ============================================================================
@@ -302,6 +457,8 @@ void NetworkInterface::on_tcp_accept()
             continue;
         }
 
+        (void)peer_sock.set_no_delay(true);
+
         auto channel = std::make_unique<TcpChannel>(dispatcher_, interface_table_,
                                                     std::move(peer_sock), peer_addr);
 
@@ -326,6 +483,11 @@ void NetworkInterface::on_tcp_accept()
 
         channel->set_disconnect_callback([this](Channel& ch) { on_channel_disconnect(ch); });
         channel->activate();
+
+        if (accept_callback_)
+        {
+            accept_callback_(*channel);
+        }
 
         ATLAS_LOG_DEBUG("Accepted TCP connection from {}", peer_addr.to_string());
         channels_[peer_addr] = std::move(channel);
@@ -379,6 +541,51 @@ void NetworkInterface::on_udp_readable()
 
         auto* udp_ch = static_cast<UdpChannel*>(it->second.get());
         udp_ch->on_datagram_received(std::span<const std::byte>(buf.data(), bytes));
+    }
+}
+
+void NetworkInterface::on_rudp_readable()
+{
+    std::array<std::byte, 65536> buf;
+    while (true)
+    {
+        auto result = rudp_socket_->recv_from(buf);
+        if (!result)
+        {
+            if (result.error().code() == ErrorCode::WouldBlock)
+                break;
+            ATLAS_LOG_WARNING("RUDP recv error: {}", result.error().message());
+            break;
+        }
+
+        auto [bytes, src_addr] = *result;
+        if (bytes == 0)
+            continue;
+
+        if (rate_limit_ > 0 && !check_rate_limit(src_addr.ip()))
+            continue;
+
+        auto it = channels_.find(src_addr);
+        if (it == channels_.end())
+        {
+            if (!rudp_server_mode_ || shutting_down_)
+                continue;
+
+            auto channel = std::make_unique<ReliableUdpChannel>(dispatcher_, interface_table_,
+                                                                *rudp_socket_, src_addr);
+            channel->set_disconnect_callback([this](Channel& ch) { on_channel_disconnect(ch); });
+            channel->activate();
+
+            if (accept_callback_)
+                accept_callback_(*channel);
+
+            ATLAS_LOG_DEBUG("RUDP: new peer {}", src_addr.to_string());
+            auto [inserted_it, _] = channels_.emplace(src_addr, std::move(channel));
+            it = inserted_it;
+        }
+
+        auto* rudp_ch = static_cast<ReliableUdpChannel*>(it->second.get());
+        rudp_ch->on_datagram_received(std::span<const std::byte>(buf.data(), bytes));
     }
 }
 

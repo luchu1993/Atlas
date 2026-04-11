@@ -159,6 +159,55 @@ atlas_add_test(test_dynamic_library
     DEPS atlas_platform
 )
 
+# ── Phase 6: machined ────────────────────────────────────────────────────────
+
+atlas_add_test(test_process_registry
+    SOURCES test_process_registry.cpp
+    DEPS atlas_machined_lib
+)
+
+atlas_add_test(test_listener_manager
+    SOURCES test_listener_manager.cpp
+    DEPS atlas_machined_lib
+)
+
+atlas_add_test(test_watcher_forwarder
+    SOURCES test_watcher_forwarder.cpp
+    DEPS atlas_machined_lib
+)
+
+# ── Phase 5: Server framework base classes ───────────────────────────────────
+
+atlas_add_test(test_watcher
+    SOURCES test_watcher.cpp
+    DEPS atlas_server
+)
+
+atlas_add_test(test_updatable
+    SOURCES test_updatable.cpp
+    DEPS atlas_server
+)
+
+atlas_add_test(test_server_config
+    SOURCES test_server_config.cpp
+    DEPS atlas_server
+)
+
+atlas_add_test(test_server_app
+    SOURCES test_server_app.cpp
+    DEPS atlas_server
+)
+
+atlas_add_test(test_script_app
+    SOURCES test_script_app.cpp
+    DEPS atlas_server
+)
+
+atlas_add_test(test_entity_app
+    SOURCES test_entity_app.cpp
+    DEPS atlas_server
+)
+
 # ── ScriptPhase 2: Marshal layer ─────────────────────────────────────────────
 
 atlas_add_test(test_clr_marshal
@@ -311,3 +360,59 @@ if(WIN32 AND DOTNET_NETHOST_DLL)
         COMMENT "Copying nethost.dll alongside test_clr_script_engine"
     )
 endif()
+
+# ── Phase 7: Database layer ───────────────────────────────────────────────────
+
+atlas_add_test(test_database_types
+    SOURCES test_database_types.cpp
+    DEPS atlas_db
+)
+
+atlas_add_test(test_entity_def_registry_json
+    SOURCES test_entity_def_registry_json.cpp
+    DEPS atlas_entitydef atlas_serialization
+)
+
+atlas_add_test(test_xml_database
+    SOURCES test_xml_database.cpp
+    DEPS atlas_db_xml atlas_entitydef
+)
+
+atlas_add_test(test_dbapp_messages
+    SOURCES test_dbapp_messages.cpp
+    DEPS atlas_dbapp_lib atlas_serialization
+)
+
+atlas_add_test(test_checkout_manager
+    SOURCES test_checkout_manager.cpp
+    DEPS atlas_dbapp_lib
+)
+
+# ── Phase 8: BaseApp ──────────────────────────────────────────────────────────
+
+atlas_add_test(test_base_entity
+    SOURCES test_base_entity.cpp
+    DEPS atlas_baseapp_lib
+)
+
+atlas_add_test(test_entity_manager
+    SOURCES test_entity_manager.cpp
+    DEPS atlas_baseapp_lib
+)
+
+atlas_add_test(test_baseapp_messages
+    SOURCES test_baseapp_messages.cpp
+    DEPS atlas_baseapp_lib atlas_serialization
+)
+
+# ── Phase 9: LoginApp + BaseAppMgr ─────────────────────────────────────────
+
+atlas_add_test(test_login_messages
+    SOURCES test_login_messages.cpp
+    DEPS atlas_loginapp_lib atlas_serialization
+)
+
+atlas_add_test(test_baseappmgr_messages
+    SOURCES test_baseappmgr_messages.cpp
+    DEPS atlas_baseappmgr_lib atlas_serialization
+)

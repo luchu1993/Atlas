@@ -20,6 +20,7 @@ namespace atlas
 class Channel;
 class TcpChannel;
 class UdpChannel;
+class ReliableUdpChannel;
 
 // Thread safety: NOT thread-safe. All calls must originate from EventDispatcher's thread.
 class NetworkInterface : public FrequentTask
@@ -35,11 +36,28 @@ public:
     // TCP server
     [[nodiscard]] auto start_tcp_server(const Address& addr) -> Result<void>;
 
-    // TCP client (async connect)
+    // TCP client (async connect) — always sets TCP_NODELAY for low-latency internal links
     [[nodiscard]] auto connect_tcp(const Address& addr) -> Result<TcpChannel*>;
 
-    // UDP endpoint
+    // UDP endpoint (plain unreliable, used by machined etc.)
     [[nodiscard]] auto start_udp(const Address& addr) -> Result<void>;
+
+    // UDP client — opens a shared UDP socket (if not already open) and creates a
+    // UdpChannel to the given remote address for fire-and-forget sends.
+    [[nodiscard]] auto connect_udp(const Address& addr) -> Result<UdpChannel*>;
+
+    // RUDP server — listens on a shared UDP socket; incoming datagrams from new peers
+    // automatically create ReliableUdpChannel instances (used for external client connections).
+    [[nodiscard]] auto start_rudp_server(const Address& addr) -> Result<void>;
+
+    // RUDP client — opens a shared UDP socket (if not already open) and creates a
+    // ReliableUdpChannel to the given remote address.
+    [[nodiscard]] auto connect_rudp(const Address& addr) -> Result<ReliableUdpChannel*>;
+
+    // RUDP client with congestion control disabled (nocwnd=true).
+    // Use for intra-datacenter links where loss is near-zero and minimal latency
+    // is more important than fairness (e.g. BaseApp ↔ CellApp).
+    [[nodiscard]] auto connect_rudp_nocwnd(const Address& addr) -> Result<ReliableUdpChannel*>;
 
     // Channel access
     [[nodiscard]] auto find_channel(const Address& addr) -> Channel*;
@@ -51,9 +69,15 @@ public:
     // Addresses
     [[nodiscard]] auto tcp_address() const -> Address;
     [[nodiscard]] auto udp_address() const -> Address;
+    [[nodiscard]] auto rudp_address() const -> Address;
 
     // Rate limiting (packets per second per IP, 0 = disabled)
     void set_rate_limit(uint32_t max_per_second);
+
+    // Accept callback — called after each successful TCP accept.
+    // Allows the application to install per-connection callbacks (e.g. disconnect handlers).
+    using AcceptCallback = std::function<void(Channel&)>;
+    void set_accept_callback(AcceptCallback cb);
 
     // Shutdown
     void prepare_for_shutdown();
@@ -65,6 +89,7 @@ private:
     // IO callbacks
     void on_tcp_accept();
     void on_udp_readable();
+    void on_rudp_readable();
 
     // Channel lifecycle
     void on_channel_disconnect(Channel& channel);
@@ -85,9 +110,14 @@ private:
     std::optional<Socket> tcp_listen_socket_;
     Address tcp_address_;
 
-    // UDP
+    // UDP (plain unreliable)
     std::optional<Socket> udp_socket_;
     Address udp_address_;
+
+    // RUDP (reliable UDP — shared socket for all ReliableUdpChannels)
+    std::optional<Socket> rudp_socket_;
+    Address rudp_address_;
+    bool rudp_server_mode_{false};  // true: auto-create channels for unknown peers
 
     // Active channels keyed by remote address
     std::unordered_map<Address, std::unique_ptr<Channel>> channels_;
@@ -117,6 +147,7 @@ private:
     static constexpr Duration kRateCleanupInterval = std::chrono::seconds(60);
 
     bool shutting_down_{false};
+    AcceptCallback accept_callback_;
 };
 
 }  // namespace atlas

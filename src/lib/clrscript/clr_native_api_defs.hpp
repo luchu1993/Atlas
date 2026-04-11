@@ -82,5 +82,21 @@
             reinterpret_cast<const std::byte*>(data), len))                                        \
     X(void, unregister_all_entity_types,                                                           \
         (),                                                                                        \
-        atlas::get_native_api_provider().unregister_all_entity_types())
+        atlas::get_native_api_provider().unregister_all_entity_types())                            \
+                                                                                                   \
+    /* ---- Persistence ---------------------------------------------------- */                    \
+    X(void, write_to_db,                                                                           \
+        (uint32_t entity_id, const uint8_t* entity_data, int32_t len),                            \
+        atlas::get_native_api_provider().write_to_db(                                              \
+            entity_id, reinterpret_cast<const std::byte*>(entity_data), len))                     \
+                                                                                                   \
+    /* ---- Client transfer ------------------------------------------------ */                    \
+    X(void, give_client_to,                                                                        \
+        (uint32_t src_entity_id, uint32_t dest_entity_id),                                        \
+        atlas::get_native_api_provider().give_client_to(src_entity_id, dest_entity_id))           \
+                                                                                                   \
+    /* ---- C# → C++ callback table ---------------------------------------- */                   \
+    X(void, set_native_callbacks,                                                                  \
+        (const void* native_callbacks, int32_t len),                                               \
+        atlas::get_native_api_provider().set_native_callbacks(native_callbacks, len))
 // clang-format on

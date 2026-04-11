@@ -23,20 +23,76 @@ static auto round_trip(const T& msg) -> Result<T>
 
 TEST(MachinedTypes, RegisterRoundTrip)
 {
-    RegisterMessage orig{"baseapp", 7100, 12345};
+    RegisterMessage orig;
+    orig.process_type = ProcessType::BaseApp;
+    orig.name = "baseapp-1";
+    orig.internal_port = 7100;
+    orig.external_port = 7200;
+    orig.pid = 12345;
+
     auto result = round_trip(orig);
     ASSERT_TRUE(result.has_value());
-    EXPECT_EQ(result->type, "baseapp");
-    EXPECT_EQ(result->port, 7100);
+    EXPECT_EQ(result->protocol_version, kProtocolVersion);
+    EXPECT_EQ(result->process_type, ProcessType::BaseApp);
+    EXPECT_EQ(result->name, "baseapp-1");
+    EXPECT_EQ(result->internal_port, 7100u);
+    EXPECT_EQ(result->external_port, 7200u);
     EXPECT_EQ(result->pid, 12345u);
 }
 
-TEST(MachinedTypes, RegisterEmptyType)
+TEST(MachinedTypes, RegisterTruncatedReturnsError)
 {
-    RegisterMessage orig{"", 0, 0};
+    std::vector<std::byte> empty;
+    BinaryReader r(empty);
+    auto result = RegisterMessage::deserialize(r);
+    EXPECT_FALSE(result.has_value());
+}
+
+// ============================================================================
+// RegisterAck
+// ============================================================================
+
+TEST(MachinedTypes, RegisterAckSuccess)
+{
+    RegisterAck orig;
+    orig.success = true;
+    orig.error_message = "";
+    orig.server_time = 1234567890ULL;
+    orig.heartbeat_udp_port = 0;
+
     auto result = round_trip(orig);
     ASSERT_TRUE(result.has_value());
-    EXPECT_EQ(result->type, "");
+    EXPECT_TRUE(result->success);
+    EXPECT_EQ(result->server_time, 1234567890ULL);
+    EXPECT_EQ(result->heartbeat_udp_port, 0u);
+}
+
+TEST(MachinedTypes, RegisterAckWithUdpPort)
+{
+    RegisterAck orig;
+    orig.success = true;
+    orig.error_message = "";
+    orig.server_time = 9999ULL;
+    orig.heartbeat_udp_port = 20019;
+
+    auto result = round_trip(orig);
+    ASSERT_TRUE(result.has_value());
+    EXPECT_TRUE(result->success);
+    EXPECT_EQ(result->heartbeat_udp_port, 20019u);
+}
+
+TEST(MachinedTypes, RegisterAckFailure)
+{
+    RegisterAck orig;
+    orig.success = false;
+    orig.error_message = "duplicate name";
+    orig.server_time = 0;
+    orig.heartbeat_udp_port = 0;
+
+    auto result = round_trip(orig);
+    ASSERT_TRUE(result.has_value());
+    EXPECT_FALSE(result->success);
+    EXPECT_EQ(result->error_message, "duplicate name");
 }
 
 // ============================================================================
@@ -45,10 +101,15 @@ TEST(MachinedTypes, RegisterEmptyType)
 
 TEST(MachinedTypes, DeregisterRoundTrip)
 {
-    DeregisterMessage orig{"cellapp", 99};
+    DeregisterMessage orig;
+    orig.process_type = ProcessType::CellApp;
+    orig.name = "cellapp-2";
+    orig.pid = 99;
+
     auto result = round_trip(orig);
     ASSERT_TRUE(result.has_value());
-    EXPECT_EQ(result->type, "cellapp");
+    EXPECT_EQ(result->process_type, ProcessType::CellApp);
+    EXPECT_EQ(result->name, "cellapp-2");
     EXPECT_EQ(result->pid, 99u);
 }
 
@@ -58,10 +119,12 @@ TEST(MachinedTypes, DeregisterRoundTrip)
 
 TEST(MachinedTypes, QueryRoundTrip)
 {
-    QueryMessage orig{"loginapp"};
+    QueryMessage orig;
+    orig.process_type = ProcessType::LoginApp;
+
     auto result = round_trip(orig);
     ASSERT_TRUE(result.has_value());
-    EXPECT_EQ(result->type, "loginapp");
+    EXPECT_EQ(result->process_type, ProcessType::LoginApp);
 }
 
 // ============================================================================
@@ -79,69 +142,48 @@ TEST(MachinedTypes, QueryResponseEmpty)
 TEST(MachinedTypes, QueryResponseMultipleProcesses)
 {
     QueryResponse orig;
-    orig.processes.push_back({"baseapp", Address(0x7F000001, 7100), 100});
-    orig.processes.push_back({"baseapp", Address(0x7F000002, 7101), 101});
-    orig.processes.push_back({"cellapp", Address(0x7F000003, 7200), 200});
+    ProcessInfo p1;
+    p1.process_type = ProcessType::BaseApp;
+    p1.name = "baseapp-1";
+    p1.internal_addr = Address(0x7F000001, 7100);
+    p1.external_addr = Address(0, 0);
+    p1.pid = 100;
+    p1.load = 0.5f;
+
+    ProcessInfo p2;
+    p2.process_type = ProcessType::CellApp;
+    p2.name = "cellapp-1";
+    p2.internal_addr = Address(0x7F000002, 7200);
+    p2.external_addr = Address(0, 0);
+    p2.pid = 200;
+    p2.load = 0.0f;
+
+    orig.processes.push_back(p1);
+    orig.processes.push_back(p2);
 
     auto result = round_trip(orig);
     ASSERT_TRUE(result.has_value());
-    ASSERT_EQ(result->processes.size(), 3u);
+    ASSERT_EQ(result->processes.size(), 2u);
 
-    EXPECT_EQ(result->processes[0].type, "baseapp");
-    EXPECT_EQ(result->processes[0].address.ip(), 0x7F000001u);
-    EXPECT_EQ(result->processes[0].address.port(), 7100u);
+    EXPECT_EQ(result->processes[0].process_type, ProcessType::BaseApp);
+    EXPECT_EQ(result->processes[0].name, "baseapp-1");
+    EXPECT_EQ(result->processes[0].internal_addr.ip(), 0x7F000001u);
+    EXPECT_EQ(result->processes[0].internal_addr.port(), 7100u);
     EXPECT_EQ(result->processes[0].pid, 100u);
 
-    EXPECT_EQ(result->processes[1].type, "baseapp");
-    EXPECT_EQ(result->processes[1].pid, 101u);
-
-    EXPECT_EQ(result->processes[2].type, "cellapp");
-    EXPECT_EQ(result->processes[2].pid, 200u);
+    EXPECT_EQ(result->processes[1].process_type, ProcessType::CellApp);
+    EXPECT_EQ(result->processes[1].pid, 200u);
 }
-
-// ============================================================================
-// QueryResponse: DoS guard — count > kMaxProcesses must return error
-// ============================================================================
 
 TEST(MachinedTypes, QueryResponseCountExceedsLimit)
 {
-    // Craft a malformed payload: count = 10001, then truncated body
     BinaryWriter w;
-    w.write<uint32_t>(10001u);  // exceeds kMaxProcesses (10000)
+    w.write<uint32_t>(10001u);  // exceeds kMaxProcesses
     auto data = w.data();
     BinaryReader r(data);
-
     auto result = QueryResponse::deserialize(r);
     EXPECT_FALSE(result.has_value());
     EXPECT_EQ(result.error().code(), ErrorCode::InvalidArgument);
-}
-
-TEST(MachinedTypes, QueryResponseMaxAllowed)
-{
-    // Exactly at the limit should succeed (if data is present)
-    // We only test that count=10000 is accepted, not that it reads all entries
-    // (building 10000 entries would be slow; we test the boundary check only)
-    QueryResponse orig;
-    for (int i = 0; i < 5; ++i)
-    {
-        orig.processes.push_back({"svc", Address(0x7F000001, static_cast<uint16_t>(7000 + i)),
-                                  static_cast<uint32_t>(i)});
-    }
-    auto result = round_trip(orig);
-    ASSERT_TRUE(result.has_value());
-    EXPECT_EQ(result->processes.size(), 5u);
-}
-
-// ============================================================================
-// Truncated payloads return errors (not crashes)
-// ============================================================================
-
-TEST(MachinedTypes, RegisterTruncatedReturnsError)
-{
-    std::vector<std::byte> empty;
-    BinaryReader r(empty);
-    auto result = RegisterMessage::deserialize(r);
-    EXPECT_FALSE(result.has_value());
 }
 
 TEST(MachinedTypes, QueryResponseTruncatedAfterCount)
@@ -152,4 +194,157 @@ TEST(MachinedTypes, QueryResponseTruncatedAfterCount)
     BinaryReader r(data);
     auto result = QueryResponse::deserialize(r);
     EXPECT_FALSE(result.has_value());
+}
+
+// ============================================================================
+// HeartbeatMessage / HeartbeatAck
+// ============================================================================
+
+TEST(MachinedTypes, HeartbeatRoundTrip)
+{
+    HeartbeatMessage orig;
+    orig.load = 0.75f;
+    orig.entity_count = 1024;
+
+    auto result = round_trip(orig);
+    ASSERT_TRUE(result.has_value());
+    EXPECT_FLOAT_EQ(result->load, 0.75f);
+    EXPECT_EQ(result->entity_count, 1024u);
+}
+
+TEST(MachinedTypes, HeartbeatAckRoundTrip)
+{
+    HeartbeatAck orig;
+    orig.server_time = 9999999999ULL;
+
+    auto result = round_trip(orig);
+    ASSERT_TRUE(result.has_value());
+    EXPECT_EQ(result->server_time, 9999999999ULL);
+}
+
+// ============================================================================
+// BirthNotification / DeathNotification
+// ============================================================================
+
+TEST(MachinedTypes, BirthNotificationRoundTrip)
+{
+    BirthNotification orig;
+    orig.process_type = ProcessType::BaseApp;
+    orig.name = "baseapp-3";
+    orig.internal_addr = Address(0x7F000001, 7100);
+    orig.external_addr = Address(0x01020304, 8100);
+    orig.pid = 555;
+
+    auto result = round_trip(orig);
+    ASSERT_TRUE(result.has_value());
+    EXPECT_EQ(result->process_type, ProcessType::BaseApp);
+    EXPECT_EQ(result->name, "baseapp-3");
+    EXPECT_EQ(result->internal_addr.port(), 7100u);
+    EXPECT_EQ(result->external_addr.port(), 8100u);
+    EXPECT_EQ(result->pid, 555u);
+}
+
+TEST(MachinedTypes, DeathNotificationRoundTrip)
+{
+    DeathNotification orig;
+    orig.process_type = ProcessType::DBApp;
+    orig.name = "dbapp-1";
+    orig.internal_addr = Address(0x7F000001, 7300);
+    orig.reason = 1;
+
+    auto result = round_trip(orig);
+    ASSERT_TRUE(result.has_value());
+    EXPECT_EQ(result->process_type, ProcessType::DBApp);
+    EXPECT_EQ(result->name, "dbapp-1");
+    EXPECT_EQ(result->reason, 1u);
+}
+
+// ============================================================================
+// ListenerRegister / ListenerAck
+// ============================================================================
+
+TEST(MachinedTypes, ListenerRegisterRoundTrip)
+{
+    ListenerRegister orig;
+    orig.listener_type = ListenerType::Both;
+    orig.target_type = ProcessType::BaseApp;
+
+    auto result = round_trip(orig);
+    ASSERT_TRUE(result.has_value());
+    EXPECT_EQ(result->listener_type, ListenerType::Both);
+    EXPECT_EQ(result->target_type, ProcessType::BaseApp);
+}
+
+TEST(MachinedTypes, ListenerAckRoundTrip)
+{
+    ListenerAck orig;
+    orig.success = true;
+
+    auto result = round_trip(orig);
+    ASSERT_TRUE(result.has_value());
+    EXPECT_TRUE(result->success);
+}
+
+// ============================================================================
+// WatcherRequest / WatcherResponse / WatcherForward / WatcherReply
+// ============================================================================
+
+TEST(MachinedTypes, WatcherRequestRoundTrip)
+{
+    WatcherRequest orig;
+    orig.target_type = ProcessType::BaseApp;
+    orig.target_name = "baseapp-1";
+    orig.watcher_path = "network/channels";
+    orig.request_id = 42;
+
+    auto result = round_trip(orig);
+    ASSERT_TRUE(result.has_value());
+    EXPECT_EQ(result->target_type, ProcessType::BaseApp);
+    EXPECT_EQ(result->target_name, "baseapp-1");
+    EXPECT_EQ(result->watcher_path, "network/channels");
+    EXPECT_EQ(result->request_id, 42u);
+}
+
+TEST(MachinedTypes, WatcherResponseRoundTrip)
+{
+    WatcherResponse orig;
+    orig.request_id = 42;
+    orig.found = true;
+    orig.source_name = "baseapp-1";
+    orig.value = "128";
+
+    auto result = round_trip(orig);
+    ASSERT_TRUE(result.has_value());
+    EXPECT_EQ(result->request_id, 42u);
+    EXPECT_TRUE(result->found);
+    EXPECT_EQ(result->source_name, "baseapp-1");
+    EXPECT_EQ(result->value, "128");
+}
+
+TEST(MachinedTypes, WatcherForwardRoundTrip)
+{
+    WatcherForward orig;
+    orig.request_id = 7;
+    orig.requester_name = "atlas_tool";
+    orig.watcher_path = "server/tick_rate";
+
+    auto result = round_trip(orig);
+    ASSERT_TRUE(result.has_value());
+    EXPECT_EQ(result->request_id, 7u);
+    EXPECT_EQ(result->requester_name, "atlas_tool");
+    EXPECT_EQ(result->watcher_path, "server/tick_rate");
+}
+
+TEST(MachinedTypes, WatcherReplyRoundTrip)
+{
+    WatcherReply orig;
+    orig.request_id = 7;
+    orig.found = true;
+    orig.value = "10";
+
+    auto result = round_trip(orig);
+    ASSERT_TRUE(result.has_value());
+    EXPECT_EQ(result->request_id, 7u);
+    EXPECT_TRUE(result->found);
+    EXPECT_EQ(result->value, "10");
 }

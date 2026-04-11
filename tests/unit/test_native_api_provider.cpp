@@ -56,6 +56,10 @@ struct MockProvider final : public INativeApiProvider
     void register_entity_type(const std::byte*, int32_t) override { ++register_type_count; }
 
     void unregister_all_entity_types() override { unregister_all_called = true; }
+
+    void write_to_db(uint32_t, const std::byte*, int32_t) override {}
+    void give_client_to(uint32_t, uint32_t) override {}
+    void set_native_callbacks(const void*, int32_t) override {}
 };
 
 // ============================================================================

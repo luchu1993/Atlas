@@ -1,0 +1,61 @@
+#pragma once
+
+#include "checkout_manager.hpp"
+#include "db/database_factory.hpp"
+#include "db/idatabase.hpp"
+#include "dbapp_messages.hpp"
+#include "entitydef/entity_def_registry.hpp"
+#include "server/manager_app.hpp"
+
+#include <memory>
+#include <optional>
+#include <string>
+
+namespace atlas
+{
+
+namespace login
+{
+struct AuthLogin;
+struct AuthLoginResult;
+}  // namespace login
+
+class DBApp : public ManagerApp
+{
+public:
+    using ManagerApp::ManagerApp;
+
+    static auto run(int argc, char* argv[]) -> int;
+
+protected:
+    auto init(int argc, char* argv[]) -> bool override;
+    void fini() override;
+    void on_tick_complete() override;
+    void register_watchers() override;
+
+private:
+    // ---- Message handlers ---------------------------------------------------
+    void on_write_entity(const Address& src, Channel* ch, const dbapp::WriteEntity& msg);
+    void on_checkout_entity(const Address& src, Channel* ch, const dbapp::CheckoutEntity& msg);
+    void on_checkin_entity(const Address& src, Channel* ch, const dbapp::CheckinEntity& msg);
+    void on_delete_entity(const Address& src, Channel* ch, const dbapp::DeleteEntity& msg);
+    void on_lookup_entity(const Address& src, Channel* ch, const dbapp::LookupEntity& msg);
+
+    // ---- Authentication (LoginApp → DBApp) ----------------------------------
+    void on_auth_login(const Address& src, Channel* ch, const login::AuthLogin& msg);
+
+    // ---- BaseApp death notification -----------------------------------------
+    void on_baseapp_death(const Address& internal_addr, std::string_view name);
+
+    // ---- Helpers ------------------------------------------------------------
+    [[nodiscard]] auto build_db_config() const -> DatabaseConfig;
+
+    // ---- State --------------------------------------------------------------
+    std::unique_ptr<IDatabase> database_;
+    CheckoutManager checkout_mgr_;
+    std::optional<EntityDefRegistry> entity_defs_;  // nullopt until loaded
+    bool auto_create_accounts_{false};
+    uint16_t account_type_id_{0};
+};
+
+}  // namespace atlas

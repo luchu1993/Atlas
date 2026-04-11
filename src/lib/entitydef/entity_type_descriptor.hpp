@@ -40,9 +40,10 @@ struct PropertyDescriptor
     std::string name;
     PropertyDataType data_type;
     ReplicationScope scope;
-    bool persistent;
-    uint8_t detail_level = 5;
-    uint16_t index;
+    bool persistent{false};
+    bool identifier{false};  // [Identifier] — extracted as sm_identifier column in DB
+    uint8_t detail_level{5};
+    uint16_t index{0};
 };
 
 struct RpcDescriptor

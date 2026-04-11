@@ -44,8 +44,10 @@ public:
     // Send the current bundle reliably (ACK required, retransmit on loss)
     [[nodiscard]] auto send_reliable() -> Result<void>;
 
-    // Send the current bundle unreliably (no ACK, no retransmit)
-    [[nodiscard]] auto send_unreliable() -> Result<void>;
+    // Send the current bundle unreliably (no ACK, no retransmit).
+    // Overrides Channel::send_unreliable() so that typed messages whose
+    // descriptor().reliability == Unreliable automatically use this path.
+    [[nodiscard]] auto send_unreliable() -> Result<void> override;
 
     // Called by NetworkInterface when a datagram arrives from this peer
     void on_datagram_received(std::span<const std::byte> data);
