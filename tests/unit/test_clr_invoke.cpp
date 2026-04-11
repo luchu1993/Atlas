@@ -72,7 +72,8 @@ void inject_fn(ClrStaticMethod<Ret, Args...>& method, Ret (*fn)(Args...))
 
     static_assert(sizeof(method) == sizeof(fn),
                   "ClrStaticMethod<> must be exactly one function pointer in size");
-    std::memcpy(&method, &fn, sizeof(fn));
+    void* dst = &method;
+    std::memcpy(dst, &fn, sizeof(fn));
 }
 
 }  // namespace
