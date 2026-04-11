@@ -6,6 +6,7 @@
     <EnforceExtendedAnalyzerRules>true</EnforceExtendedAnalyzerRules>
     <IsRoslynComponent>true</IsRoslynComponent>
     <RootNamespace>Atlas.Generators.Events</RootNamespace>
+    <NoWarn>RS2008</NoWarn>
   </PropertyGroup>
 
   <ItemGroup>

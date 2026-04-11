@@ -19,13 +19,14 @@ if(MSVC)
         WIN32_LEAN_AND_MEAN     # Reduce windows.h bloat
     )
 else()
+    # Apply strict warnings only to C++ to avoid polluting third-party C code (e.g. zlib)
     add_compile_options(
-        -Wall
-        -Wextra
-        -Wpedantic
-        -Wno-unused-parameter
-        -Wconversion
-        -Wnon-virtual-dtor
+        $<$<COMPILE_LANGUAGE:CXX>:-Wall>
+        $<$<COMPILE_LANGUAGE:CXX>:-Wextra>
+        $<$<COMPILE_LANGUAGE:CXX>:-Wpedantic>
+        $<$<COMPILE_LANGUAGE:CXX>:-Wno-unused-parameter>
+        $<$<COMPILE_LANGUAGE:CXX>:-Wconversion>
+        $<$<COMPILE_LANGUAGE:CXX>:-Wnon-virtual-dtor>
     )
 endif()
 
