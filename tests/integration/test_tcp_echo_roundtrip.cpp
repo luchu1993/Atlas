@@ -182,6 +182,45 @@ TEST_F(TcpEchoRoundtripTest, SingleRequestReply)
     EXPECT_EQ(reply_text, "hello");
 }
 
+TEST_F(TcpEchoRoundtripTest, LargeFrameRoundtripTriggersDynamicBufferGrowth)
+{
+    ASSERT_TRUE(server_ni_.start_tcp_server(Address("127.0.0.1", 0)).has_value());
+    auto server_addr = server_ni_.tcp_address();
+
+    server_ni_.interface_table().register_typed_handler<EchoRequest>(
+        [&](const Address&, Channel* ch, const EchoRequest& req)
+        { (void)ch->send_message(EchoReply{req.id, req.text}); });
+
+    std::atomic<bool> reply_received{false};
+    std::atomic<uint32_t> reply_id{0};
+    std::string reply_text;
+
+    client_ni_.interface_table().register_typed_handler<EchoReply>(
+        [&](const Address&, Channel*, const EchoReply& rep)
+        {
+            reply_id.store(rep.id, std::memory_order_relaxed);
+            reply_text = rep.text;
+            reply_received.store(true, std::memory_order_release);
+        });
+
+    auto conn = client_ni_.connect_tcp(server_addr);
+    ASSERT_TRUE(conn.has_value()) << conn.error().message();
+    ASSERT_TRUE(poll_both_until(server_disp_, client_disp_,
+                                [&] { return server_ni_.channel_count() >= 1u; }));
+
+    std::string payload(48 * 1024, 'x');
+    auto send_result = (*conn)->send_message(EchoRequest{99, payload});
+    ASSERT_TRUE(send_result.has_value()) << send_result.error().message();
+
+    ASSERT_TRUE(poll_both_until(
+        server_disp_, client_disp_, [&] { return reply_received.load(std::memory_order_acquire); },
+        std::chrono::milliseconds(2000)))
+        << "Large EchoReply was never received within the timeout";
+
+    EXPECT_EQ(reply_id.load(), 99u);
+    EXPECT_EQ(reply_text, payload);
+}
+
 // ============================================================================
 // Test: multiple sequential requests preserve order and identity
 // ============================================================================

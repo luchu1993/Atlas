@@ -1,5 +1,6 @@
 #pragma once
 
+#include "foundation/memory/stream_buffer_pool.hpp"
 #include "foundation/time.hpp"
 #include "network/address.hpp"
 #include "network/event_dispatcher.hpp"
@@ -79,6 +80,11 @@ public:
     using AcceptCallback = std::function<void(Channel&)>;
     void set_accept_callback(AcceptCallback cb);
 
+    // Disconnect callback — notified after NetworkInterface detaches the channel
+    // from the active set. Useful for higher-level session cleanup.
+    using DisconnectCallback = std::function<void(Channel&)>;
+    void set_disconnect_callback(DisconnectCallback cb);
+
     // Shutdown
     void prepare_for_shutdown();
 
@@ -95,6 +101,7 @@ private:
     void on_channel_disconnect(Channel& channel);
     void condemn_channel(const Address& addr);
     void process_condemned_channels();
+    [[nodiscard]] auto datagram_recv_buffer() -> std::span<std::byte>;
 
     // Rate limiting
     auto check_rate_limit(uint32_t ip) -> bool;
@@ -146,8 +153,12 @@ private:
     TimePoint last_rate_cleanup_{};
     static constexpr Duration kRateCleanupInterval = std::chrono::seconds(60);
 
+    static constexpr std::size_t kMaxDatagramSize = 64 * 1024;
+    StreamBuffer datagram_recv_scratch_;
+
     bool shutting_down_{false};
     AcceptCallback accept_callback_;
+    DisconnectCallback disconnect_callback_;
 };
 
 }  // namespace atlas

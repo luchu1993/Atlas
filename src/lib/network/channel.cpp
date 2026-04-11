@@ -44,6 +44,8 @@ void Channel::condemn()
         dispatcher_.cancel_timer(inactivity_timer_);
         inactivity_timer_ = TimerHandle{};
     }
+    bundle_.clear();
+    on_condemned();
 }
 
 auto Channel::send() -> Result<void>

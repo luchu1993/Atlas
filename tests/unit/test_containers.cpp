@@ -1,11 +1,14 @@
+#include "foundation/containers/byte_ring_buffer.hpp"
 #include "foundation/containers/flat_map.hpp"
 #include "foundation/containers/object_pool.hpp"
+#include "foundation/containers/paged_sparse_table.hpp"
 #include "foundation/containers/ring_buffer.hpp"
 #include "foundation/containers/slot_map.hpp"
 
 #include <gtest/gtest.h>
 
 #include <algorithm>
+#include <array>
 #include <string>
 #include <vector>
 
@@ -59,6 +62,63 @@ TEST(RingBuffer, IndexAccess)
     EXPECT_EQ(rb[0], 10);
     EXPECT_EQ(rb[1], 20);
     EXPECT_EQ(rb[2], 30);
+}
+
+// ---------------------------------------------------------------------------
+// ByteRingBuffer
+// ---------------------------------------------------------------------------
+
+TEST(ByteRingBuffer, EnsureWritableGrowsWithinConfiguredLimit)
+{
+    ByteRingBuffer rb(8, 64);
+    EXPECT_EQ(rb.capacity(), 8u);
+    EXPECT_EQ(rb.min_capacity(), 8u);
+    EXPECT_EQ(rb.max_capacity(), 64u);
+
+    const std::array<std::byte, 4> payload{std::byte{'a'}, std::byte{'b'}, std::byte{'c'},
+                                           std::byte{'d'}};
+    EXPECT_TRUE(rb.append(payload));
+    EXPECT_TRUE(rb.ensure_writable(20));
+    EXPECT_EQ(rb.capacity(), 32u);
+    EXPECT_FALSE(rb.ensure_writable(61));
+}
+
+TEST(ByteRingBuffer, PeekFrontHandlesWrappedReadableData)
+{
+    ByteRingBuffer rb(8, 32);
+
+    const std::array<std::byte, 6> first{std::byte{1}, std::byte{2}, std::byte{3},
+                                         std::byte{4}, std::byte{5}, std::byte{6}};
+    EXPECT_TRUE(rb.append(first));
+    rb.consume(4);
+
+    const std::array<std::byte, 4> second{std::byte{7}, std::byte{8}, std::byte{9}, std::byte{10}};
+    EXPECT_TRUE(rb.append(second));
+
+    std::array<std::byte, 6> out{};
+    ASSERT_TRUE(rb.peek_front(out));
+    EXPECT_EQ(out[0], std::byte{5});
+    EXPECT_EQ(out[1], std::byte{6});
+    EXPECT_EQ(out[2], std::byte{7});
+    EXPECT_EQ(out[3], std::byte{8});
+    EXPECT_EQ(out[4], std::byte{9});
+    EXPECT_EQ(out[5], std::byte{10});
+}
+
+TEST(ByteRingBuffer, ShrinkToFitReturnsToBaselineAfterBurst)
+{
+    ByteRingBuffer rb(8, 64);
+    EXPECT_TRUE(rb.ensure_writable(40));
+    EXPECT_EQ(rb.capacity(), 64u);
+
+    const std::array<std::byte, 40> payload{};
+    EXPECT_TRUE(rb.append(payload));
+    rb.consume(payload.size());
+
+    rb.shrink_to_fit();
+    EXPECT_EQ(rb.capacity(), 8u);
+    EXPECT_EQ(rb.readable_size(), 0u);
+    EXPECT_EQ(rb.writable_size(), 8u);
 }
 
 // ---------------------------------------------------------------------------
@@ -312,4 +372,64 @@ TEST(ObjectPool, IterationAfterMixedCreateDestroy)
     std::sort(values.begin(), values.end());
     EXPECT_EQ(values[0], 10);
     EXPECT_EQ(values[1], 40);
+}
+
+// ---------------------------------------------------------------------------
+// PagedSparseTable
+// ---------------------------------------------------------------------------
+
+TEST(PagedSparseTable, AllocatesPagesLazily)
+{
+    PagedSparseTable<uint16_t, int> table;
+    EXPECT_EQ(table.size(), 0u);
+    EXPECT_EQ(table.allocated_page_count(), 0u);
+
+    EXPECT_TRUE(table.insert(42, std::make_unique<int>(7)));
+    EXPECT_EQ(table.size(), 1u);
+    EXPECT_EQ(table.allocated_page_count(), 1u);
+    ASSERT_NE(table.get(42), nullptr);
+    EXPECT_EQ(*table.get(42), 7);
+}
+
+TEST(PagedSparseTable, SeparatePagesStaySparse)
+{
+    PagedSparseTable<uint16_t, int> table;
+    EXPECT_TRUE(table.insert(0x0001, std::make_unique<int>(1)));
+    EXPECT_TRUE(table.insert(0x1202, std::make_unique<int>(2)));
+    EXPECT_TRUE(table.insert(0xFF03, std::make_unique<int>(3)));
+
+    EXPECT_EQ(table.size(), 3u);
+    EXPECT_EQ(table.allocated_page_count(), 3u);
+    EXPECT_EQ(*table.get(0x0001), 1);
+    EXPECT_EQ(*table.get(0x1202), 2);
+    EXPECT_EQ(*table.get(0xFF03), 3);
+    EXPECT_EQ(table.get(0x1203), nullptr);
+}
+
+TEST(PagedSparseTable, DuplicateInsertRejectedAndEraseUpdatesSize)
+{
+    PagedSparseTable<uint16_t, int> table;
+    EXPECT_TRUE(table.insert(5000, std::make_unique<int>(11)));
+    EXPECT_FALSE(table.insert(5000, std::make_unique<int>(22)));
+    ASSERT_NE(table.get(5000), nullptr);
+    EXPECT_EQ(*table.get(5000), 11);
+
+    EXPECT_TRUE(table.erase(5000));
+    EXPECT_FALSE(table.erase(5000));
+    EXPECT_EQ(table.size(), 0u);
+    EXPECT_EQ(table.get(5000), nullptr);
+}
+
+TEST(PagedSparseTable, ClearReleasesAllPages)
+{
+    PagedSparseTable<uint16_t, int> table;
+    EXPECT_TRUE(table.insert(1, std::make_unique<int>(1)));
+    EXPECT_TRUE(table.insert(0x2201, std::make_unique<int>(2)));
+    EXPECT_EQ(table.allocated_page_count(), 2u);
+
+    table.clear();
+    EXPECT_EQ(table.size(), 0u);
+    EXPECT_EQ(table.allocated_page_count(), 0u);
+    EXPECT_EQ(table.get(1), nullptr);
+    EXPECT_EQ(table.get(0x2201), nullptr);
 }

@@ -214,6 +214,62 @@ TEST_F(NetworkInterfaceTest, ChannelCountAfterDisconnect)
     EXPECT_EQ(ni_.channel_count(), 0u);
 }
 
+TEST_F(NetworkInterfaceTest, CondemnedTcpChannelReclaimsExpandedRecvBufferImmediately)
+{
+    ASSERT_TRUE(ni_.start_tcp_server(Address("127.0.0.1", 0)).has_value());
+
+    auto client_sock = Socket::create_tcp();
+    ASSERT_TRUE(client_sock.has_value());
+    auto connect_result = client_sock->connect(ni_.tcp_address());
+    ASSERT_TRUE(connect_result.has_value() ||
+                connect_result.error().code() == ErrorCode::WouldBlock);
+
+    ASSERT_TRUE(poll_until(dispatcher_, [&] { return ni_.channel_count() >= 1u; }));
+
+    auto client_addr = client_sock->local_address();
+    ASSERT_TRUE(client_addr.has_value()) << client_addr.error().message();
+
+    auto* channel = dynamic_cast<TcpChannel*>(ni_.find_channel(*client_addr));
+    ASSERT_NE(channel, nullptr);
+    EXPECT_EQ(channel->recv_buffer_capacity(), TcpChannel::kInitialRecvBufferSize);
+
+    constexpr std::size_t kFrameLength = 48 * 1024;
+    constexpr std::size_t kPartialPayload = 24 * 1024;
+    uint32_t frame_len_le = endian::to_little(static_cast<uint32_t>(kFrameLength));
+
+    std::vector<std::byte> partial_frame;
+    partial_frame.reserve(sizeof(frame_len_le) + kPartialPayload);
+    auto* len_bytes = reinterpret_cast<const std::byte*>(&frame_len_le);
+    partial_frame.insert(partial_frame.end(), len_bytes, len_bytes + sizeof(frame_len_le));
+    partial_frame.insert(partial_frame.end(), kPartialPayload, std::byte{'x'});
+
+    std::size_t sent_total = 0;
+    while (sent_total < partial_frame.size())
+    {
+        auto sent = client_sock->send(std::span<const std::byte>(
+            partial_frame.data() + sent_total, partial_frame.size() - sent_total));
+        ASSERT_TRUE(sent.has_value()) << sent.error().message();
+        ASSERT_GT(*sent, 0u);
+        sent_total += *sent;
+    }
+
+    ASSERT_TRUE(poll_until(dispatcher_,
+                           [&]
+                           {
+                               return channel->recv_buffer_capacity() >
+                                          TcpChannel::kInitialRecvBufferSize &&
+                                      channel->recv_buffer_size() > 0;
+                           }));
+
+    ni_.prepare_for_shutdown();
+
+    EXPECT_EQ(ni_.channel_count(), 0u);
+    EXPECT_EQ(channel->recv_buffer_capacity(), TcpChannel::kInitialRecvBufferSize);
+    EXPECT_EQ(channel->recv_buffer_size(), 0u);
+    EXPECT_EQ(channel->write_buffer_capacity(), TcpChannel::kInitialWriteBufferSize);
+    EXPECT_EQ(channel->write_buffer_size(), 0u);
+}
+
 // ============================================================================
 // RUDP tests
 // ============================================================================

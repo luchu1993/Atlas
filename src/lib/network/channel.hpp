@@ -94,6 +94,7 @@ public:
 protected:
     // Subclass hooks
     [[nodiscard]] virtual auto do_send(std::span<const std::byte> data) -> Result<size_t> = 0;
+    virtual void on_condemned() {}
     void on_data_received(std::span<const std::byte> data);
     void on_disconnect();
 

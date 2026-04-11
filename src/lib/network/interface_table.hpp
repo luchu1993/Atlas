@@ -1,8 +1,8 @@
 #pragma once
 
+#include "foundation/containers/paged_sparse_table.hpp"
 #include "network/message.hpp"
 
-#include <array>
 #include <memory>
 
 namespace atlas
@@ -39,9 +39,7 @@ public:
     [[nodiscard]] auto handler_count() const -> size_t;
 
 private:
-    static constexpr std::size_t kMaxMessageID = 65536;
-    std::array<std::unique_ptr<Entry>, kMaxMessageID> entries_{};
-    std::size_t count_{0};
+    PagedSparseTable<MessageID, Entry> entries_;
 };
 
 }  // namespace atlas

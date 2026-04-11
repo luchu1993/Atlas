@@ -7,7 +7,6 @@
 #include "network/udp_channel.hpp"
 
 #include <algorithm>
-#include <array>
 
 namespace atlas
 {
@@ -388,6 +387,11 @@ void NetworkInterface::set_accept_callback(AcceptCallback cb)
     accept_callback_ = std::move(cb);
 }
 
+void NetworkInterface::set_disconnect_callback(DisconnectCallback cb)
+{
+    disconnect_callback_ = std::move(cb);
+}
+
 // ============================================================================
 // Shutdown
 // ============================================================================
@@ -496,10 +500,10 @@ void NetworkInterface::on_tcp_accept()
 
 void NetworkInterface::on_udp_readable()
 {
-    std::array<std::byte, 65536> buf;
+    auto recv_buffer = datagram_recv_buffer();
     while (true)
     {
-        auto result = udp_socket_->recv_from(buf);
+        auto result = udp_socket_->recv_from(recv_buffer);
         if (!result)
         {
             if (result.error().code() == ErrorCode::WouldBlock)
@@ -540,16 +544,16 @@ void NetworkInterface::on_udp_readable()
         }
 
         auto* udp_ch = static_cast<UdpChannel*>(it->second.get());
-        udp_ch->on_datagram_received(std::span<const std::byte>(buf.data(), bytes));
+        udp_ch->on_datagram_received(recv_buffer.first(bytes));
     }
 }
 
 void NetworkInterface::on_rudp_readable()
 {
-    std::array<std::byte, 65536> buf;
+    auto recv_buffer = datagram_recv_buffer();
     while (true)
     {
-        auto result = rudp_socket_->recv_from(buf);
+        auto result = rudp_socket_->recv_from(recv_buffer);
         if (!result)
         {
             if (result.error().code() == ErrorCode::WouldBlock)
@@ -585,7 +589,7 @@ void NetworkInterface::on_rudp_readable()
         }
 
         auto* rudp_ch = static_cast<ReliableUdpChannel*>(it->second.get());
-        rudp_ch->on_datagram_received(std::span<const std::byte>(buf.data(), bytes));
+        rudp_ch->on_datagram_received(recv_buffer.first(bytes));
     }
 }
 
@@ -596,6 +600,10 @@ void NetworkInterface::on_rudp_readable()
 void NetworkInterface::on_channel_disconnect(Channel& channel)
 {
     condemn_channel(channel.remote_address());
+    if (disconnect_callback_)
+    {
+        disconnect_callback_(channel);
+    }
 }
 
 void NetworkInterface::condemn_channel(const Address& addr)
@@ -633,6 +641,16 @@ void NetworkInterface::process_condemned_channels()
     {
         condemned_.pop_front();
     }
+}
+
+auto NetworkInterface::datagram_recv_buffer() -> std::span<std::byte>
+{
+    if (!datagram_recv_scratch_)
+    {
+        datagram_recv_scratch_ = StreamBufferPool::instance().acquire(kMaxDatagramSize);
+    }
+
+    return {datagram_recv_scratch_.data(), datagram_recv_scratch_.capacity()};
 }
 
 // ============================================================================
