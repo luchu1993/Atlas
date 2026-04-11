@@ -3,6 +3,7 @@
 
 #include <gtest/gtest.h>
 
+#include <cstring>
 #include <string>
 
 namespace atlas::test
