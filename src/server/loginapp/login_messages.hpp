@@ -3,6 +3,7 @@
 #include "db/idatabase.hpp"
 #include "network/address.hpp"
 #include "network/message.hpp"
+#include "network/message_ids.hpp"
 #include "server/entity_types.hpp"
 
 #include <cstdint>
@@ -52,8 +53,8 @@ struct LoginRequest
 
     static auto descriptor() -> const MessageDesc&
     {
-        static const MessageDesc desc{5000, "login::LoginRequest", MessageLengthStyle::Variable,
-                                      -1};
+        static const MessageDesc desc{msg_id::id(msg_id::Login::LoginRequest),
+                                      "login::LoginRequest", MessageLengthStyle::Variable, -1};
         return desc;
     }
 
@@ -90,7 +91,8 @@ struct LoginResult
 
     static auto descriptor() -> const MessageDesc&
     {
-        static const MessageDesc desc{5001, "login::LoginResult", MessageLengthStyle::Variable, -1};
+        static const MessageDesc desc{msg_id::id(msg_id::Login::LoginResult), "login::LoginResult",
+                                      MessageLengthStyle::Variable, -1};
         return desc;
     }
 
@@ -138,7 +140,8 @@ struct AuthLogin
 
     static auto descriptor() -> const MessageDesc&
     {
-        static const MessageDesc desc{5002, "login::AuthLogin", MessageLengthStyle::Variable, -1};
+        static const MessageDesc desc{msg_id::id(msg_id::Login::AuthLogin), "login::AuthLogin",
+                                      MessageLengthStyle::Variable, -1};
         return desc;
     }
 
@@ -182,8 +185,8 @@ struct AuthLoginResult
 
     static auto descriptor() -> const MessageDesc&
     {
-        static const MessageDesc desc{5003, "login::AuthLoginResult", MessageLengthStyle::Variable,
-                                      -1};
+        static const MessageDesc desc{msg_id::id(msg_id::Login::AuthLoginResult),
+                                      "login::AuthLoginResult", MessageLengthStyle::Variable, -1};
         return desc;
     }
 
@@ -229,7 +232,8 @@ struct AllocateBaseApp
     static auto descriptor() -> const MessageDesc&
     {
         static const MessageDesc desc{
-            5004, "login::AllocateBaseApp", MessageLengthStyle::Fixed,
+            msg_id::id(msg_id::Login::AllocateBaseApp), "login::AllocateBaseApp",
+            MessageLengthStyle::Fixed,
             static_cast<int>(sizeof(uint32_t) + sizeof(uint16_t) + sizeof(int64_t))};
         return desc;
     }
@@ -270,8 +274,8 @@ struct AllocateBaseAppResult
 
     static auto descriptor() -> const MessageDesc&
     {
-        static const MessageDesc desc{5005, "login::AllocateBaseAppResult",
-                                      MessageLengthStyle::Fixed,
+        static const MessageDesc desc{msg_id::id(msg_id::Login::AllocateBaseAppResult),
+                                      "login::AllocateBaseAppResult", MessageLengthStyle::Fixed,
                                       static_cast<int>(sizeof(uint32_t) + sizeof(uint8_t) +
                                                        (sizeof(uint32_t) + sizeof(uint16_t)) * 2)};
         return desc;
@@ -322,7 +326,8 @@ struct PrepareLogin
     static auto descriptor() -> const MessageDesc&
     {
         static const MessageDesc desc{
-            5006, "login::PrepareLogin", MessageLengthStyle::Fixed,
+            msg_id::id(msg_id::Login::PrepareLogin), "login::PrepareLogin",
+            MessageLengthStyle::Fixed,
             static_cast<int>(sizeof(uint32_t) + sizeof(uint16_t) + sizeof(int64_t) +
                              sizeof(SessionKey) + sizeof(uint32_t) + sizeof(uint16_t))};
         return desc;
@@ -375,8 +380,9 @@ struct PrepareLoginResult
 
     static auto descriptor() -> const MessageDesc&
     {
-        static const MessageDesc desc{5007, "login::PrepareLoginResult",
-                                      MessageLengthStyle::Variable, -1};
+        static const MessageDesc desc{msg_id::id(msg_id::Login::PrepareLoginResult),
+                                      "login::PrepareLoginResult", MessageLengthStyle::Variable,
+                                      -1};
         return desc;
     }
 

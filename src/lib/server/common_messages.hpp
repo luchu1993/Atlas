@@ -1,6 +1,7 @@
 #pragma once
 
 #include "network/message.hpp"
+#include "network/message_ids.hpp"
 #include "serialization/binary_stream.hpp"
 
 #include <cstdint>
@@ -8,19 +9,20 @@
 // ============================================================================
 // Common messages shared by all Atlas server processes
 //
-// Message ID allocation:
-//   0   –  99   reserved
-//   100 – 199   common (this file)
-//   1000 – 1099  machined (machined_types.hpp)
-//   2000 – 2999  BaseApp
-//   3000 – 3999  CellApp
-//   4000 – 4999  DBApp
-//   5000 – 5999  LoginApp
-//   6000 – 6999  BaseAppMgr
-//   7000 – 7999  CellAppMgr
-//   8000 – 8999  DBAppMgr
-//   10000 – 19999 external (client ↔ server)
-//   50000 – 59999 C# RPC forwarding
+// Message ID allocation (see network/message_ids.hpp for the authoritative
+// registry — do NOT add numeric IDs here or in individual message headers):
+//   0     –    99   reserved
+//   100   –   199   common      (this file)
+//   1000  –  1099   machined    (machined_types.hpp)
+//   2000  –  2999   BaseApp     (baseapp_messages.hpp)
+//   3000  –  3999   CellApp     — reserved
+//   4000  –  4999   DBApp       (dbapp_messages.hpp)
+//   5000  –  5999   LoginApp    (login_messages.hpp)
+//   6000  –  6999   BaseAppMgr  (baseappmgr_messages.hpp)
+//   7000  –  7999   CellAppMgr  — reserved
+//   8000  –  8999   DBAppMgr    — reserved
+//   10000 – 19999   external (client ↔ server)
+//   50000 – 59999   C# RPC forwarding
 // ============================================================================
 
 namespace atlas::msg
@@ -35,7 +37,8 @@ struct Heartbeat
 
     static auto descriptor() -> const MessageDesc&
     {
-        static const MessageDesc desc{100, "Heartbeat", MessageLengthStyle::Fixed,
+        static const MessageDesc desc{msg_id::id(msg_id::Common::Heartbeat), "Heartbeat",
+                                      MessageLengthStyle::Fixed,
                                       static_cast<int32_t>(sizeof(uint64_t) + sizeof(float))};
         return desc;
     }
@@ -68,7 +71,8 @@ struct ShutdownRequest
 
     static auto descriptor() -> const MessageDesc&
     {
-        static const MessageDesc desc{101, "ShutdownRequest", MessageLengthStyle::Fixed,
+        static const MessageDesc desc{msg_id::id(msg_id::Common::ShutdownRequest),
+                                      "ShutdownRequest", MessageLengthStyle::Fixed,
                                       static_cast<int32_t>(sizeof(uint8_t))};
         return desc;
     }

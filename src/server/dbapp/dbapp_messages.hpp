@@ -3,6 +3,7 @@
 #include "db/idatabase.hpp"
 #include "network/address.hpp"
 #include "network/message.hpp"
+#include "network/message_ids.hpp"
 
 #include <cstdint>
 #include <string>
@@ -59,7 +60,8 @@ struct WriteEntity
 
     static auto descriptor() -> const MessageDesc&
     {
-        static const MessageDesc desc{4000, "dbapp::WriteEntity", MessageLengthStyle::Variable, -1};
+        static const MessageDesc desc{msg_id::id(msg_id::DBApp::WriteEntity), "dbapp::WriteEntity",
+                                      MessageLengthStyle::Variable, -1};
         return desc;
     }
 
@@ -115,8 +117,8 @@ struct WriteEntityAck
 
     static auto descriptor() -> const MessageDesc&
     {
-        static const MessageDesc desc{4001, "dbapp::WriteEntityAck", MessageLengthStyle::Variable,
-                                      -1};
+        static const MessageDesc desc{msg_id::id(msg_id::DBApp::WriteEntityAck),
+                                      "dbapp::WriteEntityAck", MessageLengthStyle::Variable, -1};
         return desc;
     }
 
@@ -161,8 +163,8 @@ struct CheckoutEntity
 
     static auto descriptor() -> const MessageDesc&
     {
-        static const MessageDesc desc{4002, "dbapp::CheckoutEntity", MessageLengthStyle::Variable,
-                                      -1};
+        static const MessageDesc desc{msg_id::id(msg_id::DBApp::CheckoutEntity),
+                                      "dbapp::CheckoutEntity", MessageLengthStyle::Variable, -1};
         return desc;
     }
 
@@ -215,8 +217,8 @@ struct CheckoutEntityAck
 
     static auto descriptor() -> const MessageDesc&
     {
-        static const MessageDesc desc{4003, "dbapp::CheckoutEntityAck",
-                                      MessageLengthStyle::Variable, -1};
+        static const MessageDesc desc{msg_id::id(msg_id::DBApp::CheckoutEntityAck),
+                                      "dbapp::CheckoutEntityAck", MessageLengthStyle::Variable, -1};
         return desc;
     }
 
@@ -275,7 +277,8 @@ struct CheckinEntity
 
     static auto descriptor() -> const MessageDesc&
     {
-        static const MessageDesc desc{4004, "dbapp::CheckinEntity", MessageLengthStyle::Fixed,
+        static const MessageDesc desc{msg_id::id(msg_id::DBApp::CheckinEntity),
+                                      "dbapp::CheckinEntity", MessageLengthStyle::Fixed,
                                       static_cast<int>(sizeof(uint16_t) + sizeof(int64_t))};
         return desc;
     }
@@ -313,7 +316,8 @@ struct DeleteEntity
     static auto descriptor() -> const MessageDesc&
     {
         static const MessageDesc desc{
-            4005, "dbapp::DeleteEntity", MessageLengthStyle::Fixed,
+            msg_id::id(msg_id::DBApp::DeleteEntity), "dbapp::DeleteEntity",
+            MessageLengthStyle::Fixed,
             static_cast<int>(sizeof(uint16_t) + sizeof(int64_t) + sizeof(uint32_t))};
         return desc;
     }
@@ -353,8 +357,8 @@ struct DeleteEntityAck
 
     static auto descriptor() -> const MessageDesc&
     {
-        static const MessageDesc desc{4006, "dbapp::DeleteEntityAck", MessageLengthStyle::Variable,
-                                      -1};
+        static const MessageDesc desc{msg_id::id(msg_id::DBApp::DeleteEntityAck),
+                                      "dbapp::DeleteEntityAck", MessageLengthStyle::Variable, -1};
         return desc;
     }
 
@@ -393,8 +397,8 @@ struct LookupEntity
 
     static auto descriptor() -> const MessageDesc&
     {
-        static const MessageDesc desc{4007, "dbapp::LookupEntity", MessageLengthStyle::Variable,
-                                      -1};
+        static const MessageDesc desc{msg_id::id(msg_id::DBApp::LookupEntity),
+                                      "dbapp::LookupEntity", MessageLengthStyle::Variable, -1};
         return desc;
     }
 
@@ -433,7 +437,8 @@ struct LookupEntityAck
 
     static auto descriptor() -> const MessageDesc&
     {
-        static const MessageDesc desc{4008, "dbapp::LookupEntityAck", MessageLengthStyle::Fixed,
+        static const MessageDesc desc{msg_id::id(msg_id::DBApp::LookupEntityAck),
+                                      "dbapp::LookupEntityAck", MessageLengthStyle::Fixed,
                                       static_cast<int>(sizeof(uint32_t) + 1 + sizeof(int64_t))};
         return desc;
     }

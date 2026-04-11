@@ -159,3 +159,44 @@ TEST(BaseAppMessages, ReplicatedDeltaFromCell)
     EXPECT_EQ(rt->delta.size(), 4u);
     EXPECT_EQ(rt->delta[3], std::byte{0x40});
 }
+
+// Verify packed_int multi-byte paths: entity_id in [0xFE, 0xFFFF] uses 3-byte
+// encoding; entity_id > 0xFFFF uses 5-byte encoding.
+TEST(BaseAppMessages, PackedIntBoundaries)
+{
+    // 3-byte entity_id (0xFE tag + uint16 LE)
+    {
+        ReplicatedDeltaFromCell msg;
+        msg.base_entity_id = 1000;
+        msg.delta = {std::byte{0xFF}};
+        auto rt = round_trip(msg);
+        ASSERT_TRUE(rt.has_value());
+        EXPECT_EQ(rt->base_entity_id, 1000u);
+        EXPECT_EQ(rt->delta.size(), 1u);
+    }
+    // 5-byte entity_id (0xFF tag + uint32 LE)
+    {
+        CellRpcForward msg;
+        msg.base_entity_id = 0x00010001u;
+        msg.rpc_id = 500;
+        msg.payload = {std::byte{0x01}, std::byte{0x02}};
+        auto rt = round_trip(msg);
+        ASSERT_TRUE(rt.has_value());
+        EXPECT_EQ(rt->base_entity_id, 0x00010001u);
+        EXPECT_EQ(rt->rpc_id, 500u);
+        EXPECT_EQ(rt->payload.size(), 2u);
+    }
+    // Large payload size in BroadcastRpcFromCell (crosses 0xFE boundary)
+    {
+        BroadcastRpcFromCell msg;
+        msg.base_entity_id = 42;
+        msg.rpc_id = 1;
+        msg.target = 2;
+        msg.payload.assign(300, std::byte{0xAB});
+        auto rt = round_trip(msg);
+        ASSERT_TRUE(rt.has_value());
+        EXPECT_EQ(rt->base_entity_id, 42u);
+        EXPECT_EQ(rt->payload.size(), 300u);
+        EXPECT_EQ(rt->payload[299], std::byte{0xAB});
+    }
+}

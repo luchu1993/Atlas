@@ -2,6 +2,7 @@
 
 #include "network/address.hpp"
 #include "network/message.hpp"
+#include "network/message_ids.hpp"
 #include "server/entity_types.hpp"
 
 #include <cstdint>
@@ -36,8 +37,8 @@ struct RegisterBaseApp
 
     static auto descriptor() -> const MessageDesc&
     {
-        static const MessageDesc desc{6000, "baseappmgr::RegisterBaseApp",
-                                      MessageLengthStyle::Fixed,
+        static const MessageDesc desc{msg_id::id(msg_id::BaseAppMgr::RegisterBaseApp),
+                                      "baseappmgr::RegisterBaseApp", MessageLengthStyle::Fixed,
                                       static_cast<int>((sizeof(uint32_t) + sizeof(uint16_t)) * 2)};
         return desc;
     }
@@ -81,7 +82,8 @@ struct RegisterBaseAppAck
     static auto descriptor() -> const MessageDesc&
     {
         static const MessageDesc desc{
-            6001, "baseappmgr::RegisterBaseAppAck", MessageLengthStyle::Fixed,
+            msg_id::id(msg_id::BaseAppMgr::RegisterBaseAppAck), "baseappmgr::RegisterBaseAppAck",
+            MessageLengthStyle::Fixed,
             static_cast<int>(sizeof(uint8_t) + sizeof(uint32_t) * 3 + sizeof(uint64_t))};
         return desc;
     }
@@ -125,7 +127,8 @@ struct BaseAppReady
 
     static auto descriptor() -> const MessageDesc&
     {
-        static const MessageDesc desc{6002, "baseappmgr::BaseAppReady", MessageLengthStyle::Fixed,
+        static const MessageDesc desc{msg_id::id(msg_id::BaseAppMgr::BaseAppReady),
+                                      "baseappmgr::BaseAppReady", MessageLengthStyle::Fixed,
                                       static_cast<int>(sizeof(uint32_t))};
         return desc;
     }
@@ -201,7 +204,8 @@ struct RegisterGlobalBase
 
     static auto descriptor() -> const MessageDesc&
     {
-        static const MessageDesc desc{6010, "baseappmgr::RegisterGlobalBase",
+        static const MessageDesc desc{msg_id::id(msg_id::BaseAppMgr::RegisterGlobalBase),
+                                      "baseappmgr::RegisterGlobalBase",
                                       MessageLengthStyle::Variable, -1};
         return desc;
     }
@@ -239,7 +243,8 @@ struct DeregisterGlobalBase
 
     static auto descriptor() -> const MessageDesc&
     {
-        static const MessageDesc desc{6011, "baseappmgr::DeregisterGlobalBase",
+        static const MessageDesc desc{msg_id::id(msg_id::BaseAppMgr::DeregisterGlobalBase),
+                                      "baseappmgr::DeregisterGlobalBase",
                                       MessageLengthStyle::Variable, -1};
         return desc;
     }
@@ -272,7 +277,8 @@ struct GlobalBaseNotification
 
     static auto descriptor() -> const MessageDesc&
     {
-        static const MessageDesc desc{6012, "baseappmgr::GlobalBaseNotification",
+        static const MessageDesc desc{msg_id::id(msg_id::BaseAppMgr::GlobalBaseNotification),
+                                      "baseappmgr::GlobalBaseNotification",
                                       MessageLengthStyle::Variable, -1};
         return desc;
     }
@@ -318,8 +324,8 @@ struct RequestEntityIdRange
 
     static auto descriptor() -> const MessageDesc&
     {
-        static const MessageDesc desc{6020, "baseappmgr::RequestEntityIdRange",
-                                      MessageLengthStyle::Fixed,
+        static const MessageDesc desc{msg_id::id(msg_id::BaseAppMgr::RequestEntityIdRange),
+                                      "baseappmgr::RequestEntityIdRange", MessageLengthStyle::Fixed,
                                       static_cast<int>(sizeof(uint32_t))};
         return desc;
     }
@@ -350,7 +356,8 @@ struct RequestEntityIdRangeAck
 
     static auto descriptor() -> const MessageDesc&
     {
-        static const MessageDesc desc{6021, "baseappmgr::RequestEntityIdRangeAck",
+        static const MessageDesc desc{msg_id::id(msg_id::BaseAppMgr::RequestEntityIdRangeAck),
+                                      "baseappmgr::RequestEntityIdRangeAck",
                                       MessageLengthStyle::Fixed,
                                       static_cast<int>(sizeof(uint32_t) * 3)};
         return desc;

@@ -2,6 +2,7 @@
 
 #include "network/address.hpp"
 #include "network/message.hpp"
+#include "network/message_ids.hpp"
 #include "server/server_config.hpp"
 
 #include <cstdint>
@@ -46,7 +47,8 @@ struct RegisterMessage
 
     static auto descriptor() -> const MessageDesc&
     {
-        static const MessageDesc desc{1000, "machined::Register", MessageLengthStyle::Variable, -1};
+        static const MessageDesc desc{msg_id::id(msg_id::Machined::Register), "machined::Register",
+                                      MessageLengthStyle::Variable, -1};
         return desc;
     }
 
@@ -100,8 +102,8 @@ struct RegisterAck
 
     static auto descriptor() -> const MessageDesc&
     {
-        static const MessageDesc desc{1004, "machined::RegisterAck", MessageLengthStyle::Variable,
-                                      -1};
+        static const MessageDesc desc{msg_id::id(msg_id::Machined::RegisterAck),
+                                      "machined::RegisterAck", MessageLengthStyle::Variable, -1};
         return desc;
     }
 
@@ -143,8 +145,8 @@ struct DeregisterMessage
 
     static auto descriptor() -> const MessageDesc&
     {
-        static const MessageDesc desc{1001, "machined::Deregister", MessageLengthStyle::Variable,
-                                      -1};
+        static const MessageDesc desc{msg_id::id(msg_id::Machined::Deregister),
+                                      "machined::Deregister", MessageLengthStyle::Variable, -1};
         return desc;
     }
 
@@ -184,7 +186,8 @@ struct QueryMessage
 
     static auto descriptor() -> const MessageDesc&
     {
-        static const MessageDesc desc{1002, "machined::Query", MessageLengthStyle::Variable, -1};
+        static const MessageDesc desc{msg_id::id(msg_id::Machined::Query), "machined::Query",
+                                      MessageLengthStyle::Variable, -1};
         return desc;
     }
 
@@ -207,8 +210,8 @@ struct QueryResponse
 
     static auto descriptor() -> const MessageDesc&
     {
-        static const MessageDesc desc{1003, "machined::QueryResponse", MessageLengthStyle::Variable,
-                                      -1};
+        static const MessageDesc desc{msg_id::id(msg_id::Machined::QueryResponse),
+                                      "machined::QueryResponse", MessageLengthStyle::Variable, -1};
         return desc;
     }
 
@@ -292,8 +295,8 @@ struct HeartbeatMessage
 
     static auto descriptor() -> const MessageDesc&
     {
-        static const MessageDesc desc{1005, "machined::Heartbeat", MessageLengthStyle::Variable,
-                                      -1};
+        static const MessageDesc desc{msg_id::id(msg_id::Machined::Heartbeat),
+                                      "machined::Heartbeat", MessageLengthStyle::Variable, -1};
         return desc;
     }
 
@@ -324,8 +327,8 @@ struct HeartbeatAck
 
     static auto descriptor() -> const MessageDesc&
     {
-        static const MessageDesc desc{1006, "machined::HeartbeatAck", MessageLengthStyle::Variable,
-                                      -1};
+        static const MessageDesc desc{msg_id::id(msg_id::Machined::HeartbeatAck),
+                                      "machined::HeartbeatAck", MessageLengthStyle::Variable, -1};
         return desc;
     }
 
@@ -356,8 +359,9 @@ struct BirthNotification
 
     static auto descriptor() -> const MessageDesc&
     {
-        static const MessageDesc desc{1010, "machined::BirthNotification",
-                                      MessageLengthStyle::Variable, -1};
+        static const MessageDesc desc{msg_id::id(msg_id::Machined::BirthNotification),
+                                      "machined::BirthNotification", MessageLengthStyle::Variable,
+                                      -1};
         return desc;
     }
 
@@ -414,8 +418,9 @@ struct DeathNotification
 
     static auto descriptor() -> const MessageDesc&
     {
-        static const MessageDesc desc{1011, "machined::DeathNotification",
-                                      MessageLengthStyle::Variable, -1};
+        static const MessageDesc desc{msg_id::id(msg_id::Machined::DeathNotification),
+                                      "machined::DeathNotification", MessageLengthStyle::Variable,
+                                      -1};
         return desc;
     }
 
@@ -472,8 +477,9 @@ struct ListenerRegister
 
     static auto descriptor() -> const MessageDesc&
     {
-        static const MessageDesc desc{1012, "machined::ListenerRegister",
-                                      MessageLengthStyle::Variable, -1};
+        static const MessageDesc desc{msg_id::id(msg_id::Machined::ListenerRegister),
+                                      "machined::ListenerRegister", MessageLengthStyle::Variable,
+                                      -1};
         return desc;
     }
 
@@ -504,8 +510,8 @@ struct ListenerAck
 
     static auto descriptor() -> const MessageDesc&
     {
-        static const MessageDesc desc{1013, "machined::ListenerAck", MessageLengthStyle::Variable,
-                                      -1};
+        static const MessageDesc desc{msg_id::id(msg_id::Machined::ListenerAck),
+                                      "machined::ListenerAck", MessageLengthStyle::Variable, -1};
         return desc;
     }
 
@@ -535,8 +541,8 @@ struct WatcherRequest
 
     static auto descriptor() -> const MessageDesc&
     {
-        static const MessageDesc desc{1020, "machined::WatcherRequest",
-                                      MessageLengthStyle::Variable, -1};
+        static const MessageDesc desc{msg_id::id(msg_id::Machined::WatcherRequest),
+                                      "machined::WatcherRequest", MessageLengthStyle::Variable, -1};
         return desc;
     }
 
@@ -580,8 +586,9 @@ struct WatcherResponse
 
     static auto descriptor() -> const MessageDesc&
     {
-        static const MessageDesc desc{1021, "machined::WatcherResponse",
-                                      MessageLengthStyle::Variable, -1};
+        static const MessageDesc desc{msg_id::id(msg_id::Machined::WatcherResponse),
+                                      "machined::WatcherResponse", MessageLengthStyle::Variable,
+                                      -1};
         return desc;
     }
 
@@ -624,8 +631,8 @@ struct WatcherForward
 
     static auto descriptor() -> const MessageDesc&
     {
-        static const MessageDesc desc{1022, "machined::WatcherForward",
-                                      MessageLengthStyle::Variable, -1};
+        static const MessageDesc desc{msg_id::id(msg_id::Machined::WatcherForward),
+                                      "machined::WatcherForward", MessageLengthStyle::Variable, -1};
         return desc;
     }
 
@@ -663,8 +670,8 @@ struct WatcherReply
 
     static auto descriptor() -> const MessageDesc&
     {
-        static const MessageDesc desc{1023, "machined::WatcherReply", MessageLengthStyle::Variable,
-                                      -1};
+        static const MessageDesc desc{msg_id::id(msg_id::Machined::WatcherReply),
+                                      "machined::WatcherReply", MessageLengthStyle::Variable, -1};
         return desc;
     }
 

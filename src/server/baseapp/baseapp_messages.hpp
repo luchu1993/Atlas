@@ -3,6 +3,7 @@
 #include "db/idatabase.hpp"
 #include "network/address.hpp"
 #include "network/message.hpp"
+#include "network/message_ids.hpp"
 #include "server/entity_types.hpp"
 
 #include <cstdint>
@@ -39,7 +40,8 @@ struct CreateBase
 
     static auto descriptor() -> const MessageDesc&
     {
-        static const MessageDesc desc{2000, "baseapp::CreateBase", MessageLengthStyle::Fixed,
+        static const MessageDesc desc{msg_id::id(msg_id::BaseApp::CreateBase),
+                                      "baseapp::CreateBase", MessageLengthStyle::Fixed,
                                       static_cast<int>(sizeof(uint16_t) + sizeof(uint32_t))};
         return desc;
     }
@@ -76,8 +78,9 @@ struct CreateBaseFromDB
 
     static auto descriptor() -> const MessageDesc&
     {
-        static const MessageDesc desc{2001, "baseapp::CreateBaseFromDB",
-                                      MessageLengthStyle::Variable, -1};
+        static const MessageDesc desc{msg_id::id(msg_id::BaseApp::CreateBaseFromDB),
+                                      "baseapp::CreateBaseFromDB", MessageLengthStyle::Variable,
+                                      -1};
         return desc;
     }
 
@@ -115,7 +118,8 @@ struct AcceptClient
 
     static auto descriptor() -> const MessageDesc&
     {
-        static const MessageDesc desc{2002, "baseapp::AcceptClient", MessageLengthStyle::Fixed,
+        static const MessageDesc desc{msg_id::id(msg_id::BaseApp::AcceptClient),
+                                      "baseapp::AcceptClient", MessageLengthStyle::Fixed,
                                       static_cast<int>(sizeof(uint32_t) + sizeof(SessionKey))};
         return desc;
     }
@@ -156,7 +160,8 @@ struct CellEntityCreated
     static auto descriptor() -> const MessageDesc&
     {
         static const MessageDesc desc{
-            2010, "baseapp::CellEntityCreated", MessageLengthStyle::Fixed,
+            msg_id::id(msg_id::BaseApp::CellEntityCreated), "baseapp::CellEntityCreated",
+            MessageLengthStyle::Fixed,
             static_cast<int>(sizeof(uint32_t) * 2 + sizeof(uint32_t) + sizeof(uint16_t))};
         return desc;
     }
@@ -196,8 +201,8 @@ struct CellEntityDestroyed
 
     static auto descriptor() -> const MessageDesc&
     {
-        static const MessageDesc desc{2011, "baseapp::CellEntityDestroyed",
-                                      MessageLengthStyle::Fixed,
+        static const MessageDesc desc{msg_id::id(msg_id::BaseApp::CellEntityDestroyed),
+                                      "baseapp::CellEntityDestroyed", MessageLengthStyle::Fixed,
                                       static_cast<int>(sizeof(uint32_t))};
         return desc;
     }
@@ -229,7 +234,8 @@ struct CurrentCell
     static auto descriptor() -> const MessageDesc&
     {
         static const MessageDesc desc{
-            2012, "baseapp::CurrentCell", MessageLengthStyle::Fixed,
+            msg_id::id(msg_id::BaseApp::CurrentCell), "baseapp::CurrentCell",
+            MessageLengthStyle::Fixed,
             static_cast<int>(sizeof(uint32_t) * 2 + sizeof(uint32_t) + sizeof(uint16_t))};
         return desc;
     }
@@ -271,24 +277,24 @@ struct CellRpcForward
 
     static auto descriptor() -> const MessageDesc&
     {
-        static const MessageDesc desc{2013, "baseapp::CellRpcForward", MessageLengthStyle::Variable,
-                                      -1};
+        static const MessageDesc desc{msg_id::id(msg_id::BaseApp::CellRpcForward),
+                                      "baseapp::CellRpcForward", MessageLengthStyle::Variable, -1};
         return desc;
     }
 
     void serialize(BinaryWriter& w) const
     {
-        w.write(base_entity_id);
-        w.write(rpc_id);
-        w.write(static_cast<uint32_t>(payload.size()));
+        w.write_packed_int(base_entity_id);
+        w.write_packed_int(rpc_id);
+        w.write_packed_int(static_cast<uint32_t>(payload.size()));
         w.write_bytes(payload);
     }
 
     static auto deserialize(BinaryReader& r) -> Result<CellRpcForward>
     {
-        auto eid = r.read<uint32_t>();
-        auto rid = r.read<uint32_t>();
-        auto sz = r.read<uint32_t>();
+        auto eid = r.read_packed_int();
+        auto rid = r.read_packed_int();
+        auto sz = r.read_packed_int();
         if (!eid || !rid || !sz)
             return Error{ErrorCode::InvalidArgument, "CellRpcForward: truncated"};
         auto span = r.read_bytes(*sz);
@@ -319,24 +325,24 @@ struct SelfRpcFromCell
 
     static auto descriptor() -> const MessageDesc&
     {
-        static const MessageDesc desc{2014, "baseapp::SelfRpcFromCell",
-                                      MessageLengthStyle::Variable, -1};
+        static const MessageDesc desc{msg_id::id(msg_id::BaseApp::SelfRpcFromCell),
+                                      "baseapp::SelfRpcFromCell", MessageLengthStyle::Variable, -1};
         return desc;
     }
 
     void serialize(BinaryWriter& w) const
     {
-        w.write(base_entity_id);
-        w.write(rpc_id);
-        w.write(static_cast<uint32_t>(payload.size()));
+        w.write_packed_int(base_entity_id);
+        w.write_packed_int(rpc_id);
+        w.write_packed_int(static_cast<uint32_t>(payload.size()));
         w.write_bytes(payload);
     }
 
     static auto deserialize(BinaryReader& r) -> Result<SelfRpcFromCell>
     {
-        auto eid = r.read<uint32_t>();
-        auto rid = r.read<uint32_t>();
-        auto sz = r.read<uint32_t>();
+        auto eid = r.read_packed_int();
+        auto rid = r.read_packed_int();
+        auto sz = r.read_packed_int();
         if (!eid || !rid || !sz)
             return Error{ErrorCode::InvalidArgument, "SelfRpcFromCell: truncated"};
         auto span = r.read_bytes(*sz);
@@ -368,27 +374,27 @@ struct BroadcastRpcFromCell
 
     static auto descriptor() -> const MessageDesc&
     {
-        static const MessageDesc desc{2016, "baseapp::BroadcastRpcFromCell",
-                                      MessageLengthStyle::Variable, -1,
-                                      MessageReliability::Unreliable};
+        static const MessageDesc desc{msg_id::id(msg_id::BaseApp::BroadcastRpcFromCell),
+                                      "baseapp::BroadcastRpcFromCell", MessageLengthStyle::Variable,
+                                      -1, MessageReliability::Unreliable};
         return desc;
     }
 
     void serialize(BinaryWriter& w) const
     {
-        w.write(base_entity_id);
-        w.write(rpc_id);
+        w.write_packed_int(base_entity_id);
+        w.write_packed_int(rpc_id);
         w.write(target);
-        w.write(static_cast<uint32_t>(payload.size()));
+        w.write_packed_int(static_cast<uint32_t>(payload.size()));
         w.write_bytes(payload);
     }
 
     static auto deserialize(BinaryReader& r) -> Result<BroadcastRpcFromCell>
     {
-        auto eid = r.read<uint32_t>();
-        auto rid = r.read<uint32_t>();
+        auto eid = r.read_packed_int();
+        auto rid = r.read_packed_int();
         auto tgt = r.read<uint8_t>();
-        auto sz = r.read<uint32_t>();
+        auto sz = r.read_packed_int();
         if (!eid || !rid || !tgt || !sz)
             return Error{ErrorCode::InvalidArgument, "BroadcastRpcFromCell: truncated"};
         auto span = r.read_bytes(*sz);
@@ -417,7 +423,8 @@ struct ReplicatedDeltaFromCell
     // best-effort delivery is preferred over head-of-line blocking.
     static auto descriptor() -> const MessageDesc&
     {
-        static const MessageDesc desc{2015, "baseapp::ReplicatedDeltaFromCell",
+        static const MessageDesc desc{msg_id::id(msg_id::BaseApp::ReplicatedDeltaFromCell),
+                                      "baseapp::ReplicatedDeltaFromCell",
                                       MessageLengthStyle::Variable, -1,
                                       MessageReliability::Unreliable};
         return desc;
@@ -425,15 +432,15 @@ struct ReplicatedDeltaFromCell
 
     void serialize(BinaryWriter& w) const
     {
-        w.write(base_entity_id);
-        w.write(static_cast<uint32_t>(delta.size()));
+        w.write_packed_int(base_entity_id);
+        w.write_packed_int(static_cast<uint32_t>(delta.size()));
         w.write_bytes(delta);
     }
 
     static auto deserialize(BinaryReader& r) -> Result<ReplicatedDeltaFromCell>
     {
-        auto eid = r.read<uint32_t>();
-        auto sz = r.read<uint32_t>();
+        auto eid = r.read_packed_int();
+        auto sz = r.read_packed_int();
         if (!eid || !sz)
             return Error{ErrorCode::InvalidArgument, "ReplicatedDeltaFromCell: truncated"};
         auto span = r.read_bytes(*sz);
@@ -458,7 +465,8 @@ struct Authenticate
 
     static auto descriptor() -> const MessageDesc&
     {
-        static const MessageDesc desc{2020, "baseapp::Authenticate", MessageLengthStyle::Fixed,
+        static const MessageDesc desc{msg_id::id(msg_id::BaseApp::Authenticate),
+                                      "baseapp::Authenticate", MessageLengthStyle::Fixed,
                                       static_cast<int>(sizeof(SessionKey))};
         return desc;
     }
@@ -494,8 +502,9 @@ struct AuthenticateResult
 
     static auto descriptor() -> const MessageDesc&
     {
-        static const MessageDesc desc{2021, "baseapp::AuthenticateResult",
-                                      MessageLengthStyle::Variable, -1};
+        static const MessageDesc desc{msg_id::id(msg_id::BaseApp::AuthenticateResult),
+                                      "baseapp::AuthenticateResult", MessageLengthStyle::Variable,
+                                      -1};
         return desc;
     }
 
@@ -537,7 +546,8 @@ struct ForceLogoff
 
     static auto descriptor() -> const MessageDesc&
     {
-        static const MessageDesc desc{2030, "baseapp::ForceLogoff", MessageLengthStyle::Fixed,
+        static const MessageDesc desc{msg_id::id(msg_id::BaseApp::ForceLogoff),
+                                      "baseapp::ForceLogoff", MessageLengthStyle::Fixed,
                                       static_cast<int>(sizeof(int64_t) + sizeof(uint32_t))};
         return desc;
     }
@@ -573,7 +583,8 @@ struct ForceLogoffAck
 
     static auto descriptor() -> const MessageDesc&
     {
-        static const MessageDesc desc{2031, "baseapp::ForceLogoffAck", MessageLengthStyle::Fixed,
+        static const MessageDesc desc{msg_id::id(msg_id::BaseApp::ForceLogoffAck),
+                                      "baseapp::ForceLogoffAck", MessageLengthStyle::Fixed,
                                       static_cast<int>(sizeof(uint32_t) + sizeof(uint8_t))};
         return desc;
     }

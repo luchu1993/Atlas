@@ -91,7 +91,12 @@ endfunction()
 #   atlas_add_test(test_network
 #       SOURCES test_socket.cpp test_channel.cpp
 #       DEPS    atlas_network
+#       LABELS  unit          # optional; defaults to "unit"
 #   )
+#
+# Tests can be filtered by label with:
+#   ctest --preset debug-ninja -L unit
+#   ctest --preset debug-ninja -L integration
 function(atlas_add_test target)
     if(NOT ATLAS_BUILD_TESTS)
         return()
@@ -100,12 +105,16 @@ function(atlas_add_test target)
     cmake_parse_arguments(ARG
         ""
         ""
-        "SOURCES;DEPS"
+        "SOURCES;DEPS;LABELS"
         ${ARGN}
     )
 
     if(NOT ARG_SOURCES)
         message(FATAL_ERROR "atlas_add_test(${target}): no SOURCES given")
+    endif()
+
+    if(NOT ARG_LABELS)
+        set(ARG_LABELS "unit")
     endif()
 
     add_executable(${target} ${ARG_SOURCES})
@@ -125,5 +134,6 @@ function(atlas_add_test target)
     gtest_discover_tests(${target}
         DISCOVERY_TIMEOUT 30
         DISCOVERY_MODE PRE_TEST
+        PROPERTIES LABELS "${ARG_LABELS}"
     )
 endfunction()

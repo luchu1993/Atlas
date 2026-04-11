@@ -49,11 +49,20 @@ jobs:
       - name: Build
         run: cmake --build --preset debug-ninja
 
-      - name: Test (Windows)
+      - name: Unit Tests (Windows)
         if: runner.os == 'Windows'
         shell: pwsh
-        run: ctest --preset debug-ninja
+        run: ctest --preset debug-ninja -L unit
 
-      - name: Test (Linux)
+      - name: Unit Tests (Linux)
         if: runner.os == 'Linux'
-        run: ctest --preset debug-ninja
+        run: ctest --preset debug-ninja -L unit
+
+      - name: Integration Tests (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: ctest --preset debug-ninja -L integration
+
+      - name: Integration Tests (Linux)
+        if: runner.os == 'Linux'
+        run: ctest --preset debug-ninja -L integration
