@@ -11,6 +11,10 @@ set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
+# Static libraries may be linked into shared libraries (e.g. atlas_engine.so),
+# so compile everything with position-independent code on Linux.
+set(CMAKE_POSITION_INDEPENDENT_CODE ON)
+
 # ── Module path ──────────────────────────────────────────────────────────────
 list(APPEND CMAKE_MODULE_PATH "${CMAKE_SOURCE_DIR}/cmake")
 
