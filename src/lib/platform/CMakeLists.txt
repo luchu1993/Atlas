@@ -3,6 +3,7 @@ add_library(atlas_platform_config INTERFACE)
 target_include_directories(atlas_platform_config
     INTERFACE $<BUILD_INTERFACE:${CMAKE_SOURCE_DIR}/src/lib>
 )
+set_target_properties(atlas_platform_config PROPERTIES FOLDER "Libraries")
 
 # atlas_platform — OS abstraction layer (I/O, threading, signals, filesystem)
 set(ATLAS_PLATFORM_SOURCES

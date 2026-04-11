@@ -44,6 +44,17 @@ set(CMAKE_RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin")
 set(CMAKE_LIBRARY_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/lib")
 set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/lib")
 
+# ── IDE folder grouping (Visual Studio solution folders) ─────────────────────
+set_property(GLOBAL PROPERTY USE_FOLDERS ON)
+
+# Suppress ZERO_CHECK target (CMake re-runs on source changes are still
+# triggered automatically by MSBuild via the .vcxproj dependencies).
+set(CMAKE_SUPPRESS_REGENERATION ON)
+
+# Sink ALL_BUILD and CTest dashboard targets into a hidden-looking folder.
+set_property(GLOBAL PROPERTY PREDEFINED_TARGETS_FOLDER "_CMake")
+set_property(GLOBAL PROPERTY CTEST_TARGETS_FOLDER     "_CMake")
+
 # ── CMake modules ────────────────────────────────────────────────────────────
 include(AtlasCompilerOptions)
 include(AtlasMacros)

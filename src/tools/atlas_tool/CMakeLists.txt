@@ -7,5 +7,6 @@ target_link_libraries(atlas_tool PRIVATE
 )
 
 set_target_properties(atlas_tool PROPERTIES
+    FOLDER "Applications"
     RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin"
 )

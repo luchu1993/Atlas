@@ -125,8 +125,14 @@ function(atlas_add_test target)
             ${ARG_DEPS}
     )
 
+    if("integration" IN_LIST ARG_LABELS)
+        set(_test_folder "Tests/Integration")
+    else()
+        set(_test_folder "Tests/Unit")
+    endif()
+
     set_target_properties(${target} PROPERTIES
-        FOLDER "Tests"
+        FOLDER "${_test_folder}"
         RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin/tests"
     )
 
