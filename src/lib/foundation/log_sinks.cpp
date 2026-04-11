@@ -27,9 +27,15 @@ void ConsoleSink::write(LogLevel level, std::string_view category, std::string_v
     }
 
     if (level >= LogLevel::Error)
+    {
         std::fwrite(formatted.data(), 1, formatted.size(), stderr);
+        std::fflush(stderr);
+    }
     else
+    {
         std::fwrite(formatted.data(), 1, formatted.size(), stdout);
+        std::fflush(stdout);
+    }
 }
 
 void ConsoleSink::flush()

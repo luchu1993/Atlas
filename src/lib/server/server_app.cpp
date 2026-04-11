@@ -1,6 +1,7 @@
 #include "server/server_app.hpp"
 
 #include "foundation/log.hpp"
+#include "foundation/runtime.hpp"
 #include "server/server_app_option.hpp"
 
 #include <chrono>
@@ -46,9 +47,14 @@ auto ServerApp::run_app(int argc, char* argv[]) -> int
         return 1;
     }
     config_ = std::move(*cfg_result);
-
     // 2. Configure logger
-    Logger::instance().set_level(config_.log_level);
+    RuntimeConfig runtime_cfg;
+    runtime_cfg.log_level = config_.log_level;
+    auto runtime_result = Runtime::initialize(runtime_cfg);
+    if (!runtime_result)
+    {
+        return 1;
+    }
 
     // 3. Apply ServerAppOption values from raw config
     if (config_.raw_config)
@@ -62,9 +68,9 @@ auto ServerApp::run_app(int argc, char* argv[]) -> int
     if (!init(argc, argv))
     {
         ATLAS_LOG_CRITICAL("ServerApp::init() failed");
+        Runtime::finalize();
         return 1;
     }
-
 #if defined(_WIN32)
     int pid = _getpid();
 #else
@@ -80,6 +86,7 @@ auto ServerApp::run_app(int argc, char* argv[]) -> int
 
     // 8. Cleanup
     fini();
+    Runtime::finalize();
 
     return run_ok ? 0 : 1;
 }
