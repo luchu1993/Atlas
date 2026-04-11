@@ -33,6 +33,8 @@ internal static class EngineContext
 
         var prefix = NativeApi.GetProcessPrefix();
         EntityManager.Instance.SetProcessPrefix(prefix);
+        EntityTypeRegistry.RegisterAll();
+        NativeCallbacks.Register();
 
         _initialized = true;
     }
@@ -42,6 +44,8 @@ internal static class EngineContext
     public static void Shutdown()
     {
         if (!_initialized) return;
+        NativeCallbacks.Reset();
+        NativeApi.UnregisterAllEntityTypes();
         EntityManager.Instance.Reset();
         SyncContext = null;
         _initialized = false;

@@ -1,10 +1,12 @@
 #pragma once
 
 #include "clrscript/native_api_provider.hpp"
+#include "platform/dynamic_library.hpp"
 #include "script/script_engine.hpp"
 #include "server/server_app.hpp"
 
 #include <memory>
+#include <optional>
 
 namespace atlas
 {
@@ -68,6 +70,7 @@ protected:
     void reload_scripts();
 
 private:
+    std::optional<DynamicLibrary> native_api_library_;
     std::unique_ptr<ScriptEngine> script_engine_;
     std::unique_ptr<INativeApiProvider> native_provider_;
     float last_dt_{0.0f};  // seconds, updated each tick

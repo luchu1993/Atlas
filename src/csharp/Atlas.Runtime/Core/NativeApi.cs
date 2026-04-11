@@ -116,6 +116,14 @@ internal static unsafe partial class NativeApi
     [LibraryImport(LibName, EntryPoint = "atlas_unregister_all_entity_types")]
     public static partial void UnregisterAllEntityTypes();
 
+    [LibraryImport(LibName, EntryPoint = "atlas_set_native_callbacks")]
+    private static partial void SetNativeCallbacksNative(void* nativeCallbacks, int len);
+
+    public static void SetNativeCallbacks(void* nativeCallbacks, int len)
+    {
+        SetNativeCallbacksNative(nativeCallbacks, len);
+    }
+
     // =========================================================================
     // ABI version (diagnostic)
     // =========================================================================

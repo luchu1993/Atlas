@@ -7,6 +7,7 @@
 #include "script/script_engine.hpp"
 
 #include <filesystem>
+#include <optional>
 #include <string>
 #include <string_view>
 
@@ -36,6 +37,7 @@ public:
     {
         std::filesystem::path runtime_config_path;    // runtimeconfig.json
         std::filesystem::path runtime_assembly_path;  // Atlas.Runtime.dll
+        std::optional<ClrBootstrapArgs> bootstrap_args;
     };
 
     [[nodiscard]] auto configure(const Config& config) -> Result<void>;

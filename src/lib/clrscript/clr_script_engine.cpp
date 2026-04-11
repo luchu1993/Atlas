@@ -46,7 +46,10 @@ auto ClrScriptEngine::initialize() -> Result<void>
                                                          host_result.error().message())};
 
     // 2. Run Phase 2 bootstrap (error bridge + vtable).
-    auto bootstrap_result = clr_bootstrap(host_, config_.runtime_assembly_path);
+    auto bootstrap_result =
+        config_.bootstrap_args
+            ? clr_bootstrap(host_, config_.runtime_assembly_path, *config_.bootstrap_args)
+            : clr_bootstrap(host_, config_.runtime_assembly_path);
     if (!bootstrap_result)
         return Error{ErrorCode::ScriptError, std::format("ClrScriptEngine: bootstrap failed: {}",
                                                          bootstrap_result.error().message())};
