@@ -189,6 +189,13 @@ function(atlas_build_csharp_project project_dir)
         VERBATIM
     )
 
+    if("${project_dir}" MATCHES "^tests/")
+        set(_csharp_folder "CSharp/Tests")
+    else()
+        set(_csharp_folder "CSharp/Sources")
+    endif()
+    set_target_properties(${_target_name} PROPERTIES FOLDER "${_csharp_folder}")
+
     # Export output directory to caller scope
     string(TOUPPER "${_target_suffix}" _upper)
     set(CSHARP_${_upper}_OUTPUT_DIR "${_output_dir}" PARENT_SCOPE)

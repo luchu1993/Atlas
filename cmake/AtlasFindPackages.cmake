@@ -17,6 +17,11 @@ if(ATLAS_BUILD_TESTS)
     # Prevent overriding parent project's compiler/linker settings on Windows
     set(gtest_force_shared_crt ON CACHE BOOL "" FORCE)
     FetchContent_MakeAvailable(googletest)
+    foreach(_t gtest gtest_main gmock gmock_main)
+        if(TARGET ${_t})
+            set_target_properties(${_t} PROPERTIES FOLDER "ThirdParty/googletest")
+        endif()
+    endforeach()
 endif()
 
 # ── pugixml (XML parsing) ───────────────────────────────────────────────────
@@ -27,6 +32,17 @@ FetchContent_Declare(
     GIT_SHALLOW    TRUE
 )
 FetchContent_MakeAvailable(pugixml)
+if(TARGET pugixml)
+    set_target_properties(pugixml PROPERTIES FOLDER "ThirdParty")
+endif()
+if(TARGET pugixml-static)
+    set_target_properties(pugixml-static PROPERTIES FOLDER "ThirdParty")
+endif()
+foreach(_t Continuous Experimental Nightly NightlyMemoryCheck)
+    if(TARGET ${_t})
+        set_target_properties(${_t} PROPERTIES FOLDER "_CMake")
+    endif()
+endforeach()
 
 # ── rapidjson (JSON parsing, header-only) ────────────────────────────────────
 # Disable rapidjson's own targets — we only need the headers.
@@ -42,6 +58,12 @@ FetchContent_Declare(
     GIT_SHALLOW    FALSE
 )
 FetchContent_MakeAvailable(rapidjson)
+foreach(_t travis_doc RapidJSON_ALL_BUILD RapidJSON_INSTALL RapidJSON_RUN_TESTS
+             RapidJSON_RUN_TESTS_WITH_VALGRIND RapidJSON_tarball)
+    if(TARGET ${_t})
+        set_target_properties(${_t} PROPERTIES FOLDER "ThirdParty/rapidjson")
+    endif()
+endforeach()
 
 # ── zlib (compression) ───────────────────────────────────────────────────────
 FetchContent_Declare(
@@ -52,6 +74,11 @@ FetchContent_Declare(
 )
 set(ZLIB_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
 FetchContent_MakeAvailable(zlib)
+foreach(_t zlibstatic zlib minigzip minigzip64 example example64)
+    if(TARGET ${_t})
+        set_target_properties(${_t} PROPERTIES FOLDER "ThirdParty/zlib")
+    endif()
+endforeach()
 
 # Provide an INTERFACE target with correct include paths so consumers can
 # simply link "atlas_zlib" without worrying about FetchContent internals.
@@ -62,6 +89,7 @@ if(NOT TARGET atlas_zlib)
         ${zlib_SOURCE_DIR}
         ${zlib_BINARY_DIR}
     )
+    set_target_properties(atlas_zlib PROPERTIES FOLDER "ThirdParty/zlib")
 endif()
 
 # ── .NET SDK (for CLR scripting) ─────────────────────────────────────────────
