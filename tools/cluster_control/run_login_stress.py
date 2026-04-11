@@ -1,0 +1,483 @@
+#!/usr/bin/env python3
+
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import signal
+import subprocess
+import sys
+import time
+from dataclasses import dataclass
+from datetime import datetime
+from pathlib import Path
+from typing import Iterable
+
+
+REPO_ROOT = Path(__file__).resolve().parents[2]
+
+
+def resolve_repo_root() -> Path:
+    return REPO_ROOT
+
+
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="Bring up a local Atlas cluster and run login_stress.")
+    parser.add_argument("--build-dir", default="build/debug-windows")
+    parser.add_argument("--config", default="Debug")
+    parser.add_argument("--machined-host", default="127.0.0.1")
+    parser.add_argument("--machined-port", type=int, default=20018)
+    parser.add_argument("--login-port", type=int, default=20013)
+    parser.add_argument("--baseapp-internal-port", type=int, default=21001)
+    parser.add_argument("--baseapp-external-port", type=int, default=22001)
+    parser.add_argument("--baseappmgr-port", type=int, default=23001)
+    parser.add_argument("--dbapp-port", type=int, default=24001)
+    parser.add_argument("--clients", type=int, default=100)
+    parser.add_argument("--account-pool", type=int, default=50)
+    parser.add_argument("--ramp-per-sec", type=int, default=100)
+    parser.add_argument("--duration-sec", type=int, default=60)
+    parser.add_argument("--shortline-pct", type=int, default=20)
+    parser.add_argument("--shortline-min-ms", type=int, default=1000)
+    parser.add_argument("--shortline-max-ms", type=int, default=5000)
+    parser.add_argument("--hold-min-ms", type=int, default=30000)
+    parser.add_argument("--hold-max-ms", type=int, default=60000)
+    parser.add_argument("--retry-delay-ms", type=int, default=1000)
+    parser.add_argument("--connect-timeout-ms", type=int, default=10000)
+    parser.add_argument("--account-type-id", type=int, default=1)
+    parser.add_argument(
+        "--password-hash",
+        default="aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    )
+    parser.add_argument("--keep-cluster", action="store_true")
+    parser.add_argument("--verbose-failures", action="store_true")
+    return parser.parse_args()
+
+
+def log(message: str, *, stream: object = sys.stdout) -> None:
+    print(message, file=stream, flush=True)
+
+
+def fail(message: str) -> "NoReturn":
+    raise RuntimeError(message)
+
+
+def assert_file_exists(path: Path, label: str) -> None:
+    if not path.exists():
+        fail(f"{label} not found: {path}")
+
+
+def resolve_bin_dir(build_root: Path, config: str) -> Path:
+    candidates = [
+        build_root / "bin" / config,
+        build_root / "bin",
+    ]
+    for candidate in candidates:
+        if candidate.exists():
+            return candidate
+    return candidates[0]
+
+
+def resolve_program(bin_dir: Path, stem: str) -> Path:
+    suffixes = [".exe", ""] if os.name == "nt" else ["", ".exe"]
+    for suffix in suffixes:
+        candidate = bin_dir / f"{stem}{suffix}"
+        if candidate.exists():
+            return candidate
+    # Return the platform-native expectation so the error message is stable.
+    return bin_dir / f"{stem}{'.exe' if os.name == 'nt' else ''}"
+
+
+@dataclass
+class LoggedProcess:
+    name: str
+    start_order: int
+    process: subprocess.Popen[str]
+    stdout_handle: object
+    stderr_handle: object
+
+
+def start_logged_process(
+    *,
+    name: str,
+    file_path: Path,
+    arguments: Iterable[str],
+    working_directory: Path,
+    log_directory: Path,
+) -> LoggedProcess:
+    stdout_path = log_directory / f"{name}.stdout.log"
+    stderr_path = log_directory / f"{name}.stderr.log"
+
+    log(f"Starting {name}")
+    stdout_handle = stdout_path.open("w", encoding="utf-8", newline="")
+    stderr_handle = stderr_path.open("w", encoding="utf-8", newline="")
+
+    creationflags = 0
+    popen_kwargs: dict[str, object] = {}
+    if os.name == "nt":
+        creationflags = subprocess.CREATE_NEW_PROCESS_GROUP  # type: ignore[attr-defined]
+    else:
+        popen_kwargs["start_new_session"] = True
+
+    process = subprocess.Popen(
+        [str(file_path), *list(arguments)],
+        cwd=working_directory,
+        stdout=stdout_handle,
+        stderr=stderr_handle,
+        text=True,
+        creationflags=creationflags,
+        **popen_kwargs,
+    )
+
+    return LoggedProcess(
+        name=name,
+        start_order=0,
+        process=process,
+        stdout_handle=stdout_handle,
+        stderr_handle=stderr_handle,
+    )
+
+
+def stop_logged_processes(processes: list[LoggedProcess]) -> None:
+    for entry in sorted(processes, key=lambda item: item.start_order, reverse=True):
+        proc = entry.process
+        if proc.poll() is None:
+            log(f"Stopping {entry.name} (pid={proc.pid})")
+            try:
+                if os.name == "nt":
+                    proc.terminate()
+                else:
+                    os.killpg(proc.pid, signal.SIGTERM)
+            except ProcessLookupError:
+                pass
+
+            try:
+                proc.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                try:
+                    if os.name == "nt":
+                        proc.kill()
+                    else:
+                        os.killpg(proc.pid, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
+                try:
+                    proc.wait(timeout=5)
+                except subprocess.TimeoutExpired:
+                    pass
+
+        entry.stdout_handle.close()
+        entry.stderr_handle.close()
+
+
+def wait_for_registration(
+    *,
+    atlas_tool: Path,
+    machined_address: str,
+    proc_type: str,
+    name: str,
+    timeout_sec: int = 15,
+) -> bool:
+    deadline = time.monotonic() + timeout_sec
+    while time.monotonic() < deadline:
+        result = subprocess.run(
+            [str(atlas_tool), "--machined", machined_address, "list", proc_type],
+            capture_output=True,
+            text=True,
+            cwd=resolve_repo_root(),
+        )
+        if result.returncode == 0 and name in result.stdout:
+            return True
+        time.sleep(0.5)
+    return False
+
+
+def build_runtime_config(
+    *,
+    machined_address: str,
+    account_type_id: int,
+    db_dir: Path,
+) -> dict[str, object]:
+    return {
+        "machined_address": machined_address,
+        "auto_create_accounts": True,
+        "account_type_id": account_type_id,
+        "database": {
+            "type": "xml",
+            "xml_dir": str(db_dir),
+        },
+    }
+
+
+def main() -> int:
+    args = parse_args()
+
+    repo_root = resolve_repo_root()
+    build_root = (repo_root / args.build_dir).resolve()
+    bin_dir = resolve_bin_dir(build_root, args.config)
+    runtime_config = repo_root / "runtime" / "atlas_server.runtimeconfig.json"
+    runtime_assembly = build_root / "csharp" / "src" / "csharp" / "Atlas.Runtime" / "Atlas.Runtime.dll"
+
+    atlas_tool = resolve_program(bin_dir, "atlas_tool")
+    login_stress = resolve_program(bin_dir, "login_stress")
+    machined = resolve_program(bin_dir, "machined")
+    loginapp = resolve_program(bin_dir, "atlas_loginapp")
+    baseapp = resolve_program(bin_dir, "atlas_baseapp")
+    baseappmgr = resolve_program(bin_dir, "atlas_baseappmgr")
+    dbapp = resolve_program(bin_dir, "atlas_dbapp")
+
+    assert_file_exists(machined, machined.name)
+    assert_file_exists(loginapp, loginapp.name)
+    assert_file_exists(baseapp, baseapp.name)
+    assert_file_exists(baseappmgr, baseappmgr.name)
+    assert_file_exists(dbapp, dbapp.name)
+    assert_file_exists(atlas_tool, atlas_tool.name)
+    assert_file_exists(login_stress, login_stress.name)
+    assert_file_exists(runtime_config, runtime_config.name)
+    assert_file_exists(runtime_assembly, runtime_assembly.name)
+
+    timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+    run_root = repo_root / ".tmp" / "login-stress" / timestamp
+    log_dir = run_root / "logs"
+    db_dir = run_root / "db"
+    db_config_path = run_root / "dbapp.json"
+
+    log_dir.mkdir(parents=True, exist_ok=True)
+    db_dir.mkdir(parents=True, exist_ok=True)
+
+    machined_address = f"{args.machined_host}:{args.machined_port}"
+    db_config_path.write_text(
+        json.dumps(
+            build_runtime_config(
+                machined_address=machined_address,
+                account_type_id=args.account_type_id,
+                db_dir=db_dir,
+            ),
+            indent=2,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    processes: list[LoggedProcess] = []
+
+    try:
+        processes.append(
+            start_logged_process(
+                name="machined",
+                file_path=machined,
+                working_directory=repo_root,
+                log_directory=log_dir,
+                arguments=[
+                    "--type",
+                    "machined",
+                    "--name",
+                    "machined",
+                    "--internal-port",
+                    str(args.machined_port),
+                    "--log-level",
+                    "info",
+                ],
+            )
+        )
+        processes[-1].start_order = 1
+        time.sleep(1)
+
+        processes.append(
+            start_logged_process(
+                name="loginapp",
+                file_path=loginapp,
+                working_directory=repo_root,
+                log_directory=log_dir,
+                arguments=[
+                    "--type",
+                    "loginapp",
+                    "--name",
+                    "loginapp",
+                    "--machined",
+                    machined_address,
+                    "--external-port",
+                    str(args.login_port),
+                    "--auto-create-accounts",
+                    "true",
+                    "--log-level",
+                    "info",
+                ],
+            )
+        )
+        processes[-1].start_order = 2
+        time.sleep(1)
+
+        processes.append(
+            start_logged_process(
+                name="baseapp",
+                file_path=baseapp,
+                working_directory=repo_root,
+                log_directory=log_dir,
+                arguments=[
+                    "--type",
+                    "baseapp",
+                    "--name",
+                    "baseapp",
+                    "--machined",
+                    machined_address,
+                    "--internal-port",
+                    str(args.baseapp_internal_port),
+                    "--external-port",
+                    str(args.baseapp_external_port),
+                    "--assembly",
+                    str(runtime_assembly),
+                    "--runtime-config",
+                    str(runtime_config),
+                    "--log-level",
+                    "info",
+                ],
+            )
+        )
+        processes[-1].start_order = 3
+        time.sleep(1)
+
+        processes.append(
+            start_logged_process(
+                name="dbapp",
+                file_path=dbapp,
+                working_directory=repo_root,
+                log_directory=log_dir,
+                arguments=[
+                    "--type",
+                    "dbapp",
+                    "--name",
+                    "dbapp",
+                    "--machined",
+                    machined_address,
+                    "--internal-port",
+                    str(args.dbapp_port),
+                    "--config",
+                    str(db_config_path),
+                    "--log-level",
+                    "info",
+                ],
+            )
+        )
+        processes[-1].start_order = 4
+        time.sleep(1)
+
+        processes.append(
+            start_logged_process(
+                name="baseappmgr",
+                file_path=baseappmgr,
+                working_directory=repo_root,
+                log_directory=log_dir,
+                arguments=[
+                    "--type",
+                    "baseappmgr",
+                    "--name",
+                    "baseappmgr",
+                    "--machined",
+                    machined_address,
+                    "--internal-port",
+                    str(args.baseappmgr_port),
+                    "--log-level",
+                    "info",
+                ],
+            )
+        )
+        processes[-1].start_order = 5
+
+        log("Waiting for processes to register with machined...")
+        registrations = [
+            wait_for_registration(
+                atlas_tool=atlas_tool,
+                machined_address=machined_address,
+                proc_type="dbapp",
+                name="dbapp",
+            ),
+            wait_for_registration(
+                atlas_tool=atlas_tool,
+                machined_address=machined_address,
+                proc_type="baseappmgr",
+                name="baseappmgr",
+            ),
+            wait_for_registration(
+                atlas_tool=atlas_tool,
+                machined_address=machined_address,
+                proc_type="baseapp",
+                name="baseapp",
+            ),
+            wait_for_registration(
+                atlas_tool=atlas_tool,
+                machined_address=machined_address,
+                proc_type="loginapp",
+                name="loginapp",
+            ),
+        ]
+
+        if not all(registrations):
+            log(
+                "Warning: cluster did not fully register with machined within the timeout. "
+                f"Continuing anyway; check logs under {log_dir} if login_stress fails.",
+                stream=sys.stderr,
+            )
+        else:
+            log("")
+            log("Registered processes:")
+            subprocess.run(
+                [str(atlas_tool), "--machined", machined_address, "list"],
+                cwd=repo_root,
+                check=False,
+            )
+            log("")
+
+        stress_args = [
+            "--login",
+            f"{args.machined_host}:{args.login_port}",
+            "--password-hash",
+            args.password_hash,
+            "--clients",
+            str(args.clients),
+            "--account-pool",
+            str(args.account_pool),
+            "--ramp-per-sec",
+            str(args.ramp_per_sec),
+            "--duration-sec",
+            str(args.duration_sec),
+            "--retry-delay-ms",
+            str(args.retry_delay_ms),
+            "--connect-timeout-ms",
+            str(args.connect_timeout_ms),
+            "--hold-min-ms",
+            str(args.hold_min_ms),
+            "--hold-max-ms",
+            str(args.hold_max_ms),
+            "--shortline-pct",
+            str(args.shortline_pct),
+            "--shortline-min-ms",
+            str(args.shortline_min_ms),
+            "--shortline-max-ms",
+            str(args.shortline_max_ms),
+        ]
+        if args.verbose_failures:
+            stress_args.append("--verbose-failures")
+
+        log("Running login_stress...")
+        stress_result = subprocess.run([str(login_stress), *stress_args], cwd=repo_root)
+        if stress_result.returncode != 0:
+            fail(f"login_stress exited with code {stress_result.returncode}")
+
+        log("")
+        log("Run artifacts:")
+        log(f"  logs: {log_dir}")
+        log(f"  db:   {db_dir}")
+
+        if args.keep_cluster:
+            log("Keeping cluster alive. Stop the spawned processes manually when done.")
+            processes = []
+
+        return 0
+    finally:
+        if processes:
+            stop_logged_processes(processes)
+
+
+if __name__ == "__main__":
+    sys.exit(main())

@@ -43,6 +43,9 @@ _deps/
 Thumbs.db
 desktop.ini
 
+# Local runtime artifacts
+.tmp/
+
 # Python
 __pycache__/
 *.pyc
