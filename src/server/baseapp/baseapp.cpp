@@ -75,6 +75,8 @@ auto BaseApp::init(int argc, char* argv[]) -> bool
         }
         ATLAS_LOG_INFO("BaseApp: external RUDP interface listening on port {}", cfg.external_port);
     }
+    external_network_.set_disconnect_callback([this](Channel& ch)
+                                              { on_external_client_disconnect(ch); });
 
     // ---- Subscribe to DBApp birth notification to connect ----------------
     machined_client().subscribe(
@@ -195,6 +197,15 @@ void BaseApp::register_watchers()
     auto& wr = watcher_registry();
     wr.add<std::size_t>("baseapp/entity_count",
                         std::function<std::size_t()>([this] { return entity_mgr_.size(); }));
+    wr.add<std::size_t>(
+        "baseapp/client_binding_count",
+        std::function<std::size_t()>([this] { return entity_client_index_.size(); }));
+    wr.add<uint64_t>("baseapp/auth_success_total",
+                     std::function<uint64_t()>([this] { return auth_success_total_; }));
+    wr.add<uint64_t>("baseapp/auth_fail_total",
+                     std::function<uint64_t()>([this] { return auth_fail_total_; }));
+    wr.add<uint64_t>("baseapp/force_logoff_total",
+                     std::function<uint64_t()>([this] { return force_logoff_total_; }));
     wr.add<bool>("baseapp/dbapp_connected",
                  std::function<bool()>([this] { return dbapp_channel_ != nullptr; }));
 }
@@ -251,9 +262,45 @@ void BaseApp::register_internal_handlers()
     (void)table.register_typed_handler<dbapp::WriteEntityAck>(
         [this](const Address& /*src*/, Channel* /*ch*/, const dbapp::WriteEntityAck& msg)
         {
+            auto force_logoff_it = pending_force_logoff_writes_.find(msg.request_id);
+            if (force_logoff_it != pending_force_logoff_writes_.end())
+            {
+                const PendingForceLogoffWrite pending_write = force_logoff_it->second;
+                pending_force_logoff_writes_.erase(force_logoff_it);
+
+                if (!msg.success)
+                {
+                    ATLAS_LOG_ERROR(
+                        "BaseApp: force-logoff persist failed request_id={} entity_id={} error={}",
+                        msg.request_id, pending_write.entity_id, msg.error);
+
+                    auto pending_it = pending_force_logoffs_.find(pending_write.force_request_id);
+                    if (pending_it != pending_force_logoffs_.end())
+                    {
+                        login::PrepareLoginResult reply;
+                        reply.request_id = pending_it->second.login_request_id;
+                        reply.success = false;
+                        reply.error = "force_logoff_persist_failed";
+                        send_prepare_login_result(pending_it->second.loginapp_addr, reply);
+                        pending_force_logoffs_.erase(pending_it);
+                    }
+                    return;
+                }
+
+                finalize_force_logoff(pending_write.entity_id);
+                continue_login_after_force_logoff(pending_write.force_request_id);
+                return;
+            }
+
             auto* ent = entity_mgr_.find(msg.request_id);
             if (ent)
+            {
+                if (msg.success && msg.dbid != kInvalidDBID)
+                {
+                    (void)entity_mgr_.assign_dbid(ent->entity_id(), msg.dbid);
+                }
                 ent->on_write_ack(msg.dbid, msg.success);
+            }
         });
 
     // ---- CheckoutEntityAck (DBApp → BaseApp) --------------------------------
@@ -268,7 +315,7 @@ void BaseApp::register_internal_handlers()
                 pending_logins_.erase(login_it);
 
                 login::PrepareLoginResult reply;
-                reply.request_id = msg.request_id;
+                reply.request_id = pending.login_request_id;
 
                 if (msg.status != dbapp::CheckoutStatus::Success)
                 {
@@ -276,18 +323,37 @@ void BaseApp::register_internal_handlers()
                                     msg.request_id, static_cast<int>(msg.status));
                     reply.success = false;
                     reply.error = "checkout_failed";
-                    if (pending.loginapp_ch)
-                        (void)pending.loginapp_ch->send_message(reply);
+                    send_prepare_login_result(pending.loginapp_addr, reply);
                     return;
                 }
 
                 // Create the Proxy entity
                 auto* ent = entity_mgr_.create(pending.type_id, true);
+                if (!ent)
+                {
+                    ATLAS_LOG_ERROR(
+                        "BaseApp: failed to allocate EntityID for login entity type={} dbid={}",
+                        pending.type_id, msg.dbid);
+
+                    if (dbapp_channel_)
+                    {
+                        dbapp::CheckinEntity checkin;
+                        checkin.type_id = pending.type_id;
+                        checkin.dbid = msg.dbid;
+                        (void)dbapp_channel_->send_message(checkin);
+                    }
+
+                    reply.success = false;
+                    reply.error = "entity_id_exhausted";
+                    send_prepare_login_result(pending.loginapp_addr, reply);
+                    return;
+                }
+
                 ent->set_entity_data(std::vector<std::byte>(msg.blob.begin(), msg.blob.end()));
-                ent->set_dbid(msg.dbid);
+                (void)entity_mgr_.assign_dbid(ent->entity_id(), msg.dbid);
                 auto* proxy = entity_mgr_.find_proxy(ent->entity_id());
                 if (proxy)
-                    proxy->set_session_key(pending.session_key);
+                    (void)entity_mgr_.assign_session_key(proxy->entity_id(), pending.session_key);
 
                 if (native_provider_ && native_provider_->restore_entity_fn())
                 {
@@ -299,8 +365,7 @@ void BaseApp::register_internal_handlers()
 
                 reply.success = true;
                 reply.entity_id = ent->entity_id();
-                if (pending.loginapp_ch)
-                    (void)pending.loginapp_ch->send_message(reply);
+                send_prepare_login_result(pending.loginapp_addr, reply);
 
                 ATLAS_LOG_INFO("BaseApp: login entity created id={} dbid={}", ent->entity_id(),
                                msg.dbid);
@@ -345,6 +410,13 @@ void BaseApp::on_create_base(Channel& /*ch*/, const baseapp::CreateBase& msg)
     }
     bool has_client = type->has_client;
     auto* ent = entity_mgr_.create(msg.type_id, has_client);
+    if (!ent)
+    {
+        ATLAS_LOG_ERROR("BaseApp: CreateBase: EntityID range exhausted for type_id {}",
+                        msg.type_id);
+        return;
+    }
+
     ATLAS_LOG_DEBUG("BaseApp: created entity id={} type={}", ent->entity_id(), msg.type_id);
 }
 
@@ -359,6 +431,13 @@ void BaseApp::on_create_base_from_db(Channel& /*ch*/, const baseapp::CreateBaseF
     auto* type = defs.find_by_id(msg.type_id);
     bool has_client = type ? type->has_client : false;
     auto* ent = entity_mgr_.create(msg.type_id, has_client, msg.dbid);
+    if (!ent)
+    {
+        ATLAS_LOG_ERROR(
+            "BaseApp: CreateBaseFromDB: EntityID range exhausted for type_id {} dbid {}",
+            msg.type_id, msg.dbid);
+        return;
+    }
 
     dbapp::CheckoutEntity req;
     req.mode = msg.identifier.empty() ? dbapp::LoadMode::ByDBID : dbapp::LoadMode::ByName;
@@ -377,7 +456,12 @@ void BaseApp::on_accept_client(Channel& /*ch*/, const baseapp::AcceptClient& msg
         ATLAS_LOG_WARNING("BaseApp: AcceptClient: entity {} not a Proxy", msg.dest_entity_id);
         return;
     }
-    proxy->set_session_key(msg.session_key);
+    if (!entity_mgr_.assign_session_key(proxy->entity_id(), msg.session_key))
+    {
+        ATLAS_LOG_ERROR("BaseApp: AcceptClient: failed to bind session key to entity {}",
+                        msg.dest_entity_id);
+        return;
+    }
     ATLAS_LOG_DEBUG("BaseApp: entity {} ready for client", msg.dest_entity_id);
 }
 
@@ -424,9 +508,12 @@ void BaseApp::on_self_rpc_from_cell(Channel& /*ch*/, const baseapp::SelfRpcFromC
     if (!proxy || !proxy->has_client())
         return;
 
-    (void)proxy->client_channel()->send_message(
-        static_cast<MessageID>(msg.rpc_id),
-        std::span<const std::byte>(msg.payload.data(), msg.payload.size()));
+    if (auto* client_ch = resolve_client_channel(proxy->entity_id()))
+    {
+        (void)client_ch->send_message(
+            static_cast<MessageID>(msg.rpc_id),
+            std::span<const std::byte>(msg.payload.data(), msg.payload.size()));
+    }
 }
 
 void BaseApp::on_broadcast_rpc_from_cell(Channel& /*ch*/, const baseapp::BroadcastRpcFromCell& msg)
@@ -435,9 +522,12 @@ void BaseApp::on_broadcast_rpc_from_cell(Channel& /*ch*/, const baseapp::Broadca
     if (!proxy || !proxy->has_client())
         return;
 
-    (void)proxy->client_channel()->send_message(
-        static_cast<MessageID>(msg.rpc_id),
-        std::span<const std::byte>(msg.payload.data(), msg.payload.size()));
+    if (auto* client_ch = resolve_client_channel(proxy->entity_id()))
+    {
+        (void)client_ch->send_message(
+            static_cast<MessageID>(msg.rpc_id),
+            std::span<const std::byte>(msg.payload.data(), msg.payload.size()));
+    }
 }
 
 void BaseApp::on_replicated_delta_from_cell(Channel& /*ch*/,
@@ -448,9 +538,12 @@ void BaseApp::on_replicated_delta_from_cell(Channel& /*ch*/,
         return;
 
     // Forward replicated delta to client (reserved update message ID)
-    (void)proxy->client_channel()->send_message(
-        static_cast<MessageID>(0xF001),
-        std::span<const std::byte>(msg.delta.data(), msg.delta.size()));
+    if (auto* client_ch = resolve_client_channel(proxy->entity_id()))
+    {
+        (void)client_ch->send_message(
+            static_cast<MessageID>(0xF001),
+            std::span<const std::byte>(msg.delta.data(), msg.delta.size()));
+    }
 }
 
 // ============================================================================
@@ -479,6 +572,165 @@ void BaseApp::do_write_to_db(EntityID entity_id, const std::byte* data, int32_t 
     (void)dbapp_channel_->send_message(msg);
 }
 
+auto BaseApp::capture_entity_snapshot(EntityID entity_id, std::vector<std::byte>& out) -> bool
+{
+    auto* ent = entity_mgr_.find(entity_id);
+    if (!ent)
+    {
+        return false;
+    }
+
+    if (native_provider_)
+    {
+        if (auto fn = native_provider_->get_entity_data_fn())
+        {
+            uint8_t* raw = nullptr;
+            int32_t len = 0;
+            fn(entity_id, &raw, &len);
+
+            if (len < 0)
+            {
+                ATLAS_LOG_ERROR("BaseApp: get_entity_data returned negative length for entity={}",
+                                entity_id);
+                return false;
+            }
+            if (len > 0 && raw == nullptr)
+            {
+                ATLAS_LOG_ERROR(
+                    "BaseApp: get_entity_data returned null payload for entity={} len={}",
+                    entity_id, len);
+                return false;
+            }
+            if (len == 0)
+            {
+                out.clear();
+                ent->set_entity_data({});
+                return true;
+            }
+
+            out.assign(reinterpret_cast<const std::byte*>(raw),
+                       reinterpret_cast<const std::byte*>(raw) + len);
+            ent->set_entity_data(out);
+            return true;
+        }
+    }
+
+    out = ent->entity_data();
+    ATLAS_LOG_WARNING("BaseApp: no managed snapshot callback for entity={}, using cached blob",
+                      entity_id);
+    return true;
+}
+
+void BaseApp::begin_force_logoff_persist(uint32_t force_request_id, EntityID entity_id)
+{
+    if (!dbapp_channel_)
+    {
+        ATLAS_LOG_ERROR("BaseApp: force-logoff persist: no DBApp connection");
+        auto pending_it = pending_force_logoffs_.find(force_request_id);
+        if (pending_it != pending_force_logoffs_.end())
+        {
+            login::PrepareLoginResult reply;
+            reply.request_id = pending_it->second.login_request_id;
+            reply.success = false;
+            reply.error = "no_dbapp";
+            send_prepare_login_result(pending_it->second.loginapp_addr, reply);
+            pending_force_logoffs_.erase(pending_it);
+        }
+        return;
+    }
+
+    auto* ent = entity_mgr_.find(entity_id);
+    if (!ent || ent->dbid() == kInvalidDBID)
+    {
+        finalize_force_logoff(entity_id);
+        continue_login_after_force_logoff(force_request_id);
+        return;
+    }
+
+    std::vector<std::byte> blob;
+    if (!capture_entity_snapshot(entity_id, blob))
+    {
+        auto pending_it = pending_force_logoffs_.find(force_request_id);
+        if (pending_it != pending_force_logoffs_.end())
+        {
+            login::PrepareLoginResult reply;
+            reply.request_id = pending_it->second.login_request_id;
+            reply.success = false;
+            reply.error = "force_logoff_snapshot_failed";
+            send_prepare_login_result(pending_it->second.loginapp_addr, reply);
+            pending_force_logoffs_.erase(pending_it);
+        }
+        return;
+    }
+
+    const uint32_t write_request_id = next_prepare_request_id_++;
+    PendingForceLogoffWrite pending_write;
+    pending_write.force_request_id = force_request_id;
+    pending_write.entity_id = entity_id;
+    pending_force_logoff_writes_[write_request_id] = pending_write;
+
+    dbapp::WriteEntity msg;
+    msg.flags = WriteFlags::ExplicitDBID | WriteFlags::LogOff;
+    msg.type_id = ent->type_id();
+    msg.dbid = ent->dbid();
+    msg.entity_id = entity_id;
+    msg.request_id = write_request_id;
+    msg.blob = std::move(blob);
+    (void)dbapp_channel_->send_message(msg);
+}
+
+void BaseApp::continue_login_after_force_logoff(uint32_t force_request_id)
+{
+    auto it = pending_force_logoffs_.find(force_request_id);
+    if (it == pending_force_logoffs_.end())
+    {
+        return;
+    }
+
+    PendingLogin pending = it->second;
+    pending_force_logoffs_.erase(it);
+
+    if (!dbapp_channel_)
+    {
+        login::PrepareLoginResult reply;
+        reply.request_id = pending.login_request_id;
+        reply.success = false;
+        reply.error = "no_dbapp";
+        send_prepare_login_result(pending.loginapp_addr, reply);
+        return;
+    }
+
+    uint32_t new_rid = next_prepare_request_id_++;
+    pending_logins_[new_rid] = pending;
+
+    dbapp::CheckoutEntity co;
+    co.request_id = new_rid;
+    co.dbid = pending.dbid;
+    co.type_id = pending.type_id;
+    (void)dbapp_channel_->send_message(co);
+}
+
+void BaseApp::finalize_force_logoff(EntityID entity_id)
+{
+    auto* ent = entity_mgr_.find(entity_id);
+    if (!ent)
+    {
+        return;
+    }
+
+    unbind_client(entity_id);
+    (void)entity_mgr_.clear_session_key(entity_id);
+    (void)entity_mgr_.assign_dbid(entity_id, kInvalidDBID);
+    if (native_provider_)
+    {
+        if (auto fn = native_provider_->entity_destroyed_fn())
+        {
+            fn(entity_id);
+        }
+    }
+    ent->mark_for_destroy();
+}
+
 void BaseApp::do_give_client_to_local(EntityID src_id, EntityID dest_id)
 {
     auto* src_proxy = entity_mgr_.find_proxy(src_id);
@@ -493,9 +745,21 @@ void BaseApp::do_give_client_to_local(EntityID src_id, EntityID dest_id)
         ATLAS_LOG_WARNING("BaseApp: give_client_to: src={} has no client", src_id);
         return;
     }
-    dst_proxy->set_session_key(src_proxy->session_key());
-    dst_proxy->set_client_channel(src_proxy->client_channel());
-    src_proxy->set_client_channel(nullptr);
+    const auto session_key = src_proxy->session_key();
+    (void)entity_mgr_.clear_session_key(src_id);
+    if (!entity_mgr_.assign_session_key(dest_id, session_key))
+    {
+        ATLAS_LOG_ERROR("BaseApp: give_client_to: failed to move session key to dest={}", dest_id);
+        return;
+    }
+
+    const auto client_addr = src_proxy->client_addr();
+    unbind_client(src_id);
+    if (!bind_client(dest_id, client_addr))
+    {
+        ATLAS_LOG_ERROR("BaseApp: give_client_to: failed to move client binding to dest={}",
+                        dest_id);
+    }
 }
 
 void BaseApp::do_give_client_to_remote(EntityID src_id, EntityID /*dest_id*/,
@@ -521,7 +785,7 @@ void BaseApp::do_give_client_to_remote(EntityID src_id, EntityID /*dest_id*/,
     accept.session_key = src_proxy->session_key();
     (void)(*dest_ch_result)->send_message(accept);
 
-    src_proxy->set_client_channel(nullptr);
+    unbind_client(src_id);
 }
 
 // ============================================================================
@@ -560,6 +824,121 @@ void BaseApp::on_request_entity_id_range_ack(Channel& /*ch*/,
                    msg.entity_id_end);
 }
 
+auto BaseApp::resolve_internal_channel(const Address& addr) -> Channel*
+{
+    if (auto* existing = network().find_channel(addr))
+    {
+        return existing;
+    }
+
+    auto result = network().connect_rudp(addr);
+    if (!result)
+    {
+        ATLAS_LOG_WARNING("BaseApp: failed to resolve internal channel {}:{}", addr.ip(),
+                          addr.port());
+        return nullptr;
+    }
+
+    return static_cast<Channel*>(*result);
+}
+
+auto BaseApp::resolve_client_channel(EntityID entity_id) -> Channel*
+{
+    auto it = entity_client_index_.find(entity_id);
+    if (it == entity_client_index_.end())
+    {
+        return nullptr;
+    }
+
+    auto* proxy = entity_mgr_.find_proxy(entity_id);
+    if (!proxy || !proxy->has_client())
+    {
+        auto reverse = client_entity_index_.find(it->second);
+        if (reverse != client_entity_index_.end() && reverse->second == entity_id)
+        {
+            client_entity_index_.erase(reverse);
+        }
+        entity_client_index_.erase(it);
+        return nullptr;
+    }
+
+    auto* ch = external_network_.find_channel(it->second);
+    if (!ch)
+    {
+        unbind_client(entity_id);
+        return nullptr;
+    }
+
+    return ch;
+}
+
+auto BaseApp::bind_client(EntityID entity_id, const Address& client_addr) -> bool
+{
+    auto* proxy = entity_mgr_.find_proxy(entity_id);
+    if (!proxy)
+    {
+        return false;
+    }
+
+    auto existing_client = client_entity_index_.find(client_addr);
+    if (existing_client != client_entity_index_.end() && existing_client->second != entity_id)
+    {
+        unbind_client(existing_client->second);
+    }
+
+    auto existing_entity = entity_client_index_.find(entity_id);
+    if (existing_entity != entity_client_index_.end() && existing_entity->second != client_addr)
+    {
+        client_entity_index_.erase(existing_entity->second);
+    }
+
+    entity_client_index_[entity_id] = client_addr;
+    client_entity_index_[client_addr] = entity_id;
+    proxy->bind_client(client_addr);
+    return true;
+}
+
+void BaseApp::unbind_client(EntityID entity_id)
+{
+    auto it = entity_client_index_.find(entity_id);
+    if (it != entity_client_index_.end())
+    {
+        auto reverse = client_entity_index_.find(it->second);
+        if (reverse != client_entity_index_.end() && reverse->second == entity_id)
+        {
+            client_entity_index_.erase(reverse);
+        }
+        entity_client_index_.erase(it);
+    }
+
+    if (auto* proxy = entity_mgr_.find_proxy(entity_id))
+    {
+        proxy->unbind_client();
+    }
+}
+
+void BaseApp::on_external_client_disconnect(Channel& ch)
+{
+    auto it = client_entity_index_.find(ch.remote_address());
+    if (it == client_entity_index_.end())
+    {
+        return;
+    }
+
+    const auto entity_id = it->second;
+    unbind_client(entity_id);
+    ATLAS_LOG_INFO("BaseApp: client disconnected from entity={}", entity_id);
+}
+
+void BaseApp::send_prepare_login_result(const Address& reply_addr,
+                                        const login::PrepareLoginResult& msg)
+{
+    if (auto* ch = this->resolve_internal_channel(reply_addr))
+    {
+        (void)ch->send_message(msg);
+    }
+}
+
 void BaseApp::maybe_request_more_ids()
 {
     if (!id_range_requested_ && baseappmgr_channel_ && entity_mgr_.is_range_low())
@@ -574,21 +953,19 @@ void BaseApp::maybe_request_more_ids()
 
 void BaseApp::on_prepare_login(Channel& ch, const login::PrepareLogin& msg)
 {
+    ATLAS_LOG_INFO("BaseApp: prepare login request_id={} dbid={} type_id={} from {}:{}",
+                   msg.request_id, msg.dbid, msg.type_id, ch.remote_address().ip(),
+                   ch.remote_address().port());
     // Check if entity with same dbid is already online → force logoff first
-    bool already_online = false;
-    entity_mgr_.for_each(
-        [&](const BaseEntity& ent)
-        {
-            if (ent.dbid() == msg.dbid)
-                already_online = true;
-        });
+    const bool already_online = entity_mgr_.find_by_dbid(msg.dbid) != nullptr;
 
     if (already_online)
     {
         // Send ForceLogoff to ourselves (within the same BaseApp)
         uint32_t rid = next_prepare_request_id_++;
         PendingLogin pending;
-        pending.loginapp_ch = &ch;
+        pending.login_request_id = msg.request_id;
+        pending.loginapp_addr = ch.remote_address();
         pending.type_id = msg.type_id;
         pending.dbid = msg.dbid;
         pending.session_key = msg.session_key;
@@ -605,7 +982,8 @@ void BaseApp::on_prepare_login(Channel& ch, const login::PrepareLogin& msg)
     // Create entity from DB
     uint32_t rid = next_prepare_request_id_++;
     PendingLogin pending;
-    pending.loginapp_ch = &ch;
+    pending.login_request_id = msg.request_id;
+    pending.loginapp_addr = ch.remote_address();
     pending.type_id = msg.type_id;
     pending.dbid = msg.dbid;
     pending.session_key = msg.session_key;
@@ -628,53 +1006,45 @@ void BaseApp::on_prepare_login(Channel& ch, const login::PrepareLogin& msg)
         reply.request_id = msg.request_id;
         reply.success = false;
         reply.error = "no_dbapp";
-        (void)ch.send_message(reply);
+        send_prepare_login_result(ch.remote_address(), reply);
     }
     (void)msg.client_addr;
 }
 
-void BaseApp::on_force_logoff(Channel& /*ch*/, const baseapp::ForceLogoff& msg)
+void BaseApp::on_force_logoff(Channel& ch, const baseapp::ForceLogoff& msg)
 {
     // Find the proxy with this dbid and evict it
     EntityID found_id = kInvalidEntityID;
-    entity_mgr_.for_each(
-        [&](const BaseEntity& ent)
-        {
-            if (ent.dbid() == msg.dbid)
-                found_id = ent.entity_id();
-        });
+    if (auto* ent = entity_mgr_.find_by_dbid(msg.dbid))
+    {
+        found_id = ent->entity_id();
+    }
 
     if (found_id != kInvalidEntityID)
     {
-        auto* ent = entity_mgr_.find(found_id);
-        if (ent)
-            ent->mark_for_destroy();
-        ATLAS_LOG_INFO("BaseApp: ForceLogoff: evicted entity={} dbid={}", found_id, msg.dbid);
+        ++force_logoff_total_;
+        ATLAS_LOG_INFO("BaseApp: ForceLogoff: processing entity={} dbid={}", found_id, msg.dbid);
+        auto pending_it = pending_force_logoffs_.find(msg.request_id);
+        if (pending_it != pending_force_logoffs_.end())
+        {
+            begin_force_logoff_persist(msg.request_id, found_id);
+            return;
+        }
+
+        finalize_force_logoff(found_id);
     }
 
-    // Send ack back to caller
+    auto pending_it = pending_force_logoffs_.find(msg.request_id);
+    if (pending_it != pending_force_logoffs_.end())
+    {
+        continue_login_after_force_logoff(msg.request_id);
+        return;
+    }
+
     baseapp::ForceLogoffAck ack;
     ack.request_id = msg.request_id;
     ack.success = true;
-
-    auto it = pending_force_logoffs_.find(msg.request_id);
-    if (it != pending_force_logoffs_.end())
-    {
-        // Self-initiated logoff — continue checkout
-        PendingLogin& pending = it->second;
-        if (dbapp_channel_)
-        {
-            uint32_t new_rid = next_prepare_request_id_++;
-            pending_logins_[new_rid] = pending;
-
-            dbapp::CheckoutEntity co;
-            co.request_id = new_rid;
-            co.dbid = pending.dbid;
-            co.type_id = pending.type_id;
-            (void)dbapp_channel_->send_message(co);
-        }
-        pending_force_logoffs_.erase(it);
-    }
+    (void)ch.send_message(ack);
 }
 
 void BaseApp::on_force_logoff_ack(Channel& /*ch*/, const baseapp::ForceLogoffAck& msg)
@@ -687,29 +1057,16 @@ void BaseApp::on_force_logoff_ack(Channel& /*ch*/, const baseapp::ForceLogoffAck
     {
         PendingLogin& pending = it->second;
         login::PrepareLoginResult reply;
-        reply.request_id = msg.request_id;
+        reply.request_id = pending.login_request_id;
         reply.success = false;
         reply.error = "force_logoff_failed";
-        if (pending.loginapp_ch)
-            (void)pending.loginapp_ch->send_message(reply);
+        send_prepare_login_result(pending.loginapp_addr, reply);
         pending_force_logoffs_.erase(it);
         return;
     }
 
     // Logoff succeeded — now checkout entity from DBApp
-    PendingLogin& pending = it->second;
-    uint32_t new_rid = next_prepare_request_id_++;
-    pending_logins_[new_rid] = pending;
-
-    if (dbapp_channel_)
-    {
-        dbapp::CheckoutEntity co;
-        co.request_id = new_rid;
-        co.dbid = pending.dbid;
-        co.type_id = pending.type_id;
-        (void)dbapp_channel_->send_message(co);
-    }
-    pending_force_logoffs_.erase(it);
+    continue_login_after_force_logoff(msg.request_id);
 }
 
 // ============================================================================
@@ -718,18 +1075,10 @@ void BaseApp::on_force_logoff_ack(Channel& /*ch*/, const baseapp::ForceLogoffAck
 
 void BaseApp::on_client_authenticate(Channel& ch, const baseapp::Authenticate& msg)
 {
-    // Look for a Proxy with the matching session key
-    EntityID found_id = kInvalidEntityID;
-    entity_mgr_.for_each(
-        [&](const BaseEntity& ent)
-        {
-            auto* proxy = dynamic_cast<const Proxy*>(&ent);
-            if (proxy && proxy->session_key() == msg.session_key)
-                found_id = ent.entity_id();
-        });
-
-    if (found_id == kInvalidEntityID)
+    auto* proxy = entity_mgr_.find_proxy_by_session(msg.session_key);
+    if (!proxy)
     {
+        ++auth_fail_total_;
         ATLAS_LOG_WARNING("BaseApp: Authenticate: no matching session key");
         baseapp::AuthenticateResult res;
         res.success = false;
@@ -738,25 +1087,24 @@ void BaseApp::on_client_authenticate(Channel& ch, const baseapp::Authenticate& m
         return;
     }
 
-    auto* proxy = entity_mgr_.find_proxy(found_id);
-    if (!proxy)
+    if (!bind_client(proxy->entity_id(), ch.remote_address()))
     {
+        ++auth_fail_total_;
         baseapp::AuthenticateResult res;
         res.success = false;
-        res.error = "not_a_proxy";
+        res.error = "bind_client_failed";
         (void)ch.send_message(res);
         return;
     }
 
-    proxy->set_client_channel(&ch);
-
     baseapp::AuthenticateResult res;
     res.success = true;
-    res.entity_id = found_id;
+    res.entity_id = proxy->entity_id();
     res.type_id = proxy->type_id();
     (void)ch.send_message(res);
+    ++auth_success_total_;
 
-    ATLAS_LOG_INFO("BaseApp: client authenticated as entity={}", found_id);
+    ATLAS_LOG_INFO("BaseApp: client authenticated as entity={}", proxy->entity_id());
 }
 
 }  // namespace atlas

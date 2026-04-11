@@ -138,6 +138,16 @@ void LoginApp::register_watchers()
 {
     ManagerApp::register_watchers();
     auto& wr = watcher_registry();
+    wr.add<uint64_t>("loginapp/login_requests_total",
+                     std::function<uint64_t()>([this] { return login_requests_total_; }));
+    wr.add<uint64_t>("loginapp/login_success_total",
+                     std::function<uint64_t()>([this] { return login_success_total_; }));
+    wr.add<uint64_t>("loginapp/login_fail_total",
+                     std::function<uint64_t()>([this] { return login_fail_total_; }));
+    wr.add<uint64_t>("loginapp/login_timeout_total",
+                     std::function<uint64_t()>([this] { return login_timeout_total_; }));
+    wr.add<uint64_t>("loginapp/login_rate_limited_total",
+                     std::function<uint64_t()>([this] { return login_rate_limited_total_; }));
     wr.add<int>("loginapp/pending_logins",
                 std::function<int()>([this] { return static_cast<int>(pending_.size()); }));
     wr.add<bool>("loginapp/dbapp_connected",
@@ -152,10 +162,16 @@ void LoginApp::register_watchers()
 
 void LoginApp::on_login_request(const Address& src, Channel* ch, const login::LoginRequest& msg)
 {
+    (void)ch;
+    ++login_requests_total_;
+    ATLAS_LOG_INFO("LoginApp: login request user='{}' from {}:{}", msg.username, src.ip(),
+                   src.port());
+
     if (is_rate_limited(src))
     {
+        ++login_rate_limited_total_;
         ATLAS_LOG_WARNING("LoginApp: rate-limited login from {}:{}", src.ip(), src.port());
-        send_login_error(ch, login::LoginStatus::RateLimited, "too many attempts");
+        send_login_error(src, login::LoginStatus::RateLimited, "too many attempts");
         return;
     }
     record_login_attempt(src);
@@ -163,14 +179,14 @@ void LoginApp::on_login_request(const Address& src, Channel* ch, const login::Lo
     if (!dbapp_channel_)
     {
         ATLAS_LOG_ERROR("LoginApp: no DBApp connection for login request");
-        send_login_error(ch, login::LoginStatus::ServerNotReady, "no_dbapp");
+        send_login_error(src, login::LoginStatus::ServerNotReady, "no_dbapp");
         return;
     }
 
     uint32_t rid = next_request_id_++;
     PendingLogin pending;
     pending.request_id = rid;
-    pending.client_ch = ch;
+    pending.client_addr = src;
     pending.username = msg.username;
     pending.stage = PendingStage::WaitingAuth;
     pending.created_at = Clock::now();
@@ -200,12 +216,14 @@ void LoginApp::on_auth_login_result(const Address& /*src*/, Channel* /*ch*/,
         return;
     }
     PendingLogin& pending = it->second;
+    ATLAS_LOG_INFO("LoginApp: auth result request_id={} success={} status={}", msg.request_id,
+                   msg.success, static_cast<int>(msg.status));
 
     if (!msg.success)
     {
         ATLAS_LOG_INFO("LoginApp: auth failed for '{}' status={}", pending.username,
                        static_cast<int>(msg.status));
-        send_login_error(pending.client_ch, msg.status, "auth_failed");
+        send_login_error(pending.client_addr, msg.status, "auth_failed");
         pending_.erase(it);
         return;
     }
@@ -213,7 +231,7 @@ void LoginApp::on_auth_login_result(const Address& /*src*/, Channel* /*ch*/,
     if (!baseappmgr_channel_)
     {
         ATLAS_LOG_ERROR("LoginApp: no BaseAppMgr connection");
-        send_login_error(pending.client_ch, login::LoginStatus::ServerNotReady, "no_baseappmgr");
+        send_login_error(pending.client_addr, login::LoginStatus::ServerNotReady, "no_baseappmgr");
         pending_.erase(it);
         return;
     }
@@ -244,11 +262,13 @@ void LoginApp::on_allocate_baseapp_result(const Address& /*src*/, Channel* /*ch*
         return;
     }
     PendingLogin& pending = it->second;
+    ATLAS_LOG_INFO("LoginApp: allocate baseapp result request_id={} success={} internal={}:{}",
+                   msg.request_id, msg.success, msg.internal_addr.ip(), msg.internal_addr.port());
 
     if (!msg.success)
     {
         ATLAS_LOG_WARNING("LoginApp: no BaseApp available for '{}'", pending.username);
-        send_login_error(pending.client_ch, login::LoginStatus::ServerFull, "no_baseapp");
+        send_login_error(pending.client_addr, login::LoginStatus::ServerFull, "no_baseapp");
         pending_.erase(it);
         return;
     }
@@ -264,7 +284,7 @@ void LoginApp::on_allocate_baseapp_result(const Address& /*src*/, Channel* /*ch*
     {
         ATLAS_LOG_ERROR("LoginApp: could not connect to BaseApp {}:{}", msg.internal_addr.ip(),
                         msg.internal_addr.port());
-        send_login_error(pending.client_ch, login::LoginStatus::InternalError, "connect_failed");
+        send_login_error(pending.client_addr, login::LoginStatus::InternalError, "connect_failed");
         pending_.erase(it);
         return;
     }
@@ -275,8 +295,7 @@ void LoginApp::on_allocate_baseapp_result(const Address& /*src*/, Channel* /*ch*
     prep.type_id = pending.type_id;
     prep.dbid = pending.dbid;
     prep.session_key = pending.session_key;
-    prep.client_addr =
-        (pending.client_ch != nullptr) ? pending.client_ch->remote_address() : Address{};
+    prep.client_addr = pending.client_addr;
     (void)baseapp_ch->send_message(prep);
 }
 
@@ -294,22 +313,26 @@ void LoginApp::on_prepare_login_result(const Address& /*src*/, Channel* /*ch*/,
         return;
     }
     PendingLogin& pending = it->second;
+    ATLAS_LOG_INFO(
+        "LoginApp: prepare login result request_id={} success={} entity_id={} error='{}'",
+        msg.request_id, msg.success, msg.entity_id, msg.error);
 
     if (!msg.success)
     {
         ATLAS_LOG_ERROR("LoginApp: PrepareLogin failed for '{}': {}", pending.username, msg.error);
-        send_login_error(pending.client_ch, login::LoginStatus::InternalError, msg.error);
+        send_login_error(pending.client_addr, login::LoginStatus::InternalError, msg.error);
         pending_.erase(it);
         return;
     }
 
     // Send LoginResult to client with BaseApp external address + session key
+    ++login_success_total_;
     login::LoginResult result;
     result.status = login::LoginStatus::Success;
     result.session_key = pending.session_key;
     result.baseapp_addr = pending.baseapp_external_addr;
-    if (pending.client_ch)
-        (void)pending.client_ch->send_message(result);
+    if (auto* client_ch = network().find_channel(pending.client_addr))
+        (void)client_ch->send_message(result);
 
     ATLAS_LOG_INFO("LoginApp: login complete for '{}' entity={} baseapp={}:{}", pending.username,
                    msg.entity_id, pending.baseapp_external_addr.ip(),
@@ -321,8 +344,11 @@ void LoginApp::on_prepare_login_result(const Address& /*src*/, Channel* /*ch*/,
 // Helpers
 // ============================================================================
 
-void LoginApp::send_login_error(Channel* ch, login::LoginStatus status, const std::string& msg)
+void LoginApp::send_login_error(const Address& client_addr, login::LoginStatus status,
+                                const std::string& msg)
 {
+    ++login_fail_total_;
+    auto* ch = network().find_channel(client_addr);
     if (!ch)
         return;
     login::LoginResult result;
@@ -371,9 +397,10 @@ void LoginApp::cleanup_expired_logins()
     {
         if (now - it->second.created_at > kPendingTimeout)
         {
+            ++login_timeout_total_;
             ATLAS_LOG_WARNING("LoginApp: pending login request_id={} timed out",
                               it->second.request_id);
-            send_login_error(it->second.client_ch, login::LoginStatus::InternalError, "timeout");
+            send_login_error(it->second.client_addr, login::LoginStatus::InternalError, "timeout");
             it = pending_.erase(it);
         }
         else

@@ -277,6 +277,17 @@ void MachinedClient::on_register_ack(const Address& src, Channel* /*ch*/,
     {
         registered_ = true;
 
+        for (const auto& sub : subscriptions_)
+        {
+            machined::ListenerRegister listener_msg;
+            listener_msg.listener_type = sub.listener_type;
+            listener_msg.target_type = sub.target_type;
+            if (channel_ != nullptr)
+            {
+                (void)channel_->send_message(listener_msg);
+            }
+        }
+
         if (msg.heartbeat_udp_port != 0)
         {
             machined_heartbeat_udp_addr_ = Address(src.ip(), msg.heartbeat_udp_port);

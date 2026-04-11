@@ -6,10 +6,25 @@
 #include "network/machined_types.hpp"
 #include "server/watcher.hpp"
 
+#include <algorithm>
 #include <format>
 
 namespace atlas
 {
+
+namespace
+{
+
+auto resolve_advertised_addr(const Address& advertised, const Address& src) -> Address
+{
+    if (advertised.ip() != 0)
+    {
+        return advertised;
+    }
+    return Address(src.ip(), advertised.port());
+}
+
+}  // namespace
 
 // ============================================================================
 // run — static entry point
@@ -99,18 +114,20 @@ void BaseAppMgr::register_watchers()
 // Message handlers
 // ============================================================================
 
-void BaseAppMgr::on_register_baseapp(const Address& /*src*/, Channel* ch,
+void BaseAppMgr::on_register_baseapp(const Address& src, Channel* ch,
                                      const baseappmgr::RegisterBaseApp& msg)
 {
     auto [range_start, range_end] = allocate_entity_id_range();
+    const Address internal_addr = resolve_advertised_addr(msg.internal_addr, src);
+    const Address external_addr = resolve_advertised_addr(msg.external_addr, src);
 
     uint32_t app_id = next_app_id_++;
     BaseAppInfo info;
-    info.internal_addr = msg.internal_addr;
-    info.external_addr = msg.external_addr;
+    info.internal_addr = internal_addr;
+    info.external_addr = external_addr;
     info.app_id = app_id;
     info.channel = ch;
-    baseapps_.emplace(msg.internal_addr, std::move(info));
+    baseapps_.emplace(internal_addr, std::move(info));
 
     baseappmgr::RegisterBaseAppAck ack;
     ack.success = true;
@@ -123,8 +140,8 @@ void BaseAppMgr::on_register_baseapp(const Address& /*src*/, Channel* ch,
     ATLAS_LOG_INFO(
         "BaseAppMgr: BaseApp registered app_id={} internal={}:{} external={}:{} "
         "id_range=[{},{}]",
-        app_id, msg.internal_addr.ip(), msg.internal_addr.port(), msg.external_addr.ip(),
-        msg.external_addr.port(), range_start, range_end);
+        app_id, internal_addr.ip(), internal_addr.port(), external_addr.ip(), external_addr.port(),
+        range_start, range_end);
 }
 
 void BaseAppMgr::on_baseapp_ready(const Address& src, Channel* /*ch*/,
@@ -133,7 +150,14 @@ void BaseAppMgr::on_baseapp_ready(const Address& src, Channel* /*ch*/,
     auto it = baseapps_.find(src);
     if (it == baseapps_.end())
     {
-        ATLAS_LOG_WARNING("BaseAppMgr: BaseAppReady from unknown addr {}:{}", src.ip(), src.port());
+        it = std::find_if(baseapps_.begin(), baseapps_.end(),
+                          [&msg](const auto& entry) { return entry.second.app_id == msg.app_id; });
+    }
+
+    if (it == baseapps_.end())
+    {
+        ATLAS_LOG_WARNING("BaseAppMgr: BaseAppReady from unknown addr {}:{} app_id={}", src.ip(),
+                          src.port(), msg.app_id);
         return;
     }
     it->second.is_ready = true;
@@ -145,7 +169,12 @@ void BaseAppMgr::on_inform_load(const Address& src, Channel* /*ch*/,
 {
     auto it = baseapps_.find(src);
     if (it == baseapps_.end())
-        return;
+    {
+        it = std::find_if(baseapps_.begin(), baseapps_.end(),
+                          [&msg](const auto& entry) { return entry.second.app_id == msg.app_id; });
+        if (it == baseapps_.end())
+            return;
+    }
     it->second.load = msg.load;
     it->second.entity_count = msg.entity_count;
     it->second.proxy_count = msg.proxy_count;
@@ -154,6 +183,8 @@ void BaseAppMgr::on_inform_load(const Address& src, Channel* /*ch*/,
 void BaseAppMgr::on_allocate_baseapp(const Address& src, Channel* ch,
                                      const login::AllocateBaseApp& msg)
 {
+    ATLAS_LOG_INFO("BaseAppMgr: allocate request_id={} type_id={} dbid={} from {}:{}",
+                   msg.request_id, msg.type_id, msg.dbid, src.ip(), src.port());
     login::AllocateBaseAppResult result;
     result.request_id = msg.request_id;
 

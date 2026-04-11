@@ -4,6 +4,7 @@
 #include "loginapp/login_messages.hpp"
 #include "network/channel.hpp"
 #include "network/machined_types.hpp"
+#include "network/reliable_udp.hpp"
 
 #include <format>
 
@@ -187,25 +188,43 @@ auto DBApp::build_db_config() const -> DatabaseConfig
     return db_cfg;
 }
 
+auto DBApp::resolve_reply_channel(const Address& addr) -> Channel*
+{
+    if (auto* existing = network().find_channel(addr))
+    {
+        return existing;
+    }
+
+    auto result = network().connect_rudp(addr);
+    if (!result)
+    {
+        ATLAS_LOG_WARNING("DBApp: failed to resolve reply channel {}:{}", addr.ip(), addr.port());
+        return nullptr;
+    }
+
+    return static_cast<Channel*>(*result);
+}
+
 // ============================================================================
 // on_write_entity
 // ============================================================================
 
-void DBApp::on_write_entity(const Address& /*src*/, Channel* ch, const dbapp::WriteEntity& msg)
+void DBApp::on_write_entity(const Address& src, Channel* ch, const dbapp::WriteEntity& msg)
 {
     if (ch == nullptr)
         return;
 
-    // Snapshot channel pointer; lambda captures it by pointer (channel is
-    // long-lived; if it closes before the DB completes, send will just fail).
-    auto send_ack = [ch, request_id = msg.request_id](PutResult result)
+    auto send_ack = [this, reply_addr = src, request_id = msg.request_id](PutResult result)
     {
         dbapp::WriteEntityAck ack;
         ack.request_id = request_id;
         ack.success = result.success;
         ack.dbid = result.dbid;
         ack.error = std::move(result.error);
-        (void)ch->send_message(ack);
+        if (auto* reply_ch = this->resolve_reply_channel(reply_addr))
+        {
+            (void)reply_ch->send_message(ack);
+        }
     };
 
     // Checkin path: LogOff flag means entity is going offline — clear checkout
@@ -225,11 +244,14 @@ void DBApp::on_checkout_entity(const Address& src, Channel* ch, const dbapp::Che
     if (ch == nullptr)
         return;
 
+    ATLAS_LOG_INFO("DBApp: checkout request_id={} dbid={} type_id={} from {}:{}", msg.request_id,
+                   msg.dbid, msg.type_id, src.ip(), src.port());
+
     CheckoutInfo owner;
     owner.base_addr = src;
     owner.entity_id = msg.entity_id;
 
-    auto send_ack = [ch, request_id = msg.request_id](GetResult result)
+    auto send_ack = [this, reply_addr = src, request_id = msg.request_id](GetResult result)
     {
         dbapp::CheckoutEntityAck ack;
         ack.request_id = request_id;
@@ -252,7 +274,10 @@ void DBApp::on_checkout_entity(const Address& src, Channel* ch, const dbapp::Che
             ack.status = dbapp::CheckoutStatus::Success;
             ack.blob = std::move(result.data.blob);
         }
-        (void)ch->send_message(ack);
+        if (auto* reply_ch = this->resolve_reply_channel(reply_addr))
+        {
+            (void)reply_ch->send_message(ack);
+        }
     };
 
     // Claim the slot in memory first
@@ -261,6 +286,10 @@ void DBApp::on_checkout_entity(const Address& src, Channel* ch, const dbapp::Che
 
     if (co_result.status == CheckoutManager::CheckoutStatus::AlreadyCheckedOut)
     {
+        ATLAS_LOG_WARNING(
+            "DBApp: checkout denied request_id={} dbid={} already checked out by {}:{}",
+            msg.request_id, msg.dbid, co_result.current_owner.base_addr.ip(),
+            co_result.current_owner.base_addr.port());
         dbapp::CheckoutEntityAck ack;
         ack.request_id = msg.request_id;
         ack.status = dbapp::CheckoutStatus::AlreadyCheckedOut;
@@ -319,6 +348,7 @@ void DBApp::on_checkout_entity(const Address& src, Channel* ch, const dbapp::Che
 void DBApp::on_checkin_entity(const Address& /*src*/, Channel* /*ch*/,
                               const dbapp::CheckinEntity& msg)
 {
+    ATLAS_LOG_INFO("DBApp: checkin dbid={} type_id={}", msg.dbid, msg.type_id);
     checkout_mgr_.checkin(msg.dbid, msg.type_id);
     database_->clear_checkout(msg.dbid, msg.type_id, [](bool) {});
 }
@@ -327,19 +357,22 @@ void DBApp::on_checkin_entity(const Address& /*src*/, Channel* /*ch*/,
 // on_delete_entity
 // ============================================================================
 
-void DBApp::on_delete_entity(const Address& /*src*/, Channel* ch, const dbapp::DeleteEntity& msg)
+void DBApp::on_delete_entity(const Address& src, Channel* ch, const dbapp::DeleteEntity& msg)
 {
     if (ch == nullptr)
         return;
 
     database_->del_entity(msg.dbid, msg.type_id,
-                          [ch, request_id = msg.request_id](DelResult result)
+                          [this, reply_addr = src, request_id = msg.request_id](DelResult result)
                           {
                               dbapp::DeleteEntityAck ack;
                               ack.request_id = request_id;
                               ack.success = result.success;
                               ack.error = std::move(result.error);
-                              (void)ch->send_message(ack);
+                              if (auto* reply_ch = this->resolve_reply_channel(reply_addr))
+                              {
+                                  (void)reply_ch->send_message(ack);
+                              }
                           });
 }
 
@@ -347,20 +380,24 @@ void DBApp::on_delete_entity(const Address& /*src*/, Channel* ch, const dbapp::D
 // on_lookup_entity
 // ============================================================================
 
-void DBApp::on_lookup_entity(const Address& /*src*/, Channel* ch, const dbapp::LookupEntity& msg)
+void DBApp::on_lookup_entity(const Address& src, Channel* ch, const dbapp::LookupEntity& msg)
 {
     if (ch == nullptr)
         return;
 
-    database_->lookup_by_name(msg.type_id, msg.identifier,
-                              [ch, request_id = msg.request_id](LookupResult result)
-                              {
-                                  dbapp::LookupEntityAck ack;
-                                  ack.request_id = request_id;
-                                  ack.found = result.found;
-                                  ack.dbid = result.dbid;
-                                  (void)ch->send_message(ack);
-                              });
+    database_->lookup_by_name(
+        msg.type_id, msg.identifier,
+        [this, reply_addr = src, request_id = msg.request_id](LookupResult result)
+        {
+            dbapp::LookupEntityAck ack;
+            ack.request_id = request_id;
+            ack.found = result.found;
+            ack.dbid = result.dbid;
+            if (auto* reply_ch = this->resolve_reply_channel(reply_addr))
+            {
+                (void)reply_ch->send_message(ack);
+            }
+        });
 }
 
 // ============================================================================
@@ -386,15 +423,20 @@ void DBApp::on_baseapp_death(const Address& internal_addr, std::string_view name
 // on_auth_login — handle LoginApp authentication request
 // ============================================================================
 
-void DBApp::on_auth_login(const Address& /*src*/, Channel* ch, const login::AuthLogin& msg)
+void DBApp::on_auth_login(const Address& src, Channel* ch, const login::AuthLogin& msg)
 {
+    ATLAS_LOG_INFO("DBApp: auth login request_id={} user='{}' from {}:{}", msg.request_id,
+                   msg.username, src.ip(), src.port());
     if (!database_)
     {
         login::AuthLoginResult reply;
         reply.request_id = msg.request_id;
         reply.success = false;
         reply.status = login::LoginStatus::InternalError;
-        (void)ch->send_message(reply);
+        if (auto* reply_ch = this->resolve_reply_channel(src))
+        {
+            (void)reply_ch->send_message(reply);
+        }
         return;
     }
 
@@ -402,7 +444,8 @@ void DBApp::on_auth_login(const Address& /*src*/, Channel* ch, const login::Auth
     database_->lookup_by_name(
         account_type_id_, msg.username,
         [this, request_id = msg.request_id, password_hash = msg.password_hash,
-         auto_create = msg.auto_create, username = msg.username, ch](LookupResult result)
+         auto_create = msg.auto_create, username = msg.username,
+         reply_addr = src](LookupResult result)
         {
             login::AuthLoginResult reply;
             reply.request_id = request_id;
@@ -420,7 +463,7 @@ void DBApp::on_auth_login(const Address& /*src*/, Channel* ch, const login::Auth
                     database_->put_entity(
                         kInvalidDBID, account_type_id_, WriteFlags::CreateNew, data.blob,
                         data.identifier,
-                        [ch, request_id, type_id = account_type_id_](PutResult put)
+                        [this, reply_addr, request_id, type_id = account_type_id_](PutResult put)
                         {
                             login::AuthLoginResult r;
                             r.request_id = request_id;
@@ -436,7 +479,10 @@ void DBApp::on_auth_login(const Address& /*src*/, Channel* ch, const login::Auth
                                 r.success = false;
                                 r.status = login::LoginStatus::InternalError;
                             }
-                            (void)ch->send_message(r);
+                            if (auto* reply_ch = this->resolve_reply_channel(reply_addr))
+                            {
+                                (void)reply_ch->send_message(r);
+                            }
                         });
                     return;
                 }
@@ -463,7 +509,10 @@ void DBApp::on_auth_login(const Address& /*src*/, Channel* ch, const login::Auth
                     reply.type_id = account_type_id_;
                 }
             }
-            (void)ch->send_message(reply);
+            if (auto* reply_ch = this->resolve_reply_channel(reply_addr))
+            {
+                (void)reply_ch->send_message(reply);
+            }
         });
 }
 

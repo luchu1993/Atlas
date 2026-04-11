@@ -186,6 +186,18 @@ auto ServerConfig::from_json_file(const std::filesystem::path& path) -> Result<S
         cfg.db_mysql_pool_size = db->read_int("mysql_pool_size", cfg.db_mysql_pool_size);
     }
 
+    cfg.auto_create_accounts = root->read_bool("auto_create_accounts", cfg.auto_create_accounts);
+    cfg.account_type_id =
+        static_cast<uint16_t>(root->read_uint("account_type_id", cfg.account_type_id));
+
+    if (auto* auth = root->child("authentication"))
+    {
+        cfg.auto_create_accounts =
+            auth->read_bool("auto_create_accounts", cfg.auto_create_accounts);
+        cfg.account_type_id =
+            static_cast<uint16_t>(auth->read_uint("account_type_id", cfg.account_type_id));
+    }
+
     return cfg;
 }
 
@@ -295,6 +307,27 @@ auto ServerConfig::from_args(int argc, char* argv[]) -> Result<ServerConfig>
             cfg.db_xml_dir = std::string(val);
             ++i;
         }
+        else if (key == "auto-create-accounts")
+        {
+            auto lower = std::string(val);
+            std::transform(lower.begin(), lower.end(), lower.begin(),
+                           [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+            cfg.auto_create_accounts =
+                (lower == "1" || lower == "true" || lower == "yes" || lower == "on");
+            ++i;
+        }
+        else if (key == "account-type-id")
+        {
+            try
+            {
+                cfg.account_type_id = static_cast<uint16_t>(std::stoi(std::string(val)));
+            }
+            catch (...)
+            {
+                return Error{ErrorCode::InvalidArgument, "invalid --account-type-id"};
+            }
+            ++i;
+        }
         // "--config" is consumed by load(), not here
     }
 
@@ -358,6 +391,10 @@ auto ServerConfig::load(int argc, char* argv[]) -> Result<ServerConfig>
         cfg.script_assembly = cli.script_assembly;
     if (!cli.runtime_config.empty())
         cfg.runtime_config = cli.runtime_config;
+    if (cli.auto_create_accounts != defaults.auto_create_accounts)
+        cfg.auto_create_accounts = cli.auto_create_accounts;
+    if (cli.account_type_id != defaults.account_type_id)
+        cfg.account_type_id = cli.account_type_id;
 
     // Derive process_name from type if not set
     if (cfg.process_name.empty())

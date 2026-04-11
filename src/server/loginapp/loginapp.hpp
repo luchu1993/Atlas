@@ -54,7 +54,7 @@ private:
     struct PendingLogin
     {
         uint32_t request_id{0};
-        Channel* client_ch{nullptr};
+        Address client_addr;
         std::string username;
         PendingStage stage{PendingStage::WaitingAuth};
         DatabaseID dbid{kInvalidDBID};
@@ -74,7 +74,8 @@ private:
                                  const login::PrepareLoginResult& msg);
 
     // ---- Internal helpers ---------------------------------------------------
-    void send_login_error(Channel* ch, login::LoginStatus status, const std::string& msg);
+    void send_login_error(const Address& client_addr, login::LoginStatus status,
+                          const std::string& msg);
     void cleanup_expired_logins();
 
     [[nodiscard]] auto is_rate_limited(const Address& src) -> bool;
@@ -103,6 +104,13 @@ private:
     // ---- Connections --------------------------------------------------------
     Channel* dbapp_channel_{nullptr};
     Channel* baseappmgr_channel_{nullptr};
+
+    // ---- Metrics -----------------------------------------------------------
+    uint64_t login_requests_total_{0};
+    uint64_t login_success_total_{0};
+    uint64_t login_fail_total_{0};
+    uint64_t login_timeout_total_{0};
+    uint64_t login_rate_limited_total_{0};
 };
 
 }  // namespace atlas

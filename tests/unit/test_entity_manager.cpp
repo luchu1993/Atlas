@@ -31,6 +31,47 @@ TEST(EntityManager, AppIndexBuckets)
     EXPECT_EQ(b, EntityManager::kIdBucketSize + 1u);
 }
 
+TEST(EntityManager, AllocateIDStopsAtRangeEnd)
+{
+    EntityManager mgr;
+    mgr.set_id_range(10, 12);
+
+    EXPECT_EQ(mgr.allocate_id(), 10u);
+    EXPECT_EQ(mgr.allocate_id(), 11u);
+    EXPECT_EQ(mgr.allocate_id(), 12u);
+    EXPECT_EQ(mgr.allocate_id(), kInvalidEntityID);
+    EXPECT_EQ(mgr.range_remaining(), 0u);
+}
+
+TEST(EntityManager, CreateFailsWhenRangeExhausted)
+{
+    EntityManager mgr;
+    mgr.set_id_range(50, 50);
+
+    auto* first = mgr.create(1, false);
+    ASSERT_NE(first, nullptr);
+    EXPECT_EQ(first->entity_id(), 50u);
+
+    auto* second = mgr.create(2, false);
+    EXPECT_EQ(second, nullptr);
+    EXPECT_EQ(mgr.size(), 1u);
+}
+
+TEST(EntityManager, RangeLowUsesAssignedRangeCapacity)
+{
+    EntityManager mgr;
+    mgr.set_id_range(100, 109);
+
+    EXPECT_FALSE(mgr.is_range_low());
+
+    for (int i = 0; i < 9; ++i)
+    {
+        ASSERT_NE(mgr.allocate_id(), kInvalidEntityID);
+    }
+
+    EXPECT_TRUE(mgr.is_range_low());
+}
+
 TEST(EntityManager, CreateAndFind)
 {
     EntityManager mgr;
@@ -54,6 +95,48 @@ TEST(EntityManager, CreateProxy)
     auto* proxy = mgr.find_proxy(ent->entity_id());
     ASSERT_NE(proxy, nullptr);
     EXPECT_FALSE(proxy->has_client());
+}
+
+TEST(EntityManager, FindByDbidUsesSecondaryIndex)
+{
+    EntityManager mgr;
+    auto* ent = mgr.create(7, false);
+    ASSERT_NE(ent, nullptr);
+
+    EXPECT_EQ(mgr.find_by_dbid(1001), nullptr);
+    EXPECT_TRUE(mgr.assign_dbid(ent->entity_id(), 1001));
+    EXPECT_EQ(mgr.find_by_dbid(1001), ent);
+
+    mgr.destroy(ent->entity_id());
+    EXPECT_EQ(mgr.find_by_dbid(1001), nullptr);
+}
+
+TEST(EntityManager, FindProxyBySessionUsesSecondaryIndex)
+{
+    EntityManager mgr;
+    auto* ent = mgr.create(9, true);
+    ASSERT_NE(ent, nullptr);
+
+    auto key = SessionKey::generate();
+    EXPECT_EQ(mgr.find_proxy_by_session(key), nullptr);
+    EXPECT_TRUE(mgr.assign_session_key(ent->entity_id(), key));
+    EXPECT_EQ(mgr.find_proxy_by_session(key), mgr.find_proxy(ent->entity_id()));
+
+    EXPECT_TRUE(mgr.clear_session_key(ent->entity_id()));
+    EXPECT_EQ(mgr.find_proxy_by_session(key), nullptr);
+}
+
+TEST(EntityManager, DuplicateDbidAssignmentIsRejected)
+{
+    EntityManager mgr;
+    auto* a = mgr.create(1, false);
+    auto* b = mgr.create(2, false);
+    ASSERT_NE(a, nullptr);
+    ASSERT_NE(b, nullptr);
+
+    EXPECT_TRUE(mgr.assign_dbid(a->entity_id(), 77));
+    EXPECT_FALSE(mgr.assign_dbid(b->entity_id(), 77));
+    EXPECT_EQ(mgr.find_by_dbid(77), a);
 }
 
 TEST(EntityManager, NonProxyFindProxy)

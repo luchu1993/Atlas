@@ -293,6 +293,21 @@ void MachinedApp::on_listener_register(const Address& /*src*/, Channel* ch,
     ListenerAck ack;
     ack.success = true;
     (void)ch->send_message(ack);
+
+    if (msg.listener_type == ListenerType::Birth || msg.listener_type == ListenerType::Both)
+    {
+        const auto existing = process_registry_.find_by_type(msg.target_type);
+        for (const auto& entry : existing)
+        {
+            BirthNotification notif;
+            notif.process_type = entry.process_type;
+            notif.name = entry.name;
+            notif.internal_addr = entry.internal_addr;
+            notif.external_addr = entry.external_addr;
+            notif.pid = entry.pid;
+            (void)ch->send_message(notif);
+        }
+    }
 }
 
 void MachinedApp::on_watcher_request(const Address& /*src*/, Channel* ch, const WatcherRequest& msg)

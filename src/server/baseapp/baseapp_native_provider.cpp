@@ -41,8 +41,15 @@ void BaseAppNativeProvider::send_client_rpc(uint32_t entity_id, uint32_t rpc_id,
         ATLAS_LOG_WARNING("BaseApp: send_client_rpc: entity {} has no client", entity_id);
         return;
     }
-    (void)proxy->client_channel()->send_message(static_cast<MessageID>(rpc_id),
-                                                std::span<const std::byte>(payload, len));
+    auto* client_ch = app_.resolve_client_channel(entity_id);
+    if (!client_ch)
+    {
+        ATLAS_LOG_WARNING("BaseApp: send_client_rpc: entity {} client channel unavailable",
+                          entity_id);
+        return;
+    }
+    (void)client_ch->send_message(static_cast<MessageID>(rpc_id),
+                                  std::span<const std::byte>(payload, len));
     (void)target;
 }
 

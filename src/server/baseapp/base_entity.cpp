@@ -45,9 +45,16 @@ void BaseEntity::clear_cell()
 
 Proxy::Proxy(EntityID id, uint16_t type_id, DatabaseID dbid) : BaseEntity(id, type_id, dbid) {}
 
-void Proxy::set_client_channel(Channel* ch)
+void Proxy::bind_client(const Address& addr)
 {
-    client_channel_ = ch;
+    client_addr_ = addr;
+    client_attached_ = true;
+}
+
+void Proxy::unbind_client()
+{
+    client_addr_ = {};
+    client_attached_ = false;
 }
 
 }  // namespace atlas

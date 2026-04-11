@@ -49,6 +49,7 @@ private:
 
     // ---- Helpers ------------------------------------------------------------
     [[nodiscard]] auto build_db_config() const -> DatabaseConfig;
+    auto resolve_reply_channel(const Address& addr) -> Channel*;
 
     // ---- State --------------------------------------------------------------
     std::unique_ptr<IDatabase> database_;

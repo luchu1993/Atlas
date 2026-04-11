@@ -68,7 +68,7 @@ protected:
 };
 
 // ============================================================================
-// Proxy — BaseEntity with an attached client Channel
+// Proxy — BaseEntity with an attached client session
 //
 // Each logged-in client is associated with exactly one Proxy on BaseApp.
 // The Proxy routes client RPCs to the entity and relays server RPCs back.
@@ -79,17 +79,20 @@ class Proxy : public BaseEntity
 public:
     Proxy(EntityID id, uint16_t type_id, DatabaseID dbid = kInvalidDBID);
 
-    // The authenticated network channel to the client (nullptr if disconnected)
-    [[nodiscard]] auto client_channel() const -> Channel* { return client_channel_; }
-    void set_client_channel(Channel* ch);
+    // Client attachment is tracked by remote address so the live Channel can be
+    // resolved on demand instead of being stored in entity state.
+    [[nodiscard]] auto client_addr() const -> const Address& { return client_addr_; }
+    void bind_client(const Address& addr);
+    void unbind_client();
 
-    [[nodiscard]] auto has_client() const -> bool { return client_channel_ != nullptr; }
+    [[nodiscard]] auto has_client() const -> bool { return client_attached_; }
 
     [[nodiscard]] auto session_key() const -> const SessionKey& { return session_key_; }
     void set_session_key(const SessionKey& key) { session_key_ = key; }
 
 private:
-    Channel* client_channel_{nullptr};
+    Address client_addr_;
+    bool client_attached_{false};
     SessionKey session_key_;
 };
 

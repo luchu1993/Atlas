@@ -77,6 +77,7 @@ public:
 
     // ---- Callback accessors (used by BaseApp message handlers) ----------
     [[nodiscard]] auto restore_entity_fn() const -> RestoreEntityFn { return restore_entity_fn_; }
+    [[nodiscard]] auto get_entity_data_fn() const -> GetEntityDataFn { return get_entity_data_fn_; }
     [[nodiscard]] auto entity_destroyed_fn() const -> EntityDestroyedFn
     {
         return entity_destroyed_fn_;

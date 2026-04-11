@@ -113,6 +113,16 @@ private:
     void register_internal_handlers();
     void send_to_dbapp(Channel*& dbapp_ch, auto&& msg);
     void maybe_request_more_ids();
+    auto capture_entity_snapshot(EntityID entity_id, std::vector<std::byte>& out) -> bool;
+    void begin_force_logoff_persist(uint32_t force_request_id, EntityID entity_id);
+    void continue_login_after_force_logoff(uint32_t force_request_id);
+    void finalize_force_logoff(EntityID entity_id);
+    auto resolve_internal_channel(const Address& addr) -> Channel*;
+    auto resolve_client_channel(EntityID entity_id) -> Channel*;
+    auto bind_client(EntityID entity_id, const Address& client_addr) -> bool;
+    void unbind_client(EntityID entity_id);
+    void on_external_client_disconnect(Channel& ch);
+    void send_prepare_login_result(const Address& reply_addr, const login::PrepareLoginResult& msg);
 
     // ---- State ----------------------------------------------------------
     NetworkInterface& external_network_;
@@ -125,7 +135,8 @@ private:
     // Pending login state: maps request_id → reply channel back to LoginApp
     struct PendingLogin
     {
-        Channel* loginapp_ch{nullptr};
+        uint32_t login_request_id{0};
+        Address loginapp_addr;
         uint16_t type_id{0};
         DatabaseID dbid{kInvalidDBID};
         SessionKey session_key;
@@ -136,6 +147,17 @@ private:
 
     // Pending ForceLogoff awaiting ack: maps request_id → PendingLogin
     std::unordered_map<uint32_t, PendingLogin> pending_force_logoffs_;
+    struct PendingForceLogoffWrite
+    {
+        uint32_t force_request_id{0};
+        EntityID entity_id{kInvalidEntityID};
+    };
+    std::unordered_map<uint32_t, PendingForceLogoffWrite> pending_force_logoff_writes_;
+    std::unordered_map<EntityID, Address> entity_client_index_;
+    std::unordered_map<Address, EntityID> client_entity_index_;
+    uint64_t auth_success_total_{0};
+    uint64_t auth_fail_total_{0};
+    uint64_t force_logoff_total_{0};
     bool id_range_requested_{false};
 };
 
