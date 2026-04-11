@@ -2,10 +2,12 @@
 
 #if ATLAS_PLATFORM_LINUX
 
+#include <cerrno>
 #include <limits>
 #include <sys/epoll.h>
 #include <unistd.h>
 #include <unordered_map>
+#include <vector>
 
 namespace atlas
 {
@@ -55,6 +57,7 @@ public:
         }
 
         entries_[fd] = Entry{interest, std::move(callback)};
+        ++generation_;
         return Result<void>{};
     }
 
@@ -76,6 +79,7 @@ public:
         }
 
         it->second.interest = interest;
+        ++generation_;
         return Result<void>{};
     }
 
@@ -93,6 +97,7 @@ public:
         }
 
         entries_.erase(it);
+        ++generation_;
         return Result<void>{};
     }
 
@@ -125,28 +130,42 @@ public:
 
         if (result < 0)
         {
+            if (errno == EINTR)
+            {
+                return 0;
+            }
             return Error(ErrorCode::IoError, "epoll_wait() failed");
         }
 
-        // Dispatch callbacks — a callback may call add/remove/modify,
-        // so we must re-lookup after each callback invocation.
-        int dispatched = 0;
-
+        ready_fds_.clear();
         for (int i = 0; i < result; ++i)
         {
             FdHandle fd = static_cast<FdHandle>(events[i].data.fd);
+            IOEvent io_events = from_epoll_events(events[i].events);
+            ready_fds_.push_back({fd, io_events});
+        }
 
-            // Re-lookup each time — previous callback may have removed this fd
+        int dispatched = 0;
+        for (auto [fd, events_flags] : ready_fds_)
+        {
             auto it = entries_.find(fd);
             if (it == entries_.end())
             {
                 continue;
             }
 
-            // Copy callback before invoking (callback may erase this entry)
-            auto callback = it->second.callback;
-            IOEvent io_events = from_epoll_events(events[i].events);
-            callback(fd, io_events);
+            const auto gen_before = generation_;
+            IOCallback cb;
+            std::swap(it->second.callback, cb);
+            cb(fd, events_flags);
+            if (generation_ != gen_before)
+            {
+                it = entries_.find(fd);
+            }
+            if (it != entries_.end() && !it->second.callback)
+            {
+                std::swap(it->second.callback, cb);
+            }
             ++dispatched;
         }
 
@@ -160,6 +179,12 @@ private:
     {
         IOEvent interest;
         IOCallback callback;
+    };
+
+    struct ReadyFd
+    {
+        FdHandle fd;
+        IOEvent events;
     };
 
     static auto to_epoll_events(IOEvent interest) -> uint32_t
@@ -203,7 +228,9 @@ private:
     }
 
     int epfd_{-1};
+    uint64_t generation_{0};
     std::unordered_map<FdHandle, Entry> entries_;
+    std::vector<ReadyFd> ready_fds_;
 };
 
 // ============================================================================

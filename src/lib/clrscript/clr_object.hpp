@@ -16,6 +16,8 @@
 namespace atlas
 {
 
+class ClrObjectRegistry;
+
 // ============================================================================
 // GCHandleTracker — Debug-mode GCHandle leak detector
 // ============================================================================
@@ -162,6 +164,8 @@ public:
     [[nodiscard]] auto gc_handle() const -> void* { return gc_handle_; }
 
 private:
+    friend class ClrObjectRegistry;
+
     // Free the GCHandle if non-null, then set to null.
     void release();
 

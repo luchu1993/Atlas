@@ -1,5 +1,6 @@
-#include <gtest/gtest.h>
 #include "serialization/binary_stream.hpp"
+
+#include <gtest/gtest.h>
 
 #include <cstdint>
 #include <string>
@@ -70,7 +71,7 @@ TEST(BinaryStream, PackedIntLargeValue)
 {
     BinaryWriter writer;
     writer.write_packed_int(300);
-    EXPECT_EQ(writer.size(), 5u);
+    EXPECT_EQ(writer.size(), 3u);
 
     BinaryReader reader(writer.data());
     auto v = reader.read_packed_int();
@@ -185,8 +186,8 @@ TEST(BinaryStream, PackedIntBoundaryValues)
     writer.write_packed_int(255);
     writer.write_packed_int(256);
 
-    // 0 → 1 byte, 254 → 1 byte, 255 → 5 bytes, 256 → 5 bytes
-    EXPECT_EQ(writer.size(), 1u + 1u + 5u + 5u);
+    // 0 → 1 byte, 254 → 3 bytes, 255 → 3 bytes, 256 → 3 bytes
+    EXPECT_EQ(writer.size(), 1u + 3u + 3u + 3u);
 
     BinaryReader reader(writer.data());
     EXPECT_EQ(*reader.read_packed_int(), 0u);

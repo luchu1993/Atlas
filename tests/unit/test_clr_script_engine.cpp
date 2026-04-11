@@ -280,4 +280,29 @@ TEST_F(ClrScriptEngineTest, EntityCountAfterInit)
     EXPECT_EQ(count, 0);
 }
 
+// ============================================================================
+// Phase 6: Boundary tests
+// ============================================================================
+
+TEST_F(ClrScriptEngineTest, ReInitAfterShutdown)
+{
+    {
+        EngineScope scope1(*this);
+        ASSERT_TRUE(scope1.ok);
+    }
+
+    {
+        EngineScope scope2(*this);
+        ASSERT_TRUE(scope2.ok);
+
+        ClrStaticMethod<int, int*> get_count;
+        ASSERT_TRUE(bind(get_count, "GetEntityCount"));
+
+        int count = -1;
+        auto r = get_count.invoke(&count);
+        ASSERT_TRUE(r.has_value()) << r.error().message();
+        EXPECT_EQ(count, 0);
+    }
+}
+
 }  // namespace atlas::test

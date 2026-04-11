@@ -80,6 +80,27 @@ auto ClrScriptEngine::initialize() -> Result<void>
     if (!r)
         return r.error();
 
+    // 3b. Bind HotReloadManager methods.
+    auto bind_hr = [&](auto& method, std::string_view name) -> Result<void>
+    {
+        auto hr = method.bind(host_, asm_path, kHotReloadType, name);
+        if (!hr)
+            return Error{
+                ErrorCode::ScriptError,
+                std::format("ClrScriptEngine: failed to bind {}: {}", name, hr.error().message())};
+        return {};
+    };
+
+    r = bind_hr(load_scripts_, "LoadScripts");
+    if (!r)
+        return r.error();
+    r = bind_hr(serialize_and_unload_, "SerializeAndUnload");
+    if (!r)
+        return r.error();
+    r = bind_hr(load_and_restore_, "LoadAndRestore");
+    if (!r)
+        return r.error();
+
     // 4. Call C# EngineInit (sets up EngineContext, EntityManager, etc.)
     auto init_result = engine_init_.invoke();
     if (!init_result)
@@ -108,11 +129,18 @@ void ClrScriptEngine::finalize()
     ATLAS_LOG_INFO("ClrScriptEngine finalized");
 }
 
-auto ClrScriptEngine::load_module(const std::filesystem::path& /*path*/) -> Result<void>
+auto ClrScriptEngine::load_module(const std::filesystem::path& path) -> Result<void>
 {
-    // Phase 3: game-script assembly loading is deferred to Phase 5 (hot-reload).
-    // The current engine uses Atlas.Runtime.dll as the sole managed assembly.
-    // load_module() is a no-op placeholder for future extension.
+    if (!initialized_)
+        return Error{ErrorCode::InvalidArgument, "ClrScriptEngine not initialized"};
+
+    auto path_str = path.u8string();
+    auto result = load_scripts_.invoke(reinterpret_cast<const uint8_t*>(path_str.data()),
+                                       static_cast<int32_t>(path_str.size()));
+    if (!result)
+        return Error{ErrorCode::ScriptError,
+                     std::format("load_module failed: {}", result.error().message())};
+    ATLAS_LOG_INFO("ClrScriptEngine: loaded script module {}", path.string());
     return {};
 }
 
@@ -147,10 +175,45 @@ auto ClrScriptEngine::call_function(std::string_view /*module_name*/,
                                     std::string_view /*function_name*/,
                                     std::span<const ScriptValue> /*args*/) -> Result<ScriptValue>
 {
-    // Phase 3: dynamic function dispatch is deferred to Phase 4 (Source Generator).
-    // The primary C++ → C# path uses the lifecycle methods above.
     return Error{ErrorCode::NotSupported,
                  "call_function() not yet implemented — use lifecycle methods"};
+}
+
+auto ClrScriptEngine::call_hot_reload(std::string_view method_name) -> Result<void>
+{
+    if (!initialized_)
+        return Error{ErrorCode::InvalidArgument, "ClrScriptEngine not initialized"};
+
+    if (method_name == "SerializeAndUnload")
+    {
+        auto r = serialize_and_unload_.invoke();
+        if (!r)
+            return r.error();
+        return {};
+    }
+
+    return Error{ErrorCode::InvalidArgument,
+                 std::format("Unknown hot-reload method: {}", method_name)};
+}
+
+auto ClrScriptEngine::call_hot_reload(std::string_view method_name,
+                                      const std::filesystem::path& assembly_path) -> Result<void>
+{
+    if (!initialized_)
+        return Error{ErrorCode::InvalidArgument, "ClrScriptEngine not initialized"};
+
+    if (method_name == "LoadAndRestore")
+    {
+        auto path_str = assembly_path.u8string();
+        auto r = load_and_restore_.invoke(reinterpret_cast<const uint8_t*>(path_str.data()),
+                                          static_cast<int32_t>(path_str.size()));
+        if (!r)
+            return r.error();
+        return {};
+    }
+
+    return Error{ErrorCode::InvalidArgument,
+                 std::format("Unknown hot-reload method: {}", method_name)};
 }
 
 void ClrScriptEngine::reset_all_methods()
@@ -160,6 +223,9 @@ void ClrScriptEngine::reset_all_methods()
     on_init_.reset();
     on_tick_.reset();
     on_shutdown_.reset();
+    load_scripts_.reset();
+    serialize_and_unload_.reset();
+    load_and_restore_.reset();
 }
 
 }  // namespace atlas

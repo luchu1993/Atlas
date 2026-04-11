@@ -1,5 +1,6 @@
 using System;
 using System.Runtime.InteropServices;
+using System.Threading;
 using Atlas.Entity;
 
 namespace Atlas.Core;
@@ -23,12 +24,24 @@ internal static class Lifecycle
 
     internal static void DoEngineInit()
     {
+        var syncContext = new AtlasSynchronizationContext();
+        SynchronizationContext.SetSynchronizationContext(syncContext);
+        EngineContext.SyncContext = syncContext;
+
+        ThreadGuard.SetMainThread();
+
         EngineContext.Initialize();
         Log.Info("Atlas C# runtime initialized");
+#if DEBUG
+        Atlas.Diagnostics.GCMonitor.Start(TimeSpan.FromSeconds(60));
+#endif
     }
 
     internal static void DoEngineShutdown()
     {
+#if DEBUG
+        Atlas.Diagnostics.GCMonitor.Stop();
+#endif
         Log.Info("Atlas C# runtime shutting down");
         EngineContext.Shutdown();
     }
@@ -40,6 +53,7 @@ internal static class Lifecycle
 
     internal static void DoOnTick(float deltaTime)
     {
+        EngineContext.SyncContext?.ProcessQueue();
         EntityManager.Instance.OnTickAll(deltaTime);
     }
 

@@ -9,6 +9,7 @@ atlas_add_library(atlas_network
         interface_table.cpp
         bundle.cpp
         channel.cpp
+        compression_filter.cpp
         network_interface.cpp
         reliable_udp.cpp
         tcp_channel.cpp
@@ -17,6 +18,7 @@ atlas_add_library(atlas_network
         atlas_foundation
         atlas_platform
         atlas_serialization
+        atlas_zlib
 )
 
 # Winsock on Windows

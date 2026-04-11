@@ -38,6 +38,7 @@ public:
         }
 
         entries_[fd] = Entry{interest, std::move(callback)};
+        ++generation_;
         return Result<void>{};
     }
 
@@ -50,6 +51,7 @@ public:
         }
 
         it->second.interest = interest;
+        ++generation_;
         return Result<void>{};
     }
 
@@ -62,6 +64,7 @@ public:
         }
 
         entries_.erase(it);
+        ++generation_;
         return Result<void>{};
     }
 
@@ -129,6 +132,10 @@ public:
             int err = ::WSAGetLastError();
             return Error(ErrorCode::IoError, std::format("select() failed: WSA error {}", err));
 #else
+            if (errno == EINTR)
+            {
+                return 0;
+            }
             return Error(ErrorCode::IoError, std::format("select() failed: {} (errno={})",
                                                          std::strerror(errno), errno));
 #endif
@@ -159,16 +166,25 @@ public:
         int dispatched = 0;
         for (auto [fd, events] : ready_fds_)
         {
-            // Re-lookup in case a prior callback called remove() on this fd.
-            // Copy the callback before invoking — callback may call remove()
-            // which destroys the Entry that owns the std::function.
-            auto current_it = entries_.find(fd);
-            if (current_it != entries_.end())
+            auto it = entries_.find(fd);
+            if (it == entries_.end())
             {
-                auto cb = current_it->second.callback;
-                cb(fd, events);
-                ++dispatched;
+                continue;
             }
+
+            const auto gen_before = generation_;
+            IOCallback cb;
+            std::swap(it->second.callback, cb);
+            cb(fd, events);
+            if (generation_ != gen_before)
+            {
+                it = entries_.find(fd);
+            }
+            if (it != entries_.end() && !it->second.callback)
+            {
+                std::swap(it->second.callback, cb);
+            }
+            ++dispatched;
         }
 
         return dispatched;
@@ -188,6 +204,7 @@ private:
         IOEvent events;
     };
 
+    uint64_t generation_{0};
     std::unordered_map<FdHandle, Entry> entries_;
     std::vector<ReadyFd> ready_fds_;
 };

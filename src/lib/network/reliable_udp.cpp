@@ -6,6 +6,7 @@
 #include "serialization/binary_stream.hpp"
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstring>
 #include <format>
@@ -25,6 +26,7 @@ ReliableUdpChannel::ReliableUdpChannel(EventDispatcher& dispatcher, InterfaceTab
 
 ReliableUdpChannel::~ReliableUdpChannel()
 {
+    cancel_delayed_ack();
     stop_resend_timer();
 }
 
@@ -79,6 +81,7 @@ auto ReliableUdpChannel::send_reliable() -> Result<void>
         flags |= rudp::kFlagHasAck;
     }
 
+    cancel_delayed_ack();
     auto packet =
         build_packet(flags, seq, std::span<const std::byte>(payload.data(), payload.size()));
 
@@ -120,6 +123,7 @@ auto ReliableUdpChannel::send_unreliable() -> Result<void>
         flags |= rudp::kFlagHasAck;  // piggyback ACK even on unreliable
     }
 
+    cancel_delayed_ack();
     auto packet =
         build_packet(flags, 0, std::span<const std::byte>(payload.data(), payload.size()));
 
@@ -146,6 +150,7 @@ auto ReliableUdpChannel::do_send(std::span<const std::byte> data) -> Result<size
         flags |= rudp::kFlagHasAck;
     }
 
+    cancel_delayed_ack();
     auto packet = build_packet(flags, seq, data);
 
     unacked_[seq] = UnackedPacket{packet, Clock::now(), 1};
@@ -167,31 +172,40 @@ auto ReliableUdpChannel::do_send(std::span<const std::byte> data) -> Result<size
 auto ReliableUdpChannel::build_packet(uint8_t flags, SeqNum seq, std::span<const std::byte> payload,
                                       const FragmentHeader* frag) -> std::vector<std::byte>
 {
-    BinaryWriter header;
-    header.write<uint8_t>(flags);
+    std::array<std::byte, 32> hdr_buf{};
+    std::size_t hdr_len = 0;
+
+    hdr_buf[hdr_len++] = static_cast<std::byte>(flags);
 
     if (flags & rudp::kFlagHasSeq)
     {
-        header.write<uint32_t>(seq);
+        auto le = endian::to_little(static_cast<uint32_t>(seq));
+        std::memcpy(hdr_buf.data() + hdr_len, &le, sizeof(uint32_t));
+        hdr_len += sizeof(uint32_t);
     }
 
     if (flags & rudp::kFlagHasAck)
     {
-        header.write<uint32_t>(remote_seq_);
-        header.write<uint32_t>(recv_ack_bits_);
+        auto ack_le = endian::to_little(static_cast<uint32_t>(remote_seq_));
+        std::memcpy(hdr_buf.data() + hdr_len, &ack_le, sizeof(uint32_t));
+        hdr_len += sizeof(uint32_t);
+        auto bits_le = endian::to_little(recv_ack_bits_);
+        std::memcpy(hdr_buf.data() + hdr_len, &bits_le, sizeof(uint32_t));
+        hdr_len += sizeof(uint32_t);
     }
 
     if ((flags & rudp::kFlagFragment) && frag)
     {
-        header.write<uint16_t>(frag->fragment_id);
-        header.write<uint8_t>(frag->fragment_index);
-        header.write<uint8_t>(frag->fragment_count);
+        auto fid_le = endian::to_little(frag->fragment_id);
+        std::memcpy(hdr_buf.data() + hdr_len, &fid_le, sizeof(uint16_t));
+        hdr_len += sizeof(uint16_t);
+        hdr_buf[hdr_len++] = static_cast<std::byte>(frag->fragment_index);
+        hdr_buf[hdr_len++] = static_cast<std::byte>(frag->fragment_count);
     }
 
-    auto hdr = header.data();
     std::vector<std::byte> pkt;
-    pkt.reserve(hdr.size() + payload.size());
-    pkt.insert(pkt.end(), hdr.begin(), hdr.end());
+    pkt.reserve(hdr_len + payload.size());
+    pkt.insert(pkt.end(), hdr_buf.data(), hdr_buf.data() + hdr_len);
     pkt.insert(pkt.end(), payload.begin(), payload.end());
     return pkt;
 }
@@ -286,9 +300,17 @@ void ReliableUdpChannel::on_datagram_received(std::span<const std::byte> data)
         record_received_seq(seq);
         bytes_received_ += remaining;
 
-        // Enqueue for ordered delivery instead of immediate dispatch
         enqueue_for_delivery(seq, *payload, is_fragment, frag_hdr);
         flush_receive_buffer();
+
+        if (seq != rcv_nxt_ - 1)
+        {
+            send_ack();
+        }
+        else
+        {
+            schedule_delayed_ack();
+        }
     }
     else
     {
@@ -305,22 +327,16 @@ void ReliableUdpChannel::on_datagram_received(std::span<const std::byte> data)
 
 void ReliableUdpChannel::process_ack(SeqNum ack_num, uint32_t ack_bits)
 {
-    // --- Phase 1: Process explicit ACKs via direct map lookup ---
-    //
-    // The ACK window covers ack_num and the 32 packets before it.
-    // Instead of iterating all N unacked entries and testing each,
-    // iterate the (at most 33) possible ACK'd seq numbers and find()
-    // directly in the map — O(33·log N) vs O(N).
-    std::vector<SeqNum> acked_seqs;
+    std::array<SeqNum, 33> acked_seqs{};
+    uint32_t acked_count = 0;
     auto now = Clock::now();
 
-    // ack_num itself is always ACK'd
     for (int32_t diff = 0; diff <= 32; ++diff)
     {
         SeqNum candidate = ack_num - static_cast<SeqNum>(diff);
         if (diff > 0 && !(ack_bits & (1u << (diff - 1))))
         {
-            continue;  // bit not set — not ACK'd
+            continue;
         }
 
         auto it = unacked_.find(candidate);
@@ -329,37 +345,26 @@ void ReliableUdpChannel::process_ack(SeqNum ack_num, uint32_t ack_bits)
             continue;
         }
 
-        // ACK'd — update RTT with Karn's algorithm (first send only)
         if (it->second.send_count == 1)
         {
             rtt_.update(now - it->second.sent_at);
         }
-        acked_seqs.push_back(candidate);
+        acked_seqs[acked_count++] = candidate;
         unacked_.erase(it);
     }
 
-    // --- Phase 2: Purge entries too old for the ACK window (O(N)) ---
-    // These are sequences more than 32 behind ack_num — considered lost.
-    std::erase_if(unacked_, [ack_num](const auto& kv)
-                  { return seq_less_than(kv.first, ack_num) && seq_diff(ack_num, kv.first) > 32; });
-
-    // Congestion window growth
-    if (!acked_seqs.empty())
+    if (acked_count != 0)
     {
-        on_ack_cwnd_update(static_cast<uint32_t>(acked_seqs.size()));
+        on_ack_cwnd_update(acked_count);
     }
 
-    // --- Phase 3: Fast retransmit ---
-    // For each remaining unacked packet, if ANY newer packet was just ACK'd
-    // (i.e., seq < max(acked_seqs)), increment its skip_count once.
-    // Using the max is O(N + |acked|) instead of O(N × |acked|).
     bool fast_resent = false;
-    if (fast_resend_thresh_ > 0 && !acked_seqs.empty())
+    if (fast_resend_thresh_ > 0 && acked_count != 0)
     {
-        // Find the newest acked sequence (highest in wrapping sense)
         SeqNum max_acked = acked_seqs[0];
-        for (SeqNum s : acked_seqs)
+        for (uint32_t i = 1; i < acked_count; ++i)
         {
+            SeqNum s = acked_seqs[i];
             if (seq_less_than(max_acked, s))
             {
                 max_acked = s;
@@ -375,7 +380,8 @@ void ReliableUdpChannel::process_ack(SeqNum ack_num, uint32_t ack_bits)
 
             if (pkt.skip_count >= fast_resend_thresh_)
             {
-                auto result = shared_socket_.send_to(pkt.data, remote_);
+                auto fresh_pkt = rebuild_packet_header(pkt.data);
+                auto result = shared_socket_.send_to(fresh_pkt, remote_);
                 if (result)
                 {
                     bytes_sent_ += *result;
@@ -558,6 +564,7 @@ auto ReliableUdpChannel::send_fragmented(std::span<const std::byte> payload) -> 
             flags |= rudp::kFlagHasAck;
         }
 
+        cancel_delayed_ack();
         FragmentHeader fhdr{frag_id, i, frag_count};
         auto packet = build_packet(flags, seq, chunk, &fhdr);
 
@@ -590,14 +597,13 @@ void ReliableUdpChannel::on_fragment_received(const FragmentHeader& hdr,
 
     auto& group = pending_fragments_[hdr.fragment_id];
 
-    // Initialize group on first fragment
     if (group.expected_count == 0)
     {
         group.expected_count = hdr.fragment_count;
-        group.fragments.resize(hdr.fragment_count);
+        group.buffer.reserve(hdr.fragment_count * rudp::kMaxUdpPayload);
+        group.frag_sizes.resize(hdr.fragment_count, 0);
         group.first_received = Clock::now();
 
-        // Memory protection: limit concurrent fragment groups
         if (pending_fragments_.size() > kMaxPendingFragmentGroups)
         {
             cleanup_stale_fragments();
@@ -609,32 +615,34 @@ void ReliableUdpChannel::on_fragment_received(const FragmentHeader& hdr,
         return;
     }
 
-    // Store fragment (skip if already received — duplicate)
-    if (group.fragments[hdr.fragment_index].empty())
+    if (group.frag_sizes[hdr.fragment_index] == 0)
     {
-        group.fragments[hdr.fragment_index].assign(payload.begin(), payload.end());
+        auto offset = static_cast<std::size_t>(hdr.fragment_index) * rudp::kMaxUdpPayload;
+        auto needed = offset + payload.size();
+        if (group.buffer.size() < needed)
+        {
+            group.buffer.resize(needed);
+        }
+        std::memcpy(group.buffer.data() + offset, payload.data(), payload.size());
+        group.frag_sizes[hdr.fragment_index] = static_cast<uint16_t>(payload.size());
+        group.total_size += payload.size();
         group.received_count++;
     }
 
-    // Check if all fragments received
     if (group.received_count == group.expected_count)
     {
-        // Reassemble
+        // Compact into contiguous payload (fragments may have varying sizes)
         std::vector<std::byte> full_payload;
-        std::size_t total_size = 0;
-        for (const auto& frag : group.fragments)
+        full_payload.reserve(group.total_size);
+        for (uint8_t i = 0; i < group.expected_count; ++i)
         {
-            total_size += frag.size();
-        }
-        full_payload.reserve(total_size);
-        for (const auto& frag : group.fragments)
-        {
-            full_payload.insert(full_payload.end(), frag.begin(), frag.end());
+            auto frag_offset = static_cast<std::size_t>(i) * rudp::kMaxUdpPayload;
+            full_payload.insert(full_payload.end(), group.buffer.data() + frag_offset,
+                                group.buffer.data() + frag_offset + group.frag_sizes[i]);
         }
 
         pending_fragments_.erase(hdr.fragment_id);
 
-        // Dispatch the reassembled message
         on_data_received(full_payload);
         dispatch_messages(full_payload);
     }
@@ -652,6 +660,124 @@ void ReliableUdpChannel::cleanup_stale_fragments()
 }
 
 // ============================================================================
+// Independent ACK sending + delayed ACK
+// ============================================================================
+
+void ReliableUdpChannel::send_ack()
+{
+    if (remote_seq_ == 0)
+    {
+        return;
+    }
+
+    uint8_t flags = rudp::kFlagHasAck;
+    auto packet = build_packet(flags, 0, std::span<const std::byte>{});
+
+    auto result = shared_socket_.send_to(packet, remote_);
+    if (result)
+    {
+        bytes_sent_ += *result;
+    }
+    ack_pending_ = false;
+}
+
+void ReliableUdpChannel::schedule_delayed_ack()
+{
+    ack_pending_ = true;
+    if (delayed_ack_timer_.is_valid())
+    {
+        return;
+    }
+    delayed_ack_timer_ = dispatcher_.add_timer(kDelayedAckTimeout,
+                                               [this](TimerHandle)
+                                               {
+                                                   delayed_ack_timer_ = TimerHandle{};
+                                                   if (ack_pending_)
+                                                   {
+                                                       send_ack();
+                                                   }
+                                               });
+}
+
+void ReliableUdpChannel::cancel_delayed_ack()
+{
+    if (delayed_ack_timer_.is_valid())
+    {
+        dispatcher_.cancel_timer(delayed_ack_timer_);
+        delayed_ack_timer_ = TimerHandle{};
+    }
+    ack_pending_ = false;
+}
+
+// ============================================================================
+// rebuild_packet_header — retransmit with fresh ACK info
+// ============================================================================
+
+auto ReliableUdpChannel::rebuild_packet_header(const std::vector<std::byte>& original_packet)
+    -> std::vector<std::byte>
+{
+    if (original_packet.empty())
+    {
+        return original_packet;
+    }
+
+    BinaryReader reader(std::span<const std::byte>(original_packet.data(), original_packet.size()));
+    auto flags_result = reader.read<uint8_t>();
+    if (!flags_result)
+    {
+        return original_packet;
+    }
+    uint8_t flags = *flags_result;
+
+    SeqNum seq = 0;
+    if (flags & rudp::kFlagHasSeq)
+    {
+        auto s = reader.read<uint32_t>();
+        if (!s)
+        {
+            return original_packet;
+        }
+        seq = *s;
+    }
+
+    // Skip old ACK fields
+    if (flags & rudp::kFlagHasAck)
+    {
+        reader.skip(sizeof(uint32_t) * 2);
+    }
+
+    // Read fragment header if present
+    FragmentHeader frag_hdr{};
+    const FragmentHeader* frag_ptr = nullptr;
+    if (flags & rudp::kFlagFragment)
+    {
+        auto fid = reader.read<uint16_t>();
+        auto fidx = reader.read<uint8_t>();
+        auto fcnt = reader.read<uint8_t>();
+        if (fid && fidx && fcnt)
+        {
+            frag_hdr = {*fid, *fidx, *fcnt};
+            frag_ptr = &frag_hdr;
+        }
+    }
+
+    auto payload_bytes = reader.read_bytes(reader.remaining());
+    if (!payload_bytes)
+    {
+        return original_packet;
+    }
+
+    // Always include ACK in retransmissions
+    uint8_t new_flags = flags;
+    if (remote_seq_ > 0)
+    {
+        new_flags |= rudp::kFlagHasAck;
+    }
+
+    return build_packet(new_flags, seq, *payload_bytes, frag_ptr);
+}
+
+// ============================================================================
 // check_resends
 // ============================================================================
 
@@ -665,16 +791,15 @@ void ReliableUdpChannel::check_resends()
         cleanup_stale_fragments();
     }
 
+    bool had_timeout = false;
     for (auto& [seq, pkt] : unacked_)
     {
-        // Backoff: nodelay uses 1.5x (KCP-style), normal uses 2x
-        // Capped at 5 doublings (~30s max)
         auto backoff = rtt_.rto();
         for (uint32_t i = 1; i < pkt.send_count && i < 5; ++i)
         {
             if (rtt_.nodelay())
             {
-                backoff = backoff * 3 / 2;  // 1.5x
+                backoff = backoff * 3 / 2;
             }
             else
             {
@@ -684,20 +809,24 @@ void ReliableUdpChannel::check_resends()
 
         if (now - pkt.sent_at >= backoff)
         {
-            auto result = shared_socket_.send_to(pkt.data, remote_);
+            auto fresh_pkt = rebuild_packet_header(pkt.data);
+            auto result = shared_socket_.send_to(fresh_pkt, remote_);
             if (result)
             {
                 bytes_sent_ += *result;
             }
             pkt.sent_at = now;
             pkt.send_count++;
-
-            // RTO timeout → aggressive cwnd reduction
-            on_loss_cwnd_update(true);
+            had_timeout = true;
 
             ATLAS_LOG_DEBUG("Resend seq={} attempt={} to {}", seq, pkt.send_count,
                             remote_.to_string());
         }
+    }
+
+    if (had_timeout)
+    {
+        on_loss_cwnd_update(true);
     }
 }
 
@@ -780,10 +909,7 @@ void ReliableUdpChannel::on_loss_cwnd_update(bool is_timeout)
 
 void ReliableUdpChannel::start_resend_timer()
 {
-    if (resend_timer_.is_valid())
-    {
-        return;  // already running
-    }
+    stop_resend_timer();
 
     auto min_interval = rtt_.nodelay() ? Milliseconds(10) : Milliseconds(50);
     auto interval = std::max(rtt_.rto(), Duration(min_interval));

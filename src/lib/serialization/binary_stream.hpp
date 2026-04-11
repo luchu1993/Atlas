@@ -159,8 +159,9 @@ public:
     void write(T value)
     {
         auto le = endian::to_little(value);
-        const auto* bytes = reinterpret_cast<const std::byte*>(&le);
-        buffer_.insert(buffer_.end(), bytes, bytes + sizeof(T));
+        auto old_size = buffer_.size();
+        buffer_.resize(old_size + sizeof(T));
+        std::memcpy(buffer_.data() + old_size, &le, sizeof(T));
     }
 
     void write_bytes(std::span<const std::byte> data);
@@ -169,9 +170,13 @@ public:
     void write_packed_int(uint32_t value);
 
     [[nodiscard]] auto data() const -> std::span<const std::byte>;
+    [[nodiscard]] auto mutable_data() -> std::byte* { return buffer_.data(); }
     [[nodiscard]] auto size() const -> std::size_t;
     [[nodiscard]] auto reserve(std::size_t bytes) -> std::byte*;
+    void truncate(std::size_t new_size);
 
+    // Attach/detach the internal buffer for zero-copy bundle composition
+    void attach(std::vector<std::byte> buf);
     void clear();
     [[nodiscard]] auto detach() -> std::vector<std::byte>;
 
@@ -205,6 +210,7 @@ public:
 
     [[nodiscard]] auto read_bytes(std::size_t count) -> Result<std::span<const std::byte>>;
     [[nodiscard]] auto read_string() -> Result<std::string>;
+    [[nodiscard]] auto read_string_view() -> Result<std::string_view>;
     [[nodiscard]] auto read_packed_int() -> Result<uint32_t>;
 
     [[nodiscard]] auto remaining() const -> std::size_t;

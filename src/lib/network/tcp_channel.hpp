@@ -1,9 +1,8 @@
 #pragma once
 
+#include "foundation/containers/byte_ring_buffer.hpp"
 #include "network/channel.hpp"
 #include "network/socket.hpp"
-
-#include <vector>
 
 namespace atlas
 {
@@ -11,9 +10,8 @@ namespace atlas
 class TcpChannel : public Channel
 {
 public:
-    // TCP frame format: [uint32 frame_length LE][bundle data]
     static constexpr std::size_t kFrameHeaderSize = sizeof(uint32_t);
-    static constexpr std::size_t kMaxRecvBufferSize = 1024 * 1024;  // 1 MB backpressure limit
+    static constexpr std::size_t kMaxRecvBufferSize = 1024 * 1024;
 
     TcpChannel(EventDispatcher& dispatcher, InterfaceTable& table, Socket socket,
                const Address& remote);
@@ -21,10 +19,7 @@ public:
 
     [[nodiscard]] auto fd() const -> FdHandle override { return socket_.fd(); }
 
-    // Called when socket is readable (from EventDispatcher)
     void on_readable();
-
-    // Called when socket is writable (flush write buffer)
     void on_writable();
 
 protected:
@@ -37,15 +32,8 @@ private:
 
     Socket socket_;
 
-    // Receive buffer with read-offset: avoids O(n) erase(begin,...) on every
-    // frame consumed.  Compacted (erased) once the unread head exceeds half
-    // the buffer capacity.
-    std::vector<std::byte> recv_buffer_;
-    std::size_t recv_read_pos_{0};
-
-    // Write buffer with read-offset: same strategy for the write path.
-    std::vector<std::byte> write_buffer_;
-    std::size_t write_read_pos_{0};
+    ByteRingBuffer recv_buffer_{kMaxRecvBufferSize};
+    ByteRingBuffer write_buffer_{256 * 1024};
 
     bool write_registered_{false};
 };

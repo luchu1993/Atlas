@@ -27,7 +27,8 @@ void Channel::activate()
     if (state_ == ChannelState::Created)
     {
         state_ = ChannelState::Active;
-        reset_inactivity_timer();
+        last_activity_ = Clock::now();
+        start_inactivity_timer();
     }
 }
 
@@ -57,6 +58,18 @@ auto Channel::send() -> Result<void>
     }
 
     auto data = bundle_.finalize();
+
+    if (packet_filter_)
+    {
+        auto filtered =
+            packet_filter_->send_filter(std::span<const std::byte>(data.data(), data.size()));
+        if (!filtered)
+        {
+            return filtered.error();
+        }
+        data = std::move(*filtered);
+    }
+
     auto result = do_send(data);
     if (!result)
     {
@@ -82,10 +95,16 @@ auto Channel::send_message(MessageID id, std::span<const std::byte> data) -> Res
 void Channel::set_inactivity_timeout(Duration timeout)
 {
     inactivity_timeout_ = timeout;
-    reset_inactivity_timer();
+    last_activity_ = Clock::now();
+    start_inactivity_timer();
 }
 
 void Channel::reset_inactivity_timer()
+{
+    last_activity_ = Clock::now();
+}
+
+void Channel::start_inactivity_timer()
 {
     if (inactivity_timeout_ <= Duration::zero())
     {
@@ -95,19 +114,23 @@ void Channel::reset_inactivity_timer()
     {
         dispatcher_.cancel_timer(inactivity_timer_);
     }
-    inactivity_timer_ = dispatcher_.add_timer(
-        inactivity_timeout_,
-        [this](TimerHandle)
-        {
-            ATLAS_LOG_WARNING("Channel to {} timed out due to inactivity", remote_.to_string());
-            on_disconnect();
-        });
+    inactivity_timer_ = dispatcher_.add_repeating_timer(
+        inactivity_timeout_, [this](TimerHandle) { check_inactivity(); });
+}
+
+void Channel::check_inactivity()
+{
+    if (Clock::now() - last_activity_ >= inactivity_timeout_)
+    {
+        ATLAS_LOG_WARNING("Channel to {} timed out due to inactivity", remote_.to_string());
+        on_disconnect();
+    }
 }
 
 void Channel::on_data_received(std::span<const std::byte> data)
 {
     bytes_received_ += data.size();
-    reset_inactivity_timer();
+    last_activity_ = Clock::now();
 }
 
 void Channel::on_disconnect()
@@ -122,27 +145,43 @@ void Channel::on_disconnect()
 void Channel::dispatch_messages(std::span<const std::byte> frame_data)
 {
     BinaryReader reader(frame_data);
-    while (reader.remaining() >= sizeof(MessageID))
+    while (reader.remaining() >= 1)
     {
-        // BinaryReader::read<T> already handles endian conversion
-        auto id_result = reader.read<MessageID>();
-        if (!id_result)
+        // Read packed MessageID: 1 byte if < 0xFE, else 0xFE + uint16 LE
+        auto tag_result = reader.read<uint8_t>();
+        if (!tag_result)
         {
             break;
         }
-        auto id = *id_result;
-
-        // Determine payload size
-        const auto* desc = interface_table_.find(id);
-        std::size_t payload_size = 0;
-
-        if (desc && desc->is_fixed())
+        MessageID id;
+        if (*tag_result < 0xFE)
         {
-            payload_size = static_cast<std::size_t>(desc->fixed_length);
+            id = static_cast<MessageID>(*tag_result);
+        }
+        else if (*tag_result == 0xFE)
+        {
+            auto id16 = reader.read<uint16_t>();
+            if (!id16)
+            {
+                break;
+            }
+            id = *id16;
         }
         else
         {
-            // Variable: read packed int length
+            ATLAS_LOG_WARNING("Invalid packed MessageID tag 0xFF from {}", remote_.to_string());
+            break;
+        }
+
+        const auto* entry = interface_table_.find_entry(id);
+        std::size_t payload_size = 0;
+
+        if (entry && entry->desc.is_fixed())
+        {
+            payload_size = static_cast<std::size_t>(entry->desc.fixed_length);
+        }
+        else
+        {
             auto len = reader.read_packed_int();
             if (!len)
             {
@@ -157,20 +196,20 @@ void Channel::dispatch_messages(std::span<const std::byte> frame_data)
             break;
         }
 
-        // Extract this message's payload bytes
         auto payload_span = reader.read_bytes(payload_size);
         if (!payload_span)
         {
             break;
         }
 
-        BinaryReader msg_reader(*payload_span);
-        auto dispatch_result = interface_table_.dispatch(remote_, this, id, msg_reader);
-        if (!dispatch_result)
+        if (!entry)
         {
-            ATLAS_LOG_WARNING("Failed to dispatch message {}: {}", id,
-                              dispatch_result.error().message());
+            ATLAS_LOG_WARNING("Unknown message ID {} from {}", id, remote_.to_string());
+            continue;
         }
+
+        BinaryReader msg_reader(*payload_span);
+        entry->handler->handle_message(remote_, this, id, msg_reader);
     }
 }
 

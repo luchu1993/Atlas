@@ -1,5 +1,7 @@
 #include "serialization/binary_stream.hpp"
 
+#include <cassert>
+
 namespace atlas
 {
 
@@ -35,9 +37,14 @@ void BinaryWriter::write_string(std::string_view str)
 
 void BinaryWriter::write_packed_int(uint32_t value)
 {
-    if (value < 0xFF)
+    if (value < 0xFE)
     {
         write(static_cast<uint8_t>(value));
+    }
+    else if (value <= 0xFFFF)
+    {
+        write(static_cast<uint8_t>(0xFE));
+        write(static_cast<uint16_t>(value));
     }
     else
     {
@@ -61,6 +68,17 @@ auto BinaryWriter::reserve(std::size_t bytes) -> std::byte*
     auto old_size = buffer_.size();
     buffer_.resize(old_size + bytes);
     return buffer_.data() + old_size;
+}
+
+void BinaryWriter::truncate(std::size_t new_size)
+{
+    assert(new_size <= buffer_.size());
+    buffer_.resize(new_size);
+}
+
+void BinaryWriter::attach(std::vector<std::byte> buf)
+{
+    buffer_ = std::move(buf);
 }
 
 void BinaryWriter::clear()
@@ -110,6 +128,25 @@ auto BinaryReader::read_string() -> Result<std::string>
     return std::string(reinterpret_cast<const char*>(bytes.data()), bytes.size());
 }
 
+auto BinaryReader::read_string_view() -> Result<std::string_view>
+{
+    auto length_result = read_packed_int();
+    if (!length_result)
+    {
+        return length_result.error();
+    }
+
+    auto length = length_result.value();
+    auto bytes_result = read_bytes(length);
+    if (!bytes_result)
+    {
+        return bytes_result.error();
+    }
+
+    auto bytes = bytes_result.value();
+    return std::string_view(reinterpret_cast<const char*>(bytes.data()), bytes.size());
+}
+
 auto BinaryReader::read_packed_int() -> Result<uint32_t>
 {
     auto tag_result = read<uint8_t>();
@@ -119,9 +156,19 @@ auto BinaryReader::read_packed_int() -> Result<uint32_t>
     }
 
     auto tag = tag_result.value();
-    if (tag < 0xFF)
+    if (tag < 0xFE)
     {
         return static_cast<uint32_t>(tag);
+    }
+
+    if (tag == 0xFE)
+    {
+        auto v16 = read<uint16_t>();
+        if (!v16)
+        {
+            return v16.error();
+        }
+        return static_cast<uint32_t>(*v16);
     }
 
     return read<uint32_t>();

@@ -1,6 +1,7 @@
 #include "clrscript/clr_object.hpp"
 
 #include "clrscript/clr_error.hpp"
+#include "clrscript/clr_object_registry.hpp"
 #include "foundation/error.hpp"
 #include "foundation/log.hpp"
 
@@ -46,16 +47,19 @@ ClrObject::ClrObject(void* gc_handle) : gc_handle_(gc_handle)
 #if ATLAS_DEBUG
     GCHandleTracker::on_alloc();
 #endif
+    ClrObjectRegistry::instance().register_object(this);
 }
 
 ClrObject::~ClrObject()
 {
+    ClrObjectRegistry::instance().unregister_object(this);
     release();
 }
 
 ClrObject::ClrObject(ClrObject&& other) noexcept : gc_handle_(other.gc_handle_)
 {
     other.gc_handle_ = nullptr;
+    ClrObjectRegistry::instance().register_object(this);
 }
 
 ClrObject& ClrObject::operator=(ClrObject&& other) noexcept

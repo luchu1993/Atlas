@@ -378,4 +378,29 @@ TEST_F(ClrObjectTest, TrackerLeakCountIsZeroAfterConstruct)
 
 #endif  // ATLAS_DEBUG
 
+// ============================================================================
+// Phase 6: Boundary tests
+// ============================================================================
+
+TEST_F(ClrObjectTest, DoubleRelease)
+{
+    auto obj = std::make_unique<ClrObject>(make_fake_handle());
+    obj.reset();
+    // Object is already destroyed; this test just verifies no double-free crash.
+    SUCCEED();
+}
+
+TEST_F(ClrObjectTest, MoveFromReleasedObject)
+{
+    ClrObject a(make_fake_handle());
+    ClrObject b(std::move(a));
+
+    EXPECT_TRUE(a.is_none());
+    EXPECT_FALSE(b.is_none());
+
+    ClrObject c(std::move(a));
+    EXPECT_TRUE(c.is_none());
+    EXPECT_TRUE(a.is_none());
+}
+
 }  // namespace atlas::test

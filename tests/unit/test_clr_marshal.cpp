@@ -447,4 +447,42 @@ TEST(ClrMarshalBounds, ToSpanRefNormalSpanWorks)
     EXPECT_EQ(ref.length, static_cast<int32_t>(buf.size()));
 }
 
+// ============================================================================
+// Phase 6: Boundary tests
+// ============================================================================
+
+TEST(ClrMarshalBoundary, EmptyStringRoundTrip)
+{
+    auto ref = to_string_ref("");
+    auto result = from_string_ref(ref);
+    EXPECT_EQ(result, "");
+    EXPECT_EQ(ref.length, 0);
+}
+
+TEST(ClrMarshalBoundary, UnicodeStringRoundTrip)
+{
+    std::string utf8 = "\xe4\xb8\xad\xe6\x96\x87\xf0\x9f\x98\x80";  // 中文😀
+    auto ref = to_string_ref(utf8);
+    auto result = from_string_ref(ref);
+    EXPECT_EQ(result, utf8);
+}
+
+TEST(ClrMarshalBoundary, LargeStringRoundTrip)
+{
+    std::string large(1024 * 1024, 'X');
+    auto ref = to_string_ref(large);
+    auto result = from_string_ref(ref);
+    EXPECT_EQ(result.size(), large.size());
+    EXPECT_EQ(result, large);
+}
+
+TEST(ClrMarshalBoundary, NullPointerStringRef)
+{
+    ClrStringRef ref{};
+    ref.data = nullptr;
+    ref.length = 0;
+    auto result = from_string_ref(ref);
+    EXPECT_EQ(result, "");
+}
+
 }  // namespace atlas::test

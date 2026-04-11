@@ -100,18 +100,23 @@ private:
         uint8_t fragment_count;  // total fragments
     };
 
-    // Fragment reassembly
     struct FragmentGroup
     {
         uint8_t expected_count{0};
         uint8_t received_count{0};
-        std::vector<std::vector<std::byte>> fragments;  // indexed by fragment_index
+        std::vector<std::byte> buffer;     // pre-allocated contiguous buffer
+        std::vector<uint16_t> frag_sizes;  // per-fragment size (0 = not received)
+        std::size_t total_size{0};
         TimePoint first_received;
     };
 
     // Build packet header and prepend to payload
     auto build_packet(uint8_t flags, SeqNum seq, std::span<const std::byte> payload,
                       const FragmentHeader* frag = nullptr) -> std::vector<std::byte>;
+
+    // Rebuild packet header with fresh ACK info for retransmission
+    auto rebuild_packet_header(const std::vector<std::byte>& original_packet)
+        -> std::vector<std::byte>;
 
     // ACK processing
     void process_ack(SeqNum ack_num, uint32_t ack_bits);
@@ -120,6 +125,11 @@ private:
     void check_resends();
     void start_resend_timer();
     void stop_resend_timer();
+
+    // Independent ACK sending + delayed ACK
+    void send_ack();
+    void schedule_delayed_ack();
+    void cancel_delayed_ack();
 
     // Receive tracking
     void record_received_seq(SeqNum seq);
@@ -180,6 +190,11 @@ private:
 
     // Resend timer
     TimerHandle resend_timer_;
+
+    // Delayed ACK timer
+    TimerHandle delayed_ack_timer_;
+    bool ack_pending_{false};
+    static constexpr Duration kDelayedAckTimeout = std::chrono::milliseconds(25);
 };
 
 }  // namespace atlas

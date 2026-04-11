@@ -1,6 +1,5 @@
 #include "serialization/json_parser.hpp"
 
-// Suppress deprecation warnings from rapidjson (uses deprecated std::iterator)
 #if defined(_MSC_VER)
 #pragma warning(push)
 #pragma warning(disable : 4996 5054)
@@ -9,6 +8,8 @@
 #pragma GCC diagnostic ignored "-Wdeprecated-declarations"
 #endif
 
+#include <cassert>
+#include <charconv>
 #include <rapidjson/document.h>
 #include <rapidjson/error/en.h>
 
@@ -23,14 +24,10 @@
 namespace atlas::json
 {
 
-// ============================================================================
-// Internal helpers
-// ============================================================================
-
 namespace
 {
 
-void populate_from_value(DataSection::Ptr& section, const rapidjson::Value& val);
+void populate_from_value(DataSection* section, const rapidjson::Value& val);
 
 auto value_to_string(const rapidjson::Value& val) -> std::string
 {
@@ -66,46 +63,57 @@ auto value_to_string(const rapidjson::Value& val) -> std::string
     {
         return "";
     }
-    // Object/Array handled separately
     return "";
 }
 
-void convert_value(DataSection::Ptr& parent, const std::string& key, const rapidjson::Value& val)
+void convert_value(DataSection* parent, std::string_view key, const rapidjson::Value& val)
 {
     if (val.IsObject())
     {
-        auto child = parent->add_child(key);
+        auto* child = parent->add_child(std::string(key));
         populate_from_value(child, val);
     }
     else if (val.IsArray())
     {
-        auto child = parent->add_child(key);
+        auto* child = parent->add_child(std::string(key));
         for (rapidjson::SizeType i = 0; i < val.Size(); ++i)
         {
-            convert_value(child, std::to_string(i), val[i]);
+            char idx_buf[32];
+            auto [ptr, ec] = std::to_chars(idx_buf, idx_buf + sizeof(idx_buf),
+                                           static_cast<unsigned long long>(i));
+            assert(ec == std::errc{});
+            convert_value(child, std::string_view(idx_buf, static_cast<std::size_t>(ptr - idx_buf)),
+                          val[i]);
         }
     }
     else
     {
-        parent->add_child(key, value_to_string(val));
+        parent->add_child(std::string(key), value_to_string(val));
     }
 }
 
-void populate_from_value(DataSection::Ptr& section, const rapidjson::Value& val)
+void populate_from_value(DataSection* section, const rapidjson::Value& val)
 {
     if (val.IsObject())
     {
         for (auto it = val.MemberBegin(); it != val.MemberEnd(); ++it)
         {
-            std::string member_name(it->name.GetString(), it->name.GetStringLength());
-            convert_value(section, member_name, it->value);
+            convert_value(section,
+                          std::string_view(it->name.GetString(), it->name.GetStringLength()),
+                          it->value);
         }
     }
     else if (val.IsArray())
     {
         for (rapidjson::SizeType i = 0; i < val.Size(); ++i)
         {
-            convert_value(section, std::to_string(i), val[i]);
+            char idx_buf[32];
+            auto [ptr, ec] = std::to_chars(idx_buf, idx_buf + sizeof(idx_buf),
+                                           static_cast<unsigned long long>(i));
+            assert(ec == std::errc{});
+            convert_value(section,
+                          std::string_view(idx_buf, static_cast<std::size_t>(ptr - idx_buf)),
+                          val[i]);
         }
     }
     else
@@ -116,11 +124,7 @@ void populate_from_value(DataSection::Ptr& section, const rapidjson::Value& val)
 
 }  // anonymous namespace
 
-// ============================================================================
-// Public API
-// ============================================================================
-
-auto parse_file(const std::filesystem::path& path) -> Result<DataSection::Ptr>
+auto parse_file(const std::filesystem::path& path) -> Result<std::shared_ptr<DataSectionTree>>
 {
     auto text = fs::read_text_file(path);
     if (!text)
@@ -130,7 +134,7 @@ auto parse_file(const std::filesystem::path& path) -> Result<DataSection::Ptr>
     return parse_string(*text);
 }
 
-auto parse_string(std::string_view json) -> Result<DataSection::Ptr>
+auto parse_string(std::string_view json) -> Result<std::shared_ptr<DataSectionTree>>
 {
     rapidjson::Document doc;
     doc.Parse(json.data(), json.size());
@@ -144,9 +148,9 @@ auto parse_string(std::string_view json) -> Result<DataSection::Ptr>
         return Error(ErrorCode::InvalidArgument, std::move(msg));
     }
 
-    auto root = std::make_shared<DataSection>("root");
-    populate_from_value(root, doc);
-    return root;
+    auto tree = std::make_shared<DataSectionTree>("root");
+    populate_from_value(tree->root(), doc);
+    return tree;
 }
 
 }  // namespace atlas::json

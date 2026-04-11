@@ -12,34 +12,32 @@ namespace atlas
 
 inline constexpr std::size_t kMaxBundleSize = 64 * 1024;  // 64 KB
 
+// Messages are written directly into the bundle's wire buffer using a
+// reserve-and-backpatch strategy for variable-length prefixes.  This
+// eliminates the intermediate payload_writer_ copy that was here before.
 class Bundle
 {
 public:
     Bundle() = default;
 
-    // Start writing a new message. Must call end_message() before start_message() again.
     void start_message(const MessageDesc& desc);
 
-    // Get writer for the current message payload.
-    // The returned reference is valid only between start_message() and end_message().
+    // Returns a writer that appends directly into the bundle buffer.
     [[nodiscard]] auto writer() -> BinaryWriter&;
 
-    // Finish the current message (patches length prefix for variable-length messages)
+    // Patches the length prefix for variable-length messages.
     void end_message();
 
-    // Convenience: write a complete typed message
     template <NetworkMessage Msg>
     void add_message(const Msg& msg)
     {
         start_message(Msg::descriptor());
-        msg.serialize(payload_writer_);
+        msg.serialize(writer_);
         end_message();
     }
 
-    // Finalize and return the accumulated wire data. Clears the bundle.
     [[nodiscard]] auto finalize() -> std::vector<std::byte>;
 
-    // Query
     [[nodiscard]] auto message_count() const -> uint32_t { return message_count_; }
     [[nodiscard]] auto total_size() const -> std::size_t { return buffer_.size(); }
     [[nodiscard]] auto empty() const -> bool { return message_count_ == 0; }
@@ -51,12 +49,13 @@ public:
     void clear();
 
 private:
-    std::vector<std::byte> buffer_;  // accumulated wire data
-    BinaryWriter payload_writer_;    // for current message payload
+    std::vector<std::byte> buffer_;
+    BinaryWriter writer_;  // writes directly into buffer_ (set via attach/detach)
     uint32_t message_count_{0};
-    bool writing_message_{false};  // between start/end
+    bool writing_message_{false};
     MessageLengthStyle current_style_{};
-    std::size_t payload_start_{0};  // offset where payload begins
+    std::size_t length_prefix_pos_{0};  // offset reserved for backpatching length
+    std::size_t payload_start_{0};
 };
 
 }  // namespace atlas

@@ -20,7 +20,7 @@ namespace atlas
 // Lifecycle:
 //   1. configure()   — set paths for runtimeconfig.json and Atlas.Runtime.dll
 //   2. initialize()  — start CLR, bootstrap, bind lifecycle methods
-//   3. load_module() — load user game-script assemblies (optional)
+//   3. load_module() — load user game-script assemblies
 //   4. on_init()     — trigger C# entity initialization
 //   5. on_tick()     — per-frame update (called from main loop)
 //   6. on_shutdown() — trigger C# entity cleanup
@@ -55,6 +55,18 @@ public:
 
     [[nodiscard]] auto is_initialized() const -> bool { return initialized_; }
 
+    // -- Hot-reload support (used by ClrHotReload) ----------------------------
+
+    /// Call a no-argument [UnmanagedCallersOnly] method in HotReloadManager.
+    [[nodiscard]] auto call_hot_reload(std::string_view method_name) -> Result<void>;
+
+    /// Call a path-argument [UnmanagedCallersOnly] method in HotReloadManager.
+    [[nodiscard]] auto call_hot_reload(std::string_view method_name,
+                                       const std::filesystem::path& assembly_path) -> Result<void>;
+
+    /// Access the CLR host (needed for rebinding methods after reload).
+    [[nodiscard]] auto host() -> ClrHost& { return host_; }
+
 private:
     Config config_;
     ClrHost host_;
@@ -69,7 +81,14 @@ private:
     ClrFallibleMethod<float> on_tick_;     // Lifecycle.OnTick(float dt)
     ClrFallibleMethod<> on_shutdown_;      // Lifecycle.OnShutdown()
 
+    // Script loading (HotReloadManager entry points)
+    ClrFallibleMethod<const uint8_t*, int32_t> load_scripts_;      // LoadScripts
+    ClrFallibleMethod<> serialize_and_unload_;                     // SerializeAndUnload
+    ClrFallibleMethod<const uint8_t*, int32_t> load_and_restore_;  // LoadAndRestore
+
     static constexpr std::string_view kLifecycleType = "Atlas.Core.Lifecycle, Atlas.Runtime";
+    static constexpr std::string_view kHotReloadType =
+        "Atlas.Hosting.HotReloadManager, Atlas.Runtime";
 
     void reset_all_methods();
 };

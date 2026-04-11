@@ -3,7 +3,6 @@
 #include "foundation/log.hpp"
 #include "network/event_dispatcher.hpp"
 
-#include <array>
 #include <cstring>
 
 namespace atlas
@@ -30,10 +29,17 @@ TcpChannel::~TcpChannel()
 
 void TcpChannel::on_readable()
 {
-    std::array<std::byte, 8192> temp{};
     while (true)
     {
-        auto result = socket_.recv(temp);
+        auto span = recv_buffer_.writable_span();
+        if (span.empty())
+        {
+            ATLAS_LOG_ERROR("TcpChannel recv buffer full from {}", remote_.to_string());
+            on_disconnect();
+            return;
+        }
+
+        auto result = socket_.recv(span);
         if (!result)
         {
             if (result.error().code() == ErrorCode::WouldBlock)
@@ -52,16 +58,8 @@ void TcpChannel::on_readable()
             return;
         }
 
-        recv_buffer_.insert(recv_buffer_.end(), temp.data(), temp.data() + *result);
-        on_data_received(std::span<const std::byte>(temp.data(), *result));
-
-        // Backpressure: if unread recv data too large, condemn
-        if (recv_buffer_.size() - recv_read_pos_ > kMaxRecvBufferSize)
-        {
-            ATLAS_LOG_ERROR("TcpChannel recv buffer overflow from {}", remote_.to_string());
-            on_disconnect();
-            return;
-        }
+        recv_buffer_.commit(*result);
+        on_data_received(std::span<const std::byte>(span.data(), *result));
     }
 
     process_recv_buffer();
@@ -71,17 +69,28 @@ void TcpChannel::process_recv_buffer()
 {
     while (true)
     {
-        std::size_t available = recv_buffer_.size() - recv_read_pos_;
+        auto available = recv_buffer_.readable_size();
 
         if (available < kFrameHeaderSize)
         {
             break;
         }
 
-        const std::byte* head = recv_buffer_.data() + recv_read_pos_;
-
+        // Peek frame length — may span the ring buffer wrap point
+        auto rspan = recv_buffer_.readable_span();
         uint32_t frame_length;
-        std::memcpy(&frame_length, head, sizeof(uint32_t));
+
+        if (rspan.size() >= kFrameHeaderSize)
+        {
+            std::memcpy(&frame_length, rspan.data(), sizeof(uint32_t));
+        }
+        else
+        {
+            recv_buffer_.linearize();
+            rspan = recv_buffer_.readable_span();
+            std::memcpy(&frame_length, rspan.data(), sizeof(uint32_t));
+        }
+
         frame_length = endian::from_little(frame_length);
 
         if (frame_length > kMaxBundleSize)
@@ -98,18 +107,35 @@ void TcpChannel::process_recv_buffer()
             break;
         }
 
-        const std::byte* frame_start = head + kFrameHeaderSize;
-        dispatch_messages(std::span<const std::byte>(frame_start, frame_length));
-
-        recv_read_pos_ += total;
-
-        // Compact: once the consumed prefix exceeds half the buffer, shift.
-        if (recv_read_pos_ > recv_buffer_.size() / 2)
+        // Ensure contiguous data for dispatch
+        if (rspan.size() < total)
         {
-            recv_buffer_.erase(recv_buffer_.begin(),
-                               recv_buffer_.begin() + static_cast<std::ptrdiff_t>(recv_read_pos_));
-            recv_read_pos_ = 0;
+            recv_buffer_.linearize();
+            rspan = recv_buffer_.readable_span();
         }
+
+        const std::byte* frame_start = rspan.data() + kFrameHeaderSize;
+
+        if (packet_filter_)
+        {
+            auto filtered =
+                packet_filter_->recv_filter(std::span<const std::byte>(frame_start, frame_length));
+            if (filtered)
+            {
+                dispatch_messages(std::span<const std::byte>(filtered->data(), filtered->size()));
+            }
+            else
+            {
+                ATLAS_LOG_WARNING("TcpChannel recv_filter failed from {}: {}", remote_.to_string(),
+                                  filtered.error().message());
+            }
+        }
+        else
+        {
+            dispatch_messages(std::span<const std::byte>(frame_start, frame_length));
+        }
+
+        recv_buffer_.consume(total);
     }
 }
 
@@ -125,24 +151,24 @@ void TcpChannel::on_writable()
 auto TcpChannel::do_send(std::span<const std::byte> data) -> Result<size_t>
 {
     uint32_t frame_length = endian::to_little(static_cast<uint32_t>(data.size()));
-    auto* header_bytes = reinterpret_cast<const std::byte*>(&frame_length);
+    auto header = std::span<const std::byte>(reinterpret_cast<const std::byte*>(&frame_length),
+                                             sizeof(uint32_t));
 
-    write_buffer_.insert(write_buffer_.end(), header_bytes, header_bytes + sizeof(uint32_t));
-    write_buffer_.insert(write_buffer_.end(), data.begin(), data.end());
+    if (!write_buffer_.append(header) || !write_buffer_.append(data))
+    {
+        return Error(ErrorCode::WouldBlock, "Write buffer full");
+    }
 
     try_flush_write_buffer();
-
     return static_cast<size_t>(data.size());
 }
 
 void TcpChannel::try_flush_write_buffer()
 {
-    while (write_read_pos_ < write_buffer_.size())
+    while (write_buffer_.readable_size() > 0)
     {
-        std::span<const std::byte> unsent(write_buffer_.data() + write_read_pos_,
-                                          write_buffer_.size() - write_read_pos_);
-
-        auto result = socket_.send(unsent);
+        auto rspan = write_buffer_.readable_span();
+        auto result = socket_.send(rspan);
         if (!result)
         {
             if (result.error().code() == ErrorCode::WouldBlock)
@@ -156,21 +182,8 @@ void TcpChannel::try_flush_write_buffer()
             return;
         }
 
-        write_read_pos_ += *result;
-
-        // Compact once consumed prefix exceeds half the buffer.
-        if (write_read_pos_ > write_buffer_.size() / 2)
-        {
-            write_buffer_.erase(
-                write_buffer_.begin(),
-                write_buffer_.begin() + static_cast<std::ptrdiff_t>(write_read_pos_));
-            write_read_pos_ = 0;
-        }
+        write_buffer_.consume(*result);
     }
-
-    // All data flushed — reset to empty state without reallocation.
-    write_buffer_.clear();
-    write_read_pos_ = 0;
 
     if (write_registered_)
     {
@@ -180,7 +193,7 @@ void TcpChannel::try_flush_write_buffer()
 
 void TcpChannel::update_write_interest()
 {
-    bool need_write = (write_read_pos_ < write_buffer_.size());
+    bool need_write = write_buffer_.readable_size() > 0;
     if (need_write && !write_registered_)
     {
         auto interest = IOEvent::Readable | IOEvent::Writable;

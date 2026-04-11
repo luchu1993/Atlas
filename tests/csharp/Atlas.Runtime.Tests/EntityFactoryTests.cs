@@ -1,0 +1,47 @@
+using Atlas.Entity;
+using Atlas.Serialization;
+using Xunit;
+
+namespace Atlas.Tests;
+
+[Entity("FactoryTestEntity")]
+public partial class FactoryTestEntity : ServerEntity
+{
+    [Replicated] private int _health = 100;
+}
+
+public class EntityFactoryTests
+{
+    [Fact]
+    public void Create_KnownType_ReturnsEntity()
+    {
+        var entity = EntityFactory.Create("FactoryTestEntity");
+        Assert.NotNull(entity);
+        Assert.IsType<FactoryTestEntity>(entity);
+    }
+
+    [Fact]
+    public void Create_UnknownType_ReturnsNull()
+    {
+        var entity = EntityFactory.Create("NonExistent");
+        Assert.Null(entity);
+    }
+
+    [Fact]
+    public void Create_TypeNameMatches()
+    {
+        var entity = EntityFactory.Create("FactoryTestEntity");
+        Assert.NotNull(entity);
+        Assert.Equal("FactoryTestEntity", entity!.TypeName);
+    }
+
+    [Fact]
+    public void Create_MultipleInstances_AreDifferent()
+    {
+        var e1 = EntityFactory.Create("FactoryTestEntity");
+        var e2 = EntityFactory.Create("FactoryTestEntity");
+        Assert.NotNull(e1);
+        Assert.NotNull(e2);
+        Assert.NotSame(e1, e2);
+    }
+}

@@ -1,9 +1,10 @@
-#include <gtest/gtest.h>
-#include "network/reliable_udp.hpp"
 #include "network/event_dispatcher.hpp"
 #include "network/interface_table.hpp"
-#include "network/socket.hpp"
 #include "network/message.hpp"
+#include "network/reliable_udp.hpp"
+#include "network/socket.hpp"
+
+#include <gtest/gtest.h>
 
 #include <array>
 #include <chrono>
@@ -27,7 +28,8 @@ struct RudpTestMsg
     static auto deserialize(BinaryReader& r) -> Result<RudpTestMsg>
     {
         auto v = r.read<uint32_t>();
-        if (!v) return v.error();
+        if (!v)
+            return v.error();
         return RudpTestMsg{*v};
     }
 };
@@ -38,10 +40,7 @@ protected:
     EventDispatcher dispatcher_{"test"};
     InterfaceTable table_;
 
-    void SetUp() override
-    {
-        dispatcher_.set_max_poll_wait(Milliseconds(1));
-    }
+    void SetUp() override { dispatcher_.set_max_poll_wait(Milliseconds(1)); }
 
     // Helper: read all pending datagrams from a socket and feed to channel
     void pump_datagrams(Socket& sock, ReliableUdpChannel& channel)
@@ -50,9 +49,9 @@ protected:
         while (true)
         {
             auto result = sock.recv_from(buf);
-            if (!result || result->first == 0) break;
-            channel.on_datagram_received(
-                std::span<const std::byte>(buf.data(), result->first));
+            if (!result || result->first == 0)
+                break;
+            channel.on_datagram_received(std::span<const std::byte>(buf.data(), result->first));
         }
     }
 };
@@ -113,8 +112,7 @@ TEST_F(ReliableUdpTest, AckClearsUnacked)
     ASSERT_TRUE(sock_b->bind(Address("127.0.0.1", 0)).has_value());
     auto addr_b = sock_b->local_address().value();
 
-    table_.register_typed_handler<RudpTestMsg>(
-        [](const Address&, Channel*, const RudpTestMsg&) {});
+    table_.register_typed_handler<RudpTestMsg>([](const Address&, Channel*, const RudpTestMsg&) {});
 
     ReliableUdpChannel channel_a(dispatcher_, table_, *sock_a, addr_b);
     channel_a.activate();
@@ -154,11 +152,8 @@ TEST_F(ReliableUdpTest, UnreliableSendNoTracking)
     auto addr_b = sock_b->local_address().value();
 
     bool received = false;
-    table_.register_typed_handler<RudpTestMsg>(
-        [&](const Address&, Channel*, const RudpTestMsg& msg)
-        {
-            received = true;
-        });
+    table_.register_typed_handler<RudpTestMsg>([&](const Address&, Channel*, const RudpTestMsg& msg)
+                                               { received = true; });
 
     ReliableUdpChannel channel_a(dispatcher_, table_, *sock_a, addr_b);
     channel_a.activate();
@@ -207,8 +202,7 @@ TEST_F(ReliableUdpTest, RttEstimation)
     ASSERT_TRUE(sock_b->bind(Address("127.0.0.1", 0)).has_value());
     auto addr_b = sock_b->local_address().value();
 
-    table_.register_typed_handler<RudpTestMsg>(
-        [](const Address&, Channel*, const RudpTestMsg&) {});
+    table_.register_typed_handler<RudpTestMsg>([](const Address&, Channel*, const RudpTestMsg&) {});
 
     ReliableUdpChannel channel_a(dispatcher_, table_, *sock_a, addr_b);
     channel_a.activate();
@@ -228,14 +222,10 @@ TEST_F(ReliableUdpTest, RttEstimation)
     std::this_thread::sleep_for(std::chrono::milliseconds(10));
     pump_datagrams(*sock_a, channel_a);
 
-    // RTT should have moved from initial 200ms toward actual loopback RTT.
-    // After one sample with Jacobson/Karels (7/8 old + 1/8 new), we expect
-    // ~175ms from initial 200ms with ~1ms actual RTT. After multiple exchanges
-    // it converges. Just verify it decreased from the initial value.
     auto updated_rtt = channel_a.rtt();
-    auto initial_ms = std::chrono::duration_cast<Milliseconds>(initial_rtt).count();
-    auto updated_ms = std::chrono::duration_cast<Milliseconds>(updated_rtt).count();
-    EXPECT_LT(updated_ms, initial_ms) << "RTT should decrease on loopback";
+    auto updated_us = std::chrono::duration_cast<Microseconds>(updated_rtt).count();
+    EXPECT_GT(updated_us, 0) << "RTT should be positive after exchange";
+    EXPECT_LT(updated_us, 100'000) << "RTT should be reasonable on loopback";
 }
 
 // ============================================================================
@@ -254,8 +244,7 @@ TEST_F(ReliableUdpTest, NodelayLowersMinRto)
     auto addr_b = sock_b->local_address().value();
     auto addr_a = sock_a->local_address().value();
 
-    table_.register_typed_handler<RudpTestMsg>(
-        [](const Address&, Channel*, const RudpTestMsg&) {});
+    table_.register_typed_handler<RudpTestMsg>([](const Address&, Channel*, const RudpTestMsg&) {});
 
     ReliableUdpChannel channel_a(dispatcher_, table_, *sock_a, addr_b);
     channel_a.set_nodelay(true);
@@ -279,11 +268,9 @@ TEST_F(ReliableUdpTest, NodelayLowersMinRto)
         pump_datagrams(*sock_a, channel_a);
     }
 
-    // After 5 exchanges from 200ms initial (7/8 old + 1/8 new per sample),
-    // RTT converges toward loopback ~1ms. After 5 samples: ~200*(7/8)^5 ≈ 100ms.
-    // Verify it has decreased significantly from the 200ms starting point.
-    auto rtt_ms = std::chrono::duration_cast<Milliseconds>(channel_a.rtt()).count();
-    EXPECT_LT(rtt_ms, 150) << "RTT should converge downward on loopback";
+    auto rtt_us = std::chrono::duration_cast<Microseconds>(channel_a.rtt()).count();
+    EXPECT_GT(rtt_us, 0) << "RTT should be positive after exchanges";
+    EXPECT_LT(rtt_us, 50'000) << "RTT should converge to loopback values";
 }
 
 TEST_F(ReliableUdpTest, FastResendConfiguration)
@@ -329,13 +316,15 @@ struct LargeMsg
     static auto deserialize(BinaryReader& r) -> Result<LargeMsg>
     {
         auto sz = r.read<uint32_t>();
-        if (!sz) return sz.error();
+        if (!sz)
+            return sz.error();
         LargeMsg msg;
         msg.data.resize(*sz);
         for (uint32_t i = 0; i < *sz; ++i)
         {
             auto b = r.read<uint8_t>();
-            if (!b) return b.error();
+            if (!b)
+                return b.error();
             msg.data[i] = *b;
         }
         return msg;
@@ -395,8 +384,7 @@ TEST_F(ReliableUdpTest, FragmentedSendAndReceive)
     ASSERT_EQ(received_data.size(), 5000u);
     for (uint32_t i = 0; i < 5000; ++i)
     {
-        EXPECT_EQ(received_data[i], static_cast<uint8_t>(i % 256))
-            << "Mismatch at byte " << i;
+        EXPECT_EQ(received_data[i], static_cast<uint8_t>(i % 256)) << "Mismatch at byte " << i;
     }
 }
 
@@ -421,11 +409,8 @@ TEST_F(ReliableUdpTest, OrderedDelivery)
     auto addr_b = sock_b->local_address().value();
 
     std::vector<uint32_t> received_order;
-    table_.register_typed_handler<RudpTestMsg>(
-        [&](const Address&, Channel*, const RudpTestMsg& msg)
-        {
-            received_order.push_back(msg.value);
-        });
+    table_.register_typed_handler<RudpTestMsg>([&](const Address&, Channel*, const RudpTestMsg& msg)
+                                               { received_order.push_back(msg.value); });
 
     ReliableUdpChannel channel_a(dispatcher_, table_, *sock_a, addr_b);
     channel_a.set_nocwnd(true);  // send multiple without ACK exchange
@@ -446,7 +431,8 @@ TEST_F(ReliableUdpTest, OrderedDelivery)
     while (true)
     {
         auto result = sock_b->recv_from(buf);
-        if (!result || result->first == 0) break;
+        if (!result || result->first == 0)
+            break;
         datagrams.emplace_back(buf.data(), buf.data() + result->first);
     }
     ASSERT_EQ(datagrams.size(), 3u);
@@ -482,11 +468,8 @@ TEST_F(ReliableUdpTest, OrderedDeliveryWaitsForGap)
     auto addr_b = sock_b->local_address().value();
 
     std::vector<uint32_t> received_order;
-    table_.register_typed_handler<RudpTestMsg>(
-        [&](const Address&, Channel*, const RudpTestMsg& msg)
-        {
-            received_order.push_back(msg.value);
-        });
+    table_.register_typed_handler<RudpTestMsg>([&](const Address&, Channel*, const RudpTestMsg& msg)
+                                               { received_order.push_back(msg.value); });
 
     ReliableUdpChannel channel_a(dispatcher_, table_, *sock_a, addr_b);
     channel_a.set_nocwnd(true);
@@ -505,7 +488,8 @@ TEST_F(ReliableUdpTest, OrderedDeliveryWaitsForGap)
     while (true)
     {
         auto result = sock_b->recv_from(buf);
-        if (!result || result->first == 0) break;
+        if (!result || result->first == 0)
+            break;
         datagrams.emplace_back(buf.data(), buf.data() + result->first);
     }
     ASSERT_EQ(datagrams.size(), 3u);
@@ -542,8 +526,7 @@ TEST_F(ReliableUdpTest, RecvWindowDropsExcessivePackets)
     ASSERT_TRUE(sock_b->bind(Address("127.0.0.1", 0)).has_value());
     auto addr_b = sock_b->local_address().value();
 
-    table_.register_typed_handler<RudpTestMsg>(
-        [](const Address&, Channel*, const RudpTestMsg&) {});
+    table_.register_typed_handler<RudpTestMsg>([](const Address&, Channel*, const RudpTestMsg&) {});
 
     ReliableUdpChannel channel_a(dispatcher_, table_, *sock_a, addr_b);
     channel_a.set_nocwnd(true);  // send 10 packets without ACK
@@ -568,7 +551,8 @@ TEST_F(ReliableUdpTest, RecvWindowDropsExcessivePackets)
     while (true)
     {
         auto result = sock_b->recv_from(buf);
-        if (!result || result->first == 0) break;
+        if (!result || result->first == 0)
+            break;
         datagrams.emplace_back(buf.data(), buf.data() + result->first);
     }
     ASSERT_EQ(datagrams.size(), 10u);
@@ -597,11 +581,8 @@ TEST_F(ReliableUdpTest, UnreliableBypassesOrdering)
     auto addr_b = sock_b->local_address().value();
 
     bool received = false;
-    table_.register_typed_handler<RudpTestMsg>(
-        [&](const Address&, Channel*, const RudpTestMsg&)
-        {
-            received = true;
-        });
+    table_.register_typed_handler<RudpTestMsg>([&](const Address&, Channel*, const RudpTestMsg&)
+                                               { received = true; });
 
     ReliableUdpChannel channel_a(dispatcher_, table_, *sock_a, addr_b);
     channel_a.activate();
@@ -649,8 +630,7 @@ TEST_F(ReliableUdpTest, CwndGrowsOnAck)
     ASSERT_TRUE(sock_b->bind(Address("127.0.0.1", 0)).has_value());
     auto addr_b = sock_b->local_address().value();
 
-    table_.register_typed_handler<RudpTestMsg>(
-        [](const Address&, Channel*, const RudpTestMsg&) {});
+    table_.register_typed_handler<RudpTestMsg>([](const Address&, Channel*, const RudpTestMsg&) {});
 
     ReliableUdpChannel channel_a(dispatcher_, table_, *sock_a, addr_b);
     channel_a.activate();
@@ -776,8 +756,7 @@ TEST_F(ReliableUdpTest, CwndGrowsAfterFirstAckAllowsSecondSend)
     ASSERT_TRUE(sock_b->bind(Address("127.0.0.1", 0)).has_value());
     auto addr_b = sock_b->local_address().value();
 
-    table_.register_typed_handler<RudpTestMsg>(
-        [](const Address&, Channel*, const RudpTestMsg&) {});
+    table_.register_typed_handler<RudpTestMsg>([](const Address&, Channel*, const RudpTestMsg&) {});
 
     ReliableUdpChannel channel_a(dispatcher_, table_, *sock_a, addr_b);
     channel_a.activate();

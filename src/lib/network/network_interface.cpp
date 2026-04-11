@@ -241,16 +241,9 @@ void NetworkInterface::prepare_for_shutdown()
 {
     shutting_down_ = true;
 
-    // Condemn all active channels
-    std::vector<Address> addrs;
-    addrs.reserve(channels_.size());
-    for (auto& [addr, _] : channels_)
+    while (!channels_.empty())
     {
-        addrs.push_back(addr);
-    }
-    for (auto& addr : addrs)
-    {
-        condemn_channel(addr);
+        condemn_channel(channels_.begin()->first);
     }
 
     ATLAS_LOG_INFO("NetworkInterface preparing for shutdown, {} channels condemned",
@@ -334,14 +327,14 @@ void NetworkInterface::on_tcp_accept()
         channel->set_disconnect_callback([this](Channel& ch) { on_channel_disconnect(ch); });
         channel->activate();
 
-        ATLAS_LOG_INFO("Accepted TCP connection from {}", peer_addr.to_string());
+        ATLAS_LOG_DEBUG("Accepted TCP connection from {}", peer_addr.to_string());
         channels_[peer_addr] = std::move(channel);
     }
 }
 
 void NetworkInterface::on_udp_readable()
 {
-    std::array<std::byte, 2048> buf{};
+    std::array<std::byte, 65536> buf;
     while (true)
     {
         auto result = udp_socket_->recv_from(buf);
@@ -422,15 +415,17 @@ void NetworkInterface::condemn_channel(const Address& addr)
             "NetworkInterface: condemned channel list at capacity ({}), "
             "force-closing oldest entry",
             kMaxCondemnedChannels);
-        condemned_.erase(condemned_.begin());
+        condemned_.pop_front();
     }
 }
 
 void NetworkInterface::process_condemned_channels()
 {
     auto now = Clock::now();
-    std::erase_if(condemned_, [now](const CondemnedEntry& entry)
-                  { return (now - entry.condemned_at) >= kCondemnTimeout; });
+    while (!condemned_.empty() && (now - condemned_.front().condemned_at) >= kCondemnTimeout)
+    {
+        condemned_.pop_front();
+    }
 }
 
 // ============================================================================
@@ -439,10 +434,16 @@ void NetworkInterface::process_condemned_channels()
 
 auto NetworkInterface::check_rate_limit(uint32_t ip) -> bool
 {
+    static constexpr std::size_t kMaxRateTrackers = 100'000;
+
+    if (rate_trackers_.size() >= kMaxRateTrackers && !rate_trackers_.contains(ip))
+    {
+        return false;
+    }
+
     auto now = Clock::now();
     auto& tracker = rate_trackers_[ip];
 
-    // Reset window if elapsed
     if (now - tracker.window_start >= std::chrono::seconds(1))
     {
         tracker.count = 0;

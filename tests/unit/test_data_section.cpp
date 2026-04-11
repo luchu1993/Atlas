@@ -349,16 +349,16 @@ TEST(DataSection, ChildrenByNameReturnsAll)
 
 TEST(DataSection, ManualBuildAndRead)
 {
-    auto root = std::make_shared<DataSection>("root");
-    root->add_child("name", "Atlas");
-    root->add_child("version", "1");
-    auto sub = root->add_child("network");
+    auto tree = std::make_shared<DataSectionTree>("root");
+    tree->add_child("name", "Atlas");
+    tree->add_child("version", "1");
+    auto* sub = tree->add_child("network");
     sub->add_child("port", "7000");
 
-    EXPECT_EQ(root->read_string("name"), "Atlas");
-    EXPECT_EQ(root->read_int("version"), 1);
+    EXPECT_EQ(tree->read_string("name"), "Atlas");
+    EXPECT_EQ(tree->read_int("version"), 1);
 
-    auto net = root->child("network");
+    auto* net = tree->child("network");
     ASSERT_NE(net, nullptr);
     EXPECT_EQ(net->read_int("port"), 7000);
 }

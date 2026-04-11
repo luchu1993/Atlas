@@ -1,4 +1,5 @@
 using System;
+using System.Threading;
 using Atlas.Entity;
 
 namespace Atlas.Core;
@@ -19,6 +20,12 @@ internal static class EngineContext
 {
     private static bool _initialized;
 
+    /// <summary>
+    /// Custom SynchronizationContext installed during bootstrap.
+    /// OnTick calls ProcessQueue() to run await continuations on the main thread.
+    /// </summary>
+    public static AtlasSynchronizationContext? SyncContext { get; set; }
+
     public static void Initialize()
     {
         if (_initialized)
@@ -36,6 +43,7 @@ internal static class EngineContext
     {
         if (!_initialized) return;
         EntityManager.Instance.Reset();
+        SyncContext = null;
         _initialized = false;
     }
 }

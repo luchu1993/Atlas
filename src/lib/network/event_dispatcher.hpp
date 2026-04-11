@@ -124,10 +124,14 @@ private:
     TimerQueue timers_;
     std::vector<FrequentTask*> tasks_;
     bool iterating_tasks_{false};
+    bool tasks_dirty_{false};
 
     bool running_{false};
     bool stop_requested_{false};
     Duration max_poll_wait_{Milliseconds(100)};
+    Duration adaptive_poll_wait_{Milliseconds(1)};
+    static constexpr Duration kMinPollWait{Microseconds(100)};
+    static constexpr Duration kMaxAdaptivePollWait{Milliseconds(100)};
 };
 
 }  // namespace atlas

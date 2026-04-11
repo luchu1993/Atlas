@@ -8,8 +8,11 @@ atlas_add_library(atlas_clrscript
         clr_host.cpp
         $<$<PLATFORM_ID:Windows>:clr_host_windows.cpp>
         $<$<PLATFORM_ID:Linux>:clr_host_linux.cpp>
+        clr_hot_reload.cpp
         clr_object.cpp
+        clr_object_registry.cpp
         clr_script_engine.cpp
+        file_watcher.cpp
         native_api_provider.cpp
         clr_marshal.cpp
     DEPS
@@ -17,6 +20,7 @@ atlas_add_library(atlas_clrscript
         atlas_platform
         atlas_math
         atlas_script
+        atlas_entitydef
 )
 
 # Link against nethost (provides get_hostfxr_path).

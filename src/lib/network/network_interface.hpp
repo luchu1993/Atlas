@@ -8,6 +8,7 @@
 #include "network/socket.hpp"
 
 #include <cstdint>
+#include <deque>
 #include <memory>
 #include <optional>
 #include <unordered_map>
@@ -97,7 +98,7 @@ private:
         std::unique_ptr<Channel> channel;
         TimePoint condemned_at;
     };
-    std::vector<CondemnedEntry> condemned_;
+    std::deque<CondemnedEntry> condemned_;
     static constexpr Duration kCondemnTimeout = std::chrono::seconds(60);
     // Cap the condemned list to prevent unbounded growth under DDoS-style
     // connect/disconnect floods.  Entries over this limit are force-closed

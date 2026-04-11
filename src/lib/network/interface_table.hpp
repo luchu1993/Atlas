@@ -2,7 +2,8 @@
 
 #include "network/message.hpp"
 
-#include <unordered_map>
+#include <array>
+#include <memory>
 
 namespace atlas
 {
@@ -10,12 +11,17 @@ namespace atlas
 class InterfaceTable
 {
 public:
+    struct Entry
+    {
+        MessageDesc desc;
+        std::unique_ptr<MessageHandler> handler;
+    };
+
     InterfaceTable() = default;
 
     [[nodiscard]] auto register_handler(MessageID id, const MessageDesc& desc,
-                                        std::shared_ptr<MessageHandler> handler) -> Result<void>;
+                                        std::unique_ptr<MessageHandler> handler) -> Result<void>;
 
-    // Convenience: register typed handler
     template <NetworkMessage Msg>
     auto register_typed_handler(typename TypedMessageHandler<Msg>::Callback callback)
         -> Result<void>
@@ -28,17 +34,14 @@ public:
                                 BinaryReader& data) -> Result<void>;
 
     [[nodiscard]] auto find(MessageID id) const -> const MessageDesc*;
+    [[nodiscard]] auto find_entry(MessageID id) const -> const Entry*;
     [[nodiscard]] auto handler(MessageID id) const -> MessageHandler*;
     [[nodiscard]] auto handler_count() const -> size_t;
 
 private:
-    struct Entry
-    {
-        MessageDesc desc;
-        std::shared_ptr<MessageHandler> handler;
-    };
-
-    std::unordered_map<MessageID, Entry> entries_;
+    static constexpr std::size_t kMaxMessageID = 65536;
+    std::array<std::unique_ptr<Entry>, kMaxMessageID> entries_{};
+    std::size_t count_{0};
 };
 
 }  // namespace atlas

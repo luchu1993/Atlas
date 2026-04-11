@@ -2,7 +2,10 @@
 
 #include <gtest/gtest.h>
 
+#include <atomic>
 #include <filesystem>
+#include <thread>
+#include <vector>
 
 namespace atlas::test
 {
@@ -139,6 +142,35 @@ TEST(ClrHostLifecycleTest, FullLifecycle)
 
     host.finalize();
     EXPECT_FALSE(host.is_initialized());
+}
+
+// ============================================================================
+// Phase 6: Boundary tests
+// ============================================================================
+
+TEST_F(ClrHostTest, ConcurrentGetFunction)
+{
+    auto asm_path = smoke_assembly();
+
+    std::vector<std::thread> threads;
+    std::atomic<int> success_count{0};
+
+    for (int i = 0; i < 8; ++i)
+    {
+        threads.emplace_back(
+            [this, asm_path, &success_count]()
+            {
+                using PingFn = int (*)();
+                auto result = host.get_method_as<PingFn>(asm_path, kType, "Ping");
+                if (result.has_value() && (*result)() == 42)
+                    success_count.fetch_add(1);
+            });
+    }
+
+    for (auto& t : threads)
+        t.join();
+
+    EXPECT_EQ(success_count.load(), 8);
 }
 
 }  // namespace atlas::test

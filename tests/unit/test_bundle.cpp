@@ -1,5 +1,6 @@
-#include <gtest/gtest.h>
 #include "network/bundle.hpp"
+
+#include <gtest/gtest.h>
 
 using namespace atlas;
 
@@ -19,7 +20,8 @@ struct BundleTestMsg
     static auto deserialize(BinaryReader& r) -> Result<BundleTestMsg>
     {
         auto v = r.read<uint32_t>();
-        if (!v) return v.error();
+        if (!v)
+            return v.error();
         return BundleTestMsg{*v};
     }
 };
@@ -40,7 +42,8 @@ struct FixedMsg
     static auto deserialize(BinaryReader& r) -> Result<FixedMsg>
     {
         auto c = r.read<uint16_t>();
-        if (!c) return c.error();
+        if (!c)
+            return c.error();
         return FixedMsg{*c};
     }
 };
@@ -74,8 +77,8 @@ TEST(Bundle, SingleFixedMessage)
 
     EXPECT_EQ(b.message_count(), 1u);
     auto data = b.finalize();
-    // Fixed: [uint16 ID][uint16 code] = 4 bytes total (no length prefix)
-    EXPECT_EQ(data.size(), 4u);
+    // Fixed: [packed ID=11 → 1 byte][uint16 code] = 3 bytes total (no length prefix)
+    EXPECT_EQ(data.size(), 3u);
 }
 
 TEST(Bundle, MultipleMessages)
@@ -136,15 +139,15 @@ TEST(Bundle, WireFormatVariableCanBeParsedBack)
 
     BinaryReader reader{std::span<const std::byte>{data}};
 
-    // Read MessageID
-    auto id = reader.read<uint16_t>();
+    // Read packed MessageID (ID=10 fits in 1 byte)
+    auto id = reader.read_packed_int();
     ASSERT_TRUE(id.has_value());
-    EXPECT_EQ(*id, 10u);  // BundleTestMsg::descriptor().id
+    EXPECT_EQ(*id, 10u);
 
-    // Read packed int length
+    // Read packed length prefix (4 fits in 1 byte)
     auto len = reader.read_packed_int();
     ASSERT_TRUE(len.has_value());
-    EXPECT_EQ(*len, 4u);  // sizeof(uint32_t)
+    EXPECT_EQ(*len, 4u);
 
     // Read payload
     auto val = reader.read<uint32_t>();
@@ -162,9 +165,10 @@ TEST(Bundle, WireFormatFixedCanBeParsedBack)
 
     BinaryReader reader{std::span<const std::byte>{data}};
 
-    auto id = reader.read<uint16_t>();
+    // Read packed MessageID (ID=11 fits in 1 byte)
+    auto id = reader.read_packed_int();
     ASSERT_TRUE(id.has_value());
-    EXPECT_EQ(*id, 11u);  // FixedMsg::descriptor().id
+    EXPECT_EQ(*id, 11u);
 
     // No length prefix for fixed messages
     auto code = reader.read<uint16_t>();
@@ -217,8 +221,8 @@ TEST(Bundle, WriterLifetimeBetweenMessages)
     auto data = b.finalize();
     BinaryReader reader{std::span<const std::byte>{data}};
 
-    // First message
-    auto id1 = reader.read<uint16_t>();
+    // First message — packed ID and packed length
+    auto id1 = reader.read_packed_int();
     ASSERT_TRUE(id1.has_value());
     EXPECT_EQ(*id1, 20u);
     auto len1 = reader.read_packed_int();
@@ -228,8 +232,8 @@ TEST(Bundle, WriterLifetimeBetweenMessages)
     ASSERT_TRUE(val1.has_value());
     EXPECT_EQ(*val1, 11111u);
 
-    // Second message
-    auto id2 = reader.read<uint16_t>();
+    // Second message — packed ID and packed length
+    auto id2 = reader.read_packed_int();
     ASSERT_TRUE(id2.has_value());
     EXPECT_EQ(*id2, 20u);
     auto len2 = reader.read_packed_int();

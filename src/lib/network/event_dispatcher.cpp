@@ -30,8 +30,8 @@ auto EventDispatcher::modify_interest(FdHandle fd, IOEvent interest) -> Result<v
 
 auto EventDispatcher::deregister(FdHandle fd) -> Result<void>
 {
-    // Safe to call during poll dispatch — IOPoller implementations use
-    // snapshot/copy-before-invoke patterns that tolerate concurrent removal.
+    // Safe to call during poll dispatch — IOPoller implementations swap the
+    // callback out for invocation and re-resolve the entry when the map changes.
     return poller_->remove(fd);
 }
 
@@ -92,6 +92,7 @@ void EventDispatcher::remove_frequent_task(FrequentTask* task)
         if (it != tasks_.end())
         {
             *it = nullptr;
+            tasks_dirty_ = true;
         }
     }
     else
@@ -112,33 +113,43 @@ void EventDispatcher::process_frequent_tasks()
     }
     iterating_tasks_ = false;
 
-    // Compact nullptrs left by deferred removals
-    std::erase(tasks_, nullptr);
+    if (tasks_dirty_)
+    {
+        std::erase(tasks_, nullptr);
+        tasks_dirty_ = false;
+    }
 }
 
 void EventDispatcher::process_once()
 {
-    // 1. Frequent tasks
     process_frequent_tasks();
 
-    // 2. Timers
-    timers_.process(Clock::now());
-
-    // 3. Calculate poll timeout
     auto now = Clock::now();
+    timers_.process(now);
+
     auto time_to_timer = timers_.time_until_next(now);
-    auto timeout = std::min(time_to_timer, max_poll_wait_);
-    if (timeout < Duration::zero())
+    auto timeout = std::min({time_to_timer, max_poll_wait_, adaptive_poll_wait_});
+    if (timeout < kMinPollWait)
     {
-        timeout = Duration::zero();
+        timeout = kMinPollWait;
     }
 
-    // 4. Poll IO
     auto result = poller_->poll(timeout);
     if (!result)
     {
         ATLAS_LOG_ERROR("EventDispatcher poll error: {}", result.error().message());
     }
+
+    if (result && *result > 0)
+    {
+        adaptive_poll_wait_ = kMinPollWait;
+    }
+    else
+    {
+        adaptive_poll_wait_ = std::min(adaptive_poll_wait_ * 2, kMaxAdaptivePollWait);
+    }
+
+    timers_.process(Clock::now());
 }
 
 void EventDispatcher::run()

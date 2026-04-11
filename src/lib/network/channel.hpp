@@ -4,6 +4,7 @@
 #include "foundation/timer_queue.hpp"
 #include "network/address.hpp"
 #include "network/bundle.hpp"
+#include "network/packet_filter.hpp"
 #include "platform/io_poller.hpp"
 
 #include <cstdint>
@@ -42,6 +43,12 @@ public:
 
     // Convenience: send a typed message
     template <NetworkMessage Msg>
+    void queue_message(const Msg& msg)
+    {
+        bundle_.add_message(msg);
+    }
+
+    template <NetworkMessage Msg>
     [[nodiscard]] auto send_message(const Msg& msg) -> Result<void>
     {
         bundle_.add_message(msg);
@@ -63,6 +70,10 @@ public:
     // Statistics
     [[nodiscard]] auto bytes_sent() const -> uint64_t { return bytes_sent_; }
     [[nodiscard]] auto bytes_received() const -> uint64_t { return bytes_received_; }
+
+    // Packet filter (compression, encryption, etc.)
+    void set_packet_filter(PacketFilterPtr filter) { packet_filter_ = std::move(filter); }
+    [[nodiscard]] auto packet_filter() const -> PacketFilter* { return packet_filter_.get(); }
 
     // Disconnect callback
     using DisconnectCallback = std::function<void(Channel&)>;
@@ -89,9 +100,15 @@ protected:
     uint64_t bytes_sent_{0};
     uint64_t bytes_received_{0};
 
+    PacketFilterPtr packet_filter_;
     DisconnectCallback disconnect_callback_;
     Duration inactivity_timeout_{};
     TimerHandle inactivity_timer_;
+    TimePoint last_activity_{};
+
+private:
+    void check_inactivity();
+    void start_inactivity_timer();
 };
 
 }  // namespace atlas

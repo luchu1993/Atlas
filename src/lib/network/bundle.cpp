@@ -12,21 +12,24 @@ void Bundle::start_message(const MessageDesc& desc)
     writing_message_ = true;
     current_style_ = desc.length_style;
 
-    // Write MessageID in little-endian
-    auto id_le = endian::to_little(desc.id);
-    const auto* id_bytes = reinterpret_cast<const std::byte*>(&id_le);
-    buffer_.insert(buffer_.end(), id_bytes, id_bytes + sizeof(uint16_t));
+    // Move buffer into writer so payload writes go directly into it
+    writer_.attach(std::move(buffer_));
 
-    // Record where payload will begin (after we write the length prefix in end_message)
-    payload_start_ = buffer_.size();
+    // Write MessageID using packed encoding (1 byte if < 0xFE, else 3 bytes)
+    writer_.write_packed_int(desc.id);
 
-    // Reset payload writer for this message
-    payload_writer_.clear();
+    if (current_style_ == MessageLengthStyle::Variable)
+    {
+        length_prefix_pos_ = writer_.size();
+        static_cast<void>(writer_.reserve(1));  // 1-byte slot; expanded in end_message if needed
+    }
+
+    payload_start_ = writer_.size();
 }
 
 auto Bundle::writer() -> BinaryWriter&
 {
-    return payload_writer_;
+    return writer_;
 }
 
 void Bundle::end_message()
@@ -35,19 +38,41 @@ void Bundle::end_message()
     writing_message_ = false;
     ++message_count_;
 
-    auto payload = payload_writer_.data();
-
     if (current_style_ == MessageLengthStyle::Variable)
     {
-        // Write packed_int length prefix, then payload
-        BinaryWriter len_writer;
-        len_writer.write_packed_int(static_cast<uint32_t>(payload.size()));
-        auto len_data = len_writer.data();
-        buffer_.insert(buffer_.end(), len_data.begin(), len_data.end());
+        auto payload_len = static_cast<uint32_t>(writer_.size() - payload_start_);
+
+        if (payload_len < 0xFE)
+        {
+            writer_.mutable_data()[length_prefix_pos_] = static_cast<std::byte>(payload_len);
+        }
+        else if (payload_len <= 0xFFFF)
+        {
+            // Tag byte becomes 0xFE; need 2 more bytes for uint16 LE
+            constexpr std::size_t extra = 2;
+            static_cast<void>(writer_.reserve(extra));
+            auto* base = writer_.mutable_data();
+            base[length_prefix_pos_] = static_cast<std::byte>(0xFE);
+            auto* payload_ptr = base + payload_start_;
+            std::memmove(payload_ptr + extra, payload_ptr, payload_len);
+            auto le16 = endian::to_little(static_cast<uint16_t>(payload_len));
+            std::memcpy(payload_ptr, &le16, sizeof(uint16_t));
+        }
+        else
+        {
+            // Tag byte becomes 0xFF; need 4 more bytes for uint32 LE
+            constexpr std::size_t extra = 4;
+            static_cast<void>(writer_.reserve(extra));
+            auto* base = writer_.mutable_data();
+            base[length_prefix_pos_] = static_cast<std::byte>(0xFF);
+            auto* payload_ptr = base + payload_start_;
+            std::memmove(payload_ptr + extra, payload_ptr, payload_len);
+            auto le32 = endian::to_little(payload_len);
+            std::memcpy(payload_ptr, &le32, sizeof(uint32_t));
+        }
     }
 
-    // Append payload data
-    buffer_.insert(buffer_.end(), payload.begin(), payload.end());
+    buffer_ = writer_.detach();
 }
 
 auto Bundle::finalize() -> std::vector<std::byte>
@@ -61,7 +86,7 @@ auto Bundle::finalize() -> std::vector<std::byte>
 void Bundle::clear()
 {
     buffer_.clear();
-    payload_writer_.clear();
+    writer_.clear();
     message_count_ = 0;
     writing_message_ = false;
 }

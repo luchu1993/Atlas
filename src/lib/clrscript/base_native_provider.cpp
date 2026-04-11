@@ -1,5 +1,6 @@
 #include "clrscript/base_native_provider.hpp"
 
+#include "entitydef/entity_def_registry.hpp"
 #include "foundation/log.hpp"
 
 #include <cstddef>
@@ -70,14 +71,14 @@ void BaseNativeProvider::send_base_rpc(uint32_t entity_id, uint32_t /*rpc_id*/,
         entity_id);
 }
 
-void BaseNativeProvider::register_entity_type(const std::byte* /*data*/, int32_t /*len*/)
+void BaseNativeProvider::register_entity_type(const std::byte* data, int32_t len)
 {
-    ATLAS_LOG_ERROR("register_entity_type() not implemented for this process type");
+    EntityDefRegistry::instance().register_type(data, len);
 }
 
 void BaseNativeProvider::unregister_all_entity_types()
 {
-    ATLAS_LOG_ERROR("unregister_all_entity_types() not implemented for this process type");
+    EntityDefRegistry::instance().clear();
 }
 
 }  // namespace atlas

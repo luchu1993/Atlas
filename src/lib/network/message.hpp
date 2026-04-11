@@ -80,9 +80,9 @@ private:
 // Factory for typed handlers
 template <NetworkMessage Msg>
 [[nodiscard]] auto make_handler(typename TypedMessageHandler<Msg>::Callback callback)
-    -> std::shared_ptr<MessageHandler>
+    -> std::unique_ptr<MessageHandler>
 {
-    return std::make_shared<TypedMessageHandler<Msg>>(std::move(callback));
+    return std::make_unique<TypedMessageHandler<Msg>>(std::move(callback));
 }
 
 }  // namespace atlas

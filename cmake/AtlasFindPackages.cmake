@@ -43,6 +43,27 @@ FetchContent_Declare(
 )
 FetchContent_MakeAvailable(rapidjson)
 
+# ── zlib (compression) ───────────────────────────────────────────────────────
+FetchContent_Declare(
+    zlib
+    GIT_REPOSITORY https://github.com/madler/zlib.git
+    GIT_TAG        v1.3.1
+    GIT_SHALLOW    TRUE
+)
+set(ZLIB_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
+FetchContent_MakeAvailable(zlib)
+
+# Provide an INTERFACE target with correct include paths so consumers can
+# simply link "atlas_zlib" without worrying about FetchContent internals.
+if(NOT TARGET atlas_zlib)
+    add_library(atlas_zlib INTERFACE)
+    target_link_libraries(atlas_zlib INTERFACE zlibstatic)
+    target_include_directories(atlas_zlib INTERFACE
+        ${zlib_SOURCE_DIR}
+        ${zlib_BINARY_DIR}
+    )
+endif()
+
 # ── .NET SDK (for CLR scripting) ─────────────────────────────────────────────
 include(${CMAKE_SOURCE_DIR}/cmake/FindDotNet.cmake)
 

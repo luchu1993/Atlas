@@ -37,6 +37,14 @@ public:
     [[nodiscard]] auto send(std::span<const std::byte> data) -> Result<size_t>;
     [[nodiscard]] auto recv(std::span<std::byte> buffer) -> Result<size_t>;
 
+    // Scatter-gather I/O (TCP)
+    struct IoVec
+    {
+        const std::byte* data;
+        std::size_t size;
+    };
+    [[nodiscard]] auto send_iov(std::span<const IoVec> iov) -> Result<size_t>;
+
     // Datagram I/O (UDP)
     [[nodiscard]] auto send_to(std::span<const std::byte> data, const Address& dest)
         -> Result<size_t>;

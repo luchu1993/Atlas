@@ -30,7 +30,8 @@ internal static unsafe partial class NativeApi
     private static partial void LogMessageNative(int level, byte* msg, int len);
 
     /// <summary>
-    /// Log a UTF-8 message at the given level (0=Debug 1=Trace 2=Info 3=Warn 4=Error 5=Critical).
+    /// Log a UTF-8 message at the given level (0=Trace 1=Debug 2=Info 3=Warn 4=Error 5=Critical).
+    /// Thread-safe — no ThreadGuard required.
     /// </summary>
     public static void LogMessage(int level, ReadOnlySpan<byte> message)
     {
@@ -61,14 +62,19 @@ internal static unsafe partial class NativeApi
 
     [LibraryImport(LibName, EntryPoint = "atlas_send_client_rpc")]
     private static partial void SendClientRpcNative(
-        uint entityId, uint rpcId, byte target,
+        uint entityId, uint packedRpcId,
         byte* payload, int payloadLen);
 
-    public static void SendClientRpc(uint entityId, uint rpcId, byte target,
+    /// <summary>
+    /// Send a client RPC. Direction is encoded in the top 2 bits of packedRpcId
+    /// using the format: [direction:2 | typeIndex:14 | method:8].
+    /// </summary>
+    public static void SendClientRpc(uint entityId, uint packedRpcId,
         ReadOnlySpan<byte> payload)
     {
+        ThreadGuard.EnsureMainThread();
         fixed (byte* ptr = payload)
-            SendClientRpcNative(entityId, rpcId, target, ptr, payload.Length);
+            SendClientRpcNative(entityId, packedRpcId, ptr, payload.Length);
     }
 
     [LibraryImport(LibName, EntryPoint = "atlas_send_cell_rpc")]
@@ -77,6 +83,7 @@ internal static unsafe partial class NativeApi
 
     public static void SendCellRpc(uint entityId, uint rpcId, ReadOnlySpan<byte> payload)
     {
+        ThreadGuard.EnsureMainThread();
         fixed (byte* ptr = payload)
             SendCellRpcNative(entityId, rpcId, ptr, payload.Length);
     }
@@ -87,6 +94,7 @@ internal static unsafe partial class NativeApi
 
     public static void SendBaseRpc(uint entityId, uint rpcId, ReadOnlySpan<byte> payload)
     {
+        ThreadGuard.EnsureMainThread();
         fixed (byte* ptr = payload)
             SendBaseRpcNative(entityId, rpcId, ptr, payload.Length);
     }
@@ -100,6 +108,7 @@ internal static unsafe partial class NativeApi
 
     public static void RegisterEntityType(ReadOnlySpan<byte> data)
     {
+        ThreadGuard.EnsureMainThread();
         fixed (byte* ptr = data)
             RegisterEntityTypeNative(ptr, data.Length);
     }

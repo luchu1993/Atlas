@@ -15,6 +15,7 @@
 #include <netinet/in.h>
 #include <netinet/tcp.h>
 #include <sys/socket.h>
+#include <sys/uio.h>
 #include <unistd.h>
 #endif
 
@@ -186,6 +187,12 @@ auto Socket::create_tcp() -> Result<Socket>
         return r.error();
     if (auto r = sock.set_reuse_addr(true); !r)
         return r.error();
+    if (auto r = sock.set_no_delay(true); !r)
+        return r.error();
+    if (auto r = sock.set_send_buffer_size(256 * 1024); !r)
+        return r.error();
+    if (auto r = sock.set_recv_buffer_size(256 * 1024); !r)
+        return r.error();
     return sock;
 }
 
@@ -213,6 +220,10 @@ auto Socket::create_udp() -> Result<Socket>
     if (auto r = sock.set_non_blocking(true); !r)
         return r.error();
     if (auto r = sock.set_reuse_addr(true); !r)
+        return r.error();
+    if (auto r = sock.set_send_buffer_size(512 * 1024); !r)
+        return r.error();
+    if (auto r = sock.set_recv_buffer_size(512 * 1024); !r)
         return r.error();
     return sock;
 }
@@ -259,7 +270,7 @@ auto Socket::accept() -> Result<std::pair<Socket, Address>>
     }
     auto client_fd = static_cast<FdHandle>(client_raw);
 #else
-    int client_raw = ::accept(fd_, reinterpret_cast<sockaddr*>(&client_addr), &len);
+    int client_raw = ::accept4(fd_, reinterpret_cast<sockaddr*>(&client_addr), &len, SOCK_NONBLOCK);
     if (client_raw == -1)
     {
         return map_socket_error();
@@ -268,7 +279,15 @@ auto Socket::accept() -> Result<std::pair<Socket, Address>>
 #endif
 
     Socket client_sock(client_fd);
+#if ATLAS_PLATFORM_WINDOWS
     if (auto r = client_sock.set_non_blocking(true); !r)
+        return r.error();
+#endif
+    if (auto r = client_sock.set_no_delay(true); !r)
+        return r.error();
+    if (auto r = client_sock.set_send_buffer_size(256 * 1024); !r)
+        return r.error();
+    if (auto r = client_sock.set_recv_buffer_size(256 * 1024); !r)
         return r.error();
 
     Address client_address(client_addr);
@@ -347,6 +366,52 @@ auto Socket::recv(std::span<std::byte> buffer) -> Result<size_t>
 #endif
 
     return static_cast<size_t>(received);
+}
+
+// ============================================================================
+// Scatter-gather I/O (TCP)
+// ============================================================================
+
+auto Socket::send_iov(std::span<const IoVec> iov) -> Result<size_t>
+{
+    if (iov.empty())
+    {
+        return size_t{0};
+    }
+
+#if ATLAS_PLATFORM_WINDOWS
+    static constexpr std::size_t kMaxBufs = 16;
+    WSABUF bufs[kMaxBufs];
+    auto count = std::min(iov.size(), kMaxBufs);
+    for (std::size_t i = 0; i < count; ++i)
+    {
+        bufs[i].buf = reinterpret_cast<char*>(const_cast<std::byte*>(iov[i].data));
+        bufs[i].len = static_cast<ULONG>(iov[i].size);
+    }
+    DWORD sent = 0;
+    int result = ::WSASend(static_cast<SOCKET>(fd_), bufs, static_cast<DWORD>(count), &sent, 0,
+                           nullptr, nullptr);
+    if (result == SOCKET_ERROR)
+    {
+        return map_socket_error();
+    }
+    return static_cast<size_t>(sent);
+#else
+    static constexpr std::size_t kMaxIov = 16;
+    struct iovec vecs[kMaxIov];
+    auto count = std::min(iov.size(), kMaxIov);
+    for (std::size_t i = 0; i < count; ++i)
+    {
+        vecs[i].iov_base = const_cast<std::byte*>(iov[i].data);
+        vecs[i].iov_len = iov[i].size;
+    }
+    auto sent = ::writev(fd_, vecs, static_cast<int>(count));
+    if (sent == -1)
+    {
+        return map_socket_error();
+    }
+    return static_cast<size_t>(sent);
+#endif
 }
 
 // ============================================================================

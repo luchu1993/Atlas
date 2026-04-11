@@ -8,6 +8,7 @@
     "configProperties": {
       "System.GC.Server": true,
       "System.GC.Concurrent": true,
+      "System.GC.RetainVM": true,
       "System.GC.DynamicAdaptationMode": 1,
       "System.Runtime.TieredCompilation": true,
       "System.Runtime.TieredCompilation.QuickJit": true,
