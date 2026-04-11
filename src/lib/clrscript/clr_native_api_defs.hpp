@@ -20,7 +20,7 @@
 //   #undef X
 //
 //   // Implement all atlas_* functions (clr_native_api.cpp):
-//   #define X(ret, name, params, call) \
+//   #define X(ret, name, params, call)
 //       ATLAS_NATIVE_API ret atlas_##name params { call; }
 //   ATLAS_NATIVE_API_TABLE(X)
 //   #undef X

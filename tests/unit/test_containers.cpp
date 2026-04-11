@@ -295,10 +295,10 @@ TEST(FlatMap, InsertOrAssignUpdatesExisting)
 TEST(ObjectPool, IterationAfterMixedCreateDestroy)
 {
     ObjectPool<int> pool;
-    auto h1 = pool.create(10);
+    [[maybe_unused]] auto h1 = pool.create(10);
     auto h2 = pool.create(20);
     auto h3 = pool.create(30);
-    auto h4 = pool.create(40);
+    [[maybe_unused]] auto h4 = pool.create(40);
 
     pool.destroy(h2);
     pool.destroy(h3);
