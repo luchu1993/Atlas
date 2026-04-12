@@ -57,9 +57,7 @@ void XmlDatabase::shutdown()
 {
     if (!started_)
         return;
-    save_meta();
-    save_auto_load();
-    save_checkouts();
+    flush_dirty_state(true);
     started_ = false;
     ATLAS_LOG_INFO("XmlDatabase: shut down");
 }
@@ -86,7 +84,7 @@ void XmlDatabase::put_entity(DatabaseID dbid, uint16_t type_id, WriteFlags flags
                 if (nit->second == dbid)
                 {
                     it->second.erase(nit);
-                    save_index(type_id);
+                    mark_index_dirty(type_id);
                     break;
                 }
             }
@@ -95,10 +93,11 @@ void XmlDatabase::put_entity(DatabaseID dbid, uint16_t type_id, WriteFlags flags
         if (has_flag(flags, WriteFlags::LogOff))
         {
             checkouts_.erase(checkout_key(type_id, dbid));
-            save_checkouts();
+            mark_checkouts_dirty();
         }
         result.success = true;
         result.dbid = dbid;
+        flush_dirty_state();
         fire_or_defer([cb = std::move(callback), result]() mutable { cb(result); });
         return;
     }
@@ -106,7 +105,7 @@ void XmlDatabase::put_entity(DatabaseID dbid, uint16_t type_id, WriteFlags flags
     if (has_flag(flags, WriteFlags::CreateNew) || dbid == kInvalidDBID)
     {
         dbid = next_dbid_++;
-        save_meta();
+        mark_meta_dirty();
     }
 
     // Ensure type directory exists
@@ -120,30 +119,31 @@ void XmlDatabase::put_entity(DatabaseID dbid, uint16_t type_id, WriteFlags flags
     {
         load_index(type_id);
         name_index_[type_id][identifier] = dbid;
-        save_index(type_id);
+        mark_index_dirty(type_id);
     }
 
     // Update auto-load flags
     if (has_flag(flags, WriteFlags::AutoLoadOn))
     {
         auto_load_set_.insert(checkout_key(type_id, dbid));
-        save_auto_load();
+        mark_auto_load_dirty();
     }
     else if (has_flag(flags, WriteFlags::AutoLoadOff))
     {
         auto_load_set_.erase(checkout_key(type_id, dbid));
-        save_auto_load();
+        mark_auto_load_dirty();
     }
 
     // Clear checkout if LogOff
     if (has_flag(flags, WriteFlags::LogOff))
     {
         checkouts_.erase(checkout_key(type_id, dbid));
-        save_checkouts();
+        mark_checkouts_dirty();
     }
 
     result.success = true;
     result.dbid = dbid;
+    flush_dirty_state();
     fire_or_defer([cb = std::move(callback), result]() mutable { cb(result); });
 }
 
@@ -195,7 +195,7 @@ void XmlDatabase::del_entity(DatabaseID dbid, uint16_t type_id,
             if (nit->second == dbid)
             {
                 it->second.erase(nit);
-                save_index(type_id);
+                mark_index_dirty(type_id);
                 break;
             }
         }
@@ -203,8 +203,11 @@ void XmlDatabase::del_entity(DatabaseID dbid, uint16_t type_id,
 
     checkouts_.erase(checkout_key(type_id, dbid));
     auto_load_set_.erase(checkout_key(type_id, dbid));
+    mark_checkouts_dirty();
+    mark_auto_load_dirty();
 
     result.success = true;
+    flush_dirty_state();
     fire_or_defer([cb = std::move(callback), result]() mutable { cb(result); });
 }
 
@@ -259,12 +262,13 @@ void XmlDatabase::checkout_entity(DatabaseID dbid, uint16_t type_id, const Check
     }
 
     checkouts_[key] = new_owner;
-    save_checkouts();
+    mark_checkouts_dirty();
 
     result.success = true;
     result.data.dbid = dbid;
     result.data.type_id = type_id;
     result.data.blob = std::move(*blob);
+    flush_dirty_state();
     fire_or_defer([cb = std::move(callback), result = std::move(result)]() mutable
                   { cb(std::move(result)); });
 }
@@ -292,7 +296,8 @@ void XmlDatabase::clear_checkout(DatabaseID dbid, uint16_t type_id,
 {
     bool erased = checkouts_.erase(checkout_key(type_id, dbid)) > 0;
     if (erased)
-        save_checkouts();
+        mark_checkouts_dirty();
+    flush_dirty_state();
     fire_or_defer([cb = std::move(callback), erased]() mutable { cb(erased); });
 }
 
@@ -313,7 +318,8 @@ void XmlDatabase::clear_checkouts_for_address(const Address& base_addr,
         }
     }
     if (count > 0)
-        save_checkouts();
+        mark_checkouts_dirty();
+    flush_dirty_state();
     fire_or_defer([cb = std::move(callback), count]() mutable { cb(count); });
 }
 
@@ -349,7 +355,8 @@ void XmlDatabase::set_auto_load(DatabaseID dbid, uint16_t type_id, bool auto_loa
         auto_load_set_.insert(key);
     else
         auto_load_set_.erase(key);
-    save_auto_load();
+    mark_auto_load_dirty();
+    flush_dirty_state();
 }
 
 // ============================================================================
@@ -358,6 +365,8 @@ void XmlDatabase::set_auto_load(DatabaseID dbid, uint16_t type_id, bool auto_loa
 
 void XmlDatabase::process_results()
 {
+    flush_dirty_state();
+
     if (!deferred_mode_)
         return;
     while (!deferred_.empty())
@@ -366,6 +375,99 @@ void XmlDatabase::process_results()
         deferred_.pop_front();
         cb();
     }
+}
+
+void XmlDatabase::mark_meta_dirty()
+{
+    meta_dirty_ = true;
+    if (next_flush_deadline_ == TimePoint{})
+    {
+        next_flush_deadline_ = Clock::now() + kFlushInterval;
+    }
+}
+
+void XmlDatabase::mark_index_dirty(uint16_t type_id)
+{
+    dirty_indexes_.insert(type_id);
+    if (next_flush_deadline_ == TimePoint{})
+    {
+        next_flush_deadline_ = Clock::now() + kFlushInterval;
+    }
+}
+
+void XmlDatabase::mark_auto_load_dirty()
+{
+    auto_load_dirty_ = true;
+    if (next_flush_deadline_ == TimePoint{})
+    {
+        next_flush_deadline_ = Clock::now() + kFlushInterval;
+    }
+}
+
+void XmlDatabase::mark_checkouts_dirty()
+{
+    checkouts_dirty_ = true;
+    if (next_flush_deadline_ == TimePoint{})
+    {
+        next_flush_deadline_ = Clock::now() + kFlushInterval;
+    }
+}
+
+void XmlDatabase::flush_dirty_state(bool force)
+{
+    if (!started_)
+    {
+        return;
+    }
+
+    if (!meta_dirty_ && !auto_load_dirty_ && !checkouts_dirty_ && dirty_indexes_.empty())
+    {
+        next_flush_deadline_ = {};
+        return;
+    }
+
+    if (!force)
+    {
+        if (next_flush_deadline_ == TimePoint{})
+        {
+            next_flush_deadline_ = Clock::now() + kFlushInterval;
+            return;
+        }
+
+        if (Clock::now() < next_flush_deadline_)
+        {
+            return;
+        }
+    }
+
+    if (meta_dirty_)
+    {
+        save_meta();
+        meta_dirty_ = false;
+    }
+
+    if (!dirty_indexes_.empty())
+    {
+        for (uint16_t type_id : dirty_indexes_)
+        {
+            save_index(type_id);
+        }
+        dirty_indexes_.clear();
+    }
+
+    if (auto_load_dirty_)
+    {
+        save_auto_load();
+        auto_load_dirty_ = false;
+    }
+
+    if (checkouts_dirty_)
+    {
+        save_checkouts();
+        checkouts_dirty_ = false;
+    }
+
+    next_flush_deadline_ = {};
 }
 
 // ============================================================================

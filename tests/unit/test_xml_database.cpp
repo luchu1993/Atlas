@@ -3,7 +3,9 @@
 
 #include <gtest/gtest.h>
 
+#include <chrono>
 #include <filesystem>
+#include <thread>
 
 using namespace atlas;
 
@@ -379,6 +381,26 @@ TEST_F(XmlDatabaseTest, DeferredModeDelaysCallbacks)
     EXPECT_GT(put_result.dbid, 0);
 
     db_.set_deferred_mode(false);
+}
+
+TEST_F(XmlDatabaseTest, ProcessResultsFlushesDirtyStateOnDeadline)
+{
+    PutResult put;
+    db_.put_entity(kInvalidDBID, 1, WriteFlags::CreateNew, make_blob("data"), "eve",
+                   [&](PutResult r) { put = r; });
+    ASSERT_TRUE(put.success);
+
+    auto meta_path = test_dir_ / "meta.json";
+    auto index_path = test_dir_ / "Account" / "index.json";
+
+    EXPECT_FALSE(std::filesystem::exists(meta_path));
+    EXPECT_FALSE(std::filesystem::exists(index_path));
+
+    std::this_thread::sleep_for(std::chrono::milliseconds(300));
+    db_.process_results();
+
+    EXPECT_TRUE(std::filesystem::exists(meta_path));
+    EXPECT_TRUE(std::filesystem::exists(index_path));
 }
 
 // ============================================================================

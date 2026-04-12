@@ -1,12 +1,14 @@
 #pragma once
 
 #include "db/idatabase.hpp"
+#include "foundation/time.hpp"
 
 #include <deque>
 #include <functional>
 #include <mutex>
 #include <set>
 #include <unordered_map>
+#include <unordered_set>
 
 namespace atlas
 {
@@ -88,6 +90,11 @@ private:
     void save_auto_load();
     void load_checkouts();
     void save_checkouts();
+    void mark_meta_dirty();
+    void mark_index_dirty(uint16_t type_id);
+    void mark_auto_load_dirty();
+    void mark_checkouts_dirty();
+    void flush_dirty_state(bool force = false);
 
     [[nodiscard]] auto read_blob(uint16_t type_id, DatabaseID dbid) const
         -> std::optional<std::vector<std::byte>>;
@@ -103,9 +110,14 @@ private:
     DatabaseID next_dbid_{1};
     bool started_{false};
     bool deferred_mode_{false};
+    TimePoint next_flush_deadline_{};
+    bool meta_dirty_{false};
+    bool auto_load_dirty_{false};
+    bool checkouts_dirty_{false};
 
     // name → DBID index (per type_id)
     std::unordered_map<uint16_t, std::unordered_map<std::string, DatabaseID>> name_index_;
+    std::unordered_set<uint16_t> dirty_indexes_;
 
     // checkout: key = (type_id << 48) | (dbid & 0xFFFFFFFFFFFF)
     std::unordered_map<uint64_t, CheckoutInfo> checkouts_;
@@ -124,6 +136,8 @@ private:
         return (static_cast<uint64_t>(type_id) << 48) |
                (static_cast<uint64_t>(dbid) & 0x0000FFFFFFFFFFFFULL);
     }
+
+    static constexpr Duration kFlushInterval = std::chrono::milliseconds(250);
 };
 
 }  // namespace atlas
