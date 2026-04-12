@@ -14,12 +14,12 @@
 
 ## 验收标准 (M1)
 
-- [ ] C++ 进程能加载 CoreCLR 并成功初始化
-- [ ] C++ 可调用 C# `[UnmanagedCallersOnly]` 静态方法并获取正确返回值
-- [ ] `runtimeconfig.json` 配置 Server GC 和分层编译
-- [ ] CMake 能发现 .NET SDK 并自动编译 C# 测试项目
-- [ ] Windows 和 Linux 上均可运行
-- [ ] 关闭时 CoreCLR 正常卸载，无泄漏
+- [x] C++ 进程能加载 CoreCLR 并成功初始化
+- [x] C++ 可调用 C# `[UnmanagedCallersOnly]` 静态方法并获取正确返回值
+- [x] `runtimeconfig.json` 配置 Server GC 和分层编译
+- [x] CMake 能发现 .NET SDK 并自动编译 C# 测试项目
+- [x] Windows 和 Linux 上均可运行
+- [x] 关闭时 CoreCLR 正常卸载，无泄漏
 
 ---
 

@@ -14,17 +14,23 @@
 
 ## 验收标准
 
-- [ ] machined 进程可启动并监听 TCP 端口
-- [ ] 服务器进程启动时自动注册，关闭时自动注销
-- [ ] 进程可按类型查询已注册的其他进程地址（含负载信息）
-- [ ] 进程异常退出后 machined 在 ~15 秒内检测到并广播死亡通知（TCP keepalive + 心跳超时）
-- [ ] Birth/Death Listener 机制可工作：进程可订阅其他类型进程的上下线事件
-- [ ] 进程唯一性校验：Manager 类型同类只允许一个，普通进程同类型+同名不允许
-- [ ] Watcher 查询可通过 machined 转发到目标进程
-- [ ] machined 优雅关闭时通知所有已注册进程
-- [ ] 单元测试覆盖注册/注销/查询/超时/监听全部场景
-- [ ] 集成测试: 单进程内嵌多 EventDispatcher，两个模拟进程通过 machined 互相发现
-- [ ] `atlas_tool` CLI 工具可列出进程、查询 Watcher
+- [x] machined 进程可启动并监听 TCP 端口
+- [x] 服务器进程启动时自动注册，关闭时自动注销
+- [x] 进程可按类型查询已注册的其他进程地址（含负载信息）
+- [x] 进程异常退出后 machined 在 ~15 秒内检测到并广播死亡通知（TCP keepalive + 心跳超时）
+- [x] Birth/Death Listener 机制可工作：进程可订阅其他类型进程的上下线事件
+- [x] 进程唯一性校验：Manager 类型同类只允许一个，普通进程同类型+同名不允许
+- [x] Watcher 查询可通过 machined 转发到目标进程
+- [x] machined 优雅关闭时通知所有已注册进程
+- [x] 单元测试覆盖注册/注销/查询/超时/监听全部场景
+- [x] 集成测试: 单进程内嵌多 EventDispatcher，两个模拟进程通过 machined 互相发现
+- [~] `atlas_tool` CLI 工具可列出进程、查询 Watcher
+
+## 验收状态（2026-04-13）
+
+- `machined` 当前实现是 `TCP 注册/查询 + UDP heartbeat` 的混合模型，而不是早期草案中的纯 TCP 或 BigWorld 式广播 UDP。
+- 服务端的 Watcher 转发链路已经在 `machined`/`WatcherForwarder`/`MachinedClient` 中落地。
+- `atlas_tool list` 已可用，但 `atlas_tool watch` 仍是占位提示，尚未把原始 `WatcherRequest` 能力暴露给 CLI。
 
 ---
 
@@ -1110,7 +1116,7 @@ Step 6.1: 消息定义扩展          ← 无依赖, 最先开始
 | Staggered replies 防广播风暴 | 不需要 | TCP 无广播风暴 |
 | `MachineDaemon::findInterface()` 广播查询 | `MachinedClient::find_one()` 直连查询 | TCP 直连, 确定性 |
 | `MachineDaemon::registerBirthListener()` | `MachinedClient::listen_for_birth()` | 接口类似, 传输不同 |
-| `cluster_tool` 运维工具 | `atlas_tool` CLI | 列出进程 / 查询 Watcher / 关闭 |
+| `cluster_tool` 运维工具 | `atlas_tool` CLI | 当前已支持列出进程，Watcher/关闭能力待补 |
 | PID+category+name 唯一性校验 | Manager 单实例 + 同类型同名拒绝 | 更严格的校验规则 |
 | Channel* 原始指针 | ChannelId (整数 ID) | 避免悬垂指针 |
 

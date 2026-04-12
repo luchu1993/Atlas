@@ -13,11 +13,17 @@
 
 ## 验收标准 (M3)
 
-- [ ] C# 脚本中可调用 `Atlas.Log.Info()`, `Atlas.Log.Warning()`, `Atlas.Log.Error()`
-- [ ] C# 脚本中可读取 `Atlas.Time.ServerTime`, `Atlas.Time.DeltaTime`
-- [ ] `ClrScriptEngine` 实现 `ScriptEngine` 接口的完整生命周期
-- [ ] C++ 侧可触发 C# 实体的 `OnInit` / `OnTick` / `OnShutdown` 回调
-- [ ] 原有 `atlas_module.cpp` 的全部功能在 C# 侧有对应实现
+- [x] C# 脚本中可调用 `Atlas.Log.Info()`, `Atlas.Log.Warning()`, `Atlas.Log.Error()`
+- [x] C# 脚本中可读取 `Atlas.Time.ServerTime`, `Atlas.Time.DeltaTime`
+- [x] `ClrScriptEngine` 实现 `ScriptEngine` 接口的完整生命周期
+- [x] C++ 侧可触发 C# 实体的 `OnInit` / `OnTick` / `OnShutdown` 回调
+- [~] 原有 `atlas_module.cpp` 的全部功能在 C# 侧有对应实现
+
+## 验收状态（2026-04-13）
+
+- `Atlas.Runtime` 已具备 `Log`、`Time`、`EntityManager`、`ScriptHost`、`Lifecycle` 等主路径实现。
+- `ClrScriptEngine` 已绑定 `EngineInit / EngineShutdown / OnInit / OnTick / OnShutdown`，并有 `test_clr_script_engine.cpp`、`EntityManagerTests` 等覆盖生命周期链路。
+- 当前仍未达到“`atlas_module.cpp` 全量功能一一平移到 C#”的收口状态，剩余能力会继续并入后续 Source Generator / NativeApi 扩展。
 
 ---
 

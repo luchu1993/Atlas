@@ -161,10 +161,10 @@ src/csharp/
 | **M0: 抽象层就位** | `ScriptEvents` 不再依赖 `PyObjectPtr`; 项目编译不需要 Python SDK; 所有非 Python 测试通过 | ✅ 完成 |
 | **M1: .NET 可加载** | C++ 进程能加载 CoreCLR 并调用 C# `[UnmanagedCallersOnly]` 方法返回正确结果 | ✅ 完成 |
 | **M2: 双向互操作** | C++ 可调用 C# 方法, C# 可调用 C++ 导出函数; 支持基本类型 + string + byte[]; Interop Generator 生成可用代码 | ✅ 完成 — 116 个 C++ 测试通过；详见 [implementation_notes.md](scripting/implementation_notes.md) |
-| **M3: 引擎可脚本化** | C# 脚本中可调用 `Atlas.Log.Info()`, `Atlas.Time.ServerTime`; Entity 生命周期回调工作 |
-| **M4: 跨端共享** | 同一 `Atlas.Shared.dll` 在服务端 (.NET 9) 和 Unity IL2CPP 上编译运行; Source Generator 输出零反射代码 |
-| **M5: 热重载可用** | 修改 C# 脚本后无需重启服务端进程即可生效 |
-| **M6: 生产就绪** | 全部测试通过; 10K 实体压测无内存泄漏; GC 暂停 < 5ms@p99 |
+| **M3: 引擎可脚本化** | C# 脚本中可调用 `Atlas.Log.Info()`, `Atlas.Time.ServerTime`; Entity 生命周期回调工作 | 🟡 进行中 — `Atlas.Runtime`、`ClrScriptEngine`、生命周期回调与对应测试已落地，`atlas_module.cpp` 的全量 C# 对等能力仍在补齐 |
+| **M4: 跨端共享** | 同一 `Atlas.Shared.dll` 在服务端 (.NET 9) 和 Unity IL2CPP 上编译运行; Source Generator 输出零反射代码 | 🟡 进行中 — `Atlas.Shared` 与 Entity/Rpc/Events Generator 已落地，Unity IL2CPP 全量验收仍未完成 |
+| **M5: 热重载可用** | 修改 C# 脚本后无需重启服务端进程即可生效 | 🟡 进行中 — `ScriptLoadContext`、`HotReloadManager`、`ClrHotReload` 与文件监控已落地，自动编译/回滚链路仍需继续收口 |
+| **M6: 生产就绪** | 全部测试通过; 10K 实体压测无内存泄漏; GC 暂停 < 5ms@p99 | 🟡 进行中 — C++/C# 测试矩阵已建立，但全量通过、压测与 GC 指标尚未完成正式验收 |
 
 ## 7. Python 删除清单
 

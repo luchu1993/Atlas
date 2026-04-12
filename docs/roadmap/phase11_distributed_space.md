@@ -28,6 +28,10 @@
 - [ ] CellApp 死亡 → CellAppMgr 检测到 → 实体从备份恢复（基本容灾）
 - [ ] 全部新增代码有单元测试
 
+## 验收状态（2026-04-13）
+
+- [ ] 当前仓库仍未进入 `CellApp` / `CellAppMgr` / Real-Ghost 实现阶段，本阶段保持为设计文档。
+
 ---
 
 ## 1. BigWorld 架构分析与 Atlas 适配

@@ -12,11 +12,17 @@
 
 ## 验收标准 (M4)
 
-- [ ] `Atlas.Shared.dll` 在 .NET 9 和 Unity IL2CPP 上均可编译运行
-- [ ] Entity Source Generator 生成序列化、脏标记、工厂代码
-- [ ] RPC Source Generator 生成发送存根和接收分发代码
-- [ ] Events Source Generator 生成事件注册代码
-- [ ] 所有生成的代码中无 `System.Reflection`、`Activator.CreateInstance`、`MethodInfo.Invoke`
+- [~] `Atlas.Shared.dll` 在 .NET 9 和 Unity IL2CPP 上均可编译运行
+- [x] Entity Source Generator 生成序列化、脏标记、工厂代码
+- [x] RPC Source Generator 生成发送存根和接收分发代码
+- [x] Events Source Generator 生成事件注册代码
+- [~] 所有生成的代码中无 `System.Reflection`、`Activator.CreateInstance`、`MethodInfo.Invoke`
+
+## 验收状态（2026-04-13）
+
+- `Atlas.Shared`、`Atlas.Generators.Entity`、`Atlas.Generators.Rpc`、`Atlas.Generators.Events` 均已在仓库中落地，并有对应 C# 测试项目。
+- 当前代码已经满足服务端脚本层、后续 BaseApp/Client SDK 设计所需的最小共享子集。
+- 仍缺少 Unity IL2CPP 侧的系统验收，因此本阶段不能写成“完全完成”。
 
 ---
 

@@ -13,12 +13,12 @@
 
 ## 验收标准 (M0)
 
-- [ ] `src/lib/pyscript/` 目录完全删除（16 个文件）
-- [ ] `tests/unit/test_py_*.cpp`（7 个）+ `test_atlas_module.cpp` 共 **8 个**测试文件全部删除
-- [ ] `script_events.hpp` 不再 `#include "pyscript/py_object.hpp"`
-- [ ] 项目编译不需要 Python3 SDK（`cmake/AtlasFindPackages.cmake` 无 `find_package(Python3)`）
-- [ ] `ScriptEngine` / `ScriptValue` 接口定义完整，可被 ScriptPhase 1 的 `ClrScriptEngine` 实现
-- [ ] 所有非 Python 相关的单元测试（25 个）通过
+- [x] `src/lib/pyscript/` 目录完全删除（16 个文件）
+- [x] `tests/unit/test_py_*.cpp`（7 个）+ `test_atlas_module.cpp` 共 **8 个**测试文件全部删除
+- [x] `script_events.hpp` 不再 `#include "pyscript/py_object.hpp"`
+- [x] 项目编译不需要 Python3 SDK（`cmake/AtlasFindPackages.cmake` 无 `find_package(Python3)`）
+- [x] `ScriptEngine` / `ScriptValue` 接口定义完整，可被 ScriptPhase 1 的 `ClrScriptEngine` 实现
+- [x] 所有非 Python 相关的单元测试（25 个）通过
 
 ---
 

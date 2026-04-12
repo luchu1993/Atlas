@@ -13,16 +13,21 @@
 
 ## 验收标准
 
-- [ ] BaseApp 可启动，注册到 machined，初始化 C# 脚本引擎
-- [ ] 可创建 Base 实体，C# 脚本逻辑 (`OnInit`, `OnTick`) 可执行
-- [ ] 可创建 Proxy 实体，接受客户端 RUDP 连接
+- [x] BaseApp 可启动，注册到 machined，初始化 C# 脚本引擎
+- [x] 可创建 Base 实体，C# 脚本逻辑 (`OnInit`, `OnTick`) 可执行
+- [x] 可创建 Proxy 实体，接受客户端 RUDP 连接
 - [ ] 客户端 `[ServerRpc]` 调用经安全校验后分发到 C# 实体
 - [ ] C# 实体 `[ClientRpc]` 调用经 C++ 路由发送到客户端
-- [ ] `WriteToDB()` 将 `[Persistent]` 属性持久化到 DBApp
-- [ ] `CreateEntityFromDB()` 从 DBApp 加载实体并恢复 C# 状态
-- [ ] `GiveClientTo()` 可在本地 Proxy 之间转移客户端连接
-- [ ] `[Replicated]` 属性增量同步到 Proxy 的客户端
-- [ ] 全部新增代码有单元测试
+- [x] `WriteToDB()` 将 `[Persistent]` 属性持久化到 DBApp
+- [x] `CreateEntityFromDB()` 从 DBApp 加载实体并恢复 C# 状态
+- [x] `GiveClientTo()` 可在本地 Proxy 之间转移客户端连接
+- [~] `[Replicated]` 属性增量同步到 Proxy 的客户端
+- [x] 全部新增代码有单元测试
+
+## 验收状态（2026-04-13）
+
+- 当前 BaseApp 主体已经具备“实体宿主 + 登录准备 + DB 往返 + 本地客户端转移”的可用基线。
+- 未完成项主要集中在真正的外部客户端协议闭环: `ServerRpcCall`、稳定的 `[ClientRpc]` 下行协议，以及 AOI/多观察者复制。
 
 ---
 

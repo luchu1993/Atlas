@@ -2,7 +2,7 @@
 
 > 前置依赖: Phase 8 (BaseApp), Phase 7 (DBApp), Phase 6 (machined)
 > BigWorld 参考: `server/loginapp/`, `server/baseappmgr/`, `lib/connection/login_interface.hpp`
-> 文档状态: 2026-04-12 当前实现快照
+> 文档状态: 2026-04-13 当前实现快照
 
 ---
 
@@ -24,7 +24,7 @@ Phase 9 的目标是完成单集群登录主线:
 
 ---
 
-## 验收状态（2026-04-12）
+## 验收状态（2026-04-13）
 
 - [x] `LoginApp` 可接受客户端 `RUDP` 连接并处理 `LoginRequest`
 - [x] 登录主链路已实现: `AuthLogin -> AllocateBaseApp -> PrepareLogin -> Authenticate`
@@ -36,7 +36,7 @@ Phase 9 的目标是完成单集群登录主线:
 - [x] `BaseApp` 过载保护已实现，并反馈到 `BaseAppMgr` 分配决策
 - [x] `Global Bases` 注册 / 注销 / 广播已实现
 - [~] 定向测试和常规链路已具备继续推进条件，但极端短线重登压测仍未达到目标
-- [~] 单元测试和定向集成测试已覆盖关键模块，但仍缺少完整的端到端 `test_login_flow.cpp`
+- [~] 已补充 `test_login_flow.cpp` 与 DBApp 相关集成测试，但极端 churn / 长稳覆盖仍需继续扩展
 
 说明:
 
@@ -91,7 +91,7 @@ Phase 9 的目标是完成单集群登录主线:
 
 ### 4. 当前主要残余问题
 
-截至 2026-04-12，常规功能已经具备，但在**极端短线重登**压测下仍存在残余问题:
+截至 2026-04-13，常规功能已经具备，但在**极端短线重登**压测下仍存在残余问题:
 
 - `timeout_fail`
 - `invalid_session`
@@ -306,15 +306,18 @@ enum class LoginStatus : uint8_t
 - `tests/unit/test_xml_database.cpp`
 - `tests/unit/test_reliable_udp.cpp`
 - `tests/integration/test_baseappmgr_registration.cpp`
+- `tests/integration/test_login_flow.cpp`
+- `tests/integration/test_dbapp_login_flow.cpp`
+- `tests/integration/test_dbapp_checkout_cleanup.cpp`
 
 ### 2. 当前测试结论
 
-截至 2026-04-12:
+截至 2026-04-13:
 
 - 定向单元测试和模块级集成测试已具备继续推进条件
 - `BaseAppMgr` 注册、负载、消息层已有较完整测试
+- 已补充端到端 `test_login_flow.cpp` 与 DBApp 集成测试骨架
 - 登录主链路的极端压力稳定性仍需继续验证
-- 仍缺少完整的端到端 `test_login_flow.cpp`
 
 ### 3. 压测参考
 

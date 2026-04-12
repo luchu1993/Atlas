@@ -2,7 +2,7 @@
 
 > 前置依赖: Phase 5 (ServerApp/ManagerApp), Phase 6 (machined), Script Phase 4 最小持久化元数据子集
 > BigWorld 参考: `server/dbapp/`, `lib/db_storage/idatabase.hpp`, `lib/db_storage_mysql/`, `lib/db_storage_xml/`
-> 文档状态: 2026-04-12 可落地实施版
+> 文档状态: 2026-04-13 当前代码对齐版
 
 ---
 
@@ -40,7 +40,7 @@ Phase 7 的目标是把数据库层收敛成一个**可持续演进的单 DBApp 
 
 ---
 
-## 验收状态（2026-04-12）
+## 验收状态（2026-04-13）
 
 - [x] `IDatabase` 接口已落地，包含 `put/get/del/lookup/checkout/clear_checkout/auto_load`
 - [x] `DBApp` 进程已落地，可启动、注册到 `machined`、处理数据库消息
@@ -49,10 +49,10 @@ Phase 7 的目标是把数据库层收敛成一个**可持续演进的单 DBApp 
 - [x] `DBApp` 已支持 `AbortCheckout`，用于登录回滚场景
 - [x] `DBApp` 已能处理 `LoginApp -> DBApp` 的 `AuthLogin`
 - [x] `EntityDefRegistry` 已支持 `DBApp` 从 `entity_defs.json` 加载
-- [x] 单元测试已覆盖 `dbapp_messages` 与 `xml_database`
-- [~] `SQLite` backend 方案已形成草案，但尚未实现
+- [x] 单元测试已覆盖 `dbapp_messages`、`xml_database`、`sqlite_database` 与 `server_config` 的数据库配置分支
+- [x] `SQLite` backend 已在当前代码中实现，并接入 `database_factory` / `ServerConfig` / `DBApp`
 - [ ] `MySQL` backend 尚未作为当前主线完成落地
-- [ ] 仍缺少完整的 `DBApp` 端到端集成测试
+- [~] 已补充 `DBApp` 相关集成测试（登录链路 / checkout 清理），但矩阵仍需继续扩展
 - [ ] 仍未进入多 `DBApp` / `DBAppMgr` 分片阶段
 
 ---
@@ -95,6 +95,7 @@ Phase 7 的目标是把数据库层收敛成一个**可持续演进的单 DBApp 
 当前实际可用的数据库后端是:
 
 - `xml`
+- `sqlite`
 
 当前代码中对 `mysql` 有工厂入口预留，但文档层不能再把它写成“已完成能力”。
 

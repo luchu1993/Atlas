@@ -13,17 +13,21 @@
 
 ## 验收标准
 
-- [ ] `ServerApp` 基类可启动主循环，处理信号，优雅关闭
-- [ ] `ServerApp` 的 tick 系统可工作：`on_start_of_tick` → `Updatable::update()` → `on_tick_complete`
-- [ ] `ServerApp` tick 性能监控可工作：慢帧检测 + Watcher 统计
-- [ ] `ScriptApp` 可初始化 `ClrScriptEngine` 并在 tick 中驱动 C# 脚本
-- [ ] `EntityApp` 提供 `BgTaskManager` 和脚本定时器
-- [ ] `ManagerApp` 为无脚本的管理进程提供轻量基类
-- [ ] `ServerConfig` 可从命令行和 JSON 文件加载配置
-- [ ] `ServerAppOption<T>` 可声明子类配置项，自动从 JSON 加载并注册 Watcher
-- [ ] Watcher 系统可注册和查询运行时指标
-- [ ] 至少一个最小示例进程可基于框架启动并运行
-- [ ] 全部新增代码有单元测试
+- [x] `ServerApp` 基类可启动主循环，处理信号，优雅关闭
+- [x] `ServerApp` 的 tick 系统可工作：`on_start_of_tick` → `Updatable::update()` → `on_tick_complete`
+- [x] `ServerApp` tick 性能监控可工作：慢帧检测 + Watcher 统计
+- [x] `ScriptApp` 可初始化 `ClrScriptEngine` 并在 tick 中驱动 C# 脚本
+- [x] `EntityApp` 提供 `BgTaskManager` 和脚本定时器
+- [x] `ManagerApp` 为无脚本的管理进程提供轻量基类
+- [x] `ServerConfig` 可从命令行和 JSON 文件加载配置
+- [x] `ServerAppOption<T>` 可声明子类配置项，自动从 JSON 加载并注册 Watcher
+- [x] Watcher 系统可注册和查询运行时指标
+- [x] 至少一个最小示例进程可基于框架启动并运行
+- [x] 全部新增代码有单元测试
+
+## 验收状态（2026-04-13）
+
+- Phase 5 已经不再是设计草案，而是当前 `machined`、`DBApp`、`BaseApp`、`LoginApp` 等进程的共同运行时基线。
 
 ---
 

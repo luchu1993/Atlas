@@ -14,15 +14,15 @@
 | Script 2 | C++ ↔ C# 互操作层 | ✅ 完成 | [script_phase2](../scripting/script_phase2_interop_layer.md) |
 | Script 3 | Atlas 引擎 C# 绑定 | 部分落地（主路径可用，仍在补齐） | [script_phase3](../scripting/script_phase3_engine_bindings.md) |
 | Script 4 | 共享程序集 + Source Generator | 部分落地（服务端依赖子集已可用） | [script_phase4](../scripting/script_phase4_shared_generators.md) |
-| Script 5 | 热重载机制 | 待开始 | [script_phase5](../scripting/script_phase5_hot_reload.md) |
-| Script 6 | 测试与稳定化 | 待开始 | [script_phase6](../scripting/script_phase6_testing.md) |
+| Script 5 | 热重载机制 | 部分落地（基础设施已在库内） | [script_phase5](../scripting/script_phase5_hot_reload.md) |
+| Script 6 | 测试与稳定化 | 部分落地（测试矩阵已铺开） | [script_phase6](../scripting/script_phase6_testing.md) |
 
 说明:
 
 - 上表的“状态”表示脚本文档整体收敛度，不等于仓库当前代码是否已经具备某些最小能力子集。
 - 后续服务器 phase 中提到的 “Script Phase 4 依赖”，通常是指当前代码已经在使用的最小共享能力:
   `Atlas.Shared`、属性标记、`SpanWriter/SpanReader`、实体定义导出/注册、基础 Source Generator 输出。
-- Script Phase 5/6 仍是后续完善项，不应阻塞 Phase 5-12 按当前代码基线继续推进。
+- Script Phase 5/6 仍是后续完善项，但仓库中已经有热重载基础设施和脚本层测试矩阵，不应再按“完全未开始”描述。
 
 ---
 
