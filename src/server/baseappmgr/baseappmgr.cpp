@@ -117,9 +117,21 @@ void BaseAppMgr::register_watchers()
 void BaseAppMgr::on_register_baseapp(const Address& src, Channel* ch,
                                      const baseappmgr::RegisterBaseApp& msg)
 {
-    auto [range_start, range_end] = allocate_entity_id_range();
     const Address internal_addr = resolve_advertised_addr(msg.internal_addr, src);
     const Address external_addr = resolve_advertised_addr(msg.external_addr, src);
+
+    if (baseapps_.contains(internal_addr))
+    {
+        ATLAS_LOG_WARNING("BaseAppMgr: duplicate BaseApp registration for internal addr {}:{}",
+                          internal_addr.ip(), internal_addr.port());
+
+        baseappmgr::RegisterBaseAppAck ack;
+        ack.success = false;
+        (void)ch->send_message(ack);
+        return;
+    }
+
+    auto [range_start, range_end] = allocate_entity_id_range();
 
     uint32_t app_id = next_app_id_++;
     BaseAppInfo info;
@@ -127,7 +139,17 @@ void BaseAppMgr::on_register_baseapp(const Address& src, Channel* ch,
     info.external_addr = external_addr;
     info.app_id = app_id;
     info.channel = ch;
-    baseapps_.emplace(internal_addr, std::move(info));
+    const auto [it, inserted] = baseapps_.emplace(internal_addr, std::move(info));
+    if (!inserted)
+    {
+        ATLAS_LOG_ERROR("BaseAppMgr: failed to insert BaseApp registration for {}:{}",
+                        internal_addr.ip(), internal_addr.port());
+        baseappmgr::RegisterBaseAppAck ack;
+        ack.success = false;
+        (void)ch->send_message(ack);
+        return;
+    }
+    app_id_index_.emplace(app_id, it->first);
 
     baseappmgr::RegisterBaseAppAck ack;
     ack.success = true;
@@ -144,40 +166,40 @@ void BaseAppMgr::on_register_baseapp(const Address& src, Channel* ch,
         range_start, range_end);
 }
 
-void BaseAppMgr::on_baseapp_ready(const Address& src, Channel* /*ch*/,
+void BaseAppMgr::on_baseapp_ready(const Address& src, Channel* ch,
                                   const baseappmgr::BaseAppReady& msg)
 {
-    auto it = baseapps_.find(src);
-    if (it == baseapps_.end())
+    BaseAppInfo* info = find_baseapp_by_app_id(msg.app_id);
+    if (info == nullptr)
     {
-        it = std::find_if(baseapps_.begin(), baseapps_.end(),
-                          [&msg](const auto& entry) { return entry.second.app_id == msg.app_id; });
-    }
-
-    if (it == baseapps_.end())
-    {
-        ATLAS_LOG_WARNING("BaseAppMgr: BaseAppReady from unknown addr {}:{} app_id={}", src.ip(),
-                          src.port(), msg.app_id);
+        ATLAS_LOG_WARNING("BaseAppMgr: BaseAppReady for unknown app_id={} from {}:{}", msg.app_id,
+                          src.ip(), src.port());
         return;
     }
-    it->second.is_ready = true;
+
+    if (!matches_registered_source(*info, src, ch, "BaseAppReady"))
+        return;
+
+    info->is_ready = true;
     ATLAS_LOG_INFO("BaseAppMgr: BaseApp app_id={} is ready", msg.app_id);
 }
 
-void BaseAppMgr::on_inform_load(const Address& src, Channel* /*ch*/,
-                                const baseappmgr::InformLoad& msg)
+void BaseAppMgr::on_inform_load(const Address& src, Channel* ch, const baseappmgr::InformLoad& msg)
 {
-    auto it = baseapps_.find(src);
-    if (it == baseapps_.end())
+    BaseAppInfo* info = find_baseapp_by_app_id(msg.app_id);
+    if (info == nullptr)
     {
-        it = std::find_if(baseapps_.begin(), baseapps_.end(),
-                          [&msg](const auto& entry) { return entry.second.app_id == msg.app_id; });
-        if (it == baseapps_.end())
-            return;
+        ATLAS_LOG_WARNING("BaseAppMgr: InformLoad for unknown app_id={} from {}:{}", msg.app_id,
+                          src.ip(), src.port());
+        return;
     }
-    it->second.load = msg.load;
-    it->second.entity_count = msg.entity_count;
-    it->second.proxy_count = msg.proxy_count;
+
+    if (!matches_registered_source(*info, src, ch, "InformLoad"))
+        return;
+
+    info->load = msg.load;
+    info->entity_count = msg.entity_count;
+    info->proxy_count = msg.proxy_count;
 }
 
 void BaseAppMgr::on_allocate_baseapp(const Address& src, Channel* ch,
@@ -259,6 +281,17 @@ void BaseAppMgr::on_deregister_global_base(const Address& /*src*/, Channel* /*ch
 void BaseAppMgr::on_request_entity_id_range(const Address& src, Channel* ch,
                                             const baseappmgr::RequestEntityIdRange& msg)
 {
+    BaseAppInfo* info = find_baseapp_by_app_id(msg.app_id);
+    if (info == nullptr)
+    {
+        ATLAS_LOG_WARNING("BaseAppMgr: RequestEntityIdRange for unknown app_id={} from {}:{}",
+                          msg.app_id, src.ip(), src.port());
+        return;
+    }
+
+    if (!matches_registered_source(*info, src, ch, "RequestEntityIdRange"))
+        return;
+
     auto [start, end] = allocate_entity_id_range();
 
     baseappmgr::RequestEntityIdRangeAck ack;
@@ -275,6 +308,53 @@ void BaseAppMgr::on_request_entity_id_range(const Address& src, Channel* ch,
 // ============================================================================
 // Internal helpers
 // ============================================================================
+
+auto BaseAppMgr::find_baseapp_by_app_id(uint32_t app_id) -> BaseAppInfo*
+{
+    const auto index_it = app_id_index_.find(app_id);
+    if (index_it == app_id_index_.end())
+        return nullptr;
+
+    const auto it = baseapps_.find(index_it->second);
+    if (it == baseapps_.end())
+    {
+        app_id_index_.erase(index_it);
+        return nullptr;
+    }
+
+    return &it->second;
+}
+
+auto BaseAppMgr::find_baseapp_by_app_id(uint32_t app_id) const -> const BaseAppInfo*
+{
+    const auto index_it = app_id_index_.find(app_id);
+    if (index_it == app_id_index_.end())
+        return nullptr;
+
+    const auto it = baseapps_.find(index_it->second);
+    return (it != baseapps_.end()) ? &it->second : nullptr;
+}
+
+auto BaseAppMgr::matches_registered_source(const BaseAppInfo& info, const Address& src,
+                                           const Channel* ch, std::string_view operation) const
+    -> bool
+{
+    if (src != info.internal_addr)
+    {
+        ATLAS_LOG_WARNING("BaseAppMgr: {} source mismatch for app_id={} expected {}:{} got {}:{}",
+                          operation, info.app_id, info.internal_addr.ip(),
+                          info.internal_addr.port(), src.ip(), src.port());
+        return false;
+    }
+
+    if (ch != nullptr && info.channel != nullptr && info.channel != ch)
+    {
+        ATLAS_LOG_WARNING("BaseAppMgr: {} channel mismatch for app_id={}", operation, info.app_id);
+        return false;
+    }
+
+    return true;
+}
 
 auto BaseAppMgr::find_least_loaded() const -> const BaseAppInfo*
 {
@@ -344,6 +424,7 @@ void BaseAppMgr::on_baseapp_death(const Address& addr)
         return;
     ATLAS_LOG_WARNING("BaseAppMgr: BaseApp app_id={} died ({}:{})", it->second.app_id, addr.ip(),
                       addr.port());
+    app_id_index_.erase(it->second.app_id);
     baseapps_.erase(it);
 
     // Clean up any global bases owned by the dead BaseApp

@@ -8,6 +8,7 @@
 
 #include <cstdint>
 #include <string>
+#include <string_view>
 #include <unordered_map>
 
 namespace atlas
@@ -67,6 +68,11 @@ private:
                                     const baseappmgr::RequestEntityIdRange& msg);
 
     // ---- Internal helpers -----------------------------------------------
+    [[nodiscard]] auto find_baseapp_by_app_id(uint32_t app_id) -> BaseAppInfo*;
+    [[nodiscard]] auto find_baseapp_by_app_id(uint32_t app_id) const -> const BaseAppInfo*;
+    [[nodiscard]] auto matches_registered_source(const BaseAppInfo& info, const Address& src,
+                                                 const Channel* ch,
+                                                 std::string_view operation) const -> bool;
     [[nodiscard]] auto find_least_loaded() const -> const BaseAppInfo*;
     [[nodiscard]] auto is_overloaded() const -> bool;
     void broadcast_to_all_baseapps(const baseappmgr::GlobalBaseNotification& notif);
@@ -75,6 +81,7 @@ private:
 
     // ---- State ----------------------------------------------------------
     std::unordered_map<Address, BaseAppInfo> baseapps_;
+    std::unordered_map<uint32_t, Address> app_id_index_;
     uint32_t next_app_id_{1};
     EntityID next_entity_range_start_{1};
 

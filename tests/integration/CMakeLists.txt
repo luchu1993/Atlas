@@ -17,6 +17,12 @@ atlas_add_test(test_machined_registration
     LABELS integration
 )
 
+atlas_add_test(test_baseappmgr_registration
+    SOURCES test_baseappmgr_registration.cpp
+    DEPS atlas_baseappmgr_lib atlas_server atlas_network
+    LABELS integration
+)
+
 atlas_add_test(test_rudp_two_network_interfaces
     SOURCES test_rudp_two_network_interfaces.cpp
     DEPS atlas_network
