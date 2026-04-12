@@ -60,6 +60,7 @@ public:
     void set_fast_resend_thresh(uint32_t thresh) { fast_resend_thresh_ = thresh; }
 
     // Receive window size (max out-of-order buffered packets)
+    void set_send_window(uint32_t wnd) { send_window_ = wnd; }
     void set_recv_window(uint32_t wnd) { rcv_wnd_ = wnd; }
     [[nodiscard]] auto recv_window() const -> uint32_t { return rcv_wnd_; }
 

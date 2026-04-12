@@ -7,6 +7,9 @@
 #if ATLAS_PLATFORM_WINDOWS
 #include <winsock2.h>
 #include <ws2tcpip.h>
+#ifndef SIO_UDP_CONNRESET
+#define SIO_UDP_CONNRESET _WSAIOW(IOC_VENDOR, 12)
+#endif
 #pragma comment(lib, "ws2_32.lib")
 #else
 #include <arpa/inet.h>
@@ -206,6 +209,12 @@ auto Socket::create_udp() -> Result<Socket>
     {
         return map_socket_error();
     }
+    // Disable WSAECONNRESET on UDP sockets — Windows reports ICMP port
+    // unreachable as a recv error which disrupts the receive loop.
+    BOOL new_behavior = FALSE;
+    DWORD bytes_returned = 0;
+    ::WSAIoctl(raw, SIO_UDP_CONNRESET, &new_behavior, sizeof(new_behavior), nullptr, 0,
+               &bytes_returned, nullptr, nullptr);
     auto fd = static_cast<FdHandle>(raw);
 #else
     int raw = ::socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);

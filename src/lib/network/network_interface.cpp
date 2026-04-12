@@ -375,6 +375,8 @@ auto NetworkInterface::connect_rudp_nocwnd(const Address& addr) -> Result<Reliab
         return result;
 
     (*result)->set_nocwnd(true);
+    (*result)->set_send_window(4096);
+    (*result)->set_recv_window(4096);
     return result;
 }
 
@@ -528,6 +530,8 @@ void NetworkInterface::on_udp_readable()
             {
                 break;
             }
+            if (result.error().code() == ErrorCode::ConnectionReset)
+                continue;
             ATLAS_LOG_WARNING("UDP recv error: {}", result.error().message());
             break;
         }
@@ -583,6 +587,8 @@ void NetworkInterface::on_rudp_readable()
         {
             if (result.error().code() == ErrorCode::WouldBlock)
                 break;
+            if (result.error().code() == ErrorCode::ConnectionReset)
+                continue;
             ATLAS_LOG_WARNING("RUDP recv error: {}", result.error().message());
             break;
         }
@@ -603,6 +609,9 @@ void NetworkInterface::on_rudp_readable()
             auto channel = std::make_unique<ReliableUdpChannel>(dispatcher_, interface_table_,
                                                                 *rudp_socket_, src_addr);
             channel->set_disconnect_callback([this](Channel& ch) { on_channel_disconnect(ch); });
+            channel->set_nocwnd(true);
+            channel->set_send_window(4096);
+            channel->set_recv_window(4096);
             channel->activate();
 
             if (accept_callback_)
@@ -643,8 +652,11 @@ void NetworkInterface::condemn_channel(const Address& addr)
     auto channel = std::move(it->second);
     channels_.erase(it);
 
-    // Deregister fd from dispatcher before moving to condemned
-    (void)dispatcher_.deregister(channel->fd());
+    // RUDP channels share a single socket — deregistering it would break all
+    // other RUDP channels. Only deregister for TCP (owns its own socket).
+    const bool shared_fd = rudp_socket_ && channel->fd() == rudp_socket_->fd();
+    if (!shared_fd)
+        (void)dispatcher_.deregister(channel->fd());
     channel->condemn();
 
     condemned_.push_back({std::move(channel), Clock::now()});

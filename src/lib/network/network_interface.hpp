@@ -143,7 +143,7 @@ private:
         TimePoint condemned_at;
     };
     std::deque<CondemnedEntry> condemned_;
-    static constexpr Duration kCondemnTimeout = std::chrono::seconds(60);
+    static constexpr Duration kCondemnTimeout = std::chrono::seconds(5);
     // Cap the condemned list to prevent unbounded growth under DDoS-style
     // connect/disconnect floods.  Entries over this limit are force-closed
     // immediately (oldest first) rather than waiting for the timeout.
@@ -162,7 +162,7 @@ private:
 
     static constexpr std::size_t kMaxDatagramSize = 64 * 1024;
     static constexpr std::size_t kMaxAcceptsPerCallback = 128;
-    static constexpr std::size_t kMaxDatagramsPerCallback = 256;
+    static constexpr std::size_t kMaxDatagramsPerCallback = 1024;
     StreamBuffer datagram_recv_scratch_;
 
     bool shutting_down_{false};

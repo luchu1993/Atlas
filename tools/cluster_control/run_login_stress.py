@@ -242,14 +242,18 @@ def stop_logged_processes(processes: list[LoggedProcess]) -> None:
             log(f"Stopping {entry.name} (pid={proc.pid})")
             try:
                 if os.name == "nt":
-                    proc.terminate()
+                    # CTRL_BREAK_EVENT triggers a graceful shutdown
+                    # (fini → flush → exit) instead of hard-killing with
+                    # TerminateProcess.  Works because the child was
+                    # started with CREATE_NEW_PROCESS_GROUP.
+                    os.kill(proc.pid, signal.CTRL_BREAK_EVENT)
                 else:
                     os.killpg(proc.pid, signal.SIGTERM)
             except ProcessLookupError:
                 pass
 
             try:
-                proc.wait(timeout=5)
+                proc.wait(timeout=8)
             except subprocess.TimeoutExpired:
                 try:
                     if os.name == "nt":
@@ -329,6 +333,8 @@ def build_loginapp_args(args: argparse.Namespace, machined_address: str) -> list
         str(args.login_rate_limit_global),
         "--login-rate-limit-window-sec",
         str(args.login_rate_limit_window_sec),
+        "--update-hertz",
+        "50",
         "--log-level",
         "info",
     ]
@@ -482,7 +488,7 @@ def main() -> int:
                 arguments=build_loginapp_args(args, machined_address),
             )
         )
-        processes[-1].start_order = 2
+        processes[-1].start_order = 5
         time.sleep(1)
 
         for baseapp_spec in baseapp_specs:
@@ -507,12 +513,14 @@ def main() -> int:
                         str(runtime_assembly),
                         "--runtime-config",
                         str(runtime_config),
+                        "--update-hertz",
+                        "50",
                         "--log-level",
                         "info",
                     ],
                 )
             )
-            processes[-1].start_order = 3
+            processes[-1].start_order = 4
         time.sleep(1)
 
         processes.append(
@@ -532,12 +540,14 @@ def main() -> int:
                     str(args.dbapp_port),
                     "--config",
                     str(db_config_path),
+                    "--update-hertz",
+                    "50",
                     "--log-level",
                     "info",
                 ],
             )
         )
-        processes[-1].start_order = 4
+        processes[-1].start_order = 2
         time.sleep(1)
 
         processes.append(
@@ -555,12 +565,14 @@ def main() -> int:
                     machined_address,
                     "--internal-port",
                     str(args.baseappmgr_port),
+                    "--update-hertz",
+                    "50",
                     "--log-level",
                     "info",
                 ],
             )
         )
-        processes[-1].start_order = 5
+        processes[-1].start_order = 3
 
         log("Waiting for processes to register with machined...")
         registrations = [
