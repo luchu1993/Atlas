@@ -195,7 +195,7 @@ auto DBApp::resolve_reply_channel(const Address& addr) -> Channel*
         return existing;
     }
 
-    auto result = network().connect_rudp(addr);
+    auto result = network().connect_rudp_nocwnd(addr);
     if (!result)
     {
         ATLAS_LOG_WARNING("DBApp: failed to resolve reply channel {}:{}", addr.ip(), addr.port());
@@ -284,12 +284,17 @@ void DBApp::on_checkout_entity(const Address& src, Channel* ch, const dbapp::Che
     auto co_result = checkout_mgr_.try_checkout(
         msg.mode == dbapp::LoadMode::ByDBID ? msg.dbid : kInvalidDBID, msg.type_id, owner);
 
-    if (co_result.status == CheckoutManager::CheckoutStatus::AlreadyCheckedOut)
+    if (co_result.status == CheckoutManager::CheckoutStatus::AlreadyCheckedOut ||
+        co_result.status == CheckoutManager::CheckoutStatus::PendingCheckout)
     {
-        ATLAS_LOG_WARNING(
-            "DBApp: checkout denied request_id={} dbid={} already checked out by {}:{}",
-            msg.request_id, msg.dbid, co_result.current_owner.base_addr.ip(),
-            co_result.current_owner.base_addr.port());
+        ATLAS_LOG_DEBUG(
+            "DBApp: checkout conflict request_id={} dbid={} type_id={} owner={}:{} app_id={} "
+            "entity_id={} state={}",
+            msg.request_id, msg.dbid, msg.type_id, co_result.current_owner.base_addr.ip(),
+            co_result.current_owner.base_addr.port(), co_result.current_owner.app_id,
+            co_result.current_owner.entity_id,
+            co_result.status == CheckoutManager::CheckoutStatus::AlreadyCheckedOut ? "confirmed"
+                                                                                   : "pending");
         dbapp::CheckoutEntityAck ack;
         ack.request_id = msg.request_id;
         ack.status = dbapp::CheckoutStatus::AlreadyCheckedOut;
@@ -297,16 +302,6 @@ void DBApp::on_checkout_entity(const Address& src, Channel* ch, const dbapp::Che
         ack.holder_addr = co_result.current_owner.base_addr;
         ack.holder_app_id = co_result.current_owner.app_id;
         ack.holder_entity_id = co_result.current_owner.entity_id;
-        (void)ch->send_message(ack);
-        return;
-    }
-
-    if (co_result.status == CheckoutManager::CheckoutStatus::PendingCheckout)
-    {
-        dbapp::CheckoutEntityAck ack;
-        ack.request_id = msg.request_id;
-        ack.status = dbapp::CheckoutStatus::AlreadyCheckedOut;
-        ack.dbid = msg.dbid;
         (void)ch->send_message(ack);
         return;
     }

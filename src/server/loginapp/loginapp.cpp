@@ -91,7 +91,7 @@ auto LoginApp::init(int argc, char* argv[]) -> bool
             {
                 ATLAS_LOG_INFO("LoginApp: DBApp born at {}:{}, connecting via RUDP...",
                                n.internal_addr.ip(), n.internal_addr.port());
-                auto ch = network().connect_rudp(n.internal_addr);
+                auto ch = network().connect_rudp_nocwnd(n.internal_addr);
                 if (ch)
                     dbapp_channel_ = static_cast<Channel*>(*ch);
             }
@@ -111,7 +111,7 @@ auto LoginApp::init(int argc, char* argv[]) -> bool
             {
                 ATLAS_LOG_INFO("LoginApp: BaseAppMgr born at {}:{}, connecting via RUDP...",
                                n.internal_addr.ip(), n.internal_addr.port());
-                auto ch = network().connect_rudp(n.internal_addr);
+                auto ch = network().connect_rudp_nocwnd(n.internal_addr);
                 if (ch)
                     baseappmgr_channel_ = static_cast<Channel*>(*ch);
             }
@@ -304,7 +304,7 @@ void LoginApp::on_allocate_baseapp_result(const Address& /*src*/, Channel* /*ch*
     pending.stage = PendingStage::WaitingPrepare;
 
     // Connect to BaseApp internal RUDP address and send PrepareLogin
-    auto ch_result = network().connect_rudp(msg.internal_addr);
+    auto ch_result = network().connect_rudp_nocwnd(msg.internal_addr);
     if (!ch_result)
     {
         ATLAS_LOG_ERROR("LoginApp: could not connect to BaseApp {}:{}", msg.internal_addr.ip(),

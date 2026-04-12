@@ -139,6 +139,29 @@ TEST_F(ReliableUdpTest, AckClearsUnacked)
     EXPECT_EQ(channel_a.unacked_count(), 0u);
 }
 
+TEST_F(ReliableUdpTest, CondemnClearsReliableState)
+{
+    auto sock_a = Socket::create_udp();
+    ASSERT_TRUE(sock_a.has_value());
+    ASSERT_TRUE(sock_a->bind(Address("127.0.0.1", 0)).has_value());
+
+    auto sock_b = Socket::create_udp();
+    ASSERT_TRUE(sock_b.has_value());
+    ASSERT_TRUE(sock_b->bind(Address("127.0.0.1", 0)).has_value());
+    auto addr_b = sock_b->local_address().value();
+
+    ReliableUdpChannel channel_a(dispatcher_, table_, *sock_a, addr_b);
+    channel_a.activate();
+
+    channel_a.bundle().add_message(RudpTestMsg{7});
+    ASSERT_TRUE(channel_a.send_reliable().has_value());
+    EXPECT_EQ(channel_a.unacked_count(), 1u);
+
+    channel_a.condemn();
+    EXPECT_EQ(channel_a.state(), ChannelState::Condemned);
+    EXPECT_EQ(channel_a.unacked_count(), 0u);
+}
+
 TEST_F(ReliableUdpTest, UnreliableSendNoTracking)
 {
     auto sock_a = Socket::create_udp();

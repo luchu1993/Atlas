@@ -84,6 +84,7 @@ public:
 
 protected:
     [[nodiscard]] auto do_send(std::span<const std::byte> data) -> Result<size_t> override;
+    void on_condemned() override;
 
 private:
     struct UnackedPacket

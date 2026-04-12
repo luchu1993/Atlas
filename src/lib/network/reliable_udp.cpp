@@ -165,6 +165,16 @@ auto ReliableUdpChannel::do_send(std::span<const std::byte> data) -> Result<size
     return *result;
 }
 
+void ReliableUdpChannel::on_condemned()
+{
+    cancel_delayed_ack();
+    stop_resend_timer();
+    unacked_.clear();
+    rcv_buf_.clear();
+    pending_fragments_.clear();
+    ack_pending_ = false;
+}
+
 // ============================================================================
 // build_packet
 // ============================================================================
