@@ -292,6 +292,41 @@ TEST_F(NetworkInterfaceTest, UdpRateLimitedDatagramsAlsoConsumePerPollBudget)
         std::chrono::milliseconds(500)));
 }
 
+TEST_F(NetworkInterfaceTest, TcpRateLimitedAcceptsAlsoConsumePerPollBudget)
+{
+    ASSERT_TRUE(ni_.start_tcp_server(Address("127.0.0.1", 0)).has_value());
+
+    ni_.set_rate_limit(1);
+
+    constexpr std::size_t kClientCount = 192;  // intentionally above the current accept budget
+    std::vector<Socket> clients;
+    clients.reserve(kClientCount);
+
+    for (std::size_t i = 0; i < kClientCount; ++i)
+    {
+        auto sock = Socket::create_tcp();
+        ASSERT_TRUE(sock.has_value()) << sock.error().message();
+
+        auto connect_result = sock->connect(ni_.tcp_address());
+        ASSERT_TRUE(connect_result.has_value() ||
+                    connect_result.error().code() == ErrorCode::WouldBlock ||
+                    connect_result.error().code() == ErrorCode::ConnectionRefused)
+            << connect_result.error().message();
+
+        clients.push_back(std::move(*sock));
+    }
+
+    std::this_thread::sleep_for(std::chrono::milliseconds(50));
+
+    dispatcher_.process_once();
+    EXPECT_EQ(ni_.channel_count(), 1u);
+
+    ni_.set_rate_limit(0);
+
+    ASSERT_TRUE(poll_until(
+        dispatcher_, [&] { return ni_.channel_count() > 1u; }, std::chrono::milliseconds(500)));
+}
+
 // ============================================================================
 // Shutdown: connect_tcp must fail after prepare_for_shutdown
 // ============================================================================
@@ -536,6 +571,40 @@ TEST_F(NetworkInterfaceTest, ConnectRudpIsIdempotent)
     ASSERT_TRUE(cr2.has_value());
     EXPECT_EQ(*cr1, *cr2);  // same channel reused
     EXPECT_EQ(ni_.channel_count(), 1u);
+}
+
+TEST_F(NetworkInterfaceTest, RudpRateLimitedDatagramsAlsoConsumePerPollBudget)
+{
+    ASSERT_TRUE(ni_.start_rudp_server(Address("127.0.0.1", 0)).has_value());
+    ni_.set_rate_limit(1);
+
+    constexpr uint32_t kDatagramCount = 1500;  // intentionally above the current RUDP budget
+    std::vector<Socket> senders;
+    senders.reserve(kDatagramCount);
+
+    std::array<std::byte, 9> pkt{};
+    pkt[0] = std::byte{rudp::kFlagHasSeq};
+    pkt[4] = std::byte{1};
+
+    for (uint32_t i = 0; i < kDatagramCount; ++i)
+    {
+        auto sender = Socket::create_udp();
+        ASSERT_TRUE(sender.has_value()) << sender.error().message();
+        ASSERT_TRUE(sender->bind(Address("127.0.0.1", 0)).has_value());
+
+        auto sent = sender->send_to(pkt, ni_.rudp_address());
+        ASSERT_TRUE(sent.has_value()) << sent.error().message();
+        ASSERT_EQ(*sent, pkt.size());
+
+        senders.push_back(std::move(*sender));
+    }
+
+    dispatcher_.process_once();
+    EXPECT_EQ(ni_.channel_count(), 1u);
+
+    ni_.set_rate_limit(0);
+    ASSERT_TRUE(poll_until(
+        dispatcher_, [&] { return ni_.channel_count() > 1u; }, std::chrono::milliseconds(500)));
 }
 
 TEST_F(NetworkInterfaceTest, RudpServerDefaultProfileKeepsCongestionControl)

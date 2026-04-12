@@ -10,7 +10,7 @@ A modern distributed MMO game server framework written in **C++20** with **C# (.
 - **Entity System** — Entities distributed across Base / Cell / Client, communicating via Mailbox RPC
 - **C# (.NET 9) Scripting** — High-performance C# scripting via embedded CoreCLR; zero-overhead interop with `[UnmanagedCallersOnly]`
 - **Cross-Platform** — Full OS API abstraction, unified build on Windows and Linux
-- **Pluggable Database** — MySQL (production) and XML (development) backends
+- **Pluggable Database** — MySQL (production), SQLite (development), and XML (lightweight fallback) backends
 - **Client SDK** — Lightweight connection SDK, not tied to any specific game client engine
 
 ## Architecture
@@ -20,7 +20,7 @@ Client ──► LoginApp ──► BaseAppMgr ──► BaseApp ◄──► Ce
                                           │              │
                                         DBApp        CellAppMgr
                                           │
-                                        MySQL
+                                   MySQL / SQLite / XML
 ```
 
 | Process | Role |
@@ -28,7 +28,7 @@ Client ──► LoginApp ──► BaseAppMgr ──► BaseApp ◄──► Ce
 | **LoginApp** | Client authentication and login |
 | **BaseApp** | Entity state management, client proxy, persistence |
 | **CellApp** | Spatial partitioning, entity movement, AoI (Area of Interest) |
-| **DBApp** | Asynchronous database read/write |
+| **DBApp** | Asynchronous database read/write across XML, SQLite, or MySQL backends |
 | **BaseAppMgr / CellAppMgr / DBAppMgr** | Cluster load balancing and coordination |
 | **Reviver** | Crash detection and automatic recovery |
 | **machined** | Machine daemon, service registration and discovery |
@@ -105,6 +105,8 @@ dotnet --version       # should be 9.x.x
 ```
 
 > **Third-party dependencies** (Google Test, pugixml, RapidJSON, zlib) are automatically downloaded by CMake `FetchContent` during the first configure — no manual installation needed. Ensure internet access (or a pre-seeded `_deps` cache) during the first configure.
+
+> **SQLite backend runtime note:** the SQLite backend loads the system SQLite library dynamically at runtime (`sqlite3.dll` / `winsqlite3.dll` on Windows, `libsqlite3.so*` on Linux/macOS). Atlas does not vendor SQLite into the build tree.
 
 ### Clone
 
@@ -265,7 +267,7 @@ Then start in order:
 # Terminal 4 — CellApp manager
 .\atlas_cellappmgr.exe
 
-# Terminal 5 — database process (XML dev backend)
+# Terminal 5 — database process (XML fallback by default; switch to SQLite via config/CLI)
 .\atlas_dbapp.exe
 
 # Terminal 6 — base entity process
@@ -284,13 +286,37 @@ Each process loads configuration from CLI flags and a JSON config file (via `Ser
 | Flag | Description | Example |
 |------|-------------|---------|
 | `--config <path>` | Path to JSON config file | `--config conf/baseapp.json` |
-| `--machined-host <ip>` | Address of the machined daemon | `--machined-host 127.0.0.1` |
-| `--port <n>` | Port for this process to listen on | `--port 20010` |
+| `--machined <host:port>` | Address of the machined daemon | `--machined 127.0.0.1:20018` |
+| `--internal-port <n>` | Internal listen port for this process | `--internal-port 20010` |
+| `--external-port <n>` | External/client-facing port when applicable | `--external-port 20013` |
 
 ### Database Backend
 
-- **XML backend** (development/testing) — zero configuration, data stored as XML files, enabled by default
-- **MySQL backend** (production) — requires a running MySQL instance; configure connection details in the process JSON config
+- **XML backend** (development/testing) — zero configuration, file-based storage, still the default fallback
+- **SQLite backend** (development) — single-file relational backend with checkout / lookup semantics closer to MySQL; requires a runtime SQLite library and supports `sqlite_path`, `sqlite_wal`, and `sqlite_busy_timeout_ms`
+- **MySQL backend** (production candidate) — requires a running MySQL instance; configure connection details in the process JSON config
+
+Example database config:
+
+```json
+{
+  "database": {
+    "type": "sqlite",
+    "sqlite_path": "data/atlas_dev.sqlite3",
+    "sqlite_wal": true,
+    "sqlite_busy_timeout_ms": 5000
+  }
+}
+```
+
+Common DBApp CLI overrides:
+
+```bash
+--db-type sqlite
+--db-sqlite-path data/atlas_dev.sqlite3
+--db-sqlite-wal true
+--db-sqlite-busy-timeout-ms 5000
+```
 
 ### C# Scripts
 
@@ -325,6 +351,7 @@ atlas/
 │   │   ├── connection/       Client-server protocol definitions
 │   │   ├── db/               Database abstraction (IDatabase + DatabaseFactory)
 │   │   ├── db_mysql/         MySQL backend
+│   │   ├── db_sqlite/        SQLite backend (runtime-loaded sqlite3)
 │   │   ├── db_xml/           XML backend
 │   │   └── server/           Server framework base classes
 │   ├── server/             Server processes
