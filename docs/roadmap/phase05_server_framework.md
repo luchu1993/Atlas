@@ -1,7 +1,9 @@
 # Phase 5: 服务器框架基类 (`src/lib/server/`)
 
-> 前置依赖: 脚本层 (Script Phase 0–6) 完成
+> 前置依赖: 脚本层运行时基线就绪（Script Phase 0-3 + Script Phase 4 最小子集）
 > BigWorld 参考: `lib/server/server_app.hpp`, `lib/server/script_app.hpp`, `lib/server/entity_app.hpp`
+> 说明: 当前代码已经具备 `Atlas.Shared`、基础属性标记、`SpanWriter/SpanReader`、
+> `EntityDefRegistry` 注册等最小共享能力；Script Phase 5/6 属于后续增强项，不是本阶段阻塞条件。
 
 ---
 
@@ -1062,7 +1064,7 @@ static_assert(NetworkMessage<ShutdownRequest>);
 | 6000 – 6999 | BaseAppMgr 接口 |
 | 7000 – 7999 | CellAppMgr 接口 |
 | 8000 – 8999 | DBAppMgr 接口 |
-| 10000 – 19999 | 外部接口 (客户端 ↔ 服务器) |
+| 10000 – 19999 | 外部接口 (客户端 ↔ 服务器，保留给完整客户端协议；当前代码的 BaseApp 认证消息暂时仍放在 `2000–2999`) |
 | 50000 – 59999 | C# RPC 转发 (脚本层 RPC 封装在统一消息中) |
 
 > **与 BigWorld 的差异:**

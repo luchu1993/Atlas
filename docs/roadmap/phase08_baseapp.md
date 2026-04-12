@@ -1,7 +1,8 @@
 # Phase 8: BaseApp — 实体宿主与客户端代理
 
-> 前置依赖: Phase 7 (DBApp), Phase 5 (ScriptApp/EntityApp), Script Phase 4 (Entity/RPC Source Generator)
+> 前置依赖: Phase 7 (DBApp), Phase 5 (ScriptApp/EntityApp), Script Phase 4 最小实体/RPC 子集
 > BigWorld 参考: `server/baseapp/baseapp.hpp`, `server/baseapp/base.hpp`, `server/baseapp/proxy.hpp`
+> 当前代码基线 (2026-04-12): BaseApp 已实现内部消息、登录准备/认证、DB 持久化、`give_client_to()` 本地转移以及 NativeApi 回调；客户端外部接口目前只有 `Authenticate / AuthenticateResult`，`ServerRpcCall`、`EnableEntities` 和 AOI 下行协议仍待 Phase 10 / Phase 12 补齐。另需注意：当前 `SelfRpcFromCell` / `ReplicatedDeltaFromCell` / `BroadcastRpcFromCell` handler 都只会路由到单个 `base_entity_id` 对应的 Proxy，尚未具备 BigWorld 风格的多观察者 fan-out。
 
 ---
 
@@ -14,7 +15,7 @@
 
 - [ ] BaseApp 可启动，注册到 machined，初始化 C# 脚本引擎
 - [ ] 可创建 Base 实体，C# 脚本逻辑 (`OnInit`, `OnTick`) 可执行
-- [ ] 可创建 Proxy 实体，接受客户端 TCP 连接
+- [ ] 可创建 Proxy 实体，接受客户端 RUDP 连接
 - [ ] 客户端 `[ServerRpc]` 调用经安全校验后分发到 C# 实体
 - [ ] C# 实体 `[ClientRpc]` 调用经 C++ 路由发送到客户端
 - [ ] `WriteToDB()` 将 `[Persistent]` 属性持久化到 DBApp
@@ -52,7 +53,7 @@
 |------|-----------|------|
 | **类层次** | `BaseApp : EntityApp : ScriptApp : ServerApp` | 与 Phase 5 一致 |
 | **Base 实体** | `BaseEntity` — C++ 薄壳 + C# 实体实例 | 游戏逻辑全在 C# |
-| **Proxy 实体** | `Proxy : BaseEntity` + TCP Channel | TCP 替代 UDP（与 Phase 6 一致） |
+| **Proxy 实体** | `Proxy : BaseEntity` + RUDP Channel | 与当前代码一致，复用 Atlas 可靠 UDP 传输 |
 | **双网络接口** | 保留: 内部 + 外部两个 `NetworkInterface` | 安全隔离，客户端只能访问外部 |
 | **Cell 关联** | 保留 `CellMailbox` 结构 | Phase 10 CellApp 需要 |
 | **消息路由** | 客户端消息携带 EntityID，直接查找 | 比 BigWorld 的 `setClient` 更直接 |
@@ -132,39 +133,51 @@ C# Source Generator 在每个实体的 `OnTick()` 中检查 dirty flags。如果
 | `CellEntityDestroyed` | 2011 | CellApp → BaseApp | Cell 实体已销毁 |
 | `CurrentCell` | 2012 | CellApp → BaseApp | Cell 地址更新 (Offload) |
 | `CellRpcForward` | 2013 | CellApp → BaseApp | Cell → Base RPC 转发 |
-| `ClientRpcFromCell` | 2014 | CellApp → BaseApp | Cell → Client RPC 转发 |
+| `SelfRpcFromCell` | 2014 | CellApp → BaseApp | Cell → 拥有者客户端 RPC，可靠路径 |
 | `ReplicatedDeltaFromCell` | 2015 | CellApp → BaseApp | Cell 属性更新 → 转发客户端 |
-| `WriteToDBResponse` | 2020 | DBApp → BaseApp | writeToDB 结果 |
+| `BroadcastRpcFromCell` | 2016 | CellApp → BaseApp | Cell → `otherClients/allClients` RPC，广播路径 |
+| `WriteEntityAck` | 4001 | DBApp → BaseApp | `write_to_db()` 结果 |
 
-### 2.2 BaseApp 外部接口 (从客户端)
-
-| 消息 | ID | 方向 | 用途 |
-|------|-----|------|------|
-| `Authenticate` | 10000 | Client → BaseApp | SessionKey 认证 |
-| `ServerRpcCall` | 10001 | Client → BaseApp | 调用 `[ServerRpc]` (Exposed) |
-| `EnableEntities` | 10002 | Client → BaseApp | 开启实体同步/AOI |
-| `HeartbeatPing` | 10003 | Client → BaseApp | 客户端心跳 |
-
-### 2.3 BaseApp → Client 消息
+### 2.2 当前已实现的 BaseApp 外部接口 (从客户端)
 
 | 消息 | ID | 方向 | 用途 |
 |------|-----|------|------|
-| `AuthResult` | 10100 | BaseApp → Client | 认证结果 |
-| `ClientRpcCall` | 10101 | BaseApp → Client | `[ClientRpc]` 调用 |
-| `EntityEnter` | 10102 | BaseApp → Client | 实体进入 AOI |
-| `EntityLeave` | 10103 | BaseApp → Client | 实体离开 AOI |
-| `EntityPropertyUpdate` | 10104 | BaseApp → Client | `[Replicated]` 属性增量更新 |
-| `CreateBasePlayer` | 10105 | BaseApp → Client | 创建客户端本地 Player 实体 |
-| `ResetEntities` | 10106 | BaseApp → Client | giveClientTo 后重置 |
+| `Authenticate` | 2020 | Client → BaseApp | SessionKey 认证 |
+
+### 2.3 当前已实现的 BaseApp → Client 消息
+
+| 消息 | ID | 方向 | 用途 |
+|------|-----|------|------|
+| `AuthenticateResult` | 2021 | BaseApp → Client | 认证结果 |
+
+### 2.4 规划中、但尚未在当前代码落地的外部协议
+
+这些消息仍然是 BaseApp / CellApp / Client SDK 的目标接口，但当前仓库尚未定义对应
+`struct` 或 handler：
+
+| 消息 | 规划方向 | 说明 |
+|------|----------|------|
+| `ServerRpcCall` | Client → BaseApp | Phase 10 / 12 |
+| `EnableEntities` | Client → BaseApp | Phase 10 / 12 |
+| `HeartbeatPing` | Client → BaseApp | 后续外部连接保活 |
+| `ClientRpcCall` | BaseApp → Client | 目标 SDK 协议 |
+| `EntityEnter` / `EntityLeave` | BaseApp → Client | Phase 10 AOI |
+| `EntityPropertyUpdate` | BaseApp → Client | Phase 10 复制 |
+| `CreateBasePlayer` / `ResetEntities` | BaseApp → Client | Phase 12 SDK |
 
 ---
 
 ## 3. 核心模块设计
 
+> 说明: 本节保留了原始 Phase 8 设计草案，但需要按当前代码理解：
+> - `Proxy` 已合并进 `src/server/baseapp/base_entity.hpp`
+> - `send_replicated_delta()` / `enable_entities()` / 外部 `ServerRpcCall` 仍未在当前代码中落地
+> - 相关客户端同步职责已转移到 Phase 10 / Phase 12 继续完成
+
 ### 3.1 BaseEntity — Base 实体
 
 ```cpp
-// src/server/BaseApp/base_entity.hpp
+// src/server/baseapp/base_entity.hpp
 namespace atlas {
 
 class BaseEntity {
@@ -260,7 +273,7 @@ protected:
 ### 3.2 Proxy — 客户端代理实体
 
 ```cpp
-// src/server/BaseApp/proxy.hpp
+// src/server/baseapp/base_entity.hpp   (`Proxy` 在当前代码中合并于此)
 namespace atlas {
 
 class Proxy : public BaseEntity {
@@ -342,7 +355,7 @@ private:
 ### 3.3 EntityManager — 实体集合管理
 
 ```cpp
-// src/server/BaseApp/entity_manager.hpp
+// src/server/baseapp/entity_manager.hpp
 namespace atlas {
 
 class EntityManager {
@@ -443,7 +456,7 @@ void EntityManager::extend_id_range(EntityID new_end) {
 ### 3.4 BaseAppNativeProvider — BaseApp 专用 NativeApi
 
 ```cpp
-// src/server/BaseApp/baseapp_native_provider.hpp
+// src/server/baseapp/baseapp_native_provider.hpp
 namespace atlas {
 
 class BaseApp;  // forward
@@ -530,7 +543,7 @@ void BaseAppNativeProvider::send_cell_rpc(
 ### 3.5 BaseApp — 主进程类
 
 ```cpp
-// src/server/BaseApp/baseapp.hpp
+// src/server/baseapp/baseapp.hpp
 namespace atlas {
 
 class BaseApp : public EntityApp {
@@ -562,20 +575,19 @@ private:
                                  const baseapp::CellEntityCreated& msg);
     void on_cell_rpc_forward(const Address& src, Channel* ch,
                               const baseapp::CellRpcForward& msg);
-    void on_client_rpc_from_cell(const Address& src, Channel* ch,
-                                  const baseapp::ClientRpcFromCell& msg);
+    void on_self_rpc_from_cell(const Address& src, Channel* ch,
+                                const baseapp::SelfRpcFromCell& msg);
     void on_replicated_delta_from_cell(const Address& src, Channel* ch,
                                        const baseapp::ReplicatedDeltaFromCell& msg);
+    void on_broadcast_rpc_from_cell(const Address& src, Channel* ch,
+                                     const baseapp::BroadcastRpcFromCell& msg);
     void on_write_to_db_response(const Address& src, Channel* ch,
                                   const dbapp::WriteEntityAck& msg);
 
     // ---- 外部消息处理器 (客户端) ----
     void on_client_authenticate(const Address& src, Channel* ch,
-                                 const baseapp_ext::Authenticate& msg);
-    void on_client_server_rpc(const Address& src, Channel* ch,
-                               const baseapp_ext::ServerRpcCall& msg);
-    void on_client_enable_entities(const Address& src, Channel* ch,
-                                    const baseapp_ext::EnableEntities& msg);
+                                 const baseapp::Authenticate& msg);
+    // `ServerRpcCall` / `EnableEntities` 尚未在当前代码中实现
 
     // ---- 客户端连接管理 ----
     void on_ext_channel_disconnect(ChannelId channel_id);
@@ -610,12 +622,12 @@ private:
                     ┌──────────────────────────────────┐
                     │           BaseApp 进程            │
                     │                                    │
-  Clients ────TCP──→│ ext_network_ (port 20100)         │
+  Clients ───RUDP──→│ ext_network_ (port 20100)         │
                     │   ├── Authenticate                │
                     │   ├── ServerRpcCall               │
                     │   └── EnableEntities              │
                     │                                    │
-  CellApp ───TCP──→│ network_ (internal, port auto)     │
+  CellApp ──RUDP──→│ network_ (internal, port auto)     │
   DBApp            │   ├── CellEntityCreated            │
   machined         │   ├── CellRpcForward               │
   Managers         │   └── WriteToDBResponse            │
@@ -634,7 +646,7 @@ BaseApp::init():
                                              // ScriptApp 初始化 ClrHost + 加载 C# 程序集
                                              // C# EntityTypeRegistry.RegisterAll() 执行
 
-    ext_network_.start_tcp_server(ext_addr)  // 监听外部端口
+    ext_network_.start_rudp_server(ext_addr) // 监听外部 RUDP 端口
     ext_network_ disconnect callback → on_ext_channel_disconnect
     configure_ext_security()                 // 外部接口安全策略 (见下)
 
@@ -666,10 +678,10 @@ void BaseApp::configure_ext_security() {
     // 1. 认证超时: 连接建立后 10 秒内必须发送 Authenticate，否则断开
     ext_network_.set_auth_timeout(Seconds(10));
 
-    // 2. 认证前消息白名单: 只允许 Authenticate + HeartbeatPing
+    // 2. 认证前消息白名单: 当前代码只允许 Authenticate；
+    //    HeartbeatPing 仍是后续外部协议
     ext_network_.set_unauthenticated_whitelist({
-        baseapp_ext::Authenticate::descriptor().id(),
-        baseapp_ext::HeartbeatPing::descriptor().id(),
+        baseapp::Authenticate::descriptor().id(),
     });
 
     // 3. 最大同时连接数
@@ -683,8 +695,9 @@ void BaseApp::configure_ext_security() {
 }
 ```
 
-> BigWorld 的 `InitialConnectionFilter` 拒绝非预期来源的包。Atlas 的 TCP 外部接口天然只接受
-> 已建立连接的消息，无需额外的包过滤。但认证前的消息白名单和超时是必须的。
+> BigWorld 的 `InitialConnectionFilter` 拒绝非预期来源的包。Atlas 当前外部接口同样运行在
+> 数据报语义之上（RUDP），因此仍必须显式维护认证前白名单、超时和连接状态，而不是依赖 TCP
+> 连接态替代这些校验。
 
 **`on_tick_complete()` 流程:**
 
@@ -700,8 +713,8 @@ BaseApp::on_tick_complete():
 
 ```cpp
 void BaseApp::on_client_heartbeat(const Address& src, ChannelId ch_id,
-                                   const baseapp_ext::HeartbeatPing& msg) {
-    // Channel 内部更新最后活跃时间
+                                   const HeartbeatPing& msg) {
+    // 目标设计：当前代码尚未实现外部客户端心跳
 }
 
 void BaseApp::check_client_idle_timeouts() {
@@ -864,18 +877,18 @@ C# (请求加载)          BaseApp C++                DBApp
 
 **新增文件:**
 ```
-src/server/BaseApp/baseapp_messages.hpp     # 内部接口消息
-src/server/BaseApp/baseapp_ext_messages.hpp # 外部接口消息 (客户端)
+src/server/baseapp/baseapp_messages.hpp
 tests/unit/test_baseapp_messages.cpp
 ```
 
-定义 §2 中所有消息的 `struct` + `serialize/deserialize` + `static_assert(NetworkMessage<T>)`。
+当前代码把内部接口和已实现的外部认证消息都放在 `baseapp_messages.hpp`；
+不存在单独的 `baseapp_ext_messages.hpp`。
 
 ### Step 8.2: BaseEntity
 
 **新增文件:**
 ```
-src/server/BaseApp/base_entity.hpp / .cpp
+src/server/baseapp/base_entity.hpp / .cpp
 tests/unit/test_base_entity.cpp
 ```
 
@@ -889,8 +902,8 @@ tests/unit/test_base_entity.cpp
 
 **新增文件:**
 ```
-src/server/BaseApp/proxy.hpp / .cpp
-tests/unit/test_proxy.cpp
+src/server/baseapp/base_entity.hpp / .cpp   # 当前代码将 `Proxy` 合并在此文件中
+tests/unit/test_base_entity.cpp
 ```
 
 **测试用例:**
@@ -906,7 +919,7 @@ tests/unit/test_proxy.cpp
 
 **新增文件:**
 ```
-src/server/BaseApp/entity_manager.hpp / .cpp
+src/server/baseapp/entity_manager.hpp / .cpp
 tests/unit/test_entity_manager.cpp
 ```
 
@@ -922,20 +935,21 @@ tests/unit/test_entity_manager.cpp
 
 **新增文件:**
 ```
-src/server/BaseApp/baseapp_native_provider.hpp / .cpp
+src/server/baseapp/baseapp_native_provider.hpp / .cpp
 tests/unit/test_baseapp_native_provider.cpp
 ```
 
 **实现:** 所有 `INativeApiProvider` 方法的 BaseApp 特化实现。
 
-**需同步更新:** `INativeApiProvider` 接口新增 `write_to_db()` / `delete_from_db()` /
-`create_entity()` / `destroy_entity()` / `give_client_to()` 等 BaseApp 需要的方法。
+**需同步更新:** `INativeApiProvider` / `BaseNativeProvider` 补齐当前代码实际使用的方法：
+`send_client_rpc()` / `send_cell_rpc()` / `send_base_rpc()` / `write_to_db()` /
+`give_client_to()` / `set_native_callbacks()`。
 
 ### Step 8.6: BaseApp 进程
 
 **新增文件:**
 ```
-src/server/BaseApp/
+src/server/baseapp/
 ├── CMakeLists.txt
 ├── main.cpp
 ├── baseapp.hpp / .cpp
@@ -947,14 +961,16 @@ src/server/BaseApp/
 3. EntityDefRegistry 从 C# 注册
 4. EntityManager 集成
 5. 外部接口: Authenticate → 绑定 Proxy
-6. 外部接口: ServerRpcCall → 校验 + 分发到 C#
-7. NativeApi: send_client_rpc → Proxy → 客户端
-8. NativeApi: write_to_db → 发送到 DBApp
-9. DBApp 回调处理 (WriteEntityAck)
-10. NativeApi: create_entity_from_db → CheckoutEntity 流程
-11. NativeApi: give_client_to → 本地 Proxy 转移
-12. Tick: 脏属性推送
-13. Watcher 注册
+6. NativeApi: send_client_rpc → Proxy → 客户端
+7. NativeApi: write_to_db → 发送到 DBApp
+8. DBApp 回调处理 (`WriteEntityAck`)
+9. NativeApi: create_entity_from_db → CheckoutEntity 流程
+10. NativeApi: give_client_to → 本地 Proxy 转移
+11. Watcher 注册
+
+注：
+- `ServerRpcCall` / `EnableEntities` / AOI 脏属性推送在当前代码里仍未落地
+- 这些外部协议由 Phase 10 / Phase 12 接着完成
 
 ### Step 8.7: INativeApiProvider 扩展
 
@@ -1021,7 +1037,7 @@ tests/integration/test_baseapp_integration.cpp
 2. BaseApp 初始化 C# 脚本引擎
 3. 创建 Base 实体 → C# OnInit 回调
 4. WriteToDB → DBApp 存储 → 返回 DBID
-5. 模拟客户端 TCP 连接 → Authenticate
+5. 模拟客户端 RUDP 连接 → Authenticate
 6. 创建 Proxy → 绑定客户端
 7. 客户端发送 ServerRpc → C# 处理
 8. C# 发送 ClientRpc → 客户端接收
@@ -1033,14 +1049,12 @@ tests/integration/test_baseapp_integration.cpp
 ## 6. 文件清单汇总
 
 ```
-src/server/BaseApp/
+src/server/baseapp/
 ├── CMakeLists.txt
 ├── main.cpp
 ├── baseapp.hpp / .cpp              (Step 8.6)
 ├── baseapp_messages.hpp            (Step 8.1)
-├── baseapp_ext_messages.hpp        (Step 8.1)
-├── base_entity.hpp / .cpp          (Step 8.2)
-├── proxy.hpp / .cpp                (Step 8.3)
+├── base_entity.hpp / .cpp          (Step 8.2 / 8.3, `Proxy` 内嵌于此)
 ├── entity_manager.hpp / .cpp       (Step 8.4)
 └── baseapp_native_provider.hpp/.cpp (Step 8.5)
 
@@ -1154,7 +1168,7 @@ C# 实体实例通过 `GCHandle` 防止被 GC 回收。C++ 持有 `uint64_t scri
 这是因为 BigWorld 的外部 UDP 接口不在每条消息中携带 EntityID。
 
 **Atlas:** 每条外部消息携带 `entity_id` 字段。原因:
-- TCP 是流式的，不像 UDP 那样有天然的消息边界关联
+- 当前外部协议走 RUDP，但仍选择显式 EntityID，避免 `select client` 这类隐式会话状态
 - 更直观，无隐式状态
 - `client_to_entity_` 映射仅用于连接断开时查找对应实体
 
