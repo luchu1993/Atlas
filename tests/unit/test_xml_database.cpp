@@ -396,7 +396,10 @@ TEST_F(XmlDatabaseTest, ProcessResultsFlushesDirtyStateOnDeadline)
     EXPECT_FALSE(std::filesystem::exists(meta_path));
     EXPECT_FALSE(std::filesystem::exists(index_path));
 
-    std::this_thread::sleep_for(std::chrono::milliseconds(300));
+    db_.process_results();
+    EXPECT_FALSE(std::filesystem::exists(meta_path));
+
+    std::this_thread::sleep_for(std::chrono::milliseconds(2100));
     db_.process_results();
 
     EXPECT_TRUE(std::filesystem::exists(meta_path));

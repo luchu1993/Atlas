@@ -188,6 +188,13 @@ public:
     virtual void clear_checkouts_for_address(const Address& base_addr,
                                              std::function<void(int cleared_count)> callback) = 0;
 
+    /// Fire-and-forget checkout clear (no callback, no flush).
+    /// Used by the optimistic-checkin fast path to avoid scheduling overhead.
+    virtual void mark_checkout_cleared(DatabaseID dbid, uint16_t type_id)
+    {
+        clear_checkout(dbid, type_id, [](bool) {});
+    }
+
     // =====================================================================
     // Auto-load
     // =====================================================================
@@ -201,6 +208,10 @@ public:
     // =====================================================================
     // Main-thread pump
     // =====================================================================
+
+    /// Enable deferred-callback mode: queue callbacks and invoke them only
+    /// from process_results(), giving the event loop room to process ACKs.
+    virtual void set_deferred_mode(bool /*enabled*/) {}
 
     /// Collect completed async callbacks and invoke them on the calling (main) thread.
     /// Call from DBApp::on_tick_complete().

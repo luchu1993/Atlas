@@ -37,8 +37,7 @@ public:
     XmlDatabase() = default;
     ~XmlDatabase() override;
 
-    /// Enable deferred-callback mode for testing async behavior.
-    void set_deferred_mode(bool enabled) { deferred_mode_ = enabled; }
+    void set_deferred_mode(bool enabled) override { deferred_mode_ = enabled; }
 
     [[nodiscard]] auto startup(const DatabaseConfig& config, const EntityDefRegistry& entity_defs)
         -> Result<void> override;
@@ -70,6 +69,8 @@ public:
     void clear_checkouts_for_address(const Address& base_addr,
                                      std::function<void(int cleared_count)> callback) override;
 
+    void mark_checkout_cleared(DatabaseID dbid, uint16_t type_id) override;
+
     void get_auto_load_entities(std::function<void(std::vector<EntityData>)> callback) override;
 
     void set_auto_load(DatabaseID dbid, uint16_t type_id, bool auto_load) override;
@@ -97,7 +98,7 @@ private:
     void flush_dirty_state(bool force = false);
     void stage_blob_write(uint16_t type_id, DatabaseID dbid, std::span<const std::byte> data);
     void stage_blob_delete(uint16_t type_id, DatabaseID dbid);
-    void flush_pending_blob_writes();
+    void flush_pending_blob_writes(int budget);
 
     [[nodiscard]] auto read_blob(uint16_t type_id, DatabaseID dbid) const
         -> std::optional<std::vector<std::byte>>;
@@ -114,6 +115,7 @@ private:
     bool started_{false};
     bool deferred_mode_{false};
     TimePoint next_flush_deadline_{};
+    TimePoint next_metadata_flush_deadline_{};
     bool meta_dirty_{false};
     bool auto_load_dirty_{false};
     bool checkouts_dirty_{false};
@@ -142,13 +144,19 @@ private:
     // deferred callbacks
     std::deque<std::function<void()>> deferred_;
 
+    // blob read cache — populated on flush and disk reads, avoids repeated I/O
+    mutable std::unordered_map<uint64_t, std::vector<std::byte>> blob_cache_;
+
     static constexpr auto checkout_key(uint16_t type_id, DatabaseID dbid) -> uint64_t
     {
         return (static_cast<uint64_t>(type_id) << 48) |
                (static_cast<uint64_t>(dbid) & 0x0000FFFFFFFFFFFFULL);
     }
 
-    static constexpr Duration kFlushInterval = std::chrono::milliseconds(250);
+    static constexpr Duration kFlushInterval = std::chrono::milliseconds(200);
+    static constexpr Duration kMetadataFlushInterval = std::chrono::seconds(2);
+    static constexpr int kMaxCallbacksPerTick = 2048;
+    static constexpr int kMaxBlobWritesPerFlush = 16;
 };
 
 }  // namespace atlas

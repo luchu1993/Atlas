@@ -97,7 +97,6 @@ void XmlDatabase::put_entity(DatabaseID dbid, uint16_t type_id, WriteFlags flags
         }
         result.success = true;
         result.dbid = dbid;
-        flush_dirty_state();
         fire_or_defer([cb = std::move(callback), result]() mutable { cb(result); });
         return;
     }
@@ -139,7 +138,6 @@ void XmlDatabase::put_entity(DatabaseID dbid, uint16_t type_id, WriteFlags flags
 
     result.success = true;
     result.dbid = dbid;
-    flush_dirty_state();
     fire_or_defer([cb = std::move(callback), result]() mutable { cb(result); });
 }
 
@@ -203,7 +201,6 @@ void XmlDatabase::del_entity(DatabaseID dbid, uint16_t type_id,
     mark_auto_load_dirty();
 
     result.success = true;
-    flush_dirty_state();
     fire_or_defer([cb = std::move(callback), result]() mutable { cb(result); });
 }
 
@@ -264,7 +261,6 @@ void XmlDatabase::checkout_entity(DatabaseID dbid, uint16_t type_id, const Check
     result.data.dbid = dbid;
     result.data.type_id = type_id;
     result.data.blob = std::move(*blob);
-    flush_dirty_state();
     fire_or_defer([cb = std::move(callback), result = std::move(result)]() mutable
                   { cb(std::move(result)); });
 }
@@ -293,7 +289,6 @@ void XmlDatabase::clear_checkout(DatabaseID dbid, uint16_t type_id,
     bool erased = checkouts_.erase(checkout_key(type_id, dbid)) > 0;
     if (erased)
         mark_checkouts_dirty();
-    flush_dirty_state();
     fire_or_defer([cb = std::move(callback), erased]() mutable { cb(erased); });
 }
 
@@ -315,7 +310,6 @@ void XmlDatabase::clear_checkouts_for_address(const Address& base_addr,
     }
     if (count > 0)
         mark_checkouts_dirty();
-    flush_dirty_state();
     fire_or_defer([cb = std::move(callback), count]() mutable { cb(count); });
 }
 
@@ -352,7 +346,6 @@ void XmlDatabase::set_auto_load(DatabaseID dbid, uint16_t type_id, bool auto_loa
     else
         auto_load_set_.erase(key);
     mark_auto_load_dirty();
-    flush_dirty_state();
 }
 
 // ============================================================================
@@ -365,7 +358,9 @@ void XmlDatabase::process_results()
 
     if (!deferred_mode_)
         return;
-    while (!deferred_.empty())
+
+    int budget = kMaxCallbacksPerTick;
+    while (!deferred_.empty() && budget-- > 0)
     {
         auto cb = std::move(deferred_.front());
         deferred_.pop_front();
@@ -373,40 +368,38 @@ void XmlDatabase::process_results()
     }
 }
 
+void XmlDatabase::mark_checkout_cleared(DatabaseID dbid, uint16_t type_id)
+{
+    if (checkouts_.erase(checkout_key(type_id, dbid)) > 0)
+        mark_checkouts_dirty();
+}
+
 void XmlDatabase::mark_meta_dirty()
 {
     meta_dirty_ = true;
-    if (next_flush_deadline_ == TimePoint{})
-    {
-        next_flush_deadline_ = Clock::now() + kFlushInterval;
-    }
+    if (next_metadata_flush_deadline_ == TimePoint{})
+        next_metadata_flush_deadline_ = Clock::now() + kMetadataFlushInterval;
 }
 
 void XmlDatabase::mark_index_dirty(uint16_t type_id)
 {
     dirty_indexes_.insert(type_id);
-    if (next_flush_deadline_ == TimePoint{})
-    {
-        next_flush_deadline_ = Clock::now() + kFlushInterval;
-    }
+    if (next_metadata_flush_deadline_ == TimePoint{})
+        next_metadata_flush_deadline_ = Clock::now() + kMetadataFlushInterval;
 }
 
 void XmlDatabase::mark_auto_load_dirty()
 {
     auto_load_dirty_ = true;
-    if (next_flush_deadline_ == TimePoint{})
-    {
-        next_flush_deadline_ = Clock::now() + kFlushInterval;
-    }
+    if (next_metadata_flush_deadline_ == TimePoint{})
+        next_metadata_flush_deadline_ = Clock::now() + kMetadataFlushInterval;
 }
 
 void XmlDatabase::mark_checkouts_dirty()
 {
     checkouts_dirty_ = true;
-    if (next_flush_deadline_ == TimePoint{})
-    {
-        next_flush_deadline_ = Clock::now() + kFlushInterval;
-    }
+    if (next_metadata_flush_deadline_ == TimePoint{})
+        next_metadata_flush_deadline_ = Clock::now() + kMetadataFlushInterval;
 }
 
 void XmlDatabase::flush_dirty_state(bool force)
@@ -416,60 +409,66 @@ void XmlDatabase::flush_dirty_state(bool force)
         return;
     }
 
-    if (!meta_dirty_ && !auto_load_dirty_ && !checkouts_dirty_ && dirty_indexes_.empty() &&
-        pending_blob_writes_.empty())
+    const bool has_blobs = !pending_blob_writes_.empty();
+    const bool has_metadata =
+        meta_dirty_ || auto_load_dirty_ || checkouts_dirty_ || !dirty_indexes_.empty();
+
+    if (!has_blobs && !has_metadata)
     {
         next_flush_deadline_ = {};
+        next_metadata_flush_deadline_ = {};
         return;
     }
 
-    if (!force)
+    const auto now = Clock::now();
+
+    if (has_blobs)
     {
-        if (next_flush_deadline_ == TimePoint{})
+        const bool blob_ready =
+            force || (next_flush_deadline_ != TimePoint{} && now >= next_flush_deadline_);
+        if (blob_ready)
         {
-            next_flush_deadline_ = Clock::now() + kFlushInterval;
-            return;
+            int blob_budget =
+                force ? static_cast<int>(pending_blob_writes_.size()) : kMaxBlobWritesPerFlush;
+            flush_pending_blob_writes(blob_budget);
         }
 
-        if (Clock::now() < next_flush_deadline_)
+        if (pending_blob_writes_.empty())
+            next_flush_deadline_ = {};
+        else if (next_flush_deadline_ == TimePoint{})
+            next_flush_deadline_ = now + kFlushInterval;
+    }
+
+    if (has_metadata)
+    {
+        const bool metadata_ready = force || (next_metadata_flush_deadline_ != TimePoint{} &&
+                                              now >= next_metadata_flush_deadline_);
+        if (metadata_ready)
         {
-            return;
+            if (meta_dirty_)
+            {
+                save_meta();
+                meta_dirty_ = false;
+            }
+            if (!dirty_indexes_.empty())
+            {
+                for (uint16_t type_id : dirty_indexes_)
+                    save_index(type_id);
+                dirty_indexes_.clear();
+            }
+            if (auto_load_dirty_)
+            {
+                save_auto_load();
+                auto_load_dirty_ = false;
+            }
+            if (checkouts_dirty_)
+            {
+                save_checkouts();
+                checkouts_dirty_ = false;
+            }
+            next_metadata_flush_deadline_ = {};
         }
     }
-
-    if (!pending_blob_writes_.empty())
-    {
-        flush_pending_blob_writes();
-    }
-
-    if (meta_dirty_)
-    {
-        save_meta();
-        meta_dirty_ = false;
-    }
-
-    if (!dirty_indexes_.empty())
-    {
-        for (uint16_t type_id : dirty_indexes_)
-        {
-            save_index(type_id);
-        }
-        dirty_indexes_.clear();
-    }
-
-    if (auto_load_dirty_)
-    {
-        save_auto_load();
-        auto_load_dirty_ = false;
-    }
-
-    if (checkouts_dirty_)
-    {
-        save_checkouts();
-        checkouts_dirty_ = false;
-    }
-
-    next_flush_deadline_ = {};
 }
 
 // ============================================================================
@@ -675,15 +674,17 @@ void XmlDatabase::save_checkouts()
 auto XmlDatabase::read_blob(uint16_t type_id, DatabaseID dbid) const
     -> std::optional<std::vector<std::byte>>
 {
-    if (auto pending = pending_blob_writes_.find(checkout_key(type_id, dbid));
-        pending != pending_blob_writes_.end())
+    auto key = checkout_key(type_id, dbid);
+
+    if (auto pending = pending_blob_writes_.find(key); pending != pending_blob_writes_.end())
     {
         if (pending->second.deleted)
-        {
             return std::nullopt;
-        }
         return pending->second.data;
     }
+
+    if (auto cached = blob_cache_.find(key); cached != blob_cache_.end())
+        return cached->second;
 
     auto path = blob_path(type_id, dbid);
     std::ifstream f(path, std::ios::binary);
@@ -696,6 +697,8 @@ auto XmlDatabase::read_blob(uint16_t type_id, DatabaseID dbid) const
 
     std::vector<std::byte> data(size);
     f.read(reinterpret_cast<char*>(data.data()), static_cast<std::streamsize>(size));
+
+    blob_cache_[key] = data;
     return data;
 }
 
@@ -731,32 +734,38 @@ void XmlDatabase::stage_blob_write(uint16_t type_id, DatabaseID dbid,
 
 void XmlDatabase::stage_blob_delete(uint16_t type_id, DatabaseID dbid)
 {
-    auto& pending = pending_blob_writes_[checkout_key(type_id, dbid)];
+    auto key = checkout_key(type_id, dbid);
+    auto& pending = pending_blob_writes_[key];
     pending.type_id = type_id;
     pending.dbid = dbid;
     pending.data.clear();
     pending.deleted = true;
+    blob_cache_.erase(key);
     if (next_flush_deadline_ == TimePoint{})
     {
         next_flush_deadline_ = Clock::now() + kFlushInterval;
     }
 }
 
-void XmlDatabase::flush_pending_blob_writes()
+void XmlDatabase::flush_pending_blob_writes(int budget)
 {
-    for (const auto& [key, pending] : pending_blob_writes_)
+    auto it = pending_blob_writes_.begin();
+    int written = 0;
+    while (it != pending_blob_writes_.end() && written < budget)
     {
-        (void)key;
-        if (pending.deleted)
+        if (it->second.deleted)
         {
-            delete_blob(pending.type_id, pending.dbid);
+            delete_blob(it->second.type_id, it->second.dbid);
+            blob_cache_.erase(it->first);
         }
         else
         {
-            write_blob(pending.type_id, pending.dbid, pending.data);
+            write_blob(it->second.type_id, it->second.dbid, it->second.data);
+            blob_cache_[it->first] = std::move(it->second.data);
         }
+        it = pending_blob_writes_.erase(it);
+        ++written;
     }
-    pending_blob_writes_.clear();
 }
 
 // ============================================================================
