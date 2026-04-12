@@ -50,9 +50,14 @@ auto EntityManager::create(uint16_t type_id, bool has_client, DatabaseID dbid) -
 
     std::unique_ptr<BaseEntity> ent;
     if (has_client)
+    {
         ent = std::make_unique<Proxy>(id, type_id, dbid);
+        ++proxy_count_;
+    }
     else
+    {
         ent = std::make_unique<BaseEntity>(id, type_id, dbid);
+    }
 
     auto* ptr = ent.get();
     entities_.emplace(id, std::move(ent));
@@ -240,6 +245,10 @@ void EntityManager::erase_indexes_for(const BaseEntity& ent)
 
     if (const auto* proxy = dynamic_cast<const Proxy*>(&ent))
     {
+        if (proxy_count_ > 0)
+        {
+            --proxy_count_;
+        }
         if (!proxy->session_key().is_zero())
         {
             auto it = session_index_.find(proxy->session_key());

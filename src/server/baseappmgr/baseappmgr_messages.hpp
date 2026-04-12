@@ -157,12 +157,17 @@ struct InformLoad
     float load{0.0f};
     uint32_t entity_count{0};
     uint32_t proxy_count{0};
+    uint32_t pending_prepare_count{0};
+    uint32_t pending_force_logoff_count{0};
+    uint32_t detached_proxy_count{0};
+    uint32_t logoff_in_flight_count{0};
+    uint32_t deferred_login_count{0};
 
     static auto descriptor() -> const MessageDesc&
     {
         static const MessageDesc desc{
             6003, "baseappmgr::InformLoad", MessageLengthStyle::Fixed,
-            static_cast<int>(sizeof(uint32_t) + sizeof(float) + sizeof(uint32_t) * 2)};
+            static_cast<int>(sizeof(uint32_t) + sizeof(float) + sizeof(uint32_t) * 7)};
         return desc;
     }
 
@@ -172,6 +177,11 @@ struct InformLoad
         w.write(load);
         w.write(entity_count);
         w.write(proxy_count);
+        w.write(pending_prepare_count);
+        w.write(pending_force_logoff_count);
+        w.write(detached_proxy_count);
+        w.write(logoff_in_flight_count);
+        w.write(deferred_login_count);
     }
 
     static auto deserialize(BinaryReader& r) -> Result<InformLoad>
@@ -180,13 +190,23 @@ struct InformLoad
         auto ld = r.read<float>();
         auto ec = r.read<uint32_t>();
         auto pc = r.read<uint32_t>();
-        if (!aid || !ld || !ec || !pc)
+        auto ppc = r.read<uint32_t>();
+        auto pfl = r.read<uint32_t>();
+        auto dpc = r.read<uint32_t>();
+        auto lif = r.read<uint32_t>();
+        auto dlc = r.read<uint32_t>();
+        if (!aid || !ld || !ec || !pc || !ppc || !pfl || !dpc || !lif || !dlc)
             return Error{ErrorCode::InvalidArgument, "InformLoad: truncated"};
         InformLoad msg;
         msg.app_id = *aid;
         msg.load = *ld;
         msg.entity_count = *ec;
         msg.proxy_count = *pc;
+        msg.pending_prepare_count = *ppc;
+        msg.pending_force_logoff_count = *pfl;
+        msg.detached_proxy_count = *dpc;
+        msg.logoff_in_flight_count = *lif;
+        msg.deferred_login_count = *dlc;
         return msg;
     }
 };

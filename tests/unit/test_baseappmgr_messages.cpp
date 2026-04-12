@@ -54,11 +54,22 @@ TEST(BaseAppMgrMessages, InformLoad_RoundTrip)
     msg.load = 0.42f;
     msg.entity_count = 500;
     msg.proxy_count = 100;
+    msg.pending_prepare_count = 7;
+    msg.pending_force_logoff_count = 3;
+    msg.detached_proxy_count = 11;
+    msg.logoff_in_flight_count = 5;
+    msg.deferred_login_count = 9;
 
     auto out = round_trip(msg);
     EXPECT_EQ(out.app_id, 1u);
     EXPECT_NEAR(out.load, 0.42f, 1e-5f);
     EXPECT_EQ(out.entity_count, 500u);
+    EXPECT_EQ(out.proxy_count, 100u);
+    EXPECT_EQ(out.pending_prepare_count, 7u);
+    EXPECT_EQ(out.pending_force_logoff_count, 3u);
+    EXPECT_EQ(out.detached_proxy_count, 11u);
+    EXPECT_EQ(out.logoff_in_flight_count, 5u);
+    EXPECT_EQ(out.deferred_login_count, 9u);
 }
 
 TEST(BaseAppMgrMessages, RegisterGlobalBase_RoundTrip)

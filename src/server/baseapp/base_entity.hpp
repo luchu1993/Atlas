@@ -1,6 +1,7 @@
 #pragma once
 
 #include "db/idatabase.hpp"
+#include "foundation/time.hpp"
 #include "network/address.hpp"
 #include "server/entity_types.hpp"
 
@@ -89,11 +90,21 @@ public:
 
     [[nodiscard]] auto session_key() const -> const SessionKey& { return session_key_; }
     void set_session_key(const SessionKey& key) { session_key_ = key; }
+    [[nodiscard]] auto session_epoch() const -> uint64_t { return session_epoch_; }
+    auto bump_session_epoch() -> uint64_t { return ++session_epoch_; }
+
+    void enter_detached_grace(TimePoint until);
+    void clear_detached_grace();
+    [[nodiscard]] auto is_detached() const -> bool { return detached_grace_; }
+    [[nodiscard]] auto detached_until() const -> TimePoint { return detached_until_; }
 
 private:
     Address client_addr_;
     bool client_attached_{false};
     SessionKey session_key_;
+    uint64_t session_epoch_{0};
+    bool detached_grace_{false};
+    TimePoint detached_until_{};
 };
 
 }  // namespace atlas

@@ -11,6 +11,8 @@
 #include <span>
 #include <string_view>
 #include <unordered_map>
+#include <unordered_set>
+#include <vector>
 
 namespace atlas
 {
@@ -40,6 +42,7 @@ struct PrepareLoginResult;
 
 namespace baseappmgr
 {
+struct InformLoad;
 struct RegisterBaseAppAck;
 struct RequestEntityIdRangeAck;
 }  // namespace baseappmgr
@@ -76,12 +79,16 @@ protected:
     [[nodiscard]] auto init(int argc, char* argv[]) -> bool override;
     void fini() override;
 
+    void on_end_of_tick() override;
     void on_tick_complete() override;
     void register_watchers() override;
 
     [[nodiscard]] auto create_native_provider() -> std::unique_ptr<INativeApiProvider> override;
 
 private:
+    struct LoadSnapshot;
+    struct LoadTracker;
+
     // ---- Message handlers — internal interface --------------------------
     void on_create_base(Channel& ch, const baseapp::CreateBase& msg);
     void on_create_base_from_db(Channel& ch, const baseapp::CreateBaseFromDB& msg);
@@ -114,6 +121,11 @@ private:
     // ---- Helpers --------------------------------------------------------
     void register_internal_handlers();
     void send_to_dbapp(Channel*& dbapp_ch, auto&& msg);
+    void expire_detached_proxies();
+    void update_load_estimate();
+    void report_load_to_baseappmgr();
+    [[nodiscard]] auto capture_load_snapshot() const -> LoadSnapshot;
+    void drain_finished_login_flows(std::vector<DatabaseID> dbids);
     void maybe_request_more_ids();
 
     // ---- State ----------------------------------------------------------
@@ -133,6 +145,10 @@ private:
         DatabaseID dbid{kInvalidDBID};
         SessionKey session_key;
         TimePoint created_at{};
+        TimePoint next_force_logoff_retry_at{};
+        Address force_logoff_holder_addr;
+        uint8_t force_logoff_retry_count{0};
+        bool waiting_for_remote_force_logoff_ack{false};
         bool reply_sent{false};
     };
     std::unordered_map<uint32_t, PendingLogin> pending_logins_;
@@ -140,19 +156,77 @@ private:
 
     // Pending ForceLogoff awaiting ack: maps request_id → PendingLogin
     std::unordered_map<uint32_t, PendingLogin> pending_force_logoffs_;
-    struct PendingForceLogoffWrite
+    struct PendingLogoffWrite
     {
-        uint32_t force_request_id{0};
+        uint32_t continuation_request_id{0};
         EntityID entity_id{kInvalidEntityID};
+        DatabaseID dbid{kInvalidDBID};
+        uint16_t type_id{0};
         TimePoint created_at{};
     };
-    std::unordered_map<uint32_t, PendingForceLogoffWrite> pending_force_logoff_writes_;
+    struct PendingRemoteForceLogoffAck
+    {
+        Address reply_addr;
+        uint32_t request_id{0};
+    };
+    struct DeferredLoginCheckout
+    {
+        PendingLogin pending;
+        DatabaseID dbid{kInvalidDBID};
+        uint16_t type_id{0};
+        std::vector<std::byte> blob;
+    };
+    struct DetachedProxyState
+    {
+        TimePoint detached_at{};
+        TimePoint detached_until{};
+    };
+    struct LoadSnapshot
+    {
+        uint32_t entity_count{0};
+        uint32_t proxy_count{0};
+        uint32_t pending_prepare_count{0};
+        uint32_t pending_force_logoff_count{0};
+        uint32_t detached_proxy_count{0};
+        uint32_t logoff_in_flight_count{0};
+        uint32_t deferred_login_count{0};
+    };
+    struct LoadTracker
+    {
+        void mark_tick_started();
+        void observe_tick_complete(int update_hertz, const LoadSnapshot& snapshot);
+        [[nodiscard]] auto build_report(uint32_t app_id, const LoadSnapshot& snapshot) const
+            -> baseappmgr::InformLoad;
+        [[nodiscard]] auto current_load() const -> float { return load_; }
+
+    private:
+        float load_{0.0f};
+        TimePoint tick_started_{};
+    };
+    std::unordered_map<uint32_t, PendingLogoffWrite> pending_logoff_writes_;
+    std::unordered_map<EntityID, std::vector<PendingRemoteForceLogoffAck>>
+        pending_remote_force_logoff_acks_;
+    std::unordered_map<EntityID, std::vector<DeferredLoginCheckout>> deferred_login_checkouts_;
+    std::unordered_map<EntityID, DetachedProxyState> detached_proxies_;
+    std::unordered_map<EntityID, std::vector<uint32_t>> pending_local_force_logoff_waiters_;
+    std::unordered_set<EntityID> logoff_entities_in_flight_;
+    std::unordered_set<DatabaseID> active_login_dbids_;
+    std::unordered_map<DatabaseID, PendingLogin> queued_logins_;
     std::unordered_map<EntityID, Address> entity_client_index_;
     std::unordered_map<Address, EntityID> client_entity_index_;
     uint64_t auth_success_total_{0};
     uint64_t auth_fail_total_{0};
     uint64_t force_logoff_total_{0};
+    uint64_t fast_relogin_total_{0};
+    uint64_t detached_relogin_total_{0};
+    LoadTracker load_tracker_{};
+    static constexpr Duration kForceLogoffRetryBaseDelay = std::chrono::milliseconds(250);
+    static constexpr Duration kForceLogoffRetryMaxDelay = std::chrono::seconds(2);
     static constexpr Duration kPendingTimeout = std::chrono::seconds(30);
+    // Keep detached proxies around for one shortline reconnect window. Longer
+    // retention increases stale proxy pressure without improving the fast path.
+    static constexpr Duration kDetachedProxyGrace = std::chrono::milliseconds(1500);
+    static constexpr float kLoadSmoothingBias = 0.25f;
     bool id_range_requested_{false};
 
     void cleanup_expired_pending_requests();
@@ -161,15 +235,42 @@ private:
     void fail_pending_prepare_login(uint32_t request_id, std::string_view reason);
     void fail_pending_force_logoff(PendingLogin& pending, std::string_view reason);
     void fail_pending_force_logoff(uint32_t request_id, std::string_view reason);
+    void schedule_force_logoff_retry(PendingLogin& pending, TimePoint now);
+    void retry_stalled_force_logoff(uint32_t request_id);
     void release_checkout(DatabaseID dbid, uint16_t type_id);
+    [[nodiscard]] auto retry_login_after_checkout_conflict(PendingLogin pending, DatabaseID dbid,
+                                                           const Address& holder_addr) -> bool;
     [[nodiscard]] auto restore_managed_entity(EntityID entity_id, uint16_t type_id, DatabaseID dbid,
                                               std::span<const std::byte> blob) -> bool;
     [[nodiscard]] auto notify_managed_entity_destroyed(EntityID entity_id, std::string_view context)
         -> bool;
     auto capture_entity_snapshot(EntityID entity_id, std::vector<std::byte>& out) -> bool;
+    [[nodiscard]] auto rotate_proxy_session(EntityID entity_id, const SessionKey& session_key)
+        -> bool;
+    [[nodiscard]] auto try_complete_local_relogin(PendingLogin pending) -> bool;
+    void enter_detached_grace(EntityID entity_id);
+    void clear_detached_grace(EntityID entity_id);
+    [[nodiscard]] auto deferred_login_checkout_count() const -> std::size_t;
+    void complete_prepare_login_from_checkout(PendingLogin pending, DatabaseID dbid,
+                                              uint16_t type_id, std::span<const std::byte> blob);
+    void defer_prepare_login_from_checkout(EntityID blocking_entity_id, PendingLogin pending,
+                                           DatabaseID dbid, uint16_t type_id,
+                                           std::span<const std::byte> blob);
+    void fail_deferred_prepare_logins(EntityID blocking_entity_id, std::string_view reason,
+                                      std::vector<DatabaseID>* finished_dbids = nullptr);
+    [[nodiscard]] auto resume_deferred_prepare_logins(EntityID blocking_entity_id) -> bool;
+    void submit_prepare_login(PendingLogin pending);
+    void dispatch_prepare_login(PendingLogin pending);
+    void finish_login_flow(DatabaseID dbid);
+    void start_disconnect_logoff(EntityID entity_id);
+    void flush_remote_force_logoff_acks(EntityID entity_id, bool success);
+    void flush_all_remote_force_logoff_acks(bool success);
+    void begin_logoff_persist(EntityID entity_id, DatabaseID dbid, uint16_t type_id,
+                              uint32_t continuation_request_id);
     void begin_force_logoff_persist(uint32_t force_request_id, EntityID entity_id);
     void continue_login_after_force_logoff(uint32_t force_request_id);
     [[nodiscard]] auto finalize_force_logoff(EntityID entity_id) -> bool;
+    void process_force_logoff_request(const baseapp::ForceLogoff& msg);
     auto resolve_internal_channel(const Address& addr) -> Channel*;
     auto resolve_client_channel(EntityID entity_id) -> Channel*;
     auto bind_client(EntityID entity_id, const Address& client_addr) -> bool;

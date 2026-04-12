@@ -96,6 +96,9 @@ TEST(CheckoutManager, PendingCheckoutBlocksConcurrentRequest)
 
     auto result = mgr.try_checkout(42, 1, owner2);
     EXPECT_EQ(result.status, CheckoutManager::CheckoutStatus::PendingCheckout);
+    EXPECT_EQ(result.current_owner.base_addr, owner1.base_addr);
+    EXPECT_EQ(result.current_owner.app_id, owner1.app_id);
+    EXPECT_EQ(result.current_owner.entity_id, owner1.entity_id);
 }
 
 // ============================================================================

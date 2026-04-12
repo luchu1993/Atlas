@@ -12,6 +12,160 @@
 namespace atlas
 {
 
+void BaseAppMgr::DbidAffinityTable::remember(DatabaseID dbid, uint32_t app_id, TimePoint now)
+{
+    if (dbid == kInvalidDBID || app_id == 0)
+    {
+        return;
+    }
+
+    if (auto existing = entries_.find(dbid); existing != entries_.end())
+    {
+        if (existing->second.app_id != app_id)
+        {
+            auto reverse = dbids_by_app_.find(existing->second.app_id);
+            if (reverse != dbids_by_app_.end())
+            {
+                reverse->second.erase(dbid);
+                if (reverse->second.empty())
+                {
+                    dbids_by_app_.erase(reverse);
+                }
+            }
+        }
+    }
+
+    entries_[dbid] = Entry{app_id, now};
+    dbids_by_app_[app_id].insert(dbid);
+}
+
+void BaseAppMgr::DbidAffinityTable::erase(DatabaseID dbid)
+{
+    auto it = entries_.find(dbid);
+    if (it == entries_.end())
+    {
+        return;
+    }
+
+    if (auto reverse = dbids_by_app_.find(it->second.app_id); reverse != dbids_by_app_.end())
+    {
+        reverse->second.erase(dbid);
+        if (reverse->second.empty())
+        {
+            dbids_by_app_.erase(reverse);
+        }
+    }
+
+    entries_.erase(it);
+}
+
+void BaseAppMgr::DbidAffinityTable::forget_app(uint32_t app_id)
+{
+    auto reverse = dbids_by_app_.find(app_id);
+    if (reverse == dbids_by_app_.end())
+    {
+        return;
+    }
+
+    for (DatabaseID dbid : reverse->second)
+    {
+        entries_.erase(dbid);
+    }
+    dbids_by_app_.erase(reverse);
+}
+
+void BaseAppMgr::DbidAffinityTable::prune_expired(TimePoint now, Duration ttl)
+{
+    for (auto it = entries_.begin(); it != entries_.end();)
+    {
+        if (now - it->second.last_assigned_at <= ttl)
+        {
+            ++it;
+            continue;
+        }
+
+        if (auto reverse = dbids_by_app_.find(it->second.app_id); reverse != dbids_by_app_.end())
+        {
+            reverse->second.erase(it->first);
+            if (reverse->second.empty())
+            {
+                dbids_by_app_.erase(reverse);
+            }
+        }
+        it = entries_.erase(it);
+    }
+}
+
+auto BaseAppMgr::DbidAffinityTable::find(DatabaseID dbid) const -> std::optional<Entry>
+{
+    auto it = entries_.find(dbid);
+    if (it == entries_.end())
+    {
+        return std::nullopt;
+    }
+    return it->second;
+}
+
+auto BaseAppMgr::BaseAppInfo::queue_pressure() const -> float
+{
+    const float pressure_units =
+        static_cast<float>(pending_prepare_count + pending_force_logoff_count +
+                           deferred_login_count + logoff_in_flight_count) +
+        static_cast<float>(detached_proxy_count) * 0.1f;
+
+    // Queue depth is a balancing hint, not a hard overload signal. Scale it
+    // conservatively so transient login bursts spread across BaseApps instead
+    // of collapsing the whole cluster into "no_baseapp" rejections.
+    return std::min(0.35f, pressure_units / 512.0f);
+}
+
+auto BaseAppMgr::BaseAppInfo::is_hard_overloaded(float overload_threshold) const -> bool
+{
+    return measured_load >= overload_threshold ||
+           pending_prepare_count >= BaseAppMgr::kHardOverloadPendingPrepareLimit ||
+           deferred_login_count >= BaseAppMgr::kHardOverloadDeferredLoginLimit ||
+           (pending_force_logoff_count + logoff_in_flight_count) >=
+               BaseAppMgr::kHardOverloadLogoffLimit;
+}
+
+void BaseAppMgr::BaseAppInfo::apply_load_report(
+    float load, uint32_t reported_entity_count, uint32_t reported_proxy_count,
+    uint32_t reported_pending_prepare_count, uint32_t reported_pending_force_logoff_count,
+    uint32_t reported_detached_proxy_count, uint32_t reported_logoff_in_flight_count,
+    uint32_t reported_deferred_login_count, TimePoint now)
+{
+    measured_load = std::clamp(load, 0.0f, 1.0f);
+    entity_count = reported_entity_count;
+    proxy_count = reported_proxy_count;
+    pending_prepare_count = reported_pending_prepare_count;
+    pending_force_logoff_count = reported_pending_force_logoff_count;
+    detached_proxy_count = reported_detached_proxy_count;
+    logoff_in_flight_count = reported_logoff_in_flight_count;
+    deferred_login_count = reported_deferred_login_count;
+    pending_login_allocations = 0;
+    effective_load = std::clamp(std::max(measured_load, queue_pressure()), 0.0f, 1.0f);
+    last_load_report_at = now;
+}
+
+void BaseAppMgr::BaseAppInfo::reserve_login_slot(float load_increment)
+{
+    ++pending_login_allocations;
+    ++pending_prepare_count;
+    ++entity_count;
+    ++proxy_count;
+    effective_load = std::min(1.0f, std::max(effective_load + load_increment, queue_pressure()));
+}
+
+auto BaseAppMgr::BaseAppInfo::has_fresh_load(TimePoint now, Duration stale_after) const -> bool
+{
+    if (last_load_report_at == TimePoint{})
+    {
+        return true;
+    }
+
+    return (now - last_load_report_at) <= stale_after;
+}
+
 namespace
 {
 
@@ -108,6 +262,8 @@ void BaseAppMgr::register_watchers()
                         std::function<std::size_t()>([this] { return baseapps_.size(); }));
     wr.add<std::size_t>("baseappmgr/global_base_count",
                         std::function<std::size_t()>([this] { return global_bases_.size(); }));
+    wr.add<std::size_t>("baseappmgr/dbid_affinity_count",
+                        std::function<std::size_t()>([this] { return dbid_affinity_.size(); }));
 }
 
 // ============================================================================
@@ -197,9 +353,9 @@ void BaseAppMgr::on_inform_load(const Address& src, Channel* ch, const baseappmg
     if (!matches_registered_source(*info, src, ch, "InformLoad"))
         return;
 
-    info->load = msg.load;
-    info->entity_count = msg.entity_count;
-    info->proxy_count = msg.proxy_count;
+    info->apply_load_report(msg.load, msg.entity_count, msg.proxy_count, msg.pending_prepare_count,
+                            msg.pending_force_logoff_count, msg.detached_proxy_count,
+                            msg.logoff_in_flight_count, msg.deferred_login_count, Clock::now());
 }
 
 void BaseAppMgr::on_allocate_baseapp(const Address& src, Channel* ch,
@@ -219,7 +375,7 @@ void BaseAppMgr::on_allocate_baseapp(const Address& src, Channel* ch,
         return;
     }
 
-    auto* best = find_least_loaded();
+    auto* best = find_allocation_target(msg.dbid);
     if (!best)
     {
         ATLAS_LOG_WARNING("BaseAppMgr: no ready BaseApp available for req={}", msg.request_id);
@@ -231,10 +387,18 @@ void BaseAppMgr::on_allocate_baseapp(const Address& src, Channel* ch,
     result.success = true;
     result.internal_addr = best->internal_addr;
     result.external_addr = best->external_addr;
-    (void)ch->send_message(result);
+    const auto send_result = ch->send_message(result);
+    if (!send_result)
+    {
+        ATLAS_LOG_WARNING("BaseAppMgr: failed to reply AllocateBaseApp req={} app_id={}: {}",
+                          msg.request_id, best->app_id, send_result.error().message());
+        return;
+    }
 
-    ATLAS_LOG_DEBUG("BaseAppMgr: allocated BaseApp app_id={} for req={}", best->app_id,
-                    msg.request_id);
+    record_successful_allocation(best->app_id, msg.dbid, Clock::now());
+
+    ATLAS_LOG_DEBUG("BaseAppMgr: allocated BaseApp app_id={} for req={} dbid={}", best->app_id,
+                    msg.request_id, msg.dbid);
     (void)src;
 }
 
@@ -356,27 +520,130 @@ auto BaseAppMgr::matches_registered_source(const BaseAppInfo& info, const Addres
     return true;
 }
 
+auto BaseAppMgr::is_allocation_candidate(const BaseAppInfo& info, TimePoint now,
+                                         Duration stale_after) const -> bool
+{
+    return info.is_ready && !info.is_retiring && info.has_fresh_load(now, stale_after);
+}
+
+auto BaseAppMgr::is_better_candidate(const BaseAppInfo& candidate, const BaseAppInfo& incumbent)
+    -> bool
+{
+    if (candidate.effective_load != incumbent.effective_load)
+    {
+        return candidate.effective_load < incumbent.effective_load;
+    }
+
+    if (candidate.proxy_count != incumbent.proxy_count)
+    {
+        return candidate.proxy_count < incumbent.proxy_count;
+    }
+
+    if (candidate.entity_count != incumbent.entity_count)
+    {
+        return candidate.entity_count < incumbent.entity_count;
+    }
+
+    return candidate.app_id < incumbent.app_id;
+}
+
+auto BaseAppMgr::load_report_stale_after() const -> Duration
+{
+    const int update_hertz = std::max(config().update_hertz, 1);
+    const auto expected_tick =
+        std::chrono::duration_cast<Duration>(std::chrono::duration<double>(1.0 / update_hertz));
+    const auto minimum_staleness = std::chrono::duration_cast<Duration>(std::chrono::seconds(1));
+    return std::max(expected_tick * 10, minimum_staleness);
+}
+
 auto BaseAppMgr::find_least_loaded() const -> const BaseAppInfo*
 {
     const BaseAppInfo* best = nullptr;
-    float lowest = 2.0f;
+    const auto now = Clock::now();
+    const auto stale_after = load_report_stale_after();
     for (const auto& [addr, info] : baseapps_)
     {
-        if (!info.is_ready || info.is_retiring)
-            continue;
-        if (info.load < lowest)
+        if (!is_allocation_candidate(info, now, stale_after))
         {
-            lowest = info.load;
+            continue;
+        }
+
+        if (best == nullptr || is_better_candidate(info, *best))
+        {
             best = &info;
         }
     }
     return best;
 }
 
+auto BaseAppMgr::should_prefer_affinity(const BaseAppInfo& preferred,
+                                        const BaseAppInfo* least_loaded) const -> bool
+{
+    if (preferred.is_hard_overloaded(kOverloadThreshold))
+    {
+        return false;
+    }
+
+    if (least_loaded == nullptr || preferred.app_id == least_loaded->app_id)
+    {
+        return true;
+    }
+
+    // Preserve DBID affinity using reported process load rather than the
+    // queue-biased balancing score. For shortline relogin storms the preferred
+    // BaseApp often carries more detached proxies precisely because it can
+    // complete the reconnect locally; routing away from it defeats the fast
+    // path and amplifies force-logoff pressure.
+    const float allowed_load = std::min(1.0f, least_loaded->measured_load + kDbidAffinityLoadSlack);
+    return preferred.measured_load <= allowed_load;
+}
+
+auto BaseAppMgr::find_allocation_target(DatabaseID dbid) -> const BaseAppInfo*
+{
+    const auto now = Clock::now();
+    const auto stale_after = load_report_stale_after();
+    dbid_affinity_.prune_expired(now, kDbidAffinityTtl);
+
+    const BaseAppInfo* least_loaded = find_least_loaded();
+    if (dbid == kInvalidDBID)
+    {
+        return least_loaded;
+    }
+
+    const auto affinity = dbid_affinity_.find(dbid);
+    if (!affinity)
+    {
+        return least_loaded;
+    }
+
+    const auto* preferred = find_baseapp_by_app_id(affinity->app_id);
+    if (preferred == nullptr || !is_allocation_candidate(*preferred, now, stale_after))
+    {
+        dbid_affinity_.erase(dbid);
+        return least_loaded;
+    }
+
+    if (should_prefer_affinity(*preferred, least_loaded))
+    {
+        return preferred;
+    }
+
+    return least_loaded;
+}
+
+void BaseAppMgr::record_successful_allocation(uint32_t app_id, DatabaseID dbid, TimePoint now)
+{
+    if (auto* reserved = find_baseapp_by_app_id(app_id))
+    {
+        reserved->reserve_login_slot(kLoginAllocationLoadIncrement);
+        dbid_affinity_.remember(dbid, reserved->app_id, now);
+    }
+}
+
 auto BaseAppMgr::is_overloaded() const -> bool
 {
     const auto* best = find_least_loaded();
-    if (!best || best->load <= kOverloadThreshold)
+    if (!best || !best->is_hard_overloaded(kOverloadThreshold))
     {
         overload_start_ = {};
         logins_since_overload_ = 0;
@@ -424,6 +691,7 @@ void BaseAppMgr::on_baseapp_death(const Address& addr)
         return;
     ATLAS_LOG_WARNING("BaseAppMgr: BaseApp app_id={} died ({}:{})", it->second.app_id, addr.ip(),
                       addr.port());
+    dbid_affinity_.forget_app(it->second.app_id);
     app_id_index_.erase(it->second.app_id);
     baseapps_.erase(it);
 

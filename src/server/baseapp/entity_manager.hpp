@@ -76,6 +76,7 @@ public:
     void flush_destroyed();
 
     [[nodiscard]] auto size() const -> std::size_t { return entities_.size(); }
+    [[nodiscard]] auto proxy_count() const -> std::size_t { return proxy_count_; }
 
     // Iterate all entities (read-only view of pointers)
     template <typename Fn>
@@ -94,6 +95,7 @@ private:
     std::unordered_map<EntityID, std::unique_ptr<BaseEntity>> entities_;
     std::unordered_map<DatabaseID, EntityID> dbid_index_;
     std::unordered_map<SessionKey, EntityID> session_index_;
+    std::size_t proxy_count_{0};
 };
 
 }  // namespace atlas

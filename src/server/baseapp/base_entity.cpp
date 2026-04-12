@@ -49,12 +49,26 @@ void Proxy::bind_client(const Address& addr)
 {
     client_addr_ = addr;
     client_attached_ = true;
+    detached_grace_ = false;
+    detached_until_ = {};
 }
 
 void Proxy::unbind_client()
 {
     client_addr_ = {};
     client_attached_ = false;
+}
+
+void Proxy::enter_detached_grace(TimePoint until)
+{
+    detached_grace_ = true;
+    detached_until_ = until;
+}
+
+void Proxy::clear_detached_grace()
+{
+    detached_grace_ = false;
+    detached_until_ = {};
 }
 
 }  // namespace atlas
