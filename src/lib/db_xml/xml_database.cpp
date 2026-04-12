@@ -74,7 +74,7 @@ void XmlDatabase::put_entity(DatabaseID dbid, uint16_t type_id, WriteFlags flags
 
     if (has_flag(flags, WriteFlags::Delete))
     {
-        delete_blob(type_id, dbid);
+        stage_blob_delete(type_id, dbid);
         // Remove name index entry
         auto it = name_index_.find(type_id);
         if (it != name_index_.end())
@@ -108,11 +108,7 @@ void XmlDatabase::put_entity(DatabaseID dbid, uint16_t type_id, WriteFlags flags
         mark_meta_dirty();
     }
 
-    // Ensure type directory exists
-    std::error_code ec;
-    std::filesystem::create_directories(type_dir(type_id), ec);
-
-    write_blob(type_id, dbid, blob);
+    stage_blob_write(type_id, dbid, blob);
 
     // Update name index
     if (!identifier.empty())
@@ -177,14 +173,14 @@ void XmlDatabase::del_entity(DatabaseID dbid, uint16_t type_id,
                              std::function<void(DelResult)> callback)
 {
     DelResult result;
-    if (!std::filesystem::exists(blob_path(type_id, dbid)))
+    if (!read_blob(type_id, dbid).has_value())
     {
         result.success = false;
         result.error = std::format("entity ({},{}) not found", type_id, dbid);
         fire_or_defer([cb = std::move(callback), result]() mutable { cb(result); });
         return;
     }
-    delete_blob(type_id, dbid);
+    stage_blob_delete(type_id, dbid);
 
     // Remove name index entry
     auto it = name_index_.find(type_id);
@@ -420,7 +416,8 @@ void XmlDatabase::flush_dirty_state(bool force)
         return;
     }
 
-    if (!meta_dirty_ && !auto_load_dirty_ && !checkouts_dirty_ && dirty_indexes_.empty())
+    if (!meta_dirty_ && !auto_load_dirty_ && !checkouts_dirty_ && dirty_indexes_.empty() &&
+        pending_blob_writes_.empty())
     {
         next_flush_deadline_ = {};
         return;
@@ -438,6 +435,11 @@ void XmlDatabase::flush_dirty_state(bool force)
         {
             return;
         }
+    }
+
+    if (!pending_blob_writes_.empty())
+    {
+        flush_pending_blob_writes();
     }
 
     if (meta_dirty_)
@@ -673,6 +675,16 @@ void XmlDatabase::save_checkouts()
 auto XmlDatabase::read_blob(uint16_t type_id, DatabaseID dbid) const
     -> std::optional<std::vector<std::byte>>
 {
+    if (auto pending = pending_blob_writes_.find(checkout_key(type_id, dbid));
+        pending != pending_blob_writes_.end())
+    {
+        if (pending->second.deleted)
+        {
+            return std::nullopt;
+        }
+        return pending->second.data;
+    }
+
     auto path = blob_path(type_id, dbid);
     std::ifstream f(path, std::ios::binary);
     if (!f)
@@ -701,6 +713,50 @@ void XmlDatabase::delete_blob(uint16_t type_id, DatabaseID dbid)
 {
     std::error_code ec;
     std::filesystem::remove(blob_path(type_id, dbid), ec);
+}
+
+void XmlDatabase::stage_blob_write(uint16_t type_id, DatabaseID dbid,
+                                   std::span<const std::byte> data)
+{
+    auto& pending = pending_blob_writes_[checkout_key(type_id, dbid)];
+    pending.type_id = type_id;
+    pending.dbid = dbid;
+    pending.data.assign(data.begin(), data.end());
+    pending.deleted = false;
+    if (next_flush_deadline_ == TimePoint{})
+    {
+        next_flush_deadline_ = Clock::now() + kFlushInterval;
+    }
+}
+
+void XmlDatabase::stage_blob_delete(uint16_t type_id, DatabaseID dbid)
+{
+    auto& pending = pending_blob_writes_[checkout_key(type_id, dbid)];
+    pending.type_id = type_id;
+    pending.dbid = dbid;
+    pending.data.clear();
+    pending.deleted = true;
+    if (next_flush_deadline_ == TimePoint{})
+    {
+        next_flush_deadline_ = Clock::now() + kFlushInterval;
+    }
+}
+
+void XmlDatabase::flush_pending_blob_writes()
+{
+    for (const auto& [key, pending] : pending_blob_writes_)
+    {
+        (void)key;
+        if (pending.deleted)
+        {
+            delete_blob(pending.type_id, pending.dbid);
+        }
+        else
+        {
+            write_blob(pending.type_id, pending.dbid, pending.data);
+        }
+    }
+    pending_blob_writes_.clear();
 }
 
 // ============================================================================

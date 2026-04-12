@@ -95,6 +95,9 @@ private:
     void mark_auto_load_dirty();
     void mark_checkouts_dirty();
     void flush_dirty_state(bool force = false);
+    void stage_blob_write(uint16_t type_id, DatabaseID dbid, std::span<const std::byte> data);
+    void stage_blob_delete(uint16_t type_id, DatabaseID dbid);
+    void flush_pending_blob_writes();
 
     [[nodiscard]] auto read_blob(uint16_t type_id, DatabaseID dbid) const
         -> std::optional<std::vector<std::byte>>;
@@ -121,6 +124,14 @@ private:
 
     // checkout: key = (type_id << 48) | (dbid & 0xFFFFFFFFFFFF)
     std::unordered_map<uint64_t, CheckoutInfo> checkouts_;
+    struct PendingBlobWrite
+    {
+        uint16_t type_id{0};
+        DatabaseID dbid{kInvalidDBID};
+        std::vector<std::byte> data;
+        bool deleted{false};
+    };
+    std::unordered_map<uint64_t, PendingBlobWrite> pending_blob_writes_;
 
     // auto-load set: same key encoding
     std::set<uint64_t> auto_load_set_;

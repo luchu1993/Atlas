@@ -403,6 +403,37 @@ TEST_F(XmlDatabaseTest, ProcessResultsFlushesDirtyStateOnDeadline)
     EXPECT_TRUE(std::filesystem::exists(index_path));
 }
 
+TEST_F(XmlDatabaseTest, StagedBlobWritesAreReadableBeforeFlushAndCoalesce)
+{
+    PutResult put;
+    db_.put_entity(kInvalidDBID, 1, WriteFlags::CreateNew, make_blob("v1"), "frank",
+                   [&](PutResult r) { put = r; });
+    ASSERT_TRUE(put.success);
+
+    auto blob_path = test_dir_ / "Account" / (std::to_string(put.dbid) + ".bin");
+    EXPECT_FALSE(std::filesystem::exists(blob_path));
+
+    PutResult update;
+    db_.put_entity(put.dbid, 1, WriteFlags::None, make_blob("v2-latest"), "",
+                   [&](PutResult r) { update = r; });
+    ASSERT_TRUE(update.success);
+
+    GetResult get;
+    db_.get_entity(put.dbid, 1, [&](GetResult r) { get = std::move(r); });
+    ASSERT_TRUE(get.success);
+    EXPECT_EQ(get.data.blob, make_blob("v2-latest"));
+    EXPECT_FALSE(std::filesystem::exists(blob_path));
+
+    std::this_thread::sleep_for(std::chrono::milliseconds(300));
+    db_.process_results();
+
+    ASSERT_TRUE(std::filesystem::exists(blob_path));
+    GetResult after_flush;
+    db_.get_entity(put.dbid, 1, [&](GetResult r) { after_flush = std::move(r); });
+    ASSERT_TRUE(after_flush.success);
+    EXPECT_EQ(after_flush.data.blob, make_blob("v2-latest"));
+}
+
 // ============================================================================
 // WriteFlags::LogOff clears checkout
 // ============================================================================
