@@ -14,11 +14,27 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - name: Windows (MSVC + Ninja)
+          - name: Windows (MSVC + Ninja, Debug)
             os: windows-latest
+            build_preset: debug-ninja
+            test_preset: debug-ninja
+            run_tests: true
 
-          - name: Linux (GCC 13 + Ninja)
+          - name: Windows (MSVC + Ninja, Release)
+            os: windows-latest
+            build_preset: release-ninja
+            run_tests: false
+
+          - name: Linux (GCC 13 + Ninja, Debug)
             os: ubuntu-latest
+            build_preset: debug-ninja
+            test_preset: debug-ninja
+            run_tests: true
+
+          - name: Linux (GCC 13 + Ninja, Release)
+            os: ubuntu-latest
+            build_preset: release-ninja
+            run_tests: false
 
     steps:
       - name: Checkout
@@ -44,25 +60,15 @@ jobs:
           sudo update-alternatives --install /usr/bin/g++ g++ /usr/bin/g++-13 100
 
       - name: Configure
-        run: cmake --preset debug-ninja
+        run: cmake --preset ${{ matrix.build_preset }}
 
       - name: Build
-        run: cmake --build --preset debug-ninja
+        run: cmake --build --preset ${{ matrix.build_preset }}
 
-      - name: Unit Tests (Windows)
-        if: runner.os == 'Windows'
-        shell: pwsh
-        run: ctest --preset debug-ninja -L unit
+      - name: Unit Tests
+        if: matrix.run_tests
+        run: ctest --preset ${{ matrix.test_preset }} -L unit
 
-      - name: Unit Tests (Linux)
-        if: runner.os == 'Linux'
-        run: ctest --preset debug-ninja -L unit
-
-      - name: Integration Tests (Windows)
-        if: runner.os == 'Windows'
-        shell: pwsh
-        run: ctest --preset debug-ninja -L integration
-
-      - name: Integration Tests (Linux)
-        if: runner.os == 'Linux'
-        run: ctest --preset debug-ninja -L integration
+      - name: Integration Tests
+        if: matrix.run_tests
+        run: ctest --preset ${{ matrix.test_preset }} -L integration
