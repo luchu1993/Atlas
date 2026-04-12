@@ -326,8 +326,8 @@ auto NetworkInterface::connect_rudp(const Address& addr) -> Result<ReliableUdpCh
         if (auto r = sock->set_send_buffer_size(4 * 1024 * 1024); !r)
             ATLAS_LOG_WARNING("RUDP: failed to set send buffer size: {}", r.error().message());
 
-        Address any_addr(0, 0);
-        if (auto r = sock->bind(any_addr); !r)
+        const Address bind_addr = rudp_client_bind_address_.value_or(Address(0, 0));
+        if (auto r = sock->bind(bind_addr); !r)
             return r.error();
 
         auto local = sock->local_address();
@@ -357,6 +357,11 @@ auto NetworkInterface::connect_rudp(const Address& addr) -> Result<ReliableUdpCh
     auto* raw = static_cast<ReliableUdpChannel*>(channel.get());
     channels_[addr] = std::move(channel);
     return raw;
+}
+
+void NetworkInterface::set_rudp_client_bind_address(const Address& addr)
+{
+    rudp_client_bind_address_ = addr;
 }
 
 auto NetworkInterface::connect_rudp_nocwnd(const Address& addr) -> Result<ReliableUdpChannel*>
@@ -434,8 +439,14 @@ void NetworkInterface::do_task()
 
 void NetworkInterface::on_tcp_accept()
 {
+    std::size_t accepts = 0;
     while (true)
     {
+        if (callback_budget_exhausted(accepts, kMaxAcceptsPerCallback))
+        {
+            break;
+        }
+
         auto result = tcp_listen_socket_->accept();
         if (!result)
         {
@@ -495,14 +506,21 @@ void NetworkInterface::on_tcp_accept()
 
         ATLAS_LOG_DEBUG("Accepted TCP connection from {}", peer_addr.to_string());
         channels_[peer_addr] = std::move(channel);
+        ++accepts;
     }
 }
 
 void NetworkInterface::on_udp_readable()
 {
     auto recv_buffer = datagram_recv_buffer();
+    std::size_t datagrams = 0;
     while (true)
     {
+        if (callback_budget_exhausted(datagrams, kMaxDatagramsPerCallback))
+        {
+            break;
+        }
+
         auto result = udp_socket_->recv_from(recv_buffer);
         if (!result)
         {
@@ -545,14 +563,21 @@ void NetworkInterface::on_udp_readable()
 
         auto* udp_ch = static_cast<UdpChannel*>(it->second.get());
         udp_ch->on_datagram_received(recv_buffer.first(bytes));
+        ++datagrams;
     }
 }
 
 void NetworkInterface::on_rudp_readable()
 {
     auto recv_buffer = datagram_recv_buffer();
+    std::size_t datagrams = 0;
     while (true)
     {
+        if (callback_budget_exhausted(datagrams, kMaxDatagramsPerCallback))
+        {
+            break;
+        }
+
         auto result = rudp_socket_->recv_from(recv_buffer);
         if (!result)
         {
@@ -590,6 +615,7 @@ void NetworkInterface::on_rudp_readable()
 
         auto* rudp_ch = static_cast<ReliableUdpChannel*>(it->second.get());
         rudp_ch->on_datagram_received(recv_buffer.first(bytes));
+        ++datagrams;
     }
 }
 
@@ -677,6 +703,11 @@ auto NetworkInterface::check_rate_limit(uint32_t ip) -> bool
 
     ++tracker.count;
     return tracker.count <= rate_limit_;
+}
+
+auto NetworkInterface::callback_budget_exhausted(std::size_t processed, std::size_t budget) -> bool
+{
+    return processed >= budget;
 }
 
 void NetworkInterface::cleanup_stale_rate_trackers()

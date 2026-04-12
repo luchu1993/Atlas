@@ -18,6 +18,9 @@ public:
     static constexpr std::size_t kInitialWriteBufferSize = 16 * 1024;
     static constexpr std::size_t kMaxWriteBufferSize = 256 * 1024;
     static constexpr Duration kBufferShrinkDelay = std::chrono::seconds(30);
+    static constexpr std::size_t kMaxSocketReadsPerCallback = 64;
+    static constexpr std::size_t kMaxFramesPerCallback = 128;
+    static constexpr std::size_t kMaxWriteFlushesPerCallback = 64;
 
     TcpChannel(EventDispatcher& dispatcher, InterfaceTable& table, Socket socket,
                const Address& remote);
@@ -51,8 +54,8 @@ protected:
 private:
     [[nodiscard]] auto ensure_recv_writable() -> bool;
     [[nodiscard]] auto peek_frame_length() const -> std::optional<uint32_t>;
-    void process_recv_buffer();
-    void try_flush_write_buffer();
+    void process_recv_buffer(std::size_t frame_budget = kMaxFramesPerCallback);
+    void try_flush_write_buffer(std::size_t write_budget = kMaxWriteFlushesPerCallback);
     void update_write_interest();
     void schedule_recv_buffer_shrink();
     void cancel_recv_buffer_shrink();

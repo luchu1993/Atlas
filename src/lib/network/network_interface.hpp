@@ -60,6 +60,10 @@ public:
     // is more important than fairness (e.g. BaseApp ↔ CellApp).
     [[nodiscard]] auto connect_rudp_nocwnd(const Address& addr) -> Result<ReliableUdpChannel*>;
 
+    // Override the local address used when the first outbound RUDP client socket is bound.
+    // The port may be left as 0 to request an ephemeral port from the OS.
+    void set_rudp_client_bind_address(const Address& addr);
+
     // Channel access
     [[nodiscard]] auto find_channel(const Address& addr) -> Channel*;
     [[nodiscard]] auto channel_count() const -> size_t;
@@ -106,6 +110,8 @@ private:
     // Rate limiting
     auto check_rate_limit(uint32_t ip) -> bool;
     void cleanup_stale_rate_trackers();
+    [[nodiscard]] static auto callback_budget_exhausted(std::size_t processed, std::size_t budget)
+        -> bool;
 
     EventDispatcher& dispatcher_;
     // IMPORTANT: registration_ must be declared after dispatcher_ so that its
@@ -125,6 +131,7 @@ private:
     std::optional<Socket> rudp_socket_;
     Address rudp_address_;
     bool rudp_server_mode_{false};  // true: auto-create channels for unknown peers
+    std::optional<Address> rudp_client_bind_address_;
 
     // Active channels keyed by remote address
     std::unordered_map<Address, std::unique_ptr<Channel>> channels_;
@@ -154,6 +161,8 @@ private:
     static constexpr Duration kRateCleanupInterval = std::chrono::seconds(60);
 
     static constexpr std::size_t kMaxDatagramSize = 64 * 1024;
+    static constexpr std::size_t kMaxAcceptsPerCallback = 128;
+    static constexpr std::size_t kMaxDatagramsPerCallback = 256;
     StreamBuffer datagram_recv_scratch_;
 
     bool shutting_down_{false};

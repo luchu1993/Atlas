@@ -33,8 +33,14 @@ TcpChannel::~TcpChannel()
 
 void TcpChannel::on_readable()
 {
+    std::size_t reads = 0;
     while (true)
     {
+        if (reads >= kMaxSocketReadsPerCallback)
+        {
+            break;
+        }
+
         auto span = recv_buffer_.writable_span();
         if (span.empty())
         {
@@ -69,6 +75,7 @@ void TcpChannel::on_readable()
         cancel_recv_buffer_shrink();
         recv_buffer_.commit(*result);
         on_data_received(std::span<const std::byte>(span.data(), *result));
+        ++reads;
     }
 
     process_recv_buffer();
@@ -120,10 +127,16 @@ auto TcpChannel::peek_frame_length() const -> std::optional<uint32_t>
     return endian::from_little(frame_length);
 }
 
-void TcpChannel::process_recv_buffer()
+void TcpChannel::process_recv_buffer(std::size_t frame_budget)
 {
+    std::size_t frames = 0;
     while (true)
     {
+        if (frames >= frame_budget)
+        {
+            break;
+        }
+
         auto available = recv_buffer_.readable_size();
 
         if (available < kFrameHeaderSize)
@@ -190,6 +203,7 @@ void TcpChannel::process_recv_buffer()
         }
 
         recv_buffer_.consume(total);
+        ++frames;
     }
 
     if (recv_buffer_.readable_size() == 0)
@@ -246,10 +260,18 @@ void TcpChannel::on_condemned()
     write_registered_ = false;
 }
 
-void TcpChannel::try_flush_write_buffer()
+void TcpChannel::try_flush_write_buffer(std::size_t write_budget)
 {
+    std::size_t flushes = 0;
     while (write_buffer_.readable_size() > 0)
     {
+        if (flushes >= write_budget)
+        {
+            update_write_interest();
+            cancel_write_buffer_shrink();
+            return;
+        }
+
         auto rspan = write_buffer_.readable_span();
         auto result = socket_.send(rspan);
         if (!result)
@@ -266,6 +288,7 @@ void TcpChannel::try_flush_write_buffer()
         }
 
         write_buffer_.consume(*result);
+        ++flushes;
     }
 
     if (write_registered_)
