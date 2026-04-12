@@ -1697,8 +1697,7 @@ void BaseApp::cleanup_expired_pending_requests()
     std::vector<DatabaseID> finished_login_dbids;
     std::unordered_set<uint32_t> expired_force_logoff_request_ids;
 
-    std::erase_if(canceled_login_checkouts_,
-                  [now](const auto& entry)
+    std::erase_if(canceled_login_checkouts_, [now](const auto& entry)
                   { return now - entry.second.canceled_at > kCanceledCheckoutRetention; });
 
     for (auto& [request_id, pending] : pending_logins_)
@@ -1834,9 +1833,10 @@ void BaseApp::cleanup_expired_pending_requests()
 
     for (uint32_t login_request_id : expired_prepared_login_requests)
     {
-        ATLAS_LOG_WARNING("BaseApp: prepared login request_id={} expired before client "
-                          "authenticate",
-                          login_request_id);
+        ATLAS_LOG_WARNING(
+            "BaseApp: prepared login request_id={} expired before client "
+            "authenticate",
+            login_request_id);
         (void)rollback_prepared_login_entity(login_request_id);
     }
 
@@ -1998,9 +1998,10 @@ void BaseApp::send_abort_checkout(uint32_t request_id, DatabaseID dbid, uint16_t
 {
     if (!dbapp_channel_)
     {
-        ATLAS_LOG_WARNING("BaseApp: cannot abort checkout request_id={} dbid={} without DBApp "
-                          "channel",
-                          request_id, dbid);
+        ATLAS_LOG_WARNING(
+            "BaseApp: cannot abort checkout request_id={} dbid={} without DBApp "
+            "channel",
+            request_id, dbid);
         return;
     }
 

@@ -23,8 +23,8 @@ auto ManagerApp::init(int argc, char* argv[]) -> bool
     if (cfg.process_type != ProcessType::Machined && cfg.internal_port > 0)
     {
         Address listen_addr(0, cfg.internal_port);
-        if (auto r = network().start_rudp_server(listen_addr,
-                                                 NetworkInterface::cluster_rudp_profile());
+        if (auto r =
+                network().start_rudp_server(listen_addr, NetworkInterface::cluster_rudp_profile());
             !r)
         {
             ATLAS_LOG_ERROR("ManagerApp: failed to start RUDP server on port {}: {}",

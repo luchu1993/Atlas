@@ -147,8 +147,8 @@ auto LoginApp::init(int argc, char* argv[]) -> bool
         external_network_.set_accept_callback(
             [](Channel& ch)
             { ch.set_inactivity_timeout(std::chrono::seconds(kClientChannelInactivitySec)); });
-        external_network_.set_disconnect_callback(
-            [this](Channel& ch) { on_client_disconnect(ch); });
+        external_network_.set_disconnect_callback([this](Channel& ch)
+                                                  { on_client_disconnect(ch); });
 
         ATLAS_LOG_INFO("LoginApp: RUDP listener on port {}", cfg.external_port);
     }

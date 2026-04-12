@@ -485,10 +485,10 @@ struct AbortCheckout
 
     static auto descriptor() -> const MessageDesc&
     {
-        static const MessageDesc desc{msg_id::id(msg_id::DBApp::AbortCheckout),
-                                      "dbapp::AbortCheckout", MessageLengthStyle::Fixed,
-                                      static_cast<int>(sizeof(uint32_t) + sizeof(uint16_t) +
-                                                       sizeof(int64_t))};
+        static const MessageDesc desc{
+            msg_id::id(msg_id::DBApp::AbortCheckout), "dbapp::AbortCheckout",
+            MessageLengthStyle::Fixed,
+            static_cast<int>(sizeof(uint32_t) + sizeof(uint16_t) + sizeof(int64_t))};
         return desc;
     }
 
