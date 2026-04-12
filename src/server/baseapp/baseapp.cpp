@@ -305,6 +305,13 @@ void BaseApp::register_watchers()
     wr.add<std::size_t>(
         "baseapp/logoff_in_flight_count",
         std::function<std::size_t()>([this] { return logoff_entities_in_flight_.size(); }));
+    wr.add<std::size_t>("baseapp/canceled_checkout_count",
+                        std::function<std::size_t()>(
+                            [this] { return canceled_login_checkouts_.size(); }));
+    wr.add<uint64_t>("baseapp/canceled_checkout_total",
+                     std::function<uint64_t()>([this] { return canceled_checkout_total_; }));
+    wr.add<uint64_t>("baseapp/prepared_login_timeout_total",
+                     std::function<uint64_t()>([this] { return prepared_login_timeout_total_; }));
     wr.add<bool>("baseapp/dbapp_connected",
                  std::function<bool()>([this] { return dbapp_channel_ != nullptr; }));
 }
@@ -1837,6 +1844,7 @@ void BaseApp::cleanup_expired_pending_requests()
             "BaseApp: prepared login request_id={} expired before client "
             "authenticate",
             login_request_id);
+        ++prepared_login_timeout_total_;
         (void)rollback_prepared_login_entity(login_request_id);
     }
 
@@ -1991,6 +1999,7 @@ void BaseApp::cancel_inflight_checkout(uint32_t request_id, const PendingLogin& 
 {
     canceled_login_checkouts_[request_id] =
         CanceledCheckout{pending.dbid, pending.type_id, Clock::now()};
+    ++canceled_checkout_total_;
     send_abort_checkout(request_id, pending.dbid, pending.type_id);
 }
 

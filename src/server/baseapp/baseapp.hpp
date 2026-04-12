@@ -87,6 +87,8 @@ protected:
     [[nodiscard]] auto create_native_provider() -> std::unique_ptr<INativeApiProvider> override;
 
 private:
+    friend class BaseAppRollbackTest;
+
     struct LoadSnapshot;
     struct LoadTracker;
 
@@ -239,6 +241,8 @@ private:
     uint64_t force_logoff_total_{0};
     uint64_t fast_relogin_total_{0};
     uint64_t detached_relogin_total_{0};
+    uint64_t canceled_checkout_total_{0};
+    uint64_t prepared_login_timeout_total_{0};
     LoadTracker load_tracker_{};
     static constexpr Duration kForceLogoffRetryBaseDelay = std::chrono::milliseconds(250);
     static constexpr Duration kForceLogoffRetryMaxDelay = std::chrono::seconds(2);

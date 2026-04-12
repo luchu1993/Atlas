@@ -47,6 +47,8 @@ protected:
     void register_watchers() override;
 
 private:
+    friend class LoginRollbackTest;
+
     // ---- Pending login state machine ----------------------------------------
     enum class PendingStage : uint8_t
     {
@@ -138,6 +140,7 @@ private:
     uint64_t login_rate_limited_total_{0};
     uint64_t login_dedup_total_{0};
     uint64_t login_busy_total_{0};
+    uint64_t abandoned_login_total_{0};
 };
 
 }  // namespace atlas

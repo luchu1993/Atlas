@@ -35,6 +35,8 @@ protected:
     void register_watchers() override;
 
 private:
+    friend class DBAppRollbackTest;
+
     // ---- Message handlers ---------------------------------------------------
     void on_write_entity(const Address& src, Channel* ch, const dbapp::WriteEntity& msg);
     void on_checkout_entity(const Address& src, Channel* ch, const dbapp::CheckoutEntity& msg);
@@ -62,11 +64,15 @@ private:
         uint16_t type_id{0};
         Address reply_addr;
         bool canceled{false};
+        DatabaseID cleared_dbid{kInvalidDBID};
     };
     std::unordered_map<uint32_t, PendingCheckoutRequest> pending_checkout_requests_;
     std::optional<EntityDefRegistry> entity_defs_;  // nullopt until loaded
     bool auto_create_accounts_{false};
     uint16_t account_type_id_{0};
+    uint64_t abort_checkout_total_{0};
+    uint64_t abort_checkout_pending_hit_total_{0};
+    uint64_t abort_checkout_late_hit_total_{0};
 };
 
 }  // namespace atlas

@@ -417,6 +417,11 @@ atlas_add_test(test_login_messages
     DEPS atlas_loginapp_lib atlas_serialization
 )
 
+atlas_add_test(test_login_rollback
+    SOURCES test_login_rollback.cpp
+    DEPS atlas_loginapp_lib atlas_baseapp_lib atlas_dbapp_lib
+)
+
 atlas_add_test(test_baseappmgr_messages
     SOURCES test_baseappmgr_messages.cpp
     DEPS atlas_baseappmgr_lib atlas_serialization

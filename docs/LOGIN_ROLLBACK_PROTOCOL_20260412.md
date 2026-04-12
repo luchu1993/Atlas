@@ -388,15 +388,18 @@
 - [x] `BaseApp` 已支持 queued / pending / prepared 三类状态的回滚
 - [x] `DBApp` 已支持 pending checkout abort 与迟到回包 suppress
 - [x] 消息 round-trip 测试已补齐
+- [x] rollback 相关 watcher / metric 已落库
+- [x] 已补最小行为测试，覆盖 `LoginApp` abandon、`BaseApp` prepared lease timeout、`DBApp` pending abort 幂等
 
 ### 14.2 待补行为测试
 
-- [ ] `LoginApp` 客户端断开后，目标 request 进入 canceled 集并不再接受迟到成功回包
+- [x] `LoginApp` 客户端放弃登录后，目标 request 进入 canceled 集并更新 rollback metric
 - [ ] `LoginApp` 登录超时后，若已分配 `BaseApp`，会实际发送 `CancelPrepareLogin`
 - [ ] `BaseApp` 收到 `CancelPrepareLogin` 且 request 位于 `pending_logins_` 时，会发 `AbortCheckout`
+- [x] `BaseApp` prepared lease timeout 到期时，会回滚 prepared 状态并更新 metric
 - [ ] `BaseApp` 收到 `CancelPrepareLogin` 且 request 位于 `prepared_login_entities_` 时，会 destroy proxy 并 clear session
 - [ ] `DBApp` 收到 `AbortCheckout` 且 checkout 仍在 pending 时，不发送原始 `CheckoutEntityAck`
-- [ ] `DBApp` 收到重复 `AbortCheckout` 时保持幂等
+- [x] `DBApp` 收到重复 `AbortCheckout` 时保持幂等
 
 ### 14.3 待补时序测试
 
@@ -410,13 +413,13 @@
 
 上线前建议至少暴露以下 watcher / metric:
 
-- [ ] `loginapp/canceled_request_count`
-- [ ] `loginapp/abandoned_login_total`
-- [ ] `baseapp/canceled_checkout_count`
-- [ ] `baseapp/prepared_login_timeout_total`
-- [ ] `dbapp/abort_checkout_total`
-- [ ] `dbapp/abort_checkout_pending_hit_total`
-- [ ] `dbapp/abort_checkout_late_hit_total`
+- [x] `loginapp/canceled_request_count`
+- [x] `loginapp/abandoned_login_total`
+- [x] `baseapp/canceled_checkout_count`
+- [x] `baseapp/prepared_login_timeout_total`
+- [x] `dbapp/abort_checkout_total`
+- [x] `dbapp/abort_checkout_pending_hit_total`
+- [x] `dbapp/abort_checkout_late_hit_total`
 
 ### 14.5 建议验收命令
 

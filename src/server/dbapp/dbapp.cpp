@@ -172,6 +172,16 @@ void DBApp::register_watchers()
     reg.add<std::string>(
         "dbapp/checkouts",
         std::function<std::string()>{[this]() { return std::to_string(checkout_mgr_.size()); }});
+    reg.add<std::size_t>("dbapp/pending_checkout_request_count",
+                         std::function<std::size_t()>(
+                             [this] { return pending_checkout_requests_.size(); }));
+    reg.add<uint64_t>("dbapp/abort_checkout_total",
+                      std::function<uint64_t()>([this] { return abort_checkout_total_; }));
+    reg.add<uint64_t>(
+        "dbapp/abort_checkout_pending_hit_total",
+        std::function<uint64_t()>([this] { return abort_checkout_pending_hit_total_; }));
+    reg.add<uint64_t>("dbapp/abort_checkout_late_hit_total",
+                      std::function<uint64_t()>([this] { return abort_checkout_late_hit_total_; }));
 }
 
 // ============================================================================
@@ -315,13 +325,15 @@ void DBApp::on_checkout_entity(const Address& src, Channel* ch, const dbapp::Che
     // After DB confirms, promote checkout to Confirmed; on failure, roll back.
     auto dbid = msg.dbid;
     auto type_id = msg.type_id;
-    pending_checkout_requests_[msg.request_id] = PendingCheckoutRequest{dbid, type_id, src, false};
+    pending_checkout_requests_[msg.request_id] =
+        PendingCheckoutRequest{dbid, type_id, src, false, kInvalidDBID};
 
     auto on_db_done = [this, request_id = msg.request_id, dbid, type_id,
                        send_ack = std::move(send_ack)](GetResult result) mutable
     {
         bool canceled = false;
         DatabaseID cleanup_dbid = dbid;
+        DatabaseID cleared_dbid = kInvalidDBID;
         if (auto pending_it = pending_checkout_requests_.find(request_id);
             pending_it != pending_checkout_requests_.end())
         {
@@ -330,6 +342,7 @@ void DBApp::on_checkout_entity(const Address& src, Channel* ch, const dbapp::Che
             {
                 cleanup_dbid = pending_it->second.dbid;
             }
+            cleared_dbid = pending_it->second.cleared_dbid;
             pending_checkout_requests_.erase(pending_it);
         }
 
@@ -340,10 +353,13 @@ void DBApp::on_checkout_entity(const Address& src, Channel* ch, const dbapp::Che
 
         if (canceled)
         {
-            checkout_mgr_.release_checkout(cleanup_dbid, type_id);
-            if (cleanup_dbid != kInvalidDBID)
+            if (cleanup_dbid != cleared_dbid)
             {
-                database_->mark_checkout_cleared(cleanup_dbid, type_id);
+                checkout_mgr_.release_checkout(cleanup_dbid, type_id);
+                if (cleanup_dbid != kInvalidDBID)
+                {
+                    database_->mark_checkout_cleared(cleanup_dbid, type_id);
+                }
             }
             ATLAS_LOG_DEBUG("DBApp: checkout request_id={} canceled before reply", request_id);
             return;
@@ -376,18 +392,22 @@ void DBApp::on_abort_checkout(const Address& src, Channel* ch, const dbapp::Abor
     if (ch == nullptr)
         return;
 
+    ++abort_checkout_total_;
     auto it = pending_checkout_requests_.find(msg.request_id);
     if (it != pending_checkout_requests_.end())
     {
+        ++abort_checkout_pending_hit_total_;
         it->second.canceled = true;
-        checkout_mgr_.release_checkout(it->second.dbid, it->second.type_id);
-        if (it->second.dbid != kInvalidDBID)
+        if (it->second.dbid != kInvalidDBID && it->second.cleared_dbid != it->second.dbid)
         {
+            checkout_mgr_.release_checkout(it->second.dbid, it->second.type_id);
             database_->mark_checkout_cleared(it->second.dbid, it->second.type_id);
+            it->second.cleared_dbid = it->second.dbid;
         }
     }
     else
     {
+        ++abort_checkout_late_hit_total_;
         checkout_mgr_.checkin(msg.dbid, msg.type_id);
         if (msg.dbid != kInvalidDBID)
         {

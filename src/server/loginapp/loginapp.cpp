@@ -193,6 +193,10 @@ void LoginApp::register_watchers()
                      std::function<uint64_t()>([this] { return login_rate_limited_total_; }));
     wr.add<uint64_t>("loginapp/login_busy_total",
                      std::function<uint64_t()>([this] { return login_busy_total_; }));
+    wr.add<uint64_t>("loginapp/abandoned_login_total",
+                     std::function<uint64_t()>([this] { return abandoned_login_total_; }));
+    wr.add<std::size_t>("loginapp/canceled_request_count",
+                        std::function<std::size_t()>([this] { return canceled_requests_.size(); }));
     wr.add<int>("loginapp/pending_logins",
                 std::function<int()>([this] { return static_cast<int>(pending_.size()); }));
     wr.add<bool>("loginapp/dbapp_connected",
@@ -554,6 +558,7 @@ void LoginApp::abandon_pending_login(std::unordered_map<uint32_t, PendingLogin>:
     PendingLogin pending = std::move(it->second);
     pending_by_username_.erase(pending.username);
     pending_.erase(it);
+    ++abandoned_login_total_;
     cancel_prepare_login(pending);
 }
 
