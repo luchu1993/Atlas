@@ -385,6 +385,8 @@ TEST_F(XmlDatabaseTest, DeferredModeDelaysCallbacks)
 
 TEST_F(XmlDatabaseTest, ProcessResultsFlushesDirtyStateOnDeadline)
 {
+    db_.set_flush_policy(XmlDatabase::FlushPolicy::Buffered);
+
     PutResult put;
     db_.put_entity(kInvalidDBID, 1, WriteFlags::CreateNew, make_blob("data"), "eve",
                    [&](PutResult r) { put = r; });
@@ -408,6 +410,8 @@ TEST_F(XmlDatabaseTest, ProcessResultsFlushesDirtyStateOnDeadline)
 
 TEST_F(XmlDatabaseTest, StagedBlobWritesAreReadableBeforeFlushAndCoalesce)
 {
+    db_.set_flush_policy(XmlDatabase::FlushPolicy::Buffered);
+
     PutResult put;
     db_.put_entity(kInvalidDBID, 1, WriteFlags::CreateNew, make_blob("v1"), "frank",
                    [&](PutResult r) { put = r; });
@@ -435,6 +439,29 @@ TEST_F(XmlDatabaseTest, StagedBlobWritesAreReadableBeforeFlushAndCoalesce)
     db_.get_entity(put.dbid, 1, [&](GetResult r) { after_flush = std::move(r); });
     ASSERT_TRUE(after_flush.success);
     EXPECT_EQ(after_flush.data.blob, make_blob("v2-latest"));
+}
+
+TEST_F(XmlDatabaseTest, ImmediateFlushPolicyPersistsBlobAndMetadataBeforeCallback)
+{
+    db_.set_flush_policy(XmlDatabase::FlushPolicy::Immediate);
+
+    PutResult put;
+    db_.put_entity(kInvalidDBID, 1, WriteFlags::CreateNew, make_blob("strict"), "grace",
+                   [&](PutResult r) { put = r; });
+    ASSERT_TRUE(put.success);
+
+    auto blob_path = test_dir_ / "Account" / (std::to_string(put.dbid) + ".bin");
+    auto meta_path = test_dir_ / "meta.json";
+    auto index_path = test_dir_ / "Account" / "index.json";
+
+    EXPECT_TRUE(std::filesystem::exists(blob_path));
+    EXPECT_TRUE(std::filesystem::exists(meta_path));
+    EXPECT_TRUE(std::filesystem::exists(index_path));
+
+    GetResult get;
+    db_.get_entity(put.dbid, 1, [&](GetResult r) { get = std::move(r); });
+    ASSERT_TRUE(get.success);
+    EXPECT_EQ(get.data.blob, make_blob("strict"));
 }
 
 // ============================================================================

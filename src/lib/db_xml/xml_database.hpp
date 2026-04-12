@@ -29,15 +29,29 @@ namespace atlas
 //   - Deferred (deferred_mode_=true): callbacks are queued and only invoked
 //     when process_results() is called.  Use this mode in tests to simulate
 //     the asynchronous behavior of the MySQL backend.
+//
+// Flush policy:
+//   - Buffered (default): blob writes are staged in memory and flushed later
+//     to keep the XML backend cheap during development. Successful callbacks
+//     mean "visible in this process", not "durable on disk".
+//   - Immediate: each mutating call flushes staged state before callbacks are
+//     observed. Use this for tests that need durable-on-return semantics.
 // ============================================================================
 
 class XmlDatabase : public IDatabase
 {
 public:
+    enum class FlushPolicy
+    {
+        Buffered,
+        Immediate,
+    };
+
     XmlDatabase() = default;
     ~XmlDatabase() override;
 
     void set_deferred_mode(bool enabled) override { deferred_mode_ = enabled; }
+    void set_flush_policy(FlushPolicy policy);
 
     [[nodiscard]] auto startup(const DatabaseConfig& config, const EntityDefRegistry& entity_defs)
         -> Result<void> override;
@@ -95,6 +109,7 @@ private:
     void mark_index_dirty(uint16_t type_id);
     void mark_auto_load_dirty();
     void mark_checkouts_dirty();
+    void flush_after_mutation();
     void flush_dirty_state(bool force = false);
     void stage_blob_write(uint16_t type_id, DatabaseID dbid, std::span<const std::byte> data);
     void stage_blob_delete(uint16_t type_id, DatabaseID dbid);
@@ -114,6 +129,7 @@ private:
     DatabaseID next_dbid_{1};
     bool started_{false};
     bool deferred_mode_{false};
+    FlushPolicy flush_policy_{FlushPolicy::Buffered};
     TimePoint next_flush_deadline_{};
     TimePoint next_metadata_flush_deadline_{};
     bool meta_dirty_{false};
@@ -146,6 +162,7 @@ private:
 
     // blob read cache — populated on flush and disk reads, avoids repeated I/O
     mutable std::unordered_map<uint64_t, std::vector<std::byte>> blob_cache_;
+    size_t pending_blob_bytes_{0};
 
     static constexpr auto checkout_key(uint16_t type_id, DatabaseID dbid) -> uint64_t
     {
@@ -157,6 +174,8 @@ private:
     static constexpr Duration kMetadataFlushInterval = std::chrono::seconds(2);
     static constexpr int kMaxCallbacksPerTick = 2048;
     static constexpr int kMaxBlobWritesPerFlush = 16;
+    static constexpr size_t kMaxPendingBlobWrites = 64;
+    static constexpr size_t kMaxPendingBlobBytes = 4 * 1024 * 1024;
 };
 
 }  // namespace atlas

@@ -21,6 +21,13 @@ XmlDatabase::~XmlDatabase()
         shutdown();
 }
 
+void XmlDatabase::set_flush_policy(FlushPolicy policy)
+{
+    flush_policy_ = policy;
+    if (started_ && flush_policy_ == FlushPolicy::Immediate)
+        flush_dirty_state(true);
+}
+
 // ============================================================================
 // startup / shutdown
 // ============================================================================
@@ -49,7 +56,9 @@ auto XmlDatabase::startup(const DatabaseConfig& config, const EntityDefRegistry&
     load_checkouts();
 
     started_ = true;
-    ATLAS_LOG_INFO("XmlDatabase: started at '{}', next_dbid={}", base_dir_.string(), next_dbid_);
+    ATLAS_LOG_INFO("XmlDatabase: started at '{}', next_dbid={}, flush_policy={}",
+                   base_dir_.string(), next_dbid_,
+                   flush_policy_ == FlushPolicy::Buffered ? "buffered" : "immediate");
     return {};
 }
 
@@ -97,6 +106,7 @@ void XmlDatabase::put_entity(DatabaseID dbid, uint16_t type_id, WriteFlags flags
         }
         result.success = true;
         result.dbid = dbid;
+        flush_after_mutation();
         fire_or_defer([cb = std::move(callback), result]() mutable { cb(result); });
         return;
     }
@@ -138,6 +148,7 @@ void XmlDatabase::put_entity(DatabaseID dbid, uint16_t type_id, WriteFlags flags
 
     result.success = true;
     result.dbid = dbid;
+    flush_after_mutation();
     fire_or_defer([cb = std::move(callback), result]() mutable { cb(result); });
 }
 
@@ -201,6 +212,7 @@ void XmlDatabase::del_entity(DatabaseID dbid, uint16_t type_id,
     mark_auto_load_dirty();
 
     result.success = true;
+    flush_after_mutation();
     fire_or_defer([cb = std::move(callback), result]() mutable { cb(result); });
 }
 
@@ -261,6 +273,7 @@ void XmlDatabase::checkout_entity(DatabaseID dbid, uint16_t type_id, const Check
     result.data.dbid = dbid;
     result.data.type_id = type_id;
     result.data.blob = std::move(*blob);
+    flush_after_mutation();
     fire_or_defer([cb = std::move(callback), result = std::move(result)]() mutable
                   { cb(std::move(result)); });
 }
@@ -288,7 +301,10 @@ void XmlDatabase::clear_checkout(DatabaseID dbid, uint16_t type_id,
 {
     bool erased = checkouts_.erase(checkout_key(type_id, dbid)) > 0;
     if (erased)
+    {
         mark_checkouts_dirty();
+        flush_after_mutation();
+    }
     fire_or_defer([cb = std::move(callback), erased]() mutable { cb(erased); });
 }
 
@@ -309,7 +325,10 @@ void XmlDatabase::clear_checkouts_for_address(const Address& base_addr,
         }
     }
     if (count > 0)
+    {
         mark_checkouts_dirty();
+        flush_after_mutation();
+    }
     fire_or_defer([cb = std::move(callback), count]() mutable { cb(count); });
 }
 
@@ -346,6 +365,7 @@ void XmlDatabase::set_auto_load(DatabaseID dbid, uint16_t type_id, bool auto_loa
     else
         auto_load_set_.erase(key);
     mark_auto_load_dirty();
+    flush_after_mutation();
 }
 
 // ============================================================================
@@ -371,7 +391,10 @@ void XmlDatabase::process_results()
 void XmlDatabase::mark_checkout_cleared(DatabaseID dbid, uint16_t type_id)
 {
     if (checkouts_.erase(checkout_key(type_id, dbid)) > 0)
+    {
         mark_checkouts_dirty();
+        flush_after_mutation();
+    }
 }
 
 void XmlDatabase::mark_meta_dirty()
@@ -400,6 +423,21 @@ void XmlDatabase::mark_checkouts_dirty()
     checkouts_dirty_ = true;
     if (next_metadata_flush_deadline_ == TimePoint{})
         next_metadata_flush_deadline_ = Clock::now() + kMetadataFlushInterval;
+}
+
+void XmlDatabase::flush_after_mutation()
+{
+    if (flush_policy_ == FlushPolicy::Immediate)
+    {
+        flush_dirty_state(true);
+        return;
+    }
+
+    if (pending_blob_writes_.size() >= kMaxPendingBlobWrites ||
+        pending_blob_bytes_ >= kMaxPendingBlobBytes)
+    {
+        flush_dirty_state(true);
+    }
 }
 
 void XmlDatabase::flush_dirty_state(bool force)
@@ -721,11 +759,15 @@ void XmlDatabase::delete_blob(uint16_t type_id, DatabaseID dbid)
 void XmlDatabase::stage_blob_write(uint16_t type_id, DatabaseID dbid,
                                    std::span<const std::byte> data)
 {
-    auto& pending = pending_blob_writes_[checkout_key(type_id, dbid)];
+    auto key = checkout_key(type_id, dbid);
+    auto& pending = pending_blob_writes_[key];
+    if (!pending.deleted)
+        pending_blob_bytes_ -= pending.data.size();
     pending.type_id = type_id;
     pending.dbid = dbid;
     pending.data.assign(data.begin(), data.end());
     pending.deleted = false;
+    pending_blob_bytes_ += pending.data.size();
     if (next_flush_deadline_ == TimePoint{})
     {
         next_flush_deadline_ = Clock::now() + kFlushInterval;
@@ -736,6 +778,8 @@ void XmlDatabase::stage_blob_delete(uint16_t type_id, DatabaseID dbid)
 {
     auto key = checkout_key(type_id, dbid);
     auto& pending = pending_blob_writes_[key];
+    if (!pending.deleted)
+        pending_blob_bytes_ -= pending.data.size();
     pending.type_id = type_id;
     pending.dbid = dbid;
     pending.data.clear();
@@ -753,6 +797,8 @@ void XmlDatabase::flush_pending_blob_writes(int budget)
     int written = 0;
     while (it != pending_blob_writes_.end() && written < budget)
     {
+        if (!it->second.deleted)
+            pending_blob_bytes_ -= it->second.data.size();
         if (it->second.deleted)
         {
             delete_blob(it->second.type_id, it->second.dbid);
