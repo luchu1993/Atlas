@@ -1,7 +1,8 @@
 # Phase 10: CellApp — 空间模拟
 
-> 前置依赖: Phase 8 (BaseApp), Phase 9 (BaseAppMgr), Script Phase 4 (`[Replicated]` + DirtyFlags)
+> 前置依赖: Phase 8 (BaseApp), Phase 9 (BaseAppMgr), Script Phase 4 (`[Replicated]` + DirtyFlags；Phase 10 需补充按受众过滤的 delta API)
 > BigWorld 参考: `server/cellapp/cellapp.hpp`, `server/cellapp/entity.hpp`, `server/cellapp/witness.hpp`
+> 当前代码基线 (2026-04-12): 仓库里还没有 `CellApp` 实现，`src/server/cellapp/` 只有 `CMakeLists.txt`。因此本阶段必须复用已经落地的 `BaseApp` 回程协议（`src/server/baseapp/baseapp_messages.hpp`），并以当前脚本层实际提供的复制接口为前提调整设计。
 
 ---
 
@@ -76,45 +77,110 @@ Entity : PyObjectPlus
 CellEntity (C++ 薄壳)
   → C++ 只持有 GCHandle + position/direction
   → 属性管理完全在 C# (Source Generator DirtyFlags)
-  → C# 每 tick 检查 IsDirty → 调用 SerializeReplicatedDelta() → NativeApi
-  → C++ Witness 收到 delta blob → 按优先级调度发送
+  → C# 每 tick 检查 IsDirty → 生成 owner/other 快照与 delta（需扩展当前生成器）→ NativeApi
+  → C++ CellEntity 发布最新 replication frame；每个 Witness 仍各自保存“已发送到哪一版”的状态
 ```
 
 **关键差异:**
 - BigWorld: 属性变更在 C++ 层追踪（`PropertyOwnerLink` + `eventHistory`）
 - Atlas: 属性变更在 C# 层追踪（`DirtyFlags`），C++ 只收到序列化好的 delta blob
-- BigWorld: Witness 直接读 Entity 的 C++ 属性生成 delta
-- Atlas: Witness 从 C# 获取 delta blob，不解析内容
+- BigWorld: Witness 直接读 Entity 的 C++ 属性生成 delta，并在 `EntityCache` 中维护 `lastEventNumber_ / lastVolatileUpdateNumber_`
+- Atlas: Witness 不解析属性内容，但仍要像 BigWorld 一样在每个 `EntityCache` 里维护“该观察者已经消费到哪一个 replication/event/volatile 序号”
 
 **这意味着:**
 - C++ 不需要 `eventHistory`（C# 管理）
 - C++ 不需要 `PropertyOwnerLink`（C# DirtyFlags 替代）
-- C++ 的 Witness 简化为：管理 EntityCache + 优先级调度 + 转发 blob
+- C++ 的 Witness 简化为：管理 `EntityCache` 的发送进度/状态、优先级调度、转发 blob
 - 位置/方向仍在 C++ 管理（RangeList 需要直接访问）
 
 ---
 
 ## 2. 消息协议设计
 
-### 2.1 CellApp 内部接口
+### 2.1 协议分层
+
+当前代码下，Phase 10 不能再定义一套与 `BaseApp` 现有处理器并行的
+`CellApp → BaseApp` 回程协议。消息需要分成两层：
+
+1. `3000-3099`：CellApp 自有消息，只用于 `BaseApp → CellApp` 请求和 CellApp 本地管理
+2. `2010-2016`：复用已实现的 `BaseApp` 入站消息，由 CellApp 发回 BaseApp
+
+### 2.2 CellApp 新增消息 (`3000-3099`)
 
 | 消息 | ID | 方向 | 用途 |
 |------|-----|------|------|
 | `CreateCellEntity` | 3000 | BaseApp → CellApp | 创建 Cell 实体 |
-| `CreateCellEntityAck` | 3001 | CellApp → BaseApp | 创建结果（Cell地址） |
 | `DestroyCellEntity` | 3002 | BaseApp → CellApp | 销毁 Cell 实体 |
 | `CellEntityRpc` | 3003 | BaseApp → CellApp | 客户端 RPC 转发（[ServerRpc] 经 Base） |
-| `BaseEntityRpc` | 3004 | CellApp → BaseApp | Cell → Base RPC |
-| `ClientRpcFromCell` | 3005 | CellApp → BaseApp | Cell → Client RPC（经 Proxy 转发） |
-| `ReplicatedDelta` | 3006 | CellApp → BaseApp | 属性增量 → 经 Proxy 转发客户端 |
-| `CellEntityPosition` | 3007 | CellApp → BaseApp | 位置更新（Volatile） |
 | `CreateSpace` | 3010 | 管理/脚本 → CellApp | 创建 Space |
 | `DestroySpace` | 3011 | 管理/脚本 → CellApp | 销毁 Space |
 | `AvatarUpdate` | 3020 | BaseApp → CellApp | 客户端位置更新 |
 | `EnableWitness` | 3021 | BaseApp → CellApp | 开启 AOI（客户端 enableEntities） |
 | `DisableWitness` | 3022 | BaseApp → CellApp | 关闭 AOI |
 
-### 2.2 详细消息定义
+约束：
+- 不再在 `3000` 段定义 `CreateCellEntityAck` / `BaseEntityRpc` / 泛化版 `ClientRpcFromCell` / `ReplicatedDelta` / `CellEntityPosition`
+- `CreateCellEntity` 的成功路径直接复用 `baseapp::CellEntityCreated`
+- 显式失败回包当前代码未定义；如果实现阶段确实需要失败通知，应新增独立失败消息，而不是覆盖现有 `2010-2016` 语义
+
+### 2.3 复用现有 BaseApp 入站消息 (`CellApp → BaseApp`)
+
+| 消息 | ID | 方向 | 当前代码语义 |
+|------|-----|------|-------------|
+| `CellEntityCreated` | 2010 | CellApp → BaseApp | Cell 创建成功，Base 记录 `cell_entity_id + cell_addr` |
+| `CellEntityDestroyed` | 2011 | CellApp → BaseApp | Cell 已销毁，Base 清理路由 |
+| `CurrentCell` | 2012 | CellApp → BaseApp | Phase 11 offload 后更新 Cell 地址 |
+| `CellRpcForward` | 2013 | CellApp → BaseApp | Cell → Base RPC，Base 侧分发给脚本 |
+| `SelfRpcFromCell` | 2014 | CellApp → BaseApp | 发给拥有者客户端，可靠路径 |
+| `ReplicatedDeltaFromCell` | 2015 | CellApp → BaseApp | 当前代码只透传到 `base_entity_id` 对应的单个客户端；Phase 10 可先用于“按观察者逐个回送”的 AOI delta |
+| `BroadcastRpcFromCell` | 2016 | CellApp → BaseApp | 消息定义支持 `otherClients/allClients`，但当前 `BaseApp` 实现仍只发给 `base_entity_id` 对应客户端，不能当作已完成的 AOI fan-out |
+
+这部分消息定义已经存在于 `src/server/baseapp/baseapp_messages.hpp`，Phase 10 直接复用，不再在 CellApp 文档里重定义一份并行版本。
+
+当前代码现实约束：
+- `BaseApp::on_self_rpc_from_cell()` 可稳定发给单个 Proxy 客户端
+- `BaseApp::on_replicated_delta_from_cell()` 也只会发给单个 Proxy，且外层消息 ID 当前固定为 `0xF001`
+- `BaseApp::on_broadcast_rpc_from_cell()` 目前并不会根据 `target` 枚举遍历 AOI 观察者集合
+
+因此，Phase 10 文档中的 AOI 下行闭环必须按下面两种路径之一实现，不能把现状写成“已支持广播”：
+- 首选路径：`CellApp/Witness` 直接按“每个观察者一个回包”展开，下行时使用观察者自己的 `base_entity_id` 作为路由键，经 `SelfRpcFromCell` / `ReplicatedDeltaFromCell` 发回 BaseApp
+- 后续优化：扩展 BaseApp，使 `BroadcastRpcFromCell` 真正具备按观察者集合 fan-out 的能力
+
+### 2.3.1 Phase 10 首阶段的 `0xF001` 过渡协议
+
+如果 Phase 10 不同步改造 BaseApp 的外部下行消息路由，那么
+`ReplicatedDeltaFromCell` 的 payload 不能直接被写成“已经是
+`EntityEnter` / `EntityPropertyUpdate` 等真实客户端消息”。
+
+当前代码可闭环的首阶段方案是：
+- `BaseApp::on_replicated_delta_from_cell()` 继续把外层消息 ID 固定为 `0xF001`
+- `msg.delta` 内部承载一个 CellApp 定义的二级 envelope
+- 客户端 / 测试桩先只识别 `0xF001`，再在包内按 `kind` 分发
+
+建议的 envelope:
+
+```cpp
+enum class CellAoIEnvelopeKind : uint8_t {
+    EntityEnter = 1,
+    EntityLeave = 2,
+    EntityPositionUpdate = 3,
+    EntityPropertyUpdate = 4,
+};
+
+struct CellAoIEnvelope {
+    CellAoIEnvelopeKind kind;
+    EntityID public_entity_id;     // 当前阶段使用 base_entity_id
+    std::vector<std::byte> payload;
+};
+```
+
+约束：
+- `SelfRpcFromCell` 仍用于“拥有者客户端 RPC”这条可靠路径
+- `ReplicatedDeltaFromCell` 首阶段只承担 AOI/复制 envelope 的单观察者回送
+- Phase 12 若落地真实的 `10102/10103/10104/10111` 客户端协议，则应由 BaseApp 在下行前解包
+  `CellAoIEnvelope`，或直接把 `ReplicatedDeltaFromCell` 改为携带真实客户端消息 ID
+
+### 2.4 新增消息的详细定义
 
 ```cpp
 namespace atlas::cellapp {
@@ -127,18 +193,10 @@ struct CreateCellEntity {
     Vector3 direction;
     Address base_addr;             // BaseApp 地址（回报用）
     uint32_t request_id;
-    // 可选: C# cell init data blob
-
-    static auto descriptor() -> const MessageDesc& { /*...*/ }
-    // ...
-};
-
-struct CreateCellEntityAck {
-    uint32_t request_id;
-    bool success;
-    EntityID cell_entity_id;       // CellApp 上分配的 EntityID
-    Address cell_addr;             // CellApp 地址
-    std::string error;
+    std::vector<std::byte> script_init_data;
+    // BaseApp/脚本层提供的 Cell 初始化数据。CellApp 会把它与
+    // space/base/position/direction/on_ground 等运行时字段合成为
+    // 完整 restore blob，再传给 NativeCallbacks::RestoreEntity()。
 
     static auto descriptor() -> const MessageDesc& { /*...*/ }
     // ...
@@ -154,22 +212,8 @@ struct CellEntityRpc {
     // ...
 };
 
-struct ClientRpcFromCell {
-    EntityID base_entity_id;       // Proxy EntityID (BaseApp 侧)
-    EntityID source_entity_id;     // 产生 RPC 的实体（可能不是 Proxy 自身）
-    uint32_t rpc_id;
-    uint8_t target;                // OwnerClient / AllClients / OtherClients
-    std::vector<std::byte> payload;
-
-    static auto descriptor() -> const MessageDesc& { /*...*/ }
-    // ...
-};
-
-struct ReplicatedDelta {
-    EntityID base_entity_id;       // Proxy EntityID
-    EntityID source_entity_id;     // 产生 delta 的实体
-    uint8_t scope;                 // ReplicationScope
-    std::vector<std::byte> delta;  // C# SerializeReplicatedDelta() 输出
+struct DestroyCellEntity {
+    EntityID base_entity_id;
 
     static auto descriptor() -> const MessageDesc& { /*...*/ }
     // ...
@@ -187,6 +231,10 @@ struct AvatarUpdate {
 
 } // namespace atlas::cellapp
 ```
+
+回程消息 `CellEntityCreated` / `CellEntityDestroyed` / `CurrentCell` /
+`CellRpcForward` / `SelfRpcFromCell` / `ReplicatedDeltaFromCell` /
+`BroadcastRpcFromCell` 直接复用 `src/server/baseapp/baseapp_messages.hpp`。
 
 ---
 
@@ -247,6 +295,20 @@ protected:
     friend class RangeList;
 };
 
+class FixedRangeListNode final : public RangeListNode {
+public:
+    FixedRangeListNode(float x, float z, RangeListOrder order) : x_(x), z_(z), order_(order) {}
+
+    [[nodiscard]] auto x() const -> float override { return x_; }
+    [[nodiscard]] auto z() const -> float override { return z_; }
+    [[nodiscard]] auto order() const -> RangeListOrder override { return order_; }
+
+private:
+    float x_;
+    float z_;
+    RangeListOrder order_;
+};
+
 } // namespace atlas
 ```
 
@@ -276,8 +338,8 @@ private:
     void shuffle_z(RangeListNode* node, float old_z);
 
     /// 哨兵节点
-    RangeListNode head_;  // x=z=-FLT_MAX
-    RangeListNode tail_;  // x=z=+FLT_MAX
+    FixedRangeListNode head_{-FLT_MAX, -FLT_MAX, RangeListOrder::Head};
+    FixedRangeListNode tail_{+FLT_MAX, +FLT_MAX, RangeListOrder::Tail};
 };
 
 } // namespace atlas
@@ -325,24 +387,24 @@ public:
 
     void insert(RangeList& list);
     void remove(RangeList& list);
+    void remove_without_contracting();
 
     /// 范围变更（AOI 半径调整）
     void set_range(float new_range);
 
     /// 中心节点移动后更新边界
     void update(float old_x, float old_z);
+    void shuffle_x_then_z_expand(bool x_inc, bool z_inc, float old_x, float old_z);
+    void shuffle_x_then_z_contract(bool x_inc, bool z_inc, float old_x, float old_z);
 
     /// 子类覆盖
-    virtual void on_enter(Entity& entity) = 0;
-    virtual void on_leave(Entity& entity) = 0;
+    virtual void on_enter(CellEntity& entity) = 0;
+    virtual void on_leave(CellEntity& entity) = 0;
 
 private:
     RangeListNode& central_;
-    float range_;
-
-    /// 上下界节点
-    RangeTriggerBoundNode upper_x_, upper_z_;
-    RangeTriggerBoundNode lower_x_, lower_z_;
+    RangeTriggerNode upper_bound_;
+    RangeTriggerNode lower_bound_;
 
     /// 旧位置（用于 2D 交叉检测）
     float old_entity_x_ = 0.0f;
@@ -354,8 +416,8 @@ class AoITrigger : public RangeTrigger {
 public:
     explicit AoITrigger(Witness& owner, float radius);
 
-    void on_enter(Entity& entity) override;
-    void on_leave(Entity& entity) override;
+    void on_enter(CellEntity& entity) override;
+    void on_leave(CellEntity& entity) override;
 
 private:
     Witness& owner_;
@@ -367,7 +429,7 @@ private:
 ### 3.3 CellEntity — Cell 侧实体
 
 ```cpp
-// src/server/CellApp/cell_entity.hpp
+// src/server/cellapp/cell_entity.hpp
 namespace atlas {
 
 class CellEntity {
@@ -414,16 +476,28 @@ public:
         -> ControllerID;
     auto cancel_controller(ControllerID id) -> bool;
 
-    // ========== Dirty 属性 ==========
-    /// C# 调用 NativeApi 传入 delta blob
-    void set_replicated_dirty(uint8_t scope, std::vector<std::byte> delta);
-
-    /// Witness 取走待发送的 delta
-    struct PendingDelta {
-        uint8_t scope;
-        std::vector<std::byte> data;
+    // ========== 复制帧 ==========
+    /// 不能使用单消费者的 pending queue，也不能只保留“最新一帧”。
+    /// CellEntity 需要同时保存“最新快照 + 有界 delta 历史”，供慢观察者补包。
+    struct ReplicationFrame {
+        uint64_t event_seq = 0;              // 本条属性 delta 的序号
+        uint64_t volatile_seq = 0;           // 本条位置/朝向更新的序号
+        std::vector<std::byte> owner_delta;
+        std::vector<std::byte> other_delta;
+        Vector3 position;
+        Vector3 direction;
+        bool on_ground = false;
     };
-    auto take_pending_deltas() -> std::vector<PendingDelta>;
+
+    struct ReplicationState {
+        uint64_t latest_event_seq = 0;
+        uint64_t latest_volatile_seq = 0;
+        std::vector<std::byte> owner_snapshot;
+        std::vector<std::byte> other_snapshot;
+        std::deque<ReplicationFrame> history;  // 固定窗口，例如最近 8~16 帧
+    };
+    void publish_replication_frame(ReplicationFrame frame);
+    [[nodiscard]] auto replication_state() const -> const ReplicationState*;
 
     // ========== RangeList 节点 ==========
     [[nodiscard]] auto range_node() -> EntityRangeListNode& { return range_node_; }
@@ -451,8 +525,8 @@ private:
     Controllers controllers_;
     EntityRangeListNode range_node_;
 
-    // 脏属性（C# 传入的 delta blob）
-    std::vector<PendingDelta> pending_deltas_;
+    // 最新快照 + 有界 delta 历史（供所有 Witness 只读共享）
+    std::optional<ReplicationState> replication_state_;
 
     bool destroyed_ = false;
 };
@@ -466,7 +540,7 @@ private:
 |---|---|---|
 | `PyObjectPlus` 基类 | `uint64_t script_handle_` | C# GCHandle |
 | `properties_` (vector\<ScriptObject\>) | 无（C# 管理） | 属性全在 C# |
-| `eventHistory_` / `PropertyOwnerLink` | `pending_deltas_` | C# DirtyFlags 替代 |
+| `eventHistory_` / `PropertyOwnerLink` | `replication_state_` + `EntityCache` 发送序号 | C# DirtyFlags 产出 blob；每个 Witness 仍维护自己的消费进度 |
 | `pVehicle_` / Vehicle 系统 | 初期不实现 | 后续 |
 | `pChunk_` / Chunk 空间 | 初期不实现 | 后续 |
 | Real/Ghost 双模式 | 仅 Real（Phase 11 扩展） | 渐进 |
@@ -475,7 +549,7 @@ private:
 ### 3.4 Witness — AOI 管理器
 
 ```cpp
-// src/server/CellApp/witness.hpp
+// src/server/cellapp/witness.hpp
 namespace atlas {
 
 class Witness {
@@ -500,13 +574,16 @@ private:
         CellEntity* entity;
         double priority = 0.0;        // 距离/5 + 1（越小越优先）
         uint8_t flags = 0;
+        uint64_t last_event_seq = 0;
+        uint64_t last_volatile_seq = 0;
 
         // 标志
         static constexpr uint8_t ENTER_PENDING  = 0x01;
         static constexpr uint8_t GONE           = 0x08;
+        static constexpr uint8_t REFRESH        = 0x10;
 
         [[nodiscard]] auto is_updatable() const -> bool {
-            return (flags & (ENTER_PENDING | GONE)) == 0;
+            return (flags & (ENTER_PENDING | GONE | REFRESH)) == 0;
         }
 
         void update_priority(const Vector3& origin) {
@@ -515,10 +592,10 @@ private:
         }
     };
 
-    /// 处理状态转换 (ENTER_PENDING → 发送 enterAoI, GONE → 移除)
+    /// 处理状态转换 (ENTER_PENDING / REFRESH / GONE)
     void handle_state_change(EntityCache& cache);
 
-    /// 发送单个实体的更新
+    /// 发送单个实体的更新（根据该观察者的 last_event_seq / last_volatile_seq 决定是否发送）
     void send_entity_update(EntityCache& cache);
 
     CellEntity& owner_;
@@ -537,7 +614,7 @@ private:
 } // namespace atlas
 ```
 
-**Witness::update() 流程（对齐 BigWorld）:**
+**Witness::update() 流程（按 BigWorld 的 `EntityCache` 思路适配）:**
 
 ```
 Witness::update(max_packet_bytes):
@@ -547,10 +624,17 @@ Witness::update(max_packet_bytes):
     make_heap (min-heap by priority)
 
   PHASE 2: 状态转换
-    遍历堆，处理 ENTER_PENDING / GONE:
+    遍历堆，处理 ENTER_PENDING / REFRESH / GONE:
       ENTER_PENDING:
-        发送 EntityEnter (type_id, position, [AllClients] 属性全量)
+        发送 EntityEnter (type_id, position, [AllClients] 全量快照)
+        记录 cache.last_event_seq = state.latest_event_seq
+        记录 cache.last_volatile_seq = state.latest_volatile_seq
         清除 ENTER_PENDING 标志
+      REFRESH:
+        重新发送快照（类似 BigWorld 的 refresh/create path）
+        更新 last_event_seq = state.latest_event_seq
+        更新 last_volatile_seq = state.latest_volatile_seq
+        清除 REFRESH 标志
       GONE:
         发送 EntityLeave (entity_id)
         从 aoi_map_ 移除
@@ -566,10 +650,18 @@ Witness::update(max_packet_bytes):
         if cache.is_updatable():
             send_entity_update(cache):
                 1. 位置更新 (Volatile: position + direction)
-                2. 属性 delta (从 entity->take_pending_deltas() 获取)
-                   按 scope 过滤:
-                     AllClients → 发给本 Witness
-                     OwnClient → 仅当 entity == owner_ 时发送
+                   - 读取 entity->replication_state()
+                   - 若 state.latest_volatile_seq > cache.last_volatile_seq：
+                     直接发送 history 中最新那条 absolute volatile update
+                   - volatile 是 latest-wins，不要求补发中间每一帧
+                2. 属性 delta (读取 entity->replication_state())
+                   - 若 cache.last_event_seq == state.latest_event_seq：本 tick 无属性包
+                   - 若 history 中存在从 cache.last_event_seq + 1 到 latest_event_seq 的连续 delta：
+                     依序补发这些 delta，并推进 cache.last_event_seq
+                   - 若出现序号断档，或观察者落后到 history 窗口之外：
+                     发送 owner_snapshot / other_snapshot，并把 cache 标记为 REFRESH 完成
+                   - 当前仓库的脚本生成器还没有 owner/other 的“快照 + 增量”双接口，
+                     Phase 10 需要先扩展 Script Phase 4
                 3. 累计 bytes_sent
 
             cache.update_priority(owner_.position())
@@ -682,7 +774,7 @@ private:
 ### 3.6 Space — 游戏空间
 
 ```cpp
-// src/server/CellApp/space.hpp
+// src/server/cellapp/space.hpp
 namespace atlas {
 
 using SpaceID = uint32_t;
@@ -722,7 +814,7 @@ private:
 ### 3.7 CellApp 进程
 
 ```cpp
-// src/server/CellApp/cellapp.hpp
+// src/server/cellapp/cellapp.hpp
 namespace atlas {
 
 class CellApp : public EntityApp {
@@ -786,7 +878,8 @@ on_end_of_tick():                    // game_clock tick 后, Updatable 前
 
 ScriptEngine::on_tick(dt):           // C# tick (在 ScriptApp::on_tick_complete 中)
     C# 实体逻辑
-    C# 检查 DirtyFlags → 调用 NativeApi → CellEntity::set_replicated_dirty()
+    C# 检查 DirtyFlags → 调用 NativeApi → CellEntity::publish_replication_frame()
+    CellEntity 维护 latest snapshot + bounded history
 
 on_tick_complete():                  // Updatable 之后
     tick_controllers(dt)             // 所有 Controller::update()
@@ -794,14 +887,15 @@ on_tick_complete():                  // Updatable 之后
         for each space:
             for each entity with witness:
                 witness->update(max_packet_bytes)
-                // → 生成 ClientRpcFromCell / ReplicatedDelta 消息
+                // → 首阶段生成逐观察者的 SelfRpcFromCell / ReplicatedDeltaFromCell
+                // → 如后续补齐 BaseApp observer fan-out，再引入 BroadcastRpcFromCell 优化
                 // → 发送到 BaseApp Proxy
 ```
 
 ### 3.8 CellAppNativeProvider
 
 ```cpp
-// src/server/CellApp/cellapp_native_provider.hpp
+// src/server/cellapp/cellapp_native_provider.hpp
 namespace atlas {
 
 class CellAppNativeProvider : public BaseNativeProvider {
@@ -810,7 +904,9 @@ public:
 
     double server_time() override;
     float delta_time() override;
-    uint8_t get_process_prefix() override { return 'C'; }
+    uint8_t get_process_prefix() override {
+        return static_cast<uint8_t>(ProcessType::CellApp);
+    }
 
     // C# entity.Client.ShowDamage() → 这里 → 经 BaseApp Proxy 发客户端
     void send_client_rpc(uint32_t entity_id, uint32_t rpc_id,
@@ -821,9 +917,14 @@ public:
     void send_base_rpc(uint32_t entity_id, uint32_t rpc_id,
                        const std::byte* payload, int32_t len) override;
 
-    // C# 属性变更 → 标记 dirty
-    void set_replicated_dirty(uint32_t entity_id, uint8_t scope,
-                               const std::byte* delta, int32_t len);
+    // C# 属性变更 → 发布本 tick 的复制帧
+    void publish_replication_frame(uint32_t entity_id,
+                                   uint64_t event_seq,
+                                   uint64_t volatile_seq,
+                                   const std::byte* owner_snapshot, int32_t owner_snapshot_len,
+                                   const std::byte* other_snapshot, int32_t other_snapshot_len,
+                                   const std::byte* owner_delta, int32_t owner_len,
+                                   const std::byte* other_delta, int32_t other_len);
 
     // Entity types
     void register_entity_type(const std::byte* data, int32_t len) override;
@@ -852,15 +953,25 @@ BaseApp                        CellApp                     C# (Cell Script)
   │                               │ space.add_entity()         │
   │                               │ range_list.insert()        │
   │                               │                            │
-  │                               │── NativeApi ──────────────→│
-  │                               │   EntityFactory.Create()   │
-  │                               │   entity.OnCreatedOnCell() │
+  │                               │ compose full restore blob  │
+  │                               │ (space_id/base_entity_id/  │
+  │                               │  position/direction/       │
+  │                               │  on_ground/script_init_data)│
+  │                               │── NativeCallbacks ────────→│
+  │                               │   RestoreEntity(cell_id,   │
+  │                               │    type_id, 0, blob, len)  │
+  │                               │   Deserialize(blob)        │
+  │                               │   OnInit(false)            │
   │                               │                            │
-  │←── CreateCellEntityAck ──────│                            │
-  │   (ok, cell_id, cell_addr)   │                            │
+  │←── CellEntityCreated ────────│                            │
+  │   (base_id, cell_id, addr)   │                            │
   │                               │                            │
   │ base_entity.set_cell(addr,id)│                            │
 ```
+
+约束：
+- `RestoreEntity()` 调用前，CellApp 必须先合成完整初始化 blob；不能传 `null, 0`
+- 这样 C# 实体的 `OnInit(false)` 才能在第一次执行前看到正确的 `space/base/position` 初始态
 
 ### 4.2 客户端移动 → AOI 更新
 
@@ -876,17 +987,28 @@ Client          BaseApp          CellApp (tick)           Other Clients
   │               │                  │ [tick_witnesses()]     │
   │               │                  │ Witness::update()      │
   │               │                  │ → 优先级堆调度          │
-  │               │                  │ → EntityEnter/Leave    │
-  │               │                  │ → ReplicatedDelta      │
-  │               │                  │ → CellEntityPosition   │
+  │               │                  │ → 对每个观察者逐个展开   │
+  │               │                  │   客户端消息 payload     │
+  │               │                  │   (EntityEnter/Leave/    │
+  │               │                  │    EntityPropertyUpdate/ │
+  │               │                  │    EntityPositionUpdate) │
+  │               │                  │ → 以“观察者 base_entity_id”│
+  │               │                  │   为路由键回送 BaseApp   │
+  │               │                  │   SelfRpcFromCell /      │
+  │               │                  │   ReplicatedDeltaFromCell│
+  │               │                  │   (outer msg id = 0xF001 │
+  │               │                  │    on BaseApp path, inner │
+  │               │                  │    payload = CellAoIEnvelope)
   │               │                  │                        │
-  │               │←── 批量消息 ────│                        │
-  │               │ ClientRpcFromCell│                        │
-  │               │ ReplicatedDelta │                        │
-  │               │ EntityEnter     │                        │
+  │               │←── 逐观察者消息 ─│                        │
+  │               │ SelfRpc / ReplicatedDelta│                 │
   │               │                  │                        │
   │               │── 转发到客户端 ──────────────────────────→│
 ```
+
+说明：
+- 这是与当前 `BaseApp` 实现真正闭环的 Phase 10 路径
+- `BroadcastRpcFromCell` 保留为后续优化接口，但当前不应承担“AOI 广播已实现”的设计语义
 
 ---
 
@@ -956,7 +1078,7 @@ tests/unit/test_controllers.cpp
 
 **新增文件:**
 ```
-src/server/CellApp/
+src/server/cellapp/
 ├── space.hpp / .cpp
 ├── cell_entity.hpp / .cpp
 tests/unit/test_space.cpp
@@ -967,14 +1089,14 @@ tests/unit/test_cell_entity.cpp
 - Space 创建/销毁
 - 实体添加/移除
 - 位置设置 → RangeList 更新
-- `set_replicated_dirty()` → `take_pending_deltas()`
+- `publish_replication_frame()` → `replication_state()` 历史窗口轮转
 - 实体销毁 → 从 Space + RangeList 移除
 
 ### Step 10.5: Witness / AOI
 
 **新增文件:**
 ```
-src/server/CellApp/
+src/server/cellapp/
 ├── witness.hpp / .cpp
 ├── aoi_trigger.hpp / .cpp
 tests/unit/test_witness.cpp
@@ -986,7 +1108,10 @@ tests/unit/test_witness.cpp
 - 实体离开 → GONE → 发送 EntityLeave
 - 优先级: 近的实体优先发送
 - 带宽限制: 超出后停止发送，下 tick 继续
-- 实体有 dirty delta → Witness 携带 delta 发送
+- 慢观察者若还在 history 窗口内 → 依序补发 delta
+- 慢观察者若落后超出 history 窗口 → 自动走 snapshot/refresh，不会永久漏包
+- 实体有 dirty delta → Witness 按观察者自己的发送序号决定是否携带 delta
+- `ReplicatedDeltaFromCell` 的 payload 正确编码/解码 `CellAoIEnvelope`
 - Scope 过滤: AllClients vs OwnClient
 - AOI 半径变更 → 重新计算
 - 1000 实体 AOI 性能
@@ -995,7 +1120,7 @@ tests/unit/test_witness.cpp
 
 **新增文件:**
 ```
-src/server/CellApp/cellapp_messages.hpp
+src/server/cellapp/cellapp_messages.hpp
 tests/unit/test_cellapp_messages.cpp
 ```
 
@@ -1003,17 +1128,24 @@ tests/unit/test_cellapp_messages.cpp
 
 **新增/更新文件:**
 ```
-src/server/CellApp/cellapp_native_provider.hpp / .cpp
-src/lib/clrscript/native_api_provider.hpp       (扩展: set_replicated_dirty 等)
-src/lib/clrscript/clr_native_api.hpp / .cpp      (扩展: atlas_set_replicated_dirty 等)
+src/server/cellapp/cellapp_native_provider.hpp / .cpp
+src/lib/clrscript/clr_native_api_defs.hpp       (单一来源，新增 atlas_* 导出)
+src/lib/clrscript/native_api_provider.hpp       (由 defs 自动扩展)
+src/lib/clrscript/base_native_provider.hpp / .cpp
+src/lib/clrscript/clr_native_api.hpp / .cpp     (由 defs 自动扩展)
 ```
 
 新增导出:
 ```cpp
 ATLAS_NATIVE_API void atlas_set_position(uint32_t entity_id,
     float x, float y, float z);
-ATLAS_NATIVE_API void atlas_set_replicated_dirty(uint32_t entity_id,
-    uint8_t scope, const uint8_t* delta, int32_t len);
+ATLAS_NATIVE_API void atlas_publish_replication_frame(uint32_t entity_id,
+    uint64_t event_seq,
+    uint64_t volatile_seq,
+    const uint8_t* owner_snapshot, int32_t owner_snapshot_len,
+    const uint8_t* other_snapshot, int32_t other_snapshot_len,
+    const uint8_t* owner_delta, int32_t owner_len,
+    const uint8_t* other_delta, int32_t other_len);
 ATLAS_NATIVE_API int32_t atlas_add_move_controller(uint32_t entity_id,
     float dest_x, float dest_y, float dest_z, float speed, int user_arg);
 ATLAS_NATIVE_API int32_t atlas_add_timer_controller(uint32_t entity_id,
@@ -1024,11 +1156,15 @@ ATLAS_NATIVE_API void atlas_cancel_controller(uint32_t entity_id,
     int32_t controller_id);
 ```
 
+设计约束：
+- `clr_native_api_defs.hpp` 是导出表的唯一来源；不要只修改单个 provider/header
+- `BaseNativeProvider` 也要同步提供默认 no-op / 报错实现，保证非 CellApp 进程可继续链接
+
 ### Step 10.8: CellApp 进程
 
 **新增文件:**
 ```
-src/server/CellApp/
+src/server/cellapp/
 ├── CMakeLists.txt
 ├── main.cpp
 ├── cellapp.hpp / .cpp
@@ -1044,7 +1180,8 @@ src/server/CellApp/
 6. CellEntityRpc 处理 (客户端 RPC 经 BaseApp 转发)
 7. Controller tick
 8. Witness tick + 消息生成
-9. ClientRpcFromCell / ReplicatedDelta → BaseApp
+9. 首阶段: SelfRpcFromCell / ReplicatedDeltaFromCell → BaseApp
+   优化阶段: BroadcastRpcFromCell → BaseApp
 10. EnableWitness / DisableWitness
 11. Watcher 注册
 
@@ -1052,15 +1189,18 @@ src/server/CellApp/
 
 **更新文件:**
 ```
-src/server/BaseApp/baseapp.hpp / .cpp
+src/server/baseapp/baseapp.hpp / .cpp
 ```
 
 - BaseApp 发送 `CreateCellEntity` → CellApp
-- BaseApp 处理 `CreateCellEntityAck` → `base_entity.set_cell()`
-- BaseApp 转发 `ClientRpcFromCell` → Proxy → Client
-- BaseApp 转发 `ReplicatedDelta` → Proxy → Client
-- BaseApp 转发 `AvatarUpdate` (Client → CellApp)
-- BaseApp 发送 `EnableWitness` / `DisableWitness`
+- BaseApp 处理 `baseapp::CellEntityCreated` / `CellEntityDestroyed` / `CurrentCell`
+- BaseApp 转发 `baseapp::SelfRpcFromCell` / `BroadcastRpcFromCell`
+- BaseApp 转发 `baseapp::ReplicatedDeltaFromCell`（当前代码是 byte-for-byte 透传到客户端）
+- 若保持当前 handler，不修改外层消息 ID，则客户端侧需先消费 `0xF001 + CellAoIEnvelope`
+- 若要直接对接 Phase 12 的 `EntityEnter/Leave/PropertyUpdate/PositionUpdate`，则 BaseApp 必须在这里解包并改发真实客户端消息
+- BaseApp 新增 `AvatarUpdate` (Client → CellApp) / `EnableWitness` / `DisableWitness`
+- 若本阶段保持当前 BaseApp handler 语义不变，则 AOI 下行必须走“CellApp 按观察者逐个回送”的路径；
+  若要真正使用 `BroadcastRpcFromCell(target=other/all)`，则需在本步骤补齐 BaseApp 的多观察者 fan-out
 
 ### Step 10.10: 集成测试
 
@@ -1074,9 +1214,9 @@ tests/integration/test_cellapp_integration.cpp
 2. 客户端登录 → 创建 Proxy → 创建 Cell 实体
 3. EnableWitness → AOI 开始工作
 4. 移动实体 → 其他客户端收到位置更新
-5. 新实体进入 AOI → 客户端收到 EntityEnter
-6. 实体离开 AOI → 客户端收到 EntityLeave
-7. C# 修改 [Replicated] 属性 → 客户端收到 delta
+5. 新实体进入 AOI → 客户端收到 `0xF001(CellAoIEnvelope: EntityEnter)`
+6. 实体离开 AOI → 客户端收到 `0xF001(CellAoIEnvelope: EntityLeave)`
+7. C# 修改 [Replicated] 属性 → 客户端收到 `0xF001(CellAoIEnvelope: EntityPropertyUpdate)`
 8. Controller: MoveToPoint → 实体平滑移动
 9. 1000 实体同空间 → tick 性能测量
 
@@ -1098,7 +1238,7 @@ src/lib/space/
 ├── timer_controller.hpp / .cpp
 └── proximity_controller.hpp / .cpp
 
-src/server/CellApp/
+src/server/cellapp/
 ├── CMakeLists.txt
 ├── main.cpp
 ├── cellapp.hpp / .cpp
@@ -1113,7 +1253,7 @@ src/lib/clrscript/                      (扩展)
 ├── native_api_provider.hpp
 ├── clr_native_api.hpp / .cpp
 
-src/server/BaseApp/                     (扩展)
+src/server/baseapp/                     (扩展)
 ├── baseapp.hpp / .cpp
 
 tests/unit/
@@ -1172,8 +1312,8 @@ Step 10.10: 集成测试               ← 依赖全部
 | `Entity : PyObjectPlus` (~7800 LOC) | `CellEntity` (~500 LOC) | C# 管理属性/逻辑 |
 | `RangeList` 双轴排序链表 | `RangeList` **完全对齐** | 核心算法不变 |
 | `RangeTrigger` + 2D 交叉检测 | `RangeTrigger` **完全对齐** | 滞后老位置 + 先扩后缩 |
-| `Witness` 优先级堆 + 带宽控制 | `Witness` 对齐设计 | delta 来自 C# |
-| `eventHistory` + `PropertyOwnerLink` | `pending_deltas_` (C# DirtyFlags) | **核心简化** |
+| `Witness` 优先级堆 + 带宽控制 | `Witness` 对齐设计 | delta 来自 C#，但 `EntityCache` 仍保留发送进度 |
+| `eventHistory` + `PropertyOwnerLink` | `replication_state_` + `EntityCache.last_*_seq` | **核心简化**，而不是去掉观察者侧状态 |
 | `EntityPopulation` (全局 map) | `entity_population_` (CellApp 成员) | 相同模式 |
 | `Space` + `Cell` 分离 | `Space` = `Cell` (初期) | Phase 11 分离 |
 | `RealEntity` + `Ghost` | 仅 Real (Phase 11 扩展) | 渐进 |
@@ -1202,11 +1342,19 @@ BigWorld 的 RangeList 是经过 15 年 MMO 生产验证的核心算法。其巧
 
 **BigWorld:** C++ 的 `PropertyOwnerLink` 追踪每个属性变更 → `eventHistory` 记录 → Witness 读取 history 生成客户端 delta
 
-**Atlas:** C# Source Generator 生成 `DirtyFlags` → C# `SerializeReplicatedDelta()` 输出 blob → NativeApi 传到 C++ → `CellEntity::pending_deltas_` → Witness 取走发送
+**Atlas（按当前代码约束修正后）:** C# Source Generator 生成 `DirtyFlags`，并需要扩展出
+“owner/other 快照 + owner/other delta” 两套序列化结果，以及对应的 event/volatile 序号
+→ NativeApi 传到 C++ → `CellEntity::replication_state_` 维护“最新快照 + 有界历史” →
+各 `Witness::EntityCache` 自己记录已经发送到哪个序号
 
-优势: C++ 不需要理解属性结构，只传递 blob。
-代价: C++ 无法合并多个 tick 的 delta（C# 每 tick 只产生一个 delta blob）。
-但对于大多数游戏场景，单 tick delta 足够。
+优势: C++ 不需要理解属性结构，只传递面向不同受众的 blob。
+代价: Script Phase 4 需要补齐按受众过滤的“快照 + 增量 + 序号”API；当前仓库只有
+`SerializeReplicatedDelta()` 与全量快照 `SerializeForOwnerClient()` /
+`SerializeForOtherClients()`，不足以直接完成 BigWorld 风格的 AOI 增量同步。
+
+补包规则：
+- 属性事件流必须保持顺序；若缺失中间 delta，则退回 snapshot/refresh
+- volatile 位置流采用 latest-wins；观察者落后时直接发送最新 absolute 位置即可
 
 ### 9.3 位置仍在 C++ 管理
 
@@ -1231,6 +1379,23 @@ C++ 直接读取 position 驱动 RangeList。
 
 `send_client_rpc()` 在两个进程中行为不同:
 - **BaseApp:** 直接发送到 Proxy 的客户端 Channel
-- **CellApp:** 生成 `ClientRpcFromCell` 消息发送到 BaseApp，由 BaseApp Proxy 转发
+- **CellApp:** Phase 10 首阶段按观察者逐个展开，
+  使用观察者 `base_entity_id` 回送 `SelfRpcFromCell` / `ReplicatedDeltaFromCell`；
+  后续如扩展 BaseApp observer fan-out，再把 `BroadcastRpcFromCell` 用作聚合优化
 
 同一个 C# 代码 `entity.Client.ShowDamage()` 在不同进程自动路由到正确路径。
+
+### 9.6 EntityID 分层
+
+当前代码里 `BaseEntity` 已经持有 `cell_entity_id_ + cell_addr_`，说明需要区分：
+- `base_entity_id`: BaseApp / 客户端可见的稳定实体标识
+- `cell_entity_id`: CellApp 内部路由标识，可在未来 offload/重建时变化
+
+因此：
+- CellApp 运行时中的 C# `EntityId` 应与 `cell_entity_id` 对齐，由 C++ 分配后通过
+  `RestoreEntity(cell_entity_id, ...)` 注入脚本层；其高 8 位应复用 `ProcessType::CellApp`
+- CellApp → BaseApp 的创建/销毁/迁移消息可以带 `cell_entity_id`
+- 面向客户端的 AOI/RPC/属性更新 payload 必须携带稳定的可见实体 ID，当前优先使用
+  `base_entity_id`，不能直接泄露 CellApp 局部 ID
+- 若后续引入“纯 Cell、无 Base 对应物”的实体，则需要额外定义稳定的 `public_entity_id`
+  层；在本阶段先把范围限定为“客户端可见实体均有 Base 对应物”

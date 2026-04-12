@@ -2,6 +2,9 @@
 
 > 前置依赖: Phase 10 (CellApp 单机可工作), Phase 9 (BaseAppMgr)
 > BigWorld 参考: `server/cellapp/real_entity.hpp`, `server/cellapp/entity_ghost_maintainer.cpp`, `server/cellappmgr/`
+> 当前代码基线 (2026-04-12): 仓库里还没有 `CellApp` / `CellAppMgr` 实现；当前内部进程通信基线是
+> `EntityApp` / `ManagerApp` 共享的 `RUDP`。因此本阶段文档中的 inter-CellApp / CellAppMgr 通道
+> 应默认建立在现有内部 `RUDP` 基线之上，而不是另起一套 TCP 专用控制面。
 
 ---
 
@@ -60,9 +63,9 @@
 |------|-----------|------|
 | **Real/Ghost 标识** | 对齐 BigWorld: `real_data_` + `real_channel_` 互斥 | 清晰且高效 |
 | **Haunt** | 对齐 BigWorld: Real 持有 Haunt 列表 | 拉模型已验证 |
-| **Ghost 同步** | 位置: `GhostPositionUpdate`; 属性: `GhostDelta` (C# blob) | 属性 delta 来自 C# |
+| **Ghost 同步** | 位置: `GhostPositionUpdate`; 属性: `GhostDelta` (C# blob + 序号) | 属性 delta 来自 C# |
 | **Offload** | 对齐 BigWorld: 序列化 → 传输 → 反序列化 | 标准做法 |
-| **CellAppChannel** | 复用 Atlas TCP Channel + 批量发送 | TCP 替代 UDP |
+| **CellAppChannel** | 复用 Atlas 内部 `RUDP` channel + 批量/多消息发送 | 与当前内部通信基线一致 |
 | **BSP 树** | 对齐 BigWorld: 交替分割 + 负载均衡 | 简化：初期不实现 EntityBoundLevels |
 | **负载均衡** | 简化版: 比较左右负载 + 移动分割线 + aggression | 去掉多级 entity bounds |
 | **Ghost 创建** | 对齐 BigWorld 拉模型: GhostMaintainer | 核心机制不变 |
@@ -82,15 +85,16 @@ Ghost Entity: Python 实例 + 部分属性 (ghosted data)
 ```
 Real Entity: C# 实例 (GCHandle) + C++ CellEntity
 Ghost Entity: C++ GhostEntity ONLY (无 C# 实例)
-  → Ghost 只存储位置 + [AllClients] 属性 blob
+  → Ghost 只存储位置 + `[AllClients]` 快照/增量 blob + 最新复制序号
+  → Witness 仍按每观察者 `EntityCache.last_event_seq / last_volatile_seq` 决定发送什么
   → Ghost 的属性 blob 由 Real 广播过来，原样转发给 Witness
 ```
 
 **关键简化:**
 - BigWorld 的 Ghost 有完整的 Python 对象，可以访问属性
 - Atlas 的 Ghost **没有 C# 实例**，只是一个 C++ 数据容器
-- Ghost 存储: 位置/方向 + 最新的 `[AllClients]` 属性 blob
-- Witness 看到 Ghost 时，发送 Ghost 缓存的 blob 给客户端
+- Ghost 存储: 位置/方向 + 最新的 `[AllClients]` 快照/增量 blob + 复制序号
+- Witness 看到 Ghost 时，依然按照“每观察者自己的发送进度”决定发送 Ghost 缓存的 blob 给客户端
 - 这避免了为每个 Ghost 创建 C# 对象的 GC 压力
 
 ---
@@ -104,7 +108,7 @@ Ghost Entity: C++ GhostEntity ONLY (无 C# 实例)
 | `CreateGhost` | 3100 | Real CellApp → Ghost CellApp | 创建 Ghost 副本 |
 | `DeleteGhost` | 3101 | Real CellApp → Ghost CellApp | 删除 Ghost |
 | `GhostPositionUpdate` | 3102 | Real → Ghost | 位置/方向 volatile 更新 |
-| `GhostDelta` | 3103 | Real → Ghost | `[AllClients]` 属性增量 blob |
+| `GhostDelta` | 3103 | Real → Ghost | `[AllClients]` 属性增量 blob（复用 Phase 10 的受众过滤快照/增量/序号扩展） |
 | `GhostSetReal` | 3104 | 新 Real → Ghost | Offload 后通知新 Real 地址 |
 | `GhostSetNextReal` | 3105 | 旧 Real → Ghost | Offload 前通知即将迁移 |
 
@@ -114,7 +118,7 @@ Ghost Entity: C++ GhostEntity ONLY (无 C# 实例)
 |------|-----|------|------|
 | `OffloadEntity` | 3110 | 旧 CellApp → 新 CellApp | 传输完整 Real 数据 |
 | `OffloadEntityAck` | 3111 | 新 CellApp → 旧 CellApp | 确认接收 |
-| `CurrentCell` | 3112 | 新 CellApp → BaseApp | 通知 Base 新的 Cell 地址 |
+| `baseapp::CurrentCell` | 2012 | 新 CellApp → BaseApp | 复用现有 BaseApp 入站消息，通知 Base 新的 Cell 地址 |
 
 ### 2.3 CellAppMgr 消息
 
@@ -161,7 +165,7 @@ struct GhostPositionUpdate {
 
 struct GhostDelta {
     EntityID ghost_entity_id;
-    std::vector<std::byte> delta;  // C# SerializeReplicatedDelta() 输出
+    std::vector<std::byte> delta;  // `[AllClients]` 定向 delta，依赖 Phase 10 的脚本层扩展
 
     static auto descriptor() -> const MessageDesc& { /*...*/ }
     // ...
@@ -199,7 +203,7 @@ struct OffloadEntity {
 Phase 10 的 `CellEntity` 扩展为支持 Real 和 Ghost：
 
 ```cpp
-// src/server/CellApp/cell_entity.hpp (扩展)
+// src/server/cellapp/cell_entity.hpp (扩展)
 namespace atlas {
 
 class CellEntity {
@@ -246,7 +250,7 @@ private:
 ### 3.2 RealEntityData — Real 实体扩展数据
 
 ```cpp
-// src/server/CellApp/real_entity_data.hpp
+// src/server/cellapp/real_entity_data.hpp
 namespace atlas {
 
 class RealEntityData {
@@ -305,7 +309,7 @@ private:
 ### 3.3 GhostMaintainer — Ghost 生命周期管理
 
 ```cpp
-// src/server/CellApp/ghost_maintainer.hpp
+// src/server/cellapp/ghost_maintainer.hpp
 namespace atlas {
 
 class GhostMaintainer {
@@ -377,7 +381,7 @@ check_entity(entity):
 ### 3.4 OffloadChecker — 实体迁移检测
 
 ```cpp
-// src/server/CellApp/offload_checker.hpp
+// src/server/cellapp/offload_checker.hpp
 namespace atlas {
 
 class OffloadChecker {
@@ -469,7 +473,7 @@ Step 10: CellApp B 运行 GhostMaintainer
 Phase 10 中 Space = Cell (单 CellApp)。Phase 11 分离：
 
 ```cpp
-// src/server/CellApp/cell.hpp
+// src/server/cellapp/cell.hpp
 namespace atlas {
 
 struct CellBounds {
@@ -512,7 +516,7 @@ private:
 ### 3.7 BSP 树
 
 ```cpp
-// src/server/CellAppMgr/bsp_tree.hpp
+// src/server/cellappmgr/bsp_tree.hpp
 namespace atlas {
 
 using CellID = uint32_t;
@@ -662,7 +666,7 @@ void BSPInternal::balance(float safety_bound) {
 ### 3.8 CellAppMgr 进程
 
 ```cpp
-// src/server/CellAppMgr/cellappmgr.hpp
+// src/server/cellappmgr/cellappmgr.hpp
 namespace atlas {
 
 class CellAppMgr : public ManagerApp {
@@ -756,8 +760,8 @@ CellApp B (新 Real):
 
 **更新文件:**
 ```
-src/server/CellApp/cell_entity.hpp / .cpp     (扩展 Real/Ghost 字段)
-src/server/CellApp/real_entity_data.hpp / .cpp (新增)
+src/server/cellapp/cell_entity.hpp / .cpp      (扩展 Real/Ghost 字段)
+src/server/cellapp/real_entity_data.hpp / .cpp (新增)
 tests/unit/test_real_ghost.cpp
 ```
 
@@ -774,7 +778,7 @@ tests/unit/test_real_ghost.cpp
 
 **新增文件:**
 ```
-src/server/CellApp/intercell_messages.hpp
+src/server/cellapp/intercell_messages.hpp
 tests/unit/test_intercell_messages.cpp
 ```
 
@@ -782,7 +786,7 @@ tests/unit/test_intercell_messages.cpp
 
 **新增文件:**
 ```
-src/server/CellApp/cell.hpp / .cpp
+src/server/cellapp/cell.hpp / .cpp
 tests/unit/test_cell.cpp
 ```
 
@@ -790,7 +794,7 @@ tests/unit/test_cell.cpp
 
 **新增文件:**
 ```
-src/server/CellApp/ghost_maintainer.hpp / .cpp
+src/server/cellapp/ghost_maintainer.hpp / .cpp
 tests/unit/test_ghost_maintainer.cpp
 ```
 
@@ -805,7 +809,7 @@ tests/unit/test_ghost_maintainer.cpp
 
 **新增文件:**
 ```
-src/server/CellApp/offload_checker.hpp / .cpp
+src/server/cellapp/offload_checker.hpp / .cpp
 tests/unit/test_offload.cpp
 ```
 
@@ -820,7 +824,7 @@ tests/unit/test_offload.cpp
 
 **新增文件:**
 ```
-src/server/CellAppMgr/bsp_tree.hpp / .cpp
+src/server/cellappmgr/bsp_tree.hpp / .cpp
 tests/unit/test_bsp_tree.cpp
 ```
 
@@ -836,7 +840,7 @@ tests/unit/test_bsp_tree.cpp
 
 **新增文件:**
 ```
-src/server/CellAppMgr/cellappmgr_messages.hpp
+src/server/cellappmgr/cellappmgr_messages.hpp
 tests/unit/test_cellappmgr_messages.cpp
 ```
 
@@ -844,7 +848,7 @@ tests/unit/test_cellappmgr_messages.cpp
 
 **新增文件:**
 ```
-src/server/CellAppMgr/
+src/server/cellappmgr/
 ├── CMakeLists.txt
 ├── main.cpp
 ├── cellappmgr.hpp / .cpp
@@ -866,8 +870,8 @@ src/server/CellAppMgr/
 
 **更新文件:**
 ```
-src/server/CellApp/cellapp.hpp / .cpp
-src/server/CellApp/space.hpp / .cpp
+src/server/cellapp/cellapp.hpp / .cpp
+src/server/cellapp/space.hpp / .cpp
 ```
 
 - Space 持有 Cell + BSP 树 (从 CellAppMgr 接收)
@@ -917,7 +921,7 @@ tests/integration/test_distributed_space.cpp
 ## 6. 文件清单汇总
 
 ```
-src/server/CellApp/                    (扩展 + 新增)
+src/server/cellapp/                    (扩展 + 新增)
 ├── cell_entity.hpp / .cpp              (扩展: Real/Ghost)
 ├── real_entity_data.hpp / .cpp         (新增)
 ├── cell.hpp / .cpp                     (新增)
@@ -927,7 +931,7 @@ src/server/CellApp/                    (扩展 + 新增)
 ├── cellapp.hpp / .cpp                  (扩展)
 ├── space.hpp / .cpp                    (扩展)
 
-src/server/CellAppMgr/                 (新增)
+src/server/cellappmgr/                 (新增)
 ├── CMakeLists.txt
 ├── main.cpp
 ├── cellappmgr.hpp / .cpp
@@ -993,13 +997,13 @@ Step 11.11: 集成测试                  ← 依赖全部
 | `Haunt` (Channel + time) | `Haunt` (Channel + time) | 一致 |
 | `EntityGhostMaintainer` 拉模型 | `GhostMaintainer` 拉模型 | 算法一致 |
 | `ghostDistance + appealRadius + GHOST_FUDGE` | `ghost_distance + hysteresis` | 简化配置 |
-| `ghostPositionUpdate` + `ghostHistoryEvent` | `GhostPositionUpdate` + `GhostDelta` | Atlas delta 来自 C# blob |
+| `ghostPositionUpdate` + `ghostHistoryEvent` | `GhostPositionUpdate` + `GhostDelta` | Atlas delta 来自 C# blob + 复制序号 |
 | `convertRealToGhost()` 保留 Python 对象 | `convert_real_to_ghost()` 释放 C# | C# 实例不跨进程 |
 | `convertGhostToReal()` 已有 Python 对象 | `convert_ghost_to_real()` 反序列化新 C# | 需完整反序列化 |
 | BSP InternalNode + CellData | BSPInternal + BSPLeaf | 结构一致 |
 | EntityBoundLevels (多级追踪) | 简化: 直接按负载差移动 | 去掉多级复杂度 |
 | Aggression 阻尼 (0.9/1.1) | Aggression 阻尼 (0.9/1.1) | 一致 |
-| `CellAppChannel` (UDP + 批量 flush) | TCP Channel + tick flush | TCP 替代 UDP |
+| `CellAppChannel` (UDP + 批量 flush) | RUDP channel + tick flush | Atlas 沿用现有内部可靠 UDP 基线 |
 | `forwardedBaseEntityPacket()` | Ghost 转发到 Real | 一致模式 |
 | Ghost Controller (GHOST_ONLY domain) | Ghost 无 Controller | Atlas 简化 |
 | `ghostSetNextReal` + `ghostSetReal` | 一致 | 防消息乱序 |
@@ -1044,13 +1048,20 @@ Atlas 初期用简单公式: `move = load_diff * 0.1 * aggression`。
 
 足够实现基本负载均衡。如果需要更精细控制，可后续加入 EntityBoundLevels。
 
-### 9.4 Inter-CellApp 通信用 TCP
+### 9.4 Inter-CellApp 通信用 RUDP
 
-**决策: 复用 Atlas 现有 TCP Channel。**
+**决策: 复用 Atlas 现有内部 RUDP channel。**
 
 BigWorld 用专用 UDP CellAppChannel + 定时器 flush。
-Atlas 的 TCP Channel 自带帧边界和可靠性，性能在进程数 < 100 时足够。
-Ghost 位置更新频率受 tick 频率限制（10-20Hz），TCP 不是瓶颈。
+Atlas 当前服务进程之间已经统一跑在 `NetworkInterface::start_rudp_server()` /
+`connect_rudp_nocwnd()` 这一套内部可靠 UDP 基线上。Phase 11 不应再单独引入一套 TCP-only
+控制面，否则会让 BaseApp / CellApp / Manager 的内部通信模型再次分裂。
+
+工程约束:
+
+- inter-CellApp 与 CellAppMgr 通信优先复用现有内部 `RUDP`
+- 仍可按 tick 进行 bundle/flush，模拟 BigWorld `CellAppChannel` 的批量发送语义
+- 若后续压测证明大包重传或 head-of-line 行为不可接受，再单独评估新 lane / 新承载，而不是先文档分叉
 
 ### 9.5 初期不实现的功能
 

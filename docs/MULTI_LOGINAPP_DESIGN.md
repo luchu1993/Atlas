@@ -3,27 +3,41 @@
 > 日期: 2026-04-12
 > 状态: 修订草案
 > 适用范围: Atlas 多 LoginApp 扩展
-> 说明: 本文档是 `LoginAppMgr` 详细设计的 source of truth。若与 `docs/roadmap/phase09_login_flow.md`
-> 的早期占位描述冲突，以本文为准。
+> 说明: 本文档是多 `LoginApp` / `LoginAppMgr` 的**目标设计草案**，不是当前仓库实现快照。
+> 当前代码仍以 [phase09_login_flow.md](./roadmap/phase09_login_flow.md) 中描述的
+> “单 `LoginApp` 直接对外”链路为准；若与当前实现冲突，以 Phase 9 文档为准。
 
 ## 1. 设计结论
 
 本次修订后的核心结论如下:
 
-- `LoginAppMgr` 是**内部控制面**，不直接对客户端开放。
-- 客户端入口保持为 `LoginApp` 的外部监听地址，由 **L4 LB / DNS RR / K8s Service** 做入口分发。
-- `LoginAppMgr` 的首要职责是:
-  - 管理 `LoginApp` 实例注册与健康状态
-  - 提供**全局用户名 claim**，保证同一用户名在全集群只有一个活跃登录流程
-  - 聚合 `LoginApp` 负载与可观测性，为后续 admission / queue 能力预留扩展点
-- 生产环境默认采用 **fail-closed** 策略:
-  - `LoginAppMgr` 不可用时，新的登录请求返回 `ServerNotReady`
-  - 不允许自动回退到“多实例下仅本地去重”的模式
-- 客户端可见的**全局排队系统**不纳入本期 MVP。该能力只有在具备 ticket/resume 语义、
-  幂等入队协议和高可用控制面之后才进入下一阶段。
+- 首个多 `LoginApp` 版本建议优先采用 **`Client -> LoginAppMgr -> LoginApp`** 的入口模式。
+- `LoginAppMgr` 同时承担两类职责:
+  - **外部入口网关**: 接收客户端 `ResolveLoginApp`
+  - **内部协调器**: 管理 `LoginApp` 注册、全局用户名 claim/release、负载聚合
+- 未来正式线上项目允许切换到 **`Client -> LB -> LoginApp`** 模式。
+- 为了支持未来切换，协议和代码必须从第一天起保留**双模式 ingress 扩展点**:
+  - 当前模式: `CoordinatorIngress`
+  - 未来模式: `LBIngress`
+- 无论入口模式如何切换，`LoginAppMgr` 都继续保留，负责内部协调，不会被删除。
+- 当前阶段不实现客户端可见全局排队；先把入口选路、route token、全局 claim 和故障语义做正确。
 
-这份设计的目标不是“最少改动”，而是以工业级约束为前提，给出一个可以稳定上线、可演进、
-可运维的实现边界。
+这份设计的目标不是最省代码，而是先把“首个多 LoginApp 版本可上线的入口方案”与“未来可平滑切到 LB 的扩展点”
+一起设计好，避免下一轮推翻协议。
+
+## 1.1 当前代码基线
+
+截至 2026-04-12，仓库当前已落地的仍然是:
+
+- 客户端直接连接 `LoginApp`
+- `LoginApp` 直接处理 `LoginRequest`
+- `LoginAppMgr` 尚未实现
+- `ResolveLoginApp` / `route_token` / 全局 username claim 尚未进入当前 wire contract
+
+因此本文后续所有“当前阶段”表述，都应理解为:
+
+- **首个多 LoginApp 实现阶段的目标设计**
+- 不是当前 `main` 分支已经存在的行为
 
 ## 2. 背景与约束
 
@@ -40,154 +54,281 @@
 - 用户名去重只在本地实例内有效
 - 登录 admission 只能做局部判断
 
-但工业级实现还必须满足以下非功能约束:
+当前阶段的新增目标是:
 
-- **公网入口和内部控制面隔离**
-- **故障时语义明确**
-- **协议幂等、可校验所有权**
-- **文档与现有代码模式对齐**
+- 引入多个 `LoginApp`
+- 由 `LoginAppMgr` 统一暴露登录入口
+- 在全集群内保证用户名登录流程互斥
+- 未来切到 `LB` 时，尽量不改动登录主协议和 `LoginApp` 核心状态机
+
+工业级实现仍需满足这些约束:
+
+- 外部入口协议和内部控制面协议必须隔离
+- 语义必须明确到故障场景
+- claim/release 必须具备 owner 校验和幂等语义
+- 当前入口方案不能把未来 `LB` 迁移路径堵死
 
 ## 3. 总体架构
 
-### 3.1 拓扑
+### 3.1 当前阶段拓扑: CoordinatorIngress
 
 ```text
-                      Public / Internet
-                              |
-                    +-------------------+
-                    |  L4 LB / DNS RR   |
-                    +---------+---------+
-                              |
-          +-------------------+-------------------+
-          |                   |                   |
-   +------v------+     +------v------+     +------v------+
-   | LoginApp-1  |     | LoginApp-2  | ... | LoginApp-N  |
-   | ext + int   |     | ext + int   |     | ext + int   |
-   +------+------+     +------+------+     +------+------+
-          |                   |                   |
-          +-------------------+-------------------+
-                              |
-                    +---------v---------+
-                    |   LoginAppMgr     |
-                    | internal only     |
-                    | claim + registry  |
-                    +---------+---------+
-                              |
-               +--------------+--------------+
-               |                             |
-        +------v------+               +------v------+
-        |   DBApp     |               | BaseAppMgr  |
-        +-------------+               +-------------+
+                       Public / Internet
+                               |
+                       +-------v--------+
+                       |  LoginAppMgr   |
+                       | ext + int      |
+                       | ingress +      |
+                       | coordinator    |
+                       +-------+--------+
+                               |
+             +-----------------+-----------------+
+             |                 |                 |
+      +------v------+   +------v------+   +------v------+
+      | LoginApp-1  |   | LoginApp-2  |   | LoginApp-N  |
+      | internal    |   | internal    |   | internal    |
+      +------+------+   +------+------+   +------+------+
+             |                 |                 |
+             +-----------------+-----------------+
+                               |
+                    +----------+----------+
+                    |                     |
+             +------v------+       +------v------+
+             |   DBApp     |       | BaseAppMgr  |
+             +-------------+       +-------------+
 ```
 
-### 3.2 边界定义
+### 3.2 未来拓扑: LBIngress
 
-- 客户端**只**连接 `LoginApp` 的外部地址。
-- 客户端**不会**连接 `machined`。
-- 客户端**不会**连接 `LoginAppMgr`。
-- `LoginAppMgr` 只通过集群内部 `RUDP` 与各 `LoginApp` 通信。
-- `machined` 只负责服务发现和 Birth/Death 通知，不承担客户端服务发现职责。
+```text
+                       Public / Internet
+                               |
+                    +----------v----------+
+                    |   L4 UDP LB / VIP   |
+                    +----------+----------+
+                               |
+         +---------------------+---------------------+
+         |                     |                     |
+  +------v------+       +------v------+       +------v------+
+  | LoginApp-1  |       | LoginApp-2  |       | LoginApp-N  |
+  | ext + int   |       | ext + int   |       | ext + int   |
+  +------+------+       +------+------+       +------+------+
+         |                     |                     |
+         +---------------------+---------------------+
+                               |
+                    +----------v----------+
+                    |    LoginAppMgr      |
+                    |   internal only     |
+                    +----------+----------+
+                               |
+                    +----------+----------+
+                    |                     |
+             +------v------+       +------v------+
+             |   DBApp     |       | BaseAppMgr  |
+             +-------------+       +-------------+
+```
 
-### 3.3 为什么这样设计
+### 3.3 架构决策
 
-这套拓扑有几个直接收益:
+当前阶段选择 `CoordinatorIngress` 的原因:
 
-- 避免把 manager 进程变成公网入口和新的容量瓶颈
-- 复用现有 `LoginApp` 的外部 RUDP 监听、断开回调、超时和消息处理模型
-- 让 `LoginAppMgr` 保持和 `BaseAppMgr` 相同的“控制面”定位
-- 方便后续接入标准基础设施: Nginx stream、Envoy、K8s Service、SLB、Anycast 等
+- 便于在 Atlas 内部自洽地完成多 `LoginApp` 入口调度
+- 当前不依赖额外基础设施即可验证多实例方案
+- 可以把入口选择和全局 claim 一起收敛在同一个 manager 中
 
-## 4. 非目标
+但本文同时要求:
 
-本期不做以下事情:
+- `LoginAppMgr` 的**入口功能**与**协调功能**在实现上分层
+- 将来切到 `LBIngress` 时，只禁用入口层，不重写 claim 协调层
 
-- 不做 `Client -> LoginAppMgr -> LoginApp` 的两段式跳转
-- 不做 `LoginAppMgr` 透明代理客户端流量
-- 不做无状态、无 token 的客户端排队
-- 不在生产模式下支持 `LoginAppMgr` 故障时自动退化到多实例本地去重
+## 4. 模式与边界
 
-这些方案要么与现有 Atlas 实现风格冲突，要么在一致性与运维上不达工业级标准。
+### 4.1 Ingress 模式
 
-## 5. 生产模式与降级策略
+新增配置:
+
+```text
+login_ingress_mode = coordinator | lb
+```
+
+语义如下:
+
+- `coordinator`
+  - 当前阶段默认
+  - 客户端先连 `LoginAppMgr`
+  - `LoginAppMgr` 返回目标 `LoginApp` 地址和 `route_token`
+- `lb`
+  - 未来线上模式
+  - 客户端直接连外部 `LB` 或统一入口
+  - `LoginAppMgr` 不再承担客户端入口，但继续承担 claim 协调
+
+### 4.2 `route_token` 兼容策略
+
+为了支持未来切换，`LoginRequest` 中新增可选字段 `route_token`。
+
+模式行为:
+
+- `coordinator` 模式:
+  - `route_token` 必须存在且合法
+- `lb` 模式:
+  - `route_token` 可为空
+  - 若存在，可做兼容校验；若为空，直接进入 claim
+
+这意味着:
+
+- 当前客户端可以走两段式
+- 未来切到 `LB` 后，客户端协议不必整体推翻
+
+### 4.3 外部入口与内部控制面的隔离
+
+即使当前让 `LoginAppMgr` 对外暴露入口，也必须保持两张网络面:
+
+- `internal network`
+  - `ManagerApp` 负责
+  - 用于 `RegisterLoginApp`、`ClaimUsername` 等控制消息
+- `external network`
+  - `LoginAppMgr` 自己维护
+  - 只处理客户端 `ResolveLoginApp`
+
+明确禁止:
+
+- 客户端直接向 `LoginAppMgr` 发送内部 claim/control-plane 消息
+- `LoginApp` 从外部网络接收 coordinator 内部协议
+
+## 5. 生产模式与故障语义
 
 ### 5.1 模式定义
 
-引入两种明确模式:
+新增配置:
 
-- `coordinator_required = true`:
-  - 生产默认
-  - 多 `LoginApp` 部署必须启用
-  - `LoginAppMgr` 不健康时拒绝新登录
-- `coordinator_required = false`:
-  - 仅限开发 / 单机 / 集成测试
-  - 仅允许**单 LoginApp 实例**部署
-  - 可回退到本地用户名去重
+```text
+coordinator_required = true | false
+require_route_token = true | false
+```
 
-文档明确禁止在“多 `LoginApp` + `coordinator_required = false`”组合下上线生产。
+推荐组合:
+
+- 当前阶段生产验证:
+  - `login_ingress_mode = coordinator`
+  - `coordinator_required = true`
+  - `require_route_token = true`
+- 未来 LB 模式:
+  - `login_ingress_mode = lb`
+  - `coordinator_required = true`
+  - `require_route_token = false`
 
 ### 5.2 故障语义
 
-| 场景 | 生产策略 |
-|------|---------|
-| `LoginApp` 崩溃 | 由 LB 摘除，客户端重试到其他实例 |
-| `LoginAppMgr` 崩溃/网络分区 | 所有 `LoginApp` 停止接收新登录，返回 `ServerNotReady` |
-| `LoginAppMgr` 重启恢复 | `LoginApp` 重新注册，之后恢复接单；**不 replay 旧 claim** |
-| `LoginApp` 与 `LoginAppMgr` 间 channel 断开 | 当前进行中的 pending login 立即失败并清理 |
+| 场景 | 当前阶段策略 |
+|------|--------------|
+| `LoginApp` 崩溃 | `LoginAppMgr` 不再给它分配新 route；客户端重新 `ResolveLoginApp` |
+| `LoginAppMgr` 崩溃/网络分区 | 新登录不可用；客户端无法 resolve；进行中的登录 fail-closed |
+| 客户端拿到 `route_token` 后目标 `LoginApp` 下线 | 客户端重新 `ResolveLoginApp` |
+| `LoginApp` 与 `LoginAppMgr` 的内部 channel 断开 | 当前 pending login 立即失败并清理 |
+| `LoginAppMgr` 重启恢复 | 各 `LoginApp` 重新注册；旧 route token/claim 全部失效 |
 
 关键原则:
 
-- 生产模式下，宁可短时间拒绝新登录，也不能在多实例之间放弃全局 claim 语义。
-- `LoginAppMgr` 重启后不尝试“盲目重放”旧 pending 状态，因为这会引入 app_id /
-  registration epoch / lease 竞态。
+- 当前阶段承认 `LoginAppMgr` 是入口单点。
+- 生产模式下绝不自动退化到“多实例本地去重”。
+- manager 重启后不 replay 旧 claim，避免引入 epoch/lease 竞态。
 
 ## 6. LoginAppMgr 职责
 
-`LoginAppMgr` 在 MVP 中只承担三类职责:
+### 6.1 当前阶段职责
+
+`LoginAppMgr` 负责五类事情:
 
 1. `LoginApp` 注册与健康状态跟踪
-2. 全局用户名 claim / release
-3. 负载聚合与 watcher 暴露
+2. 对外处理 `ResolveLoginApp`
+3. 管理短期 `route_token`
+4. 管理全局用户名 claim/release
+5. 聚合 `LoginApp` 负载并暴露 watcher
 
-它**不负责**:
+### 6.2 非职责
 
-- 给客户端返回目标 `LoginApp` 地址
-- 参与认证、数据库查询、BaseApp 分配、PrepareLogin
-- 直接维护客户端连接生命周期
+`LoginAppMgr` 仍然不负责:
 
-## 7. 协议设计
+- 登录认证
+- 数据库查询
+- BaseApp 分配
+- PrepareLogin
+- 代理客户端完整登录流量
 
-### 7.1 Message ID 范围
+它只负责**选择目标 LoginApp**，然后让客户端与该 `LoginApp` 直连。
+
+## 7. 登录流程设计
+
+### 7.1 正常路径
+
+```text
+Client        LoginAppMgr        LoginApp-X        DBApp     BaseAppMgr   BaseApp
+  |                |                 |               |           |           |
+  |- Resolve ----->|                 |               |           |           |
+  |                |- select app --> |               |           |           |
+  |<- route_token -|                 |               |           |           |
+  |                |                 |               |           |           |
+  |--- LoginRequest(route_token) --->|               |           |           |
+  |                |                 |- ClaimUser -->|           |           |
+  |                |                 |<- Granted ----|           |           |
+  |                |                 |- AuthLogin -------------->|           |
+  |                |                 |<---- AuthLoginResult -----|           |
+  |                |                 |- AllocateBase ----------------------->|
+  |                |                 |<---------------- AllocateResult ------|
+  |                |                 |- PrepareLogin ------------------------------>|
+  |                |                 |<-------------------------- PrepareResult ----|
+  |                |                 |- ReleaseUser ->|         |                  |
+  |<--------------- LoginResult -----|               |         |                  |
+```
+
+### 7.2 关键语义
+
+流程被拆成两个阶段:
+
+1. `ResolveLoginApp`
+  - 只分配一个**短期路由租约**
+  - 不代表该用户名已经获得全局登录权
+2. `ClaimUsername`
+  - 由目标 `LoginApp` 在收到 `LoginRequest` 后发起
+  - 只有 claim 成功，登录流程才正式开始
+
+这样拆分的意义:
+
+- 客户端只拿地址但不继续登录时，不会直接污染全局 claim
+- 目标 `LoginApp` 仍然是登录状态机的 owner
+- 未来切到 `LB` 时，可以删掉 `Resolve`，保留 claim
+
+## 8. 协议设计
+
+### 8.1 Message ID 范围
 
 在 `src/lib/network/message_ids.hpp` 中新增:
 
 ```cpp
-// 9000 - 9099  LoginAppMgr (internal control-plane only)
+// 9000 - 9099  LoginAppMgr
 enum class LoginAppMgr : uint16_t
 {
     RegisterLoginApp      = 9000,
     RegisterLoginAppAck   = 9001,
     LoginAppReady         = 9002,
     InformLoginLoad       = 9003,
+
     ClaimUsername         = 9004,
     ClaimUsernameResult   = 9005,
     RenewUsernameClaim    = 9006,
     ReleaseUsername       = 9007,
 
-    // Reserved for future admission / queue / HA sync
-    AdmissionQuery        = 9010,
-    AdmissionResult       = 9011,
-    QueueEnqueue          = 9020,
-    QueueEnqueueResult    = 9021,
-    QueueCancel           = 9022,
+    ResolveLoginApp       = 9010,
+    ResolveLoginAppResult = 9011,
 };
 ```
 
 说明:
 
-- `9010+` 仅预留，不属于当前实现范围。
-- 本期移除原先 `ResolveLoginApp` / `ResolveLoginAppResult` 的客户端入口设计。
+- `9010+` 当前属于外部入口协议
+- 将来切到 `LB` 模式后，这部分协议可以保留兼容，但不再是主路径
 
-### 7.2 Register / load 协议
+### 8.2 Register / load 协议
 
 新增文件: `src/server/loginappmgr/loginappmgr_messages.hpp`
 
@@ -198,13 +339,50 @@ enum class LoginAppMgr : uint16_t
 | 9002 | `LoginAppReady` | LoginApp -> Mgr | `app_id`, `registration_epoch` |
 | 9003 | `InformLoginLoad` | LoginApp -> Mgr | `app_id`, `registration_epoch`, `load`, `pending_count`, `rate_limited_count` |
 
-`registration_epoch` 是本次注册会话的逻辑代次，用于防止:
+`registration_epoch` 是本次注册会话代次，用于防止:
 
 - 旧 channel 上的延迟包污染新状态
-- `LoginAppMgr` 重启后错误接受旧实例消息
-- `LoginApp` 重连后旧会话消息误删新会话 claim
+- manager 重启后错误接受旧实例消息
+- 旧会话的 release/renew 误删新会话 claim
 
-### 7.3 Claim 协议
+### 8.3 外部入口协议
+
+#### ResolveLoginApp
+
+```cpp
+struct ResolveLoginApp
+{
+    uint32_t protocol_version{0};
+    std::string client_version;
+};
+```
+
+#### ResolveStatus
+
+```cpp
+enum class ResolveStatus : uint8_t
+{
+    Success = 0,
+    NoLoginApp = 1,
+    ServerBusy = 2,
+    ServerNotReady = 3,
+};
+```
+
+#### ResolveLoginAppResult
+
+```cpp
+struct ResolveLoginAppResult
+{
+    ResolveStatus status{ResolveStatus::ServerNotReady};
+    Address loginapp_addr;
+    uint64_t route_token{0};
+    uint32_t route_ttl_ms{0};
+    uint32_t retry_after_ms{0};
+};
+```
+
+### 8.4 Claim 协议
 
 #### ClaimUsername
 
@@ -215,18 +393,21 @@ struct ClaimUsername
     uint64_t registration_epoch{0};
     uint32_t request_id{0};
     std::string username;
+    uint64_t route_token{0};
 };
 ```
 
-#### ClaimUsernameResultStatus
+#### ClaimUsernameStatus
 
 ```cpp
 enum class ClaimUsernameStatus : uint8_t
 {
     Granted = 0,
     AlreadyClaimed = 1,
-    CoordinatorUnavailable = 2,
-    InvalidRegistration = 3,
+    InvalidRoute = 2,
+    ExpiredRoute = 3,
+    InvalidRegistration = 4,
+    CoordinatorUnavailable = 5,
 };
 ```
 
@@ -237,8 +418,8 @@ struct ClaimUsernameResult
 {
     uint32_t request_id{0};
     ClaimUsernameStatus status{ClaimUsernameStatus::CoordinatorUnavailable};
-    uint64_t lease_id{0};
-    uint32_t lease_ttl_ms{0};
+    uint64_t claim_lease_id{0};
+    uint32_t claim_ttl_ms{0};
 };
 ```
 
@@ -251,7 +432,7 @@ struct RenewUsernameClaim
     uint64_t registration_epoch{0};
     uint32_t request_id{0};
     std::string username;
-    uint64_t lease_id{0};
+    uint64_t claim_lease_id{0};
 };
 ```
 
@@ -273,29 +454,116 @@ struct ReleaseUsername
     uint64_t registration_epoch{0};
     uint32_t request_id{0};
     std::string username;
-    uint64_t lease_id{0};
+    uint64_t claim_lease_id{0};
     ReleaseReason reason{ReleaseReason::Failed};
 };
 ```
 
-### 7.4 协议约束
+## 9. Route token 设计
+
+### 9.1 设计目标
+
+`route_token` 是当前 `CoordinatorIngress` 模式下的短期路由租约。
+
+它的用途不是认证，而是:
+
+- 证明客户端确实经过 `LoginAppMgr` 选路
+- 约束该请求只能打到指定 `LoginApp`
+- 避免客户端绕过 coordinator 随机命中任意 LoginApp
+
+### 9.2 当前阶段实现
+
+当前阶段使用**状态型 opaque token**，不做无状态签名票据。
+
+建议结构:
+
+```cpp
+struct RouteLeaseEntry
+{
+    uint64_t route_token{0};
+    uint32_t app_id{0};
+    uint64_t registration_epoch{0};
+    Address loginapp_internal_addr;
+    Address loginapp_external_addr;
+    TimePoint created_at{};
+    TimePoint expires_at{};
+    bool consumed{false};
+};
+```
+
+状态索引:
+
+```cpp
+std::unordered_map<uint64_t, RouteLeaseEntry> route_leases_;
+```
+
+### 9.3 语义约束
+
+- `route_token` 必须是随机不可预测值
+- TTL 建议 3 到 5 秒
+- 单次消费
+- 只能被被分配的目标 `LoginApp` 使用
+- 过期后自动回收
+- manager 重启后全部失效
+
+### 9.4 为什么不用“返回地址即完成”
+
+如果 `Resolve` 成功后只返回地址，不发 token，会有两个问题:
+
+- 客户端可以绕过 coordinator 直接扫所有 `LoginApp`
+- `LoginApp` 无法区分“合法路由进来的请求”和“旁路直连请求”
+
+所以即使当前阶段由 `LoginAppMgr` 做入口，也不能只返回裸地址。
+
+## 10. Claim 设计
+
+### 10.1 设计目标
+
+claim 是全集群用户名互斥的唯一真相来源。
+
+### 10.2 ClaimEntry
+
+```cpp
+struct ClaimEntry
+{
+    uint32_t app_id{0};
+    uint64_t registration_epoch{0};
+    uint32_t request_id{0};
+    uint64_t claim_lease_id{0};
+    TimePoint claimed_at{};
+    TimePoint expires_at{};
+};
+```
+
+索引建议:
+
+```cpp
+std::unordered_map<std::string, ClaimEntry> claims_by_username_;
+std::unordered_map<uint32_t, std::unordered_set<std::string>> usernames_by_app_;
+```
+
+### 10.3 语义要求
 
 工业级实现必须满足:
 
-- `ReleaseUsername` 只有在 `(app_id, registration_epoch, request_id, username, lease_id)`
-  全部匹配当前 owner 时才生效
-- `RenewUsernameClaim` 同样需要 owner 全量匹配
-- `ClaimUsernameResult` 不能只返回 `bool success`
-- 所有消息都必须校验消息来源:
+- `ReleaseUsername` 只有在
+  `(app_id, registration_epoch, request_id, username, claim_lease_id)` 全匹配时才生效
+- `RenewUsernameClaim` 同样要求 owner 全量匹配
+- `ClaimUsernameResult` 不能只返回 `bool`
+- 任何 claim/release/renew 都必须校验消息来源:
   - `src == registered internal_addr`
   - `channel_id == registered channel_id`
   - `registration_epoch == current session epoch`
 
-这部分必须复用当前 `BaseAppMgr` 的 source validation 思路，而不是只看 `app_id`。
+推荐初始值:
 
-## 8. Manager 状态模型
+- `LoginApp` pending timeout: 10s
+- claim lease TTL: 30s
+- renew 周期: 10s
 
-### 8.1 LoginAppInfo
+## 11. 负载聚合与选路
+
+### 11.1 LoginAppInfo
 
 ```cpp
 struct LoginAppInfo
@@ -309,315 +577,286 @@ struct LoginAppInfo
     float measured_load{0.0f};
     uint32_t pending_count{0};
     uint32_t rate_limited_count{0};
+    uint32_t pending_route_leases{0};
     bool is_ready{false};
     TimePoint last_load_report_at{};
 };
 ```
 
-### 8.2 ClaimEntry
+### 11.2 选路原则
+
+`ResolveLoginApp` 时按以下优先级选路:
+
+1. 实例必须 `is_ready`
+2. 负载上报必须新鲜
+3. 优先选择 `effective_load` 最低实例
+
+建议计算:
 
 ```cpp
-struct ClaimEntry
-{
-    uint32_t app_id{0};
-    uint64_t registration_epoch{0};
-    uint32_t request_id{0};
-    uint64_t lease_id{0};
-    TimePoint claimed_at{};
-    TimePoint expires_at{};
-};
+effective_load = measured_load + pending_route_leases * epsilon
 ```
 
-索引建议:
+其中:
 
-```cpp
-std::unordered_map<std::string, ClaimEntry> claims_by_username_;
-std::unordered_map<uint32_t, std::unordered_set<std::string>> usernames_by_app_;
-```
+- `epsilon` 是很小的预留因子，例如 `0.01`
+- 只作为入口分散的轻量提示，不等同于真实 pending login
 
-设计要求:
+### 11.3 为什么不在 Resolve 时直接做重负载预留
 
-- `lease_id` 使用不可预测值
-- TTL 必须大于 `LoginApp` pending timeout，并预留网络抖动余量
-- 若 pending login 可能超过 TTL，`LoginApp` 需周期性发送 `RenewUsernameClaim`
+如果在 `Resolve` 成功时就把这次请求当作真实登录负载，会放大:
 
-推荐初始值:
+- 客户端探测流量
+- 超时重试
+- 拿到地址但未继续登录的请求
 
-- `LoginApp` pending timeout: 10s
-- claim lease TTL: 30s
-- renew 周期: 10s
+因此:
 
-## 9. 登录时序
+- `Resolve` 只增加轻量 `pending_route_leases`
+- `Claim` 成功后才算进入真实 pending login 压力
 
-### 9.1 正常路径
+## 12. LoginApp 改造要求
+
+### 12.1 新增配置
 
 ```text
-Client         LB          LoginApp-X       LoginAppMgr      DBApp     BaseAppMgr   BaseApp
-  |             |               |                |             |           |           |
-  |-- connect ->|-------------->|                |             |           |           |
-  | LoginRequest|               |                |             |           |           |
-  |------------>|               |                |             |           |           |
-  |             |               |- ClaimUser --->|             |           |           |
-  |             |               |<- Granted -----|             |           |           |
-  |             |               |- AuthLogin ----------------->|           |           |
-  |             |               |<---------- AuthResult -------|           |           |
-  |             |               |- AllocateBase --------------------------->|           |
-  |             |               |<---------------- AllocateResult ----------|           |
-  |             |               |- PrepareLogin -------------------------------------->|
-  |             |               |<--------------------------- PrepareResult -----------|
-  |             |               |- ReleaseUser -->|          |           |            |
-  |<----------------------------- LoginResult     |          |           |            |
+login_ingress_mode
+coordinator_required
+require_route_token
 ```
 
-### 9.2 LoginApp 处理顺序
-
-`on_login_request()` 的顺序固定为:
-
-1. 本地 rate limit
-2. 本地 pending 上限检查
-3. 检查 `LoginAppMgr` 是否健康
-4. 检查本地 `pending_by_username_`
-5. 发送 `ClaimUsername`
-6. claim 成功后才进入 `AuthLogin`
-
-这样做有两个目的:
-
-- 降低无效认证请求进入 DBApp
-- 保证“登录流程存在”与“用户名全局占用”绑定
-
-### 9.3 失败路径
-
-以下任一路径结束时，`LoginApp` 都必须释放 claim:
-
-- 认证失败
-- BaseApp 分配失败
-- PrepareLogin 失败
-- 客户端断开
-- Pending timeout
-
-如果 `LoginAppMgr` channel 在 pending 期间断开:
-
-- 立即 fail 当前 pending login
-- 清空本地 pending 记录
-- 返回 `ServerNotReady`
-- 不继续执行后续 Auth / Allocate / Prepare
-
-## 10. LoginApp 改造要求
-
-### 10.1 新增成员
+### 12.2 新增成员
 
 ```cpp
 ChannelId loginappmgr_channel_id_{kInvalidChannelId};
 uint32_t my_app_id_{0};
 uint64_t registration_epoch_{0};
 TimePoint last_load_report_{};
-TimePoint last_claim_renew_{};
 bool coordinator_required_{true};
+bool require_route_token_{true};
 ```
 
-### 10.2 PendingLogin 扩展
+### 12.3 LoginRequest 扩展
+
+`login::LoginRequest` 新增:
 
 ```cpp
-enum class PendingStage : uint8_t
-{
-    WaitingClaim = 0,
-    WaitingAuth = 1,
-    WaitingBaseApp,
-    WaitingCheckout,
-    WaitingPrepare,
-};
-
-struct PendingLogin
-{
-    uint32_t request_id{0};
-    ChannelId client_channel_id{kInvalidChannelId};
-    std::string username;
-    PendingStage stage{PendingStage::WaitingClaim};
-    uint64_t claim_lease_id{0};
-    TimePoint claim_expires_at{};
-    // existing fields...
-};
+uint64_t route_token{0};
 ```
 
-### 10.3 重连策略
+### 12.4 `on_login_request()` 顺序
 
-`LoginApp` 与 `LoginAppMgr` 重连后:
+`LoginApp` 收到请求后必须按以下顺序处理:
 
-1. 重新 `RegisterLoginApp`
-2. 等待 `RegisterLoginAppAck`
-3. 更新 `my_app_id_` 与 `registration_epoch_`
-4. 重新发送 `LoginAppReady`
-5. 恢复接受新登录
+1. 本地 rate limit
+2. 本地 pending 上限检查
+3. 检查 coordinator 是否健康
+4. 如果 `require_route_token == true`，校验客户端请求里必须带 token
+5. 检查本地 `pending_by_username_`
+6. 发送 `ClaimUsername(username, route_token)`
+7. claim 成功后进入 `AuthLogin`
 
-明确禁止:
+### 12.5 LB 模式兼容
 
-- 在旧 `app_id` / 旧 `registration_epoch` 下 replay claim
-- 对 manager 重启前的 pending login 做“补注册”
+未来切到 `LB` 时:
 
-工业级实现优先选择**清晰的一致性边界**，而不是复杂且不可靠的状态重放。
+- `require_route_token = false`
+- `LoginRequest.route_token` 可为空
+- `ClaimUsername` 仍可复用当前协议
+- `LoginAppMgr` 在 `ClaimUsername` 路径中跳过 route 校验，仅保留 username claim
 
-## 11. LoginAppMgr 进程实现要求
+这就是本文要求保留的关键扩展点。
 
-### 11.1 进程类型
+## 13. LoginAppMgr 实现要求
 
-在 `ProcessType` 中新增:
+### 13.1 双网络面
+
+`LoginAppMgr` 必须是双网络结构:
 
 ```cpp
-LoginAppMgr = 9
+class LoginAppMgr : public ManagerApp
+{
+public:
+    LoginAppMgr(EventDispatcher&, NetworkInterface& internal_network,
+                NetworkInterface& external_network);
+
+private:
+    NetworkInterface& external_network_;
+};
 ```
 
-并补齐:
+其中:
 
-- `process_type_name()`
-- `process_type_from_name()`
+- `internal_network` 复用 `ManagerApp`
+- `external_network_` 只处理 `ResolveLoginApp`
 
-### 11.2 基类与网络
+### 13.2 模块拆分
 
-`LoginAppMgr` 仍继承 `ManagerApp`，因为它是纯控制面。
+为了未来切到 `LB`，建议在代码结构上拆分:
 
-但需要明确:
+```text
+src/server/loginappmgr/
+├── loginappmgr.hpp / .cpp
+├── loginappmgr_messages.hpp
+├── loginappmgr_ingress.hpp / .cpp
+└── main.cpp
+```
 
-- 只监听 `internal_port`
-- 使用 `cluster_rudp_profile()`
-- **不新增外部客户端监听口**
+模块职责:
 
-### 11.3 Handler 风格
+- `loginappmgr.cpp`
+  - register / validate / claim / release / load aggregation
+- `loginappmgr_ingress.cpp`
+  - external RUDP listener
+  - `ResolveLoginApp`
+  - route lease 管理
 
-所有 handler 都必须遵循与 `BaseAppMgr` 一致的校验模式:
+未来切到 `LB` 时，只需 disable `loginappmgr_ingress` 的对外监听，不动核心协调层。
+
+### 13.3 Handler 风格
+
+所有内部 handler 都必须遵循与 `BaseAppMgr` 一致的校验模式:
 
 - 先按 `app_id` 找实例
 - 再校验 `src`
 - 再校验 `channel_id`
 - 再校验 `registration_epoch`
 
-这是一条硬性工程规范，不能像草案那样在 `on_claim_username()` /
-`on_release_username()` 中直接信任消息字段。
+不能像粗略草案那样只信任消息体里的 `app_id`。
 
-## 12. 观测与运维
+## 14. 观测与运维
 
 最少需要暴露以下 watcher / metrics:
 
 - `loginappmgr/loginapp_count`
 - `loginappmgr/healthy_loginapp_count`
+- `loginappmgr/route_lease_count`
+- `loginappmgr/route_resolve_total`
+- `loginappmgr/route_resolve_fail_total`
 - `loginappmgr/claim_count`
 - `loginappmgr/claim_grant_total`
 - `loginappmgr/claim_reject_total`
-- `loginappmgr/claim_expire_total`
-- `loginappmgr/register_total`
 - `loginappmgr/source_validation_fail_total`
 
-同时每个 `LoginApp` 至少暴露:
+每个 `LoginApp` 至少暴露:
 
 - `loginapp/coordinator_connected`
-- `loginapp/coordinator_required`
+- `loginapp/require_route_token`
 - `loginapp/pending_claims`
 - `loginapp/claim_timeout_total`
 - `loginapp/claim_release_total`
 
-LB 健康检查不直接依赖 `LoginAppMgr` 内部状态，而是通过 `LoginApp` 自身健康状态决定是否摘流。
-推荐规则:
+## 15. 当前不做的事情
 
-- `LoginApp` 外部监听正常
-- `LoginAppMgr` 已连接
-- `DBApp` 已连接
-- `BaseAppMgr` 已连接
+本阶段不做:
 
-四者同时满足时才对外宣称 ready。
+- 客户端可见全局排队
+- manager 崩溃后 replay pending claim
+- route token 跨重启恢复
+- 无状态签名 route token
+- active-standby LoginAppMgr
 
-## 13. 排队系统: 延后到下一阶段
+原因很简单:
 
-原草案中的全局排队设计存在以下工程问题:
+- 这些都不是“把当前入口方案做对”的必要条件
+- 过早加入只会显著提高协议和恢复复杂度
 
-- 客户端排队状态依赖进程内 `ChannelId`
-- 无 queue ticket / resume token
-- 无幂等入队
-- 无断线恢复
-- 无 HA 方案
+## 16. 实施阶段
 
-因此本期决策是:
-
-- **P5 不实现客户端可见全局队列**
-- 当前过载时继续返回 `ServerBusy` / `ServerNotReady`
-
-未来若要做全局队列，必须先满足以下前置条件:
-
-1. `QueueTicket` 是可恢复、可跨重连复用的显式 token
-2. 入队协议幂等
-3. 支持取消、超时、重绑定
-4. `LoginAppMgr` 至少具备 active-standby 或可恢复快照
-5. 客户端队列状态由 `LoginApp` 转发，或引入专门 `LoginGateway`
-
-在这些条件满足前，把“排队”写进 MVP 只会扩大不确定性。
-
-## 14. 实施阶段
-
-按工业级优先级调整为 6 个阶段:
+按工程优先级调整为 6 个阶段:
 
 | 阶段 | 内容 | 是否进入当前范围 |
 |------|------|------------------|
 | P1 | `ProcessType` / message IDs / config 开关 | 是 |
 | P2 | `loginappmgr_messages.hpp` + 单元测试 | 是 |
-| P3 | `LoginAppMgr` 进程实现: register / validate / claim / renew / release | 是 |
-| P4 | `LoginApp` 集成: claim-first 状态机、fail-closed、metrics | 是 |
-| P5 | HA 与恢复: active-standby / snapshot / restart procedure | 否，下一阶段 |
-| P6 | 全局排队: ticket-based queue | 否，下一阶段 |
+| P3 | `LoginAppMgr` 内部协调层: register / validate / claim / renew / release | 是 |
+| P4 | `LoginAppMgr` 外部入口层: resolve / route lease / external RUDP | 是 |
+| P5 | `LoginApp` 集成: route token + claim-first 状态机 + fail-closed | 是 |
+| P6 | `LBIngress` 切换支持与开关验证 | 预留接口，暂不完整实现 |
 
 ### 当前交付标准
 
 本期只有满足以下条件才算完成:
 
-- 多 `LoginApp` 部署下，用户名全局 claim 正确
-- `LoginAppMgr` 不可用时，新登录 fail-closed
-- 无旧 lease 误删新 claim 的协议漏洞
-- 单元测试覆盖 claim ownership / epoch 校验 / TTL 过期
-- 集成测试覆盖多实例重复登录竞争
+- 客户端可以先连 `LoginAppMgr` 并拿到目标 `LoginApp`
+- `route_token` 只能被目标 `LoginApp` 单次消费
+- 多 `LoginApp` 部署下用户名全局 claim 正确
+- manager 不可用时新登录 fail-closed
+- `LoginRequest` 协议对未来 `LB` 模式兼容
+- 单元测试覆盖 route lease / token 过期 / owner 校验 / epoch 校验
+- 集成测试覆盖多实例重复用户名竞争与目标实例下线重试
 
-## 15. 变更文件清单
+## 17. 未来切换到 LB 的路径
+
+将来切换到 `LB` 时，按如下步骤演进:
+
+1. 客户端入口改为统一 `LB`
+2. `login_ingress_mode` 切到 `lb`
+3. `LoginAppMgr` 停止对外监听 `ResolveLoginApp`
+4. `require_route_token` 切为 `false`
+5. `LoginApp` 保持 claim-first 状态机不变
+6. `LoginAppMgr` 保留内部协调职责
+
+换句话说，未来切换时被替换的是**入口选路层**，不是**内部协调层**。
+
+## 18. 变更文件清单
 
 | 操作 | 文件 | 阶段 |
 |------|------|------|
 | 修改 | `src/lib/server/server_config.hpp` | P1 |
 | 修改 | `src/lib/server/server_config.cpp` | P1 |
 | 修改 | `src/lib/network/message_ids.hpp` | P1 |
-| 修改 | `src/server/CMakeLists.txt` | P3 |
-| 新增 | `src/server/loginappmgr/CMakeLists.txt` | P3 |
+| 修改 | `src/server/CMakeLists.txt` | P3/P4 |
+| 新增 | `src/server/loginappmgr/CMakeLists.txt` | P3/P4 |
 | 新增 | `src/server/loginappmgr/loginappmgr_messages.hpp` | P2 |
-| 新增 | `src/server/loginappmgr/loginappmgr.hpp` | P3 |
+| 新增 | `src/server/loginappmgr/loginappmgr.hpp` | P3/P4 |
 | 新增 | `src/server/loginappmgr/loginappmgr.cpp` | P3 |
-| 新增 | `src/server/loginappmgr/main.cpp` | P3 |
-| 修改 | `src/server/loginapp/loginapp.hpp` | P4 |
-| 修改 | `src/server/loginapp/loginapp.cpp` | P4 |
-| 修改 | `tests/unit/` 下 LoginAppMgr 消息与 claim 测试 | P2/P3 |
-| 修改 | `tests/integration/` 下多 LoginApp 竞争登录测试 | P4 |
+| 新增 | `src/server/loginappmgr/loginappmgr_ingress.hpp` | P4 |
+| 新增 | `src/server/loginappmgr/loginappmgr_ingress.cpp` | P4 |
+| 新增 | `src/server/loginappmgr/main.cpp` | P3/P4 |
+| 修改 | `src/server/loginapp/login_messages.hpp` | P5 |
+| 修改 | `src/server/loginapp/loginapp.hpp` | P5 |
+| 修改 | `src/server/loginapp/loginapp.cpp` | P5 |
+| 修改 | `tests/unit/` 下 LoginAppMgr 消息与 lease/claim 测试 | P2/P3/P4 |
+| 修改 | `tests/integration/` 下多 LoginApp 登录竞争测试 | P5 |
 
-## 16. 部署拓扑示例
+## 19. 部署拓扑示例
+
+### 当前阶段
 
 ```text
-机器 A: machined + LoginAppMgr + BaseAppMgr + CellAppMgr + DBApp
+机器 A: machined + LoginAppMgr(ext+int) + BaseAppMgr + CellAppMgr + DBApp
 机器 B: machined + LoginApp-1 + BaseApp-1 + CellApp-1
 机器 C: machined + LoginApp-2 + BaseApp-2 + CellApp-2
 机器 D: machined + LoginApp-3 + BaseApp-3 + CellApp-3
-
-公网入口:
-  SLB / Nginx stream / Envoy / K8s Service
-      -> LoginApp-{1..N}.external_port
 ```
 
-客户端配置只需要知道**统一的登录入口地址**，而不是 `LoginAppMgr` 地址。
+客户端配置只需要知道 `LoginAppMgr` 的统一入口地址。
 
-## 17. 与旧草案的关键差异
+### 未来阶段
 
-本次修订明确废弃以下旧设计:
+```text
+公网入口: SLB / Envoy / Nginx stream / K8s Service
+    -> LoginApp-{1..N}.external_port
 
-- `Client -> LoginAppMgr -> LoginApp` 两段跳转
-- `ResolveLoginApp` / `ResolveLoginAppResult`
-- `LoginAppMgr` 成为客户端 RUDP 排队入口
-- 多实例下 coordinator 故障时自动回退本地去重
-- 无 lease / 无 epoch / 无 owner 校验的 claim/release 协议
+LoginAppMgr:
+    只保留 internal control-plane
+```
 
-保留并强化的部分:
+## 20. 与前一版草案的关键差异
 
-- `LoginAppMgr` 作为纯 manager / control-plane 进程
-- `ChannelId` 而非 `Channel*`
-- 复用 `BaseAppMgr` 式的注册、source validation、watcher 结构
-- 分阶段交付，先做正确性，再做 HA 和 queue
+本次修订相对前一版文档的变化:
+
+- 恢复 `LoginAppMgr` 对外入口方案
+- 不再强行要求当前阶段必须使用 `LB`
+- 引入 `route_token` 作为两段式入口的核心租约机制
+- 明确拆分 `Resolve` 与 `Claim`
+- 保留未来 `LBIngress` 的协议与代码扩展点
+- 明确 `LoginAppMgr` 将长期保留，不因未来引入 `LB` 而消失
+
+保持不变的工业级约束:
+
+- claim/release 必须具备 owner 校验
+- manager 重启后不 replay 旧 claim
+- 多实例下不允许自动回退本地去重
+- 先做正确性，再做 queue 和 HA
