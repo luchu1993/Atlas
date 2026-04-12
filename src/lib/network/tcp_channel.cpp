@@ -127,16 +127,10 @@ auto TcpChannel::peek_frame_length() const -> std::optional<uint32_t>
     return endian::from_little(frame_length);
 }
 
-void TcpChannel::process_recv_buffer(std::size_t frame_budget)
+void TcpChannel::process_recv_buffer()
 {
-    std::size_t frames = 0;
     while (true)
     {
-        if (frames >= frame_budget)
-        {
-            break;
-        }
-
         auto available = recv_buffer_.readable_size();
 
         if (available < kFrameHeaderSize)
@@ -203,7 +197,6 @@ void TcpChannel::process_recv_buffer(std::size_t frame_budget)
         }
 
         recv_buffer_.consume(total);
-        ++frames;
     }
 
     if (recv_buffer_.readable_size() == 0)

@@ -7,6 +7,7 @@
 #include <gtest/gtest.h>
 
 #include <array>
+#include <atomic>
 #include <chrono>
 #include <thread>
 #include <vector>
@@ -134,10 +135,86 @@ TEST_F(NetworkInterfaceTest, TcpMessageDispatch)
     EXPECT_EQ(received_value.load(), 42u);
 }
 
+TEST_F(NetworkInterfaceTest, TcpReadableCallbackDrainsAllBufferedFrames)
+{
+    ASSERT_TRUE(ni_.start_tcp_server(Address("127.0.0.1", 0)).has_value());
+
+    constexpr uint32_t kFrameCount = 160;
+    std::atomic<uint32_t> received_count{0};
+    std::atomic<uint32_t> last_value{0};
+
+    ni_.interface_table().register_typed_handler<NetTestMsg>(
+        [&](const Address&, Channel*, const NetTestMsg& msg)
+        {
+            last_value.store(msg.value, std::memory_order_relaxed);
+            received_count.fetch_add(1, std::memory_order_relaxed);
+        });
+
+    auto client_sock = Socket::create_tcp();
+    ASSERT_TRUE(client_sock.has_value());
+    auto connect_result = client_sock->connect(ni_.tcp_address());
+    ASSERT_TRUE(connect_result.has_value() ||
+                connect_result.error().code() == ErrorCode::WouldBlock);
+
+    ASSERT_TRUE(poll_until(dispatcher_, [&] { return ni_.channel_count() >= 1u; }));
+
+    std::vector<std::byte> frames;
+    frames.reserve(kFrameCount * 16);
+
+    for (uint32_t i = 0; i < kFrameCount; ++i)
+    {
+        Bundle bundle;
+        bundle.add_message(NetTestMsg{i});
+        auto payload = bundle.finalize();
+
+        uint32_t frame_len = endian::to_little(static_cast<uint32_t>(payload.size()));
+        auto* len_bytes = reinterpret_cast<const std::byte*>(&frame_len);
+        frames.insert(frames.end(), len_bytes, len_bytes + sizeof(frame_len));
+        frames.insert(frames.end(), payload.begin(), payload.end());
+    }
+
+    std::size_t sent_total = 0;
+    while (sent_total < frames.size())
+    {
+        auto sent = client_sock->send(
+            std::span<const std::byte>(frames.data() + sent_total, frames.size() - sent_total));
+        ASSERT_TRUE(sent.has_value()) << sent.error().message();
+        ASSERT_GT(*sent, 0u);
+        sent_total += *sent;
+    }
+
+    ASSERT_TRUE(poll_until(
+        dispatcher_, [&] { return received_count.load(std::memory_order_relaxed) == kFrameCount; },
+        std::chrono::milliseconds(1000)));
+
+    EXPECT_EQ(received_count.load(std::memory_order_relaxed), kFrameCount);
+    EXPECT_EQ(last_value.load(std::memory_order_relaxed), kFrameCount - 1);
+}
+
 TEST_F(NetworkInterfaceTest, FindChannel)
 {
     EXPECT_EQ(ni_.find_channel(Address("1.2.3.4", 5)), nullptr);
     EXPECT_EQ(ni_.channel_count(), 0u);
+}
+
+TEST_F(NetworkInterfaceTest, FindChannelById)
+{
+    ASSERT_TRUE(ni_.start_tcp_server(Address("127.0.0.1", 0)).has_value());
+
+    auto client_sock = Socket::create_tcp();
+    ASSERT_TRUE(client_sock.has_value());
+    auto connect_result = client_sock->connect(ni_.tcp_address());
+    ASSERT_TRUE(connect_result.has_value() ||
+                connect_result.error().code() == ErrorCode::WouldBlock);
+
+    ASSERT_TRUE(poll_until(dispatcher_, [&] { return ni_.channel_count() >= 1u; }));
+
+    auto client_addr = client_sock->local_address();
+    ASSERT_TRUE(client_addr.has_value()) << client_addr.error().message();
+
+    auto* channel = ni_.find_channel(*client_addr);
+    ASSERT_NE(channel, nullptr);
+    EXPECT_EQ(ni_.find_channel(channel->channel_id()), channel);
 }
 
 TEST_F(NetworkInterfaceTest, PrepareForShutdown)
@@ -173,6 +250,46 @@ TEST_F(NetworkInterfaceTest, RateLimitRejectsExcess)
 
     // channel_count reflects accepted UDP "sessions" — must not exceed rate limit
     EXPECT_LE(ni_.channel_count(), 2u);
+}
+
+TEST_F(NetworkInterfaceTest, UdpRateLimitedDatagramsAlsoConsumePerPollBudget)
+{
+    ASSERT_TRUE(ni_.start_udp(Address("127.0.0.1", 0)).has_value());
+
+    std::atomic<uint32_t> received_count{0};
+    ni_.interface_table().register_typed_handler<NetTestMsg>(
+        [&](const Address&, Channel*, const NetTestMsg&)
+        { received_count.fetch_add(1, std::memory_order_relaxed); });
+
+    ni_.set_rate_limit(1);
+
+    auto sender = Socket::create_udp();
+    ASSERT_TRUE(sender.has_value());
+    ASSERT_TRUE(sender->bind(Address("127.0.0.1", 0)).has_value());
+
+    constexpr uint32_t kDatagramCount = 1500;  // intentionally above current per-poll budget
+    for (uint32_t i = 0; i < kDatagramCount; ++i)
+    {
+        Bundle bundle;
+        bundle.add_message(NetTestMsg{i});
+        auto payload = bundle.finalize();
+
+        auto sent = sender->send_to(payload, ni_.udp_address());
+        ASSERT_TRUE(sent.has_value()) << sent.error().message();
+        ASSERT_EQ(*sent, payload.size());
+    }
+
+    // A single process_once should not drain the whole UDP socket under flood;
+    // only one packet is admitted by the rate limiter and the rest should be
+    // left for future polls once the callback budget is exhausted.
+    dispatcher_.process_once();
+    EXPECT_EQ(received_count.load(std::memory_order_relaxed), 1u);
+
+    ni_.set_rate_limit(0);
+
+    ASSERT_TRUE(poll_until(
+        dispatcher_, [&] { return received_count.load(std::memory_order_relaxed) > 1u; },
+        std::chrono::milliseconds(500)));
 }
 
 // ============================================================================
@@ -211,6 +328,84 @@ TEST_F(NetworkInterfaceTest, ChannelCountAfterDisconnect)
     // After draining, condemned channels should be cleaned up
     poll_until(dispatcher_, [&] { return false; }, std::chrono::milliseconds(100));
 
+    EXPECT_EQ(ni_.channel_count(), 0u);
+}
+
+TEST_F(NetworkInterfaceTest, DisconnectCallbackRunsAfterTcpProtocolDisconnect)
+{
+    ASSERT_TRUE(ni_.start_tcp_server(Address("127.0.0.1", 0)).has_value());
+
+    std::atomic<bool> callback_seen{false};
+    std::atomic<ChannelId> callback_channel_id{kInvalidChannelId};
+    std::atomic<int> callback_state{-1};
+    std::atomic<bool> callback_removed_from_active_set{false};
+
+    ni_.set_disconnect_callback(
+        [&](Channel& ch)
+        {
+            callback_channel_id.store(ch.channel_id(), std::memory_order_relaxed);
+            callback_state.store(static_cast<int>(ch.state()), std::memory_order_relaxed);
+            callback_removed_from_active_set.store(
+                ni_.find_channel(ch.remote_address()) == nullptr &&
+                    ni_.find_channel(ch.channel_id()) == nullptr && ni_.channel_count() == 0u,
+                std::memory_order_relaxed);
+            callback_seen.store(true, std::memory_order_release);
+        });
+
+    auto client_sock = Socket::create_tcp();
+    ASSERT_TRUE(client_sock.has_value());
+    auto connect_result = client_sock->connect(ni_.tcp_address());
+    ASSERT_TRUE(connect_result.has_value() ||
+                connect_result.error().code() == ErrorCode::WouldBlock);
+
+    ASSERT_TRUE(poll_until(dispatcher_, [&] { return ni_.channel_count() >= 1u; }));
+
+    auto client_addr = client_sock->local_address();
+    ASSERT_TRUE(client_addr.has_value()) << client_addr.error().message();
+
+    auto* channel = ni_.find_channel(*client_addr);
+    ASSERT_NE(channel, nullptr);
+    const auto expected_channel_id = channel->channel_id();
+
+    const uint32_t oversized_frame_len =
+        endian::to_little(static_cast<uint32_t>(kMaxBundleSize + 1));
+    auto* len_bytes = reinterpret_cast<const std::byte*>(&oversized_frame_len);
+    auto send_result =
+        client_sock->send(std::span<const std::byte>(len_bytes, sizeof(oversized_frame_len)));
+    ASSERT_TRUE(send_result.has_value()) << send_result.error().message();
+    ASSERT_EQ(*send_result, sizeof(oversized_frame_len));
+
+    ASSERT_TRUE(poll_until(
+        dispatcher_, [&] { return callback_seen.load(std::memory_order_acquire); },
+        std::chrono::milliseconds(1000)));
+
+    EXPECT_EQ(callback_channel_id.load(std::memory_order_relaxed), expected_channel_id);
+    EXPECT_EQ(callback_state.load(std::memory_order_relaxed),
+              static_cast<int>(ChannelState::Condemned));
+    EXPECT_TRUE(callback_removed_from_active_set.load(std::memory_order_relaxed));
+    EXPECT_EQ(ni_.channel_count(), 0u);
+}
+
+TEST_F(NetworkInterfaceTest, PrepareForShutdownDoesNotInvokeDisconnectCallback)
+{
+    ASSERT_TRUE(ni_.start_tcp_server(Address("127.0.0.1", 0)).has_value());
+
+    std::atomic<uint32_t> disconnect_callbacks{0};
+    ni_.set_disconnect_callback([&](Channel&)
+                                { disconnect_callbacks.fetch_add(1, std::memory_order_relaxed); });
+
+    auto client_sock = Socket::create_tcp();
+    ASSERT_TRUE(client_sock.has_value());
+    auto connect_result = client_sock->connect(ni_.tcp_address());
+    ASSERT_TRUE(connect_result.has_value() ||
+                connect_result.error().code() == ErrorCode::WouldBlock);
+
+    ASSERT_TRUE(poll_until(dispatcher_, [&] { return ni_.channel_count() >= 1u; }));
+
+    ni_.prepare_for_shutdown();
+    poll_until(dispatcher_, [&] { return false; }, std::chrono::milliseconds(20));
+
+    EXPECT_EQ(disconnect_callbacks.load(std::memory_order_relaxed), 0u);
     EXPECT_EQ(ni_.channel_count(), 0u);
 }
 
@@ -341,4 +536,46 @@ TEST_F(NetworkInterfaceTest, ConnectRudpIsIdempotent)
     ASSERT_TRUE(cr2.has_value());
     EXPECT_EQ(*cr1, *cr2);  // same channel reused
     EXPECT_EQ(ni_.channel_count(), 1u);
+}
+
+TEST_F(NetworkInterfaceTest, RudpServerDefaultProfileKeepsCongestionControl)
+{
+    EventDispatcher server_disp{"rudp_profile_default_server"};
+    server_disp.set_max_poll_wait(Milliseconds(1));
+    NetworkInterface server_ni(server_disp);
+    Channel* accepted = nullptr;
+    server_ni.set_accept_callback([&accepted](Channel& ch) { accepted = &ch; });
+    ASSERT_TRUE(server_ni.start_rudp_server(Address("127.0.0.1", 0)).has_value());
+
+    auto conn = ni_.connect_rudp(server_ni.rudp_address());
+    ASSERT_TRUE(conn.has_value());
+    ASSERT_TRUE((*conn)->send_message(NetTestMsg{1}).has_value());
+
+    ASSERT_TRUE(poll_until(server_disp, [&] { return accepted != nullptr; }));
+
+    auto* server_ch = static_cast<ReliableUdpChannel*>(accepted);
+    EXPECT_FALSE(server_ch->nocwnd());
+}
+
+TEST_F(NetworkInterfaceTest, RudpServerClusterProfileDisablesCongestionControl)
+{
+    EventDispatcher server_disp{"rudp_profile_cluster_server"};
+    server_disp.set_max_poll_wait(Milliseconds(1));
+    NetworkInterface server_ni(server_disp);
+    Channel* accepted = nullptr;
+    server_ni.set_accept_callback([&accepted](Channel& ch) { accepted = &ch; });
+    ASSERT_TRUE(
+        server_ni
+            .start_rudp_server(Address("127.0.0.1", 0), NetworkInterface::cluster_rudp_profile())
+            .has_value());
+
+    auto conn = ni_.connect_rudp(server_ni.rudp_address());
+    ASSERT_TRUE(conn.has_value());
+    ASSERT_TRUE((*conn)->send_message(NetTestMsg{1}).has_value());
+
+    ASSERT_TRUE(poll_until(server_disp, [&] { return accepted != nullptr; }));
+
+    auto* server_ch = static_cast<ReliableUdpChannel*>(accepted);
+    EXPECT_TRUE(server_ch->nocwnd());
+    EXPECT_GT(server_ch->effective_window(), 1u);
 }

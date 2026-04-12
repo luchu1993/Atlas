@@ -11,6 +11,18 @@
 namespace atlas
 {
 
+namespace
+{
+
+void apply_rudp_profile(ReliableUdpChannel& channel, const NetworkInterface::RudpProfile& profile)
+{
+    channel.set_nocwnd(profile.nocwnd);
+    channel.set_send_window(profile.send_window);
+    channel.set_recv_window(profile.recv_window);
+}
+
+}  // namespace
+
 // ============================================================================
 // Constructor / Destructor
 // ============================================================================
@@ -27,6 +39,7 @@ NetworkInterface::~NetworkInterface()
     registration_.reset();
 
     channels_.clear();
+    channels_by_id_.clear();
     condemned_.clear();
 
     if (tcp_listen_socket_)
@@ -131,6 +144,7 @@ auto NetworkInterface::connect_tcp(const Address& addr) -> Result<TcpChannel*>
 
     auto channel =
         std::make_unique<TcpChannel>(dispatcher_, interface_table_, std::move(*sock), addr);
+    channel->set_channel_id(next_channel_id_++);
 
     auto reg = dispatcher_.register_reader(channel->fd(),
                                            [ch = channel.get()](FdHandle, IOEvent events)
@@ -153,6 +167,7 @@ auto NetworkInterface::connect_tcp(const Address& addr) -> Result<TcpChannel*>
     channel->activate();
 
     auto* raw = channel.get();
+    channels_by_id_[raw->channel_id()] = raw;
     channels_[addr] = std::move(channel);
     return raw;
 }
@@ -217,10 +232,12 @@ auto NetworkInterface::connect_udp(const Address& addr) -> Result<UdpChannel*>
         return static_cast<UdpChannel*>(it->second.get());
 
     auto channel = std::make_unique<UdpChannel>(dispatcher_, interface_table_, *udp_socket_, addr);
+    channel->set_channel_id(next_channel_id_++);
     channel->set_disconnect_callback([this](Channel& ch) { on_channel_disconnect(ch); });
     channel->activate();
 
     auto* raw = static_cast<UdpChannel*>(channel.get());
+    channels_by_id_[raw->channel_id()] = raw;
     channels_[addr] = std::move(channel);
     return raw;
 }
@@ -235,6 +252,16 @@ auto NetworkInterface::find_channel(const Address& addr) -> Channel*
     if (it != channels_.end())
     {
         return it->second.get();
+    }
+    return nullptr;
+}
+
+auto NetworkInterface::find_channel(ChannelId id) -> Channel*
+{
+    auto it = channels_by_id_.find(id);
+    if (it != channels_by_id_.end())
+    {
+        return it->second;
     }
     return nullptr;
 }
@@ -267,7 +294,8 @@ auto NetworkInterface::rudp_address() const -> Address
 // RUDP server / client
 // ============================================================================
 
-auto NetworkInterface::start_rudp_server(const Address& addr) -> Result<void>
+auto NetworkInterface::start_rudp_server(const Address& addr, const RudpProfile& accept_profile)
+    -> Result<void>
 {
     if (rudp_socket_)
     {
@@ -297,6 +325,7 @@ auto NetworkInterface::start_rudp_server(const Address& addr) -> Result<void>
 
     rudp_socket_ = std::move(*sock);
     rudp_server_mode_ = true;
+    rudp_accept_profile_ = accept_profile;
 
     auto reg = dispatcher_.register_reader(rudp_socket_->fd(),
                                            [this](FdHandle, IOEvent) { on_rudp_readable(); });
@@ -307,7 +336,8 @@ auto NetworkInterface::start_rudp_server(const Address& addr) -> Result<void>
     return Result<void>{};
 }
 
-auto NetworkInterface::connect_rudp(const Address& addr) -> Result<ReliableUdpChannel*>
+auto NetworkInterface::connect_rudp(const Address& addr, const RudpProfile& profile)
+    -> Result<ReliableUdpChannel*>
 {
     if (shutting_down_)
         return Error(ErrorCode::ChannelCondemned, "Shutting down");
@@ -351,12 +381,29 @@ auto NetworkInterface::connect_rudp(const Address& addr) -> Result<ReliableUdpCh
 
     auto channel =
         std::make_unique<ReliableUdpChannel>(dispatcher_, interface_table_, *rudp_socket_, addr);
+    channel->set_channel_id(next_channel_id_++);
     channel->set_disconnect_callback([this](Channel& ch) { on_channel_disconnect(ch); });
+    apply_rudp_profile(*channel, profile);
     channel->activate();
 
     auto* raw = static_cast<ReliableUdpChannel*>(channel.get());
+    channels_by_id_[raw->channel_id()] = raw;
     channels_[addr] = std::move(channel);
     return raw;
+}
+
+auto NetworkInterface::internet_rudp_profile() -> RudpProfile
+{
+    return RudpProfile{};
+}
+
+auto NetworkInterface::cluster_rudp_profile() -> RudpProfile
+{
+    RudpProfile profile;
+    profile.nocwnd = true;
+    profile.send_window = 4096;
+    profile.recv_window = 4096;
+    return profile;
 }
 
 void NetworkInterface::set_rudp_client_bind_address(const Address& addr)
@@ -370,13 +417,9 @@ auto NetworkInterface::connect_rudp_nocwnd(const Address& addr) -> Result<Reliab
     if (auto it = channels_.find(addr); it != channels_.end())
         return static_cast<ReliableUdpChannel*>(it->second.get());
 
-    auto result = connect_rudp(addr);
+    auto result = connect_rudp(addr, cluster_rudp_profile());
     if (!result)
         return result;
-
-    (*result)->set_nocwnd(true);
-    (*result)->set_send_window(4096);
-    (*result)->set_recv_window(4096);
     return result;
 }
 
@@ -461,6 +504,7 @@ void NetworkInterface::on_tcp_accept()
         }
 
         auto& [peer_sock, peer_addr] = *result;
+        ++accepts;
 
         // Rate check
         if (rate_limit_ > 0 && !check_rate_limit(peer_addr.ip()))
@@ -478,6 +522,7 @@ void NetworkInterface::on_tcp_accept()
 
         auto channel = std::make_unique<TcpChannel>(dispatcher_, interface_table_,
                                                     std::move(peer_sock), peer_addr);
+        channel->set_channel_id(next_channel_id_++);
 
         auto reg =
             dispatcher_.register_reader(channel->fd(),
@@ -501,14 +546,13 @@ void NetworkInterface::on_tcp_accept()
         channel->set_disconnect_callback([this](Channel& ch) { on_channel_disconnect(ch); });
         channel->activate();
 
+        ATLAS_LOG_DEBUG("Accepted TCP connection from {}", peer_addr.to_string());
+        channels_by_id_[channel->channel_id()] = channel.get();
+        channels_[peer_addr] = std::move(channel);
         if (accept_callback_)
         {
-            accept_callback_(*channel);
+            accept_callback_(*channels_[peer_addr]);
         }
-
-        ATLAS_LOG_DEBUG("Accepted TCP connection from {}", peer_addr.to_string());
-        channels_[peer_addr] = std::move(channel);
-        ++accepts;
     }
 }
 
@@ -531,12 +575,16 @@ void NetworkInterface::on_udp_readable()
                 break;
             }
             if (result.error().code() == ErrorCode::ConnectionReset)
+            {
+                ++datagrams;
                 continue;
+            }
             ATLAS_LOG_WARNING("UDP recv error: {}", result.error().message());
             break;
         }
 
         auto [bytes, src_addr] = *result;
+        ++datagrams;
         if (bytes == 0)
         {
             continue;
@@ -559,15 +607,16 @@ void NetworkInterface::on_udp_readable()
 
             auto channel =
                 std::make_unique<UdpChannel>(dispatcher_, interface_table_, *udp_socket_, src_addr);
+            channel->set_channel_id(next_channel_id_++);
             channel->set_disconnect_callback([this](Channel& ch) { on_channel_disconnect(ch); });
             channel->activate();
+            channels_by_id_[channel->channel_id()] = channel.get();
             auto [inserted_it, _] = channels_.emplace(src_addr, std::move(channel));
             it = inserted_it;
         }
 
         auto* udp_ch = static_cast<UdpChannel*>(it->second.get());
         udp_ch->on_datagram_received(recv_buffer.first(bytes));
-        ++datagrams;
     }
 }
 
@@ -588,12 +637,16 @@ void NetworkInterface::on_rudp_readable()
             if (result.error().code() == ErrorCode::WouldBlock)
                 break;
             if (result.error().code() == ErrorCode::ConnectionReset)
+            {
+                ++datagrams;
                 continue;
+            }
             ATLAS_LOG_WARNING("RUDP recv error: {}", result.error().message());
             break;
         }
 
         auto [bytes, src_addr] = *result;
+        ++datagrams;
         if (bytes == 0)
             continue;
 
@@ -608,23 +661,21 @@ void NetworkInterface::on_rudp_readable()
 
             auto channel = std::make_unique<ReliableUdpChannel>(dispatcher_, interface_table_,
                                                                 *rudp_socket_, src_addr);
+            channel->set_channel_id(next_channel_id_++);
             channel->set_disconnect_callback([this](Channel& ch) { on_channel_disconnect(ch); });
-            channel->set_nocwnd(true);
-            channel->set_send_window(4096);
-            channel->set_recv_window(4096);
+            apply_rudp_profile(*channel, rudp_accept_profile_);
             channel->activate();
 
-            if (accept_callback_)
-                accept_callback_(*channel);
-
             ATLAS_LOG_DEBUG("RUDP: new peer {}", src_addr.to_string());
+            channels_by_id_[channel->channel_id()] = channel.get();
             auto [inserted_it, _] = channels_.emplace(src_addr, std::move(channel));
             it = inserted_it;
+            if (accept_callback_)
+                accept_callback_(*it->second);
         }
 
         auto* rudp_ch = static_cast<ReliableUdpChannel*>(it->second.get());
         rudp_ch->on_datagram_received(recv_buffer.first(bytes));
-        ++datagrams;
     }
 }
 
@@ -651,6 +702,7 @@ void NetworkInterface::condemn_channel(const Address& addr)
 
     auto channel = std::move(it->second);
     channels_.erase(it);
+    channels_by_id_.erase(channel->channel_id());
 
     // RUDP channels share a single socket — deregistering it would break all
     // other RUDP channels. Only deregister for TCP (owns its own socket).
