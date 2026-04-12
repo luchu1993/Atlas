@@ -25,6 +25,11 @@ BaseAppMgr 作为 BaseApp 集群的全局管理者，二者协同完成从「客
 - [ ] 压力测试: 100 并发登录请求无异常
 - [ ] 全部新增代码有单元测试
 
+## 当前实现状态（2026-04-12）
+
+- 登录链路在极端短线重登压测下的已落地优化、当前残余问题和后续排查方向，见 [../LOGIN_STRESS_REMAINING_ISSUES_20260412.md](../LOGIN_STRESS_REMAINING_ISSUES_20260412.md)
+- 该记录重点覆盖 `force-logoff -> relogin -> checkout -> authenticate` 链路，而不是本设计文档中的功能分解本身
+
 ---
 
 ## 1. BigWorld 架构分析与 Atlas 适配
