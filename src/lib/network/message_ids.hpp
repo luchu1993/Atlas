@@ -116,6 +116,8 @@ enum class DBApp : uint16_t
     DeleteEntityAck = 4006,
     LookupEntity = 4007,
     LookupEntityAck = 4008,
+    AbortCheckout = 4009,
+    AbortCheckoutAck = 4010,
 };
 
 // ── LoginApp (5000–5999) ──────────────────────────────────────────────────────
@@ -130,6 +132,7 @@ enum class Login : uint16_t
     AllocateBaseAppResult = 5005,
     PrepareLogin = 5006,
     PrepareLoginResult = 5007,
+    CancelPrepareLogin = 5008,
 };
 
 // ── BaseAppMgr (6000–6999) ────────────────────────────────────────────────────
@@ -202,6 +205,8 @@ ATLAS_ASSERT_ID_RANGE(DBApp::DeleteEntity, 4000, 4999);
 ATLAS_ASSERT_ID_RANGE(DBApp::DeleteEntityAck, 4000, 4999);
 ATLAS_ASSERT_ID_RANGE(DBApp::LookupEntity, 4000, 4999);
 ATLAS_ASSERT_ID_RANGE(DBApp::LookupEntityAck, 4000, 4999);
+ATLAS_ASSERT_ID_RANGE(DBApp::AbortCheckout, 4000, 4999);
+ATLAS_ASSERT_ID_RANGE(DBApp::AbortCheckoutAck, 4000, 4999);
 
 // Login
 ATLAS_ASSERT_ID_RANGE(Login::LoginRequest, 5000, 5999);
@@ -212,6 +217,7 @@ ATLAS_ASSERT_ID_RANGE(Login::AllocateBaseApp, 5000, 5999);
 ATLAS_ASSERT_ID_RANGE(Login::AllocateBaseAppResult, 5000, 5999);
 ATLAS_ASSERT_ID_RANGE(Login::PrepareLogin, 5000, 5999);
 ATLAS_ASSERT_ID_RANGE(Login::PrepareLoginResult, 5000, 5999);
+ATLAS_ASSERT_ID_RANGE(Login::CancelPrepareLogin, 5000, 5999);
 
 // BaseAppMgr
 ATLAS_ASSERT_ID_RANGE(BaseAppMgr::RegisterBaseApp, 6000, 6999);

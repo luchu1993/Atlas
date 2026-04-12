@@ -38,6 +38,7 @@ namespace login
 {
 struct PrepareLogin;
 struct PrepareLoginResult;
+struct CancelPrepareLogin;
 }  // namespace login
 
 namespace baseappmgr
@@ -103,6 +104,7 @@ private:
 
     // ---- Login flow handlers --------------------------------------------
     void on_prepare_login(Channel& ch, const login::PrepareLogin& msg);
+    void on_cancel_prepare_login(Channel& ch, const login::CancelPrepareLogin& msg);
     void on_force_logoff(Channel& ch, const baseapp::ForceLogoff& msg);
     void on_force_logoff_ack(Channel& ch, const baseapp::ForceLogoffAck& msg);
     void on_register_baseapp_ack(Channel& ch, const baseappmgr::RegisterBaseAppAck& msg);
@@ -183,6 +185,19 @@ private:
         TimePoint detached_at{};
         TimePoint detached_until{};
     };
+    struct PreparedLoginEntity
+    {
+        EntityID entity_id{kInvalidEntityID};
+        DatabaseID dbid{kInvalidDBID};
+        uint16_t type_id{0};
+        TimePoint prepared_at{};
+    };
+    struct CanceledCheckout
+    {
+        DatabaseID dbid{kInvalidDBID};
+        uint16_t type_id{0};
+        TimePoint canceled_at{};
+    };
     struct LoadSnapshot
     {
         uint32_t entity_count{0};
@@ -210,6 +225,9 @@ private:
         pending_remote_force_logoff_acks_;
     std::unordered_map<EntityID, std::vector<DeferredLoginCheckout>> deferred_login_checkouts_;
     std::unordered_map<EntityID, DetachedProxyState> detached_proxies_;
+    std::unordered_map<uint32_t, PreparedLoginEntity> prepared_login_entities_;
+    std::unordered_map<EntityID, uint32_t> prepared_login_requests_by_entity_;
+    std::unordered_map<uint32_t, CanceledCheckout> canceled_login_checkouts_;
     std::unordered_map<EntityID, std::vector<uint32_t>> pending_local_force_logoff_waiters_;
     std::unordered_set<EntityID> logoff_entities_in_flight_;
     std::unordered_set<DatabaseID> active_login_dbids_;
@@ -225,6 +243,8 @@ private:
     static constexpr Duration kForceLogoffRetryBaseDelay = std::chrono::milliseconds(250);
     static constexpr Duration kForceLogoffRetryMaxDelay = std::chrono::seconds(2);
     static constexpr Duration kPendingTimeout = std::chrono::seconds(8);
+    static constexpr Duration kCanceledCheckoutRetention = std::chrono::seconds(10);
+    static constexpr Duration kPreparedLoginTimeout = std::chrono::seconds(10);
     // Keep detached proxies around for one shortline reconnect window. Longer
     // retention increases stale proxy pressure without improving the fast path.
     static constexpr Duration kDetachedProxyGrace = std::chrono::milliseconds(1500);
@@ -240,6 +260,11 @@ private:
     void schedule_force_logoff_retry(PendingLogin& pending, TimePoint now);
     void retry_stalled_force_logoff(uint32_t request_id);
     void release_checkout(DatabaseID dbid, uint16_t type_id);
+    void cancel_inflight_checkout(uint32_t request_id, const PendingLogin& pending);
+    void send_abort_checkout(uint32_t request_id, DatabaseID dbid, uint16_t type_id);
+    void cancel_prepare_login(uint32_t login_request_id, DatabaseID dbid);
+    [[nodiscard]] auto rollback_prepared_login_entity(uint32_t login_request_id) -> bool;
+    void clear_prepared_login_entity(EntityID entity_id);
     [[nodiscard]] auto retry_login_after_checkout_conflict(PendingLogin pending, DatabaseID dbid,
                                                            const Address& holder_addr) -> bool;
     [[nodiscard]] auto restore_managed_entity(EntityID entity_id, uint16_t type_id, DatabaseID dbid,

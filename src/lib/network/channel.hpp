@@ -17,6 +17,8 @@ namespace atlas
 
 class EventDispatcher;
 class InterfaceTable;
+using ChannelId = uint64_t;
+inline constexpr ChannelId kInvalidChannelId = 0;
 
 enum class ChannelState : uint8_t
 {
@@ -66,6 +68,7 @@ public:
 
     // State
     [[nodiscard]] auto state() const -> ChannelState { return state_; }
+    [[nodiscard]] auto channel_id() const -> ChannelId { return channel_id_; }
     [[nodiscard]] auto remote_address() const -> const Address& { return remote_; }
     [[nodiscard]] auto is_connected() const -> bool { return state_ == ChannelState::Active; }
 
@@ -87,6 +90,7 @@ public:
     // Disconnect callback
     using DisconnectCallback = std::function<void(Channel&)>;
     void set_disconnect_callback(DisconnectCallback cb);
+    void set_channel_id(ChannelId id);
 
     // Access underlying fd for IOPoller registration
     [[nodiscard]] virtual auto fd() const -> FdHandle = 0;
@@ -106,6 +110,7 @@ protected:
     Address remote_;
     ChannelState state_{ChannelState::Created};
     Bundle bundle_;
+    ChannelId channel_id_{kInvalidChannelId};
 
     uint64_t bytes_sent_{0};
     uint64_t bytes_received_{0};

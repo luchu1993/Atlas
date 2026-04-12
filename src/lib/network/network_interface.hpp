@@ -3,6 +3,7 @@
 #include "foundation/memory/stream_buffer_pool.hpp"
 #include "foundation/time.hpp"
 #include "network/address.hpp"
+#include "network/channel.hpp"
 #include "network/event_dispatcher.hpp"
 #include "network/frequent_task.hpp"
 #include "network/interface_table.hpp"
@@ -27,6 +28,13 @@ class ReliableUdpChannel;
 class NetworkInterface : public FrequentTask
 {
 public:
+    struct RudpProfile
+    {
+        bool nocwnd{false};
+        uint32_t send_window{256};
+        uint32_t recv_window{256};
+    };
+
     explicit NetworkInterface(EventDispatcher& dispatcher);
     ~NetworkInterface() override;
 
@@ -49,16 +57,22 @@ public:
 
     // RUDP server — listens on a shared UDP socket; incoming datagrams from new peers
     // automatically create ReliableUdpChannel instances (used for external client connections).
-    [[nodiscard]] auto start_rudp_server(const Address& addr) -> Result<void>;
+    [[nodiscard]] auto start_rudp_server(const Address& addr,
+                                         const RudpProfile& accept_profile = RudpProfile{})
+        -> Result<void>;
 
     // RUDP client — opens a shared UDP socket (if not already open) and creates a
     // ReliableUdpChannel to the given remote address.
-    [[nodiscard]] auto connect_rudp(const Address& addr) -> Result<ReliableUdpChannel*>;
+    [[nodiscard]] auto connect_rudp(const Address& addr, const RudpProfile& profile = RudpProfile{})
+        -> Result<ReliableUdpChannel*>;
 
     // RUDP client with congestion control disabled (nocwnd=true).
     // Use for intra-datacenter links where loss is near-zero and minimal latency
     // is more important than fairness (e.g. BaseApp ↔ CellApp).
     [[nodiscard]] auto connect_rudp_nocwnd(const Address& addr) -> Result<ReliableUdpChannel*>;
+
+    [[nodiscard]] static auto internet_rudp_profile() -> RudpProfile;
+    [[nodiscard]] static auto cluster_rudp_profile() -> RudpProfile;
 
     // Override the local address used when the first outbound RUDP client socket is bound.
     // The port may be left as 0 to request an ephemeral port from the OS.
@@ -66,6 +80,7 @@ public:
 
     // Channel access
     [[nodiscard]] auto find_channel(const Address& addr) -> Channel*;
+    [[nodiscard]] auto find_channel(ChannelId id) -> Channel*;
     [[nodiscard]] auto channel_count() const -> size_t;
 
     // Message handling
@@ -132,9 +147,12 @@ private:
     Address rudp_address_;
     bool rudp_server_mode_{false};  // true: auto-create channels for unknown peers
     std::optional<Address> rudp_client_bind_address_;
+    RudpProfile rudp_accept_profile_{};
 
     // Active channels keyed by remote address
     std::unordered_map<Address, std::unique_ptr<Channel>> channels_;
+    std::unordered_map<ChannelId, Channel*> channels_by_id_;
+    ChannelId next_channel_id_{1};
 
     // Condemned channels awaiting cleanup
     struct CondemnedEntry

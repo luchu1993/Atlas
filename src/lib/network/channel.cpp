@@ -229,4 +229,9 @@ void Channel::set_disconnect_callback(DisconnectCallback cb)
     disconnect_callback_ = std::move(cb);
 }
 
+void Channel::set_channel_id(ChannelId id)
+{
+    channel_id_ = id;
+}
+
 }  // namespace atlas

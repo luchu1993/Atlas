@@ -13,7 +13,7 @@ BaseAppMgr 作为 BaseApp 集群的全局管理者，二者协同完成从「客
 
 ## 验收标准
 
-- [ ] LoginApp 可接受客户端 TCP 连接，处理登录请求
+- [ ] LoginApp 可接受客户端 RUDP 连接，处理登录请求
 - [ ] 登录流程完整: 认证 → 分配 BaseApp → Checkout 实体 → 创建 Proxy → 返回 SessionKey
 - [ ] BaseAppMgr 管理所有 BaseApp 的注册、负载上报和 Entity ID 分配
 - [ ] BaseAppMgr 选择最低负载 BaseApp 分配新登录
@@ -29,7 +29,11 @@ BaseAppMgr 作为 BaseApp 集群的全局管理者，二者协同完成从「客
 
 - 压测执行方式、参数说明、产物结构和结果判读，见 [../LOGIN_STRESS_TESTING.md](../LOGIN_STRESS_TESTING.md)
 - 登录链路在极端短线重登压测下的已落地优化、当前残余问题和后续排查方向，见 [../LOGIN_STRESS_REMAINING_ISSUES_20260412.md](../LOGIN_STRESS_REMAINING_ISSUES_20260412.md)
+- 客户端登录中途断开后的 `prepare/checkout` 回滚协议设计，见 [../LOGIN_ROLLBACK_PROTOCOL_20260412.md](../LOGIN_ROLLBACK_PROTOCOL_20260412.md)
 - 该记录重点覆盖 `force-logoff -> relogin -> checkout -> authenticate` 链路，而不是本设计文档中的功能分解本身
+- 传输层现状修正: 当前代码里的客户端登录入口已是**外部 RUDP**，不是本文早期草案中的 TCP
+- 多 `LoginApp` 的详细工业级设计见 [../MULTI_LOGINAPP_DESIGN.md](../MULTI_LOGINAPP_DESIGN.md)；
+  本文中“单 LoginApp + 外部 LB 足够”的表述仅代表 Phase 9 的历史基线，不再是最终详细方案
 
 ---
 
@@ -68,13 +72,13 @@ BaseAppMgr 作为 BaseApp 集群的全局管理者，二者协同完成从「客
 
 | 方面 | Atlas 决策 | 原因 |
 |------|-----------|------|
-| **登录协议** | TCP 连接 LoginApp → 发送登录消息 | TCP 更简单、可靠，无需 probe |
+| **登录协议** | RUDP 连接 LoginApp → 发送登录消息 | 与当前实现一致，保留可靠消息语义 |
 | **认证路径** | LoginApp → DBApp 验证 | 简化：DBApp 承担认证（初期） |
 | **BaseApp 分配** | LoginApp → BaseAppMgr → BaseApp | 比 BigWorld 的 DBApp 中转更直接 |
 | **Session Key** | 32 字节随机令牌（与 Phase 8 一致） | 比 BigWorld uint32 更安全 |
 | **速率限制** | per-IP + 全局计数 | 保留核心防护 |
 | **Challenge** | 初期不实现 | 后续按需 |
-| **多 LoginApp** | 初期单实例 + 外部 LB | K8s Service / Nginx 负载均衡 |
+| **多 LoginApp** | 当前实现基线为单实例；详细扩展见 `MULTI_LOGINAPP_DESIGN.md` | 先完成单实例链路，再引入内部控制面 |
 | **Entity ID 分配** | BaseAppMgr 分配区间 | 类似 BigWorld 但更显式 |
 | **Global Bases** | 保留，BaseAppMgr 管理 | 全局单例实体必需 |
 | **启动同步** | machined birth 事件驱动 | 比 BigWorld 的轮询更优雅 |
@@ -101,7 +105,7 @@ BaseAppMgr 作为 BaseApp 集群的全局管理者，二者协同完成从「客
 ```
 Client           LoginApp          DBApp         BaseAppMgr        BaseApp
   │                 │                │                │                │
-  │─[1] TCP连接 ───→│                │                │                │
+  │─[1] RUDP连接 ─→│                │                │                │
   │─[2] Login ─────→│                │                │                │
   │  (user, pass_h)  │                │                │                │
   │                 │                │                │                │
@@ -134,7 +138,7 @@ Client           LoginApp          DBApp         BaseAppMgr        BaseApp
   │  baseapp_addr,  │                                                  │
   │  baseapp_port)  │                                                  │
   │                                                                    │
-  │─[10] TCP连接 ────────────────────────────────────────────────────→│
+  │─[10] RUDP连接 ───────────────────────────────────────────────────→│
   │─[11] Authenticate(session_key) ──────────────────────────────────→│
   │                                                     验证session_key│
   │                                                     attach_client  │
@@ -862,7 +866,7 @@ src/server/LoginApp/
 **实现顺序:**
 1. 基本启动（ManagerApp + 双网络接口 + machined）
 2. 发现 DBApp 和 BaseAppMgr（machined query）
-3. 外部 TCP 监听（客户端连接）
+3. 外部 RUDP 监听（客户端连接）
 4. `LoginRequest` 处理 → 状态机
 5. 速率限制（per-IP + 全局）
 6. 发送 `AuthLogin` → DBApp → 处理 `AuthLoginResult`
@@ -983,7 +987,7 @@ Step 9.1: 消息定义 + SessionKey     ← 无依赖
 
 | BigWorld | Atlas | 差异说明 |
 |----------|-------|---------|
-| UDP probe + UDP login | TCP 连接 + 消息 | Atlas 更简单可靠 |
+| UDP probe + UDP login | RUDP 连接 + 消息 | Atlas 仍更简单，且与当前实现一致 |
 | RSA 加密凭证 | 明文 (初期) + 后续 TLS | 简化，TLS 更现代 |
 | LoginApp → DBApp → BaseAppMgr → BaseApp | LoginApp → DBApp (认证) → BaseAppMgr → BaseApp | Atlas 路径更清晰 |
 | SessionKey = uint32 (timestamp) | SessionKey = 32 bytes (random) | Atlas 更安全 |
@@ -995,9 +999,9 @@ Step 9.1: 消息定义 + SessionKey     ← 无依赖
 | `globalBases_` + 广播 | `global_bases_` + 广播 | 相同模式 |
 | `BackupHash` 备份 | 初期不实现 | Phase 13 |
 | 5 阶段关闭 | 初期简单关闭 | 后续优化 |
-| 多 LoginApp + probe 发现 | 单 LoginApp + 外部 LB | 现代部署模式 |
+| 多 LoginApp + probe 发现 | 当前基线单 LoginApp；多实例扩展见 `MULTI_LOGINAPP_DESIGN.md` | 详细方案已拆分到独立文档 |
 | `SharedData` (BaseApp间+全局) | 初期不实现 | 按需 |
-| 登录结果缓存 (防重发) | 不需要 (TCP 无重传) | — |
+| 登录结果缓存 (防重发) | 当前不实现 | Atlas 现阶段无 probe/cache 需求 |
 | Channel\* 原始指针 | ChannelId + 断开回调 | 避免悬垂指针 |
 | 无 session 超时 | pending_logins_ 30s 超时 | 防泄漏 |
 | 重复登录仅本地踢 | ForceLogoff 跨 BaseApp | 多 BaseApp 安全 |
@@ -1094,9 +1098,9 @@ LoginApp 返回 LoginResult(Success) 后，客户端应在 30 秒内连接 BaseA
 | 功能 | 原因 | 何时实现 |
 |------|------|---------|
 | 加密通信 (RSA/TLS) | 初期内网部署不需要 | 按需 |
-| 多 LoginApp | 外部 LB 足够 | 按需 |
+| 多 LoginApp | 详细设计见 `MULTI_LOGINAPP_DESIGN.md` | 按详细文档推进 |
 | Login Challenge (PoW) | 内网无需防 DDoS | 按需 |
-| 登录结果缓存 | UDP 重发才需要，TCP 不需要 | 不实现 |
+| 登录结果缓存 | 当前登录协议无 probe/cache 需求 | 不实现 |
 | SharedData 机制 | 复杂，初期无场景 | 按需 |
 | 备份 Hash | 需要多 BaseApp 容灾 | Phase 13 |
 | 协调关闭 | 初期直接停 | 后续 |

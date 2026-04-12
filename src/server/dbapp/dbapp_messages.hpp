@@ -14,9 +14,9 @@
 //
 // Direction:
 //   BaseApp → DBApp : WriteEntity, CheckoutEntity, CheckinEntity,
-//                     DeleteEntity, LookupEntity
+//                     DeleteEntity, LookupEntity, AbortCheckout
 //   DBApp → BaseApp : WriteEntityAck, CheckoutEntityAck, DeleteEntityAck,
-//                     LookupEntityAck
+//                     LookupEntityAck, AbortCheckoutAck
 // ============================================================================
 
 namespace atlas::dbapp
@@ -471,6 +471,86 @@ struct LookupEntityAck
     }
 };
 static_assert(NetworkMessage<LookupEntityAck>);
+
+// ============================================================================
+// AbortCheckout  (BaseApp → DBApp, ID 4009)
+// Cancel a previously issued CheckoutEntity request that is no longer needed.
+// ============================================================================
+
+struct AbortCheckout
+{
+    uint32_t request_id{0};
+    uint16_t type_id{0};
+    DatabaseID dbid{kInvalidDBID};
+
+    static auto descriptor() -> const MessageDesc&
+    {
+        static const MessageDesc desc{msg_id::id(msg_id::DBApp::AbortCheckout),
+                                      "dbapp::AbortCheckout", MessageLengthStyle::Fixed,
+                                      static_cast<int>(sizeof(uint32_t) + sizeof(uint16_t) +
+                                                       sizeof(int64_t))};
+        return desc;
+    }
+
+    void serialize(BinaryWriter& w) const
+    {
+        w.write(request_id);
+        w.write(type_id);
+        w.write(dbid);
+    }
+
+    static auto deserialize(BinaryReader& r) -> Result<AbortCheckout>
+    {
+        auto rid = r.read<uint32_t>();
+        auto ti = r.read<uint16_t>();
+        auto db = r.read<int64_t>();
+        if (!rid || !ti || !db)
+            return Error{ErrorCode::InvalidArgument, "AbortCheckout: truncated"};
+        AbortCheckout msg;
+        msg.request_id = *rid;
+        msg.type_id = *ti;
+        msg.dbid = *db;
+        return msg;
+    }
+};
+static_assert(NetworkMessage<AbortCheckout>);
+
+// ============================================================================
+// AbortCheckoutAck  (DBApp → BaseApp, ID 4010)
+// ============================================================================
+
+struct AbortCheckoutAck
+{
+    uint32_t request_id{0};
+    bool success{false};
+
+    static auto descriptor() -> const MessageDesc&
+    {
+        static const MessageDesc desc{msg_id::id(msg_id::DBApp::AbortCheckoutAck),
+                                      "dbapp::AbortCheckoutAck", MessageLengthStyle::Fixed,
+                                      static_cast<int>(sizeof(uint32_t) + sizeof(uint8_t))};
+        return desc;
+    }
+
+    void serialize(BinaryWriter& w) const
+    {
+        w.write(request_id);
+        w.write(static_cast<uint8_t>(success ? 1 : 0));
+    }
+
+    static auto deserialize(BinaryReader& r) -> Result<AbortCheckoutAck>
+    {
+        auto rid = r.read<uint32_t>();
+        auto ok = r.read<uint8_t>();
+        if (!rid || !ok)
+            return Error{ErrorCode::InvalidArgument, "AbortCheckoutAck: truncated"};
+        AbortCheckoutAck msg;
+        msg.request_id = *rid;
+        msg.success = (*ok != 0);
+        return msg;
+    }
+};
+static_assert(NetworkMessage<AbortCheckoutAck>);
 
 }  // namespace atlas::dbapp
 

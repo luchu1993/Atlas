@@ -282,6 +282,32 @@ TEST(DbappMessages, LookupEntityAckNotFound)
     EXPECT_EQ(out->dbid, kInvalidDBID);
 }
 
+TEST(DbappMessages, AbortCheckoutRoundTrip)
+{
+    AbortCheckout msg;
+    msg.request_id = 501;
+    msg.type_id = 9;
+    msg.dbid = 12345;
+
+    auto out = round_trip(msg);
+    ASSERT_TRUE(out.has_value());
+    EXPECT_EQ(out->request_id, 501u);
+    EXPECT_EQ(out->type_id, 9u);
+    EXPECT_EQ(out->dbid, 12345);
+}
+
+TEST(DbappMessages, AbortCheckoutAckRoundTrip)
+{
+    AbortCheckoutAck msg;
+    msg.request_id = 501;
+    msg.success = true;
+
+    auto out = round_trip(msg);
+    ASSERT_TRUE(out.has_value());
+    EXPECT_EQ(out->request_id, 501u);
+    EXPECT_TRUE(out->success);
+}
+
 // ============================================================================
 // Descriptor IDs
 // ============================================================================
@@ -297,4 +323,6 @@ TEST(DbappMessages, MessageDescriptorIds)
     EXPECT_EQ(DeleteEntityAck::descriptor().id, 4006);
     EXPECT_EQ(LookupEntity::descriptor().id, 4007);
     EXPECT_EQ(LookupEntityAck::descriptor().id, 4008);
+    EXPECT_EQ(AbortCheckout::descriptor().id, 4009);
+    EXPECT_EQ(AbortCheckoutAck::descriptor().id, 4010);
 }

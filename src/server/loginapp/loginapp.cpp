@@ -8,6 +8,7 @@
 #include "network/reliable_udp.hpp"
 #include "server/watcher.hpp"
 
+#include <algorithm>
 #include <format>
 
 namespace atlas
@@ -20,13 +21,15 @@ namespace atlas
 auto LoginApp::run(int argc, char* argv[]) -> int
 {
     EventDispatcher dispatcher;
-    NetworkInterface network(dispatcher);
-    LoginApp app(dispatcher, network);
+    NetworkInterface internal_network(dispatcher);
+    NetworkInterface external_network(dispatcher);
+    LoginApp app(dispatcher, internal_network, external_network);
     return app.run_app(argc, argv);
 }
 
-LoginApp::LoginApp(EventDispatcher& dispatcher, NetworkInterface& network)
-    : ManagerApp(dispatcher, network)
+LoginApp::LoginApp(EventDispatcher& dispatcher, NetworkInterface& network,
+                   NetworkInterface& external_network)
+    : ManagerApp(dispatcher, network), external_network_(external_network)
 {
 }
 
@@ -61,12 +64,12 @@ auto LoginApp::init(int argc, char* argv[]) -> bool
         return false;
     }
 
-    auto& table = network().interface_table();
-
-    // Client-facing messages
-    (void)table.register_typed_handler<login::LoginRequest>(
+    auto& client_table = external_network_.interface_table();
+    (void)client_table.register_typed_handler<login::LoginRequest>(
         [this](const Address& src, Channel* ch, const login::LoginRequest& msg)
         { on_login_request(src, ch, msg); });
+
+    auto& table = network().interface_table();
 
     // DBApp responses
     (void)table.register_typed_handler<login::AuthLoginResult>(
@@ -132,7 +135,8 @@ auto LoginApp::init(int argc, char* argv[]) -> bool
     if (cfg.external_port > 0)
     {
         Address listen_addr(0, cfg.external_port);
-        auto result = network().start_rudp_server(listen_addr);
+        auto result = external_network_.start_rudp_server(
+            listen_addr, NetworkInterface::internet_rudp_profile());
         if (!result)
         {
             ATLAS_LOG_ERROR("LoginApp: failed to listen on port {}: {}", cfg.external_port,
@@ -140,9 +144,11 @@ auto LoginApp::init(int argc, char* argv[]) -> bool
             return false;
         }
 
-        network().set_accept_callback(
+        external_network_.set_accept_callback(
             [](Channel& ch)
             { ch.set_inactivity_timeout(std::chrono::seconds(kClientChannelInactivitySec)); });
+        external_network_.set_disconnect_callback(
+            [this](Channel& ch) { on_client_disconnect(ch); });
 
         ATLAS_LOG_INFO("LoginApp: RUDP listener on port {}", cfg.external_port);
     }
@@ -163,6 +169,7 @@ void LoginApp::fini()
 void LoginApp::on_tick_complete()
 {
     cleanup_expired_logins();
+    cleanup_canceled_requests(Clock::now());
     ManagerApp::on_tick_complete();
 }
 
@@ -200,7 +207,11 @@ void LoginApp::register_watchers()
 
 void LoginApp::on_login_request(const Address& src, Channel* ch, const login::LoginRequest& msg)
 {
-    (void)ch;
+    if (ch == nullptr)
+    {
+        return;
+    }
+
     ++login_requests_total_;
     ATLAS_LOG_DEBUG("LoginApp: login request user='{}' from {}:{}", msg.username, src.ip(),
                     src.port());
@@ -209,7 +220,7 @@ void LoginApp::on_login_request(const Address& src, Channel* ch, const login::Lo
     {
         ++login_rate_limited_total_;
         ATLAS_LOG_DEBUG("LoginApp: rate-limited login from {}:{}", src.ip(), src.port());
-        send_login_error(src, login::LoginStatus::RateLimited, "too many attempts");
+        send_login_error(ch->channel_id(), login::LoginStatus::RateLimited, "too many attempts");
         return;
     }
     record_login_attempt(src);
@@ -219,7 +230,8 @@ void LoginApp::on_login_request(const Address& src, Channel* ch, const login::Lo
         ++login_dedup_total_;
         ATLAS_LOG_DEBUG("LoginApp: dedup login for '{}' from {}:{}", msg.username, src.ip(),
                         src.port());
-        send_login_error(src, login::LoginStatus::LoginInProgress, "login_in_progress");
+        send_login_error(ch->channel_id(), login::LoginStatus::LoginInProgress,
+                         "login_in_progress");
         return;
     }
 
@@ -228,20 +240,21 @@ void LoginApp::on_login_request(const Address& src, Channel* ch, const login::Lo
         ++login_busy_total_;
         ATLAS_LOG_DEBUG("LoginApp: admission control, pending={} from {}:{}", pending_.size(),
                         src.ip(), src.port());
-        send_login_error(src, login::LoginStatus::ServerBusy, "server_busy");
+        send_login_error(ch->channel_id(), login::LoginStatus::ServerBusy, "server_busy");
         return;
     }
 
     if (!dbapp_channel_)
     {
         ATLAS_LOG_ERROR("LoginApp: no DBApp connection for login request");
-        send_login_error(src, login::LoginStatus::ServerNotReady, "no_dbapp");
+        send_login_error(ch->channel_id(), login::LoginStatus::ServerNotReady, "no_dbapp");
         return;
     }
 
     uint32_t rid = next_request_id_++;
     PendingLogin pending;
     pending.request_id = rid;
+    pending.client_channel_id = ch->channel_id();
     pending.client_addr = src;
     pending.username = msg.username;
     pending.stage = PendingStage::WaitingAuth;
@@ -269,6 +282,10 @@ void LoginApp::on_auth_login_result(const Address& /*src*/, Channel* /*ch*/,
     auto it = pending_.find(msg.request_id);
     if (it == pending_.end())
     {
+        if (canceled_requests_.contains(msg.request_id))
+        {
+            return;
+        }
         ATLAS_LOG_WARNING("LoginApp: AuthLoginResult for unknown request_id={}", msg.request_id);
         return;
     }
@@ -280,7 +297,7 @@ void LoginApp::on_auth_login_result(const Address& /*src*/, Channel* /*ch*/,
     {
         ATLAS_LOG_DEBUG("LoginApp: auth failed for '{}' status={}", pending.username,
                         static_cast<int>(msg.status));
-        send_login_error(pending.client_addr, msg.status, "auth_failed");
+        send_login_error(pending.client_channel_id, msg.status, "auth_failed");
         remove_pending(it);
         return;
     }
@@ -288,7 +305,8 @@ void LoginApp::on_auth_login_result(const Address& /*src*/, Channel* /*ch*/,
     if (!baseappmgr_channel_)
     {
         ATLAS_LOG_ERROR("LoginApp: no BaseAppMgr connection");
-        send_login_error(pending.client_addr, login::LoginStatus::ServerNotReady, "no_baseappmgr");
+        send_login_error(pending.client_channel_id, login::LoginStatus::ServerNotReady,
+                         "no_baseappmgr");
         remove_pending(it);
         return;
     }
@@ -314,6 +332,10 @@ void LoginApp::on_allocate_baseapp_result(const Address& /*src*/, Channel* /*ch*
     auto it = pending_.find(msg.request_id);
     if (it == pending_.end())
     {
+        if (canceled_requests_.contains(msg.request_id))
+        {
+            return;
+        }
         ATLAS_LOG_WARNING("LoginApp: AllocateBaseAppResult for unknown request_id={}",
                           msg.request_id);
         return;
@@ -325,7 +347,7 @@ void LoginApp::on_allocate_baseapp_result(const Address& /*src*/, Channel* /*ch*
     if (!msg.success)
     {
         ATLAS_LOG_WARNING("LoginApp: no BaseApp available for '{}'", pending.username);
-        send_login_error(pending.client_addr, login::LoginStatus::ServerFull, "no_baseapp");
+        send_login_error(pending.client_channel_id, login::LoginStatus::ServerFull, "no_baseapp");
         remove_pending(it);
         return;
     }
@@ -340,7 +362,8 @@ void LoginApp::on_allocate_baseapp_result(const Address& /*src*/, Channel* /*ch*
     {
         ATLAS_LOG_ERROR("LoginApp: could not connect to BaseApp {}:{}", msg.internal_addr.ip(),
                         msg.internal_addr.port());
-        send_login_error(pending.client_addr, login::LoginStatus::InternalError, "connect_failed");
+        send_login_error(pending.client_channel_id, login::LoginStatus::InternalError,
+                         "connect_failed");
         remove_pending(it);
         return;
     }
@@ -365,6 +388,10 @@ void LoginApp::on_checkout_entity_ack(const Address& /*src*/, Channel* /*ch*/,
     auto it = pending_.find(msg.request_id);
     if (it == pending_.end())
     {
+        if (canceled_requests_.contains(msg.request_id))
+        {
+            return;
+        }
         ATLAS_LOG_WARNING("LoginApp: CheckoutEntityAck for unknown request_id={}", msg.request_id);
         return;
     }
@@ -382,7 +409,7 @@ void LoginApp::on_checkout_entity_ack(const Address& /*src*/, Channel* /*ch*/,
             auto ch_result = network().connect_rudp_nocwnd(pending.baseapp_internal_addr);
             if (!ch_result)
             {
-                send_login_error(pending.client_addr, login::LoginStatus::InternalError,
+                send_login_error(pending.client_channel_id, login::LoginStatus::InternalError,
                                  "connect_failed");
                 remove_pending(it);
                 return;
@@ -401,7 +428,7 @@ void LoginApp::on_checkout_entity_ack(const Address& /*src*/, Channel* /*ch*/,
 
         ATLAS_LOG_WARNING("LoginApp: checkout failed for '{}' dbid={} status={}", pending.username,
                           pending.dbid, static_cast<int>(msg.status));
-        send_login_error(pending.client_addr, login::LoginStatus::InternalError,
+        send_login_error(pending.client_channel_id, login::LoginStatus::InternalError,
                          msg.error.empty() ? "checkout_failed" : msg.error);
         remove_pending(it);
         return;
@@ -415,7 +442,8 @@ void LoginApp::on_checkout_entity_ack(const Address& /*src*/, Channel* /*ch*/,
     {
         ATLAS_LOG_ERROR("LoginApp: could not connect to BaseApp {}:{}",
                         pending.baseapp_internal_addr.ip(), pending.baseapp_internal_addr.port());
-        send_login_error(pending.client_addr, login::LoginStatus::InternalError, "connect_failed");
+        send_login_error(pending.client_channel_id, login::LoginStatus::InternalError,
+                         "connect_failed");
         remove_pending(it);
         return;
     }
@@ -442,6 +470,10 @@ void LoginApp::on_prepare_login_result(const Address& /*src*/, Channel* /*ch*/,
     auto it = pending_.find(msg.request_id);
     if (it == pending_.end())
     {
+        if (canceled_requests_.contains(msg.request_id))
+        {
+            return;
+        }
         ATLAS_LOG_WARNING("LoginApp: PrepareLoginResult for unknown request_id={}", msg.request_id);
         return;
     }
@@ -453,19 +485,35 @@ void LoginApp::on_prepare_login_result(const Address& /*src*/, Channel* /*ch*/,
     if (!msg.success)
     {
         ATLAS_LOG_ERROR("LoginApp: PrepareLogin failed for '{}': {}", pending.username, msg.error);
-        send_login_error(pending.client_addr, login::LoginStatus::InternalError, msg.error);
+        send_login_error(pending.client_channel_id, login::LoginStatus::InternalError, msg.error);
         remove_pending(it);
         return;
     }
 
     // Send LoginResult to client with BaseApp external address + session key
-    ++login_success_total_;
     login::LoginResult result;
     result.status = login::LoginStatus::Success;
     result.session_key = pending.session_key;
     result.baseapp_addr = pending.baseapp_external_addr;
-    if (auto* client_ch = network().find_channel(pending.client_addr))
-        (void)client_ch->send_message(result);
+    auto* client_ch = external_network_.find_channel(pending.client_channel_id);
+    if (!client_ch)
+    {
+        ATLAS_LOG_WARNING(
+            "LoginApp: client channel disappeared before login completion request_id={}",
+            pending.request_id);
+        abandon_pending_login(it);
+        return;
+    }
+
+    if (!client_ch->send_message(result))
+    {
+        ATLAS_LOG_WARNING("LoginApp: failed to deliver LoginResult request_id={}",
+                          pending.request_id);
+        abandon_pending_login(it);
+        return;
+    }
+
+    ++login_success_total_;
 
     ATLAS_LOG_DEBUG("LoginApp: login complete for '{}' entity={} baseapp={}:{}", pending.username,
                     msg.entity_id, pending.baseapp_external_addr.ip(),
@@ -477,17 +525,65 @@ void LoginApp::on_prepare_login_result(const Address& /*src*/, Channel* /*ch*/,
 // Helpers
 // ============================================================================
 
+void LoginApp::cancel_prepare_login(const PendingLogin& pending)
+{
+    canceled_requests_[pending.request_id] = Clock::now();
+
+    if (pending.baseapp_internal_addr.port() == 0)
+    {
+        return;
+    }
+
+    auto ch_result = network().connect_rudp_nocwnd(pending.baseapp_internal_addr);
+    if (!ch_result)
+    {
+        ATLAS_LOG_WARNING("LoginApp: failed to cancel prepare login request_id={} at {}:{}",
+                          pending.request_id, pending.baseapp_internal_addr.ip(),
+                          pending.baseapp_internal_addr.port());
+        return;
+    }
+
+    login::CancelPrepareLogin cancel;
+    cancel.request_id = pending.request_id;
+    cancel.dbid = pending.dbid;
+    (void)(*ch_result)->send_message(cancel);
+}
+
+void LoginApp::abandon_pending_login(std::unordered_map<uint32_t, PendingLogin>::iterator it)
+{
+    PendingLogin pending = std::move(it->second);
+    pending_by_username_.erase(pending.username);
+    pending_.erase(it);
+    cancel_prepare_login(pending);
+}
+
+void LoginApp::on_client_disconnect(Channel& ch)
+{
+    for (auto it = pending_.begin(); it != pending_.end();)
+    {
+        if (it->second.client_channel_id == ch.channel_id())
+        {
+            auto current = it++;
+            abandon_pending_login(current);
+        }
+        else
+        {
+            ++it;
+        }
+    }
+}
+
 void LoginApp::remove_pending(std::unordered_map<uint32_t, PendingLogin>::iterator it)
 {
     pending_by_username_.erase(it->second.username);
     pending_.erase(it);
 }
 
-void LoginApp::send_login_error(const Address& client_addr, login::LoginStatus status,
+void LoginApp::send_login_error(uint64_t client_channel_id, login::LoginStatus status,
                                 const std::string& msg)
 {
     ++login_fail_total_;
-    auto* ch = network().find_channel(client_addr);
+    auto* ch = external_network_.find_channel(client_channel_id);
     if (!ch)
         return;
     login::LoginResult result;
@@ -597,15 +693,22 @@ void LoginApp::cleanup_expired_logins()
             ++login_timeout_total_;
             ATLAS_LOG_WARNING("LoginApp: pending login request_id={} timed out",
                               it->second.request_id);
-            send_login_error(it->second.client_addr, login::LoginStatus::InternalError, "timeout");
-            pending_by_username_.erase(it->second.username);
-            it = pending_.erase(it);
+            send_login_error(it->second.client_channel_id, login::LoginStatus::InternalError,
+                             "timeout");
+            auto current = it++;
+            abandon_pending_login(current);
         }
         else
         {
             ++it;
         }
     }
+}
+
+void LoginApp::cleanup_canceled_requests(TimePoint now)
+{
+    std::erase_if(canceled_requests_, [now](const auto& entry)
+                  { return now - entry.second > kCanceledRequestRetention; });
 }
 
 }  // namespace atlas

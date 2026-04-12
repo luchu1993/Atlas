@@ -94,6 +94,10 @@ auto DBApp::init(int argc, char* argv[]) -> bool
         [this](const Address& src, Channel* ch, const dbapp::LookupEntity& msg)
         { on_lookup_entity(src, ch, msg); });
 
+    (void)table.register_typed_handler<dbapp::AbortCheckout>(
+        [this](const Address& src, Channel* ch, const dbapp::AbortCheckout& msg)
+        { on_abort_checkout(src, ch, msg); });
+
     // ---- Authentication (LoginApp → DBApp) ----------------------------------
     (void)table.register_typed_handler<login::AuthLogin>(
         [this](const Address& src, Channel* ch, const login::AuthLogin& msg)
@@ -311,13 +315,43 @@ void DBApp::on_checkout_entity(const Address& src, Channel* ch, const dbapp::Che
     // After DB confirms, promote checkout to Confirmed; on failure, roll back.
     auto dbid = msg.dbid;
     auto type_id = msg.type_id;
+    pending_checkout_requests_[msg.request_id] = PendingCheckoutRequest{dbid, type_id, src, false};
 
-    auto on_db_done =
-        [this, dbid, type_id, owner, send_ack = std::move(send_ack)](GetResult result) mutable
+    auto on_db_done = [this, request_id = msg.request_id, dbid, type_id,
+                       send_ack = std::move(send_ack)](GetResult result) mutable
     {
+        bool canceled = false;
+        DatabaseID cleanup_dbid = dbid;
+        if (auto pending_it = pending_checkout_requests_.find(request_id);
+            pending_it != pending_checkout_requests_.end())
+        {
+            canceled = pending_it->second.canceled;
+            if (pending_it->second.dbid != kInvalidDBID)
+            {
+                cleanup_dbid = pending_it->second.dbid;
+            }
+            pending_checkout_requests_.erase(pending_it);
+        }
+
+        if (result.success && result.data.dbid != kInvalidDBID)
+        {
+            cleanup_dbid = result.data.dbid;
+        }
+
+        if (canceled)
+        {
+            checkout_mgr_.release_checkout(cleanup_dbid, type_id);
+            if (cleanup_dbid != kInvalidDBID)
+            {
+                database_->mark_checkout_cleared(cleanup_dbid, type_id);
+            }
+            ATLAS_LOG_DEBUG("DBApp: checkout request_id={} canceled before reply", request_id);
+            return;
+        }
+
         if (!result.success || result.checked_out_by.has_value())
         {
-            checkout_mgr_.release_checkout(dbid, type_id);
+            checkout_mgr_.release_checkout(cleanup_dbid, type_id);
         }
         else
         {
@@ -334,6 +368,39 @@ void DBApp::on_checkout_entity(const Address& src, Channel* ch, const dbapp::Che
     else
     {
         database_->checkout_entity(msg.dbid, msg.type_id, owner, std::move(on_db_done));
+    }
+}
+
+void DBApp::on_abort_checkout(const Address& src, Channel* ch, const dbapp::AbortCheckout& msg)
+{
+    if (ch == nullptr)
+        return;
+
+    auto it = pending_checkout_requests_.find(msg.request_id);
+    if (it != pending_checkout_requests_.end())
+    {
+        it->second.canceled = true;
+        checkout_mgr_.release_checkout(it->second.dbid, it->second.type_id);
+        if (it->second.dbid != kInvalidDBID)
+        {
+            database_->mark_checkout_cleared(it->second.dbid, it->second.type_id);
+        }
+    }
+    else
+    {
+        checkout_mgr_.checkin(msg.dbid, msg.type_id);
+        if (msg.dbid != kInvalidDBID)
+        {
+            database_->mark_checkout_cleared(msg.dbid, msg.type_id);
+        }
+    }
+
+    dbapp::AbortCheckoutAck ack;
+    ack.request_id = msg.request_id;
+    ack.success = true;
+    if (auto* reply_ch = this->resolve_reply_channel(src))
+    {
+        (void)reply_ch->send_message(ack);
     }
 }
 

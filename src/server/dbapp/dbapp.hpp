@@ -10,6 +10,7 @@
 #include <memory>
 #include <optional>
 #include <string>
+#include <unordered_map>
 
 namespace atlas
 {
@@ -40,6 +41,7 @@ private:
     void on_checkin_entity(const Address& src, Channel* ch, const dbapp::CheckinEntity& msg);
     void on_delete_entity(const Address& src, Channel* ch, const dbapp::DeleteEntity& msg);
     void on_lookup_entity(const Address& src, Channel* ch, const dbapp::LookupEntity& msg);
+    void on_abort_checkout(const Address& src, Channel* ch, const dbapp::AbortCheckout& msg);
 
     // ---- Authentication (LoginApp → DBApp) ----------------------------------
     void on_auth_login(const Address& src, Channel* ch, const login::AuthLogin& msg);
@@ -54,6 +56,14 @@ private:
     // ---- State --------------------------------------------------------------
     std::unique_ptr<IDatabase> database_;
     CheckoutManager checkout_mgr_;
+    struct PendingCheckoutRequest
+    {
+        DatabaseID dbid{kInvalidDBID};
+        uint16_t type_id{0};
+        Address reply_addr;
+        bool canceled{false};
+    };
+    std::unordered_map<uint32_t, PendingCheckoutRequest> pending_checkout_requests_;
     std::optional<EntityDefRegistry> entity_defs_;  // nullopt until loaded
     bool auto_create_accounts_{false};
     uint16_t account_type_id_{0};

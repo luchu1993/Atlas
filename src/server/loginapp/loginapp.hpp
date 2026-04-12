@@ -37,7 +37,8 @@ class LoginApp : public ManagerApp
 public:
     static auto run(int argc, char* argv[]) -> int;
 
-    LoginApp(EventDispatcher& dispatcher, NetworkInterface& network);
+    LoginApp(EventDispatcher& dispatcher, NetworkInterface& network,
+             NetworkInterface& external_network);
 
 protected:
     [[nodiscard]] auto init(int argc, char* argv[]) -> bool override;
@@ -58,6 +59,7 @@ private:
     struct PendingLogin
     {
         uint32_t request_id{0};
+        uint64_t client_channel_id{0};
         Address client_addr;
         std::string username;
         PendingStage stage{PendingStage::WaitingAuth};
@@ -81,11 +83,15 @@ private:
                                 const dbapp::CheckoutEntityAck& msg);
 
     // ---- Internal helpers ---------------------------------------------------
-    void send_login_error(const Address& client_addr, login::LoginStatus status,
+    void on_client_disconnect(Channel& ch);
+    void cancel_prepare_login(const PendingLogin& pending);
+    void abandon_pending_login(std::unordered_map<uint32_t, PendingLogin>::iterator it);
+    void send_login_error(uint64_t client_channel_id, login::LoginStatus status,
                           const std::string& msg);
     void remove_pending(std::unordered_map<uint32_t, PendingLogin>::iterator it);
     void cleanup_expired_logins();
     void cleanup_stale_rate_entries(TimePoint now);
+    void cleanup_canceled_requests(TimePoint now);
 
     [[nodiscard]] auto is_rate_limited(const Address& src) -> bool;
     [[nodiscard]] auto is_trusted_rate_limit_source(const Address& src) const -> bool;
@@ -109,15 +115,18 @@ private:
     // ---- Config knobs -------------------------------------------------------
     static constexpr std::chrono::seconds kPendingTimeout{10};
     static constexpr std::chrono::seconds kRateCleanupInterval{60};
+    static constexpr std::chrono::seconds kCanceledRequestRetention{10};
     static constexpr int kClientChannelInactivitySec = 3;
     static constexpr std::size_t kMaxPendingLogins = 2000;
 
     // ---- Login tracking ----------------------------------------------------
     std::unordered_map<uint32_t, PendingLogin> pending_;
     std::unordered_map<std::string, uint32_t> pending_by_username_;
+    std::unordered_map<uint32_t, TimePoint> canceled_requests_;
     uint32_t next_request_id_{1};
 
     // ---- Connections --------------------------------------------------------
+    NetworkInterface& external_network_;
     Channel* dbapp_channel_{nullptr};
     Channel* baseappmgr_channel_{nullptr};
 

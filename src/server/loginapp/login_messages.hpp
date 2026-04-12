@@ -23,6 +23,7 @@
 //   BaseAppMgr → LoginApp  : AllocateBaseAppResult (5005)
 //   LoginApp   → BaseApp   : PrepareLogin       (5006)
 //   BaseApp    → LoginApp  : PrepareLoginResult (5007)
+//   LoginApp   → BaseApp   : CancelPrepareLogin (5008)
 // ============================================================================
 
 namespace atlas::login
@@ -427,5 +428,44 @@ struct PrepareLoginResult
     }
 };
 static_assert(NetworkMessage<PrepareLoginResult>);
+
+// ============================================================================
+// CancelPrepareLogin  (LoginApp → BaseApp, ID 5008)
+// Sent when the client disconnects before the login handoff completes so the
+// target BaseApp can roll back any pending prepare / checkout work.
+// ============================================================================
+
+struct CancelPrepareLogin
+{
+    uint32_t request_id{0};
+    DatabaseID dbid{kInvalidDBID};
+
+    static auto descriptor() -> const MessageDesc&
+    {
+        static const MessageDesc desc{msg_id::id(msg_id::Login::CancelPrepareLogin),
+                                      "login::CancelPrepareLogin", MessageLengthStyle::Fixed,
+                                      static_cast<int>(sizeof(uint32_t) + sizeof(int64_t))};
+        return desc;
+    }
+
+    void serialize(BinaryWriter& w) const
+    {
+        w.write(request_id);
+        w.write(dbid);
+    }
+
+    static auto deserialize(BinaryReader& r) -> Result<CancelPrepareLogin>
+    {
+        auto rid = r.read<uint32_t>();
+        auto db = r.read<int64_t>();
+        if (!rid || !db)
+            return Error{ErrorCode::InvalidArgument, "CancelPrepareLogin: truncated"};
+        CancelPrepareLogin msg;
+        msg.request_id = *rid;
+        msg.dbid = *db;
+        return msg;
+    }
+};
+static_assert(NetworkMessage<CancelPrepareLogin>);
 
 }  // namespace atlas::login

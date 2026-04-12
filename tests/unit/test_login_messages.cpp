@@ -133,6 +133,17 @@ TEST(LoginMessages, PrepareLoginResult_RoundTrip)
     EXPECT_EQ(out.entity_id, 5001u);
 }
 
+TEST(LoginMessages, CancelPrepareLogin_RoundTrip)
+{
+    CancelPrepareLogin msg;
+    msg.request_id = 77;
+    msg.dbid = 1234;
+
+    auto out = round_trip(msg);
+    EXPECT_EQ(out.request_id, 77u);
+    EXPECT_EQ(out.dbid, 1234);
+}
+
 TEST(LoginMessages, SessionKey_Generate_Unique)
 {
     auto k1 = SessionKey::generate();

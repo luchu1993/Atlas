@@ -5,6 +5,10 @@
 
 配套压测执行方法、参数说明和结果判读，见 [LOGIN_STRESS_TESTING.md](./LOGIN_STRESS_TESTING.md)
 
+客户端登录中途断开后的 `prepare/checkout` 回滚协议设计，见 [LOGIN_ROLLBACK_PROTOCOL_20260412.md](./LOGIN_ROLLBACK_PROTOCOL_20260412.md)
+
+建议后续直接按该文档中的“可执行验收清单”补齐行为测试、时序测试和监控项，而不是继续零散修补。
+
 ---
 
 ## 1. 背景
