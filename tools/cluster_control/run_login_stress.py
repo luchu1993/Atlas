@@ -12,7 +12,7 @@ import time
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Iterable
+from typing import Iterable, NoReturn
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -31,10 +31,14 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--login-port", type=int, default=20013)
     parser.add_argument("--baseapp-internal-port", type=int, default=21001)
     parser.add_argument("--baseapp-external-port", type=int, default=22001)
+    parser.add_argument("--baseapp-count", type=int, default=1)
+    parser.add_argument("--baseapp-internal-port-stride", type=int, default=1)
+    parser.add_argument("--baseapp-external-port-stride", type=int, default=1)
     parser.add_argument("--baseappmgr-port", type=int, default=23001)
     parser.add_argument("--dbapp-port", type=int, default=24001)
     parser.add_argument("--clients", type=int, default=100)
     parser.add_argument("--account-pool", type=int, default=50)
+    parser.add_argument("--account-index-base", type=int, default=0)
     parser.add_argument("--ramp-per-sec", type=int, default=100)
     parser.add_argument("--duration-sec", type=int, default=60)
     parser.add_argument("--shortline-pct", type=int, default=20)
@@ -45,6 +49,15 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--retry-delay-ms", type=int, default=1000)
     parser.add_argument("--connect-timeout-ms", type=int, default=10000)
     parser.add_argument("--account-type-id", type=int, default=1)
+    parser.add_argument("--source-ip", action="append", default=[])
+    parser.add_argument("--source-ip-file")
+    parser.add_argument("--local-workers", type=int, default=1)
+    parser.add_argument("--worker-index", type=int, default=0)
+    parser.add_argument("--worker-count", type=int, default=1)
+    parser.add_argument("--login-rate-limit-per-ip", type=int, default=5)
+    parser.add_argument("--login-rate-limit-global", type=int, default=1000)
+    parser.add_argument("--login-rate-limit-window-sec", type=int, default=60)
+    parser.add_argument("--login-rate-limit-trusted-cidr", action="append", default=[])
     parser.add_argument(
         "--password-hash",
         default="aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
@@ -58,13 +71,97 @@ def log(message: str, *, stream: object = sys.stdout) -> None:
     print(message, file=stream, flush=True)
 
 
-def fail(message: str) -> "NoReturn":
+def fail(message: str) -> NoReturn:
     raise RuntimeError(message)
 
 
 def assert_file_exists(path: Path, label: str) -> None:
     if not path.exists():
         fail(f"{label} not found: {path}")
+
+
+def parse_source_ip_file(path: Path) -> list[str]:
+    values: list[str] = []
+    for raw_line in path.read_text(encoding="utf-8").splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#"):
+            continue
+        values.append(line)
+    return values
+
+
+def collect_source_ips(args: argparse.Namespace) -> list[str]:
+    source_ips = list(args.source_ip)
+    if args.source_ip_file:
+        source_ips.extend(parse_source_ip_file(Path(args.source_ip_file)))
+    return source_ips
+
+
+def split_range(total: int, parts: int, index: int) -> tuple[int, int]:
+    base, remainder = divmod(total, parts)
+    start = index * base + min(index, remainder)
+    size = base + (1 if index < remainder else 0)
+    return start, size
+
+
+def assign_worker_source_ips(source_ips: list[str], worker_index: int, worker_count: int) -> list[str]:
+    if not source_ips:
+        return []
+
+    assigned = source_ips[worker_index::worker_count]
+    if assigned:
+        return assigned
+    return [source_ips[worker_index % len(source_ips)]]
+
+
+def build_worker_plan(args: argparse.Namespace, source_ips: list[str]) -> list[dict[str, object]]:
+    if args.baseapp_count <= 0:
+        fail("--baseapp-count must be >= 1")
+    if args.baseapp_internal_port_stride <= 0:
+        fail("--baseapp-internal-port-stride must be >= 1")
+    if args.baseapp_external_port_stride <= 0:
+        fail("--baseapp-external-port-stride must be >= 1")
+    if args.local_workers <= 0:
+        fail("--local-workers must be >= 1")
+    if args.worker_count <= 0:
+        fail("--worker-count must be >= 1")
+    if args.worker_index < 0 or args.worker_index >= args.worker_count:
+        fail("--worker-index must be in [0, worker-count)")
+
+    total_workers = args.worker_count * args.local_workers
+    base_worker_index = args.worker_index * args.local_workers
+
+    workers: list[dict[str, object]] = []
+    for local_index in range(args.local_workers):
+        global_worker_index = base_worker_index + local_index
+        client_offset, client_count = split_range(args.clients, total_workers, global_worker_index)
+        if client_count <= 0:
+            continue
+
+        if args.account_pool >= total_workers:
+            account_offset, account_count = split_range(
+                args.account_pool, total_workers, global_worker_index
+            )
+            account_index_base = args.account_index_base + account_offset
+        else:
+            account_count = max(1, args.account_pool)
+            account_index_base = args.account_index_base
+
+        workers.append(
+            {
+                "global_worker_index": global_worker_index,
+                "global_worker_count": total_workers,
+                "client_offset": client_offset,
+                "clients": client_count,
+                "account_pool": account_count,
+                "account_index_base": account_index_base,
+                "source_ips": assign_worker_source_ips(source_ips, global_worker_index, total_workers),
+            }
+        )
+
+    if not workers:
+        fail("no stress workers were scheduled; increase --clients or lower worker count")
+    return workers
 
 
 def resolve_bin_dir(build_root: Path, config: str) -> Path:
@@ -209,8 +306,101 @@ def build_runtime_config(
     }
 
 
+def extend_repeated_flag(arguments: list[str], flag: str, values: Iterable[str]) -> None:
+    for value in values:
+        arguments.extend([flag, value])
+
+
+def build_loginapp_args(args: argparse.Namespace, machined_address: str) -> list[str]:
+    loginapp_args = [
+        "--type",
+        "loginapp",
+        "--name",
+        "loginapp",
+        "--machined",
+        machined_address,
+        "--external-port",
+        str(args.login_port),
+        "--auto-create-accounts",
+        "true",
+        "--login-rate-limit-per-ip",
+        str(args.login_rate_limit_per_ip),
+        "--login-rate-limit-global",
+        str(args.login_rate_limit_global),
+        "--login-rate-limit-window-sec",
+        str(args.login_rate_limit_window_sec),
+        "--log-level",
+        "info",
+    ]
+    extend_repeated_flag(
+        loginapp_args, "--login-rate-limit-trusted-cidr", args.login_rate_limit_trusted_cidr
+    )
+    return loginapp_args
+
+
+def build_stress_args(args: argparse.Namespace, worker: dict[str, object]) -> list[str]:
+    stress_args = [
+        "--login",
+        f"{args.machined_host}:{args.login_port}",
+        "--password-hash",
+        args.password_hash,
+        "--clients",
+        str(worker["clients"]),
+        "--account-pool",
+        str(worker["account_pool"]),
+        "--account-index-base",
+        str(worker["account_index_base"]),
+        "--worker-index",
+        str(worker["global_worker_index"]),
+        "--worker-count",
+        str(worker["global_worker_count"]),
+        "--ramp-per-sec",
+        str(args.ramp_per_sec),
+        "--duration-sec",
+        str(args.duration_sec),
+        "--retry-delay-ms",
+        str(args.retry_delay_ms),
+        "--connect-timeout-ms",
+        str(args.connect_timeout_ms),
+        "--hold-min-ms",
+        str(args.hold_min_ms),
+        "--hold-max-ms",
+        str(args.hold_max_ms),
+        "--shortline-pct",
+        str(args.shortline_pct),
+        "--shortline-min-ms",
+        str(args.shortline_min_ms),
+        "--shortline-max-ms",
+        str(args.shortline_max_ms),
+    ]
+    extend_repeated_flag(stress_args, "--source-ip", worker["source_ips"])
+    if args.verbose_failures:
+        stress_args.append("--verbose-failures")
+    return stress_args
+
+
+def build_baseapp_specs(args: argparse.Namespace) -> list[dict[str, object]]:
+    specs: list[dict[str, object]] = []
+    for index in range(args.baseapp_count):
+        specs.append(
+            {
+                "index": index,
+                "name": "baseapp" if index == 0 else f"baseapp_{index:02d}",
+                "log_name": "baseapp" if index == 0 else f"baseapp_{index:02d}",
+                "internal_port": args.baseapp_internal_port
+                + index * args.baseapp_internal_port_stride,
+                "external_port": args.baseapp_external_port
+                + index * args.baseapp_external_port_stride,
+            }
+        )
+    return specs
+
+
 def main() -> int:
     args = parse_args()
+    source_ips = collect_source_ips(args)
+    worker_plan = build_worker_plan(args, source_ips)
+    baseapp_specs = build_baseapp_specs(args)
 
     repo_root = resolve_repo_root()
     build_root = (repo_root / args.build_dir).resolve()
@@ -289,52 +479,40 @@ def main() -> int:
                 file_path=loginapp,
                 working_directory=repo_root,
                 log_directory=log_dir,
-                arguments=[
-                    "--type",
-                    "loginapp",
-                    "--name",
-                    "loginapp",
-                    "--machined",
-                    machined_address,
-                    "--external-port",
-                    str(args.login_port),
-                    "--auto-create-accounts",
-                    "true",
-                    "--log-level",
-                    "info",
-                ],
+                arguments=build_loginapp_args(args, machined_address),
             )
         )
         processes[-1].start_order = 2
         time.sleep(1)
 
-        processes.append(
-            start_logged_process(
-                name="baseapp",
-                file_path=baseapp,
-                working_directory=repo_root,
-                log_directory=log_dir,
-                arguments=[
-                    "--type",
-                    "baseapp",
-                    "--name",
-                    "baseapp",
-                    "--machined",
-                    machined_address,
-                    "--internal-port",
-                    str(args.baseapp_internal_port),
-                    "--external-port",
-                    str(args.baseapp_external_port),
-                    "--assembly",
-                    str(runtime_assembly),
-                    "--runtime-config",
-                    str(runtime_config),
-                    "--log-level",
-                    "info",
-                ],
+        for baseapp_spec in baseapp_specs:
+            processes.append(
+                start_logged_process(
+                    name=str(baseapp_spec["log_name"]),
+                    file_path=baseapp,
+                    working_directory=repo_root,
+                    log_directory=log_dir,
+                    arguments=[
+                        "--type",
+                        "baseapp",
+                        "--name",
+                        str(baseapp_spec["name"]),
+                        "--machined",
+                        machined_address,
+                        "--internal-port",
+                        str(baseapp_spec["internal_port"]),
+                        "--external-port",
+                        str(baseapp_spec["external_port"]),
+                        "--assembly",
+                        str(runtime_assembly),
+                        "--runtime-config",
+                        str(runtime_config),
+                        "--log-level",
+                        "info",
+                    ],
+                )
             )
-        )
-        processes[-1].start_order = 3
+            processes[-1].start_order = 3
         time.sleep(1)
 
         processes.append(
@@ -398,12 +576,15 @@ def main() -> int:
                 proc_type="baseappmgr",
                 name="baseappmgr",
             ),
-            wait_for_registration(
-                atlas_tool=atlas_tool,
-                machined_address=machined_address,
-                proc_type="baseapp",
-                name="baseapp",
-            ),
+            *[
+                wait_for_registration(
+                    atlas_tool=atlas_tool,
+                    machined_address=machined_address,
+                    proc_type="baseapp",
+                    name=str(baseapp_spec["name"]),
+                )
+                for baseapp_spec in baseapp_specs
+            ],
             wait_for_registration(
                 atlas_tool=atlas_tool,
                 machined_address=machined_address,
@@ -428,41 +609,51 @@ def main() -> int:
             )
             log("")
 
-        stress_args = [
-            "--login",
-            f"{args.machined_host}:{args.login_port}",
-            "--password-hash",
-            args.password_hash,
-            "--clients",
-            str(args.clients),
-            "--account-pool",
-            str(args.account_pool),
-            "--ramp-per-sec",
-            str(args.ramp_per_sec),
-            "--duration-sec",
-            str(args.duration_sec),
-            "--retry-delay-ms",
-            str(args.retry_delay_ms),
-            "--connect-timeout-ms",
-            str(args.connect_timeout_ms),
-            "--hold-min-ms",
-            str(args.hold_min_ms),
-            "--hold-max-ms",
-            str(args.hold_max_ms),
-            "--shortline-pct",
-            str(args.shortline_pct),
-            "--shortline-min-ms",
-            str(args.shortline_min_ms),
-            "--shortline-max-ms",
-            str(args.shortline_max_ms),
-        ]
-        if args.verbose_failures:
-            stress_args.append("--verbose-failures")
+        if args.local_workers == 1:
+            worker = worker_plan[0]
+            log(
+                "Running login_stress..."
+                f" worker={worker['global_worker_index']}/{worker['global_worker_count']}"
+                f" clients={worker['clients']} account_pool={worker['account_pool']}"
+                f" baseapps={len(baseapp_specs)}"
+                f" source_ips={len(worker['source_ips'])}"
+            )
+            stress_result = subprocess.run(
+                [str(login_stress), *build_stress_args(args, worker)], cwd=repo_root
+            )
+            if stress_result.returncode != 0:
+                fail(f"login_stress exited with code {stress_result.returncode}")
+        else:
+            stress_workers: list[LoggedProcess] = []
+            try:
+                for ordinal, worker in enumerate(worker_plan):
+                    name = f"login_stress_worker_{ordinal:02d}"
+                    log(
+                        f"Starting {name}: global_worker={worker['global_worker_index']}/"
+                        f"{worker['global_worker_count']} clients={worker['clients']} "
+                        f"account_pool={worker['account_pool']} baseapps={len(baseapp_specs)} "
+                        f"source_ips={len(worker['source_ips'])}"
+                    )
+                    stress_workers.append(
+                        start_logged_process(
+                            name=name,
+                            file_path=login_stress,
+                            arguments=build_stress_args(args, worker),
+                            working_directory=repo_root,
+                            log_directory=log_dir,
+                        )
+                    )
 
-        log("Running login_stress...")
-        stress_result = subprocess.run([str(login_stress), *stress_args], cwd=repo_root)
-        if stress_result.returncode != 0:
-            fail(f"login_stress exited with code {stress_result.returncode}")
+                for worker_proc in stress_workers:
+                    return_code = worker_proc.process.wait()
+                    worker_proc.stdout_handle.close()
+                    worker_proc.stderr_handle.close()
+                    worker_proc.stdout_handle = None
+                    worker_proc.stderr_handle = None
+                    if return_code != 0:
+                        fail(f"{worker_proc.name} exited with code {return_code}")
+            finally:
+                stop_logged_processes([worker for worker in stress_workers if worker.process.poll() is None])
 
         log("")
         log("Run artifacts:")

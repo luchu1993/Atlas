@@ -123,6 +123,20 @@ auto parse_log_level(std::string_view s) -> LogLevel
     return LogLevel::Info;
 }
 
+void load_string_array(const DataSection* section, std::vector<std::string>& out)
+{
+    if (!section)
+    {
+        return;
+    }
+
+    out.clear();
+    for (auto* child : section->children())
+    {
+        out.emplace_back(child->value());
+    }
+}
+
 }  // namespace
 
 // ============================================================================
@@ -189,6 +203,14 @@ auto ServerConfig::from_json_file(const std::filesystem::path& path) -> Result<S
     cfg.auto_create_accounts = root->read_bool("auto_create_accounts", cfg.auto_create_accounts);
     cfg.account_type_id =
         static_cast<uint16_t>(root->read_uint("account_type_id", cfg.account_type_id));
+    cfg.login_rate_limit_per_ip =
+        root->read_int("login_rate_limit_per_ip", cfg.login_rate_limit_per_ip);
+    cfg.login_rate_limit_global =
+        root->read_int("login_rate_limit_global", cfg.login_rate_limit_global);
+    cfg.login_rate_limit_window_sec =
+        root->read_int("login_rate_limit_window_sec", cfg.login_rate_limit_window_sec);
+    load_string_array(root->child("login_rate_limit_trusted_cidrs"),
+                      cfg.login_rate_limit_trusted_cidrs);
 
     if (auto* auth = root->child("authentication"))
     {
@@ -196,6 +218,18 @@ auto ServerConfig::from_json_file(const std::filesystem::path& path) -> Result<S
             auth->read_bool("auto_create_accounts", cfg.auto_create_accounts);
         cfg.account_type_id =
             static_cast<uint16_t>(auth->read_uint("account_type_id", cfg.account_type_id));
+
+        if (auto* rate_limit = auth->child("rate_limit"))
+        {
+            cfg.login_rate_limit_per_ip =
+                rate_limit->read_int("per_ip", cfg.login_rate_limit_per_ip);
+            cfg.login_rate_limit_global =
+                rate_limit->read_int("global", cfg.login_rate_limit_global);
+            cfg.login_rate_limit_window_sec =
+                rate_limit->read_int("window_sec", cfg.login_rate_limit_window_sec);
+            load_string_array(rate_limit->child("trusted_cidrs"),
+                              cfg.login_rate_limit_trusted_cidrs);
+        }
     }
 
     return cfg;
@@ -328,6 +362,47 @@ auto ServerConfig::from_args(int argc, char* argv[]) -> Result<ServerConfig>
             }
             ++i;
         }
+        else if (key == "login-rate-limit-per-ip")
+        {
+            try
+            {
+                cfg.login_rate_limit_per_ip = std::stoi(std::string(val));
+            }
+            catch (...)
+            {
+                return Error{ErrorCode::InvalidArgument, "invalid --login-rate-limit-per-ip"};
+            }
+            ++i;
+        }
+        else if (key == "login-rate-limit-global")
+        {
+            try
+            {
+                cfg.login_rate_limit_global = std::stoi(std::string(val));
+            }
+            catch (...)
+            {
+                return Error{ErrorCode::InvalidArgument, "invalid --login-rate-limit-global"};
+            }
+            ++i;
+        }
+        else if (key == "login-rate-limit-window-sec")
+        {
+            try
+            {
+                cfg.login_rate_limit_window_sec = std::stoi(std::string(val));
+            }
+            catch (...)
+            {
+                return Error{ErrorCode::InvalidArgument, "invalid --login-rate-limit-window-sec"};
+            }
+            ++i;
+        }
+        else if (key == "login-rate-limit-trusted-cidr")
+        {
+            cfg.login_rate_limit_trusted_cidrs.emplace_back(val);
+            ++i;
+        }
         // "--config" is consumed by load(), not here
     }
 
@@ -395,6 +470,14 @@ auto ServerConfig::load(int argc, char* argv[]) -> Result<ServerConfig>
         cfg.auto_create_accounts = cli.auto_create_accounts;
     if (cli.account_type_id != defaults.account_type_id)
         cfg.account_type_id = cli.account_type_id;
+    if (cli.login_rate_limit_per_ip != defaults.login_rate_limit_per_ip)
+        cfg.login_rate_limit_per_ip = cli.login_rate_limit_per_ip;
+    if (cli.login_rate_limit_global != defaults.login_rate_limit_global)
+        cfg.login_rate_limit_global = cli.login_rate_limit_global;
+    if (cli.login_rate_limit_window_sec != defaults.login_rate_limit_window_sec)
+        cfg.login_rate_limit_window_sec = cli.login_rate_limit_window_sec;
+    if (!cli.login_rate_limit_trusted_cidrs.empty())
+        cfg.login_rate_limit_trusted_cidrs = cli.login_rate_limit_trusted_cidrs;
 
     // Derive process_name from type if not set
     if (cfg.process_name.empty())

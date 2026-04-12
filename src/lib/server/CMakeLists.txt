@@ -3,6 +3,7 @@
 atlas_add_library(atlas_server
     SOURCES
         watcher.cpp
+        ipv4_networks.cpp
         updatable.cpp
         server_config.cpp
         server_app.cpp

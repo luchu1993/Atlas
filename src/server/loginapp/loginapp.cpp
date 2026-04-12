@@ -38,6 +38,28 @@ auto LoginApp::init(int argc, char* argv[]) -> bool
     if (!ManagerApp::init(argc, argv))
         return false;
 
+    const auto& cfg = config();
+    if (cfg.login_rate_limit_per_ip < 0 || cfg.login_rate_limit_global < 0 ||
+        cfg.login_rate_limit_window_sec <= 0)
+    {
+        ATLAS_LOG_ERROR("LoginApp: invalid rate-limit config per_ip={} global={} window_sec={}",
+                        cfg.login_rate_limit_per_ip, cfg.login_rate_limit_global,
+                        cfg.login_rate_limit_window_sec);
+        return false;
+    }
+
+    rate_limit_per_ip_ = cfg.login_rate_limit_per_ip;
+    rate_limit_global_ = cfg.login_rate_limit_global;
+    rate_limit_window_ = std::chrono::seconds(cfg.login_rate_limit_window_sec);
+
+    auto trusted_load = trusted_rate_limit_sources_.add_all(cfg.login_rate_limit_trusted_cidrs);
+    if (!trusted_load)
+    {
+        ATLAS_LOG_ERROR("LoginApp: invalid trusted rate-limit CIDR config: {}",
+                        trusted_load.error().message());
+        return false;
+    }
+
     auto& table = network().interface_table();
 
     // Client-facing messages
@@ -101,7 +123,6 @@ auto LoginApp::init(int argc, char* argv[]) -> bool
         });
 
     // Start RUDP listener for clients
-    const auto& cfg = config();
     if (cfg.external_port > 0)
     {
         Address listen_addr(0, cfg.external_port);
@@ -115,6 +136,10 @@ auto LoginApp::init(int argc, char* argv[]) -> bool
         ATLAS_LOG_INFO("LoginApp: RUDP listener on port {}", cfg.external_port);
     }
 
+    ATLAS_LOG_INFO(
+        "LoginApp: login rate limit configured per_ip={} global={} window={}s trusted_cidrs={}",
+        rate_limit_per_ip_, rate_limit_global_, cfg.login_rate_limit_window_sec,
+        trusted_rate_limit_sources_.size());
     ATLAS_LOG_INFO("LoginApp: initialised");
     return true;
 }
@@ -170,7 +195,7 @@ void LoginApp::on_login_request(const Address& src, Channel* ch, const login::Lo
     if (is_rate_limited(src))
     {
         ++login_rate_limited_total_;
-        ATLAS_LOG_WARNING("LoginApp: rate-limited login from {}:{}", src.ip(), src.port());
+        ATLAS_LOG_DEBUG("LoginApp: rate-limited login from {}:{}", src.ip(), src.port());
         send_login_error(src, login::LoginStatus::RateLimited, "too many attempts");
         return;
     }
@@ -360,34 +385,92 @@ void LoginApp::send_login_error(const Address& client_addr, login::LoginStatus s
 auto LoginApp::is_rate_limited(const Address& src) -> bool
 {
     const auto now = Clock::now();
+    cleanup_stale_rate_entries(now);
+
+    if (rate_limit_per_ip_ <= 0 && rate_limit_global_ <= 0)
+    {
+        return false;
+    }
+
+    if (is_trusted_rate_limit_source(src))
+    {
+        return false;
+    }
 
     // Global window check
     if (global_window_start_ == TimePoint{})
         global_window_start_ = now;
-    if (now - global_window_start_ > kRateWindow)
+    if (now - global_window_start_ > rate_limit_window_)
     {
         global_window_start_ = now;
         global_login_count_ = 0;
     }
-    if (global_login_count_ >= kGlobalMaxPerWindow)
+    if (rate_limit_global_ > 0 && global_login_count_ >= rate_limit_global_)
         return true;
 
     // Per-IP window check
+    if (rate_limit_per_ip_ <= 0)
+    {
+        return false;
+    }
+
     auto& entry = rate_table_[src.ip()];
     if (entry.window_start == TimePoint{})
         entry.window_start = now;
-    if (now - entry.window_start > kRateWindow)
+    if (now - entry.window_start > rate_limit_window_)
     {
         entry.window_start = now;
         entry.count = 0;
     }
-    return entry.count >= kPerIpMaxPerWindow;
+    return entry.count >= rate_limit_per_ip_;
+}
+
+auto LoginApp::is_trusted_rate_limit_source(const Address& src) const -> bool
+{
+    return !trusted_rate_limit_sources_.empty() && trusted_rate_limit_sources_.contains(src.ip());
 }
 
 void LoginApp::record_login_attempt(const Address& src)
 {
-    ++global_login_count_;
-    ++rate_table_[src.ip()].count;
+    if (is_trusted_rate_limit_source(src))
+    {
+        return;
+    }
+
+    if (rate_limit_global_ > 0)
+    {
+        ++global_login_count_;
+    }
+    if (rate_limit_per_ip_ > 0)
+    {
+        auto& entry = rate_table_[src.ip()];
+        if (entry.window_start == TimePoint{})
+        {
+            entry.window_start = Clock::now();
+        }
+        ++entry.count;
+    }
+}
+
+void LoginApp::cleanup_stale_rate_entries(TimePoint now)
+{
+    if (now - last_rate_cleanup_ < kRateCleanupInterval)
+    {
+        return;
+    }
+    last_rate_cleanup_ = now;
+
+    for (auto it = rate_table_.begin(); it != rate_table_.end();)
+    {
+        if (now - it->second.window_start > rate_limit_window_)
+        {
+            it = rate_table_.erase(it);
+        }
+        else
+        {
+            ++it;
+        }
+    }
 }
 
 void LoginApp::cleanup_expired_logins()

@@ -36,9 +36,13 @@ struct Options
     Address login_addr{"127.0.0.1", 0};
     std::string username_prefix{"stress_user_"};
     std::string password_hash;
+    std::vector<Address> source_ips;
     std::size_t clients{100};
     std::size_t account_pool{0};
+    std::size_t account_index_base{0};
     std::size_t ramp_per_sec{100};
+    std::size_t worker_index{0};
+    std::size_t worker_count{1};
     int duration_sec{60};
     int connect_timeout_ms{10'000};
     int retry_delay_ms{1'000};
@@ -78,13 +82,14 @@ class Session
 {
 public:
     Session(std::size_t id, std::string username, EventDispatcher& dispatcher, const Options& opts,
-            Metrics& metrics, std::mt19937& rng)
+            Metrics& metrics, std::mt19937& rng, std::optional<Address> source_ip)
         : id_(id),
           username_(std::move(username)),
           dispatcher_(dispatcher),
           opts_(opts),
           metrics_(metrics),
-          rng_(rng)
+          rng_(rng),
+          source_ip_(source_ip)
     {
     }
 
@@ -151,6 +156,10 @@ private:
         }
 
         network_ = std::make_unique<NetworkInterface>(dispatcher_);
+        if (source_ip_)
+        {
+            network_->set_rudp_client_bind_address(Address(source_ip_->ip(), 0));
+        }
         network_->set_disconnect_callback([this](Channel& ch)
                                           { on_disconnect(ch.remote_address()); });
 
@@ -396,6 +405,7 @@ private:
     bool intentionally_offline_{false};
     bool suppress_disconnect_callback_{false};
     bool restart_requested_{false};
+    std::optional<Address> source_ip_;
 };
 
 void print_usage()
@@ -408,8 +418,14 @@ void print_usage()
         << "  --account-pool <n>         Distinct account count; smaller than clients triggers "
            "relogin\n"
         << "                             pressure (default: same as clients)\n"
+        << "  --account-index-base <n>   Starting account index for this worker shard "
+           "(default: 0)\n"
         << "  --username-prefix <text>   Account prefix (default: stress_user_)\n"
         << "  --ramp-per-sec <n>         New login attempts started per second (default: 100)\n"
+        << "  --worker-index <n>         Worker shard index for reporting (default: 0)\n"
+        << "  --worker-count <n>         Total worker shard count (default: 1)\n"
+        << "  --source-ip <ipv4>         Bind outbound RUDP client sockets to this local IPv4; "
+           "repeatable\n"
         << "  --duration-sec <n>         Total runtime in seconds (default: 60)\n"
         << "  --retry-delay-ms <n>       Delay before retry after failure/disconnect (default: "
            "1000)\n"
@@ -447,7 +463,22 @@ auto parse_address(std::string_view spec) -> std::optional<Address>
 
     const auto port =
         static_cast<uint16_t>(std::strtoul(std::string(port_sv).c_str(), nullptr, 10));
-    return Address(host, port);
+    auto resolved = Address::resolve(host, port);
+    if (!resolved)
+    {
+        return std::nullopt;
+    }
+    return *resolved;
+}
+
+auto parse_ipv4_address(std::string_view spec) -> std::optional<Address>
+{
+    auto resolved = Address::resolve(spec, 0);
+    if (!resolved)
+    {
+        return std::nullopt;
+    }
+    return *resolved;
 }
 
 template <typename T>
@@ -535,12 +566,35 @@ auto parse_options(int argc, char* argv[]) -> std::optional<Options>
                 return std::nullopt;
             opts.account_pool = *parsed;
         }
+        else if (arg == "--account-index-base")
+        {
+            auto value = require_value(arg);
+            if (!value)
+                return std::nullopt;
+            auto parsed = parse_numeric<std::size_t>(*value);
+            if (!parsed)
+                return std::nullopt;
+            opts.account_index_base = *parsed;
+        }
         else if (arg == "--username-prefix")
         {
             auto value = require_value(arg);
             if (!value)
                 return std::nullopt;
             opts.username_prefix = std::string(*value);
+        }
+        else if (arg == "--source-ip")
+        {
+            auto value = require_value(arg);
+            if (!value)
+                return std::nullopt;
+            auto addr = parse_ipv4_address(*value);
+            if (!addr)
+            {
+                std::cerr << "Invalid --source-ip IPv4 address\n";
+                return std::nullopt;
+            }
+            opts.source_ips.push_back(*addr);
         }
         else if (arg == "--ramp-per-sec")
         {
@@ -642,6 +696,26 @@ auto parse_options(int argc, char* argv[]) -> std::optional<Options>
                 return std::nullopt;
             opts.seed = *parsed;
         }
+        else if (arg == "--worker-index")
+        {
+            auto value = require_value(arg);
+            if (!value)
+                return std::nullopt;
+            auto parsed = parse_numeric<std::size_t>(*value);
+            if (!parsed)
+                return std::nullopt;
+            opts.worker_index = *parsed;
+        }
+        else if (arg == "--worker-count")
+        {
+            auto value = require_value(arg);
+            if (!value)
+                return std::nullopt;
+            auto parsed = parse_numeric<std::size_t>(*value);
+            if (!parsed || *parsed == 0)
+                return std::nullopt;
+            opts.worker_count = *parsed;
+        }
         else if (arg == "--verbose-failures")
         {
             opts.verbose_failures = true;
@@ -666,6 +740,11 @@ auto parse_options(int argc, char* argv[]) -> std::optional<Options>
     if (opts.account_pool == 0)
     {
         opts.account_pool = opts.clients;
+    }
+    if (opts.worker_index >= opts.worker_count)
+    {
+        std::cerr << "--worker-index must be smaller than --worker-count\n";
+        return std::nullopt;
     }
 
     if (opts.hold_max_ms < opts.hold_min_ms)
@@ -719,6 +798,9 @@ void print_summary(const Options& opts, const Metrics& metrics,
     std::cout << "\nSummary\n";
     std::cout << std::format("  clients:            {}\n", opts.clients);
     std::cout << std::format("  account_pool:       {}\n", opts.account_pool);
+    std::cout << std::format("  account_index_base: {}\n", opts.account_index_base);
+    std::cout << std::format("  worker:             {}/{}\n", opts.worker_index, opts.worker_count);
+    std::cout << std::format("  source_ip_count:    {}\n", opts.source_ips.size());
     std::cout << std::format("  login_started:      {}\n", metrics.login_started);
     std::cout << std::format("  login_success:      {}\n", metrics.login_result_success);
     std::cout << std::format("  auth_success:       {}\n", metrics.auth_success);
@@ -779,17 +861,23 @@ int main(int argc, char* argv[])
 
     for (std::size_t i = 0; i < opts->clients; ++i)
     {
-        const auto account_index = i % opts->account_pool;
+        const auto account_index = opts->account_index_base + (i % opts->account_pool);
         auto username = std::format("{}{}", opts->username_prefix, account_index);
-        sessions.emplace_back(i, std::move(username), dispatcher, *opts, metrics, rng);
+        std::optional<Address> source_ip;
+        if (!opts->source_ips.empty())
+        {
+            source_ip = opts->source_ips[i % opts->source_ips.size()];
+        }
+        sessions.emplace_back(i, std::move(username), dispatcher, *opts, metrics, rng, source_ip);
         sessions.back().schedule_initial(started_at +
                                          std::chrono::milliseconds(i * ramp_interval_ms));
     }
 
     std::cout << std::format(
-        "Starting login_stress: login={} clients={} account_pool={} ramp/s={} duration={}s "
-        "shortline={}%% seed={}\n",
-        opts->login_addr.to_string(), opts->clients, opts->account_pool, opts->ramp_per_sec,
+        "Starting login_stress: login={} clients={} account_pool={} account_base={} worker={}/{} "
+        "sources={} ramp/s={} duration={}s shortline={}%% seed={}\n",
+        opts->login_addr.to_string(), opts->clients, opts->account_pool, opts->account_index_base,
+        opts->worker_index, opts->worker_count, opts->source_ips.size(), opts->ramp_per_sec,
         opts->duration_sec, opts->shortline_pct, opts->seed);
 
     auto next_progress = started_at + std::chrono::seconds(1);

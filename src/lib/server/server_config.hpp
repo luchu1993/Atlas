@@ -9,6 +9,7 @@
 #include <memory>
 #include <string>
 #include <string_view>
+#include <vector>
 
 namespace atlas
 {
@@ -80,6 +81,10 @@ struct ServerConfig
     // ---- Authentication (DBApp) ---------------------------------------------
     bool auto_create_accounts{false};
     uint16_t account_type_id{0};
+    int login_rate_limit_per_ip{5};
+    int login_rate_limit_global{1000};
+    int login_rate_limit_window_sec{60};
+    std::vector<std::string> login_rate_limit_trusted_cidrs;
 
     // ---- Logging ------------------------------------------------------------
     LogLevel log_level = LogLevel::Info;

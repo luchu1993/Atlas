@@ -193,6 +193,11 @@ atlas_add_test(test_server_config
     DEPS atlas_server
 )
 
+atlas_add_test(test_ipv4_networks
+    SOURCES test_ipv4_networks.cpp
+    DEPS atlas_server
+)
+
 atlas_add_test(test_server_app
     SOURCES test_server_app.cpp
     DEPS atlas_server

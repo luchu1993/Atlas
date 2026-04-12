@@ -170,6 +170,10 @@ TEST(ServerConfig, FromJsonFile)
         "machined_address": "127.0.0.1:20018",
         "is_production": true,
         "log_level": "warning",
+        "login_rate_limit_per_ip": 12,
+        "login_rate_limit_global": 345,
+        "login_rate_limit_window_sec": 9,
+        "login_rate_limit_trusted_cidrs": ["127.0.0.1/32", "10.0.0.0/8"],
         "script": {
             "assembly": "Atlas.Runtime.dll",
             "runtime_config": "atlas.runtimeconfig.json"
@@ -183,6 +187,12 @@ TEST(ServerConfig, FromJsonFile)
     EXPECT_TRUE(r->is_production);
     EXPECT_EQ(r->machined_address.port(), 20018);
     EXPECT_EQ(r->log_level, LogLevel::Warning);
+    EXPECT_EQ(r->login_rate_limit_per_ip, 12);
+    EXPECT_EQ(r->login_rate_limit_global, 345);
+    EXPECT_EQ(r->login_rate_limit_window_sec, 9);
+    ASSERT_EQ(r->login_rate_limit_trusted_cidrs.size(), 2u);
+    EXPECT_EQ(r->login_rate_limit_trusted_cidrs[0], "127.0.0.1/32");
+    EXPECT_EQ(r->login_rate_limit_trusted_cidrs[1], "10.0.0.0/8");
     EXPECT_EQ(r->script_assembly, std::filesystem::path("Atlas.Runtime.dll"));
     EXPECT_EQ(r->runtime_config, std::filesystem::path("atlas.runtimeconfig.json"));
     EXPECT_NE(r->raw_config, nullptr);
@@ -220,16 +230,31 @@ TEST(ServerConfig, LoadCliOverridesJson)
 {
     auto path = write_temp_json(R"({
         "update_hertz": 10,
-        "log_level": "info"
+        "log_level": "info",
+        "authentication": {
+            "rate_limit": {
+                "per_ip": 5,
+                "global": 1000,
+                "window_sec": 60,
+                "trusted_cidrs": ["127.0.0.1/32"]
+            }
+        }
     })");
 
-    FakeArgv args(
-        {"exe", "--config", path.string(), "--update-hertz", "30", "--log-level", "debug"});
+    FakeArgv args({"exe", "--config", path.string(), "--update-hertz", "30", "--log-level", "debug",
+                   "--login-rate-limit-per-ip", "77", "--login-rate-limit-global", "88",
+                   "--login-rate-limit-window-sec", "99", "--login-rate-limit-trusted-cidr",
+                   "192.168.1.0/24"});
     auto r = ServerConfig::load(args.argc(), args.argv());
     ASSERT_TRUE(r.has_value()) << r.error().message();
 
     EXPECT_EQ(r->update_hertz, 30);            // CLI wins
     EXPECT_EQ(r->log_level, LogLevel::Debug);  // CLI wins
+    EXPECT_EQ(r->login_rate_limit_per_ip, 77);
+    EXPECT_EQ(r->login_rate_limit_global, 88);
+    EXPECT_EQ(r->login_rate_limit_window_sec, 99);
+    ASSERT_EQ(r->login_rate_limit_trusted_cidrs.size(), 1u);
+    EXPECT_EQ(r->login_rate_limit_trusted_cidrs[0], "192.168.1.0/24");
 }
 
 TEST(ServerConfig, LoadNoConfigFile)

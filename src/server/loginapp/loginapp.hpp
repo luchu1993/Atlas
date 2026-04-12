@@ -3,6 +3,7 @@
 #include "foundation/time.hpp"
 #include "login_messages.hpp"
 #include "server/entity_types.hpp"
+#include "server/ipv4_networks.hpp"
 #include "server/manager_app.hpp"
 
 #include <cstdint>
@@ -77,8 +78,10 @@ private:
     void send_login_error(const Address& client_addr, login::LoginStatus status,
                           const std::string& msg);
     void cleanup_expired_logins();
+    void cleanup_stale_rate_entries(TimePoint now);
 
     [[nodiscard]] auto is_rate_limited(const Address& src) -> bool;
+    [[nodiscard]] auto is_trusted_rate_limit_source(const Address& src) const -> bool;
     void record_login_attempt(const Address& src);
 
     // ---- Rate limiting state ------------------------------------------------
@@ -90,12 +93,15 @@ private:
     std::unordered_map<uint32_t, RateEntry> rate_table_;  // key = client IP
     int global_login_count_{0};
     TimePoint global_window_start_{};
+    TimePoint last_rate_cleanup_{};
+    IPv4NetworkSet trusted_rate_limit_sources_;
+    int rate_limit_per_ip_{5};
+    int rate_limit_global_{1000};
+    Duration rate_limit_window_{std::chrono::seconds(60)};
 
     // ---- Config knobs -------------------------------------------------------
-    static constexpr int kPerIpMaxPerWindow = 5;
-    static constexpr int kGlobalMaxPerWindow = 1000;
-    static constexpr std::chrono::seconds kRateWindow{60};
     static constexpr std::chrono::seconds kPendingTimeout{30};
+    static constexpr std::chrono::seconds kRateCleanupInterval{60};
 
     // ---- Login tracking ----------------------------------------------------
     std::unordered_map<uint32_t, PendingLogin> pending_;
