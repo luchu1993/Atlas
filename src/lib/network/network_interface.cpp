@@ -294,8 +294,13 @@ auto NetworkInterface::rudp_address() const -> Address
 // RUDP server / client
 // ============================================================================
 
-auto NetworkInterface::start_rudp_server(const Address& addr, const RudpProfile& accept_profile)
-    -> Result<void>
+auto NetworkInterface::start_rudp_server(const Address& addr) -> Result<void>
+{
+    return start_rudp_server(addr, RudpProfile{});
+}
+
+auto NetworkInterface::start_rudp_server(const Address& addr,
+                                         const RudpProfile& accept_profile) -> Result<void>
 {
     if (rudp_socket_)
     {
@@ -334,6 +339,11 @@ auto NetworkInterface::start_rudp_server(const Address& addr, const RudpProfile&
 
     ATLAS_LOG_INFO("RUDP server listening on {}", rudp_address_.to_string());
     return Result<void>{};
+}
+
+auto NetworkInterface::connect_rudp(const Address& addr) -> Result<ReliableUdpChannel*>
+{
+    return connect_rudp(addr, RudpProfile{});
 }
 
 auto NetworkInterface::connect_rudp(const Address& addr, const RudpProfile& profile)

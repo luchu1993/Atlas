@@ -57,13 +57,14 @@ public:
 
     // RUDP server — listens on a shared UDP socket; incoming datagrams from new peers
     // automatically create ReliableUdpChannel instances (used for external client connections).
-    [[nodiscard]] auto start_rudp_server(const Address& addr,
-                                         const RudpProfile& accept_profile = RudpProfile{})
+    [[nodiscard]] auto start_rudp_server(const Address& addr) -> Result<void>;
+    [[nodiscard]] auto start_rudp_server(const Address& addr, const RudpProfile& accept_profile)
         -> Result<void>;
 
     // RUDP client — opens a shared UDP socket (if not already open) and creates a
     // ReliableUdpChannel to the given remote address.
-    [[nodiscard]] auto connect_rudp(const Address& addr, const RudpProfile& profile = RudpProfile{})
+    [[nodiscard]] auto connect_rudp(const Address& addr) -> Result<ReliableUdpChannel*>;
+    [[nodiscard]] auto connect_rudp(const Address& addr, const RudpProfile& profile)
         -> Result<ReliableUdpChannel*>;
 
     // RUDP client with congestion control disabled (nocwnd=true).
