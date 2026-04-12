@@ -3,6 +3,8 @@
 > 记录日期: 2026-04-12
 > 范围: LoginApp / BaseApp / BaseAppMgr / DBApp 在极端短线重登压力下的实现现状、压测结果与残余问题
 
+配套压测执行方法、参数说明和结果判读，见 [LOGIN_STRESS_TESTING.md](./LOGIN_STRESS_TESTING.md)
+
 ---
 
 ## 1. 背景
