@@ -15,8 +15,10 @@ class LoginRollbackTest : public ::testing::Test
 {
 protected:
     LoginRollbackTest()
-        : dispatcher_("login_rollback"), internal_network_(dispatcher_),
-          external_network_(dispatcher_), app_(dispatcher_, internal_network_, external_network_)
+        : dispatcher_("login_rollback"),
+          internal_network_(dispatcher_),
+          external_network_(dispatcher_),
+          app_(dispatcher_, internal_network_, external_network_)
     {
     }
 
@@ -77,8 +79,10 @@ class BaseAppRollbackTest : public ::testing::Test
 {
 protected:
     BaseAppRollbackTest()
-        : dispatcher_("baseapp_rollback"), internal_network_(dispatcher_),
-          external_network_(dispatcher_), app_(dispatcher_, internal_network_, external_network_)
+        : dispatcher_("baseapp_rollback"),
+          internal_network_(dispatcher_),
+          external_network_(dispatcher_),
+          app_(dispatcher_, internal_network_, external_network_)
     {
     }
 
@@ -169,8 +173,8 @@ public:
         checkout_callback = std::move(callback);
     }
 
-    void clear_checkout(DatabaseID dbid, uint16_t type_id, std::function<void(bool)> callback)
-        override
+    void clear_checkout(DatabaseID dbid, uint16_t type_id,
+                        std::function<void(bool)> callback) override
     {
         ++clear_checkout_calls;
         last_cleared = std::make_pair(dbid, type_id);
@@ -211,10 +215,7 @@ protected:
         app_.database_ = std::make_unique<FakeDatabase>();
     }
 
-    auto db() -> FakeDatabase&
-    {
-        return *static_cast<FakeDatabase*>(app_.database_.get());
-    }
+    auto db() -> FakeDatabase& { return *static_cast<FakeDatabase*>(app_.database_.get()); }
 
     void register_watchers() { app_.register_watchers(); }
 

@@ -305,9 +305,9 @@ void BaseApp::register_watchers()
     wr.add<std::size_t>(
         "baseapp/logoff_in_flight_count",
         std::function<std::size_t()>([this] { return logoff_entities_in_flight_.size(); }));
-    wr.add<std::size_t>("baseapp/canceled_checkout_count",
-                        std::function<std::size_t()>(
-                            [this] { return canceled_login_checkouts_.size(); }));
+    wr.add<std::size_t>(
+        "baseapp/canceled_checkout_count",
+        std::function<std::size_t()>([this] { return canceled_login_checkouts_.size(); }));
     wr.add<uint64_t>("baseapp/canceled_checkout_total",
                      std::function<uint64_t()>([this] { return canceled_checkout_total_; }));
     wr.add<uint64_t>("baseapp/prepared_login_timeout_total",

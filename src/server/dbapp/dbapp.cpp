@@ -172,9 +172,9 @@ void DBApp::register_watchers()
     reg.add<std::string>(
         "dbapp/checkouts",
         std::function<std::string()>{[this]() { return std::to_string(checkout_mgr_.size()); }});
-    reg.add<std::size_t>("dbapp/pending_checkout_request_count",
-                         std::function<std::size_t()>(
-                             [this] { return pending_checkout_requests_.size(); }));
+    reg.add<std::size_t>(
+        "dbapp/pending_checkout_request_count",
+        std::function<std::size_t()>([this] { return pending_checkout_requests_.size(); }));
     reg.add<uint64_t>("dbapp/abort_checkout_total",
                       std::function<uint64_t()>([this] { return abort_checkout_total_; }));
     reg.add<uint64_t>(
