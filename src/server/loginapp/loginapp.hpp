@@ -1,5 +1,6 @@
 #pragma once
 
+#include "dbapp/dbapp_messages.hpp"
 #include "foundation/time.hpp"
 #include "login_messages.hpp"
 #include "server/entity_types.hpp"
@@ -10,6 +11,7 @@
 #include <string>
 #include <unordered_map>
 #include <unordered_set>
+#include <vector>
 
 namespace atlas
 {
@@ -49,6 +51,7 @@ private:
     {
         WaitingAuth = 0,
         WaitingBaseApp,
+        WaitingCheckout,
         WaitingPrepare,
     };
 
@@ -64,6 +67,7 @@ private:
         Address baseapp_internal_addr;
         Address baseapp_external_addr;
         TimePoint created_at{};
+        std::vector<std::byte> entity_blob;
     };
 
     // ---- Message handlers ---------------------------------------------------
@@ -73,10 +77,13 @@ private:
                                     const login::AllocateBaseAppResult& msg);
     void on_prepare_login_result(const Address& src, Channel* ch,
                                  const login::PrepareLoginResult& msg);
+    void on_checkout_entity_ack(const Address& src, Channel* ch,
+                                const dbapp::CheckoutEntityAck& msg);
 
     // ---- Internal helpers ---------------------------------------------------
     void send_login_error(const Address& client_addr, login::LoginStatus status,
                           const std::string& msg);
+    void remove_pending(std::unordered_map<uint32_t, PendingLogin>::iterator it);
     void cleanup_expired_logins();
     void cleanup_stale_rate_entries(TimePoint now);
 
@@ -100,11 +107,14 @@ private:
     Duration rate_limit_window_{std::chrono::seconds(60)};
 
     // ---- Config knobs -------------------------------------------------------
-    static constexpr std::chrono::seconds kPendingTimeout{30};
+    static constexpr std::chrono::seconds kPendingTimeout{10};
     static constexpr std::chrono::seconds kRateCleanupInterval{60};
+    static constexpr int kClientChannelInactivitySec = 3;
+    static constexpr std::size_t kMaxPendingLogins = 2000;
 
     // ---- Login tracking ----------------------------------------------------
     std::unordered_map<uint32_t, PendingLogin> pending_;
+    std::unordered_map<std::string, uint32_t> pending_by_username_;
     uint32_t next_request_id_{1};
 
     // ---- Connections --------------------------------------------------------
@@ -117,6 +127,8 @@ private:
     uint64_t login_fail_total_{0};
     uint64_t login_timeout_total_{0};
     uint64_t login_rate_limited_total_{0};
+    uint64_t login_dedup_total_{0};
+    uint64_t login_busy_total_{0};
 };
 
 }  // namespace atlas

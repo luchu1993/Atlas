@@ -1,6 +1,7 @@
 #pragma once
 
 #include "base_entity.hpp"
+#include "foundation/time.hpp"
 #include "server/entity_types.hpp"
 
 #include <cstdint>
@@ -61,8 +62,13 @@ public:
     // Retrieve Proxy by ID (nullptr if not a Proxy or not found)
     [[nodiscard]] auto find_proxy(EntityID id) const -> Proxy*;
 
-    // Retrieve Proxy by login session key (nullptr if not found)
-    [[nodiscard]] auto find_proxy_by_session(const SessionKey& session_key) const -> Proxy*;
+    // Retrieve Proxy by login session key (nullptr if not found).
+    // Also checks recently-retired session keys to tolerate short-lived
+    // overlap between session rotation and client authentication.
+    [[nodiscard]] auto find_proxy_by_session(const SessionKey& session_key) -> Proxy*;
+
+    // Remove expired entries from the retired-session table.
+    void cleanup_retired_sessions();
 
     // Update secondary indexes when identity/session state changes.
     auto assign_dbid(EntityID id, DatabaseID dbid) -> bool;
@@ -95,6 +101,13 @@ private:
     std::unordered_map<EntityID, std::unique_ptr<BaseEntity>> entities_;
     std::unordered_map<DatabaseID, EntityID> dbid_index_;
     std::unordered_map<SessionKey, EntityID> session_index_;
+    struct RetiredSession
+    {
+        EntityID entity_id{kInvalidEntityID};
+        TimePoint expires_at{};
+    };
+    std::unordered_map<SessionKey, RetiredSession> retired_sessions_;
+    static constexpr Duration kRetiredSessionTtl = std::chrono::seconds(5);
     std::size_t proxy_count_{0};
 };
 

@@ -150,6 +150,8 @@ private:
         uint8_t force_logoff_retry_count{0};
         bool waiting_for_remote_force_logoff_ack{false};
         bool reply_sent{false};
+        bool blob_prefetched{false};
+        std::vector<std::byte> entity_blob;
     };
     std::unordered_map<uint32_t, PendingLogin> pending_logins_;
     uint32_t next_prepare_request_id_{1};
@@ -222,7 +224,7 @@ private:
     LoadTracker load_tracker_{};
     static constexpr Duration kForceLogoffRetryBaseDelay = std::chrono::milliseconds(250);
     static constexpr Duration kForceLogoffRetryMaxDelay = std::chrono::seconds(2);
-    static constexpr Duration kPendingTimeout = std::chrono::seconds(30);
+    static constexpr Duration kPendingTimeout = std::chrono::seconds(8);
     // Keep detached proxies around for one shortline reconnect window. Longer
     // retention increases stale proxy pressure without improving the fast path.
     static constexpr Duration kDetachedProxyGrace = std::chrono::milliseconds(1500);

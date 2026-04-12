@@ -69,6 +69,7 @@ auto DBApp::init(int argc, char* argv[]) -> bool
         ATLAS_LOG_ERROR("DBApp: database startup failed: {}", startup_result.error().message());
         return false;
     }
+    database_->set_deferred_mode(true);
 
     // ---- Register message handlers ------------------------------------------
     auto& table = network().interface_table();
@@ -248,7 +249,7 @@ void DBApp::on_checkout_entity(const Address& src, Channel* ch, const dbapp::Che
                     msg.dbid, msg.type_id, src.ip(), src.port());
 
     CheckoutInfo owner;
-    owner.base_addr = src;
+    owner.base_addr = (msg.owner_addr.port() != 0) ? msg.owner_addr : src;
     owner.entity_id = msg.entity_id;
 
     auto send_ack = [this, reply_addr = src, request_id = msg.request_id](GetResult result)
@@ -345,7 +346,7 @@ void DBApp::on_checkin_entity(const Address& /*src*/, Channel* /*ch*/,
 {
     ATLAS_LOG_DEBUG("DBApp: checkin dbid={} type_id={}", msg.dbid, msg.type_id);
     checkout_mgr_.checkin(msg.dbid, msg.type_id);
-    database_->clear_checkout(msg.dbid, msg.type_id, [](bool) {});
+    database_->mark_checkout_cleared(msg.dbid, msg.type_id);
 }
 
 // ============================================================================

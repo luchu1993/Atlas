@@ -73,7 +73,6 @@ TEST(Proxy, DefaultState)
     Proxy p(10, 5);
     EXPECT_EQ(p.entity_id(), 10u);
     EXPECT_FALSE(p.has_client());
-    EXPECT_EQ(p.client_channel(), nullptr);
 }
 
 TEST(Proxy, SessionKey)

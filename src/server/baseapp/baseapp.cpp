@@ -218,6 +218,12 @@ auto BaseApp::init(int argc, char* argv[]) -> bool
 
 void BaseApp::fini()
 {
+    entity_mgr_.for_each(
+        [this](const BaseEntity& ent)
+        {
+            if (ent.dbid() != kInvalidDBID)
+                release_checkout(ent.dbid(), ent.type_id());
+        });
     entity_mgr_.flush_destroyed();
     EntityApp::fini();
 }
@@ -234,11 +240,13 @@ void BaseApp::on_end_of_tick()
 void BaseApp::on_tick_complete()
 {
     entity_mgr_.flush_destroyed();
+    entity_mgr_.cleanup_retired_sessions();
     expire_detached_proxies();
     update_load_estimate();
     report_load_to_baseappmgr();
     cleanup_expired_pending_requests();
     maybe_request_more_ids();
+
     EntityApp::on_tick_complete();
 }
 
@@ -851,7 +859,7 @@ auto BaseApp::try_complete_local_relogin(PendingLogin pending) -> bool
     }
 
     auto* proxy = entity_mgr_.find_proxy(ent->entity_id());
-    if (!proxy || logoff_entities_in_flight_.contains(proxy->entity_id()))
+    if (!proxy)
     {
         return false;
     }
@@ -915,10 +923,7 @@ void BaseApp::complete_prepare_login_from_checkout(PendingLogin pending, Databas
     {
         defer_prepare_login_from_checkout(blocking_ent->entity_id(), std::move(pending), dbid,
                                           type_id, blob);
-        if (!logoff_entities_in_flight_.contains(blocking_ent->entity_id()))
-        {
-            start_disconnect_logoff(blocking_ent->entity_id());
-        }
+        start_disconnect_logoff(blocking_ent->entity_id());
         return;
     }
 
@@ -943,10 +948,7 @@ void BaseApp::complete_prepare_login_from_checkout(PendingLogin pending, Databas
             entity_mgr_.destroy(ent->entity_id());
             defer_prepare_login_from_checkout(blocking_ent->entity_id(), std::move(pending), dbid,
                                               type_id, blob);
-            if (!logoff_entities_in_flight_.contains(blocking_ent->entity_id()))
-            {
-                start_disconnect_logoff(blocking_ent->entity_id());
-            }
+            start_disconnect_logoff(blocking_ent->entity_id());
             return;
         }
 
@@ -1083,6 +1085,17 @@ void BaseApp::dispatch_prepare_login(PendingLogin pending)
         return;
     }
 
+    // If LoginApp already checked out and provided the blob, skip DBApp round-trip
+    if (pending.blob_prefetched)
+    {
+        const DatabaseID dbid = pending.dbid;
+        const uint16_t type_id = pending.type_id;
+        auto blob = std::move(pending.entity_blob);
+        complete_prepare_login_from_checkout(std::move(pending), dbid, type_id,
+                                             std::span<const std::byte>(blob));
+        return;
+    }
+
     const uint32_t rid = next_prepare_request_id_++;
     const DatabaseID dbid = pending.dbid;
     const uint16_t type_id = pending.type_id;
@@ -1195,45 +1208,19 @@ void BaseApp::begin_logoff_persist(EntityID entity_id, DatabaseID dbid, uint16_t
     if (entity_id == kInvalidEntityID)
     {
         if (continuation_request_id != 0)
-        {
             continue_login_after_force_logoff(continuation_request_id);
-        }
         else
-        {
             finish_login_flow(dbid);
-        }
-        return;
-    }
-
-    if (logoff_entities_in_flight_.contains(entity_id))
-    {
-        return;
-    }
-
-    if (!dbapp_channel_)
-    {
-        ATLAS_LOG_ERROR("BaseApp: logoff persist: no DBApp connection (entity={} dbid={})",
-                        entity_id, dbid);
-        if (continuation_request_id != 0)
-        {
-            fail_pending_force_logoff(continuation_request_id, "no_dbapp");
-        }
-        flush_remote_force_logoff_acks(entity_id, false);
-        finish_login_flow(dbid);
         return;
     }
 
     auto* ent = entity_mgr_.find(entity_id);
-    if (!ent || ent->dbid() != dbid)
+    if (!ent || ent->dbid() != dbid || ent->is_pending_destroy())
     {
         if (continuation_request_id != 0)
-        {
             continue_login_after_force_logoff(continuation_request_id);
-        }
         else
-        {
             finish_login_flow(dbid);
-        }
         return;
     }
 
@@ -1241,41 +1228,73 @@ void BaseApp::begin_logoff_persist(EntityID entity_id, DatabaseID dbid, uint16_t
     if (!capture_entity_snapshot(entity_id, blob))
     {
         if (continuation_request_id != 0)
-        {
             fail_pending_force_logoff(continuation_request_id, "force_logoff_snapshot_failed");
-        }
         flush_remote_force_logoff_acks(entity_id, false);
         finish_login_flow(dbid);
         return;
     }
 
-    const uint32_t write_request_id = next_prepare_request_id_++;
-    PendingLogoffWrite pending_write;
-    pending_write.continuation_request_id = continuation_request_id;
-    pending_write.entity_id = entity_id;
-    pending_write.dbid = dbid;
-    pending_write.type_id = type_id;
-    pending_write.created_at = Clock::now();
-    pending_logoff_writes_[write_request_id] = pending_write;
-    logoff_entities_in_flight_.insert(entity_id);
+    // Optimistic checkin: release the DB-side checkout immediately so that a
+    // subsequent CheckoutEntity for the same DBID can succeed without waiting
+    // for the data write to complete.
+    release_checkout(dbid, type_id);
 
-    dbapp::WriteEntity msg;
-    msg.flags = WriteFlags::ExplicitDBID | WriteFlags::LogOff;
-    msg.type_id = type_id;
-    msg.dbid = dbid;
-    msg.entity_id = entity_id;
-    msg.request_id = write_request_id;
-    msg.blob = std::move(blob);
-    auto send_result = dbapp_channel_->send_message(msg);
-    if (!send_result)
+    // Fire-and-forget data persistence — the checkout is already released so
+    // we don't use WriteFlags::LogOff.  The WriteEntityAck for this request
+    // will be silently ignored (entity already destroyed locally).
+    if (dbapp_channel_)
     {
-        pending_logoff_writes_.erase(write_request_id);
-        logoff_entities_in_flight_.erase(entity_id);
+        dbapp::WriteEntity msg;
+        msg.flags = WriteFlags::ExplicitDBID;
+        msg.type_id = type_id;
+        msg.dbid = dbid;
+        msg.entity_id = entity_id;
+        msg.request_id = next_prepare_request_id_++;
+        msg.blob = std::move(blob);
+        (void)dbapp_channel_->send_message(msg);
+    }
+
+    // Destroy the local entity immediately.
+    if (!finalize_force_logoff(entity_id))
+    {
         if (continuation_request_id != 0)
+            fail_pending_force_logoff(continuation_request_id, "force_logoff_destroy_failed");
+        if (auto waiter_it = pending_local_force_logoff_waiters_.find(entity_id);
+            waiter_it != pending_local_force_logoff_waiters_.end())
         {
-            fail_pending_force_logoff(continuation_request_id, "force_logoff_persist_send_failed");
+            for (uint32_t waiter_request_id : waiter_it->second)
+                fail_pending_force_logoff(waiter_request_id, "force_logoff_destroy_failed");
+            pending_local_force_logoff_waiters_.erase(waiter_it);
         }
+        fail_deferred_prepare_logins(entity_id, "force_logoff_destroy_failed");
         flush_remote_force_logoff_acks(entity_id, false);
+        finish_login_flow(dbid);
+        return;
+    }
+
+    // All post-logoff continuations are processed synchronously — no need to
+    // wait for WriteEntityAck.
+    const bool resumed_deferred = resume_deferred_prepare_logins(entity_id);
+
+    if (auto waiter_it = pending_local_force_logoff_waiters_.find(entity_id);
+        waiter_it != pending_local_force_logoff_waiters_.end())
+    {
+        for (uint32_t waiter_request_id : waiter_it->second)
+        {
+            if (pending_force_logoffs_.contains(waiter_request_id))
+                continue_login_after_force_logoff(waiter_request_id);
+        }
+        pending_local_force_logoff_waiters_.erase(waiter_it);
+    }
+
+    flush_remote_force_logoff_acks(entity_id, true);
+
+    if (continuation_request_id != 0 && pending_force_logoffs_.contains(continuation_request_id))
+    {
+        continue_login_after_force_logoff(continuation_request_id);
+    }
+    else if (!resumed_deferred)
+    {
         finish_login_flow(dbid);
     }
 }
@@ -1306,13 +1325,8 @@ void BaseApp::start_disconnect_logoff(EntityID entity_id)
 {
     clear_detached_grace(entity_id);
 
-    if (logoff_entities_in_flight_.contains(entity_id))
-    {
-        return;
-    }
-
     auto* ent = entity_mgr_.find(entity_id);
-    if (!ent)
+    if (!ent || ent->is_pending_destroy())
     {
         return;
     }
@@ -1402,12 +1416,11 @@ void BaseApp::process_force_logoff_request(const baseapp::ForceLogoff& msg)
 
     if (found_id != kInvalidEntityID)
     {
-        if (logoff_entities_in_flight_.contains(found_id))
+        if (auto* found_ent = entity_mgr_.find(found_id);
+            found_ent && found_ent->is_pending_destroy())
         {
             if (pending_force_logoffs_.contains(msg.request_id))
-            {
-                pending_local_force_logoff_waiters_[found_id].push_back(msg.request_id);
-            }
+                continue_login_after_force_logoff(msg.request_id);
             return;
         }
 
@@ -2067,9 +2080,9 @@ void BaseApp::maybe_request_more_ids()
 
 void BaseApp::on_prepare_login(Channel& ch, const login::PrepareLogin& msg)
 {
-    ATLAS_LOG_DEBUG("BaseApp: prepare login request_id={} dbid={} type_id={} from {}:{}",
-                    msg.request_id, msg.dbid, msg.type_id, ch.remote_address().ip(),
-                    ch.remote_address().port());
+    ATLAS_LOG_DEBUG("BaseApp: prepare login request_id={} dbid={} type_id={} blob={}B from {}:{}",
+                    msg.request_id, msg.dbid, msg.type_id, msg.entity_blob.size(),
+                    ch.remote_address().ip(), ch.remote_address().port());
     PendingLogin pending;
     pending.login_request_id = msg.request_id;
     pending.loginapp_addr = ch.remote_address();
@@ -2077,6 +2090,8 @@ void BaseApp::on_prepare_login(Channel& ch, const login::PrepareLogin& msg)
     pending.dbid = msg.dbid;
     pending.session_key = msg.session_key;
     pending.created_at = Clock::now();
+    pending.blob_prefetched = msg.blob_prefetched;
+    pending.entity_blob = msg.entity_blob;
     submit_prepare_login(std::move(pending));
     (void)msg.client_addr;
 }
@@ -2106,13 +2121,14 @@ void BaseApp::on_force_logoff(Channel& ch, const baseapp::ForceLogoff& msg)
 
     pending_remote_force_logoff_acks_[found_id].push_back({ch.remote_address(), msg.request_id});
 
-    if (logoff_entities_in_flight_.contains(found_id))
+    auto* ent = entity_mgr_.find(found_id);
+    if (!ent || ent->is_pending_destroy())
     {
+        flush_remote_force_logoff_acks(found_id, true);
         return;
     }
 
-    auto* ent = entity_mgr_.find(found_id);
-    if (!ent || ent->dbid() == kInvalidDBID)
+    if (ent->dbid() == kInvalidDBID)
     {
         (void)finalize_force_logoff(found_id);
         flush_remote_force_logoff_acks(found_id, true);

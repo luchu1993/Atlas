@@ -160,6 +160,7 @@ struct CheckoutEntity
     std::string identifier;
     uint32_t entity_id{0};
     uint32_t request_id{0};
+    Address owner_addr;
 
     static auto descriptor() -> const MessageDesc&
     {
@@ -176,6 +177,8 @@ struct CheckoutEntity
         w.write_string(identifier);
         w.write(entity_id);
         w.write(request_id);
+        w.write(owner_addr.ip());
+        w.write(owner_addr.port());
     }
 
     static auto deserialize(BinaryReader& r) -> Result<CheckoutEntity>
@@ -186,7 +189,9 @@ struct CheckoutEntity
         auto id_str = r.read_string();
         auto eid = r.read<uint32_t>();
         auto rid = r.read<uint32_t>();
-        if (!m || !ti || !db || !id_str || !eid || !rid)
+        auto oip = r.read<uint32_t>();
+        auto oport = r.read<uint16_t>();
+        if (!m || !ti || !db || !id_str || !eid || !rid || !oip || !oport)
             return Error{ErrorCode::InvalidArgument, "CheckoutEntity: truncated"};
         CheckoutEntity msg;
         msg.mode = static_cast<LoadMode>(*m);
@@ -195,6 +200,7 @@ struct CheckoutEntity
         msg.identifier = std::move(*id_str);
         msg.entity_id = *eid;
         msg.request_id = *rid;
+        msg.owner_addr = Address(*oip, *oport);
         return msg;
     }
 };

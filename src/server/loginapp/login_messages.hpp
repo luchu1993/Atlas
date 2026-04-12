@@ -9,6 +9,7 @@
 #include <cstdint>
 #include <cstring>
 #include <string>
+#include <vector>
 
 // ============================================================================
 // Login-flow network messages (IDs 5000–5007)
@@ -40,6 +41,8 @@ enum class LoginStatus : uint8_t
     RateLimited = 4,
     ServerNotReady = 5,
     InternalError = 6,
+    LoginInProgress = 7,
+    ServerBusy = 8,
 };
 
 // ============================================================================
@@ -322,14 +325,13 @@ struct PrepareLogin
     DatabaseID dbid{kInvalidDBID};
     SessionKey session_key;
     Address client_addr;
+    std::vector<std::byte> entity_blob;
+    bool blob_prefetched{false};
 
     static auto descriptor() -> const MessageDesc&
     {
-        static const MessageDesc desc{
-            msg_id::id(msg_id::Login::PrepareLogin), "login::PrepareLogin",
-            MessageLengthStyle::Fixed,
-            static_cast<int>(sizeof(uint32_t) + sizeof(uint16_t) + sizeof(int64_t) +
-                             sizeof(SessionKey) + sizeof(uint32_t) + sizeof(uint16_t))};
+        static const MessageDesc desc{msg_id::id(msg_id::Login::PrepareLogin),
+                                      "login::PrepareLogin", MessageLengthStyle::Variable, -1};
         return desc;
     }
 
@@ -342,6 +344,10 @@ struct PrepareLogin
             reinterpret_cast<const std::byte*>(session_key.bytes), sizeof(session_key.bytes)));
         w.write(client_addr.ip());
         w.write(client_addr.port());
+        w.write(static_cast<uint8_t>(blob_prefetched ? 1 : 0));
+        w.write(static_cast<uint32_t>(entity_blob.size()));
+        if (!entity_blob.empty())
+            w.write_bytes(entity_blob);
     }
 
     static auto deserialize(BinaryReader& r) -> Result<PrepareLogin>
@@ -354,7 +360,9 @@ struct PrepareLogin
         auto key_span = r.read_bytes(sizeof(SessionKey));
         auto ip = r.read<uint32_t>();
         auto port = r.read<uint16_t>();
-        if (!key_span || !ip || !port)
+        auto pf = r.read<uint8_t>();
+        auto blob_sz = r.read<uint32_t>();
+        if (!key_span || !ip || !port || !pf || !blob_sz)
             return Error{ErrorCode::InvalidArgument, "PrepareLogin: field truncated"};
         PrepareLogin msg;
         msg.request_id = *rid;
@@ -362,6 +370,14 @@ struct PrepareLogin
         msg.dbid = *db;
         std::memcpy(msg.session_key.bytes, key_span->data(), sizeof(SessionKey));
         msg.client_addr = Address(*ip, *port);
+        msg.blob_prefetched = (*pf != 0);
+        if (*blob_sz > 0)
+        {
+            auto blob_span = r.read_bytes(*blob_sz);
+            if (!blob_span)
+                return Error{ErrorCode::InvalidArgument, "PrepareLogin: blob truncated"};
+            msg.entity_blob.assign(blob_span->begin(), blob_span->end());
+        }
         return msg;
     }
 };

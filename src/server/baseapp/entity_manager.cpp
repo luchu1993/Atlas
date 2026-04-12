@@ -89,14 +89,23 @@ auto EntityManager::find_proxy(EntityID id) const -> Proxy*
     return dynamic_cast<Proxy*>(find(id));
 }
 
-auto EntityManager::find_proxy_by_session(const SessionKey& session_key) const -> Proxy*
+auto EntityManager::find_proxy_by_session(const SessionKey& session_key) -> Proxy*
 {
     auto it = session_index_.find(session_key);
-    if (it == session_index_.end())
+    if (it != session_index_.end())
     {
-        return nullptr;
+        return this->find_proxy(it->second);
     }
-    return this->find_proxy(it->second);
+
+    auto rit = retired_sessions_.find(session_key);
+    if (rit != retired_sessions_.end() && Clock::now() <= rit->second.expires_at)
+    {
+        const EntityID eid = rit->second.entity_id;
+        retired_sessions_.erase(rit);
+        return this->find_proxy(eid);
+    }
+
+    return nullptr;
 }
 
 auto EntityManager::assign_dbid(EntityID id, DatabaseID dbid) -> bool
@@ -155,6 +164,10 @@ auto EntityManager::assign_session_key(EntityID id, const SessionKey& session_ke
     if (!old_key.is_zero())
     {
         session_index_.erase(old_key);
+        if (!session_key.is_zero())
+        {
+            retired_sessions_[old_key] = RetiredSession{id, Clock::now() + kRetiredSessionTtl};
+        }
     }
 
     if (!session_key.is_zero())
@@ -227,6 +240,18 @@ void EntityManager::flush_destroyed()
             this->erase_indexes_for(*it->second);
             it = entities_.erase(it);
         }
+        else
+            ++it;
+    }
+}
+
+void EntityManager::cleanup_retired_sessions()
+{
+    const auto now = Clock::now();
+    for (auto it = retired_sessions_.begin(); it != retired_sessions_.end();)
+    {
+        if (now > it->second.expires_at)
+            it = retired_sessions_.erase(it);
         else
             ++it;
     }

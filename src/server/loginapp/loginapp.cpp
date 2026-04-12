@@ -1,6 +1,7 @@
 #include "loginapp.hpp"
 
 #include "baseappmgr/baseappmgr_messages.hpp"
+#include "dbapp/dbapp_messages.hpp"
 #include "foundation/log.hpp"
 #include "network/channel.hpp"
 #include "network/machined_types.hpp"
@@ -82,6 +83,11 @@ auto LoginApp::init(int argc, char* argv[]) -> bool
         [this](const Address& src, Channel* ch, const login::PrepareLoginResult& msg)
         { on_prepare_login_result(src, ch, msg); });
 
+    // DBApp checkout responses (for LoginApp-proxy checkout)
+    (void)table.register_typed_handler<dbapp::CheckoutEntityAck>(
+        [this](const Address& src, Channel* ch, const dbapp::CheckoutEntityAck& msg)
+        { on_checkout_entity_ack(src, ch, msg); });
+
     // ---- Subscribe to DBApp birth ----------------------------------------
     machined_client().subscribe(
         machined::ListenerType::Both, ProcessType::DBApp,
@@ -133,6 +139,11 @@ auto LoginApp::init(int argc, char* argv[]) -> bool
                             result.error().message());
             return false;
         }
+
+        network().set_accept_callback(
+            [](Channel& ch)
+            { ch.set_inactivity_timeout(std::chrono::seconds(kClientChannelInactivitySec)); });
+
         ATLAS_LOG_INFO("LoginApp: RUDP listener on port {}", cfg.external_port);
     }
 
@@ -173,6 +184,8 @@ void LoginApp::register_watchers()
                      std::function<uint64_t()>([this] { return login_timeout_total_; }));
     wr.add<uint64_t>("loginapp/login_rate_limited_total",
                      std::function<uint64_t()>([this] { return login_rate_limited_total_; }));
+    wr.add<uint64_t>("loginapp/login_busy_total",
+                     std::function<uint64_t()>([this] { return login_busy_total_; }));
     wr.add<int>("loginapp/pending_logins",
                 std::function<int()>([this] { return static_cast<int>(pending_.size()); }));
     wr.add<bool>("loginapp/dbapp_connected",
@@ -201,6 +214,24 @@ void LoginApp::on_login_request(const Address& src, Channel* ch, const login::Lo
     }
     record_login_attempt(src);
 
+    if (pending_by_username_.contains(msg.username))
+    {
+        ++login_dedup_total_;
+        ATLAS_LOG_DEBUG("LoginApp: dedup login for '{}' from {}:{}", msg.username, src.ip(),
+                        src.port());
+        send_login_error(src, login::LoginStatus::LoginInProgress, "login_in_progress");
+        return;
+    }
+
+    if (pending_.size() >= kMaxPendingLogins)
+    {
+        ++login_busy_total_;
+        ATLAS_LOG_DEBUG("LoginApp: admission control, pending={} from {}:{}", pending_.size(),
+                        src.ip(), src.port());
+        send_login_error(src, login::LoginStatus::ServerBusy, "server_busy");
+        return;
+    }
+
     if (!dbapp_channel_)
     {
         ATLAS_LOG_ERROR("LoginApp: no DBApp connection for login request");
@@ -215,6 +246,7 @@ void LoginApp::on_login_request(const Address& src, Channel* ch, const login::Lo
     pending.username = msg.username;
     pending.stage = PendingStage::WaitingAuth;
     pending.created_at = Clock::now();
+    pending_by_username_[msg.username] = rid;
     pending_[rid] = std::move(pending);
 
     const auto& cfg = config();
@@ -249,7 +281,7 @@ void LoginApp::on_auth_login_result(const Address& /*src*/, Channel* /*ch*/,
         ATLAS_LOG_DEBUG("LoginApp: auth failed for '{}' status={}", pending.username,
                         static_cast<int>(msg.status));
         send_login_error(pending.client_addr, msg.status, "auth_failed");
-        pending_.erase(it);
+        remove_pending(it);
         return;
     }
 
@@ -257,7 +289,7 @@ void LoginApp::on_auth_login_result(const Address& /*src*/, Channel* /*ch*/,
     {
         ATLAS_LOG_ERROR("LoginApp: no BaseAppMgr connection");
         send_login_error(pending.client_addr, login::LoginStatus::ServerNotReady, "no_baseappmgr");
-        pending_.erase(it);
+        remove_pending(it);
         return;
     }
 
@@ -294,7 +326,7 @@ void LoginApp::on_allocate_baseapp_result(const Address& /*src*/, Channel* /*ch*
     {
         ATLAS_LOG_WARNING("LoginApp: no BaseApp available for '{}'", pending.username);
         send_login_error(pending.client_addr, login::LoginStatus::ServerFull, "no_baseapp");
-        pending_.erase(it);
+        remove_pending(it);
         return;
     }
 
@@ -303,14 +335,13 @@ void LoginApp::on_allocate_baseapp_result(const Address& /*src*/, Channel* /*ch*
     pending.session_key = SessionKey::generate();
     pending.stage = PendingStage::WaitingPrepare;
 
-    // Connect to BaseApp internal RUDP address and send PrepareLogin
     auto ch_result = network().connect_rudp_nocwnd(msg.internal_addr);
     if (!ch_result)
     {
         ATLAS_LOG_ERROR("LoginApp: could not connect to BaseApp {}:{}", msg.internal_addr.ip(),
                         msg.internal_addr.port());
         send_login_error(pending.client_addr, login::LoginStatus::InternalError, "connect_failed");
-        pending_.erase(it);
+        remove_pending(it);
         return;
     }
     Channel* baseapp_ch = static_cast<Channel*>(*ch_result);
@@ -321,6 +352,83 @@ void LoginApp::on_allocate_baseapp_result(const Address& /*src*/, Channel* /*ch*
     prep.dbid = pending.dbid;
     prep.session_key = pending.session_key;
     prep.client_addr = pending.client_addr;
+    (void)baseapp_ch->send_message(prep);
+}
+
+// ============================================================================
+// on_checkout_entity_ack — DBApp returns entity blob for proxy checkout
+// ============================================================================
+
+void LoginApp::on_checkout_entity_ack(const Address& /*src*/, Channel* /*ch*/,
+                                      const dbapp::CheckoutEntityAck& msg)
+{
+    auto it = pending_.find(msg.request_id);
+    if (it == pending_.end())
+    {
+        ATLAS_LOG_WARNING("LoginApp: CheckoutEntityAck for unknown request_id={}", msg.request_id);
+        return;
+    }
+    PendingLogin& pending = it->second;
+
+    if (msg.status != dbapp::CheckoutStatus::Success)
+    {
+        if (msg.status == dbapp::CheckoutStatus::AlreadyCheckedOut)
+        {
+            // Fall back: let BaseApp handle force-logoff via the old path (no blob)
+            ATLAS_LOG_DEBUG("LoginApp: checkout conflict for '{}' dbid={}, delegating to BaseApp",
+                            pending.username, pending.dbid);
+            pending.stage = PendingStage::WaitingPrepare;
+
+            auto ch_result = network().connect_rudp_nocwnd(pending.baseapp_internal_addr);
+            if (!ch_result)
+            {
+                send_login_error(pending.client_addr, login::LoginStatus::InternalError,
+                                 "connect_failed");
+                remove_pending(it);
+                return;
+            }
+            Channel* baseapp_ch = static_cast<Channel*>(*ch_result);
+
+            login::PrepareLogin prep;
+            prep.request_id = msg.request_id;
+            prep.type_id = pending.type_id;
+            prep.dbid = pending.dbid;
+            prep.session_key = pending.session_key;
+            prep.client_addr = pending.client_addr;
+            (void)baseapp_ch->send_message(prep);
+            return;
+        }
+
+        ATLAS_LOG_WARNING("LoginApp: checkout failed for '{}' dbid={} status={}", pending.username,
+                          pending.dbid, static_cast<int>(msg.status));
+        send_login_error(pending.client_addr, login::LoginStatus::InternalError,
+                         msg.error.empty() ? "checkout_failed" : msg.error);
+        remove_pending(it);
+        return;
+    }
+
+    pending.entity_blob = msg.blob;
+    pending.stage = PendingStage::WaitingPrepare;
+
+    auto ch_result = network().connect_rudp_nocwnd(pending.baseapp_internal_addr);
+    if (!ch_result)
+    {
+        ATLAS_LOG_ERROR("LoginApp: could not connect to BaseApp {}:{}",
+                        pending.baseapp_internal_addr.ip(), pending.baseapp_internal_addr.port());
+        send_login_error(pending.client_addr, login::LoginStatus::InternalError, "connect_failed");
+        remove_pending(it);
+        return;
+    }
+    Channel* baseapp_ch = static_cast<Channel*>(*ch_result);
+
+    login::PrepareLogin prep;
+    prep.request_id = msg.request_id;
+    prep.type_id = pending.type_id;
+    prep.dbid = pending.dbid;
+    prep.session_key = pending.session_key;
+    prep.client_addr = pending.client_addr;
+    prep.blob_prefetched = true;
+    prep.entity_blob = std::move(pending.entity_blob);
     (void)baseapp_ch->send_message(prep);
 }
 
@@ -346,7 +454,7 @@ void LoginApp::on_prepare_login_result(const Address& /*src*/, Channel* /*ch*/,
     {
         ATLAS_LOG_ERROR("LoginApp: PrepareLogin failed for '{}': {}", pending.username, msg.error);
         send_login_error(pending.client_addr, login::LoginStatus::InternalError, msg.error);
-        pending_.erase(it);
+        remove_pending(it);
         return;
     }
 
@@ -362,12 +470,18 @@ void LoginApp::on_prepare_login_result(const Address& /*src*/, Channel* /*ch*/,
     ATLAS_LOG_DEBUG("LoginApp: login complete for '{}' entity={} baseapp={}:{}", pending.username,
                     msg.entity_id, pending.baseapp_external_addr.ip(),
                     pending.baseapp_external_addr.port());
-    pending_.erase(it);
+    remove_pending(it);
 }
 
 // ============================================================================
 // Helpers
 // ============================================================================
+
+void LoginApp::remove_pending(std::unordered_map<uint32_t, PendingLogin>::iterator it)
+{
+    pending_by_username_.erase(it->second.username);
+    pending_.erase(it);
+}
 
 void LoginApp::send_login_error(const Address& client_addr, login::LoginStatus status,
                                 const std::string& msg)
@@ -484,6 +598,7 @@ void LoginApp::cleanup_expired_logins()
             ATLAS_LOG_WARNING("LoginApp: pending login request_id={} timed out",
                               it->second.request_id);
             send_login_error(it->second.client_addr, login::LoginStatus::InternalError, "timeout");
+            pending_by_username_.erase(it->second.username);
             it = pending_.erase(it);
         }
         else
