@@ -299,8 +299,8 @@ auto NetworkInterface::start_rudp_server(const Address& addr) -> Result<void>
     return start_rudp_server(addr, RudpProfile{});
 }
 
-auto NetworkInterface::start_rudp_server(const Address& addr,
-                                         const RudpProfile& accept_profile) -> Result<void>
+auto NetworkInterface::start_rudp_server(const Address& addr, const RudpProfile& accept_profile)
+    -> Result<void>
 {
     if (rudp_socket_)
     {
