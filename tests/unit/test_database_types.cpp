@@ -1,3 +1,4 @@
+#include "db/database_factory.hpp"
 #include "db/idatabase.hpp"
 
 #include <gtest/gtest.h>
@@ -78,4 +79,18 @@ TEST(DatabaseTypes, CheckoutInfoFields)
     EXPECT_EQ(info.base_addr.port(), 7100u);
     EXPECT_EQ(info.app_id, 42u);
     EXPECT_EQ(info.entity_id, 1001u);
+}
+
+TEST(DatabaseTypes, CreateDatabaseSupportsSqlite)
+{
+    DatabaseConfig cfg;
+
+    auto db = create_database(cfg);
+    ASSERT_NE(db, nullptr);
+}
+
+TEST(DatabaseTypes, DatabaseConfigDefaultsToSqlite)
+{
+    DatabaseConfig cfg;
+    EXPECT_EQ(cfg.type, "sqlite");
 }

@@ -14,7 +14,7 @@ atlas_add_library(atlas_dbapp_lib
 )
 
 target_include_directories(atlas_dbapp_lib
-    PRIVATE ${CMAKE_SOURCE_DIR}/src/server
+    PUBLIC $<BUILD_INTERFACE:${CMAKE_SOURCE_DIR}/src/server>
 )
 
 atlas_add_executable(atlas_dbapp

@@ -7,5 +7,7 @@ atlas_add_library(atlas_db
         atlas_foundation
         atlas_network
         atlas_entitydef
+        atlas_db_sqlite
         atlas_db_xml
+        atlas_platform
 )

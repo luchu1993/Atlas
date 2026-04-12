@@ -6,13 +6,19 @@
 namespace atlas
 {
 
-std::atomic<bool> Runtime::initialized_{false};
+std::atomic<uint32_t> Runtime::init_count_{0};
+std::mutex Runtime::mutex_{};
 
 auto Runtime::initialize(const RuntimeConfig& config) -> Result<void>
 {
-    if (initialized_.exchange(true, std::memory_order_acq_rel))
+    std::lock_guard lock(mutex_);
+
+    const uint32_t previous = init_count_.load(std::memory_order_acquire);
+    if (previous > 0)
     {
-        return Error{ErrorCode::AlreadyExists, "Runtime already initialized"};
+        init_count_.store(previous + 1, std::memory_order_release);
+        Logger::instance().set_level(config.log_level);
+        return {};
     }
 
     // 1. Logging — must be first so subsequent subsystems can log.
@@ -30,14 +36,26 @@ auto Runtime::initialize(const RuntimeConfig& config) -> Result<void>
     // 3. Platform init — placeholder for WSAStartup / platform_initialize()
     //    socket.cpp already self-initialises Winsock via ensure_winsock().
 
+    init_count_.store(1, std::memory_order_release);
     ATLAS_LOG_INFO("Atlas Runtime initialized");
     return {};
 }
 
 void Runtime::finalize()
 {
-    if (!initialized_.exchange(false, std::memory_order_acq_rel))
+    std::lock_guard lock(mutex_);
+
+    const uint32_t previous = init_count_.load(std::memory_order_acquire);
+    if (previous == 0)
         return;
+
+    if (previous > 1)
+    {
+        init_count_.store(previous - 1, std::memory_order_release);
+        return;
+    }
+
+    init_count_.store(0, std::memory_order_release);
 
     ATLAS_LOG_INFO("Atlas Runtime finalized");
     Logger::instance().clear_sinks();

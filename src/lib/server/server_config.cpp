@@ -123,6 +123,14 @@ auto parse_log_level(std::string_view s) -> LogLevel
     return LogLevel::Info;
 }
 
+auto parse_bool_string(std::string_view s) -> bool
+{
+    auto lower = std::string(s);
+    std::transform(lower.begin(), lower.end(), lower.begin(),
+                   [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+    return lower == "1" || lower == "true" || lower == "yes" || lower == "on";
+}
+
 void load_string_array(const DataSection* section, std::vector<std::string>& out)
 {
     if (!section)
@@ -192,6 +200,12 @@ auto ServerConfig::from_json_file(const std::filesystem::path& path) -> Result<S
             cfg.db_type = dbtype;
 
         cfg.db_xml_dir = db->read_string("xml_dir", cfg.db_xml_dir.string());
+        cfg.db_sqlite_path = db->read_string("sqlite_path", cfg.db_sqlite_path.string());
+        cfg.db_sqlite_wal = db->read_bool("sqlite_wal", cfg.db_sqlite_wal);
+        cfg.db_sqlite_busy_timeout_ms =
+            db->read_int("sqlite_busy_timeout_ms", cfg.db_sqlite_busy_timeout_ms);
+        cfg.db_sqlite_foreign_keys =
+            db->read_bool("sqlite_foreign_keys", cfg.db_sqlite_foreign_keys);
         cfg.db_mysql_host = db->read_string("mysql_host", cfg.db_mysql_host);
         cfg.db_mysql_port = static_cast<uint16_t>(db->read_uint("mysql_port", cfg.db_mysql_port));
         cfg.db_mysql_user = db->read_string("mysql_user", cfg.db_mysql_user);
@@ -341,13 +355,80 @@ auto ServerConfig::from_args(int argc, char* argv[]) -> Result<ServerConfig>
             cfg.db_xml_dir = std::string(val);
             ++i;
         }
+        else if (key == "db-sqlite-path")
+        {
+            cfg.db_sqlite_path = std::string(val);
+            ++i;
+        }
+        else if (key == "db-sqlite-wal")
+        {
+            cfg.db_sqlite_wal = parse_bool_string(val);
+            ++i;
+        }
+        else if (key == "db-sqlite-busy-timeout-ms")
+        {
+            try
+            {
+                cfg.db_sqlite_busy_timeout_ms = std::stoi(std::string(val));
+            }
+            catch (...)
+            {
+                return Error{ErrorCode::InvalidArgument, "invalid --db-sqlite-busy-timeout-ms"};
+            }
+            ++i;
+        }
+        else if (key == "db-sqlite-foreign-keys")
+        {
+            cfg.db_sqlite_foreign_keys = parse_bool_string(val);
+            ++i;
+        }
+        else if (key == "db-mysql-host")
+        {
+            cfg.db_mysql_host = std::string(val);
+            ++i;
+        }
+        else if (key == "db-mysql-port")
+        {
+            try
+            {
+                cfg.db_mysql_port = static_cast<uint16_t>(std::stoi(std::string(val)));
+            }
+            catch (...)
+            {
+                return Error{ErrorCode::InvalidArgument, "invalid --db-mysql-port"};
+            }
+            ++i;
+        }
+        else if (key == "db-mysql-user")
+        {
+            cfg.db_mysql_user = std::string(val);
+            ++i;
+        }
+        else if (key == "db-mysql-password")
+        {
+            cfg.db_mysql_password = std::string(val);
+            ++i;
+        }
+        else if (key == "db-mysql-database")
+        {
+            cfg.db_mysql_database = std::string(val);
+            ++i;
+        }
+        else if (key == "db-mysql-pool-size")
+        {
+            try
+            {
+                cfg.db_mysql_pool_size = std::stoi(std::string(val));
+            }
+            catch (...)
+            {
+                return Error{ErrorCode::InvalidArgument, "invalid --db-mysql-pool-size"};
+            }
+            ++i;
+        }
         else if (key == "auto-create-accounts")
         {
-            auto lower = std::string(val);
-            std::transform(lower.begin(), lower.end(), lower.begin(),
-                           [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
-            cfg.auto_create_accounts =
-                (lower == "1" || lower == "true" || lower == "yes" || lower == "on");
+            cfg.auto_create_accounts = parse_bool_string(val);
             ++i;
         }
         else if (key == "account-type-id")
@@ -444,39 +525,77 @@ auto ServerConfig::load(int argc, char* argv[]) -> Result<ServerConfig>
 
     auto& cli = *cli_result;
 
-    // Only override fields that CLI explicitly set (non-default)
-    // We detect "was set" by comparing against a default-constructed ServerConfig.
+    const auto has_cli_key = [argc, argv](std::string_view wanted) -> bool
+    {
+        for (int i = 1; i < argc; ++i)
+        {
+            std::string_view key = argv[i];
+            if (!key.starts_with("--"))
+                continue;
+            key.remove_prefix(2);
+            if (key == wanted)
+                return true;
+        }
+        return false;
+    };
+
     ServerConfig defaults;
 
-    if (cli.process_type != defaults.process_type)
+    if (has_cli_key("type"))
         cfg.process_type = cli.process_type;
-    if (!cli.process_name.empty())
+    if (has_cli_key("name"))
         cfg.process_name = cli.process_name;
-    if (cli.machined_address != defaults.machined_address)
+    if (has_cli_key("machined"))
         cfg.machined_address = cli.machined_address;
-    if (cli.internal_port != defaults.internal_port)
+    if (has_cli_key("internal-port"))
         cfg.internal_port = cli.internal_port;
-    if (cli.external_port != defaults.external_port)
+    if (has_cli_key("external-port"))
         cfg.external_port = cli.external_port;
-    if (cli.update_hertz != defaults.update_hertz)
+    if (has_cli_key("update-hertz"))
         cfg.update_hertz = cli.update_hertz;
-    if (cli.log_level != defaults.log_level)
+    if (has_cli_key("log-level"))
         cfg.log_level = cli.log_level;
-    if (!cli.script_assembly.empty())
+    if (has_cli_key("assembly"))
         cfg.script_assembly = cli.script_assembly;
-    if (!cli.runtime_config.empty())
+    if (has_cli_key("runtime-config"))
         cfg.runtime_config = cli.runtime_config;
-    if (cli.auto_create_accounts != defaults.auto_create_accounts)
+    if (has_cli_key("entitydef-path"))
+        cfg.entitydef_path = cli.entitydef_path;
+    if (has_cli_key("db-type"))
+        cfg.db_type = cli.db_type;
+    if (has_cli_key("db-xml-dir"))
+        cfg.db_xml_dir = cli.db_xml_dir;
+    if (has_cli_key("db-sqlite-path"))
+        cfg.db_sqlite_path = cli.db_sqlite_path;
+    if (has_cli_key("db-sqlite-wal"))
+        cfg.db_sqlite_wal = cli.db_sqlite_wal;
+    if (has_cli_key("db-sqlite-busy-timeout-ms"))
+        cfg.db_sqlite_busy_timeout_ms = cli.db_sqlite_busy_timeout_ms;
+    if (has_cli_key("db-sqlite-foreign-keys"))
+        cfg.db_sqlite_foreign_keys = cli.db_sqlite_foreign_keys;
+    if (has_cli_key("db-mysql-host"))
+        cfg.db_mysql_host = cli.db_mysql_host;
+    if (has_cli_key("db-mysql-port"))
+        cfg.db_mysql_port = cli.db_mysql_port;
+    if (has_cli_key("db-mysql-user"))
+        cfg.db_mysql_user = cli.db_mysql_user;
+    if (has_cli_key("db-mysql-password"))
+        cfg.db_mysql_password = cli.db_mysql_password;
+    if (has_cli_key("db-mysql-database"))
+        cfg.db_mysql_database = cli.db_mysql_database;
+    if (has_cli_key("db-mysql-pool-size"))
+        cfg.db_mysql_pool_size = cli.db_mysql_pool_size;
+    if (has_cli_key("auto-create-accounts"))
         cfg.auto_create_accounts = cli.auto_create_accounts;
-    if (cli.account_type_id != defaults.account_type_id)
+    if (has_cli_key("account-type-id"))
         cfg.account_type_id = cli.account_type_id;
-    if (cli.login_rate_limit_per_ip != defaults.login_rate_limit_per_ip)
+    if (has_cli_key("login-rate-limit-per-ip"))
         cfg.login_rate_limit_per_ip = cli.login_rate_limit_per_ip;
-    if (cli.login_rate_limit_global != defaults.login_rate_limit_global)
+    if (has_cli_key("login-rate-limit-global"))
         cfg.login_rate_limit_global = cli.login_rate_limit_global;
-    if (cli.login_rate_limit_window_sec != defaults.login_rate_limit_window_sec)
+    if (has_cli_key("login-rate-limit-window-sec"))
         cfg.login_rate_limit_window_sec = cli.login_rate_limit_window_sec;
-    if (!cli.login_rate_limit_trusted_cidrs.empty())
+    if (has_cli_key("login-rate-limit-trusted-cidr"))
         cfg.login_rate_limit_trusted_cidrs = cli.login_rate_limit_trusted_cidrs;
 
     // Derive process_name from type if not set

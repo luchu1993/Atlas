@@ -37,6 +37,7 @@ Phase 7 的目标是把数据库层收敛成一个**可持续演进的单 DBApp 
   - 后端内部可以同步执行
   - 但回调统一通过 `process_results()` 回到主线程，避免行为分裂
 - 当前阶段只做**单 DBApp**，不做 `DBAppMgr` 分片和多 DBApp 一致性
+- 当前代码默认 `db_type` 已切换为 `sqlite`；未显式配置时开发环境优先走 SQLite
 
 ---
 
@@ -49,8 +50,9 @@ Phase 7 的目标是把数据库层收敛成一个**可持续演进的单 DBApp 
 - [x] `DBApp` 已支持 `AbortCheckout`，用于登录回滚场景
 - [x] `DBApp` 已能处理 `LoginApp -> DBApp` 的 `AuthLogin`
 - [x] `EntityDefRegistry` 已支持 `DBApp` 从 `entity_defs.json` 加载
-- [x] 单元测试已覆盖 `dbapp_messages`、`xml_database`、`sqlite_database` 与 `server_config` 的数据库配置分支
+- [x] 单元测试已覆盖 `dbapp_messages`、`checkout_manager`、`xml_database`、`sqlite_database`、`database_factory` 与 `server_config` 的数据库配置分支
 - [x] `SQLite` backend 已在当前代码中实现，并接入 `database_factory` / `ServerConfig` / `DBApp`
+- [x] 当前代码默认 `db_type` 已切换为 `sqlite`
 - [ ] `MySQL` backend 尚未作为当前主线完成落地
 - [~] 已补充 `DBApp` 相关集成测试（登录链路 / checkout 清理），但矩阵仍需继续扩展
 - [ ] 仍未进入多 `DBApp` / `DBAppMgr` 分片阶段
@@ -369,6 +371,12 @@ Atlas 当前数据库后端策略调整为:
 - 登录主链路可在 `sqlite` 后端下跑通
 - checkout 占用与释放语义稳定
 
+状态:
+
+- 已完成
+- 已落地 `sqlite` backend、配置链路、`DBApp` 接入与基础/集成测试
+- 当前代码默认后端已切换为 `sqlite`
+
 ### P7.3 DBApp 集成补强
 
 目标:
@@ -390,6 +398,13 @@ Atlas 当前数据库后端策略调整为:
 - `AuthLogin` 基线路径
 
 都具备稳定回归测试
+
+状态:
+
+- 进行中
+- 已完成 `AuthLogin` 基线路径与 `BaseApp death -> clear_checkouts_for_address` 集成验证
+- 仓库中已加入 `test_dbapp_login_flow`、`test_dbapp_checkout_cleanup`、`test_login_flow`
+- `AbortCheckout`、更完整的登录链路矩阵、长稳运行与更多故障路径回归仍需继续补强
 
 ### P7.4 MySQL backend 进入正式实现
 
@@ -419,7 +434,8 @@ Atlas 当前数据库后端策略调整为:
 ```json
 {
   "db_type": "sqlite",
-  "db_sqlite_path": "data/atlas_dev.sqlite3"
+  "db_sqlite_path": "data/atlas_dev.sqlite3",
+  "db_sqlite_foreign_keys": true
 }
 ```
 
@@ -453,6 +469,7 @@ Atlas 当前数据库后端策略调整为:
 - `db_sqlite_path`
 - `db_sqlite_wal`
 - `db_sqlite_busy_timeout_ms`
+- `db_sqlite_foreign_keys`
 - `db_mysql_*`
 
 其中:
@@ -468,19 +485,30 @@ Atlas 当前数据库后端策略调整为:
 
 当前已存在:
 
+- `tests/unit/test_database_types.cpp`
 - `tests/unit/test_xml_database.cpp`
-- `tests/unit/test_dbapp_messages.cpp`
-
-这说明消息层和 XML backend 已经有基础覆盖，但还不够。
-
-### 2. 本阶段必须新增
-
-建议新增:
-
-- `tests/unit/test_checkout_manager.cpp`
 - `tests/unit/test_sqlite_database.cpp`
+- `tests/unit/test_dbapp_messages.cpp`
+- `tests/unit/test_checkout_manager.cpp`
+- `tests/unit/test_server_config.cpp`
 - `tests/integration/test_dbapp_login_flow.cpp`
 - `tests/integration/test_dbapp_checkout_cleanup.cpp`
+- `tests/integration/test_login_flow.cpp`
+
+这说明当前缺口已经不是“完全没有测试入口”，而是:
+
+- 故障路径覆盖还不够完整
+- 端到端稳定性和长稳回归还需要继续补强
+- 不同后端下的行为一致性仍需要持续验证
+
+### 2. 本阶段仍需补强
+
+建议继续补的不是测试文件名本身，而是以下场景:
+
+- `AbortCheckout` 与 delayed callback 交叉时的 suppress / 幂等行为
+- `CheckinEntity`、`WriteFlags::LogOff`、`auto_load` 在 SQLite 路径下的更多回归
+- `test_login_flow` 的长稳运行、短线重登 churn 与故障注入
+- `xml / sqlite / mysql` 三类后端的契约一致性验证
 
 ### 3. 必测场景
 
@@ -507,7 +535,7 @@ Phase 7 只有满足以下条件，才应视为真正完成:
 - 单 `DBApp` 架构稳定可运行
 - `IDatabase` 语义不再频繁变动
 - `xml` 继续可用但降级为 fallback
-- `sqlite` 成为可实际使用的开发默认后端候选
+- `sqlite` 成为当前代码默认且可实际使用的开发后端
 - `mysql` 的接口与数据模型路径明确，不再与开发路径冲突
 - `DBApp` 的 checkout / abort / clear 路径有回归测试
 - Phase 9 登录主链路可在 `sqlite` 后端上稳定验证
@@ -540,13 +568,14 @@ Phase 7 只有满足以下条件，才应视为真正完成:
 
 ## 当前结论
 
-截至 2026-04-12，Phase 7 不应再被描述为“从零设计 DBApp”。
+截至 2026-04-13，Phase 7 不应再被描述为“从零设计 DBApp”。
 
 更准确的说法是:
 
 - **DBApp 主体已经落地**
 - **XML backend 已经可用**
-- **下一步主线是把开发默认后端切到 SQLite**
+- **SQLite backend 已经落地并切成开发默认后端**
+- **下一步主线是继续补强 DBApp 集成测试矩阵与故障路径验证**
 - **MySQL 继续作为正式后端预选推进**
 
 这才是当前 Atlas 数据库层最可落地、也最符合工程现实的方案。

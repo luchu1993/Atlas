@@ -131,7 +131,7 @@ python tools/cluster_control/run_login_stress.py `
 
 - `timeout_fail` 是否持续上升
 - `invalid_session`
-- `checkouts.json` 是否在结束后仍保留大量 checkout
+- SQLite `entities.checked_out` 是否在结束后仍残留大量 checkout
 
 ### 4.3 多 BaseApp 极限短线重登压测
 
@@ -259,8 +259,9 @@ python tools/cluster_control/run_login_stress.py `
   - 各服务和各 worker 的 stdout / stderr
 
 - `db/`
-  - XML DB 目录
-  - 可用于检查压测结束后的 checkout 残留情况
+  - SQLite 数据目录
+  - 默认生成 `atlas_login_stress.sqlite3`
+  - 可用于检查压测结束后的账号/checkout 落库状态
 
 - `dbapp.json`
   - 本次压测自动生成的 DBApp 运行配置
@@ -270,7 +271,7 @@ python tools/cluster_control/run_login_stress.py `
 - `.tmp/login-stress/<timestamp>/logs/loginapp.stdout.log`
 - `.tmp/login-stress/<timestamp>/logs/baseapp.stderr.log`
 - `.tmp/login-stress/<timestamp>/logs/login_stress_worker_00.stdout.log`
-- `.tmp/login-stress/<timestamp>/db/checkouts.json`
+- `.tmp/login-stress/<timestamp>/db/atlas_login_stress.sqlite3`
 
 ---
 
@@ -326,7 +327,7 @@ python tools/cluster_control/run_login_stress.py `
 
 2. `timeout_fail` 高
    - 优先看 BaseApp / DBApp / LoginApp 日志时间线
-   - 再看 `checkouts.json` 是否有大量残留
+   - 再看 SQLite `entities.checked_out` 是否有大量残留
 
 3. `unexpected_disc` 高
    - 优先看网络层问题、进程退出、RUDP 通道状态和服务端主动断开
@@ -335,9 +336,9 @@ python tools/cluster_control/run_login_stress.py `
 
 文件:
 
-- `.tmp/login-stress/<timestamp>/db/checkouts.json`
+- `.tmp/login-stress/<timestamp>/db/atlas_login_stress.sqlite3`
 
-如果压测结束后仍保留大量 checkout，通常说明:
+如果压测结束后 SQLite 中仍有大量 `entities.checked_out = 1`，通常说明:
 
 - 旧 Proxy / entity 所有权未释放
 - `writeback -> checkin -> recheckout` 链路没有收敛
@@ -420,7 +421,7 @@ python tools/cluster_control/run_login_stress.py `
 2. 跑 `shortline-pct=0` 的常规登录压测
 3. 跑单 BaseApp 的短线重登压测
 4. 跑多 BaseApp 的极限短线重登压测
-5. 检查 `logs/` 与 `db/checkouts.json`
+5. 检查 `logs/` 与 `db/atlas_login_stress.sqlite3`
 6. 再更新专项问题记录文档
 
 这样可以避免一上来只看极端压测，把基础功能回归和多进程极限问题混在一起。

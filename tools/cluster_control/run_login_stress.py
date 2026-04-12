@@ -299,13 +299,15 @@ def build_runtime_config(
     account_type_id: int,
     db_dir: Path,
 ) -> dict[str, object]:
+    sqlite_path = db_dir / "atlas_login_stress.sqlite3"
     return {
         "machined_address": machined_address,
         "auto_create_accounts": True,
         "account_type_id": account_type_id,
         "database": {
-            "type": "xml",
-            "xml_dir": str(db_dir),
+            "type": "sqlite",
+            "sqlite_path": str(sqlite_path),
+            "sqlite_foreign_keys": True,
         },
     }
 

@@ -194,6 +194,10 @@ auto DBApp::build_db_config() const -> DatabaseConfig
     DatabaseConfig db_cfg;
     db_cfg.type = cfg.db_type;
     db_cfg.xml_dir = cfg.db_xml_dir;
+    db_cfg.sqlite_path = cfg.db_sqlite_path;
+    db_cfg.sqlite_wal = cfg.db_sqlite_wal;
+    db_cfg.sqlite_busy_timeout_ms = cfg.db_sqlite_busy_timeout_ms;
+    db_cfg.sqlite_foreign_keys = cfg.db_sqlite_foreign_keys;
     db_cfg.mysql_host = cfg.db_mysql_host;
     db_cfg.mysql_port = cfg.db_mysql_port;
     db_cfg.mysql_user = cfg.db_mysql_user;
@@ -537,15 +541,15 @@ void DBApp::on_auth_login(const Address& src, Channel* ch, const login::AuthLogi
             {
                 if (auto_create && auto_create_accounts_)
                 {
-                    // Create new account entity; password_hash stored as identifier blob
+                    // Create new account entity with the credential hash stored in the DB row.
                     EntityData data;
                     data.type_id = account_type_id_;
                     data.identifier = username;
-                    // Empty blob for now — the entity will be populated by C# on first login
+                    // Empty blob for now — the entity will be populated by C# on first login.
                     data.blob = {};
-                    database_->put_entity(
+                    database_->put_entity_with_password(
                         kInvalidDBID, account_type_id_, WriteFlags::CreateNew, data.blob,
-                        data.identifier,
+                        data.identifier, password_hash,
                         [this, reply_addr, request_id, type_id = account_type_id_](PutResult put)
                         {
                             login::AuthLoginResult r;

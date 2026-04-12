@@ -241,6 +241,71 @@ TEST_F(XmlDatabaseTest, LookupByName)
     EXPECT_FALSE(not_found.found);
 }
 
+TEST_F(XmlDatabaseTest, LookupByNameReturnsStoredPasswordHash)
+{
+    PutResult put;
+    db_.put_entity_with_password(kInvalidDBID, 1, WriteFlags::CreateNew, make_blob("acct"),
+                                 "alice_pw", "pw_hash_123",
+                                 [&](PutResult r) { put = std::move(r); });
+    ASSERT_TRUE(put.success);
+
+    LookupResult lookup;
+    db_.lookup_by_name(1, "alice_pw", [&](LookupResult r) { lookup = std::move(r); });
+    ASSERT_TRUE(lookup.found);
+    EXPECT_EQ(lookup.dbid, put.dbid);
+    EXPECT_EQ(lookup.password_hash, "pw_hash_123");
+}
+
+TEST_F(XmlDatabaseTest, PasswordHashPersistsAcrossRestart)
+{
+    db_.set_flush_policy(XmlDatabase::FlushPolicy::Immediate);
+
+    PutResult put;
+    db_.put_entity_with_password(kInvalidDBID, 1, WriteFlags::CreateNew, make_blob("acct"),
+                                 "persist_user", "persist_hash",
+                                 [&](PutResult r) { put = std::move(r); });
+    ASSERT_TRUE(put.success);
+
+    db_.shutdown();
+
+    DatabaseConfig cfg;
+    cfg.type = "xml";
+    cfg.xml_dir = test_dir_;
+    ASSERT_TRUE(db_.startup(cfg, EntityDefRegistry::instance()).has_value());
+
+    LookupResult lookup;
+    db_.lookup_by_name(1, "persist_user", [&](LookupResult r) { lookup = std::move(r); });
+    ASSERT_TRUE(lookup.found);
+    EXPECT_EQ(lookup.dbid, put.dbid);
+    EXPECT_EQ(lookup.password_hash, "persist_hash");
+}
+
+TEST_F(XmlDatabaseTest, DeleteRemovesStoredPasswordHash)
+{
+    db_.set_flush_policy(XmlDatabase::FlushPolicy::Immediate);
+
+    PutResult put;
+    db_.put_entity_with_password(kInvalidDBID, 1, WriteFlags::CreateNew, make_blob("acct"),
+                                 "recreate_user", "old_hash",
+                                 [&](PutResult r) { put = std::move(r); });
+    ASSERT_TRUE(put.success);
+
+    DelResult del;
+    db_.del_entity(put.dbid, 1, [&](DelResult r) { del = std::move(r); });
+    ASSERT_TRUE(del.success);
+
+    PutResult recreate;
+    db_.put_entity(kInvalidDBID, 1, WriteFlags::CreateNew, make_blob("acct2"), "recreate_user",
+                   [&](PutResult r) { recreate = std::move(r); });
+    ASSERT_TRUE(recreate.success);
+
+    LookupResult lookup;
+    db_.lookup_by_name(1, "recreate_user", [&](LookupResult r) { lookup = std::move(r); });
+    ASSERT_TRUE(lookup.found);
+    EXPECT_EQ(lookup.dbid, recreate.dbid);
+    EXPECT_TRUE(lookup.password_hash.empty());
+}
+
 // ============================================================================
 // checkout / checkin
 // ============================================================================

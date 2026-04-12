@@ -383,6 +383,11 @@ atlas_add_test(test_xml_database
     DEPS atlas_db_xml atlas_entitydef
 )
 
+atlas_add_test(test_sqlite_database
+    SOURCES test_sqlite_database.cpp
+    DEPS atlas_db_sqlite atlas_entitydef atlas_platform
+)
+
 atlas_add_test(test_dbapp_messages
     SOURCES test_dbapp_messages.cpp
     DEPS atlas_dbapp_lib atlas_serialization

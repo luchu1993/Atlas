@@ -61,6 +61,11 @@ public:
                     std::span<const std::byte> blob, const std::string& identifier,
                     std::function<void(PutResult)> callback) override;
 
+    void put_entity_with_password(DatabaseID dbid, uint16_t type_id, WriteFlags flags,
+                                  std::span<const std::byte> blob, const std::string& identifier,
+                                  const std::string& password_hash,
+                                  std::function<void(PutResult)> callback) override;
+
     void get_entity(DatabaseID dbid, uint16_t type_id,
                     std::function<void(GetResult)> callback) override;
 
@@ -105,10 +110,13 @@ private:
     void save_auto_load();
     void load_checkouts();
     void save_checkouts();
+    void load_password_hashes();
+    void save_password_hashes();
     void mark_meta_dirty();
     void mark_index_dirty(uint16_t type_id);
     void mark_auto_load_dirty();
     void mark_checkouts_dirty();
+    void mark_password_hashes_dirty();
     void flush_after_mutation();
     void flush_dirty_state(bool force = false);
     void stage_blob_write(uint16_t type_id, DatabaseID dbid, std::span<const std::byte> data);
@@ -135,6 +143,7 @@ private:
     bool meta_dirty_{false};
     bool auto_load_dirty_{false};
     bool checkouts_dirty_{false};
+    bool password_hashes_dirty_{false};
 
     // name → DBID index (per type_id)
     std::unordered_map<uint16_t, std::unordered_map<std::string, DatabaseID>> name_index_;
@@ -142,6 +151,7 @@ private:
 
     // checkout: key = (type_id << 48) | (dbid & 0xFFFFFFFFFFFF)
     std::unordered_map<uint64_t, CheckoutInfo> checkouts_;
+    std::unordered_map<uint64_t, std::string> password_hashes_;
     struct PendingBlobWrite
     {
         uint16_t type_id{0};

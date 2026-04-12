@@ -5,6 +5,7 @@
 
 #include <atomic>
 #include <filesystem>
+#include <mutex>
 
 namespace atlas
 {
@@ -37,6 +38,10 @@ struct RuntimeConfig
 // The existing per-subsystem init functions continue to work as-is. Runtime
 // simply calls them in the correct order, guaranteeing a consistent startup
 // sequence across all process types.
+//
+// initialize()/finalize() are reference-counted so multi-component integration
+// tests can host multiple logical server processes inside one OS process
+// without fighting over the global logger/runtime state.
 
 class Runtime
 {
@@ -51,11 +56,12 @@ public:
 
     [[nodiscard]] static auto is_initialized() -> bool
     {
-        return initialized_.load(std::memory_order_acquire);
+        return init_count_.load(std::memory_order_acquire) > 0;
     }
 
 private:
-    static std::atomic<bool> initialized_;
+    static std::atomic<uint32_t> init_count_;
+    static std::mutex mutex_;
 };
 
 }  // namespace atlas

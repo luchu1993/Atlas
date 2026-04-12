@@ -7,6 +7,43 @@
 #include <filesystem>
 #include <format>
 #include <fstream>
+#include <string_view>
+
+namespace
+{
+
+auto escape_json_string(std::string_view value) -> std::string
+{
+    std::string escaped;
+    escaped.reserve(value.size());
+    for (char ch : value)
+    {
+        switch (ch)
+        {
+            case '\\':
+                escaped += "\\\\";
+                break;
+            case '"':
+                escaped += "\\\"";
+                break;
+            case '\n':
+                escaped += "\\n";
+                break;
+            case '\r':
+                escaped += "\\r";
+                break;
+            case '\t':
+                escaped += "\\t";
+                break;
+            default:
+                escaped += ch;
+                break;
+        }
+    }
+    return escaped;
+}
+
+}  // namespace
 
 namespace atlas
 {
@@ -54,6 +91,7 @@ auto XmlDatabase::startup(const DatabaseConfig& config, const EntityDefRegistry&
     load_meta();
     load_auto_load();
     load_checkouts();
+    load_password_hashes();
 
     started_ = true;
     ATLAS_LOG_INFO("XmlDatabase: started at '{}', next_dbid={}, flush_policy={}",
@@ -80,6 +118,7 @@ void XmlDatabase::put_entity(DatabaseID dbid, uint16_t type_id, WriteFlags flags
                              std::function<void(PutResult)> callback)
 {
     PutResult result;
+    const auto key = checkout_key(type_id, dbid);
 
     if (has_flag(flags, WriteFlags::Delete))
     {
@@ -101,9 +140,11 @@ void XmlDatabase::put_entity(DatabaseID dbid, uint16_t type_id, WriteFlags flags
         // Clear checkout if LogOff
         if (has_flag(flags, WriteFlags::LogOff))
         {
-            checkouts_.erase(checkout_key(type_id, dbid));
+            checkouts_.erase(key);
             mark_checkouts_dirty();
         }
+        if (password_hashes_.erase(key) > 0)
+            mark_password_hashes_dirty();
         result.success = true;
         result.dbid = dbid;
         flush_after_mutation();
@@ -144,6 +185,74 @@ void XmlDatabase::put_entity(DatabaseID dbid, uint16_t type_id, WriteFlags flags
     {
         checkouts_.erase(checkout_key(type_id, dbid));
         mark_checkouts_dirty();
+    }
+
+    result.success = true;
+    result.dbid = dbid;
+    flush_after_mutation();
+    fire_or_defer([cb = std::move(callback), result]() mutable { cb(result); });
+}
+
+void XmlDatabase::put_entity_with_password(DatabaseID dbid, uint16_t type_id, WriteFlags flags,
+                                           std::span<const std::byte> blob,
+                                           const std::string& identifier,
+                                           const std::string& password_hash,
+                                           std::function<void(PutResult)> callback)
+{
+    PutResult result;
+
+    if (has_flag(flags, WriteFlags::Delete))
+    {
+        put_entity(dbid, type_id, flags, blob, identifier, std::move(callback));
+        return;
+    }
+
+    if (has_flag(flags, WriteFlags::CreateNew) || dbid == kInvalidDBID)
+    {
+        dbid = next_dbid_++;
+        mark_meta_dirty();
+    }
+
+    stage_blob_write(type_id, dbid, blob);
+
+    if (!identifier.empty())
+    {
+        load_index(type_id);
+        name_index_[type_id][identifier] = dbid;
+        mark_index_dirty(type_id);
+    }
+
+    if (has_flag(flags, WriteFlags::AutoLoadOn))
+    {
+        auto_load_set_.insert(checkout_key(type_id, dbid));
+        mark_auto_load_dirty();
+    }
+    else if (has_flag(flags, WriteFlags::AutoLoadOff))
+    {
+        auto_load_set_.erase(checkout_key(type_id, dbid));
+        mark_auto_load_dirty();
+    }
+
+    if (has_flag(flags, WriteFlags::LogOff))
+    {
+        checkouts_.erase(checkout_key(type_id, dbid));
+        mark_checkouts_dirty();
+    }
+
+    const auto key = checkout_key(type_id, dbid);
+    if (password_hash.empty())
+    {
+        if (password_hashes_.erase(key) > 0)
+            mark_password_hashes_dirty();
+    }
+    else
+    {
+        auto it = password_hashes_.find(key);
+        if (it == password_hashes_.end() || it->second != password_hash)
+        {
+            password_hashes_[key] = password_hash;
+            mark_password_hashes_dirty();
+        }
     }
 
     result.success = true;
@@ -208,6 +317,8 @@ void XmlDatabase::del_entity(DatabaseID dbid, uint16_t type_id,
 
     checkouts_.erase(checkout_key(type_id, dbid));
     auto_load_set_.erase(checkout_key(type_id, dbid));
+    if (password_hashes_.erase(checkout_key(type_id, dbid)) > 0)
+        mark_password_hashes_dirty();
     mark_checkouts_dirty();
     mark_auto_load_dirty();
 
@@ -229,6 +340,11 @@ void XmlDatabase::lookup_by_name(uint16_t type_id, const std::string& identifier
         {
             result.found = true;
             result.dbid = nit->second;
+            if (auto pw = password_hashes_.find(checkout_key(type_id, nit->second));
+                pw != password_hashes_.end())
+            {
+                result.password_hash = pw->second;
+            }
         }
     }
     fire_or_defer([cb = std::move(callback), result]() mutable { cb(result); });
@@ -425,6 +541,13 @@ void XmlDatabase::mark_checkouts_dirty()
         next_metadata_flush_deadline_ = Clock::now() + kMetadataFlushInterval;
 }
 
+void XmlDatabase::mark_password_hashes_dirty()
+{
+    password_hashes_dirty_ = true;
+    if (next_metadata_flush_deadline_ == TimePoint{})
+        next_metadata_flush_deadline_ = Clock::now() + kMetadataFlushInterval;
+}
+
 void XmlDatabase::flush_after_mutation()
 {
     if (flush_policy_ == FlushPolicy::Immediate)
@@ -448,8 +571,8 @@ void XmlDatabase::flush_dirty_state(bool force)
     }
 
     const bool has_blobs = !pending_blob_writes_.empty();
-    const bool has_metadata =
-        meta_dirty_ || auto_load_dirty_ || checkouts_dirty_ || !dirty_indexes_.empty();
+    const bool has_metadata = meta_dirty_ || auto_load_dirty_ || checkouts_dirty_ ||
+                              password_hashes_dirty_ || !dirty_indexes_.empty();
 
     if (!has_blobs && !has_metadata)
     {
@@ -503,6 +626,11 @@ void XmlDatabase::flush_dirty_state(bool force)
             {
                 save_checkouts();
                 checkouts_dirty_ = false;
+            }
+            if (password_hashes_dirty_)
+            {
+                save_password_hashes();
+                password_hashes_dirty_ = false;
             }
             next_metadata_flush_deadline_ = {};
         }
@@ -607,13 +735,7 @@ void XmlDatabase::save_index(uint16_t type_id)
     {
         if (!first)
             f << ",\n";
-        // Escape name minimally
-        std::string escaped = name;
-        // Replace " → \"
-        for (size_t i = 0; i < escaped.size(); ++i)
-            if (escaped[i] == '"')
-                escaped.replace(i, 1, "\\\""), i++;
-        f << std::format("  \"{}\": {}", escaped, dbid);
+        f << std::format("  \"{}\": {}", escape_json_string(name), dbid);
         first = false;
     }
     f << "\n}\n";
@@ -704,6 +826,52 @@ void XmlDatabase::save_checkouts()
             "  {{\"type_id\":{},\"dbid\":{},\"base_ip\":{},\"base_port\":{}"
             ",\"app_id\":{},\"entity_id\":{}}}",
             type_id, dbid, info.base_addr.ip(), info.base_addr.port(), info.app_id, info.entity_id);
+        first = false;
+    }
+    f << "\n]\n";
+}
+
+void XmlDatabase::load_password_hashes()
+{
+    password_hashes_.clear();
+
+    auto path = base_dir_ / "password_hashes.json";
+    if (!std::filesystem::exists(path))
+        return;
+
+    auto tree = DataSection::from_json(path);
+    if (!tree)
+        return;
+
+    auto* root = (*tree)->root();
+    for (auto* entry : root->children())
+    {
+        auto type_id = static_cast<uint16_t>(entry->read_uint("type_id", 0));
+        auto dbid = static_cast<DatabaseID>(entry->read_uint("dbid", 0));
+        auto password_hash = entry->read_string("password_hash", "");
+        if (type_id == 0 || dbid == 0 || password_hash.empty())
+            continue;
+        password_hashes_[checkout_key(type_id, dbid)] = std::move(password_hash);
+    }
+}
+
+void XmlDatabase::save_password_hashes()
+{
+    auto path = base_dir_ / "password_hashes.json";
+    std::ofstream f(path);
+    if (!f)
+        return;
+
+    f << "[\n";
+    bool first = true;
+    for (const auto& [key, password_hash] : password_hashes_)
+    {
+        auto type_id = static_cast<uint16_t>(key >> 48);
+        auto dbid = static_cast<DatabaseID>(key & 0x0000FFFFFFFFFFFFULL);
+        if (!first)
+            f << ",\n";
+        f << std::format("  {{\"type_id\":{},\"dbid\":{},\"password_hash\":\"{}\"}}", type_id, dbid,
+                         escape_json_string(password_hash));
         first = false;
     }
     f << "\n]\n";

@@ -3,6 +3,7 @@
 #include "foundation/log.hpp"
 
 // Include backends that are compiled in
+#include "db_sqlite/sqlite_database.hpp"
 #include "db_xml/xml_database.hpp"
 
 #if defined(ATLAS_DB_MYSQL)
@@ -18,6 +19,10 @@ auto create_database(const DatabaseConfig& config) -> std::unique_ptr<IDatabase>
     {
         return std::make_unique<XmlDatabase>();
     }
+    if (config.type == "sqlite")
+    {
+        return std::make_unique<SqliteDatabase>();
+    }
 #if defined(ATLAS_DB_MYSQL)
     if (config.type == "mysql")
     {
@@ -26,10 +31,11 @@ auto create_database(const DatabaseConfig& config) -> std::unique_ptr<IDatabase>
 #endif
 
 #if defined(ATLAS_DB_MYSQL)
-    ATLAS_LOG_ERROR("create_database: unknown backend type '{}' (supported: xml, mysql)",
+    ATLAS_LOG_ERROR("create_database: unknown backend type '{}' (supported: xml, sqlite, mysql)",
                     config.type);
 #else
-    ATLAS_LOG_ERROR("create_database: unknown backend type '{}' (supported: xml)", config.type);
+    ATLAS_LOG_ERROR("create_database: unknown backend type '{}' (supported: xml, sqlite)",
+                    config.type);
 #endif
     return nullptr;
 }

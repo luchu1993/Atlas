@@ -28,10 +28,16 @@ inline constexpr DatabaseID kInvalidDBID = 0;
 
 struct DatabaseConfig
 {
-    std::string type;  // "xml" or "mysql"
+    std::string type{"sqlite"};  // "xml", "sqlite", or "mysql"
 
     // XML backend
     std::filesystem::path xml_dir{"data/db"};
+
+    // SQLite backend
+    std::filesystem::path sqlite_path{"data/atlas_dev.sqlite3"};
+    bool sqlite_wal{true};
+    int sqlite_busy_timeout_ms{5000};
+    bool sqlite_foreign_keys{true};
 
     // MySQL backend
     std::string mysql_host{"127.0.0.1"};
@@ -153,6 +159,17 @@ public:
     virtual void put_entity(DatabaseID dbid, uint16_t type_id, WriteFlags flags,
                             std::span<const std::byte> blob, const std::string& identifier,
                             std::function<void(PutResult)> callback) = 0;
+
+    /// Save entity with an explicit password hash payload.
+    /// Used by DBApp account creation so AuthLogin can validate credentials.
+    virtual void put_entity_with_password(DatabaseID dbid, uint16_t type_id, WriteFlags flags,
+                                          std::span<const std::byte> blob,
+                                          const std::string& identifier,
+                                          const std::string& /*password_hash*/,
+                                          std::function<void(PutResult)> callback)
+    {
+        put_entity(dbid, type_id, flags, blob, identifier, std::move(callback));
+    }
 
     /// Load entity by DBID.
     virtual void get_entity(DatabaseID dbid, uint16_t type_id,

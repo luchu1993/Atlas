@@ -177,6 +177,13 @@ TEST(ServerConfig, FromJsonFile)
         "script": {
             "assembly": "Atlas.Runtime.dll",
             "runtime_config": "atlas.runtimeconfig.json"
+        },
+        "database": {
+            "type": "sqlite",
+            "sqlite_path": "data/dev.sqlite3",
+            "sqlite_wal": false,
+            "sqlite_busy_timeout_ms": 1234,
+            "sqlite_foreign_keys": false
         }
     })");
 
@@ -195,6 +202,11 @@ TEST(ServerConfig, FromJsonFile)
     EXPECT_EQ(r->login_rate_limit_trusted_cidrs[1], "10.0.0.0/8");
     EXPECT_EQ(r->script_assembly, std::filesystem::path("Atlas.Runtime.dll"));
     EXPECT_EQ(r->runtime_config, std::filesystem::path("atlas.runtimeconfig.json"));
+    EXPECT_EQ(r->db_type, "sqlite");
+    EXPECT_EQ(r->db_sqlite_path, std::filesystem::path("data/dev.sqlite3"));
+    EXPECT_FALSE(r->db_sqlite_wal);
+    EXPECT_EQ(r->db_sqlite_busy_timeout_ms, 1234);
+    EXPECT_FALSE(r->db_sqlite_foreign_keys);
     EXPECT_NE(r->raw_config, nullptr);
 }
 
@@ -218,6 +230,7 @@ TEST(ServerConfig, FromJsonFilePartialKeys)
     ASSERT_TRUE(r.has_value());
     EXPECT_EQ(r->update_hertz, 5);
     // Defaults preserved
+    EXPECT_EQ(r->db_type, "sqlite");
     EXPECT_EQ(r->log_level, LogLevel::Info);
     EXPECT_FALSE(r->is_production);
 }
@@ -231,6 +244,14 @@ TEST(ServerConfig, LoadCliOverridesJson)
     auto path = write_temp_json(R"({
         "update_hertz": 10,
         "log_level": "info",
+        "database": {
+            "type": "xml",
+            "xml_dir": "data/xml",
+            "sqlite_path": "data/from_json.sqlite3",
+            "sqlite_wal": true,
+            "sqlite_busy_timeout_ms": 5000,
+            "sqlite_foreign_keys": true
+        },
         "authentication": {
             "rate_limit": {
                 "per_ip": 5,
@@ -241,15 +262,41 @@ TEST(ServerConfig, LoadCliOverridesJson)
         }
     })");
 
-    FakeArgv args({"exe", "--config", path.string(), "--update-hertz", "30", "--log-level", "debug",
-                   "--login-rate-limit-per-ip", "77", "--login-rate-limit-global", "88",
-                   "--login-rate-limit-window-sec", "99", "--login-rate-limit-trusted-cidr",
+    FakeArgv args({"exe",
+                   "--config",
+                   path.string(),
+                   "--update-hertz",
+                   "30",
+                   "--log-level",
+                   "debug",
+                   "--db-type",
+                   "sqlite",
+                   "--db-sqlite-path",
+                   "data/from_cli.sqlite3",
+                   "--db-sqlite-wal",
+                   "false",
+                   "--db-sqlite-busy-timeout-ms",
+                   "2222",
+                   "--db-sqlite-foreign-keys",
+                   "false",
+                   "--login-rate-limit-per-ip",
+                   "77",
+                   "--login-rate-limit-global",
+                   "88",
+                   "--login-rate-limit-window-sec",
+                   "99",
+                   "--login-rate-limit-trusted-cidr",
                    "192.168.1.0/24"});
     auto r = ServerConfig::load(args.argc(), args.argv());
     ASSERT_TRUE(r.has_value()) << r.error().message();
 
     EXPECT_EQ(r->update_hertz, 30);            // CLI wins
     EXPECT_EQ(r->log_level, LogLevel::Debug);  // CLI wins
+    EXPECT_EQ(r->db_type, "sqlite");
+    EXPECT_EQ(r->db_sqlite_path, std::filesystem::path("data/from_cli.sqlite3"));
+    EXPECT_FALSE(r->db_sqlite_wal);
+    EXPECT_EQ(r->db_sqlite_busy_timeout_ms, 2222);
+    EXPECT_FALSE(r->db_sqlite_foreign_keys);
     EXPECT_EQ(r->login_rate_limit_per_ip, 77);
     EXPECT_EQ(r->login_rate_limit_global, 88);
     EXPECT_EQ(r->login_rate_limit_window_sec, 99);
@@ -264,6 +311,7 @@ TEST(ServerConfig, LoadNoConfigFile)
     ASSERT_TRUE(r.has_value());
     EXPECT_EQ(r->process_type, ProcessType::Machined);
     EXPECT_EQ(r->process_name, "main");
+    EXPECT_EQ(r->db_type, "sqlite");
 }
 
 TEST(ServerConfig, LoadDefaultProcessName)
