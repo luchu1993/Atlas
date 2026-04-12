@@ -10,12 +10,12 @@ namespace
 
 // Build a minimal ProcessEntry without a real Channel
 ProcessEntry make_entry(ProcessType type, std::string name, uint32_t pid,
-                        Channel* channel = nullptr)
+                        Channel* channel = nullptr, uint32_t ip = 0x7F000001)
 {
     ProcessEntry e;
     e.process_type = type;
     e.name = std::move(name);
-    e.internal_addr = Address(0x7F000001, 7100);
+    e.internal_addr = Address(ip, 7100);
     e.external_addr = Address(0, 0);
     e.pid = pid;
     e.channel = channel;
@@ -185,6 +185,21 @@ TEST(ProcessRegistry, UpdateLoad)
     auto found = reg.find_by_channel(fake_ch);
     ASSERT_TRUE(found.has_value());
     EXPECT_FLOAT_EQ(found->load, 0.8f);
+}
+
+TEST(ProcessRegistry, FindTcpChannelByPidDisambiguatesSharedIpHeartbeats)
+{
+    ProcessRegistry reg;
+    // NOLINTNEXTLINE(performance-no-int-to-ptr)
+    Channel* ch1 = reinterpret_cast<Channel*>(uintptr_t{0x1111});
+    // NOLINTNEXTLINE(performance-no-int-to-ptr)
+    Channel* ch2 = reinterpret_cast<Channel*>(uintptr_t{0x2222});
+
+    ASSERT_TRUE(reg.register_process(make_entry(ProcessType::BaseApp, "baseapp-1", 100, ch1)));
+    ASSERT_TRUE(reg.register_process(make_entry(ProcessType::BaseApp, "baseapp-2", 200, ch2)));
+
+    EXPECT_EQ(reg.find_tcp_channel_by_pid(100, 0x7F000001), ch1);
+    EXPECT_EQ(reg.find_tcp_channel_by_pid(200, 0x7F000001), ch2);
 }
 
 // ============================================================================

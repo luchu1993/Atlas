@@ -120,4 +120,21 @@ auto ProcessRegistry::find_tcp_channel_by_ip(uint32_t ip) const -> Channel*
     return nullptr;
 }
 
+auto ProcessRegistry::find_tcp_channel_by_pid(uint32_t pid, uint32_t ip) const -> Channel*
+{
+    for (const auto& e : entries_)
+    {
+        if (e.channel == nullptr || e.pid != pid)
+        {
+            continue;
+        }
+
+        if (ip == 0 || e.internal_addr.ip() == ip)
+        {
+            return e.channel;
+        }
+    }
+    return nullptr;
+}
+
 }  // namespace atlas::machined

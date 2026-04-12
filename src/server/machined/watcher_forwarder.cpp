@@ -8,7 +8,11 @@
 namespace atlas::machined
 {
 
-WatcherForwarder::WatcherForwarder(const ProcessRegistry& registry) : registry_(registry) {}
+WatcherForwarder::WatcherForwarder(const ProcessRegistry& registry,
+                                   ChannelResolver requester_resolver)
+    : registry_(registry), requester_resolver_(std::move(requester_resolver))
+{
+}
 
 void WatcherForwarder::handle_request(Channel* requester_channel, const WatcherRequest& req)
 {
@@ -67,15 +71,16 @@ void WatcherForwarder::handle_request(Channel* requester_channel, const WatcherR
         return;
     }
 
-    pending_.push_back({fwd_id, requester_channel, target->name, Clock::now()});
+    pending_.push_back(
+        {fwd_id, req.request_id, requester_channel->remote_address(), target->name, Clock::now()});
     ATLAS_LOG_DEBUG("WatcherForwarder: forwarded request {} → {} (fwd_id={})", req.request_id,
                     target->name, fwd_id);
 }
 
 void WatcherForwarder::handle_reply(Channel* source_channel, const WatcherReply& reply)
 {
-    auto it = std::find_if(pending_.begin(), pending_.end(),
-                           [&](const PendingEntry& e) { return e.request_id == reply.request_id; });
+    auto it = std::find_if(pending_.begin(), pending_.end(), [&](const PendingEntry& e)
+                           { return e.forwarded_request_id == reply.request_id; });
 
     if (it == pending_.end())
     {
@@ -86,9 +91,11 @@ void WatcherForwarder::handle_reply(Channel* source_channel, const WatcherReply&
 
     // Find source name for the response
     std::string source_name = it->target_name;
-    Channel* requester = it->requester_channel;
+    const uint32_t requester_request_id = it->requester_request_id;
+    const Address requester_addr = it->requester_addr;
     pending_.erase(it);
 
+    Channel* requester = requester_resolver_ ? requester_resolver_(requester_addr) : nullptr;
     if (requester == nullptr || !requester->is_connected())
     {
         ATLAS_LOG_DEBUG("WatcherForwarder: requester gone for request_id={}", reply.request_id);
@@ -96,7 +103,7 @@ void WatcherForwarder::handle_reply(Channel* source_channel, const WatcherReply&
     }
 
     WatcherResponse resp;
-    resp.request_id = reply.request_id;
+    resp.request_id = requester_request_id;
     resp.found = reply.found;
     resp.source_name = std::move(source_name);
     resp.value = reply.value;
@@ -122,16 +129,18 @@ void WatcherForwarder::check_timeouts()
                           return false;
 
                       ATLAS_LOG_WARNING("WatcherForwarder: request_id={} timed out (target={})",
-                                        e.request_id, e.target_name);
+                                        e.forwarded_request_id, e.target_name);
 
-                      if (e.requester_channel != nullptr && e.requester_channel->is_connected())
+                      Channel* requester =
+                          requester_resolver_ ? requester_resolver_(e.requester_addr) : nullptr;
+                      if (requester != nullptr && requester->is_connected())
                       {
                           WatcherResponse resp;
-                          resp.request_id = e.request_id;
+                          resp.request_id = e.requester_request_id;
                           resp.found = false;
                           resp.source_name = e.target_name;
                           resp.value = "";
-                          (void)e.requester_channel->send_message(resp);
+                          (void)requester->send_message(resp);
                       }
                       return true;
                   });

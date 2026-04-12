@@ -12,7 +12,9 @@ namespace atlas::machined
 {
 
 MachinedApp::MachinedApp(EventDispatcher& dispatcher, NetworkInterface& network)
-    : ManagerApp(dispatcher, network), watcher_forwarder_(process_registry_)
+    : ManagerApp(dispatcher, network),
+      watcher_forwarder_(process_registry_,
+                         [this](const Address& addr) { return this->network().find_channel(addr); })
 {
 }
 
@@ -231,9 +233,18 @@ void MachinedApp::on_heartbeat(const Address& src, Channel* ch, const HeartbeatM
     if (ch == nullptr)
         return;
 
-    // UDP heartbeat: src.ip() matches the registered process IP, but the port
-    // is the ephemeral send port — look up by TCP channel first, then by IP.
-    Channel* tcp_ch = process_registry_.find_tcp_channel_by_ip(src.ip());
+    // UDP heartbeat: the source port is ephemeral, so correlate it back to the
+    // TCP registration channel using pid+IP when available. IP-only matching
+    // is kept as a backward-compatible fallback for older clients.
+    Channel* tcp_ch = nullptr;
+    if (msg.pid != 0)
+    {
+        tcp_ch = process_registry_.find_tcp_channel_by_pid(msg.pid, src.ip());
+    }
+    if (tcp_ch == nullptr)
+    {
+        tcp_ch = process_registry_.find_tcp_channel_by_ip(src.ip());
+    }
     Channel* registry_ch = (tcp_ch != nullptr) ? tcp_ch : ch;
 
     process_registry_.update_load(registry_ch, msg.load, msg.entity_count);

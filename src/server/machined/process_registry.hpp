@@ -59,9 +59,12 @@ public:
     // Update load for a connected process
     void update_load(Channel* channel, float load, uint32_t entity_count);
 
-    // Look up the TCP channel for a process by its source IP (used to correlate
-    // UDP heartbeat datagrams, which arrive on an ephemeral port, with their TCP
-    // registration channel).  Returns nullptr if no match.
+    // Look up the TCP channel for a process by PID (+ optional source IP) to
+    // correlate UDP heartbeat datagrams with their TCP registration channel
+    // even when many processes share the same host IP.
+    [[nodiscard]] auto find_tcp_channel_by_pid(uint32_t pid, uint32_t ip = 0) const -> Channel*;
+
+    // Legacy fallback used only when older clients omit PID from the heartbeat.
     [[nodiscard]] auto find_tcp_channel_by_ip(uint32_t ip) const -> Channel*;
 
     [[nodiscard]] auto size() const -> std::size_t { return entries_.size(); }

@@ -2,10 +2,12 @@
 
 #include "foundation/time.hpp"
 #include "machined/process_registry.hpp"
+#include "network/address.hpp"
 #include "network/channel.hpp"
 #include "network/machined_types.hpp"
 
 #include <cstdint>
+#include <functional>
 #include <optional>
 #include <vector>
 
@@ -32,9 +34,10 @@ class WatcherForwarder
 {
 public:
     static constexpr Duration kReplyTimeout = std::chrono::seconds(5);
+    using ChannelResolver = std::function<Channel*(const Address&)>;
 
     // ProcessRegistry is used read-only to look up channels for target processes.
-    explicit WatcherForwarder(const ProcessRegistry& registry);
+    WatcherForwarder(const ProcessRegistry& registry, ChannelResolver requester_resolver);
 
     // Forward a request to the target process.
     // requester_channel — the channel from which the WatcherRequest arrived.
@@ -52,13 +55,15 @@ public:
 private:
     struct PendingEntry
     {
-        uint32_t request_id{0};
-        Channel* requester_channel{nullptr};
+        uint32_t forwarded_request_id{0};
+        uint32_t requester_request_id{0};
+        Address requester_addr;
         std::string target_name;
         TimePoint issued_at;
     };
 
     const ProcessRegistry& registry_;
+    ChannelResolver requester_resolver_;
     std::vector<PendingEntry> pending_;
 
     // Monotonically increasing ID used when forwarding to target process.

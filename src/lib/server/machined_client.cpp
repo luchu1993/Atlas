@@ -117,6 +117,11 @@ void MachinedClient::send_heartbeat(float load, uint32_t entity_count)
     machined::HeartbeatMessage msg;
     msg.load = load;
     msg.entity_count = entity_count;
+#if defined(_WIN32)
+    msg.pid = static_cast<uint32_t>(_getpid());
+#else
+    msg.pid = static_cast<uint32_t>(getpid());
+#endif
 
     if (machined_heartbeat_udp_addr_.port() != 0)
     {

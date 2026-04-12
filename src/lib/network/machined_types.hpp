@@ -292,6 +292,7 @@ struct HeartbeatMessage
 {
     float load{0.0f};  // current load (0.0 ~ 1.0)
     uint32_t entity_count{0};
+    uint32_t pid{0};
 
     static auto descriptor() -> const MessageDesc&
     {
@@ -304,6 +305,7 @@ struct HeartbeatMessage
     {
         w.write<float>(load);
         w.write<uint32_t>(entity_count);
+        w.write<uint32_t>(pid);
     }
 
     static auto deserialize(BinaryReader& r) -> Result<HeartbeatMessage>
@@ -317,6 +319,8 @@ struct HeartbeatMessage
         if (!ec)
             return ec.error();
         msg.entity_count = *ec;
+        auto pid = r.read<uint32_t>();
+        msg.pid = pid ? *pid : 0;
         return msg;
     }
 };
