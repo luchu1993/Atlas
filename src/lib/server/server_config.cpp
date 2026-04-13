@@ -4,7 +4,10 @@
 
 #include <algorithm>
 #include <format>
+#include <optional>
 #include <string>
+#include <type_traits>
+#include <variant>
 
 namespace atlas
 {
@@ -145,6 +148,99 @@ void load_string_array(const DataSection* section, std::vector<std::string>& out
     }
 }
 
+// ============================================================================
+// CLI field descriptor table
+// ============================================================================
+
+/// Type-erased pointer to a ServerConfig member field.
+using FieldPtr =
+    std::variant<std::string ServerConfig::*, int ServerConfig::*, uint16_t ServerConfig::*,
+                 bool ServerConfig::*, std::filesystem::path ServerConfig::*>;
+
+/// Maps a CLI key name to its corresponding ServerConfig member.
+struct CliField
+{
+    std::string_view key;
+    FieldPtr ptr;
+};
+
+// clang-format off
+static const CliField cli_fields[] = {
+    {"name",                       &ServerConfig::process_name},
+    {"internal-port",              &ServerConfig::internal_port},
+    {"external-port",              &ServerConfig::external_port},
+    {"update-hertz",               &ServerConfig::update_hertz},
+    {"assembly",                   &ServerConfig::script_assembly},
+    {"runtime-config",             &ServerConfig::runtime_config},
+    {"entitydef-path",             &ServerConfig::entitydef_path},
+    {"db-type",                    &ServerConfig::db_type},
+    {"db-xml-dir",                 &ServerConfig::db_xml_dir},
+    {"db-sqlite-path",             &ServerConfig::db_sqlite_path},
+    {"db-sqlite-wal",              &ServerConfig::db_sqlite_wal},
+    {"db-sqlite-busy-timeout-ms",  &ServerConfig::db_sqlite_busy_timeout_ms},
+    {"db-sqlite-foreign-keys",     &ServerConfig::db_sqlite_foreign_keys},
+    {"db-mysql-host",              &ServerConfig::db_mysql_host},
+    {"db-mysql-port",              &ServerConfig::db_mysql_port},
+    {"db-mysql-user",              &ServerConfig::db_mysql_user},
+    {"db-mysql-password",          &ServerConfig::db_mysql_password},
+    {"db-mysql-database",          &ServerConfig::db_mysql_database},
+    {"db-mysql-pool-size",         &ServerConfig::db_mysql_pool_size},
+    {"auto-create-accounts",       &ServerConfig::auto_create_accounts},
+    {"account-type-id",            &ServerConfig::account_type_id},
+    {"login-rate-limit-per-ip",    &ServerConfig::login_rate_limit_per_ip},
+    {"login-rate-limit-global",    &ServerConfig::login_rate_limit_global},
+    {"login-rate-limit-window-sec",&ServerConfig::login_rate_limit_window_sec},
+};
+// clang-format on
+
+/// Parse a string value and assign it to the config field identified by @p ptr.
+auto parse_and_assign(ServerConfig& cfg, const FieldPtr& ptr, std::string_view key,
+                      std::string_view val) -> std::optional<Error>
+{
+    return std::visit(
+        [&](auto member) -> std::optional<Error>
+        {
+            using T = std::remove_reference_t<decltype(cfg.*member)>;
+
+            if constexpr (std::is_same_v<T, std::string> ||
+                          std::is_same_v<T, std::filesystem::path>)
+            {
+                cfg.*member = std::string(val);
+            }
+            else if constexpr (std::is_same_v<T, bool>)
+            {
+                cfg.*member = parse_bool_string(val);
+            }
+            else if constexpr (std::is_same_v<T, int>)
+            {
+                try
+                {
+                    cfg.*member = std::stoi(std::string(val));
+                }
+                catch (...)
+                {
+                    return Error{ErrorCode::InvalidArgument, std::format("invalid --{}", key)};
+                }
+            }
+            else if constexpr (std::is_same_v<T, uint16_t>)
+            {
+                try
+                {
+                    int p = std::stoi(std::string(val));
+                    if (p < 0 || p > 65535)
+                        throw std::out_of_range("out of range");
+                    cfg.*member = static_cast<uint16_t>(p);
+                }
+                catch (...)
+                {
+                    return Error{ErrorCode::InvalidArgument, std::format("invalid --{}", key)};
+                }
+            }
+            return std::nullopt;
+        },
+        ptr);
+}
+
 }  // namespace
 
 // ============================================================================
@@ -268,17 +364,13 @@ auto ServerConfig::from_args(int argc, char* argv[]) -> Result<ServerConfig>
         else
             continue;
 
+        // Special-case fields that need custom parsing
         if (key == "type")
         {
             auto pt = process_type_from_name(val);
             if (!pt)
                 return pt.error();
             cfg.process_type = *pt;
-            ++i;
-        }
-        else if (key == "name")
-        {
-            cfg.process_name = std::string(val);
             ++i;
         }
         else if (key == "machined")
@@ -289,200 +381,30 @@ auto ServerConfig::from_args(int argc, char* argv[]) -> Result<ServerConfig>
             cfg.machined_address = *addr;
             ++i;
         }
-        else if (key == "internal-port")
-        {
-            try
-            {
-                cfg.internal_port = static_cast<uint16_t>(std::stoi(std::string(val)));
-            }
-            catch (...)
-            {
-                return Error{ErrorCode::InvalidArgument, "invalid --internal-port"};
-            }
-            ++i;
-        }
-        else if (key == "external-port")
-        {
-            try
-            {
-                cfg.external_port = static_cast<uint16_t>(std::stoi(std::string(val)));
-            }
-            catch (...)
-            {
-                return Error{ErrorCode::InvalidArgument, "invalid --external-port"};
-            }
-            ++i;
-        }
-        else if (key == "update-hertz")
-        {
-            try
-            {
-                cfg.update_hertz = std::stoi(std::string(val));
-            }
-            catch (...)
-            {
-                return Error{ErrorCode::InvalidArgument, "invalid --update-hertz"};
-            }
-            ++i;
-        }
         else if (key == "log-level")
         {
             cfg.log_level = parse_log_level(val);
-            ++i;
-        }
-        else if (key == "assembly")
-        {
-            cfg.script_assembly = std::string(val);
-            ++i;
-        }
-        else if (key == "runtime-config")
-        {
-            cfg.runtime_config = std::string(val);
-            ++i;
-        }
-        else if (key == "entitydef-path")
-        {
-            cfg.entitydef_path = std::string(val);
-            ++i;
-        }
-        else if (key == "db-type")
-        {
-            cfg.db_type = std::string(val);
-            ++i;
-        }
-        else if (key == "db-xml-dir")
-        {
-            cfg.db_xml_dir = std::string(val);
-            ++i;
-        }
-        else if (key == "db-sqlite-path")
-        {
-            cfg.db_sqlite_path = std::string(val);
-            ++i;
-        }
-        else if (key == "db-sqlite-wal")
-        {
-            cfg.db_sqlite_wal = parse_bool_string(val);
-            ++i;
-        }
-        else if (key == "db-sqlite-busy-timeout-ms")
-        {
-            try
-            {
-                cfg.db_sqlite_busy_timeout_ms = std::stoi(std::string(val));
-            }
-            catch (...)
-            {
-                return Error{ErrorCode::InvalidArgument, "invalid --db-sqlite-busy-timeout-ms"};
-            }
-            ++i;
-        }
-        else if (key == "db-sqlite-foreign-keys")
-        {
-            cfg.db_sqlite_foreign_keys = parse_bool_string(val);
-            ++i;
-        }
-        else if (key == "db-mysql-host")
-        {
-            cfg.db_mysql_host = std::string(val);
-            ++i;
-        }
-        else if (key == "db-mysql-port")
-        {
-            try
-            {
-                cfg.db_mysql_port = static_cast<uint16_t>(std::stoi(std::string(val)));
-            }
-            catch (...)
-            {
-                return Error{ErrorCode::InvalidArgument, "invalid --db-mysql-port"};
-            }
-            ++i;
-        }
-        else if (key == "db-mysql-user")
-        {
-            cfg.db_mysql_user = std::string(val);
-            ++i;
-        }
-        else if (key == "db-mysql-password")
-        {
-            cfg.db_mysql_password = std::string(val);
-            ++i;
-        }
-        else if (key == "db-mysql-database")
-        {
-            cfg.db_mysql_database = std::string(val);
-            ++i;
-        }
-        else if (key == "db-mysql-pool-size")
-        {
-            try
-            {
-                cfg.db_mysql_pool_size = std::stoi(std::string(val));
-            }
-            catch (...)
-            {
-                return Error{ErrorCode::InvalidArgument, "invalid --db-mysql-pool-size"};
-            }
-            ++i;
-        }
-        else if (key == "auto-create-accounts")
-        {
-            cfg.auto_create_accounts = parse_bool_string(val);
-            ++i;
-        }
-        else if (key == "account-type-id")
-        {
-            try
-            {
-                cfg.account_type_id = static_cast<uint16_t>(std::stoi(std::string(val)));
-            }
-            catch (...)
-            {
-                return Error{ErrorCode::InvalidArgument, "invalid --account-type-id"};
-            }
-            ++i;
-        }
-        else if (key == "login-rate-limit-per-ip")
-        {
-            try
-            {
-                cfg.login_rate_limit_per_ip = std::stoi(std::string(val));
-            }
-            catch (...)
-            {
-                return Error{ErrorCode::InvalidArgument, "invalid --login-rate-limit-per-ip"};
-            }
-            ++i;
-        }
-        else if (key == "login-rate-limit-global")
-        {
-            try
-            {
-                cfg.login_rate_limit_global = std::stoi(std::string(val));
-            }
-            catch (...)
-            {
-                return Error{ErrorCode::InvalidArgument, "invalid --login-rate-limit-global"};
-            }
-            ++i;
-        }
-        else if (key == "login-rate-limit-window-sec")
-        {
-            try
-            {
-                cfg.login_rate_limit_window_sec = std::stoi(std::string(val));
-            }
-            catch (...)
-            {
-                return Error{ErrorCode::InvalidArgument, "invalid --login-rate-limit-window-sec"};
-            }
             ++i;
         }
         else if (key == "login-rate-limit-trusted-cidr")
         {
             cfg.login_rate_limit_trusted_cidrs.emplace_back(val);
             ++i;
+        }
+        else
+        {
+            // Table-driven: match key against cli_fields[]
+            for (const auto& field : cli_fields)
+            {
+                if (key == field.key)
+                {
+                    auto err = parse_and_assign(cfg, field.ptr, key, val);
+                    if (err)
+                        return *err;
+                    ++i;
+                    break;
+                }
+            }
         }
         // "--config" is consumed by load(), not here
     }
@@ -541,62 +463,22 @@ auto ServerConfig::load(int argc, char* argv[]) -> Result<ServerConfig>
 
     ServerConfig defaults;
 
+    // Special-case overrides
     if (has_cli_key("type"))
         cfg.process_type = cli.process_type;
-    if (has_cli_key("name"))
-        cfg.process_name = cli.process_name;
     if (has_cli_key("machined"))
         cfg.machined_address = cli.machined_address;
-    if (has_cli_key("internal-port"))
-        cfg.internal_port = cli.internal_port;
-    if (has_cli_key("external-port"))
-        cfg.external_port = cli.external_port;
-    if (has_cli_key("update-hertz"))
-        cfg.update_hertz = cli.update_hertz;
     if (has_cli_key("log-level"))
         cfg.log_level = cli.log_level;
-    if (has_cli_key("assembly"))
-        cfg.script_assembly = cli.script_assembly;
-    if (has_cli_key("runtime-config"))
-        cfg.runtime_config = cli.runtime_config;
-    if (has_cli_key("entitydef-path"))
-        cfg.entitydef_path = cli.entitydef_path;
-    if (has_cli_key("db-type"))
-        cfg.db_type = cli.db_type;
-    if (has_cli_key("db-xml-dir"))
-        cfg.db_xml_dir = cli.db_xml_dir;
-    if (has_cli_key("db-sqlite-path"))
-        cfg.db_sqlite_path = cli.db_sqlite_path;
-    if (has_cli_key("db-sqlite-wal"))
-        cfg.db_sqlite_wal = cli.db_sqlite_wal;
-    if (has_cli_key("db-sqlite-busy-timeout-ms"))
-        cfg.db_sqlite_busy_timeout_ms = cli.db_sqlite_busy_timeout_ms;
-    if (has_cli_key("db-sqlite-foreign-keys"))
-        cfg.db_sqlite_foreign_keys = cli.db_sqlite_foreign_keys;
-    if (has_cli_key("db-mysql-host"))
-        cfg.db_mysql_host = cli.db_mysql_host;
-    if (has_cli_key("db-mysql-port"))
-        cfg.db_mysql_port = cli.db_mysql_port;
-    if (has_cli_key("db-mysql-user"))
-        cfg.db_mysql_user = cli.db_mysql_user;
-    if (has_cli_key("db-mysql-password"))
-        cfg.db_mysql_password = cli.db_mysql_password;
-    if (has_cli_key("db-mysql-database"))
-        cfg.db_mysql_database = cli.db_mysql_database;
-    if (has_cli_key("db-mysql-pool-size"))
-        cfg.db_mysql_pool_size = cli.db_mysql_pool_size;
-    if (has_cli_key("auto-create-accounts"))
-        cfg.auto_create_accounts = cli.auto_create_accounts;
-    if (has_cli_key("account-type-id"))
-        cfg.account_type_id = cli.account_type_id;
-    if (has_cli_key("login-rate-limit-per-ip"))
-        cfg.login_rate_limit_per_ip = cli.login_rate_limit_per_ip;
-    if (has_cli_key("login-rate-limit-global"))
-        cfg.login_rate_limit_global = cli.login_rate_limit_global;
-    if (has_cli_key("login-rate-limit-window-sec"))
-        cfg.login_rate_limit_window_sec = cli.login_rate_limit_window_sec;
     if (has_cli_key("login-rate-limit-trusted-cidr"))
         cfg.login_rate_limit_trusted_cidrs = cli.login_rate_limit_trusted_cidrs;
+
+    // Table-driven overrides
+    for (const auto& field : cli_fields)
+    {
+        if (has_cli_key(field.key))
+            std::visit([&](auto m) { cfg.*m = cli.*m; }, field.ptr);
+    }
 
     // Derive process_name from type if not set
     if (cfg.process_name.empty())
