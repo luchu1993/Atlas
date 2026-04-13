@@ -904,6 +904,7 @@ auto SqliteDatabase::load_sqlite_api() -> Result<SqliteApi>
             if (!sym)
             {
                 last_error = sym.error();
+                std::cout << std::format("> load symbol {} failed.\n", name);
                 return false;
             }
             out = *sym;
