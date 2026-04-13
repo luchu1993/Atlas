@@ -937,6 +937,7 @@ auto SqliteDatabase::load_sqlite_api() -> Result<SqliteApi>
             continue;
         }
 
+        std::cout << "load sqlite api succeed\n";
         return api;
     }
 
