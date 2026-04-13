@@ -100,13 +100,14 @@ protected:
         cfg.sqlite_busy_timeout_ms = 1000;
         cfg.sqlite_foreign_keys = true;
 
+        std::cout << "before db startup\n";
         auto start = db_.startup(cfg, EntityDefRegistry::instance());
         if (!start)
         {
+            std::cout << "db startup failed.\n" << start.error().message();
             GTEST_SKIP() << "sqlite runtime unavailable: " << start.error().message();
         }
-
-        std::cout << "register_account_entity\n";
+        std::cout << "after db startup\n";
     }
 
     void TearDown() override
