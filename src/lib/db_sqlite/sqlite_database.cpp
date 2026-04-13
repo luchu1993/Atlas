@@ -885,7 +885,8 @@ auto SqliteDatabase::load_sqlite_api() -> Result<SqliteApi>
     Error last_error{ErrorCode::NotFound, "sqlite runtime library not found"};
     for (auto candidate : kCandidates)
     {
-        std::cout << std::format("dynamic load sqlite dll: {}", candidate);
+        std::cout << std::format("dynamic load sqlite dll: {}\n", candidate);
+
         auto lib_result = DynamicLibrary::load(std::filesystem::path(candidate));
         if (!lib_result)
         {
@@ -897,6 +898,8 @@ auto SqliteDatabase::load_sqlite_api() -> Result<SqliteApi>
 
         auto load_symbol = [&]<typename Fn>(Fn& out, std::string_view name) -> bool
         {
+            std::cout << std::format("sqlite load symbol name: {}\n", name);
+
             auto sym = api.library.get_symbol<Fn>(name);
             if (!sym)
             {
@@ -906,7 +909,7 @@ auto SqliteDatabase::load_sqlite_api() -> Result<SqliteApi>
             out = *sym;
             return true;
         };
-        
+
         std::cout << "sqlite load symbol check \n";
 
         if (!load_symbol(api.open_v2, "sqlite3_open_v2") ||
