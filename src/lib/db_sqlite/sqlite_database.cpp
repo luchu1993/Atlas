@@ -86,7 +86,7 @@ auto SqliteDatabase::startup(const DatabaseConfig& config, const EntityDefRegist
         return api_result.error();
     }
     api_ = std::move(*api_result);
-    std::cout << "load_sqlite_api\n";
+    std::cout << "load_sqlite_api success\n";
 
     auto open_result = open_database(config);
     if (!open_result)
@@ -899,8 +899,6 @@ auto SqliteDatabase::load_sqlite_api() -> Result<SqliteApi>
 
         auto load_symbol = [&]<typename Fn>(Fn& out, std::string_view name) -> bool
         {
-            std::cout << std::format("sqlite load symbol name: {}\n", name);
-
             auto sym = api.library.get_symbol<Fn>(name);
             if (!sym)
             {
@@ -957,6 +955,8 @@ auto SqliteDatabase::open_database(const DatabaseConfig& config) -> Result<void>
         }
     }
 
+    std::cout << "open_database: 1 \n";
+
     auto flags = kSqliteOpenReadWrite | kSqliteOpenCreate | kSqliteOpenFullMutex;
     auto rc = api_->open_v2(db_path_.string().c_str(), &db_, flags, nullptr);
     if (rc != kSqliteOk || db_ == nullptr)
@@ -964,11 +964,15 @@ auto SqliteDatabase::open_database(const DatabaseConfig& config) -> Result<void>
         return sqlite_error("SqliteDatabase: sqlite3_open_v2 failed", rc);
     }
 
+    std::cout << "open_database: 2 \n";
+
     rc = api_->busy_timeout(db_, config.sqlite_busy_timeout_ms);
     if (rc != kSqliteOk)
     {
         return sqlite_error("SqliteDatabase: sqlite3_busy_timeout failed", rc);
     }
+
+    std::cout << "open_database: 3 \n";
 
     auto journal_sql = std::string(config.sqlite_wal ? "PRAGMA journal_mode = WAL"
                                                      : "PRAGMA journal_mode = DELETE");
@@ -977,17 +981,26 @@ auto SqliteDatabase::open_database(const DatabaseConfig& config) -> Result<void>
     {
         return pragma_result.error();
     }
+
+    std::cout << "open_database: 4 \n";
+
     auto fk_result = exec_sql(std::string(
         config.sqlite_foreign_keys ? "PRAGMA foreign_keys = ON" : "PRAGMA foreign_keys = OFF"));
     if (!fk_result)
     {
         return fk_result.error();
     }
+
+    std::cout << "open_database: 5 \n";
+
     auto sync_result = exec_sql("PRAGMA synchronous = NORMAL");
     if (!sync_result)
     {
         return sync_result.error();
     }
+
+    std::cout << "open_database: 6 \n";
+
     return {};
 }
 
