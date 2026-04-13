@@ -87,6 +87,8 @@ protected:
     {
         register_account_entity();
 
+        std::cout << "register_account_entity\n";
+
         test_dir_ = std::filesystem::temp_directory_path() / "atlas_sqlite_db_test";
         std::filesystem::remove_all(test_dir_);
         std::filesystem::create_directories(test_dir_);
@@ -103,6 +105,8 @@ protected:
         {
             GTEST_SKIP() << "sqlite runtime unavailable: " << start.error().message();
         }
+
+        std::cout << "register_account_entity\n";
     }
 
     void TearDown() override
