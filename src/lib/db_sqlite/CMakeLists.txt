@@ -1,4 +1,4 @@
-# atlas_db_sqlite — SQLite database backend (runtime-loaded sqlite3 library)
+# atlas_db_sqlite — SQLite database backend (statically linked sqlite3)
 
 atlas_add_library(atlas_db_sqlite
     SOURCES
@@ -7,5 +7,5 @@ atlas_add_library(atlas_db_sqlite
         atlas_foundation
         atlas_entitydef
         atlas_network
-        atlas_platform
+        sqlite3
 )

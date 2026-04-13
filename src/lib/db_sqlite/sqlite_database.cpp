@@ -6,16 +6,10 @@
 #include <cstdint>
 #include <filesystem>
 #include <format>
-#include <iostream>
 #include <string_view>
 
 namespace
 {
-
-auto sqlite_transient() -> void (*)(void*)
-{
-    return reinterpret_cast<void (*)(void*)>(static_cast<intptr_t>(-1));
-}
 
 auto unix_time_ms() -> int64_t
 {
@@ -31,10 +25,8 @@ constexpr int kSqliteSchemaVersion = 1;
 namespace atlas
 {
 
-SqliteDatabase::Statement::Statement(Statement&& other) noexcept
-    : api_(other.api_), stmt_(other.stmt_)
+SqliteDatabase::Statement::Statement(Statement&& other) noexcept : stmt_(other.stmt_)
 {
-    other.api_ = nullptr;
     other.stmt_ = nullptr;
 }
 
@@ -45,9 +37,7 @@ auto SqliteDatabase::Statement::operator=(Statement&& other) noexcept -> Stateme
         return *this;
     }
     reset();
-    api_ = other.api_;
     stmt_ = other.stmt_;
-    other.api_ = nullptr;
     other.stmt_ = nullptr;
     return *this;
 }
@@ -59,9 +49,9 @@ SqliteDatabase::Statement::~Statement()
 
 void SqliteDatabase::Statement::reset()
 {
-    if (stmt_ != nullptr && api_ != nullptr)
+    if (stmt_ != nullptr)
     {
-        (void)api_->finalize(stmt_);
+        sqlite3_finalize(stmt_);
     }
     stmt_ = nullptr;
 }
@@ -80,21 +70,11 @@ auto SqliteDatabase::startup(const DatabaseConfig& config, const EntityDefRegist
     entity_defs_ = &entity_defs;
     db_path_ = config.sqlite_path;
 
-    auto api_result = load_sqlite_api();
-    if (!api_result)
-    {
-        return api_result.error();
-    }
-    api_ = std::move(*api_result);
-    std::cout << "load_sqlite_api success\n";
-
     auto open_result = open_database(config);
     if (!open_result)
     {
-        api_.reset();
         return open_result.error();
     }
-    std::cout << "open_database\n";
 
     auto schema_result = ensure_schema();
     if (!schema_result)
@@ -102,7 +82,6 @@ auto SqliteDatabase::startup(const DatabaseConfig& config, const EntityDefRegist
         shutdown();
         return schema_result.error();
     }
-    std::cout << "ensure_schema\n";
 
     started_ = true;
     ATLAS_LOG_INFO("SqliteDatabase: started at '{}'", db_path_.string());
@@ -111,14 +90,13 @@ auto SqliteDatabase::startup(const DatabaseConfig& config, const EntityDefRegist
 
 void SqliteDatabase::shutdown()
 {
-    if (db_ != nullptr && api_.has_value())
+    if (db_ != nullptr)
     {
-        (void)api_->close(db_);
+        sqlite3_close(db_);
         db_ = nullptr;
     }
     deferred_.clear();
     started_ = false;
-    api_.reset();
 }
 
 void SqliteDatabase::put_entity(DatabaseID dbid, uint16_t type_id, WriteFlags flags,
@@ -127,7 +105,7 @@ void SqliteDatabase::put_entity(DatabaseID dbid, uint16_t type_id, WriteFlags fl
 {
     PutResult result;
 
-    if (!started_ || db_ == nullptr || !api_.has_value())
+    if (!started_ || db_ == nullptr)
     {
         result.error = "sqlite backend not started";
         fire_or_defer([cb = std::move(callback), result]() mutable { cb(result); });
@@ -164,29 +142,29 @@ void SqliteDatabase::put_entity(DatabaseID dbid, uint16_t type_id, WriteFlags fl
         }
 
         auto stmt = std::move(*stmt_result);
-        auto rc = api_->bind_int(stmt.get(), 1, static_cast<int>(type_id));
-        if (rc == kSqliteOk)
+        auto rc = sqlite3_bind_int(stmt.get(), 1, static_cast<int>(type_id));
+        if (rc == SQLITE_OK)
         {
             auto bind_result = bind_blob(stmt, 2, blob);
-            rc = bind_result ? kSqliteOk : 1;
+            rc = bind_result ? SQLITE_OK : 1;
             if (!bind_result)
                 result.error = std::string(bind_result.error().message());
         }
-        if (rc == kSqliteOk)
+        if (rc == SQLITE_OK)
         {
             auto bind_result = bind_identifier(stmt, 3, identifier);
-            rc = bind_result ? kSqliteOk : 1;
+            rc = bind_result ? SQLITE_OK : 1;
             if (!bind_result)
                 result.error = std::string(bind_result.error().message());
         }
-        if (rc == kSqliteOk)
-            rc = api_->bind_int(stmt.get(), 4, has_flag(flags, WriteFlags::AutoLoadOn) ? 1 : 0);
-        if (rc == kSqliteOk)
-            rc = api_->bind_int64(stmt.get(), 5, now_ms);
-        if (rc == kSqliteOk)
-            rc = api_->bind_int64(stmt.get(), 6, now_ms);
+        if (rc == SQLITE_OK)
+            rc = sqlite3_bind_int(stmt.get(), 4, has_flag(flags, WriteFlags::AutoLoadOn) ? 1 : 0);
+        if (rc == SQLITE_OK)
+            rc = sqlite3_bind_int64(stmt.get(), 5, now_ms);
+        if (rc == SQLITE_OK)
+            rc = sqlite3_bind_int64(stmt.get(), 6, now_ms);
 
-        if (rc != kSqliteOk)
+        if (rc != SQLITE_OK)
         {
             if (result.error.empty())
                 result.error =
@@ -195,8 +173,8 @@ void SqliteDatabase::put_entity(DatabaseID dbid, uint16_t type_id, WriteFlags fl
             return;
         }
 
-        rc = api_->step(stmt.get());
-        if (rc != kSqliteDone)
+        rc = sqlite3_step(stmt.get());
+        if (rc != SQLITE_DONE)
         {
             result.error = std::string(sqlite_error("SqliteDatabase: insert failed", rc).message());
             fire_or_defer([cb = std::move(callback), result]() mutable { cb(result); });
@@ -204,7 +182,7 @@ void SqliteDatabase::put_entity(DatabaseID dbid, uint16_t type_id, WriteFlags fl
         }
 
         result.success = true;
-        result.dbid = static_cast<DatabaseID>(api_->last_insert_rowid(db_));
+        result.dbid = static_cast<DatabaseID>(sqlite3_last_insert_rowid(db_));
         fire_or_defer([cb = std::move(callback), result]() mutable { cb(result); });
         return;
     }
@@ -247,38 +225,38 @@ void SqliteDatabase::put_entity(DatabaseID dbid, uint16_t type_id, WriteFlags fl
     }
 
     auto stmt = std::move(*stmt_result);
-    auto rc = kSqliteOk;
+    auto rc = SQLITE_OK;
     auto bind_blob_result = bind_blob(stmt, 1, blob);
-    rc = bind_blob_result ? kSqliteOk : 1;
+    rc = bind_blob_result ? SQLITE_OK : 1;
     if (!bind_blob_result)
         result.error = std::string(bind_blob_result.error().message());
-    if (rc == kSqliteOk)
+    if (rc == SQLITE_OK)
     {
         auto bind_result = bind_identifier(stmt, 2, final_identifier);
-        rc = bind_result ? kSqliteOk : 1;
+        rc = bind_result ? SQLITE_OK : 1;
         if (!bind_result)
             result.error = std::string(bind_result.error().message());
     }
-    if (rc == kSqliteOk)
-        rc = api_->bind_int(stmt.get(), 3, final_auto_load ? 1 : 0);
-    if (rc == kSqliteOk)
-        rc = api_->bind_int(stmt.get(), 4, final_checked_out ? 1 : 0);
-    if (rc == kSqliteOk)
-        rc = api_->bind_int64(stmt.get(), 5, final_checked_out ? final_owner.base_addr.ip() : 0);
-    if (rc == kSqliteOk)
-        rc = api_->bind_int(stmt.get(), 6, final_checked_out ? final_owner.base_addr.port() : 0);
-    if (rc == kSqliteOk)
-        rc = api_->bind_int(stmt.get(), 7, final_checked_out ? final_owner.app_id : 0);
-    if (rc == kSqliteOk)
-        rc = api_->bind_int(stmt.get(), 8, final_checked_out ? final_owner.entity_id : 0);
-    if (rc == kSqliteOk)
-        rc = api_->bind_int64(stmt.get(), 9, now_ms);
-    if (rc == kSqliteOk)
-        rc = api_->bind_int64(stmt.get(), 10, dbid);
-    if (rc == kSqliteOk)
-        rc = api_->bind_int(stmt.get(), 11, static_cast<int>(type_id));
+    if (rc == SQLITE_OK)
+        rc = sqlite3_bind_int(stmt.get(), 3, final_auto_load ? 1 : 0);
+    if (rc == SQLITE_OK)
+        rc = sqlite3_bind_int(stmt.get(), 4, final_checked_out ? 1 : 0);
+    if (rc == SQLITE_OK)
+        rc = sqlite3_bind_int64(stmt.get(), 5, final_checked_out ? final_owner.base_addr.ip() : 0);
+    if (rc == SQLITE_OK)
+        rc = sqlite3_bind_int(stmt.get(), 6, final_checked_out ? final_owner.base_addr.port() : 0);
+    if (rc == SQLITE_OK)
+        rc = sqlite3_bind_int(stmt.get(), 7, final_checked_out ? final_owner.app_id : 0);
+    if (rc == SQLITE_OK)
+        rc = sqlite3_bind_int(stmt.get(), 8, final_checked_out ? final_owner.entity_id : 0);
+    if (rc == SQLITE_OK)
+        rc = sqlite3_bind_int64(stmt.get(), 9, now_ms);
+    if (rc == SQLITE_OK)
+        rc = sqlite3_bind_int64(stmt.get(), 10, dbid);
+    if (rc == SQLITE_OK)
+        rc = sqlite3_bind_int(stmt.get(), 11, static_cast<int>(type_id));
 
-    if (rc != kSqliteOk)
+    if (rc != SQLITE_OK)
     {
         if (result.error.empty())
             result.error =
@@ -287,8 +265,8 @@ void SqliteDatabase::put_entity(DatabaseID dbid, uint16_t type_id, WriteFlags fl
         return;
     }
 
-    rc = api_->step(stmt.get());
-    if (rc != kSqliteDone)
+    rc = sqlite3_step(stmt.get());
+    if (rc != SQLITE_DONE)
     {
         result.error = std::string(sqlite_error("SqliteDatabase: update failed", rc).message());
         fire_or_defer([cb = std::move(callback), result]() mutable { cb(result); });
@@ -308,7 +286,7 @@ void SqliteDatabase::put_entity_with_password(DatabaseID dbid, uint16_t type_id,
 {
     PutResult result;
 
-    if (!started_ || db_ == nullptr || !api_.has_value())
+    if (!started_ || db_ == nullptr)
     {
         result.error = "sqlite backend not started";
         fire_or_defer([cb = std::move(callback), result]() mutable { cb(result); });
@@ -355,47 +333,47 @@ void SqliteDatabase::put_entity_with_password(DatabaseID dbid, uint16_t type_id,
         }
 
         auto stmt = std::move(*stmt_result);
-        auto rc = kSqliteOk;
+        auto rc = SQLITE_OK;
         auto bind_blob_result = bind_blob(stmt, 1, blob);
-        rc = bind_blob_result ? kSqliteOk : 1;
+        rc = bind_blob_result ? SQLITE_OK : 1;
         if (!bind_blob_result)
             result.error = std::string(bind_blob_result.error().message());
-        if (rc == kSqliteOk)
+        if (rc == SQLITE_OK)
         {
             auto bind_identifier_result = bind_identifier(stmt, 2, final_identifier);
-            rc = bind_identifier_result ? kSqliteOk : 1;
+            rc = bind_identifier_result ? SQLITE_OK : 1;
             if (!bind_identifier_result)
                 result.error = std::string(bind_identifier_result.error().message());
         }
-        if (rc == kSqliteOk)
+        if (rc == SQLITE_OK)
         {
             if (password_hash.empty())
-                rc = api_->bind_null(stmt.get(), 3);
+                rc = sqlite3_bind_null(stmt.get(), 3);
             else
-                rc = api_->bind_text(stmt.get(), 3, password_hash.c_str(), -1, sqlite_transient());
+                rc = sqlite3_bind_text(stmt.get(), 3, password_hash.c_str(), -1, SQLITE_TRANSIENT);
         }
-        if (rc == kSqliteOk)
-            rc = api_->bind_int(stmt.get(), 4, final_auto_load ? 1 : 0);
-        if (rc == kSqliteOk)
-            rc = api_->bind_int(stmt.get(), 5, final_checked_out ? 1 : 0);
-        if (rc == kSqliteOk)
-            rc =
-                api_->bind_int64(stmt.get(), 6, final_checked_out ? final_owner.base_addr.ip() : 0);
-        if (rc == kSqliteOk)
-            rc =
-                api_->bind_int(stmt.get(), 7, final_checked_out ? final_owner.base_addr.port() : 0);
-        if (rc == kSqliteOk)
-            rc = api_->bind_int(stmt.get(), 8, final_checked_out ? final_owner.app_id : 0);
-        if (rc == kSqliteOk)
-            rc = api_->bind_int(stmt.get(), 9, final_checked_out ? final_owner.entity_id : 0);
-        if (rc == kSqliteOk)
-            rc = api_->bind_int64(stmt.get(), 10, now_ms);
-        if (rc == kSqliteOk)
-            rc = api_->bind_int64(stmt.get(), 11, dbid);
-        if (rc == kSqliteOk)
-            rc = api_->bind_int(stmt.get(), 12, static_cast<int>(type_id));
+        if (rc == SQLITE_OK)
+            rc = sqlite3_bind_int(stmt.get(), 4, final_auto_load ? 1 : 0);
+        if (rc == SQLITE_OK)
+            rc = sqlite3_bind_int(stmt.get(), 5, final_checked_out ? 1 : 0);
+        if (rc == SQLITE_OK)
+            rc = sqlite3_bind_int64(stmt.get(), 6,
+                                    final_checked_out ? final_owner.base_addr.ip() : 0);
+        if (rc == SQLITE_OK)
+            rc = sqlite3_bind_int(stmt.get(), 7,
+                                  final_checked_out ? final_owner.base_addr.port() : 0);
+        if (rc == SQLITE_OK)
+            rc = sqlite3_bind_int(stmt.get(), 8, final_checked_out ? final_owner.app_id : 0);
+        if (rc == SQLITE_OK)
+            rc = sqlite3_bind_int(stmt.get(), 9, final_checked_out ? final_owner.entity_id : 0);
+        if (rc == SQLITE_OK)
+            rc = sqlite3_bind_int64(stmt.get(), 10, now_ms);
+        if (rc == SQLITE_OK)
+            rc = sqlite3_bind_int64(stmt.get(), 11, dbid);
+        if (rc == SQLITE_OK)
+            rc = sqlite3_bind_int(stmt.get(), 12, static_cast<int>(type_id));
 
-        if (rc != kSqliteOk || api_->step(stmt.get()) != kSqliteDone)
+        if (rc != SQLITE_OK || sqlite3_step(stmt.get()) != SQLITE_DONE)
         {
             if (result.error.empty())
                 result.error =
@@ -425,36 +403,36 @@ void SqliteDatabase::put_entity_with_password(DatabaseID dbid, uint16_t type_id,
     }
 
     auto stmt = std::move(*stmt_result);
-    auto rc = api_->bind_int(stmt.get(), 1, static_cast<int>(type_id));
-    if (rc == kSqliteOk)
+    auto rc = sqlite3_bind_int(stmt.get(), 1, static_cast<int>(type_id));
+    if (rc == SQLITE_OK)
     {
         auto bind_result = bind_blob(stmt, 2, blob);
-        rc = bind_result ? kSqliteOk : 1;
+        rc = bind_result ? SQLITE_OK : 1;
         if (!bind_result)
             result.error = std::string(bind_result.error().message());
     }
-    if (rc == kSqliteOk)
+    if (rc == SQLITE_OK)
     {
         auto bind_result = bind_identifier(stmt, 3, identifier);
-        rc = bind_result ? kSqliteOk : 1;
+        rc = bind_result ? SQLITE_OK : 1;
         if (!bind_result)
             result.error = std::string(bind_result.error().message());
     }
-    if (rc == kSqliteOk)
+    if (rc == SQLITE_OK)
     {
         if (password_hash.empty())
-            rc = api_->bind_null(stmt.get(), 4);
+            rc = sqlite3_bind_null(stmt.get(), 4);
         else
-            rc = api_->bind_text(stmt.get(), 4, password_hash.c_str(), -1, sqlite_transient());
+            rc = sqlite3_bind_text(stmt.get(), 4, password_hash.c_str(), -1, SQLITE_TRANSIENT);
     }
-    if (rc == kSqliteOk)
-        rc = api_->bind_int(stmt.get(), 5, has_flag(flags, WriteFlags::AutoLoadOn) ? 1 : 0);
-    if (rc == kSqliteOk)
-        rc = api_->bind_int64(stmt.get(), 6, now_ms);
-    if (rc == kSqliteOk)
-        rc = api_->bind_int64(stmt.get(), 7, now_ms);
+    if (rc == SQLITE_OK)
+        rc = sqlite3_bind_int(stmt.get(), 5, has_flag(flags, WriteFlags::AutoLoadOn) ? 1 : 0);
+    if (rc == SQLITE_OK)
+        rc = sqlite3_bind_int64(stmt.get(), 6, now_ms);
+    if (rc == SQLITE_OK)
+        rc = sqlite3_bind_int64(stmt.get(), 7, now_ms);
 
-    if (rc != kSqliteOk)
+    if (rc != SQLITE_OK)
     {
         if (result.error.empty())
             result.error =
@@ -463,8 +441,8 @@ void SqliteDatabase::put_entity_with_password(DatabaseID dbid, uint16_t type_id,
         return;
     }
 
-    rc = api_->step(stmt.get());
-    if (rc != kSqliteDone)
+    rc = sqlite3_step(stmt.get());
+    if (rc != SQLITE_DONE)
     {
         result.error =
             std::string(sqlite_error("SqliteDatabase: password insert failed", rc).message());
@@ -473,7 +451,7 @@ void SqliteDatabase::put_entity_with_password(DatabaseID dbid, uint16_t type_id,
     }
 
     result.success = true;
-    result.dbid = static_cast<DatabaseID>(api_->last_insert_rowid(db_));
+    result.dbid = static_cast<DatabaseID>(sqlite3_last_insert_rowid(db_));
     fire_or_defer([cb = std::move(callback), result]() mutable { cb(result); });
 }
 
@@ -517,25 +495,25 @@ void SqliteDatabase::del_entity(DatabaseID dbid, uint16_t type_id,
     }
 
     auto stmt = std::move(*stmt_result);
-    auto rc = api_->bind_int64(stmt.get(), 1, dbid);
-    if (rc == kSqliteOk)
-        rc = api_->bind_int(stmt.get(), 2, static_cast<int>(type_id));
-    if (rc != kSqliteOk)
+    auto rc = sqlite3_bind_int64(stmt.get(), 1, dbid);
+    if (rc == SQLITE_OK)
+        rc = sqlite3_bind_int(stmt.get(), 2, static_cast<int>(type_id));
+    if (rc != SQLITE_OK)
     {
         result.error = std::string(sqlite_error("SqliteDatabase: delete bind failed").message());
         fire_or_defer([cb = std::move(callback), result]() mutable { cb(result); });
         return;
     }
 
-    rc = api_->step(stmt.get());
-    if (rc != kSqliteDone)
+    rc = sqlite3_step(stmt.get());
+    if (rc != SQLITE_DONE)
     {
         result.error = std::string(sqlite_error("SqliteDatabase: delete failed", rc).message());
         fire_or_defer([cb = std::move(callback), result]() mutable { cb(result); });
         return;
     }
 
-    if (api_->changes(db_) <= 0)
+    if (sqlite3_changes(db_) <= 0)
     {
         result.error = std::format("entity ({},{}) not found", type_id, dbid);
         fire_or_defer([cb = std::move(callback), result]() mutable { cb(result); });
@@ -625,21 +603,21 @@ void SqliteDatabase::checkout_entity(DatabaseID dbid, uint16_t type_id,
     }
 
     auto stmt = std::move(*update_result);
-    auto rc = api_->bind_int64(stmt.get(), 1, new_owner.base_addr.ip());
-    if (rc == kSqliteOk)
-        rc = api_->bind_int(stmt.get(), 2, new_owner.base_addr.port());
-    if (rc == kSqliteOk)
-        rc = api_->bind_int(stmt.get(), 3, static_cast<int>(new_owner.app_id));
-    if (rc == kSqliteOk)
-        rc = api_->bind_int(stmt.get(), 4, static_cast<int>(new_owner.entity_id));
-    if (rc == kSqliteOk)
-        rc = api_->bind_int64(stmt.get(), 5, now_ms);
-    if (rc == kSqliteOk)
-        rc = api_->bind_int64(stmt.get(), 6, dbid);
-    if (rc == kSqliteOk)
-        rc = api_->bind_int(stmt.get(), 7, static_cast<int>(type_id));
+    auto rc = sqlite3_bind_int64(stmt.get(), 1, new_owner.base_addr.ip());
+    if (rc == SQLITE_OK)
+        rc = sqlite3_bind_int(stmt.get(), 2, new_owner.base_addr.port());
+    if (rc == SQLITE_OK)
+        rc = sqlite3_bind_int(stmt.get(), 3, static_cast<int>(new_owner.app_id));
+    if (rc == SQLITE_OK)
+        rc = sqlite3_bind_int(stmt.get(), 4, static_cast<int>(new_owner.entity_id));
+    if (rc == SQLITE_OK)
+        rc = sqlite3_bind_int64(stmt.get(), 5, now_ms);
+    if (rc == SQLITE_OK)
+        rc = sqlite3_bind_int64(stmt.get(), 6, dbid);
+    if (rc == SQLITE_OK)
+        rc = sqlite3_bind_int(stmt.get(), 7, static_cast<int>(type_id));
 
-    if (rc != kSqliteOk || api_->step(stmt.get()) != kSqliteDone)
+    if (rc != SQLITE_OK || sqlite3_step(stmt.get()) != SQLITE_DONE)
     {
         (void)exec_sql("ROLLBACK");
         result.error =
@@ -648,7 +626,7 @@ void SqliteDatabase::checkout_entity(DatabaseID dbid, uint16_t type_id,
         return;
     }
 
-    if (api_->changes(db_) != 1)
+    if (sqlite3_changes(db_) != 1)
     {
         (void)exec_sql("ROLLBACK");
         auto refreshed = fetch_by_dbid(dbid, type_id);
@@ -718,14 +696,14 @@ void SqliteDatabase::clear_checkout(DatabaseID dbid, uint16_t type_id,
     if (stmt_result)
     {
         auto stmt = std::move(*stmt_result);
-        auto rc = api_->bind_int64(stmt.get(), 1, now_ms);
-        if (rc == kSqliteOk)
-            rc = api_->bind_int64(stmt.get(), 2, dbid);
-        if (rc == kSqliteOk)
-            rc = api_->bind_int(stmt.get(), 3, static_cast<int>(type_id));
-        if (rc == kSqliteOk && api_->step(stmt.get()) == kSqliteDone)
+        auto rc = sqlite3_bind_int64(stmt.get(), 1, now_ms);
+        if (rc == SQLITE_OK)
+            rc = sqlite3_bind_int64(stmt.get(), 2, dbid);
+        if (rc == SQLITE_OK)
+            rc = sqlite3_bind_int(stmt.get(), 3, static_cast<int>(type_id));
+        if (rc == SQLITE_OK && sqlite3_step(stmt.get()) == SQLITE_DONE)
         {
-            cleared = api_->changes(db_) > 0;
+            cleared = sqlite3_changes(db_) > 0;
         }
     }
 
@@ -744,14 +722,14 @@ void SqliteDatabase::clear_checkouts_for_address(const Address& base_addr,
     if (stmt_result)
     {
         auto stmt = std::move(*stmt_result);
-        auto rc = api_->bind_int64(stmt.get(), 1, now_ms);
-        if (rc == kSqliteOk)
-            rc = api_->bind_int64(stmt.get(), 2, base_addr.ip());
-        if (rc == kSqliteOk)
-            rc = api_->bind_int(stmt.get(), 3, base_addr.port());
-        if (rc == kSqliteOk && api_->step(stmt.get()) == kSqliteDone)
+        auto rc = sqlite3_bind_int64(stmt.get(), 1, now_ms);
+        if (rc == SQLITE_OK)
+            rc = sqlite3_bind_int64(stmt.get(), 2, base_addr.ip());
+        if (rc == SQLITE_OK)
+            rc = sqlite3_bind_int(stmt.get(), 3, base_addr.port());
+        if (rc == SQLITE_OK && sqlite3_step(stmt.get()) == SQLITE_DONE)
         {
-            cleared = api_->changes(db_);
+            cleared = sqlite3_changes(db_);
         }
     }
 
@@ -771,14 +749,14 @@ void SqliteDatabase::mark_checkout_cleared(DatabaseID dbid, uint16_t type_id)
     }
 
     auto stmt = std::move(*stmt_result);
-    auto rc = api_->bind_int64(stmt.get(), 1, now_ms);
-    if (rc == kSqliteOk)
-        rc = api_->bind_int64(stmt.get(), 2, dbid);
-    if (rc == kSqliteOk)
-        rc = api_->bind_int(stmt.get(), 3, static_cast<int>(type_id));
-    if (rc == kSqliteOk)
+    auto rc = sqlite3_bind_int64(stmt.get(), 1, now_ms);
+    if (rc == SQLITE_OK)
+        rc = sqlite3_bind_int64(stmt.get(), 2, dbid);
+    if (rc == SQLITE_OK)
+        rc = sqlite3_bind_int(stmt.get(), 3, static_cast<int>(type_id));
+    if (rc == SQLITE_OK)
     {
-        (void)api_->step(stmt.get());
+        (void)sqlite3_step(stmt.get());
     }
 }
 
@@ -798,27 +776,27 @@ void SqliteDatabase::get_auto_load_entities(std::function<void(std::vector<Entit
     auto stmt = std::move(*stmt_result);
     for (;;)
     {
-        auto rc = api_->step(stmt.get());
-        if (rc == kSqliteDone)
+        auto rc = sqlite3_step(stmt.get());
+        if (rc == SQLITE_DONE)
         {
             break;
         }
-        if (rc != kSqliteRow)
+        if (rc != SQLITE_ROW)
         {
             break;
         }
 
         EntityData data;
-        data.dbid = static_cast<DatabaseID>(api_->column_int64(stmt.get(), 0));
-        data.type_id = static_cast<uint16_t>(api_->column_int(stmt.get(), 1));
-        auto blob_ptr = api_->column_blob(stmt.get(), 2);
-        auto blob_size = api_->column_bytes(stmt.get(), 2);
+        data.dbid = static_cast<DatabaseID>(sqlite3_column_int64(stmt.get(), 0));
+        data.type_id = static_cast<uint16_t>(sqlite3_column_int(stmt.get(), 1));
+        auto blob_ptr = sqlite3_column_blob(stmt.get(), 2);
+        auto blob_size = sqlite3_column_bytes(stmt.get(), 2);
         if (blob_ptr != nullptr && blob_size > 0)
         {
             auto* bytes = static_cast<const std::byte*>(blob_ptr);
             data.blob.assign(bytes, bytes + blob_size);
         }
-        if (const auto* text = api_->column_text(stmt.get(), 3); text != nullptr)
+        if (const auto* text = sqlite3_column_text(stmt.get(), 3); text != nullptr)
         {
             data.identifier = reinterpret_cast<const char*>(text);
         }
@@ -840,16 +818,16 @@ void SqliteDatabase::set_auto_load(DatabaseID dbid, uint16_t type_id, bool auto_
     }
 
     auto stmt = std::move(*stmt_result);
-    auto rc = api_->bind_int(stmt.get(), 1, auto_load ? 1 : 0);
-    if (rc == kSqliteOk)
-        rc = api_->bind_int64(stmt.get(), 2, now_ms);
-    if (rc == kSqliteOk)
-        rc = api_->bind_int64(stmt.get(), 3, dbid);
-    if (rc == kSqliteOk)
-        rc = api_->bind_int(stmt.get(), 4, static_cast<int>(type_id));
-    if (rc == kSqliteOk)
+    auto rc = sqlite3_bind_int(stmt.get(), 1, auto_load ? 1 : 0);
+    if (rc == SQLITE_OK)
+        rc = sqlite3_bind_int64(stmt.get(), 2, now_ms);
+    if (rc == SQLITE_OK)
+        rc = sqlite3_bind_int64(stmt.get(), 3, dbid);
+    if (rc == SQLITE_OK)
+        rc = sqlite3_bind_int(stmt.get(), 4, static_cast<int>(type_id));
+    if (rc == SQLITE_OK)
     {
-        (void)api_->step(stmt.get());
+        (void)sqlite3_step(stmt.get());
     }
 }
 
@@ -869,77 +847,6 @@ void SqliteDatabase::process_results()
     }
 }
 
-auto SqliteDatabase::load_sqlite_api() -> Result<SqliteApi>
-{
-    static constexpr std::string_view kCandidates[] = {
-#if defined(_WIN32)
-        "sqlite3.dll",
-        "winsqlite3.dll",
-#elif defined(__APPLE__)
-        "libsqlite3.dylib",
-        "/usr/lib/libsqlite3.dylib",
-#else
-        "libsqlite3.so.0",
-        "libsqlite3.so",
-        "/usr/lib/x86_64-linux-gnu/libsqlite3.so.0",
-#endif
-    };
-
-    Error last_error{ErrorCode::NotFound, "sqlite runtime library not found"};
-    for (auto candidate : kCandidates)
-    {
-        auto lib_result = DynamicLibrary::load(std::filesystem::path(candidate));
-        if (!lib_result)
-        {
-            last_error = lib_result.error();
-            continue;
-        }
-
-        SqliteApi api{std::move(*lib_result)};
-
-        auto load_symbol = [&]<typename Fn>(Fn& out, std::string_view name) -> bool
-        {
-            auto sym = api.library.get_symbol<Fn>(name);
-            if (!sym)
-            {
-                last_error = sym.error();
-                std::cout << std::format("> load symbol {} failed.\n", name);
-                return false;
-            }
-            out = *sym;
-            return true;
-        };
-
-        if (!load_symbol(api.open_v2, "sqlite3_open_v2") ||
-            !load_symbol(api.close, "sqlite3_close") || !load_symbol(api.exec, "sqlite3_exec") ||
-            !load_symbol(api.free_fn, "sqlite3_free") ||
-            !load_symbol(api.errmsg, "sqlite3_errmsg") ||
-            !load_symbol(api.busy_timeout, "sqlite3_busy_timeout") ||
-            !load_symbol(api.prepare_v2, "sqlite3_prepare_v2") ||
-            !load_symbol(api.finalize, "sqlite3_finalize") ||
-            !load_symbol(api.step, "sqlite3_step") ||
-            !load_symbol(api.bind_int, "sqlite3_bind_int") ||
-            !load_symbol(api.bind_int64, "sqlite3_bind_int64") ||
-            !load_symbol(api.bind_null, "sqlite3_bind_null") ||
-            !load_symbol(api.bind_text, "sqlite3_bind_text") ||
-            !load_symbol(api.bind_blob, "sqlite3_bind_blob") ||
-            !load_symbol(api.column_int, "sqlite3_column_int") ||
-            !load_symbol(api.column_int64, "sqlite3_column_int64") ||
-            !load_symbol(api.column_text, "sqlite3_column_text") ||
-            !load_symbol(api.column_blob, "sqlite3_column_blob") ||
-            !load_symbol(api.column_bytes, "sqlite3_column_bytes") ||
-            !load_symbol(api.last_insert_rowid, "sqlite3_last_insert_rowid") ||
-            !load_symbol(api.changes, "sqlite3_changes"))
-        {
-            continue;
-        }
-        return api;
-    }
-
-    return Error{last_error.code(), std::string("failed to load sqlite runtime: ") +
-                                        std::string(last_error.message())};
-}
-
 auto SqliteDatabase::open_database(const DatabaseConfig& config) -> Result<void>
 {
     auto parent = db_path_.parent_path();
@@ -955,24 +862,18 @@ auto SqliteDatabase::open_database(const DatabaseConfig& config) -> Result<void>
         }
     }
 
-    std::cout << "open_database: 1 \n";
-
-    auto flags = kSqliteOpenReadWrite | kSqliteOpenCreate | kSqliteOpenFullMutex;
-    auto rc = api_->open_v2(db_path_.string().c_str(), &db_, flags, nullptr);
-    if (rc != kSqliteOk || db_ == nullptr)
+    auto flags = SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE | SQLITE_OPEN_FULLMUTEX;
+    auto rc = sqlite3_open_v2(db_path_.string().c_str(), &db_, flags, nullptr);
+    if (rc != SQLITE_OK || db_ == nullptr)
     {
         return sqlite_error("SqliteDatabase: sqlite3_open_v2 failed", rc);
     }
 
-    std::cout << "open_database: 2 \n";
-
-    rc = api_->busy_timeout(db_, config.sqlite_busy_timeout_ms);
-    if (rc != kSqliteOk)
+    rc = sqlite3_busy_timeout(db_, config.sqlite_busy_timeout_ms);
+    if (rc != SQLITE_OK)
     {
         return sqlite_error("SqliteDatabase: sqlite3_busy_timeout failed", rc);
     }
-
-    std::cout << "open_database: 3 \n";
 
     auto journal_sql = std::string(config.sqlite_wal ? "PRAGMA journal_mode = WAL"
                                                      : "PRAGMA journal_mode = DELETE");
@@ -982,8 +883,6 @@ auto SqliteDatabase::open_database(const DatabaseConfig& config) -> Result<void>
         return pragma_result.error();
     }
 
-    std::cout << "open_database: 4 \n";
-
     auto fk_result = exec_sql(std::string(
         config.sqlite_foreign_keys ? "PRAGMA foreign_keys = ON" : "PRAGMA foreign_keys = OFF"));
     if (!fk_result)
@@ -991,15 +890,11 @@ auto SqliteDatabase::open_database(const DatabaseConfig& config) -> Result<void>
         return fk_result.error();
     }
 
-    std::cout << "open_database: 5 \n";
-
     auto sync_result = exec_sql("PRAGMA synchronous = NORMAL");
     if (!sync_result)
     {
         return sync_result.error();
     }
-
-    std::cout << "open_database: 6 \n";
 
     return {};
 }
@@ -1100,8 +995,8 @@ auto SqliteDatabase::ensure_schema() -> Result<void>
 auto SqliteDatabase::exec_sql(std::string_view sql) -> Result<void>
 {
     char* err = nullptr;
-    auto rc = api_->exec(db_, std::string(sql).c_str(), nullptr, nullptr, &err);
-    if (rc == kSqliteOk)
+    auto rc = sqlite3_exec(db_, std::string(sql).c_str(), nullptr, nullptr, &err);
+    if (rc == SQLITE_OK)
     {
         return {};
     }
@@ -1111,12 +1006,12 @@ auto SqliteDatabase::exec_sql(std::string_view sql) -> Result<void>
     {
         message += ": ";
         message += err;
-        api_->free_fn(err);
+        sqlite3_free(err);
     }
     else if (db_ != nullptr)
     {
         message += ": ";
-        message += api_->errmsg(db_);
+        message += sqlite3_errmsg(db_);
     }
 
     return Error{ErrorCode::InternalError, std::move(message)};
@@ -1142,12 +1037,12 @@ auto SqliteDatabase::exec_sql_ignoring_duplicate_column(std::string_view sql) ->
 auto SqliteDatabase::prepare(std::string_view sql) -> Result<Statement>
 {
     sqlite3_stmt* stmt = nullptr;
-    auto rc = api_->prepare_v2(db_, std::string(sql).c_str(), -1, &stmt, nullptr);
-    if (rc != kSqliteOk)
+    auto rc = sqlite3_prepare_v2(db_, std::string(sql).c_str(), -1, &stmt, nullptr);
+    if (rc != SQLITE_OK)
     {
         return sqlite_error(std::format("SqliteDatabase: prepare failed '{}'", sql), rc);
     }
-    return Statement{&*api_, stmt};
+    return Statement{stmt};
 }
 
 auto SqliteDatabase::upsert_meta(std::string_view key, std::string_view value) -> Result<void>
@@ -1159,16 +1054,16 @@ auto SqliteDatabase::upsert_meta(std::string_view key, std::string_view value) -
     }
 
     auto stmt = std::move(*stmt_result);
-    auto rc = api_->bind_text(stmt.get(), 1, std::string(key).c_str(), -1, sqlite_transient());
-    if (rc == kSqliteOk)
-        rc = api_->bind_text(stmt.get(), 2, std::string(value).c_str(), -1, sqlite_transient());
-    if (rc != kSqliteOk)
+    auto rc = sqlite3_bind_text(stmt.get(), 1, std::string(key).c_str(), -1, SQLITE_TRANSIENT);
+    if (rc == SQLITE_OK)
+        rc = sqlite3_bind_text(stmt.get(), 2, std::string(value).c_str(), -1, SQLITE_TRANSIENT);
+    if (rc != SQLITE_OK)
     {
         return sqlite_error("SqliteDatabase: meta bind failed", rc);
     }
 
-    rc = api_->step(stmt.get());
-    if (rc != kSqliteDone)
+    rc = sqlite3_step(stmt.get());
+    if (rc != SQLITE_DONE)
     {
         return sqlite_error("SqliteDatabase: meta upsert failed", rc);
     }
@@ -1188,20 +1083,20 @@ auto SqliteDatabase::fetch_by_dbid(DatabaseID dbid, uint16_t type_id) -> Result<
     }
 
     auto stmt = std::move(*stmt_result);
-    auto rc = api_->bind_int64(stmt.get(), 1, dbid);
-    if (rc == kSqliteOk)
-        rc = api_->bind_int(stmt.get(), 2, static_cast<int>(type_id));
-    if (rc != kSqliteOk)
+    auto rc = sqlite3_bind_int64(stmt.get(), 1, dbid);
+    if (rc == SQLITE_OK)
+        rc = sqlite3_bind_int(stmt.get(), 2, static_cast<int>(type_id));
+    if (rc != SQLITE_OK)
     {
         return sqlite_error("SqliteDatabase: fetch_by_dbid bind failed", rc);
     }
 
-    rc = api_->step(stmt.get());
-    if (rc == kSqliteDone)
+    rc = sqlite3_step(stmt.get());
+    if (rc == SQLITE_DONE)
     {
         return EntityRow{};
     }
-    if (rc != kSqliteRow)
+    if (rc != SQLITE_ROW)
     {
         return sqlite_error("SqliteDatabase: fetch_by_dbid step failed", rc);
     }
@@ -1221,21 +1116,21 @@ auto SqliteDatabase::fetch_by_name(uint16_t type_id, std::string_view identifier
     }
 
     auto stmt = std::move(*stmt_result);
-    auto rc = api_->bind_int(stmt.get(), 1, static_cast<int>(type_id));
+    auto rc = sqlite3_bind_int(stmt.get(), 1, static_cast<int>(type_id));
     auto owned_identifier = std::string(identifier);
-    if (rc == kSqliteOk)
-        rc = api_->bind_text(stmt.get(), 2, owned_identifier.c_str(), -1, sqlite_transient());
-    if (rc != kSqliteOk)
+    if (rc == SQLITE_OK)
+        rc = sqlite3_bind_text(stmt.get(), 2, owned_identifier.c_str(), -1, SQLITE_TRANSIENT);
+    if (rc != SQLITE_OK)
     {
         return sqlite_error("SqliteDatabase: fetch_by_name bind failed", rc);
     }
 
-    rc = api_->step(stmt.get());
-    if (rc == kSqliteDone)
+    rc = sqlite3_step(stmt.get());
+    if (rc == SQLITE_DONE)
     {
         return EntityRow{};
     }
-    if (rc != kSqliteRow)
+    if (rc != SQLITE_ROW)
     {
         return sqlite_error("SqliteDatabase: fetch_by_name step failed", rc);
     }
@@ -1246,35 +1141,35 @@ auto SqliteDatabase::read_row(sqlite3_stmt* stmt) const -> EntityRow
 {
     EntityRow row;
     row.found = true;
-    row.data.dbid = static_cast<DatabaseID>(api_->column_int64(stmt, 0));
-    row.data.type_id = static_cast<uint16_t>(api_->column_int(stmt, 1));
+    row.data.dbid = static_cast<DatabaseID>(sqlite3_column_int64(stmt, 0));
+    row.data.type_id = static_cast<uint16_t>(sqlite3_column_int(stmt, 1));
 
-    auto blob_ptr = api_->column_blob(stmt, 2);
-    auto blob_size = api_->column_bytes(stmt, 2);
+    auto blob_ptr = sqlite3_column_blob(stmt, 2);
+    auto blob_size = sqlite3_column_bytes(stmt, 2);
     if (blob_ptr != nullptr && blob_size > 0)
     {
         auto* bytes = static_cast<const std::byte*>(blob_ptr);
         row.data.blob.assign(bytes, bytes + blob_size);
     }
 
-    if (const auto* text = api_->column_text(stmt, 3); text != nullptr)
+    if (const auto* text = sqlite3_column_text(stmt, 3); text != nullptr)
     {
         row.data.identifier = reinterpret_cast<const char*>(text);
     }
-    if (const auto* text = api_->column_text(stmt, 4); text != nullptr)
+    if (const auto* text = sqlite3_column_text(stmt, 4); text != nullptr)
     {
         row.password_hash = reinterpret_cast<const char*>(text);
     }
 
-    row.auto_load = api_->column_int(stmt, 5) != 0;
-    const bool checked_out = api_->column_int(stmt, 6) != 0;
+    row.auto_load = sqlite3_column_int(stmt, 5) != 0;
+    const bool checked_out = sqlite3_column_int(stmt, 6) != 0;
     if (checked_out)
     {
         CheckoutInfo info;
-        info.base_addr = Address(static_cast<uint32_t>(api_->column_int64(stmt, 7)),
-                                 static_cast<uint16_t>(api_->column_int(stmt, 8)));
-        info.app_id = static_cast<uint32_t>(api_->column_int(stmt, 9));
-        info.entity_id = static_cast<uint32_t>(api_->column_int(stmt, 10));
+        info.base_addr = Address(static_cast<uint32_t>(sqlite3_column_int64(stmt, 7)),
+                                 static_cast<uint16_t>(sqlite3_column_int(stmt, 8)));
+        info.app_id = static_cast<uint32_t>(sqlite3_column_int(stmt, 9));
+        info.entity_id = static_cast<uint32_t>(sqlite3_column_int(stmt, 10));
         row.checked_out_by = info;
     }
 
@@ -1284,16 +1179,16 @@ auto SqliteDatabase::read_row(sqlite3_stmt* stmt) const -> EntityRow
 auto SqliteDatabase::bind_identifier(Statement& stmt, int index,
                                      const std::string& identifier) const -> Result<void>
 {
-    int rc = kSqliteOk;
+    int rc = SQLITE_OK;
     if (identifier.empty())
     {
-        rc = api_->bind_null(stmt.get(), index);
+        rc = sqlite3_bind_null(stmt.get(), index);
     }
     else
     {
-        rc = api_->bind_text(stmt.get(), index, identifier.c_str(), -1, sqlite_transient());
+        rc = sqlite3_bind_text(stmt.get(), index, identifier.c_str(), -1, SQLITE_TRANSIENT);
     }
-    if (rc != kSqliteOk)
+    if (rc != SQLITE_OK)
     {
         return sqlite_error("SqliteDatabase: bind identifier failed", rc);
     }
@@ -1306,8 +1201,8 @@ auto SqliteDatabase::bind_blob(Statement& stmt, int index, std::span<const std::
     static const std::byte kEmptyBlob = std::byte{0};
     const void* data = blob.empty() ? &kEmptyBlob : blob.data();
     auto rc =
-        api_->bind_blob(stmt.get(), index, data, static_cast<int>(blob.size()), sqlite_transient());
-    if (rc != kSqliteOk)
+        sqlite3_bind_blob(stmt.get(), index, data, static_cast<int>(blob.size()), SQLITE_TRANSIENT);
+    if (rc != SQLITE_OK)
     {
         return sqlite_error("SqliteDatabase: bind blob failed", rc);
     }
@@ -1317,10 +1212,10 @@ auto SqliteDatabase::bind_blob(Statement& stmt, int index, std::span<const std::
 auto SqliteDatabase::sqlite_error(std::string_view prefix) const -> Error
 {
     std::string message(prefix);
-    if (db_ != nullptr && api_.has_value() && api_->errmsg != nullptr)
+    if (db_ != nullptr)
     {
         message += ": ";
-        message += api_->errmsg(db_);
+        message += sqlite3_errmsg(db_);
     }
     return Error{ErrorCode::InternalError, std::move(message)};
 }
@@ -1329,9 +1224,7 @@ auto SqliteDatabase::sqlite_error(std::string_view prefix, int code) const -> Er
 {
     return Error{ErrorCode::InternalError,
                  std::format("{} (sqlite rc={}){}", prefix, code,
-                             (db_ != nullptr && api_.has_value() && api_->errmsg != nullptr)
-                                 ? std::format(": {}", api_->errmsg(db_))
-                                 : "")};
+                             db_ != nullptr ? std::format(": {}", sqlite3_errmsg(db_)) : "")};
 }
 
 void SqliteDatabase::fire_or_defer(std::function<void()> cb)

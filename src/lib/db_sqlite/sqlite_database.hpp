@@ -1,17 +1,13 @@
 #pragma once
 
 #include "db/idatabase.hpp"
-#include "platform/dynamic_library.hpp"
 
 #include <deque>
 #include <functional>
-#include <optional>
+#include <sqlite3.h>
 #include <string>
 #include <string_view>
 #include <vector>
-
-struct sqlite3;
-struct sqlite3_stmt;
 
 namespace atlas
 {
@@ -68,40 +64,6 @@ public:
     void process_results() override;
 
 private:
-    struct SqliteApi
-    {
-        explicit SqliteApi(DynamicLibrary&& lib) : library(std::move(lib)) {}
-        SqliteApi(SqliteApi&&) noexcept = default;
-        auto operator=(SqliteApi&&) noexcept -> SqliteApi& = default;
-        SqliteApi(const SqliteApi&) = delete;
-        auto operator=(const SqliteApi&) -> SqliteApi& = delete;
-
-        DynamicLibrary library;
-
-        int (*open_v2)(const char*, sqlite3**, int, const char*){nullptr};
-        int (*close)(sqlite3*){nullptr};
-        int (*exec)(sqlite3*, const char*, int (*)(void*, int, char**, char**), void*,
-                    char**){nullptr};
-        void (*free_fn)(void*){nullptr};
-        const char* (*errmsg)(sqlite3*){nullptr};
-        int (*busy_timeout)(sqlite3*, int){nullptr};
-        int (*prepare_v2)(sqlite3*, const char*, int, sqlite3_stmt**, const char**){nullptr};
-        int (*finalize)(sqlite3_stmt*){nullptr};
-        int (*step)(sqlite3_stmt*){nullptr};
-        int (*bind_int)(sqlite3_stmt*, int, int){nullptr};
-        int (*bind_int64)(sqlite3_stmt*, int, long long){nullptr};
-        int (*bind_null)(sqlite3_stmt*, int){nullptr};
-        int (*bind_text)(sqlite3_stmt*, int, const char*, int, void (*)(void*)){nullptr};
-        int (*bind_blob)(sqlite3_stmt*, int, const void*, int, void (*)(void*)){nullptr};
-        int (*column_int)(sqlite3_stmt*, int){nullptr};
-        long long (*column_int64)(sqlite3_stmt*, int){nullptr};
-        const unsigned char* (*column_text)(sqlite3_stmt*, int){nullptr};
-        const void* (*column_blob)(sqlite3_stmt*, int){nullptr};
-        int (*column_bytes)(sqlite3_stmt*, int){nullptr};
-        long long (*last_insert_rowid)(sqlite3*){nullptr};
-        int (*changes)(sqlite3*){nullptr};
-    };
-
     struct EntityRow
     {
         bool found{false};
@@ -115,7 +77,7 @@ private:
     {
     public:
         Statement() = default;
-        Statement(const SqliteApi* api, sqlite3_stmt* stmt) : api_(api), stmt_(stmt) {}
+        explicit Statement(sqlite3_stmt* stmt) : stmt_(stmt) {}
         Statement(const Statement&) = delete;
         auto operator=(const Statement&) -> Statement& = delete;
         Statement(Statement&& other) noexcept;
@@ -126,11 +88,9 @@ private:
         void reset();
 
     private:
-        const SqliteApi* api_{nullptr};
         sqlite3_stmt* stmt_{nullptr};
     };
 
-    [[nodiscard]] static auto load_sqlite_api() -> Result<SqliteApi>;
     [[nodiscard]] auto open_database(const DatabaseConfig& config) -> Result<void>;
     [[nodiscard]] auto ensure_schema() -> Result<void>;
     [[nodiscard]] auto exec_sql(std::string_view sql) -> Result<void>;
@@ -149,7 +109,6 @@ private:
     [[nodiscard]] auto sqlite_error(std::string_view prefix, int code) const -> Error;
     void fire_or_defer(std::function<void()> cb);
 
-    std::optional<SqliteApi> api_;
     sqlite3* db_{nullptr};
     const EntityDefRegistry* entity_defs_{nullptr};
     std::filesystem::path db_path_;
@@ -157,12 +116,6 @@ private:
     bool deferred_mode_{false};
     std::deque<std::function<void()>> deferred_;
 
-    static constexpr int kSqliteOk = 0;
-    static constexpr int kSqliteRow = 100;
-    static constexpr int kSqliteDone = 101;
-    static constexpr int kSqliteOpenReadWrite = 0x00000002;
-    static constexpr int kSqliteOpenCreate = 0x00000004;
-    static constexpr int kSqliteOpenFullMutex = 0x00010000;
     static constexpr int kMaxCallbacksPerTick = 2048;
 };
 

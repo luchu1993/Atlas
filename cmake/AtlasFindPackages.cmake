@@ -92,6 +92,34 @@ if(NOT TARGET atlas_zlib)
     set_target_properties(atlas_zlib PROPERTIES FOLDER "ThirdParty/zlib")
 endif()
 
+# ── SQLite3 (database backend, amalgamation from sqlite.org) ─────────────────
+FetchContent_Declare(
+    sqlite3
+    URL      https://www.sqlite.org/2024/sqlite-amalgamation-3470200.zip
+    URL_HASH SHA3_256=0e4df2263ef8169f9396b9535d9654d8d64ae8eb1a339ba06c7b12a72e6fb020
+)
+FetchContent_MakeAvailable(sqlite3)
+
+# The amalgamation has no CMakeLists.txt — build it ourselves as a static lib.
+if(NOT TARGET sqlite3)
+    add_library(sqlite3 STATIC ${sqlite3_SOURCE_DIR}/sqlite3.c)
+    target_include_directories(sqlite3 PUBLIC ${sqlite3_SOURCE_DIR})
+    target_compile_definitions(sqlite3 PRIVATE
+        SQLITE_THREADSAFE=1
+        SQLITE_ENABLE_FTS5
+        SQLITE_ENABLE_JSON1
+    )
+    if(WIN32)
+        target_compile_definitions(sqlite3 PRIVATE SQLITE_API=)
+    endif()
+    if(MSVC)
+        target_compile_options(sqlite3 PRIVATE /W0)
+    else()
+        target_compile_options(sqlite3 PRIVATE -w)
+    endif()
+endif()
+set_target_properties(sqlite3 PROPERTIES FOLDER "ThirdParty")
+
 # ── .NET SDK (for CLR scripting) ─────────────────────────────────────────────
 include(${CMAKE_SOURCE_DIR}/cmake/FindDotNet.cmake)
 

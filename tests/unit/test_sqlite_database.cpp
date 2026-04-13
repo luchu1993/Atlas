@@ -87,8 +87,6 @@ protected:
     {
         register_account_entity();
 
-        std::cout << "register_account_entity\n";
-
         test_dir_ = std::filesystem::temp_directory_path() / "atlas_sqlite_db_test";
         std::filesystem::remove_all(test_dir_);
         std::filesystem::create_directories(test_dir_);
@@ -100,14 +98,8 @@ protected:
         cfg.sqlite_busy_timeout_ms = 1000;
         cfg.sqlite_foreign_keys = true;
 
-        std::cout << "before db startup\n";
         auto start = db_.startup(cfg, EntityDefRegistry::instance());
-        if (!start)
-        {
-            std::cout << "db startup failed.\n" << start.error().message();
-            GTEST_SKIP() << "sqlite runtime unavailable: " << start.error().message();
-        }
-        std::cout << "after db startup\n";
+        ASSERT_TRUE(start.has_value()) << "db startup failed: " << start.error().message();
     }
 
     void TearDown() override
