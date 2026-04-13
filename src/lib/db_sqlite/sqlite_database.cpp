@@ -86,6 +86,7 @@ auto SqliteDatabase::startup(const DatabaseConfig& config, const EntityDefRegist
         return api_result.error();
     }
     api_ = std::move(*api_result);
+    std::cout << "load_sqlite_api\n";
 
     auto open_result = open_database(config);
     if (!open_result)
@@ -93,6 +94,7 @@ auto SqliteDatabase::startup(const DatabaseConfig& config, const EntityDefRegist
         api_.reset();
         return open_result.error();
     }
+    std::cout << "open_database\n";
 
     auto schema_result = ensure_schema();
     if (!schema_result)
@@ -100,6 +102,7 @@ auto SqliteDatabase::startup(const DatabaseConfig& config, const EntityDefRegist
         shutdown();
         return schema_result.error();
     }
+    std::cout << "ensure_schema\n";
 
     started_ = true;
     ATLAS_LOG_INFO("SqliteDatabase: started at '{}'", db_path_.string());
@@ -885,8 +888,6 @@ auto SqliteDatabase::load_sqlite_api() -> Result<SqliteApi>
     Error last_error{ErrorCode::NotFound, "sqlite runtime library not found"};
     for (auto candidate : kCandidates)
     {
-        std::cout << std::format("dynamic load sqlite dll: {}\n", candidate);
-
         auto lib_result = DynamicLibrary::load(std::filesystem::path(candidate));
         if (!lib_result)
         {
@@ -911,8 +912,6 @@ auto SqliteDatabase::load_sqlite_api() -> Result<SqliteApi>
             return true;
         };
 
-        std::cout << "sqlite load symbol check \n";
-
         if (!load_symbol(api.open_v2, "sqlite3_open_v2") ||
             !load_symbol(api.close, "sqlite3_close") || !load_symbol(api.exec, "sqlite3_exec") ||
             !load_symbol(api.free_fn, "sqlite3_free") ||
@@ -936,8 +935,6 @@ auto SqliteDatabase::load_sqlite_api() -> Result<SqliteApi>
         {
             continue;
         }
-
-        std::cout << "load sqlite api succeed\n";
         return api;
     }
 
