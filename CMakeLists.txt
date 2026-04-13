@@ -2,7 +2,7 @@ cmake_minimum_required(VERSION 3.20)
 
 project(Atlas
     VERSION 0.1.0
-    LANGUAGES CXX
+    LANGUAGES C CXX
     DESCRIPTION "Atlas - Modern Distributed MMO Server Framework"
 )
 
