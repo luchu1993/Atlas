@@ -6,6 +6,7 @@
 #include <cstdint>
 #include <filesystem>
 #include <format>
+#include <iostream>
 #include <string_view>
 
 namespace
@@ -884,6 +885,7 @@ auto SqliteDatabase::load_sqlite_api() -> Result<SqliteApi>
     Error last_error{ErrorCode::NotFound, "sqlite runtime library not found"};
     for (auto candidate : kCandidates)
     {
+        std::cout << std::format("dynamic load sqlite dll: {}", candidate);
         auto lib_result = DynamicLibrary::load(std::filesystem::path(candidate));
         if (!lib_result)
         {
@@ -904,6 +906,8 @@ auto SqliteDatabase::load_sqlite_api() -> Result<SqliteApi>
             out = *sym;
             return true;
         };
+        
+        std::cout << "sqlite load symbol check \n";
 
         if (!load_symbol(api.open_v2, "sqlite3_open_v2") ||
             !load_symbol(api.close, "sqlite3_close") || !load_symbol(api.exec, "sqlite3_exec") ||
