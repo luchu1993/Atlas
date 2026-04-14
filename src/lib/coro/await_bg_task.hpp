@@ -3,6 +3,7 @@
 #include "network/bg_task_manager.hpp"
 
 #include <coroutine>
+#include <exception>
 #include <optional>
 #include <type_traits>
 #include <utility>
@@ -25,19 +26,36 @@ auto await_bg_task(BgTaskManager& mgr, F&& work)
         BgTaskManager& mgr;
         F work;
         std::optional<R> result;
+        std::exception_ptr exception;
 
         auto await_ready() -> bool { return false; }
 
         void await_suspend(std::coroutine_handle<> caller)
         {
-            mgr.add_task([this]() { result.emplace(work()); },
-                         [caller]() mutable { caller.resume(); });
+            mgr.add_task(
+                [this]()
+                {
+                    try
+                    {
+                        result.emplace(work());
+                    }
+                    catch (...)
+                    {
+                        exception = std::current_exception();
+                    }
+                },
+                [caller]() mutable { caller.resume(); });
         }
 
-        auto await_resume() -> R { return std::move(*result); }
+        auto await_resume() -> R
+        {
+            if (exception)
+                std::rethrow_exception(exception);
+            return std::move(*result);
+        }
     };
 
-    return Awaiter{mgr, std::forward<F>(work)};
+    return Awaiter{mgr, std::forward<F>(work), std::nullopt, nullptr};
 }
 
 // void specialization
@@ -49,18 +67,35 @@ auto await_bg_task(BgTaskManager& mgr, F&& work)
     {
         BgTaskManager& mgr;
         F work;
+        std::exception_ptr exception;
 
         auto await_ready() -> bool { return false; }
 
         void await_suspend(std::coroutine_handle<> caller)
         {
-            mgr.add_task([this]() { work(); }, [caller]() mutable { caller.resume(); });
+            mgr.add_task(
+                [this]()
+                {
+                    try
+                    {
+                        work();
+                    }
+                    catch (...)
+                    {
+                        exception = std::current_exception();
+                    }
+                },
+                [caller]() mutable { caller.resume(); });
         }
 
-        void await_resume() {}
+        void await_resume()
+        {
+            if (exception)
+                std::rethrow_exception(exception);
+        }
     };
 
-    return Awaiter{mgr, std::forward<F>(work)};
+    return Awaiter{mgr, std::forward<F>(work), nullptr};
 }
 
 }  // namespace atlas

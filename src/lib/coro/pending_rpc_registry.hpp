@@ -67,9 +67,9 @@ private:
     {
         auto operator()(const PendingKey& k) const -> size_t
         {
-            auto h1 = std::hash<uint16_t>{}(k.reply_id);
-            auto h2 = std::hash<uint32_t>{}(k.request_id);
-            return h1 ^ (h2 << 16);
+            auto h = static_cast<size_t>(k.reply_id);
+            h ^= std::hash<uint32_t>{}(k.request_id) + 0x9e3779b9 + (h << 6) + (h >> 2);
+            return h;
         }
     };
 

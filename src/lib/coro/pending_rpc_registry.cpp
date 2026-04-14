@@ -1,6 +1,7 @@
 #include "coro/pending_rpc_registry.hpp"
 
 #include "foundation/log.hpp"
+#include "serialization/binary_stream.hpp"
 
 namespace atlas
 {
@@ -17,6 +18,15 @@ auto PendingRpcRegistry::register_pending(MessageID reply_id, uint32_t request_i
                                           Duration timeout) -> PendingHandle
 {
     auto key = PendingKey{reply_id, request_id};
+
+    // Cancel existing entry if present (prevents timer leak on duplicate keys)
+    if (auto it = pending_.find(key); it != pending_.end())
+    {
+        ATLAS_LOG_WARNING("PendingRpcRegistry: overwriting duplicate key (reply={}, req={})",
+                          reply_id, request_id);
+        dispatcher_.cancel_timer(it->second.timeout_timer);
+        pending_.erase(it);
+    }
 
     // Start timeout timer
     auto timer = dispatcher_.add_timer(timeout,
@@ -97,9 +107,9 @@ auto PendingRpcRegistry::pending_count() const -> size_t
 
 auto PendingRpcRegistry::extract_request_id(std::span<const std::byte> payload) -> uint32_t
 {
-    uint32_t id = 0;
-    std::memcpy(&id, payload.data(), sizeof(uint32_t));
-    return id;  // Already little-endian in wire format, matches our convention
+    uint32_t id_le = 0;
+    std::memcpy(&id_le, payload.data(), sizeof(uint32_t));
+    return endian::from_little(id_le);
 }
 
 }  // namespace atlas

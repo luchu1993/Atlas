@@ -31,7 +31,7 @@ auto rpc_call(PendingRpcRegistry& registry, Channel& channel, const Request& req
     {
         PendingRpcRegistry& registry;
         Channel& channel;
-        const Request& request;
+        Request request;
         Duration timeout;
         CancellationToken token;
 
@@ -49,7 +49,7 @@ auto rpc_call(PendingRpcRegistry& registry, Channel& channel, const Request& req
             return false;
         }
 
-        void await_suspend(std::coroutine_handle<> caller)
+        auto await_suspend(std::coroutine_handle<> caller) -> std::coroutine_handle<>
         {
             // 1. Send request
             auto send_result = channel.send_message(request);
@@ -58,8 +58,7 @@ auto rpc_call(PendingRpcRegistry& registry, Channel& channel, const Request& req
                 result = Error{send_result.error().code(),
                                std::string("rpc_call: send failed: ") +
                                    std::string(send_result.error().message())};
-                caller.resume();
-                return;
+                return caller;  // symmetric transfer back to caller
             }
 
             // 2. Register pending entry
@@ -92,6 +91,8 @@ auto rpc_call(PendingRpcRegistry& registry, Channel& channel, const Request& req
             {
                 cancel_reg = token.on_cancel([this]() { registry.cancel(pending_handle); });
             }
+
+            return std::noop_coroutine();  // suspend until reply/timeout/cancel
         }
 
         auto await_resume() -> Result<Reply> { return std::move(result); }

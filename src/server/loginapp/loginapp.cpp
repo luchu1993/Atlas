@@ -70,9 +70,19 @@ auto LoginApp::init(int argc, char* argv[]) -> bool
         [this](const Address& src, Channel* ch, const login::LoginRequest& msg)
         { on_login_request(src, ch, msg); });
 
+    // Register RPC reply message descriptors so Channel knows their wire format
+    // (especially fixed-length messages). The pre-dispatch hook intercepts them
+    // before these no-op handlers run.
+    auto& table = network().interface_table();
+    (void)table.register_typed_handler<login::AuthLoginResult>(
+        [](const Address&, Channel*, const login::AuthLoginResult&) {});
+    (void)table.register_typed_handler<login::AllocateBaseAppResult>(
+        [](const Address&, Channel*, const login::AllocateBaseAppResult&) {});
+    (void)table.register_typed_handler<login::PrepareLoginResult>(
+        [](const Address&, Channel*, const login::PrepareLoginResult&) {});
+
     // Register pre-dispatch hook on internal network so rpc_call replies
     // are routed to the PendingRpcRegistry before normal handler dispatch.
-    auto& table = network().interface_table();
     table.set_pre_dispatch_hook([this](MessageID id, std::span<const std::byte> payload) -> bool
                                 { return rpc_registry_.try_dispatch(id, payload); });
 
