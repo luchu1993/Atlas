@@ -537,6 +537,20 @@ void DBApp::on_auth_login(const Address& src, Channel* ch, const login::AuthLogi
             login::AuthLoginResult reply;
             reply.request_id = request_id;
 
+            // A backend error (e.g. transient SQLite failure) must not be
+            // mistaken for "account does not exist" — surface it immediately.
+            if (!result.error.empty())
+            {
+                ATLAS_LOG_ERROR("DBApp: auth lookup failed for '{}': {}", username, result.error);
+                reply.success = false;
+                reply.status = login::LoginStatus::InternalError;
+                if (auto* reply_ch = this->resolve_reply_channel(reply_addr))
+                {
+                    (void)reply_ch->send_message(reply);
+                }
+                return;
+            }
+
             if (!result.found)
             {
                 if (auto_create && auto_create_accounts_)

@@ -128,6 +128,7 @@ struct LookupResult
     bool found{false};
     DatabaseID dbid{kInvalidDBID};
     std::string password_hash;  // sm_passwordHash (may be empty)
+    std::string error;          // non-empty on backend failure (distinct from not-found)
 };
 
 // ============================================================================
