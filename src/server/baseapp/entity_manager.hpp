@@ -2,10 +2,10 @@
 
 #include "base_entity.hpp"
 #include "foundation/time.hpp"
+#include "id_client.hpp"
 #include "server/entity_types.hpp"
 
 #include <cstdint>
-#include <limits>
 #include <memory>
 #include <unordered_map>
 
@@ -15,40 +15,24 @@ namespace atlas
 // ============================================================================
 // EntityManager — owns all BaseEntity instances on this BaseApp
 //
-// EntityID allocation:
-//   IDs are allocated locally using a monotonically-increasing counter.
-//   The counter starts at (app_index * kIdBucketSize + 1) so that each
-//   BaseApp instance produces non-overlapping IDs without coordination.
-//   When a manager-assigned range is installed, allocation is constrained to
-//   [range_start_, range_end_]. If the range is exhausted, allocate_id()
-//   returns kInvalidEntityID instead of spilling into another app's range.
+// EntityID allocation is delegated to an IDClient which obtains IDs from
+// DBApp via water-level-controlled batch requests.
 // ============================================================================
 
 class EntityManager
 {
 public:
-    static constexpr uint32_t kIdBucketSize = 1'000'000u;
+    EntityManager() = default;
 
-    // app_index  — zero-based index of this BaseApp in the cluster
-    explicit EntityManager(uint32_t app_index = 0);
+    // Install the IDClient for water-level ID allocation from DBApp.
+    void set_id_client(IDClient* client) { id_client_ = client; }
 
-    // Allocate a fresh EntityID (never reused within one process lifetime).
-    // Returns kInvalidEntityID when the current manager-assigned range is exhausted.
+    // Allocate a fresh EntityID from the IDClient cache.
+    // Returns kInvalidEntityID when no IDClient is installed or cache is empty.
     [[nodiscard]] auto allocate_id() -> EntityID;
 
-    // Set the allocated ID range from BaseAppMgr (replaces the local bucket)
-    void set_id_range(EntityID start, EntityID end);
-
-    // Extend the upper bound of the current range
-    void extend_id_range(EntityID new_end);
-
-    // Returns true when < 20% of the currently assigned range remains.
+    // Returns true when IDs are running low and more should be requested.
     [[nodiscard]] auto is_range_low() const -> bool;
-
-    [[nodiscard]] auto range_remaining() const -> uint32_t
-    {
-        return (next_id_ <= range_end_) ? (range_end_ - next_id_ + 1) : 0;
-    }
 
     // Create a new BaseEntity or Proxy and take ownership
     auto create(uint16_t type_id, bool has_client, DatabaseID dbid = kInvalidDBID) -> BaseEntity*;
@@ -95,9 +79,7 @@ public:
 private:
     void erase_indexes_for(const BaseEntity& ent);
 
-    EntityID next_id_;
-    EntityID range_start_{1};
-    EntityID range_end_{std::numeric_limits<EntityID>::max()};
+    IDClient* id_client_{nullptr};
     std::unordered_map<EntityID, std::unique_ptr<BaseEntity>> entities_;
     std::unordered_map<DatabaseID, EntityID> dbid_index_;
     std::unordered_map<SessionKey, EntityID> session_index_;

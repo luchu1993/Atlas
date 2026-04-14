@@ -431,3 +431,35 @@ atlas_add_test(test_baseappmgr_messages
     SOURCES test_baseappmgr_messages.cpp
     DEPS atlas_baseappmgr_lib atlas_serialization
 )
+
+atlas_add_test(test_coro_task
+    SOURCES test_coro_task.cpp
+    DEPS atlas_coro
+)
+
+atlas_add_test(test_coro_sleep
+    SOURCES test_coro_sleep.cpp
+    DEPS atlas_coro
+)
+
+atlas_add_test(test_coro_rpc
+    SOURCES test_coro_rpc.cpp
+    DEPS atlas_coro
+)
+
+# ── EntityID allocation (IDClient + EntityIdAllocator) ───────────────────────
+
+atlas_add_test(test_id_client
+    SOURCES test_id_client.cpp
+    DEPS atlas_baseapp_lib
+)
+
+atlas_add_test(test_entity_id_allocator
+    SOURCES test_entity_id_allocator.cpp
+    DEPS atlas_dbapp_lib
+)
+
+atlas_add_test(test_dbapp_entity_id_messages
+    SOURCES test_dbapp_entity_id_messages.cpp
+    DEPS atlas_dbapp_lib atlas_serialization
+)

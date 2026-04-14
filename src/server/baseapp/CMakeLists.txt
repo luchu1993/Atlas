@@ -4,6 +4,7 @@ atlas_add_library(atlas_baseapp_lib
     SOURCES
         base_entity.cpp
         entity_manager.cpp
+        id_client.cpp
         baseapp_native_provider.cpp
         baseapp.cpp
     DEPS

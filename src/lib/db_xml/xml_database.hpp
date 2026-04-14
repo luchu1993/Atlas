@@ -94,6 +94,10 @@ public:
 
     void set_auto_load(DatabaseID dbid, uint16_t type_id, bool auto_load) override;
 
+    void load_entity_id_counter(std::function<void(EntityID next_id)> callback) override;
+    void save_entity_id_counter(EntityID next_id,
+                                std::function<void(bool success)> callback) override;
+
     void process_results() override;
 
 private:

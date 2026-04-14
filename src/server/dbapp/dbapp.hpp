@@ -4,6 +4,7 @@
 #include "db/database_factory.hpp"
 #include "db/idatabase.hpp"
 #include "dbapp_messages.hpp"
+#include "entity_id_allocator.hpp"
 #include "entitydef/entity_def_registry.hpp"
 #include "server/manager_app.hpp"
 
@@ -45,6 +46,10 @@ private:
     void on_lookup_entity(const Address& src, Channel* ch, const dbapp::LookupEntity& msg);
     void on_abort_checkout(const Address& src, Channel* ch, const dbapp::AbortCheckout& msg);
 
+    // ---- EntityID allocation (BaseApp → DBApp) --------------------------------
+    void on_get_entity_ids(const Address& src, Channel* ch, const dbapp::GetEntityIds& msg);
+    void on_put_entity_ids(const Address& src, Channel* ch, const dbapp::PutEntityIds& msg);
+
     // ---- Authentication (LoginApp → DBApp) ----------------------------------
     void on_auth_login(const Address& src, Channel* ch, const login::AuthLogin& msg);
 
@@ -57,6 +62,7 @@ private:
 
     // ---- State --------------------------------------------------------------
     std::unique_ptr<IDatabase> database_;
+    std::unique_ptr<EntityIdAllocator> id_allocator_;
     CheckoutManager checkout_mgr_;
     struct PendingCheckoutRequest
     {

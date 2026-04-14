@@ -120,6 +120,10 @@ enum class DBApp : uint16_t
     LookupEntityAck = 4008,
     AbortCheckout = 4009,
     AbortCheckoutAck = 4010,
+    GetEntityIds = 4020,
+    GetEntityIdsAck = 4021,
+    PutEntityIds = 4022,
+    PutEntityIdsAck = 4023,
 };
 
 // ── LoginApp (5000–5999) ──────────────────────────────────────────────────────
@@ -148,8 +152,8 @@ enum class BaseAppMgr : uint16_t
     RegisterGlobalBase = 6010,
     DeregisterGlobalBase = 6011,
     GlobalBaseNotification = 6012,
-    RequestEntityIdRange = 6020,
-    RequestEntityIdRangeAck = 6021,
+    RequestEntityIdRange = 6020,     // deprecated: ID allocation moved to DBApp
+    RequestEntityIdRangeAck = 6021,  // deprecated: ID allocation moved to DBApp
 };
 
 // ── Range static_asserts ──────────────────────────────────────────────────────
@@ -209,6 +213,10 @@ ATLAS_ASSERT_ID_RANGE(DBApp::LookupEntity, 4000, 4999);
 ATLAS_ASSERT_ID_RANGE(DBApp::LookupEntityAck, 4000, 4999);
 ATLAS_ASSERT_ID_RANGE(DBApp::AbortCheckout, 4000, 4999);
 ATLAS_ASSERT_ID_RANGE(DBApp::AbortCheckoutAck, 4000, 4999);
+ATLAS_ASSERT_ID_RANGE(DBApp::GetEntityIds, 4000, 4999);
+ATLAS_ASSERT_ID_RANGE(DBApp::GetEntityIdsAck, 4000, 4999);
+ATLAS_ASSERT_ID_RANGE(DBApp::PutEntityIds, 4000, 4999);
+ATLAS_ASSERT_ID_RANGE(DBApp::PutEntityIdsAck, 4000, 4999);
 
 // Login
 ATLAS_ASSERT_ID_RANGE(Login::LoginRequest, 5000, 5999);

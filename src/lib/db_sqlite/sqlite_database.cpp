@@ -971,6 +971,41 @@ void SqliteDatabase::set_auto_load(DatabaseID dbid, uint16_t type_id, bool auto_
     }
 }
 
+void SqliteDatabase::load_entity_id_counter(std::function<void(EntityID next_id)> callback)
+{
+    EntityID next_id = 1;
+
+    auto stmt_result = prepare("SELECT next_id FROM atlas_entity_id_counter WHERE id = 1");
+    if (stmt_result)
+    {
+        auto stmt = std::move(*stmt_result);
+        if (sqlite3_step(stmt.get()) == SQLITE_ROW)
+        {
+            next_id = static_cast<EntityID>(sqlite3_column_int64(stmt.get(), 0));
+        }
+    }
+
+    fire_or_defer([cb = std::move(callback), next_id]() { cb(next_id); });
+}
+
+void SqliteDatabase::save_entity_id_counter(EntityID next_id,
+                                            std::function<void(bool success)> callback)
+{
+    bool ok = false;
+    auto stmt_result = prepare("UPDATE atlas_entity_id_counter SET next_id = ? WHERE id = 1");
+    if (stmt_result)
+    {
+        auto stmt = std::move(*stmt_result);
+        auto rc = sqlite3_bind_int64(stmt.get(), 1, static_cast<int64_t>(next_id));
+        if (rc == SQLITE_OK && sqlite3_step(stmt.get()) == SQLITE_DONE)
+        {
+            ok = (sqlite3_changes(db_) > 0);
+        }
+    }
+
+    fire_or_defer([cb = std::move(callback), ok]() { cb(ok); });
+}
+
 void SqliteDatabase::process_results()
 {
     if (!deferred_mode_)
@@ -1139,6 +1174,25 @@ auto SqliteDatabase::ensure_schema() -> Result<void>
     if (!index5)
     {
         return index5.error();
+    }
+
+    // EntityID counter table — used by EntityIdAllocator for crash-safe ID persistence
+    auto eid_table_result = exec_sql(
+        "CREATE TABLE IF NOT EXISTS atlas_entity_id_counter ("
+        "id INTEGER PRIMARY KEY CHECK(id = 1),"
+        "next_id INTEGER NOT NULL DEFAULT 1"
+        ")");
+    if (!eid_table_result)
+    {
+        return eid_table_result.error();
+    }
+
+    // Seed the single row if it doesn't exist yet
+    auto eid_seed_result =
+        exec_sql("INSERT OR IGNORE INTO atlas_entity_id_counter(id, next_id) VALUES(1, 1)");
+    if (!eid_seed_result)
+    {
+        return eid_seed_result.error();
     }
 
     return {};

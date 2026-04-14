@@ -2,29 +2,16 @@
 
 #include "foundation/log.hpp"
 
-#include <algorithm>
-
 namespace atlas
 {
 
-EntityManager::EntityManager(uint32_t app_index)
-    : next_id_(app_index * kIdBucketSize + 1), range_start_(next_id_)
-{
-}
-
 auto EntityManager::allocate_id() -> EntityID
 {
-    if (next_id_ > range_end_)
-    {
-        ATLAS_LOG_WARNING("EntityManager: EntityID range exhausted [{}..{}]", range_start_,
-                          range_end_);
-        return kInvalidEntityID;
-    }
+    if (id_client_)
+        return id_client_->allocate_id();
 
-    EntityID id = next_id_++;
-    if (next_id_ == 0)
-        next_id_ = 1;  // wrap-around safety (shouldn't happen in practice)
-    return id;
+    ATLAS_LOG_WARNING("EntityManager: no IDClient installed, cannot allocate EntityID");
+    return kInvalidEntityID;
 }
 
 auto EntityManager::create(uint16_t type_id, bool has_client, DatabaseID dbid) -> BaseEntity*
@@ -206,29 +193,12 @@ void EntityManager::destroy(EntityID id)
     entities_.erase(it);
 }
 
-void EntityManager::set_id_range(EntityID start, EntityID end)
-{
-    range_start_ = start;
-    next_id_ = start;
-    range_end_ = end;
-}
-
-void EntityManager::extend_id_range(EntityID new_end)
-{
-    range_end_ = std::max(new_end, range_end_);
-}
-
 auto EntityManager::is_range_low() const -> bool
 {
-    if (range_end_ == std::numeric_limits<EntityID>::max())
-        return false;  // unbounded local allocation
+    if (id_client_)
+        return id_client_->needs_refill();
 
-    const auto remaining = this->range_remaining();
-    const auto total_capacity =
-        (range_end_ >= range_start_) ? static_cast<uint32_t>(range_end_ - range_start_ + 1) : 0u;
-    const auto low_watermark = std::max<uint32_t>(1u, total_capacity / 5u);
-
-    return remaining < low_watermark;
+    return true;  // no IDClient — always request more
 }
 
 void EntityManager::flush_destroyed()

@@ -3,6 +3,7 @@
 #include "entitydef/entity_def_registry.hpp"
 #include "foundation/error.hpp"
 #include "network/address.hpp"
+#include "server/entity_types.hpp"
 
 #include <cstdint>
 #include <filesystem>
@@ -222,6 +223,19 @@ public:
 
     /// Set or clear the auto-load flag for an entity.
     virtual void set_auto_load(DatabaseID dbid, uint16_t type_id, bool auto_load) = 0;
+
+    // =====================================================================
+    // EntityID counter persistence
+    // =====================================================================
+
+    /// Load the next EntityID counter from persistent storage.
+    /// Called at startup to recover the allocator state.
+    /// If no counter exists yet, callback receives 1 (first valid ID).
+    virtual void load_entity_id_counter(std::function<void(EntityID next_id)> callback) = 0;
+
+    /// Persist the next EntityID counter so it survives restarts.
+    virtual void save_entity_id_counter(EntityID next_id,
+                                        std::function<void(bool success)> callback) = 0;
 
     // =====================================================================
     // Main-thread pump

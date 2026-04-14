@@ -4,6 +4,7 @@ atlas_add_library(atlas_dbapp_lib
     SOURCES
         checkout_manager.cpp
         dbapp.cpp
+        entity_id_allocator.cpp
     DEPS
         atlas_foundation
         atlas_network

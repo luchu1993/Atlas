@@ -36,15 +36,12 @@ TEST(BaseAppMgrMessages, RegisterBaseAppAck_RoundTrip)
     RegisterBaseAppAck msg;
     msg.success = true;
     msg.app_id = 3;
-    msg.entity_id_start = 10001;
-    msg.entity_id_end = 20000;
     msg.game_time = 123456789u;
 
     auto out = round_trip(msg);
     EXPECT_TRUE(out.success);
     EXPECT_EQ(out.app_id, 3u);
-    EXPECT_EQ(out.entity_id_start, 10001u);
-    EXPECT_EQ(out.entity_id_end, 20000u);
+    EXPECT_EQ(out.game_time, 123456789u);
 }
 
 TEST(BaseAppMgrMessages, InformLoad_RoundTrip)
@@ -97,27 +94,6 @@ TEST(BaseAppMgrMessages, GlobalBaseNotification_RoundTrip)
     EXPECT_EQ(out.key, "Auction");
     EXPECT_FALSE(out.added);
     EXPECT_EQ(out.entity_id, 42u);
-}
-
-TEST(BaseAppMgrMessages, RequestEntityIdRange_RoundTrip)
-{
-    RequestEntityIdRange msg;
-    msg.app_id = 2;
-
-    auto out = round_trip(msg);
-    EXPECT_EQ(out.app_id, 2u);
-}
-
-TEST(BaseAppMgrMessages, RequestEntityIdRangeAck_RoundTrip)
-{
-    RequestEntityIdRangeAck msg;
-    msg.app_id = 2;
-    msg.entity_id_start = 20001;
-    msg.entity_id_end = 30000;
-
-    auto out = round_trip(msg);
-    EXPECT_EQ(out.entity_id_start, 20001u);
-    EXPECT_EQ(out.entity_id_end, 30000u);
 }
 
 }  // namespace

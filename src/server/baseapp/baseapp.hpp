@@ -2,8 +2,10 @@
 
 #include "baseapp_native_provider.hpp"
 #include "db/idatabase.hpp"
+#include "dbapp/dbapp_messages.hpp"
 #include "entity_manager.hpp"
 #include "foundation/time.hpp"
+#include "id_client.hpp"
 #include "server/entity_app.hpp"
 #include "server/entity_types.hpp"
 
@@ -111,8 +113,7 @@ private:
     void on_force_logoff(Channel& ch, const baseapp::ForceLogoff& msg);
     void on_force_logoff_ack(Channel& ch, const baseapp::ForceLogoffAck& msg);
     void on_register_baseapp_ack(Channel& ch, const baseappmgr::RegisterBaseAppAck& msg);
-    void on_request_entity_id_range_ack(Channel& ch,
-                                        const baseappmgr::RequestEntityIdRangeAck& msg);
+    void on_get_entity_ids_ack(Channel& ch, const dbapp::GetEntityIdsAck& msg);
 
     // ---- External client handler ----------------------------------------
     void on_client_authenticate(Channel& ch, const baseapp::Authenticate& msg);
@@ -136,6 +137,7 @@ private:
 
     // ---- State ----------------------------------------------------------
     NetworkInterface& external_network_;
+    IDClient id_client_;
     EntityManager entity_mgr_;
     BaseAppNativeProvider* native_provider_{nullptr};  // owned by ScriptApp
     Channel* dbapp_channel_{nullptr};                  // connection to DBApp
@@ -255,7 +257,6 @@ private:
     // retention increases stale proxy pressure without improving the fast path.
     static constexpr Duration kDetachedProxyGrace = std::chrono::milliseconds(1500);
     static constexpr float kLoadSmoothingBias = 0.25f;
-    bool id_range_requested_{false};
 
     void cleanup_expired_pending_requests();
     void fail_all_dbapp_pending_requests(std::string_view reason);

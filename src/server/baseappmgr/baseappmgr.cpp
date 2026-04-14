@@ -232,10 +232,6 @@ auto BaseAppMgr::init(int argc, char* argv[]) -> bool
         [this](const Address& src, Channel* ch, const baseappmgr::DeregisterGlobalBase& msg)
         { on_deregister_global_base(src, ch, msg); });
 
-    (void)table.register_typed_handler<baseappmgr::RequestEntityIdRange>(
-        [this](const Address& src, Channel* ch, const baseappmgr::RequestEntityIdRange& msg)
-        { on_request_entity_id_range(src, ch, msg); });
-
     // Subscribe to BaseApp death notifications
     machined_client().subscribe(machined::ListenerType::Death, ProcessType::BaseApp, nullptr,
                                 [this](const machined::DeathNotification& n)
@@ -287,8 +283,6 @@ void BaseAppMgr::on_register_baseapp(const Address& src, Channel* ch,
         return;
     }
 
-    auto [range_start, range_end] = allocate_entity_id_range();
-
     uint32_t app_id = next_app_id_++;
     BaseAppInfo info;
     info.internal_addr = internal_addr;
@@ -310,16 +304,12 @@ void BaseAppMgr::on_register_baseapp(const Address& src, Channel* ch,
     baseappmgr::RegisterBaseAppAck ack;
     ack.success = true;
     ack.app_id = app_id;
-    ack.entity_id_start = range_start;
-    ack.entity_id_end = range_end;
     ack.game_time = game_time();
     (void)ch->send_message(ack);
 
-    ATLAS_LOG_INFO(
-        "BaseAppMgr: BaseApp registered app_id={} internal={}:{} external={}:{} "
-        "id_range=[{},{}]",
-        app_id, internal_addr.ip(), internal_addr.port(), external_addr.ip(), external_addr.port(),
-        range_start, range_end);
+    ATLAS_LOG_INFO("BaseAppMgr: BaseApp registered app_id={} internal={}:{} external={}:{}", app_id,
+                   internal_addr.ip(), internal_addr.port(), external_addr.ip(),
+                   external_addr.port());
 }
 
 void BaseAppMgr::on_baseapp_ready(const Address& src, Channel* ch,
@@ -440,33 +430,6 @@ void BaseAppMgr::on_deregister_global_base(const Address& /*src*/, Channel* /*ch
     broadcast_to_all_baseapps(notif);
 
     ATLAS_LOG_INFO("BaseAppMgr: global base '{}' deregistered", msg.key);
-}
-
-void BaseAppMgr::on_request_entity_id_range(const Address& src, Channel* ch,
-                                            const baseappmgr::RequestEntityIdRange& msg)
-{
-    BaseAppInfo* info = find_baseapp_by_app_id(msg.app_id);
-    if (info == nullptr)
-    {
-        ATLAS_LOG_WARNING("BaseAppMgr: RequestEntityIdRange for unknown app_id={} from {}:{}",
-                          msg.app_id, src.ip(), src.port());
-        return;
-    }
-
-    if (!matches_registered_source(*info, src, ch, "RequestEntityIdRange"))
-        return;
-
-    auto [start, end] = allocate_entity_id_range();
-
-    baseappmgr::RequestEntityIdRangeAck ack;
-    ack.app_id = msg.app_id;
-    ack.entity_id_start = start;
-    ack.entity_id_end = end;
-    (void)ch->send_message(ack);
-
-    ATLAS_LOG_INFO("BaseAppMgr: extended EntityID range [{},{}] to app_id={}", start, end,
-                   msg.app_id);
-    (void)src;
 }
 
 // ============================================================================
@@ -674,14 +637,6 @@ void BaseAppMgr::broadcast_to_all_baseapps(const baseappmgr::GlobalBaseNotificat
         if (info.is_ready && info.channel)
             (void)info.channel->send_message(notif);
     }
-}
-
-auto BaseAppMgr::allocate_entity_id_range() -> std::pair<EntityID, EntityID>
-{
-    EntityID start = next_entity_range_start_;
-    EntityID end = start + kEntityIdRangeSize - 1;
-    next_entity_range_start_ = end + 1;
-    return {start, end};
 }
 
 void BaseAppMgr::on_baseapp_death(const Address& addr)

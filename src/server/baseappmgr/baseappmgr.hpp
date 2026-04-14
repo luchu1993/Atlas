@@ -106,9 +106,6 @@ private:
                                  const baseappmgr::RegisterGlobalBase& msg);
     void on_deregister_global_base(const Address& src, Channel* ch,
                                    const baseappmgr::DeregisterGlobalBase& msg);
-    void on_request_entity_id_range(const Address& src, Channel* ch,
-                                    const baseappmgr::RequestEntityIdRange& msg);
-
     // ---- Internal helpers -----------------------------------------------
     [[nodiscard]] auto find_baseapp_by_app_id(uint32_t app_id) -> BaseAppInfo*;
     [[nodiscard]] auto find_baseapp_by_app_id(uint32_t app_id) const -> const BaseAppInfo*;
@@ -127,16 +124,12 @@ private:
     void record_successful_allocation(uint32_t app_id, DatabaseID dbid, TimePoint now);
     [[nodiscard]] auto is_overloaded() const -> bool;
     void broadcast_to_all_baseapps(const baseappmgr::GlobalBaseNotification& notif);
-    auto allocate_entity_id_range() -> std::pair<EntityID, EntityID>;
     void on_baseapp_death(const Address& addr);
 
     // ---- State ----------------------------------------------------------
     std::unordered_map<Address, BaseAppInfo> baseapps_;
     std::unordered_map<uint32_t, Address> app_id_index_;
     uint32_t next_app_id_{1};
-    EntityID next_entity_range_start_{1};
-
-    static constexpr uint32_t kEntityIdRangeSize = 10'000u;
     static constexpr float kLoginAllocationLoadIncrement = 0.01f;
     static constexpr float kOverloadThreshold = 0.9f;
     static constexpr float kDbidAffinityLoadSlack = 0.25f;

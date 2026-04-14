@@ -103,6 +103,15 @@ auto DBApp::init(int argc, char* argv[]) -> bool
         [this](const Address& src, Channel* ch, const login::AuthLogin& msg)
         { on_auth_login(src, ch, msg); });
 
+    // ---- EntityID allocation handlers ----------------------------------------
+    (void)table.register_typed_handler<dbapp::GetEntityIds>(
+        [this](const Address& src, Channel* ch, const dbapp::GetEntityIds& msg)
+        { on_get_entity_ids(src, ch, msg); });
+
+    (void)table.register_typed_handler<dbapp::PutEntityIds>(
+        [this](const Address& src, Channel* ch, const dbapp::PutEntityIds& msg)
+        { on_put_entity_ids(src, ch, msg); });
+
     // ---- Subscribe to BaseApp death notifications ---------------------------
     machined_client().subscribe(machined::ListenerType::Death, ProcessType::BaseApp,
                                 nullptr,  // no birth callback needed
@@ -112,6 +121,17 @@ auto DBApp::init(int argc, char* argv[]) -> bool
     // ---- Configuration ------------------------------------------------------
     auto_create_accounts_ = cfg.auto_create_accounts;
     account_type_id_ = cfg.account_type_id;
+
+    // ---- EntityID allocator — authoritative ID source -----------------------
+    id_allocator_ = std::make_unique<EntityIdAllocator>(*database_);
+    id_allocator_->startup(
+        [](bool ok)
+        {
+            if (!ok)
+                ATLAS_LOG_ERROR("DBApp: EntityIdAllocator startup failed");
+            else
+                ATLAS_LOG_INFO("DBApp: EntityIdAllocator ready");
+        });
 
     ATLAS_LOG_INFO("DBApp: initialised (backend={}, auto_create={}, account_type={})", db_cfg.type,
                    auto_create_accounts_, account_type_id_);
@@ -124,6 +144,20 @@ auto DBApp::init(int argc, char* argv[]) -> bool
 
 void DBApp::fini()
 {
+    if (id_allocator_ && database_)
+    {
+        id_allocator_->persist(
+            [](bool ok)
+            {
+                if (!ok)
+                    ATLAS_LOG_WARNING(
+                        "DBApp: final EntityIdAllocator persist "
+                        "failed");
+            });
+        // Flush the deferred persist callback before shutting down the DB
+        database_->process_results();
+        id_allocator_.reset();
+    }
     if (database_)
     {
         database_->shutdown();
@@ -141,6 +175,8 @@ void DBApp::on_tick_complete()
     ManagerApp::on_tick_complete();
     if (database_)
         database_->process_results();
+    if (id_allocator_)
+        id_allocator_->persist_if_needed([](bool) {});
 }
 
 // ============================================================================
@@ -182,6 +218,11 @@ void DBApp::register_watchers()
         std::function<uint64_t()>([this] { return abort_checkout_pending_hit_total_; }));
     reg.add<uint64_t>("dbapp/abort_checkout_late_hit_total",
                       std::function<uint64_t()>([this] { return abort_checkout_late_hit_total_; }));
+
+    reg.add<std::string>(
+        "dbapp/next_entity_id",
+        std::function<std::string()>{
+            [this]() { return std::to_string(id_allocator_ ? id_allocator_->next_id() : 0u); }});
 }
 
 // ============================================================================
@@ -485,6 +526,55 @@ void DBApp::on_lookup_entity(const Address& src, Channel* ch, const dbapp::Looku
                 (void)reply_ch->send_message(ack);
             }
         });
+}
+
+// ============================================================================
+// on_get_entity_ids — allocate EntityIDs for a BaseApp
+// ============================================================================
+
+void DBApp::on_get_entity_ids(const Address& src, Channel* ch, const dbapp::GetEntityIds& msg)
+{
+    if (ch == nullptr)
+        return;
+
+    if (!id_allocator_)
+    {
+        ATLAS_LOG_ERROR("DBApp: GetEntityIds but allocator not ready");
+        return;
+    }
+
+    auto [start, end] = id_allocator_->allocate(msg.count);
+    ATLAS_LOG_DEBUG("DBApp: allocated entity IDs [{}, {}] (count={}) for {}:{}", start, end,
+                    msg.count, src.ip(), src.port());
+
+    dbapp::GetEntityIdsAck ack;
+    ack.start = start;
+    ack.end = end;
+    ack.count = msg.count;
+    if (auto* reply_ch = resolve_reply_channel(src))
+    {
+        (void)reply_ch->send_message(ack);
+    }
+}
+
+// ============================================================================
+// on_put_entity_ids — return unused EntityIDs (currently acknowledged only)
+// ============================================================================
+
+void DBApp::on_put_entity_ids(const Address& src, Channel* ch, const dbapp::PutEntityIds& msg)
+{
+    if (ch == nullptr)
+        return;
+
+    ATLAS_LOG_DEBUG("DBApp: PutEntityIds [{}, {}] from {}:{} (not recycled)", msg.start, msg.end,
+                    src.ip(), src.port());
+
+    dbapp::PutEntityIdsAck ack;
+    ack.success = true;
+    if (auto* reply_ch = resolve_reply_channel(src))
+    {
+        (void)reply_ch->send_message(ack);
+    }
 }
 
 // ============================================================================

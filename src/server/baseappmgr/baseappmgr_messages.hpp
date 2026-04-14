@@ -75,8 +75,6 @@ struct RegisterBaseAppAck
 {
     bool success{false};
     uint32_t app_id{0};
-    EntityID entity_id_start{kInvalidEntityID};
-    EntityID entity_id_end{kInvalidEntityID};
     uint64_t game_time{0};
 
     static auto descriptor() -> const MessageDesc&
@@ -84,7 +82,7 @@ struct RegisterBaseAppAck
         static const MessageDesc desc{
             msg_id::id(msg_id::BaseAppMgr::RegisterBaseAppAck), "baseappmgr::RegisterBaseAppAck",
             MessageLengthStyle::Fixed,
-            static_cast<int>(sizeof(uint8_t) + sizeof(uint32_t) * 3 + sizeof(uint64_t))};
+            static_cast<int>(sizeof(uint8_t) + sizeof(uint32_t) + sizeof(uint64_t))};
         return desc;
     }
 
@@ -92,8 +90,6 @@ struct RegisterBaseAppAck
     {
         w.write(static_cast<uint8_t>(success ? 1 : 0));
         w.write(app_id);
-        w.write(entity_id_start);
-        w.write(entity_id_end);
         w.write(game_time);
     }
 
@@ -101,16 +97,12 @@ struct RegisterBaseAppAck
     {
         auto ok = r.read<uint8_t>();
         auto aid = r.read<uint32_t>();
-        auto es = r.read<uint32_t>();
-        auto ee = r.read<uint32_t>();
         auto gt = r.read<uint64_t>();
-        if (!ok || !aid || !es || !ee || !gt)
+        if (!ok || !aid || !gt)
             return Error{ErrorCode::InvalidArgument, "RegisterBaseAppAck: truncated"};
         RegisterBaseAppAck msg;
         msg.success = (*ok != 0);
         msg.app_id = *aid;
-        msg.entity_id_start = *es;
-        msg.entity_id_end = *ee;
         msg.game_time = *gt;
         return msg;
     }
@@ -333,77 +325,5 @@ struct GlobalBaseNotification
     }
 };
 static_assert(NetworkMessage<GlobalBaseNotification>);
-
-// ============================================================================
-// RequestEntityIdRange  (BaseApp → BaseAppMgr, ID 6020)
-// ============================================================================
-
-struct RequestEntityIdRange
-{
-    uint32_t app_id{0};
-
-    static auto descriptor() -> const MessageDesc&
-    {
-        static const MessageDesc desc{msg_id::id(msg_id::BaseAppMgr::RequestEntityIdRange),
-                                      "baseappmgr::RequestEntityIdRange", MessageLengthStyle::Fixed,
-                                      static_cast<int>(sizeof(uint32_t))};
-        return desc;
-    }
-
-    void serialize(BinaryWriter& w) const { w.write(app_id); }
-
-    static auto deserialize(BinaryReader& r) -> Result<RequestEntityIdRange>
-    {
-        auto aid = r.read<uint32_t>();
-        if (!aid)
-            return Error{ErrorCode::InvalidArgument, "RequestEntityIdRange: truncated"};
-        RequestEntityIdRange msg;
-        msg.app_id = *aid;
-        return msg;
-    }
-};
-static_assert(NetworkMessage<RequestEntityIdRange>);
-
-// ============================================================================
-// RequestEntityIdRangeAck  (BaseAppMgr → BaseApp, ID 6021)
-// ============================================================================
-
-struct RequestEntityIdRangeAck
-{
-    uint32_t app_id{0};
-    EntityID entity_id_start{kInvalidEntityID};
-    EntityID entity_id_end{kInvalidEntityID};
-
-    static auto descriptor() -> const MessageDesc&
-    {
-        static const MessageDesc desc{msg_id::id(msg_id::BaseAppMgr::RequestEntityIdRangeAck),
-                                      "baseappmgr::RequestEntityIdRangeAck",
-                                      MessageLengthStyle::Fixed,
-                                      static_cast<int>(sizeof(uint32_t) * 3)};
-        return desc;
-    }
-
-    void serialize(BinaryWriter& w) const
-    {
-        w.write(app_id);
-        w.write(entity_id_start);
-        w.write(entity_id_end);
-    }
-
-    static auto deserialize(BinaryReader& r) -> Result<RequestEntityIdRangeAck>
-    {
-        auto aid = r.read<uint32_t>();
-        auto es = r.read<uint32_t>();
-        auto ee = r.read<uint32_t>();
-        if (!aid || !es || !ee)
-            return Error{ErrorCode::InvalidArgument, "RequestEntityIdRangeAck: truncated"};
-        RequestEntityIdRangeAck msg;
-        msg.app_id = *aid;
-        msg.entity_id_start = *es;
-        msg.entity_id_end = *ee;
-        return msg;
-    }
-};
-static_assert(NetworkMessage<RequestEntityIdRangeAck>);
 
 }  // namespace atlas::baseappmgr

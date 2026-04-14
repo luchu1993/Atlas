@@ -504,6 +504,35 @@ void XmlDatabase::process_results()
     }
 }
 
+void XmlDatabase::load_entity_id_counter(std::function<void(EntityID next_id)> callback)
+{
+    EntityID next_id = 1;
+    auto path = base_dir_ / "entity_id_counter.json";
+    if (std::filesystem::exists(path))
+    {
+        auto tree = DataSection::from_json(path);
+        if (tree)
+        {
+            next_id = static_cast<EntityID>((*tree)->root()->read_uint("next_id", 1));
+        }
+    }
+    fire_or_defer([cb = std::move(callback), next_id]() { cb(next_id); });
+}
+
+void XmlDatabase::save_entity_id_counter(EntityID next_id,
+                                         std::function<void(bool success)> callback)
+{
+    auto path = base_dir_ / "entity_id_counter.json";
+    std::ofstream f(path);
+    bool ok = false;
+    if (f)
+    {
+        f << std::format("{{\"next_id\":{}}}\n", next_id);
+        ok = f.good();
+    }
+    fire_or_defer([cb = std::move(callback), ok]() { cb(ok); });
+}
+
 void XmlDatabase::mark_checkout_cleared(DatabaseID dbid, uint16_t type_id)
 {
     if (checkouts_.erase(checkout_key(type_id, dbid)) > 0)

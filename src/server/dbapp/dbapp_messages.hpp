@@ -552,6 +552,147 @@ struct AbortCheckoutAck
 };
 static_assert(NetworkMessage<AbortCheckoutAck>);
 
+// ============================================================================
+// GetEntityIds  (BaseApp → DBApp, ID 4020)
+// Request a batch of EntityIDs from the authoritative allocator.
+// ============================================================================
+
+struct GetEntityIds
+{
+    uint32_t count{0};  // number of IDs requested
+
+    static auto descriptor() -> const MessageDesc&
+    {
+        static const MessageDesc desc{msg_id::id(msg_id::DBApp::GetEntityIds),
+                                      "dbapp::GetEntityIds", MessageLengthStyle::Fixed,
+                                      static_cast<int>(sizeof(uint32_t))};
+        return desc;
+    }
+
+    void serialize(BinaryWriter& w) const { w.write(count); }
+
+    static auto deserialize(BinaryReader& r) -> Result<GetEntityIds>
+    {
+        auto c = r.read<uint32_t>();
+        if (!c)
+            return Error{ErrorCode::InvalidArgument, "GetEntityIds: truncated"};
+        GetEntityIds msg;
+        msg.count = *c;
+        return msg;
+    }
+};
+static_assert(NetworkMessage<GetEntityIds>);
+
+// ============================================================================
+// GetEntityIdsAck  (DBApp → BaseApp, ID 4021)
+// Returns a contiguous range [start, start + count - 1].
+// ============================================================================
+
+struct GetEntityIdsAck
+{
+    EntityID start{kInvalidEntityID};
+    EntityID end{kInvalidEntityID};
+    uint32_t count{0};
+
+    static auto descriptor() -> const MessageDesc&
+    {
+        static const MessageDesc desc{msg_id::id(msg_id::DBApp::GetEntityIdsAck),
+                                      "dbapp::GetEntityIdsAck", MessageLengthStyle::Fixed,
+                                      static_cast<int>(sizeof(EntityID) * 2 + sizeof(uint32_t))};
+        return desc;
+    }
+
+    void serialize(BinaryWriter& w) const
+    {
+        w.write(start);
+        w.write(end);
+        w.write(count);
+    }
+
+    static auto deserialize(BinaryReader& r) -> Result<GetEntityIdsAck>
+    {
+        auto s = r.read<EntityID>();
+        auto e = r.read<EntityID>();
+        auto c = r.read<uint32_t>();
+        if (!s || !e || !c)
+            return Error{ErrorCode::InvalidArgument, "GetEntityIdsAck: truncated"};
+        GetEntityIdsAck msg;
+        msg.start = *s;
+        msg.end = *e;
+        msg.count = *c;
+        return msg;
+    }
+};
+static_assert(NetworkMessage<GetEntityIdsAck>);
+
+// ============================================================================
+// PutEntityIds  (BaseApp → DBApp, ID 4022)
+// Return unused EntityIDs (currently a no-op on DBApp side).
+// ============================================================================
+
+struct PutEntityIds
+{
+    EntityID start{kInvalidEntityID};
+    EntityID end{kInvalidEntityID};
+
+    static auto descriptor() -> const MessageDesc&
+    {
+        static const MessageDesc desc{msg_id::id(msg_id::DBApp::PutEntityIds),
+                                      "dbapp::PutEntityIds", MessageLengthStyle::Fixed,
+                                      static_cast<int>(sizeof(EntityID) * 2)};
+        return desc;
+    }
+
+    void serialize(BinaryWriter& w) const
+    {
+        w.write(start);
+        w.write(end);
+    }
+
+    static auto deserialize(BinaryReader& r) -> Result<PutEntityIds>
+    {
+        auto s = r.read<EntityID>();
+        auto e = r.read<EntityID>();
+        if (!s || !e)
+            return Error{ErrorCode::InvalidArgument, "PutEntityIds: truncated"};
+        PutEntityIds msg;
+        msg.start = *s;
+        msg.end = *e;
+        return msg;
+    }
+};
+static_assert(NetworkMessage<PutEntityIds>);
+
+// ============================================================================
+// PutEntityIdsAck  (DBApp → BaseApp, ID 4023)
+// ============================================================================
+
+struct PutEntityIdsAck
+{
+    bool success{false};
+
+    static auto descriptor() -> const MessageDesc&
+    {
+        static const MessageDesc desc{msg_id::id(msg_id::DBApp::PutEntityIdsAck),
+                                      "dbapp::PutEntityIdsAck", MessageLengthStyle::Fixed,
+                                      static_cast<int>(sizeof(uint8_t))};
+        return desc;
+    }
+
+    void serialize(BinaryWriter& w) const { w.write(static_cast<uint8_t>(success ? 1 : 0)); }
+
+    static auto deserialize(BinaryReader& r) -> Result<PutEntityIdsAck>
+    {
+        auto ok = r.read<uint8_t>();
+        if (!ok)
+            return Error{ErrorCode::InvalidArgument, "PutEntityIdsAck: truncated"};
+        PutEntityIdsAck msg;
+        msg.success = (*ok != 0);
+        return msg;
+    }
+};
+static_assert(NetworkMessage<PutEntityIdsAck>);
+
 }  // namespace atlas::dbapp
 
 // ============================================================================

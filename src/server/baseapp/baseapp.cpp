@@ -109,11 +109,7 @@ auto BaseApp::init(int argc, char* argv[]) -> bool
 
     const auto& cfg = config();
 
-    // Derive app_index from port offset or machined registration order.
-    // For now we use a simple heuristic: (external_port / 1000) % 1000.
-    uint32_t app_index =
-        (cfg.external_port > 0) ? static_cast<uint32_t>(cfg.external_port / 1000) % 1000 : 0;
-    entity_mgr_ = EntityManager(app_index);
+    entity_mgr_.set_id_client(&id_client_);
 
     // ---- Register internal message handlers --------------------------------
     register_internal_handlers();
@@ -202,9 +198,10 @@ auto BaseApp::init(int argc, char* argv[]) -> bool
     (void)table.register_typed_handler<baseappmgr::RegisterBaseAppAck>(
         [this](const Address& /*src*/, Channel* ch, const baseappmgr::RegisterBaseAppAck& msg)
         { on_register_baseapp_ack(*ch, msg); });
-    (void)table.register_typed_handler<baseappmgr::RequestEntityIdRangeAck>(
-        [this](const Address& /*src*/, Channel* ch, const baseappmgr::RequestEntityIdRangeAck& msg)
-        { on_request_entity_id_range_ack(*ch, msg); });
+    // ---- EntityID allocation from DBApp --------------------------------
+    (void)table.register_typed_handler<dbapp::GetEntityIdsAck>(
+        [this](const Address& /*src*/, Channel* ch, const dbapp::GetEntityIdsAck& msg)
+        { on_get_entity_ids_ack(*ch, msg); });
 
     // ---- Register external client handler -------------------------------
     auto& ext_table = external_network_.interface_table();
@@ -215,7 +212,7 @@ auto BaseApp::init(int argc, char* argv[]) -> bool
         [this](const Address& /*src*/, Channel* ch, const baseapp::ClientBaseRpc& msg)
         { on_client_base_rpc(*ch, msg); });
 
-    ATLAS_LOG_INFO("BaseApp: initialised (app_index={})", app_index);
+    ATLAS_LOG_INFO("BaseApp: initialised");
     return true;
 }
 
@@ -1547,7 +1544,9 @@ void BaseApp::on_register_baseapp_ack(Channel& /*ch*/, const baseappmgr::Registe
         return;
     }
     app_id_ = msg.app_id;
-    entity_mgr_.set_id_range(msg.entity_id_start, msg.entity_id_end);
+
+    // Request initial batch of EntityIDs from DBApp
+    maybe_request_more_ids();
 
     // Notify BaseAppMgr that we are ready
     if (baseappmgr_channel_)
@@ -1557,17 +1556,14 @@ void BaseApp::on_register_baseapp_ack(Channel& /*ch*/, const baseappmgr::Registe
         (void)baseappmgr_channel_->send_message(ready);
     }
 
-    ATLAS_LOG_INFO("BaseApp: registered as app_id={} id_range=[{},{}]", app_id_,
-                   msg.entity_id_start, msg.entity_id_end);
+    ATLAS_LOG_INFO("BaseApp: registered as app_id={}", app_id_);
 }
 
-void BaseApp::on_request_entity_id_range_ack(Channel& /*ch*/,
-                                             const baseappmgr::RequestEntityIdRangeAck& msg)
+void BaseApp::on_get_entity_ids_ack(Channel& /*ch*/, const dbapp::GetEntityIdsAck& msg)
 {
-    entity_mgr_.extend_id_range(msg.entity_id_end);
-    id_range_requested_ = false;
-    ATLAS_LOG_INFO("BaseApp: EntityID range extended to [{},{}]", msg.entity_id_start,
-                   msg.entity_id_end);
+    id_client_.add_ids(msg.start, msg.end);
+    ATLAS_LOG_INFO("BaseApp: received {} EntityIDs [{},{}] from DBApp, available={}", msg.count,
+                   msg.start, msg.end, id_client_.available());
 }
 
 auto BaseApp::resolve_internal_channel(const Address& addr) -> Channel*
@@ -2280,14 +2276,17 @@ void BaseApp::report_load_to_baseappmgr()
 
 void BaseApp::maybe_request_more_ids()
 {
-    if (!id_range_requested_ && baseappmgr_channel_ && entity_mgr_.is_range_low())
-    {
-        baseappmgr::RequestEntityIdRange req;
-        req.app_id = app_id_;
-        (void)baseappmgr_channel_->send_message(req);
-        id_range_requested_ = true;
-        ATLAS_LOG_INFO("BaseApp: requested more EntityIDs from BaseAppMgr");
-    }
+    if (!dbapp_channel_ || !entity_mgr_.is_range_low())
+        return;
+
+    auto count = id_client_.ids_to_request();
+    if (count == 0)
+        return;
+
+    dbapp::GetEntityIds req;
+    req.count = count;
+    (void)dbapp_channel_->send_message(req);
+    ATLAS_LOG_INFO("BaseApp: requested {} EntityIDs from DBApp", count);
 }
 
 void BaseApp::on_prepare_login(Channel& ch, const login::PrepareLogin& msg)
