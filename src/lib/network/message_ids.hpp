@@ -152,8 +152,6 @@ enum class BaseAppMgr : uint16_t
     RegisterGlobalBase = 6010,
     DeregisterGlobalBase = 6011,
     GlobalBaseNotification = 6012,
-    RequestEntityIdRange = 6020,     // deprecated: ID allocation moved to DBApp
-    RequestEntityIdRangeAck = 6021,  // deprecated: ID allocation moved to DBApp
 };
 
 // ── Range static_asserts ──────────────────────────────────────────────────────
@@ -237,8 +235,6 @@ ATLAS_ASSERT_ID_RANGE(BaseAppMgr::InformLoad, 6000, 6999);
 ATLAS_ASSERT_ID_RANGE(BaseAppMgr::RegisterGlobalBase, 6000, 6999);
 ATLAS_ASSERT_ID_RANGE(BaseAppMgr::DeregisterGlobalBase, 6000, 6999);
 ATLAS_ASSERT_ID_RANGE(BaseAppMgr::GlobalBaseNotification, 6000, 6999);
-ATLAS_ASSERT_ID_RANGE(BaseAppMgr::RequestEntityIdRange, 6000, 6999);
-ATLAS_ASSERT_ID_RANGE(BaseAppMgr::RequestEntityIdRangeAck, 6000, 6999);
 
 #undef ATLAS_ASSERT_ID_RANGE
 

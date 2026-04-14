@@ -48,7 +48,6 @@ namespace baseappmgr
 {
 struct InformLoad;
 struct RegisterBaseAppAck;
-struct RequestEntityIdRangeAck;
 }  // namespace baseappmgr
 
 class Channel;

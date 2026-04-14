@@ -9,7 +9,7 @@
 #include <string>
 
 // ============================================================================
-// BaseAppMgr messages (IDs 6000–6021)
+// BaseAppMgr messages (IDs 6000–6012)
 //
 // Directions:
 //   BaseApp    → BaseAppMgr : RegisterBaseApp     (6000)
@@ -19,8 +19,6 @@
 //   BaseApp    → BaseAppMgr : RegisterGlobalBase  (6010)
 //   BaseApp    → BaseAppMgr : DeregisterGlobalBase(6011)
 //   BaseAppMgr → BaseApp    : GlobalBaseNotification (6012)
-//   BaseApp    → BaseAppMgr : RequestEntityIdRange (6020)
-//   BaseAppMgr → BaseApp    : RequestEntityIdRangeAck (6021)
 // ============================================================================
 
 namespace atlas::baseappmgr
