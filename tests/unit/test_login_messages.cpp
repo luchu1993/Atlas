@@ -32,19 +32,29 @@ TEST(LoginMessages, LoginRequest_RoundTrip)
     EXPECT_EQ(out.password_hash, msg.password_hash);
 }
 
-TEST(LoginMessages, LoginResult_RoundTrip)
+TEST(LoginMessages, LoginResult_Success_RoundTrip)
 {
     LoginResult msg;
     msg.status = LoginStatus::Success;
     msg.session_key = SessionKey::generate();
     msg.baseapp_addr = Address(0x7F000001u, 20100);
-    msg.error_message = "ok";
 
     auto out = round_trip(msg);
-    EXPECT_EQ(out.status, msg.status);
+    EXPECT_EQ(out.status, LoginStatus::Success);
     EXPECT_EQ(out.session_key, msg.session_key);
     EXPECT_EQ(out.baseapp_addr.port(), msg.baseapp_addr.port());
-    EXPECT_EQ(out.error_message, msg.error_message);
+}
+
+TEST(LoginMessages, LoginResult_Error_RoundTrip)
+{
+    LoginResult msg;
+    msg.status = LoginStatus::InvalidCredentials;
+    msg.error_message = "bad password";
+
+    auto out = round_trip(msg);
+    EXPECT_EQ(out.status, LoginStatus::InvalidCredentials);
+    EXPECT_EQ(out.error_message, "bad password");
+    EXPECT_TRUE(out.session_key.is_zero());
 }
 
 TEST(LoginMessages, AuthLogin_RoundTrip)

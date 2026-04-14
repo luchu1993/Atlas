@@ -185,6 +185,8 @@ void LoginApp::register_watchers()
                      std::function<uint64_t()>([this] { return login_timeout_total_; }));
     wr.add<uint64_t>("loginapp/login_rate_limited_total",
                      std::function<uint64_t()>([this] { return login_rate_limited_total_; }));
+    wr.add<uint64_t>("loginapp/login_dedup_total",
+                     std::function<uint64_t()>([this] { return login_dedup_total_; }));
     wr.add<uint64_t>("loginapp/login_busy_total",
                      std::function<uint64_t()>([this] { return login_busy_total_; }));
     wr.add<uint64_t>("loginapp/abandoned_login_total",
@@ -222,6 +224,16 @@ void LoginApp::on_login_request(const Address& src, Channel* ch, const login::Lo
     }
     record_login_attempt(src);
 
+    // Reject if this channel already has a login in progress
+    if (channel_cancel_sources_.contains(ch->channel_id()))
+    {
+        ++login_dedup_total_;
+        ATLAS_LOG_DEBUG("LoginApp: duplicate login from same channel {}:{}", src.ip(), src.port());
+        send_login_error(ch->channel_id(), login::LoginStatus::LoginInProgress,
+                         "login_in_progress");
+        return;
+    }
+
     if (pending_by_username_.contains(msg.username))
     {
         ++login_dedup_total_;
@@ -245,6 +257,13 @@ void LoginApp::on_login_request(const Address& src, Channel* ch, const login::Lo
     {
         ATLAS_LOG_ERROR("LoginApp: no DBApp connection for login request");
         send_login_error(ch->channel_id(), login::LoginStatus::ServerNotReady, "no_dbapp");
+        return;
+    }
+
+    if (!baseappmgr_channel_)
+    {
+        ATLAS_LOG_ERROR("LoginApp: no BaseAppMgr connection for login request");
+        send_login_error(ch->channel_id(), login::LoginStatus::ServerNotReady, "no_baseappmgr");
         return;
     }
 

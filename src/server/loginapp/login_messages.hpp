@@ -103,11 +103,17 @@ struct LoginResult
     void serialize(BinaryWriter& w) const
     {
         w.write(static_cast<uint8_t>(status));
-        w.write_bytes(std::span<const std::byte>(
-            reinterpret_cast<const std::byte*>(session_key.bytes), sizeof(session_key.bytes)));
-        w.write(baseapp_addr.ip());
-        w.write(baseapp_addr.port());
-        w.write_string(error_message);
+        if (status == LoginStatus::Success)
+        {
+            w.write_bytes(std::span<const std::byte>(
+                reinterpret_cast<const std::byte*>(session_key.bytes), sizeof(session_key.bytes)));
+            w.write(baseapp_addr.ip());
+            w.write(baseapp_addr.port());
+        }
+        else
+        {
+            w.write_string(error_message);
+        }
     }
 
     static auto deserialize(BinaryReader& r) -> Result<LoginResult>
@@ -115,17 +121,25 @@ struct LoginResult
         auto st = r.read<uint8_t>();
         if (!st)
             return Error{ErrorCode::InvalidArgument, "LoginResult: truncated"};
-        auto key_span = r.read_bytes(sizeof(SessionKey));
-        auto ip = r.read<uint32_t>();
-        auto port = r.read<uint16_t>();
-        auto err = r.read_string();
-        if (!key_span || !ip || !port || !err)
-            return Error{ErrorCode::InvalidArgument, "LoginResult: field truncated"};
         LoginResult msg;
         msg.status = static_cast<LoginStatus>(*st);
-        std::memcpy(msg.session_key.bytes, key_span->data(), sizeof(SessionKey));
-        msg.baseapp_addr = Address(*ip, *port);
-        msg.error_message = std::move(*err);
+        if (msg.status == LoginStatus::Success)
+        {
+            auto key_span = r.read_bytes(sizeof(SessionKey));
+            auto ip = r.read<uint32_t>();
+            auto port = r.read<uint16_t>();
+            if (!key_span || !ip || !port)
+                return Error{ErrorCode::InvalidArgument, "LoginResult: field truncated"};
+            std::memcpy(msg.session_key.bytes, key_span->data(), sizeof(SessionKey));
+            msg.baseapp_addr = Address(*ip, *port);
+        }
+        else
+        {
+            auto err = r.read_string();
+            if (!err)
+                return Error{ErrorCode::InvalidArgument, "LoginResult: error_message truncated"};
+            msg.error_message = std::move(*err);
+        }
         return msg;
     }
 };
@@ -189,8 +203,11 @@ struct AuthLoginResult
 
     static auto descriptor() -> const MessageDesc&
     {
-        static const MessageDesc desc{msg_id::id(msg_id::Login::AuthLoginResult),
-                                      "login::AuthLoginResult", MessageLengthStyle::Variable, -1};
+        static const MessageDesc desc{
+            msg_id::id(msg_id::Login::AuthLoginResult), "login::AuthLoginResult",
+            MessageLengthStyle::Fixed,
+            static_cast<int>(sizeof(uint32_t) + sizeof(uint8_t) + sizeof(uint8_t) +
+                             sizeof(int64_t) + sizeof(uint16_t))};
         return desc;
     }
 
