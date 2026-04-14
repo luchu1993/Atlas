@@ -53,6 +53,8 @@ auto error_code_name(ErrorCode code) -> std::string_view
             return "RateLimited";
         case ErrorCode::ChannelCondemned:
             return "ChannelCondemned";
+        case ErrorCode::Cancelled:
+            return "Cancelled";
         case ErrorCode::ScriptError:
             return "ScriptError";
         case ErrorCode::ScriptTypeError:

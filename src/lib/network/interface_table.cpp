@@ -1,6 +1,7 @@
 #include "network/interface_table.hpp"
 
 #include "foundation/log.hpp"
+#include "serialization/binary_stream.hpp"
 
 namespace atlas
 {
@@ -20,6 +21,16 @@ auto InterfaceTable::register_handler(MessageID id, const MessageDesc& desc,
 auto InterfaceTable::dispatch(const Address& source, Channel* channel, MessageID id,
                               BinaryReader& data) -> Result<void>
 {
+    // Pre-dispatch hook: let coroutine RPC registry consume reply messages
+    if (pre_dispatch_hook_)
+    {
+        auto payload = data.data().subspan(data.position());
+        if (pre_dispatch_hook_(id, payload))
+        {
+            return {};  // message consumed by hook
+        }
+    }
+
     auto* entry = entries_.get(id);
     if (!entry)
     {

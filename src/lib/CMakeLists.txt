@@ -3,6 +3,7 @@
 
 add_subdirectory(platform)
 add_subdirectory(foundation)
+add_subdirectory(coro)
 add_subdirectory(math)
 add_subdirectory(serialization)
 add_subdirectory(resmgr)

@@ -3,8 +3,10 @@
 #include "foundation/containers/paged_sparse_table.hpp"
 #include "network/message.hpp"
 
+#include <cstddef>
 #include <functional>
 #include <memory>
+#include <span>
 
 namespace atlas
 {
@@ -42,9 +44,15 @@ public:
     using DefaultHandler = std::function<void(const Address&, Channel*, MessageID, BinaryReader&)>;
     void set_default_handler(DefaultHandler handler) { default_handler_ = std::move(handler); }
 
+    // Pre-dispatch hook: if set, called before normal dispatch.
+    // Returns true if the message was consumed (e.g. by a coroutine RPC registry).
+    using PreDispatchHook = std::function<bool(MessageID, std::span<const std::byte>)>;
+    void set_pre_dispatch_hook(PreDispatchHook hook) { pre_dispatch_hook_ = std::move(hook); }
+
 private:
     PagedSparseTable<MessageID, Entry> entries_;
     DefaultHandler default_handler_;
+    PreDispatchHook pre_dispatch_hook_;
 };
 
 }  // namespace atlas

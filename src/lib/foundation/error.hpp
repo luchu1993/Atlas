@@ -41,6 +41,9 @@ enum class ErrorCode : uint32_t
     RateLimited,
     ChannelCondemned,
 
+    // Coroutine error codes
+    Cancelled,
+
     // Script error codes
     ScriptError,
     ScriptTypeError,

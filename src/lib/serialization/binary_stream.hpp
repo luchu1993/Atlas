@@ -213,6 +213,7 @@ public:
     [[nodiscard]] auto read_string_view() -> Result<std::string_view>;
     [[nodiscard]] auto read_packed_int() -> Result<uint32_t>;
 
+    [[nodiscard]] auto data() const -> std::span<const std::byte> { return data_; }
     [[nodiscard]] auto remaining() const -> std::size_t;
     [[nodiscard]] auto position() const -> std::size_t;
     [[nodiscard]] auto peek() const -> Result<std::byte>;
