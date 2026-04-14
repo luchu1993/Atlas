@@ -108,12 +108,6 @@ struct BaseAppMgrClient
                 register_ack = msg;
                 register_ack_received.store(true, std::memory_order_release);
             });
-        network.interface_table().register_typed_handler<RequestEntityIdRangeAck>(
-            [this](const Address&, Channel*, const RequestEntityIdRangeAck& msg)
-            {
-                id_range_ack = msg;
-                id_range_ack_received.store(true, std::memory_order_release);
-            });
         network.interface_table().register_typed_handler<login::AllocateBaseAppResult>(
             [this](const Address&, Channel*, const login::AllocateBaseAppResult& msg)
             {
@@ -127,7 +121,6 @@ struct BaseAppMgrClient
         ASSERT_TRUE(network.start_rudp_server(Address("127.0.0.1", port)).has_value());
     }
 
-    void reset_id_range_ack() { id_range_ack_received.store(false, std::memory_order_release); }
     void reset_allocate_result()
     {
         allocate_result_received.store(false, std::memory_order_release);
@@ -136,10 +129,8 @@ struct BaseAppMgrClient
     EventDispatcher dispatcher;
     NetworkInterface network;
     std::atomic<bool> register_ack_received{false};
-    std::atomic<bool> id_range_ack_received{false};
     std::atomic<bool> allocate_result_received{false};
     RegisterBaseAppAck register_ack;
-    RequestEntityIdRangeAck id_range_ack;
     login::AllocateBaseAppResult allocate_result;
 };
 
@@ -211,7 +202,6 @@ TEST(BaseAppMgrIntegration, RejectsDuplicateInternalAddressWithoutConsumingAppId
         << "third BaseApp registration ack not received";
     EXPECT_TRUE(client3.register_ack.success);
     EXPECT_EQ(client3.register_ack.app_id, 2u);
-    EXPECT_EQ(client3.register_ack.entity_id_start, client1.register_ack.entity_id_end + 1);
 
     stop_flag.store(true, std::memory_order_release);
     app_thread.join();
@@ -309,25 +299,6 @@ TEST(BaseAppMgrIntegration, IgnoresSpoofedFollowUpMessagesFromWrongBaseApp)
     EXPECT_EQ(login_client.allocate_result.request_id, 77u);
     EXPECT_EQ(login_client.allocate_result.internal_addr.port(), 7102u);
     EXPECT_EQ(login_client.allocate_result.external_addr.port(), 17102u);
-
-    baseapp2.reset_id_range_ack();
-    RequestEntityIdRange spoof_range;
-    spoof_range.app_id = baseapp1.register_ack.app_id;
-    ASSERT_TRUE((*ch2)->send_message(spoof_range).has_value());
-    EXPECT_FALSE(poll_until(
-        baseapp2.dispatcher,
-        [&] { return baseapp2.id_range_ack_received.load(std::memory_order_acquire); },
-        std::chrono::milliseconds(200)));
-
-    RequestEntityIdRange valid_range;
-    valid_range.app_id = baseapp2.register_ack.app_id;
-    ASSERT_TRUE((*ch2)->send_message(valid_range).has_value());
-    ASSERT_TRUE(
-        poll_until(baseapp2.dispatcher,
-                   [&] { return baseapp2.id_range_ack_received.load(std::memory_order_acquire); }));
-
-    EXPECT_EQ(baseapp2.id_range_ack.app_id, baseapp2.register_ack.app_id);
-    EXPECT_EQ(baseapp2.id_range_ack.entity_id_start, baseapp2.register_ack.entity_id_end + 1);
 
     stop_flag.store(true, std::memory_order_release);
     app_thread.join();
