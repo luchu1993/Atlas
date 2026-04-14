@@ -120,6 +120,20 @@ public sealed class DefGenerator : IIncrementalGenerator
 
             entityList.Add((def, user.ClassName, user.Namespace));
 
+            // Properties (fields, dirty tracking, change callbacks)
+            var properties = PropertiesEmitter.Emit(def, user.ClassName, user.Namespace, ctx);
+            if (properties != null)
+                spc.AddSource($"{user.ClassName}.Properties.g.cs", SourceText.From(properties, System.Text.Encoding.UTF8));
+
+            // Serialization (Serialize/Deserialize + TypeName)
+            var serialization = SerializationEmitter.Emit(def, user.ClassName, user.Namespace, ctx);
+            spc.AddSource($"{user.ClassName}.Serialization.g.cs", SourceText.From(serialization, System.Text.Encoding.UTF8));
+
+            // DeltaSync (delta/owner/other sync)
+            var deltaSync = DeltaSyncEmitter.Emit(def, user.ClassName, user.Namespace, ctx);
+            if (deltaSync != null)
+                spc.AddSource($"{user.ClassName}.DeltaSync.g.cs", SourceText.From(deltaSync, System.Text.Encoding.UTF8));
+
             // RPC stubs
             var stubs = RpcStubEmitter.Emit(def, user.ClassName, user.Namespace, baseClassShort, ctx, typeIndexMap);
             if (!string.IsNullOrEmpty(stubs))
@@ -129,6 +143,13 @@ public sealed class DefGenerator : IIncrementalGenerator
             var mailboxes = MailboxEmitter.Emit(def, user.ClassName, user.Namespace, baseClassShort, ctx, typeIndexMap);
             if (!string.IsNullOrEmpty(mailboxes))
                 spc.AddSource($"{user.ClassName}.Mailboxes.g.cs", SourceText.From(mailboxes, System.Text.Encoding.UTF8));
+        }
+
+        // Global: EntityFactory
+        if (entityList.Count > 0)
+        {
+            var factory = Emitters.FactoryEmitter.Emit(entityList, typeIndexMap, ctx);
+            spc.AddSource("EntityFactory.g.cs", SourceText.From(factory, System.Text.Encoding.UTF8));
         }
 
         // Global: RPC IDs

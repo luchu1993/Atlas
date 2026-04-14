@@ -34,12 +34,17 @@ internal static class TypeRegistryEmitter
         sb.AppendLine("    [System.Runtime.CompilerServices.ModuleInitializer]");
         sb.AppendLine("    internal static void RegisterAll()");
         sb.AppendLine("    {");
+        sb.AppendLine("        try");
+        sb.AppendLine("        {");
         foreach (var (def, className, ns) in sorted)
         {
             if (!typeIndexMap.TryGetValue(def.Name, out var typeId))
                 continue;
-            sb.AppendLine($"        Register_{def.Name}({typeId});");
+            sb.AppendLine($"            Register_{def.Name}({typeId});");
         }
+        sb.AppendLine("        }");
+        sb.AppendLine("        catch (System.DllNotFoundException) { }");
+        sb.AppendLine("        catch (System.InvalidOperationException) { }");
         sb.AppendLine("    }");
 
         foreach (var (def, className, ns) in sorted)

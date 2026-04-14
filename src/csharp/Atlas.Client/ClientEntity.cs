@@ -14,6 +14,9 @@ public abstract class ClientEntity
 
     public abstract string TypeName { get; }
 
+    /// <summary>Restores entity state received from the server (implemented by source generator).</summary>
+    public virtual void Deserialize(ref SpanReader reader) { }
+
     /// <summary>Called when the entity is created on the client.</summary>
     protected internal virtual void OnInit() { }
 

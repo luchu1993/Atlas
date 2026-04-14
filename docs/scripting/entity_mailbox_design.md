@@ -1,6 +1,10 @@
 # 设计: Entity Mailbox 代理机制
 
-> 归属阶段: ScriptPhase 4 (Atlas.Generators.Rpc) | 关联: ScriptPhase 3 (ClrScriptEngine)
+> 归属阶段: ScriptPhase 4 (~~Atlas.Generators.Rpc~~ → Atlas.Generators.Def) | 关联: ScriptPhase 3 (ClrScriptEngine)
+
+> **⚠ 部分内容已过时 (2026-04-14)**:  
+> 本文档中引用的 `[ClientRpc]`/`[CellRpc]`/`[BaseRpc]` Attribute 和 `Atlas.Generators.Rpc` 项目已在 [DefGenerator 统一重构](../DEFGEN_CONSOLIDATION_DESIGN.md) 中删除。  
+> Mailbox 代理现由 **DefGenerator** 从 `.def` 文件的 `<client_methods>`/`<cell_methods>`/`<base_methods>` 节生成。核心设计思想不变，仅输入来源从 C# Attribute 改为 `.def` 文件。
 
 ---
 

@@ -22,7 +22,7 @@
 - [ ] 客户端可登录 Atlas 集群（LoginApp → BaseApp 完整流程）
 - [ ] 客户端可接收 AOI 内实体的创建/销毁/属性更新
 - [ ] 客户端可调用 exposed cell/base 方法（编译期类型安全）
-- [ ] 客户端可接收 `[ClientRpc]` 调用（Source Generator 分发）
+- [ ] 客户端可接收 client_methods RPC 调用（DefGenerator 分发）
 - [ ] `AvatarFilter` 位置插值工作平滑（延迟自适应）
 - [ ] 断线检测可工作，提供重连 API
 - [ ] 带宽统计可查询
@@ -83,8 +83,8 @@
 │  ┌──────────────────────┐  ┌──────────────────────────┐           │
 │  │ 服务端生成            │  │ 客户端生成                │           │
 │  │ SerializeReplicatedΔ │  │ ApplyReplicatedDelta     │           │
-│  │ [ClientRpc] 发送存根  │  │ [ClientRpc] 接收分发     │           │
-│  │ [CellRpc] 接收分发   │  │ Exposed RPC 发送存根     │           │
+│  │ client_methods 发送   │  │ client_methods 接收分发  │           │
+│  │ cell_methods 接收分发 │  │ Exposed RPC 发送存根     │           │
 │  │ EntityFactory         │  │ EntityFactory            │           │
 │  └──────────────────────┘  └──────────────────────────┘           │
 └────────────────────────────────────────────────────────────────────┘
@@ -190,7 +190,7 @@ public struct EntityPositionUpdate {
 
 public struct EntityPropertyUpdate {
     public uint EntityId;
-    public byte Scope;             // ReplicationScope
+    public byte Scope;             // PropertyScope (定义在 .def 中)
     public byte[] Delta;           // SerializeReplicatedDelta() 输出
 }
 
@@ -638,7 +638,7 @@ Unity Client                   BaseApp          CellApp
   │                               │                │ C# RpcDispatcher
   │                               │                │ → entity.OnMethod()
   │                               │                │
-  │ 收到 [ClientRpc]:             │                │
+  │ 收到 client_methods RPC:      │                │
   │←── ClientRpcCall(rpcId, args)─│←───────────────│
   │    → RpcDispatcher.DispatchClientRpc()         │
   │    → entity.OnShowDamage()    │                │
@@ -658,7 +658,7 @@ Source Generator 根据 `ATLAS_CLIENT` / `ATLAS_SERVER` 生成不同代码：
 [Entity("Avatar")]
 public partial class Avatar : ServerEntity
 {
-    [CellRpc]  // .def 中标记 exposed: OwnClient
+    // .def 中 cell_methods 标记 exposed: OwnClient
     public partial void RequestMove(Vector3 target);
 }
 
@@ -683,7 +683,7 @@ public partial void RequestMove(Vector3 target)
 ### 5.2 客户端 RPC 接收
 
 ```csharp
-// [ClientRpc] — 服务端: 发送存根; 客户端: 接收分发
+// client_methods — 服务端: 发送存根; 客户端: 接收分发 (由 DefGenerator 生成)
 
 // 客户端生成 (ATLAS_CLIENT):
 internal static partial class ClientRpcDispatcher
@@ -815,14 +815,10 @@ src/csharp/Atlas.ClientSDK/
 
 ### Step 12.7: Source Generator 客户端条件
 
-**更新文件:**
-```
-src/csharp/Atlas.Generators.Entity/     (更新: 检查 ATLAS_CLIENT)
-src/csharp/Atlas.Generators.Rpc/        (更新: 检查 ATLAS_CLIENT)
-```
+**已由 DefGenerator 统一处理** (EntityGenerator 和 RpcGenerator 已删除):
 
-- `ATLAS_CLIENT`: 生成 `ApplyReplicatedDelta()`、exposed RPC 发送存根、`[ClientRpc]` 接收分发
-- `ATLAS_SERVER`: 生成 `SerializeReplicatedDelta()`、`[ClientRpc]` 发送存根、`[CellRpc]`/`[BaseRpc]` 接收分发
+- `ATLAS_CLIENT`: 生成 `ApplyReplicatedDelta()`、exposed RPC 发送存根、client_methods 接收分发
+- `ATLAS_BASE`/`ATLAS_CELL`: 生成 `SerializeReplicatedDelta()`、client_methods 发送存根、cell/base_methods 接收分发
 
 ### Step 12.8: atlas_test_client 命令行工具
 
@@ -880,8 +876,7 @@ src/csharp/Atlas.ClientSDK/
     ├── ClientMessages.cs                (Step 12.2)
     └── ServerMessages.cs                (Step 12.2)
 
-src/csharp/Atlas.Generators.Entity/      (Step 12.7, 更新)
-src/csharp/Atlas.Generators.Rpc/         (Step 12.7, 更新)
+src/csharp/Atlas.Generators.Def/         (Step 12.7, 已支持 ATLAS_CLIENT 上下文)
 
 src/tools/atlas_test_client/             (Step 12.8)
 ├── atlas_test_client.csproj

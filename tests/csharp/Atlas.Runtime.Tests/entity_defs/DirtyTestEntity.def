@@ -1,0 +1,7 @@
+<entity name="DirtyTestEntity">
+  <properties>
+    <property name="score" type="int32" scope="all_clients" />
+    <property name="speed" type="float" scope="all_clients" />
+    <property name="name" type="string" scope="all_clients" />
+  </properties>
+</entity>

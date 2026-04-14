@@ -20,8 +20,8 @@ internal static class DefTypeHelper
             "double" => "double",
             "string" => "string",
             "bytes" => "byte[]",
-            "vector3" => "System.Numerics.Vector3",
-            "quaternion" => "System.Numerics.Quaternion",
+            "vector3" => "Atlas.DataTypes.Vector3",
+            "quaternion" => "Atlas.DataTypes.Quaternion",
             _ => defType,
         };
     }
@@ -71,6 +71,45 @@ internal static class DefTypeHelper
             "vector3" => "ReadVector3",
             "quaternion" => "ReadQuaternion",
             _ => "ReadInt32",
+        };
+    }
+
+    /// <summary>Convert .def property name (snake_case) to C# property name (PascalCase).</summary>
+    public static string ToPropertyName(string defName)
+    {
+        if (string.IsNullOrEmpty(defName)) return defName;
+        // Simple PascalCase: capitalize first letter
+        return char.ToUpperInvariant(defName[0]) + defName.Substring(1);
+    }
+
+    /// <summary>Convert .def property name to C# backing field name (_camelCase).</summary>
+    public static string ToFieldName(string defName)
+    {
+        if (string.IsNullOrEmpty(defName)) return defName;
+        return "_" + defName;
+    }
+
+    /// <summary>Default value expression for a .def type in C#.</summary>
+    public static string DefaultValue(string defType)
+    {
+        return defType.ToLowerInvariant() switch
+        {
+            "string" => "\"\"",
+            "bytes" => "System.Array.Empty<byte>()",
+            "vector3" => "default",
+            "quaternion" => "default",
+            _ => "default",
+        };
+    }
+
+    /// <summary>Whether the type needs a non-default initializer in field declaration.</summary>
+    public static bool NeedsFieldInitializer(string defType)
+    {
+        return defType.ToLowerInvariant() switch
+        {
+            "string" => true,
+            "bytes" => true,
+            _ => false,
         };
     }
 

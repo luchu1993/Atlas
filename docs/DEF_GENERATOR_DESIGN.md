@@ -1,8 +1,8 @@
 # 基于 .def 文件的进程感知代码生成 + C++ 安全校验
 
 > 日期: 2026-04-14
-> 状态: 待实现
-> 关联: [BigWorld RPC 参考](BIGWORLD_RPC_REFERENCE.md) | [Entity Mailbox 设计](scripting/entity_mailbox_design.md)
+> 状态: 已实现（C# Generator 部分完成，C++ 安全校验部分待实现）
+> 关联: [BigWorld RPC 参考](BIGWORLD_RPC_REFERENCE.md) | [Entity Mailbox 设计](scripting/entity_mailbox_design.md) | [DefGenerator 统一重构](DEFGEN_CONSOLIDATION_DESIGN.md)
 
 ## 1. 背景
 
@@ -187,21 +187,25 @@ public partial class Avatar : ClientEntity
 Atlas.Generators.Def/
 ├── Atlas.Generators.Def.csproj    # netstandard2.0, Roslyn generator
 ├── DefParser.cs                   # XML 解析 → DefModel
-├── DefModel.cs                    # 数据模型
+├── DefModel.cs                    # 数据模型（EntityDefModel, MethodDefModel, PropertyDefModel）
 ├── ProcessContext.cs              # 进程上下文枚举 + RPC 角色矩阵
 ├── DefGenerator.cs                # IIncrementalGenerator 主入口
+├── DefTypeHelper.cs               # .def 类型 ↔ C# 类型/Writer/Reader 映射
 ├── DefDiagnosticDescriptors.cs    # 诊断描述
 └── Emitters/
-    ├── PropertyEmitter.cs         # 属性字段 + get/set
-    ├── SerializationEmitter.cs    # Serialize / Deserialize
-    ├── DeltaSyncEmitter.cs        # Owner/Other client 同步
+    ├── PropertiesEmitter.cs       # 字段声明 + Property + DirtyFlags + On{Name}Changed 回调
+    ├── SerializationEmitter.cs    # Serialize / Deserialize (version+fieldCount+bodyLength)
+    ├── DeltaSyncEmitter.cs        # Delta/Owner/Other client 同步
     ├── RpcStubEmitter.cs          # Send stub / Forbidden stub
     ├── MailboxEmitter.cs          # Mailbox struct
     ├── DispatcherEmitter.cs       # RPC 分发
-    ├── FactoryEmitter.cs          # EntityFactory.Create()
-    ├── TypeRegistryEmitter.cs     # 实体类型注册
+    ├── FactoryEmitter.cs          # EntityFactory.Create() / CreateByTypeId()
+    ├── TypeRegistryEmitter.cs     # DefEntityTypeRegistry ([ModuleInitializer])
     └── RpcIdEmitter.cs            # RpcIds 常量
 ```
+
+> **注意**: 原设计中 PropertyEmitter/SerializationEmitter/DeltaSyncEmitter/FactoryEmitter 计划从一开始就包含在 DefGenerator 中。
+> 实际实施分两步：先实现 RPC 相关 Emitter，后在 [DefGenerator 统一重构](DEFGEN_CONSOLIDATION_DESIGN.md) 中补充属性/序列化相关 Emitter 并删除了旧的 EntityGenerator 和 RpcGenerator。
 
 #### DefParser.cs
 

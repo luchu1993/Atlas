@@ -1,0 +1,5 @@
+<entity name="FactoryTestEntity">
+  <properties>
+    <property name="health" type="int32" scope="all_clients" />
+  </properties>
+</entity>

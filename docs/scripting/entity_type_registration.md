@@ -1,6 +1,12 @@
-# 设计: 实体类型注册机制（替代 .def 文件）
+# 设计: 实体类型注册机制
 
 > 归属阶段: ScriptPhase 3 (C++ EntityDefRegistry) + ScriptPhase 4 (Source Generator 注册代码)
+
+> **⚠ 部分内容已过时 (2026-04-14)**:  
+> 本文档原标题为"替代 .def 文件"，但设计方向已调整：`.def` 文件被保留并作为实体定义的唯一来源。  
+> 文档中引用的 `[Replicated]`/`[ClientRpc]` 等 Attribute 已删除，`EntityGenerator` 已删除。  
+> 类型注册现由 **DefGenerator** 生成的 `DefEntityTypeRegistry`（使用 `[ModuleInitializer]`）自动完成。  
+> C++ 端 `EntityDefRegistry` 的设计和二进制注册格式仍然有效。
 
 ---
 

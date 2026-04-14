@@ -2,6 +2,11 @@
 
 > 预估周期: 3–4 周 | 前置依赖: ScriptPhase 3 完成
 
+> **⚠ 部分内容已过时 (2026-04-14)**:  
+> 本文档中描述的 `EntityGenerator`、`RpcGenerator` 及相关 C# Attribute（`[Replicated]`、`[Persistent]`、`[ServerOnly]`、`[ClientRpc]`、`[CellRpc]`、`[BaseRpc]`）已在 [DefGenerator 统一重构](../DEFGEN_CONSOLIDATION_DESIGN.md) 中被删除。  
+> 所有实体代码生成（属性、序列化、RPC、工厂）现由 **DefGenerator** 统一从 `.def` 文件生成。`RpcAttributes.cs` 文件已删除，`Attributes.cs` 仅保留 `[Entity]`。  
+> 本文档中的代码示例保留作为历史参考，实际代码应参考 [DEF_GENERATOR_DESIGN](../DEF_GENERATOR_DESIGN.md)。
+
 ---
 
 ## 目标

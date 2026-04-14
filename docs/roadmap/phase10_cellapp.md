@@ -1,6 +1,6 @@
 # Phase 10: CellApp — 空间模拟
 
-> 前置依赖: Phase 8 (BaseApp), Phase 9 (BaseAppMgr), Script Phase 4 (`[Replicated]` + DirtyFlags；Phase 10 需补充按受众过滤的 delta API)
+> 前置依赖: Phase 8 (BaseApp), Phase 9 (BaseAppMgr), DefGenerator (DirtyFlags + DeltaSync；Phase 10 需补充按受众过滤的 delta API)
 > 协同依赖: [DEF_GENERATOR_DESIGN](../DEF_GENERATOR_DESIGN.md) 的 C++ 部分（Step 5-9: .def 解析、EntityDefRegistry 扩展、BaseApp 外部接口、Exposed 校验、sourceEntityID 验证）
 > BigWorld 参考: `server/cellapp/cellapp.hpp`, `server/cellapp/entity.hpp`, `server/cellapp/witness.hpp`
 > 当前代码基线 (2026-04-12): 仓库里还没有 `CellApp` 实现，`src/server/cellapp/` 只有 `CMakeLists.txt`。因此本阶段必须复用已经落地的 `BaseApp` 回程协议（`src/server/baseapp/baseapp_messages.hpp`），并以当前脚本层实际提供的复制接口为前提调整设计。
@@ -22,11 +22,11 @@
 - [ ] RangeList 双轴排序链表正确维护，移动操作 O(δ/密度) 接近 O(1)
 - [ ] RangeTrigger 正确检测实体的 2D 进入/离开事件（双轴交叉校验）
 - [ ] Witness/AOI 系统可工作：优先级堆驱动、带宽感知的增量同步
-- [ ] `[Replicated]` DirtyFlags 驱动 AOI 属性更新，按 Scope 过滤
+- [ ] DirtyFlags 驱动 AOI 属性更新，按 `.def` PropertyScope 过滤
 - [ ] Controller 系统支持 MoveToPoint / Timer / Proximity
 - [ ] BaseApp 可请求创建/销毁 Cell 实体，Cell 回报地址给 Base
 - [ ] 客户端 RPC（经 BaseApp 转发）正确分发到 Cell 实体 C# 脚本
-- [ ] Cell 实体 `[ClientRpc]` 经 BaseApp Proxy 发送到客户端
+- [ ] Cell 实体 client_methods RPC 经 BaseApp Proxy 发送到客户端
 - [ ] 1000 实体在单 Space 中 tick 性能达标（< 50ms @ 10Hz）
 - [ ] 全部新增代码有单元测试
 
@@ -1470,7 +1470,7 @@ tests/integration/test_cellapp_integration.cpp
 4. 移动实体 → 其他客户端收到位置更新
 5. 新实体进入 AOI → 客户端收到 `0xF001(CellAoIEnvelope: EntityEnter)`
 6. 实体离开 AOI → 客户端收到 `0xF001(CellAoIEnvelope: EntityLeave)`
-7. C# 修改 [Replicated] 属性 → 客户端收到 `0xF001(CellAoIEnvelope: EntityPropertyUpdate)`
+7. C# 修改可复制属性 → 客户端收到 `0xF001(CellAoIEnvelope: EntityPropertyUpdate)`
 8. Controller: MoveToPoint → 实体平滑移动
 9. 1000 实体同空间 → tick 性能测量
 10. **RPC 安全校验（对齐 DEF_GENERATOR Step 11 C++ 测试）:**

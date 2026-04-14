@@ -33,7 +33,7 @@ internal static class EngineContext
 
         var prefix = NativeApi.GetProcessPrefix();
         EntityManager.Instance.SetProcessPrefix(prefix);
-        EntityTypeRegistry.RegisterAll();
+        // Entity type registration is handled by DefEntityTypeRegistry via [ModuleInitializer]
         NativeCallbacks.Register();
 
         _initialized = true;

@@ -739,7 +739,7 @@ private:
 
 ```
 CellApp A (旧 Real):
-  1. C# entity.Serialize() → 完整状态 blob (包含 [Persistent] + [Replicated] + [ServerOnly])
+  1. C# entity.Serialize() → 完整状态 blob (包含所有 .def 属性，不区分 scope)
   2. NativeApi → C++ 获取 blob
   3. GCHandle.Free() → C# 实例可被 GC
   4. 发送 blob 到 CellApp B
@@ -752,9 +752,10 @@ CellApp B (新 Real):
   5. CellEntity.set_script_handle(handle)
 ```
 
-> **注意:** Offload 时序列化的是**完整**状态（不只是 Persistent），
-> 因为 `[ServerOnly]` 和 `[Replicated]` 属性也需要在新进程恢复。
-> 需要在 C# Source Generator 中生成一个 `SerializeFull()` 方法（区别于 `Serialize([Persistent])`）。
+> **注意:** Offload 时序列化的是**完整**状态（不只是 persistent 属性），
+> 因为所有 scope 的属性（包括 cell_private、cell_public 等）都需要在新进程恢复。
+> DefGenerator 生成的 `Serialize()` 方法已包含所有 `.def` 定义的属性。
+> 若后续需要区分，可额外生成 `SerializePersistent()` 方法仅序列化 `persistent="true"` 的属性。
 
 ---
 

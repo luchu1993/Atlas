@@ -98,7 +98,7 @@ BigWorld 使用 XML `.def` 文件声明实体的所有方法及其所属端：
 | 无标记 | 无 | 客户端不可调 | Cell, Base |
 | `<Exposed/>` on ClientMethod | **编译错误** | 客户端方法不允许 Exposed | — |
 
-**Atlas 对应:** `.def` 文件中 `cell_methods` / `base_methods` 的 `<exposed>` 属性标记等价于 `<Exposed/>`。Atlas 用 `[ClientRpc]`/`[CellRpc]`/`[BaseRpc]` 区分方向，`exposed` 作为正交属性控制客户端可达性。
+**Atlas 对应:** `.def` 文件中 `cell_methods` / `base_methods` 的 `<exposed>` 属性标记等价于 `<Exposed/>`。`.def` 的 `<client_methods>`/`<cell_methods>`/`<base_methods>` 节直接定义 RPC 方向，`exposed` 作为正交属性控制客户端可达性。DefGenerator 根据进程上下文（ATLAS_BASE/ATLAS_CELL/ATLAS_CLIENT）生成对应的 Send stub / Receive partial / Forbidden stub。
 
 ---
 
@@ -1016,7 +1016,7 @@ Atlas 统一使用消息 ID + RPC ID 的二级编码，避免 BigWorld 的 `Expo
 
 | BigWorld 概念 | Atlas 对应 | 说明 |
 |---|---|---|
-| `.def` XML 方法声明 | `.def` XML + C# Attribute (`[ClientRpc]`, `[CellRpc]`, `[BaseRpc]`) | .def 为 SSoT，C# Attribute 定义方向 |
+| `.def` XML 方法声明 | `.def` XML（`<client_methods>`/`<cell_methods>`/`<base_methods>`）| .def 为唯一来源，DefGenerator 按进程上下文生成代码 |
 | `<Exposed/>` 标记 | `.def` 的 `<exposed>` 属性 (None/OwnClient/AllClients) | 与方向正交，C++ EntityDefRegistry 校验 |
 | `PyServer` + `ServerCaller` | `AvatarCellMailbox` (readonly struct) | Source Generator 编译期生成 |
 | `PyClient` + `ClientCaller` | `AvatarClientMailbox` (readonly struct) | Source Generator 编译期生成 |

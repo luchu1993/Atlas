@@ -79,10 +79,12 @@
 | 测试类 | 用例数 | 重点 |
 |--------|--------|------|
 | `InteropGeneratorTests` | ~8 | 结构体生成/方法生成/版本检查/诊断 |
-| `EntityGeneratorTests` | ~10 | 序列化/脏标记/工厂/诊断 |
-| `RpcGeneratorTests` | ~8 | 存根/分发/ID 分配/诊断 |
+| `DefGeneratorTests` | 16 | RPC stubs/Mailbox/Dispatcher/ID/诊断/属性 scope 解析 |
 | `EventGeneratorTests` | ~6 | 注册/注销/参数类型/诊断 |
-| **合计** | **~32** | |
+| **合计** | **~30** | |
+
+> **注意**: `EntityGeneratorTests` 和 `RpcGeneratorTests` 已随 EntityGenerator/RpcGenerator 的删除而移除。
+> DefGenerator 统一了 RPC 和实体属性代码生成，相关测试合并到 `DefGeneratorTests` 中。
 
 ---
 

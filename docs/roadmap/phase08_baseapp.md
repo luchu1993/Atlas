@@ -17,17 +17,17 @@
 - [x] 可创建 Base 实体，C# 脚本逻辑 (`OnInit`, `OnTick`) 可执行
 - [x] 可创建 Proxy 实体，接受客户端 RUDP 连接
 - [ ] 客户端 exposed RPC 调用经安全校验后分发到 C# 实体
-- [ ] C# 实体 `[ClientRpc]` 调用经 C++ 路由发送到客户端
-- [x] `WriteToDB()` 将 `[Persistent]` 属性持久化到 DBApp
+- [ ] C# 实体 client_methods 调用经 C++ 路由发送到客户端
+- [x] `WriteToDB()` 将 persistent 属性持久化到 DBApp
 - [x] `CreateEntityFromDB()` 从 DBApp 加载实体并恢复 C# 状态
 - [x] `GiveClientTo()` 可在本地 Proxy 之间转移客户端连接
-- [~] `[Replicated]` 属性增量同步到 Proxy 的客户端
+- [~] 可复制属性（.def scope >= own_client）增量同步到 Proxy 的客户端
 - [x] 全部新增代码有单元测试
 
 ## 验收状态（2026-04-13）
 
 - 当前 BaseApp 主体已经具备“实体宿主 + 登录准备 + DB 往返 + 本地客户端转移”的可用基线。
-- 未完成项主要集中在真正的外部客户端协议闭环: `ClientBaseRpc`/`ClientCellRpc`、稳定的 `[ClientRpc]` 下行协议，以及 AOI/多观察者复制。
+- 未完成项主要集中在真正的外部客户端协议闭环: `ClientBaseRpc`/`ClientCellRpc`、稳定的 client_methods 下行协议，以及 AOI/多观察者复制。
 
 ---
 
@@ -105,9 +105,9 @@ BaseApp (C++) 持有 C# 实体句柄 (GCHandle via ScriptObject)
 从 DB 恢复需要 **C++ → C# 方向**的调用 `atlas_restore_entity`。此函数在 Step 8.7 的
 NativeApi 导出中需要增加（见下方补充）。
 
-**[Replicated] 脏属性同步机制:**
+**可复制属性脏标记同步机制** (由 DefGenerator 从 `.def` 属性 scope 生成):
 
-C# Source Generator 在每个实体的 `OnTick()` 中检查 dirty flags。如果有变更，
+DefGenerator 在每个实体生成 dirty flags 追踪代码。`OnTick()` 中检查 dirty flags，如果有变更，
 主动通过 NativeApi 推送 delta blob:
 
 ```
@@ -966,7 +966,7 @@ src/server/baseapp/
 3. EntityDefRegistry 从 C# 注册
 4. EntityManager 集成
 5. 外部接口: Authenticate → 绑定 Proxy
-6. NativeApi: send_client_rpc → Proxy → 客户端 (下行 [ClientRpc])
+6. NativeApi: send_client_rpc → Proxy → 客户端 (下行 client_methods)
 7. NativeApi: write_to_db → 发送到 DBApp
 8. DBApp 回调处理 (`WriteEntityAck`)
 9. NativeApi: create_entity_from_db → CheckoutEntity 流程
@@ -1203,7 +1203,7 @@ C# 实体实例通过 `GCHandle` 防止被 GC 回收。C++ 持有 `uint64_t scri
 
 **决策: C# 侧主动推送 delta blob。**
 
-C# Source Generator 为每个 [Replicated] 属性生成 dirty tracking 代码。
+DefGenerator 为每个 `.def` 中可复制 scope 的属性生成 dirty tracking 代码。
 每 tick C# 检查 dirty flags，如果有变更则通过 NativeApi 推送 delta 到 C++，
 C++ 直接转发到客户端。C++ 不解析 delta 内容。
 

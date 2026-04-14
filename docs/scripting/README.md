@@ -131,8 +131,7 @@ src/lib/
 ```
 src/csharp/
 ├── Atlas.Generators.Interop/     # Source Generator: Native 互操作
-├── Atlas.Generators.Entity/      # Source Generator: 实体系统
-├── Atlas.Generators.Rpc/         # Source Generator: RPC 系统
+├── Atlas.Generators.Def/         # Source Generator: 实体系统 (属性/序列化/RPC/工厂/类型注册)
 ├── Atlas.Generators.Events/      # Source Generator: 事件系统
 ├── Atlas.Shared/                 # 共享库 (netstandard2.1, IL2CPP 安全)
 ├── Atlas.Runtime/                # 服务端运行时 (net9.0)
