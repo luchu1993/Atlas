@@ -54,10 +54,9 @@ __pycache__/
 *.egg-info/
 
 # C# build artifacts
-src/csharp/**/obj/
-src/csharp/**/bin/
-tests/csharp/**/obj/
-tests/csharp/**/bin/
+**/obj/
+**/bin/Debug/
+**/bin/Release/
 
 # Editor backups
 *~
