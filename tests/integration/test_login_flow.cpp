@@ -664,6 +664,13 @@ TEST(LoginFlowIntegration, ClientCanLoginAndAuthenticateThroughFullStack)
     EXPECT_EQ(client.auth_result.type_id, 1u);
     EXPECT_TRUE(client.auth_result.error.empty());
 
+    // Terminate child processes before removing files they may hold open.
+    loginapp.terminate();
+    baseapp.terminate();
+    baseappmgr.terminate();
+    dbapp.terminate();
+    machined.terminate();
+
     std::filesystem::remove(sqlite_path);
     std::filesystem::remove(entity_defs);
     std::filesystem::remove(baseapp_config);
