@@ -151,12 +151,6 @@ auto ReliableUdpChannel::do_send(std::span<const std::byte> data) -> Result<size
         return data.size();
     }
 
-    auto eff_wnd = effective_window();
-    if (unacked_.size() >= eff_wnd)
-    {
-        return Error(ErrorCode::WouldBlock, "Send window full");
-    }
-
     auto seq = next_send_seq_++;
 
     uint8_t flags = rudp::kFlagReliable | rudp::kFlagHasSeq;
