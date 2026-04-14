@@ -21,7 +21,7 @@ namespace atlas
 // Lifecycle (run_app):
 //   1. ServerConfig::load(argc, argv)
 //   2. init(argc, argv)          — subclasses chain-call base first
-//   3. run()                     — default: dispatcher_.run()
+//   3. run_loop()                — default: dispatcher_.run()
 //   4. on_run_complete()
 //   5. fini()                    — subclasses chain-call base last
 //
@@ -75,13 +75,13 @@ protected:
     // Called after config is loaded. Subclasses must call ServerApp::init() first.
     [[nodiscard]] virtual auto init(int argc, char* argv[]) -> bool;
 
-    // Called after run() returns. Subclasses call ServerApp::fini() last.
+    // Called after run_loop() returns. Subclasses call ServerApp::fini() last.
     virtual void fini();
 
     // Default: dispatcher_.run(). Override for custom loop behaviour.
-    [[nodiscard]] virtual auto run() -> bool;
+    [[nodiscard]] virtual auto run_loop() -> bool;
 
-    // Called once run() has returned, before fini().
+    // Called once run_loop() has returned, before fini().
     virtual void on_run_complete() {}
 
     // ---- Tick hooks (called in order each frame) ----------------------------

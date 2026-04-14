@@ -50,11 +50,11 @@ protected:
         ServerApp::fini();
     }
 
-    auto run() -> bool override
+    auto run_loop() -> bool override
     {
         run_called = true;
         hook_order.push_back("run");
-        return ServerApp::run();
+        return ServerApp::run_loop();
     }
 
     void on_end_of_tick() override

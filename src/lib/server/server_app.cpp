@@ -79,7 +79,7 @@ auto ServerApp::run_app(int argc, char* argv[]) -> int
     ATLAS_LOG_INFO("{} started (pid={})", config_.process_name, pid);
 
     // 6. Run
-    bool run_ok = run();
+    bool run_ok = run_loop();
 
     // 7. Post-run hook
     on_run_complete();
@@ -187,7 +187,7 @@ void ServerApp::fini()
     remove_signal_handler(Signal::Terminate);
 }
 
-auto ServerApp::run() -> bool
+auto ServerApp::run_loop() -> bool
 {
     dispatcher_.run();
     return true;
