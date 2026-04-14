@@ -463,3 +463,8 @@ atlas_add_test(test_dbapp_entity_id_messages
     SOURCES test_dbapp_entity_id_messages.cpp
     DEPS atlas_dbapp_lib atlas_serialization
 )
+
+atlas_add_test(test_delta_forwarder
+    SOURCES test_delta_forwarder.cpp
+    DEPS atlas_baseapp_lib
+)

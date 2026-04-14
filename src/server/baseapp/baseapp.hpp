@@ -3,6 +3,7 @@
 #include "baseapp_native_provider.hpp"
 #include "db/idatabase.hpp"
 #include "dbapp/dbapp_messages.hpp"
+#include "delta_forwarder.hpp"
 #include "entity_manager.hpp"
 #include "foundation/time.hpp"
 #include "id_client.hpp"
@@ -124,6 +125,9 @@ private:
     void do_give_client_to_local(EntityID src_id, EntityID dest_id);
     void do_give_client_to_remote(EntityID src_id, EntityID dest_id, const Address& dest_baseapp);
 
+    // ---- Delta forwarding ------------------------------------------------
+    void flush_client_deltas();
+
     // ---- Helpers --------------------------------------------------------
     void register_internal_handlers();
     void send_to_dbapp(Channel*& dbapp_ch, auto&& msg);
@@ -239,6 +243,10 @@ private:
     std::unordered_map<DatabaseID, PendingLogin> queued_logins_;
     std::unordered_map<EntityID, Address> entity_client_index_;
     std::unordered_map<Address, EntityID> client_entity_index_;
+    std::unordered_map<Address, DeltaForwarder> client_delta_forwarders_;
+    uint64_t delta_bytes_sent_total_{0};
+    uint64_t delta_bytes_deferred_total_{0};
+    static constexpr uint32_t kDeltaBudgetPerTick = 16 * 1024;  // 16 KB per client per tick
     uint64_t auth_success_total_{0};
     uint64_t auth_fail_total_{0};
     uint64_t force_logoff_total_{0};

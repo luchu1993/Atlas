@@ -246,6 +246,7 @@ void BaseApp::on_tick_complete()
     entity_mgr_.flush_destroyed();
     entity_mgr_.cleanup_retired_sessions();
     expire_detached_proxies();
+    flush_client_deltas();
     update_load_estimate();
     report_load_to_baseappmgr();
     cleanup_expired_pending_requests();
@@ -314,6 +315,17 @@ void BaseApp::register_watchers()
                      std::function<uint64_t()>([this] { return prepared_login_timeout_total_; }));
     wr.add<bool>("baseapp/dbapp_connected",
                  std::function<bool()>([this] { return dbapp_channel_ != nullptr; }));
+    wr.add<uint64_t>("baseapp/delta_bytes_sent_total",
+                     std::function<uint64_t()>([this] { return delta_bytes_sent_total_; }));
+    wr.add<std::size_t>("baseapp/delta_queue_depth",
+                        std::function<std::size_t()>(
+                            [this]
+                            {
+                                std::size_t depth = 0;
+                                for (auto& [_, fwd] : client_delta_forwarders_)
+                                    depth += fwd.queue_depth();
+                                return depth;
+                            }));
 }
 
 // ============================================================================
@@ -702,12 +714,43 @@ void BaseApp::on_replicated_delta_from_cell(Channel& /*ch*/,
     if (!proxy || !proxy->has_client())
         return;
 
-    // Forward replicated delta to client (reserved update message ID)
-    if (auto* client_ch = resolve_client_channel(proxy->entity_id()))
+    auto it = entity_client_index_.find(proxy->entity_id());
+    if (it == entity_client_index_.end())
+        return;
+
+    client_delta_forwarders_[it->second].enqueue(
+        msg.base_entity_id, std::span<const std::byte>(msg.delta.data(), msg.delta.size()));
+}
+
+void BaseApp::flush_client_deltas()
+{
+    for (auto it = client_delta_forwarders_.begin(); it != client_delta_forwarders_.end();)
     {
-        (void)client_ch->send_message(
-            static_cast<MessageID>(0xF001),
-            std::span<const std::byte>(msg.delta.data(), msg.delta.size()));
+        auto& [client_addr, forwarder] = *it;
+
+        // Resolve channel; if client disconnected, discard its forwarder.
+        auto ent_it = client_entity_index_.find(client_addr);
+        if (ent_it == client_entity_index_.end())
+        {
+            it = client_delta_forwarders_.erase(it);
+            continue;
+        }
+
+        auto* client_ch = resolve_client_channel(ent_it->second);
+        if (!client_ch)
+        {
+            it = client_delta_forwarders_.erase(it);
+            continue;
+        }
+
+        auto bytes = forwarder.flush(*client_ch, kDeltaBudgetPerTick);
+        delta_bytes_sent_total_ += bytes;
+
+        // Remove empty forwarders to avoid map bloat.
+        if (forwarder.queue_depth() == 0)
+            it = client_delta_forwarders_.erase(it);
+        else
+            ++it;
     }
 }
 
