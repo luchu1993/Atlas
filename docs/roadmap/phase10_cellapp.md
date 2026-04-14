@@ -1,6 +1,7 @@
 # Phase 10: CellApp — 空间模拟
 
 > 前置依赖: Phase 8 (BaseApp), Phase 9 (BaseAppMgr), Script Phase 4 (`[Replicated]` + DirtyFlags；Phase 10 需补充按受众过滤的 delta API)
+> 协同依赖: [DEF_GENERATOR_DESIGN](../DEF_GENERATOR_DESIGN.md) 的 C++ 部分（Step 5-9: .def 解析、EntityDefRegistry 扩展、BaseApp 外部接口、Exposed 校验、sourceEntityID 验证）
 > BigWorld 参考: `server/cellapp/cellapp.hpp`, `server/cellapp/entity.hpp`, `server/cellapp/witness.hpp`
 > 当前代码基线 (2026-04-12): 仓库里还没有 `CellApp` 实现，`src/server/cellapp/` 只有 `CMakeLists.txt`。因此本阶段必须复用已经落地的 `BaseApp` 回程协议（`src/server/baseapp/baseapp_messages.hpp`），并以当前脚本层实际提供的复制接口为前提调整设计。
 
@@ -104,10 +105,11 @@ CellEntity (C++ 薄壳)
 ### 2.1 协议分层
 
 当前代码下，Phase 10 不能再定义一套与 `BaseApp` 现有处理器并行的
-`CellApp → BaseApp` 回程协议。消息需要分成两层：
+`CellApp → BaseApp` 回程协议。消息需要分成三层：
 
-1. `3000-3099`：CellApp 自有消息，只用于 `BaseApp → CellApp` 请求和 CellApp 本地管理
+1. `3000-3099`：CellApp 自有消息，`BaseApp → CellApp` 请求和 CellApp 本地管理
 2. `2010-2016`：复用已实现的 `BaseApp` 入站消息，由 CellApp 发回 BaseApp
+3. `2022-2023`：BaseApp 外部接口扩展，接收客户端 RPC（对齐 DEF_GENERATOR_DESIGN Step 6）
 
 ### 2.2 CellApp 新增消息 (`3000-3099`)
 
@@ -115,17 +117,53 @@ CellEntity (C++ 薄壳)
 |------|-----|------|------|
 | `CreateCellEntity` | 3000 | BaseApp → CellApp | 创建 Cell 实体 |
 | `DestroyCellEntity` | 3002 | BaseApp → CellApp | 销毁 Cell 实体 |
-| `CellEntityRpc` | 3003 | BaseApp → CellApp | 客户端 RPC 转发（[ServerRpc] 经 Base） |
+| `ClientCellRpcForward` | 3003 | BaseApp → CellApp | 客户端 Cell RPC 转发，携带 sourceEntityID（对应 BigWorld `runExposedMethod`） |
+| `InternalCellRpc` | 3004 | BaseApp → CellApp | 服务器内部 Base→Cell RPC，无需 Exposed（对应 BigWorld `runScriptMethod`） |
 | `CreateSpace` | 3010 | 管理/脚本 → CellApp | 创建 Space |
 | `DestroySpace` | 3011 | 管理/脚本 → CellApp | 销毁 Space |
 | `AvatarUpdate` | 3020 | BaseApp → CellApp | 客户端位置更新 |
 | `EnableWitness` | 3021 | BaseApp → CellApp | 开启 AOI（客户端 enableEntities） |
 | `DisableWitness` | 3022 | BaseApp → CellApp | 关闭 AOI |
 
+> **为什么拆分两条 CellRpc 消息？**
+> BigWorld 区分 `runExposedMethod`（客户端发起，REAL_ONLY，需要 Exposed 校验 + sourceEntityID 验证）
+> 和 `runScriptMethod`（服务器内部 Base→Cell，REAL_ONLY，可调用所有 Cell 方法，无需 Exposed）。
+> 参见 [BigWorld RPC 参考 Section 3.1 / 3.3](../BIGWORLD_RPC_REFERENCE.md)。
+> 合并为一条消息会导致 CellApp 无法区分来源、安全校验逻辑混乱。
+
 约束：
 - 不再在 `3000` 段定义 `CreateCellEntityAck` / `BaseEntityRpc` / 泛化版 `ClientRpcFromCell` / `ReplicatedDelta` / `CellEntityPosition`
 - `CreateCellEntity` 的成功路径直接复用 `baseapp::CellEntityCreated`
 - 显式失败回包当前代码未定义；如果实现阶段确实需要失败通知，应新增独立失败消息，而不是覆盖现有 `2010-2016` 语义
+
+### 2.2.1 BaseApp 外部接口扩展（客户端 RPC 接收）
+
+DEF_GENERATOR_DESIGN Step 6 定义了两条新的 BaseApp 外部接口消息，用于接收客户端发起的 RPC：
+
+| 消息 | ID | 方向 | 用途 | 状态 |
+|------|-----|------|------|------|
+| `ClientBaseRpc` | 2022 | Client → BaseApp | 客户端调用 Base 上的 exposed 方法 | **已实现** |
+| `ClientCellRpc` | 2023 | Client → BaseApp | 客户端调用 Cell 上的 exposed 方法（经 BaseApp 转发到 CellApp） | **仅保留消息 ID** |
+
+> **当前代码状态：**
+> - `ClientBaseRpc` (2022)：struct 定义和 handler (`on_client_base_rpc`) 已实现于 `baseapp_messages.hpp` / `baseapp.cpp`
+> - `ClientCellRpc` (2023)：仅在 `message_ids.hpp` 中保留了枚举值，**尚无 struct 定义和 handler**
+> - 客户端侧 `client_native_provider.cpp::send_cell_rpc()` 目前是 stub（仅打日志）
+>
+> Phase 10 Step 10.9 需要新增 `ClientCellRpc` 的 struct 定义和 handler。
+
+`ClientBaseRpc` 格式：`[rpc_id | payload]`（已实现）
+- BaseApp 通过 `find_proxy_by_channel()` 确定调用者，天然只能调用自己的 Base
+- 校验 `is_exposed()` 后直接分发给 C# 脚本
+
+`ClientCellRpc` 格式：`[target_entity_id | rpc_id | payload]`（Phase 10 新增）
+- `target_entity_id == proxy.entity_id()`：调用自己的 Cell（OWN_CLIENT / ALL_CLIENTS）
+- `target_entity_id != proxy.entity_id()`：调用其他实体的 Cell（仅 ALL_CLIENTS）
+- BaseApp 嵌入 `source_entity_id = proxy.entity_id()`（客户端不可伪造）后转发为 `ClientCellRpcForward`
+
+> `ClientBaseRpc` 已定义在 `src/server/baseapp/baseapp_messages.hpp` 中，与 `Authenticate` (2020) / `AuthenticateResult` (2021) 属于同一外部接口段。
+> `ClientCellRpc` 的 struct 定义需在 Phase 10 Step 10.9 中新增到同一文件。
+> Phase 10 的 BaseApp 集成步骤（Step 10.9）负责实现这两条消息的处理器和 Exposed 校验逻辑。
 
 ### 2.3 复用现有 BaseApp 入站消息 (`CellApp → BaseApp`)
 
@@ -136,7 +174,7 @@ CellEntity (C++ 薄壳)
 | `CurrentCell` | 2012 | CellApp → BaseApp | Phase 11 offload 后更新 Cell 地址 |
 | `CellRpcForward` | 2013 | CellApp → BaseApp | Cell → Base RPC，Base 侧分发给脚本 |
 | `SelfRpcFromCell` | 2014 | CellApp → BaseApp | 发给拥有者客户端，可靠路径 |
-| `ReplicatedDeltaFromCell` | 2015 | CellApp → BaseApp | 当前代码只透传到 `base_entity_id` 对应的单个客户端；Phase 10 可先用于“按观察者逐个回送”的 AOI delta |
+| `ReplicatedDeltaFromCell` | 2015 | CellApp → BaseApp | **Unreliable**。当前代码只透传到 `base_entity_id` 对应的单个客户端；Phase 10 用于 Volatile 位置更新（latest-wins，允许丢包） |
 | `BroadcastRpcFromCell` | 2016 | CellApp → BaseApp | 消息定义支持 `otherClients/allClients`，但当前 `BaseApp` 实现仍只发给 `base_entity_id` 对应客户端，不能当作已完成的 AOI fan-out |
 
 这部分消息定义已经存在于 `src/server/baseapp/baseapp_messages.hpp`，Phase 10 直接复用，不再在 CellApp 文档里重定义一份并行版本。
@@ -146,9 +184,16 @@ CellEntity (C++ 薄壳)
 - `BaseApp::on_replicated_delta_from_cell()` 也只会发给单个 Proxy，且外层消息 ID 当前固定为 `0xF001`
 - `BaseApp::on_broadcast_rpc_from_cell()` 目前并不会根据 `target` 枚举遍历 AOI 观察者集合
 
-因此，Phase 10 文档中的 AOI 下行闭环必须按下面两种路径之一实现，不能把现状写成“已支持广播”：
-- 首选路径：`CellApp/Witness` 直接按“每个观察者一个回包”展开，下行时使用观察者自己的 `base_entity_id` 作为路由键，经 `SelfRpcFromCell` / `ReplicatedDeltaFromCell` 发回 BaseApp
+因此，Phase 10 文档中的 AOI 下行闭环必须按下面两种路径之一实现，不能把现状写成”已支持广播”：
+- 首选路径：`CellApp/Witness` 直接按”每个观察者一个回包”展开，下行时使用观察者自己的 `base_entity_id` 作为路由键发回 BaseApp
 - 后续优化：扩展 BaseApp，使 `BroadcastRpcFromCell` 真正具备按观察者集合 fan-out 的能力
+
+> **传输可靠性约束（关键）：**
+> - `SelfRpcFromCell` (2014) — **Reliable**，用于：拥有者客户端 RPC、有序属性 delta (`event_seq`)
+> - `ReplicatedDeltaFromCell` (2015) — **Unreliable**，仅用于：Volatile 位置/朝向更新（latest-wins，允许丢包）
+> - `BroadcastRpcFromCell` (2016) — **Unreliable**，用于：广播 ClientRpc（后续优化阶段）
+>
+> 属性 delta 要求按 `event_seq` 有序到达（断档时需补发或退回 snapshot），因此**必须走 Reliable 路径**（`SelfRpcFromCell`），不能走 Unreliable 的 `ReplicatedDeltaFromCell`。Volatile 位置更新是 latest-wins 语义，允许丢包，适合走 Unreliable 路径。
 
 ### 2.3.1 Phase 10 首阶段的 `0xF001` 过渡协议
 
@@ -179,10 +224,11 @@ struct CellAoIEnvelope {
 ```
 
 约束：
-- `SelfRpcFromCell` 仍用于“拥有者客户端 RPC”这条可靠路径
-- `ReplicatedDeltaFromCell` 首阶段只承担 AOI/复制 envelope 的单观察者回送
+- `SelfRpcFromCell` (Reliable) 用于：(1) 拥有者客户端 RPC；(2) 有序属性 delta（`event_seq`，不可丢包）
+- `ReplicatedDeltaFromCell` (Unreliable) 仅用于：Volatile 位置/朝向更新（latest-wins，允许丢包）
+- 属性 delta 的 `CellAoIEnvelope` (kind=EntityPropertyUpdate) **必须走 `SelfRpcFromCell`**，否则 `event_seq` 有序性无法保证
 - Phase 12 若落地真实的 `10102/10103/10104/10111` 客户端协议，则应由 BaseApp 在下行前解包
-  `CellAoIEnvelope`，或直接把 `ReplicatedDeltaFromCell` 改为携带真实客户端消息 ID
+  `CellAoIEnvelope`，或改用真实客户端消息 ID
 
 ### 2.4 新增消息的详细定义
 
@@ -206,10 +252,23 @@ struct CreateCellEntity {
     // ...
 };
 
-struct CellEntityRpc {
-    EntityID cell_entity_id;
+// 客户端 Cell RPC 转发（对应 BigWorld runExposedMethod, REAL_ONLY）
+// BaseApp 在 on_client_cell_rpc() 中校验 Exposed + 跨实体权限后构造此消息
+struct ClientCellRpcForward {
+    EntityID target_entity_id;     // 目标实体（base_entity_id 空间）
+    EntityID source_entity_id;     // BaseApp 嵌入的 proxy.entity_id()，客户端不可伪造
     uint32_t rpc_id;
-    EntityID caller_entity_id;     // 调用者（用于安全校验）
+    std::vector<std::byte> payload;
+
+    static auto descriptor() -> const MessageDesc& { /*...*/ }
+    // ...
+};
+
+// 服务器内部 Base→Cell RPC（对应 BigWorld runScriptMethod, REAL_ONLY）
+// 不需要 Exposed 校验，Base 可调用所有 Cell 方法
+struct InternalCellRpc {
+    EntityID target_entity_id;     // 目标实体（base_entity_id 空间）
+    uint32_t rpc_id;
     std::vector<std::byte> payload;
 
     static auto descriptor() -> const MessageDesc& { /*...*/ }
@@ -228,6 +287,36 @@ struct AvatarUpdate {
     Vector3 position;
     Vector3 direction;
     bool on_ground;
+
+    static auto descriptor() -> const MessageDesc& { /*...*/ }
+    // ...
+};
+
+struct EnableWitness {
+    EntityID cell_entity_id;
+    float aoi_radius;
+
+    static auto descriptor() -> const MessageDesc& { /*...*/ }
+    // ...
+};
+
+struct DisableWitness {
+    EntityID cell_entity_id;
+
+    static auto descriptor() -> const MessageDesc& { /*...*/ }
+    // ...
+};
+
+struct CreateSpace {
+    SpaceID space_id;
+    // 后续可扩展: 空间配置 (地图名, 尺寸等)
+
+    static auto descriptor() -> const MessageDesc& { /*...*/ }
+    // ...
+};
+
+struct DestroySpace {
+    SpaceID space_id;
 
     static auto descriptor() -> const MessageDesc& { /*...*/ }
     // ...
@@ -829,6 +918,9 @@ public:
         { return spaces_; }
     auto find_entity(EntityID id) -> CellEntity*;
 
+    /// 通过 base_entity_id 查找实体（RPC 路由使用）
+    auto find_entity_by_base_id(EntityID base_entity_id) -> CellEntity*;
+
 protected:
     auto init(int argc, char* argv[]) -> bool override;
     void fini() override;
@@ -845,8 +937,17 @@ private:
                                 const cellapp::CreateCellEntity& msg);
     void on_destroy_cell_entity(const Address& src, Channel* ch,
                                  const cellapp::DestroyCellEntity& msg);
-    void on_cell_entity_rpc(const Address& src, Channel* ch,
-                             const cellapp::CellEntityRpc& msg);
+
+    // 客户端 Cell RPC（经 BaseApp 转发），需要 Exposed + sourceEntityID 校验
+    // 对应 BigWorld Entity::runExposedMethod()
+    void on_client_cell_rpc_forward(const Address& src, Channel* ch,
+                                     const cellapp::ClientCellRpcForward& msg);
+
+    // 服务器内部 Base→Cell RPC，无需 Exposed 校验
+    // 对应 BigWorld Entity::runScriptMethod()
+    void on_internal_cell_rpc(const Address& src, Channel* ch,
+                               const cellapp::InternalCellRpc& msg);
+
     void on_avatar_update(const Address& src, Channel* ch,
                            const cellapp::AvatarUpdate& msg);
     void on_enable_witness(const Address& src, Channel* ch,
@@ -863,8 +964,11 @@ private:
     // ---- 组件 ----
     std::unordered_map<SpaceID, std::unique_ptr<Space>> spaces_;
 
-    // 全局 EntityID → CellEntity* 索引
+    // cell_entity_id → CellEntity* 索引（CellApp 内部路由）
     std::unordered_map<EntityID, CellEntity*> entity_population_;
+
+    // base_entity_id → CellEntity* 索引（RPC 路由，因为客户端和 BaseApp 使用 base_entity_id）
+    std::unordered_map<EntityID, CellEntity*> base_entity_population_;
 
     EntityID next_entity_id_ = 1;
 };
@@ -891,12 +995,89 @@ on_tick_complete():                  // Updatable 之后
         for each space:
             for each entity with witness:
                 witness->update(max_packet_bytes)
-                // → 首阶段生成逐观察者的 SelfRpcFromCell / ReplicatedDeltaFromCell
+                // → 属性 delta (event_seq): 逐观察者走 SelfRpcFromCell (Reliable)
+                // → Volatile 位置更新: 逐观察者走 ReplicatedDeltaFromCell (Unreliable)
                 // → 如后续补齐 BaseApp observer fan-out，再引入 BroadcastRpcFromCell 优化
                 // → 发送到 BaseApp Proxy
 ```
 
-### 3.8 CellAppNativeProvider
+### 3.8 CellApp RPC 安全校验（对齐 DEF_GENERATOR Step 7-9）
+
+CellApp 的两条 RPC 入站路径对应 BigWorld 的双消息设计：
+
+#### 3.8.1 on_client_cell_rpc_forward — 客户端发起的 Cell RPC
+
+对应 BigWorld `Entity::runExposedMethod()`，必须执行完整的安全校验链：
+
+```cpp
+void CellApp::on_client_cell_rpc_forward(const Address& src, Channel* ch,
+                                          const cellapp::ClientCellRpcForward& msg)
+{
+    auto* entity = find_entity_by_base_id(msg.target_entity_id);
+    if (!entity) return;
+
+    // Ghost 透明转发（Phase 11）：
+    // if (!entity->is_real()) { entity->forward_to_real(...); return; }
+
+    auto* rpc_desc = entity_def_registry_.find_rpc(msg.rpc_id);
+    if (!rpc_desc || rpc_desc->exposed == ExposedScope::None)
+    {
+        // 不应到达——BaseApp 应已拦截非 exposed RPC
+        ATLAS_LOG_WARNING("CellApp: non-exposed RPC {} reached cell, dropping", msg.rpc_id);
+        return;
+    }
+
+    // 方向校验：确保是 Cell 方向 (0x02) 的 RPC，防止 Base RPC 被错误路由到 CellApp
+    if (rpc_desc->direction() != 0x02)
+    {
+        ATLAS_LOG_WARNING("CellApp: RPC 0x{:06X} direction {} != CellRpc(0x02), dropping",
+                          msg.rpc_id, rpc_desc->direction());
+        return;
+    }
+
+    // OWN_CLIENT 方法：验证调用者身份（对齐 BigWorld Section 4.5）
+    if (rpc_desc->exposed == ExposedScope::OwnClient)
+    {
+        if (msg.target_entity_id != msg.source_entity_id)
+        {
+            ATLAS_LOG_WARNING("Blocked cell RPC: source {} != target {}, "
+                              "method is exposed as OWN_CLIENT",
+                              msg.source_entity_id, msg.target_entity_id);
+            return;
+        }
+    }
+    // ALL_CLIENTS: 不验证 sourceEntityID（设计如此——任何 AoI 内客户端可调用）
+
+    script_engine().dispatch_cell_rpc(entity->id(), msg.rpc_id, msg.payload);
+}
+```
+
+> **安全保障（四层纵深，对齐 BigWorld Section 4）：**
+> 1. **BaseApp 第一层**：`on_client_cell_rpc()` 检查 `is_exposed(rpc_id)`，非 exposed 直接丢弃
+> 2. **BaseApp 第二层**：跨实体调用检查 `target != proxy && exposed != AllClients` → 丢弃
+> 3. **CellApp 第三层**：方向校验 `rpc_desc->direction() == 0x02`，防止 Base RPC 被错误路由
+> 4. **CellApp 第四层**：OwnClient 方法验证 `source == target`，source 由 BaseApp 嵌入不可伪造
+
+#### 3.8.2 on_internal_cell_rpc — 服务器内部 Base→Cell RPC
+
+对应 BigWorld `Entity::runScriptMethod()`，来自可信的 BaseApp，无需校验：
+
+```cpp
+void CellApp::on_internal_cell_rpc(const Address& src, Channel* ch,
+                                    const cellapp::InternalCellRpc& msg)
+{
+    auto* entity = find_entity_by_base_id(msg.target_entity_id);
+    if (!entity) return;
+
+    // Ghost 透明转发（Phase 11）：
+    // if (!entity->is_real()) { entity->forward_to_real(...); return; }
+
+    // 内部 RPC 不需要 Exposed 校验——Base 可调用所有 Cell 方法
+    script_engine().dispatch_cell_rpc(entity->id(), msg.rpc_id, msg.payload);
+}
+```
+
+### 3.9 CellAppNativeProvider
 
 ```cpp
 // src/server/cellapp/cellapp_native_provider.hpp
@@ -977,7 +1158,47 @@ BaseApp                        CellApp                     C# (Cell Script)
 - `RestoreEntity()` 调用前，CellApp 必须先合成完整初始化 blob；不能传 `null, 0`
 - 这样 C# 实体的 `OnInit(false)` 才能在第一次执行前看到正确的 `space/base/position` 初始态
 
-### 4.2 客户端移动 → AOI 更新
+### 4.2 客户端 → Cell RPC（安全校验全链路）
+
+对齐 DEF_GENERATOR_DESIGN Section 6.2，展示 Client→Cell RPC 的完整安全校验链：
+
+```
+Client                    BaseApp                         CellApp
+  │                         │                               │
+  │── ClientCellRpc ──────→│                               │
+  │   (target_entity_id,    │                               │
+  │    rpc_id, payload)     │                               │
+  │                         │                               │
+  │                         ├─ 1. find_proxy_by_channel()   │
+  │                         ├─ 2. entity_def_registry_      │
+  │                         │     .find_rpc(rpc_id)         │
+  │                         ├─ 3. is_exposed? ──No──→ DROP  │
+  │                         ├─ 4. target != proxy &&        │
+  │                         │     exposed != AllClients?    │
+  │                         │     ──Yes──→ DROP             │
+  │                         ├─ 5. embed source_entity_id    │
+  │                         │     = proxy.entity_id()       │
+  │                         │     (客户端不可伪造)            │
+  │                         │                               │
+  │                         ├── ClientCellRpcForward ──────→│
+  │                         │   (target, source, rpc_id,    │
+  │                         │    payload)                   │
+  │                         │                               │
+  │                         │                               ├─ 6. find_entity_by_base_id(target)
+  │                         │                               ├─ 7. Ghost? → forward (Phase 11)
+  │                         │                               ├─ 8. OWN_CLIENT?
+  │                         │                               │     source == target?
+  │                         │                               │     ──No──→ DROP
+  │                         │                               ├─ 9. dispatch_cell_rpc(...)
+  │                         │                               │     → C# partial 方法执行
+```
+
+> **与 BigWorld 的对照（参见 BIGWORLD_RPC_REFERENCE Section 3.1）：**
+> - 步骤 1-5 对应 BigWorld `Proxy::cellEntityMethod()` (`baseapp/proxy.cpp:2491-2530`)
+> - 步骤 6-9 对应 BigWorld `Entity::runMethodHelper(isExposed=true)` (`cellapp/entity.cpp:5418-5508`)
+> - `source_entity_id` 由 BaseApp 写入，等同于 BigWorld `b << id_` (`proxy.cpp:2527`)
+
+### 4.3 客户端移动 → AOI 更新
 
 ```
 Client          BaseApp          CellApp (tick)           Other Clients
@@ -1181,30 +1402,59 @@ src/server/cellapp/
 3. CreateCellEntity 处理 (从 BaseApp 请求)
 4. CellEntity 生命周期 (C# 脚本集成)
 5. AvatarUpdate 处理 (位置更新)
-6. CellEntityRpc 处理 (客户端 RPC 经 BaseApp 转发)
-7. Controller tick
-8. Witness tick + 消息生成
-9. 首阶段: SelfRpcFromCell / ReplicatedDeltaFromCell → BaseApp
-   优化阶段: BroadcastRpcFromCell → BaseApp
-10. EnableWitness / DisableWitness
-11. Watcher 注册
+6. ClientCellRpcForward 处理 (客户端 Cell RPC 经 BaseApp 转发，含 Exposed + sourceEntityID 校验)
+7. InternalCellRpc 处理 (服务器内部 Base→Cell RPC，无校验)
+8. Controller tick
+9. Witness tick + 消息生成
+10. 首阶段: SelfRpcFromCell (Reliable: RPC + 属性 delta) / ReplicatedDeltaFromCell (Unreliable: Volatile 位置) → BaseApp
+    优化阶段: BroadcastRpcFromCell → BaseApp
+11. EnableWitness / DisableWitness
+12. Watcher 注册
 
 ### Step 10.9: BaseApp 集成更新
 
 **更新文件:**
 ```
 src/server/baseapp/baseapp.hpp / .cpp
+src/server/baseapp/baseapp_messages.hpp         (新增 ClientCellRpc struct；ClientBaseRpc 已存在)
 ```
 
-- BaseApp 发送 `CreateCellEntity` → CellApp
+**外部接口（客户端 RPC 接收）— 对齐 DEF_GENERATOR Step 6-8：**
+
+- `ClientBaseRpc` (2022) struct 和 handler 已存在，无需重建
+- **新增** `ClientCellRpc` (2023) struct 定义（当前仅有 message_ids.hpp 中的枚举值）
+- `on_client_base_rpc()` 处理器：
+  1. `find_proxy_by_channel()` 确定调用者
+  2. `entity_def_registry_.find_rpc(rpc_id)` 查找方法
+  3. `is_exposed()` 校验 → 非 exposed 丢弃
+  4. 方向校验：`rpc_desc->direction() == 0x03` → 非 Base 方向丢弃（防止客户端用 Base 通道调用 Cell RPC）
+  5. 通过 → 分发给 C# 脚本
+- `on_client_cell_rpc()` 处理器：
+  1. `find_proxy_by_channel()` 确定调用者
+  2. `entity_def_registry_.find_rpc(rpc_id)` 查找方法
+  3. `is_exposed()` 校验 → 非 exposed 丢弃
+  4. 方向校验：`rpc_desc->direction() == 0x02` → 非 Cell 方向丢弃（防止客户端用 Cell 通道调用 Base RPC）
+  5. 跨实体校验：`target != proxy && exposed != AllClients` → 丢弃
+  6. 嵌入 `source_entity_id = proxy.entity_id()` 构造 `ClientCellRpcForward`
+  7. 发送到目标实体的 CellApp（单 CellApp 阶段所有 Cell 地址相同，多 CellApp 阶段需全局路由表）
+
+**内部接口（Cell→Base 回程）：**
+
 - BaseApp 处理 `baseapp::CellEntityCreated` / `CellEntityDestroyed` / `CurrentCell`
 - BaseApp 转发 `baseapp::SelfRpcFromCell` / `BroadcastRpcFromCell`
-- BaseApp 转发 `baseapp::ReplicatedDeltaFromCell`（当前代码是 byte-for-byte 透传到客户端）
+- BaseApp 转发 `baseapp::ReplicatedDeltaFromCell`（Unreliable，仅用于 Volatile 位置更新；当前代码是 byte-for-byte 透传到客户端）
 - 若保持当前 handler，不修改外层消息 ID，则客户端侧需先消费 `0xF001 + CellAoIEnvelope`
 - 若要直接对接 Phase 12 的 `EntityEnter/Leave/PropertyUpdate/PositionUpdate`，则 BaseApp 必须在这里解包并改发真实客户端消息
+
+**生命周期与位置：**
+
+- BaseApp 发送 `CreateCellEntity` → CellApp
 - BaseApp 新增 `AvatarUpdate` (Client → CellApp) / `EnableWitness` / `DisableWitness`
-- 若本阶段保持当前 BaseApp handler 语义不变，则 AOI 下行必须走“CellApp 按观察者逐个回送”的路径；
-  若要真正使用 `BroadcastRpcFromCell(target=other/all)`，则需在本步骤补齐 BaseApp 的多观察者 fan-out
+
+**AOI 下行路径约束：**
+
+- 若本阶段保持当前 BaseApp handler 语义不变，则 AOI 下行必须走”CellApp 按观察者逐个回送”的路径
+- 若要真正使用 `BroadcastRpcFromCell(target=other/all)`，则需在本步骤补齐 BaseApp 的多观察者 fan-out
 
 ### Step 10.10: 集成测试
 
@@ -1223,6 +1473,15 @@ tests/integration/test_cellapp_integration.cpp
 7. C# 修改 [Replicated] 属性 → 客户端收到 `0xF001(CellAoIEnvelope: EntityPropertyUpdate)`
 8. Controller: MoveToPoint → 实体平滑移动
 9. 1000 实体同空间 → tick 性能测量
+10. **RPC 安全校验（对齐 DEF_GENERATOR Step 11 C++ 测试）:**
+    - 非 exposed Cell RPC → BaseApp 拒绝
+    - Exposed OWN_CLIENT Cell RPC → 接受 owner 调用
+    - Exposed OWN_CLIENT Cell RPC → 拒绝非 owner 调用（CellApp sourceEntityID 校验）
+    - Exposed ALL_CLIENTS Cell RPC → 接受任意调用
+    - 跨实体 Cell RPC + OWN_CLIENT → BaseApp 拒绝（target != proxy）
+    - 跨实体 Cell RPC + ALL_CLIENTS → BaseApp 接受并转发
+    - 非 exposed Base RPC → BaseApp 拒绝
+    - 内部 Base→Cell RPC (InternalCellRpc) → CellApp 直接执行（无校验）
 
 ---
 
@@ -1259,6 +1518,7 @@ src/lib/clrscript/                      (扩展)
 
 src/server/baseapp/                     (扩展)
 ├── baseapp.hpp / .cpp
+├── baseapp_messages.hpp                (新增 ClientBaseRpc / ClientCellRpc)
 
 tests/unit/
 ├── test_range_list.cpp
@@ -1277,12 +1537,26 @@ tests/integration/
 
 ## 7. 依赖关系与执行顺序
 
+### 7.0 已知代码差异 / 前置修复项
+
+Phase 10 开始前需确认或修复以下已知问题：
+
+| # | 严重度 | 文件 | 问题 | 修复方式 |
+|---|--------|------|------|---------|
+| 1 | 高 | `baseapp_messages.hpp` | `ClientCellRpc` (2023) 仅保留消息 ID，**无 struct 定义和 handler** | Step 10.9 新增 struct + handler |
+| 2 | 高 | `baseapp_messages.hpp` | `ReplicatedDeltaFromCell` (2015) 标记为 **Unreliable**，不能用于有序属性 delta (`event_seq`) | 属性 delta 走 `SelfRpcFromCell` (Reliable)；`ReplicatedDeltaFromCell` 仅用于 Volatile 位置更新 |
+| 3 | 中 | `DeltaSyncEmitter.cs` / `entity_def_registry.hpp` | C# `ReplicationScope` 只有 4 值 (0-3)，C++ 有 8 值 (0-7)，枚举值含义不同（C# AllClients=3 vs C++ AllClients=4）。当前 `>=` 过滤因数值巧合而正确，但不可扩展 | Phase 10 采用 .def 定义后须改为显式 scope 匹配 |
+| 4 | 中 | `client_native_provider.cpp` | `send_cell_rpc()` 是 stub（仅打日志），客户端无法调用 Cell RPC | Step 10.10 集成测试前须实现（依赖 Step 10.9 的 `ClientCellRpc` struct） |
+
 ```
+前置: DEF_GENERATOR Step 5  ← EntityDefRegistry 扩展 (.def 解析、find_rpc、is_exposed)
+      (CellApp RPC 校验和 BaseApp 外部接口都依赖 EntityDefRegistry)
+
 Step 10.1: RangeList               ← 无依赖, 纯算法
 Step 10.2: RangeTrigger            ← 依赖 10.1
     │
 Step 10.3: Controller              ← 无依赖, 可与 10.1 并行
-Step 10.6: 消息定义                ← 无依赖, 可并行
+Step 10.6: 消息定义                ← 无依赖, 可并行（含 ClientCellRpcForward / InternalCellRpc）
     │
 Step 10.4: Space + CellEntity      ← 依赖 10.1 + 10.2 + 10.3
     │
@@ -1290,14 +1564,15 @@ Step 10.5: Witness / AOI           ← 依赖 10.2 + 10.4
     │
 Step 10.7: NativeApi 扩展          ← 依赖 10.3 + 10.4
     │
-Step 10.8: CellApp 进程            ← 依赖 10.4 + 10.5 + 10.6 + 10.7
-Step 10.9: BaseApp 集成            ← 依赖 10.6 + 10.8
+Step 10.8: CellApp 进程            ← 依赖 10.4 + 10.5 + 10.6 + 10.7 + DEF_GENERATOR Step 5
+Step 10.9: BaseApp 集成            ← 依赖 10.6 + 10.8 + DEF_GENERATOR Step 5-6
 Step 10.10: 集成测试               ← 依赖全部
 ```
 
 **推荐执行顺序:**
 
 ```
+第 0 轮 (前置): DEF_GENERATOR Step 5 — EntityDefRegistry .def 解析扩展
 第 1 轮 (并行): 10.1 RangeList + 10.3 Controller + 10.6 消息定义
 第 2 轮:        10.2 RangeTrigger
 第 3 轮 (并行): 10.4 Space/CellEntity + 10.7 NativeApi
@@ -1318,7 +1593,11 @@ Step 10.10: 集成测试               ← 依赖全部
 | `RangeTrigger` + 2D 交叉检测 | `RangeTrigger` **完全对齐** | 滞后老位置 + 先扩后缩 |
 | `Witness` 优先级堆 + 带宽控制 | `Witness` 对齐设计 | delta 来自 C#，但 `EntityCache` 仍保留发送进度 |
 | `eventHistory` + `PropertyOwnerLink` | `replication_state_` + `EntityCache.last_*_seq` | **核心简化**，而不是去掉观察者侧状态 |
-| `EntityPopulation` (全局 map) | `entity_population_` (CellApp 成员) | 相同模式 |
+| `EntityPopulation` (全局 map) | `entity_population_` + `base_entity_population_` | 双索引：cell_id 内部路由 + base_id RPC 路由 |
+| `runExposedMethod` (REAL_ONLY) | `ClientCellRpcForward` (3003) | 客户端→Cell，含 sourceEntityID 校验 |
+| `runScriptMethod` (REAL_ONLY) | `InternalCellRpc` (3004) | Base→Cell 内部，无校验 |
+| `cellEntityMethod` (外部接口) | `ClientCellRpc` (2023) | BaseApp 外部接口，客户端入口（Phase 10 新增 struct） |
+| `baseEntityMethod` (外部接口) | `ClientBaseRpc` (2022) | BaseApp 外部接口，客户端入口 |
 | `Space` + `Cell` 分离 | `Space` = `Cell` (初期) | Phase 11 分离 |
 | `RealEntity` + `Ghost` | 仅 Real (Phase 11 扩展) | 渐进 |
 | 20+ Controller 子类 | 3 个 (MoveToPoint/Timer/Proximity) | C# 可扩展 |
@@ -1356,9 +1635,16 @@ BigWorld 的 RangeList 是经过 15 年 MMO 生产验证的核心算法。其巧
 `SerializeReplicatedDelta()` 与全量快照 `SerializeForOwnerClient()` /
 `SerializeForOtherClients()`，不足以直接完成 BigWorld 风格的 AOI 增量同步。
 
-补包规则：
-- 属性事件流必须保持顺序；若缺失中间 delta，则退回 snapshot/refresh
-- volatile 位置流采用 latest-wins；观察者落后时直接发送最新 absolute 位置即可
+**补包规则（两种流的语义截然不同，不可混淆）：**
+
+| 流 | 语义 | 丢包/落后处理 | 原因 |
+|---|---|---|---|
+| **属性事件流** (`event_seq`) | 有序、累积 | 必须按序补发 delta；若断档超出 history 窗口则退回 snapshot/refresh | 属性变更不可跳过，否则客户端状态永久偏离 |
+| **Volatile 位置流** (`volatile_seq`) | Latest-wins | 直接发送最新 absolute 位置，丢弃中间帧 | 位置是瞬时状态，旧值无意义，补发反而浪费带宽 |
+
+这两种流在 `EntityCache` 中各自独立追踪（`last_event_seq` / `last_volatile_seq`），
+Witness 在 `send_entity_update()` 中分别处理。BigWorld 的 `lastEventNumber_` /
+`lastVolatileUpdateNumber_` 采用相同分治策略。
 
 ### 9.3 位置仍在 C++ 管理
 
@@ -1384,22 +1670,54 @@ C++ 直接读取 position 驱动 RangeList。
 `send_client_rpc()` 在两个进程中行为不同:
 - **BaseApp:** 直接发送到 Proxy 的客户端 Channel
 - **CellApp:** Phase 10 首阶段按观察者逐个展开，
-  使用观察者 `base_entity_id` 回送 `SelfRpcFromCell` / `ReplicatedDeltaFromCell`；
+  属性 delta 经 `SelfRpcFromCell` (Reliable) 回送，Volatile 位置经 `ReplicatedDeltaFromCell` (Unreliable) 回送；
   后续如扩展 BaseApp observer fan-out，再把 `BroadcastRpcFromCell` 用作聚合优化
 
 同一个 C# 代码 `entity.Client.ShowDamage()` 在不同进程自动路由到正确路径。
 
-### 9.6 EntityID 分层
+### 9.6 EntityID 分层与 RPC 路由
 
 当前代码里 `BaseEntity` 已经持有 `cell_entity_id_ + cell_addr_`，说明需要区分：
 - `base_entity_id`: BaseApp / 客户端可见的稳定实体标识
 - `cell_entity_id`: CellApp 内部路由标识，可在未来 offload/重建时变化
 
-因此：
+**RPC 路由的 ID 空间选择（对齐 DEF_GENERATOR_DESIGN）：**
+
+DEF_GENERATOR_DESIGN Step 8-9 中的 `target_entity_id` 和 `source_entity_id` 均在
+`base_entity_id` 空间中：
+- 客户端发送 `ClientCellRpc` 时填写的 `target_entity_id` 是 `base_entity_id`（客户端只知道这个）
+- BaseApp 嵌入的 `source_entity_id = proxy.entity_id()` 也是 `base_entity_id`
+- CellApp 的 `on_client_cell_rpc_forward()` 使用 `base_entity_population_` 索引定位实体
+- OWN_CLIENT 校验 `target_entity_id != source_entity_id` 在 `base_entity_id` 空间比较
+
+因此 CellApp 维护双索引：
+- `entity_population_`: `cell_entity_id` → `CellEntity*`（内部管理、生命周期）
+- `base_entity_population_`: `base_entity_id` → `CellEntity*`（RPC 路由、AOI 下行）
+
+其余规则不变：
 - CellApp 运行时中的 C# `EntityId` 应与 `cell_entity_id` 对齐，由 C++ 分配后通过
   `RestoreEntity(cell_entity_id, ...)` 注入脚本层；其高 8 位应复用 `ProcessType::CellApp`
 - CellApp → BaseApp 的创建/销毁/迁移消息可以带 `cell_entity_id`
-- 面向客户端的 AOI/RPC/属性更新 payload 必须携带稳定的可见实体 ID，当前优先使用
-  `base_entity_id`，不能直接泄露 CellApp 局部 ID
-- 若后续引入“纯 Cell、无 Base 对应物”的实体，则需要额外定义稳定的 `public_entity_id`
-  层；在本阶段先把范围限定为“客户端可见实体均有 Base 对应物”
+- 面向客户端的 AOI/RPC/属性更新 payload 必须携带稳定的 `base_entity_id`，不能直接泄露 CellApp 局部 ID
+- 若后续引入”纯 Cell、无 Base 对应物”的实体，则需要额外定义稳定的 `public_entity_id`
+  层；在本阶段先把范围限定为”客户端可见实体均有 Base 对应物”
+
+### 9.7 RPC 安全校验：双消息 + 四层纵深
+
+**决策: CellApp 接收 RPC 拆分为 `ClientCellRpcForward` 和 `InternalCellRpc` 两条消息。**
+
+这是 BigWorld 的核心安全设计（`runExposedMethod` vs `runScriptMethod`），拆分的原因：
+
+1. **安全边界清晰**：客户端路径需要 Exposed 校验 + direction 验证 + sourceEntityID 验证；内部路径来自可信 BaseApp，无需任何校验
+2. **不可混淆来源**：合并为一条消息需要额外的 `is_from_client` 标志，而标志本身可能被错误设置
+3. **对齐 BigWorld REAL_ONLY 语义**：Phase 11 引入 Ghost 时，两条消息都标记为 REAL_ONLY，Ghost 透明转发
+
+安全校验全链路（四层纵深，对齐 BigWorld Section 4.1-4.5）：
+
+| 层 | 位置 | 检查 | 拒绝时 |
+|---|---|---|---|
+| 第 1 层 | BaseApp `on_client_cell_rpc()` | `is_exposed(rpc_id)` | 丢弃 + 日志 |
+| 第 1.5 层 | BaseApp `on_client_cell_rpc()` | `direction() == 0x02`（防止 Base RPC 走 Cell 通道） | 丢弃 + 日志 |
+| 第 2 层 | BaseApp `on_client_cell_rpc()` | 跨实体 + 非 ALL_CLIENTS | 丢弃 + 日志 |
+| 第 3 层 | CellApp `on_client_cell_rpc_forward()` | `direction() == 0x02`（纵深校验） | 丢弃 + 日志 |
+| 第 4 层 | CellApp `on_client_cell_rpc_forward()` | OWN_CLIENT + source != target | 丢弃 + 日志 |

@@ -21,7 +21,7 @@
 - [ ] `Atlas.ClientSDK` 可发布为 NuGet 包，Unity 可引用
 - [ ] 客户端可登录 Atlas 集群（LoginApp → BaseApp 完整流程）
 - [ ] 客户端可接收 AOI 内实体的创建/销毁/属性更新
-- [ ] 客户端可调用 `[ServerRpc]` 方法（编译期类型安全）
+- [ ] 客户端可调用 exposed cell/base 方法（编译期类型安全）
 - [ ] 客户端可接收 `[ClientRpc]` 调用（Source Generator 分发）
 - [ ] `AvatarFilter` 位置插值工作平滑（延迟自适应）
 - [ ] 断线检测可工作，提供重连 API
@@ -84,7 +84,7 @@
 │  │ 服务端生成            │  │ 客户端生成                │           │
 │  │ SerializeReplicatedΔ │  │ ApplyReplicatedDelta     │           │
 │  │ [ClientRpc] 发送存根  │  │ [ClientRpc] 接收分发     │           │
-│  │ [ServerRpc] 接收分发  │  │ [ServerRpc] 发送存根     │           │
+│  │ [CellRpc] 接收分发   │  │ Exposed RPC 发送存根     │           │
 │  │ EntityFactory         │  │ EntityFactory            │           │
 │  └──────────────────────┘  └──────────────────────────┘           │
 └────────────────────────────────────────────────────────────────────┘
@@ -114,7 +114,8 @@ Source Generator 检查 `ATLAS_CLIENT` / `ATLAS_SERVER` 条件生成不同方向
 |------|-----|------|------|
 | `LoginRequest` | 5000 | LoginApp | 登录（已在 Phase 9 定义） |
 | `Authenticate` | 2020 | BaseApp | 当前代码已实现 |
-| `ServerRpcCall` | 10001 | BaseApp | 目标协议，未实现 |
+| `ClientBaseRpc` | 2022 | BaseApp | 目标协议，未实现 |
+| `ClientCellRpc` | 2023 | BaseApp | 目标协议，未实现 |
 | `EnableEntities` | 10002 | BaseApp | 目标协议，未实现 |
 | `AvatarUpdate` | 10010 | BaseApp → CellApp | 目标协议，未实现 |
 | `Heartbeat` | 10003 | BaseApp | 目标协议，未实现 |
@@ -258,9 +259,9 @@ public sealed class AtlasClient : IDisposable
 
     // ========== RPC ==========
 
-    /// <summary>调用 [ServerRpc] (由 Source Generator 的 Mailbox 代理调用)</summary>
-    public void SendServerRpc(uint entityId, uint rpcId,
-                               ReadOnlySpan<byte> payload);
+    /// <summary>调用 exposed cell/base 方法 (由 Source Generator 的 Mailbox 代理调用)</summary>
+    public void SendExposedRpc(uint entityId, uint rpcId,
+                                ReadOnlySpan<byte> payload);
 
     // ========== 位置 ==========
 
@@ -632,8 +633,8 @@ Unity Client                   BaseApp          CellApp
   │    → entity.ApplyReplicatedDelta()             │
   │    → EntityUpdated event      │                │
   │                               │                │
-  │ 调用 [ServerRpc]:             │                │
-  │── ServerRpcCall(rpcId, args) →│── validate ───→│
+  │ 调用 exposed cell/base 方法:   │                │
+  │── ClientCellRpc(rpcId, args) →│── validate ───→│
   │                               │                │ C# RpcDispatcher
   │                               │                │ → entity.OnMethod()
   │                               │                │
@@ -652,11 +653,12 @@ Unity Client                   BaseApp          CellApp
 Source Generator 根据 `ATLAS_CLIENT` / `ATLAS_SERVER` 生成不同代码：
 
 ```csharp
-// [ServerRpc] — 服务端: 接收分发; 客户端: 发送存根
+// Exposed CellRpc — 服务端: 接收分发; 客户端: 发送存根
+// 客户端可达性由 .def 文件的 <exposed> 属性控制
 [Entity("Avatar")]
 public partial class Avatar : ServerEntity
 {
-    [ServerRpc]
+    [CellRpc]  // .def 中标记 exposed: OwnClient
     public partial void RequestMove(Vector3 target);
 }
 
@@ -672,7 +674,7 @@ public partial void RequestMove(Vector3 target)
 {
     var writer = new SpanWriter(32);
     writer.WriteVector3(target);
-    AtlasClient.Current.SendServerRpc(EntityId,
+    AtlasClient.Current.SendExposedRpc(EntityId,
         RpcIds.Avatar_RequestMove, writer.WrittenSpan);
     writer.Dispose();
 }
@@ -819,8 +821,8 @@ src/csharp/Atlas.Generators.Entity/     (更新: 检查 ATLAS_CLIENT)
 src/csharp/Atlas.Generators.Rpc/        (更新: 检查 ATLAS_CLIENT)
 ```
 
-- `ATLAS_CLIENT`: 生成 `ApplyReplicatedDelta()`、`[ServerRpc]` 发送存根、`[ClientRpc]` 接收分发
-- `ATLAS_SERVER`: 生成 `SerializeReplicatedDelta()`、`[ClientRpc]` 发送存根、`[ServerRpc]` 接收分发
+- `ATLAS_CLIENT`: 生成 `ApplyReplicatedDelta()`、exposed RPC 发送存根、`[ClientRpc]` 接收分发
+- `ATLAS_SERVER`: 生成 `SerializeReplicatedDelta()`、`[ClientRpc]` 发送存根、`[CellRpc]`/`[BaseRpc]` 接收分发
 
 ### Step 12.8: atlas_test_client 命令行工具
 
@@ -852,7 +854,7 @@ tests/csharp/Atlas.ClientSDK.Tests/
 3. 收到 CreateBasePlayer → CreateCellPlayer
 4. 发送 EnableEntities → 收到 AOI 实体
 5. 发送 AvatarUpdate → 收到其他实体的 PositionUpdate
-6. 发送 ServerRpc → 服务端 C# 处理
+6. 发送 exposed CellRpc → 服务端 C# 处理
 7. 服务端 ClientRpc → 客户端 C# 收到
 8. 属性变更 → 客户端 ApplyReplicatedDelta
 9. 断线 → Disconnected 事件

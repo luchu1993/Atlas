@@ -118,7 +118,7 @@ struct RpcDescriptor
 {
     std::string     name;
     uint32_t        rpc_id;         // 全局唯一 RPC ID
-    uint8_t         direction;      // 0=ClientRpc, 1=ServerRpc, 2=CellRpc, 3=BaseRpc
+    uint8_t         direction;      // 0=ClientRpc, 2=CellRpc, 3=BaseRpc (1=reserved)
     // 参数类型列表（用于日志/调试，不用于反序列化）
     std::vector<PropertyDataType> param_types;
 };
@@ -293,7 +293,7 @@ void on_client_rpc(uint16_t entity_type, uint32_t entity_id,
 {
     auto& registry = EntityDefRegistry::instance();
 
-    // 安全校验: 该 RPC ID 是否属于该实体类型的 ServerRpc
+    // 安全校验: 该 RPC ID 是否属于该实体类型且标记了 exposed
     if (!registry.validate_rpc(entity_type, rpc_id)) {
         ATLAS_LOG_WARNING("Invalid RPC {} for type {}", rpc_id, entity_type);
         return;
@@ -414,7 +414,7 @@ void update_entity_position(uint16_t type_id, uint32_t entity_id,
 
 - [ ] 扫描所有 `[Entity]` 类型
 - [ ] 收集 `[Replicated]`/`[Persistent]`/`[ServerOnly]` 属性
-- [ ] 收集 `[ClientRpc]`/`[ServerRpc]`/`[CellRpc]`/`[BaseRpc]` 方法
+- [ ] 收集 `[ClientRpc]`/`[CellRpc]`/`[BaseRpc]` 方法
 - [ ] 生成 `EntityTypeRegistry.RegisterAll()` 和每个类型的注册方法
 - [ ] 注册二进制格式与 C++ `register_type()` 反序列化对齐
 

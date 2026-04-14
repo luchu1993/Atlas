@@ -53,11 +53,11 @@ public partial class Avatar : ServerEntity
     [BaseRpc]
     public partial void OnCellDestroyed();
 
-    // Client → Server
-    [ServerRpc]
+    // Client → Cell (exposed in .def)
+    [CellRpc]  // .def: exposed: OwnClient
     public partial void RequestMove(Vector3 target);
 
-    [ServerRpc]
+    [CellRpc]  // .def: exposed: OwnClient
     public partial void RequestUseItem(int itemId);
 }
 ```
@@ -208,8 +208,8 @@ public partial class Avatar
 
 internal static partial class RpcDispatcher
 {
-    // 服务端收到客户端 RPC 时的分发
-    private static void Dispatch_Avatar_ServerRpc(
+    // CellApp 收到 CellRpc 时的分发（含 exposed 方法）
+    private static void Dispatch_Avatar_CellRpc(
         Avatar target, int rpcId, ref SpanReader reader)
     {
         switch (rpcId)
@@ -271,13 +271,11 @@ internal static partial class RpcIds
     public const int Avatar_PlayAnimation  = 0x0001_0002;
     public const int Avatar_ShowEffect     = 0x0001_0003;
 
-    // ServerRpc
-    public const int Avatar_RequestMove    = 0x0001_0101;
-    public const int Avatar_RequestUseItem = 0x0001_0102;
-
-    // CellRpc
-    public const int Avatar_MoveTo         = 0x0001_0201;
-    public const int Avatar_CastSkill      = 0x0001_0202;
+    // CellRpc (includes exposed methods callable by client)
+    public const int Avatar_CastSkill      = 0x0001_0201;
+    public const int Avatar_MoveTo         = 0x0001_0202;
+    public const int Avatar_RequestMove    = 0x0001_0203;
+    public const int Avatar_RequestUseItem = 0x0001_0204;
 
     // BaseRpc
     public const int Avatar_SaveData       = 0x0001_0301;
@@ -418,7 +416,7 @@ public abstract class ServerEntity
 
 **修改**: `Atlas.Generators.Rpc`
 
-- [ ] 为每个实体生成 `Dispatch_{Entity}_ServerRpc()` (服务端收 client→server)
+- [ ] 为每个实体生成 `Dispatch_{Entity}_CellRpc()` (CellApp 收，含 exposed 方法)
 - [ ] 为每个实体生成 `Dispatch_{Entity}_ClientRpc()` (客户端收 server→client)
 - [ ] 为每个实体生成 `Dispatch_{Entity}_CellRpc()` (CellApp 收)
 - [ ] 为每个实体生成 `Dispatch_{Entity}_BaseRpc()` (BaseApp 收)
@@ -445,7 +443,7 @@ public abstract class ServerEntity
 
 ### 任务 M.6: RPC ID 分配策略
 
-- [ ] ID 格式: `0xTTTT_DDNN` — TypeIndex(16bit) + Direction(8bit, 00=Client/01=Server/02=Cell/03=Base) + MethodIndex(8bit)
+- [ ] ID 格式: `0xTTTT_DDNN` — TypeIndex(16bit) + Direction(8bit, 00=Client/02=Cell/03=Base) + MethodIndex(8bit)
 - [ ] 编译期顺序分配: Source Generator 按 (EntityType 名称排序, RpcDirection, MethodName 排序) 递增赋值
 - [ ] 添加/删除方法可能改变已有 ID — 编译期诊断可检测客户端/服务端 wire-format 版本不匹配
 - [ ] 编译期诊断: TypeIndex 超过 65535 或 MethodIndex 超过 255 时报错
