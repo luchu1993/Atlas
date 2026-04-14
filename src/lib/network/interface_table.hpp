@@ -49,6 +49,14 @@ public:
     using PreDispatchHook = std::function<bool(MessageID, std::span<const std::byte>)>;
     void set_pre_dispatch_hook(PreDispatchHook hook) { pre_dispatch_hook_ = std::move(hook); }
 
+    // Try the pre-dispatch hook directly (used by Channel for unregistered messages).
+    auto try_pre_dispatch(MessageID id, std::span<const std::byte> payload) -> bool
+    {
+        if (pre_dispatch_hook_)
+            return pre_dispatch_hook_(id, payload);
+        return false;
+    }
+
 private:
     PagedSparseTable<MessageID, Entry> entries_;
     DefaultHandler default_handler_;

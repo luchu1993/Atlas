@@ -244,6 +244,14 @@ void TcpChannel::on_condemned()
     cancel_recv_buffer_shrink();
     cancel_write_buffer_shrink();
 
+    // Deregister from IOPoller to prevent stale events on condemned channels.
+    // The destructor also deregisters, but doing it here avoids the window
+    // between condemn and destruction where the poller could still fire.
+    if (socket_.is_valid())
+    {
+        (void)dispatcher_.deregister(socket_.fd());
+    }
+
     recv_buffer_.clear();
     recv_buffer_.shrink_to_fit();
 

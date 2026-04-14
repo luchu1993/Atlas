@@ -49,10 +49,10 @@ struct std::hash<atlas::Address>
 {
     auto operator()(const atlas::Address& addr) const noexcept -> std::size_t
     {
-        // Knuth multiplicative hash for IP, then FNV-1a mix with port.
-        // Avoids the high collision rate of a plain XOR.
-        std::size_t h = static_cast<std::size_t>(addr.ip()) * 2654435761u;
-        h ^= static_cast<std::size_t>(addr.port()) * 40503u;
+        // 64-bit mixing to avoid zero upper bits on 64-bit platforms.
+        auto h = static_cast<std::size_t>(addr.ip());
+        h *= std::size_t{0x9E3779B97F4A7C15ULL};
+        h ^= static_cast<std::size_t>(addr.port()) * std::size_t{0x517CC1B727220A95ULL};
         return h;
     }
 };

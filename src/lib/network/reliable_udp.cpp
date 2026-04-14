@@ -142,6 +142,21 @@ auto ReliableUdpChannel::send_unreliable() -> Result<void>
 
 auto ReliableUdpChannel::do_send(std::span<const std::byte> data) -> Result<size_t>
 {
+    // Auto-fragment if payload exceeds max UDP payload
+    if (data.size() > rudp::kMaxUdpPayload)
+    {
+        auto result = send_fragmented(data);
+        if (!result)
+            return result.error();
+        return data.size();
+    }
+
+    auto eff_wnd = effective_window();
+    if (unacked_.size() >= eff_wnd)
+    {
+        return Error(ErrorCode::WouldBlock, "Send window full");
+    }
+
     auto seq = next_send_seq_++;
 
     uint8_t flags = rudp::kFlagReliable | rudp::kFlagHasSeq;
@@ -182,7 +197,7 @@ void ReliableUdpChannel::on_condemned()
 auto ReliableUdpChannel::build_packet(uint8_t flags, SeqNum seq, std::span<const std::byte> payload,
                                       const FragmentHeader* frag) -> std::vector<std::byte>
 {
-    std::array<std::byte, 32> hdr_buf{};
+    std::array<std::byte, rudp::kMaxHeaderSize> hdr_buf{};
     std::size_t hdr_len = 0;
 
     hdr_buf[hdr_len++] = static_cast<std::byte>(flags);
@@ -281,6 +296,16 @@ void ReliableUdpChannel::on_datagram_received(std::span<const std::byte> data)
     auto remaining = reader.remaining();
     if (remaining == 0)
     {
+        // Zero-payload packet: still need to record seq for reliable packets
+        // so the sender receives an ACK and does not retransmit forever.
+        if (flags & rudp::kFlagHasSeq)
+        {
+            if (!is_duplicate(seq) && !seq_greater_than(seq, rcv_nxt_ + rcv_wnd_))
+            {
+                record_received_seq(seq);
+                schedule_delayed_ack();
+            }
+        }
         return;
     }
 
@@ -557,8 +582,14 @@ auto ReliableUdpChannel::send_fragmented(std::span<const std::byte> payload) -> 
         return Error(ErrorCode::WouldBlock, "Send window too small for fragmented message");
     }
 
+    // Skip IDs that collide with in-progress fragment reassembly
     auto frag_id = next_fragment_id_++;
+    while (pending_fragments_.contains(frag_id))
+        frag_id = next_fragment_id_++;
     auto frag_count = static_cast<uint8_t>(total);
+
+    // Record rollback point in case of partial send failure
+    auto rollback_seq = next_send_seq_;
 
     for (uint8_t i = 0; i < frag_count; ++i)
     {
@@ -583,6 +614,10 @@ auto ReliableUdpChannel::send_fragmented(std::span<const std::byte> payload) -> 
         auto result = shared_socket_.send_to(packet, remote_);
         if (!result)
         {
+            // Roll back: remove all fragments we just enqueued in unacked_
+            for (auto s = rollback_seq; s != next_send_seq_; ++s)
+                unacked_.erase(s);
+            next_send_seq_ = rollback_seq;
             return result.error();
         }
         bytes_sent_ += *result;
@@ -687,6 +722,11 @@ void ReliableUdpChannel::send_ack()
     if (result)
     {
         bytes_sent_ += *result;
+    }
+    else
+    {
+        ATLAS_LOG_DEBUG("RUDP send_ack failed to {}: {}", remote_.to_string(),
+                        result.error().message());
     }
     ack_pending_ = false;
 }
@@ -919,7 +959,9 @@ void ReliableUdpChannel::on_loss_cwnd_update(bool is_timeout)
 
 void ReliableUdpChannel::start_resend_timer()
 {
-    stop_resend_timer();
+    // Only start if not already running — avoids wasteful cancel+recreate cycles
+    if (resend_timer_.is_valid())
+        return;
 
     auto min_interval = rtt_.nodelay() ? Milliseconds(10) : Milliseconds(50);
     auto interval = std::max(rtt_.rto(), Duration(min_interval));

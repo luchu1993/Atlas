@@ -179,6 +179,7 @@ private:
     TimePoint last_rate_cleanup_{};
     static constexpr Duration kRateCleanupInterval = std::chrono::seconds(60);
 
+    static constexpr std::size_t kMaxChannels = 8192;
     static constexpr std::size_t kMaxDatagramSize = 64 * 1024;
     static constexpr std::size_t kMaxAcceptsPerCallback = 128;
     static constexpr std::size_t kMaxDatagramsPerCallback = 1024;

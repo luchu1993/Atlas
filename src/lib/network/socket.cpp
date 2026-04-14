@@ -2,7 +2,9 @@
 
 #include "foundation/log.hpp"
 
+#include <cstdio>
 #include <format>
+#include <utility>
 
 #if ATLAS_PLATFORM_WINDOWS
 #include <winsock2.h>
@@ -35,7 +37,12 @@ struct WinsockInit
     {
 #if ATLAS_PLATFORM_WINDOWS
         WSADATA wsa;
-        WSAStartup(MAKEWORD(2, 2), &wsa);
+        auto ret = WSAStartup(MAKEWORD(2, 2), &wsa);
+        if (ret != 0)
+        {
+            std::fprintf(stderr, "WSAStartup failed with error: %d\n", ret);
+            std::abort();
+        }
 #endif
     }
 
@@ -86,6 +93,7 @@ auto map_socket_error() -> atlas::Error
     {
         case EWOULDBLOCK:  // same as EAGAIN on most systems
         case EINPROGRESS:
+        case EINTR:
             return atlas::Error(atlas::ErrorCode::WouldBlock, "Operation would block");
         case ECONNREFUSED:
             return atlas::Error(atlas::ErrorCode::ConnectionRefused, "Connection refused");
@@ -133,10 +141,7 @@ Socket::~Socket()
     }
 }
 
-Socket::Socket(Socket&& other) noexcept : fd_(other.fd_)
-{
-    other.fd_ = kInvalidFd;
-}
+Socket::Socket(Socket&& other) noexcept : fd_(std::exchange(other.fd_, kInvalidFd)) {}
 
 Socket& Socket::operator=(Socket&& other) noexcept
 {
@@ -146,8 +151,7 @@ Socket& Socket::operator=(Socket&& other) noexcept
         {
             close();
         }
-        fd_ = other.fd_;
-        other.fd_ = kInvalidFd;
+        fd_ = std::exchange(other.fd_, kInvalidFd);
     }
     return *this;
 }
@@ -328,7 +332,8 @@ auto Socket::connect(const Address& addr) -> Result<void>
             return Error(ErrorCode::WouldBlock, "Connection in progress");
         }
 #endif
-        return map_socket_error();
+        // Use already-captured err instead of re-reading errno/WSAGetLastError
+        return Error(ErrorCode::IoError, std::format("connect failed: {}", err));
     }
     return {};
 }
@@ -388,39 +393,50 @@ auto Socket::send_iov(std::span<const IoVec> iov) -> Result<size_t>
         return size_t{0};
     }
 
-#if ATLAS_PLATFORM_WINDOWS
     static constexpr std::size_t kMaxBufs = 16;
-    WSABUF bufs[kMaxBufs];
-    auto count = std::min(iov.size(), kMaxBufs);
-    for (std::size_t i = 0; i < count; ++i)
+    size_t total_sent = 0;
+
+    // Process in batches of kMaxBufs to avoid silent truncation
+    for (std::size_t offset = 0; offset < iov.size(); offset += kMaxBufs)
     {
-        bufs[i].buf = reinterpret_cast<char*>(const_cast<std::byte*>(iov[i].data));
-        bufs[i].len = static_cast<ULONG>(iov[i].size);
-    }
-    DWORD sent = 0;
-    int result = ::WSASend(static_cast<SOCKET>(fd_), bufs, static_cast<DWORD>(count), &sent, 0,
-                           nullptr, nullptr);
-    if (result == SOCKET_ERROR)
-    {
-        return map_socket_error();
-    }
-    return static_cast<size_t>(sent);
+        auto count = std::min(iov.size() - offset, kMaxBufs);
+
+#if ATLAS_PLATFORM_WINDOWS
+        WSABUF bufs[kMaxBufs];
+        for (std::size_t i = 0; i < count; ++i)
+        {
+            bufs[i].buf = reinterpret_cast<char*>(const_cast<std::byte*>(iov[offset + i].data));
+            bufs[i].len = static_cast<ULONG>(iov[offset + i].size);
+        }
+        DWORD sent = 0;
+        int result = ::WSASend(static_cast<SOCKET>(fd_), bufs, static_cast<DWORD>(count), &sent, 0,
+                               nullptr, nullptr);
+        if (result == SOCKET_ERROR)
+        {
+            if (total_sent > 0)
+                return total_sent;
+            return map_socket_error();
+        }
+        total_sent += sent;
 #else
-    static constexpr std::size_t kMaxIov = 16;
-    struct iovec vecs[kMaxIov];
-    auto count = std::min(iov.size(), kMaxIov);
-    for (std::size_t i = 0; i < count; ++i)
-    {
-        vecs[i].iov_base = const_cast<std::byte*>(iov[i].data);
-        vecs[i].iov_len = iov[i].size;
-    }
-    auto sent = ::writev(fd_, vecs, static_cast<int>(count));
-    if (sent == -1)
-    {
-        return map_socket_error();
-    }
-    return static_cast<size_t>(sent);
+        struct iovec vecs[kMaxBufs];
+        for (std::size_t i = 0; i < count; ++i)
+        {
+            vecs[i].iov_base = const_cast<std::byte*>(iov[offset + i].data);
+            vecs[i].iov_len = iov[offset + i].size;
+        }
+        auto sent = ::writev(fd_, vecs, static_cast<int>(count));
+        if (sent == -1)
+        {
+            if (total_sent > 0)
+                return total_sent;
+            return map_socket_error();
+        }
+        total_sent += static_cast<size_t>(sent);
 #endif
+    }
+
+    return total_sent;
 }
 
 // ============================================================================

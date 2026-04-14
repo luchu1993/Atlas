@@ -1,6 +1,7 @@
 #pragma once
 
 #include "foundation/error.hpp"
+#include "foundation/log.hpp"
 #include "network/address.hpp"
 #include "serialization/binary_stream.hpp"
 
@@ -94,7 +95,10 @@ public:
         {
             callback_(source, channel, result.value());
         }
-        // If deserialization fails, silently discard (logged at dispatch level)
+        else
+        {
+            ATLAS_LOG_WARNING("Failed to deserialize message {} from {}", id, source.to_string());
+        }
     }
 
 private:

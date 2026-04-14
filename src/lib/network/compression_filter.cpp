@@ -1,6 +1,7 @@
 #include "network/compression_filter.hpp"
 
 #include "foundation/log.hpp"
+#include "serialization/binary_stream.hpp"
 
 #include <cstring>
 #include <zlib.h>
@@ -32,7 +33,7 @@ auto CompressionFilter::send_filter(std::span<const std::byte> data)
     std::vector<std::byte> output(kHeaderSize + compressed_bound);
 
     output[0] = static_cast<std::byte>(CompressionType::Deflate);
-    auto original_len = static_cast<uint32_t>(data.size());
+    auto original_len = endian::to_little(static_cast<uint32_t>(data.size()));
     std::memcpy(output.data() + 1, &original_len, sizeof(uint32_t));
 
     uLongf dest_len = compressed_bound;
@@ -83,8 +84,9 @@ auto CompressionFilter::recv_filter(std::span<const std::byte> data)
             return Error(ErrorCode::InvalidArgument, "CompressionFilter: truncated deflate header");
         }
 
-        uint32_t original_len;
-        std::memcpy(&original_len, data.data() + 1, sizeof(uint32_t));
+        uint32_t original_len_le;
+        std::memcpy(&original_len_le, data.data() + 1, sizeof(uint32_t));
+        auto original_len = endian::from_little(original_len_le);
 
         if (original_len > 16 * 1024 * 1024)
         {

@@ -131,7 +131,7 @@ private:
     Duration max_poll_wait_{Milliseconds(100)};
     Duration adaptive_poll_wait_{Milliseconds(1)};
     static constexpr Duration kMinPollWait{Microseconds(100)};
-    static constexpr Duration kMaxAdaptivePollWait{Milliseconds(100)};
+    static constexpr Duration kMaxAdaptivePollWait{Milliseconds(10)};
 };
 
 }  // namespace atlas

@@ -213,6 +213,12 @@ void Channel::dispatch_messages(std::span<const std::byte> frame_data)
             break;
         }
 
+        // Let pre-dispatch hook (RPC registry) consume reply messages first
+        if (interface_table_.try_pre_dispatch(id, *payload_span))
+        {
+            continue;
+        }
+
         if (!entry)
         {
             ATLAS_LOG_WARNING("Unknown message ID {} from {}", id, remote_.to_string());

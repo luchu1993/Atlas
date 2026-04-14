@@ -70,6 +70,14 @@ NetworkInterface::~NetworkInterface()
 
 auto NetworkInterface::start_tcp_server(const Address& addr) -> Result<void>
 {
+    // Close existing listen socket if called more than once
+    if (tcp_listen_socket_)
+    {
+        (void)dispatcher_.deregister(tcp_listen_socket_->fd());
+        tcp_listen_socket_->close();
+        tcp_listen_socket_.reset();
+    }
+
     auto sock = Socket::create_tcp();
     if (!sock)
     {
@@ -229,7 +237,12 @@ auto NetworkInterface::connect_udp(const Address& addr) -> Result<UdpChannel*>
 
     // Re-use existing channel if already targeting this peer
     if (auto it = channels_.find(addr); it != channels_.end())
-        return static_cast<UdpChannel*>(it->second.get());
+    {
+        auto* udp = dynamic_cast<UdpChannel*>(it->second.get());
+        if (!udp)
+            return Error(ErrorCode::AlreadyExists, "Channel exists with different protocol");
+        return udp;
+    }
 
     auto channel = std::make_unique<UdpChannel>(dispatcher_, interface_table_, *udp_socket_, addr);
     channel->set_channel_id(next_channel_id_++);
@@ -386,7 +399,10 @@ auto NetworkInterface::connect_rudp(const Address& addr, const RudpProfile& prof
     // Re-use existing channel if already connected to this peer
     if (auto it = channels_.find(addr); it != channels_.end())
     {
-        return static_cast<ReliableUdpChannel*>(it->second.get());
+        auto* rudp = dynamic_cast<ReliableUdpChannel*>(it->second.get());
+        if (!rudp)
+            return Error(ErrorCode::AlreadyExists, "Channel exists with different protocol");
+        return rudp;
     }
 
     auto channel =
@@ -425,7 +441,12 @@ auto NetworkInterface::connect_rudp_nocwnd(const Address& addr) -> Result<Reliab
 {
     // Re-use existing channel without changing its nocwnd flag
     if (auto it = channels_.find(addr); it != channels_.end())
-        return static_cast<ReliableUdpChannel*>(it->second.get());
+    {
+        auto* rudp = dynamic_cast<ReliableUdpChannel*>(it->second.get());
+        if (!rudp)
+            return Error(ErrorCode::AlreadyExists, "Channel exists with different protocol");
+        return rudp;
+    }
 
     auto result = connect_rudp(addr, cluster_rudp_profile());
     if (!result)
@@ -528,7 +549,11 @@ void NetworkInterface::on_tcp_accept()
             continue;
         }
 
-        (void)peer_sock.set_no_delay(true);
+        if (auto nd = peer_sock.set_no_delay(true); !nd)
+        {
+            ATLAS_LOG_WARNING("Failed to set TCP_NODELAY on accepted connection from {}: {}",
+                              peer_addr.to_string(), nd.error().message());
+        }
 
         auto channel = std::make_unique<TcpChannel>(dispatcher_, interface_table_,
                                                     std::move(peer_sock), peer_addr);
@@ -610,7 +635,7 @@ void NetworkInterface::on_udp_readable()
         auto it = channels_.find(src_addr);
         if (it == channels_.end())
         {
-            if (shutting_down_)
+            if (shutting_down_ || channels_.size() >= kMaxChannels)
             {
                 continue;
             }
@@ -666,7 +691,7 @@ void NetworkInterface::on_rudp_readable()
         auto it = channels_.find(src_addr);
         if (it == channels_.end())
         {
-            if (!rudp_server_mode_ || shutting_down_)
+            if (!rudp_server_mode_ || shutting_down_ || channels_.size() >= kMaxChannels)
                 continue;
 
             auto channel = std::make_unique<ReliableUdpChannel>(dispatcher_, interface_table_,
@@ -695,7 +720,14 @@ void NetworkInterface::on_rudp_readable()
 
 void NetworkInterface::on_channel_disconnect(Channel& channel)
 {
-    condemn_channel(channel.remote_address());
+    // Copy callback data before condemn_channel, which may re-enter
+    // on_channel_disconnect if the disconnect_callback_ triggers further
+    // disconnects (cascading). Condemning first ensures the channel is
+    // removed from the active set before any callback runs.
+    auto addr = channel.remote_address();
+    condemn_channel(addr);
+
+    // Invoke after condemn to avoid re-entrancy on the same channel.
     if (disconnect_callback_)
     {
         disconnect_callback_(channel);
@@ -714,9 +746,10 @@ void NetworkInterface::condemn_channel(const Address& addr)
     channels_.erase(it);
     channels_by_id_.erase(channel->channel_id());
 
-    // RUDP channels share a single socket — deregistering it would break all
-    // other RUDP channels. Only deregister for TCP (owns its own socket).
-    const bool shared_fd = rudp_socket_ && channel->fd() == rudp_socket_->fd();
+    // UDP and RUDP channels share a single socket — deregistering it would
+    // break all other channels on that socket. Only deregister for TCP.
+    const bool shared_fd = (rudp_socket_ && channel->fd() == rudp_socket_->fd()) ||
+                           (udp_socket_ && channel->fd() == udp_socket_->fd());
     if (!shared_fd)
         (void)dispatcher_.deregister(channel->fd());
     channel->condemn();

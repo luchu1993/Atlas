@@ -27,7 +27,8 @@ auto InterfaceTable::dispatch(const Address& source, Channel* channel, MessageID
         auto payload = data.data().subspan(data.position());
         if (pre_dispatch_hook_(id, payload))
         {
-            return {};  // message consumed by hook
+            data.skip(payload.size());  // advance reader past consumed message
+            return {};
         }
     }
 
