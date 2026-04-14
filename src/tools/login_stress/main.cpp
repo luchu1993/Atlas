@@ -44,7 +44,7 @@ struct Options
     std::size_t worker_index{0};
     std::size_t worker_count{1};
     int duration_sec{60};
-    int connect_timeout_ms{10'000};
+    int connect_timeout_ms{20'000};
     int retry_delay_ms{1'000};
     int hold_min_ms{30'000};
     int hold_max_ms{60'000};
@@ -429,7 +429,7 @@ void print_usage()
         << "  --duration-sec <n>         Total runtime in seconds (default: 60)\n"
         << "  --retry-delay-ms <n>       Delay before retry after failure/disconnect (default: "
            "1000)\n"
-        << "  --connect-timeout-ms <n>   Timeout for login/auth stages (default: 10000)\n"
+        << "  --connect-timeout-ms <n>   Timeout for login/auth stages (default: 20000)\n"
         << "  --hold-min-ms <n>          Min online hold time for normal sessions (default: "
            "30000)\n"
         << "  --hold-max-ms <n>          Max online hold time for normal sessions (default: "

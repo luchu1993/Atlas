@@ -249,6 +249,19 @@ public:
     /// Call from DBApp::on_tick_complete().
     virtual void process_results() = 0;
 
+    // =====================================================================
+    // Write batching
+    // =====================================================================
+
+    /// Begin a batch: all subsequent write operations share a single outer
+    /// transaction until end_batch() is called.  Individual operations use
+    /// SAVEPOINTs for per-operation rollback.  No-op if unsupported.
+    virtual void begin_batch() {}
+
+    /// Commit the batched transaction (if any writes occurred) and leave
+    /// batch mode.  No-op if unsupported or if no batch is active.
+    virtual void end_batch() {}
+
     /// Whether this backend supports multiple simultaneous DBApp instances.
     [[nodiscard]] virtual auto supports_multi_dbapp() const -> bool { return false; }
 

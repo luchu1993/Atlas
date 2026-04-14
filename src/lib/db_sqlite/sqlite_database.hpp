@@ -67,6 +67,9 @@ public:
 
     void process_results() override;
 
+    void begin_batch() override;
+    void end_batch() override;
+
 private:
     struct EntityRow
     {
@@ -113,12 +116,23 @@ private:
     [[nodiscard]] auto sqlite_error(std::string_view prefix, int code) const -> Error;
     void fire_or_defer(std::function<void()> cb);
 
+    // Write-scope helpers: in batch mode these use SAVEPOINTs inside a
+    // single outer transaction; outside batch mode they fall back to
+    // individual BEGIN IMMEDIATE / COMMIT / ROLLBACK.
+    [[nodiscard]] auto begin_write_scope() -> Result<std::string>;
+    void commit_write_scope(const std::string& scope);
+    void rollback_write_scope(const std::string& scope);
+
     sqlite3* db_{nullptr};
     const EntityDefRegistry* entity_defs_{nullptr};
     std::filesystem::path db_path_;
     bool started_{false};
     bool deferred_mode_{false};
     std::deque<std::function<void()>> deferred_;
+
+    bool batch_active_{false};
+    bool batch_txn_open_{false};
+    int batch_savepoint_seq_{0};
 
     static constexpr int kMaxCallbacksPerTick = 2048;
 };

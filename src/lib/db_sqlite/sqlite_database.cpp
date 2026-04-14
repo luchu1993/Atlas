@@ -187,21 +187,23 @@ void SqliteDatabase::put_entity(DatabaseID dbid, uint16_t type_id, WriteFlags fl
         return;
     }
 
-    // Wrap read-then-update in a transaction so checkout state cannot be
-    // modified between the fetch and the write (see checkout_entity for the
-    // same pattern).
-    auto begin_result = exec_sql("BEGIN IMMEDIATE");
-    if (!begin_result)
+    // Wrap read-then-update in a write scope so checkout state cannot be
+    // modified between the fetch and the write.  In batch mode this uses a
+    // SAVEPOINT inside the per-tick transaction; otherwise a standalone
+    // BEGIN IMMEDIATE / COMMIT.
+    auto scope_result = begin_write_scope();
+    if (!scope_result)
     {
-        result.error = std::string(begin_result.error().message());
+        result.error = std::string(scope_result.error().message());
         fire_or_defer([cb = std::move(callback), result]() mutable { cb(result); });
         return;
     }
+    auto scope = std::move(*scope_result);
 
     auto row_result = fetch_by_dbid(dbid, type_id);
     if (!row_result)
     {
-        (void)exec_sql("ROLLBACK");
+        rollback_write_scope(scope);
         result.error = std::string(row_result.error().message());
         fire_or_defer([cb = std::move(callback), result]() mutable { cb(result); });
         return;
@@ -210,7 +212,7 @@ void SqliteDatabase::put_entity(DatabaseID dbid, uint16_t type_id, WriteFlags fl
     auto row = std::move(*row_result);
     if (!row.found)
     {
-        (void)exec_sql("ROLLBACK");
+        rollback_write_scope(scope);
         result.error = std::format("entity ({},{}) not found", type_id, dbid);
         fire_or_defer([cb = std::move(callback), result]() mutable { cb(result); });
         return;
@@ -232,7 +234,7 @@ void SqliteDatabase::put_entity(DatabaseID dbid, uint16_t type_id, WriteFlags fl
         "updated_at_ms = ? WHERE dbid = ? AND type_id = ?");
     if (!stmt_result)
     {
-        (void)exec_sql("ROLLBACK");
+        rollback_write_scope(scope);
         result.error = std::string(stmt_result.error().message());
         fire_or_defer([cb = std::move(callback), result]() mutable { cb(result); });
         return;
@@ -272,7 +274,7 @@ void SqliteDatabase::put_entity(DatabaseID dbid, uint16_t type_id, WriteFlags fl
 
     if (rc != SQLITE_OK)
     {
-        (void)exec_sql("ROLLBACK");
+        rollback_write_scope(scope);
         if (result.error.empty())
             result.error =
                 std::string(sqlite_error("SqliteDatabase: update bind failed").message());
@@ -283,20 +285,13 @@ void SqliteDatabase::put_entity(DatabaseID dbid, uint16_t type_id, WriteFlags fl
     rc = sqlite3_step(stmt.get());
     if (rc != SQLITE_DONE)
     {
-        (void)exec_sql("ROLLBACK");
+        rollback_write_scope(scope);
         result.error = std::string(sqlite_error("SqliteDatabase: update failed", rc).message());
         fire_or_defer([cb = std::move(callback), result]() mutable { cb(result); });
         return;
     }
 
-    auto commit_result = exec_sql("COMMIT");
-    if (!commit_result)
-    {
-        (void)exec_sql("ROLLBACK");
-        result.error = std::string(commit_result.error().message());
-        fire_or_defer([cb = std::move(callback), result]() mutable { cb(result); });
-        return;
-    }
+    commit_write_scope(scope);
 
     result.success = true;
     result.dbid = dbid;
@@ -320,25 +315,26 @@ void SqliteDatabase::put_entity_with_password(DatabaseID dbid, uint16_t type_id,
 
     if (!(has_flag(flags, WriteFlags::CreateNew) || dbid == kInvalidDBID))
     {
-        auto begin_result = exec_sql("BEGIN IMMEDIATE");
-        if (!begin_result)
+        auto scope_result = begin_write_scope();
+        if (!scope_result)
         {
-            result.error = std::string(begin_result.error().message());
+            result.error = std::string(scope_result.error().message());
             fire_or_defer([cb = std::move(callback), result]() mutable { cb(result); });
             return;
         }
+        auto scope = std::move(*scope_result);
 
         auto row_result = fetch_by_dbid(dbid, type_id);
         if (!row_result)
         {
-            (void)exec_sql("ROLLBACK");
+            rollback_write_scope(scope);
             result.error = std::string(row_result.error().message());
             fire_or_defer([cb = std::move(callback), result]() mutable { cb(result); });
             return;
         }
         if (!row_result->found)
         {
-            (void)exec_sql("ROLLBACK");
+            rollback_write_scope(scope);
             result.error = std::format("entity ({},{}) not found", type_id, dbid);
             fire_or_defer([cb = std::move(callback), result]() mutable { cb(result); });
             return;
@@ -362,7 +358,7 @@ void SqliteDatabase::put_entity_with_password(DatabaseID dbid, uint16_t type_id,
             "WHERE dbid = ? AND type_id = ?");
         if (!stmt_result)
         {
-            (void)exec_sql("ROLLBACK");
+            rollback_write_scope(scope);
             result.error = std::string(stmt_result.error().message());
             fire_or_defer([cb = std::move(callback), result]() mutable { cb(result); });
             return;
@@ -411,7 +407,7 @@ void SqliteDatabase::put_entity_with_password(DatabaseID dbid, uint16_t type_id,
 
         if (rc != SQLITE_OK || sqlite3_step(stmt.get()) != SQLITE_DONE)
         {
-            (void)exec_sql("ROLLBACK");
+            rollback_write_scope(scope);
             if (result.error.empty())
                 result.error =
                     std::string(sqlite_error("SqliteDatabase: password update failed").message());
@@ -419,14 +415,7 @@ void SqliteDatabase::put_entity_with_password(DatabaseID dbid, uint16_t type_id,
             return;
         }
 
-        auto commit_result = exec_sql("COMMIT");
-        if (!commit_result)
-        {
-            (void)exec_sql("ROLLBACK");
-            result.error = std::string(commit_result.error().message());
-            fire_or_defer([cb = std::move(callback), result]() mutable { cb(result); });
-            return;
-        }
+        commit_write_scope(scope);
 
         result.success = true;
         result.dbid = dbid;
@@ -600,18 +589,19 @@ void SqliteDatabase::checkout_entity(DatabaseID dbid, uint16_t type_id,
     GetResult result;
     const auto now_ms = unix_time_ms();
 
-    auto begin_result = exec_sql("BEGIN IMMEDIATE");
-    if (!begin_result)
+    auto scope_result = begin_write_scope();
+    if (!scope_result)
     {
-        result.error = std::string(begin_result.error().message());
+        result.error = std::string(scope_result.error().message());
         fire_or_defer([cb = std::move(callback), result]() mutable { cb(result); });
         return;
     }
+    auto scope = std::move(*scope_result);
 
     auto row_result = fetch_by_dbid(dbid, type_id);
     if (!row_result)
     {
-        (void)exec_sql("ROLLBACK");
+        rollback_write_scope(scope);
         result.error = std::string(row_result.error().message());
         fire_or_defer([cb = std::move(callback), result]() mutable { cb(result); });
         return;
@@ -620,7 +610,7 @@ void SqliteDatabase::checkout_entity(DatabaseID dbid, uint16_t type_id,
     auto row = std::move(*row_result);
     if (!row.found)
     {
-        (void)exec_sql("ROLLBACK");
+        rollback_write_scope(scope);
         result.error = std::format("checkout: entity ({},{}) not found", type_id, dbid);
         fire_or_defer([cb = std::move(callback), result]() mutable { cb(result); });
         return;
@@ -628,7 +618,7 @@ void SqliteDatabase::checkout_entity(DatabaseID dbid, uint16_t type_id,
 
     if (row.checked_out_by.has_value())
     {
-        (void)exec_sql("ROLLBACK");
+        rollback_write_scope(scope);
         result.success = true;
         result.data = std::move(row.data);
         result.checked_out_by = row.checked_out_by;
@@ -643,7 +633,7 @@ void SqliteDatabase::checkout_entity(DatabaseID dbid, uint16_t type_id,
         "WHERE dbid = ? AND type_id = ? AND checked_out = 0");
     if (!update_result)
     {
-        (void)exec_sql("ROLLBACK");
+        rollback_write_scope(scope);
         result.error = std::string(update_result.error().message());
         fire_or_defer([cb = std::move(callback), result]() mutable { cb(result); });
         return;
@@ -666,7 +656,7 @@ void SqliteDatabase::checkout_entity(DatabaseID dbid, uint16_t type_id,
 
     if (rc != SQLITE_OK || sqlite3_step(stmt.get()) != SQLITE_DONE)
     {
-        (void)exec_sql("ROLLBACK");
+        rollback_write_scope(scope);
         result.error =
             std::string(sqlite_error("SqliteDatabase: checkout update failed").message());
         fire_or_defer([cb = std::move(callback), result]() mutable { cb(result); });
@@ -675,7 +665,7 @@ void SqliteDatabase::checkout_entity(DatabaseID dbid, uint16_t type_id,
 
     if (sqlite3_changes(db_) != 1)
     {
-        (void)exec_sql("ROLLBACK");
+        rollback_write_scope(scope);
         auto refreshed = fetch_by_dbid(dbid, type_id);
         if (refreshed && refreshed->found && refreshed->checked_out_by.has_value())
         {
@@ -692,14 +682,7 @@ void SqliteDatabase::checkout_entity(DatabaseID dbid, uint16_t type_id,
         return;
     }
 
-    auto commit_result = exec_sql("COMMIT");
-    if (!commit_result)
-    {
-        (void)exec_sql("ROLLBACK");
-        result.error = std::string(commit_result.error().message());
-        fire_or_defer([cb = std::move(callback), result]() mutable { cb(result); });
-        return;
-    }
+    commit_write_scope(scope);
 
     result.success = true;
     result.data = std::move(row.data);
@@ -714,20 +697,21 @@ void SqliteDatabase::checkout_entity_by_name(uint16_t type_id, const std::string
     GetResult result;
     const auto now_ms = unix_time_ms();
 
-    // Resolve name and checkout atomically within a single transaction so
+    // Resolve name and checkout atomically within a single write scope so
     // a concurrent rename/delete cannot cause us to check out a stale row.
-    auto begin_result = exec_sql("BEGIN IMMEDIATE");
-    if (!begin_result)
+    auto scope_result = begin_write_scope();
+    if (!scope_result)
     {
-        result.error = std::string(begin_result.error().message());
+        result.error = std::string(scope_result.error().message());
         fire_or_defer([cb = std::move(callback), result]() mutable { cb(result); });
         return;
     }
+    auto scope = std::move(*scope_result);
 
     auto lookup = fetch_by_name(type_id, identifier);
     if (!lookup)
     {
-        (void)exec_sql("ROLLBACK");
+        rollback_write_scope(scope);
         result.error = std::string(lookup.error().message());
         fire_or_defer([cb = std::move(callback), result]() mutable { cb(result); });
         return;
@@ -735,7 +719,7 @@ void SqliteDatabase::checkout_entity_by_name(uint16_t type_id, const std::string
 
     if (!lookup->found)
     {
-        (void)exec_sql("ROLLBACK");
+        rollback_write_scope(scope);
         result.error = std::format("checkout_by_name: '{}' not found", identifier);
         fire_or_defer([cb = std::move(callback), result]() mutable { cb(result); });
         return;
@@ -745,7 +729,7 @@ void SqliteDatabase::checkout_entity_by_name(uint16_t type_id, const std::string
 
     if (lookup->checked_out_by.has_value())
     {
-        (void)exec_sql("ROLLBACK");
+        rollback_write_scope(scope);
         result.success = true;
         result.data = std::move(lookup->data);
         result.checked_out_by = lookup->checked_out_by;
@@ -760,7 +744,7 @@ void SqliteDatabase::checkout_entity_by_name(uint16_t type_id, const std::string
         "WHERE dbid = ? AND type_id = ? AND checked_out = 0");
     if (!update_result)
     {
-        (void)exec_sql("ROLLBACK");
+        rollback_write_scope(scope);
         result.error = std::string(update_result.error().message());
         fire_or_defer([cb = std::move(callback), result]() mutable { cb(result); });
         return;
@@ -783,7 +767,7 @@ void SqliteDatabase::checkout_entity_by_name(uint16_t type_id, const std::string
 
     if (rc != SQLITE_OK || sqlite3_step(stmt.get()) != SQLITE_DONE)
     {
-        (void)exec_sql("ROLLBACK");
+        rollback_write_scope(scope);
         result.error =
             std::string(sqlite_error("SqliteDatabase: checkout_by_name update failed").message());
         fire_or_defer([cb = std::move(callback), result]() mutable { cb(result); });
@@ -792,7 +776,7 @@ void SqliteDatabase::checkout_entity_by_name(uint16_t type_id, const std::string
 
     if (sqlite3_changes(db_) != 1)
     {
-        (void)exec_sql("ROLLBACK");
+        rollback_write_scope(scope);
         auto refreshed = fetch_by_dbid(dbid, type_id);
         if (refreshed && refreshed->found && refreshed->checked_out_by.has_value())
         {
@@ -809,14 +793,7 @@ void SqliteDatabase::checkout_entity_by_name(uint16_t type_id, const std::string
         return;
     }
 
-    auto commit_result = exec_sql("COMMIT");
-    if (!commit_result)
-    {
-        (void)exec_sql("ROLLBACK");
-        result.error = std::string(commit_result.error().message());
-        fire_or_defer([cb = std::move(callback), result]() mutable { cb(result); });
-        return;
-    }
+    commit_write_scope(scope);
 
     result.success = true;
     result.data = std::move(lookup->data);
@@ -1019,6 +996,95 @@ void SqliteDatabase::process_results()
         auto cb = std::move(deferred_.front());
         deferred_.pop_front();
         cb();
+    }
+}
+
+// ============================================================================
+// Batch-transaction support
+// ============================================================================
+
+void SqliteDatabase::begin_batch()
+{
+    batch_active_ = true;
+    batch_savepoint_seq_ = 0;
+}
+
+void SqliteDatabase::end_batch()
+{
+    if (batch_active_ && batch_txn_open_)
+    {
+        auto r = exec_sql("COMMIT");
+        if (!r)
+        {
+            ATLAS_LOG_ERROR("SqliteDatabase: batch COMMIT failed: {}", r.error().message());
+        }
+        batch_txn_open_ = false;
+    }
+    batch_active_ = false;
+    batch_savepoint_seq_ = 0;
+}
+
+auto SqliteDatabase::begin_write_scope() -> Result<std::string>
+{
+    if (!batch_active_)
+    {
+        // Non-batch: open an individual transaction.
+        auto r = exec_sql("BEGIN IMMEDIATE");
+        if (!r)
+            return r.error();
+        return std::string{};
+    }
+
+    // Batch mode: lazily open the outer transaction on first write.
+    if (!batch_txn_open_)
+    {
+        auto r = exec_sql("BEGIN IMMEDIATE");
+        if (!r)
+            return r.error();
+        batch_txn_open_ = true;
+    }
+
+    auto name = std::format("sp_{}", ++batch_savepoint_seq_);
+    auto r = exec_sql(std::format("SAVEPOINT {}", name));
+    if (!r)
+        return r.error();
+    return name;
+}
+
+void SqliteDatabase::commit_write_scope(const std::string& scope)
+{
+    if (scope.empty())
+    {
+        // Non-batch: individual COMMIT.
+        auto r = exec_sql("COMMIT");
+        if (!r)
+        {
+            ATLAS_LOG_ERROR("SqliteDatabase: COMMIT failed: {}", r.error().message());
+        }
+    }
+    else
+    {
+        // Batch: release the savepoint.
+        auto r = exec_sql(std::format("RELEASE {}", scope));
+        if (!r)
+        {
+            ATLAS_LOG_ERROR("SqliteDatabase: RELEASE {} failed: {}", scope, r.error().message());
+        }
+    }
+}
+
+void SqliteDatabase::rollback_write_scope(const std::string& scope)
+{
+    if (scope.empty())
+    {
+        // Non-batch: individual ROLLBACK.
+        (void)exec_sql("ROLLBACK");
+    }
+    else
+    {
+        // Batch: roll back to the savepoint, then release it.
+        (void)exec_sql(std::format("ROLLBACK TO {}", scope));
+        (void)exec_sql(std::format("RELEASE {}", scope));
     }
 }
 

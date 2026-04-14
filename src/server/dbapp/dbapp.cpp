@@ -70,6 +70,7 @@ auto DBApp::init(int argc, char* argv[]) -> bool
         return false;
     }
     database_->set_deferred_mode(true);
+    database_->begin_batch();
 
     // ---- Register message handlers ------------------------------------------
     auto& table = network().interface_table();
@@ -160,6 +161,7 @@ void DBApp::fini()
     }
     if (database_)
     {
+        database_->end_batch();
         database_->shutdown();
         database_.reset();
     }
@@ -174,7 +176,11 @@ void DBApp::on_tick_complete()
 {
     ManagerApp::on_tick_complete();
     if (database_)
-        database_->process_results();
+    {
+        database_->end_batch();        // Commit batched writes from this tick
+        database_->process_results();  // Pump deferred callbacks
+        database_->begin_batch();      // Open batch for next tick
+    }
     if (id_allocator_)
         id_allocator_->persist_if_needed([](bool) {});
 }

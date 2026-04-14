@@ -47,7 +47,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--hold-min-ms", type=int, default=30000)
     parser.add_argument("--hold-max-ms", type=int, default=60000)
     parser.add_argument("--retry-delay-ms", type=int, default=1000)
-    parser.add_argument("--connect-timeout-ms", type=int, default=10000)
+    parser.add_argument("--connect-timeout-ms", type=int, default=20000)
     parser.add_argument("--account-type-id", type=int, default=1)
     parser.add_argument("--source-ip", action="append", default=[])
     parser.add_argument("--source-ip-file")
@@ -226,12 +226,19 @@ def start_logged_process(
         **popen_kwargs,
     )
 
+    # Close the parent's copy of the file handles.  The child already has
+    # its own inherited copy and will keep writing to it.  Closing here
+    # prevents handle leakage to subsequent Popen() calls on Windows
+    # (bInheritHandles=TRUE inherits ALL open inheritable handles).
+    stdout_handle.close()
+    stderr_handle.close()
+
     return LoggedProcess(
         name=name,
         start_order=0,
         process=process,
-        stdout_handle=stdout_handle,
-        stderr_handle=stderr_handle,
+        stdout_handle=None,
+        stderr_handle=None,
     )
 
 
@@ -267,8 +274,10 @@ def stop_logged_processes(processes: list[LoggedProcess]) -> None:
                 except subprocess.TimeoutExpired:
                     pass
 
-        entry.stdout_handle.close()
-        entry.stderr_handle.close()
+        if entry.stdout_handle:
+            entry.stdout_handle.close()
+        if entry.stderr_handle:
+            entry.stderr_handle.close()
 
 
 def wait_for_registration(
@@ -660,8 +669,10 @@ def main() -> int:
 
                 for worker_proc in stress_workers:
                     return_code = worker_proc.process.wait()
-                    worker_proc.stdout_handle.close()
-                    worker_proc.stderr_handle.close()
+                    if worker_proc.stdout_handle:
+                        worker_proc.stdout_handle.close()
+                    if worker_proc.stderr_handle:
+                        worker_proc.stderr_handle.close()
                     worker_proc.stdout_handle = None
                     worker_proc.stderr_handle = None
                     if return_code != 0:
