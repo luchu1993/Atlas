@@ -1,6 +1,8 @@
 #pragma once
 
-#include "dbapp/dbapp_messages.hpp"
+#include "coro/cancellation.hpp"
+#include "coro/fire_and_forget.hpp"
+#include "coro/pending_rpc_registry.hpp"
 #include "foundation/time.hpp"
 #include "login_messages.hpp"
 #include "server/entity_types.hpp"
@@ -21,15 +23,14 @@ class Channel;
 // ============================================================================
 // LoginApp — client authentication and login orchestration
 //
-// Login flow:
+// Login flow (coroutine-based):
 //   1. Client connects → LoginRequest
-//   2. LoginApp → DBApp: AuthLogin (validate credentials)
-//   3. DBApp → LoginApp: AuthLoginResult
-//   4. LoginApp → BaseAppMgr: AllocateBaseApp
-//   5. BaseAppMgr → LoginApp: AllocateBaseAppResult
-//   6. LoginApp → BaseApp: PrepareLogin (creates Proxy entity)
-//   7. BaseApp → LoginApp: PrepareLoginResult (entity_id + ready)
-//   8. LoginApp → Client: LoginResult (external_addr + session_key)
+//   2. co_await rpc_call<AuthLoginResult>     → DBApp auth
+//   3. co_await rpc_call<AllocateBaseAppResult> → BaseAppMgr picks BaseApp
+//   4. co_await rpc_call<PrepareLoginResult>  → BaseApp creates Proxy entity
+//   5. LoginApp → Client: LoginResult (external_addr + session_key)
+//
+// Rollback: ScopeGuard + CancellationToken ensure cleanup on any failure.
 // ============================================================================
 
 class LoginApp : public ManagerApp
@@ -49,51 +50,18 @@ protected:
 private:
     friend class LoginRollbackTest;
 
-    // ---- Pending login state machine ----------------------------------------
-    enum class PendingStage : uint8_t
-    {
-        WaitingAuth = 0,
-        WaitingBaseApp,
-        WaitingCheckout,
-        WaitingPrepare,
-    };
-
-    struct PendingLogin
-    {
-        uint32_t request_id{0};
-        uint64_t client_channel_id{0};
-        Address client_addr;
-        std::string username;
-        PendingStage stage{PendingStage::WaitingAuth};
-        DatabaseID dbid{kInvalidDBID};
-        uint16_t type_id{0};
-        SessionKey session_key;
-        Address baseapp_internal_addr;
-        Address baseapp_external_addr;
-        TimePoint created_at{};
-        std::vector<std::byte> entity_blob;
-    };
-
     // ---- Message handlers ---------------------------------------------------
     void on_login_request(const Address& src, Channel* ch, const login::LoginRequest& msg);
-    void on_auth_login_result(const Address& src, Channel* ch, const login::AuthLoginResult& msg);
-    void on_allocate_baseapp_result(const Address& src, Channel* ch,
-                                    const login::AllocateBaseAppResult& msg);
-    void on_prepare_login_result(const Address& src, Channel* ch,
-                                 const login::PrepareLoginResult& msg);
-    void on_checkout_entity_ack(const Address& src, Channel* ch,
-                                const dbapp::CheckoutEntityAck& msg);
+
+    // ---- Coroutine login flow -----------------------------------------------
+    auto handle_login_coro(uint64_t client_channel_id, Address client_addr,
+                           login::LoginRequest request) -> FireAndForget;
 
     // ---- Internal helpers ---------------------------------------------------
     void on_client_disconnect(Channel& ch);
-    void cancel_prepare_login(const PendingLogin& pending);
-    void abandon_pending_login(std::unordered_map<uint32_t, PendingLogin>::iterator it);
     void send_login_error(uint64_t client_channel_id, login::LoginStatus status,
                           const std::string& msg);
-    void remove_pending(std::unordered_map<uint32_t, PendingLogin>::iterator it);
-    void cleanup_expired_logins();
     void cleanup_stale_rate_entries(TimePoint now);
-    void cleanup_canceled_requests(TimePoint now);
 
     [[nodiscard]] auto is_rate_limited(const Address& src) -> bool;
     [[nodiscard]] auto is_trusted_rate_limit_source(const Address& src) const -> bool;
@@ -115,16 +83,17 @@ private:
     Duration rate_limit_window_{std::chrono::seconds(60)};
 
     // ---- Config knobs -------------------------------------------------------
-    static constexpr std::chrono::seconds kPendingTimeout{10};
     static constexpr std::chrono::seconds kRateCleanupInterval{60};
-    static constexpr std::chrono::seconds kCanceledRequestRetention{10};
     static constexpr int kClientChannelInactivitySec = 3;
     static constexpr std::size_t kMaxPendingLogins = 2000;
+    static constexpr auto kRpcTimeout = Milliseconds(10000);
+
+    // ---- Coroutine RPC infrastructure ---------------------------------------
+    PendingRpcRegistry rpc_registry_;
 
     // ---- Login tracking ----------------------------------------------------
-    std::unordered_map<uint32_t, PendingLogin> pending_;
     std::unordered_map<std::string, uint32_t> pending_by_username_;
-    std::unordered_map<uint32_t, TimePoint> canceled_requests_;
+    std::unordered_map<uint64_t, CancellationSource> channel_cancel_sources_;
     uint32_t next_request_id_{1};
 
     // ---- Connections --------------------------------------------------------

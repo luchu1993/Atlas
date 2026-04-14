@@ -7,6 +7,7 @@ atlas_add_library(atlas_loginapp_lib
         atlas_foundation
         atlas_network
         atlas_server
+        atlas_coro
 )
 
 # Cross-server headers (baseappmgr messages, etc.)

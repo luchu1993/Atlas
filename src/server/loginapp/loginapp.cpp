@@ -1,14 +1,13 @@
 #include "loginapp.hpp"
 
-#include "baseappmgr/baseappmgr_messages.hpp"
-#include "dbapp/dbapp_messages.hpp"
+#include "coro/rpc_call.hpp"
+#include "coro/scope_guard.hpp"
 #include "foundation/log.hpp"
 #include "network/channel.hpp"
 #include "network/machined_types.hpp"
 #include "network/reliable_udp.hpp"
 #include "server/watcher.hpp"
 
-#include <algorithm>
 #include <format>
 
 namespace atlas
@@ -29,7 +28,9 @@ auto LoginApp::run(int argc, char* argv[]) -> int
 
 LoginApp::LoginApp(EventDispatcher& dispatcher, NetworkInterface& network,
                    NetworkInterface& external_network)
-    : ManagerApp(dispatcher, network), external_network_(external_network)
+    : ManagerApp(dispatcher, network),
+      rpc_registry_(dispatcher),
+      external_network_(external_network)
 {
 }
 
@@ -69,27 +70,11 @@ auto LoginApp::init(int argc, char* argv[]) -> bool
         [this](const Address& src, Channel* ch, const login::LoginRequest& msg)
         { on_login_request(src, ch, msg); });
 
+    // Register pre-dispatch hook on internal network so rpc_call replies
+    // are routed to the PendingRpcRegistry before normal handler dispatch.
     auto& table = network().interface_table();
-
-    // DBApp responses
-    (void)table.register_typed_handler<login::AuthLoginResult>(
-        [this](const Address& src, Channel* ch, const login::AuthLoginResult& msg)
-        { on_auth_login_result(src, ch, msg); });
-
-    // BaseAppMgr responses
-    (void)table.register_typed_handler<login::AllocateBaseAppResult>(
-        [this](const Address& src, Channel* ch, const login::AllocateBaseAppResult& msg)
-        { on_allocate_baseapp_result(src, ch, msg); });
-
-    // BaseApp responses
-    (void)table.register_typed_handler<login::PrepareLoginResult>(
-        [this](const Address& src, Channel* ch, const login::PrepareLoginResult& msg)
-        { on_prepare_login_result(src, ch, msg); });
-
-    // DBApp checkout responses (for LoginApp-proxy checkout)
-    (void)table.register_typed_handler<dbapp::CheckoutEntityAck>(
-        [this](const Address& src, Channel* ch, const dbapp::CheckoutEntityAck& msg)
-        { on_checkout_entity_ack(src, ch, msg); });
+    table.set_pre_dispatch_hook([this](MessageID id, std::span<const std::byte> payload) -> bool
+                                { return rpc_registry_.try_dispatch(id, payload); });
 
     // ---- Subscribe to DBApp birth ----------------------------------------
     machined_client().subscribe(
@@ -163,13 +148,12 @@ auto LoginApp::init(int argc, char* argv[]) -> bool
 
 void LoginApp::fini()
 {
+    rpc_registry_.cancel_all();
     ManagerApp::fini();
 }
 
 void LoginApp::on_tick_complete()
 {
-    cleanup_expired_logins();
-    cleanup_canceled_requests(Clock::now());
     ManagerApp::on_tick_complete();
 }
 
@@ -195,10 +179,9 @@ void LoginApp::register_watchers()
                      std::function<uint64_t()>([this] { return login_busy_total_; }));
     wr.add<uint64_t>("loginapp/abandoned_login_total",
                      std::function<uint64_t()>([this] { return abandoned_login_total_; }));
-    wr.add<std::size_t>("loginapp/canceled_request_count",
-                        std::function<std::size_t()>([this] { return canceled_requests_.size(); }));
-    wr.add<int>("loginapp/pending_logins",
-                std::function<int()>([this] { return static_cast<int>(pending_.size()); }));
+    wr.add<int>(
+        "loginapp/pending_logins",
+        std::function<int()>([this] { return static_cast<int>(pending_by_username_.size()); }));
     wr.add<bool>("loginapp/dbapp_connected",
                  std::function<bool()>([this] { return dbapp_channel_ != nullptr; }));
     wr.add<bool>("loginapp/baseappmgr_connected",
@@ -239,11 +222,11 @@ void LoginApp::on_login_request(const Address& src, Channel* ch, const login::Lo
         return;
     }
 
-    if (pending_.size() >= kMaxPendingLogins)
+    if (pending_by_username_.size() >= kMaxPendingLogins)
     {
         ++login_busy_total_;
-        ATLAS_LOG_DEBUG("LoginApp: admission control, pending={} from {}:{}", pending_.size(),
-                        src.ip(), src.port());
+        ATLAS_LOG_DEBUG("LoginApp: admission control, pending={} from {}:{}",
+                        pending_by_username_.size(), src.ip(), src.port());
         send_login_error(ch->channel_id(), login::LoginStatus::ServerBusy, "server_busy");
         return;
     }
@@ -255,333 +238,241 @@ void LoginApp::on_login_request(const Address& src, Channel* ch, const login::Lo
         return;
     }
 
-    uint32_t rid = next_request_id_++;
-    PendingLogin pending;
-    pending.request_id = rid;
-    pending.client_channel_id = ch->channel_id();
-    pending.client_addr = src;
-    pending.username = msg.username;
-    pending.stage = PendingStage::WaitingAuth;
-    pending.created_at = Clock::now();
-    pending_by_username_[msg.username] = rid;
-    pending_[rid] = std::move(pending);
+    handle_login_coro(ch->channel_id(), src, msg);
+}
 
-    const auto& cfg = config();
+// ============================================================================
+// handle_login_coro — coroutine: orchestrates the entire login flow
+// ============================================================================
+
+auto LoginApp::handle_login_coro(uint64_t client_channel_id, Address client_addr,
+                                 login::LoginRequest request) -> FireAndForget
+{
+    uint32_t rid = next_request_id_++;
+    std::string username = request.username;
+
+    // ---- Dedup guard: remove from pending_by_username_ on any exit path ----
+    pending_by_username_[username] = rid;
+    ScopeGuard dedup_guard([this, username] { pending_by_username_.erase(username); });
+
+    // ---- Cancellation: cancelled when client disconnects --------------------
+    CancellationSource cancel_source;
+    auto token = cancel_source.token();
+    channel_cancel_sources_[client_channel_id] = cancel_source;
+    ScopeGuard cancel_guard([this, client_channel_id]
+                            { channel_cancel_sources_.erase(client_channel_id); });
+
+    // ======================================================================
+    // Step 1: Authenticate with DBApp
+    // ======================================================================
+    if (!dbapp_channel_)
+    {
+        send_login_error(client_channel_id, login::LoginStatus::ServerNotReady, "no_dbapp");
+        co_return;
+    }
 
     login::AuthLogin auth;
     auth.request_id = rid;
-    auth.username = msg.username;
-    auth.password_hash = msg.password_hash;
-    auth.auto_create = cfg.auto_create_accounts;
-    (void)dbapp_channel_->send_message(auth);
-}
+    auth.username = request.username;
+    auth.password_hash = request.password_hash;
+    auth.auto_create = config().auto_create_accounts;
 
-// ============================================================================
-// on_auth_login_result — step 3: DBApp replies with auth outcome
-// ============================================================================
-
-void LoginApp::on_auth_login_result(const Address& /*src*/, Channel* /*ch*/,
-                                    const login::AuthLoginResult& msg)
-{
-    auto it = pending_.find(msg.request_id);
-    if (it == pending_.end())
+    auto auth_result = co_await rpc_call<login::AuthLoginResult>(rpc_registry_, *dbapp_channel_,
+                                                                 auth, kRpcTimeout, token);
+    if (!auth_result)
     {
-        if (canceled_requests_.contains(msg.request_id))
+        if (auth_result.error().code() == ErrorCode::Cancelled)
         {
-            return;
+            ++abandoned_login_total_;
+            ATLAS_LOG_DEBUG("LoginApp: login cancelled for '{}' (client disconnected)", username);
+            co_return;
         }
-        ATLAS_LOG_WARNING("LoginApp: AuthLoginResult for unknown request_id={}", msg.request_id);
-        return;
+        if (auth_result.error().code() == ErrorCode::Timeout)
+            ++login_timeout_total_;
+        ATLAS_LOG_WARNING("LoginApp: auth RPC failed for '{}': {}", username,
+                          auth_result.error().message());
+        send_login_error(client_channel_id, login::LoginStatus::InternalError, "auth_rpc_failed");
+        co_return;
     }
-    PendingLogin& pending = it->second;
-    ATLAS_LOG_DEBUG("LoginApp: auth result request_id={} success={} status={}", msg.request_id,
-                    msg.success, static_cast<int>(msg.status));
 
-    if (!msg.success)
+    const auto& auth_reply = auth_result.value();
+    ATLAS_LOG_DEBUG("LoginApp: auth result request_id={} success={} status={}", rid,
+                    auth_reply.success, static_cast<int>(auth_reply.status));
+
+    if (!auth_reply.success)
     {
-        ATLAS_LOG_DEBUG("LoginApp: auth failed for '{}' status={}", pending.username,
-                        static_cast<int>(msg.status));
-        send_login_error(pending.client_channel_id, msg.status, "auth_failed");
-        remove_pending(it);
-        return;
+        ATLAS_LOG_DEBUG("LoginApp: auth failed for '{}' status={}", username,
+                        static_cast<int>(auth_reply.status));
+        send_login_error(client_channel_id, auth_reply.status, "auth_failed");
+        co_return;
     }
 
+    // ======================================================================
+    // Step 2: Allocate a BaseApp via BaseAppMgr
+    // ======================================================================
     if (!baseappmgr_channel_)
     {
         ATLAS_LOG_ERROR("LoginApp: no BaseAppMgr connection");
-        send_login_error(pending.client_channel_id, login::LoginStatus::ServerNotReady,
-                         "no_baseappmgr");
-        remove_pending(it);
-        return;
+        send_login_error(client_channel_id, login::LoginStatus::ServerNotReady, "no_baseappmgr");
+        co_return;
     }
-
-    pending.dbid = msg.dbid;
-    pending.type_id = msg.type_id;
-    pending.stage = PendingStage::WaitingBaseApp;
 
     login::AllocateBaseApp alloc;
-    alloc.request_id = msg.request_id;
-    alloc.type_id = msg.type_id;
-    alloc.dbid = msg.dbid;
-    (void)baseappmgr_channel_->send_message(alloc);
-}
+    alloc.request_id = rid;
+    alloc.type_id = auth_reply.type_id;
+    alloc.dbid = auth_reply.dbid;
 
-// ============================================================================
-// on_allocate_baseapp_result — step 5: BaseAppMgr picks a BaseApp
-// ============================================================================
-
-void LoginApp::on_allocate_baseapp_result(const Address& /*src*/, Channel* /*ch*/,
-                                          const login::AllocateBaseAppResult& msg)
-{
-    auto it = pending_.find(msg.request_id);
-    if (it == pending_.end())
+    auto alloc_result = co_await rpc_call<login::AllocateBaseAppResult>(
+        rpc_registry_, *baseappmgr_channel_, alloc, kRpcTimeout, token);
+    if (!alloc_result)
     {
-        if (canceled_requests_.contains(msg.request_id))
+        if (alloc_result.error().code() == ErrorCode::Cancelled)
         {
-            return;
+            ++abandoned_login_total_;
+            ATLAS_LOG_DEBUG("LoginApp: login cancelled for '{}' (client disconnected)", username);
+            co_return;
         }
-        ATLAS_LOG_WARNING("LoginApp: AllocateBaseAppResult for unknown request_id={}",
-                          msg.request_id);
-        return;
+        if (alloc_result.error().code() == ErrorCode::Timeout)
+            ++login_timeout_total_;
+        ATLAS_LOG_WARNING("LoginApp: allocate baseapp RPC failed for '{}': {}", username,
+                          alloc_result.error().message());
+        send_login_error(client_channel_id, login::LoginStatus::InternalError,
+                         "allocate_rpc_failed");
+        co_return;
     }
-    PendingLogin& pending = it->second;
+
+    const auto& alloc_reply = alloc_result.value();
     ATLAS_LOG_DEBUG("LoginApp: allocate baseapp result request_id={} success={} internal={}:{}",
-                    msg.request_id, msg.success, msg.internal_addr.ip(), msg.internal_addr.port());
+                    rid, alloc_reply.success, alloc_reply.internal_addr.ip(),
+                    alloc_reply.internal_addr.port());
 
-    if (!msg.success)
+    if (!alloc_reply.success)
     {
-        ATLAS_LOG_WARNING("LoginApp: no BaseApp available for '{}'", pending.username);
-        send_login_error(pending.client_channel_id, login::LoginStatus::ServerFull, "no_baseapp");
-        remove_pending(it);
-        return;
+        ATLAS_LOG_WARNING("LoginApp: no BaseApp available for '{}'", username);
+        send_login_error(client_channel_id, login::LoginStatus::ServerFull, "no_baseapp");
+        co_return;
     }
 
-    pending.baseapp_internal_addr = msg.internal_addr;
-    pending.baseapp_external_addr = msg.external_addr;
-    pending.session_key = SessionKey::generate();
-    pending.stage = PendingStage::WaitingPrepare;
-
-    auto ch_result = network().connect_rudp_nocwnd(msg.internal_addr);
-    if (!ch_result)
-    {
-        ATLAS_LOG_ERROR("LoginApp: could not connect to BaseApp {}:{}", msg.internal_addr.ip(),
-                        msg.internal_addr.port());
-        send_login_error(pending.client_channel_id, login::LoginStatus::InternalError,
-                         "connect_failed");
-        remove_pending(it);
-        return;
-    }
-    Channel* baseapp_ch = static_cast<Channel*>(*ch_result);
-
-    login::PrepareLogin prep;
-    prep.request_id = msg.request_id;
-    prep.type_id = pending.type_id;
-    prep.dbid = pending.dbid;
-    prep.session_key = pending.session_key;
-    prep.client_addr = pending.client_addr;
-    (void)baseapp_ch->send_message(prep);
-}
-
-// ============================================================================
-// on_checkout_entity_ack — DBApp returns entity blob for proxy checkout
-// ============================================================================
-
-void LoginApp::on_checkout_entity_ack(const Address& /*src*/, Channel* /*ch*/,
-                                      const dbapp::CheckoutEntityAck& msg)
-{
-    auto it = pending_.find(msg.request_id);
-    if (it == pending_.end())
-    {
-        if (canceled_requests_.contains(msg.request_id))
-        {
-            return;
-        }
-        ATLAS_LOG_WARNING("LoginApp: CheckoutEntityAck for unknown request_id={}", msg.request_id);
-        return;
-    }
-    PendingLogin& pending = it->second;
-
-    if (msg.status != dbapp::CheckoutStatus::Success)
-    {
-        if (msg.status == dbapp::CheckoutStatus::AlreadyCheckedOut)
-        {
-            // Fall back: let BaseApp handle force-logoff via the old path (no blob)
-            ATLAS_LOG_DEBUG("LoginApp: checkout conflict for '{}' dbid={}, delegating to BaseApp",
-                            pending.username, pending.dbid);
-            pending.stage = PendingStage::WaitingPrepare;
-
-            auto ch_result = network().connect_rudp_nocwnd(pending.baseapp_internal_addr);
-            if (!ch_result)
-            {
-                send_login_error(pending.client_channel_id, login::LoginStatus::InternalError,
-                                 "connect_failed");
-                remove_pending(it);
-                return;
-            }
-            Channel* baseapp_ch = static_cast<Channel*>(*ch_result);
-
-            login::PrepareLogin prep;
-            prep.request_id = msg.request_id;
-            prep.type_id = pending.type_id;
-            prep.dbid = pending.dbid;
-            prep.session_key = pending.session_key;
-            prep.client_addr = pending.client_addr;
-            (void)baseapp_ch->send_message(prep);
-            return;
-        }
-
-        ATLAS_LOG_WARNING("LoginApp: checkout failed for '{}' dbid={} status={}", pending.username,
-                          pending.dbid, static_cast<int>(msg.status));
-        send_login_error(pending.client_channel_id, login::LoginStatus::InternalError,
-                         msg.error.empty() ? "checkout_failed" : msg.error);
-        remove_pending(it);
-        return;
-    }
-
-    pending.entity_blob = msg.blob;
-    pending.stage = PendingStage::WaitingPrepare;
-
-    auto ch_result = network().connect_rudp_nocwnd(pending.baseapp_internal_addr);
+    // ======================================================================
+    // Step 3: PrepareLogin on the allocated BaseApp
+    // ======================================================================
+    auto ch_result = network().connect_rudp_nocwnd(alloc_reply.internal_addr);
     if (!ch_result)
     {
         ATLAS_LOG_ERROR("LoginApp: could not connect to BaseApp {}:{}",
-                        pending.baseapp_internal_addr.ip(), pending.baseapp_internal_addr.port());
-        send_login_error(pending.client_channel_id, login::LoginStatus::InternalError,
-                         "connect_failed");
-        remove_pending(it);
-        return;
+                        alloc_reply.internal_addr.ip(), alloc_reply.internal_addr.port());
+        send_login_error(client_channel_id, login::LoginStatus::InternalError, "connect_failed");
+        co_return;
     }
     Channel* baseapp_ch = static_cast<Channel*>(*ch_result);
 
+    auto session_key = SessionKey::generate();
+
     login::PrepareLogin prep;
-    prep.request_id = msg.request_id;
-    prep.type_id = pending.type_id;
-    prep.dbid = pending.dbid;
-    prep.session_key = pending.session_key;
-    prep.client_addr = pending.client_addr;
-    prep.blob_prefetched = true;
-    prep.entity_blob = std::move(pending.entity_blob);
-    (void)baseapp_ch->send_message(prep);
-}
+    prep.request_id = rid;
+    prep.type_id = auth_reply.type_id;
+    prep.dbid = auth_reply.dbid;
+    prep.session_key = session_key;
+    prep.client_addr = client_addr;
 
-// ============================================================================
-// on_prepare_login_result — step 7: BaseApp created the Proxy
-// ============================================================================
-
-void LoginApp::on_prepare_login_result(const Address& /*src*/, Channel* /*ch*/,
-                                       const login::PrepareLoginResult& msg)
-{
-    auto it = pending_.find(msg.request_id);
-    if (it == pending_.end())
-    {
-        if (canceled_requests_.contains(msg.request_id))
+    // ---- Rollback guard: send CancelPrepareLogin if we fail after this point
+    ScopeGuard prepare_guard(
+        [this, rid, dbid = auth_reply.dbid, baseapp_addr = alloc_reply.internal_addr]
         {
-            return;
-        }
-        ATLAS_LOG_WARNING("LoginApp: PrepareLoginResult for unknown request_id={}", msg.request_id);
-        return;
-    }
-    PendingLogin& pending = it->second;
-    ATLAS_LOG_DEBUG(
-        "LoginApp: prepare login result request_id={} success={} entity_id={} error='{}'",
-        msg.request_id, msg.success, msg.entity_id, msg.error);
+            auto cancel_ch = network().connect_rudp_nocwnd(baseapp_addr);
+            if (cancel_ch)
+            {
+                login::CancelPrepareLogin cancel;
+                cancel.request_id = rid;
+                cancel.dbid = dbid;
+                (void)(*cancel_ch)->send_message(cancel);
+            }
+            else
+            {
+                ATLAS_LOG_WARNING(
+                    "LoginApp: failed to send CancelPrepareLogin request_id={} to "
+                    "{}:{}",
+                    rid, baseapp_addr.ip(), baseapp_addr.port());
+            }
+        });
 
-    if (!msg.success)
+    auto prep_result = co_await rpc_call<login::PrepareLoginResult>(rpc_registry_, *baseapp_ch,
+                                                                    prep, kRpcTimeout, token);
+    if (!prep_result)
     {
-        ATLAS_LOG_ERROR("LoginApp: PrepareLogin failed for '{}': {}", pending.username, msg.error);
-        send_login_error(pending.client_channel_id, login::LoginStatus::InternalError, msg.error);
-        remove_pending(it);
-        return;
+        if (prep_result.error().code() == ErrorCode::Cancelled)
+        {
+            ++abandoned_login_total_;
+            ATLAS_LOG_DEBUG("LoginApp: login cancelled for '{}' (client disconnected)", username);
+            co_return;  // prepare_guard fires → CancelPrepareLogin sent
+        }
+        if (prep_result.error().code() == ErrorCode::Timeout)
+            ++login_timeout_total_;
+        ATLAS_LOG_WARNING("LoginApp: prepare login RPC failed for '{}': {}", username,
+                          prep_result.error().message());
+        send_login_error(client_channel_id, login::LoginStatus::InternalError,
+                         "prepare_rpc_failed");
+        co_return;  // prepare_guard fires → CancelPrepareLogin sent
     }
 
-    // Send LoginResult to client with BaseApp external address + session key
-    login::LoginResult result;
-    result.status = login::LoginStatus::Success;
-    result.session_key = pending.session_key;
-    result.baseapp_addr = pending.baseapp_external_addr;
-    auto* client_ch = external_network_.find_channel(pending.client_channel_id);
+    const auto& prep_reply = prep_result.value();
+    ATLAS_LOG_DEBUG(
+        "LoginApp: prepare login result request_id={} success={} entity_id={} error='{}'", rid,
+        prep_reply.success, prep_reply.entity_id, prep_reply.error);
+
+    if (!prep_reply.success)
+    {
+        ATLAS_LOG_ERROR("LoginApp: PrepareLogin failed for '{}': {}", username, prep_reply.error);
+        send_login_error(client_channel_id, login::LoginStatus::InternalError, prep_reply.error);
+        co_return;  // prepare_guard fires → CancelPrepareLogin sent
+    }
+
+    // ======================================================================
+    // Success — dismiss rollback guard and send LoginResult to client
+    // ======================================================================
+    prepare_guard.dismiss();
+
+    auto* client_ch = external_network_.find_channel(client_channel_id);
     if (!client_ch)
     {
         ATLAS_LOG_WARNING(
-            "LoginApp: client channel disappeared before login completion request_id={}",
-            pending.request_id);
-        abandon_pending_login(it);
-        return;
+            "LoginApp: client channel disappeared before login completion request_id={}", rid);
+        ++abandoned_login_total_;
+        co_return;
     }
+
+    login::LoginResult result;
+    result.status = login::LoginStatus::Success;
+    result.session_key = session_key;
+    result.baseapp_addr = alloc_reply.external_addr;
 
     if (!client_ch->send_message(result))
     {
-        ATLAS_LOG_WARNING("LoginApp: failed to deliver LoginResult request_id={}",
-                          pending.request_id);
-        abandon_pending_login(it);
-        return;
+        ATLAS_LOG_WARNING("LoginApp: failed to deliver LoginResult request_id={}", rid);
+        ++abandoned_login_total_;
+        co_return;
     }
 
     ++login_success_total_;
-
-    ATLAS_LOG_DEBUG("LoginApp: login complete for '{}' entity={} baseapp={}:{}", pending.username,
-                    msg.entity_id, pending.baseapp_external_addr.ip(),
-                    pending.baseapp_external_addr.port());
-    remove_pending(it);
+    ATLAS_LOG_DEBUG("LoginApp: login complete for '{}' entity={} baseapp={}:{}", username,
+                    prep_reply.entity_id, alloc_reply.external_addr.ip(),
+                    alloc_reply.external_addr.port());
 }
 
 // ============================================================================
 // Helpers
 // ============================================================================
 
-void LoginApp::cancel_prepare_login(const PendingLogin& pending)
-{
-    canceled_requests_[pending.request_id] = Clock::now();
-
-    if (pending.baseapp_internal_addr.port() == 0)
-    {
-        return;
-    }
-
-    auto ch_result = network().connect_rudp_nocwnd(pending.baseapp_internal_addr);
-    if (!ch_result)
-    {
-        ATLAS_LOG_WARNING("LoginApp: failed to cancel prepare login request_id={} at {}:{}",
-                          pending.request_id, pending.baseapp_internal_addr.ip(),
-                          pending.baseapp_internal_addr.port());
-        return;
-    }
-
-    login::CancelPrepareLogin cancel;
-    cancel.request_id = pending.request_id;
-    cancel.dbid = pending.dbid;
-    (void)(*ch_result)->send_message(cancel);
-}
-
-void LoginApp::abandon_pending_login(std::unordered_map<uint32_t, PendingLogin>::iterator it)
-{
-    PendingLogin pending = std::move(it->second);
-    pending_by_username_.erase(pending.username);
-    pending_.erase(it);
-    ++abandoned_login_total_;
-    cancel_prepare_login(pending);
-}
-
 void LoginApp::on_client_disconnect(Channel& ch)
 {
-    for (auto it = pending_.begin(); it != pending_.end();)
+    auto it = channel_cancel_sources_.find(ch.channel_id());
+    if (it != channel_cancel_sources_.end())
     {
-        if (it->second.client_channel_id == ch.channel_id())
-        {
-            auto current = it++;
-            abandon_pending_login(current);
-        }
-        else
-        {
-            ++it;
-        }
+        it->second.request_cancellation();
+        // Note: the coroutine's ScopeGuard removes the entry from channel_cancel_sources_
+        // when it finishes, so we don't erase here — the cancellation callback resumes
+        // the coroutine synchronously, which erases the entry via cancel_guard.
     }
-}
-
-void LoginApp::remove_pending(std::unordered_map<uint32_t, PendingLogin>::iterator it)
-{
-    pending_by_username_.erase(it->second.username);
-    pending_.erase(it);
 }
 
 void LoginApp::send_login_error(uint64_t client_channel_id, login::LoginStatus status,
@@ -686,34 +577,6 @@ void LoginApp::cleanup_stale_rate_entries(TimePoint now)
             ++it;
         }
     }
-}
-
-void LoginApp::cleanup_expired_logins()
-{
-    const auto now = Clock::now();
-    for (auto it = pending_.begin(); it != pending_.end();)
-    {
-        if (now - it->second.created_at > kPendingTimeout)
-        {
-            ++login_timeout_total_;
-            ATLAS_LOG_WARNING("LoginApp: pending login request_id={} timed out",
-                              it->second.request_id);
-            send_login_error(it->second.client_channel_id, login::LoginStatus::InternalError,
-                             "timeout");
-            auto current = it++;
-            abandon_pending_login(current);
-        }
-        else
-        {
-            ++it;
-        }
-    }
-}
-
-void LoginApp::cleanup_canceled_requests(TimePoint now)
-{
-    std::erase_if(canceled_requests_, [now](const auto& entry)
-                  { return now - entry.second > kCanceledRequestRetention; });
 }
 
 }  // namespace atlas

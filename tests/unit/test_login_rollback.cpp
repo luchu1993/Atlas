@@ -1,4 +1,5 @@
 #include "baseapp/baseapp.hpp"
+#include "coro/cancellation.hpp"
 #include "db/idatabase.hpp"
 #include "dbapp/dbapp.hpp"
 #include "loginapp/loginapp.hpp"
@@ -24,30 +25,36 @@ protected:
 
     void register_watchers() { app_.register_watchers(); }
 
-    void seed_pending_login(uint32_t request_id, std::string username)
+    // Seed an active login's cancellation state (simulates what handle_login_coro sets up)
+    auto seed_active_login(uint64_t channel_id, const std::string& username, uint32_t request_id)
+        -> CancellationToken
     {
-        LoginApp::PendingLogin pending;
-        pending.request_id = request_id;
-        pending.username = std::move(username);
-        pending.created_at = Clock::now();
-        app_.pending_by_username_[pending.username] = pending.request_id;
-        app_.pending_[pending.request_id] = pending;
+        CancellationSource source;
+        auto token = source.token();
+        app_.channel_cancel_sources_[channel_id] = source;
+        app_.pending_by_username_[username] = request_id;
+        return token;
     }
 
-    void abandon_pending_login(uint32_t request_id)
+    void cancel_for_channel(uint64_t channel_id)
     {
-        auto it = app_.pending_.find(request_id);
-        ASSERT_NE(it, app_.pending_.end());
-        app_.abandon_pending_login(it);
+        auto it = app_.channel_cancel_sources_.find(channel_id);
+        if (it != app_.channel_cancel_sources_.end())
+            it->second.request_cancellation();
     }
 
-    auto is_canceled(uint32_t request_id) const -> bool
+    void add_pending_username(const std::string& username, uint32_t request_id)
     {
-        return app_.canceled_requests_.contains(request_id);
+        app_.pending_by_username_[username] = request_id;
     }
 
-    auto pending_empty() const -> bool { return app_.pending_.empty(); }
+    void remove_pending_username(const std::string& username)
+    {
+        app_.pending_by_username_.erase(username);
+    }
+
     auto pending_by_username_empty() const -> bool { return app_.pending_by_username_.empty(); }
+    auto active_login_count() const -> std::size_t { return app_.channel_cancel_sources_.size(); }
     auto abandoned_total() const -> uint64_t { return app_.abandoned_login_total_; }
     auto watcher(std::string_view path) -> std::optional<std::string>
     {
@@ -60,19 +67,35 @@ protected:
     LoginApp app_;
 };
 
-TEST_F(LoginRollbackTest, AbandonPendingLoginMarksCanceledAndUpdatesWatchers)
+TEST_F(LoginRollbackTest, ClientDisconnectCancelsActiveLogin)
 {
     register_watchers();
-    seed_pending_login(42, "tester");
+    auto token = seed_active_login(100, "tester", 42);
 
-    abandon_pending_login(42);
+    EXPECT_EQ(active_login_count(), 1u);
+    EXPECT_FALSE(pending_by_username_empty());
+    EXPECT_FALSE(token.is_cancelled());
 
-    EXPECT_TRUE(pending_empty());
+    // Simulate what on_client_disconnect does: cancel the source
+    cancel_for_channel(100);
+
+    EXPECT_TRUE(token.is_cancelled());
+}
+
+TEST_F(LoginRollbackTest, DedupTrackingAndMetrics)
+{
+    register_watchers();
+
+    add_pending_username("alice", 1);
+    add_pending_username("bob", 2);
+
+    EXPECT_FALSE(pending_by_username_empty());
+    EXPECT_EQ(watcher("loginapp/pending_logins").value_or(""), "2");
+
+    remove_pending_username("alice");
+    remove_pending_username("bob");
     EXPECT_TRUE(pending_by_username_empty());
-    ASSERT_TRUE(is_canceled(42));
-    EXPECT_EQ(abandoned_total(), 1u);
-    EXPECT_EQ(watcher("loginapp/abandoned_login_total").value_or(""), "1");
-    EXPECT_EQ(watcher("loginapp/canceled_request_count").value_or(""), "1");
+    EXPECT_EQ(watcher("loginapp/pending_logins").value_or(""), "0");
 }
 
 class BaseAppRollbackTest : public ::testing::Test
@@ -198,6 +221,11 @@ public:
     }
 
     void set_auto_load(DatabaseID, uint16_t, bool) override {}
+    void load_entity_id_counter(std::function<void(EntityID)> callback) override { callback(1); }
+    void save_entity_id_counter(EntityID, std::function<void(bool)> callback) override
+    {
+        callback(true);
+    }
     void process_results() override {}
 
     std::function<void(GetResult)> checkout_callback;

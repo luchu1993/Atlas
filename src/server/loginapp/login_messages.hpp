@@ -321,6 +321,8 @@ static_assert(NetworkMessage<AllocateBaseAppResult>);
 
 struct PrepareLogin
 {
+    static constexpr uint32_t kMaxBlobSize = 1024 * 1024;  // 1 MB
+
     uint32_t request_id{0};
     uint16_t type_id{0};
     DatabaseID dbid{kInvalidDBID};
@@ -372,6 +374,8 @@ struct PrepareLogin
         std::memcpy(msg.session_key.bytes, key_span->data(), sizeof(SessionKey));
         msg.client_addr = Address(*ip, *port);
         msg.blob_prefetched = (*pf != 0);
+        if (*blob_sz > kMaxBlobSize)
+            return Error{ErrorCode::InvalidArgument, "PrepareLogin: blob too large"};
         if (*blob_sz > 0)
         {
             auto blob_span = r.read_bytes(*blob_sz);
