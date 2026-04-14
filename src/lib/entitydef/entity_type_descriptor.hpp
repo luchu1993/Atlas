@@ -30,9 +30,21 @@ enum class PropertyDataType : uint8_t
 enum class ReplicationScope : uint8_t
 {
     CellPrivate = 0,
-    BaseOnly = 1,
+    CellPublic = 1,
     OwnClient = 2,
-    AllClients = 3,
+    OtherClients = 3,
+    AllClients = 4,
+    CellPublicAndOwn = 5,
+    Base = 6,
+    BaseAndClient = 7,
+};
+
+/// Exposed scope for RPC methods callable by clients.
+enum class ExposedScope : uint8_t
+{
+    None = 0,        // Not exposed — server-internal only
+    OwnClient = 1,   // Only the owning client may call
+    AllClients = 2,  // Any client in AoI may call (cell_methods only)
 };
 
 struct PropertyDescriptor
@@ -51,6 +63,7 @@ struct RpcDescriptor
     std::string name;
     uint32_t rpc_id;  // Packed: [direction:2 | typeIndex:14 | method:8]
     std::vector<PropertyDataType> param_types;
+    ExposedScope exposed{ExposedScope::None};
 
     [[nodiscard]] uint8_t direction() const { return static_cast<uint8_t>((rpc_id >> 22) & 0x3); }
     [[nodiscard]] uint16_t type_index() const
@@ -58,6 +71,7 @@ struct RpcDescriptor
         return static_cast<uint16_t>((rpc_id >> 8) & 0x3FFF);
     }
     [[nodiscard]] uint8_t method_index() const { return static_cast<uint8_t>(rpc_id & 0xFF); }
+    [[nodiscard]] bool is_exposed() const { return exposed != ExposedScope::None; }
 };
 
 /// Compression algorithm for entity data on the wire (mirrors network::CompressionType).

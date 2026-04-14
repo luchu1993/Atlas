@@ -23,6 +23,11 @@ auto InterfaceTable::dispatch(const Address& source, Channel* channel, MessageID
     auto* entry = entries_.get(id);
     if (!entry)
     {
+        if (default_handler_)
+        {
+            default_handler_(source, channel, id, data);
+            return {};
+        }
         return Error(ErrorCode::NotFound, "Unknown message ID");
     }
 

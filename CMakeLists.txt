@@ -75,6 +75,7 @@ endif()
 
 if(ATLAS_BUILD_CLIENT_SDK)
     add_subdirectory(src/client_sdk)
+    add_subdirectory(src/client)
 endif()
 
 add_subdirectory(src/tools)

@@ -63,7 +63,6 @@ public sealed class RpcGenerator : IIncrementalGenerator
             {
                 var attrName = attr.AttributeClass?.ToDisplayString();
                 if (attrName == "Atlas.Rpc.ClientRpcAttribute") direction = "Client";
-                else if (attrName == "Atlas.Rpc.ServerRpcAttribute") direction = "Server";
                 else if (attrName == "Atlas.Rpc.CellRpcAttribute") direction = "Cell";
                 else if (attrName == "Atlas.Rpc.BaseRpcAttribute") direction = "Base";
 
@@ -111,7 +110,6 @@ public sealed class RpcGenerator : IIncrementalGenerator
             switch (direction)
             {
                 case "Client": model.ClientRpcs.Add(rpcMethod); break;
-                case "Server": model.ServerRpcs.Add(rpcMethod); break;
                 case "Cell": model.CellRpcs.Add(rpcMethod); break;
                 case "Base": model.BaseRpcs.Add(rpcMethod); break;
             }
@@ -137,7 +135,7 @@ public sealed class RpcGenerator : IIncrementalGenerator
 
         // Only generate code for entities that actually have RPCs
         var withRpcs = allSorted.Where(m =>
-            m.ClientRpcs.Count > 0 || m.ServerRpcs.Count > 0 ||
+            m.ClientRpcs.Count > 0 ||
             m.CellRpcs.Count > 0 || m.BaseRpcs.Count > 0).ToList();
 
         if (withRpcs.Count == 0) return;
@@ -167,7 +165,6 @@ public sealed class RpcGenerator : IIncrementalGenerator
     private static void ValidateModel(SourceProductionContext spc, RpcEntityModel model)
     {
         var allMethods = model.ClientRpcs
-            .Concat(model.ServerRpcs)
             .Concat(model.CellRpcs)
             .Concat(model.BaseRpcs);
 
@@ -201,7 +198,6 @@ public sealed class RpcGenerator : IIncrementalGenerator
     {
         var ids = new Dictionary<string, int>();
         AssignIds(ids, model.ClassName, model.ClientRpcs, typeIndex, 0x00);
-        AssignIds(ids, model.ClassName, model.ServerRpcs, typeIndex, 0x01);
         AssignIds(ids, model.ClassName, model.CellRpcs, typeIndex, 0x02);
         AssignIds(ids, model.ClassName, model.BaseRpcs, typeIndex, 0x03);
         return ids;
@@ -210,6 +206,8 @@ public sealed class RpcGenerator : IIncrementalGenerator
     /// <summary>
     /// Packed RPC ID encoding: [direction:2 | typeIndex:14 | method:8] = 24 bits.
     /// rpcId = (direction &lt;&lt; 22) | (typeIndex &lt;&lt; 8) | method
+    /// Direction: 0x00 = ClientRpc, 0x02 = CellRpc, 0x03 = BaseRpc.
+    /// Note: direction 0x01 is reserved (previously ServerRpc, now abolished).
     /// </summary>
     private static void AssignIds(
         Dictionary<string, int> ids, string className,
@@ -242,8 +240,6 @@ public sealed class RpcGenerator : IIncrementalGenerator
         sb.AppendLine($"public partial class {model.ClassName}");
         sb.AppendLine("{");
 
-        foreach (var rpc in model.ServerRpcs)
-            EmitServerRpcStub(sb, model.ClassName, rpc, rpcIds);
         foreach (var rpc in model.ClientRpcs)
             EmitSendStub(sb, model.ClassName, rpc, "Client", rpcIds);
         foreach (var rpc in model.CellRpcs)
@@ -253,20 +249,6 @@ public sealed class RpcGenerator : IIncrementalGenerator
 
         sb.AppendLine("}");
         return sb.ToString();
-    }
-
-    private static void EmitServerRpcStub(
-        StringBuilder sb, string className, RpcMethodModel rpc,
-        Dictionary<string, int> rpcIds)
-    {
-        var paramList = string.Join(", ", rpc.Parameters.Select(p => $"{p.TypeFullName} {p.ParamName}"));
-        sb.AppendLine($"    public partial void {rpc.MethodName}({paramList})");
-        sb.AppendLine("    {");
-        sb.AppendLine($"        throw new System.InvalidOperationException(");
-        sb.AppendLine($"            \"[ServerRpc] {rpc.MethodName} can only be sent from the client. \" +");
-        sb.AppendLine($"            \"On the server, implement On{rpc.MethodName}() to handle the incoming RPC.\");");
-        sb.AppendLine("    }");
-        sb.AppendLine();
     }
 
     private static void EmitSendStub(
@@ -485,7 +467,6 @@ public sealed class RpcGenerator : IIncrementalGenerator
         {
             var typeIndex = typeIndexMap[model.TypeName];
             EmitRpcIdGroup(sb, model.ClassName, model.ClientRpcs, typeIndex, 0x00, "ClientRpc");
-            EmitRpcIdGroup(sb, model.ClassName, model.ServerRpcs, typeIndex, 0x01, "ServerRpc");
             EmitRpcIdGroup(sb, model.ClassName, model.CellRpcs, typeIndex, 0x02, "CellRpc");
             EmitRpcIdGroup(sb, model.ClassName, model.BaseRpcs, typeIndex, 0x03, "BaseRpc");
         }
@@ -522,23 +503,6 @@ public sealed class RpcGenerator : IIncrementalGenerator
         sb.AppendLine();
         sb.AppendLine("internal static partial class RpcDispatcher");
         sb.AppendLine("{");
-
-        // Top-level dispatch for ServerRpc (received by server from client)
-        sb.AppendLine("    public static void DispatchServerRpc(ServerEntity target, int rpcId, ref SpanReader reader)");
-        sb.AppendLine("    {");
-        sb.AppendLine("        switch (target)");
-        sb.AppendLine("        {");
-        foreach (var model in sorted)
-        {
-            if (model.ServerRpcs.Count == 0) continue;
-            var fullName = string.IsNullOrEmpty(model.Namespace)
-                ? model.ClassName
-                : $"{model.Namespace}.{model.ClassName}";
-            sb.AppendLine($"            case {fullName} t: Dispatch_{model.ClassName}_ServerRpc(t, rpcId, ref reader); break;");
-        }
-        sb.AppendLine("        }");
-        sb.AppendLine("    }");
-        sb.AppendLine();
 
         // Top-level dispatch for ClientRpc (received by client from server)
         sb.AppendLine("    public static void DispatchClientRpc(ServerEntity target, int rpcId, ref SpanReader reader)");
@@ -598,11 +562,21 @@ public sealed class RpcGenerator : IIncrementalGenerator
                 ? model.ClassName
                 : $"{model.Namespace}.{model.ClassName}";
 
-            EmitEntityDispatch(sb, fullName, model.ClassName, model.ServerRpcs, typeIndex, 0x01, "ServerRpc");
             EmitEntityDispatch(sb, fullName, model.ClassName, model.ClientRpcs, typeIndex, 0x00, "ClientRpc");
             EmitEntityDispatch(sb, fullName, model.ClassName, model.CellRpcs, typeIndex, 0x02, "CellRpc");
             EmitEntityDispatch(sb, fullName, model.ClassName, model.BaseRpcs, typeIndex, 0x03, "BaseRpc");
         }
+
+        // Register dispatchers into the NativeCallbacks bridge
+        sb.AppendLine();
+        sb.AppendLine("    [System.Runtime.CompilerServices.ModuleInitializer]");
+        sb.AppendLine("    internal static void RegisterDispatchers()");
+        sb.AppendLine("    {");
+        sb.AppendLine("        Atlas.Core.RpcBridge.Dispatchers[0] = DispatchClientRpc;");
+        sb.AppendLine("        // Slot 1 reserved (previously ServerRpc, now abolished)");
+        sb.AppendLine("        Atlas.Core.RpcBridge.Dispatchers[2] = DispatchCellRpc;");
+        sb.AppendLine("        Atlas.Core.RpcBridge.Dispatchers[3] = DispatchBaseRpc;");
+        sb.AppendLine("    }");
 
         sb.AppendLine("}");
         return sb.ToString();

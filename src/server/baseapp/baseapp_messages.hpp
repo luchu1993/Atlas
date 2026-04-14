@@ -535,6 +535,52 @@ struct AuthenticateResult
 static_assert(NetworkMessage<AuthenticateResult>);
 
 // ============================================================================
+// ClientBaseRpc  (Client → BaseApp external interface, ID 2022)
+// Client sends an exposed base method call. BaseApp validates the exposed scope
+// and dispatches to the C# entity via the dispatch_rpc callback.
+// ============================================================================
+
+struct ClientBaseRpc
+{
+    uint32_t rpc_id{0};
+    std::vector<std::byte> payload;
+
+    static auto descriptor() -> const MessageDesc&
+    {
+        static const MessageDesc desc{msg_id::id(msg_id::BaseApp::ClientBaseRpc),
+                                      "baseapp::ClientBaseRpc", MessageLengthStyle::Variable, -1};
+        return desc;
+    }
+
+    void serialize(BinaryWriter& w) const
+    {
+        w.write(rpc_id);
+        w.write_packed_int(static_cast<uint32_t>(payload.size()));
+        if (!payload.empty())
+            w.write_bytes(std::span<const std::byte>(payload));
+    }
+
+    static auto deserialize(BinaryReader& r) -> Result<ClientBaseRpc>
+    {
+        auto rid = r.read<uint32_t>();
+        auto plen = r.read_packed_int();
+        if (!rid || !plen)
+            return Error{ErrorCode::InvalidArgument, "ClientBaseRpc: truncated"};
+        ClientBaseRpc msg;
+        msg.rpc_id = *rid;
+        if (*plen > 0)
+        {
+            auto pdata = r.read_bytes(*plen);
+            if (!pdata)
+                return Error{ErrorCode::InvalidArgument, "ClientBaseRpc: payload truncated"};
+            msg.payload.assign(pdata->begin(), pdata->end());
+        }
+        return msg;
+    }
+};
+static_assert(NetworkMessage<ClientBaseRpc>);
+
+// ============================================================================
 // ForceLogoff  (BaseApp → BaseApp, ID 2030)
 // Sent to evict an existing Proxy so the new login can checkout the entity.
 // ============================================================================

@@ -5,11 +5,9 @@
 #include "network/channel.hpp"
 #include "network/machined_types.hpp"
 #include "network/reliable_udp.hpp"
-#include "script/script_value.hpp"
 
 #include <cstring>
 #include <span>
-#include <vector>
 
 namespace atlas
 {
@@ -22,6 +20,7 @@ struct NativeCallbackTable
     RestoreEntityFn restore_entity;
     GetEntityDataFn get_entity_data;
     EntityDestroyedFn entity_destroyed;
+    DispatchRpcFn dispatch_rpc;
 };
 #pragma pack(pop)
 
@@ -78,12 +77,13 @@ void BaseAppNativeProvider::send_base_rpc(uint32_t entity_id, uint32_t rpc_id,
                                           const std::byte* payload, int32_t len)
 {
     // Base-to-base RPC: the entity lives on this BaseApp.
-    // Dispatch directly via script engine callback (no network hop needed).
-    std::vector<ScriptValue> args{
-        ScriptValue::from_int(static_cast<int32_t>(entity_id)),
-        ScriptValue::from_int(static_cast<int32_t>(rpc_id)),
-        ScriptValue(std::vector<std::byte>(payload, payload + static_cast<std::size_t>(len)))};
-    (void)app_.script_engine().call_function("Atlas.Runtime", "OnBaseRpc", args);
+    // Dispatch directly via the C# callback (no network hop needed).
+    if (!dispatch_rpc_fn_)
+    {
+        ATLAS_LOG_WARNING("BaseApp: send_base_rpc: dispatch_rpc callback not registered");
+        return;
+    }
+    dispatch_rpc_fn_(entity_id, rpc_id, reinterpret_cast<const uint8_t*>(payload), len);
 }
 
 void BaseAppNativeProvider::write_to_db(uint32_t entity_id, const std::byte* entity_data,
@@ -114,6 +114,7 @@ void BaseAppNativeProvider::set_native_callbacks(const void* native_callbacks, i
     restore_entity_fn_ = table.restore_entity;
     get_entity_data_fn_ = table.get_entity_data;
     entity_destroyed_fn_ = table.entity_destroyed;
+    dispatch_rpc_fn_ = table.dispatch_rpc;
     ATLAS_LOG_INFO("BaseApp: native callback table registered");
 }
 

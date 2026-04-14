@@ -1,0 +1,41 @@
+<entity name="Avatar">
+
+  <properties>
+    <property name="hp"       type="int32"   scope="all_clients"           persistent="true" />
+    <property name="position" type="vector3" scope="all_clients" />
+    <property name="gold"     type="int32"   scope="base"                  persistent="true" />
+    <property name="aiState"  type="int32"   scope="cell_public" />
+    <property name="modelId"  type="int32"   scope="other_clients" />
+    <property name="mana"     type="int32"   scope="cell_public_and_own" />
+    <property name="secret"   type="string"  scope="base_and_client"       persistent="true" />
+    <property name="level"    type="int32"   scope="own_client"            persistent="true" />
+  </properties>
+
+  <client_methods>
+    <method name="ShowDamage">
+      <arg name="amount"     type="int32" />
+      <arg name="attackerId" type="uint32" />
+    </method>
+    <method name="ShowHeal">
+      <arg name="amount" type="int32" />
+    </method>
+  </client_methods>
+
+  <cell_methods>
+    <method name="CastSkill" exposed="own_client">
+      <arg name="skillId"  type="int32" />
+      <arg name="targetId" type="uint32" />
+    </method>
+    <method name="OnEnterRegion">
+      <arg name="regionId" type="int32" />
+    </method>
+  </cell_methods>
+
+  <base_methods>
+    <method name="UseItem" exposed="own_client">
+      <arg name="itemId" type="int32" />
+    </method>
+    <method name="OnPlayerDead" />
+  </base_methods>
+
+</entity>

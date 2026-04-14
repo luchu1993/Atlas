@@ -98,7 +98,9 @@ enum class BaseApp : uint16_t
     // External: Client ↔ BaseApp
     Authenticate = 2020,
     AuthenticateResult = 2021,
-    // Internal: BaseApp ↔ BaseApp
+    ClientBaseRpc = 2022,  // Client → BaseApp: exposed base method call
+    ClientCellRpc = 2023,  // Client → BaseApp: exposed cell method call (forwarded to CellApp)
+                           // Internal: BaseApp ↔ BaseApp
     ForceLogoff = 2030,
     ForceLogoffAck = 2031,
 };

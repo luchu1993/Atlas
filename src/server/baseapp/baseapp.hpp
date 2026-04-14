@@ -32,6 +32,7 @@ struct ReplicatedDeltaFromCell;
 struct ForceLogoff;
 struct ForceLogoffAck;
 struct Authenticate;
+struct ClientBaseRpc;
 }  // namespace baseapp
 
 namespace login
@@ -115,6 +116,7 @@ private:
 
     // ---- External client handler ----------------------------------------
     void on_client_authenticate(Channel& ch, const baseapp::Authenticate& msg);
+    void on_client_base_rpc(Channel& ch, const baseapp::ClientBaseRpc& msg);
 
     // ---- Called by BaseAppNativeProvider --------------------------------
     friend class BaseAppNativeProvider;

@@ -8,7 +8,6 @@ internal sealed class RpcEntityModel
     public string ClassName { get; set; } = "";
     public string TypeName { get; set; } = "";
     public List<RpcMethodModel> ClientRpcs { get; } = new();
-    public List<RpcMethodModel> ServerRpcs { get; } = new();
     public List<RpcMethodModel> CellRpcs { get; } = new();
     public List<RpcMethodModel> BaseRpcs { get; } = new();
 }

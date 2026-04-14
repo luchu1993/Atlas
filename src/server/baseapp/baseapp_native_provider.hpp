@@ -44,6 +44,22 @@ using GetEntityDataFn = void (*)(uint32_t entity_id, uint8_t** out_data, int32_t
 using EntityDestroyedFn = void (*)(uint32_t entity_id);
 
 // ============================================================================
+// DispatchRpcFn — dispatches an incoming RPC to the C# entity.
+//
+// Called by C++ when a validated RPC arrives (e.g. ClientBaseRpc from external
+// interface or CellRpcForward from internal interface).
+//
+// Parameters:
+//   entity_id — target entity
+//   rpc_id    — packed RPC ID [direction:2 | typeIndex:14 | method:8]
+//   payload   — serialised argument data
+//   len       — byte length of payload
+// ============================================================================
+
+using DispatchRpcFn = void (*)(uint32_t entity_id, uint32_t rpc_id, const uint8_t* payload,
+                               int32_t len);
+
+// ============================================================================
 // BaseAppNativeProvider — INativeApiProvider for the BaseApp process
 // ============================================================================
 
@@ -82,12 +98,14 @@ public:
     {
         return entity_destroyed_fn_;
     }
+    [[nodiscard]] auto dispatch_rpc_fn() const -> DispatchRpcFn { return dispatch_rpc_fn_; }
 
 private:
     BaseApp& app_;
     RestoreEntityFn restore_entity_fn_{nullptr};
     GetEntityDataFn get_entity_data_fn_{nullptr};
     EntityDestroyedFn entity_destroyed_fn_{nullptr};
+    DispatchRpcFn dispatch_rpc_fn_{nullptr};
 };
 
 }  // namespace atlas

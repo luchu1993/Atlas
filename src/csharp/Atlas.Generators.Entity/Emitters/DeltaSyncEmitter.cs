@@ -33,11 +33,18 @@ internal static class DeltaSyncEmitter
         sb.AppendLine($"public partial class {model.ClassName}");
         sb.AppendLine("{");
 
-        // Scope constants for readability
+        // Scope constants — matches Atlas.Entity.ReplicationScope enum:
+        //   CellPrivate=0, BaseOnly=1, OwnClient=2, AllClients=3
+        // Note: C++ entity_type_descriptor.hpp has an extended 8-value enum (OtherClients,
+        // CellPublicAndOwn, Base, BaseAndClient). When .def-based definitions are adopted,
+        // this filtering must be updated to use explicit scope matching instead of >=.
         sb.AppendLine("    // ReplicationScope: CellPrivate=0, BaseOnly=1, OwnClient=2, AllClients=3");
         sb.AppendLine();
 
         // SerializeForOwnerClient: OwnClient (2) + AllClients (3) fields
+        // With the current 4-value C# enum, >= 2 correctly selects {OwnClient, AllClients}.
+        // If the enum is extended to match C++ (8 values), change to explicit matching:
+        //   scope == OwnClient || scope == AllClients || scope == CellPublicAndOwn || scope == BaseAndClient
         var ownerFields = replicatedFields.Where(f => f.ReplicationScope >= 2).ToList();
         sb.AppendLine("    public void SerializeForOwnerClient(ref SpanWriter writer)");
         sb.AppendLine("    {");
@@ -49,6 +56,8 @@ internal static class DeltaSyncEmitter
         sb.AppendLine();
 
         // SerializeForOtherClients: AllClients (3) fields only
+        // With the current 4-value C# enum, >= 3 correctly selects {AllClients}.
+        // If extended to 8 values, change to: scope == OtherClients || scope == AllClients
         var otherFields = replicatedFields.Where(f => f.ReplicationScope >= 3).ToList();
         sb.AppendLine("    public void SerializeForOtherClients(ref SpanWriter writer)");
         sb.AppendLine("    {");

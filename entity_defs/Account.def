@@ -1,0 +1,16 @@
+<entity name="Account">
+
+  <properties>
+    <property name="username"  type="string" scope="base"            persistent="true" />
+    <property name="lastLogin" type="string" scope="base"            persistent="true" />
+    <property name="loginKey"  type="string" scope="base_and_client" persistent="true" />
+  </properties>
+
+  <base_methods>
+    <method name="RequestAvatarList" exposed="own_client" />
+    <method name="SelectAvatar" exposed="own_client">
+      <arg name="avatarIndex" type="int32" />
+    </method>
+  </base_methods>
+
+</entity>

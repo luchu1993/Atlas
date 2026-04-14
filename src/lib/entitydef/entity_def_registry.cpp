@@ -137,6 +137,13 @@ bool EntityDefRegistry::register_type(const std::byte* data, int32_t len)
             rpc.param_types.push_back(static_cast<PropertyDataType>(*pt));
         }
 
+        // ExposedScope — appended after param_types
+        auto exposed_val = reader.read<uint8_t>();
+        if (exposed_val)
+        {
+            rpc.exposed = static_cast<ExposedScope>(*exposed_val);
+        }
+
         desc.rpcs.push_back(std::move(rpc));
     }
 
@@ -211,6 +218,31 @@ bool EntityDefRegistry::validate_rpc(uint16_t type_id, uint32_t rpc_id) const
     if (it == rpc_to_type_.end())
         return false;
     return types_[it->second].type_id == type_id;
+}
+
+const RpcDescriptor* EntityDefRegistry::find_rpc(uint32_t rpc_id) const
+{
+    auto it = rpc_to_type_.find(rpc_id);
+    if (it == rpc_to_type_.end())
+        return nullptr;
+    for (const auto& rpc : types_[it->second].rpcs)
+    {
+        if (rpc.rpc_id == rpc_id)
+            return &rpc;
+    }
+    return nullptr;
+}
+
+bool EntityDefRegistry::is_exposed(uint32_t rpc_id) const
+{
+    auto* rpc = find_rpc(rpc_id);
+    return rpc != nullptr && rpc->is_exposed();
+}
+
+ExposedScope EntityDefRegistry::get_exposed_scope(uint32_t rpc_id) const
+{
+    auto* rpc = find_rpc(rpc_id);
+    return rpc ? rpc->exposed : ExposedScope::None;
 }
 
 std::vector<const PropertyDescriptor*> EntityDefRegistry::get_replicated_properties(
@@ -341,12 +373,20 @@ auto EntityDefRegistry::from_json_file(const std::filesystem::path& path)
 
                 // scope
                 auto scope_str = prop_node->read_string("scope", "cell_private");
-                if (scope_str == "base_only")
-                    prop.scope = ReplicationScope::BaseOnly;
+                if (scope_str == "cell_public")
+                    prop.scope = ReplicationScope::CellPublic;
                 else if (scope_str == "own_client")
                     prop.scope = ReplicationScope::OwnClient;
+                else if (scope_str == "other_clients")
+                    prop.scope = ReplicationScope::OtherClients;
                 else if (scope_str == "all_clients")
                     prop.scope = ReplicationScope::AllClients;
+                else if (scope_str == "cell_public_and_own")
+                    prop.scope = ReplicationScope::CellPublicAndOwn;
+                else if (scope_str == "base" || scope_str == "base_only")
+                    prop.scope = ReplicationScope::Base;
+                else if (scope_str == "base_and_client")
+                    prop.scope = ReplicationScope::BaseAndClient;
                 else
                     prop.scope = ReplicationScope::CellPrivate;
 

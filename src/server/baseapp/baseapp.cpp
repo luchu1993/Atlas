@@ -211,6 +211,9 @@ auto BaseApp::init(int argc, char* argv[]) -> bool
     (void)ext_table.register_typed_handler<baseapp::Authenticate>(
         [this](const Address& /*src*/, Channel* ch, const baseapp::Authenticate& msg)
         { on_client_authenticate(*ch, msg); });
+    (void)ext_table.register_typed_handler<baseapp::ClientBaseRpc>(
+        [this](const Address& /*src*/, Channel* ch, const baseapp::ClientBaseRpc& msg)
+        { on_client_base_rpc(*ch, msg); });
 
     ATLAS_LOG_INFO("BaseApp: initialised (app_index={})", app_index);
     return true;
@@ -655,13 +658,16 @@ void BaseApp::on_current_cell(Channel& /*ch*/, const baseapp::CurrentCell& msg)
 
 void BaseApp::on_cell_rpc_forward(Channel& /*ch*/, const baseapp::CellRpcForward& msg)
 {
-    // C# entity receives the base-directed RPC call via the native API callback table.
-    // We invoke the RPC handler through the script engine.
-    std::vector<ScriptValue> ba_args{
-        ScriptValue::from_int(static_cast<int32_t>(msg.base_entity_id)),
-        ScriptValue::from_int(static_cast<int32_t>(msg.rpc_id)),
-        ScriptValue(std::vector<std::byte>(msg.payload.begin(), msg.payload.end()))};
-    (void)script_engine().call_function("Atlas.Runtime", "OnBaseRpc", ba_args);
+    // C# entity receives the base-directed RPC call via the native callback table.
+    auto dispatch_fn = native_provider().dispatch_rpc_fn();
+    if (!dispatch_fn)
+    {
+        ATLAS_LOG_WARNING("BaseApp: on_cell_rpc_forward: dispatch_rpc callback not registered");
+        return;
+    }
+    dispatch_fn(msg.base_entity_id, msg.rpc_id,
+                reinterpret_cast<const uint8_t*>(msg.payload.data()),
+                static_cast<int32_t>(msg.payload.size()));
 }
 
 void BaseApp::on_self_rpc_from_cell(Channel& /*ch*/, const baseapp::SelfRpcFromCell& msg)
@@ -2412,6 +2418,42 @@ void BaseApp::on_client_authenticate(Channel& ch, const baseapp::Authenticate& m
     clear_prepared_login_entity(proxy->entity_id());
 
     ATLAS_LOG_DEBUG("BaseApp: client authenticated as entity={}", proxy->entity_id());
+}
+
+// ============================================================================
+// on_client_base_rpc — handle exposed base method call from client
+// ============================================================================
+
+void BaseApp::on_client_base_rpc(Channel& ch, const baseapp::ClientBaseRpc& msg)
+{
+    // 1. Find the proxy bound to this client channel
+    auto it = client_entity_index_.find(ch.remote_address());
+    if (it == client_entity_index_.end())
+    {
+        ATLAS_LOG_WARNING("BaseApp: ClientBaseRpc from unauthenticated channel");
+        return;
+    }
+    auto entity_id = it->second;
+
+    // 2. Validate the RPC is exposed
+    auto& registry = EntityDefRegistry::instance();
+    auto* rpc_desc = registry.find_rpc(msg.rpc_id);
+    if (!rpc_desc || rpc_desc->exposed == ExposedScope::None)
+    {
+        ATLAS_LOG_WARNING("BaseApp: client tried to call non-exposed base method (rpc_id=0x{:06X})",
+                          msg.rpc_id);
+        return;
+    }
+
+    // 3. Dispatch to C# via the native callback
+    auto dispatch_fn = native_provider().dispatch_rpc_fn();
+    if (!dispatch_fn)
+    {
+        ATLAS_LOG_WARNING("BaseApp: ClientBaseRpc: dispatch_rpc callback not registered");
+        return;
+    }
+    dispatch_fn(entity_id, msg.rpc_id, reinterpret_cast<const uint8_t*>(msg.payload.data()),
+                static_cast<int32_t>(msg.payload.size()));
 }
 
 }  // namespace atlas

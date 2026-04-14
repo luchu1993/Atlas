@@ -1,0 +1,26 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net9.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <RootNamespace>Atlas.BaseSample</RootNamespace>
+    <!-- Process context: this project compiles for the BaseApp process -->
+    <DefineConstants>ATLAS_BASE</DefineConstants>
+    <EmitCompilerGeneratedFiles>true</EmitCompilerGeneratedFiles>
+    <CompilerGeneratedFilesOutputPath>$(BaseIntermediateOutputPath)generated</CompilerGeneratedFilesOutputPath>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\csharp\Atlas.Runtime\Atlas.Runtime.csproj" />
+    <ProjectReference Include="..\..\src\csharp\Atlas.Generators.Def\Atlas.Generators.Def.csproj"
+                      OutputItemType="Analyzer"
+                      ReferenceOutputAssembly="false" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <AdditionalFiles Include="..\..\entity_defs\Avatar.def" />
+    <AdditionalFiles Include="..\..\entity_defs\Account.def" />
+  </ItemGroup>
+
+</Project>

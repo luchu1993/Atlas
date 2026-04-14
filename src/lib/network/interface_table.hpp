@@ -3,6 +3,7 @@
 #include "foundation/containers/paged_sparse_table.hpp"
 #include "network/message.hpp"
 
+#include <functional>
 #include <memory>
 
 namespace atlas
@@ -38,8 +39,12 @@ public:
     [[nodiscard]] auto handler(MessageID id) const -> MessageHandler*;
     [[nodiscard]] auto handler_count() const -> size_t;
 
+    using DefaultHandler = std::function<void(const Address&, Channel*, MessageID, BinaryReader&)>;
+    void set_default_handler(DefaultHandler handler) { default_handler_ = std::move(handler); }
+
 private:
     PagedSparseTable<MessageID, Entry> entries_;
+    DefaultHandler default_handler_;
 };
 
 }  // namespace atlas

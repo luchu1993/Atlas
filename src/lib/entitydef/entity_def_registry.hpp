@@ -40,10 +40,25 @@ public:
     /// Validate that rpc_id belongs to the given entity type.
     [[nodiscard]] bool validate_rpc(uint16_t type_id, uint32_t rpc_id) const;
 
-    /// Get replicated properties for a type, filtered by max_scope.
-    /// Returns properties whose scope >= max_scope threshold appropriate for the target:
-    ///   - For owner client: scope >= OwnClient (2)
-    ///   - For other clients: scope >= AllClients (3)
+    /// Find an RPC descriptor by its packed rpc_id. Returns nullptr if not found.
+    [[nodiscard]] const RpcDescriptor* find_rpc(uint32_t rpc_id) const;
+
+    /// Check whether an RPC is exposed to clients.
+    [[nodiscard]] bool is_exposed(uint32_t rpc_id) const;
+
+    /// Get the exposed scope for an RPC. Returns None if not found.
+    [[nodiscard]] ExposedScope get_exposed_scope(uint32_t rpc_id) const;
+
+    /// Get replicated properties for a type, filtered by min_scope.
+    /// Returns properties whose scope >= min_scope.
+    ///
+    /// Current usage (with C# 4-value enum: CellPrivate=0, BaseOnly=1, OwnClient=2, AllClients=3):
+    ///   - For owner client: pass OwnClient (2) → selects {OwnClient, AllClients}
+    ///   - For other clients: pass OtherClients (3) → selects {AllClients} (C# AllClients == 3)
+    ///
+    /// WARNING: The C++ ReplicationScope enum has 8 values (OtherClients=3, AllClients=4, etc.)
+    /// but C# only sends values 0-3. If .def-based definitions are adopted with the full
+    /// 8-value enum, this >= comparison must be replaced with explicit scope matching.
     [[nodiscard]] std::vector<const PropertyDescriptor*> get_replicated_properties(
         uint16_t type_id, ReplicationScope min_scope) const;
 

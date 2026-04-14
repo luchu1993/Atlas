@@ -11,6 +11,7 @@ internal unsafe struct NativeCallbackTable
     public nint RestoreEntity;
     public nint GetEntityData;
     public nint EntityDestroyed;
+    public nint DispatchRpc;
 }
 
 internal static unsafe class NativeCallbacks
@@ -25,6 +26,7 @@ internal static unsafe class NativeCallbacks
             (nint)(delegate* unmanaged<uint, ushort, long, byte*, int, void>)&RestoreEntity;
         table.GetEntityData = (nint)(delegate* unmanaged<uint, byte**, int*, void>)&GetEntityData;
         table.EntityDestroyed = (nint)(delegate* unmanaged<uint, void>)&EntityDestroyed;
+        table.DispatchRpc = (nint)(delegate* unmanaged<uint, uint, byte*, int, void>)&DispatchRpc;
 
         NativeApi.SetNativeCallbacks(&table, sizeof(NativeCallbackTable));
     }
@@ -145,6 +147,41 @@ internal static unsafe class NativeCallbacks
         {
             ThreadGuard.EnsureMainThread();
             EntityManager.Instance.Destroy(entityId);
+        }
+        catch (Exception ex)
+        {
+            ErrorBridge.SetError(ex);
+        }
+    }
+
+    [UnmanagedCallersOnly]
+    public static void DispatchRpc(uint entityId, uint rpcId, byte* payload, int len)
+    {
+        try
+        {
+            ThreadGuard.EnsureMainThread();
+
+            var entity = EntityManager.Instance.Get(entityId);
+            if (entity is null)
+            {
+                Log.Warning($"DispatchRpc: unknown entity {entityId}");
+                return;
+            }
+
+            var reader = new SpanReader(new ReadOnlySpan<byte>(payload, len));
+
+            // Determine direction from the packed rpc_id: bits 22-23
+            // 0=ClientRpc, 1=reserved (unused), 2=CellRpc, 3=BaseRpc
+            int direction = (int)((rpcId >> 22) & 0x3);
+            if (direction == 1)
+            {
+                Log.Warning($"DispatchRpc: direction=1 is reserved (rpcId=0x{rpcId:X6})");
+                return;
+            }
+            int id = (int)rpcId;
+
+            var dispatcher = RpcBridge.Dispatchers[direction];
+            dispatcher?.Invoke(entity, id, ref reader);
         }
         catch (Exception ex)
         {
