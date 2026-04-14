@@ -70,10 +70,10 @@ ThreadPool::ThreadPool(uint32_t num_threads) : impl_(std::make_unique<Impl>())
 
                         task = std::move(impl_->tasks.front());
                         impl_->tasks.pop();
+                        impl_->pending.fetch_sub(1, std::memory_order_relaxed);
                     }
 
                     task();
-                    impl_->pending.fetch_sub(1, std::memory_order_relaxed);
                 }
             });
     }
@@ -88,6 +88,10 @@ void ThreadPool::enqueue(std::function<void()> task)
 {
     {
         std::lock_guard lock(impl_->mutex);
+        if (impl_->stopped.load(std::memory_order_relaxed))
+        {
+            return;  // Silently drop — packaged_task dtor sets broken_promise
+        }
         impl_->tasks.push(std::move(task));
         impl_->pending.fetch_add(1, std::memory_order_relaxed);
     }
@@ -96,12 +100,18 @@ void ThreadPool::enqueue(std::function<void()> task)
 
 void ThreadPool::shutdown()
 {
-    if (impl_->stopped.exchange(true, std::memory_order_acq_rel))
     {
-        return;  // Already shut down
+        std::lock_guard lock(impl_->mutex);
+        if (impl_->stopped.exchange(true))
+        {
+            return;  // Already shut down
+        }
     }
 
-    // Wake all workers so they see stopped=true and drain remaining tasks
+    // Wake all workers so they see stopped=true and drain remaining tasks.
+    // Setting stopped under the mutex above prevents a lost-wakeup race:
+    // a worker that holds the mutex for its predicate check cannot miss
+    // the transition, and a worker already in cv.wait() will be notified.
     impl_->cv.notify_all();
 
     // jthread destructor joins — workers will process all queued tasks
