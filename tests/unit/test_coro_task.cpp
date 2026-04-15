@@ -19,23 +19,18 @@ using namespace atlas;
 template <typename T>
 auto sync_wait(Task<T>& task) -> T
 {
-    // Wrap the task in a FireAndForget-style driver that immediately starts it.
+    // Use FireAndForget (eager start) to drive the lazy Task chain.
+    // Avoids calling operator co_await() in a non-coroutine function,
+    // which MSVC incorrectly treats as making the enclosing function a coroutine.
     T result{};
     bool done = false;
 
-    auto driver = [&]() -> Task<void>
+    auto driver = [&]() -> FireAndForget
     {
         result = co_await task;
         done = true;
     };
-
-    auto driver_task = driver();
-
-    // Drive the lazy Task chain: resume the outermost coroutine once;
-    // symmetric transfer will propagate through the chain.
-    auto awaiter = driver_task.operator co_await();
-    auto h = awaiter.await_suspend(std::noop_coroutine());
-    h.resume();
+    driver();
 
     EXPECT_TRUE(done);
     return result;
@@ -45,16 +40,12 @@ inline void sync_wait_void(Task<void>& task)
 {
     bool done = false;
 
-    auto driver = [&]() -> Task<void>
+    auto driver = [&]() -> FireAndForget
     {
         co_await task;
         done = true;
     };
-
-    auto driver_task = driver();
-    auto awaiter = driver_task.operator co_await();
-    auto h = awaiter.await_suspend(std::noop_coroutine());
-    h.resume();
+    driver();
 
     EXPECT_TRUE(done);
 }

@@ -9,6 +9,7 @@
 #include <array>
 #include <chrono>
 #include <cstddef>
+#include <optional>
 #include <thread>
 
 namespace atlas
@@ -101,6 +102,7 @@ protected:
 
         auto accepted = server_sock->accept();
         ASSERT_TRUE(accepted.has_value());
+        peer_sock_ = std::move(accepted->first);
 
         sender_ =
             std::make_unique<TcpChannel>(dispatcher_, table_, std::move(*client_sock), server_addr);
@@ -109,6 +111,7 @@ protected:
 
     EventDispatcher dispatcher_{"test_delta_fwd"};
     InterfaceTable table_;
+    std::optional<Socket> peer_sock_;  // Keep accepted socket alive to prevent SIGPIPE.
     std::unique_ptr<TcpChannel> sender_;
 };
 
