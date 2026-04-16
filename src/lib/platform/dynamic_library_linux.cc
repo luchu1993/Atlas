@@ -38,7 +38,7 @@ auto DynamicLibrary::Load(const std::filesystem::path& path) -> Result<DynamicLi
   void* handle = dlopen(path.string().c_str(), RTLD_NOW);
   if (!handle) {
     const char* err = dlerror();
-    return Error{ErrorCode::IoError,
+    return Error{ErrorCode::kIoError,
                  std::string("dlopen failed: ") + (err ? err : "unknown error")};
   }
   return DynamicLibrary{handle};
