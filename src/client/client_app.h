@@ -36,7 +36,7 @@ class ClientApp {
     std::filesystem::path runtime_config;
   };
 
-  static auto run(int argc, char* argv[]) -> int;
+  static auto Run(int argc, char* argv[]) -> int;
 
   ClientApp();
   ~ClientApp();
@@ -45,20 +45,20 @@ class ClientApp {
   [[nodiscard]] auto baseapp_channel() -> Channel* { return baseapp_channel_; }
 
  private:
-  auto init(int argc, char* argv[]) -> bool;
-  void fini();
-  auto main_loop() -> int;
+  auto Init(int argc, char* argv[]) -> bool;
+  void Fini();
+  auto MainLoop() -> int;
 
   // CLR embedding
-  auto init_clr(const char* exe_path) -> bool;
-  void fini_clr();
+  auto InitClr(const char* exe_path) -> bool;
+  void FiniClr();
 
   // Login flow
-  auto login() -> bool;
-  auto authenticate(const Address& baseapp_addr, const SessionKey& session_key) -> bool;
+  auto Login() -> bool;
+  auto Authenticate(const Address& baseapp_addr, const SessionKey& session_key) -> bool;
 
   // RPC handling — dispatch incoming messages from BaseApp
-  void on_rpc_message(uint32_t rpc_id, const std::byte* payload, int32_t len);
+  void OnRpcMessage(uint32_t rpc_id, const std::byte* payload, int32_t len);
 
   Config config_;
   EventDispatcher dispatcher_{"client"};

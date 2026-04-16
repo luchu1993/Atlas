@@ -27,11 +27,11 @@ namespace atlas {
 // Static entry point
 // ============================================================================
 
-auto ClientApp::run(int argc, char* argv[]) -> int {
+auto ClientApp::Run(int argc, char* argv[]) -> int {
   ClientApp app;
-  if (!app.init(argc, argv)) return 1;
-  auto rc = app.main_loop();
-  app.fini();
+  if (!app.Init(argc, argv)) return 1;
+  auto rc = app.MainLoop();
+  app.Fini();
   return rc;
 }
 
@@ -46,7 +46,7 @@ ClientApp::~ClientApp() = default;
 // Init
 // ============================================================================
 
-auto ClientApp::init(int argc, char* argv[]) -> bool {
+auto ClientApp::Init(int argc, char* argv[]) -> bool {
   // Parse command-line arguments
   for (int i = 1; i < argc; ++i) {
     std::string_view arg(argv[i]);
@@ -85,7 +85,7 @@ auto ClientApp::init(int argc, char* argv[]) -> bool {
 
   // Init CLR if assembly is specified
   if (!config_.script_assembly.empty()) {
-    if (!init_clr(argv[0])) return false;
+    if (!InitClr(argv[0])) return false;
   }
 
   return true;
@@ -95,7 +95,7 @@ auto ClientApp::init(int argc, char* argv[]) -> bool {
 // CLR initialization — mirrors ScriptApp pattern
 // ============================================================================
 
-auto ClientApp::init_clr(const char* exe_path) -> bool {
+auto ClientApp::InitClr(const char* exe_path) -> bool {
   native_provider_ = std::make_unique<ClientNativeProvider>(*this);
   SetNativeApiProvider(native_provider_.get());
 
@@ -174,7 +174,7 @@ auto ClientApp::init_clr(const char* exe_path) -> bool {
   return true;
 }
 
-void ClientApp::fini_clr() {
+void ClientApp::FiniClr() {
   using SetNativeApiProviderFn = void (*)(void*);
 
   if (script_engine_) {
@@ -198,8 +198,8 @@ void ClientApp::fini_clr() {
 // Fini
 // ============================================================================
 
-void ClientApp::fini() {
-  fini_clr();
+void ClientApp::Fini() {
+  FiniClr();
   ATLAS_LOG_INFO("Client: finalized");
 }
 
@@ -207,7 +207,7 @@ void ClientApp::fini() {
 // Login flow
 // ============================================================================
 
-auto ClientApp::login() -> bool {
+auto ClientApp::Login() -> bool {
   ATLAS_LOG_INFO("Client: connecting to LoginApp at {}:{}", config_.loginapp_host,
                  config_.loginapp_port);
 
@@ -245,10 +245,10 @@ auto ClientApp::login() -> bool {
   ATLAS_LOG_INFO("Client: login succeeded, BaseApp at {}", login_result->baseapp_addr.ToString());
 
   // Authenticate on BaseApp
-  return authenticate(login_result->baseapp_addr, login_result->session_key);
+  return Authenticate(login_result->baseapp_addr, login_result->session_key);
 }
 
-auto ClientApp::authenticate(const Address& baseapp_addr, const SessionKey& session_key) -> bool {
+auto ClientApp::Authenticate(const Address& baseapp_addr, const SessionKey& session_key) -> bool {
   auto ch_result = network_.ConnectRudp(baseapp_addr);
   if (!ch_result) {
     ATLAS_LOG_ERROR("Client: failed to connect to BaseApp: {}", ch_result.Error().Message());
@@ -297,7 +297,7 @@ auto ClientApp::authenticate(const Address& baseapp_addr, const SessionKey& sess
 // RPC message handling
 // ============================================================================
 
-void ClientApp::on_rpc_message(uint32_t rpc_id, const std::byte* payload, int32_t len) {
+void ClientApp::OnRpcMessage(uint32_t rpc_id, const std::byte* payload, int32_t len) {
   if (!native_provider_ || !native_provider_->dispatch_rpc_fn()) {
     ATLAS_LOG_WARNING("Client: received RPC but no dispatcher registered");
     return;
@@ -310,9 +310,9 @@ void ClientApp::on_rpc_message(uint32_t rpc_id, const std::byte* payload, int32_
 // Main loop
 // ============================================================================
 
-auto ClientApp::main_loop() -> int {
+auto ClientApp::MainLoop() -> int {
   // Login first
-  if (!login()) return 1;
+  if (!Login()) return 1;
 
   ATLAS_LOG_INFO("Client: entering main loop (press Ctrl+C to exit)");
 
@@ -327,12 +327,12 @@ auto ClientApp::main_loop() -> int {
         if (rem > 0) {
           auto payload = reader.ReadBytes(rem);
           if (payload) {
-            on_rpc_message(static_cast<uint32_t>(msg_id),
-                           reinterpret_cast<const std::byte*>(payload->data()),
-                           static_cast<int32_t>(payload->size()));
+            OnRpcMessage(static_cast<uint32_t>(msg_id),
+                         reinterpret_cast<const std::byte*>(payload->data()),
+                         static_cast<int32_t>(payload->size()));
           }
         } else {
-          on_rpc_message(static_cast<uint32_t>(msg_id), nullptr, 0);
+          OnRpcMessage(static_cast<uint32_t>(msg_id), nullptr, 0);
         }
       });
 
