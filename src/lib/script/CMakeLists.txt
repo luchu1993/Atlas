@@ -2,8 +2,8 @@
 
 atlas_add_library(atlas_script
     SOURCES
-        script_events.cpp
-        script_value.cpp
+        script_events.cc
+        script_value.cc
     DEPS
         atlas_foundation
 )

@@ -2,10 +2,10 @@
 
 atlas_add_library(atlas_machined_lib
     SOURCES
-        process_registry.cpp
-        listener_manager.cpp
-        watcher_forwarder.cpp
-        machined_app.cpp
+        process_registry.cc
+        listener_manager.cc
+        watcher_forwarder.cc
+        machined_app.cc
     DEPS
         atlas_server
     PUBLIC_INCLUDE_DIRS
@@ -14,7 +14,7 @@ atlas_add_library(atlas_machined_lib
 
 atlas_add_executable(machined
     SOURCES
-        main.cpp
+        main.cc
     DEPS
         atlas_machined_lib
 )

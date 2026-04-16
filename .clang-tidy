@@ -9,6 +9,11 @@ Checks: >
   -cppcoreguidelines-pro-bounds-array-to-pointer-decay,
   -cppcoreguidelines-pro-type-reinterpret-cast,
   -cppcoreguidelines-owning-memory,
+  google-*,
+  -google-readability-todo,
+  llvm-header-guard,
+  misc-non-private-member-variables-in-classes,
+  misc-use-anonymous-namespace,
   modernize-*,
   -modernize-use-trailing-return-type,
   performance-*,
@@ -16,7 +21,131 @@ Checks: >
   -readability-magic-numbers,
   -readability-identifier-length,
 
+# Google-specific checks added:
+#   google-build-using-namespace        — ban "using namespace"
+#   google-explicit-constructor         — single-arg constructors must be explicit
+#   google-readability-casting          — prefer C++ casts over C casts
+#   google-global-names-in-headers      — no global names in headers
+#   google-default-arguments            — no default args on virtual methods
+#   google-runtime-int                  — use <cstdint> types
+#   google-build-namespaces             — namespace hygiene
+#   misc-non-private-member-variables-in-classes — class data must be private
+#   misc-use-anonymous-namespace        — prefer anon namespace over static
+
 WarningsAsErrors: ''
 HeaderFilterRegex: 'src/.*'
 FormatStyle: file
+
+# ============================================================================
+# Google C++ Style Guide — naming conventions
+# ============================================================================
+CheckOptions:
+  # ── Namespaces ─────────────────────────────────────────────
+  - key: readability-identifier-naming.NamespaceCase
+    value: lower_case
+
+  # ── Types (class, struct, enum, typedef, alias) ────────────
+  - key: readability-identifier-naming.ClassCase
+    value: CamelCase
+  - key: readability-identifier-naming.StructCase
+    value: CamelCase
+  - key: readability-identifier-naming.EnumCase
+    value: CamelCase
+  - key: readability-identifier-naming.TypeAliasCase
+    value: CamelCase
+  - key: readability-identifier-naming.TypedefCase
+    value: CamelCase
+  - key: readability-identifier-naming.UnionCase
+    value: CamelCase
+
+  # ── Functions & Methods: PascalCase ────────────────────────
+  - key: readability-identifier-naming.FunctionCase
+    value: CamelCase
+  - key: readability-identifier-naming.MethodCase
+    value: CamelCase
+  # Ignore coroutine protocol and STL interface methods that must stay snake_case
+  - key: readability-identifier-naming.MethodIgnoredRegexp
+    value: '^(await_ready|await_suspend|await_resume|initial_suspend|final_suspend|get_return_object|return_void|return_value|unhandled_exception|yield_value|begin|end|cbegin|cend|rbegin|rend|size|empty|data|push_back|pop_back|front|back|insert|erase|find|count|contains|swap|resize|reserve|clear|emplace|emplace_back|operator.*)$'
+  - key: readability-identifier-naming.VirtualMethodCase
+    value: CamelCase
+  - key: readability-identifier-naming.VirtualMethodIgnoredRegexp
+    value: '^(await_ready|await_suspend|await_resume|initial_suspend|final_suspend|get_return_object|return_void|return_value|unhandled_exception|yield_value|begin|end|cbegin|cend|rbegin|rend|size|empty|data|push_back|pop_back|front|back|insert|erase|find|count|contains|swap|resize|reserve|clear|emplace|emplace_back|operator.*)$'
+
+  # ── Variables: snake_case ──────────────────────────────────
+  - key: readability-identifier-naming.VariableCase
+    value: lower_case
+  - key: readability-identifier-naming.LocalVariableCase
+    value: lower_case
+  - key: readability-identifier-naming.ParameterCase
+    value: lower_case
+  - key: readability-identifier-naming.GlobalVariableCase
+    value: lower_case
+
+  # ── Class/struct members ───────────────────────────────────
+  # Private/protected: snake_case with trailing underscore
+  - key: readability-identifier-naming.MemberCase
+    value: lower_case
+  - key: readability-identifier-naming.MemberSuffix
+    value: '_'
+  - key: readability-identifier-naming.PrivateMemberCase
+    value: lower_case
+  - key: readability-identifier-naming.PrivateMemberSuffix
+    value: '_'
+  - key: readability-identifier-naming.ProtectedMemberCase
+    value: lower_case
+  - key: readability-identifier-naming.ProtectedMemberSuffix
+    value: '_'
+  # Public (struct data members): snake_case, no underscore
+  - key: readability-identifier-naming.PublicMemberCase
+    value: lower_case
+  - key: readability-identifier-naming.PublicMemberSuffix
+    value: ''
+
+  # ── Constants: kPascalCase ─────────────────────────────────
+  - key: readability-identifier-naming.ConstantCase
+    value: CamelCase
+  - key: readability-identifier-naming.ConstantPrefix
+    value: 'k'
+  - key: readability-identifier-naming.ConstexprVariableCase
+    value: CamelCase
+  - key: readability-identifier-naming.ConstexprVariablePrefix
+    value: 'k'
+  - key: readability-identifier-naming.StaticConstantCase
+    value: CamelCase
+  - key: readability-identifier-naming.StaticConstantPrefix
+    value: 'k'
+  - key: readability-identifier-naming.ClassConstantCase
+    value: CamelCase
+  - key: readability-identifier-naming.ClassConstantPrefix
+    value: 'k'
+  - key: readability-identifier-naming.GlobalConstantCase
+    value: CamelCase
+  - key: readability-identifier-naming.GlobalConstantPrefix
+    value: 'k'
+
+  # ── Enum values: kPascalCase ───────────────────────────────
+  - key: readability-identifier-naming.EnumConstantCase
+    value: CamelCase
+  - key: readability-identifier-naming.EnumConstantPrefix
+    value: 'k'
+  - key: readability-identifier-naming.ScopedEnumConstantCase
+    value: CamelCase
+  - key: readability-identifier-naming.ScopedEnumConstantPrefix
+    value: 'k'
+
+  # ── Macros: UPPER_SNAKE_CASE ───────────────────────────────
+  - key: readability-identifier-naming.MacroDefinitionCase
+    value: UPPER_CASE
+
+  # ── Template parameters: PascalCase ────────────────────────
+  - key: readability-identifier-naming.TemplateParameterCase
+    value: CamelCase
+  - key: readability-identifier-naming.TypeTemplateParameterCase
+    value: CamelCase
+  - key: readability-identifier-naming.ValueTemplateParameterCase
+    value: CamelCase
+
+  # ── Concepts: PascalCase ───────────────────────────────────
+  - key: readability-identifier-naming.ConceptCase
+    value: CamelCase
 ...

@@ -2,15 +2,15 @@
 
 atlas_add_library(atlas_server
     SOURCES
-        watcher.cpp
-        ipv4_networks.cpp
-        updatable.cpp
-        server_config.cpp
-        server_app.cpp
-        manager_app.cpp
-        script_app.cpp
-        entity_app.cpp
-        machined_client.cpp
+        watcher.cc
+        ipv4_networks.cc
+        updatable.cc
+        server_config.cc
+        server_app.cc
+        manager_app.cc
+        script_app.cc
+        entity_app.cc
+        machined_client.cc
     DEPS
         atlas_foundation
         atlas_network

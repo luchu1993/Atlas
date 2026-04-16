@@ -45,7 +45,10 @@ foreach(_t Continuous Experimental Nightly NightlyMemoryCheck)
 endforeach()
 
 # ── rapidjson (JSON parsing, header-only) ────────────────────────────────────
-# Disable rapidjson's own targets — we only need the headers.
+# We only need the headers, not rapidjson's own CMake targets.
+# rapidjson's CMakeLists.txt uses cmake_minimum_required(VERSION 2.8) which
+# CMake 3.31+ rejects (CMP0097).  Bypass it with FetchContent_Populate so that
+# add_subdirectory is never called on rapidjson's source tree.
 set(RAPIDJSON_BUILD_DOC      OFF CACHE BOOL "" FORCE)
 set(RAPIDJSON_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
 set(RAPIDJSON_BUILD_TESTS    OFF CACHE BOOL "" FORCE)
@@ -57,13 +60,11 @@ FetchContent_Declare(
     GIT_TAG        ab1842a2dae061284c0a62dca1cc6d5e7e37e346
     GIT_SHALLOW    FALSE
 )
-FetchContent_MakeAvailable(rapidjson)
-foreach(_t travis_doc RapidJSON_ALL_BUILD RapidJSON_INSTALL RapidJSON_RUN_TESTS
-             RapidJSON_RUN_TESTS_WITH_VALGRIND RapidJSON_tarball)
-    if(TARGET ${_t})
-        set_target_properties(${_t} PROPERTIES FOLDER "ThirdParty/rapidjson")
-    endif()
-endforeach()
+FetchContent_GetProperties(rapidjson)
+if(NOT rapidjson_POPULATED)
+    FetchContent_Populate(rapidjson)
+endif()
+# rapidjson_SOURCE_DIR is now set; consumers use it via SYSTEM PRIVATE include.
 
 # ── zlib (compression) ───────────────────────────────────────────────────────
 FetchContent_Declare(
@@ -103,7 +104,7 @@ FetchContent_MakeAvailable(sqlite3)
 # The amalgamation has no CMakeLists.txt — build it ourselves as a static lib.
 if(NOT TARGET sqlite3)
     add_library(sqlite3 STATIC ${sqlite3_SOURCE_DIR}/sqlite3.c)
-    target_include_directories(sqlite3 PUBLIC ${sqlite3_SOURCE_DIR})
+    target_include_directories(sqlite3 SYSTEM PUBLIC ${sqlite3_SOURCE_DIR})
     target_compile_definitions(sqlite3 PRIVATE
         SQLITE_THREADSAFE=1
         SQLITE_ENABLE_FTS5
@@ -122,6 +123,15 @@ set_target_properties(sqlite3 PROPERTIES FOLDER "ThirdParty")
 
 # ── .NET SDK (for CLR scripting) ─────────────────────────────────────────────
 include(${CMAKE_SOURCE_DIR}/cmake/FindDotNet.cmake)
+
+# Generate runtimeconfig.json into the binary directory, substituting the
+# runtime version detected by FindDotNet.cmake (DOTNET_RUNTIME_VERSION /
+# DOTNET_RUNTIME_TFM).  Test binaries load it from ATLAS_BINARY_DIR/runtime/.
+configure_file(
+    "${CMAKE_SOURCE_DIR}/runtime/atlas_server.runtimeconfig.json.in"
+    "${CMAKE_BINARY_DIR}/runtime/atlas_server.runtimeconfig.json"
+    @ONLY
+)
 
 # ── OpenSSL (optional at Phase 2) ────────────────────────────────────────────
 # find_package(OpenSSL REQUIRED)

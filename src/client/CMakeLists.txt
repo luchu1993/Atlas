@@ -2,8 +2,8 @@
 
 atlas_add_library(atlas_client_lib
     SOURCES
-        client_app.cpp
-        client_native_provider.cpp
+        client_app.cc
+        client_native_provider.cc
     DEPS
         atlas_foundation
         atlas_network
@@ -22,7 +22,7 @@ target_include_directories(atlas_client_lib
 
 atlas_add_executable(atlas_client
     SOURCES
-        main.cpp
+        main.cc
     DEPS
         atlas_client_lib
 )

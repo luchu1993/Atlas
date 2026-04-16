@@ -26,7 +26,7 @@ internal static unsafe partial class NativeApi
     // Logging
     // =========================================================================
 
-    [LibraryImport(LibName, EntryPoint = "atlas_log_message")]
+    [LibraryImport(LibName, EntryPoint = "AtlasLogMessage")]
     private static partial void LogMessageNative(int level, byte* msg, int len);
 
     /// <summary>
@@ -43,24 +43,24 @@ internal static unsafe partial class NativeApi
     // Time
     // =========================================================================
 
-    [LibraryImport(LibName, EntryPoint = "atlas_server_time")]
+    [LibraryImport(LibName, EntryPoint = "AtlasServerTime")]
     public static partial double ServerTime();
 
-    [LibraryImport(LibName, EntryPoint = "atlas_delta_time")]
+    [LibraryImport(LibName, EntryPoint = "AtlasDeltaTime")]
     public static partial float DeltaTime();
 
     // =========================================================================
     // Process identity
     // =========================================================================
 
-    [LibraryImport(LibName, EntryPoint = "atlas_get_process_prefix")]
+    [LibraryImport(LibName, EntryPoint = "AtlasGetProcessPrefix")]
     public static partial byte GetProcessPrefix();
 
     // =========================================================================
     // RPC dispatch
     // =========================================================================
 
-    [LibraryImport(LibName, EntryPoint = "atlas_send_client_rpc")]
+    [LibraryImport(LibName, EntryPoint = "AtlasSendClientRpc")]
     private static partial void SendClientRpcNative(
         uint entityId, uint packedRpcId,
         byte* payload, int payloadLen);
@@ -77,7 +77,7 @@ internal static unsafe partial class NativeApi
             SendClientRpcNative(entityId, packedRpcId, ptr, payload.Length);
     }
 
-    [LibraryImport(LibName, EntryPoint = "atlas_send_cell_rpc")]
+    [LibraryImport(LibName, EntryPoint = "AtlasSendCellRpc")]
     private static partial void SendCellRpcNative(
         uint entityId, uint rpcId, byte* payload, int payloadLen);
 
@@ -88,7 +88,7 @@ internal static unsafe partial class NativeApi
             SendCellRpcNative(entityId, rpcId, ptr, payload.Length);
     }
 
-    [LibraryImport(LibName, EntryPoint = "atlas_send_base_rpc")]
+    [LibraryImport(LibName, EntryPoint = "AtlasSendBaseRpc")]
     private static partial void SendBaseRpcNative(
         uint entityId, uint rpcId, byte* payload, int payloadLen);
 
@@ -103,7 +103,7 @@ internal static unsafe partial class NativeApi
     // Entity type registry
     // =========================================================================
 
-    [LibraryImport(LibName, EntryPoint = "atlas_register_entity_type")]
+    [LibraryImport(LibName, EntryPoint = "AtlasRegisterEntityType")]
     private static partial void RegisterEntityTypeNative(byte* data, int len);
 
     public static void RegisterEntityType(ReadOnlySpan<byte> data)
@@ -113,10 +113,10 @@ internal static unsafe partial class NativeApi
             RegisterEntityTypeNative(ptr, data.Length);
     }
 
-    [LibraryImport(LibName, EntryPoint = "atlas_unregister_all_entity_types")]
+    [LibraryImport(LibName, EntryPoint = "AtlasUnregisterAllEntityTypes")]
     public static partial void UnregisterAllEntityTypes();
 
-    [LibraryImport(LibName, EntryPoint = "atlas_set_native_callbacks")]
+    [LibraryImport(LibName, EntryPoint = "AtlasSetNativeCallbacks")]
     private static partial void SetNativeCallbacksNative(void* nativeCallbacks, int len);
 
     public static void SetNativeCallbacks(void* nativeCallbacks, int len)
@@ -128,6 +128,6 @@ internal static unsafe partial class NativeApi
     // ABI version (diagnostic)
     // =========================================================================
 
-    [LibraryImport(LibName, EntryPoint = "atlas_get_abi_version")]
+    [LibraryImport(LibName, EntryPoint = "AtlasGetAbiVersion")]
     public static partial uint GetAbiVersion();
 }

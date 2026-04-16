@@ -2,7 +2,7 @@
 
 atlas_add_library(atlas_db_xml
     SOURCES
-        xml_database.cpp
+        xml_database.cc
     DEPS
         atlas_foundation
         atlas_serialization

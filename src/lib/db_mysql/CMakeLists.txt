@@ -7,9 +7,9 @@ if(ATLAS_DB_MYSQL)
 
     atlas_add_library(atlas_db_mysql
         SOURCES
-            mysql_database.cpp
-            mysql_connection_pool.cpp
-            mysql_connection.cpp
+            mysql_database.cc
+            mysql_connection_pool.cc
+            mysql_connection.cc
         DEPS
             atlas_foundation
             atlas_serialization

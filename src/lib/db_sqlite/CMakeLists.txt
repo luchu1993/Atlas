@@ -2,7 +2,7 @@
 
 atlas_add_library(atlas_db_sqlite
     SOURCES
-        sqlite_database.cpp
+        sqlite_database.cc
     DEPS
         atlas_foundation
         atlas_entitydef

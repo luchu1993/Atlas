@@ -1,10 +1,10 @@
-#include "server/manager_app.hpp"
-#include "server/script_app.hpp"
+#include <memory>
+#include <vector>
 
 #include <gtest/gtest.h>
 
-#include <memory>
-#include <vector>
+#include "server/manager_app.h"
+#include "server/script_app.h"
 
 using namespace atlas;
 
@@ -12,320 +12,287 @@ using namespace atlas;
 // Mock ScriptEngine — no CLR, tracks lifecycle calls
 // ============================================================================
 
-class MockScriptEngine : public ScriptEngine
-{
-public:
-    bool initialized{false};
-    bool finalized{false};
-    int on_init_count{0};
-    int on_tick_count{0};
-    int on_shutdown_count{0};
-    bool last_is_reload{false};
-    float last_dt{0.0f};
-    bool fail_initialize{false};
+class MockScriptEngine : public ScriptEngine {
+ public:
+  bool initialized{false};
+  bool finalized{false};
+  int on_init_count{0};
+  int on_tick_count{0};
+  int on_shutdown_count{0};
+  bool last_is_reload{false};
+  float last_dt{0.0f};
+  bool fail_initialize{false};
 
-    auto initialize() -> Result<void> override
-    {
-        if (fail_initialize)
-            return Error{ErrorCode::InternalError, "mock init failure"};
-        initialized = true;
-        return {};
-    }
+  auto Initialize() -> Result<void> override {
+    if (fail_initialize) return Error{ErrorCode::kInternalError, "mock init failure"};
+    initialized = true;
+    return {};
+  }
 
-    void finalize() override { finalized = true; }
+  void Finalize() override { finalized = true; }
 
-    auto load_module(const std::filesystem::path&) -> Result<void> override { return {}; }
+  auto LoadModule(const std::filesystem::path&) -> Result<void> override { return {}; }
 
-    void on_tick(float dt) override
-    {
-        ++on_tick_count;
-        last_dt = dt;
-    }
+  void OnTick(float dt) override {
+    ++on_tick_count;
+    last_dt = dt;
+  }
 
-    void on_init(bool is_reload) override
-    {
-        ++on_init_count;
-        last_is_reload = is_reload;
-    }
+  void OnInit(bool is_reload) override {
+    ++on_init_count;
+    last_is_reload = is_reload;
+  }
 
-    void on_shutdown() override { ++on_shutdown_count; }
+  void OnShutdown() override { ++on_shutdown_count; }
 
-    auto call_function(std::string_view, std::string_view, std::span<const ScriptValue>)
-        -> Result<ScriptValue> override
-    {
-        return ScriptValue{};
-    }
+  auto CallFunction(std::string_view, std::string_view, std::span<const ScriptValue>)
+      -> Result<ScriptValue> override {
+    return ScriptValue{};
+  }
 
-    auto runtime_name() const -> std::string_view override { return "Mock"; }
+  auto RuntimeName() const -> std::string_view override { return "Mock"; }
 };
 
 // ============================================================================
 // Mock INativeApiProvider
 // ============================================================================
 
-class MockNativeProvider : public INativeApiProvider
-{
-public:
-    bool created{false};
-    MockNativeProvider() { created = true; }
+class MockNativeProvider : public INativeApiProvider {
+ public:
+  bool created{false};
+  MockNativeProvider() { created = true; }
 
-    void log_message(int32_t, const char*, int32_t) override {}
-    double server_time() override { return 0.0; }
-    float delta_time() override { return 0.0f; }
-    uint8_t get_process_prefix() override { return 0; }
-    void send_client_rpc(uint32_t, uint32_t, uint8_t, const std::byte*, int32_t) override {}
-    void send_cell_rpc(uint32_t, uint32_t, const std::byte*, int32_t) override {}
-    void send_base_rpc(uint32_t, uint32_t, const std::byte*, int32_t) override {}
-    void register_entity_type(const std::byte*, int32_t) override {}
-    void unregister_all_entity_types() override {}
-    void write_to_db(uint32_t, const std::byte*, int32_t) override {}
-    void give_client_to(uint32_t, uint32_t) override {}
-    void set_native_callbacks(const void*, int32_t) override {}
+  void LogMessage(int32_t, const char*, int32_t) override {}
+  double ServerTime() override { return 0.0; }
+  float DeltaTime() override { return 0.0f; }
+  uint8_t GetProcessPrefix() override { return 0; }
+  void SendClientRpc(uint32_t, uint32_t, uint8_t, const std::byte*, int32_t) override {}
+  void SendCellRpc(uint32_t, uint32_t, const std::byte*, int32_t) override {}
+  void SendBaseRpc(uint32_t, uint32_t, const std::byte*, int32_t) override {}
+  void RegisterEntityType(const std::byte*, int32_t) override {}
+  void UnregisterAllEntityTypes() override {}
+  void WriteToDb(uint32_t, const std::byte*, int32_t) override {}
+  void GiveClientTo(uint32_t, uint32_t) override {}
+  void SetNativeCallbacks(const void*, int32_t) override {}
 };
 
 // ============================================================================
 // TestScriptApp — injects mock engine, skips real CLR
 // ============================================================================
 
-class TestScriptApp : public ScriptApp
-{
-public:
-    MockScriptEngine* mock_engine{nullptr};
-    MockNativeProvider* mock_provider{nullptr};
-    bool script_ready_called{false};
-    int max_ticks{1};
+class TestScriptApp : public ScriptApp {
+ public:
+  MockScriptEngine* mock_engine{nullptr};
+  MockNativeProvider* mock_provider{nullptr};
+  bool script_ready_called{false};
+  int max_ticks{1};
 
-    // Snapshot captured in fini() before the engine is destroyed.
-    int captured_on_init_count{0};
-    int captured_on_tick_count{0};
-    int captured_on_shutdown_count{0};
-    bool captured_finalized{false};
-    bool captured_last_is_reload{false};
+  // Snapshot captured in Fini() before the engine is destroyed.
+  int captured_on_init_count{0};
+  int captured_on_tick_count{0};
+  int captured_on_shutdown_count{0};
+  bool captured_finalized{false};
+  bool captured_last_is_reload{false};
 
-    TestScriptApp(EventDispatcher& d, NetworkInterface& n) : ScriptApp(d, n) {}
+  TestScriptApp(EventDispatcher& d, NetworkInterface& n) : ScriptApp(d, n) {}
 
-protected:
-    auto create_native_provider() -> std::unique_ptr<INativeApiProvider> override
-    {
-        auto p = std::make_unique<MockNativeProvider>();
-        mock_provider = p.get();
-        return p;
+ protected:
+  auto CreateNativeProvider() -> std::unique_ptr<INativeApiProvider> override {
+    auto p = std::make_unique<MockNativeProvider>();
+    mock_provider = p.get();
+    return p;
+  }
+
+  // Override Init to inject the mock engine instead of ClrScriptEngine.
+  auto Init(int argc, char* argv[]) -> bool override {
+    // Call ServerApp::Init() directly (skip ScriptApp::Init() real CLR path)
+    if (!ServerApp::Init(argc, argv)) return false;
+
+    // Inject provider
+    auto provider = CreateNativeProvider();
+    SetNativeApiProvider(provider.get());
+    // Keep ownership via a captured unique_ptr in the lambda — store it locally.
+    // For test purposes we just leak it (process-lifetime).
+    provider.release();
+
+    // Inject mock engine
+    auto engine = std::make_unique<MockScriptEngine>();
+    mock_engine = engine.get();
+
+    if (mock_engine->fail_initialize) {
+      // Return false as real Init() would
+      return false;
     }
 
-    // Override init to inject the mock engine instead of ClrScriptEngine.
-    auto init(int argc, char* argv[]) -> bool override
-    {
-        // Call ServerApp::init() directly (skip ScriptApp::init() real CLR path)
-        if (!ServerApp::init(argc, argv))
-            return false;
+    mock_engine->initialized = true;
+    mock_engine->OnInit(false);
 
-        // Inject provider
-        auto provider = create_native_provider();
-        set_native_api_provider(provider.get());
-        // Keep ownership via a captured unique_ptr in the lambda — store it locally.
-        // For test purposes we just leak it (process-lifetime).
-        provider.release();
+    // Transfer ownership via the protected accessor: we need to expose
+    // script_engine_ — instead, store it and expose via OnTickComplete.
+    injected_engine_ = std::move(engine);
 
-        // Inject mock engine
-        auto engine = std::make_unique<MockScriptEngine>();
-        mock_engine = engine.get();
+    OnScriptReady();
+    return true;
+  }
 
-        if (mock_engine->fail_initialize)
-        {
-            // Return false as real init() would
-            return false;
-        }
-
-        mock_engine->initialized = true;
-        mock_engine->on_init(false);
-
-        // Transfer ownership via the protected accessor: we need to expose
-        // script_engine_ — instead, store it and expose via on_tick_complete.
-        injected_engine_ = std::move(engine);
-
-        on_script_ready();
-        return true;
+  void Fini() override {
+    if (injected_engine_) {
+      injected_engine_->OnShutdown();
+      injected_engine_->Finalize();
+      // Capture before destroying
+      captured_on_init_count = injected_engine_->on_init_count;
+      captured_on_tick_count = injected_engine_->on_tick_count;
+      captured_on_shutdown_count = injected_engine_->on_shutdown_count;
+      captured_finalized = injected_engine_->finalized;
+      captured_last_is_reload = injected_engine_->last_is_reload;
+      injected_engine_.reset();
     }
+    SetNativeApiProvider(nullptr);
+    ServerApp::Fini();
+  }
 
-    void fini() override
-    {
-        if (injected_engine_)
-        {
-            injected_engine_->on_shutdown();
-            injected_engine_->finalize();
-            // Capture before destroying
-            captured_on_init_count = injected_engine_->on_init_count;
-            captured_on_tick_count = injected_engine_->on_tick_count;
-            captured_on_shutdown_count = injected_engine_->on_shutdown_count;
-            captured_finalized = injected_engine_->finalized;
-            captured_last_is_reload = injected_engine_->last_is_reload;
-            injected_engine_.reset();
-        }
-        set_native_api_provider(nullptr);
-        ServerApp::fini();
-    }
+  void OnTickComplete() override {
+    if (injected_engine_) injected_engine_->OnTick(0.016f);
 
-    void on_tick_complete() override
-    {
-        if (injected_engine_)
-            injected_engine_->on_tick(0.016f);
+    if (++tick_count_ >= max_ticks) Shutdown();
+  }
 
-        if (++tick_count_ >= max_ticks)
-            shutdown();
-    }
+  void OnScriptReady() override { script_ready_called = true; }
 
-    void on_script_ready() override { script_ready_called = true; }
-
-private:
-    std::unique_ptr<MockScriptEngine> injected_engine_;
-    int tick_count_{0};
+ private:
+  std::unique_ptr<MockScriptEngine> injected_engine_;
+  int tick_count_{0};
 };
 
 // Minimal argv (no CLR paths needed)
-struct ScriptArgv
-{
-    std::vector<std::string> storage{"exe", "--type", "baseapp", "--update-hertz", "100"};
-    std::vector<char*> ptrs;
-    ScriptArgv()
-    {
-        for (auto& s : storage)
-            ptrs.push_back(s.data());
-    }
-    int argc() { return static_cast<int>(ptrs.size()); }
-    char** argv() { return ptrs.data(); }
+struct ScriptArgv {
+  std::vector<std::string> storage{"exe", "--type", "baseapp", "--update-hertz", "100"};
+  std::vector<char*> ptrs;
+  ScriptArgv() {
+    for (auto& s : storage) ptrs.push_back(s.data());
+  }
+  int argc() { return static_cast<int>(ptrs.size()); }
+  char** argv() { return ptrs.data(); }
 };
 
 // ============================================================================
 // ManagerApp tests (lightweight — just verifies it compiles and runs)
 // ============================================================================
 
-class TestManagerApp : public ManagerApp
-{
-public:
-    int max_ticks{1};
-    TestManagerApp(EventDispatcher& d, NetworkInterface& n) : ManagerApp(d, n) {}
+class TestManagerApp : public ManagerApp {
+ public:
+  int max_ticks{1};
+  TestManagerApp(EventDispatcher& d, NetworkInterface& n) : ManagerApp(d, n) {}
 
-protected:
-    void on_tick_complete() override
-    {
-        if (++tick_count_ >= max_ticks)
-            shutdown();
-    }
+ protected:
+  void OnTickComplete() override {
+    if (++tick_count_ >= max_ticks) Shutdown();
+  }
 
-private:
-    int tick_count_{0};
+ private:
+  int tick_count_{0};
 };
 
-TEST(ManagerApp, StartsAndStops)
-{
-    EventDispatcher dispatcher("test");
-    NetworkInterface network(dispatcher);
-    TestManagerApp app(dispatcher, network);
-    app.max_ticks = 2;
+TEST(ManagerApp, StartsAndStops) {
+  EventDispatcher dispatcher("test");
+  NetworkInterface network(dispatcher);
+  TestManagerApp app(dispatcher, network);
+  app.max_ticks = 2;
 
-    std::vector<std::string> s{"exe", "--type", "baseappmgr", "--update-hertz", "100"};
-    std::vector<char*> p;
-    for (auto& a : s)
-        p.push_back(a.data());
-    int code = app.run_app(static_cast<int>(p.size()), p.data());
-    EXPECT_EQ(code, 0);
+  std::vector<std::string> s{"exe", "--type", "baseappmgr", "--update-hertz", "100"};
+  std::vector<char*> p;
+  for (auto& a : s) p.push_back(a.data());
+  int code = app.RunApp(static_cast<int>(p.size()), p.data());
+  EXPECT_EQ(code, 0);
 }
 
-TEST(ManagerApp, WatchersPresent)
-{
-    EventDispatcher dispatcher("test");
-    NetworkInterface network(dispatcher);
-    TestManagerApp app(dispatcher, network);
-    app.max_ticks = 1;
+TEST(ManagerApp, WatchersPresent) {
+  EventDispatcher dispatcher("test");
+  NetworkInterface network(dispatcher);
+  TestManagerApp app(dispatcher, network);
+  app.max_ticks = 1;
 
-    std::vector<std::string> s{"exe", "--type", "cellappmgr", "--update-hertz", "100"};
-    std::vector<char*> p;
-    for (auto& a : s)
-        p.push_back(a.data());
-    app.run_app(static_cast<int>(p.size()), p.data());
+  std::vector<std::string> s{"exe", "--type", "cellappmgr", "--update-hertz", "100"};
+  std::vector<char*> p;
+  for (auto& a : s) p.push_back(a.data());
+  app.RunApp(static_cast<int>(p.size()), p.data());
 
-    EXPECT_TRUE(app.watcher_registry().get("app/type").has_value());
-    EXPECT_EQ(app.watcher_registry().get("app/type").value_or(""), "cellappmgr");
+  EXPECT_TRUE(app.GetWatcherRegistry().Get("app/type").has_value());
+  EXPECT_EQ(app.GetWatcherRegistry().Get("app/type").value_or(""), "cellappmgr");
 }
 
 // ============================================================================
 // ScriptApp tests
 // ============================================================================
 
-TEST(ScriptApp, NativeProviderCreated)
-{
-    EventDispatcher dispatcher("test");
-    NetworkInterface network(dispatcher);
-    TestScriptApp app(dispatcher, network);
+TEST(ScriptApp, NativeProviderCreated) {
+  EventDispatcher dispatcher("test");
+  NetworkInterface network(dispatcher);
+  TestScriptApp app(dispatcher, network);
 
-    ScriptArgv args;
-    app.run_app(args.argc(), args.argv());
+  ScriptArgv args;
+  app.RunApp(args.argc(), args.argv());
 
-    ASSERT_NE(app.mock_provider, nullptr);
-    EXPECT_TRUE(app.mock_provider->created);
+  ASSERT_NE(app.mock_provider, nullptr);
+  EXPECT_TRUE(app.mock_provider->created);
 }
 
-TEST(ScriptApp, ScriptEngineInitCalledOnStartup)
-{
-    EventDispatcher dispatcher("test");
-    NetworkInterface network(dispatcher);
-    TestScriptApp app(dispatcher, network);
+TEST(ScriptApp, ScriptEngineInitCalledOnStartup) {
+  EventDispatcher dispatcher("test");
+  NetworkInterface network(dispatcher);
+  TestScriptApp app(dispatcher, network);
 
-    ScriptArgv args;
-    app.run_app(args.argc(), args.argv());
+  ScriptArgv args;
+  app.RunApp(args.argc(), args.argv());
 
-    ASSERT_NE(app.mock_engine, nullptr);
-    EXPECT_TRUE(app.mock_engine->initialized);
-    EXPECT_EQ(app.captured_on_init_count, 1);
-    EXPECT_FALSE(app.captured_last_is_reload);
+  ASSERT_NE(app.mock_engine, nullptr);
+  EXPECT_TRUE(app.mock_engine->initialized);
+  EXPECT_EQ(app.captured_on_init_count, 1);
+  EXPECT_FALSE(app.captured_last_is_reload);
 }
 
-TEST(ScriptApp, OnScriptReadyCalled)
-{
-    EventDispatcher dispatcher("test");
-    NetworkInterface network(dispatcher);
-    TestScriptApp app(dispatcher, network);
+TEST(ScriptApp, OnScriptReadyCalled) {
+  EventDispatcher dispatcher("test");
+  NetworkInterface network(dispatcher);
+  TestScriptApp app(dispatcher, network);
 
-    ScriptArgv args;
-    app.run_app(args.argc(), args.argv());
+  ScriptArgv args;
+  app.RunApp(args.argc(), args.argv());
 
-    EXPECT_TRUE(app.script_ready_called);
+  EXPECT_TRUE(app.script_ready_called);
 }
 
-TEST(ScriptApp, OnTickDrivesScriptTick)
-{
-    EventDispatcher dispatcher("test");
-    NetworkInterface network(dispatcher);
-    TestScriptApp app(dispatcher, network);
-    app.max_ticks = 5;
+TEST(ScriptApp, OnTickDrivesScriptTick) {
+  EventDispatcher dispatcher("test");
+  NetworkInterface network(dispatcher);
+  TestScriptApp app(dispatcher, network);
+  app.max_ticks = 5;
 
-    ScriptArgv args;
-    app.run_app(args.argc(), args.argv());
+  ScriptArgv args;
+  app.RunApp(args.argc(), args.argv());
 
-    EXPECT_EQ(app.captured_on_tick_count, 5);
+  EXPECT_EQ(app.captured_on_tick_count, 5);
 }
 
-TEST(ScriptApp, ScriptEngineShutdownAndFinalizeCalledOnFini)
-{
-    EventDispatcher dispatcher("test");
-    NetworkInterface network(dispatcher);
-    TestScriptApp app(dispatcher, network);
+TEST(ScriptApp, ScriptEngineShutdownAndFinalizeCalledOnFini) {
+  EventDispatcher dispatcher("test");
+  NetworkInterface network(dispatcher);
+  TestScriptApp app(dispatcher, network);
 
-    ScriptArgv args;
-    app.run_app(args.argc(), args.argv());
+  ScriptArgv args;
+  app.RunApp(args.argc(), args.argv());
 
-    EXPECT_EQ(app.captured_on_shutdown_count, 1);
-    EXPECT_TRUE(app.captured_finalized);
+  EXPECT_EQ(app.captured_on_shutdown_count, 1);
+  EXPECT_TRUE(app.captured_finalized);
 }
 
-TEST(ScriptApp, ProcessTypeSetCorrectly)
-{
-    EventDispatcher dispatcher("test");
-    NetworkInterface network(dispatcher);
-    TestScriptApp app(dispatcher, network);
+TEST(ScriptApp, ProcessTypeSetCorrectly) {
+  EventDispatcher dispatcher("test");
+  NetworkInterface network(dispatcher);
+  TestScriptApp app(dispatcher, network);
 
-    ScriptArgv args;
-    app.run_app(args.argc(), args.argv());
+  ScriptArgv args;
+  app.RunApp(args.argc(), args.argv());
 
-    EXPECT_EQ(app.config().process_type, ProcessType::BaseApp);
+  EXPECT_EQ(app.Config().process_type, ProcessType::kBaseApp);
 }

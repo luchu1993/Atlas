@@ -70,6 +70,15 @@ endif()
 list(SORT _hostfxr_version_dirs ORDER DESCENDING)
 list(GET _hostfxr_version_dirs 0 _hostfxr_dir)
 
+# Extract runtime version from the hostfxr directory name (e.g. "9.0.14").
+get_filename_component(DOTNET_RUNTIME_VERSION "${_hostfxr_dir}" NAME)
+
+# Derive Target Framework Moniker (e.g. "net9.0" from "9.0.14").
+string(REGEX MATCH "^([0-9]+\\.[0-9]+)" _dotnet_tfm_ver "${DOTNET_RUNTIME_VERSION}")
+set(DOTNET_RUNTIME_TFM "net${_dotnet_tfm_ver}")
+
+message(STATUS "Detected .NET runtime: ${DOTNET_RUNTIME_VERSION} (TFM: ${DOTNET_RUNTIME_TFM})")
+
 # On Windows find_library only searches for .lib/.a, not .dll.
 # Use find_file for the actual shared library in all cases.
 find_file(DOTNET_HOSTFXR_LIB

@@ -2,7 +2,7 @@
 
 atlas_add_library(atlas_db
     SOURCES
-        database_factory.cpp
+        database_factory.cc
     DEPS
         atlas_foundation
         atlas_network

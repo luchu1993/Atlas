@@ -1,5 +1,10 @@
 cmake_minimum_required(VERSION 3.20)
 
+# Use extraction timestamp for FetchContent URL downloads (avoids CMP0135 warning).
+if(POLICY CMP0135)
+    cmake_policy(SET CMP0135 NEW)
+endif()
+
 project(Atlas
     VERSION 0.1.0
     LANGUAGES C CXX

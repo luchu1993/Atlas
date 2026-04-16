@@ -2,31 +2,148 @@
 Language: Cpp
 BasedOnStyle: Google
 
-# Atlas customizations
-IndentWidth: 4
-TabWidth: 4
+# ============================================================================
+# Google C++ Style — explicit settings
+# ============================================================================
+
+# Indentation
+IndentWidth: 2
+TabWidth: 8
 UseTab: Never
+ContinuationIndentWidth: 4
+ConstructorInitializerIndentWidth: 4
+AccessModifierOffset: -1
+IndentCaseLabels: true
+IndentCaseBlocks: false
+IndentGotoLabels: true
+IndentPPDirectives: None
+IndentWrappedFunctionNames: false
+NamespaceIndentation: None
+LambdaBodyIndentation: Signature
+
+# Line length
 ColumnLimit: 100
 
-AccessModifierOffset: -4
+# Braces
+BreakBeforeBraces: Attach
+Cpp11BracedListStyle: true
+
+# Alignment
 AlignAfterOpenBracket: Align
-AllowShortFunctionsOnASingleLine: Inline
-AllowShortIfStatementsOnASingleLine: Never
-AllowShortLoopsOnASingleLine: false
-BreakBeforeBraces: Allman
-NamespaceIndentation: None
+AlignConsecutiveAssignments: false
+AlignConsecutiveDeclarations: false
+AlignConsecutiveMacros: false
+AlignEscapedNewlines: Left
+AlignOperands: Align
+AlignTrailingComments: true
+
+# Pointer/reference
+DerivePointerAlignment: false
 PointerAlignment: Left
+ReferenceAlignment: Pointer
+
+# Short forms
+AllowAllArgumentsOnNextLine: true
+AllowAllParametersOfDeclarationOnNextLine: true
+AllowShortBlocksOnASingleLine: Empty
+AllowShortCaseLabelsOnASingleLine: false
+AllowShortEnumsOnASingleLine: true
+AllowShortFunctionsOnASingleLine: Inline
+AllowShortIfStatementsOnASingleLine: WithoutElse
+AllowShortLambdasOnASingleLine: All
+AllowShortLoopsOnASingleLine: true
+
+# Breaking
+AlwaysBreakAfterReturnType: None
+AlwaysBreakBeforeMultilineStrings: true
+AlwaysBreakTemplateDeclarations: Yes
+BinPackArguments: true
+BinPackParameters: true
+BreakBeforeBinaryOperators: None
+BreakBeforeTernaryOperators: true
+BreakConstructorInitializers: BeforeColon
+BreakInheritanceList: BeforeColon
+BreakStringLiterals: true
+PackConstructorInitializers: NextLine
+
+# Spaces
+SpaceAfterCStyleCast: false
+SpaceAfterLogicalNot: false
+SpaceAfterTemplateKeyword: true
+SpaceBeforeAssignmentOperators: true
+SpaceBeforeCaseColon: false
+SpaceBeforeCpp11BracedList: false
+SpaceBeforeCtorInitializerColon: true
+SpaceBeforeInheritanceColon: true
+SpaceBeforeParens: ControlStatements
+SpaceBeforeRangeBasedForLoopColon: true
+SpaceBeforeSquareBrackets: false
+SpaceInEmptyBlock: false
+SpaceInEmptyParentheses: false
+SpacesBeforeTrailingComments: 2
+SpacesInAngles: false
+SpacesInCStyleCastParentheses: false
+SpacesInConditionalStatement: false
+SpacesInContainerLiterals: true
+SpacesInParentheses: false
+SpacesInSquareBrackets: false
+
+# Includes — Google C++ Style Guide ordering
+# 1. Related header (auto-detected via IncludeIsMainRegex, priority 0)
+# 2. C system headers (.h extension)
+# 3. C++ standard library headers (no extension)
+# 4. Third-party library headers
+# 5. Project headers (double-quoted)
 SortIncludes: CaseInsensitive
 IncludeBlocks: Regroup
-
-# Include ordering
 IncludeCategories:
-  - Regex: '^"'
-    Priority: 1
-  - Regex: '^<atlas/'
-    Priority: 2
-  - Regex: '^<gtest/'
-    Priority: 3
-  - Regex: '^<'
+  # Third-party libraries (matched first to avoid .h confusion with C system)
+  - Regex: '^<(gtest|gmock|rapidjson|pugixml|hostfxr|nethost|coreclr_delegates|zlib|liburing|sqlite3|spdlog|fmt|asio|boost)'
     Priority: 4
+  # C system headers (.h extension, not matched above)
+  - Regex: '^<.*\.h>'
+    Priority: 2
+  # C++ standard library headers (no extension)
+  - Regex: '^<'
+    Priority: 3
+  # Project headers (double-quoted)
+  - Regex: '^"'
+    Priority: 5
+
+# Penalties (Google defaults)
+PenaltyBreakAssignment: 2
+PenaltyBreakBeforeFirstCallParameter: 1
+PenaltyBreakComment: 300
+PenaltyBreakFirstLessLess: 120
+PenaltyBreakString: 1000
+PenaltyBreakTemplateDeclaration: 10
+PenaltyExcessCharacter: 1000000
+PenaltyIndentedWhitespace: 0
+PenaltyReturnTypeOnItsOwnLine: 200
+
+# C++20 requires clauses
+IndentRequiresClause: true
+RequiresClausePosition: OwnLine
+RequiresExpressionIndentation: OuterScope
+
+# Qualifier alignment (const placement)
+QualifierAlignment: Leave
+
+# Misc
+CommentPragmas: '^ IWYU pragma:'
+CompactNamespaces: false
+EmptyLineAfterAccessModifier: Never
+EmptyLineBeforeAccessModifier: LogicalBlock
+FixNamespaceComments: true
+IncludeIsMainRegex: '([-_](test|unittest))?$'
+InsertBraces: false
+InsertTrailingCommas: None
+KeepEmptyLinesAtTheStartOfBlocks: false
+MaxEmptyLinesToKeep: 1
+ReflowComments: true
+RemoveSemicolon: true
+SeparateDefinitionBlocks: Leave
+ShortNamespaceLines: 1
+SortUsingDeclarations: true
+Standard: c++20
 ...

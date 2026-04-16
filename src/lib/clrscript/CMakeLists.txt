@@ -2,19 +2,19 @@
 
 atlas_add_library(atlas_clrscript
     SOURCES
-        base_native_provider.cpp
-        clr_bootstrap.cpp
-        clr_error.cpp
-        clr_host.cpp
-        $<$<PLATFORM_ID:Windows>:clr_host_windows.cpp>
-        $<$<PLATFORM_ID:Linux>:clr_host_linux.cpp>
-        clr_hot_reload.cpp
-        clr_object.cpp
-        clr_object_registry.cpp
-        clr_script_engine.cpp
-        file_watcher.cpp
-        native_api_provider.cpp
-        clr_marshal.cpp
+        base_native_provider.cc
+        clr_bootstrap.cc
+        clr_error.cc
+        clr_host.cc
+        $<$<PLATFORM_ID:Windows>:clr_host_windows.cc>
+        $<$<PLATFORM_ID:Linux>:clr_host_linux.cc>
+        clr_hot_reload.cc
+        clr_object.cc
+        clr_object_registry.cc
+        clr_script_engine.cc
+        file_watcher.cc
+        native_api_provider.cc
+        clr_marshal.cc
     DEPS
         atlas_foundation
         atlas_platform

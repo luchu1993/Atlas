@@ -1,650 +1,599 @@
-#include "network/event_dispatcher.hpp"
-#include "network/message.hpp"
-#include "network/network_interface.hpp"
-#include "network/reliable_udp.hpp"
-#include "network/tcp_channel.hpp"
-
-#include <gtest/gtest.h>
-
 #include <array>
 #include <atomic>
 #include <chrono>
 #include <thread>
 #include <vector>
 
+#include <gtest/gtest.h>
+
+#include "network/event_dispatcher.h"
+#include "network/message.h"
+#include "network/network_interface.h"
+#include "network/reliable_udp.h"
+#include "network/tcp_channel.h"
+
 using namespace atlas;
 
 // A simple test message
-struct NetTestMsg
-{
-    uint32_t value;
+struct NetTestMsg {
+  uint32_t value;
 
-    static auto descriptor() -> const MessageDesc&
-    {
-        static const MessageDesc desc{200, "NetTestMsg", MessageLengthStyle::Variable, -1};
-        return desc;
-    }
+  static auto Descriptor() -> const MessageDesc& {
+    static const MessageDesc desc{200, "NetTestMsg", MessageLengthStyle::kVariable, -1};
+    return desc;
+  }
 
-    void serialize(BinaryWriter& w) const { w.write<uint32_t>(value); }
+  void Serialize(BinaryWriter& w) const { w.Write<uint32_t>(value); }
 
-    static auto deserialize(BinaryReader& r) -> Result<NetTestMsg>
-    {
-        auto v = r.read<uint32_t>();
-        if (!v)
-            return v.error();
-        return NetTestMsg{*v};
-    }
+  static auto Deserialize(BinaryReader& r) -> Result<NetTestMsg> {
+    auto v = r.Read<uint32_t>();
+    if (!v) return v.Error();
+    return NetTestMsg{*v};
+  }
 };
 
 // Poll dispatcher until predicate returns true or timeout expires.
 // Avoids flaky sleep_for patterns.
 template <typename Pred>
 static bool poll_until(EventDispatcher& dispatcher, Pred pred,
-                       std::chrono::milliseconds timeout = std::chrono::milliseconds(500))
-{
-    auto deadline = std::chrono::steady_clock::now() + timeout;
-    while (std::chrono::steady_clock::now() < deadline)
-    {
-        dispatcher.process_once();
-        if (pred())
-            return true;
-        std::this_thread::sleep_for(std::chrono::milliseconds(1));
-    }
-    return false;
+                       std::chrono::milliseconds timeout = std::chrono::milliseconds(500)) {
+  auto deadline = std::chrono::steady_clock::now() + timeout;
+  while (std::chrono::steady_clock::now() < deadline) {
+    dispatcher.ProcessOnce();
+    if (pred()) return true;
+    std::this_thread::sleep_for(std::chrono::milliseconds(1));
+  }
+  return false;
 }
 
-class NetworkInterfaceTest : public ::testing::Test
-{
-protected:
-    EventDispatcher dispatcher_{"test"};
-    NetworkInterface ni_{dispatcher_};
+class NetworkInterfaceTest : public ::testing::Test {
+ protected:
+  EventDispatcher dispatcher_{"test"};
+  NetworkInterface ni_{dispatcher_};
 
-    void SetUp() override { dispatcher_.set_max_poll_wait(Milliseconds(1)); }
+  void SetUp() override { dispatcher_.SetMaxPollWait(Milliseconds(1)); }
 };
 
-TEST_F(NetworkInterfaceTest, StartTcpServer)
-{
-    auto result = ni_.start_tcp_server(Address("127.0.0.1", 0));
-    ASSERT_TRUE(result.has_value()) << result.error().message();
-    EXPECT_NE(ni_.tcp_address().port(), 0);
+TEST_F(NetworkInterfaceTest, StartTcpServer) {
+  auto result = ni_.StartTcpServer(Address("127.0.0.1", 0));
+  ASSERT_TRUE(result.HasValue()) << result.Error().Message();
+  EXPECT_NE(ni_.TcpAddress().Port(), 0);
 }
 
-TEST_F(NetworkInterfaceTest, StartUdp)
-{
-    auto result = ni_.start_udp(Address("127.0.0.1", 0));
-    ASSERT_TRUE(result.has_value()) << result.error().message();
-    EXPECT_NE(ni_.udp_address().port(), 0);
+TEST_F(NetworkInterfaceTest, StartUdp) {
+  auto result = ni_.StartUdp(Address("127.0.0.1", 0));
+  ASSERT_TRUE(result.HasValue()) << result.Error().Message();
+  EXPECT_NE(ni_.UdpAddress().Port(), 0);
 }
 
-TEST_F(NetworkInterfaceTest, TcpConnectAndAccept)
-{
-    auto server_result = ni_.start_tcp_server(Address("127.0.0.1", 0));
-    ASSERT_TRUE(server_result.has_value());
+TEST_F(NetworkInterfaceTest, TcpConnectAndAccept) {
+  auto server_result = ni_.StartTcpServer(Address("127.0.0.1", 0));
+  ASSERT_TRUE(server_result.HasValue());
 
-    auto connect_result = ni_.connect_tcp(ni_.tcp_address());
-    ASSERT_TRUE(connect_result.has_value()) << connect_result.error().message();
-    EXPECT_NE(*connect_result, nullptr);
+  auto connect_result = ni_.ConnectTcp(ni_.TcpAddress());
+  ASSERT_TRUE(connect_result.HasValue()) << connect_result.Error().Message();
+  EXPECT_NE(*connect_result, nullptr);
 
-    // Poll until the accept event is processed (≥1 channel)
-    EXPECT_TRUE(poll_until(dispatcher_, [&] { return ni_.channel_count() >= 1u; }));
+  // Poll until the accept event is processed (≥1 channel)
+  EXPECT_TRUE(poll_until(dispatcher_, [&] { return ni_.ChannelCount() >= 1u; }));
 }
 
-TEST_F(NetworkInterfaceTest, TcpMessageDispatch)
-{
-    // Start server NI
-    auto server_result = ni_.start_tcp_server(Address("127.0.0.1", 0));
-    ASSERT_TRUE(server_result.has_value());
-    auto server_addr = ni_.tcp_address();
+TEST_F(NetworkInterfaceTest, TcpMessageDispatch) {
+  // Start server NI
+  auto server_result = ni_.StartTcpServer(Address("127.0.0.1", 0));
+  ASSERT_TRUE(server_result.HasValue());
+  auto server_addr = ni_.TcpAddress();
 
-    // Register handler
-    std::atomic<bool> received{false};
-    std::atomic<uint32_t> received_value{0};
-    ni_.interface_table().register_typed_handler<NetTestMsg>(
-        [&](const Address&, Channel*, const NetTestMsg& msg)
-        {
-            received_value.store(msg.value, std::memory_order_relaxed);
-            received.store(true, std::memory_order_release);
-        });
+  // Register handler
+  std::atomic<bool> received{false};
+  std::atomic<uint32_t> received_value{0};
+  ni_.InterfaceTable().RegisterTypedHandler<NetTestMsg>(
+      [&](const Address&, Channel*, const NetTestMsg& msg) {
+        received_value.store(msg.value, std::memory_order_relaxed);
+        received.store(true, std::memory_order_release);
+      });
 
-    // Create a client socket and connect
-    auto client_sock = Socket::create_tcp();
-    ASSERT_TRUE(client_sock.has_value());
-    (void)client_sock->connect(server_addr);
+  // Create a client socket and connect
+  auto client_sock = Socket::CreateTcp();
+  ASSERT_TRUE(client_sock.HasValue());
+  (void)client_sock->Connect(server_addr);
 
-    // Poll until accept event processed (channel appears on server side)
-    ASSERT_TRUE(poll_until(dispatcher_, [&] { return ni_.channel_count() >= 1u; }));
+  // Poll until accept event processed (channel appears on server side)
+  ASSERT_TRUE(poll_until(dispatcher_, [&] { return ni_.ChannelCount() >= 1u; }));
 
-    // Build and send a framed message from client
+  // Build and send a framed message from client
+  Bundle bundle;
+  bundle.AddMessage(NetTestMsg{42});
+  auto payload = bundle.Finalize();
+
+  // TCP frame: [uint32 length LE][payload]
+  uint32_t frame_len = endian::ToLittle(static_cast<uint32_t>(payload.size()));
+  std::vector<std::byte> frame;
+  auto* len_bytes = reinterpret_cast<const std::byte*>(&frame_len);
+  frame.insert(frame.end(), len_bytes, len_bytes + 4);
+  frame.insert(frame.end(), payload.begin(), payload.end());
+
+  auto sent = client_sock->Send(frame);
+  ASSERT_TRUE(sent.HasValue()) << sent.Error().Message();
+
+  // Poll until the message handler fires
+  ASSERT_TRUE(poll_until(dispatcher_, [&] { return received.load(std::memory_order_acquire); }));
+
+  EXPECT_EQ(received_value.load(), 42u);
+}
+
+TEST_F(NetworkInterfaceTest, TcpReadableCallbackDrainsAllBufferedFrames) {
+  ASSERT_TRUE(ni_.StartTcpServer(Address("127.0.0.1", 0)).HasValue());
+
+  constexpr uint32_t kFrameCount = 160;
+  std::atomic<uint32_t> received_count{0};
+  std::atomic<uint32_t> last_value{0};
+
+  ni_.InterfaceTable().RegisterTypedHandler<NetTestMsg>(
+      [&](const Address&, Channel*, const NetTestMsg& msg) {
+        last_value.store(msg.value, std::memory_order_relaxed);
+        received_count.fetch_add(1, std::memory_order_relaxed);
+      });
+
+  auto client_sock = Socket::CreateTcp();
+  ASSERT_TRUE(client_sock.HasValue());
+  auto connect_result = client_sock->Connect(ni_.TcpAddress());
+  ASSERT_TRUE(connect_result.HasValue() || connect_result.Error().Code() == ErrorCode::kWouldBlock);
+
+  ASSERT_TRUE(poll_until(dispatcher_, [&] { return ni_.ChannelCount() >= 1u; }));
+
+  std::vector<std::byte> frames;
+  frames.reserve(kFrameCount * 16);
+
+  for (uint32_t i = 0; i < kFrameCount; ++i) {
     Bundle bundle;
-    bundle.add_message(NetTestMsg{42});
-    auto payload = bundle.finalize();
+    bundle.AddMessage(NetTestMsg{i});
+    auto payload = bundle.Finalize();
 
-    // TCP frame: [uint32 length LE][payload]
-    uint32_t frame_len = endian::to_little(static_cast<uint32_t>(payload.size()));
-    std::vector<std::byte> frame;
+    uint32_t frame_len = endian::ToLittle(static_cast<uint32_t>(payload.size()));
     auto* len_bytes = reinterpret_cast<const std::byte*>(&frame_len);
-    frame.insert(frame.end(), len_bytes, len_bytes + 4);
-    frame.insert(frame.end(), payload.begin(), payload.end());
+    frames.insert(frames.end(), len_bytes, len_bytes + sizeof(frame_len));
+    frames.insert(frames.end(), payload.begin(), payload.end());
+  }
 
-    auto sent = client_sock->send(frame);
-    ASSERT_TRUE(sent.has_value()) << sent.error().message();
+  std::size_t sent_total = 0;
+  while (sent_total < frames.size()) {
+    auto sent = client_sock->Send(
+        std::span<const std::byte>(frames.data() + sent_total, frames.size() - sent_total));
+    ASSERT_TRUE(sent.HasValue()) << sent.Error().Message();
+    ASSERT_GT(*sent, 0u);
+    sent_total += *sent;
+  }
 
-    // Poll until the message handler fires
-    ASSERT_TRUE(poll_until(dispatcher_, [&] { return received.load(std::memory_order_acquire); }));
+  ASSERT_TRUE(poll_until(
+      dispatcher_, [&] { return received_count.load(std::memory_order_relaxed) == kFrameCount; },
+      std::chrono::milliseconds(1000)));
 
-    EXPECT_EQ(received_value.load(), 42u);
+  EXPECT_EQ(received_count.load(std::memory_order_relaxed), kFrameCount);
+  EXPECT_EQ(last_value.load(std::memory_order_relaxed), kFrameCount - 1);
 }
 
-TEST_F(NetworkInterfaceTest, TcpReadableCallbackDrainsAllBufferedFrames)
-{
-    ASSERT_TRUE(ni_.start_tcp_server(Address("127.0.0.1", 0)).has_value());
-
-    constexpr uint32_t kFrameCount = 160;
-    std::atomic<uint32_t> received_count{0};
-    std::atomic<uint32_t> last_value{0};
-
-    ni_.interface_table().register_typed_handler<NetTestMsg>(
-        [&](const Address&, Channel*, const NetTestMsg& msg)
-        {
-            last_value.store(msg.value, std::memory_order_relaxed);
-            received_count.fetch_add(1, std::memory_order_relaxed);
-        });
-
-    auto client_sock = Socket::create_tcp();
-    ASSERT_TRUE(client_sock.has_value());
-    auto connect_result = client_sock->connect(ni_.tcp_address());
-    ASSERT_TRUE(connect_result.has_value() ||
-                connect_result.error().code() == ErrorCode::WouldBlock);
-
-    ASSERT_TRUE(poll_until(dispatcher_, [&] { return ni_.channel_count() >= 1u; }));
-
-    std::vector<std::byte> frames;
-    frames.reserve(kFrameCount * 16);
-
-    for (uint32_t i = 0; i < kFrameCount; ++i)
-    {
-        Bundle bundle;
-        bundle.add_message(NetTestMsg{i});
-        auto payload = bundle.finalize();
-
-        uint32_t frame_len = endian::to_little(static_cast<uint32_t>(payload.size()));
-        auto* len_bytes = reinterpret_cast<const std::byte*>(&frame_len);
-        frames.insert(frames.end(), len_bytes, len_bytes + sizeof(frame_len));
-        frames.insert(frames.end(), payload.begin(), payload.end());
-    }
-
-    std::size_t sent_total = 0;
-    while (sent_total < frames.size())
-    {
-        auto sent = client_sock->send(
-            std::span<const std::byte>(frames.data() + sent_total, frames.size() - sent_total));
-        ASSERT_TRUE(sent.has_value()) << sent.error().message();
-        ASSERT_GT(*sent, 0u);
-        sent_total += *sent;
-    }
-
-    ASSERT_TRUE(poll_until(
-        dispatcher_, [&] { return received_count.load(std::memory_order_relaxed) == kFrameCount; },
-        std::chrono::milliseconds(1000)));
-
-    EXPECT_EQ(received_count.load(std::memory_order_relaxed), kFrameCount);
-    EXPECT_EQ(last_value.load(std::memory_order_relaxed), kFrameCount - 1);
+TEST_F(NetworkInterfaceTest, FindChannel) {
+  EXPECT_EQ(ni_.FindChannel(Address("1.2.3.4", 5)), nullptr);
+  EXPECT_EQ(ni_.ChannelCount(), 0u);
 }
 
-TEST_F(NetworkInterfaceTest, FindChannel)
-{
-    EXPECT_EQ(ni_.find_channel(Address("1.2.3.4", 5)), nullptr);
-    EXPECT_EQ(ni_.channel_count(), 0u);
+TEST_F(NetworkInterfaceTest, FindChannelById) {
+  ASSERT_TRUE(ni_.StartTcpServer(Address("127.0.0.1", 0)).HasValue());
+
+  auto client_sock = Socket::CreateTcp();
+  ASSERT_TRUE(client_sock.HasValue());
+  auto connect_result = client_sock->Connect(ni_.TcpAddress());
+  ASSERT_TRUE(connect_result.HasValue() || connect_result.Error().Code() == ErrorCode::kWouldBlock);
+
+  ASSERT_TRUE(poll_until(dispatcher_, [&] { return ni_.ChannelCount() >= 1u; }));
+
+  auto client_addr = client_sock->LocalAddress();
+  ASSERT_TRUE(client_addr.HasValue()) << client_addr.Error().Message();
+
+  auto* channel = ni_.FindChannel(*client_addr);
+  ASSERT_NE(channel, nullptr);
+  EXPECT_EQ(ni_.FindChannel(channel->ChannelId()), channel);
 }
 
-TEST_F(NetworkInterfaceTest, FindChannelById)
-{
-    ASSERT_TRUE(ni_.start_tcp_server(Address("127.0.0.1", 0)).has_value());
+TEST_F(NetworkInterfaceTest, PrepareForShutdown) {
+  auto result = ni_.StartTcpServer(Address("127.0.0.1", 0));
+  ASSERT_TRUE(result.HasValue());
 
-    auto client_sock = Socket::create_tcp();
-    ASSERT_TRUE(client_sock.has_value());
-    auto connect_result = client_sock->connect(ni_.tcp_address());
-    ASSERT_TRUE(connect_result.has_value() ||
-                connect_result.error().code() == ErrorCode::WouldBlock);
-
-    ASSERT_TRUE(poll_until(dispatcher_, [&] { return ni_.channel_count() >= 1u; }));
-
-    auto client_addr = client_sock->local_address();
-    ASSERT_TRUE(client_addr.has_value()) << client_addr.error().message();
-
-    auto* channel = ni_.find_channel(*client_addr);
-    ASSERT_NE(channel, nullptr);
-    EXPECT_EQ(ni_.find_channel(channel->channel_id()), channel);
+  ni_.PrepareForShutdown();
+  // After shutdown, connect should fail or be rejected
+  // (channels are condemned)
 }
 
-TEST_F(NetworkInterfaceTest, PrepareForShutdown)
-{
-    auto result = ni_.start_tcp_server(Address("127.0.0.1", 0));
-    ASSERT_TRUE(result.has_value());
+TEST_F(NetworkInterfaceTest, RateLimitRejectsExcess) {
+  ni_.SetRateLimit(2);  // max 2 packets per second per IP
 
-    ni_.prepare_for_shutdown();
-    // After shutdown, connect should fail or be rejected
-    // (channels are condemned)
+  auto result = ni_.StartUdp(Address("127.0.0.1", 0));
+  ASSERT_TRUE(result.HasValue());
+  auto udp_addr = ni_.UdpAddress();
+
+  auto sender = Socket::CreateUdp();
+  ASSERT_TRUE(sender.HasValue());
+
+  // Burst 10 packets instantly — rate limiter should cap accepted channels at 2
+  std::array<std::byte, 4> data{};
+  for (int i = 0; i < 10; ++i) {
+    (void)sender->SendTo(data, udp_addr);
+  }
+
+  // Drain the receive buffer
+  poll_until(dispatcher_, [&] { return false; }, std::chrono::milliseconds(50));
+
+  // channel_count reflects accepted UDP "sessions" — must not exceed rate limit
+  EXPECT_LE(ni_.ChannelCount(), 2u);
 }
 
-TEST_F(NetworkInterfaceTest, RateLimitRejectsExcess)
-{
-    ni_.set_rate_limit(2);  // max 2 packets per second per IP
+TEST_F(NetworkInterfaceTest, UdpRateLimitedDatagramsAlsoConsumePerPollBudget) {
+  ASSERT_TRUE(ni_.StartUdp(Address("127.0.0.1", 0)).HasValue());
 
-    auto result = ni_.start_udp(Address("127.0.0.1", 0));
-    ASSERT_TRUE(result.has_value());
-    auto udp_addr = ni_.udp_address();
+  std::atomic<uint32_t> received_count{0};
+  ni_.InterfaceTable().RegisterTypedHandler<NetTestMsg>(
+      [&](const Address&, Channel*, const NetTestMsg&) {
+        received_count.fetch_add(1, std::memory_order_relaxed);
+      });
 
-    auto sender = Socket::create_udp();
-    ASSERT_TRUE(sender.has_value());
+  ni_.SetRateLimit(1);
 
-    // Burst 10 packets instantly — rate limiter should cap accepted channels at 2
-    std::array<std::byte, 4> data{};
-    for (int i = 0; i < 10; ++i)
-    {
-        (void)sender->send_to(data, udp_addr);
-    }
+  auto sender = Socket::CreateUdp();
+  ASSERT_TRUE(sender.HasValue());
+  ASSERT_TRUE(sender->Bind(Address("127.0.0.1", 0)).HasValue());
 
-    // Drain the receive buffer
-    poll_until(dispatcher_, [&] { return false; }, std::chrono::milliseconds(50));
+  constexpr uint32_t kDatagramCount = 1500;  // intentionally above current per-poll budget
+  for (uint32_t i = 0; i < kDatagramCount; ++i) {
+    Bundle bundle;
+    bundle.AddMessage(NetTestMsg{i});
+    auto payload = bundle.Finalize();
 
-    // channel_count reflects accepted UDP "sessions" — must not exceed rate limit
-    EXPECT_LE(ni_.channel_count(), 2u);
+    auto sent = sender->SendTo(payload, ni_.UdpAddress());
+    ASSERT_TRUE(sent.HasValue()) << sent.Error().Message();
+    ASSERT_EQ(*sent, payload.size());
+  }
+
+  // A single ProcessOnce should not drain the whole UDP socket under flood;
+  // only one packet is admitted by the rate limiter and the rest should be
+  // left for future polls once the callback budget is exhausted.
+  dispatcher_.ProcessOnce();
+  EXPECT_EQ(received_count.load(std::memory_order_relaxed), 1u);
+
+  ni_.SetRateLimit(0);
+
+  ASSERT_TRUE(poll_until(
+      dispatcher_, [&] { return received_count.load(std::memory_order_relaxed) > 1u; },
+      std::chrono::milliseconds(500)));
 }
 
-TEST_F(NetworkInterfaceTest, UdpRateLimitedDatagramsAlsoConsumePerPollBudget)
-{
-    ASSERT_TRUE(ni_.start_udp(Address("127.0.0.1", 0)).has_value());
+TEST_F(NetworkInterfaceTest, TcpRateLimitedAcceptsAlsoConsumePerPollBudget) {
+  ASSERT_TRUE(ni_.StartTcpServer(Address("127.0.0.1", 0)).HasValue());
 
-    std::atomic<uint32_t> received_count{0};
-    ni_.interface_table().register_typed_handler<NetTestMsg>(
-        [&](const Address&, Channel*, const NetTestMsg&)
-        { received_count.fetch_add(1, std::memory_order_relaxed); });
+  ni_.SetRateLimit(1);
 
-    ni_.set_rate_limit(1);
+  constexpr std::size_t kClientCount = 192;  // intentionally above the current accept budget
+  std::vector<Socket> clients;
+  clients.reserve(kClientCount);
 
-    auto sender = Socket::create_udp();
-    ASSERT_TRUE(sender.has_value());
-    ASSERT_TRUE(sender->bind(Address("127.0.0.1", 0)).has_value());
+  for (std::size_t i = 0; i < kClientCount; ++i) {
+    auto sock = Socket::CreateTcp();
+    ASSERT_TRUE(sock.HasValue()) << sock.Error().Message();
 
-    constexpr uint32_t kDatagramCount = 1500;  // intentionally above current per-poll budget
-    for (uint32_t i = 0; i < kDatagramCount; ++i)
-    {
-        Bundle bundle;
-        bundle.add_message(NetTestMsg{i});
-        auto payload = bundle.finalize();
+    auto connect_result = sock->Connect(ni_.TcpAddress());
+    ASSERT_TRUE(connect_result.HasValue() ||
+                connect_result.Error().Code() == ErrorCode::kWouldBlock ||
+                connect_result.Error().Code() == ErrorCode::kConnectionRefused)
+        << connect_result.Error().Message();
 
-        auto sent = sender->send_to(payload, ni_.udp_address());
-        ASSERT_TRUE(sent.has_value()) << sent.error().message();
-        ASSERT_EQ(*sent, payload.size());
-    }
+    clients.push_back(std::move(*sock));
+  }
 
-    // A single process_once should not drain the whole UDP socket under flood;
-    // only one packet is admitted by the rate limiter and the rest should be
-    // left for future polls once the callback budget is exhausted.
-    dispatcher_.process_once();
-    EXPECT_EQ(received_count.load(std::memory_order_relaxed), 1u);
+  std::this_thread::sleep_for(std::chrono::milliseconds(50));
 
-    ni_.set_rate_limit(0);
+  dispatcher_.ProcessOnce();
+  EXPECT_EQ(ni_.ChannelCount(), 1u);
 
-    ASSERT_TRUE(poll_until(
-        dispatcher_, [&] { return received_count.load(std::memory_order_relaxed) > 1u; },
-        std::chrono::milliseconds(500)));
-}
+  ni_.SetRateLimit(0);
 
-TEST_F(NetworkInterfaceTest, TcpRateLimitedAcceptsAlsoConsumePerPollBudget)
-{
-    ASSERT_TRUE(ni_.start_tcp_server(Address("127.0.0.1", 0)).has_value());
-
-    ni_.set_rate_limit(1);
-
-    constexpr std::size_t kClientCount = 192;  // intentionally above the current accept budget
-    std::vector<Socket> clients;
-    clients.reserve(kClientCount);
-
-    for (std::size_t i = 0; i < kClientCount; ++i)
-    {
-        auto sock = Socket::create_tcp();
-        ASSERT_TRUE(sock.has_value()) << sock.error().message();
-
-        auto connect_result = sock->connect(ni_.tcp_address());
-        ASSERT_TRUE(connect_result.has_value() ||
-                    connect_result.error().code() == ErrorCode::WouldBlock ||
-                    connect_result.error().code() == ErrorCode::ConnectionRefused)
-            << connect_result.error().message();
-
-        clients.push_back(std::move(*sock));
-    }
-
-    std::this_thread::sleep_for(std::chrono::milliseconds(50));
-
-    dispatcher_.process_once();
-    EXPECT_EQ(ni_.channel_count(), 1u);
-
-    ni_.set_rate_limit(0);
-
-    ASSERT_TRUE(poll_until(
-        dispatcher_, [&] { return ni_.channel_count() > 1u; }, std::chrono::milliseconds(500)));
+  ASSERT_TRUE(poll_until(
+      dispatcher_, [&] { return ni_.ChannelCount() > 1u; }, std::chrono::milliseconds(500)));
 }
 
 // ============================================================================
 // Shutdown: connect_tcp must fail after prepare_for_shutdown
 // ============================================================================
 
-TEST_F(NetworkInterfaceTest, ConnectAfterShutdownReturnsError)
-{
-    auto result = ni_.start_tcp_server(Address("127.0.0.1", 0));
-    ASSERT_TRUE(result.has_value());
+TEST_F(NetworkInterfaceTest, ConnectAfterShutdownReturnsError) {
+  auto result = ni_.StartTcpServer(Address("127.0.0.1", 0));
+  ASSERT_TRUE(result.HasValue());
 
-    ni_.prepare_for_shutdown();
+  ni_.PrepareForShutdown();
 
-    auto conn = ni_.connect_tcp(ni_.tcp_address());
-    EXPECT_FALSE(conn.has_value());
+  auto conn = ni_.ConnectTcp(ni_.TcpAddress());
+  EXPECT_FALSE(conn.HasValue());
 }
 
 // ============================================================================
 // Channel lifecycle: condemn removes channel, count returns to 0
 // ============================================================================
 
-TEST_F(NetworkInterfaceTest, ChannelCountAfterDisconnect)
-{
-    auto server_result = ni_.start_tcp_server(Address("127.0.0.1", 0));
-    ASSERT_TRUE(server_result.has_value());
+TEST_F(NetworkInterfaceTest, ChannelCountAfterDisconnect) {
+  auto server_result = ni_.StartTcpServer(Address("127.0.0.1", 0));
+  ASSERT_TRUE(server_result.HasValue());
 
-    auto conn = ni_.connect_tcp(ni_.tcp_address());
-    ASSERT_TRUE(conn.has_value());
+  auto conn = ni_.ConnectTcp(ni_.TcpAddress());
+  ASSERT_TRUE(conn.HasValue());
 
-    // Wait for accept
-    ASSERT_TRUE(poll_until(dispatcher_, [&] { return ni_.channel_count() >= 1u; }));
+  // Wait for accept
+  ASSERT_TRUE(poll_until(dispatcher_, [&] { return ni_.ChannelCount() >= 1u; }));
 
-    // Calling prepare_for_shutdown condemns all channels
-    ni_.prepare_for_shutdown();
+  // Calling PrepareForShutdown condemns all channels
+  ni_.PrepareForShutdown();
 
-    // After draining, condemned channels should be cleaned up
-    poll_until(dispatcher_, [&] { return false; }, std::chrono::milliseconds(100));
+  // After draining, condemned channels should be cleaned up
+  poll_until(dispatcher_, [&] { return false; }, std::chrono::milliseconds(100));
 
-    EXPECT_EQ(ni_.channel_count(), 0u);
+  EXPECT_EQ(ni_.ChannelCount(), 0u);
 }
 
-TEST_F(NetworkInterfaceTest, DisconnectCallbackRunsAfterTcpProtocolDisconnect)
-{
-    ASSERT_TRUE(ni_.start_tcp_server(Address("127.0.0.1", 0)).has_value());
+TEST_F(NetworkInterfaceTest, DisconnectCallbackRunsAfterTcpProtocolDisconnect) {
+  ASSERT_TRUE(ni_.StartTcpServer(Address("127.0.0.1", 0)).HasValue());
 
-    std::atomic<bool> callback_seen{false};
-    std::atomic<ChannelId> callback_channel_id{kInvalidChannelId};
-    std::atomic<int> callback_state{-1};
-    std::atomic<bool> callback_removed_from_active_set{false};
+  std::atomic<bool> callback_seen{false};
+  std::atomic<ChannelId> callback_channel_id{kInvalidChannelId};
+  std::atomic<int> callback_state{-1};
+  std::atomic<bool> callback_removed_from_active_set{false};
 
-    ni_.set_disconnect_callback(
-        [&](Channel& ch)
-        {
-            callback_channel_id.store(ch.channel_id(), std::memory_order_relaxed);
-            callback_state.store(static_cast<int>(ch.state()), std::memory_order_relaxed);
-            callback_removed_from_active_set.store(
-                ni_.find_channel(ch.remote_address()) == nullptr &&
-                    ni_.find_channel(ch.channel_id()) == nullptr && ni_.channel_count() == 0u,
-                std::memory_order_relaxed);
-            callback_seen.store(true, std::memory_order_release);
-        });
+  ni_.SetDisconnectCallback([&](Channel& ch) {
+    callback_channel_id.store(ch.ChannelId(), std::memory_order_relaxed);
+    callback_state.store(static_cast<int>(ch.State()), std::memory_order_relaxed);
+    callback_removed_from_active_set.store(ni_.FindChannel(ch.RemoteAddress()) == nullptr &&
+                                               ni_.FindChannel(ch.ChannelId()) == nullptr &&
+                                               ni_.ChannelCount() == 0u,
+                                           std::memory_order_relaxed);
+    callback_seen.store(true, std::memory_order_release);
+  });
 
-    auto client_sock = Socket::create_tcp();
-    ASSERT_TRUE(client_sock.has_value());
-    auto connect_result = client_sock->connect(ni_.tcp_address());
-    ASSERT_TRUE(connect_result.has_value() ||
-                connect_result.error().code() == ErrorCode::WouldBlock);
+  auto client_sock = Socket::CreateTcp();
+  ASSERT_TRUE(client_sock.HasValue());
+  auto connect_result = client_sock->Connect(ni_.TcpAddress());
+  ASSERT_TRUE(connect_result.HasValue() || connect_result.Error().Code() == ErrorCode::kWouldBlock);
 
-    ASSERT_TRUE(poll_until(dispatcher_, [&] { return ni_.channel_count() >= 1u; }));
+  ASSERT_TRUE(poll_until(dispatcher_, [&] { return ni_.ChannelCount() >= 1u; }));
 
-    auto client_addr = client_sock->local_address();
-    ASSERT_TRUE(client_addr.has_value()) << client_addr.error().message();
+  auto client_addr = client_sock->LocalAddress();
+  ASSERT_TRUE(client_addr.HasValue()) << client_addr.Error().Message();
 
-    auto* channel = ni_.find_channel(*client_addr);
-    ASSERT_NE(channel, nullptr);
-    const auto expected_channel_id = channel->channel_id();
+  auto* channel = ni_.FindChannel(*client_addr);
+  ASSERT_NE(channel, nullptr);
+  const auto expected_channel_id = channel->ChannelId();
 
-    const uint32_t oversized_frame_len =
-        endian::to_little(static_cast<uint32_t>(kMaxBundleSize + 1));
-    auto* len_bytes = reinterpret_cast<const std::byte*>(&oversized_frame_len);
-    auto send_result =
-        client_sock->send(std::span<const std::byte>(len_bytes, sizeof(oversized_frame_len)));
-    ASSERT_TRUE(send_result.has_value()) << send_result.error().message();
-    ASSERT_EQ(*send_result, sizeof(oversized_frame_len));
+  const uint32_t oversized_frame_len = endian::ToLittle(static_cast<uint32_t>(kMaxBundleSize + 1));
+  auto* len_bytes = reinterpret_cast<const std::byte*>(&oversized_frame_len);
+  auto send_result =
+      client_sock->Send(std::span<const std::byte>(len_bytes, sizeof(oversized_frame_len)));
+  ASSERT_TRUE(send_result.HasValue()) << send_result.Error().Message();
+  ASSERT_EQ(*send_result, sizeof(oversized_frame_len));
 
-    ASSERT_TRUE(poll_until(
-        dispatcher_, [&] { return callback_seen.load(std::memory_order_acquire); },
-        std::chrono::milliseconds(1000)));
+  ASSERT_TRUE(poll_until(
+      dispatcher_, [&] { return callback_seen.load(std::memory_order_acquire); },
+      std::chrono::milliseconds(1000)));
 
-    EXPECT_EQ(callback_channel_id.load(std::memory_order_relaxed), expected_channel_id);
-    EXPECT_EQ(callback_state.load(std::memory_order_relaxed),
-              static_cast<int>(ChannelState::Condemned));
-    EXPECT_TRUE(callback_removed_from_active_set.load(std::memory_order_relaxed));
-    EXPECT_EQ(ni_.channel_count(), 0u);
+  EXPECT_EQ(callback_channel_id.load(std::memory_order_relaxed), expected_channel_id);
+  EXPECT_EQ(callback_state.load(std::memory_order_relaxed),
+            static_cast<int>(ChannelState::kCondemned));
+  EXPECT_TRUE(callback_removed_from_active_set.load(std::memory_order_relaxed));
+  EXPECT_EQ(ni_.ChannelCount(), 0u);
 }
 
-TEST_F(NetworkInterfaceTest, PrepareForShutdownDoesNotInvokeDisconnectCallback)
-{
-    ASSERT_TRUE(ni_.start_tcp_server(Address("127.0.0.1", 0)).has_value());
+TEST_F(NetworkInterfaceTest, PrepareForShutdownDoesNotInvokeDisconnectCallback) {
+  ASSERT_TRUE(ni_.StartTcpServer(Address("127.0.0.1", 0)).HasValue());
 
-    std::atomic<uint32_t> disconnect_callbacks{0};
-    ni_.set_disconnect_callback([&](Channel&)
-                                { disconnect_callbacks.fetch_add(1, std::memory_order_relaxed); });
+  std::atomic<uint32_t> disconnect_callbacks{0};
+  ni_.SetDisconnectCallback(
+      [&](Channel&) { disconnect_callbacks.fetch_add(1, std::memory_order_relaxed); });
 
-    auto client_sock = Socket::create_tcp();
-    ASSERT_TRUE(client_sock.has_value());
-    auto connect_result = client_sock->connect(ni_.tcp_address());
-    ASSERT_TRUE(connect_result.has_value() ||
-                connect_result.error().code() == ErrorCode::WouldBlock);
+  auto client_sock = Socket::CreateTcp();
+  ASSERT_TRUE(client_sock.HasValue());
+  auto connect_result = client_sock->Connect(ni_.TcpAddress());
+  ASSERT_TRUE(connect_result.HasValue() || connect_result.Error().Code() == ErrorCode::kWouldBlock);
 
-    ASSERT_TRUE(poll_until(dispatcher_, [&] { return ni_.channel_count() >= 1u; }));
+  ASSERT_TRUE(poll_until(dispatcher_, [&] { return ni_.ChannelCount() >= 1u; }));
 
-    ni_.prepare_for_shutdown();
-    poll_until(dispatcher_, [&] { return false; }, std::chrono::milliseconds(20));
+  ni_.PrepareForShutdown();
+  poll_until(dispatcher_, [&] { return false; }, std::chrono::milliseconds(20));
 
-    EXPECT_EQ(disconnect_callbacks.load(std::memory_order_relaxed), 0u);
-    EXPECT_EQ(ni_.channel_count(), 0u);
+  EXPECT_EQ(disconnect_callbacks.load(std::memory_order_relaxed), 0u);
+  EXPECT_EQ(ni_.ChannelCount(), 0u);
 }
 
-TEST_F(NetworkInterfaceTest, CondemnedTcpChannelReclaimsExpandedRecvBufferImmediately)
-{
-    ASSERT_TRUE(ni_.start_tcp_server(Address("127.0.0.1", 0)).has_value());
+TEST_F(NetworkInterfaceTest, CondemnedTcpChannelReclaimsExpandedRecvBufferImmediately) {
+  ASSERT_TRUE(ni_.StartTcpServer(Address("127.0.0.1", 0)).HasValue());
 
-    auto client_sock = Socket::create_tcp();
-    ASSERT_TRUE(client_sock.has_value());
-    auto connect_result = client_sock->connect(ni_.tcp_address());
-    ASSERT_TRUE(connect_result.has_value() ||
-                connect_result.error().code() == ErrorCode::WouldBlock);
+  auto client_sock = Socket::CreateTcp();
+  ASSERT_TRUE(client_sock.HasValue());
+  auto connect_result = client_sock->Connect(ni_.TcpAddress());
+  ASSERT_TRUE(connect_result.HasValue() || connect_result.Error().Code() == ErrorCode::kWouldBlock);
 
-    ASSERT_TRUE(poll_until(dispatcher_, [&] { return ni_.channel_count() >= 1u; }));
+  ASSERT_TRUE(poll_until(dispatcher_, [&] { return ni_.ChannelCount() >= 1u; }));
 
-    auto client_addr = client_sock->local_address();
-    ASSERT_TRUE(client_addr.has_value()) << client_addr.error().message();
+  auto client_addr = client_sock->LocalAddress();
+  ASSERT_TRUE(client_addr.HasValue()) << client_addr.Error().Message();
 
-    auto* channel = dynamic_cast<TcpChannel*>(ni_.find_channel(*client_addr));
-    ASSERT_NE(channel, nullptr);
-    EXPECT_EQ(channel->recv_buffer_capacity(), TcpChannel::kInitialRecvBufferSize);
+  auto* channel = dynamic_cast<TcpChannel*>(ni_.FindChannel(*client_addr));
+  ASSERT_NE(channel, nullptr);
+  EXPECT_EQ(channel->RecvBufferCapacity(), TcpChannel::kInitialRecvBufferSize);
 
-    constexpr std::size_t kFrameLength = 48 * 1024;
-    constexpr std::size_t kPartialPayload = 24 * 1024;
-    uint32_t frame_len_le = endian::to_little(static_cast<uint32_t>(kFrameLength));
+  constexpr std::size_t kFrameLength = 48 * 1024;
+  constexpr std::size_t kPartialPayload = 24 * 1024;
+  uint32_t frame_len_le = endian::ToLittle(static_cast<uint32_t>(kFrameLength));
 
-    std::vector<std::byte> partial_frame;
-    partial_frame.reserve(sizeof(frame_len_le) + kPartialPayload);
-    auto* len_bytes = reinterpret_cast<const std::byte*>(&frame_len_le);
-    partial_frame.insert(partial_frame.end(), len_bytes, len_bytes + sizeof(frame_len_le));
-    partial_frame.insert(partial_frame.end(), kPartialPayload, std::byte{'x'});
+  std::vector<std::byte> partial_frame;
+  partial_frame.reserve(sizeof(frame_len_le) + kPartialPayload);
+  auto* len_bytes = reinterpret_cast<const std::byte*>(&frame_len_le);
+  partial_frame.insert(partial_frame.end(), len_bytes, len_bytes + sizeof(frame_len_le));
+  partial_frame.insert(partial_frame.end(), kPartialPayload, std::byte{'x'});
 
-    std::size_t sent_total = 0;
-    while (sent_total < partial_frame.size())
-    {
-        auto sent = client_sock->send(std::span<const std::byte>(
-            partial_frame.data() + sent_total, partial_frame.size() - sent_total));
-        ASSERT_TRUE(sent.has_value()) << sent.error().message();
-        ASSERT_GT(*sent, 0u);
-        sent_total += *sent;
-    }
+  std::size_t sent_total = 0;
+  while (sent_total < partial_frame.size()) {
+    auto sent = client_sock->Send(std::span<const std::byte>(partial_frame.data() + sent_total,
+                                                             partial_frame.size() - sent_total));
+    ASSERT_TRUE(sent.HasValue()) << sent.Error().Message();
+    ASSERT_GT(*sent, 0u);
+    sent_total += *sent;
+  }
 
-    ASSERT_TRUE(poll_until(dispatcher_,
-                           [&]
-                           {
-                               return channel->recv_buffer_capacity() >
-                                          TcpChannel::kInitialRecvBufferSize &&
-                                      channel->recv_buffer_size() > 0;
-                           }));
+  ASSERT_TRUE(poll_until(dispatcher_, [&] {
+    return channel->RecvBufferCapacity() > TcpChannel::kInitialRecvBufferSize &&
+           channel->RecvBufferSize() > 0;
+  }));
 
-    ni_.prepare_for_shutdown();
+  ni_.PrepareForShutdown();
 
-    EXPECT_EQ(ni_.channel_count(), 0u);
-    EXPECT_EQ(channel->recv_buffer_capacity(), TcpChannel::kInitialRecvBufferSize);
-    EXPECT_EQ(channel->recv_buffer_size(), 0u);
-    EXPECT_EQ(channel->write_buffer_capacity(), TcpChannel::kInitialWriteBufferSize);
-    EXPECT_EQ(channel->write_buffer_size(), 0u);
+  EXPECT_EQ(ni_.ChannelCount(), 0u);
+  EXPECT_EQ(channel->RecvBufferCapacity(), TcpChannel::kInitialRecvBufferSize);
+  EXPECT_EQ(channel->RecvBufferSize(), 0u);
+  EXPECT_EQ(channel->WriteBufferCapacity(), TcpChannel::kInitialWriteBufferSize);
+  EXPECT_EQ(channel->WriteBufferSize(), 0u);
 }
 
 // ============================================================================
 // RUDP tests
 // ============================================================================
 
-TEST_F(NetworkInterfaceTest, StartRudpServer)
-{
-    auto result = ni_.start_rudp_server(Address("127.0.0.1", 0));
-    ASSERT_TRUE(result.has_value()) << result.error().message();
-    EXPECT_NE(ni_.rudp_address().port(), 0);
+TEST_F(NetworkInterfaceTest, StartRudpServer) {
+  auto result = ni_.StartRudpServer(Address("127.0.0.1", 0));
+  ASSERT_TRUE(result.HasValue()) << result.Error().Message();
+  EXPECT_NE(ni_.RudpAddress().Port(), 0);
 }
 
-TEST_F(NetworkInterfaceTest, ConnectRudpCreatesChannel)
-{
-    // Server NI
-    EventDispatcher server_disp{"rudp_server"};
-    server_disp.set_max_poll_wait(Milliseconds(1));
-    NetworkInterface server_ni(server_disp);
+TEST_F(NetworkInterfaceTest, ConnectRudpCreatesChannel) {
+  // Server NI
+  EventDispatcher server_disp{"rudp_server"};
+  server_disp.SetMaxPollWait(Milliseconds(1));
+  NetworkInterface server_ni(server_disp);
 
-    auto sr = server_ni.start_rudp_server(Address("127.0.0.1", 0));
-    ASSERT_TRUE(sr.has_value()) << sr.error().message();
+  auto sr = server_ni.StartRudpServer(Address("127.0.0.1", 0));
+  ASSERT_TRUE(sr.HasValue()) << sr.Error().Message();
 
-    // Client NI connects to server
-    auto cr = ni_.connect_rudp(server_ni.rudp_address());
-    ASSERT_TRUE(cr.has_value()) << cr.error().message();
-    EXPECT_NE(*cr, nullptr);
-    EXPECT_EQ(ni_.channel_count(), 1u);
+  // Client NI connects to server
+  auto cr = ni_.ConnectRudp(server_ni.RudpAddress());
+  ASSERT_TRUE(cr.HasValue()) << cr.Error().Message();
+  EXPECT_NE(*cr, nullptr);
+  EXPECT_EQ(ni_.ChannelCount(), 1u);
 }
 
-TEST_F(NetworkInterfaceTest, RudpServerAutoCreatesChannelOnFirstDatagram)
-{
-    auto sr = ni_.start_rudp_server(Address("127.0.0.1", 0));
-    ASSERT_TRUE(sr.has_value());
-    auto server_addr = ni_.rudp_address();
+TEST_F(NetworkInterfaceTest, RudpServerAutoCreatesChannelOnFirstDatagram) {
+  auto sr = ni_.StartRudpServer(Address("127.0.0.1", 0));
+  ASSERT_TRUE(sr.HasValue());
+  auto server_addr = ni_.RudpAddress();
 
-    // Send a raw datagram to the server from a plain UDP socket
-    auto sender = Socket::create_udp();
-    ASSERT_TRUE(sender.has_value());
-    Address any(0, 0);
-    (void)sender->bind(any);
+  // Send a raw datagram to the server from a plain UDP socket
+  auto sender = Socket::CreateUdp();
+  ASSERT_TRUE(sender.HasValue());
+  Address any(0, 0);
+  (void)sender->Bind(any);
 
-    // Minimal RUDP packet: flags=0x02 (kFlagHasSeq), seq=1, no ack bits
-    std::array<std::byte, 9> pkt{};
-    pkt[0] = std::byte{rudp::kFlagHasSeq};  // flags
-    pkt[1] = std::byte{0};
-    pkt[2] = std::byte{0};  // seq hi
-    pkt[3] = std::byte{0};
-    pkt[4] = std::byte{1};  // seq lo (=1)
-    pkt[5] = std::byte{0};
-    pkt[6] = std::byte{0};  // ack hi
-    pkt[7] = std::byte{0};
-    pkt[8] = std::byte{0};  // ack lo
+  // Minimal RUDP packet: flags=0x02 (kFlagHasSeq), seq=1, no ack bits
+  std::array<std::byte, 9> pkt{};
+  pkt[0] = std::byte{rudp::kFlagHasSeq};  // flags
+  pkt[1] = std::byte{0};
+  pkt[2] = std::byte{0};  // seq hi
+  pkt[3] = std::byte{0};
+  pkt[4] = std::byte{1};  // seq lo (=1)
+  pkt[5] = std::byte{0};
+  pkt[6] = std::byte{0};  // ack hi
+  pkt[7] = std::byte{0};
+  pkt[8] = std::byte{0};  // ack lo
 
-    (void)sender->send_to(pkt, server_addr);
+  (void)sender->SendTo(pkt, server_addr);
 
-    // Dispatcher should accept the datagram and create a channel
-    EXPECT_TRUE(poll_until(dispatcher_, [&] { return ni_.channel_count() >= 1u; }));
+  // Dispatcher should accept the datagram and create a channel
+  EXPECT_TRUE(poll_until(dispatcher_, [&] { return ni_.ChannelCount() >= 1u; }));
 }
 
-TEST_F(NetworkInterfaceTest, ConnectRudpIsIdempotent)
-{
-    EventDispatcher server_disp{"rudp_idem"};
-    server_disp.set_max_poll_wait(Milliseconds(1));
-    NetworkInterface server_ni(server_disp);
-    ASSERT_TRUE(server_ni.start_rudp_server(Address("127.0.0.1", 0)).has_value());
+TEST_F(NetworkInterfaceTest, ConnectRudpIsIdempotent) {
+  EventDispatcher server_disp{"rudp_idem"};
+  server_disp.SetMaxPollWait(Milliseconds(1));
+  NetworkInterface server_ni(server_disp);
+  ASSERT_TRUE(server_ni.StartRudpServer(Address("127.0.0.1", 0)).HasValue());
 
-    auto cr1 = ni_.connect_rudp(server_ni.rudp_address());
-    auto cr2 = ni_.connect_rudp(server_ni.rudp_address());
-    ASSERT_TRUE(cr1.has_value());
-    ASSERT_TRUE(cr2.has_value());
-    EXPECT_EQ(*cr1, *cr2);  // same channel reused
-    EXPECT_EQ(ni_.channel_count(), 1u);
+  auto cr1 = ni_.ConnectRudp(server_ni.RudpAddress());
+  auto cr2 = ni_.ConnectRudp(server_ni.RudpAddress());
+  ASSERT_TRUE(cr1.HasValue());
+  ASSERT_TRUE(cr2.HasValue());
+  EXPECT_EQ(*cr1, *cr2);  // same channel reused
+  EXPECT_EQ(ni_.ChannelCount(), 1u);
 }
 
-TEST_F(NetworkInterfaceTest, RudpRateLimitedDatagramsAlsoConsumePerPollBudget)
-{
-    ASSERT_TRUE(ni_.start_rudp_server(Address("127.0.0.1", 0)).has_value());
-    ni_.set_rate_limit(1);
+TEST_F(NetworkInterfaceTest, RudpRateLimitedDatagramsAlsoConsumePerPollBudget) {
+  ASSERT_TRUE(ni_.StartRudpServer(Address("127.0.0.1", 0)).HasValue());
+  ni_.SetRateLimit(1);
 
-    constexpr uint32_t kDatagramCount = 1500;  // intentionally above the current RUDP budget
-    std::vector<Socket> senders;
-    senders.reserve(kDatagramCount);
+  constexpr uint32_t kDatagramCount = 1500;  // intentionally above the current RUDP budget
+  std::vector<Socket> senders;
+  senders.reserve(kDatagramCount);
 
-    std::array<std::byte, 9> pkt{};
-    pkt[0] = std::byte{rudp::kFlagHasSeq};
-    pkt[4] = std::byte{1};
+  std::array<std::byte, 9> pkt{};
+  pkt[0] = std::byte{rudp::kFlagHasSeq};
+  pkt[4] = std::byte{1};
 
-    for (uint32_t i = 0; i < kDatagramCount; ++i)
-    {
-        auto sender = Socket::create_udp();
-        ASSERT_TRUE(sender.has_value()) << sender.error().message();
-        ASSERT_TRUE(sender->bind(Address("127.0.0.1", 0)).has_value());
+  for (uint32_t i = 0; i < kDatagramCount; ++i) {
+    auto sender = Socket::CreateUdp();
+    ASSERT_TRUE(sender.HasValue()) << sender.Error().Message();
+    ASSERT_TRUE(sender->Bind(Address("127.0.0.1", 0)).HasValue());
 
-        auto sent = sender->send_to(pkt, ni_.rudp_address());
-        ASSERT_TRUE(sent.has_value()) << sent.error().message();
-        ASSERT_EQ(*sent, pkt.size());
+    auto sent = sender->SendTo(pkt, ni_.RudpAddress());
+    ASSERT_TRUE(sent.HasValue()) << sent.Error().Message();
+    ASSERT_EQ(*sent, pkt.size());
 
-        senders.push_back(std::move(*sender));
-    }
+    senders.push_back(std::move(*sender));
+  }
 
-    dispatcher_.process_once();
-    EXPECT_EQ(ni_.channel_count(), 1u);
+  dispatcher_.ProcessOnce();
+  EXPECT_EQ(ni_.ChannelCount(), 1u);
 
-    ni_.set_rate_limit(0);
-    ASSERT_TRUE(poll_until(
-        dispatcher_, [&] { return ni_.channel_count() > 1u; }, std::chrono::milliseconds(500)));
+  ni_.SetRateLimit(0);
+  ASSERT_TRUE(poll_until(
+      dispatcher_, [&] { return ni_.ChannelCount() > 1u; }, std::chrono::milliseconds(500)));
 }
 
-TEST_F(NetworkInterfaceTest, RudpServerDefaultProfileKeepsCongestionControl)
-{
-    EventDispatcher server_disp{"rudp_profile_default_server"};
-    server_disp.set_max_poll_wait(Milliseconds(1));
-    NetworkInterface server_ni(server_disp);
-    Channel* accepted = nullptr;
-    server_ni.set_accept_callback([&accepted](Channel& ch) { accepted = &ch; });
-    ASSERT_TRUE(server_ni.start_rudp_server(Address("127.0.0.1", 0)).has_value());
+TEST_F(NetworkInterfaceTest, RudpServerDefaultProfileKeepsCongestionControl) {
+  EventDispatcher server_disp{"rudp_profile_default_server"};
+  server_disp.SetMaxPollWait(Milliseconds(1));
+  NetworkInterface server_ni(server_disp);
+  Channel* accepted = nullptr;
+  server_ni.SetAcceptCallback([&accepted](Channel& ch) { accepted = &ch; });
+  ASSERT_TRUE(server_ni.StartRudpServer(Address("127.0.0.1", 0)).HasValue());
 
-    auto conn = ni_.connect_rudp(server_ni.rudp_address());
-    ASSERT_TRUE(conn.has_value());
-    ASSERT_TRUE((*conn)->send_message(NetTestMsg{1}).has_value());
+  auto conn = ni_.ConnectRudp(server_ni.RudpAddress());
+  ASSERT_TRUE(conn.HasValue());
+  ASSERT_TRUE((*conn)->SendMessage(NetTestMsg{1}).HasValue());
 
-    ASSERT_TRUE(poll_until(server_disp, [&] { return accepted != nullptr; }));
+  ASSERT_TRUE(poll_until(server_disp, [&] { return accepted != nullptr; }));
 
-    auto* server_ch = static_cast<ReliableUdpChannel*>(accepted);
-    EXPECT_FALSE(server_ch->nocwnd());
+  auto* server_ch = static_cast<ReliableUdpChannel*>(accepted);
+  EXPECT_FALSE(server_ch->Nocwnd());
 }
 
-TEST_F(NetworkInterfaceTest, RudpServerClusterProfileDisablesCongestionControl)
-{
-    EventDispatcher server_disp{"rudp_profile_cluster_server"};
-    server_disp.set_max_poll_wait(Milliseconds(1));
-    NetworkInterface server_ni(server_disp);
-    Channel* accepted = nullptr;
-    server_ni.set_accept_callback([&accepted](Channel& ch) { accepted = &ch; });
-    ASSERT_TRUE(
-        server_ni
-            .start_rudp_server(Address("127.0.0.1", 0), NetworkInterface::cluster_rudp_profile())
-            .has_value());
+TEST_F(NetworkInterfaceTest, RudpServerClusterProfileDisablesCongestionControl) {
+  EventDispatcher server_disp{"rudp_profile_cluster_server"};
+  server_disp.SetMaxPollWait(Milliseconds(1));
+  NetworkInterface server_ni(server_disp);
+  Channel* accepted = nullptr;
+  server_ni.SetAcceptCallback([&accepted](Channel& ch) { accepted = &ch; });
+  ASSERT_TRUE(
+      server_ni.StartRudpServer(Address("127.0.0.1", 0), NetworkInterface::ClusterRudpProfile())
+          .HasValue());
 
-    auto conn = ni_.connect_rudp(server_ni.rudp_address());
-    ASSERT_TRUE(conn.has_value());
-    ASSERT_TRUE((*conn)->send_message(NetTestMsg{1}).has_value());
+  auto conn = ni_.ConnectRudp(server_ni.RudpAddress());
+  ASSERT_TRUE(conn.HasValue());
+  ASSERT_TRUE((*conn)->SendMessage(NetTestMsg{1}).HasValue());
 
-    ASSERT_TRUE(poll_until(server_disp, [&] { return accepted != nullptr; }));
+  ASSERT_TRUE(poll_until(server_disp, [&] { return accepted != nullptr; }));
 
-    auto* server_ch = static_cast<ReliableUdpChannel*>(accepted);
-    EXPECT_TRUE(server_ch->nocwnd());
-    EXPECT_GT(server_ch->effective_window(), 1u);
+  auto* server_ch = static_cast<ReliableUdpChannel*>(accepted);
+  EXPECT_TRUE(server_ch->Nocwnd());
+  EXPECT_GT(server_ch->EffectiveWindow(), 1u);
 }

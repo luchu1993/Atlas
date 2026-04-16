@@ -2,18 +2,18 @@
 
 atlas_add_library(atlas_network
     SOURCES
-        address.cpp
-        bg_task_manager.cpp
-        socket.cpp
-        event_dispatcher.cpp
-        interface_table.cpp
-        bundle.cpp
-        channel.cpp
-        compression_filter.cpp
-        network_interface.cpp
-        reliable_udp.cpp
-        tcp_channel.cpp
-        udp_channel.cpp
+        address.cc
+        bg_task_manager.cc
+        socket.cc
+        event_dispatcher.cc
+        interface_table.cc
+        bundle.cc
+        channel.cc
+        compression_filter.cc
+        network_interface.cc
+        reliable_udp.cc
+        tcp_channel.cc
+        udp_channel.cc
     DEPS
         atlas_foundation
         atlas_platform

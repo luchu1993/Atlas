@@ -2,7 +2,7 @@
 
 atlas_add_library(atlas_baseappmgr_lib
     SOURCES
-        baseappmgr.cpp
+        baseappmgr.cc
     DEPS
         atlas_foundation
         atlas_network
@@ -16,7 +16,7 @@ target_include_directories(atlas_baseappmgr_lib
 
 atlas_add_executable(atlas_baseappmgr
     SOURCES
-        main.cpp
+        main.cc
     DEPS
         atlas_baseappmgr_lib
 )

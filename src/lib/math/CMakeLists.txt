@@ -2,8 +2,8 @@
 
 atlas_add_library(atlas_math
     SOURCES
-        matrix4.cpp
-        quaternion.cpp
+        matrix4.cc
+        quaternion.cc
     DEPS
         atlas_platform_config
 )

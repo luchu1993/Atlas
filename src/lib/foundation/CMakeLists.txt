@@ -2,15 +2,15 @@
 
 atlas_add_library(atlas_foundation
     SOURCES
-        error.cpp
-        string_utils.cpp
-        log.cpp
-        log_sinks.cpp
-        runtime.cpp
-        time.cpp
-        timer_queue.cpp
-        pool_allocator.cpp
-        memory_tracker.cpp
+        error.cc
+        string_utils.cc
+        log.cc
+        log_sinks.cc
+        runtime.cc
+        clock.cc
+        timer_queue.cc
+        pool_allocator.cc
+        memory_tracker.cc
     DEPS
         atlas_platform_config
         Threads::Threads

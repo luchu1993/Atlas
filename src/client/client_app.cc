@@ -1,0 +1,353 @@
+#include "client_app.h"
+
+#include "clrscript/clr_bootstrap.h"
+#include "clrscript/clr_native_api.h"
+#include "foundation/log.h"
+#include "network/channel.h"
+#include "network/message_ids.h"
+#include "network/reliable_udp.h"
+#include "serialization/binary_stream.h"
+#include "server/entity_types.h"
+
+// Reuse login/baseapp message definitions
+#include <chrono>
+#include <cstring>
+#include <filesystem>
+#include <format>
+#include <span>
+#include <thread>
+#include <vector>
+
+#include "baseapp/baseapp_messages.h"
+#include "loginapp/login_messages.h"
+
+namespace atlas {
+
+// ============================================================================
+// Static entry point
+// ============================================================================
+
+auto ClientApp::run(int argc, char* argv[]) -> int {
+  ClientApp app;
+  if (!app.init(argc, argv)) return 1;
+  auto rc = app.main_loop();
+  app.fini();
+  return rc;
+}
+
+// ============================================================================
+// Constructor / Destructor
+// ============================================================================
+
+ClientApp::ClientApp() = default;
+ClientApp::~ClientApp() = default;
+
+// ============================================================================
+// Init
+// ============================================================================
+
+auto ClientApp::init(int argc, char* argv[]) -> bool {
+  // Parse command-line arguments
+  for (int i = 1; i < argc; ++i) {
+    std::string_view arg(argv[i]);
+    auto next = [&]() -> std::string_view {
+      return (i + 1 < argc) ? std::string_view(argv[++i]) : "";
+    };
+
+    if (arg == "--loginapp-host")
+      config_.loginapp_host = std::string(next());
+    else if (arg == "--loginapp-port")
+      config_.loginapp_port = static_cast<uint16_t>(std::stoul(std::string(next())));
+    else if (arg == "--username")
+      config_.username = std::string(next());
+    else if (arg == "--password")
+      config_.password_hash = std::string(next());
+    else if (arg == "--assembly")
+      config_.script_assembly = std::filesystem::path(std::string(next()));
+    else if (arg == "--runtime-config")
+      config_.runtime_config = std::filesystem::path(std::string(next()));
+  }
+
+  // Default password to empty hash
+  if (config_.password_hash.empty()) config_.password_hash = "default_hash";
+
+  // Start RUDP server (for receiving replies)
+  auto listen_result = network_.StartRudpServer(Address("127.0.0.1", 0));
+  if (!listen_result) {
+    ATLAS_LOG_ERROR("Client: failed to start RUDP listener: {}", listen_result.Error().Message());
+    return false;
+  }
+
+  // Configure fast polling
+  dispatcher_.SetMaxPollWait(std::chrono::milliseconds(1));
+
+  ATLAS_LOG_INFO("Client: initialized");
+
+  // Init CLR if assembly is specified
+  if (!config_.script_assembly.empty()) {
+    if (!init_clr(argv[0])) return false;
+  }
+
+  return true;
+}
+
+// ============================================================================
+// CLR initialization — mirrors ScriptApp pattern
+// ============================================================================
+
+auto ClientApp::init_clr(const char* exe_path) -> bool {
+  native_provider_ = std::make_unique<ClientNativeProvider>(*this);
+  SetNativeApiProvider(native_provider_.get());
+
+  using SetNativeApiProviderFn = void (*)(void*);
+  using GetClrBridgeFn = void* (*)();
+
+#if ATLAS_PLATFORM_WINDOWS
+  constexpr auto kModuleName = "atlas_engine.dll";
+#else
+  constexpr auto kModuleName = "libatlas_engine.so";
+#endif
+
+  auto module_path = std::filesystem::absolute(exe_path).parent_path() / kModuleName;
+  auto lib_result = DynamicLibrary::Load(module_path);
+  if (!lib_result) {
+    ATLAS_LOG_ERROR("Client: failed to load {}: {}", module_path.string(),
+                    lib_result.Error().Message());
+    return false;
+  }
+  native_api_library_ = std::move(*lib_result);
+
+  auto set_provider =
+      native_api_library_->GetSymbol<SetNativeApiProviderFn>("AtlasSetNativeApiProvider");
+  if (!set_provider) {
+    ATLAS_LOG_ERROR("Client: failed to resolve AtlasSetNativeApiProvider");
+    return false;
+  }
+  (*set_provider)(native_provider_.get());
+
+  // Resolve CLR error bridge
+  auto error_set = native_api_library_->GetSymbol<GetClrBridgeFn>("AtlasGetClrErrorSetFn");
+  auto error_clear = native_api_library_->GetSymbol<GetClrBridgeFn>("AtlasGetClrErrorClearFn");
+  auto error_code = native_api_library_->GetSymbol<GetClrBridgeFn>("AtlasGetClrErrorGetCodeFn");
+  if (!error_set || !error_clear || !error_code) {
+    ATLAS_LOG_ERROR("Client: failed to resolve CLR error bridge exports");
+    return false;
+  }
+
+  ClrBootstrapArgs bootstrap_args;
+  bootstrap_args.error_set = reinterpret_cast<decltype(bootstrap_args.error_set)>((*error_set)());
+  bootstrap_args.error_clear =
+      reinterpret_cast<decltype(bootstrap_args.error_clear)>((*error_clear)());
+  bootstrap_args.error_get_code =
+      reinterpret_cast<decltype(bootstrap_args.error_get_code)>((*error_code)());
+
+  // Create CLR engine
+  auto clr = std::make_unique<ClrScriptEngine>();
+  ClrScriptEngine::Config clr_config;
+  clr_config.runtime_config_path = config_.runtime_config;
+  clr_config.runtime_assembly_path = config_.script_assembly;
+  clr_config.bootstrap_args = bootstrap_args;
+
+  auto cfg_result = clr->Configure(clr_config);
+  if (!cfg_result) {
+    ATLAS_LOG_ERROR("Client: CLR configure failed: {}", cfg_result.Error().Message());
+    return false;
+  }
+  script_engine_ = std::move(clr);
+
+  auto init_result = script_engine_->Initialize();
+  if (!init_result) {
+    ATLAS_LOG_ERROR("Client: CLR initialize failed: {}", init_result.Error().Message());
+    return false;
+  }
+
+  auto load_result = script_engine_->LoadModule(config_.script_assembly);
+  if (!load_result) {
+    ATLAS_LOG_ERROR("Client: load_module({}) failed: {}", config_.script_assembly.string(),
+                    load_result.Error().Message());
+    return false;
+  }
+
+  script_engine_->OnInit(false);
+
+  ATLAS_LOG_INFO("Client: CLR initialized, assembly loaded");
+  return true;
+}
+
+void ClientApp::fini_clr() {
+  using SetNativeApiProviderFn = void (*)(void*);
+
+  if (script_engine_) {
+    script_engine_->OnShutdown();
+    script_engine_->Finalize();
+    script_engine_.reset();
+  }
+
+  if (native_api_library_) {
+    auto set_provider =
+        native_api_library_->GetSymbol<SetNativeApiProviderFn>("AtlasSetNativeApiProvider");
+    if (set_provider) (*set_provider)(nullptr);
+    native_api_library_.reset();
+  }
+
+  SetNativeApiProvider(nullptr);
+  native_provider_.reset();
+}
+
+// ============================================================================
+// Fini
+// ============================================================================
+
+void ClientApp::fini() {
+  fini_clr();
+  ATLAS_LOG_INFO("Client: finalized");
+}
+
+// ============================================================================
+// Login flow
+// ============================================================================
+
+auto ClientApp::login() -> bool {
+  ATLAS_LOG_INFO("Client: connecting to LoginApp at {}:{}", config_.loginapp_host,
+                 config_.loginapp_port);
+
+  auto login_addr = Address(config_.loginapp_host, config_.loginapp_port);
+  auto ch_result = network_.ConnectRudp(login_addr);
+  if (!ch_result) {
+    ATLAS_LOG_ERROR("Client: failed to connect to LoginApp: {}", ch_result.Error().Message());
+    return false;
+  }
+  auto* login_ch = *ch_result;
+
+  // Send LoginRequest
+  login::LoginRequest req;
+  req.username = config_.username;
+  req.password_hash = config_.password_hash;
+  (void)login_ch->SendMessage(req);
+
+  // Wait for LoginResult
+  std::optional<login::LoginResult> login_result;
+  network_.InterfaceTable().RegisterTypedHandler<login::LoginResult>(
+      [&](const Address&, Channel*, const login::LoginResult& msg) { login_result = msg; });
+
+  auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
+  while (!login_result && std::chrono::steady_clock::now() < deadline) {
+    dispatcher_.ProcessOnce();
+    std::this_thread::sleep_for(std::chrono::milliseconds(2));
+  }
+
+  if (!login_result || login_result->status != login::LoginStatus::kSuccess) {
+    ATLAS_LOG_ERROR("Client: login failed: {}",
+                    login_result ? login_result->error_message : "timeout");
+    return false;
+  }
+
+  ATLAS_LOG_INFO("Client: login succeeded, BaseApp at {}", login_result->baseapp_addr.ToString());
+
+  // Authenticate on BaseApp
+  return authenticate(login_result->baseapp_addr, login_result->session_key);
+}
+
+auto ClientApp::authenticate(const Address& baseapp_addr, const SessionKey& session_key) -> bool {
+  auto ch_result = network_.ConnectRudp(baseapp_addr);
+  if (!ch_result) {
+    ATLAS_LOG_ERROR("Client: failed to connect to BaseApp: {}", ch_result.Error().Message());
+    return false;
+  }
+  baseapp_channel_ = *ch_result;
+
+  // Send Authenticate
+  baseapp::Authenticate auth_msg;
+  auth_msg.session_key = session_key;
+  (void)baseapp_channel_->SendMessage(auth_msg);
+
+  // Wait for AuthenticateResult
+  std::optional<std::tuple<bool, EntityID, uint16_t>> auth_result;
+  network_.InterfaceTable().RegisterTypedHandler<baseapp::AuthenticateResult>(
+      [&](const Address&, Channel*, const baseapp::AuthenticateResult& msg) {
+        auth_result = std::make_tuple(msg.success, msg.entity_id, msg.type_id);
+      });
+
+  auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+  while (!auth_result && std::chrono::steady_clock::now() < deadline) {
+    dispatcher_.ProcessOnce();
+    std::this_thread::sleep_for(std::chrono::milliseconds(2));
+  }
+
+  if (!auth_result || !std::get<0>(*auth_result)) {
+    ATLAS_LOG_ERROR("Client: authentication failed");
+    return false;
+  }
+
+  player_entity_id_ = std::get<1>(*auth_result);
+  player_type_id_ = std::get<2>(*auth_result);
+  authenticated_ = true;
+
+  ATLAS_LOG_INFO("Client: authenticated as entity={} type={}", player_entity_id_, player_type_id_);
+
+  // Create the client-side entity via C# callback
+  if (native_provider_ && native_provider_->create_entity_fn()) {
+    native_provider_->create_entity_fn()(player_entity_id_, player_type_id_);
+  }
+
+  return true;
+}
+
+// ============================================================================
+// RPC message handling
+// ============================================================================
+
+void ClientApp::on_rpc_message(uint32_t rpc_id, const std::byte* payload, int32_t len) {
+  if (!native_provider_ || !native_provider_->dispatch_rpc_fn()) {
+    ATLAS_LOG_WARNING("Client: received RPC but no dispatcher registered");
+    return;
+  }
+  native_provider_->dispatch_rpc_fn()(player_entity_id_, rpc_id,
+                                      reinterpret_cast<const uint8_t*>(payload), len);
+}
+
+// ============================================================================
+// Main loop
+// ============================================================================
+
+auto ClientApp::main_loop() -> int {
+  // Login first
+  if (!login()) return 1;
+
+  ATLAS_LOG_INFO("Client: entering main loop (press Ctrl+C to exit)");
+
+  // Register a catch-all handler for RPC messages from BaseApp.
+  // BaseApp sends ClientRpc using the rpc_id directly as the MessageID.
+  // We register a raw message handler that catches everything not handled
+  // by specific typed handlers.
+  network_.InterfaceTable().SetDefaultHandler(
+      [this](const Address&, Channel*, MessageID msg_id, BinaryReader& reader) {
+        // The message ID is the RPC ID when receiving ClientRpcs from BaseApp.
+        auto rem = reader.Remaining();
+        if (rem > 0) {
+          auto payload = reader.ReadBytes(rem);
+          if (payload) {
+            on_rpc_message(static_cast<uint32_t>(msg_id),
+                           reinterpret_cast<const std::byte*>(payload->data()),
+                           static_cast<int32_t>(payload->size()));
+          }
+        } else {
+          on_rpc_message(static_cast<uint32_t>(msg_id), nullptr, 0);
+        }
+      });
+
+  while (!shutdown_requested_) {
+    dispatcher_.ProcessOnce();
+
+    // Drive C# tick if CLR is loaded
+    if (script_engine_) {
+      script_engine_->OnTick(0.016f);
+    }
+
+    std::this_thread::sleep_for(std::chrono::milliseconds(16));
+  }
+
+  return 0;
+}
+
+}  // namespace atlas

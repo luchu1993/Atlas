@@ -4,7 +4,7 @@
 # ── atlas_add_library ────────────────────────────────────────────────────────
 # Usage:
 #   atlas_add_library(atlas_network
-#       SOURCES src1.cpp src2.cpp
+#       SOURCES src1.cc src2.cc
 #       DEPS    atlas_platform atlas_foundation
 #       PUBLIC_INCLUDE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}/include
 #   )
@@ -52,7 +52,7 @@ endfunction()
 # ── atlas_add_executable ─────────────────────────────────────────────────────
 # Usage:
 #   atlas_add_executable(loginapp
-#       SOURCES main.cpp login_app.cpp
+#       SOURCES main.cc login_app.cc
 #       DEPS    atlas_server atlas_network
 #   )
 function(atlas_add_executable target)
@@ -89,7 +89,7 @@ endfunction()
 # ── atlas_add_test ───────────────────────────────────────────────────────────
 # Usage:
 #   atlas_add_test(test_network
-#       SOURCES test_socket.cpp test_channel.cpp
+#       SOURCES test_socket.cc test_channel.cc
 #       DEPS    atlas_network
 #       LABELS  unit          # optional; defaults to "unit"
 #   )

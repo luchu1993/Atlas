@@ -2,12 +2,12 @@
 
 atlas_add_library(atlas_baseapp_lib
     SOURCES
-        base_entity.cpp
-        delta_forwarder.cpp
-        entity_manager.cpp
-        id_client.cpp
-        baseapp_native_provider.cpp
-        baseapp.cpp
+        base_entity.cc
+        delta_forwarder.cc
+        entity_manager.cc
+        id_client.cc
+        baseapp_native_provider.cc
+        baseapp.cc
     DEPS
         atlas_foundation
         atlas_network
@@ -24,7 +24,7 @@ target_include_directories(atlas_baseapp_lib
 
 atlas_add_executable(atlas_baseapp
     SOURCES
-        main.cpp
+        main.cc
     DEPS
         atlas_baseapp_lib
 )

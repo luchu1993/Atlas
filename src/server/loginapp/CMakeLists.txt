@@ -2,7 +2,7 @@
 
 atlas_add_library(atlas_loginapp_lib
     SOURCES
-        loginapp.cpp
+        loginapp.cc
     DEPS
         atlas_foundation
         atlas_network
@@ -17,7 +17,7 @@ target_include_directories(atlas_loginapp_lib
 
 atlas_add_executable(atlas_loginapp
     SOURCES
-        main.cpp
+        main.cc
     DEPS
         atlas_loginapp_lib
 )

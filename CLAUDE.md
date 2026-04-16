@@ -77,15 +77,23 @@ Lightweight SDK for game clients to connect to Atlas servers.
 
 ## Code Conventions
 
+Follows the [Google C++ Style Guide](https://google.github.io/styleguide/cppguide.html).
+See `docs/CODING_STYLE.md` for the full project style guide.
+
+### Key rules
+
 - C++20 standard, no compiler extensions
-- Platform-specific code uses suffix: `_windows.cpp`, `_linux.cpp`
+- **Formatting**: 2-space indent, attached braces, 100-column limit (enforced by `.clang-format`)
+- **Naming**: `PascalCase` functions, `snake_case` variables, `kPascalCase` enum values/constants, `snake_case_` class members
+- Accessors matching member names stay `snake_case`: `port()` for `port_`, `set_port()` for setter
+- Coroutine protocol functions (`await_ready`, `initial_suspend`, etc.) and STL interface functions (`begin`, `end`, `size`, etc.) stay `snake_case`
+- Platform-specific code uses suffix: `_windows.cc`, `_linux.cc`
 - Namespace: `atlas::`
 - Use `std::format` for string formatting
 - Use `std::expected` or custom `Result<T,E>` for error handling (no exceptions)
 - Smart pointers: `std::unique_ptr`, `std::shared_ptr`, and custom `IntrusivePtr<T>`
 - All new code should have unit tests (Google Test)
-- Follow `.clang-format` style
-- In the absence of explicit style guidelines, mimic patterns in existing code
+- In the absence of explicit style guidelines, follow Google C++ Style Guide
 
 ## Testing
 

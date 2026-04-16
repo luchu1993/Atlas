@@ -21,7 +21,7 @@ public static class CallbackEntryPoint
     // Test 1: ABI version round-trip
     // =========================================================================
     //
-    // Calls atlas_get_abi_version() and writes the result to *out.
+    // Calls AtlasGetAbiVersion() and writes the result to *out.
     // C++ verifies that the value matches ATLAS_NATIVE_API_ABI_VERSION.
 
     [UnmanagedCallersOnly]
@@ -43,7 +43,7 @@ public static class CallbackEntryPoint
     // Test 2: LogMessage round-trip
     // =========================================================================
     //
-    // Calls atlas_log_message with a known UTF-8 string.
+    // Calls AtlasLogMessage with a known UTF-8 string.
     // Verifies that the call does not crash and returns no error.
     // (C++ verifies the log sink received the message in a later test.)
 
@@ -67,7 +67,7 @@ public static class CallbackEntryPoint
     // Test 3: ServerTime round-trip
     // =========================================================================
     //
-    // Calls atlas_server_time() and writes the result to *out.
+    // Calls AtlasServerTime() and writes the result to *out.
     // C++ verifies the value is >= 0 (stub returns 0.0 in Phase 2).
 
     [UnmanagedCallersOnly]

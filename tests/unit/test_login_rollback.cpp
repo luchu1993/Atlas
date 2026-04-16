@@ -1,337 +1,293 @@
-#include "baseapp/baseapp.hpp"
-#include "coro/cancellation.hpp"
-#include "db/idatabase.hpp"
-#include "dbapp/dbapp.hpp"
-#include "loginapp/loginapp.hpp"
-
-#include <gtest/gtest.h>
-
 #include <optional>
 #include <utility>
 
-namespace atlas
-{
+#include <gtest/gtest.h>
 
-class LoginRollbackTest : public ::testing::Test
-{
-protected:
-    LoginRollbackTest()
-        : dispatcher_("login_rollback"),
-          internal_network_(dispatcher_),
-          external_network_(dispatcher_),
-          app_(dispatcher_, internal_network_, external_network_)
-    {
-    }
+#include "baseapp/baseapp.h"
+#include "coro/cancellation.h"
+#include "db/idatabase.h"
+#include "dbapp/dbapp.h"
+#include "loginapp/loginapp.h"
 
-    void register_watchers() { app_.register_watchers(); }
+namespace atlas {
 
-    // Seed an active login's cancellation state (simulates what handle_login_coro sets up)
-    auto seed_active_login(uint64_t channel_id, const std::string& username, uint32_t request_id)
-        -> CancellationToken
-    {
-        CancellationSource source;
-        auto token = source.token();
-        app_.channel_cancel_sources_[channel_id] = source;
-        app_.pending_by_username_[username] = request_id;
-        return token;
-    }
+class LoginRollbackTest : public ::testing::Test {
+ protected:
+  LoginRollbackTest()
+      : dispatcher_("login_rollback"),
+        internal_network_(dispatcher_),
+        external_network_(dispatcher_),
+        app_(dispatcher_, internal_network_, external_network_) {}
 
-    void cancel_for_channel(uint64_t channel_id)
-    {
-        auto it = app_.channel_cancel_sources_.find(channel_id);
-        if (it != app_.channel_cancel_sources_.end())
-            it->second.request_cancellation();
-    }
+  void register_watchers() { app_.RegisterWatchers(); }
 
-    void add_pending_username(const std::string& username, uint32_t request_id)
-    {
-        app_.pending_by_username_[username] = request_id;
-    }
+  // Seed an active login's cancellation state (simulates what handle_login_coro sets up)
+  auto seed_active_login(uint64_t channel_id, const std::string& username, uint32_t request_id)
+      -> CancellationToken {
+    CancellationSource source;
+    auto token = source.Token();
+    app_.channel_cancel_sources_[channel_id] = source;
+    app_.pending_by_username_[username] = request_id;
+    return token;
+  }
 
-    void remove_pending_username(const std::string& username)
-    {
-        app_.pending_by_username_.erase(username);
-    }
+  void cancel_for_channel(uint64_t channel_id) {
+    auto it = app_.channel_cancel_sources_.find(channel_id);
+    if (it != app_.channel_cancel_sources_.end()) it->second.RequestCancellation();
+  }
 
-    auto pending_by_username_empty() const -> bool { return app_.pending_by_username_.empty(); }
-    auto active_login_count() const -> std::size_t { return app_.channel_cancel_sources_.size(); }
-    auto abandoned_total() const -> uint64_t { return app_.abandoned_login_total_; }
-    auto watcher(std::string_view path) -> std::optional<std::string>
-    {
-        return app_.watcher_registry().get(path);
-    }
+  void add_pending_username(const std::string& username, uint32_t request_id) {
+    app_.pending_by_username_[username] = request_id;
+  }
 
-    EventDispatcher dispatcher_;
-    NetworkInterface internal_network_;
-    NetworkInterface external_network_;
-    LoginApp app_;
+  void remove_pending_username(const std::string& username) {
+    app_.pending_by_username_.erase(username);
+  }
+
+  auto pending_by_username_empty() const -> bool { return app_.pending_by_username_.empty(); }
+  auto active_login_count() const -> std::size_t { return app_.channel_cancel_sources_.size(); }
+  auto abandoned_total() const -> uint64_t { return app_.abandoned_login_total_; }
+  auto watcher(std::string_view path) -> std::optional<std::string> {
+    return app_.GetWatcherRegistry().Get(path);
+  }
+
+  EventDispatcher dispatcher_;
+  NetworkInterface internal_network_;
+  NetworkInterface external_network_;
+  LoginApp app_;
 };
 
-TEST_F(LoginRollbackTest, ClientDisconnectCancelsActiveLogin)
-{
-    register_watchers();
-    auto token = seed_active_login(100, "tester", 42);
+TEST_F(LoginRollbackTest, ClientDisconnectCancelsActiveLogin) {
+  register_watchers();
+  auto token = seed_active_login(100, "tester", 42);
 
-    EXPECT_EQ(active_login_count(), 1u);
-    EXPECT_FALSE(pending_by_username_empty());
-    EXPECT_FALSE(token.is_cancelled());
+  EXPECT_EQ(active_login_count(), 1u);
+  EXPECT_FALSE(pending_by_username_empty());
+  EXPECT_FALSE(token.IsCancelled());
 
-    // Simulate what on_client_disconnect does: cancel the source
-    cancel_for_channel(100);
+  // Simulate what on_client_disconnect does: cancel the source
+  cancel_for_channel(100);
 
-    EXPECT_TRUE(token.is_cancelled());
+  EXPECT_TRUE(token.IsCancelled());
 }
 
-TEST_F(LoginRollbackTest, DedupTrackingAndMetrics)
-{
-    register_watchers();
+TEST_F(LoginRollbackTest, DedupTrackingAndMetrics) {
+  register_watchers();
 
-    add_pending_username("alice", 1);
-    add_pending_username("bob", 2);
+  add_pending_username("alice", 1);
+  add_pending_username("bob", 2);
 
-    EXPECT_FALSE(pending_by_username_empty());
-    EXPECT_EQ(watcher("loginapp/pending_logins").value_or(""), "2");
+  EXPECT_FALSE(pending_by_username_empty());
+  EXPECT_EQ(watcher("loginapp/pending_logins").value_or(""), "2");
 
-    remove_pending_username("alice");
-    remove_pending_username("bob");
-    EXPECT_TRUE(pending_by_username_empty());
-    EXPECT_EQ(watcher("loginapp/pending_logins").value_or(""), "0");
+  remove_pending_username("alice");
+  remove_pending_username("bob");
+  EXPECT_TRUE(pending_by_username_empty());
+  EXPECT_EQ(watcher("loginapp/pending_logins").value_or(""), "0");
 }
 
-class BaseAppRollbackTest : public ::testing::Test
-{
-protected:
-    BaseAppRollbackTest()
-        : dispatcher_("baseapp_rollback"),
-          internal_network_(dispatcher_),
-          external_network_(dispatcher_),
-          app_(dispatcher_, internal_network_, external_network_)
-    {
-    }
+class BaseAppRollbackTest : public ::testing::Test {
+ protected:
+  BaseAppRollbackTest()
+      : dispatcher_("baseapp_rollback"),
+        internal_network_(dispatcher_),
+        external_network_(dispatcher_),
+        app_(dispatcher_, internal_network_, external_network_) {}
 
-    void register_watchers() { app_.register_watchers(); }
+  void register_watchers() { app_.RegisterWatchers(); }
 
-    void seed_expired_prepared_login(uint32_t login_request_id, EntityID entity_id)
-    {
-        app_.prepared_login_entities_[login_request_id] = BaseApp::PreparedLoginEntity{
-            entity_id, 1234, 7,
-            Clock::now() - BaseApp::kPreparedLoginTimeout - std::chrono::seconds(1)};
-        app_.prepared_login_requests_by_entity_[entity_id] = login_request_id;
-    }
+  void seed_expired_prepared_login(uint32_t login_request_id, EntityID entity_id) {
+    app_.prepared_login_entities_[login_request_id] = BaseApp::PreparedLoginEntity{
+        entity_id, 1234, 7,
+        Clock::now() - BaseApp::kPreparedLoginTimeout - std::chrono::seconds(1)};
+    app_.prepared_login_requests_by_entity_[entity_id] = login_request_id;
+  }
 
-    void cleanup_expired() { app_.cleanup_expired_pending_requests(); }
+  void cleanup_expired() { app_.CleanupExpiredPendingRequests(); }
 
-    auto has_prepared(uint32_t login_request_id) const -> bool
-    {
-        return app_.prepared_login_entities_.contains(login_request_id);
-    }
+  auto has_prepared(uint32_t login_request_id) const -> bool {
+    return app_.prepared_login_entities_.contains(login_request_id);
+  }
 
-    auto has_prepared_entity(EntityID entity_id) const -> bool
-    {
-        return app_.prepared_login_requests_by_entity_.contains(entity_id);
-    }
+  auto has_prepared_entity(EntityID entity_id) const -> bool {
+    return app_.prepared_login_requests_by_entity_.contains(entity_id);
+  }
 
-    auto prepared_timeout_total() const -> uint64_t { return app_.prepared_login_timeout_total_; }
-    auto watcher(std::string_view path) -> std::optional<std::string>
-    {
-        return app_.watcher_registry().get(path);
-    }
+  auto prepared_timeout_total() const -> uint64_t { return app_.prepared_login_timeout_total_; }
+  auto watcher(std::string_view path) -> std::optional<std::string> {
+    return app_.GetWatcherRegistry().Get(path);
+  }
 
-    EventDispatcher dispatcher_;
-    NetworkInterface internal_network_;
-    NetworkInterface external_network_;
-    BaseApp app_;
+  EventDispatcher dispatcher_;
+  NetworkInterface internal_network_;
+  NetworkInterface external_network_;
+  BaseApp app_;
 };
 
-TEST_F(BaseAppRollbackTest, PreparedLoginTimeoutRollsBackPreparedState)
-{
-    register_watchers();
-    seed_expired_prepared_login(77, 901);
+TEST_F(BaseAppRollbackTest, PreparedLoginTimeoutRollsBackPreparedState) {
+  register_watchers();
+  seed_expired_prepared_login(77, 901);
 
-    cleanup_expired();
+  cleanup_expired();
 
-    EXPECT_FALSE(has_prepared(77));
-    EXPECT_FALSE(has_prepared_entity(901));
-    EXPECT_EQ(prepared_timeout_total(), 1u);
-    EXPECT_EQ(watcher("baseapp/prepared_login_timeout_total").value_or(""), "1");
-    EXPECT_EQ(watcher("baseapp/canceled_checkout_count").value_or(""), "0");
+  EXPECT_FALSE(has_prepared(77));
+  EXPECT_FALSE(has_prepared_entity(901));
+  EXPECT_EQ(prepared_timeout_total(), 1u);
+  EXPECT_EQ(watcher("baseapp/prepared_login_timeout_total").value_or(""), "1");
+  EXPECT_EQ(watcher("baseapp/canceled_checkout_count").value_or(""), "0");
 }
 
-class FakeDatabase final : public IDatabase
-{
-public:
-    Result<void> startup(const DatabaseConfig&, const EntityDefRegistry&) override { return {}; }
-    void shutdown() override {}
+class FakeDatabase final : public IDatabase {
+ public:
+  Result<void> Startup(const DatabaseConfig&, const EntityDefRegistry&) override { return {}; }
+  void Shutdown() override {}
 
-    void put_entity(DatabaseID, uint16_t, WriteFlags, std::span<const std::byte>,
-                    const std::string&, std::function<void(PutResult)>) override
-    {
-        ADD_FAILURE() << "put_entity should not be called in this test";
-    }
+  void PutEntity(DatabaseID, uint16_t, WriteFlags, std::span<const std::byte>, const std::string&,
+                 std::function<void(PutResult)>) override {
+    ADD_FAILURE() << "PutEntity should not be called in this test";
+  }
 
-    void get_entity(DatabaseID, uint16_t, std::function<void(GetResult)>) override
-    {
-        ADD_FAILURE() << "get_entity should not be called in this test";
-    }
+  void GetEntity(DatabaseID, uint16_t, std::function<void(GetResult)>) override {
+    ADD_FAILURE() << "GetEntity should not be called in this test";
+  }
 
-    void del_entity(DatabaseID, uint16_t, std::function<void(DelResult)>) override
-    {
-        ADD_FAILURE() << "del_entity should not be called in this test";
-    }
+  void DelEntity(DatabaseID, uint16_t, std::function<void(DelResult)>) override {
+    ADD_FAILURE() << "DelEntity should not be called in this test";
+  }
 
-    void lookup_by_name(uint16_t, const std::string&, std::function<void(LookupResult)>) override
-    {
-        ADD_FAILURE() << "lookup_by_name should not be called in this test";
-    }
+  void LookupByName(uint16_t, const std::string&, std::function<void(LookupResult)>) override {
+    ADD_FAILURE() << "LookupByName should not be called in this test";
+  }
 
-    void checkout_entity(DatabaseID, uint16_t, const CheckoutInfo&,
-                         std::function<void(GetResult)> callback) override
-    {
-        checkout_callback = std::move(callback);
-    }
+  void CheckoutEntity(DatabaseID, uint16_t, const CheckoutInfo&,
+                      std::function<void(GetResult)> callback) override {
+    checkout_callback = std::move(callback);
+  }
 
-    void checkout_entity_by_name(uint16_t, const std::string&, const CheckoutInfo&,
-                                 std::function<void(GetResult)> callback) override
-    {
-        checkout_callback = std::move(callback);
-    }
+  void CheckoutEntityByName(uint16_t, const std::string&, const CheckoutInfo&,
+                            std::function<void(GetResult)> callback) override {
+    checkout_callback = std::move(callback);
+  }
 
-    void clear_checkout(DatabaseID dbid, uint16_t type_id,
-                        std::function<void(bool)> callback) override
-    {
-        ++clear_checkout_calls;
-        last_cleared = std::make_pair(dbid, type_id);
-        callback(true);
-    }
+  void ClearCheckout(DatabaseID dbid, uint16_t type_id,
+                     std::function<void(bool)> callback) override {
+    ++clear_checkout_calls;
+    last_cleared = std::make_pair(dbid, type_id);
+    callback(true);
+  }
 
-    void clear_checkouts_for_address(const Address&, std::function<void(int)> callback) override
-    {
-        callback(0);
-    }
+  void ClearCheckoutsForAddress(const Address&, std::function<void(int)> callback) override {
+    callback(0);
+  }
 
-    void mark_checkout_cleared(DatabaseID dbid, uint16_t type_id) override
-    {
-        ++mark_checkout_cleared_calls;
-        last_cleared = std::make_pair(dbid, type_id);
-    }
+  void MarkCheckoutCleared(DatabaseID dbid, uint16_t type_id) override {
+    ++mark_checkout_cleared_calls;
+    last_cleared = std::make_pair(dbid, type_id);
+  }
 
-    void get_auto_load_entities(std::function<void(std::vector<EntityData>)> callback) override
-    {
-        callback({});
-    }
+  void GetAutoLoadEntities(std::function<void(std::vector<EntityData>)> callback) override {
+    callback({});
+  }
 
-    void set_auto_load(DatabaseID, uint16_t, bool) override {}
-    void load_entity_id_counter(std::function<void(EntityID)> callback) override { callback(1); }
-    void save_entity_id_counter(EntityID, std::function<void(bool)> callback) override
-    {
-        callback(true);
-    }
-    void process_results() override {}
+  void SetAutoLoad(DatabaseID, uint16_t, bool) override {}
+  void LoadEntityIdCounter(std::function<void(EntityID)> callback) override { callback(1); }
+  void SaveEntityIdCounter(EntityID, std::function<void(bool)> callback) override {
+    callback(true);
+  }
+  void ProcessResults() override {}
 
-    std::function<void(GetResult)> checkout_callback;
-    int clear_checkout_calls{0};
-    int mark_checkout_cleared_calls{0};
-    std::optional<std::pair<DatabaseID, uint16_t>> last_cleared;
+  std::function<void(GetResult)> checkout_callback;
+  int clear_checkout_calls{0};
+  int mark_checkout_cleared_calls{0};
+  std::optional<std::pair<DatabaseID, uint16_t>> last_cleared;
 };
 
-class DBAppRollbackTest : public ::testing::Test
-{
-protected:
-    DBAppRollbackTest()
-        : dispatcher_("dbapp_rollback"), network_(dispatcher_), app_(dispatcher_, network_)
-    {
-        app_.database_ = std::make_unique<FakeDatabase>();
-    }
+class DBAppRollbackTest : public ::testing::Test {
+ protected:
+  DBAppRollbackTest()
+      : dispatcher_("dbapp_rollback"), network_(dispatcher_), app_(dispatcher_, network_) {
+    app_.database_ = std::make_unique<FakeDatabase>();
+  }
 
-    auto db() -> FakeDatabase& { return *static_cast<FakeDatabase*>(app_.database_.get()); }
+  auto db() -> FakeDatabase& { return *static_cast<FakeDatabase*>(app_.database_.get()); }
 
-    void register_watchers() { app_.register_watchers(); }
+  void register_watchers() { app_.RegisterWatchers(); }
 
-    void start_checkout(uint32_t request_id, DatabaseID dbid, uint16_t type_id)
-    {
-        dbapp::CheckoutEntity checkout;
-        checkout.request_id = request_id;
-        checkout.dbid = dbid;
-        checkout.type_id = type_id;
-        app_.on_checkout_entity(Address("127.0.0.1", 30001), reinterpret_cast<Channel*>(1),
-                                checkout);
-    }
+  void start_checkout(uint32_t request_id, DatabaseID dbid, uint16_t type_id) {
+    dbapp::CheckoutEntity checkout;
+    checkout.request_id = request_id;
+    checkout.dbid = dbid;
+    checkout.type_id = type_id;
+    app_.OnCheckoutEntity(Address("127.0.0.1", 30001), reinterpret_cast<Channel*>(1), checkout);
+  }
 
-    void abort_checkout(uint32_t request_id, DatabaseID dbid, uint16_t type_id)
-    {
-        dbapp::AbortCheckout abort;
-        abort.request_id = request_id;
-        abort.dbid = dbid;
-        abort.type_id = type_id;
-        app_.on_abort_checkout(Address("127.0.0.1", 30001), reinterpret_cast<Channel*>(1), abort);
-    }
+  void abort_checkout(uint32_t request_id, DatabaseID dbid, uint16_t type_id) {
+    dbapp::AbortCheckout abort;
+    abort.request_id = request_id;
+    abort.dbid = dbid;
+    abort.type_id = type_id;
+    app_.OnAbortCheckout(Address("127.0.0.1", 30001), reinterpret_cast<Channel*>(1), abort);
+  }
 
-    void complete_checkout_success(DatabaseID dbid)
-    {
-        ASSERT_TRUE(db().checkout_callback);
-        GetResult result;
-        result.success = true;
-        result.data.dbid = dbid;
-        db().checkout_callback(std::move(result));
-    }
-
-    auto pending_request_contains(uint32_t request_id) const -> bool
-    {
-        return app_.pending_checkout_requests_.contains(request_id);
-    }
-
-    auto pending_request_canceled(uint32_t request_id) const -> bool
-    {
-        return app_.pending_checkout_requests_.at(request_id).canceled;
-    }
-
-    auto pending_request_cleared_dbid(uint32_t request_id) const -> DatabaseID
-    {
-        return app_.pending_checkout_requests_.at(request_id).cleared_dbid;
-    }
-
-    auto checkout_owner(DatabaseID dbid, uint16_t type_id) const -> std::optional<CheckoutInfo>
-    {
-        return app_.checkout_mgr_.get_owner(dbid, type_id);
-    }
-
-    auto abort_total() const -> uint64_t { return app_.abort_checkout_total_; }
-    auto abort_pending_total() const -> uint64_t { return app_.abort_checkout_pending_hit_total_; }
-    auto abort_late_total() const -> uint64_t { return app_.abort_checkout_late_hit_total_; }
-    auto watcher(std::string_view path) -> std::optional<std::string>
-    {
-        return app_.watcher_registry().get(path);
-    }
-
-    EventDispatcher dispatcher_;
-    NetworkInterface network_;
-    DBApp app_;
-};
-
-TEST_F(DBAppRollbackTest, AbortCheckoutIsIdempotentWhileRequestIsPending)
-{
-    register_watchers();
-    start_checkout(1001, 555, 9);
+  void complete_checkout_success(DatabaseID dbid) {
     ASSERT_TRUE(db().checkout_callback);
-    ASSERT_TRUE(pending_request_contains(1001));
+    GetResult result;
+    result.success = true;
+    result.data.dbid = dbid;
+    db().checkout_callback(std::move(result));
+  }
 
-    abort_checkout(1001, 555, 9);
-    abort_checkout(1001, 555, 9);
+  auto pending_request_contains(uint32_t request_id) const -> bool {
+    return app_.pending_checkout_requests_.contains(request_id);
+  }
 
-    EXPECT_EQ(db().mark_checkout_cleared_calls, 1);
-    ASSERT_TRUE(pending_request_contains(1001));
-    EXPECT_TRUE(pending_request_canceled(1001));
-    EXPECT_EQ(pending_request_cleared_dbid(1001), 555);
+  auto pending_request_canceled(uint32_t request_id) const -> bool {
+    return app_.pending_checkout_requests_.at(request_id).canceled;
+  }
 
-    complete_checkout_success(555);
+  auto pending_request_cleared_dbid(uint32_t request_id) const -> DatabaseID {
+    return app_.pending_checkout_requests_.at(request_id).cleared_dbid;
+  }
 
-    EXPECT_FALSE(pending_request_contains(1001));
-    EXPECT_EQ(db().mark_checkout_cleared_calls, 1);
-    EXPECT_FALSE(checkout_owner(555, 9).has_value());
-    EXPECT_EQ(abort_total(), 2u);
-    EXPECT_EQ(abort_pending_total(), 2u);
-    EXPECT_EQ(abort_late_total(), 0u);
-    EXPECT_EQ(watcher("dbapp/abort_checkout_total").value_or(""), "2");
+  auto checkout_owner(DatabaseID dbid, uint16_t type_id) const -> std::optional<CheckoutInfo> {
+    return app_.checkout_mgr_.GetOwner(dbid, type_id);
+  }
+
+  auto abort_total() const -> uint64_t { return app_.abort_checkout_total_; }
+  auto abort_pending_total() const -> uint64_t { return app_.abort_checkout_pending_hit_total_; }
+  auto abort_late_total() const -> uint64_t { return app_.abort_checkout_late_hit_total_; }
+  auto watcher(std::string_view path) -> std::optional<std::string> {
+    return app_.GetWatcherRegistry().Get(path);
+  }
+
+  EventDispatcher dispatcher_;
+  NetworkInterface network_;
+  DBApp app_;
+};
+
+TEST_F(DBAppRollbackTest, AbortCheckoutIsIdempotentWhileRequestIsPending) {
+  register_watchers();
+  start_checkout(1001, 555, 9);
+  ASSERT_TRUE(db().checkout_callback);
+  ASSERT_TRUE(pending_request_contains(1001));
+
+  abort_checkout(1001, 555, 9);
+  abort_checkout(1001, 555, 9);
+
+  EXPECT_EQ(db().mark_checkout_cleared_calls, 1);
+  ASSERT_TRUE(pending_request_contains(1001));
+  EXPECT_TRUE(pending_request_canceled(1001));
+  EXPECT_EQ(pending_request_cleared_dbid(1001), 555);
+
+  complete_checkout_success(555);
+
+  EXPECT_FALSE(pending_request_contains(1001));
+  EXPECT_EQ(db().mark_checkout_cleared_calls, 1);
+  EXPECT_FALSE(checkout_owner(555, 9).has_value());
+  EXPECT_EQ(abort_total(), 2u);
+  EXPECT_EQ(abort_pending_total(), 2u);
+  EXPECT_EQ(abort_late_total(), 0u);
+  EXPECT_EQ(watcher("dbapp/abort_checkout_total").value_or(""), "2");
 }
 
 }  // namespace atlas

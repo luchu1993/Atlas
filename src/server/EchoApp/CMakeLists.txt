@@ -2,13 +2,13 @@
 
 atlas_add_executable(atlas_echoapp
     SOURCES
-        echo_app.cpp
-        main.cpp
+        echo_app.cc
+        main.cc
     DEPS
         atlas_server
 )
 
-# Place include root so echo_app.hpp can be found when including from main.cpp
+# Place include root so echo_app.hpp can be found when including from main.cc
 target_include_directories(atlas_echoapp
     PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
 )

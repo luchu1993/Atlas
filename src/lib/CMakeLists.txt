@@ -25,13 +25,13 @@ add_subdirectory(server)
 # Bundles the atlas_* C-linkage export functions into a shared library so that
 # C# [LibraryImport("atlas_engine")] P/Invoke can resolve them at runtime.
 #
-# clr_native_api.cpp is compiled exclusively here (not in any static lib).
+# clr_native_api.cc is compiled exclusively here (not in any static lib).
 # It delegates to the INativeApiProvider registered by the hosting process.
 # The static library atlas_clrscript (linked below) provides
-# native_api_provider.cpp (set/get_native_api_provider), ClrHost, etc.
+# native_api_provider.cc (set/get_native_api_provider), ClrHost, etc.
 
 add_library(atlas_engine SHARED
-    ${CMAKE_CURRENT_SOURCE_DIR}/clrscript/clr_native_api.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/clrscript/clr_native_api.cc
 )
 
 target_compile_definitions(atlas_engine PRIVATE ATLAS_ENGINE_EXPORTS)

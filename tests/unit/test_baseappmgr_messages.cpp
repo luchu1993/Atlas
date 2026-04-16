@@ -1,99 +1,92 @@
-#include "baseappmgr/baseappmgr_messages.hpp"
-#include "serialization/binary_stream.hpp"
-
 #include <gtest/gtest.h>
+
+#include "baseappmgr/baseappmgr_messages.h"
+#include "serialization/binary_stream.h"
 
 using namespace atlas;
 using namespace atlas::baseappmgr;
 
-namespace
-{
+namespace {
 
 template <typename Msg>
-auto round_trip(const Msg& msg) -> Msg
-{
-    BinaryWriter w;
-    msg.serialize(w);
-    BinaryReader r(w.data());
-    auto result = Msg::deserialize(r);
-    EXPECT_TRUE(result.has_value());
-    return result.value_or(Msg{});
+auto round_trip(const Msg& msg) -> Msg {
+  BinaryWriter w;
+  msg.Serialize(w);
+  BinaryReader r(w.data());
+  auto result = Msg::Deserialize(r);
+  EXPECT_TRUE(result.HasValue());
+  return result.ValueOr(Msg{});
 }
 
-TEST(BaseAppMgrMessages, RegisterBaseApp_RoundTrip)
-{
-    RegisterBaseApp msg;
-    msg.internal_addr = Address(0x7F000001u, 9000);
-    msg.external_addr = Address(0x0A000001u, 20100);
+TEST(BaseAppMgrMessages, RegisterBaseApp_RoundTrip) {
+  RegisterBaseApp msg;
+  msg.internal_addr = Address(0x7F000001u, 9000);
+  msg.external_addr = Address(0x0A000001u, 20100);
 
-    auto out = round_trip(msg);
-    EXPECT_EQ(out.internal_addr.port(), 9000u);
-    EXPECT_EQ(out.external_addr.port(), 20100u);
+  auto out = round_trip(msg);
+  EXPECT_EQ(out.internal_addr.Port(), 9000u);
+  EXPECT_EQ(out.external_addr.Port(), 20100u);
 }
 
-TEST(BaseAppMgrMessages, RegisterBaseAppAck_RoundTrip)
-{
-    RegisterBaseAppAck msg;
-    msg.success = true;
-    msg.app_id = 3;
-    msg.game_time = 123456789u;
+TEST(BaseAppMgrMessages, RegisterBaseAppAck_RoundTrip) {
+  RegisterBaseAppAck msg;
+  msg.success = true;
+  msg.app_id = 3;
+  msg.game_time = 123456789u;
 
-    auto out = round_trip(msg);
-    EXPECT_TRUE(out.success);
-    EXPECT_EQ(out.app_id, 3u);
-    EXPECT_EQ(out.game_time, 123456789u);
+  auto out = round_trip(msg);
+  EXPECT_TRUE(out.success);
+  EXPECT_EQ(out.app_id, 3u);
+  EXPECT_EQ(out.game_time, 123456789u);
 }
 
-TEST(BaseAppMgrMessages, InformLoad_RoundTrip)
-{
-    InformLoad msg;
-    msg.app_id = 1;
-    msg.load = 0.42f;
-    msg.entity_count = 500;
-    msg.proxy_count = 100;
-    msg.pending_prepare_count = 7;
-    msg.pending_force_logoff_count = 3;
-    msg.detached_proxy_count = 11;
-    msg.logoff_in_flight_count = 5;
-    msg.deferred_login_count = 9;
+TEST(BaseAppMgrMessages, InformLoad_RoundTrip) {
+  InformLoad msg;
+  msg.app_id = 1;
+  msg.load = 0.42f;
+  msg.entity_count = 500;
+  msg.proxy_count = 100;
+  msg.pending_prepare_count = 7;
+  msg.pending_force_logoff_count = 3;
+  msg.detached_proxy_count = 11;
+  msg.logoff_in_flight_count = 5;
+  msg.deferred_login_count = 9;
 
-    auto out = round_trip(msg);
-    EXPECT_EQ(out.app_id, 1u);
-    EXPECT_NEAR(out.load, 0.42f, 1e-5f);
-    EXPECT_EQ(out.entity_count, 500u);
-    EXPECT_EQ(out.proxy_count, 100u);
-    EXPECT_EQ(out.pending_prepare_count, 7u);
-    EXPECT_EQ(out.pending_force_logoff_count, 3u);
-    EXPECT_EQ(out.detached_proxy_count, 11u);
-    EXPECT_EQ(out.logoff_in_flight_count, 5u);
-    EXPECT_EQ(out.deferred_login_count, 9u);
+  auto out = round_trip(msg);
+  EXPECT_EQ(out.app_id, 1u);
+  EXPECT_NEAR(out.load, 0.42f, 1e-5f);
+  EXPECT_EQ(out.entity_count, 500u);
+  EXPECT_EQ(out.proxy_count, 100u);
+  EXPECT_EQ(out.pending_prepare_count, 7u);
+  EXPECT_EQ(out.pending_force_logoff_count, 3u);
+  EXPECT_EQ(out.detached_proxy_count, 11u);
+  EXPECT_EQ(out.logoff_in_flight_count, 5u);
+  EXPECT_EQ(out.deferred_login_count, 9u);
 }
 
-TEST(BaseAppMgrMessages, RegisterGlobalBase_RoundTrip)
-{
-    RegisterGlobalBase msg;
-    msg.key = "WorldManager";
-    msg.entity_id = 9999;
-    msg.type_id = 5;
+TEST(BaseAppMgrMessages, RegisterGlobalBase_RoundTrip) {
+  RegisterGlobalBase msg;
+  msg.key = "WorldManager";
+  msg.entity_id = 9999;
+  msg.type_id = 5;
 
-    auto out = round_trip(msg);
-    EXPECT_EQ(out.key, "WorldManager");
-    EXPECT_EQ(out.entity_id, 9999u);
+  auto out = round_trip(msg);
+  EXPECT_EQ(out.key, "WorldManager");
+  EXPECT_EQ(out.entity_id, 9999u);
 }
 
-TEST(BaseAppMgrMessages, GlobalBaseNotification_RoundTrip)
-{
-    GlobalBaseNotification msg;
-    msg.key = "Auction";
-    msg.base_addr = Address(0x01020304u, 8888);
-    msg.entity_id = 42;
-    msg.type_id = 7;
-    msg.added = false;
+TEST(BaseAppMgrMessages, GlobalBaseNotification_RoundTrip) {
+  GlobalBaseNotification msg;
+  msg.key = "Auction";
+  msg.base_addr = Address(0x01020304u, 8888);
+  msg.entity_id = 42;
+  msg.type_id = 7;
+  msg.added = false;
 
-    auto out = round_trip(msg);
-    EXPECT_EQ(out.key, "Auction");
-    EXPECT_FALSE(out.added);
-    EXPECT_EQ(out.entity_id, 42u);
+  auto out = round_trip(msg);
+  EXPECT_EQ(out.key, "Auction");
+  EXPECT_FALSE(out.added);
+  EXPECT_EQ(out.entity_id, 42u);
 }
 
 }  // namespace

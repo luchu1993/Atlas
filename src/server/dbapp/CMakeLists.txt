@@ -2,9 +2,9 @@
 
 atlas_add_library(atlas_dbapp_lib
     SOURCES
-        checkout_manager.cpp
-        dbapp.cpp
-        entity_id_allocator.cpp
+        checkout_manager.cc
+        dbapp.cc
+        entity_id_allocator.cc
     DEPS
         atlas_foundation
         atlas_network
@@ -20,7 +20,7 @@ target_include_directories(atlas_dbapp_lib
 
 atlas_add_executable(atlas_dbapp
     SOURCES
-        main.cpp
+        main.cc
     DEPS
         atlas_dbapp_lib
 )

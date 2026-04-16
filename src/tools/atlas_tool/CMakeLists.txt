@@ -1,6 +1,6 @@
 # atlas_tool — Command-line tool for interacting with machined
 
-add_executable(atlas_tool main.cpp)
+add_executable(atlas_tool main.cc)
 
 target_link_libraries(atlas_tool PRIVATE
     atlas_server

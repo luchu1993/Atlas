@@ -2,7 +2,7 @@
 
 atlas_add_library(atlas_coro
     SOURCES
-        pending_rpc_registry.cpp
+        pending_rpc_registry.cc
     DEPS
         atlas_foundation
         atlas_network

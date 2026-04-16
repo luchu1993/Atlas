@@ -7,26 +7,26 @@ set_target_properties(atlas_platform_config PROPERTIES FOLDER "Libraries")
 
 # atlas_platform — OS abstraction layer (I/O, threading, signals, filesystem)
 set(ATLAS_PLATFORM_SOURCES
-    filesystem.cpp
-    io_poller.cpp
-    io_poller_select.cpp
-    threading.cpp
-    signal_handler.cpp
+    filesystem.cc
+    io_poller.cc
+    io_poller_select.cc
+    threading.cc
+    signal_handler.cc
 )
 
 # Platform-specific sources
 if(WIN32)
     list(APPEND ATLAS_PLATFORM_SOURCES
-        io_poller_wsapoll.cpp
-        threading_windows.cpp
-        dynamic_library_windows.cpp
+        io_poller_wsapoll.cc
+        threading_windows.cc
+        dynamic_library_windows.cc
     )
 elseif(UNIX AND NOT APPLE)
     list(APPEND ATLAS_PLATFORM_SOURCES
-        io_poller_epoll.cpp
-        io_poller_io_uring.cpp
-        threading_linux.cpp
-        dynamic_library_linux.cpp
+        io_poller_epoll.cc
+        io_poller_io_uring.cc
+        threading_linux.cc
+        dynamic_library_linux.cc
     )
 endif()
 

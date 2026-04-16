@@ -2,10 +2,10 @@
 
 atlas_add_library(atlas_serialization
     SOURCES
-        binary_stream.cpp
-        data_section.cpp
-        xml_parser.cpp
-        json_parser.cpp
+        binary_stream.cc
+        data_section.cc
+        xml_parser.cc
+        json_parser.cc
     DEPS
         atlas_foundation
         atlas_platform

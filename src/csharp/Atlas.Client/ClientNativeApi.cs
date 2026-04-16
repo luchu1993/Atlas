@@ -15,7 +15,7 @@ internal static unsafe partial class ClientNativeApi
     // Logging
     // =========================================================================
 
-    [LibraryImport(LibName, EntryPoint = "atlas_log_message")]
+    [LibraryImport(LibName, EntryPoint = "AtlasLogMessage")]
     private static partial void LogMessageNative(int level, byte* msg, int len);
 
     public static void LogMessage(int level, ReadOnlySpan<byte> message)
@@ -28,7 +28,7 @@ internal static unsafe partial class ClientNativeApi
     // RPC dispatch — client only sends base and cell RPCs
     // =========================================================================
 
-    [LibraryImport(LibName, EntryPoint = "atlas_send_base_rpc")]
+    [LibraryImport(LibName, EntryPoint = "AtlasSendBaseRpc")]
     private static partial void SendBaseRpcNative(uint entityId, uint rpcId, byte* payload, int len);
 
     public static void SendBaseRpc(uint entityId, uint rpcId, ReadOnlySpan<byte> payload)
@@ -37,7 +37,7 @@ internal static unsafe partial class ClientNativeApi
             SendBaseRpcNative(entityId, rpcId, ptr, payload.Length);
     }
 
-    [LibraryImport(LibName, EntryPoint = "atlas_send_cell_rpc")]
+    [LibraryImport(LibName, EntryPoint = "AtlasSendCellRpc")]
     private static partial void SendCellRpcNative(uint entityId, uint rpcId, byte* payload, int len);
 
     public static void SendCellRpc(uint entityId, uint rpcId, ReadOnlySpan<byte> payload)
@@ -50,7 +50,7 @@ internal static unsafe partial class ClientNativeApi
     // Entity type registry
     // =========================================================================
 
-    [LibraryImport(LibName, EntryPoint = "atlas_register_entity_type")]
+    [LibraryImport(LibName, EntryPoint = "AtlasRegisterEntityType")]
     private static partial void RegisterEntityTypeNative(byte* data, int len);
 
     public static void RegisterEntityType(ReadOnlySpan<byte> data)
@@ -63,7 +63,7 @@ internal static unsafe partial class ClientNativeApi
     // Callback registration
     // =========================================================================
 
-    [LibraryImport(LibName, EntryPoint = "atlas_set_native_callbacks")]
+    [LibraryImport(LibName, EntryPoint = "AtlasSetNativeCallbacks")]
     private static partial void SetNativeCallbacksNative(void* callbacks, int len);
 
     public static void SetNativeCallbacks(void* callbacks, int len)
@@ -75,6 +75,6 @@ internal static unsafe partial class ClientNativeApi
     // ABI version
     // =========================================================================
 
-    [LibraryImport(LibName, EntryPoint = "atlas_get_abi_version")]
+    [LibraryImport(LibName, EntryPoint = "AtlasGetAbiVersion")]
     public static partial uint GetAbiVersion();
 }

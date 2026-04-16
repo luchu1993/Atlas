@@ -2,7 +2,7 @@
 
 atlas_add_library(atlas_entitydef
     SOURCES
-        entity_def_registry.cpp
+        entity_def_registry.cc
     DEPS
         atlas_foundation
         atlas_serialization
