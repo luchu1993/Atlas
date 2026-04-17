@@ -56,7 +56,11 @@ jobs:
           chmod +x bazel && sudo mv bazel /usr/local/bin/bazel
 
       - name: Restore .NET projects
-        run: dotnet restore
+        run: |
+          for proj in $(find . -name '*.csproj'); do
+            dotnet restore "$proj"
+          done
+        shell: bash
 
       - name: Build
         run: bazel build //... ${{ matrix.config }}
