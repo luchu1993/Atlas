@@ -34,6 +34,9 @@ build:linux --cxxopt=-Wextra
 build:linux --cxxopt=-Wpedantic
 build:linux --cxxopt=-Werror
 build:linux --cxxopt=-Wno-unused-parameter
+# GCC 13 false positive: atomic load on ref-counted objects inlined through
+# lambdas triggers bogus "writing N bytes into a region of size 0" warnings.
+build:linux --cxxopt=-Wno-stringop-overflow
 build:linux --cxxopt=-Wconversion
 build:linux --cxxopt=-Wnon-virtual-dtor
 # Position-independent code (required for atlas_engine shared library)
