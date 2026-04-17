@@ -126,6 +126,29 @@ git clone <repo-url>
 cd Atlas
 ```
 
+### IDE / 编辑器配置（可选）
+
+#### VS Code + clangd
+
+1. 安装推荐插件（打开项目时自动提示，或手动查看 `.vscode/extensions.json`）：
+   - **clangd** — 基于 compile_commands.json 的 C++ 代码智能
+   - **Bazel** — BUILD 文件语法高亮
+2. 复制配置模板：
+   ```bash
+   cp .vscode/settings.json.example .vscode/settings.json
+   ```
+3. 生成 `compile_commands.json`：
+   ```bash
+   bazel run :refresh_compile_commands
+   ```
+4. 添加/删除源文件或修改 BUILD 目标后需重新执行步骤 3。
+
+#### CLion
+
+1. 安装 **Bazel for CLion** 插件（Settings -> Plugins -> Marketplace）
+2. File -> **Import Bazel Project** -> 选择 Atlas 根目录
+3. 无需额外配置——CLion 直接与 Bazel 同步
+
 ## 构建
 
 ### 构建命令

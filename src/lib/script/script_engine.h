@@ -39,7 +39,7 @@ class ScriptEngine {
   virtual void OnTick(float dt) = 0;
 
   // Called on server initialization (after all modules loaded).
-  virtual void OnInit(bool is_reload = false) = 0;
+  virtual void OnInit(bool is_reload) = 0;
 
   // Called before shutdown.
   virtual void OnShutdown() = 0;

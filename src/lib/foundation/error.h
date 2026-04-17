@@ -85,7 +85,8 @@ class Error {
 template <typename T, typename E = Error>
 class Result {
  public:
-  // Implicit construction from value or error
+  // NOLINTBEGIN(google-explicit-constructor)
+  // Implicit construction from value or error — intentional for Result ergonomics.
   Result(const T& value) noexcept(std::is_nothrow_copy_constructible_v<T>) : storage_(value) {}
 
   Result(T&& value) noexcept(std::is_nothrow_move_constructible_v<T>)
@@ -95,6 +96,7 @@ class Result {
 
   Result(E&& error) noexcept(std::is_nothrow_move_constructible_v<E>)
       : storage_(std::move(error)) {}
+  // NOLINTEND(google-explicit-constructor)
 
   [[nodiscard]] auto HasValue() const noexcept -> bool {
     return std::holds_alternative<T>(storage_);
@@ -180,11 +182,13 @@ class Result<void, E> {
   // Success: no E is constructed.
   Result() noexcept : storage_(std::in_place_index<0>) {}
 
+  // NOLINTBEGIN(google-explicit-constructor)
   Result(const E& error) noexcept(std::is_nothrow_copy_constructible_v<E>)
       : storage_(std::in_place_index<1>, error) {}
 
   Result(E&& error) noexcept(std::is_nothrow_move_constructible_v<E>)
       : storage_(std::in_place_index<1>, std::move(error)) {}
+  // NOLINTEND(google-explicit-constructor)
 
   [[nodiscard]] auto HasValue() const noexcept -> bool { return storage_.index() == 0; }
 

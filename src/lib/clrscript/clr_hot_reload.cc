@@ -55,7 +55,7 @@ auto ClrHotReload::ProcessPending() -> Result<void> {
   return DoReload();
 }
 
-auto ClrHotReload::CompileScripts() -> Result<void> {
+auto ClrHotReload::CompileScripts() const -> Result<void> {
   auto temp_dir = config_.output_directory / ".reload_staging";
   std::filesystem::create_directories(temp_dir);
 

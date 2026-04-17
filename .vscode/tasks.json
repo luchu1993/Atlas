@@ -1,0 +1,101 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    // ── Build All ─────────────────────────────────────────────────────
+    {
+      "label": "Bazel: Build All",
+      "type": "shell",
+      "command": "bazel build //...",
+      "group": { "kind": "build", "isDefault": true },
+      "problemMatcher": ["$msCompile"],
+      "presentation": { "reveal": "always", "panel": "shared" }
+    },
+    {
+      "label": "Bazel: Build All (Release)",
+      "type": "shell",
+      "command": "bazel build //... --config=release",
+      "group": "build",
+      "problemMatcher": ["$msCompile"]
+    },
+
+    // ── Test ──────────────────────────────────────────────────────────
+    {
+      "label": "Bazel: Test All",
+      "type": "shell",
+      "command": "bazel test //tests/unit:all --test_output=errors",
+      "group": { "kind": "test", "isDefault": true },
+      "problemMatcher": ["$msCompile"]
+    },
+
+    // ── Server Processes ──────────────────────────────────────────────
+    {
+      "label": "Bazel: Build machined",
+      "type": "shell",
+      "command": "bazel build //src/server/machined:machined",
+      "group": "build",
+      "problemMatcher": ["$msCompile"]
+    },
+    {
+      "label": "Bazel: Build EchoApp",
+      "type": "shell",
+      "command": "bazel build //src/server/EchoApp:atlas_echoapp",
+      "group": "build",
+      "problemMatcher": ["$msCompile"]
+    },
+    {
+      "label": "Bazel: Build LoginApp",
+      "type": "shell",
+      "command": "bazel build //src/server/loginapp:atlas_loginapp",
+      "group": "build",
+      "problemMatcher": ["$msCompile"]
+    },
+    {
+      "label": "Bazel: Build BaseApp",
+      "type": "shell",
+      "command": "bazel build //src/server/baseapp:atlas_baseapp",
+      "group": "build",
+      "problemMatcher": ["$msCompile"]
+    },
+    {
+      "label": "Bazel: Build BaseAppMgr",
+      "type": "shell",
+      "command": "bazel build //src/server/baseappmgr:atlas_baseappmgr",
+      "group": "build",
+      "problemMatcher": ["$msCompile"]
+    },
+    {
+      "label": "Bazel: Build DBApp",
+      "type": "shell",
+      "command": "bazel build //src/server/dbapp:atlas_dbapp",
+      "group": "build",
+      "problemMatcher": ["$msCompile"]
+    },
+    {
+      "label": "Bazel: Build Client",
+      "type": "shell",
+      "command": "bazel build //src/client:atlas_client",
+      "group": "build",
+      "problemMatcher": ["$msCompile"]
+    },
+
+    // ── Tooling ───────────────────────────────────────────────────────
+    {
+      "label": "Bazel: Refresh compile_commands.json",
+      "type": "shell",
+      "command": "bazel run :refresh_compile_commands",
+      "problemMatcher": []
+    },
+    {
+      "label": "clang-format: Check Changed Files",
+      "type": "shell",
+      "command": "git diff --name-only --diff-filter=AM HEAD | grep -E '\\.(cc|h|cpp|hpp)$' | xargs -r \"C:/Program Files/Microsoft Visual Studio/2022/Community/VC/Tools/Llvm/x64/bin/clang-format.exe\" --dry-run --Werror",
+      "problemMatcher": []
+    },
+    {
+      "label": "clang-format: Fix Changed Files",
+      "type": "shell",
+      "command": "git diff --name-only --diff-filter=AM HEAD | grep -E '\\.(cc|h|cpp|hpp)$' | xargs -r \"C:/Program Files/Microsoft Visual Studio/2022/Community/VC/Tools/Llvm/x64/bin/clang-format.exe\" -i",
+      "problemMatcher": []
+    }
+  ]
+}

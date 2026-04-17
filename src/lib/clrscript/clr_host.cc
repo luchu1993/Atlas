@@ -54,18 +54,18 @@ ClrHost::~ClrHost() {
 }
 
 ClrHost::ClrHost(ClrHost&& other) noexcept
-    : hostfxr_lib(std::move(other.hostfxr_lib)),
-      host_context(other.host_context),
-      fn_init_config(other.fn_init_config),
-      fn_get_delegate(other.fn_get_delegate),
-      fn_close(other.fn_close),
-      fn_load_assembly(other.fn_load_assembly),
+    : hostfxr_lib_(std::move(other.hostfxr_lib_)),
+      host_context_(other.host_context_),
+      fn_init_config_(other.fn_init_config_),
+      fn_get_delegate_(other.fn_get_delegate_),
+      fn_close_(other.fn_close_),
+      fn_load_assembly_(other.fn_load_assembly_),
       initialized_(other.initialized_) {
-  other.host_context = nullptr;
-  other.fn_init_config = nullptr;
-  other.fn_get_delegate = nullptr;
-  other.fn_close = nullptr;
-  other.fn_load_assembly = nullptr;
+  other.host_context_ = nullptr;
+  other.fn_init_config_ = nullptr;
+  other.fn_get_delegate_ = nullptr;
+  other.fn_close_ = nullptr;
+  other.fn_load_assembly_ = nullptr;
   other.initialized_ = false;
 }
 
@@ -73,19 +73,19 @@ ClrHost& ClrHost::operator=(ClrHost&& other) noexcept {
   if (this != &other) {
     if (initialized_) Finalize();
 
-    hostfxr_lib = std::move(other.hostfxr_lib);
-    host_context = other.host_context;
-    fn_init_config = other.fn_init_config;
-    fn_get_delegate = other.fn_get_delegate;
-    fn_close = other.fn_close;
-    fn_load_assembly = other.fn_load_assembly;
+    hostfxr_lib_ = std::move(other.hostfxr_lib_);
+    host_context_ = other.host_context_;
+    fn_init_config_ = other.fn_init_config_;
+    fn_get_delegate_ = other.fn_get_delegate_;
+    fn_close_ = other.fn_close_;
+    fn_load_assembly_ = other.fn_load_assembly_;
     initialized_ = other.initialized_;
 
-    other.host_context = nullptr;
-    other.fn_init_config = nullptr;
-    other.fn_get_delegate = nullptr;
-    other.fn_close = nullptr;
-    other.fn_load_assembly = nullptr;
+    other.host_context_ = nullptr;
+    other.fn_init_config_ = nullptr;
+    other.fn_get_delegate_ = nullptr;
+    other.fn_close_ = nullptr;
+    other.fn_load_assembly_ = nullptr;
     other.initialized_ = false;
   }
   return *this;
@@ -106,24 +106,24 @@ auto ClrHost::Initialize(const std::filesystem::path& runtime_config_path) -> Re
 #endif
 
   hostfxr_handle ctx = nullptr;
-  int rc = AsInitFn(fn_init_config)(config_str.c_str(), nullptr, &ctx);
+  int rc = AsInitFn(fn_init_config_)(config_str.c_str(), nullptr, &ctx);
   if (rc != 0 || ctx == nullptr) {
     return Error{ErrorCode::kScriptError,
                  std::format("hostfxr_initialize_for_runtime_config failed: 0x{:08X}", rc)};
   }
-  host_context = ctx;
+  host_context_ = ctx;
 
   // Step 3: Obtain the load_assembly_and_get_function_pointer delegate
   void* load_assembly_fn = nullptr;
-  rc = AsDelegateFn(fn_get_delegate)(static_cast<hostfxr_handle>(host_context),
-                                     hdt_load_assembly_and_get_function_pointer, &load_assembly_fn);
+  rc = AsDelegateFn(fn_get_delegate_)(static_cast<hostfxr_handle>(host_context_),
+                                      hdt_load_assembly_and_get_function_pointer, &load_assembly_fn);
   if (rc != 0 || load_assembly_fn == nullptr) {
-    AsCloseFn(fn_close)(static_cast<hostfxr_handle>(host_context));
-    host_context = nullptr;
+    AsCloseFn(fn_close_)(static_cast<hostfxr_handle>(host_context_));
+    host_context_ = nullptr;
     return Error{ErrorCode::kScriptError,
                  std::format("hostfxr_get_runtime_delegate failed: 0x{:08X}", rc)};
   }
-  fn_load_assembly = load_assembly_fn;
+  fn_load_assembly_ = load_assembly_fn;
 
   initialized_ = true;
   ATLAS_LOG_INFO("ClrHost: CoreCLR initialized (config: {})", runtime_config_path.string());
@@ -133,23 +133,23 @@ auto ClrHost::Initialize(const std::filesystem::path& runtime_config_path) -> Re
 void ClrHost::Finalize() {
   if (!initialized_) return;
 
-  fn_load_assembly = nullptr;
+  fn_load_assembly_ = nullptr;
 
-  if (host_context) {
-    // as_close_fn() still valid here: fn_close is nulled below, after the call.
-    AsCloseFn(fn_close)(static_cast<hostfxr_handle>(host_context));
-    host_context = nullptr;
+  if (host_context_) {
+    // as_close_fn() still valid here: fn_close_ is nulled below, after the call.
+    AsCloseFn(fn_close_)(static_cast<hostfxr_handle>(host_context_));
+    host_context_ = nullptr;
   }
 
   // Null all function pointers that point into the shared library BEFORE
   // unloading it, eliminating any window of dangling function pointers.
-  fn_init_config = nullptr;
-  fn_get_delegate = nullptr;
-  fn_close = nullptr;
+  fn_init_config_ = nullptr;
+  fn_get_delegate_ = nullptr;
+  fn_close_ = nullptr;
 
-  // hostfxr_lib destructor unloads the shared library — must happen after
+  // hostfxr_lib_ destructor unloads the shared library — must happen after
   // all function pointers referencing library symbols are cleared.
-  hostfxr_lib.reset();
+  hostfxr_lib_.reset();
 
   initialized_ = false;
 
@@ -168,7 +168,7 @@ auto ClrHost::GetMethod(const std::filesystem::path& assembly_path, std::string_
   auto w_type = Utf8ToWide(type_name);
   auto w_method = Utf8ToWide(method_name);
 
-  int rc = AsLoadFn(fn_load_assembly)(w_assembly.c_str(), w_type.c_str(), w_method.c_str(),
+  int rc = AsLoadFn(fn_load_assembly_)(w_assembly.c_str(), w_type.c_str(), w_method.c_str(),
                                       UNMANAGEDCALLERSONLY_METHOD, nullptr, &method_ptr);
 #else
   // char_t = char on Linux/macOS
@@ -176,7 +176,7 @@ auto ClrHost::GetMethod(const std::filesystem::path& assembly_path, std::string_
   auto s_type = std::string(type_name);
   auto s_method = std::string(method_name);
 
-  int rc = AsLoadFn(fn_load_assembly)(s_assembly.c_str(), s_type.c_str(), s_method.c_str(),
+  int rc = AsLoadFn(fn_load_assembly_)(s_assembly.c_str(), s_type.c_str(), s_method.c_str(),
                                       UNMANAGEDCALLERSONLY_METHOD, nullptr, &method_ptr);
 #endif
 

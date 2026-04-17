@@ -34,24 +34,24 @@ auto ClrHost::LoadHostfxr() -> Result<void> {
     return Error{ErrorCode::kScriptError,
                  std::format("Failed to load hostfxr: {}", lib_result.Error().Message())};
   }
-  hostfxr_lib = std::move(*lib_result);
+  hostfxr_lib_ = std::move(*lib_result);
 
   // Resolve the three hostfxr entry points we need.
-  auto sym_init = hostfxr_lib->GetSymbol<hostfxr_initialize_for_runtime_config_fn>(
+  auto sym_init = hostfxr_lib_->GetSymbol<hostfxr_initialize_for_runtime_config_fn>(
       "hostfxr_initialize_for_runtime_config");
   auto sym_delegate =
-      hostfxr_lib->GetSymbol<hostfxr_get_runtime_delegate_fn>("hostfxr_get_runtime_delegate");
-  auto sym_close = hostfxr_lib->GetSymbol<hostfxr_close_fn>("hostfxr_close");
+      hostfxr_lib_->GetSymbol<hostfxr_get_runtime_delegate_fn>("hostfxr_get_runtime_delegate");
+  auto sym_close = hostfxr_lib_->GetSymbol<hostfxr_close_fn>("hostfxr_close");
 
   if (!sym_init || !sym_delegate || !sym_close) {
-    hostfxr_lib.reset();
+    hostfxr_lib_.reset();
     return Error{ErrorCode::kScriptError, "Failed to resolve required hostfxr symbols"};
   }
 
   // Store as void* — cast back to typed pointers in clr_host.cpp via macros
-  fn_init_config = reinterpret_cast<void*>(*sym_init);
-  fn_get_delegate = reinterpret_cast<void*>(*sym_delegate);
-  fn_close = reinterpret_cast<void*>(*sym_close);
+  fn_init_config_ = reinterpret_cast<void*>(*sym_init);
+  fn_get_delegate_ = reinterpret_cast<void*>(*sym_delegate);
+  fn_close_ = reinterpret_cast<void*>(*sym_close);
 
   ATLAS_LOG_DEBUG("ClrHost: hostfxr loaded from {}", std::filesystem::path(buffer).string());
   return {};

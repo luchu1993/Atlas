@@ -38,11 +38,9 @@ class ClientNativeProvider : public BaseNativeProvider {
   void SetNativeCallbacks(const void* native_callbacks, int32_t len) override;
 
   // Callback accessors
-  [[nodiscard]] auto dispatch_rpc_fn() const -> ClientDispatchRpcFn { return dispatch_rpc_fn_; }
-  [[nodiscard]] auto create_entity_fn() const -> ClientCreateEntityFn { return create_entity_fn_; }
-  [[nodiscard]] auto destroy_entity_fn() const -> ClientDestroyEntityFn {
-    return destroy_entity_fn_;
-  }
+  [[nodiscard]] auto DispatchRpcFn() const -> ClientDispatchRpcFn { return dispatch_rpc_fn_; }
+  [[nodiscard]] auto CreateEntityFn() const -> ClientCreateEntityFn { return create_entity_fn_; }
+  [[nodiscard]] auto DestroyEntityFn() const -> ClientDestroyEntityFn { return destroy_entity_fn_; }
 
  private:
   ClientApp& app_;

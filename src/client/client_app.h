@@ -9,7 +9,6 @@
 
 #include "client_native_provider.h"
 #include "clrscript/clr_script_engine.h"
-#include "foundation/clock.h"
 #include "network/event_dispatcher.h"
 #include "network/network_interface.h"
 #include "platform/dynamic_library.h"
@@ -42,7 +41,7 @@ class ClientApp {
   ~ClientApp();
 
   // Accessors for ClientNativeProvider
-  [[nodiscard]] auto baseapp_channel() -> Channel* { return baseapp_channel_; }
+  [[nodiscard]] auto BaseappChannel() -> Channel* { return baseapp_channel_; }
 
  private:
   auto Init(int argc, char* argv[]) -> bool;

@@ -1,0 +1,82 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    // ── Server Processes ──────────────────────────────────────────────
+    // Start order: machined -> DBAppMgr -> BaseAppMgr -> CellAppMgr
+    //              -> DBApp -> BaseApp -> CellApp -> LoginApp
+    {
+      "name": "machined",
+      "type": "cppvsdbg",
+      "request": "launch",
+      "program": "${workspaceFolder}/bazel-bin/src/server/machined/machined.exe",
+      "cwd": "${workspaceFolder}",
+      "preLaunchTask": "Bazel: Build machined"
+    },
+    {
+      "name": "EchoApp",
+      "type": "cppvsdbg",
+      "request": "launch",
+      "program": "${workspaceFolder}/bazel-bin/src/server/EchoApp/atlas_echoapp.exe",
+      "cwd": "${workspaceFolder}",
+      "preLaunchTask": "Bazel: Build EchoApp"
+    },
+    {
+      "name": "LoginApp",
+      "type": "cppvsdbg",
+      "request": "launch",
+      "program": "${workspaceFolder}/bazel-bin/src/server/loginapp/atlas_loginapp.exe",
+      "cwd": "${workspaceFolder}",
+      "preLaunchTask": "Bazel: Build LoginApp"
+    },
+    {
+      "name": "BaseApp",
+      "type": "cppvsdbg",
+      "request": "launch",
+      "program": "${workspaceFolder}/bazel-bin/src/server/baseapp/atlas_baseapp.exe",
+      "cwd": "${workspaceFolder}",
+      "preLaunchTask": "Bazel: Build BaseApp"
+    },
+    {
+      "name": "BaseAppMgr",
+      "type": "cppvsdbg",
+      "request": "launch",
+      "program": "${workspaceFolder}/bazel-bin/src/server/baseappmgr/atlas_baseappmgr.exe",
+      "cwd": "${workspaceFolder}",
+      "preLaunchTask": "Bazel: Build BaseAppMgr"
+    },
+    {
+      "name": "DBApp",
+      "type": "cppvsdbg",
+      "request": "launch",
+      "program": "${workspaceFolder}/bazel-bin/src/server/dbapp/atlas_dbapp.exe",
+      "cwd": "${workspaceFolder}",
+      "preLaunchTask": "Bazel: Build DBApp"
+    },
+    {
+      "name": "Client",
+      "type": "cppvsdbg",
+      "request": "launch",
+      "program": "${workspaceFolder}/bazel-bin/src/client/atlas_client.exe",
+      "cwd": "${workspaceFolder}",
+      "preLaunchTask": "Bazel: Build Client"
+    },
+
+    // ── Compound: Full Cluster ────────────────────────────────────────
+    // Use VS Code compound launch to start multiple processes at once.
+    // See "compounds" section below.
+
+    // ── Attach to running process ─────────────────────────────────────
+    {
+      "name": "Attach to Process",
+      "type": "cppvsdbg",
+      "request": "attach"
+    }
+  ],
+  "compounds": [
+    {
+      "name": "Cluster: machined + EchoApp",
+      "configurations": ["machined", "EchoApp"],
+      "stopAll": true
+    }
+  ]
+}

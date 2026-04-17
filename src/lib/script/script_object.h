@@ -40,8 +40,7 @@ class ScriptObject {
   [[nodiscard]] virtual auto AsBytes() const -> Result<std::vector<std::byte>> = 0;
 
   [[nodiscard]] virtual auto IsCallable() const -> bool = 0;
-  [[nodiscard]] virtual auto Call(std::span<const ScriptValue> args = {})
-      -> Result<ScriptValue> = 0;
+  [[nodiscard]] virtual auto Call(std::span<const ScriptValue> args) -> Result<ScriptValue> = 0;
 
   [[nodiscard]] virtual auto ToDebugString() const -> std::string {
     return std::string(TypeName());

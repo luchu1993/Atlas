@@ -3,7 +3,6 @@
 
 #include <filesystem>
 #include <optional>
-#include <string>
 #include <string_view>
 
 #include "clrscript/clr_bootstrap.h"
@@ -46,7 +45,7 @@ class ClrScriptEngine final : public ScriptEngine {
   void Finalize() override;
   [[nodiscard]] auto LoadModule(const std::filesystem::path& path) -> Result<void> override;
   void OnTick(float dt) override;
-  void OnInit(bool is_reload = false) override;
+  void OnInit(bool is_reload) override;
   void OnShutdown() override;
   [[nodiscard]] auto CallFunction(std::string_view module_name, std::string_view function_name,
                                   std::span<const ScriptValue> args)

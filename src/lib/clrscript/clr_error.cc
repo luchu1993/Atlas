@@ -4,8 +4,6 @@
 #include <cstring>
 #include <format>
 
-#include "foundation/log.h"
-
 namespace atlas {
 
 // ============================================================================

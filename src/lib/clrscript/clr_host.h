@@ -75,20 +75,20 @@ class ClrHost {
   [[nodiscard]] auto LoadHostfxr() -> Result<void>;
 
   // hostfxr shared library — must outlive all cached function pointers.
-  std::optional<DynamicLibrary> hostfxr_lib;
+  std::optional<DynamicLibrary> hostfxr_lib_;
 
   // hostfxr context handle (opaque to callers)
-  void* host_context = nullptr;
+  void* host_context_ = nullptr;
 
   // Resolved hostfxr entry points stored as void* to avoid pulling in
   // hostfxr SDK headers in this public header. Cast to the correct type
   // in clr_host.cpp before use.
-  void* fn_init_config = nullptr;
-  void* fn_get_delegate = nullptr;
-  void* fn_close = nullptr;
+  void* fn_init_config_ = nullptr;
+  void* fn_get_delegate_ = nullptr;
+  void* fn_close_ = nullptr;
 
   // CoreCLR managed-to-native bridge delegate
-  void* fn_load_assembly = nullptr;
+  void* fn_load_assembly_ = nullptr;
 
   bool initialized_ = false;
 };

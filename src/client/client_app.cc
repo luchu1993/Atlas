@@ -1,22 +1,18 @@
 #include "client_app.h"
 
 #include "clrscript/clr_bootstrap.h"
-#include "clrscript/clr_native_api.h"
 #include "foundation/log.h"
 #include "network/channel.h"
-#include "network/message_ids.h"
 #include "network/reliable_udp.h"
 #include "serialization/binary_stream.h"
 #include "server/entity_types.h"
 
 // Reuse login/baseapp message definitions
 #include <chrono>
-#include <cstring>
 #include <filesystem>
 #include <format>
 #include <span>
 #include <thread>
-#include <vector>
 
 #include "baseapp/baseapp_messages.h"
 #include "loginapp/login_messages.h"
@@ -286,8 +282,8 @@ auto ClientApp::Authenticate(const Address& baseapp_addr, const SessionKey& sess
   ATLAS_LOG_INFO("Client: authenticated as entity={} type={}", player_entity_id_, player_type_id_);
 
   // Create the client-side entity via C# callback
-  if (native_provider_ && native_provider_->create_entity_fn()) {
-    native_provider_->create_entity_fn()(player_entity_id_, player_type_id_);
+  if (native_provider_ && native_provider_->CreateEntityFn()) {
+    native_provider_->CreateEntityFn()(player_entity_id_, player_type_id_);
   }
 
   return true;
@@ -298,12 +294,12 @@ auto ClientApp::Authenticate(const Address& baseapp_addr, const SessionKey& sess
 // ============================================================================
 
 void ClientApp::OnRpcMessage(uint32_t rpc_id, const std::byte* payload, int32_t len) {
-  if (!native_provider_ || !native_provider_->dispatch_rpc_fn()) {
+  if (!native_provider_ || !native_provider_->DispatchRpcFn()) {
     ATLAS_LOG_WARNING("Client: received RPC but no dispatcher registered");
     return;
   }
-  native_provider_->dispatch_rpc_fn()(player_entity_id_, rpc_id,
-                                      reinterpret_cast<const uint8_t*>(payload), len);
+  native_provider_->DispatchRpcFn()(player_entity_id_, rpc_id,
+                                    reinterpret_cast<const uint8_t*>(payload), len);
 }
 
 // ============================================================================

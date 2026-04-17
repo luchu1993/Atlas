@@ -52,7 +52,7 @@ class ClrHotReload {
   Clock::time_point last_change_time_{};
   bool debouncing_{false};
 
-  [[nodiscard]] auto CompileScripts() -> Result<void>;
+  [[nodiscard]] auto CompileScripts() const -> Result<void>;
   [[nodiscard]] auto DoReload() -> Result<void>;
 };
 

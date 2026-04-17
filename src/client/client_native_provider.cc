@@ -6,7 +6,6 @@
 #include "client_app.h"
 #include "foundation/log.h"
 #include "network/channel.h"
-#include "network/message_ids.h"
 
 namespace atlas {
 
@@ -28,7 +27,7 @@ uint8_t ClientNativeProvider::GetProcessPrefix() {
 
 void ClientNativeProvider::SendBaseRpc(uint32_t entity_id, uint32_t rpc_id,
                                        const std::byte* payload, int32_t len) {
-  auto* ch = app_.baseapp_channel();
+  auto* ch = app_.BaseappChannel();
   if (!ch) {
     ATLAS_LOG_WARNING("Client: send_base_rpc: not connected to BaseApp");
     return;

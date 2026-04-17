@@ -1,0 +1,12 @@
+{
+  // Disable Microsoft C/C++ IntelliSense (conflicts with clangd)
+  "C_Cpp.intelliSenseEngine": "disabled",
+
+  // clangd configuration
+  "clangd.arguments": [
+    "--background-index",
+    "--clang-tidy",
+    "--header-insertion=iwyu",
+    "--completion-style=detailed"
+  ]
+}

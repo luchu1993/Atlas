@@ -126,6 +126,29 @@ git clone <repo-url>
 cd Atlas
 ```
 
+### IDE / Editor Setup (optional)
+
+#### VS Code + clangd
+
+1. Install the recommended extensions (prompted automatically, or manually from `.vscode/extensions.json`):
+   - **clangd** — C++ IntelliSense via compile_commands.json
+   - **Bazel** — BUILD file syntax highlighting
+2. Copy the settings template:
+   ```bash
+   cp .vscode/settings.json.example .vscode/settings.json
+   ```
+3. Generate `compile_commands.json`:
+   ```bash
+   bazel run :refresh_compile_commands
+   ```
+4. Re-run step 3 whenever you add/remove source files or change BUILD targets.
+
+#### CLion
+
+1. Install the **Bazel for CLion** plugin (Settings -> Plugins -> Marketplace)
+2. File -> **Import Bazel Project** -> select the Atlas root directory
+3. No additional configuration needed — CLion syncs with Bazel directly
+
 ## Building
 
 ### Build Commands
