@@ -18,16 +18,16 @@ namespace atlas {
 // ============================================================================
 //
 // Lifecycle:
-//   1. configure()   — set paths for runtimeconfig.json and Atlas.Runtime.dll
-//   2. initialize()  — start CLR, bootstrap, bind lifecycle methods
-//   3. load_module() — load user game-script assemblies
-//   4. on_init()     — trigger C# entity initialization
-//   5. on_tick()     — per-frame update (called from main loop)
-//   6. on_shutdown() — trigger C# entity cleanup
-//   7. finalize()    — shut down CLR
+//   1. Configure()   — set paths for runtimeconfig.json and Atlas.Runtime.dll
+//   2. Initialize()  — start CLR, bootstrap, bind lifecycle methods
+//   3. LoadModule()  — load user game-script assemblies
+//   4. OnInit()      — trigger C# entity initialization
+//   5. OnTick()      — per-frame update (called from main loop)
+//   6. OnShutdown()  — trigger C# entity cleanup
+//   7. Finalize()    — shut down CLR
 //
 // All lifecycle methods use the "return 0 = ok, return -1 = error" convention.
-// Errors from C# are read via the TLS error bridge (clr_error.hpp).
+// Errors from C# are read via the TLS error bridge (clr_error.h).
 
 class ClrScriptEngine final : public ScriptEngine {
  public:

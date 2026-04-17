@@ -1,7 +1,6 @@
 #ifndef ATLAS_LIB_CLRSCRIPT_FILE_WATCHER_H_
 #define ATLAS_LIB_CLRSCRIPT_FILE_WATCHER_H_
 
-#include <chrono>
 #include <filesystem>
 #include <string>
 #include <unordered_map>

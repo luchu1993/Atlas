@@ -21,13 +21,13 @@ using namespace atlas;
 TEST(RingBuffer, PushUntilFullPopAllFIFO) {
   RingBuffer<int> rb(4);
   for (int i = 0; i < 4; ++i) {
-    EXPECT_TRUE(rb.push_back(i));
+    EXPECT_TRUE(rb.PushBack(i));
   }
-  EXPECT_TRUE(rb.full());
-  EXPECT_FALSE(rb.push_back(99));  // full
+  EXPECT_TRUE(rb.Full());
+  EXPECT_FALSE(rb.PushBack(99));  // full
 
   for (int i = 0; i < 4; ++i) {
-    auto val = rb.pop_front();
+    auto val = rb.PopFront();
     ASSERT_TRUE(val.has_value());
     EXPECT_EQ(*val, i);
   }
@@ -36,23 +36,23 @@ TEST(RingBuffer, PushUntilFullPopAllFIFO) {
 
 TEST(RingBuffer, WrapAround) {
   RingBuffer<int> rb(3);
-  rb.push_back(1);
-  rb.push_back(2);
-  rb.pop_front();  // remove 1, head advances
-  rb.push_back(3);
-  rb.push_back(4);  // wraps around
+  rb.PushBack(1);
+  rb.PushBack(2);
+  rb.PopFront();  // remove 1, head advances
+  rb.PushBack(3);
+  rb.PushBack(4);  // wraps around
 
   EXPECT_EQ(rb.size(), 3u);
-  EXPECT_EQ(*rb.pop_front(), 2);
-  EXPECT_EQ(*rb.pop_front(), 3);
-  EXPECT_EQ(*rb.pop_front(), 4);
+  EXPECT_EQ(*rb.PopFront(), 2);
+  EXPECT_EQ(*rb.PopFront(), 3);
+  EXPECT_EQ(*rb.PopFront(), 4);
 }
 
 TEST(RingBuffer, IndexAccess) {
   RingBuffer<int> rb(4);
-  rb.push_back(10);
-  rb.push_back(20);
-  rb.push_back(30);
+  rb.PushBack(10);
+  rb.PushBack(20);
+  rb.PushBack(30);
 
   EXPECT_EQ(rb[0], 10);
   EXPECT_EQ(rb[1], 20);
@@ -119,34 +119,34 @@ TEST(ByteRingBuffer, ShrinkToFitReturnsToBaselineAfterBurst) {
 
 TEST(SlotMap, InsertGetRemove) {
   SlotMap<std::string> map;
-  auto h = map.insert("hello");
-  EXPECT_TRUE(h.is_valid());
+  auto h = map.Insert("hello");
+  EXPECT_TRUE(h.IsValid());
   EXPECT_EQ(map.size(), 1u);
 
-  auto* val = map.get(h);
+  auto* val = map.Get(h);
   ASSERT_NE(val, nullptr);
   EXPECT_EQ(*val, "hello");
 
-  EXPECT_TRUE(map.remove(h));
+  EXPECT_TRUE(map.Remove(h));
   EXPECT_EQ(map.size(), 0u);
 }
 
 TEST(SlotMap, HandleInvalidationAfterRemove) {
   SlotMap<int> map;
-  auto h = map.insert(42);
-  map.remove(h);
+  auto h = map.Insert(42);
+  map.Remove(h);
 
   // Old handle should be invalid due to generation bump
-  EXPECT_FALSE(map.contains(h));
-  EXPECT_EQ(map.get(h), nullptr);
+  EXPECT_FALSE(map.Contains(h));
+  EXPECT_EQ(map.Get(h), nullptr);
 }
 
 TEST(SlotMap, DenseIterationNoGaps) {
   SlotMap<int> map;
-  auto h1 = map.insert(1);
-  map.insert(2);
-  map.insert(3);
-  map.remove(h1);  // remove first element
+  auto h1 = map.Insert(1);
+  map.Insert(2);
+  map.Insert(3);
+  map.Remove(h1);  // remove first element
 
   std::vector<int> values;
   for (auto& v : map) {
@@ -166,16 +166,16 @@ TEST(SlotMap, DenseIterationNoGaps) {
 
 TEST(ObjectPool, CreateGetDestroyIsValid) {
   ObjectPool<int> pool;
-  auto h = pool.create(42);
-  EXPECT_TRUE(pool.is_valid(h));
+  auto h = pool.Create(42);
+  EXPECT_TRUE(pool.IsValid(h));
 
-  auto* val = pool.get(h);
+  auto* val = pool.Get(h);
   ASSERT_NE(val, nullptr);
   EXPECT_EQ(*val, 42);
 
-  pool.destroy(h);
-  EXPECT_FALSE(pool.is_valid(h));
-  EXPECT_EQ(pool.get(h), nullptr);
+  pool.Destroy(h);
+  EXPECT_FALSE(pool.IsValid(h));
+  EXPECT_EQ(pool.Get(h), nullptr);
 }
 
 // ---------------------------------------------------------------------------
@@ -184,15 +184,15 @@ TEST(ObjectPool, CreateGetDestroyIsValid) {
 
 TEST(FlatMap, InsertAndFind) {
   FlatMap<int, std::string> map;
-  auto [it, inserted] = map.insert(1, "one");
+  auto [it, inserted] = map.Insert(1, "one");
   EXPECT_TRUE(inserted);
   EXPECT_EQ(it->second, "one");
 
-  auto found = map.find(1);
+  auto found = map.Find(1);
   ASSERT_NE(found, map.end());
   EXPECT_EQ(found->second, "one");
 
-  EXPECT_EQ(map.find(99), map.end());
+  EXPECT_EQ(map.Find(99), map.end());
 }
 
 TEST(FlatMap, OperatorBracket) {
@@ -205,19 +205,19 @@ TEST(FlatMap, OperatorBracket) {
 
 TEST(FlatMap, Erase) {
   FlatMap<int, int> map;
-  map.insert(1, 100);
-  map.insert(2, 200);
-  EXPECT_TRUE(map.erase(1));
-  EXPECT_FALSE(map.contains(1));
-  EXPECT_TRUE(map.contains(2));
-  EXPECT_FALSE(map.erase(99));
+  map.Insert(1, 100);
+  map.Insert(2, 200);
+  EXPECT_TRUE(map.Erase(1));
+  EXPECT_FALSE(map.Contains(1));
+  EXPECT_TRUE(map.Contains(2));
+  EXPECT_FALSE(map.Erase(99));
 }
 
 TEST(FlatMap, MaintainsSortedOrder) {
   FlatMap<int, int> map;
-  map.insert(3, 30);
-  map.insert(1, 10);
-  map.insert(2, 20);
+  map.Insert(3, 30);
+  map.Insert(1, 10);
+  map.Insert(2, 20);
 
   std::vector<int> keys;
   for (auto& [k, v] : map) {
@@ -230,12 +230,12 @@ TEST(FlatMap, ContainsEmptySize) {
   FlatMap<int, int> map;
   EXPECT_TRUE(map.empty());
   EXPECT_EQ(map.size(), 0u);
-  EXPECT_FALSE(map.contains(1));
+  EXPECT_FALSE(map.Contains(1));
 
-  map.insert(1, 10);
+  map.Insert(1, 10);
   EXPECT_FALSE(map.empty());
   EXPECT_EQ(map.size(), 1u);
-  EXPECT_TRUE(map.contains(1));
+  EXPECT_TRUE(map.Contains(1));
 }
 
 // ============================================================================
@@ -244,21 +244,21 @@ TEST(FlatMap, ContainsEmptySize) {
 
 TEST(RingBuffer, PopEmptyReturnsNullopt) {
   RingBuffer<int> rb(4);
-  auto val = rb.pop_front();
+  auto val = rb.PopFront();
   EXPECT_FALSE(val.has_value());
 }
 
 TEST(RingBuffer, ClearResetsState) {
   RingBuffer<int> rb(4);
-  rb.push_back(1);
-  rb.push_back(2);
-  rb.clear();
+  rb.PushBack(1);
+  rb.PushBack(2);
+  rb.Clear();
   EXPECT_TRUE(rb.empty());
   EXPECT_EQ(rb.size(), 0u);
 
   // Should be able to push again after clear
-  EXPECT_TRUE(rb.push_back(3));
-  EXPECT_EQ(*rb.pop_front(), 3);
+  EXPECT_TRUE(rb.PushBack(3));
+  EXPECT_EQ(*rb.PopFront(), 3);
 }
 
 // ============================================================================
@@ -267,39 +267,39 @@ TEST(RingBuffer, ClearResetsState) {
 
 TEST(SlotMap, SlotReuseWithNewGeneration) {
   SlotMap<int> map;
-  auto h1 = map.insert(100);
-  map.remove(h1);
+  auto h1 = map.Insert(100);
+  map.Remove(h1);
 
   // Insert again — reuses the same slot index but with bumped generation
-  auto h2 = map.insert(200);
-  EXPECT_TRUE(h2.is_valid());
+  auto h2 = map.Insert(200);
+  EXPECT_TRUE(h2.IsValid());
   EXPECT_NE(h1.generation, h2.generation);  // generation should differ
 
   // Old handle should not work
-  EXPECT_FALSE(map.contains(h1));
-  EXPECT_EQ(map.get(h1), nullptr);
+  EXPECT_FALSE(map.Contains(h1));
+  EXPECT_EQ(map.Get(h1), nullptr);
 
   // New handle should work
-  EXPECT_TRUE(map.contains(h2));
-  EXPECT_EQ(*map.get(h2), 200);
+  EXPECT_TRUE(map.Contains(h2));
+  EXPECT_EQ(*map.Get(h2), 200);
 }
 
 TEST(SlotMap, ClearInvalidatesAllHandles) {
   SlotMap<int> map;
-  auto h1 = map.insert(1);
-  auto h2 = map.insert(2);
-  auto h3 = map.insert(3);
+  auto h1 = map.Insert(1);
+  auto h2 = map.Insert(2);
+  auto h3 = map.Insert(3);
 
-  map.clear();
+  map.Clear();
   EXPECT_EQ(map.size(), 0u);
-  EXPECT_FALSE(map.contains(h1));
-  EXPECT_FALSE(map.contains(h2));
-  EXPECT_FALSE(map.contains(h3));
+  EXPECT_FALSE(map.Contains(h1));
+  EXPECT_FALSE(map.Contains(h2));
+  EXPECT_FALSE(map.Contains(h3));
 
   // Can insert again after clear
-  auto h4 = map.insert(4);
-  EXPECT_TRUE(map.contains(h4));
-  EXPECT_EQ(*map.get(h4), 4);
+  auto h4 = map.Insert(4);
+  EXPECT_TRUE(map.Contains(h4));
+  EXPECT_EQ(*map.Get(h4), 4);
 }
 
 // ============================================================================
@@ -308,19 +308,19 @@ TEST(SlotMap, ClearInvalidatesAllHandles) {
 
 TEST(FlatMap, DuplicateInsertReturnsFalse) {
   FlatMap<int, std::string> map;
-  auto [it1, ok1] = map.insert(1, "first");
+  auto [it1, ok1] = map.Insert(1, "first");
   EXPECT_TRUE(ok1);
 
-  auto [it2, ok2] = map.insert(1, "second");
+  auto [it2, ok2] = map.Insert(1, "second");
   EXPECT_FALSE(ok2);
   EXPECT_EQ(it2->second, "first");  // original value preserved
 }
 
 TEST(FlatMap, InsertOrAssignUpdatesExisting) {
   FlatMap<int, std::string> map;
-  map.insert_or_assign(1, "first");
-  map.insert_or_assign(1, "updated");
-  EXPECT_EQ(map.find(1)->second, "updated");
+  map.InsertOrAssign(1, "first");
+  map.InsertOrAssign(1, "updated");
+  EXPECT_EQ(map.Find(1)->second, "updated");
 }
 
 // ============================================================================
@@ -329,13 +329,13 @@ TEST(FlatMap, InsertOrAssignUpdatesExisting) {
 
 TEST(ObjectPool, IterationAfterMixedCreateDestroy) {
   ObjectPool<int> pool;
-  [[maybe_unused]] auto h1 = pool.create(10);
-  auto h2 = pool.create(20);
-  auto h3 = pool.create(30);
-  [[maybe_unused]] auto h4 = pool.create(40);
+  [[maybe_unused]] auto h1 = pool.Create(10);
+  auto h2 = pool.Create(20);
+  auto h3 = pool.Create(30);
+  [[maybe_unused]] auto h4 = pool.Create(40);
 
-  pool.destroy(h2);
-  pool.destroy(h3);
+  pool.Destroy(h2);
+  pool.Destroy(h3);
 
   std::vector<int> values;
   for (auto& v : pool) {
@@ -356,7 +356,7 @@ TEST(PagedSparseTable, AllocatesPagesLazily) {
   EXPECT_EQ(table.size(), 0u);
   EXPECT_EQ(table.AllocatedPageCount(), 0u);
 
-  EXPECT_TRUE(table.insert(42, std::make_unique<int>(7)));
+  EXPECT_TRUE(table.Insert(42, std::make_unique<int>(7)));
   EXPECT_EQ(table.size(), 1u);
   EXPECT_EQ(table.AllocatedPageCount(), 1u);
   ASSERT_NE(table.Get(42), nullptr);
@@ -365,9 +365,9 @@ TEST(PagedSparseTable, AllocatesPagesLazily) {
 
 TEST(PagedSparseTable, SeparatePagesStaySparse) {
   PagedSparseTable<uint16_t, int> table;
-  EXPECT_TRUE(table.insert(0x0001, std::make_unique<int>(1)));
-  EXPECT_TRUE(table.insert(0x1202, std::make_unique<int>(2)));
-  EXPECT_TRUE(table.insert(0xFF03, std::make_unique<int>(3)));
+  EXPECT_TRUE(table.Insert(0x0001, std::make_unique<int>(1)));
+  EXPECT_TRUE(table.Insert(0x1202, std::make_unique<int>(2)));
+  EXPECT_TRUE(table.Insert(0xFF03, std::make_unique<int>(3)));
 
   EXPECT_EQ(table.size(), 3u);
   EXPECT_EQ(table.AllocatedPageCount(), 3u);
@@ -379,24 +379,24 @@ TEST(PagedSparseTable, SeparatePagesStaySparse) {
 
 TEST(PagedSparseTable, DuplicateInsertRejectedAndEraseUpdatesSize) {
   PagedSparseTable<uint16_t, int> table;
-  EXPECT_TRUE(table.insert(5000, std::make_unique<int>(11)));
-  EXPECT_FALSE(table.insert(5000, std::make_unique<int>(22)));
+  EXPECT_TRUE(table.Insert(5000, std::make_unique<int>(11)));
+  EXPECT_FALSE(table.Insert(5000, std::make_unique<int>(22)));
   ASSERT_NE(table.Get(5000), nullptr);
   EXPECT_EQ(*table.Get(5000), 11);
 
-  EXPECT_TRUE(table.erase(5000));
-  EXPECT_FALSE(table.erase(5000));
+  EXPECT_TRUE(table.Erase(5000));
+  EXPECT_FALSE(table.Erase(5000));
   EXPECT_EQ(table.size(), 0u);
   EXPECT_EQ(table.Get(5000), nullptr);
 }
 
 TEST(PagedSparseTable, ClearReleasesAllPages) {
   PagedSparseTable<uint16_t, int> table;
-  EXPECT_TRUE(table.insert(1, std::make_unique<int>(1)));
-  EXPECT_TRUE(table.insert(0x2201, std::make_unique<int>(2)));
+  EXPECT_TRUE(table.Insert(1, std::make_unique<int>(1)));
+  EXPECT_TRUE(table.Insert(0x2201, std::make_unique<int>(2)));
   EXPECT_EQ(table.AllocatedPageCount(), 2u);
 
-  table.clear();
+  table.Clear();
   EXPECT_EQ(table.size(), 0u);
   EXPECT_EQ(table.AllocatedPageCount(), 0u);
   EXPECT_EQ(table.Get(1), nullptr);

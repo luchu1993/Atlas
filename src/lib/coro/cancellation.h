@@ -1,7 +1,6 @@
 #ifndef ATLAS_LIB_CORO_CANCELLATION_H_
 #define ATLAS_LIB_CORO_CANCELLATION_H_
 
-#include <algorithm>
 #include <cstdint>
 #include <functional>
 #include <memory>
@@ -37,11 +36,8 @@ class CancelRegistration {
 
   ~CancelRegistration() {
     if (state_ && id_ != 0) {
-      auto& cbs = state_->callbacks;
-      cbs.erase(
-          std::remove_if(cbs.begin(), cbs.end(),
-                         [id = id_](const CancellationState::Entry& e) { return e.id == id; }),
-          cbs.end());
+      std::erase_if(state_->callbacks,
+                    [id = id_](const CancellationState::Entry& e) { return e.id == id; });
     }
   }
 
@@ -52,11 +48,8 @@ class CancelRegistration {
     if (this != &other) {
       // Deregister current
       if (state_ && id_ != 0) {
-        auto& cbs = state_->callbacks;
-        cbs.erase(
-            std::remove_if(cbs.begin(), cbs.end(),
-                           [id = id_](const CancellationState::Entry& e) { return e.id == id; }),
-            cbs.end());
+        std::erase_if(state_->callbacks,
+                      [id = id_](const CancellationState::Entry& e) { return e.id == id; });
       }
       state_ = std::move(other.state_);
       id_ = std::exchange(other.id_, 0);

@@ -59,7 +59,6 @@ class GCHandleTracker {
 // The C# side (GCHandleHelper) exposes [UnmanagedCallersOnly] methods that
 // match these signatures exactly.
 
-// NOLINTBEGIN(misc-non-private-member-variables-in-classes)
 struct ClrObjectVTable {
   // Free a GCHandle.
   // C# signature: [UnmanagedCallersOnly] static void Free(IntPtr handle)
@@ -96,7 +95,6 @@ struct ClrObjectVTable {
     return free_handle && get_type_name && is_none && to_int64 && to_double && to_string && to_bool;
   }
 };
-// NOLINTEND(misc-non-private-member-variables-in-classes)
 
 // Process-wide vtable.  Must be populated before any ClrObject is constructed.
 // Typically called from ClrHost bootstrap after CLR initialization.

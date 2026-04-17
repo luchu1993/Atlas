@@ -7,11 +7,11 @@ namespace atlas {
 
 auto InterfaceTable::RegisterHandler(MessageID id, const MessageDesc& desc,
                                      std::unique_ptr<MessageHandler> handler) -> Result<void> {
-  if (entries_.contains(id)) {
+  if (entries_.Contains(id)) {
     return Error(ErrorCode::kAlreadyExists, "Message ID already registered");
   }
 
-  (void)entries_.insert(id, std::make_unique<Entry>(Entry{desc, std::move(handler)}));
+  (void)entries_.Insert(id, std::make_unique<Entry>(Entry{desc, std::move(handler)}));
   return {};
 }
 
@@ -39,7 +39,7 @@ auto InterfaceTable::Dispatch(const Address& source, Channel* channel, MessageID
   return {};
 }
 
-auto InterfaceTable::find(MessageID id) const -> const MessageDesc* {
+auto InterfaceTable::Find(MessageID id) const -> const MessageDesc* {
   auto* entry = entries_.Get(id);
   if (!entry) {
     return nullptr;

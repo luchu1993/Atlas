@@ -1,10 +1,7 @@
 #ifndef ATLAS_LIB_FOUNDATION_CONTAINERS_SLOT_MAP_H_
 #define ATLAS_LIB_FOUNDATION_CONTAINERS_SLOT_MAP_H_
 
-#include <compare>
 #include <cstdint>
-#include <limits>
-#include <optional>
 #include <vector>
 
 namespace atlas {
@@ -13,7 +10,7 @@ struct SlotHandle {
   uint32_t index{~0u};
   uint32_t generation{0};
 
-  [[nodiscard]] constexpr auto is_valid() const -> bool { return index != ~0u; }
+  [[nodiscard]] constexpr auto IsValid() const -> bool { return index != ~0u; }
   constexpr auto operator<=>(const SlotHandle&) const = default;
 };
 
@@ -26,7 +23,7 @@ class SlotMap {
     dense_to_sparse_.reserve(initial_capacity);
   }
 
-  auto insert(T value) -> SlotHandle {
+  auto Insert(T value) -> SlotHandle {
     uint32_t sparse_index;
     if (free_head_ != kNullIndex) {
       sparse_index = free_head_;
@@ -47,12 +44,12 @@ class SlotMap {
   }
 
   template <typename... Args>
-  auto emplace(Args&&... args) -> SlotHandle {
-    return insert(T(std::forward<Args>(args)...));
+  auto Emplace(Args&&... args) -> SlotHandle {
+    return Insert(T(std::forward<Args>(args)...));
   }
 
-  auto remove(SlotHandle handle) -> bool {
-    if (!contains(handle)) return false;
+  auto Remove(SlotHandle handle) -> bool {
+    if (!Contains(handle)) return false;
 
     auto& slot = slots_[handle.index];
     auto dense_idx = slot.dense_index;
@@ -77,17 +74,17 @@ class SlotMap {
     return true;
   }
 
-  [[nodiscard]] auto get(SlotHandle handle) -> T* {
-    if (!contains(handle)) return nullptr;
+  [[nodiscard]] auto Get(SlotHandle handle) -> T* {
+    if (!Contains(handle)) return nullptr;
     return &dense_[slots_[handle.index].dense_index];
   }
 
-  [[nodiscard]] auto get(SlotHandle handle) const -> const T* {
-    if (!contains(handle)) return nullptr;
+  [[nodiscard]] auto Get(SlotHandle handle) const -> const T* {
+    if (!Contains(handle)) return nullptr;
     return &dense_[slots_[handle.index].dense_index];
   }
 
-  [[nodiscard]] auto contains(SlotHandle handle) const -> bool {
+  [[nodiscard]] auto Contains(SlotHandle handle) const -> bool {
     return handle.index < slots_.size() && slots_[handle.index].generation == handle.generation &&
            slots_[handle.index].dense_index != kNullIndex;
   }
@@ -95,7 +92,7 @@ class SlotMap {
   [[nodiscard]] auto size() const -> std::size_t { return dense_.size(); }
   [[nodiscard]] auto empty() const -> bool { return dense_.empty(); }
 
-  void clear() {
+  void Clear() {
     for (auto& slot : slots_) {
       if (slot.dense_index != kNullIndex) {
         slot.generation++;

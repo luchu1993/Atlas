@@ -1,5 +1,7 @@
 #include "clrscript/file_watcher.h"
 
+#include <algorithm>
+
 namespace atlas {
 
 FileWatcher::FileWatcher(const std::filesystem::path& directory) : directory_(directory) {
@@ -60,10 +62,8 @@ bool FileWatcher::IsExcluded(const std::filesystem::path& path) {
   auto str = path.generic_string();
   static const char* excludes[] = {"/bin/", "/obj/", "/.git/", "/.reload_staging/",
                                    "/.reload_backup/"};
-  for (const auto* exc : excludes) {
-    if (str.find(exc) != std::string::npos) return true;
-  }
-  return false;
+  return std::ranges::any_of(
+      excludes, [&str](const char* exc) { return str.find(exc) != std::string::npos; });
 }
 
 }  // namespace atlas

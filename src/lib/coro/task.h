@@ -29,37 +29,37 @@ struct FinalAwaiter {
 // PromiseBase<T>: common promise machinery for non-void Task.
 template <typename T>
 struct PromiseBase {
-  std::coroutine_handle<> continuation{};
+  std::coroutine_handle<> continuation;
 
   auto initial_suspend() noexcept -> std::suspend_always { return {}; }
   auto final_suspend() noexcept -> FinalAwaiter { return {}; }
 
-  void unhandled_exception() { result_.template emplace<2>(std::current_exception()); }
+  void unhandled_exception() { result.template emplace<2>(std::current_exception()); }
 
-  auto get_result() -> T {
-    if (auto* ex = std::get_if<2>(&result_)) std::rethrow_exception(*ex);
-    return std::move(std::get<1>(result_));
+  auto GetResult() -> T {
+    if (auto* ex = std::get_if<2>(&result)) std::rethrow_exception(*ex);
+    return std::move(std::get<1>(result));
   }
 
   // 0 = not set, 1 = value, 2 = exception
-  std::variant<std::monostate, T, std::exception_ptr> result_;
+  std::variant<std::monostate, T, std::exception_ptr> result;
 };
 
 // PromiseBase<void>: specialization for Task<void>.
 template <>
 struct PromiseBase<void> {
-  std::coroutine_handle<> continuation{};
+  std::coroutine_handle<> continuation;
 
   auto initial_suspend() noexcept -> std::suspend_always { return {}; }
   auto final_suspend() noexcept -> FinalAwaiter { return {}; }
 
-  void unhandled_exception() { exception_ = std::current_exception(); }
+  void unhandled_exception() { exception = std::current_exception(); }
 
-  void get_result() {
-    if (exception_) std::rethrow_exception(exception_);
+  void GetResult() const {
+    if (exception) std::rethrow_exception(exception);
   }
 
-  std::exception_ptr exception_{};
+  std::exception_ptr exception;
 };
 
 }  // namespace detail
@@ -76,7 +76,7 @@ class [[nodiscard]] Task {
       return Task{std::coroutine_handle<promise_type>::from_promise(*this)};
     }
 
-    void return_value(T value) { this->result_.template emplace<1>(std::move(value)); }
+    void return_value(T value) { this->result.template emplace<1>(std::move(value)); }
   };
 
   Task(Task&& other) noexcept : handle_(std::exchange(other.handle_, nullptr)) {}
@@ -96,8 +96,8 @@ class [[nodiscard]] Task {
   Task(const Task&) = delete;
   Task& operator=(const Task&) = delete;
 
-  auto operator co_await() & { return make_awaiter(); }
-  auto operator co_await() && { return make_awaiter(); }
+  auto operator co_await() & { return MakeAwaiter(); }
+  auto operator co_await() && { return MakeAwaiter(); }
 
  private:
   struct Awaiter {
@@ -110,10 +110,10 @@ class [[nodiscard]] Task {
       return handle;  // symmetric transfer
     }
 
-    auto await_resume() -> T { return handle.promise().get_result(); }
+    auto await_resume() -> T { return handle.promise().GetResult(); }
   };
 
-  auto make_awaiter() -> Awaiter { return Awaiter{handle_}; }
+  auto MakeAwaiter() -> Awaiter { return Awaiter{handle_}; }
 
   explicit Task(std::coroutine_handle<promise_type> h) : handle_(h) {}
   std::coroutine_handle<promise_type> handle_;

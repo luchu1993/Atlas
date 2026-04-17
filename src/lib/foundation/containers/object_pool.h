@@ -13,15 +13,15 @@ class ObjectPool {
   explicit ObjectPool(std::size_t initial_capacity = 64) : map_(initial_capacity) {}
 
   template <typename... Args>
-  auto create(Args&&... args) -> Handle {
-    return map_.emplace(std::forward<Args>(args)...);
+  auto Create(Args&&... args) -> Handle {
+    return map_.Emplace(std::forward<Args>(args)...);
   }
 
-  void destroy(Handle handle) { map_.remove(handle); }
+  void Destroy(Handle handle) { map_.Remove(handle); }
 
-  [[nodiscard]] auto get(Handle handle) -> T* { return map_.get(handle); }
-  [[nodiscard]] auto get(Handle handle) const -> const T* { return map_.get(handle); }
-  [[nodiscard]] auto is_valid(Handle handle) const -> bool { return map_.contains(handle); }
+  [[nodiscard]] auto Get(Handle handle) -> T* { return map_.Get(handle); }
+  [[nodiscard]] auto Get(Handle handle) const -> const T* { return map_.Get(handle); }
+  [[nodiscard]] auto IsValid(Handle handle) const -> bool { return map_.Contains(handle); }
   [[nodiscard]] auto size() const -> std::size_t { return map_.size(); }
   [[nodiscard]] auto empty() const -> bool { return map_.empty(); }
 

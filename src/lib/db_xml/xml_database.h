@@ -3,7 +3,6 @@
 
 #include <deque>
 #include <functional>
-#include <mutex>
 #include <set>
 #include <unordered_map>
 #include <unordered_set>
@@ -184,7 +183,7 @@ class XmlDatabase : public IDatabase {
   static constexpr int kMaxCallbacksPerTick = 2048;
   static constexpr int kMaxBlobWritesPerFlush = 16;
   static constexpr size_t kMaxPendingBlobWrites = 64;
-  static constexpr size_t kMaxPendingBlobBytes = 4 * 1024 * 1024;
+  static constexpr size_t kMaxPendingBlobBytes = size_t{4} * 1024 * 1024;
 };
 
 }  // namespace atlas

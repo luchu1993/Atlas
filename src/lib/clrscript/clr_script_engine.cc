@@ -17,7 +17,7 @@ auto ClrScriptEngine::Configure(const Config& config) -> Result<void> {
 auto ClrScriptEngine::Initialize() -> Result<void> {
   if (initialized_) return Error{ErrorCode::kAlreadyExists, "ClrScriptEngine already initialized"};
   if (!configured_)
-    return Error{ErrorCode::kInvalidArgument, "configure() must be called before initialize()"};
+    return Error{ErrorCode::kInvalidArgument, "Configure() must be called before Initialize()"};
 
   // RAII rollback: on any failure, reset methods and shut down the CLR host.
   bool committed = false;
@@ -119,7 +119,7 @@ auto ClrScriptEngine::LoadModule(const std::filesystem::path& path) -> Result<vo
                                      static_cast<int32_t>(path_str.size()));
   if (!result)
     return Error{ErrorCode::kScriptError,
-                 std::format("load_module failed: {}", result.Error().Message())};
+                 std::format("LoadModule failed: {}", result.Error().Message())};
   ATLAS_LOG_INFO("ClrScriptEngine: loaded script module {}", path.string());
   return {};
 }
@@ -127,26 +127,26 @@ auto ClrScriptEngine::LoadModule(const std::filesystem::path& path) -> Result<vo
 void ClrScriptEngine::OnTick(float dt) {
   if (!initialized_) return;
   auto result = on_tick_.Invoke(dt);
-  if (!result) ATLAS_LOG_ERROR("ClrScriptEngine::on_tick failed: {}", result.Error().Message());
+  if (!result) ATLAS_LOG_ERROR("ClrScriptEngine::OnTick failed: {}", result.Error().Message());
 }
 
 void ClrScriptEngine::OnInit(bool is_reload) {
   if (!initialized_) return;
   auto result = on_init_.Invoke(is_reload ? uint8_t{1} : uint8_t{0});
-  if (!result) ATLAS_LOG_ERROR("ClrScriptEngine::on_init failed: {}", result.Error().Message());
+  if (!result) ATLAS_LOG_ERROR("ClrScriptEngine::OnInit failed: {}", result.Error().Message());
 }
 
 void ClrScriptEngine::OnShutdown() {
   if (!initialized_) return;
   auto result = on_shutdown_.Invoke();
-  if (!result) ATLAS_LOG_ERROR("ClrScriptEngine::on_shutdown failed: {}", result.Error().Message());
+  if (!result) ATLAS_LOG_ERROR("ClrScriptEngine::OnShutdown failed: {}", result.Error().Message());
 }
 
 auto ClrScriptEngine::CallFunction(std::string_view /*module_name*/,
                                    std::string_view /*function_name*/,
                                    std::span<const ScriptValue> /*args*/) -> Result<ScriptValue> {
   return Error{ErrorCode::kNotSupported,
-               "call_function() not yet implemented — use lifecycle methods"};
+               "CallFunction() not yet implemented — use lifecycle methods"};
 }
 
 auto ClrScriptEngine::CallHotReload(std::string_view method_name) -> Result<void> {

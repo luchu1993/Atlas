@@ -206,10 +206,10 @@ void TcpChannel::OnCondemned() {
     (void)dispatcher_.Deregister(socket_.Fd());
   }
 
-  recv_buffer_.clear();
+  recv_buffer_.Clear();
   recv_buffer_.ShrinkToFit();
 
-  write_buffer_.clear();
+  write_buffer_.Clear();
   write_buffer_.ShrinkToFit();
 
   write_registered_ = false;

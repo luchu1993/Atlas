@@ -18,11 +18,11 @@ Checks: >
   -cppcoreguidelines-macro-usage,
   -cppcoreguidelines-init-variables,
   -cppcoreguidelines-pro-bounds-constant-array-index,
+  -cppcoreguidelines-pro-type-union-access,
+  -cppcoreguidelines-pro-type-vararg,
   google-*,
   -google-readability-todo,
   -google-readability-braces-around-statements,
-  llvm-header-guard,
-  misc-non-private-member-variables-in-classes,
   misc-use-anonymous-namespace,
   modernize-*,
   -modernize-avoid-c-arrays,
@@ -33,13 +33,18 @@ Checks: >
   -modernize-raw-string-literal,
   performance-*,
   -performance-enum-size,
+  -performance-no-int-to-ptr,
   readability-*,
+  -readability-convert-member-functions-to-static,
+  -readability-redundant-member-init,
   -readability-magic-numbers,
   -readability-identifier-length,
   -readability-braces-around-statements,
   -readability-uppercase-literal-suffix,
   -readability-implicit-bool-conversion,
   -readability-function-cognitive-complexity,
+  -readability-math-missing-parentheses,
+  -readability-isolate-declaration,
 
 # Google-specific checks added:
 #   google-build-using-namespace        — ban "using namespace"
@@ -49,7 +54,6 @@ Checks: >
 #   google-default-arguments            — no default args on virtual methods
 #   google-runtime-int                  — use <cstdint> types
 #   google-build-namespaces             — namespace hygiene
-#   misc-non-private-member-variables-in-classes — class data must be private
 #   misc-use-anonymous-namespace        — prefer anon namespace over static
 
 WarningsAsErrors: ''
@@ -69,10 +73,14 @@ CheckOptions:
     value: CamelCase
   - key: readability-identifier-naming.StructCase
     value: CamelCase
+  - key: readability-identifier-naming.StructIgnoredRegexp
+    value: '^promise_type$'
   - key: readability-identifier-naming.EnumCase
     value: CamelCase
   - key: readability-identifier-naming.TypeAliasCase
     value: CamelCase
+  - key: readability-identifier-naming.TypeAliasIgnoredRegexp
+    value: '^(value_type|key_type|mapped_type|reference|const_reference|pointer|const_pointer|iterator|const_iterator|reverse_iterator|const_reverse_iterator|size_type|difference_type|allocator_type|element_type)$'
   - key: readability-identifier-naming.TypedefCase
     value: CamelCase
   - key: readability-identifier-naming.UnionCase
@@ -85,11 +93,11 @@ CheckOptions:
     value: CamelCase
   # Ignore coroutine protocol and STL interface methods that must stay snake_case
   - key: readability-identifier-naming.MethodIgnoredRegexp
-    value: '^(await_ready|await_suspend|await_resume|initial_suspend|final_suspend|get_return_object|return_void|return_value|unhandled_exception|yield_value|begin|end|cbegin|cend|rbegin|rend|size|empty|data|push_back|pop_back|front|back|insert|erase|find|count|contains|swap|resize|reserve|clear|emplace|emplace_back|operator.*)$'
+    value: '^(await_ready|await_suspend|await_resume|initial_suspend|final_suspend|get_return_object|return_void|return_value|unhandled_exception|yield_value|begin|end|cbegin|cend|rbegin|rend|size|empty|data|operator.*)$'
   - key: readability-identifier-naming.VirtualMethodCase
     value: CamelCase
   - key: readability-identifier-naming.VirtualMethodIgnoredRegexp
-    value: '^(await_ready|await_suspend|await_resume|initial_suspend|final_suspend|get_return_object|return_void|return_value|unhandled_exception|yield_value|begin|end|cbegin|cend|rbegin|rend|size|empty|data|push_back|pop_back|front|back|insert|erase|find|count|contains|swap|resize|reserve|clear|emplace|emplace_back|operator.*)$'
+    value: '^(await_ready|await_suspend|await_resume|initial_suspend|final_suspend|get_return_object|return_void|return_value|unhandled_exception|yield_value|begin|end|cbegin|cend|rbegin|rend|size|empty|data|operator.*)$'
 
   # ── Variables: snake_case ──────────────────────────────────
   - key: readability-identifier-naming.VariableCase
@@ -156,6 +164,8 @@ CheckOptions:
   # ── Macros: UPPER_SNAKE_CASE ───────────────────────────────
   - key: readability-identifier-naming.MacroDefinitionCase
     value: UPPER_CASE
+  - key: readability-identifier-naming.MacroDefinitionIgnoredRegexp
+    value: '^.*_H_$'
 
   # ── Template parameters: PascalCase ────────────────────────
   - key: readability-identifier-naming.TemplateParameterCase

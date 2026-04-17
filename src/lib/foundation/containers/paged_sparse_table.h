@@ -3,7 +3,6 @@
 
 #include <array>
 #include <cstddef>
-#include <cstdint>
 #include <limits>
 #include <memory>
 #include <type_traits>
@@ -26,7 +25,7 @@ class PagedSparseTable {
   static constexpr std::size_t kPageCount = std::size_t{1} << kTopBits;
   static constexpr Key kPageMask = static_cast<Key>(kPageSize - 1);
   static constexpr std::size_t kMaxInlinePagePointers = 4096;
-  static constexpr std::size_t kMaxPageBytes = 64 * 1024;
+  static constexpr std::size_t kMaxPageBytes = size_t{64} * 1024;
 
   static_assert(kPageCount <= kMaxInlinePagePointers,
                 "PagedSparseTable top-level page table would be too large; "
@@ -34,7 +33,7 @@ class PagedSparseTable {
 
   using ValueType = T;
 
-  [[nodiscard]] auto insert(Key key, std::unique_ptr<T> value) -> bool {
+  [[nodiscard]] auto Insert(Key key, std::unique_ptr<T> value) -> bool {
     auto* slot = this->LocateSlot(key, true);
     if (*slot != nullptr) {
       return false;
@@ -45,7 +44,7 @@ class PagedSparseTable {
     return true;
   }
 
-  [[nodiscard]] auto erase(Key key) -> bool {
+  [[nodiscard]] auto Erase(Key key) -> bool {
     auto* slot = this->LocateSlot(key, false);
     if (!slot || *slot == nullptr) {
       return false;
@@ -66,9 +65,9 @@ class PagedSparseTable {
     return (slot && *slot) ? slot->get() : nullptr;
   }
 
-  [[nodiscard]] auto contains(Key key) const -> bool { return this->Get(key) != nullptr; }
+  [[nodiscard]] auto Contains(Key key) const -> bool { return this->Get(key) != nullptr; }
 
-  void clear() {
+  void Clear() {
     for (auto& page : pages_) {
       page.reset();
     }

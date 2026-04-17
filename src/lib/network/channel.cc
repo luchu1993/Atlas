@@ -73,7 +73,7 @@ auto Channel::SendUnreliable() -> Result<void> {
 
 auto Channel::SendMessage(MessageID id, std::span<const std::byte> data) -> Result<void> {
   MessageDesc desc{id, "", MessageLengthStyle::kVariable, -1};
-  if (auto* found = interface_table_.find(id)) {
+  if (auto* found = interface_table_.Find(id)) {
     desc = *found;
   }
   bundle_.StartMessage(desc);

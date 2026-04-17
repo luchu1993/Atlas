@@ -30,7 +30,7 @@ auto RpcCall(PendingRpcRegistry& registry, Channel& channel, const Request& requ
     PendingRpcRegistry& registry;
     Channel& channel;
     Request request;
-    Duration timeout;
+    Duration timeout{};
     CancellationToken token;
 
     Result<Reply> result{Error{ErrorCode::kInternalError, "rpc_call: not completed"}};

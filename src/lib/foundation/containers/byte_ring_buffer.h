@@ -53,7 +53,7 @@ class ByteRingBuffer {
     assert(n <= ReadableSize());
     read_pos_ += n;
     if (read_pos_ == write_pos_) {
-      clear();
+      Clear();
     }
   }
 
@@ -65,7 +65,7 @@ class ByteRingBuffer {
   [[nodiscard]] auto Capacity() const -> std::size_t { return capacity_; }
   [[nodiscard]] auto MaxCapacity() const -> std::size_t { return max_capacity_; }
 
-  void clear() {
+  void Clear() {
     read_pos_ = 0;
     write_pos_ = 0;
   }
@@ -95,7 +95,7 @@ class ByteRingBuffer {
     return true;
   }
 
-  [[nodiscard]] auto reserve(std::size_t min_capacity) -> bool {
+  [[nodiscard]] auto Reserve(std::size_t min_capacity) -> bool {
     if (min_capacity <= capacity_) return true;
     if (min_capacity > max_capacity_) return false;
 
@@ -108,13 +108,13 @@ class ByteRingBuffer {
 
   [[nodiscard]] auto EnsureWritable(std::size_t writable_bytes) -> bool {
     if (writable_bytes <= WritableSize()) return true;
-    return reserve(ReadableSize() + writable_bytes);
+    return Reserve(ReadableSize() + writable_bytes);
   }
 
   void Linearize() {
     auto size = ReadableSize();
     if (size == 0) {
-      clear();
+      Clear();
       return;
     }
 

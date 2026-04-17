@@ -1,6 +1,5 @@
 #include "db_xml/xml_database.h"
 
-#include <algorithm>
 #include <filesystem>
 #include <format>
 #include <fstream>
@@ -343,7 +342,7 @@ void XmlDatabase::CheckoutEntityByName(uint16_t type_id, const std::string& iden
                                        std::function<void(GetResult)> callback) {
   LoadIndex(type_id);
   auto it = name_index_.find(type_id);
-  if (it == name_index_.end() || !it->second.count(identifier)) {
+  if (it == name_index_.end() || !it->second.contains(identifier)) {
     GetResult result;
     result.success = false;
     result.error = std::format("checkout_by_name: '{}' not found", identifier);
@@ -602,7 +601,7 @@ void XmlDatabase::SaveMeta() {
 }
 
 void XmlDatabase::LoadIndex(uint16_t type_id) {
-  if (name_index_.count(type_id)) return;  // already loaded
+  if (name_index_.contains(type_id)) return;  // already loaded
 
   auto path = TypeDir(type_id) / "index.json";
   if (!std::filesystem::exists(path)) {
@@ -621,7 +620,9 @@ void XmlDatabase::LoadIndex(uint16_t type_id) {
     try {
       idx[std::string(child->Name())] =
           static_cast<DatabaseID>(std::stoll(std::string(child->Value())));
-    } catch (...) {}
+    } catch (...) {
+      ATLAS_LOG_WARNING("XmlDatabase: skipping invalid index entry '{}'", child->Name());
+    }
   }
 }
 
