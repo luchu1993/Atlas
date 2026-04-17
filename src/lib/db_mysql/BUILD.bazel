@@ -1,0 +1,14 @@
+# src/lib/db_mysql/BUILD.bazel
+#
+# atlas_db_mysql — MySQL database backend (optional)
+# Enable with: bazel build ... --define=ATLAS_DB_MYSQL=1
+#
+# Source files (mysql_database.cc, mysql_connection_pool.cc, mysql_connection.cc)
+# do not exist yet. This target is a placeholder.
+
+package(default_visibility = ["//visibility:public"])
+
+cc_library(
+    name = "atlas_db_mysql",
+    # Empty interface library — no sources until MySQL backend is implemented
+)

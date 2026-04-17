@@ -1,60 +1,72 @@
 #include <atomic>
+#include <cstdlib>
 #include <filesystem>
 #include <thread>
 #include <vector>
 
 #include <gtest/gtest.h>
 
+#include "bazel_test_paths.h"
 #include "clrscript/clr_host.h"
 
 namespace atlas::test {
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
-// Path to the generated runtimeconfig.json (written to the CMake binary dir by
-// configure_file in AtlasFindPackages.cmake with the detected runtime version).
 static std::filesystem::path runtime_config() {
-#ifdef ATLAS_BINARY_DIR
-  return std::filesystem::path(ATLAS_BINARY_DIR) / "runtime" / "atlas_server.runtimeconfig.json";
-#else
+  auto* rloc = std::getenv("ATLAS_RUNTIME_CONFIG_RLOC");
+  if (rloc) return BazelRlocation(rloc);
   return "runtime/atlas_server.runtimeconfig.json";
-#endif
 }
 
-// Path to the compiled SmokeTest assembly (placed by 'dotnet build --output').
 static std::filesystem::path smoke_assembly() {
-#ifdef ATLAS_BINARY_DIR
-  return std::filesystem::path(ATLAS_BINARY_DIR) / "csharp" / "tests" / "csharp" /
-         "Atlas.SmokeTest" / "Atlas.SmokeTest.dll";
-#else
+  auto* rloc = std::getenv("ATLAS_SMOKE_TEST_DLL_RLOC");
+  if (rloc) return BazelRlocation(rloc);
   return "csharp/tests/csharp/Atlas.SmokeTest/Atlas.SmokeTest.dll";
-#endif
 }
 
 static constexpr std::string_view kType = "Atlas.SmokeTest.EntryPoint, Atlas.SmokeTest";
 
 // ── Test fixture ─────────────────────────────────────────────────────────────
+//
+// CoreCLR is a process-global singleton: once initialized it cannot be
+// re-initialized after Finalize().  We therefore use SetUpTestSuite /
+// TearDownTestSuite so the CLR is loaded exactly once for all tests.
 
 class ClrHostTest : public ::testing::Test {
- protected:
-  ClrHost host;
-
-  void SetUp() override {
-    auto result = host.Initialize(runtime_config());
+ public:
+  static void SetUpTestSuite() {
+    s_host = new ClrHost();
+    auto result = s_host->Initialize(runtime_config());
     ASSERT_TRUE(result.HasValue()) << "ClrHost init failed: " << result.Error().Message();
   }
 
-  void TearDown() override { host.Finalize(); }
+  static void TearDownTestSuite() {
+    if (s_host) {
+      s_host->Finalize();
+      delete s_host;
+      s_host = nullptr;
+    }
+  }
+
+ protected:
+  void SetUp() override { ASSERT_NE(s_host, nullptr) << "CLR not initialized"; }
+
+  ClrHost& host() { return *s_host; }
+
+  static ClrHost* s_host;
 };
+
+ClrHost* ClrHostTest::s_host = nullptr;
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
 
 TEST_F(ClrHostTest, IsInitializedAfterInit) {
-  EXPECT_TRUE(host.IsInitialized());
+  EXPECT_TRUE(host().IsInitialized());
 }
 
 TEST_F(ClrHostTest, Ping) {
-  auto method = host.GetMethod(smoke_assembly(), kType, "Ping");
+  auto method = host().GetMethod(smoke_assembly(), kType, "Ping");
   ASSERT_TRUE(method.HasValue()) << method.Error().Message();
 
   using PingFn = int (*)();
@@ -62,7 +74,7 @@ TEST_F(ClrHostTest, Ping) {
 }
 
 TEST_F(ClrHostTest, Add) {
-  auto method = host.GetMethod(smoke_assembly(), kType, "Add");
+  auto method = host().GetMethod(smoke_assembly(), kType, "Add");
   ASSERT_TRUE(method.HasValue()) << method.Error().Message();
 
   using AddFn = int (*)(int, int);
@@ -74,7 +86,7 @@ TEST_F(ClrHostTest, Add) {
 }
 
 TEST_F(ClrHostTest, StringLength) {
-  auto method = host.GetMethod(smoke_assembly(), kType, "StringLength");
+  auto method = host().GetMethod(smoke_assembly(), kType, "StringLength");
   ASSERT_TRUE(method.HasValue()) << method.Error().Message();
 
   using StringLengthFn = int (*)(const uint8_t*, int);
@@ -89,16 +101,16 @@ TEST_F(ClrHostTest, StringLength) {
 }
 
 TEST_F(ClrHostTest, InitializeTwiceReturnsError) {
-  auto result = host.Initialize(runtime_config());
+  auto result = host().Initialize(runtime_config());
   EXPECT_FALSE(result.HasValue());
 }
 
 TEST_F(ClrHostTest, GetMethodForNonexistentMethodReturnsError) {
-  auto result = host.GetMethod(smoke_assembly(), kType, "NoSuchMethod");
+  auto result = host().GetMethod(smoke_assembly(), kType, "NoSuchMethod");
   EXPECT_FALSE(result.HasValue());
 }
 
-// ── Tests without fixture (pre-init / post-finalize) ─────────────────────────
+// ── Tests without fixture (pre-init state) ───────────────────────────────────
 
 TEST(ClrHostLifecycleTest, GetMethodBeforeInitReturnsError) {
   ClrHost uninit;
@@ -112,23 +124,8 @@ TEST(ClrHostLifecycleTest, FinalizeBeforeInitIsNoOp) {
   EXPECT_FALSE(host.IsInitialized());
 }
 
-TEST(ClrHostLifecycleTest, FullLifecycle) {
-  ClrHost host;
-  ASSERT_TRUE(host.Initialize(runtime_config()).HasValue());
-  EXPECT_TRUE(host.IsInitialized());
-
-  auto method = host.GetMethod(smoke_assembly(), kType, "Ping");
-  ASSERT_TRUE(method.HasValue());
-
-  using PingFn = int (*)();
-  EXPECT_EQ(reinterpret_cast<PingFn>(*method)(), 42);
-
-  host.Finalize();
-  EXPECT_FALSE(host.IsInitialized());
-}
-
 // ============================================================================
-// Phase 6: Boundary tests
+// Boundary tests
 // ============================================================================
 
 TEST_F(ClrHostTest, ConcurrentGetFunction) {
@@ -140,7 +137,7 @@ TEST_F(ClrHostTest, ConcurrentGetFunction) {
   for (int i = 0; i < 8; ++i) {
     threads.emplace_back([this, asm_path, &success_count]() {
       using PingFn = int (*)();
-      auto result = host.GetMethodAs<PingFn>(asm_path, kType, "Ping");
+      auto result = host().GetMethodAs<PingFn>(asm_path, kType, "Ping");
       if (result.HasValue() && (*result)() == 42) success_count.fetch_add(1);
     });
   }

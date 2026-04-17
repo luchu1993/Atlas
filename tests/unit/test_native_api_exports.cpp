@@ -1,9 +1,11 @@
+#include <cstdlib>
 #include <filesystem>
 #include <optional>
 #include <string>
 
 #include <gtest/gtest.h>
 
+#include "bazel_test_paths.h"
 #include "platform/dynamic_library.h"
 #include "platform/platform_config.h"
 
@@ -12,22 +14,11 @@ using namespace atlas;
 // ============================================================================
 // Locate atlas_engine shared library
 // ============================================================================
-//
-// ATLAS_BINARY_DIR is injected by CMake (same pattern as test_clr_host).
-// The shared library is placed in ${CMAKE_BINARY_DIR}/bin/ by the
-// atlas_engine target's RUNTIME_OUTPUT_DIRECTORY / LIBRARY_OUTPUT_DIRECTORY.
 
 static std::filesystem::path atlas_engine_path() {
-  // ATLAS_ENGINE_DIR is injected via $<TARGET_FILE_DIR:atlas_engine> in
-  // CMake, giving the exact directory regardless of single/multi-config
-  // generators (e.g. bin/ for Ninja, bin/Debug/ for MSVC).
-  std::filesystem::path dir = ATLAS_ENGINE_DIR;
-
-#if ATLAS_PLATFORM_WINDOWS
-  return dir / "atlas_engine.dll";
-#else
-  return dir / "libatlas_engine.so";
-#endif
+  auto* rloc = std::getenv("ATLAS_ENGINE_RLOC");
+  EXPECT_NE(rloc, nullptr) << "ATLAS_ENGINE_RLOC env var must be set";
+  return atlas::test::BazelRlocation(rloc ? rloc : "");
 }
 
 // ============================================================================

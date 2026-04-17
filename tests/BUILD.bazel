@@ -1,0 +1,11 @@
+# tests/BUILD.bazel
+
+test_suite(
+    name = "unit_tests",
+    tags = ["unit"],
+)
+
+test_suite(
+    name = "integration_tests",
+    tags = ["integration"],
+)

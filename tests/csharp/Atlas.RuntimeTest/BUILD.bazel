@@ -1,0 +1,17 @@
+# tests/csharp/Atlas.RuntimeTest/BUILD.bazel
+
+load("//tools/dotnet:dotnet_build.bzl", "atlas_dotnet_project")
+
+atlas_dotnet_project(
+    name = "atlas_runtime_test_dll",
+    project_file = "Atlas.RuntimeTest.csproj",
+    assembly_name = "Atlas.RuntimeTest.dll",
+    srcs = glob(
+        ["**/*.cs"],
+        exclude = ["obj/**", "bin/**"],
+    ) + ["Atlas.RuntimeTest.csproj"],
+    project_deps = [
+        "//src/csharp/Atlas.Runtime:atlas_runtime_dll",
+    ],
+    visibility = ["//visibility:public"],
+)

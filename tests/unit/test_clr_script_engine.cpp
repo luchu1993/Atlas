@@ -1,8 +1,10 @@
+#include <cstdlib>
 #include <filesystem>
 #include <optional>
 
 #include <gtest/gtest.h>
 
+#include "bazel_test_paths.h"
 #include "clrscript/base_native_provider.h"
 #include "clrscript/clr_bootstrap.h"
 #include "clrscript/clr_error.h"
@@ -13,41 +15,30 @@
 #include "platform/platform_config.h"
 
 // ============================================================================
-// Path helpers (injected via CMake compile definitions)
+// Path helpers
 // ============================================================================
 
 namespace {
 
 std::filesystem::path runtime_config() {
-#ifdef ATLAS_BINARY_DIR
-  return std::filesystem::path(ATLAS_BINARY_DIR) / "runtime" / "atlas_server.runtimeconfig.json";
-#else
+  auto* rloc = std::getenv("ATLAS_RUNTIME_CONFIG_RLOC");
+  if (rloc) return atlas::test::BazelRlocation(rloc);
   return "runtime/atlas_server.runtimeconfig.json";
-#endif
 }
 
 std::filesystem::path test_dll() {
-#ifdef ATLAS_BINARY_DIR
-  return std::filesystem::path(ATLAS_BINARY_DIR) / "csharp" / "tests" / "csharp" /
-         "Atlas.RuntimeTest" / "Atlas.RuntimeTest.dll";
-#else
+  auto* rloc = std::getenv("ATLAS_RUNTIME_TEST_DLL_RLOC");
+  if (rloc) return atlas::test::BazelRlocation(rloc);
   return "csharp/tests/csharp/Atlas.RuntimeTest/Atlas.RuntimeTest.dll";
-#endif
 }
 
 std::filesystem::path atlas_engine_path() {
-#ifdef ATLAS_RUNTIME_TEST_DIR
-  std::filesystem::path dir = ATLAS_RUNTIME_TEST_DIR;
-#elif defined(ATLAS_ENGINE_DIR)
-  std::filesystem::path dir = ATLAS_ENGINE_DIR;
-#else
-  std::filesystem::path dir = ".";
-#endif
-
+  auto* rloc = std::getenv("ATLAS_ENGINE_RLOC");
+  if (rloc) return atlas::test::BazelRlocation(rloc);
 #if ATLAS_PLATFORM_WINDOWS
-  return dir / "atlas_engine.dll";
+  return "atlas_engine.dll";
 #else
-  return dir / "libatlas_engine.so";
+  return "libatlas_engine.so";
 #endif
 }
 

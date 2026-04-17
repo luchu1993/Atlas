@@ -1,0 +1,19 @@
+# src/lib/db_sqlite/BUILD.bazel
+#
+# atlas_db_sqlite — SQLite database backend
+
+package(default_visibility = ["//visibility:public"])
+
+cc_library(
+    name = "atlas_db_sqlite",
+    srcs = ["sqlite_database.cc"],
+    hdrs = ["sqlite_database.h"],
+    strip_include_prefix = "/src/lib",
+    deps = [
+        "//src/lib/db:atlas_db_iface",
+        "//src/lib/entitydef:atlas_entitydef",
+        "//src/lib/foundation:atlas_foundation",
+        "//src/lib/network:atlas_network",
+        "@sqlite3",
+    ],
+)

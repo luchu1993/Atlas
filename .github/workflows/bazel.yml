@@ -1,0 +1,67 @@
+name: Bazel CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  build-and-test:
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Windows (Bazel, Debug)
+            os: windows-latest
+            config: ""
+            run_tests: true
+
+          - name: Windows (Bazel, Release)
+            os: windows-latest
+            config: "--config=release"
+            run_tests: false
+
+          - name: Linux (Bazel, Debug)
+            os: ubuntu-latest
+            config: ""
+            run_tests: true
+
+          - name: Linux (Bazel, Release)
+            os: ubuntu-latest
+            config: "--config=release"
+            run_tests: false
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup .NET SDK
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '9.0.x'
+
+      - name: Setup MSVC environment (Windows)
+        if: runner.os == 'Windows'
+        uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x64
+
+      - name: Install Bazelisk
+        if: runner.os == 'Linux'
+        run: |
+          curl -Lo bazel https://github.com/bazelbuild/bazelisk/releases/latest/download/bazelisk-linux-amd64
+          chmod +x bazel && sudo mv bazel /usr/local/bin/bazel
+
+      - name: Build
+        run: bazel build //... ${{ matrix.config }}
+
+      - name: Unit Tests
+        if: matrix.run_tests
+        run: bazel test //tests/unit:all ${{ matrix.config }} --test_tag_filters=unit
+
+      - name: Integration Tests
+        if: matrix.run_tests
+        run: bazel test //tests/integration:all ${{ matrix.config }} --test_tag_filters=integration

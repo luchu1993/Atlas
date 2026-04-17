@@ -1,0 +1,17 @@
+# src/server/EchoApp/BUILD.bazel
+
+package(default_visibility = ["//visibility:public"])
+
+cc_library(
+    name = "atlas_echoapp_lib",
+    srcs = ["echo_app.cc"],
+    hdrs = ["echo_app.h"],
+    strip_include_prefix = "/src/server",
+    deps = ["//src/lib/server:atlas_server"],
+)
+
+cc_binary(
+    name = "atlas_echoapp",
+    srcs = ["main.cc"],
+    deps = [":atlas_echoapp_lib"],
+)

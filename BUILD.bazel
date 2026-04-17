@@ -1,0 +1,19 @@
+# Atlas Engine — root BUILD.bazel
+
+package(default_visibility = ["//visibility:public"])
+
+# ── Optional feature config_settings ─────────────────────────────────────────
+# These mirror CMake options and are toggled via --define on the command line.
+
+# Enable MySQL database backend: bazel build ... --define=ATLAS_DB_MYSQL=1
+config_setting(
+    name = "db_mysql_enabled",
+    define_values = {"ATLAS_DB_MYSQL": "1"},
+)
+
+# Enable io_uring on Linux: bazel build ... --define=ATLAS_USE_IOURING=1
+config_setting(
+    name = "linux_with_uring",
+    constraint_values = ["@platforms//os:linux"],
+    define_values = {"ATLAS_USE_IOURING": "1"},
+)

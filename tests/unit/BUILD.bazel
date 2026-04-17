@@ -1,0 +1,611 @@
+# tests/unit/BUILD.bazel
+#
+# All unit tests for Atlas Engine libraries.
+# Each test is a cc_test linking against the library under test and gtest_main.
+
+package(default_visibility = ["//visibility:private"])
+
+# ── Helper: common test deps ────────────────────────────────────────────────
+GTEST = ["@googletest//:gtest_main"]
+
+# ── Basic / Foundation ──────────────────────────────────────────────────────
+
+cc_test(
+    name = "test_hello",
+    srcs = ["test_hello.cpp"],
+    deps = GTEST,
+    tags = ["unit"],
+)
+
+cc_test(
+    name = "test_platform_config",
+    srcs = ["test_platform_config.cpp"],
+    deps = GTEST + ["//src/lib/platform:atlas_platform_config"],
+    tags = ["unit"],
+)
+
+cc_test(
+    name = "test_error",
+    srcs = ["test_error.cpp"],
+    deps = GTEST + ["//src/lib/foundation:atlas_foundation"],
+    tags = ["unit"],
+)
+
+cc_test(
+    name = "test_string_utils",
+    srcs = ["test_string_utils.cpp"],
+    deps = GTEST + ["//src/lib/foundation:atlas_foundation"],
+    tags = ["unit"],
+)
+
+cc_test(
+    name = "test_log",
+    srcs = ["test_log.cpp"],
+    deps = GTEST + ["//src/lib/foundation:atlas_foundation"],
+    tags = ["unit"],
+)
+
+cc_test(
+    name = "test_time",
+    srcs = ["test_time.cpp"],
+    deps = GTEST + ["//src/lib/foundation:atlas_foundation"],
+    tags = ["unit"],
+)
+
+cc_test(
+    name = "test_timer_queue",
+    srcs = ["test_timer_queue.cpp"],
+    deps = GTEST + ["//src/lib/foundation:atlas_foundation"],
+    tags = ["unit"],
+)
+
+cc_test(
+    name = "test_intrusive_ptr",
+    srcs = ["test_intrusive_ptr.cpp"],
+    deps = GTEST + ["//src/lib/foundation:atlas_foundation"],
+    tags = ["unit"],
+)
+
+cc_test(
+    name = "test_pool_allocator",
+    srcs = ["test_pool_allocator.cpp"],
+    deps = GTEST + ["//src/lib/foundation:atlas_foundation"],
+    tags = ["unit"],
+)
+
+cc_test(
+    name = "test_containers",
+    srcs = ["test_containers.cpp"],
+    deps = GTEST + ["//src/lib/foundation:atlas_foundation"],
+    tags = ["unit"],
+)
+
+cc_test(
+    name = "test_log_sinks",
+    srcs = ["test_log_sinks.cpp"],
+    deps = GTEST + ["//src/lib/foundation:atlas_foundation"],
+    tags = ["unit"],
+)
+
+# ── Platform ────────────────────────────────────────────────────────────────
+
+cc_test(
+    name = "test_filesystem",
+    srcs = ["test_filesystem.cpp"],
+    deps = GTEST + ["//src/lib/platform:atlas_platform"],
+    tags = ["unit"],
+)
+
+cc_test(
+    name = "test_threading",
+    srcs = ["test_threading.cpp"],
+    deps = GTEST + ["//src/lib/platform:atlas_platform"],
+    tags = ["unit"],
+)
+
+cc_test(
+    name = "test_signal_handler",
+    srcs = ["test_signal_handler.cpp"],
+    deps = GTEST + ["//src/lib/platform:atlas_platform"],
+    tags = ["unit"],
+)
+
+cc_test(
+    name = "test_dynamic_library",
+    srcs = ["test_dynamic_library.cpp"],
+    deps = GTEST + ["//src/lib/platform:atlas_platform"],
+    tags = ["unit"],
+)
+
+# ── Serialization ───────────────────────────────────────────────────────────
+
+cc_test(
+    name = "test_binary_stream",
+    srcs = ["test_binary_stream.cpp"],
+    deps = GTEST + ["//src/lib/serialization:atlas_serialization"],
+    tags = ["unit"],
+)
+
+cc_test(
+    name = "test_data_section",
+    srcs = ["test_data_section.cpp"],
+    deps = GTEST + ["//src/lib/serialization:atlas_serialization"],
+    tags = ["unit"],
+)
+
+# ── Math ────────────────────────────────────────────────────────────────────
+
+cc_test(
+    name = "test_math",
+    srcs = ["test_math.cpp"],
+    deps = GTEST + ["//src/lib/math:atlas_math"],
+    tags = ["unit"],
+)
+
+# ── Network ─────────────────────────────────────────────────────────────────
+
+cc_test(
+    name = "test_address",
+    srcs = ["test_address.cpp"],
+    deps = GTEST + ["//src/lib/network:atlas_network"],
+    tags = ["unit"],
+)
+
+cc_test(
+    name = "test_socket",
+    srcs = ["test_socket.cpp"],
+    deps = GTEST + ["//src/lib/network:atlas_network"],
+    tags = ["unit"],
+)
+
+cc_test(
+    name = "test_event_dispatcher",
+    srcs = ["test_event_dispatcher.cpp"],
+    deps = GTEST + ["//src/lib/network:atlas_network"],
+    tags = ["unit"],
+)
+
+cc_test(
+    name = "test_message",
+    srcs = ["test_message.cpp"],
+    deps = GTEST + ["//src/lib/network:atlas_network"],
+    tags = ["unit"],
+)
+
+cc_test(
+    name = "test_bundle",
+    srcs = ["test_bundle.cpp"],
+    deps = GTEST + ["//src/lib/network:atlas_network"],
+    tags = ["unit"],
+)
+
+cc_test(
+    name = "test_channel",
+    srcs = ["test_channel.cpp"],
+    deps = GTEST + ["//src/lib/network:atlas_network"],
+    tags = ["unit"],
+)
+
+cc_test(
+    name = "test_network_interface",
+    srcs = ["test_network_interface.cpp"],
+    deps = GTEST + ["//src/lib/network:atlas_network"],
+    tags = ["unit"],
+)
+
+cc_test(
+    name = "test_bg_task_manager",
+    srcs = ["test_bg_task_manager.cpp"],
+    deps = GTEST + ["//src/lib/network:atlas_network"],
+    tags = ["unit"],
+)
+
+cc_test(
+    name = "test_seq_num",
+    srcs = ["test_seq_num.cpp"],
+    deps = GTEST + ["//src/lib/network:atlas_network"],
+    tags = ["unit"],
+)
+
+cc_test(
+    name = "test_reliable_udp",
+    srcs = ["test_reliable_udp.cpp"],
+    deps = GTEST + ["//src/lib/network:atlas_network"],
+    tags = ["unit"],
+)
+
+cc_test(
+    name = "test_compression_filter",
+    srcs = ["test_compression_filter.cpp"],
+    deps = GTEST + ["//src/lib/network:atlas_network"],
+    tags = ["unit"],
+)
+
+cc_test(
+    name = "test_machined_types",
+    srcs = ["test_machined_types.cpp"],
+    deps = GTEST + [
+        "//src/lib/network:atlas_network",
+        "//src/lib/server:atlas_server",
+    ],
+    tags = ["unit"],
+)
+
+# ── Script ──────────────────────────────────────────────────────────────────
+
+cc_test(
+    name = "test_script_events",
+    srcs = ["test_script_events.cpp"],
+    deps = GTEST + ["//src/lib/script:atlas_script"],
+    tags = ["unit"],
+)
+
+cc_test(
+    name = "test_script_value",
+    srcs = ["test_script_value.cpp"],
+    deps = GTEST + ["//src/lib/script:atlas_script"],
+    tags = ["unit"],
+)
+
+# ── Entity Definition ──────────────────────────────────────────────────────
+
+cc_test(
+    name = "test_entity_def_registry_json",
+    srcs = ["test_entity_def_registry_json.cpp"],
+    deps = GTEST + [
+        "//src/lib/entitydef:atlas_entitydef",
+        "//src/lib/serialization:atlas_serialization",
+    ],
+    tags = ["unit"],
+)
+
+# ── Database ────────────────────────────────────────────────────────────────
+
+cc_test(
+    name = "test_database_types",
+    srcs = ["test_database_types.cpp"],
+    deps = GTEST + ["//src/lib/db:atlas_db"],
+    tags = ["unit"],
+)
+
+cc_test(
+    name = "test_xml_database",
+    srcs = ["test_xml_database.cpp"],
+    deps = GTEST + [
+        "//src/lib/db_xml:atlas_db_xml",
+        "//src/lib/entitydef:atlas_entitydef",
+    ],
+    tags = ["unit"],
+)
+
+cc_test(
+    name = "test_sqlite_database",
+    srcs = ["test_sqlite_database.cpp"],
+    deps = GTEST + [
+        "//src/lib/db_sqlite:atlas_db_sqlite",
+        "//src/lib/entitydef:atlas_entitydef",
+        "//src/lib/platform:atlas_platform",
+    ],
+    tags = ["unit"],
+)
+
+# ── Coroutine ───────────────────────────────────────────────────────────────
+
+cc_test(
+    name = "test_coro_task",
+    srcs = ["test_coro_task.cpp"],
+    deps = GTEST + ["//src/lib/coro:atlas_coro"],
+    tags = ["unit"],
+)
+
+cc_test(
+    name = "test_coro_sleep",
+    srcs = ["test_coro_sleep.cpp"],
+    deps = GTEST + ["//src/lib/coro:atlas_coro"],
+    tags = ["unit"],
+)
+
+cc_test(
+    name = "test_coro_rpc",
+    srcs = ["test_coro_rpc.cpp"],
+    deps = GTEST + ["//src/lib/coro:atlas_coro"],
+    tags = ["unit"],
+)
+
+# ── Server Framework ───────────────────────────────────────────────────────
+
+cc_test(
+    name = "test_watcher",
+    srcs = ["test_watcher.cpp"],
+    deps = GTEST + ["//src/lib/server:atlas_server"],
+    tags = ["unit"],
+)
+
+cc_test(
+    name = "test_updatable",
+    srcs = ["test_updatable.cpp"],
+    deps = GTEST + ["//src/lib/server:atlas_server"],
+    tags = ["unit"],
+)
+
+cc_test(
+    name = "test_server_config",
+    srcs = ["test_server_config.cpp"],
+    deps = GTEST + ["//src/lib/server:atlas_server"],
+    tags = ["unit"],
+)
+
+cc_test(
+    name = "test_ipv4_networks",
+    srcs = ["test_ipv4_networks.cpp"],
+    deps = GTEST + ["//src/lib/server:atlas_server"],
+    tags = ["unit"],
+)
+
+cc_test(
+    name = "test_server_app",
+    srcs = ["test_server_app.cpp"],
+    deps = GTEST + ["//src/lib/server:atlas_server"],
+    tags = ["unit"],
+)
+
+cc_test(
+    name = "test_script_app",
+    srcs = ["test_script_app.cpp"],
+    deps = GTEST + ["//src/lib/server:atlas_server"],
+    tags = ["unit"],
+)
+
+cc_test(
+    name = "test_entity_app",
+    srcs = ["test_entity_app.cpp"],
+    deps = GTEST + ["//src/lib/server:atlas_server"],
+    tags = ["unit"],
+)
+
+# ── Machined ────────────────────────────────────────────────────────────────
+
+cc_test(
+    name = "test_process_registry",
+    srcs = ["test_process_registry.cpp"],
+    deps = GTEST + ["//src/server/machined:atlas_machined_lib"],
+    tags = ["unit"],
+)
+
+cc_test(
+    name = "test_listener_manager",
+    srcs = ["test_listener_manager.cpp"],
+    deps = GTEST + ["//src/server/machined:atlas_machined_lib"],
+    tags = ["unit"],
+)
+
+cc_test(
+    name = "test_watcher_forwarder",
+    srcs = ["test_watcher_forwarder.cpp"],
+    deps = GTEST + ["//src/server/machined:atlas_machined_lib"],
+    tags = ["unit"],
+)
+
+# ── CLR Script ──────────────────────────────────────────────────────────────
+
+cc_test(
+    name = "test_clr_marshal",
+    srcs = ["test_clr_marshal.cpp"],
+    deps = GTEST + ["//src/lib/clrscript:atlas_clrscript"],
+    tags = ["unit"],
+)
+
+cc_test(
+    name = "test_native_api_provider",
+    srcs = ["test_native_api_provider.cpp"],
+    deps = GTEST + ["//src/lib/clrscript:atlas_clrscript"],
+    tags = ["unit"],
+)
+
+cc_test(
+    name = "test_clr_error",
+    srcs = ["test_clr_error.cpp"],
+    deps = GTEST + ["//src/lib/clrscript:atlas_clrscript"],
+    tags = ["unit"],
+)
+
+cc_test(
+    name = "test_clr_invoke",
+    srcs = ["test_clr_invoke.cpp"],
+    deps = GTEST + ["//src/lib/clrscript:atlas_clrscript"],
+    tags = ["unit"],
+)
+
+cc_test(
+    name = "test_clr_object",
+    srcs = ["test_clr_object.cpp"],
+    deps = GTEST + ["//src/lib/clrscript:atlas_clrscript"],
+    tags = ["unit"],
+)
+
+# CLR tests that load the atlas_engine shared library at runtime.
+# Path macros are set as empty-string compile-time defaults; actual paths
+# are supplied at runtime via env vars that the tests check first.
+# This approach works with both CMake (compile-time macros) and Bazel (env vars).
+
+cc_test(
+    name = "test_native_api_exports",
+    srcs = [
+        "bazel_test_paths.h",
+        "test_native_api_exports.cpp",
+    ],
+    data = ["//src/lib/clrscript:atlas_engine.dll"],
+    env = {"ATLAS_ENGINE_RLOC": "$(rlocationpath //src/lib/clrscript:atlas_engine.dll)"},
+    deps = GTEST + ["//src/lib/platform:atlas_platform"],
+    tags = ["unit"],
+)
+
+cc_test(
+    name = "test_clr_host",
+    srcs = [
+        "bazel_test_paths.h",
+        "test_clr_host.cpp",
+    ],
+    data = [
+        "//src/lib/clrscript:atlas_engine.dll",
+        "//runtime:runtimeconfig",
+        "//tests/csharp/Atlas.SmokeTest:atlas_smoke_test_dll",
+    ],
+    env = {
+        "ATLAS_RUNTIME_CONFIG_RLOC": "$(rlocationpath //runtime:runtimeconfig)",
+        "ATLAS_SMOKE_TEST_DLL_RLOC": "$(rlocationpath //tests/csharp/Atlas.SmokeTest:atlas_smoke_test_dll)",
+    },
+    deps = GTEST + ["//src/lib/clrscript:atlas_clrscript"],
+    tags = ["unit"],
+)
+
+cc_test(
+    name = "test_clr_callback",
+    srcs = [
+        "bazel_test_paths.h",
+        "test_clr_callback.cpp",
+    ],
+    data = [
+        "//src/lib/clrscript:atlas_engine.dll",
+        "//runtime:runtimeconfig",
+        "//tests/csharp/Atlas.RuntimeTest:atlas_runtime_test_dll",
+    ],
+    env = {
+        "ATLAS_ENGINE_RLOC": "$(rlocationpath //src/lib/clrscript:atlas_engine.dll)",
+        "ATLAS_RUNTIME_CONFIG_RLOC": "$(rlocationpath //runtime:runtimeconfig)",
+        "ATLAS_RUNTIME_TEST_DLL_RLOC": "$(rlocationpath //tests/csharp/Atlas.RuntimeTest:atlas_runtime_test_dll)",
+    },
+    deps = GTEST + [
+        "//src/lib/clrscript:atlas_clrscript",
+        "//src/lib/platform:atlas_platform",
+    ],
+    tags = ["unit"],
+)
+
+cc_test(
+    name = "test_clr_script_engine",
+    srcs = [
+        "bazel_test_paths.h",
+        "test_clr_script_engine.cpp",
+    ],
+    data = [
+        "//src/lib/clrscript:atlas_engine.dll",
+        "//runtime:runtimeconfig",
+        "//tests/csharp/Atlas.RuntimeTest:atlas_runtime_test_dll",
+    ],
+    env = {
+        "ATLAS_ENGINE_RLOC": "$(rlocationpath //src/lib/clrscript:atlas_engine.dll)",
+        "ATLAS_RUNTIME_CONFIG_RLOC": "$(rlocationpath //runtime:runtimeconfig)",
+        "ATLAS_RUNTIME_TEST_DLL_RLOC": "$(rlocationpath //tests/csharp/Atlas.RuntimeTest:atlas_runtime_test_dll)",
+    },
+    deps = GTEST + [
+        "//src/lib/clrscript:atlas_clrscript",
+        "//src/lib/platform:atlas_platform",
+    ],
+    tags = ["unit"],
+)
+
+# ── Server component tests ──────────────────────────────────────────────────
+
+cc_test(
+    name = "test_dbapp_messages",
+    srcs = ["test_dbapp_messages.cpp"],
+    deps = GTEST + [
+        "//src/lib/serialization:atlas_serialization",
+        "//src/server/dbapp:atlas_dbapp_lib",
+    ],
+    tags = ["unit"],
+)
+
+cc_test(
+    name = "test_checkout_manager",
+    srcs = ["test_checkout_manager.cpp"],
+    deps = GTEST + ["//src/server/dbapp:atlas_dbapp_lib"],
+    tags = ["unit"],
+)
+
+cc_test(
+    name = "test_entity_id_allocator",
+    srcs = ["test_entity_id_allocator.cpp"],
+    deps = GTEST + ["//src/server/dbapp:atlas_dbapp_lib"],
+    tags = ["unit"],
+)
+
+cc_test(
+    name = "test_dbapp_entity_id_messages",
+    srcs = ["test_dbapp_entity_id_messages.cpp"],
+    deps = GTEST + [
+        "//src/lib/serialization:atlas_serialization",
+        "//src/server/dbapp:atlas_dbapp_lib",
+    ],
+    tags = ["unit"],
+)
+
+cc_test(
+    name = "test_base_entity",
+    srcs = ["test_base_entity.cpp"],
+    deps = GTEST + ["//src/server/baseapp:atlas_baseapp_lib"],
+    tags = ["unit"],
+)
+
+cc_test(
+    name = "test_entity_manager",
+    srcs = ["test_entity_manager.cpp"],
+    deps = GTEST + ["//src/server/baseapp:atlas_baseapp_lib"],
+    tags = ["unit"],
+)
+
+cc_test(
+    name = "test_baseapp_messages",
+    srcs = ["test_baseapp_messages.cpp"],
+    deps = GTEST + [
+        "//src/lib/serialization:atlas_serialization",
+        "//src/server/baseapp:atlas_baseapp_lib",
+    ],
+    tags = ["unit"],
+)
+
+cc_test(
+    name = "test_id_client",
+    srcs = ["test_id_client.cpp"],
+    deps = GTEST + ["//src/server/baseapp:atlas_baseapp_lib"],
+    tags = ["unit"],
+)
+
+cc_test(
+    name = "test_delta_forwarder",
+    srcs = ["test_delta_forwarder.cpp"],
+    deps = GTEST + ["//src/server/baseapp:atlas_baseapp_lib"],
+    tags = ["unit"],
+)
+
+cc_test(
+    name = "test_login_messages",
+    srcs = ["test_login_messages.cpp"],
+    deps = GTEST + [
+        "//src/lib/serialization:atlas_serialization",
+        "//src/server/loginapp:atlas_loginapp_lib",
+    ],
+    tags = ["unit"],
+)
+
+cc_test(
+    name = "test_login_rollback",
+    srcs = ["test_login_rollback.cpp"],
+    deps = GTEST + [
+        "//src/server/baseapp:atlas_baseapp_lib",
+        "//src/server/dbapp:atlas_dbapp_lib",
+        "//src/server/loginapp:atlas_loginapp_lib",
+    ],
+    tags = ["unit"],
+)
+
+cc_test(
+    name = "test_baseappmgr_messages",
+    srcs = ["test_baseappmgr_messages.cpp"],
+    deps = GTEST + [
+        "//src/lib/serialization:atlas_serialization",
+        "//src/server/baseappmgr:atlas_baseappmgr_lib",
+    ],
+    tags = ["unit"],
+)

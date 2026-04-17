@@ -1,0 +1,23 @@
+# src/server/machined/BUILD.bazel
+
+package(default_visibility = ["//visibility:public"])
+
+cc_library(
+    name = "atlas_machined_lib",
+    srcs = [
+        "listener_manager.cc",
+        "machined_app.cc",
+        "process_registry.cc",
+        "watcher_forwarder.cc",
+    ],
+    hdrs = glob(["*.h"]),
+    includes = ["."],
+    strip_include_prefix = "/src/server",
+    deps = ["//src/lib/server:atlas_server"],
+)
+
+cc_binary(
+    name = "machined",
+    srcs = ["main.cc"],
+    deps = [":atlas_machined_lib"],
+)

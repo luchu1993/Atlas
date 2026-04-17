@@ -1,0 +1,27 @@
+# runtime/BUILD.bazel
+#
+# Generates atlas_server.runtimeconfig.json by detecting the installed
+# .NET runtime version.
+
+package(default_visibility = ["//visibility:public"])
+
+genrule(
+    name = "runtimeconfig",
+    srcs = ["atlas_server.runtimeconfig.json.in"],
+    outs = ["atlas_server.runtimeconfig.json"],
+    cmd = select({
+        "@platforms//os:windows": " && ".join([
+            # Detect the latest .NET runtime version
+            "DOTNET_VER=$$(dotnet --list-runtimes | grep 'Microsoft.NETCore.App' | tail -1 | awk '{print $$2}')",
+            "DOTNET_TFM=\"net$$(echo $$DOTNET_VER | cut -d. -f1-2)\"",
+            # Substitute placeholders in the template
+            "sed -e \"s|@DOTNET_RUNTIME_TFM@|$$DOTNET_TFM|g\" -e \"s|@DOTNET_RUNTIME_VERSION@|$$DOTNET_VER|g\" $(SRCS) > $@",
+        ]),
+        "//conditions:default": " && ".join([
+            "DOTNET_VER=$$(dotnet --list-runtimes | grep 'Microsoft.NETCore.App' | tail -1 | awk '{print $$2}')",
+            "DOTNET_TFM=\"net$$(echo $$DOTNET_VER | cut -d. -f1-2)\"",
+            "sed -e \"s|@DOTNET_RUNTIME_TFM@|$$DOTNET_TFM|g\" -e \"s|@DOTNET_RUNTIME_VERSION@|$$DOTNET_VER|g\" $(SRCS) > $@",
+        ]),
+    }),
+    local = True,
+)

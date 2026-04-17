@@ -1,0 +1,26 @@
+module(
+    name = "atlas",
+    version = "0.1.0",
+)
+
+# C++ rules
+bazel_dep(name = "rules_cc", version = "0.0.9")
+
+# Platform constraints (for select() on OS/CPU)
+bazel_dep(name = "platforms", version = "0.0.10")
+
+# Google Test — used by all cc_test targets
+# Note: project uses 1.15.2 via FetchContent; BCR carries 1.14.0.
+# When 1.15.x lands in BCR, bump this version.
+bazel_dep(name = "googletest", version = "1.14.0")
+
+# ── Phase 2 dependencies ─────────────────────────────────────────────────────
+# pugixml — XML parsing (serialization, db_xml)
+bazel_dep(name = "pugixml", version = "1.14")
+
+# C# / .NET rules — for atlas_clrscript and C# tests (Phase 6)
+# bazel_dep(name = "rules_dotnet", version = "0.17.0")
+
+# rapidjson, zlib, sqlite3 — not in BCR, declared via module extension
+atlas_deps = use_extension("//:deps.bzl", "atlas_deps")
+use_repo(atlas_deps, "rapidjson", "zlib", "sqlite3", "dotnet_host")

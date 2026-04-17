@@ -6,43 +6,48 @@ This file provides guidance to Claude Code when working with the Atlas Engine co
 
 Atlas is a modern distributed MMO game server framework written in C++20 with C# (.NET 9) scripting. It is inspired by the BigWorld Engine architecture, featuring a distributed multi-process server design with load balancing, scalability, and fault tolerance. The scripting layer embeds CoreCLR via hostfxr and uses [UnmanagedCallersOnly] for zero-overhead C++ ↔ C# interop.
 
-## Build System (CMake)
+## Build System (Bazel)
 
-### Configure and Build
+### Build
 
 ```bash
-# Using presets (recommended)
-cmake --preset debug-windows       # Windows / MSVC
-cmake --preset debug-ninja         # Cross-platform / Ninja
+# Build everything
+bazel build //...
 
-cmake --build --preset debug-windows
-cmake --build --preset debug-ninja
-
-# Manual
-cmake -B build -G "Visual Studio 17 2022" -A x64
-cmake --build build --config Debug
+# Build with a specific config
+bazel build //... --config=release
+bazel build //... --config=debug
 ```
 
 ### Run Tests
 
 ```bash
-ctest --preset debug-windows
-# or
-ctest --test-dir build --output-on-failure
+# All unit tests
+bazel test //tests/unit:all
+
+# Specific test
+bazel test //tests/unit:test_hello
+
+# Integration tests
+bazel test //tests/integration:all
+
+# All tests with output
+bazel test //tests/unit:all --test_output=all
 ```
 
-### Build Configurations
+### Build Configurations (via .bazelrc)
 
-- **Debug** — full debug symbols, assertions enabled, `ATLAS_DEBUG=1`
-- **Release** — fully optimized, no debug, `NDEBUG` defined
-- **RelWithDebInfo** (Hybrid) — optimized with debug symbols
+- **Default (Debug)** — full debug symbols, assertions enabled
+- **`--config=release`** — fully optimized, `NDEBUG` defined
+- **`--config=debug`** — explicit debug mode, `ATLAS_DEBUG=1`
+- **`--config=hybrid`** — optimized with debug symbols
 
-### CMake Options
+### Sanitizers
 
-- `ATLAS_BUILD_TESTS` — build unit tests (default ON)
-- `ATLAS_BUILD_SERVER` — build server applications (default ON)
-- `ATLAS_BUILD_CLIENT_SDK` — build client SDK (default ON)
-- `ATLAS_ENABLE_ASAN` — enable AddressSanitizer (GCC/Clang only)
+- `--config=asan` — AddressSanitizer (Linux / GCC / Clang)
+- `--config=asan-msvc` — AddressSanitizer (Windows / MSVC)
+- `--config=tsan` — ThreadSanitizer (Linux only)
+- `--config=ubsan` — UndefinedBehaviorSanitizer (Linux only)
 
 ## Architecture
 
@@ -100,11 +105,14 @@ See `docs/CODING_STYLE.md` for the full project style guide.
 Unit tests use Google Test. Each library's tests are in `tests/unit/`.
 
 ```bash
-# Run all tests
-ctest --test-dir build
+# Run all unit tests
+bazel test //tests/unit:all
 
 # Run specific test
-./build/bin/tests/test_hello
+bazel test //tests/unit:test_hello
+
+# Run with verbose output
+bazel test //tests/unit:test_hello --test_output=all
 ```
 
 ## Pre-Commit Requirements
@@ -114,7 +122,7 @@ Before every commit, ensure the following two checks pass:
 **1. All unit tests pass**
 
 ```bash
-ctest --test-dir build --output-on-failure
+bazel test //tests/unit:all --test_output=errors
 ```
 
 **2. clang-format has no violations**

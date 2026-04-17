@@ -1,0 +1,96 @@
+# tests/integration/BUILD.bazel
+#
+# Integration tests exercise multi-component interactions:
+#   - TCP round-trip between two NetworkInterface instances
+#   - MachinedApp full registration / heartbeat / query flow
+#   - BaseAppMgr registration flow
+#   - DBApp login and checkout flows
+#   - Full login flow across multiple server components
+#   - RUDP bidirectional messaging between two NetworkInterface instances
+
+package(default_visibility = ["//visibility:private"])
+
+GTEST = ["@googletest//:gtest_main"]
+
+cc_test(
+    name = "test_tcp_echo_roundtrip",
+    srcs = ["test_tcp_echo_roundtrip.cpp"],
+    deps = GTEST + ["//src/lib/network:atlas_network"],
+    local = True,
+    tags = ["integration"],
+)
+
+cc_test(
+    name = "test_machined_registration",
+    srcs = ["test_machined_registration.cpp"],
+    deps = GTEST + [
+        "//src/server/machined:atlas_machined_lib",
+        "//src/lib/server:atlas_server",
+        "//src/lib/network:atlas_network",
+    ],
+    local = True,
+    tags = ["integration"],
+)
+
+cc_test(
+    name = "test_baseappmgr_registration",
+    srcs = ["test_baseappmgr_registration.cpp"],
+    deps = GTEST + [
+        "//src/server/baseappmgr:atlas_baseappmgr_lib",
+        "//src/lib/server:atlas_server",
+        "//src/lib/network:atlas_network",
+    ],
+    local = True,
+    tags = ["integration"],
+)
+
+cc_test(
+    name = "test_dbapp_login_flow",
+    srcs = ["test_dbapp_login_flow.cpp"],
+    deps = GTEST + [
+        "//src/server/dbapp:atlas_dbapp_lib",
+        "//src/lib/server:atlas_server",
+        "//src/lib/network:atlas_network",
+        "//src/lib/platform:atlas_platform",
+    ],
+    local = True,
+    tags = ["integration"],
+)
+
+cc_test(
+    name = "test_dbapp_checkout_cleanup",
+    srcs = ["test_dbapp_checkout_cleanup.cpp"],
+    deps = GTEST + [
+        "//src/server/dbapp:atlas_dbapp_lib",
+        "//src/lib/server:atlas_server",
+        "//src/lib/network:atlas_network",
+        "//src/lib/platform:atlas_platform",
+    ],
+    local = True,
+    tags = ["integration"],
+)
+
+cc_test(
+    name = "test_login_flow",
+    srcs = ["test_login_flow.cpp"],
+    deps = GTEST + [
+        "//src/server/baseapp:atlas_baseapp_lib",
+        "//src/server/baseappmgr:atlas_baseappmgr_lib",
+        "//src/server/dbapp:atlas_dbapp_lib",
+        "//src/server/loginapp:atlas_loginapp_lib",
+        "//src/server/machined:atlas_machined_lib",
+        "//src/lib/server:atlas_server",
+        "//src/lib/network:atlas_network",
+        "//src/lib/platform:atlas_platform",
+    ],
+    local = True,
+    tags = ["integration"],
+)
+
+cc_test(
+    name = "test_rudp_two_network_interfaces",
+    srcs = ["test_rudp_two_network_interfaces.cpp"],
+    deps = GTEST + ["//src/lib/network:atlas_network"],
+    local = True,
+    tags = ["integration"],
+)

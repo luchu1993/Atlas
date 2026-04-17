@@ -1,0 +1,19 @@
+# src/lib/entitydef/BUILD.bazel
+#
+# atlas_entitydef — entity type definitions, data types
+
+package(default_visibility = ["//visibility:public"])
+
+cc_library(
+    name = "atlas_entitydef",
+    srcs = ["entity_def_registry.cc"],
+    hdrs = [
+        "entity_def_registry.h",
+        "entity_type_descriptor.h",
+    ],
+    strip_include_prefix = "/src/lib",
+    deps = [
+        "//src/lib/foundation:atlas_foundation",
+        "//src/lib/serialization:atlas_serialization",
+    ],
+)

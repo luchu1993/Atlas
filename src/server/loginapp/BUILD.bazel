@@ -1,0 +1,24 @@
+# src/server/loginapp/BUILD.bazel
+
+package(default_visibility = ["//visibility:public"])
+
+cc_library(
+    name = "atlas_loginapp_lib",
+    srcs = ["loginapp.cc"],
+    hdrs = glob(["*.h"]),
+    includes = ["."],
+    strip_include_prefix = "/src/server",
+    deps = [
+        "//src/lib/coro:atlas_coro",
+        "//src/lib/db:atlas_db_iface",
+        "//src/lib/foundation:atlas_foundation",
+        "//src/lib/network:atlas_network",
+        "//src/lib/server:atlas_server",
+    ],
+)
+
+cc_binary(
+    name = "atlas_loginapp",
+    srcs = ["main.cc"],
+    deps = [":atlas_loginapp_lib"],
+)

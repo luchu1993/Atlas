@@ -68,18 +68,22 @@ ServerApp
 | 工具 | 版本要求 | 说明 |
 |------|----------|------|
 | [Visual Studio 2022](https://visualstudio.microsoft.com/) | 17.x | 需勾选 **"使用 C++ 的桌面开发"** 工作负载 |
-| [CMake](https://cmake.org/download/) | 3.20+ | 或使用 Visual Studio 内置版本 |
-| [.NET 9 SDK](https://dotnet.microsoft.com/download/dotnet/9.0) | 9.0+ | C# 脚本层必须 |
-| [Git](https://git-scm.com/) | 任意版本 | 版本控制与 FetchContent 依赖拉取 |
+| [Bazelisk](https://github.com/bazelbuild/bazelisk) | 最新版 | Bazel 版本管理器，读取 `.bazelversion` 自动下载对应版本的 Bazel |
+| [.NET 9 SDK](https://dotnet.microsoft.com/download/dotnet/9.0) | 9.0+ | C# 脚本层必须；构建时自动检测 |
+| [Git](https://git-scm.com/) | 任意版本 | 版本控制 |
+
+**安装 Bazelisk（Windows）：**
+```bat
+winget install Google.Bazelisk
+```
 
 **Visual Studio 2022 安装时需选择：**
 - 工作负载：**使用 C++ 的桌面开发**
-- 单个组件：**用于 Windows 的 C++ CMake 工具**（可选，VS 已内置 CMake）
 
 安装完成后验证：
 ```bat
 cl /?                  :: MSVC 编译器——需在 VS Developer Command Prompt 中执行
-cmake --version        :: 应输出 3.20+
+bazel --version        :: 应显示 7.x（由 Bazelisk 自动下载）
 dotnet --version       :: 应输出 9.x.x
 git --version
 ```
@@ -89,7 +93,12 @@ git --version
 ```bash
 # 编译器与构建工具
 sudo apt update
-sudo apt install -y build-essential g++-12 cmake ninja-build git
+sudo apt install -y build-essential g++-12 git
+
+# Bazelisk — 自动管理 Bazel 版本
+curl -Lo /usr/local/bin/bazel \
+  https://github.com/bazelbuild/bazelisk/releases/latest/download/bazelisk-linux-amd64
+chmod +x /usr/local/bin/bazel
 
 # .NET 9 SDK（参考 https://learn.microsoft.com/dotnet/core/install/linux）
 wget https://dot.net/v1/dotnet-install.sh
@@ -100,11 +109,13 @@ source ~/.bashrc
 
 # 验证
 g++ --version          # 应为 12+
-cmake --version        # 应为 3.20+
+bazel --version        # 应显示 7.x（由 Bazelisk 自动下载）
 dotnet --version       # 应为 9.x.x
 ```
 
-> **第三方依赖**（Google Test、pugixml、RapidJSON、zlib）由 CMake `FetchContent` 在首次配置时自动下载，无需手动安装。首次配置需保证网络可用（或提前缓存好 `_deps` 目录）。
+> **第三方依赖**（Google Test、pugixml、RapidJSON、zlib、SQLite）由 Bazel 通过 `MODULE.bazel` 和 `deps.bzl` 管理，首次构建时自动下载并缓存，无需手动安装。
+
+> **.NET SDK 自动检测：** Bazel 会通过 `DOTNET_ROOT` 环境变量或系统默认路径自动定位已安装的 .NET SDK，无需手动配置版本路径——只需安装 .NET 9+ SDK 即可。
 
 > **SQLite 后端运行时说明：** SQLite 后端会在运行时动态加载系统 SQLite 库（Windows 上优先 `sqlite3.dll` / `winsqlite3.dll`，Linux/macOS 上为 `libsqlite3.so*` / `libsqlite3.dylib`）。Atlas 不会把 SQLite 静态打包进构建产物。
 
@@ -117,91 +128,92 @@ cd Atlas
 
 ## 构建
 
-### 配置与编译
+### 构建命令
 
 ```bash
-# Windows — Visual Studio 生成器（推荐）
-cmake --preset debug-windows
-cmake --build --preset debug-windows
+# 构建全部（默认 debug 模式）
+bazel build //...
 
-# Windows — Release
-cmake --preset release-windows
-cmake --build --preset release-windows
+# 指定构建配置
+bazel build //... --config=debug
+bazel build //... --config=release
+bazel build //... --config=hybrid     # 带调试符号的优化构建
 
-# Linux — GCC / Make
-cmake --preset debug-linux
-cmake --build --preset debug-linux
-
-# 跨平台 — Ninja（需安装 Ninja）
-cmake --preset debug-ninja
-cmake --build --preset debug-ninja
+# 构建特定目标
+bazel build //src/server/machined:machined
+bazel build //src/lib/network:atlas_network
 ```
 
-> 首次配置会下载第三方依赖（约 100 MB），后续配置无需重新下载。
+> 首次构建时自动下载第三方依赖并缓存，后续构建为增量构建，仅重新编译变更的输入。
 
-### CMake 选项
+### 构建配置（通过 `.bazelrc`）
 
-通过 `-D<选项>=ON/OFF` 覆盖默认值，例如：
+| 配置 | 说明 |
+|------|------|
+| *（默认）* | Debug 模式——完整调试符号，断言启用 |
+| `--config=debug` | 显式 debug 模式，`ATLAS_DEBUG=1` |
+| `--config=release` | 完全优化，定义 `NDEBUG` |
+| `--config=hybrid` | 优化构建 + 调试符号（等同于 RelWithDebInfo） |
 
-| 选项 | 默认值 | 说明 |
+### Sanitizer
+
+| 配置 | 平台 | 说明 |
+|------|------|------|
+| `--config=asan` | Linux | AddressSanitizer（GCC/Clang） |
+| `--config=asan-msvc` | Windows | AddressSanitizer（MSVC） |
+| `--config=tsan` | Linux | ThreadSanitizer |
+| `--config=ubsan` | Linux | UndefinedBehaviorSanitizer |
+
+> TSan 和 UBSan 不支持 MSVC。
+
+### 可选构建标志
+
+| 标志 | 默认值 | 说明 |
 |------|--------|------|
-| `ATLAS_BUILD_TESTS` | `ON` | 构建 Google Test 单元测试 |
-| `ATLAS_BUILD_SERVER` | `ON` | 构建服务器进程 |
-| `ATLAS_BUILD_CLIENT_SDK` | `ON` | 构建客户端 SDK |
-| `ATLAS_ENABLE_ASAN` | `OFF` | 启用 AddressSanitizer（仅 GCC/Clang） |
-| `ATLAS_ENABLE_TSAN` | `OFF` | 启用 ThreadSanitizer（仅 GCC/Clang） |
-| `ATLAS_ENABLE_UBSAN` | `OFF` | 启用 UndefinedBehaviorSanitizer（仅 GCC/Clang） |
-
-示例——不构建测试：
-```bash
-cmake --preset debug-linux -DATLAS_BUILD_TESTS=OFF
-cmake --build --preset debug-linux
-```
+| `--define=ATLAS_DB_MYSQL=1` | `0` | 启用 MySQL 数据库后端 |
+| `--define=ATLAS_USE_IOURING=1` | `0` | 在 Linux 上启用 io_uring |
 
 ### 构建产物
 
+构建产物位于 `bazel-bin/`（由 Bazel 创建的符号链接）：
+
 ```
-build/debug-windows/bin/Debug/
-├── machined.exe          # 机器守护进程（最先启动）
-├── atlas_loginapp.exe    # 登录网关
-├── atlas_baseappmgr.exe  # BaseApp 集群管理器
-├── atlas_baseapp.exe     # Base 实体进程
-├── atlas_cellappmgr.exe  # CellApp 集群管理器
-├── atlas_dbappmgr.exe    # DBApp 集群管理器
-├── atlas_dbapp.exe       # 数据库进程
-├── atlas_echoapp.exe     # 最小验证进程
-├── atlas_tool.exe        # 开发者命令行工具
-├── atlas_engine.dll      # 核心共享库
-└── zlib.dll              # 压缩运行时库
+bazel-bin/src/server/
+├── machined/machined         # 机器守护进程（最先启动）
+├── loginapp/atlas_loginapp   # 登录网关
+├── baseappmgr/atlas_baseappmgr
+├── baseapp/atlas_baseapp
+├── cellappmgr/atlas_cellappmgr
+├── dbappmgr/atlas_dbappmgr
+├── dbapp/atlas_dbapp
+└── EchoApp/atlas_echoapp    # 最小验证进程
 ```
 
-Linux 下：`.exe` 去掉扩展名，`.dll` 对应 `.so`。
+Windows 下二进制文件带 `.exe` 扩展名。
 
 ## 测试
 
 ### 运行全部单元测试
 
 ```bash
-# Windows（Visual Studio preset）
-ctest --preset debug-windows
+# 全部单元测试
+bazel test //tests/unit:all
 
-# Windows — 直接运行
-ctest --test-dir build/debug-windows --build-config Debug --output-on-failure
+# 全部单元测试（详细输出）
+bazel test //tests/unit:all --test_output=all
 
-# Linux
-ctest --preset debug-ninja
-# 或
-ctest --test-dir build/debug-linux --output-on-failure
+# 集成测试
+bazel test //tests/integration:all
 ```
 
-### 运行单个测试二进制
+### 运行单个测试
 
 ```bash
-# Windows
-.\build\debug-windows\bin\Debug\test_server_app.exe
+# 运行特定测试目标
+bazel test //tests/unit:test_math
 
-# Linux
-./build/debug-linux/bin/test_server_app
+# 详细输出
+bazel test //tests/unit:test_server_app --test_output=all
 ```
 
 ### C# 测试
@@ -239,45 +251,38 @@ machined → DBAppMgr → BaseAppMgr → CellAppMgr → DBApp → BaseApp → Ce
 
 `EchoApp` 是最小化的独立验证进程，不依赖其他服务，适合快速验证构建结果：
 
-```bat
-cd build\debug-windows\bin\Debug
-.\atlas_echoapp.exe
+```bash
+bazel run //src/server/EchoApp:atlas_echoapp
 ```
 
 ### 完整集群启动（开发环境）
 
-先切换到输出目录：
+在不同终端中依次执行：
 
-```bat
-cd build\debug-windows\bin\Debug
-```
-
-然后在不同终端中依次执行：
-
-```bat
+```bash
 # 终端 1 — 服务发现守护进程
-.\machined.exe
+bazel run //src/server/machined:machined
 
 # 终端 2 — DBApp 管理器
-.\atlas_dbappmgr.exe
+bazel run //src/server/dbappmgr:atlas_dbappmgr
 
 # 终端 3 — BaseApp 管理器
-.\atlas_baseappmgr.exe
+bazel run //src/server/baseappmgr:atlas_baseappmgr
 
 # 终端 4 — CellApp 管理器
-.\atlas_cellappmgr.exe
+bazel run //src/server/cellappmgr:atlas_cellappmgr
 
 # 终端 5 — 数据库进程（默认使用 XML 回退后端；可通过配置/CLI 切换为 SQLite）
-.\atlas_dbapp.exe
+bazel run //src/server/dbapp:atlas_dbapp
 
 # 终端 6 — Base 实体进程
-.\atlas_baseapp.exe
+bazel run //src/server/baseapp:atlas_baseapp
 
 # 终端 7 — 登录网关（最后启动，开始接受客户端连接）
-.\atlas_loginapp.exe
+bazel run //src/server/loginapp:atlas_loginapp
 ```
 
-Linux 下将 `.\<进程名>.exe` 替换为 `./<进程名>`，目录为 `build/debug-linux/bin/`。
+也可以先构建后直接从 `bazel-bin/` 运行二进制文件。
 
 ### 配置说明
 
@@ -326,7 +331,10 @@ C# 游戏逻辑脚本位于 `scripts/` 目录，运行时通过嵌入式 CoreCLR
 
 ```
 atlas/
-├── cmake/                  CMake 工具模块
+├── BUILD.bazel             根构建文件与功能开关配置
+├── MODULE.bazel            Bazel 模块与依赖声明
+├── .bazelrc                编译器选项与构建配置
+├── deps.bzl                非注册中心的第三方依赖
 ├── docs/
 │   ├── roadmap/            各阶段开发规划文档
 │   └── scripting/          C# 脚本层设计文档

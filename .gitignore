@@ -1,8 +1,11 @@
+# Bazel
+bazel-*/
+MODULE.bazel.lock
+
 # Build directories
 build/
 build_*/
 out/
-cmake-build-*/
 
 # IDE files
 .vs/
@@ -13,7 +16,6 @@ cmake-build-*/
 *.user
 *.sln
 *.vcxproj*
-CMakeSettings.json
 
 # Compiled objects
 *.o
@@ -27,16 +29,6 @@ CMakeSettings.json
 *.pdb
 *.ilk
 *.exp
-
-# CMake generated
-CMakeCache.txt
-CMakeFiles/
-cmake_install.cmake
-Makefile
-compile_commands.json
-CTestTestfile.cmake
-Testing/
-_deps/
 
 # OS files
 .DS_Store
