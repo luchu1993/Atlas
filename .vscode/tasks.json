@@ -26,6 +26,13 @@
       "group": { "kind": "test", "isDefault": true },
       "problemMatcher": ["$msCompile"]
     },
+    {
+      "label": "Bazel: Test Single",
+      "type": "shell",
+      "command": "bazel test //tests/unit:${input:testTarget} --test_output=all",
+      "group": "test",
+      "problemMatcher": ["$msCompile"]
+    },
 
     // ── Server Processes ──────────────────────────────────────────────
     {
@@ -96,6 +103,46 @@
       "type": "shell",
       "command": "git diff --name-only --diff-filter=AM HEAD | grep -E '\\.(cc|h|cpp|hpp)$' | xargs -r \"C:/Program Files/Microsoft Visual Studio/2022/Community/VC/Tools/Llvm/x64/bin/clang-format.exe\" -i",
       "problemMatcher": []
+    }
+  ],
+  "inputs": [
+    {
+      "id": "testTarget",
+      "type": "pickString",
+      "description": "Select unit test to run",
+      "options": [
+        "test_containers",
+        "test_hello",
+        "test_socket",
+        "test_ring_buffer",
+        "test_event_dispatcher",
+        "test_timer_queue",
+        "test_binary_stream",
+        "test_channel",
+        "test_clr_host",
+        "test_clr_script_engine",
+        "test_clr_callback",
+        "test_native_api_exports",
+        "test_xml_database",
+        "test_sqlite_database",
+        "test_coroutine",
+        "test_threading",
+        "test_string_utils",
+        "test_log",
+        "test_time",
+        "test_server_config",
+        "test_server_app",
+        "test_script_value",
+        "test_script_events",
+        "test_script_app",
+        "test_signal_handler",
+        "test_watcher",
+        "test_watcher_forwarder",
+        "test_updatable",
+        "test_seq_num",
+        "test_base_entity",
+        "test_delta_forwarder"
+      ]
     }
   ]
 }
