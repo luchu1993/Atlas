@@ -42,6 +42,8 @@ bool poll_until(EventDispatcher& disp, Pred pred,
   return false;
 }
 
+#if defined(_WIN32)
+
 auto reserve_udp_port() -> uint16_t {
   auto sock = Socket::CreateUdp();
   EXPECT_TRUE(sock.HasValue());
@@ -59,8 +61,6 @@ auto reserve_tcp_port() -> uint16_t {
   EXPECT_TRUE(local.HasValue());
   return local ? local->Port() : 0;
 }
-
-#if defined(_WIN32)
 auto executable_path() -> std::filesystem::path {
   std::wstring buffer(MAX_PATH, L'\0');
   const DWORD len = ::GetModuleFileNameW(nullptr, buffer.data(), static_cast<DWORD>(buffer.size()));
@@ -262,7 +262,6 @@ struct ChildProcess {
     }
   }
 };
-#endif
 
 auto write_entity_defs_json() -> std::filesystem::path {
   auto path = std::filesystem::temp_directory_path() / "atlas_login_flow_entity_defs.json";
@@ -378,6 +377,8 @@ auto format_process_entries(const std::vector<machined::ProcessInfo>& entries) -
   }
   return oss.str();
 }
+
+#endif  // defined(_WIN32)
 
 }  // namespace
 
