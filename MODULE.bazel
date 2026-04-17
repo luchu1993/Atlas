@@ -14,16 +14,13 @@ bazel_dep(name = "platforms", version = "0.0.10")
 # When 1.15.x lands in BCR, bump this version.
 bazel_dep(name = "googletest", version = "1.14.0")
 
-# ── Phase 2 dependencies ─────────────────────────────────────────────────────
-# pugixml — XML parsing (serialization, db_xml)
-bazel_dep(name = "pugixml", version = "1.14")
-
 # C# / .NET rules — for atlas_clrscript and C# tests (Phase 6)
 # bazel_dep(name = "rules_dotnet", version = "0.17.0")
 
-# rapidjson, zlib, sqlite3 — not in BCR, declared via module extension
+# pugixml, rapidjson, zlib, sqlite3 — not in BCR or need custom BUILD,
+# declared via module extension
 atlas_deps = use_extension("//:deps.bzl", "atlas_deps")
-use_repo(atlas_deps, "rapidjson", "zlib", "sqlite3", "dotnet_host")
+use_repo(atlas_deps, "pugixml", "rapidjson", "zlib", "sqlite3", "dotnet_host")
 
 # ── Developer tooling ────────────────────────────────────────────────────────
 # Hedron's compile_commands.json extractor for clangd / VS Code IntelliSense

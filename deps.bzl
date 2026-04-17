@@ -8,6 +8,15 @@ load("@bazel_tools//tools/build_defs/repo:http.bzl", "http_archive")
 load("//tools/dotnet:dotnet_host_repo.bzl", "dotnet_host_repo")
 
 def _atlas_deps_impl(module_ctx):
+    # pugixml 1.14 — lightweight XML parsing
+    http_archive(
+        name = "pugixml",
+        url = "https://github.com/zeux/pugixml/releases/download/v1.14/pugixml-1.14.tar.gz",
+        strip_prefix = "pugixml-1.14",
+        sha256 = "2f10e276870c64b1db6809050a75e11a897a8d7456c4be5c6b2e35a11168a015",
+        build_file = "//third_party:pugixml.BUILD",
+    )
+
     # rapidjson — header-only JSON library
     # Pinned to same commit as CMake FetchContent (ab1842a)
     http_archive(
