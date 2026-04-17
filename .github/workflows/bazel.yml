@@ -55,6 +55,9 @@ jobs:
           curl -Lo bazel https://github.com/bazelbuild/bazelisk/releases/latest/download/bazelisk-linux-amd64
           chmod +x bazel && sudo mv bazel /usr/local/bin/bazel
 
+      - name: Restore .NET projects
+        run: dotnet restore
+
       - name: Build
         run: bazel build //... ${{ matrix.config }}
 
