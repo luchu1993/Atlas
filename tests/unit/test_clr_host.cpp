@@ -6,8 +6,8 @@
 
 #include <gtest/gtest.h>
 
-#include "bazel_test_paths.h"
 #include "clrscript/clr_host.h"
+#include "test_paths.h"
 
 namespace atlas::test {
 
@@ -15,13 +15,13 @@ namespace atlas::test {
 
 static std::filesystem::path runtime_config() {
   auto* rloc = std::getenv("ATLAS_RUNTIME_CONFIG_RLOC");
-  if (rloc) return BazelRlocation(rloc);
+  if (rloc) return ResolvePath(rloc);
   return "runtime/atlas_server.runtimeconfig.json";
 }
 
 static std::filesystem::path smoke_assembly() {
   auto* rloc = std::getenv("ATLAS_SMOKE_TEST_DLL_RLOC");
-  if (rloc) return BazelRlocation(rloc);
+  if (rloc) return ResolvePath(rloc);
   return "csharp/tests/csharp/Atlas.SmokeTest/Atlas.SmokeTest.dll";
 }
 

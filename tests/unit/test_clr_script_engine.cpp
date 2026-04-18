@@ -4,7 +4,6 @@
 
 #include <gtest/gtest.h>
 
-#include "bazel_test_paths.h"
 #include "clrscript/base_native_provider.h"
 #include "clrscript/clr_bootstrap.h"
 #include "clrscript/clr_error.h"
@@ -13,6 +12,7 @@
 #include "clrscript/clr_invoke.h"
 #include "platform/dynamic_library.h"
 #include "platform/platform_config.h"
+#include "test_paths.h"
 
 // ============================================================================
 // Path helpers
@@ -22,19 +22,19 @@ namespace {
 
 std::filesystem::path runtime_config() {
   auto* rloc = std::getenv("ATLAS_RUNTIME_CONFIG_RLOC");
-  if (rloc) return atlas::test::BazelRlocation(rloc);
+  if (rloc) return atlas::test::ResolvePath(rloc);
   return "runtime/atlas_server.runtimeconfig.json";
 }
 
 std::filesystem::path test_dll() {
   auto* rloc = std::getenv("ATLAS_RUNTIME_TEST_DLL_RLOC");
-  if (rloc) return atlas::test::BazelRlocation(rloc);
+  if (rloc) return atlas::test::ResolvePath(rloc);
   return "csharp/tests/csharp/Atlas.RuntimeTest/Atlas.RuntimeTest.dll";
 }
 
 std::filesystem::path atlas_engine_path() {
   auto* rloc = std::getenv("ATLAS_ENGINE_RLOC");
-  if (rloc) return atlas::test::BazelRlocation(rloc);
+  if (rloc) return atlas::test::ResolvePath(rloc);
 #if ATLAS_PLATFORM_WINDOWS
   return "atlas_engine.dll";
 #else

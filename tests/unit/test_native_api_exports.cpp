@@ -5,9 +5,9 @@
 
 #include <gtest/gtest.h>
 
-#include "bazel_test_paths.h"
 #include "platform/dynamic_library.h"
 #include "platform/platform_config.h"
+#include "test_paths.h"
 
 using namespace atlas;
 
@@ -18,7 +18,7 @@ using namespace atlas;
 static std::filesystem::path atlas_engine_path() {
   auto* rloc = std::getenv("ATLAS_ENGINE_RLOC");
   EXPECT_NE(rloc, nullptr) << "ATLAS_ENGINE_RLOC env var must be set";
-  return atlas::test::BazelRlocation(rloc ? rloc : "");
+  return atlas::test::ResolvePath(rloc ? rloc : "");
 }
 
 // ============================================================================

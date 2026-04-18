@@ -292,10 +292,10 @@ atlas_add_test(NAME test_clr_object
 )
 
 # CLR tests that load atlas_engine shared library at runtime.
-# Paths are supplied via env vars; BazelRlocation() returns them as-is for CMake.
+# Paths are supplied via env vars set in test properties.
 
 add_executable(test_native_api_exports
-  bazel_test_paths.h
+  test_paths.h
   test_native_api_exports.cpp
 )
 target_link_libraries(test_native_api_exports PRIVATE GTest::gtest_main atlas_platform)
@@ -308,7 +308,7 @@ set_tests_properties(test_native_api_exports PROPERTIES
 )
 
 add_executable(test_clr_host
-  bazel_test_paths.h
+  test_paths.h
   test_clr_host.cpp
 )
 target_link_libraries(test_clr_host PRIVATE GTest::gtest_main atlas_clrscript)
@@ -322,7 +322,7 @@ set_tests_properties(test_clr_host PROPERTIES
 )
 
 add_executable(test_clr_callback
-  bazel_test_paths.h
+  test_paths.h
   test_clr_callback.cpp
 )
 target_link_libraries(test_clr_callback PRIVATE GTest::gtest_main atlas_clrscript atlas_platform)
@@ -336,7 +336,7 @@ set_tests_properties(test_clr_callback PROPERTIES
 )
 
 add_executable(test_clr_script_engine
-  bazel_test_paths.h
+  test_paths.h
   test_clr_script_engine.cpp
 )
 target_link_libraries(test_clr_script_engine PRIVATE GTest::gtest_main atlas_clrscript atlas_platform)
