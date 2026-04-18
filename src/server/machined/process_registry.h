@@ -64,7 +64,7 @@ class ProcessRegistry {
   // Legacy fallback used only when older clients omit PID from the heartbeat.
   [[nodiscard]] auto FindTcpChannelByIp(uint32_t ip) const -> Channel*;
 
-  [[nodiscard]] auto size() const -> std::size_t { return entries_.size(); }
+  [[nodiscard]] auto Size() const -> std::size_t { return entries_.size(); }
 
   // Iterate all entries (read-only)
   using VisitorFn = std::function<void(const ProcessEntry&)>;

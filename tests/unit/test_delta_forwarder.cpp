@@ -31,8 +31,8 @@ static auto make_delta(std::initializer_list<uint8_t> bytes) -> std::vector<std:
 
 TEST(DeltaForwarderTest, InitiallyEmpty) {
   DeltaForwarder fwd;
-  EXPECT_EQ(fwd.queue_depth(), 0u);
-  EXPECT_EQ(fwd.stats().bytes_sent, 0u);
+  EXPECT_EQ(fwd.QueueDepth(), 0u);
+  EXPECT_EQ(fwd.GetStats().bytes_sent, 0u);
 }
 
 TEST(DeltaForwarderTest, EnqueueIncreasesDepth) {
@@ -41,10 +41,10 @@ TEST(DeltaForwarderTest, EnqueueIncreasesDepth) {
   auto d2 = make_delta({4, 5});
 
   fwd.Enqueue(100, d1);
-  EXPECT_EQ(fwd.queue_depth(), 1u);
+  EXPECT_EQ(fwd.QueueDepth(), 1u);
 
   fwd.Enqueue(200, d2);
-  EXPECT_EQ(fwd.queue_depth(), 2u);
+  EXPECT_EQ(fwd.QueueDepth(), 2u);
 }
 
 TEST(DeltaForwarderTest, EnqueueSameEntityReplacesEntry) {
@@ -53,11 +53,11 @@ TEST(DeltaForwarderTest, EnqueueSameEntityReplacesEntry) {
   auto d2 = make_delta({10, 20, 30, 40, 50});
 
   fwd.Enqueue(100, d1);
-  EXPECT_EQ(fwd.queue_depth(), 1u);
+  EXPECT_EQ(fwd.QueueDepth(), 1u);
 
   // Same entity — should replace, not add.
   fwd.Enqueue(100, d2);
-  EXPECT_EQ(fwd.queue_depth(), 1u);
+  EXPECT_EQ(fwd.QueueDepth(), 1u);
 }
 
 TEST(DeltaForwarderTest, EnqueueMultipleEntities) {
@@ -66,7 +66,7 @@ TEST(DeltaForwarderTest, EnqueueMultipleEntities) {
     auto d = make_delta({static_cast<uint8_t>(id)});
     fwd.Enqueue(id, d);
   }
-  EXPECT_EQ(fwd.queue_depth(), 10u);
+  EXPECT_EQ(fwd.QueueDepth(), 10u);
 }
 
 // ============================================================================
@@ -109,7 +109,7 @@ TEST_F(DeltaForwarderFlushTest, FlushEmptyQueueReturnsZero) {
   DeltaForwarder fwd;
   auto bytes = fwd.Flush(*sender_, 4096);
   EXPECT_EQ(bytes, 0u);
-  EXPECT_EQ(fwd.queue_depth(), 0u);
+  EXPECT_EQ(fwd.QueueDepth(), 0u);
 }
 
 TEST_F(DeltaForwarderFlushTest, FlushWithinBudgetSendsAll) {
@@ -119,12 +119,12 @@ TEST_F(DeltaForwarderFlushTest, FlushWithinBudgetSendsAll) {
 
   fwd.Enqueue(100, d1);
   fwd.Enqueue(200, d2);
-  EXPECT_EQ(fwd.queue_depth(), 2u);
+  EXPECT_EQ(fwd.QueueDepth(), 2u);
 
   auto bytes = fwd.Flush(*sender_, 4096);
   EXPECT_EQ(bytes, 7u);  // 3 + 4
-  EXPECT_EQ(fwd.queue_depth(), 0u);
-  EXPECT_EQ(fwd.stats().bytes_sent, 7u);
+  EXPECT_EQ(fwd.QueueDepth(), 0u);
+  EXPECT_EQ(fwd.GetStats().bytes_sent, 7u);
 }
 
 TEST_F(DeltaForwarderFlushTest, FlushOverBudgetDefersRemaining) {
@@ -139,13 +139,13 @@ TEST_F(DeltaForwarderFlushTest, FlushOverBudgetDefersRemaining) {
   // But the first flush always sends at least one, so 3 bytes sent.
   auto bytes = fwd.Flush(*sender_, 4);
   EXPECT_EQ(bytes, 3u);
-  EXPECT_EQ(fwd.queue_depth(), 1u);  // entity 200 deferred
+  EXPECT_EQ(fwd.QueueDepth(), 1u);  // entity 200 deferred
 
   // Flush again with enough budget — the deferred entry should be sent.
   auto bytes2 = fwd.Flush(*sender_, 4096);
   EXPECT_EQ(bytes2, 5u);
-  EXPECT_EQ(fwd.queue_depth(), 0u);
-  EXPECT_EQ(fwd.stats().bytes_sent, 8u);
+  EXPECT_EQ(fwd.QueueDepth(), 0u);
+  EXPECT_EQ(fwd.GetStats().bytes_sent, 8u);
 }
 
 TEST_F(DeltaForwarderFlushTest, AlwaysSendsAtLeastOneEntryEvenIfOverBudget) {
@@ -157,7 +157,7 @@ TEST_F(DeltaForwarderFlushTest, AlwaysSendsAtLeastOneEntryEvenIfOverBudget) {
   // Budget = 1, but first entry is always sent to guarantee progress.
   auto bytes = fwd.Flush(*sender_, 1);
   EXPECT_EQ(bytes, 10u);
-  EXPECT_EQ(fwd.queue_depth(), 0u);
+  EXPECT_EQ(fwd.QueueDepth(), 0u);
 }
 
 TEST_F(DeltaForwarderFlushTest, DeferredTicksBoostPriority) {
@@ -173,18 +173,18 @@ TEST_F(DeltaForwarderFlushTest, DeferredTicksBoostPriority) {
   // After flush: entity 200 remains, its deferred_ticks becomes 1.
   auto bytes1 = fwd.Flush(*sender_, 2);
   EXPECT_EQ(bytes1, 1u);
-  EXPECT_EQ(fwd.queue_depth(), 1u);  // entity 200 deferred
+  EXPECT_EQ(fwd.QueueDepth(), 1u);  // entity 200 deferred
 
   // Now enqueue a new entity 300 (also small).
   fwd.Enqueue(300, small);
-  EXPECT_EQ(fwd.queue_depth(), 2u);
+  EXPECT_EQ(fwd.QueueDepth(), 2u);
 
   // Flush with budget = 2: entity 200 has deferred_ticks=1, entity 300 has 0.
   // Entity 200 should go first (higher deferred_ticks).
   auto bytes2 = fwd.Flush(*sender_, 2);
   // Entity 200 is 8 bytes > budget 2, but it's the first so it's sent.
   EXPECT_EQ(bytes2, 8u);
-  EXPECT_EQ(fwd.queue_depth(), 1u);  // entity 300 deferred
+  EXPECT_EQ(fwd.QueueDepth(), 1u);  // entity 300 deferred
 }
 
 TEST_F(DeltaForwarderFlushTest, ReplacePreservesAccumulatedDeferredTicks) {
@@ -204,7 +204,7 @@ TEST_F(DeltaForwarderFlushTest, ReplacePreservesAccumulatedDeferredTicks) {
   // One was sent (at least 1 guaranteed), the other deferred.
   // The deferred one now has deferred_ticks=1.
 
-  auto remaining = fwd.queue_depth();
+  auto remaining = fwd.QueueDepth();
   EXPECT_EQ(remaining, 1u);
 
   // Replace the deferred entry with new data — deferred_ticks should be preserved.
@@ -215,7 +215,7 @@ TEST_F(DeltaForwarderFlushTest, ReplacePreservesAccumulatedDeferredTicks) {
   fwd.Enqueue(200, d2);  // Same for entity 200.
 
   // The key invariant: queue depth should not exceed 2.
-  EXPECT_LE(fwd.queue_depth(), 2u);
+  EXPECT_LE(fwd.QueueDepth(), 2u);
 }
 
 }  // namespace atlas

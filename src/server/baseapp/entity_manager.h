@@ -64,8 +64,8 @@ class EntityManager {
   // Remove entities flagged pending_destroy
   void FlushDestroyed();
 
-  [[nodiscard]] auto size() const -> std::size_t { return entities_.size(); }
-  [[nodiscard]] auto proxy_count() const -> std::size_t { return proxy_count_; }
+  [[nodiscard]] auto Size() const -> std::size_t { return entities_.size(); }
+  [[nodiscard]] auto ProxyCount() const -> std::size_t { return proxy_count_; }
 
   // Iterate all entities (read-only view of pointers)
   template <typename Fn>

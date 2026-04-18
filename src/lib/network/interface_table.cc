@@ -19,7 +19,7 @@ auto InterfaceTable::Dispatch(const Address& source, Channel* channel, MessageID
                               BinaryReader& data) -> Result<void> {
   // Pre-dispatch hook: let coroutine RPC registry consume reply messages
   if (pre_dispatch_hook_) {
-    auto payload = data.data().subspan(data.Position());
+    auto payload = data.Data().subspan(data.Position());
     if (pre_dispatch_hook_(id, payload)) {
       data.Skip(payload.size());  // advance reader past consumed message
       return {};

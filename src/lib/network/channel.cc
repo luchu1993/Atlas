@@ -34,7 +34,7 @@ void Channel::Condemn() {
     dispatcher_.CancelTimer(inactivity_timer_);
     inactivity_timer_ = TimerHandle{};
   }
-  bundle_.clear();
+  bundle_.Clear();
   OnCondemned();
 }
 

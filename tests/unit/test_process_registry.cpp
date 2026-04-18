@@ -28,13 +28,13 @@ ProcessEntry make_entry(ProcessType type, std::string name, uint32_t pid,
 
 TEST(ProcessRegistry, RegisterAndSize) {
   ProcessRegistry reg;
-  EXPECT_EQ(reg.size(), 0u);
+  EXPECT_EQ(reg.Size(), 0u);
 
   EXPECT_TRUE(reg.RegisterProcess(make_entry(ProcessType::kBaseApp, "baseapp-1", 100)));
-  EXPECT_EQ(reg.size(), 1u);
+  EXPECT_EQ(reg.Size(), 1u);
 
   EXPECT_TRUE(reg.RegisterProcess(make_entry(ProcessType::kCellApp, "cellapp-1", 200)));
-  EXPECT_EQ(reg.size(), 2u);
+  EXPECT_EQ(reg.Size(), 2u);
 }
 
 TEST(ProcessRegistry, DuplicateNameRejected) {
@@ -42,7 +42,7 @@ TEST(ProcessRegistry, DuplicateNameRejected) {
   EXPECT_TRUE(reg.RegisterProcess(make_entry(ProcessType::kBaseApp, "baseapp-1", 100)));
   // Same type + name → rejected
   EXPECT_FALSE(reg.RegisterProcess(make_entry(ProcessType::kBaseApp, "baseapp-1", 101)));
-  EXPECT_EQ(reg.size(), 1u);
+  EXPECT_EQ(reg.Size(), 1u);
 }
 
 TEST(ProcessRegistry, SameNameDifferentTypeAllowed) {
@@ -50,7 +50,7 @@ TEST(ProcessRegistry, SameNameDifferentTypeAllowed) {
   EXPECT_TRUE(reg.RegisterProcess(make_entry(ProcessType::kBaseApp, "app-1", 100)));
   // Different type → allowed
   EXPECT_TRUE(reg.RegisterProcess(make_entry(ProcessType::kCellApp, "app-1", 200)));
-  EXPECT_EQ(reg.size(), 2u);
+  EXPECT_EQ(reg.Size(), 2u);
 }
 
 // Use a fake pointer value for channel uniqueness test
@@ -61,7 +61,7 @@ TEST(ProcessRegistry, DuplicateChannelRejected) {
   EXPECT_TRUE(reg.RegisterProcess(make_entry(ProcessType::kBaseApp, "baseapp-1", 100, fake_ch)));
   // Different name but same channel → rejected
   EXPECT_FALSE(reg.RegisterProcess(make_entry(ProcessType::kBaseApp, "baseapp-2", 101, fake_ch)));
-  EXPECT_EQ(reg.size(), 1u);
+  EXPECT_EQ(reg.Size(), 1u);
 }
 
 // ============================================================================
@@ -128,12 +128,12 @@ TEST(ProcessRegistry, UnregisterByChannel) {
   // NOLINTNEXTLINE(performance-no-int-to-ptr)
   Channel* fake_ch = reinterpret_cast<Channel*>(uintptr_t{0x1234});
   ASSERT_TRUE(reg.RegisterProcess(make_entry(ProcessType::kBaseApp, "baseapp-1", 100, fake_ch)));
-  EXPECT_EQ(reg.size(), 1u);
+  EXPECT_EQ(reg.Size(), 1u);
 
   auto removed = reg.UnregisterByChannel(fake_ch);
   ASSERT_TRUE(removed.has_value());
   EXPECT_EQ(removed->name, "baseapp-1");
-  EXPECT_EQ(reg.size(), 0u);
+  EXPECT_EQ(reg.Size(), 0u);
 
   // Second unregister returns nullopt
   auto gone = reg.UnregisterByChannel(fake_ch);
@@ -147,12 +147,12 @@ TEST(ProcessRegistry, UnregisterByChannel) {
 TEST(ProcessRegistry, UnregisterByName) {
   ProcessRegistry reg;
   ASSERT_TRUE(reg.RegisterProcess(make_entry(ProcessType::kBaseApp, "baseapp-1", 100)));
-  EXPECT_EQ(reg.size(), 1u);
+  EXPECT_EQ(reg.Size(), 1u);
 
   auto removed = reg.UnregisterByName(ProcessType::kBaseApp, "baseapp-1");
   ASSERT_TRUE(removed.has_value());
   EXPECT_EQ(removed->pid, 100u);
-  EXPECT_EQ(reg.size(), 0u);
+  EXPECT_EQ(reg.Size(), 0u);
 
   auto gone = reg.UnregisterByName(ProcessType::kBaseApp, "baseapp-1");
   EXPECT_FALSE(gone.has_value());

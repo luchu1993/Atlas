@@ -40,10 +40,10 @@ class IDClient {
   [[nodiscard]] auto IdsToRequest() const -> uint32_t;
 
   // Current number of available IDs in the cache.
-  [[nodiscard]] auto available() const -> uint64_t { return total_available_; }
+  [[nodiscard]] auto Available() const -> uint64_t { return total_available_; }
 
   // Returns true if available IDs are below the critically-low threshold.
-  [[nodiscard]] auto is_critically_low() const -> bool { return total_available_ < kCriticallyLow; }
+  [[nodiscard]] auto IsCriticallyLow() const -> bool { return total_available_ < kCriticallyLow; }
 
  private:
   struct Range {

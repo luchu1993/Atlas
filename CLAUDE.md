@@ -101,8 +101,7 @@ See `docs/CODING_STYLE.md` for the full project style guide.
 
 - C++20 standard, no compiler extensions
 - **Formatting**: 2-space indent, attached braces, 100-column limit (enforced by `.clang-format`)
-- **Naming**: `PascalCase` functions, `snake_case` variables, `kPascalCase` enum values/constants, `snake_case_` class members
-- Accessors matching member names stay `snake_case`: `port()` for `port_`, `set_port()` for setter
+- **Naming**: `PascalCase` functions (including accessors/mutators), `snake_case` variables, `kPascalCase` enum values/constants, `snake_case_` class members
 - Coroutine protocol functions (`await_ready`, `initial_suspend`, etc.) and STL interface functions (`begin`, `end`, `size`, etc.) stay `snake_case`
 - Platform-specific code uses suffix: `_windows.cc`, `_linux.cc`
 - Namespace: `atlas::`

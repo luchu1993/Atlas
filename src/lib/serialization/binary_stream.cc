@@ -41,15 +41,15 @@ void BinaryWriter::WritePackedInt(uint32_t value) {
   }
 }
 
-auto BinaryWriter::data() const -> std::span<const std::byte> {
+auto BinaryWriter::Data() const -> std::span<const std::byte> {
   return {buffer_.data(), buffer_.size()};
 }
 
-auto BinaryWriter::size() const -> std::size_t {
+auto BinaryWriter::Size() const -> std::size_t {
   return buffer_.size();
 }
 
-auto BinaryWriter::reserve(std::size_t bytes) -> std::byte* {
+auto BinaryWriter::Reserve(std::size_t bytes) -> std::byte* {
   auto old_size = buffer_.size();
   buffer_.resize(old_size + bytes);
   return buffer_.data() + old_size;
@@ -64,7 +64,7 @@ void BinaryWriter::Attach(std::vector<std::byte> buf) {
   buffer_ = std::move(buf);
 }
 
-void BinaryWriter::clear() {
+void BinaryWriter::Clear() {
   buffer_.clear();
 }
 

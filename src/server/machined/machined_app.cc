@@ -2,8 +2,8 @@
 
 #include <algorithm>
 
-#include "foundation/log.h"
 #include "foundation/clock.h"
+#include "foundation/log.h"
 #include "network/event_dispatcher.h"
 #include "network/network_interface.h"
 #include "server/server_config.h"
@@ -115,7 +115,7 @@ void MachinedApp::RegisterWatchers() {
 
   auto& reg = GetWatcherRegistry();
   reg.Add<std::string>("machined/registered_processes", std::function<std::string()>{[this]() {
-                         return std::to_string(process_registry_.size());
+                         return std::to_string(process_registry_.Size());
                        }});
   reg.Add<std::string>("machined/listener_subscriptions", std::function<std::string()>{[this]() {
                          return std::to_string(listener_manager_.SubscriptionCount());

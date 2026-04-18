@@ -141,15 +141,15 @@ class BinaryWriter {
   void WriteString(std::string_view str);
   void WritePackedInt(uint32_t value);
 
-  [[nodiscard]] auto data() const -> std::span<const std::byte>;
+  [[nodiscard]] auto Data() const -> std::span<const std::byte>;
   [[nodiscard]] auto MutableData() -> std::byte* { return buffer_.data(); }
-  [[nodiscard]] auto size() const -> std::size_t;
-  [[nodiscard]] auto reserve(std::size_t bytes) -> std::byte*;
+  [[nodiscard]] auto Size() const -> std::size_t;
+  [[nodiscard]] auto Reserve(std::size_t bytes) -> std::byte*;
   void Truncate(std::size_t new_size);
 
   // Attach/detach the internal buffer for zero-copy bundle composition
   void Attach(std::vector<std::byte> buf);
-  void clear();
+  void Clear();
   [[nodiscard]] auto Detach() -> std::vector<std::byte>;
 
  private:
@@ -182,7 +182,7 @@ class BinaryReader {
   [[nodiscard]] auto ReadStringView() -> Result<std::string_view>;
   [[nodiscard]] auto ReadPackedInt() -> Result<uint32_t>;
 
-  [[nodiscard]] auto data() const -> std::span<const std::byte> { return data_; }
+  [[nodiscard]] auto Data() const -> std::span<const std::byte> { return data_; }
   [[nodiscard]] auto Remaining() const -> std::size_t;
   [[nodiscard]] auto Position() const -> std::size_t;
   [[nodiscard]] auto Peek() const -> Result<std::byte>;

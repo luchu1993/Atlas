@@ -100,7 +100,7 @@ TEST(Bundle, ClearResetsState) {
   b.AddMessage(BundleTestMsg{1});
   EXPECT_EQ(b.MessageCount(), 1u);
 
-  b.clear();
+  b.Clear();
   EXPECT_TRUE(b.empty());
   EXPECT_EQ(b.MessageCount(), 0u);
   EXPECT_EQ(b.TotalSize(), 0u);

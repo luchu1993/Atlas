@@ -32,18 +32,18 @@ class BaseEntity {
   BaseEntity(const BaseEntity&) = delete;
   BaseEntity& operator=(const BaseEntity&) = delete;
 
-  [[nodiscard]] auto entity_id() const -> EntityID { return entity_id_; }
-  [[nodiscard]] auto type_id() const -> uint16_t { return type_id_; }
-  [[nodiscard]] auto dbid() const -> DatabaseID { return dbid_; }
-  void set_dbid(DatabaseID id) { dbid_ = id; }
+  [[nodiscard]] auto EntityId() const -> EntityID { return entity_id_; }
+  [[nodiscard]] auto TypeId() const -> uint16_t { return type_id_; }
+  [[nodiscard]] auto Dbid() const -> DatabaseID { return dbid_; }
+  void SetDbid(DatabaseID id) { dbid_ = id; }
 
-  [[nodiscard]] auto has_cell() const -> bool { return cell_entity_id_ != kInvalidEntityID; }
-  [[nodiscard]] auto cell_entity_id() const -> EntityID { return cell_entity_id_; }
-  [[nodiscard]] auto cell_addr() const -> const Address& { return cell_addr_; }
+  [[nodiscard]] auto HasCell() const -> bool { return cell_entity_id_ != kInvalidEntityID; }
+  [[nodiscard]] auto CellEntityId() const -> EntityID { return cell_entity_id_; }
+  [[nodiscard]] auto CellAddr() const -> const Address& { return cell_addr_; }
 
-  // Entity data blob (persistent properties serialised by C#)
-  [[nodiscard]] auto entity_data() const -> const std::vector<std::byte>& { return entity_data_; }
-  void set_entity_data(std::vector<std::byte> data) { entity_data_ = std::move(data); }
+  // Entity data blob (persistent properties serialized by C#)
+  [[nodiscard]] auto EntityData() const -> const std::vector<std::byte>& { return entity_data_; }
+  void SetEntityData(std::vector<std::byte> data) { entity_data_ = std::move(data); }
 
   // Called by DBApp write-ack
   void OnWriteAck(DatabaseID dbid, bool success);
@@ -54,7 +54,7 @@ class BaseEntity {
 
   // Mark entity as pending destruction
   void MarkForDestroy() { pending_destroy_ = true; }
-  [[nodiscard]] auto is_pending_destroy() const -> bool { return pending_destroy_; }
+  [[nodiscard]] auto IsPendingDestroy() const -> bool { return pending_destroy_; }
 
  protected:
   EntityID entity_id_;
@@ -80,21 +80,21 @@ class Proxy : public BaseEntity {
 
   // Client attachment is tracked by remote address so the live Channel can be
   // resolved on demand instead of being stored in entity state.
-  [[nodiscard]] auto client_addr() const -> const Address& { return client_addr_; }
+  [[nodiscard]] auto ClientAddr() const -> const Address& { return client_addr_; }
   void BindClient(const Address& addr);
   void UnbindClient();
 
-  [[nodiscard]] auto has_client() const -> bool { return client_attached_; }
+  [[nodiscard]] auto HasClient() const -> bool { return client_attached_; }
 
-  [[nodiscard]] auto session_key() const -> const SessionKey& { return session_key_; }
-  void set_session_key(const SessionKey& key) { session_key_ = key; }
-  [[nodiscard]] auto session_epoch() const -> uint64_t { return session_epoch_; }
+  [[nodiscard]] auto GetSessionKey() const -> const ::atlas::SessionKey& { return session_key_; }
+  void SetSessionKey(const SessionKey& key) { session_key_ = key; }
+  [[nodiscard]] auto SessionEpoch() const -> uint64_t { return session_epoch_; }
   auto BumpSessionEpoch() -> uint64_t { return ++session_epoch_; }
 
   void EnterDetachedGrace(TimePoint until);
   void ClearDetachedGrace();
-  [[nodiscard]] auto is_detached() const -> bool { return detached_grace_; }
-  [[nodiscard]] auto detached_until() const -> TimePoint { return detached_until_; }
+  [[nodiscard]] auto IsDetached() const -> bool { return detached_grace_; }
+  [[nodiscard]] auto DetachedUntil() const -> TimePoint { return detached_until_; }
 
  private:
   Address client_addr_;

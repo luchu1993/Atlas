@@ -157,7 +157,7 @@ TEST(InterfaceTable, PreDispatchHookInterceptsMessage) {
   // Build a fake message
   BinaryWriter writer;
   writer.Write<uint32_t>(12345);  // request_id
-  BinaryReader reader(writer.data());
+  BinaryReader reader(writer.Data());
 
   Address addr;
   auto result = table.Dispatch(addr, nullptr, 42, reader);
@@ -176,7 +176,7 @@ TEST(InterfaceTable, PreDispatchHookPassThrough) {
 
   BinaryWriter writer;
   writer.Write<uint32_t>(0);
-  BinaryReader reader(writer.data());
+  BinaryReader reader(writer.Data());
 
   Address addr;
   // No handler registered for this ID — should fall through to NotFound

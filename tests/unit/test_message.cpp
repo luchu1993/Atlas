@@ -66,7 +66,7 @@ TEST(Message, SerializeDeserializeRoundTrip) {
   BinaryWriter w;
   orig.Serialize(w);
 
-  BinaryReader r(w.data());
+  BinaryReader r(w.Data());
   auto result = TestMsg::Deserialize(r);
   ASSERT_TRUE(result.HasValue());
   EXPECT_EQ(result->value, 42u);
@@ -78,9 +78,9 @@ TEST(Message, FixedMessageRoundTrip) {
   BinaryWriter w;
   orig.Serialize(w);
 
-  EXPECT_EQ(w.size(), sizeof(uint32_t));
+  EXPECT_EQ(w.Size(), sizeof(uint32_t));
 
-  BinaryReader r(w.data());
+  BinaryReader r(w.Data());
   auto result = PingMsg::Deserialize(r);
   ASSERT_TRUE(result.HasValue());
   EXPECT_EQ(result->sequence, 12345u);
@@ -101,7 +101,7 @@ TEST(Message, TypedHandlerDispatch) {
   BinaryWriter w;
   msg.Serialize(w);
 
-  BinaryReader r(w.data());
+  BinaryReader r(w.Data());
   handler->HandleMessage(Address::kNone, nullptr, 1, r);
 
   EXPECT_TRUE(called);
@@ -117,7 +117,7 @@ TEST(Message, TypedHandlerMalformedData) {
   BinaryWriter w;
   w.Write<uint8_t>(0xFF);
 
-  BinaryReader r(w.data());
+  BinaryReader r(w.Data());
   handler->HandleMessage(Address::kNone, nullptr, 1, r);
 
   // Handler should not be called (deserialization failed silently)
@@ -129,7 +129,7 @@ TEST(Message, EmptyStringRoundTrip) {
   BinaryWriter w;
   orig.Serialize(w);
 
-  BinaryReader r(w.data());
+  BinaryReader r(w.Data());
   auto result = TestMsg::Deserialize(r);
   ASSERT_TRUE(result.HasValue());
   EXPECT_EQ(result->value, 0u);
@@ -142,7 +142,7 @@ TEST(Message, LargePayloadRoundTrip) {
   BinaryWriter w;
   orig.Serialize(w);
 
-  BinaryReader r(w.data());
+  BinaryReader r(w.Data());
   auto result = TestMsg::Deserialize(r);
   ASSERT_TRUE(result.HasValue());
   EXPECT_EQ(result->value, 0xDEADBEEFu);

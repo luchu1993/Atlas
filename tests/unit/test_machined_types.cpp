@@ -11,7 +11,7 @@ template <typename T>
 static auto round_trip(const T& msg) -> Result<T> {
   BinaryWriter w;
   msg.Serialize(w);
-  auto data = w.data();
+  auto data = w.Data();
   BinaryReader r(data);
   return T::Deserialize(r);
 }
@@ -168,7 +168,7 @@ TEST(MachinedTypes, QueryResponseMultipleProcesses) {
 TEST(MachinedTypes, QueryResponseCountExceedsLimit) {
   BinaryWriter w;
   w.Write<uint32_t>(10001u);  // exceeds kMaxProcesses
-  auto data = w.data();
+  auto data = w.Data();
   BinaryReader r(data);
   auto result = QueryResponse::Deserialize(r);
   EXPECT_FALSE(result.HasValue());
@@ -178,7 +178,7 @@ TEST(MachinedTypes, QueryResponseCountExceedsLimit) {
 TEST(MachinedTypes, QueryResponseTruncatedAfterCount) {
   BinaryWriter w;
   w.Write<uint32_t>(3u);  // claims 3 entries but provides none
-  auto data = w.data();
+  auto data = w.Data();
   BinaryReader r(data);
   auto result = QueryResponse::Deserialize(r);
   EXPECT_FALSE(result.HasValue());

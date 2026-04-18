@@ -13,7 +13,7 @@ template <typename Msg>
 auto round_trip(const Msg& msg) -> Msg {
   BinaryWriter w;
   msg.Serialize(w);
-  BinaryReader r(w.data());
+  BinaryReader r(w.Data());
   auto result = Msg::Deserialize(r);
   EXPECT_TRUE(result.HasValue()) << "deserialize failed";
   return result.ValueOr(Msg{});

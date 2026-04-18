@@ -83,7 +83,7 @@ auto EntityManager::AssignDbid(EntityID id, DatabaseID dbid) -> bool {
     return false;
   }
 
-  const auto kOldDbid = ent->dbid();
+  const auto kOldDbid = ent->Dbid();
   if (kOldDbid == dbid) {
     return true;
   }
@@ -105,7 +105,7 @@ auto EntityManager::AssignDbid(EntityID id, DatabaseID dbid) -> bool {
     dbid_index_[dbid] = id;
   }
 
-  ent->set_dbid(dbid);
+  ent->SetDbid(dbid);
   return true;
 }
 
@@ -115,7 +115,7 @@ auto EntityManager::AssignSessionKey(EntityID id, const SessionKey& session_key)
     return false;
   }
 
-  const auto kOldKey = proxy->session_key();
+  const auto kOldKey = proxy->GetSessionKey();
   if (kOldKey == session_key) {
     return true;
   }
@@ -139,7 +139,7 @@ auto EntityManager::AssignSessionKey(EntityID id, const SessionKey& session_key)
     session_index_[session_key] = id;
   }
 
-  proxy->set_session_key(session_key);
+  proxy->SetSessionKey(session_key);
   return true;
 }
 
@@ -164,7 +164,7 @@ auto EntityManager::IsRangeLow() const -> bool {
 
 void EntityManager::FlushDestroyed() {
   for (auto it = entities_.begin(); it != entities_.end();) {
-    if (it->second->is_pending_destroy()) {
+    if (it->second->IsPendingDestroy()) {
       this->EraseIndexesFor(*it->second);
       it = entities_.erase(it);
     } else
@@ -183,9 +183,9 @@ void EntityManager::CleanupRetiredSessions() {
 }
 
 void EntityManager::EraseIndexesFor(const BaseEntity& ent) {
-  if (ent.dbid() != kInvalidDBID) {
-    auto it = dbid_index_.find(ent.dbid());
-    if (it != dbid_index_.end() && it->second == ent.entity_id()) {
+  if (ent.Dbid() != kInvalidDBID) {
+    auto it = dbid_index_.find(ent.Dbid());
+    if (it != dbid_index_.end() && it->second == ent.EntityId()) {
       dbid_index_.erase(it);
     }
   }
@@ -194,9 +194,9 @@ void EntityManager::EraseIndexesFor(const BaseEntity& ent) {
     if (proxy_count_ > 0) {
       --proxy_count_;
     }
-    if (!proxy->session_key().IsZero()) {
-      auto it = session_index_.find(proxy->session_key());
-      if (it != session_index_.end() && it->second == ent.entity_id()) {
+    if (!proxy->GetSessionKey().IsZero()) {
+      auto it = session_index_.find(proxy->GetSessionKey());
+      if (it != session_index_.end() && it->second == ent.EntityId()) {
         session_index_.erase(it);
       }
     }

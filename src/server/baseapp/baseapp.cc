@@ -208,7 +208,7 @@ auto BaseApp::Init(int argc, char* argv[]) -> bool {
 
 void BaseApp::Fini() {
   entity_mgr_.ForEach([this](const BaseEntity& ent) {
-    if (ent.dbid() != kInvalidDBID) ReleaseCheckout(ent.dbid(), ent.type_id());
+    if (ent.Dbid() != kInvalidDBID) ReleaseCheckout(ent.Dbid(), ent.TypeId());
   });
   entity_mgr_.FlushDestroyed();
   EntityApp::Fini();
@@ -228,7 +228,7 @@ void BaseApp::OnTickComplete() {
   ExpireDetachedProxies();
   FlushClientDeltas();
   UpdateLoadEstimate();
-  ReportLoadToBaseappmgr();
+  ReportLoadToBaseAppMgr();
   CleanupExpiredPendingRequests();
   MaybeRequestMoreIds();
 
@@ -255,9 +255,9 @@ void BaseApp::RegisterWatchers() {
   wr.Add<float>("baseapp/load",
                 std::function<float()>([this] { return load_tracker_.CurrentLoad(); }));
   wr.Add<std::size_t>("baseapp/entity_count",
-                      std::function<std::size_t()>([this] { return entity_mgr_.size(); }));
+                      std::function<std::size_t()>([this] { return entity_mgr_.Size(); }));
   wr.Add<std::size_t>("baseapp/proxy_count",
-                      std::function<std::size_t()>([this] { return entity_mgr_.proxy_count(); }));
+                      std::function<std::size_t()>([this] { return entity_mgr_.ProxyCount(); }));
   wr.Add<std::size_t>("baseapp/client_binding_count",
                       std::function<std::size_t()>([this] { return entity_client_index_.size(); }));
   wr.Add<uint64_t>("baseapp/auth_success_total",
@@ -296,7 +296,7 @@ void BaseApp::RegisterWatchers() {
                    std::function<uint64_t()>([this] { return delta_bytes_sent_total_; }));
   wr.Add<std::size_t>("baseapp/delta_queue_depth", std::function<std::size_t()>([this] {
                         std::size_t depth = 0;
-                        for (auto& [_, fwd] : client_delta_forwarders_) depth += fwd.queue_depth();
+                        for (auto& [_, fwd] : client_delta_forwarders_) depth += fwd.QueueDepth();
                         return depth;
                       }));
 }
@@ -434,7 +434,7 @@ void BaseApp::RegisterInternalHandlers() {
         auto* ent = entity_mgr_.Find(msg.request_id);
         if (ent) {
           if (msg.success && msg.dbid != kInvalidDBID) {
-            (void)entity_mgr_.AssignDbid(ent->entity_id(), msg.dbid);
+            (void)entity_mgr_.AssignDbid(ent->EntityId(), msg.dbid);
           }
           ent->OnWriteAck(msg.dbid, msg.success);
         }
@@ -497,12 +497,12 @@ void BaseApp::RegisterInternalHandlers() {
         }
         auto* ent = entity_mgr_.Find(kEid);
         if (!ent) return;
-        ent->set_entity_data(std::vector<std::byte>(msg.blob.begin(), msg.blob.end()));
-        if (!RestoreManagedEntity(kEid, ent->type_id(), msg.dbid,
+        ent->SetEntityData(std::vector<std::byte>(msg.blob.begin(), msg.blob.end()));
+        if (!RestoreManagedEntity(kEid, ent->TypeId(), msg.dbid,
                                   std::span<const std::byte>(msg.blob.data(), msg.blob.size()))) {
           (void)NotifyManagedEntityDestroyed(kEid, "CreateBaseFromDB rollback");
           entity_mgr_.Destroy(kEid);
-          ReleaseCheckout(msg.dbid, ent->type_id());
+          ReleaseCheckout(msg.dbid, ent->TypeId());
         }
       });
 
@@ -530,7 +530,7 @@ void BaseApp::OnCreateBase(Channel& /*ch*/, const baseapp::CreateBase& msg) {
     return;
   }
 
-  ATLAS_LOG_DEBUG("BaseApp: created entity id={} type={}", ent->entity_id(), msg.type_id);
+  ATLAS_LOG_DEBUG("BaseApp: created entity id={} type={}", ent->EntityId(), msg.type_id);
 }
 
 void BaseApp::OnCreateBaseFromDb(Channel& /*ch*/, const baseapp::CreateBaseFromDB& msg) {
@@ -553,7 +553,7 @@ void BaseApp::OnCreateBaseFromDb(Channel& /*ch*/, const baseapp::CreateBaseFromD
   req.type_id = msg.type_id;
   req.dbid = msg.dbid;
   req.identifier = msg.identifier;
-  req.entity_id = ent->entity_id();
+  req.entity_id = ent->EntityId();
   (void)dbapp_channel_->SendMessage(req);
 }
 
@@ -563,12 +563,12 @@ void BaseApp::OnAcceptClient(Channel& /*ch*/, const baseapp::AcceptClient& msg) 
     ATLAS_LOG_WARNING("BaseApp: AcceptClient: entity {} not a Proxy", msg.dest_entity_id);
     return;
   }
-  if (!entity_mgr_.AssignSessionKey(proxy->entity_id(), msg.session_key)) {
+  if (!entity_mgr_.AssignSessionKey(proxy->EntityId(), msg.session_key)) {
     ATLAS_LOG_ERROR("BaseApp: AcceptClient: failed to bind session key to entity {}",
                     msg.dest_entity_id);
     return;
   }
-  ClearDetachedGrace(proxy->entity_id());
+  ClearDetachedGrace(proxy->EntityId());
   ATLAS_LOG_DEBUG("BaseApp: entity {} ready for client", msg.dest_entity_id);
 }
 
@@ -605,9 +605,9 @@ void BaseApp::OnCellRpcForward(Channel& /*ch*/, const baseapp::CellRpcForward& m
 
 void BaseApp::OnSelfRpcFromCell(Channel& /*ch*/, const baseapp::SelfRpcFromCell& msg) {
   auto* proxy = entity_mgr_.FindProxy(msg.base_entity_id);
-  if (!proxy || !proxy->has_client()) return;
+  if (!proxy || !proxy->HasClient()) return;
 
-  if (auto* client_ch = ResolveClientChannel(proxy->entity_id())) {
+  if (auto* client_ch = ResolveClientChannel(proxy->EntityId())) {
     (void)client_ch->SendMessage(
         static_cast<MessageID>(msg.rpc_id),
         std::span<const std::byte>(msg.payload.data(), msg.payload.size()));
@@ -616,9 +616,9 @@ void BaseApp::OnSelfRpcFromCell(Channel& /*ch*/, const baseapp::SelfRpcFromCell&
 
 void BaseApp::OnBroadcastRpcFromCell(Channel& /*ch*/, const baseapp::BroadcastRpcFromCell& msg) {
   auto* proxy = entity_mgr_.FindProxy(msg.base_entity_id);
-  if (!proxy || !proxy->has_client()) return;
+  if (!proxy || !proxy->HasClient()) return;
 
-  if (auto* client_ch = ResolveClientChannel(proxy->entity_id())) {
+  if (auto* client_ch = ResolveClientChannel(proxy->EntityId())) {
     (void)client_ch->SendMessage(
         static_cast<MessageID>(msg.rpc_id),
         std::span<const std::byte>(msg.payload.data(), msg.payload.size()));
@@ -628,9 +628,9 @@ void BaseApp::OnBroadcastRpcFromCell(Channel& /*ch*/, const baseapp::BroadcastRp
 void BaseApp::OnReplicatedDeltaFromCell(Channel& /*ch*/,
                                         const baseapp::ReplicatedDeltaFromCell& msg) {
   auto* proxy = entity_mgr_.FindProxy(msg.base_entity_id);
-  if (!proxy || !proxy->has_client()) return;
+  if (!proxy || !proxy->HasClient()) return;
 
-  auto it = entity_client_index_.find(proxy->entity_id());
+  auto it = entity_client_index_.find(proxy->EntityId());
   if (it == entity_client_index_.end()) return;
 
   client_delta_forwarders_[it->second].Enqueue(
@@ -658,7 +658,7 @@ void BaseApp::FlushClientDeltas() {
     delta_bytes_sent_total_ += bytes;
 
     // Remove empty forwarders to avoid map bloat.
-    if (forwarder.queue_depth() == 0)
+    if (forwarder.QueueDepth() == 0)
       it = client_delta_forwarders_.erase(it);
     else
       ++it;
@@ -679,9 +679,9 @@ void BaseApp::DoWriteToDb(EntityID entity_id, const std::byte* data, int32_t len
 
   dbapp::WriteEntity msg;
   // Use kCreateNew for first save (dbid=0), kExplicitDbid for updates
-  msg.flags = (ent->dbid() == kInvalidDBID) ? WriteFlags::kCreateNew : WriteFlags::kExplicitDbid;
-  msg.type_id = ent->type_id();
-  msg.dbid = ent->dbid();
+  msg.flags = (ent->Dbid() == kInvalidDBID) ? WriteFlags::kCreateNew : WriteFlags::kExplicitDbid;
+  msg.type_id = ent->TypeId();
+  msg.dbid = ent->Dbid();
   msg.entity_id = entity_id;
   msg.request_id = entity_id;  // echo back in WriteEntityAck
   msg.blob.assign(data, data + len);
@@ -694,7 +694,7 @@ auto BaseApp::CaptureEntitySnapshot(EntityID entity_id, std::vector<std::byte>& 
     return false;
   }
 
-  if (HasManagedEntityType(ent->type_id()) && native_provider_) {
+  if (HasManagedEntityType(ent->TypeId()) && native_provider_) {
     if (auto fn = native_provider_->get_entity_data_fn()) {
       uint8_t* raw = nullptr;
       int32_t len = 0;
@@ -718,19 +718,19 @@ auto BaseApp::CaptureEntitySnapshot(EntityID entity_id, std::vector<std::byte>& 
       }
       if (len == 0) {
         out.clear();
-        ent->set_entity_data({});
+        ent->SetEntityData({});
         return true;
       }
 
       out.assign(reinterpret_cast<const std::byte*>(raw),
                  reinterpret_cast<const std::byte*>(raw) + len);
-      ent->set_entity_data(out);
+      ent->SetEntityData(out);
       return true;
     }
   }
 
-  out = ent->entity_data();
-  if (HasManagedEntityType(ent->type_id())) {
+  out = ent->EntityData();
+  if (HasManagedEntityType(ent->TypeId())) {
     ATLAS_LOG_WARNING("BaseApp: no managed snapshot callback for entity={}, using cached blob",
                       entity_id);
   }
@@ -749,7 +749,7 @@ auto BaseApp::RotateProxySession(EntityID entity_id, const SessionKey& session_k
 
 void BaseApp::EnterDetachedGrace(EntityID entity_id) {
   auto* proxy = entity_mgr_.FindProxy(entity_id);
-  if (!proxy || proxy->dbid() == kInvalidDBID) {
+  if (!proxy || proxy->Dbid() == kInvalidDBID) {
     return;
   }
 
@@ -771,7 +771,7 @@ void BaseApp::ExpireDetachedProxies() {
   for (auto it = detached_proxies_.begin(); it != detached_proxies_.end();) {
     const EntityID kEntityId = it->first;
     auto* proxy = entity_mgr_.FindProxy(kEntityId);
-    if (!proxy || proxy->has_client()) {
+    if (!proxy || proxy->HasClient()) {
       if (proxy) {
         proxy->ClearDetachedGrace();
       }
@@ -807,23 +807,23 @@ auto BaseApp::TryCompleteLocalRelogin(PendingLogin pending) -> bool {
   }
 
   auto* ent = entity_mgr_.FindByDbid(pending.dbid);
-  if (!ent || ent->is_pending_destroy()) {
+  if (!ent || ent->IsPendingDestroy()) {
     return false;
   }
 
-  auto* proxy = entity_mgr_.FindProxy(ent->entity_id());
+  auto* proxy = entity_mgr_.FindProxy(ent->EntityId());
   if (!proxy) {
     return false;
   }
 
-  const bool kWasDetached = proxy->is_detached();
-  if (auto* existing_client = ResolveClientChannel(proxy->entity_id())) {
+  const bool kWasDetached = proxy->IsDetached();
+  if (auto* existing_client = ResolveClientChannel(proxy->EntityId())) {
     existing_client->Condemn();
   }
-  UnbindClient(proxy->entity_id());
-  ClearDetachedGrace(proxy->entity_id());
+  UnbindClient(proxy->EntityId());
+  ClearDetachedGrace(proxy->EntityId());
 
-  if (!RotateProxySession(proxy->entity_id(), pending.session_key)) {
+  if (!RotateProxySession(proxy->EntityId(), pending.session_key)) {
     FailPendingPrepareLogin(pending, "session_conflict");
     FinishLoginFlow(pending.dbid);
     return true;
@@ -832,7 +832,7 @@ auto BaseApp::TryCompleteLocalRelogin(PendingLogin pending) -> bool {
   login::PrepareLoginResult reply;
   reply.request_id = pending.login_request_id;
   reply.success = true;
-  reply.entity_id = proxy->entity_id();
+  reply.entity_id = proxy->EntityId();
   SendPrepareLoginResult(pending.loginapp_addr, reply);
 
   ++fast_relogin_total_;
@@ -840,8 +840,8 @@ auto BaseApp::TryCompleteLocalRelogin(PendingLogin pending) -> bool {
     ++detached_relogin_total_;
   }
 
-  ATLAS_LOG_DEBUG("BaseApp: fast relogin entity={} dbid={} detached={} epoch={}",
-                  proxy->entity_id(), pending.dbid, kWasDetached ? 1 : 0, proxy->session_epoch());
+  ATLAS_LOG_DEBUG("BaseApp: fast relogin entity={} dbid={} detached={} epoch={}", proxy->EntityId(),
+                  pending.dbid, kWasDetached ? 1 : 0, proxy->SessionEpoch());
   FinishLoginFlow(pending.dbid);
   return true;
 }
@@ -865,9 +865,9 @@ void BaseApp::CompletePrepareLoginFromCheckout(PendingLogin pending, DatabaseID 
   }
 
   if (auto* blocking_ent = entity_mgr_.FindByDbid(dbid); blocking_ent) {
-    DeferPrepareLoginFromCheckout(blocking_ent->entity_id(), std::move(pending), dbid, type_id,
+    DeferPrepareLoginFromCheckout(blocking_ent->EntityId(), std::move(pending), dbid, type_id,
                                   blob);
-    StartDisconnectLogoff(blocking_ent->entity_id());
+    StartDisconnectLogoff(blocking_ent->EntityId());
     return;
   }
 
@@ -883,17 +883,17 @@ void BaseApp::CompletePrepareLoginFromCheckout(PendingLogin pending, DatabaseID 
     return;
   }
 
-  ent->set_entity_data(std::vector<std::byte>(blob.begin(), blob.end()));
-  if (!entity_mgr_.AssignDbid(ent->entity_id(), dbid)) {
+  ent->SetEntityData(std::vector<std::byte>(blob.begin(), blob.end()));
+  if (!entity_mgr_.AssignDbid(ent->EntityId(), dbid)) {
     if (auto* blocking_ent = entity_mgr_.FindByDbid(dbid); blocking_ent) {
-      entity_mgr_.Destroy(ent->entity_id());
-      DeferPrepareLoginFromCheckout(blocking_ent->entity_id(), std::move(pending), dbid, type_id,
+      entity_mgr_.Destroy(ent->EntityId());
+      DeferPrepareLoginFromCheckout(blocking_ent->EntityId(), std::move(pending), dbid, type_id,
                                     blob);
-      StartDisconnectLogoff(blocking_ent->entity_id());
+      StartDisconnectLogoff(blocking_ent->EntityId());
       return;
     }
 
-    entity_mgr_.Destroy(ent->entity_id());
+    entity_mgr_.Destroy(ent->EntityId());
     ReleaseCheckout(dbid, type_id);
     reply.success = false;
     reply.error = "dbid_conflict";
@@ -902,9 +902,9 @@ void BaseApp::CompletePrepareLoginFromCheckout(PendingLogin pending, DatabaseID 
     return;
   }
 
-  auto* proxy = entity_mgr_.FindProxy(ent->entity_id());
-  if (proxy && !RotateProxySession(proxy->entity_id(), pending.session_key)) {
-    entity_mgr_.Destroy(ent->entity_id());
+  auto* proxy = entity_mgr_.FindProxy(ent->EntityId());
+  if (proxy && !RotateProxySession(proxy->EntityId(), pending.session_key)) {
+    entity_mgr_.Destroy(ent->EntityId());
     ReleaseCheckout(dbid, type_id);
     reply.success = false;
     reply.error = "session_conflict";
@@ -913,9 +913,9 @@ void BaseApp::CompletePrepareLoginFromCheckout(PendingLogin pending, DatabaseID 
     return;
   }
 
-  if (!RestoreManagedEntity(ent->entity_id(), type_id, dbid, blob)) {
-    (void)NotifyManagedEntityDestroyed(ent->entity_id(), "login rollback");
-    entity_mgr_.Destroy(ent->entity_id());
+  if (!RestoreManagedEntity(ent->EntityId(), type_id, dbid, blob)) {
+    (void)NotifyManagedEntityDestroyed(ent->EntityId(), "login rollback");
+    entity_mgr_.Destroy(ent->EntityId());
     ReleaseCheckout(dbid, type_id);
     reply.success = false;
     reply.error = "restore_entity_failed";
@@ -925,15 +925,15 @@ void BaseApp::CompletePrepareLoginFromCheckout(PendingLogin pending, DatabaseID 
   }
 
   prepared_login_entities_[pending.login_request_id] =
-      PreparedLoginEntity{ent->entity_id(), dbid, type_id, Clock::now()};
-  prepared_login_requests_by_entity_[ent->entity_id()] = pending.login_request_id;
+      PreparedLoginEntity{ent->EntityId(), dbid, type_id, Clock::now()};
+  prepared_login_requests_by_entity_[ent->EntityId()] = pending.login_request_id;
 
   reply.success = true;
-  reply.entity_id = ent->entity_id();
+  reply.entity_id = ent->EntityId();
   SendPrepareLoginResult(pending.loginapp_addr, reply);
   FinishLoginFlow(pending.dbid);
 
-  ATLAS_LOG_DEBUG("BaseApp: login entity created id={} dbid={}", ent->entity_id(), dbid);
+  ATLAS_LOG_DEBUG("BaseApp: login entity created id={} dbid={}", ent->EntityId(), dbid);
 }
 
 void BaseApp::DeferPrepareLoginFromCheckout(EntityID blocking_entity_id, PendingLogin pending,
@@ -1125,7 +1125,7 @@ void BaseApp::BeginLogoffPersist(EntityID entity_id, DatabaseID dbid, uint16_t t
   }
 
   auto* ent = entity_mgr_.Find(entity_id);
-  if (!ent || ent->dbid() != dbid || ent->is_pending_destroy()) {
+  if (!ent || ent->Dbid() != dbid || ent->IsPendingDestroy()) {
     if (continuation_request_id != 0)
       ContinueLoginAfterForceLogoff(continuation_request_id);
     else
@@ -1201,7 +1201,7 @@ void BaseApp::BeginLogoffPersist(EntityID entity_id, DatabaseID dbid, uint16_t t
 
 void BaseApp::BeginForceLogoffPersist(uint32_t force_request_id, EntityID entity_id) {
   auto* ent = entity_mgr_.Find(entity_id);
-  if (!ent || ent->dbid() == kInvalidDBID) {
+  if (!ent || ent->Dbid() == kInvalidDBID) {
     if (!FinalizeForceLogoff(entity_id)) {
       FailPendingForceLogoff(force_request_id, "force_logoff_destroy_failed");
       auto pending_it = pending_force_logoffs_.find(force_request_id);
@@ -1214,18 +1214,18 @@ void BaseApp::BeginForceLogoffPersist(uint32_t force_request_id, EntityID entity
     return;
   }
 
-  BeginLogoffPersist(entity_id, ent->dbid(), ent->type_id(), force_request_id);
+  BeginLogoffPersist(entity_id, ent->Dbid(), ent->TypeId(), force_request_id);
 }
 
 void BaseApp::StartDisconnectLogoff(EntityID entity_id) {
   ClearDetachedGrace(entity_id);
 
   auto* ent = entity_mgr_.Find(entity_id);
-  if (!ent || ent->is_pending_destroy()) {
+  if (!ent || ent->IsPendingDestroy()) {
     return;
   }
 
-  const DatabaseID kDbid = ent->dbid();
+  const DatabaseID kDbid = ent->Dbid();
   if (kDbid != kInvalidDBID) {
     active_login_dbids_.insert(kDbid);
   }
@@ -1235,7 +1235,7 @@ void BaseApp::StartDisconnectLogoff(EntityID entity_id) {
     return;
   }
 
-  BeginLogoffPersist(entity_id, kDbid, ent->type_id(), 0);
+  BeginLogoffPersist(entity_id, kDbid, ent->TypeId(), 0);
 }
 
 void BaseApp::ContinueLoginAfterForceLogoff(uint32_t force_request_id) {
@@ -1293,12 +1293,11 @@ auto BaseApp::FinalizeForceLogoff(EntityID entity_id) -> bool {
 void BaseApp::ProcessForceLogoffRequest(const baseapp::ForceLogoff& msg) {
   EntityID found_id = kInvalidEntityID;
   if (auto* ent = entity_mgr_.FindByDbid(msg.dbid)) {
-    found_id = ent->entity_id();
+    found_id = ent->EntityId();
   }
 
   if (found_id != kInvalidEntityID) {
-    if (auto* found_ent = entity_mgr_.Find(found_id);
-        found_ent && found_ent->is_pending_destroy()) {
+    if (auto* found_ent = entity_mgr_.Find(found_id); found_ent && found_ent->IsPendingDestroy()) {
       if (pending_force_logoffs_.contains(msg.request_id))
         ContinueLoginAfterForceLogoff(msg.request_id);
       return;
@@ -1326,18 +1325,18 @@ void BaseApp::DoGiveClientToLocal(EntityID src_id, EntityID dest_id) {
     ATLAS_LOG_ERROR("BaseApp: give_client_to: invalid src={} or dest={}", src_id, dest_id);
     return;
   }
-  if (!src_proxy->has_client()) {
+  if (!src_proxy->HasClient()) {
     ATLAS_LOG_WARNING("BaseApp: give_client_to: src={} has no client", src_id);
     return;
   }
-  const auto kSessionKey = src_proxy->session_key();
+  const auto kSessionKey = src_proxy->GetSessionKey();
   (void)entity_mgr_.ClearSessionKey(src_id);
   if (!entity_mgr_.AssignSessionKey(dest_id, kSessionKey)) {
     ATLAS_LOG_ERROR("BaseApp: give_client_to: failed to move session key to dest={}", dest_id);
     return;
   }
 
-  const auto kClientAddr = src_proxy->client_addr();
+  const auto kClientAddr = src_proxy->ClientAddr();
   UnbindClient(src_id);
   if (!BindClient(dest_id, kClientAddr)) {
     ATLAS_LOG_ERROR("BaseApp: give_client_to: failed to move client binding to dest={}", dest_id);
@@ -1347,7 +1346,7 @@ void BaseApp::DoGiveClientToLocal(EntityID src_id, EntityID dest_id) {
 void BaseApp::DoGiveClientToRemote(EntityID src_id, EntityID /*dest_id*/,
                                    const Address& dest_baseapp) {
   auto* src_proxy = entity_mgr_.FindProxy(src_id);
-  if (!src_proxy || !src_proxy->has_client()) {
+  if (!src_proxy || !src_proxy->HasClient()) {
     ATLAS_LOG_ERROR("BaseApp: give_client_to_remote: src={} has no client", src_id);
     return;
   }
@@ -1361,7 +1360,7 @@ void BaseApp::DoGiveClientToRemote(EntityID src_id, EntityID /*dest_id*/,
 
   baseapp::AcceptClient accept;
   accept.dest_entity_id = src_id;
-  accept.session_key = src_proxy->session_key();
+  accept.session_key = src_proxy->GetSessionKey();
   (void)(*dest_ch_result)->SendMessage(accept);
 
   UnbindClient(src_id);
@@ -1395,7 +1394,7 @@ void BaseApp::OnRegisterBaseappAck(Channel& /*ch*/, const baseappmgr::RegisterBa
 void BaseApp::OnGetEntityIdsAck(Channel& /*ch*/, const dbapp::GetEntityIdsAck& msg) {
   id_client_.AddIds(msg.start, msg.end);
   ATLAS_LOG_INFO("BaseApp: received {} EntityIDs [{},{}] from DBApp, available={}", msg.count,
-                 msg.start, msg.end, id_client_.available());
+                 msg.start, msg.end, id_client_.Available());
 }
 
 auto BaseApp::ResolveInternalChannel(const Address& addr) -> Channel* {
@@ -1419,7 +1418,7 @@ auto BaseApp::ResolveClientChannel(EntityID entity_id) -> Channel* {
   }
 
   auto* proxy = entity_mgr_.FindProxy(entity_id);
-  if (!proxy || !proxy->has_client()) {
+  if (!proxy || !proxy->HasClient()) {
     auto reverse = client_entity_index_.find(it->second);
     if (reverse != client_entity_index_.end() && reverse->second == entity_id) {
       client_entity_index_.erase(reverse);
@@ -1483,7 +1482,7 @@ void BaseApp::OnExternalClientDisconnect(Channel& ch) {
 
   const auto kEntityId = it->second;
   UnbindClient(kEntityId);
-  if (auto* proxy = entity_mgr_.FindProxy(kEntityId); proxy && proxy->dbid() != kInvalidDBID) {
+  if (auto* proxy = entity_mgr_.FindProxy(kEntityId); proxy && proxy->Dbid() != kInvalidDBID) {
     EnterDetachedGrace(kEntityId);
     ATLAS_LOG_DEBUG("BaseApp: client disconnected from entity={} entering detached grace",
                     kEntityId);
@@ -1943,7 +1942,7 @@ auto BaseApp::RestoreManagedEntity(EntityID entity_id, uint16_t type_id, Databas
 
 auto BaseApp::NotifyManagedEntityDestroyed(EntityID entity_id, std::string_view context) -> bool {
   auto* ent = entity_mgr_.Find(entity_id);
-  if (!ent || !HasManagedEntityType(ent->type_id())) {
+  if (!ent || !HasManagedEntityType(ent->TypeId())) {
     return true;
   }
 
@@ -1964,8 +1963,8 @@ auto BaseApp::NotifyManagedEntityDestroyed(EntityID entity_id, std::string_view 
 
 auto BaseApp::CaptureLoadSnapshot() const -> LoadSnapshot {
   LoadSnapshot snapshot;
-  snapshot.entity_count = static_cast<uint32_t>(entity_mgr_.size());
-  snapshot.proxy_count = static_cast<uint32_t>(entity_mgr_.proxy_count());
+  snapshot.entity_count = static_cast<uint32_t>(entity_mgr_.Size());
+  snapshot.proxy_count = static_cast<uint32_t>(entity_mgr_.ProxyCount());
   snapshot.pending_prepare_count = static_cast<uint32_t>(pending_logins_.size());
   snapshot.pending_force_logoff_count = static_cast<uint32_t>(pending_force_logoffs_.size());
   snapshot.detached_proxy_count = static_cast<uint32_t>(detached_proxies_.size());
@@ -1978,7 +1977,7 @@ void BaseApp::UpdateLoadEstimate() {
   load_tracker_.ObserveTickComplete(Config().update_hertz, CaptureLoadSnapshot());
 }
 
-void BaseApp::ReportLoadToBaseappmgr() {
+void BaseApp::ReportLoadToBaseAppMgr() {
   if (!baseappmgr_channel_ || app_id_ == 0) {
     return;
   }
@@ -2028,7 +2027,7 @@ void BaseApp::OnForceLogoff(Channel& ch, const baseapp::ForceLogoff& msg) {
 
   EntityID found_id = kInvalidEntityID;
   if (auto* ent = entity_mgr_.FindByDbid(msg.dbid)) {
-    found_id = ent->entity_id();
+    found_id = ent->EntityId();
   }
 
   if (found_id == kInvalidEntityID) {
@@ -2042,19 +2041,19 @@ void BaseApp::OnForceLogoff(Channel& ch, const baseapp::ForceLogoff& msg) {
   pending_remote_force_logoff_acks_[found_id].push_back({ch.RemoteAddress(), msg.request_id});
 
   auto* ent = entity_mgr_.Find(found_id);
-  if (!ent || ent->is_pending_destroy()) {
+  if (!ent || ent->IsPendingDestroy()) {
     FlushRemoteForceLogoffAcks(found_id, true);
     return;
   }
 
-  if (ent->dbid() == kInvalidDBID) {
+  if (ent->Dbid() == kInvalidDBID) {
     (void)FinalizeForceLogoff(found_id);
     FlushRemoteForceLogoffAcks(found_id, true);
     return;
   }
 
   ++force_logoff_total_;
-  BeginLogoffPersist(found_id, ent->dbid(), ent->type_id(), 0);
+  BeginLogoffPersist(found_id, ent->Dbid(), ent->TypeId(), 0);
 }
 
 void BaseApp::OnForceLogoffAck(Channel& /*ch*/, const baseapp::ForceLogoffAck& msg) {
@@ -2095,7 +2094,7 @@ void BaseApp::OnClientAuthenticate(Channel& ch, const baseapp::Authenticate& msg
     return;
   }
 
-  if (!BindClient(proxy->entity_id(), ch.RemoteAddress())) {
+  if (!BindClient(proxy->EntityId(), ch.RemoteAddress())) {
     ++auth_fail_total_;
     baseapp::AuthenticateResult res;
     res.success = false;
@@ -2106,13 +2105,13 @@ void BaseApp::OnClientAuthenticate(Channel& ch, const baseapp::Authenticate& msg
 
   baseapp::AuthenticateResult res;
   res.success = true;
-  res.entity_id = proxy->entity_id();
-  res.type_id = proxy->type_id();
+  res.entity_id = proxy->EntityId();
+  res.type_id = proxy->TypeId();
   (void)ch.SendMessage(res);
   ++auth_success_total_;
-  ClearPreparedLoginEntity(proxy->entity_id());
+  ClearPreparedLoginEntity(proxy->EntityId());
 
-  ATLAS_LOG_DEBUG("BaseApp: client authenticated as entity={}", proxy->entity_id());
+  ATLAS_LOG_DEBUG("BaseApp: client authenticated as entity={}", proxy->EntityId());
 }
 
 // ============================================================================

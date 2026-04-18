@@ -93,7 +93,7 @@ TEST(CommonMessages, HeartbeatRoundTrip) {
   BinaryWriter w;
   hb.Serialize(w);
 
-  BinaryReader r(w.data());
+  BinaryReader r(w.Data());
   auto result = msg::Heartbeat::Deserialize(r);
   ASSERT_TRUE(result.HasValue());
   EXPECT_EQ(result->game_time, 42u);
@@ -106,7 +106,7 @@ TEST(CommonMessages, ShutdownRequestRoundTrip) {
   BinaryWriter w;
   req.Serialize(w);
 
-  BinaryReader r(w.data());
+  BinaryReader r(w.Data());
   auto result = msg::ShutdownRequest::Deserialize(r);
   ASSERT_TRUE(result.HasValue());
   EXPECT_EQ(result->reason, 2u);

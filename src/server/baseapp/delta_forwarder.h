@@ -43,9 +43,9 @@ class DeltaForwarder {
   auto Flush(Channel& client_ch, uint32_t budget_bytes) -> uint32_t;
 
   /// Current queue depth (number of pending entities).
-  [[nodiscard]] auto queue_depth() const -> std::size_t { return queue_.size(); }
+  [[nodiscard]] auto QueueDepth() const -> std::size_t { return queue_.size(); }
 
-  [[nodiscard]] auto stats() const -> const Stats& { return stats_; }
+  [[nodiscard]] auto GetStats() const -> const Stats& { return stats_; }
 
   /// Reserved client-facing message ID for delta updates.
   static constexpr MessageID kClientDeltaMessageId = static_cast<MessageID>(0xF001);

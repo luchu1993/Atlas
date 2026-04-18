@@ -16,7 +16,7 @@ TEST(BinaryStream, TrivialTypesRoundTrip) {
   writer.Write<float>(3.14f);
   writer.Write<double>(2.718281828);
 
-  BinaryReader reader(writer.data());
+  BinaryReader reader(writer.Data());
 
   auto v1 = reader.Read<int8_t>();
   ASSERT_TRUE(v1.HasValue());
@@ -47,7 +47,7 @@ TEST(BinaryStream, StringRoundTrip) {
   BinaryWriter writer;
   writer.WriteString("hello atlas");
 
-  BinaryReader reader(writer.data());
+  BinaryReader reader(writer.Data());
   auto s = reader.ReadString();
   ASSERT_TRUE(s.HasValue());
   EXPECT_EQ(*s, "hello atlas");
@@ -56,9 +56,9 @@ TEST(BinaryStream, StringRoundTrip) {
 TEST(BinaryStream, PackedIntSmallValue) {
   BinaryWriter writer;
   writer.WritePackedInt(100);
-  EXPECT_EQ(writer.size(), 1u);
+  EXPECT_EQ(writer.Size(), 1u);
 
-  BinaryReader reader(writer.data());
+  BinaryReader reader(writer.Data());
   auto v = reader.ReadPackedInt();
   ASSERT_TRUE(v.HasValue());
   EXPECT_EQ(*v, 100u);
@@ -67,9 +67,9 @@ TEST(BinaryStream, PackedIntSmallValue) {
 TEST(BinaryStream, PackedIntLargeValue) {
   BinaryWriter writer;
   writer.WritePackedInt(300);
-  EXPECT_EQ(writer.size(), 3u);
+  EXPECT_EQ(writer.Size(), 3u);
 
-  BinaryReader reader(writer.data());
+  BinaryReader reader(writer.Data());
   auto v = reader.ReadPackedInt();
   ASSERT_TRUE(v.HasValue());
   EXPECT_EQ(*v, 300u);
@@ -79,7 +79,7 @@ TEST(BinaryStream, ReadPastEndReturnsError) {
   BinaryWriter writer;
   writer.Write<int8_t>(1);
 
-  BinaryReader reader(writer.data());
+  BinaryReader reader(writer.Data());
   (void)reader.Read<int8_t>();
   auto bad = reader.Read<int32_t>();
   EXPECT_FALSE(bad.HasValue());
@@ -89,15 +89,15 @@ TEST(BinaryStream, ReadPastEndReturnsError) {
 TEST(BinaryStream, ClearAndDetach) {
   BinaryWriter writer;
   writer.Write<int32_t>(123);
-  EXPECT_GT(writer.size(), 0u);
+  EXPECT_GT(writer.Size(), 0u);
 
   auto buf = writer.Detach();
-  EXPECT_EQ(writer.size(), 0u);
+  EXPECT_EQ(writer.Size(), 0u);
   EXPECT_EQ(buf.size(), sizeof(int32_t));
 
   writer.Write<int32_t>(456);
-  writer.clear();
-  EXPECT_EQ(writer.size(), 0u);
+  writer.Clear();
+  EXPECT_EQ(writer.Size(), 0u);
 }
 
 TEST(BinaryStream, MultipleWritesThenReads) {
@@ -107,7 +107,7 @@ TEST(BinaryStream, MultipleWritesThenReads) {
   writer.Write<uint32_t>(3);
   writer.WriteString("end");
 
-  BinaryReader reader(writer.data());
+  BinaryReader reader(writer.Data());
   EXPECT_EQ(*reader.Read<uint32_t>(), 1u);
   EXPECT_EQ(*reader.Read<uint32_t>(), 2u);
   EXPECT_EQ(*reader.Read<uint32_t>(), 3u);
@@ -125,11 +125,11 @@ TEST(BinaryStream, MultipleWritesThenReads) {
 TEST(BinaryStream, WriteBytesNullPointerDoesNotCrash) {
   BinaryWriter writer;
   writer.WriteBytes(nullptr, 0);
-  EXPECT_EQ(writer.size(), 0u);
+  EXPECT_EQ(writer.Size(), 0u);
 
   // Non-zero size with null should also not crash (guarded)
   writer.WriteBytes(nullptr, 100);
-  EXPECT_EQ(writer.size(), 0u);
+  EXPECT_EQ(writer.Size(), 0u);
 }
 
 // ============================================================================
@@ -144,7 +144,7 @@ TEST(BinaryStream, ReadStringInsufficientData) {
   writer.Write<uint8_t>(0x42);
   writer.Write<uint8_t>(0x43);
 
-  BinaryReader reader(writer.data());
+  BinaryReader reader(writer.Data());
   auto s = reader.ReadString();
   EXPECT_FALSE(s.HasValue());
   EXPECT_TRUE(reader.HasError());
@@ -158,7 +158,7 @@ TEST(BinaryStream, EmptyStringRoundTrip) {
   BinaryWriter writer;
   writer.WriteString("");
 
-  BinaryReader reader(writer.data());
+  BinaryReader reader(writer.Data());
   auto s = reader.ReadString();
   ASSERT_TRUE(s.HasValue());
   EXPECT_EQ(*s, "");
@@ -176,9 +176,9 @@ TEST(BinaryStream, PackedIntBoundaryValues) {
   writer.WritePackedInt(256);
 
   // 0 → 1 byte, 254 → 3 bytes, 255 → 3 bytes, 256 → 3 bytes
-  EXPECT_EQ(writer.size(), 1u + 3u + 3u + 3u);
+  EXPECT_EQ(writer.Size(), 1u + 3u + 3u + 3u);
 
-  BinaryReader reader(writer.data());
+  BinaryReader reader(writer.Data());
   EXPECT_EQ(*reader.ReadPackedInt(), 0u);
   EXPECT_EQ(*reader.ReadPackedInt(), 254u);
   EXPECT_EQ(*reader.ReadPackedInt(), 255u);
@@ -195,7 +195,7 @@ TEST(BinaryStream, ReaderSkipAndPosition) {
   writer.Write<int32_t>(200);
   writer.Write<int32_t>(300);
 
-  BinaryReader reader(writer.data());
+  BinaryReader reader(writer.Data());
   EXPECT_EQ(reader.Position(), 0u);
 
   reader.Skip(4);
@@ -220,7 +220,7 @@ TEST(BinaryStream, PeekDoesNotAdvance) {
   BinaryWriter writer;
   writer.Write<uint8_t>(0xAB);
 
-  BinaryReader reader(writer.data());
+  BinaryReader reader(writer.Data());
   auto p = reader.Peek();
   ASSERT_TRUE(p.HasValue());
   EXPECT_EQ(*p, std::byte{0xAB});

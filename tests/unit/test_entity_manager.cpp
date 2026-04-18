@@ -46,18 +46,18 @@ TEST(EntityManager, CreateFailsWhenIDsExhausted) {
 
   auto* ent = mgr.Create(1, false);
   EXPECT_EQ(ent, nullptr);
-  EXPECT_EQ(mgr.size(), 0u);
+  EXPECT_EQ(mgr.Size(), 0u);
 }
 
 TEST(EntityManager, CreateAndFind) {
   TestFixture f;
   auto* ent = f.mgr.Create(42, false);
   ASSERT_NE(ent, nullptr);
-  EXPECT_EQ(ent->type_id(), 42u);
-  EXPECT_EQ(ent->dbid(), kInvalidDBID);
-  EXPECT_EQ(f.mgr.size(), 1u);
+  EXPECT_EQ(ent->TypeId(), 42u);
+  EXPECT_EQ(ent->Dbid(), kInvalidDBID);
+  EXPECT_EQ(f.mgr.Size(), 1u);
 
-  auto* found = f.mgr.Find(ent->entity_id());
+  auto* found = f.mgr.Find(ent->EntityId());
   EXPECT_EQ(found, ent);
 }
 
@@ -65,11 +65,11 @@ TEST(EntityManager, CreateProxy) {
   TestFixture f;
   auto* ent = f.mgr.Create(7, true);
   ASSERT_NE(ent, nullptr);
-  EXPECT_EQ(f.mgr.size(), 1u);
+  EXPECT_EQ(f.mgr.Size(), 1u);
 
-  auto* proxy = f.mgr.FindProxy(ent->entity_id());
+  auto* proxy = f.mgr.FindProxy(ent->EntityId());
   ASSERT_NE(proxy, nullptr);
-  EXPECT_FALSE(proxy->has_client());
+  EXPECT_FALSE(proxy->HasClient());
 }
 
 TEST(EntityManager, FindByDbidUsesSecondaryIndex) {
@@ -78,10 +78,10 @@ TEST(EntityManager, FindByDbidUsesSecondaryIndex) {
   ASSERT_NE(ent, nullptr);
 
   EXPECT_EQ(f.mgr.FindByDbid(1001), nullptr);
-  EXPECT_TRUE(f.mgr.AssignDbid(ent->entity_id(), 1001));
+  EXPECT_TRUE(f.mgr.AssignDbid(ent->EntityId(), 1001));
   EXPECT_EQ(f.mgr.FindByDbid(1001), ent);
 
-  f.mgr.Destroy(ent->entity_id());
+  f.mgr.Destroy(ent->EntityId());
   EXPECT_EQ(f.mgr.FindByDbid(1001), nullptr);
 }
 
@@ -92,10 +92,10 @@ TEST(EntityManager, FindProxyBySessionUsesSecondaryIndex) {
 
   auto key = SessionKey::Generate();
   EXPECT_EQ(f.mgr.FindProxyBySession(key), nullptr);
-  EXPECT_TRUE(f.mgr.AssignSessionKey(ent->entity_id(), key));
-  EXPECT_EQ(f.mgr.FindProxyBySession(key), f.mgr.FindProxy(ent->entity_id()));
+  EXPECT_TRUE(f.mgr.AssignSessionKey(ent->EntityId(), key));
+  EXPECT_EQ(f.mgr.FindProxyBySession(key), f.mgr.FindProxy(ent->EntityId()));
 
-  EXPECT_TRUE(f.mgr.ClearSessionKey(ent->entity_id()));
+  EXPECT_TRUE(f.mgr.ClearSessionKey(ent->EntityId()));
   EXPECT_EQ(f.mgr.FindProxyBySession(key), nullptr);
 }
 
@@ -106,8 +106,8 @@ TEST(EntityManager, DuplicateDbidAssignmentIsRejected) {
   ASSERT_NE(a, nullptr);
   ASSERT_NE(b, nullptr);
 
-  EXPECT_TRUE(f.mgr.AssignDbid(a->entity_id(), 77));
-  EXPECT_FALSE(f.mgr.AssignDbid(b->entity_id(), 77));
+  EXPECT_TRUE(f.mgr.AssignDbid(a->EntityId(), 77));
+  EXPECT_FALSE(f.mgr.AssignDbid(b->EntityId(), 77));
   EXPECT_EQ(f.mgr.FindByDbid(77), a);
 }
 
@@ -120,36 +120,36 @@ TEST(EntityManager, CreateRejectsDuplicateDbid) {
   auto* second = f.mgr.Create(2, false, 1234);
   EXPECT_EQ(second, nullptr);
   EXPECT_EQ(f.mgr.FindByDbid(1234), first);
-  EXPECT_EQ(f.mgr.size(), 1u);
+  EXPECT_EQ(f.mgr.Size(), 1u);
 }
 
 TEST(EntityManager, NonProxyFindProxy) {
   TestFixture f;
   auto* ent = f.mgr.Create(7, false);
-  EXPECT_EQ(f.mgr.FindProxy(ent->entity_id()), nullptr);
+  EXPECT_EQ(f.mgr.FindProxy(ent->EntityId()), nullptr);
 }
 
 TEST(EntityManager, Destroy) {
   TestFixture f;
   auto* ent = f.mgr.Create(1, false);
-  EntityID id = ent->entity_id();
+  EntityID id = ent->EntityId();
   f.mgr.Destroy(id);
   EXPECT_EQ(f.mgr.Find(id), nullptr);
-  EXPECT_EQ(f.mgr.size(), 0u);
+  EXPECT_EQ(f.mgr.Size(), 0u);
 }
 
 TEST(EntityManager, FlushDestroyed) {
   TestFixture f;
   auto* ent1 = f.mgr.Create(1, false);
   auto* ent2 = f.mgr.Create(2, false);
-  EntityID id1 = ent1->entity_id();
+  EntityID id1 = ent1->EntityId();
 
   ent1->MarkForDestroy();
   f.mgr.FlushDestroyed();
 
   EXPECT_EQ(f.mgr.Find(id1), nullptr);
-  EXPECT_NE(f.mgr.Find(ent2->entity_id()), nullptr);
-  EXPECT_EQ(f.mgr.size(), 1u);
+  EXPECT_NE(f.mgr.Find(ent2->EntityId()), nullptr);
+  EXPECT_EQ(f.mgr.Size(), 1u);
 }
 
 TEST(EntityManager, ForEach) {

@@ -43,7 +43,7 @@ class Bundle {
     return buffer_.size() + needed <= kMaxBundleSize;
   }
 
-  void clear();
+  void Clear();
 
  private:
   std::vector<std::byte> buffer_;

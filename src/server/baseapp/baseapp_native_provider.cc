@@ -31,7 +31,7 @@ uint8_t BaseAppNativeProvider::GetProcessPrefix() {
 void BaseAppNativeProvider::SendClientRpc(uint32_t entity_id, uint32_t rpc_id, uint8_t target,
                                           const std::byte* payload, int32_t len) {
   auto* proxy = app_.GetEntityManager().FindProxy(entity_id);
-  if (!proxy || !proxy->has_client()) {
+  if (!proxy || !proxy->HasClient()) {
     ATLAS_LOG_WARNING("BaseApp: SendClientRpc: entity {} has no client", entity_id);
     return;
   }
@@ -48,13 +48,13 @@ void BaseAppNativeProvider::SendClientRpc(uint32_t entity_id, uint32_t rpc_id, u
 void BaseAppNativeProvider::SendCellRpc(uint32_t entity_id, uint32_t rpc_id,
                                         const std::byte* payload, int32_t len) {
   auto* ent = app_.GetEntityManager().Find(entity_id);
-  if (!ent || !ent->has_cell()) {
+  if (!ent || !ent->HasCell()) {
     ATLAS_LOG_WARNING("BaseApp: SendCellRpc: entity {} has no cell", entity_id);
     return;
   }
   // Connect to cell — nocwnd disables congestion control for this intra-DC link
   // where loss is negligible and round-trip latency is the dominant concern.
-  auto cell_ch_result = app_.Network().ConnectRudpNocwnd(ent->cell_addr());
+  auto cell_ch_result = app_.Network().ConnectRudpNocwnd(ent->CellAddr());
   if (!cell_ch_result) {
     ATLAS_LOG_ERROR("BaseApp: SendCellRpc: cannot connect to cell for entity {}", entity_id);
     return;

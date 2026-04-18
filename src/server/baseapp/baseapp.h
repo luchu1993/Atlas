@@ -126,10 +126,9 @@ class BaseApp : public EntityApp {
 
   // ---- Helpers --------------------------------------------------------
   void RegisterInternalHandlers();
-  void SendToDbapp(Channel*& dbapp_ch, auto&& msg);
   void ExpireDetachedProxies();
   void UpdateLoadEstimate();
-  void ReportLoadToBaseappmgr();
+  void ReportLoadToBaseAppMgr();
   [[nodiscard]] auto CaptureLoadSnapshot() const -> LoadSnapshot;
   void DrainFinishedLoginFlows(std::vector<DatabaseID> dbids);
   void MaybeRequestMoreIds();
