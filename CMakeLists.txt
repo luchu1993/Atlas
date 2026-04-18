@@ -20,6 +20,7 @@ list(APPEND CMAKE_MODULE_PATH "${CMAKE_SOURCE_DIR}/cmake")
 include(AtlasCompilerOptions)
 include(Dependencies)
 include(FindDotNet)
+include(AtlasRuntimeDeploy)
 
 if(ATLAS_BUILD_CSHARP)
   include(AtlasDotNetBuild)

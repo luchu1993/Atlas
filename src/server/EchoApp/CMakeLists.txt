@@ -14,3 +14,4 @@ target_link_libraries(atlas_echoapp_lib
 
 add_executable(atlas_echoapp main.cc)
 target_link_libraries(atlas_echoapp PRIVATE atlas_echoapp_lib)
+atlas_deploy_clr_runtime(atlas_echoapp)

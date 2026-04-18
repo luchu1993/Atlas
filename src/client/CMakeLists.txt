@@ -24,3 +24,4 @@ target_link_libraries(atlas_client_lib
 
 add_executable(atlas_client main.cc)
 target_link_libraries(atlas_client PRIVATE atlas_client_lib)
+atlas_deploy_clr_runtime(atlas_client)

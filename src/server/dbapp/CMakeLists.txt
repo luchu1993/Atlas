@@ -24,3 +24,4 @@ target_link_libraries(atlas_dbapp_lib
 
 add_executable(atlas_dbapp main.cc)
 target_link_libraries(atlas_dbapp PRIVATE atlas_dbapp_lib)
+atlas_deploy_clr_runtime(atlas_dbapp)

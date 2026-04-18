@@ -20,3 +20,4 @@ target_link_libraries(atlas_loginapp_lib
 
 add_executable(atlas_loginapp main.cc)
 target_link_libraries(atlas_loginapp PRIVATE atlas_loginapp_lib)
+atlas_deploy_clr_runtime(atlas_loginapp)

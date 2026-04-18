@@ -17,3 +17,4 @@ target_link_libraries(atlas_machined_lib
 
 add_executable(machined main.cc)
 target_link_libraries(machined PRIVATE atlas_machined_lib)
+atlas_deploy_clr_runtime(machined)

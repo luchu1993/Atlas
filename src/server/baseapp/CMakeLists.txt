@@ -30,3 +30,4 @@ target_link_libraries(atlas_baseapp_lib
 
 add_executable(atlas_baseapp main.cc)
 target_link_libraries(atlas_baseapp PRIVATE atlas_baseapp_lib)
+atlas_deploy_clr_runtime(atlas_baseapp)

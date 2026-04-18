@@ -26,6 +26,11 @@ function(atlas_add_test)
               -P "${CMAKE_SOURCE_DIR}/cmake/CopyRuntimeDLLs.cmake"
       VERBATIM
     )
+    # TARGET_RUNTIME_DLLS misses (a) atlas_engine.dll, which is loaded at
+    # runtime via DynamicLibrary::Load rather than linked, and (b) nethost.dll
+    # on some MSVC configurations when the IMPORTED SHARED target is reached
+    # only transitively. Deploy both explicitly for CLR-dependent tests.
+    atlas_deploy_clr_runtime_if_needed(${ARG_NAME})
   endif()
 
   add_test(NAME ${ARG_NAME} COMMAND ${ARG_NAME})

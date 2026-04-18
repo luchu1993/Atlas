@@ -19,3 +19,4 @@ target_link_libraries(atlas_baseappmgr_lib
 
 add_executable(atlas_baseappmgr main.cc)
 target_link_libraries(atlas_baseappmgr PRIVATE atlas_baseappmgr_lib)
+atlas_deploy_clr_runtime(atlas_baseappmgr)
