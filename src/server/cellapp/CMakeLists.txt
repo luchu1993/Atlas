@@ -1,0 +1,1 @@
+# cellapp — spatial partitioning (placeholder)

@@ -68,14 +68,9 @@ Key components provided by `ServerApp`:
 | Tool | Version | Notes |
 |------|---------|-------|
 | [Visual Studio 2022](https://visualstudio.microsoft.com/) | 17.x | Select **"Desktop development with C++"** workload |
-| [Bazelisk](https://github.com/bazelbuild/bazelisk) | Latest | Bazel version manager; reads `.bazelversion` and downloads the correct Bazel binary |
+| [CMake](https://cmake.org/download/) | 3.28+ | Build system; can also use the one bundled with Visual Studio |
 | [.NET 9 SDK](https://dotnet.microsoft.com/download/dotnet/9.0) | 9.0+ | Required for C# scripting layer; auto-detected at build time |
 | [Git](https://git-scm.com/) | Any | Version control |
-
-**Install Bazelisk (Windows):**
-```bat
-winget install Google.Bazelisk
-```
 
 **Visual Studio 2022 workload required:**
 - Workload: **Desktop development with C++**
@@ -83,7 +78,7 @@ winget install Google.Bazelisk
 Verify prerequisites after installation:
 ```bat
 cl /?                  :: MSVC compiler — available after opening VS Developer Command Prompt
-bazel --version        :: should show 7.x (auto-downloaded by Bazelisk)
+cmake --version        :: should be 3.28+
 dotnet --version       :: should be 9.x.x
 git --version
 ```
@@ -91,14 +86,9 @@ git --version
 #### Linux (Ubuntu 22.04+)
 
 ```bash
-# Compiler, build tools
+# Compiler, build tools, CMake
 sudo apt update
-sudo apt install -y build-essential g++-12 git
-
-# Bazelisk — manages Bazel versions automatically
-curl -Lo /usr/local/bin/bazel \
-  https://github.com/bazelbuild/bazelisk/releases/latest/download/bazelisk-linux-amd64
-chmod +x /usr/local/bin/bazel
+sudo apt install -y build-essential g++-13 cmake git
 
 # .NET 9 SDK — https://learn.microsoft.com/dotnet/core/install/linux
 wget https://dot.net/v1/dotnet-install.sh
@@ -108,16 +98,14 @@ echo 'export PATH="$HOME/.dotnet:$PATH"' >> ~/.bashrc
 source ~/.bashrc
 
 # Verify
-g++ --version          # should be 12+
-bazel --version        # should show 7.x (auto-downloaded by Bazelisk)
+g++ --version          # should be 13+
+cmake --version        # should be 3.28+
 dotnet --version       # should be 9.x.x
 ```
 
-> **Third-party dependencies** (Google Test, pugixml, RapidJSON, zlib, SQLite) are managed by Bazel via `MODULE.bazel` and `deps.bzl`. They are downloaded and cached automatically on first build — no manual installation needed.
+> **Third-party dependencies** (Google Test, pugixml, RapidJSON, zlib, SQLite) are managed by CMake via `FetchContent`. They are downloaded and cached automatically on first configure — no manual installation needed.
 
-> **.NET SDK auto-detection:** Bazel automatically locates the installed .NET SDK via the `DOTNET_ROOT` environment variable or standard system paths. No version-specific configuration is needed — just install the .NET 9+ SDK.
-
-> **SQLite backend runtime note:** the SQLite backend loads the system SQLite library dynamically at runtime (`sqlite3.dll` / `winsqlite3.dll` on Windows, `libsqlite3.so*` on Linux/macOS). Atlas does not vendor SQLite into the build tree.
+> **.NET SDK auto-detection:** CMake automatically locates the installed .NET SDK via the `DOTNET_ROOT` environment variable or standard system paths. No version-specific configuration is needed — just install the .NET 9+ SDK.
 
 ### Clone
 
@@ -132,111 +120,112 @@ cd Atlas
 
 1. Install the recommended extensions (prompted automatically, or manually from `.vscode/extensions.json`):
    - **clangd** — C++ IntelliSense via compile_commands.json
-   - **Bazel** — BUILD file syntax highlighting
+   - **CMake Tools** — CMake integration
 2. Copy the settings template:
    ```bash
    cp .vscode/settings.json.example .vscode/settings.json
    ```
-3. Generate `compile_commands.json`:
-   ```bash
-   bazel run :refresh_compile_commands
-   ```
-4. Re-run step 3 whenever you add/remove source files or change BUILD targets.
+3. CMake generates `compile_commands.json` automatically in the build directory when `CMAKE_EXPORT_COMPILE_COMMANDS` is enabled (already configured).
 
 #### CLion
 
-1. Install the **Bazel for CLion** plugin (Settings -> Plugins -> Marketplace)
-2. File -> **Import Bazel Project** -> select the Atlas root directory
-3. No additional configuration needed — CLion syncs with Bazel directly
+1. File -> **Open** -> select the Atlas root directory (CLion detects the `CMakeLists.txt` automatically)
+2. Select the desired CMake preset (debug, release, etc.) from the toolbar
+3. No additional configuration needed
 
 ## Building
 
 ### Build Commands
 
 ```bash
-# Build everything (debug by default)
-bazel build //...
+# Configure (debug by default)
+cmake --preset debug
 
-# Build with a specific configuration
-bazel build //... --config=debug
-bazel build //... --config=release
-bazel build //... --config=hybrid     # optimized with debug symbols
+# Build
+cmake --build build/debug --config Debug
 
-# Build a specific target
-bazel build //src/server/machined:machined
-bazel build //src/lib/network:atlas_network
+# Configure + build with a specific configuration
+cmake --preset release
+cmake --build build/release --config Release
+
+cmake --preset hybrid
+cmake --build build/hybrid --config RelWithDebInfo
 ```
 
-> The first build downloads third-party dependencies automatically and caches them. Subsequent builds are incremental and only recompile changed inputs.
+> The first configure downloads third-party dependencies automatically via `FetchContent` and caches them. Subsequent builds are incremental and only recompile changed inputs.
 
-### Build Configurations (via `.bazelrc`)
+### Build Presets (via `CMakePresets.json`)
 
-| Config | Description |
+| Preset | Description |
 |--------|-------------|
-| *(default)* | Debug mode — full debug symbols, assertions enabled |
-| `--config=debug` | Explicit debug mode, `ATLAS_DEBUG=1` |
-| `--config=release` | Fully optimized, `NDEBUG` defined |
-| `--config=hybrid` | Optimized with debug symbols (RelWithDebInfo equivalent) |
+| `debug` | Debug mode — full debug symbols, assertions enabled, `ATLAS_DEBUG=1` |
+| `release` | Fully optimized, `NDEBUG` defined |
+| `hybrid` | Optimized with debug symbols (RelWithDebInfo equivalent) |
 
 ### Sanitizers
 
-| Config | Platform | Description |
+| Preset | Platform | Description |
 |--------|----------|-------------|
-| `--config=asan` | Linux | AddressSanitizer (GCC/Clang) |
-| `--config=asan-msvc` | Windows | AddressSanitizer (MSVC) |
-| `--config=tsan` | Linux | ThreadSanitizer |
-| `--config=ubsan` | Linux | UndefinedBehaviorSanitizer |
+| `asan` | Linux | AddressSanitizer (GCC/Clang) |
+| `asan-msvc` | Windows | AddressSanitizer (MSVC) |
+| `tsan` | Linux | ThreadSanitizer |
+| `ubsan` | Linux | UndefinedBehaviorSanitizer |
 
 > TSan and UBSan are not supported by MSVC.
 
-### Optional Build Flags
+### CMake Options
 
-| Flag | Default | Description |
-|------|---------|-------------|
-| `--define=ATLAS_DB_MYSQL=1` | `0` | Enable MySQL database backend |
-| `--define=ATLAS_USE_IOURING=1` | `0` | Enable io_uring on Linux |
+| Option | Default | Description |
+|--------|---------|-------------|
+| `ATLAS_BUILD_TESTS` | `ON` | Build unit and integration tests |
+| `ATLAS_BUILD_CSHARP` | `ON` | Build C# projects via dotnet |
+| `ATLAS_DB_MYSQL` | `OFF` | Enable MySQL database backend |
+| `ATLAS_USE_IOURING` | `OFF` | Enable io_uring on Linux |
 
 ### Build Outputs
 
-Build artifacts are placed in `bazel-bin/` (symlinked by Bazel):
+Build artifacts are placed in `build/<preset>/`:
 
 ```
-bazel-bin/src/server/
-├── machined/machined         # Machine daemon (start first)
-├── loginapp/atlas_loginapp   # Login gateway
-├── baseappmgr/atlas_baseappmgr
-├── baseapp/atlas_baseapp
-├── cellappmgr/atlas_cellappmgr
-├── dbappmgr/atlas_dbappmgr
-├── dbapp/atlas_dbapp
-└── EchoApp/atlas_echoapp    # Minimal verification app
+build/debug/src/server/
+├── machined/Debug/machined         # Machine daemon (start first)
+├── loginapp/Debug/atlas_loginapp   # Login gateway
+├── baseappmgr/Debug/atlas_baseappmgr
+├── baseapp/Debug/atlas_baseapp
+├── dbapp/Debug/atlas_dbapp
+└── EchoApp/Debug/atlas_echoapp    # Minimal verification app
 ```
 
-On Windows binaries have `.exe` extension.
+On Windows binaries have `.exe` extension. On Linux, the `Debug/` subdirectory is absent (single-config generator).
 
 ## Testing
 
 ### Run All Unit Tests
 
 ```bash
-# All unit tests
-bazel test //tests/unit:all
+cd build/debug
 
-# All unit tests with verbose output
-bazel test //tests/unit:all --test_output=all
+# All tests
+ctest --build-config Debug
 
-# Integration tests
-bazel test //tests/integration:all
+# Unit tests only
+ctest --build-config Debug --label-regex unit
+
+# Integration tests only
+ctest --build-config Debug --label-regex integration
+
+# All tests with verbose output on failure
+ctest --build-config Debug --output-on-failure
 ```
 
 ### Run a Single Test
 
 ```bash
-# Run a specific test target
-bazel test //tests/unit:test_math
+# Run a specific test by name
+ctest --build-config Debug -R test_math
 
 # Run with verbose output
-bazel test //tests/unit:test_server_app --test_output=all
+ctest --build-config Debug -R test_server_app --output-on-failure
 ```
 
 ### C# Tests
@@ -275,7 +264,7 @@ machined → DBAppMgr → BaseAppMgr → CellAppMgr → DBApp → BaseApp → Ce
 `EchoApp` is a minimal standalone process with no dependencies on other services, useful for verifying the build:
 
 ```bash
-bazel run //src/server/EchoApp:atlas_echoapp
+./build/debug/src/server/EchoApp/Debug/atlas_echoapp
 ```
 
 ### Full Cluster (development)
@@ -284,28 +273,25 @@ Open a separate terminal for each process and start in order:
 
 ```bash
 # Terminal 1 — service discovery daemon
-bazel run //src/server/machined:machined
+./build/debug/src/server/machined/Debug/machined
 
 # Terminal 2 — DBApp manager
-bazel run //src/server/dbappmgr:atlas_dbappmgr
+# ./build/debug/src/server/dbappmgr/Debug/atlas_dbappmgr  # placeholder
 
 # Terminal 3 — BaseApp manager
-bazel run //src/server/baseappmgr:atlas_baseappmgr
+./build/debug/src/server/baseappmgr/Debug/atlas_baseappmgr
 
-# Terminal 4 — CellApp manager
-bazel run //src/server/cellappmgr:atlas_cellappmgr
+# Terminal 4 — database process (XML fallback by default; switch to SQLite via config/CLI)
+./build/debug/src/server/dbapp/Debug/atlas_dbapp
 
-# Terminal 5 — database process (XML fallback by default; switch to SQLite via config/CLI)
-bazel run //src/server/dbapp:atlas_dbapp
+# Terminal 5 — base entity process
+./build/debug/src/server/baseapp/Debug/atlas_baseapp
 
-# Terminal 6 — base entity process
-bazel run //src/server/baseapp:atlas_baseapp
-
-# Terminal 7 — login gateway (start last; begins accepting client connections)
-bazel run //src/server/loginapp:atlas_loginapp
+# Terminal 6 — login gateway (start last; begins accepting client connections)
+./build/debug/src/server/loginapp/Debug/atlas_loginapp
 ```
 
-Alternatively, run binaries directly from `bazel-bin/` after building.
+On Linux (single-config generator), omit the `Debug/` subdirectory.
 
 ### Configuration
 
@@ -354,10 +340,13 @@ Game logic scripts live in the `scripts/` directory and are loaded at runtime vi
 
 ```
 atlas/
-├── BUILD.bazel             Root build file and feature config_settings
-├── MODULE.bazel            Bazel module and dependency declarations
-├── .bazelrc                Compiler flags and build configurations
-├── deps.bzl                Non-registry third-party dependencies
+├── CMakeLists.txt          Root build file
+├── CMakePresets.json        Build presets (debug, release, sanitizers)
+├── cmake/                  CMake modules
+│   ├── AtlasCompilerOptions.cmake
+│   ├── Dependencies.cmake       Third-party deps via FetchContent
+│   ├── FindDotNet.cmake          .NET SDK auto-detection
+│   └── AtlasDotNetBuild.cmake    C# project build helper
 ├── docs/
 │   ├── roadmap/            Phase-by-phase development plan
 │   └── scripting/          C# scripting layer design docs
@@ -382,7 +371,7 @@ atlas/
 │   │   ├── connection/       Client-server protocol definitions
 │   │   ├── db/               Database abstraction (IDatabase + DatabaseFactory)
 │   │   ├── db_mysql/         MySQL backend
-│   │   ├── db_sqlite/        SQLite backend (runtime-loaded sqlite3)
+│   │   ├── db_sqlite/        SQLite backend
 │   │   ├── db_xml/           XML backend
 │   │   └── server/           Server framework base classes
 │   ├── server/             Server processes
@@ -403,13 +392,11 @@ atlas/
 │   │   ├── Atlas.Generators.Events/   Source generator for event wiring
 │   │   └── Atlas.Generators.Rpc/      Source generator for RPC stubs
 │   ├── client_sdk/         Client connection SDK
-│   └── tools/              Developer CLI tools
-│       └── atlas_tool/
+│   └── client/             Console client application
 ├── tests/
-│   ├── unit/               C++ unit tests (Google Test, 60+ test files)
-│   ├── integration/        Integration test stubs
+│   ├── unit/               C++ unit tests (Google Test, 70 tests)
+│   ├── integration/        Integration tests (7 tests)
 │   └── csharp/             C# smoke tests
-├── tools/                  Operations tools (cluster_control, db_tools, monitoring)
 └── docker/                 Container deployment
 ```
 

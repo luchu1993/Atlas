@@ -8,57 +8,57 @@
       "name": "machined",
       "type": "cppvsdbg",
       "request": "launch",
-      "program": "${workspaceFolder}/bazel-bin/src/server/machined/machined.exe",
+      "program": "${workspaceFolder}/build/debug/src/server/machined/Debug/machined.exe",
       "cwd": "${workspaceFolder}",
-      "preLaunchTask": "Bazel: Build machined"
+      "preLaunchTask": "CMake: Build machined"
     },
     {
       "name": "EchoApp",
       "type": "cppvsdbg",
       "request": "launch",
-      "program": "${workspaceFolder}/bazel-bin/src/server/EchoApp/atlas_echoapp.exe",
+      "program": "${workspaceFolder}/build/debug/src/server/EchoApp/Debug/atlas_echoapp.exe",
       "cwd": "${workspaceFolder}",
-      "preLaunchTask": "Bazel: Build EchoApp"
+      "preLaunchTask": "CMake: Build EchoApp"
     },
     {
       "name": "LoginApp",
       "type": "cppvsdbg",
       "request": "launch",
-      "program": "${workspaceFolder}/bazel-bin/src/server/loginapp/atlas_loginapp.exe",
+      "program": "${workspaceFolder}/build/debug/src/server/loginapp/Debug/atlas_loginapp.exe",
       "cwd": "${workspaceFolder}",
-      "preLaunchTask": "Bazel: Build LoginApp"
+      "preLaunchTask": "CMake: Build LoginApp"
     },
     {
       "name": "BaseApp",
       "type": "cppvsdbg",
       "request": "launch",
-      "program": "${workspaceFolder}/bazel-bin/src/server/baseapp/atlas_baseapp.exe",
+      "program": "${workspaceFolder}/build/debug/src/server/baseapp/Debug/atlas_baseapp.exe",
       "cwd": "${workspaceFolder}",
-      "preLaunchTask": "Bazel: Build BaseApp"
+      "preLaunchTask": "CMake: Build BaseApp"
     },
     {
       "name": "BaseAppMgr",
       "type": "cppvsdbg",
       "request": "launch",
-      "program": "${workspaceFolder}/bazel-bin/src/server/baseappmgr/atlas_baseappmgr.exe",
+      "program": "${workspaceFolder}/build/debug/src/server/baseappmgr/Debug/atlas_baseappmgr.exe",
       "cwd": "${workspaceFolder}",
-      "preLaunchTask": "Bazel: Build BaseAppMgr"
+      "preLaunchTask": "CMake: Build BaseAppMgr"
     },
     {
       "name": "DBApp",
       "type": "cppvsdbg",
       "request": "launch",
-      "program": "${workspaceFolder}/bazel-bin/src/server/dbapp/atlas_dbapp.exe",
+      "program": "${workspaceFolder}/build/debug/src/server/dbapp/Debug/atlas_dbapp.exe",
       "cwd": "${workspaceFolder}",
-      "preLaunchTask": "Bazel: Build DBApp"
+      "preLaunchTask": "CMake: Build DBApp"
     },
     {
       "name": "Client",
       "type": "cppvsdbg",
       "request": "launch",
-      "program": "${workspaceFolder}/bazel-bin/src/client/atlas_client.exe",
+      "program": "${workspaceFolder}/build/debug/src/client/Debug/atlas_client.exe",
       "cwd": "${workspaceFolder}",
-      "preLaunchTask": "Bazel: Build Client"
+      "preLaunchTask": "CMake: Build Client"
     },
 
     // ── Compound: Full Cluster ────────────────────────────────────────

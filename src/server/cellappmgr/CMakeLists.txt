@@ -1,0 +1,1 @@
+# cellappmgr — cell manager (placeholder)

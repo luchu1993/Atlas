@@ -1,6 +1,6 @@
 {
   "recommendations": [
     "llvm-vs-code-extensions.vscode-clangd",
-    "BazelBuild.vscode-bazel"
+    "ms-vscode.cmake-tools"
   ]
 }

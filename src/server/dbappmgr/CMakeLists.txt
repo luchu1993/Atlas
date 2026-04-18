@@ -1,0 +1,1 @@
+# dbappmgr — database manager (placeholder)

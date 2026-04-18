@@ -8,5 +8,9 @@
     "--clang-tidy",
     "--header-insertion=iwyu",
     "--completion-style=detailed"
-  ]
+  ],
+
+  // CMake configuration
+  "cmake.configureOnOpen": true,
+  "cmake.buildDirectory": "${workspaceFolder}/build/${buildType}"
 }

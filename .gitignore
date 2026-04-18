@@ -1,18 +1,22 @@
-# Bazel
-bazel-*/
-MODULE.bazel.lock
+# CMake
+build/
+out/
+cmake-build-*/
+CMakeCache.txt
+CMakeFiles/
+_deps/
 compile_commands.json
 
-# Build directories
-build/
-build_*/
-out/
+# Bazel (legacy)
+bazel-*/
+MODULE.bazel.lock
 
 # IDE files
 .vs/
 .vscode/settings.json
 .idea/
 .claude/
+.clwb/
 *.suo
 *.user
 *.sln

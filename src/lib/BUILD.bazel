@@ -1,3 +1,0 @@
-# src/lib/BUILD.bazel — marker package for the library subtree
-# Individual libraries are defined in their own sub-packages.
-# atlas_engine shared library is in //src/lib/clrscript:atlas_engine

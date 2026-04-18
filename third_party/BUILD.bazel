@@ -1,2 +1,0 @@
-# third_party/BUILD.bazel — marker package (empty)
-# Build files for external deps are referenced via build_file in deps.bzl.
