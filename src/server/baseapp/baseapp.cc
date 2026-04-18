@@ -227,6 +227,7 @@ void BaseApp::OnTickComplete() {
   entity_mgr_.CleanupRetiredSessions();
   ExpireDetachedProxies();
   FlushClientDeltas();
+  EmitBaselineSnapshots();
   UpdateLoadEstimate();
   ReportLoadToBaseAppMgr();
   CleanupExpiredPendingRequests();
@@ -294,11 +295,26 @@ void BaseApp::RegisterWatchers() {
                std::function<bool()>([this] { return dbapp_channel_ != nullptr; }));
   wr.Add<uint64_t>("baseapp/delta_bytes_sent_total",
                    std::function<uint64_t()>([this] { return delta_bytes_sent_total_; }));
+  wr.Add<uint64_t>("baseapp/delta_bytes_deferred_total", std::function<uint64_t()>([this] {
+                     uint64_t total = delta_bytes_deferred_total_;
+                     for (auto& [_, fwd] : client_delta_forwarders_)
+                       total += fwd.GetStats().bytes_deferred;
+                     return total;
+                   }));
   wr.Add<std::size_t>("baseapp/delta_queue_depth", std::function<std::size_t()>([this] {
                         std::size_t depth = 0;
                         for (auto& [_, fwd] : client_delta_forwarders_) depth += fwd.QueueDepth();
                         return depth;
                       }));
+  wr.Add<uint64_t>("baseapp/reliable_delta_bytes_sent_total",
+                   std::function<uint64_t()>([this] { return reliable_delta_bytes_sent_total_; }));
+  wr.Add<uint64_t>("baseapp/reliable_delta_messages_sent_total", std::function<uint64_t()>([this] {
+                     return reliable_delta_messages_sent_total_;
+                   }));
+  wr.Add<uint64_t>("baseapp/baseline_messages_sent_total",
+                   std::function<uint64_t()>([this] { return baseline_messages_sent_total_; }));
+  wr.Add<uint64_t>("baseapp/baseline_bytes_sent_total",
+                   std::function<uint64_t()>([this] { return baseline_bytes_sent_total_; }));
 }
 
 // ============================================================================
@@ -356,6 +372,12 @@ void BaseApp::RegisterInternalHandlers() {
   (void)table.RegisterTypedHandler<baseapp::ReplicatedDeltaFromCell>(
       [this](const Address& /*src*/, Channel* ch, const baseapp::ReplicatedDeltaFromCell& msg) {
         OnReplicatedDeltaFromCell(*ch, msg);
+      });
+
+  (void)table.RegisterTypedHandler<baseapp::ReplicatedReliableDeltaFromCell>(
+      [this](const Address& /*src*/, Channel* ch,
+             const baseapp::ReplicatedReliableDeltaFromCell& msg) {
+        OnReplicatedReliableDeltaFromCell(*ch, msg);
       });
 
   // ---- WriteEntityAck (DBApp → BaseApp) ----------------------------------
@@ -637,6 +659,25 @@ void BaseApp::OnReplicatedDeltaFromCell(Channel& /*ch*/,
       msg.base_entity_id, std::span<const std::byte>(msg.delta.data(), msg.delta.size()));
 }
 
+void BaseApp::OnReplicatedReliableDeltaFromCell(
+    Channel& /*ch*/, const baseapp::ReplicatedReliableDeltaFromCell& msg) {
+  // Reliable deltas carry semantically-critical property changes (HP, state,
+  // inventory). They bypass the DeltaForwarder budget so the byte-limit cannot
+  // drop them, and they ride the reliable client-facing message ID so the
+  // transport retransmits on loss.
+  auto* proxy = entity_mgr_.FindProxy(msg.base_entity_id);
+  if (!proxy || !proxy->HasClient()) return;
+
+  auto* client_ch = ResolveClientChannel(proxy->EntityId());
+  if (!client_ch) return;
+
+  (void)client_ch->SendMessage(DeltaForwarder::kClientReliableDeltaMessageId,
+                               std::span<const std::byte>(msg.delta.data(), msg.delta.size()));
+
+  reliable_delta_bytes_sent_total_ += msg.delta.size();
+  ++reliable_delta_messages_sent_total_;
+}
+
 void BaseApp::FlushClientDeltas() {
   for (auto it = client_delta_forwarders_.begin(); it != client_delta_forwarders_.end();) {
     auto& [client_addr, forwarder] = *it;
@@ -662,6 +703,39 @@ void BaseApp::FlushClientDeltas() {
       it = client_delta_forwarders_.erase(it);
     else
       ++it;
+  }
+}
+
+void BaseApp::EmitBaselineSnapshots() {
+  // Fire only every kBaselineInterval ticks; spread work thin across ticks
+  // rather than stagger per-entity — at Atlas's expected per-BaseApp proxy
+  // count this is negligible, and a synchronized pulse is simpler to reason
+  // about than a rolling window.
+  ++baseline_tick_counter_;
+  if (baseline_tick_counter_ % kBaselineInterval != 0) return;
+
+  // No runtime means no C# entities to snapshot.
+  if (!native_provider_) return;
+  auto snapshot_fn = native_provider_->get_owner_snapshot_fn();
+  if (!snapshot_fn) return;  // runtime predates baseline support
+
+  for (const auto& [entity_id, client_addr] : entity_client_index_) {
+    auto* client_ch = ResolveClientChannel(entity_id);
+    if (!client_ch) continue;
+
+    uint8_t* raw = nullptr;
+    int32_t len = 0;
+    snapshot_fn(entity_id, &raw, &len);
+    if (len <= 0 || raw == nullptr) continue;  // entity has no owner-visible props
+
+    baseapp::ReplicatedBaselineToClient msg;
+    msg.base_entity_id = entity_id;
+    msg.snapshot.assign(reinterpret_cast<const std::byte*>(raw),
+                        reinterpret_cast<const std::byte*>(raw) + len);
+    (void)client_ch->SendMessage(msg);
+
+    baseline_bytes_sent_total_ += static_cast<uint64_t>(len);
+    ++baseline_messages_sent_total_;
   }
 }
 

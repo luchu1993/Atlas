@@ -52,7 +52,8 @@ void register_account_entity() {
   write_u8(1);
   write_u8(5);
   write_u16(0);
-  write_u8(1);
+  write_u8(1);  // identifier
+  write_u8(0);  // reliable
 
   write_str("level");
   write_u8(6);
@@ -60,7 +61,8 @@ void register_account_entity() {
   write_u8(1);
   write_u8(5);
   write_u16(1);
-  write_u8(0);
+  write_u8(0);  // identifier
+  write_u8(0);  // reliable
 
   write_u8(0);
 

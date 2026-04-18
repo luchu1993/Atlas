@@ -56,29 +56,28 @@ auto ScriptApp::Init(int argc, char* argv[]) -> bool {
   native_api_library_ = std::move(*native_api_lib_result);
 
   auto set_provider_result =
-      native_api_library_->GetSymbol<SetNativeApiProviderFn>("atlas_set_native_api_provider");
+      native_api_library_->GetSymbol<SetNativeApiProviderFn>("AtlasSetNativeApiProvider");
   if (!set_provider_result) {
-    ATLAS_LOG_ERROR("ScriptApp: failed to resolve atlas_set_native_api_provider: {}",
+    ATLAS_LOG_ERROR("ScriptApp: failed to resolve AtlasSetNativeApiProvider: {}",
                     set_provider_result.Error().Message());
     return false;
   }
   (*set_provider_result)(native_provider_.get());
 
-  auto error_set_result =
-      native_api_library_->GetSymbol<GetClrBridgeFn>("atlas_get_clr_error_set_fn");
+  auto error_set_result = native_api_library_->GetSymbol<GetClrBridgeFn>("AtlasGetClrErrorSetFn");
   auto error_clear_result =
-      native_api_library_->GetSymbol<GetClrBridgeFn>("atlas_get_clr_error_clear_fn");
+      native_api_library_->GetSymbol<GetClrBridgeFn>("AtlasGetClrErrorClearFn");
   auto error_code_result =
-      native_api_library_->GetSymbol<GetClrBridgeFn>("atlas_get_clr_error_get_code_fn");
+      native_api_library_->GetSymbol<GetClrBridgeFn>("AtlasGetClrErrorGetCodeFn");
   if (!error_set_result || !error_clear_result || !error_code_result) {
     ATLAS_LOG_ERROR("ScriptApp: failed to resolve DLL CLR error bridge exports");
     return false;
   }
 
-  auto has_error_result = native_api_library_->GetSymbol<HasClrErrorFn>("atlas_has_clr_error");
-  auto read_error_result = native_api_library_->GetSymbol<ReadClrErrorFn>("atlas_read_clr_error");
+  auto has_error_result = native_api_library_->GetSymbol<HasClrErrorFn>("AtlasHasClrError");
+  auto read_error_result = native_api_library_->GetSymbol<ReadClrErrorFn>("AtlasReadClrError");
   auto clear_error_api_result =
-      native_api_library_->GetSymbol<ClearClrErrorFn>("atlas_clear_clr_error");
+      native_api_library_->GetSymbol<ClearClrErrorFn>("AtlasClearClrError");
   if (!has_error_result || !read_error_result || !clear_error_api_result) {
     ATLAS_LOG_ERROR("ScriptApp: failed to resolve DLL CLR error query exports");
     return false;
@@ -153,7 +152,7 @@ void ScriptApp::Fini() {
 
   if (native_api_library_) {
     auto set_provider_result =
-        native_api_library_->GetSymbol<SetNativeApiProviderFn>("atlas_set_native_api_provider");
+        native_api_library_->GetSymbol<SetNativeApiProviderFn>("AtlasSetNativeApiProvider");
     if (set_provider_result) (*set_provider_result)(nullptr);
     native_api_library_.reset();
   }

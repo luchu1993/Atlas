@@ -47,8 +47,18 @@ class DeltaForwarder {
 
   [[nodiscard]] auto GetStats() const -> const Stats& { return stats_; }
 
-  /// Reserved client-facing message ID for delta updates.
+  /// Reserved client-facing message ID for (unreliable) delta updates.
   static constexpr MessageID kClientDeltaMessageId = static_cast<MessageID>(0xF001);
+
+  /// Reserved client-facing message ID for periodic full-state baseline snapshots —
+  /// sent reliably every `kBaselineInterval` ticks so a UDP loss window cannot
+  /// leave the client stuck on stale state. The payload is the owner-scope
+  /// serialization produced by the source generator.
+  static constexpr MessageID kClientBaselineMessageId = static_cast<MessageID>(0xF002);
+
+  /// Reserved client-facing message ID for reliable property delta updates —
+  /// carries fields marked reliable="true" in .def; bypasses the byte budget.
+  static constexpr MessageID kClientReliableDeltaMessageId = static_cast<MessageID>(0xF003);
 
  private:
   struct PendingDelta {

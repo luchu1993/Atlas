@@ -12,12 +12,19 @@ internal unsafe struct NativeCallbackTable
     public nint GetEntityData;
     public nint EntityDestroyed;
     public nint DispatchRpc;
+    // Appended for补强一 baseline snapshots. C++ tolerates older runtimes where
+    // this field is absent; new C++ versions tolerate older runtimes too.
+    public nint GetOwnerSnapshot;
 }
 
 internal static unsafe class NativeCallbacks
 {
     private static byte[]? s_lastSerialized;
     private static GCHandle s_lastSerializedHandle;
+    // Separate pin for baseline snapshots so they don't trample GetEntityData's buffer
+    // (the two callbacks can be live in the same tick).
+    private static byte[]? s_lastOwnerSnapshot;
+    private static GCHandle s_lastOwnerSnapshotHandle;
 
     public static void Register()
     {
@@ -27,6 +34,8 @@ internal static unsafe class NativeCallbacks
         table.GetEntityData = (nint)(delegate* unmanaged<uint, byte**, int*, void>)&GetEntityData;
         table.EntityDestroyed = (nint)(delegate* unmanaged<uint, void>)&EntityDestroyed;
         table.DispatchRpc = (nint)(delegate* unmanaged<uint, uint, byte*, int, void>)&DispatchRpc;
+        table.GetOwnerSnapshot =
+            (nint)(delegate* unmanaged<uint, byte**, int*, void>)&GetOwnerSnapshot;
 
         NativeApi.SetNativeCallbacks(&table, sizeof(NativeCallbackTable));
     }
@@ -38,6 +47,12 @@ internal static unsafe class NativeCallbacks
             s_lastSerializedHandle.Free();
         }
         s_lastSerialized = null;
+
+        if (s_lastOwnerSnapshotHandle.IsAllocated)
+        {
+            s_lastOwnerSnapshotHandle.Free();
+        }
+        s_lastOwnerSnapshot = null;
     }
 
     [UnmanagedCallersOnly]
@@ -136,6 +151,60 @@ internal static unsafe class NativeCallbacks
             {
                 *outLen = -1;
             }
+            ErrorBridge.SetError(ex);
+        }
+    }
+
+    [UnmanagedCallersOnly]
+    public static void GetOwnerSnapshot(uint entityId, byte** outData, int* outLen)
+    {
+        try
+        {
+            if (outData == null || outLen == null)
+            {
+                return;
+            }
+
+            *outData = null;
+            *outLen = 0;
+
+            ThreadGuard.EnsureMainThread();
+
+            var entity = EntityManager.Instance.Get(entityId);
+            if (entity is null)
+            {
+                return;
+            }
+
+            var writer = new SpanWriter(4096);
+            byte[] snapshot;
+            try
+            {
+                // Default no-op on base class → empty span for entities with no
+                // owner-visible props. Caller must tolerate zero-length snapshots.
+                entity.SerializeForOwnerClient(ref writer);
+                snapshot = writer.WrittenSpan.ToArray();
+            }
+            finally
+            {
+                writer.Dispose();
+            }
+
+            if (s_lastOwnerSnapshotHandle.IsAllocated)
+            {
+                s_lastOwnerSnapshotHandle.Free();
+            }
+
+            s_lastOwnerSnapshot = snapshot;
+            s_lastOwnerSnapshotHandle = GCHandle.Alloc(snapshot, GCHandleType.Pinned);
+
+            *outData = (byte*)s_lastOwnerSnapshotHandle.AddrOfPinnedObject();
+            *outLen = snapshot.Length;
+        }
+        catch (Exception ex)
+        {
+            if (outData != null) *outData = null;
+            if (outLen != null) *outLen = -1;
             ErrorBridge.SetError(ex);
         }
     }

@@ -52,8 +52,8 @@
 1. **引擎核心构建为共享库 `atlas_engine.dll/.so`**：C# 的 `[LibraryImport("atlas_engine")]` 走标准 DLL 查找流程，不需要 `DllImportResolver` hack。详见 [native_api_architecture.md](native_api_architecture.md) 方案 A。
 2. **`ATLAS_NATIVE_API_TABLE` X-macro 为单一定义源**：`src/lib/clrscript/clr_native_api_defs.h` 同时展开声明、实现、`INativeApiProvider` 纯虚方法、`BaseNativeProvider` 默认实现四处。新增 API 只需编辑该头文件。
 3. **`ClrObjectVTable` 在 Bootstrap 时一次性注入**：7 个函数指针（`free_handle / get_type_name / is_none / to_int64 / to_double / to_string / to_bool`）由 C# `GCHandleHelper` 的 `[UnmanagedCallersOnly]` 方法地址填充。所有 `ClrObject` 共享同一份 vtable，方法调用是 O(1) 间接跳转，无需每次 `get_method` 查找。
-4. **错误桥走 C++ TLS**：C# `ErrorBridge` 不使用 `[ThreadStatic]`，而是通过 `ClrBootstrapArgs` 注入 C++ 侧 `clr_error_set/clear/get_code` 的函数指针。DLL 与 EXE 的 TLS 隔离问题通过 DLL 导出 `atlas_get_clr_error_*_fn()` 查询函数解决（详见 [implementation_notes.md](implementation_notes.md) §1）。
-5. **Provider 模式支持进程差异化**：每个服务端可执行文件（BaseApp / CellApp / DBApp / Reviver）注册自己的 `INativeApiProvider` 实现；`atlas_*` 导出函数在 C++ 侧统一委托给当前 provider。
+4. **错误桥走 C++ TLS**：C# `ErrorBridge` 不使用 `[ThreadStatic]`，而是通过 `ClrBootstrapArgs` 注入 C++ 侧 `clr_error_set/clear/get_code` 的函数指针。DLL 与 EXE 的 TLS 隔离问题通过 DLL 导出 `AtlasGetClrError*Fn()` 查询函数解决（详见 [implementation_notes.md](implementation_notes.md) §1）。
+5. **Provider 模式支持进程差异化**：每个服务端可执行文件（BaseApp / CellApp / DBApp / Reviver）注册自己的 `INativeApiProvider` 实现；`Atlas*` 导出函数在 C++ 侧统一委托给当前 provider。
 
 ## 已裁掉的方向
 

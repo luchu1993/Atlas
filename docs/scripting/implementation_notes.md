@@ -18,13 +18,13 @@
 
 - C# 通过 `ErrorBridge.s_setError`（函数指针）调用 `clr_error_set()` 时，
   写入的是函数指针所在模块的 TLS 副本。
-- C++ 调用 `has_clr_error()` 时，读取的是当前模块（可执行文件）的 TLS 副本。
+- C++ 调用 `HasClrError()` 时，读取的是当前模块（可执行文件）的 TLS 副本。
 - 如果两个函数指针分属不同模块，写入和读取命中不同的 TLS → 错误永远读不到。
 
 同理，`INativeApiProvider` 的全局指针 `g_provider`（`std::atomic<INativeApiProvider*>`）
-也是按模块独立存储的。通过 DLL 导出的 `atlas_log_message()` 调用
-`get_native_api_provider()` 读取的是 DLL 内的 `g_provider`；而可执行文件直接调用
-`set_native_api_provider()` 设置的是可执行文件内的 `g_provider`。
+也是按模块独立存储的。通过 DLL 导出的 `AtlasLogMessage()` 调用
+`GetNativeApiProvider()` 读取的是 DLL 内的 `g_provider`；而可执行文件直接调用
+`SetNativeApiProvider()` 设置的是可执行文件内的 `g_provider`。
 
 ### 解决方案
 
@@ -34,31 +34,31 @@
 
 ```cpp
 // clr_native_api.hpp
-ATLAS_NATIVE_API void atlas_set_native_api_provider(void* provider);
+ATLAS_NATIVE_API void AtlasSetNativeApiProvider(void* provider);
 ```
 
 **Error bridge 函数指针获取（TLS 状态）：**
 
 ```cpp
-ATLAS_NATIVE_API void* atlas_get_clr_error_set_fn();
-ATLAS_NATIVE_API void* atlas_get_clr_error_clear_fn();
-ATLAS_NATIVE_API void* atlas_get_clr_error_get_code_fn();
+ATLAS_NATIVE_API void* AtlasGetClrErrorSetFn();
+ATLAS_NATIVE_API void* AtlasGetClrErrorClearFn();
+ATLAS_NATIVE_API void* AtlasGetClrErrorGetCodeFn();
 ```
 
 **Error bridge 查询（DLL-side TLS）：**
 
 ```cpp
-ATLAS_NATIVE_API int32_t atlas_has_clr_error();
-ATLAS_NATIVE_API int32_t atlas_read_clr_error(char* buf, int32_t buf_len);
-ATLAS_NATIVE_API void    atlas_clear_clr_error();
+ATLAS_NATIVE_API int32_t AtlasHasClrError();
+ATLAS_NATIVE_API int32_t AtlasReadClrError(char* buf, int32_t buf_len);
+ATLAS_NATIVE_API void    AtlasClearClrError();
 ```
 
 使用方式：
 
-1. 通过 `atlas_get_clr_error_set_fn()` 获取 DLL 内的 `clr_error_set` 地址
+1. 通过 `AtlasGetClrErrorSetFn()` 获取 DLL 内的 `clr_error_set` 地址
 2. 将该地址放入 `ClrBootstrapArgs::error_set` 传给 C# `Bootstrap.Initialize()`
 3. C# 异常通过 `ErrorBridge.SetError()` 调用该函数指针 → 写入 DLL 的 TLS
-4. C++ 通过 `atlas_has_clr_error()` / `atlas_read_clr_error()` 查询 DLL 的 TLS
+4. C++ 通过 `AtlasHasClrError()` / `AtlasReadClrError()` 查询 DLL 的 TLS
 
 **对生产环境的影响**：在正式的服务端进程中，如果进程通过 import library 链接
 `atlas_engine.dll`（而非同时静态链接 `atlas_clrscript`），则不存在 TLS 重复问题。
@@ -207,5 +207,5 @@ struct ClrObjectVTable
 
 新增 API 只需编辑 `clr_native_api_defs.hpp` 一个文件。
 
-**注意**：不在 table 中的特殊函数（`atlas_get_abi_version`、`atlas_set_native_api_provider`、
+**注意**：不在 table 中的特殊函数（`AtlasGetAbiVersion`、`AtlasSetNativeApiProvider`、
 error bridge 函数）在 `clr_native_api.hpp/cpp` 中手动声明和实现。

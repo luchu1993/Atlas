@@ -31,6 +31,7 @@ struct CellRpcForward;
 struct SelfRpcFromCell;
 struct BroadcastRpcFromCell;
 struct ReplicatedDeltaFromCell;
+struct ReplicatedReliableDeltaFromCell;
 struct ForceLogoff;
 struct ForceLogoffAck;
 struct Authenticate;
@@ -102,6 +103,8 @@ class BaseApp : public EntityApp {
   void OnSelfRpcFromCell(Channel& ch, const baseapp::SelfRpcFromCell& msg);
   void OnBroadcastRpcFromCell(Channel& ch, const baseapp::BroadcastRpcFromCell& msg);
   void OnReplicatedDeltaFromCell(Channel& ch, const baseapp::ReplicatedDeltaFromCell& msg);
+  void OnReplicatedReliableDeltaFromCell(Channel& ch,
+                                         const baseapp::ReplicatedReliableDeltaFromCell& msg);
 
   // ---- Login flow handlers --------------------------------------------
   void OnPrepareLogin(Channel& ch, const login::PrepareLogin& msg);
@@ -123,6 +126,13 @@ class BaseApp : public EntityApp {
 
   // ---- Delta forwarding ------------------------------------------------
   void FlushClientDeltas();
+
+  // ---- Baseline snapshot emission -------------------------------------
+  // Called each tick; sends a reliable full-state snapshot for every live
+  // client-bound entity once per kBaselineInterval ticks. Ensures that UDP
+  // loss on the unreliable delta path cannot leave the client permanently
+  // stale — the next baseline reconverges state within one interval.
+  void EmitBaselineSnapshots();
 
   // ---- Helpers --------------------------------------------------------
   void RegisterInternalHandlers();
@@ -232,7 +242,15 @@ class BaseApp : public EntityApp {
   std::unordered_map<Address, DeltaForwarder> client_delta_forwarders_;
   uint64_t delta_bytes_sent_total_{0};
   uint64_t delta_bytes_deferred_total_{0};
+  uint64_t reliable_delta_bytes_sent_total_{0};
+  uint64_t reliable_delta_messages_sent_total_{0};
+  uint64_t baseline_messages_sent_total_{0};
+  uint64_t baseline_bytes_sent_total_{0};
+  uint64_t baseline_tick_counter_{0};
   static constexpr uint32_t kDeltaBudgetPerTick = 16 * 1024;  // 16 KB per client per tick
+  // ~30 ticks (≈ 1 s at 30 Hz) between reliable full-state snapshots per entity.
+  // Compensates补强二's DeltaForwarder unreliable losses within one interval.
+  static constexpr uint64_t kBaselineInterval = 30;
   uint64_t auth_success_total_{0};
   uint64_t auth_fail_total_{0};
   uint64_t force_logoff_total_{0};

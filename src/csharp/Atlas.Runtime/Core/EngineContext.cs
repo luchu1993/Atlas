@@ -13,7 +13,7 @@ namespace Atlas.Core;
 /// [LibraryImport("atlas_engine")]. This requires that:
 ///   1. atlas_engine.dll is loadable (same directory as the managed assembly).
 ///   2. An <c>INativeApiProvider</c> has been registered via
-///      <c>atlas_set_native_api_provider()</c> before CLR bootstrap.
+///      <c>AtlasSetNativeApiProvider()</c> before CLR bootstrap.
 /// Both conditions are guaranteed by <c>ClrScriptEngine::initialize()</c>.
 /// </remarks>
 internal static class EngineContext

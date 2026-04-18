@@ -34,11 +34,37 @@ internal static class DeltaSyncEmitter
         sb.AppendLine($"partial class {className}");
         sb.AppendLine("{");
 
-        // SerializeReplicatedDelta — only dirty fields
-        EmitSerializeReplicatedDelta(sb, replicableProps);
+        // Static masks partitioning the dirty flags into reliable / unreliable subsets.
+        EmitDirtyFlagMasks(sb, replicableProps);
         sb.AppendLine();
 
-        // ApplyReplicatedDelta — apply delta from wire
+        // SerializeReplicatedDelta — only dirty fields (full mask, transitional API).
+        EmitSerializeReplicatedDelta(sb, replicableProps, methodName: "SerializeReplicatedDelta",
+                                     restrictMask: null);
+        sb.AppendLine();
+
+        // Reliable / Unreliable split — bypasses DeltaForwarder budget on the reliable path.
+        var hasReliable = replicableProps.Any(p => p.Reliable);
+        var hasUnreliable = replicableProps.Any(p => !p.Reliable);
+        if (hasReliable)
+        {
+            EmitSerializeReplicatedDelta(sb, replicableProps,
+                methodName: "SerializeReplicatedDeltaReliable",
+                restrictMask: "ReliableDirtyMask");
+            sb.AppendLine();
+        }
+        if (hasUnreliable)
+        {
+            EmitSerializeReplicatedDelta(sb, replicableProps,
+                methodName: "SerializeReplicatedDeltaUnreliable",
+                restrictMask: "UnreliableDirtyMask");
+            sb.AppendLine();
+        }
+
+        EmitHasDirtyHelpers(sb, replicableProps, hasReliable, hasUnreliable);
+        sb.AppendLine();
+
+        // ApplyReplicatedDelta — apply delta from wire (same format for both channels)
         EmitApplyReplicatedDelta(sb, replicableProps);
         sb.AppendLine();
 
@@ -59,21 +85,63 @@ internal static class DeltaSyncEmitter
         return sb.ToString();
     }
 
-    private static void EmitSerializeReplicatedDelta(StringBuilder sb, List<PropertyDefModel> props)
+    private static void EmitDirtyFlagMasks(StringBuilder sb, List<PropertyDefModel> props)
+    {
+        var reliableNames = props.Where(p => p.Reliable)
+                                 .Select(p => "ReplicatedDirtyFlags." + DefTypeHelper.ToPropertyName(p.Name))
+                                 .ToList();
+        var unreliableNames = props.Where(p => !p.Reliable)
+                                   .Select(p => "ReplicatedDirtyFlags." + DefTypeHelper.ToPropertyName(p.Name))
+                                   .ToList();
+        var reliableExpr = reliableNames.Count == 0 ? "ReplicatedDirtyFlags.None" : string.Join(" | ", reliableNames);
+        var unreliableExpr = unreliableNames.Count == 0 ? "ReplicatedDirtyFlags.None" : string.Join(" | ", unreliableNames);
+        sb.AppendLine($"    private const ReplicatedDirtyFlags ReliableDirtyMask = {reliableExpr};");
+        sb.AppendLine($"    private const ReplicatedDirtyFlags UnreliableDirtyMask = {unreliableExpr};");
+    }
+
+    private static void EmitSerializeReplicatedDelta(StringBuilder sb, List<PropertyDefModel> props,
+                                                     string methodName, string? restrictMask)
     {
         var (_, _, writerMethod, _, castPrefix) = GetFlagsTypeInfo(props.Count);
-        sb.AppendLine("    public void SerializeReplicatedDelta(ref SpanWriter writer)");
+        sb.AppendLine($"    public void {methodName}(ref SpanWriter writer)");
         sb.AppendLine("    {");
-        sb.AppendLine($"        writer.{writerMethod}({castPrefix}_dirtyFlags);");
+        if (restrictMask == null)
+        {
+            sb.AppendLine($"        var flags = _dirtyFlags;");
+        }
+        else
+        {
+            sb.AppendLine($"        var flags = _dirtyFlags & {restrictMask};");
+        }
+        sb.AppendLine($"        writer.{writerMethod}({castPrefix}flags);");
         foreach (var prop in props)
         {
+            if (restrictMask != null)
+            {
+                // Skip props that aren't in this channel's mask — the flags bit can't be set.
+                if (restrictMask == "ReliableDirtyMask" && !prop.Reliable) continue;
+                if (restrictMask == "UnreliableDirtyMask" && prop.Reliable) continue;
+            }
             var propName = DefTypeHelper.ToPropertyName(prop.Name);
             var fieldName = DefTypeHelper.ToFieldName(prop.Name);
             var writeMethod = DefTypeHelper.WriteMethod(prop.Type);
-            sb.AppendLine($"        if ((_dirtyFlags & ReplicatedDirtyFlags.{propName}) != 0)");
+            sb.AppendLine($"        if ((flags & ReplicatedDirtyFlags.{propName}) != 0)");
             sb.AppendLine($"            writer.{writeMethod}({fieldName});");
         }
         sb.AppendLine("    }");
+    }
+
+    private static void EmitHasDirtyHelpers(StringBuilder sb, List<PropertyDefModel> props,
+                                            bool hasReliable, bool hasUnreliable)
+    {
+        if (hasReliable)
+            sb.AppendLine("    public bool HasReliableDirty => (_dirtyFlags & ReliableDirtyMask) != 0;");
+        else
+            sb.AppendLine("    public bool HasReliableDirty => false;");
+        if (hasUnreliable)
+            sb.AppendLine("    public bool HasUnreliableDirty => (_dirtyFlags & UnreliableDirtyMask) != 0;");
+        else
+            sb.AppendLine("    public bool HasUnreliableDirty => false;");
     }
 
     private static void EmitApplyReplicatedDelta(StringBuilder sb, List<PropertyDefModel> props)
@@ -96,7 +164,9 @@ internal static class DeltaSyncEmitter
     private static void EmitScopeSerialize(StringBuilder sb, List<PropertyDefModel> props,
                                             string methodName)
     {
-        sb.AppendLine($"    public void {methodName}(ref SpanWriter writer)");
+        // SerializeForOwnerClient / SerializeForOtherClients are virtual on ServerEntity
+        // so the baseline pump can invoke them polymorphically on any entity.
+        sb.AppendLine($"    public override void {methodName}(ref SpanWriter writer)");
         sb.AppendLine("    {");
         foreach (var prop in props)
         {

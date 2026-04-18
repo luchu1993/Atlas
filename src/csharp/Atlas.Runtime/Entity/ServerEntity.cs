@@ -27,6 +27,21 @@ public abstract class ServerEntity
     /// <summary>Restores entity state (implemented by source generator).</summary>
     public abstract void Deserialize(ref SpanReader reader);
 
+    /// <summary>
+    /// Owner-client-scope snapshot: fields visible to the client that owns this
+    /// entity. Used by BaseApp's periodic baseline pump. The source generator
+    /// overrides this for entities that expose owner-visible properties;
+    /// entities without any owner-visible fields inherit the default no-op.
+    /// </summary>
+    public virtual void SerializeForOwnerClient(ref SpanWriter writer) { }
+
+    /// <summary>
+    /// Other-clients-scope snapshot: fields visible to non-owning observers.
+    /// Reserved for future CellApp AOI use; the source generator overrides this
+    /// for entities with other-visible properties.
+    /// </summary>
+    public virtual void SerializeForOtherClients(ref SpanWriter writer) { }
+
     /// <summary>Called when the entity is first created or after hot-reload.</summary>
     protected internal virtual void OnInit(bool isReload) { }
 

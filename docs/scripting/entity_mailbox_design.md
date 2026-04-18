@@ -46,7 +46,7 @@ entity.Client.ShowDamage(100f, pos)
              writer.WriteVector3(pos);
              entity.SendClientRpc(RpcIds.Avatar_ShowDamage, writer.WrittenSpan);
                └─> NativeApi.SendClientRpc(EntityId, (uint)rpcId, payload)
-                     └─> [LibraryImport("atlas_engine")] atlas_send_client_rpc
+                     └─> [LibraryImport("atlas_engine")] AtlasSendClientRpc
                            └─> INativeApiProvider.SendClientRpc(...)
 ```
 

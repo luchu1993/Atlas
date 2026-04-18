@@ -91,6 +91,7 @@ enum class BaseApp : uint16_t {
   kSelfRpcFromCell = 2014,
   kReplicatedDeltaFromCell = 2015,
   kBroadcastRpcFromCell = 2016,
+  kReplicatedReliableDeltaFromCell = 2017,
   // External: Client ↔ BaseApp
   kAuthenticate = 2020,
   kAuthenticateResult = 2021,
@@ -187,6 +188,7 @@ ATLAS_ASSERT_ID_RANGE(BaseApp::kCellRpcForward, 2000, 2999);
 ATLAS_ASSERT_ID_RANGE(BaseApp::kSelfRpcFromCell, 2000, 2999);
 ATLAS_ASSERT_ID_RANGE(BaseApp::kReplicatedDeltaFromCell, 2000, 2999);
 ATLAS_ASSERT_ID_RANGE(BaseApp::kBroadcastRpcFromCell, 2000, 2999);
+ATLAS_ASSERT_ID_RANGE(BaseApp::kReplicatedReliableDeltaFromCell, 2000, 2999);
 ATLAS_ASSERT_ID_RANGE(BaseApp::kAuthenticate, 2000, 2999);
 ATLAS_ASSERT_ID_RANGE(BaseApp::kAuthenticateResult, 2000, 2999);
 ATLAS_ASSERT_ID_RANGE(BaseApp::kForceLogoff, 2000, 2999);

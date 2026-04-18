@@ -531,6 +531,193 @@ public partial class Avatar : ClientEntity
     // DEF001 diagnostic test
     // =========================================================================
 
+    // =========================================================================
+    // Reliable attribute tests (补强四 §4.1–§4.5)
+    // =========================================================================
+
+    [Fact]
+    public void DefParser_ReliableAttribute_DefaultsFalse()
+    {
+        // AvatarDef (top of this file) does not mark any property reliable;
+        // without the attribute Reliable must default to false.
+        var text = SourceText.From(AvatarDef, System.Text.Encoding.UTF8);
+        var model = DefParser.Parse(text, "Avatar.def", null)!;
+
+        Assert.All(model.Properties, p => Assert.False(p.Reliable));
+    }
+
+    [Fact]
+    public void DefParser_ReliableAttribute_ParsesTrue()
+    {
+        var xml = @"<entity name=""Npc"">
+  <properties>
+    <property name=""hp""       type=""int32""   scope=""all_clients""  reliable=""true"" />
+    <property name=""position"" type=""vector3"" scope=""all_clients"" />
+  </properties>
+</entity>";
+        var model = DefParser.Parse(SourceText.From(xml, System.Text.Encoding.UTF8), "Npc.def", null)!;
+
+        Assert.True(model.Properties[0].Reliable);   // hp
+        Assert.False(model.Properties[1].Reliable);  // position
+    }
+
+    [Fact]
+    public void DeltaSync_EmitsReliableAndUnreliableMethods()
+    {
+        var reliableXml = @"<entity name=""Avatar"">
+  <properties>
+    <property name=""hp""       type=""int32""   scope=""all_clients"" reliable=""true"" />
+    <property name=""mana""     type=""int32""   scope=""all_clients"" />
+  </properties>
+</entity>";
+        var source = @"
+using Atlas.Entity;
+using Atlas.Serialization;
+namespace Test;
+
+[Entity(""Avatar"")]
+public partial class Avatar : ServerEntity
+{
+    public override string TypeName => ""Avatar"";
+    public override void Serialize(ref SpanWriter w) {}
+    public override void Deserialize(ref SpanReader r) {}
+}
+";
+        var (result, _) = RunDefGenerator(source, reliableXml, "ATLAS_BASE");
+
+        var deltaTree = result.GeneratedTrees
+            .FirstOrDefault(t => t.FilePath.Contains("Avatar.DeltaSync"));
+        Assert.NotNull(deltaTree);
+        var code = deltaTree!.GetText().ToString();
+
+        // Per-channel masks partition the dirty bits.
+        Assert.Contains("ReliableDirtyMask", code);
+        Assert.Contains("UnreliableDirtyMask", code);
+        // Reliable mask references hp (marked reliable="true").
+        Assert.Matches(@"ReliableDirtyMask\s*=\s*ReplicatedDirtyFlags\.Hp\s*;", code);
+        // Unreliable mask references mana (unmarked).
+        Assert.Matches(@"UnreliableDirtyMask\s*=\s*ReplicatedDirtyFlags\.Mana\s*;", code);
+
+        // Both serialize entry points are emitted.
+        Assert.Contains("SerializeReplicatedDeltaReliable(", code);
+        Assert.Contains("SerializeReplicatedDeltaUnreliable(", code);
+
+        // Has-dirty helpers allow the send loop to skip empty channels cheaply.
+        Assert.Contains("HasReliableDirty", code);
+        Assert.Contains("HasUnreliableDirty", code);
+    }
+
+    [Fact]
+    public void DeltaSync_AllUnreliable_EmitsEmptyReliableMask()
+    {
+        // Property marked all_clients but no reliable="true": unreliable only path.
+        var xml = @"<entity name=""Drone"">
+  <properties>
+    <property name=""position"" type=""vector3"" scope=""all_clients"" />
+  </properties>
+</entity>";
+        var source = @"
+using Atlas.Entity;
+using Atlas.Serialization;
+namespace Test;
+
+[Entity(""Drone"")]
+public partial class Drone : ServerEntity
+{
+    public override string TypeName => ""Drone"";
+    public override void Serialize(ref SpanWriter w) {}
+    public override void Deserialize(ref SpanReader r) {}
+}
+";
+        var (result, _) = RunDefGenerator(source, xml, "ATLAS_BASE");
+
+        var deltaTree = result.GeneratedTrees.FirstOrDefault(t => t.FilePath.Contains("DeltaSync"));
+        Assert.NotNull(deltaTree);
+        var code = deltaTree!.GetText().ToString();
+
+        // Reliable mask has no members → expressed as ReplicatedDirtyFlags.None.
+        Assert.Matches(@"ReliableDirtyMask\s*=\s*ReplicatedDirtyFlags\.None\s*;", code);
+        // No reliable-channel serialize method is emitted when nothing is reliable.
+        Assert.DoesNotContain("SerializeReplicatedDeltaReliable(", code);
+        // Unreliable path still exists.
+        Assert.Contains("SerializeReplicatedDeltaUnreliable(", code);
+    }
+
+    // =========================================================================
+    // Baseline snapshot support (补强一)
+    // =========================================================================
+
+    [Fact]
+    public void DeltaSync_OwnerScopeMethod_IsOverrideOnServerEntity()
+    {
+        // 补强一 depends on SerializeForOwnerClient being virtually dispatchable
+        // from NativeCallbacks.GetOwnerSnapshot, not a static per-class method.
+        // Guard against someone accidentally removing the `override` modifier.
+        var xml = @"<entity name=""Avatar"">
+  <properties>
+    <property name=""hp""    type=""int32""   scope=""all_clients"" />
+    <property name=""level"" type=""int32""   scope=""own_client"" />
+  </properties>
+</entity>";
+        var source = @"
+using Atlas.Entity;
+using Atlas.Serialization;
+namespace Test;
+
+[Entity(""Avatar"")]
+public partial class Avatar : ServerEntity
+{
+    public override string TypeName => ""Avatar"";
+    public override void Serialize(ref SpanWriter w) {}
+    public override void Deserialize(ref SpanReader r) {}
+}
+";
+        var (result, _) = RunDefGenerator(source, xml, "ATLAS_BASE");
+
+        var deltaTree = result.GeneratedTrees.FirstOrDefault(t => t.FilePath.Contains("DeltaSync"));
+        Assert.NotNull(deltaTree);
+        var code = deltaTree!.GetText().ToString();
+
+        Assert.Contains("public override void SerializeForOwnerClient(", code);
+    }
+
+    [Fact]
+    public void TypeRegistryEmitter_EmitsReliableByte()
+    {
+        // The emitter must append an explicit reliable flag per property so the
+        // C++ registry reader can deserialize it deterministically (protocol v2).
+        var xml = @"<entity name=""Avatar"">
+  <properties>
+    <property name=""hp"" type=""int32"" scope=""all_clients"" reliable=""true"" />
+    <property name=""position"" type=""vector3"" scope=""all_clients"" />
+  </properties>
+</entity>";
+        var source = @"
+using Atlas.Entity;
+using Atlas.Serialization;
+namespace Test;
+
+[Entity(""Avatar"")]
+public partial class Avatar : ServerEntity
+{
+    public override string TypeName => ""Avatar"";
+    public override void Serialize(ref SpanWriter w) {}
+    public override void Deserialize(ref SpanReader r) {}
+}
+";
+        var (result, _) = RunDefGenerator(source, xml, "ATLAS_BASE");
+
+        var registryTree = result.GeneratedTrees
+            .FirstOrDefault(t => t.FilePath.Contains("EntityTypeRegistry"));
+        Assert.NotNull(registryTree);
+        var code = registryTree!.GetText().ToString();
+
+        // The emitter writes 'WriteBool(true)' for reliable hp and 'WriteBool(false)'
+        // for the unmarked position. Assert both appear.
+        Assert.Contains("WriteBool(true)", code);
+        Assert.Contains("WriteBool(false)", code);
+    }
+
     [Fact]
     public void MismatchedEntityName_ReportsDEF001()
     {

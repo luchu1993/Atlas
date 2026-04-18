@@ -1,5 +1,6 @@
 #include "baseapp_native_provider.h"
 
+#include <algorithm>
 #include <cstring>
 #include <span>
 
@@ -13,12 +14,14 @@ namespace atlas {
 
 // Packed layout of the callback table sent by C# Atlas.Runtime via set_native_callbacks.
 // Must match the [UnmanagedCallersOnly] exports in Atlas.Runtime.
+// New entries are appended at the end; C++ tolerates short tables (older runtimes).
 #pragma pack(push, 1)
 struct NativeCallbackTable {
   RestoreEntityFn restore_entity;
   GetEntityDataFn get_entity_data;
   EntityDestroyedFn entity_destroyed;
   DispatchRpcFn dispatch_rpc;
+  GetOwnerSnapshotFn get_owner_snapshot;  // appended — optional for older runtimes
 };
 #pragma pack(pop)
 
@@ -90,17 +93,24 @@ void BaseAppNativeProvider::GiveClientTo(uint32_t src_entity_id, uint32_t dest_e
 }
 
 void BaseAppNativeProvider::SetNativeCallbacks(const void* native_callbacks, int32_t len) {
-  if (!native_callbacks || len < static_cast<int32_t>(sizeof(NativeCallbackTable))) {
+  // Minimum accepted size = the original 4-entry table; new entries are
+  // optional so pre-baseline runtimes still register cleanly.
+  constexpr int32_t kMinTableBytes =
+      static_cast<int32_t>(sizeof(RestoreEntityFn) + sizeof(GetEntityDataFn) +
+                           sizeof(EntityDestroyedFn) + sizeof(DispatchRpcFn));
+  if (!native_callbacks || len < kMinTableBytes) {
     ATLAS_LOG_ERROR("BaseApp: set_native_callbacks: invalid callback table (len={})", len);
     return;
   }
   NativeCallbackTable table{};
-  std::memcpy(&table, native_callbacks, sizeof(NativeCallbackTable));
+  const auto copy_bytes = std::min<int32_t>(len, static_cast<int32_t>(sizeof(NativeCallbackTable)));
+  std::memcpy(&table, native_callbacks, static_cast<size_t>(copy_bytes));
   restore_entity_fn_ = table.restore_entity;
   get_entity_data_fn_ = table.get_entity_data;
   entity_destroyed_fn_ = table.entity_destroyed;
   dispatch_rpc_fn_ = table.dispatch_rpc;
-  ATLAS_LOG_INFO("BaseApp: native callback table registered");
+  get_owner_snapshot_fn_ = table.get_owner_snapshot;  // nullptr if runtime predates baseline
+  ATLAS_LOG_INFO("BaseApp: native callback table registered (len={})", len);
 }
 
 }  // namespace atlas

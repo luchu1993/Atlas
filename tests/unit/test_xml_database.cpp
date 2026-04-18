@@ -86,7 +86,8 @@ class XmlDatabaseTest : public ::testing::Test {
     write_u8(1);   // persistent=true
     write_u8(5);   // detail_level
     write_u16(0);  // index
-    write_u8(1);   // identifier=true  (optional field)
+    write_u8(1);   // identifier=true
+    write_u8(0);   // reliable=false
     // property 1: level
     write_str("level");
     write_u8(6);   // Int32
@@ -95,6 +96,7 @@ class XmlDatabaseTest : public ::testing::Test {
     write_u8(5);   // detail_level
     write_u16(1);  // index
     write_u8(0);   // identifier=false
+    write_u8(0);   // reliable=false
     // rpc_count=0
     write_u8(0);
 

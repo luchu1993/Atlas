@@ -60,6 +60,17 @@ using DispatchRpcFn = void (*)(uint32_t entity_id, uint32_t rpc_id, const uint8_
                                int32_t len);
 
 // ============================================================================
+// GetOwnerSnapshotFn — called by BaseApp's periodic baseline pump to fetch the
+// owner-scope serialization of an entity (the fields visible to the owning
+// client). Differs from GetEntityData (which is scope-agnostic full-entity DB
+// state) by filtering to client-visible properties via the source-generated
+// SerializeForOwnerClient method. Callee fills a pinned buffer and returns the
+// pointer + length; out_len is -1 on error.
+// ============================================================================
+
+using GetOwnerSnapshotFn = void (*)(uint32_t entity_id, uint8_t** out_data, int32_t* out_len);
+
+// ============================================================================
 // BaseAppNativeProvider — INativeApiProvider for the BaseApp process
 // ============================================================================
 
@@ -97,6 +108,9 @@ class BaseAppNativeProvider : public BaseNativeProvider {
     return entity_destroyed_fn_;
   }
   [[nodiscard]] auto dispatch_rpc_fn() const -> DispatchRpcFn { return dispatch_rpc_fn_; }
+  [[nodiscard]] auto get_owner_snapshot_fn() const -> GetOwnerSnapshotFn {
+    return get_owner_snapshot_fn_;
+  }
 
  private:
   BaseApp& app_;
@@ -104,6 +118,7 @@ class BaseAppNativeProvider : public BaseNativeProvider {
   GetEntityDataFn get_entity_data_fn_{nullptr};
   EntityDestroyedFn entity_destroyed_fn_{nullptr};
   DispatchRpcFn dispatch_rpc_fn_{nullptr};
+  GetOwnerSnapshotFn get_owner_snapshot_fn_{nullptr};
 };
 
 }  // namespace atlas

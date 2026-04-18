@@ -15,7 +15,7 @@ public sealed class EntityManager
     private readonly Dictionary<uint, ServerEntity> _entities = new();
 
     // Distributed EntityId: high 8 bits = process prefix, low 24 bits = local seq.
-    // Process prefix is provided by C++ via atlas_get_process_prefix().
+    // Process prefix is provided by C++ via AtlasGetProcessPrefix().
     private byte _processPrefix;
     private uint _localSeq = 1;
 

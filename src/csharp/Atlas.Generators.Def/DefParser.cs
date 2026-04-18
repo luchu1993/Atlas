@@ -108,6 +108,7 @@ internal static class DefParser
             Type = el.Attribute("type")?.Value ?? "int32",
             Scope = ParseScope(scopeStr),
             Persistent = el.Attribute("persistent")?.Value == "true",
+            Reliable = el.Attribute("reliable")?.Value == "true",
         };
     }
 

@@ -405,6 +405,101 @@ struct ReplicatedDeltaFromCell {
 static_assert(NetworkMessage<ReplicatedDeltaFromCell>);
 
 // ============================================================================
+// ReplicatedReliableDeltaFromCell  (CellApp → BaseApp → Client, ID 2017)
+//
+// Reliable twin of ReplicatedDeltaFromCell. Carries delta bytes for properties
+// marked reliable="true" in .def — fields where a dropped UDP packet cannot be
+// tolerated (HP, state transitions, inventory). Bypasses the DeltaForwarder
+// byte budget on the BaseApp→Client hop; reliable deltas must not be dropped.
+// The payload format is identical to the unreliable variant (flags + values),
+// so the client reuses ApplyReplicatedDelta for both.
+// ============================================================================
+
+struct ReplicatedReliableDeltaFromCell {
+  EntityID base_entity_id{kInvalidEntityID};
+  std::vector<std::byte> delta;
+
+  static auto Descriptor() -> const MessageDesc& {
+    static const MessageDesc kDesc{msg_id::Id(msg_id::BaseApp::kReplicatedReliableDeltaFromCell),
+                                   "baseapp::ReplicatedReliableDeltaFromCell",
+                                   MessageLengthStyle::kVariable, -1,
+                                   MessageReliability::kReliable};
+    return kDesc;
+  }
+
+  void Serialize(BinaryWriter& w) const {
+    w.WritePackedInt(base_entity_id);
+    w.WritePackedInt(static_cast<uint32_t>(delta.size()));
+    w.WriteBytes(delta);
+  }
+
+  static auto Deserialize(BinaryReader& r) -> Result<ReplicatedReliableDeltaFromCell> {
+    auto eid = r.ReadPackedInt();
+    auto sz = r.ReadPackedInt();
+    if (!eid || !sz)
+      return Error{ErrorCode::kInvalidArgument, "ReplicatedReliableDeltaFromCell: truncated"};
+    auto span = r.ReadBytes(*sz);
+    if (!span)
+      return Error{ErrorCode::kInvalidArgument, "ReplicatedReliableDeltaFromCell: delta truncated"};
+    ReplicatedReliableDeltaFromCell msg;
+    msg.base_entity_id = *eid;
+    msg.delta.assign(span->begin(), span->end());
+    return msg;
+  }
+};
+static_assert(NetworkMessage<ReplicatedReliableDeltaFromCell>);
+
+// ============================================================================
+// ReplicatedBaselineToClient  (BaseApp → Client, client-facing ID 0xF002)
+//
+// Periodic full-state snapshot for an owning client's entity. Sent reliably
+// every `BaseApp::kBaselineInterval` ticks so that any property change lost on
+// the unreliable delta path is recovered within one baseline interval. The
+// payload is the owner-scope serialization produced by the source generator
+// (`SerializeForOwnerClient`), so the client reuses the same property reader
+// it would use for deltas — only the message ID differs.
+//
+// This is a client-facing message (no CellApp→BaseApp hop); BaseApp itself
+// assembles and sends it, so it does not appear in the BaseApp internal
+// enum range (2000-2031). The struct is defined here purely for typed
+// Serialize/Deserialize round-trip testing.
+// ============================================================================
+
+struct ReplicatedBaselineToClient {
+  EntityID base_entity_id{kInvalidEntityID};
+  std::vector<std::byte> snapshot;
+
+  static auto Descriptor() -> const MessageDesc& {
+    // Reliability MUST be reliable — that is the entire point of baseline.
+    static const MessageDesc kDesc{
+        static_cast<MessageID>(0xF002), "baseapp::ReplicatedBaselineToClient",
+        MessageLengthStyle::kVariable, -1, MessageReliability::kReliable};
+    return kDesc;
+  }
+
+  void Serialize(BinaryWriter& w) const {
+    w.WritePackedInt(base_entity_id);
+    w.WritePackedInt(static_cast<uint32_t>(snapshot.size()));
+    w.WriteBytes(snapshot);
+  }
+
+  static auto Deserialize(BinaryReader& r) -> Result<ReplicatedBaselineToClient> {
+    auto eid = r.ReadPackedInt();
+    auto sz = r.ReadPackedInt();
+    if (!eid || !sz)
+      return Error{ErrorCode::kInvalidArgument, "ReplicatedBaselineToClient: truncated"};
+    auto span = r.ReadBytes(*sz);
+    if (!span)
+      return Error{ErrorCode::kInvalidArgument, "ReplicatedBaselineToClient: snapshot truncated"};
+    ReplicatedBaselineToClient msg;
+    msg.base_entity_id = *eid;
+    msg.snapshot.assign(span->begin(), span->end());
+    return msg;
+  }
+};
+static_assert(NetworkMessage<ReplicatedBaselineToClient>);
+
+// ============================================================================
 // Authenticate  (Client → BaseApp external interface, ID 2020)
 // First message sent by client after connecting to BaseApp.
 // ============================================================================

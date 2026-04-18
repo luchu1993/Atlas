@@ -1,14 +1,14 @@
 <entity name="Avatar">
 
   <properties>
-    <property name="hp"       type="int32"   scope="all_clients"           persistent="true" />
+    <property name="hp"       type="int32"   scope="all_clients"           persistent="true"  reliable="true" />
     <property name="position" type="vector3" scope="all_clients" />
     <property name="gold"     type="int32"   scope="base"                  persistent="true" />
-    <property name="aiState"  type="int32"   scope="cell_public" />
-    <property name="modelId"  type="int32"   scope="other_clients" />
+    <property name="aiState"  type="int32"   scope="cell_public"                              reliable="true" />
+    <property name="modelId"  type="int32"   scope="other_clients"                            reliable="true" />
     <property name="mana"     type="int32"   scope="cell_public_and_own" />
-    <property name="secret"   type="string"  scope="base_and_client"       persistent="true" />
-    <property name="level"    type="int32"   scope="own_client"            persistent="true" />
+    <property name="secret"   type="string"  scope="base_and_client"       persistent="true"  reliable="true" />
+    <property name="level"    type="int32"   scope="own_client"            persistent="true"  reliable="true" />
   </properties>
 
   <client_methods>

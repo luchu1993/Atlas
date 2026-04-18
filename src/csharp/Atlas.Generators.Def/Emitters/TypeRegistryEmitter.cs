@@ -85,6 +85,8 @@ internal static class TypeRegistryEmitter
             sb.AppendLine($"            writer.WriteBool({(prop.Persistent ? "true" : "false")});");
             sb.AppendLine($"            writer.WriteByte(5);");  // detail_level default
             sb.AppendLine($"            writer.WriteUInt16({(ushort)i});");
+            sb.AppendLine($"            writer.WriteBool(false);");  // identifier (not parsed from .def yet)
+            sb.AppendLine($"            writer.WriteBool({(prop.Reliable ? "true" : "false")});");
         }
 
         // RPCs — collect ALL methods from all sections

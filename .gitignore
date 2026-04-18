@@ -52,8 +52,7 @@ __pycache__/
 
 # C# build artifacts
 **/obj/
-**/bin/Debug/
-**/bin/Release/
+**/bin/
 
 # Editor backups
 *~

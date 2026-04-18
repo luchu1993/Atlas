@@ -40,6 +40,11 @@ internal sealed class PropertyDefModel
     public string Type { get; set; } = "";
     public PropertyScope Scope { get; set; } = PropertyScope.CellPrivate;
     public bool Persistent { get; set; }
+
+    // Reliable delivery: when true, changes are routed through the reliable
+    // message channel, bypassing the DeltaForwarder byte budget so a dropped
+    // packet cannot strand the client in a stale state.
+    public bool Reliable { get; set; }
 }
 
 internal sealed class EntityDefModel

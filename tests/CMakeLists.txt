@@ -11,6 +11,23 @@ function(atlas_add_test)
   add_executable(${ARG_NAME} ${ARG_SOURCES})
   target_link_libraries(${ARG_NAME} PRIVATE GTest::gtest_main ${ARG_DEPS})
   target_include_directories(${ARG_NAME} PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
+
+  # Windows: copy every transitively-linked runtime DLL (nethost.dll for
+  # CLR-dependent tests, zlib1.dll for compression, etc.) next to the test
+  # exe so the OS loader resolves them at process start. Without this,
+  # missing DLLs trigger a modal STATUS_DLL_NOT_FOUND dialog that blocks CI
+  # and local runs. Delegated to a script so the empty-DLL case is handled
+  # cleanly (cmake -E copy_if_different rejects zero source args).
+  if(WIN32)
+    add_custom_command(TARGET ${ARG_NAME} POST_BUILD
+      COMMAND ${CMAKE_COMMAND}
+              "-DTARGET_DLLS=$<TARGET_RUNTIME_DLLS:${ARG_NAME}>"
+              "-DTARGET_DIR=$<TARGET_FILE_DIR:${ARG_NAME}>"
+              -P "${CMAKE_SOURCE_DIR}/cmake/CopyRuntimeDLLs.cmake"
+      VERBATIM
+    )
+  endif()
+
   add_test(NAME ${ARG_NAME} COMMAND ${ARG_NAME})
   set_tests_properties(${ARG_NAME} PROPERTIES LABELS "${ARG_LABEL}")
 

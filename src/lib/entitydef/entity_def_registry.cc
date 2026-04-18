@@ -79,13 +79,15 @@ bool EntityDefRegistry::RegisterType(const std::byte* data, int32_t len) {
     prop.detail_level = *detail_level;
     prop.index = *index;
 
-    // identifier flag — optional field added in protocol v2 (absent = false)
-    if (reader.Remaining() >= 1) {
-      // Peek: only consume if the next byte looks like a flag (0 or 1)
-      // Use a soft read to stay forward-compatible.
-      auto id_flag = reader.Read<uint8_t>();
-      if (id_flag) prop.identifier = *id_flag != 0;
+    // Protocol v2: identifier + reliable flags are emitted explicitly per property.
+    auto id_flag = reader.Read<uint8_t>();
+    auto reliable_flag = reader.Read<uint8_t>();
+    if (!id_flag || !reliable_flag) {
+      ATLAS_LOG_ERROR("register_type: failed to read property flags for '{}'", desc.name);
+      return false;
     }
+    prop.identifier = *id_flag != 0;
+    prop.reliable = *reliable_flag != 0;
 
     desc.properties.push_back(std::move(prop));
   }
@@ -282,6 +284,7 @@ auto EntityDefRegistry::FromJsonFile(const std::filesystem::path& path)
         prop.name = prop_node->ReadString("name");
         prop.persistent = prop_node->ReadBool("persistent", false);
         prop.identifier = prop_node->ReadBool("identifier", false);
+        prop.reliable = prop_node->ReadBool("reliable", false);
         prop.index = static_cast<uint16_t>(prop_node->ReadUint("index", 0));
 
         // data_type from string

@@ -148,6 +148,51 @@ TEST(BaseAppMessages, ReplicatedDeltaFromCell) {
   EXPECT_EQ(rt->delta[3], std::byte{0x40});
 }
 
+TEST(BaseAppMessages, ReplicatedReliableDeltaFromCell) {
+  ReplicatedReliableDeltaFromCell msg;
+  msg.base_entity_id = 8;
+  msg.delta = {std::byte{0xDE}, std::byte{0xAD}, std::byte{0xBE}, std::byte{0xEF}};
+
+  auto rt = round_trip(msg);
+  ASSERT_TRUE(rt.has_value());
+  EXPECT_EQ(rt->base_entity_id, 8u);
+  EXPECT_EQ(rt->delta.size(), 4u);
+  EXPECT_EQ(rt->delta[0], std::byte{0xDE});
+  EXPECT_EQ(rt->delta[3], std::byte{0xEF});
+}
+
+// The reliable variant must declare Reliable delivery so the channel routes it
+// through the retransmitting path; the unreliable variant must declare the
+// opposite. Mixing these up would silently defeat the whole补强四 split.
+TEST(BaseAppMessages, DeltaReliabilityDescriptors) {
+  EXPECT_TRUE(ReplicatedDeltaFromCell::Descriptor().IsUnreliable());
+  EXPECT_FALSE(ReplicatedReliableDeltaFromCell::Descriptor().IsUnreliable());
+  EXPECT_NE(ReplicatedDeltaFromCell::Descriptor().id,
+            ReplicatedReliableDeltaFromCell::Descriptor().id);
+}
+
+TEST(BaseAppMessages, ReplicatedBaselineToClient) {
+  ReplicatedBaselineToClient msg;
+  msg.base_entity_id = 42;
+  msg.snapshot = {std::byte{0xCA}, std::byte{0xFE}, std::byte{0xBA}, std::byte{0xBE}};
+
+  auto rt = round_trip(msg);
+  ASSERT_TRUE(rt.has_value());
+  EXPECT_EQ(rt->base_entity_id, 42u);
+  EXPECT_EQ(rt->snapshot.size(), 4u);
+  EXPECT_EQ(rt->snapshot[0], std::byte{0xCA});
+  EXPECT_EQ(rt->snapshot[3], std::byte{0xBE});
+}
+
+// Baseline is the补强一 loss-recovery channel — it MUST be reliable, and it
+// MUST use the reserved client-facing ID 0xF002 (neither 0xF001 unreliable
+// delta nor 0xF003 reliable delta).
+TEST(BaseAppMessages, BaselineDescriptor) {
+  const auto& desc = ReplicatedBaselineToClient::Descriptor();
+  EXPECT_FALSE(desc.IsUnreliable());
+  EXPECT_EQ(desc.id, static_cast<MessageID>(0xF002));
+}
+
 // Verify packed_int multi-byte paths: entity_id in [0xFE, 0xFFFF] uses 3-byte
 // encoding; entity_id > 0xFFFF uses 5-byte encoding.
 TEST(BaseAppMessages, PackedIntBoundaries) {

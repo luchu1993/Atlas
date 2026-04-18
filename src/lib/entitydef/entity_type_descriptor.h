@@ -50,6 +50,10 @@ struct PropertyDescriptor {
   ReplicationScope scope;
   bool persistent{false};
   bool identifier{false};  // [Identifier] — extracted as sm_identifier column in DB
+  // Reliable delivery: changes to this property bypass the DeltaForwarder budget
+  // and go out on the reliable channel. Use for semantically critical fields
+  // (HP, state, inventory) where a dropped UDP packet cannot be tolerated.
+  bool reliable{false};
   uint8_t detail_level{5};
   uint16_t index{0};
 };

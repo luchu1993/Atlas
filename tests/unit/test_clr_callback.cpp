@@ -59,9 +59,9 @@ static constexpr std::string_view kTestType =
 //   The test binary statically links atlas_clrscript, while atlas_engine.dll
 //   also links it.  This creates TWO copies of all globals (g_provider,
 //   t_clr_error).  The fixture resolves this by:
-//     1. Registering the provider through the DLL's export (atlas_set_native_api_provider).
+//     1. Registering the provider through the DLL's export (AtlasSetNativeApiProvider).
 //     2. Passing the DLL's clr_error_* function pointers to Bootstrap so C# writes
-//        into the DLL's TLS — matching what the DLL's atlas_has_clr_error() reads.
+//        into the DLL's TLS — matching what the DLL's AtlasHasClrError() reads.
 //     3. Bootstrapping through Atlas.RuntimeTest.dll's RunBootstrap forwarder
 //        (not clr_bootstrap) to avoid loading a second Atlas.Runtime.dll Assembly.
 

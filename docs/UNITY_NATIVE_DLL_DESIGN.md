@@ -1768,10 +1768,10 @@ public enum AtlasLoginStatus : byte {
 | 现有接口 | 变更 |
 |----------|------|
 | `LibName = "atlas_engine"` | → `"atlas_net_client"` |
-| `atlas_send_base_rpc` | → `AtlasNetSendBaseRpc` (增加 ctx 参数) |
-| `atlas_send_cell_rpc` | → `AtlasNetSendCellRpc` (增加 ctx 参数) |
-| `atlas_set_native_callbacks` | → `AtlasNetSetCallbacks` (新结构体) |
-| `atlas_log_message` | → 通过日志回调反向调用 Unity Debug.Log |
+| `AtlasSendBaseRpc` | → `AtlasNetSendBaseRpc` (增加 ctx 参数) |
+| `AtlasSendCellRpc` | → `AtlasNetSendCellRpc` (增加 ctx 参数) |
+| `AtlasSetNativeCallbacks` | → `AtlasNetSetCallbacks` (新结构体) |
+| `AtlasLogMessage` | → 通过日志回调反向调用 Unity Debug.Log |
 
 ---
 
