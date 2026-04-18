@@ -319,7 +319,7 @@ add_test(NAME test_clr_host COMMAND test_clr_host)
 set_tests_properties(test_clr_host PROPERTIES
   LABELS "unit"
   ENVIRONMENT
-    "ATLAS_RUNTIME_CONFIG_RLOC=${CMAKE_BINARY_DIR}/runtime/atlas_server.runtimeconfig.json;ATLAS_SMOKE_TEST_DLL_RLOC=${CMAKE_BINARY_DIR}/csharp/atlas_smoke_test_dll/Atlas.SmokeTest.dll"
+    "ATLAS_RUNTIME_CONFIG_RLOC=${CMAKE_BINARY_DIR}/runtime/atlas_server.runtimeconfig.json;ATLAS_SMOKE_TEST_DLL_RLOC=$<GENEX_EVAL:$<TARGET_PROPERTY:atlas_smoke_test_dll,DOTNET_ASSEMBLY>>"
 )
 set_target_properties(test_clr_host PROPERTIES FOLDER "Test/Unit")
 
@@ -334,7 +334,7 @@ add_test(NAME test_clr_callback COMMAND test_clr_callback)
 set_tests_properties(test_clr_callback PROPERTIES
   LABELS "unit"
   ENVIRONMENT
-    "ATLAS_ENGINE_RLOC=$<TARGET_FILE:atlas_engine>;ATLAS_RUNTIME_CONFIG_RLOC=${CMAKE_BINARY_DIR}/runtime/atlas_server.runtimeconfig.json;ATLAS_RUNTIME_TEST_DLL_RLOC=${CMAKE_BINARY_DIR}/csharp/atlas_runtime_test_dll/Atlas.RuntimeTest.dll"
+    "ATLAS_ENGINE_RLOC=$<TARGET_FILE:atlas_engine>;ATLAS_RUNTIME_CONFIG_RLOC=${CMAKE_BINARY_DIR}/runtime/atlas_server.runtimeconfig.json;ATLAS_RUNTIME_TEST_DLL_RLOC=$<GENEX_EVAL:$<TARGET_PROPERTY:atlas_runtime_test_dll,DOTNET_ASSEMBLY>>"
 )
 set_target_properties(test_clr_callback PROPERTIES FOLDER "Test/Unit")
 
@@ -349,7 +349,7 @@ add_test(NAME test_clr_script_engine COMMAND test_clr_script_engine)
 set_tests_properties(test_clr_script_engine PROPERTIES
   LABELS "unit"
   ENVIRONMENT
-    "ATLAS_ENGINE_RLOC=$<TARGET_FILE:atlas_engine>;ATLAS_RUNTIME_CONFIG_RLOC=${CMAKE_BINARY_DIR}/runtime/atlas_server.runtimeconfig.json;ATLAS_RUNTIME_TEST_DLL_RLOC=${CMAKE_BINARY_DIR}/csharp/atlas_runtime_test_dll/Atlas.RuntimeTest.dll"
+    "ATLAS_ENGINE_RLOC=$<TARGET_FILE:atlas_engine>;ATLAS_RUNTIME_CONFIG_RLOC=${CMAKE_BINARY_DIR}/runtime/atlas_server.runtimeconfig.json;ATLAS_RUNTIME_TEST_DLL_RLOC=$<GENEX_EVAL:$<TARGET_PROPERTY:atlas_runtime_test_dll,DOTNET_ASSEMBLY>>"
 )
 set_target_properties(test_clr_script_engine PROPERTIES FOLDER "Test/Unit")
 

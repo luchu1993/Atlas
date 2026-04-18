@@ -11,10 +11,14 @@
 #   DEPENDS         <target ...>     (other dotnet targets this depends on)
 # )
 function(atlas_dotnet_project)
-  cmake_parse_arguments(ARG "" "NAME;PROJECT_FILE;ASSEMBLY_NAME;CONFIGURATION" "DEPENDS" ${ARGN})
+  cmake_parse_arguments(ARG "" "NAME;PROJECT_FILE;ASSEMBLY_NAME;CONFIGURATION;TARGET_FRAMEWORK" "DEPENDS" ${ARGN})
 
   if(NOT ARG_CONFIGURATION)
     set(ARG_CONFIGURATION "Release")
+  endif()
+
+  if(NOT ARG_TARGET_FRAMEWORK)
+    set(ARG_TARGET_FRAMEWORK "net9.0")
   endif()
 
   # Resolve the .csproj file path relative to current source dir
@@ -27,6 +31,20 @@ function(atlas_dotnet_project)
     if(ARG_DEPENDS)
       add_dependencies(${ARG_NAME} ${ARG_DEPENDS})
     endif()
+
+    # Compute the VS output path so tests/consumers can locate the DLL
+    get_filename_component(_proj_dir "${ARG_PROJECT_FILE}" DIRECTORY)
+    set(_platform "${CMAKE_GENERATOR_PLATFORM}")
+    if(NOT _platform)
+      set(_platform "x64")
+    endif()
+    set(_output_dir "${CMAKE_CURRENT_SOURCE_DIR}/${_proj_dir}/bin/${_platform}/$<CONFIG>/${ARG_TARGET_FRAMEWORK}")
+    set(_output_dll "${_output_dir}/${ARG_ASSEMBLY_NAME}")
+
+    set_target_properties(${ARG_NAME} PROPERTIES
+      DOTNET_OUTPUT_DIR "${_output_dir}"
+      DOTNET_ASSEMBLY "${_output_dll}"
+    )
   else()
     # ── Non-VS (Ninja, Make, etc.): build via dotnet CLI ─────────────────
     set(_output_dir "${CMAKE_BINARY_DIR}/csharp/${ARG_NAME}")
