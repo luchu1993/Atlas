@@ -11,7 +11,7 @@ A modern distributed MMO game server framework written in **C++20** with **C# (.
 - **C# (.NET 9) Scripting** — High-performance C# scripting via embedded CoreCLR; zero-overhead interop with `[UnmanagedCallersOnly]`
 - **Cross-Platform** — Full OS API abstraction, unified build on Windows and Linux
 - **Pluggable Database** — MySQL (production), SQLite (development), and XML (lightweight fallback) backends
-- **Client SDK** — Lightweight connection SDK, not tied to any specific game client engine
+- **Client Runtime** — C# `Atlas.Client` skeleton (entity / callbacks / generator wiring); full connection + login stack in progress (Phase 12)
 
 ## Architecture
 
@@ -334,7 +334,7 @@ Common DBApp CLI overrides:
 
 ### C# Scripts
 
-Game logic scripts live in the `scripts/` directory and are loaded at runtime via embedded CoreCLR. The .NET runtime configuration is at `runtime/atlas_server.runtimeconfig.json`.
+Game logic is authored as C# libraries under `src/csharp/` (`Atlas.Shared`, `Atlas.Runtime`) and loaded at runtime via embedded CoreCLR. The .NET runtime configuration is at `runtime/atlas_server.runtimeconfig.json`.
 
 ## Project Structure
 
@@ -351,10 +351,6 @@ atlas/
 │   ├── roadmap/            Phase-by-phase development plan
 │   └── scripting/          C# scripting layer design docs
 ├── runtime/                .NET runtime configuration
-├── scripts/                C# game logic scripts (loaded at runtime)
-│   ├── base/               Base entity scripts
-│   ├── cell/               Cell entity scripts
-│   └── common/             Shared definitions
 ├── src/
 │   ├── lib/                Core libraries
 │   │   ├── platform/         OS abstraction layer (I/O, threading, signals, filesystem)
@@ -362,15 +358,15 @@ atlas/
 │   │   ├── network/          Sockets, event dispatcher, channels, messages
 │   │   ├── serialization/    Binary streams, XML/JSON parsing
 │   │   ├── math/             Vectors, matrices, quaternions
-│   │   ├── physics/          Physics / collision stubs
-│   │   ├── chunk/            World chunk / streaming stubs
+│   │   ├── physics/          Physics / collision (placeholder)
 │   │   ├── resmgr/           Resource manager stubs
+│   │   ├── coro/             C++20 coroutine helpers (RPC await, cancellation)
 │   │   ├── script/           Script abstraction layer (ScriptEngine / ScriptValue)
 │   │   ├── clrscript/        .NET 9 CoreCLR embedding (ClrHost)
 │   │   ├── entitydef/        Entity type definitions, data types, mailbox
 │   │   ├── connection/       Client-server protocol definitions
 │   │   ├── db/               Database abstraction (IDatabase + DatabaseFactory)
-│   │   ├── db_mysql/         MySQL backend
+│   │   ├── db_mysql/         MySQL backend (placeholder)
 │   │   ├── db_sqlite/        SQLite backend
 │   │   ├── db_xml/           XML backend
 │   │   └── server/           Server framework base classes
@@ -379,25 +375,24 @@ atlas/
 │   │   ├── loginapp/         Login gateway
 │   │   ├── baseapp/          Base entity host
 │   │   ├── baseappmgr/       BaseApp cluster manager
-│   │   ├── cellapp/          Spatial simulation
-│   │   ├── cellappmgr/       CellApp cluster manager
+│   │   ├── cellapp/          Spatial simulation (placeholder)
+│   │   ├── cellappmgr/       CellApp cluster manager (placeholder)
 │   │   ├── dbapp/            Database process
-│   │   ├── dbappmgr/         DBApp cluster manager
-│   │   ├── reviver/          Crash detection and recovery
+│   │   ├── dbappmgr/         DBApp cluster manager (placeholder)
+│   │   ├── reviver/          Crash detection and recovery (placeholder)
 │   │   └── EchoApp/          Minimal verification process
 │   ├── csharp/             C# managed libraries
-│   │   ├── Atlas.Shared/       Protocol types, entity definitions, RPC contracts
-│   │   ├── Atlas.Runtime/      CoreCLR hosting and engine bindings
-│   │   ├── Atlas.Generators.Entity/   Source generator for entity classes
-│   │   ├── Atlas.Generators.Events/   Source generator for event wiring
-│   │   └── Atlas.Generators.Rpc/      Source generator for RPC stubs
-│   ├── client_sdk/         Client connection SDK
-│   └── client/             Console client application
-├── tests/
-│   ├── unit/               C++ unit tests (Google Test, 70 tests)
-│   ├── integration/        Integration tests (7 tests)
-│   └── csharp/             C# smoke tests
-└── docker/                 Container deployment
+│   │   ├── Atlas.Shared/              Protocol types, entity definitions, RPC contracts
+│   │   ├── Atlas.Runtime/             CoreCLR hosting and engine bindings (server side)
+│   │   ├── Atlas.Client/              Client-side entity runtime (skeleton)
+│   │   ├── Atlas.Generators.Def/      Source generator: .def-driven entity classes / delta sync
+│   │   └── Atlas.Generators.Events/   Source generator for event wiring
+│   ├── client/             Console client application (connection + native provider)
+│   └── tools/              Operator tooling (atlas_tool, login_stress)
+└── tests/
+    ├── unit/               C++ unit tests (Google Test)
+    ├── integration/        End-to-end integration tests (Google Test)
+    └── csharp/             C# unit and smoke tests (Atlas.Runtime.Tests, Atlas.Generators.Tests, Atlas.RuntimeTest, Atlas.SmokeTest)
 ```
 
 ## License
