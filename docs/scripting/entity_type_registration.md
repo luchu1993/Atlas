@@ -1,454 +1,148 @@
 # 设计: 实体类型注册机制
 
-> 归属阶段: ScriptPhase 3 (C++ EntityDefRegistry) + ScriptPhase 4 (Source Generator 注册代码)
-
-> **⚠ 部分内容已过时 (2026-04-14)**:  
-> 本文档原标题为"替代 .def 文件"，但设计方向已调整：`.def` 文件被保留并作为实体定义的唯一来源。  
-> 文档中引用的 `[Replicated]`/`[ClientRpc]` 等 Attribute 已删除，`EntityGenerator` 已删除。  
-> 类型注册现由 **DefGenerator** 生成的 `DefEntityTypeRegistry`（使用 `[ModuleInitializer]`）自动完成。  
-> C++ 端 `EntityDefRegistry` 的设计和二进制注册格式仍然有效。
+> 归属阶段: ScriptPhase 3 (C++ `EntityDefRegistry`) + ScriptPhase 4 (Source Generator 注册代码)
+>
+> **状态（2026-04-19）：✅ 已落地**。`.def` 文件保留并作为实体定义唯一来源；C# 侧 `[Replicated]` / `[ClientRpc]` 等 Attribute 与独立的 `EntityGenerator` 均已删除。类型注册由 `Atlas.Generators.Def` 的 `TypeRegistryEmitter` + `[ModuleInitializer]` 自动完成。
 
 ---
 
 ## 1. 问题
 
-BigWorld 传统架构使用 `.def` XML 文件描述实体类型信息：
+BigWorld 传统使用 `.def` XML 描述实体（属性、同步范围、方法签名）。Atlas 保留 `.def`（`entity_defs/*.def`）作为输入源，但引擎 C++ 侧需要结构化元信息支撑以下职责：
 
-```xml
-<!-- 传统 .def 文件示例 -->
-<Avatar.def>
-  <Properties>
-    <name>
-      <Type> STRING </Type>
-      <Flags> ALL_CLIENTS </Flags>
-    </name>
-    <hp>
-      <Type> INT32 </Type>
-      <Flags> OWN_CLIENT </Flags>
-    </hp>
-    <position>
-      <Type> VECTOR3 </Type>
-      <Flags> ALL_CLIENTS </Flags>
-    </position>
-  </Properties>
-  <ClientMethods>
-    <showDamage>
-      <Arg> FLOAT32 </Arg>
-      <Arg> VECTOR3 </Arg>
-    </showDamage>
-  </ClientMethods>
-  <CellMethods>
-    <moveTo>
-      <Arg> VECTOR3 </Arg>
-    </moveTo>
-  </CellMethods>
-</Avatar.def>
-```
+| C++ 引擎职责 | 需要的元信息 |
+|-------------|-------------|
+| RPC 路由分发 | `rpc_id` → 所属类型 + 方向 |
+| 属性同步范围过滤 | 属性名 → `ReplicationScope` |
+| 数据库持久化 | `persistent`、`identifier` 标记 + 数据类型 |
+| 空间管理 | 实体是否有 `Position` 属性 |
+| 带宽优化 | 属性大小估算、delta 更新 |
+| 安全校验 | 客户端发来的 `rpc_id` 合法性 + `ExposedScope` |
+| 日志 / 调试 | 实体类型名、RPC 方法名 |
 
-**切换到 C# 后，`.def` 被 C# 类型 + Attribute 完全取代。**
+## 2. 方案
 
-但 C++ 引擎层在以下场景仍需实体类型元信息：
-
-| C++ 引擎层功能 | 需要的信息 |
-|---------------|-----------|
-| RPC 路由分发 | 实体类型 ID → RPC ID 映射表 |
-| 属性同步范围过滤 | 属性名 → 同步范围 (ALL_CLIENTS / OWN_CLIENT / CELL / BASE) |
-| 数据库持久化 | 持久属性列表、属性数据类型 |
-| 空间管理 | 实体是否有 Position 属性 |
-| 网络带宽优化 | 属性大小估算、差量更新 |
-| 安全校验 | 客户端发来的 RPC ID 是否合法 |
-| 日志/调试 | 实体类型名、RPC 方法名 |
-
-## 2. 方案: 启动时注册
-
-C# Source Generator 在编译期收集所有实体类型信息，生成注册代码。引擎启动时，C# 调用 C++ 的 `NativeApi` 注册函数，C++ 侧构建内存索引。
+启动时由 C# 侧通过 `Atlas.Core.NativeApi.RegisterEntityType` 把每个类型的二进制描述送给 C++ `EntityDefRegistry`；热重载前 `UnregisterAllEntityTypes`，重载后重新注册。
 
 ```
-编译期                               运行时启动
-┌───────────────────┐               ┌──────────────────────┐
-│ C# Source         │               │ C# Bootstrap.Init()  │
-│ Generator         │  ──生成──→    │   EntityTypeRegistry  │
-│                   │               │     .RegisterAll()    │
-│ 扫描 [Entity]    │               │        │              │
-│ [Replicated]     │               │        ▼              │
-│ [ClientRpc] 等   │               │   NativeApi           │
-└───────────────────┘               │   .RegisterEntityType │
-                                    │   (序列化的类型描述)  │
-                                    └────────┼─────────────┘
-                                             │
-                                             ▼
-                                    ┌──────────────────────┐
-                                    │ C++ EntityDefRegistry │
-                                    │   反序列化 → 构建    │
-                                    │   内存索引 ≡ 旧 .def │
-                                    │   解析结果           │
-                                    └──────────────────────┘
+编译期（Atlas.Generators.Def）              运行时 / 热重载
+┌─────────────────────────────┐            ┌────────────────────────────────────┐
+│ 扫描 entity_defs/*.def      │            │ [ModuleInitializer]                 │
+│ TypeRegistryEmitter         │ ─生成───→  │ DefEntityTypeRegistry.RegisterAll   │
+│  → DefEntityTypeRegistry     │            │   ├─ 序列化 EntityTypeDescriptor    │
+│  → RegisterAll()             │            │   └─ NativeApi.RegisterEntityType   │
+└─────────────────────────────┘            └──────────────┬─────────────────────┘
+                                                          ▼
+                                           ┌────────────────────────────────────┐
+                                           │ atlas_register_entity_type          │
+                                           │   └─ EntityDefRegistry::RegisterType │
+                                           └────────────────────────────────────┘
 ```
 
-## 3. 类型描述数据结构
+## 3. C++ 数据结构
 
-### 3.1 C++ 侧 (引擎层索引)
+### `src/lib/entitydef/entity_type_descriptor.h`
 
 ```cpp
-// src/lib/entitydef/entity_type_descriptor.hpp
-
-namespace atlas {
-
-enum class PropertyDataType : uint8_t
-{
-    Bool, Int8, UInt8, Int16, UInt16,
-    Int32, UInt32, Int64, UInt64,
-    Float, Double, String, Bytes,
-    Vector3, Quaternion,
-    Custom  // 嵌套自定义类型
+enum class PropertyDataType : uint8_t {
+  kBool, kInt8, kUInt8, kInt16, kUInt16, kInt32, kUInt32,
+  kInt64, kUInt64, kFloat, kDouble, kString, kBytes,
+  kVector3, kQuaternion, kCustom
 };
 
-enum class ReplicationScope : uint8_t
-{
-    CellPrivate = 0, // 仅 Cell 端
-    BaseOnly    = 1, // 仅 Base 端
-    OwnClient   = 2, // Base/Cell + 拥有者客户端
-    AllClients  = 3, // Base/Cell + 所有客户端
+enum class ReplicationScope : uint8_t {
+  kCellPrivate = 0, kCellPublic = 1, kOwnClient = 2, kOtherClients = 3,
+  kAllClients = 4, kCellPublicAndOwn = 5, kBase = 6, kBaseAndClient = 7,
 };
 
-struct PropertyDescriptor
-{
-    std::string     name;
-    PropertyDataType data_type;
-    ReplicationScope scope;
-    bool            persistent;     // 是否入库
-    uint16_t        index;          // 在序列化流中的位置
+enum class ExposedScope : uint8_t {
+  kNone = 0,          // 仅服务端可调用
+  kOwnClient = 1,     // 仅拥有者客户端
+  kAllClients = 2,    // AoI 内任何客户端（仅 cell_methods）
 };
 
-struct RpcDescriptor
-{
-    std::string     name;
-    uint32_t        rpc_id;         // 全局唯一 RPC ID
-    uint8_t         direction;      // 0=ClientRpc, 2=CellRpc, 3=BaseRpc (1=reserved)
-    // 参数类型列表（用于日志/调试，不用于反序列化）
-    std::vector<PropertyDataType> param_types;
+struct PropertyDescriptor {
+  std::string      name;
+  PropertyDataType data_type;
+  ReplicationScope scope;
+  bool             persistent{false};
+  bool             identifier{false};   // [Identifier]：DB 主键
+  bool             reliable{false};     // 绕过 DeltaForwarder 预算，走可靠通道
+  uint8_t          detail_level{5};
+  uint16_t         index{0};
 };
 
-struct EntityTypeDescriptor
-{
-    std::string                     name;           // "Avatar"
-    uint16_t                        type_id;        // 全局唯一类型 ID
-    bool                            has_cell;       // 是否有 Cell 部分
-    bool                            has_client;     // 是否有客户端代理
-    std::vector<PropertyDescriptor> properties;
-    std::vector<RpcDescriptor>      rpcs;
+struct RpcDescriptor {
+  std::string                   name;
+  uint32_t                      rpc_id;  // packed: direction:2 | typeIndex:14 | method:8
+  std::vector<PropertyDataType> param_types;
+  ExposedScope                  exposed{ExposedScope::kNone};
+
+  uint8_t  Direction() const;   // (rpc_id >> 22) & 0x3
+  uint16_t TypeIndex() const;   // (rpc_id >> 8) & 0x3FFF
+  uint8_t  MethodIndex() const; // rpc_id & 0xFF
+  bool     IsExposed() const;
 };
 
-} // namespace atlas
-```
+enum class EntityCompression : uint8_t { kNone = 0, kDeflate = 1 };
 
-### 3.2 C++ 侧全局注册表
-
-```cpp
-// src/lib/entitydef/entity_def_registry.hpp
-
-namespace atlas {
-
-class EntityDefRegistry
-{
-public:
-    // C# 启动时调用此函数注册（通过 NativeApi）
-    Result<void, std::string> register_type(
-        const std::byte* data, int32_t len);
-
-    // 按类型名查找
-    const EntityTypeDescriptor* find_by_name(std::string_view name) const;
-
-    // 按类型 ID 查找
-    const EntityTypeDescriptor* find_by_id(uint16_t type_id) const;
-
-    // 验证 RPC ID 是否属于某类型的合法 RPC
-    bool validate_rpc(uint16_t type_id, uint32_t rpc_id) const;
-
-    // 获取某类型的所有需要同步的属性
-    std::span<const PropertyDescriptor> get_replicated_properties(
-        uint16_t type_id, ReplicationScope max_scope) const;
-
-    // 获取某类型的持久属性列表
-    std::span<const PropertyDescriptor> get_persistent_properties(
-        uint16_t type_id) const;
-
-    size_t type_count() const { return types_.size(); }
-
-private:
-    std::vector<EntityTypeDescriptor>               types_;
-    std::unordered_map<std::string, uint16_t>       name_index_;
-    std::unordered_map<uint16_t, size_t>            id_index_;
-    std::unordered_map<uint32_t, uint16_t>          rpc_to_type_;
+struct EntityTypeDescriptor {
+  std::string                     name;
+  uint16_t                        type_id;
+  bool                            has_cell;
+  bool                            has_client;
+  std::vector<PropertyDescriptor> properties;
+  std::vector<RpcDescriptor>      rpcs;
+  EntityCompression               internal_compression{EntityCompression::kNone};
+  EntityCompression               external_compression{EntityCompression::kNone};
 };
-
-} // namespace atlas
 ```
 
-### 3.3 C# 侧注册代码 (Source Generator 生成)
+### `src/lib/entitydef/entity_def_registry.h`
 
-```csharp
-// <auto-generated by Atlas.Generators.Entity/>
+主要 API（PascalCase）：
 
-internal static class EntityTypeRegistry
-{
-    /// <summary>
-    /// 引擎启动时调用，注册所有实体类型到 C++ EntityDefRegistry
-    /// </summary>
-    public static void RegisterAll()
-    {
-        RegisterAvatar();
-        RegisterMonster();
-        RegisterNPC();
-        // ... 所有 [Entity] 标记的类型
-    }
+| 方法 | 用途 |
+|------|------|
+| `static EntityDefRegistry& Instance()` | 进程级单例 |
+| `bool RegisterType(const std::byte* data, int32_t len)` | 由 `atlas_register_entity_type` 调用；反序列化 + 建索引 |
+| `static Result<EntityDefRegistry> FromJsonFile(path)` | DBApp 从 `entity_defs.json` 直接加载，不经 C# |
+| `const EntityTypeDescriptor* FindByName(name)` / `FindById(type_id)` | 查找 |
+| `bool ValidateRpc(type_id, rpc_id)` | 检验 `rpc_id` 归属 |
+| `const RpcDescriptor* FindRpc(rpc_id)` | 按 packed ID 查找 |
+| `bool IsExposed(rpc_id)` / `ExposedScope GetExposedScope(rpc_id)` | 客户端 RPC 合法性 |
+| `std::vector<const PropertyDescriptor*> GetReplicatedProperties(type_id, min_scope)` | 按范围过滤 |
+| `std::vector<const PropertyDescriptor*> GetPersistentProperties(type_id)` | 持久属性列表 |
+| `std::array<uint8_t,16> PersistentPropertiesDigest()` | 持久字段 MD5 摘要，用于 BaseApp ↔ DBApp schema 一致性校验 |
+| `void clear()` | 热重载前清空 |
 
-    private static void RegisterAvatar()
-    {
-        var writer = new SpanWriter(512);
+> **注意**：`GetReplicatedProperties` 当前使用 `>=` 范围比较，依赖 C# 只发送 4 个值（`CellPrivate=0` / `BaseOnly=1` / `OwnClient=2` / `AllClients=3`）。C++ `ReplicationScope` 保留全部 8 个值；若未来以 `.def` 为直接源引入全部 8 种，需要改为显式匹配。
 
-        // 类型头
-        writer.WriteString("Avatar");         // name
-        writer.WriteUInt16(1);                // type_id
-        writer.WriteBool(true);               // has_cell
-        writer.WriteBool(true);               // has_client
+## 4. C# 侧生成
 
-        // 属性列表
-        writer.WritePackedUInt32(3);          // property count
+`Atlas.Generators.Def/Emitters/TypeRegistryEmitter.cs` 产出 `DefEntityTypeRegistry`（含 `[ModuleInitializer]`），在程序集加载时：
 
-        // Property: name
-        writer.WriteString("name");
-        writer.WriteByte((byte)PropertyDataType.String);
-        writer.WriteByte((byte)ReplicationScope.AllClients);
-        writer.WriteBool(true);               // persistent
-        writer.WriteUInt16(0);                // index
+1. 为每个 `EntityTypeDescriptor` 用 `Atlas.Serialization.SpanWriter` 构建二进制描述；字节格式与 C++ `RegisterType` 解析路径约定一致。
+2. 调用 `Atlas.Core.NativeApi.RegisterEntityType(ReadOnlySpan<byte>)`（内部 `[LibraryImport("atlas_engine", EntryPoint = "atlas_register_entity_type")]`）。
+3. 热重载前由 `ClrHotReload` 触发 `atlas_unregister_all_entity_types` → `EntityDefRegistry::clear()`；新程序集加载时 `[ModuleInitializer]` 再次触发 `RegisterAll`。
 
-        // Property: hp
-        writer.WriteString("hp");
-        writer.WriteByte((byte)PropertyDataType.Int32);
-        writer.WriteByte((byte)ReplicationScope.OwnClient);
-        writer.WriteBool(true);
-        writer.WriteUInt16(1);
+## 5. 各服务进程的使用
 
-        // Property: position
-        writer.WriteString("position");
-        writer.WriteByte((byte)PropertyDataType.Vector3);
-        writer.WriteByte((byte)ReplicationScope.AllClients);
-        writer.WriteBool(false);
-        writer.WriteUInt16(2);
+| 进程 | 使用点 |
+|------|-------|
+| BaseApp | `INativeApiProvider::SendClientRpc / SendCellRpc / SendBaseRpc` 前用 `ValidateRpc` + `IsExposed` 校验；`GetPersistentProperties` 构造持久化快照 |
+| CellApp | 属性同步按 `GetReplicatedProperties(type_id, scope)` 过滤；空间管理按 `FindByName("Position")` 判断 |
+| DBApp | `FromJsonFile` 或共享 `EntityDefRegistry` 校验持久字段 schema；`PersistentPropertiesDigest()` 与 BaseApp 握手 |
+| Reviver / LoginApp | 通常只需类型元数据，只读访问 |
 
-        // RPC 列表
-        writer.WritePackedUInt32(5);          // rpc count
+## 6. 测试
 
-        // RPC: ShowDamage (ClientRpc)
-        writer.WriteString("ShowDamage");
-        writer.WriteUInt32(RpcIds.Avatar_ShowDamage);
-        writer.WriteByte(0);                  // direction = ClientRpc
-        writer.WritePackedUInt32(2);          // param count
-        writer.WriteByte((byte)PropertyDataType.Float);
-        writer.WriteByte((byte)PropertyDataType.Vector3);
+- C++：`tests/unit/test_entity_def_registry.cpp`（注册 / 查找 / RPC 校验）。
+- C#：由 `tests/csharp/Atlas.Generators.Tests/DefGeneratorTests.cs` 覆盖 `DefEntityTypeRegistry` 的生成结果；集成测试在 `tests/csharp/Atlas.Runtime.Tests` 验证注册路径可走通。
+- 跨进程一致性：`PersistentPropertiesDigest` 在 BaseApp / DBApp 握手阶段比对，不一致则拒绝服务。
 
-        // RPC: MoveTo (CellRpc)
-        writer.WriteString("MoveTo");
-        writer.WriteUInt32(RpcIds.Avatar_MoveTo);
-        writer.WriteByte(2);                  // direction = CellRpc
-        writer.WritePackedUInt32(1);
-        writer.WriteByte((byte)PropertyDataType.Vector3);
+## 7. 关联
 
-        // ... 更多 RPC ...
-
-        NativeApi.RegisterEntityType(writer.WrittenSpan);
-        writer.Dispose();
-    }
-}
-```
-
-### 3.4 C++ NativeApi 注册入口
-
-```cpp
-// src/lib/clrscript/clr_native_api.cpp
-
-// C# → C++ 回调
-static void native_register_entity_type(
-    const std::byte* data, int32_t len)
-{
-    auto& registry = EntityDefRegistry::instance();
-    auto result = registry.register_type(data, len);
-    if (!result) {
-        ATLAS_LOG_ERROR("Failed to register entity type: {}", result.error());
-    }
-}
-
-// C++ 导出函数（由 C# [LibraryImport("atlas_engine")] 调用）
-// 声明在 clr_native_api.hpp，实现在 clr_native_api.cpp
-ATLAS_NATIVE_API void atlas_register_entity_type(const uint8_t* data, int32_t len)
-{
-    native_register_entity_type(
-        reinterpret_cast<const std::byte*>(data), len);
-}
-```
-
-## 4. 引擎各环节如何使用注册表
-
-### 4.1 RPC 路由
-
-```cpp
-// 收到客户端 RPC 消息
-void on_client_rpc(uint16_t entity_type, uint32_t entity_id,
-                   uint32_t rpc_id, const std::byte* payload, int32_t len)
-{
-    auto& registry = EntityDefRegistry::instance();
-
-    // 安全校验: 该 RPC ID 是否属于该实体类型且标记了 exposed
-    if (!registry.validate_rpc(entity_type, rpc_id)) {
-        ATLAS_LOG_WARNING("Invalid RPC {} for type {}", rpc_id, entity_type);
-        return;
-    }
-
-    // 转交 C# 分发
-    ClrScriptEngine::instance().dispatch_rpc(entity_id, rpc_id, payload, len);
-}
-```
-
-### 4.2 属性同步范围过滤
-
-```cpp
-// 实体 dirty 属性同步
-void sync_entity_properties(uint32_t entity_id, uint16_t type_id,
-                            const std::byte* full_state, int32_t len)
-{
-    auto& registry = EntityDefRegistry::instance();
-
-    // 发给拥有者客户端: OwnClient + AllClients 范围的属性
-    auto owner_props = registry.get_replicated_properties(
-        type_id, ReplicationScope::OwnClient);
-    send_to_owner(entity_id, owner_props, full_state, len);
-
-    // 发给其他客户端: 仅 AllClients 范围的属性
-    auto other_props = registry.get_replicated_properties(
-        type_id, ReplicationScope::AllClients);
-    send_to_others(entity_id, other_props, full_state, len);
-}
-```
-
-### 4.3 数据库持久化
-
-```cpp
-// DBApp 保存实体
-void persist_entity(uint16_t type_id, uint32_t entity_id,
-                    const std::byte* state, int32_t len)
-{
-    auto& registry = EntityDefRegistry::instance();
-    auto persistent_props = registry.get_persistent_properties(type_id);
-
-    auto* desc = registry.find_by_id(type_id);
-    // 使用类型名作为表名
-    db_->save(desc->name, entity_id, persistent_props, state, len);
-}
-```
-
-### 4.4 空间管理
-
-```cpp
-// CellApp 空间管理
-void update_entity_position(uint16_t type_id, uint32_t entity_id,
-                            const std::byte* state, int32_t len)
-{
-    auto& registry = EntityDefRegistry::instance();
-    auto* desc = registry.find_by_id(type_id);
-
-    // 查找 position 属性的偏移
-    for (auto& prop : desc->properties) {
-        if (prop.name == "position" && prop.data_type == PropertyDataType::Vector3) {
-            auto reader = BinaryReader(state + prop.index * /*...*/, 12);
-            auto pos = reader.read<Vector3>();
-            space_manager_.update_position(entity_id, pos);
-            break;
-        }
-    }
-}
-```
-
-## 5. 与传统 .def 方式的对比
-
-| 维度 | .def XML 文件 | C# Attribute + Source Generator |
-|------|-------------|-------------------------------|
-| 信息来源 | 独立 XML 文件 | **C# 源代码中的类型定义** |
-| 一致性 | XML 与代码可能不同步 | **单一信息源，不可能不一致** |
-| 类型安全 | 字符串匹配 | **编译期类型检查** |
-| 新增属性 | 修改 XML + 代码两处 | **仅修改 C# 代码一处** |
-| IDE 支持 | XML 编辑器 | **C# IDE 全套支持** |
-| 错误发现时机 | 运行时加载报错 | **编译期报错** |
-| 引擎注册 | 解析 XML → 内存结构 | **反序列化二进制 → 相同内存结构** |
-| 版本管理 | XML diff 可读性差 | **C# diff 清晰** |
-| 运行时开销 | XML 解析（启动时） | **二进制反序列化（更快）** |
-
-## 6. 开发任务
-
-### 任务 T.1: C++ EntityTypeDescriptor 数据结构
-
-**新建**: `src/lib/entitydef/entity_type_descriptor.hpp`
-
-- [ ] `PropertyDataType` 枚举
-- [ ] `ReplicationScope` 枚举
-- [ ] `PropertyDescriptor` 结构
-- [ ] `RpcDescriptor` 结构
-- [ ] `EntityTypeDescriptor` 结构
-
-### 任务 T.2: C++ EntityDefRegistry
-
-**新建**: `src/lib/entitydef/entity_def_registry.hpp`, `entity_def_registry.cpp`
-
-- [ ] `register_type()` — 反序列化 C# 发来的二进制类型描述
-- [ ] `find_by_name()` / `find_by_id()` — 查找
-- [ ] `validate_rpc()` — RPC 合法性校验
-- [ ] `get_replicated_properties()` — 按 scope 过滤属性
-- [ ] `get_persistent_properties()` — 获取持久属性
-- [ ] 单例/注入机制
-
-### 任务 T.3: C++ 导出函数实现
-
-**修改**: `src/lib/clrscript/clr_native_api.cpp`
-
-- [ ] 实现 `atlas_register_entity_type` — 反序列化 C# 发来的二进制数据并注册到 `EntityDefRegistry`
-- [ ] 实现 `atlas_unregister_all_entity_types` — 清空注册表（热重载用）
-- [ ] 两个函数声明已在 Phase 2 `clr_native_api.hpp` 中定义
-
-### 任务 T.4: Source Generator — 注册代码生成
-
-**修改**: `Atlas.Generators.Entity`
-
-- [ ] 扫描所有 `[Entity]` 类型
-- [ ] 收集 `[Replicated]`/`[Persistent]`/`[ServerOnly]` 属性
-- [ ] 收集 `[ClientRpc]`/`[CellRpc]`/`[BaseRpc]` 方法
-- [ ] 生成 `EntityTypeRegistry.RegisterAll()` 和每个类型的注册方法
-- [ ] 注册二进制格式与 C++ `register_type()` 反序列化对齐
-
-### 任务 T.5: 引擎各模块适配
-
-- [ ] RPC 路由模块使用 `EntityDefRegistry::validate_rpc()`
-- [ ] 属性同步模块使用 `get_replicated_properties()` 过滤
-- [ ] DBApp 使用 `get_persistent_properties()` 决定存储字段
-- [ ] CellApp 空间管理从注册表获取 Position 属性信息
-- [ ] 日志模块使用类型名/方法名输出可读信息
-
-### 任务 T.6: 热重载集成
-
-- [ ] 热重载前调用 `unregister_all_types()`
-- [ ] 新 Assembly 加载后重新 `RegisterAll()`
-- [ ] 验证注册表更新后各模块无残留缓存
-
-### 任务 T.7: 单元测试
-
-**新建**: `tests/unit/test_entity_def_registry.cpp`
-
-- [ ] 注册/查找/移除正确性
-- [ ] RPC 校验（合法/非法 ID）
-- [ ] 属性 scope 过滤正确性
-- [ ] 重复注册处理
-- [ ] 空实体/无属性/无 RPC 边界
-
-**新建**: `tests/csharp/Atlas.Generators.Entity.Tests/TypeRegistryGeneratorTests.cs`
-
-- [ ] Generator 快照测试：验证生成的注册代码格式正确
-- [ ] 多实体注册、增量添加不影响已有 ID
+- [script_phase4_shared_generators.md](script_phase4_shared_generators.md) — Emitter 架构。
+- [DEF_GENERATOR_DESIGN.md](../DEF_GENERATOR_DESIGN.md) — `.def` 文件格式与 DefGenerator 整体设计。
+- [PROPERTY_SYNC_DESIGN.md](../PROPERTY_SYNC_DESIGN.md) — 属性同步与 delta 细节。

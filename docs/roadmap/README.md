@@ -28,17 +28,19 @@
 
 ## 后脚本层阶段
 
-| Phase | 名称 | 关键交付 | 文档 |
-|-------|------|----------|------|
-| 5 | 服务器框架基类 | ServerApp 主循环、消息接口注册、Watcher | [phase05_server_framework.md](phase05_server_framework.md) |
-| 6 | machined 进程管理 | 服务发现、进程注册、心跳监控 | [phase06_machined.md](phase06_machined.md) |
-| 7 | DBApp + 数据库层 | IDatabase 接口、SQLite/XML/MySQL 路线、异步持久化 | [phase07_dbapp.md](phase07_dbapp.md) |
-| 8 | BaseApp 实体宿主 | Base/Proxy 实体、客户端代理、writeToDB | [phase08_baseapp.md](phase08_baseapp.md) |
-| 9 | LoginApp + BaseAppMgr | 登录流程、SessionKey、负载分配 | [phase09_login_flow.md](phase09_login_flow.md) |
-| 10 | CellApp 空间模拟 | Space、RangeList、AOI/Witness、Controller | [phase10_cellapp.md](phase10_cellapp.md) |
-| 11 | 分布式空间 (Real/Ghost + CellAppMgr) | Ghost 机制、Entity Offload、BSP 分区 | [phase11_distributed_space.md](phase11_distributed_space.md) |
-| 12 | 客户端 SDK | 连接协议、实体同步、Avatar Filter | [phase12_client_sdk.md](phase12_client_sdk.md) |
-| 13 | 高可用 (Reviver + DBAppMgr) | 崩溃恢复、Manager 热备、集群管理 | [phase13_high_availability.md](phase13_high_availability.md) |
+当前进度基线: 2026-04-18。
+
+| Phase | 名称 | 状态 | 关键交付 | 文档 |
+|-------|------|------|----------|------|
+| 5 | 服务器框架基类 | ✅ 完成 | ServerApp 主循环、消息接口注册、Watcher | [phase05_server_framework.md](phase05_server_framework.md) |
+| 6 | machined 进程管理 | ✅ 主线完成（auto-reconnect / `atlas_tool watch`/`shutdown` 待补） | 服务发现、进程注册、心跳监控 | [phase06_machined.md](phase06_machined.md) |
+| 7 | DBApp + 数据库层 | ✅ SQLite/XML 主线；🚧 集成补强；⬜ MySQL 未开始 | IDatabase 接口、SQLite/XML/MySQL 路线、异步持久化 | [phase07_dbapp.md](phase07_dbapp.md) |
+| 8 | BaseApp 实体宿主 | ✅ 主线完成（AOI fan-out、HeartbeatPing 延至 Phase 10/12） | Base/Proxy 实体、客户端代理、writeToDB | [phase08_baseapp.md](phase08_baseapp.md) |
+| 9 | LoginApp + BaseAppMgr | ✅ 主线完成；🚧 churn 压测收敛待做 | 登录流程、SessionKey、负载分配 | [phase09_login_flow.md](phase09_login_flow.md) |
+| 10 | CellApp 空间模拟 | ⬜ 未启动（前置 PR-A/B/C/D 仍待合入） | Space、RangeList、AOI/Witness、Controller | [phase10_cellapp.md](phase10_cellapp.md) · [前置](phase10_prerequisites.md) |
+| 11 | 分布式空间 (Real/Ghost + CellAppMgr) | ⬜ 未启动（等待 Phase 10） | Ghost 机制、Entity Offload、BSP 分区 | [phase11_distributed_space.md](phase11_distributed_space.md) |
+| 12 | 客户端 SDK | 🚧 C# `Atlas.Client` 骨架已落（实体/回调/生成器），协议栈与登录流程未开工 | 连接协议、实体同步、Avatar Filter | [phase12_client_sdk.md](phase12_client_sdk.md) |
+| 13 | 高可用 (Reviver + DBAppMgr) | ⬜ 未启动 | 崩溃恢复、Manager 热备、集群管理 | [phase13_high_availability.md](phase13_high_availability.md) |
 
 ---
 

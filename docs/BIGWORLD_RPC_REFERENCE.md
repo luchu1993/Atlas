@@ -1,7 +1,10 @@
-# BigWorld RPC 机制参考 — Atlas 实现指南
+# BigWorld RPC 机制参考
 
 > 来源: BigWorld Engine 14.4.1 源码分析
 > 关联: [Entity Mailbox 设计](scripting/entity_mailbox_design.md) | [Phase 8 BaseApp](roadmap/phase08_baseapp.md) | [Phase 10 CellApp](roadmap/phase10_cellapp.md)
+>
+> 本文档聚焦 **BigWorld 原始机制**。Atlas 侧的实现映射、缺陷修复清单、Phase 10/11 任务与安全加固均已迁至
+> [RPC 审计与修复方案](RPC_AUDIT_REMEDIATION.md)（§7 概念映射 / §8 实现状态 / §9 Phase 10 / §10 Phase 11 / §11 安全加固 / §13 散落设计注记）。
 
 ---
 
@@ -97,8 +100,6 @@ BigWorld 使用 XML `.def` 文件声明实体的所有方法及其所属端：
 | `<Exposed>ALL_CLIENTS</Exposed>` | `ALL_CLIENTS` | 任何客户端可调 | 仅 Cell |
 | 无标记 | 无 | 客户端不可调 | Cell, Base |
 | `<Exposed/>` on ClientMethod | **编译错误** | 客户端方法不允许 Exposed | — |
-
-**Atlas 对应:** `.def` 文件中 `cell_methods` / `base_methods` 的 `<exposed>` 属性标记等价于 `<Exposed/>`。`.def` 的 `<client_methods>`/`<cell_methods>`/`<base_methods>` 节直接定义 RPC 方向，`exposed` 作为正交属性控制客户端可达性。DefGenerator 根据进程上下文（ATLAS_BASE/ATLAS_CELL/ATLAS_CLIENT）生成对应的 Send stub / Receive partial / Forbidden stub。
 
 ---
 
@@ -428,8 +429,6 @@ if (clientSafety & DataType::CLIENT_UNUSABLE) {
 }
 ```
 
-**Atlas 对应:** Source Generator 在编译期强制类型安全，比 BigWorld 的加载时检查更早发现问题。
-
 ### 4.4 第3层: REAL_ONLY 消息路由
 
 Exposed 方法的处理消息被标记为 `REAL_ONLY`:
@@ -479,8 +478,6 @@ if (isExposed) {
 - `OWN_CLIENT` 方法只允许实体拥有者调用
 - `ALL_CLIENTS` 方法不验证调用者（设计如此）
 
-**Atlas 对应:** `CellEntityRpc` 消息中的 `caller_entity_id` 字段，由 BaseApp 填入。
-
 ### 4.6 不存在的机制
 
 | 机制 | 状态 | 说明 |
@@ -488,8 +485,6 @@ if (isExposed) {
 | 调用频率限制 | **无** | Exposed 方法无 rate limiting |
 | ACL / 角色权限 | **无** | 无更细粒度的权限系统 |
 | IP 白名单 | **无** | 方法级别无此机制 |
-
-**Atlas 机会:** 可在 C++ 校验层加入 RPC 频率限制，这是 BigWorld 缺少的防护。
 
 ---
 
@@ -629,8 +624,6 @@ def queryInfo(self, sourceEntityID):
 ```
 
 **核心设计思想：** 客户端是不可信的，不应直接操作其他玩家的 Base 实体。所有跨实体交互都必须经服务端逻辑中转，由服务端决定暴露哪些信息。
-
-**Atlas 对应:** 客户端只能调用自身实体的 exposed cell/base 方法。查询其他实体需通过服务端逻辑转发，与 BigWorld 一致。
 
 ---
 
@@ -865,18 +858,6 @@ enum ControllerDomain {
 Real 通过 `ghostControllerCreate/Delete/Update` 消息将 Controller 状态同步到 Ghost。
 Controller 子类在代码中硬编码 `domain()` 返回值，`.def` 中无配置。
 
-### 6.9 Atlas 对应
-
-| BigWorld | Atlas (Phase 11) | 说明 |
-|---|---|---|
-| `REAL_ONLY` 消息标记 | CellApp 消息处理器中检查 `isReal()` 并转发 | 相同设计 |
-| `pRealChannel_` 转发 | Ghost 持有 Real 的 Channel 地址 | 相同设计 |
-| `haunts_[]` 追踪 Ghost | Real 维护 Ghost CellApp 列表 | 相同设计 |
-| 属性 `<Flags>` GHOSTED | C# `[Replicated(Scope.xxx)]` | Source Generator 按 Scope 过滤 |
-| `<DetailLevel>` LoD | 后续实现 | 可在 C# Attribute 中扩展 |
-| Controller `ControllerDomain` | Controller 子类指定域 | 代码级控制 |
-| Ghost 透明转发 | 脚本层无感知 | **核心保留：分布式透明性** |
-
 ---
 
 ## 7. 方法索引体系
@@ -920,9 +901,6 @@ for (size_t i = 0; i < exposedMethods_.size(); ++i) {
 | Cell → Base | `internalIndex()` | `internalMethod(index)` |
 | Server → Client | `exposedMsgID()` | `exposedMethod(methodID)` |
 
-**Atlas 对应:** RPC ID 格式 `0xTTTT_DDNN` 已统一了方向和方法编号，不需要维护两套索引。
-Source Generator 在编译期生成 `RpcIds` 常量，客户端和服务端共享同一套 ID。
-
 ---
 
 ## 8. 网络消息协议
@@ -959,13 +937,6 @@ MF_BASE_STREAM_MSG_EX( callCellMethod )     // line 253, 外部 → Cell (经 Ba
 MF_CALLBACK_MSG( entityMethod )             // Server → Client
 MERCURY_METHOD_RANGE_MSG( entityMethod, 2 ) // 方法消息范围
 ```
-
-### 8.3 Atlas 简化
-
-Atlas 统一使用消息 ID + RPC ID 的二级编码，避免 BigWorld 的 `ExposedMethodMessageRange`
-复杂编码。消息定义参见:
-- `src/server/baseapp/baseapp_messages.hpp` — BaseApp 协议
-- `src/server/cellapp/cellapp_messages.hpp` — CellApp 协议 (Phase 10)
 
 ---
 
@@ -1010,61 +981,7 @@ Atlas 统一使用消息 ID + RPC ID 的二级编码，避免 BigWorld 的 `Expo
 
 ---
 
-## 10. Atlas 实现映射
-
-### 10.1 BigWorld → Atlas 概念对照
-
-| BigWorld 概念 | Atlas 对应 | 说明 |
-|---|---|---|
-| `.def` XML 方法声明 | `.def` XML（`<client_methods>`/`<cell_methods>`/`<base_methods>`）| .def 为唯一来源，DefGenerator 按进程上下文生成代码 |
-| `<Exposed/>` 标记 | `.def` 的 `<exposed>` 属性 (None/OwnClient/AllClients) | 与方向正交，C++ EntityDefRegistry 校验 |
-| `PyServer` + `ServerCaller` | `AvatarCellMailbox` (readonly struct) | Source Generator 编译期生成 |
-| `PyClient` + `ClientCaller` | `AvatarClientMailbox` (readonly struct) | Source Generator 编译期生成 |
-| `CellEntityMailBox` | `AvatarCellMailbox` | 同上 |
-| `ClientEntityMailBox` | `AvatarClientMailbox` + `MailboxTarget` 枚举 | 支持 OwnerClient/AllClients/OtherClients |
-| `RemoteEntityMethod::pyCall()` | Mailbox struct 的方法体 (SpanWriter 序列化) | 零堆分配 |
-| `MethodDescription::callMethod()` | `RpcDispatcher.Dispatch_*()` (switch 分发) | 编译期生成 |
-| `ExposedMethodMessageRange` | `RpcIds` 常量 (`0xTTTT_DDNN`) | 简化的 ID 编码 |
-| `exposedMethod()` / `internalMethod()` 双索引 | 统一 RPC ID | 无需维护两套索引 |
-| `sourceEntityID` 验证 | `CellEntityRpc.caller_entity_id` | BaseApp 填入，C++ 校验 |
-
-### 10.2 安全校验映射
-
-| BigWorld 检查 | Atlas 对应 | 实现位置 |
-|---|---|---|
-| `isExposed()` 门禁 | `EntityDefRegistry::is_exposed()` 检查 exposed 属性 | C++ BaseApp |
-| `CLIENT_UNSAFE` 类型警告 | 编译期类型安全 (C# 强类型) | Source Generator |
-| `CLIENT_UNUSABLE` 拒绝 | 不适用 (C# 无 MAILBOX/PYTHON 类型) | — |
-| `REAL_ONLY` 消息路由 | Phase 11 实现 | CellApp 消息处理 |
-| `sourceEntityID` 验证 | `caller_entity_id` 校验 | C++ CellApp |
-| 无 rate limiting | **可在 C++ 层新增** | BaseApp 外部接口 |
-
-### 10.3 关键实现建议
-
-1. **客户端 RPC 校验必须在 C++ 层:**
-   客户端消息先经过 C++ 的 `EntityDefRegistry::validate_rpc()` 校验，确认:
-   - rpc_id 对应的方法存在
-   - 方法标记了 `exposed`（等价于 BigWorld 的 `isExposed()` 检查）
-   - 调用者有权限（等价于 BigWorld 的 OWN_CLIENT sourceID 检查）
-   通过后才转发给 C# `RpcDispatcher`。
-
-2. **CellApp 的 caller_entity_id 由 BaseApp 填写:**
-   与 BigWorld 的 `Proxy::cellEntityMethod()` 中 `b << id_` 完全一致。
-   客户端无法伪造此字段。
-
-3. **MailboxTarget 三模式对齐 BigWorld:**
-   BigWorld 的 `PyClient(isForOwn, isForOthers)` 对应 Atlas 的 `MailboxTarget` 枚举:
-   - `OwnerClient` = `isForOwn=true, isForOthers=false`
-   - `OtherClients` = `isForOwn=false, isForOthers=true`
-   - `AllClients` = `isForOwn=true, isForOthers=true`
-
-4. **AOI 下行路径当前约束:**
-   CellApp 的 ClientRpc 需经 BaseApp Proxy 转发到客户端。Phase 10 首阶段按观察者
-   逐个展开回送 `SelfRpcFromCell` / `ReplicatedDeltaFromCell`。
-
----
-
-## 11. MethodDescription 核心方法参考
+## 10. MethodDescription 核心方法参考
 
 以下是 `MethodDescription` 中与 RPC 序列化/调用直接相关的关键方法:
 
@@ -1081,7 +998,7 @@ Atlas 统一使用消息 ID + RPC ID 的二级编码，避免 BigWorld 的 `Expo
 
 ---
 
-## 12. 附录: 完整调用链路对比表
+## 11. 附录: 完整调用链路对比表
 
 | 步骤 | Client→Cell | Client→Base | Base→Cell | Cell→Base | Base→Client | Cell→Client |
 |------|---|---|---|---|---|---|
@@ -1093,3 +1010,5 @@ Atlas 统一使用消息 ID + RPC ID 的二级编码，避免 BigWorld 的 `Expo
 | 6. 网络接口 | 外部 | 外部 | 内部 | 内部 | 直发客户端 | 内部→BaseApp→客户端 |
 | 7. 需要 Exposed? | Yes | Yes | No | No | No | No |
 | 8. sourceID 验证 | OWN_CLIENT 时 | No | No | No | N/A | N/A |
+
+> Atlas 侧对应的实现状态、Phase 10/11 任务清单与安全加固路线图见 [RPC 审计与修复方案](RPC_AUDIT_REMEDIATION.md) §7 ~ §12。

@@ -1,22 +1,22 @@
 # Unity Native Network DLL 设计文档
 
 > **状态**: 草案 v2 (已评审修订)
-> **日期**: 2026-04-17
+> **日期**: 2026-04-18
 > **目标**: 将 C++ 网络层抽取为独立 native DLL, 供 Unity 客户端通过 P/Invoke 调用
 >
 > **v2 修订要点**:
 > - 新增 §4.0 ABI 约定 (内存所有权 / 版本 / 重入 / 返回码)
 > - §4.5 Login/Auth API 精简: SessionKey/baseapp 地址不跨 FFI, authenticate 参数从 4 降为 2
-> - §4.5.4 新增 `atlas_net_disconnect` API
+> - §4.5.4 新增 `AtlasNetDisconnect` API
 > - §4.5.6 状态转换矩阵
 > - §5.2.1 SessionKey 生命周期与 `SecureZero` 清除
 > - §5.2.2 Callback table 原子替换 + noop sentinel
 > - §5.3 澄清客户端 RPC 线格式 (MessageID 位置编码, 无独立 rpc_id 字段)
 > - §10 Phase 0: IL2CPP 可行性 Spike (前置所有其他 Phase)
-> - §10 各 Phase 细化验证命令 (含 `bazel query` / ABI `static_assert`)
-> - §3 / §9.3 构建系统全面 Bazel 化 (target 加 `atlas_` 前缀,
->   `cc_shared_library` 用 `roots`+`exports_filter`, 对齐
->   `docs/BAZEL_MIGRATION.md` 约定)
+> - §10 各 Phase 细化验证命令 (含依赖图检查 / ABI `static_assert`)
+> - §3 / §9.3 构建系统全面对齐 CMake 3.28+ (target 加 `atlas_` 前缀,
+>   动态库用 `add_library(... SHARED)` + `CXX_VISIBILITY_PRESET hidden`,
+>   对齐 `CLAUDE.md` 与 `CMakePresets.json` 约定)
 > - §12 风险表新增 6 项具体风险与缓解
 
 ---
@@ -52,7 +52,7 @@ Unity 客户端架构:
 ┌─────────────────────────────────────────────┐
 │  Unity C# (MonoBehaviour)                   │
 │  ├── AtlasNetworkManager                    │
-│  │   ├── Update() → atlas_net_poll()        │
+│  │   ├── Update() → AtlasNetPoll()        │
 │  │   ├── Login/Auth 调用                     │
 │  │   └── 回调分发                            │
 │  ├── Atlas.Client (改造后)                   │
@@ -76,7 +76,7 @@ Unity 客户端架构:
 
 ### 1.3 核心原则
 
-- **C# 驱动 Tick**: Unity 的 `Update()` 调用 `atlas_net_poll()` 驱动网络事件循环
+- **C# 驱动 Tick**: Unity 的 `Update()` 调用 `AtlasNetPoll()` 驱动网络事件循环
 - **高层封装 Login/Auth**: DLL 内部管理连接切换和协议状态机，C# 只需调用并等待回调
 - **回调上行**: 收到 RPC/实体创建/断线等事件时，DLL 通过注册的函数指针回调 C#
 - **零 CLR 依赖**: DLL 不嵌入 CoreCLR，不依赖 hostfxr
@@ -201,192 +201,312 @@ atlas_net_client.dll
 
 ---
 
-## 3. Bazel 构建目标
+## 3. CMake 构建目标
 
-> 项目使用 Bazel 作为唯一构建系统 (见 `CLAUDE.md` 与 `docs/BAZEL_MIGRATION.md`)。
+> 项目使用 CMake 3.28+ 作为唯一构建系统 (见 `CLAUDE.md` 与
+> `CMakePresets.json`, 历史迁移记录见 `0930f66 build: migrate from Bazel to CMake`)。
 > 本节约定对齐仓库现有惯例:
-> - 所有 `cc_library` target 名加 `atlas_` 前缀 (例: `atlas_network`)
-> - 源文件放在 `src/`、头文件放在 `include/`, `hdrs = glob(["include/**/*.h"])`,
->   `includes = ["include"]`
-> - `cc_shared_library` 采用 `roots` + `exports_filter` 模式
->   (参考 `atlas_engine` 的实现)
-> - 平台分支用 `select({"@platforms//os:windows": [...], ...})`
+> - 所有 target 名加 `atlas_` 前缀 (例: `atlas_network`)
+> - 每个库一个子目录, 含单独 `CMakeLists.txt`;
+>   由 `src/lib/CMakeLists.txt` 用 `add_subdirectory` 串起
+> - 头文件与 `.cc` 平铺在同一目录, 通过
+>   `target_include_directories(... PUBLIC "${CMAKE_SOURCE_DIR}/src/lib")` 暴露
+> - 动态库用 `add_library(name SHARED ...)`, Unix 下设置
+>   `CXX_VISIBILITY_PRESET hidden` 实现精细符号导出
+>   (参考 `src/lib/clrscript/CMakeLists.txt` 中 `atlas_engine` 的实现)
+> - 平台分支用 `if(WIN32)` / `if(APPLE)` / `if(UNIX AND NOT APPLE)`
 
 ### 3.1 新增 Target: atlas_net_client
 
-```python
-# src/lib/net_client/BUILD.bazel
+```cmake
+# src/lib/net_client/CMakeLists.txt
 
-load("@rules_cc//cc:defs.bzl", "cc_library", "cc_shared_library")
-
-# ---- 核心 cc_library ----
+# ---- 核心静态库 ----
 # 编译 Login/Auth 状态机和 C API 入口;
-# 通过 cc_shared_library 组合为最终 DLL 之前单独做单元测试
-cc_library(
-    name = "atlas_net_client_core",
-    srcs = [
-        "src/client_api.cc",        # C API 导出层
-        "src/client_session.cc",    # Login/Auth 状态机
-    ],
-    hdrs = glob(["include/**/*.h"]),
-    includes = ["include"],
-    defines = ["ATLAS_NET_CLIENT_EXPORTS"],
-    copts = select({
-        "@platforms//os:windows": [],
-        "//conditions:default": ["-fvisibility=hidden"],
-    }),
-    deps = [
-        "//src/lib/network:atlas_network",
-        "//src/lib/foundation:atlas_foundation",
-        "//src/lib/platform:atlas_platform",
-        # 关键: 只链接 binary 子集, 不拉入 pugixml / rapidjson (§3.3)
-        "//src/lib/serialization:atlas_serialization_binary",
-    ],
-    visibility = ["//visibility:public"],
+# 与最终 SHARED 库分开, 便于单元测试直接链接 static target
+add_library(atlas_net_client_core STATIC
+  client_api.cc        # C API 导出层
+  client_session.cc    # Login/Auth 状态机
 )
+
+target_include_directories(atlas_net_client_core
+  PUBLIC "${CMAKE_SOURCE_DIR}/src/lib"
+)
+
+target_compile_definitions(atlas_net_client_core
+  PRIVATE ATLAS_NET_CLIENT_EXPORTS
+)
+
+target_link_libraries(atlas_net_client_core
+  PUBLIC
+    atlas_network
+    atlas_foundation
+    atlas_platform
+    # 关键: 只链接 binary 子集, 不拉入 pugixml / rapidjson (§3.3)
+    atlas_serialization_binary
+    atlas_compiler_options
+)
+
+if(UNIX)
+  set_target_properties(atlas_net_client_core PROPERTIES
+    CXX_VISIBILITY_PRESET hidden
+    VISIBILITY_INLINES_HIDDEN ON
+  )
+endif()
 
 # ---- 最终共享库 ----
-# 参考 src/lib/engine/BUILD.bazel 的 atlas_engine cc_shared_library 模式
-cc_shared_library(
-    name = "atlas_net_client",
-    roots = [":atlas_net_client_core"],
-    exports_filter = ["//src/lib/net_client/..."],  # 只导出本目录符号
-    user_link_flags = select({
-        "@platforms//os:linux":   ["-Wl,--exclude-libs,ALL"],
-        "@platforms//os:macos":   ["-Wl,-dead_strip"],
-        "//conditions:default":   [],
-    }),
-    shared_lib_name = select({
-        "@platforms//os:windows": "atlas_net_client.dll",
-        "@platforms//os:macos":   "libatlas_net_client.dylib",
-        "//conditions:default":   "libatlas_net_client.so",
-    }),
-    # 默认不参与 //... 通配构建, 需显式 bazel build
-    tags = ["manual"],
-    visibility = ["//visibility:public"],
+# 参考 src/lib/clrscript/CMakeLists.txt 的 atlas_engine SHARED 模式
+add_library(atlas_net_client SHARED
+  client_api.cc
+  client_session.cc
 )
+
+target_include_directories(atlas_net_client
+  PUBLIC "${CMAKE_SOURCE_DIR}/src/lib"
+)
+
+target_compile_definitions(atlas_net_client
+  PRIVATE ATLAS_NET_CLIENT_EXPORTS
+)
+
+target_link_libraries(atlas_net_client
+  PRIVATE
+    atlas_network
+    atlas_foundation
+    atlas_platform
+    atlas_serialization_binary
+    atlas_compiler_options
+)
+
+if(UNIX)
+  set_target_properties(atlas_net_client PROPERTIES
+    CXX_VISIBILITY_PRESET hidden
+    VISIBILITY_INLINES_HIDDEN ON
+  )
+  target_link_options(atlas_net_client PRIVATE
+    $<$<PLATFORM_ID:Linux>:-Wl,--exclude-libs,ALL>
+    $<$<PLATFORM_ID:Darwin>:-Wl,-dead_strip>
+  )
+endif()
+
+# 输出名: atlas_net_client.dll (Win), libatlas_net_client.so (Linux/Android),
+#        atlas_net_client.bundle (macOS, Unity Plugin 标准格式)
+set_target_properties(atlas_net_client PROPERTIES
+  OUTPUT_NAME "atlas_net_client"
+)
+if(APPLE AND NOT IOS)
+  # [I1 修复] macOS Unity Plugin 用 .bundle 扩展名, 本质是动态库
+  set_target_properties(atlas_net_client PROPERTIES
+    SUFFIX ".bundle"
+    PREFIX ""           # 不要 lib 前缀, Unity 按 LibName 精确查找
+  )
+endif()
 
 # ---- iOS 静态库变体 ----
 # Apple 禁止第三方动态库, Unity iOS 构建走 [DllImport("__Internal")]
-cc_library(
-    name = "atlas_net_client_static",
-    deps = [":atlas_net_client_core"],
-    linkstatic = True,
-    alwayslink = True,   # Unity 侧按名称查, 避免符号被 gc
-    tags = ["manual"],
-    visibility = ["//visibility:public"],
-)
+# 仅在 iOS 目标构建时定义, 避免污染桌面构建
+if(CMAKE_SYSTEM_NAME STREQUAL "iOS")
+  add_library(atlas_net_client_static STATIC
+    client_api.cc
+    client_session.cc
+  )
+  target_include_directories(atlas_net_client_static
+    PUBLIC "${CMAKE_SOURCE_DIR}/src/lib"
+  )
+  target_compile_definitions(atlas_net_client_static
+    PRIVATE ATLAS_NET_CLIENT_EXPORTS
+  )
+  target_link_libraries(atlas_net_client_static
+    PUBLIC atlas_network atlas_foundation atlas_platform
+           atlas_serialization_binary atlas_compiler_options
+  )
+endif()
+```
+
+记得在 `src/lib/CMakeLists.txt` (Layer 2) 追加:
+
+```cmake
+add_subdirectory(net_client)
 ```
 
 ### 3.2 构建开关
 
-Bazel 不像 CMake 有 `option()`; 项目已有的等价做法是:
+CMake 原生 `option()` 即可表达 "该 target 是否默认构建":
 
-a. **tags=["manual"]**: 让 target 默认不参与 `//...` 通配构建,
-   开发者需显式 `bazel build //src/lib/net_client:atlas_net_client`。
-   本设计首选此法 — net_client 属于 "可选产物", 默认不出现在
-   服务端 CI 矩阵中。
+```cmake
+# 顶层 CMakeLists.txt (或 src/lib/net_client/CMakeLists.txt 开头)
+option(ATLAS_BUILD_NET_CLIENT "Build Unity native client DLL" OFF)
 
-b. **--define + config_setting**: 如需更细粒度控制 (例如同一 target
-   在不同模式下选择不同实现), 用:
+if(ATLAS_BUILD_NET_CLIENT)
+  # 上面的 add_library(atlas_net_client SHARED ...) 仅在开关开启时生效
+endif()
+```
 
-   ```python
-   config_setting(
-       name = "compression_enabled",
-       define_values = {"ATLAS_COMPRESSION": "1"},
-   )
-   ```
+配置命令:
+```bash
+cmake --preset release -DATLAS_BUILD_NET_CLIENT=ON
+cmake --build build/release --target atlas_net_client --config Release
+```
 
-   然后:
-   ```bash
-   bazel build //src/lib/net_client:atlas_net_client \
-       --define=ATLAS_COMPRESSION=1
-   ```
+若需要可选特性开关 (例如压缩), 使用标准 CMake 模式:
+```cmake
+option(ATLAS_NET_CLIENT_COMPRESSION "Enable RUDP compression filter" ON)
+if(ATLAS_NET_CLIENT_COMPRESSION)
+  target_compile_definitions(atlas_net_client_core PRIVATE ATLAS_COMPRESSION=1)
+endif()
+```
 
-本设计建议: compression 作为 `config_setting` + `select` 控制,
-其余通过 `manual` tag 控制可见性。
+本设计建议: 用 `ATLAS_BUILD_NET_CLIENT` 控制 target 是否生成
+(默认 `OFF`, 服务端 CI 矩阵不会误构建); compression 用独立 `option()`。
 
 ### 3.3 序列化模块拆分
 
-当前 `src/lib/serialization/BUILD.bazel` 把 4 个 `.cc` 合入
+当前 `src/lib/serialization/CMakeLists.txt` 把 4 个 `.cc` 合入
 `atlas_serialization`; 其中 `xml_parser.cc` 和 `json_parser.cc`
 引入 pugixml / rapidjson 依赖, Unity 客户端 DLL 不需要。
 
 **方案**: 新增 `atlas_serialization_binary` target (仅 `binary_stream.cc`,
 无第三方依赖):
 
-```python
-# src/lib/serialization/BUILD.bazel (修改后)
+```cmake
+# src/lib/serialization/CMakeLists.txt (修改后)
 
-cc_library(
-    name = "atlas_serialization_binary",
-    srcs = ["src/binary_stream.cc"],
-    hdrs = ["include/serialization/binary_stream.h"],
-    includes = ["include"],
-    deps = [
-        "//src/lib/foundation:atlas_foundation",
-        "//src/lib/platform:atlas_platform",
-    ],
-    visibility = ["//visibility:public"],
+add_library(atlas_serialization_binary STATIC
+  binary_stream.cc
+)
+
+target_include_directories(atlas_serialization_binary
+  PUBLIC "${CMAKE_SOURCE_DIR}/src/lib"
+)
+
+target_link_libraries(atlas_serialization_binary
+  PUBLIC atlas_foundation atlas_platform atlas_compiler_options
 )
 
 # 原 atlas_serialization 保持不变, 服务端继续使用
-cc_library(
-    name = "atlas_serialization",
-    srcs = [
-        "src/binary_stream.cc",
-        "src/data_section.cc",
-        "src/xml_parser.cc",
-        "src/json_parser.cc",
-    ],
-    hdrs = glob(["include/**/*.h"]),
-    includes = ["include"],
-    deps = [
-        "//src/lib/foundation:atlas_foundation",
-        "//src/lib/platform:atlas_platform",
-        "@pugixml",
-        "@rapidjson",
-    ],
-    visibility = ["//visibility:public"],
+add_library(atlas_serialization STATIC
+  binary_stream.cc
+  data_section.cc
+  json_parser.cc
+  xml_parser.cc
+)
+
+target_include_directories(atlas_serialization
+  PUBLIC "${CMAKE_SOURCE_DIR}/src/lib"
+)
+
+target_link_libraries(atlas_serialization
+  PUBLIC atlas_foundation atlas_platform pugixml rapidjson atlas_compiler_options
 )
 ```
 
-> **备选**: 也可让 `atlas_serialization` 以 `atlas_serialization_binary`
-> 为 dep 避免 binary_stream.cc 的重复编译。是否这么做取决于
+> **备选**: 可让 `atlas_serialization` 通过 `target_link_libraries(...
+> PUBLIC atlas_serialization_binary)` 并仅新增 data/xml/json 3 个 .cc,
+> 避免 `binary_stream.cc` 的重复编译。是否这么做取决于
 > `binary_stream.cc` 规模; 若较小, 冗余编译成本可忽略。
 
-`atlas_net_client_core` 只依赖 `atlas_serialization_binary`,
-这样 DLL 不会携带 pugixml / rapidjson 代码。
+#### 3.3.1 传递依赖闭包 — 必须同步调整 atlas_network
+
+> ⚠ **容易踩坑**: 仅仅引入 `atlas_serialization_binary` 目标不足以
+> 把 pugixml / rapidjson 挡在 DLL 外。
+
+当前 `src/lib/network/CMakeLists.txt`:
+
+```cmake
+target_link_libraries(atlas_network
+  PUBLIC atlas_foundation atlas_platform atlas_serialization ZLIB::ZLIB ...
+)
+```
+
+`PUBLIC` 意味着:下游 (`atlas_net_client_core`) 链 `atlas_network` 时,
+CMake 会把 `atlas_serialization`(完整版, 含 pugixml/rapidjson) 也加入
+`atlas_net_client_core` 的 `INTERFACE_LINK_LIBRARIES`, 最终打进 DLL。
+
+已验证 (`grep -l 'pugi\|rapidjson' src/lib/network/**`): `atlas_network`
+源码只 `#include "serialization/binary_stream.h"`, **没有**任何 xml/json
+用法。因此把依赖降级是安全的。
+
+**修复步骤** (必须与 §3.3 同一个 PR 内完成, 否则 §3.3 无效):
+
+1. 修改 `src/lib/network/CMakeLists.txt`:
+   ```cmake
+   target_link_libraries(atlas_network
+     PUBLIC atlas_foundation atlas_platform
+            atlas_serialization_binary         # ← 原来是 atlas_serialization
+            ZLIB::ZLIB atlas_compiler_options
+   )
+   ```
+
+2. 全量服务端编译验证 (atlas_network 被服务端各组件链接):
+   ```bash
+   cmake --preset debug
+   cmake --build build/debug --config Debug
+   # 预期: 所有原本依赖 atlas_network 的 target (server/loginapp/baseapp/...)
+   # 继续编译通过, 因为它们真正需要 xml/json 时会自己再显式依赖 atlas_serialization
+   ```
+
+3. 验证 DLL 不再携带 pugixml/rapidjson:
+   ```bash
+   cmake --build build/release --target atlas_net_client --config Release
+   dumpbin /dependents build/release/src/lib/net_client/Release/atlas_net_client.dll
+   # 预期: 不出现 pugixml / rapidjson 符号
+   # Linux:
+   nm -D build/release/.../libatlas_net_client.so | grep -Ei 'pugi|rapid'
+   # 预期: 空输出
+   ```
+
+4. 若服务端的某个 target (如 `atlas_server` / `atlas_loginapp` / `atlas_baseapp`)
+   之前依赖 `atlas_network` 顺带拿到了 `atlas_serialization` 的 xml/json,
+   编译会报 `pugi::...` / `rapidjson::...` 未定义 — 给该 target 加显式
+   `target_link_libraries(... PUBLIC atlas_serialization)` 补回即可。
+
+`atlas_net_client_core` 在此基础上再显式只依赖 `atlas_serialization_binary`,
+DLL 就真正不会携带 pugixml / rapidjson 代码了。
 
 ### 3.4 目录结构
 
 ```
 src/lib/net_client/
-├── BUILD.bazel
-├── include/
-│   └── net_client/
-│       ├── net_client_export.h     # ATLAS_NET_API 宏 (§4.1)
-│       ├── client_api.h            # C API 声明 (§4.2-4.9)
-│       └── client_session.h        # Login/Auth 状态机 (§5.2)
-└── src/
-    ├── client_api.cc               # C API 实现
-    └── client_session.cc           # 状态机实现
+├── CMakeLists.txt
+├── net_client_export.h     # ATLAS_NET_API 宏 (§4.1)
+├── client_api.h            # C API 声明 (§4.2-4.9)
+├── client_api.cc           # C API 实现
+├── client_session.h        # Login/Auth 状态机声明 (§5.2)
+└── client_session.cc       # 状态机实现
 ```
 
-对应单元测试:
+(与仓库现有约定一致: `.h` 与 `.cc` 平铺同目录, 不做 `include/` 分层)
 
-```
-tests/unit/net_client/
-├── BUILD.bazel
-├── client_session_test.cc          # mock NetworkInterface (§10 Phase 3 验证 a)
-├── abi_layout_test.cc              # sizeof/offsetof static_assert (§10 Phase 3 验证 e)
-└── state_machine_test.cc           # §4.5.6 状态矩阵覆盖
+对应单元测试 (挂接到现有 `tests/unit/CMakeLists.txt`, 复用
+`atlas_add_test` helper):
+
+```cmake
+# tests/unit/CMakeLists.txt 追加:
+
+atlas_add_test(NAME test_client_session
+  SOURCES test_client_session.cpp     # mock NetworkInterface (§10 Phase 3 验证 a)
+  DEPS atlas_net_client_core
+)
+
+atlas_add_test(NAME test_net_client_abi_layout
+  SOURCES test_net_client_abi_layout.cpp   # sizeof/offsetof static_assert (§10 Phase 3 验证 e)
+  DEPS atlas_net_client_core
+)
+
+atlas_add_test(NAME test_client_state_machine
+  SOURCES test_client_state_machine.cpp    # §4.5.6 状态矩阵覆盖
+  DEPS atlas_net_client_core
+)
 ```
 
-```
-tests/integration/net_client/
-├── BUILD.bazel
-└── client_flow_test.cc             # 真实 LoginApp + BaseApp + DBApp
+```cmake
+# tests/integration/CMakeLists.txt 追加:
+
+atlas_add_test(NAME test_client_flow
+  LABEL integration
+  SOURCES test_client_flow.cpp        # 真实 LoginApp + BaseApp + DBApp
+  DEPS atlas_net_client_core atlas_server ...
+)
 ```
 
 ---
@@ -402,10 +522,10 @@ tests/integration/net_client/
 所有跨 FFI 的 `const char*` / `const uint8_t*` / `const void*` 均为
 **非拥有视图 (non-owning view)**：
 
-**C++ → C# 方向** (回调参数、`atlas_net_last_error` 返回值)
+**C++ → C# 方向** (回调参数、`AtlasNetLastError` 返回值)
 - 指针在**回调/函数返回后立即失效**
 - C# 必须在回调内同步复制数据到托管堆
-- 不得保存裸指针、不得跨 `atlas_net_poll()` 周期使用
+- 不得保存裸指针、不得跨 `AtlasNetPoll()` 周期使用
 
 ```csharp
 [UnmanagedCallersOnly]
@@ -417,34 +537,67 @@ static void OnRpc(uint entId, uint rpcId, byte* payload, int len) {
 }
 ```
 
-**C# → C++ 方向** (`atlas_net_send_*`, `atlas_net_login` 等入参)
+**C# → C++ 方向** (`AtlasNetSend*`, `AtlasNetLogin` 等入参)
 - C# 必须在调用期间保持 pinned，调用返回即可释放
 - C++ 必须在函数返回前完成数据复制 (拷入 Bundle 或 `std::string`)
 
 #### 4.0.2 Error 字符串生命周期
 
-- `atlas_net_last_error(ctx)` 返回指针指向 ctx 内部 `std::string`
+- `AtlasNetLastError(ctx)` 返回指针指向 ctx 内部 `std::string`
 - 有效期至下一次作用于**同一 ctx** 的任何 API 调用之前
-- `atlas_net_global_last_error()` (无 ctx 情形) 使用线程局部存储，
+- `AtlasNetGlobalLastError()` (无 ctx 情形) 使用线程局部存储，
   有效期至本线程下一次 Atlas 调用之前
 
 #### 4.0.3 回调可重入性
 
-- 回调内**允许**调用 `atlas_net_send_*`, `atlas_net_get_state`,
-  `atlas_net_get_stats`, `atlas_net_last_error`
-- 回调内**禁止**调用 `atlas_net_create`, `atlas_net_destroy`,
-  `atlas_net_poll`, `atlas_net_disconnect`, `atlas_net_login`,
-  `atlas_net_authenticate`, `atlas_net_set_callbacks`
+- 回调内**允许**调用 `AtlasNetSend*`, `AtlasNetGetState`,
+  `AtlasNetGetStats`, `AtlasNetLastError`
+- 回调内**禁止**调用 `AtlasNetCreate`, `AtlasNetDestroy`,
+  `AtlasNetPoll`, `AtlasNetDisconnect`, `AtlasNetLogin`,
+  `AtlasNetAuthenticate`, `AtlasNetSetCallbacks`
 - `ATLAS_DEBUG` 构建下，禁用组合触发 assert；Release 下返回 `-EBUSY`
 
 #### 4.0.4 Callback Table 初始化
 
-- `atlas_net_create` 成功后，ctx 内置 noop 回调表，未注册即收消息
-  不会 null 解引用
-- `atlas_net_set_callbacks` 的结构体字段**不得为 NULL**；未使用的
-  字段须填 `atlas_net_noop_*` sentinel (DLL 导出的空实现)
-- 热替换：`atlas_net_set_callbacks` 在 poll 外任何时刻可调用，
-  ctx 原子切换（使用 `std::atomic<AtlasNetCallbacks*>`）
+- `AtlasNetCreate` 成功后, ctx 内置 noop 回调表 (每个字段指向 DLL 导出的
+  `AtlasNetNoop<Event>` sentinel), 未注册即收消息不会 null 解引用
+- `AtlasNetSetCallbacks` 的结构体字段**不得为 NULL** — 未使用的槽位
+  必须填入对应 sentinel (§4.7 末尾声明); DLL 入口处若检测到任一字段
+  为 NULL 返回 `-EINVAL`, 便于启动期就断出配置错误
+- 热替换: `AtlasNetSetCallbacks` 在 poll 外任何时刻可调用,
+  ctx 原子切换 (`std::atomic<AtlasNetCallbacks*>`, 读侧 `memory_order_acquire`,
+  写侧 `memory_order_release`)
+- **所有回调首参均为 `AtlasNetContext* ctx`** — 这是能支持"多 ctx 并发"
+  (§4.0.6) 的唯一路径: C# 侧用静态 `Dictionary<nint,AtlasClient>` 在 ctx
+  指针 → AtlasClient 实例之间做映射
+
+#### 4.0.4.1 C# 侧获取 sentinel 函数指针的模式
+
+C# 没法直接 `&AtlasNetNoopRpc` — 这些符号存在于 DLL 内部。用以下两种模式:
+
+```csharp
+// 模式 A: [LibraryImport] 声明每个 sentinel, 再用 &AtlasNetNoopRpc 取地址
+//         (需要 .NET 7+ 的函数指针支持; Unity IL2CPP 已经接受)
+internal static unsafe partial class AtlasNetNative {
+    [LibraryImport(LibName)] internal static partial void
+        AtlasNetNoopRpc(nint ctx, uint eid, uint rid, byte* payload, int len);
+    // ... 其余 sentinel 同样声明
+}
+
+var cbs = new AtlasNetCallbacks {
+    OnRpc            = (nint)(delegate* unmanaged<nint,uint,uint,byte*,int,void>)
+                             &AtlasNetNative.AtlasNetNoopRpc,
+    OnEntityEnter    = (nint)(delegate* unmanaged<...>)&AtlasNetNative.AtlasNetNoopEntityEnter,
+    // ...
+};
+
+// 模式 B: C# 侧提供空 [UnmanagedCallersOnly] 方法 (IL2CPP 下若 Phase 0 Spike
+//         选方案 B 时使用)。比模式 A 多一次跨 FFI 调用, 但省去从 DLL 取符号地址。
+```
+
+推荐模式 A (符号直接从 DLL 解析, 零额外跨 FFI)。`AtlasClient` 构造函数里
+统一把所有字段预填 sentinel, 然后让上层按需 override 具体字段, 再调
+`AtlasNetSetCallbacks`。
 
 #### 4.0.5 ABI 版本
 
@@ -461,15 +614,15 @@ static void OnRpc(uint entId, uint rpcId, byte* payload, int len) {
 | 新增函数 / 新增回调 (结构体尾追加字段不算) | MINOR | 向后兼容，C# 可延后升级 |
 | 仅实现修复，不改 ABI | PATCH | 不校验 |
 
-**校验点**: `atlas_net_create(expected_abi)` 执行
+**校验点**: `AtlasNetCreate(expected_abi)` 执行
 `caller_major != our_major || caller_minor > our_minor` 检查，
-失败返回 NULL 并通过 `atlas_net_global_last_error()` 暴露原因。
+失败返回 NULL 并通过 `AtlasNetGlobalLastError()` 暴露原因。
 
 #### 4.0.6 线程模型
 
 - 每个 `AtlasNetContext` 仅允许被**单一线程**访问（Unity 主线程）
 - 多 ctx 并发允许，但不共享任何状态
-- 日志 sink (`atlas_net_set_log_handler`) 是**进程级**全局状态，
+- 日志 sink (`AtlasNetSetLogHandler`) 是**进程级**全局状态，
   线程安全由 `atlas_foundation` Logger 保证
 
 #### 4.0.7 返回码约定
@@ -483,7 +636,7 @@ static void OnRpc(uint entId, uint rpcId, byte* payload, int len) {
 | `-ENOCONN` (-107) | 无可用连接 |
 | `-EINVAL` (-22) | 参数非法 |
 | `-ENOMEM` (-12) | 内存分配失败 |
-| `-EABI` (-1000, 自定义) | ABI 版本不匹配 (仅 `atlas_net_create`) |
+| `-EABI` (-1000, 自定义) | ABI 版本不匹配 (仅 `AtlasNetCreate`) |
 
 ### 4.1 导出宏
 
@@ -515,13 +668,13 @@ typedef struct AtlasNetContext AtlasNetContext;
 typedef struct AtlasNetChannel AtlasNetChannel;
 
 // ABI 版本查询 (C# 诊断用, 不用于校验)
-ATLAS_NET_CALL uint32_t atlas_net_abi_version(void);
+ATLAS_NET_CALL uint32_t AtlasNetGetAbiVersion(void);
 
 // 错误信息
-ATLAS_NET_CALL const char* atlas_net_last_error(AtlasNetContext* ctx);
+ATLAS_NET_CALL const char* AtlasNetLastError(AtlasNetContext* ctx);
 
-// 无 ctx 时的错误信息 (atlas_net_create 失败时使用, 线程局部)
-ATLAS_NET_CALL const char* atlas_net_global_last_error(void);
+// 无 ctx 时的错误信息 (AtlasNetCreate 失败时使用, 线程局部)
+ATLAS_NET_CALL const char* AtlasNetGlobalLastError(void);
 ```
 
 ### 4.3 生命周期
@@ -530,12 +683,12 @@ ATLAS_NET_CALL const char* atlas_net_global_last_error(void);
 // 创建网络上下文 (内部创建 EventDispatcher + NetworkInterface)。
 // expected_abi: 调用方编译时的 ATLAS_NET_ABI_VERSION,
 // 与 DLL 内部版本按 §4.0.5 规则校验,失败返回 NULL。
-//   - NULL 返回时用 atlas_net_global_last_error() 取原因
+//   - NULL 返回时用 AtlasNetGlobalLastError() 取原因
 //   - 成功返回时 ctx 已安装 noop 回调表,立即可安全使用
-ATLAS_NET_CALL AtlasNetContext* atlas_net_create(uint32_t expected_abi);
+ATLAS_NET_CALL AtlasNetContext* AtlasNetCreate(uint32_t expected_abi);
 
 // 销毁 (断开所有连接, 清零 SessionKey, 释放资源)
-ATLAS_NET_CALL void atlas_net_destroy(AtlasNetContext* ctx);
+ATLAS_NET_CALL void AtlasNetDestroy(AtlasNetContext* ctx);
 ```
 
 **C# 使用范式**:
@@ -545,10 +698,10 @@ public static class AtlasNet {
     const uint kExpectedAbi = 0x01000000u;  // 与 C 头文件同步
 
     public static nint Create() {
-        var ctx = AtlasNetNative.atlas_net_create(kExpectedAbi);
+        var ctx = AtlasNetNative.AtlasNetCreate(kExpectedAbi);
         if (ctx == 0) {
             var err = Marshal.PtrToStringUTF8(
-                AtlasNetNative.atlas_net_global_last_error());
+                AtlasNetNative.AtlasNetGlobalLastError());
             throw new InvalidOperationException(
                 $"atlas_net_client DLL 初始化失败: {err ?? "unknown"}");
         }
@@ -565,7 +718,7 @@ public static class AtlasNet {
 // - 触发到期的定时器 (重传、心跳等)
 // - 触发已注册的回调 (RPC 分发、实体创建等)
 // 返回处理的事件数, -1 表示错误
-ATLAS_NET_CALL int32_t atlas_net_poll(AtlasNetContext* ctx);
+ATLAS_NET_CALL int32_t AtlasNetPoll(AtlasNetContext* ctx);
 ```
 
 Unity 侧用法:
@@ -579,7 +732,7 @@ void Update() {
 
 > **重要设计决定**: `SessionKey` 永不跨 FFI 边界。DLL 在收到 `LoginResult`
 > 时将 SessionKey 和 BaseApp 地址缓存在 `ClientSession` 内部，
-> `atlas_net_authenticate` 无需由 C# 回传。这一原则:
+> `AtlasNetAuthenticate` 无需由 C# 回传。这一原则:
 > - 缩小 SessionKey 的暴露面 (托管堆扫描、调试器、core dump 均无法看到)
 > - 消除两侧状态同步负担
 > - 简化 API (authenticate 从 4 参降为 2 参)
@@ -590,7 +743,7 @@ void Update() {
 // ---- 登录结果回调 ----
 // status 枚举: 见 AtlasLoginStatus
 // baseapp_host / baseapp_port: 仅供 UI 展示,不需回传给 authenticate
-// user_data: atlas_net_login 时传入的用户指针,回调原样带回
+// user_data: AtlasNetLogin 时传入的用户指针,回调原样带回
 //            (避免 C# 用静态字段存 MonoBehaviour 句柄)
 typedef void (*AtlasLoginResultFn)(
     void*       user_data,
@@ -630,7 +783,7 @@ typedef void (*AtlasAuthResultFn)(
 //   2. connect_rudp(loginapp_host, loginapp_port) → kLoggingIn
 //   3. 构造并发送 LoginRequest (username + password_hash)
 //   4. 注册 typed handler <login::LoginResult>
-//   5. atlas_net_poll() 驱动,收到 LoginResult 后:
+//   5. AtlasNetPoll() 驱动,收到 LoginResult 后:
 //      - 解析 SessionKey 和 baseapp_addr,存入 ClientSession 私有字段
 //      - 关闭 LoginApp 连接 (已完成使命)
 //      - 状态转 kLoginSucceeded
@@ -641,7 +794,7 @@ typedef void (*AtlasAuthResultFn)(
 //   -EBUSY   : 状态不允许
 //   -EINVAL  : 参数非法 (host/port 为空等)
 //   -ENOMEM  : 分配失败
-ATLAS_NET_CALL int32_t atlas_net_login(
+ATLAS_NET_CALL int32_t AtlasNetLogin(
     AtlasNetContext*    ctx,
     const char*         loginapp_host,
     uint16_t            loginapp_port,
@@ -669,7 +822,7 @@ ATLAS_NET_CALL int32_t atlas_net_login(
 //      - 失败: ClearSessionKey(), 状态转 kDisconnected, 回调 success=0
 //
 // 注意: SessionKey 不作为参数 — DLL 自持 (§5.2.1)
-ATLAS_NET_CALL int32_t atlas_net_authenticate(
+ATLAS_NET_CALL int32_t AtlasNetAuthenticate(
     AtlasNetContext*   ctx,
     AtlasAuthResultFn  callback,
     void*              user_data         // 透传回 callback, 可为 NULL
@@ -694,8 +847,8 @@ typedef enum {
 //   - 如果 reason == LOGOUT,触发 on_disconnect 回调通知上层
 //   - 如果 reason == USER,不触发回调 (用户显式退出已知状态)
 //
-// 调用后允许重新 atlas_net_login() 用新凭证登录。
-ATLAS_NET_CALL int32_t atlas_net_disconnect(
+// 调用后允许重新 AtlasNetLogin() 用新凭证登录。
+ATLAS_NET_CALL int32_t AtlasNetDisconnect(
     AtlasNetContext*      ctx,
     AtlasDisconnectReason reason);
 ```
@@ -711,7 +864,7 @@ typedef enum {
     ATLAS_NET_STATE_CONNECTED         = 4,
 } AtlasNetState;
 
-ATLAS_NET_CALL AtlasNetState atlas_net_get_state(AtlasNetContext* ctx);
+ATLAS_NET_CALL AtlasNetState AtlasNetGetState(AtlasNetContext* ctx);
 ```
 
 #### 4.5.6 状态转换矩阵
@@ -719,7 +872,7 @@ ATLAS_NET_CALL AtlasNetState atlas_net_get_state(AtlasNetContext* ctx);
 所有 C API 入口**首行**检查 state。非法调用**不**隐式断开、不改状态，
 仅返回错误码 (`ATLAS_DEBUG` 下额外 log warn)，保持状态机确定性。
 
-| From \ 调用        | login    | authenticate | send_*rpc | disconnect | destroy |
+| From \ 调用        | Login    | Authenticate | Send*Rpc  | Disconnect | Destroy |
 |-------------------|----------|--------------|-----------|------------|---------|
 | Disconnected      | ✓        | `-EBUSY`     | `-ENOCONN`| ✓ (noop)   | ✓       |
 | LoggingIn         | `-EBUSY` | `-EBUSY`     | `-ENOCONN`| ✓          | ✓       |
@@ -732,7 +885,7 @@ ATLAS_NET_CALL AtlasNetState atlas_net_get_state(AtlasNetContext* ctx);
 ```
        ┌─────────────── Disconnected ◄──────────────────┐
        │                     │                          │
-       │                  login()                       │
+       │                AtlasNetLogin()                 │
        │                     ▼                          │
        │                LoggingIn                       │
        │                     │                          │
@@ -743,7 +896,7 @@ ATLAS_NET_CALL AtlasNetState atlas_net_get_state(AtlasNetContext* ctx);
        │           ▼                    └──────►────────┤
        │     LoginSucceeded                             │
        │           │                                    │
-       │   authenticate()                               │
+       │   AtlasNetAuthenticate()                       │
        │           ▼                                    │
        │     Authenticating                             │
        │           │                                    │
@@ -754,11 +907,11 @@ ATLAS_NET_CALL AtlasNetState atlas_net_get_state(AtlasNetContext* ctx);
        │      ▼           └───────►─────────────────────┤
        │   Connected                                    │
        │      │                                         │
-       │   disconnect() / error / server close          │
+       │   AtlasNetDisconnect() / error / server close  │
        │      │                                         │
        └──────┘                                         │
                                                         │
-  (任何状态) atlas_net_disconnect() ────────────────────┘
+  (任何状态) AtlasNetDisconnect() ────────────────────┘
 ```
 
 ### 4.6 消息发送
@@ -767,7 +920,7 @@ ATLAS_NET_CALL AtlasNetState atlas_net_get_state(AtlasNetContext* ctx);
 // 发送 Base RPC (通过已认证的 BaseApp 连接)
 // rpc_id: 由 SourceGenerator 生成的 RPC 标识
 // payload: SpanWriter 序列化后的参数数据
-ATLAS_NET_CALL int32_t atlas_net_send_base_rpc(
+ATLAS_NET_CALL int32_t AtlasNetSendBaseRpc(
     AtlasNetContext* ctx,
     uint32_t entity_id,
     uint32_t rpc_id,
@@ -776,7 +929,7 @@ ATLAS_NET_CALL int32_t atlas_net_send_base_rpc(
 );
 
 // 发送 Cell RPC (通过 BaseApp 转发到 CellApp)
-ATLAS_NET_CALL int32_t atlas_net_send_cell_rpc(
+ATLAS_NET_CALL int32_t AtlasNetSendCellRpc(
     AtlasNetContext* ctx,
     uint32_t entity_id,
     uint32_t rpc_id,
@@ -784,53 +937,185 @@ ATLAS_NET_CALL int32_t atlas_net_send_cell_rpc(
     int32_t payload_len
 );
 ```
+
+> **[M3] 非-RPC 业务消息的发送路径**: Phase 12 §2.1 列出的 `EnableEntities`
+> (10002)、`AvatarUpdate` (10010)、`Heartbeat` (10003)、`Disconnect` (10020)
+> 也是上行业务消息, 不属于"调用某 exposed cell/base 方法"语义, 不应走
+> `AtlasNetSendBaseRpc`。方案:
+>
+> - 这些消息在 Source Generator 里注册为**固定 rpc_id 的系统消息**,
+>   C# 层仍调用 `AtlasNetSendBaseRpc(ctx, player_entity_id, kRpcId_EnableEntities,
+>   payload, len)`, 由 BaseApp 的 RPC 分发表识别为系统级动作。
+> - 这种统一让 DLL 的发送路径只有 2 个入口 (BaseRpc / CellRpc), 无需为每种
+>   系统消息加专属 C API。对应的 rpc_id 空间占用在 `Atlas.Shared/MessageIds.cs`
+>   里显式编码。
+>
+> 若后续发现确有高频且不适合走 RPC 通道的消息 (例如高频 AvatarUpdate),
+> 再追加 `AtlasNetSendAvatarUpdate(ctx, pos, dir, on_ground)` 这类专属 C API,
+> 避免每包都跨 FFI 序列化/复制。
 
 ### 4.7 消息接收回调
 
+> **设计约束** (B2 + B4 修订):
+> - **每个回调首参必须是 `AtlasNetContext* ctx`** — `[UnmanagedCallersOnly]`
+>   静态方法无法闭包 this, 没有 ctx 就无法从回调路由回 C# 的 `AtlasClient`
+>   实例。`AtlasNetPoll(ctx)` 触发回调时由 DLL 填入当前 ctx。
+> - **回调集必须覆盖 Phase 12 协议** (见 `docs/roadmap/phase12_client_sdk.md §2.2`)
+>   的全部服务器→客户端消息。生成器不应该要求 DLL 新增回调才能支持新业务消息,
+>   但连接/实体/RPC 三类稳定协议保留为强类型回调以方便 C# Source Generator 分发。
+>
+> 约定:
+> - 所有 `on_*` 指针不得为 NULL (§4.0.4) — 未用的填 DLL 导出的
+>   `AtlasNetNoop<Event>` sentinel
+> - payload 指针生命周期只到回调返回 (§4.0.1)
+> - 全部在 `AtlasNetPoll(ctx)` 线程同步触发, 不跨线程
+
 ```cpp
 // ============================================================================
-// 回调注册 (在 atlas_net_create 之后, login 之前调用)
+// 回调注册 (在 AtlasNetCreate 之后, login 之前调用)
 // ============================================================================
 
-// RPC 消息回调 (服务端 → 客户端)
+// ---- 连接 / 会话事件 --------------------------------------------------------
+
+// 服务器主动关闭或 DLL 检测到断线 (USER-initiated disconnect 不触发此回调, §4.5.4)
+// reason: 0=服务端关闭, 1=超时, 2=网络错误, 3=LoggedOff (服务端踢下线)
+typedef void (*AtlasDisconnectFn)(AtlasNetContext* ctx, int32_t reason);
+
+// ---- 玩家实体 (Login 后一次性创建) -----------------------------------------
+
+// CreateBasePlayer (MessageID 10105): 玩家 Base 实体创建
+// base_props 是 [BASE_AND_CLIENT] 属性 blob, 由 C# 侧 ApplyReplicatedDelta 解析
+typedef void (*AtlasPlayerBaseCreateFn)(
+    AtlasNetContext* ctx,
+    uint32_t entity_id,
+    uint16_t type_id,
+    const uint8_t* base_props, int32_t base_props_len);
+
+// CreateCellPlayer (MessageID 10110): 玩家 Cell 实体创建 (进入世界)
+typedef void (*AtlasPlayerCellCreateFn)(
+    AtlasNetContext* ctx,
+    uint32_t space_id,
+    float pos_x, float pos_y, float pos_z,
+    float dir_x, float dir_y, float dir_z,
+    const uint8_t* cell_props, int32_t cell_props_len);
+
+// ResetEntities (MessageID 10106): 服务端触发 giveClientTo, 客户端清空 AOI
+typedef void (*AtlasResetEntitiesFn)(AtlasNetContext* ctx);
+
+// ---- AOI 实体生命周期 ------------------------------------------------------
+
+// EntityEnter (MessageID 10102): AOI 内其他实体进入
+typedef void (*AtlasEntityEnterFn)(
+    AtlasNetContext* ctx,
+    uint32_t entity_id,
+    uint16_t type_id,
+    float pos_x, float pos_y, float pos_z,
+    float dir_x, float dir_y, float dir_z,
+    const uint8_t* properties, int32_t properties_len);
+
+// EntityLeave (MessageID 10103): AOI 内实体离开
+typedef void (*AtlasEntityLeaveFn)(
+    AtlasNetContext* ctx,
+    uint32_t entity_id);
+
+// ---- 实体状态同步 ----------------------------------------------------------
+
+// EntityPositionUpdate (MessageID 10111): 位置/朝向变化, 供 AvatarFilter.Input 消费
+typedef void (*AtlasEntityPositionFn)(
+    AtlasNetContext* ctx,
+    uint32_t entity_id,
+    float pos_x, float pos_y, float pos_z,
+    float dir_x, float dir_y, float dir_z,
+    uint8_t on_ground);
+
+// EntityPropertyUpdate (MessageID 10104): 属性 delta
+// scope: PropertyScope 枚举 (见 .def); delta 由 Source Generator 的
+// ApplyReplicatedDelta 解析
+typedef void (*AtlasEntityPropertyFn)(
+    AtlasNetContext* ctx,
+    uint32_t entity_id,
+    uint8_t scope,
+    const uint8_t* delta, int32_t delta_len);
+
+// ForcedPosition (MessageID 10112): 服务端强制纠正位置 (e.g., 反作弊 rewind)
+typedef void (*AtlasForcedPositionFn)(
+    AtlasNetContext* ctx,
+    uint32_t entity_id,
+    float pos_x, float pos_y, float pos_z,
+    float dir_x, float dir_y, float dir_z);
+
+// ---- RPC (服务端 → 客户端) -------------------------------------------------
+
+// ClientRpcCall (MessageID 10101): 服务端调用客户端的 client_methods
+// 由 C# Source Generator 生成的 RpcDispatcher 按 rpc_id 分发到目标 entity 的方法
 typedef void (*AtlasRpcCallbackFn)(
+    AtlasNetContext* ctx,
     uint32_t entity_id,
     uint32_t rpc_id,
-    const uint8_t* payload,
-    int32_t payload_len
-);
+    const uint8_t* payload, int32_t payload_len);
 
-// 实体创建回调
-typedef void (*AtlasEntityCreateFn)(
-    uint32_t entity_id,
-    uint16_t type_id
-);
+// ---- 回调表 ----------------------------------------------------------------
+// #pragma pack(push, 1) 保证 C/C# 侧结构体布局一致 (C# 侧用 Pack=1)
+// 任何新增字段只能追加在末尾 (不破坏 MINOR 兼容, §4.0.5)
 
-// 实体销毁回调
-typedef void (*AtlasEntityDestroyFn)(
-    uint32_t entity_id
-);
-
-// 连接断开回调
-typedef void (*AtlasDisconnectFn)(
-    int32_t reason  // 0=正常, 1=超时, 2=服务端关闭, 3=网络错误
-);
-
-// 注册所有回调 (打包为结构体, 类似现有 ClientCallbackTable)
 #pragma pack(push, 1)
 typedef struct {
-    AtlasRpcCallbackFn      on_rpc;
-    AtlasEntityCreateFn     on_entity_create;
-    AtlasEntityDestroyFn    on_entity_destroy;
-    AtlasDisconnectFn       on_disconnect;
+    // 连接事件
+    AtlasDisconnectFn          on_disconnect;
+    // 玩家会话
+    AtlasPlayerBaseCreateFn    on_player_base_create;
+    AtlasPlayerCellCreateFn    on_player_cell_create;
+    AtlasResetEntitiesFn       on_reset_entities;
+    // AOI 实体生命周期
+    AtlasEntityEnterFn         on_entity_enter;
+    AtlasEntityLeaveFn         on_entity_leave;
+    // 实体状态
+    AtlasEntityPositionFn      on_entity_position;
+    AtlasEntityPropertyFn      on_entity_property;
+    AtlasForcedPositionFn      on_forced_position;
+    // RPC
+    AtlasRpcCallbackFn         on_rpc;
 } AtlasNetCallbacks;
 #pragma pack(pop)
 
-ATLAS_NET_CALL void atlas_net_set_callbacks(
+// 注册回调 (原子替换, §4.0.4)。返回码:
+//   0        : 成功
+//   -EINVAL  : callbacks 为 NULL 或任何字段为 NULL
+//   -EBUSY   : 在回调内调用 (§4.0.3 禁止)
+ATLAS_NET_CALL int32_t AtlasNetSetCallbacks(
     AtlasNetContext* ctx,
-    const AtlasNetCallbacks* callbacks
-);
+    const AtlasNetCallbacks* callbacks);
+
+// ---- Noop sentinel 导出 ----------------------------------------------------
+// §4.0.4 要求 AtlasNetCallbacks 每个字段非 NULL。未使用的槽位填入下列 sentinel
+// (C# 侧通过 GetProcAddress / GetSymbol 取函数指针填入)。
+// 每个 sentinel 与对应回调 typedef 签名严格一致, 函数体为空。
+
+ATLAS_NET_CALL void AtlasNetNoopDisconnect(AtlasNetContext*, int32_t);
+ATLAS_NET_CALL void AtlasNetNoopPlayerBaseCreate(
+    AtlasNetContext*, uint32_t, uint16_t, const uint8_t*, int32_t);
+ATLAS_NET_CALL void AtlasNetNoopPlayerCellCreate(
+    AtlasNetContext*, uint32_t, float, float, float, float, float, float,
+    const uint8_t*, int32_t);
+ATLAS_NET_CALL void AtlasNetNoopResetEntities(AtlasNetContext*);
+ATLAS_NET_CALL void AtlasNetNoopEntityEnter(
+    AtlasNetContext*, uint32_t, uint16_t, float, float, float,
+    float, float, float, const uint8_t*, int32_t);
+ATLAS_NET_CALL void AtlasNetNoopEntityLeave(AtlasNetContext*, uint32_t);
+ATLAS_NET_CALL void AtlasNetNoopEntityPosition(
+    AtlasNetContext*, uint32_t, float, float, float, float, float, float, uint8_t);
+ATLAS_NET_CALL void AtlasNetNoopEntityProperty(
+    AtlasNetContext*, uint32_t, uint8_t, const uint8_t*, int32_t);
+ATLAS_NET_CALL void AtlasNetNoopForcedPosition(
+    AtlasNetContext*, uint32_t, float, float, float, float, float, float);
+ATLAS_NET_CALL void AtlasNetNoopRpc(
+    AtlasNetContext*, uint32_t, uint32_t, const uint8_t*, int32_t);
 ```
+
+#### 4.7.1 `AtlasNetSetCallbacks` 返回码
+
+**[I2 修复]** 旧版签名为 `void`, 现改为 `int32_t`, 与 §4.0.7 返回码公约一致,
+以便 C# 侧把 "有字段为 NULL" 这类配置错误当作启动期断言捕获, 而不是静默生效。
 
 ### 4.8 日志
 
@@ -842,7 +1127,7 @@ typedef void (*AtlasLogFn)(
     int32_t message_len
 );
 
-ATLAS_NET_CALL void atlas_net_set_log_handler(AtlasLogFn handler);
+ATLAS_NET_CALL void AtlasNetSetLogHandler(AtlasLogFn handler);
 ```
 
 ### 4.9 诊断
@@ -860,7 +1145,7 @@ typedef struct {
 } AtlasNetStats;
 #pragma pack(pop)
 
-ATLAS_NET_CALL int32_t atlas_net_get_stats(
+ATLAS_NET_CALL int32_t AtlasNetGetStats(
     AtlasNetContext* ctx,
     AtlasNetStats* out_stats
 );
@@ -870,28 +1155,34 @@ ATLAS_NET_CALL int32_t atlas_net_get_stats(
 
 | 函数 | 方向 | 用途 |
 |------|------|------|
-| `atlas_net_abi_version` | - | ABI 版本查询 (诊断用) |
-| `atlas_net_last_error` | - | 获取 ctx 内最后错误 (view 语义,§4.0.2) |
-| `atlas_net_global_last_error` | - | 无 ctx 时的错误 (TLS,仅用于 create 失败后) |
-| `atlas_net_create` | C#→C++ | 创建网络上下文 (带 ABI 校验,§4.0.5) |
-| `atlas_net_destroy` | C#→C++ | 销毁网络上下文 |
-| `atlas_net_poll` | C#→C++ | **每帧调用, 驱动网络层** |
-| `atlas_net_set_callbacks` | C#→C++ | 注册事件回调 (原子热替换) |
-| `atlas_net_set_log_handler` | C#→C++ | 注册日志回调 (进程级) |
-| `atlas_net_login` | C#→C++ | 发起登录 (带 user_data) |
-| `atlas_net_authenticate` | C#→C++ | 发起认证 (无 host/key 参数,DLL 自持) |
-| `atlas_net_disconnect` | C#→C++ | 关闭连接,保留 ctx 和回调表 |
-| `atlas_net_get_state` | C#→C++ | 查询连接状态 (含 LoginSucceeded) |
-| `atlas_net_send_base_rpc` | C#→C++ | 发送 Base RPC |
-| `atlas_net_send_cell_rpc` | C#→C++ | 发送 Cell RPC |
-| `atlas_net_get_stats` | C#→C++ | 获取网络统计 |
-| `atlas_net_noop_rpc` 等 | 内部 | sentinel 空回调 (set_callbacks 占位) |
+| `AtlasNetGetAbiVersion` | - | ABI 版本查询 (诊断用) |
+| `AtlasNetLastError` | - | 获取 ctx 内最后错误 (view 语义,§4.0.2) |
+| `AtlasNetGlobalLastError` | - | 无 ctx 时的错误 (TLS,仅用于 create 失败后) |
+| `AtlasNetCreate` | C#→C++ | 创建网络上下文 (带 ABI 校验,§4.0.5) |
+| `AtlasNetDestroy` | C#→C++ | 销毁网络上下文 |
+| `AtlasNetPoll` | C#→C++ | **每帧调用, 驱动网络层** |
+| `AtlasNetSetCallbacks` | C#→C++ | 注册事件回调 (原子热替换) |
+| `AtlasNetSetLogHandler` | C#→C++ | 注册日志回调 (进程级) |
+| `AtlasNetLogin` | C#→C++ | 发起登录 (带 user_data) |
+| `AtlasNetAuthenticate` | C#→C++ | 发起认证 (无 host/key 参数,DLL 自持) |
+| `AtlasNetDisconnect` | C#→C++ | 关闭连接,保留 ctx 和回调表 |
+| `AtlasNetGetState` | C#→C++ | 查询连接状态 (含 LoginSucceeded) |
+| `AtlasNetSendBaseRpc` | C#→C++ | 发送 Base RPC |
+| `AtlasNetSendCellRpc` | C#→C++ | 发送 Cell RPC |
+| `AtlasNetGetStats` | C#→C++ | 获取网络统计 |
+| `AtlasNetNoop<Event>` × 10 | 内部 | 每个事件回调的 sentinel 空实现 (§4.7 末尾列表) |
 | `AtlasLoginResultFn` | C++→C# | 登录结果通知 (user_data + status + baseapp addr) |
 | `AtlasAuthResultFn` | C++→C# | 认证结果通知 (user_data + entity_id + type_id) |
-| `AtlasRpcCallbackFn` | C++→C# | RPC 消息分发 |
-| `AtlasEntityCreateFn` | C++→C# | 实体创建通知 |
-| `AtlasEntityDestroyFn` | C++→C# | 实体销毁通知 |
-| `AtlasDisconnectFn` | C++→C# | 连接断开通知 (LOGOUT/超时/服务端关闭/错误) |
+| `AtlasDisconnectFn` | C++→C# | **(ctx, reason)** 服务器关闭/超时/踢下线 |
+| `AtlasPlayerBaseCreateFn` | C++→C# | **(ctx, entity_id, type_id, base_props)** 玩家 Base 创建 |
+| `AtlasPlayerCellCreateFn` | C++→C# | **(ctx, space_id, pos, dir, cell_props)** 玩家 Cell 创建 (进入世界) |
+| `AtlasResetEntitiesFn` | C++→C# | **(ctx)** giveClientTo 触发 AOI 重置 |
+| `AtlasEntityEnterFn` | C++→C# | **(ctx, entity_id, type_id, pos, dir, props)** AOI 实体进入 |
+| `AtlasEntityLeaveFn` | C++→C# | **(ctx, entity_id)** AOI 实体离开 |
+| `AtlasEntityPositionFn` | C++→C# | **(ctx, entity_id, pos, dir, on_ground)** 位置更新 → AvatarFilter |
+| `AtlasEntityPropertyFn` | C++→C# | **(ctx, entity_id, scope, delta)** 属性 delta → ApplyReplicatedDelta |
+| `AtlasForcedPositionFn` | C++→C# | **(ctx, entity_id, pos, dir)** 服务端强制位置 |
+| `AtlasRpcCallbackFn` | C++→C# | **(ctx, entity_id, rpc_id, payload)** client_methods 分发 |
 | `AtlasLogFn` | C++→C# | 日志转发 |
 
 ---
@@ -964,8 +1255,8 @@ AtlasNetContext (不透明, C++ 内部)
   `session_key_` 复制进消息
 - **销毁时机**:
   - `on_auth_result(success=false)` → 立即 `ClearSessionKey()`
-  - `atlas_net_disconnect()` → `ClearSessionKey()`
-  - `atlas_net_destroy()` → 随 ctx 析构自动清零
+  - `AtlasNetDisconnect()` → `ClearSessionKey()`
+  - `AtlasNetDestroy()` → 随 ctx 析构自动清零
   - 成功登录后保留，为未来的断线重连 (Phase 2) 预留
 - **禁止跨 FFI**: SessionKey 永不穿越 C API; C# 不感知其存在
 - **内存**: 析构与显式清零都用 `SecureZeroMemory` 或等价物,
@@ -1007,49 +1298,87 @@ class ClientSession {
 `callbacks_` 使用 `std::atomic<AtlasNetCallbacks>` (若结构体可平凡)
 或 `std::atomic<std::shared_ptr<AtlasNetCallbacks>>`。
 
-`atlas_net_create` 成功返回前必须已写入一份 noop 表:
+`AtlasNetCreate` 成功返回前必须已写入一份 noop 表:
 
 ```cpp
 // src/lib/net_client/client_api.cc
-static void NoopRpc(uint32_t, uint32_t, const uint8_t*, int32_t) {}
-static void NoopEntityCreate(uint32_t, uint16_t) {}
-static void NoopEntityDestroy(uint32_t) {}
-static void NoopDisconnect(int32_t) {}
+// 每个 sentinel 与 §4.7 对应回调 typedef 签名严格一致, 且 ATLAS_NET_CALL
+// 导出 (让 C# 通过 [LibraryImport] 取函数指针, §4.0.4.1 模式 A)。
 
-AtlasNetContext* atlas_net_create(uint32_t expected_abi) {
+ATLAS_NET_CALL void AtlasNetNoopDisconnect(AtlasNetContext*, int32_t) {}
+ATLAS_NET_CALL void AtlasNetNoopPlayerBaseCreate(
+    AtlasNetContext*, uint32_t, uint16_t, const uint8_t*, int32_t) {}
+ATLAS_NET_CALL void AtlasNetNoopPlayerCellCreate(
+    AtlasNetContext*, uint32_t, float, float, float, float, float, float,
+    const uint8_t*, int32_t) {}
+ATLAS_NET_CALL void AtlasNetNoopResetEntities(AtlasNetContext*) {}
+ATLAS_NET_CALL void AtlasNetNoopEntityEnter(
+    AtlasNetContext*, uint32_t, uint16_t, float, float, float,
+    float, float, float, const uint8_t*, int32_t) {}
+ATLAS_NET_CALL void AtlasNetNoopEntityLeave(AtlasNetContext*, uint32_t) {}
+ATLAS_NET_CALL void AtlasNetNoopEntityPosition(
+    AtlasNetContext*, uint32_t, float, float, float, float, float, float, uint8_t) {}
+ATLAS_NET_CALL void AtlasNetNoopEntityProperty(
+    AtlasNetContext*, uint32_t, uint8_t, const uint8_t*, int32_t) {}
+ATLAS_NET_CALL void AtlasNetNoopForcedPosition(
+    AtlasNetContext*, uint32_t, float, float, float, float, float, float) {}
+ATLAS_NET_CALL void AtlasNetNoopRpc(
+    AtlasNetContext*, uint32_t, uint32_t, const uint8_t*, int32_t) {}
+
+AtlasNetContext* AtlasNetCreate(uint32_t expected_abi) {
   // ... ABI 校验 ...
   auto* ctx = new AtlasNetContext{/* ... */};
   AtlasNetCallbacks noop{
-    .on_rpc = &NoopRpc,
-    .on_entity_create = &NoopEntityCreate,
-    .on_entity_destroy = &NoopEntityDestroy,
-    .on_disconnect = &NoopDisconnect,
+    .on_disconnect         = &AtlasNetNoopDisconnect,
+    .on_player_base_create = &AtlasNetNoopPlayerBaseCreate,
+    .on_player_cell_create = &AtlasNetNoopPlayerCellCreate,
+    .on_reset_entities     = &AtlasNetNoopResetEntities,
+    .on_entity_enter       = &AtlasNetNoopEntityEnter,
+    .on_entity_leave       = &AtlasNetNoopEntityLeave,
+    .on_entity_position    = &AtlasNetNoopEntityPosition,
+    .on_entity_property    = &AtlasNetNoopEntityProperty,
+    .on_forced_position    = &AtlasNetNoopForcedPosition,
+    .on_rpc                = &AtlasNetNoopRpc,
   };
   ctx->callbacks_.store(noop, std::memory_order_release);
   return ctx;
 }
 ```
 
-同时导出 `atlas_net_noop_*` sentinel,让 C# 可以显式填写未使用字段,
-`set_callbacks` 见到 NULL 字段直接返回 `-EINVAL`。
+C# 通过 `[LibraryImport]` 取各 sentinel 函数指针填入未使用字段 (§4.0.4.1);
+`AtlasNetSetCallbacks` 见到任一字段为 NULL 直接返回 `-EINVAL`。
 
 ### 5.3 消息分发流程
 
 ```
-atlas_net_poll() 调用
+AtlasNetPoll(ctx) 调用
   │
   ▼
-EventDispatcher::ProcessOnce()
+EventDispatcher::ProcessOnce()      [单线程, tick 驱动, 见 event_dispatcher.h]
   ├── IOPoller::Poll() → 读取网络数据
   ├── ReliableUdpChannel → 解包 RUDP → 提取 Bundle
   ├── InterfaceTable::Dispatch()
-  │   ├── 匹配 Typed Handler (LoginResult, AuthenticateResult)
-  │   │   └── ClientSession 内部处理 → 触发 login/auth 回调
-  │   └── Default Handler (RPC 消息, 见下方注解)
+  │   ├── 匹配 Typed Handler
+  │   │   ├── LoginResult / AuthenticateResult
+  │   │   │   └── ClientSession 处理 → 触发 login/auth 一次性回调
+  │   │   ├── CreateBasePlayer (10105)     → callbacks_.on_player_base_create(ctx, ...)
+  │   │   ├── CreateCellPlayer (10110)     → callbacks_.on_player_cell_create(ctx, ...)
+  │   │   ├── ResetEntities    (10106)     → callbacks_.on_reset_entities(ctx)
+  │   │   ├── EntityEnter      (10102)     → callbacks_.on_entity_enter(ctx, ...)
+  │   │   ├── EntityLeave      (10103)     → callbacks_.on_entity_leave(ctx, id)
+  │   │   ├── EntityPositionUpdate (10111) → callbacks_.on_entity_position(ctx, ...)
+  │   │   ├── EntityPropertyUpdate (10104) → callbacks_.on_entity_property(ctx, ...)
+  │   │   ├── ForcedPosition   (10112)     → callbacks_.on_forced_position(ctx, ...)
+  │   │   └── LoggedOff        (10113)     → callbacks_.on_disconnect(ctx, 3 /*LoggedOff*/)
+  │   └── Default Handler (未知 MessageID = 服务端 RPC, 见 §5.3.1)
   │       └── 将 MessageID 升级为 uint32_t rpc_id
-  │           └── 调用 callbacks_.on_rpc(entity_id, rpc_id, payload, len)
+  │           └── callbacks_.on_rpc(ctx, entity_id, rpc_id, payload, len)
   └── TimerQueue::Process() → 重传、心跳等
 ```
+
+> **线程模型**: `EventDispatcher::ProcessOnce()` (`src/lib/network/event_dispatcher.h:103`)
+> 是纯 tick-pumped 同步实现, 不起内部线程, 所以所有回调在 `AtlasNetPoll`
+> 的调用线程里同步触发, 满足 §4.0.6 "每 ctx 单线程"。
 
 #### 5.3.1 服务器→客户端 RPC 的线格式
 
@@ -1062,13 +1391,14 @@ EventDispatcher::ProcessOnce()
 handler，因此在完成 authentication 后注册一个 **Default Handler**:
 
 ```cpp
-// 等价于 src/client/client_app.cc:323-337 的现有实现
+// 等价于 src/client/client_app.cc:323-337 的现有实现, 扩展出 ctx 透传
 network_.InterfaceTable().SetDefaultHandler(
-    [this](const Address&, Channel*, MessageID msg_id, BinaryReader& reader) {
+    [this, ctx](const Address&, Channel*, MessageID msg_id, BinaryReader& reader) {
       // msg_id 即 rpc_id (uint16 升 uint32)
       auto remaining = reader.Remaining();
       auto payload = remaining > 0 ? reader.ReadBytes(remaining) : std::nullopt;
-      callbacks_.load().on_rpc(
+      callbacks_.load()->on_rpc(
+          ctx,                                                 // [B2] 新增首参
           player_entity_id_,
           static_cast<uint32_t>(msg_id),
           payload ? reinterpret_cast<const uint8_t*>(payload->data()) : nullptr,
@@ -1130,57 +1460,93 @@ internal static unsafe partial class AtlasNetNative
 #endif
 
     // --- 版本 / 错误 ---
-    [LibraryImport(LibName)] internal static partial uint atlas_net_abi_version();
-    [LibraryImport(LibName)] internal static partial nint atlas_net_last_error(nint ctx);
-    [LibraryImport(LibName)] internal static partial nint atlas_net_global_last_error();
+    [LibraryImport(LibName)] internal static partial uint AtlasNetGetAbiVersion();
+    [LibraryImport(LibName)] internal static partial nint AtlasNetLastError(nint ctx);
+    [LibraryImport(LibName)] internal static partial nint AtlasNetGlobalLastError();
 
     // --- 生命周期 ---
     [LibraryImport(LibName)]
-    internal static partial nint atlas_net_create(uint expectedAbi);
+    internal static partial nint AtlasNetCreate(uint expectedAbi);
 
     [LibraryImport(LibName)]
-    internal static partial void atlas_net_destroy(nint ctx);
+    internal static partial void AtlasNetDestroy(nint ctx);
 
     // --- Tick ---
-    [LibraryImport(LibName)] internal static partial int atlas_net_poll(nint ctx);
+    [LibraryImport(LibName)] internal static partial int AtlasNetPoll(nint ctx);
 
-    // --- 回调 ---
+    // --- 回调 ([I2 修复] 返回 int 而非 void) ---
     [LibraryImport(LibName)]
-    internal static partial int atlas_net_set_callbacks(
+    internal static partial int AtlasNetSetCallbacks(
         nint ctx, AtlasNetCallbacks* callbacks);
 
     [LibraryImport(LibName)]
-    internal static partial void atlas_net_set_log_handler(nint handler);
+    internal static partial void AtlasNetSetLogHandler(nint handler);
+
+    // --- Sentinel 函数导出 (§4.0.4.1 模式 A, 每字段一份) ---
+    [LibraryImport(LibName)] internal static partial void
+        AtlasNetNoopDisconnect(nint ctx, int reason);
+    [LibraryImport(LibName)] internal static unsafe partial void
+        AtlasNetNoopPlayerBaseCreate(nint ctx, uint eid, ushort tid,
+                                     byte* props, int len);
+    [LibraryImport(LibName)] internal static unsafe partial void
+        AtlasNetNoopPlayerCellCreate(nint ctx, uint space_id,
+                                     float px, float py, float pz,
+                                     float dx, float dy, float dz,
+                                     byte* props, int len);
+    [LibraryImport(LibName)] internal static partial void
+        AtlasNetNoopResetEntities(nint ctx);
+    [LibraryImport(LibName)] internal static unsafe partial void
+        AtlasNetNoopEntityEnter(nint ctx, uint eid, ushort tid,
+                                float px, float py, float pz,
+                                float dx, float dy, float dz,
+                                byte* props, int len);
+    [LibraryImport(LibName)] internal static partial void
+        AtlasNetNoopEntityLeave(nint ctx, uint eid);
+    [LibraryImport(LibName)] internal static partial void
+        AtlasNetNoopEntityPosition(nint ctx, uint eid,
+                                   float px, float py, float pz,
+                                   float dx, float dy, float dz,
+                                   byte on_ground);
+    [LibraryImport(LibName)] internal static unsafe partial void
+        AtlasNetNoopEntityProperty(nint ctx, uint eid, byte scope,
+                                   byte* delta, int len);
+    [LibraryImport(LibName)] internal static partial void
+        AtlasNetNoopForcedPosition(nint ctx, uint eid,
+                                   float px, float py, float pz,
+                                   float dx, float dy, float dz);
+    [LibraryImport(LibName)] internal static unsafe partial void
+        AtlasNetNoopRpc(nint ctx, uint eid, uint rid,
+                        byte* payload, int len);
 
     // --- Login/Auth/Disconnect (新 API:无 host/key 参数传回) ---
     [LibraryImport(LibName, StringMarshalling = StringMarshalling.Utf8)]
-    internal static partial int atlas_net_login(
+    internal static partial int AtlasNetLogin(
         nint ctx, string loginappHost, ushort loginappPort,
         string username, string passwordHash,
         nint callback, nint userData);
 
     [LibraryImport(LibName)]
-    internal static partial int atlas_net_authenticate(
+    internal static partial int AtlasNetAuthenticate(
         nint ctx, nint callback, nint userData);
 
     [LibraryImport(LibName)]
-    internal static partial int atlas_net_disconnect(nint ctx, int reason);
+    internal static partial int AtlasNetDisconnect(nint ctx, int reason);
 
     [LibraryImport(LibName)]
-    internal static partial int atlas_net_get_state(nint ctx);
+    internal static partial int AtlasNetGetState(nint ctx);
 
     // --- 消息 ---
     [LibraryImport(LibName)]
-    internal static partial int atlas_net_send_base_rpc(
+    internal static partial int AtlasNetSendBaseRpc(
         nint ctx, uint entityId, uint rpcId, byte* payload, int len);
 
     [LibraryImport(LibName)]
-    internal static partial int atlas_net_send_cell_rpc(
+    internal static partial int AtlasNetSendCellRpc(
         nint ctx, uint entityId, uint rpcId, byte* payload, int len);
 
     // --- 诊断 ---
     [LibraryImport(LibName)]
-    internal static partial int atlas_net_get_stats(nint ctx, AtlasNetStats* outStats);
+    internal static partial int AtlasNetGetStats(nint ctx, AtlasNetStats* outStats);
 }
 
 // 薄封装,把 ABI 校验和错误转异常收拢到一处
@@ -1188,9 +1554,9 @@ public static class AtlasNet {
     const uint kExpectedAbi = 0x01000000u;  // 与 C 头文件同步
 
     public static nint Create() {
-        var ctx = AtlasNetNative.atlas_net_create(kExpectedAbi);
+        var ctx = AtlasNetNative.AtlasNetCreate(kExpectedAbi);
         if (ctx == 0) {
-            var errPtr = AtlasNetNative.atlas_net_global_last_error();
+            var errPtr = AtlasNetNative.AtlasNetGlobalLastError();
             var err = errPtr == 0 ? "unknown"
                                   : Marshal.PtrToStringUTF8(errPtr);
             throw new InvalidOperationException(
@@ -1204,55 +1570,145 @@ public static class AtlasNet {
 ### 6.2 回调结构体
 
 ```csharp
+// 字段顺序和 Pack 与 C 侧 §4.7 AtlasNetCallbacks 严格一致。
+// 任何新增字段只能追加到末尾 (向后兼容, §4.0.5 MINOR bump)。
 [StructLayout(LayoutKind.Sequential, Pack = 1)]
 internal unsafe struct AtlasNetCallbacks
 {
-    public nint OnRpc;           // delegate* unmanaged<uint, uint, byte*, int, void>
-    public nint OnEntityCreate;  // delegate* unmanaged<uint, ushort, void>
-    public nint OnEntityDestroy; // delegate* unmanaged<uint, void>
-    public nint OnDisconnect;    // delegate* unmanaged<int, void>
+    // 连接事件
+    public nint OnDisconnect;           // (nint ctx, int reason) → void
+    // 玩家会话
+    public nint OnPlayerBaseCreate;     // (ctx, eid, tid, props, len) → void
+    public nint OnPlayerCellCreate;     // (ctx, space, pos[3], dir[3], props, len) → void
+    public nint OnResetEntities;        // (ctx) → void
+    // AOI 实体生命周期
+    public nint OnEntityEnter;          // (ctx, eid, tid, pos[3], dir[3], props, len) → void
+    public nint OnEntityLeave;          // (ctx, eid) → void
+    // 实体状态
+    public nint OnEntityPosition;       // (ctx, eid, pos[3], dir[3], on_ground) → void
+    public nint OnEntityProperty;       // (ctx, eid, scope, delta, len) → void
+    public nint OnForcedPosition;       // (ctx, eid, pos[3], dir[3]) → void
+    // RPC
+    public nint OnRpc;                  // (ctx, eid, rid, payload, len) → void
 }
 ```
 
 ### 6.3 回调注册
 
+> **全部 `[UnmanagedCallersOnly]` 方法首参都是 `nint ctx`** — 用于从
+> 进程级 `Dictionary<nint, AtlasClient>` 查回托管实例, 支持多 ctx 并发。
+
 ```csharp
 internal static unsafe class AtlasNetCallbackBridge
 {
-    // ---- 事件回调 (消息/实体/断开) ----
+    // ---- 进程级 ctx 注册表 ------------------------------------------------
+    // AtlasClient 构造时 Put, Destroy 时 Remove。读侧在 poll 线程内执行,
+    // 与构造/销毁路径通过 ConcurrentDictionary 隔离。
+    private static readonly ConcurrentDictionary<nint, AtlasClient> _ctxMap = new();
+    internal static void Bind(nint ctx, AtlasClient client) => _ctxMap[ctx] = client;
+    internal static void Unbind(nint ctx) => _ctxMap.TryRemove(ctx, out _);
+    internal static AtlasClient FromCtx(nint ctx) => _ctxMap[ctx];
+
+    // ---- 事件回调 (消息/实体/断开) ----------------------------------------
     // 所有指针/字节数据在本方法返回后失效 (§4.0.1), 必须立即复制。
+
     [UnmanagedCallersOnly]
-    static void OnRpc(uint entityId, uint rpcId, byte* payload, int len) {
-        byte[] copy = len > 0 ? new Span<byte>(payload, len).ToArray()
-                              : Array.Empty<byte>();
-        RpcDispatcher.Enqueue(entityId, rpcId, copy);
+    static void OnDisconnect(nint ctx, int reason)
+        => FromCtx(ctx).HandleDisconnect(reason);
+
+    [UnmanagedCallersOnly]
+    static void OnPlayerBaseCreate(nint ctx, uint eid, ushort tid,
+                                   byte* props, int len)
+    {
+        var copy = len > 0 ? new Span<byte>(props, len).ToArray()
+                           : Array.Empty<byte>();
+        FromCtx(ctx).Entities.HandlePlayerBaseCreate(eid, tid, copy);
     }
 
     [UnmanagedCallersOnly]
-    static void OnEntityCreate(uint entityId, ushort typeId) {
-        ClientEntityManager.Instance.HandleCreate(entityId, typeId);
+    static void OnPlayerCellCreate(nint ctx, uint spaceId,
+                                   float px, float py, float pz,
+                                   float dx, float dy, float dz,
+                                   byte* props, int len)
+    {
+        var copy = len > 0 ? new Span<byte>(props, len).ToArray()
+                           : Array.Empty<byte>();
+        FromCtx(ctx).Entities.HandlePlayerCellCreate(spaceId,
+            new Vector3(px, py, pz), new Vector3(dx, dy, dz), copy);
     }
 
     [UnmanagedCallersOnly]
-    static void OnEntityDestroy(uint entityId) {
-        ClientEntityManager.Instance.HandleDestroy(entityId);
+    static void OnResetEntities(nint ctx)
+        => FromCtx(ctx).Entities.HandleReset();
+
+    [UnmanagedCallersOnly]
+    static void OnEntityEnter(nint ctx, uint eid, ushort tid,
+                              float px, float py, float pz,
+                              float dx, float dy, float dz,
+                              byte* props, int len)
+    {
+        var copy = len > 0 ? new Span<byte>(props, len).ToArray()
+                           : Array.Empty<byte>();
+        FromCtx(ctx).Entities.HandleEntityEnter(eid, tid,
+            new Vector3(px, py, pz), new Vector3(dx, dy, dz), copy);
     }
 
     [UnmanagedCallersOnly]
-    static void OnDisconnect(int reason) {
-        AtlasNetworkManager.Instance.HandleDisconnect(reason);
+    static void OnEntityLeave(nint ctx, uint eid)
+        => FromCtx(ctx).Entities.HandleEntityLeave(eid);
+
+    [UnmanagedCallersOnly]
+    static void OnEntityPosition(nint ctx, uint eid,
+                                 float px, float py, float pz,
+                                 float dx, float dy, float dz,
+                                 byte onGround)
+        => FromCtx(ctx).Entities.HandleEntityPosition(eid,
+               new Vector3(px, py, pz), new Vector3(dx, dy, dz), onGround != 0);
+
+    [UnmanagedCallersOnly]
+    static void OnEntityProperty(nint ctx, uint eid, byte scope,
+                                 byte* delta, int len)
+    {
+        var copy = len > 0 ? new Span<byte>(delta, len).ToArray()
+                           : Array.Empty<byte>();
+        FromCtx(ctx).Entities.HandleEntityProperty(eid, scope, copy);
+    }
+
+    [UnmanagedCallersOnly]
+    static void OnForcedPosition(nint ctx, uint eid,
+                                 float px, float py, float pz,
+                                 float dx, float dy, float dz)
+        => FromCtx(ctx).Entities.HandleForcedPosition(eid,
+               new Vector3(px, py, pz), new Vector3(dx, dy, dz));
+
+    [UnmanagedCallersOnly]
+    static void OnRpc(nint ctx, uint eid, uint rid, byte* payload, int len)
+    {
+        var copy = len > 0 ? new Span<byte>(payload, len).ToArray()
+                           : Array.Empty<byte>();
+        FromCtx(ctx).RpcDispatcher.Enqueue(eid, rid, copy);
     }
 
     internal static void Register(nint ctx)
     {
         AtlasNetCallbacks table;
-        table.OnRpc = (nint)(delegate* unmanaged<uint, uint, byte*, int, void>)&OnRpc;
-        table.OnEntityCreate = (nint)(delegate* unmanaged<uint, ushort, void>)&OnEntityCreate;
-        table.OnEntityDestroy = (nint)(delegate* unmanaged<uint, void>)&OnEntityDestroy;
-        table.OnDisconnect = (nint)(delegate* unmanaged<int, void>)&OnDisconnect;
-        int rc = AtlasNetNative.atlas_net_set_callbacks(ctx, &table);
+        // 每字段都必须非 NULL (§4.0.4); 如果业务不关心某事件, 填 sentinel
+        // 而不是 (nint)0。这里示例全部接入真实 handler, sentinel 仅在更
+        // 细粒度的 "只订阅部分事件" 场景下使用。
+        table.OnDisconnect        = (nint)(delegate* unmanaged<nint,int,void>)&OnDisconnect;
+        table.OnPlayerBaseCreate  = (nint)(delegate* unmanaged<nint,uint,ushort,byte*,int,void>)&OnPlayerBaseCreate;
+        table.OnPlayerCellCreate  = (nint)(delegate* unmanaged<nint,uint,float,float,float,float,float,float,byte*,int,void>)&OnPlayerCellCreate;
+        table.OnResetEntities     = (nint)(delegate* unmanaged<nint,void>)&OnResetEntities;
+        table.OnEntityEnter       = (nint)(delegate* unmanaged<nint,uint,ushort,float,float,float,float,float,float,byte*,int,void>)&OnEntityEnter;
+        table.OnEntityLeave       = (nint)(delegate* unmanaged<nint,uint,void>)&OnEntityLeave;
+        table.OnEntityPosition    = (nint)(delegate* unmanaged<nint,uint,float,float,float,float,float,float,byte,void>)&OnEntityPosition;
+        table.OnEntityProperty    = (nint)(delegate* unmanaged<nint,uint,byte,byte*,int,void>)&OnEntityProperty;
+        table.OnForcedPosition    = (nint)(delegate* unmanaged<nint,uint,float,float,float,float,float,float,void>)&OnForcedPosition;
+        table.OnRpc               = (nint)(delegate* unmanaged<nint,uint,uint,byte*,int,void>)&OnRpc;
+
+        int rc = AtlasNetNative.AtlasNetSetCallbacks(ctx, &table);
         if (rc != 0) throw new InvalidOperationException(
-            $"atlas_net_set_callbacks failed: {rc}");
+            $"AtlasNetSetCallbacks failed: {rc}");
     }
 }
 
@@ -1312,9 +1768,9 @@ public enum AtlasLoginStatus : byte {
 | 现有接口 | 变更 |
 |----------|------|
 | `LibName = "atlas_engine"` | → `"atlas_net_client"` |
-| `atlas_send_base_rpc` | → `atlas_net_send_base_rpc` (增加 ctx 参数) |
-| `atlas_send_cell_rpc` | → `atlas_net_send_cell_rpc` (增加 ctx 参数) |
-| `atlas_set_native_callbacks` | → `atlas_net_set_callbacks` (新结构体) |
+| `atlas_send_base_rpc` | → `AtlasNetSendBaseRpc` (增加 ctx 参数) |
+| `atlas_send_cell_rpc` | → `AtlasNetSendCellRpc` (增加 ctx 参数) |
+| `atlas_set_native_callbacks` | → `AtlasNetSetCallbacks` (新结构体) |
 | `atlas_log_message` | → 通过日志回调反向调用 Unity Debug.Log |
 
 ---
@@ -1395,7 +1851,7 @@ public unsafe class AtlasNetworkManager : MonoBehaviour
         Instance = this;
         _ctx = AtlasNet.Create();   // 内部带 ABI 校验, 失败抛异常 (§6.1)
 
-        AtlasNetNative.atlas_net_set_log_handler(
+        AtlasNetNative.AtlasNetSetLogHandler(
             (nint)(delegate* unmanaged<int, byte*, int, void>)&LogBridge.OnLog);
         AtlasNetCallbackBridge.Register(_ctx);
     }
@@ -1403,14 +1859,14 @@ public unsafe class AtlasNetworkManager : MonoBehaviour
     void Update()
     {
         if (_ctx != 0)
-            AtlasNetNative.atlas_net_poll(_ctx);
+            AtlasNetNative.AtlasNetPoll(_ctx);
     }
 
     void OnDestroy()
     {
         if (_ctx != 0)
         {
-            AtlasNetNative.atlas_net_destroy(_ctx);
+            AtlasNetNative.AtlasNetDestroy(_ctx);
             _ctx = 0;
             Instance = null!;
         }
@@ -1422,7 +1878,7 @@ public unsafe class AtlasNetworkManager : MonoBehaviour
     {
         // GCHandle 让 C++ 透传定位回具体实例 (§4.5.2 user_data 参数)
         var h = GCHandle.Alloc(this);
-        int rc = AtlasNetNative.atlas_net_login(
+        int rc = AtlasNetNative.AtlasNetLogin(
             _ctx, config.loginappHost, config.loginappPort,
             username, passwordHash,
             AtlasNetLoginBridge.Pointer, GCHandle.ToIntPtr(h));
@@ -1433,23 +1889,23 @@ public unsafe class AtlasNetworkManager : MonoBehaviour
     public void Authenticate()
     {
         var h = GCHandle.Alloc(this);
-        int rc = AtlasNetNative.atlas_net_authenticate(
+        int rc = AtlasNetNative.AtlasNetAuthenticate(
             _ctx, AtlasNetAuthBridge.Pointer, GCHandle.ToIntPtr(h));
         if (rc != 0) { h.Free(); throw new InvalidOperationException($"auth rc={rc}"); }
     }
 
     public void Logout() {
-        AtlasNetNative.atlas_net_disconnect(_ctx, (int)AtlasDisconnectReason.Logout);
+        AtlasNetNative.AtlasNetDisconnect(_ctx, (int)AtlasDisconnectReason.Logout);
     }
 
     public void SendBaseRpc(uint entityId, uint rpcId, ReadOnlySpan<byte> payload) {
         fixed (byte* p = payload)
-            AtlasNetNative.atlas_net_send_base_rpc(_ctx, entityId, rpcId, p, payload.Length);
+            AtlasNetNative.AtlasNetSendBaseRpc(_ctx, entityId, rpcId, p, payload.Length);
     }
 
     public AtlasNetStats GetStats() {
         AtlasNetStats s;
-        AtlasNetNative.atlas_net_get_stats(_ctx, &s);
+        AtlasNetNative.AtlasNetGetStats(_ctx, &s);
         return s;
     }
 
@@ -1531,12 +1987,12 @@ Unity 客户端编译时定义 `ATLAS_CLIENT` 符号，DefGenerator 自动生成
 
 | 平台 | 库类型 | IO 后端 | 构建工具链 | 注意事项 |
 |------|--------|---------|-----------|----------|
-| Windows x64 | .dll | WSAPoll | Bazel + MSVC | 主开发平台 |
-| Android arm64 | .so | epoll | Bazel + rules_android_ndk | Unity IL2CPP, NDK r25+ |
-| Android armv7 | .so | epoll | Bazel + rules_android_ndk | 渐淘汰, 可选 |
-| iOS arm64 | .a (静态) | select | Bazel + rules_apple | Apple 禁止第三方动态库 |
-| macOS arm64 | .bundle | kqueue/select | Bazel + rules_apple | 开发调试用 |
-| Linux x64 | .so | epoll | Bazel + GCC/Clang | 服务端/CI |
+| Windows x64 | .dll | WSAPoll | CMake + MSVC (VS 2022) | 主开发平台 |
+| Android arm64 | .so | epoll | CMake + Android NDK r25+ toolchain file | Unity IL2CPP |
+| Android armv7 | .so | epoll | CMake + Android NDK toolchain file | 渐淘汰, 可选 |
+| iOS arm64 | .a (静态) | select | CMake + ios-cmake toolchain | Apple 禁止第三方动态库 |
+| macOS arm64 | .bundle | kqueue/select | CMake + AppleClang | 开发调试 (Unity 编辑器);  `.bundle` 是 Unity macOS Plugin 的标准格式, 实际内部是 Mach-O 动态库 |
+| Linux x64 | .so | epoll | CMake + GCC/Clang | 服务端/CI |
 
 ### 9.2 iOS 静态库处理
 
@@ -1556,58 +2012,92 @@ Unity 处理方式:
 #endif
 ```
 
-### 9.3 Bazel 交叉编译
+### 9.3 CMake 交叉编译
 
-Bazel 通过 `--platforms` 与 `--config` 驱动交叉编译。前置要求:
-- `MODULE.bazel` 已注册 `rules_android_ndk` (Android) 和
-  `rules_apple` / `apple_support` (iOS/macOS) 依赖
-- `.bazelrc` 定义各目标的 `--config` 条目 (见下方参考)
+CMake 通过 `-DCMAKE_TOOLCHAIN_FILE=<path>` 驱动交叉编译。前置要求:
+- **Android**: NDK 已安装, `$ANDROID_NDK_HOME` 指向 NDK 根目录,
+  使用 NDK 自带的 `build/cmake/android.toolchain.cmake`。
+  **宿主支持**: Windows / macOS / Linux 均可 — NDK 都有对应平台的 toolchain。
+- **iOS / macOS**: 安装 Xcode + CLT; iOS 使用社区维护的
+  `ios.toolchain.cmake` (或 Xcode 生成器 + `-G Xcode -DCMAKE_SYSTEM_NAME=iOS`)。
+  **宿主限制 (B5)**: **必须在 macOS 上执行**。Xcode 不提供 Windows/Linux 版本,
+  `CMAKE_SYSTEM_NAME=iOS` + `-G Xcode` 会在非 macOS 宿主上直接失败
+  (找不到 xcode-select / xcodebuild)。项目主开发平台是 Windows, 所以 iOS 产物:
+    - 开发期: 让有 macOS 的开发者手动跑 `cmake --preset ios-arm64`
+    - 长期: 把 iOS 构建固化到 CI (GitHub Actions `macos-latest` runner 开箱即用)
+- 新增 preset (推荐) 封装到 `CMakePresets.json`, 或直接传命令行
 
-Bazel 构建命令 (target 名 `atlas_net_client` 由 §3.1 定义):
+构建命令 (target 名 `atlas_net_client` 由 §3.1 定义):
 
 ```bash
 # Windows x64 (原生构建, 开发主平台)
-bazel build //src/lib/net_client:atlas_net_client
+cmake --preset release -DATLAS_BUILD_NET_CLIENT=ON
+cmake --build build/release --target atlas_net_client --config Release
 
 # Linux x64 (服务端 / CI)
-bazel build //src/lib/net_client:atlas_net_client \
-    --config=linux_x86_64
+cmake --preset release -DATLAS_BUILD_NET_CLIENT=ON
+cmake --build build/release --target atlas_net_client
 
 # Android arm64 (Unity 主力 Android 目标)
-bazel build //src/lib/net_client:atlas_net_client \
-    --config=android_arm64
+cmake -S . -B build/android_arm64 \
+    -DCMAKE_TOOLCHAIN_FILE=$ANDROID_NDK_HOME/build/cmake/android.toolchain.cmake \
+    -DANDROID_ABI=arm64-v8a \
+    -DANDROID_PLATFORM=android-24 \
+    -DATLAS_BUILD_NET_CLIENT=ON \
+    -DATLAS_BUILD_TESTS=OFF -DATLAS_BUILD_CSHARP=OFF \
+    -DCMAKE_BUILD_TYPE=Release
+cmake --build build/android_arm64 --target atlas_net_client
 
 # Android armv7 (可选, 渐淘汰)
-bazel build //src/lib/net_client:atlas_net_client \
-    --config=android_armv7
+cmake -S . -B build/android_armv7 \
+    -DCMAKE_TOOLCHAIN_FILE=$ANDROID_NDK_HOME/build/cmake/android.toolchain.cmake \
+    -DANDROID_ABI=armeabi-v7a \
+    -DANDROID_PLATFORM=android-24 \
+    -DATLAS_BUILD_NET_CLIENT=ON \
+    -DATLAS_BUILD_TESTS=OFF -DATLAS_BUILD_CSHARP=OFF \
+    -DCMAKE_BUILD_TYPE=Release
+cmake --build build/android_armv7 --target atlas_net_client
 
 # iOS arm64 — 使用静态库 target (§3.1)
 # 原因: Apple 禁止第三方 dylib, Unity iOS 用 [DllImport("__Internal")]
-bazel build //src/lib/net_client:atlas_net_client_static \
-    --config=ios_arm64
+cmake -S . -B build/ios_arm64 -G Xcode \
+    -DCMAKE_SYSTEM_NAME=iOS \
+    -DCMAKE_OSX_ARCHITECTURES=arm64 \
+    -DCMAKE_OSX_DEPLOYMENT_TARGET=13.0 \
+    -DATLAS_BUILD_NET_CLIENT=ON \
+    -DATLAS_BUILD_TESTS=OFF -DATLAS_BUILD_CSHARP=OFF
+cmake --build build/ios_arm64 --target atlas_net_client_static \
+    --config Release
 
 # macOS arm64 (开发调试, Unity 编辑器使用)
-bazel build //src/lib/net_client:atlas_net_client \
-    --config=macos_arm64
+cmake -S . -B build/macos_arm64 \
+    -DCMAKE_OSX_ARCHITECTURES=arm64 \
+    -DATLAS_BUILD_NET_CLIENT=ON \
+    -DCMAKE_BUILD_TYPE=Release
+cmake --build build/macos_arm64 --target atlas_net_client
 ```
 
-`.bazelrc` 片段参考 (具体 platform 定义在 `//platforms:BUILD.bazel`):
+建议把这些参数固化到 `CMakePresets.json` (或 `CMakeUserPresets.json`)
+里的新增 `configurePresets` 条目, 形如:
 
+```jsonc
+{
+  "name": "android-arm64",
+  "toolchainFile": "$env{ANDROID_NDK_HOME}/build/cmake/android.toolchain.cmake",
+  "binaryDir": "${sourceDir}/build/android_arm64",
+  "cacheVariables": {
+    "ANDROID_ABI": "arm64-v8a",
+    "ANDROID_PLATFORM": "android-24",
+    "CMAKE_BUILD_TYPE": "Release",
+    "ATLAS_BUILD_NET_CLIENT": "ON",
+    "ATLAS_BUILD_TESTS": "OFF",
+    "ATLAS_BUILD_CSHARP": "OFF"
+  }
+}
 ```
-# --- Android NDK (rules_android_ndk) ---
-build:android_arm64 --platforms=//platforms:android_arm64
-build:android_arm64 --android_platforms=//platforms:android_arm64
-build:android_armv7 --platforms=//platforms:android_armv7
-build:android_armv7 --android_platforms=//platforms:android_armv7
 
-# --- iOS / macOS (rules_apple) ---
-build:ios_arm64     --platforms=@build_bazel_apple_support//configs:ios_arm64
-build:ios_arm64     --apple_platform_type=ios
-build:macos_arm64   --platforms=@build_bazel_apple_support//configs:darwin_arm64
-
-# --- Linux 交叉 (若从 Windows/macOS 构建 Linux so, 可选) ---
-build:linux_x86_64  --platforms=@platforms//cpu:x86_64+@platforms//os:linux
-```
+之后跑 `cmake --preset android-arm64 && cmake --build build/android_arm64
+--target atlas_net_client` 即可。
 
 Unity 侧对 iOS 使用 `[DllImport("__Internal")]`, `.a` 归档会被
 Xcode 主工程直接链接入最终二进制 (见 §7 Plugins/iOS 目录)。
@@ -1639,7 +2129,7 @@ Xcode 主工程直接链接入最终二进制 (见 §7 Plugins/iOS 目录)。
      extern "C" ATLAS_NET_API void probe_set_callback(void (*cb)(int32_t));
      extern "C" ATLAS_NET_API void probe_fire(int32_t value);
      ```
-   - 用同一 Bazel toolchain 交叉编译 Windows / Android-arm64 / iOS-arm64 三份
+   - 用同一 CMake toolchain 交叉编译 Windows / Android-arm64 / iOS-arm64 三份
 
 2. **Unity 测试工程** (Unity 2022.3 LTS 作为下限基准)
    - 场景中挂载 `ProbeComponent`, 调 `probe_set_callback(&OnFire)` 然后 `probe_fire(42)`
@@ -1696,30 +2186,36 @@ Xcode 主工程直接链接入最终二进制 (见 §7 Plugins/iOS 目录)。
 
    a. 目标独立编译:
       ```bash
-      bazel build //src/lib/network:atlas_network
+      cmake --preset debug
+      cmake --build build/debug --target atlas_network --config Debug
       ```
 
-   b. 依赖图检查 — 用 `bazel query` 列出传递依赖, 确认
-      `atlas_network` 不再闭包到 `atlas_server` / `atlas_db` / `atlas_entitydef`:
+   b. 依赖图检查 — 读取 CMake 生成的依赖元数据, 确认
+      `atlas_network` 不再传递依赖到 `atlas_server` / `atlas_db` / `atlas_entitydef`:
       ```bash
-      bazel query "deps(//src/lib/network:atlas_network)" --output=package \
-          | sort -u
-      # 预期输出只含: src/lib/foundation, src/lib/platform,
-      # src/lib/serialization (及可选 third_party/zlib)
-      # 禁止出现: src/lib/server, src/lib/db, src/lib/entitydef
+      # 方式 1: 用 cmake-file-api / CMake graphviz 导出依赖图
+      cmake --preset debug --graphviz=build/debug/deps.dot
+      # 然后 grep / 看图, 期望 atlas_network 节点的出边只到:
+      #   atlas_foundation, atlas_platform, atlas_serialization
+      #   (及可选 ZLIB::ZLIB)
+      # 禁止出现: atlas_server, atlas_db*, atlas_entitydef
+
+      # 方式 2: 直接读 target 的 LINK_LIBRARIES 属性
+      cmake -P - <<'EOF'
+      get_target_property(libs atlas_network INTERFACE_LINK_LIBRARIES)
+      message(STATUS "atlas_network deps: ${libs}")
+      EOF
       ```
 
-      进阶, 用 `somepath` 定位残留路径:
-      ```bash
-      bazel query "somepath(//src/lib/network:atlas_network, \
-                            //src/lib/server:atlas_server)"
-      # 期望输出: Empty results.
-      ```
+      若怀疑残留路径, 用 `include-what-you-use` 或直接 grep 头文件
+      `#include` 关系定位。
 
    c. 全量测试不回退:
       ```bash
-      bazel test //tests/unit:all --test_output=errors
-      bazel test //tests/integration:all --test_output=errors
+      cd build/debug && ctest --build-config Debug --label-regex unit \
+          --output-on-failure
+      cd build/debug && ctest --build-config Debug --label-regex integration \
+          --output-on-failure
       ```
 
    d. 格式检查:
@@ -1730,24 +2226,38 @@ Xcode 主工程直接链接入最终二进制 (见 §7 Plugins/iOS 目录)。
 ### Phase 2: 序列化模块拆分 (预计 0.5 天)
 
 1. **创建 `atlas_serialization_binary` target**
-   - 修改 `src/lib/serialization/BUILD.bazel`
-   - 拆出 `cc_library(name = "serialization_binary", srcs = ["binary_stream.cc"], ...)`,
-     不链接 pugixml/rapidjson
-   - 现有 `serialization` target 保持不变 (继续包含全部 4 个 .cc)
+   - 修改 `src/lib/serialization/CMakeLists.txt`
+   - 新增 `add_library(atlas_serialization_binary STATIC binary_stream.cc)`,
+     仅 `PUBLIC` 链接 `atlas_foundation atlas_platform atlas_compiler_options`,
+     不引入 pugixml/rapidjson
+   - 现有 `atlas_serialization` target 保持不变 (继续包含全部 4 个 .cc)
 
-2. **验证**
+3. **验证**
    - 独立编译:
      ```bash
-     bazel build //src/lib/serialization:atlas_serialization_binary
+     cmake --preset debug
+     cmake --build build/debug --target atlas_serialization_binary --config Debug
      ```
-   - 最小 smoke test: 在 `tests/unit/serialization/BUILD.bazel` 添加
-     `test_binary_stream_only` target 仅依赖 `atlas_serialization_binary`,
-     能编译使用 `BinaryReader / BinaryWriter` 的 hello_world.cc
-   - 依赖不回溯到 pugixml / rapidjson:
+   - 最小 smoke test: 在 `tests/unit/CMakeLists.txt` 添加
+     ```cmake
+     atlas_add_test(NAME test_binary_stream_only
+       SOURCES test_binary_stream_only.cpp
+       DEPS atlas_serialization_binary
+     )
+     ```
+     能编译使用 `BinaryReader / BinaryWriter` 的用例
+   - `atlas_network` 的闭包不再回溯到 pugixml / rapidjson:
      ```bash
-     bazel query "deps(//src/lib/serialization:atlas_serialization_binary)" \
-         | grep -E "pugixml|rapidjson"
-     # 期望: 无任何匹配
+     # 导出依赖图检查
+     cmake --preset debug --graphviz=build/debug/deps.dot
+     # 期望 atlas_network 节点的出边
+     # 不包含 pugixml / rapidjson / atlas_serialization(完整版) 节点
+     grep -E '"atlas_network" -> "(pugixml|rapidjson)"' build/debug/deps.dot
+     # 期望: 无输出
+     ```
+   - 全量单元测试不回退:
+     ```bash
+     cd build/debug && ctest --build-config Debug --label-regex unit --output-on-failure
      ```
 
 ### Phase 3: C API 导出层 (预计 3-4 天)
@@ -1756,10 +2266,26 @@ Xcode 主工程直接链接入最终二进制 (见 §7 Plugins/iOS 目录)。
    - `src/lib/net_client/` 目录
    - `net_client_export.h` — 导出宏定义 (§4.1)
    - `client_session.h` / `client_session.cc` — Login/Auth 状态机
-     (从 `src/client/client_app.cc:210-294` 提取并异步化)
+     (从 `src/client/client_app.cc:209-289` 提取并异步化, 见 §5.2 + M4)
    - `client_api.h` — C API 头文件 (公开接口)
    - `client_api.cc` — C API 实现
-   - `BUILD.bazel` — `cc_shared_library` 构建配置
+   - `CMakeLists.txt` — 按 §3.1 配置 `atlas_net_client_core` (STATIC) +
+     `atlas_net_client` (SHARED), 并在 `src/lib/CMakeLists.txt` 追加
+     `add_subdirectory(net_client)`
+   - 顶层 `CMakeLists.txt` 增加 `option(ATLAS_BUILD_NET_CLIENT ... OFF)` (§3.2)
+
+   **[M4] 异步化范围界定**: 现有 `client_app.cc:209-289` 的 Login/Authenticate
+   是阻塞 `while + ProcessOnce + sleep` 轮询模式; 要迁成 DLL 内的回调驱动需:
+   - `ClientApp::Login()` (行 209–244) → `ClientSession::StartLogin(callback,user_data)`:
+     保留 `network_.ConnectRudp`, `InterfaceTable::RegisterTypedHandler<LoginResult>`
+     的结构; 把 `while` 循环+超时逻辑改成 `TimerQueue::Schedule(timeout_ms,
+     []{ fire_callback_with_timeout })`。收到 LoginResult 后由 `typed handler`
+     触发 callback 并取消定时器。
+   - `ClientApp::Authenticate()` (行 247–289) → `ClientSession::StartAuthenticate`:
+     同上模式。
+   - 现有阻塞版本 `ClientApp` 仅服务端内部集成测试仍在用, 保留不删;
+     `ClientSession` 是 DLL 内部的异步版本, 两者长期并存一段时间。
+     Phase 12 上线 + 集成测试通过后, 考虑让 `ClientApp` 也改走 `ClientSession`。
 
 2. **实现 ClientSession** (§5.2 详细行为)
    - 封装 `EventDispatcher` + `NetworkInterface`
@@ -1769,17 +2295,17 @@ Xcode 主工程直接链接入最终二进制 (见 §7 Plugins/iOS 目录)。
    - `SecureZero` 清除 SessionKey (§5.2.1)
 
 3. **实现 C API**
-   - 生命周期: `atlas_net_create(abi)` / `atlas_net_destroy`
-   - Tick: `atlas_net_poll`
+   - 生命周期: `AtlasNetCreate(abi)` / `AtlasNetDestroy`
+   - Tick: `AtlasNetPoll`
    - Login/Auth/Disconnect: §4.5
-   - 消息: `atlas_net_send_base_rpc` / `atlas_net_send_cell_rpc`
-   - 回调: `atlas_net_set_callbacks` (原子替换) / `atlas_net_set_log_handler`
-   - 诊断: `atlas_net_get_stats` / `atlas_net_get_state` / `atlas_net_last_error`
-   - Sentinel: `atlas_net_noop_rpc` 等 (§5.2.2)
+   - 消息: `AtlasNetSendBaseRpc` / `AtlasNetSendCellRpc`
+   - 回调: `AtlasNetSetCallbacks` (原子替换) / `AtlasNetSetLogHandler`
+   - 诊断: `AtlasNetGetStats` / `AtlasNetGetState` / `AtlasNetLastError`
+   - Sentinel: `AtlasNetNoopRpc` 等 (§5.2.2)
 
 4. **验证** — 三类测试必须齐备
 
-   a. 单元测试 (`tests/unit/net_client/client_session_test.cc`)
+   a. 单元测试 (`tests/unit/test_client_session.cpp`)
       - 用 `MockNetworkInterface` 驱动 `ClientSession` 状态机
       - 覆盖用例:
         - Login 成功 → LoginSucceeded
@@ -1790,22 +2316,25 @@ Xcode 主工程直接链接入最终二进制 (见 §7 Plugins/iOS 目录)。
         - 状态矩阵 (§4.5.6) 所有非法调用返回预期错误码
         - Disconnect 幂等性
       ```bash
-      bazel test //tests/unit/net_client:client_session_test --test_output=all
+      cd build/debug && ctest --build-config Debug -R test_client_session \
+          --output-on-failure
       ```
 
-   b. 集成测试 (`tests/integration/net_client/client_flow_test.cc`)
+   b. 集成测试 (`tests/integration/test_client_flow.cpp`)
       - 启动真实 LoginApp + BaseApp + DBApp (复用现有 integration fixture)
-      - 驱动完整 C API: `atlas_net_create` → `login` → `authenticate` → RPC → `disconnect` → `destroy`
+      - 驱动完整 C API: `AtlasNetCreate` → `login` → `authenticate` → RPC → `disconnect` → `destroy`
       - 验证端到端线格式兼容性
       ```bash
-      bazel test //tests/integration/net_client:client_flow_test --test_output=errors
+      cd build/debug && ctest --build-config Debug -R test_client_flow \
+          --output-on-failure
       ```
 
    c. FFI 验证 (独立 .NET 控制台 demo, 不依赖 Unity)
       - `tools/net_client_demo/Program.cs` — 最小可运行 demo
       - 构建与运行:
         ```bash
-        bazel build //src/lib/net_client:atlas_net_client
+        cmake --preset debug -DATLAS_BUILD_NET_CLIENT=ON
+        cmake --build build/debug --target atlas_net_client --config Debug
         dotnet run --project tools/net_client_demo/net_client_demo.csproj
         ```
       - 手工验证 P/Invoke 路径: `Create(abi)` → `Login` → `Authenticate`
@@ -1815,40 +2344,59 @@ Xcode 主工程直接链接入最终二进制 (见 §7 Plugins/iOS 目录)。
 
    d. 导出符号清单审核 (Windows)
       ```bash
-      bazel build //src/lib/net_client:atlas_net_client
-      dumpbin /exports bazel-bin/src/lib/net_client/atlas_net_client.dll \
-          | grep "atlas_net_"
+      cmake --build build/release --target atlas_net_client --config Release
+      dumpbin /exports build/release/src/lib/net_client/Release/atlas_net_client.dll \
+          | findstr "atlas_net_"
       # 对照 §4.10 表, 确认所有 API 均已导出且无多余符号
       ```
 
       Linux/macOS 对应:
       ```bash
-      nm -D --defined-only bazel-bin/src/lib/net_client/libatlas_net_client.so \
+      nm -D --defined-only build/release/src/lib/net_client/libatlas_net_client.so \
           | grep atlas_net_
       ```
 
-   e. ABI 回归防护: 在 `tests/unit/net_client` 下加一个
-      `abi_layout_test.cc`, 对每个跨 FFI 结构体做 `static_assert` 锁定
-      `sizeof` / `offsetof`:
+   e. ABI 回归防护: 在 `tests/unit/` 下加一个
+      `test_net_client_abi_layout.cpp`, 对每个跨 FFI 结构体做
+      `static_assert` 锁定 `sizeof` / `offsetof` (§4.7 10 字段回调表,
+      64-bit 指针 → 80 字节):
       ```cpp
-      static_assert(sizeof(AtlasNetCallbacks) == 32);
-      static_assert(offsetof(AtlasNetCallbacks, on_rpc) == 0);
-      static_assert(offsetof(AtlasNetCallbacks, on_entity_create) == 8);
-      // ...
+      // AtlasNetCallbacks: 10 个函数指针 * 8B (64-bit), Pack=1 已隐含
+      static_assert(sizeof(AtlasNetCallbacks) == 10 * sizeof(void*));
+      static_assert(offsetof(AtlasNetCallbacks, on_disconnect)         == 0);
+      static_assert(offsetof(AtlasNetCallbacks, on_player_base_create) ==  1 * sizeof(void*));
+      static_assert(offsetof(AtlasNetCallbacks, on_player_cell_create) ==  2 * sizeof(void*));
+      static_assert(offsetof(AtlasNetCallbacks, on_reset_entities)     ==  3 * sizeof(void*));
+      static_assert(offsetof(AtlasNetCallbacks, on_entity_enter)       ==  4 * sizeof(void*));
+      static_assert(offsetof(AtlasNetCallbacks, on_entity_leave)       ==  5 * sizeof(void*));
+      static_assert(offsetof(AtlasNetCallbacks, on_entity_position)    ==  6 * sizeof(void*));
+      static_assert(offsetof(AtlasNetCallbacks, on_entity_property)    ==  7 * sizeof(void*));
+      static_assert(offsetof(AtlasNetCallbacks, on_forced_position)    ==  8 * sizeof(void*));
+      static_assert(offsetof(AtlasNetCallbacks, on_rpc)                ==  9 * sizeof(void*));
+
+      // AtlasNetStats: 5*u32 + 1*float = 24B
+      static_assert(sizeof(AtlasNetStats) == 24);
       ```
-      这样任何破坏 ABI 的修改都在编译期爆出, 而不是运行期 Unity 崩溃。
+      C# 侧在 `AtlasNetNativeTests` 里再加运行期 `Marshal.SizeOf<AtlasNetCallbacks>()`
+      比对, 双向锁定布局。任何破坏 ABI 的修改都在编译期爆出, 而不是运行期 Unity 崩溃。
 
 ### Phase 4: C# P/Invoke 适配 (预计 2-3 天)
 
 1. **创建 AtlasNetNative.cs** (§6.1)
    - 所有 P/Invoke 声明, 使用 `[LibraryImport]` (source-generated marshalling)
-   - 反映新 API: `atlas_net_create(uint expectedAbi)` 等
+   - 反映新 API: `AtlasNetCreate(uint expectedAbi)` 等
    - iOS 条件编译 `LibName = "__Internal"`
    - 顶部 `AtlasNet.Create()` 薄封装统一做 ABI 校验 + 异常
 
 2. **创建 AtlasNetCallbackBridge.cs** (§6.3)
-   - `[UnmanagedCallersOnly]` 事件回调 (OnRpc/OnEntityCreate/OnEntityDestroy/OnDisconnect)
+   - 10 个 `[UnmanagedCallersOnly]` 事件回调 (OnDisconnect / OnPlayerBaseCreate /
+     OnPlayerCellCreate / OnResetEntities / OnEntityEnter / OnEntityLeave /
+     OnEntityPosition / OnEntityProperty / OnForcedPosition / OnRpc), 每个首参
+     均为 `nint ctx`, 通过 `FromCtx(ctx)` 查回 `AtlasClient` 实例
+   - 进程级 `ConcurrentDictionary<nint, AtlasClient>` 用于 ctx→实例映射
+     (AtlasClient 构造 `Bind`, Dispose `Unbind`)
    - 单独的 `AtlasNetLoginBridge` / `AtlasNetAuthBridge` 处理 user_data + GCHandle
+     (login/auth 的回调走独立的 trampoline 模式, 见 phase12 §3.6)
    - 所有回调内立即复制指针数据 (§4.0.1)
 
 3. **适配 ClientNativeApi.cs**
@@ -1893,33 +2441,45 @@ Xcode 主工程直接链接入最终二进制 (见 §7 Plugins/iOS 目录)。
 ### Phase 6: 跨平台构建 (预计 2-3 天)
 
 1. **Android NDK 构建**
-   - 在 `MODULE.bazel` 中注册 `rules_android_ndk`
-   - `.bazelrc` 增加 `--config=android_arm64` / `--config=android_armv7` (§9.3)
+   - 安装 Android NDK r25+, 设置 `$ANDROID_NDK_HOME`
+   - 在 `CMakePresets.json` 追加 `android-arm64` / `android-armv7`
+     configurePreset (§9.3 的示例)
    - 命令:
      ```bash
-     bazel build //src/lib/net_client:atlas_net_client --config=android_arm64
+     cmake --preset android-arm64
+     cmake --build build/android_arm64 --target atlas_net_client
      ```
-   - 产物位置: `bazel-bin/src/lib/net_client/libatlas_net_client.so`
+   - 产物位置: `build/android_arm64/src/lib/net_client/libatlas_net_client.so`
    - 验证:
      ```bash
      # 检查 ABI (ARM64)
-     file bazel-bin/src/lib/net_client/libatlas_net_client.so
+     file build/android_arm64/src/lib/net_client/libatlas_net_client.so
      # 预期: "ELF 64-bit LSB shared object, ARM aarch64, ..."
      # 符号导出检查
-     nm -D --defined-only bazel-bin/.../libatlas_net_client.so | grep atlas_net_
+     nm -D --defined-only build/android_arm64/.../libatlas_net_client.so \
+         | grep atlas_net_
      ```
 
-2. **iOS 构建**
-   - 在 `MODULE.bazel` 中注册 `rules_apple` + `apple_support`
+2. **iOS 构建** (⚠ **必须在 macOS 宿主上执行**, 见 §9.3 — Xcode 无 Windows 版本)
+   - 在 macOS 机器或 CI (GitHub Actions `macos-latest`) 上执行
+   - 安装 Xcode + CLT, 引入 `ios.toolchain.cmake`
+     (或使用 `-G Xcode -DCMAKE_SYSTEM_NAME=iOS`, 见 §9.3)
    - 使用 `atlas_net_client_static` target 产出 `.a` (§9.3)
    - 命令:
      ```bash
-     bazel build //src/lib/net_client:atlas_net_client_static \
-         --config=ios_arm64
+     cmake -S . -B build/ios_arm64 -G Xcode \
+         -DCMAKE_SYSTEM_NAME=iOS \
+         -DCMAKE_OSX_ARCHITECTURES=arm64 \
+         -DCMAKE_OSX_DEPLOYMENT_TARGET=13.0 \
+         -DATLAS_BUILD_NET_CLIENT=ON \
+         -DATLAS_BUILD_TESTS=OFF -DATLAS_BUILD_CSHARP=OFF
+     cmake --build build/ios_arm64 --target atlas_net_client_static \
+         --config Release
      ```
-   - 产物位置: `bazel-bin/src/lib/net_client/libatlas_net_client_static.a`
+   - 产物位置:
+     `build/ios_arm64/src/lib/net_client/Release-iphoneos/libatlas_net_client_static.a`
    - 验证: 将 `.a` 放入 Unity `Plugins/iOS/`, Unity iOS 构建出包后
-     `.ipa` 内 symbol table 包含 `_atlas_net_create` 等
+     `.ipa` 内 symbol table 包含 `_AtlasNetCreate` 等
 
 3. **CI 集成** (可选)
    - 在 GitHub Actions 或等价 CI 上注册矩阵构建任务
@@ -1962,6 +2522,45 @@ MTU = 1472, 最大分片 255, 延迟 ACK 25ms
 
 DLL 内部复用现有 `ReliableUdpChannel` 实现，C# 层无需感知 RUDP 细节。
 
+### 11.4 password_hash 算法 (I4)
+
+`AtlasNetLogin` 的 `password_hash` 字段由客户端在调用前计算。为避免服务端
+拿到明文密码, 哈希必须在**客户端**侧做, DLL 只作透传。
+
+**算法**:
+
+```
+password_hash = Base64( SHA-256( username + ":" + password ) )
+```
+
+- 输入: UTF-8 字节序列 `username + ":" + password`
+- 输出: 32 字节摘要, Base64 编码 (44 字符含填充)
+- 为什么拼 username: 盐化, 防止两个用户相同密码得到相同 hash
+
+**两端对齐验证**:
+- 服务端在 `src/server/loginapp/login_handler.cc` 的 `LoginRequest` 处理路径
+  按同一算法比对 (目前实现是直接字符串对比 — Phase 9 已知待补)
+- C# 客户端实现见 phase12 §3.6 `HashPassword`; 测试用 `test_login_hash` 单测
+  锁定 hex 输出: `SHA-256("alice:hunter2")` = `...` (固定向量, 服务端/客户端共享)
+
+**不做**: bcrypt/argon2 等 slow-hash — 它们的成本在于抗离线爆破, 需要服务端
+存储盐后做 slow verify; 本项目认证路径目前还是查表比对, slow-hash 不提供
+额外价值。真正的密码存储强化应在 LoginApp 落库层独立设计。
+
+### 11.5 `AtlasNetDisconnect` 幂等性与回调触发 (M5)
+
+§4.5.4 约定:
+
+| 场景 | 行为 |
+|------|------|
+| 首次调用, 状态非 Disconnected | 关闭 channel / 清状态; USER-initiated 不触发 `on_disconnect`; LOGOUT-initiated 触发 `on_disconnect(ctx, 3)` |
+| 首次调用, 状态已为 Disconnected | noop; 返回 0; **不触发 `on_disconnect`** |
+| 重复调用 (无论 reason) | noop; 返回 0; **不再触发 `on_disconnect`** (避免 C# 重复收到断线事件) |
+| DLL 内部检测到断线 (服务端主动关闭/超时/网络错误) | 自动触发 `on_disconnect(ctx, reason)` 一次, 并切到 Disconnected |
+
+换言之: `on_disconnect` 在一次 "从 Connected/半途 → Disconnected" 转换中
+**恰好触发一次**。
+
 ---
 
 ## 12. 风险与缓解
@@ -1973,10 +2572,10 @@ DLL 内部复用现有 `ReliableUdpChannel` 实现，C# 层无需感知 RUDP 细
 | iOS 静态链接符号冲突 | 链接错误 | `-fvisibility=hidden` 只导出 `atlas_net_*`; 与 Unity 内置 .NET 运行时符号必不冲突 |
 | 回调线程安全 | 崩溃/数据竞争 | 所有回调在 `poll()` 内同步触发, 与 Unity 主线程一致 (§4.0.6) |
 | Atlas.Shared 的 Vector3 与 UnityEngine.Vector3 冲突 | 编译错误/混淆 | 条件编译或隐式转换运算符 |
-| DLL 与 C# 层 ABI 版本不匹配 | 静默数据损坏 / Unity 崩溃 | `atlas_net_create(expected_abi)` 强制校验, 失败返回 NULL (§4.0.5) |
+| DLL 与 C# 层 ABI 版本不匹配 | 静默数据损坏 / Unity 崩溃 | `AtlasNetCreate(expected_abi)` 强制校验, 失败返回 NULL (§4.0.5) |
 | `AtlasNetCallbacks` 布局改动未同步 | Unity 运行时不定期崩溃 | Phase 3 验证 e: 用 `static_assert` 锁 `sizeof`/`offsetof`, 编译期阻断 |
 | SessionKey 泄漏 (core dump / 进程 snapshot) | 会话劫持 | `SessionKey` 不跨 FFI, `SecureZero` 清除 (§5.2.1) |
 | 用户在非法状态调用 API (重复 login 等) | 状态机损坏 | §4.5.6 矩阵 + 非法调用仅返回错误码, 绝不隐式断开 |
 | C# 在回调中递归调用 poll/destroy | 栈溢出 / use-after-free | §4.0.3 明确禁止清单, `ATLAS_DEBUG` 下 assert |
-| C# 保存 `atlas_net_last_error` 返回指针跨帧使用 | 悬垂指针读取 | §4.0.1/4.0.2 文档 + code review 检查; C# 层统一封装为 `string` 复制 |
+| C# 保存 `AtlasNetLastError` 返回指针跨帧使用 | 悬垂指针读取 | §4.0.1/4.0.2 文档 + code review 检查; C# 层统一封装为 `string` 复制 |
 | 服务器发 rpc_id 超过 `uint16` 可表示范围 | RPC 分发失败 | §5.3.2 约束: MessageID 为 uint16; 若将来扩容需同步升级 ABI MAJOR |

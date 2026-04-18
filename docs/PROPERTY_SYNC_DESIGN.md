@@ -280,3 +280,93 @@ avatar.Hp = 60
 | 1.3 | C# scope-filtered 快照回调 | `src/csharp/Atlas.Runtime/Core/NativeCallbacks.cs` `src/server/baseapp/baseapp_native_provider.hpp` | 新增 `GetEntitySnapshot` 回调，区分 owner/other 调用 `SerializeForOwnerClient` / `SerializeForOtherClients` |
 | 1.4 | 客户端处理 baseline | `src/client/client_app.cpp` + C# 客户端运行时 | 注册 0xF002 handler；DeltaSyncEmitter 生成 `ApplyBaseline(ref SpanReader)` |
 | 1.5 | 测试 | `tests/unit/test_baseline_snapshot.cpp` (新增) `tests/csharp/.../BaselineTests.cs` (新增) | 消息序列化、计数逻辑、属性覆盖正确性 |
+
+---
+
+## 8. 实施审计与后续补强 (2026-04-18)
+
+对 §7 任务清单的代码落地情况做了一次逐项审计。结论：**补强二基本落地，补强一/三完全未开始**，另外识别出一项设计文档未覆盖的正确性风险（Reliable/Unreliable 分流）。本节记录审计结果并给出更新后的补强步骤。
+
+### 8.1 当前实现状态
+
+| 任务 | 状态 | 证据 |
+|---|---|---|
+| **2.1** DeltaForwarder 模块 | DONE | `src/server/baseapp/delta_forwarder.h/.cc`；`PendingDelta` 含 `entity_id/delta/deferred_ticks`（无 `priority`） |
+| **2.2** BaseApp 集成 + 16KB 预算 | DONE | `baseapp.cc:628-638` Enqueue；`baseapp.cc:229,640-666` Flush；`baseapp.h:236` `kDeltaBudgetPerTick` |
+| **2.3** Watcher 监控 | PARTIAL | `baseapp.cc:295-301` 注册了 `delta_bytes_sent_total` 和 `delta_queue_depth`；**缺 `delta_bytes_deferred_total`** |
+| **2.4** 单元测试 | DONE | `tests/unit/test_delta_forwarder.cpp` (222 行) 覆盖全部场景 |
+| **3.1–3.7** LatestChangeOnly | MISSING | 全部 7 项零实现 |
+| **1.1–1.5** Baseline 快照 | MISSING | 全部 5 项零实现 |
+
+### 8.2 补强二：剩余修补任务
+
+| # | 任务 | 文件 | 说明 |
+|---|---|---|---|
+| 2.5 | 补注册 deferred watcher | `src/server/baseapp/baseapp.cc`（紧邻 line 295-301 已有 watcher 注册块） | 追加 `RegisterWatcher("baseapp/delta_bytes_deferred_total", ...)` 读取 `DeltaForwarder::stats().bytes_deferred`，聚合所有 `client_delta_forwarders_` 求和 |
+| 2.6 | PendingDelta 增加 priority | `delta_forwarder.h:54-58` `delta_forwarder.cc:26`（排序比较器） | 追加 `uint16_t priority{0}` 字段；`Enqueue()` 签名加 priority 参数（默认 0）；`Flush()` 排序改为 `(priority desc, deferred_ticks desc)` 字典序；同 entity 替换时**取二者较大值**而非覆盖，避免被低优先级的后续写入降权 |
+| 2.7 | BaseApp 调用方传递 priority | `baseapp.cc:628-638` `OnReplicatedDeltaFromCell` | 当前 `OnReplicatedDeltaFromCell` 只收到 `{base_entity_id, delta}`。**暂传 0 作为占位**——真正的"距离/属性类型/上次发送间隔"优先级需要 Witness 上下文，只有 Phase 10 CellApp 完成后才能填入；此任务先确保框架就位 |
+| 2.8 | 单元测试扩展 | `tests/unit/test_delta_forwarder.cpp` | 新增用例：(a) 高 priority 插入后先于低 priority 发送；(b) 同 entity 先低后高 priority 时合并保留高 priority；(c) priority 相等时退化为 deferred_ticks 排序 |
+
+### 8.3 补强三：状态调整 — **降级合并**
+
+**审计发现：** `DeltaForwarder::Enqueue` 对同一 entity 已做**整条 delta 替换**（`delta_forwarder.cc:9-20`），这覆盖了 §5.3 所声明的"跨帧积压合并"核心诉求。`latest_only` 标记现阶段的**唯一差异价值**是"区分哪些属性即使积压也必须保留中间帧"——但目前没有任何业务场景需要此区分。
+
+**决定：** 补强三（7 个子任务 3.1–3.7）**不再作为独立任务推进**，保留到 §6 远期混合架构中重新评估。届时若 C++ 侧引入 per-property 事件粒度的合并（而非当前 entity 级替换），再考虑 `.def` 标记。
+
+**行动：** 无需实现。本节作为决策记录归档。
+
+### 8.4 补强四：Reliable/Unreliable per-property 分流（新增，P0）
+
+**问题：** 当前 `ReplicatedDeltaFromCell` 硬编 `MessageReliability::kUnreliable`（`baseapp_messages.h`）。设计文档 §3.2 已承认 DirtyBit "丢包后若属性不再变化，客户端永久停留旧值"。补强一（Baseline 每秒兜底）虽能最终收敛，但**在 1 秒窗口内语义关键属性（HP、状态位、背包变更）可能完全丢失**——玩家可能看到"残血单位变满血"的错觉。
+
+**方案：** 在 `.def` 中加 `reliable="true"` 标记，生成器对可靠属性走独立的 reliable 消息通道，Unreliable 继续承载位置/朝向等高频低重要性属性。与补强一 Baseline 互为双保险（reliable delta 保证语义事件不丢；baseline 保证状态收敛）。
+
+| # | 任务 | 文件 | 说明 |
+|---|---|---|---|
+| 4.1 | DefModel 增加字段 | `src/csharp/Atlas.Generators.Def/DefModel.cs:37-43` `PropertyDefModel` | 新增 `bool Reliable` |
+| 4.2 | DefParser 解析 | `src/csharp/Atlas.Generators.Def/DefParser.cs:102-112` `ParseProperty()` | 读取 `reliable` 属性（默认 false） |
+| 4.3 | TypeRegistryEmitter 传递到 C++ | `src/csharp/Atlas.Generators.Def/Emitters/TypeRegistryEmitter.cs:79-88` | 属性描述符追加 `reliable` 字段 |
+| 4.4 | C++ 存储标记 | `src/lib/entitydef/entity_type_descriptor.h:47-55` `PropertyDescriptor` | 新增 `bool reliable{false}` |
+| 4.5 | 生成器分流序列化 | `src/csharp/Atlas.Generators.Def/Emitters/DeltaSyncEmitter.cs` | 为 reliable 属性与 unreliable 属性生成两份 `_dirtyFlags`（或拆分 mask 位段）；帧末产生两条 delta blob |
+| 4.6 | 新增 reliable 消息 ID | `src/lib/network/message_ids.h:82-102` `src/server/baseapp/baseapp_messages.h` | `ReplicatedReliableDeltaFromCell` — **实际分配 msg 2017**（2016 已被 `kBroadcastRpcFromCell` 占用）；`MessageReliability::kReliable`；客户端侧 `DeltaForwarder::kClientReliableDeltaMessageId = 0xF003` |
+| 4.7 | BaseApp 双路径 | `baseapp.cc` | `OnReplicatedReliableDeltaFromCell` 直接转发（不入 DeltaForwarder，因为预算用于丢弃场景，reliable 不能丢弃）；Unreliable 路径保持现状 |
+| 4.8 | 客户端 handler | client C# runtime | 注册新消息，复用同一 `ApplyReplicatedDelta` 入口（delta blob 格式相同，只是传输通道不同） |
+| 4.9 | Avatar.def 标注 | `entity_defs/Avatar.def` | `hp` / 状态类字段加 `reliable="true"`；`position` 保持默认 unreliable |
+| 4.10 | 测试 | `tests/unit/test_baseapp_reliable_delta.cpp`（新增）+ C# 生成器测试 | 验证分流正确、reliable 不走预算限流 |
+
+### 8.5 补强一：保持原方案，按 §7.3 执行
+
+补强一任务（1.1–1.5）方案不变，按§7.3 清单原样推进。补强四落地后，补强一仍需保留——两者关注点不同：
+
+- **补强四**：保证"**变化事件**"不丢（语义）
+- **补强一**：保证"**当前状态**"最终收敛（快照）
+
+补强一 Baseline 间隔可考虑从 30 帧延长（例如 120 帧 ≈ 4s），因为有补强四兜底后，baseline 只需防御极端场景（客户端错过了 reliable 重传）。
+
+### 8.6 更新后的优先级与实施顺序
+
+```
+P0: 补强四 (Reliable 分流)   →  补强一 (Baseline 快照)
+    独立模块可并行               依赖补强四稳定后评估间隔
+
+P1: 补强二补齐 (2.5–2.8)        从任意时机插入
+    小改动，低风险
+
+P2: 补强三                      冻结，归入 §6 远期
+```
+
+**实施顺序建议：**
+
+1. **第一阶段（P0 正确性修复）**：补强四 → 补强一。先做补强四是因为它从根源上减少了补强一需要覆盖的场景；Baseline 间隔的最终确定依赖补强四落地后的实测丢包影响。
+2. **第二阶段（P1 观测与调度完善）**：补强二剩余四项（2.5–2.8）。Watcher 是小时级任务；priority 字段框架就位后，等 CellApp Witness 能提供上下文时再填真实优先级。
+3. **第三阶段（远期）**：§6 混合架构 + 补强三重新评估，与 Phase 10 CellApp Step 10.5b 一并设计。
+
+### 8.7 验收门槛
+
+每项补强完成时须满足：
+
+| 项 | 验收点 |
+|---|---|
+| 补强四 | `entity_defs/Avatar.def` 中 `hp` 标注 reliable 后，断网 30 帧再恢复，客户端 HP 与服务端一致（当前会漂移）|
+| 补强一 | 客户端错过所有 reliable 消息后，最多 `kBaselineInterval` 帧内状态收敛到服务端 |
+| 补强二 (2.5–2.8) | `baseapp/delta_bytes_deferred_total` 在 watcher dump 中可见；`test_delta_forwarder.cpp` 新增 3 个 priority 相关用例全部通过 |

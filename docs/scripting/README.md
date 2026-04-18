@@ -130,13 +130,21 @@ src/lib/
 
 ```
 src/csharp/
-├── Atlas.Generators.Interop/     # Source Generator: Native 互操作
-├── Atlas.Generators.Def/         # Source Generator: 实体系统 (属性/序列化/RPC/工厂/类型注册)
+├── Atlas.Generators.Def/         # Source Generator: 实体系统 (属性/序列化/RPC/工厂/Mailbox/类型注册)
 ├── Atlas.Generators.Events/      # Source Generator: 事件系统
 ├── Atlas.Shared/                 # 共享库 (netstandard2.1, IL2CPP 安全)
 ├── Atlas.Runtime/                # 服务端运行时 (net9.0)
-└── Atlas.Runtime.Tests/          # xUnit 测试
+└── Atlas.Client/                 # 客户端运行时 (net9.0, 共享 Atlas.Shared — Unity 侧仍按 netstandard2.1 共享源码)
+
+tests/csharp/
+├── Atlas.Runtime.Tests/          # Runtime xUnit 测试
+├── Atlas.Generators.Tests/       # Generator 快照/编译测试
+├── Atlas.RuntimeTest/            # C++ 集成测试使用的 forwarder 程序集
+└── Atlas.SmokeTest/              # ClrHost 冒烟 (Ping/Add/StringLength)
 ```
+
+> 说明：原 `Atlas.Generators.Interop` 已移除（手写 `NativeApi.cs` 即可，见 [implementation_notes.md](implementation_notes.md) §3）；
+> 原 `Atlas.Generators.Entity` 与 `Atlas.Generators.Rpc` 已合并入 `Atlas.Generators.Def`，从 `.def` 文件直接驱动代码生成。
 
 ## 5. 阶段总览
 
@@ -144,9 +152,9 @@ src/csharp/
 |------|------|----------|-----------|
 | 0 | 清理 Python + 建立抽象层 | 1.5-2 周 | `ScriptEngine` / `ScriptValue` 接口; pyscript 删除 |
 | 1 | .NET 9 运行时嵌入 | 2-3 周 | `ClrHost`; C++ 进程能调用 C# 方法 |
-| 2 | C++ ↔ C# 互操作层 | 4-5 周 | `ClrMarshal` / `ClrObject`; `Atlas.Generators.Interop` |
+| 2 | C++ ↔ C# 互操作层 | 4-5 周 | `ClrMarshal` / `ClrObject`; `atlas_engine` 共享库 + `NativeApi.cs` |
 | 3† | Atlas 引擎 C# 绑定 | 3-4 周 | `Atlas.Runtime`; `ClrScriptEngine`; 日志/时间/实体回调 |
-| 4 | 共享程序集 + Source Generator | 3-4 周 | `Atlas.Shared`; Entity/Rpc/Events Generator |
+| 4 | 共享程序集 + Source Generator | 3-4 周 | `Atlas.Shared`; 统一 `Atlas.Generators.Def` + `Atlas.Generators.Events` |
 
 > † ScriptPhase 3 启动前需先执行 ScriptPhase 4 的任务 4.1 (Atlas.Shared 项目) + 4.2 (Attribute 定义) + 4.3 (SpanWriter/SpanReader)，因为 `Atlas.Runtime` 引用 `Atlas.Shared`。
 | 5 | 热重载机制 | 2-3 周 | `AssemblyLoadContext` 隔离; 文件监控; 状态迁移 |
@@ -155,19 +163,23 @@ src/csharp/
 
 ## 6. 里程碑与验收标准
 
+> 下表状态核对于 2026-04-18。
+
 | 里程碑 | 验收标准 | 状态 |
 |--------|----------|------|
 | **M0: 抽象层就位** | `ScriptEvents` 不再依赖 `PyObjectPtr`; 项目编译不需要 Python SDK; 所有非 Python 测试通过 | ✅ 完成 |
 | **M1: .NET 可加载** | C++ 进程能加载 CoreCLR 并调用 C# `[UnmanagedCallersOnly]` 方法返回正确结果 | ✅ 完成 |
-| **M2: 双向互操作** | C++ 可调用 C# 方法, C# 可调用 C++ 导出函数; 支持基本类型 + string + byte[]; Interop Generator 生成可用代码 | ✅ 完成 — 116 个 C++ 测试通过；详见 [implementation_notes.md](scripting/implementation_notes.md) |
-| **M3: 引擎可脚本化** | C# 脚本中可调用 `Atlas.Log.Info()`, `Atlas.Time.ServerTime`; Entity 生命周期回调工作 | 🟡 进行中 — `Atlas.Runtime`、`ClrScriptEngine`、生命周期回调与对应测试已落地，`atlas_module.cpp` 的全量 C# 对等能力仍在补齐 |
-| **M4: 跨端共享** | 同一 `Atlas.Shared.dll` 在服务端 (.NET 9) 和 Unity IL2CPP 上编译运行; Source Generator 输出零反射代码 | 🟡 进行中 — `Atlas.Shared` 与 Entity/Rpc/Events Generator 已落地，Unity IL2CPP 全量验收仍未完成 |
-| **M5: 热重载可用** | 修改 C# 脚本后无需重启服务端进程即可生效 | 🟡 进行中 — `ScriptLoadContext`、`HotReloadManager`、`ClrHotReload` 与文件监控已落地，自动编译/回滚链路仍需继续收口 |
-| **M6: 生产就绪** | 全部测试通过; 10K 实体压测无内存泄漏; GC 暂停 < 5ms@p99 | 🟡 进行中 — C++/C# 测试矩阵已建立，但全量通过、压测与 GC 指标尚未完成正式验收 |
+| **M2: 双向互操作** | C++ 可调用 C# 方法, C# 可调用 C++ 导出函数; 支持基本类型 + string + byte[]; Interop 桥接代码可用 | ✅ 完成 — `atlas_engine.dll` 共享库输出 + `NativeApi.cs` [LibraryImport] + `ClrObjectVTable`；~116 个 C++ 测试到位。自定义 `Atlas.Generators.Interop` 已移除，详见 [implementation_notes.md](implementation_notes.md) |
+| **M3: 引擎可脚本化** | C# 脚本中可调用 `Atlas.Log.Info()`, `Atlas.Time.ServerTime`; Entity 生命周期回调工作 | 🟡 进行中 — `Atlas.Runtime.Core.Bootstrap`（CLR handshake）+ `Lifecycle`（引擎生命周期入口）+ `ClrScriptEngine` 已落地；`atlas_module.cpp` 的全量 C# 对等能力仍在补齐 |
+| **M4: 跨端共享** | 同一 `Atlas.Shared.dll` 在服务端 (.NET 9) 和 Unity IL2CPP 上编译运行; Source Generator 输出零反射代码 | 🟡 进行中 — `Atlas.Shared` + 统一后的 `Atlas.Generators.Def`（吸收原 Entity/Rpc Generator）+ `Atlas.Generators.Events` 已落地，Unity IL2CPP 全量验收仍未完成 |
+| **M5: 热重载可用** | 修改 C# 脚本后无需重启服务端进程即可生效 | 🟡 进行中 — `ScriptLoadContext`、`HotReloadManager`、`ClrHotReload`、`FileWatcher` 已落地，`test_hot_reload` 集成测试与生产开关收口待补 |
+| **M6: 生产就绪** | 全部测试通过; 10K 实体压测无内存泄漏; GC 暂停 < 5ms@p99 | 🟡 进行中 — C++ ~12 个脚本相关测试 + C# 6 个 Runtime 测试文件（~102 `[Fact]`）+ `DefGeneratorTests`；长稳压测、BenchmarkDotNet、GC p99 指标仍缺 |
 
-## 7. Python 删除清单
+## 7. Python 删除清单（已完成，核对于 2026-04-18）
 
-### 需要删除的文件（24 个）
+以下清单为 M0 验收时的历史记录，仓库中 `grep pyscript|PyObject|py_object` 已无命中，`cmake/AtlasFindPackages.cmake` 已不复存在，全部条目已消化。
+
+### 已删除的文件（24 个）
 
 | 类型 | 文件 | 数量 |
 |------|------|------|
@@ -181,15 +193,15 @@ src/csharp/
 | 测试 | `tests/unit/test_py_pickler.cpp` | 1 |
 | 测试 | `tests/unit/test_atlas_module.cpp` | 1 |
 
-### 需要修改的文件（5 个）
+### 已修改/替换的文件
 
-| 文件 | 变更 |
-|------|------|
-| `src/lib/CMakeLists.txt` | `pyscript` → `clrscript` |
-| `src/lib/script/CMakeLists.txt` | 移除 `atlas_pyscript` 依赖 |
-| `src/lib/script/script_events.hpp/cpp` | 移除 Python 耦合 |
-| `cmake/AtlasFindPackages.cmake` | 移除 `find_package(Python3)`; 新增 .NET 发现 |
-| `tests/unit/CMakeLists.txt` | 移除 8 个 `test_py_*` 条目 |
+| 文件 | 当前状态 |
+|------|---------|
+| `src/lib/CMakeLists.txt` | 仅 `clrscript`，无 `pyscript` |
+| `src/lib/script/CMakeLists.txt` | 不再依赖 `atlas_pyscript` |
+| `src/lib/script/script_events.{h,cc}` | 统一使用 `ScriptObject` / `ScriptValue`，无 Python 耦合 |
+| `cmake/` | 现为 `AtlasCompilerOptions.cmake` / `AtlasDotNetBuild.cmake` / `Dependencies.cmake` / `FindDotNet.cmake`，不再有 `AtlasFindPackages.cmake` 或 `find_package(Python3)` |
+| `tests/unit/CMakeLists.txt` | 所有 `test_py_*` 条目已移除 |
 
 ## 8. 详细阶段文档
 
