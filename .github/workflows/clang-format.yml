@@ -20,5 +20,5 @@ jobs:
 
       - name: Run clang-format check
         run: |
-          find src -name '*.cpp' -o -name '*.h' -o -name '*.hpp' | \
+          find src tests -name '*.cc' -o -name '*.cpp' -o -name '*.h' -o -name '*.hpp' | \
             xargs clang-format --dry-run --Werror
