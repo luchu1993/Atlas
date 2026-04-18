@@ -13,6 +13,13 @@ function(atlas_add_test)
   target_include_directories(${ARG_NAME} PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
   add_test(NAME ${ARG_NAME} COMMAND ${ARG_NAME})
   set_tests_properties(${ARG_NAME} PROPERTIES LABELS "${ARG_LABEL}")
+
+  # Organize test targets into solution folders by label
+  if(ARG_LABEL STREQUAL "integration")
+    set_target_properties(${ARG_NAME} PROPERTIES FOLDER "Test/Integration")
+  else()
+    set_target_properties(${ARG_NAME} PROPERTIES FOLDER "Test/Unit")
+  endif()
 endfunction()
 
 add_subdirectory(unit)
