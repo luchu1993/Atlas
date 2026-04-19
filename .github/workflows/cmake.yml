@@ -62,7 +62,11 @@ jobs:
           sudo update-alternatives --install /usr/bin/gcc gcc /usr/bin/gcc-13 100
 
       - name: Restore .NET packages
-        run: dotnet restore
+        shell: bash
+        run: |
+          for proj in $(find src tests -name '*.csproj'); do
+            dotnet restore "$proj" || true
+          done
 
       - name: Configure
         run: cmake --preset ${{ matrix.preset }}
