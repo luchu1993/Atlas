@@ -2,8 +2,8 @@
 
 #include <algorithm>
 
-#include "foundation/log.h"
 #include "foundation/clock.h"
+#include "foundation/log.h"
 
 namespace atlas::machined {
 

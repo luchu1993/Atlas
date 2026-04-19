@@ -3,8 +3,8 @@
 #include <algorithm>
 #include <format>
 
-#include "foundation/log.h"
 #include "foundation/clock.h"
+#include "foundation/log.h"
 #include "network/channel.h"
 #include "network/machined_types.h"
 #include "server/watcher.h"

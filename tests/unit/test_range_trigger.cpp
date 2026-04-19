@@ -63,13 +63,6 @@ class RecordingTrigger final : public RangeTrigger {
   int leave_count_{0};
 };
 
-// Helper: insert an entity node into the list.
-auto AddEntity(RangeList& list, std::unique_ptr<EntityRangeListNode> n)
-    -> std::unique_ptr<EntityRangeListNode> {
-  list.Insert(n.get());
-  return n;
-}
-
 // ============================================================================
 // Peer movement — basic 2-D semantics
 // ============================================================================

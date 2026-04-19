@@ -115,8 +115,9 @@ auto ClrHost::Initialize(const std::filesystem::path& runtime_config_path) -> Re
 
   // Step 3: Obtain the load_assembly_and_get_function_pointer delegate
   void* load_assembly_fn = nullptr;
-  rc = AsDelegateFn(fn_get_delegate_)(static_cast<hostfxr_handle>(host_context_),
-                                      hdt_load_assembly_and_get_function_pointer, &load_assembly_fn);
+  rc =
+      AsDelegateFn(fn_get_delegate_)(static_cast<hostfxr_handle>(host_context_),
+                                     hdt_load_assembly_and_get_function_pointer, &load_assembly_fn);
   if (rc != 0 || load_assembly_fn == nullptr) {
     AsCloseFn(fn_close_)(static_cast<hostfxr_handle>(host_context_));
     host_context_ = nullptr;
@@ -169,7 +170,7 @@ auto ClrHost::GetMethod(const std::filesystem::path& assembly_path, std::string_
   auto w_method = Utf8ToWide(method_name);
 
   int rc = AsLoadFn(fn_load_assembly_)(w_assembly.c_str(), w_type.c_str(), w_method.c_str(),
-                                      UNMANAGEDCALLERSONLY_METHOD, nullptr, &method_ptr);
+                                       UNMANAGEDCALLERSONLY_METHOD, nullptr, &method_ptr);
 #else
   // char_t = char on Linux/macOS
   auto s_assembly = assembly_path.string();
@@ -177,7 +178,7 @@ auto ClrHost::GetMethod(const std::filesystem::path& assembly_path, std::string_
   auto s_method = std::string(method_name);
 
   int rc = AsLoadFn(fn_load_assembly_)(s_assembly.c_str(), s_type.c_str(), s_method.c_str(),
-                                      UNMANAGEDCALLERSONLY_METHOD, nullptr, &method_ptr);
+                                       UNMANAGEDCALLERSONLY_METHOD, nullptr, &method_ptr);
 #endif
 
   if (rc != 0 || method_ptr == nullptr) {

@@ -61,6 +61,9 @@ jobs:
           sudo update-alternatives --install /usr/bin/g++ g++ /usr/bin/g++-13 100
           sudo update-alternatives --install /usr/bin/gcc gcc /usr/bin/gcc-13 100
 
+      - name: Restore .NET packages
+        run: dotnet restore
+
       - name: Configure
         run: cmake --preset ${{ matrix.preset }}
 

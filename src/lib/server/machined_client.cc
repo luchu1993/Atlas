@@ -1,7 +1,7 @@
 #include "server/machined_client.h"
 
-#include "foundation/log.h"
 #include "foundation/clock.h"
+#include "foundation/log.h"
 #include "network/channel.h"
 #include "network/event_dispatcher.h"
 #include "network/interface_table.h"
