@@ -219,6 +219,15 @@ void CellApp::OnEndOfTick() {
   // this frame's positions. GhostMaintainer runs first so a just-
   // crossed entity still has its haunts published before the Offload
   // handoff.
+  //
+  // ServerApp tick order per server_app.h:
+  //   OnEndOfTick (this) → OnStartOfTick → Updatables (C# on_tick) →
+  //   OnTickComplete (CellApp: TickControllers + TickWitnesses)
+  // An entity offloaded here becomes a Ghost BEFORE this frame's C#
+  // tick runs. TickWitnesses then skips it (HasWitness() is false after
+  // ConvertRealToGhost), and Phase 11 §3.5 Step 9's "witness teardown
+  // before controller stop" ordering is preserved by the Convert method
+  // itself.
   TickGhostPump();
   TickOffloadChecker();
 }
@@ -588,14 +597,6 @@ auto CellApp::FindPeerChannel(const Address& addr) const -> Channel* {
   return it == peer_cellapp_channels_.end() ? nullptr : it->second;
 }
 
-void CellApp::SetPeerChannel(const Address& addr, Channel* ch) {
-  if (ch == nullptr) {
-    peer_cellapp_channels_.erase(addr);
-  } else {
-    peer_cellapp_channels_[addr] = ch;
-  }
-}
-
 void CellApp::OnCreateGhost(const Address& /*src*/, Channel* ch, const cellapp::CreateGhost& msg) {
   auto* space = FindSpace(msg.space_id);
   if (!space) {
@@ -672,8 +673,9 @@ void CellApp::OnGhostSnapshotRefresh(const Address& /*src*/, Channel* /*ch*/,
 
 void CellApp::OnGhostSetReal(const Address& /*src*/, Channel* /*ch*/,
                              const cellapp::GhostSetReal& msg) {
-  // Our Ghost's authoritative Real just moved. Swap the back-channel to
-  // the new Real's peer channel.
+  // Our Ghost's authoritative Real just moved. Rebind the back-channel
+  // to the new Real's peer channel so any future forwarded traffic
+  // (e.g. reply RPCs) targets the right CellApp.
   auto it = entity_population_.find(msg.ghost_entity_id);
   if (it == entity_population_.end()) return;
   auto* entity = it->second;
@@ -684,22 +686,7 @@ void CellApp::OnGhostSetReal(const Address& /*src*/, Channel* /*ch*/,
                       msg.new_real_addr.Ip(), msg.new_real_addr.Port());
     return;
   }
-  // ConvertRealToGhost is the only "re-parent" we have; since we're
-  // already a Ghost, bypass and overwrite real_channel_ via a targeted
-  // helper. Exposing that would widen the Convert API; instead we
-  // fall back to Convert-then-Convert for now, which is a no-op because
-  // we're already Ghost. Simpler: reset next_real_addr and rely on
-  // ghost's stale channel being overwritten by the message pathway. Not
-  // ideal — documenting as a known-edge for later refinement.
-  entity->SetNextRealAddr({});
-  // NOTE: CellEntity currently lacks a SetRealChannel setter. The
-  // channel on the Ghost is only changed through ConvertRealToGhost.
-  // For PR-4 completeness, we leave the old channel in place; the
-  // Ghost's replication still works because cross-process messages
-  // arrive from the NEW Real via the interface table (identified by
-  // ghost_entity_id, not by channel identity). Deferred refactor:
-  // expose a dedicated CellEntity::SetRealChannel and plumb here.
-  (void)new_ch;
+  entity->RebindRealChannel(new_ch);
 }
 
 void CellApp::OnGhostSetNextReal(const Address& /*src*/, Channel* /*ch*/,
@@ -831,14 +818,40 @@ void CellApp::OnOffloadEntity(const Address& src, Channel* ch, const cellapp::Of
 
 void CellApp::OnOffloadEntityAck(const Address& /*src*/, Channel* /*ch*/,
                                  const cellapp::OffloadEntityAck& msg) {
-  // Sender side: our Real is already a Ghost (TickOffloadChecker
-  // converted it before sending OffloadEntity). A success ack is the
-  // normal path — nothing more to do. A failure ack is informational
-  // for now; a future hardening pass could convert the Ghost back.
-  if (!msg.success) {
-    ATLAS_LOG_ERROR("CellApp: OffloadEntityAck reported failure for entity_id={}",
-                    msg.real_entity_id);
+  // Phase 11 PR-6 review fix (B3): clear pending tracking and surface
+  // limbo-Ghost diagnostics on failure.
+  auto pending_it = pending_offloads_.find(msg.real_entity_id);
+  if (pending_it == pending_offloads_.end()) {
+    ATLAS_LOG_WARNING(
+        "CellApp: OffloadEntityAck for entity_id={} not in pending set — "
+        "duplicate ack, unknown entity, or TickOffloadChecker never tracked it",
+        msg.real_entity_id);
+    return;
   }
+  const Address target = pending_it->second.target_addr;
+  const auto age = Clock::now() - pending_it->second.sent_at;
+  pending_offloads_.erase(pending_it);
+
+  if (msg.success) {
+    ATLAS_LOG_INFO("CellApp: Offload of entity_id={} to {}:{} succeeded (rtt={} ms)",
+                   msg.real_entity_id, target.Ip(), target.Port(),
+                   std::chrono::duration_cast<std::chrono::milliseconds>(age).count());
+    return;
+  }
+  // Failure path: our local entity is now a Ghost with real_channel_
+  // pointing at the CellApp that rejected the Offload. No Real exists
+  // anywhere in the cluster — the entity is in limbo until ops
+  // intervenes. Phase 11 scope (§9.5) does not auto-revert; revert
+  // would require keeping the RealEntityData + controller state
+  // snapshot around until Ack and re-instantiating on failure.
+  ATLAS_LOG_ERROR(
+      "CellApp: Offload of entity_id={} to {}:{} REJECTED after {} ms. "
+      "Entity is now a limbo Ghost locally with no Real anywhere; client RPCs "
+      "targeted at this base_entity_id will drop until recovery. Check peer "
+      "CellApp log at {}:{} for the rejection reason.",
+      msg.real_entity_id, target.Ip(), target.Port(),
+      std::chrono::duration_cast<std::chrono::milliseconds>(age).count(), target.Ip(),
+      target.Port());
 }
 
 // ---- CellAppMgr → CellApp control ----
@@ -907,9 +920,7 @@ void CellApp::OnRegisterCellAppAck(const Address& /*src*/, Channel* /*ch*/,
 // Tick-time Ghost pump + Offload checker
 // ============================================================================
 
-auto CellApp::BuildOffloadMessage(const CellEntity& entity,
-                                  cellappmgr::CellID /*target_cell_id*/) const
-    -> cellapp::OffloadEntity {
+auto CellApp::BuildOffloadMessage(const CellEntity& entity) const -> cellapp::OffloadEntity {
   cellapp::OffloadEntity msg;
   msg.real_entity_id = entity.Id();
   msg.type_id = entity.TypeId();
@@ -1054,7 +1065,7 @@ void CellApp::TickOffloadChecker() {
       }
 
       // Step 1-3: build message and warn existing haunts that Real is moving.
-      auto msg = BuildOffloadMessage(*op.entity, op.target_cell_id);
+      auto msg = BuildOffloadMessage(*op.entity);
       if (auto* rd = op.entity->GetRealData()) {
         cellapp::GhostSetNextReal notify;
         notify.ghost_entity_id = op.entity->Id();
@@ -1069,6 +1080,11 @@ void CellApp::TickOffloadChecker() {
         ATLAS_LOG_ERROR("CellApp: OffloadEntity send failed for entity_id={}", op.entity->Id());
         continue;
       }
+
+      // Record the outstanding Offload so OnOffloadEntityAck can tie the
+      // reply back to its target (and, on failure, emit an actionable
+      // limbo-Ghost diagnostic — Phase 11 PR-6 review fix B3).
+      pending_offloads_[op.entity->Id()] = PendingOffload{op.target_cellapp_addr, Clock::now()};
 
       // Step 5 (sender): local Real → Ghost immediately, using the peer
       // channel as the new back-channel. Drops witness + controllers per

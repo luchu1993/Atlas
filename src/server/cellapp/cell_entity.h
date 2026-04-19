@@ -119,6 +119,12 @@ class CellEntity : public IEntityMotion {
   void GhostApplyDelta(uint64_t event_seq, std::span<const std::byte> other_delta);
   void GhostApplySnapshot(uint64_t event_seq, std::span<const std::byte> other_snapshot);
 
+  // Rebinds the Ghost's back-channel. Used by CellApp::OnGhostSetReal after
+  // another CellApp becomes the new Real following a successful Offload.
+  // Also clears next_real_addr_ since the handoff is complete. No-op
+  // (log-and-return) on a Real since Reals don't have a back-channel.
+  void RebindRealChannel(Channel* new_real_channel);
+
   // ---- IEntityMotion --------------------------------------------------------
   //
   // SetPosition / SetDirection update both the in-memory field AND the

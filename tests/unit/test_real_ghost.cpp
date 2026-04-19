@@ -89,6 +89,40 @@ TEST(RealGhost, ConvertRealToGhost_IgnoredOnGhost) {
 }
 
 // ============================================================================
+// RebindRealChannel — review-fix B1
+// ============================================================================
+
+TEST(RealGhost, RebindRealChannel_UpdatesBackChannelAndClearsNextRealAddr) {
+  Space space(1);
+  auto* initial_ch = FakeChannel(0xAA);
+  auto* new_ch = FakeChannel(0xBB);
+  auto* e = space.AddEntity(std::make_unique<CellEntity>(CellEntity::GhostTag{}, 42, 1, space,
+                                                         math::Vector3{0, 0, 0},
+                                                         math::Vector3{1, 0, 0}, initial_ch));
+  // Simulate mid-Offload state: pre-reg next_real_addr via GhostSetNextReal.
+  e->SetNextRealAddr(Address(0x7F000001u, 30002));
+  ASSERT_EQ(e->GetRealChannel(), initial_ch);
+
+  e->RebindRealChannel(new_ch);
+  EXPECT_EQ(e->GetRealChannel(), new_ch);
+  // Offload handoff complete → next_real_addr cleared.
+  EXPECT_EQ(e->NextRealAddr().Ip(), 0u);
+  EXPECT_EQ(e->NextRealAddr().Port(), 0u);
+}
+
+TEST(RealGhost, RebindRealChannel_IgnoredOnReal) {
+  Space space(1);
+  auto* e = space.AddEntity(
+      std::make_unique<CellEntity>(99, 1, space, math::Vector3{0, 0, 0}, math::Vector3{1, 0, 0}));
+  ASSERT_TRUE(e->IsReal());
+  auto* new_ch = FakeChannel(0xBB);
+  e->RebindRealChannel(new_ch);
+  // Real has no back-channel, and RebindRealChannel must NOT install one.
+  EXPECT_EQ(e->GetRealChannel(), nullptr);
+  EXPECT_TRUE(e->IsReal());
+}
+
+// ============================================================================
 // Ghost → Real conversion
 // ============================================================================
 

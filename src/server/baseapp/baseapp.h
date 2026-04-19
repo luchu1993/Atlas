@@ -65,6 +65,27 @@ class Channel;
 //   • Scripted entity logic via ClrScriptEngine / BaseAppNativeProvider
 // ============================================================================
 
+// ============================================================================
+// Phase 11 PR-6 routing helper (pure function)
+// ============================================================================
+//
+// Looks up a CellApp Channel* for `cell_addr` in the peer-channel map.
+// Returns nullptr when:
+//   - cell_addr has port 0 (default-constructed Address; the entity has
+//     not yet been bound to a Cell via OnCellEntityCreated / OnCurrentCell);
+//   - the map has no entry for cell_addr (peer CellApp not known, either
+//     not yet connected or already died).
+//
+// Exposed at namespace scope so unit tests can drive it on a plain map +
+// synthetic Channel* values without having to construct a BaseApp. The
+// complete "entity → cell_addr → channel" chain is covered by
+// BaseApp::ResolveCellChannelForEntity which layers the entity lookup
+// on top of this helper.
+
+[[nodiscard]] auto ResolveCellChannelByAddr(
+    const std::unordered_map<Address, Channel*>& cellapp_channels, const Address& cell_addr)
+    -> Channel*;
+
 class BaseApp : public EntityApp {
  public:
   static auto Run(int argc, char* argv[]) -> int;
@@ -75,6 +96,15 @@ class BaseApp : public EntityApp {
 
   [[nodiscard]] auto GetEntityManager() -> EntityManager& { return entity_mgr_; }
   [[nodiscard]] auto GetNativeProvider() -> BaseAppNativeProvider& { return *native_provider_; }
+
+  // ---- Phase 11 PR-6 CellApp routing ------------------------------------
+  //
+  // Returns the CellApp channel that currently owns `target_entity_id`'s
+  // Real, or nullptr if the entity is unknown, has no Cell yet, or the
+  // peer channel map has no entry for its current cell_addr. Used by
+  // OnClientCellRpc. Wraps the pure ResolveCellChannelByAddr helper
+  // (see free-function declaration below) with the entity lookup.
+  [[nodiscard]] auto ResolveCellChannelForEntity(EntityID target_entity_id) const -> Channel*;
 
  protected:
   // ---- EntityApp / ScriptApp overrides --------------------------------

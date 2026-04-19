@@ -166,6 +166,16 @@ void CellEntity::GhostApplyDelta(uint64_t event_seq, std::span<const std::byte> 
   while (state.history.size() > kReplicationHistoryWindow) state.history.pop_front();
 }
 
+void CellEntity::RebindRealChannel(Channel* new_real_channel) {
+  if (!IsGhost()) {
+    ATLAS_LOG_WARNING("CellEntity::RebindRealChannel on non-Ghost id={} — ignored", id_);
+    return;
+  }
+  real_channel_ = new_real_channel;
+  // Offload handoff is done — the transition-window hint no longer applies.
+  next_real_addr_ = {};
+}
+
 void CellEntity::GhostApplySnapshot(uint64_t event_seq, std::span<const std::byte> other_snapshot) {
   if (!IsGhost()) {
     ATLAS_LOG_WARNING("CellEntity::GhostApplySnapshot on non-Ghost entity id={} — ignored", id_);

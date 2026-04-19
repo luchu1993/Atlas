@@ -487,6 +487,11 @@ atlas_add_test(NAME test_base_entity
   DEPS atlas_baseapp_lib
 )
 
+atlas_add_test(NAME test_baseapp_cell_routing
+  SOURCES test_baseapp_cell_routing.cpp
+  DEPS atlas_baseapp_lib atlas_network
+)
+
 atlas_add_test(NAME test_entity_manager
   SOURCES test_entity_manager.cpp
   DEPS atlas_baseapp_lib

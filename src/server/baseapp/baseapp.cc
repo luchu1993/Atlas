@@ -2337,31 +2337,18 @@ void BaseApp::OnClientCellRpc(Channel& ch, const baseapp::ClientCellRpc& msg) {
   // authenticated proxy binding — the client cannot forge it. CellApp
   // re-checks everything (defence in depth) on the other side.
   //
-  // Phase 11 PR-6: multi-CellApp routing. Pick the channel by the
-  // target entity's last-known cell_addr rather than a single cluster-
-  // wide CellApp. Stale routing (Offload in flight) shows up as either
-  // an unknown peer (drop with a warning) or the old CellApp rejecting
-  // the RPC because the entity is now a Ghost there — the Q2 soft
-  // guard on CellApp's OnClientCellRpcForward catches that case.
-  auto* target = entity_mgr_.Find(msg.target_entity_id);
-  if (target == nullptr) {
-    ATLAS_LOG_WARNING("BaseApp: ClientCellRpc target entity {} unknown (rpc_id=0x{:06X})",
-                      msg.target_entity_id, msg.rpc_id);
-    return;
-  }
-  const Address cell_addr = target->CellAddr();
-  if (cell_addr.Port() == 0) {
+  // Phase 11 PR-6: ResolveCellChannelForEntity handles the multi-
+  // CellApp lookup (entity → cell_addr → channel map). Stale routing
+  // (Offload in flight) shows up as either an unknown peer (nullptr,
+  // drop with a warning) or the old CellApp rejecting the RPC because
+  // the entity is now a Ghost there — the Q2 soft guard on CellApp's
+  // OnClientCellRpcForward catches that case.
+  auto* ch_out = ResolveCellChannelForEntity(msg.target_entity_id);
+  if (ch_out == nullptr) {
     ATLAS_LOG_WARNING(
-        "BaseApp: ClientCellRpc target entity {} has no cell_addr yet (rpc_id=0x{:06X})",
-        msg.target_entity_id, msg.rpc_id);
-    return;
-  }
-  auto ch_it = cellapp_channels_.find(cell_addr);
-  if (ch_it == cellapp_channels_.end()) {
-    ATLAS_LOG_WARNING(
-        "BaseApp: ClientCellRpc has no channel for target entity {}'s cell_addr {}:{} "
+        "BaseApp: ClientCellRpc dropped — no cell channel for target entity {} "
         "(rpc_id=0x{:06X})",
-        msg.target_entity_id, cell_addr.Ip(), cell_addr.Port(), msg.rpc_id);
+        msg.target_entity_id, msg.rpc_id);
     return;
   }
 
@@ -2370,7 +2357,24 @@ void BaseApp::OnClientCellRpc(Channel& ch, const baseapp::ClientCellRpc& msg) {
   fwd.source_entity_id = source_entity_id;
   fwd.rpc_id = msg.rpc_id;
   fwd.payload = msg.payload;  // copy; Serialize/Deserialize owns bytes
-  (void)ch_it->second->SendMessage(fwd);
+  (void)ch_out->SendMessage(fwd);
+}
+
+auto ResolveCellChannelByAddr(const std::unordered_map<Address, Channel*>& cellapp_channels,
+                              const Address& cell_addr) -> Channel* {
+  // Cell address 0:0 is the "not yet placed on any Cell" sentinel —
+  // BaseEntity default-constructs cell_addr_ to {0,0} and OnCellEntityCreated
+  // / OnCurrentCell replace it. A valid cell address always has a non-
+  // zero port.
+  if (cell_addr.Port() == 0) return nullptr;
+  auto it = cellapp_channels.find(cell_addr);
+  return it == cellapp_channels.end() ? nullptr : it->second;
+}
+
+auto BaseApp::ResolveCellChannelForEntity(EntityID target_entity_id) const -> Channel* {
+  auto* target = entity_mgr_.Find(target_entity_id);
+  if (target == nullptr) return nullptr;
+  return ResolveCellChannelByAddr(cellapp_channels_, target->CellAddr());
 }
 
 }  // namespace atlas

@@ -5,7 +5,6 @@
 #include <limits>
 #include <utility>
 
-#include "cellapp/intercell_messages.h"  // for cellapp::CreateSpace we might emit
 #include "foundation/log.h"
 #include "network/channel.h"
 #include "network/event_dispatcher.h"

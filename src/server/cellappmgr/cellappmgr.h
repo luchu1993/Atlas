@@ -14,10 +14,6 @@ namespace atlas {
 
 class Channel;
 
-namespace cellapp {
-struct CreateSpace;
-}
-
 // ============================================================================
 // CellAppMgr — CellApp cluster manager (Phase 11 §3.8)
 //

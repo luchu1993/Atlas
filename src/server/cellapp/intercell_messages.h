@@ -410,6 +410,14 @@ struct OffloadEntity {
   std::vector<std::byte> other_snapshot;
   uint64_t latest_event_seq{0};
   uint64_t latest_volatile_seq{0};
+  // Reserved wire slot for serialized Controller state (MoveToPoint,
+  // Timer, Proximity). Phase 11 does NOT carry controller state across
+  // Offload — ConvertRealToGhost calls controllers_.StopAll() and the
+  // receiver starts with an empty controller list. The field stays on
+  // the wire so the format is forward-compatible when a follow-up
+  // implements controller migration; until then it is always empty and
+  // scripts must re-arm motion/timer logic after Offload completes if
+  // they need it to continue.
   std::vector<std::byte> controller_data;
   std::vector<Address> existing_haunts;
 

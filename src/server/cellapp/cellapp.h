@@ -133,18 +133,14 @@ class CellApp : public EntityApp {
   // already died).
   [[nodiscard]] auto FindPeerChannel(const Address& addr) const -> Channel*;
 
-  // Insert a peer Channel* directly. Production uses are Init's machined
-  // subscription; tests use it to wire fake channels for Offload flow
-  // coverage without running machined.
-  void SetPeerChannel(const Address& addr, Channel* ch);
-
   // ---- Offload orchestration (exposed for tests) --------------------------
 
   // Build an OffloadEntity message for `entity`. Does NOT send; caller
-  // decides transport. `persistent_blob` is left empty here — PR-6
-  // wires the C# SerializeEntity callback that fills it in.
-  auto BuildOffloadMessage(const CellEntity& entity, cellappmgr::CellID target_cell_id) const
-      -> cellapp::OffloadEntity;
+  // decides transport. PR-6 wires the C# SerializeEntity callback here
+  // to fill `persistent_blob`. The receiver rebuilds its local Cell
+  // membership by querying its own BSP with the arriving position, so
+  // no target_cell_id needs to travel on the wire.
+  auto BuildOffloadMessage(const CellEntity& entity) const -> cellapp::OffloadEntity;
 
   // Ghost-pump + offload-checker pass, called from OnEndOfTick. Exposed
   // so unit tests can step the tick pipeline deterministically.
@@ -196,6 +192,20 @@ class CellApp : public EntityApp {
   // Populated by the machined Birth subscription in Init; cleared by
   // the matching Death callback.
   std::unordered_map<Address, Channel*> peer_cellapp_channels_;
+
+  // Phase 11 PR-6 review fix (B3): Offload ack tracking. Inserted by
+  // TickOffloadChecker right before the Real→Ghost conversion; removed
+  // by OnOffloadEntityAck. A missing Ack means:
+  //   success=true  → remove quietly, Offload is done.
+  //   success=false → remove AND log a limbo-Ghost diagnostic so ops
+  //                    know this entity has no Real anywhere in the
+  //                    cluster and client RPCs will drop until some
+  //                    manual recovery (future: auto-revert).
+  struct PendingOffload {
+    Address target_addr;
+    TimePoint sent_at;
+  };
+  std::unordered_map<EntityID, PendingOffload> pending_offloads_;
 
   // Safety ceiling on per-tick AvatarUpdate displacement. phase10_cellapp.md
   // §3.12 Phase 10 strategy: reject beyond 50 m/tick (roughly 500 m/s at
