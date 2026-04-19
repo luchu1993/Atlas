@@ -3,6 +3,7 @@
 
 #include <functional>
 #include <memory>
+#include <unordered_set>
 
 #include "space/controller.h"
 #include "space/range_trigger.h"
@@ -48,9 +49,31 @@ class ProximityController final : public Controller {
   void Start() override;
   void Update(float dt) override;
   void Stop() override;
+  [[nodiscard]] auto TypeTag() const -> ControllerKind override {
+    return ControllerKind::kProximity;
+  }
+
+  // Snapshot of peers currently inside the trigger. Empty if the
+  // trigger hasn't been Start()ed yet. Phase 11 Offload serialisation
+  // consumes this to remember peer membership across process migration;
+  // see controller_codec.h.
+  [[nodiscard]] auto InsidePeers() const -> const std::unordered_set<RangeListNode*>&;
+
+  // Seed the inside-peer set before Start() runs. Used by Offload
+  // arrival (review-fix B2): pre-populating with peers that were
+  // already "inside" at the origin suppresses duplicate OnEnter events
+  // for peers that remained in range across migration. Peers from the
+  // origin that no longer exist locally are simply dropped by the
+  // caller before passing them here — the trigger won't know about
+  // them and will not emit phantom OnLeave events.
+  void SeedInsidePeersForMigration(std::unordered_set<RangeListNode*> peers);
 
  private:
   class TriggerImpl;
+
+  // Applied in Start() when non-empty. Owned by this controller until
+  // migrated into the TriggerImpl's own inside_peers_ set.
+  std::unordered_set<RangeListNode*> pending_seed_peers_;
 
   RangeListNode& central_;
   RangeList& list_;

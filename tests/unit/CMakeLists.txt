@@ -233,6 +233,11 @@ atlas_add_test(NAME test_real_ghost
   DEPS atlas_cellapp_lib atlas_space atlas_network
 )
 
+atlas_add_test(NAME test_controller_codec
+  SOURCES test_controller_codec.cpp
+  DEPS atlas_cellapp_lib atlas_space atlas_serialization
+)
+
 atlas_add_test(NAME test_cell
   SOURCES test_cell.cpp
   DEPS atlas_cellapp_lib atlas_space

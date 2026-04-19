@@ -29,6 +29,9 @@ class MoveToPointController final : public Controller {
   [[nodiscard]] auto FaceMovement() const -> bool { return face_movement_; }
 
   void Update(float dt) override;
+  [[nodiscard]] auto TypeTag() const -> ControllerKind override {
+    return ControllerKind::kMoveToPoint;
+  }
 
  private:
   math::Vector3 destination_;

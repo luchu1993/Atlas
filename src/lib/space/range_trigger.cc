@@ -83,6 +83,14 @@ void RangeTrigger::Remove(RangeList& list) {
   list_ = nullptr;
 }
 
+void RangeTrigger::SeedInsidePeersForMigration(std::unordered_set<RangeListNode*> peers) {
+  // Seed is only meaningful while un-inserted: once the bounds are in
+  // the list, Insert has already run and inside_peers_ reflects the
+  // actual list state. Injecting after Insert would corrupt it.
+  assert(list_ == nullptr && "SeedInsidePeersForMigration after Insert()");
+  inside_peers_ = std::move(peers);
+}
+
 auto RangeTrigger::IsZInRange(float z) const -> bool {
   const float cz = central_.Z();
   return z > (cz - range_) && z < (cz + range_);

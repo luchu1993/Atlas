@@ -32,6 +32,17 @@ using ControllerID = uint32_t;
 //   cancellation is safe.
 // ============================================================================
 
+// Phase 11 PR-6 review-fix B2: stable enumeration of controller types
+// for cross-process migration. The wire protocol records the Kind byte
+// + per-type state; a migrating receiver dispatches to the right
+// subclass constructor by matching this tag.
+enum class ControllerKind : uint8_t {
+  kUnknown = 0,
+  kMoveToPoint = 1,
+  kTimer = 2,
+  kProximity = 3,
+};
+
 class Controller {
  public:
   Controller() = default;
@@ -51,6 +62,13 @@ class Controller {
   virtual void Start() {}
   virtual void Update(float dt) = 0;
   virtual void Stop() {}
+
+  // Phase 11 PR-6 review-fix B2: cross-process migration tag. Every
+  // concrete subclass overrides to return a stable kind so the
+  // serialisation layer can round-trip it via ControllerKind. Base
+  // returns kUnknown — tests / callers that construct a bare Controller
+  // won't be migrated.
+  [[nodiscard]] virtual auto TypeTag() const -> ControllerKind { return ControllerKind::kUnknown; }
 
  protected:
   // Mark the controller as done. The owning Controllers container will

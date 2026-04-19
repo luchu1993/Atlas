@@ -40,6 +40,17 @@ class TimerController final : public Controller {
   [[nodiscard]] auto FireCount() const -> uint32_t { return fire_count_; }
 
   void Update(float dt) override;
+  [[nodiscard]] auto TypeTag() const -> ControllerKind override { return ControllerKind::kTimer; }
+
+  // Migration restore: set the running accumulator + fire count so a
+  // cross-process Offload preserves "half-elapsed" timer state. Only
+  // valid to call before Start() — i.e. immediately after construction
+  // on the receiving CellApp. Production callers are the Phase 11
+  // ControllerCodec on Offload arrival; tests may also use it.
+  void RestoreRunningStateForMigration(float accumulated, uint32_t fire_count) {
+    accumulated_ = accumulated;
+    fire_count_ = fire_count;
+  }
 
  private:
   float interval_;

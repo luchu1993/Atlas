@@ -77,6 +77,23 @@ class RangeTrigger {
   [[nodiscard]] auto Central() const -> const RangeListNode& { return central_; }
   [[nodiscard]] auto Range() const -> float { return range_; }
 
+  // Phase 11 PR-6 review-fix B2: expose + seed the inside-peer set for
+  // cross-process migration.
+  //
+  // InsidePeers() returns the current 2-D-inside snapshot. Used at
+  // Offload send-time to persist peer membership.
+  //
+  // SeedInsidePeersForMigration pre-populates the set BEFORE Insert()
+  // runs. Insert's natural enter/leave dispatch then only fires leave
+  // events for pre-seeded peers that moved out of range, without re-
+  // firing enter for peers that stayed in — exactly the non-flapping
+  // behaviour we want on Offload arrival. Must NOT be called while the
+  // trigger is currently inserted (list_ != nullptr).
+  [[nodiscard]] auto InsidePeers() const -> const std::unordered_set<RangeListNode*>& {
+    return inside_peers_;
+  }
+  void SeedInsidePeersForMigration(std::unordered_set<RangeListNode*> peers);
+
   // Callbacks — subclass (AoITrigger, ProximityTrigger) overrides. The
   // `other` node is guaranteed to be non-bound (a peer in the list) and
   // not the central itself.

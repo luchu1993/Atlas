@@ -20,6 +20,21 @@ auto Controllers::Add(std::unique_ptr<Controller> ctrl, IEntityMotion* motion, i
   return id;
 }
 
+auto Controllers::AddWithPreservedId(std::unique_ptr<Controller> ctrl, IEntityMotion* motion,
+                                     int user_arg, ControllerID preserved_id) -> ControllerID {
+  if (preserved_id == 0 || controllers_.contains(preserved_id)) return 0;
+  ctrl->id_ = preserved_id;
+  ctrl->motion_ = motion;
+  ctrl->user_arg_ = user_arg;
+  ctrl->finished_ = false;
+  auto* raw = ctrl.get();
+  controllers_.emplace(preserved_id, std::move(ctrl));
+  // Ensure future Add() calls don't collide with the preserved ID.
+  if (preserved_id >= next_id_) next_id_ = preserved_id + 1;
+  raw->Start();
+  return preserved_id;
+}
+
 auto Controllers::Cancel(ControllerID id) -> bool {
   auto it = controllers_.find(id);
   if (it == controllers_.end()) return false;

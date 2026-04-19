@@ -10,6 +10,7 @@ add_library(atlas_cellapp_lib STATIC
   cell_entity.cc
   cellapp.cc
   cellapp_native_provider.cc
+  controller_codec.cc
   ghost_maintainer.cc
   offload_checker.cc
   real_entity_data.cc

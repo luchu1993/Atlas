@@ -11,6 +11,7 @@
 #include "cellapp_messages.h"
 #include "cellapp_native_provider.h"
 #include "cellappmgr/cellappmgr_messages.h"
+#include "controller_codec.h"
 #include "foundation/clock.h"
 #include "foundation/log.h"
 #include "ghost_maintainer.h"
@@ -770,6 +771,22 @@ void CellApp::OnOffloadEntity(const Address& src, Channel* ch, const cellapp::Of
     space->LocalCells().begin()->second->AddRealEntity(entity);
   }
 
+  // Phase 11 PR-6 review-fix B2: rebuild controllers from the sender's
+  // snapshot. Must run AFTER the entity is registered with
+  // entity_population_ + the local Cell so the ProximityController's
+  // peer resolver can look up peers by entity_id.
+  if (!msg.controller_data.empty()) {
+    BinaryReader r(std::span<const std::byte>(msg.controller_data));
+    const bool ok = DeserializeControllersForMigration(
+        *entity, r, [this](uint32_t peer_id) -> CellEntity* { return FindEntity(peer_id); });
+    if (!ok) {
+      ATLAS_LOG_ERROR(
+          "CellApp: Offload controller restore failed for entity_id={} — arriving "
+          "controllers partially / empty",
+          msg.real_entity_id);
+    }
+  }
+
   // Notify BaseApp that the Cell for this entity has moved. PR-6
   // completes the BaseApp-side multi-CellApp routing table; until then
   // this message still needs sending for single-CellApp compatibility.
@@ -962,6 +979,17 @@ auto CellApp::BuildOffloadMessage(const CellEntity& entity) const -> cellapp::Of
     for (const auto& h : rd->Haunts()) {
       if (h.channel != nullptr) msg.existing_haunts.push_back(h.channel->RemoteAddress());
     }
+  }
+  // Phase 11 PR-6 review-fix B2: serialise live controller state so the
+  // Offload receiver can resume MoveToPoint/Timer/Proximity without
+  // losing mid-motion progress or proximity membership. Serialised at
+  // send-time — before ConvertRealToGhost runs StopAll — so the
+  // controllers are still the authoritative live set.
+  {
+    BinaryWriter cw;
+    SerializeControllersForMigration(entity, cw);
+    auto buf = cw.Detach();
+    msg.controller_data.assign(buf.begin(), buf.end());
   }
   return msg;
 }
