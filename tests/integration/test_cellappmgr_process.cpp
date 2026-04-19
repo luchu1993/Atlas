@@ -12,9 +12,12 @@
 // via hostfxr); that layer is orthogonal to Phase 11 and is covered
 // end-to-end by test_login_flow.cpp + follow-up work.
 
+#include <algorithm>
 #include <atomic>
 #include <chrono>
+#include <deque>
 #include <filesystem>
+#include <fstream>
 #include <string>
 #include <thread>
 #include <vector>
@@ -134,8 +137,13 @@ struct Child {
       cmd += L' ';
       cmd += QuoteArg(a);
     }
+    // Unique log per-invocation: clashes between sibling test cases (same
+    // proc_label) were overwriting each other's output and masking the
+    // real failure reason.
+    const auto log_stamp =
+        std::to_string(::GetCurrentProcessId()) + "_" + std::to_string(::GetTickCount64());
     auto log_file = std::filesystem::temp_directory_path() /
-                    ("atlas_cellappmgr_process_" + proc_label + ".log");
+                    ("atlas_cellappmgr_process_" + proc_label + "_" + log_stamp + ".log");
     SECURITY_ATTRIBUTES sa{};
     sa.nLength = sizeof(sa);
     sa.bInheritHandle = TRUE;
@@ -173,6 +181,25 @@ struct Child {
 
   [[nodiscard]] auto Diagnostic() const -> std::string {
     std::string out = "[" + label + "] running=" + (IsRunning() ? "yes" : "no");
+    if (pi.hProcess != nullptr) {
+      DWORD code = 0;
+      if (::GetExitCodeProcess(pi.hProcess, &code) && code != STILL_ACTIVE) {
+        out += " exit=" + std::to_string(code);
+      }
+    }
+    // Tail the log file so we can see what the subprocess was complaining
+    // about when the test assertion fires.
+    if (!log_path.empty() && std::filesystem::exists(log_path)) {
+      std::ifstream f(log_path, std::ios::in);
+      std::deque<std::string> ring;
+      std::string line;
+      while (std::getline(f, line)) {
+        ring.push_back(std::move(line));
+        if (ring.size() > 20) ring.pop_front();
+      }
+      out += "\n--- log tail ---\n";
+      for (const auto& l : ring) out += "  " + l + "\n";
+    }
     return out;
   }
 
@@ -219,6 +246,101 @@ auto WaitForRegistration(MachinedClient& client, EventDispatcher& disp, ProcessT
   });
 }
 
+// Raw blocking TCP connect probe. Atlas's Socket defaults to
+// non-blocking + SO_REUSEADDR, both of which break "is this port
+// actually listening?" probes: non-blocking connect returns in-progress
+// without resolving, and SO_REUSEADDR lets bind succeed alongside an
+// active listener. We bypass Atlas entirely and use the Winsock API
+// directly for the probe.
+auto TcpConnectProbe(uint16_t port) -> bool {
+  SOCKET s = ::socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+  if (s == INVALID_SOCKET) return false;
+  sockaddr_in sa{};
+  sa.sin_family = AF_INET;
+  sa.sin_port = htons(port);
+  sa.sin_addr.s_addr = htonl(0x7F000001u);  // 127.0.0.1
+  // Short connect timeout: we poll repeatedly, so each attempt just
+  // needs to fail fast. 250 ms is generous for loopback.
+  DWORD send_timeout = 250;
+  ::setsockopt(s, SOL_SOCKET, SO_SNDTIMEO, reinterpret_cast<const char*>(&send_timeout),
+               sizeof(send_timeout));
+  const int rc = ::connect(s, reinterpret_cast<const sockaddr*>(&sa), sizeof(sa));
+  ::closesocket(s);
+  return rc == 0;
+}
+
+auto WaitForTcpListen(uint16_t port, std::chrono::milliseconds timeout) -> bool {
+  const auto deadline = std::chrono::steady_clock::now() + timeout;
+  while (std::chrono::steady_clock::now() < deadline) {
+    if (TcpConnectProbe(port)) return true;
+    std::this_thread::sleep_for(std::chrono::milliseconds(20));
+  }
+  return false;
+}
+
+// UDP has no "is it listening" signal — a bare bind attempt on the same
+// port would succeed because Atlas sets SO_REUSEADDR (which on Windows
+// allows address hijacking). The best we can do without looking at OS
+// tables is a small fixed delay — empirically cellappmgr's RUDP server
+// is bound within ~100 ms of process launch, so 250 ms is a wide enough
+// safety margin.
+auto WaitForUdpBound(uint16_t /*port*/, std::chrono::milliseconds timeout) -> bool {
+  // Paren around std::min avoids collision with the Windows.h min macro.
+  std::this_thread::sleep_for((std::min)(timeout, std::chrono::milliseconds(250)));
+  return true;
+}
+
+// Launch machined with per-attempt port reroll. Windows can briefly
+// refuse to rebind a port that was held by a terminated process (prior
+// test run residue, ephemeral-range collision, TCP TIME_WAIT on a
+// listen socket). We probe with WaitForTcpListen; if the port never
+// starts serving within 2 s, drop the child (dtor terminates) and try
+// a fresh port up to kLaunchRetryCount times.
+constexpr int kLaunchRetryCount = 5;
+
+auto LaunchMachinedWithRetry(const std::filesystem::path& machined_exe,
+                             const std::wstring& name_suffix, uint16_t* out_port, Child* out_child)
+    -> bool {
+  for (int attempt = 0; attempt < kLaunchRetryCount; ++attempt) {
+    const uint16_t port = ReserveTcpPort();
+    if (port == 0) continue;
+    auto child =
+        Child::Launch(machined_exe,
+                      {L"--type", L"machined", L"--name", L"machined_" + name_suffix,
+                       L"--update-hertz", L"100", L"--internal-port", std::to_wstring(port)},
+                      "machined");
+    if (child.IsRunning() && WaitForTcpListen(port, std::chrono::seconds(2))) {
+      *out_port = port;
+      *out_child = std::move(child);
+      return true;
+    }
+    // `child` falls out of scope → dtor terminates + cleans up.
+  }
+  return false;
+}
+
+// Same rollover idea for cellappmgr. Verifies via WaitForUdpBound that
+// the child has taken its RUDP port before returning.
+auto LaunchCellAppMgrWithRetry(const std::filesystem::path& cellappmgr_exe,
+                               const std::wstring& machined_addr, const std::wstring& name_suffix,
+                               uint16_t* out_port, Child* out_child) -> bool {
+  for (int attempt = 0; attempt < kLaunchRetryCount; ++attempt) {
+    const uint16_t port = ReserveUdpPort();
+    if (port == 0) continue;
+    auto child = Child::Launch(
+        cellappmgr_exe,
+        {L"--type", L"cellappmgr", L"--name", L"cellappmgr_" + name_suffix, L"--update-hertz",
+         L"100", L"--internal-port", std::to_wstring(port), L"--machined", machined_addr},
+        "cellappmgr");
+    if (child.IsRunning() && WaitForUdpBound(port, std::chrono::seconds(2))) {
+      *out_port = port;
+      *out_child = std::move(child);
+      return true;
+    }
+  }
+  return false;
+}
+
 #endif  // defined(_WIN32)
 
 }  // namespace
@@ -233,25 +355,18 @@ TEST(CellAppMgrProcess, MachinedAndCellAppMgrBootAndRegister) {
     GTEST_SKIP() << "server binaries not found; build_root=" << BuildRoot();
   }
 
-  const uint16_t machined_port = ReserveTcpPort();
-  const uint16_t cellappmgr_port = ReserveUdpPort();
-  ASSERT_NE(machined_port, 0u);
-  ASSERT_NE(cellappmgr_port, 0u);
+  uint16_t machined_port = 0;
+  Child machined;
+  ASSERT_TRUE(LaunchMachinedWithRetry(machined_exe, L"cellappmgr_boot", &machined_port, &machined))
+      << "machined failed to start + bind TCP on any attempt";
+
   const std::wstring machined_addr = L"127.0.0.1:" + std::to_wstring(machined_port);
-
-  auto machined =
-      Child::Launch(machined_exe,
-                    {L"--type", L"machined", L"--name", L"machined_cellappmgr_process_test",
-                     L"--update-hertz", L"100", L"--internal-port", std::to_wstring(machined_port)},
-                    "machined");
-  ASSERT_TRUE(machined.IsRunning()) << machined.Diagnostic();
-
-  auto cellappmgr = Child::Launch(
-      cellappmgr_exe,
-      {L"--type", L"cellappmgr", L"--name", L"cellappmgr_process_test", L"--update-hertz", L"100",
-       L"--internal-port", std::to_wstring(cellappmgr_port), L"--machined", machined_addr},
-      "cellappmgr");
-  ASSERT_TRUE(cellappmgr.IsRunning()) << cellappmgr.Diagnostic();
+  uint16_t cellappmgr_port = 0;
+  Child cellappmgr;
+  ASSERT_TRUE(LaunchCellAppMgrWithRetry(cellappmgr_exe, machined_addr, L"process_test",
+                                        &cellappmgr_port, &cellappmgr))
+      << "cellappmgr failed to start + bind UDP on any attempt\n"
+      << machined.Diagnostic();
 
   EventDispatcher disp{"cellappmgr_process_registry"};
   disp.SetMaxPollWait(Milliseconds(1));
@@ -260,7 +375,8 @@ TEST(CellAppMgrProcess, MachinedAndCellAppMgrBootAndRegister) {
   ASSERT_TRUE(client.Connect(Address("127.0.0.1", machined_port)));
 
   ASSERT_TRUE(WaitForRegistration(client, disp, ProcessType::kCellAppMgr, cellappmgr_port))
-      << "atlas_cellappmgr.exe did not register with machined — " << cellappmgr.Diagnostic();
+      << "atlas_cellappmgr.exe did not register with machined — " << machined.Diagnostic() << "\n"
+      << cellappmgr.Diagnostic();
 #endif
 }
 
@@ -274,23 +390,18 @@ TEST(CellAppMgrProcess, SyntheticCellAppRegistersWithRealCellAppMgrBinary) {
     GTEST_SKIP() << "server binaries not found; build_root=" << BuildRoot();
   }
 
-  const uint16_t machined_port = ReserveTcpPort();
-  const uint16_t cellappmgr_port = ReserveUdpPort();
+  uint16_t machined_port = 0;
+  Child machined;
+  ASSERT_TRUE(LaunchMachinedWithRetry(machined_exe, L"cellapp_register", &machined_port, &machined))
+      << "machined failed to start + bind TCP on any attempt";
+
   const std::wstring machined_addr = L"127.0.0.1:" + std::to_wstring(machined_port);
-
-  auto machined =
-      Child::Launch(machined_exe,
-                    {L"--type", L"machined", L"--name", L"machined_cellapp_register",
-                     L"--update-hertz", L"100", L"--internal-port", std::to_wstring(machined_port)},
-                    "machined");
-  ASSERT_TRUE(machined.IsRunning());
-
-  auto cellappmgr = Child::Launch(
-      cellappmgr_exe,
-      {L"--type", L"cellappmgr", L"--name", L"cellappmgr_register_test", L"--update-hertz", L"100",
-       L"--internal-port", std::to_wstring(cellappmgr_port), L"--machined", machined_addr},
-      "cellappmgr");
-  ASSERT_TRUE(cellappmgr.IsRunning());
+  uint16_t cellappmgr_port = 0;
+  Child cellappmgr;
+  ASSERT_TRUE(LaunchCellAppMgrWithRetry(cellappmgr_exe, machined_addr, L"register_test",
+                                        &cellappmgr_port, &cellappmgr))
+      << "cellappmgr failed to start + bind UDP on any attempt\n"
+      << machined.Diagnostic();
 
   // Wait for cellappmgr to be reachable (registered + RUDP listening).
   EventDispatcher registry_disp{"registry_probe"};
@@ -300,6 +411,7 @@ TEST(CellAppMgrProcess, SyntheticCellAppRegistersWithRealCellAppMgrBinary) {
   ASSERT_TRUE(registry_client.Connect(Address("127.0.0.1", machined_port)));
   ASSERT_TRUE(WaitForRegistration(registry_client, registry_disp, ProcessType::kCellAppMgr,
                                   cellappmgr_port))
+      << machined.Diagnostic() << "\n"
       << cellappmgr.Diagnostic();
 
   // Drive a synthetic CellApp-like register flow against the real
