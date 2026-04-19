@@ -1,6 +1,7 @@
 #ifndef ATLAS_SERVER_BASEAPP_BASEAPP_H_
 #define ATLAS_SERVER_BASEAPP_BASEAPP_H_
 
+#include <functional>
 #include <memory>
 #include <span>
 #include <string_view>
@@ -50,6 +51,10 @@ namespace baseappmgr {
 struct InformLoad;
 struct RegisterBaseAppAck;
 }  // namespace baseappmgr
+
+namespace cellappmgr {
+struct SpaceCreatedResult;
+}  // namespace cellappmgr
 
 class Channel;
 
@@ -107,6 +112,22 @@ class BaseApp : public EntityApp {
   // (see free-function declaration below) with the entity lookup.
   [[nodiscard]] auto ResolveCellChannelForEntity(EntityID target_entity_id) const -> Channel*;
 
+  // ---- Phase 11 PR-6 review-fix S2/S3: Space creation via CellAppMgr ----
+  //
+  // Callback invoked when CellAppMgr replies to a CreateSpaceRequest.
+  // `success` indicates whether the Space exists afterwards; on success
+  // `cell_addr` holds the CellApp that now hosts the initial Cell.
+  // Scripts/game logic hook in via RequestCreateSpace() below.
+  using SpaceCreatedCallback =
+      std::function<void(bool success, SpaceID space_id, const Address& cell_addr)>;
+
+  // Requests a new Space from CellAppMgr. Returns 0 if no CellAppMgr is
+  // currently connected (birth hasn't happened yet or it died); caller
+  // can retry. Non-zero return is the request_id assigned by BaseApp —
+  // the callback fires when CellAppMgr replies (or never, on timeout;
+  // the pending table is pruned by a periodic sweep).
+  auto RequestCreateSpace(SpaceID space_id, SpaceCreatedCallback callback) -> uint32_t;
+
  protected:
   // ---- EntityApp / ScriptApp overrides --------------------------------
   [[nodiscard]] auto Init(int argc, char* argv[]) -> bool override;
@@ -137,6 +158,8 @@ class BaseApp : public EntityApp {
   void OnReplicatedDeltaFromCell(Channel& ch, const baseapp::ReplicatedDeltaFromCell& msg);
   void OnReplicatedReliableDeltaFromCell(Channel& ch,
                                          const baseapp::ReplicatedReliableDeltaFromCell& msg);
+  // Phase 11 review-fix S2/S3.
+  void OnSpaceCreatedResult(Channel& ch, const cellappmgr::SpaceCreatedResult& msg);
 
   // ---- Login flow handlers --------------------------------------------
   void OnPrepareLogin(Channel& ch, const login::PrepareLogin& msg);
@@ -189,6 +212,13 @@ class BaseApp : public EntityApp {
   // on) lives on BaseEntity.cell_addr_, maintained by
   // OnCellEntityCreated + OnCurrentCell.
   CellAppPeerRegistry cellapp_peers_;
+
+  // Phase 11 PR-6 review-fix S2/S3: CellAppMgr control channel +
+  // pending Space-create callbacks keyed by request_id.
+  Channel* cellappmgr_channel_{nullptr};
+  uint32_t next_space_request_id_{1};
+  std::unordered_map<uint32_t, SpaceCreatedCallback> pending_space_creates_;
+
   uint32_t app_id_{0};
 
   // Pending login state: maps request_id → reply channel back to LoginApp

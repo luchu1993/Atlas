@@ -11,6 +11,7 @@
 #include "baseapp_native_provider.h"
 #include "baseappmgr/baseappmgr_messages.h"
 #include "cellapp/cellapp_messages.h"
+#include "cellappmgr/cellappmgr_messages.h"
 #include "db/idatabase.h"
 #include "dbapp/dbapp_messages.h"
 #include "entitydef/entity_def_registry.h"
@@ -144,6 +145,28 @@ auto BaseApp::Init(int argc, char* argv[]) -> bool {
   // never self-registers as a CellApp, so self_addr is a default
   // Address — the filter becomes a no-op.
   cellapp_peers_.Subscribe(GetMachinedClient(), /*self_addr=*/Address{});
+
+  // ---- Subscribe to CellAppMgr (review-fix S2/S3) --------------------
+  //
+  // Connect to the CellAppMgr on birth so scripts can call
+  // RequestCreateSpace. On death we just clear the channel — pending
+  // create requests will time out (periodic sweep in a future tick, or
+  // explicit fail-all on reconnect retry).
+  GetMachinedClient().Subscribe(
+      machined::ListenerType::kBoth, ProcessType::kCellAppMgr,
+      [this](const machined::BirthNotification& n) {
+        if (cellappmgr_channel_ != nullptr) return;
+        auto ch = Network().ConnectRudpNocwnd(n.internal_addr);
+        if (ch) {
+          cellappmgr_channel_ = static_cast<Channel*>(*ch);
+          ATLAS_LOG_INFO("BaseApp: CellAppMgr connected at {}:{}", n.internal_addr.Ip(),
+                         n.internal_addr.Port());
+        }
+      },
+      [this](const machined::DeathNotification& /*n*/) {
+        ATLAS_LOG_WARNING("BaseApp: CellAppMgr died, clearing channel");
+        cellappmgr_channel_ = nullptr;
+      });
 
   // ---- Subscribe to BaseAppMgr and register ourselves ----------------
   GetMachinedClient().Subscribe(
@@ -372,6 +395,12 @@ void BaseApp::RegisterInternalHandlers() {
   (void)table.RegisterTypedHandler<baseapp::CellRpcForward>(
       [this](const Address& /*src*/, Channel* ch, const baseapp::CellRpcForward& msg) {
         OnCellRpcForward(*ch, msg);
+      });
+
+  // Phase 11 review-fix S2/S3: CellAppMgr replies to CreateSpaceRequest.
+  (void)table.RegisterTypedHandler<cellappmgr::SpaceCreatedResult>(
+      [this](const Address& /*src*/, Channel* ch, const cellappmgr::SpaceCreatedResult& msg) {
+        OnSpaceCreatedResult(*ch, msg);
       });
 
   (void)table.RegisterTypedHandler<baseapp::SelfRpcFromCell>(
@@ -2364,6 +2393,45 @@ auto BaseApp::ResolveCellChannelForEntity(EntityID target_entity_id) const -> Ch
   auto* target = entity_mgr_.Find(target_entity_id);
   if (target == nullptr) return nullptr;
   return ResolveCellChannelByAddr(cellapp_peers_.Channels(), target->CellAddr());
+}
+
+// ============================================================================
+// Phase 11 PR-6 review-fix S2/S3 — Space creation via CellAppMgr
+// ============================================================================
+
+auto BaseApp::RequestCreateSpace(SpaceID space_id, SpaceCreatedCallback callback) -> uint32_t {
+  if (cellappmgr_channel_ == nullptr) {
+    ATLAS_LOG_WARNING("BaseApp: RequestCreateSpace({}) — no CellAppMgr channel yet", space_id);
+    if (callback) callback(/*success=*/false, space_id, Address{});
+    return 0;
+  }
+  if (space_id == kInvalidSpaceID) {
+    ATLAS_LOG_WARNING("BaseApp: RequestCreateSpace rejected: space_id=0");
+    if (callback) callback(/*success=*/false, space_id, Address{});
+    return 0;
+  }
+  const uint32_t request_id = next_space_request_id_++;
+  pending_space_creates_[request_id] = std::move(callback);
+
+  cellappmgr::CreateSpaceRequest msg;
+  msg.space_id = space_id;
+  msg.request_id = request_id;
+  msg.reply_addr = Network().RudpAddress();
+  (void)cellappmgr_channel_->SendMessage(msg);
+  return request_id;
+}
+
+void BaseApp::OnSpaceCreatedResult(Channel& /*ch*/, const cellappmgr::SpaceCreatedResult& msg) {
+  auto it = pending_space_creates_.find(msg.request_id);
+  if (it == pending_space_creates_.end()) {
+    ATLAS_LOG_WARNING(
+        "BaseApp: SpaceCreatedResult for unknown request_id={} (space_id={}, success={})",
+        msg.request_id, msg.space_id, msg.success);
+    return;
+  }
+  auto cb = std::move(it->second);
+  pending_space_creates_.erase(it);
+  if (cb) cb(msg.success, msg.space_id, msg.host_addr);
 }
 
 }  // namespace atlas

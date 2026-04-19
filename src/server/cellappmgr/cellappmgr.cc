@@ -11,6 +11,7 @@
 #include "network/interface_table.h"
 #include "network/machined_types.h"
 #include "network/network_interface.h"
+#include "network/reliable_udp.h"
 #include "serialization/binary_stream.h"
 #include "server/machined_client.h"
 #include "server/watcher.h"
@@ -176,14 +177,39 @@ void CellAppMgr::OnInformCellLoad(const Address& /*src*/, Channel* /*ch*/,
   ATLAS_LOG_WARNING("CellAppMgr: InformCellLoad for unknown app_id={}", msg.app_id);
 }
 
-void CellAppMgr::OnCreateSpaceRequest(const Address& /*src*/, Channel* /*ch*/,
+void CellAppMgr::OnCreateSpaceRequest(const Address& src, Channel* ch,
                                       const cellappmgr::CreateSpaceRequest& msg) {
+  // Review-fix S2/S3: always reply — success OR failure. The originator
+  // (BaseApp / script) tracks a per-request callback via request_id and
+  // needs a terminal signal to resolve it.
+  auto send_reply = [&](bool ok, cellappmgr::CellID cell_id, Address host_addr) {
+    cellappmgr::SpaceCreatedResult reply;
+    reply.request_id = msg.request_id;
+    reply.space_id = msg.space_id;
+    reply.success = ok;
+    reply.cell_id = cell_id;
+    reply.host_addr = host_addr;
+    // Prefer reply_addr (BaseApp's advertised RUDP) over the raw src
+    // because BaseApp may have multiple channels into CellAppMgr; the
+    // reply_addr is the one its pending-requests table is keyed on.
+    // Fall back to `ch` if reply_addr is default-constructed.
+    if (msg.reply_addr.Port() != 0) {
+      auto reply_ch = Network().ConnectRudpNocwnd(msg.reply_addr);
+      if (reply_ch) (void)(*reply_ch)->SendMessage(reply);
+    } else if (ch != nullptr) {
+      (void)ch->SendMessage(reply);
+    }
+    (void)src;
+  };
+
   if (msg.space_id == kInvalidSpaceID) {
     ATLAS_LOG_WARNING("CellAppMgr: CreateSpaceRequest with invalid space_id=0");
+    send_reply(/*ok=*/false, 0, Address{});
     return;
   }
   if (spaces_.contains(msg.space_id)) {
     ATLAS_LOG_WARNING("CellAppMgr: CreateSpaceRequest for existing space_id={}", msg.space_id);
+    send_reply(/*ok=*/false, 0, Address{});
     return;
   }
 
@@ -191,6 +217,7 @@ void CellAppMgr::OnCreateSpaceRequest(const Address& /*src*/, Channel* /*ch*/,
   if (host == nullptr) {
     ATLAS_LOG_ERROR("CellAppMgr: CreateSpaceRequest space_id={} — no CellApps available to host",
                     msg.space_id);
+    send_reply(/*ok=*/false, 0, Address{});
     return;
   }
 
@@ -217,6 +244,7 @@ void CellAppMgr::OnCreateSpaceRequest(const Address& /*src*/, Channel* /*ch*/,
   ATLAS_LOG_INFO("CellAppMgr: created Space {} on CellApp app_id={} ({}:{}), cell_id={}",
                  msg.space_id, host->app_id, host->internal_addr.Ip(), host->internal_addr.Port(),
                  cell_id);
+  send_reply(/*ok=*/true, cell_id, host->internal_addr);
 }
 
 void CellAppMgr::OnCellAppDeath(const Address& internal_addr) {

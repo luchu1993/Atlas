@@ -110,6 +110,10 @@ struct CellAppClient {
         [this](const Address&, Channel*, const UpdateGeometry& msg) {
           update_geometry_msgs.push_back(msg);
         });
+    network.InterfaceTable().RegisterTypedHandler<SpaceCreatedResult>(
+        [this](const Address&, Channel*, const SpaceCreatedResult& msg) {
+          space_created_results.push_back(msg);
+        });
   }
 
   EventDispatcher dispatcher;
@@ -118,6 +122,7 @@ struct CellAppClient {
   RegisterCellAppAck register_ack;
   std::vector<AddCellToSpace> add_cell_msgs;
   std::vector<UpdateGeometry> update_geometry_msgs;
+  std::vector<SpaceCreatedResult> space_created_results;
 };
 
 struct MgrFixture {
@@ -184,6 +189,75 @@ TEST(CellAppMgrIntegration, TwoClients_RegisterOverRudp_DistinctAppIds) {
                         [&] { return b.register_ack_received.load(std::memory_order_acquire); }));
   EXPECT_TRUE(b.register_ack.success);
   EXPECT_EQ(b.register_ack.app_id, 2u);
+}
+
+// ============================================================================
+// Review-fix S2/S3: CreateSpaceRequest replies to the sender with
+// SpaceCreatedResult carrying success + host_addr + cell_id.
+// ============================================================================
+
+TEST(CellAppMgrIntegration, CreateSpace_RepliesWithSpaceCreatedResult) {
+  MgrFixture fx;
+  ASSERT_NE(fx.port, 0u);
+
+  // Host CellApp registers so the mgr has somewhere to put the Space.
+  CellAppClient host{"space_host"};
+  ASSERT_TRUE(host.network.StartRudpServer(Address("127.0.0.1", 0)).HasValue());
+  auto ch_host = host.network.ConnectRudp(fx.server_addr);
+  ASSERT_TRUE(ch_host.HasValue());
+  RegisterCellApp host_reg;
+  host_reg.internal_addr = Address(0, 31001);
+  ASSERT_TRUE((*ch_host)->SendMessage(host_reg).HasValue());
+  ASSERT_TRUE(PollUntil(
+      host.dispatcher, [&] { return host.register_ack_received.load(std::memory_order_acquire); }));
+
+  // Requester client (simulates BaseApp). Send a CreateSpaceRequest
+  // with reply_addr pointing at our own RUDP listener so the mgr's
+  // ConnectRudpNocwnd reply path has somewhere to land.
+  CellAppClient requester{"space_requester"};
+  ASSERT_TRUE(requester.network.StartRudpServer(Address("127.0.0.1", 0)).HasValue());
+  auto ch_req = requester.network.ConnectRudp(fx.server_addr);
+  ASSERT_TRUE(ch_req.HasValue());
+
+  CreateSpaceRequest csr;
+  csr.space_id = 123;
+  csr.request_id = 77;
+  csr.reply_addr = requester.network.RudpAddress();
+  ASSERT_TRUE((*ch_req)->SendMessage(csr).HasValue());
+
+  ASSERT_TRUE(PollUntil(requester.dispatcher, [&] {
+    return !requester.space_created_results.empty();
+  })) << "CellAppMgr did not reply with SpaceCreatedResult";
+
+  const auto& reply = requester.space_created_results[0];
+  EXPECT_EQ(reply.request_id, 77u);
+  EXPECT_EQ(reply.space_id, 123u);
+  EXPECT_TRUE(reply.success);
+  EXPECT_GT(reply.cell_id, 0u);
+  EXPECT_EQ(reply.host_addr.Port(), 31001u);  // advertised port of `host`
+}
+
+TEST(CellAppMgrIntegration, CreateSpace_NoHosts_RepliesWithFailure) {
+  MgrFixture fx;
+  ASSERT_NE(fx.port, 0u);
+
+  CellAppClient requester{"space_requester_nohosts"};
+  ASSERT_TRUE(requester.network.StartRudpServer(Address("127.0.0.1", 0)).HasValue());
+  auto ch_req = requester.network.ConnectRudp(fx.server_addr);
+  ASSERT_TRUE(ch_req.HasValue());
+
+  CreateSpaceRequest csr;
+  csr.space_id = 456;
+  csr.request_id = 88;
+  csr.reply_addr = requester.network.RudpAddress();
+  ASSERT_TRUE((*ch_req)->SendMessage(csr).HasValue());
+
+  ASSERT_TRUE(PollUntil(requester.dispatcher, [&] {
+    return !requester.space_created_results.empty();
+  })) << "Expected failure reply when no CellApps are registered";
+  const auto& reply = requester.space_created_results[0];
+  EXPECT_EQ(reply.request_id, 88u);
+  EXPECT_FALSE(reply.success);
 }
 
 // ============================================================================

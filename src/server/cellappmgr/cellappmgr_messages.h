@@ -297,6 +297,62 @@ struct ShouldOffload {
 };
 static_assert(NetworkMessage<ShouldOffload>);
 
+// ----------------------------------------------------------------------------
+// SpaceCreatedResult  (CellAppMgr → BaseApp, ID 7007)
+//
+// Phase 11 PR-6 review-fix S2/S3. CellAppMgr replies to every
+// CreateSpaceRequest with this message so the originating BaseApp (or
+// script) can resolve its per-request callback and learn which CellApp
+// now hosts the initial Cell of the Space. Failure cases carry
+// success=false and zeroed host_addr / cell_id; the caller should treat
+// them as "no Space exists" and retry / surface the error to game code.
+// ----------------------------------------------------------------------------
+
+struct SpaceCreatedResult {
+  uint32_t request_id{0};
+  SpaceID space_id{kInvalidSpaceID};
+  bool success{false};
+  CellID cell_id{0};
+  Address host_addr;
+
+  static auto Descriptor() -> const MessageDesc& {
+    static const MessageDesc kDesc{
+        msg_id::Id(msg_id::CellAppMgr::kSpaceCreatedResult), "cellappmgr::SpaceCreatedResult",
+        MessageLengthStyle::kFixed,
+        static_cast<int>(sizeof(uint32_t) + sizeof(uint32_t) + sizeof(uint8_t) + sizeof(uint32_t) +
+                         sizeof(uint32_t) + sizeof(uint16_t))};
+    return kDesc;
+  }
+
+  void Serialize(BinaryWriter& w) const {
+    w.Write(request_id);
+    w.Write(space_id);
+    w.Write(static_cast<uint8_t>(success ? 1 : 0));
+    w.Write(cell_id);
+    w.Write(host_addr.Ip());
+    w.Write(host_addr.Port());
+  }
+
+  static auto Deserialize(BinaryReader& r) -> Result<SpaceCreatedResult> {
+    auto rid = r.Read<uint32_t>();
+    auto sid = r.Read<uint32_t>();
+    auto ok = r.Read<uint8_t>();
+    auto cid = r.Read<uint32_t>();
+    auto ip = r.Read<uint32_t>();
+    auto port = r.Read<uint16_t>();
+    if (!rid || !sid || !ok || !cid || !ip || !port)
+      return Error{ErrorCode::kInvalidArgument, "SpaceCreatedResult: truncated"};
+    SpaceCreatedResult msg;
+    msg.request_id = *rid;
+    msg.space_id = *sid;
+    msg.success = (*ok != 0);
+    msg.cell_id = *cid;
+    msg.host_addr = Address(*ip, *port);
+    return msg;
+  }
+};
+static_assert(NetworkMessage<SpaceCreatedResult>);
+
 }  // namespace atlas::cellappmgr
 
 #endif  // ATLAS_SERVER_CELLAPPMGR_CELLAPPMGR_MESSAGES_H_
