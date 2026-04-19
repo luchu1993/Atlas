@@ -7,6 +7,7 @@ target_link_libraries(atlas_server_types
 
 # atlas_server — server framework base classes
 add_library(atlas_server STATIC
+  cellapp_peer_registry.cc
   entity_app.cc
   ipv4_networks.cc
   machined_client.cc

@@ -85,7 +85,9 @@ auto BaseApp::Run(int argc, char* argv[]) -> int {
 
 BaseApp::BaseApp(EventDispatcher& dispatcher, NetworkInterface& internal_network,
                  NetworkInterface& external_network)
-    : EntityApp(dispatcher, internal_network), external_network_(external_network) {}
+    : EntityApp(dispatcher, internal_network),
+      external_network_(external_network),
+      cellapp_peers_(internal_network) {}
 
 BaseApp::~BaseApp() = default;
 
@@ -135,26 +137,13 @@ auto BaseApp::Init(int argc, char* argv[]) -> bool {
         FailAllDbappPendingRequests("dbapp_disconnected");
       });
 
-  // ---- Subscribe to CellApps (Phase 11 PR-6: multi-CellApp routing) --
+  // ---- Subscribe to CellApps (Phase 11 PR-6 / review-fix C2) ---------
   //
-  // Every CellApp that machined reports Born gets a RUDP channel
-  // installed in cellapp_channels_, keyed by its internal address.
-  // Death wipes the entry. Per-entity routing decisions consult
-  // BaseEntity::CellAddr() to pick which channel to forward on.
-  GetMachinedClient().Subscribe(
-      machined::ListenerType::kBoth, ProcessType::kCellApp,
-      [this](const machined::BirthNotification& n) {
-        if (cellapp_channels_.contains(n.internal_addr)) return;
-        ATLAS_LOG_INFO("BaseApp: CellApp born at {}:{}, connecting via RUDP...",
-                       n.internal_addr.Ip(), n.internal_addr.Port());
-        auto ch = Network().ConnectRudpNocwnd(n.internal_addr);
-        if (ch) cellapp_channels_[n.internal_addr] = static_cast<Channel*>(*ch);
-      },
-      [this](const machined::DeathNotification& n) {
-        ATLAS_LOG_WARNING("BaseApp: CellApp died at {}:{}, clearing routing entry",
-                          n.internal_addr.Ip(), n.internal_addr.Port());
-        cellapp_channels_.erase(n.internal_addr);
-      });
+  // Delegated to CellAppPeerRegistry which handles Birth/Death +
+  // self-filter consistently with CellApp's own peer list. BaseApp
+  // never self-registers as a CellApp, so self_addr is a default
+  // Address — the filter becomes a no-op.
+  cellapp_peers_.Subscribe(GetMachinedClient(), /*self_addr=*/Address{});
 
   // ---- Subscribe to BaseAppMgr and register ourselves ----------------
   GetMachinedClient().Subscribe(
@@ -2374,7 +2363,7 @@ auto ResolveCellChannelByAddr(const std::unordered_map<Address, Channel*>& cella
 auto BaseApp::ResolveCellChannelForEntity(EntityID target_entity_id) const -> Channel* {
   auto* target = entity_mgr_.Find(target_entity_id);
   if (target == nullptr) return nullptr;
-  return ResolveCellChannelByAddr(cellapp_channels_, target->CellAddr());
+  return ResolveCellChannelByAddr(cellapp_peers_.Channels(), target->CellAddr());
 }
 
 }  // namespace atlas

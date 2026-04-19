@@ -43,7 +43,7 @@ auto CellApp::Run(int argc, char* argv[]) -> int {
 }
 
 CellApp::CellApp(EventDispatcher& dispatcher, NetworkInterface& network)
-    : EntityApp(dispatcher, network) {}
+    : EntityApp(dispatcher, network), peer_registry_(network) {}
 
 CellApp::~CellApp() = default;
 
@@ -180,24 +180,10 @@ auto CellApp::Init(int argc, char* argv[]) -> bool {
       },
       nullptr);
 
-  // Subscribe to peer CellApps so the Ghost/Offload pipelines can resolve
-  // Address → Channel* at will. Filter out ourselves (machined relays
-  // birth for the process that just registered).
-  GetMachinedClient().Subscribe(
-      machined::ListenerType::kBoth, ProcessType::kCellApp,
-      [this](const machined::BirthNotification& n) {
-        if (n.internal_addr == Network().RudpAddress()) return;
-        if (peer_cellapp_channels_.contains(n.internal_addr)) return;
-        ATLAS_LOG_INFO("CellApp: peer CellApp born at {}:{}", n.internal_addr.Ip(),
-                       n.internal_addr.Port());
-        auto ch = Network().ConnectRudpNocwnd(n.internal_addr);
-        if (ch) peer_cellapp_channels_[n.internal_addr] = static_cast<Channel*>(*ch);
-      },
-      [this](const machined::DeathNotification& n) {
-        ATLAS_LOG_WARNING("CellApp: peer CellApp died at {}:{}", n.internal_addr.Ip(),
-                          n.internal_addr.Port());
-        peer_cellapp_channels_.erase(n.internal_addr);
-      });
+  // Subscribe to peer CellApps via the shared registry (review-fix C2).
+  // self_addr is our own RUDP address so machined's re-broadcast of our
+  // own Birth doesn't add us to the peer list.
+  peer_registry_.Subscribe(GetMachinedClient(), /*self_addr=*/Network().RudpAddress());
 
   ATLAS_LOG_INFO("CellApp: initialised");
   return true;
@@ -593,8 +579,7 @@ void CellApp::OnDisableWitness(const Address& /*src*/, Channel* /*ch*/,
 // ============================================================================
 
 auto CellApp::FindPeerChannel(const Address& addr) const -> Channel* {
-  auto it = peer_cellapp_channels_.find(addr);
-  return it == peer_cellapp_channels_.end() ? nullptr : it->second;
+  return peer_registry_.Find(addr);
 }
 
 void CellApp::OnCreateGhost(const Address& /*src*/, Channel* ch, const cellapp::CreateGhost& msg) {

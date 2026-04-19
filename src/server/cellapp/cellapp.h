@@ -6,6 +6,7 @@
 
 #include "cellappmgr/cellappmgr_messages.h"  // cellappmgr::CellID
 #include "network/address.h"
+#include "server/cellapp_peer_registry.h"
 #include "server/entity_app.h"
 #include "server/entity_types.h"
 
@@ -188,10 +189,10 @@ class CellApp : public EntityApp {
   uint32_t app_id_{0};
   Channel* cellappmgr_channel_{nullptr};
 
-  // Peer CellApp channels keyed by each peer's internal RUDP address.
-  // Populated by the machined Birth subscription in Init; cleared by
-  // the matching Death callback.
-  std::unordered_map<Address, Channel*> peer_cellapp_channels_;
+  // Peer CellApp channels. Review-fix C2 replaced the local map with a
+  // shared registry (atlas_server) so both BaseApp and CellApp route
+  // through the same Birth/Death + self-filter code.
+  CellAppPeerRegistry peer_registry_;
 
   // Phase 11 PR-6 review fix (B3): Offload ack tracking. Inserted by
   // TickOffloadChecker right before the Real→Ghost conversion; removed

@@ -15,6 +15,7 @@
 #include "entity_manager.h"
 #include "foundation/clock.h"
 #include "id_client.h"
+#include "server/cellapp_peer_registry.h"
 #include "server/entity_app.h"
 #include "server/entity_types.h"
 
@@ -182,12 +183,12 @@ class BaseApp : public EntityApp {
   BaseAppNativeProvider* native_provider_{nullptr};  // owned by ScriptApp
   Channel* dbapp_channel_{nullptr};                  // connection to DBApp
   Channel* baseappmgr_channel_{nullptr};             // connection to BaseAppMgr
-  // Phase 11 PR-6: multi-CellApp routing. Every peer CellApp that
-  // machined reports Born is recorded here by its internal RUDP address;
-  // Death wipes the entry. Per-entity routing (which CellApp this
-  // entity's Real currently lives on) lives on BaseEntity.cell_addr_,
-  // maintained by OnCellEntityCreated + OnCurrentCell.
-  std::unordered_map<Address, Channel*> cellapp_channels_;
+  // Phase 11 PR-6 / review-fix C2: multi-CellApp routing. The registry
+  // handles Birth/Death subscription + self-filter internally. Per-
+  // entity routing (which CellApp this entity's Real currently lives
+  // on) lives on BaseEntity.cell_addr_, maintained by
+  // OnCellEntityCreated + OnCurrentCell.
+  CellAppPeerRegistry cellapp_peers_;
   uint32_t app_id_{0};
 
   // Pending login state: maps request_id → reply channel back to LoginApp
