@@ -213,6 +213,11 @@ atlas_add_test(NAME test_cellappmgr_messages
   DEPS atlas_cellappmgr_messages atlas_cellapp_lib atlas_serialization
 )
 
+atlas_add_test(NAME test_bsp_tree
+  SOURCES test_bsp_tree.cpp
+  DEPS atlas_cellappmgr_bsp atlas_serialization
+)
+
 atlas_add_test(NAME test_space
   SOURCES test_space.cpp
   DEPS atlas_cellapp_lib atlas_space

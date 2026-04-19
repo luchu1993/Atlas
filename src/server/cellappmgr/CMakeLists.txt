@@ -1,7 +1,7 @@
 # cellappmgr — cell manager (Phase 11)
 #
-# PR-1 lands the message INTERFACE lib; the process executable + static lib
-# follow in PR-5 (src/server/cellappmgr/{main.cc, cellappmgr.{h,cc}, bsp_tree.{h,cc}}).
+# PR-1 landed the message INTERFACE lib; PR-2 adds the BSP tree. The process
+# executable + process lib follow in PR-5.
 
 # Header-only message definitions.
 # Exposed as INTERFACE so both atlas_cellapp_lib (which needs to handle
@@ -16,4 +16,22 @@ target_link_libraries(atlas_cellappmgr_messages INTERFACE
   atlas_network
   atlas_serialization
   atlas_server
+)
+
+# BSP tree — spatial partition shared by CellAppMgr (authoritative) and
+# CellApp (deserialises UpdateGeometry blobs). Kept in its own STATIC lib
+# so PR-4's atlas_cellapp_lib can link it without pulling in the manager
+# process code.
+add_library(atlas_cellappmgr_bsp STATIC
+  bsp_tree.cc
+)
+target_include_directories(atlas_cellappmgr_bsp PUBLIC
+  "${CMAKE_SOURCE_DIR}/src/server"
+)
+target_link_libraries(atlas_cellappmgr_bsp PUBLIC
+  atlas_foundation
+  atlas_network
+  atlas_serialization
+  atlas_server
+  atlas_cellappmgr_messages
 )
