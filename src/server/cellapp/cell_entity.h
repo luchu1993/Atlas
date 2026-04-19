@@ -18,6 +18,8 @@
 
 namespace atlas {
 
+class Channel;
+class RealEntityData;
 class Space;
 class Witness;
 
@@ -45,8 +47,22 @@ class Witness;
 
 class CellEntity : public IEntityMotion {
  public:
+  // Tag used to disambiguate the Ghost ctor — no arg-count clash, no
+  // accidental implicit conversion, and it makes call sites self-describing.
+  struct GhostTag {};
+
+  // Phase 10 ctor — creates a REAL entity. The RealEntityData sidecar is
+  // allocated so is_real() returns true immediately.
   CellEntity(EntityID id, uint16_t type_id, Space& space, const math::Vector3& position,
              const math::Vector3& direction);
+
+  // Phase 11 ctor — creates a GHOST replica. `real_channel` is the non-
+  // owning back-channel to the Real CellApp; it must remain valid for
+  // the lifetime of the ghost (cleared by ConvertGhostToReal on Offload
+  // promotion, or cleared externally before the entity is destroyed).
+  CellEntity(GhostTag, EntityID id, uint16_t type_id, Space& space, const math::Vector3& position,
+             const math::Vector3& direction, Channel* real_channel);
+
   ~CellEntity() override;
 
   CellEntity(const CellEntity&) = delete;
@@ -58,6 +74,50 @@ class CellEntity : public IEntityMotion {
   [[nodiscard]] auto TypeId() const -> uint16_t { return type_id_; }
   [[nodiscard]] auto GetSpace() -> Space& { return space_; }
   [[nodiscard]] auto GetSpace() const -> const Space& { return space_; }
+
+  // ---- Real / Ghost state ---------------------------------------------------
+  //
+  // An entity is exactly one of: Real (real_data_ set) or Ghost
+  // (real_channel_ set). The pair is kept mutually exclusive by
+  // Convert{Real,Ghost}To{Ghost,Real}. See Phase 11 §3.1.
+  //
+  // Ghosts are passive C++ data containers — no Witness, no Controllers,
+  // no script instance. Every writeable CellApp entry point must
+  // log-and-skip when it sees a Ghost (Q2 resolution: soft guard, never
+  // hard assert); see cellapp_native_provider.cc for the pattern.
+
+  [[nodiscard]] auto IsReal() const -> bool { return real_data_ != nullptr; }
+  [[nodiscard]] auto IsGhost() const -> bool { return real_channel_ != nullptr; }
+
+  [[nodiscard]] auto GetRealData() -> RealEntityData* { return real_data_.get(); }
+  [[nodiscard]] auto GetRealData() const -> const RealEntityData* { return real_data_.get(); }
+  [[nodiscard]] auto GetRealChannel() const -> Channel* { return real_channel_; }
+
+  [[nodiscard]] auto NextRealAddr() const -> const Address& { return next_real_addr_; }
+  void SetNextRealAddr(const Address& addr) { next_real_addr_ = addr; }
+
+  // Real → Ghost transition, invoked by CellApp at the emitting end of an
+  // Offload. Drops the RealEntityData sidecar (the haunt list leaves
+  // with it) and parks `real_channel` as the new back-channel. The
+  // witness is torn down because Ghost is script-less; controllers are
+  // stopped for the same reason.
+  void ConvertRealToGhost(Channel* new_real_channel);
+
+  // Ghost → Real transition, invoked by CellApp at the receiving end of
+  // an Offload. Clears the back-channel, allocates a fresh
+  // RealEntityData. Existing replication_state_ is retained — the new
+  // Real keeps serving the already-baselined snapshot until its C#
+  // instance publishes the next frame.
+  void ConvertGhostToReal();
+
+  // Ghost-only writes. Each of these is a no-op on a Real entity
+  // (log-and-return) because the Real's authoritative state would
+  // otherwise be stomped by a stale cross-process delivery.
+
+  void GhostUpdatePosition(const math::Vector3& position, const math::Vector3& direction,
+                           bool on_ground, uint64_t volatile_seq);
+  void GhostApplyDelta(uint64_t event_seq, std::span<const std::byte> other_delta);
+  void GhostApplySnapshot(uint64_t event_seq, std::span<const std::byte> other_snapshot);
 
   // ---- IEntityMotion --------------------------------------------------------
   //
@@ -206,6 +266,16 @@ class CellEntity : public IEntityMotion {
 
   std::optional<ReplicationState> replication_state_;
 
+  // Phase 11 Real/Ghost state (mutually exclusive):
+  //   real_data_    non-null → Real
+  //   real_channel_ non-null → Ghost
+  // next_real_addr_ is the Offload-transition hint a Ghost carries while
+  // its old Real is mid-handoff; it's only meaningful between the old
+  // Real's GhostSetNextReal and the new Real's GhostSetReal.
+  std::unique_ptr<RealEntityData> real_data_;
+  Channel* real_channel_{nullptr};
+  Address next_real_addr_{};
+
   bool destroyed_{false};
   bool linked_to_range_list_{false};
 };
@@ -217,12 +287,21 @@ class CellEntity : public IEntityMotion {
 // the class body while full Witness visibility is required for the template
 // instantiation site (implicit inline).
 
+#include "foundation/log.h"
 #include "witness.h"
 
 namespace atlas {
 
 template <typename ReliableFn>
 void CellEntity::EnableWitness(float aoi_radius, ReliableFn&& send_reliable) {
+  // Ghost rejection (Phase 11 §3.1): a Witness observes peer AoI on behalf
+  // of a client-bound script, which only exists on a Real. Silently
+  // attaching one to a Ghost would leak events out through a channel
+  // that doesn't own the entity.
+  if (!IsReal()) {
+    ATLAS_LOG_WARNING("CellEntity::EnableWitness on non-Real entity id={} — ignored", id_);
+    return;
+  }
   witness_ = std::make_unique<Witness>(*this, aoi_radius, std::forward<ReliableFn>(send_reliable));
   witness_->Activate();
 }
@@ -230,6 +309,10 @@ void CellEntity::EnableWitness(float aoi_radius, ReliableFn&& send_reliable) {
 template <typename ReliableFn, typename UnreliableFn>
 void CellEntity::EnableWitness(float aoi_radius, ReliableFn&& send_reliable,
                                UnreliableFn&& send_unreliable) {
+  if (!IsReal()) {
+    ATLAS_LOG_WARNING("CellEntity::EnableWitness on non-Real entity id={} — ignored", id_);
+    return;
+  }
   witness_ = std::make_unique<Witness>(*this, aoi_radius, std::forward<ReliableFn>(send_reliable),
                                        std::forward<UnreliableFn>(send_unreliable));
   witness_->Activate();

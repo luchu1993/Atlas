@@ -228,6 +228,16 @@ atlas_add_test(NAME test_cell_entity
   DEPS atlas_cellapp_lib atlas_space
 )
 
+atlas_add_test(NAME test_real_ghost
+  SOURCES test_real_ghost.cpp
+  DEPS atlas_cellapp_lib atlas_space atlas_network
+)
+
+atlas_add_test(NAME test_cell
+  SOURCES test_cell.cpp
+  DEPS atlas_cellapp_lib atlas_space
+)
+
 atlas_add_test(NAME test_witness_lifecycle
   SOURCES test_witness_lifecycle.cpp
   DEPS atlas_cellapp_lib atlas_space

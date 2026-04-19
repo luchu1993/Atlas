@@ -3,6 +3,8 @@
 #include <cfloat>
 #include <utility>
 
+#include "foundation/log.h"
+#include "real_entity_data.h"
 #include "space.h"
 #include "witness.h"
 
@@ -25,6 +27,28 @@ CellEntity::CellEntity(EntityID id, uint16_t type_id, Space& space, const math::
   // "new entity joined" signal those triggers want.
   space_.GetRangeList().Insert(&range_node_);
   linked_to_range_list_ = true;
+  // Phase 11: default-construct the Real sidecar so IsReal() holds from
+  // the first tick. Ghost construction uses the tag ctor below.
+  real_data_ = std::make_unique<RealEntityData>(*this);
+}
+
+CellEntity::CellEntity(GhostTag, EntityID id, uint16_t type_id, Space& space,
+                       const math::Vector3& position, const math::Vector3& direction,
+                       Channel* real_channel)
+    : id_(id),
+      type_id_(type_id),
+      position_(position),
+      direction_(direction),
+      space_(space),
+      range_node_(position.x, position.z),
+      real_channel_(real_channel) {
+  // Ghost shares the same RangeList wiring as Real — cross-Cell observers'
+  // Witnesses will pick it up through the ordinary AoITrigger machinery.
+  range_node_.SetOwnerData(this);
+  space_.GetRangeList().Insert(&range_node_);
+  linked_to_range_list_ = true;
+  // No RealEntityData allocation: the Real side lives elsewhere; our
+  // cross-process bridge is real_channel_.
 }
 
 CellEntity::~CellEntity() {
@@ -67,6 +91,94 @@ void CellEntity::DisableWitness() {
   if (!witness_) return;
   witness_->Deactivate();
   witness_.reset();
+}
+
+void CellEntity::ConvertRealToGhost(Channel* new_real_channel) {
+  if (!IsReal()) {
+    ATLAS_LOG_WARNING("CellEntity::ConvertRealToGhost on non-Real entity id={} — ignored", id_);
+    return;
+  }
+  // Tear down script-facing surfaces first so nothing fires during the
+  // handover. Witness destruction follows the Phase 10 §3.10 #4 order —
+  // Deactivate before reset to give AoITriggers a chance to unhook.
+  if (witness_) {
+    witness_->Deactivate();
+    witness_.reset();
+  }
+  controllers_.StopAll();
+  // Drop the haunt list and velocity sample — we're no longer authoritative.
+  real_data_.reset();
+  real_channel_ = new_real_channel;
+  // range_node_ stays in place; as a Ghost we're still spatially present
+  // for peer witnesses observing this Cell.
+}
+
+void CellEntity::ConvertGhostToReal() {
+  if (!IsGhost()) {
+    ATLAS_LOG_WARNING("CellEntity::ConvertGhostToReal on non-Ghost entity id={} — ignored", id_);
+    return;
+  }
+  real_channel_ = nullptr;
+  next_real_addr_ = {};
+  real_data_ = std::make_unique<RealEntityData>(*this);
+  // replication_state_ carries over — the freshly-minted Real inherits
+  // the baseline the Ghost was already serving until the next C# publish.
+}
+
+void CellEntity::GhostUpdatePosition(const math::Vector3& pos, const math::Vector3& direction,
+                                     bool on_ground, uint64_t volatile_seq) {
+  if (!IsGhost()) {
+    ATLAS_LOG_WARNING("CellEntity::GhostUpdatePosition on non-Ghost entity id={} — ignored", id_);
+    return;
+  }
+  if (!replication_state_.has_value()) replication_state_.emplace();
+  auto& state = *replication_state_;
+  // Latest-wins: drop stale / duplicate frames delivered out of order.
+  if (volatile_seq <= state.latest_volatile_seq) return;
+  state.latest_volatile_seq = volatile_seq;
+  // SetPosition handles the RangeList shuffle; the Ghost version
+  // deliberately reuses that path so peer Witness AoI stays consistent
+  // whether the entity is Real or Ghost on this process.
+  if (pos.x != position_.x || pos.y != position_.y || pos.z != position_.z) SetPosition(pos);
+  direction_ = direction;
+  on_ground_ = on_ground;
+}
+
+void CellEntity::GhostApplyDelta(uint64_t event_seq, std::span<const std::byte> other_delta) {
+  if (!IsGhost()) {
+    ATLAS_LOG_WARNING("CellEntity::GhostApplyDelta on non-Ghost entity id={} — ignored", id_);
+    return;
+  }
+  if (!replication_state_.has_value()) replication_state_.emplace();
+  auto& state = *replication_state_;
+  if (event_seq <= state.latest_event_seq) return;
+  state.latest_event_seq = event_seq;
+  // Parking the delta into history lets downstream Witnesses on this
+  // CellApp catch up through the Phase 10 replay path — same code,
+  // cross-process origin.
+  ReplicationFrame frame;
+  frame.event_seq = event_seq;
+  frame.other_delta.assign(other_delta.begin(), other_delta.end());
+  frame.position = position_;
+  frame.direction = direction_;
+  frame.on_ground = on_ground_;
+  state.history.push_back(std::move(frame));
+  while (state.history.size() > kReplicationHistoryWindow) state.history.pop_front();
+}
+
+void CellEntity::GhostApplySnapshot(uint64_t event_seq, std::span<const std::byte> other_snapshot) {
+  if (!IsGhost()) {
+    ATLAS_LOG_WARNING("CellEntity::GhostApplySnapshot on non-Ghost entity id={} — ignored", id_);
+    return;
+  }
+  if (!replication_state_.has_value()) replication_state_.emplace();
+  auto& state = *replication_state_;
+  // Snapshot refreshes fire when the sender detected a gap beyond the
+  // history window, so they unconditionally reset the baseline — history
+  // is useless once we've missed more than Phase 10 can replay.
+  state.latest_event_seq = event_seq;
+  state.other_snapshot.assign(other_snapshot.begin(), other_snapshot.end());
+  state.history.clear();
 }
 
 void CellEntity::SetPosition(const math::Vector3& pos) {

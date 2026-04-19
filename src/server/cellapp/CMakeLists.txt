@@ -6,9 +6,11 @@
 
 add_library(atlas_cellapp_lib STATIC
   aoi_trigger.cc
+  cell.cc
   cell_entity.cc
   cellapp.cc
   cellapp_native_provider.cc
+  real_entity_data.cc
   space.cc
   witness.cc
 )
@@ -27,6 +29,7 @@ target_link_libraries(atlas_cellapp_lib PUBLIC
   atlas_space
   atlas_clrscript
   atlas_baseapp_lib
+  atlas_cellappmgr_messages
 )
 
 # The CellApp executable.

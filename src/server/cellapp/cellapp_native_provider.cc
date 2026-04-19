@@ -41,6 +41,13 @@ void CellAppNativeProvider::SetEntityPosition(uint32_t entity_id, float x, float
     ATLAS_LOG_WARNING("atlas_set_position: unknown entity_id={}", entity_id);
     return;
   }
+  // Phase 11 §3.1: Ghosts are read-only mirrors of a remote Real. A script
+  // running on this CellApp that tries to write a Ghost's position is
+  // almost always a logic bug — log and drop (Q2: soft guard).
+  if (!entity->IsReal()) {
+    ATLAS_LOG_WARNING("atlas_set_position on Ghost entity_id={} — rejected", entity_id);
+    return;
+  }
   // SetPosition handles the RangeList shuffle; the MarkVolatileDirty on
   // the C# side happens when the script property setter runs, so here we
   // just propagate the coordinate change. (The C#-layer dirty flip is
@@ -56,6 +63,11 @@ void CellAppNativeProvider::PublishReplicationFrame(
   auto* entity = lookup_ ? lookup_(entity_id) : nullptr;
   if (!entity) {
     ATLAS_LOG_WARNING("atlas_publish_replication_frame: unknown entity_id={}", entity_id);
+    return;
+  }
+  if (!entity->IsReal()) {
+    ATLAS_LOG_WARNING("atlas_publish_replication_frame on Ghost entity_id={} — rejected",
+                      entity_id);
     return;
   }
 
@@ -96,6 +108,10 @@ auto CellAppNativeProvider::AddMoveController(uint32_t entity_id, float dest_x, 
     ATLAS_LOG_WARNING("atlas_add_move_controller: unknown entity_id={}", entity_id);
     return 0;
   }
+  if (!entity->IsReal()) {
+    ATLAS_LOG_WARNING("atlas_add_move_controller on Ghost entity_id={} — rejected", entity_id);
+    return 0;
+  }
   return static_cast<int32_t>(entity->GetControllers().Add(
       std::make_unique<MoveToPointController>(math::Vector3{dest_x, dest_y, dest_z}, speed,
                                               /*face_movement=*/false),
@@ -109,6 +125,10 @@ auto CellAppNativeProvider::AddTimerController(uint32_t entity_id, float interva
     ATLAS_LOG_WARNING("atlas_add_timer_controller: unknown entity_id={}", entity_id);
     return 0;
   }
+  if (!entity->IsReal()) {
+    ATLAS_LOG_WARNING("atlas_add_timer_controller on Ghost entity_id={} — rejected", entity_id);
+    return 0;
+  }
   return static_cast<int32_t>(
       entity->GetControllers().Add(std::make_unique<TimerController>(interval, repeat),
                                    /*motion=*/nullptr, user_arg));
@@ -119,6 +139,10 @@ auto CellAppNativeProvider::AddProximityController(uint32_t entity_id, float ran
   auto* entity = lookup_ ? lookup_(entity_id) : nullptr;
   if (!entity) {
     ATLAS_LOG_WARNING("atlas_add_proximity_controller: unknown entity_id={}", entity_id);
+    return 0;
+  }
+  if (!entity->IsReal()) {
+    ATLAS_LOG_WARNING("atlas_add_proximity_controller on Ghost entity_id={} — rejected", entity_id);
     return 0;
   }
   // The controller callbacks are stubbed for now — Step 10.8's CellApp

@@ -225,5 +225,45 @@ TEST_F(CellAppNativeProviderTest, SetNativeCallbacksDispatchRoundtrips) {
   EXPECT_EQ(g_dispatch_rpc_id, 0x00800001u);
 }
 
+// ============================================================================
+// Phase 11 PR-3 — Ghost write guards
+// ============================================================================
+//
+// Every write path that mutates Real-only state must log-and-skip when its
+// entity is a Ghost. Resolution from Phase 11 Q2: soft guard, not a hard
+// assert, so a misbehaving script can't take the CellApp down.
+
+TEST_F(CellAppNativeProviderTest, SetPositionRejectedOnGhost) {
+  auto* e = space_.AddEntity(std::make_unique<CellEntity>(
+      CellEntity::GhostTag{}, 500, 1, space_, math::Vector3{0, 0, 0}, math::Vector3{1, 0, 0},
+      /*real_channel=*/reinterpret_cast<Channel*>(0xBEEF)));
+  ASSERT_TRUE(e->IsGhost());
+  provider_.SetEntityPosition(500, 9.f, 9.f, 9.f);
+  // Position unchanged — guard blocked the write.
+  EXPECT_FLOAT_EQ(e->Position().x, 0.f);
+  EXPECT_FLOAT_EQ(e->Position().z, 0.f);
+}
+
+TEST_F(CellAppNativeProviderTest, PublishReplicationFrameRejectedOnGhost) {
+  auto* e = space_.AddEntity(
+      std::make_unique<CellEntity>(CellEntity::GhostTag{}, 501, 1, space_, math::Vector3{0, 0, 0},
+                                   math::Vector3{1, 0, 0}, reinterpret_cast<Channel*>(0xBEEF)));
+  provider_.PublishReplicationFrame(501, /*event_seq=*/1, /*volatile_seq=*/1, nullptr, 0, nullptr,
+                                    0, nullptr, 0, nullptr, 0);
+  // Ghost's replication_state_ was never allocated by the provider.
+  EXPECT_EQ(e->GetReplicationState(), nullptr);
+}
+
+TEST_F(CellAppNativeProviderTest, AddControllersRejectedOnGhost) {
+  auto* e = space_.AddEntity(
+      std::make_unique<CellEntity>(CellEntity::GhostTag{}, 502, 1, space_, math::Vector3{0, 0, 0},
+                                   math::Vector3{1, 0, 0}, reinterpret_cast<Channel*>(0xBEEF)));
+  EXPECT_EQ(provider_.AddMoveController(502, 0, 0, 0, 1.f, 0), 0);
+  EXPECT_EQ(provider_.AddTimerController(502, 1.f, false, 0), 0);
+  EXPECT_EQ(provider_.AddProximityController(502, 5.f, 0), 0);
+  // Nothing attached to the Ghost's controllers list.
+  EXPECT_EQ(e->GetControllers().Count(), 0u);
+}
+
 }  // namespace
 }  // namespace atlas
