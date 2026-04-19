@@ -22,6 +22,9 @@ add_subdirectory(db_xml)
 add_subdirectory(db_mysql)
 add_subdirectory(clrscript)
 
+# Layer 3: Phase 10 spatial index (used by CellApp)
+add_subdirectory(space)
+
 # Placeholders
 add_subdirectory(connection)
 add_subdirectory(resmgr)

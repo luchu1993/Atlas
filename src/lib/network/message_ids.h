@@ -102,6 +102,29 @@ enum class BaseApp : uint16_t {
   kForceLogoffAck = 2031,
 };
 
+// ── CellApp (3000–3999) ───────────────────────────────────────────────────────
+//
+// These are CellApp's inbound messages; CellApp's outbound traffic reuses
+// the BaseApp enum (CellEntityCreated / CellRpcForward / …) because the
+// physical destination is BaseApp and message IDs are a single flat space.
+
+enum class CellApp : uint16_t {
+  kCreateCellEntity = 3000,
+  kDestroyCellEntity = 3002,
+  // Client → BaseApp → CellApp (client-initiated cell RPC, REAL_ONLY,
+  // needs Exposed + sourceEntityID validation on arrival). Mirrors
+  // BigWorld's runExposedMethod.
+  kClientCellRpcForward = 3003,
+  // Server-internal Base → CellApp (REAL_ONLY, no Exposed check — the
+  // base side is already trusted). Mirrors BigWorld's runScriptMethod.
+  kInternalCellRpc = 3004,
+  kCreateSpace = 3010,
+  kDestroySpace = 3011,
+  kAvatarUpdate = 3020,
+  kEnableWitness = 3021,
+  kDisableWitness = 3022,
+};
+
 // ── DBApp (4000–4999) ─────────────────────────────────────────────────────────
 
 enum class DBApp : uint16_t {
@@ -193,6 +216,17 @@ ATLAS_ASSERT_ID_RANGE(BaseApp::kAuthenticate, 2000, 2999);
 ATLAS_ASSERT_ID_RANGE(BaseApp::kAuthenticateResult, 2000, 2999);
 ATLAS_ASSERT_ID_RANGE(BaseApp::kForceLogoff, 2000, 2999);
 ATLAS_ASSERT_ID_RANGE(BaseApp::kForceLogoffAck, 2000, 2999);
+
+// CellApp
+ATLAS_ASSERT_ID_RANGE(CellApp::kCreateCellEntity, 3000, 3999);
+ATLAS_ASSERT_ID_RANGE(CellApp::kDestroyCellEntity, 3000, 3999);
+ATLAS_ASSERT_ID_RANGE(CellApp::kClientCellRpcForward, 3000, 3999);
+ATLAS_ASSERT_ID_RANGE(CellApp::kInternalCellRpc, 3000, 3999);
+ATLAS_ASSERT_ID_RANGE(CellApp::kCreateSpace, 3000, 3999);
+ATLAS_ASSERT_ID_RANGE(CellApp::kDestroySpace, 3000, 3999);
+ATLAS_ASSERT_ID_RANGE(CellApp::kAvatarUpdate, 3000, 3999);
+ATLAS_ASSERT_ID_RANGE(CellApp::kEnableWitness, 3000, 3999);
+ATLAS_ASSERT_ID_RANGE(CellApp::kDisableWitness, 3000, 3999);
 
 // DBApp
 ATLAS_ASSERT_ID_RANGE(DBApp::kWriteEntity, 4000, 4999);

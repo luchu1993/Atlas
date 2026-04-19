@@ -43,3 +43,9 @@ atlas_add_test(NAME test_rudp_two_network_interfaces
   DEPS atlas_network
   LABEL integration
 )
+
+atlas_add_test(NAME test_cellapp_integration
+  SOURCES test_cellapp_integration.cpp
+  DEPS atlas_cellapp_lib atlas_server atlas_network
+  LABEL integration
+)

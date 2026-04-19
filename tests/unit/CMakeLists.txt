@@ -176,6 +176,73 @@ atlas_add_test(NAME test_entity_def_registry_json
   DEPS atlas_entitydef atlas_serialization
 )
 
+atlas_add_test(NAME test_entity_def_registry_rpc
+  SOURCES test_entity_def_registry_rpc.cpp
+  DEPS atlas_entitydef atlas_serialization
+)
+
+# ── Space (Phase 10: RangeList / RangeTrigger / Controller) ────────────────
+
+atlas_add_test(NAME test_range_list
+  SOURCES test_range_list.cpp
+  DEPS atlas_space
+)
+
+atlas_add_test(NAME test_controllers
+  SOURCES test_controllers.cpp
+  DEPS atlas_space
+)
+
+atlas_add_test(NAME test_range_trigger
+  SOURCES test_range_trigger.cpp
+  DEPS atlas_space
+)
+
+atlas_add_test(NAME test_cellapp_messages
+  SOURCES test_cellapp_messages.cpp
+  DEPS atlas_cellapp_lib atlas_serialization
+)
+
+atlas_add_test(NAME test_space
+  SOURCES test_space.cpp
+  DEPS atlas_cellapp_lib atlas_space
+)
+
+atlas_add_test(NAME test_cell_entity
+  SOURCES test_cell_entity.cpp
+  DEPS atlas_cellapp_lib atlas_space
+)
+
+atlas_add_test(NAME test_witness_lifecycle
+  SOURCES test_witness_lifecycle.cpp
+  DEPS atlas_cellapp_lib atlas_space
+)
+
+atlas_add_test(NAME test_witness_replication
+  SOURCES test_witness_replication.cpp
+  DEPS atlas_cellapp_lib atlas_space
+)
+
+atlas_add_test(NAME test_witness_peer_lifetime
+  SOURCES test_witness_peer_lifetime.cpp
+  DEPS atlas_cellapp_lib atlas_space
+)
+
+atlas_add_test(NAME test_range_trigger_lifetime
+  SOURCES test_range_trigger_lifetime.cpp
+  DEPS atlas_cellapp_lib atlas_space
+)
+
+atlas_add_test(NAME test_cellapp_native_provider
+  SOURCES test_cellapp_native_provider.cpp
+  DEPS atlas_cellapp_lib atlas_space atlas_clrscript
+)
+
+atlas_add_test(NAME test_cellapp_handlers
+  SOURCES test_cellapp_handlers.cpp
+  DEPS atlas_cellapp_lib atlas_space atlas_entitydef
+)
+
 # ── Database ────────────────────────────────────────────────────────────────
 
 atlas_add_test(NAME test_database_types

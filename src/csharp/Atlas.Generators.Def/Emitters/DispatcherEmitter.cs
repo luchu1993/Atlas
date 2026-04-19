@@ -84,12 +84,27 @@ internal static class DispatcherEmitter
         sb.AppendLine("    {");
         sb.AppendLine("        switch (target)");
         sb.AppendLine("        {");
+        int emittedCases = 0;
         foreach (var (def, className, ns) in entities)
         {
             var methods = GetMethodsForSection(def, section);
             if (methods.Count == 0) continue;
             var fullName = string.IsNullOrEmpty(ns) ? className : $"{ns}.{className}";
             sb.AppendLine($"            case {fullName} t: Dispatch_{className}_{dirName}(t, rpcId, ref reader); break;");
+            emittedCases++;
+        }
+        // If no entity in this assembly has methods for `direction`, the
+        // switch body would be empty and trigger CS1522. Add a default
+        // arm — and keep it for the non-empty case too, so any future
+        // RPC arriving at a type we don't handle is silently dropped
+        // rather than falling through to whatever the next statement is.
+        if (emittedCases == 0)
+        {
+            sb.AppendLine("            default: _ = rpcId; _ = reader; break;");
+        }
+        else
+        {
+            sb.AppendLine("            default: break;");
         }
         sb.AppendLine("        }");
         sb.AppendLine("    }");

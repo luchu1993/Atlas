@@ -1,0 +1,14 @@
+<entity name="ReplicationFrameEntity">
+  <properties>
+    <!-- Fixture exercising every client-visible scope to lock the audience
+         mask codegen in DeltaSyncEmitter. Non-replicable scopes
+         (CellPrivate, CellPublic, Base) are omitted because
+         BuildAndConsumeReplicationFrame should not emit any client-facing
+         bytes for them. -->
+    <property name="hp" type="int32" scope="own_client" />
+    <property name="buffCount" type="int32" scope="all_clients" />
+    <property name="animState" type="int32" scope="other_clients" />
+    <property name="privateFlag" type="int32" scope="cell_public_and_own" />
+    <property name="baseLinked" type="int32" scope="base_and_client" />
+  </properties>
+</entity>

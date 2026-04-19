@@ -42,6 +42,66 @@ public abstract class ServerEntity
     /// </summary>
     public virtual void SerializeForOtherClients(ref SpanWriter writer) { }
 
+    /// <summary>
+    /// Build and consume this entity's replication frame for the current tick.
+    /// The source generator emits an override for entities with any replicable
+    /// property; the base implementation returns <see langword="false"/> so
+    /// entities without client-visible state pay no cost.
+    /// <para/>
+    /// Called once per tick by the CellApp replication pump, <b>after</b>
+    /// user <see cref="OnTick"/> code has had the chance to mutate
+    /// properties and flip volatile dirty bits. Clears both the dirty
+    /// flags and the volatile dirty flag as a side effect of consumption
+    /// — hence "AndConsume".
+    /// <para/>
+    /// ZERO-ALLOC CONTRACT: the four <see cref="SpanWriter"/>s are caller-
+    /// owned; they MUST be reset before the call (so stale bytes from a
+    /// prior entity don't bleed in) and the caller consumes
+    /// <c>.WrittenSpan</c> before the next Reset/Dispose. The pump is
+    /// expected to pool one writer quartet across all entities per tick,
+    /// calling <c>Reset()</c> between each. See
+    /// phase10_cellapp.md §3.3 / §3.9 for the data-flow contract.
+    /// </summary>
+    /// <param name="ownerSnapshot">Full-state snapshot for the owner audience. Written only when event_seq advances.</param>
+    /// <param name="otherSnapshot">Full-state snapshot for observer audience.</param>
+    /// <param name="ownerDelta">Audience-filtered delta for owner — <see cref="PropertyScope.OwnClient"/>, <see cref="PropertyScope.AllClients"/>, <see cref="PropertyScope.CellPublicAndOwn"/>, <see cref="PropertyScope.BaseAndClient"/>.</param>
+    /// <param name="otherDelta">Audience-filtered delta for observers — <see cref="PropertyScope.AllClients"/>, <see cref="PropertyScope.OtherClients"/> only.</param>
+    /// <param name="eventSeq">Property-event sequence; 0 if no property changed this tick.</param>
+    /// <param name="volatileSeq">Volatile (pos/orient) sequence; 0 if no volatile change.</param>
+    /// <returns>
+    /// <c>true</c> when at least one stream advanced (event_seq and/or
+    /// volatile_seq > 0 in the outputs). <c>false</c> is the fast path — the
+    /// pump should NOT hand zero-length spans to NativeApi in that case.
+    /// </returns>
+    public virtual bool BuildAndConsumeReplicationFrame(
+        ref SpanWriter ownerSnapshot, ref SpanWriter otherSnapshot,
+        ref SpanWriter ownerDelta, ref SpanWriter otherDelta,
+        out ulong eventSeq, out ulong volatileSeq)
+    {
+        eventSeq = 0;
+        volatileSeq = 0;
+        return false;
+    }
+
+    /// <summary>
+    /// Mark this entity's position/orientation as dirty for the current tick.
+    /// The next <see cref="BuildAndConsumeReplicationFrame"/> will advance
+    /// <see cref="ReplicationFrame.VolatileSeq"/> and clear this flag.
+    /// <para/>
+    /// The CellApp <c>atlas_set_position</c> native bridge flips this when C#
+    /// writes a new position; game scripts normally never call this directly.
+    /// </summary>
+    public void MarkVolatileDirty() => _volatileDirty = true;
+
+    /// <summary>Current volatile-dirty state (exposed for generated code).</summary>
+    protected bool VolatileDirtyCore
+    {
+        get => _volatileDirty;
+        set => _volatileDirty = value;
+    }
+
+    private bool _volatileDirty;
+
     /// <summary>Called when the entity is first created or after hot-reload.</summary>
     protected internal virtual void OnInit(bool isReload) { }
 

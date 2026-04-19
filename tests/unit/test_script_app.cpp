@@ -74,6 +74,19 @@ class MockNativeProvider : public INativeApiProvider {
   void WriteToDb(uint32_t, const std::byte*, int32_t) override {}
   void GiveClientTo(uint32_t, uint32_t) override {}
   void SetNativeCallbacks(const void*, int32_t) override {}
+
+  // Phase 10 CellApp-specific stubs — non-CellApp test mocks just need
+  // to stay concrete as INativeApiProvider's surface grows.
+  void SetEntityPosition(uint32_t, float, float, float) override {}
+  void PublishReplicationFrame(uint32_t, uint64_t, uint64_t, const std::byte*, int32_t,
+                               const std::byte*, int32_t, const std::byte*, int32_t,
+                               const std::byte*, int32_t) override {}
+  auto AddMoveController(uint32_t, float, float, float, float, int32_t) -> int32_t override {
+    return 0;
+  }
+  auto AddTimerController(uint32_t, float, bool, int32_t) -> int32_t override { return 0; }
+  auto AddProximityController(uint32_t, float, int32_t) -> int32_t override { return 0; }
+  void CancelController(uint32_t, int32_t) override {}
 };
 
 // ============================================================================

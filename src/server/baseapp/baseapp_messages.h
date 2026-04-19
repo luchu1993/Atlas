@@ -609,6 +609,60 @@ struct ClientBaseRpc {
 static_assert(NetworkMessage<ClientBaseRpc>);
 
 // ============================================================================
+// ClientCellRpc  (Client → BaseApp external interface, ID 2023)
+//
+// Client sends an exposed cell method call. BaseApp validates direction/
+// exposed/cross-entity rules, embeds `source_entity_id = proxy.entity_id()`
+// (un-spoofable), and forwards to the owning CellApp as ClientCellRpcForward.
+//
+// Wire format: [target_entity_id | rpc_id | payload].
+// `target_entity_id` is the base_entity_id space — clients only ever know
+// base ids; CellApp's base_entity_population_ index resolves it to the
+// CellEntity on arrival.
+//
+// Phase 10 prerequisite PR-A: struct + handler skeleton. The full validation
+// chain (direction==0x02, IsExposed, cross-entity + AllClients) is wired in
+// Step 10.9 once the registry direction/exposed metadata is guaranteed.
+// ============================================================================
+
+struct ClientCellRpc {
+  EntityID target_entity_id{kInvalidEntityID};
+  uint32_t rpc_id{0};
+  std::vector<std::byte> payload;
+
+  static auto Descriptor() -> const MessageDesc& {
+    static const MessageDesc kDesc{msg_id::Id(msg_id::BaseApp::kClientCellRpc),
+                                   "baseapp::ClientCellRpc", MessageLengthStyle::kVariable, -1};
+    return kDesc;
+  }
+
+  void Serialize(BinaryWriter& w) const {
+    w.WritePackedInt(target_entity_id);
+    w.Write(rpc_id);
+    w.WritePackedInt(static_cast<uint32_t>(payload.size()));
+    if (!payload.empty()) w.WriteBytes(std::span<const std::byte>(payload));
+  }
+
+  static auto Deserialize(BinaryReader& r) -> Result<ClientCellRpc> {
+    auto tid = r.ReadPackedInt();
+    auto rid = r.Read<uint32_t>();
+    auto plen = r.ReadPackedInt();
+    if (!tid || !rid || !plen)
+      return Error{ErrorCode::kInvalidArgument, "ClientCellRpc: truncated"};
+    ClientCellRpc msg;
+    msg.target_entity_id = *tid;
+    msg.rpc_id = *rid;
+    if (*plen > 0) {
+      auto pdata = r.ReadBytes(*plen);
+      if (!pdata) return Error{ErrorCode::kInvalidArgument, "ClientCellRpc: payload truncated"};
+      msg.payload.assign(pdata->begin(), pdata->end());
+    }
+    return msg;
+  }
+};
+static_assert(NetworkMessage<ClientCellRpc>);
+
+// ============================================================================
 // ForceLogoff  (BaseApp → BaseApp, ID 2030)
 // Sent to evict an existing Proxy so the new login can checkout the entity.
 // ============================================================================

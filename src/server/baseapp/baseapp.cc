@@ -10,6 +10,7 @@
 #include "baseapp_messages.h"
 #include "baseapp_native_provider.h"
 #include "baseappmgr/baseappmgr_messages.h"
+#include "cellapp/cellapp_messages.h"
 #include "db/idatabase.h"
 #include "dbapp/dbapp_messages.h"
 #include "entitydef/entity_def_registry.h"
@@ -134,6 +135,25 @@ auto BaseApp::Init(int argc, char* argv[]) -> bool {
         FailAllDbappPendingRequests("dbapp_disconnected");
       });
 
+  // ---- Subscribe to CellApp (Phase 10 single-CellApp stage) ----------
+  //
+  // Phase 10 assumes at most one CellApp. Phase 11 replaces this with a
+  // cluster-wide CellAppMgr routing table keyed by space + spatial hash.
+  GetMachinedClient().Subscribe(
+      machined::ListenerType::kBoth, ProcessType::kCellApp,
+      [this](const machined::BirthNotification& n) {
+        if (cellapp_channel_ == nullptr) {
+          ATLAS_LOG_INFO("BaseApp: CellApp born at {}:{}, connecting via RUDP...",
+                         n.internal_addr.Ip(), n.internal_addr.Port());
+          auto ch = Network().ConnectRudpNocwnd(n.internal_addr);
+          if (ch) cellapp_channel_ = static_cast<Channel*>(*ch);
+        }
+      },
+      [this](const machined::DeathNotification& /*n*/) {
+        ATLAS_LOG_WARNING("BaseApp: CellApp died, clearing cellapp channel");
+        cellapp_channel_ = nullptr;
+      });
+
   // ---- Subscribe to BaseAppMgr and register ourselves ----------------
   GetMachinedClient().Subscribe(
       machined::ListenerType::kBirth, ProcessType::kBaseAppMgr,
@@ -196,6 +216,10 @@ auto BaseApp::Init(int argc, char* argv[]) -> bool {
   (void)ext_table.RegisterTypedHandler<baseapp::ClientBaseRpc>(
       [this](const Address& /*src*/, Channel* ch, const baseapp::ClientBaseRpc& msg) {
         OnClientBaseRpc(*ch, msg);
+      });
+  (void)ext_table.RegisterTypedHandler<baseapp::ClientCellRpc>(
+      [this](const Address& /*src*/, Channel* ch, const baseapp::ClientCellRpc& msg) {
+        OnClientCellRpc(*ch, msg);
       });
 
   ATLAS_LOG_INFO("BaseApp: initialised");
@@ -625,6 +649,11 @@ void BaseApp::OnCellRpcForward(Channel& /*ch*/, const baseapp::CellRpcForward& m
               static_cast<int32_t>(msg.payload.size()));
 }
 
+// Path #3 of the three-path CellApp→Client delta contract (see
+// delta_forwarder.h for the full contract). SelfRpcFromCell is Reliable, sent
+// directly to the owner's client channel with the RPC's own method id. It
+// MUST NOT touch DeltaForwarder — that forwarder is latest-wins and would
+// silently drop intermediate RPCs.
 void BaseApp::OnSelfRpcFromCell(Channel& /*ch*/, const baseapp::SelfRpcFromCell& msg) {
   auto* proxy = entity_mgr_.FindProxy(msg.base_entity_id);
   if (!proxy || !proxy->HasClient()) return;
@@ -647,6 +676,13 @@ void BaseApp::OnBroadcastRpcFromCell(Channel& /*ch*/, const baseapp::BroadcastRp
   }
 }
 
+// Path #1 of the three-path CellApp→Client delta contract (see
+// delta_forwarder.h for the full contract). ReplicatedDeltaFromCell is
+// Unreliable; its payload passes through the per-client DeltaForwarder,
+// which enforces LATEST-WINS for the same entity and a per-tick byte budget.
+// Use for Volatile position/orientation updates only — NEVER for anything
+// that carries event_seq or other cumulative counters, because the forwarder
+// will replace pending entries and silently drop intermediate frames.
 void BaseApp::OnReplicatedDeltaFromCell(Channel& /*ch*/,
                                         const baseapp::ReplicatedDeltaFromCell& msg) {
   auto* proxy = entity_mgr_.FindProxy(msg.base_entity_id);
@@ -659,6 +695,12 @@ void BaseApp::OnReplicatedDeltaFromCell(Channel& /*ch*/,
       msg.base_entity_id, std::span<const std::byte>(msg.delta.data(), msg.delta.size()));
 }
 
+// Path #2 of the three-path CellApp→Client delta contract (see
+// delta_forwarder.h for the full contract). Reliable deltas carry
+// semantically-critical property changes (HP, state, inventory, AoI property
+// updates carrying event_seq). They BYPASS DeltaForwarder so the byte-budget
+// and same-entity replacement cannot drop them, and ride the reliable
+// client-facing message ID so the transport retransmits on loss.
 void BaseApp::OnReplicatedReliableDeltaFromCell(
     Channel& /*ch*/, const baseapp::ReplicatedReliableDeltaFromCell& msg) {
   // Reliable deltas carry semantically-critical property changes (HP, state,
@@ -2201,7 +2243,7 @@ void BaseApp::OnClientBaseRpc(Channel& ch, const baseapp::ClientBaseRpc& msg) {
   }
   auto entity_id = it->second;
 
-  // 2. Validate the RPC is exposed
+  // 2. Validate the RPC is exposed.
   auto& registry = EntityDefRegistry::Instance();
   auto* rpc_desc = registry.FindRpc(msg.rpc_id);
   if (!rpc_desc || rpc_desc->exposed == ExposedScope::kNone) {
@@ -2210,7 +2252,18 @@ void BaseApp::OnClientBaseRpc(Channel& ch, const baseapp::ClientBaseRpc& msg) {
     return;
   }
 
-  // 3. Dispatch to C# via the native callback
+  // 2.5. Direction check. A client that tries to invoke a cell_methods
+  // (direction 0x02) or client_methods (0x00) through the Base channel
+  // is probing — either exploitation, or a generator bug. Either way we
+  // reject loud and fast.
+  if (rpc_desc->Direction() != 0x03) {
+    ATLAS_LOG_WARNING(
+        "BaseApp: ClientBaseRpc rpc_id=0x{:06X} has direction {}, expected 0x03 (Base)", msg.rpc_id,
+        rpc_desc->Direction());
+    return;
+  }
+
+  // 3. Dispatch to C# via the native callback.
   auto dispatch_fn = GetNativeProvider().dispatch_rpc_fn();
   if (!dispatch_fn) {
     ATLAS_LOG_WARNING("BaseApp: ClientBaseRpc: dispatch_rpc callback not registered");
@@ -2218,6 +2271,81 @@ void BaseApp::OnClientBaseRpc(Channel& ch, const baseapp::ClientBaseRpc& msg) {
   }
   dispatch_fn(entity_id, msg.rpc_id, reinterpret_cast<const uint8_t*>(msg.payload.data()),
               static_cast<int32_t>(msg.payload.size()));
+}
+
+// ============================================================================
+// OnClientCellRpc — full validation chain + forward to CellApp
+//
+// Four-layer defence-in-depth (phase10_cellapp.md §9.7):
+//   L1   authenticated channel (client_entity_index_ hit)
+//   L1.5 direction bits == 0x02 (reject Base RPCs sent through cell channel)
+//   L2   cross-entity + non-AllClients scope → reject
+//   — forward to CellApp —
+//   L3,L4 re-check in CellApp::OnClientCellRpcForward
+// ============================================================================
+
+void BaseApp::OnClientCellRpc(Channel& ch, const baseapp::ClientCellRpc& msg) {
+  // L1: authenticated proxy binding. An un-authenticated channel has no
+  // right to an entity id, so there's no way to stamp source_entity_id.
+  auto it = client_entity_index_.find(ch.RemoteAddress());
+  if (it == client_entity_index_.end()) {
+    ATLAS_LOG_WARNING("BaseApp: ClientCellRpc from unauthenticated channel (rpc_id=0x{:06X})",
+                      msg.rpc_id);
+    return;
+  }
+  const auto source_entity_id = it->second;
+
+  auto& registry = EntityDefRegistry::Instance();
+  const auto* rpc_desc = registry.FindRpc(msg.rpc_id);
+  if (rpc_desc == nullptr) {
+    ATLAS_LOG_WARNING("BaseApp: ClientCellRpc unknown rpc_id=0x{:06X} (source entity={})",
+                      msg.rpc_id, source_entity_id);
+    return;
+  }
+
+  // L1.5: direction check. Cell RPCs must sit in the 0x02 space.
+  if (rpc_desc->Direction() != 0x02) {
+    ATLAS_LOG_WARNING(
+        "BaseApp: ClientCellRpc rpc_id=0x{:06X} has direction {}, expected 0x02 (Cell)", msg.rpc_id,
+        rpc_desc->Direction());
+    return;
+  }
+
+  // Exposed check.
+  if (rpc_desc->exposed == ExposedScope::kNone) {
+    ATLAS_LOG_WARNING("BaseApp: client tried to call non-exposed cell method (rpc_id=0x{:06X})",
+                      msg.rpc_id);
+    return;
+  }
+
+  // L2: cross-entity check. OWN_CLIENT methods may only be invoked on
+  // the caller's own entity; ALL_CLIENTS methods may target any entity
+  // the caller sees in AoI (we don't re-validate AoI here — the cell
+  // layer has that data and will drop misaddressed packets anyway).
+  if (msg.target_entity_id != source_entity_id && rpc_desc->exposed != ExposedScope::kAllClients) {
+    ATLAS_LOG_WARNING(
+        "BaseApp: cross-entity ClientCellRpc blocked (source={} target={} rpc_id=0x{:06X} "
+        "exposed={})",
+        source_entity_id, msg.target_entity_id, msg.rpc_id,
+        static_cast<uint8_t>(rpc_desc->exposed));
+    return;
+  }
+
+  // Forward to the CellApp. `source_entity_id` is stamped HERE from the
+  // authenticated proxy binding — the client cannot forge it. CellApp
+  // re-checks everything (defence in depth) on the other side.
+  if (cellapp_channel_ == nullptr) {
+    ATLAS_LOG_WARNING("BaseApp: ClientCellRpc has no CellApp channel yet (rpc_id=0x{:06X})",
+                      msg.rpc_id);
+    return;
+  }
+
+  cellapp::ClientCellRpcForward fwd;
+  fwd.target_entity_id = msg.target_entity_id;
+  fwd.source_entity_id = source_entity_id;
+  fwd.rpc_id = msg.rpc_id;
+  fwd.payload = msg.payload;  // copy; Serialize/Deserialize owns bytes
+  (void)cellapp_channel_->SendMessage(fwd);
 }
 
 }  // namespace atlas

@@ -38,6 +38,16 @@ internal static class DeltaSyncEmitter
         EmitDirtyFlagMasks(sb, replicableProps);
         sb.AppendLine();
 
+        // Static masks partitioning the dirty flags by client audience. These are
+        // what the CellApp replication pump needs: Owner side receives props
+        // visible to the entity's owning client (OwnClient, AllClients,
+        // CellPublicAndOwn, BaseAndClient); the Other side receives props
+        // visible to observers (AllClients, OtherClients). CellPublicAndOwn
+        // intentionally appears ONLY in the owner mask — revealing a
+        // CellPublicAndOwn field to non-owners is a privacy bug.
+        EmitAudienceMasks(sb, replicableProps);
+        sb.AppendLine();
+
         // SerializeReplicatedDelta — only dirty fields (full mask, transitional API).
         EmitSerializeReplicatedDelta(sb, replicableProps, methodName: "SerializeReplicatedDelta",
                                      restrictMask: null);
@@ -79,10 +89,118 @@ internal static class DeltaSyncEmitter
         // SerializeForOtherClients — fields visible to non-owner clients
         var otherFields = replicableProps.Where(p => IsOtherVisible(p.Scope)).ToList();
         if (otherFields.Count > 0)
+        {
             EmitScopeSerialize(sb, otherFields, "SerializeForOtherClients");
+            sb.AppendLine();
+        }
+
+        // Per-audience delta serializers — what CellApp sends to observers when
+        // a property changes. Distinct from the reliable/unreliable split: any
+        // property can appear in either owner or other delta depending on
+        // scope, and reliability is a transport-layer concern.
+        EmitAudienceDeltaSerializer(sb, replicableProps, "SerializeOwnerDelta",
+                                    "OwnerVisibleMask", p => IsOwnerVisible(p.Scope));
+        sb.AppendLine();
+        EmitAudienceDeltaSerializer(sb, replicableProps, "SerializeOtherDelta",
+                                    "OtherVisibleMask", p => IsOtherVisible(p.Scope));
+        sb.AppendLine();
+
+        // The frame counters live alongside the dirty flag state in this
+        // generated partial so non-replicable entities don't carry them.
+        sb.AppendLine("    private ulong _eventSeq;");
+        sb.AppendLine("    private ulong _volatileSeq;");
+        sb.AppendLine();
+
+        // BuildAndConsumeReplicationFrame — the per-tick entry point the
+        // CellApp replication pump calls. Returns null on fast path (no dirty
+        // state at all) so the caller can skip both the allocation and the
+        // NativeApi hop.
+        EmitBuildAndConsume(sb, ownerFields.Count > 0, otherFields.Count > 0);
 
         sb.AppendLine("}");
         return sb.ToString();
+    }
+
+    private static void EmitAudienceMasks(StringBuilder sb, List<PropertyDefModel> props)
+    {
+        string MaskExpr(System.Func<PropertyScope, bool> pred)
+        {
+            var names = props.Where(p => pred(p.Scope))
+                             .Select(p => "ReplicatedDirtyFlags." + DefTypeHelper.ToPropertyName(p.Name))
+                             .ToList();
+            return names.Count == 0 ? "ReplicatedDirtyFlags.None" : string.Join(" | ", names);
+        }
+
+        sb.AppendLine($"    private const ReplicatedDirtyFlags OwnerVisibleMask = {MaskExpr(IsOwnerVisible)};");
+        sb.AppendLine($"    private const ReplicatedDirtyFlags OtherVisibleMask = {MaskExpr(IsOtherVisible)};");
+    }
+
+    private static void EmitAudienceDeltaSerializer(StringBuilder sb, List<PropertyDefModel> props,
+                                                    string methodName, string maskName,
+                                                    System.Func<PropertyDefModel, bool> audiencePred)
+    {
+        var (_, _, writerMethod, _, castPrefix) = GetFlagsTypeInfo(props.Count);
+        sb.AppendLine($"    public void {methodName}(ref SpanWriter writer)");
+        sb.AppendLine("    {");
+        sb.AppendLine($"        var flags = _dirtyFlags & {maskName};");
+        sb.AppendLine($"        writer.{writerMethod}({castPrefix}flags);");
+        foreach (var prop in props)
+        {
+            // Only audience-visible props can have their flag set after the
+            // mask, so skip the rest at codegen time.
+            if (!audiencePred(prop)) continue;
+            var propName = DefTypeHelper.ToPropertyName(prop.Name);
+            var fieldName = DefTypeHelper.ToFieldName(prop.Name);
+            var writeMethod = DefTypeHelper.WriteMethod(prop.Type);
+            sb.AppendLine($"        if ((flags & ReplicatedDirtyFlags.{propName}) != 0)");
+            sb.AppendLine($"            writer.{writeMethod}({fieldName});");
+        }
+        sb.AppendLine("    }");
+    }
+
+    private static void EmitBuildAndConsume(StringBuilder sb, bool hasOwnerSnapshot,
+                                            bool hasOtherSnapshot)
+    {
+        // Zero-alloc API: caller owns the four SpanWriters (typically
+        // pool-rented once per tick and Reset() between entities). We
+        // serialize in-place and return (eventSeq, volatileSeq) through
+        // out params. Avoids per-tick byte[] churn that the allocating
+        // form caused on high-fanout CellApp pumps.
+        sb.AppendLine("    public override bool BuildAndConsumeReplicationFrame(");
+        sb.AppendLine("        ref SpanWriter ownerSnapshot, ref SpanWriter otherSnapshot,");
+        sb.AppendLine("        ref SpanWriter ownerDelta, ref SpanWriter otherDelta,");
+        sb.AppendLine("        out ulong eventSeq, out ulong volatileSeq)");
+        sb.AppendLine("    {");
+        sb.AppendLine("        bool hasEvent = (_dirtyFlags & (OwnerVisibleMask | OtherVisibleMask)) != ReplicatedDirtyFlags.None;");
+        sb.AppendLine("        bool hasVolatile = VolatileDirtyCore;");
+        sb.AppendLine("        if (!hasEvent && !hasVolatile)");
+        sb.AppendLine("        {");
+        sb.AppendLine("            eventSeq = 0; volatileSeq = 0;");
+        sb.AppendLine("            return false;");
+        sb.AppendLine("        }");
+        sb.AppendLine();
+        sb.AppendLine("        if (hasEvent)");
+        sb.AppendLine("        {");
+        sb.AppendLine("            _eventSeq++;");
+        if (hasOwnerSnapshot)
+            sb.AppendLine("            SerializeForOwnerClient(ref ownerSnapshot);");
+        if (hasOtherSnapshot)
+            sb.AppendLine("            SerializeForOtherClients(ref otherSnapshot);");
+        sb.AppendLine("            SerializeOwnerDelta(ref ownerDelta);");
+        sb.AppendLine("            SerializeOtherDelta(ref otherDelta);");
+        sb.AppendLine("            _dirtyFlags = ReplicatedDirtyFlags.None;");
+        sb.AppendLine("        }");
+        sb.AppendLine();
+        sb.AppendLine("        if (hasVolatile)");
+        sb.AppendLine("        {");
+        sb.AppendLine("            _volatileSeq++;");
+        sb.AppendLine("            VolatileDirtyCore = false;");
+        sb.AppendLine("        }");
+        sb.AppendLine();
+        sb.AppendLine("        eventSeq = hasEvent ? _eventSeq : 0UL;");
+        sb.AppendLine("        volatileSeq = hasVolatile ? _volatileSeq : 0UL;");
+        sb.AppendLine("        return true;");
+        sb.AppendLine("    }");
     }
 
     private static void EmitDirtyFlagMasks(StringBuilder sb, List<PropertyDefModel> props)

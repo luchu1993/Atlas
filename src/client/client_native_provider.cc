@@ -45,11 +45,20 @@ void ClientNativeProvider::SendBaseRpc(uint32_t entity_id, uint32_t rpc_id,
 
 void ClientNativeProvider::SendCellRpc(uint32_t entity_id, uint32_t rpc_id,
                                        const std::byte* payload, int32_t len) {
-  // Phase 2: ClientCellRpc forwarding to CellApp via BaseApp
-  ATLAS_LOG_WARNING("Client: send_cell_rpc not yet implemented (rpc_id=0x{:06X})", rpc_id);
-  (void)entity_id;
-  (void)payload;
-  (void)len;
+  auto* ch = app_.BaseappChannel();
+  if (!ch) {
+    ATLAS_LOG_WARNING("Client: send_cell_rpc: not connected to BaseApp");
+    return;
+  }
+
+  // The client-visible entity id space is base_entity_id; BaseApp resolves
+  // target -> CellEntity via its base_entity_population_ index.
+  baseapp::ClientCellRpc msg;
+  msg.target_entity_id = entity_id;
+  msg.rpc_id = rpc_id;
+  if (len > 0) msg.payload.assign(payload, payload + static_cast<std::size_t>(len));
+
+  (void)ch->SendMessage(msg);
 }
 
 void ClientNativeProvider::SetNativeCallbacks(const void* native_callbacks, int32_t len) {

@@ -1,0 +1,137 @@
+#include "cell_entity.h"
+
+#include <cfloat>
+#include <utility>
+
+#include "space.h"
+#include "witness.h"
+
+namespace atlas {
+
+CellEntity::CellEntity(EntityID id, uint16_t type_id, Space& space, const math::Vector3& position,
+                       const math::Vector3& direction)
+    : id_(id),
+      type_id_(type_id),
+      position_(position),
+      direction_(direction),
+      space_(space),
+      range_node_(position.x, position.z) {
+  // Stash the back-pointer so AoITrigger callbacks (which only get a
+  // RangeListNode&) can recover the owning CellEntity via reinterpret_cast.
+  range_node_.SetOwnerData(this);
+  // Link the node into the owning RangeList now; SetPosition afterwards
+  // will shuffle from this initial location. Insert does fire crosses
+  // with any triggers already in the list at this position — that's the
+  // "new entity joined" signal those triggers want.
+  space_.GetRangeList().Insert(&range_node_);
+  linked_to_range_list_ = true;
+}
+
+CellEntity::~CellEntity() {
+  // Order per phase10_cellapp.md §3.10 #4:
+  //   1. witness_.reset() — removes the AoITrigger's bound nodes while
+  //      central is still linked.
+  //   2. controllers_.StopAll() — ProximityController etc. hold their
+  //      own RangeTriggers; StopAll removes those bound nodes cleanly.
+  //   3. RangeList.Remove(&range_node_) — central leaves last.
+  if (witness_) {
+    witness_->Deactivate();
+    witness_.reset();
+  }
+  controllers_.StopAll();
+
+  if (linked_to_range_list_) {
+    // Synthetic "vacate to infinity" shuffle BEFORE unlinking: sweeps
+    // the range_node_ past every live trigger upper bound, which fires
+    // HandleCrossX/Z → DispatchMembership → OnLeave on any trigger
+    // that had us in its inside_peers_ set. Without this, other
+    // Witnesses' aoi_map_ entries (which hold raw CellEntity* to this
+    // object) would keep dangling references after we're deleted, and
+    // the next Witness::Update would UAF on our GetReplicationState().
+    //
+    // RangeList::Remove itself doesn't fire cross events — by design,
+    // it's a pure unlink — so the workaround is to make the node
+    // "fly off the edge" first. The shuffle is O(N) in the list
+    // length (not position delta) on this pass, which is acceptable
+    // because entity destruction is rare relative to movement.
+    const float old_x = range_node_.X();
+    const float old_z = range_node_.Z();
+    range_node_.SetXZ(FLT_MAX, FLT_MAX);
+    space_.GetRangeList().ShuffleXThenZ(&range_node_, old_x, old_z);
+    space_.GetRangeList().Remove(&range_node_);
+    linked_to_range_list_ = false;
+  }
+}
+
+void CellEntity::DisableWitness() {
+  if (!witness_) return;
+  witness_->Deactivate();
+  witness_.reset();
+}
+
+void CellEntity::SetPosition(const math::Vector3& pos) {
+  if (destroyed_) return;
+  const math::Vector3 old = position_;
+  position_ = pos;
+  range_node_.SetXZ(pos.x, pos.z);
+  space_.GetRangeList().ShuffleXThenZ(&range_node_, old.x, old.z);
+}
+
+void CellEntity::SetDirection(const math::Vector3& dir) {
+  // Direction doesn't affect RangeList sort — no shuffle needed.
+  direction_ = dir;
+}
+
+void CellEntity::SetPositionAndDirection(const math::Vector3& pos, const math::Vector3& dir) {
+  if (destroyed_) return;
+  const math::Vector3 old = position_;
+  position_ = pos;
+  direction_ = dir;
+  range_node_.SetXZ(pos.x, pos.z);
+  space_.GetRangeList().ShuffleXThenZ(&range_node_, old.x, old.z);
+}
+
+void CellEntity::PublishReplicationFrame(ReplicationFrame frame,
+                                         std::span<const std::byte> owner_snapshot,
+                                         std::span<const std::byte> other_snapshot) {
+  if (!replication_state_.has_value()) replication_state_.emplace();
+  auto& state = *replication_state_;
+
+  // Event stream: ordered, cumulative. Advance + snapshot + history.
+  if (frame.event_seq > state.latest_event_seq) {
+    state.latest_event_seq = frame.event_seq;
+    state.owner_snapshot.assign(owner_snapshot.begin(), owner_snapshot.end());
+    state.other_snapshot.assign(other_snapshot.begin(), other_snapshot.end());
+    state.history.push_back(frame);
+    while (state.history.size() > kReplicationHistoryWindow) state.history.pop_front();
+  }
+
+  // Volatile stream: latest-wins. No history; just bump the counter and
+  // adopt the new position/direction as C++'s authoritative mirror.
+  if (frame.volatile_seq > state.latest_volatile_seq) {
+    state.latest_volatile_seq = frame.volatile_seq;
+    // The C# layer will have called atlas_set_position earlier in the
+    // tick, so these fields may already agree; adopt unconditionally so
+    // callers can publish without a prior SetPosition.
+    if (frame.position.x != position_.x || frame.position.y != position_.y ||
+        frame.position.z != position_.z) {
+      SetPosition(frame.position);
+    }
+    direction_ = frame.direction;
+    on_ground_ = frame.on_ground;
+  }
+}
+
+auto CellEntity::GetReplicationState() const -> const ReplicationState* {
+  return replication_state_.has_value() ? &*replication_state_ : nullptr;
+}
+
+void CellEntity::Destroy() {
+  if (destroyed_) return;
+  destroyed_ = true;
+  // Actual resource cleanup (controllers, range_node_) happens in the
+  // destructor. Space::RemoveEntity() erases the owning unique_ptr
+  // shortly after, which triggers ~CellEntity in the correct order.
+}
+
+}  // namespace atlas

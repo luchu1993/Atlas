@@ -68,6 +68,42 @@ class INativeApiProvider {
   // for C++ → C# calls.  The native_callbacks blob is a packed array of
   // function pointer values whose layout is defined in clr_native_api.h.
   virtual void SetNativeCallbacks(const void* native_callbacks, int32_t len) = 0;
+
+  // ---- CellApp spatial/replication (Phase 10) -------------------------
+  //
+  // Only CellApp implements these non-trivially; other processes inherit
+  // BaseNativeProvider's default no-op + error log. BaseApp might
+  // implement SetEntityPosition in the future for the "predict own
+  // client" case but for now only CellApp owns position authority.
+
+  // C# tells us about the new world position of a cell entity. The
+  // provider updates CellEntity::position_ (which triggers a RangeList
+  // shuffle) and marks the entity's volatile-dirty flag so the next
+  // BuildAndConsumeReplicationFrame advances VolatileSeq.
+  virtual void SetEntityPosition(uint32_t entity_id, float x, float y, float z) = 0;
+
+  // C# hands the cell layer a per-tick replication frame. Owner/other
+  // snapshot pointers are only consumed when event_seq > 0 (see
+  // CellEntity::PublishReplicationFrame); callers pass nullptr/0 when
+  // the event stream has nothing this tick.
+  virtual void PublishReplicationFrame(uint32_t entity_id, uint64_t event_seq,
+                                       uint64_t volatile_seq, const std::byte* owner_snap,
+                                       int32_t owner_snap_len, const std::byte* other_snap,
+                                       int32_t other_snap_len, const std::byte* owner_delta,
+                                       int32_t owner_delta_len, const std::byte* other_delta,
+                                       int32_t other_delta_len) = 0;
+
+  // Controller registration — C# scripts create movement / timer /
+  // proximity controllers via these calls. The returned controller_id
+  // is opaque to the caller; it's passed back to CancelController to
+  // tear the controller down early.
+  virtual auto AddMoveController(uint32_t entity_id, float dest_x, float dest_y, float dest_z,
+                                 float speed, int32_t user_arg) -> int32_t = 0;
+  virtual auto AddTimerController(uint32_t entity_id, float interval, bool repeat, int32_t user_arg)
+      -> int32_t = 0;
+  virtual auto AddProximityController(uint32_t entity_id, float range, int32_t user_arg)
+      -> int32_t = 0;
+  virtual void CancelController(uint32_t entity_id, int32_t controller_id) = 0;
 };
 
 // Register the provider for this process.  Must be called before

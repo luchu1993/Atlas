@@ -15,6 +15,14 @@ using EntityID = uint32_t;
 inline constexpr EntityID kInvalidEntityID = 0;
 
 // ============================================================================
+// SpaceID — uniquely identifies a spatial partition (BigWorld's "Space").
+// Phase 10 single-CellApp stage treats Space == Cell; Phase 11 splits them.
+// ============================================================================
+
+using SpaceID = uint32_t;
+inline constexpr SpaceID kInvalidSpaceID = 0;
+
+// ============================================================================
 // SessionKey — 32-byte random token issued to a client at login
 // Used for authenticating the client <-> Proxy binding.
 // ============================================================================

@@ -99,7 +99,50 @@
     /* ---- C# → C++ callback table ---------------------------------------- */                   \
     X(void, SetNativeCallbacks,                                                                    \
         (const void* native_callbacks, int32_t len),                                               \
-        atlas::GetNativeApiProvider().SetNativeCallbacks(native_callbacks, len))
+        atlas::GetNativeApiProvider().SetNativeCallbacks(native_callbacks, len))                    \
+                                                                                                   \
+    /* ---- CellApp spatial/replication (Phase 10) ----------------------- */                     \
+    /* C# tells the cell layer about the entity's new world position. C++ */                     \
+    /* side updates CellEntity::position_ + range_node_ + marks the C#     */                     \
+    /* volatile-dirty bit so the next BuildAndConsumeReplicationFrame      */                     \
+    /* advances VolatileSeq.                                                */                     \
+    X(void, SetEntityPosition,                                                                     \
+        (uint32_t entity_id, float x, float y, float z),                                          \
+        atlas::GetNativeApiProvider().SetEntityPosition(entity_id, x, y, z))                       \
+                                                                                                   \
+    /* C# hands the cell layer one tick of ReplicationFrame output. The    */                     \
+    /* owner/other snapshots are used whenever event_seq > 0; otherwise    */                     \
+    /* the caller passes zero-length spans. See phase10_cellapp.md §3.9.   */                     \
+    X(void, PublishReplicationFrame,                                                               \
+        (uint32_t entity_id, uint64_t event_seq, uint64_t volatile_seq,                          \
+         const uint8_t* owner_snap, int32_t owner_snap_len,                                        \
+         const uint8_t* other_snap, int32_t other_snap_len,                                        \
+         const uint8_t* owner_delta, int32_t owner_delta_len,                                      \
+         const uint8_t* other_delta, int32_t other_delta_len),                                     \
+        atlas::GetNativeApiProvider().PublishReplicationFrame(                                    \
+            entity_id, event_seq, volatile_seq,                                                    \
+            reinterpret_cast<const std::byte*>(owner_snap), owner_snap_len,                        \
+            reinterpret_cast<const std::byte*>(other_snap), other_snap_len,                        \
+            reinterpret_cast<const std::byte*>(owner_delta), owner_delta_len,                      \
+            reinterpret_cast<const std::byte*>(other_delta), other_delta_len))                     \
+                                                                                                   \
+    /* ---- CellApp controllers (Phase 10) ------------------------------- */                    \
+    X(int32_t, AddMoveController,                                                                  \
+        (uint32_t entity_id, float dest_x, float dest_y, float dest_z,                            \
+         float speed, int32_t user_arg),                                                           \
+        return atlas::GetNativeApiProvider().AddMoveController(                                   \
+            entity_id, dest_x, dest_y, dest_z, speed, user_arg))                                   \
+    X(int32_t, AddTimerController,                                                                 \
+        (uint32_t entity_id, float interval, uint8_t repeat, int32_t user_arg),                  \
+        return atlas::GetNativeApiProvider().AddTimerController(                                  \
+            entity_id, interval, repeat != 0, user_arg))                                           \
+    X(int32_t, AddProximityController,                                                             \
+        (uint32_t entity_id, float range, int32_t user_arg),                                      \
+        return atlas::GetNativeApiProvider().AddProximityController(                              \
+            entity_id, range, user_arg))                                                           \
+    X(void, CancelController,                                                                      \
+        (uint32_t entity_id, int32_t controller_id),                                              \
+        atlas::GetNativeApiProvider().CancelController(entity_id, controller_id))
 // clang-format on
 
 #endif  // ATLAS_LIB_CLRSCRIPT_CLR_NATIVE_API_DEFS_H_

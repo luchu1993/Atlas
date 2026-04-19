@@ -57,6 +57,25 @@ class BaseNativeProvider : public INativeApiProvider {
   // ---- Callback table (default: no-op) --------------------------------
   void SetNativeCallbacks(const void* native_callbacks, int32_t len) override;
 
+  // ---- CellApp-specific (default: log + no-op) ------------------------
+  //
+  // Processes that aren't CellApp inherit these no-op bodies — a script
+  // running on BaseApp that calls atlas_set_position just logs an error.
+  // CellAppNativeProvider overrides each to wire into Space / CellEntity.
+  void SetEntityPosition(uint32_t entity_id, float x, float y, float z) override;
+  void PublishReplicationFrame(uint32_t entity_id, uint64_t event_seq, uint64_t volatile_seq,
+                               const std::byte* owner_snap, int32_t owner_snap_len,
+                               const std::byte* other_snap, int32_t other_snap_len,
+                               const std::byte* owner_delta, int32_t owner_delta_len,
+                               const std::byte* other_delta, int32_t other_delta_len) override;
+  auto AddMoveController(uint32_t entity_id, float dest_x, float dest_y, float dest_z, float speed,
+                         int32_t user_arg) -> int32_t override;
+  auto AddTimerController(uint32_t entity_id, float interval, bool repeat, int32_t user_arg)
+      -> int32_t override;
+  auto AddProximityController(uint32_t entity_id, float range, int32_t user_arg)
+      -> int32_t override;
+  void CancelController(uint32_t entity_id, int32_t controller_id) override;
+
  protected:
   BaseNativeProvider() = default;
 };

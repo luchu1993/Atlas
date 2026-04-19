@@ -36,6 +36,7 @@ struct ForceLogoff;
 struct ForceLogoffAck;
 struct Authenticate;
 struct ClientBaseRpc;
+struct ClientCellRpc;
 }  // namespace baseapp
 
 namespace login {
@@ -117,6 +118,7 @@ class BaseApp : public EntityApp {
   // ---- External client handler ----------------------------------------
   void OnClientAuthenticate(Channel& ch, const baseapp::Authenticate& msg);
   void OnClientBaseRpc(Channel& ch, const baseapp::ClientBaseRpc& msg);
+  void OnClientCellRpc(Channel& ch, const baseapp::ClientCellRpc& msg);
 
   // ---- Called by BaseAppNativeProvider --------------------------------
   friend class BaseAppNativeProvider;
@@ -150,6 +152,7 @@ class BaseApp : public EntityApp {
   BaseAppNativeProvider* native_provider_{nullptr};  // owned by ScriptApp
   Channel* dbapp_channel_{nullptr};                  // connection to DBApp
   Channel* baseappmgr_channel_{nullptr};             // connection to BaseAppMgr
+  Channel* cellapp_channel_{nullptr};                // Phase 10: CellApp (single-CellApp stage)
   uint32_t app_id_{0};
 
   // Pending login state: maps request_id → reply channel back to LoginApp

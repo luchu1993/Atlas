@@ -35,6 +35,23 @@ TEST(DeltaForwarderTest, InitiallyEmpty) {
   EXPECT_EQ(fwd.GetStats().bytes_sent, 0u);
 }
 
+// Locks the reserved client-facing message IDs used by the three-path
+// CellApp→Client delta contract (see delta_forwarder.h for full contract).
+// 0xF001 is specifically the latest-wins path served by this forwarder;
+// property deltas with event_seq must ride a different reserved id
+// (0xF003), and the baseline snapshot a third (0xF002). Any overlap would
+// let the client mis-dispatch, silently merging semantically different
+// streams.
+TEST(DeltaForwarderTest, ReservedClientMessageIdsAreDistinct) {
+  EXPECT_NE(DeltaForwarder::kClientDeltaMessageId, DeltaForwarder::kClientBaselineMessageId);
+  EXPECT_NE(DeltaForwarder::kClientDeltaMessageId, DeltaForwarder::kClientReliableDeltaMessageId);
+  EXPECT_NE(DeltaForwarder::kClientBaselineMessageId,
+            DeltaForwarder::kClientReliableDeltaMessageId);
+  EXPECT_EQ(DeltaForwarder::kClientDeltaMessageId, static_cast<MessageID>(0xF001));
+  EXPECT_EQ(DeltaForwarder::kClientBaselineMessageId, static_cast<MessageID>(0xF002));
+  EXPECT_EQ(DeltaForwarder::kClientReliableDeltaMessageId, static_cast<MessageID>(0xF003));
+}
+
 TEST(DeltaForwarderTest, EnqueueIncreasesDepth) {
   DeltaForwarder fwd;
   auto d1 = make_delta({1, 2, 3});

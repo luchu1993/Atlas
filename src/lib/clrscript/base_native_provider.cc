@@ -82,4 +82,55 @@ void BaseNativeProvider::SetNativeCallbacks(const void* /*native_callbacks*/, in
   // Default: silently ignore.  Processes without C# scripting never receive callbacks.
 }
 
+// ---------------------------------------------------------------------------
+// CellApp-specific defaults — every non-CellApp process gets these as
+// error-logging no-ops. Game scripts calling atlas_set_position on
+// BaseApp (where no RangeList exists) get a clear log instead of a
+// silent mis-operation.
+// ---------------------------------------------------------------------------
+
+void BaseNativeProvider::SetEntityPosition(uint32_t entity_id, float /*x*/, float /*y*/,
+                                           float /*z*/) {
+  ATLAS_LOG_ERROR("atlas_set_position() not supported on this process type (entity_id={})",
+                  entity_id);
+}
+
+void BaseNativeProvider::PublishReplicationFrame(
+    uint32_t entity_id, uint64_t /*event_seq*/, uint64_t /*volatile_seq*/,
+    const std::byte* /*owner_snap*/, int32_t /*owner_snap_len*/, const std::byte* /*other_snap*/,
+    int32_t /*other_snap_len*/, const std::byte* /*owner_delta*/, int32_t /*owner_delta_len*/,
+    const std::byte* /*other_delta*/, int32_t /*other_delta_len*/) {
+  ATLAS_LOG_ERROR(
+      "atlas_publish_replication_frame() not supported on this process type (entity_id={})",
+      entity_id);
+}
+
+auto BaseNativeProvider::AddMoveController(uint32_t entity_id, float /*dx*/, float /*dy*/,
+                                           float /*dz*/, float /*speed*/, int32_t /*user_arg*/)
+    -> int32_t {
+  ATLAS_LOG_ERROR("atlas_add_move_controller() not supported on this process type (entity_id={})",
+                  entity_id);
+  return 0;
+}
+
+auto BaseNativeProvider::AddTimerController(uint32_t entity_id, float /*interval*/, bool /*repeat*/,
+                                            int32_t /*user_arg*/) -> int32_t {
+  ATLAS_LOG_ERROR("atlas_add_timer_controller() not supported on this process type (entity_id={})",
+                  entity_id);
+  return 0;
+}
+
+auto BaseNativeProvider::AddProximityController(uint32_t entity_id, float /*range*/,
+                                                int32_t /*user_arg*/) -> int32_t {
+  ATLAS_LOG_ERROR(
+      "atlas_add_proximity_controller() not supported on this process type (entity_id={})",
+      entity_id);
+  return 0;
+}
+
+void BaseNativeProvider::CancelController(uint32_t entity_id, int32_t /*controller_id*/) {
+  ATLAS_LOG_ERROR("atlas_cancel_controller() not supported on this process type (entity_id={})",
+                  entity_id);
+}
+
 }  // namespace atlas

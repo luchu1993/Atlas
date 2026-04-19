@@ -32,6 +32,7 @@
   <ItemGroup>
     <AdditionalFiles Include="entity_defs\DirtyTestEntity.def" />
     <AdditionalFiles Include="entity_defs\FactoryTestEntity.def" />
+    <AdditionalFiles Include="entity_defs\ReplicationFrameEntity.def" />
   </ItemGroup>
 
 </Project>

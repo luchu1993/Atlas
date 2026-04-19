@@ -4,6 +4,7 @@
 #include <gtest/gtest.h>
 
 #include "baseapp_messages.h"
+#include "network/message_ids.h"
 #include "serialization/binary_stream.h"
 
 using namespace atlas;
@@ -169,6 +170,64 @@ TEST(BaseAppMessages, DeltaReliabilityDescriptors) {
   EXPECT_FALSE(ReplicatedReliableDeltaFromCell::Descriptor().IsUnreliable());
   EXPECT_NE(ReplicatedDeltaFromCell::Descriptor().id,
             ReplicatedReliableDeltaFromCell::Descriptor().id);
+}
+
+TEST(BaseAppMessages, ClientCellRpc) {
+  ClientCellRpc msg;
+  msg.target_entity_id = 12345;
+  msg.rpc_id = 0x00800042;
+  msg.payload = {std::byte{0x11}, std::byte{0x22}, std::byte{0x33}};
+
+  auto rt = round_trip(msg);
+  ASSERT_TRUE(rt.has_value());
+  EXPECT_EQ(rt->target_entity_id, 12345u);
+  EXPECT_EQ(rt->rpc_id, 0x00800042u);
+  ASSERT_EQ(rt->payload.size(), 3u);
+  EXPECT_EQ(rt->payload[0], std::byte{0x11});
+  EXPECT_EQ(rt->payload[2], std::byte{0x33});
+  EXPECT_EQ(ClientCellRpc::Descriptor().id,
+            static_cast<MessageID>(msg_id::Id(msg_id::BaseApp::kClientCellRpc)));
+}
+
+TEST(BaseAppMessages, ClientCellRpcEmptyPayload) {
+  ClientCellRpc msg;
+  msg.target_entity_id = 1;
+  msg.rpc_id = 0x007FFFFF;
+  // payload intentionally left empty
+
+  auto rt = round_trip(msg);
+  ASSERT_TRUE(rt.has_value());
+  EXPECT_EQ(rt->target_entity_id, 1u);
+  EXPECT_EQ(rt->rpc_id, 0x007FFFFFu);
+  EXPECT_TRUE(rt->payload.empty());
+}
+
+// Locks the three-path CellApp→Client delta contract documented in
+// delta_forwarder.h. Any future change that relaxes one of these invariants
+// (e.g. making ReplicatedReliableDeltaFromCell unreliable, or overlapping
+// msg ids) would silently route ordered property deltas through the
+// latest-wins forwarder and desync clients. This test exists precisely to
+// fail loud in that case.
+TEST(BaseAppMessages, ThreePathDeltaContract) {
+  // Path #1 — Unreliable volatile latest-wins, via DeltaForwarder → 0xF001.
+  EXPECT_TRUE(ReplicatedDeltaFromCell::Descriptor().IsUnreliable())
+      << "Path #1 must be Unreliable; latest-wins is incompatible with Reliable transport.";
+
+  // Path #2 — Reliable property delta, bypasses DeltaForwarder, direct → 0xF003.
+  EXPECT_FALSE(ReplicatedReliableDeltaFromCell::Descriptor().IsUnreliable())
+      << "Path #2 MUST be Reliable; it carries ordered property deltas (event_seq).";
+
+  // Path #3 — Reliable owner RPC, bypasses DeltaForwarder, direct via rpc_id.
+  EXPECT_FALSE(SelfRpcFromCell::Descriptor().IsUnreliable())
+      << "Path #3 MUST be Reliable; RPC calls cannot tolerate drops.";
+
+  // All three paths use distinct internal message IDs (so dispatch is unambiguous).
+  const auto unreliable_id = ReplicatedDeltaFromCell::Descriptor().id;
+  const auto reliable_id = ReplicatedReliableDeltaFromCell::Descriptor().id;
+  const auto self_rpc_id = SelfRpcFromCell::Descriptor().id;
+  EXPECT_NE(unreliable_id, reliable_id);
+  EXPECT_NE(unreliable_id, self_rpc_id);
+  EXPECT_NE(reliable_id, self_rpc_id);
 }
 
 TEST(BaseAppMessages, ReplicatedBaselineToClient) {

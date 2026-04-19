@@ -16,7 +16,15 @@ public ref struct SpanWriter
     private byte[] _buffer;
     private int _position;
 
-    public SpanWriter(int initialCapacity = 256)
+    // C# structs get an implicit parameterless ctor that zero-inits
+    // fields — which would leave `_buffer` null and the first Write call
+    // NREs inside EnsureCapacity. An explicit parameterless ctor that
+    // chains to the sized overload ensures `new SpanWriter()` (the
+    // zero-args form callers reach for) produces a writer with a live
+    // pool-rented buffer.
+    public SpanWriter() : this(256) {}
+
+    public SpanWriter(int initialCapacity)
     {
         _buffer = ArrayPool<byte>.Shared.Rent(initialCapacity);
         _position = 0;
@@ -168,6 +176,19 @@ public ref struct SpanWriter
     public readonly ReadOnlySpan<byte> WrittenSpan => _buffer.AsSpan(0, _position);
     public readonly int Length => _position;
     public readonly int Position => _position;
+
+    /// <summary>
+    /// Rewind position to 0 so the underlying pool-rented buffer can be
+    /// reused for a fresh serialisation. No reallocation; the high-water
+    /// capacity sticks around. Intended for "pool one writer, serialise
+    /// N entities" loops (e.g. CellApp replication pump) where
+    /// per-entity <c>new SpanWriter()</c> would add ArrayPool.Rent
+    /// traffic to the hot path.
+    /// </summary>
+    public void Reset()
+    {
+        _position = 0;
+    }
 
     public void Dispose()
     {
