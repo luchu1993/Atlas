@@ -10,6 +10,8 @@ add_library(atlas_cellapp_lib STATIC
   cell_entity.cc
   cellapp.cc
   cellapp_native_provider.cc
+  ghost_maintainer.cc
+  offload_checker.cc
   real_entity_data.cc
   space.cc
   witness.cc
@@ -30,6 +32,7 @@ target_link_libraries(atlas_cellapp_lib PUBLIC
   atlas_clrscript
   atlas_baseapp_lib
   atlas_cellappmgr_messages
+  atlas_cellappmgr_bsp
 )
 
 # The CellApp executable.

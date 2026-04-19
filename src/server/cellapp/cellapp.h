@@ -4,6 +4,7 @@
 #include <memory>
 #include <unordered_map>
 
+#include "cellappmgr/cellappmgr_messages.h"  // cellappmgr::CellID
 #include "network/address.h"
 #include "server/entity_app.h"
 #include "server/entity_types.h"
@@ -13,6 +14,7 @@ namespace atlas {
 class Space;
 class CellEntity;
 class CellAppNativeProvider;
+class Channel;
 
 namespace cellapp {
 struct CreateCellEntity;
@@ -24,7 +26,20 @@ struct DestroySpace;
 struct AvatarUpdate;
 struct EnableWitness;
 struct DisableWitness;
+struct CreateGhost;
+struct DeleteGhost;
+struct GhostPositionUpdate;
+struct GhostDelta;
+struct GhostSnapshotRefresh;
+struct GhostSetReal;
+struct GhostSetNextReal;
+struct OffloadEntity;
+struct OffloadEntityAck;
 }  // namespace cellapp
+
+// cellappmgr struct types are fully declared via cellappmgr_messages.h
+// above — kept included rather than forward-declared so CellID and
+// message-struct fields are visible in inline helpers on this header.
 
 // ============================================================================
 // CellApp — spatial-simulation server process
@@ -83,6 +98,50 @@ class CellApp : public EntityApp {
   void OnEnableWitness(const Address& src, Channel* ch, const cellapp::EnableWitness& msg);
   void OnDisableWitness(const Address& src, Channel* ch, const cellapp::DisableWitness& msg);
 
+  // ---- Phase 11 inter-CellApp handlers ----
+  void OnCreateGhost(const Address& src, Channel* ch, const cellapp::CreateGhost& msg);
+  void OnDeleteGhost(const Address& src, Channel* ch, const cellapp::DeleteGhost& msg);
+  void OnGhostPositionUpdate(const Address& src, Channel* ch,
+                             const cellapp::GhostPositionUpdate& msg);
+  void OnGhostDelta(const Address& src, Channel* ch, const cellapp::GhostDelta& msg);
+  void OnGhostSnapshotRefresh(const Address& src, Channel* ch,
+                              const cellapp::GhostSnapshotRefresh& msg);
+  void OnGhostSetReal(const Address& src, Channel* ch, const cellapp::GhostSetReal& msg);
+  void OnGhostSetNextReal(const Address& src, Channel* ch, const cellapp::GhostSetNextReal& msg);
+  void OnOffloadEntity(const Address& src, Channel* ch, const cellapp::OffloadEntity& msg);
+  void OnOffloadEntityAck(const Address& src, Channel* ch, const cellapp::OffloadEntityAck& msg);
+
+  // ---- Phase 11 CellAppMgr → CellApp handlers ----
+  void OnAddCellToSpace(const Address& src, Channel* ch, const cellappmgr::AddCellToSpace& msg);
+  void OnUpdateGeometry(const Address& src, Channel* ch, const cellappmgr::UpdateGeometry& msg);
+  void OnShouldOffload(const Address& src, Channel* ch, const cellappmgr::ShouldOffload& msg);
+
+  // ---- Peer CellApp routing (exposed for tests) --------------------------
+  //
+  // Lookup Channel* for a peer CellApp by address. Populated via the
+  // machined ProcessType::kCellApp Birth/Death subscription in Init.
+  // Returns nullptr if the peer isn't known (either not yet connected or
+  // already died).
+  [[nodiscard]] auto FindPeerChannel(const Address& addr) const -> Channel*;
+
+  // Insert a peer Channel* directly. Production uses are Init's machined
+  // subscription; tests use it to wire fake channels for Offload flow
+  // coverage without running machined.
+  void SetPeerChannel(const Address& addr, Channel* ch);
+
+  // ---- Offload orchestration (exposed for tests) --------------------------
+
+  // Build an OffloadEntity message for `entity`. Does NOT send; caller
+  // decides transport. `persistent_blob` is left empty here — PR-6
+  // wires the C# SerializeEntity callback that fills it in.
+  auto BuildOffloadMessage(const CellEntity& entity, cellappmgr::CellID target_cell_id) const
+      -> cellapp::OffloadEntity;
+
+  // Ghost-pump + offload-checker pass, called from OnEndOfTick. Exposed
+  // so unit tests can step the tick pipeline deterministically.
+  void TickGhostPump();
+  void TickOffloadChecker();
+
  protected:
   [[nodiscard]] auto Init(int argc, char* argv[]) -> bool override;
   void Fini() override;
@@ -102,15 +161,22 @@ class CellApp : public EntityApp {
   std::unordered_map<SpaceID, std::unique_ptr<Space>> spaces_;
 
   // cell_entity_id → CellEntity*. Non-owning — the owning unique_ptr lives
-  // in the peer Space's entities_ map.
+  // in the peer Space's entities_ map. Holds BOTH Real and Ghost entities
+  // (PR-4: §9.6 Q8 — EntityIDs are cluster-wide so no collision risk).
   std::unordered_map<EntityID, CellEntity*> entity_population_;
 
   // base_entity_id → CellEntity*. Required for RPC routing because
   // clients and BaseApp both identify entities by their base_entity_id,
-  // which is stable across CellApp offloads (Phase 11).
+  // which is stable across CellApp offloads (Phase 11). Only Real
+  // entities appear here — client RPCs never dispatch to a Ghost.
   std::unordered_map<EntityID, CellEntity*> base_entity_population_;
 
   EntityID next_entity_id_{1};
+
+  // Peer CellApp channels keyed by each peer's internal RUDP address.
+  // Populated by the machined Birth subscription in Init; cleared by
+  // the matching Death callback.
+  std::unordered_map<Address, Channel*> peer_cellapp_channels_;
 
   // Safety ceiling on per-tick AvatarUpdate displacement. phase10_cellapp.md
   // §3.12 Phase 10 strategy: reject beyond 50 m/tick (roughly 500 m/s at

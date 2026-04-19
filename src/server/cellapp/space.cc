@@ -1,15 +1,43 @@
 #include "space.h"
 
+#include <utility>
+
+#include "cell.h"
 #include "cell_entity.h"
 
 namespace atlas {
 
 Space::Space(SpaceID id) : id_(id) {}
 
-// Out-of-line destructor: CellEntity is incomplete in space.h (forward
-// declared to break the include cycle), so the unique_ptr deleter can't
-// be instantiated inline there.
+// Out-of-line destructor: CellEntity (and Cell) are incomplete in
+// space.h (forward declared to break the include cycle), so the
+// unique_ptr deleter can't be instantiated inline there.
 Space::~Space() = default;
+
+auto Space::AddLocalCell(std::unique_ptr<Cell> cell) -> Cell* {
+  auto* raw = cell.get();
+  const auto id = cell->Id();
+  local_cells_[id] = std::move(cell);
+  return raw;
+}
+
+auto Space::RemoveLocalCell(cellappmgr::CellID id) -> bool {
+  return local_cells_.erase(id) > 0;
+}
+
+auto Space::FindLocalCell(cellappmgr::CellID id) -> Cell* {
+  auto it = local_cells_.find(id);
+  return it == local_cells_.end() ? nullptr : it->second.get();
+}
+
+auto Space::FindLocalCell(cellappmgr::CellID id) const -> const Cell* {
+  auto it = local_cells_.find(id);
+  return it == local_cells_.end() ? nullptr : it->second.get();
+}
+
+void Space::SetBspTree(BSPTree tree) {
+  bsp_tree_ = std::move(tree);
+}
 
 auto Space::AddEntity(std::unique_ptr<CellEntity> entity) -> CellEntity* {
   auto* raw = entity.get();

@@ -238,6 +238,16 @@ atlas_add_test(NAME test_cell
   DEPS atlas_cellapp_lib atlas_space
 )
 
+atlas_add_test(NAME test_ghost_maintainer
+  SOURCES test_ghost_maintainer.cpp
+  DEPS atlas_cellapp_lib atlas_cellappmgr_bsp atlas_space atlas_network
+)
+
+atlas_add_test(NAME test_offload_checker
+  SOURCES test_offload_checker.cpp
+  DEPS atlas_cellapp_lib atlas_cellappmgr_bsp atlas_space
+)
+
 atlas_add_test(NAME test_witness_lifecycle
   SOURCES test_witness_lifecycle.cpp
   DEPS atlas_cellapp_lib atlas_space
