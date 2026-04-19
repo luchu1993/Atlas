@@ -203,6 +203,16 @@ atlas_add_test(NAME test_cellapp_messages
   DEPS atlas_cellapp_lib atlas_serialization
 )
 
+atlas_add_test(NAME test_intercell_messages
+  SOURCES test_intercell_messages.cpp
+  DEPS atlas_cellapp_lib atlas_serialization
+)
+
+atlas_add_test(NAME test_cellappmgr_messages
+  SOURCES test_cellappmgr_messages.cpp
+  DEPS atlas_cellappmgr_messages atlas_cellapp_lib atlas_serialization
+)
+
 atlas_add_test(NAME test_space
   SOURCES test_space.cpp
   DEPS atlas_cellapp_lib atlas_space

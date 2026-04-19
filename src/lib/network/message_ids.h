@@ -33,7 +33,7 @@
 //   4000  –  4999   DBApp       (DBApp)
 //   5000  –  5999   LoginApp    (Login)
 //   6000  –  6999   BaseAppMgr  (BaseAppMgr)
-//   7000  –  7999   CellAppMgr  (CellAppMgr) — reserved
+//   7000  –  7999   CellAppMgr  (CellAppMgr)
 //   8000  –  8999   DBAppMgr    (DBAppMgr)   — reserved
 //   10000 – 19999   external client ↔ server — reserved
 //   50000 – 59999   C# RPC forwarding        — reserved
@@ -123,6 +123,36 @@ enum class CellApp : uint16_t {
   kAvatarUpdate = 3020,
   kEnableWitness = 3021,
   kDisableWitness = 3022,
+  // ── Phase 11: inter-CellApp Real/Ghost + Offload (3100–3199) ───────────
+  // Real ↔ Ghost replication (Real CellApp → Ghost CellApp).
+  kCreateGhost = 3100,
+  kDeleteGhost = 3101,
+  kGhostPositionUpdate = 3102,
+  kGhostDelta = 3103,
+  kGhostSetReal = 3104,
+  kGhostSetNextReal = 3105,
+  kGhostSnapshotRefresh = 3106,
+  // Entity migration between CellApps.
+  kOffloadEntity = 3110,
+  kOffloadEntityAck = 3111,
+};
+
+// ── CellAppMgr (7000–7099) ────────────────────────────────────────────────────
+//
+// Phase 11. Spans both CellApp↔CellAppMgr registration/load and
+// CellAppMgr→CellApp control plane (AddCell/UpdateGeometry/ShouldOffload).
+// Convention: same subsystem owns the enum regardless of direction (mirrors
+// BaseAppMgr, where RegisterBaseAppAck lives in BaseAppMgr enum despite
+// BaseAppMgr → BaseApp direction).
+
+enum class CellAppMgr : uint16_t {
+  kRegisterCellApp = 7000,     // CellApp → CellAppMgr
+  kRegisterCellAppAck = 7001,  // CellAppMgr → CellApp
+  kInformCellLoad = 7002,      // CellApp → CellAppMgr
+  kCreateSpaceRequest = 7003,  // BaseApp/script → CellAppMgr
+  kAddCellToSpace = 7004,      // CellAppMgr → CellApp
+  kUpdateGeometry = 7005,      // CellAppMgr → CellApp
+  kShouldOffload = 7006,       // CellAppMgr → CellApp
 };
 
 // ── DBApp (4000–4999) ─────────────────────────────────────────────────────────
@@ -227,6 +257,24 @@ ATLAS_ASSERT_ID_RANGE(CellApp::kDestroySpace, 3000, 3999);
 ATLAS_ASSERT_ID_RANGE(CellApp::kAvatarUpdate, 3000, 3999);
 ATLAS_ASSERT_ID_RANGE(CellApp::kEnableWitness, 3000, 3999);
 ATLAS_ASSERT_ID_RANGE(CellApp::kDisableWitness, 3000, 3999);
+ATLAS_ASSERT_ID_RANGE(CellApp::kCreateGhost, 3000, 3999);
+ATLAS_ASSERT_ID_RANGE(CellApp::kDeleteGhost, 3000, 3999);
+ATLAS_ASSERT_ID_RANGE(CellApp::kGhostPositionUpdate, 3000, 3999);
+ATLAS_ASSERT_ID_RANGE(CellApp::kGhostDelta, 3000, 3999);
+ATLAS_ASSERT_ID_RANGE(CellApp::kGhostSetReal, 3000, 3999);
+ATLAS_ASSERT_ID_RANGE(CellApp::kGhostSetNextReal, 3000, 3999);
+ATLAS_ASSERT_ID_RANGE(CellApp::kGhostSnapshotRefresh, 3000, 3999);
+ATLAS_ASSERT_ID_RANGE(CellApp::kOffloadEntity, 3000, 3999);
+ATLAS_ASSERT_ID_RANGE(CellApp::kOffloadEntityAck, 3000, 3999);
+
+// CellAppMgr
+ATLAS_ASSERT_ID_RANGE(CellAppMgr::kRegisterCellApp, 7000, 7099);
+ATLAS_ASSERT_ID_RANGE(CellAppMgr::kRegisterCellAppAck, 7000, 7099);
+ATLAS_ASSERT_ID_RANGE(CellAppMgr::kInformCellLoad, 7000, 7099);
+ATLAS_ASSERT_ID_RANGE(CellAppMgr::kCreateSpaceRequest, 7000, 7099);
+ATLAS_ASSERT_ID_RANGE(CellAppMgr::kAddCellToSpace, 7000, 7099);
+ATLAS_ASSERT_ID_RANGE(CellAppMgr::kUpdateGeometry, 7000, 7099);
+ATLAS_ASSERT_ID_RANGE(CellAppMgr::kShouldOffload, 7000, 7099);
 
 // DBApp
 ATLAS_ASSERT_ID_RANGE(DBApp::kWriteEntity, 4000, 4999);
