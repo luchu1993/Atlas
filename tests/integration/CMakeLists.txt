@@ -56,3 +56,9 @@ atlas_add_test(NAME test_cellappmgr_integration
        atlas_server atlas_network
   LABEL integration
 )
+
+atlas_add_test(NAME test_cellappmgr_process
+  SOURCES test_cellappmgr_process.cpp
+  DEPS atlas_cellappmgr_messages atlas_server atlas_network atlas_platform
+  LABEL integration
+)
