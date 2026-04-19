@@ -204,12 +204,13 @@ struct CurrentCell {
   EntityID base_entity_id{kInvalidEntityID};
   EntityID cell_entity_id{kInvalidEntityID};
   Address cell_addr;
+  uint32_t epoch{0};  // Monotonic; BaseApp rejects stale updates (epoch < stored).
 
   static auto Descriptor() -> const MessageDesc& {
     static const MessageDesc kDesc{
         msg_id::Id(msg_id::BaseApp::kCurrentCell), "baseapp::CurrentCell",
         MessageLengthStyle::kFixed,
-        static_cast<int>(sizeof(uint32_t) * 2 + sizeof(uint32_t) + sizeof(uint16_t))};
+        static_cast<int>(sizeof(uint32_t) * 3 + sizeof(uint32_t) + sizeof(uint16_t))};
     return kDesc;
   }
 
@@ -218,6 +219,7 @@ struct CurrentCell {
     w.Write(cell_entity_id);
     w.Write(cell_addr.Ip());
     w.Write(cell_addr.Port());
+    w.Write(epoch);
   }
 
   static auto Deserialize(BinaryReader& r) -> Result<CurrentCell> {
@@ -225,12 +227,14 @@ struct CurrentCell {
     auto ceid = r.Read<uint32_t>();
     auto ip = r.Read<uint32_t>();
     auto port = r.Read<uint16_t>();
-    if (!beid || !ceid || !ip || !port)
+    auto ep = r.Read<uint32_t>();
+    if (!beid || !ceid || !ip || !port || !ep)
       return Error{ErrorCode::kInvalidArgument, "CurrentCell: truncated"};
     CurrentCell msg;
     msg.base_entity_id = *beid;
     msg.cell_entity_id = *ceid;
     msg.cell_addr = Address(*ip, *port);
+    msg.epoch = *ep;
     return msg;
   }
 };

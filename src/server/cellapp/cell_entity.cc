@@ -151,7 +151,12 @@ void CellEntity::GhostApplyDelta(uint64_t event_seq, std::span<const std::byte> 
   }
   if (!replication_state_.has_value()) replication_state_.emplace();
   auto& state = *replication_state_;
-  if (event_seq <= state.latest_event_seq) return;
+  if (event_seq <= state.latest_event_seq) {
+    ATLAS_LOG_DEBUG(
+        "CellEntity::GhostApplyDelta: stale event_seq={} (latest={}) on entity id={} — dropped",
+        event_seq, state.latest_event_seq, id_);
+    return;
+  }
   state.latest_event_seq = event_seq;
   // Parking the delta into history lets downstream Witnesses on this
   // CellApp catch up through the Phase 10 replay path — same code,

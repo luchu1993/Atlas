@@ -596,6 +596,11 @@ void CellApp::OnCreateGhost(const Address& /*src*/, Channel* ch, const cellapp::
                       msg.real_entity_id);
     return;
   }
+  if (ch == nullptr) {
+    ATLAS_LOG_WARNING("CellApp: CreateGhost for entity_id={} with null channel — ignoring",
+                      msg.real_entity_id);
+    return;
+  }
   // Resolve a Channel* to the Real CellApp. CreateGhost arrives on the
   // peer's connection (`ch`) so we can just latch that.
   auto* entity_ptr_raw = space->AddEntity(
@@ -641,6 +646,13 @@ void CellApp::OnGhostPositionUpdate(const Address& /*src*/, Channel* /*ch*/,
                                     const cellapp::GhostPositionUpdate& msg) {
   auto it = entity_population_.find(msg.ghost_entity_id);
   if (it == entity_population_.end()) return;  // Ghost not here; drop.
+  if (!std::isfinite(msg.position.x) || !std::isfinite(msg.position.y) ||
+      !std::isfinite(msg.position.z) || !std::isfinite(msg.direction.x) ||
+      !std::isfinite(msg.direction.y) || !std::isfinite(msg.direction.z)) {
+    ATLAS_LOG_WARNING("CellApp: GhostPositionUpdate with NaN/Inf for entity_id={} — dropped",
+                      msg.ghost_entity_id);
+    return;
+  }
   it->second->GhostUpdatePosition(msg.position, msg.direction, msg.on_ground, msg.volatile_seq);
 }
 
@@ -788,13 +800,14 @@ void CellApp::OnOffloadEntity(const Address& src, Channel* ch, const cellapp::Of
     }
   }
 
-  // Notify BaseApp that the Cell for this entity has moved. PR-6
-  // completes the BaseApp-side multi-CellApp routing table; until then
-  // this message still needs sending for single-CellApp compatibility.
+  // Notify BaseApp that the Cell for this entity has moved. The epoch
+  // lets BaseApp reject stale CurrentCell messages that arrive out of
+  // order (e.g. from an old CellApp path during rapid re-offload).
   baseapp::CurrentCell cc;
   cc.base_entity_id = msg.base_entity_id;
   cc.cell_entity_id = entity->Id();
   cc.cell_addr = Network().RudpAddress();
+  cc.epoch = next_offload_epoch_++;
   auto base_ch = Network().ConnectRudpNocwnd(msg.base_addr);
   if (base_ch) (void)(*base_ch)->SendMessage(cc);
 

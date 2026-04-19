@@ -120,7 +120,7 @@ void BSPInternal::Balance(float safety_bound) {
       // they happened to be and starve Balance on the next pass.
       const float lo = (axis_ == BSPAxis::kX) ? sub_bounds_.min_x : sub_bounds_.min_z;
       const float hi = (axis_ == BSPAxis::kX) ? sub_bounds_.max_x : sub_bounds_.max_z;
-      if (std::isfinite(lo) && std::isfinite(hi)) {
+      if (std::isfinite(lo) && std::isfinite(hi) && lo < hi) {
         // Leave a 1% slack at each end to ensure strictly-inside clamp.
         const float span = hi - lo;
         const float pad = span * 0.01f;

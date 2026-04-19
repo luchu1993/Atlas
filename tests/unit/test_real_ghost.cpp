@@ -435,5 +435,47 @@ TEST(RealEntityData, MarkBroadcastSeqs_AreReadBack) {
   EXPECT_EQ(rd->LastBroadcastVolatileSeq(), 22u);
 }
 
+// ============================================================================
+// GhostApplyDelta — stale / duplicate sequence rejection
+// ============================================================================
+
+TEST(RealGhost, GhostApplyDelta_StaleSeqDropped) {
+  Space space(1);
+  auto* e = space.AddEntity(
+      std::make_unique<CellEntity>(CellEntity::GhostTag{}, 100, 1, space, math::Vector3{0, 0, 0},
+                                   math::Vector3{1, 0, 0}, FakeChannel(0xAA)));
+  auto d = MakeBlob({0xAB});
+  // Apply at seq=5.
+  e->GhostApplyDelta(5, std::span<const std::byte>(d));
+  ASSERT_NE(e->GetReplicationState(), nullptr);
+  EXPECT_EQ(e->GetReplicationState()->latest_event_seq, 5u);
+  EXPECT_EQ(e->GetReplicationState()->history.size(), 1u);
+
+  // Apply at seq=3 (stale) — must be dropped.
+  auto stale = MakeBlob({0xCD});
+  e->GhostApplyDelta(3, std::span<const std::byte>(stale));
+  EXPECT_EQ(e->GetReplicationState()->latest_event_seq, 5u);
+  EXPECT_EQ(e->GetReplicationState()->history.size(), 1u);
+}
+
+TEST(RealGhost, GhostApplyDelta_OutOfOrderDropped) {
+  Space space(1);
+  auto* e = space.AddEntity(
+      std::make_unique<CellEntity>(CellEntity::GhostTag{}, 101, 1, space, math::Vector3{0, 0, 0},
+                                   math::Vector3{1, 0, 0}, FakeChannel(0xAA)));
+  auto d = MakeBlob({0xEF});
+  // Apply at seq=5.
+  e->GhostApplyDelta(5, std::span<const std::byte>(d));
+  ASSERT_NE(e->GetReplicationState(), nullptr);
+  EXPECT_EQ(e->GetReplicationState()->latest_event_seq, 5u);
+  EXPECT_EQ(e->GetReplicationState()->history.size(), 1u);
+
+  // Apply at seq=5 again (duplicate) — must be dropped.
+  auto dup = MakeBlob({0x11});
+  e->GhostApplyDelta(5, std::span<const std::byte>(dup));
+  EXPECT_EQ(e->GetReplicationState()->latest_event_seq, 5u);
+  EXPECT_EQ(e->GetReplicationState()->history.size(), 1u);
+}
+
 }  // namespace
 }  // namespace atlas

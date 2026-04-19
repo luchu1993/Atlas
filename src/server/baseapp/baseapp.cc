@@ -166,6 +166,11 @@ auto BaseApp::Init(int argc, char* argv[]) -> bool {
       [this](const machined::DeathNotification& /*n*/) {
         ATLAS_LOG_WARNING("BaseApp: CellAppMgr died, clearing channel");
         cellappmgr_channel_ = nullptr;
+        // Fail all pending space-create callbacks so callers don't hang.
+        for (auto& [rid, cb] : pending_space_creates_) {
+          if (cb) cb(/*success=*/false, /*space_id=*/0, Address{});
+        }
+        pending_space_creates_.clear();
       });
 
   // ---- Subscribe to BaseAppMgr and register ourselves ----------------
@@ -655,7 +660,7 @@ void BaseApp::OnCellEntityDestroyed(Channel& /*ch*/, const baseapp::CellEntityDe
 void BaseApp::OnCurrentCell(Channel& /*ch*/, const baseapp::CurrentCell& msg) {
   auto* ent = entity_mgr_.Find(msg.base_entity_id);
   if (!ent) return;
-  ent->SetCell(msg.cell_entity_id, msg.cell_addr);
+  ent->SetCell(msg.cell_entity_id, msg.cell_addr, msg.epoch);
 }
 
 void BaseApp::OnCellRpcForward(Channel& /*ch*/, const baseapp::CellRpcForward& msg) {

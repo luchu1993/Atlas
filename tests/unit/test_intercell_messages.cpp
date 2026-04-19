@@ -269,6 +269,91 @@ TEST(IntercellMessages, OffloadEntityAck_RoundTripFailure) {
 // If anyone renumbers these in message_ids.h the wire protocol breaks for
 // every running CellApp; assert the allocation explicitly.
 
+// ─── Truncated / malformed deserialization ───────────────────────────────────
+
+TEST(IntercellMessages, CreateGhost_Truncated_ReturnsNullopt) {
+  CreateGhost msg;
+  msg.real_entity_id = 42;
+  msg.type_id = 7;
+  msg.space_id = 3;
+  msg.position = {1.f, 2.f, 3.f};
+  msg.direction = {0.f, 1.f, 0.f};
+  msg.on_ground = true;
+  msg.real_cellapp_addr = Address(0x7F000001u, 30001);
+  msg.base_addr = Address(0x0A000002u, 20002);
+  msg.base_entity_id = 0x00ABCDEF;
+  msg.event_seq = 100;
+  msg.volatile_seq = 200;
+  msg.other_snapshot = MakeBlob({0xDE, 0xAD, 0xBE, 0xEF});
+
+  BinaryWriter w;
+  msg.Serialize(w);
+  auto full = w.Detach();
+
+  // Truncate: only first 4 bytes — mid-message.
+  auto partial = std::vector<std::byte>(full.begin(), full.begin() + 4);
+  BinaryReader r(partial);
+  auto result = CreateGhost::Deserialize(r);
+  EXPECT_FALSE(result.HasValue());
+}
+
+TEST(IntercellMessages, OffloadEntity_Truncated_ReturnsNullopt) {
+  OffloadEntity msg;
+  msg.real_entity_id = 0xCAFEBABE;
+  msg.type_id = 12;
+  msg.space_id = 77;
+  msg.position = {-5.f, 0.f, 7.f};
+  msg.direction = {1.f, 0.f, 0.f};
+  msg.on_ground = true;
+  msg.base_addr = Address(0x7F000001u, 20000);
+  msg.base_entity_id = 0x11223344;
+  msg.persistent_blob = MakeBlob({0x01, 0x02, 0x03, 0x04});
+  msg.owner_snapshot = MakeBlob({0xA0, 0xA1});
+  msg.other_snapshot = MakeBlob({0xB0, 0xB1, 0xB2});
+  msg.latest_event_seq = 1234;
+  msg.latest_volatile_seq = 5678;
+  msg.controller_data = MakeBlob({0xC0});
+  msg.existing_haunts = {Address(0x7F000003u, 30003)};
+
+  BinaryWriter w;
+  msg.Serialize(w);
+  auto full = w.Detach();
+
+  // Truncate: only first 4 bytes — mid-message.
+  auto partial = std::vector<std::byte>(full.begin(), full.begin() + 4);
+  BinaryReader r(partial);
+  auto result = OffloadEntity::Deserialize(r);
+  EXPECT_FALSE(result.HasValue());
+}
+
+TEST(IntercellMessages, GhostDelta_EmptyReader_ReturnsNullopt) {
+  std::vector<std::byte> empty;
+  BinaryReader r(empty);
+  auto result = GhostDelta::Deserialize(r);
+  EXPECT_FALSE(result.HasValue());
+}
+
+TEST(IntercellMessages, OffloadEntityAck_Truncated_ReturnsNullopt) {
+  OffloadEntityAck msg;
+  msg.real_entity_id = 100;
+  msg.success = true;
+
+  BinaryWriter w;
+  msg.Serialize(w);
+  auto full = w.Detach();
+
+  // Truncate: only first 2 bytes — not enough for entity_id + success.
+  auto partial = std::vector<std::byte>(full.begin(), full.begin() + 2);
+  BinaryReader r(partial);
+  auto result = OffloadEntityAck::Deserialize(r);
+  EXPECT_FALSE(result.HasValue());
+}
+
+// ─── Message ID stability ────────────────────────────────────────────────────
+//
+// If anyone renumbers these in message_ids.h the wire protocol breaks for
+// every running CellApp; assert the allocation explicitly.
+
 TEST(IntercellMessages, MessageIdsAreStable) {
   EXPECT_EQ(msg_id::Id(msg_id::CellApp::kCreateGhost), 3100u);
   EXPECT_EQ(msg_id::Id(msg_id::CellApp::kDeleteGhost), 3101u);

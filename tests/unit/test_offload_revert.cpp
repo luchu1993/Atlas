@@ -162,5 +162,81 @@ TEST(OffloadRevert, RevertSkipsWhenEntityAlreadyReal) {
   EXPECT_EQ(h.app.PendingOffloadsForTest().size(), 0u);  // entry consumed regardless
 }
 
+// ============================================================================
+// Revert on a destroyed entity (removed from space AND population) is
+// idempotent — no crash.
+// ============================================================================
+
+TEST(OffloadRevert, RevertOnDestroyedEntity) {
+  Harness h;
+  auto* peer_channel = FakeChannel(0xBEEF);
+  auto* entity = SeedEntityWithState(h, /*id=*/200, peer_channel);
+
+  // Capture snapshot while entity is still alive.
+  CellApp::PendingOffload po;
+  const Address target(0x7F000001u, 30002);
+  const Address fake_haunt_addr(0x7F000001u, 30003);
+  CaptureSnapshot(po, *entity, /*sid=*/42, /*cid=*/7, target,
+                  /*haunt_addrs=*/{fake_haunt_addr});
+
+  // Convert Real → Ghost so the entity is in the state it'd be during
+  // a pending Offload.
+  entity->ConvertRealToGhost(peer_channel);
+  entity->GetSpace().FindLocalCell(7)->RemoveRealEntity(entity);
+
+  // Now destroy the entity: remove from Space AND population.
+  const EntityID eid = entity->Id();
+  h.app.EntityPopulationForTest().erase(eid);
+  entity->GetSpace().RemoveEntity(eid);
+  // `entity` pointer is now dangling — do not dereference.
+
+  // Seed the pending offload and attempt revert. Must not crash even
+  // though the entity no longer exists.
+  h.app.PendingOffloadsForTest()[eid] = std::move(po);
+  h.app.RevertPendingOffload(eid, "destroyed-entity");
+
+  // The pending entry should be consumed regardless.
+  EXPECT_EQ(h.app.PendingOffloadsForTest().size(), 0u);
+}
+
+// ============================================================================
+// Revert with a malformed (truncated) controller blob — entity becomes Real
+// again, controllers may be partially restored, no crash.
+// ============================================================================
+
+TEST(OffloadRevert, RevertWithMalformedControllerBlob) {
+  Harness h;
+  auto* peer_channel = FakeChannel(0xBEEF);
+  auto* entity = SeedEntityWithState(h, /*id=*/300, peer_channel);
+
+  // Capture a valid snapshot first.
+  CellApp::PendingOffload po;
+  const Address target(0x7F000001u, 30002);
+  CaptureSnapshot(po, *entity, /*sid=*/42, /*cid=*/7, target,
+                  /*haunt_addrs=*/{});
+
+  // Truncate the controller blob to only 2 bytes — this is malformed.
+  ASSERT_GT(po.controller_blob.size(), 2u);
+  po.controller_blob.resize(2);
+
+  // Convert Real → Ghost and remove from Cell.
+  entity->ConvertRealToGhost(peer_channel);
+  ASSERT_TRUE(entity->IsGhost());
+  entity->GetSpace().FindLocalCell(7)->RemoveRealEntity(entity);
+
+  // Store the pending offload and revert.
+  h.app.PendingOffloadsForTest()[entity->Id()] = std::move(po);
+  h.app.RevertPendingOffload(entity->Id(), "malformed-blob");
+
+  // Entity must be Real again — no crash.
+  EXPECT_TRUE(entity->IsReal());
+  EXPECT_EQ(h.app.PendingOffloadsForTest().size(), 0u);
+  // Cell membership should be restored.
+  EXPECT_TRUE(entity->GetSpace().FindLocalCell(7)->HasRealEntity(entity));
+  // Controllers may be partially restored or empty — 0 is acceptable
+  // when the blob is too truncated to decode any controller.
+  EXPECT_LE(entity->GetControllers().Count(), 1u);
+}
+
 }  // namespace
 }  // namespace atlas

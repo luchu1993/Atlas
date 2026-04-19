@@ -59,11 +59,6 @@ auto GhostMaintainer::Run(Space& space, TimePoint now) -> PendingWork {
     // invites flapping when an entity bounces across a border, so we
     // hold the Ghost even after it leaves our interest zone briefly.
     for (const auto& h : real_data->Haunts()) {
-      const bool resolver_channel_matches =
-          resolver_ ? (resolver_(/*addr=*/{}) == nullptr)  // harmless probe
-                    : false;
-      (void)resolver_channel_matches;
-
       // We don't have a direct reverse mapping from channel → address
       // in GhostMaintainer; instead, walk peer_cells comparing
       // `resolver_(addr) == h.channel` to decide if the Haunt's peer is

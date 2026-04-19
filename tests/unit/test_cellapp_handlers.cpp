@@ -13,6 +13,7 @@
 //
 // Those end-to-end paths land in test_cellapp_integration (Step 10.10).
 
+#include <cmath>
 #include <memory>
 
 #include <gtest/gtest.h>
@@ -21,7 +22,9 @@
 #include "cellapp.h"
 #include "cellapp_messages.h"
 #include "entitydef/entity_def_registry.h"
+#include "intercell_messages.h"
 #include "math/vector3.h"
+#include "network/channel.h"
 #include "network/event_dispatcher.h"
 #include "network/network_interface.h"
 #include "space.h"
@@ -310,6 +313,84 @@ TEST_F(CellAppHandlersTest, InternalCellRpcBypassesExposedCheck) {
   app_.OnInternalCellRpc({}, nullptr, msg);
   // No way to assert success without a dispatched C# callback; the
   // test passes if the handler does not crash.
+}
+
+// ---------------------------------------------------------------------------
+// Phase 11 inter-CellApp handler coverage
+// ---------------------------------------------------------------------------
+
+namespace {
+
+auto FakeChannel(uintptr_t tag) -> Channel* {
+  return reinterpret_cast<Channel*>(tag);
+}
+
+}  // namespace
+
+TEST_F(CellAppHandlersTest, CreateGhostWithNullChannelRejected) {
+  // Pre-create the space so the handler doesn't bail for a missing space.
+  cellapp::CreateSpace cs;
+  cs.space_id = 1;
+  app_.OnCreateSpace({}, nullptr, cs);
+
+  cellapp::CreateGhost msg;
+  msg.real_entity_id = 500;
+  msg.type_id = 1;
+  msg.space_id = 1;
+  msg.position = {0, 0, 0};
+  msg.direction = {1, 0, 0};
+  msg.on_ground = false;
+  msg.real_cellapp_addr = Address(0x7F000001u, 30001);
+  msg.base_addr = Address(0x7F000001u, 20000);
+  msg.base_entity_id = 500;
+  msg.event_seq = 0;
+  msg.volatile_seq = 0;
+
+  app_.OnCreateGhost({}, /*ch=*/nullptr, msg);
+
+  // Null channel must cause the handler to bail out — no ghost created.
+  EXPECT_EQ(app_.FindEntity(500), nullptr);
+}
+
+TEST_F(CellAppHandlersTest, GhostPositionUpdateRejectsNaN) {
+  // Create a space for the ghost to live in.
+  cellapp::CreateSpace cs;
+  cs.space_id = 1;
+  app_.OnCreateSpace({}, nullptr, cs);
+
+  // Create a ghost via the handler with a non-null fake channel.
+  cellapp::CreateGhost cg;
+  cg.real_entity_id = 600;
+  cg.type_id = 1;
+  cg.space_id = 1;
+  cg.position = {10, 0, 20};
+  cg.direction = {1, 0, 0};
+  cg.on_ground = false;
+  cg.real_cellapp_addr = Address(0x7F000001u, 30001);
+  cg.base_addr = Address(0x7F000001u, 20000);
+  cg.base_entity_id = 600;
+  cg.event_seq = 0;
+  cg.volatile_seq = 0;
+
+  app_.OnCreateGhost({}, FakeChannel(0xBEEF), cg);
+
+  auto* ghost = app_.FindEntity(600);
+  ASSERT_NE(ghost, nullptr);
+  EXPECT_FLOAT_EQ(ghost->Position().x, 10.f);
+  EXPECT_FLOAT_EQ(ghost->Position().z, 20.f);
+
+  // Send a position update containing NaN — must be rejected.
+  cellapp::GhostPositionUpdate upd;
+  upd.ghost_entity_id = 600;
+  upd.position = {std::nanf(""), 0, 0};
+  upd.direction = {1, 0, 0};
+  upd.on_ground = true;
+  upd.volatile_seq = 1;
+  app_.OnGhostPositionUpdate({}, nullptr, upd);
+
+  // Position must remain at the original values.
+  EXPECT_FLOAT_EQ(ghost->Position().x, 10.f);
+  EXPECT_FLOAT_EQ(ghost->Position().z, 20.f);
 }
 
 }  // namespace

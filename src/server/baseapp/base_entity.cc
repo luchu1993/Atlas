@@ -19,14 +19,21 @@ void BaseEntity::OnWriteAck(DatabaseID dbid, bool success) {
   }
 }
 
-void BaseEntity::SetCell(EntityID cell_eid, const Address& addr) {
+void BaseEntity::SetCell(EntityID cell_eid, const Address& addr, uint32_t epoch) {
+  if (epoch < cell_epoch_) {
+    ATLAS_LOG_DEBUG("BaseEntity::SetCell: stale epoch={} (current={}) for entity {} — ignored",
+                    epoch, cell_epoch_, entity_id_);
+    return;
+  }
   cell_entity_id_ = cell_eid;
   cell_addr_ = addr;
+  cell_epoch_ = epoch;
 }
 
 void BaseEntity::ClearCell() {
   cell_entity_id_ = kInvalidEntityID;
   cell_addr_ = {};
+  cell_epoch_ = 0;
 }
 
 // ============================================================================

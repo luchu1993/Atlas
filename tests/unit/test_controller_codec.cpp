@@ -213,5 +213,120 @@ TEST(ControllerCodec, UnknownKindAbortsRestore) {
   EXPECT_FALSE(DeserializeControllersForMigration(*e, r, [](uint32_t) { return nullptr; }));
 }
 
+// ============================================================================
+// Mixed controller types — all survive round-trip.
+// ============================================================================
+
+TEST(ControllerCodec, MixedControllerTypes_AllSurviveRoundTrip) {
+  Space src_space(1);
+  Space dst_space(1);
+  auto* src = MakeReal(src_space, 1, {0, 0, 0});
+  auto* peer = MakeReal(src_space, 10, {5, 0, 0});
+  (void)peer;
+
+  // Add MoveToPoint controller.
+  const auto id_move = src->GetControllers().Add(
+      std::make_unique<MoveToPointController>(math::Vector3{100, 0, 100}, /*speed=*/5.f,
+                                              /*face_movement=*/true),
+      /*motion=*/src, /*user_arg=*/1);
+
+  // Add Timer controller.
+  const auto id_timer = src->GetControllers().Add(
+      std::make_unique<TimerController>(/*interval=*/2.0f, /*repeat=*/true),
+      /*motion=*/nullptr, /*user_arg=*/2);
+
+  // Add Proximity controller.
+  const auto id_prox = src->GetControllers().Add(
+      std::make_unique<ProximityController>(src->RangeNode(), src_space.GetRangeList(),
+                                            /*range=*/10.f, ProximityController::EnterFn{},
+                                            ProximityController::LeaveFn{}),
+      /*motion=*/nullptr, /*user_arg=*/0);
+
+  ASSERT_EQ(src->GetControllers().Count(), 3u);
+
+  // Serialize.
+  BinaryWriter w;
+  SerializeControllersForMigration(*src, w);
+  auto blob = w.Detach();
+
+  // Destination space — peer entity present for proximity resolution.
+  auto* dst = MakeReal(dst_space, 1, {0, 0, 0});
+  auto* dst_peer = MakeReal(dst_space, 10, {5, 0, 0});
+  (void)dst_peer;
+
+  BinaryReader r{std::span<const std::byte>(blob)};
+  auto resolver = [&dst_space](uint32_t id) -> CellEntity* { return dst_space.FindEntity(id); };
+  ASSERT_TRUE(DeserializeControllersForMigration(*dst, r, resolver));
+
+  // All 3 controllers survive.
+  EXPECT_EQ(dst->GetControllers().Count(), 3u);
+  EXPECT_TRUE(dst->GetControllers().Contains(id_move));
+  EXPECT_TRUE(dst->GetControllers().Contains(id_timer));
+  EXPECT_TRUE(dst->GetControllers().Contains(id_prox));
+
+  // Verify types by advancing — MoveToPoint should move position.
+  auto pos_before = dst->Position();
+  dst->GetControllers().Update(1.f);
+  EXPECT_GT(dst->Position().x, pos_before.x);
+
+  // Verify proximity by iterating.
+  bool found_prox = false;
+  dst->GetControllers().ForEach([&](const Controller& c) {
+    if (c.TypeTag() == ControllerKind::kProximity) found_prox = true;
+  });
+  EXPECT_TRUE(found_prox);
+}
+
+// ============================================================================
+// Double round-trip — idempotent.
+// ============================================================================
+
+TEST(ControllerCodec, DoubleRoundTrip_Idempotent) {
+  Space space_a(1);
+  Space space_b(1);
+  Space space_c(1);
+
+  auto* a = MakeReal(space_a, 1, {0, 0, 0});
+
+  // Add a MoveToPoint and a Timer.
+  a->GetControllers().Add(
+      std::make_unique<MoveToPointController>(math::Vector3{50, 0, 50}, /*speed=*/10.f,
+                                              /*face_movement=*/false),
+      /*motion=*/a, /*user_arg=*/0);
+  a->GetControllers().Add(std::make_unique<TimerController>(/*interval=*/1.0f, /*repeat=*/true),
+                          /*motion=*/nullptr, /*user_arg=*/0);
+
+  // Advance so timer accumulator is non-zero.
+  a->GetControllers().Update(0.3f);
+
+  // First round-trip: A -> B.
+  BinaryWriter w1;
+  SerializeControllersForMigration(*a, w1);
+  auto blob1 = w1.Detach();
+
+  auto* b = MakeReal(space_b, 1, {0, 0, 0});
+  BinaryReader r1{std::span<const std::byte>(blob1)};
+  ASSERT_TRUE(DeserializeControllersForMigration(*b, r1, [](uint32_t) { return nullptr; }));
+  ASSERT_EQ(b->GetControllers().Count(), 2u);
+
+  // Second round-trip: B -> C.
+  BinaryWriter w2;
+  SerializeControllersForMigration(*b, w2);
+  auto blob2 = w2.Detach();
+
+  auto* c = MakeReal(space_c, 1, {0, 0, 0});
+  BinaryReader r2{std::span<const std::byte>(blob2)};
+  ASSERT_TRUE(DeserializeControllersForMigration(*c, r2, [](uint32_t) { return nullptr; }));
+
+  // Final state must match first deserialization.
+  EXPECT_EQ(c->GetControllers().Count(), b->GetControllers().Count());
+
+  // Verify motion controller still works on the final entity.
+  auto pos_before = c->Position();
+  c->GetControllers().Update(1.f);
+  EXPECT_GT(c->Position().x, pos_before.x);
+  EXPECT_GT(c->Position().z, pos_before.z);
+}
+
 }  // namespace
 }  // namespace atlas

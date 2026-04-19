@@ -85,12 +85,14 @@ TEST(BaseAppMessages, CurrentCell) {
   msg.base_entity_id = 10;
   msg.cell_entity_id = 20;
   msg.cell_addr = Address(0x0A000001u, 7003);
+  msg.epoch = 42;
 
   auto rt = round_trip(msg);
   ASSERT_TRUE(rt.has_value());
   EXPECT_EQ(rt->base_entity_id, 10u);
   EXPECT_EQ(rt->cell_entity_id, 20u);
   EXPECT_EQ(rt->cell_addr.Port(), 7003u);
+  EXPECT_EQ(rt->epoch, 42u);
 }
 
 TEST(BaseAppMessages, CellRpcForward) {

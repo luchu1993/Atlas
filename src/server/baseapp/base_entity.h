@@ -40,6 +40,7 @@ class BaseEntity {
   [[nodiscard]] auto HasCell() const -> bool { return cell_entity_id_ != kInvalidEntityID; }
   [[nodiscard]] auto CellEntityId() const -> EntityID { return cell_entity_id_; }
   [[nodiscard]] auto CellAddr() const -> const Address& { return cell_addr_; }
+  [[nodiscard]] auto CellEpoch() const -> uint32_t { return cell_epoch_; }
 
   // Entity data blob (persistent properties serialized by C#)
   [[nodiscard]] auto EntityData() const -> const std::vector<std::byte>& { return entity_data_; }
@@ -48,8 +49,10 @@ class BaseEntity {
   // Called by DBApp write-ack
   void OnWriteAck(DatabaseID dbid, bool success);
 
-  // Cell tracking
-  void SetCell(EntityID cell_eid, const Address& addr);
+  // Cell tracking — epoch prevents stale CurrentCell from overwriting a
+  // newer placement. CellEntityCreated uses epoch=0 (initial), Offload
+  // uses monotonically increasing epochs.
+  void SetCell(EntityID cell_eid, const Address& addr, uint32_t epoch = 0);
   void ClearCell();
 
   // Mark entity as pending destruction
@@ -62,6 +65,7 @@ class BaseEntity {
   DatabaseID dbid_;
   EntityID cell_entity_id_{kInvalidEntityID};
   Address cell_addr_;
+  uint32_t cell_epoch_{0};
   std::vector<std::byte> entity_data_;
   bool pending_destroy_{false};
   bool writing_to_db_{false};

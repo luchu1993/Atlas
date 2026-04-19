@@ -244,6 +244,11 @@ class CellApp : public EntityApp {
 
   std::unordered_map<EntityID, PendingOffload> pending_offloads_;
 
+  // Monotonic epoch for CurrentCell ordering. Incremented each time this
+  // CellApp sends a CurrentCell to BaseApp after an Offload arrival, so
+  // BaseApp can reject stale updates from a slower old-CellApp path.
+  uint32_t next_offload_epoch_{1};
+
   // Scan pending_offloads_ for entries past the Ack deadline; revert
   // them in place. Called each tick from OnEndOfTick.
   void TickOffloadAckTimeouts();
