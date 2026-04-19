@@ -64,12 +64,21 @@ class CellAppNativeProvider : public BaseNativeProvider {
   [[nodiscard]] auto entity_destroyed_fn() const -> EntityDestroyedFn {
     return entity_destroyed_fn_;
   }
+  [[nodiscard]] auto serialize_entity_fn() const -> SerializeEntityFn {
+    return serialize_entity_fn_;
+  }
 
  private:
   EntityLookupFn lookup_;
   RestoreEntityFn restore_entity_fn_{nullptr};
   DispatchRpcFn dispatch_rpc_fn_{nullptr};
   EntityDestroyedFn entity_destroyed_fn_{nullptr};
+  // Phase 11 PR-6: used by CellApp::BuildOffloadMessage to capture the
+  // outgoing Real entity's full state. nullptr until C# registers the
+  // expanded NativeCallbackTable; absence is not fatal (CellApp ships an
+  // empty persistent_blob and the receiver proceeds using only the
+  // replication baseline, as in PR-4).
+  SerializeEntityFn serialize_entity_fn_{nullptr};
 };
 
 }  // namespace atlas

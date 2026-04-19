@@ -135,23 +135,25 @@ auto BaseApp::Init(int argc, char* argv[]) -> bool {
         FailAllDbappPendingRequests("dbapp_disconnected");
       });
 
-  // ---- Subscribe to CellApp (Phase 10 single-CellApp stage) ----------
+  // ---- Subscribe to CellApps (Phase 11 PR-6: multi-CellApp routing) --
   //
-  // Phase 10 assumes at most one CellApp. Phase 11 replaces this with a
-  // cluster-wide CellAppMgr routing table keyed by space + spatial hash.
+  // Every CellApp that machined reports Born gets a RUDP channel
+  // installed in cellapp_channels_, keyed by its internal address.
+  // Death wipes the entry. Per-entity routing decisions consult
+  // BaseEntity::CellAddr() to pick which channel to forward on.
   GetMachinedClient().Subscribe(
       machined::ListenerType::kBoth, ProcessType::kCellApp,
       [this](const machined::BirthNotification& n) {
-        if (cellapp_channel_ == nullptr) {
-          ATLAS_LOG_INFO("BaseApp: CellApp born at {}:{}, connecting via RUDP...",
-                         n.internal_addr.Ip(), n.internal_addr.Port());
-          auto ch = Network().ConnectRudpNocwnd(n.internal_addr);
-          if (ch) cellapp_channel_ = static_cast<Channel*>(*ch);
-        }
+        if (cellapp_channels_.contains(n.internal_addr)) return;
+        ATLAS_LOG_INFO("BaseApp: CellApp born at {}:{}, connecting via RUDP...",
+                       n.internal_addr.Ip(), n.internal_addr.Port());
+        auto ch = Network().ConnectRudpNocwnd(n.internal_addr);
+        if (ch) cellapp_channels_[n.internal_addr] = static_cast<Channel*>(*ch);
       },
-      [this](const machined::DeathNotification& /*n*/) {
-        ATLAS_LOG_WARNING("BaseApp: CellApp died, clearing cellapp channel");
-        cellapp_channel_ = nullptr;
+      [this](const machined::DeathNotification& n) {
+        ATLAS_LOG_WARNING("BaseApp: CellApp died at {}:{}, clearing routing entry",
+                          n.internal_addr.Ip(), n.internal_addr.Port());
+        cellapp_channels_.erase(n.internal_addr);
       });
 
   // ---- Subscribe to BaseAppMgr and register ourselves ----------------
@@ -2334,9 +2336,32 @@ void BaseApp::OnClientCellRpc(Channel& ch, const baseapp::ClientCellRpc& msg) {
   // Forward to the CellApp. `source_entity_id` is stamped HERE from the
   // authenticated proxy binding — the client cannot forge it. CellApp
   // re-checks everything (defence in depth) on the other side.
-  if (cellapp_channel_ == nullptr) {
-    ATLAS_LOG_WARNING("BaseApp: ClientCellRpc has no CellApp channel yet (rpc_id=0x{:06X})",
-                      msg.rpc_id);
+  //
+  // Phase 11 PR-6: multi-CellApp routing. Pick the channel by the
+  // target entity's last-known cell_addr rather than a single cluster-
+  // wide CellApp. Stale routing (Offload in flight) shows up as either
+  // an unknown peer (drop with a warning) or the old CellApp rejecting
+  // the RPC because the entity is now a Ghost there — the Q2 soft
+  // guard on CellApp's OnClientCellRpcForward catches that case.
+  auto* target = entity_mgr_.Find(msg.target_entity_id);
+  if (target == nullptr) {
+    ATLAS_LOG_WARNING("BaseApp: ClientCellRpc target entity {} unknown (rpc_id=0x{:06X})",
+                      msg.target_entity_id, msg.rpc_id);
+    return;
+  }
+  const Address cell_addr = target->CellAddr();
+  if (cell_addr.Port() == 0) {
+    ATLAS_LOG_WARNING(
+        "BaseApp: ClientCellRpc target entity {} has no cell_addr yet (rpc_id=0x{:06X})",
+        msg.target_entity_id, msg.rpc_id);
+    return;
+  }
+  auto ch_it = cellapp_channels_.find(cell_addr);
+  if (ch_it == cellapp_channels_.end()) {
+    ATLAS_LOG_WARNING(
+        "BaseApp: ClientCellRpc has no channel for target entity {}'s cell_addr {}:{} "
+        "(rpc_id=0x{:06X})",
+        msg.target_entity_id, cell_addr.Ip(), cell_addr.Port(), msg.rpc_id);
     return;
   }
 
@@ -2345,7 +2370,7 @@ void BaseApp::OnClientCellRpc(Channel& ch, const baseapp::ClientCellRpc& msg) {
   fwd.source_entity_id = source_entity_id;
   fwd.rpc_id = msg.rpc_id;
   fwd.payload = msg.payload;  // copy; Serialize/Deserialize owns bytes
-  (void)cellapp_channel_->SendMessage(fwd);
+  (void)ch_it->second->SendMessage(fwd);
 }
 
 }  // namespace atlas

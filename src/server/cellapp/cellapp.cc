@@ -749,6 +749,24 @@ void CellApp::OnOffloadEntity(const Address& src, Channel* ch, const cellapp::Of
   // Install base-ID routing so subsequent RPCs land.
   base_entity_population_[msg.base_entity_id] = entity;
 
+  // Phase 11 PR-6: restore the C# entity instance from the sender's
+  // persistent_blob via RestoreEntity. Empty blob is valid (unit tests
+  // / C#-less setups): the Real then has no script state and any
+  // client-visible AoI is driven entirely from the replication
+  // baseline below, until the first successful C# publish.
+  if (!msg.persistent_blob.empty() && native_provider_ != nullptr &&
+      native_provider_->restore_entity_fn() != nullptr) {
+    ClearNativeApiError();
+    native_provider_->restore_entity_fn()(
+        entity->Id(), msg.type_id, /*dbid=*/0,
+        reinterpret_cast<const uint8_t*>(msg.persistent_blob.data()),
+        static_cast<int32_t>(msg.persistent_blob.size()));
+    if (auto error = ConsumeNativeApiError()) {
+      ATLAS_LOG_ERROR("CellApp: Offload RestoreEntity failed cell_id={} type={}: {}", entity->Id(),
+                      msg.type_id, *error);
+    }
+  }
+
   // Seed replication snapshots from the offload payload. Neither call
   // writes through the Ghost path — we're Real here.
   CellEntity::ReplicationFrame frame;
@@ -901,9 +919,42 @@ auto CellApp::BuildOffloadMessage(const CellEntity& entity,
   msg.on_ground = entity.OnGround();
   msg.base_addr = entity.BaseAddr();
   msg.base_entity_id = entity.BaseEntityId();
-  // PR-6 fills persistent_blob via the SerializeEntity NativeCallback.
-  // For PR-4 we ship the replication baseline only; the receiver uses it
-  // to serve AoI until the first post-offload C# publish.
+  // Phase 11 §4 / PR-6: capture the C# entity state via SerializeEntity
+  // if the callback is registered. The destination CellApp's
+  // OnOffloadEntity will pass this blob through RestoreEntity, which
+  // reuses the Phase 10 Deserialize abstract. If no runtime is
+  // registered (unit tests, early boot) we ship an empty blob and
+  // rely on the replication baseline — the Ghost→Real promotion still
+  // works; just without script state restoration.
+  if (native_provider_ != nullptr && native_provider_->serialize_entity_fn() != nullptr) {
+    auto fn = native_provider_->serialize_entity_fn();
+    // Size probe + one retry: ask C# for the required size with a
+    // zero-cap call, then allocate and fetch. The two-phase protocol
+    // keeps buffer allocation on the C++ side (easier to log / cap)
+    // and avoids an ambient thread-local on the C# side.
+    int32_t needed = 0;
+    int32_t probe_out_len = 0;
+    const int32_t probe = fn(entity.Id(), /*out_buf=*/nullptr, /*cap=*/0, &probe_out_len);
+    if (probe > 0) {
+      needed = probe;
+    } else if (probe == 0) {
+      needed = probe_out_len;
+    }
+    if (needed > 0) {
+      msg.persistent_blob.resize(static_cast<std::size_t>(needed));
+      int32_t real_len = 0;
+      const int32_t rc = fn(entity.Id(), reinterpret_cast<uint8_t*>(msg.persistent_blob.data()),
+                            needed, &real_len);
+      if (rc == 0 && real_len > 0) {
+        msg.persistent_blob.resize(static_cast<std::size_t>(real_len));
+      } else {
+        ATLAS_LOG_WARNING(
+            "CellApp: SerializeEntity failed (rc={}, real_len={}) — shipping empty blob", rc,
+            real_len);
+        msg.persistent_blob.clear();
+      }
+    }
+  }
   if (const auto* state = entity.GetReplicationState()) {
     msg.owner_snapshot = state->owner_snapshot;
     msg.other_snapshot = state->other_snapshot;

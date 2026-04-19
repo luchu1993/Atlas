@@ -19,6 +19,10 @@ namespace atlas {
 // set_native_callbacks. Must match the [UnmanagedCallersOnly] exports in
 // Atlas.Runtime. Identical struct as BaseAppNativeProvider uses — the C#
 // side fills the same table regardless of process type.
+//
+// Growth rule: new entries go at the tail. Older C# runtimes produce a
+// shorter table; SetNativeCallbacks below clamps the copy to what the
+// caller actually sent, so missing entries read back as nullptr.
 #pragma pack(push, 1)
 struct CellAppCallbackTable {
   RestoreEntityFn restore_entity;
@@ -26,6 +30,7 @@ struct CellAppCallbackTable {
   EntityDestroyedFn entity_destroyed;
   DispatchRpcFn dispatch_rpc;
   GetOwnerSnapshotFn get_owner_snapshot;
+  SerializeEntityFn serialize_entity;  // Phase 11 PR-6
 };
 #pragma pack(pop)
 
@@ -183,6 +188,11 @@ void CellAppNativeProvider::SetNativeCallbacks(const void* native_callbacks, int
   restore_entity_fn_ = table.restore_entity;
   dispatch_rpc_fn_ = table.dispatch_rpc;
   entity_destroyed_fn_ = table.entity_destroyed;
+  // serialize_entity was appended in PR-6. Older runtimes leave it as
+  // the memset-initialised nullptr; CellApp treats that as "no C# blob
+  // available" and continues serving Offload with just the replication
+  // baseline.
+  serialize_entity_fn_ = table.serialize_entity;
   // get_entity_data and get_owner_snapshot are not needed on CellApp (no DB
   // persistence or baseline pump), but we accept the table silently.
   ATLAS_LOG_INFO("CellApp: native callback table registered (len={})", len);

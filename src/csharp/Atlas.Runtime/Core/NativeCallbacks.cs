@@ -15,6 +15,12 @@ internal unsafe struct NativeCallbackTable
     // Appended for补强一 baseline snapshots. C++ tolerates older runtimes where
     // this field is absent; new C++ versions tolerate older runtimes too.
     public nint GetOwnerSnapshot;
+    // Phase 11 PR-6: Offload serialization. CellApp invokes this from
+    // BuildOffloadMessage to capture the full entity state the destination
+    // CellApp will hand to RestoreEntity. Distinct from GetEntityData
+    // (DB persistence) and SerializeFor*Client (AoI replication); see
+    // docs/roadmap/phase11_distributed_space.md §4 for why.
+    public nint SerializeEntity;
 }
 
 internal static unsafe class NativeCallbacks
@@ -36,6 +42,8 @@ internal static unsafe class NativeCallbacks
         table.DispatchRpc = (nint)(delegate* unmanaged<uint, uint, byte*, int, void>)&DispatchRpc;
         table.GetOwnerSnapshot =
             (nint)(delegate* unmanaged<uint, byte**, int*, void>)&GetOwnerSnapshot;
+        table.SerializeEntity =
+            (nint)(delegate* unmanaged<uint, byte*, int, int*, int>)&SerializeEntity;
 
         NativeApi.SetNativeCallbacks(&table, sizeof(NativeCallbackTable));
     }
@@ -206,6 +214,70 @@ internal static unsafe class NativeCallbacks
             if (outData != null) *outData = null;
             if (outLen != null) *outLen = -1;
             ErrorBridge.SetError(ex);
+        }
+    }
+
+    [UnmanagedCallersOnly]
+    public static int SerializeEntity(uint entityId, byte* outBuf, int outBufCap, int* outLen)
+    {
+        // Zero-copy contract:
+        //   - On success return 0 and write the exact byte count to *outLen.
+        //   - If outBufCap is insufficient, return the needed size without
+        //     writing; C++ reallocs and retries.
+        //   - On error return -1 and set *outLen to -1.
+        try
+        {
+            ThreadGuard.EnsureMainThread();
+
+            if (outLen == null)
+            {
+                return -1;
+            }
+
+            var entity = EntityManager.Instance.Get(entityId);
+            if (entity is null)
+            {
+                Log.Warning($"SerializeEntity: unknown entity {entityId}");
+                *outLen = -1;
+                return -1;
+            }
+
+            // Serialize into a temp buffer so we can report the size
+            // precisely. Reusing SpanWriter here keeps the code path
+            // identical to GetEntityData's Serialize call — i.e. we
+            // go through the generator-emitted ServerEntity.Serialize
+            // (Phase 10 abstract), NOT a new SerializeFull variant.
+            var writer = new SpanWriter(4096);
+            byte[] snapshot;
+            try
+            {
+                entity.Serialize(ref writer);
+                snapshot = writer.WrittenSpan.ToArray();
+            }
+            finally
+            {
+                writer.Dispose();
+            }
+
+            if (outBuf == null || outBufCap < snapshot.Length)
+            {
+                // Short-buffer protocol — caller retries with a bigger buf.
+                *outLen = snapshot.Length;
+                return snapshot.Length;
+            }
+
+            fixed (byte* src = snapshot)
+            {
+                Buffer.MemoryCopy(src, outBuf, outBufCap, snapshot.Length);
+            }
+            *outLen = snapshot.Length;
+            return 0;
+        }
+        catch (Exception ex)
+        {
+            if (outLen != null) *outLen = -1;
+            ErrorBridge.SetError(ex);
+            return -1;
         }
     }
 

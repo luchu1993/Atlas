@@ -152,7 +152,12 @@ class BaseApp : public EntityApp {
   BaseAppNativeProvider* native_provider_{nullptr};  // owned by ScriptApp
   Channel* dbapp_channel_{nullptr};                  // connection to DBApp
   Channel* baseappmgr_channel_{nullptr};             // connection to BaseAppMgr
-  Channel* cellapp_channel_{nullptr};                // Phase 10: CellApp (single-CellApp stage)
+  // Phase 11 PR-6: multi-CellApp routing. Every peer CellApp that
+  // machined reports Born is recorded here by its internal RUDP address;
+  // Death wipes the entry. Per-entity routing (which CellApp this
+  // entity's Real currently lives on) lives on BaseEntity.cell_addr_,
+  // maintained by OnCellEntityCreated + OnCurrentCell.
+  std::unordered_map<Address, Channel*> cellapp_channels_;
   uint32_t app_id_{0};
 
   // Pending login state: maps request_id → reply channel back to LoginApp
