@@ -217,6 +217,7 @@ void CellApp::OnEndOfTick() {
   // itself.
   TickGhostPump();
   TickOffloadChecker();
+  TickOffloadAckTimeouts();
 }
 
 void CellApp::OnTickComplete() {
@@ -820,8 +821,8 @@ void CellApp::OnOffloadEntity(const Address& src, Channel* ch, const cellapp::Of
 
 void CellApp::OnOffloadEntityAck(const Address& /*src*/, Channel* /*ch*/,
                                  const cellapp::OffloadEntityAck& msg) {
-  // Phase 11 PR-6 review fix (B3): clear pending tracking and surface
-  // limbo-Ghost diagnostics on failure.
+  // Phase 11 PR-6 review fix (B3): on success, drop the pending entry;
+  // on failure, auto-revert the Ghost back to Real using the snapshot.
   auto pending_it = pending_offloads_.find(msg.real_entity_id);
   if (pending_it == pending_offloads_.end()) {
     ATLAS_LOG_WARNING(
@@ -832,28 +833,105 @@ void CellApp::OnOffloadEntityAck(const Address& /*src*/, Channel* /*ch*/,
   }
   const Address target = pending_it->second.target_addr;
   const auto age = Clock::now() - pending_it->second.sent_at;
-  pending_offloads_.erase(pending_it);
 
   if (msg.success) {
+    pending_offloads_.erase(pending_it);
     ATLAS_LOG_INFO("CellApp: Offload of entity_id={} to {}:{} succeeded (rtt={} ms)",
                    msg.real_entity_id, target.Ip(), target.Port(),
                    std::chrono::duration_cast<std::chrono::milliseconds>(age).count());
     return;
   }
-  // Failure path: our local entity is now a Ghost with real_channel_
-  // pointing at the CellApp that rejected the Offload. No Real exists
-  // anywhere in the cluster — the entity is in limbo until ops
-  // intervenes. Phase 11 scope (§9.5) does not auto-revert; revert
-  // would require keeping the RealEntityData + controller state
-  // snapshot around until Ack and re-instantiating on failure.
   ATLAS_LOG_ERROR(
-      "CellApp: Offload of entity_id={} to {}:{} REJECTED after {} ms. "
-      "Entity is now a limbo Ghost locally with no Real anywhere; client RPCs "
-      "targeted at this base_entity_id will drop until recovery. Check peer "
-      "CellApp log at {}:{} for the rejection reason.",
+      "CellApp: Offload of entity_id={} to {}:{} REJECTED after {} ms — reverting Ghost to Real "
+      "locally",
       msg.real_entity_id, target.Ip(), target.Port(),
-      std::chrono::duration_cast<std::chrono::milliseconds>(age).count(), target.Ip(),
-      target.Port());
+      std::chrono::duration_cast<std::chrono::milliseconds>(age).count());
+  RevertPendingOffload(msg.real_entity_id, "receiver rejected");
+}
+
+void CellApp::TickOffloadAckTimeouts() {
+  if (pending_offloads_.empty()) return;
+  const auto now = Clock::now();
+  // Collect first so we can mutate the map while reverting.
+  std::vector<EntityID> timed_out;
+  for (const auto& [eid, po] : pending_offloads_) {
+    if (now - po.sent_at >= kOffloadAckTimeout) timed_out.push_back(eid);
+  }
+  for (auto eid : timed_out) {
+    ATLAS_LOG_ERROR(
+        "CellApp: Offload of entity_id={} TIMED OUT after {} ms — reverting Ghost to Real locally",
+        eid, std::chrono::duration_cast<std::chrono::milliseconds>(kOffloadAckTimeout).count());
+    RevertPendingOffload(eid, "ack timeout");
+  }
+}
+
+void CellApp::RevertPendingOffload(EntityID entity_id, const char* reason) {
+  auto pending_it = pending_offloads_.find(entity_id);
+  if (pending_it == pending_offloads_.end()) return;
+  PendingOffload po = std::move(pending_it->second);
+  pending_offloads_.erase(pending_it);
+
+  auto* entity = FindEntity(entity_id);
+  if (entity == nullptr) {
+    ATLAS_LOG_ERROR("CellApp: RevertPendingOffload entity_id={} not found (reason={}) — drop",
+                    entity_id, reason);
+    return;
+  }
+  if (!entity->IsGhost()) {
+    // Someone already finalised (e.g. a second Ack arrived success=true
+    // on a retried path). Nothing to do.
+    ATLAS_LOG_WARNING(
+        "CellApp: RevertPendingOffload entity_id={} is not a Ghost — revert skipped (reason={})",
+        entity_id, reason);
+    return;
+  }
+
+  // Ghost → Real. replication_state_ carries over (both Convert methods
+  // preserve it), so AoI continues serving from the baseline the ghost
+  // was already replicating.
+  entity->ConvertGhostToReal();
+
+  // Re-install in base_entity_population_ so client RPCs that arrive
+  // before BaseApp's CurrentCell re-sync still dispatch correctly. The
+  // Real currently lives here — even though the BaseApp never learned
+  // we moved (CurrentCell is sent by the receiver on success, not the
+  // sender on send), so BaseApp's cell_addr for this entity is already
+  // us.
+  base_entity_population_[entity->BaseEntityId()] = entity;
+
+  // Restore local-Cell membership. The snapshot captured which Cell we
+  // lived in pre-Offload; if that Cell is still present we rejoin.
+  if (po.cell_id != 0) {
+    if (auto* space = FindSpace(po.space_id); space != nullptr) {
+      if (auto* cell = space->FindLocalCell(po.cell_id)) cell->AddRealEntity(entity);
+    }
+  }
+
+  // Restore haunts: resolve each saved peer address through the
+  // registry and re-add. Peers that died during the Offload window
+  // fall out — they'd come back on the next TickGhostPump pass anyway.
+  if (auto* rd = entity->GetRealData()) {
+    for (const auto& ha : po.haunt_addrs) {
+      if (auto* peer = FindPeerChannel(ha)) rd->AddHaunt(peer);
+    }
+  }
+
+  // Restore controllers from the serialised blob (review-fix B2).
+  if (!po.controller_blob.empty()) {
+    BinaryReader r{std::span<const std::byte>(po.controller_blob)};
+    const bool ok = DeserializeControllersForMigration(
+        *entity, r, [this](uint32_t peer_id) -> CellEntity* { return FindEntity(peer_id); });
+    if (!ok) {
+      ATLAS_LOG_ERROR(
+          "CellApp: Offload revert controller restore failed for entity_id={} — controllers lost",
+          entity_id);
+    }
+  }
+
+  ATLAS_LOG_INFO(
+      "CellApp: Offload revert complete for entity_id={} (reason={}); Real re-installed on local "
+      "CellApp",
+      entity_id, reason);
 }
 
 // ---- CellAppMgr → CellApp control ----
@@ -1094,10 +1172,34 @@ void CellApp::TickOffloadChecker() {
         continue;
       }
 
-      // Record the outstanding Offload so OnOffloadEntityAck can tie the
-      // reply back to its target (and, on failure, emit an actionable
-      // limbo-Ghost diagnostic — Phase 11 PR-6 review fix B3).
-      pending_offloads_[op.entity->Id()] = PendingOffload{op.target_cellapp_addr, Clock::now()};
+      // Record the outstanding Offload with a full revert snapshot so
+      // OnOffloadEntityAck / TickOffloadAckTimeouts can restore a live
+      // Real when the receiver rejects or never replies. Snapshot is
+      // captured BEFORE ConvertRealToGhost drops the haunt list and
+      // StopAlls controllers.
+      PendingOffload po;
+      po.target_addr = op.target_cellapp_addr;
+      po.sent_at = Clock::now();
+      po.space_id = op.entity->GetSpace().Id();
+      for (const auto& [cid, cell] : space->LocalCells()) {
+        if (cell->HasRealEntity(op.entity)) {
+          po.cell_id = cid;
+          break;
+        }
+      }
+      if (const auto* rd = op.entity->GetRealData()) {
+        po.haunt_addrs.reserve(rd->Haunts().size());
+        for (const auto& h : rd->Haunts()) {
+          if (h.channel != nullptr) po.haunt_addrs.push_back(h.channel->RemoteAddress());
+        }
+      }
+      {
+        BinaryWriter cw;
+        SerializeControllersForMigration(*op.entity, cw);
+        auto buf = cw.Detach();
+        po.controller_blob.assign(buf.begin(), buf.end());
+      }
+      pending_offloads_[op.entity->Id()] = std::move(po);
 
       // Step 5 (sender): local Real → Ghost immediately, using the peer
       // channel as the new back-channel. Drops witness + controllers per

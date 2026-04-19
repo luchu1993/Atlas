@@ -238,6 +238,11 @@ atlas_add_test(NAME test_controller_codec
   DEPS atlas_cellapp_lib atlas_space atlas_serialization
 )
 
+atlas_add_test(NAME test_offload_revert
+  SOURCES test_offload_revert.cpp
+  DEPS atlas_cellapp_lib atlas_space atlas_network atlas_serialization
+)
+
 atlas_add_test(NAME test_cell
   SOURCES test_cell.cpp
   DEPS atlas_cellapp_lib atlas_space

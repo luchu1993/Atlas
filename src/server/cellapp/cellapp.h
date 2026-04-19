@@ -148,6 +148,54 @@ class CellApp : public EntityApp {
   void TickGhostPump();
   void TickOffloadChecker();
 
+  // ---- Phase 11 PR-6 review-fix B3 Offload rollback ---------------------
+  //
+  // PendingOffload captures everything the CellApp needs to re-install
+  // a Real locally when the receiver rejects (or never acks) an
+  // OffloadEntity. Inserted by TickOffloadChecker right before
+  // ConvertRealToGhost; removed by OnOffloadEntityAck (success) or by
+  // the failure-revert path.
+  //
+  // Revert: ConvertGhostToReal (preserves replication_state_), rehydrate
+  // haunts + local-Cell membership + controllers (from controller_blob).
+  // BaseApp never heard we moved — CurrentCell is sent by the receiver
+  // on success, not the sender on send — so client RPC routing stays
+  // correct across a revert.
+  //
+  // Timeout: entries older than kOffloadAckTimeout are reverted each
+  // tick via TickOffloadAckTimeouts, on the assumption the receiver is
+  // unreachable.
+  struct PendingOffload {
+    Address target_addr;
+    TimePoint sent_at;
+    SpaceID space_id{kInvalidSpaceID};
+    cellappmgr::CellID cell_id{0};  // 0 ⇒ no local Cell membership to restore
+    std::vector<Address> haunt_addrs;
+    std::vector<std::byte> controller_blob;
+  };
+
+  // Revert a pending Offload back to a live Real. No-op if the entry is
+  // already resolved. Callers: OnOffloadEntityAck failure branch,
+  // TickOffloadAckTimeouts, and unit tests that seed a pending entry
+  // via PendingOffloadsForTest().
+  void RevertPendingOffload(EntityID entity_id, const char* reason);
+
+  // Test hook — direct mutable access to the pending map. Production
+  // writers are TickOffloadChecker (insert) + the Ack / timeout paths
+  // (erase).
+  [[nodiscard]] auto PendingOffloadsForTest() -> std::unordered_map<EntityID, PendingOffload>& {
+    return pending_offloads_;
+  }
+
+  // Test hook — direct mutable access to entity_population_. Production
+  // writers are OnCreateCellEntity / OnOffloadEntity / OnCreateGhost.
+  // Unit tests that bypass those handlers (to avoid spinning up the
+  // full network+CLR pipeline) use this to seed lookups consumed by
+  // RevertPendingOffload and the RPC dispatch paths.
+  [[nodiscard]] auto EntityPopulationForTest() -> std::unordered_map<EntityID, CellEntity*>& {
+    return entity_population_;
+  }
+
  protected:
   [[nodiscard]] auto Init(int argc, char* argv[]) -> bool override;
   void Fini() override;
@@ -194,19 +242,13 @@ class CellApp : public EntityApp {
   // through the same Birth/Death + self-filter code.
   CellAppPeerRegistry peer_registry_;
 
-  // Phase 11 PR-6 review fix (B3): Offload ack tracking. Inserted by
-  // TickOffloadChecker right before the Real→Ghost conversion; removed
-  // by OnOffloadEntityAck. A missing Ack means:
-  //   success=true  → remove quietly, Offload is done.
-  //   success=false → remove AND log a limbo-Ghost diagnostic so ops
-  //                    know this entity has no Real anywhere in the
-  //                    cluster and client RPCs will drop until some
-  //                    manual recovery (future: auto-revert).
-  struct PendingOffload {
-    Address target_addr;
-    TimePoint sent_at;
-  };
   std::unordered_map<EntityID, PendingOffload> pending_offloads_;
+
+  // Scan pending_offloads_ for entries past the Ack deadline; revert
+  // them in place. Called each tick from OnEndOfTick.
+  void TickOffloadAckTimeouts();
+
+  static constexpr Duration kOffloadAckTimeout = std::chrono::seconds(5);
 
   // Safety ceiling on per-tick AvatarUpdate displacement. phase10_cellapp.md
   // §3.12 Phase 10 strategy: reject beyond 50 m/tick (roughly 500 m/s at
