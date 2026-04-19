@@ -115,6 +115,15 @@ class CellApp : public EntityApp {
   void OnAddCellToSpace(const Address& src, Channel* ch, const cellappmgr::AddCellToSpace& msg);
   void OnUpdateGeometry(const Address& src, Channel* ch, const cellappmgr::UpdateGeometry& msg);
   void OnShouldOffload(const Address& src, Channel* ch, const cellappmgr::ShouldOffload& msg);
+  void OnRegisterCellAppAck(const Address& src, Channel* ch,
+                            const cellappmgr::RegisterCellAppAck& msg);
+
+  // ---- app_id / EntityID bookkeeping (PR-5, §9.6 Q8 scheme A) --------
+  //
+  // After RegisterCellApp succeeds, AppId() holds the non-zero value
+  // assigned by CellAppMgr. AllocateCellEntityId packs it into the
+  // high 8 bits so EntityIDs are unique cluster-wide.
+  [[nodiscard]] auto AppId() const -> uint32_t { return app_id_; }
 
   // ---- Peer CellApp routing (exposed for tests) --------------------------
   //
@@ -172,6 +181,16 @@ class CellApp : public EntityApp {
   std::unordered_map<EntityID, CellEntity*> base_entity_population_;
 
   EntityID next_entity_id_{1};
+
+  // app_id assigned by CellAppMgr's RegisterCellAppAck. Forms the high
+  // 8 bits of every EntityID we mint (§9.6 Q8 scheme A).
+  // 0 ⇒ not yet registered; IDs allocated before registration use
+  // high byte 0 and will clash once a CellAppMgr is in the cluster,
+  // so callers should avoid creating entities pre-registration in
+  // production. Phase 10 unit tests never observe app_id and continue
+  // to work with app_id_ == 0.
+  uint32_t app_id_{0};
+  Channel* cellappmgr_channel_{nullptr};
 
   // Peer CellApp channels keyed by each peer's internal RUDP address.
   // Populated by the machined Birth subscription in Init; cleared by

@@ -154,6 +154,31 @@ auto CellApp::Init(int argc, char* argv[]) -> bool {
       [this](const Address& src, Channel* ch, const cellappmgr::ShouldOffload& msg) {
         OnShouldOffload(src, ch, msg);
       });
+  (void)table.RegisterTypedHandler<cellappmgr::RegisterCellAppAck>(
+      [this](const Address& src, Channel* ch, const cellappmgr::RegisterCellAppAck& msg) {
+        OnRegisterCellAppAck(src, ch, msg);
+      });
+
+  // Connect to CellAppMgr on birth + send RegisterCellApp. The manager
+  // will respond with RegisterCellAppAck carrying our app_id.
+  GetMachinedClient().Subscribe(
+      machined::ListenerType::kBirth, ProcessType::kCellAppMgr,
+      [this](const machined::BirthNotification& n) {
+        if (cellappmgr_channel_ != nullptr) return;
+        auto ch = Network().ConnectRudpNocwnd(n.internal_addr);
+        if (!ch) {
+          ATLAS_LOG_ERROR("CellApp: failed to connect to CellAppMgr at {}:{}", n.internal_addr.Ip(),
+                          n.internal_addr.Port());
+          return;
+        }
+        cellappmgr_channel_ = static_cast<Channel*>(*ch);
+        cellappmgr::RegisterCellApp reg;
+        reg.internal_addr = Network().RudpAddress();
+        (void)cellappmgr_channel_->SendMessage(reg);
+        ATLAS_LOG_INFO("CellApp: registering with CellAppMgr at {}:{}", n.internal_addr.Ip(),
+                       n.internal_addr.Port());
+      },
+      nullptr);
 
   // Subscribe to peer CellApps so the Ghost/Offload pipelines can resolve
   // Address → Channel* at will. Filter out ourselves (machined relays
@@ -257,9 +282,13 @@ auto CellApp::FindSpace(SpaceID id) -> Space* {
 }
 
 auto CellApp::AllocateCellEntityId() -> EntityID {
-  // Phase 10 single-CellApp stage: simple monotonic counter. Phase 11
-  // introduces a cluster-wide allocator tied to the CellAppMgr.
-  return next_entity_id_++;
+  // §9.6 Q8 scheme A — high 8 bits = app_id, low 24 bits = CellApp-local
+  // monotonic counter. Until RegisterCellAppAck lands, app_id_ == 0 and
+  // we produce Phase-10-compatible IDs that work for single-CellApp
+  // tests. In production, Init synchronously registers before any
+  // CreateCellEntity traffic arrives.
+  const uint32_t local = next_entity_id_++ & 0x00FFFFFFu;
+  return (app_id_ << 24) | local;
 }
 
 // ============================================================================
@@ -840,6 +869,20 @@ void CellApp::OnShouldOffload(const Address& /*src*/, Channel* /*ch*/,
   if (auto* cell = space->FindLocalCell(msg.cell_id)) {
     cell->SetShouldOffload(msg.enable);
   }
+}
+
+void CellApp::OnRegisterCellAppAck(const Address& /*src*/, Channel* /*ch*/,
+                                   const cellappmgr::RegisterCellAppAck& msg) {
+  if (!msg.success) {
+    ATLAS_LOG_ERROR("CellApp: RegisterCellAppAck reported failure from CellAppMgr");
+    return;
+  }
+  if (msg.app_id == 0 || msg.app_id > 0xFFu) {
+    ATLAS_LOG_ERROR("CellApp: RegisterCellAppAck invalid app_id={} (expected 1..255)", msg.app_id);
+    return;
+  }
+  app_id_ = msg.app_id;
+  ATLAS_LOG_INFO("CellApp: registered with CellAppMgr; app_id={}", app_id_);
 }
 
 // ============================================================================

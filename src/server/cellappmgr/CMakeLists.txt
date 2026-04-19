@@ -35,3 +35,26 @@ target_link_libraries(atlas_cellappmgr_bsp PUBLIC
   atlas_server
   atlas_cellappmgr_messages
 )
+
+# CellAppMgr manager process library.
+add_library(atlas_cellappmgr_lib STATIC
+  cellappmgr.cc
+)
+target_include_directories(atlas_cellappmgr_lib PUBLIC
+  "${CMAKE_SOURCE_DIR}/src/server"
+  "${CMAKE_CURRENT_SOURCE_DIR}"
+)
+target_link_libraries(atlas_cellappmgr_lib
+  PUBLIC
+    atlas_foundation
+    atlas_network
+    atlas_serialization
+    atlas_server
+    atlas_cellappmgr_messages
+    atlas_cellappmgr_bsp
+    atlas_compiler_options
+)
+
+add_executable(atlas_cellappmgr main.cc)
+target_link_libraries(atlas_cellappmgr PRIVATE atlas_cellappmgr_lib)
+atlas_deploy_clr_runtime(atlas_cellappmgr)

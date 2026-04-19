@@ -248,6 +248,11 @@ atlas_add_test(NAME test_offload_checker
   DEPS atlas_cellapp_lib atlas_cellappmgr_bsp atlas_space
 )
 
+atlas_add_test(NAME test_cellappmgr
+  SOURCES test_cellappmgr.cpp
+  DEPS atlas_cellappmgr_lib atlas_cellappmgr_bsp atlas_network
+)
+
 atlas_add_test(NAME test_witness_lifecycle
   SOURCES test_witness_lifecycle.cpp
   DEPS atlas_cellapp_lib atlas_space
