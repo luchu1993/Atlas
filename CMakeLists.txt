@@ -33,6 +33,7 @@ find_package(Threads REQUIRED)
 add_subdirectory(src/lib)
 add_subdirectory(src/server)
 add_subdirectory(src/client)
+add_subdirectory(src/tools)
 
 if(ATLAS_BUILD_CSHARP)
   add_subdirectory(src/csharp)
