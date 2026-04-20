@@ -57,6 +57,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--shortline-pct", type=int, default=0)
     parser.add_argument("--shortline-min-ms", type=int, default=1000)
     parser.add_argument("--shortline-max-ms", type=int, default=5000)
+    parser.add_argument("--rpc-rate-hz", type=int, default=2)
     parser.add_argument("--hold-min-ms", type=int, default=30000)
     parser.add_argument("--hold-max-ms", type=int, default=60000)
     parser.add_argument("--retry-delay-ms", type=int, default=1000)
@@ -421,6 +422,8 @@ def build_stress_args(args: argparse.Namespace, worker: dict[str, object]) -> li
         str(args.shortline_min_ms),
         "--shortline-max-ms",
         str(args.shortline_max_ms),
+        "--rpc-rate-hz",
+        str(args.rpc_rate_hz),
     ]
     extend_repeated_flag(stress_args, "--source-ip", worker["source_ips"])
     if args.verbose_failures:

@@ -50,6 +50,12 @@ struct Options {
   int shortline_pct{20};
   int shortline_min_ms{1'000};
   int shortline_max_ms{5'000};
+  // P3: once a session is kOnline and its StressAvatar cell entity is
+  // live, it fires an Echo RPC at rpc_rate_hz Hz for the remainder of
+  // its hold window. Each Echo round-trip contributes one RTT sample.
+  // Values <= 0 disable the periodic stream (first Echo after
+  // EntityTransferred still fires, giving one RTT sample per session).
+  int rpc_rate_hz{2};
   bool verbose_failures{false};
   uint32_t seed{12345};
 };
@@ -134,9 +140,17 @@ class Session {
         }
         break;
       case SessionState::kOnline:
-        if (echo_pending_ && now >= echo_due_at_) {
-          echo_pending_ = false;
+        // Fire any due periodic Echoes. Handles the initial post-transfer
+        // Echo (seeded by OnEntityTransferred with a 500 ms delay to let
+        // CellEntityCreated propagate) AND the 1/rpc_rate_hz cadence that
+        // follows. Loop in case we fell behind (e.g. tick jitter).
+        while (echo_pending_ && now >= echo_due_at_) {
           SendEcho();
+          if (opts_.rpc_rate_hz > 0) {
+            echo_due_at_ += std::chrono::milliseconds(1000 / opts_.rpc_rate_hz);
+          } else {
+            echo_pending_ = false;  // one-shot mode
+          }
         }
         if (now >= next_action_at_) {
           DisconnectAndRetry(now);
@@ -425,6 +439,11 @@ class Session {
     session_key_ = {};
     baseapp_addr_ = {};
     intentionally_offline_ = false;
+    // P3 leak fix: without clearing these, a retry that transitions back
+    // into kOnline before OnEntityTransferred fires would send an Echo at
+    // the *old* Avatar's id, tripping BaseApp's cross-entity reject.
+    echo_pending_ = false;
+    next_echo_seq_ = 0;
     suppress_disconnect_callback_ = false;
   }
 
@@ -521,6 +540,8 @@ void PrintUsage() {
          "(default: 20)\n"
       << "  --shortline-min-ms <n>     Min time before planned short disconnect (default: 1000)\n"
       << "  --shortline-max-ms <n>     Max time before planned short disconnect (default: 5000)\n"
+      << "  --rpc-rate-hz <n>          Echo RPC rate per session while in-world "
+         "(default: 2, 0 = one-shot)\n"
       << "  --seed <n>                 RNG seed (default: 12345)\n"
       << "  --verbose-failures         Print individual failures\n"
       << "\n"
@@ -687,6 +708,12 @@ auto ParseOptions(int argc, char* argv[]) -> std::optional<Options> {
       auto parsed = ParseNumeric<int>(*value);
       if (!parsed) return std::nullopt;
       opts.shortline_max_ms = *parsed;
+    } else if (kArg == "--rpc-rate-hz") {
+      auto value = require_value(kArg);
+      if (!value) return std::nullopt;
+      auto parsed = ParseNumeric<int>(*value);
+      if (!parsed) return std::nullopt;
+      opts.rpc_rate_hz = *parsed;
     } else if (kArg == "--seed") {
       auto value = require_value(kArg);
       if (!value) return std::nullopt;
@@ -782,8 +809,12 @@ void PrintSummary(const Options& opts, const Metrics& metrics,
   std::cout << std::format("  select_avatar_sent: {}\n", metrics.select_avatar_sent);
   std::cout << std::format("  select_avatar_fail: {}\n", metrics.select_avatar_fail);
   std::cout << std::format("  entity_transferred: {}\n", metrics.entity_transferred);
+  std::cout << std::format("  rpc_rate_hz:        {}\n", opts.rpc_rate_hz);
   std::cout << std::format("  echo_sent:          {}\n", metrics.echo_sent);
   std::cout << std::format("  echo_received:      {}\n", metrics.echo_received);
+  std::cout << std::format(
+      "  echo_loss:          {}\n",
+      metrics.echo_sent > metrics.echo_received ? metrics.echo_sent - metrics.echo_received : 0);
   if (!metrics.echo_rtt_ms.empty()) {
     std::cout << std::format("  echo_rtt_p50:       {:.2f} ms\n",
                              PercentileMs(metrics.echo_rtt_ms, 50.0));
