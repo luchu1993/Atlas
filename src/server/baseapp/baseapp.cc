@@ -2476,10 +2476,29 @@ void BaseApp::OnClientCellRpc(Channel& ch, const baseapp::ClientCellRpc& msg) {
   // OnClientCellRpcForward catches that case.
   auto* ch_out = ResolveCellChannelForEntity(msg.target_entity_id);
   if (ch_out == nullptr) {
-    ATLAS_LOG_WARNING(
-        "BaseApp: ClientCellRpc dropped — no cell channel for target entity {} "
-        "(rpc_id=0x{:06X})",
-        msg.target_entity_id, msg.rpc_id);
+    // Rate-limit this one: under the P3.3 single-CellApp overload we
+    // measured 893 drops in 30s, each one a format + log flush that
+    // further stretched BaseApp's tick loop. After CellReady lands
+    // (eliminating the normal race), legitimate hits here indicate
+    // either a late-binding script path or a partitioned CellApp —
+    // both worth one log line per second, not one per packet.
+    // This site runs on the single dispatcher thread, so plain static
+    // locals without atomics are safe.
+    using SteadyClock = std::chrono::steady_clock;
+    static SteadyClock::time_point last_log{};
+    static uint64_t suppressed = 0;
+    const auto now = SteadyClock::now();
+    if (now - last_log >= std::chrono::seconds(1)) {
+      ATLAS_LOG_WARNING(
+          "BaseApp: ClientCellRpc dropped — no cell channel for target entity {} "
+          "(rpc_id=0x{:06X}){}",
+          msg.target_entity_id, msg.rpc_id,
+          suppressed > 0 ? std::format(" [+{} similar in last 1s]", suppressed) : std::string{});
+      last_log = now;
+      suppressed = 0;
+    } else {
+      ++suppressed;
+    }
     return;
   }
 
