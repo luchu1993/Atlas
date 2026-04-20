@@ -60,6 +60,12 @@ struct Options {
   // property via ClientCellRpc → cell method → property setter. Drives
   // the cell-side dirty/replication path at scale. 0 = disabled.
   int move_rate_hz{10};
+  // P3.3: number of distinct cell-side spaces to spread avatars across.
+  // Each session picks space_id = (session_id % space_count) + 1 and
+  // encodes it in the SelectAvatar RPC; server-side Account.SelectAvatar
+  // forwards it to CreateBaseEntity. 1 = all avatars in one space (the
+  // pre-P3.3 baseline).
+  int space_count{1};
   bool verbose_failures{false};
   uint32_t seed{12345};
 };
@@ -313,17 +319,22 @@ class Session {
                                      ? RandomBetween(opts_.shortline_min_ms, opts_.shortline_max_ms)
                                      : RandomBetween(opts_.hold_min_ms, opts_.hold_max_ms));
 
-    // P2.3c: fire Account.SelectAvatar(0) as a ClientBaseRpc. RPC ID is
-    // packed as (direction<<22) | (type_index<<8) | method_index, matching
+    // P2.3c: fire Account.SelectAvatar(space_id) as a ClientBaseRpc. RPC ID
+    // is packed as (direction<<22) | (type_index<<8) | method_index, matching
     // Atlas.Generators.Def/Emitters/RpcIdEmitter.cs. Account's type_index
     // is 1 (first alphabetically among {Account, StressAvatar}); base_methods
     // sort alphabetically to [RequestAvatarList=1, SelectAvatar=2]; direction
     // 3 is the exposed-base-RPC tag. Cf. baseapp.cc OnClientBaseRpc validation.
-    // Payload is int32 avatarIndex=0 as 4-byte little-endian.
+    // P3.3: payload is int32 space_id (1..space_count) in little-endian.
+    // Server-side Account.SelectAvatar forwards this to CreateBaseEntity so
+    // the StressAvatar cell entity lands in the selected space.
     constexpr uint32_t kSelectAvatarRpcId = (3u << 22) | (1u << 8) | 2u;
+    const int32_t kSpaceCount = opts_.space_count > 0 ? opts_.space_count : 1;
+    const int32_t kSpaceId = static_cast<int32_t>(id_ % static_cast<std::size_t>(kSpaceCount)) + 1;
     baseapp::ClientBaseRpc rpc;
     rpc.rpc_id = kSelectAvatarRpcId;
-    rpc.payload = {std::byte{0}, std::byte{0}, std::byte{0}, std::byte{0}};
+    rpc.payload.resize(sizeof(kSpaceId));
+    std::memcpy(rpc.payload.data(), &kSpaceId, sizeof(kSpaceId));
     const auto kRpcSend = auth_channel_->SendMessage(rpc);
     if (kRpcSend) {
       ++metrics_.select_avatar_sent;
@@ -602,6 +613,8 @@ void PrintUsage() {
          "(default: 2, 0 = one-shot)\n"
       << "  --move-rate-hz <n>         ReportPos rate per session while in-world "
          "(default: 10, 0 = disabled)\n"
+      << "  --space-count <n>          Distinct cell spaces to spread avatars across "
+         "(default: 1)\n"
       << "  --seed <n>                 RNG seed (default: 12345)\n"
       << "  --verbose-failures         Print individual failures\n"
       << "\n"
@@ -780,6 +793,12 @@ auto ParseOptions(int argc, char* argv[]) -> std::optional<Options> {
       auto parsed = ParseNumeric<int>(*value);
       if (!parsed) return std::nullopt;
       opts.move_rate_hz = *parsed;
+    } else if (kArg == "--space-count") {
+      auto value = require_value(kArg);
+      if (!value) return std::nullopt;
+      auto parsed = ParseNumeric<int>(*value);
+      if (!parsed) return std::nullopt;
+      opts.space_count = *parsed;
     } else if (kArg == "--seed") {
       auto value = require_value(kArg);
       if (!value) return std::nullopt;
@@ -882,6 +901,7 @@ void PrintSummary(const Options& opts, const Metrics& metrics,
       "  echo_loss:          {}\n",
       metrics.echo_sent > metrics.echo_received ? metrics.echo_sent - metrics.echo_received : 0);
   std::cout << std::format("  move_rate_hz:       {}\n", opts.move_rate_hz);
+  std::cout << std::format("  space_count:        {}\n", opts.space_count);
   std::cout << std::format("  move_sent:          {}\n", metrics.move_sent);
   std::cout << std::format("  move_fail:          {}\n", metrics.move_fail);
   if (!metrics.echo_rtt_ms.empty()) {

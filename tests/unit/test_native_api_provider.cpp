@@ -53,7 +53,7 @@ struct MockProvider final : public INativeApiProvider {
 
   void WriteToDb(uint32_t, const std::byte*, int32_t) override {}
   void GiveClientTo(uint32_t, uint32_t) override {}
-  auto CreateBaseEntity(uint16_t) -> uint32_t override { return 0; }
+  auto CreateBaseEntity(uint16_t, uint32_t) -> uint32_t override { return 0; }
   void SetNativeCallbacks(const void*, int32_t) override {}
 
   // Phase 10 CellApp-specific no-op overrides — mock doesn't exercise

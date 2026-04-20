@@ -120,19 +120,21 @@ internal static unsafe partial class NativeApi
     public static partial void GiveClientTo(uint srcEntityId, uint destEntityId);
 
     [LibraryImport(LibName, EntryPoint = "AtlasCreateBaseEntity")]
-    private static partial uint CreateBaseEntityNative(ushort typeId);
+    private static partial uint CreateBaseEntityNative(ushort typeId, uint spaceId);
 
     /// <summary>
     /// Script-initiated entity creation on the caller's BaseApp. Returns
     /// the newly-allocated entity id, or 0 on failure. The C# instance is
     /// available from EntityManager.Instance.Get(...) after the call — the
     /// native side invokes RestoreEntity synchronously before returning.
-    /// For has_cell types the call also fires CreateCellEntity to a CellApp.
+    /// For has_cell types the call also fires CreateCellEntity to a CellApp
+    /// targeting <paramref name="spaceId"/> (CellApp auto-creates the Space
+    /// if missing). space_id is ignored for base-only types.
     /// </summary>
-    public static uint CreateBaseEntity(ushort typeId)
+    public static uint CreateBaseEntity(ushort typeId, uint spaceId = 1)
     {
         ThreadGuard.EnsureMainThread();
-        return CreateBaseEntityNative(typeId);
+        return CreateBaseEntityNative(typeId, spaceId);
     }
 
     [LibraryImport(LibName, EntryPoint = "AtlasSetNativeCallbacks")]

@@ -1506,7 +1506,7 @@ void BaseApp::DoGiveClientToLocal(EntityID src_id, EntityID dest_id) {
   }
 }
 
-auto BaseApp::CreateBaseEntityFromScript(uint16_t type_id) -> EntityID {
+auto BaseApp::CreateBaseEntityFromScript(uint16_t type_id, SpaceID space_id) -> EntityID {
   const auto& defs = EntityDefs();
   auto* type = defs.FindById(type_id);
   if (!type) {
@@ -1547,7 +1547,7 @@ auto BaseApp::CreateBaseEntityFromScript(uint16_t type_id) -> EntityID {
       cellapp::CreateCellEntity msg;
       msg.base_entity_id = kEid;
       msg.type_id = type_id;
-      msg.space_id = 1;
+      msg.space_id = space_id == kInvalidSpaceID ? SpaceID{1} : space_id;
       msg.position = {0.f, 0.f, 0.f};
       msg.direction = {1.f, 0.f, 0.f};
       msg.on_ground = false;

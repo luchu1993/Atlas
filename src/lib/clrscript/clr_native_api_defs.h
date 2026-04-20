@@ -100,11 +100,12 @@
     /* Synchronously creates a new base entity of the given type on THIS    */                    \
     /* BaseApp: allocates an EntityID, instantiates the C# script instance  */                    \
     /* via RestoreEntity (empty blob = defaults), and — if the type has a   */                    \
-    /* cell side — sends CreateCellEntity to a CellApp. Returns the new     */                    \
-    /* entity_id, or 0 on failure (unknown type, EntityID exhausted, …).    */                    \
+    /* cell side — sends CreateCellEntity to a CellApp with the given       */                    \
+    /* space_id. Returns the new entity_id, or 0 on failure (unknown type,  */                    \
+    /* EntityID exhausted, …). space_id is ignored for base-only types.     */                    \
     X(uint32_t, CreateBaseEntity,                                                                  \
-        (uint16_t type_id),                                                                        \
-        return atlas::GetNativeApiProvider().CreateBaseEntity(type_id))                             \
+        (uint16_t type_id, uint32_t space_id),                                                     \
+        return atlas::GetNativeApiProvider().CreateBaseEntity(type_id, space_id))                  \
                                                                                                    \
     /* ---- C# → C++ callback table ---------------------------------------- */                   \
     X(void, SetNativeCallbacks,                                                                    \

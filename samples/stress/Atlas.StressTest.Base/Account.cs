@@ -17,16 +17,21 @@ public partial class Account : ServerEntity
 
     public partial void SelectAvatar(int avatarIndex)
     {
-        Log.Info($"[StressTest.Base] Account.SelectAvatar(index={avatarIndex}) entity={EntityId}");
+        // P3.3: world_stress encodes the desired space_id into avatarIndex.
+        // Values <= 0 default to space 1 so the one-space case (all prior
+        // P2/P3 smoke runs) keeps working unchanged.
+        uint spaceId = avatarIndex > 0 ? (uint)avatarIndex : 1u;
+        Log.Info(
+            $"[StressTest.Base] Account.SelectAvatar(index={avatarIndex}) entity={EntityId} -> space={spaceId}");
 
-        var avatar = EntityFactory.CreateBase("StressAvatar");
+        var avatar = EntityFactory.CreateBase("StressAvatar", spaceId);
         if (avatar == null)
         {
             Log.Error($"[StressTest.Base] SelectAvatar: failed to create StressAvatar");
             return;
         }
         Log.Info(
-            $"[StressTest.Base] SelectAvatar: created StressAvatar entity={avatar.EntityId}, handing off client");
+            $"[StressTest.Base] SelectAvatar: created StressAvatar entity={avatar.EntityId} in space={spaceId}, handing off client");
 
         // Transfer the client proxy from the Account to the new StressAvatar
         // so cell RPCs (Echo / ReportPos) can reach the avatar directly.

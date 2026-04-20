@@ -66,9 +66,10 @@ class INativeApiProvider {
   // ---- Script-initiated entity creation (BaseApp) --------------------
   // Create a new base entity on THIS BaseApp of the given type. Returns
   // the newly-allocated EntityID, or 0 on failure. For has_cell types
-  // the call also triggers CreateCellEntity on a CellApp. Non-BaseApp
+  // the call also triggers CreateCellEntity on a CellApp targeting
+  // `space_id` (CellApp auto-creates the space if missing). Non-BaseApp
   // providers log an error and return 0.
-  virtual auto CreateBaseEntity(uint16_t type_id) -> uint32_t = 0;
+  virtual auto CreateBaseEntity(uint16_t type_id, uint32_t space_id) -> uint32_t = 0;
 
   // ---- C# → C++ callback table ----------------------------------------
   // Called by C# Atlas.Runtime once at startup to supply function pointers

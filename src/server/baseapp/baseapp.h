@@ -184,9 +184,10 @@ class BaseApp : public EntityApp {
   // pool, creates the base entity, instantiates the C# script side via
   // RestoreManagedEntity (empty blob — defaults), and if the type has a
   // cell side, sends CreateCellEntity to a CellApp (picked from the
-  // cellapp_peer_registry_, space_id=1, position={0,0,0}). Returns the
-  // new EntityID, or 0 on failure.
-  auto CreateBaseEntityFromScript(uint16_t type_id) -> EntityID;
+  // cellapp_peer_registry_, position={0,0,0}). `space_id` is forwarded to
+  // the cell; CellApp auto-creates the Space if it doesn't yet exist.
+  // Returns the new EntityID, or 0 on failure.
+  auto CreateBaseEntityFromScript(uint16_t type_id, SpaceID space_id) -> EntityID;
 
   // ---- Delta forwarding ------------------------------------------------
   void FlushClientDeltas();

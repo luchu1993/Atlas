@@ -43,25 +43,26 @@ public static class EntityFactory
 
     /// <summary>
     /// Creates a new base entity of the named type on the local BaseApp
-    /// and returns it. Same effect as <see cref="CreateBaseByTypeId"/>
-    /// but resolves the type name via the local registry first.
+    /// and returns it. <paramref name="spaceId"/> is forwarded to the cell
+    /// side for has_cell types (ignored for base-only).
     /// </summary>
-    public static ServerEntity? CreateBase(string typeName)
+    public static ServerEntity? CreateBase(string typeName, uint spaceId = 1)
     {
         var typeId = GetTypeId(typeName);
         if (typeId == 0) return null;
-        return CreateBaseByTypeId(typeId);
+        return CreateBaseByTypeId(typeId, spaceId);
     }
 
     /// <summary>
     /// Creates a new base entity of the given type id on the local BaseApp.
     /// The C# instance is materialised synchronously via the RestoreEntity
     /// callback from within the native call, so it is available in
-    /// EntityManager before this method returns.
+    /// EntityManager before this method returns. <paramref name="spaceId"/>
+    /// is forwarded to the cell side for has_cell types.
     /// </summary>
-    public static ServerEntity? CreateBaseByTypeId(ushort typeId)
+    public static ServerEntity? CreateBaseByTypeId(ushort typeId, uint spaceId = 1)
     {
-        var entityId = NativeApi.CreateBaseEntity(typeId);
+        var entityId = NativeApi.CreateBaseEntity(typeId, spaceId);
         if (entityId == 0) return null;
         return EntityManager.Instance.Get(entityId);
     }
