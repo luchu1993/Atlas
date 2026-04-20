@@ -56,6 +56,10 @@ struct Options {
   // Values <= 0 disable the periodic stream (first Echo after
   // EntityTransferred still fires, giving one RTT sample per session).
   int rpc_rate_hz{2};
+  // P3.2: ReportPos stream rate — writes the StressAvatar.position
+  // property via ClientCellRpc → cell method → property setter. Drives
+  // the cell-side dirty/replication path at scale. 0 = disabled.
+  int move_rate_hz{10};
   bool verbose_failures{false};
   uint32_t seed{12345};
 };
@@ -91,6 +95,10 @@ struct Metrics {
   // CellApp → BaseApp → client updates rtt_ms.
   std::size_t echo_sent{0};
   std::size_t echo_received{0};
+  // P3.2: ReportPos is fire-and-forget (no direct reply in the current
+  // protocol). Counts "accepted by local send queue".
+  std::size_t move_sent{0};
+  std::size_t move_fail{0};
   std::vector<double> auth_latency_ms;
   std::vector<double> echo_rtt_ms;
   std::unordered_map<std::string, std::size_t> failure_reasons;
@@ -151,6 +159,11 @@ class Session {
           } else {
             echo_pending_ = false;  // one-shot mode
           }
+        }
+        // Same shape for ReportPos at move_rate_hz.
+        while (move_pending_ && now >= move_due_at_) {
+          SendReportPos();
+          move_due_at_ += std::chrono::milliseconds(1000 / opts_.move_rate_hz);
         }
         if (now >= next_action_at_) {
           DisconnectAndRetry(now);
@@ -325,17 +338,20 @@ class Session {
     // from Account → StressAvatar (or equivalent). Update our cached id
     // so subsequent cell RPCs target the new entity.
     //
-    // We can't Echo *immediately* — CellEntityCreated ack from CellApp
+    // We can't RPC *immediately* — CellEntityCreated ack from CellApp
     // hasn't necessarily reached BaseApp yet, so the Proxy::CellAddr
     // lookup that ClientCellRpc does would fail and BaseApp drops the
-    // message with "no cell channel for target entity". Defer Echo to
-    // the next Update() tick past echo_due_at_ so the cell has a chance
-    // to bind. A proper fix would be a BaseApp → Client "CellReady"
-    // notification; this is the P2.3e pragmatic shortcut.
+    // message with "no cell channel for target entity". Defer both the
+    // Echo and ReportPos streams 500 ms past transfer so the cell has
+    // a chance to bind. A proper fix would be a BaseApp → Client
+    // "CellReady" notification; this is the pragmatic shortcut.
     entity_id_ = msg.new_entity_id;
     ++metrics_.entity_transferred;
-    echo_due_at_ = SteadyClock::now() + std::chrono::milliseconds(500);
+    const auto kNow = SteadyClock::now();
+    echo_due_at_ = kNow + std::chrono::milliseconds(500);
     echo_pending_ = true;
+    move_due_at_ = kNow + std::chrono::milliseconds(500);
+    move_pending_ = opts_.move_rate_hz > 0;
   }
 
   void SendEcho() {
@@ -366,6 +382,41 @@ class Session {
       ++metrics_.echo_sent;
     } else {
       RecordFailure(std::format("echo_send:{}", kSend.Error().Message()));
+    }
+  }
+
+  void SendReportPos() {
+    if (!auth_channel_ || entity_id_ == kInvalidEntityID) return;
+
+    // StressAvatar.ReportPos is a cell_method (exposed all_clients).
+    //   direction=2 (cell) <<22 | type_index=2 <<8 | method_index=2
+    //   (ReportPos sorts after Echo alphabetically) = 0x00800202
+    constexpr uint32_t kReportPosRpcId = (2u << 22) | (2u << 8) | 2u;
+
+    // Tiny random-walk in a 100 m square centred at (0,0,0). Absolute
+    // values stay well under CellApp's single-tick displacement cap
+    // (phase10_cellapp.md §3.12) so AvatarUpdate-style rejects can't
+    // confuse this with the teleport path.
+    std::uniform_real_distribution<float> walk(-1.f, 1.f);
+    pos_x_ = std::clamp(pos_x_ + walk(rng_), -50.f, 50.f);
+    pos_z_ = std::clamp(pos_z_ + walk(rng_), -50.f, 50.f);
+    const float dx = 1.f, dy = 0.f, dz = 0.f;
+
+    // Payload: Vector3 pos (x,y,z) + Vector3 dir (x,y,z) = 6 * float, LE.
+    std::vector<std::byte> payload(6 * sizeof(float));
+    const float fs[6] = {pos_x_, 0.f, pos_z_, dx, dy, dz};
+    std::memcpy(payload.data(), fs, sizeof(fs));
+
+    baseapp::ClientCellRpc rpc;
+    rpc.target_entity_id = entity_id_;
+    rpc.rpc_id = kReportPosRpcId;
+    rpc.payload = std::move(payload);
+    const auto kSend = auth_channel_->SendMessage(rpc);
+    if (kSend) {
+      ++metrics_.move_sent;
+    } else {
+      ++metrics_.move_fail;
+      RecordFailure(std::format("move_send:{}", kSend.Error().Message()));
     }
   }
 
@@ -444,6 +495,9 @@ class Session {
     // the *old* Avatar's id, tripping BaseApp's cross-entity reject.
     echo_pending_ = false;
     next_echo_seq_ = 0;
+    move_pending_ = false;
+    pos_x_ = 0.f;
+    pos_z_ = 0.f;
     suppress_disconnect_callback_ = false;
   }
 
@@ -507,6 +561,10 @@ class Session {
   uint32_t next_echo_seq_{0};
   TimePoint echo_due_at_{};
   bool echo_pending_{false};
+  TimePoint move_due_at_{};
+  bool move_pending_{false};
+  float pos_x_{0.f};
+  float pos_z_{0.f};
 };
 
 void PrintUsage() {
@@ -542,6 +600,8 @@ void PrintUsage() {
       << "  --shortline-max-ms <n>     Max time before planned short disconnect (default: 5000)\n"
       << "  --rpc-rate-hz <n>          Echo RPC rate per session while in-world "
          "(default: 2, 0 = one-shot)\n"
+      << "  --move-rate-hz <n>         ReportPos rate per session while in-world "
+         "(default: 10, 0 = disabled)\n"
       << "  --seed <n>                 RNG seed (default: 12345)\n"
       << "  --verbose-failures         Print individual failures\n"
       << "\n"
@@ -714,6 +774,12 @@ auto ParseOptions(int argc, char* argv[]) -> std::optional<Options> {
       auto parsed = ParseNumeric<int>(*value);
       if (!parsed) return std::nullopt;
       opts.rpc_rate_hz = *parsed;
+    } else if (kArg == "--move-rate-hz") {
+      auto value = require_value(kArg);
+      if (!value) return std::nullopt;
+      auto parsed = ParseNumeric<int>(*value);
+      if (!parsed) return std::nullopt;
+      opts.move_rate_hz = *parsed;
     } else if (kArg == "--seed") {
       auto value = require_value(kArg);
       if (!value) return std::nullopt;
@@ -815,6 +881,9 @@ void PrintSummary(const Options& opts, const Metrics& metrics,
   std::cout << std::format(
       "  echo_loss:          {}\n",
       metrics.echo_sent > metrics.echo_received ? metrics.echo_sent - metrics.echo_received : 0);
+  std::cout << std::format("  move_rate_hz:       {}\n", opts.move_rate_hz);
+  std::cout << std::format("  move_sent:          {}\n", metrics.move_sent);
+  std::cout << std::format("  move_fail:          {}\n", metrics.move_fail);
   if (!metrics.echo_rtt_ms.empty()) {
     std::cout << std::format("  echo_rtt_p50:       {:.2f} ms\n",
                              PercentileMs(metrics.echo_rtt_ms, 50.0));
