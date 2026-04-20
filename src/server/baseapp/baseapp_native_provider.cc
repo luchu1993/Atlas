@@ -31,7 +31,7 @@ uint8_t BaseAppNativeProvider::GetProcessPrefix() {
   return static_cast<uint8_t>(ProcessType::kBaseApp);
 }
 
-void BaseAppNativeProvider::SendClientRpc(uint32_t entity_id, uint32_t rpc_id, uint8_t target,
+void BaseAppNativeProvider::SendClientRpc(uint32_t entity_id, uint32_t rpc_id,
                                           const std::byte* payload, int32_t len) {
   auto* proxy = app_.GetEntityManager().FindProxy(entity_id);
   if (!proxy || !proxy->HasClient()) {
@@ -45,7 +45,6 @@ void BaseAppNativeProvider::SendClientRpc(uint32_t entity_id, uint32_t rpc_id, u
   }
   (void)client_ch->SendMessage(static_cast<MessageID>(rpc_id),
                                std::span<const std::byte>(payload, static_cast<size_t>(len)));
-  (void)target;
 }
 
 void BaseAppNativeProvider::SendCellRpc(uint32_t entity_id, uint32_t rpc_id,

@@ -60,10 +60,10 @@
                                                                                                    \
     /* ---- RPC dispatch --------------------------------------------------- */                     \
     X(void, SendClientRpc,                                                                         \
-        (uint32_t entity_id, uint32_t rpc_id, uint8_t target,                                     \
+        (uint32_t entity_id, uint32_t rpc_id,                                                      \
          const uint8_t* payload, int32_t len),                                                     \
         atlas::GetNativeApiProvider().SendClientRpc(                                                \
-            entity_id, rpc_id, target,                                                             \
+            entity_id, rpc_id,                                                                     \
             reinterpret_cast<const std::byte*>(payload), len))                                     \
     X(void, SendCellRpc,                                                                           \
         (uint32_t entity_id, uint32_t rpc_id, const uint8_t* payload, int32_t len),               \

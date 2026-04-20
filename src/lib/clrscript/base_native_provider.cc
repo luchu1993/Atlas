@@ -37,7 +37,7 @@ uint8_t BaseNativeProvider::GetProcessPrefix() {
   return 0;
 }
 
-void BaseNativeProvider::SendClientRpc(uint32_t entity_id, uint32_t /*rpc_id*/, uint8_t /*target*/,
+void BaseNativeProvider::SendClientRpc(uint32_t entity_id, uint32_t /*rpc_id*/,
                                        const std::byte* /*payload*/, int32_t /*len*/) {
   ATLAS_LOG_ERROR(
       "send_client_rpc() not supported on this process type "

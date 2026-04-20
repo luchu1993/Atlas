@@ -35,7 +35,7 @@ struct MockProvider final : public INativeApiProvider {
   float DeltaTime() override { return 0.016f; }
   uint8_t GetProcessPrefix() override { return process_prefix; }
 
-  void SendClientRpc(uint32_t, uint32_t, uint8_t, const std::byte*, int32_t) override {
+  void SendClientRpc(uint32_t, uint32_t, const std::byte*, int32_t) override {
     ++send_client_rpc_count;
   }
 
@@ -130,7 +130,7 @@ TEST(NativeApiProvider, RpcCallsDelegateCorrectly) {
   MockProvider mock;
   SetNativeApiProvider(&mock);
 
-  mock.SendClientRpc(1, 2, 0, nullptr, 0);
+  mock.SendClientRpc(1, 2, nullptr, 0);
   mock.SendCellRpc(1, 2, nullptr, 0);
   mock.SendBaseRpc(1, 2, nullptr, 0);
 

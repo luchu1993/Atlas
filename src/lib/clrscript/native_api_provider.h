@@ -39,8 +39,8 @@ class INativeApiProvider {
 
   // ---- RPC dispatch ---------------------------------------------------
   // payload points to a length-prefixed serialised argument buffer.
-  virtual void SendClientRpc(uint32_t entity_id, uint32_t rpc_id, uint8_t target,
-                             const std::byte* payload, int32_t len) = 0;
+  virtual void SendClientRpc(uint32_t entity_id, uint32_t rpc_id, const std::byte* payload,
+                             int32_t len) = 0;
 
   virtual void SendCellRpc(uint32_t entity_id, uint32_t rpc_id, const std::byte* payload,
                            int32_t len) = 0;

@@ -11,6 +11,7 @@
 namespace atlas {
 
 class CellEntity;
+class NetworkInterface;
 
 // ============================================================================
 // CellAppNativeProvider — INativeApiProvider wired to a CellApp process
@@ -36,9 +37,19 @@ class CellAppNativeProvider : public BaseNativeProvider {
   // cell_entity_id (see phase10_cellapp.md §9.6).
   using EntityLookupFn = std::function<CellEntity*(uint32_t entity_id)>;
 
+  // `network` is used by SendClientRpc to open a RUDP connection back to
+  // the owning BaseApp. For handler-level tests that never exercise that
+  // path, the default ctor with just the lookup is still available.
   explicit CellAppNativeProvider(EntityLookupFn lookup);
+  CellAppNativeProvider(EntityLookupFn lookup, NetworkInterface& network);
 
   uint8_t GetProcessPrefix() override;
+
+  // Cell → owning-client RPC. Wraps into baseapp::SelfRpcFromCell and
+  // sends to the entity's base_addr. BaseApp's OnSelfRpcFromCell relays
+  // to the client on the RUDP channel using rpc_id as the wire msg_id.
+  void SendClientRpc(uint32_t entity_id, uint32_t rpc_id, const std::byte* payload,
+                     int32_t len) override;
 
   // Phase 10 CellApp-specific surfaces.
   void SetEntityPosition(uint32_t entity_id, float x, float y, float z) override;
@@ -70,6 +81,7 @@ class CellAppNativeProvider : public BaseNativeProvider {
 
  private:
   EntityLookupFn lookup_;
+  NetworkInterface* network_{nullptr};  // null for handler-level tests
   RestoreEntityFn restore_entity_fn_{nullptr};
   DispatchRpcFn dispatch_rpc_fn_{nullptr};
   EntityDestroyedFn entity_destroyed_fn_{nullptr};

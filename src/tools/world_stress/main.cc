@@ -2,6 +2,7 @@
 #include <chrono>
 #include <cstdint>
 #include <cstdlib>
+#include <cstring>
 #include <format>
 #include <iostream>
 #include <limits>
@@ -79,7 +80,13 @@ struct Metrics {
   std::size_t select_avatar_sent{0};
   std::size_t select_avatar_fail{0};
   std::size_t entity_transferred{0};
+  // P2.3e: Echo / EchoReply round-trip through the Cell-side CLR dispatch.
+  // Each EntityTransferred triggers one Echo; a matching EchoReply from
+  // CellApp → BaseApp → client updates rtt_ms.
+  std::size_t echo_sent{0};
+  std::size_t echo_received{0};
   std::vector<double> auth_latency_ms;
+  std::vector<double> echo_rtt_ms;
   std::unordered_map<std::string, std::size_t> failure_reasons;
 };
 
@@ -127,6 +134,10 @@ class Session {
         }
         break;
       case SessionState::kOnline:
+        if (echo_pending_ && now >= echo_due_at_) {
+          echo_pending_ = false;
+          SendEcho();
+        }
         if (now >= next_action_at_) {
           DisconnectAndRetry(now);
         }
@@ -162,6 +173,16 @@ class Session {
         [this](const Address&, Channel*, const baseapp::EntityTransferred& msg) {
           OnEntityTransferred(msg);
         });
+    // EchoReply arrives as a raw packet — BaseApp forwards the cell-side
+    // SelfRpcFromCell to the client via `SendMessage(static_cast<MessageID>
+    // (rpc_id), payload)`, which truncates the 32-bit packed rpc_id to 16
+    // bits. There's no typed message struct for it (the id is dynamic per
+    // RPC), and Channel::DispatchMessages silently drops messages whose
+    // id isn't in the InterfaceTable. Catch it with the pre-dispatch hook
+    // instead, which runs *before* the entry check.
+    table.SetPreDispatchHook([this](MessageID id, std::span<const std::byte> payload) -> bool {
+      return OnRawMessage(id, payload);
+    });
   }
 
   void StartAttempt(TimePoint now) {
@@ -289,8 +310,73 @@ class Session {
     // Engine-level handoff notification: our controlling entity has moved
     // from Account → StressAvatar (or equivalent). Update our cached id
     // so subsequent cell RPCs target the new entity.
+    //
+    // We can't Echo *immediately* — CellEntityCreated ack from CellApp
+    // hasn't necessarily reached BaseApp yet, so the Proxy::CellAddr
+    // lookup that ClientCellRpc does would fail and BaseApp drops the
+    // message with "no cell channel for target entity". Defer Echo to
+    // the next Update() tick past echo_due_at_ so the cell has a chance
+    // to bind. A proper fix would be a BaseApp → Client "CellReady"
+    // notification; this is the P2.3e pragmatic shortcut.
     entity_id_ = msg.new_entity_id;
     ++metrics_.entity_transferred;
+    echo_due_at_ = SteadyClock::now() + std::chrono::milliseconds(500);
+    echo_pending_ = true;
+  }
+
+  void SendEcho() {
+    if (!auth_channel_ || entity_id_ == kInvalidEntityID) return;
+
+    // StressAvatar.Echo is a cell_method (exposed own_client). RPC id
+    // layout matches Atlas.Generators.Def/Emitters/RpcIdEmitter.cs:
+    //   (direction=2 <<22) | (type_index=2 (StressAvatar, 2nd alpha) <<8)
+    //   | method_index=1 (Echo sorts before ReportPos)
+    //   = 0x00800201
+    constexpr uint32_t kEchoRpcId = (2u << 22) | (2u << 8) | 1u;
+
+    const uint32_t seq = next_echo_seq_++;
+    const uint64_t client_ts_ns = static_cast<uint64_t>(
+        std::chrono::duration_cast<std::chrono::nanoseconds>(SteadyClock::now().time_since_epoch())
+            .count());
+
+    std::vector<std::byte> payload(sizeof(seq) + sizeof(client_ts_ns));
+    std::memcpy(payload.data(), &seq, sizeof(seq));
+    std::memcpy(payload.data() + sizeof(seq), &client_ts_ns, sizeof(client_ts_ns));
+
+    baseapp::ClientCellRpc rpc;
+    rpc.target_entity_id = entity_id_;
+    rpc.rpc_id = kEchoRpcId;
+    rpc.payload = std::move(payload);
+    const auto kSend = auth_channel_->SendMessage(rpc);
+    if (kSend) {
+      ++metrics_.echo_sent;
+    } else {
+      RecordFailure(std::format("echo_send:{}", kSend.Error().Message()));
+    }
+  }
+
+  auto OnRawMessage(MessageID id, std::span<const std::byte> payload) -> bool {
+    // EchoReply wire msg_id is the cell-direction 0-bits form of
+    //   (direction=0 <<22) | (type_index=2 <<8) | method_index=1 = 0x0201
+    constexpr MessageID kEchoReplyWireId = 0x0201;
+    if (id != kEchoReplyWireId) return false;
+
+    // Payload layout matches StressAvatar.def client_methods::EchoReply:
+    //   uint32 seq | uint64 serverTsNs | uint64 clientTsNs
+    BinaryReader reader(payload);
+    auto seq = reader.Read<uint32_t>();
+    auto server_ts_ns = reader.Read<uint64_t>();
+    auto client_ts_ns = reader.Read<uint64_t>();
+    if (!seq || !server_ts_ns || !client_ts_ns) return true;  // malformed but ours
+
+    const uint64_t now_ns = static_cast<uint64_t>(
+        std::chrono::duration_cast<std::chrono::nanoseconds>(SteadyClock::now().time_since_epoch())
+            .count());
+    const double rtt_ms = static_cast<double>(now_ns - *client_ts_ns) / 1e6;
+    ++metrics_.echo_received;
+    metrics_.echo_rtt_ms.push_back(rtt_ms);
+    (void)*server_ts_ns;  // reserved for future up-leg / down-leg split
+    return true;
   }
 
   void OnDisconnect(const Address&) {
@@ -399,6 +485,9 @@ class Session {
   bool suppress_disconnect_callback_{false};
   bool restart_requested_{false};
   std::optional<Address> source_ip_;
+  uint32_t next_echo_seq_{0};
+  TimePoint echo_due_at_{};
+  bool echo_pending_{false};
 };
 
 void PrintUsage() {
@@ -693,6 +782,16 @@ void PrintSummary(const Options& opts, const Metrics& metrics,
   std::cout << std::format("  select_avatar_sent: {}\n", metrics.select_avatar_sent);
   std::cout << std::format("  select_avatar_fail: {}\n", metrics.select_avatar_fail);
   std::cout << std::format("  entity_transferred: {}\n", metrics.entity_transferred);
+  std::cout << std::format("  echo_sent:          {}\n", metrics.echo_sent);
+  std::cout << std::format("  echo_received:      {}\n", metrics.echo_received);
+  if (!metrics.echo_rtt_ms.empty()) {
+    std::cout << std::format("  echo_rtt_p50:       {:.2f} ms\n",
+                             PercentileMs(metrics.echo_rtt_ms, 50.0));
+    std::cout << std::format("  echo_rtt_p95:       {:.2f} ms\n",
+                             PercentileMs(metrics.echo_rtt_ms, 95.0));
+    std::cout << std::format("  echo_rtt_p99:       {:.2f} ms\n",
+                             PercentileMs(metrics.echo_rtt_ms, 99.0));
+  }
   std::cout << std::format("  login_fail:         {}\n", metrics.login_result_fail);
   std::cout << std::format("  auth_fail:          {}\n", metrics.auth_fail);
   std::cout << std::format("  timeout_fail:       {}\n", metrics.timeout_fail);

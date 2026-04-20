@@ -4,9 +4,13 @@
 #include <cstring>
 #include <utility>
 
+#include "baseapp/baseapp_messages.h"
 #include "cell_entity.h"
 #include "foundation/log.h"
 #include "math/vector3.h"
+#include "network/channel.h"
+#include "network/network_interface.h"
+#include "network/reliable_udp.h"
 #include "server/server_config.h"
 #include "space.h"
 #include "space/move_controller.h"
@@ -36,8 +40,40 @@ struct CellAppCallbackTable {
 
 CellAppNativeProvider::CellAppNativeProvider(EntityLookupFn lookup) : lookup_(std::move(lookup)) {}
 
+CellAppNativeProvider::CellAppNativeProvider(EntityLookupFn lookup, NetworkInterface& network)
+    : lookup_(std::move(lookup)), network_(&network) {}
+
 uint8_t CellAppNativeProvider::GetProcessPrefix() {
   return static_cast<uint8_t>(ProcessType::kCellApp);
+}
+
+void CellAppNativeProvider::SendClientRpc(uint32_t entity_id, uint32_t rpc_id,
+                                          const std::byte* payload, int32_t len) {
+  auto* entity = lookup_ ? lookup_(entity_id) : nullptr;
+  if (!entity) {
+    ATLAS_LOG_WARNING("CellApp: SendClientRpc: unknown entity_id={}", entity_id);
+    return;
+  }
+  if (!network_) {
+    ATLAS_LOG_ERROR(
+        "CellApp: SendClientRpc: provider was constructed without a NetworkInterface "
+        "(handler-level test?); cannot route to BaseApp");
+    return;
+  }
+  // Route back to the owning BaseApp via SelfRpcFromCell. BaseApp's
+  // OnSelfRpcFromCell relays to the client on the RUDP channel using
+  // rpc_id as the wire msg_id.
+  auto base_ch = network_->ConnectRudpNocwnd(entity->BaseAddr());
+  if (!base_ch) {
+    ATLAS_LOG_ERROR("CellApp: SendClientRpc: cannot connect to base at {} for entity {}",
+                    entity->BaseAddr().ToString(), entity_id);
+    return;
+  }
+  baseapp::SelfRpcFromCell msg;
+  msg.base_entity_id = entity->BaseEntityId();
+  msg.rpc_id = rpc_id;
+  msg.payload.assign(payload, payload + len);
+  (void)(*base_ch)->SendMessage(msg);
 }
 
 void CellAppNativeProvider::SetEntityPosition(uint32_t entity_id, float x, float y, float z) {

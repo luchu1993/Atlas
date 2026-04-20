@@ -643,12 +643,21 @@ void BaseApp::OnAcceptClient(Channel& /*ch*/, const baseapp::AcceptClient& msg) 
   ATLAS_LOG_DEBUG("BaseApp: entity {} ready for client", msg.dest_entity_id);
 }
 
-void BaseApp::OnCellEntityCreated(Channel& /*ch*/, const baseapp::CellEntityCreated& msg) {
+void BaseApp::OnCellEntityCreated(Channel& ch, const baseapp::CellEntityCreated& msg) {
   auto* ent = entity_mgr_.Find(msg.base_entity_id);
   if (!ent) return;
-  ent->SetCell(msg.cell_entity_id, msg.cell_addr);
-  ATLAS_LOG_DEBUG("BaseApp: entity {} has cell at {}:{}", msg.base_entity_id, msg.cell_addr.Ip(),
-                  msg.cell_addr.Port());
+  // CellApp fills msg.cell_addr from its own Network().RudpAddress(), which
+  // for INADDR_ANY binds reports 0.0.0.0:<port> — useless for routing. The
+  // channel's RemoteAddress is the actual peer we just received from, and
+  // matches what machined's Birth notification put in cellapp_peers_, so
+  // use it when the wire value is unresolved.
+  Address cell_addr = msg.cell_addr;
+  if (cell_addr.Ip() == 0) {
+    cell_addr = ch.RemoteAddress();
+  }
+  ent->SetCell(msg.cell_entity_id, cell_addr);
+  ATLAS_LOG_DEBUG("BaseApp: entity {} has cell at {}:{}", msg.base_entity_id, cell_addr.Ip(),
+                  cell_addr.Port());
 }
 
 void BaseApp::OnCellEntityDestroyed(Channel& /*ch*/, const baseapp::CellEntityDestroyed& msg) {

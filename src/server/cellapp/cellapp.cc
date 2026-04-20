@@ -53,8 +53,8 @@ CellApp::~CellApp() = default;
 // ============================================================================
 
 auto CellApp::CreateNativeProvider() -> std::unique_ptr<INativeApiProvider> {
-  auto provider =
-      std::make_unique<CellAppNativeProvider>([this](uint32_t id) { return FindEntity(id); });
+  auto provider = std::make_unique<CellAppNativeProvider>(
+      [this](uint32_t id) { return FindEntity(id); }, Network());
   // Keep a typed alias so the CellApp-specific API surface is available
   // to callers without downcasting. ScriptApp owns the unique_ptr.
   native_provider_ = provider.get();
@@ -312,7 +312,15 @@ void CellApp::OnCreateCellEntity(const Address& src, Channel* ch,
   auto entity_ptr =
       std::make_unique<CellEntity>(cell_id, msg.type_id, *space, msg.position, msg.direction);
   entity_ptr->SetOnGround(msg.on_ground);
-  entity_ptr->SetBase(msg.base_addr, msg.base_entity_id);
+  // If the sender reported an unresolved bind address (0.0.0.0:port from
+  // INADDR_ANY), fall back to the incoming channel's RemoteAddress which
+  // is the actual peer we just received from. Symmetric to BaseApp's
+  // OnCellEntityCreated fixup on the other leg.
+  Address base_addr = msg.base_addr;
+  if (base_addr.Ip() == 0 && ch != nullptr) {
+    base_addr = ch->RemoteAddress();
+  }
+  entity_ptr->SetBase(base_addr, msg.base_entity_id);
   auto* entity = space->AddEntity(std::move(entity_ptr));
   entity_population_[cell_id] = entity;
   base_entity_population_[msg.base_entity_id] = entity;

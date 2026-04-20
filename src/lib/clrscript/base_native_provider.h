@@ -35,7 +35,7 @@ class BaseNativeProvider : public INativeApiProvider {
   uint8_t GetProcessPrefix() override;
 
   // ---- RPC (default: log error + no-op) --------------------------------
-  void SendClientRpc(uint32_t entity_id, uint32_t rpc_id, uint8_t target, const std::byte* payload,
+  void SendClientRpc(uint32_t entity_id, uint32_t rpc_id, const std::byte* payload,
                      int32_t len) override;
 
   void SendCellRpc(uint32_t entity_id, uint32_t rpc_id, const std::byte* payload,
