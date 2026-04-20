@@ -2,12 +2,15 @@ using System;
 using System.IO;
 using System.Reflection;
 using System.Runtime.Loader;
+using Atlas.Entity;
 
 namespace Atlas.Hosting;
 
 /// <summary>
-/// Collectible AssemblyLoadContext for user game scripts.
-/// User script assemblies are loaded here; engine/shared assemblies fall back to Default.
+/// Collectible AssemblyLoadContext for user game scripts. Engine assemblies
+/// (Atlas.Runtime, Atlas.Shared, Atlas.Generators.*) are redirected to
+/// whichever ALC already holds them so every process shares one type
+/// identity for ref-struct spans, delegate tables, and static state.
 /// </summary>
 internal sealed class ScriptLoadContext : AssemblyLoadContext
 {
@@ -19,13 +22,17 @@ internal sealed class ScriptLoadContext : AssemblyLoadContext
         _scriptDirectory = scriptDirectory;
     }
 
-    // Engine assemblies must be shared with the default ALC; otherwise the
-    // script ALC gets its own fresh copy where static state (ThreadGuard's
-    // main-thread id, native callback registrations, etc.) is zero, which
-    // silently breaks [ModuleInitializer]-driven entity registration.
-    // MSBuild copies Atlas.Runtime.dll and friends next to the user script
-    // as normal build output; without this filter the override below would
-    // find them on disk and load duplicates into the collectible ALC.
+    // Engine assemblies must resolve to the instance already loaded by the
+    // CLR bootstrap. If they were loaded a second time into the collectible
+    // ALC the script would see fresh copies where static state (ThreadGuard's
+    // main-thread id, NativeCallbacks registrations, dispatcher tables) is
+    // zero. Worse, ref-struct method signatures (ref SpanWriter / SpanReader)
+    // would reference a distinct type from what ServerEntity declares, so
+    // override methods silently fail to bind and manifest as
+    // TypeLoadException "method does not have an implementation".
+    // MSBuild copies these DLLs next to the user script as normal build
+    // output; without this filter the fallback below would find them on
+    // disk and load duplicates into the wrong ALC.
     private static readonly string[] EngineAssemblyPrefixes =
     {
         "Atlas.Runtime",
@@ -58,13 +65,23 @@ internal sealed class ScriptLoadContext : AssemblyLoadContext
                             return asm;
                     }
                 }
-                // Not yet loaded anywhere — load into Default ALC from the
-                // script directory (MSBuild copies engine assemblies here
-                // as normal build output). This makes the script-ALC and
-                // the bootstrap ALC share the same instance going forward.
+                // Not yet loaded anywhere. We cannot use Default ALC as the
+                // sink, because Atlas.Runtime is resolved by hostfxr into a
+                // hostfxr-owned IsolatedComponentLoadContext (not Default).
+                // If we load engine dependencies (e.g. Atlas.Shared) into
+                // Default, they'll be a distinct type-system from the ones
+                // Atlas.Runtime's own ALC eventually loads — and method
+                // overrides with ref-struct parameters (SpanWriter /
+                // SpanReader) silently fail to bind, manifesting as
+                // TypeLoadException "method does not have an implementation".
+                //
+                // Force the load into Atlas.Runtime's ALC so everything
+                // under the engine umbrella shares one type identity.
+                var runtimeAsm = typeof(EntityFactory).Assembly;
+                var runtimeAlc = AssemblyLoadContext.GetLoadContext(runtimeAsm);
                 var enginePath = Path.Combine(_scriptDirectory, $"{name}.dll");
-                if (File.Exists(enginePath))
-                    return Default.LoadFromAssemblyPath(enginePath);
+                if (runtimeAlc != null && File.Exists(enginePath))
+                    return runtimeAlc.LoadFromAssemblyPath(enginePath);
                 return null;
             }
         }
