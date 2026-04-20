@@ -504,7 +504,8 @@ TEST(CellAppIntegration, ThousandEntityTickWithinPerfBudget) {
     const auto t0 = std::chrono::steady_clock::now();
     space.Tick(0.1f);
     const auto t1 = std::chrono::steady_clock::now();
-    tick_ms.push_back(std::chrono::duration_cast<std::chrono::microseconds>(t1 - t0).count() /
+    tick_ms.push_back(static_cast<double>(
+                          std::chrono::duration_cast<std::chrono::microseconds>(t1 - t0).count()) /
                       1000.0);
   }
   std::sort(tick_ms.begin(), tick_ms.end());
