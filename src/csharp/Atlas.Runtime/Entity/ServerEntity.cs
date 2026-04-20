@@ -130,4 +130,16 @@ public abstract class ServerEntity
     {
         NativeApi.SendBaseRpc(EntityId, (uint)rpcId, payload);
     }
+
+    /// <summary>
+    /// Transfer this entity's client connection to another base entity.
+    /// Typical use: <c>Account.SelectAvatar</c> creates the Avatar then
+    /// calls <c>GiveClientTo(avatar.EntityId)</c> so subsequent client
+    /// RPCs target the avatar. After the call <c>this</c> no longer owns
+    /// the proxy.
+    /// </summary>
+    protected internal void GiveClientTo(uint destEntityId)
+    {
+        NativeApi.GiveClientTo(EntityId, destEntityId);
+    }
 }

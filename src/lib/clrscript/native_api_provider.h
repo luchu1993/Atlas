@@ -63,6 +63,13 @@ class INativeApiProvider {
   // dest_entity_id (may live on a different BaseApp).
   virtual void GiveClientTo(uint32_t src_entity_id, uint32_t dest_entity_id) = 0;
 
+  // ---- Script-initiated entity creation (BaseApp) --------------------
+  // Create a new base entity on THIS BaseApp of the given type. Returns
+  // the newly-allocated EntityID, or 0 on failure. For has_cell types
+  // the call also triggers CreateCellEntity on a CellApp. Non-BaseApp
+  // providers log an error and return 0.
+  virtual auto CreateBaseEntity(uint16_t type_id) -> uint32_t = 0;
+
   // ---- C# → C++ callback table ----------------------------------------
   // Called by C# Atlas.Runtime once at startup to supply function pointers
   // for C++ → C# calls.  The native_callbacks blob is a packed array of

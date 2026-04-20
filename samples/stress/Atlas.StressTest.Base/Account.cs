@@ -4,11 +4,9 @@ namespace Atlas.StressTest.Base;
 
 // Login entity for the world_stress harness. Account itself is base-only
 // (see entity_defs/Account.def — no cell_methods, no cell-scoped props).
-// After authenticate, the client is expected to call SelectAvatar to
-// spawn a StressAvatar, which is the actual cell-bearing world entity.
-//
-// P2.2: SelectAvatar is a no-op stub. P2.3 will create the StressAvatar
-// entity and transfer the client proxy to it.
+// After authenticate, the client calls SelectAvatar to spawn a
+// StressAvatar (has_cell=true), and the client proxy is handed over to
+// the new avatar so subsequent cell RPCs target it.
 [Entity("Account")]
 public partial class Account : ServerEntity
 {
@@ -20,6 +18,18 @@ public partial class Account : ServerEntity
     public partial void SelectAvatar(int avatarIndex)
     {
         Log.Info($"[StressTest.Base] Account.SelectAvatar(index={avatarIndex}) entity={EntityId}");
-        // P2.3: EntityFactory.Create("StressAvatar") + client proxy handoff.
+
+        var avatar = EntityFactory.CreateBase("StressAvatar");
+        if (avatar == null)
+        {
+            Log.Error($"[StressTest.Base] SelectAvatar: failed to create StressAvatar");
+            return;
+        }
+        Log.Info(
+            $"[StressTest.Base] SelectAvatar: created StressAvatar entity={avatar.EntityId}, handing off client");
+
+        // Transfer the client proxy from the Account to the new StressAvatar
+        // so cell RPCs (Echo / ReportPos) can reach the avatar directly.
+        GiveClientTo(avatar.EntityId);
     }
 }

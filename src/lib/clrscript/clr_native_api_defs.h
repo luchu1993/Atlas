@@ -96,6 +96,16 @@
         (uint32_t src_entity_id, uint32_t dest_entity_id),                                        \
         atlas::GetNativeApiProvider().GiveClientTo(src_entity_id, dest_entity_id))                  \
                                                                                                    \
+    /* ---- Script-initiated entity creation (BaseApp) ---------------------- */                   \
+    /* Synchronously creates a new base entity of the given type on THIS    */                    \
+    /* BaseApp: allocates an EntityID, instantiates the C# script instance  */                    \
+    /* via RestoreEntity (empty blob = defaults), and — if the type has a   */                    \
+    /* cell side — sends CreateCellEntity to a CellApp. Returns the new     */                    \
+    /* entity_id, or 0 on failure (unknown type, EntityID exhausted, …).    */                    \
+    X(uint32_t, CreateBaseEntity,                                                                  \
+        (uint16_t type_id),                                                                        \
+        return atlas::GetNativeApiProvider().CreateBaseEntity(type_id))                             \
+                                                                                                   \
     /* ---- C# → C++ callback table ---------------------------------------- */                   \
     X(void, SetNativeCallbacks,                                                                    \
         (const void* native_callbacks, int32_t len),                                               \

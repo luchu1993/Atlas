@@ -1484,6 +1484,62 @@ void BaseApp::DoGiveClientToLocal(EntityID src_id, EntityID dest_id) {
   }
 }
 
+auto BaseApp::CreateBaseEntityFromScript(uint16_t type_id) -> EntityID {
+  const auto& defs = EntityDefs();
+  auto* type = defs.FindById(type_id);
+  if (!type) {
+    ATLAS_LOG_ERROR("BaseApp: CreateBaseEntityFromScript: unknown type_id {}", type_id);
+    return 0;
+  }
+
+  auto* ent = entity_mgr_.Create(type_id, type->has_client);
+  if (!ent) {
+    ATLAS_LOG_ERROR("BaseApp: CreateBaseEntityFromScript: EntityID pool exhausted for type_id {}",
+                    type_id);
+    return 0;
+  }
+  const EntityID kEid = ent->EntityId();
+
+  // Instantiate the C# script-side via RestoreEntity with an empty blob
+  // (script defaults). Same path the login flow uses after DBApp checkout.
+  if (!RestoreManagedEntity(kEid, type_id, kInvalidDBID, {})) {
+    ATLAS_LOG_ERROR("BaseApp: CreateBaseEntityFromScript: RestoreManagedEntity failed for {}",
+                    kEid);
+    entity_mgr_.Destroy(kEid);
+    return 0;
+  }
+
+  // For cell-bearing types, materialise a cell counterpart on a CellApp.
+  // v1 wiring: pick the first connected CellApp from the peer registry,
+  // use space_id=1 (CellApp auto-creates missing spaces), position=(0,0,0).
+  // No CellAppMgr round-trip yet — load-balanced space allocation lands
+  // in a future iteration.
+  if (type->has_cell) {
+    const auto& peers = cellapp_peers_.Channels();
+    if (peers.empty()) {
+      ATLAS_LOG_WARNING(
+          "BaseApp: CreateBaseEntityFromScript: type {} has_cell but no CellApp peer available",
+          type_id);
+    } else {
+      auto* cell_ch = peers.begin()->second;
+      cellapp::CreateCellEntity msg;
+      msg.base_entity_id = kEid;
+      msg.type_id = type_id;
+      msg.space_id = 1;
+      msg.position = {0.f, 0.f, 0.f};
+      msg.direction = {1.f, 0.f, 0.f};
+      msg.on_ground = false;
+      msg.base_addr = Network().RudpAddress();
+      msg.request_id = kEid;
+      (void)cell_ch->SendMessage(msg);
+      ATLAS_LOG_INFO("BaseApp: sent CreateCellEntity for entity={} type={} to {}", kEid, type_id,
+                     peers.begin()->first.ToString());
+    }
+  }
+
+  return kEid;
+}
+
 void BaseApp::DoGiveClientToRemote(EntityID src_id, EntityID /*dest_id*/,
                                    const Address& dest_baseapp) {
   auto* src_proxy = entity_mgr_.FindProxy(src_id);

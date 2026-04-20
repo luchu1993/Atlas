@@ -78,6 +78,11 @@ void BaseNativeProvider::GiveClientTo(uint32_t src_entity_id, uint32_t /*dest_en
   ATLAS_LOG_ERROR("give_client_to() not supported on this process type (src={})", src_entity_id);
 }
 
+auto BaseNativeProvider::CreateBaseEntity(uint16_t type_id) -> uint32_t {
+  ATLAS_LOG_ERROR("create_base_entity() not supported on this process type (type_id={})", type_id);
+  return 0;
+}
+
 void BaseNativeProvider::SetNativeCallbacks(const void* /*native_callbacks*/, int32_t /*len*/) {
   // Default: silently ignore.  Processes without C# scripting never receive callbacks.
 }

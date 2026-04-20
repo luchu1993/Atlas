@@ -116,6 +116,9 @@ class BaseAppNativeProvider : public BaseNativeProvider {
   // ---- Client transfer ------------------------------------------------
   void GiveClientTo(uint32_t src_entity_id, uint32_t dest_entity_id) override;
 
+  // ---- Script-initiated entity creation -------------------------------
+  auto CreateBaseEntity(uint16_t type_id) -> uint32_t override;
+
   // ---- C# → C++ callback table ----------------------------------------
   void SetNativeCallbacks(const void* native_callbacks, int32_t len) override;
 

@@ -180,6 +180,14 @@ class BaseApp : public EntityApp {
   void DoGiveClientToLocal(EntityID src_id, EntityID dest_id);
   void DoGiveClientToRemote(EntityID src_id, EntityID dest_id, const Address& dest_baseapp);
 
+  // Script-initiated entity creation. Allocates an EntityID from the local
+  // pool, creates the base entity, instantiates the C# script side via
+  // RestoreManagedEntity (empty blob — defaults), and if the type has a
+  // cell side, sends CreateCellEntity to a CellApp (picked from the
+  // cellapp_peer_registry_, space_id=1, position={0,0,0}). Returns the
+  // new EntityID, or 0 on failure.
+  auto CreateBaseEntityFromScript(uint16_t type_id) -> EntityID;
+
   // ---- Delta forwarding ------------------------------------------------
   void FlushClientDeltas();
 

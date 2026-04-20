@@ -54,6 +54,9 @@ class BaseNativeProvider : public INativeApiProvider {
   // ---- Client transfer (default: log error + no-op) -------------------
   void GiveClientTo(uint32_t src_entity_id, uint32_t dest_entity_id) override;
 
+  // ---- Script-initiated entity creation (default: log error + 0) -----
+  auto CreateBaseEntity(uint16_t type_id) -> uint32_t override;
+
   // ---- Callback table (default: no-op) --------------------------------
   void SetNativeCallbacks(const void* native_callbacks, int32_t len) override;
 
