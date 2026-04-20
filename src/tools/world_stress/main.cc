@@ -71,13 +71,14 @@ struct Metrics {
   std::size_t unexpected_disconnects{0};
   std::size_t planned_disconnects{0};
   // P2.3c: SelectAvatar is fire-and-forget on the wire — there is no
-  // AuthenticateResult-equivalent reply to it in the current protocol.
-  // Counts here are "accepted by the local send queue", not server-side
-  // completions. Server-side fan-out (entity creation + client proxy
-  // handoff) is observed via BaseApp's own script logs until we add a
-  // dedicated client notification in a later phase.
+  // direct reply to it in the current protocol. `select_avatar_sent`
+  // counts "accepted by the local send queue"; `entity_transferred`
+  // counts the engine-level EntityTransferred notifications that arrive
+  // after the server-side Account.SelectAvatar runs GiveClientTo (see
+  // P2.3e baseapp change). The two should match 1:1 on a healthy run.
   std::size_t select_avatar_sent{0};
   std::size_t select_avatar_fail{0};
+  std::size_t entity_transferred{0};
   std::vector<double> auth_latency_ms;
   std::unordered_map<std::string, std::size_t> failure_reasons;
 };
@@ -156,6 +157,10 @@ class Session {
     (void)table.RegisterTypedHandler<baseapp::AuthenticateResult>(
         [this](const Address&, Channel*, const baseapp::AuthenticateResult& msg) {
           OnAuthResult(msg);
+        });
+    (void)table.RegisterTypedHandler<baseapp::EntityTransferred>(
+        [this](const Address&, Channel*, const baseapp::EntityTransferred& msg) {
+          OnEntityTransferred(msg);
         });
   }
 
@@ -278,6 +283,14 @@ class Session {
       ++metrics_.select_avatar_fail;
       RecordFailure(std::format("select_avatar_send:{}", kRpcSend.Error().Message()));
     }
+  }
+
+  void OnEntityTransferred(const baseapp::EntityTransferred& msg) {
+    // Engine-level handoff notification: our controlling entity has moved
+    // from Account → StressAvatar (or equivalent). Update our cached id
+    // so subsequent cell RPCs target the new entity.
+    entity_id_ = msg.new_entity_id;
+    ++metrics_.entity_transferred;
   }
 
   void OnDisconnect(const Address&) {
@@ -679,6 +692,7 @@ void PrintSummary(const Options& opts, const Metrics& metrics,
   std::cout << std::format("  auth_success:       {}\n", metrics.auth_success);
   std::cout << std::format("  select_avatar_sent: {}\n", metrics.select_avatar_sent);
   std::cout << std::format("  select_avatar_fail: {}\n", metrics.select_avatar_fail);
+  std::cout << std::format("  entity_transferred: {}\n", metrics.entity_transferred);
   std::cout << std::format("  login_fail:         {}\n", metrics.login_result_fail);
   std::cout << std::format("  auth_fail:          {}\n", metrics.auth_fail);
   std::cout << std::format("  timeout_fail:       {}\n", metrics.timeout_fail);

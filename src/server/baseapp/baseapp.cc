@@ -1481,6 +1481,19 @@ void BaseApp::DoGiveClientToLocal(EntityID src_id, EntityID dest_id) {
   UnbindClient(src_id);
   if (!BindClient(dest_id, kClientAddr)) {
     ATLAS_LOG_ERROR("BaseApp: give_client_to: failed to move client binding to dest={}", dest_id);
+    return;
+  }
+
+  // Tell the client its owning entity has changed. Without this message
+  // the client still thinks `src_id` is its entity (that's what it got
+  // from AuthenticateResult), and every ClientCellRpc it sends afterwards
+  // would target a detached Proxy at validation time. See BigWorld's
+  // Proxy::giveClientTo → currentEntityChanged analogue.
+  if (auto* client_ch = ResolveClientChannel(dest_id)) {
+    baseapp::EntityTransferred notify;
+    notify.new_entity_id = dest_id;
+    notify.new_type_id = dst_proxy->TypeId();
+    (void)client_ch->SendMessage(notify);
   }
 }
 

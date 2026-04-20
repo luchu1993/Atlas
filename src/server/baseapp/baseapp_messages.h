@@ -575,6 +575,46 @@ struct AuthenticateResult {
 static_assert(NetworkMessage<AuthenticateResult>);
 
 // ============================================================================
+// EntityTransferred  (BaseApp → Client, ID 2024)
+//
+// Notifies the client that its owning entity has changed as a result of a
+// server-side GiveClientTo handoff (e.g. Account → Avatar at SelectAvatar).
+// After this arrives, the client must use `new_entity_id` as the
+// `target_entity_id` for subsequent ClientCellRpc messages; the previous
+// id is unbound from the RUDP channel and will be rejected at validation.
+// `new_type_id` lets the client identify which entity class is now active
+// (useful when the client needs to construct type-specific RPC ids).
+// ============================================================================
+
+struct EntityTransferred {
+  EntityID new_entity_id{kInvalidEntityID};
+  uint16_t new_type_id{0};
+
+  static auto Descriptor() -> const MessageDesc& {
+    static const MessageDesc kDesc{msg_id::Id(msg_id::BaseApp::kEntityTransferred),
+                                   "baseapp::EntityTransferred", MessageLengthStyle::kFixed,
+                                   static_cast<int>(sizeof(uint32_t) + sizeof(uint16_t))};
+    return kDesc;
+  }
+
+  void Serialize(BinaryWriter& w) const {
+    w.Write(new_entity_id);
+    w.Write(new_type_id);
+  }
+
+  static auto Deserialize(BinaryReader& r) -> Result<EntityTransferred> {
+    auto eid = r.Read<uint32_t>();
+    auto ti = r.Read<uint16_t>();
+    if (!eid || !ti) return Error{ErrorCode::kInvalidArgument, "EntityTransferred: truncated"};
+    EntityTransferred msg;
+    msg.new_entity_id = *eid;
+    msg.new_type_id = *ti;
+    return msg;
+  }
+};
+static_assert(NetworkMessage<EntityTransferred>);
+
+// ============================================================================
 // ClientBaseRpc  (Client → BaseApp external interface, ID 2022)
 // Client sends an exposed base method call. BaseApp validates the exposed scope
 // and dispatches to the C# entity via the dispatch_rpc callback.

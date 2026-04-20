@@ -97,7 +97,12 @@ enum class BaseApp : uint16_t {
   kAuthenticateResult = 2021,
   kClientBaseRpc = 2022,  // Client → BaseApp: exposed base method call
   kClientCellRpc = 2023,  // Client → BaseApp: exposed cell method call (forwarded to CellApp)
-                          // Internal: BaseApp ↔ BaseApp
+  // BaseApp → Client: notifies the client that its owning entity has
+  // changed (e.g. after a script-initiated GiveClientTo handoff). The
+  // client must use the new entity_id as the target for subsequent
+  // ClientCellRpc messages; the old id is no longer bound to the channel.
+  kEntityTransferred = 2024,
+  // Internal: BaseApp ↔ BaseApp
   kForceLogoff = 2030,
   kForceLogoffAck = 2031,
 };
@@ -245,6 +250,7 @@ ATLAS_ASSERT_ID_RANGE(BaseApp::kBroadcastRpcFromCell, 2000, 2999);
 ATLAS_ASSERT_ID_RANGE(BaseApp::kReplicatedReliableDeltaFromCell, 2000, 2999);
 ATLAS_ASSERT_ID_RANGE(BaseApp::kAuthenticate, 2000, 2999);
 ATLAS_ASSERT_ID_RANGE(BaseApp::kAuthenticateResult, 2000, 2999);
+ATLAS_ASSERT_ID_RANGE(BaseApp::kEntityTransferred, 2000, 2999);
 ATLAS_ASSERT_ID_RANGE(BaseApp::kForceLogoff, 2000, 2999);
 ATLAS_ASSERT_ID_RANGE(BaseApp::kForceLogoffAck, 2000, 2999);
 
