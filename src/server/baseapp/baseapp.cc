@@ -118,6 +118,13 @@ auto BaseApp::Init(int argc, char* argv[]) -> bool {
     }
     ATLAS_LOG_INFO("BaseApp: external RUDP interface listening on port {}", cfg.external_port);
   }
+  // P5: apply an inactivity timeout on accept so a client that goes dark
+  // (crash / ungraceful close / network failure) is detected within
+  // bounded time instead of lingering as a zombie Proxy forever. Mirrors
+  // LoginApp's pattern; value is tuned for worldstate sessions that
+  // normally send traffic continuously via move/echo streams.
+  external_network_.SetAcceptCallback(
+      [](Channel& ch) { ch.SetInactivityTimeout(std::chrono::seconds(10)); });
   external_network_.SetDisconnectCallback([this](Channel& ch) { OnExternalClientDisconnect(ch); });
 
   // ---- Subscribe to DBApp birth notification to connect ----------------
@@ -1442,6 +1449,22 @@ auto BaseApp::FinalizeForceLogoff(EntityID entity_id) -> bool {
   auto* ent = entity_mgr_.Find(entity_id);
   if (!ent) {
     return true;
+  }
+
+  // If the entity has a cell counterpart, tell the owning CellApp to
+  // destroy it before we drop the base side. Without this the cell
+  // entity leaks forever — it has no independent destroy trigger.
+  // Covers the shortline / script-created path (StressAvatar et al.);
+  // DB-backed entities that go through BeginLogoffPersist also want
+  // this hook but can share the same helper call when that path lands.
+  if (ent->HasCell()) {
+    if (auto* cell_ch = ResolveCellChannelForEntity(entity_id)) {
+      cellapp::DestroyCellEntity msg;
+      msg.base_entity_id = entity_id;
+      (void)cell_ch->SendMessage(msg);
+      ATLAS_LOG_DEBUG("BaseApp: sent DestroyCellEntity for entity={}", entity_id);
+    }
+    ent->ClearCell();
   }
 
   if (!NotifyManagedEntityDestroyed(entity_id, "force logoff")) {
