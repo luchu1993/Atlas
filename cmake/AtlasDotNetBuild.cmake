@@ -26,6 +26,33 @@ function(atlas_dotnet_project)
 
   if(CMAKE_GENERATOR MATCHES "Visual Studio")
     # ── Visual Studio: include the .csproj natively ──────────────────────
+    #
+    # `include_external_msproject` does NOT invoke `dotnet restore`. If the
+    # project has no `obj/project.assets.json`, MSBuild silently skips the
+    # C# project during a solution build, which in turn skips any native
+    # target that depends on it via `add_dependencies` — the dependent
+    # .exe is never produced and `ctest` reports it as "Not Run". Run
+    # restore at configure time to guarantee the restore artefacts exist
+    # before VS builds this project.
+    if(DOTNET_EXECUTABLE)
+      message(STATUS "Restoring NuGet packages for ${ARG_NAME}")
+      execute_process(
+        COMMAND "${DOTNET_EXECUTABLE}" restore "${_proj_path}" --nologo --verbosity quiet
+        WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+        RESULT_VARIABLE _restore_result
+        OUTPUT_VARIABLE _restore_output
+        ERROR_VARIABLE _restore_output
+      )
+      if(NOT _restore_result EQUAL 0)
+        message(FATAL_ERROR
+          "dotnet restore failed for ${_proj_path} (exit ${_restore_result}):\n${_restore_output}")
+      endif()
+    else()
+      message(WARNING
+        "DOTNET_EXECUTABLE not found — cannot restore ${_proj_path}. "
+        "VS solution build may skip this C# project and its dependents.")
+    endif()
+
     include_external_msproject(${ARG_NAME} "${_proj_path}")
 
     if(ARG_DEPENDS)
