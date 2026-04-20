@@ -1,6 +1,7 @@
 using System;
 using System.IO;
 using System.Reflection;
+using System.Runtime.CompilerServices;
 using System.Threading;
 
 namespace Atlas.Hosting;
@@ -28,6 +29,35 @@ internal sealed class ScriptHost : IDisposable
         _context = new ScriptLoadContext(dir);
         _scriptAssembly = _context.LoadFromAssemblyPath(Path.GetFullPath(assemblyPath));
         _contextRef = new WeakReference(_context);
+
+        // Force every module initializer in the loaded assembly to run.
+        // `LoadFromAssemblyPath` does NOT execute module initializers — they
+        // only fire the first time the CLR *uses* a type from the module,
+        // which with collectible ALCs means "never" if the host never
+        // accesses one. DefGenerator emits DefEntityTypeRegistry.RegisterAll
+        // as a [ModuleInitializer]; without this kick it silently never
+        // registers any entity types with the C++ engine, so subsequent
+        // RPC dispatch fails with "non-exposed base method".
+        foreach (var module in _scriptAssembly.GetModules())
+        {
+            try { RuntimeHelpers.RunModuleConstructor(module.ModuleHandle); }
+            catch (Exception ex)
+            {
+                // Unwrap TypeInitializationException chains to surface the
+                // actual inner exception type and message. The generator
+                // swallows DllNotFoundException and InvalidOperationException
+                // internally, so anything making it out here is a real
+                // structural failure (missing engine assembly, missing type,
+                // etc.) that should fail the load loudly.
+                var root = ex;
+                while (root.InnerException != null) root = root.InnerException;
+                Atlas.Log.Error(
+                    $"ScriptHost.Load: module init '{module.Name}' failed. "
+                    + $"Outer={ex.GetType().Name}: {ex.Message}. "
+                    + $"Root={root.GetType().Name}: {root.Message}");
+                throw;
+            }
+        }
     }
 
     /// <summary>
