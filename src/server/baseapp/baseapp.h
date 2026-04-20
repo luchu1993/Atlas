@@ -186,8 +186,10 @@ class BaseApp : public EntityApp {
   // cell side, sends CreateCellEntity to a CellApp (picked from the
   // cellapp_peer_registry_, position={0,0,0}). `space_id` is forwarded to
   // the cell; CellApp auto-creates the Space if it doesn't yet exist.
-  // Returns the new EntityID, or 0 on failure.
-  auto CreateBaseEntityFromScript(uint16_t type_id, SpaceID space_id) -> EntityID;
+  // `aoi_radius > 0` asks the cell to enable a witness with that radius
+  // (passed through the CreateCellEntity message). Returns the new
+  // EntityID, or 0 on failure.
+  auto CreateBaseEntityFromScript(uint16_t type_id, SpaceID space_id, float aoi_radius) -> EntityID;
 
   // ---- Delta forwarding ------------------------------------------------
   void FlushClientDeltas();

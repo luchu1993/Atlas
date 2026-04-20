@@ -21,10 +21,16 @@ public partial class Account : ServerEntity
         // Values <= 0 default to space 1 so the one-space case (all prior
         // P2/P3 smoke runs) keeps working unchanged.
         uint spaceId = avatarIndex > 0 ? (uint)avatarIndex : 1u;
+        // P4: always ask the cell to enable an AoI witness on the new
+        // StressAvatar. 50 m roughly matches the ReportPos random-walk
+        // clamp (±50 m square) so neighbours move in and out of AoI
+        // during a run; no good way yet to thread this radius from the
+        // world_stress CLI — future refinement.
+        const float kAoIRadius = 50f;
         Log.Info(
-            $"[StressTest.Base] Account.SelectAvatar(index={avatarIndex}) entity={EntityId} -> space={spaceId}");
+            $"[StressTest.Base] Account.SelectAvatar(index={avatarIndex}) entity={EntityId} -> space={spaceId} aoi={kAoIRadius}");
 
-        var avatar = EntityFactory.CreateBase("StressAvatar", spaceId);
+        var avatar = EntityFactory.CreateBase("StressAvatar", spaceId, kAoIRadius);
         if (avatar == null)
         {
             Log.Error($"[StressTest.Base] SelectAvatar: failed to create StressAvatar");

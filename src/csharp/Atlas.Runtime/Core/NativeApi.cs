@@ -120,7 +120,7 @@ internal static unsafe partial class NativeApi
     public static partial void GiveClientTo(uint srcEntityId, uint destEntityId);
 
     [LibraryImport(LibName, EntryPoint = "AtlasCreateBaseEntity")]
-    private static partial uint CreateBaseEntityNative(ushort typeId, uint spaceId);
+    private static partial uint CreateBaseEntityNative(ushort typeId, uint spaceId, float aoiRadius);
 
     /// <summary>
     /// Script-initiated entity creation on the caller's BaseApp. Returns
@@ -129,12 +129,14 @@ internal static unsafe partial class NativeApi
     /// native side invokes RestoreEntity synchronously before returning.
     /// For has_cell types the call also fires CreateCellEntity to a CellApp
     /// targeting <paramref name="spaceId"/> (CellApp auto-creates the Space
-    /// if missing). space_id is ignored for base-only types.
+    /// if missing) and enables a witness with <paramref name="aoiRadius"/>
+    /// (0 = no witness). space_id / aoi_radius are ignored for base-only
+    /// types.
     /// </summary>
-    public static uint CreateBaseEntity(ushort typeId, uint spaceId = 1)
+    public static uint CreateBaseEntity(ushort typeId, uint spaceId = 1, float aoiRadius = 0f)
     {
         ThreadGuard.EnsureMainThread();
-        return CreateBaseEntityNative(typeId, spaceId);
+        return CreateBaseEntityNative(typeId, spaceId, aoiRadius);
     }
 
     [LibraryImport(LibName, EntryPoint = "AtlasSetNativeCallbacks")]

@@ -91,8 +91,9 @@ void BaseAppNativeProvider::GiveClientTo(uint32_t src_entity_id, uint32_t dest_e
                       dest_entity_id);
 }
 
-auto BaseAppNativeProvider::CreateBaseEntity(uint16_t type_id, uint32_t space_id) -> uint32_t {
-  return app_.CreateBaseEntityFromScript(type_id, space_id);
+auto BaseAppNativeProvider::CreateBaseEntity(uint16_t type_id, uint32_t space_id, float aoi_radius)
+    -> uint32_t {
+  return app_.CreateBaseEntityFromScript(type_id, space_id, aoi_radius);
 }
 
 void BaseAppNativeProvider::SetNativeCallbacks(const void* native_callbacks, int32_t len) {

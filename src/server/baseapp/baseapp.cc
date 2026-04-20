@@ -1522,7 +1522,8 @@ void BaseApp::DoGiveClientToLocal(EntityID src_id, EntityID dest_id) {
   }
 }
 
-auto BaseApp::CreateBaseEntityFromScript(uint16_t type_id, SpaceID space_id) -> EntityID {
+auto BaseApp::CreateBaseEntityFromScript(uint16_t type_id, SpaceID space_id, float aoi_radius)
+    -> EntityID {
   const auto& defs = EntityDefs();
   auto* type = defs.FindById(type_id);
   if (!type) {
@@ -1583,6 +1584,7 @@ auto BaseApp::CreateBaseEntityFromScript(uint16_t type_id, SpaceID space_id) -> 
       msg.on_ground = false;
       msg.base_addr = Network().RudpAddress();
       msg.request_id = kEid;
+      msg.aoi_radius = aoi_radius;
       (void)cell_ch->SendMessage(msg);
       ATLAS_LOG_INFO("BaseApp: sent CreateCellEntity for entity={} type={} space={} to {}", kEid,
                      type_id, effective_space_id, sorted_peers[cell_index].first.ToString());

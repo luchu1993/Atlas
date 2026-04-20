@@ -101,11 +101,12 @@
     /* BaseApp: allocates an EntityID, instantiates the C# script instance  */                    \
     /* via RestoreEntity (empty blob = defaults), and — if the type has a   */                    \
     /* cell side — sends CreateCellEntity to a CellApp with the given       */                    \
-    /* space_id. Returns the new entity_id, or 0 on failure (unknown type,  */                    \
-    /* EntityID exhausted, …). space_id is ignored for base-only types.     */                    \
+    /* space_id and aoi_radius (0 = no witness). Returns the new entity_id, */                    \
+    /* or 0 on failure (unknown type, EntityID exhausted, …). space_id /    */                    \
+    /* aoi_radius are ignored for base-only types.                          */                    \
     X(uint32_t, CreateBaseEntity,                                                                  \
-        (uint16_t type_id, uint32_t space_id),                                                     \
-        return atlas::GetNativeApiProvider().CreateBaseEntity(type_id, space_id))                  \
+        (uint16_t type_id, uint32_t space_id, float aoi_radius),                                   \
+        return atlas::GetNativeApiProvider().CreateBaseEntity(type_id, space_id, aoi_radius))      \
                                                                                                    \
     /* ---- C# → C++ callback table ---------------------------------------- */                   \
     X(void, SetNativeCallbacks,                                                                    \

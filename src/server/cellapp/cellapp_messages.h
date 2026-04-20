@@ -51,6 +51,11 @@ struct CreateCellEntity {
   bool on_ground{false};
   Address base_addr;  // where to send CellEntityCreated back
   uint32_t request_id{0};
+  // AoI radius for this entity's witness. 0 means "no witness" (default);
+  // any positive value enables the witness in OnCreateCellEntity without
+  // a separate EnableWitness round-trip. The entity still has to be
+  // client-bearing for witness envelopes to reach anywhere useful.
+  float aoi_radius{0.f};
   std::vector<std::byte> script_init_data;
 
   static auto Descriptor() -> const MessageDesc& {
@@ -73,6 +78,7 @@ struct CreateCellEntity {
     w.Write(base_addr.Ip());
     w.Write(base_addr.Port());
     w.Write(request_id);
+    w.Write(aoi_radius);
     w.WritePackedInt(static_cast<uint32_t>(script_init_data.size()));
     if (!script_init_data.empty()) w.WriteBytes(std::span<const std::byte>(script_init_data));
   }
@@ -91,9 +97,10 @@ struct CreateCellEntity {
     auto ip = r.Read<uint32_t>();
     auto port = r.Read<uint16_t>();
     auto rid = r.Read<uint32_t>();
+    auto aoi = r.Read<float>();
     auto slen = r.ReadPackedInt();
     if (!eid || !ti || !sid || !px || !py || !pz || !dx || !dy || !dz || !og || !ip || !port ||
-        !rid || !slen)
+        !rid || !aoi || !slen)
       return Error{ErrorCode::kInvalidArgument, "CreateCellEntity: truncated"};
     CreateCellEntity msg;
     msg.base_entity_id = *eid;
@@ -104,6 +111,7 @@ struct CreateCellEntity {
     msg.on_ground = (*og != 0);
     msg.base_addr = Address(*ip, *port);
     msg.request_id = *rid;
+    msg.aoi_radius = *aoi;
     if (*slen > 0) {
       auto data = r.ReadBytes(*slen);
       if (!data)

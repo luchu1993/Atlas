@@ -106,6 +106,12 @@ struct Metrics {
   // protocol). Counts "accepted by local send queue".
   std::size_t move_sent{0};
   std::size_t move_fail{0};
+  // P4: AoI envelope counts received via BaseApp's reliable-delta relay
+  // (wire msg_id 0xF003). First payload byte is CellAoIEnvelopeKind.
+  std::size_t aoi_enter{0};
+  std::size_t aoi_leave{0};
+  std::size_t aoi_pos_update{0};
+  std::size_t aoi_prop_update{0};
   std::vector<double> auth_latency_ms;
   std::vector<double> echo_rtt_ms;
   std::unordered_map<std::string, std::size_t> failure_reasons;
@@ -442,24 +448,52 @@ class Session {
     // EchoReply wire msg_id is the cell-direction 0-bits form of
     //   (direction=0 <<22) | (type_index=2 <<8) | method_index=1 = 0x0201
     constexpr MessageID kEchoReplyWireId = 0x0201;
-    if (id != kEchoReplyWireId) return false;
+    // DeltaForwarder::kClientReliableDeltaMessageId — BaseApp relays
+    // CellApp's ReplicatedReliableDeltaFromCell here. The payload starts
+    // with a CellAoIEnvelopeKind byte (enter=1, leave=2, pos=3, prop=4).
+    constexpr MessageID kReliableDeltaWireId = 0xF003;
 
-    // Payload layout matches StressAvatar.def client_methods::EchoReply:
-    //   uint32 seq | uint64 serverTsNs | uint64 clientTsNs
-    BinaryReader reader(payload);
-    auto seq = reader.Read<uint32_t>();
-    auto server_ts_ns = reader.Read<uint64_t>();
-    auto client_ts_ns = reader.Read<uint64_t>();
-    if (!seq || !server_ts_ns || !client_ts_ns) return true;  // malformed but ours
+    if (id == kEchoReplyWireId) {
+      // Payload layout matches StressAvatar.def client_methods::EchoReply:
+      //   uint32 seq | uint64 serverTsNs | uint64 clientTsNs
+      BinaryReader reader(payload);
+      auto seq = reader.Read<uint32_t>();
+      auto server_ts_ns = reader.Read<uint64_t>();
+      auto client_ts_ns = reader.Read<uint64_t>();
+      if (!seq || !server_ts_ns || !client_ts_ns) return true;  // malformed but ours
 
-    const uint64_t now_ns = static_cast<uint64_t>(
-        std::chrono::duration_cast<std::chrono::nanoseconds>(SteadyClock::now().time_since_epoch())
-            .count());
-    const double rtt_ms = static_cast<double>(now_ns - *client_ts_ns) / 1e6;
-    ++metrics_.echo_received;
-    metrics_.echo_rtt_ms.push_back(rtt_ms);
-    (void)*server_ts_ns;  // reserved for future up-leg / down-leg split
-    return true;
+      const uint64_t now_ns =
+          static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(
+                                    SteadyClock::now().time_since_epoch())
+                                    .count());
+      const double rtt_ms = static_cast<double>(now_ns - *client_ts_ns) / 1e6;
+      ++metrics_.echo_received;
+      metrics_.echo_rtt_ms.push_back(rtt_ms);
+      (void)*server_ts_ns;  // reserved for future up-leg / down-leg split
+      return true;
+    }
+
+    if (id == kReliableDeltaWireId && !payload.empty()) {
+      switch (static_cast<uint8_t>(payload[0])) {
+        case 1:
+          ++metrics_.aoi_enter;
+          break;
+        case 2:
+          ++metrics_.aoi_leave;
+          break;
+        case 3:
+          ++metrics_.aoi_pos_update;
+          break;
+        case 4:
+          ++metrics_.aoi_prop_update;
+          break;
+        default:
+          break;
+      }
+      return true;
+    }
+
+    return false;
   }
 
   void OnDisconnect(const Address&) {
@@ -912,6 +946,10 @@ void PrintSummary(const Options& opts, const Metrics& metrics,
   std::cout << std::format("  space_count:        {}\n", opts.space_count);
   std::cout << std::format("  move_sent:          {}\n", metrics.move_sent);
   std::cout << std::format("  move_fail:          {}\n", metrics.move_fail);
+  std::cout << std::format("  aoi_enter:          {}\n", metrics.aoi_enter);
+  std::cout << std::format("  aoi_leave:          {}\n", metrics.aoi_leave);
+  std::cout << std::format("  aoi_pos_update:     {}\n", metrics.aoi_pos_update);
+  std::cout << std::format("  aoi_prop_update:    {}\n", metrics.aoi_prop_update);
   if (!metrics.echo_rtt_ms.empty()) {
     std::cout << std::format("  echo_rtt_p50:       {:.2f} ms\n",
                              PercentileMs(metrics.echo_rtt_ms, 50.0));

@@ -364,6 +364,17 @@ void CellApp::OnCreateCellEntity(const Address& src, Channel* ch,
                       *error);
     }
   }
+
+  // P4: if the creator asked for an AoI witness, enable it now so we
+  // don't need a separate EnableWitness wire round-trip for every
+  // client-bearing entity. Uses the existing OnEnableWitness plumbing
+  // verbatim — same callback wiring, same entity lookup.
+  if (msg.aoi_radius > 0.f) {
+    cellapp::EnableWitness ew;
+    ew.base_entity_id = msg.base_entity_id;
+    ew.aoi_radius = msg.aoi_radius;
+    OnEnableWitness(src, ch, ew);
+  }
   (void)src;
 }
 
