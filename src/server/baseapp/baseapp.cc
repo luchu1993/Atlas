@@ -1532,10 +1532,16 @@ auto BaseApp::CreateBaseEntityFromScript(uint16_t type_id, SpaceID space_id) -> 
   }
 
   // For cell-bearing types, materialise a cell counterpart on a CellApp.
-  // v1 wiring: pick the first connected CellApp from the peer registry,
-  // use space_id=1 (CellApp auto-creates missing spaces), position=(0,0,0).
-  // No CellAppMgr round-trip yet — load-balanced space allocation lands
-  // in a future iteration.
+  // v2 wiring (P3.4): pick the CellApp deterministically by space_id over
+  // a stably-sorted peer list, so every entity in the same space lands
+  // on the same CellApp (required — CellApp auto-creates its view of a
+  // space on first CreateCellEntity, so a second CreateCellEntity for
+  // the same space_id that arrived at a different CellApp would materialise
+  // a second, disconnected copy of the "space"). Keyed by Address so the
+  // ordering is independent of the insertion order of Birth notifications.
+  // A proper CellAppMgr-routed allocation is still the right long-term
+  // design (load-aware, offload-aware); this is a 2-line placeholder that
+  // at least lights up every CellApp instead of pinning to peers.begin().
   if (type->has_cell) {
     const auto& peers = cellapp_peers_.Channels();
     if (peers.empty()) {
@@ -1543,19 +1549,27 @@ auto BaseApp::CreateBaseEntityFromScript(uint16_t type_id, SpaceID space_id) -> 
           "BaseApp: CreateBaseEntityFromScript: type {} has_cell but no CellApp peer available",
           type_id);
     } else {
-      auto* cell_ch = peers.begin()->second;
+      std::vector<std::pair<Address, Channel*>> sorted_peers(peers.begin(), peers.end());
+      std::sort(sorted_peers.begin(), sorted_peers.end(), [](const auto& a, const auto& b) {
+        if (a.first.Ip() != b.first.Ip()) return a.first.Ip() < b.first.Ip();
+        return a.first.Port() < b.first.Port();
+      });
+      const SpaceID effective_space_id = space_id == kInvalidSpaceID ? SpaceID{1} : space_id;
+      const std::size_t cell_index =
+          static_cast<std::size_t>(effective_space_id - 1) % sorted_peers.size();
+      auto* cell_ch = sorted_peers[cell_index].second;
       cellapp::CreateCellEntity msg;
       msg.base_entity_id = kEid;
       msg.type_id = type_id;
-      msg.space_id = space_id == kInvalidSpaceID ? SpaceID{1} : space_id;
+      msg.space_id = effective_space_id;
       msg.position = {0.f, 0.f, 0.f};
       msg.direction = {1.f, 0.f, 0.f};
       msg.on_ground = false;
       msg.base_addr = Network().RudpAddress();
       msg.request_id = kEid;
       (void)cell_ch->SendMessage(msg);
-      ATLAS_LOG_INFO("BaseApp: sent CreateCellEntity for entity={} type={} to {}", kEid, type_id,
-                     peers.begin()->first.ToString());
+      ATLAS_LOG_INFO("BaseApp: sent CreateCellEntity for entity={} type={} space={} to {}", kEid,
+                     type_id, effective_space_id, sorted_peers[cell_index].first.ToString());
     }
   }
 
