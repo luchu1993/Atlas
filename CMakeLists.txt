@@ -37,6 +37,7 @@ add_subdirectory(src/tools)
 
 if(ATLAS_BUILD_CSHARP)
   add_subdirectory(src/csharp)
+  add_subdirectory(samples/stress)
 endif()
 
 # ── Tests ────────────────────────────────────────────────────────────────────

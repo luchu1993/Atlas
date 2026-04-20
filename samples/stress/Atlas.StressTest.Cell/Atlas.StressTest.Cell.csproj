@@ -1,0 +1,30 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net9.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <RootNamespace>Atlas.StressTest.Cell</RootNamespace>
+    <AssemblyName>Atlas.StressTest.Cell</AssemblyName>
+    <!-- CellApp-side script assembly. -->
+    <DefineConstants>ATLAS_CELL</DefineConstants>
+    <EmitCompilerGeneratedFiles>true</EmitCompilerGeneratedFiles>
+    <CompilerGeneratedFilesOutputPath>$(BaseIntermediateOutputPath)generated</CompilerGeneratedFilesOutputPath>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\..\src\csharp\Atlas.Runtime\Atlas.Runtime.csproj" />
+    <ProjectReference Include="..\..\..\src\csharp\Atlas.Generators.Def\Atlas.Generators.Def.csproj"
+                      OutputItemType="Analyzer"
+                      ReferenceOutputAssembly="false" />
+  </ItemGroup>
+
+  <!-- Both defs must be present so alphabetical type-id assignment matches
+       the Base assembly. Account has no cell side (no cell_methods, no
+       cell-scoped props); it registers as metadata only on CellApp. -->
+  <ItemGroup>
+    <AdditionalFiles Include="..\..\..\entity_defs\Account.def" />
+    <AdditionalFiles Include="..\..\..\entity_defs\StressAvatar.def" />
+  </ItemGroup>
+
+</Project>

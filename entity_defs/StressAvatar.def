@@ -1,0 +1,26 @@
+<entity name="StressAvatar">
+
+  <properties>
+    <property name="position" type="vector3" scope="all_clients" />
+  </properties>
+
+  <cell_methods>
+    <method name="Echo" exposed="own_client">
+      <arg name="seq"        type="uint32" />
+      <arg name="clientTsNs" type="uint64" />
+    </method>
+    <method name="ReportPos" exposed="all_clients">
+      <arg name="pos" type="vector3" />
+      <arg name="dir" type="vector3" />
+    </method>
+  </cell_methods>
+
+  <client_methods>
+    <method name="EchoReply">
+      <arg name="seq"        type="uint32" />
+      <arg name="serverTsNs" type="uint64" />
+      <arg name="clientTsNs" type="uint64" />
+    </method>
+  </client_methods>
+
+</entity>
