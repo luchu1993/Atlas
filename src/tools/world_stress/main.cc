@@ -70,6 +70,14 @@ struct Metrics {
   std::size_t timeout_fail{0};
   std::size_t unexpected_disconnects{0};
   std::size_t planned_disconnects{0};
+  // P2.3c: SelectAvatar is fire-and-forget on the wire — there is no
+  // AuthenticateResult-equivalent reply to it in the current protocol.
+  // Counts here are "accepted by the local send queue", not server-side
+  // completions. Server-side fan-out (entity creation + client proxy
+  // handoff) is observed via BaseApp's own script logs until we add a
+  // dedicated client notification in a later phase.
+  std::size_t select_avatar_sent{0};
+  std::size_t select_avatar_fail{0};
   std::vector<double> auth_latency_ms;
   std::unordered_map<std::string, std::size_t> failure_reasons;
 };
@@ -251,6 +259,25 @@ class Session {
                                  intentionally_offline_
                                      ? RandomBetween(opts_.shortline_min_ms, opts_.shortline_max_ms)
                                      : RandomBetween(opts_.hold_min_ms, opts_.hold_max_ms));
+
+    // P2.3c: fire Account.SelectAvatar(0) as a ClientBaseRpc. RPC ID is
+    // packed as (direction<<22) | (type_index<<8) | method_index, matching
+    // Atlas.Generators.Def/Emitters/RpcIdEmitter.cs. Account's type_index
+    // is 1 (first alphabetically among {Account, StressAvatar}); base_methods
+    // sort alphabetically to [RequestAvatarList=1, SelectAvatar=2]; direction
+    // 3 is the exposed-base-RPC tag. Cf. baseapp.cc OnClientBaseRpc validation.
+    // Payload is int32 avatarIndex=0 as 4-byte little-endian.
+    constexpr uint32_t kSelectAvatarRpcId = (3u << 22) | (1u << 8) | 2u;
+    baseapp::ClientBaseRpc rpc;
+    rpc.rpc_id = kSelectAvatarRpcId;
+    rpc.payload = {std::byte{0}, std::byte{0}, std::byte{0}, std::byte{0}};
+    const auto kRpcSend = auth_channel_->SendMessage(rpc);
+    if (kRpcSend) {
+      ++metrics_.select_avatar_sent;
+    } else {
+      ++metrics_.select_avatar_fail;
+      RecordFailure(std::format("select_avatar_send:{}", kRpcSend.Error().Message()));
+    }
   }
 
   void OnDisconnect(const Address&) {
@@ -650,6 +677,8 @@ void PrintSummary(const Options& opts, const Metrics& metrics,
   std::cout << std::format("  login_started:      {}\n", metrics.login_started);
   std::cout << std::format("  login_success:      {}\n", metrics.login_result_success);
   std::cout << std::format("  auth_success:       {}\n", metrics.auth_success);
+  std::cout << std::format("  select_avatar_sent: {}\n", metrics.select_avatar_sent);
+  std::cout << std::format("  select_avatar_fail: {}\n", metrics.select_avatar_fail);
   std::cout << std::format("  login_fail:         {}\n", metrics.login_result_fail);
   std::cout << std::format("  auth_fail:          {}\n", metrics.auth_fail);
   std::cout << std::format("  timeout_fail:       {}\n", metrics.timeout_fail);
