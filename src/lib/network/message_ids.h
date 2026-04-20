@@ -102,6 +102,12 @@ enum class BaseApp : uint16_t {
   // client must use the new entity_id as the target for subsequent
   // ClientCellRpc messages; the old id is no longer bound to the channel.
   kEntityTransferred = 2024,
+  // BaseApp → Client: notifies the client that its bound entity's cell
+  // counterpart is live and ready to accept ClientCellRpc. Arrives after
+  // CellEntityCreated from the CellApp has bound cell_addr on the proxy.
+  // Without this, clients racing CreateCellEntity would have their first
+  // cell RPCs dropped at BaseApp as "no cell channel for target entity".
+  kCellReady = 2025,
   // Internal: BaseApp ↔ BaseApp
   kForceLogoff = 2030,
   kForceLogoffAck = 2031,
@@ -251,6 +257,7 @@ ATLAS_ASSERT_ID_RANGE(BaseApp::kReplicatedReliableDeltaFromCell, 2000, 2999);
 ATLAS_ASSERT_ID_RANGE(BaseApp::kAuthenticate, 2000, 2999);
 ATLAS_ASSERT_ID_RANGE(BaseApp::kAuthenticateResult, 2000, 2999);
 ATLAS_ASSERT_ID_RANGE(BaseApp::kEntityTransferred, 2000, 2999);
+ATLAS_ASSERT_ID_RANGE(BaseApp::kCellReady, 2000, 2999);
 ATLAS_ASSERT_ID_RANGE(BaseApp::kForceLogoff, 2000, 2999);
 ATLAS_ASSERT_ID_RANGE(BaseApp::kForceLogoffAck, 2000, 2999);
 

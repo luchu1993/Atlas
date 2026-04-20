@@ -96,6 +96,7 @@ struct Metrics {
   std::size_t select_avatar_sent{0};
   std::size_t select_avatar_fail{0};
   std::size_t entity_transferred{0};
+  std::size_t cell_ready{0};
   // P2.3e: Echo / EchoReply round-trip through the Cell-side CLR dispatch.
   // Each EntityTransferred triggers one Echo; a matching EchoReply from
   // CellApp → BaseApp → client updates rtt_ms.
@@ -206,6 +207,8 @@ class Session {
         [this](const Address&, Channel*, const baseapp::EntityTransferred& msg) {
           OnEntityTransferred(msg);
         });
+    (void)table.RegisterTypedHandler<baseapp::CellReady>(
+        [this](const Address&, Channel*, const baseapp::CellReady& msg) { OnCellReady(msg); });
     // EchoReply arrives as a raw packet — BaseApp forwards the cell-side
     // SelfRpcFromCell to the client via `SendMessage(static_cast<MessageID>
     // (rpc_id), payload)`, which truncates the 32-bit packed rpc_id to 16
@@ -347,21 +350,25 @@ class Session {
   void OnEntityTransferred(const baseapp::EntityTransferred& msg) {
     // Engine-level handoff notification: our controlling entity has moved
     // from Account → StressAvatar (or equivalent). Update our cached id
-    // so subsequent cell RPCs target the new entity.
-    //
-    // We can't RPC *immediately* — CellEntityCreated ack from CellApp
-    // hasn't necessarily reached BaseApp yet, so the Proxy::CellAddr
-    // lookup that ClientCellRpc does would fail and BaseApp drops the
-    // message with "no cell channel for target entity". Defer both the
-    // Echo and ReportPos streams 500 ms past transfer so the cell has
-    // a chance to bind. A proper fix would be a BaseApp → Client
-    // "CellReady" notification; this is the pragmatic shortcut.
+    // so subsequent cell RPCs target the new entity. Don't start the
+    // Echo / ReportPos streams yet — the cell counterpart may not be
+    // bound on BaseApp's Proxy yet, so a ClientCellRpc fired here would
+    // be dropped with "no cell channel for target entity". Wait for the
+    // matching CellReady instead (engine guarantees it after BaseApp
+    // records cell_addr on the Proxy).
     entity_id_ = msg.new_entity_id;
     ++metrics_.entity_transferred;
+  }
+
+  void OnCellReady(const baseapp::CellReady& msg) {
+    // Server-confirmed: entity `msg.entity_id` now has a live cell side
+    // bound to our Proxy on BaseApp. Safe to start the in-world streams.
+    if (msg.entity_id != entity_id_) return;  // stale notification for a prior session
+    ++metrics_.cell_ready;
     const auto kNow = SteadyClock::now();
-    echo_due_at_ = kNow + std::chrono::milliseconds(500);
+    echo_due_at_ = kNow;
     echo_pending_ = true;
-    move_due_at_ = kNow + std::chrono::milliseconds(500);
+    move_due_at_ = kNow;
     move_pending_ = opts_.move_rate_hz > 0;
   }
 
@@ -894,6 +901,7 @@ void PrintSummary(const Options& opts, const Metrics& metrics,
   std::cout << std::format("  select_avatar_sent: {}\n", metrics.select_avatar_sent);
   std::cout << std::format("  select_avatar_fail: {}\n", metrics.select_avatar_fail);
   std::cout << std::format("  entity_transferred: {}\n", metrics.entity_transferred);
+  std::cout << std::format("  cell_ready:         {}\n", metrics.cell_ready);
   std::cout << std::format("  rpc_rate_hz:        {}\n", opts.rpc_rate_hz);
   std::cout << std::format("  echo_sent:          {}\n", metrics.echo_sent);
   std::cout << std::format("  echo_received:      {}\n", metrics.echo_received);

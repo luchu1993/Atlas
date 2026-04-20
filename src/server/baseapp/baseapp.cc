@@ -658,6 +658,22 @@ void BaseApp::OnCellEntityCreated(Channel& ch, const baseapp::CellEntityCreated&
   ent->SetCell(msg.cell_entity_id, cell_addr);
   ATLAS_LOG_DEBUG("BaseApp: entity {} has cell at {}:{}", msg.base_entity_id, cell_addr.Ip(),
                   cell_addr.Port());
+
+  // Tell the client its cell is ready. Without this the client has no way
+  // to know when its ClientCellRpc will actually route vs. be dropped by
+  // the "no cell channel for target entity" path. A Proxy that doesn't
+  // have a client yet (e.g. entity created via CreateBaseEntity before
+  // GiveClientTo) gets nothing here — if a client binds later, CellReady
+  // doesn't fire retroactively, but in the world_stress script flow
+  // GiveClientTo runs strictly before the CellApp ack can arrive.
+  auto* proxy = entity_mgr_.FindProxy(msg.base_entity_id);
+  if (proxy && proxy->HasClient()) {
+    if (auto* client_ch = ResolveClientChannel(msg.base_entity_id)) {
+      baseapp::CellReady ready;
+      ready.entity_id = msg.base_entity_id;
+      (void)client_ch->SendMessage(ready);
+    }
+  }
 }
 
 void BaseApp::OnCellEntityDestroyed(Channel& /*ch*/, const baseapp::CellEntityDestroyed& msg) {

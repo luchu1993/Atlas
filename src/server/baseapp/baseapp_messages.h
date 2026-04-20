@@ -615,6 +615,43 @@ struct EntityTransferred {
 static_assert(NetworkMessage<EntityTransferred>);
 
 // ============================================================================
+// CellReady  (BaseApp → Client, ID 2025)
+//
+// Fired when BaseApp records the cell_addr on a client-bound Proxy, i.e.
+// after CellEntityCreated arrives from the CellApp. Eliminates the race
+// where the client would try to ClientCellRpc before cell_addr was set
+// and see BaseApp's "no cell channel for target entity" drop.
+//
+// Emission: once per entity, at the first moment both
+//   (1) the entity has a cell (SetCell has fired), AND
+//   (2) the entity has a client (BindClient has fired)
+// are simultaneously true. In practice OnCellEntityCreated is the
+// second of those two edges on the world_stress script flow because
+// GiveClientTo runs synchronously before the CellApp ack can arrive.
+// ============================================================================
+
+struct CellReady {
+  EntityID entity_id{kInvalidEntityID};
+
+  static auto Descriptor() -> const MessageDesc& {
+    static const MessageDesc kDesc{msg_id::Id(msg_id::BaseApp::kCellReady), "baseapp::CellReady",
+                                   MessageLengthStyle::kFixed, static_cast<int>(sizeof(uint32_t))};
+    return kDesc;
+  }
+
+  void Serialize(BinaryWriter& w) const { w.Write(entity_id); }
+
+  static auto Deserialize(BinaryReader& r) -> Result<CellReady> {
+    auto eid = r.Read<uint32_t>();
+    if (!eid) return Error{ErrorCode::kInvalidArgument, "CellReady: truncated"};
+    CellReady msg;
+    msg.entity_id = *eid;
+    return msg;
+  }
+};
+static_assert(NetworkMessage<CellReady>);
+
+// ============================================================================
 // ClientBaseRpc  (Client → BaseApp external interface, ID 2022)
 // Client sends an exposed base method call. BaseApp validates the exposed scope
 // and dispatches to the C# entity via the dispatch_rpc callback.
