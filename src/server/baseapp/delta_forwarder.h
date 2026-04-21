@@ -72,7 +72,14 @@ class DeltaForwarder {
   };
 
   /// Enqueue or replace a delta for the given entity.
-  void Enqueue(EntityID entity_id, std::span<const std::byte> delta);
+  /// `priority` biases Flush ordering — higher goes first. A same-entity
+  /// replace takes max(existing_priority, new_priority) so a low-priority
+  /// write can't demote an entry an earlier high-priority producer
+  /// deliberately boosted. Default 0 — BaseApp today has no priority
+  /// context (Witness-side distance/priority scoring is Phase 10 work);
+  /// the field is wired now so the call site is stable once a real
+  /// value lands.
+  void Enqueue(EntityID entity_id, std::span<const std::byte> delta, uint16_t priority = 0);
 
   /// Flush queued deltas to `client_ch` using reserved message ID,
   /// stopping when `budget_bytes` would be exceeded.
@@ -102,6 +109,7 @@ class DeltaForwarder {
     EntityID entity_id{kInvalidEntityID};
     std::vector<std::byte> delta;
     uint32_t deferred_ticks{0};
+    uint16_t priority{0};
   };
 
   std::vector<PendingDelta> queue_;

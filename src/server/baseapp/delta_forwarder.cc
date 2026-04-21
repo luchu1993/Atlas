@@ -6,24 +6,33 @@
 
 namespace atlas {
 
-void DeltaForwarder::Enqueue(EntityID entity_id, std::span<const std::byte> delta) {
+void DeltaForwarder::Enqueue(EntityID entity_id, std::span<const std::byte> delta,
+                             uint16_t priority) {
   // Replace existing entry for the same entity (only latest matters).
   for (auto& entry : queue_) {
     if (entry.entity_id == entity_id) {
       entry.delta.assign(delta.begin(), delta.end());
       // Keep accumulated deferred_ticks — the entity has been waiting.
+      // Priority is max-merged so a low-priority write can't demote an
+      // entry an earlier high-priority producer deliberately boosted.
+      entry.priority = std::max(entry.priority, priority);
       return;
     }
   }
 
-  queue_.push_back(PendingDelta{entity_id, {delta.begin(), delta.end()}, 0});
+  queue_.push_back(PendingDelta{entity_id, {delta.begin(), delta.end()}, 0, priority});
 }
 
 auto DeltaForwarder::Flush(Channel& client_ch, uint32_t budget_bytes) -> uint32_t {
   if (queue_.empty()) return 0;
 
-  // Sort by deferred_ticks descending so starved entries go first.
+  // Sort key (descending lex): (priority, deferred_ticks). Higher-priority
+  // entries flush first so operators can bias bandwidth toward critical
+  // entities once Witness supplies real values; ties fall through to the
+  // anti-starvation rule so entries that have waited longest get sent
+  // before fresh arrivals inside the same priority band.
   std::sort(queue_.begin(), queue_.end(), [](const PendingDelta& a, const PendingDelta& b) {
+    if (a.priority != b.priority) return a.priority > b.priority;
     return a.deferred_ticks > b.deferred_ticks;
   });
 
