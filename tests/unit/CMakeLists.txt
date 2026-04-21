@@ -76,6 +76,11 @@ atlas_add_test(NAME test_dynamic_library
   DEPS atlas_platform
 )
 
+atlas_add_test(NAME test_child_process
+  SOURCES test_child_process.cpp
+  DEPS atlas_platform
+)
+
 # ── Serialization ───────────────────────────────────────────────────────────
 
 atlas_add_test(NAME test_binary_stream

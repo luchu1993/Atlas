@@ -13,12 +13,14 @@ add_library(atlas_platform STATIC
 
 if(WIN32)
   target_sources(atlas_platform PRIVATE
+    child_process_windows.cc
     dynamic_library_windows.cc
     io_poller_wsapoll.cc
     threading_windows.cc
   )
 elseif(UNIX)
   target_sources(atlas_platform PRIVATE
+    child_process_linux.cc
     dynamic_library_linux.cc
     io_poller_epoll.cc
     threading_linux.cc
