@@ -718,6 +718,243 @@ public partial class Avatar : ServerEntity
         Assert.Contains("WriteBool(false)", code);
     }
 
+    // =========================================================================
+    // Phase B0 — paired scope-aware snapshot deserializers
+    //
+    // The AoI enter envelope carries bytes produced by the server's
+    // SerializeForOtherClients; baseline carries SerializeForOwnerClient
+    // output. These are raw-field scope subsets (no version/fieldCount/
+    // bodyLength framing), so the client side needs paired Apply*Snapshot
+    // methods that iterate the same scope filter in the same declaration
+    // order — see PROPERTY_SYNC_DESIGN.md §9 / Phase B0.
+    // =========================================================================
+
+    // Pull the body of a method named `methodName` out of a generated file's
+    // text. Naive but sufficient for these tests (one `{` / `}` nesting).
+    private static string ExtractMethodBody(string code, string methodSignatureSubstring)
+    {
+        int sigIdx = code.IndexOf(methodSignatureSubstring, System.StringComparison.Ordinal);
+        Assert.True(sigIdx >= 0,
+            $"method '{methodSignatureSubstring}' not found in generated code:\n{code}");
+        int braceOpen = code.IndexOf('{', sigIdx);
+        Assert.True(braceOpen > 0, "opening brace not found");
+        int depth = 1;
+        int i = braceOpen + 1;
+        while (i < code.Length && depth > 0)
+        {
+            if (code[i] == '{') depth++;
+            else if (code[i] == '}') depth--;
+            i++;
+        }
+        Assert.Equal(0, depth);
+        return code.Substring(braceOpen + 1, i - braceOpen - 2);
+    }
+
+    [Fact]
+    public void ClientContext_EmitsApplyOwnerSnapshot_WithOwnerVisibleFieldsInOrder()
+    {
+        var source = @"
+using Atlas.Client;
+namespace Test;
+
+[Atlas.Entity.Entity(""Avatar"")]
+public partial class Avatar : ClientEntity
+{
+    public override string TypeName => ""Avatar"";
+    public partial void ShowDamage(int amount, uint attackerId) {}
+}
+";
+        var (result, _) = RunDefGenerator(source, AvatarDef, "ATLAS_CLIENT");
+
+        var delta = result.GeneratedTrees
+            .FirstOrDefault(t => t.FilePath.Contains("Avatar.DeltaSync"));
+        Assert.NotNull(delta);
+        var code = delta!.GetText().ToString();
+
+        // Owner-visible from AvatarDef (in declaration order): hp, mana, secret, level
+        var body = ExtractMethodBody(code, "ApplyOwnerSnapshot(ref SpanReader reader)");
+        int hp     = body.IndexOf("_hp = reader.ReadInt32()",  System.StringComparison.Ordinal);
+        int mana   = body.IndexOf("_mana = reader.ReadInt32()",System.StringComparison.Ordinal);
+        int secret = body.IndexOf("_secret = reader.ReadString()", System.StringComparison.Ordinal);
+        int level  = body.IndexOf("_level = reader.ReadInt32()",System.StringComparison.Ordinal);
+
+        Assert.True(hp >= 0 && mana > hp && secret > mana && level > secret,
+            $"owner-visible fields not in declaration order; body was:\n{body}");
+
+        // Fields outside the owner-scope must not appear.
+        Assert.DoesNotContain("_gold",    body);  // scope=base
+        Assert.DoesNotContain("_aiState", body);  // scope=cell_public
+        Assert.DoesNotContain("_modelId", body);  // scope=other_clients (other-only)
+        Assert.DoesNotContain("_pos",     body);  // scope=cell_private
+    }
+
+    [Fact]
+    public void ClientContext_EmitsApplyOtherSnapshot_WithOtherVisibleFieldsInOrder()
+    {
+        var source = @"
+using Atlas.Client;
+namespace Test;
+
+[Atlas.Entity.Entity(""Avatar"")]
+public partial class Avatar : ClientEntity
+{
+    public override string TypeName => ""Avatar"";
+    public partial void ShowDamage(int amount, uint attackerId) {}
+}
+";
+        var (result, _) = RunDefGenerator(source, AvatarDef, "ATLAS_CLIENT");
+
+        var code = result.GeneratedTrees
+            .First(t => t.FilePath.Contains("Avatar.DeltaSync"))
+            .GetText().ToString();
+
+        // Other-visible (AllClients + OtherClients): hp, modelId
+        var body = ExtractMethodBody(code, "ApplyOtherSnapshot(ref SpanReader reader)");
+        int hp      = body.IndexOf("_hp = reader.ReadInt32()",     System.StringComparison.Ordinal);
+        int modelId = body.IndexOf("_modelId = reader.ReadInt32()",System.StringComparison.Ordinal);
+
+        Assert.True(hp >= 0 && modelId > hp,
+            $"other-visible fields not in declaration order; body was:\n{body}");
+
+        // Owner-only fields must not appear.
+        Assert.DoesNotContain("_mana",   body);  // cell_public_and_own → owner-only
+        Assert.DoesNotContain("_secret", body);  // base_and_client     → owner-only
+        Assert.DoesNotContain("_level",  body);  // own_client          → owner-only
+    }
+
+    [Fact]
+    public void ClientContext_SnapshotApply_DoesNotFireChangeCallbacks()
+    {
+        // Initial / baseline snapshots are authoritative resets, not observed
+        // changes — they must bypass the OnXxxChanged hook that the setter
+        // path will fire in Phase B2. Guarantee: Apply*Snapshot writes to
+        // the private backing field (`_<name>`) rather than the public
+        // property setter, so no OnXxxChanged call can sneak in.
+        var source = @"
+using Atlas.Client;
+namespace Test;
+
+[Atlas.Entity.Entity(""Avatar"")]
+public partial class Avatar : ClientEntity
+{
+    public override string TypeName => ""Avatar"";
+    public partial void ShowDamage(int amount, uint attackerId) {}
+}
+";
+        var (result, _) = RunDefGenerator(source, AvatarDef, "ATLAS_CLIENT");
+        var code = result.GeneratedTrees
+            .First(t => t.FilePath.Contains("Avatar.DeltaSync"))
+            .GetText().ToString();
+
+        var ownerBody = ExtractMethodBody(code, "ApplyOwnerSnapshot(ref SpanReader reader)");
+        var otherBody = ExtractMethodBody(code, "ApplyOtherSnapshot(ref SpanReader reader)");
+
+        // No PascalCase property write (e.g. "Hp = ") and no OnXxxChanged call.
+        Assert.DoesNotContain("Hp = reader",    ownerBody);
+        Assert.DoesNotContain("Mana = reader",  ownerBody);
+        Assert.DoesNotContain("OnHpChanged",    ownerBody);
+        Assert.DoesNotContain("OnHpChanged",    otherBody);
+        Assert.DoesNotContain("OnManaChanged",  ownerBody);
+        Assert.DoesNotContain("OnModelIdChanged", otherBody);
+    }
+
+    [Fact]
+    public void ClientContext_ScopeApplyOrder_MirrorsServerScopeSerialize()
+    {
+        // Load-bearing invariant: the server writes owner/other snapshots
+        // with the same field filter + declaration-order iteration as the
+        // client reads them. A regression where one side picks up a field
+        // the other side doesn't will silently corrupt state on peer enter
+        // or baseline. This test pins the order lock-step.
+        var clientSource = @"
+using Atlas.Client;
+[Atlas.Entity.Entity(""Avatar"")]
+public partial class Avatar : ClientEntity
+{
+    public override string TypeName => ""Avatar"";
+    public partial void ShowDamage(int amount, uint attackerId) {}
+}
+";
+        var baseSource = @"
+using Atlas.Entity;
+using Atlas.Serialization;
+[Entity(""Avatar"")]
+public partial class Avatar : ServerEntity
+{
+    public override string TypeName => ""Avatar"";
+    public override void Serialize(ref SpanWriter w) {}
+    public override void Deserialize(ref SpanReader r) {}
+    public partial void UseItem(int itemId) {}
+    public partial void OnPlayerDead() {}
+}
+";
+        var (clientResult, _) = RunDefGenerator(clientSource, AvatarDef, "ATLAS_CLIENT");
+        var (baseResult,   _) = RunDefGenerator(baseSource,   AvatarDef, "ATLAS_BASE");
+
+        var clientCode = clientResult.GeneratedTrees
+            .First(t => t.FilePath.Contains("Avatar.DeltaSync")).GetText().ToString();
+        var baseCode = baseResult.GeneratedTrees
+            .First(t => t.FilePath.Contains("Avatar.DeltaSync")).GetText().ToString();
+
+        // Extract field names from both sides in emission order.
+        static System.Collections.Generic.List<string> FieldOrder(string methodBody)
+        {
+            // Matches '_fieldName' as the LHS of an assignment or as the
+            // argument to writer.WriteX(_fieldName).
+            var regex = new System.Text.RegularExpressions.Regex(@"_([a-zA-Z][a-zA-Z0-9]*)");
+            var seen = new System.Collections.Generic.HashSet<string>();
+            var result = new System.Collections.Generic.List<string>();
+            foreach (System.Text.RegularExpressions.Match m in regex.Matches(methodBody))
+            {
+                if (seen.Add(m.Groups[1].Value)) result.Add(m.Groups[1].Value);
+            }
+            return result;
+        }
+
+        var clientOwner = FieldOrder(
+            ExtractMethodBody(clientCode, "ApplyOwnerSnapshot(ref SpanReader reader)"));
+        var serverOwner = FieldOrder(
+            ExtractMethodBody(baseCode, "SerializeForOwnerClient(ref SpanWriter writer)"));
+        Assert.Equal(serverOwner, clientOwner);
+
+        var clientOther = FieldOrder(
+            ExtractMethodBody(clientCode, "ApplyOtherSnapshot(ref SpanReader reader)"));
+        var serverOther = FieldOrder(
+            ExtractMethodBody(baseCode, "SerializeForOtherClients(ref SpanWriter writer)"));
+        Assert.Equal(serverOther, clientOther);
+    }
+
+    [Fact]
+    public void ClientContext_NoOtherVisibleFields_OmitsApplyOtherSnapshot()
+    {
+        // When a def has no AllClients/OtherClients fields, ApplyOtherSnapshot
+        // is useless (and the server won't produce an other_snapshot payload
+        // to feed it). The emitter must skip it to keep generated code clean.
+        var ownerOnlyDef = @"<entity name=""Avatar"">
+  <properties>
+    <property name=""level""  type=""int32"" scope=""own_client"" />
+    <property name=""secret"" type=""string"" scope=""base_and_client"" />
+  </properties>
+</entity>";
+        var source = @"
+using Atlas.Client;
+[Atlas.Entity.Entity(""Avatar"")]
+public partial class Avatar : ClientEntity
+{
+    public override string TypeName => ""Avatar"";
+}
+";
+        var (result, _) = RunDefGenerator(source, ownerOnlyDef, "ATLAS_CLIENT");
+
+        var delta = result.GeneratedTrees
+            .FirstOrDefault(t => t.FilePath.Contains("Avatar.DeltaSync"));
+        Assert.NotNull(delta);
+        var code = delta!.GetText().ToString();
+
+        Assert.Contains("ApplyOwnerSnapshot", code);
+        Assert.DoesNotContain("ApplyOtherSnapshot", code);
+    }
+
     [Fact]
     public void MismatchedEntityName_ReportsDEF001()
     {

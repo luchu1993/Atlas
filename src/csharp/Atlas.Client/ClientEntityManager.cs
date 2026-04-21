@@ -44,16 +44,15 @@ public sealed class ClientEntityManager
 
     /// <summary>
     /// AoI peer entered the local player's view. Creates the entity via the
-    /// generated factory and initialises identity + transform. The envelope
-    /// also carries a scope-subset <paramref name="peerSnapshot"/> produced by
-    /// the server's <c>SerializeForOtherClients</c>; however the current
-    /// <see cref="ClientEntity.Deserialize"/> expects a
-    /// <c>version+fieldCount+bodyLength</c>-framed payload, which the scope
-    /// serializers do NOT emit. Applying the snapshot is therefore gated
-    /// behind Phase B0 of the client-sync rework; until B0 lands we log the
-    /// snapshot byte count and drop the bytes.
+    /// generated factory, initialises identity + transform, and applies the
+    /// other-scope <paramref name="peerSnapshot"/> via
+    /// <see cref="ClientEntity.ApplyOtherSnapshot"/> (paired with the
+    /// server's <c>SerializeForOtherClients</c>). The snapshot write goes
+    /// straight to backing fields and does not fire property-change
+    /// callbacks — the peer is entering in a given state rather than
+    /// transitioning.
     /// Idempotent: a re-enter after a pending leave reuses the existing
-    /// instance and only refreshes the transform.
+    /// instance and refreshes transform + state.
     /// </summary>
     public void OnEnter(uint entityId, ushort typeId, Vector3 pos, Vector3 dir, bool onGround,
                         ReadOnlySpan<byte> peerSnapshot)
@@ -77,12 +76,8 @@ public sealed class ClientEntityManager
 
         if (!peerSnapshot.IsEmpty)
         {
-            // TODO(B0): scope-subset snapshot has no version/fieldCount/bodyLength
-            // framing, so calling entity.Deserialize here would misread the bytes.
-            // Drop for now — B0 introduces a paired scope-aware deserializer.
-            Console.Error.WriteLine(
-                $"ClientEntityManager.OnEnter: dropping {peerSnapshot.Length}-byte snapshot for "
-                + $"entityId={entityId} (waiting on Phase B0 scope-aware deserializer)");
+            var reader = new SpanReader(peerSnapshot);
+            entity.ApplyOtherSnapshot(ref reader);
         }
     }
 
@@ -121,19 +116,15 @@ public sealed class ClientEntityManager
     /// <summary>
     /// Apply a periodic full-state baseline snapshot (channel
     /// <c>kClientBaselineMessageId = 0xF002</c>). The baseline body is the
-    /// owner-scope snapshot produced by <c>SerializeForOwnerClient</c>,
-    /// which — like the AoI enter snapshot — lacks the framing that
-    /// <see cref="ClientEntity.Deserialize"/> requires. Phase B0 will
-    /// introduce a scope-aware deserializer; until then we drop the payload
-    /// and log a breadcrumb so the test harness can see baselines arriving.
+    /// owner-scope snapshot produced by <c>SerializeForOwnerClient</c>;
+    /// routes through <see cref="ClientEntity.ApplyOwnerSnapshot"/> so
+    /// fields are reset without firing change callbacks.
     /// </summary>
     public void ApplyBaseline(uint entityId, ReadOnlySpan<byte> snapshot)
     {
-        if (!_entities.TryGetValue(entityId, out _)) return;
+        if (!_entities.TryGetValue(entityId, out var entity)) return;
         if (snapshot.IsEmpty) return;
-        // TODO(B0): gated on scope-aware deserializer — see OnEnter.
-        Console.Error.WriteLine(
-            $"ClientEntityManager.ApplyBaseline: dropping {snapshot.Length}-byte baseline for "
-            + $"entityId={entityId} (waiting on Phase B0 scope-aware deserializer)");
+        var reader = new SpanReader(snapshot);
+        entity.ApplyOwnerSnapshot(ref reader);
     }
 }

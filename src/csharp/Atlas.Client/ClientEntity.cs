@@ -19,6 +19,26 @@ public abstract class ClientEntity
     public virtual void Deserialize(ref SpanReader reader) { }
 
     /// <summary>
+    /// Apply an owner-scope snapshot (fields visible to the entity's owning
+    /// client: <c>OwnClient</c>, <c>AllClients</c>, <c>CellPublicAndOwn</c>,
+    /// <c>BaseAndClient</c>). Paired with the server's
+    /// <c>SerializeForOwnerClient</c>. Used by the baseline channel
+    /// (<c>0xF002</c>) for the local player's own entity. Writes directly
+    /// to backing fields — does NOT fire <c>OnXxxChanged</c>, matching
+    /// BigWorld's initial-snapshot semantics.
+    /// </summary>
+    public virtual void ApplyOwnerSnapshot(ref SpanReader reader) { }
+
+    /// <summary>
+    /// Apply an other-scope snapshot (fields visible to non-owner
+    /// observers: <c>AllClients</c>, <c>OtherClients</c>). Paired with the
+    /// server's <c>SerializeForOtherClients</c>. Used by the AoI enter
+    /// envelope (<c>kEntityEnter</c>) when a peer joins the local player's
+    /// view. Same direct-write semantics as <see cref="ApplyOwnerSnapshot"/>.
+    /// </summary>
+    public virtual void ApplyOtherSnapshot(ref SpanReader reader) { }
+
+    /// <summary>
     /// Apply an incremental property delta as produced by the server's
     /// <c>SerializeReplicatedDelta*</c> family. The wire body is a dirty-flag
     /// bitmap followed by the changed field values. The generator overrides
