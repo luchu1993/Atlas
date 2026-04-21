@@ -1106,6 +1106,145 @@ public partial class Avatar : ServerEntity
         Assert.Equal(serverSeq, clientSeq);
     }
 
+    // =========================================================================
+    // Phase B2 — client setter stays silent (aligned with BigWorld)
+    //
+    // BigWorld's simple_client_entity.cpp::propertyEvent fires the
+    // set_<propname> script callback ONLY on network-received changes; a
+    // local Python write (`entity.hp = 60`) is completely silent. Clients
+    // observe authoritative server state — local writes are edge cases
+    // (prediction, test fixtures) that shouldn't masquerade as observed
+    // transitions. Atlas aligns: OnXxxChanged is reachable only through
+    // ApplyReplicatedDelta (wire path), never through the property setter
+    // on the client side.
+    // =========================================================================
+
+    [Fact]
+    public void ClientContext_ReplicableSetter_IsBareAssignment()
+    {
+        var source = @"
+using Atlas.Client;
+[Atlas.Entity.Entity(""Avatar"")]
+public partial class Avatar : ClientEntity
+{
+    public override string TypeName => ""Avatar"";
+    public partial void ShowDamage(int amount, uint attackerId) {}
+}
+";
+        var (result, _) = RunDefGenerator(source, AvatarDef, "ATLAS_CLIENT");
+        var props = result.GeneratedTrees
+            .First(t => t.FilePath.Contains("Avatar.Properties")).GetText().ToString();
+
+        var hpBlock = ExtractMethodBody(props, "public int Hp");
+        // Setter is a single expression-bodied assignment.
+        Assert.Contains("set => _hp = value;", hpBlock);
+        // The inequality guard / old-capture / callback scaffolding that
+        // the server setter uses must NOT appear — those belong to the
+        // dirty-tracking path only.
+        Assert.DoesNotContain("if (_hp != value)", hpBlock);
+        Assert.DoesNotContain("var old = _hp;", hpBlock);
+        Assert.DoesNotContain("OnHpChanged", hpBlock);
+        Assert.DoesNotContain("_dirtyFlags", hpBlock);
+    }
+
+    [Fact]
+    public void ClientContext_OnXxxChanged_ReachableOnlyFromApplyReplicatedDelta()
+    {
+        // Load-bearing invariant for scheme 2 (BigWorld alignment). The only
+        // call site of OnHpChanged on the client must be inside
+        // ApplyReplicatedDelta. If a future refactor accidentally re-adds a
+        // setter-side callback, or if local script code starts firing the
+        // hook, this pins it.
+        var source = @"
+using Atlas.Client;
+[Atlas.Entity.Entity(""Avatar"")]
+public partial class Avatar : ClientEntity
+{
+    public override string TypeName => ""Avatar"";
+    public partial void ShowDamage(int amount, uint attackerId) {}
+}
+";
+        var (result, _) = RunDefGenerator(source, AvatarDef, "ATLAS_CLIENT");
+        var props = result.GeneratedTrees
+            .First(t => t.FilePath.Contains("Avatar.Properties")).GetText().ToString();
+        var delta = result.GeneratedTrees
+            .First(t => t.FilePath.Contains("Avatar.DeltaSync")).GetText().ToString();
+
+        // Properties.g.cs has exactly one OnHpChanged mention — the
+        // `partial void` declaration the generator always emits for scripts
+        // to implement. No other references.
+        var mentions = System.Text.RegularExpressions.Regex.Matches(props, @"\bOnHpChanged\b").Count;
+        Assert.Equal(1, mentions);
+        Assert.Contains("partial void OnHpChanged(", props);
+
+        // DeltaSync.g.cs invokes OnHpChanged at least once, and every
+        // invocation is inside ApplyReplicatedDelta.
+        var applyBody = ExtractMethodBody(delta, "ApplyReplicatedDelta(ref SpanReader reader)");
+        Assert.Contains("OnHpChanged(oldHp, _hp);", applyBody);
+        int applyCount = System.Text.RegularExpressions.Regex.Matches(applyBody, @"\bOnHpChanged\b").Count;
+        int totalCount = System.Text.RegularExpressions.Regex.Matches(delta, @"\bOnHpChanged\b").Count;
+        Assert.Equal(applyCount, totalCount);
+    }
+
+    [Fact]
+    public void ServerContext_SetterStillTracksDirty()
+    {
+        // Regression: B2 only changed the client path. The server setter
+        // must still fire both dirty-bit-set AND OnXxxChanged.
+        var source = @"
+using Atlas.Entity;
+using Atlas.Serialization;
+[Entity(""Avatar"")]
+public partial class Avatar : ServerEntity
+{
+    public override string TypeName => ""Avatar"";
+    public override void Serialize(ref SpanWriter w) {}
+    public override void Deserialize(ref SpanReader r) {}
+    public partial void UseItem(int itemId) {}
+    public partial void OnPlayerDead() {}
+}
+";
+        var (result, _) = RunDefGenerator(source, AvatarDef, "ATLAS_BASE");
+        var props = result.GeneratedTrees
+            .First(t => t.FilePath.Contains("Avatar.Properties")).GetText().ToString();
+
+        var hpBlock = ExtractMethodBody(props, "public int Hp");
+        Assert.Contains("if (_hp != value)", hpBlock);
+        Assert.Contains("_dirtyFlags |= ReplicatedDirtyFlags.Hp;", hpBlock);
+        Assert.Contains("OnHpChanged(old, value);", hpBlock);
+    }
+
+    [Fact]
+    public void ClientContext_DeltaStillBypassesSetter()
+    {
+        // Regression guard for B1: ApplyReplicatedDelta must keep writing
+        // to the private backing field directly. If it started going
+        // through the new-in-B2 callback-firing setter, OnXxxChanged
+        // would fire twice per delta (once from setter, once from the
+        // explicit call in ApplyReplicatedDelta).
+        var source = @"
+using Atlas.Client;
+[Atlas.Entity.Entity(""Avatar"")]
+public partial class Avatar : ClientEntity
+{
+    public override string TypeName => ""Avatar"";
+    public partial void ShowDamage(int amount, uint attackerId) {}
+}
+";
+        var (result, _) = RunDefGenerator(source, AvatarDef, "ATLAS_CLIENT");
+        var code = result.GeneratedTrees
+            .First(t => t.FilePath.Contains("Avatar.DeltaSync")).GetText().ToString();
+        var body = ExtractMethodBody(code, "ApplyReplicatedDelta(ref SpanReader reader)");
+
+        // The delta body assigns `_hp = reader.ReadX()` and calls
+        // `OnHpChanged(oldHp, _hp)` explicitly. It must NOT go through the
+        // public property (`Hp = reader.ReadX()`) which would re-trigger
+        // OnHpChanged from the setter.
+        Assert.Contains("_hp = reader.", body);
+        Assert.DoesNotContain("Hp = reader", body);
+        Assert.Contains("OnHpChanged(oldHp, _hp);", body);
+    }
+
     [Fact]
     public void ClientContext_NoOtherVisibleFields_OmitsApplyOtherSnapshot()
     {

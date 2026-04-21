@@ -77,15 +77,22 @@ internal static class PropertiesEmitter
         }
         sb.AppendLine();
 
-        // Properties with dirty tracking. emitDirtyBacking is false on Client
-        // so `withDirtyTracking` is always false there — client setters stay
-        // bare in Phase B0/B1, the delta callback path fires OnXxxChanged
-        // directly (see DeltaSyncEmitter Client branch). Phase B2 will
-        // revisit the client setter shape.
+        // Properties. Two setter shapes:
+        //   * Server replicable → dirty-bit + OnXxxChanged
+        //   * Everything else   → bare assignment (no callback)
+        //
+        // The client setter intentionally does NOT fire OnXxxChanged — only
+        // wire deltas do (via DeltaSyncEmitter's ApplyReplicatedDelta).
+        // Aligning with BigWorld's simple_client_entity.cpp::propertyEvent:
+        // set_<propname> script callbacks fire only on network-received
+        // changes, not on local Python assignment. Clients observe
+        // authoritative server state; a local write is an edge case
+        // (prediction, test fixtures, scratch UI state) that shouldn't
+        // masquerade as an observed transition.
         foreach (var prop in props)
         {
-            bool withDirtyTracking = emitDirtyBacking && enumReplicableProps.Contains(prop);
-            EmitProperty(sb, prop, withDirtyTracking);
+            bool trackDirty = emitDirtyBacking && enumReplicableProps.Contains(prop);
+            EmitProperty(sb, prop, trackDirty);
             sb.AppendLine();
         }
 
@@ -120,7 +127,7 @@ internal static class PropertiesEmitter
         sb.AppendLine("    }");
     }
 
-    private static void EmitProperty(StringBuilder sb, PropertyDefModel prop, bool withDirtyTracking)
+    private static void EmitProperty(StringBuilder sb, PropertyDefModel prop, bool trackDirty)
     {
         var csType = DefTypeHelper.ToCSharpType(prop.Type);
         var fieldName = DefTypeHelper.ToFieldName(prop.Name);
@@ -130,7 +137,7 @@ internal static class PropertiesEmitter
         sb.AppendLine("    {");
         sb.AppendLine($"        get => {fieldName};");
 
-        if (withDirtyTracking)
+        if (trackDirty)
         {
             sb.AppendLine("        set");
             sb.AppendLine("        {");
