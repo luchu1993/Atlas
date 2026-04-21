@@ -39,6 +39,11 @@ auto ScriptClientHarness::Start() -> Result<void> {
       copts.args.emplace_back("--runtime-config");
       copts.args.emplace_back(opts_.runtime_config.string());
     }
+    if (opts_.drop_inbound_duration_ms > 0) {
+      copts.args.emplace_back("--drop-inbound-ms");
+      copts.args.emplace_back(std::to_string(opts_.drop_inbound_start_ms));
+      copts.args.emplace_back(std::to_string(opts_.drop_inbound_duration_ms));
+    }
 
     auto r = ChildProcess::Start(std::move(copts));
     if (!r.HasValue()) {

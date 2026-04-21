@@ -40,6 +40,10 @@ struct ScriptClientOptions {
   std::size_t username_index_base{0};
   std::size_t count{0};  // zero → harness is inert
   bool verify{false};    // PrintSummary returns false on threshold miss
+  // Phase C3: forwarded to each child as `--drop-inbound-ms start duration`.
+  // 0/0 = off.
+  int drop_inbound_start_ms{0};
+  int drop_inbound_duration_ms{0};
 };
 
 class ScriptClientHarness {

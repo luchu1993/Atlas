@@ -80,6 +80,10 @@ struct Options {
   std::filesystem::path client_runtime_config;
   std::string script_username_prefix{"script_user_"};
   bool script_verify{false};
+  // Phase C3: forward a drop-inbound window to every script child so the
+  // harness can simulate reliable / baseline recovery end-to-end. 0/0 = off.
+  int client_drop_inbound_start_ms{0};
+  int client_drop_inbound_duration_ms{0};
 };
 
 enum class SessionState : uint8_t {
@@ -680,6 +684,10 @@ void PrintUsage() {
       << "  --script-username-prefix <text> Username prefix for script children (default: "
          "script_user_)\n"
       << "  --script-verify            Non-zero exit if any script child didn't observe OnInit\n"
+      << "  --client-drop-inbound-ms <start> <duration>\n"
+      << "                             Forward atlas_client --drop-inbound-ms to every script\n"
+      << "                             child: drop state-channel messages in the time window\n"
+      << "                             for Phase C3 reliable-retransmit / baseline tests\n"
       << "\n"
       << "Example:\n"
       << "  world_stress --login 127.0.0.1:20013 --password-hash <sha256> --clients 500 "
@@ -906,6 +914,16 @@ auto ParseOptions(int argc, char* argv[]) -> std::optional<Options> {
       opts.script_username_prefix = std::string(*value);
     } else if (kArg == "--script-verify") {
       opts.script_verify = true;
+    } else if (kArg == "--client-drop-inbound-ms") {
+      auto start = require_value(kArg);
+      if (!start) return std::nullopt;
+      auto dur = require_value(kArg);
+      if (!dur) return std::nullopt;
+      auto parsed_start = ParseNumeric<int>(*start);
+      auto parsed_dur = ParseNumeric<int>(*dur);
+      if (!parsed_start || !parsed_dur) return std::nullopt;
+      opts.client_drop_inbound_start_ms = *parsed_start;
+      opts.client_drop_inbound_duration_ms = *parsed_dur;
     } else if (kArg == "--help" || kArg == "-h") {
       PrintUsage();
       std::exit(0);
@@ -1095,6 +1113,8 @@ int main(int argc, char* argv[]) {
   sco.username_index_base = kOpts->account_index_base + kOpts->account_pool;
   sco.count = kOpts->script_clients;
   sco.verify = kOpts->script_verify;
+  sco.drop_inbound_start_ms = kOpts->client_drop_inbound_start_ms;
+  sco.drop_inbound_duration_ms = kOpts->client_drop_inbound_duration_ms;
   world_stress::ScriptClientHarness script_harness(std::move(sco));
   if (auto r = script_harness.Start(); !r.HasValue()) {
     std::cerr << "[script-clients] " << r.Error().Message() << "\n";
