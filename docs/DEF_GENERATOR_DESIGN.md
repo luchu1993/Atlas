@@ -803,3 +803,90 @@ BigWorld 通过 `REAL_ONLY` 消息标记实现 Ghost → Real 透明转发（参
 | ATLAS_DEF005 | Warning | `partial class` 缺少 `[Entity]` 匹配的 partial 方法实现 |
 | ATLAS_DEF006 | Error | `.def` XML 解析失败 |
 | ATLAS_DEF007 | Error | 重复的 type_id |
+
+---
+
+## 10. ProcessContext.Client 模式：实测产物与缺口（2026-04-21）
+
+§4 的 RPC 角色矩阵、§5 的 Emitter 设计都对"Client 上下文该产出什么"做了规约，但 Generator 的 Client 分支上线后一直没被对照 BigWorld 做过一轮完整审计。本节是实测 + 对照修订：用 `samples/client/Atlas.ClientSample.csproj`（`<DefineConstants>ATLAS_CLIENT</DefineConstants>`，引用 `Atlas.Client` + `Atlas.Generators.Def` as Analyzer）+ `entity_defs/Avatar.def` 触发 Generator，产物落在 `samples/client/obj/generated/Atlas.Generators.Def/Atlas.Generators.Def.DefGenerator/`。
+
+### 10.1 实测已覆盖的产物
+
+| 文件 | 核心内容 | 状态 |
+|---|---|---|
+| `Avatar.Properties.g.cs` | backing field + 公开 get/set + `OnXxxChanged` partial 声明 | 正常，但 setter 有缺陷（见 §10.2）|
+| `Avatar.RpcStubs.g.cs` | `client_methods` → `public partial void X(...)` 接收声明；exposed `cell_methods` / `base_methods` → `SendCellRpc` / `SendBaseRpc` 发送 stub；非 exposed → `throw InvalidOperationException` | 符合 §4.1 矩阵 |
+| `Avatar.Serialization.g.cs` | `TypeName` override + `Deserialize(ref SpanReader)`（version + fieldCount + bodyLength 容错跳过）；不生成 `Serialize` | 正常，但直写字段绕过 setter（见 §10.2）|
+| `Avatar.Mailboxes.g.cs` | `AvatarBaseMailbox`（只含 exposed base_methods）+ `AvatarCellMailbox`（只含 exposed cell_methods）；无 `AvatarClientMailbox` | 符合 §4.2 |
+| `DefRpcDispatcher.g.cs` | `[ModuleInitializer]` 注册 `Atlas.Client.ClientCallbacks.ClientRpcDispatcher` → switch 到 `target.Method(...)` | 接收派发已就绪 |
+| `EntityFactory.g.cs` | `[ModuleInitializer]` 调 `Atlas.Client.ClientEntityFactory.Register(typeId, factory)` | 正常 |
+| `DefEntityTypeRegistry.g.cs` | 通过 `Atlas.Client.ClientEntityRegistryBridge.RegisterEntityType` 注册 | 正常 |
+| `RpcIds.g.cs` | 全进程一致的 RPC ID 常量 | 正常 |
+
+**显著缺失**：对比服务端（`samples/stress/Atlas.StressTest.Cell/obj/generated/...`），客户端**不生成 `*.DeltaSync.g.cs`**。`DeltaSyncEmitter.cs:19-20` 显式短路：`if (ctx == ProcessContext.Client) return null;`
+
+### 10.2 与 BigWorld 对照发现的缺口
+
+对照 BigWorld `common/simple_client_entity.cpp:135-163` 的 `propertyEvent()` 与 `client/bw_entity.cpp:624-653` 的 `onPositionUpdated()`（完整分析见 `PROPERTY_SYNC_DESIGN.md §9`），当前 Client 模式产物存在四项语义偏差：
+
+| # | 缺口 | 现状代码位置 | 需修正 |
+|---|---|---|---|
+| A | **客户端无 delta 解码** | `DeltaSyncEmitter.cs:19-20` 直接返回 null | 对称发射 `ApplyReplicatedDelta(ref SpanReader)`：按 `_dirtyFlags` bitmap 读字段，逐字段写入 + 触发回调。客户端**不维护** `_dirtyFlags` 字段，bitmap 只作一次性解码分发 |
+| B | **setter 不触发 `OnXxxChanged`** | `PropertiesEmitter.cs:111-140` 的 `EmitProperty`：client 分支（`withDirtyTracking=false`）只产出 `set => _field = value;` | client 分支也生成 `if (old != new) { var o = _field; _field = value; OnXxxChanged(o, value); }`，但**不设置 dirty bit**（客户端没有写端诉求）|
+| C | **`Deserialize` 直写字段绕过 setter** | `SerializationEmitter` 客户端产物用 `_hp = reader.ReadInt32();` 等 | **保持现状**——对齐 BigWorld `shouldUseCallback=false` 的初始快照语义（enter-AoI 时回调不应触发）。但需在 `ClientEntity` 加 `OnEnterWorld()` 虚方法，框架在快照应用完毕后统一调一次，供脚本做整体初始化 |
+| D | **Position 回调语义错位** | Position 当前在 `Avatar.Properties.g.cs` 里生成 `OnPositionChanged(old, new)` partial，与其它属性同构 | Position 在客户端接收端**不应**走属性回调链：C++ 宿主将 `0xF003` 信封的 `kEntityPositionUpdate` kind 桥到 `ClientEntity.ApplyPositionUpdate(Vector3)`；该函数直写 `_position`、调 `OnPositionUpdated(Vector3 newPos)` 专用钩子（对齐 BigWorld `onPositionUpdated()`）。Generator 层应在 `ApplyReplicatedDelta` bitmap 中**跳过** Position 位，或发诊断警告 |
+
+### 10.3 `ClientEntity` 基类需补的入口
+
+客户端需要的运行时钩子，Generator 生成的代码会调用：
+
+```csharp
+public abstract class ClientEntity  // src/csharp/Atlas.Client/ClientEntity.cs
+{
+    // 已有：EntityId, TypeName, Deserialize, OnInit, OnDestroy, SendCellRpc, SendBaseRpc
+
+    // 新增（本节）：
+    protected internal virtual void OnEnterWorld() { }
+    // 框架在 Deserialize (enter-AoI 初始快照) 应用完毕后统一调用一次。
+    // 对齐 BigWorld 的 shouldUseCallback=false 路径：初始属性不触发 OnXxxChanged，
+    // 脚本在 OnEnterWorld 里基于"已完整同步的当前状态"做整体初始化。
+
+    public void ApplyPositionUpdate(Vector3 newPos) { /* 由 Generator 或手写填入 */ }
+    // 专用于 kEntityPositionUpdate volatile 通道。直写 _position，调 OnPositionUpdated。
+    // 不触发 OnPositionChanged（避免与属性回调链混淆）。
+
+    protected internal virtual void OnPositionUpdated(Vector3 newPos) { }
+    // 客户端脚本的位置钩子。对齐 BigWorld BWEntity::onPositionUpdated()。
+}
+```
+
+`ApplyPositionUpdate` 可以由基类手写（Position 是所有实体通用的字段），也可以由 Generator 为有 Position 属性的实体发射；后者更安全，避免不同实体 Position 字段布局偏差。
+
+### 10.4 Emitter 层任务清单
+
+| # | 任务 | 文件 |
+|---|---|---|
+| 10.1 | `DeltaSyncEmitter` 增加 Client 分支，对称发射 `ApplyReplicatedDelta` | `Emitters/DeltaSyncEmitter.cs` |
+| 10.2 | `PropertiesEmitter` Client 分支 setter 改为触发 `OnXxxChanged`（不设 dirty bit） | `Emitters/PropertiesEmitter.cs:111-140` |
+| 10.3 | `ClientEntity` 增 `OnEnterWorld`、`ApplyPositionUpdate`、`OnPositionUpdated` | `src/csharp/Atlas.Client/ClientEntity.cs` |
+| 10.4 | `SerializationEmitter` 客户端 `Deserialize` 末尾调 `OnEnterWorld()` | `Emitters/SerializationEmitter.cs` |
+| 10.5 | Generator 诊断：Position 属性出现在 `ApplyReplicatedDelta` 位图时报 `ATLAS_DEF008`（或自动跳过该位）| `DefDiagnosticDescriptors.cs`，见 §10.5 |
+| 10.6 | 测试：`DefGeneratorTests.cs` 新增 Client 上下文 `ApplyReplicatedDelta` 生成 + setter 回调 + Deserialize 不触发回调的用例 | `tests/csharp/Atlas.Generators.Tests/` |
+| 10.7 | 验收：`dotnet build samples/client/` 后产物目录多出 `Avatar.DeltaSync.g.cs` 且只含 `ApplyReplicatedDelta` | 手动验证 |
+
+### 10.5 新增诊断
+
+| 诊断 ID | 严重度 | 规则 |
+|---|---|---|
+| ATLAS_DEF008 | Warning | Client 上下文下，`.def` 中名为 `position` 的属性若参与 `ApplyReplicatedDelta` bitmap，将与 `kEntityPositionUpdate` volatile 通道产生双重触发。Generator 自动从 bitmap 中跳过 Position 位；如需保留按属性同步，显式加 `<property name="position" ... volatile="false" />` 标记 |
+
+（`volatile` 属性标记是后续工作，当前先用实体名约定 `position` 做兜底。）
+
+### 10.6 与 PROPERTY_SYNC_DESIGN 的交叉引用
+
+- 本节任务 10.1 对应 `PROPERTY_SYNC_DESIGN.md §9.5` 任务 9.1
+- 本节任务 10.2 对应 `PROPERTY_SYNC_DESIGN.md §9.5` 任务 9.2
+- 本节任务 10.3 对应 `PROPERTY_SYNC_DESIGN.md §9.5` 任务 9.3 + 9.4
+- 本节任务 10.5 对应 `PROPERTY_SYNC_DESIGN.md §9.5` 任务 9.6
+
+两份文档视角不同：`PROPERTY_SYNC_DESIGN.md §9` 从"属性同步整体链路"切入，强调 BigWorld 双通道与 Atlas 服务端/客户端两侧的对称；本节从"Generator 实际发射什么"切入，具体到每个 Emitter 的改动点。落地时以 `PROPERTY_SYNC_DESIGN.md §9.5` 的任务编号为主索引。

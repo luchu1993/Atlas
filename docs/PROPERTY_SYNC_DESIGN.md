@@ -370,3 +370,121 @@ P2: 补强三                      冻结，归入 §6 远期
 | 补强四 | `entity_defs/Avatar.def` 中 `hp` 标注 reliable 后，断网 30 帧再恢复，客户端 HP 与服务端一致（当前会漂移）|
 | 补强一 | 客户端错过所有 reliable 消息后，最多 `kBaselineInterval` 帧内状态收敛到服务端 |
 | 补强二 (2.5–2.8) | `baseapp/delta_bytes_deferred_total` 在 watcher dump 中可见；`test_delta_forwarder.cpp` 新增 3 个 priority 相关用例全部通过 |
+
+---
+
+## 9. 客户端接收侧的对称设计（2026-04-21，BigWorld 源码审计补齐）
+
+§2–§8 聚焦服务端产出侧。对照 BigWorld 源码（`common/simple_client_entity.cpp`、`client/entity.cpp`、`lib/connection_model/bw_entity.cpp`）+ Atlas 客户端实测产物（`samples/client/obj/generated/Atlas.Generators.Def/Atlas.Generators.Def.DefGenerator/Avatar.*.g.cs`），发现**客户端消费侧存在结构性缺口**，且 §7.3 任务 1.4、§8.4 任务 4.8 中"客户端侧复用 `ApplyReplicatedDelta` 入口"的假设在当前代码里并不成立——Generator 在 Client 模式下根本没发射这个函数。本节把缺口与对齐方案落纸。
+
+### 9.1 BigWorld 的双通道接收模型
+
+**属性增量通道**（`common/simple_client_entity.cpp:135-163` 的 `propertyEvent()`）：
+
+```cpp
+bool propertyEvent(ScriptObject pEntity, const EntityDescription & edesc,
+    int propertyID, BinaryIStream & data, bool shouldUseCallback)
+{
+    ScriptObject pOldValue = king.setOwnedProperty(propertyID, data);  // 先写值并取旧值
+    if (shouldUseCallback) {                                            // enter-AoI: false；后续 delta: true
+        BW::string methodName = "set_" + pDataDescription->name();
+        Script::call(..., PyTuple_Pack(1, pOldValue.get()), ...);       // 自动调 set_<propname>(oldValue)
+    }
+}
+```
+
+两条关键约定：
+
+1. **回调签名 `set_<propname>(oldValue)` 框架自动 invoke** —— 新值已就地写入对象，脚本只需 oldValue 做比较
+2. **初始快照 vs 增量由 `shouldUseCallback` 区分** —— enter-AoI 批量下发属性时 `false`（不调回调，避免脚本在 `onEnterWorld` 之前被乱序通知），后续 delta `true`
+
+**位置通道**（独立消息 `avatarUpdateNoAliasDetailed` / `avatarUpdatePlayerDetailed` / `forcedPosition`，`lib/connection/common_client_interface.hpp:122-152`）：
+
+```
+ServerConnection::avatarUpdateXxx()
+  → BWEntities::handleEntityMoveWithError()
+  → BWEntity::onMoveFromServer()            (bw_entity.cpp:562-588)
+  → movement filter (插值 / 外推 / 时间戳追赶)
+  → setSpaceVehiclePositionAndDirection()
+  → onPositionUpdated()                      (bw_entity.cpp:624-653, 纯 C++ 钩子)
+```
+
+位置**不走属性系统**、**不触发 Python `set_position`**，只触发 C++ `onPositionUpdated()`。脚本要观察移动走独立入口（`Entity.onMove()` 等）。设计动机：位置高频、需要插值，混入属性回调流会吞 CPU 且语义错位。
+
+### 9.2 Atlas 当前客户端接收现状（实测）
+
+| 环节 | BigWorld | Atlas 实测 | 证据 |
+|---|---|---|---|
+| 属性 delta 解码 | `propertyEvent(propertyID, ...)` 按 ID 分发 | **无**：Generator 在 Client 模式直接跳过 | `src/csharp/Atlas.Generators.Def/Emitters/DeltaSyncEmitter.cs:19-20`：`if (ctx == ProcessContext.Client) return null;` |
+| setter 自动回调 | 自动调 `set_<propname>(oldValue)` | **不调**：Client 分支 setter 仅 `_field = value` | `PropertiesEmitter.cs:111-140` 的 `EmitProperty`：`withDirtyTracking=true` 分支（server）触发 `OnXxxChanged`；`else` 分支（client，`ctx != Client` 才算 replicable）只生成裸赋值 |
+| 初始快照 vs 增量 | `shouldUseCallback` 布尔参数 | **无区分**：只有 `Deserialize()`（enter-AoI 全量），且直写 `_field = reader.ReadXxx()` 绕过 setter | `samples/client/obj/generated/.../Avatar.Serialization.g.cs` |
+| 位置高频同步 | 独立消息 + filter + `onPositionUpdated()` | 位置与属性共走 `kReliableDeltaWireId=0xF003` AoI 信封，首字节 `CellAoIEnvelopeKind` 区分；客户端无 filter、无独立位置钩子 | `src/tools/world_stress/main.cc:447-497` 当前只对信封头字节计数 |
+
+`§7.3` 任务 1.4 与 `§8.4` 任务 4.8 均假设客户端"复用同一 `ApplyReplicatedDelta` 入口"，该入口当前**未生成**，两任务的客户端侧落地需先补齐此前置依赖。
+
+### 9.3 对齐目标
+
+**P0 — 属性 delta 对称解码**
+
+扩 `DeltaSyncEmitter` 在 `ctx == ProcessContext.Client` 时生成对称的 `ApplyReplicatedDelta(ref SpanReader reader)`：按服务端写出的 `(flags byte[s])+(dirty values)` 位图格式读，逐字段：
+
+```csharp
+public void ApplyReplicatedDelta(ref SpanReader reader)
+{
+    var flags = (ReplicatedDirtyFlags)reader.ReadByte();
+    if ((flags & ReplicatedDirtyFlags.Hp) != 0)
+    {
+        var old = _hp;
+        _hp = reader.ReadInt32();
+        OnHpChanged(old, _hp);
+    }
+    // ...
+}
+```
+
+注意：客户端不维护 `_dirtyFlags` 字段（没有写端诉求），只把 flags 当一次性 bitmap 用于解码分发。
+
+**P0 — 客户端 setter 触发回调**
+
+修 `PropertiesEmitter.cs:121-137`：让 `ctx == ProcessContext.Client` 的 setter 也走"`if (old != new)` → 写字段 → 调 `OnXxxChanged(old, new)`"的形式，**但不设置任何 dirty bit**（客户端没有脏标记）。这样无论是 wire delta 写入还是脚本本地赋值都会触发回调，与 BigWorld `set_<propname>(old)` 语义对齐。
+
+**P0 — 初始快照 vs 增量分流**
+
+- `Deserialize()`（enter-AoI 全量快照）**维持直写字段**、**不触发回调**，对齐 BigWorld `shouldUseCallback=false` 语义
+- 新增 `ClientEntity.OnEnterWorld()` 虚方法，框架在快照应用完毕后统一调用一次，供脚本做相对"当前状态"的整体初始化
+- `ApplyReplicatedDelta()`（增量）**触发每个变化属性的 `OnXxxChanged`**，对齐 `shouldUseCallback=true`
+
+**P0 — Position 走独立通道**
+
+Position 在 `.def` 仍是 `scope="all_clients"` 属性（与 BigWorld `Volatile` 标志呼应），但客户端接收端**不与普通属性同路**：
+
+- `0xF003` 信封 `kind=kEntityPositionUpdate`（volatile 通道）桥接到 `ClientEntity.ApplyPositionUpdate(Vector3 newPos)` 专用钩子
+- `ApplyPositionUpdate` 直写 `_position` 字段（不经属性 setter）、调 `OnPositionUpdated(Vector3 newPos)` ——**不是** `OnPositionChanged(old, new)`，避免混入属性回调链
+- `kind=kEntityPropertyUpdate`（event 通道）中若再带 Position 位：要么服务端保证 Position 永不进入 event 通道（与 §6.1 volatile/event 分流一致），要么客户端 `ApplyReplicatedDelta` 在位图中跳过 Position（Generator 层面校验）
+
+**P2 — 客户端 movement filter（远期）**
+
+BigWorld filter（时间戳追赶 + 外推）是完整客户端必需，stress 场景不需要。留给 Unity 客户端集成时再设计，现阶段 `OnPositionUpdated` 直接落到 `_position` 即可。
+
+### 9.4 与 §6 远期架构的关系
+
+§6 规划的 DirtyBit（C#）+ EventHistory（C++ 轻量）混合架构只改**服务端产出侧**。本节补齐**客户端消费侧**，两者**正交**：
+
+- **服务端**：DirtyBit → HistoryEvent → per-observer cursor → 写 wire delta
+- **客户端**：wire delta → `ApplyReplicatedDelta` 按 bitmap 分发 → setter + 回调
+
+不论服务端是否迁 EventHistory，客户端 wire 格式（`kind byte` + `flags bitmap` + `values`）可保持不变，本节的客户端侧实现复用。
+
+### 9.5 实施任务清单
+
+| # | 任务 | 文件 | 依赖 |
+|---|---|---|---|
+| 9.1 | `DeltaSyncEmitter` 增加 Client 对称发射 `ApplyReplicatedDelta` | `src/csharp/Atlas.Generators.Def/Emitters/DeltaSyncEmitter.cs:19-20` | 无 |
+| 9.2 | `PropertiesEmitter` Client 分支 setter 触发 `OnXxxChanged`（不设 dirty bit） | `src/csharp/Atlas.Generators.Def/Emitters/PropertiesEmitter.cs:111-140` | 无 |
+| 9.3 | `ClientEntity` 基类增 `OnEnterWorld()` 虚方法 | `src/csharp/Atlas.Client/ClientEntity.cs` | 无 |
+| 9.4 | `ClientEntity` 基类增 `ApplyPositionUpdate(Vector3)` + `OnPositionUpdated(Vector3)` 钩子 | `src/csharp/Atlas.Client/ClientEntity.cs` | 无 |
+| 9.5 | C++ 客户端宿主把 `0xF003` 信封按 kind 桥到 `ClientCallbacks.DispatchRpc` / `ApplyReplicatedDelta` / `ApplyPositionUpdate` | `src/client/client_native_provider.cc`，`src/csharp/Atlas.Client/ClientCallbacks.cs` | 9.1/9.4 |
+| 9.6 | Generator 诊断：Position 不得出现在 `ApplyReplicatedDelta` 位图中（或自动跳过） | `src/csharp/Atlas.Generators.Def/DefDiagnosticDescriptors.cs` | 9.1 |
+| 9.7 | 验收：`samples/client/` 构建后产物多出 `Avatar.DeltaSync.g.cs`（只含 `ApplyReplicatedDelta`）；`Avatar.Properties.g.cs` setter 调用 `OnXxxChanged` | 构建验证 | 9.1/9.2 |
+
+任务 9.1–9.4 是 §7.3 / §8.4 中所有"客户端侧"落地的**前置基础**，优先做完再推补强一 / 补强四的客户端部分。
