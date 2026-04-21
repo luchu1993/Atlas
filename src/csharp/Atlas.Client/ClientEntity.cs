@@ -15,6 +15,14 @@ public abstract class ClientEntity
 
     public abstract string TypeName { get; }
 
+    // Transform state — replicated via the volatile position channel
+    // (0xF001 / kEntityPositionUpdate), separate from the replicated
+    // property channel. Read freely from script; writes go through
+    // ApplyPositionUpdate so the script hook fires consistently.
+    public Vector3 Position { get; private set; }
+    public Vector3 Direction { get; private set; }
+    public bool OnGround { get; private set; }
+
     /// <summary>Restores entity state received from the server (implemented by source generator).</summary>
     public virtual void Deserialize(ref SpanReader reader) { }
 
@@ -50,11 +58,28 @@ public abstract class ClientEntity
 
     /// <summary>
     /// Apply a volatile position/orientation update from the AoI volatile
-    /// channel (<c>kEntityPositionUpdate</c> envelope). Phase B4 wires this
-    /// to a generator-produced position field and an <c>OnPositionUpdated</c>
-    /// script hook; in Phase A the base simply drops the update.
+    /// channel (<c>kEntityPositionUpdate</c> envelope). Writes the three
+    /// transform fields and fires <see cref="OnPositionUpdated"/>.
+    /// Virtual so a future per-entity generator override (movement filter,
+    /// interpolation target, etc.) can replace the straight write.
     /// </summary>
-    public virtual void ApplyPositionUpdate(Vector3 pos, Vector3 dir, bool onGround) { }
+    public virtual void ApplyPositionUpdate(Vector3 pos, Vector3 dir, bool onGround)
+    {
+        Position = pos;
+        Direction = dir;
+        OnGround = onGround;
+        OnPositionUpdated(pos);
+    }
+
+    /// <summary>
+    /// Script hook called after every volatile position update. Takes the
+    /// new position only — matches BigWorld's <c>BWEntity::onPositionUpdated</c>
+    /// signature. Deliberately distinct from the property-change callback
+    /// chain (<c>OnXxxChanged</c>): position arrives through its own high-
+    /// frequency channel and routing it through the per-field callback path
+    /// would muddle semantics and inflate dispatch cost.
+    /// </summary>
+    protected internal virtual void OnPositionUpdated(Vector3 newPos) { }
 
     /// <summary>Called when the entity is created on the client.</summary>
     protected internal virtual void OnInit() { }
