@@ -400,6 +400,31 @@ auto ClientApp::MainLoop() -> int {
         config_.drop_inbound_start_ms + config_.drop_inbound_duration_ms);
   }
 
+  // BaseApp emits two fixed-length BaseApp → Client messages that need typed
+  // handlers, not the default RPC fallback: EntityTransferred (2024) updates
+  // the proxy entity after GiveClientTo; CellReady (2025) signals that the
+  // client-bound Proxy has a cell address. They MUST be registered as
+  // typed, because the Channel dispatcher uses the MessageDesc length style
+  // to advance the read cursor — with no typed entry, a fixed-length
+  // payload is misparsed as a packed-int length prefix and every
+  // subsequent message in the same datagram is thrown out with a
+  // "Truncated message" warning. That broke the AoI state stream and
+  // prevented any OnHpChanged / OnPositionUpdated from reaching script.
+  network_.InterfaceTable().RegisterTypedHandler<baseapp::EntityTransferred>(
+      [this](const Address&, Channel*, const baseapp::EntityTransferred& msg) {
+        // Rebind the proxy identity so subsequent base-RPCs target the new
+        // entity. The cell-RPC path is identity-tracked by the script via
+        // ClientEntity.EntityId, so it does not need anything here.
+        player_entity_id_ = msg.new_entity_id;
+        player_type_id_ = msg.new_type_id;
+      });
+  network_.InterfaceTable().RegisterTypedHandler<baseapp::CellReady>(
+      [](const Address&, Channel*, const baseapp::CellReady&) {
+        // Informational only — the client doesn't need to take any action;
+        // the typed registration exists solely so Channel::DispatchMessages
+        // knows the fixed-length payload layout.
+      });
+
   // Register a catch-all handler for messages from BaseApp.
   //
   // Two transport-level concerns are multiplexed over this default handler:

@@ -21,11 +21,19 @@ void ConsoleSink::Write(LogLevel level, std::string_view category, std::string_v
                             location.file_name(), location.line(), message);
   }
 
+  // fflush on every line, for both streams. Without this, stdout stays in
+  // the 4 KB C-runtime buffer when the process is redirected to a pipe —
+  // a harness that TerminateProcess'es the child (Windows world_stress
+  // script-client flow) loses every INFO log emitted before exit because
+  // TerminateProcess skips the C-runtime's exit-time flush. The cost is
+  // one fflush per log line, which is negligible for operator-facing
+  // diagnostic volume.
   if (level >= LogLevel::kError) {
     std::fwrite(formatted.data(), 1, formatted.size(), stderr);
     std::fflush(stderr);
   } else {
     std::fwrite(formatted.data(), 1, formatted.size(), stdout);
+    std::fflush(stdout);
   }
 }
 

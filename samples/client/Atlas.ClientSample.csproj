@@ -33,7 +33,13 @@
   </ItemGroup>
 
   <ItemGroup>
-    <AdditionalFiles Include="..\..\entity_defs\Avatar.def" />
+    <!-- Entity defs must be the exact set the stress cluster's server apps
+         use (samples/stress/Atlas.StressTest.Base + .Cell) so that the
+         generator assigns matching numeric type IDs to both sides. Client
+         once included Avatar.def, which pushed StressAvatar from id 2 to
+         id 3; the server sent typeId=2 on the wire and the client
+         instantiated Avatar instead of StressAvatar, so OnHpChanged et al
+         never fired. -->
     <AdditionalFiles Include="..\..\entity_defs\Account.def" />
     <AdditionalFiles Include="..\..\entity_defs\StressAvatar.def" />
   </ItemGroup>

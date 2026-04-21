@@ -86,7 +86,13 @@ public static class ClientCallbacks
         try
         {
             var entity = ClientEntityFactory.Create(typeId);
-            if (entity == null) return;
+            if (entity == null)
+            {
+                Console.Error.WriteLine(
+                    $"ClientCallbacks.CreateEntity: no factory registered for typeId={typeId} "
+                    + $"(entityId={entityId})");
+                return;
+            }
 
             entity.EntityId = entityId;
             s_entityMgr.Register(entity);

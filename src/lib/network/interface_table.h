@@ -51,6 +51,19 @@ class InterfaceTable {
     return false;
   }
 
+  // Invoke the registered default handler for an unrecognized MessageID.
+  // Returns false when no default handler has been installed, in which
+  // case the caller should log and drop. Used by Channel's inline per-
+  // message loop (which does its own typed-entry lookup and skips
+  // Dispatch()) so the client's state-channel fallback still runs for
+  // 0xF001 / 0xF002 / 0xF003.
+  auto TryDispatchDefault(const Address& source, Channel* channel, MessageID id, BinaryReader& data)
+      -> bool {
+    if (!default_handler_) return false;
+    default_handler_(source, channel, id, data);
+    return true;
+  }
+
  private:
   PagedSparseTable<MessageID, Entry> entries_;
   DefaultHandler default_handler_;

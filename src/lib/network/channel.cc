@@ -173,12 +173,19 @@ void Channel::DispatchMessages(std::span<const std::byte> frame_data) {
       continue;
     }
 
+    BinaryReader msg_reader(*payload_span);
     if (!entry) {
-      ATLAS_LOG_WARNING("Unknown message ID {} from {}", id, remote_.ToString());
+      // No typed handler — try the InterfaceTable's default handler. The
+      // client installs one on the default-handler slot to route the three
+      // reserved state-replication channels (0xF001 / 0xF002 / 0xF003) and
+      // every ClientRpc (anything in the dynamic rpc_id range). Only log
+      // "Unknown message ID" when nothing's installed either.
+      if (!interface_table_.TryDispatchDefault(remote_, this, id, msg_reader)) {
+        ATLAS_LOG_WARNING("Unknown message ID {} from {}", id, remote_.ToString());
+      }
       continue;
     }
 
-    BinaryReader msg_reader(*payload_span);
     entry->handler->HandleMessage(remote_, this, id, msg_reader);
   }
 }

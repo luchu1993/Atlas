@@ -124,10 +124,27 @@ auto ChildProcess::Start(Options opts) -> Result<ChildProcess> {
   std::wstring wcwd =
       opts.working_directory.empty() ? std::wstring{} : opts.working_directory.wstring();
 
+  // Open NUL as the child's stdin — safer than inheriting STD_INPUT_HANDLE,
+  // which may be a broken handle when the parent itself was launched with a
+  // redirected stdin (pipe from Python subprocess / bash, console-less
+  // service, etc.). CoreCLR's runtime init touches console handles and
+  // hangs or truncates output when stdin is in an odd state.
+  SECURITY_ATTRIBUTES nul_sa{};
+  nul_sa.nLength = sizeof(nul_sa);
+  nul_sa.bInheritHandle = TRUE;
+  HANDLE nul_in = CreateFileW(L"NUL", GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE, &nul_sa,
+                              OPEN_EXISTING, 0, nullptr);
+  if (nul_in == INVALID_HANDLE_VALUE) {
+    CloseHandle(read_end);
+    CloseHandle(write_end);
+    return Error{ErrorCode::kInternalError, "ChildProcess::Start: CreateFileW(NUL) failed, gle=" +
+                                                std::to_string(GetLastError())};
+  }
+
   STARTUPINFOW si{};
   si.cb = sizeof(si);
   si.dwFlags = STARTF_USESTDHANDLES;
-  si.hStdInput = GetStdHandle(STD_INPUT_HANDLE);
+  si.hStdInput = nul_in;
   si.hStdOutput = write_end;
   si.hStdError = write_end;  // merge stderr into stdout — script writes to both
 
@@ -138,13 +155,15 @@ auto ChildProcess::Start(Options opts) -> Result<ChildProcess> {
     const DWORD gle = GetLastError();
     CloseHandle(read_end);
     CloseHandle(write_end);
+    CloseHandle(nul_in);
     return Error{ErrorCode::kInternalError, "CreateProcessW failed (gle=" + std::to_string(gle) +
                                                 ") for exe=" + opts.exe.string()};
   }
 
-  // Close the write end in the parent so the pipe signals EOF when the
-  // child exits.
+  // Close the write end + NUL stdin in the parent so the pipe signals EOF
+  // when the child exits. The child keeps its own inherited duplicates.
   CloseHandle(write_end);
+  CloseHandle(nul_in);
   CloseHandle(pi.hThread);  // we never touch the primary thread separately
 
   ChildProcess cp;

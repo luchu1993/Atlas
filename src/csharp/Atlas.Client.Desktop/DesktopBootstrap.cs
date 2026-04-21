@@ -27,14 +27,13 @@ namespace Atlas.Client;
 //   1. Initialise the CLR (Atlas.ClrHost's Bootstrap runs, ErrorBridge /
 //      GCHandleHelper registered).
 //   2. Call DesktopBootstrap.Initialize() via ClrHost::GetMethodAs.
-//   3. Only then LoadModule the user's script assembly — any generated
-//      ModuleInitializer inside it (TypeRegistry etc.) can now safely
-//      call through ClientHost.
+//   3. Then DesktopBootstrap.LoadUserAssembly() to load the user's script
+//      assembly — the call forces every [ModuleInitializer] in the target
+//      assembly to run immediately, wiring the generator-emitted entity
+//      factory and RPC dispatcher before the first CreateEntity callback
+//      reaches managed code.
 // The call is explicit rather than a [ModuleInitializer] so library
-// consumers never have hidden side-effects on load (CA2255). The
-// corresponding C++ wiring currently shares a pre-existing blocker with
-// ClrScriptEngine's Atlas.Runtime.Lifecycle lookup — see
-// docs/PHASE_C_VALIDATION.md Known Limitations §1.
+// consumers never have hidden side-effects on load (CA2255).
 // ============================================================================
 
 [StructLayout(LayoutKind.Sequential, Pack = 1)]
@@ -64,6 +63,22 @@ public static unsafe class DesktopBootstrap
     {
         try
         {
+            // Force AutoFlush on managed stdout / stderr. .NET's default
+            // Console writers leave a ~2 KB buffer in front of the handle
+            // when stdout is a redirected pipe, so harnesses that poll
+            // child stdout (world_stress --script-clients) or kill the
+            // child before graceful exit see the first few hundred
+            // Console.WriteLine lines vanish. Line-rate flushing is
+            // harmless — desktop-client log volume never saturates it.
+            Console.SetOut(new System.IO.StreamWriter(Console.OpenStandardOutput())
+            {
+                AutoFlush = true,
+            });
+            Console.SetError(new System.IO.StreamWriter(Console.OpenStandardError())
+            {
+                AutoFlush = true,
+            });
+
             ClientHost.SendBaseRpcHandler = ClientNativeApi.SendBaseRpc;
             ClientHost.SendCellRpcHandler = ClientNativeApi.SendCellRpc;
             ClientHost.RegisterEntityTypeHandler = ClientNativeApi.RegisterEntityType;
@@ -93,7 +108,38 @@ public static unsafe class DesktopBootstrap
         try
         {
             var path = Encoding.UTF8.GetString(new ReadOnlySpan<byte>(pathUtf8, pathLen));
-            Assembly.LoadFrom(path);
+
+            // Load the user assembly into the SAME AssemblyLoadContext that
+            // already holds Atlas.Client (which is the ALC this very method
+            // runs in). hostfxr's load_assembly_and_get_function_pointer
+            // puts each distinct script assembly into its own "isolated"
+            // ALC, so using AssemblyLoadContext.Default or Assembly.LoadFrom
+            // here would give us two distinct Atlas.Client.ClientEntityFactory
+            // types: the generator's ModuleInitializer would register entity
+            // creators into the user-assembly's copy while the
+            // [UnmanagedCallersOnly] bridges in this file read from the
+            // Atlas.Client.Desktop copy, and every CreateEntity callback
+            // would come back null.
+            var hostAlc = System.Runtime.Loader.AssemblyLoadContext.GetLoadContext(
+                typeof(DesktopBootstrap).Assembly);
+            if (hostAlc == null)
+            {
+                ErrorBridge.SetError(new InvalidOperationException(
+                    "DesktopBootstrap: unable to resolve host AssemblyLoadContext"));
+                return -1;
+            }
+            var assembly = hostAlc.LoadFromAssemblyPath(path);
+
+            // The runtime defers [ModuleInitializer] execution until code
+            // in the module is first accessed. atlas_client never touches
+            // user-assembly types from managed code — all wiring happens
+            // through C++ callbacks — so we force the module ctor to run
+            // now so the generator-emitted registrations fire.
+            foreach (var module in assembly.Modules)
+            {
+                System.Runtime.CompilerServices.RuntimeHelpers.RunModuleConstructor(
+                    module.ModuleHandle);
+            }
             return 0;
         }
         catch (Exception ex)
