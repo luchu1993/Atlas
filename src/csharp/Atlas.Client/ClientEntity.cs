@@ -140,11 +140,11 @@ public abstract class ClientEntity
 
     protected internal void SendCellRpc(int rpcId, ReadOnlySpan<byte> payload)
     {
-        ClientNativeApi.SendCellRpc(EntityId, (uint)rpcId, payload);
+        ClientHost.SendCellRpc(EntityId, (uint)rpcId, payload);
     }
 
     protected internal void SendBaseRpc(int rpcId, ReadOnlySpan<byte> payload)
     {
-        ClientNativeApi.SendBaseRpc(EntityId, (uint)rpcId, payload);
+        ClientHost.SendBaseRpc(EntityId, (uint)rpcId, payload);
     }
 }

@@ -1,6 +1,11 @@
 <Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
-    <TargetFramework>net9.0</TargetFramework>
+    <!-- Target netstandard2.1 so Unity (Mono / IL2CPP) can consume this
+         assembly directly, either as a managed plugin DLL or as source.
+         Anything requiring .NET 5+ primitives — [UnmanagedCallersOnly],
+         `delegate* unmanaged`, raw [LibraryImport], hostfxr glue — lives
+         in Atlas.Client.Desktop, not here. -->
+    <TargetFramework>netstandard2.1</TargetFramework>
     <LangVersion>latest</LangVersion>
     <Nullable>enable</Nullable>
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
@@ -8,12 +13,12 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <!-- Atlas.Client deliberately has ONE dependency: Atlas.Shared. The
+         assembly is intended for direct reuse by Unity (Mono/IL2CPP) which
+         cannot and must not pull in CoreCLR hosting types. Any CoreCLR-
+         specific wiring (Bootstrap, UnmanagedCallersOnly bridges, P/Invoke
+         to atlas_engine) lives in Atlas.Client.Desktop and/or the concrete
+         host app csproj (e.g. Atlas.ClientSample). -->
     <ProjectReference Include="..\Atlas.Shared\Atlas.Shared.csproj" />
-    <!-- Atlas.ClrHost supplies the CoreCLR bootstrap entry point that
-         atlas_client.exe's hostfxr glue resolves at startup. Atlas.Client
-         doesn't call any of those types directly — the dependency is
-         transitive so the bootstrap assembly actually ships next to
-         Atlas.ClientSample.dll instead of being missing at runtime. -->
-    <ProjectReference Include="..\Atlas.ClrHost\Atlas.ClrHost.csproj" />
   </ItemGroup>
 </Project>

@@ -18,6 +18,15 @@
 
   <ItemGroup>
     <ProjectReference Include="..\..\src\csharp\Atlas.Client\Atlas.Client.csproj" />
+    <!-- Atlas.Client.Desktop carries the CoreCLR-specific glue: it hosts
+         the [UnmanagedCallersOnly] bridges, fills the ClientHost delegate
+         slots with P/Invoke handlers, and (via its [ModuleInitializer])
+         registers the native callback table. Unity samples reference
+         Atlas.Client directly and skip this project. -->
+    <ProjectReference Include="..\..\src\csharp\Atlas.Client.Desktop\Atlas.Client.Desktop.csproj" />
+    <!-- Atlas.ClrHost supplies the CoreCLR bootstrap entry point that
+         atlas_client.exe's hostfxr glue resolves at startup. -->
+    <ProjectReference Include="..\..\src\csharp\Atlas.ClrHost\Atlas.ClrHost.csproj" />
     <ProjectReference Include="..\..\src\csharp\Atlas.Generators.Def\Atlas.Generators.Def.csproj"
                       OutputItemType="Analyzer"
                       ReferenceOutputAssembly="false" />

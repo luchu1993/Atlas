@@ -39,5 +39,17 @@ atlas_dotnet_project(
   NAME atlas_client_dll
   PROJECT_FILE Atlas.Client/Atlas.Client.csproj
   ASSEMBLY_NAME Atlas.Client.dll
-  DEPENDS atlas_shared_dll atlas_clrhost_dll
+  TARGET_FRAMEWORK netstandard2.1
+  DEPENDS atlas_shared_dll
+)
+
+# Atlas.Client.Desktop carries the CoreCLR-host-specific glue
+# (UnmanagedCallersOnly bridges + P/Invoke to atlas_engine). Unity builds
+# skip this target entirely — they ship Atlas.Client alongside their own
+# P/Invoke layer against atlas_net_client.dll.
+atlas_dotnet_project(
+  NAME atlas_client_desktop_dll
+  PROJECT_FILE Atlas.Client.Desktop/Atlas.Client.Desktop.csproj
+  ASSEMBLY_NAME Atlas.Client.Desktop.dll
+  DEPENDS atlas_shared_dll atlas_client_dll atlas_clrhost_dll
 )

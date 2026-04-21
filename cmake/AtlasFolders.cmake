@@ -120,6 +120,7 @@ atlas_set_folder("CSharp"
   atlas_clrhost_dll
   atlas_runtime_dll
   atlas_client_dll
+  atlas_client_desktop_dll
 )
 
 atlas_set_folder("CSharp/Generators"

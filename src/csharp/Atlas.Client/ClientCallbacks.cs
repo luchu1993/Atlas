@@ -1,23 +1,23 @@
 using System;
-using System.Runtime.InteropServices;
 using Atlas.DataTypes;
 using Atlas.Serialization;
 
 namespace Atlas.Client;
 
-[StructLayout(LayoutKind.Sequential, Pack = 1)]
-internal unsafe struct ClientCallbackTable
-{
-    public nint DispatchRpc;
-    public nint CreateEntity;
-    public nint DestroyEntity;
-    public nint DeliverFromServer;
-}
-
 /// <summary>
-/// Manages the callback table from C++ → C# on the client side.
+/// Pure-managed surface of the client callback layer. The host app (desktop
+/// CoreCLR or Unity IL2CPP) owns the native-side callback table and routes
+/// incoming wire bytes into the static <c>Dispatch*</c> decoders below.
 /// </summary>
-public static unsafe class ClientCallbacks
+/// <remarks>
+/// Atlas.Client targets netstandard2.1 for Unity consumption. Everything
+/// that requires .NET 5+ primitives — [UnmanagedCallersOnly] bridges, raw
+/// delegate* unmanaged, P/Invoke to a specific native dll — lives in
+/// Atlas.Client.Desktop (CoreCLR) or the Unity package (Mono / IL2CPP).
+/// Both hosts call into the same decoders here so wire-format parsing is
+/// defined exactly once.
+/// </remarks>
+public static class ClientCallbacks
 {
     /// <summary>
     /// Delegate type for dispatching an incoming ClientRpc to a managed entity.
@@ -25,18 +25,17 @@ public static unsafe class ClientCallbacks
     public delegate void RpcDispatchDelegate(ClientEntity entity, int rpcId, ref SpanReader reader);
 
     /// <summary>
-    /// RPC dispatcher set by generated code.
-    /// Index: 0 = ClientRpc (the only direction the client receives)
+    /// RPC dispatcher set by generated code (<c>[ModuleInitializer]</c>).
     /// </summary>
     public static RpcDispatchDelegate? ClientRpcDispatcher;
 
     // Reserved client-facing MessageIDs — must match
     // src/server/baseapp/delta_forwarder.h::kClient*MessageId exactly.
-    // Duplicated here (rather than imported) because Atlas.Client must remain
-    // independent of any server header.
-    internal const ushort kClientDeltaMessageId = 0xF001;          // volatile / unreliable
-    internal const ushort kClientBaselineMessageId = 0xF002;       // owner-scope full baseline (reliable)
-    internal const ushort kClientReliableDeltaMessageId = 0xF003;  // ordered property delta (reliable)
+    // Duplicated here (rather than imported) because Atlas.Client must
+    // remain independent of any server header.
+    public const ushort kClientDeltaMessageId = 0xF001;          // volatile / unreliable
+    public const ushort kClientBaselineMessageId = 0xF002;       // owner-scope full baseline (reliable)
+    public const ushort kClientReliableDeltaMessageId = 0xF003;  // ordered property delta (reliable)
 
     // CellAoIEnvelopeKind — must match src/server/cellapp/cell_aoi_envelope.h
     // byte-for-byte.
@@ -49,30 +48,27 @@ public static unsafe class ClientCallbacks
 
     public static ClientEntityManager EntityManager => s_entityMgr;
 
-    internal static void Register()
-    {
-        ClientCallbackTable table;
-        table.DispatchRpc = (nint)(delegate* unmanaged<uint, uint, byte*, int, void>)&DispatchRpc;
-        table.CreateEntity = (nint)(delegate* unmanaged<uint, ushort, void>)&CreateEntity;
-        table.DestroyEntity = (nint)(delegate* unmanaged<uint, void>)&DestroyEntity;
-        table.DeliverFromServer =
-            (nint)(delegate* unmanaged<ushort, byte*, int, void>)&DeliverFromServer;
+    // =========================================================================
+    // Host entry points — called by native-callback glue in the host app
+    // (Atlas.Client.Desktop / Unity package). Signatures take pre-materialised
+    // ReadOnlySpan<byte> so the unmanaged-to-managed conversion stays in the
+    // host-specific assembly and Atlas.Client keeps a runtime-agnostic ABI.
+    // =========================================================================
 
-        ClientNativeApi.SetNativeCallbacks(&table, sizeof(ClientCallbackTable));
-    }
-
-    [UnmanagedCallersOnly]
-    public static void DispatchRpc(uint entityId, uint rpcId, byte* payload, int len)
+    /// <summary>
+    /// Dispatch an incoming ClientRpc to the current entity. The host app
+    /// resolves the native-side pointer / length into a ReadOnlySpan before
+    /// calling through.
+    /// </summary>
+    public static void DispatchRpc(uint entityId, uint rpcId, ReadOnlySpan<byte> payload)
     {
         try
         {
             var entity = s_entityMgr.Get(entityId);
             if (entity is null) return;
 
-            var reader = new SpanReader(new ReadOnlySpan<byte>(payload, len));
-            int id = (int)rpcId;
-
-            ClientRpcDispatcher?.Invoke(entity, id, ref reader);
+            var reader = new SpanReader(payload);
+            ClientRpcDispatcher?.Invoke(entity, (int)rpcId, ref reader);
         }
         catch (Exception ex)
         {
@@ -80,7 +76,11 @@ public static unsafe class ClientCallbacks
         }
     }
 
-    [UnmanagedCallersOnly]
+    /// <summary>
+    /// Create the client-side instance for the local player's own entity
+    /// (called once during desktop-client Authenticate flow; Unity's
+    /// equivalent path differs).
+    /// </summary>
     public static void CreateEntity(uint entityId, ushort typeId)
     {
         try
@@ -98,7 +98,7 @@ public static unsafe class ClientCallbacks
         }
     }
 
-    [UnmanagedCallersOnly]
+    /// <summary>Tear down the local-player entity (logout or forced DC).</summary>
     public static void DestroyEntity(uint entityId)
     {
         try
@@ -112,18 +112,15 @@ public static unsafe class ClientCallbacks
     }
 
     /// <summary>
-    /// Opaque transport-channel delivery hook called by the native client for
-    /// the three reserved state-replication MessageIDs. Owning all envelope
-    /// decoding here (rather than in C++) keeps the native layer free of
-    /// property-sync business logic so a non-C# script host can bind the same
-    /// hook unchanged.
+    /// Entry point for the three reserved state-replication MessageIDs
+    /// (<c>0xF001</c> unreliable delta / <c>0xF002</c> baseline /
+    /// <c>0xF003</c> reliable delta). Host delivers the already-extracted
+    /// payload; this method owns all envelope decoding.
     /// </summary>
-    [UnmanagedCallersOnly]
-    public static void DeliverFromServer(ushort msgId, byte* payload, int len)
+    public static void DeliverFromServer(ushort msgId, ReadOnlySpan<byte> body)
     {
         try
         {
-            var body = new ReadOnlySpan<byte>(payload, len);
             switch (msgId)
             {
                 case kClientDeltaMessageId:
@@ -135,7 +132,7 @@ public static unsafe class ClientCallbacks
                     break;
                 default:
                     Console.Error.WriteLine(
-                        $"DeliverFromServer: unexpected msgId=0x{msgId:X4} len={len}");
+                        $"DeliverFromServer: unexpected msgId=0x{msgId:X4} len={body.Length}");
                     break;
             }
         }
@@ -145,7 +142,9 @@ public static unsafe class ClientCallbacks
         }
     }
 
-    // -- Envelope decoders --------------------------------------------------
+    // =========================================================================
+    // Envelope decoders
+    // =========================================================================
 
     // Wire layout for 0xF001 / 0xF003 (CellAoIEnvelope, src/server/cellapp/cell_aoi_envelope.h):
     //   [u8 kind] [u32 LE public_entity_id] [payload bytes...]

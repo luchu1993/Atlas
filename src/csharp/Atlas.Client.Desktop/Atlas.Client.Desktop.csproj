@@ -1,0 +1,19 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <!-- Desktop host glue: CoreCLR / hostfxr specific. net9.0 so we can use
+         [UnmanagedCallersOnly] + delegate* unmanaged + [LibraryImport]
+         freely. Unity (Mono/IL2CPP) does NOT consume this assembly — it
+         owns its own P/Invoke layer against atlas_net_client.dll. -->
+    <TargetFramework>net9.0</TargetFramework>
+    <LangVersion>latest</LangVersion>
+    <Nullable>enable</Nullable>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <RootNamespace>Atlas.Client</RootNamespace>
+    <AssemblyName>Atlas.Client.Desktop</AssemblyName>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Atlas.Shared\Atlas.Shared.csproj" />
+    <ProjectReference Include="..\Atlas.Client\Atlas.Client.csproj" />
+  </ItemGroup>
+</Project>
