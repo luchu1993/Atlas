@@ -11,6 +11,31 @@ namespace Atlas.StressTest.Cell;
 [Entity("StressAvatar")]
 public partial class StressAvatar : ServerEntity
 {
+    // HP tick driver — see entity_defs/StressAvatar.def. Phase C2 uses this
+    // as the predictable source of reliable-delta events: every observer
+    // tracking this entity should see OnHpChanged on their client script at
+    // the same cadence as kHpTickPeriod. No game-mechanics meaning.
+    private const int kHpInitial = 100;
+    private const float kHpTickPeriod = 1.0f;  // seconds between mutations
+    private float _hpTickAccum;
+
+    protected override void OnInit(bool isReload)
+    {
+        if (!isReload) Hp = kHpInitial;
+    }
+
+    protected override void OnTick(float deltaTime)
+    {
+        _hpTickAccum += deltaTime;
+        while (_hpTickAccum >= kHpTickPeriod)
+        {
+            _hpTickAccum -= kHpTickPeriod;
+            // Count down to 1, then wrap back to kHpInitial so the stress
+            // test sees unbroken monotonic transitions over long runs.
+            Hp = Hp > 1 ? Hp - 1 : kHpInitial;
+        }
+    }
+
     public partial void Echo(uint seq, ulong clientTsNs)
     {
         // Reply straight back to the owning client. serverTsNs is captured

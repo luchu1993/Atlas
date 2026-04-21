@@ -1,8 +1,12 @@
 <entity name="StressAvatar">
 
-  <!-- No <properties>: position is handled by the ServerEntity base class
-       via the volatile channel (kEntityPositionUpdate), not the replicated-
-       property channel. Any additional replicated state would go here. -->
+  <properties>
+    <!-- hp drives Phase C2 end-to-end validation: a server-side OnTick
+         mutator flips the value, every in-AoI client observes OnHpChanged
+         through the reliable delta channel (0xF003). The `reliable` flag
+         also sets up the C3 drop-window test for retransmit behaviour. -->
+    <property name="hp" type="int32" scope="all_clients" reliable="true" />
+  </properties>
 
   <cell_methods>
     <method name="Echo" exposed="own_client">

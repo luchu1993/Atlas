@@ -21,6 +21,7 @@
   <ItemGroup>
     <AdditionalFiles Include="..\..\entity_defs\Avatar.def" />
     <AdditionalFiles Include="..\..\entity_defs\Account.def" />
+    <AdditionalFiles Include="..\..\entity_defs\StressAvatar.def" />
   </ItemGroup>
 
 </Project>
