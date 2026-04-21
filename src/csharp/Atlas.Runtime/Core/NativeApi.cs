@@ -1,5 +1,6 @@
 using System;
 using System.Runtime.InteropServices;
+using Atlas.DataTypes;
 
 namespace Atlas.Core;
 
@@ -145,6 +146,25 @@ internal static unsafe partial class NativeApi
     public static void SetNativeCallbacks(void* nativeCallbacks, int len)
     {
         SetNativeCallbacksNative(nativeCallbacks, len);
+    }
+
+    // =========================================================================
+    // CellApp spatial
+    // =========================================================================
+    //
+    // AtlasSetEntityPosition forwards to the active INativeApiProvider. On
+    // CellApp that updates the CellEntity's C++ position_ + range_node_ so
+    // AoI triggers see the move. On any other process type the provider
+    // logs a warning and no-ops — harmless if a shared script accidentally
+    // runs there. See src/lib/clrscript/clr_native_api_defs.h.
+
+    [LibraryImport(LibName, EntryPoint = "AtlasSetEntityPosition")]
+    private static partial void SetEntityPositionNative(uint entityId, float x, float y, float z);
+
+    public static void SetEntityPosition(uint entityId, Vector3 position)
+    {
+        ThreadGuard.EnsureMainThread();
+        SetEntityPositionNative(entityId, position.X, position.Y, position.Z);
     }
 
     // =========================================================================

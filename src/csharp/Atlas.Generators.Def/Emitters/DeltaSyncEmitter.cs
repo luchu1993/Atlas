@@ -13,7 +13,13 @@ internal static class DeltaSyncEmitter
     public static string? Emit(EntityDefModel def, string className, string namespaceName,
                                ProcessContext ctx)
     {
-        var replicableProps = def.Properties.Where(p => IsReplicable(p.Scope)).ToList();
+        // ATLAS_DEF008: a replicable `position` is flagged IsReservedPosition
+        // in the parser and must not appear anywhere in the replication
+        // pipeline — no enum bit, no delta serializer/deserializer, no
+        // snapshot read/write. Position rides the volatile channel
+        // exclusively, handled by ClientEntity base.
+        var replicableProps = def.Properties
+            .Where(p => IsReplicable(p.Scope) && !p.IsReservedPosition).ToList();
         if (replicableProps.Count == 0) return null;
 
         // Client path: no dirty-tracking or outbound serializers. We emit

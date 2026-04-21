@@ -43,4 +43,15 @@ internal static class DefDiagnosticDescriptors
         "Atlas.Def",
         DiagnosticSeverity.Error,
         isEnabledByDefault: true);
+
+    public static readonly DiagnosticDescriptor DEF008 = new(
+        "ATLAS_DEF008",
+        "'position' is reserved for the volatile channel and cannot be replicated as a property",
+        "Entity '{0}': property 'position' with a replicable scope is reserved — "
+        + "position is already transported by the volatile channel (kEntityPositionUpdate) "
+        + "and the ClientEntity base class. The declaration will be skipped in generated "
+        + "replication code to avoid double-delivery. Rename the property or remove it from the .def.",
+        "Atlas.Def",
+        DiagnosticSeverity.Warning,
+        isEnabledByDefault: true);
 }

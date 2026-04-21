@@ -1,5 +1,6 @@
 using System;
 using Atlas.Core;
+using Atlas.DataTypes;
 using Atlas.Serialization;
 
 namespace Atlas.Entity;
@@ -83,13 +84,67 @@ public abstract class ServerEntity
         return false;
     }
 
+    // Transform state — lives on the volatile channel (kEntityPositionUpdate
+    // envelope), not the replicated-property channel. The Position setter
+    // both syncs C++ CellEntity::position_ via AtlasSetEntityPosition (so
+    // AoI triggers see the move in the same tick) and flips
+    // VolatileDirtyCore (so the next BuildAndConsumeReplicationFrame
+    // advances VolatileSeq). Direction / OnGround piggyback on the volatile
+    // seq — Witness reads them directly when volatile_seq advances.
+    //
+    // See PROPERTY_SYNC_DESIGN.md §9.3 "Position 走独立通道".
+    public Vector3 Position
+    {
+        get => _position;
+        set
+        {
+            if (_position != value)
+            {
+                _position = value;
+                NativeApi.SetEntityPosition(EntityId, value);
+                _volatileDirty = true;
+            }
+        }
+    }
+
+    public Vector3 Direction
+    {
+        get => _direction;
+        set
+        {
+            if (_direction != value)
+            {
+                _direction = value;
+                _volatileDirty = true;
+            }
+        }
+    }
+
+    public bool OnGround
+    {
+        get => _onGround;
+        set
+        {
+            if (_onGround != value)
+            {
+                _onGround = value;
+                _volatileDirty = true;
+            }
+        }
+    }
+
+    private Vector3 _position;
+    private Vector3 _direction;
+    private bool _onGround;
+
     /// <summary>
     /// Mark this entity's position/orientation as dirty for the current tick.
     /// The next <see cref="BuildAndConsumeReplicationFrame"/> will advance
     /// <see cref="ReplicationFrame.VolatileSeq"/> and clear this flag.
     /// <para/>
-    /// The CellApp <c>atlas_set_position</c> native bridge flips this when C#
-    /// writes a new position; game scripts normally never call this directly.
+    /// Typically called transitively via <see cref="Position"/>/<see cref="Direction"/>/
+    /// <see cref="OnGround"/> setters; scripts rarely need to invoke it
+    /// directly.
     /// </summary>
     public void MarkVolatileDirty() => _volatileDirty = true;
 

@@ -46,7 +46,20 @@ internal static class DefParser
         {
             foreach (var propEl in propsEl.Elements("property"))
             {
-                model.Properties.Add(ParseProperty(propEl));
+                var prop = ParseProperty(propEl);
+                // ATLAS_DEF008 — a replicable property named "position" collides
+                // with the volatile channel / ClientEntity base Position. Flag
+                // the property so every emitter skips it, and warn the user so
+                // the silent skip isn't surprising.
+                if (IsReplicableScope(prop.Scope)
+                    && string.Equals(prop.Name, "position",
+                                     StringComparison.OrdinalIgnoreCase))
+                {
+                    prop.IsReservedPosition = true;
+                    reportDiagnostic?.Invoke(Diagnostic.Create(
+                        DefDiagnosticDescriptors.DEF008, Location.None, model.Name));
+                }
+                model.Properties.Add(prop);
             }
         }
 
@@ -144,6 +157,19 @@ internal static class DefParser
             _ => ExposedScope.None,
         };
     }
+
+    // Mirrors IsReplicable predicates in the emitters (DeltaSyncEmitter,
+    // PropertiesEmitter). Shared authority lives here so DEF008 detection
+    // can't drift from emission filtering.
+    private static bool IsReplicableScope(PropertyScope scope) => scope switch
+    {
+        PropertyScope.OwnClient => true,
+        PropertyScope.AllClients => true,
+        PropertyScope.OtherClients => true,
+        PropertyScope.CellPublicAndOwn => true,
+        PropertyScope.BaseAndClient => true,
+        _ => false,
+    };
 
     private static PropertyScope ParseScope(string value)
     {

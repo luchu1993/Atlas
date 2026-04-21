@@ -1,8 +1,8 @@
 <entity name="StressAvatar">
 
-  <properties>
-    <property name="position" type="vector3" scope="all_clients" />
-  </properties>
+  <!-- No <properties>: position is handled by the ServerEntity base class
+       via the volatile channel (kEntityPositionUpdate), not the replicated-
+       property channel. Any additional replicated state would go here. -->
 
   <cell_methods>
     <method name="Echo" exposed="own_client">

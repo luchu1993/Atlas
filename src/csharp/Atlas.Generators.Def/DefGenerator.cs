@@ -80,12 +80,27 @@ public sealed class DefGenerator : IIncrementalGenerator
         if (defs.IsDefaultOrEmpty || users.IsDefaultOrEmpty)
             return;
 
-        // Build def lookup
+        // Build def lookup.
+        //
+        // Surface parser-stage diagnostics flagged on the model. DefParser
+        // currently detects ATLAS_DEF008 (reserved `position`) during parse
+        // and records the decision on the PropertyDefModel; we report it
+        // here because the parser runs inside the incremental pipeline's
+        // Select transform where no SourceProductionContext is available.
         var defMap = new Dictionary<string, EntityDefModel>();
         foreach (var def in defs)
         {
             if (!string.IsNullOrEmpty(def.Name))
                 defMap[def.Name] = def;
+
+            foreach (var prop in def.Properties)
+            {
+                if (prop.IsReservedPosition)
+                {
+                    spc.ReportDiagnostic(Diagnostic.Create(
+                        DefDiagnosticDescriptors.DEF008, Location.None, def.Name));
+                }
+            }
         }
 
         // Build type index map (1-based, alphabetically sorted by entity name)

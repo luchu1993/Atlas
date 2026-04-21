@@ -15,8 +15,13 @@ internal static class PropertiesEmitter
     {
         if (def.Properties.Count == 0) return null;
 
-        // Filter properties based on process context
-        var props = GetPropertiesForContext(def.Properties, ctx);
+        // Filter properties based on process context. ATLAS_DEF008 drops
+        // any replicable `position` — its declaration is a ghost (the
+        // ClientEntity base class + volatile channel handle position
+        // already), so emitting a backing field / property here would
+        // shadow the base-class Position and create two sources of truth.
+        var props = GetPropertiesForContext(def.Properties, ctx)
+            .Where(p => !p.IsReservedPosition).ToList();
         if (props.Count == 0) return null;
 
         // Enum emission vs backing-field emission are decoupled:

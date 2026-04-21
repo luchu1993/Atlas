@@ -32,7 +32,10 @@ internal static class SerializationEmitter
         sb.AppendLine("    private const byte kSerializationVersion = 1;");
         sb.AppendLine();
 
-        var allProps = def.Properties;
+        // ATLAS_DEF008: reserved-position properties are skipped everywhere.
+        // PropertiesEmitter doesn't emit a backing field for them, so
+        // referencing `_position` here would not compile.
+        var allProps = def.Properties.Where(p => !p.IsReservedPosition).ToList();
 
         // Server/Base/Cell: generate Serialize (full state)
         // Client: no Serialize (clients don't send full state)

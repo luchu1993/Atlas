@@ -74,11 +74,14 @@ internal static class TypeRegistryEmitter
         sb.AppendLine($"            writer.WriteBool({(def.HasCell ? "true" : "false")});");
         sb.AppendLine($"            writer.WriteBool({(def.HasClient ? "true" : "false")});");
 
-        // Properties
-        sb.AppendLine($"            writer.WritePackedUInt32({(uint)def.Properties.Count});");
-        for (int i = 0; i < def.Properties.Count; i++)
+        // Properties. ATLAS_DEF008 reserved-position properties are skipped
+        // so the C++ registry's property index matches the generated C#
+        // field layout — both sides iterate the filtered list.
+        var effectiveProps = def.Properties.Where(p => !p.IsReservedPosition).ToList();
+        sb.AppendLine($"            writer.WritePackedUInt32({(uint)effectiveProps.Count});");
+        for (int i = 0; i < effectiveProps.Count; i++)
         {
-            var prop = def.Properties[i];
+            var prop = effectiveProps[i];
             sb.AppendLine($"            writer.WriteString(\"{prop.Name}\");");
             sb.AppendLine($"            writer.WriteByte({DefTypeHelper.DataTypeId(prop.Type)});");
             sb.AppendLine($"            writer.WriteByte({(byte)prop.Scope});");

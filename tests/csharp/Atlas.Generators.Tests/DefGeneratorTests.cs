@@ -611,9 +611,11 @@ public partial class Avatar : ServerEntity
     public void DeltaSync_AllUnreliable_EmitsEmptyReliableMask()
     {
         // Property marked all_clients but no reliable="true": unreliable only path.
+        // Uses `velocity` rather than `position` so the test exercises the
+        // unreliable mask emission without tripping ATLAS_DEF008.
         var xml = @"<entity name=""Drone"">
   <properties>
-    <property name=""position"" type=""vector3"" scope=""all_clients"" />
+    <property name=""velocity"" type=""vector3"" scope=""all_clients"" />
   </properties>
 </entity>";
         var source = @"
@@ -1274,6 +1276,141 @@ public partial class Avatar : ClientEntity
 
         Assert.Contains("ApplyOwnerSnapshot", code);
         Assert.DoesNotContain("ApplyOtherSnapshot", code);
+    }
+
+    // =========================================================================
+    // Phase B5 — ATLAS_DEF008: replicable `position` is reserved
+    //
+    // Position is already handled by the volatile channel
+    // (kEntityPositionUpdate envelope) and the ClientEntity base class.
+    // A .def that also declares a replicable property named "position"
+    // would produce two sources of truth. The parser flags such a
+    // property and all emitters skip it (no enum bit, no backing field,
+    // no serializer / deserializer). The user gets a warning rather
+    // than a silent drop.
+    // =========================================================================
+
+    [Fact]
+    public void DEF008_FiresOnReplicablePosition()
+    {
+        var xml = @"<entity name=""Avatar"">
+  <properties>
+    <property name=""position"" type=""vector3"" scope=""all_clients"" />
+  </properties>
+</entity>";
+        Diagnostic? reported = null;
+        var model = DefParser.Parse(SourceText.From(xml, System.Text.Encoding.UTF8), "Avatar.def",
+                                    d => { if (d.Id == "ATLAS_DEF008") reported = d; });
+
+        Assert.NotNull(reported);
+        Assert.Equal(DiagnosticSeverity.Warning, reported!.Severity);
+        // Model still contains the property but with the skip flag set, so
+        // every emitter can filter it uniformly.
+        Assert.True(model!.Properties[0].IsReservedPosition);
+    }
+
+    [Fact]
+    public void DEF008_CaseInsensitive()
+    {
+        // "position" / "Position" / "POSITION" all trigger.
+        foreach (var name in new[] { "Position", "POSITION", "PoSiTiOn" })
+        {
+            var xml = $@"<entity name=""Avatar"">
+  <properties>
+    <property name=""{name}"" type=""vector3"" scope=""all_clients"" />
+  </properties>
+</entity>";
+            Diagnostic? reported = null;
+            var model = DefParser.Parse(SourceText.From(xml, System.Text.Encoding.UTF8),
+                                        "Avatar.def",
+                                        d => { if (d.Id == "ATLAS_DEF008") reported = d; });
+            Assert.NotNull(reported);
+            Assert.True(model!.Properties[0].IsReservedPosition, $"failed for name={name}");
+        }
+    }
+
+    [Fact]
+    public void DEF008_SkipsNonReplicablePosition()
+    {
+        // A non-replicable `position` (e.g. cell_private) has no wire path
+        // to conflict with the volatile channel — no diagnostic, no skip.
+        var xml = @"<entity name=""Avatar"">
+  <properties>
+    <property name=""position"" type=""vector3"" scope=""cell_private"" />
+  </properties>
+</entity>";
+        Diagnostic? reported = null;
+        var model = DefParser.Parse(SourceText.From(xml, System.Text.Encoding.UTF8), "Avatar.def",
+                                    d => { if (d.Id == "ATLAS_DEF008") reported = d; });
+
+        Assert.Null(reported);
+        Assert.False(model!.Properties[0].IsReservedPosition);
+    }
+
+    [Fact]
+    public void DEF008_DoesNotFireOnPositionPrefixOrSuffix()
+    {
+        // Partial matches (my_position, positions, spawnPosition) must
+        // NOT trigger — only the exact name is reserved.
+        foreach (var name in new[] { "spawnPosition", "positions", "my_position", "pos" })
+        {
+            var xml = $@"<entity name=""Avatar"">
+  <properties>
+    <property name=""{name}"" type=""vector3"" scope=""all_clients"" />
+  </properties>
+</entity>";
+            Diagnostic? reported = null;
+            var model = DefParser.Parse(SourceText.From(xml, System.Text.Encoding.UTF8),
+                                        "Avatar.def",
+                                        d => { if (d.Id == "ATLAS_DEF008") reported = d; });
+            Assert.Null(reported);
+            Assert.False(model!.Properties[0].IsReservedPosition, $"failed for name={name}");
+        }
+    }
+
+    [Fact]
+    public void DEF008_EmittersSkipReservedPositionEntirely()
+    {
+        // Full emitter-level skip invariant: `position` in a replicable scope
+        // produces no backing field in Properties.g.cs, no enum bit in
+        // ReplicatedDirtyFlags, no serialize/deserialize references
+        // anywhere, no entry in the TypeRegistry blob.
+        var xml = @"<entity name=""Avatar"">
+  <properties>
+    <property name=""hp""       type=""int32""   scope=""all_clients"" />
+    <property name=""position"" type=""vector3"" scope=""all_clients"" />
+  </properties>
+</entity>";
+        var source = @"
+using Atlas.Entity;
+using Atlas.Serialization;
+[Entity(""Avatar"")]
+public partial class Avatar : ServerEntity
+{
+    public override string TypeName => ""Avatar"";
+    public override void Serialize(ref SpanWriter w) {}
+    public override void Deserialize(ref SpanReader r) {}
+}
+";
+        var (result, _) = RunDefGenerator(source, xml, "ATLAS_BASE");
+
+        // Diagnostic surfaced.
+        Assert.Contains(result.Diagnostics, d => d.Id == "ATLAS_DEF008");
+
+        // Combined output of all generated files: no mention of the
+        // position backing field, enum flag, or script-side property.
+        var allCode = string.Join("\n", result.GeneratedTrees
+            .Select(t => t.GetText().ToString()));
+
+        Assert.DoesNotContain("_position", allCode);
+        Assert.DoesNotContain("ReplicatedDirtyFlags.Position", allCode);
+        Assert.DoesNotContain("public Atlas.DataTypes.Vector3 Position", allCode);
+        Assert.DoesNotContain("OnPositionChanged", allCode);
+
+        // And hp (the other, valid replicable field) is intact — skipping
+        // position didn't take the whole file down.
+        Assert.Contains("_hp", allCode);
+        Assert.Contains("ReplicatedDirtyFlags.Hp", allCode);
     }
 
     [Fact]

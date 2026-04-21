@@ -45,6 +45,13 @@ internal sealed class PropertyDefModel
     // message channel, bypassing the DeltaForwarder byte budget so a dropped
     // packet cannot strand the client in a stale state.
     public bool Reliable { get; set; }
+
+    // IsReservedPosition: set by DefParser when the .def declares a property
+    // named "position" (case-insensitive) with a replicable scope. Position
+    // is already transported by the volatile channel and handled by the
+    // ClientEntity base class; this flag tells all emitters to skip the
+    // property as if the declaration were absent. See ATLAS_DEF008.
+    public bool IsReservedPosition { get; set; }
 }
 
 internal sealed class EntityDefModel
