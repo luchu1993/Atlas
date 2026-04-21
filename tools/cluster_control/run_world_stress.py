@@ -80,6 +80,29 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--keep-cluster", action="store_true")
     parser.add_argument("--verbose-failures", action="store_true")
+
+    # Phase C2/C3 — real atlas_client.exe subprocesses loaded with the
+    # ClientSample assembly. world_stress orchestrates them alongside its
+    # raw-protocol virtual clients and parses per-child stdout events.
+    # See docs/PHASE_C_VALIDATION.md for the scenarios these flags enable.
+    parser.add_argument("--script-clients", type=int, default=0,
+                        help="Spawn N real atlas_client.exe subprocesses "
+                             "alongside virtual clients (Phase C2)")
+    parser.add_argument("--client-exe", default=None,
+                        help="Path to atlas_client.exe. Defaults to "
+                             "<build-dir>/src/client/<config>/atlas_client.exe")
+    parser.add_argument("--client-assembly", default=None,
+                        help="Path to Atlas.ClientSample.dll. Defaults to "
+                             "samples/client/bin/<config>/net9.0/Atlas.ClientSample.dll")
+    parser.add_argument("--client-runtime-config", default=None,
+                        help="Optional hostfxr *.runtimeconfig.json forwarded to each child")
+    parser.add_argument("--script-username-prefix", default="script_user_")
+    parser.add_argument("--script-verify", action="store_true",
+                        help="Fail the orchestrator run if any script child didn't observe OnInit")
+    parser.add_argument("--client-drop-inbound-ms", nargs=2, type=int, metavar=("START", "DURATION"),
+                        default=None,
+                        help="Forward atlas_client --drop-inbound-ms to every script child "
+                             "(Phase C3 recovery tests)")
     return parser.parse_args()
 
 
@@ -434,7 +457,43 @@ def build_stress_args(args: argparse.Namespace, worker: dict[str, object]) -> li
     extend_repeated_flag(stress_args, "--source-ip", worker["source_ips"])
     if args.verbose_failures:
         stress_args.append("--verbose-failures")
+
+    # Phase C2/C3 pass-through. Only the first worker shard carries the
+    # script-client fleet: launching the same children from every shard would
+    # multiply the subprocess count and all children would race for the same
+    # username pool. Downstream shards fall back to zero script-clients even
+    # when --script-clients is set on the command line.
+    is_primary_worker = int(worker["global_worker_index"]) == 0
+    if args.script_clients > 0 and is_primary_worker:
+        stress_args.extend(["--script-clients", str(args.script_clients)])
+        client_exe = args.client_exe or default_client_exe(args)
+        client_assembly = args.client_assembly or default_client_assembly(args)
+        stress_args.extend(["--client-exe", str(client_exe)])
+        stress_args.extend(["--client-assembly", str(client_assembly)])
+        if args.client_runtime_config:
+            stress_args.extend(["--client-runtime-config", str(args.client_runtime_config)])
+        if args.script_username_prefix != "script_user_":
+            stress_args.extend(["--script-username-prefix", args.script_username_prefix])
+        if args.script_verify:
+            stress_args.append("--script-verify")
+        if args.client_drop_inbound_ms:
+            start_ms, duration_ms = args.client_drop_inbound_ms
+            stress_args.extend([
+                "--client-drop-inbound-ms", str(start_ms), str(duration_ms),
+            ])
     return stress_args
+
+
+def default_client_exe(args: argparse.Namespace) -> Path:
+    return resolve_repo_root() / args.build_dir / "src" / "client" / args.config / "atlas_client.exe"
+
+
+def default_client_assembly(args: argparse.Namespace) -> Path:
+    # The ClientSample csproj does not set AppendPlatformToOutputPath, so
+    # `dotnet build` drops the assembly under bin/<Config>/net9.0/ (no x64
+    # segment). Keep the default aligned with reality.
+    return (resolve_repo_root() / "samples" / "client" / "bin" / args.config
+            / "net9.0" / "Atlas.ClientSample.dll")
 
 
 def build_baseapp_specs(args: argparse.Namespace) -> list[dict[str, object]]:

@@ -28,7 +28,7 @@ world_stress --login 127.0.0.1:20013 \
              --duration-sec 30 \
              --script-clients 2 \
              --client-exe build/debug/src/client/Debug/atlas_client.exe \
-             --client-assembly samples/client/bin/x64/Debug/net9.0/Atlas.ClientSample.dll \
+             --client-assembly samples/client/bin/Debug/net9.0/Atlas.ClientSample.dll \
              --script-verify
 ```
 
@@ -71,7 +71,7 @@ world_stress --login 127.0.0.1:20013 \
              --clients 0 --duration-sec 20 \
              --script-clients 2 \
              --client-exe build/debug/src/client/Debug/atlas_client.exe \
-             --client-assembly samples/client/bin/x64/Debug/net9.0/Atlas.ClientSample.dll \
+             --client-assembly samples/client/bin/Debug/net9.0/Atlas.ClientSample.dll \
              --client-drop-inbound-ms 5000 4000
 ```
 
