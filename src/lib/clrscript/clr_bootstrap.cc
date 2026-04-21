@@ -14,7 +14,12 @@ using BootstrapFn = int (*)(ClrBootstrapArgs*, ClrObjectVTableOut*);
 // Shared implementation.
 auto ClrBootstrapImpl(ClrHost& host, const std::filesystem::path& runtime_dll,
                       ClrBootstrapArgs args) -> Result<void> {
-  auto method = host.GetMethodAs<BootstrapFn>(runtime_dll, "Atlas.Core.Bootstrap, Atlas.Runtime",
+  // Atlas.Core.Bootstrap lives in Atlas.ClrHost.dll — shared between
+  // atlas_server (loaded via Atlas.Runtime) and atlas_client (loaded via
+  // Atlas.Client). Both those assemblies ProjectReference Atlas.ClrHost,
+  // so when `runtime_dll` is the game-layer script assembly the runtime
+  // finds the Bootstrap type transitively.
+  auto method = host.GetMethodAs<BootstrapFn>(runtime_dll, "Atlas.Core.Bootstrap, Atlas.ClrHost",
                                               "Initialize");
   if (!method)
     return Error{ErrorCode::kScriptError,

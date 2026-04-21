@@ -22,15 +22,22 @@ atlas_dotnet_project(
 )
 
 atlas_dotnet_project(
+  NAME atlas_clrhost_dll
+  PROJECT_FILE Atlas.ClrHost/Atlas.ClrHost.csproj
+  ASSEMBLY_NAME Atlas.ClrHost.dll
+  DEPENDS atlas_shared_dll
+)
+
+atlas_dotnet_project(
   NAME atlas_runtime_dll
   PROJECT_FILE Atlas.Runtime/Atlas.Runtime.csproj
   ASSEMBLY_NAME Atlas.Runtime.dll
-  DEPENDS atlas_shared_dll atlas_generators_events_dll
+  DEPENDS atlas_shared_dll atlas_clrhost_dll atlas_generators_events_dll
 )
 
 atlas_dotnet_project(
   NAME atlas_client_dll
   PROJECT_FILE Atlas.Client/Atlas.Client.csproj
   ASSEMBLY_NAME Atlas.Client.dll
-  DEPENDS atlas_shared_dll
+  DEPENDS atlas_shared_dll atlas_clrhost_dll
 )

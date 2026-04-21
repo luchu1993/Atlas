@@ -7,17 +7,22 @@ namespace Atlas.Core;
 // Bootstrap — CLR initialization entry point called from ClrHost (C++)
 // ============================================================================
 //
-// C++ calls Bootstrap.Initialize() once after loading the CLR.
-// This method:
+// C++ calls Bootstrap.Initialize() once after loading the CLR. This method:
 //   1. Registers the C++ error-bridge function pointers with ErrorBridge.
 //   2. Populates ClrObjectVTable by returning function pointers to C++.
 //
-// The C++ side uses ClrHost::get_method_as<> to bind this method:
-//   using InitFn = int(*)(BootstrapArgs*);
-//   auto fn = host.get_method_as<InitFn>(asm, "Atlas.Core.Bootstrap, Atlas.Runtime", "Initialize");
+// The C++ side uses ClrHost::GetMethodAs<> to bind this method:
+//   using InitFn = int(*)(BootstrapArgs*, ObjectVTableOut*);
+//   auto fn = host.GetMethodAs<InitFn>(asm, "Atlas.Core.Bootstrap, Atlas.ClrHost", "Initialize");
 //
-// BootstrapArgs is defined in clr_bootstrap_args.hpp (C++) and must match
-// the BootstrapArgs struct below byte-for-byte.
+// BootstrapArgs / ObjectVTableOut are defined in clr_bootstrap.h (C++) and
+// MUST match the structs below byte-for-byte.
+//
+// This type lives in Atlas.ClrHost rather than Atlas.Runtime so both the
+// server-side host (atlas_server) and the desktop-client host (atlas_client)
+// can share the exact same bootstrap entry point without either side having
+// to pull in the other's game-layer types. Unity, which bypasses CoreCLR
+// hosting entirely, references Atlas.Shared only and never loads this dll.
 
 /// <summary>
 /// Function-pointer bundle passed from C++ to Bootstrap.Initialize().
@@ -25,7 +30,7 @@ namespace Atlas.Core;
 /// Layout must match <c>ClrBootstrapArgs</c> in C++.
 /// </summary>
 [StructLayout(LayoutKind.Sequential)]
-internal unsafe struct BootstrapArgs
+public unsafe struct BootstrapArgs
 {
     // ---- Error bridge (C++ TLS functions) ----
     public delegate* unmanaged<int, byte*, int, void> ErrorSet;
@@ -39,18 +44,18 @@ internal unsafe struct BootstrapArgs
 /// Layout must match <c>ClrObjectVTableOut</c> in C++.
 /// </summary>
 [StructLayout(LayoutKind.Sequential)]
-internal unsafe struct ObjectVTableOut
+public unsafe struct ObjectVTableOut
 {
     public delegate* unmanaged<IntPtr, void> FreeHandle;
     public delegate* unmanaged<IntPtr, byte*, int, int> GetTypeName;
     public delegate* unmanaged<IntPtr, byte> IsNone;
     public delegate* unmanaged<IntPtr, long*, int> ToInt64;
     public delegate* unmanaged<IntPtr, double*, int> ToDouble;
-    public delegate* unmanaged<IntPtr, byte*, int, int> ToStr;   // avoids shadow of object.ToString()
+    public delegate* unmanaged<IntPtr, byte*, int, int> ToStr;  // avoids shadow of object.ToString()
     public delegate* unmanaged<IntPtr, byte*, int> ToBool;
 }
 
-internal static unsafe class Bootstrap
+public static unsafe class Bootstrap
 {
     /// <summary>
     /// Entry point called by C++ immediately after loading the CLR.

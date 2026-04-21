@@ -9,5 +9,11 @@
 
   <ItemGroup>
     <ProjectReference Include="..\Atlas.Shared\Atlas.Shared.csproj" />
+    <!-- Atlas.ClrHost supplies the CoreCLR bootstrap entry point that
+         atlas_client.exe's hostfxr glue resolves at startup. Atlas.Client
+         doesn't call any of those types directly — the dependency is
+         transitive so the bootstrap assembly actually ships next to
+         Atlas.ClientSample.dll instead of being missing at runtime. -->
+    <ProjectReference Include="..\Atlas.ClrHost\Atlas.ClrHost.csproj" />
   </ItemGroup>
 </Project>

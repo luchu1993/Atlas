@@ -9,26 +9,19 @@ namespace Atlas.Core;
 // ============================================================================
 //
 // ClrObject (C++) holds a GCHandle (void*) that keeps a managed object alive.
-// The four [UnmanagedCallersOnly] methods below form the vtable that C++
-// registers into ClrObjectVTable during CLR bootstrap.
+// The [UnmanagedCallersOnly] methods below form the vtable that C++ registers
+// into ClrObjectVTable during CLR bootstrap.
 //
 // GCHandle allocation policy:
 //   - All handles are GCHandleType.Normal (pinning is not needed; C++ stores
 //     the opaque handle, not a raw pointer into managed memory).
 //   - Handles are freed exactly once by ClrObject::release().
 //
-// C++ registration (during bootstrap):
-//   ClrObjectVTable vt{};
-//   vt.free_handle  = GCHandleHelper_FreeHandle;   // bound via get_method_as<>
-//   vt.get_type_name = GCHandleHelper_GetTypeName;
-//   vt.is_none      = GCHandleHelper_IsNone;
-//   vt.to_int64     = GCHandleHelper_ToInt64;
-//   vt.to_double    = GCHandleHelper_ToDouble;
-//   vt.to_string    = GCHandleHelper_ToString;
-//   vt.to_bool      = GCHandleHelper_ToBool;
-//   set_clr_object_vtable(vt);
+// Lives in Atlas.ClrHost alongside Bootstrap/ErrorBridge so atlas_server and
+// atlas_client share one definition (and one GCHandle-release contract).
+// Unity hosts skip this assembly entirely.
 
-internal static unsafe class GCHandleHelper
+public static unsafe class GCHandleHelper
 {
     // -------------------------------------------------------------------------
     // GCHandle factory — called from C# when creating a ClrObject

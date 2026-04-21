@@ -1,0 +1,17 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net9.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <Optimize>true</Optimize>
+    <AssemblyName>Atlas.ClrHost</AssemblyName>
+    <RootNamespace>Atlas</RootNamespace>
+    <!-- CoreCLR-hosting glue only. Kept out of Atlas.Shared because Unity
+         (or any non-CoreCLR runtime) references Atlas.Shared directly and
+         has no use for delegate*unmanaged / UnmanagedCallersOnly primitives.
+         Atlas.Runtime (server) and Atlas.Client (desktop client host) both
+         reference this assembly; Unity does not. -->
+  </PropertyGroup>
+
+</Project>

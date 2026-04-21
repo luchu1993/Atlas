@@ -1,6 +1,6 @@
 using System;
-using System.Text;
 using System.Runtime.InteropServices;
+using System.Text;
 
 namespace Atlas.Core;
 
@@ -14,8 +14,8 @@ namespace Atlas.Core;
 // buffer via this class.
 //
 // The C++ side provides three function pointers (registered during bootstrap):
-//   clr_error_set   — write error code + UTF-8 message into the TLS buffer
-//   clr_error_clear — clear the TLS buffer
+//   clr_error_set     — write error code + UTF-8 message into the TLS buffer
+//   clr_error_clear   — clear the TLS buffer
 //   clr_error_get_code — read the current error code
 //
 // Usage pattern in every [UnmanagedCallersOnly] method:
@@ -34,8 +34,13 @@ namespace Atlas.Core;
 //           return -1;
 //       }
 //   }
+//
+// Lives in Atlas.ClrHost so both Atlas.Runtime (server) and Atlas.Client
+// (desktop client) can call into it via `using Atlas.Core;` without
+// cross-referencing each other's assemblies. Public rather than internal so
+// those downstream assemblies can reach it across the assembly boundary.
 
-internal static unsafe class ErrorBridge
+public static unsafe class ErrorBridge
 {
     // Static function pointer fields — populated once during bootstrap.
     private static delegate* unmanaged<int, byte*, int, void> s_setError;

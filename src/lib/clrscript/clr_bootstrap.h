@@ -64,7 +64,9 @@ static_assert(sizeof(ClrObjectVTableOut) == 56,
 // clr_bootstrap() — call after ClrHost::initialize()
 // ============================================================================
 //
-// 1. Locates Bootstrap.Initialize() in the given Atlas.Runtime assembly.
+// 1. Locates Bootstrap.Initialize() in the Atlas.ClrHost assembly, which is
+//    transitively loaded via the given script assembly (Atlas.Runtime for
+//    server-side hosts, Atlas.Client for desktop-client hosts).
 // 2. Constructs ClrBootstrapArgs with the C++ TLS error-bridge function pointers.
 // 3. Calls Bootstrap.Initialize() which:
 //      a. Registers ErrorBridge with the C++ error-bridge functions.
@@ -73,7 +75,9 @@ static_assert(sizeof(ClrObjectVTableOut) == 56,
 //
 // Parameters:
 //   host          — initialized ClrHost (must be alive for the duration of CLR use)
-//   runtime_dll   — path to Atlas.Runtime.dll (built from src/csharp/Atlas.Runtime/)
+//   runtime_dll   — path to the game-layer script assembly (server script dll
+//                   or Atlas.ClientSample.dll) that transitively references
+//                   Atlas.ClrHost
 //
 // Returns Error if:
 //   - Bootstrap.Initialize() cannot be resolved.
