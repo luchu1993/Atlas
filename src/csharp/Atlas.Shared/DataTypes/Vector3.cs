@@ -70,4 +70,24 @@ public readonly struct Vector3 : IEquatable<Vector3>
 
     public override string ToString()
         => $"({X}, {Y}, {Z})";
+
+#if UNITY_5_3_OR_NEWER
+    // ------------------------------------------------------------------------
+    // UnityEngine.Vector3 interop — only compiled when Atlas.Shared is
+    // consumed from inside a Unity project (UNITY_5_3_OR_NEWER symbol is
+    // defined by every Unity version since 5.3, 2015). Atlas.Shared ships
+    // to server / desktop-client builds where UnityEngine is absent;
+    // guarding the bridge behind the symbol keeps those builds clean.
+    //
+    // Implicit both ways is deliberate: game scripts tend to mix
+    // UnityEngine.Vector3 (component APIs, Transform, etc.) with
+    // Atlas.DataTypes.Vector3 (wire / replicated state) in the same
+    // expression and explicit casting every site would be noise.
+    // ------------------------------------------------------------------------
+    public static implicit operator UnityEngine.Vector3(Vector3 v)
+        => new UnityEngine.Vector3(v.X, v.Y, v.Z);
+
+    public static implicit operator Vector3(UnityEngine.Vector3 v)
+        => new Vector3(v.x, v.y, v.z);
+#endif
 }
