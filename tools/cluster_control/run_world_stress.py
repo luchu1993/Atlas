@@ -173,8 +173,11 @@ def build_worker_plan(args: argparse.Namespace, source_ips: list[str]) -> list[d
     if args.worker_index < 0 or args.worker_index >= args.worker_count:
         fail("--worker-index must be in [0, worker-count)")
 
-    # P1: clients=0 means cluster-only smoke test; no stress workers.
-    if args.clients <= 0:
+    # P1: clients=0 means cluster-only smoke test; no stress workers. Phase
+    # C2 relaxes this: if --script-clients > 0 we still need a single stress
+    # worker shard to carry the script children even though there are zero
+    # virtual clients.
+    if args.clients <= 0 and args.script_clients <= 0:
         return []
 
     total_workers = args.worker_count * args.local_workers
@@ -184,7 +187,10 @@ def build_worker_plan(args: argparse.Namespace, source_ips: list[str]) -> list[d
     for local_index in range(args.local_workers):
         global_worker_index = base_worker_index + local_index
         client_offset, client_count = split_range(args.clients, total_workers, global_worker_index)
-        if client_count <= 0:
+        # The primary shard owns the script-client fleet and must be
+        # scheduled even with zero virtual clients; other shards fall through
+        # when their slice is empty.
+        if client_count <= 0 and not (args.script_clients > 0 and global_worker_index == 0):
             continue
 
         if args.account_pool >= total_workers:
