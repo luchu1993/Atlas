@@ -46,7 +46,17 @@ FetchContent_Declare(
 FetchContent_MakeAvailable(googletest)
 
 # pugixml — ships CMakeLists.txt
+# pugixml unconditionally calls include(CTest), which pollutes the IDE with
+# a CTestDashboardTargets folder (Continuous/Experimental/Nightly…). We
+# never submit to CDash, so shadow the stock CTest module with an empty
+# stub on CMAKE_MODULE_PATH for the duration of the pugixml fetch.
+set(_atlas_ctest_stub_dir "${CMAKE_BINARY_DIR}/_atlas_cmake_stubs")
+file(WRITE "${_atlas_ctest_stub_dir}/CTest.cmake"
+  "# Stub: suppresses CTest dashboard targets inside pugixml.\n")
+list(PREPEND CMAKE_MODULE_PATH "${_atlas_ctest_stub_dir}")
 FetchContent_MakeAvailable(pugixml)
+list(REMOVE_ITEM CMAKE_MODULE_PATH "${_atlas_ctest_stub_dir}")
+unset(_atlas_ctest_stub_dir)
 
 # rapidjson — header-only, avoid its complex CMakeLists.txt
 FetchContent_GetProperties(rapidjson)
