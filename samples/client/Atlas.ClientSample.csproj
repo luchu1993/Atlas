@@ -9,6 +9,11 @@
     <DefineConstants>ATLAS_CLIENT</DefineConstants>
     <EmitCompilerGeneratedFiles>true</EmitCompilerGeneratedFiles>
     <CompilerGeneratedFilesOutputPath>$(BaseIntermediateOutputPath)generated</CompilerGeneratedFilesOutputPath>
+    <!-- Phase C2 end-to-end: atlas_client.exe hosts this assembly via
+         hostfxr, so we need a .runtimeconfig.json next to the dll even
+         though this is a Library project. Without it hostfxr bails with
+         "Initialization for self-contained components is not supported". -->
+    <GenerateRuntimeConfigurationFiles>true</GenerateRuntimeConfigurationFiles>
   </PropertyGroup>
 
   <ItemGroup>

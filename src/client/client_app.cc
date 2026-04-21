@@ -93,8 +93,19 @@ auto ClientApp::Init(int argc, char* argv[]) -> bool {
 
   ATLAS_LOG_INFO("Client: initialized");
 
-  // Init CLR if assembly is specified
+  // Init CLR if assembly is specified. If --runtime-config wasn't supplied,
+  // auto-locate `<AssemblyStem>.runtimeconfig.json` next to the assembly —
+  // `dotnet build` emits it when GenerateRuntimeConfigurationFiles=true,
+  // so the typical build path has one available even for library projects.
   if (!config_.script_assembly.empty()) {
+    if (config_.runtime_config.empty()) {
+      auto sibling = config_.script_assembly.parent_path() /
+                     (config_.script_assembly.stem().string() + ".runtimeconfig.json");
+      if (std::filesystem::exists(sibling)) {
+        config_.runtime_config = sibling;
+        ATLAS_LOG_INFO("Client: auto-located runtime config {}", sibling.string());
+      }
+    }
     if (!InitClr(argv[0])) return false;
   }
 
