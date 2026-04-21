@@ -81,6 +81,12 @@ atlas_add_test(NAME test_child_process
   DEPS atlas_platform
 )
 
+atlas_add_test(NAME test_client_event_tap
+  SOURCES
+    test_client_event_tap.cpp
+    ${CMAKE_SOURCE_DIR}/src/tools/world_stress/client_event_tap.cc
+)
+
 # ── Serialization ───────────────────────────────────────────────────────────
 
 atlas_add_test(NAME test_binary_stream
