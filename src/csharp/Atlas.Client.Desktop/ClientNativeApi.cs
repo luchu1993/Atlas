@@ -9,21 +9,13 @@ namespace Atlas.Client;
 /// </summary>
 internal static unsafe partial class ClientNativeApi
 {
-    // LibName is conditional so the same source can be repurposed when/if
-    // a Unity-style host ever ships this assembly. Desktop CoreCLR (the
-    // atlas_client.exe path) hostfxr-embeds the runtime and exposes C API
-    // exports from atlas_engine.dll (src/lib/clrscript/). Unity (Mono /
-    // IL2CPP) would P/Invoke against atlas_net_client.dll instead — see
-    // docs/UNITY_NATIVE_DLL_DESIGN.md §6.1. Atlas.Client.Desktop currently
-    // only targets the desktop path; the conditional keeps the option
-    // open without requiring a source edit at pickup time.
-#if UNITY_IOS && !UNITY_EDITOR
-    private const string LibName = "__Internal";
-#elif UNITY_5_3_OR_NEWER || ATLAS_UNITY
-    private const string LibName = "atlas_net_client";
-#else
+    // atlas_engine exports C API from src/lib/clrscript/ and is specific to
+    // the desktop CoreCLR-hosted client (atlas_client.exe). The Unity build
+    // path never compiles this assembly — Unity's Mono/IL2CPP host ships
+    // its own P/Invoke layer against atlas_net_client.dll with a different
+    // C API shape (see docs/UNITY_NATIVE_DLL_DESIGN.md §6.1), so there is
+    // no "shared source" case to guard for.
     private const string LibName = "atlas_engine";
-#endif
 
     // =========================================================================
     // Logging
