@@ -1,11 +1,11 @@
 using System;
-using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 
 namespace Atlas.Client;
 
 // ============================================================================
-// DesktopBootstrap — CoreCLR-host specific glue.
+// DesktopBootstrap — CoreCLR-host specific glue, invoked explicitly by the
+// host app (atlas_client.exe) once the CLR is up.
 //
 // * Installs ClientHost delegate slots so pure-managed Atlas.Client RPC-send
 //   and entity-registry calls reach atlas_engine via P/Invoke.
@@ -19,6 +19,19 @@ namespace Atlas.Client;
 // Atlas.Client.Desktop. Unity builds do not include this assembly — the
 // Unity package installs equivalent handlers via its own P/Invoke surface
 // against atlas_net_client.dll.
+//
+// Invocation contract — client_app.cc (desktop host) is expected to:
+//   1. Initialise the CLR (Atlas.ClrHost's Bootstrap runs, ErrorBridge /
+//      GCHandleHelper registered).
+//   2. Call DesktopBootstrap.Initialize() via ClrHost::GetMethodAs.
+//   3. Only then LoadModule the user's script assembly — any generated
+//      ModuleInitializer inside it (TypeRegistry etc.) can now safely
+//      call through ClientHost.
+// The call is explicit rather than a [ModuleInitializer] so library
+// consumers never have hidden side-effects on load (CA2255). The
+// corresponding C++ wiring currently shares a pre-existing blocker with
+// ClrScriptEngine's Atlas.Runtime.Lifecycle lookup — see
+// docs/PHASE_C_VALIDATION.md Known Limitations §1.
 // ============================================================================
 
 [StructLayout(LayoutKind.Sequential, Pack = 1)]
@@ -32,15 +45,15 @@ internal unsafe struct ClientCallbackTable
 
 public static unsafe class DesktopBootstrap
 {
-    [ModuleInitializer]
-    internal static void Init()
+    /// <summary>
+    /// Fill ClientHost delegate slots with P/Invoke handlers and register
+    /// the native callback table with atlas_engine. Must be called exactly
+    /// once per process, after CLR bootstrap and before the generated
+    /// ModuleInitializer code in the user's script assembly runs.
+    /// Idempotent — repeat calls overwrite the slots with the same values.
+    /// </summary>
+    public static void Initialize()
     {
-        // Pure-managed Atlas.Client types (ClientEntity / generated Type
-        // registry module initializer) reach native code through these
-        // slots. Wiring them in a ModuleInitializer means the first time
-        // .NET loads Atlas.Client.Desktop (via ClientSample.dll's
-        // ProjectReference), the slots get filled before any generated
-        // ModuleInitializer in the game-layer assembly runs.
         ClientHost.SendBaseRpcHandler = ClientNativeApi.SendBaseRpc;
         ClientHost.SendCellRpcHandler = ClientNativeApi.SendCellRpc;
         ClientHost.RegisterEntityTypeHandler = ClientNativeApi.RegisterEntityType;
@@ -49,9 +62,9 @@ public static unsafe class DesktopBootstrap
     }
 
     /// <summary>
-    /// Build the native callback table and hand it to atlas_engine.
-    /// Exposed as public so test harnesses (or hosts that suppress module
-    /// initializers) can call it manually.
+    /// Build the native callback table and hand it to atlas_engine. Split
+    /// out so tests can exercise the wire path without reinstalling the
+    /// ClientHost handler slots.
     /// </summary>
     public static void RegisterNativeCallbacks()
     {
