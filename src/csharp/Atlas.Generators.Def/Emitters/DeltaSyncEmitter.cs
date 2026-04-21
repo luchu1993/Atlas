@@ -161,15 +161,48 @@ internal static class DeltaSyncEmitter
         if (ownerFields.Count > 0)
         {
             EmitScopeApply(sb, ownerFields, "ApplyOwnerSnapshot");
-            if (otherFields.Count > 0) sb.AppendLine();
+            sb.AppendLine();
         }
         if (otherFields.Count > 0)
         {
             EmitScopeApply(sb, otherFields, "ApplyOtherSnapshot");
+            sb.AppendLine();
         }
+
+        // ApplyReplicatedDelta — scope-agnostic at decode time. The server
+        // audience mask guarantees only bits for scope-visible fields are
+        // ever set in `flags`, so iterating every replicable prop is safe:
+        // non-audience bits can't fire the inner read. Matches BigWorld's
+        // `shouldUseCallback=true` incremental path — every field that
+        // actually changed fires OnXxxChanged so scripts observe the
+        // transition. ReplicatedDirtyFlags is emitted by PropertiesEmitter
+        // on the client side too (dirty-backing field is not).
+        EmitClientApplyReplicatedDelta(sb, replicableProps);
 
         sb.AppendLine("}");
         return sb.ToString();
+    }
+
+    private static void EmitClientApplyReplicatedDelta(StringBuilder sb,
+                                                        List<PropertyDefModel> replicableProps)
+    {
+        var (_, _, _, readerMethod, _) = GetFlagsTypeInfo(replicableProps.Count);
+        sb.AppendLine("    public override void ApplyReplicatedDelta(ref SpanReader reader)");
+        sb.AppendLine("    {");
+        sb.AppendLine($"        var flags = (ReplicatedDirtyFlags)reader.{readerMethod}();");
+        foreach (var prop in replicableProps)
+        {
+            var propName = DefTypeHelper.ToPropertyName(prop.Name);
+            var fieldName = DefTypeHelper.ToFieldName(prop.Name);
+            var readMethod = DefTypeHelper.ReadMethod(prop.Type);
+            sb.AppendLine($"        if ((flags & ReplicatedDirtyFlags.{propName}) != 0)");
+            sb.AppendLine("        {");
+            sb.AppendLine($"            var old{propName} = {fieldName};");
+            sb.AppendLine($"            {fieldName} = reader.{readMethod}();");
+            sb.AppendLine($"            On{propName}Changed(old{propName}, {fieldName});");
+            sb.AppendLine("        }");
+        }
+        sb.AppendLine("    }");
     }
 
     private static void EmitScopeApply(StringBuilder sb, List<PropertyDefModel> props,

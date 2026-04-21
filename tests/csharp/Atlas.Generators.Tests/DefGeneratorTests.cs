@@ -924,6 +924,188 @@ public partial class Avatar : ServerEntity
         Assert.Equal(serverOther, clientOther);
     }
 
+    // =========================================================================
+    // Phase B1 — client ApplyReplicatedDelta emission
+    //
+    // Companion to Phase B0: the server's SerializeOwnerDelta /
+    // SerializeOtherDelta family writes a scope-masked bitmap + changed
+    // field values; the client must read that format and fire
+    // OnXxxChanged for every field the bitmap marks. Unlike Apply*Snapshot
+    // which is authoritative-reset / callback-silent, Apply*Delta is an
+    // observed incremental change and DOES fire callbacks — matching
+    // BigWorld's shouldUseCallback=true path.
+    // =========================================================================
+
+    [Fact]
+    public void ClientContext_EmitsApplyReplicatedDelta_WithFlagReadAndCallbacks()
+    {
+        var source = @"
+using Atlas.Client;
+namespace Test;
+
+[Atlas.Entity.Entity(""Avatar"")]
+public partial class Avatar : ClientEntity
+{
+    public override string TypeName => ""Avatar"";
+    public partial void ShowDamage(int amount, uint attackerId) {}
+}
+";
+        var (result, _) = RunDefGenerator(source, AvatarDef, "ATLAS_CLIENT");
+
+        var delta = result.GeneratedTrees
+            .FirstOrDefault(t => t.FilePath.Contains("Avatar.DeltaSync"));
+        Assert.NotNull(delta);
+        var code = delta!.GetText().ToString();
+
+        var body = ExtractMethodBody(code, "ApplyReplicatedDelta(ref SpanReader reader)");
+
+        // Flags read width matches the dirty-flag backing type chosen by
+        // ReplicatedDirtyFlags. AvatarDef has 5 replicable props ≤ 8,
+        // so backing type is byte → reader.ReadByte().
+        Assert.Contains("reader.ReadByte()", body);
+
+        // Every replicable field is present with guard + read + callback.
+        // Replicable scopes in AvatarDef: hp, modelId, mana, secret, level.
+        string[] replicableProps = { "Hp", "ModelId", "Mana", "Secret", "Level" };
+        foreach (var prop in replicableProps)
+        {
+            var fieldName = "_" + char.ToLowerInvariant(prop[0]) + prop.Substring(1);
+            Assert.Contains($"flags & ReplicatedDirtyFlags.{prop}", body);
+            Assert.Contains($"var old{prop} = {fieldName};", body);
+            Assert.Contains($"{fieldName} = reader.", body);
+            Assert.Contains($"On{prop}Changed(old{prop}, {fieldName});", body);
+        }
+
+        // Non-replicable fields (gold=Base, aiState=CellPublic, pos=CellPrivate)
+        // have no entry in ApplyReplicatedDelta — the flags enum omits them.
+        Assert.DoesNotContain("_gold",    body);
+        Assert.DoesNotContain("_aiState", body);
+        Assert.DoesNotContain("_pos ",    body);
+    }
+
+    [Fact]
+    public void ClientContext_ReplicatedDirtyFlags_EnumEmittedWithoutBackingField()
+    {
+        // B1 decouples enum-emission from dirty-field emission. On the
+        // client the enum exists (ApplyReplicatedDelta needs it to test
+        // bits) but `_dirtyFlags` and IsDirty/ClearDirty are server-only.
+        var source = @"
+using Atlas.Client;
+namespace Test;
+
+[Atlas.Entity.Entity(""Avatar"")]
+public partial class Avatar : ClientEntity
+{
+    public override string TypeName => ""Avatar"";
+    public partial void ShowDamage(int amount, uint attackerId) {}
+}
+";
+        var (result, _) = RunDefGenerator(source, AvatarDef, "ATLAS_CLIENT");
+        var props = result.GeneratedTrees
+            .First(t => t.FilePath.Contains("Avatar.Properties")).GetText().ToString();
+
+        Assert.Contains("private enum ReplicatedDirtyFlags", props);
+        Assert.DoesNotContain("_dirtyFlags", props);
+        Assert.DoesNotContain("IsDirty", props);
+        Assert.DoesNotContain("ClearDirty", props);
+    }
+
+    [Fact]
+    public void ClientContext_DeltaFlagType_MatchesPropCount()
+    {
+        // Backing type picker (GetFlagsTypeInfo) picks byte/ushort/uint/ulong
+        // based on replicable-prop count. A 9-field replicable set crosses
+        // into ushort territory; the client decoder must track that so its
+        // ReadByte/ReadUInt16/… call matches the server's WriteByte/… call
+        // byte-for-byte.
+        var nineDef = @"<entity name=""Bulk"">
+  <properties>
+    <property name=""a1"" type=""int32"" scope=""all_clients"" />
+    <property name=""a2"" type=""int32"" scope=""all_clients"" />
+    <property name=""a3"" type=""int32"" scope=""all_clients"" />
+    <property name=""a4"" type=""int32"" scope=""all_clients"" />
+    <property name=""a5"" type=""int32"" scope=""all_clients"" />
+    <property name=""a6"" type=""int32"" scope=""all_clients"" />
+    <property name=""a7"" type=""int32"" scope=""all_clients"" />
+    <property name=""a8"" type=""int32"" scope=""all_clients"" />
+    <property name=""a9"" type=""int32"" scope=""all_clients"" />
+  </properties>
+</entity>";
+        var source = @"
+using Atlas.Client;
+[Atlas.Entity.Entity(""Bulk"")]
+public partial class Bulk : ClientEntity
+{
+    public override string TypeName => ""Bulk"";
+}
+";
+        var (result, _) = RunDefGenerator(source, nineDef, "ATLAS_CLIENT");
+        var code = result.GeneratedTrees
+            .First(t => t.FilePath.Contains("Bulk.DeltaSync")).GetText().ToString();
+        var body = ExtractMethodBody(code, "ApplyReplicatedDelta(ref SpanReader reader)");
+
+        Assert.Contains("reader.ReadUInt16()", body);
+        Assert.DoesNotContain("reader.ReadByte()", body);
+    }
+
+    [Fact]
+    public void ClientContext_DeltaReadOrder_MirrorsServerDeltaWriteOrder()
+    {
+        // Full round-trip symmetry: for every replicable prop, the server's
+        // SerializeReplicatedDelta writes in declaration order, and the
+        // client's ApplyReplicatedDelta reads in the same order. The guard
+        // is `(flags & ReplicatedDirtyFlags.Prop) != 0` on both sides, so
+        // the reader position stays in lockstep with writer position.
+        var clientSource = @"
+using Atlas.Client;
+[Atlas.Entity.Entity(""Avatar"")]
+public partial class Avatar : ClientEntity
+{
+    public override string TypeName => ""Avatar"";
+    public partial void ShowDamage(int amount, uint attackerId) {}
+}
+";
+        var baseSource = @"
+using Atlas.Entity;
+using Atlas.Serialization;
+[Entity(""Avatar"")]
+public partial class Avatar : ServerEntity
+{
+    public override string TypeName => ""Avatar"";
+    public override void Serialize(ref SpanWriter w) {}
+    public override void Deserialize(ref SpanReader r) {}
+    public partial void UseItem(int itemId) {}
+    public partial void OnPlayerDead() {}
+}
+";
+        var (clientResult, _) = RunDefGenerator(clientSource, AvatarDef, "ATLAS_CLIENT");
+        var (baseResult,   _) = RunDefGenerator(baseSource,   AvatarDef, "ATLAS_BASE");
+
+        var clientCode = clientResult.GeneratedTrees
+            .First(t => t.FilePath.Contains("Avatar.DeltaSync")).GetText().ToString();
+        var baseCode = baseResult.GeneratedTrees
+            .First(t => t.FilePath.Contains("Avatar.DeltaSync")).GetText().ToString();
+
+        // Property-name sequence on both sides.
+        var clientSeq = new System.Collections.Generic.List<string>();
+        foreach (System.Text.RegularExpressions.Match m
+            in System.Text.RegularExpressions.Regex.Matches(
+                ExtractMethodBody(clientCode, "ApplyReplicatedDelta(ref SpanReader reader)"),
+                @"ReplicatedDirtyFlags\.(\w+)"))
+        {
+            clientSeq.Add(m.Groups[1].Value);
+        }
+        var serverSeq = new System.Collections.Generic.List<string>();
+        foreach (System.Text.RegularExpressions.Match m
+            in System.Text.RegularExpressions.Regex.Matches(
+                ExtractMethodBody(baseCode, "SerializeReplicatedDelta(ref SpanWriter writer)"),
+                @"ReplicatedDirtyFlags\.(\w+)"))
+        {
+            serverSeq.Add(m.Groups[1].Value);
+        }
+        Assert.Equal(serverSeq, clientSeq);
+    }
+
     [Fact]
     public void ClientContext_NoOtherVisibleFields_OmitsApplyOtherSnapshot()
     {
