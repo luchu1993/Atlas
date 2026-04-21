@@ -9,6 +9,7 @@
 
 #include "client_native_provider.h"
 #include "clrscript/clr_script_engine.h"
+#include "foundation/error.h"
 #include "network/event_dispatcher.h"
 #include "network/network_interface.h"
 #include "platform/dynamic_library.h"
@@ -57,6 +58,17 @@ class ClientApp {
   // CLR embedding
   auto InitClr(const char* exe_path) -> bool;
   void FiniClr();
+
+  // Desktop-only CLR glue. InvokeDesktopBootstrap binds
+  // Atlas.Client.DesktopBootstrap.Initialize in Atlas.Client.Desktop.dll
+  // (loaded transitively via the user's script assembly) and invokes it
+  // once so the ClientHost delegate slots + native callback table are
+  // filled before any generated ModuleInitializer in the user assembly
+  // runs. LoadUserAssembly calls Atlas.Client.DesktopBootstrap.
+  // LoadUserAssembly — a thin Assembly.LoadFrom wrapper — so the user's
+  // module initializers fire on the already-bootstrapped CLR.
+  [[nodiscard]] auto InvokeDesktopBootstrap() -> Result<void>;
+  [[nodiscard]] auto LoadUserAssembly(const std::filesystem::path& path) -> Result<void>;
 
   // Login flow
   auto Login() -> bool;

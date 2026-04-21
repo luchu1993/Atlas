@@ -1,5 +1,8 @@
 using System;
+using System.Reflection;
 using System.Runtime.InteropServices;
+using System.Text;
+using Atlas.Core;
 
 namespace Atlas.Client;
 
@@ -51,14 +54,53 @@ public static unsafe class DesktopBootstrap
     /// once per process, after CLR bootstrap and before the generated
     /// ModuleInitializer code in the user's script assembly runs.
     /// Idempotent — repeat calls overwrite the slots with the same values.
+    /// <para/>
+    /// Exposed as an <c>[UnmanagedCallersOnly]</c> entry point so C++ can
+    /// resolve it via <c>ClrHost::GetMethodAs</c>. Returns 0 on success,
+    /// -1 on failure (with the error message set through ErrorBridge).
     /// </summary>
-    public static void Initialize()
+    [UnmanagedCallersOnly]
+    public static int Initialize()
     {
-        ClientHost.SendBaseRpcHandler = ClientNativeApi.SendBaseRpc;
-        ClientHost.SendCellRpcHandler = ClientNativeApi.SendCellRpc;
-        ClientHost.RegisterEntityTypeHandler = ClientNativeApi.RegisterEntityType;
+        try
+        {
+            ClientHost.SendBaseRpcHandler = ClientNativeApi.SendBaseRpc;
+            ClientHost.SendCellRpcHandler = ClientNativeApi.SendCellRpc;
+            ClientHost.RegisterEntityTypeHandler = ClientNativeApi.RegisterEntityType;
 
-        RegisterNativeCallbacks();
+            RegisterNativeCallbacks();
+            return 0;
+        }
+        catch (Exception ex)
+        {
+            ErrorBridge.SetError(ex);
+            return -1;
+        }
+    }
+
+    /// <summary>
+    /// Load the user's script assembly from <paramref name="pathUtf8"/>
+    /// (UTF-8 bytes). Triggers every <c>[ModuleInitializer]</c> in the
+    /// assembly, which wires the generator-emitted RPC dispatcher,
+    /// entity factory, and type registry into <see cref="ClientHost"/>.
+    /// The host must have called <see cref="Initialize"/> first so the
+    /// ClientHost slots are populated before any of those initializers
+    /// run.
+    /// </summary>
+    [UnmanagedCallersOnly]
+    public static int LoadUserAssembly(byte* pathUtf8, int pathLen)
+    {
+        try
+        {
+            var path = Encoding.UTF8.GetString(new ReadOnlySpan<byte>(pathUtf8, pathLen));
+            Assembly.LoadFrom(path);
+            return 0;
+        }
+        catch (Exception ex)
+        {
+            ErrorBridge.SetError(ex);
+            return -1;
+        }
     }
 
     /// <summary>

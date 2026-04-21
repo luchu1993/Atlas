@@ -1,6 +1,7 @@
 #include "client_app.h"
 
 #include "clrscript/clr_bootstrap.h"
+#include "clrscript/clr_invoke.h"
 #include "foundation/log.h"
 #include "network/channel.h"
 #include "network/reliable_udp.h"
@@ -162,12 +163,18 @@ auto ClientApp::InitClr(const char* exe_path) -> bool {
   bootstrap_args.error_get_code =
       reinterpret_cast<decltype(bootstrap_args.error_get_code)>((*error_code)());
 
-  // Create CLR engine
+  // Create CLR engine. The desktop client does NOT bind
+  // Atlas.Core.Lifecycle or Atlas.Hosting.HotReloadManager — those live in
+  // Atlas.Runtime (server only). We clear the type strings so Initialize
+  // skips those bindings; LoadModule and OnTick / OnInit / OnShutdown then
+  // become no-ops the client doesn't rely on.
   auto clr = std::make_unique<ClrScriptEngine>();
   ClrScriptEngine::Config clr_config;
   clr_config.runtime_config_path = config_.runtime_config;
   clr_config.runtime_assembly_path = config_.script_assembly;
   clr_config.bootstrap_args = bootstrap_args;
+  clr_config.lifecycle_type.clear();
+  clr_config.hotreload_type.clear();
 
   auto cfg_result = clr->Configure(clr_config);
   if (!cfg_result) {
@@ -182,10 +189,26 @@ auto ClientApp::InitClr(const char* exe_path) -> bool {
     return false;
   }
 
-  auto load_result = script_engine_->LoadModule(config_.script_assembly);
-  if (!load_result) {
-    ATLAS_LOG_ERROR("Client: load_module({}) failed: {}", config_.script_assembly.string(),
-                    load_result.Error().Message());
+  // After CLR bootstrap completes, install the Desktop-specific host glue:
+  // ClientHost delegate slots + the native callback table. Must run before
+  // the user assembly's generator-emitted ModuleInitializer fires (the
+  // [ModuleInitializer] in TypeRegistryEmitter calls
+  // ClientHost.RegisterEntityType), so we invoke it before LoadUserAssembly.
+  if (auto r = InvokeDesktopBootstrap(); !r) {
+    ATLAS_LOG_ERROR("Client: DesktopBootstrap.Initialize failed: {}", r.Error().Message());
+    return false;
+  }
+
+  // The server path uses HotReloadManager.LoadScripts to pull in the user
+  // assembly. The client doesn't bind HotReloadManager, so we instead load
+  // the assembly directly via DesktopBootstrap.LoadUserAssembly (a plain
+  // Assembly.LoadFrom wrapper). This triggers any [ModuleInitializer] in
+  // the script assembly, which in turn wires the generated RPC dispatcher
+  // / entity factory / type registry against the already-filled
+  // ClientHost slots.
+  if (auto r = LoadUserAssembly(config_.script_assembly); !r) {
+    ATLAS_LOG_ERROR("Client: LoadUserAssembly({}) failed: {}", config_.script_assembly.string(),
+                    r.Error().Message());
     return false;
   }
 
@@ -193,6 +216,37 @@ auto ClientApp::InitClr(const char* exe_path) -> bool {
 
   ATLAS_LOG_INFO("Client: CLR initialized, assembly loaded");
   return true;
+}
+
+auto ClientApp::InvokeDesktopBootstrap() -> Result<void> {
+  // Atlas.Client.Desktop ships alongside the user's assembly (as a
+  // transitive ProjectReference of Atlas.ClientSample). Pointing
+  // GetMethodAs at the user assembly's directory would also work, but
+  // binding through the script-assembly path mirrors how ClrBootstrap
+  // itself resolves Atlas.ClrHost and keeps the type-load graph intact.
+  ClrFallibleMethod<> init_method;
+  auto bind_result =
+      init_method.Bind(script_engine_->Host(), config_.script_assembly,
+                       "Atlas.Client.DesktopBootstrap, Atlas.Client.Desktop", "Initialize");
+  if (!bind_result) return bind_result.Error();
+  auto r = init_method.Invoke();
+  if (!r) return r.Error();
+  return {};
+}
+
+auto ClientApp::LoadUserAssembly(const std::filesystem::path& path) -> Result<void> {
+  ClrFallibleMethod<const uint8_t*, int32_t> load_method;
+  auto bind_result =
+      load_method.Bind(script_engine_->Host(), path,
+                       "Atlas.Client.DesktopBootstrap, Atlas.Client.Desktop", "LoadUserAssembly");
+  if (!bind_result) return bind_result.Error();
+
+  const auto path_str = path.u8string();
+  auto r = load_method.Invoke(reinterpret_cast<const uint8_t*>(path_str.data()),
+                              static_cast<int32_t>(path_str.size()));
+  if (!r) return r.Error();
+  ATLAS_LOG_INFO("Client: loaded user assembly {}", path.string());
+  return {};
 }
 
 void ClientApp::FiniClr() {

@@ -15,5 +15,9 @@
   <ItemGroup>
     <ProjectReference Include="..\Atlas.Shared\Atlas.Shared.csproj" />
     <ProjectReference Include="..\Atlas.Client\Atlas.Client.csproj" />
+    <!-- Atlas.Core.ErrorBridge lives in Atlas.ClrHost. Needed so
+         UnmanagedCallersOnly entry points here can route exceptions to
+         the C++ TLS error buffer. -->
+    <ProjectReference Include="..\Atlas.ClrHost\Atlas.ClrHost.csproj" />
   </ItemGroup>
 </Project>
