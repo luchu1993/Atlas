@@ -328,9 +328,14 @@ class BaseApp : public EntityApp {
   uint64_t baseline_bytes_sent_total_{0};
   uint64_t baseline_tick_counter_{0};
   static constexpr uint32_t kDeltaBudgetPerTick = 16 * 1024;  // 16 KB per client per tick
-  // ~30 ticks (≈ 1 s at 30 Hz) between reliable full-state snapshots per entity.
-  // Compensates补强二's DeltaForwarder unreliable losses within one interval.
-  static constexpr uint64_t kBaselineInterval = 30;
+  // Ticks between reliable full-state snapshots per entity. Baseline is the
+  // belt-and-braces recovery path for the unreliable delta channel
+  // (0xF001). With补强四's reliable delta channel (0xF003) in place for any
+  // property that can't tolerate loss, the unreliable path only carries
+  // volatile-type state whose next frame supersedes a stale one anyway —
+  // so the baseline cadence can be loose (PROPERTY_SYNC_DESIGN §8.5).
+  // 120 ticks ≈ 4 s at 30 Hz / 12 s at 10 Hz.
+  static constexpr uint64_t kBaselineInterval = 120;
   uint64_t auth_success_total_{0};
   uint64_t auth_fail_total_{0};
   uint64_t force_logoff_total_{0};
