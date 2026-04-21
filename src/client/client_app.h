@@ -33,6 +33,12 @@ class ClientApp {
     std::string password_hash;
     std::filesystem::path script_assembly;
     std::filesystem::path runtime_config;
+    // Phase C3 reliability test hook — drop every inbound state-replication
+    // message (0xF001 / 0xF002 / 0xF003) whose arrival time, measured from
+    // ClientApp::MainLoop entry, lies within [drop_inbound_start_ms,
+    // drop_inbound_start_ms + drop_inbound_duration_ms). 0/0 = off.
+    int drop_inbound_start_ms{0};
+    int drop_inbound_duration_ms{0};
   };
 
   static auto Run(int argc, char* argv[]) -> int;
@@ -74,6 +80,11 @@ class ClientApp {
   uint16_t player_type_id_{0};
   bool authenticated_{false};
   bool shutdown_requested_{false};
+
+  // Set once at MainLoop entry; used by the C3 inbound drop filter to
+  // measure "time since client boot". Zero-valued when no MainLoop has
+  // started yet.
+  std::chrono::steady_clock::time_point loop_start_{};
 };
 
 }  // namespace atlas

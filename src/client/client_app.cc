@@ -63,6 +63,19 @@ auto ClientApp::Init(int argc, char* argv[]) -> bool {
       config_.script_assembly = std::filesystem::path(std::string(next()));
     else if (arg == "--runtime-config")
       config_.runtime_config = std::filesystem::path(std::string(next()));
+    else if (arg == "--drop-inbound-ms") {
+      // Two-argument flag: start_ms duration_ms.
+      auto start_sv = next();
+      auto duration_sv = next();
+      try {
+        config_.drop_inbound_start_ms = std::stoi(std::string(start_sv));
+        config_.drop_inbound_duration_ms = std::stoi(std::string(duration_sv));
+      } catch (...) {
+        ATLAS_LOG_ERROR("Client: --drop-inbound-ms requires two integer args (got '{}', '{}')",
+                        start_sv, duration_sv);
+        return false;
+      }
+    }
   }
 
   // Default password to empty hash
@@ -313,6 +326,15 @@ auto ClientApp::MainLoop() -> int {
 
   ATLAS_LOG_INFO("Client: entering main loop (press Ctrl+C to exit)");
 
+  loop_start_ = std::chrono::steady_clock::now();
+  if (config_.drop_inbound_duration_ms > 0) {
+    ATLAS_LOG_WARNING(
+        "Client: --drop-inbound-ms active: state-channel messages received in "
+        "[{} ms, {} ms) after MainLoop entry will be dropped (test mode)",
+        config_.drop_inbound_start_ms,
+        config_.drop_inbound_start_ms + config_.drop_inbound_duration_ms);
+  }
+
   // Register a catch-all handler for messages from BaseApp.
   //
   // Two transport-level concerns are multiplexed over this default handler:
@@ -346,6 +368,20 @@ auto ClientApp::MainLoop() -> int {
         }
 
         if (is_state_channel) {
+          // Phase C3 test hook: silently drop state-channel traffic inside
+          // the [start, start+duration) window to simulate packet loss on
+          // the reliable / volatile / baseline channels. RPCs and other
+          // traffic flow normally so login, auth and script method calls
+          // still work.
+          if (config_.drop_inbound_duration_ms > 0) {
+            const auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
+                                     std::chrono::steady_clock::now() - loop_start_)
+                                     .count();
+            if (elapsed >= config_.drop_inbound_start_ms &&
+                elapsed < config_.drop_inbound_start_ms + config_.drop_inbound_duration_ms) {
+              return;  // dropped
+            }
+          }
           // MessageID is already uint16_t (see src/lib/network/message.h); the
           // deliver_from_server callback takes uint16_t by value, so no cast is
           // needed.
