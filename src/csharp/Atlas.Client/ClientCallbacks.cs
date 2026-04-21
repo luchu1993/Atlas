@@ -1,5 +1,6 @@
 using System;
 using System.Runtime.InteropServices;
+using Atlas.DataTypes;
 using Atlas.Serialization;
 
 namespace Atlas.Client;
@@ -10,6 +11,7 @@ internal unsafe struct ClientCallbackTable
     public nint DispatchRpc;
     public nint CreateEntity;
     public nint DestroyEntity;
+    public nint DeliverFromServer;
 }
 
 /// <summary>
@@ -28,6 +30,21 @@ public static unsafe class ClientCallbacks
     /// </summary>
     public static RpcDispatchDelegate? ClientRpcDispatcher;
 
+    // Reserved client-facing MessageIDs — must match
+    // src/server/baseapp/delta_forwarder.h::kClient*MessageId exactly.
+    // Duplicated here (rather than imported) because Atlas.Client must remain
+    // independent of any server header.
+    internal const ushort kClientDeltaMessageId = 0xF001;          // volatile / unreliable
+    internal const ushort kClientBaselineMessageId = 0xF002;       // owner-scope full baseline (reliable)
+    internal const ushort kClientReliableDeltaMessageId = 0xF003;  // ordered property delta (reliable)
+
+    // CellAoIEnvelopeKind — must match src/server/cellapp/cell_aoi_envelope.h
+    // byte-for-byte.
+    private const byte kEntityEnter = 1;
+    private const byte kEntityLeave = 2;
+    private const byte kEntityPositionUpdate = 3;
+    private const byte kEntityPropertyUpdate = 4;
+
     private static readonly ClientEntityManager s_entityMgr = new();
 
     public static ClientEntityManager EntityManager => s_entityMgr;
@@ -38,6 +55,8 @@ public static unsafe class ClientCallbacks
         table.DispatchRpc = (nint)(delegate* unmanaged<uint, uint, byte*, int, void>)&DispatchRpc;
         table.CreateEntity = (nint)(delegate* unmanaged<uint, ushort, void>)&CreateEntity;
         table.DestroyEntity = (nint)(delegate* unmanaged<uint, void>)&DestroyEntity;
+        table.DeliverFromServer =
+            (nint)(delegate* unmanaged<ushort, byte*, int, void>)&DeliverFromServer;
 
         ClientNativeApi.SetNativeCallbacks(&table, sizeof(ClientCallbackTable));
     }
@@ -90,5 +109,133 @@ public static unsafe class ClientCallbacks
         {
             Console.Error.WriteLine($"DestroyEntity error: {ex}");
         }
+    }
+
+    /// <summary>
+    /// Opaque transport-channel delivery hook called by the native client for
+    /// the three reserved state-replication MessageIDs. Owning all envelope
+    /// decoding here (rather than in C++) keeps the native layer free of
+    /// property-sync business logic so a non-C# script host can bind the same
+    /// hook unchanged.
+    /// </summary>
+    [UnmanagedCallersOnly]
+    public static void DeliverFromServer(ushort msgId, byte* payload, int len)
+    {
+        try
+        {
+            var body = new ReadOnlySpan<byte>(payload, len);
+            switch (msgId)
+            {
+                case kClientDeltaMessageId:
+                case kClientReliableDeltaMessageId:
+                    DispatchAoIEnvelope(body);
+                    break;
+                case kClientBaselineMessageId:
+                    DispatchBaseline(body);
+                    break;
+                default:
+                    Console.Error.WriteLine(
+                        $"DeliverFromServer: unexpected msgId=0x{msgId:X4} len={len}");
+                    break;
+            }
+        }
+        catch (Exception ex)
+        {
+            Console.Error.WriteLine($"DeliverFromServer error (msgId=0x{msgId:X4}): {ex}");
+        }
+    }
+
+    // -- Envelope decoders --------------------------------------------------
+
+    // Wire layout for 0xF001 / 0xF003 (CellAoIEnvelope, src/server/cellapp/cell_aoi_envelope.h):
+    //   [u8 kind] [u32 LE public_entity_id] [payload bytes...]
+    private const int kEnvelopeHeaderBytes = 1 + 4;
+    private static void DispatchAoIEnvelope(ReadOnlySpan<byte> body)
+    {
+        if (body.Length < kEnvelopeHeaderBytes)
+        {
+            Console.Error.WriteLine($"DispatchAoIEnvelope: truncated envelope ({body.Length} bytes)");
+            return;
+        }
+        var reader = new SpanReader(body);
+        byte kind = reader.ReadByte();
+        uint entityId = reader.ReadUInt32();
+        var inner = body.Slice(kEnvelopeHeaderBytes);
+
+        switch (kind)
+        {
+            case kEntityEnter:
+                DispatchEnter(entityId, inner);
+                break;
+            case kEntityLeave:
+                s_entityMgr.OnLeave(entityId);
+                break;
+            case kEntityPositionUpdate:
+                DispatchPositionUpdate(entityId, inner);
+                break;
+            case kEntityPropertyUpdate:
+                s_entityMgr.ApplyPropertyDelta(entityId, inner);
+                break;
+            default:
+                Console.Error.WriteLine(
+                    $"DispatchAoIEnvelope: unknown kind={kind} entityId={entityId}");
+                break;
+        }
+    }
+
+    // kEntityEnter inner payload (witness.cc::BuildEnterPayload):
+    //   [u16 type_id] [3f pos] [3f dir] [u8 on_ground] [... peer_snapshot ...]
+    // The peer_snapshot tail is scope-subset bytes (SerializeForOtherClients)
+    // for AoI peers — ClientEntityManager gates its application on Phase B0.
+    private const int kEnterFixedBytes = 2 + 6 * 4 + 1;
+    private static void DispatchEnter(uint entityId, ReadOnlySpan<byte> inner)
+    {
+        if (inner.Length < kEnterFixedBytes)
+        {
+            Console.Error.WriteLine($"DispatchEnter: truncated ({inner.Length} bytes)");
+            return;
+        }
+        var reader = new SpanReader(inner);
+        ushort typeId = reader.ReadUInt16();
+        var pos = reader.ReadVector3();
+        var dir = reader.ReadVector3();
+        bool onGround = reader.ReadByte() != 0;
+
+        var snapshot = inner.Slice(kEnterFixedBytes);
+        s_entityMgr.OnEnter(entityId, typeId, pos, dir, onGround, snapshot);
+    }
+
+    // kEntityPositionUpdate inner payload (witness.cc::SendEntityUpdate volatile branch):
+    //   [3f pos] [3f dir] [u8 on_ground]
+    private const int kPositionUpdateBytes = 6 * 4 + 1;
+    private static void DispatchPositionUpdate(uint entityId, ReadOnlySpan<byte> inner)
+    {
+        if (inner.Length < kPositionUpdateBytes)
+        {
+            Console.Error.WriteLine($"DispatchPositionUpdate: truncated ({inner.Length} bytes)");
+            return;
+        }
+        var reader = new SpanReader(inner);
+        var pos = reader.ReadVector3();
+        var dir = reader.ReadVector3();
+        bool onGround = reader.ReadByte() != 0;
+        s_entityMgr.ApplyPosition(entityId, pos, dir, onGround);
+    }
+
+    // Wire layout for 0xF002 (baseapp_messages.h::ReplicatedBaselineToClient):
+    //   [PackedInt base_entity_id] [PackedInt snapshot_size] [snapshot bytes]
+    private static void DispatchBaseline(ReadOnlySpan<byte> body)
+    {
+        var reader = new SpanReader(body);
+        uint entityId = reader.ReadPackedUInt32();
+        uint size = reader.ReadPackedUInt32();
+        if ((uint)reader.Remaining < size)
+        {
+            Console.Error.WriteLine(
+                $"DispatchBaseline: truncated snapshot (want={size} have={reader.Remaining})");
+            return;
+        }
+        var snapshot = body.Slice(reader.Position, (int)size);
+        s_entityMgr.ApplyBaseline(entityId, snapshot);
     }
 }

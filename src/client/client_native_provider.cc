@@ -10,11 +10,13 @@
 namespace atlas {
 
 // Packed layout of the callback table sent by C# Atlas.Client via set_native_callbacks.
+// Field order and packing must mirror Atlas.Client.ClientCallbackTable exactly.
 #pragma pack(push, 1)
 struct ClientCallbackTable {
   ClientDispatchRpcFn dispatch_rpc;
   ClientCreateEntityFn create_entity;
   ClientDestroyEntityFn destroy_entity;
+  ClientDeliverFromServerFn deliver_from_server;
 };
 #pragma pack(pop)
 
@@ -71,6 +73,7 @@ void ClientNativeProvider::SetNativeCallbacks(const void* native_callbacks, int3
   dispatch_rpc_fn_ = table.dispatch_rpc;
   create_entity_fn_ = table.create_entity;
   destroy_entity_fn_ = table.destroy_entity;
+  deliver_from_server_fn_ = table.deliver_from_server;
   ATLAS_LOG_INFO("Client: native callback table registered");
 }
 

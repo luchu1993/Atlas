@@ -1,4 +1,5 @@
 using System;
+using Atlas.DataTypes;
 using Atlas.Serialization;
 
 namespace Atlas.Client;
@@ -16,6 +17,24 @@ public abstract class ClientEntity
 
     /// <summary>Restores entity state received from the server (implemented by source generator).</summary>
     public virtual void Deserialize(ref SpanReader reader) { }
+
+    /// <summary>
+    /// Apply an incremental property delta as produced by the server's
+    /// <c>SerializeReplicatedDelta*</c> family. The wire body is a dirty-flag
+    /// bitmap followed by the changed field values. The generator overrides
+    /// this in Phase B of the client-sync rework (<c>PROPERTY_SYNC_DESIGN.md</c>
+    /// §9.5 task 9.1); the base no-op keeps the dispatcher valid before the
+    /// generator change lands.
+    /// </summary>
+    public virtual void ApplyReplicatedDelta(ref SpanReader reader) { }
+
+    /// <summary>
+    /// Apply a volatile position/orientation update from the AoI volatile
+    /// channel (<c>kEntityPositionUpdate</c> envelope). Phase B4 wires this
+    /// to a generator-produced position field and an <c>OnPositionUpdated</c>
+    /// script hook; in Phase A the base simply drops the update.
+    /// </summary>
+    public virtual void ApplyPositionUpdate(Vector3 pos, Vector3 dir, bool onGround) { }
 
     /// <summary>Called when the entity is created on the client.</summary>
     protected internal virtual void OnInit() { }

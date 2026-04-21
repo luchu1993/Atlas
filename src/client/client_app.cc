@@ -15,6 +15,7 @@
 #include <thread>
 
 #include "baseapp/baseapp_messages.h"
+#include "baseapp/delta_forwarder.h"
 #include "loginapp/login_messages.h"
 
 namespace atlas {
@@ -312,24 +313,55 @@ auto ClientApp::MainLoop() -> int {
 
   ATLAS_LOG_INFO("Client: entering main loop (press Ctrl+C to exit)");
 
-  // Register a catch-all handler for RPC messages from BaseApp.
-  // BaseApp sends ClientRpc using the rpc_id directly as the MessageID.
-  // We register a raw message handler that catches everything not handled
-  // by specific typed handlers.
+  // Register a catch-all handler for messages from BaseApp.
+  //
+  // Two transport-level concerns are multiplexed over this default handler:
+  //
+  //   (a) The three reserved state-replication channels
+  //       (DeltaForwarder::kClientDeltaMessageId          0xF001 — unreliable),
+  //       (DeltaForwarder::kClientBaselineMessageId       0xF002 — reliable),
+  //       (DeltaForwarder::kClientReliableDeltaMessageId  0xF003 — reliable)
+  //       are routed opaquely to the managed script host via
+  //       deliver_from_server_fn_. The native layer performs zero envelope
+  //       decoding so an alternative script host (Lua, TS, …) can bind the
+  //       same transport hook without touching this file.
+  //
+  //   (b) Any other MessageID is treated as a ClientRpc — BaseApp sends
+  //       ClientRpcs using the rpc_id directly as the MessageID.
   network_.InterfaceTable().SetDefaultHandler(
       [this](const Address&, Channel*, MessageID msg_id, BinaryReader& reader) {
-        // The message ID is the RPC ID when receiving ClientRpcs from BaseApp.
-        auto rem = reader.Remaining();
+        const bool is_state_channel = msg_id == DeltaForwarder::kClientDeltaMessageId ||
+                                      msg_id == DeltaForwarder::kClientBaselineMessageId ||
+                                      msg_id == DeltaForwarder::kClientReliableDeltaMessageId;
+
+        const uint8_t* payload_ptr = nullptr;
+        int32_t payload_len = 0;
+        const auto rem = reader.Remaining();
         if (rem > 0) {
-          auto payload = reader.ReadBytes(rem);
-          if (payload) {
-            OnRpcMessage(static_cast<uint32_t>(msg_id),
-                         reinterpret_cast<const std::byte*>(payload->data()),
-                         static_cast<int32_t>(payload->size()));
+          auto read = reader.ReadBytes(rem);
+          if (read) {
+            payload_ptr = reinterpret_cast<const uint8_t*>(read->data());
+            payload_len = static_cast<int32_t>(read->size());
           }
-        } else {
-          OnRpcMessage(static_cast<uint32_t>(msg_id), nullptr, 0);
         }
+
+        if (is_state_channel) {
+          // MessageID is already uint16_t (see src/lib/network/message.h); the
+          // deliver_from_server callback takes uint16_t by value, so no cast is
+          // needed.
+          if (native_provider_ && native_provider_->DeliverFromServerFn()) {
+            native_provider_->DeliverFromServerFn()(msg_id, payload_ptr, payload_len);
+          } else {
+            ATLAS_LOG_WARNING(
+                "Client: state-channel message 0x{:04X} arrived but no deliver_from_server "
+                "callback registered",
+                static_cast<unsigned>(msg_id));
+          }
+          return;
+        }
+
+        OnRpcMessage(static_cast<uint32_t>(msg_id), reinterpret_cast<const std::byte*>(payload_ptr),
+                     payload_len);
       });
 
   while (!shutdown_requested_) {
