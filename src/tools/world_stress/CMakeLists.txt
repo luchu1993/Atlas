@@ -6,6 +6,7 @@
 add_executable(world_stress
   main.cc
   client_event_tap.cc
+  script_clients.cc
 )
 target_link_libraries(world_stress PRIVATE
   atlas_baseapp_lib

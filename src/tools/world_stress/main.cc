@@ -3,6 +3,7 @@
 #include <cstdint>
 #include <cstdlib>
 #include <cstring>
+#include <filesystem>
 #include <format>
 #include <iostream>
 #include <limits>
@@ -23,6 +24,7 @@
 #include "network/event_dispatcher.h"
 #include "network/network_interface.h"
 #include "network/reliable_udp.h"
+#include "script_clients.h"
 
 using namespace atlas;
 
@@ -68,6 +70,16 @@ struct Options {
   int space_count{1};
   bool verbose_failures{false};
   uint32_t seed{12345};
+
+  // Phase C2: end-to-end verification via real atlas_client.exe subprocesses
+  // that load samples/client/. Zero means no script children are launched
+  // and the harness retains its original raw-protocol-only behaviour.
+  std::size_t script_clients{0};
+  std::filesystem::path client_exe;
+  std::filesystem::path client_assembly;
+  std::filesystem::path client_runtime_config;
+  std::string script_username_prefix{"script_user_"};
+  bool script_verify{false};
 };
 
 enum class SessionState : uint8_t {
@@ -658,6 +670,16 @@ void PrintUsage() {
          "(default: 1)\n"
       << "  --seed <n>                 RNG seed (default: 12345)\n"
       << "  --verbose-failures         Print individual failures\n"
+      << "  --script-clients <n>       Spawn N real atlas_client.exe subprocesses that load\n"
+      << "                             --client-assembly; their Phase-B stdout is counted and\n"
+      << "                             summarised alongside virtual-client metrics (default: 0)\n"
+      << "  --client-exe <path>        Path to atlas_client.exe (required with --script-clients)\n"
+      << "  --client-assembly <path>   Path to Atlas.ClientSample.dll (required with "
+         "--script-clients)\n"
+      << "  --client-runtime-config <path>  hostfxr *.runtimeconfig.json (optional)\n"
+      << "  --script-username-prefix <text> Username prefix for script children (default: "
+         "script_user_)\n"
+      << "  --script-verify            Non-zero exit if any script child didn't observe OnInit\n"
       << "\n"
       << "Example:\n"
       << "  world_stress --login 127.0.0.1:20013 --password-hash <sha256> --clients 500 "
@@ -860,6 +882,30 @@ auto ParseOptions(int argc, char* argv[]) -> std::optional<Options> {
       opts.worker_count = *parsed;
     } else if (kArg == "--verbose-failures") {
       opts.verbose_failures = true;
+    } else if (kArg == "--script-clients") {
+      auto value = require_value(kArg);
+      if (!value) return std::nullopt;
+      auto parsed = ParseNumeric<std::size_t>(*value);
+      if (!parsed) return std::nullopt;
+      opts.script_clients = *parsed;
+    } else if (kArg == "--client-exe") {
+      auto value = require_value(kArg);
+      if (!value) return std::nullopt;
+      opts.client_exe = std::filesystem::path(std::string(*value));
+    } else if (kArg == "--client-assembly") {
+      auto value = require_value(kArg);
+      if (!value) return std::nullopt;
+      opts.client_assembly = std::filesystem::path(std::string(*value));
+    } else if (kArg == "--client-runtime-config") {
+      auto value = require_value(kArg);
+      if (!value) return std::nullopt;
+      opts.client_runtime_config = std::filesystem::path(std::string(*value));
+    } else if (kArg == "--script-username-prefix") {
+      auto value = require_value(kArg);
+      if (!value) return std::nullopt;
+      opts.script_username_prefix = std::string(*value);
+    } else if (kArg == "--script-verify") {
+      opts.script_verify = true;
     } else if (kArg == "--help" || kArg == "-h") {
       PrintUsage();
       std::exit(0);
@@ -1026,11 +1072,41 @@ int main(int argc, char* argv[]) {
       kOpts->worker_index, kOpts->worker_count, kOpts->source_ips.size(), kOpts->ramp_per_sec,
       kOpts->duration_sec, kOpts->shortline_pct, kOpts->seed);
 
+  // Phase C2: optional real atlas_client.exe subprocess harness. Launched
+  // BEFORE the virtual-client ramp so script children observe the same
+  // server state the raw-protocol clients do. Pumped once per main-loop
+  // iteration so stdout lines don't back up.
+  world_stress::ScriptClientOptions sco;
+  sco.exe = kOpts->client_exe;
+  sco.assembly = kOpts->client_assembly;
+  sco.runtime_config = kOpts->client_runtime_config;
+  // Address has no standalone Host() accessor; derive it from the dotted
+  // form in ToString() by trimming the ":port" suffix.
+  {
+    auto s = kOpts->login_addr.ToString();
+    auto colon = s.rfind(':');
+    sco.login_host = colon != std::string::npos ? s.substr(0, colon) : s;
+  }
+  sco.login_port = kOpts->login_addr.Port();
+  sco.password_hash = kOpts->password_hash;
+  sco.username_prefix = kOpts->script_username_prefix;
+  // Offset script usernames past the virtual-client pool so both fleets can
+  // share an --account-pool without colliding on the same credentials.
+  sco.username_index_base = kOpts->account_index_base + kOpts->account_pool;
+  sco.count = kOpts->script_clients;
+  sco.verify = kOpts->script_verify;
+  world_stress::ScriptClientHarness script_harness(std::move(sco));
+  if (auto r = script_harness.Start(); !r.HasValue()) {
+    std::cerr << "[script-clients] " << r.Error().Message() << "\n";
+    return 2;
+  }
+
   auto next_progress = kStartedAt + std::chrono::seconds(1);
   const auto kDeadline = kStartedAt + std::chrono::seconds(kOpts->duration_sec);
 
   while (SteadyClock::now() < kDeadline) {
     dispatcher.ProcessOnce();
+    script_harness.Pump();
 
     const auto kNow = SteadyClock::now();
     for (auto& session : sessions) {
@@ -1043,6 +1119,8 @@ int main(int argc, char* argv[]) {
     }
   }
 
+  script_harness.ShutdownAndWait(std::chrono::seconds(3));
   PrintSummary(*kOpts, metrics, sessions);
-  return 0;
+  const bool script_ok = script_harness.PrintSummary();
+  return script_ok ? 0 : 1;
 }
