@@ -28,6 +28,13 @@ struct ClientEventCounters {
   uint64_t on_destroy{0};
   uint64_t on_hp_changed{0};
   uint64_t on_position_updated{0};
+  // Phase D2'.3: how many property deltas the client missed in the
+  // middle of a reliable stream. Populated from the `event_seq gap:
+  // last=A got=B missed=N` warning lines that ClientEntity emits to
+  // Console.Error when the incoming seq jumps by more than 1. A single
+  // log line contributes N to the counter — operators care about lost
+  // events, not the count of warning lines.
+  uint64_t event_seq_gaps{0};
   uint64_t unparsed_lines{0};
 };
 

@@ -91,3 +91,32 @@ TEST(ClientEventTap, MultipleLinesAccumulate) {
   EXPECT_EQ(c.on_destroy, 1u);
   EXPECT_EQ(c.unparsed_lines, 1u);
 }
+
+// ============================================================================
+// Phase D2'.3 — event_seq gap warnings
+// ============================================================================
+
+TEST(ClientEventTap, EventSeqGap_AddsMissedCount) {
+  ClientEventCounters c;
+  EXPECT_TRUE(
+      ParseAndCountClientEventLine("[StressAvatar:42] event_seq gap: last=10 got=15 missed=4", c));
+  EXPECT_EQ(c.event_seq_gaps, 4u);
+  EXPECT_EQ(c.unparsed_lines, 0u);
+}
+
+TEST(ClientEventTap, EventSeqGap_MultipleLinesAccumulate) {
+  ClientEventCounters c;
+  (void)ParseAndCountClientEventLine("[StressAvatar:42] event_seq gap: last=10 got=15 missed=4", c);
+  (void)ParseAndCountClientEventLine("[StressAvatar:42] event_seq gap: last=15 got=20 missed=4", c);
+  (void)ParseAndCountClientEventLine("[StressAvatar:99] event_seq gap: last=3 got=7 missed=3", c);
+  EXPECT_EQ(c.event_seq_gaps, 11u);
+}
+
+TEST(ClientEventTap, EventSeqGap_MissingMissedField_CountsLineButNoMiss) {
+  // Defensive — a future refactor removing the `missed=` suffix should
+  // surface as a parser warning, not as silently mis-counted deltas.
+  ClientEventCounters c;
+  EXPECT_TRUE(ParseAndCountClientEventLine("[StressAvatar:42] event_seq gap: last=10 got=15", c));
+  EXPECT_EQ(c.event_seq_gaps, 0u);
+  EXPECT_EQ(c.unparsed_lines, 0u);  // well-formed prefix → recognized
+}

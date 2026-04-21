@@ -62,6 +62,29 @@ auto ParseAndCountClientEventLine(std::string_view line, ClientEventCounters& ou
     return true;
   }
 
+  // event_seq gap warning — Phase D2'.3. Format (from
+  // ClientEntity.NoteIncomingEventSeq):
+  //   [<Type>:<Id>] event_seq gap: last=A got=B missed=N
+  // We add N to the counter so it reflects the number of lost deltas,
+  // not the number of warning lines.
+  if (StartsWithToken(rest, "event_seq gap")) {
+    auto missed_pos = rest.find("missed=");
+    if (missed_pos != std::string_view::npos) {
+      auto digits = rest.substr(missed_pos + 7);
+      uint64_t n = 0;
+      for (char c : digits) {
+        if (c < '0' || c > '9') break;
+        n = n * 10 + static_cast<uint64_t>(c - '0');
+      }
+      out.event_seq_gaps += n;
+      return true;
+    }
+    // Well-formed prefix but missing/mangled `missed=` → still count
+    // the line as recognized so it doesn't inflate unparsed_lines, but
+    // we can't add any missed count.
+    return true;
+  }
+
   ++out.unparsed_lines;
   return false;
 }
