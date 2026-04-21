@@ -59,6 +59,18 @@ public abstract class ClientEntity
     /// <summary>Called when the entity is created on the client.</summary>
     protected internal virtual void OnInit() { }
 
+    /// <summary>
+    /// Called once after the entity has been fully initialised into the
+    /// local player's world — factory creation, initial transform, and
+    /// the other-scope snapshot from the AoI <c>kEntityEnter</c> envelope
+    /// have all been applied. Scripts override this for setup that needs
+    /// the complete starting state (attach visuals, register timers, etc.).
+    /// BigWorld analogue: <c>BWEntity::onEnterWorld</c>. Distinct from
+    /// <see cref="OnInit"/> which fires on the bare instance before any
+    /// server state is consumed.
+    /// </summary>
+    protected internal virtual void OnEnterWorld() { }
+
     /// <summary>Called when the entity is destroyed on the client.</summary>
     protected internal virtual void OnDestroy() { }
 

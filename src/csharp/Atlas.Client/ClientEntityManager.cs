@@ -51,12 +51,19 @@ public sealed class ClientEntityManager
     /// straight to backing fields and does not fire property-change
     /// callbacks — the peer is entering in a given state rather than
     /// transitioning.
-    /// Idempotent: a re-enter after a pending leave reuses the existing
-    /// instance and refreshes transform + state.
+    /// After all initial state is in place, fires
+    /// <see cref="ClientEntity.OnEnterWorld"/> so scripts can do setup
+    /// that needs the complete starting state.
+    /// Idempotent: a re-enter of an already-tracked entity refreshes
+    /// transform + state but does NOT re-fire
+    /// <see cref="ClientEntity.OnInit"/> or
+    /// <see cref="ClientEntity.OnEnterWorld"/> — those are once-per-lifetime
+    /// hooks.
     /// </summary>
     public void OnEnter(uint entityId, ushort typeId, Vector3 pos, Vector3 dir, bool onGround,
                         ReadOnlySpan<byte> peerSnapshot)
     {
+        bool freshlyCreated = false;
         if (!_entities.TryGetValue(entityId, out var entity))
         {
             entity = ClientEntityFactory.Create(typeId);
@@ -70,6 +77,7 @@ public sealed class ClientEntityManager
             entity.EntityId = entityId;
             _entities[entityId] = entity;
             entity.OnInit();
+            freshlyCreated = true;
         }
 
         entity.ApplyPositionUpdate(pos, dir, onGround);
@@ -79,6 +87,8 @@ public sealed class ClientEntityManager
             var reader = new SpanReader(peerSnapshot);
             entity.ApplyOtherSnapshot(ref reader);
         }
+
+        if (freshlyCreated) entity.OnEnterWorld();
     }
 
     /// <summary>
