@@ -33,8 +33,16 @@ class ClrScriptEngine final : public ScriptEngine {
  public:
   struct Config {
     std::filesystem::path runtime_config_path;    // runtimeconfig.json
-    std::filesystem::path runtime_assembly_path;  // Atlas.Runtime.dll
+    std::filesystem::path runtime_assembly_path;  // script assembly (search root)
     std::optional<ClrBootstrapArgs> bootstrap_args;
+
+    // Managed entry-point types the engine binds during Initialize. Each
+    // field can be cleared to skip the corresponding binding set: the
+    // desktop-client host passes empty strings for both because its
+    // lifecycle and assembly-loading paths live outside Atlas.Runtime.
+    // Server hosts leave the defaults in place.
+    std::string lifecycle_type{"Atlas.Core.Lifecycle, Atlas.Runtime"};
+    std::string hotreload_type{"Atlas.Hosting.HotReloadManager, Atlas.Runtime"};
   };
 
   [[nodiscard]] auto Configure(const Config& config) -> Result<void>;
@@ -84,10 +92,6 @@ class ClrScriptEngine final : public ScriptEngine {
   ClrFallibleMethod<const uint8_t*, int32_t> load_scripts_;      // LoadScripts
   ClrFallibleMethod<> serialize_and_unload_;                     // SerializeAndUnload
   ClrFallibleMethod<const uint8_t*, int32_t> load_and_restore_;  // LoadAndRestore
-
-  static constexpr std::string_view kLifecycleType = "Atlas.Core.Lifecycle, Atlas.Runtime";
-  static constexpr std::string_view kHotReloadType =
-      "Atlas.Hosting.HotReloadManager, Atlas.Runtime";
 
   void ResetAllMethods();
 };

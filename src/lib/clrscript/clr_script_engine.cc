@@ -47,49 +47,55 @@ auto ClrScriptEngine::Initialize() -> Result<void> {
     return Error{ErrorCode::kScriptError, std::format("ClrScriptEngine: bootstrap failed: {}",
                                                       bootstrap_result.Error().Message())};
 
-  // 3. Bind Phase 3 lifecycle methods.
+  // 3. Bind Phase 3 lifecycle methods. Optional: hosts that don't expose
+  // an Atlas.Core.Lifecycle entry point (desktop client) pass an empty
+  // lifecycle_type and the engine skips this block; the corresponding
+  // ScriptEngine virtuals become no-ops.
   const auto& asm_path = config_.runtime_assembly_path;
 
-  auto bind = [&](auto& method, std::string_view name) -> Result<void> {
-    auto r = method.Bind(host_, asm_path, kLifecycleType, name);
+  auto bind = [&](auto& method, std::string_view type_name, std::string_view name) -> Result<void> {
+    auto r = method.Bind(host_, asm_path, type_name, name);
     if (!r)
       return Error{ErrorCode::kScriptError, std::format("ClrScriptEngine: failed to bind {}: {}",
                                                         name, r.Error().Message())};
     return {};
   };
 
-  auto r = bind(engine_init_, "EngineInit");
-  if (!r) return r.Error();
-  r = bind(engine_shutdown_, "EngineShutdown");
-  if (!r) return r.Error();
-  r = bind(on_init_, "OnInit");
-  if (!r) return r.Error();
-  r = bind(on_tick_, "OnTick");
-  if (!r) return r.Error();
-  r = bind(on_shutdown_, "OnShutdown");
-  if (!r) return r.Error();
+  if (!config_.lifecycle_type.empty()) {
+    const std::string_view kLifecycle{config_.lifecycle_type};
+    auto r = bind(engine_init_, kLifecycle, "EngineInit");
+    if (!r) return r.Error();
+    r = bind(engine_shutdown_, kLifecycle, "EngineShutdown");
+    if (!r) return r.Error();
+    r = bind(on_init_, kLifecycle, "OnInit");
+    if (!r) return r.Error();
+    r = bind(on_tick_, kLifecycle, "OnTick");
+    if (!r) return r.Error();
+    r = bind(on_shutdown_, kLifecycle, "OnShutdown");
+    if (!r) return r.Error();
+  }
 
-  // 3b. Bind HotReloadManager methods.
-  auto bind_hr = [&](auto& method, std::string_view name) -> Result<void> {
-    auto hr = method.Bind(host_, asm_path, kHotReloadType, name);
-    if (!hr)
-      return Error{ErrorCode::kScriptError, std::format("ClrScriptEngine: failed to bind {}: {}",
-                                                        name, hr.Error().Message())};
-    return {};
-  };
-
-  r = bind_hr(load_scripts_, "LoadScripts");
-  if (!r) return r.Error();
-  r = bind_hr(serialize_and_unload_, "SerializeAndUnload");
-  if (!r) return r.Error();
-  r = bind_hr(load_and_restore_, "LoadAndRestore");
-  if (!r) return r.Error();
+  // 3b. Bind HotReloadManager methods. Same optional pattern — LoadModule
+  // returns an error if hotreload_type is empty and a caller tries to use
+  // it, rather than failing Initialize when the host intentionally opts out.
+  if (!config_.hotreload_type.empty()) {
+    const std::string_view kHotReload{config_.hotreload_type};
+    auto r = bind(load_scripts_, kHotReload, "LoadScripts");
+    if (!r) return r.Error();
+    r = bind(serialize_and_unload_, kHotReload, "SerializeAndUnload");
+    if (!r) return r.Error();
+    r = bind(load_and_restore_, kHotReload, "LoadAndRestore");
+    if (!r) return r.Error();
+  }
 
   // 4. Call C# EngineInit (sets up EngineContext, EntityManager, etc.)
-  auto init_result = engine_init_.Invoke();
-  if (!init_result)
-    return Error{ErrorCode::kScriptError, std::format("ClrScriptEngine: EngineInit failed: {}",
-                                                      init_result.Error().Message())};
+  // Skip when the lifecycle type wasn't configured.
+  if (engine_init_.IsBound()) {
+    auto init_result = engine_init_.Invoke();
+    if (!init_result)
+      return Error{ErrorCode::kScriptError, std::format("ClrScriptEngine: EngineInit failed: {}",
+                                                        init_result.Error().Message())};
+  }
 
   committed = true;
   initialized_ = true;
@@ -100,10 +106,12 @@ auto ClrScriptEngine::Initialize() -> Result<void> {
 void ClrScriptEngine::Finalize() {
   if (!initialized_) return;
 
-  auto shutdown_result = engine_shutdown_.Invoke();
-  if (!shutdown_result)
-    ATLAS_LOG_ERROR("ClrScriptEngine: EngineShutdown failed: {}",
-                    shutdown_result.Error().Message());
+  if (engine_shutdown_.IsBound()) {
+    auto shutdown_result = engine_shutdown_.Invoke();
+    if (!shutdown_result)
+      ATLAS_LOG_ERROR("ClrScriptEngine: EngineShutdown failed: {}",
+                      shutdown_result.Error().Message());
+  }
 
   ResetAllMethods();
   host_.Finalize();
@@ -113,6 +121,11 @@ void ClrScriptEngine::Finalize() {
 
 auto ClrScriptEngine::LoadModule(const std::filesystem::path& path) -> Result<void> {
   if (!initialized_) return Error{ErrorCode::kInvalidArgument, "ClrScriptEngine not initialized"};
+  if (!load_scripts_.IsBound()) {
+    return Error{ErrorCode::kInvalidArgument,
+                 "ClrScriptEngine::LoadModule: hotreload_type is empty, no LoadScripts entry "
+                 "bound — hosts that skip HotReloadManager must load assemblies by other means"};
+  }
 
   auto path_str = path.u8string();
   auto result = load_scripts_.Invoke(reinterpret_cast<const uint8_t*>(path_str.data()),
@@ -125,19 +138,19 @@ auto ClrScriptEngine::LoadModule(const std::filesystem::path& path) -> Result<vo
 }
 
 void ClrScriptEngine::OnTick(float dt) {
-  if (!initialized_) return;
+  if (!initialized_ || !on_tick_.IsBound()) return;
   auto result = on_tick_.Invoke(dt);
   if (!result) ATLAS_LOG_ERROR("ClrScriptEngine::OnTick failed: {}", result.Error().Message());
 }
 
 void ClrScriptEngine::OnInit(bool is_reload) {
-  if (!initialized_) return;
+  if (!initialized_ || !on_init_.IsBound()) return;
   auto result = on_init_.Invoke(is_reload ? uint8_t{1} : uint8_t{0});
   if (!result) ATLAS_LOG_ERROR("ClrScriptEngine::OnInit failed: {}", result.Error().Message());
 }
 
 void ClrScriptEngine::OnShutdown() {
-  if (!initialized_) return;
+  if (!initialized_ || !on_shutdown_.IsBound()) return;
   auto result = on_shutdown_.Invoke();
   if (!result) ATLAS_LOG_ERROR("ClrScriptEngine::OnShutdown failed: {}", result.Error().Message());
 }
