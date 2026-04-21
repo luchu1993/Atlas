@@ -110,14 +110,17 @@ public sealed class ClientEntityManager
     }
 
     /// <summary>
-    /// Apply an ordered property delta (<c>kEntityPropertyUpdate</c>).
-    /// The base <see cref="ClientEntity.ApplyReplicatedDelta"/> is a no-op
-    /// until Phase B1 lands a generated override; this method is still
-    /// wired so the dispatcher can be smoke-tested end-to-end today.
+    /// Apply an ordered property delta (<c>kEntityPropertyUpdate</c>). The
+    /// caller supplies the <paramref name="eventSeq"/> taken from the
+    /// envelope prefix (Phase D2'.2): the entity records it, logs a gap
+    /// warning if the seq jumped by more than 1, and then dispatches the
+    /// delta bytes through the generator-emitted
+    /// <see cref="ClientEntity.ApplyReplicatedDelta"/>.
     /// </summary>
-    public void ApplyPropertyDelta(uint entityId, ReadOnlySpan<byte> delta)
+    public void ApplyPropertyDelta(uint entityId, ulong eventSeq, ReadOnlySpan<byte> delta)
     {
         if (!_entities.TryGetValue(entityId, out var entity)) return;
+        entity.NoteIncomingEventSeq(eventSeq);
         if (delta.IsEmpty) return;
         var reader = new SpanReader(delta);
         entity.ApplyReplicatedDelta(ref reader);

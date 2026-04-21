@@ -46,6 +46,21 @@ auto MakeEnvelope(CellAoIEnvelopeKind kind, EntityID public_entity_id,
   return out;
 }
 
+// kEntityPropertyUpdate payload: uint64 LE event_seq + delta/snapshot bytes.
+// Phase D2'.2 — the seq prefix lets the client detect gaps (missing or out-of-
+// order reliable deltas). Client decoder is
+// Atlas.Client.ClientCallbacks.DispatchAoIEnvelope.
+auto BuildPropertyUpdatePayload(uint64_t event_seq, std::span<const std::byte> delta)
+    -> std::vector<std::byte> {
+  std::vector<std::byte> out;
+  out.reserve(sizeof(uint64_t) + delta.size());
+  for (int i = 0; i < 8; ++i) {
+    out.push_back(static_cast<std::byte>((event_seq >> (i * 8)) & 0xFF));
+  }
+  out.insert(out.end(), delta.begin(), delta.end());
+  return out;
+}
+
 // Payload for EntityEnter: type_id (uint16 LE) + position (3x float LE)
 // + direction (3x float LE) + on_ground (uint8). Client decoder mirrors
 // this in the reverse order. Owner snapshot bytes (if any) append after.
@@ -365,9 +380,10 @@ void Witness::SendEntityUpdate(EntityCache& cache) {
       // range — suppress entirely only if the peer genuinely had no
       // audience-visible change this frame.
       if (!delta_bytes.empty()) {
+        auto payload = BuildPropertyUpdatePayload(frame.event_seq, delta_bytes);
         auto envelope =
             MakeEnvelope<0>(CellAoIEnvelopeKind::kEntityPropertyUpdate,
-                            cache.entity->BaseEntityId(), std::span<const std::byte>(delta_bytes));
+                            cache.entity->BaseEntityId(), std::span<const std::byte>(payload));
         if (send_reliable_) send_reliable_(owner_.BaseEntityId(), envelope);
       }
       cache.last_event_seq = frame.event_seq;
@@ -378,9 +394,14 @@ void Witness::SendEntityUpdate(EntityCache& cache) {
     // current audience-scope snapshot; the client resets its view of
     // the peer and resumes catch-up from there.
     const auto& snapshot = observer_is_owner ? state->owner_snapshot : state->other_snapshot;
+    // Carry latest_event_seq as the envelope's seq: after snapshot apply
+    // the client's "last seen" seq moves forward to the publishing frame.
+    // The next delta with seq = latest_event_seq+1 will not trigger a gap
+    // warning.
+    auto payload = BuildPropertyUpdatePayload(state->latest_event_seq, snapshot);
     auto envelope =
         MakeEnvelope<0>(CellAoIEnvelopeKind::kEntityPropertyUpdate, cache.entity->BaseEntityId(),
-                        std::span<const std::byte>(snapshot));
+                        std::span<const std::byte>(payload));
     if (send_reliable_) send_reliable_(owner_.BaseEntityId(), envelope);
     cache.last_event_seq = state->latest_event_seq;
     cache.flags &= ~EntityCache::kRefresh;

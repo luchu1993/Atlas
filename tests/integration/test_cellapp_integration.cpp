@@ -377,6 +377,12 @@ class PropertyDeltaFixture : public ::testing::Test {
   static auto PayloadBody(const ReplicationCapture& e) -> std::span<const std::byte> {
     return std::span<const std::byte>(e.payload.data() + 5, e.payload.size() - 5);
   }
+  // Phase D2'.2: kEntityPropertyUpdate envelopes carry an 8-byte LE
+  // event_seq prefix before the delta bytes. Skip it to get at the
+  // audience-specific delta payload.
+  static auto PropertyUpdateDelta(const ReplicationCapture& e) -> std::span<const std::byte> {
+    return PayloadBody(e).subspan(8);
+  }
 
   static auto MakeEntity(Space& space, EntityID id, EntityID base_id, math::Vector3 pos)
       -> CellEntity* {
@@ -418,7 +424,7 @@ TEST_F(PropertyDeltaFixture, OtherObserverReceivesOtherDelta) {
     if (KindOf(c) == CellAoIEnvelopeKind::kEntityPropertyUpdate) updates.push_back(c);
   }
   ASSERT_EQ(updates.size(), 1u);
-  EXPECT_EQ(PayloadBody(updates[0])[0], std::byte{0xBB})
+  EXPECT_EQ(PropertyUpdateDelta(updates[0])[0], std::byte{0xBB})
       << "Other-audience observer should receive other_delta (0xBB), not owner_delta (0xAA)";
 }
 
@@ -446,7 +452,7 @@ TEST_F(PropertyDeltaFixture, OwnerObserverReceivesOwnerDelta) {
     if (KindOf(c) == CellAoIEnvelopeKind::kEntityPropertyUpdate) updates.push_back(c);
   }
   ASSERT_EQ(updates.size(), 1u);
-  EXPECT_EQ(PayloadBody(updates[0])[0], std::byte{0xCC})
+  EXPECT_EQ(PropertyUpdateDelta(updates[0])[0], std::byte{0xCC})
       << "Owner-audience observer should receive owner_delta (0xCC), not other_delta (0xDD)";
 }
 

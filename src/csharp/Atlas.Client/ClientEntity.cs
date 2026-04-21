@@ -15,6 +15,16 @@ public abstract class ClientEntity
 
     public abstract string TypeName { get; }
 
+    // Phase D2'.2: event_seq gap observability. The server stamps every
+    // kEntityPropertyUpdate envelope with its originating frame's event_seq
+    // (see witness.cc::BuildPropertyUpdatePayload). The client records the
+    // most recent seq it has observed; when the next delta's seq jumps by
+    // more than 1, the skipped count lands in EventSeqGapsTotal and a line
+    // hits Console.Error so world_stress's tap can aggregate gap counts
+    // across a script-child fleet (Phase D2'.3).
+    public ulong LastEventSeq { get; private set; }
+    public ulong EventSeqGapsTotal { get; private set; }
+
     // Transform state — replicated via the volatile position channel
     // (0xF001 / kEntityPositionUpdate), separate from the replicated
     // property channel. Read freely from script; writes go through
@@ -80,6 +90,30 @@ public abstract class ClientEntity
     /// would muddle semantics and inflate dispatch cost.
     /// </summary>
     protected internal virtual void OnPositionUpdated(Vector3 newPos) { }
+
+    /// <summary>
+    /// Called by the manager whenever an incoming kEntityPropertyUpdate
+    /// envelope's event_seq prefix has been decoded — before the delta body
+    /// is applied. Counts and logs gaps; internal so scripts can't desync
+    /// the counter by calling it ad-hoc.
+    /// </summary>
+    internal void NoteIncomingEventSeq(ulong seq)
+    {
+        // Reliable delta is ordered so seq should only ever move forward.
+        // Out-of-order / duplicate deliveries (possible if a snapshot
+        // fallback re-stamps a smaller seq than an already-seen one) are
+        // silently dropped from gap tracking to avoid underflow noise.
+        if (seq <= LastEventSeq) return;
+
+        if (LastEventSeq > 0 && seq > LastEventSeq + 1)
+        {
+            ulong missed = seq - LastEventSeq - 1;
+            EventSeqGapsTotal += missed;
+            Console.Error.WriteLine(
+                $"[{TypeName}:{EntityId}] event_seq gap: last={LastEventSeq} got={seq} missed={missed}");
+        }
+        LastEventSeq = seq;
+    }
 
     /// <summary>Called when the entity is created on the client.</summary>
     protected internal virtual void OnInit() { }

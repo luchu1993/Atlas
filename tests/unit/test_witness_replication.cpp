@@ -40,6 +40,22 @@ auto PayloadBody(const Captured& c) -> std::span<const std::byte> {
   return std::span<const std::byte>(c.payload.data() + 5, c.payload.size() - 5);
 }
 
+// Phase D2'.2: kEntityPropertyUpdate envelopes prepend a uint64 LE event_seq
+// to their delta/snapshot bytes. The two helpers below extract each half.
+auto PropertyUpdateSeq(const Captured& c) -> uint64_t {
+  auto body = PayloadBody(c);
+  uint64_t seq = 0;
+  for (int i = 0; i < 8; ++i) {
+    seq |= static_cast<uint64_t>(static_cast<unsigned char>(body[i])) << (i * 8);
+  }
+  return seq;
+}
+
+auto PropertyUpdateDelta(const Captured& c) -> std::span<const std::byte> {
+  auto body = PayloadBody(c);
+  return body.subspan(8);
+}
+
 auto MakeBlob(std::initializer_list<uint8_t> bytes) -> std::vector<std::byte> {
   std::vector<std::byte> v;
   v.reserve(bytes.size());
@@ -175,9 +191,12 @@ TEST_F(WitnessReplicationTest, PropertyDeltasReplayInOrder) {
     if (KindOf(c) == CellAoIEnvelopeKind::kEntityPropertyUpdate) updates.push_back(c);
   }
   ASSERT_EQ(updates.size(), 3u);
-  EXPECT_EQ(PayloadBody(updates[0])[0], std::byte{0xB1});
-  EXPECT_EQ(PayloadBody(updates[1])[0], std::byte{0xB2});
-  EXPECT_EQ(PayloadBody(updates[2])[0], std::byte{0xB3});
+  EXPECT_EQ(PropertyUpdateSeq(updates[0]), 1u);
+  EXPECT_EQ(PropertyUpdateSeq(updates[1]), 2u);
+  EXPECT_EQ(PropertyUpdateSeq(updates[2]), 3u);
+  EXPECT_EQ(PropertyUpdateDelta(updates[0])[0], std::byte{0xB1});
+  EXPECT_EQ(PropertyUpdateDelta(updates[1])[0], std::byte{0xB2});
+  EXPECT_EQ(PropertyUpdateDelta(updates[2])[0], std::byte{0xB3});
   EXPECT_EQ(cache.last_event_seq, 3u);
   for (const auto& u : updates) EXPECT_TRUE(u.reliable);
 }
@@ -203,7 +222,8 @@ TEST_F(WitnessReplicationTest, PropertyDeltaOwnerAudienceWhenObserverIsOwner) {
   }
   ASSERT_EQ(updates.size(), 1u);
   // Owner-audience byte (0xCC) not other-audience (0xDD).
-  EXPECT_EQ(PayloadBody(updates[0])[0], std::byte{0xCC});
+  EXPECT_EQ(PropertyUpdateDelta(updates[0])[0], std::byte{0xCC});
+  EXPECT_EQ(PropertyUpdateSeq(updates[0]), 1u);
 }
 
 // ----------------------------------------------------------------------------
@@ -237,11 +257,13 @@ TEST_F(WitnessReplicationTest, SnapshotFallbackWhenBeyondHistoryWindow) {
   }
   ASSERT_EQ(updates.size(), 1u) << "Fallback ships the snapshot in ONE envelope, not history";
 
-  // Payload should be the peer's other_snapshot (two bytes {0x22, 0x33}).
-  auto body = PayloadBody(updates[0]);
-  ASSERT_EQ(body.size(), 2u);
-  EXPECT_EQ(body[0], std::byte{0x22});
-  EXPECT_EQ(body[1], std::byte{0x33});
+  // Payload should be the peer's other_snapshot (two bytes {0x22, 0x33}),
+  // preceded by the latest_event_seq the snapshot reflects.
+  auto delta = PropertyUpdateDelta(updates[0]);
+  ASSERT_EQ(delta.size(), 2u);
+  EXPECT_EQ(delta[0], std::byte{0x22});
+  EXPECT_EQ(delta[1], std::byte{0x33});
+  EXPECT_EQ(PropertyUpdateSeq(updates[0]), window + 4);
 
   // After fallback, last_event_seq jumps to the peer's current latest.
   EXPECT_EQ(cache.last_event_seq, window + 4);
@@ -277,9 +299,10 @@ TEST_F(WitnessReplicationTest, SnapshotFallbackFollowedByIncrementalCatchup) {
     if (KindOf(c) == CellAoIEnvelopeKind::kEntityPropertyUpdate) updates.push_back(c);
   }
   ASSERT_EQ(updates.size(), 1u);
-  auto body = PayloadBody(updates[0]);
-  EXPECT_EQ(body.size(), 1u);
-  EXPECT_EQ(body[0], std::byte{0xEF}) << "History replay should ship frame.other_delta";
+  auto delta = PropertyUpdateDelta(updates[0]);
+  EXPECT_EQ(delta.size(), 1u);
+  EXPECT_EQ(delta[0], std::byte{0xEF}) << "History replay should ship frame.other_delta";
+  EXPECT_EQ(PropertyUpdateSeq(updates[0]), window + 5);
   EXPECT_EQ(cache.last_event_seq, window + 5);
 }
 

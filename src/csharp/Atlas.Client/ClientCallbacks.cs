@@ -174,7 +174,7 @@ public static unsafe class ClientCallbacks
                 DispatchPositionUpdate(entityId, inner);
                 break;
             case kEntityPropertyUpdate:
-                s_entityMgr.ApplyPropertyDelta(entityId, inner);
+                DispatchPropertyUpdate(entityId, inner);
                 break;
             default:
                 Console.Error.WriteLine(
@@ -203,6 +203,27 @@ public static unsafe class ClientCallbacks
 
         var snapshot = inner.Slice(kEnterFixedBytes);
         s_entityMgr.OnEnter(entityId, typeId, pos, dir, onGround, snapshot);
+    }
+
+    // kEntityPropertyUpdate inner payload (witness.cc::BuildPropertyUpdatePayload):
+    //   [u64 event_seq] [delta or snapshot bytes]
+    // The seq prefix lets the client notice missing reliable deltas (Phase
+    // D2'.2). It is authoritative on the delta channel (ordered, gap-free
+    // in the nominal case) and approximately correct on the snapshot
+    // fallback (the snapshot reflects state up to latest_event_seq).
+    private const int kPropertyUpdatePrefixBytes = 8;
+    private static void DispatchPropertyUpdate(uint entityId, ReadOnlySpan<byte> inner)
+    {
+        if (inner.Length < kPropertyUpdatePrefixBytes)
+        {
+            Console.Error.WriteLine(
+                $"DispatchPropertyUpdate: truncated ({inner.Length} bytes, need at least 8)");
+            return;
+        }
+        var reader = new SpanReader(inner);
+        ulong eventSeq = reader.ReadUInt64();
+        var delta = inner.Slice(kPropertyUpdatePrefixBytes);
+        s_entityMgr.ApplyPropertyDelta(entityId, eventSeq, delta);
     }
 
     // kEntityPositionUpdate inner payload (witness.cc::SendEntityUpdate volatile branch):
