@@ -120,3 +120,52 @@ TEST(ClientEventTap, EventSeqGap_MissingMissedField_CountsLineButNoMiss) {
   EXPECT_EQ(c.event_seq_gaps, 0u);
   EXPECT_EQ(c.unparsed_lines, 0u);  // well-formed prefix → recognized
 }
+
+// ============================================================================
+// L6 — optional [t=...] timestamp prefix (ClientLog in Atlas.Client)
+// ============================================================================
+
+TEST(ClientEventTap, TimestampPrefix_Stripped_OnInit) {
+  ClientEventCounters c;
+  EXPECT_TRUE(ParseAndCountClientEventLine("[t=1.234] [StressAvatar:42] OnInit", c));
+  EXPECT_EQ(c.on_init, 1u);
+  EXPECT_EQ(c.unparsed_lines, 0u);
+}
+
+TEST(ClientEventTap, TimestampPrefix_Stripped_HpChanged) {
+  ClientEventCounters c;
+  EXPECT_TRUE(
+      ParseAndCountClientEventLine("[t=12.345] [StressAvatar:42] OnHpChanged old=100 new=99", c));
+  EXPECT_EQ(c.on_hp_changed, 1u);
+}
+
+TEST(ClientEventTap, TimestampPrefix_Stripped_EventSeqGap) {
+  // Both the event_seq gap warning (stderr) and the regular events
+  // (stdout) carry the prefix because ClientLog.Warn/Info share the
+  // same Timestamp() helper. Missing any one path would desync the
+  // harness counter from the on-wire state.
+  ClientEventCounters c;
+  EXPECT_TRUE(ParseAndCountClientEventLine(
+      "[t=5.000] [StressAvatar:42] event_seq gap: last=10 got=15 missed=4", c));
+  EXPECT_EQ(c.event_seq_gaps, 4u);
+}
+
+TEST(ClientEventTap, TimestampPrefix_MissingClose_BumpsUnparsed) {
+  // Malformed: opens [t= but never closes. Defensively treated as
+  // unparsed — we don't want a partial parse to shadow a later
+  // identifiable event on the same line.
+  ClientEventCounters c;
+  EXPECT_FALSE(ParseAndCountClientEventLine("[t=1.234 [StressAvatar:42] OnInit", c));
+  EXPECT_EQ(c.on_init, 0u);
+  EXPECT_EQ(c.unparsed_lines, 1u);
+}
+
+TEST(ClientEventTap, PreL6Format_StillParses) {
+  // Backward compat: a log line without the timestamp bracket must
+  // continue to match exactly as it did before L6 landed. Pre-L6
+  // builds shipped without the prefix and runs that mix old client
+  // binaries with a new tap must not regress.
+  ClientEventCounters c;
+  EXPECT_TRUE(ParseAndCountClientEventLine("[StressAvatar:42] OnHpChanged old=100 new=99", c));
+  EXPECT_EQ(c.on_hp_changed, 1u);
+}

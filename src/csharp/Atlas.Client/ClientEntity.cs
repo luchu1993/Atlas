@@ -109,7 +109,7 @@ public abstract class ClientEntity
         {
             ulong missed = seq - LastEventSeq - 1;
             EventSeqGapsTotal += missed;
-            Console.Error.WriteLine(
+            ClientLog.Warn(
                 $"[{TypeName}:{EntityId}] event_seq gap: last={LastEventSeq} got={seq} missed={missed}");
         }
         LastEventSeq = seq;

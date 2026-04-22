@@ -188,6 +188,6 @@ protected override void OnTick(float dt) {
    **L4 Baseline on CellApp**（commit `f2dec1e`）**已实施**：CellApp 侧新增 `TickClientBaselinePump`，每 `kClientBaselineIntervalTicks = 120` tick 对每个 has-witness entity 调 `GetOwnerSnapshot` 拿 cell-side `SerializeForOwnerClient` 输出，通过新消息 `ReplicatedBaselineFromCell` (msg 2019, reliable) 发给 BaseApp。BaseApp 的 `OnReplicatedBaselineFromCell` 只做中继：`ResolveClientChannel` → 发 `ReplicatedBaselineToClient` (0xF002) 给 owner client。payload 是 cell-side owner-scope 快照，wire 与 pre-M2 baseapp pump 输出 byte-identical，客户端解码零改动。C3-B 现已可验证（见 §C3-B）。
 4. **Drop 过滤器在 RUDP 之上**（见 C3 开头警告）：当前 `--drop-inbound-ms` 不能验证传输层 reliable 重传；C3-A 和 C3-B 实际测试的都是"应用层漏接 + baseline 静默恢复"。要真正验证 RUDP 重传需要在 `src/lib/network/reliable_udp.cc` 加丢包注入点（未来工作）。
 5. **Baseline 不触发 `OnXxxChanged`**：B2 scheme-2 明确选择 baseline 静默路径。脚本看不到被 baseline 恢复的字段变化，只能轮询字段值或依赖 `seqgaps` 推断"被吞了多少"。
-6. **Tap 不带时间戳**：无法自动断言"窗口后 4s 内收敛"。当前脚本只打 old/new 值；要机械化需要给每条日志前置 server-time 戳。
+6. ~~Tap 不带时间戳~~ **已修复**：`Atlas.Client.ClientLog` 给每条脚本日志前置 `[t=S.sss]` 单调秒戳（起点为首次 ClientLog 访问；进程启动后几 ms 内即激活）。`client_event_tap.cc::EventBegins` 新增前缀剥离，计数语义向后兼容。后续收敛分析可用 `grep '^\[t=\([0-9.]*\)\]'` 把时间戳抽回来对 drop window 边界做自动断言。
 7. **C3-B 需手动 `.def` 改动 + rebuild**：没有运行时 reliable 开关。未来可加 `.def` 的"条件 reliable"或 CLI 覆盖，现阶段"改 def → rebuild → 测 → 改回"流程可接受。
 8. **子进程日志冗余**：脚本走 `Console.WriteLine`；大流量场景下 stdout 管道可能成为瓶颈。压测规模 > 几十 client 时建议关闭 `--script-clients`，用裸协议 path。

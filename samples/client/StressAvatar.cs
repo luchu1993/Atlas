@@ -20,25 +20,25 @@ public partial class StressAvatar : ClientEntity
 
     protected override void OnInit()
     {
-        Console.WriteLine($"[StressAvatar:{EntityId}] OnInit");
+        ClientLog.Info($"[StressAvatar:{EntityId}] OnInit");
     }
 
     protected override void OnEnterWorld()
     {
-        Console.WriteLine(
+        ClientLog.Info(
             $"[StressAvatar:{EntityId}] OnEnterWorld pos={FormatVec(Position)} hp={Hp}");
     }
 
     protected override void OnDestroy()
     {
-        Console.WriteLine($"[StressAvatar:{EntityId}] OnDestroy");
+        ClientLog.Info($"[StressAvatar:{EntityId}] OnDestroy");
     }
 
     // -------- Property-change callback (B1, wire-delta-only per B2) --------
 
     partial void OnHpChanged(int oldValue, int newValue)
     {
-        Console.WriteLine(
+        ClientLog.Info(
             $"[StressAvatar:{EntityId}] OnHpChanged old={oldValue} new={newValue}");
     }
 
@@ -46,7 +46,7 @@ public partial class StressAvatar : ClientEntity
 
     protected override void OnPositionUpdated(Vector3 newPos)
     {
-        Console.WriteLine(
+        ClientLog.Info(
             $"[StressAvatar:{EntityId}] OnPositionUpdated pos={FormatVec(newPos)}");
     }
 
@@ -56,7 +56,7 @@ public partial class StressAvatar : ClientEntity
     {
         // Real stress measurement is done by world_stress virtual clients
         // parsing the raw wire; the script path just confirms the RPC lands.
-        Console.WriteLine(
+        ClientLog.Info(
             $"[StressAvatar:{EntityId}] EchoReply seq={seq} serverTsNs={serverTsNs} clientTsNs={clientTsNs}");
     }
 

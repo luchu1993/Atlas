@@ -24,14 +24,14 @@ public partial class Account : ClientEntity
 
     protected override void OnInit()
     {
-        Console.WriteLine(
+        ClientLog.Info(
             $"[Account:{EntityId}] OnInit — calling SelectAvatar({kDefaultAvatarIndex})");
         SelectAvatar(kDefaultAvatarIndex);
     }
 
     protected override void OnDestroy()
     {
-        Console.WriteLine($"[Account:{EntityId}] OnDestroy");
+        ClientLog.Info($"[Account:{EntityId}] OnDestroy");
     }
 
     // RequestAvatarList is declared in Account.def but the stress harness

@@ -9,7 +9,21 @@ namespace {
 // — the harness only aggregates per-child counts today; the id is noise at
 // this layer. Kept as positional substring lookup (no regex) so the tap
 // stays header-only-friendly and has zero startup cost per line.
+//
+// L6: client logs now emit `[t=<seconds>] [<Type>:<Id>] <Event>` — the
+// leading timestamp bracket is stripped here before the type:id bracket
+// parse so existing counters work unchanged. The raw value is not kept
+// by the tap (analysis scripts lift it back out with a regex) — the
+// benefit is purely that convergence timing is recoverable post-run.
 auto EventBegins(std::string_view line) -> std::string_view {
+  // Strip optional leading timestamp bracket: `[t=12.345] ` (prefix +
+  // exactly one space). If the line doesn't start with `[t=` the line
+  // is pre-L6 format and drops through untouched.
+  if (line.size() >= 4 && line[0] == '[' && line[1] == 't' && line[2] == '=') {
+    auto end = line.find("] ");
+    if (end == std::string_view::npos) return {};
+    line = line.substr(end + 2);
+  }
   // Find the first closing bracket. If this line doesn't have the
   // "[<Type>:<Id>] <Event>" shape, return empty.
   auto close = line.find(']');
