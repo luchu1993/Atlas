@@ -806,36 +806,32 @@ void BaseApp::FlushClientDeltas() {
 }
 
 void BaseApp::EmitBaselineSnapshots() {
-  // Fire only every kBaselineInterval ticks; spread work thin across ticks
-  // rather than stagger per-entity — at Atlas's expected per-BaseApp proxy
-  // count this is negligible, and a synchronized pulse is simpler to reason
-  // about than a rolling window.
-  ++baseline_tick_counter_;
-  if (baseline_tick_counter_ % kBaselineInterval != 0) return;
-
-  // No runtime means no C# entities to snapshot.
-  if (!native_provider_) return;
-  auto snapshot_fn = native_provider_->get_owner_snapshot_fn();
-  if (!snapshot_fn) return;  // runtime predates baseline support
-
-  for (const auto& [entity_id, client_addr] : entity_client_index_) {
-    auto* client_ch = ResolveClientChannel(entity_id);
-    if (!client_ch) continue;
-
-    uint8_t* raw = nullptr;
-    int32_t len = 0;
-    snapshot_fn(entity_id, &raw, &len);
-    if (len <= 0 || raw == nullptr) continue;  // entity has no owner-visible props
-
-    baseapp::ReplicatedBaselineToClient msg;
-    msg.base_entity_id = entity_id;
-    msg.snapshot.assign(reinterpret_cast<const std::byte*>(raw),
-                        reinterpret_cast<const std::byte*>(raw) + len);
-    (void)client_ch->SendMessage(msg);
-
-    baseline_bytes_sent_total_ += static_cast<uint64_t>(len);
-    ++baseline_messages_sent_total_;
-  }
+  // Disabled. See PHASE_C_VALIDATION.md Known Limitations §3.
+  //
+  // BigWorld's architecture keeps every entity property on exactly one
+  // side of the base/cell split — see lib/entitydef/data_description.ipp's
+  // isCellData/isBaseData "data only lives on a base or a cell but not
+  // both". Atlas's generator currently emits _hp and similar cell-scope
+  // fields on BOTH the Base and Cell generated classes, but only the
+  // CellApp's OnTick pump ever writes them; the base-side field stays
+  // at its default (0). Calling SerializeForOwnerClient from the base
+  // proxy here serialises those defaults into ReplicatedBaselineToClient
+  // (0xF002), the client applies the baseline via ApplyOwnerSnapshot,
+  // and every subsequent reliable delta then reports
+  // OnHpChanged(old=0, new=N) instead of OnHpChanged(prev, new) — a
+  // silent, periodic corruption of the script-visible state.
+  //
+  // Short-term fix: no-op. All stress-test properties today are
+  // reliable=true, so they ride 0xF003 with transport-level retransmit;
+  // no baseline safety net is needed. C3-B's unreliable-delta recovery
+  // path will need baseline back — at that point the pump belongs on
+  // the CellApp (where the authoritative data lives), not here.
+  //
+  // Medium-term plan: generator splits fields by scope (BigWorld
+  // model), eliminating the stale base-side copy. Long-term plan:
+  // CellApp ships cellBackupData opaque bytes to the base for DB
+  // writes / offload / reviver.
+  (void)baseline_tick_counter_;  // kept for stats watchers
 }
 
 // ============================================================================
