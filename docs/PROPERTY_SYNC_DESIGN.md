@@ -131,17 +131,24 @@ Atlas 当前阶段不引入完整的 EventHistory 机制。
 
 **问题：** Unreliable 投递丢包后，若属性不再变化，客户端永久停留旧值。
 
-**方案：** 每 N 帧（建议 30 帧 ≈ 1 秒）发一次全量快照作为 baseline，客户端以最近收到的 baseline + 后续 delta 合成当前状态。
+**方案 (历史)：** 每 N 帧（建议 30 帧 ≈ 1 秒）发一次全量快照作为 baseline。**已暂时禁用，见 5.1a**。
 
-```
-帧 1:  delta [HP dirty] → unreliable
-帧 2:  delta [MP dirty] → unreliable
-...
-帧 30: baseline [全量快照] → reliable
-帧 31: delta [HP dirty] → unreliable
-```
+**替代方案：** delta 加 sequence number（已实施 D2'.2），客户端发现跳号时可检测丢包；目前所有属性均可设置 `reliable="true"`，走 0xF003 reliable channel 获得 transport 层重传兜底。
 
-替代方案：delta 加 sequence number，客户端发现跳号时 NACK 请求重传。但 baseline 方案更简单，对全量快照的序列化已有 `SerializeForOwnerClient()` / `SerializeForOtherClients()` 可复用。
+### 5.1a Baseline 路径迁移（2026-04 M2+L1+L2 对齐 BigWorld）
+
+**现状：**
+- **Generator 按 scope 分拆 field** (M2, commit `46c70b9`)：base partial 只 emit `DATA_BASE`（`base_and_client` / `base`）字段；cell partial 只 emit cell-scope（`own_client` / `all_clients` / `other_clients` / `cell_public_and_own` / `cell_public` / `cell_private`）字段。对齐 BigWorld `lib/entitydef/data_description.ipp:113-131` 的 "data only lives on a base or a cell but not both" 原则。
+- **BaseApp baseline pump 禁用** (hotfix `de42fc0`)：`EmitBaselineSnapshots` 改为 no-op。原逻辑从 base-side 的 C# 实例读 `SerializeForOwnerClient`，但 cell 属性（如 hp）只在 cell 端 OnTick 写入，base 端字段永远是默认 0 —— baseline 到达 client 时会把 `_hp` 覆写为 0，下一条 delta 触发错误的 `OnHpChanged(0, N)` 而不是 `OnHpChanged(prev, N)`。
+- **Cell → Base 定期 opaque 备份** (L1, commit `3fdbd2d`)：CellApp 每 `kBackupIntervalTicks = 50` (~1s) 对每个 has-base entity 调 `SerializeEntity` → 以 `BackupCellEntity` (msg 2018) 发给 BaseApp。Base 只存 bytes 不反序列化，保存在 `BaseEntity::cell_backup_data_` 里。对齐 BigWorld `bigworld/server/cellapp/real_entity.cpp:884-906` + `bigworld/server/baseapp/base.cpp:1182-1200`。
+- **DB 写入 / 检出合并 blob** (L2, commit `788330d`)：DB blob 格式升级为 `[magic=0xA7][version=1][base_len u32][base_bytes][cell_len u32][cell_bytes]`。写 DB 时 `CaptureEntitySnapshot` 把当前 base bytes + `cell_backup_data_` 拼在一起；检出时 `DecodeDbBlob` 拆回两段，base 给 `RestoreManagedEntity`，cell 存回 `cell_backup_data_`。下一次 `CreateCellEntity` 会把 cell 部分作为 `script_init_data` 喂给新 cell 的 `Deserialize`，使 cell-scope `persistent="true"` 属性跨 DB 生命周期保留。
+
+**未来：如需恢复 baseline pump（C3-B unreliable delta 恢复场景）**
+- 在 cellapp 侧实现（有权威数据的进程发 baseline），复用 `SerializeEntity` 路径 / `cell_backup_data_` 相同的 opaque bytes
+- 通过新消息或复用 `BackupCellEntity` + 一个 "ship to client" flag 让 BaseApp 在收到时同时转 0xF002 给 owner client
+- BaseApp 的 `EmitBaselineSnapshots` 保持 no-op
+
+**历史记录（便于审计）：** 设计曾讨论过 (a) 让 cell 每次 `PublishReplicationFrame` push owner_snapshot 到 base / (b) baseline pump 迁到 cellapp —— 最终走 (b) + BigWorld 风格 opaque bytes (L1 + L2)，优于 (a) 因为 base 完全不 peek cell 字段，消除歧义源。
 
 ### 5.2 带宽预算
 
