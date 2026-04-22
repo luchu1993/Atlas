@@ -243,6 +243,15 @@ class CellEntity : public IEntityMotion {
 
   [[nodiscard]] auto GetReplicationState() const -> const ReplicationState*;
 
+  // Test-only: mutable access to the ReplicationState. Used to
+  // synthesise pathological states (e.g. seq/history divergence) that
+  // PublishReplicationFrame's invariants wouldn't naturally produce.
+  // Asserts the state is already materialised; callers should have
+  // published at least one frame first.
+  [[nodiscard]] auto GetReplicationStateMutableForTest() -> ReplicationState& {
+    return *replication_state_;
+  }
+
   // ---- Destruction ----------------------------------------------------------
 
   [[nodiscard]] auto IsDestroyed() const -> bool { return destroyed_; }

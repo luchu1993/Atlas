@@ -3,6 +3,7 @@
 #include <algorithm>
 
 #include "cell_entity.h"
+#include "foundation/log.h"
 
 namespace atlas {
 
@@ -52,15 +53,28 @@ auto RealEntityData::BuildDelta() const -> cellapp::GhostDelta {
   cellapp::GhostDelta msg;
   msg.ghost_entity_id = owner_.Id();
   const auto* state = owner_.GetReplicationState();
-  if (state && !state->history.empty()) {
-    // The Phase 10 ReplicationFrame stream already has per-tick other_delta
-    // pre-filtered by OtherVisibleMask — we just forward the latest frame's
-    // payload to subscribers. Any Ghost behind this seq will fall back to
-    // a GhostSnapshotRefresh on the next pass (enforced by CellApp).
-    const auto& latest = state->history.back();
+  if (state == nullptr || state->history.empty()) return msg;
+
+  // Invariant: PublishReplicationFrame only appends to `history` when it
+  // also advances `latest_event_seq`, so the back frame's seq should
+  // always equal the current latest. If they diverge — say, history
+  // was cleared externally but latest_event_seq wasn't reset, or
+  // vice-versa — forwarding back()'s delta bytes with a mismatched
+  // seq would hand the Ghost a corrupted record. Prefer to ship an
+  // empty delta so the pump's gap > 1 check on the next tick promotes
+  // the refresh to a GhostSnapshotRefresh.
+  const auto& latest = state->history.back();
+  if (latest.event_seq != state->latest_event_seq) {
+    ATLAS_LOG_WARNING(
+        "RealEntityData::BuildDelta: history.back().event_seq={} mismatches "
+        "state->latest_event_seq={} for entity id={} — shipping empty delta; "
+        "next pump will upgrade to a snapshot refresh",
+        latest.event_seq, state->latest_event_seq, owner_.Id());
     msg.event_seq = state->latest_event_seq;
-    msg.other_delta = latest.other_delta;
+    return msg;
   }
+  msg.event_seq = state->latest_event_seq;
+  msg.other_delta = latest.other_delta;
   return msg;
 }
 

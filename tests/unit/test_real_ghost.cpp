@@ -377,6 +377,36 @@ TEST(RealEntityData, BuildDelta_EmptyWhenNoHistory) {
   EXPECT_TRUE(msg.other_delta.empty());
 }
 
+// Phase 11 C5: defend against a divergence between history.back().event_seq
+// and state->latest_event_seq. Invariant holds under normal publish flow,
+// but we'd rather produce an empty delta (and let the next pump upgrade
+// to snapshot-refresh via gap > 1) than forward a corrupted pair of
+// (wire seq, other_delta bytes) that don't describe the same frame.
+TEST(RealEntityData, BuildDelta_EmptyWhenHistoryBackSeqMismatchesLatest) {
+  Space space(1);
+  auto* e = space.AddEntity(
+      std::make_unique<CellEntity>(200, 1, space, math::Vector3{0, 0, 0}, math::Vector3{1, 0, 0}));
+
+  // Publish a real frame so history has content + state->latest_event_seq == 5.
+  auto real_delta = MakeBlob({0x01, 0xAB, 0xCD});
+  CellEntity::ReplicationFrame f;
+  f.event_seq = 5;
+  f.other_delta = real_delta;
+  e->PublishReplicationFrame(std::move(f), {}, {});
+
+  // Manually desynchronise — simulate a pathological state where the
+  // back frame's seq no longer matches latest. The Ghost pump must
+  // refuse to forward the stale delta under that seq.
+  auto& mutable_state = e->GetReplicationStateMutableForTest();
+  mutable_state.history.back().event_seq = 3;  // pretend back is older
+
+  auto msg = e->GetRealData()->BuildDelta();
+  EXPECT_EQ(msg.event_seq, 5u);
+  EXPECT_TRUE(msg.other_delta.empty())
+      << "mismatched seq must produce an empty delta so the pump escalates "
+         "to GhostSnapshotRefresh rather than lying about the frame";
+}
+
 TEST(RealEntityData, BuildSnapshotRefresh_ReflectsOwnerSnapshot) {
   Space space(1);
   auto* e = space.AddEntity(
