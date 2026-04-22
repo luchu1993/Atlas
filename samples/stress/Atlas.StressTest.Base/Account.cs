@@ -35,10 +35,21 @@ public partial class Account : ServerEntity
 
         // Transfer the client proxy from the Account to the new StressAvatar
         // so cell RPCs (Echo / ReportPos) can reach the avatar directly.
-        // BindClient on the BaseApp side triggers the cell to EnableWitness
-        // with CellAppConfig defaults (500 m radius, 5 m hysteresis). C5
-        // follows up with a SetAoIRadius(50) so stress peers move in and
-        // out of AoI against the ±50 m random-walk clamp.
+        // BindClient on the BaseApp side fires cellapp::EnableWitness so
+        // the avatar's witness comes up with CellAppConfig defaults
+        // (500 m radius, 5 m hysteresis).
         GiveClientTo(avatar.EntityId);
+
+        // Shrink the AoI to 50 m so the avatar's ±50 m random-walk
+        // clamp in ReportPos produces peers moving in and out of AoI
+        // over the course of a run — the property sync / enter / leave
+        // stress assertions all depend on that churn. 5 m hysteresis
+        // keeps the dual-band trigger from flapping at the boundary.
+        //
+        // This runs strictly AFTER GiveClientTo so BindClient has
+        // already dispatched EnableWitness on the cell; both messages
+        // share the same BaseApp→CellApp channel so EnableWitness is
+        // guaranteed to land before SetAoIRadius.
+        avatar.SetAoIRadius(50f, 5f);
     }
 }
