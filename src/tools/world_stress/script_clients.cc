@@ -44,6 +44,11 @@ auto ScriptClientHarness::Start() -> Result<void> {
       copts.args.emplace_back(std::to_string(opts_.drop_inbound_start_ms));
       copts.args.emplace_back(std::to_string(opts_.drop_inbound_duration_ms));
     }
+    if (opts_.drop_transport_duration_ms > 0) {
+      copts.args.emplace_back("--drop-transport-ms");
+      copts.args.emplace_back(std::to_string(opts_.drop_transport_start_ms));
+      copts.args.emplace_back(std::to_string(opts_.drop_transport_duration_ms));
+    }
 
     auto r = ChildProcess::Start(std::move(copts));
     if (!r.HasValue()) {

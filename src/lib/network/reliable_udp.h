@@ -50,6 +50,19 @@ class ReliableUdpChannel : public Channel {
   // Called by NetworkInterface when a datagram arrives from this peer
   void OnDatagramReceived(std::span<const std::byte> data);
 
+  // Transport-level drop injection window — for C3 validation. During
+  // the [start, start+duration) interval relative to `origin`, every
+  // incoming datagram is silently dropped BEFORE header parsing or ACK
+  // generation. The sender's reliable retransmit machinery will notice
+  // the missing ACKs and resend (PHASE_C_VALIDATION.md §4 used to
+  // complain that application-layer drops bypassed this path entirely).
+  // Pass duration_ms == 0 to disable.
+  void SetInboundDropWindow(TimePoint origin, uint32_t start_ms, uint32_t duration_ms) {
+    drop_origin_ = origin;
+    drop_start_ms_ = start_ms;
+    drop_duration_ms_ = duration_ms;
+  }
+
   // Configuration
   void SetNodelay(bool enable) { rtt_.SetNodelay(enable); }
   [[nodiscard]] auto Nodelay() const -> bool { return rtt_.Nodelay(); }
@@ -190,6 +203,13 @@ class ReliableUdpChannel : public Channel {
   TimerHandle delayed_ack_timer_;
   bool ack_pending_{false};
   static constexpr Duration kDelayedAckTimeout = std::chrono::milliseconds(25);
+
+  // Transport-level drop injection — disabled (duration==0) by default.
+  // Populated via SetInboundDropWindow for PHASE_C_VALIDATION.md §4
+  // scenarios that need to exercise the retransmit path end-to-end.
+  TimePoint drop_origin_{};
+  uint32_t drop_start_ms_{0};
+  uint32_t drop_duration_ms_{0};
 };
 
 }  // namespace atlas

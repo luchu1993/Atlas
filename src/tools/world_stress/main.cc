@@ -84,6 +84,10 @@ struct Options {
   // harness can simulate reliable / baseline recovery end-to-end. 0/0 = off.
   int client_drop_inbound_start_ms{0};
   int client_drop_inbound_duration_ms{0};
+  // PHASE_C_VALIDATION.md §4: transport-layer drop, forwarded as
+  // --drop-transport-ms to each child.
+  int client_drop_transport_start_ms{0};
+  int client_drop_transport_duration_ms{0};
 };
 
 enum class SessionState : uint8_t {
@@ -686,8 +690,12 @@ void PrintUsage() {
       << "  --script-verify            Non-zero exit if any script child didn't observe OnInit\n"
       << "  --client-drop-inbound-ms <start> <duration>\n"
       << "                             Forward atlas_client --drop-inbound-ms to every script\n"
-      << "                             child: drop state-channel messages in the time window\n"
-      << "                             for Phase C3 reliable-retransmit / baseline tests\n"
+      << "                             child: application-level drop of state-channel messages\n"
+      << "                             (RUDP has already ACKed; no retransmit — tests gap detect)\n"
+      << "  --client-drop-transport-ms <start> <duration>\n"
+      << "                             Forward atlas_client --drop-transport-ms: RUDP-layer drop\n"
+      << "                             (happens before ACK generation; reliable retransmit kicks\n"
+      << "                             in, reliable traffic recovers — tests transport repair)\n"
       << "\n"
       << "Example:\n"
       << "  world_stress --login 127.0.0.1:20013 --password-hash <sha256> --clients 500 "
@@ -924,6 +932,16 @@ auto ParseOptions(int argc, char* argv[]) -> std::optional<Options> {
       if (!parsed_start || !parsed_dur) return std::nullopt;
       opts.client_drop_inbound_start_ms = *parsed_start;
       opts.client_drop_inbound_duration_ms = *parsed_dur;
+    } else if (kArg == "--client-drop-transport-ms") {
+      auto start = require_value(kArg);
+      if (!start) return std::nullopt;
+      auto dur = require_value(kArg);
+      if (!dur) return std::nullopt;
+      auto parsed_start = ParseNumeric<int>(*start);
+      auto parsed_dur = ParseNumeric<int>(*dur);
+      if (!parsed_start || !parsed_dur) return std::nullopt;
+      opts.client_drop_transport_start_ms = *parsed_start;
+      opts.client_drop_transport_duration_ms = *parsed_dur;
     } else if (kArg == "--help" || kArg == "-h") {
       PrintUsage();
       std::exit(0);
@@ -1115,6 +1133,8 @@ int main(int argc, char* argv[]) {
   sco.verify = kOpts->script_verify;
   sco.drop_inbound_start_ms = kOpts->client_drop_inbound_start_ms;
   sco.drop_inbound_duration_ms = kOpts->client_drop_inbound_duration_ms;
+  sco.drop_transport_start_ms = kOpts->client_drop_transport_start_ms;
+  sco.drop_transport_duration_ms = kOpts->client_drop_transport_duration_ms;
   world_stress::ScriptClientHarness script_harness(std::move(sco));
   if (auto r = script_harness.Start(); !r.HasValue()) {
     std::cerr << "[script-clients] " << r.Error().Message() << "\n";

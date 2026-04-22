@@ -38,8 +38,19 @@ class ClientApp {
     // message (0xF001 / 0xF002 / 0xF003) whose arrival time, measured from
     // ClientApp::MainLoop entry, lies within [drop_inbound_start_ms,
     // drop_inbound_start_ms + drop_inbound_duration_ms). 0/0 = off.
+    // Application-layer filter — RUDP has already ACKed the packet, so
+    // reliable retransmit will NOT kick in; useful for validating the
+    // gap-detection path without also involving the transport.
     int drop_inbound_start_ms{0};
     int drop_inbound_duration_ms{0};
+
+    // PHASE_C_VALIDATION.md §4: transport-level drop, installed on the
+    // ReliableUdpChannel before ACK generation. Reliable packets lost
+    // in the window get retransmitted after the RTO, so a long-enough
+    // run converges back to full event counts with zero gaps even
+    // though many datagrams were silently dropped. 0/0 = off.
+    int drop_transport_start_ms{0};
+    int drop_transport_duration_ms{0};
   };
 
   static auto Run(int argc, char* argv[]) -> int;

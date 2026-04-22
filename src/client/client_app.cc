@@ -76,6 +76,21 @@ auto ClientApp::Init(int argc, char* argv[]) -> bool {
                         start_sv, duration_sv);
         return false;
       }
+    } else if (arg == "--drop-transport-ms") {
+      // Like --drop-inbound-ms, but installed at the RUDP layer so
+      // reliable packets lost in the window are eventually retransmitted.
+      // Use this flag to validate transport-level recovery (§4); use
+      // --drop-inbound-ms to validate application-level gap detection.
+      auto start_sv = next();
+      auto duration_sv = next();
+      try {
+        config_.drop_transport_start_ms = std::stoi(std::string(start_sv));
+        config_.drop_transport_duration_ms = std::stoi(std::string(duration_sv));
+      } catch (...) {
+        ATLAS_LOG_ERROR("Client: --drop-transport-ms requires two integer args (got '{}', '{}')",
+                        start_sv, duration_sv);
+        return false;
+      }
     }
   }
 
@@ -398,6 +413,23 @@ auto ClientApp::MainLoop() -> int {
         "[{} ms, {} ms) after MainLoop entry will be dropped (test mode)",
         config_.drop_inbound_start_ms,
         config_.drop_inbound_start_ms + config_.drop_inbound_duration_ms);
+  }
+  if (config_.drop_transport_duration_ms > 0) {
+    ATLAS_LOG_WARNING(
+        "Client: --drop-transport-ms active: every inbound datagram in "
+        "[{} ms, {} ms) after MainLoop entry is dropped at the RUDP layer "
+        "(reliable retransmit should recover lost reliable traffic)",
+        config_.drop_transport_start_ms,
+        config_.drop_transport_start_ms + config_.drop_transport_duration_ms);
+    if (auto* rudp = dynamic_cast<ReliableUdpChannel*>(baseapp_channel_)) {
+      rudp->SetInboundDropWindow(loop_start_,
+                                 static_cast<uint32_t>(config_.drop_transport_start_ms),
+                                 static_cast<uint32_t>(config_.drop_transport_duration_ms));
+    } else {
+      ATLAS_LOG_ERROR(
+          "Client: --drop-transport-ms set but baseapp_channel_ is not a "
+          "ReliableUdpChannel — drop window not installed");
+    }
   }
 
   // BaseApp emits two fixed-length BaseApp → Client messages that need typed

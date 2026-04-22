@@ -101,8 +101,12 @@ def parse_args() -> argparse.Namespace:
                         help="Fail the orchestrator run if any script child didn't observe OnInit")
     parser.add_argument("--client-drop-inbound-ms", nargs=2, type=int, metavar=("START", "DURATION"),
                         default=None,
-                        help="Forward atlas_client --drop-inbound-ms to every script child "
-                             "(Phase C3 recovery tests)")
+                        help="Forward atlas_client --drop-inbound-ms (app-level drop of "
+                             "state-channel messages; PHASE_C_VALIDATION.md C3-A)")
+    parser.add_argument("--client-drop-transport-ms", nargs=2, type=int,
+                        metavar=("START", "DURATION"), default=None,
+                        help="Forward atlas_client --drop-transport-ms (RUDP-layer drop; "
+                             "reliable retransmit recovers; PHASE_C_VALIDATION.md §4)")
     return parser.parse_args()
 
 
@@ -486,6 +490,11 @@ def build_stress_args(args: argparse.Namespace, worker: dict[str, object]) -> li
             start_ms, duration_ms = args.client_drop_inbound_ms
             stress_args.extend([
                 "--client-drop-inbound-ms", str(start_ms), str(duration_ms),
+            ])
+        if args.client_drop_transport_ms:
+            start_ms, duration_ms = args.client_drop_transport_ms
+            stress_args.extend([
+                "--client-drop-transport-ms", str(start_ms), str(duration_ms),
             ])
     return stress_args
 

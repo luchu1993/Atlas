@@ -208,6 +208,20 @@ void ReliableUdpChannel::OnDatagramReceived(std::span<const std::byte> data) {
     return;
   }
 
+  // Transport-level drop injection (PHASE_C_VALIDATION.md §4). The drop
+  // happens BEFORE header parsing, ACK generation, or receive-window
+  // tracking — exactly where a transport-layer packet loss would. The
+  // sender's unacked queue will see no ACK and retransmit, so reliable
+  // traffic recovers automatically. Disabled when drop_duration_ms_ is 0.
+  if (drop_duration_ms_ > 0) {
+    const auto elapsed_ms =
+        std::chrono::duration_cast<std::chrono::milliseconds>(Clock::now() - drop_origin_).count();
+    if (elapsed_ms >= static_cast<int64_t>(drop_start_ms_) &&
+        elapsed_ms < static_cast<int64_t>(drop_start_ms_ + drop_duration_ms_)) {
+      return;
+    }
+  }
+
   BinaryReader reader(data);
 
   auto flags_result = reader.Read<uint8_t>();

@@ -61,11 +61,16 @@ Summary
 
 ## C3：失联恢复
 
-C3 在 C2 基础上加一段丢包窗口 —— 借 `atlas_client --drop-inbound-ms <start> <duration>` 让一个（或全部）脚本子进程在指定时间段静默丢弃入站的 state-channel 消息（`0xF001` / `0xF002` / `0xF003`）。窗口外流量正常。
+C3 在 C2 基础上加一段丢包窗口，现在有**两种注入点**：
 
-**⚠ 关键限制（请先读）**：drop 过滤器跑在 **RUDP 已经 ACK 之后的应用层**。对发送端来说消息"已送达"，传输层不会触发重传。因此当前的 `--drop-inbound-ms` 仅**模拟"应用层漏接"**，**并不能**完整验证"reliable 重传补齐"路径 —— 做到传输层级的丢包注入需要改动 RUDP（留作后续工作）。
+| Flag | 注入层 | 时机 | 适用场景 |
+|---|---|---|---|
+| `--drop-inbound-ms <s> <d>` | 应用层（`client_app.cc::MainLoop` 默认 handler） | RUDP 已 ACK 之后 | 验证 app 层的 gap 检测 / baseline 静默恢复路径（C3-A / C3-B） |
+| `--drop-transport-ms <s> <d>` | 传输层（`ReliableUdpChannel::OnDatagramReceived`） | ACK 生成之前 | 验证 RUDP reliable 重传路径（发送方超时 → 重传 → 全部事件补齐） |
 
-这意味着 C3-A 与 C3-B 实际测试的都是同一个机制：**丢失的属性 delta 不再通过 `OnHpChanged` 触达脚本，窗口结束后 `0xF002` baseline 把 `_hp` 字段静默同步到服务端当前值**。B2 scheme-2 明确规定 baseline 不触发 `OnXxxChanged`（对齐 BigWorld `shouldUseCallback=false`），所以 baseline 恢复对脚本是"数据到位、通知缺席"。
+前者下 reliable 不会被重传（transport 不知道包丢了），所以 `OnHpChanged` 计数会少掉 drop window 里的数量；**后者下 reliable 传输会自动重试**，长期运行 `seqgaps` 归零。
+
+`--drop-inbound-ms` 与 `--drop-transport-ms` 可以组合使用 —— 前者影响应用层决定是否丢弃已 ACK 的消息，后者影响传输层是否丢弃整个 datagram。实测时通常只开一个。
 
 ### C3-A：Reliable delta 路径 + baseline 静默恢复
 
@@ -193,7 +198,7 @@ protected override void OnTick(float dt) {
    **Reviver / Offload**：offload 路径（Phase 11 `BuildOffloadMessage` → `OnOffloadEntity`）原本就使用 `SerializeEntity` / `RestoreEntity`，M2 后那些字节已经是 cell-scope-only，没有额外改动需要。Reviver 是 placeholder (`src/server/reviver/CMakeLists.txt` 只有注释)，等实现时直接用 `cell_backup_data_` 就行。
 
    **L4 Baseline on CellApp**（commit `f2dec1e`）**已实施**：CellApp 侧新增 `TickClientBaselinePump`，每 `kClientBaselineIntervalTicks = 120` tick 对每个 has-witness entity 调 `GetOwnerSnapshot` 拿 cell-side `SerializeForOwnerClient` 输出，通过新消息 `ReplicatedBaselineFromCell` (msg 2019, reliable) 发给 BaseApp。BaseApp 的 `OnReplicatedBaselineFromCell` 只做中继：`ResolveClientChannel` → 发 `ReplicatedBaselineToClient` (0xF002) 给 owner client。payload 是 cell-side owner-scope 快照，wire 与 pre-M2 baseapp pump 输出 byte-identical，客户端解码零改动。C3-B 现已可验证（见 §C3-B）。
-4. **Drop 过滤器在 RUDP 之上**（见 C3 开头警告）：当前 `--drop-inbound-ms` 不能验证传输层 reliable 重传；C3-A 和 C3-B 实际测试的都是"应用层漏接 + baseline 静默恢复"。要真正验证 RUDP 重传需要在 `src/lib/network/reliable_udp.cc` 加丢包注入点（未来工作）。
+4. ~~Drop 过滤器在 RUDP 之上~~ **已新增 `--drop-transport-ms`**：`atlas_client --drop-transport-ms <start_ms> <duration_ms>` 在 `ReliableUdpChannel::OnDatagramReceived` 入口按时间窗口丢弃整包（在头部解析 + ACK 生成之前），与 application-layer `--drop-inbound-ms` 对照。`--drop-transport-ms` 下 reliable 包的丢失会触发发送方的 retransmit，reliable 流能完整恢复；`--drop-inbound-ms` 则只模拟"应用层漏接"（RUDP 已 ACK，不触发重传）。world_stress 加配套 `--client-drop-transport-ms`；python runner 加同名 flag。已验证 2026-04-22：transport drop 5-9s / 20s → `hp=39 seqgaps=0`（reliable 路径完整重传，对比 app drop 同场景 `hp=31 seqgaps=8`）。
 5. **Baseline 不触发 `OnXxxChanged`**：B2 scheme-2 明确选择 baseline 静默路径。脚本看不到被 baseline 恢复的字段变化，只能轮询字段值或依赖 `seqgaps` 推断"被吞了多少"。
 6. ~~Tap 不带时间戳~~ **已修复**：`Atlas.Client.ClientLog` 给每条脚本日志前置 `[t=S.sss]` 单调秒戳（起点为首次 ClientLog 访问；进程启动后几 ms 内即激活）。`client_event_tap.cc::EventBegins` 新增前缀剥离，计数语义向后兼容。后续收敛分析可用 `grep '^\[t=\([0-9.]*\)\]'` 把时间戳抽回来对 drop window 边界做自动断言。
 7. ~~C3-B 需手动 `.def` 改动 + rebuild~~ **已缓解**：`tools/phase_c_validation/run_c3b.py` 把 patch → rebuild → smoke → restore 整合成一条命令，用 `try/finally` 保证 def 退出时一定回到 `reliable="true"`（除非显式传 `--skip-restore`）。运行时切换的 generator-level 开关仍未做，但"一键完整 round-trip"已经消除手动漏步回退的风险。
