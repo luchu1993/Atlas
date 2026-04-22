@@ -84,7 +84,7 @@ struct Options {
   // harness can simulate reliable / baseline recovery end-to-end. 0/0 = off.
   int client_drop_inbound_start_ms{0};
   int client_drop_inbound_duration_ms{0};
-  // PHASE_C_VALIDATION.md §4: transport-layer drop, forwarded as
+  // script_client_smoke.md 场景 3: transport-layer drop, forwarded as
   // --drop-transport-ms to each child.
   int client_drop_transport_start_ms{0};
   int client_drop_transport_duration_ms{0};

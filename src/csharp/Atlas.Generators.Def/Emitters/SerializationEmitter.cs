@@ -49,13 +49,12 @@ internal static class SerializationEmitter
         // never deserialises cell fields and vice versa. Client projects
         // whatever it can observe regardless of which side authored it.
         //
-        // NOTE (transitional, until L1/L2): because Cell.Serialize no
-        // longer piggy-backs onto the DB write path, cell properties
-        // marked persistent="true" are effectively unpersisted between
-        // M2 and L1. No current stress-test property relies on that
-        // (Avatar.gold/secret are base-side; StressAvatar.hp isn't
-        // persistent); samples/base/Avatar's cell-persistent hp is
-        // documented as a known gap in PHASE_C_VALIDATION.md §3.
+        // Cross-side persistence: once L2's cell→base BackupCellEntity
+        // path landed, Cell.Serialize no longer needs to piggy-back on
+        // the DB write path — BaseApp assembles base bytes +
+        // cell_backup_data_ into the persistent blob (PROPERTY_SYNC_DESIGN.md
+        // §5.1a). Cell-scope persistent="true" properties survive the
+        // DB round-trip even though Cell.Serialize emits cell-only bytes.
         var sideProps = GetPropertiesForContext(def.Properties, ctx)
             .Where(p => !p.IsReservedPosition).ToList();
 

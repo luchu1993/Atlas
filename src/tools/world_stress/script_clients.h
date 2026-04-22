@@ -44,10 +44,11 @@ struct ScriptClientOptions {
   // 0/0 = off.
   int drop_inbound_start_ms{0};
   int drop_inbound_duration_ms{0};
-  // PHASE_C_VALIDATION.md §4: transport-layer drop forwarded as
+  // script_client_smoke.md 场景 3: transport-layer drop forwarded as
   // `--drop-transport-ms start duration`. Use this to validate RUDP
   // reliable retransmit — dropped reliable traffic should recover; use
-  // drop_inbound_* to validate application-level gap detection.
+  // drop_inbound_* (场景 2 / 4) to validate application-level gap
+  // detection + baseline fallback.
   int drop_transport_start_ms{0};
   int drop_transport_duration_ms{0};
 };

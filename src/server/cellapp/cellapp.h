@@ -253,11 +253,11 @@ class CellApp : public EntityApp {
   uint32_t backup_tick_counter_{0};
 
   // Client baseline pump cadence. 120 ticks — matches the pre-M2
-  // BaseApp::kBaselineInterval so C3-B's drop-window recovery
-  // expectation ("baseline arrives within ≤6 s") carries over
-  // unchanged. Baseline is a bandwidth-insensitive safety net for
-  // reliable="false" attributes; tighter than backup is
-  // unnecessary.
+  // BaseApp::kBaselineInterval so the script-client smoke 场景 4
+  // ("unreliable 属性 + baseline 兜底") recovery expectation
+  // ("baseline arrives within ≤6 s") carries over unchanged.
+  // Baseline is a bandwidth-insensitive safety net for
+  // reliable="false" attributes; tighter than backup is unnecessary.
   static constexpr uint32_t kClientBaselineIntervalTicks = 120;
   uint32_t client_baseline_tick_counter_{0};
 

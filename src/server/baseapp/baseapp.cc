@@ -952,31 +952,19 @@ void BaseApp::FlushClientDeltas() {
 }
 
 void BaseApp::EmitBaselineSnapshots() {
-  // Disabled. See PHASE_C_VALIDATION.md Known Limitations §3.
+  // Intentional no-op. Post-M2 the baseline pump lives on the CellApp
+  // (see CellApp::TickClientBaselinePump + ReplicatedBaselineFromCell
+  // msg 2019), which is the side with authoritative cell-scope data.
+  // BaseApp is a relay-only participant: OnReplicatedBaselineFromCell
+  // forwards the opaque blob to the owning client as
+  // ReplicatedBaselineToClient (0xF002). See
+  // PROPERTY_SYNC_DESIGN.md §5.1a for the full baseline-path migration
+  // rationale (base/cell field ownership split and why a base-sourced
+  // baseline would serialize stale zeros).
   //
-  // BigWorld's architecture keeps every entity property on exactly one
-  // side of the base/cell split — see lib/entitydef/data_description.ipp's
-  // isCellData/isBaseData "data only lives on a base or a cell but not
-  // both". Atlas's generator currently emits _hp and similar cell-scope
-  // fields on BOTH the Base and Cell generated classes, but only the
-  // CellApp's OnTick pump ever writes them; the base-side field stays
-  // at its default (0). Calling SerializeForOwnerClient from the base
-  // proxy here serialises those defaults into ReplicatedBaselineToClient
-  // (0xF002), the client applies the baseline via ApplyOwnerSnapshot,
-  // and every subsequent reliable delta then reports
-  // OnHpChanged(old=0, new=N) instead of OnHpChanged(prev, new) — a
-  // silent, periodic corruption of the script-visible state.
-  //
-  // Short-term fix: no-op. All stress-test properties today are
-  // reliable=true, so they ride 0xF003 with transport-level retransmit;
-  // no baseline safety net is needed. C3-B's unreliable-delta recovery
-  // path will need baseline back — at that point the pump belongs on
-  // the CellApp (where the authoritative data lives), not here.
-  //
-  // Medium-term plan: generator splits fields by scope (BigWorld
-  // model), eliminating the stale base-side copy. Long-term plan:
-  // CellApp ships cellBackupData opaque bytes to the base for DB
-  // writes / offload / reviver.
+  // This method is kept so callers referencing the stats watcher don't
+  // lose the callback symbol, and so the "BaseApp doesn't emit
+  // baselines" decision is legible in the code, not silently implicit.
   (void)baseline_tick_counter_;  // kept for stats watchers
 }
 

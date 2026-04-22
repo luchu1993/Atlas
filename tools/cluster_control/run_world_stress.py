@@ -84,10 +84,10 @@ def parse_args() -> argparse.Namespace:
     # Phase C2/C3 — real atlas_client.exe subprocesses loaded with the
     # ClientSample assembly. world_stress orchestrates them alongside its
     # raw-protocol virtual clients and parses per-child stdout events.
-    # See docs/PHASE_C_VALIDATION.md for the scenarios these flags enable.
+    # See docs/script_client_smoke.md for the scenarios these flags enable.
     parser.add_argument("--script-clients", type=int, default=0,
                         help="Spawn N real atlas_client.exe subprocesses "
-                             "alongside virtual clients (Phase C2)")
+                             "alongside virtual clients (script_client_smoke.md)")
     parser.add_argument("--client-exe", default=None,
                         help="Path to atlas_client.exe. Defaults to "
                              "<build-dir>/src/client/<config>/atlas_client.exe")
@@ -102,11 +102,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--client-drop-inbound-ms", nargs=2, type=int, metavar=("START", "DURATION"),
                         default=None,
                         help="Forward atlas_client --drop-inbound-ms (app-level drop of "
-                             "state-channel messages; PHASE_C_VALIDATION.md C3-A)")
+                             "state-channel messages; script_client_smoke.md 场景 2)")
     parser.add_argument("--client-drop-transport-ms", nargs=2, type=int,
                         metavar=("START", "DURATION"), default=None,
                         help="Forward atlas_client --drop-transport-ms (RUDP-layer drop; "
-                             "reliable retransmit recovers; PHASE_C_VALIDATION.md §4)")
+                             "reliable retransmit recovers; script_client_smoke.md 场景 3)")
     return parser.parse_args()
 
 

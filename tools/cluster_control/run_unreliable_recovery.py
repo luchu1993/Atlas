@@ -19,9 +19,10 @@ is what WON'T happen when packets are dropped:
       — matches BigWorld `simple_client_entity.cpp`'s
       `shouldUseCallback=false` path
 
-Corresponds to PHASE_C_VALIDATION.md §C3-B. The one-button automation
-here is the mitigation for §7 ("需手动 .def 改动 + rebuild") — every
-step the human had to remember is now a numbered subprocess call.
+Corresponds to script_client_smoke.md 场景 4 ("应用层丢包 + unreliable
+属性 + baseline 兜底"). The one-button automation here removes the
+"forgot to change the def back" failure mode — every step the human
+had to remember is now a numbered subprocess call.
 
     1. Patch StressAvatar.def: reliable="true" -> reliable="false"
     2. cmake + dotnet rebuild of the affected targets

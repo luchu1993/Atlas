@@ -208,7 +208,7 @@ void ReliableUdpChannel::OnDatagramReceived(std::span<const std::byte> data) {
     return;
   }
 
-  // Transport-level drop injection (PHASE_C_VALIDATION.md §4). The drop
+  // Transport-level drop injection (script_client_smoke.md 场景 3). The drop
   // happens BEFORE header parsing, ACK generation, or receive-window
   // tracking — exactly where a transport-layer packet loss would. The
   // sender's unacked queue will see no ACK and retransmit, so reliable
