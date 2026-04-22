@@ -214,7 +214,14 @@ protected override void OnTick(float dt) {
 
    **L4 Baseline on CellApp**（commit `f2dec1e`）**已实施**：CellApp 侧新增 `TickClientBaselinePump`，每 `kClientBaselineIntervalTicks = 120` tick 对每个 has-witness entity 调 `GetOwnerSnapshot` 拿 cell-side `SerializeForOwnerClient` 输出，通过新消息 `ReplicatedBaselineFromCell` (msg 2019, reliable) 发给 BaseApp。BaseApp 的 `OnReplicatedBaselineFromCell` 只做中继：`ResolveClientChannel` → 发 `ReplicatedBaselineToClient` (0xF002) 给 owner client。payload 是 cell-side owner-scope 快照，wire 与 pre-M2 baseapp pump 输出 byte-identical，客户端解码零改动。C3-B 现已可验证（见 §C3-B）。
 4. ~~Drop 过滤器在 RUDP 之上~~ **已新增 `--drop-transport-ms`**：`atlas_client --drop-transport-ms <start_ms> <duration_ms>` 在 `ReliableUdpChannel::OnDatagramReceived` 入口按时间窗口丢弃整包（在头部解析 + ACK 生成之前），与 application-layer `--drop-inbound-ms` 对照。`--drop-transport-ms` 下 reliable 包的丢失会触发发送方的 retransmit，reliable 流能完整恢复；`--drop-inbound-ms` 则只模拟"应用层漏接"（RUDP 已 ACK，不触发重传）。world_stress 加配套 `--client-drop-transport-ms`；python runner 加同名 flag。已验证 2026-04-22：transport drop 5-9s / 20s → `hp=39 seqgaps=0`（reliable 路径完整重传，对比 app drop 同场景 `hp=31 seqgaps=8`）。
-5. **Baseline 不触发 `OnXxxChanged`**：B2 scheme-2 明确选择 baseline 静默路径。脚本看不到被 baseline 恢复的字段变化，只能轮询字段值或依赖 `seqgaps` 推断"被吞了多少"。
+5. **Baseline 不触发 `OnXxxChanged`**（BigWorld 对齐，不是 Atlas 限制）：B2 scheme-2 直接对齐 BigWorld 的 `isInitialising → shouldUseCallback=false` 契约 —— `client/entity.cpp:1124-1133` 把每次 property reset 传递的 `isInitialising` 翻成 `!shouldUseCallback` 交给 `simple_client_entity.cpp:135-160::propertyEvent`，后者在 `!shouldUseCallback` 下**直接写字段跳过 `set_<propname>` Python 回调**。
+
+   | Atlas | BigWorld | 触发 On*Changed？ |
+   |---|---|---|
+   | `ApplyOwnerSnapshot` / `ApplyOtherSnapshot`（0xF002 baseline / `kEntityEnter` 初始快照）| `onProperty(isInitialising=true)` | ✗ |
+   | `ApplyReplicatedDelta`（0xF001 / 0xF003 运行期 delta） | `onProperty(isInitialising=false)` | ✓ |
+
+   所以脚本层"baseline 静默恢复、只有 delta 触发回调"是设计，不是局限。脚本如果必须观察到 baseline 带来的字段变化，对齐 BigWorld 的做法是**自己读字段值**（周期轮询 `_hp` 等）或**通过 `seqgaps` 推断被吞了多少 event**。
 6. ~~Tap 不带时间戳~~ **已修复**：`Atlas.Client.ClientLog` 给每条脚本日志前置 `[t=S.sss]` 单调秒戳（起点为首次 ClientLog 访问；进程启动后几 ms 内即激活）。`client_event_tap.cc::EventBegins` 新增前缀剥离，计数语义向后兼容。后续收敛分析可用 `grep '^\[t=\([0-9.]*\)\]'` 把时间戳抽回来对 drop window 边界做自动断言。
 7. ~~C3-B 需手动 `.def` 改动 + rebuild~~ **已缓解**：`tools/phase_c_validation/run_c3b.py` 把 patch → rebuild → smoke → restore 整合成一条命令，用 `try/finally` 保证 def 退出时一定回到 `reliable="true"`（除非显式传 `--skip-restore`）。运行时切换的 generator-level 开关仍未做，但"一键完整 round-trip"已经消除手动漏步回退的风险。
 8. **子进程日志冗余**：脚本走 `Console.WriteLine`；大流量场景下 stdout 管道可能成为瓶颈。压测规模 > 几十 client 时建议关闭 `--script-clients`，用裸协议 path。
