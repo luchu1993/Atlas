@@ -44,14 +44,17 @@ public static class EntityFactory
     /// <summary>
     /// Creates a new base entity of the named type on the local BaseApp
     /// and returns it. <paramref name="spaceId"/> is forwarded to the cell
-    /// side for has_cell types; <paramref name="aoiRadius"/> &gt; 0 asks
-    /// the cell to enable a witness with that radius (ignored for base-only).
+    /// side for has_cell types (ignored for base-only). Witness attachment
+    /// happens later via the client-bind path; call
+    /// <see cref="ServerEntity.SetAoIRadius"/> after
+    /// <see cref="ServerEntity.GiveClientTo"/> to override the default
+    /// AoI radius.
     /// </summary>
-    public static ServerEntity? CreateBase(string typeName, uint spaceId = 1, float aoiRadius = 0f)
+    public static ServerEntity? CreateBase(string typeName, uint spaceId = 1)
     {
         var typeId = GetTypeId(typeName);
         if (typeId == 0) return null;
-        return CreateBaseByTypeId(typeId, spaceId, aoiRadius);
+        return CreateBaseByTypeId(typeId, spaceId);
     }
 
     /// <summary>
@@ -59,13 +62,11 @@ public static class EntityFactory
     /// The C# instance is materialised synchronously via the RestoreEntity
     /// callback from within the native call, so it is available in
     /// EntityManager before this method returns. <paramref name="spaceId"/>
-    /// is forwarded to the cell side for has_cell types;
-    /// <paramref name="aoiRadius"/> &gt; 0 enables a witness with that radius.
+    /// is forwarded to the cell side for has_cell types.
     /// </summary>
-    public static ServerEntity? CreateBaseByTypeId(ushort typeId, uint spaceId = 1,
-                                                    float aoiRadius = 0f)
+    public static ServerEntity? CreateBaseByTypeId(ushort typeId, uint spaceId = 1)
     {
-        var entityId = NativeApi.CreateBaseEntity(typeId, spaceId, aoiRadius);
+        var entityId = NativeApi.CreateBaseEntity(typeId, spaceId);
         if (entityId == 0) return null;
         return EntityManager.Instance.Get(entityId);
     }

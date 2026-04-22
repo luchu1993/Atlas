@@ -101,12 +101,24 @@
     /* BaseApp: allocates an EntityID, instantiates the C# script instance  */                    \
     /* via RestoreEntity (empty blob = defaults), and — if the type has a   */                    \
     /* cell side — sends CreateCellEntity to a CellApp with the given       */                    \
-    /* space_id and aoi_radius (0 = no witness). Returns the new entity_id, */                    \
-    /* or 0 on failure (unknown type, EntityID exhausted, …). space_id /    */                    \
-    /* aoi_radius are ignored for base-only types.                          */                    \
+    /* space_id. Returns the new entity_id, or 0 on failure (unknown type,  */                    \
+    /* EntityID exhausted, …). space_id is ignored for base-only types.    */                    \
+    /* Witness attachment happens later via the client-bind path; scripts   */                    \
+    /* that want a non-default AoI radius call SetAoIRadius after           */                    \
+    /* GiveClientTo.                                                         */                    \
     X(uint32_t, CreateBaseEntity,                                                                  \
-        (uint16_t type_id, uint32_t space_id, float aoi_radius),                                   \
-        return atlas::GetNativeApiProvider().CreateBaseEntity(type_id, space_id, aoi_radius))      \
+        (uint16_t type_id, uint32_t space_id),                                                     \
+        return atlas::GetNativeApiProvider().CreateBaseEntity(type_id, space_id))                  \
+                                                                                                   \
+    /* ---- Runtime AoI radius adjustment (BaseApp) ------------------------ */                   \
+    /* Forwards cellapp::SetAoIRadius to the cell hosting this entity's     */                    \
+    /* counterpart. Radius is clamped on the cell side to [0.1, max];       */                    \
+    /* hysteresis is the leave-band width. Logs a warning (no-op) if the    */                    \
+    /* entity has no cell counterpart. Mirrors BigWorld's                   */                    \
+    /* entity.setAoIRadius() from witness.cpp:2109.                         */                    \
+    X(void, SetAoIRadius,                                                                          \
+        (uint32_t entity_id, float radius, float hysteresis),                                      \
+        atlas::GetNativeApiProvider().SetAoIRadius(entity_id, radius, hysteresis))                 \
                                                                                                    \
     /* ---- C# → C++ callback table ---------------------------------------- */                   \
     X(void, SetNativeCallbacks,                                                                    \

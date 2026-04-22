@@ -121,7 +121,7 @@ internal static unsafe partial class NativeApi
     public static partial void GiveClientTo(uint srcEntityId, uint destEntityId);
 
     [LibraryImport(LibName, EntryPoint = "AtlasCreateBaseEntity")]
-    private static partial uint CreateBaseEntityNative(ushort typeId, uint spaceId, float aoiRadius);
+    private static partial uint CreateBaseEntityNative(ushort typeId, uint spaceId);
 
     /// <summary>
     /// Script-initiated entity creation on the caller's BaseApp. Returns
@@ -130,14 +130,33 @@ internal static unsafe partial class NativeApi
     /// native side invokes RestoreEntity synchronously before returning.
     /// For has_cell types the call also fires CreateCellEntity to a CellApp
     /// targeting <paramref name="spaceId"/> (CellApp auto-creates the Space
-    /// if missing) and enables a witness with <paramref name="aoiRadius"/>
-    /// (0 = no witness). space_id / aoi_radius are ignored for base-only
-    /// types.
+    /// if missing). space_id is ignored for base-only types.
+    /// <para/>
+    /// Witness attachment happens via the client-bind path
+    /// (<see cref="ServerEntity.GiveClientTo"/> → BaseApp BindClient → cell
+    /// EnableWitness). Scripts wanting a non-default AoI radius call
+    /// <see cref="ServerEntity.SetAoIRadius"/> after GiveClientTo.
     /// </summary>
-    public static uint CreateBaseEntity(ushort typeId, uint spaceId = 1, float aoiRadius = 0f)
+    public static uint CreateBaseEntity(ushort typeId, uint spaceId = 1)
     {
         ThreadGuard.EnsureMainThread();
-        return CreateBaseEntityNative(typeId, spaceId, aoiRadius);
+        return CreateBaseEntityNative(typeId, spaceId);
+    }
+
+    [LibraryImport(LibName, EntryPoint = "AtlasSetAoIRadius")]
+    private static partial void SetAoIRadiusNative(uint entityId, float radius, float hysteresis);
+
+    /// <summary>
+    /// Forward a SetAoIRadius to the cell hosting this entity's
+    /// counterpart. Radius is clamped on the cell side to [0.1, max];
+    /// hysteresis widens the leave boundary so peers inside
+    /// (radius, radius+hysteresis) stay in AoI. Mirrors BigWorld's
+    /// entity.setAoIRadius().
+    /// </summary>
+    public static void SetAoIRadius(uint entityId, float radius, float hysteresis)
+    {
+        ThreadGuard.EnsureMainThread();
+        SetAoIRadiusNative(entityId, radius, hysteresis);
     }
 
     [LibraryImport(LibName, EntryPoint = "AtlasSetNativeCallbacks")]

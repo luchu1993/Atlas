@@ -4,7 +4,9 @@
 #include <cstring>
 #include <span>
 
+#include "base_entity.h"
 #include "baseapp.h"
+#include "cellapp/cellapp_messages.h"
 #include "foundation/log.h"
 #include "network/channel.h"
 #include "network/machined_types.h"
@@ -91,9 +93,34 @@ void BaseAppNativeProvider::GiveClientTo(uint32_t src_entity_id, uint32_t dest_e
                       dest_entity_id);
 }
 
-auto BaseAppNativeProvider::CreateBaseEntity(uint16_t type_id, uint32_t space_id, float aoi_radius)
-    -> uint32_t {
-  return app_.CreateBaseEntityFromScript(type_id, space_id, aoi_radius);
+auto BaseAppNativeProvider::CreateBaseEntity(uint16_t type_id, uint32_t space_id) -> uint32_t {
+  return app_.CreateBaseEntityFromScript(type_id, space_id);
+}
+
+void BaseAppNativeProvider::SetAoIRadius(uint32_t entity_id, float radius, float hysteresis) {
+  auto* ent = app_.GetEntityManager().Find(entity_id);
+  if (!ent) {
+    ATLAS_LOG_WARNING("BaseApp: SetAoIRadius on unknown entity_id={}", entity_id);
+    return;
+  }
+  if (!ent->HasCell()) {
+    ATLAS_LOG_WARNING(
+        "BaseApp: SetAoIRadius on entity_id={} with no cell counterpart — "
+        "call from a has_cell entity after the cell ack has landed",
+        entity_id);
+    return;
+  }
+  auto* cell_ch = app_.ResolveCellChannelForEntity(entity_id);
+  if (!cell_ch) {
+    ATLAS_LOG_WARNING("BaseApp: SetAoIRadius on entity_id={} but cell channel unresolved",
+                      entity_id);
+    return;
+  }
+  cellapp::SetAoIRadius msg;
+  msg.base_entity_id = entity_id;
+  msg.radius = radius;
+  msg.hysteresis = hysteresis;
+  (void)cell_ch->SendMessage(msg);
 }
 
 void BaseAppNativeProvider::SetNativeCallbacks(const void* native_callbacks, int32_t len) {

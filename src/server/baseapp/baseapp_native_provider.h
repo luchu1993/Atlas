@@ -117,7 +117,10 @@ class BaseAppNativeProvider : public BaseNativeProvider {
   void GiveClientTo(uint32_t src_entity_id, uint32_t dest_entity_id) override;
 
   // ---- Script-initiated entity creation -------------------------------
-  auto CreateBaseEntity(uint16_t type_id, uint32_t space_id, float aoi_radius) -> uint32_t override;
+  auto CreateBaseEntity(uint16_t type_id, uint32_t space_id) -> uint32_t override;
+
+  // ---- Runtime AoI radius adjustment ----------------------------------
+  void SetAoIRadius(uint32_t entity_id, float radius, float hysteresis) override;
 
   // ---- C# → C++ callback table ----------------------------------------
   void SetNativeCallbacks(const void* native_callbacks, int32_t len) override;

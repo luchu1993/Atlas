@@ -67,11 +67,19 @@ class INativeApiProvider {
   // Create a new base entity on THIS BaseApp of the given type. Returns
   // the newly-allocated EntityID, or 0 on failure. For has_cell types
   // the call also triggers CreateCellEntity on a CellApp targeting
-  // `space_id` (CellApp auto-creates the space if missing) and asks it
-  // to enable a witness with `aoi_radius` (0 = no witness). Non-BaseApp
+  // `space_id` (CellApp auto-creates the space if missing). Witness
+  // enablement happens later via the client-bind path (BindClient
+  // sending cellapp::EnableWitness); scripts wanting a non-default AoI
+  // radius call SetAoIRadius once the cell is ready. Non-BaseApp
   // providers log an error and return 0.
-  virtual auto CreateBaseEntity(uint16_t type_id, uint32_t space_id, float aoi_radius)
-      -> uint32_t = 0;
+  virtual auto CreateBaseEntity(uint16_t type_id, uint32_t space_id) -> uint32_t = 0;
+
+  // ---- Runtime AoI radius adjustment (BaseApp) ------------------------
+  // Forward a cellapp::SetAoIRadius to the cell that hosts this entity.
+  // Clamp + Ghost rejection happen on the cell side (Witness::SetAoIRadius
+  // + CellApp::OnSetAoIRadius). Providers other than BaseApp log an error
+  // and no-op.
+  virtual void SetAoIRadius(uint32_t entity_id, float radius, float hysteresis) = 0;
 
   // ---- C# → C++ callback table ----------------------------------------
   // Called by C# Atlas.Runtime once at startup to supply function pointers

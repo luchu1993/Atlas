@@ -21,16 +21,10 @@ public partial class Account : ServerEntity
         // Values <= 0 default to space 1 so the one-space case (all prior
         // P2/P3 smoke runs) keeps working unchanged.
         uint spaceId = avatarIndex > 0 ? (uint)avatarIndex : 1u;
-        // P4: always ask the cell to enable an AoI witness on the new
-        // StressAvatar. 50 m roughly matches the ReportPos random-walk
-        // clamp (±50 m square) so neighbours move in and out of AoI
-        // during a run; no good way yet to thread this radius from the
-        // world_stress CLI — future refinement.
-        const float kAoIRadius = 50f;
         Log.Info(
-            $"[StressTest.Base] Account.SelectAvatar(index={avatarIndex}) entity={EntityId} -> space={spaceId} aoi={kAoIRadius}");
+            $"[StressTest.Base] Account.SelectAvatar(index={avatarIndex}) entity={EntityId} -> space={spaceId}");
 
-        var avatar = EntityFactory.CreateBase("StressAvatar", spaceId, kAoIRadius);
+        var avatar = EntityFactory.CreateBase("StressAvatar", spaceId);
         if (avatar == null)
         {
             Log.Error($"[StressTest.Base] SelectAvatar: failed to create StressAvatar");
@@ -41,6 +35,10 @@ public partial class Account : ServerEntity
 
         // Transfer the client proxy from the Account to the new StressAvatar
         // so cell RPCs (Echo / ReportPos) can reach the avatar directly.
+        // BindClient on the BaseApp side triggers the cell to EnableWitness
+        // with CellAppConfig defaults (500 m radius, 5 m hysteresis). C5
+        // follows up with a SetAoIRadius(50) so stress peers move in and
+        // out of AoI against the ±50 m random-walk clamp.
         GiveClientTo(avatar.EntityId);
     }
 }

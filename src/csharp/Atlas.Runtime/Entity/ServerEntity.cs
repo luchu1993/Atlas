@@ -197,4 +197,27 @@ public abstract class ServerEntity
     {
         NativeApi.GiveClientTo(EntityId, destEntityId);
     }
+
+    /// <summary>
+    /// Adjust this entity's AoI radius + hysteresis on the cell. Only
+    /// valid for <c>has_cell</c> entity types after a witness has been
+    /// attached (typically after <see cref="GiveClientTo"/> has landed
+    /// and the cell has received the EnableWitness); the call is a
+    /// logged no-op otherwise. <para/>
+    /// Mirrors BigWorld's <c>entity.setAoIRadius(radius, hyst)</c>
+    /// (witness.cpp:2109). The cell side clamps radius to
+    /// <c>[0.1, cellApp/max_aoi_radius]</c> and uses hysteresis as the
+    /// leave-band width (enters fire at <paramref name="radius"/>;
+    /// leaves fire at <c>radius + hysteresis</c>). In Atlas — unlike
+    /// BigWorld — hysteresis is actually applied to the trigger,
+    /// suppressing boundary thrash.
+    /// <para/>
+    /// Split note: <c>ServerEntity</c> will be split into base/cell
+    /// mixins in a later pass — at that point this method moves to the
+    /// base-side surface where it naturally lives.
+    /// </summary>
+    protected internal void SetAoIRadius(float radius, float hysteresis = 5f)
+    {
+        NativeApi.SetAoIRadius(EntityId, radius, hysteresis);
+    }
 }
