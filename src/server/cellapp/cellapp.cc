@@ -237,6 +237,14 @@ void CellApp::OnTickComplete() {
   TickWitnesses();
   TickBackupPump();
   TickClientBaselinePump();
+
+  // BigWorld parity: `updateLoad()` then `cellAppMgr_.informOfLoad()`
+  // every tick (cellapp.cpp:1312-1314). The smoother reads the PREVIOUS
+  // tick's work time (set by ServerApp::AdvanceTime after this method
+  // returns); first-tick-after-boot reports 0, which CellAppMgr already
+  // tolerates.
+  UpdatePersistentLoad();
+  SendInformCellLoad();
 }
 
 void CellApp::RegisterWatchers() {
@@ -1138,6 +1146,40 @@ void CellApp::OnShouldOffload(const Address& /*src*/, Channel* /*ch*/,
   if (auto* cell = space->FindLocalCell(msg.cell_id)) {
     cell->SetShouldOffload(msg.enable);
   }
+}
+
+auto CellApp::NumRealEntities() const -> uint32_t {
+  uint32_t n = 0;
+  for (const auto& [_, ent] : entity_population_) {
+    if (ent != nullptr && ent->IsReal()) ++n;
+  }
+  return n;
+}
+
+void CellApp::UpdatePersistentLoad() {
+  // Map work_time / expected_tick_period → [0, …] load fraction, then
+  // feed the EWMA:
+  //   persistent_load = (1-bias) * persistent_load + bias * frac
+  // This is BigWorld's `CellApp::addToLoad` applied to the persistent
+  // branch (cellapp.cpp:1166-1171). The `* update_hertz` factor in
+  // BigWorld cancels with the implicit /expected_tick_period here.
+  const auto work = LastTickWorkDuration();
+  const auto expected = ExpectedTickPeriod();
+  if (expected.count() <= 0) return;  // defensive: ill-configured hertz
+  const double frac =
+      std::chrono::duration<double>(work).count() / std::chrono::duration<double>(expected).count();
+
+  const float bias = CellAppConfig::LoadSmoothingBias();
+  persistent_load_ = (1.f - bias) * persistent_load_ + bias * static_cast<float>(frac);
+}
+
+void CellApp::SendInformCellLoad() {
+  if (cellappmgr_channel_ == nullptr || app_id_ == 0) return;
+  cellappmgr::InformCellLoad msg;
+  msg.app_id = app_id_;
+  msg.load = persistent_load_;
+  msg.entity_count = NumRealEntities();
+  (void)cellappmgr_channel_->SendMessage(msg);
 }
 
 void CellApp::OnRegisterCellAppAck(const Address& /*src*/, Channel* /*ch*/,

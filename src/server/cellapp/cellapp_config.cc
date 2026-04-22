@@ -20,6 +20,9 @@ ServerAppOption<float> s_default_aoi_hysteresis{
 ServerAppOption<float> s_max_aoi_radius{500.f, "max_aoi_radius", "cellapp/max_aoi_radius",
                                         WatcherMode::kReadWrite};
 
+ServerAppOption<float> s_load_smoothing_bias{
+    0.05f, "load_smoothing_bias", "cellapp/load_smoothing_bias", WatcherMode::kReadWrite};
+
 }  // namespace
 
 auto CellAppConfig::DefaultAoIRadius() -> float {
@@ -32,6 +35,10 @@ auto CellAppConfig::DefaultAoIHysteresis() -> float {
 
 auto CellAppConfig::MaxAoIRadius() -> float {
   return s_max_aoi_radius.Value();
+}
+
+auto CellAppConfig::LoadSmoothingBias() -> float {
+  return s_load_smoothing_bias.Value();
 }
 
 }  // namespace atlas

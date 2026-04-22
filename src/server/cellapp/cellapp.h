@@ -145,6 +145,17 @@ class CellApp : public EntityApp {
   // no target_cell_id needs to travel on the wire.
   auto BuildOffloadMessage(const CellEntity& entity) const -> cellapp::OffloadEntity;
 
+  // Per-tick BigWorld-style load estimate — EWMA of (work_time /
+  // expected_tick_period). Updated at the start of OnTickComplete so
+  // every tick feeds the smoother; the value feeds SendInformCellLoad.
+  [[nodiscard]] auto PersistentLoad() const -> float { return persistent_load_; }
+
+  // Count of Real entities currently hosted on this CellApp. Walks
+  // entity_population_ once per call — cheap at Atlas's entity scales
+  // (≤ tens of thousands per cell). Tests use this; InformCellLoad
+  // wire msg carries the same number.
+  [[nodiscard]] auto NumRealEntities() const -> uint32_t;
+
   // Ghost-pump + offload-checker pass, called from OnEndOfTick. Exposed
   // so unit tests can step the tick pipeline deterministically.
   void TickGhostPump();
@@ -229,6 +240,21 @@ class CellApp : public EntityApp {
   // M2-disabled BaseApp::EmitBaselineSnapshots and gives
   // reliable="false" properties a genuine recovery channel.
   void TickClientBaselinePump();
+
+  // EWMA update of persistent_load_. Reads LastTickWorkDuration() +
+  // ExpectedTickPeriod() from the ServerApp base class. BigWorld parity:
+  // `CellApp::updateLoad` (cellapp.cpp:1177-1225) — the persistentLoad_
+  // branch, minus transient-load breakdown which Atlas doesn't track
+  // separately. Called every tick from OnTickComplete.
+  void UpdatePersistentLoad();
+
+  // Dispatch cellappmgr::InformCellLoad to the CellAppMgr channel with
+  // current persistent_load_ + NumRealEntities(). No-op if not yet
+  // registered (cellappmgr_channel_ is null or app_id_ is 0). Called
+  // every tick from OnTickComplete — BigWorld's cadence
+  // (`handleGameTickTimeSlice` line 1314).
+  void SendInformCellLoad();
+
   [[nodiscard]] auto AllocateCellEntityId() -> EntityID;
 
   std::unordered_map<SpaceID, std::unique_ptr<Space>> spaces_;
@@ -272,6 +298,10 @@ class CellApp : public EntityApp {
   // to work with app_id_ == 0.
   uint32_t app_id_{0};
   Channel* cellappmgr_channel_{nullptr};
+
+  // EWMA-smoothed load factor in [0, 1+] — the number CellAppMgr's BSP
+  // balancer consumes. Updated every tick by UpdatePersistentLoad.
+  float persistent_load_{0.f};
 
   // Peer CellApp channels. Review-fix C2 replaced the local map with a
   // shared registry (atlas_server) so both BaseApp and CellApp route

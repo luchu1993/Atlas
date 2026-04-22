@@ -231,11 +231,16 @@ void ServerApp::AdvanceTime() {
     machined_client_.Tick();
   }
 
-  // Tick hooks
+  // Tick hooks — bracketed so we can measure actual work time,
+  // distinct from `actual_duration` which also includes the wait
+  // between timer fires. BigWorld's `updateLoad` needs the work time
+  // alone (see CellApp::LastTickWorkDuration accessor).
+  const auto work_start = Clock::now();
   OnEndOfTick();
   OnStartOfTick();
   updatables_.Call();
   OnTickComplete();
+  tick_stats_.last_work_duration = Clock::now() - work_start;
 }
 
 // ============================================================================

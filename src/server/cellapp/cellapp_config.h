@@ -25,6 +25,15 @@ class CellAppConfig {
   // ctor when a custom radius is supplied. JSON key: `max_aoi_radius`.
   // Default 500 m (BigWorld parity with `CellAppConfig::maxAoIRadius`).
   [[nodiscard]] static auto MaxAoIRadius() -> float;
+
+  // EWMA smoothing bias used by CellApp::UpdatePersistentLoad. The
+  // load estimate is `(1-bias)*prev + bias * normalised_work_time`.
+  // Small bias = heavy smoothing, slow reaction to spikes but stable;
+  // large bias = responsive but noisy. JSON key: `load_smoothing_bias`.
+  // Default 0.05 (BigWorld parity — `CellAppConfig::loadSmoothingBias`
+  // ships with 0.01f, but CellApp tick cadence differs; 0.05 gives
+  // roughly comparable settling time at Atlas's default 30 Hz).
+  [[nodiscard]] static auto LoadSmoothingBias() -> float;
 };
 
 }  // namespace atlas

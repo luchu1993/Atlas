@@ -230,6 +230,30 @@ TEST_F(CellAppHandlersTest, OnSetAoIRadiusMissingWitnessIsNoop) {
   EXPECT_FALSE(app_.FindEntityByBaseId(100)->HasWitness());
 }
 
+// Phase 11 C1: CellApp reports NumRealEntities to CellAppMgr in every
+// InformCellLoad. Ghosts MUST NOT count — the balancer tracks Real load.
+TEST_F(CellAppHandlersTest, NumRealEntitiesExcludesGhosts) {
+  EXPECT_EQ(app_.NumRealEntities(), 0u);
+
+  app_.OnCreateCellEntity({}, nullptr, MakeCreate(100, 1));
+  app_.OnCreateCellEntity({}, nullptr, MakeCreate(101, 1));
+  EXPECT_EQ(app_.NumRealEntities(), 2u);
+
+  // Convert one to a Ghost via the Phase 11 path. A Ghost no longer
+  // counts as Real-on-this-CellApp.
+  auto* ent = app_.FindEntityByBaseId(100);
+  ASSERT_NE(ent, nullptr);
+  ent->ConvertRealToGhost(/*new_real_channel=*/nullptr);
+  EXPECT_EQ(app_.NumRealEntities(), 1u);
+}
+
+// Phase 11 C1: persistent_load_ initial state is 0 until at least one
+// tick has driven UpdatePersistentLoad. Handler-level tests never call
+// AdvanceTime, so this is the stable observable state.
+TEST_F(CellAppHandlersTest, PersistentLoadStartsAtZero) {
+  EXPECT_FLOAT_EQ(app_.PersistentLoad(), 0.f);
+}
+
 TEST_F(CellAppHandlersTest, OnSetAoIRadiusClampsToMax) {
   app_.OnCreateCellEntity({}, nullptr, MakeCreate(100, 1));
   cellapp::EnableWitness e{100};

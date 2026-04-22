@@ -68,6 +68,23 @@ class ServerApp {
   auto RegisterForUpdate(Updatable* object, int level = 0) -> bool;
   auto DeregisterForUpdate(Updatable* object) -> bool;
 
+  // Last tick's work duration (time spent inside OnEndOfTick →
+  // OnTickComplete). Subclasses consume this for load reporting — see
+  // BigWorld `CellApp::updateLoad` (cellapp.cpp:1177) which derives
+  // `persistentLoad_` from `tickTime - spareTime`, equivalent here to
+  // `last_work_duration / expected_tick_period`.
+  [[nodiscard]] auto LastTickWorkDuration() const -> Duration {
+    return tick_stats_.last_work_duration;
+  }
+
+  // Expected wall-clock duration of a single tick, = 1 / update_hertz.
+  // Used alongside LastTickWorkDuration to normalise load into a
+  // fraction-of-budget-consumed metric.
+  [[nodiscard]] auto ExpectedTickPeriod() const -> Duration {
+    return std::chrono::duration_cast<Duration>(
+        std::chrono::duration<double>(1.0 / config_.update_hertz));
+  }
+
  protected:
   // ---- Subclass override points -------------------------------------------
 
@@ -120,7 +137,14 @@ class ServerApp {
 
   // Tick performance statistics
   struct TickStats {
+    // Wall-clock period between successive AdvanceTime calls. In steady
+    // state this equals the configured tick interval; spikes signal the
+    // scheduler was late or the previous tick overran.
     Duration last_duration{};
+    // Time actually spent inside the tick hooks (OnEndOfTick → … →
+    // OnTickComplete). `last_work_duration / expected_tick_period` is
+    // the BigWorld-style load fraction — 0.0 = idle, 1.0 = fully booked.
+    Duration last_work_duration{};
     Duration max_duration{};
     uint64_t slow_count{0};
   } tick_stats_;
