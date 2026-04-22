@@ -393,6 +393,34 @@ TEST(RealEntityData, BuildSnapshotRefresh_ReflectsOwnerSnapshot) {
   EXPECT_EQ(msg.other_snapshot[0], std::byte{0xCA});
 }
 
+// Phase 11 C4: empty-delta skip helper. All-zero or truly-empty
+// payloads carry no audience-visible content and must not incur
+// per-haunt wire traffic every tick. The DeltaSyncEmitter produces
+// such payloads whenever only owner-visible properties were dirty.
+TEST(RealEntityData, IsEmptyOtherDelta_TruthTable) {
+  // Truly empty — the SerializeOtherDelta didn't even run (hasEvent=false).
+  std::vector<std::byte> empty;
+  EXPECT_TRUE(RealEntityData::IsEmptyOtherDelta(std::span<const std::byte>(empty)));
+
+  // Flags-only prefix, all zero (uint8 encoding, ≤ 8 replicable props).
+  const std::vector<std::byte> zero_u8{std::byte{0}};
+  EXPECT_TRUE(RealEntityData::IsEmptyOtherDelta(std::span<const std::byte>(zero_u8)));
+
+  // Flags-only prefix, all zero (uint32 encoding, > 16 props).
+  const std::vector<std::byte> zero_u32{std::byte{0}, std::byte{0}, std::byte{0}, std::byte{0}};
+  EXPECT_TRUE(RealEntityData::IsEmptyOtherDelta(std::span<const std::byte>(zero_u32)));
+
+  // Any non-zero byte → real content; must not skip.
+  const std::vector<std::byte> flag_set{std::byte{0x01}};
+  EXPECT_FALSE(RealEntityData::IsEmptyOtherDelta(std::span<const std::byte>(flag_set)));
+
+  // Flag byte zero but payload non-zero — defensive: should not happen
+  // in practice (no flag set ⇒ no field written) but the helper treats
+  // it as "has content" to stay on the safe side.
+  const std::vector<std::byte> mixed{std::byte{0}, std::byte{0xFF}, std::byte{0xFF}};
+  EXPECT_FALSE(RealEntityData::IsEmptyOtherDelta(std::span<const std::byte>(mixed)));
+}
+
 // Phase 11 C3: broadcast decision helper — BigWorld's
 // addHistoryEventToGhosts fires per-event so the gap > 1 case doesn't
 // arise, but Atlas batches per tick so we need explicit detection.

@@ -1379,8 +1379,17 @@ void CellApp::TickGhostPump() {
           }
         } else {
           const auto msg = rd->BuildDelta();
-          for (const auto& h : rd->Haunts()) {
-            if (h.channel) (void)h.channel->SendMessage(msg);
+          // Phase 10 §10.3 #12 bandwidth follow-up: the DeltaSyncEmitter
+          // ships a 1-4 byte flags prefix even when only owner-visible
+          // properties were dirty (SerializeOtherDelta runs whenever
+          // hasEvent==true). That produces an all-zero payload with no
+          // actual audience content. Skip the SendMessage — the seq
+          // still advances, so the Ghost catches up on the next non-
+          // empty delta without a spurious snapshot refresh.
+          if (!RealEntityData::IsEmptyOtherDelta(msg.other_delta)) {
+            for (const auto& h : rd->Haunts()) {
+              if (h.channel) (void)h.channel->SendMessage(msg);
+            }
           }
         }
         rd->MarkBroadcastEventSeq(state->latest_event_seq);

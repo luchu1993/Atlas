@@ -1,8 +1,10 @@
 #ifndef ATLAS_SERVER_CELLAPP_REAL_ENTITY_DATA_H_
 #define ATLAS_SERVER_CELLAPP_REAL_ENTITY_DATA_H_
 
+#include <algorithm>
 #include <cstddef>
 #include <cstdint>
+#include <span>
 #include <vector>
 
 #include "cellapp/intercell_messages.h"
@@ -88,6 +90,19 @@ class RealEntityData {
                                                                uint64_t last_broadcast_event_seq)
       -> bool {
     return latest_event_seq > last_broadcast_event_seq + 1;
+  }
+
+  // Bandwidth optimisation for the gap==1 broadcast case: if the delta
+  // carries no audience-visible content (either empty, or the
+  // DeltaSyncEmitter flag prefix with all zeros — which happens when
+  // only owner-visible properties were dirty), skip the SendMessage.
+  // The Real still advances last_broadcast_event_seq_ so the next tick's
+  // gap arithmetic stays correct; the Ghost's seq catches up naturally
+  // on the next non-empty delta. Safe because an all-zero payload
+  // trivially has no field-update content to deliver — any dirty field
+  // would set at least one flag bit.
+  [[nodiscard]] static auto IsEmptyOtherDelta(std::span<const std::byte> delta) -> bool {
+    return std::all_of(delta.begin(), delta.end(), [](std::byte b) { return b == std::byte{0}; });
   }
 
   // ---- Broadcast bookkeeping ----------------------------------------------
