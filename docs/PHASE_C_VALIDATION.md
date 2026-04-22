@@ -110,14 +110,21 @@ python tools/cluster_control/run_world_stress.py \
 
 关闭 reliable 属性后再跑同一命令，观察 L4 baseline（commit `f2dec1e`：CellApp 侧 pump、每 120 tick ≈ 6 s 发一次 `ReplicatedBaselineFromCell` 经 BaseApp 转 0xF002 给 client）能否让 `_hp` 字段最终一致。
 
-**流程（仍需一次手工 `.def` 改动 + rebuild，#7 未完成）**：
+**一键流程**（`tools/phase_c_validation/run_c3b.py` 包装了 patch / rebuild / smoke / restore 的 try-finally 序列，`--skip-restore` 之外保证退出时 def 一定回到 `reliable="true"`）：
+
+```bash
+python tools/phase_c_validation/run_c3b.py              # 默认 20s / drop 5..9s
+python tools/phase_c_validation/run_c3b.py --duration-sec 30
+```
+
+底层等价命令（debug 或分步调试时）：
 
 1. 编辑 `entity_defs/StressAvatar.def`，把 `hp` 属性的 `reliable="true"` 改为 `reliable="false"`
 2. 重建受影响的 dll / exe：
    ```bash
    cmake --build build/debug --config Debug --target \
        atlas_stress_test_cell_dll atlas_stress_test_base_dll \
-       atlas_baseapp atlas_cellapp atlas_client
+       atlas_baseapp atlas_cellapp atlas_client atlas_client_desktop_dll
    dotnet build samples/client/Atlas.ClientSample.csproj --no-incremental --nologo
    ```
 3. 跑 **C3-A 的完全相同命令行**
@@ -189,5 +196,5 @@ protected override void OnTick(float dt) {
 4. **Drop 过滤器在 RUDP 之上**（见 C3 开头警告）：当前 `--drop-inbound-ms` 不能验证传输层 reliable 重传；C3-A 和 C3-B 实际测试的都是"应用层漏接 + baseline 静默恢复"。要真正验证 RUDP 重传需要在 `src/lib/network/reliable_udp.cc` 加丢包注入点（未来工作）。
 5. **Baseline 不触发 `OnXxxChanged`**：B2 scheme-2 明确选择 baseline 静默路径。脚本看不到被 baseline 恢复的字段变化，只能轮询字段值或依赖 `seqgaps` 推断"被吞了多少"。
 6. ~~Tap 不带时间戳~~ **已修复**：`Atlas.Client.ClientLog` 给每条脚本日志前置 `[t=S.sss]` 单调秒戳（起点为首次 ClientLog 访问；进程启动后几 ms 内即激活）。`client_event_tap.cc::EventBegins` 新增前缀剥离，计数语义向后兼容。后续收敛分析可用 `grep '^\[t=\([0-9.]*\)\]'` 把时间戳抽回来对 drop window 边界做自动断言。
-7. **C3-B 需手动 `.def` 改动 + rebuild**：没有运行时 reliable 开关。未来可加 `.def` 的"条件 reliable"或 CLI 覆盖，现阶段"改 def → rebuild → 测 → 改回"流程可接受。
+7. ~~C3-B 需手动 `.def` 改动 + rebuild~~ **已缓解**：`tools/phase_c_validation/run_c3b.py` 把 patch → rebuild → smoke → restore 整合成一条命令，用 `try/finally` 保证 def 退出时一定回到 `reliable="true"`（除非显式传 `--skip-restore`）。运行时切换的 generator-level 开关仍未做，但"一键完整 round-trip"已经消除手动漏步回退的风险。
 8. **子进程日志冗余**：脚本走 `Console.WriteLine`；大流量场景下 stdout 管道可能成为瓶颈。压测规模 > 几十 client 时建议关闭 `--script-clients`，用裸协议 path。
