@@ -63,6 +63,8 @@
   - `SendCellRpc(...)` / `SendBaseRpc(...)`
   - `RegisterEntityType(const std::byte* data, int32_t len)` / `UnregisterAllEntityTypes()`
   - `WriteToDb(...)` / `GiveClientTo(...)`
+  - `CreateBaseEntity(uint16_t type_id, uint32_t space_id)` — scripting-side `EntityFactory.CreateBase`. Witness attachment happens via the client-bind path (see `SetAoIRadius` below); creation no longer carries an AoI radius.
+  - `SetAoIRadius(uint32_t entity_id, float radius, float hysteresis)` — mirrors BigWorld's `entity.setAoIRadius`. Forwards `cellapp::SetAoIRadius` to the cell hosting this entity; clamp/Ghost-reject/floor semantics live on the cell side (`Witness::SetAoIRadius` + `CellApp::OnSetAoIRadius`). Only valid on BaseApp; other providers log an error and no-op.
   - `SetNativeCallbacks(const void* native_callbacks, int32_t len)`
 - 注册：同文件内 `void SetNativeApiProvider(INativeApiProvider*)` / `INativeApiProvider& GetNativeApiProvider()`。未注册时断言终止（编程错误，非可恢复失败）。
 - 默认实现：`src/lib/clrscript/base_native_provider.{h,cc}` — 日志/时间等通用逻辑。

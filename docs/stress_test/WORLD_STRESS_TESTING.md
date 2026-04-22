@@ -13,10 +13,14 @@ client
    ├── LoginRequest     → LoginApp           (认证)
    ├── Authenticate     → BaseApp            (账户实体材化)
    ├── ClientBaseRpc    → Account.SelectAvatar (脚本创建 StressAvatar)
-   │                       └── CreateBaseEntity native API
-   │                             ├── RestoreEntity (C# 实例化)
-   │                             └── CreateCellEntity → CellApp
-   │                                   └── OnCreateCellEntity + 自动 EnableWitness
+   │                       ├── CreateBaseEntity native API
+   │                       │   ├── RestoreEntity (C# 实例化)
+   │                       │   └── CreateCellEntity → CellApp  (cell 实体上，尚无 witness)
+   │                       ├── GiveClientTo(avatar)
+   │                       │   └── BaseApp::BindClient → cellapp::EnableWitness
+   │                       │         (witness 用 CellAppConfig 默认 500 m / 5 m)
+   │                       └── avatar.SetAoIRadius(50, 5)
+   │                             └── cellapp::SetAoIRadius  (压测收紧到 ±50 m 带)
    ├── ← EntityTransferred (客户端切换到 StressAvatar)
    ├── ← CellReady         (cell 已绑定，安全发 cell RPC)
    ├── ClientCellRpc → StressAvatar.Echo  (cell 侧 RPC 回环)
@@ -24,7 +28,9 @@ client
    ├── ClientCellRpc → StressAvatar.ReportPos (位置更新 + AoI 广播)
    │     └── Position 属性 → 邻居收 kEntityPositionUpdate
    └── Disconnect / shortline / reconnect
-         └── OnExternalClientDisconnect → FinalizeForceLogoff → DestroyCellEntity
+         └── OnExternalClientDisconnect
+               ├── UnbindClient → cellapp::DisableWitness  (witness 立即释放)
+               └── FinalizeForceLogoff → DestroyCellEntity
 ```
 
 ## 2. 工具与脚本

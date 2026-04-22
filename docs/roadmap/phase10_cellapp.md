@@ -147,8 +147,9 @@ CellEntity (C++ 薄壳)
 | `CreateSpace` | 3010 | 管理/脚本 → CellApp | 创建 Space |
 | `DestroySpace` | 3011 | 管理/脚本 → CellApp | 销毁 Space |
 | `AvatarUpdate` | 3020 | BaseApp → CellApp | 客户端位置更新 |
-| `EnableWitness` | 3021 | BaseApp → CellApp | 开启 AOI（客户端 enableEntities） |
-| `DisableWitness` | 3022 | BaseApp → CellApp | 关闭 AOI |
+| `EnableWitness` | 3021 | BaseApp → CellApp | 开启 AOI（由 `BaseApp::BindClient` 自动触发；半径/滞回来自 `CellAppConfig` 默认） |
+| `DisableWitness` | 3022 | BaseApp → CellApp | 关闭 AOI（由 `BaseApp::UnbindClient` 自动触发） |
+| `SetAoIRadius` | 3023 | BaseApp/script → CellApp | 运行时改 AoI 半径/滞回（对应 BigWorld `entity.setAoIRadius`） |
 
 > **为什么拆分两条 CellRpc 消息？**
 > BigWorld 区分 `runExposedMethod`（客户端发起，REAL_ONLY，需要 Exposed 校验 + sourceEntityID 验证）
@@ -1201,7 +1202,7 @@ CellApp 单线程驱动下，一个 tick 的执行序为 `OnStartOfTick → Upda
 |---|---|
 | **被观察实体** 在 tick 中被销毁（C# `DestroyEntity` 或 `DestroyCellEntity`） | 立即在 `Space::RemoveEntity()` 中广播：对持有该 entity 的所有 Witness 设 `cache.flags |= GONE`，实际擦除发生在各 Witness 下一次 compaction。`RangeList::Remove()` 在这一步同时执行 |
 | **观察者本身**（拥有 Witness 的实体）被销毁 | `CellEntity` 析构按 §3.10 #4 顺序：先 `witness_.reset()`（自动从 RangeList 移除 AoITrigger 节点，并对 aoi_map_ 中剩余实体**不发 `EntityLeave`**—客户端 channel 将由 BaseApp 在 Proxy 解绑时整体回收），再 `controllers_.StopAll()`，最后实体从 RangeList 移除 |
-| **观察者掉线**（Proxy 失去 client） | BaseApp 侧断链；CellApp 此时仍可能收到上一 tick 的 Self/Replicated 回送，BaseApp 的 handler 里 `FindProxy()` 为 null 直接丢弃，**不需要** Witness 主动 DisableWitness。更主动的方案是 Proxy 断链时发 `DisableWitness` 消息给 CellApp，但不是 Phase 10 必须 |
+| **观察者掉线**（Proxy 失去 client） | PR 34（BigWorld AoI 对齐）后：`BaseApp::UnbindClient` 自动向 cell 发 `cellapp::DisableWitness`，witness 立即释放。Phase 10 初版的"不主动通知"退路已被替换（兼容保留：handler 对未知 entity / 无 witness 的情况仍 log-warn 返回） |
 
 ### 3.11 性能基线与带宽度量口径
 
