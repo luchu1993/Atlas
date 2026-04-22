@@ -129,25 +129,28 @@ Atlas 当前阶段不引入完整的 EventHistory 机制。
 
 ## 5. 近期补强项（CellApp 完成前）
 
-### 5.1 可靠 delta 投递
+### 5.1 丢包恢复：reliable 通道 + baseline 兜底
 
-**问题：** Unreliable 投递丢包后，若属性不再变化，客户端永久停留旧值。
+**问题：** Unreliable 投递丢包后，若属性不再变化，客户端会永久停留旧值。
 
-**方案 (历史)：** 每 N 帧（建议 30 帧 ≈ 1 秒）发一次全量快照作为 baseline。**已暂时禁用，见 5.1a**。
+**落地方案：**
+- **reliable 属性（`.def` 声明 `reliable="true"`）** 走 `ReplicatedReliableDeltaFromCell` (msg 2017) → 0xF003 reliable channel，transport 层（RUDP）自动重传。
+- **unreliable 属性** 走 `ReplicatedDeltaFromCell` (msg 2015) → 0xF001 unreliable channel，靠 §5.1a 的 baseline pump 作为最终一致性兜底。
+- **seq 跳号检测**：每个 reliable delta 带 `event_seq` 前缀，客户端跳号时在 `ClientEntity.NoteIncomingEventSeq` 累加到 `EventSeqGapsTotal`，提供应用层可观测性。
 
-**替代方案：** delta 加 sequence number（已实施 D2'.2），客户端发现跳号时可检测丢包；目前所有属性均可设置 `reliable="true"`，走 0xF003 reliable channel 获得 transport 层重传兜底。
+### 5.1a Baseline 架构（BigWorld 对齐）
 
-### 5.1a Baseline 路径迁移（2026-04 M2+L1+L2 对齐 BigWorld）
+属性的 "当前状态最终一致" 由 BigWorld 风格的两条路径合力保证：
 
-**现状：**
-- **Generator 按 scope 分拆 field** (M2, commit `46c70b9`)：base partial 只 emit `DATA_BASE`（`base_and_client` / `base`）字段；cell partial 只 emit cell-scope（`own_client` / `all_clients` / `other_clients` / `cell_public_and_own` / `cell_public` / `cell_private`）字段。对齐 BigWorld `lib/entitydef/data_description.ipp:113-131` 的 "data only lives on a base or a cell but not both" 原则。
-- **BaseApp baseline pump 禁用** (hotfix `de42fc0`)：`EmitBaselineSnapshots` 改为 no-op。原逻辑从 base-side 的 C# 实例读 `SerializeForOwnerClient`，但 cell 属性（如 hp）只在 cell 端 OnTick 写入，base 端字段永远是默认 0 —— baseline 到达 client 时会把 `_hp` 覆写为 0，下一条 delta 触发错误的 `OnHpChanged(0, N)` 而不是 `OnHpChanged(prev, N)`。
-- **Cell → Base 定期 opaque 备份** (L1, commit `3fdbd2d`)：CellApp 每 `kBackupIntervalTicks = 50` (~1s) 对每个 has-base entity 调 `SerializeEntity` → 以 `BackupCellEntity` (msg 2018) 发给 BaseApp。Base 只存 bytes 不反序列化，保存在 `BaseEntity::cell_backup_data_` 里。对齐 BigWorld `bigworld/server/cellapp/real_entity.cpp:884-906` + `bigworld/server/baseapp/base.cpp:1182-1200`。
-- **DB 写入 / 检出合并 blob** (L2, commit `788330d`)：DB blob 格式升级为 `[magic=0xA7][version=1][base_len u32][base_bytes][cell_len u32][cell_bytes]`。写 DB 时 `CaptureEntitySnapshot` 把当前 base bytes + `cell_backup_data_` 拼在一起；检出时 `DecodeDbBlob` 拆回两段，base 给 `RestoreManagedEntity`，cell 存回 `cell_backup_data_`。下一次 `CreateCellEntity` 会把 cell 部分作为 `script_init_data` 喂给新 cell 的 `Deserialize`，使 cell-scope `persistent="true"` 属性跨 DB 生命周期保留。
+1. **cell→base opaque backup**（`BackupCellEntity` msg 2018, reliable, 每 50 tick ≈ 1 s）：CellApp 把每个 has-base entity 的 `SerializeEntity` 输出发给 BaseApp，BaseApp 存入 `BaseEntity::cell_backup_data_` 不反序列化。对齐 BigWorld `cellapp/real_entity.cpp:884-906` + `baseapp/base.cpp:1182-1200`。用于 DB 持久化 / offload 迁移 / reviver。
 
-- **Baseline pump 迁至 CellApp** (L4, commit `f2dec1e`)：新增消息 `ReplicatedBaselineFromCell` (msg 2019, reliable)。CellApp 每 `kClientBaselineIntervalTicks = 120` tick 对每个 has-witness entity 调 `GetOwnerSnapshot` 拿 cell-side `SerializeForOwnerClient` 输出，发给 BaseApp；BaseApp 的 `OnReplicatedBaselineFromCell` 只做中继 —— `ResolveClientChannel` → 发 `ReplicatedBaselineToClient` (0xF002) 给 owner client。payload wire 与 pre-M2 baseapp pump 输出 byte-identical，客户端解码零改动。BaseApp 的 `EmitBaselineSnapshots` 保持 no-op（定义在那里只是作为"本进程不发 baseline"的显式入口）。
+2. **cell→base→client baseline relay**（`ReplicatedBaselineFromCell` msg 2019, reliable, 每 120 tick ≈ 6 s）：CellApp 对每个 has-witness entity 调 `GetOwnerSnapshot` 拿 cell-side `SerializeForOwnerClient` 输出，BaseApp 中继为 `ReplicatedBaselineToClient` (0xF002) 发给 owner client。客户端侧 `ApplyOwnerSnapshot` 直写字段，不触发回调（见 §5.1b）。BaseApp 自己的 `EmitBaselineSnapshots` 保持 no-op —— baseline 源头永远是 cell（唯一有权威 cell-scope 数据的进程）。
 
-**历史记录（便于审计）：** 设计曾讨论过 (a) 让 cell 每次 `PublishReplicationFrame` push owner_snapshot 到 base / (b) baseline pump 迁到 cellapp —— 最终走 (b) + BigWorld 风格 opaque bytes (L1 + L2 + L4)，优于 (a) 因为 base 完全不 peek cell 字段，消除歧义源。
+两条路径的基础是 generator 按 scope 拆分字段：base partial 只 emit `DATA_BASE`（`base` / `base_and_client`）字段；cell partial 只 emit cell-scope 字段。对齐 BigWorld `lib/entitydef/data_description.ipp:113-131` 的 "data only lives on a base or a cell but not both"。
+
+DB 持久化：`CaptureEntitySnapshot` 在写 DB 前把当前 base bytes + `cell_backup_data_` 拼成 `[magic=0xA7][version=1][base_len u32][base_bytes][cell_len u32][cell_bytes]`；`DecodeDbBlob` 在检出时拆回两段，cell 部分作为下一次 `CreateCellEntity.script_init_data` 喂给新 cell 的 `Deserialize`。保证 cell-scope `persistent="true"` 属性跨 DB 生命周期保留。
+
+各 commit 与源码位点汇总见 [§10.1 / §10.3](#10-实施现状2026-04-22)。
 
 ### 5.1b `OnXxxChanged` 触发规则（BigWorld 对齐）
 
@@ -160,36 +163,25 @@ Baseline / 初始快照 **不触发** `OnXxxChanged`，只有运行期 delta 触
 
 脚本层面的意义：**baseline 静默恢复**，脚本看不到被 baseline 恢复的字段变化。这是设计不是局限。脚本如果必须观察到 baseline 带来的字段变化，对齐 BigWorld 的做法是**自己读字段值**（周期轮询 `_hp` 等）或**通过 `seqgaps` 推断被吞了多少 event**。
 
-### 5.2 带宽预算
+### 5.2 带宽预算（DeltaForwarder，已实施）
 
 **问题：** 大量实体同时变脏时，帧末 delta 总量可能超过网络承受能力。
 
-**方案：** BaseApp 在 `on_replicated_delta_from_cell` 中加入优先级队列：
+**当前实现（`src/server/baseapp/delta_forwarder.h/.cc` + `baseapp.cc` 集成点）：**
+- `DeltaForwarder` 队列在 BaseApp 侧维护 `PendingDelta{entity_id, delta, deferred_ticks}`。
+- `OnReplicatedDeltaFromCell` 入队（同 entity 后到的 delta **整条替换**旧 delta，天然做跨帧积压合并）。
+- `OnTickComplete` 按 `kDeltaBudgetPerTick = 16 KB` / tick flush，超预算的留到下 tick，`deferred_ticks` 用于优先级回退。
+- Watcher：`baseapp/delta_bytes_sent_total` / `baseapp/delta_queue_depth` 已注册。
 
-```
-每帧预算: MAX_BYTES_PER_TICK (如 16KB)
+**未完成的打磨项**（tail work，非阻塞，见 §8.2）：
+- `baseapp/delta_bytes_deferred_total` watcher 尚未注册。
+- `PendingDelta.priority` 字段与排序比较器未落地；真实优先级需要 Witness 上下文（距离 / 属性类型 / 最近发送时间），等 Phase 10 CellApp 完成后再填。
 
-for entity in priority_queue (按距离/重要性排序):
-    if budget >= entity.delta_size:
-        send(entity.delta)
-        budget -= entity.delta_size
-    else:
-        break  // 延迟到下帧
-```
+**Reliable delta 不走 DeltaForwarder**：`OnReplicatedReliableDeltaFromCell` 直接转发（`baseapp.cc`），因为预算机制本质是"超限就丢"，reliable 不能丢。
 
-优先级因素：距离（近的优先）、属性类型（位置/HP 优先）、上次发送间隔（越久越优先）。
+### 5.3 LatestChangeOnly 标记（已搁置）
 
-### 5.3 LatestChangeOnly 标记
-
-**问题：** HP/Position 等高频属性每帧改一次，每帧都序列化发送，浪费带宽。
-
-**方案：** `.def` 文件中增加 `latestOnly="true"` 标记：
-
-```xml
-<hp type="INT32" scope="AllClients" latestOnly="true"/>
-```
-
-当前 setter 已天然做到"同帧内多次修改只保留最终值"（ClearDirty 在帧末调用）。`latestOnly` 标记配合带宽预算使用：超预算时，标记为 latestOnly 的属性可以安全跳过当前帧，只在下帧发送最新值。
+`.def` 加 `latest_only="true"` 标记、带宽受限时合并中间帧的原方案 **不再单独推进**。理由：`DeltaForwarder::Enqueue` 已经对同一 entity 做整条 delta 替换（`delta_forwarder.cc`），覆盖了"跨帧积压合并"的核心诉求。`latest_only` 的差异价值只在 per-property 事件粒度的合并场景才显现，而那要等 §6 远期的 C++ 侧 EventHistory 落地后再评估。归档决策详见 §8.3。
 
 ---
 
