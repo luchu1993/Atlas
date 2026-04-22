@@ -31,6 +31,83 @@ auto HasManagedEntityType(uint16_t type_id) -> bool {
   return EntityDefRegistry::Instance().FindById(type_id) != nullptr;
 }
 
+// ============================================================================
+// DB-blob framing — L2
+//
+// Post-M2 the base side's C# Serialize produces DATA_BASE-only bytes,
+// and the CELL_DATA subset arrives separately via BackupCellEntity
+// (L1). Persisting an entity therefore has to stitch the two together
+// and unstitch them on checkout; if it didn't, cell-scope persistent
+// properties (marked persistent="true" in .def with a cell scope like
+// all_clients / own_client) would silently vanish through a save/load
+// cycle — the base would have no visibility into the cell state.
+//
+// Layout (prefix scheme, fixed-size):
+//     byte 0      0xA7   magic
+//     byte 1      0x01   version
+//     bytes 2..5  u32 LE base_len
+//     bytes 6..   base_bytes
+//     next        u32 LE cell_len
+//     next        cell_bytes
+//
+// Total overhead per write: 10 bytes. Legacy blobs lacking the magic
+// byte (0xA7 was chosen because BigWorld's C# Serialize header starts
+// with kSerializationVersion == 0x01, never 0xA7) fall back to
+// "all base, no cell" — which preserves old databases exactly as
+// their bytes have always been interpreted.
+constexpr std::byte kDbBlobMagic{0xA7};
+constexpr std::byte kDbBlobVersion{0x01};
+
+auto EncodeDbBlob(std::span<const std::byte> base_bytes, std::span<const std::byte> cell_bytes)
+    -> std::vector<std::byte> {
+  std::vector<std::byte> out;
+  out.reserve(2 + 4 + base_bytes.size() + 4 + cell_bytes.size());
+  out.push_back(kDbBlobMagic);
+  out.push_back(kDbBlobVersion);
+  auto push_u32 = [&](uint32_t v) {
+    for (int i = 0; i < 4; ++i) out.push_back(static_cast<std::byte>((v >> (i * 8)) & 0xFF));
+  };
+  push_u32(static_cast<uint32_t>(base_bytes.size()));
+  out.insert(out.end(), base_bytes.begin(), base_bytes.end());
+  push_u32(static_cast<uint32_t>(cell_bytes.size()));
+  out.insert(out.end(), cell_bytes.begin(), cell_bytes.end());
+  return out;
+}
+
+// Decode a DB blob into (base_bytes, cell_bytes) spans referencing the
+// input. Returns false only on structural corruption (truncated length
+// prefix); legacy pre-L2 blobs without the magic return true with the
+// full blob reported as base and an empty cell span.
+auto DecodeDbBlob(std::span<const std::byte> blob, std::span<const std::byte>& base_out,
+                  std::span<const std::byte>& cell_out) -> bool {
+  if (blob.empty() || blob[0] != kDbBlobMagic) {
+    // Legacy: whole blob is base, no cell part.
+    base_out = blob;
+    cell_out = {};
+    return true;
+  }
+  if (blob.size() < 2 + 4) return false;  // magic + version + base_len
+  // blob[1] is version. Only version 0x01 exists today; reject unknown
+  // versions so a future layout bump can't be misread as v1.
+  if (blob[1] != kDbBlobVersion) return false;
+  auto read_u32 = [&](std::size_t off) -> uint32_t {
+    return static_cast<uint32_t>(blob[off]) | (static_cast<uint32_t>(blob[off + 1]) << 8) |
+           (static_cast<uint32_t>(blob[off + 2]) << 16) |
+           (static_cast<uint32_t>(blob[off + 3]) << 24);
+  };
+  std::size_t off = 2;
+  const uint32_t kBaseLen = read_u32(off);
+  off += 4;
+  if (off + kBaseLen + 4 > blob.size()) return false;
+  base_out = blob.subspan(off, kBaseLen);
+  off += kBaseLen;
+  const uint32_t kCellLen = read_u32(off);
+  off += 4;
+  if (off + kCellLen > blob.size()) return false;
+  cell_out = blob.subspan(off, kCellLen);
+  return true;
+}
+
 }  // namespace
 
 void BaseApp::LoadTracker::MarkTickStarted() {
@@ -580,9 +657,21 @@ void BaseApp::RegisterInternalHandlers() {
         }
         auto* ent = entity_mgr_.Find(kEid);
         if (!ent) return;
-        ent->SetEntityData(std::vector<std::byte>(msg.blob.begin(), msg.blob.end()));
-        if (!RestoreManagedEntity(kEid, ent->TypeId(), msg.dbid,
-                                  std::span<const std::byte>(msg.blob.data(), msg.blob.size()))) {
+        // L2: split the DB blob into its base- and cell-scope halves.
+        // Base bytes feed the C# Base.Deserialize path via RestoreEntity;
+        // cell bytes get stashed on the Proxy so the next CreateCellEntity
+        // can hydrate the cell side through script_init_data.
+        std::span<const std::byte> base_span, cell_span;
+        if (!DecodeDbBlob(std::span<const std::byte>(msg.blob.data(), msg.blob.size()), base_span,
+                          cell_span)) {
+          ATLAS_LOG_ERROR("BaseApp: checkout blob corrupt (entity_id={} dbid={})", kEid, msg.dbid);
+          entity_mgr_.Destroy(kEid);
+          ReleaseCheckout(msg.dbid, ent->TypeId());
+          return;
+        }
+        ent->SetEntityData(std::vector<std::byte>(base_span.begin(), base_span.end()));
+        ent->SetCellBackupData(std::vector<std::byte>(cell_span.begin(), cell_span.end()));
+        if (!RestoreManagedEntity(kEid, ent->TypeId(), msg.dbid, base_span)) {
           (void)NotifyManagedEntityDestroyed(kEid, "CreateBaseFromDB rollback");
           entity_mgr_.Destroy(kEid);
           ReleaseCheckout(msg.dbid, ent->TypeId());
@@ -887,6 +976,11 @@ auto BaseApp::CaptureEntitySnapshot(EntityID entity_id, std::vector<std::byte>& 
     return false;
   }
 
+  // Step 1 — refresh the base-scope blob. GetEntityData callback runs
+  // the base-side C# Serialize, which under M2 emits DATA_BASE fields
+  // only. Cache result back into entity->entity_data_ so live-in-RAM
+  // state always matches what's about to hit the DB.
+  std::vector<std::byte> base_bytes;
   if (HasManagedEntityType(ent->TypeId()) && native_provider_) {
     if (auto fn = native_provider_->get_entity_data_fn()) {
       uint8_t* raw = nullptr;
@@ -909,24 +1003,28 @@ auto BaseApp::CaptureEntitySnapshot(EntityID entity_id, std::vector<std::byte>& 
                         entity_id, len);
         return false;
       }
-      if (len == 0) {
-        out.clear();
-        ent->SetEntityData({});
-        return true;
+      if (len > 0) {
+        base_bytes.assign(reinterpret_cast<const std::byte*>(raw),
+                          reinterpret_cast<const std::byte*>(raw) + len);
       }
-
-      out.assign(reinterpret_cast<const std::byte*>(raw),
-                 reinterpret_cast<const std::byte*>(raw) + len);
-      ent->SetEntityData(out);
-      return true;
+      ent->SetEntityData(base_bytes);
+    } else {
+      // No GetEntityData — fall back to the cached blob so the base
+      // portion at least round-trips unchanged.
+      base_bytes = ent->EntityData();
+      ATLAS_LOG_WARNING("BaseApp: no managed snapshot callback for entity={}, using cached blob",
+                        entity_id);
     }
+  } else {
+    base_bytes = ent->EntityData();
   }
 
-  out = ent->EntityData();
-  if (HasManagedEntityType(ent->TypeId())) {
-    ATLAS_LOG_WARNING("BaseApp: no managed snapshot callback for entity={}, using cached blob",
-                      entity_id);
-  }
+  // Step 2 — stitch in the cell-authoritative blob last pushed up by the
+  // CellApp backup pump (see baseapp_messages.h::BackupCellEntity).
+  // Entities without a cell side simply get an empty cell span.
+  const auto& cell_bytes = ent->CellBackupData();
+  out = EncodeDbBlob(std::span<const std::byte>(base_bytes.data(), base_bytes.size()),
+                     std::span<const std::byte>(cell_bytes.data(), cell_bytes.size()));
   return true;
 }
 
@@ -1076,7 +1174,23 @@ void BaseApp::CompletePrepareLoginFromCheckout(PendingLogin pending, DatabaseID 
     return;
   }
 
-  ent->SetEntityData(std::vector<std::byte>(blob.begin(), blob.end()));
+  // L2: split the DB blob here as well — the login checkout path is the
+  // analogue of CreateBaseFromDB. Base bytes go into entity_data_ /
+  // Base.Deserialize; cell bytes are parked on the Proxy until
+  // CreateCellEntity passes them through script_init_data.
+  std::span<const std::byte> base_span, cell_span;
+  if (!DecodeDbBlob(blob, base_span, cell_span)) {
+    ATLAS_LOG_ERROR("BaseApp: login checkout blob corrupt (dbid={} type={})", dbid, type_id);
+    entity_mgr_.Destroy(ent->EntityId());
+    ReleaseCheckout(dbid, type_id);
+    reply.success = false;
+    reply.error = "blob_corrupt";
+    SendPrepareLoginResult(pending.loginapp_addr, reply);
+    FinishLoginFlow(pending.dbid);
+    return;
+  }
+  ent->SetEntityData(std::vector<std::byte>(base_span.begin(), base_span.end()));
+  ent->SetCellBackupData(std::vector<std::byte>(cell_span.begin(), cell_span.end()));
   if (!entity_mgr_.AssignDbid(ent->EntityId(), dbid)) {
     if (auto* blocking_ent = entity_mgr_.FindByDbid(dbid); blocking_ent) {
       entity_mgr_.Destroy(ent->EntityId());
@@ -1106,7 +1220,7 @@ void BaseApp::CompletePrepareLoginFromCheckout(PendingLogin pending, DatabaseID 
     return;
   }
 
-  if (!RestoreManagedEntity(ent->EntityId(), type_id, dbid, blob)) {
+  if (!RestoreManagedEntity(ent->EntityId(), type_id, dbid, base_span)) {
     (void)NotifyManagedEntityDestroyed(ent->EntityId(), "login rollback");
     entity_mgr_.Destroy(ent->EntityId());
     ReleaseCheckout(dbid, type_id);
@@ -1628,6 +1742,13 @@ auto BaseApp::CreateBaseEntityFromScript(uint16_t type_id, SpaceID space_id, flo
       msg.base_addr = Network().RudpAddress();
       msg.request_id = kEid;
       msg.aoi_radius = aoi_radius;
+      // L2: if the Proxy holds cell_backup_data_ from a prior DB checkout
+      // or cell-side backup push, hand it to the cell via script_init_data
+      // so Cell.Deserialize can hydrate cell-scope properties. Empty on
+      // first-time CreateBaseEntityFromScript — cell uses type defaults.
+      if (auto* ent_new = entity_mgr_.Find(kEid); ent_new) {
+        msg.script_init_data = ent_new->CellBackupData();
+      }
       (void)cell_ch->SendMessage(msg);
       ATLAS_LOG_INFO("BaseApp: sent CreateCellEntity for entity={} type={} space={} to {}", kEid,
                      type_id, effective_space_id, sorted_peers[cell_index].first.ToString());
