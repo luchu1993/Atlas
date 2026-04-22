@@ -15,23 +15,31 @@ internal static class PropertiesEmitter
     {
         if (def.Properties.Count == 0) return null;
 
-        // Filter properties based on process context. ATLAS_DEF008 drops
-        // any replicable `position` — its declaration is a ghost (the
-        // ClientEntity base class + volatile channel handle position
-        // already), so emitting a backing field / property here would
-        // shadow the base-class Position and create two sources of truth.
+        // ATLAS_DEF008 dropped up front (spans every ctx): `position` in a
+        // replicable scope is a ghost of the ClientEntity base class's
+        // Position + the volatile channel, never a real field.
+        var replicableProps = def.Properties
+            .Where(p => p.Scope.IsClientVisible() && !p.IsReservedPosition)
+            .ToList();
+
+        // Backing fields live only on the side that OWNS the value
+        // (IsBase or IsCell, mutually exclusive; Client mirrors every
+        // visible prop; Server legacy fallback emits everything). This is
+        // the M2 split that lets the base stop serialising stale zeros
+        // for cell-scope properties.
         var props = GetPropertiesForContext(def.Properties, ctx)
             .Where(p => !p.IsReservedPosition).ToList();
-        if (props.Count == 0) return null;
+        if (props.Count == 0 && replicableProps.Count == 0) return null;
 
-        // Enum emission vs backing-field emission are decoupled:
-        //   * The enum is needed whenever the class has replicable props, on
-        //     EITHER side — the server uses it for dirty tracking, the client
-        //     uses it for delta-bitmap decode in ApplyReplicatedDelta
-        //     (DeltaSyncEmitter Client branch, Phase B1).
-        //   * The `_dirtyFlags` backing field is server-side only: the
-        //     client has no write-side state and never sets dirty bits.
-        var enumReplicableProps = props.Where(p => IsReplicable(p.Scope)).ToList();
+        // The ReplicatedDirtyFlags enum MUST enumerate the full IsClientVisible
+        // set in stable declaration order on every side — bit N has to denote
+        // the same property on the sender, receiver, and any intermediate
+        // observer, otherwise the 0xF003 wire flags byte is uninterpretable
+        // across the base/cell split. Backing fields filter by ctx, enum
+        // doesn't. The matching iteration rule on the serializers lives in
+        // DeltaSyncEmitter (emitters skip any prop whose field is missing
+        // on this side, so the unused bit positions stay zero in practice).
+        var enumReplicableProps = replicableProps;
         var emitDirtyBacking = ctx != ProcessContext.Client && enumReplicableProps.Count > 0;
 
         var sb = new StringBuilder();
@@ -164,42 +172,30 @@ internal static class PropertiesEmitter
     }
 
     /// <summary>
-    /// Returns properties visible in the given process context.
-    /// Server/Base/Cell see all properties; Client sees only scope >= OwnClient.
+    /// Returns the subset of <paramref name="allProps"/> whose backing field
+    /// lives on the given process side. Mirrors BigWorld's invariant that
+    /// "data only lives on a base or a cell but not both"
+    /// (lib/entitydef/data_description.ipp:113-131): Base only holds
+    /// DATA_BASE scoped properties; Cell holds everything else (cell-scope
+    /// plus client-visible cell-scope). Client is orthogonal — it keeps a
+    /// projection of whatever it can observe from either side. Server is the
+    /// legacy single-process fallback (no ATLAS_BASE/ATLAS_CELL compile
+    /// symbol) and keeps the pre-refactor behaviour of emitting everything
+    /// so existing server-mode samples don't regress.
     /// </summary>
     private static List<PropertyDefModel> GetPropertiesForContext(
         List<PropertyDefModel> allProps, ProcessContext ctx)
     {
-        if (ctx != ProcessContext.Client) return allProps;
-
-        return allProps.Where(p => IsClientVisible(p.Scope)).ToList();
-    }
-
-    private static bool IsClientVisible(PropertyScope scope)
-    {
-        return scope switch
+        return ctx switch
         {
-            PropertyScope.OwnClient => true,
-            PropertyScope.AllClients => true,
-            PropertyScope.OtherClients => true,
-            PropertyScope.CellPublicAndOwn => true,
-            PropertyScope.BaseAndClient => true,
-            _ => false,
+            ProcessContext.Base => allProps.Where(p => p.Scope.IsBase()).ToList(),
+            ProcessContext.Cell => allProps.Where(p => p.Scope.IsCell()).ToList(),
+            ProcessContext.Client => allProps.Where(p => p.Scope.IsClientVisible()).ToList(),
+            _ => allProps,
         };
     }
 
-    private static bool IsReplicable(PropertyScope scope)
-    {
-        return scope switch
-        {
-            PropertyScope.OwnClient => true,
-            PropertyScope.AllClients => true,
-            PropertyScope.OtherClients => true,
-            PropertyScope.CellPublicAndOwn => true,
-            PropertyScope.BaseAndClient => true,
-            _ => false,
-        };
-    }
+    private static bool IsReplicable(PropertyScope scope) => scope.IsClientVisible();
 
     private static (string BackingType, string FlagSuffix) GetFlagsTypeInfo(int fieldCount)
     {

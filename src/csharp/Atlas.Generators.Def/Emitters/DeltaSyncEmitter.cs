@@ -18,8 +18,18 @@ internal static class DeltaSyncEmitter
         // pipeline — no enum bit, no delta serializer/deserializer, no
         // snapshot read/write. Position rides the volatile channel
         // exclusively, handled by ClientEntity base.
+        //
+        // ctx gating mirrors the BigWorld invariant enforced in
+        // PropertiesEmitter.GetPropertiesForContext — a replicable scope
+        // is "cell-side" (OwnClient / AllClients / OtherClients /
+        // CellPublicAndOwn) or "base-side" (BaseAndClient). The delta
+        // pipeline must see only props whose backing field actually lives
+        // on THIS process, otherwise the generator emits references to
+        // fields that don't exist and the build fails.
         var replicableProps = def.Properties
-            .Where(p => IsReplicable(p.Scope) && !p.IsReservedPosition).ToList();
+            .Where(p => p.Scope.IsClientVisible() && !p.IsReservedPosition &&
+                        IsOnThisSide(p.Scope, ctx))
+            .ToList();
         if (replicableProps.Count == 0) return null;
 
         // Client path: no dirty-tracking or outbound serializers. We emit
@@ -138,15 +148,26 @@ internal static class DeltaSyncEmitter
 
     // Client-ctx sibling of the Server Emit path. Produces only
     // ApplyOwnerSnapshot / ApplyOtherSnapshot — the exact symmetric
-    // counterparts of SerializeForOwnerClient / SerializeForOtherClients.
+    // counterparts of the CELL-side SerializeForOwnerClient /
+    // SerializeForOtherClients. Base-scope client-visible props
+    // (BaseAndClient) deliberately don't participate in this snapshot
+    // pair — their wire path is separate (BigWorld sends base-side
+    // properties via set_<propname> rather than bundling them into
+    // createCellPlayer), so client decodes them only on the delta
+    // channel (ApplyReplicatedDelta). Keeping base-scope out of
+    // ApplyOwnerSnapshot preserves lockstep between cell's serializer
+    // and client's deserializer as enforced by
+    // ClientContext_ScopeApplyOrder_MirrorsServerScopeSerialize.
     // No dirty flags, no framing, no event/volatile seq counters on the
     // client.
     private static string? EmitClientSnapshotApplyMethods(EntityDefModel def, string className,
                                                            string namespaceName,
                                                            List<PropertyDefModel> replicableProps)
     {
-        var ownerFields = replicableProps.Where(p => IsOwnerVisible(p.Scope)).ToList();
-        var otherFields = replicableProps.Where(p => IsOtherVisible(p.Scope)).ToList();
+        var ownerFields = replicableProps
+            .Where(p => IsOwnerVisible(p.Scope) && p.Scope.IsCell()).ToList();
+        var otherFields = replicableProps
+            .Where(p => IsOtherVisible(p.Scope) && p.Scope.IsCell()).ToList();
         if (ownerFields.Count == 0 && otherFields.Count == 0) return null;
 
         var sb = new StringBuilder();
@@ -405,46 +426,23 @@ internal static class DeltaSyncEmitter
         sb.AppendLine("    }");
     }
 
-    private static bool IsReplicable(PropertyScope scope)
-    {
-        return scope switch
-        {
-            PropertyScope.OwnClient => true,
-            PropertyScope.AllClients => true,
-            PropertyScope.OtherClients => true,
-            PropertyScope.CellPublicAndOwn => true,
-            PropertyScope.BaseAndClient => true,
-            _ => false,
-        };
-    }
+    // Delegate to the shared PropertyScopeExtensions helpers so every caller
+    // (emitters, DEF008 detection, runtime) resolves scope membership
+    // against the same rulebook. See DefModel.cs for the BigWorld flag
+    // cross-reference.
+    private static bool IsOwnerVisible(PropertyScope scope) => scope.IsOwnClientVisible();
+    private static bool IsOtherVisible(PropertyScope scope) => scope.IsOtherClientsVisible();
 
-    /// <summary>
-    /// Owner client receives: OwnClient, AllClients, CellPublicAndOwn, BaseAndClient
-    /// </summary>
-    private static bool IsOwnerVisible(PropertyScope scope)
+    // Decide whether a replicable scope belongs on this process's generated
+    // class. Client always sees every replicable property (from its
+    // observer-side projection); Server (legacy fallback) also sees
+    // everything; Base owns BaseAndClient; Cell owns the rest.
+    private static bool IsOnThisSide(PropertyScope scope, ProcessContext ctx) => ctx switch
     {
-        return scope switch
-        {
-            PropertyScope.OwnClient => true,
-            PropertyScope.AllClients => true,
-            PropertyScope.CellPublicAndOwn => true,
-            PropertyScope.BaseAndClient => true,
-            _ => false,
-        };
-    }
-
-    /// <summary>
-    /// Non-owner clients receive: AllClients, OtherClients
-    /// </summary>
-    private static bool IsOtherVisible(PropertyScope scope)
-    {
-        return scope switch
-        {
-            PropertyScope.AllClients => true,
-            PropertyScope.OtherClients => true,
-            _ => false,
-        };
-    }
+        ProcessContext.Base => scope.IsBase(),
+        ProcessContext.Cell => scope.IsCell(),
+        _ => true,  // Client, Server — emit everything the caller has already filtered
+    };
 
     private static (string BackingType, string FlagSuffix, string WriterMethod, string ReaderMethod, string CastPrefix) GetFlagsTypeInfo(int fieldCount)
     {

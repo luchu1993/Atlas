@@ -583,7 +583,11 @@ public partial class Avatar : ServerEntity
     public override void Deserialize(ref SpanReader r) {}
 }
 ";
-        var (result, _) = RunDefGenerator(source, reliableXml, "ATLAS_BASE");
+        // hp and mana are scope="all_clients" which is cell-side under the
+        // M2 scope-split refactor — their backing field + DeltaSync lives
+        // only in the cell-generated partial. Test exercises the cell's
+        // delta plumbing so run under ATLAS_CELL.
+        var (result, _) = RunDefGenerator(source, reliableXml, "ATLAS_CELL");
 
         var deltaTree = result.GeneratedTrees
             .FirstOrDefault(t => t.FilePath.Contains("Avatar.DeltaSync"));
@@ -631,7 +635,8 @@ public partial class Drone : ServerEntity
     public override void Deserialize(ref SpanReader r) {}
 }
 ";
-        var (result, _) = RunDefGenerator(source, xml, "ATLAS_BASE");
+        // velocity all_clients → cell-side under M2.
+        var (result, _) = RunDefGenerator(source, xml, "ATLAS_CELL");
 
         var deltaTree = result.GeneratedTrees.FirstOrDefault(t => t.FilePath.Contains("DeltaSync"));
         Assert.NotNull(deltaTree);
@@ -674,7 +679,8 @@ public partial class Avatar : ServerEntity
     public override void Deserialize(ref SpanReader r) {}
 }
 ";
-        var (result, _) = RunDefGenerator(source, xml, "ATLAS_BASE");
+        // hp/level all_clients/own_client → cell-side under M2.
+        var (result, _) = RunDefGenerator(source, xml, "ATLAS_CELL");
 
         var deltaTree = result.GeneratedTrees.FirstOrDefault(t => t.FilePath.Contains("DeltaSync"));
         Assert.NotNull(deltaTree);
@@ -773,19 +779,23 @@ public partial class Avatar : ClientEntity
         Assert.NotNull(delta);
         var code = delta!.GetText().ToString();
 
-        // Owner-visible from AvatarDef (in declaration order): hp, mana, secret, level
+        // ApplyOwnerSnapshot mirrors the CELL-side SerializeForOwnerClient
+        // only — base-scope own-client props (secret) flow on a separate
+        // wire (BigWorld model: base sends set_<propname>, cell sends
+        // createCellPlayer). The owner-visible cell-scope fields in
+        // declaration order are: hp, mana, level.
         var body = ExtractMethodBody(code, "ApplyOwnerSnapshot(ref SpanReader reader)");
-        int hp     = body.IndexOf("_hp = reader.ReadInt32()",  System.StringComparison.Ordinal);
-        int mana   = body.IndexOf("_mana = reader.ReadInt32()",System.StringComparison.Ordinal);
-        int secret = body.IndexOf("_secret = reader.ReadString()", System.StringComparison.Ordinal);
-        int level  = body.IndexOf("_level = reader.ReadInt32()",System.StringComparison.Ordinal);
+        int hp    = body.IndexOf("_hp = reader.ReadInt32()",   System.StringComparison.Ordinal);
+        int mana  = body.IndexOf("_mana = reader.ReadInt32()", System.StringComparison.Ordinal);
+        int level = body.IndexOf("_level = reader.ReadInt32()",System.StringComparison.Ordinal);
 
-        Assert.True(hp >= 0 && mana > hp && secret > mana && level > secret,
-            $"owner-visible fields not in declaration order; body was:\n{body}");
+        Assert.True(hp >= 0 && mana > hp && level > mana,
+            $"owner-visible cell-scope fields not in declaration order; body was:\n{body}");
 
-        // Fields outside the owner-scope must not appear.
-        Assert.DoesNotContain("_gold",    body);  // scope=base
-        Assert.DoesNotContain("_aiState", body);  // scope=cell_public
+        // Fields outside the cell owner-scope must not appear here.
+        Assert.DoesNotContain("_gold",    body);  // scope=base (base-only)
+        Assert.DoesNotContain("_secret",  body);  // scope=base_and_client — lives on base wire
+        Assert.DoesNotContain("_aiState", body);  // scope=cell_public (no client visibility)
         Assert.DoesNotContain("_modelId", body);  // scope=other_clients (other-only)
         Assert.DoesNotContain("_pos",     body);  // scope=cell_private
     }
@@ -890,8 +900,15 @@ public partial class Avatar : ServerEntity
     public partial void OnPlayerDead() {}
 }
 ";
+        // Compare against cell-side emission — M2 moved the cell-scope
+        // replicable props (hp/aiState/modelId/mana/level) off the base
+        // partial, so the client's owner/other snapshot wire is mirror
+        // symmetric with the CELL serializer, not the base one.
+        // Base-side projection (secret base_and_client) is a separate
+        // lockstep covered by its own test (see
+        // ClientContext_BaseAndClientProperty_*).
         var (clientResult, _) = RunDefGenerator(clientSource, AvatarDef, "ATLAS_CLIENT");
-        var (baseResult,   _) = RunDefGenerator(baseSource,   AvatarDef, "ATLAS_BASE");
+        var (baseResult,   _) = RunDefGenerator(baseSource,   AvatarDef, "ATLAS_CELL");
 
         var clientCode = clientResult.GeneratedTrees
             .First(t => t.FilePath.Contains("Avatar.DeltaSync")).GetText().ToString();
@@ -1080,8 +1097,12 @@ public partial class Avatar : ServerEntity
     public partial void OnPlayerDead() {}
 }
 ";
+        // M2: delta-write now happens per side. Client's merged
+        // ApplyReplicatedDelta must agree with whichever side actually
+        // produced the delta — for the cell-scope props in AvatarDef
+        // (every replicable except `secret`), that's the cell side.
         var (clientResult, _) = RunDefGenerator(clientSource, AvatarDef, "ATLAS_CLIENT");
-        var (baseResult,   _) = RunDefGenerator(baseSource,   AvatarDef, "ATLAS_BASE");
+        var (baseResult,   _) = RunDefGenerator(baseSource,   AvatarDef, "ATLAS_CELL");
 
         var clientCode = clientResult.GeneratedTrees
             .First(t => t.FilePath.Contains("Avatar.DeltaSync")).GetText().ToString();
@@ -1105,7 +1126,23 @@ public partial class Avatar : ServerEntity
         {
             serverSeq.Add(m.Groups[1].Value);
         }
-        Assert.Equal(serverSeq, clientSeq);
+        // Under M2, each server side writes a SUBSET of the replicable
+        // props (cell writes cell-scope, base writes base-scope). Client's
+        // reader walks the union in declaration order; for the guard
+        // `if ((flags & .Prop) != 0) reader.Read()` to stay in lockstep,
+        // the server's write order must be a declaration-ordered
+        // SUBSEQUENCE of the client's read order. Equality was the
+        // pre-M2 invariant when a single server ctx wrote all
+        // client-visible props.
+        int idx = 0;
+        foreach (var name in serverSeq)
+        {
+            while (idx < clientSeq.Count && clientSeq[idx] != name) idx++;
+            Assert.True(idx < clientSeq.Count,
+                $"server seq prop '{name}' not found in client seq; " +
+                $"client={string.Join(",", clientSeq)} server={string.Join(",", serverSeq)}");
+            idx++;
+        }
     }
 
     // =========================================================================
@@ -1206,7 +1243,9 @@ public partial class Avatar : ServerEntity
     public partial void OnPlayerDead() {}
 }
 ";
-        var (result, _) = RunDefGenerator(source, AvatarDef, "ATLAS_BASE");
+        // hp is all_clients (cell-scope) — its backing field and setter
+        // live in the cell partial under M2.
+        var (result, _) = RunDefGenerator(source, AvatarDef, "ATLAS_CELL");
         var props = result.GeneratedTrees
             .First(t => t.FilePath.Contains("Avatar.Properties")).GetText().ToString();
 
@@ -1392,7 +1431,10 @@ public partial class Avatar : ServerEntity
     public override void Deserialize(ref SpanReader r) {}
 }
 ";
-        var (result, _) = RunDefGenerator(source, xml, "ATLAS_BASE");
+        // hp is all_clients (cell-scope) under M2 — run under ATLAS_CELL so
+        // the test exercises the side that actually emits the hp backing
+        // field.
+        var (result, _) = RunDefGenerator(source, xml, "ATLAS_CELL");
 
         // Diagnostic surfaced.
         Assert.Contains(result.Diagnostics, d => d.Id == "ATLAS_DEF008");

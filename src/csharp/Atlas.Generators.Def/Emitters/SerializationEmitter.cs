@@ -35,19 +35,46 @@ internal static class SerializationEmitter
         // ATLAS_DEF008: reserved-position properties are skipped everywhere.
         // PropertiesEmitter doesn't emit a backing field for them, so
         // referencing `_position` here would not compile.
-        var allProps = def.Properties.Where(p => !p.IsReservedPosition).ToList();
+        //
+        // BigWorld's base/cell split (data_description.ipp:113-131) gives us
+        // TWO independent "full state" wire formats, not one:
+        //   * Base.Serialize writes base-persistent fields (goes to DBApp
+        //     via GetEntityData → dbapp::WriteEntity). Matches BigWorld's
+        //     Base::addToStream restricted to DATA_BASE properties.
+        //   * Cell.Serialize writes cell-authoritative fields (goes to the
+        //     offload bundle and eventually to BaseApp as cellBackupData
+        //     opaque bytes once L1 lands). Matches BigWorld's
+        //     RealEntity::writeBackupProperties restricted to CELL_DATA.
+        // These two blobs are decoded in their matching ctx only — base
+        // never deserialises cell fields and vice versa. Client projects
+        // whatever it can observe regardless of which side authored it.
+        //
+        // NOTE (transitional, until L1/L2): because Cell.Serialize no
+        // longer piggy-backs onto the DB write path, cell properties
+        // marked persistent="true" are effectively unpersisted between
+        // M2 and L1. No current stress-test property relies on that
+        // (Avatar.gold/secret are base-side; StressAvatar.hp isn't
+        // persistent); samples/base/Avatar's cell-persistent hp is
+        // documented as a known gap in PHASE_C_VALIDATION.md §3.
+        var sideProps = GetPropertiesForContext(def.Properties, ctx)
+            .Where(p => !p.IsReservedPosition).ToList();
 
-        // Server/Base/Cell: generate Serialize (full state)
-        // Client: no Serialize (clients don't send full state)
+        // Server/Base/Cell: generate Serialize (full state). Client never
+        // originates state so it gets no Serialize.
         if (ctx != ProcessContext.Client)
         {
-            EmitSerialize(sb, allProps);
+            EmitSerialize(sb, sideProps);
             sb.AppendLine();
         }
 
-        // All contexts: generate Deserialize
-        // Client deserializes only client-visible fields; non-visible fields are read and discarded.
-        EmitDeserialize(sb, allProps, ctx);
+        // Deserialize reads the matching wire format — same scope partition
+        // as the writer above. Client's side filter is built into
+        // GetPropertiesForContext (keeps only IsClientVisible), so the
+        // "read-and-discard" branch inside EmitDeserialize is now dead code
+        // for Client ctx (every prop in sideProps has a field on the client
+        // too). Retained as a harmless passthrough until wire-format layer
+        // is simplified in a later commit.
+        EmitDeserialize(sb, sideProps, ctx);
 
         sb.AppendLine("}");
         return sb.ToString();
@@ -107,16 +134,19 @@ internal static class SerializationEmitter
         sb.AppendLine("    }");
     }
 
-    private static bool IsClientVisible(PropertyScope scope)
+    private static bool IsClientVisible(PropertyScope scope) => scope.IsClientVisible();
+
+    // Matches PropertiesEmitter.GetPropertiesForContext — the two must agree
+    // or Serialize refers to fields that don't exist in the generated class.
+    private static List<PropertyDefModel> GetPropertiesForContext(
+        List<PropertyDefModel> allProps, ProcessContext ctx)
     {
-        return scope switch
+        return ctx switch
         {
-            PropertyScope.OwnClient => true,
-            PropertyScope.AllClients => true,
-            PropertyScope.OtherClients => true,
-            PropertyScope.CellPublicAndOwn => true,
-            PropertyScope.BaseAndClient => true,
-            _ => false,
+            ProcessContext.Base => allProps.Where(p => p.Scope.IsBase()).ToList(),
+            ProcessContext.Cell => allProps.Where(p => p.Scope.IsCell()).ToList(),
+            ProcessContext.Client => allProps.Where(p => p.Scope.IsClientVisible()).ToList(),
+            _ => allProps,
         };
     }
 }
