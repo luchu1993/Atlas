@@ -152,6 +152,7 @@ enum class CellApp : uint16_t {
   kAvatarUpdate = 3020,
   kEnableWitness = 3021,
   kDisableWitness = 3022,
+  kSetAoIRadius = 3023,
   // ── Phase 11: inter-CellApp Real/Ghost + Offload (3100–3199) ───────────
   // Real ↔ Ghost replication (Real CellApp → Ghost CellApp).
   kCreateGhost = 3100,
@@ -291,6 +292,7 @@ ATLAS_ASSERT_ID_RANGE(CellApp::kDestroySpace, 3000, 3999);
 ATLAS_ASSERT_ID_RANGE(CellApp::kAvatarUpdate, 3000, 3999);
 ATLAS_ASSERT_ID_RANGE(CellApp::kEnableWitness, 3000, 3999);
 ATLAS_ASSERT_ID_RANGE(CellApp::kDisableWitness, 3000, 3999);
+ATLAS_ASSERT_ID_RANGE(CellApp::kSetAoIRadius, 3000, 3999);
 ATLAS_ASSERT_ID_RANGE(CellApp::kCreateGhost, 3000, 3999);
 ATLAS_ASSERT_ID_RANGE(CellApp::kDeleteGhost, 3000, 3999);
 ATLAS_ASSERT_ID_RANGE(CellApp::kGhostPositionUpdate, 3000, 3999);

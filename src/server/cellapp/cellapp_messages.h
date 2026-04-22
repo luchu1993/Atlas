@@ -414,6 +414,49 @@ struct DisableWitness {
 };
 static_assert(NetworkMessage<DisableWitness>);
 
+// ----------------------------------------------------------------------------
+// SetAoIRadius  (BaseApp/script → CellApp, ID 3023)
+//
+// Runtime AoI radius + hysteresis adjustment for an already-witnessed
+// cell entity. BigWorld parity: `entity.setAoIRadius(radius, hyst)` in
+// witness.cpp:2109 — mutates the Witness and reshapes its trigger in
+// place. The handler silently drops the message if the target has no
+// Witness attached (log-warn; the typical cause is a race where bind
+// notifications arrive after Witness teardown).
+// ----------------------------------------------------------------------------
+
+struct SetAoIRadius {
+  EntityID base_entity_id{kInvalidEntityID};
+  float radius{0.f};
+  float hysteresis{0.f};
+
+  static auto Descriptor() -> const MessageDesc& {
+    static const MessageDesc kDesc{msg_id::Id(msg_id::CellApp::kSetAoIRadius),
+                                   "cellapp::SetAoIRadius", MessageLengthStyle::kFixed,
+                                   static_cast<int>(sizeof(EntityID) + 2 * sizeof(float))};
+    return kDesc;
+  }
+
+  void Serialize(BinaryWriter& w) const {
+    w.Write(base_entity_id);
+    w.Write(radius);
+    w.Write(hysteresis);
+  }
+
+  static auto Deserialize(BinaryReader& r) -> Result<SetAoIRadius> {
+    auto eid = r.Read<uint32_t>();
+    auto rad = r.Read<float>();
+    auto hyst = r.Read<float>();
+    if (!eid || !rad || !hyst) return Error{ErrorCode::kInvalidArgument, "SetAoIRadius: truncated"};
+    SetAoIRadius msg;
+    msg.base_entity_id = *eid;
+    msg.radius = *rad;
+    msg.hysteresis = *hyst;
+    return msg;
+  }
+};
+static_assert(NetworkMessage<SetAoIRadius>);
+
 }  // namespace atlas::cellapp
 
 #endif  // ATLAS_SERVER_CELLAPP_CELLAPP_MESSAGES_H_

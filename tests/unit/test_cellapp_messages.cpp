@@ -145,6 +145,29 @@ TEST(CellAppMessages, EnableDisableWitnessRoundTrip) {
   EXPECT_EQ(rtd->base_entity_id, 17u);
 }
 
+// PR 34 / Commit C1: runtime SetAoIRadius (BigWorld's setAoIRadius in
+// witness.cpp:2109). Carries both radius and hysteresis so a single RPC
+// reshapes the dual-band AoITrigger.
+TEST(CellAppMessages, SetAoIRadiusRoundTrip) {
+  SetAoIRadius s;
+  s.base_entity_id = 42;
+  s.radius = 120.25f;
+  s.hysteresis = 8.5f;
+
+  auto rt = RoundTrip(s);
+  ASSERT_TRUE(rt.has_value());
+  EXPECT_EQ(rt->base_entity_id, 42u);
+  EXPECT_FLOAT_EQ(rt->radius, 120.25f);
+  EXPECT_FLOAT_EQ(rt->hysteresis, 8.5f);
+
+  // ID must be distinct from EnableWitness/DisableWitness — these three
+  // share a subsystem but carry independent semantics and must not alias.
+  EXPECT_NE(SetAoIRadius::Descriptor().id, EnableWitness::Descriptor().id);
+  EXPECT_NE(SetAoIRadius::Descriptor().id, DisableWitness::Descriptor().id);
+  EXPECT_EQ(SetAoIRadius::Descriptor().id,
+            static_cast<MessageID>(msg_id::Id(msg_id::CellApp::kSetAoIRadius)));
+}
+
 // The two RPC flavours MUST resolve to distinct message IDs — collapsing
 // them would let a client-initiated call be mistaken for a trusted
 // internal call (and vice versa). phase10_cellapp.md §9.7.
@@ -174,4 +197,5 @@ TEST(CellAppMessages, AllMessagesInAllocatedIdRange) {
   check(AvatarUpdate::Descriptor().id);
   check(EnableWitness::Descriptor().id);
   check(DisableWitness::Descriptor().id);
+  check(SetAoIRadius::Descriptor().id);
 }
