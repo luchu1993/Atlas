@@ -24,6 +24,7 @@
 #include "space.h"
 #include "space/move_controller.h"
 #include "space/timer_controller.h"
+#include "witness.h"
 
 namespace atlas {
 namespace {
@@ -127,6 +128,60 @@ TEST(OffloadRevert, RevertRestoresRealWithHauntsCellAndControllers) {
     }
   });
   EXPECT_TRUE(saw_move);
+}
+
+// Phase 11 C2: revert must re-attach the Witness with the pre-Offload
+// radius + hysteresis. Losing it would silently drop a script-level
+// SetAoIRadius across a failed-Offload boundary.
+TEST(OffloadRevert, RevertReattachesWitnessWithPreservedRadius) {
+  Harness h;
+  auto* peer_channel = FakeChannel(0xBEEF);  // needed for ConvertRealToGhost
+  auto* entity = SeedEntityWithState(h, /*id=*/150, /*haunt_channel=*/nullptr);
+
+  // Pretend the entity had a witness with custom AoI before Offload.
+  // Don't actually EnableWitness here — the test isolates the revert
+  // attach path: we seed PendingOffload as if TickOffloadChecker had
+  // captured those values pre-ConvertRealToGhost.
+  CellApp::PendingOffload po;
+  const Address target(0x7F000001u, 30002);
+  CaptureSnapshot(po, *entity, /*sid=*/42, /*cid=*/7, target, /*haunt_addrs=*/{});
+  po.had_witness = true;
+  po.aoi_radius = 75.f;
+  po.aoi_hysteresis = 12.5f;
+
+  // Simulate the Offload send handoff.
+  entity->ConvertRealToGhost(peer_channel);
+  ASSERT_TRUE(entity->IsGhost());
+  entity->GetSpace().FindLocalCell(7)->RemoveRealEntity(entity);
+
+  h.app.PendingOffloadsForTest()[entity->Id()] = std::move(po);
+  h.app.RevertPendingOffload(entity->Id(), "witness-preserve");
+
+  ASSERT_TRUE(entity->IsReal());
+  ASSERT_TRUE(entity->HasWitness()) << "revert must re-attach the witness";
+  EXPECT_FLOAT_EQ(entity->GetWitness()->AoIRadius(), 75.f);
+  EXPECT_FLOAT_EQ(entity->GetWitness()->Hysteresis(), 12.5f);
+}
+
+// Phase 11 C2: if the entity never had a witness (e.g. a server-only
+// headless entity), revert must not spuriously attach one.
+TEST(OffloadRevert, RevertLeavesEntityWitnessless) {
+  Harness h;
+  auto* peer_channel = FakeChannel(0xDEAD);
+  auto* entity = SeedEntityWithState(h, /*id=*/151, /*haunt_channel=*/nullptr);
+
+  CellApp::PendingOffload po;
+  CaptureSnapshot(po, *entity, /*sid=*/42, /*cid=*/7, Address(0, 0), /*haunt_addrs=*/{});
+  po.had_witness = false;  // explicit — the default but worth naming
+
+  entity->ConvertRealToGhost(peer_channel);
+  entity->GetSpace().FindLocalCell(7)->RemoveRealEntity(entity);
+
+  h.app.PendingOffloadsForTest()[entity->Id()] = std::move(po);
+  h.app.RevertPendingOffload(entity->Id(), "no-witness");
+
+  EXPECT_TRUE(entity->IsReal());
+  EXPECT_FALSE(entity->HasWitness());
 }
 
 // ============================================================================

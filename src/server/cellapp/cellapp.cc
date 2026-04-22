@@ -650,22 +650,12 @@ void CellApp::OnAvatarUpdate(const Address& /*src*/, Channel* /*ch*/,
   entity->SetOnGround(msg.on_ground);
 }
 
-void CellApp::OnEnableWitness(const Address& /*src*/, Channel* /*ch*/,
-                              const cellapp::EnableWitness& msg) {
-  auto* entity = FindEntityByBaseId(msg.base_entity_id);
-  if (!entity) {
-    ATLAS_LOG_WARNING("CellApp: EnableWitness for unknown base_id={}", msg.base_entity_id);
-    return;
-  }
+void CellApp::AttachWitness(CellEntity& entity, float aoi_radius, float hysteresis) {
   // Wire delivery callbacks to real BaseApp messages. The lambdas
   // capture `this` to access Network() for RUDP channel establishment
   // and base_entity_population_ for observer → BaseApp address lookup.
-  //
-  // Radius + hysteresis come from CellAppConfig — BigWorld's ctor-time
-  // defaultAoIRadius/aoiHyst reads, lifted into runtime config. Scripts
-  // that want a non-default radius follow up with a SetAoIRadius RPC.
-  entity->EnableWitness(
-      CellAppConfig::DefaultAoIRadius(),
+  entity.EnableWitness(
+      aoi_radius,
       // Reliable path — AoI enter/leave + ordered property deltas.
       // Routed via ReplicatedReliableDeltaFromCell (msg 2017) which
       // bypasses DeltaForwarder and reaches the client reliably.
@@ -692,7 +682,20 @@ void CellApp::OnEnableWitness(const Address& /*src*/, Channel* /*ch*/,
         msg.delta.assign(env.begin(), env.end());
         (void)(*ch)->SendMessage(msg);
       },
-      CellAppConfig::DefaultAoIHysteresis());
+      hysteresis);
+}
+
+void CellApp::OnEnableWitness(const Address& /*src*/, Channel* /*ch*/,
+                              const cellapp::EnableWitness& msg) {
+  auto* entity = FindEntityByBaseId(msg.base_entity_id);
+  if (!entity) {
+    ATLAS_LOG_WARNING("CellApp: EnableWitness for unknown base_id={}", msg.base_entity_id);
+    return;
+  }
+  // Radius + hysteresis come from CellAppConfig — BigWorld's ctor-time
+  // defaultAoIRadius/aoiHyst reads, lifted into runtime config. Scripts
+  // that want a non-default radius follow up with a SetAoIRadius RPC.
+  AttachWitness(*entity, CellAppConfig::DefaultAoIRadius(), CellAppConfig::DefaultAoIHysteresis());
 }
 
 void CellApp::OnDisableWitness(const Address& /*src*/, Channel* /*ch*/,
@@ -937,6 +940,16 @@ void CellApp::OnOffloadEntity(const Address& src, Channel* ch, const cellapp::Of
     space->LocalCells().begin()->second->AddRealEntity(entity);
   }
 
+  // Phase 11 C2: re-attach the Witness with the preserved radius +
+  // hysteresis. Runs AFTER PublishReplicationFrame / Cell membership so
+  // AoITrigger's initial sweep sees the right peer set + seq baselines.
+  // Without this, the client would stop receiving AoI envelopes the
+  // moment a Real crosses a cell boundary (BaseApp re-routes cell_addr
+  // via CurrentCell but has no channel to auto-fire EnableWitness).
+  if (msg.has_witness) {
+    AttachWitness(*entity, msg.aoi_radius, msg.aoi_hysteresis);
+  }
+
   // Phase 11 PR-6 review-fix B2: rebuild controllers from the sender's
   // snapshot. Must run AFTER the entity is registered with
   // entity_population_ + the local Cell so the ProximityController's
@@ -1092,6 +1105,14 @@ void CellApp::RevertPendingOffload(EntityID entity_id, const char* reason) {
           "CellApp: Offload revert controller restore failed for entity_id={} — controllers lost",
           entity_id);
     }
+  }
+
+  // Phase 11 C2: reattach the witness with the pre-Offload radius/hyst.
+  // Mirrors the receive-path reattachment in OnOffloadEntity — in fact
+  // either path must produce an identical witness-bearing Real, so
+  // revert delegates to the same AttachWitness helper.
+  if (po.had_witness) {
+    AttachWitness(*entity, po.aoi_radius, po.aoi_hysteresis);
   }
 
   ATLAS_LOG_INFO(
@@ -1269,6 +1290,15 @@ auto CellApp::BuildOffloadMessage(const CellEntity& entity) const -> cellapp::Of
     auto buf = cw.Detach();
     msg.controller_data.assign(buf.begin(), buf.end());
   }
+  // Phase 11 C2: preserve Witness state across the Offload. Read
+  // BEFORE ConvertRealToGhost (the caller sequences this correctly).
+  // BigWorld parity — `Witness::writeBackupData` ships both aoiRadius_
+  // and aoiHyst_ (witness.cpp:723).
+  if (const auto* witness = entity.GetWitness()) {
+    msg.has_witness = true;
+    msg.aoi_radius = witness->AoIRadius();
+    msg.aoi_hysteresis = witness->Hysteresis();
+  }
   return msg;
 }
 
@@ -1398,6 +1428,15 @@ void CellApp::TickOffloadChecker() {
         SerializeControllersForMigration(*op.entity, cw);
         auto buf = cw.Detach();
         po.controller_blob.assign(buf.begin(), buf.end());
+      }
+      // Capture witness state BEFORE ConvertRealToGhost strips it. On
+      // a revert the entity must come back with the same radius/hyst
+      // the script had configured — losing it would silently break
+      // SetAoIRadius contracts across a failed-Offload boundary.
+      if (const auto* witness = op.entity->GetWitness()) {
+        po.had_witness = true;
+        po.aoi_radius = witness->AoIRadius();
+        po.aoi_hysteresis = witness->Hysteresis();
       }
       pending_offloads_[op.entity->Id()] = std::move(po);
 

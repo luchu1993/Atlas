@@ -240,6 +240,58 @@ TEST(IntercellMessages, OffloadEntity_RoundTrip_AllBlobsEmpty) {
   EXPECT_TRUE(rt->other_snapshot.empty());
   EXPECT_TRUE(rt->controller_data.empty());
   EXPECT_TRUE(rt->existing_haunts.empty());
+  // Witness tail defaults when nothing was set.
+  EXPECT_FALSE(rt->has_witness);
+  EXPECT_FLOAT_EQ(rt->aoi_radius, 0.f);
+  EXPECT_FLOAT_EQ(rt->aoi_hysteresis, 0.f);
+}
+
+// Phase 11 C2: explicit witness state survives the round-trip so the
+// receiver can re-attach with the script-authored radius + hysteresis
+// (not CellAppConfig defaults).
+TEST(IntercellMessages, OffloadEntity_RoundTrip_WithWitnessState) {
+  OffloadEntity msg;
+  msg.real_entity_id = 42;
+  msg.type_id = 1;
+  msg.space_id = 1;
+  msg.base_addr = Address(0, 1);
+  msg.base_entity_id = 42;
+  msg.has_witness = true;
+  msg.aoi_radius = 123.5f;
+  msg.aoi_hysteresis = 7.5f;
+
+  auto rt = RoundTrip(msg);
+  ASSERT_TRUE(rt.has_value());
+  EXPECT_TRUE(rt->has_witness);
+  EXPECT_FLOAT_EQ(rt->aoi_radius, 123.5f);
+  EXPECT_FLOAT_EQ(rt->aoi_hysteresis, 7.5f);
+}
+
+// Phase 11 C2: a serialized payload missing the witness tail (pre-C2
+// format) must deserialize with has_witness=false and zero radius/hyst.
+// Remaining()-guarded decode keeps us resilient across version skew.
+TEST(IntercellMessages, OffloadEntity_Deserialize_TolerantOfMissingWitnessTail) {
+  OffloadEntity msg;
+  msg.real_entity_id = 9;
+  msg.type_id = 2;
+  msg.space_id = 3;
+  msg.base_addr = Address(0, 4);
+  msg.base_entity_id = 9;
+
+  BinaryWriter w;
+  msg.Serialize(w);
+  auto buf = w.Detach();
+  // Truncate the trailing 9-byte witness tail (uint8_t + 2 × float).
+  constexpr std::size_t kWitnessTailBytes = 1 + 2 * sizeof(float);
+  ASSERT_GT(buf.size(), kWitnessTailBytes);
+  buf.resize(buf.size() - kWitnessTailBytes);
+
+  BinaryReader r{std::span<const std::byte>(buf)};
+  auto rt = OffloadEntity::Deserialize(r);
+  ASSERT_TRUE(rt.HasValue());
+  EXPECT_FALSE(rt->has_witness);
+  EXPECT_FLOAT_EQ(rt->aoi_radius, 0.f);
+  EXPECT_FLOAT_EQ(rt->aoi_hysteresis, 0.f);
 }
 
 // ─── OffloadEntityAck ────────────────────────────────────────────────────────

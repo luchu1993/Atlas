@@ -421,6 +421,16 @@ struct OffloadEntity {
   std::vector<std::byte> controller_data;
   std::vector<Address> existing_haunts;
 
+  // Witness state preservation across the Offload boundary. The sender's
+  // Witness is torn down by ConvertRealToGhost; without these fields the
+  // receiver would re-enable with CellAppConfig defaults and silently
+  // drop any script-level SetAoIRadius. BigWorld parity: Witness's
+  // aoiRadius_ / aoiHyst_ both ride in writeBackupData (witness.cpp:723).
+  // `has_witness==false` ⇒ the other two floats are ignored.
+  bool has_witness{false};
+  float aoi_radius{0.f};
+  float aoi_hysteresis{0.f};
+
   static auto Descriptor() -> const MessageDesc& {
     static const MessageDesc kDesc{msg_id::Id(msg_id::CellApp::kOffloadEntity),
                                    "cellapp::OffloadEntity", MessageLengthStyle::kVariable, -1};
@@ -456,6 +466,13 @@ struct OffloadEntity {
       w.Write(a.Ip());
       w.Write(a.Port());
     }
+    // Witness state — appended at the tail so Deserialize can treat the
+    // block as optional via `BinaryReader::Remaining() >= 9`. Keeps
+    // wire-format back-compat with older-boundary tests that pre-date
+    // Phase 11 C2.
+    w.Write(static_cast<uint8_t>(has_witness ? 1 : 0));
+    w.Write(aoi_radius);
+    w.Write(aoi_hysteresis);
   }
 
   static auto Deserialize(BinaryReader& r) -> Result<OffloadEntity> {
@@ -530,6 +547,20 @@ struct OffloadEntity {
       if (!hip || !hport)
         return Error{ErrorCode::kInvalidArgument, "OffloadEntity: haunt addr truncated"};
       msg.existing_haunts.emplace_back(*hip, *hport);
+    }
+    // Optional witness-state tail. Absent ⇒ has_witness=false (the
+    // default), matching older-format payloads without regressing the
+    // Witness behaviour: the receiver leaves no Witness attached, which
+    // is the legacy observable state.
+    if (r.Remaining() >= sizeof(uint8_t) + 2 * sizeof(float)) {
+      auto hw = r.Read<uint8_t>();
+      auto rad = r.Read<float>();
+      auto hyst = r.Read<float>();
+      if (!hw || !rad || !hyst)
+        return Error{ErrorCode::kInvalidArgument, "OffloadEntity: witness tail truncated"};
+      msg.has_witness = (*hw != 0);
+      msg.aoi_radius = *rad;
+      msg.aoi_hysteresis = *hyst;
     }
     return msg;
   }

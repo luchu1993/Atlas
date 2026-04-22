@@ -185,6 +185,13 @@ class CellApp : public EntityApp {
     cellappmgr::CellID cell_id{0};  // 0 ⇒ no local Cell membership to restore
     std::vector<Address> haunt_addrs;
     std::vector<std::byte> controller_blob;
+    // Witness state captured pre-ConvertRealToGhost so revert can
+    // reattach with the script-authored radius / hysteresis intact.
+    // Mirrors the Offload wire payload's preservation of the same
+    // values on the happy path (BigWorld witness.cpp:723 parity).
+    bool had_witness{false};
+    float aoi_radius{0.f};
+    float aoi_hysteresis{0.f};
   };
 
   // Revert a pending Offload back to a live Real. No-op if the entry is
@@ -240,6 +247,12 @@ class CellApp : public EntityApp {
   // M2-disabled BaseApp::EmitBaselineSnapshots and gives
   // reliable="false" properties a genuine recovery channel.
   void TickClientBaselinePump();
+
+  // Attach a Witness to the given Real entity with the specified radius
+  // + hysteresis. Wires the same Reliable / Unreliable send callbacks
+  // that OnEnableWitness uses so the pipeline is identical whether the
+  // witness came up via BindClient, Offload arrival, or Offload revert.
+  void AttachWitness(CellEntity& entity, float aoi_radius, float hysteresis);
 
   // EWMA update of persistent_load_. Reads LastTickWorkDuration() +
   // ExpectedTickPeriod() from the ServerApp base class. BigWorld parity:
