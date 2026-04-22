@@ -55,6 +55,11 @@ internal static class Lifecycle
     {
         EngineContext.SyncContext?.ProcessQueue();
         EntityManager.Instance.OnTickAll(deltaTime);
+        // Collect property/volatile dirty bits that OnTick may have set and
+        // forward them to the cell layer before witnesses sweep this tick's
+        // updates. Skipping this step leaves event_seq pinned at 0 on the
+        // C++ side and no property delta ever reaches a client.
+        EntityManager.Instance.PublishReplicationAll();
     }
 
     internal static void DoOnShutdown()

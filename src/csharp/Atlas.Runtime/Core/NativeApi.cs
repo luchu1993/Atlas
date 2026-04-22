@@ -168,6 +168,48 @@ internal static unsafe partial class NativeApi
     }
 
     // =========================================================================
+    // Replication frame pump (CellApp)
+    // =========================================================================
+    //
+    // Hand one tick of replication output for a single entity to the cell
+    // layer. BuildAndConsumeReplicationFrame on the C# side produces the four
+    // audience-filtered buffers (+ event_seq / volatile_seq); this routes
+    // them to CellEntity::PublishReplicationFrame on the native side, which
+    // updates ReplicationState.history for downstream Witness consumption.
+    //
+    // The four byte* parameters accept nullptr with the corresponding length
+    // == 0 — callers passing empty SpanWriter output skip the `fixed` block.
+    // On non-CellApp processes (BaseApp, Client) the provider logs a warning
+    // and no-ops, so C# can blind-forward any entity whose frame advanced.
+
+    [LibraryImport(LibName, EntryPoint = "AtlasPublishReplicationFrame")]
+    private static partial void PublishReplicationFrameNative(
+        uint entityId, ulong eventSeq, ulong volatileSeq,
+        byte* ownerSnap, int ownerSnapLen,
+        byte* otherSnap, int otherSnapLen,
+        byte* ownerDelta, int ownerDeltaLen,
+        byte* otherDelta, int otherDeltaLen);
+
+    public static void PublishReplicationFrame(uint entityId, ulong eventSeq, ulong volatileSeq,
+        ReadOnlySpan<byte> ownerSnap, ReadOnlySpan<byte> otherSnap,
+        ReadOnlySpan<byte> ownerDelta, ReadOnlySpan<byte> otherDelta)
+    {
+        ThreadGuard.EnsureMainThread();
+        fixed (byte* ownerSnapPtr = ownerSnap)
+        fixed (byte* otherSnapPtr = otherSnap)
+        fixed (byte* ownerDeltaPtr = ownerDelta)
+        fixed (byte* otherDeltaPtr = otherDelta)
+        {
+            PublishReplicationFrameNative(
+                entityId, eventSeq, volatileSeq,
+                ownerSnapPtr, ownerSnap.Length,
+                otherSnapPtr, otherSnap.Length,
+                ownerDeltaPtr, ownerDelta.Length,
+                otherDeltaPtr, otherDelta.Length);
+        }
+    }
+
+    // =========================================================================
     // ABI version (diagnostic)
     // =========================================================================
 

@@ -417,6 +417,21 @@ auto ClientApp::MainLoop() -> int {
         // ClientEntity.EntityId, so it does not need anything here.
         player_entity_id_ = msg.new_entity_id;
         player_type_id_ = msg.new_type_id;
+
+        // Instantiate the matching client-side entity so owner-scope state
+        // deltas (0xF003 carrying kEntityPropertyUpdate for the owner
+        // himself, produced by the CellApp owner-delta forward path) have
+        // a script instance to land on. Witness never ships a kEntityEnter
+        // for the owner's own entity — BigWorld solves this with a
+        // dedicated createCellPlayer message; Atlas reuses CreateEntity
+        // here, and the initial property snapshot arrives via the
+        // BaseApp baseline pump (kBaselineInterval ticks). Without this
+        // step the factory never gets called for the new type, any
+        // subsequent OnHpChanged delta finds no matching ClientEntity and
+        // the script never sees it fire.
+        if (native_provider_ && native_provider_->CreateEntityFn()) {
+          native_provider_->CreateEntityFn()(msg.new_entity_id, msg.new_type_id);
+        }
       });
   network_.InterfaceTable().RegisterTypedHandler<baseapp::CellReady>(
       [](const Address&, Channel*, const baseapp::CellReady&) {

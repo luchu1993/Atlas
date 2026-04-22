@@ -1,5 +1,7 @@
 using System;
 using System.Collections.Generic;
+using Atlas.Core;
+using Atlas.Serialization;
 
 namespace Atlas.Entity;
 
@@ -72,6 +74,69 @@ public sealed class EntityManager
                 entity.OnTick(deltaTime);
         }
         FlushPending();
+    }
+
+    /// <summary>
+    /// Drain each entity's per-tick replication output and hand it to the
+    /// cell layer via <see cref="NativeApi.PublishReplicationFrame"/>. Called
+    /// by <see cref="Atlas.Core.Lifecycle.DoOnTick"/> immediately after
+    /// <see cref="OnTickAll"/> so the pump captures any property / volatile
+    /// state that user code flipped during OnTick.
+    /// <para/>
+    /// Without this, the generator-emitted
+    /// <see cref="ServerEntity.BuildAndConsumeReplicationFrame"/> overrides
+    /// would never run — event_seq and volatile_seq on the C++ side would
+    /// stay at 0, Witness::Update would conclude "peer already up to date"
+    /// and no property deltas would ever reach any client.
+    /// <para/>
+    /// Runs on every process type; on BaseApp / Client
+    /// <see cref="NativeApi.PublishReplicationFrame"/> is a provider-side
+    /// no-op (with a one-time warning), so a shared-script entity's pump
+    /// cost is one virtual call plus one P/Invoke per tick.
+    /// </summary>
+    internal void PublishReplicationAll()
+    {
+        // Single shared quartet of writers — Reset between entities — so we
+        // do one ArrayPool.Rent per Reset cap, not one per entity per tick.
+        // See ServerEntity.BuildAndConsumeReplicationFrame docstring "ZERO-
+        // ALLOC CONTRACT".
+        var ownerSnap = new SpanWriter(256);
+        var otherSnap = new SpanWriter(256);
+        var ownerDelta = new SpanWriter(128);
+        var otherDelta = new SpanWriter(128);
+        try
+        {
+            _iterating = true;
+            foreach (var entity in _entities.Values)
+            {
+                if (entity.IsDestroyed) continue;
+
+                ownerSnap.Reset();
+                otherSnap.Reset();
+                ownerDelta.Reset();
+                otherDelta.Reset();
+
+                if (!entity.BuildAndConsumeReplicationFrame(
+                        ref ownerSnap, ref otherSnap,
+                        ref ownerDelta, ref otherDelta,
+                        out var eventSeq, out var volatileSeq))
+                {
+                    continue;  // fast path — nothing changed this tick
+                }
+
+                NativeApi.PublishReplicationFrame(entity.EntityId, eventSeq, volatileSeq,
+                    ownerSnap.WrittenSpan, otherSnap.WrittenSpan,
+                    ownerDelta.WrittenSpan, otherDelta.WrittenSpan);
+            }
+            FlushPending();
+        }
+        finally
+        {
+            ownerSnap.Dispose();
+            otherSnap.Dispose();
+            ownerDelta.Dispose();
+            otherDelta.Dispose();
+        }
     }
 
     internal void OnShutdownAll()

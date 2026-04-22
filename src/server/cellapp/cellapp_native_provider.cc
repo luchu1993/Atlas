@@ -5,6 +5,7 @@
 #include <utility>
 
 #include "baseapp/baseapp_messages.h"
+#include "cell_aoi_envelope.h"
 #include "cell_entity.h"
 #include "foundation/log.h"
 #include "math/vector3.h"
@@ -139,6 +140,40 @@ void CellAppNativeProvider::PublishReplicationFrame(
   }
 
   entity->PublishReplicationFrame(std::move(frame), owner_snap_span, other_snap_span);
+
+  // Owner-scope direct forward. Witness::HandleAoIEnter skips `&peer ==
+  // &owner_`, so its AoI pump never carries the owner's own client-visible
+  // property changes — observer_is_owner in Witness::SendEntityUpdate is
+  // always false and the generator-emitted owner_delta would otherwise
+  // die here. BigWorld solves this in the opposite direction (push per
+  // change, bigworld server/cellapp/entity.cpp:5670), but the effect is
+  // the same: own-scope flows on a dedicated path that does not go
+  // through the AoI witness.
+  //
+  // Routing: envelope [kind=kEntityPropertyUpdate][base_id u32][event_seq
+  // u64][owner_delta bytes] → ReplicatedReliableDeltaFromCell (msg 2017) to
+  // the BaseApp → 0xF003 to the client. Format is byte-identical to what
+  // Witness produces for peer deltas, so Atlas.Client.ClientCallbacks
+  // decodes both paths with the same DispatchAoIEnvelope handler.
+  if (owner_delta_len > 0 && event_seq > 0 && entity->HasWitness() && network_) {
+    auto base_ch = network_->ConnectRudpNocwnd(entity->BaseAddr());
+    if (base_ch) {
+      const auto base_id = entity->BaseEntityId();
+      std::vector<std::byte> envelope;
+      envelope.reserve(1 + 4 + 8 + static_cast<std::size_t>(owner_delta_len));
+      envelope.push_back(static_cast<std::byte>(CellAoIEnvelopeKind::kEntityPropertyUpdate));
+      for (int i = 0; i < 4; ++i)
+        envelope.push_back(static_cast<std::byte>((base_id >> (i * 8)) & 0xFF));
+      for (int i = 0; i < 8; ++i)
+        envelope.push_back(static_cast<std::byte>((event_seq >> (i * 8)) & 0xFF));
+      envelope.insert(envelope.end(), owner_delta, owner_delta + owner_delta_len);
+
+      baseapp::ReplicatedReliableDeltaFromCell outgoing;
+      outgoing.base_entity_id = base_id;
+      outgoing.delta = std::move(envelope);
+      (void)(*base_ch)->SendMessage(outgoing);
+    }
+  }
 }
 
 auto CellAppNativeProvider::AddMoveController(uint32_t entity_id, float dest_x, float dest_y,
