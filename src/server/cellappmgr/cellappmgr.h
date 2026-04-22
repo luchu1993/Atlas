@@ -87,6 +87,16 @@ class CellAppMgr : public ManagerApp {
  private:
   // ---- Internal helpers ----
   [[nodiscard]] auto PickHostForNewSpace() const -> const CellAppInfo*;
+
+  // Alternate-host picker used on CellApp death: returns the least-
+  // loaded surviving CellApp that is NOT on `exclude_addr`'s IP when
+  // possible, falling back to any survivor when all remaining
+  // CellApps share that IP. Nullptr when no survivor exists.
+  // BigWorld parity: `CellApps::findAlternateApp` + `leastLoaded`
+  // (cellapps.cpp:91-158) — same two-tier "prefer different machine,
+  // break ties on load" preference.
+  [[nodiscard]] auto PickAlternateHost(const Address& exclude_addr) const -> const CellAppInfo*;
+
   void SendAddCell(const CellAppInfo& target, SpaceID space_id, cellappmgr::CellID cell_id,
                    const CellBounds& bounds);
   void BroadcastGeometry(const SpacePartition& partition);

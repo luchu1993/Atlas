@@ -203,6 +203,13 @@ class BSPTree {
   // Snapshot every leaf (handy for UpdateGeometry preparation, watchers).
   [[nodiscard]] auto Leaves() const -> std::vector<const CellInfo*>;
 
+  // Mutable leaf snapshot, for death rehoming: lets the caller rewrite
+  // `cellapp_addr` + `load` on each leaf owned by a dead CellApp
+  // without tearing down the tree. The returned pointers alias the
+  // tree's owned storage and are invalidated by Split() / structural
+  // edits; use them in a single synchronous pass.
+  [[nodiscard]] auto LeavesMutable() -> std::vector<CellInfo*>;
+
   // Pre-order wire format — see Phase 11 Q7. Balance state is intentionally
   // excluded.
   void Serialize(BinaryWriter& w) const;

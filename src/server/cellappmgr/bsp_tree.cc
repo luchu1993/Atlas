@@ -301,6 +301,12 @@ auto BSPTree::Leaves() const -> std::vector<const CellInfo*> {
   return out;
 }
 
+auto BSPTree::LeavesMutable() -> std::vector<CellInfo*> {
+  std::vector<CellInfo*> out;
+  if (root_) root_->CollectLeaves(out);
+  return out;
+}
+
 void BSPTree::Serialize(BinaryWriter& w) const {
   root_bounds_.Serialize(w);
   const uint8_t has_root = root_ ? 1 : 0;

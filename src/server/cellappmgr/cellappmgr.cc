@@ -250,16 +250,67 @@ void CellAppMgr::OnCreateSpaceRequest(const Address& src, Channel* ch,
 void CellAppMgr::OnCellAppDeath(const Address& internal_addr) {
   auto it = cellapps_.find(internal_addr);
   if (it == cellapps_.end()) return;
-  const uint32_t app_id = it->second.app_id;
+  const uint32_t dead_app_id = it->second.app_id;
   cellapps_.erase(it);
-  // For PR-5 we simply log the orphaned cells. Full rehoming is deferred.
-  for (const auto& [space_id, partition] : spaces_) {
-    for (const auto* ci : partition.bsp.Leaves()) {
-      if (ci->cellapp_addr == internal_addr) {
+
+  // BigWorld-style rehoming. All Real entities that were hosted on the
+  // dead CellApp are lost (BaseApp restores them from backup — orthogonal
+  // to mgr-side routing). Our job here is purely to re-point every BSP
+  // leaf owned by the dead app onto a surviving CellApp so future
+  // CreateCellEntity / Offload traffic for that cell lands somewhere
+  // reachable. BigWorld equivalent: CellApp::handleUnexpectedDeath
+  // (cellapp.cpp:312) walks the dead app's cells, picks
+  // findAlternateApp / leastLoaded, and streams
+  // `space.informCellAppsOfGeometry`. Atlas mirrors the algorithm
+  // minus the BaseApp-restoration side-channel.
+  if (cellapps_.empty()) {
+    ATLAS_LOG_CRITICAL(
+        "CellAppMgr: CellApp app_id={} died and no survivors remain — all "
+        "BSP leaves orphaned until a new CellApp registers",
+        dead_app_id);
+    return;
+  }
+
+  for (auto& [space_id, partition] : spaces_) {
+    bool reassigned_any = false;
+    for (auto* leaf : partition.bsp.LeavesMutable()) {
+      if (leaf->cellapp_addr != internal_addr) continue;
+
+      const auto* alt = PickAlternateHost(internal_addr);
+      if (alt == nullptr) {
+        // PickAlternateHost only returns nullptr when cellapps_ is
+        // empty, which we already guarded above. Defensive log for a
+        // would-be regression.
         ATLAS_LOG_ERROR(
-            "CellAppMgr: CellApp app_id={} died — space_id={} cell_id={} is now orphaned", app_id,
-            space_id, ci->cell_id);
+            "CellAppMgr: rehoming cell_id={} (space {}) failed — no "
+            "alternate host; leaf left pointing at dead app",
+            leaf->cell_id, space_id);
+        break;
       }
+
+      ATLAS_LOG_INFO(
+          "CellAppMgr: rehoming cell_id={} (space {}) from dead app_id={} "
+          "to survivor app_id={}",
+          leaf->cell_id, space_id, dead_app_id, alt->app_id);
+
+      leaf->cellapp_addr = alt->internal_addr;
+      // Start the leaf's load from the new host's current load. Keeping
+      // the dead app's last-known load would skew the next Balance pass.
+      leaf->load = alt->load;
+
+      // Tell the new host to materialise the local Cell. UpdateGeometry
+      // alone wouldn't — OnUpdateGeometry only resizes existing Cells,
+      // never creates them (cellapp.cc:1141).
+      SendAddCell(*alt, space_id, leaf->cell_id, leaf->bounds);
+      reassigned_any = true;
+    }
+
+    if (reassigned_any) {
+      // Tell every CellApp hosting ANY leaf in this Space that the
+      // layout changed. BroadcastGeometry reads the (now-updated) leaf
+      // list, so the new host is included in the fan-out and learns
+      // about the full BSP in one pass.
+      BroadcastGeometry(partition);
     }
   }
 }
@@ -298,6 +349,29 @@ auto CellAppMgr::PickHostForNewSpace() const -> const CellAppInfo* {
     }
   }
   return best;
+}
+
+auto CellAppMgr::PickAlternateHost(const Address& exclude_addr) const -> const CellAppInfo* {
+  // Two-tier selection matching BigWorld CellApps::findAlternateApp
+  // (cellapps.cpp:91-130):
+  //   Tier 1: prefer a survivor on a different machine (IP).
+  //   Tier 2: if all survivors share exclude_addr's IP, fall back to
+  //           the least-loaded on that same IP — better than nothing.
+  // Within each tier, break ties on smoothed load (lower = less
+  // booked), then on app_id for determinism.
+  const CellAppInfo* best_diff_ip = nullptr;
+  const CellAppInfo* best_any = nullptr;
+  for (const auto& [addr, info] : cellapps_) {
+    const bool diff_ip = (addr.Ip() != exclude_addr.Ip());
+    auto is_better = [](const CellAppInfo* a, const CellAppInfo* b) {
+      if (a == nullptr) return true;
+      if (b->load != a->load) return b->load < a->load;
+      return b->app_id < a->app_id;
+    };
+    if (is_better(best_any, &info)) best_any = &info;
+    if (diff_ip && is_better(best_diff_ip, &info)) best_diff_ip = &info;
+  }
+  return best_diff_ip != nullptr ? best_diff_ip : best_any;
 }
 
 void CellAppMgr::SendAddCell(const CellAppInfo& target, SpaceID space_id,

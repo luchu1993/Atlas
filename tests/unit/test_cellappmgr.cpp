@@ -229,6 +229,98 @@ TEST(CellAppMgr, CellAppDeath_UnknownAddrSilent) {
   EXPECT_TRUE(h.mgr.CellApps().empty());
 }
 
+// Phase 11 C6: a death with surviving peers rehomes every orphaned leaf
+// onto a survivor so BSP routing stays correct. BigWorld parity:
+// CellApp::handleUnexpectedDeath (cellapp.cpp:312) picks findAlternateApp
+// for each dead cell.
+TEST(CellAppMgr, CellAppDeath_RehomesLeavesToSurvivor) {
+  CellAppMgrHarness h;
+  cellappmgr::RegisterCellApp reg_a;
+  reg_a.internal_addr = MakePeerAddr(30001);
+  h.mgr.OnRegisterCellApp(reg_a.internal_addr, nullptr, reg_a);
+  cellappmgr::RegisterCellApp reg_b;
+  reg_b.internal_addr = MakePeerAddr(30002);
+  h.mgr.OnRegisterCellApp(reg_b.internal_addr, nullptr, reg_b);
+
+  // Space is created on whichever mgr picks — that's the to-be-killed
+  // peer in this test (app_id 1 wins the tie on lowest app_id at zero
+  // load). Assert the initial host then kill it.
+  cellappmgr::CreateSpaceRequest csr;
+  csr.space_id = 7;
+  csr.request_id = 1;
+  h.mgr.OnCreateSpaceRequest(Address{}, nullptr, csr);
+  ASSERT_EQ(h.mgr.Spaces().count(7), 1u);
+  const auto& partition_before = h.mgr.Spaces().at(7);
+  ASSERT_EQ(partition_before.bsp.Leaves().size(), 1u);
+  const Address initial_host = partition_before.bsp.Leaves()[0]->cellapp_addr;
+  ASSERT_EQ(initial_host, reg_a.internal_addr)
+      << "PickHostForNewSpace should pick the lowest app_id under tied load";
+
+  // Kill the initial host. The surviving peer (app_b) must end up as
+  // the leaf's cellapp_addr.
+  h.mgr.OnCellAppDeath(reg_a.internal_addr);
+
+  const auto& partition_after = h.mgr.Spaces().at(7);
+  ASSERT_EQ(partition_after.bsp.Leaves().size(), 1u);
+  EXPECT_EQ(partition_after.bsp.Leaves()[0]->cellapp_addr, reg_b.internal_addr)
+      << "dead leaf must rehome to the surviving peer";
+  EXPECT_EQ(h.mgr.CellApps().size(), 1u);
+  EXPECT_EQ(h.mgr.CellApps().begin()->second.internal_addr, reg_b.internal_addr);
+}
+
+// Phase 11 C6: multi-leaf Space — several leaves on the dead app all
+// get rehomed to survivor(s) in a single pass. Verifies the loop
+// doesn't bail after the first reassignment.
+TEST(CellAppMgr, CellAppDeath_RehomesAllMatchingLeaves) {
+  CellAppMgrHarness h;
+  cellappmgr::RegisterCellApp reg_a;
+  reg_a.internal_addr = MakePeerAddr(30001);
+  h.mgr.OnRegisterCellApp(reg_a.internal_addr, nullptr, reg_a);
+  cellappmgr::RegisterCellApp reg_b;
+  reg_b.internal_addr = MakePeerAddr(30002);
+  h.mgr.OnRegisterCellApp(reg_b.internal_addr, nullptr, reg_b);
+
+  // Two single-cell Spaces both hosted on app_a (tie break on app_id).
+  cellappmgr::CreateSpaceRequest csr1;
+  csr1.space_id = 10;
+  csr1.request_id = 1;
+  h.mgr.OnCreateSpaceRequest(Address{}, nullptr, csr1);
+  cellappmgr::CreateSpaceRequest csr2;
+  csr2.space_id = 11;
+  csr2.request_id = 2;
+  h.mgr.OnCreateSpaceRequest(Address{}, nullptr, csr2);
+  ASSERT_EQ(h.mgr.Spaces().at(10).bsp.Leaves()[0]->cellapp_addr, reg_a.internal_addr);
+  ASSERT_EQ(h.mgr.Spaces().at(11).bsp.Leaves()[0]->cellapp_addr, reg_a.internal_addr);
+
+  h.mgr.OnCellAppDeath(reg_a.internal_addr);
+
+  EXPECT_EQ(h.mgr.Spaces().at(10).bsp.Leaves()[0]->cellapp_addr, reg_b.internal_addr);
+  EXPECT_EQ(h.mgr.Spaces().at(11).bsp.Leaves()[0]->cellapp_addr, reg_b.internal_addr);
+}
+
+// Phase 11 C6: death with no survivors is log-only; leaves remain
+// pointing at the dead addr so a subsequent CellApp join can optionally
+// reclaim them (not implemented here). Without this guard the code
+// would dereference a nullptr alt host.
+TEST(CellAppMgr, CellAppDeath_LastPeerLeavesSpacesOrphaned) {
+  CellAppMgrHarness h;
+  cellappmgr::RegisterCellApp reg_a;
+  reg_a.internal_addr = MakePeerAddr(30001);
+  h.mgr.OnRegisterCellApp(reg_a.internal_addr, nullptr, reg_a);
+  cellappmgr::CreateSpaceRequest csr;
+  csr.space_id = 100;
+  csr.request_id = 1;
+  h.mgr.OnCreateSpaceRequest(Address{}, nullptr, csr);
+
+  h.mgr.OnCellAppDeath(reg_a.internal_addr);
+
+  EXPECT_TRUE(h.mgr.CellApps().empty());
+  // Space retained; leaf still claims the dead addr (defensive — a
+  // reviving CellApp is the intended recovery path).
+  ASSERT_EQ(h.mgr.Spaces().at(100).bsp.Leaves().size(), 1u);
+  EXPECT_EQ(h.mgr.Spaces().at(100).bsp.Leaves()[0]->cellapp_addr, reg_a.internal_addr);
+}
+
 // ============================================================================
 // TickLoadBalance — safety sanity
 // ============================================================================
