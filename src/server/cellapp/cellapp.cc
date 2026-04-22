@@ -230,6 +230,7 @@ void CellApp::OnTickComplete() {
   const auto dt_secs = std::chrono::duration_cast<Seconds>(GetGameClock().FrameDelta()).count();
   TickControllers(static_cast<float>(dt_secs));
   TickWitnesses();
+  TickBackupPump();
 }
 
 void CellApp::RegisterWatchers() {
@@ -256,6 +257,52 @@ void CellApp::TickWitnesses() {
     space->ForEachEntity([](CellEntity& e) {
       if (auto* w = e.GetWitness()) w->Update(kPerObserverBudget);
     });
+  }
+}
+
+void CellApp::TickBackupPump() {
+  ++backup_tick_counter_;
+  if (backup_tick_counter_ % kBackupIntervalTicks != 0) return;
+
+  // SerializeEntity callback is optional — no C# runtime registered
+  // (unit tests, early boot, scriptless nodes) means nothing to
+  // snapshot. Post-M2 the callback returns CELL_DATA only, so the
+  // bytes are safe to ship verbatim without leaking base-scope state.
+  if (native_provider_ == nullptr || native_provider_->serialize_entity_fn() == nullptr) {
+    return;
+  }
+  auto fn = native_provider_->serialize_entity_fn();
+
+  for (const auto& [base_id, entity] : base_entity_population_) {
+    if (entity == nullptr || !entity->IsReal()) continue;
+    const Address& base_addr = entity->BaseAddr();
+    if (base_addr.Ip() == 0) continue;  // no base binding yet — skip until next pump
+
+    // Size probe + fetch, same two-phase protocol as BuildOffloadMessage
+    // (see Phase 11 §4 / PR-6). Keeps buffer allocation on the C++ side.
+    int32_t probe_out_len = 0;
+    const int32_t probe = fn(entity->Id(), /*out_buf=*/nullptr, /*cap=*/0, &probe_out_len);
+    const int32_t needed = probe > 0 ? probe : (probe == 0 ? probe_out_len : -1);
+    if (needed <= 0) continue;
+
+    std::vector<std::byte> blob(static_cast<std::size_t>(needed));
+    int32_t real_len = 0;
+    const int32_t rc = fn(entity->Id(), reinterpret_cast<uint8_t*>(blob.data()), needed, &real_len);
+    if (rc != 0 || real_len <= 0) {
+      ATLAS_LOG_WARNING(
+          "CellApp: SerializeEntity for backup pump failed (base_id={}, rc={}, real_len={})",
+          base_id, rc, real_len);
+      continue;
+    }
+    blob.resize(static_cast<std::size_t>(real_len));
+
+    auto base_ch = Network().ConnectRudpNocwnd(base_addr);
+    if (!base_ch) continue;  // base transiently unreachable — next pump will retry
+
+    baseapp::BackupCellEntity msg;
+    msg.base_entity_id = base_id;
+    msg.cell_backup_data = std::move(blob);
+    (void)(*base_ch)->SendMessage(msg);
   }
 }
 

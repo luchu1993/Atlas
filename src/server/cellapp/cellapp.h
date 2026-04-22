@@ -210,6 +210,13 @@ class CellApp : public EntityApp {
   // Internal helpers.
   void TickControllers(float dt);
   void TickWitnesses();
+  // BigWorld-style cell→base state backup. Fires every
+  // kBackupIntervalTicks ticks for every entity with a live BaseAddr,
+  // capturing the cell-side Serialize output as opaque bytes and
+  // shipping BackupCellEntity (msg 2018) to the BaseApp. See
+  // baseapp_messages.h::BackupCellEntity for what the base does with
+  // the blob.
+  void TickBackupPump();
   [[nodiscard]] auto AllocateCellEntityId() -> EntityID;
 
   std::unordered_map<SpaceID, std::unique_ptr<Space>> spaces_;
@@ -226,6 +233,14 @@ class CellApp : public EntityApp {
   std::unordered_map<EntityID, CellEntity*> base_entity_population_;
 
   EntityID next_entity_id_{1};
+
+  // Backup pump cadence. 50 ticks ≈ 1 s at 50 Hz. BigWorld's default
+  // is 10 s (cellapp_config.cpp::backupPeriod = 10.f); Atlas uses a
+  // tighter cadence because the absence of a separate baseline pump
+  // means backup bytes are the only authoritative cell-side state the
+  // base sees, and the DB write path wants reasonably fresh snapshots.
+  static constexpr uint32_t kBackupIntervalTicks = 50;
+  uint32_t backup_tick_counter_{0};
 
   // app_id assigned by CellAppMgr's RegisterCellAppAck. Forms the high
   // 8 bits of every EntityID we mint (§9.6 Q8 scheme A).

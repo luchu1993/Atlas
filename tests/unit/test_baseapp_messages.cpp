@@ -174,6 +174,29 @@ TEST(BaseAppMessages, DeltaReliabilityDescriptors) {
             ReplicatedReliableDeltaFromCell::Descriptor().id);
 }
 
+TEST(BaseAppMessages, BackupCellEntity) {
+  // BigWorld-style periodic cell→base opaque-bytes snapshot. The base
+  // stores the payload verbatim; the test confirms round-trip byte
+  // fidelity so DB writes / reviver never see mutated blobs.
+  BackupCellEntity msg;
+  msg.base_entity_id = 0xCAFEBABE;
+  msg.cell_backup_data = {std::byte{0x01}, std::byte{0x23}, std::byte{0x45}, std::byte{0x67},
+                          std::byte{0x89}};
+
+  auto rt = round_trip(msg);
+  ASSERT_TRUE(rt.has_value());
+  EXPECT_EQ(rt->base_entity_id, 0xCAFEBABEu);
+  ASSERT_EQ(rt->cell_backup_data.size(), 5u);
+  EXPECT_EQ(rt->cell_backup_data[0], std::byte{0x01});
+  EXPECT_EQ(rt->cell_backup_data[4], std::byte{0x89});
+}
+
+TEST(BaseAppMessages, BackupCellEntityReliable) {
+  // Must ride the reliable channel — DB writes and reviver cannot tolerate
+  // a dropped backup snapshot silently leaving the base with stale bytes.
+  EXPECT_FALSE(BackupCellEntity::Descriptor().IsUnreliable());
+}
+
 TEST(BaseAppMessages, ClientCellRpc) {
   ClientCellRpc msg;
   msg.target_entity_id = 12345;

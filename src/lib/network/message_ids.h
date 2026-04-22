@@ -92,6 +92,14 @@ enum class BaseApp : uint16_t {
   kReplicatedDeltaFromCell = 2015,
   kBroadcastRpcFromCell = 2016,
   kReplicatedReliableDeltaFromCell = 2017,
+  // Internal: CellApp → BaseApp. Periodic opaque-bytes snapshot of the
+  // cell-authoritative CELL_DATA properties, stored verbatim on the
+  // BaseApp's Proxy as cell_backup_data_ for DB writes / reviver /
+  // cell-migration. Directly mirrors BigWorld's
+  // BaseAppIntInterface::backupCellEntity (bigworld/server/cellapp/
+  // real_entity.cpp:884-906). BaseApp never reads the bytes — it only
+  // relays them to whatever consumer needs them.
+  kBackupCellEntity = 2018,
   // External: Client ↔ BaseApp
   kAuthenticate = 2020,
   kAuthenticateResult = 2021,
@@ -254,6 +262,7 @@ ATLAS_ASSERT_ID_RANGE(BaseApp::kSelfRpcFromCell, 2000, 2999);
 ATLAS_ASSERT_ID_RANGE(BaseApp::kReplicatedDeltaFromCell, 2000, 2999);
 ATLAS_ASSERT_ID_RANGE(BaseApp::kBroadcastRpcFromCell, 2000, 2999);
 ATLAS_ASSERT_ID_RANGE(BaseApp::kReplicatedReliableDeltaFromCell, 2000, 2999);
+ATLAS_ASSERT_ID_RANGE(BaseApp::kBackupCellEntity, 2000, 2999);
 ATLAS_ASSERT_ID_RANGE(BaseApp::kAuthenticate, 2000, 2999);
 ATLAS_ASSERT_ID_RANGE(BaseApp::kAuthenticateResult, 2000, 2999);
 ATLAS_ASSERT_ID_RANGE(BaseApp::kEntityTransferred, 2000, 2999);

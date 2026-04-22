@@ -42,9 +42,22 @@ class BaseEntity {
   [[nodiscard]] auto CellAddr() const -> const Address& { return cell_addr_; }
   [[nodiscard]] auto CellEpoch() const -> uint32_t { return cell_epoch_; }
 
-  // Entity data blob (persistent properties serialized by C#)
+  // Entity data blob (base-persistent properties serialised by C#
+  // Base.Serialize — DATA_BASE scope under M2's BigWorld alignment).
   [[nodiscard]] auto EntityData() const -> const std::vector<std::byte>& { return entity_data_; }
   void SetEntityData(std::vector<std::byte> data) { entity_data_ = std::move(data); }
+
+  // Cell backup blob. Periodically pushed up by the cell (CellApp's
+  // BackupCellEntity pump → baseapp handler writes here). The bytes are
+  // the output of the cell-side C# ServerEntity.Serialize, i.e. the
+  // CELL_DATA subset of properties. BaseApp NEVER deserialises them — it
+  // just owns the blob long enough to hand it off to DB writes,
+  // reviver, or a migration target. Matches BigWorld Base::cellBackupData_
+  // (bigworld/server/baseapp/base.hpp:378).
+  [[nodiscard]] auto CellBackupData() const -> const std::vector<std::byte>& {
+    return cell_backup_data_;
+  }
+  void SetCellBackupData(std::vector<std::byte> data) { cell_backup_data_ = std::move(data); }
 
   // Called by DBApp write-ack
   void OnWriteAck(DatabaseID dbid, bool success);
@@ -67,6 +80,7 @@ class BaseEntity {
   Address cell_addr_;
   uint32_t cell_epoch_{0};
   std::vector<std::byte> entity_data_;
+  std::vector<std::byte> cell_backup_data_;
   bool pending_destroy_{false};
   bool writing_to_db_{false};
 };

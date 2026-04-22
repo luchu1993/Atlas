@@ -436,6 +436,11 @@ void BaseApp::RegisterInternalHandlers() {
         OnReplicatedReliableDeltaFromCell(*ch, msg);
       });
 
+  (void)table.RegisterTypedHandler<baseapp::BackupCellEntity>(
+      [this](const Address& /*src*/, Channel* /*ch*/, const baseapp::BackupCellEntity& msg) {
+        OnBackupCellEntity(msg);
+      });
+
   // ---- WriteEntityAck (DBApp → BaseApp) ----------------------------------
   (void)table.RegisterTypedHandler<dbapp::WriteEntityAck>(
       [this](const Address& /*src*/, Channel* /*ch*/, const dbapp::WriteEntityAck& msg) {
@@ -775,6 +780,25 @@ void BaseApp::OnReplicatedReliableDeltaFromCell(
 
   reliable_delta_bytes_sent_total_ += msg.delta.size();
   ++reliable_delta_messages_sent_total_;
+}
+
+// Cell-to-base periodic state backup. BigWorld model: base caches
+// the cell-authoritative bytes without peeking inside them, and uses
+// them verbatim for DB writes / reviver restart / offload migration.
+// See baseapp_messages.h::BackupCellEntity for the flow.
+void BaseApp::OnBackupCellEntity(const baseapp::BackupCellEntity& msg) {
+  auto* entity = entity_mgr_.Find(msg.base_entity_id);
+  if (!entity) {
+    // Not necessarily an error — entity might have just been destroyed
+    // and the last backup is still in flight. Debug-only signal.
+    ATLAS_LOG_DEBUG("BaseApp: BackupCellEntity for unknown entity_id={} (dropped)",
+                    msg.base_entity_id);
+    return;
+  }
+  // The bytes are opaque — don't touch them. Copy into the entity's
+  // cell_backup_data_ slot; the next DB write / reviver / offload
+  // consumer will read them out.
+  entity->SetCellBackupData(msg.cell_backup_data);
 }
 
 void BaseApp::FlushClientDeltas() {

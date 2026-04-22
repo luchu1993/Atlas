@@ -454,6 +454,62 @@ struct ReplicatedReliableDeltaFromCell {
 static_assert(NetworkMessage<ReplicatedReliableDeltaFromCell>);
 
 // ============================================================================
+// BackupCellEntity  (CellApp → BaseApp, ID 2018)
+//
+// BigWorld-style cell-to-base state backup. The CellApp emits this
+// periodically (every `CellApp::kBackupIntervalTicks`) for every entity
+// with a BaseApp binding. `cell_backup_data` is the opaque output of the
+// cell-side `ServerEntity.Serialize` — i.e. post-M2, only the CELL_DATA
+// subset of properties.
+//
+// BaseApp stores the bytes verbatim on its Proxy (`cell_backup_data_`)
+// without deserialising. That blob is the authoritative mirror of the
+// cell-authoritative state for:
+//   * DB writes   (base has the full persistent record: its own
+//                  base-scope entity_data_ + the cell_backup_data_ blob)
+//   * Reviver     (restore the entity on a new CellApp after a crash)
+//   * Offload     (migration from one CellApp to another — the new cell
+//                  can bootstrap from the blob instead of waiting for
+//                  cross-cell ghost traffic)
+//
+// Mirrors BigWorld BaseAppIntInterface::backupCellEntity (bigworld/
+// server/cellapp/real_entity.cpp:884-906 for the sender;
+// bigworld/server/baseapp/base.cpp:1182-1200 for the "stash as opaque
+// bytes" receiver).
+// ============================================================================
+
+struct BackupCellEntity {
+  EntityID base_entity_id{kInvalidEntityID};
+  std::vector<std::byte> cell_backup_data;
+
+  static auto Descriptor() -> const MessageDesc& {
+    static const MessageDesc kDesc{msg_id::Id(msg_id::BaseApp::kBackupCellEntity),
+                                   "baseapp::BackupCellEntity", MessageLengthStyle::kVariable, -1,
+                                   MessageReliability::kReliable};
+    return kDesc;
+  }
+
+  void Serialize(BinaryWriter& w) const {
+    w.WritePackedInt(base_entity_id);
+    w.WritePackedInt(static_cast<uint32_t>(cell_backup_data.size()));
+    w.WriteBytes(cell_backup_data);
+  }
+
+  static auto Deserialize(BinaryReader& r) -> Result<BackupCellEntity> {
+    auto eid = r.ReadPackedInt();
+    auto sz = r.ReadPackedInt();
+    if (!eid || !sz) return Error{ErrorCode::kInvalidArgument, "BackupCellEntity: truncated"};
+    auto span = r.ReadBytes(*sz);
+    if (!span) return Error{ErrorCode::kInvalidArgument, "BackupCellEntity: blob truncated"};
+    BackupCellEntity msg;
+    msg.base_entity_id = *eid;
+    msg.cell_backup_data.assign(span->begin(), span->end());
+    return msg;
+  }
+};
+static_assert(NetworkMessage<BackupCellEntity>);
+
+// ============================================================================
 // ReplicatedBaselineToClient  (BaseApp → Client, client-facing ID 0xF002)
 //
 // Periodic full-state snapshot for an owning client's entity. Sent reliably
