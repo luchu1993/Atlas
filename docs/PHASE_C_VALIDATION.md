@@ -1,7 +1,22 @@
 # Phase C 验证手册
 
-> 日期: 2026-04-21（D 阶段完成后校正）
+> 日期: 2026-04-22（BigWorld 对齐 + Known Limitations 清零）
 > 关联: [PROPERTY_SYNC_DESIGN.md §8.7 / §9.5 / §9.6](PROPERTY_SYNC_DESIGN.md) | [DEF_GENERATOR_DESIGN.md §10](DEF_GENERATOR_DESIGN.md)
+
+## 基线结果快照（2026-04-22 跑一遍完整 sweep）
+
+4 个场景的典型输出。偏差 ≤±2 属正常 tick 边界抖动，偏差更大再复查。
+
+| 场景 | 命令（简化）| init | enterworld | hp | posupd | seqgaps |
+|---|---|---:|---:|---:|---:|---:|
+| **C2** 50 bare + 2 script, 30s | `... --clients 50 --duration-sec 30` | 53 | 51 | ~669 | ~84 | **0** |
+| **C3-A** 2 script, 20s, app drop 5..9s | `... --client-drop-inbound-ms 5000 4000` | 3 | 1 | 31 | 1 | 8 |
+| **§4** 2 script, 20s, **transport** drop 5..9s | `... --client-drop-transport-ms 5000 4000` | 3 | 1 | **39** | 1 | **0** |
+| **C3-B** reliable=false + app drop 5..9s, 20s | `python tools/phase_c_validation/run_c3b.py` | 3 | 1 | 31-33 | 1 | 6-8 |
+
+**场景间关键对比**：
+- C3-A vs §4：同样是 4 秒丢包窗口，**app 层 drop 丢 8 条事件 (`hp=31 seqgaps=8`)，transport 层 drop 全部重传补齐 (`hp=39 seqgaps=0`)** —— 决定性证明 RUDP reliable retransmit 工作。
+- C3-A vs C3-B：app 层 drop 对 reliable / unreliable 无区分（都丢 8 条），差异在字段层面：C3-B 下 L4 baseline pump 在 ≤6 s 后静默恢复 `_hp` 真值，C3-A 下 reliable channel 已经 ACK 所以无重传。
 
 Phase C 把 Phase B 的客户端回调契约放到真实集群里跑一遍。本文档覆盖两条验证链路：
 
