@@ -12,7 +12,7 @@
 | **C2** 50 bare + 2 script, 30s | `... --clients 50 --duration-sec 30` | 53 | 51 | ~669 | ~84 | **0** |
 | **C3-A** 2 script, 20s, app drop 5..9s | `... --client-drop-inbound-ms 5000 4000` | 3 | 1 | 31 | 1 | 8 |
 | **§4** 2 script, 20s, **transport** drop 5..9s | `... --client-drop-transport-ms 5000 4000` | 3 | 1 | **39** | 1 | **0** |
-| **C3-B** reliable=false + app drop 5..9s, 20s | `python tools/phase_c_validation/run_c3b.py` | 3 | 1 | 31-33 | 1 | 6-8 |
+| **C3-B** reliable=false + app drop 5..9s, 20s | `python tools/cluster_control/run_phase_c3b.py` | 3 | 1 | 31-33 | 1 | 6-8 |
 
 **场景间关键对比**：
 - C3-A vs §4：同样是 4 秒丢包窗口，**app 层 drop 丢 8 条事件 (`hp=31 seqgaps=8`)，transport 层 drop 全部重传补齐 (`hp=39 seqgaps=0`)** —— 决定性证明 RUDP reliable retransmit 工作。
@@ -130,11 +130,11 @@ python tools/cluster_control/run_world_stress.py \
 
 关闭 reliable 属性后再跑同一命令，观察 L4 baseline（commit `f2dec1e`：CellApp 侧 pump、每 120 tick ≈ 6 s 发一次 `ReplicatedBaselineFromCell` 经 BaseApp 转 0xF002 给 client）能否让 `_hp` 字段最终一致。
 
-**一键流程**（`tools/phase_c_validation/run_c3b.py` 包装了 patch / rebuild / smoke / restore 的 try-finally 序列，`--skip-restore` 之外保证退出时 def 一定回到 `reliable="true"`）：
+**一键流程**（`tools/cluster_control/run_phase_c3b.py` 包装了 patch / rebuild / smoke / restore 的 try-finally 序列，`--skip-restore` 之外保证退出时 def 一定回到 `reliable="true"`）：
 
 ```bash
-python tools/phase_c_validation/run_c3b.py              # 默认 20s / drop 5..9s
-python tools/phase_c_validation/run_c3b.py --duration-sec 30
+python tools/cluster_control/run_phase_c3b.py              # 默认 20s / drop 5..9s
+python tools/cluster_control/run_phase_c3b.py --duration-sec 30
 ```
 
 底层等价命令（debug 或分步调试时）：
@@ -223,5 +223,5 @@ protected override void OnTick(float dt) {
 
    所以脚本层"baseline 静默恢复、只有 delta 触发回调"是设计，不是局限。脚本如果必须观察到 baseline 带来的字段变化，对齐 BigWorld 的做法是**自己读字段值**（周期轮询 `_hp` 等）或**通过 `seqgaps` 推断被吞了多少 event**。
 6. ~~Tap 不带时间戳~~ **已修复**：`Atlas.Client.ClientLog` 给每条脚本日志前置 `[t=S.sss]` 单调秒戳（起点为首次 ClientLog 访问；进程启动后几 ms 内即激活）。`client_event_tap.cc::EventBegins` 新增前缀剥离，计数语义向后兼容。后续收敛分析可用 `grep '^\[t=\([0-9.]*\)\]'` 把时间戳抽回来对 drop window 边界做自动断言。
-7. ~~C3-B 需手动 `.def` 改动 + rebuild~~ **已缓解**：`tools/phase_c_validation/run_c3b.py` 把 patch → rebuild → smoke → restore 整合成一条命令，用 `try/finally` 保证 def 退出时一定回到 `reliable="true"`（除非显式传 `--skip-restore`）。运行时切换的 generator-level 开关仍未做，但"一键完整 round-trip"已经消除手动漏步回退的风险。
+7. ~~C3-B 需手动 `.def` 改动 + rebuild~~ **已缓解**：`tools/cluster_control/run_phase_c3b.py` 把 patch → rebuild → smoke → restore 整合成一条命令，用 `try/finally` 保证 def 退出时一定回到 `reliable="true"`（除非显式传 `--skip-restore`）。运行时切换的 generator-level 开关仍未做，但"一键完整 round-trip"已经消除手动漏步回退的风险。
 8. **子进程日志冗余**：脚本走 `Console.WriteLine`；大流量场景下 stdout 管道可能成为瓶颈。压测规模 > 几十 client 时建议关闭 `--script-clients`，用裸协议 path。

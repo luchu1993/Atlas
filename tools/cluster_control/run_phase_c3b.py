@@ -19,7 +19,7 @@ This wrapper scripts the four steps end-to-end:
 
 Usage (from the repo root):
 
-    python tools/phase_c_validation/run_c3b.py
+    python tools/cluster_control/run_phase_c3b.py
 
 Flags mirror the underlying run_world_stress.py ones where useful
 (--duration-sec, --script-clients, --drop-start-ms, --drop-duration-ms).
