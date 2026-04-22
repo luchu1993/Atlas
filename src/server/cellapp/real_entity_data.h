@@ -74,6 +74,22 @@ class RealEntityData {
   [[nodiscard]] auto BuildDelta() const -> cellapp::GhostDelta;
   [[nodiscard]] auto BuildSnapshotRefresh() const -> cellapp::GhostSnapshotRefresh;
 
+  // Decision helper for the ghost-pump broadcast. Returns true when the
+  // gap between `latest_event_seq` and `last_broadcast_event_seq` means
+  // BuildDelta would lose intermediate frames (gap > 1) — the pump
+  // should issue a GhostSnapshotRefresh instead. Returns false for
+  // gap ≤ 1 (BuildDelta covers the single frame) or gap == 0 (no
+  // broadcast needed).
+  //
+  // BigWorld's equivalent is implicit: addHistoryEventToGhosts fires
+  // per-event (cellapp.cpp:703), so gap > 1 never happens. Atlas batches
+  // per tick, so this helper handles the batching case explicitly.
+  [[nodiscard]] static constexpr auto ShouldUseSnapshotRefresh(uint64_t latest_event_seq,
+                                                               uint64_t last_broadcast_event_seq)
+      -> bool {
+    return latest_event_seq > last_broadcast_event_seq + 1;
+  }
+
   // ---- Broadcast bookkeeping ----------------------------------------------
   //
   // CellApp's per-tick ghost pump compares the owner's latest_*_seq

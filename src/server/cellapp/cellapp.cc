@@ -1363,9 +1363,25 @@ void CellApp::TickGhostPump() {
         rd->MarkBroadcastVolatileSeq(state->latest_volatile_seq);
       }
       if (state->latest_event_seq > rd->LastBroadcastEventSeq()) {
-        const auto msg = rd->BuildDelta();
-        for (const auto& h : rd->Haunts()) {
-          if (h.channel) (void)h.channel->SendMessage(msg);
+        // Gap > 1 means multiple frames published since our last
+        // broadcast — BuildDelta would only ship the latest frame's
+        // other_delta, losing intermediate state. Fall back to a
+        // GhostSnapshotRefresh that re-bases the Ghost on the current
+        // other_snapshot + latest_event_seq. See
+        // RealEntityData::ShouldUseSnapshotRefresh for the BigWorld
+        // cross-reference (addHistoryEventToGhosts is per-event, so the
+        // gap > 1 case doesn't arise in BigWorld's design).
+        if (RealEntityData::ShouldUseSnapshotRefresh(state->latest_event_seq,
+                                                     rd->LastBroadcastEventSeq())) {
+          const auto msg = rd->BuildSnapshotRefresh();
+          for (const auto& h : rd->Haunts()) {
+            if (h.channel) (void)h.channel->SendMessage(msg);
+          }
+        } else {
+          const auto msg = rd->BuildDelta();
+          for (const auto& h : rd->Haunts()) {
+            if (h.channel) (void)h.channel->SendMessage(msg);
+          }
         }
         rd->MarkBroadcastEventSeq(state->latest_event_seq);
       }

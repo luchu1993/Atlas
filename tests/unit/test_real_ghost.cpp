@@ -393,6 +393,26 @@ TEST(RealEntityData, BuildSnapshotRefresh_ReflectsOwnerSnapshot) {
   EXPECT_EQ(msg.other_snapshot[0], std::byte{0xCA});
 }
 
+// Phase 11 C3: broadcast decision helper — BigWorld's
+// addHistoryEventToGhosts fires per-event so the gap > 1 case doesn't
+// arise, but Atlas batches per tick so we need explicit detection.
+TEST(RealEntityData, ShouldUseSnapshotRefresh_GapTruthTable) {
+  // gap == 0: no broadcast needed (caller filters this out); helper
+  // still returns false because there's nothing to fall back from.
+  EXPECT_FALSE(RealEntityData::ShouldUseSnapshotRefresh(/*latest=*/5, /*last=*/5));
+  // gap == 1: BuildDelta covers the single new frame.
+  EXPECT_FALSE(RealEntityData::ShouldUseSnapshotRefresh(/*latest=*/6, /*last=*/5));
+  // gap > 1: BuildDelta would lose intermediate frames — use snapshot.
+  EXPECT_TRUE(RealEntityData::ShouldUseSnapshotRefresh(/*latest=*/7, /*last=*/5));
+  EXPECT_TRUE(RealEntityData::ShouldUseSnapshotRefresh(/*latest=*/100, /*last=*/5));
+  // Fresh Real (last_broadcast == 0) with first frame (latest == 1):
+  // gap == 1, BuildDelta is correct.
+  EXPECT_FALSE(RealEntityData::ShouldUseSnapshotRefresh(/*latest=*/1, /*last=*/0));
+  // Fresh Real arriving via Offload with pre-existing event_seq: gap
+  // jumps from 0 to the carry-over seq in one step → snapshot refresh.
+  EXPECT_TRUE(RealEntityData::ShouldUseSnapshotRefresh(/*latest=*/42, /*last=*/0));
+}
+
 // ============================================================================
 // RealEntityData — velocity
 // ============================================================================
