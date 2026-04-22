@@ -216,7 +216,7 @@ public abstract class ServerEntity
     /// mixins in a later pass — at that point this method moves to the
     /// base-side surface where it naturally lives.
     /// </summary>
-    protected internal void SetAoIRadius(float radius, float hysteresis = 5f)
+    public void SetAoIRadius(float radius, float hysteresis = 5f)
     {
         NativeApi.SetAoIRadius(EntityId, radius, hysteresis);
     }
