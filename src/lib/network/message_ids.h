@@ -100,6 +100,16 @@ enum class BaseApp : uint16_t {
   // real_entity.cpp:884-906). BaseApp never reads the bytes — it only
   // relays them to whatever consumer needs them.
   kBackupCellEntity = 2018,
+  // Internal: CellApp → BaseApp. Periodic owner-scope full snapshot of
+  // cell-authoritative properties, for BaseApp to relay as
+  // ReplicatedBaselineToClient (0xF002) to the owning client. L4 path —
+  // re-enables the baseline safety net for reliable="false" properties
+  // after M2's generator split made the base-hosted baseline pump
+  // produce stale zeros. The wire payload is the cell-side
+  // SerializeForOwnerClient output, byte-identical to what the
+  // pre-M2 baseapp pump produced for entities whose owner-visible
+  // fields lived entirely on the base.
+  kReplicatedBaselineFromCell = 2019,
   // External: Client ↔ BaseApp
   kAuthenticate = 2020,
   kAuthenticateResult = 2021,
@@ -263,6 +273,7 @@ ATLAS_ASSERT_ID_RANGE(BaseApp::kReplicatedDeltaFromCell, 2000, 2999);
 ATLAS_ASSERT_ID_RANGE(BaseApp::kBroadcastRpcFromCell, 2000, 2999);
 ATLAS_ASSERT_ID_RANGE(BaseApp::kReplicatedReliableDeltaFromCell, 2000, 2999);
 ATLAS_ASSERT_ID_RANGE(BaseApp::kBackupCellEntity, 2000, 2999);
+ATLAS_ASSERT_ID_RANGE(BaseApp::kReplicatedBaselineFromCell, 2000, 2999);
 ATLAS_ASSERT_ID_RANGE(BaseApp::kAuthenticate, 2000, 2999);
 ATLAS_ASSERT_ID_RANGE(BaseApp::kAuthenticateResult, 2000, 2999);
 ATLAS_ASSERT_ID_RANGE(BaseApp::kEntityTransferred, 2000, 2999);

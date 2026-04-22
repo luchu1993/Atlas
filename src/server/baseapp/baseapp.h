@@ -35,6 +35,7 @@ struct BroadcastRpcFromCell;
 struct ReplicatedDeltaFromCell;
 struct ReplicatedReliableDeltaFromCell;
 struct BackupCellEntity;
+struct ReplicatedBaselineFromCell;
 struct ForceLogoff;
 struct ForceLogoffAck;
 struct Authenticate;
@@ -160,6 +161,7 @@ class BaseApp : public EntityApp {
   void OnReplicatedReliableDeltaFromCell(Channel& ch,
                                          const baseapp::ReplicatedReliableDeltaFromCell& msg);
   void OnBackupCellEntity(const baseapp::BackupCellEntity& msg);
+  void OnReplicatedBaselineFromCell(const baseapp::ReplicatedBaselineFromCell& msg);
   // Phase 11 review-fix S2/S3.
   void OnSpaceCreatedResult(Channel& ch, const cellappmgr::SpaceCreatedResult& msg);
 

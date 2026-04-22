@@ -217,6 +217,16 @@ class CellApp : public EntityApp {
   // baseapp_messages.h::BackupCellEntity for what the base does with
   // the blob.
   void TickBackupPump();
+
+  // L4: CellApp-side owner baseline pump. Every
+  // kClientBaselineIntervalTicks ticks, every Real entity with a
+  // witness (client-bound) produces its owner-scope snapshot via the
+  // cell-side SerializeForOwnerClient (get_owner_snapshot callback)
+  // and ships it through BaseApp as ReplicatedBaselineFromCell (msg
+  // 2019) → ReplicatedBaselineToClient (0xF002). Replaces the
+  // M2-disabled BaseApp::EmitBaselineSnapshots and gives
+  // reliable="false" properties a genuine recovery channel.
+  void TickClientBaselinePump();
   [[nodiscard]] auto AllocateCellEntityId() -> EntityID;
 
   std::unordered_map<SpaceID, std::unique_ptr<Space>> spaces_;
@@ -241,6 +251,15 @@ class CellApp : public EntityApp {
   // base sees, and the DB write path wants reasonably fresh snapshots.
   static constexpr uint32_t kBackupIntervalTicks = 50;
   uint32_t backup_tick_counter_{0};
+
+  // Client baseline pump cadence. 120 ticks — matches the pre-M2
+  // BaseApp::kBaselineInterval so C3-B's drop-window recovery
+  // expectation ("baseline arrives within ≤6 s") carries over
+  // unchanged. Baseline is a bandwidth-insensitive safety net for
+  // reliable="false" attributes; tighter than backup is
+  // unnecessary.
+  static constexpr uint32_t kClientBaselineIntervalTicks = 120;
+  uint32_t client_baseline_tick_counter_{0};
 
   // app_id assigned by CellAppMgr's RegisterCellAppAck. Forms the high
   // 8 bits of every EntityID we mint (§9.6 Q8 scheme A).

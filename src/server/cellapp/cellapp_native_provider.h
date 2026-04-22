@@ -78,6 +78,12 @@ class CellAppNativeProvider : public BaseNativeProvider {
   [[nodiscard]] auto serialize_entity_fn() const -> SerializeEntityFn {
     return serialize_entity_fn_;
   }
+  // L4: CellApp-side baseline pump needs the owner-scope serializer, not
+  // the full Serialize (which includes cell-private). C# fills this entry
+  // on every process type; consumer is CellApp::TickClientBaselinePump.
+  [[nodiscard]] auto get_owner_snapshot_fn() const -> GetOwnerSnapshotFn {
+    return get_owner_snapshot_fn_;
+  }
 
  private:
   EntityLookupFn lookup_;
@@ -91,6 +97,10 @@ class CellAppNativeProvider : public BaseNativeProvider {
   // empty persistent_blob and the receiver proceeds using only the
   // replication baseline, as in PR-4).
   SerializeEntityFn serialize_entity_fn_{nullptr};
+  // L4: owner-scope snapshot for the CellApp-side baseline pump (ships
+  // 0xF002 ReplicatedBaselineToClient via BaseApp). Left nullptr on test
+  // builds that don't register a runtime; the pump short-circuits.
+  GetOwnerSnapshotFn get_owner_snapshot_fn_{nullptr};
 };
 
 }  // namespace atlas

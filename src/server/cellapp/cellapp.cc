@@ -231,6 +231,7 @@ void CellApp::OnTickComplete() {
   TickControllers(static_cast<float>(dt_secs));
   TickWitnesses();
   TickBackupPump();
+  TickClientBaselinePump();
 }
 
 void CellApp::RegisterWatchers() {
@@ -302,6 +303,51 @@ void CellApp::TickBackupPump() {
     baseapp::BackupCellEntity msg;
     msg.base_entity_id = base_id;
     msg.cell_backup_data = std::move(blob);
+    (void)(*base_ch)->SendMessage(msg);
+  }
+}
+
+void CellApp::TickClientBaselinePump() {
+  ++client_baseline_tick_counter_;
+  if (client_baseline_tick_counter_ % kClientBaselineIntervalTicks != 0) return;
+
+  // GetOwnerSnapshot is optional — unit tests without a C# runtime, or
+  // a runtime from before L4 landed, leave the slot null. Short-circuit
+  // is safe: no baseline → same behaviour as the M2-disabled BaseApp
+  // pump, i.e. no safety net for reliable="false" but no corruption
+  // either.
+  if (native_provider_ == nullptr || native_provider_->get_owner_snapshot_fn() == nullptr) {
+    return;
+  }
+  auto fn = native_provider_->get_owner_snapshot_fn();
+
+  for (const auto& [base_id, entity] : base_entity_population_) {
+    if (entity == nullptr || !entity->IsReal()) continue;
+    // Only emit baselines for entities with an attached client — a
+    // CellEntity with no Witness has nothing to deliver the baseline to.
+    // Skipping here keeps the cross-cell broadcast traffic proportional
+    // to client count rather than entity count.
+    if (!entity->HasWitness()) continue;
+    const Address& base_addr = entity->BaseAddr();
+    if (base_addr.Ip() == 0) continue;  // base binding not yet populated
+
+    // GetOwnerSnapshot writes via a pinned managed buffer that the C#
+    // runtime overwrites on every call — copy the span into a local
+    // vector before invoking the callback for the next entity. raw may
+    // be null if the entity has no owner-visible properties; treat that
+    // as "no baseline this tick" rather than an error.
+    uint8_t* raw = nullptr;
+    int32_t len = 0;
+    fn(entity->Id(), &raw, &len);
+    if (len <= 0 || raw == nullptr) continue;
+
+    auto base_ch = Network().ConnectRudpNocwnd(base_addr);
+    if (!base_ch) continue;  // base transiently unreachable — retry next pump
+
+    baseapp::ReplicatedBaselineFromCell msg;
+    msg.base_entity_id = base_id;
+    msg.snapshot.assign(reinterpret_cast<const std::byte*>(raw),
+                        reinterpret_cast<const std::byte*>(raw) + len);
     (void)(*base_ch)->SendMessage(msg);
   }
 }

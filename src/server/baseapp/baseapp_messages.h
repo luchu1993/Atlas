@@ -510,6 +510,57 @@ struct BackupCellEntity {
 static_assert(NetworkMessage<BackupCellEntity>);
 
 // ============================================================================
+// ReplicatedBaselineFromCell  (CellApp → BaseApp, ID 2019)
+//
+// L4: cell-authoritative owner snapshot, periodic. Cell has the live
+// cell-scope property values; BaseApp's own SerializeForOwnerClient
+// (post-M2) returns empty blobs for pure cell-scope entities because
+// the base-side partial has no backing field for those props. So the
+// baseline must originate where the data lives — exactly BigWorld's
+// stance of "cell-auth state stays on the cell". BaseApp's only job
+// is relay: on receipt it calls ResolveClientChannel(base_entity_id)
+// and forwards the blob as a ReplicatedBaselineToClient (0xF002).
+//
+// Payload format is the raw bytes of the cell-side
+// SerializeForOwnerClient — byte-identical to the pre-M2 baseapp-
+// sourced baseline, so no client-side decoder change.
+// ============================================================================
+
+struct ReplicatedBaselineFromCell {
+  EntityID base_entity_id{kInvalidEntityID};
+  std::vector<std::byte> snapshot;
+
+  static auto Descriptor() -> const MessageDesc& {
+    static const MessageDesc kDesc{msg_id::Id(msg_id::BaseApp::kReplicatedBaselineFromCell),
+                                   "baseapp::ReplicatedBaselineFromCell",
+                                   MessageLengthStyle::kVariable, -1,
+                                   MessageReliability::kReliable};
+    return kDesc;
+  }
+
+  void Serialize(BinaryWriter& w) const {
+    w.WritePackedInt(base_entity_id);
+    w.WritePackedInt(static_cast<uint32_t>(snapshot.size()));
+    w.WriteBytes(snapshot);
+  }
+
+  static auto Deserialize(BinaryReader& r) -> Result<ReplicatedBaselineFromCell> {
+    auto eid = r.ReadPackedInt();
+    auto sz = r.ReadPackedInt();
+    if (!eid || !sz)
+      return Error{ErrorCode::kInvalidArgument, "ReplicatedBaselineFromCell: truncated"};
+    auto span = r.ReadBytes(*sz);
+    if (!span)
+      return Error{ErrorCode::kInvalidArgument, "ReplicatedBaselineFromCell: snapshot truncated"};
+    ReplicatedBaselineFromCell msg;
+    msg.base_entity_id = *eid;
+    msg.snapshot.assign(span->begin(), span->end());
+    return msg;
+  }
+};
+static_assert(NetworkMessage<ReplicatedBaselineFromCell>);
+
+// ============================================================================
 // ReplicatedBaselineToClient  (BaseApp → Client, client-facing ID 0xF002)
 //
 // Periodic full-state snapshot for an owning client's entity. Sent reliably

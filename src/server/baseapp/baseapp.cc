@@ -518,6 +518,12 @@ void BaseApp::RegisterInternalHandlers() {
         OnBackupCellEntity(msg);
       });
 
+  (void)table.RegisterTypedHandler<baseapp::ReplicatedBaselineFromCell>(
+      [this](const Address& /*src*/, Channel* /*ch*/,
+             const baseapp::ReplicatedBaselineFromCell& msg) {
+        OnReplicatedBaselineFromCell(msg);
+      });
+
   // ---- WriteEntityAck (DBApp → BaseApp) ----------------------------------
   (void)table.RegisterTypedHandler<dbapp::WriteEntityAck>(
       [this](const Address& /*src*/, Channel* /*ch*/, const dbapp::WriteEntityAck& msg) {
@@ -888,6 +894,33 @@ void BaseApp::OnBackupCellEntity(const baseapp::BackupCellEntity& msg) {
   // cell_backup_data_ slot; the next DB write / reviver / offload
   // consumer will read them out.
   entity->SetCellBackupData(msg.cell_backup_data);
+}
+
+// L4: cell-authoritative baseline relayed to the owning client. Under
+// M2's scope split, base-side SerializeForOwnerClient returns empty
+// blobs for any entity whose client-visible fields are all cell-scope
+// (every stress-test entity today), so the pre-M2 BaseApp-sourced
+// baseline pump couldn't work — hence the hotfix disable. This handler
+// brings baselines back, sourced where the data actually lives.
+// Relay-only: the bytes arrive as a cell-side SerializeForOwnerClient
+// output (wire-compatible with the pre-M2 baseline) and leave as
+// ReplicatedBaselineToClient (0xF002) toward the proxy's attached
+// client channel.
+void BaseApp::OnReplicatedBaselineFromCell(const baseapp::ReplicatedBaselineFromCell& msg) {
+  if (msg.snapshot.empty()) return;  // nothing to ship — skip the no-op round-trip
+
+  auto* proxy = entity_mgr_.FindProxy(msg.base_entity_id);
+  if (!proxy || !proxy->HasClient()) return;
+
+  auto* client_ch = ResolveClientChannel(proxy->EntityId());
+  if (!client_ch) return;
+
+  baseapp::ReplicatedBaselineToClient out;
+  out.base_entity_id = msg.base_entity_id;
+  out.snapshot = msg.snapshot;
+  (void)client_ch->SendMessage(out);
+  baseline_bytes_sent_total_ += static_cast<uint64_t>(msg.snapshot.size());
+  ++baseline_messages_sent_total_;
 }
 
 void BaseApp::FlushClientDeltas() {

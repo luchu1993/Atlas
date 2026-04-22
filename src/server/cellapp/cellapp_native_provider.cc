@@ -264,8 +264,11 @@ void CellAppNativeProvider::SetNativeCallbacks(const void* native_callbacks, int
   // available" and continues serving Offload with just the replication
   // baseline.
   serialize_entity_fn_ = table.serialize_entity;
-  // get_entity_data and get_owner_snapshot are not needed on CellApp (no DB
-  // persistence or baseline pump), but we accept the table silently.
+  // L4: get_owner_snapshot feeds CellApp::TickClientBaselinePump; without
+  // it the pump short-circuits and no baseline leaves the cell (acceptable
+  // on tests without a C# runtime). get_entity_data is CellApp-side
+  // unused today (no DB persistence from cell).
+  get_owner_snapshot_fn_ = table.get_owner_snapshot;
   ATLAS_LOG_INFO("CellApp: native callback table registered (len={})", len);
 }
 

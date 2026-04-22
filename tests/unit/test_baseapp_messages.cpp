@@ -197,6 +197,31 @@ TEST(BaseAppMessages, BackupCellEntityReliable) {
   EXPECT_FALSE(BackupCellEntity::Descriptor().IsUnreliable());
 }
 
+TEST(BaseAppMessages, ReplicatedBaselineFromCell) {
+  // L4 cell→base relay: opaque owner-snapshot blob whose bytes get
+  // forwarded verbatim into a 0xF002 ReplicatedBaselineToClient. Round-
+  // trip confirms the payload survives Serialize / Deserialize without
+  // mutation — a single flipped byte would mis-deserialize on the client
+  // and recover _hp to the wrong value.
+  ReplicatedBaselineFromCell msg;
+  msg.base_entity_id = 42;
+  msg.snapshot = {std::byte{0xAA}, std::byte{0xBB}, std::byte{0xCC}, std::byte{0xDD}};
+
+  auto rt = round_trip(msg);
+  ASSERT_TRUE(rt.has_value());
+  EXPECT_EQ(rt->base_entity_id, 42u);
+  ASSERT_EQ(rt->snapshot.size(), 4u);
+  EXPECT_EQ(rt->snapshot[0], std::byte{0xAA});
+  EXPECT_EQ(rt->snapshot[3], std::byte{0xDD});
+}
+
+TEST(BaseAppMessages, ReplicatedBaselineFromCellReliable) {
+  // Baselines recover state that's already been missed by the unreliable
+  // channel — the one job a dropped baseline *cannot* have is being
+  // silent. Must ride the reliable channel.
+  EXPECT_FALSE(ReplicatedBaselineFromCell::Descriptor().IsUnreliable());
+}
+
 TEST(BaseAppMessages, ClientCellRpc) {
   ClientCellRpc msg;
   msg.target_entity_id = 12345;
