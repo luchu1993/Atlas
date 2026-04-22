@@ -143,12 +143,20 @@ Atlas 当前阶段不引入完整的 EventHistory 机制。
 - **Cell → Base 定期 opaque 备份** (L1, commit `3fdbd2d`)：CellApp 每 `kBackupIntervalTicks = 50` (~1s) 对每个 has-base entity 调 `SerializeEntity` → 以 `BackupCellEntity` (msg 2018) 发给 BaseApp。Base 只存 bytes 不反序列化，保存在 `BaseEntity::cell_backup_data_` 里。对齐 BigWorld `bigworld/server/cellapp/real_entity.cpp:884-906` + `bigworld/server/baseapp/base.cpp:1182-1200`。
 - **DB 写入 / 检出合并 blob** (L2, commit `788330d`)：DB blob 格式升级为 `[magic=0xA7][version=1][base_len u32][base_bytes][cell_len u32][cell_bytes]`。写 DB 时 `CaptureEntitySnapshot` 把当前 base bytes + `cell_backup_data_` 拼在一起；检出时 `DecodeDbBlob` 拆回两段，base 给 `RestoreManagedEntity`，cell 存回 `cell_backup_data_`。下一次 `CreateCellEntity` 会把 cell 部分作为 `script_init_data` 喂给新 cell 的 `Deserialize`，使 cell-scope `persistent="true"` 属性跨 DB 生命周期保留。
 
-**未来：如需恢复 baseline pump（C3-B unreliable delta 恢复场景）**
-- 在 cellapp 侧实现（有权威数据的进程发 baseline），复用 `SerializeEntity` 路径 / `cell_backup_data_` 相同的 opaque bytes
-- 通过新消息或复用 `BackupCellEntity` + 一个 "ship to client" flag 让 BaseApp 在收到时同时转 0xF002 给 owner client
-- BaseApp 的 `EmitBaselineSnapshots` 保持 no-op
+- **Baseline pump 迁至 CellApp** (L4, commit `f2dec1e`)：新增消息 `ReplicatedBaselineFromCell` (msg 2019, reliable)。CellApp 每 `kClientBaselineIntervalTicks = 120` tick 对每个 has-witness entity 调 `GetOwnerSnapshot` 拿 cell-side `SerializeForOwnerClient` 输出，发给 BaseApp；BaseApp 的 `OnReplicatedBaselineFromCell` 只做中继 —— `ResolveClientChannel` → 发 `ReplicatedBaselineToClient` (0xF002) 给 owner client。payload wire 与 pre-M2 baseapp pump 输出 byte-identical，客户端解码零改动。BaseApp 的 `EmitBaselineSnapshots` 保持 no-op（定义在那里只是作为"本进程不发 baseline"的显式入口）。
 
-**历史记录（便于审计）：** 设计曾讨论过 (a) 让 cell 每次 `PublishReplicationFrame` push owner_snapshot 到 base / (b) baseline pump 迁到 cellapp —— 最终走 (b) + BigWorld 风格 opaque bytes (L1 + L2)，优于 (a) 因为 base 完全不 peek cell 字段，消除歧义源。
+**历史记录（便于审计）：** 设计曾讨论过 (a) 让 cell 每次 `PublishReplicationFrame` push owner_snapshot 到 base / (b) baseline pump 迁到 cellapp —— 最终走 (b) + BigWorld 风格 opaque bytes (L1 + L2 + L4)，优于 (a) 因为 base 完全不 peek cell 字段，消除歧义源。
+
+### 5.1b `OnXxxChanged` 触发规则（BigWorld 对齐）
+
+Baseline / 初始快照 **不触发** `OnXxxChanged`，只有运行期 delta 触发。对齐 BigWorld `client/entity.cpp:1124-1133` 把 `isInitialising` 翻成 `!shouldUseCallback` 交给 `common/simple_client_entity.cpp:135-160::propertyEvent`，后者在 `!shouldUseCallback` 下**直接写字段跳过 `set_<propname>` Python 回调**。
+
+| Atlas | BigWorld | 触发 On*Changed？ |
+|---|---|---|
+| `ApplyOwnerSnapshot` / `ApplyOtherSnapshot`（0xF002 baseline / `kEntityEnter` 初始快照）| `onProperty(isInitialising=true)` | ✗ |
+| `ApplyReplicatedDelta`（0xF001 / 0xF003 运行期 delta） | `onProperty(isInitialising=false)` | ✓ |
+
+脚本层面的意义：**baseline 静默恢复**，脚本看不到被 baseline 恢复的字段变化。这是设计不是局限。脚本如果必须观察到 baseline 带来的字段变化，对齐 BigWorld 的做法是**自己读字段值**（周期轮询 `_hp` 等）或**通过 `seqgaps` 推断被吞了多少 event**。
 
 ### 5.2 带宽预算
 

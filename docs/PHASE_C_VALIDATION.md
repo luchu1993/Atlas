@@ -1,7 +1,6 @@
-# Phase C 验证手册
+# Phase C 验证 Runbook
 
-> 日期: 2026-04-22（BigWorld 对齐 + Known Limitations 清零）
-> 关联: [PROPERTY_SYNC_DESIGN.md §8.7 / §9.5 / §9.6](PROPERTY_SYNC_DESIGN.md) | [DEF_GENERATOR_DESIGN.md §10](DEF_GENERATOR_DESIGN.md)
+> 架构背景见 [PROPERTY_SYNC_DESIGN.md §5.1 / §5.1a / §5.1b](PROPERTY_SYNC_DESIGN.md)（baseline / backup 路径 + `OnXxxChanged` 触发规则）。本文档只管"怎么跑、看啥数字"。
 
 ## 基线结果快照（2026-04-22 跑一遍完整 sweep）
 
@@ -107,72 +106,18 @@ python tools/cluster_control/run_world_stress.py \
   script_user_2        3           1        0   31       1        8        17
 ```
 
-`hp + seqgaps = 39 ≈ 40`（20 s × 2 avatars × 1 Hz），证明 event 总数正确 —— 8 个 reliable delta 在 drop window 被应用层丢弃、触发 8 个 `event_seq` 跳号、其余 31 个按 1 Hz 正常送达脚本。
+**不变量**：`hp + seqgaps ≈ duration_sec × avatars × 1 Hz`（上例 `31 + 8 = 39 ≈ 40`）。`hp` 是脚本层真正触发的 `OnHpChanged` 数，`seqgaps` 是 `event_seq` 跳号累计；二者之和对应服务端实际产生的 HP delta 总数。两个子进程 `seqgaps` 差值通常 ≤ 1（受窗口对 tick 边界对齐影响）。
 
-**预期 summary**：
+### C3-B：unreliable 属性 + baseline 恢复
 
-```
-[script-clients] per-child event summary:
-  username              init  enterworld  destroy  hp  posupd   seqgaps  unparsed
-  script_user_X            1           1        0  ~16   ~200       ~4        ~30
-  script_user_Y            1           1        0  ~16   ~200       ~4        ~30
-```
-
-- `hp` 大约 16（20s 运行 - 4s 丢失窗口，服务端 1 Hz 的 20 次里客户端真正触发回调的只有 ~16 次）
-- `seqgaps` 约为 4：窗口内被丢的 4 个 reliable delta 在下次 envelope 到达时触发一次 "gap"，`missed=4` 累加到计数
-- `_hp` 字段最终值应与 server 当前值一致（baseline 同步），但脚本层面 `OnHpChanged` 不会为丢失的那 4 个事件补调
-
-**如何复核脚本层事件数与服务端发出的 delta 对得上**：
-- `hp` + `seqgaps` ≈ 服务端 20s 内产出的 HP delta 总数（1 Hz × 20s = 20）
-- 两个子进程 `seqgaps` 差值 ≤ 1（受窗口对 tick 边界对齐影响）
-
-### C3-B：纯 baseline 恢复（可选变体）
-
-关闭 reliable 属性后再跑同一命令，观察 L4 baseline（commit `f2dec1e`：CellApp 侧 pump、每 120 tick ≈ 6 s 发一次 `ReplicatedBaselineFromCell` 经 BaseApp 转 0xF002 给 client）能否让 `_hp` 字段最终一致。
-
-**一键流程**（`tools/cluster_control/run_unreliable_recovery.py` 包装了 patch / rebuild / smoke / restore 的 try-finally 序列，`--skip-restore` 之外保证退出时 def 一定回到 `reliable="true"`）：
+把 `StressAvatar.hp` 标成 `reliable="false"`，跑 C3-A 相同的 drop-window 场景，观察 L4 baseline pump 能否让 `_hp` 字段最终一致。一键 runner 包装了 patch → rebuild → smoke → restore，`try/finally` 保证 def 退出时一定回到 `reliable="true"`：
 
 ```bash
 python tools/cluster_control/run_unreliable_recovery.py              # 默认 20s / drop 5..9s
 python tools/cluster_control/run_unreliable_recovery.py --duration-sec 30
 ```
 
-底层等价命令（debug 或分步调试时）：
-
-1. 编辑 `entity_defs/StressAvatar.def`，把 `hp` 属性的 `reliable="true"` 改为 `reliable="false"`
-2. 重建受影响的 dll / exe：
-   ```bash
-   cmake --build build/debug --config Debug --target \
-       atlas_stress_test_cell_dll atlas_stress_test_base_dll \
-       atlas_baseapp atlas_cellapp atlas_client atlas_client_desktop_dll
-   dotnet build samples/client/Atlas.ClientSample.csproj --no-incremental --nologo
-   ```
-3. 跑 **C3-A 的完全相同命令行**
-4. **验证完改回** `reliable="true"` + rebuild —— 日常 stress / 测试依赖 reliable delta
-
-已验证 2026-04-22（L4 + reliable=false）：
-
-| 场景 | summary | 说明 |
-|---|---|---|
-| C3-B 无 drop window, 20s | `hp=39 seqgaps=0` | 40 events × 97.5%：unreliable delta 在 127.0.0.1 回环上基本无丢；0 跳号 ≈ 理想情况 |
-| C3-B drop 5..9s, 20s | `hp=31 seqgaps=8` | 与 C3-A 完全一致：8 个 delta 被应用层丢弃 → 8 跳号；其余 31 正常 |
-
-**两点观察**：
-
-1. **脚本事件计数没有差异**：因为 `--client-drop-inbound-ms` 是**应用层**过滤，不区分 reliable/unreliable；丢弃行为相同 → summary 数字相同。
-2. **字段层面 L4 baseline 确实在工作**，但脚本看不到。B2 scheme-2 明确 baseline 不触发 `OnXxxChanged`（对齐 BigWorld `shouldUseCallback=false`），所以脚本只能从 `seqgaps` 推断"被吞了多少 event"，从下次 delta 的 `old` 值确认恢复（`old` 来自 apply 时字段当前值，baseline 先静默改 `_hp`，下条 delta 的 `old` 就是 baseline 写的值）。
-
-**字段级复核（可选，定位 baseline 收敛时间）**：在 `StressAvatar.cs` 定期打 `Hp` 值（需要 `ClientEntity` 加 `OnTick` 虚方法）：
-
-```csharp
-protected override void OnTick(float dt) {
-    if (++_tickCount % 30 == 0) {
-        Console.WriteLine($"[StressAvatar:{EntityId}] HpSample value={Hp}");
-    }
-}
-```
-
-现场可用 `tools/cluster_control/run_world_stress.py --script-clients 1 --duration-sec 20 --client-drop-inbound-ms 5000 4000` 配上述扩展，观察 drop window 后 `HpSample` 的值从 drop-前值漂移到服务端当前值（6 s 内，下一次 baseline pump 周期）。
+跑出来的 `hp / seqgaps` 和 C3-A 几乎相同（因为 `--client-drop-inbound-ms` 是**应用层**过滤，不区分 reliable / unreliable）。**差异在字段层面**：L4 baseline（每 ~6 s）静默把 `_hp` 拉回服务端真值，脚本看不到补调的事件（[`PROPERTY_SYNC_DESIGN.md §5.1b`](PROPERTY_SYNC_DESIGN.md) 解释为什么）；C3-A 下 reliable channel 由 transport 层保证，无需 baseline。
 
 ## 日志格式契约
 
@@ -189,39 +134,7 @@ protected override void OnTick(float dt) {
 
 修改日志格式时两边同步更新，否则 `unparsed_lines` 会飙升且对应计数会失准。
 
-## 已知限制
+## 注意事项
 
-1. ~~CLR Bootstrap 对客户端路径未就绪~~ **已修复** —— atlas_client 的 CLR 初始化链现在端到端 green：CoreCLR init → `Atlas.Core.Bootstrap, Atlas.ClrHost` → `DesktopBootstrap.Initialize` 填槽 + 注册 native callback table → `DesktopBootstrap.LoadUserAssembly` 把用户 dll 载入 **host 所在的 ALC**（不能用 `Assembly.LoadFrom` 或 `AssemblyLoadContext.Default`，否则 `Atlas.Client` 会被加载两份、generator 的 `ModuleInitializer` 注册到一份 factory 而 [UnmanagedCallersOnly] bridge 读另一份，`CreateEntity` 永远返回 null）并显式跑 `RunModuleConstructor` 触发注册。脚本钩子能正常点亮：`Account.OnInit → SelectAvatar → StressAvatar.OnInit / OnEnterWorld / OnPositionUpdated` 按序触发。
-2. ~~HP delta 流尚未达到脚本回调层~~ **已修复** —— 问题不是 handoff bug，而是**三条路径级缺失**：
-   - C# `Lifecycle.DoOnTick` 从不调 `BuildAndConsumeReplicationFrame`（无人消费脏位）
-   - `NativeApi.cs` 缺 `AtlasPublishReplicationFrame` 的 `[LibraryImport]`（消费了也到不了 C++）
-   - Witness 不追踪 owner 自己（`&peer == &owner_` 直接 return），导致 own-scope delta 无路可走。client 侧 `EntityTransferred` 也没创建对应 entity 实例。
-
-   参考 BigWorld 的 own-scope 直发路径（`bigworld/server/cellapp/entity.cpp:5670` 的 `pWitness->sendToClient`）后的修法：
-   - `Lifecycle.DoOnTick` 的 `OnTickAll` 之后遍历 entity 调 `BuildAndConsumeReplicationFrame` + `NativeApi.PublishReplicationFrame`
-   - `CellAppNativeProvider::PublishReplicationFrame` 里把 owner_delta 打成 kEntityPropertyUpdate envelope，独立经 `ReplicatedReliableDeltaFromCell (2017)` → BaseApp → 0xF003 直发 client，绕开 witness.aoiMap
-   - `client_app.cc` 的 `EntityTransferred` handler 调 native `CreateEntity(new_id, new_type)` 实例化 client 侧 entity
-
-   验证：`--script-clients 2` 时每个 client 都看到 self + peer 两个 StressAvatar 的 HP 下降（15s → hp≈29，双倍节律）；`--script-clients 1` 时只看到 self（hp≈15，1 Hz 节律）。
-
-3. **Baseline pump 暂时禁用（BigWorld 对齐已完成）**：`BaseApp::EmitBaselineSnapshots` 从 hotfix 起改为 no-op（commit `de42fc0`），中期 (M2, `46c70b9`) + 长期 (L1 `3fdbd2d`, L2 `788330d`) 工作已落地，对齐 BigWorld 的 base/cell 字段互斥 + cell→base opaque bytes 模型：
-   - **M1** (`ce927b6`): `PropertyScope` 增加 `IsBase / IsCell / IsGhosted / IsOwnClientVisible / IsOtherClientsVisible / IsClientVisible` 谓词，单一权威来源；对齐 BigWorld `DataDescription::isCellData / isBaseData`。
-   - **M2** (`46c70b9`): generator 按 side 分拆 field 生成。Base partial 只 emit `DATA_BASE` 属性 (`base` / `base_and_client`) 的字段；cell partial 只 emit cell-scope 的字段。消除了 "base 侧 `_hp` 永远是 0" 的歧义源。`ReplicatedDirtyFlags` enum 仍列出所有 `IsClientVisible` 属性（wire 一致），但 backing field 只在 owning side emit。
-   - **L1** (`3fdbd2d`): 新增 `BackupCellEntity` (msg 2018, reliable) — CellApp 每 50 tick (~1s) 对每个 has-base entity 调 `SerializeEntity` 拿到 cell-scope bytes，发给 BaseApp。BaseApp 存入 `BaseEntity::cell_backup_data_` 不反序列化。对齐 BigWorld `bigworld/server/cellapp/real_entity.cpp:884-906`。
-   - **L2** (`788330d`): DB blob 升级为 `[magic=0xA7][ver=1][base_len][base][cell_len][cell]`。`CaptureEntitySnapshot` 在写 DB 前把两段拼起来；checkout 时 `DecodeDbBlob` 拆回。CellApp 重建时 `CreateCellEntity.script_init_data` 使用检出的 cell 部分，保证 cell-scope `persistent="true"` 跨 DB 生命周期保留。
-
-   **Reviver / Offload**：offload 路径（Phase 11 `BuildOffloadMessage` → `OnOffloadEntity`）原本就使用 `SerializeEntity` / `RestoreEntity`，M2 后那些字节已经是 cell-scope-only，没有额外改动需要。Reviver 是 placeholder (`src/server/reviver/CMakeLists.txt` 只有注释)，等实现时直接用 `cell_backup_data_` 就行。
-
-   **L4 Baseline on CellApp**（commit `f2dec1e`）**已实施**：CellApp 侧新增 `TickClientBaselinePump`，每 `kClientBaselineIntervalTicks = 120` tick 对每个 has-witness entity 调 `GetOwnerSnapshot` 拿 cell-side `SerializeForOwnerClient` 输出，通过新消息 `ReplicatedBaselineFromCell` (msg 2019, reliable) 发给 BaseApp。BaseApp 的 `OnReplicatedBaselineFromCell` 只做中继：`ResolveClientChannel` → 发 `ReplicatedBaselineToClient` (0xF002) 给 owner client。payload 是 cell-side owner-scope 快照，wire 与 pre-M2 baseapp pump 输出 byte-identical，客户端解码零改动。C3-B 现已可验证（见 §C3-B）。
-4. ~~Drop 过滤器在 RUDP 之上~~ **已新增 `--drop-transport-ms`**：`atlas_client --drop-transport-ms <start_ms> <duration_ms>` 在 `ReliableUdpChannel::OnDatagramReceived` 入口按时间窗口丢弃整包（在头部解析 + ACK 生成之前），与 application-layer `--drop-inbound-ms` 对照。`--drop-transport-ms` 下 reliable 包的丢失会触发发送方的 retransmit，reliable 流能完整恢复；`--drop-inbound-ms` 则只模拟"应用层漏接"（RUDP 已 ACK，不触发重传）。world_stress 加配套 `--client-drop-transport-ms`；python runner 加同名 flag。已验证 2026-04-22：transport drop 5-9s / 20s → `hp=39 seqgaps=0`（reliable 路径完整重传，对比 app drop 同场景 `hp=31 seqgaps=8`）。
-5. **Baseline 不触发 `OnXxxChanged`**（BigWorld 对齐，不是 Atlas 限制）：B2 scheme-2 直接对齐 BigWorld 的 `isInitialising → shouldUseCallback=false` 契约 —— `client/entity.cpp:1124-1133` 把每次 property reset 传递的 `isInitialising` 翻成 `!shouldUseCallback` 交给 `simple_client_entity.cpp:135-160::propertyEvent`，后者在 `!shouldUseCallback` 下**直接写字段跳过 `set_<propname>` Python 回调**。
-
-   | Atlas | BigWorld | 触发 On*Changed？ |
-   |---|---|---|
-   | `ApplyOwnerSnapshot` / `ApplyOtherSnapshot`（0xF002 baseline / `kEntityEnter` 初始快照）| `onProperty(isInitialising=true)` | ✗ |
-   | `ApplyReplicatedDelta`（0xF001 / 0xF003 运行期 delta） | `onProperty(isInitialising=false)` | ✓ |
-
-   所以脚本层"baseline 静默恢复、只有 delta 触发回调"是设计，不是局限。脚本如果必须观察到 baseline 带来的字段变化，对齐 BigWorld 的做法是**自己读字段值**（周期轮询 `_hp` 等）或**通过 `seqgaps` 推断被吞了多少 event**。
-6. ~~Tap 不带时间戳~~ **已修复**：`Atlas.Client.ClientLog` 给每条脚本日志前置 `[t=S.sss]` 单调秒戳（起点为首次 ClientLog 访问；进程启动后几 ms 内即激活）。`client_event_tap.cc::EventBegins` 新增前缀剥离，计数语义向后兼容。后续收敛分析可用 `grep '^\[t=\([0-9.]*\)\]'` 把时间戳抽回来对 drop window 边界做自动断言。
-7. ~~C3-B 需手动 `.def` 改动 + rebuild~~ **已缓解**：`tools/cluster_control/run_unreliable_recovery.py` 把 patch → rebuild → smoke → restore 整合成一条命令，用 `try/finally` 保证 def 退出时一定回到 `reliable="true"`（除非显式传 `--skip-restore`）。运行时切换的 generator-level 开关仍未做，但"一键完整 round-trip"已经消除手动漏步回退的风险。
-8. **子进程日志冗余**：脚本走 `Console.WriteLine`；大流量场景下 stdout 管道可能成为瓶颈。压测规模 > 几十 client 时建议关闭 `--script-clients`，用裸协议 path。
+- `atlas_client.exe` 的脚本事件走 `Console.WriteLine` → 子进程 stdout → world_stress 解析。压测规模 ≥ 几十 script-client 时管道会成为瓶颈，此时用 `--clients N`（裸协议）做负载、`--script-clients 2` 做观测点即可。
+- `--drop-inbound-ms` / `--drop-transport-ms` 可同时开（应用层先丢、传输层再丢），但通常只开一个；想验证 reliable 重传用 transport 版本，想验证 gap 检测 / baseline 路径用 inbound 版本。
