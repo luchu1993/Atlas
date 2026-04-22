@@ -775,6 +775,16 @@ void BaseApp::OnCellEntityCreated(Channel& ch, const baseapp::CellEntityCreated&
   // GiveClientTo runs strictly before the CellApp ack can arrive.
   auto* proxy = entity_mgr_.FindProxy(msg.base_entity_id);
   if (proxy && proxy->HasClient()) {
+    // PR 34 C3 race fix: client may have been bound BEFORE this cell
+    // ack arrived (login's GiveClientTo runs before CellApp replies),
+    // in which case BindClient couldn't route EnableWitness — no
+    // cell_addr yet. Now that SetCell above populated it, send the
+    // EnableWitness we skipped.
+    if (auto* cell_ch = ResolveCellChannelForEntity(msg.base_entity_id)) {
+      cellapp::EnableWitness ew;
+      ew.base_entity_id = msg.base_entity_id;
+      (void)cell_ch->SendMessage(ew);
+    }
     if (auto* client_ch = ResolveClientChannel(msg.base_entity_id)) {
       baseapp::CellReady ready;
       ready.entity_id = msg.base_entity_id;
@@ -1896,6 +1906,19 @@ auto BaseApp::BindClient(EntityID entity_id, const Address& client_addr) -> bool
   entity_client_index_[entity_id] = client_addr;
   client_entity_index_[client_addr] = entity_id;
   proxy->BindClient(client_addr);
+
+  // PR 34 C3: mirror BigWorld's RealEntity::addWitness, which fires from
+  // the proxy-binding handshake. Tell the cell to attach a witness now
+  // that this entity has a client. If the cell ack (OnCellEntityCreated)
+  // hasn't landed yet — HasCell() is false — the EnableWitness is
+  // emitted by the ack handler instead (see OnCellEntityCreated race fix).
+  if (proxy->HasCell()) {
+    if (auto* cell_ch = ResolveCellChannelForEntity(entity_id)) {
+      cellapp::EnableWitness ew;
+      ew.base_entity_id = entity_id;
+      (void)cell_ch->SendMessage(ew);
+    }
+  }
   return true;
 }
 
@@ -1910,6 +1933,17 @@ void BaseApp::UnbindClient(EntityID entity_id) {
   }
 
   if (auto* proxy = entity_mgr_.FindProxy(entity_id)) {
+    // Symmetric to BindClient: tell the cell to drop the witness before
+    // the BaseApp-side proxy sheds the client binding. Idempotent on the
+    // cell side — OnDisableWitness is a no-op when no witness is attached,
+    // which covers the "client disconnected before cell ack" ordering.
+    if (proxy->HasCell()) {
+      if (auto* cell_ch = ResolveCellChannelForEntity(entity_id)) {
+        cellapp::DisableWitness dw;
+        dw.base_entity_id = entity_id;
+        (void)cell_ch->SendMessage(dw);
+      }
+    }
     proxy->UnbindClient();
   }
 }
