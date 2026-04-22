@@ -51,9 +51,7 @@ auto ServerApp::RunApp(int argc, char* argv[]) -> int {
   }
 
   // 3. Apply ServerAppOption values from raw config
-  if (config_.raw_config)
-    ServerAppOption<int>::ApplyAll(
-        *config_.raw_config->Root());  // template ignored; uses global list
+  if (config_.raw_config) ServerAppOptionBase::ApplyAll(*config_.raw_config->Root());
 
   // 4. Raise fd / handle limits
   RaiseFdLimit();
@@ -198,7 +196,7 @@ void ServerApp::RegisterWatchers() {
   w.Add<uint64_t>("tick/total_count", [this]() { return GameTime(); });
 
   // Register all ServerAppOption instances
-  ServerAppOption<int>::RegisterAll(w);  // template parameter ignored; uses global list
+  ServerAppOptionBase::RegisterAll(w);
 }
 
 // ============================================================================

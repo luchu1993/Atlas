@@ -1,8 +1,10 @@
 #ifndef ATLAS_LIB_SERVER_SERVER_APP_OPTION_H_
 #define ATLAS_LIB_SERVER_SERVER_APP_OPTION_H_
 
+#include <algorithm>
 #include <string>
 #include <string_view>
+#include <type_traits>
 #include <vector>
 
 #include "serialization/data_section.h"
@@ -21,15 +23,52 @@ namespace atlas {
 // Example usage in baseapp.cpp:
 //
 //   static ServerAppOption<int> s_backup_period{
-//       10, "backup_period", "baseapp/backup_period", WatcherMode::ReadWrite};
+//       10, "backup_period", "baseapp/backup_period", WatcherMode::kReadWrite};
 //
 // The static instances register themselves in a process-global list at
-// construction time. ServerConfig::apply_options() and
-// ServerApp::register_watchers() iterate the list.
+// construction time. ServerAppOptionBase::ApplyAll() and
+// ServerAppOptionBase::RegisterAll() iterate the list.
 // ============================================================================
 
+// Non-template base so the process-global registry is shared across all
+// ServerAppOption<T> instantiations. Without this, each template instance
+// would have its own static list and ApplyAll/RegisterAll would only see
+// options of a single T.
+class ServerAppOptionBase {
+ public:
+  virtual ~ServerAppOptionBase() {
+    auto& opts = AllOptions();
+    opts.erase(std::remove(opts.begin(), opts.end(), this), opts.end());
+  }
+
+  virtual void LoadFrom(const DataSection& root) = 0;
+  virtual void RegisterWatcher(WatcherRegistry& registry) = 0;
+
+  /// Process-wide list of all ServerAppOption instances across every T.
+  static auto AllOptions() -> std::vector<ServerAppOptionBase*>& {
+    static std::vector<ServerAppOptionBase*> s_options;
+    return s_options;
+  }
+
+  /// Apply all registered options from the given DataSection root.
+  static void ApplyAll(const DataSection& root) {
+    for (auto* opt : AllOptions()) opt->LoadFrom(root);
+  }
+
+  /// Register all options into the given WatcherRegistry.
+  static void RegisterAll(WatcherRegistry& registry) {
+    for (auto* opt : AllOptions()) opt->RegisterWatcher(registry);
+  }
+
+ protected:
+  ServerAppOptionBase() { AllOptions().push_back(this); }
+
+  ServerAppOptionBase(const ServerAppOptionBase&) = delete;
+  ServerAppOptionBase& operator=(const ServerAppOptionBase&) = delete;
+};
+
 template <typename T>
-class ServerAppOption {
+class ServerAppOption : public ServerAppOptionBase {
  public:
   ServerAppOption(T default_value, std::string_view json_key, std::string_view watcher_path,
                   WatcherMode mode = WatcherMode::kReadOnly)
@@ -37,18 +76,7 @@ class ServerAppOption {
         default_(default_value),
         json_key_(json_key),
         watcher_path_(watcher_path),
-        mode_(mode) {
-    AllOptions().push_back(this);
-  }
-
-  ~ServerAppOption() {
-    auto& opts = AllOptions();
-    opts.erase(std::remove(opts.begin(), opts.end(), this), opts.end());
-  }
-
-  // Non-copyable, non-movable (stored by pointer in global list)
-  ServerAppOption(const ServerAppOption&) = delete;
-  ServerAppOption& operator=(const ServerAppOption&) = delete;
+        mode_(mode) {}
 
   [[nodiscard]] auto Value() const -> const T& { return value_; }
 
@@ -57,8 +85,8 @@ class ServerAppOption {
   }
 
   /// Load value from the config's raw DataSection tree.
-  /// Called by ServerConfig::apply_options() after JSON loading.
-  void LoadFrom(const DataSection& root) {
+  /// Called by ServerAppOptionBase::ApplyAll() after JSON loading.
+  void LoadFrom(const DataSection& root) override {
     if constexpr (std::is_same_v<T, bool>)
       value_ = root.ReadBool(json_key_, default_);
     else if constexpr (std::is_integral_v<T> && std::is_signed_v<T>)
@@ -72,30 +100,11 @@ class ServerAppOption {
   }
 
   /// Register this option's value as a Watcher entry.
-  void RegisterWatcher(WatcherRegistry& registry) {
+  void RegisterWatcher(WatcherRegistry& registry) override {
     if (mode_ == WatcherMode::kReadWrite)
       registry.AddRw(watcher_path_, value_);
     else
       registry.Add(watcher_path_, value_);
-  }
-
-  // ---- Global registry ---------------------------------------------------
-
-  /// Process-wide list of all ServerAppOption instances.
-  /// Used by ServerConfig::apply_options() and ServerApp::register_watchers().
-  static auto AllOptions() -> std::vector<ServerAppOption*>& {
-    static std::vector<ServerAppOption*> s_options;
-    return s_options;
-  }
-
-  /// Apply all registered options from the given DataSection root.
-  static void ApplyAll(const DataSection& root) {
-    for (auto* opt : AllOptions()) opt->LoadFrom(root);
-  }
-
-  /// Register all options into the given WatcherRegistry.
-  static void RegisterAll(WatcherRegistry& registry) {
-    for (auto* opt : AllOptions()) opt->RegisterWatcher(registry);
   }
 
  private:

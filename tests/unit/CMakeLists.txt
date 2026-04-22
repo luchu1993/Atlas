@@ -304,6 +304,11 @@ atlas_add_test(NAME test_cellapp_handlers
   DEPS atlas_cellapp_lib atlas_space atlas_entitydef
 )
 
+atlas_add_test(NAME test_cellapp_config
+  SOURCES test_cellapp_config.cpp
+  DEPS atlas_cellapp_lib atlas_server atlas_serialization
+)
+
 # ── Database ────────────────────────────────────────────────────────────────
 
 atlas_add_test(NAME test_database_types
