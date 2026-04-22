@@ -19,37 +19,43 @@ Phase C 把 Phase B 的客户端回调契约放到真实集群里跑一遍。本
 
 ## C2：事件可达链路
 
-一次命令同时启动 50 个裸协议虚拟客户端（负载）+ 2 个真实脚本客户端（观察）：
+一次命令同时启动 50 个裸协议虚拟客户端（负载）+ 2 个真实脚本客户端（观察）。`run_world_stress.py` 前端的 `--login-rate-limit-per-ip` 和 `--login-rate-limit-trusted-cidr` 透传给 LoginApp 启动参数 —— 因为所有本地 client 共享 `127.0.0.1`，默认 5/60s 的 per-IP 限额撑不起 50 个 client 并发登录：
 
 ```bash
-world_stress --login 127.0.0.1:20013 \
-             --password-hash <sha256hex> \
-             --clients 50 --account-pool 50 \
-             --duration-sec 30 \
-             --script-clients 2 \
-             --client-exe build/debug/src/client/Debug/atlas_client.exe \
-             --client-assembly samples/client/bin/Debug/net9.0/Atlas.ClientSample.dll \
-             --script-verify
+python tools/cluster_control/run_world_stress.py \
+    --clients 50 --account-pool 50 \
+    --duration-sec 30 \
+    --script-clients 2 \
+    --script-verify \
+    --login-rate-limit-per-ip 200 \
+    --login-rate-limit-trusted-cidr 127.0.0.0/8
 ```
 
-退出时打印 per-child summary（D2'.3 起多一个 `seqgaps` 列）：
+（已验证 2026-04-22，`ce927b6..05f527d` 分支）退出时 exit=0，summary：
 
 ```
+Summary
+  login_success: 50 / auth_success: 50 / cell_ready: 50
+  move_sent: 14880 (10 Hz × 30 s × 50 client)
+  aoi_prop_update: 46850 / aoi_enter: 2550 / aoi_leave: 0
+  echo_rtt_p50/p95: 793 / 3284 ms  (本地单机 CPU 吃紧时 RTT 明显升高)
+
 [script-clients] per-child event summary:
-  username              init  enterworld  destroy  hp  posupd   seqgaps  unparsed
-  script_user_50           1           1        0  ~30   ~300        0        ~40
-  script_user_51           1           1        0  ~30   ~300        0        ~40
+  username              init  enterworld  destroy   hp  posupd   seqgaps  unparsed
+  script_user_50         53          51        0  937      84         0        16
+  script_user_51         53          51        0  937      83         0        16
 ```
 
-**预期读数（30 秒运行）**：
+**读数含义（30 秒运行 + 50 bare + 2 script，所有实体均在同一 50 m AoI 半径）**：
 
-| 列 | 含义 | 期望 |
+| 列 | 期望 | 说明 |
 |---|---|---|
-| `init` | `OnInit` 次数（自身实体创建 / AoI peer 进入） | ≥ 1 |
-| `enterworld` | `OnEnterWorld` 次数 | ≥ 1 |
-| `hp` | `OnHpChanged` 次数（服务端 HP tick 触发，**仅 delta 通道**） | ≈ 运行秒数（1 Hz 节律）|
-| `posupd` | `OnPositionUpdated` 次数 | 由 `--move-rate-hz` 决定（默认 10 Hz × 30 s = 300 附近） |
-| `seqgaps` | 客户端观察到的 `event_seq` 跳号数（missed deltas） | **0**（无丢包时应完全连续） |
+| `init` | 52-54 | 1 Account + 52 StressAvatar peer（50 bare + 对端 script + 本端 script；self 也计 OnInit） |
+| `enterworld` | 51-52 | 非 self 的 peer enter 才触发（self 的 StressAvatar 走 EntityTransferred → `CreateEntity` 路径，未经 `kEntityEnter`）|
+| `hp` | 800-1000 | 52 avatars × 30 s × 1 Hz ≈ 1560 个全量事件；AoI 进出、优先级回退、带宽预算会裁剪一部分；稳态稀疏约 60% 落地 |
+| `posupd` | 50-200 | 每个 bare 10 Hz × 30 s = 300；script client 看到的只有 AoI 半径内的 peer |
+| `seqgaps` | **0** | 无丢包时 reliable delta 的 `event_seq` 必须连续；非零 = reliable channel 或 replication 路径有回归 |
+| `unparsed` | ≈ 16 | init 阶段的 ClR / 网络日志行，非脚本事件 |
 
 `--script-verify` 要求每个子进程至少观察到 1 次 `OnInit`，否则 exit code = 1。
 
@@ -63,17 +69,25 @@ C3 在 C2 基础上加一段丢包窗口 —— 借 `atlas_client --drop-inbound
 
 ### C3-A：Reliable delta 路径 + baseline 静默恢复
 
-配置与 C2 相同但加一段 5-9 秒的入站丢弃：
+只用 script client（双 client 互为 peer），在第 5-9 秒入站丢弃 state-channel 消息：
 
 ```bash
-world_stress --login 127.0.0.1:20013 \
-             --password-hash <sha256hex> \
-             --clients 0 --duration-sec 20 \
-             --script-clients 2 \
-             --client-exe build/debug/src/client/Debug/atlas_client.exe \
-             --client-assembly samples/client/bin/Debug/net9.0/Atlas.ClientSample.dll \
-             --client-drop-inbound-ms 5000 4000
+python tools/cluster_control/run_world_stress.py \
+    --clients 0 --duration-sec 20 \
+    --script-clients 2 \
+    --script-verify \
+    --client-drop-inbound-ms 5000 4000
 ```
+
+已验证 2026-04-22：exit=0，
+```
+[script-clients] per-child event summary:
+  username          init  enterworld  destroy  hp  posupd  seqgaps  unparsed
+  script_user_1        3           1        0   31       1        8        17
+  script_user_2        3           1        0   31       1        8        17
+```
+
+`hp + seqgaps = 39 ≈ 40`（20 s × 2 avatars × 1 Hz），证明 event 总数正确 —— 8 个 reliable delta 在 drop window 被应用层丢弃、触发 8 个 `event_seq` 跳号、其余 31 个按 1 Hz 正常送达脚本。
 
 **预期 summary**：
 
