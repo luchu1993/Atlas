@@ -158,18 +158,11 @@ internal static class DefParser
         };
     }
 
-    // Mirrors IsReplicable predicates in the emitters (DeltaSyncEmitter,
-    // PropertiesEmitter). Shared authority lives here so DEF008 detection
-    // can't drift from emission filtering.
-    private static bool IsReplicableScope(PropertyScope scope) => scope switch
-    {
-        PropertyScope.OwnClient => true,
-        PropertyScope.AllClients => true,
-        PropertyScope.OtherClients => true,
-        PropertyScope.CellPublicAndOwn => true,
-        PropertyScope.BaseAndClient => true,
-        _ => false,
-    };
+    // Replicable = anything the client can see. PropertyScopeExtensions is
+    // the single source of truth; this indirection exists so DEF008 detection
+    // (reserved-name "position" guard) uses the same predicate the emitters
+    // use when deciding whether to emit a backing field at all.
+    private static bool IsReplicableScope(PropertyScope scope) => scope.IsClientVisible();
 
     private static PropertyScope ParseScope(string value)
     {
