@@ -88,9 +88,11 @@ auto BuildEnterPayload(uint16_t type_id, const math::Vector3& pos, const math::V
 
 }  // namespace
 
-Witness::Witness(CellEntity& owner, float aoi_radius, SendFn send_reliable, SendFn send_unreliable)
+Witness::Witness(CellEntity& owner, float aoi_radius, float hysteresis, SendFn send_reliable,
+                 SendFn send_unreliable)
     : owner_(owner),
       aoi_radius_(aoi_radius),
+      hysteresis_(hysteresis),
       send_reliable_(std::move(send_reliable)),
       send_unreliable_(std::move(send_unreliable)) {}
 
@@ -98,7 +100,8 @@ Witness::~Witness() = default;
 
 void Witness::Activate() {
   if (trigger_) return;
-  trigger_ = std::make_unique<AoITrigger>(*this, owner_.RangeNode(), aoi_radius_);
+  trigger_ = std::make_unique<AoITrigger>(*this, owner_.RangeNode(), aoi_radius_,
+                                          aoi_radius_ + hysteresis_);
   trigger_->Insert(owner_.GetSpace().GetRangeList());
 }
 
@@ -110,9 +113,10 @@ void Witness::Deactivate() {
   priority_queue_.clear();
 }
 
-void Witness::SetAoIRadius(float new_radius) {
+void Witness::SetAoIRadius(float new_radius, float new_hysteresis) {
   aoi_radius_ = new_radius;
-  if (trigger_) trigger_->SetRange(new_radius);
+  hysteresis_ = new_hysteresis;
+  if (trigger_) trigger_->SetBounds(new_radius, new_radius + new_hysteresis);
 }
 
 void Witness::HandleAoIEnter(CellEntity& peer) {
@@ -120,11 +124,20 @@ void Witness::HandleAoIEnter(CellEntity& peer) {
 
   auto [it, inserted] = aoi_map_.try_emplace(peer.Id());
   auto& cache = it->second;
+
+  // Dual-band hysteresis: inner's OnEnter fires every time a peer crosses
+  // the inner boundary inbound — including re-crossings from within the
+  // hysteresis band (outer > distance > inner). If the peer is already in
+  // aoi_map_ and NOT flagged kGone, this is a hysteresis re-cross: the
+  // client already sees the peer as in AoI, re-emitting a snapshot would
+  // be wasteful and out-of-contract. Skip the state update.
+  if (!inserted && (cache.flags & EntityCache::kGone) == 0) return;
+
   cache.entity = &peer;
   cache.peer_base_id = peer.BaseEntityId();  // safe-for-leave copy
   // ENTER_PENDING is "send a fresh snapshot to this observer" — set on
-  // first entry and on any readd-after-leave. Clear GONE if a peer left
-  // and re-entered within the same tick (cache survived the gone sweep).
+  // first entry and on any re-entry of a previously-kGone peer (the peer
+  // left AoI and came back before Update had a chance to fire the Leave).
   cache.flags = EntityCache::kEnterPending;
   UpdatePriority(cache);
 }

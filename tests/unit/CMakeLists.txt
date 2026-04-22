@@ -294,6 +294,11 @@ atlas_add_test(NAME test_range_trigger_lifetime
   DEPS atlas_cellapp_lib atlas_space
 )
 
+atlas_add_test(NAME test_aoi_trigger_hysteresis
+  SOURCES test_aoi_trigger_hysteresis.cpp
+  DEPS atlas_cellapp_lib atlas_space
+)
+
 atlas_add_test(NAME test_cellapp_native_provider
   SOURCES test_cellapp_native_provider.cpp
   DEPS atlas_cellapp_lib atlas_space atlas_clrscript

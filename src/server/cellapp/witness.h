@@ -56,7 +56,12 @@ class Witness {
   using SendFn =
       std::function<void(EntityID observer_base_id, std::span<const std::byte> envelope)>;
 
-  Witness(CellEntity& owner, float aoi_radius, SendFn send_reliable, SendFn send_unreliable = {});
+  // hysteresis widens the *leave* boundary: enters fire at `aoi_radius`,
+  // leaves at `aoi_radius + hysteresis`. Default 5.0f matches BigWorld's
+  // Witness::aoiHyst_ init value (witness.cpp:136). Pass 0.f to disable
+  // hysteresis (single-band behaviour).
+  Witness(CellEntity& owner, float aoi_radius, float hysteresis, SendFn send_reliable,
+          SendFn send_unreliable = {});
   ~Witness();
 
   Witness(const Witness&) = delete;
@@ -74,12 +79,18 @@ class Witness {
 
   [[nodiscard]] auto Owner() -> CellEntity& { return owner_; }
   [[nodiscard]] auto AoIRadius() const -> float { return aoi_radius_; }
+  [[nodiscard]] auto Hysteresis() const -> float { return hysteresis_; }
   [[nodiscard]] auto IsActive() const -> bool { return trigger_ != nullptr; }
 
-  // Resize the AoI radius in place. Uses RangeTrigger::SetRange's
-  // expand-first semantics so enters precede leaves when the new radius
-  // strictly contains or is contained by the old one.
-  void SetAoIRadius(float new_radius);
+  // Resize the AoI radius + hysteresis in place. AoITrigger uses
+  // RangeTrigger::SetRange's expand-first semantics on both bands, so
+  // enters precede leaves when the new radius strictly contains or is
+  // contained by the old one.
+  void SetAoIRadius(float new_radius, float new_hysteresis);
+
+  // Convenience overload — keeps the current hysteresis_ value. Useful
+  // for call sites (and legacy tests) that only want to resize radius.
+  void SetAoIRadius(float new_radius) { SetAoIRadius(new_radius, hysteresis_); }
 
   // Called by the AoITrigger when a peer crosses the trigger boundary.
   void HandleAoIEnter(CellEntity& peer);
@@ -153,6 +164,7 @@ class Witness {
 
   CellEntity& owner_;
   float aoi_radius_;
+  float hysteresis_;
   SendFn send_reliable_;
   SendFn send_unreliable_;
 

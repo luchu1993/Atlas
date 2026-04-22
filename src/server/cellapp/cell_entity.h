@@ -171,10 +171,15 @@ class CellEntity : public IEntityMotion {
   // `send_unreliable` callback is optional — when omitted, volatile-path
   // envelopes fall back to the reliable callback so tests can exercise
   // the state machine without wiring two transports.
+  // `hysteresis` defaults to 5.0f — matches BigWorld's Witness::aoiHyst_
+  // initial value (witness.cpp:136). Pass 0.f for strict single-band
+  // trigger semantics; pass a positive value for the dual-band hysteresis
+  // AoITrigger (enter at aoi_radius, leave at aoi_radius + hysteresis).
   template <typename ReliableFn>
-  void EnableWitness(float aoi_radius, ReliableFn&& send_reliable);
+  void EnableWitness(float aoi_radius, ReliableFn&& send_reliable, float hysteresis = 5.0f);
   template <typename ReliableFn, typename UnreliableFn>
-  void EnableWitness(float aoi_radius, ReliableFn&& send_reliable, UnreliableFn&& send_unreliable);
+  void EnableWitness(float aoi_radius, ReliableFn&& send_reliable, UnreliableFn&& send_unreliable,
+                     float hysteresis = 5.0f);
   void DisableWitness();
 
   // ---- Controllers ----------------------------------------------------------
@@ -299,7 +304,7 @@ class CellEntity : public IEntityMotion {
 namespace atlas {
 
 template <typename ReliableFn>
-void CellEntity::EnableWitness(float aoi_radius, ReliableFn&& send_reliable) {
+void CellEntity::EnableWitness(float aoi_radius, ReliableFn&& send_reliable, float hysteresis) {
   // Ghost rejection (Phase 11 §3.1): a Witness observes peer AoI on behalf
   // of a client-bound script, which only exists on a Real. Silently
   // attaching one to a Ghost would leak events out through a channel
@@ -308,18 +313,20 @@ void CellEntity::EnableWitness(float aoi_radius, ReliableFn&& send_reliable) {
     ATLAS_LOG_WARNING("CellEntity::EnableWitness on non-Real entity id={} — ignored", id_);
     return;
   }
-  witness_ = std::make_unique<Witness>(*this, aoi_radius, std::forward<ReliableFn>(send_reliable));
+  witness_ = std::make_unique<Witness>(*this, aoi_radius, hysteresis,
+                                       std::forward<ReliableFn>(send_reliable));
   witness_->Activate();
 }
 
 template <typename ReliableFn, typename UnreliableFn>
 void CellEntity::EnableWitness(float aoi_radius, ReliableFn&& send_reliable,
-                               UnreliableFn&& send_unreliable) {
+                               UnreliableFn&& send_unreliable, float hysteresis) {
   if (!IsReal()) {
     ATLAS_LOG_WARNING("CellEntity::EnableWitness on non-Real entity id={} — ignored", id_);
     return;
   }
-  witness_ = std::make_unique<Witness>(*this, aoi_radius, std::forward<ReliableFn>(send_reliable),
+  witness_ = std::make_unique<Witness>(*this, aoi_radius, hysteresis,
+                                       std::forward<ReliableFn>(send_reliable),
                                        std::forward<UnreliableFn>(send_unreliable));
   witness_->Activate();
 }

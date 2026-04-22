@@ -42,6 +42,7 @@ desktop.ini
 
 # Local runtime artifacts
 .tmp/
+tmp/
 
 # Python
 __pycache__/
