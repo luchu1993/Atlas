@@ -144,5 +144,5 @@ struct EntityTypeDescriptor {
 ## 7. 关联
 
 - [script_phase4_shared_generators.md](script_phase4_shared_generators.md) — Emitter 架构。
-- [DEF_GENERATOR_DESIGN.md](../DEF_GENERATOR_DESIGN.md) — `.def` 文件格式与 DefGenerator 整体设计。
-- [PROPERTY_SYNC_DESIGN.md](../PROPERTY_SYNC_DESIGN.md) — 属性同步与 delta 细节。
+- [DEF_GENERATOR_DESIGN.md](../generator/DEF_GENERATOR_DESIGN.md) — `.def` 文件格式与 DefGenerator 整体设计。
+- [PROPERTY_SYNC_DESIGN.md](../property_sync/PROPERTY_SYNC_DESIGN.md) — 属性同步与 delta 细节。

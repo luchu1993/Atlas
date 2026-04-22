@@ -1,7 +1,7 @@
 # 属性同步机制设计：DirtyBit vs EventHistory
 
 > 初版 2026-04-15 / 最新 2026-04-22（§9 实施汇总；客户端接收侧按 scheme-2 终稿校正）
-> 关联: [BigWorld EventHistory 参考](BIGWORLD_EVENT_HISTORY_REFERENCE.md) | [Phase 10 CellApp](roadmap/phase10_cellapp.md) | [Phase 12 Client SDK](roadmap/phase12_client_sdk.md) | [Script-Client Smoke Runbook](../stress_test/script_client_smoke.md)
+> 关联: [BigWorld EventHistory 参考](../bigworld_ref/BIGWORLD_EVENT_HISTORY_REFERENCE.md) | [Phase 10 CellApp](../roadmap/phase10_cellapp.md) | [Phase 12 Client SDK](../roadmap/phase12_client_sdk.md) | [Script-Client Smoke Runbook](../stress_test/script_client_smoke.md)
 >
 > **快速导航**：想看"当前代码是什么样"直接看 [§9 实施现状](#9-实施现状2026-04-22)；§1–§8 是设计决策的背景说明。
 

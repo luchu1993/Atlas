@@ -2,7 +2,7 @@
 
 > 日期: 2026-04-14
 > 状态: 已实现（C# Generator 部分完成，C++ 安全校验部分待实现）
-> 关联: [BigWorld RPC 参考](BIGWORLD_RPC_REFERENCE.md) | [Entity Mailbox 设计](scripting/entity_mailbox_design.md) | [DefGenerator 统一重构](DEFGEN_CONSOLIDATION_DESIGN.md)
+> 关联: [BigWorld RPC 参考](../bigworld_ref/BIGWORLD_RPC_REFERENCE.md) | [Entity Mailbox 设计](../scripting/entity_mailbox_design.md) | [DefGenerator 统一重构](DEFGEN_CONSOLIDATION_DESIGN.md)
 
 ## 1. 背景
 

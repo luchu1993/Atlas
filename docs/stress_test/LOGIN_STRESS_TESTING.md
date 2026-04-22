@@ -407,10 +407,6 @@ python tools/cluster_control/run_login_stress.py `
 - `.tmp/login-stress/20260412-145327`
 - `.tmp/login-stress/20260412-145720`
 
-对应分析见:
-
-- [LOGIN_STRESS_REMAINING_ISSUES_20260412.md](./LOGIN_STRESS_REMAINING_ISSUES_20260412.md)
-
 ---
 
 ## 10. 推荐流程

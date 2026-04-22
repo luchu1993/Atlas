@@ -72,7 +72,7 @@ C++ 网络层收到 rpc 消息
 ## 4. 关联
 
 - [script_phase4_shared_generators.md](script_phase4_shared_generators.md) — Emitter 架构。
-- [DEF_GENERATOR_DESIGN.md](../DEF_GENERATOR_DESIGN.md) — `.def` 文件格式与 DefGenerator 整体设计。
-- [DEFGEN_CONSOLIDATION_DESIGN.md](../DEFGEN_CONSOLIDATION_DESIGN.md) — Entity/Rpc Generator 合并入 DefGenerator 的历程。
-- [BIGWORLD_RPC_REFERENCE.md](../BIGWORLD_RPC_REFERENCE.md) — BigWorld RPC 语义参考。
+- [DEF_GENERATOR_DESIGN.md](../generator/DEF_GENERATOR_DESIGN.md) — `.def` 文件格式与 DefGenerator 整体设计。
+- [DEFGEN_CONSOLIDATION_DESIGN.md](../generator/DEFGEN_CONSOLIDATION_DESIGN.md) — Entity/Rpc Generator 合并入 DefGenerator 的历程。
+- [BIGWORLD_RPC_REFERENCE.md](../bigworld_ref/BIGWORLD_RPC_REFERENCE.md) — BigWorld RPC 语义参考。
 - [serialization_alignment.md](serialization_alignment.md) — 参数序列化字节格式。

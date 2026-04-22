@@ -2,7 +2,7 @@
 
 > 预估周期: 3–4 周 | 前置依赖: ScriptPhase 3 完成 | **状态: 🟡 进行中**
 
-> **架构演进**：原设计中的 `Atlas.Generators.Entity` + `Atlas.Generators.Rpc` 已被统一合并入 `Atlas.Generators.Def`，改由 `.def` 文件驱动代码生成；`[Replicated]`、`[Persistent]`、`[ServerOnly]`、`[ClientRpc]`、`[CellRpc]`、`[BaseRpc]` 等 C# Attribute 已删除。`Atlas.Generators.Events` 仍作为独立 Generator 存在。完整演进背景见 [DEFGEN_CONSOLIDATION_DESIGN.md](../DEFGEN_CONSOLIDATION_DESIGN.md) 与 [DEF_GENERATOR_DESIGN.md](../DEF_GENERATOR_DESIGN.md)。
+> **架构演进**：原设计中的 `Atlas.Generators.Entity` + `Atlas.Generators.Rpc` 已被统一合并入 `Atlas.Generators.Def`，改由 `.def` 文件驱动代码生成；`[Replicated]`、`[Persistent]`、`[ServerOnly]`、`[ClientRpc]`、`[CellRpc]`、`[BaseRpc]` 等 C# Attribute 已删除。`Atlas.Generators.Events` 仍作为独立 Generator 存在。完整演进背景见 [DEFGEN_CONSOLIDATION_DESIGN.md](../generator/DEFGEN_CONSOLIDATION_DESIGN.md) 与 [DEF_GENERATOR_DESIGN.md](../generator/DEF_GENERATOR_DESIGN.md)。
 
 ---
 

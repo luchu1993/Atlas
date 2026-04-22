@@ -1,7 +1,7 @@
 # BigWorld EntityID 一致性机制参考 — Atlas 实现指南
 
 > 来源: BigWorld Engine 14.4.1 源码分析
-> 关联: [BigWorld RPC 参考](BIGWORLD_RPC_REFERENCE.md) | [BigWorld EventHistory 参考](BIGWORLD_EVENT_HISTORY_REFERENCE.md) | [Phase 7 DBApp](roadmap/phase07_dbapp.md) | [Phase 8 BaseApp](roadmap/phase08_baseapp.md)
+> 关联: [BigWorld RPC 参考](BIGWORLD_RPC_REFERENCE.md) | [BigWorld EventHistory 参考](BIGWORLD_EVENT_HISTORY_REFERENCE.md) | [Phase 7 DBApp](../roadmap/phase07_dbapp.md) | [Phase 8 BaseApp](../roadmap/phase08_baseapp.md)
 
 ---
 

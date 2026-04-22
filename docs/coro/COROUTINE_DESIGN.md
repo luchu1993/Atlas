@@ -1,9 +1,8 @@
 # C++20 协程基础设施设计
 
-> 日期: 2026-04-14
-> 状态: 待实现
-> 适用范围: `src/lib/coro/` (新建库) + `InterfaceTable` 扩展 + `LoginApp` 试点迁移
-> 关联: [登录回滚协议](LOGIN_ROLLBACK_PROTOCOL_20260412.md) | [BigWorld RPC 参考](BIGWORLD_RPC_REFERENCE.md)
+> 日期: 2026-04-14（设计）/ 2026-04-15（落地）
+> 状态: ✅ 已落地 —— `src/lib/coro/` 已建（`task.h` / `cancellation.h` / `scope_guard.h` / `async_sleep.h` / `rpc_call.h` 等），`LoginApp` 已迁至 `handle_login_coro` (`src/server/loginapp/loginapp.cc`)
+> 关联: [Phase 9 LoginApp 落地](../roadmap/phase09_login_flow.md) | [BigWorld RPC 参考](../bigworld_ref/BIGWORLD_RPC_REFERENCE.md)
 
 ---
 

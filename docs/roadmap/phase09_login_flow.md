@@ -10,7 +10,7 @@
 
 Phase 9 完成单集群登录主线: `LoginApp` 接受客户端登录，`DBApp` 认证，`BaseAppMgr` 分配 `BaseApp`，`BaseApp` 完成 `PrepareLogin` 与最终 `Authenticate`。
 
-多 `LoginApp` 与 `LoginAppMgr` 的扩展设计见 [../MULTI_LOGINAPP_DESIGN.md](../MULTI_LOGINAPP_DESIGN.md)。
+多 `LoginApp` 与 `LoginAppMgr` 的扩展设计见 [../scripting/MULTI_LOGINAPP_DESIGN.md](../scripting/MULTI_LOGINAPP_DESIGN.md)。
 
 ---
 
@@ -34,11 +34,6 @@ Phase 9 完成单集群登录主线: `LoginApp` 接受客户端登录，`DBApp` 
 | 定向单元测试 + 模块级集成测试 | ✅ | 见下文测试清单 |
 | 极端短线重登 churn 压测收敛 | 🚧 | 仍有 `timeout_fail` / `invalid_session` / `no_dbapp` / checkout 长尾残余 |
 | 端到端长稳 / 长链路量化 | 🚧 | `force-logoff -> relogin -> checkout -> authenticate` 需继续量化 |
-
-残余问题详情见:
-
-- [../LOGIN_STRESS_REMAINING_ISSUES_20260412.md](../LOGIN_STRESS_REMAINING_ISSUES_20260412.md)
-- [../LOGIN_ROLLBACK_PROTOCOL_20260412.md](../LOGIN_ROLLBACK_PROTOCOL_20260412.md)
 
 ---
 
@@ -94,8 +89,7 @@ Phase 9 完成单集群登录主线: `LoginApp` 接受客户端登录，`DBApp` 
 3. 核查 `DBApp` 在多 BaseApp 压力下的排队与回复长尾
 4. 补完整端到端行为测试，而不是继续只靠压测日志猜测
 
-压测方法与参数见 [../LOGIN_STRESS_TESTING.md](../LOGIN_STRESS_TESTING.md)。
-详细问题分解见 [../LOGIN_STRESS_REMAINING_ISSUES_20260412.md](../LOGIN_STRESS_REMAINING_ISSUES_20260412.md)。
+压测方法与参数见 [../stress_test/LOGIN_STRESS_TESTING.md](../stress_test/LOGIN_STRESS_TESTING.md)。
 
 ---
 
@@ -107,7 +101,7 @@ Phase 9 完成单集群登录主线: `LoginApp` 接受客户端登录，`DBApp` 
 - 当前 `LoginApp` / `BaseAppMgr` / `BaseApp` / `DBApp` 在登录链路上的真实实现状态
 - 已落地功能、已知问题和剩余验证项
 
-**本文档不再负责** (统一见 [../MULTI_LOGINAPP_DESIGN.md](../MULTI_LOGINAPP_DESIGN.md)):
+**本文档不再负责** (统一见 [../scripting/MULTI_LOGINAPP_DESIGN.md](../scripting/MULTI_LOGINAPP_DESIGN.md)):
 
 - 多 `LoginApp` 入口与 `LoginAppMgr` 外部暴露方案
 - `route_token`

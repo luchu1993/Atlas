@@ -214,7 +214,7 @@ Phase 7 只有满足以下条件，才应视为真正完成:
 相关文档:
 
 - [phase09_login_flow.md](./phase09_login_flow.md)
-- [../MULTI_LOGINAPP_DESIGN.md](../MULTI_LOGINAPP_DESIGN.md)
+- [../scripting/MULTI_LOGINAPP_DESIGN.md](../scripting/MULTI_LOGINAPP_DESIGN.md)
 
 ---
 

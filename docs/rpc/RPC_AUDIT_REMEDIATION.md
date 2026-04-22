@@ -1,7 +1,7 @@
 # Atlas RPC 实现状态、缺陷修复与后续任务
 
 > 来源：2026-04-18 RPC 实现深度审计 + 从 `BIGWORLD_RPC_REFERENCE.md` 摘出的 Atlas 实现章节
-> 关联：[BigWorld RPC 参考](BIGWORLD_RPC_REFERENCE.md)（纯 BigWorld 机制参考，不含 Atlas 实现细节） | [Phase 8 BaseApp](roadmap/phase08_baseapp.md) | [Phase 10 CellApp](roadmap/phase10_cellapp.md)
+> 关联：[BigWorld RPC 参考](../bigworld_ref/BIGWORLD_RPC_REFERENCE.md)（纯 BigWorld 机制参考，不含 Atlas 实现细节） | [Phase 8 BaseApp](../roadmap/phase08_baseapp.md) | [Phase 10 CellApp](../roadmap/phase10_cellapp.md)
 >
 > 本文档覆盖 Atlas 侧与 RPC 相关的全部工程条目：
 > 1. **缺陷修复清单**（§0 ~ §6）：已实现代码中的结构性缺陷（C-1 ~ L-4）

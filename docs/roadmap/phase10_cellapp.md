@@ -1,15 +1,15 @@
 # Phase 10: CellApp — 空间模拟
 
 > 前置依赖: Phase 8 (BaseApp), Phase 9 (BaseAppMgr), DefGenerator (DirtyFlags + DeltaSync；Phase 10 需补充按受众过滤的 delta API)
-> 协同依赖: [DEF_GENERATOR_DESIGN](../DEF_GENERATOR_DESIGN.md) 的 C++ 部分（Step 5-9: .def 解析、EntityDefRegistry 扩展、BaseApp 外部接口、Exposed 校验、sourceEntityID 验证）
+> 协同依赖: [DEF_GENERATOR_DESIGN](../generator/DEF_GENERATOR_DESIGN.md) 的 C++ 部分（Step 5-9: .def 解析、EntityDefRegistry 扩展、BaseApp 外部接口、Exposed 校验、sourceEntityID 验证）
 > BigWorld 参考: `server/cellapp/cellapp.hpp`, `server/cellapp/entity.hpp`, `server/cellapp/witness.hpp`
-> 当前代码基线 (2026-04-18): 仓库里仍然没有 `CellApp` 实现，`src/server/cellapp/` 只有 `CMakeLists.txt`；`src/lib/physics/` 也仍是占位目录（仅 `CMakeLists.txt`）。因此本阶段必须复用已经落地的 `BaseApp` 回程协议（`src/server/baseapp/baseapp_messages.h`），并以当前脚本层实际提供的复制接口为前提调整设计。
+> 当前代码基线 (2026-04-22): `src/server/cellapp/` 核心实现已落地（~5500 行：`cellapp.cc/h`、`cell.cc/h`、`cell_entity.cc/h`、`witness.cc/h`、`space.cc/h`、`aoi_trigger.cc/h`、`ghost_maintainer.cc/h`、`controller_codec.cc/h`、`real_entity_data.cc/h`、`offload_checker.cc/h`、`cellapp_messages.h`、`intercell_messages.h`、`cellapp_native_provider.cc/h`）。`src/lib/physics/` 仍是占位目录。
 >
-> **前置任务 (PR-A/B/C/D) 均尚未落地** — 详见 [`phase10_prerequisites.md`](phase10_prerequisites.md)：
-> - PR-A: `baseapp_messages.h` 中 `ClientCellRpc` 的 struct 定义和 handler 未新增
-> - PR-B: `.def` 解析器与 `RpcDescriptor.direction/exposed` 字段在 `entity_def_registry.h` 中尚未实现
-> - PR-C: `DeltaSyncEmitter.cs` 尚未引入 `event_seq / volatile_seq`
-> - PR-D: `DeltaForwarder` 路径分离（Volatile latest-wins vs 属性 delta 可靠有序）的文档/测试尚未合入
+> **前置任务 (PR-A/B/C/D) 落地状态** — 详见 [`phase10_prerequisites.md`](phase10_prerequisites.md)：
+> - PR-A ✅ `baseapp_messages.h` 已含 `ClientCellRpc` (msg 2023) struct + handler
+> - PR-B ✅ `entity_def_registry` 已含 `RpcDescriptor.direction / exposed` + `ExposedScope` 查询
+> - PR-C ✅ C# 侧 `event_seq / volatile_seq` 已在 `ReplicationFrameHandle` / `ServerEntity` 中落地
+> - PR-D ✅ `DeltaForwarder` 已在 `src/server/baseapp/delta_forwarder.h/.cc` 落地，路径分离成型
 
 ---
 
@@ -45,11 +45,12 @@
 - [ ] **AvatarUpdate 安全策略（§3.12）**：非有限位置 + 单 tick 位移 > `kMaxSingleTickMove` 被拒绝
 - [ ] 全部新增代码有单元测试
 
-## 验收状态（2026-04-18）
+## 验收状态（2026-04-22）
 
-- [ ] 当前仓库仍无 `CellApp` 实现；`src/server/cellapp/` 只有构建骨架与文档前置约束。
-- [ ] Step 10.1 ~ 10.10 全部 **未开始**。
-- [ ] 前置依赖 PR-A / PR-B / PR-C / PR-D 均未合入（见 §7.1 与 [`phase10_prerequisites.md`](phase10_prerequisites.md)），必须先于 Step 10.1 完成。
+- ✅ `src/server/cellapp/` 核心实现落地（~5500 行）；Space / Cell / CellEntity / Witness / AoI / Controller / Ghost maintainer 基础架构可用。
+- ✅ 前置 PR-A / PR-B / PR-C / PR-D 均已合入。
+- 🚧 Step 10.1 ~ 10.10 的具体验收项需要按本章清单对照代码复核；性能指标（§3.11）与 AvatarUpdate 安全策略（§3.12）尚未系统性压测。
+- 🚧 `src/lib/physics/` 仍是占位目录，Controller 系统仅覆盖 MoveToPoint / Timer / Proximity 的基础路径。
 
 ## 文档使用约定（2026-04-18 修订）
 
@@ -152,7 +153,7 @@ CellEntity (C++ 薄壳)
 > **为什么拆分两条 CellRpc 消息？**
 > BigWorld 区分 `runExposedMethod`（客户端发起，REAL_ONLY，需要 Exposed 校验 + sourceEntityID 验证）
 > 和 `runScriptMethod`（服务器内部 Base→Cell，REAL_ONLY，可调用所有 Cell 方法，无需 Exposed）。
-> 参见 [BigWorld RPC 参考 Section 3.1 / 3.3](../BIGWORLD_RPC_REFERENCE.md)。
+> 参见 [BigWorld RPC 参考 Section 3.1 / 3.3](../bigworld_ref/BIGWORLD_RPC_REFERENCE.md)。
 > 合并为一条消息会导致 CellApp 无法区分来源、安全校验逻辑混乱。
 
 约束：

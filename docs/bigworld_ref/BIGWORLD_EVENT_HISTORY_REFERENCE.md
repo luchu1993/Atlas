@@ -1,7 +1,7 @@
 # BigWorld EventHistory 属性同步机制参考 — Atlas 实现指南
 
 > 来源: BigWorld Engine 14.4.1 源码分析
-> 关联: [BigWorld RPC 参考](BIGWORLD_RPC_REFERENCE.md) | [BigWorld EntityID 参考](BIGWORLD_ENTITY_ID_REFERENCE.md) | [Phase 10 CellApp](roadmap/phase10_cellapp.md) | [Phase 12 Client SDK](roadmap/phase12_client_sdk.md)
+> 关联: [BigWorld RPC 参考](BIGWORLD_RPC_REFERENCE.md) | [BigWorld EntityID 参考](BIGWORLD_ENTITY_ID_REFERENCE.md) | [Phase 10 CellApp](../roadmap/phase10_cellapp.md) | [Phase 12 Client SDK](../roadmap/phase12_client_sdk.md)
 
 ---
 

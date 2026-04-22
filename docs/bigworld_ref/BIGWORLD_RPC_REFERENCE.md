@@ -1,10 +1,10 @@
 # BigWorld RPC 机制参考
 
 > 来源: BigWorld Engine 14.4.1 源码分析
-> 关联: [Entity Mailbox 设计](scripting/entity_mailbox_design.md) | [Phase 8 BaseApp](roadmap/phase08_baseapp.md) | [Phase 10 CellApp](roadmap/phase10_cellapp.md)
+> 关联: [Entity Mailbox 设计](../scripting/entity_mailbox_design.md) | [Phase 8 BaseApp](../roadmap/phase08_baseapp.md) | [Phase 10 CellApp](../roadmap/phase10_cellapp.md)
 >
 > 本文档聚焦 **BigWorld 原始机制**。Atlas 侧的实现映射、缺陷修复清单、Phase 10/11 任务与安全加固均已迁至
-> [RPC 审计与修复方案](RPC_AUDIT_REMEDIATION.md)（§7 概念映射 / §8 实现状态 / §9 Phase 10 / §10 Phase 11 / §11 安全加固 / §13 散落设计注记）。
+> [RPC 审计与修复方案](../rpc/RPC_AUDIT_REMEDIATION.md)（§7 概念映射 / §8 实现状态 / §9 Phase 10 / §10 Phase 11 / §11 安全加固 / §13 散落设计注记）。
 
 ---
 
@@ -1011,4 +1011,4 @@ MERCURY_METHOD_RANGE_MSG( entityMethod, 2 ) // 方法消息范围
 | 7. 需要 Exposed? | Yes | Yes | No | No | No | No |
 | 8. sourceID 验证 | OWN_CLIENT 时 | No | No | No | N/A | N/A |
 
-> Atlas 侧对应的实现状态、Phase 10/11 任务清单与安全加固路线图见 [RPC 审计与修复方案](RPC_AUDIT_REMEDIATION.md) §7 ~ §12。
+> Atlas 侧对应的实现状态、Phase 10/11 任务清单与安全加固路线图见 [RPC 审计与修复方案](../rpc/RPC_AUDIT_REMEDIATION.md) §7 ~ §12。
