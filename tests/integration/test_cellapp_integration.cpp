@@ -106,6 +106,61 @@ TEST_F(CellAppIntegrationFixture, CreateCellEntityRegistersAndResponds) {
   EXPECT_NE(app_.FindSpace(5), nullptr);
 }
 
+// PR 34 end-to-end cell-side flow. Mirrors what BaseApp does on login:
+//   1. CreateCellEntity — entity exists, no witness yet (C2 decoupled).
+//   2. EnableWitness     — fires from BaseApp::BindClient (C3). No radius
+//                          on the wire; CellAppConfig defaults pick up.
+//   3. SetAoIRadius      — script call (C4/C5). Shrinks the witness's
+//                          dual-band trigger, peers outside the new
+//                          outer band get marked for leave.
+// Locks in the cross-commit contract so a regression in any of C2/C3/C4
+// surfaces here.
+TEST_F(CellAppIntegrationFixture, Pr34EndToEndEnableThenSetAoIRadius) {
+  // Peer at ~250m — well inside the 500m CellAppConfig default but
+  // well outside the 55m post-SetAoIRadius outer band.
+  app_.OnCreateCellEntity({}, nullptr, MakeCreate(/*base_id=*/200, /*space=*/1, {250.f, 0.f, 0.f}));
+
+  // Observer. After C2, creation doesn't auto-enable a witness.
+  app_.OnCreateCellEntity({}, nullptr, MakeCreate(/*base_id=*/100, /*space=*/1, {0.f, 0.f, 0.f}));
+  auto* observer = app_.FindEntityByBaseId(100);
+  ASSERT_NE(observer, nullptr);
+  EXPECT_FALSE(observer->HasWitness());
+
+  // BindClient would now fire EnableWitness. After C2 the wire form
+  // carries only base_entity_id; radius + hysteresis come from config.
+  cellapp::EnableWitness e{100};
+  app_.OnEnableWitness({}, nullptr, e);
+  ASSERT_TRUE(observer->HasWitness());
+  EXPECT_FLOAT_EQ(observer->GetWitness()->AoIRadius(), 500.f);
+  EXPECT_FLOAT_EQ(observer->GetWitness()->Hysteresis(), 5.f);
+  // Peer at 250m is inside the 500m AoI → witness saw it as ENTER_PENDING.
+  EXPECT_EQ(observer->GetWitness()->AoIMap().size(), 1u);
+
+  // Script-side SetAoIRadius(50, 5) — shrinks AoI to the stress-test band.
+  cellapp::SetAoIRadius s;
+  s.base_entity_id = 100;
+  s.radius = 50.f;
+  s.hysteresis = 5.f;
+  app_.OnSetAoIRadius({}, nullptr, s);
+  EXPECT_FLOAT_EQ(observer->GetWitness()->AoIRadius(), 50.f);
+  EXPECT_FLOAT_EQ(observer->GetWitness()->Hysteresis(), 5.f);
+
+  // Peer at 250m is now outside the new outer band (55m); the trigger
+  // contraction marked it kGone. Update compacts the map.
+  observer->GetWitness()->Update(/*max_packet_bytes=*/4096);
+  EXPECT_TRUE(observer->GetWitness()->AoIMap().empty());
+}
+
+// PR 34 C2: EnableWitness with no valid entity should log-warn and
+// leave the cell app in a sane state. This is defensive — the BindClient
+// → cell race window allows EnableWitness to arrive for an entity that
+// got destroyed in the interim.
+TEST_F(CellAppIntegrationFixture, Pr34EnableWitnessForUnknownEntityIsNoop) {
+  cellapp::EnableWitness e{9999};        // never created
+  app_.OnEnableWitness({}, nullptr, e);  // must not crash
+  EXPECT_EQ(app_.FindEntityByBaseId(9999), nullptr);
+}
+
 // Scenario #3 — EnableWitness creates an AoITrigger; existing peers
 // already in range appear as ENTER_PENDING in the aoi_map. This test
 // proves the C++ trigger integration without CLR.
