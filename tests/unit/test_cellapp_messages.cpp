@@ -133,11 +133,9 @@ TEST(CellAppMessages, AvatarUpdateRoundTrip) {
 TEST(CellAppMessages, EnableDisableWitnessRoundTrip) {
   EnableWitness e;
   e.base_entity_id = 17;
-  e.aoi_radius = 75.5f;
   auto rte = RoundTrip(e);
   ASSERT_TRUE(rte.has_value());
   EXPECT_EQ(rte->base_entity_id, 17u);
-  EXPECT_FLOAT_EQ(rte->aoi_radius, 75.5f);
 
   DisableWitness d{17};
   auto rtd = RoundTrip(d);

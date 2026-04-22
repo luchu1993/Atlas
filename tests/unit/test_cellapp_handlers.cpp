@@ -179,15 +179,71 @@ TEST_F(CellAppHandlersTest, AvatarUpdateRejectsNaNDirection) {
 TEST_F(CellAppHandlersTest, EnableDisableWitnessTogglesOnEntity) {
   app_.OnCreateCellEntity({}, nullptr, MakeCreate(100, 1));
 
+  // After C2: EnableWitness carries only the entity id; radius +
+  // hysteresis come from CellAppConfig.
   cellapp::EnableWitness e;
   e.base_entity_id = 100;
-  e.aoi_radius = 10.f;
   app_.OnEnableWitness({}, nullptr, e);
   EXPECT_TRUE(app_.FindEntityByBaseId(100)->HasWitness());
 
   cellapp::DisableWitness d{100};
   app_.OnDisableWitness({}, nullptr, d);
   EXPECT_FALSE(app_.FindEntityByBaseId(100)->HasWitness());
+}
+
+// OnCreateCellEntity no longer auto-enables a witness — witnesses are
+// attached via the client-bind path (C3 hooks) or an explicit
+// EnableWitness message. This test locks in the new contract.
+TEST_F(CellAppHandlersTest, CreateCellEntityDoesNotAutoEnableWitness) {
+  app_.OnCreateCellEntity({}, nullptr, MakeCreate(100, 1));
+  auto* entity = app_.FindEntityByBaseId(100);
+  ASSERT_NE(entity, nullptr);
+  EXPECT_FALSE(entity->HasWitness());
+}
+
+TEST_F(CellAppHandlersTest, OnSetAoIRadiusUpdatesActiveWitness) {
+  app_.OnCreateCellEntity({}, nullptr, MakeCreate(100, 1));
+  cellapp::EnableWitness e{100};
+  app_.OnEnableWitness({}, nullptr, e);
+  auto* entity = app_.FindEntityByBaseId(100);
+  ASSERT_TRUE(entity->HasWitness());
+
+  cellapp::SetAoIRadius s;
+  s.base_entity_id = 100;
+  s.radius = 42.5f;
+  s.hysteresis = 7.f;
+  app_.OnSetAoIRadius({}, nullptr, s);
+
+  EXPECT_FLOAT_EQ(entity->GetWitness()->AoIRadius(), 42.5f);
+  EXPECT_FLOAT_EQ(entity->GetWitness()->Hysteresis(), 7.f);
+}
+
+TEST_F(CellAppHandlersTest, OnSetAoIRadiusMissingWitnessIsNoop) {
+  app_.OnCreateCellEntity({}, nullptr, MakeCreate(100, 1));
+  // No EnableWitness — witness is absent.
+  cellapp::SetAoIRadius s;
+  s.base_entity_id = 100;
+  s.radius = 42.5f;
+  s.hysteresis = 7.f;
+  app_.OnSetAoIRadius({}, nullptr, s);  // should log-warn, not crash
+
+  EXPECT_FALSE(app_.FindEntityByBaseId(100)->HasWitness());
+}
+
+TEST_F(CellAppHandlersTest, OnSetAoIRadiusClampsToMax) {
+  app_.OnCreateCellEntity({}, nullptr, MakeCreate(100, 1));
+  cellapp::EnableWitness e{100};
+  app_.OnEnableWitness({}, nullptr, e);
+
+  // CellAppConfig::MaxAoIRadius() defaults to 500m. A value beyond that
+  // must be clamped inside Witness::SetAoIRadius.
+  cellapp::SetAoIRadius s;
+  s.base_entity_id = 100;
+  s.radius = 10'000.f;
+  s.hysteresis = 5.f;
+  app_.OnSetAoIRadius({}, nullptr, s);
+
+  EXPECT_FLOAT_EQ(app_.FindEntityByBaseId(100)->GetWitness()->AoIRadius(), 500.f);
 }
 
 // ---------------------------------------------------------------------------

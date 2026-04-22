@@ -27,6 +27,7 @@ struct DestroySpace;
 struct AvatarUpdate;
 struct EnableWitness;
 struct DisableWitness;
+struct SetAoIRadius;
 struct CreateGhost;
 struct DeleteGhost;
 struct GhostPositionUpdate;
@@ -98,6 +99,7 @@ class CellApp : public EntityApp {
   void OnAvatarUpdate(const Address& src, Channel* ch, const cellapp::AvatarUpdate& msg);
   void OnEnableWitness(const Address& src, Channel* ch, const cellapp::EnableWitness& msg);
   void OnDisableWitness(const Address& src, Channel* ch, const cellapp::DisableWitness& msg);
+  void OnSetAoIRadius(const Address& src, Channel* ch, const cellapp::SetAoIRadius& msg);
 
   // ---- Phase 11 inter-CellApp handlers ----
   void OnCreateGhost(const Address& src, Channel* ch, const cellapp::CreateGhost& msg);

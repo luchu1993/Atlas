@@ -7,6 +7,8 @@
 #include "aoi_trigger.h"
 #include "cell_aoi_envelope.h"
 #include "cell_entity.h"
+#include "cellapp_config.h"
+#include "foundation/log.h"
 #include "math/vector3.h"
 #include "space.h"
 #include "space/range_list.h"
@@ -114,9 +116,19 @@ void Witness::Deactivate() {
 }
 
 void Witness::SetAoIRadius(float new_radius, float new_hysteresis) {
+  // BigWorld parity (witness.cpp:2113, 2118-2125): clamp radius to a
+  // floor of 0.1m and a configurable ceiling. Hysteresis is accepted
+  // as-given (BigWorld stores it verbatim too).
+  new_radius = std::max(0.1f, new_radius);
+  const float max_radius = CellAppConfig::MaxAoIRadius();
+  if (new_radius > max_radius) {
+    ATLAS_LOG_WARNING("Witness::SetAoIRadius: clamping entity {}'s AoI radius ({}) to max ({})",
+                      owner_.BaseEntityId(), new_radius, max_radius);
+    new_radius = max_radius;
+  }
   aoi_radius_ = new_radius;
-  hysteresis_ = new_hysteresis;
-  if (trigger_) trigger_->SetBounds(new_radius, new_radius + new_hysteresis);
+  hysteresis_ = std::max(0.f, new_hysteresis);
+  if (trigger_) trigger_->SetBounds(aoi_radius_, aoi_radius_ + hysteresis_);
 }
 
 void Witness::HandleAoIEnter(CellEntity& peer) {

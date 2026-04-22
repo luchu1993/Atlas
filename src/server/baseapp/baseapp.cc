@@ -1762,7 +1762,11 @@ auto BaseApp::CreateBaseEntityFromScript(uint16_t type_id, SpaceID space_id, flo
       msg.on_ground = false;
       msg.base_addr = Network().RudpAddress();
       msg.request_id = kEid;
-      msg.aoi_radius = aoi_radius;
+      // NOTE: aoi_radius no longer rides on CreateCellEntity. PR 34 C2
+      // moved witness enablement to the client-bind path; the parameter
+      // is retained here for native-ABI back-compat until C4 strips it
+      // from AtlasCreateBaseEntity's signature.
+      (void)aoi_radius;
       // L2: if the Proxy holds cell_backup_data_ from a prior DB checkout
       // or cell-side backup push, hand it to the cell via script_init_data
       // so Cell.Deserialize can hydrate cell-scope properties. Empty on

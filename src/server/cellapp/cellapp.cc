@@ -8,6 +8,7 @@
 #include "baseapp/baseapp_messages.h"
 #include "cell.h"
 #include "cell_entity.h"
+#include "cellapp_config.h"
 #include "cellapp_messages.h"
 #include "cellapp_native_provider.h"
 #include "cellappmgr/cellappmgr_messages.h"
@@ -104,6 +105,10 @@ auto CellApp::Init(int argc, char* argv[]) -> bool {
   (void)table.RegisterTypedHandler<cellapp::DisableWitness>(
       [this](const Address& src, Channel* ch, const cellapp::DisableWitness& msg) {
         OnDisableWitness(src, ch, msg);
+      });
+  (void)table.RegisterTypedHandler<cellapp::SetAoIRadius>(
+      [this](const Address& src, Channel* ch, const cellapp::SetAoIRadius& msg) {
+        OnSetAoIRadius(src, ch, msg);
       });
 
   // ---- Phase 11 inter-CellApp handlers ----------------------------------
@@ -458,17 +463,13 @@ void CellApp::OnCreateCellEntity(const Address& src, Channel* ch,
     }
   }
 
-  // P4: if the creator asked for an AoI witness, enable it now so we
-  // don't need a separate EnableWitness wire round-trip for every
-  // client-bearing entity. Uses the existing OnEnableWitness plumbing
-  // verbatim — same callback wiring, same entity lookup.
-  if (msg.aoi_radius > 0.f) {
-    cellapp::EnableWitness ew;
-    ew.base_entity_id = msg.base_entity_id;
-    ew.aoi_radius = msg.aoi_radius;
-    OnEnableWitness(src, ch, ew);
-  }
+  // PR 34 / Commit C2: creating a cell entity no longer auto-enables a
+  // witness. Client binding (BaseApp::BindClient, landed in C3) sends
+  // cellapp::EnableWitness separately — aligning with BigWorld's
+  // RealEntity::addWitness, where witness attachment is bound to client
+  // presence rather than entity creation.
   (void)src;
+  (void)ch;
 }
 
 void CellApp::OnDestroyCellEntity(const Address& /*src*/, Channel* /*ch*/,
@@ -651,8 +652,12 @@ void CellApp::OnEnableWitness(const Address& /*src*/, Channel* /*ch*/,
   // Wire delivery callbacks to real BaseApp messages. The lambdas
   // capture `this` to access Network() for RUDP channel establishment
   // and base_entity_population_ for observer → BaseApp address lookup.
+  //
+  // Radius + hysteresis come from CellAppConfig — BigWorld's ctor-time
+  // defaultAoIRadius/aoiHyst reads, lifted into runtime config. Scripts
+  // that want a non-default radius follow up with a SetAoIRadius RPC.
   entity->EnableWitness(
-      msg.aoi_radius,
+      CellAppConfig::DefaultAoIRadius(),
       // Reliable path — AoI enter/leave + ordered property deltas.
       // Routed via ReplicatedReliableDeltaFromCell (msg 2017) which
       // bypasses DeltaForwarder and reaches the client reliably.
@@ -678,7 +683,8 @@ void CellApp::OnEnableWitness(const Address& /*src*/, Channel* /*ch*/,
         msg.base_entity_id = observer_base_id;
         msg.delta.assign(env.begin(), env.end());
         (void)(*ch)->SendMessage(msg);
-      });
+      },
+      CellAppConfig::DefaultAoIHysteresis());
 }
 
 void CellApp::OnDisableWitness(const Address& /*src*/, Channel* /*ch*/,
@@ -686,6 +692,33 @@ void CellApp::OnDisableWitness(const Address& /*src*/, Channel* /*ch*/,
   auto* entity = FindEntityByBaseId(msg.base_entity_id);
   if (!entity) return;
   entity->DisableWitness();
+}
+
+// BigWorld's setAoIRadius (witness.cpp:2109) — runtime AoI mutation from
+// script. The clamp + floor are applied inside Witness::SetAoIRadius;
+// this handler is strictly routing + Ghost rejection.
+void CellApp::OnSetAoIRadius(const Address& /*src*/, Channel* /*ch*/,
+                             const cellapp::SetAoIRadius& msg) {
+  auto* entity = FindEntityByBaseId(msg.base_entity_id);
+  if (!entity) {
+    ATLAS_LOG_WARNING("CellApp: SetAoIRadius for unknown base_id={}", msg.base_entity_id);
+    return;
+  }
+  // A Ghost has no Witness — only the Real side replicates AoI. Scripts
+  // that call SetAoIRadius via a stale mailbox must not mutate Ghost
+  // state.
+  if (!entity->IsReal()) {
+    ATLAS_LOG_WARNING("CellApp: SetAoIRadius on Ghost base_id={} — stale routing",
+                      msg.base_entity_id);
+    return;
+  }
+  auto* witness = entity->GetWitness();
+  if (!witness) {
+    ATLAS_LOG_WARNING("CellApp: SetAoIRadius on base_id={} with no witness attached",
+                      msg.base_entity_id);
+    return;
+  }
+  witness->SetAoIRadius(msg.radius, msg.hysteresis);
 }
 
 // ============================================================================
