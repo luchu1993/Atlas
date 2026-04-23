@@ -49,8 +49,8 @@ auto MakeEnvelope(CellAoIEnvelopeKind kind, EntityID public_entity_id,
 }
 
 // kEntityPropertyUpdate payload: uint64 LE event_seq + delta/snapshot bytes.
-// Phase D2'.2 — the seq prefix lets the client detect gaps (missing or out-of-
-// order reliable deltas). Client decoder is
+// The seq prefix lets the client detect gaps (missing or out-of-order
+// reliable deltas); the client decoder is
 // Atlas.Client.ClientCallbacks.DispatchAoIEnvelope.
 auto BuildPropertyUpdatePayload(uint64_t event_seq, std::span<const std::byte> delta)
     -> std::vector<std::byte> {
@@ -176,7 +176,7 @@ void Witness::UpdatePriority(EntityCache& cache) const {
   cache.priority = ComputePriority(owner_.Position(), cache.entity->Position());
 }
 
-void Witness::SendEntityEnter(EntityCache& cache) {
+auto Witness::SendEntityEnter(EntityCache& cache) -> std::size_t {
   // The snapshot we ship on Enter is the peer's *other* snapshot — the
   // observer is a non-owner for the peer (they see "other clients" data).
   // Owner-enter (the entity's own client observing itself) would use
@@ -194,17 +194,19 @@ void Witness::SendEntityEnter(EntityCache& cache) {
       MakeEnvelope<0>(CellAoIEnvelopeKind::kEntityEnter, cache.entity->BaseEntityId(), payload);
   if (send_reliable_) send_reliable_(owner_.BaseEntityId(), envelope);
 
-  // Capture the peer's current seqs so 10.5b's catch-up pump only
-  // replays events that happened AFTER this enter.
+  // Capture the peer's current seqs so the catch-up pump only replays
+  // events that happened AFTER this enter.
   if (const auto* state = cache.entity->GetReplicationState()) {
     cache.last_event_seq = state->latest_event_seq;
     cache.last_volatile_seq = state->latest_volatile_seq;
   }
+  return envelope.size();
 }
 
-void Witness::SendEntityLeave(EntityID peer_base_id) {
+auto Witness::SendEntityLeave(EntityID peer_base_id) -> std::size_t {
   auto envelope = MakeEnvelope<0>(CellAoIEnvelopeKind::kEntityLeave, peer_base_id, {});
   if (send_reliable_) send_reliable_(owner_.BaseEntityId(), envelope);
+  return envelope.size();
 }
 
 void Witness::Update(uint32_t max_packet_bytes) {
@@ -240,20 +242,16 @@ void Witness::Update(uint32_t max_packet_bytes) {
     auto it = aoi_map_.find(id);
     if (it == aoi_map_.end()) continue;
     auto& cache = it->second;
-    SendEntityEnter(cache);
+    bytes_sent += static_cast<int>(SendEntityEnter(cache));
     cache.flags &= ~EntityCache::kEnterPending;
-    // Tiny but non-trivial envelope — count a conservative size; 10.5b
-    // will compute actual bytes via the SpanWriter we're skipping today.
-    bytes_sent += 16;
   }
 
   for (auto id : refresh_ids) {
     auto it = aoi_map_.find(id);
     if (it == aoi_map_.end()) continue;
     auto& cache = it->second;
-    SendEntityEnter(cache);  // refresh shape ≡ re-send snapshot-bearing enter
+    bytes_sent += static_cast<int>(SendEntityEnter(cache));  // refresh re-sends enter
     cache.flags &= ~EntityCache::kRefresh;
-    bytes_sent += 16;
   }
 
   for (auto id : gone_ids) {
@@ -264,9 +262,8 @@ void Witness::Update(uint32_t max_packet_bytes) {
     // the underlying CellEntity has been freed; the base id we want
     // to ship to the client was captured earlier. See EntityCache's
     // comment on `peer_base_id`.
-    SendEntityLeave(it->second.peer_base_id);
+    bytes_sent += static_cast<int>(SendEntityLeave(it->second.peer_base_id));
     aoi_map_.erase(it);
-    bytes_sent += 5;
   }
 
   // Phase 2: priority heap maintenance for Updatable peers. Rebuild
@@ -302,13 +299,7 @@ void Witness::Update(uint32_t max_packet_bytes) {
     auto& cache = it->second;
     if (!cache.IsUpdatable()) continue;
 
-    // The SendEntityUpdate calls may re-enter send_* which records bytes
-    // at the transport layer; we approximate with envelope sizes here.
-    // Precise accounting arrives with the SpanWriter-based encoder.
-    const std::size_t before = aoi_map_.size();
-    SendEntityUpdate(cache);
-    bytes_sent += 32;  // placeholder per-peer cost until the encoder tracks real bytes
-    (void)before;
+    bytes_sent += static_cast<int>(SendEntityUpdate(cache));
   }
 
   // Phase 4: bandwidth deficit for next tick.
@@ -328,9 +319,11 @@ void Witness::Update(uint32_t max_packet_bytes) {
 //      doesn't cover the full range (because the peer dropped older
 //      frames), fall back to shipping the other-scope snapshot.
 //
-void Witness::SendEntityUpdate(EntityCache& cache) {
+auto Witness::SendEntityUpdate(EntityCache& cache) -> std::size_t {
   const auto* state = cache.entity->GetReplicationState();
-  if (!state) return;
+  if (!state) return 0;
+
+  std::size_t bytes = 0;
 
   // ---- Volatile stream ----
   if (state->latest_volatile_seq > cache.last_volatile_seq) {
@@ -363,11 +356,12 @@ void Witness::SendEntityUpdate(EntityCache& cache) {
     } else if (send_reliable_) {
       send_reliable_(owner_.BaseEntityId(), envelope);
     }
+    bytes += envelope.size();
     cache.last_volatile_seq = state->latest_volatile_seq;
   }
 
   // ---- Event stream ----
-  if (state->latest_event_seq <= cache.last_event_seq) return;  // up to date
+  if (state->latest_event_seq <= cache.last_event_seq) return bytes;  // up to date
 
   // Decide: can we replay from history, or do we need snapshot fallback?
   //
@@ -404,6 +398,7 @@ void Witness::SendEntityUpdate(EntityCache& cache) {
             MakeEnvelope<0>(CellAoIEnvelopeKind::kEntityPropertyUpdate,
                             cache.entity->BaseEntityId(), std::span<const std::byte>(payload));
         if (send_reliable_) send_reliable_(owner_.BaseEntityId(), envelope);
+        bytes += envelope.size();
       }
       cache.last_event_seq = frame.event_seq;
     }
@@ -422,9 +417,11 @@ void Witness::SendEntityUpdate(EntityCache& cache) {
         MakeEnvelope<0>(CellAoIEnvelopeKind::kEntityPropertyUpdate, cache.entity->BaseEntityId(),
                         std::span<const std::byte>(payload));
     if (send_reliable_) send_reliable_(owner_.BaseEntityId(), envelope);
+    bytes += envelope.size();
     cache.last_event_seq = state->latest_event_seq;
     cache.flags &= ~EntityCache::kRefresh;
   }
+  return bytes;
 }
 
 }  // namespace atlas

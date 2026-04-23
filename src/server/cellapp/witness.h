@@ -141,23 +141,21 @@ class Witness {
   // Drive the per-peer update pump once. Tests use this to assert
   // catch-up / snapshot-fallback behaviour without spinning the full
   // Update() tick loop.
-  void TestOnlySendEntityUpdate(EntityCache& cache) { SendEntityUpdate(cache); }
+  void TestOnlySendEntityUpdate(EntityCache& cache) { (void)SendEntityUpdate(cache); }
 
  private:
   // Re-compute the priority (distance/5 + 1) using our current position.
   void UpdatePriority(EntityCache& cache) const;
 
-  // Emit an EntityEnter envelope for `cache`. Uses owner.base_entity_id()
-  // as the route key.
-  void SendEntityEnter(EntityCache& cache);
-  // Emit an EntityLeave envelope.
-  void SendEntityLeave(EntityID peer_base_id);
+  // Each Send* returns the envelope bytes actually dispatched, so the
+  // tick-loop bandwidth accountant can bill precisely instead of using
+  // fixed per-call placeholders.
+  auto SendEntityEnter(EntityCache& cache) -> std::size_t;
+  auto SendEntityLeave(EntityID peer_base_id) -> std::size_t;
 
-  // Per-peer update pump — replays history delta OR falls back to
+  // Per-peer update pump — replays history delta OR falls back to a
   // snapshot when the observer has dropped out of the history window.
-  // Exposed via a helper so tests can invoke it directly on a live
-  // cache, bypassing the full priority heap scheduling.
-  void SendEntityUpdate(EntityCache& cache);
+  auto SendEntityUpdate(EntityCache& cache) -> std::size_t;
 
   CellEntity& owner_;
   float aoi_radius_;
