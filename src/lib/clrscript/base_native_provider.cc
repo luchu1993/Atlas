@@ -142,4 +142,10 @@ void BaseNativeProvider::CancelController(uint32_t entity_id, int32_t /*controll
                   entity_id);
 }
 
+void BaseNativeProvider::ReportClientEventSeqGap(uint32_t entity_id, uint32_t /*gap_delta*/) {
+  ATLAS_LOG_ERROR(
+      "atlas_report_client_event_seq_gap() called on a non-client process (entity_id={})",
+      entity_id);
+}
+
 }  // namespace atlas

@@ -39,6 +39,7 @@ struct ReplicatedBaselineFromCell;
 struct ForceLogoff;
 struct ForceLogoffAck;
 struct CellAppDeath;
+struct ClientEventSeqReport;
 struct Authenticate;
 struct ClientBaseRpc;
 struct ClientCellRpc;
@@ -150,6 +151,7 @@ class BaseApp : public EntityApp {
   void OnCancelPrepareLogin(Channel& ch, const login::CancelPrepareLogin& msg);
   void OnForceLogoff(Channel& ch, const baseapp::ForceLogoff& msg);
   void OnForceLogoffAck(Channel& ch, const baseapp::ForceLogoffAck& msg);
+  void OnClientEventSeqReport(const baseapp::ClientEventSeqReport& msg);
   void OnRegisterBaseappAck(Channel& ch, const baseappmgr::RegisterBaseAppAck& msg);
   void OnGetEntityIdsAck(Channel& ch, const dbapp::GetEntityIdsAck& msg);
 
@@ -326,6 +328,10 @@ class BaseApp : public EntityApp {
   uint64_t detached_relogin_total_{0};
   uint64_t canceled_checkout_total_{0};
   uint64_t prepared_login_timeout_total_{0};
+  // Accumulated reliable-delta gap count reported by connected clients.
+  // Each ClientEventSeqReport adds gap_delta here; ops can alert on a
+  // sustained rate via baseapp/client_event_seq_gaps_total.
+  uint64_t client_event_seq_gaps_total_{0};
   LoadTracker load_tracker_{};
   static constexpr Duration kForceLogoffRetryBaseDelay = std::chrono::milliseconds(250);
   static constexpr Duration kForceLogoffRetryMaxDelay = std::chrono::seconds(2);

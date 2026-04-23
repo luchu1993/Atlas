@@ -63,6 +63,19 @@ void ClientNativeProvider::SendCellRpc(uint32_t entity_id, uint32_t rpc_id,
   (void)ch->SendMessage(msg);
 }
 
+void ClientNativeProvider::ReportClientEventSeqGap(uint32_t entity_id, uint32_t gap_delta) {
+  if (gap_delta == 0) return;
+  auto* ch = app_.BaseappChannel();
+  if (ch == nullptr) {
+    // Channel may be torn down during shutdown — drop the report silently.
+    return;
+  }
+  baseapp::ClientEventSeqReport msg;
+  msg.base_entity_id = entity_id;
+  msg.gap_delta = gap_delta;
+  (void)ch->SendMessage(msg);
+}
+
 void ClientNativeProvider::SetNativeCallbacks(const void* native_callbacks, int32_t len) {
   if (!native_callbacks || len < static_cast<int32_t>(sizeof(ClientCallbackTable))) {
     ATLAS_LOG_ERROR("Client: set_native_callbacks: invalid callback table (len={})", len);

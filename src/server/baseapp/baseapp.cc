@@ -279,6 +279,10 @@ auto BaseApp::Init(int argc, char* argv[]) -> bool {
       [this](const Address& /*src*/, Channel* ch, const login::CancelPrepareLogin& msg) {
         OnCancelPrepareLogin(*ch, msg);
       });
+  (void)table.RegisterTypedHandler<baseapp::ClientEventSeqReport>(
+      [this](const Address& /*src*/, Channel* /*ch*/, const baseapp::ClientEventSeqReport& msg) {
+        OnClientEventSeqReport(msg);
+      });
   (void)table.RegisterTypedHandler<baseapp::ForceLogoff>(
       [this](const Address& /*src*/, Channel* ch, const baseapp::ForceLogoff& msg) {
         OnForceLogoff(*ch, msg);
@@ -395,6 +399,8 @@ void BaseApp::RegisterWatchers() {
                       }));
   wr.Add<std::size_t>("baseapp/detached_proxy_count",
                       std::function<std::size_t()>([this] { return detached_proxies_.size(); }));
+  wr.Add<uint64_t>("baseapp/client_event_seq_gaps_total",
+                   std::function<uint64_t()>([this] { return client_event_seq_gaps_total_; }));
   wr.Add<std::size_t>("baseapp/logoff_in_flight_count", std::function<std::size_t()>([this] {
                         return logoff_entities_in_flight_.size();
                       }));
@@ -2549,6 +2555,13 @@ void BaseApp::OnPrepareLogin(Channel& ch, const login::PrepareLogin& msg) {
 
 void BaseApp::OnCancelPrepareLogin(Channel& /*ch*/, const login::CancelPrepareLogin& msg) {
   CancelPrepareLogin(msg.request_id, msg.dbid);
+}
+
+void BaseApp::OnClientEventSeqReport(const baseapp::ClientEventSeqReport& msg) {
+  if (msg.gap_delta == 0) return;
+  client_event_seq_gaps_total_ += msg.gap_delta;
+  ATLAS_LOG_WARNING("Client reported reliable-delta gap: entity={} delta={} total={}",
+                    msg.base_entity_id, msg.gap_delta, client_event_seq_gaps_total_);
 }
 
 void BaseApp::OnForceLogoff(Channel& ch, const baseapp::ForceLogoff& msg) {

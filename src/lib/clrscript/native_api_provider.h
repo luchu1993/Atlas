@@ -122,6 +122,12 @@ class INativeApiProvider {
   virtual auto AddProximityController(uint32_t entity_id, float range, int32_t user_arg)
       -> int32_t = 0;
   virtual void CancelController(uint32_t entity_id, int32_t controller_id) = 0;
+
+  // ---- Client telemetry ------------------------------------------------
+  // Client reports an observed reliable-delta gap to BaseApp for the
+  // given entity. Only ClientNativeProvider implements it; server-side
+  // providers log an error and no-op.
+  virtual void ReportClientEventSeqGap(uint32_t entity_id, uint32_t gap_delta) = 0;
 };
 
 // Register the provider for this process.  Must be called before

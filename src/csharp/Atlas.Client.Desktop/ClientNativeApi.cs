@@ -83,4 +83,16 @@ internal static unsafe partial class ClientNativeApi
 
     [LibraryImport(LibName, EntryPoint = "AtlasGetAbiVersion")]
     public static partial uint GetAbiVersion();
+
+    // =========================================================================
+    // Telemetry
+    // =========================================================================
+
+    [LibraryImport(LibName, EntryPoint = "AtlasReportClientEventSeqGap")]
+    private static partial void ReportClientEventSeqGapNative(uint entityId, uint gapDelta);
+
+    public static void ReportEventSeqGap(uint entityId, uint gapDelta)
+    {
+        ReportClientEventSeqGapNative(entityId, gapDelta);
+    }
 }

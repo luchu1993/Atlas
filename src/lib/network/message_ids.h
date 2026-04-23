@@ -125,6 +125,13 @@ enum class BaseApp : uint16_t {
   // to re-ship any Reals it was hosting on the dead addr to their
   // new homes, using the last BackupCellEntity data it has cached.
   kCellAppDeath = 2026,
+  // Client → BaseApp: accumulated event_seq gap report. Clients notice
+  // when a reliable delta stream arrives with a seq jump (dropped
+  // envelope on the wire or a dispatcher hiccup) and keep a running
+  // counter; this message relays the delta to the server so ops can
+  // alert on the aggregate `baseapp/client_event_seq_gaps_total`
+  // watcher.
+  kClientEventSeqReport = 2027,
   // Internal: BaseApp ↔ BaseApp
   kForceLogoff = 2030,
   kForceLogoffAck = 2031,

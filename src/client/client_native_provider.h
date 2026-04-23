@@ -42,6 +42,9 @@ class ClientNativeProvider : public BaseNativeProvider {
   void SendCellRpc(uint32_t entity_id, uint32_t rpc_id, const std::byte* payload,
                    int32_t len) override;
 
+  // Client telemetry: periodic gap-count report to BaseApp.
+  void ReportClientEventSeqGap(uint32_t entity_id, uint32_t gap_delta) override;
+
   // C# callback table registration
   void SetNativeCallbacks(const void* native_callbacks, int32_t len) override;
 

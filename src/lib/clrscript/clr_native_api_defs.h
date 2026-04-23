@@ -165,7 +165,14 @@
             entity_id, range, user_arg))                                                           \
     X(void, CancelController,                                                                      \
         (uint32_t entity_id, int32_t controller_id),                                              \
-        atlas::GetNativeApiProvider().CancelController(entity_id, controller_id))
+        atlas::GetNativeApiProvider().CancelController(entity_id, controller_id))                  \
+                                                                                                   \
+    /* ---- Client-side telemetry --------------------------------------- */                      \
+    /* Client reports an observed reliable-delta gap. Only the client    */                       \
+    /* process implements this; server-side providers log+no-op.         */                       \
+    X(void, ReportClientEventSeqGap,                                                               \
+        (uint32_t entity_id, uint32_t gap_delta),                                                 \
+        atlas::GetNativeApiProvider().ReportClientEventSeqGap(entity_id, gap_delta))
 // clang-format on
 
 #endif  // ATLAS_LIB_CLRSCRIPT_CLR_NATIVE_API_DEFS_H_

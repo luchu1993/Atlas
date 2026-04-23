@@ -82,6 +82,9 @@ class BaseNativeProvider : public INativeApiProvider {
       -> int32_t override;
   void CancelController(uint32_t entity_id, int32_t controller_id) override;
 
+  // ---- Client telemetry (default: log + no-op) -------------------------
+  void ReportClientEventSeqGap(uint32_t entity_id, uint32_t gap_delta) override;
+
  protected:
   BaseNativeProvider() = default;
 };

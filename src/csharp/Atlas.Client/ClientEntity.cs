@@ -116,6 +116,12 @@ public abstract class ClientEntity
             EventSeqGapsTotal += missed;
             ClientLog.Warn(
                 $"[{TypeName}:{EntityId}] event_seq gap: last={LastEventSeq} got={seq} missed={missed}");
+            // Relay to server so BaseApp's baseapp/client_event_seq_gaps_total
+            // watcher sees aggregate gap pressure across the fleet. Clamp the
+            // per-report delta at uint32 max — a single jump larger than 4 G
+            // is already a disaster worth paging on, not silently dropping.
+            uint reportDelta = missed > uint.MaxValue ? uint.MaxValue : (uint)missed;
+            ClientHost.ReportEventSeqGap(EntityId, reportDelta);
         }
         LastEventSeq = seq;
     }

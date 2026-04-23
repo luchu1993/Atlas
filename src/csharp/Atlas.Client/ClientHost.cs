@@ -26,10 +26,14 @@ public static class ClientHost
 {
     public delegate void SendRpcFn(uint entityId, uint rpcId, ReadOnlySpan<byte> payload);
     public delegate void RegisterEntityTypeFn(ReadOnlySpan<byte> data);
+    public delegate void ReportEventSeqGapFn(uint entityId, uint gapDelta);
 
     public static SendRpcFn? SendBaseRpcHandler;
     public static SendRpcFn? SendCellRpcHandler;
     public static RegisterEntityTypeFn? RegisterEntityTypeHandler;
+    // Optional — clients that don't route to a BaseApp (editor previews,
+    // offline tests) leave this null and the report is silently dropped.
+    public static ReportEventSeqGapFn? ReportEventSeqGapHandler;
 
     internal static void SendBaseRpc(uint entityId, uint rpcId, ReadOnlySpan<byte> payload)
     {
@@ -56,5 +60,13 @@ public static class ClientHost
                 "ClientHost.RegisterEntityTypeHandler is not set — the host app must install "
                 + "its entity-type registry bridge at startup.");
         RegisterEntityTypeHandler(data);
+    }
+
+    internal static void ReportEventSeqGap(uint entityId, uint gapDelta)
+    {
+        // Non-fatal telemetry hop: if the host didn't wire it (Unity in
+        // offline mode, test fixtures), drop the report rather than
+        // throwing from deep inside a packet decoder.
+        ReportEventSeqGapHandler?.Invoke(entityId, gapDelta);
     }
 }

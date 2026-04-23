@@ -886,6 +886,41 @@ struct CellAppDeath {
 static_assert(NetworkMessage<CellAppDeath>);
 
 // ============================================================================
+// ClientEventSeqReport  (Client → BaseApp, ID 2027)
+// Accumulated reliable-delta gap count the client observed for a given
+// entity since the last report. BaseApp sums it into a process-wide
+// counter exposed via baseapp/client_event_seq_gaps_total.
+// ============================================================================
+
+struct ClientEventSeqReport {
+  EntityID base_entity_id{kInvalidEntityID};
+  uint32_t gap_delta{0};
+
+  static auto Descriptor() -> const MessageDesc& {
+    static const MessageDesc kDesc{msg_id::Id(msg_id::BaseApp::kClientEventSeqReport),
+                                   "baseapp::ClientEventSeqReport", MessageLengthStyle::kFixed,
+                                   static_cast<int>(sizeof(uint32_t) + sizeof(uint32_t))};
+    return kDesc;
+  }
+
+  void Serialize(BinaryWriter& w) const {
+    w.Write(base_entity_id);
+    w.Write(gap_delta);
+  }
+
+  static auto Deserialize(BinaryReader& r) -> Result<ClientEventSeqReport> {
+    auto eid = r.Read<uint32_t>();
+    auto gap = r.Read<uint32_t>();
+    if (!eid || !gap) return Error{ErrorCode::kInvalidArgument, "ClientEventSeqReport: truncated"};
+    ClientEventSeqReport msg;
+    msg.base_entity_id = *eid;
+    msg.gap_delta = *gap;
+    return msg;
+  }
+};
+static_assert(NetworkMessage<ClientEventSeqReport>);
+
+// ============================================================================
 // ForceLogoff  (BaseApp → BaseApp, ID 2030)
 // Sent to evict an existing Proxy so the new login can checkout the entity.
 // ============================================================================
