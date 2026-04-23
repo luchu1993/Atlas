@@ -83,29 +83,35 @@ auto BuildPropertyUpdateEnvelope(EntityID public_entity_id, uint64_t event_seq,
   return out;
 }
 
-// Payload for EntityEnter: type_id (uint16 LE) + position (3x float LE)
-// + direction (3x float LE) + on_ground (uint8). Client decoder mirrors
-// this in the reverse order. Owner snapshot bytes (if any) append after.
-auto BuildEnterPayload(uint16_t type_id, const math::Vector3& pos, const math::Vector3& dir,
-                       bool on_ground, std::span<const std::byte> owner_snapshot)
-    -> std::vector<std::byte> {
-  std::vector<std::byte> payload;
-  payload.reserve(2 + 6 * sizeof(float) + 1 + owner_snapshot.size());
-  auto push = [&payload](const void* src, std::size_t n) {
-    const auto* bytes = static_cast<const std::byte*>(src);
-    payload.insert(payload.end(), bytes, bytes + n);
-  };
-  push(&type_id, sizeof(type_id));
-  push(&pos.x, sizeof(float));
-  push(&pos.y, sizeof(float));
-  push(&pos.z, sizeof(float));
-  push(&dir.x, sizeof(float));
-  push(&dir.y, sizeof(float));
-  push(&dir.z, sizeof(float));
-  const uint8_t og = on_ground ? 1 : 0;
-  payload.push_back(static_cast<std::byte>(og));
-  payload.insert(payload.end(), owner_snapshot.begin(), owner_snapshot.end());
-  return payload;
+// Fused envelope builder for kEntityEnter. Wire layout:
+//   [u8 kind][u32 LE entity_id][u16 LE type_id][3x float LE pos]
+//   [3x float LE dir][u8 on_ground][peer_snapshot bytes...]
+// Client decoder mirrors this in reverse. Single-pass memcpy into a
+// pre-sized buffer avoids the 7 insert-shift operations the previous
+// BuildEnterPayload→MakeEnvelope composition racked up per call.
+auto BuildEnterEnvelope(EntityID public_entity_id, uint16_t type_id, const math::Vector3& pos,
+                        const math::Vector3& dir, bool on_ground,
+                        std::span<const std::byte> owner_snapshot) -> std::vector<std::byte> {
+  constexpr std::size_t kHeaderBytes = 1 + sizeof(uint32_t);
+  constexpr std::size_t kFixedPayload = sizeof(uint16_t) + 6 * sizeof(float) + sizeof(uint8_t);
+  std::vector<std::byte> out;
+  out.resize(kHeaderBytes + kFixedPayload + owner_snapshot.size());
+  auto* p = out.data();
+  *p++ = static_cast<std::byte>(CellAoIEnvelopeKind::kEntityEnter);
+  for (int i = 0; i < 4; ++i) {
+    *p++ = static_cast<std::byte>((public_entity_id >> (i * 8)) & 0xFF);
+  }
+  std::memcpy(p, &type_id, sizeof(type_id));
+  p += sizeof(type_id);
+  std::memcpy(p, &pos.x, sizeof(float) * 3);
+  p += sizeof(float) * 3;
+  std::memcpy(p, &dir.x, sizeof(float) * 3);
+  p += sizeof(float) * 3;
+  *p++ = static_cast<std::byte>(on_ground ? 1 : 0);
+  if (!owner_snapshot.empty()) {
+    std::memcpy(p, owner_snapshot.data(), owner_snapshot.size());
+  }
+  return out;
 }
 
 }  // namespace
@@ -207,11 +213,9 @@ auto Witness::SendEntityEnter(EntityCache& cache) -> std::size_t {
     enter_snapshot = std::span<const std::byte>(state->other_snapshot);
   }
 
-  auto payload =
-      BuildEnterPayload(cache.entity->TypeId(), cache.entity->Position(), cache.entity->Direction(),
-                        cache.entity->OnGround(), enter_snapshot);
-  auto envelope =
-      MakeEnvelope<0>(CellAoIEnvelopeKind::kEntityEnter, cache.entity->BaseEntityId(), payload);
+  auto envelope = BuildEnterEnvelope(cache.entity->BaseEntityId(), cache.entity->TypeId(),
+                                     cache.entity->Position(), cache.entity->Direction(),
+                                     cache.entity->OnGround(), enter_snapshot);
   if (send_reliable_) send_reliable_(owner_.BaseEntityId(), envelope);
 
   // Capture the peer's current seqs so the catch-up pump only replays
