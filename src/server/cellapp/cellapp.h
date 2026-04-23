@@ -352,7 +352,7 @@ class CellApp : public EntityApp {
 
   // Safety ceiling on per-tick AvatarUpdate displacement. Reject beyond
   // 50 m/tick (roughly 500 m/s at 10 Hz — well above any realistic
-  // player speed). TODO: replace with a per-class maxSpeed.
+  // player speed).
   static constexpr float kMaxSingleTickMove = 50.f;
 
   // The provider's concrete type so handlers can reach CellApp-specific

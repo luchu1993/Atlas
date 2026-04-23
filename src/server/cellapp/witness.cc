@@ -17,8 +17,8 @@ namespace atlas {
 
 namespace {
 
-// Priority metric: distance / 5 + 1. Smaller is more urgent. Matches
-// BigWorld's default; tune per game once telemetry exists.
+// Priority metric: distance / 5 + 1. Smaller is more urgent.
+// Tune per game once telemetry exists.
 auto ComputePriority(const math::Vector3& observer, const math::Vector3& target) -> double {
   const float dx = observer.x - target.x;
   const float dy = observer.y - target.y;
@@ -116,9 +116,8 @@ void Witness::Deactivate() {
 }
 
 void Witness::SetAoIRadius(float new_radius, float new_hysteresis) {
-  // BigWorld parity (witness.cpp:2113, 2118-2125): clamp radius to a
-  // floor of 0.1m and a configurable ceiling. Hysteresis is accepted
-  // as-given (BigWorld stores it verbatim too).
+  // Clamp radius to a 0.1m floor and a configurable ceiling;
+  // hysteresis is accepted as-given.
   new_radius = std::max(0.1f, new_radius);
   const float max_radius = CellAppConfig::MaxAoIRadius();
   if (new_radius > max_radius) {
@@ -231,11 +230,10 @@ void Witness::Update(uint32_t max_packet_bytes) {
       refresh_ids.push_back(id);
   }
 
-  // budget is computed for Phase 10.5b's priority-heap pump (below);
-  // for the 10.5a skeleton the Enter/Leave/Refresh passes don't yet
-  // honour it — Enter/Leave are mandatory state transitions that would
-  // deadlock if budget-dropped.
-  (void)bandwidth_deficit_;  // consumed in 10.5b
+  // Enter/Leave are mandatory state transitions and bypass the byte
+  // budget — dropping them would deadlock the aoi_map_ state machine.
+  // Refresh traffic below the priority-heap pump honours the budget.
+  (void)bandwidth_deficit_;
   int bytes_sent = 0;
 
   for (auto id : enter_ids) {
@@ -309,7 +307,7 @@ void Witness::Update(uint32_t max_packet_bytes) {
     // Precise accounting arrives with the SpanWriter-based encoder.
     const std::size_t before = aoi_map_.size();
     SendEntityUpdate(cache);
-    bytes_sent += 32;  // placeholder per-peer cost; revisit in §3.11 pass
+    bytes_sent += 32;  // placeholder per-peer cost until the encoder tracks real bytes
     (void)before;
   }
 
@@ -329,10 +327,6 @@ void Witness::Update(uint32_t max_packet_bytes) {
 //      from last_event_seq+1 through latest_event_seq. If the window
 //      doesn't cover the full range (because the peer dropped older
 //      frames), fall back to shipping the other-scope snapshot.
-//
-// Phase 10.5a's test helpers invoke this directly; Phase 10.5b's
-// priority-heap walk in Update() invokes it every tick per scheduled
-// peer.
 //
 void Witness::SendEntityUpdate(EntityCache& cache) {
   const auto* state = cache.entity->GetReplicationState();

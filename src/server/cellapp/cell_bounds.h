@@ -12,10 +12,9 @@ namespace atlas {
 // CellBounds — axis-aligned 2D rectangle on (x, z) describing the portion of
 // a Space this Cell owns.
 //
-// Phase 11 §3.6. Y is intentionally ignored: BSP partitioning runs on the
-// horizontal plane (BigWorld convention). The bounds may be infinite on any
-// edge — a fresh Space has exactly one Cell spanning [-inf, +inf]² until the
-// first BSP split.
+// Y is intentionally ignored: BSP partitioning runs on the horizontal
+// plane. The bounds may be infinite on any edge — a fresh Space has
+// exactly one Cell spanning [-inf, +inf]² until the first BSP split.
 //
 // Semantics:
 //   - Half-open on max (contains returns true for points strictly < max_*)

@@ -25,14 +25,13 @@ class AoITrigger;
 // and leaving the trigger produce EntityCache entries that the per-tick
 // Witness::Update schedules for replication.
 //
-// Scope of THIS phase (Step 10.5a):
+// Responsibilities:
 //   - AoITrigger attaches and fires enter/leave events into the witness.
 //   - An EntityCache state machine handles ENTER_PENDING, GONE, REFRESH.
 //   - The priority heap (distance/5 + 1) orders per-tick work.
 //   - Update emits CellAoIEnvelope-framed EntityEnter / EntityLeave events
-//     through the provided delivery callback. The event and volatile
-//     delta streams are STUBS — they come online in Step 10.5b along
-//     with PR-C's ReplicationFrame seqs.
+//     through the provided delivery callback, plus event and volatile
+//     delta streams keyed to CellEntity::ReplicationState seqs.
 //
 // Delivery interface:
 //   The witness doesn't know about BaseApp or the network. Instead a
@@ -52,14 +51,12 @@ class Witness {
   //                dropping one permanently desyncs the client)
   //   - unreliable: ReplicatedDeltaFromCell (via DeltaForwarder, latest-
   //                wins — volatile position/orientation only)
-  // See phase10_cellapp.md §2.3 + delta_forwarder.h's three-path contract.
   using SendFn =
       std::function<void(EntityID observer_base_id, std::span<const std::byte> envelope)>;
 
   // hysteresis widens the *leave* boundary: enters fire at `aoi_radius`,
-  // leaves at `aoi_radius + hysteresis`. Default 5.0f matches BigWorld's
-  // Witness::aoiHyst_ init value (witness.cpp:136). Pass 0.f to disable
-  // hysteresis (single-band behaviour).
+  // leaves at `aoi_radius + hysteresis`. Pass 0.f to disable hysteresis
+  // (single-band behaviour).
   Witness(CellEntity& owner, float aoi_radius, float hysteresis, SendFn send_reliable,
           SendFn send_unreliable = {});
   ~Witness();
@@ -121,7 +118,7 @@ class Witness {
 
     // Per-observer replication progress. Witness compares these against
     // the entity's CellEntity::ReplicationState to decide what needs
-    // forwarding this tick. Both advance only in Step 10.5b.
+    // forwarding this tick.
     uint64_t last_event_seq{0};
     uint64_t last_volatile_seq{0};
 
@@ -170,10 +167,10 @@ class Witness {
 
   std::unique_ptr<AoITrigger> trigger_;
 
-  // Keyed by peer's base_entity_id (the stable id the client sees, per
-  // phase10_cellapp.md §9.6). Using EntityID as the map key — rather
-  // than CellEntity* — lets us store only a weak reference; if the peer
-  // gets destroyed its cache stays until the next Update compacts it.
+  // Keyed by peer's base_entity_id (the stable id the client sees).
+  // Using EntityID rather than CellEntity* keeps the reference weak;
+  // if the peer gets destroyed its cache stays until the next Update
+  // compacts it.
   std::unordered_map<EntityID, EntityCache> aoi_map_;
 
   // Min-heap of peer ids keyed on priority. IDs (not iterators / raw

@@ -28,15 +28,9 @@ class Witness;
 //           Outer-band OnEnter is SUPPRESSED — peers between outer and
 //           inner are in the hysteresis window, not yet in AoI.
 //
-// This is strictly better than BigWorld's Witness::aoiHyst_, which is
-// stored and serialized but never actually applied to the trigger
-// boundary (see witness.cpp:2131 — setRange uses aoiRadius_ only, so a
-// peer oscillating at the exact radius flaps enter/leave each tick).
-//
-// A peer oscillating at the exact aoi_radius boundary:
-//   BigWorld     — enter/leave flap every tick the peer crosses.
-//   Atlas (this) — ONE enter when the peer first crosses inner; stays
-//                  in AoI as long as it stays within outer.
+// A peer oscillating at the exact aoi_radius boundary gets ONE enter
+// when it first crosses inner and stays in AoI as long as it stays
+// within outer — no per-tick enter/leave flap.
 // ============================================================================
 
 class AoITrigger {

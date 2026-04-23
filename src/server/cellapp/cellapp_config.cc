@@ -9,8 +9,7 @@ namespace {
 // Watchers are ReadWrite so ops can retune live from the Watcher UI.
 // Individual Witness instances capture their radius at construction time
 // (or via an explicit SetAoIRadius call), so mutating these values at
-// runtime affects only witnesses enabled *after* the change — matching
-// BigWorld's bw.xml reload semantics.
+// runtime affects only witnesses enabled *after* the change.
 ServerAppOption<float> s_default_aoi_radius{500.f, "default_aoi_radius",
                                             "cellapp/default_aoi_radius", WatcherMode::kReadWrite};
 

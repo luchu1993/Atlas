@@ -10,14 +10,13 @@ namespace atlas {
 //
 // CellApp's AoI downstream payloads ride on top of BaseApp's existing
 // CellApp→Client relay messages (SelfRpcFromCell, ReplicatedReliableDeltaFromCell,
-// ReplicatedDeltaFromCell — see phase10_cellapp.md §2.3 and delta_forwarder.h).
+// ReplicatedDeltaFromCell — see delta_forwarder.h's three-path contract).
 // Those outer messages carry opaque `payload` bytes; the CellAoIEnvelope is
 // the shape of those bytes. The client decodes `kind` first and dispatches
 // to the matching handler.
 //
-// Four kinds exist today. Phase 12 may introduce richer envelopes (terrain,
-// vehicle, etc.); keeping the tag at a single byte leaves plenty of
-// headroom.
+// The single-byte tag leaves plenty of room for future envelope kinds
+// (terrain, vehicle, etc.) without a wire break.
 // ============================================================================
 
 enum class CellAoIEnvelopeKind : uint8_t {

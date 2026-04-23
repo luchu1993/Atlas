@@ -1,8 +1,6 @@
-# atlas_cellapp_lib — CellApp runtime (Phase 10)
-#
-# Step 10.4 promotes this from an interface (messages only) to a static
-# library that owns Space and CellEntity. Later steps add Witness,
-# CellAppNativeProvider, and the CellApp process shell.
+# atlas_cellapp_lib — CellApp runtime.
+# Owns Space, CellEntity, Witness, CellAppNativeProvider, and the CellApp
+# process shell.
 
 add_library(atlas_cellapp_lib STATIC
   aoi_trigger.cc

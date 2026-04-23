@@ -18,11 +18,10 @@
 // enum (baseapp::CellEntityCreated, baseapp::SelfRpcFromCell, …) because
 // the physical receiver is BaseApp and message IDs share one flat space.
 //
-// RPC split (mirrors BigWorld's runExposedMethod vs runScriptMethod):
+// RPC split — exposed (client-facing) vs internal (server-only):
 //   - ClientCellRpcForward (3003): client-initiated, REAL_ONLY, carries
 //     `source_entity_id` stamped by BaseApp. CellApp re-validates
-//     direction + exposed + OwnClient binding (four-layer defence; see
-//     phase10_cellapp.md §3.8).
+//     direction + exposed + OwnClient binding (four-layer defence).
 //   - InternalCellRpc (3004): server-internal Base → Cell, REAL_ONLY, no
 //     exposed check because BaseApp is trusted.
 // Never collapse the two — a single "is_from_client" bool would be
@@ -120,7 +119,7 @@ static_assert(NetworkMessage<CreateCellEntity>);
 //
 // Targeted by `base_entity_id` since that is the stable id CellApp's
 // base_entity_population_ indexes by — the internal cell_entity_id can
-// change across offloads (Phase 11).
+// change across offloads.
 // ----------------------------------------------------------------------------
 
 struct DestroyCellEntity {
@@ -148,9 +147,9 @@ static_assert(NetworkMessage<DestroyCellEntity>);
 // ----------------------------------------------------------------------------
 // ClientCellRpcForward  (BaseApp → CellApp, ID 3003)
 //
-// BigWorld-style runExposedMethod. `source_entity_id` is stamped by
-// BaseApp from the client's proxy binding and cannot be forged by the
-// client. OWN_CLIENT methods require source == target.
+// Exposed (client-facing) RPC forwarded from BaseApp. `source_entity_id`
+// is stamped by BaseApp from the client's proxy binding and cannot be
+// forged by the client. OWN_CLIENT methods require source == target.
 // ----------------------------------------------------------------------------
 
 struct ClientCellRpcForward {
@@ -297,7 +296,6 @@ static_assert(NetworkMessage<DestroySpace>);
 // Client-authoritative position update. CellApp applies:
 //   1) std::isfinite on all three components (reject NaN/Inf);
 //   2) single-tick displacement bound (reject teleports).
-// See phase10_cellapp.md §3.12 for the validation policy.
 // ----------------------------------------------------------------------------
 
 struct AvatarUpdate {
@@ -350,10 +348,10 @@ static_assert(NetworkMessage<AvatarUpdate>);
 // EnableWitness  (BaseApp → CellApp, ID 3021)
 //
 // Attaches an AoI witness to a cell entity. Fired from BaseApp's
-// client-bind hooks (Proxy::BindClient → this message), mirroring
-// BigWorld's RealEntity::addWitness(). The witness uses config-driven
-// defaults (cellApp/default_aoi_radius, cellApp/default_aoi_hysteresis);
-// script-level overrides arrive via a subsequent SetAoIRadius message.
+// client-bind hooks (Proxy::BindClient → this message). The witness
+// uses config-driven defaults (cellApp/default_aoi_radius,
+// cellApp/default_aoi_hysteresis); script-level overrides arrive via
+// a subsequent SetAoIRadius message.
 // ----------------------------------------------------------------------------
 
 struct EnableWitness {
@@ -408,9 +406,8 @@ static_assert(NetworkMessage<DisableWitness>);
 // SetAoIRadius  (BaseApp/script → CellApp, ID 3023)
 //
 // Runtime AoI radius + hysteresis adjustment for an already-witnessed
-// cell entity. BigWorld parity: `entity.setAoIRadius(radius, hyst)` in
-// witness.cpp:2109 — mutates the Witness and reshapes its trigger in
-// place. The handler silently drops the message if the target has no
+// cell entity. Mutates the Witness and reshapes its trigger in place.
+// The handler silently drops the message if the target has no
 // Witness attached (log-warn; the typical cause is a race where bind
 // notifications arrive after Witness teardown).
 // ----------------------------------------------------------------------------

@@ -268,7 +268,14 @@ void CellApp::OnTickComplete() {
 
 void CellApp::RegisterWatchers() {
   EntityApp::RegisterWatchers();
-  // TODO: add entities / spaces / bandwidth budget gauges.
+  auto& wr = GetWatcherRegistry();
+  wr.Add<float>("cellapp/load", std::function<float()>([this] { return persistent_load_; }));
+  wr.Add<uint32_t>("cellapp/real_entity_count",
+                   std::function<uint32_t()>([this] { return NumRealEntities(); }));
+  wr.Add<std::size_t>("cellapp/total_entity_count",
+                      std::function<std::size_t()>([this] { return entity_population_.size(); }));
+  wr.Add<std::size_t>("cellapp/space_count",
+                      std::function<std::size_t()>([this] { return spaces_.size(); }));
 }
 
 // ============================================================================

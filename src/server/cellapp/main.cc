@@ -1,4 +1,4 @@
-// CellApp process entry point — Phase 10 Step 10.8.
+// CellApp process entry point.
 
 #include "cellapp.h"
 
