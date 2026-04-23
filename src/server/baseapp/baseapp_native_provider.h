@@ -89,6 +89,23 @@ using SerializeEntityFn = int32_t (*)(uint32_t entity_id, uint8_t* out_buf, int3
                                       int32_t* out_len);
 
 // ============================================================================
+// ProximityEventFn — Phase 11 C8 / §10.2 #9. Raised when a peer enters or
+// leaves a ProximityController's radius. Arguments:
+//   entity_id       — the owner of the ProximityController (the "sensor")
+//   user_arg        — the int32_t handle the script passed to
+//                     AddProximityController; lets a script disambiguate
+//                     multiple proximity sensors on the same entity
+//   peer_entity_id  — the base_entity_id of the crossing peer; stable
+//                     across Offload and visible client-side
+//   is_enter        — 1 when the peer crossed into range, 0 on exit
+// The C# side dispatches to the entity's onProximityEnter / onProximityLeave
+// script hook; the native side does not interpret user_arg.
+// ============================================================================
+
+using ProximityEventFn = void (*)(uint32_t entity_id, int32_t user_arg, uint32_t peer_entity_id,
+                                  uint8_t is_enter);
+
+// ============================================================================
 // BaseAppNativeProvider — INativeApiProvider for the BaseApp process
 // ============================================================================
 

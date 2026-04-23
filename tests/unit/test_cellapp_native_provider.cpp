@@ -116,6 +116,86 @@ TEST_F(CellAppNativeProviderTest, AddProximityControllerIsFunctional) {
   EXPECT_TRUE(e->GetControllers().Contains(static_cast<ControllerID>(id)));
 }
 
+// Phase 11 C8 / §10.2 #9: AddProximityController installs lambdas that
+// route enter/leave events into the registered ProximityEventFn. Use a
+// stateless recorder (must be a plain function for ProximityEventFn's
+// `void(*)(...)` signature) to capture events.
+namespace {
+struct ProximityRecord {
+  uint32_t entity_id;
+  int32_t user_arg;
+  uint32_t peer_entity_id;
+  uint8_t is_enter;
+};
+// File-static so ProximityRecorder can be used as a free function
+// pointer (no captures).
+static std::vector<ProximityRecord>* g_proximity_events = nullptr;
+extern "C" void ProximityRecorder(uint32_t entity_id, int32_t user_arg, uint32_t peer_entity_id,
+                                  uint8_t is_enter) {
+  if (g_proximity_events) {
+    g_proximity_events->push_back({entity_id, user_arg, peer_entity_id, is_enter});
+  }
+}
+}  // namespace
+
+// Stamps base_entity_id BEFORE the range-list insertion so the
+// proximity lambda sees a non-zero peer_entity_id when the
+// just-inserted peer crosses the trigger.
+auto MakePeerWithBase(Space& space, EntityID id, math::Vector3 pos, EntityID base_id)
+    -> CellEntity* {
+  auto peer = std::make_unique<CellEntity>(id, 1, space, pos, math::Vector3{1, 0, 0});
+  peer->SetBase(Address{}, base_id);
+  return space.AddEntity(std::move(peer));
+}
+
+TEST_F(CellAppNativeProviderTest, ProximityEventRoutesEnterAndLeave) {
+  std::vector<ProximityRecord> events;
+  g_proximity_events = &events;
+  provider_.SetProximityEventFnForTest(&ProximityRecorder);
+
+  // Both entities exist + have base_entity_ids populated BEFORE the
+  // ProximityController is attached. The CellEntity ctor inserts its
+  // range_node into the RangeList before we get a chance to SetBase,
+  // so any trigger observing that ctor-time insert would see base_id=0.
+  // Attaching the trigger last makes its Insert pass (the "initial
+  // sweep") see the peer with its real base_id already populated.
+  MakePeerWithBase(space_, 100, {0, 0, 0}, /*base_id=*/1100);  // sensor
+  auto* peer = MakePeerWithBase(space_, 200, {2, 0, 2}, /*base_id=*/1200);
+
+  const int32_t kUserArg = 0xBEEF;
+  const auto id = provider_.AddProximityController(100, /*range=*/10.f, kUserArg);
+  ASSERT_GT(id, 0);
+
+  // Trigger's Insert sweep fires an Enter for the in-range peer.
+  ASSERT_EQ(events.size(), 1u);
+  EXPECT_EQ(events[0].entity_id, 100u);
+  EXPECT_EQ(events[0].user_arg, kUserArg);
+  EXPECT_EQ(events[0].peer_entity_id, 1200u);  // peer's base_entity_id
+  EXPECT_EQ(events[0].is_enter, 1);
+
+  // Move the peer out of range → leave fires.
+  peer->SetPosition({100.f, 0.f, 0.f});
+  ASSERT_EQ(events.size(), 2u);
+  EXPECT_EQ(events[1].entity_id, 100u);
+  EXPECT_EQ(events[1].peer_entity_id, 1200u);
+  EXPECT_EQ(events[1].is_enter, 0);
+
+  g_proximity_events = nullptr;
+}
+
+// Without a registered fn, the lambda still runs (trigger state stays
+// correct for InsidePeers / Offload) but doesn't dispatch anything.
+TEST_F(CellAppNativeProviderTest, ProximityEventIsNoopWhenCallbackNull) {
+  MakePeerWithBase(space_, 101, {0, 0, 0}, /*base_id=*/1101);
+  provider_.SetProximityEventFnForTest(nullptr);
+  const auto id = provider_.AddProximityController(101, /*range=*/10.f, /*user_arg=*/0);
+  ASSERT_GT(id, 0);
+  MakePeerWithBase(space_, 201, {1, 0, 1}, /*base_id=*/1201);
+  // Nothing to observe on the test side — the point is no crash even
+  // with a null dispatch fn.
+  SUCCEED();
+}
+
 TEST_F(CellAppNativeProviderTest, CancelControllerRemoves) {
   auto* e = AddEntity(10);
   auto id = provider_.AddTimerController(10, 10.f, true, 0);

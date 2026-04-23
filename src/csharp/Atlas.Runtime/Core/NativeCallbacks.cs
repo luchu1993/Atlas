@@ -21,6 +21,11 @@ internal unsafe struct NativeCallbackTable
     // (DB persistence) and SerializeFor*Client (AoI replication); see
     // docs/roadmap/phase11_distributed_space.md §4 for why.
     public nint SerializeEntity;
+    // Phase 11 C8 / §10.2 #9 follow-up: raised by ProximityController
+    // when a peer crosses the radius boundary. Routed via user_arg so
+    // scripts can disambiguate multiple proximity sensors on one
+    // entity. is_enter == 1 on inbound crossing, 0 on outbound.
+    public nint ProximityEvent;
 }
 
 internal static unsafe class NativeCallbacks
@@ -44,6 +49,8 @@ internal static unsafe class NativeCallbacks
             (nint)(delegate* unmanaged<uint, byte**, int*, void>)&GetOwnerSnapshot;
         table.SerializeEntity =
             (nint)(delegate* unmanaged<uint, byte*, int, int*, int>)&SerializeEntity;
+        table.ProximityEvent =
+            (nint)(delegate* unmanaged<uint, int, uint, byte, void>)&ProximityEvent;
 
         NativeApi.SetNativeCallbacks(&table, sizeof(NativeCallbackTable));
     }
@@ -323,6 +330,52 @@ internal static unsafe class NativeCallbacks
 
             var dispatcher = RpcBridge.Dispatchers[direction];
             dispatcher?.Invoke(entity, id, ref reader);
+        }
+        catch (Exception ex)
+        {
+            ErrorBridge.SetError(ex);
+        }
+    }
+
+    // Phase 11 C8: proximity enter/leave bridge from C++ ProximityController.
+    // entityId — owner of the sensor; userArg — script's handle to
+    // disambiguate multiple sensors per entity; peerEntityId — base_id
+    // of the crossing peer (stable across Offload / visible client-side);
+    // isEnter — 1 on inbound, 0 on outbound.
+    // Script-side hook is on the entity itself; the generated
+    // `ServerEntity` base class (or a future generator pass) surfaces
+    // `OnProximityEnter(userArg, peerId)` / `OnProximityLeave(userArg, peerId)`
+    // that scripts override. Until that hookup lands the bridge routes
+    // events through a logging fallback so integration tests can observe
+    // the call reached managed code.
+    [UnmanagedCallersOnly]
+    public static void ProximityEvent(uint entityId, int userArg, uint peerEntityId, byte isEnter)
+    {
+        try
+        {
+            ThreadGuard.EnsureMainThread();
+
+            var entity = EntityManager.Instance.Get(entityId);
+            if (entity is null)
+            {
+                Log.Warning($"ProximityEvent: unknown entity {entityId}");
+                return;
+            }
+
+            // The generator-emitted OnProximityEnter/Leave hook lands in a
+            // follow-up; for now log at Debug so runtime tests can observe
+            // the event reached managed code and scripts can override via
+            // the existing virtuals if they exist.
+            if (isEnter != 0)
+            {
+                Log.Debug(
+                    $"ProximityEvent: entity={entityId} userArg={userArg} peer={peerEntityId} ENTER");
+            }
+            else
+            {
+                Log.Debug(
+                    $"ProximityEvent: entity={entityId} userArg={userArg} peer={peerEntityId} LEAVE");
+            }
         }
         catch (Exception ex)
         {

@@ -14,6 +14,7 @@
 #include "network/reliable_udp.h"
 #include "server/server_config.h"
 #include "space.h"
+#include "space/entity_range_list_node.h"
 #include "space/move_controller.h"
 #include "space/proximity_controller.h"
 #include "space/timer_controller.h"
@@ -36,6 +37,7 @@ struct CellAppCallbackTable {
   DispatchRpcFn dispatch_rpc;
   GetOwnerSnapshotFn get_owner_snapshot;
   SerializeEntityFn serialize_entity;  // Phase 11 PR-6
+  ProximityEventFn proximity_event;    // Phase 11 C8
 };
 #pragma pack(pop)
 
@@ -221,14 +223,28 @@ auto CellAppNativeProvider::AddProximityController(uint32_t entity_id, float ran
     ATLAS_LOG_WARNING("atlas_add_proximity_controller on Ghost entity_id={} — rejected", entity_id);
     return 0;
   }
-  // The controller callbacks are stubbed for now — Step 10.8's CellApp
-  // process hooks them into a C# callback dispatcher so scripts can
-  // react to proximity events. For Step 10.7's skeleton the range
-  // trigger is functional but fires into no-op lambdas.
+  // C8 / §10.2 #9: route enter/leave crossings to the C# runtime via
+  // the proximity_event_fn_ callback. The lambdas capture (this,
+  // entity_id, user_arg) so a single controller's events always carry
+  // the script's disambiguation handle back to C#. Non-entity
+  // crossings (sentinel / trigger-bound nodes) are filtered via the
+  // RangeListOrder check — matching AoITrigger's OwnerOf helper.
+  auto dispatch = [this, entity_id, user_arg](RangeListNode& other, uint8_t is_enter) {
+    if (proximity_event_fn_ == nullptr) return;
+    if (other.Order() != RangeListOrder::kEntity) return;
+    auto* peer = static_cast<CellEntity*>(static_cast<EntityRangeListNode&>(other).OwnerData());
+    if (peer == nullptr) return;
+    proximity_event_fn_(entity_id, user_arg, peer->BaseEntityId(), is_enter);
+  };
+  auto on_enter = [dispatch](ProximityController&, RangeListNode& other) {
+    dispatch(other, /*is_enter=*/1);
+  };
+  auto on_leave = [dispatch](ProximityController&, RangeListNode& other) {
+    dispatch(other, /*is_enter=*/0);
+  };
   return static_cast<int32_t>(entity->GetControllers().Add(
       std::make_unique<ProximityController>(entity->RangeNode(), entity->GetSpace().GetRangeList(),
-                                            range,
-                                            /*on_enter=*/nullptr, /*on_leave=*/nullptr),
+                                            range, std::move(on_enter), std::move(on_leave)),
       /*motion=*/nullptr, user_arg));
 }
 
@@ -269,6 +285,11 @@ void CellAppNativeProvider::SetNativeCallbacks(const void* native_callbacks, int
   // on tests without a C# runtime). get_entity_data is CellApp-side
   // unused today (no DB persistence from cell).
   get_owner_snapshot_fn_ = table.get_owner_snapshot;
+  // Phase 11 C8 / §10.2 #9 follow-up: consumed by AddProximityController's
+  // lambdas. Absence ⇒ no proximity events propagate to scripts; the
+  // trigger still fires internally (Offload membership still works) but
+  // script-side onProximityEnter / onProximityLeave never run.
+  proximity_event_fn_ = table.proximity_event;
   ATLAS_LOG_INFO("CellApp: native callback table registered (len={})", len);
 }
 

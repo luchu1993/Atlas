@@ -84,6 +84,12 @@ class CellAppNativeProvider : public BaseNativeProvider {
   [[nodiscard]] auto get_owner_snapshot_fn() const -> GetOwnerSnapshotFn {
     return get_owner_snapshot_fn_;
   }
+  // C8: proximity-trigger event dispatch. Lambdas installed by
+  // AddProximityController capture (this, entity_id, user_arg) and
+  // invoke via this accessor so unit tests can install a recording
+  // function pointer without going through SetNativeCallbacks.
+  [[nodiscard]] auto proximity_event_fn() const -> ProximityEventFn { return proximity_event_fn_; }
+  void SetProximityEventFnForTest(ProximityEventFn fn) { proximity_event_fn_ = fn; }
 
  private:
   EntityLookupFn lookup_;
@@ -101,6 +107,9 @@ class CellAppNativeProvider : public BaseNativeProvider {
   // 0xF002 ReplicatedBaselineToClient via BaseApp). Left nullptr on test
   // builds that don't register a runtime; the pump short-circuits.
   GetOwnerSnapshotFn get_owner_snapshot_fn_{nullptr};
+  // C8: proximity enter/leave bridge — nullptr ⇒ events dropped at the
+  // lambda (trigger state stays correct for Offload / InsidePeers).
+  ProximityEventFn proximity_event_fn_{nullptr};
 };
 
 }  // namespace atlas
