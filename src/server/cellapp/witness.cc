@@ -17,14 +17,16 @@ namespace atlas {
 
 namespace {
 
-// Priority metric: distance / 5 + 1. Smaller is more urgent.
-// Tune per game once telemetry exists.
+// Priority metric: squared distance. Smaller is more urgent. The
+// min-heap in Update only cares about ordering, so we skip the sqrt
+// that a true distance would require — a² < b² iff a < b for
+// non-negative magnitudes, which distance always is. Saves one sqrt
+// per updatable peer per tick.
 auto ComputePriority(const math::Vector3& observer, const math::Vector3& target) -> double {
-  const float dx = observer.x - target.x;
-  const float dy = observer.y - target.y;
-  const float dz = observer.z - target.z;
-  const auto dist = static_cast<double>(std::sqrt(dx * dx + dy * dy + dz * dz));
-  return dist / 5.0 + 1.0;
+  const double dx = observer.x - target.x;
+  const double dy = observer.y - target.y;
+  const double dz = observer.z - target.z;
+  return dx * dx + dy * dy + dz * dz;
 }
 
 // A per-audience delta with only the flag prefix and every byte zero
