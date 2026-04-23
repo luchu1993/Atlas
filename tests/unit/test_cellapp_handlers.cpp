@@ -565,8 +565,10 @@ TEST_F(CellAppHandlersTest, PeerDeathDropsOrphanGhostsAndClearsHaunts) {
   ASSERT_TRUE(real->IsReal());
   auto* rd = real->GetRealData();
   ASSERT_NE(rd, nullptr);
-  ASSERT_TRUE(rd->AddHaunt(dying_ch));
-  ASSERT_TRUE(rd->AddHaunt(other_ch));
+  const Address dying_addr(0x7F000001u, 40001);
+  const Address other_addr(0x7F000001u, 40002);
+  ASSERT_TRUE(rd->AddHaunt(dying_ch, dying_addr));
+  ASSERT_TRUE(rd->AddHaunt(other_ch, other_addr));
   ASSERT_EQ(rd->HauntCount(), 2u);
 
   app_.OnPeerCellAppDeath(Address(0x7F000001u, 40001), dying_ch);

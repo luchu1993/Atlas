@@ -12,10 +12,10 @@ RealEntityData::~RealEntityData() = default;
 
 // ---- Haunt list ------------------------------------------------------------
 
-auto RealEntityData::AddHaunt(Channel* channel) -> bool {
+auto RealEntityData::AddHaunt(Channel* channel, const Address& addr) -> bool {
   if (channel == nullptr) return false;
   if (HasHaunt(channel)) return false;
-  haunts_.push_back(Haunt{channel, Clock::now()});
+  haunts_.push_back(Haunt{channel, addr, Clock::now()});
   return true;
 }
 

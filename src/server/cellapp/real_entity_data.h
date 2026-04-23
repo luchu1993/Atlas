@@ -10,6 +10,7 @@
 #include "cellapp/intercell_messages.h"
 #include "foundation/clock.h"
 #include "math/vector3.h"
+#include "network/address.h"
 
 namespace atlas {
 
@@ -31,6 +32,7 @@ class RealEntityData {
  public:
   struct Haunt {
     Channel* channel{nullptr};
+    Address addr{};
     TimePoint creation_time{};
   };
 
@@ -44,8 +46,10 @@ class RealEntityData {
 
   // Idempotent: adding a Channel already in the Haunt list is a no-op.
   // Returns true when a new haunt was recorded, false when the peer was
-  // already present.
-  auto AddHaunt(Channel* channel) -> bool;
+  // already present. `addr` is cached on the Haunt so GhostMaintainer can
+  // decide keep-vs-delete by Address identity — robust against peer
+  // reconnects that rebind the Channel* while the Address is unchanged.
+  auto AddHaunt(Channel* channel, const Address& addr) -> bool;
 
   // Returns true when a matching haunt was erased.
   auto RemoveHaunt(Channel* channel) -> bool;

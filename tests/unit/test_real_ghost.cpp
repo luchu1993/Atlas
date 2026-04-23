@@ -283,9 +283,11 @@ TEST(RealEntityData, AddHauntIsIdempotent) {
   ASSERT_NE(rd, nullptr);
   auto* c1 = FakeChannel(0x11);
   auto* c2 = FakeChannel(0x22);
-  EXPECT_TRUE(rd->AddHaunt(c1));
-  EXPECT_FALSE(rd->AddHaunt(c1));  // duplicate
-  EXPECT_TRUE(rd->AddHaunt(c2));
+  const Address a1(0x7F000001u, 1);
+  const Address a2(0x7F000001u, 2);
+  EXPECT_TRUE(rd->AddHaunt(c1, a1));
+  EXPECT_FALSE(rd->AddHaunt(c1, a1));  // duplicate
+  EXPECT_TRUE(rd->AddHaunt(c2, a2));
   EXPECT_EQ(rd->HauntCount(), 2u);
   EXPECT_TRUE(rd->HasHaunt(c1));
   EXPECT_TRUE(rd->HasHaunt(c2));
@@ -295,7 +297,7 @@ TEST(RealEntityData, AddHauntRejectsNullptr) {
   Space space(1);
   auto* e = space.AddEntity(
       std::make_unique<CellEntity>(21, 1, space, math::Vector3{0, 0, 0}, math::Vector3{1, 0, 0}));
-  EXPECT_FALSE(e->GetRealData()->AddHaunt(nullptr));
+  EXPECT_FALSE(e->GetRealData()->AddHaunt(nullptr, Address{}));
   EXPECT_EQ(e->GetRealData()->HauntCount(), 0u);
 }
 
@@ -307,9 +309,12 @@ TEST(RealEntityData, RemoveHauntSwapBack) {
   auto* c1 = FakeChannel(0x11);
   auto* c2 = FakeChannel(0x22);
   auto* c3 = FakeChannel(0x33);
-  rd->AddHaunt(c1);
-  rd->AddHaunt(c2);
-  rd->AddHaunt(c3);
+  const Address a1(0x7F000001u, 1);
+  const Address a2(0x7F000001u, 2);
+  const Address a3(0x7F000001u, 3);
+  rd->AddHaunt(c1, a1);
+  rd->AddHaunt(c2, a2);
+  rd->AddHaunt(c3, a3);
   EXPECT_TRUE(rd->RemoveHaunt(c2));
   EXPECT_EQ(rd->HauntCount(), 2u);
   EXPECT_FALSE(rd->HasHaunt(c2));

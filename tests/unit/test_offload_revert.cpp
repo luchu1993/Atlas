@@ -55,7 +55,8 @@ auto SeedEntityWithState(Harness& h, EntityID id, Channel* haunt_channel) -> Cel
   // OnCreateCellEntity; the test bypasses that to avoid CLR / network
   // dependencies.
   h.app.EntityPopulationForTest()[id] = entity;
-  if (haunt_channel != nullptr) entity->GetRealData()->AddHaunt(haunt_channel);
+  if (haunt_channel != nullptr)
+    entity->GetRealData()->AddHaunt(haunt_channel, Address(0x7F000001u, 50000));
   entity->GetControllers().Add(
       std::make_unique<MoveToPointController>(math::Vector3{10, 0, 10}, 5.f, false), entity,
       /*user_arg=*/99);

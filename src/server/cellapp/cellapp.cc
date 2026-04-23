@@ -982,7 +982,7 @@ void CellApp::OnOffloadEntity(const Address& src, Channel* ch, const cellapp::Of
     for (const auto& haunt_addr : msg.existing_haunts) {
       if (haunt_addr == Network().RudpAddress()) continue;  // Don't haunt ourselves.
       if (auto* peer = FindPeerChannel(haunt_addr)) {
-        rd->AddHaunt(peer);
+        rd->AddHaunt(peer, haunt_addr);
       }
     }
   }
@@ -1147,7 +1147,7 @@ void CellApp::RevertPendingOffload(EntityID entity_id, const char* reason) {
   // fall out — they'd come back on the next TickGhostPump pass anyway.
   if (auto* rd = entity->GetRealData()) {
     for (const auto& ha : po.haunt_addrs) {
-      if (auto* peer = FindPeerChannel(ha)) rd->AddHaunt(peer);
+      if (auto* peer = FindPeerChannel(ha)) rd->AddHaunt(peer, ha);
     }
   }
 
@@ -1382,7 +1382,7 @@ void CellApp::TickGhostPump() {
         msg.volatile_seq = state->latest_volatile_seq;
         msg.other_snapshot = state->other_snapshot;
       }
-      if (peer->SendMessage(msg)) rd->AddHaunt(peer);
+      if (peer->SendMessage(msg)) rd->AddHaunt(peer, op.peer_addr);
     }
 
     // Dispatch deletes: DeleteGhost on the peer channel, then drop the

@@ -58,28 +58,20 @@ auto GhostMaintainer::Run(Space& space, TimePoint now) -> PendingWork {
     // whose age exceeds min_ghost_lifespan. Dropping before min-lifespan
     // invites flapping when an entity bounces across a border, so we
     // hold the Ghost even after it leaves our interest zone briefly.
+    //
+    // Match by Address, not Channel*: if a peer CellApp reconnected
+    // between ticks its Channel* identity changes while the address
+    // stays the same, and a pointer-identity check would mis-flag the
+    // haunt as "no longer in interest", tearing it down and forcing a
+    // recreate next tick.
     for (const auto& h : real_data->Haunts()) {
-      // We don't have a direct reverse mapping from channel → address
-      // in GhostMaintainer; instead, walk peer_cells comparing
-      // `resolver_(addr) == h.channel` to decide if the Haunt's peer is
-      // still in interest. This is O(peers) per haunt; peer counts are
-      // single-digit in realistic Space topologies.
-      bool still_in_interest = false;
-      Address still_peer_addr;
-      for (const auto& [peer_addr, _] : peer_cells) {
-        if (resolver_ && resolver_(peer_addr) == h.channel) {
-          still_in_interest = true;
-          still_peer_addr = peer_addr;
-          break;
-        }
-      }
-      if (still_in_interest) continue;
+      if (h.channel == nullptr) continue;
+      if (peer_cells.contains(h.addr)) continue;
 
-      // Age gate — respect min_ghost_lifespan.
       const auto age = now - h.creation_time;
       if (age < config_.min_ghost_lifespan) continue;
 
-      work.deletes.push_back(DeleteOp{&entity, h.channel, still_peer_addr});
+      work.deletes.push_back(DeleteOp{&entity, h.channel, h.addr});
     }
   });
 

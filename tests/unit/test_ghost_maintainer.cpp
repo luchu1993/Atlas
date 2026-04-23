@@ -118,7 +118,7 @@ TEST(GhostMaintainer, ExistingHaunt_NoDuplicateCreate) {
 
   auto* e = MakeReal(space, 10, {-50.f, 0.f, 0.f});
   auto* peer_channel = FakeChannel(0xA);
-  e->GetRealData()->AddHaunt(peer_channel);
+  e->GetRealData()->AddHaunt(peer_channel, peer);
 
   std::unordered_map<Address, Channel*> peers;
   peers[peer] = peer_channel;
@@ -145,7 +145,7 @@ TEST(GhostMaintainer, HauntPastMinLifespan_OutsideInterest_EmitsDelete) {
 
   auto* e = MakeReal(space, 10, {-5000.f, 0.f, 0.f});  // very far from boundary
   auto* peer_channel = FakeChannel(0xA);
-  e->GetRealData()->AddHaunt(peer_channel);
+  e->GetRealData()->AddHaunt(peer_channel, peer);
 
   // Advance `now` past min-lifespan to allow deletion.
   std::unordered_map<Address, Channel*> peers;
@@ -176,7 +176,7 @@ TEST(GhostMaintainer, HauntWithinMinLifespan_NoDelete) {
 
   auto* e = MakeReal(space, 10, {-5000.f, 0.f, 0.f});
   auto* peer_channel = FakeChannel(0xA);
-  e->GetRealData()->AddHaunt(peer_channel);
+  e->GetRealData()->AddHaunt(peer_channel, peer);
 
   std::unordered_map<Address, Channel*> peers;
   peers[peer] = peer_channel;
@@ -216,6 +216,32 @@ TEST(GhostMaintainer, GhostEntitiesAreSkipped) {
   auto work = mgr.Run(space, Clock::now());
   EXPECT_TRUE(work.creates.empty());
   EXPECT_TRUE(work.deletes.empty());
+}
+
+// Peer reconnect rebinds the registry Channel* while the Address stays
+// the same. Keep-vs-delete must match by Address so the existing Haunt
+// survives rather than bouncing every tick between delete and recreate.
+TEST(GhostMaintainer, PeerReconnect_AddressUnchanged_KeepsHauntNoFlap) {
+  Space space(1);
+  Address self{0x7F000001u, 30001};
+  Address peer{0x7F000002u, 30002};
+  space.SetBspTree(BuildTwoCellTopology(space, self, peer));
+
+  auto* e = MakeReal(space, 10, {-50.f, 0.f, 0.f});
+  auto* old_channel = FakeChannel(0xA);
+  e->GetRealData()->AddHaunt(old_channel, peer);
+
+  std::unordered_map<Address, Channel*> peers;
+  peers[peer] = FakeChannel(0xB);  // new Channel* identity for same peer
+  GhostMaintainer::Config cfg{100.f, 20.f, std::chrono::milliseconds(0)};
+  GhostMaintainer mgr(cfg, self, [&](const Address& a) -> Channel* {
+    auto it = peers.find(a);
+    return it == peers.end() ? nullptr : it->second;
+  });
+
+  const auto later = Clock::now() + std::chrono::seconds(10);
+  auto work = mgr.Run(space, later);
+  EXPECT_TRUE(work.deletes.empty()) << "reconnect must not evict the haunt";
 }
 
 // ============================================================================
@@ -337,7 +363,7 @@ TEST(GhostMaintainer, PositionOscillationRespectsMinLifespan) {
   EXPECT_TRUE(work1.deletes.empty());
 
   // Apply the haunt that was created.
-  e->GetRealData()->AddHaunt(peer_channel);
+  e->GetRealData()->AddHaunt(peer_channel, peer);
 
   // Step 2: move entity far from boundary.
   e->SetPosition({-5000.f, 0.f, 0.f});
