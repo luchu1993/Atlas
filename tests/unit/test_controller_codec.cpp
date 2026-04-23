@@ -204,9 +204,12 @@ TEST(ControllerCodec, TruncatedBlobReturnsFalse) {
 }
 
 TEST(ControllerCodec, UnknownKindAbortsRestore) {
-  // Hand-craft a blob with count=1 and Kind=99 (undefined).
-  std::vector<std::byte> bad{std::byte{1}, std::byte{99}, std::byte{1}, std::byte{0}, std::byte{0},
-                             std::byte{0}, std::byte{0},  std::byte{0}, std::byte{0}, std::byte{0}};
+  // Hand-craft a blob with count=1 (uint32 LE: 01 00 00 00) and Kind=99
+  // (undefined), then id=1 (uint32 LE) and user_arg=0 (int32 LE).
+  std::vector<std::byte> bad{std::byte{0x01}, std::byte{0x00}, std::byte{0x00}, std::byte{0x00},
+                             std::byte{99},   std::byte{0x01}, std::byte{0x00}, std::byte{0x00},
+                             std::byte{0x00}, std::byte{0x00}, std::byte{0x00}, std::byte{0x00},
+                             std::byte{0x00}};
   Space space(1);
   auto* e = MakeReal(space, 1);
   BinaryReader r{std::span<const std::byte>(bad)};
@@ -326,6 +329,31 @@ TEST(ControllerCodec, DoubleRoundTrip_Idempotent) {
   c->GetControllers().Update(1.f);
   EXPECT_GT(c->Position().x, pos_before.x);
   EXPECT_GT(c->Position().z, pos_before.z);
+}
+
+// Phase 11 C9: pre-C9 the count field was uint8, silently capping at
+// 255 controllers per entity. BigWorld's ControllerID-width count
+// (controllers.cpp:197) doesn't have the cap; Atlas now matches.
+// Round-tripping > 255 controllers exercises the new uint32 field.
+TEST(ControllerCodec, CountField_HandlesMoreThan255Controllers) {
+  Space src_space(1);
+  Space dst_space(1);
+  auto* src = MakeReal(src_space, 1);
+  auto* dst = MakeReal(dst_space, 1);
+
+  constexpr uint32_t kCount = 300;  // just past the old uint8 cap
+  for (uint32_t i = 0; i < kCount; ++i) {
+    src->GetControllers().Add(std::make_unique<TimerController>(/*interval=*/1.f, /*repeat=*/true),
+                              /*motion=*/nullptr, static_cast<int32_t>(i));
+  }
+  ASSERT_EQ(src->GetControllers().Count(), kCount);
+
+  BinaryWriter w;
+  SerializeControllersForMigration(*src, w);
+  auto blob = w.Detach();
+  BinaryReader r{std::span<const std::byte>(blob)};
+  ASSERT_TRUE(DeserializeControllersForMigration(*dst, r, [](uint32_t) { return nullptr; }));
+  EXPECT_EQ(dst->GetControllers().Count(), kCount);
 }
 
 }  // namespace

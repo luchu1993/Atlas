@@ -121,17 +121,54 @@ auto DecodeTimer(BinaryReader& r) -> std::unique_ptr<Controller> {
 
 }  // namespace
 
+// Wire layout (Phase 11 C9 — BigWorld writeRealsToStream parity):
+//   count                 : uint32   (was uint8 pre-C9; widened to match
+//                                     BigWorld's ControllerID-width count
+//                                     at controllers.cpp:197. The old
+//                                     uint8 silently capped at 255
+//                                     controllers per entity.)
+//   for each controller:
+//     kind                : uint8    (Atlas ControllerKind enum; Atlas
+//                                     has no DOMAIN_GHOST split so we
+//                                     always write type+user_arg here —
+//                                     BigWorld's conditional emission
+//                                     based on DOMAIN_GHOST does not
+//                                     apply to Atlas's simpler model;
+//                                     see phase11 §1.3 table)
+//     id                  : uint32
+//     user_arg            : int32
+//     kind-specific data (EncodeMoveToPoint / EncodeTimer / EncodeProximity)
+//
+// Structural divergence (documented, not a bug): BigWorld puts the
+// write hook on each Controller subclass (virtual writeRealToStream),
+// enabling polymorphic dispatch. Atlas uses an external per-kind
+// switch here because ProximityController's receive-side construction
+// needs (central RangeListNode + RangeList + callback lambdas) that
+// can't ride the wire — so it can't be produced by a pure
+// Controller::create(kind) factory. The switch keeps the construction
+// asymmetry explicit. A future refactor could add virtuals for Write
+// and leave construction external, but the benefit is marginal at
+// three controller kinds.
+//
+// lastAllocatedID is NOT on the wire. BigWorld transmits it verbatim
+// (controllers.cpp:176) so the destination's next_id_ starts past any
+// cancelled-controller gap on the source. Atlas derives the equivalent
+// via `Controllers::AddWithPreservedId`, which advances next_id_ to
+// `preserved_id + 1` per restored controller — after the restore loop
+// next_id_ equals `max(preserved_ids) + 1`. Gap-reuse is safe: any
+// cancelled IDs on the source can legitimately be reassigned on the
+// destination.
 void SerializeControllersForMigration(const CellEntity& entity, BinaryWriter& w) {
   const auto& controllers = const_cast<CellEntity&>(entity).GetControllers();
   // Count-first. The iterator order is unspecified but consistent
   // within a single ForEach pass, so two passes yield the same sequence.
-  uint8_t count = 0;
+  uint32_t count = 0;
   controllers.ForEach([&](const Controller& c) {
     if (c.TypeTag() == ControllerKind::kUnknown) return;  // skip bare/test controllers
     if (c.IsFinished()) return;
     ++count;
   });
-  WriteU8(w, count);
+  WriteU32(w, count);
   controllers.ForEach([&](const Controller& c) {
     const auto kind = c.TypeTag();
     if (kind == ControllerKind::kUnknown) return;
@@ -157,10 +194,10 @@ void SerializeControllersForMigration(const CellEntity& entity, BinaryWriter& w)
 
 auto DeserializeControllersForMigration(CellEntity& entity, BinaryReader& r,
                                         const EntityLookupByIdFn& lookup_peer) -> bool {
-  auto count = ReadU8(r);
+  auto count = ReadU32(r);
   if (!count) return false;
   auto& controllers = entity.GetControllers();
-  for (uint8_t i = 0; i < *count; ++i) {
+  for (uint32_t i = 0; i < *count; ++i) {
     auto kind_raw = ReadU8(r);
     auto id = ReadU32(r);
     auto user_arg = ReadI32(r);
