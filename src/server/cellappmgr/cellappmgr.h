@@ -83,6 +83,12 @@ class CellAppMgr : public ManagerApp {
   [[nodiscard]] auto Spaces() const -> const std::unordered_map<SpaceID, SpacePartition>& {
     return spaces_;
   }
+  // Test hook — scenarios that need to seed a pre-split BSP (multi-cell
+  // space) before running the balance pump reach in through this map.
+  // Production writers are OnCreateSpaceRequest and OnCellAppDeath.
+  [[nodiscard]] auto SpacesForTest() -> std::unordered_map<SpaceID, SpacePartition>& {
+    return spaces_;
+  }
 
   // Rebalance every Space and broadcast fresh UpdateGeometry. Public for
   // deterministic test invocation (production calls it from a 1 Hz

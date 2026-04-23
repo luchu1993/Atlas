@@ -343,6 +343,101 @@ TEST(CellAppMgr, TickLoadBalance_SingleSpace_NoCrash) {
   EXPECT_EQ(h.mgr.Spaces().size(), 1u);
 }
 
+// Asymmetric load across two BSP leaves must shift the split line
+// toward the heavy side and then trigger a broadcast of the updated
+// geometry. Walks the full integrated path:
+//   Register two CellApps → CreateSpace → manually seed a two-cell BSP
+//   (the mgr's production API doesn't yet expose a "split an existing
+//   space" call; tests reach through SpacesForTest) → push asymmetric
+//   InformCellLoad → call TickLoadBalance repeatedly → assert the BSP
+//   split moved AND the broadcast-cache blob is different from the
+//   pre-balance baseline.
+TEST(CellAppMgr, TickLoadBalance_AsymmetricLoad_MovesSplitAndRebroadcasts) {
+  CellAppMgrHarness h;
+  cellappmgr::RegisterCellApp reg_a;
+  reg_a.internal_addr = MakePeerAddr(30001);
+  h.mgr.OnRegisterCellApp(reg_a.internal_addr, nullptr, reg_a);
+  cellappmgr::RegisterCellApp reg_b;
+  reg_b.internal_addr = MakePeerAddr(30002);
+  h.mgr.OnRegisterCellApp(reg_b.internal_addr, nullptr, reg_b);
+
+  cellappmgr::CreateSpaceRequest csr;
+  csr.space_id = 1;
+  h.mgr.OnCreateSpaceRequest(Address{}, nullptr, csr);
+
+  // Seed a two-cell split: cell 1 stays on A, new cell 2 lands on B.
+  // Production will expose a dedicated "split cell" admin RPC; the test
+  // reaches past that gap because the rebalance logic it exercises is
+  // independent of how the split got there.
+  auto& partition = h.mgr.SpacesForTest().at(1);
+  const uint32_t app_id_a = h.mgr.CellApps().at(reg_a.internal_addr).app_id;
+  const uint32_t app_id_b = h.mgr.CellApps().at(reg_b.internal_addr).app_id;
+  CellInfo new_cell{/*cell_id=*/2, reg_b.internal_addr, CellBounds{}, /*load=*/0.f,
+                    /*entity_count=*/0};
+  auto split = partition.bsp.Split(/*existing_cell_id=*/1, BSPAxis::kX, /*position=*/0.f, new_cell);
+  ASSERT_TRUE(split.HasValue());
+
+  // Baseline snapshot of the split line — this is what Balance should
+  // shift when the load is heavier on the left side.
+  const auto* leaf_left = partition.bsp.FindCell(-100.f, 0.f);
+  const auto* leaf_right = partition.bsp.FindCell(+100.f, 0.f);
+  ASSERT_NE(leaf_left, nullptr);
+  ASSERT_NE(leaf_right, nullptr);
+  EXPECT_EQ(leaf_left->cell_id, 1u);
+  EXPECT_EQ(leaf_right->cell_id, 2u);
+
+  // Baseline broadcast blob (CreateSpace's initial fan-out was with
+  // the single-cell tree; our Split above didn't re-broadcast, so the
+  // cache is out of date vs the current in-memory tree. That's fine —
+  // the assertion below is "blob changes across the balance calls",
+  // which it does either way).
+  const auto baseline_blob = partition.last_broadcast_blob;
+
+  // Feed asymmetric load: A (left half) heavy at 0.9, B (right half)
+  // light at 0.1. Reported via wire message so the whole OnInformCellLoad
+  // path runs, including cellapps_[] load update + per-leaf load mirror.
+  cellappmgr::InformCellLoad load_a;
+  load_a.app_id = app_id_a;
+  load_a.load = 0.9f;
+  load_a.entity_count = 900;
+  h.mgr.OnInformCellLoad(Address{}, nullptr, load_a);
+  cellappmgr::InformCellLoad load_b;
+  load_b.app_id = app_id_b;
+  load_b.load = 0.1f;
+  load_b.entity_count = 100;
+  h.mgr.OnInformCellLoad(Address{}, nullptr, load_b);
+
+  // Several balance ticks: the damping aggression model moves a fraction
+  // of the imbalance per pass, so we need multiple runs to see a clear
+  // shift. Post-balance, the split should be strictly less than 0 (left
+  // side shrank because left load was heavier).
+  for (int i = 0; i < 5; ++i) h.mgr.TickLoadBalance();
+
+  // Serialize fresh and compare. The cached blob must now differ from
+  // the pre-balance state — or, equivalently, equal a freshly serialised
+  // current tree.
+  BinaryWriter w;
+  partition.bsp.Serialize(w);
+  const auto current_bytes_vec = w.Detach();
+  const std::vector<std::byte> current_bytes(current_bytes_vec.begin(), current_bytes_vec.end());
+  EXPECT_EQ(partition.last_broadcast_blob, current_bytes)
+      << "cache should equal the freshly-serialised tree after rebalance";
+  EXPECT_NE(partition.last_broadcast_blob, baseline_blob)
+      << "rebalance should have changed the broadcast blob from its seeded baseline";
+
+  // BSPInternal::Balance convention: when left is heavier, position_
+  // increases (split moves right). Pre-balance origin (x=0) lives in
+  // cell 2 (FindCell's `value < position` branches left; 0<0 is false
+  // → right child → cell 2). Post-balance the split sits slightly right
+  // of 0, so origin is now `< position` → cell 1. The QUALITATIVE
+  // direction is locked here — the exact move size is aggression-
+  // damped and would make a numeric assertion fragile.
+  const auto* leaf_origin_after = partition.bsp.FindCell(0.f, 0.f);
+  ASSERT_NE(leaf_origin_after, nullptr);
+  EXPECT_EQ(leaf_origin_after->cell_id, 1u)
+      << "with left heavier, split should have moved right past the origin";
+}
+
 // The broadcast cache short-circuits re-sends when the serialised tree
 // hasn't changed. Observable via SpacePartition::last_broadcast_blob:
 // first fan-out populates it; subsequent no-op ticks must keep the
