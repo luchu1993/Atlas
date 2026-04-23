@@ -134,6 +134,11 @@ class CellApp : public EntityApp {
   // already died).
   [[nodiscard]] auto FindPeerChannel(const Address& addr) const -> Channel*;
 
+  // Test hook — lets scenarios seed peer channels without spinning up
+  // machined. Production writers are the registry's Birth/Death
+  // subscription in Init; nothing else mutates this.
+  [[nodiscard]] auto PeerRegistryForTest() -> CellAppPeerRegistry& { return peer_registry_; }
+
   // Sweep application-level references to a dying peer CellApp: Ghosts
   // whose Real lived on that peer are dropped (their authoritative
   // source is gone), and every Real's Haunt list drops the dying

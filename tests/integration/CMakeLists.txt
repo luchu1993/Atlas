@@ -80,3 +80,9 @@ atlas_add_test(NAME test_aoi_visibility
   DEPS atlas_cellapp_lib atlas_server atlas_network
   LABEL integration
 )
+
+atlas_add_test(NAME test_offload_traversal
+  SOURCES test_offload_traversal.cpp
+  DEPS atlas_cellapp_lib atlas_cellappmgr_bsp atlas_server atlas_network
+  LABEL integration
+)
