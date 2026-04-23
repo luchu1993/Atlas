@@ -13,6 +13,13 @@ public abstract class ClientEntity
     public uint EntityId { get; internal set; }
     public bool IsDestroyed { get; internal set; }
 
+    // Set when an Apply* path threw mid-delivery and left backing fields
+    // in an indeterminate state. ClientEntityManager skips subsequent
+    // applies on a corrupted entity — a fresh enter (server-side Leave
+    // then Enter) is required to reset the state. Use this flag from
+    // scripts to suppress UI reads on the entity until it heals.
+    public bool IsCorrupted { get; internal set; }
+
     public abstract string TypeName { get; }
 
     // event_seq gap observability. The server stamps every

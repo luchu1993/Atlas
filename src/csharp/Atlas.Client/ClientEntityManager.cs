@@ -25,6 +25,20 @@ public sealed class ClientEntityManager
         return entity;
     }
 
+    // Centralised corruption handler. Called when an Apply* path threw
+    // mid-delivery (usually a wire-format mismatch surfacing through a
+    // generator-emitted Deserialize, or a user OnXxxChanged handler
+    // propagating). Sets IsCorrupted once and logs once per entity so a
+    // pathological delta doesn't flood the log.
+    private static void MarkCorrupted(ClientEntity entity, string site, Exception ex)
+    {
+        if (entity.IsCorrupted) return;
+        entity.IsCorrupted = true;
+        Console.Error.WriteLine(
+            $"ClientEntity[{entity.EntityId} type={entity.TypeName}] corrupted at {site}: {ex}. "
+            + "Subsequent apply calls will be skipped until the entity re-enters AoI.");
+    }
+
     public void Register(ClientEntity entity)
     {
         _entities[entity.EntityId] = entity;
@@ -82,10 +96,17 @@ public sealed class ClientEntityManager
 
         entity.ApplyPositionUpdate(pos, dir, onGround);
 
-        if (!peerSnapshot.IsEmpty)
+        if (!peerSnapshot.IsEmpty && !entity.IsCorrupted)
         {
-            var reader = new SpanReader(peerSnapshot);
-            entity.ApplyOtherSnapshot(ref reader);
+            try
+            {
+                var reader = new SpanReader(peerSnapshot);
+                entity.ApplyOtherSnapshot(ref reader);
+            }
+            catch (Exception ex)
+            {
+                MarkCorrupted(entity, "ApplyOtherSnapshot", ex);
+            }
         }
 
         if (freshlyCreated) entity.OnEnterWorld();
@@ -105,8 +126,16 @@ public sealed class ClientEntityManager
     /// </summary>
     public void ApplyPosition(uint entityId, Vector3 pos, Vector3 dir, bool onGround)
     {
-        if (_entities.TryGetValue(entityId, out var entity))
+        if (!_entities.TryGetValue(entityId, out var entity)) return;
+        if (entity.IsCorrupted) return;
+        try
+        {
             entity.ApplyPositionUpdate(pos, dir, onGround);
+        }
+        catch (Exception ex)
+        {
+            MarkCorrupted(entity, "ApplyPositionUpdate", ex);
+        }
     }
 
     /// <summary>
@@ -120,10 +149,18 @@ public sealed class ClientEntityManager
     public void ApplyPropertyDelta(uint entityId, ulong eventSeq, ReadOnlySpan<byte> delta)
     {
         if (!_entities.TryGetValue(entityId, out var entity)) return;
+        if (entity.IsCorrupted) return;
         entity.NoteIncomingEventSeq(eventSeq);
         if (delta.IsEmpty) return;
-        var reader = new SpanReader(delta);
-        entity.ApplyReplicatedDelta(ref reader);
+        try
+        {
+            var reader = new SpanReader(delta);
+            entity.ApplyReplicatedDelta(ref reader);
+        }
+        catch (Exception ex)
+        {
+            MarkCorrupted(entity, "ApplyReplicatedDelta", ex);
+        }
     }
 
     /// <summary>
@@ -136,8 +173,20 @@ public sealed class ClientEntityManager
     public void ApplyBaseline(uint entityId, ReadOnlySpan<byte> snapshot)
     {
         if (!_entities.TryGetValue(entityId, out var entity)) return;
+        // Baseline is the recovery channel for a corrupted entity — it
+        // may be exactly what lets us clear IsCorrupted. Clear the flag
+        // before apply; if the baseline itself throws, MarkCorrupted
+        // sets it back.
+        entity.IsCorrupted = false;
         if (snapshot.IsEmpty) return;
-        var reader = new SpanReader(snapshot);
-        entity.ApplyOwnerSnapshot(ref reader);
+        try
+        {
+            var reader = new SpanReader(snapshot);
+            entity.ApplyOwnerSnapshot(ref reader);
+        }
+        catch (Exception ex)
+        {
+            MarkCorrupted(entity, "ApplyOwnerSnapshot", ex);
+        }
     }
 }
