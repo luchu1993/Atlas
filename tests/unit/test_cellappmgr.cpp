@@ -8,12 +8,17 @@
 
 #include <gtest/gtest.h>
 
+#include "baseapp/baseapp_messages.h"
 #include "cellappmgr/bsp_tree.h"
 #include "cellappmgr/cellappmgr.h"
 #include "cellappmgr/cellappmgr_messages.h"
 #include "network/address.h"
+#include "network/channel.h"
 #include "network/event_dispatcher.h"
+#include "network/interface_table.h"
 #include "network/network_interface.h"
+#include "platform/io_poller.h"
+#include "serialization/binary_stream.h"
 
 namespace atlas {
 namespace {
@@ -29,6 +34,49 @@ struct CellAppMgrHarness {
 
 auto MakePeerAddr(uint16_t port) -> Address {
   return Address(0x7F000001u, port);
+}
+
+// Minimal Channel subclass that captures the last frame written to
+// DoSend. Lets tests observe outbound traffic without a live network.
+class RecordingChannel final : public Channel {
+ public:
+  RecordingChannel(EventDispatcher& dispatcher, InterfaceTable& table, const Address& remote)
+      : Channel(dispatcher, table, remote) {}
+
+  [[nodiscard]] auto Fd() const -> FdHandle override { return kInvalidFd; }
+
+  [[nodiscard]] auto DoSend(std::span<const std::byte> data) -> Result<size_t> override {
+    sends_.emplace_back(data.begin(), data.end());
+    return data.size();
+  }
+
+  [[nodiscard]] auto Sends() const -> const std::vector<std::vector<std::byte>>& { return sends_; }
+
+ private:
+  std::vector<std::vector<std::byte>> sends_;
+};
+
+// Pull the first baseapp::CellAppDeath payload out of a RecordingChannel
+// capture. Channel SendMessage frames carry a msg_id prefix + length
+// header followed by the serialised struct; the InterfaceTable we ship
+// to outbound sends uses the standard descriptor so the decoder here
+// matches the test_watcher_forwarder helper shape.
+auto FirstCellAppDeath(const RecordingChannel& ch) -> baseapp::CellAppDeath {
+  EXPECT_FALSE(ch.Sends().empty());
+  if (ch.Sends().empty()) return {};
+  const auto& frame = ch.Sends().front();
+  BinaryReader reader(std::span<const std::byte>(frame.data(), frame.size()));
+  const auto id = reader.ReadPackedInt();
+  EXPECT_TRUE(id.HasValue());
+  EXPECT_EQ(*id, baseapp::CellAppDeath::Descriptor().id);
+  const auto len = reader.ReadPackedInt();
+  EXPECT_TRUE(len.HasValue());
+  const auto payload = reader.ReadBytes(*len);
+  EXPECT_TRUE(payload.HasValue());
+  BinaryReader msg_reader(*payload);
+  auto msg = baseapp::CellAppDeath::Deserialize(msg_reader);
+  EXPECT_TRUE(msg.HasValue());
+  return msg.ValueOr(baseapp::CellAppDeath{});
 }
 
 // ============================================================================
@@ -436,6 +484,57 @@ TEST(CellAppMgr, TickLoadBalance_AsymmetricLoad_MovesSplitAndRebroadcasts) {
   ASSERT_NE(leaf_origin_after, nullptr);
   EXPECT_EQ(leaf_origin_after->cell_id, 1u)
       << "with left heavier, split should have moved right past the origin";
+}
+
+// End-to-end CellApp-death recovery notification to subscribed BaseApps.
+// Wire path: mgr's OnCellAppDeath rehomes the BSP leaves it was tracking,
+// builds a baseapp::CellAppDeath with the per-Space new-host map, and
+// fans it out to every subscribed BaseApp. Observing it needs a
+// RecordingChannel injected via BaseAppChannelsForTest — the mgr's
+// machined subscription normally fills that map from Birth events.
+TEST(CellAppMgr, CellAppDeath_FansOutNotificationToBaseAppSubscribers) {
+  CellAppMgrHarness h;
+  // Two CellApps: A (will die) and B (will inherit A's leaves).
+  cellappmgr::RegisterCellApp reg_a;
+  reg_a.internal_addr = MakePeerAddr(30001);
+  h.mgr.OnRegisterCellApp(reg_a.internal_addr, nullptr, reg_a);
+  cellappmgr::RegisterCellApp reg_b;
+  reg_b.internal_addr = MakePeerAddr(30002);
+  h.mgr.OnRegisterCellApp(reg_b.internal_addr, nullptr, reg_b);
+
+  // A space hosted on A by default (OnCreateSpaceRequest picks the
+  // least-loaded at tie-break, and app_id 1 wins ties).
+  cellappmgr::CreateSpaceRequest csr;
+  csr.space_id = 42;
+  h.mgr.OnCreateSpaceRequest(Address{}, nullptr, csr);
+
+  // Inject a recording baseapp peer so we can observe the fan-out.
+  // Production wires this via the mgr's ProcessType::kBaseApp subscribe
+  // callback; the test hook bypasses machined.
+  InterfaceTable base_table;
+  RecordingChannel base_ch(h.dispatcher, base_table, MakePeerAddr(20000));
+  h.mgr.BaseAppChannelsForTest()[MakePeerAddr(20000)] = &base_ch;
+
+  // Kill A. Mgr must (a) drop A from cellapps_, (b) rehome cell 1 to B,
+  // (c) fan a CellAppDeath wire msg out to every baseapp — with the
+  // rehomes list telling BaseApp which space moved where.
+  h.mgr.OnCellAppDeath(reg_a.internal_addr);
+
+  // BSP rehome (covered by other tests, but worth a sanity touch here
+  // so the death-before-fan-out ordering is visible).
+  const auto leaves = h.mgr.Spaces().at(42).bsp.Leaves();
+  ASSERT_FALSE(leaves.empty());
+  EXPECT_EQ(leaves[0]->cellapp_addr, reg_b.internal_addr);
+
+  // Fan-out assertion: the baseapp peer received exactly one frame and
+  // that frame decodes to a CellAppDeath naming A as dead and B as the
+  // new host for space 42.
+  ASSERT_EQ(base_ch.Sends().size(), 1u);
+  const auto notify = FirstCellAppDeath(base_ch);
+  EXPECT_EQ(notify.dead_addr, reg_a.internal_addr);
+  ASSERT_EQ(notify.rehomes.size(), 1u);
+  EXPECT_EQ(notify.rehomes[0].first, 42u);
+  EXPECT_EQ(notify.rehomes[0].second, reg_b.internal_addr);
 }
 
 // The broadcast cache short-circuits re-sends when the serialised tree
