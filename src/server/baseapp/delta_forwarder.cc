@@ -26,39 +26,50 @@ void DeltaForwarder::Enqueue(EntityID entity_id, std::span<const std::byte> delt
 auto DeltaForwarder::Flush(Channel& client_ch, uint32_t budget_bytes) -> uint32_t {
   if (queue_.empty()) return 0;
 
-  // Sort descending by (priority, deferred_ticks): higher priority first,
-  // ties broken by longest wait so starved entries flush before fresh
-  // arrivals inside the same priority band.
+  uint32_t bytes_sent = 0;
+
+  // Pass 1: force-send starved entries regardless of budget or priority.
+  // A steady stream of higher-priority traffic can otherwise keep a
+  // low-priority entry indefinitely unsent; the deferred_ticks cap
+  // guarantees progress once it's been waiting long enough.
+  auto starved_begin = std::partition(queue_.begin(), queue_.end(), [](const PendingDelta& e) {
+    return e.deferred_ticks < kMaxDeferredTicks;
+  });
+  for (auto it = starved_begin; it != queue_.end(); ++it) {
+    (void)client_ch.SendMessage(kClientDeltaMessageId, std::span<const std::byte>(it->delta));
+    bytes_sent += static_cast<uint32_t>(it->delta.size());
+    ++stats_.force_sent_count;
+  }
+  queue_.erase(starved_begin, queue_.end());
+
+  // Pass 2: sort remaining descending by (priority, deferred_ticks) and
+  // send while the byte budget holds. Budget is measured from scratch
+  // this tick — force-sends in Pass 1 don't eat into it, since they
+  // already proved starvation dominates the budget knob.
   std::sort(queue_.begin(), queue_.end(), [](const PendingDelta& a, const PendingDelta& b) {
     if (a.priority != b.priority) return a.priority > b.priority;
     return a.deferred_ticks > b.deferred_ticks;
   });
 
-  uint32_t bytes_sent = 0;
+  uint32_t pass2_bytes = 0;
   std::size_t sent_count = 0;
-
   for (auto& entry : queue_) {
     auto entry_size = static_cast<uint32_t>(entry.delta.size());
-    if (bytes_sent + entry_size > budget_bytes && sent_count > 0) {
-      // Would exceed budget and we already sent at least one — stop.
+    if (pass2_bytes + entry_size > budget_bytes && sent_count > 0) {
       break;
     }
-
-    // Always send at least one delta per flush to guarantee progress.
     (void)client_ch.SendMessage(kClientDeltaMessageId, std::span<const std::byte>(entry.delta));
-    bytes_sent += entry_size;
+    pass2_bytes += entry_size;
     ++sent_count;
   }
-
+  bytes_sent += pass2_bytes;
   stats_.bytes_sent += bytes_sent;
 
   // Remove sent entries, bump deferred_ticks on survivors.
   uint64_t deferred_bytes = 0;
-  if (sent_count < queue_.size()) {
-    for (std::size_t i = sent_count; i < queue_.size(); ++i) {
-      ++queue_[i].deferred_ticks;
-      deferred_bytes += queue_[i].delta.size();
-    }
+  for (std::size_t i = sent_count; i < queue_.size(); ++i) {
+    ++queue_[i].deferred_ticks;
+    deferred_bytes += queue_[i].delta.size();
   }
   stats_.bytes_deferred += deferred_bytes;
 

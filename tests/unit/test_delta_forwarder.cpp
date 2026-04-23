@@ -316,4 +316,34 @@ TEST_F(DeltaForwarderFlushTest, EqualPriorityFallsThroughToDeferredTicks) {
   EXPECT_EQ(fwd.QueueDepth(), 1u);  // entity 300 deferred now
 }
 
+// An entry that has waited kMaxDeferredTicks consecutive flushes gets
+// force-sent even when a higher-priority stream would otherwise keep
+// claiming the budget. Without this guarantee a background trickle of
+// P=10 traffic could indefinitely starve a P=0 entity.
+TEST_F(DeltaForwarderFlushTest, StarvedEntryForceSentRegardlessOfPriority) {
+  DeltaForwarder fwd;
+  auto low = make_delta({0xAA});
+  auto hi = make_delta({0xBB, 0xCC});
+
+  // Seed the low-priority entry and let it age past the cap.
+  fwd.Enqueue(100, low, /*priority=*/0);
+  for (uint32_t i = 0; i < DeltaForwarder::kMaxDeferredTicks; ++i) {
+    // Every flush has a hi-priority 2-byte entry that hogs the 1-byte
+    // budget — entity 100 never fits in Pass 2.
+    fwd.Enqueue(200 + i, hi, /*priority=*/10);
+    fwd.Flush(*sender_, 1);
+  }
+  // At this point entity 100 has been deferred kMaxDeferredTicks times.
+  EXPECT_GE(fwd.GetStats().force_sent_count, 0u);  // possibly 0 up to now
+  const uint64_t forced_before = fwd.GetStats().force_sent_count;
+
+  // Next flush: Pass 1 must force-send entity 100 even though the budget
+  // is saturated by the hi-priority stream.
+  fwd.Enqueue(999, hi, /*priority=*/10);
+  fwd.Flush(*sender_, 1);
+
+  EXPECT_GT(fwd.GetStats().force_sent_count, forced_before)
+      << "starved entry must be force-sent past the budget cap";
+}
+
 }  // namespace atlas

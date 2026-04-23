@@ -38,7 +38,14 @@ class DeltaForwarder {
   struct Stats {
     uint64_t bytes_sent{0};
     uint64_t bytes_deferred{0};
+    uint64_t force_sent_count{0};  // entries flushed past the budget cap
   };
+
+  // Starvation cap: an entry that has been deferred this many consecutive
+  // flushes is force-sent on the next Flush, regardless of the byte
+  // budget. Prevents an entity stuck behind a steady stream of
+  // higher-priority traffic from waiting forever.
+  static constexpr uint32_t kMaxDeferredTicks = 120;
 
   /// Enqueue or replace a delta for the given entity.
   /// `priority` biases Flush ordering — higher goes first. A same-entity
