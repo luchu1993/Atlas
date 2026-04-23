@@ -54,7 +54,7 @@ public class DirtyTrackingTests
         entity.Score = 42;
 
         var writer = new SpanWriter(256);
-        entity.SerializeReplicatedDelta(ref writer);
+        entity.SerializeOtherDelta(ref writer);
 
         var reader = new SpanReader(writer.WrittenSpan);
         var flags = reader.ReadByte();
@@ -71,7 +71,7 @@ public class DirtyTrackingTests
         source.Name = "Test";
 
         var writer = new SpanWriter(256);
-        source.SerializeReplicatedDelta(ref writer);
+        source.SerializeOtherDelta(ref writer);
 
         var target = new DirtyTestEntity();
         var reader = new SpanReader(writer.WrittenSpan);

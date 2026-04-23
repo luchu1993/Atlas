@@ -561,94 +561,16 @@ public partial class Avatar : ClientEntity
         Assert.False(model.Properties[1].Reliable);  // position
     }
 
-    [Fact]
-    public void DeltaSync_EmitsReliableAndUnreliableMethods()
-    {
-        var reliableXml = @"<entity name=""Avatar"">
-  <properties>
-    <property name=""hp""       type=""int32""   scope=""all_clients"" reliable=""true"" />
-    <property name=""mana""     type=""int32""   scope=""all_clients"" />
-  </properties>
-</entity>";
-        var source = @"
-using Atlas.Entity;
-using Atlas.Serialization;
-namespace Test;
-
-[Entity(""Avatar"")]
-public partial class Avatar : ServerEntity
-{
-    public override string TypeName => ""Avatar"";
-    public override void Serialize(ref SpanWriter w) {}
-    public override void Deserialize(ref SpanReader r) {}
-}
-";
-        // hp and mana are scope="all_clients" which is cell-side under the
-        // M2 scope-split refactor — their backing field + DeltaSync lives
-        // only in the cell-generated partial. Test exercises the cell's
-        // delta plumbing so run under ATLAS_CELL.
-        var (result, _) = RunDefGenerator(source, reliableXml, "ATLAS_CELL");
-
-        var deltaTree = result.GeneratedTrees
-            .FirstOrDefault(t => t.FilePath.Contains("Avatar.DeltaSync"));
-        Assert.NotNull(deltaTree);
-        var code = deltaTree!.GetText().ToString();
-
-        // Per-channel masks partition the dirty bits.
-        Assert.Contains("ReliableDirtyMask", code);
-        Assert.Contains("UnreliableDirtyMask", code);
-        // Reliable mask references hp (marked reliable="true").
-        Assert.Matches(@"ReliableDirtyMask\s*=\s*ReplicatedDirtyFlags\.Hp\s*;", code);
-        // Unreliable mask references mana (unmarked).
-        Assert.Matches(@"UnreliableDirtyMask\s*=\s*ReplicatedDirtyFlags\.Mana\s*;", code);
-
-        // Both serialize entry points are emitted.
-        Assert.Contains("SerializeReplicatedDeltaReliable(", code);
-        Assert.Contains("SerializeReplicatedDeltaUnreliable(", code);
-
-        // Has-dirty helpers allow the send loop to skip empty channels cheaply.
-        Assert.Contains("HasReliableDirty", code);
-        Assert.Contains("HasUnreliableDirty", code);
-    }
-
-    [Fact]
-    public void DeltaSync_AllUnreliable_EmitsEmptyReliableMask()
-    {
-        // Property marked all_clients but no reliable="true": unreliable only path.
-        // Uses `velocity` rather than `position` so the test exercises the
-        // unreliable mask emission without tripping ATLAS_DEF008.
-        var xml = @"<entity name=""Drone"">
-  <properties>
-    <property name=""velocity"" type=""vector3"" scope=""all_clients"" />
-  </properties>
-</entity>";
-        var source = @"
-using Atlas.Entity;
-using Atlas.Serialization;
-namespace Test;
-
-[Entity(""Drone"")]
-public partial class Drone : ServerEntity
-{
-    public override string TypeName => ""Drone"";
-    public override void Serialize(ref SpanWriter w) {}
-    public override void Deserialize(ref SpanReader r) {}
-}
-";
-        // velocity all_clients → cell-side under M2.
-        var (result, _) = RunDefGenerator(source, xml, "ATLAS_CELL");
-
-        var deltaTree = result.GeneratedTrees.FirstOrDefault(t => t.FilePath.Contains("DeltaSync"));
-        Assert.NotNull(deltaTree);
-        var code = deltaTree!.GetText().ToString();
-
-        // Reliable mask has no members → expressed as ReplicatedDirtyFlags.None.
-        Assert.Matches(@"ReliableDirtyMask\s*=\s*ReplicatedDirtyFlags\.None\s*;", code);
-        // No reliable-channel serialize method is emitted when nothing is reliable.
-        Assert.DoesNotContain("SerializeReplicatedDeltaReliable(", code);
-        // Unreliable path still exists.
-        Assert.Contains("SerializeReplicatedDeltaUnreliable(", code);
-    }
+    // Phase 11 C10 retired:
+    //   - DeltaSync_EmitsReliableAndUnreliableMethods
+    //   - DeltaSync_AllUnreliable_EmitsEmptyReliableMask
+    // Both asserted on the now-deleted SerializeReplicatedDelta{,Reliable,
+    // Unreliable} + HasReliableDirty / HasUnreliableDirty +
+    // ReliableDirtyMask / UnreliableDirtyMask emitter surface. The per-
+    // channel reliability split moved to the transport layer
+    // (ReplicatedReliableDeltaFromCell vs ReplicatedDeltaFromCell); the
+    // serializer no longer has a reliability dimension, only the
+    // audience split (SerializeOwnerDelta vs SerializeOtherDelta).
 
     // =========================================================================
     // Baseline snapshot support (补强一)
@@ -1071,10 +993,11 @@ public partial class Bulk : ClientEntity
     public void ClientContext_DeltaReadOrder_MirrorsServerDeltaWriteOrder()
     {
         // Full round-trip symmetry: for every replicable prop, the server's
-        // SerializeReplicatedDelta writes in declaration order, and the
-        // client's ApplyReplicatedDelta reads in the same order. The guard
-        // is `(flags & ReplicatedDirtyFlags.Prop) != 0` on both sides, so
-        // the reader position stays in lockstep with writer position.
+        // SerializeOtherDelta (post-C10) writes in declaration order, and
+        // the client's ApplyReplicatedDelta reads in the same order. The
+        // guard is `(flags & ReplicatedDirtyFlags.Prop) != 0` on both
+        // sides, so the reader position stays in lockstep with writer
+        // position.
         var clientSource = @"
 using Atlas.Client;
 [Atlas.Entity.Entity(""Avatar"")]
@@ -1121,7 +1044,7 @@ public partial class Avatar : ServerEntity
         var serverSeq = new System.Collections.Generic.List<string>();
         foreach (System.Text.RegularExpressions.Match m
             in System.Text.RegularExpressions.Regex.Matches(
-                ExtractMethodBody(baseCode, "SerializeReplicatedDelta(ref SpanWriter writer)"),
+                ExtractMethodBody(baseCode, "SerializeOtherDelta(ref SpanWriter writer)"),
                 @"ReplicatedDirtyFlags\.(\w+)"))
         {
             serverSeq.Add(m.Groups[1].Value);

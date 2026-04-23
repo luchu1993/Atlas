@@ -59,10 +59,6 @@ internal static class DeltaSyncEmitter
         sb.AppendLine($"partial class {className}");
         sb.AppendLine("{");
 
-        // Static masks partitioning the dirty flags into reliable / unreliable subsets.
-        EmitDirtyFlagMasks(sb, replicableProps);
-        sb.AppendLine();
-
         // Static masks partitioning the dirty flags by client audience. These are
         // what the CellApp replication pump needs: Owner side receives props
         // visible to the entity's owning client (OwnClient, AllClients,
@@ -73,33 +69,19 @@ internal static class DeltaSyncEmitter
         EmitAudienceMasks(sb, replicableProps);
         sb.AppendLine();
 
-        // SerializeReplicatedDelta — only dirty fields (full mask, transitional API).
-        EmitSerializeReplicatedDelta(sb, replicableProps, methodName: "SerializeReplicatedDelta",
-                                     restrictMask: null);
-        sb.AppendLine();
+        // Phase 11 C10 retired the legacy SerializeReplicatedDelta /
+        // *Reliable / *Unreliable triad + HasReliableDirty / HasUnreliableDirty
+        // helpers + ReliableDirtyMask / UnreliableDirtyMask constants. The
+        // CellApp replication pump goes through SerializeOwnerDelta /
+        // SerializeOtherDelta (below) via BuildAndConsumeReplicationFrame
+        // and publish_replication_frame. Reliability is a transport concern
+        // picked at the BaseApp send path (ReplicatedReliableDeltaFromCell
+        // vs ReplicatedDeltaFromCell), not a serialization split.
 
-        // Reliable / Unreliable split — bypasses DeltaForwarder budget on the reliable path.
-        var hasReliable = replicableProps.Any(p => p.Reliable);
-        var hasUnreliable = replicableProps.Any(p => !p.Reliable);
-        if (hasReliable)
-        {
-            EmitSerializeReplicatedDelta(sb, replicableProps,
-                methodName: "SerializeReplicatedDeltaReliable",
-                restrictMask: "ReliableDirtyMask");
-            sb.AppendLine();
-        }
-        if (hasUnreliable)
-        {
-            EmitSerializeReplicatedDelta(sb, replicableProps,
-                methodName: "SerializeReplicatedDeltaUnreliable",
-                restrictMask: "UnreliableDirtyMask");
-            sb.AppendLine();
-        }
-
-        EmitHasDirtyHelpers(sb, replicableProps, hasReliable, hasUnreliable);
-        sb.AppendLine();
-
-        // ApplyReplicatedDelta — apply delta from wire (same format for both channels)
+        // ApplyReplicatedDelta — apply delta from wire. Still emitted:
+        // SerializeOtherDelta's output is wire-compatible with this decoder
+        // (same flag-prefix + conditional field writes), and the client's
+        // kEntityPropertyUpdate handler dispatches through here.
         EmitApplyReplicatedDelta(sb, replicableProps);
         sb.AppendLine();
 
@@ -332,65 +314,6 @@ internal static class DeltaSyncEmitter
         sb.AppendLine("        volatileSeq = hasVolatile ? _volatileSeq : 0UL;");
         sb.AppendLine("        return true;");
         sb.AppendLine("    }");
-    }
-
-    private static void EmitDirtyFlagMasks(StringBuilder sb, List<PropertyDefModel> props)
-    {
-        var reliableNames = props.Where(p => p.Reliable)
-                                 .Select(p => "ReplicatedDirtyFlags." + DefTypeHelper.ToPropertyName(p.Name))
-                                 .ToList();
-        var unreliableNames = props.Where(p => !p.Reliable)
-                                   .Select(p => "ReplicatedDirtyFlags." + DefTypeHelper.ToPropertyName(p.Name))
-                                   .ToList();
-        var reliableExpr = reliableNames.Count == 0 ? "ReplicatedDirtyFlags.None" : string.Join(" | ", reliableNames);
-        var unreliableExpr = unreliableNames.Count == 0 ? "ReplicatedDirtyFlags.None" : string.Join(" | ", unreliableNames);
-        sb.AppendLine($"    private const ReplicatedDirtyFlags ReliableDirtyMask = {reliableExpr};");
-        sb.AppendLine($"    private const ReplicatedDirtyFlags UnreliableDirtyMask = {unreliableExpr};");
-    }
-
-    private static void EmitSerializeReplicatedDelta(StringBuilder sb, List<PropertyDefModel> props,
-                                                     string methodName, string? restrictMask)
-    {
-        var (_, _, writerMethod, _, castPrefix) = GetFlagsTypeInfo(props.Count);
-        sb.AppendLine($"    public void {methodName}(ref SpanWriter writer)");
-        sb.AppendLine("    {");
-        if (restrictMask == null)
-        {
-            sb.AppendLine($"        var flags = _dirtyFlags;");
-        }
-        else
-        {
-            sb.AppendLine($"        var flags = _dirtyFlags & {restrictMask};");
-        }
-        sb.AppendLine($"        writer.{writerMethod}({castPrefix}flags);");
-        foreach (var prop in props)
-        {
-            if (restrictMask != null)
-            {
-                // Skip props that aren't in this channel's mask — the flags bit can't be set.
-                if (restrictMask == "ReliableDirtyMask" && !prop.Reliable) continue;
-                if (restrictMask == "UnreliableDirtyMask" && prop.Reliable) continue;
-            }
-            var propName = DefTypeHelper.ToPropertyName(prop.Name);
-            var fieldName = DefTypeHelper.ToFieldName(prop.Name);
-            var writeMethod = DefTypeHelper.WriteMethod(prop.Type);
-            sb.AppendLine($"        if ((flags & ReplicatedDirtyFlags.{propName}) != 0)");
-            sb.AppendLine($"            writer.{writeMethod}({fieldName});");
-        }
-        sb.AppendLine("    }");
-    }
-
-    private static void EmitHasDirtyHelpers(StringBuilder sb, List<PropertyDefModel> props,
-                                            bool hasReliable, bool hasUnreliable)
-    {
-        if (hasReliable)
-            sb.AppendLine("    public bool HasReliableDirty => (_dirtyFlags & ReliableDirtyMask) != 0;");
-        else
-            sb.AppendLine("    public bool HasReliableDirty => false;");
-        if (hasUnreliable)
-            sb.AppendLine("    public bool HasUnreliableDirty => (_dirtyFlags & UnreliableDirtyMask) != 0;");
-        else
-            sb.AppendLine("    public bool HasUnreliableDirty => false;");
     }
 
     private static void EmitApplyReplicatedDelta(StringBuilder sb, List<PropertyDefModel> props)

@@ -58,11 +58,12 @@ public abstract class ClientEntity
 
     /// <summary>
     /// Apply an incremental property delta as produced by the server's
-    /// <c>SerializeReplicatedDelta*</c> family. The wire body is a dirty-flag
-    /// bitmap followed by the changed field values. The generator overrides
-    /// this in Phase B of the client-sync rework (<c>PROPERTY_SYNC_DESIGN.md</c>
-    /// §9.5 task 9.1); the base no-op keeps the dispatcher valid before the
-    /// generator change lands.
+    /// <c>SerializeOwnerDelta</c> / <c>SerializeOtherDelta</c> (Phase 11 C10
+    /// retired the legacy <c>SerializeReplicatedDelta*</c> triad — the
+    /// per-channel reliability split moved to the transport layer). The
+    /// wire body is a dirty-flag bitmap followed by the changed field
+    /// values; the generator overrides this per entity, base no-op keeps
+    /// the dispatcher valid for entities with no replicable properties.
     /// </summary>
     public virtual void ApplyReplicatedDelta(ref SpanReader reader) { }
 
