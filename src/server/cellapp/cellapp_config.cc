@@ -23,6 +23,9 @@ ServerAppOption<float> s_max_aoi_radius{500.f, "max_aoi_radius", "cellapp/max_ao
 ServerAppOption<float> s_load_smoothing_bias{
     0.05f, "load_smoothing_bias", "cellapp/load_smoothing_bias", WatcherMode::kReadWrite};
 
+ServerAppOption<uint32_t> s_ghost_update_interval_ms{
+    50u, "ghost_update_interval_ms", "cellapp/ghost_update_interval_ms", WatcherMode::kReadWrite};
+
 }  // namespace
 
 auto CellAppConfig::DefaultAoIRadius() -> float {
@@ -39,6 +42,10 @@ auto CellAppConfig::MaxAoIRadius() -> float {
 
 auto CellAppConfig::LoadSmoothingBias() -> float {
   return s_load_smoothing_bias.Value();
+}
+
+auto CellAppConfig::GhostUpdateIntervalMs() -> uint32_t {
+  return s_ghost_update_interval_ms.Value();
 }
 
 }  // namespace atlas

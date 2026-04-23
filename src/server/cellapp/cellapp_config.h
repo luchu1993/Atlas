@@ -1,6 +1,8 @@
 #ifndef ATLAS_SERVER_CELLAPP_CELLAPP_CONFIG_H_
 #define ATLAS_SERVER_CELLAPP_CELLAPP_CONFIG_H_
 
+#include <cstdint>
+
 namespace atlas {
 
 // Process-scoped CellApp configuration accessors backed by ServerAppOption
@@ -30,10 +32,17 @@ class CellAppConfig {
   // load estimate is `(1-bias)*prev + bias * normalised_work_time`.
   // Small bias = heavy smoothing, slow reaction to spikes but stable;
   // large bias = responsive but noisy. JSON key: `load_smoothing_bias`.
-  // Default 0.05 (BigWorld parity — `CellAppConfig::loadSmoothingBias`
-  // ships with 0.01f, but CellApp tick cadence differs; 0.05 gives
-  // roughly comparable settling time at Atlas's default 30 Hz).
+  // Default 0.05.
   [[nodiscard]] static auto LoadSmoothingBias() -> float;
+
+  // Minimum interval (milliseconds) between GhostPositionUpdate /
+  // GhostDelta broadcasts a single Real can emit to a given Haunt.
+  // Caps wire cost for fast-moving entities: position updates
+  // coalesce into one send per interval instead of one per tick.
+  // JSON key: `ghost_update_interval_ms`. Default 50 ms (≈20 Hz),
+  // i.e. roughly every other tick at a 30 Hz cadence. Set to 0 to
+  // disable and broadcast every tick.
+  [[nodiscard]] static auto GhostUpdateIntervalMs() -> uint32_t;
 };
 
 }  // namespace atlas

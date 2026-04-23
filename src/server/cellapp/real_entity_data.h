@@ -116,6 +116,13 @@ class RealEntityData {
   void MarkBroadcastEventSeq(uint64_t seq) { last_broadcast_event_seq_ = seq; }
   void MarkBroadcastVolatileSeq(uint64_t seq) { last_broadcast_volatile_seq_ = seq; }
 
+  // Timestamp of the last ghost broadcast (any kind). The ghost pump
+  // uses this to throttle per-entity fan-out to the configured update
+  // interval, so a C#-driven position change every tick doesn't turn
+  // into a per-tick fan-out to every Haunt.
+  [[nodiscard]] auto LastBroadcastTime() const -> TimePoint { return last_broadcast_time_; }
+  void MarkBroadcastTime(TimePoint t) { last_broadcast_time_ = t; }
+
   // ---- Velocity estimation ------------------------------------------------
   //
   // OffloadChecker reads velocity to project whether the entity is about
@@ -139,6 +146,7 @@ class RealEntityData {
   // history window.
   uint64_t last_broadcast_event_seq_{0};
   uint64_t last_broadcast_volatile_seq_{0};
+  TimePoint last_broadcast_time_{};
 };
 
 }  // namespace atlas

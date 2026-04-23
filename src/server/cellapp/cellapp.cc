@@ -1397,6 +1397,8 @@ void CellApp::TickGhostPump() {
 
     // After structural updates, push position/delta broadcasts for each
     // Real that advanced its seqs since the last pump.
+    const auto now = Clock::now();
+    const auto min_interval = std::chrono::milliseconds(CellAppConfig::GhostUpdateIntervalMs());
     space->ForEachEntity([&](CellEntity& entity) {
       if (!entity.IsReal()) return;
       auto* rd = entity.GetRealData();
@@ -1404,12 +1406,23 @@ void CellApp::TickGhostPump() {
       const auto* state = entity.GetReplicationState();
       if (state == nullptr) return;
 
+      // Throttle per-entity fan-out to the configured interval. A single
+      // Real moved every tick would otherwise fan out at tick rate × H
+      // haunts; coalescing into one broadcast per interval bounds wire
+      // cost at the cost of a little staleness on the Ghost side.
+      if (min_interval.count() > 0 && rd->LastBroadcastTime().time_since_epoch().count() != 0 &&
+          now - rd->LastBroadcastTime() < min_interval) {
+        return;
+      }
+
+      bool broadcast_fired = false;
       if (state->latest_volatile_seq > rd->LastBroadcastVolatileSeq()) {
         const auto msg = rd->BuildPositionUpdate();
         for (const auto& h : rd->Haunts()) {
           if (h.channel) (void)h.channel->SendMessage(msg);
         }
         rd->MarkBroadcastVolatileSeq(state->latest_volatile_seq);
+        broadcast_fired = true;
       }
       if (state->latest_event_seq > rd->LastBroadcastEventSeq()) {
         // Gap > 1 means multiple frames published since our last
@@ -1423,6 +1436,7 @@ void CellApp::TickGhostPump() {
           for (const auto& h : rd->Haunts()) {
             if (h.channel) (void)h.channel->SendMessage(msg);
           }
+          broadcast_fired = true;
         } else {
           const auto msg = rd->BuildDelta();
           // The DeltaSyncEmitter ships a 1-4 byte flags prefix even
@@ -1435,10 +1449,12 @@ void CellApp::TickGhostPump() {
             for (const auto& h : rd->Haunts()) {
               if (h.channel) (void)h.channel->SendMessage(msg);
             }
+            broadcast_fired = true;
           }
         }
         rd->MarkBroadcastEventSeq(state->latest_event_seq);
       }
+      if (broadcast_fired) rd->MarkBroadcastTime(now);
     });
   }
 }
