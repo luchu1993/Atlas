@@ -428,13 +428,20 @@ void CellAppMgr::SendAddCell(const CellAppInfo& target, SpaceID space_id,
   (void)target.channel->SendMessage(msg);
 }
 
-void CellAppMgr::BroadcastGeometry(const SpacePartition& partition) {
+void CellAppMgr::BroadcastGeometry(SpacePartition& partition) {
   // Serialize the tree once, then fan it out to every peer hosting a
   // Cell in this Space. Peers outside the Space don't care — shipping
   // geometry to them would just burn bandwidth.
   BinaryWriter w;
   partition.bsp.Serialize(w);
-  const auto blob = w.Detach();
+  auto blob = w.Detach();
+
+  // Short-circuit when the serialised bytes haven't changed since the
+  // last fan-out. Steady-state balanced clusters can tick Balance()
+  // without actually moving a split line, so without this every Space
+  // re-ships the same tree at TickLoadBalance cadence — wasted bandwidth
+  // that scales with peer × space count.
+  if (blob == partition.last_broadcast_blob) return;
 
   cellappmgr::UpdateGeometry msg;
   msg.space_id = partition.space_id;
@@ -449,6 +456,8 @@ void CellAppMgr::BroadcastGeometry(const SpacePartition& partition) {
     if (it == cellapps_.end() || it->second.channel == nullptr) continue;
     (void)it->second.channel->SendMessage(msg);
   }
+
+  partition.last_broadcast_blob = std::move(blob);
 }
 
 }  // namespace atlas

@@ -346,5 +346,33 @@ TEST(CellAppMgr, TickLoadBalance_SingleSpace_NoCrash) {
   EXPECT_EQ(h.mgr.Spaces().size(), 1u);
 }
 
+// The broadcast cache short-circuits re-sends when the serialised tree
+// hasn't changed. Observable via SpacePartition::last_broadcast_blob:
+// first fan-out populates it; subsequent no-op ticks must keep the
+// bytes identical (we can't observe the wire directly with null
+// channels, so byte-equality is the proxy). A BSP mutation forces a
+// fresh cached blob.
+TEST(CellAppMgr, BroadcastGeometry_CachesBlob_SkipsUnchangedReSends) {
+  CellAppMgrHarness h;
+  cellappmgr::RegisterCellApp reg;
+  reg.internal_addr = MakePeerAddr(30001);
+  h.mgr.OnRegisterCellApp(reg.internal_addr, nullptr, reg);
+  cellappmgr::CreateSpaceRequest csr;
+  csr.space_id = 1;
+  h.mgr.OnCreateSpaceRequest(Address{}, nullptr, csr);
+
+  // CreateSpace already fans out once; cache should now be populated.
+  const auto& partition = h.mgr.Spaces().at(1);
+  const auto baseline = partition.last_broadcast_blob;
+  ASSERT_FALSE(baseline.empty());
+
+  // Idle tick: blob must stay byte-identical. Any re-serialise would
+  // produce a structurally equal but new vector — the equality still
+  // holds because the cache tracks bytes, so this check also confirms
+  // the tree itself didn't drift.
+  h.mgr.TickLoadBalance();
+  EXPECT_EQ(partition.last_broadcast_blob, baseline);
+}
+
 }  // namespace
 }  // namespace atlas

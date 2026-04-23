@@ -62,6 +62,11 @@ class CellAppMgr : public ManagerApp {
   struct SpacePartition {
     SpaceID space_id{kInvalidSpaceID};
     BSPTree bsp;
+    // Serialised tree bytes as of the last fan-out. BroadcastGeometry
+    // compares against this and skips the send when the bytes match,
+    // so a steady-state cluster stops re-broadcasting a tree nothing
+    // asked to change.
+    std::vector<std::byte> last_broadcast_blob;
   };
 
   [[nodiscard]] auto CellApps() const -> const std::unordered_map<Address, CellAppInfo>& {
@@ -103,7 +108,7 @@ class CellAppMgr : public ManagerApp {
 
   void SendAddCell(const CellAppInfo& target, SpaceID space_id, cellappmgr::CellID cell_id,
                    const CellBounds& bounds);
-  void BroadcastGeometry(const SpacePartition& partition);
+  void BroadcastGeometry(SpacePartition& partition);
 
   // ---- State ----
   std::unordered_map<Address, CellAppInfo> cellapps_;
