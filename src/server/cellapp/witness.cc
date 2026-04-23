@@ -27,6 +27,16 @@ auto ComputePriority(const math::Vector3& observer, const math::Vector3& target)
   return dist / 5.0 + 1.0;
 }
 
+// A per-audience delta with only the flag prefix and every byte zero
+// means "no audience-visible field changed this frame" — usually
+// produced when only owner-scope props were dirty but this side is
+// serving the other-scope projection. Shipping it would burn a 1-4 B
+// envelope to tell the client "nothing happened". Safe to skip because
+// the client's seq catches up when the next non-empty frame arrives.
+auto IsAllZeroDelta(std::span<const std::byte> delta) -> bool {
+  return std::all_of(delta.begin(), delta.end(), [](std::byte b) { return b == std::byte{0}; });
+}
+
 // Encode CellAoIEnvelope { kind, public_entity_id, payload } into a byte
 // buffer. Wire format, LE:
 //   [uint8 kind] [uint32 LE public_entity_id] [variable payload bytes]
@@ -393,10 +403,11 @@ auto Witness::SendEntityUpdate(EntityCache& cache) -> std::size_t {
       if (frame.event_seq > state->latest_event_seq) break;  // defensive
 
       const auto& delta_bytes = observer_is_owner ? frame.owner_delta : frame.other_delta;
-      // Per-audience deltas always carry a leading flag byte, so we ship
-      // whenever a frame falls into our range; suppress only when the peer
-      // had no audience-visible change this frame (delta_bytes empty).
-      if (!delta_bytes.empty()) {
+      // Skip the send when either the delta is truly empty OR the flag
+      // prefix is all-zero (no audience-visible fields touched). Seq
+      // still advances so the next non-empty frame doesn't look like a
+      // gap.
+      if (!delta_bytes.empty() && !IsAllZeroDelta(delta_bytes)) {
         auto payload = BuildPropertyUpdatePayload(frame.event_seq, delta_bytes);
         auto envelope =
             MakeEnvelope<0>(CellAoIEnvelopeKind::kEntityPropertyUpdate,

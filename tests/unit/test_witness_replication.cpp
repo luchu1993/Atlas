@@ -201,6 +201,38 @@ TEST_F(WitnessReplicationTest, PropertyDeltasReplayInOrder) {
   for (const auto& u : updates) EXPECT_TRUE(u.reliable);
 }
 
+// A frame whose per-audience delta is the flag-prefix-only zero byte
+// means "no audience-visible field touched this frame" — the peer
+// dirtied only owner-scope props while this observer is the other
+// audience. Shipping the 1-byte envelope would burn wire for nothing.
+// The witness must skip the send but still advance cache.last_event_seq
+// so the next non-empty frame doesn't look like a gap.
+TEST_F(WitnessReplicationTest, AllZeroDeltaIsSkippedButSeqAdvances) {
+  Space space(1);
+  auto* observer = MakeEntity(space, 1, 1001, {0, 0, 0});
+  auto* peer = MakeEntity(space, 2, 1002, {3, 0, 3});
+  observer->EnableWitness(10.f, MakeReliable(), MakeUnreliable());
+
+  // Frame with a non-empty owner_delta but an all-zero other_delta
+  // (the flag prefix said "no other-audience fields dirty").
+  peer->PublishReplicationFrame(MakeFrame(1, MakeBlob({0xA1}), MakeBlob({0x00})), MakeBlob({0xA1}),
+                                MakeBlob({0x00}));
+
+  auto& cache = observer->GetWitness()->AoIMapMutable().at(peer->Id());
+  cache.flags = 0;
+  cache.last_event_seq = 0;
+
+  sent_.clear();
+  observer->GetWitness()->TestOnlySendEntityUpdate(cache);
+
+  // No EntityPropertyUpdate — the all-zero delta was suppressed.
+  for (const auto& c : sent_) {
+    EXPECT_NE(KindOf(c), CellAoIEnvelopeKind::kEntityPropertyUpdate);
+  }
+  // Seq advanced so a later non-empty frame isn't mistaken for a gap.
+  EXPECT_EQ(cache.last_event_seq, 1u);
+}
+
 TEST_F(WitnessReplicationTest, PropertyDeltaOwnerAudienceWhenObserverIsOwner) {
   Space space(1);
   // Observer IS the peer's owner: both entities share a base_entity_id
