@@ -15,30 +15,25 @@ internal static class PropertiesEmitter
     {
         if (def.Properties.Count == 0) return null;
 
-        // ATLAS_DEF008 dropped up front (spans every ctx): `position` in a
-        // replicable scope is a ghost of the ClientEntity base class's
-        // Position + the volatile channel, never a real field.
+        // ATLAS_DEF008 (spans every ctx): a replicable `position` is a ghost
+        // of ClientEntity.Position + the volatile channel, never a real field.
         var replicableProps = def.Properties
             .Where(p => p.Scope.IsClientVisible() && !p.IsReservedPosition)
             .ToList();
 
-        // Backing fields live only on the side that OWNS the value
-        // (IsBase or IsCell, mutually exclusive; Client mirrors every
-        // visible prop; Server legacy fallback emits everything). This is
-        // the M2 split that lets the base stop serialising stale zeros
-        // for cell-scope properties.
+        // Backing fields live only on the side that OWNS the value (base XOR
+        // cell). Client mirrors every visible prop; the legacy Server ctx is
+        // the single-process fallback and emits everything.
         var props = GetPropertiesForContext(def.Properties, ctx)
             .Where(p => !p.IsReservedPosition).ToList();
         if (props.Count == 0 && replicableProps.Count == 0) return null;
 
-        // The ReplicatedDirtyFlags enum MUST enumerate the full IsClientVisible
-        // set in stable declaration order on every side — bit N has to denote
-        // the same property on the sender, receiver, and any intermediate
-        // observer, otherwise the 0xF003 wire flags byte is uninterpretable
-        // across the base/cell split. Backing fields filter by ctx, enum
-        // doesn't. The matching iteration rule on the serializers lives in
-        // DeltaSyncEmitter (emitters skip any prop whose field is missing
-        // on this side, so the unused bit positions stay zero in practice).
+        // ReplicatedDirtyFlags enum MUST enumerate the full IsClientVisible
+        // set in stable declaration order on every side — bit N must denote
+        // the same property across sender, receiver and intermediate
+        // observers, else the 0xF003 flag byte is uninterpretable. Enum does
+        // NOT filter by ctx; backing fields do. Serializers skip props whose
+        // field is missing on this side, leaving the unused bits at zero.
         var enumReplicableProps = replicableProps;
         var emitDirtyBacking = ctx != ProcessContext.Client && enumReplicableProps.Count > 0;
 
@@ -93,12 +88,10 @@ internal static class PropertiesEmitter
         // Properties. Two setter shapes:
         //   * Server replicable → dirty-bit + OnXxxChanged
         //   * Everything else   → bare assignment (no callback)
-        //
-        // The client setter intentionally does NOT fire OnXxxChanged — only
-        // wire deltas do (via DeltaSyncEmitter's ApplyReplicatedDelta).
-        // Clients observe authoritative server state; a local write is an
-        // edge case (prediction, test fixtures, scratch UI state) that
-        // shouldn't masquerade as an observed transition.
+        // Client setters deliberately skip OnXxxChanged — only wire deltas
+        // (ApplyReplicatedDelta) fire it, since local client writes are
+        // edge cases (prediction, test fixtures) that shouldn't masquerade
+        // as observed server transitions.
         foreach (var prop in props)
         {
             bool trackDirty = emitDirtyBacking && enumReplicableProps.Contains(prop);
@@ -170,14 +163,10 @@ internal static class PropertiesEmitter
 
     /// <summary>
     /// Returns the subset of <paramref name="allProps"/> whose backing field
-    /// lives on the given process side. Data lives on either base or cell
-    /// but never both: Base only holds DATA_BASE scoped properties; Cell
-    /// holds everything else (cell-scope plus client-visible cell-scope).
-    /// Client is orthogonal — it keeps a projection of whatever it can
-    /// observe from either side. Server is the
-    /// legacy single-process fallback (no ATLAS_BASE/ATLAS_CELL compile
-    /// symbol) and keeps the pre-refactor behaviour of emitting everything
-    /// so existing server-mode samples don't regress.
+    /// lives on the given process side. Data lives on base or cell but never
+    /// both: Base holds DATA_BASE scoped props; Cell holds the rest. Client
+    /// projects whatever it can observe. Server is the legacy single-process
+    /// fallback and emits everything.
     /// </summary>
     private static List<PropertyDefModel> GetPropertiesForContext(
         List<PropertyDefModel> allProps, ProcessContext ctx)

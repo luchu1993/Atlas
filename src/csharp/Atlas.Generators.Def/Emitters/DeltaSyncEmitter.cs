@@ -13,33 +13,22 @@ internal static class DeltaSyncEmitter
     public static string? Emit(EntityDefModel def, string className, string namespaceName,
                                ProcessContext ctx)
     {
-        // ATLAS_DEF008: a replicable `position` is flagged IsReservedPosition
-        // in the parser and must not appear anywhere in the replication
-        // pipeline — no enum bit, no delta serializer/deserializer, no
-        // snapshot read/write. Position rides the volatile channel
-        // exclusively, handled by ClientEntity base.
-        //
-        // ctx gating mirrors the invariant enforced in
-        // PropertiesEmitter.GetPropertiesForContext — a replicable scope
-        // is "cell-side" (OwnClient / AllClients / OtherClients /
-        // CellPublicAndOwn) or "base-side" (BaseAndClient). The delta
-        // pipeline must see only props whose backing field actually lives
-        // on THIS process, otherwise the generator emits references to
-        // fields that don't exist and the build fails.
+        // ATLAS_DEF008: a replicable `position` is excluded from the entire
+        // replication pipeline (no enum bit, no delta, no snapshot) —
+        // position rides the volatile channel via ClientEntity base.
+        // ctx gating keeps the delta pipeline to props whose backing field
+        // lives on THIS process (base vs cell); otherwise codegen references
+        // fields that don't exist.
         var replicableProps = def.Properties
             .Where(p => p.Scope.IsClientVisible() && !p.IsReservedPosition &&
                         IsOnThisSide(p.Scope, ctx))
             .ToList();
         if (replicableProps.Count == 0) return null;
 
-        // Client path: no dirty-tracking or outbound serializers. We emit
-        // scope-subset snapshot *deserializers* (paired to the server's
-        // SerializeForOwnerClient / SerializeForOtherClients) so that AoI
-        // enter and baseline payloads can be reconstructed without the
-        // version+fieldCount+bodyLength framing used by full-state
-        // Serialize/Deserialize. Wire format: raw fields in declaration
-        // order, filtered by scope predicate — identical iteration
-        // produces identical wire on both sides.
+        // Client path: snapshot deserializers only (no dirty tracking, no
+        // outbound serializers). Wire format mirrors the server's
+        // SerializeForOwner/OtherClient: raw fields in declaration order
+        // filtered by scope predicate — identical iteration both sides.
         if (ctx == ProcessContext.Client) return EmitClientSnapshotApplyMethods(
             def, className, namespaceName, replicableProps);
 
@@ -58,26 +47,17 @@ internal static class DeltaSyncEmitter
         sb.AppendLine($"partial class {className}");
         sb.AppendLine("{");
 
-        // Static masks partitioning the dirty flags by client audience. These are
-        // what the CellApp replication pump needs: Owner side receives props
-        // visible to the entity's owning client (OwnClient, AllClients,
-        // CellPublicAndOwn, BaseAndClient); the Other side receives props
-        // visible to observers (AllClients, OtherClients). CellPublicAndOwn
-        // intentionally appears ONLY in the owner mask — revealing a
-        // CellPublicAndOwn field to non-owners is a privacy bug.
+        // Audience masks partition dirty flags for the replication pump.
+        // Owner mask covers props visible to the owning client (OwnClient,
+        // AllClients, CellPublicAndOwn, BaseAndClient); Other mask covers
+        // observer-visible props (AllClients, OtherClients). CellPublicAndOwn
+        // stays owner-only — revealing it to non-owners is a privacy bug.
         EmitAudienceMasks(sb, replicableProps);
         sb.AppendLine();
 
-        // The CellApp replication pump drives SerializeOwnerDelta /
-        // SerializeOtherDelta (below) via BuildAndConsumeReplicationFrame
-        // and publish_replication_frame. Reliability is a transport concern
-        // picked at the BaseApp send path (ReplicatedReliableDeltaFromCell
-        // vs ReplicatedDeltaFromCell), not a serialization split.
-
-        // ApplyReplicatedDelta — apply delta from wire. Still emitted:
-        // SerializeOtherDelta's output is wire-compatible with this decoder
-        // (same flag-prefix + conditional field writes), and the client's
-        // kEntityPropertyUpdate handler dispatches through here.
+        // ApplyReplicatedDelta — decodes the wire delta (flag byte(s) +
+        // conditional field reads). Wire-compatible with the per-audience
+        // SerializeOwnerDelta / SerializeOtherDelta emitted below.
         EmitApplyReplicatedDelta(sb, replicableProps);
         sb.AppendLine();
 
@@ -97,10 +77,8 @@ internal static class DeltaSyncEmitter
             sb.AppendLine();
         }
 
-        // Per-audience delta serializers — what CellApp sends to observers when
-        // a property changes. Distinct from the reliable/unreliable split: any
-        // property can appear in either owner or other delta depending on
-        // scope, and reliability is a transport-layer concern.
+        // Per-audience delta serializers. Reliability is a transport-layer
+        // concern (picked at BaseApp send path), not a serialization split.
         EmitAudienceDeltaSerializer(sb, replicableProps, "SerializeOwnerDelta",
                                     "OwnerVisibleMask", p => IsOwnerVisible(p.Scope));
         sb.AppendLine();
@@ -108,35 +86,27 @@ internal static class DeltaSyncEmitter
                                     "OtherVisibleMask", p => IsOtherVisible(p.Scope));
         sb.AppendLine();
 
-        // The frame counters live alongside the dirty flag state in this
-        // generated partial so non-replicable entities don't carry them.
+        // Frame counters live in this generated partial so non-replicable
+        // entities don't carry them.
         sb.AppendLine("    private ulong _eventSeq;");
         sb.AppendLine("    private ulong _volatileSeq;");
         sb.AppendLine();
 
-        // BuildAndConsumeReplicationFrame — the per-tick entry point the
-        // CellApp replication pump calls. Returns null on fast path (no dirty
-        // state at all) so the caller can skip both the allocation and the
-        // NativeApi hop.
+        // BuildAndConsumeReplicationFrame — per-tick entry point for the
+        // CellApp replication pump. Returns false when no dirty state, so
+        // the caller skips both the allocation and the NativeApi hop.
         EmitBuildAndConsume(sb, ownerFields.Count > 0, otherFields.Count > 0);
 
         sb.AppendLine("}");
         return sb.ToString();
     }
 
-    // Client-ctx sibling of the Server Emit path. Produces only
-    // ApplyOwnerSnapshot / ApplyOtherSnapshot — the exact symmetric
-    // counterparts of the CELL-side SerializeForOwnerClient /
-    // SerializeForOtherClients. Base-scope client-visible props
-    // (BaseAndClient) deliberately don't participate in this snapshot
-    // pair — base-side properties arrive on the delta channel
-    // (ApplyReplicatedDelta) via set_<propname>, not bundled into the
-    // createCellPlayer snapshot. Keeping base-scope out of
-    // ApplyOwnerSnapshot preserves lockstep between cell's serializer
-    // and client's deserializer as enforced by
-    // ClientContext_ScopeApplyOrder_MirrorsServerScopeSerialize.
-    // No dirty flags, no framing, no event/volatile seq counters on the
-    // client.
+    // Client-ctx variant. Emits only ApplyOwnerSnapshot / ApplyOtherSnapshot
+    // — symmetric counterparts of the cell-side SerializeForOwner/OtherClient.
+    // Base-scope client-visible props (BaseAndClient) stay out: they arrive
+    // via ApplyReplicatedDelta on the delta channel, not in the snapshot.
+    // Keeping base-scope out preserves lockstep between cell's serializer
+    // and client's deserializer.
     private static string? EmitClientSnapshotApplyMethods(EntityDefModel def, string className,
                                                            string namespaceName,
                                                            List<PropertyDefModel> replicableProps)
@@ -173,13 +143,10 @@ internal static class DeltaSyncEmitter
             sb.AppendLine();
         }
 
-        // ApplyReplicatedDelta — scope-agnostic at decode time. The server
-        // audience mask guarantees only bits for scope-visible fields are
-        // ever set in `flags`, so iterating every replicable prop is safe:
-        // non-audience bits can't fire the inner read. Every field that
-        // actually changed fires OnXxxChanged so scripts observe the
-        // transition. ReplicatedDirtyFlags is emitted by PropertiesEmitter
-        // on the client side too (dirty-backing field is not).
+        // ApplyReplicatedDelta — decode-time scope-agnostic; the server's
+        // audience mask guarantees only visible bits are ever set, so
+        // iterating every replicable prop is safe. Changed fields fire
+        // OnXxxChanged so scripts observe the transition.
         EmitClientApplyReplicatedDelta(sb, replicableProps);
 
         sb.AppendLine("}");
@@ -266,11 +233,9 @@ internal static class DeltaSyncEmitter
     private static void EmitBuildAndConsume(StringBuilder sb, bool hasOwnerSnapshot,
                                             bool hasOtherSnapshot)
     {
-        // Zero-alloc API: caller owns the four SpanWriters (typically
-        // pool-rented once per tick and Reset() between entities). We
-        // serialize in-place and return (eventSeq, volatileSeq) through
-        // out params. Avoids per-tick byte[] churn that the allocating
-        // form caused on high-fanout CellApp pumps.
+        // Zero-alloc API: caller owns the four SpanWriters (pool-rented,
+        // Reset() between entities). Returns (eventSeq, volatileSeq) via
+        // out params; avoids per-tick byte[] churn on high-fanout pumps.
         sb.AppendLine("    public override bool BuildAndConsumeReplicationFrame(");
         sb.AppendLine("        ref SpanWriter ownerSnapshot, ref SpanWriter otherSnapshot,");
         sb.AppendLine("        ref SpanWriter ownerDelta, ref SpanWriter otherDelta,");

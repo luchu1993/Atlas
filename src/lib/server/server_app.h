@@ -69,10 +69,8 @@ class ServerApp {
   auto DeregisterForUpdate(Updatable* object) -> bool;
 
   // Last tick's work duration (time spent inside OnEndOfTick →
-  // OnTickComplete). Subclasses consume this for load reporting — see
-  // BigWorld `CellApp::updateLoad` (cellapp.cpp:1177) which derives
-  // `persistentLoad_` from `tickTime - spareTime`, equivalent here to
-  // `last_work_duration / expected_tick_period`.
+  // OnTickComplete). Subclasses consume this for load reporting; the
+  // normalised load fraction is `last_work_duration / expected_tick_period`.
   [[nodiscard]] auto LastTickWorkDuration() const -> Duration {
     return tick_stats_.last_work_duration;
   }
@@ -143,7 +141,7 @@ class ServerApp {
     Duration last_duration{};
     // Time actually spent inside the tick hooks (OnEndOfTick → … →
     // OnTickComplete). `last_work_duration / expected_tick_period` is
-    // the BigWorld-style load fraction — 0.0 = idle, 1.0 = fully booked.
+    // the load fraction — 0.0 = idle, 1.0 = fully booked.
     Duration last_work_duration{};
     Duration max_duration{};
     uint64_t slow_count{0};

@@ -15,8 +15,8 @@ using EntityID = uint32_t;
 inline constexpr EntityID kInvalidEntityID = 0;
 
 // ============================================================================
-// SpaceID — uniquely identifies a spatial partition (BigWorld's "Space").
-// Phase 10 single-CellApp stage treats Space == Cell; Phase 11 splits them.
+// SpaceID — uniquely identifies a spatial partition. In the single-CellApp
+// stage Space == Cell; the multi-CellApp path splits them.
 // ============================================================================
 
 using SpaceID = uint32_t;

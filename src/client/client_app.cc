@@ -77,10 +77,10 @@ auto ClientApp::Init(int argc, char* argv[]) -> bool {
         return false;
       }
     } else if (arg == "--drop-transport-ms") {
-      // Like --drop-inbound-ms, but installed at the RUDP layer so
-      // reliable packets lost in the window are eventually retransmitted.
-      // Use this flag to validate transport-level recovery (§4); use
-      // --drop-inbound-ms to validate application-level gap detection.
+      // Like --drop-inbound-ms, but installed at the RUDP layer so reliable
+      // packets lost in the window are eventually retransmitted. Validates
+      // transport-level recovery; --drop-inbound-ms validates app-level
+      // gap detection.
       auto start_sv = next();
       auto duration_sv = next();
       try {
@@ -129,7 +129,7 @@ auto ClientApp::Init(int argc, char* argv[]) -> bool {
 }
 
 // ============================================================================
-// CLR initialization — mirrors ScriptApp pattern
+// CLR initialization
 // ============================================================================
 
 auto ClientApp::InitClr(const char* exe_path) -> bool {
@@ -178,11 +178,10 @@ auto ClientApp::InitClr(const char* exe_path) -> bool {
   bootstrap_args.error_get_code =
       reinterpret_cast<decltype(bootstrap_args.error_get_code)>((*error_code)());
 
-  // Create CLR engine. The desktop client does NOT bind
-  // Atlas.Core.Lifecycle or Atlas.Hosting.HotReloadManager — those live in
-  // Atlas.Runtime (server only). We clear the type strings so Initialize
-  // skips those bindings; LoadModule and OnTick / OnInit / OnShutdown then
-  // become no-ops the client doesn't rely on.
+  // Desktop client does NOT bind Atlas.Core.Lifecycle or
+  // Atlas.Hosting.HotReloadManager — server-only types. Clearing the type
+  // strings makes Initialize skip those bindings; LoadModule and the
+  // OnTick/OnInit/OnShutdown hooks then become client-unused no-ops.
   auto clr = std::make_unique<ClrScriptEngine>();
   ClrScriptEngine::Config clr_config;
   clr_config.runtime_config_path = config_.runtime_config;
@@ -204,23 +203,19 @@ auto ClientApp::InitClr(const char* exe_path) -> bool {
     return false;
   }
 
-  // After CLR bootstrap completes, install the Desktop-specific host glue:
-  // ClientHost delegate slots + the native callback table. Must run before
-  // the user assembly's generator-emitted ModuleInitializer fires (the
-  // [ModuleInitializer] in TypeRegistryEmitter calls
-  // ClientHost.RegisterEntityType), so we invoke it before LoadUserAssembly.
+  // Install desktop host glue (ClientHost delegate slots + native callback
+  // table) before the user assembly's ModuleInitializer fires — the emitted
+  // [ModuleInitializer] in TypeRegistryEmitter calls ClientHost.
+  // RegisterEntityType and would NRE without the slots in place.
   if (auto r = InvokeDesktopBootstrap(); !r) {
     ATLAS_LOG_ERROR("Client: DesktopBootstrap.Initialize failed: {}", r.Error().Message());
     return false;
   }
 
-  // The server path uses HotReloadManager.LoadScripts to pull in the user
-  // assembly. The client doesn't bind HotReloadManager, so we instead load
-  // the assembly directly via DesktopBootstrap.LoadUserAssembly (a plain
-  // Assembly.LoadFrom wrapper). This triggers any [ModuleInitializer] in
-  // the script assembly, which in turn wires the generated RPC dispatcher
-  // / entity factory / type registry against the already-filled
-  // ClientHost slots.
+  // Client doesn't bind HotReloadManager, so load the user assembly directly
+  // via DesktopBootstrap.LoadUserAssembly (Assembly.LoadFrom wrapper). This
+  // triggers module initializers that wire the generated RPC dispatcher /
+  // entity factory / type registry against the filled ClientHost slots.
   if (auto r = LoadUserAssembly(config_.script_assembly); !r) {
     ATLAS_LOG_ERROR("Client: LoadUserAssembly({}) failed: {}", config_.script_assembly.string(),
                     r.Error().Message());
@@ -234,11 +229,9 @@ auto ClientApp::InitClr(const char* exe_path) -> bool {
 }
 
 auto ClientApp::InvokeDesktopBootstrap() -> Result<void> {
-  // Atlas.Client.Desktop ships alongside the user's assembly (as a
-  // transitive ProjectReference of Atlas.ClientSample). Pointing
-  // GetMethodAs at the user assembly's directory would also work, but
-  // binding through the script-assembly path mirrors how ClrBootstrap
-  // itself resolves Atlas.ClrHost and keeps the type-load graph intact.
+  // Atlas.Client.Desktop ships alongside the user assembly as a transitive
+  // ProjectReference; binding through the script-assembly path matches how
+  // ClrBootstrap resolves Atlas.ClrHost and keeps the type-load graph intact.
   ClrFallibleMethod<> init_method;
   auto bind_result =
       init_method.Bind(script_engine_->Host(), config_.script_assembly,
@@ -432,61 +425,43 @@ auto ClientApp::MainLoop() -> int {
     }
   }
 
-  // BaseApp emits two fixed-length BaseApp → Client messages that need typed
-  // handlers, not the default RPC fallback: EntityTransferred (2024) updates
-  // the proxy entity after GiveClientTo; CellReady (2025) signals that the
-  // client-bound Proxy has a cell address. They MUST be registered as
-  // typed, because the Channel dispatcher uses the MessageDesc length style
-  // to advance the read cursor — with no typed entry, a fixed-length
-  // payload is misparsed as a packed-int length prefix and every
-  // subsequent message in the same datagram is thrown out with a
-  // "Truncated message" warning. That broke the AoI state stream and
-  // prevented any OnHpChanged / OnPositionUpdated from reaching script.
+  // Typed-handler registration for two fixed-length BaseApp → Client messages
+  // (EntityTransferred=2024 after GiveClientTo; CellReady=2025 when the proxy
+  // gains a cell address). Typed entries are REQUIRED — Channel dispatch uses
+  // the MessageDesc length style to advance the read cursor, and an untyped
+  // fixed-length payload is misparsed as a packed-int length prefix, causing
+  // every subsequent message in the same datagram to be dropped.
   network_.InterfaceTable().RegisterTypedHandler<baseapp::EntityTransferred>(
       [this](const Address&, Channel*, const baseapp::EntityTransferred& msg) {
         // Rebind the proxy identity so subsequent base-RPCs target the new
-        // entity. The cell-RPC path is identity-tracked by the script via
-        // ClientEntity.EntityId, so it does not need anything here.
+        // entity. Cell-RPC path is script-tracked via ClientEntity.EntityId.
         player_entity_id_ = msg.new_entity_id;
         player_type_id_ = msg.new_type_id;
 
         // Instantiate the matching client-side entity so owner-scope state
-        // deltas (0xF003 carrying kEntityPropertyUpdate for the owner
-        // himself, produced by the CellApp owner-delta forward path) have
-        // a script instance to land on. Witness never ships a kEntityEnter
-        // for the owner's own entity — BigWorld solves this with a
-        // dedicated createCellPlayer message; Atlas reuses CreateEntity
-        // here, and the initial property snapshot arrives via the
-        // BaseApp baseline pump (kBaselineInterval ticks). Without this
-        // step the factory never gets called for the new type, any
-        // subsequent OnHpChanged delta finds no matching ClientEntity and
-        // the script never sees it fire.
+        // deltas (0xF003 kEntityPropertyUpdate for the owner itself) have a
+        // script instance to land on. Witness never ships a kEntityEnter for
+        // the owner's own entity; CreateEntity fills that role, and the
+        // initial snapshot arrives via the BaseApp baseline pump. Without
+        // this step, any subsequent OnHpChanged delta finds no matching
+        // ClientEntity and never fires.
         if (native_provider_ && native_provider_->CreateEntityFn()) {
           native_provider_->CreateEntityFn()(msg.new_entity_id, msg.new_type_id);
         }
       });
   network_.InterfaceTable().RegisterTypedHandler<baseapp::CellReady>(
       [](const Address&, Channel*, const baseapp::CellReady&) {
-        // Informational only — the client doesn't need to take any action;
-        // the typed registration exists solely so Channel::DispatchMessages
+        // Informational — registration exists solely so the dispatcher
         // knows the fixed-length payload layout.
       });
 
-  // Register a catch-all handler for messages from BaseApp.
-  //
-  // Two transport-level concerns are multiplexed over this default handler:
-  //
-  //   (a) The three reserved state-replication channels
-  //       (DeltaForwarder::kClientDeltaMessageId          0xF001 — unreliable),
-  //       (DeltaForwarder::kClientBaselineMessageId       0xF002 — reliable),
-  //       (DeltaForwarder::kClientReliableDeltaMessageId  0xF003 — reliable)
-  //       are routed opaquely to the managed script host via
-  //       deliver_from_server_fn_. The native layer performs zero envelope
-  //       decoding so an alternative script host (Lua, TS, …) can bind the
-  //       same transport hook without touching this file.
-  //
-  //   (b) Any other MessageID is treated as a ClientRpc — BaseApp sends
-  //       ClientRpcs using the rpc_id directly as the MessageID.
+  // Catch-all handler. Splits traffic into two lanes:
+  //   (a) state-replication channels 0xF001 (unreliable) / 0xF002 (baseline,
+  //       reliable) / 0xF003 (reliable delta) — forwarded opaquely to the
+  //       script host so alternative hosts (Lua, TS) can bind the same hook
+  //       without touching native envelope decoding.
+  //   (b) any other MessageID — treated as a ClientRpc (BaseApp uses the
+  //       rpc_id directly as the MessageID).
   network_.InterfaceTable().SetDefaultHandler(
       [this](const Address&, Channel*, MessageID msg_id, BinaryReader& reader) {
         const bool is_state_channel = msg_id == DeltaForwarder::kClientDeltaMessageId ||
@@ -505,11 +480,10 @@ auto ClientApp::MainLoop() -> int {
         }
 
         if (is_state_channel) {
-          // Phase C3 test hook: silently drop state-channel traffic inside
-          // the [start, start+duration) window to simulate packet loss on
-          // the reliable / volatile / baseline channels. RPCs and other
-          // traffic flow normally so login, auth and script method calls
-          // still work.
+          // Test hook: silently drop state-channel traffic inside the
+          // [start, start+duration) window to simulate packet loss on
+          // reliable / volatile / baseline channels. RPCs and other traffic
+          // flow normally so login / auth / script method calls still work.
           if (config_.drop_inbound_duration_ms > 0) {
             const auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
                                      std::chrono::steady_clock::now() - loop_start_)
@@ -519,9 +493,6 @@ auto ClientApp::MainLoop() -> int {
               return;  // dropped
             }
           }
-          // MessageID is already uint16_t (see src/lib/network/message.h); the
-          // deliver_from_server callback takes uint16_t by value, so no cast is
-          // needed.
           if (native_provider_ && native_provider_->DeliverFromServerFn()) {
             native_provider_->DeliverFromServerFn()(msg_id, payload_ptr, payload_len);
           } else {

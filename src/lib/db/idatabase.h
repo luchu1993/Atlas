@@ -49,7 +49,7 @@ struct DatabaseConfig {
 };
 
 // ============================================================================
-// WriteFlags — mirrors BigWorld WriteDBFlags
+// WriteFlags
 // ============================================================================
 
 enum class WriteFlags : uint8_t {
@@ -60,7 +60,7 @@ enum class WriteFlags : uint8_t {
   kDelete = 1 << 3,        // delete from database
   kAutoLoadOn = 1 << 4,    // mark as auto-load
   kAutoLoadOff = 1 << 5,   // clear auto-load
-  kCellData = 1 << 6,      // reserved: blob includes cell data (Phase 10)
+  kCellData = 1 << 6,      // reserved: blob includes cell data
 };
 
 [[nodiscard]] inline auto operator|(WriteFlags a, WriteFlags b) -> WriteFlags {

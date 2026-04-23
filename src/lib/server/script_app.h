@@ -14,9 +14,7 @@
 namespace atlas {
 
 // ============================================================================
-// ScriptApp — ServerApp + C# scripting layer
-//
-// Replaces BigWorld's ScriptApp (Python interpreter) with ClrScriptEngine.
+// ScriptApp — ServerApp + C# scripting layer (ClrScriptEngine).
 //
 // Init sequence:
 //   ServerApp::init()
@@ -64,7 +62,7 @@ class ScriptApp : public ServerApp {
   // Called after C# OnInit() completes successfully.
   virtual void OnScriptReady() {}
 
-  // ---- Hot-reload stub (completed in Script Phase 5) ----------------------
+  // ---- Hot-reload --------------------------------------------------------
 
   // Trigger assembly reload: on_shutdown → reload → on_init(true) → on_script_ready.
   void ReloadScripts();

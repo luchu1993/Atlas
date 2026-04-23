@@ -9,17 +9,14 @@ namespace atlas::world_stress {
 // ============================================================================
 // ClientEventCounters / ParseAndCount — stdout line → event-kind counter.
 //
-// The Phase C2 harness launches real atlas_client.exe children that load
-// samples/client/. Every Phase-B script hook there logs a parse-stable line
-// like
+// The harness launches atlas_client.exe children that load samples/client/.
+// Script hooks emit parse-stable lines like
 //     "[StressAvatar:42] OnHpChanged old=100 new=99"
-// — see samples/client/StressAvatar.cs. This tap turns those lines into
-// per-child counters the harness prints at the end of a run and uses to
-// decide whether the Phase-B event contract was honoured end-to-end.
+// (see samples/client/StressAvatar.cs). This tap turns them into per-child
+// counters the harness summarises and uses for pass/fail decisions.
 //
-// Deliberately permissive: anything that isn't a recognized event line just
-// bumps `unparsed_lines` — C# breadcrumbs, log noise, stack traces all flow
-// through without crashing the harness.
+// Deliberately permissive: unrecognized lines bump `unparsed_lines` so log
+// noise and stack traces pass through without crashing the harness.
 // ============================================================================
 
 struct ClientEventCounters {
@@ -28,12 +25,10 @@ struct ClientEventCounters {
   uint64_t on_destroy{0};
   uint64_t on_hp_changed{0};
   uint64_t on_position_updated{0};
-  // Phase D2'.3: how many property deltas the client missed in the
-  // middle of a reliable stream. Populated from the `event_seq gap:
-  // last=A got=B missed=N` warning lines that ClientEntity emits to
-  // Console.Error when the incoming seq jumps by more than 1. A single
-  // log line contributes N to the counter — operators care about lost
-  // events, not the count of warning lines.
+  // Count of property deltas missed in the middle of a reliable stream.
+  // Populated from the `event_seq gap: last=A got=B missed=N` warning
+  // lines ClientEntity emits when the incoming seq jumps by more than 1.
+  // One log line contributes N (lost events, not warning count).
   uint64_t event_seq_gaps{0};
   uint64_t unparsed_lines{0};
 };

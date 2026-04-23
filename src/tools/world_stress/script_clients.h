@@ -16,7 +16,7 @@ namespace atlas::world_stress {
 
 // ============================================================================
 // ScriptClientHarness — runs N real atlas_client.exe children alongside the
-// stress harness's virtual clients and verifies the Phase-B callback contract
+// stress harness's virtual clients and verifies the client callback contract
 // end-to-end via stdout greps.
 //
 // Lifecycle from main.cc's point of view:
@@ -40,15 +40,12 @@ struct ScriptClientOptions {
   std::size_t username_index_base{0};
   std::size_t count{0};  // zero → harness is inert
   bool verify{false};    // PrintSummary returns false on threshold miss
-  // Phase C3: forwarded to each child as `--drop-inbound-ms start duration`.
-  // 0/0 = off.
+  // Forwarded to each child as `--drop-inbound-ms start duration`. 0/0 = off.
   int drop_inbound_start_ms{0};
   int drop_inbound_duration_ms{0};
-  // script_client_smoke.md 场景 3: transport-layer drop forwarded as
-  // `--drop-transport-ms start duration`. Use this to validate RUDP
-  // reliable retransmit — dropped reliable traffic should recover; use
-  // drop_inbound_* (场景 2 / 4) to validate application-level gap
-  // detection + baseline fallback.
+  // Forwarded as `--drop-transport-ms start duration`. Validates RUDP
+  // reliable retransmit recovery; use drop_inbound_* to validate the
+  // application-level gap detection + baseline fallback instead.
   int drop_transport_start_ms{0};
   int drop_transport_duration_ms{0};
 };

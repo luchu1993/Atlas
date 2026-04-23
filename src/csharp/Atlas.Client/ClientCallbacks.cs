@@ -191,7 +191,7 @@ public static class ClientCallbacks
     // kEntityEnter inner payload (witness.cc::BuildEnterPayload):
     //   [u16 type_id] [3f pos] [3f dir] [u8 on_ground] [... peer_snapshot ...]
     // The peer_snapshot tail is scope-subset bytes (SerializeForOtherClients)
-    // for AoI peers — ClientEntityManager gates its application on Phase B0.
+    // for AoI peers.
     private const int kEnterFixedBytes = 2 + 6 * 4 + 1;
     private static void DispatchEnter(uint entityId, ReadOnlySpan<byte> inner)
     {
@@ -212,10 +212,10 @@ public static class ClientCallbacks
 
     // kEntityPropertyUpdate inner payload (witness.cc::BuildPropertyUpdatePayload):
     //   [u64 event_seq] [delta or snapshot bytes]
-    // The seq prefix lets the client notice missing reliable deltas (Phase
-    // D2'.2). It is authoritative on the delta channel (ordered, gap-free
-    // in the nominal case) and approximately correct on the snapshot
-    // fallback (the snapshot reflects state up to latest_event_seq).
+    // The seq prefix lets the client detect missing reliable deltas. It is
+    // authoritative on the delta channel (ordered, nominally gap-free) and
+    // approximately correct on snapshot fallback (reflects state up to
+    // latest_event_seq).
     private const int kPropertyUpdatePrefixBytes = 8;
     private static void DispatchPropertyUpdate(uint entityId, ReadOnlySpan<byte> inner)
     {

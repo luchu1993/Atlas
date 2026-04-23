@@ -52,40 +52,34 @@ struct Options {
   int shortline_pct{20};
   int shortline_min_ms{1'000};
   int shortline_max_ms{5'000};
-  // P3: once a session is kOnline and its StressAvatar cell entity is
-  // live, it fires an Echo RPC at rpc_rate_hz Hz for the remainder of
-  // its hold window. Each Echo round-trip contributes one RTT sample.
-  // Values <= 0 disable the periodic stream (first Echo after
-  // EntityTransferred still fires, giving one RTT sample per session).
+  // Once a session is kOnline and its StressAvatar is live, it fires an
+  // Echo RPC at rpc_rate_hz Hz for the rest of its hold window; each
+  // round-trip contributes one RTT sample. 0 = one-shot (a single Echo
+  // after EntityTransferred).
   int rpc_rate_hz{2};
-  // P3.2: ReportPos stream rate — writes the StressAvatar.position
-  // property via ClientCellRpc → cell method → property setter. Drives
-  // the cell-side dirty/replication path at scale. 0 = disabled.
+  // ReportPos stream rate — writes StressAvatar.position via
+  // ClientCellRpc → cell method → property setter, exercising the
+  // cell-side dirty/replication path. 0 = disabled.
   int move_rate_hz{10};
-  // P3.3: number of distinct cell-side spaces to spread avatars across.
-  // Each session picks space_id = (session_id % space_count) + 1 and
-  // encodes it in the SelectAvatar RPC; server-side Account.SelectAvatar
-  // forwards it to CreateBaseEntity. 1 = all avatars in one space (the
-  // pre-P3.3 baseline).
+  // Distinct cell-side spaces to spread avatars across. Each session picks
+  // space_id = (session_id % space_count) + 1 and encodes it in SelectAvatar.
   int space_count{1};
   bool verbose_failures{false};
   uint32_t seed{12345};
 
-  // Phase C2: end-to-end verification via real atlas_client.exe subprocesses
-  // that load samples/client/. Zero means no script children are launched
-  // and the harness retains its original raw-protocol-only behaviour.
+  // End-to-end verification via real atlas_client.exe subprocesses that
+  // load samples/client/. Zero = no script children, raw-protocol-only.
   std::size_t script_clients{0};
   std::filesystem::path client_exe;
   std::filesystem::path client_assembly;
   std::filesystem::path client_runtime_config;
   std::string script_username_prefix{"script_user_"};
   bool script_verify{false};
-  // Phase C3: forward a drop-inbound window to every script child so the
-  // harness can simulate reliable / baseline recovery end-to-end. 0/0 = off.
+  // Forward a drop-inbound window to every script child so the harness can
+  // simulate reliable / baseline recovery end-to-end. 0/0 = off.
   int client_drop_inbound_start_ms{0};
   int client_drop_inbound_duration_ms{0};
-  // script_client_smoke.md 场景 3: transport-layer drop, forwarded as
-  // --drop-transport-ms to each child.
+  // Transport-layer drop forwarded as --drop-transport-ms to each child.
   int client_drop_transport_start_ms{0};
   int client_drop_transport_duration_ms{0};
 };
@@ -107,26 +101,23 @@ struct Metrics {
   std::size_t timeout_fail{0};
   std::size_t unexpected_disconnects{0};
   std::size_t planned_disconnects{0};
-  // P2.3c: SelectAvatar is fire-and-forget on the wire — there is no
-  // direct reply to it in the current protocol. `select_avatar_sent`
-  // counts "accepted by the local send queue"; `entity_transferred`
-  // counts the engine-level EntityTransferred notifications that arrive
-  // after the server-side Account.SelectAvatar runs GiveClientTo (see
-  // P2.3e baseapp change). The two should match 1:1 on a healthy run.
+  // SelectAvatar is fire-and-forget on the wire. `select_avatar_sent`
+  // counts "accepted by the local send queue"; `entity_transferred` counts
+  // engine-level EntityTransferred notifications that arrive after the
+  // server-side GiveClientTo. On a healthy run the two match 1:1.
   std::size_t select_avatar_sent{0};
   std::size_t select_avatar_fail{0};
   std::size_t entity_transferred{0};
   std::size_t cell_ready{0};
-  // P2.3e: Echo / EchoReply round-trip through the Cell-side CLR dispatch.
-  // Each EntityTransferred triggers one Echo; a matching EchoReply from
+  // Echo / EchoReply round-trip through cell-side CLR dispatch. Each
+  // EntityTransferred triggers one Echo; a matching EchoReply from
   // CellApp → BaseApp → client updates rtt_ms.
   std::size_t echo_sent{0};
   std::size_t echo_received{0};
-  // P3.2: ReportPos is fire-and-forget (no direct reply in the current
-  // protocol). Counts "accepted by local send queue".
+  // ReportPos is fire-and-forget; counts "accepted by local send queue".
   std::size_t move_sent{0};
   std::size_t move_fail{0};
-  // P4: AoI envelope counts received via BaseApp's reliable-delta relay
+  // AoI envelope counts received via BaseApp's reliable-delta relay
   // (wire msg_id 0xF003). First payload byte is CellAoIEnvelopeKind.
   std::size_t aoi_enter{0};
   std::size_t aoi_leave{0};
@@ -181,10 +172,9 @@ class Session {
         }
         break;
       case SessionState::kOnline:
-        // Fire any due periodic Echoes. Handles the initial post-transfer
-        // Echo (seeded by OnEntityTransferred with a 500 ms delay to let
-        // CellEntityCreated propagate) AND the 1/rpc_rate_hz cadence that
-        // follows. Loop in case we fell behind (e.g. tick jitter).
+        // Fire any due periodic Echoes. Loop in case we fell behind
+        // (e.g. tick jitter) — handles both the initial post-transfer
+        // Echo and the 1/rpc_rate_hz cadence that follows.
         while (echo_pending_ && now >= echo_due_at_) {
           SendEcho();
           if (opts_.rpc_rate_hz > 0) {
@@ -348,15 +338,11 @@ class Session {
                                      ? RandomBetween(opts_.shortline_min_ms, opts_.shortline_max_ms)
                                      : RandomBetween(opts_.hold_min_ms, opts_.hold_max_ms));
 
-    // P2.3c: fire Account.SelectAvatar(space_id) as a ClientBaseRpc. RPC ID
-    // is packed as (direction<<22) | (type_index<<8) | method_index, matching
-    // Atlas.Generators.Def/Emitters/RpcIdEmitter.cs. Account's type_index
-    // is 1 (first alphabetically among {Account, StressAvatar}); base_methods
-    // sort alphabetically to [RequestAvatarList=1, SelectAvatar=2]; direction
-    // 3 is the exposed-base-RPC tag. Cf. baseapp.cc OnClientBaseRpc validation.
-    // P3.3: payload is int32 space_id (1..space_count) in little-endian.
-    // Server-side Account.SelectAvatar forwards this to CreateBaseEntity so
-    // the StressAvatar cell entity lands in the selected space.
+    // Fire Account.SelectAvatar(space_id) as a ClientBaseRpc. RPC ID is
+    // packed as (direction<<22) | (type_index<<8) | method_index (see
+    // RpcIdEmitter.cs). Account's type_index=1, SelectAvatar method_index=2,
+    // direction=3 is the exposed-base-RPC tag. Payload is int32 space_id LE;
+    // server-side Account.SelectAvatar forwards it to CreateBaseEntity.
     constexpr uint32_t kSelectAvatarRpcId = (3u << 22) | (1u << 8) | 2u;
     const int32_t kSpaceCount = opts_.space_count > 0 ? opts_.space_count : 1;
     const int32_t kSpaceId = static_cast<int32_t>(id_ % static_cast<std::size_t>(kSpaceCount)) + 1;
@@ -374,14 +360,11 @@ class Session {
   }
 
   void OnEntityTransferred(const baseapp::EntityTransferred& msg) {
-    // Engine-level handoff notification: our controlling entity has moved
-    // from Account → StressAvatar (or equivalent). Update our cached id
-    // so subsequent cell RPCs target the new entity. Don't start the
-    // Echo / ReportPos streams yet — the cell counterpart may not be
-    // bound on BaseApp's Proxy yet, so a ClientCellRpc fired here would
-    // be dropped with "no cell channel for target entity". Wait for the
-    // matching CellReady instead (engine guarantees it after BaseApp
-    // records cell_addr on the Proxy).
+    // Controlling entity moved (e.g. Account → StressAvatar); refresh our
+    // cached id so subsequent cell RPCs target the new entity. Don't start
+    // Echo / ReportPos yet — wait for CellReady, since the cell counterpart
+    // may not be bound on BaseApp's Proxy and a ClientCellRpc fired here
+    // would drop with "no cell channel for target entity".
     entity_id_ = msg.new_entity_id;
     ++metrics_.entity_transferred;
   }
@@ -402,10 +385,8 @@ class Session {
     if (!auth_channel_ || entity_id_ == kInvalidEntityID) return;
 
     // StressAvatar.Echo is a cell_method (exposed own_client). RPC id
-    // layout matches Atlas.Generators.Def/Emitters/RpcIdEmitter.cs:
-    //   (direction=2 <<22) | (type_index=2 (StressAvatar, 2nd alpha) <<8)
-    //   | method_index=1 (Echo sorts before ReportPos)
-    //   = 0x00800201
+    // layout: (direction=2 <<22) | (type_index=2 <<8) | method_index=1
+    // = 0x00800201 (see RpcIdEmitter.cs).
     constexpr uint32_t kEchoRpcId = (2u << 22) | (2u << 8) | 1u;
 
     const uint32_t seq = next_echo_seq_++;
@@ -433,14 +414,12 @@ class Session {
     if (!auth_channel_ || entity_id_ == kInvalidEntityID) return;
 
     // StressAvatar.ReportPos is a cell_method (exposed all_clients).
-    //   direction=2 (cell) <<22 | type_index=2 <<8 | method_index=2
-    //   (ReportPos sorts after Echo alphabetically) = 0x00800202
+    // RPC id = 0x00800202 (direction=2 cell, type_index=2, method_index=2).
     constexpr uint32_t kReportPosRpcId = (2u << 22) | (2u << 8) | 2u;
 
-    // Tiny random-walk in a 100 m square centred at (0,0,0). Absolute
-    // values stay well under CellApp's single-tick displacement cap
-    // (phase10_cellapp.md §3.12) so AvatarUpdate-style rejects can't
-    // confuse this with the teleport path.
+    // Tiny random-walk in a 100 m square centred at (0,0,0); absolute
+    // values stay well under CellApp's single-tick displacement cap so
+    // AvatarUpdate-style rejects can't confuse this with a teleport.
     std::uniform_real_distribution<float> walk(-1.f, 1.f);
     pos_x_ = std::clamp(pos_x_ + walk(rng_), -50.f, 50.f);
     pos_z_ = std::clamp(pos_z_ + walk(rng_), -50.f, 50.f);
@@ -465,12 +444,10 @@ class Session {
   }
 
   auto OnRawMessage(MessageID id, std::span<const std::byte> payload) -> bool {
-    // EchoReply wire msg_id is the cell-direction 0-bits form of
-    //   (direction=0 <<22) | (type_index=2 <<8) | method_index=1 = 0x0201
+    // EchoReply wire id = 0x0201 (direction=0, type_index=2, method_index=1).
     constexpr MessageID kEchoReplyWireId = 0x0201;
-    // DeltaForwarder::kClientReliableDeltaMessageId — BaseApp relays
-    // CellApp's ReplicatedReliableDeltaFromCell here. The payload starts
-    // with a CellAoIEnvelopeKind byte (enter=1, leave=2, pos=3, prop=4).
+    // Reliable-delta relay (BaseApp → client). Payload's first byte is a
+    // CellAoIEnvelopeKind (enter=1, leave=2, pos=3, prop=4).
     constexpr MessageID kReliableDeltaWireId = 0xF003;
 
     if (id == kEchoReplyWireId) {
@@ -562,9 +539,9 @@ class Session {
     session_key_ = {};
     baseapp_addr_ = {};
     intentionally_offline_ = false;
-    // P3 leak fix: without clearing these, a retry that transitions back
-    // into kOnline before OnEntityTransferred fires would send an Echo at
-    // the *old* Avatar's id, tripping BaseApp's cross-entity reject.
+    // Clear these; otherwise a retry transitioning back into kOnline
+    // before OnEntityTransferred fires would Echo against the *old* avatar
+    // id and trip BaseApp's cross-entity reject.
     echo_pending_ = false;
     next_echo_seq_ = 0;
     move_pending_ = false;
@@ -640,8 +617,6 @@ class Session {
 };
 
 void PrintUsage() {
-  // P2.1: forked from login_stress; behaviour currently identical.
-  // Cell-ready / RPC / AoI instrumentation lands in P2.2+.
   std::cerr
       << "Usage: world_stress --login <host:port> --password-hash <sha256hex> [options]\n"
       << "\n"
@@ -679,7 +654,7 @@ void PrintUsage() {
       << "  --seed <n>                 RNG seed (default: 12345)\n"
       << "  --verbose-failures         Print individual failures\n"
       << "  --script-clients <n>       Spawn N real atlas_client.exe subprocesses that load\n"
-      << "                             --client-assembly; their Phase-B stdout is counted and\n"
+      << "                             --client-assembly; their stdout is counted and\n"
       << "                             summarised alongside virtual-client metrics (default: 0)\n"
       << "  --client-exe <path>        Path to atlas_client.exe (required with --script-clients)\n"
       << "  --client-assembly <path>   Path to Atlas.ClientSample.dll (required with "
@@ -1108,10 +1083,10 @@ int main(int argc, char* argv[]) {
       kOpts->worker_index, kOpts->worker_count, kOpts->source_ips.size(), kOpts->ramp_per_sec,
       kOpts->duration_sec, kOpts->shortline_pct, kOpts->seed);
 
-  // Phase C2: optional real atlas_client.exe subprocess harness. Launched
-  // BEFORE the virtual-client ramp so script children observe the same
-  // server state the raw-protocol clients do. Pumped once per main-loop
-  // iteration so stdout lines don't back up.
+  // Optional real atlas_client.exe subprocess harness. Launched BEFORE
+  // the virtual-client ramp so script children see the same server state
+  // as raw-protocol clients. Pumped once per main-loop iteration so
+  // stdout lines don't back up.
   world_stress::ScriptClientOptions sco;
   sco.exe = kOpts->client_exe;
   sco.assembly = kOpts->client_assembly;

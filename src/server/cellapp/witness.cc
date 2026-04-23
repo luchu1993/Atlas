@@ -212,11 +212,10 @@ auto Witness::SendEntityLeave(EntityID peer_base_id) -> std::size_t {
 void Witness::Update(uint32_t max_packet_bytes) {
   if (!trigger_) return;
 
-  // Phase 1: state transitions (enter, refresh, leave). Collect peers
-  // to process into a temp list so mutations to aoi_map_ during this
-  // pass (unlikely, but possible if SendFn re-entrantly tears down the
-  // witness) don't invalidate iterators. Scratch buffers are class
-  // members to avoid per-tick allocation on a 10Hz hot path.
+  // Step 1: state transitions (enter, refresh, leave). Collect peers into
+  // scratch lists so mutations to aoi_map_ during this pass (possible if
+  // SendFn re-entrantly tears down the witness) don't invalidate iterators.
+  // Scratch buffers are class members to avoid per-tick allocation.
   scratch_enter_.clear();
   scratch_gone_.clear();
   scratch_refresh_.clear();
@@ -266,9 +265,9 @@ void Witness::Update(uint32_t max_packet_bytes) {
     aoi_map_.erase(it);
   }
 
-  // Phase 2: priority heap maintenance for Updatable peers. Rebuild
-  // rather than maintain incrementally — observer positions change every
-  // tick so priorities are stale anyway.
+  // Step 2: priority heap maintenance for Updatable peers. Rebuild rather
+  // than maintain incrementally — observer positions change every tick so
+  // priorities are stale anyway.
   priority_queue_.clear();
   priority_queue_.reserve(aoi_map_.size());
   for (auto& [id, cache] : aoi_map_) {
@@ -281,12 +280,11 @@ void Witness::Update(uint32_t max_packet_bytes) {
   std::make_heap(priority_queue_.begin(), priority_queue_.end(),
                  [](const auto& a, const auto& b) { return a.first > b.first; });
 
-  // Phase 3: per-peer update pump — property deltas + volatile position.
-  // Walk the heap in priority order; each entity gets SendEntityUpdate
-  // which decides whether to forward catch-up delta, snapshot fallback,
-  // or a volatile position update. The budget gates how many peers we
-  // service this tick; any that didn't fit carry over (their priority
-  // stays where it was, so next tick they float up).
+  // Step 3: per-peer update pump — property deltas + volatile position.
+  // Walk the heap in priority order; SendEntityUpdate picks between
+  // catch-up delta, snapshot fallback, or a volatile position update.
+  // The budget gates how many peers we service this tick; any that didn't
+  // fit carry over (priority stays put, so next tick they float up).
   const int tick_budget = static_cast<int>(max_packet_bytes) - bandwidth_deficit_;
   while (!priority_queue_.empty() && bytes_sent < tick_budget) {
     std::pop_heap(priority_queue_.begin(), priority_queue_.end(),
@@ -302,7 +300,7 @@ void Witness::Update(uint32_t max_packet_bytes) {
     bytes_sent += static_cast<int>(SendEntityUpdate(cache));
   }
 
-  // Phase 4: bandwidth deficit for next tick.
+  // Step 4: bandwidth deficit for next tick.
   bandwidth_deficit_ = std::max(0, bytes_sent - static_cast<int>(max_packet_bytes));
 
   // Deficit larger than a whole tick's budget means the next tick alone
@@ -322,19 +320,10 @@ void Witness::Update(uint32_t max_packet_bytes) {
   }
 }
 
-// ---------------------------------------------------------------------------
-// SendEntityUpdate — per-peer catch-up pump
-// ---------------------------------------------------------------------------
-//
-// Pulls two streams off the peer's ReplicationState:
-//   1) Volatile (latest-wins): bump last_volatile_seq in one go to the
-//      peer's current latest, sending a single EntityPositionUpdate
-//      envelope with the peer's current pos/dir/on_ground.
-//   2) Event (ordered, cumulative): try to replay every history frame
-//      from last_event_seq+1 through latest_event_seq. If the window
-//      doesn't cover the full range (because the peer dropped older
-//      frames), fall back to shipping the other-scope snapshot.
-//
+// SendEntityUpdate — per-peer catch-up pump. Pulls two streams off the
+// peer's ReplicationState: volatile (latest-wins position update) and
+// event (ordered, replays history from last_event_seq+1..latest; snapshot
+// fallback when the window no longer covers the observer's gap).
 auto Witness::SendEntityUpdate(EntityCache& cache) -> std::size_t {
   const auto* state = cache.entity->GetReplicationState();
   if (!state) return 0;
@@ -404,10 +393,9 @@ auto Witness::SendEntityUpdate(EntityCache& cache) -> std::size_t {
       if (frame.event_seq > state->latest_event_seq) break;  // defensive
 
       const auto& delta_bytes = observer_is_owner ? frame.owner_delta : frame.other_delta;
-      // Even "empty" per-audience deltas still carry PR-C's leading flag
-      // byte, so we always ship something when a frame falls into our
-      // range — suppress entirely only if the peer genuinely had no
-      // audience-visible change this frame.
+      // Per-audience deltas always carry a leading flag byte, so we ship
+      // whenever a frame falls into our range; suppress only when the peer
+      // had no audience-visible change this frame (delta_bytes empty).
       if (!delta_bytes.empty()) {
         auto payload = BuildPropertyUpdatePayload(frame.event_seq, delta_bytes);
         auto envelope =

@@ -5,16 +5,13 @@ namespace atlas::world_stress {
 namespace {
 
 // Match "] <Event>" where `<Event>` is the exact token after the closing
-// bracket of "[<TypeName>:<EntityId>]". We don't parse the entity id itself
-// — the harness only aggregates per-child counts today; the id is noise at
-// this layer. Kept as positional substring lookup (no regex) so the tap
-// stays header-only-friendly and has zero startup cost per line.
+// bracket of "[<TypeName>:<EntityId>]". Entity id itself is discarded —
+// only per-child counts matter here. Positional substring parsing (no
+// regex) keeps this zero-cost.
 //
-// L6: client logs now emit `[t=<seconds>] [<Type>:<Id>] <Event>` — the
-// leading timestamp bracket is stripped here before the type:id bracket
-// parse so existing counters work unchanged. The raw value is not kept
-// by the tap (analysis scripts lift it back out with a regex) — the
-// benefit is purely that convergence timing is recoverable post-run.
+// Client logs may prefix with `[t=<seconds>] `; the timestamp bracket is
+// stripped before the type:id bracket parse. The timestamp is not
+// retained (analysis scripts lift it back out post-run).
 auto EventBegins(std::string_view line) -> std::string_view {
   // Strip optional leading timestamp bracket: `[t=12.345] ` (prefix +
   // exactly one space). If the line doesn't start with `[t=` the line
@@ -76,11 +73,9 @@ auto ParseAndCountClientEventLine(std::string_view line, ClientEventCounters& ou
     return true;
   }
 
-  // event_seq gap warning — Phase D2'.3. Format (from
-  // ClientEntity.NoteIncomingEventSeq):
+  // event_seq gap warning (from ClientEntity.NoteIncomingEventSeq):
   //   [<Type>:<Id>] event_seq gap: last=A got=B missed=N
-  // We add N to the counter so it reflects the number of lost deltas,
-  // not the number of warning lines.
+  // Add N to the counter so it reflects lost deltas, not warning lines.
   if (StartsWithToken(rest, "event_seq gap")) {
     auto missed_pos = rest.find("missed=");
     if (missed_pos != std::string_view::npos) {

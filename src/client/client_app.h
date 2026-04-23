@@ -34,21 +34,15 @@ class ClientApp {
     std::string password_hash;
     std::filesystem::path script_assembly;
     std::filesystem::path runtime_config;
-    // Phase C3 reliability test hook — drop every inbound state-replication
-    // message (0xF001 / 0xF002 / 0xF003) whose arrival time, measured from
-    // ClientApp::MainLoop entry, lies within [drop_inbound_start_ms,
-    // drop_inbound_start_ms + drop_inbound_duration_ms). 0/0 = off.
-    // Application-layer filter — RUDP has already ACKed the packet, so
-    // reliable retransmit will NOT kick in; useful for validating the
-    // gap-detection path without also involving the transport.
+    // Application-layer drop window for state-replication messages
+    // (0xF001/0xF002/0xF003), measured from MainLoop entry. RUDP has already
+    // ACKed, so no retransmit — exercises the gap-detection path. 0/0 = off.
     int drop_inbound_start_ms{0};
     int drop_inbound_duration_ms{0};
 
-    // script_client_smoke.md 场景 3: transport-level drop, installed on
-    // the ReliableUdpChannel before ACK generation. Reliable packets lost
-    // in the window get retransmitted after the RTO, so a long-enough
-    // run converges back to full event counts with zero gaps even
-    // though many datagrams were silently dropped. 0/0 = off.
+    // Transport-layer drop window, installed on the ReliableUdpChannel before
+    // ACK generation. Reliable packets lost in the window retransmit after
+    // RTO, validating recovery through the transport. 0/0 = off.
     int drop_transport_start_ms{0};
     int drop_transport_duration_ms{0};
   };
@@ -70,14 +64,9 @@ class ClientApp {
   auto InitClr(const char* exe_path) -> bool;
   void FiniClr();
 
-  // Desktop-only CLR glue. InvokeDesktopBootstrap binds
-  // Atlas.Client.DesktopBootstrap.Initialize in Atlas.Client.Desktop.dll
-  // (loaded transitively via the user's script assembly) and invokes it
-  // once so the ClientHost delegate slots + native callback table are
-  // filled before any generated ModuleInitializer in the user assembly
-  // runs. LoadUserAssembly calls Atlas.Client.DesktopBootstrap.
-  // LoadUserAssembly — a thin Assembly.LoadFrom wrapper — so the user's
-  // module initializers fire on the already-bootstrapped CLR.
+  // Desktop-only CLR glue: InvokeDesktopBootstrap fills ClientHost delegate
+  // slots + native callback table before any user-assembly ModuleInitializer
+  // runs; LoadUserAssembly then triggers those initializers on the ready CLR.
   [[nodiscard]] auto InvokeDesktopBootstrap() -> Result<void>;
   [[nodiscard]] auto LoadUserAssembly(const std::filesystem::path& path) -> Result<void>;
 
@@ -104,9 +93,8 @@ class ClientApp {
   bool authenticated_{false};
   bool shutdown_requested_{false};
 
-  // Set once at MainLoop entry; used by the C3 inbound drop filter to
-  // measure "time since client boot". Zero-valued when no MainLoop has
-  // started yet.
+  // Set once at MainLoop entry; used by the inbound drop filter to
+  // measure "time since client boot". Zero when no MainLoop has started.
   std::chrono::steady_clock::time_point loop_start_{};
 };
 

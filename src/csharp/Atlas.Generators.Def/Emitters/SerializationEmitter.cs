@@ -32,25 +32,12 @@ internal static class SerializationEmitter
         sb.AppendLine("    private const byte kSerializationVersion = 1;");
         sb.AppendLine();
 
-        // ATLAS_DEF008: reserved-position properties are skipped everywhere.
-        // PropertiesEmitter doesn't emit a backing field for them, so
-        // referencing `_position` here would not compile.
-        //
-        // The base/cell split gives us TWO independent "full state" wire
-        // formats:
-        //   * Base.Serialize writes base-persistent fields (goes to DBApp
-        //     via GetEntityData → dbapp::WriteEntity) — DATA_BASE only.
-        //   * Cell.Serialize writes cell-authoritative fields (goes to the
-        //     offload bundle and to BaseApp as cellBackupData opaque bytes)
-        //     — CELL_DATA only.
-        // Each blob is decoded in its matching ctx only; base never
-        // deserialises cell fields and vice versa. Client projects whatever
-        // it can observe regardless of which side authored it.
-        //
-        // Cross-side persistence: BaseApp stitches base bytes +
-        // cell_backup_data_ into the persistent blob, so cell-scope
-        // persistent="true" properties survive the DB round-trip even
-        // though Cell.Serialize emits cell-only bytes.
+        // ATLAS_DEF008: reserved-position props are skipped — PropertiesEmitter
+        // emits no backing field, so referencing `_position` would not compile.
+        // Base.Serialize writes DATA_BASE fields (to DBApp); Cell.Serialize
+        // writes CELL_DATA fields (to offload bundle and BaseApp's cellBackup
+        // bytes). BaseApp stitches base bytes + cell_backup_data_ for the
+        // persistent blob so cell-scope persistent="true" round-trips cleanly.
         var sideProps = GetPropertiesForContext(def.Properties, ctx)
             .Where(p => !p.IsReservedPosition).ToList();
 
@@ -62,13 +49,10 @@ internal static class SerializationEmitter
             sb.AppendLine();
         }
 
-        // Deserialize reads the matching wire format — same scope partition
-        // as the writer above. Client's side filter is built into
-        // GetPropertiesForContext (keeps only IsClientVisible), so the
-        // "read-and-discard" branch inside EmitDeserialize is now dead code
-        // for Client ctx (every prop in sideProps has a field on the client
-        // too). Retained as a harmless passthrough until wire-format layer
-        // is simplified in a later commit.
+        // Deserialize reads the matching wire format. The read-and-discard
+        // branch in EmitDeserialize is dead for Client ctx today (the side
+        // filter already excludes non-visible props) but kept as a harmless
+        // passthrough until the wire-format layer is simplified.
         EmitDeserialize(sb, sideProps, ctx);
 
         sb.AppendLine("}");

@@ -95,20 +95,14 @@ enum class BaseApp : uint16_t {
   // Internal: CellApp → BaseApp. Periodic opaque-bytes snapshot of the
   // cell-authoritative CELL_DATA properties, stored verbatim on the
   // BaseApp's Proxy as cell_backup_data_ for DB writes / reviver /
-  // cell-migration. Directly mirrors BigWorld's
-  // BaseAppIntInterface::backupCellEntity (bigworld/server/cellapp/
-  // real_entity.cpp:884-906). BaseApp never reads the bytes — it only
-  // relays them to whatever consumer needs them.
+  // cell-migration. BaseApp never reads the bytes — only relays them.
   kBackupCellEntity = 2018,
   // Internal: CellApp → BaseApp. Periodic owner-scope full snapshot of
   // cell-authoritative properties, for BaseApp to relay as
-  // ReplicatedBaselineToClient (0xF002) to the owning client. L4 path —
-  // re-enables the baseline safety net for reliable="false" properties
-  // after M2's generator split made the base-hosted baseline pump
-  // produce stale zeros. The wire payload is the cell-side
-  // SerializeForOwnerClient output, byte-identical to what the
-  // pre-M2 baseapp pump produced for entities whose owner-visible
-  // fields lived entirely on the base.
+  // ReplicatedBaselineToClient (0xF002) to the owning client. Baseline
+  // safety net for reliable="false" properties whose backing field lives
+  // on the cell side. Wire payload is the cell's SerializeForOwnerClient
+  // output.
   kReplicatedBaselineFromCell = 2019,
   // External: Client ↔ BaseApp
   kAuthenticate = 2020,
@@ -146,11 +140,10 @@ enum class CellApp : uint16_t {
   kCreateCellEntity = 3000,
   kDestroyCellEntity = 3002,
   // Client → BaseApp → CellApp (client-initiated cell RPC, REAL_ONLY,
-  // needs Exposed + sourceEntityID validation on arrival). Mirrors
-  // BigWorld's runExposedMethod.
+  // requires Exposed + sourceEntityID validation on arrival).
   kClientCellRpcForward = 3003,
   // Server-internal Base → CellApp (REAL_ONLY, no Exposed check — the
-  // base side is already trusted). Mirrors BigWorld's runScriptMethod.
+  // base side is already trusted).
   kInternalCellRpc = 3004,
   kCreateSpace = 3010,
   kDestroySpace = 3011,
@@ -158,7 +151,7 @@ enum class CellApp : uint16_t {
   kEnableWitness = 3021,
   kDisableWitness = 3022,
   kSetAoIRadius = 3023,
-  // ── Phase 11: inter-CellApp Real/Ghost + Offload (3100–3199) ───────────
+  // ── inter-CellApp Real/Ghost + Offload (3100–3199) ─────────────────────
   // Real ↔ Ghost replication (Real CellApp → Ghost CellApp).
   kCreateGhost = 3100,
   kDeleteGhost = 3101,
@@ -174,11 +167,10 @@ enum class CellApp : uint16_t {
 
 // ── CellAppMgr (7000–7099) ────────────────────────────────────────────────────
 //
-// Phase 11. Spans both CellApp↔CellAppMgr registration/load and
-// CellAppMgr→CellApp control plane (AddCell/UpdateGeometry/ShouldOffload).
-// Convention: same subsystem owns the enum regardless of direction (mirrors
-// BaseAppMgr, where RegisterBaseAppAck lives in BaseAppMgr enum despite
-// BaseAppMgr → BaseApp direction).
+// Spans both CellApp↔CellAppMgr registration/load and CellAppMgr→CellApp
+// control plane (AddCell/UpdateGeometry/ShouldOffload). Convention: same
+// subsystem owns the enum regardless of direction (matches BaseAppMgr, where
+// RegisterBaseAppAck lives here despite the BaseAppMgr → BaseApp direction).
 
 enum class CellAppMgr : uint16_t {
   kRegisterCellApp = 7000,     // CellApp → CellAppMgr

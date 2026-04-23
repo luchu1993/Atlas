@@ -12,7 +12,6 @@ namespace atlas {
 // ============================================================================
 // CheckoutManager — in-memory entity checkout tracker
 //
-// Mirrors BigWorld's LogOnRecordsCache.
 // Prevents the same entity from being loaded by two BaseApps simultaneously.
 //
 // States:
