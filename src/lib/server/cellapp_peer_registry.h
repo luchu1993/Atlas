@@ -2,6 +2,7 @@
 #define ATLAS_LIB_SERVER_CELLAPP_PEER_REGISTRY_H_
 
 #include <cstddef>
+#include <functional>
 #include <unordered_map>
 
 #include "network/address.h"
@@ -34,12 +35,21 @@ class CellAppPeerRegistry {
   CellAppPeerRegistry(const CellAppPeerRegistry&) = delete;
   auto operator=(const CellAppPeerRegistry&) -> CellAppPeerRegistry& = delete;
 
+  // Fired on peer-death AFTER the channel is looked up but BEFORE it is
+  // erased from the registry, giving the callback a last chance to sweep
+  // application-level references (e.g. Ghost real_channel_, Haunt lists)
+  // while `dying` is still the right identity to compare against.
+  using PeerDeathHandler = std::function<void(const Address& addr, Channel* dying)>;
+
   // Installs Birth/Death handlers on machined for ProcessType::kCellApp.
   // Call once per process, typically from Init() after MachinedClient
   // has been connected AND NetworkInterface has bound its RUDP port
   // (so `self_addr` is known for the self-filter). Callers that can
   // never be their own peer — BaseApp, DBApp — pass a default Address.
-  void Subscribe(MachinedClient& machined, Address self_addr);
+  //
+  // `on_death` is optional; when provided it runs on every recognised
+  // CellApp death before the channel entry is dropped.
+  void Subscribe(MachinedClient& machined, Address self_addr, PeerDeathHandler on_death = {});
 
   // Returns the peer's channel or nullptr if not currently registered.
   [[nodiscard]] auto Find(const Address& addr) const -> Channel*;

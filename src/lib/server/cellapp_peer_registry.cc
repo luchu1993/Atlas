@@ -11,7 +11,8 @@ namespace atlas {
 
 CellAppPeerRegistry::CellAppPeerRegistry(NetworkInterface& network) : network_(network) {}
 
-void CellAppPeerRegistry::Subscribe(MachinedClient& machined, Address self_addr) {
+void CellAppPeerRegistry::Subscribe(MachinedClient& machined, Address self_addr,
+                                    PeerDeathHandler on_death) {
   self_addr_ = self_addr;
   machined.Subscribe(
       machined::ListenerType::kBoth, ProcessType::kCellApp,
@@ -24,11 +25,14 @@ void CellAppPeerRegistry::Subscribe(MachinedClient& machined, Address self_addr)
         auto ch = network_.ConnectRudpNocwnd(n.internal_addr);
         if (ch) channels_.insert_or_assign(n.internal_addr, static_cast<Channel*>(*ch));
       },
-      [this](const machined::DeathNotification& n) {
-        if (channels_.erase(n.internal_addr) > 0) {
-          ATLAS_LOG_WARNING("CellAppPeerRegistry: CellApp died at {}:{}", n.internal_addr.Ip(),
-                            n.internal_addr.Port());
-        }
+      [this, on_death = std::move(on_death)](const machined::DeathNotification& n) {
+        auto it = channels_.find(n.internal_addr);
+        if (it == channels_.end()) return;
+        Channel* dying = it->second;
+        if (on_death) on_death(n.internal_addr, dying);
+        channels_.erase(it);
+        ATLAS_LOG_WARNING("CellAppPeerRegistry: CellApp died at {}:{}", n.internal_addr.Ip(),
+                          n.internal_addr.Port());
       });
 }
 

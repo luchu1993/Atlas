@@ -134,6 +134,13 @@ class CellApp : public EntityApp {
   // already died).
   [[nodiscard]] auto FindPeerChannel(const Address& addr) const -> Channel*;
 
+  // Sweep application-level references to a dying peer CellApp: Ghosts
+  // whose Real lived on that peer are dropped (their authoritative
+  // source is gone), and every Real's Haunt list drops the dying
+  // Channel* so later broadcasts don't chase a freed pointer.
+  // Invoked from the peer-registry death handler; exposed for tests.
+  void OnPeerCellAppDeath(const Address& addr, Channel* dying);
+
   // ---- Offload orchestration (exposed for tests) --------------------------
 
   // Build an OffloadEntity message for `entity`. Does NOT send; caller

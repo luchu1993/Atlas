@@ -27,6 +27,7 @@
 #include "network/channel.h"
 #include "network/event_dispatcher.h"
 #include "network/network_interface.h"
+#include "real_entity_data.h"
 #include "space.h"
 
 namespace atlas {
@@ -519,6 +520,61 @@ TEST_F(CellAppHandlersTest, GhostPositionUpdateRejectsNaN) {
   // Position must remain at the original values.
   EXPECT_FLOAT_EQ(ghost->Position().x, 10.f);
   EXPECT_FLOAT_EQ(ghost->Position().z, 20.f);
+}
+
+// Peer death must drop Ghosts whose real_channel points at the dying
+// peer AND scrub the dead Channel* from every surviving Real's Haunt
+// list; otherwise a later GhostMaintainer broadcast would chase a
+// pointer the NetworkInterface has since condemned.
+TEST_F(CellAppHandlersTest, PeerDeathDropsOrphanGhostsAndClearsHaunts) {
+  cellapp::CreateSpace cs;
+  cs.space_id = 1;
+  app_.OnCreateSpace({}, nullptr, cs);
+
+  auto* dying_ch = FakeChannel(0xDEAD);
+  auto* other_ch = FakeChannel(0xCAFE);
+
+  // Ghost whose Real lives on the dying peer → must be dropped.
+  cellapp::CreateGhost cg;
+  cg.real_entity_id = 700;
+  cg.type_id = 1;
+  cg.space_id = 1;
+  cg.position = {0, 0, 0};
+  cg.direction = {1, 0, 0};
+  cg.real_cellapp_addr = Address(0x7F000001u, 40001);
+  cg.base_entity_id = 700;
+  app_.OnCreateGhost({}, dying_ch, cg);
+  ASSERT_NE(app_.FindEntity(700), nullptr);
+
+  // Ghost whose Real lives elsewhere → must survive the sweep.
+  cellapp::CreateGhost cg_ok;
+  cg_ok.real_entity_id = 701;
+  cg_ok.type_id = 1;
+  cg_ok.space_id = 1;
+  cg_ok.position = {5, 0, 5};
+  cg_ok.direction = {1, 0, 0};
+  cg_ok.real_cellapp_addr = Address(0x7F000001u, 40002);
+  cg_ok.base_entity_id = 701;
+  app_.OnCreateGhost({}, other_ch, cg_ok);
+  ASSERT_NE(app_.FindEntity(701), nullptr);
+
+  // Real with Haunt pointing at the dying peer → Haunt must be cleared.
+  app_.OnCreateCellEntity({}, nullptr, MakeCreate(800, 1, {20, 0, 20}));
+  auto* real = app_.FindEntityByBaseId(800);
+  ASSERT_NE(real, nullptr);
+  ASSERT_TRUE(real->IsReal());
+  auto* rd = real->GetRealData();
+  ASSERT_NE(rd, nullptr);
+  ASSERT_TRUE(rd->AddHaunt(dying_ch));
+  ASSERT_TRUE(rd->AddHaunt(other_ch));
+  ASSERT_EQ(rd->HauntCount(), 2u);
+
+  app_.OnPeerCellAppDeath(Address(0x7F000001u, 40001), dying_ch);
+
+  EXPECT_EQ(app_.FindEntity(700), nullptr) << "orphan Ghost should be dropped";
+  EXPECT_NE(app_.FindEntity(701), nullptr) << "unrelated Ghost must survive";
+  EXPECT_EQ(rd->HauntCount(), 1u) << "dying peer's Haunt should be gone";
+  EXPECT_TRUE(rd->HasHaunt(other_ch)) << "surviving peer's Haunt untouched";
 }
 
 }  // namespace

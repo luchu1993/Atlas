@@ -188,8 +188,11 @@ auto CellApp::Init(int argc, char* argv[]) -> bool {
 
   // Subscribe to peer CellApps via the shared registry. self_addr is
   // our own RUDP address so machined's re-broadcast of our own Birth
-  // doesn't add us to the peer list.
-  peer_registry_.Subscribe(GetMachinedClient(), /*self_addr=*/Network().RudpAddress());
+  // doesn't add us to the peer list. The death hook sweeps Ghosts that
+  // lost their Real + Haunt lists that still reference the dying peer.
+  peer_registry_.Subscribe(
+      GetMachinedClient(), /*self_addr=*/Network().RudpAddress(),
+      [this](const Address& addr, Channel* dying) { OnPeerCellAppDeath(addr, dying); });
 
   // Track BaseApp peers so OnClientCellRpcForward can reject spoofed
   // senders. Addresses only — we don't send anything back through this
@@ -760,6 +763,37 @@ void CellApp::OnSetAoIRadius(const Address& /*src*/, Channel* /*ch*/,
 
 auto CellApp::FindPeerChannel(const Address& addr) const -> Channel* {
   return peer_registry_.Find(addr);
+}
+
+void CellApp::OnPeerCellAppDeath(const Address& addr, Channel* dying) {
+  // Collect orphan Ghost ids up-front — we can't erase from
+  // entity_population_ while iterating it. Reals get their Haunt list
+  // repaired in place; that's map-key-preserving so safe mid-iter.
+  std::vector<EntityID> orphan_ghosts;
+  uint32_t haunts_cleared = 0;
+  for (auto& [id, entity] : entity_population_) {
+    if (entity->IsGhost()) {
+      if (entity->GetRealChannel() == dying) orphan_ghosts.push_back(id);
+    } else if (entity->IsReal()) {
+      if (auto* rd = entity->GetRealData()) {
+        if (rd->RemoveHaunt(dying)) ++haunts_cleared;
+      }
+    }
+  }
+
+  for (EntityID id : orphan_ghosts) {
+    auto it = entity_population_.find(id);
+    if (it == entity_population_.end()) continue;
+    auto* entity = it->second;
+    entity_population_.erase(it);
+    entity->GetSpace().RemoveEntity(id);
+  }
+
+  if (!orphan_ghosts.empty() || haunts_cleared > 0) {
+    ATLAS_LOG_WARNING(
+        "CellApp: peer CellApp {}:{} died — dropped {} orphan Ghost(s), cleared {} Haunt(s)",
+        addr.Ip(), addr.Port(), orphan_ghosts.size(), haunts_cleared);
+  }
 }
 
 void CellApp::OnCreateGhost(const Address& /*src*/, Channel* ch, const cellapp::CreateGhost& msg) {
