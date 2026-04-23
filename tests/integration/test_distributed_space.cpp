@@ -1,8 +1,8 @@
-// Phase 11 C11 — end-to-end Real/Ghost/Offload over real RUDP.
+// End-to-end Real/Ghost/Offload over real RUDP.
 //
 // Two CellApp instances share one test thread, each bound to its own
 // EventDispatcher + NetworkInterface on an ephemeral 127.0.0.1 UDP port.
-// We register the Phase 11 inter-CellApp handlers directly on each side's
+// We register the inter-CellApp handlers directly on each side's
 // InterfaceTable (bypassing CellApp::Init — which would try to stand up
 // the CLR, machined subscription, and a CellAppMgr connection), then
 // drive the canonical Real → Ghost → Offload → Real-on-peer handshake
@@ -19,7 +19,7 @@
 // Non-wire machinery (TickGhostPump / TickOffloadChecker / BSP-driven
 // triggers / C# persistence) is exercised elsewhere — test_real_ghost,
 // test_ghost_maintainer, test_offload_checker, test_cellapp_handlers.
-// C11 is deliberately about the wire handshake.
+// This test focuses on the wire handshake.
 
 #include <chrono>
 #include <cstddef>
@@ -48,10 +48,10 @@ namespace atlas {
 namespace {
 
 // ----------------------------------------------------------------------------
-// Host wrapper: one EventDispatcher + NetworkInterface + CellApp, with the
-// Phase 11 intercell handlers wired directly onto the InterfaceTable. No
-// Init() call — Init would attempt machined / CellAppMgr bring-up we don't
-// want in a handler-level integration test.
+// Host wrapper: one EventDispatcher + NetworkInterface + CellApp, with
+// the intercell handlers wired directly onto the InterfaceTable. No
+// Init() call — Init would attempt machined / CellAppMgr bring-up we
+// don't want in a handler-level integration test.
 // ----------------------------------------------------------------------------
 
 struct CellAppHost {

@@ -111,7 +111,7 @@ auto CellApp::Init(int argc, char* argv[]) -> bool {
         OnSetAoIRadius(src, ch, msg);
       });
 
-  // ---- Phase 11 inter-CellApp handlers ----------------------------------
+  // ---- Inter-CellApp handlers ----------------------------------
   (void)table.RegisterTypedHandler<cellapp::CreateGhost>(
       [this](const Address& src, Channel* ch, const cellapp::CreateGhost& msg) {
         OnCreateGhost(src, ch, msg);
@@ -186,15 +186,15 @@ auto CellApp::Init(int argc, char* argv[]) -> bool {
       },
       nullptr);
 
-  // Subscribe to peer CellApps via the shared registry (review-fix C2).
-  // self_addr is our own RUDP address so machined's re-broadcast of our
-  // own Birth doesn't add us to the peer list.
+  // Subscribe to peer CellApps via the shared registry. self_addr is
+  // our own RUDP address so machined's re-broadcast of our own Birth
+  // doesn't add us to the peer list.
   peer_registry_.Subscribe(GetMachinedClient(), /*self_addr=*/Network().RudpAddress());
 
-  // Phase 11 C7: track BaseApp peers so OnClientCellRpcForward can
-  // reject spoofed senders. Addresses only — we don't send anything
-  // back through this channel directly; responses ride the same
-  // Channel* the handler received on.
+  // Track BaseApp peers so OnClientCellRpcForward can reject spoofed
+  // senders. Addresses only — we don't send anything back through this
+  // channel directly; responses ride the same Channel* the handler
+  // received on.
   GetMachinedClient().Subscribe(
       machined::ListenerType::kBoth, ProcessType::kBaseApp,
       [this](const machined::BirthNotification& n) {
@@ -224,7 +224,7 @@ void CellApp::Fini() {
 }
 
 void CellApp::OnEndOfTick() {
-  // Phase 11: drive Ghost maintenance + Offload checks at tick tail so
+  // Drive Ghost maintenance + Offload checks at tick tail so
   // controllers (which may have moved entities) have already committed
   // this frame's positions. GhostMaintainer runs first so a just-
   // crossed entity still has its haunts published before the Offload
@@ -235,9 +235,8 @@ void CellApp::OnEndOfTick() {
   //   OnTickComplete (CellApp: TickControllers + TickWitnesses)
   // An entity offloaded here becomes a Ghost BEFORE this frame's C#
   // tick runs. TickWitnesses then skips it (HasWitness() is false after
-  // ConvertRealToGhost), and Phase 11 §3.5 Step 9's "witness teardown
-  // before controller stop" ordering is preserved by the Convert method
-  // itself.
+  // ConvertRealToGhost); the "witness teardown before controller stop"
+  // ordering is preserved by the Convert method itself.
   TickGhostPump();
   TickOffloadChecker();
   TickOffloadAckTimeouts();
@@ -256,20 +255,17 @@ void CellApp::OnTickComplete() {
   TickBackupPump();
   TickClientBaselinePump();
 
-  // BigWorld parity: `updateLoad()` then `cellAppMgr_.informOfLoad()`
-  // every tick (cellapp.cpp:1312-1314). The smoother reads the PREVIOUS
-  // tick's work time (set by ServerApp::AdvanceTime after this method
-  // returns); first-tick-after-boot reports 0, which CellAppMgr already
-  // tolerates.
+  // updateLoad + informOfLoad run every tick. The smoother reads the
+  // PREVIOUS tick's work time (set by ServerApp::AdvanceTime after this
+  // method returns); first-tick-after-boot reports 0, which CellAppMgr
+  // already tolerates.
   UpdatePersistentLoad();
   SendInformCellLoad();
 }
 
 void CellApp::RegisterWatchers() {
   EntityApp::RegisterWatchers();
-  // Phase 10 §3.11 telemetry surfaces land here. Left empty for the
-  // Step 10.8 skeleton so the process boots cleanly; follow-up work
-  // adds entities / spaces / bandwidth budget gauges.
+  // TODO: add entities / spaces / bandwidth budget gauges.
 }
 
 // ============================================================================
@@ -281,8 +277,7 @@ void CellApp::TickControllers(float dt) {
 }
 
 void CellApp::TickWitnesses() {
-  // Budget and fan-out policy live in phase10_cellapp.md §3.11. 4 KB/tick
-  // per observer is the baseline Phase 10 target; tests exercise the
+  // 4 KB/tick per observer is the baseline budget; tests exercise the
   // heap + catch-up plumbing regardless of the exact budget.
   constexpr uint32_t kPerObserverBudget = 4096;
   for (auto& [_, space] : spaces_) {
@@ -298,8 +293,8 @@ void CellApp::TickBackupPump() {
 
   // SerializeEntity callback is optional — no C# runtime registered
   // (unit tests, early boot, scriptless nodes) means nothing to
-  // snapshot. Post-M2 the callback returns CELL_DATA only, so the
-  // bytes are safe to ship verbatim without leaking base-scope state.
+  // snapshot. The callback returns CELL_DATA only, so the bytes are
+  // safe to ship verbatim without leaking base-scope state.
   if (native_provider_ == nullptr || native_provider_->serialize_entity_fn() == nullptr) {
     return;
   }
@@ -310,8 +305,8 @@ void CellApp::TickBackupPump() {
     const Address& base_addr = entity->BaseAddr();
     if (base_addr.Ip() == 0) continue;  // no base binding yet — skip until next pump
 
-    // Size probe + fetch, same two-phase protocol as BuildOffloadMessage
-    // (see Phase 11 §4 / PR-6). Keeps buffer allocation on the C++ side.
+    // Size probe + fetch, same two-phase protocol as BuildOffloadMessage.
+    // Keeps buffer allocation on the C++ side.
     int32_t probe_out_len = 0;
     const int32_t probe = fn(entity->Id(), /*out_buf=*/nullptr, /*cap=*/0, &probe_out_len);
     const int32_t needed = probe > 0 ? probe : (probe == 0 ? probe_out_len : -1);
@@ -343,10 +338,9 @@ void CellApp::TickClientBaselinePump() {
   if (client_baseline_tick_counter_ % kClientBaselineIntervalTicks != 0) return;
 
   // GetOwnerSnapshot is optional — unit tests without a C# runtime, or
-  // a runtime from before L4 landed, leave the slot null. Short-circuit
-  // is safe: no baseline → same behaviour as the M2-disabled BaseApp
-  // pump, i.e. no safety net for reliable="false" but no corruption
-  // either.
+  // a runtime that doesn't register the callback, leave the slot null.
+  // Short-circuit is safe: no baseline means no safety net for
+  // reliable="false" but no corruption either.
   if (native_provider_ == nullptr || native_provider_->get_owner_snapshot_fn() == nullptr) {
     return;
   }
@@ -403,11 +397,11 @@ auto CellApp::FindSpace(SpaceID id) -> Space* {
 }
 
 auto CellApp::AllocateCellEntityId() -> EntityID {
-  // §9.6 Q8 scheme A — high 8 bits = app_id, low 24 bits = CellApp-local
-  // monotonic counter. Until RegisterCellAppAck lands, app_id_ == 0 and
-  // we produce Phase-10-compatible IDs that work for single-CellApp
-  // tests. In production, Init synchronously registers before any
-  // CreateCellEntity traffic arrives.
+  // High 8 bits = app_id, low 24 bits = CellApp-local monotonic counter.
+  // Until RegisterCellAppAck lands, app_id_ == 0 and we produce IDs
+  // that work for single-CellApp tests. In production, Init
+  // synchronously registers before any CreateCellEntity traffic
+  // arrives.
   const uint32_t local = next_entity_id_++ & 0x00FFFFFFu;
   return (app_id_ << 24) | local;
 }
@@ -449,10 +443,10 @@ void CellApp::OnCreateCellEntity(const Address& src, Channel* ch,
   entity_population_[cell_id] = entity;
   base_entity_population_[msg.base_entity_id] = entity;
 
-  // Phase 11: register the new Real with the appropriate local Cell.
-  // Use the BSP tree (if present) to pick which local Cell owns this
-  // position; fall back to any single local Cell when geometry isn't
-  // published yet. Without a local Cell the entity still exists in
+  // Register the new Real with the appropriate local Cell. Use the BSP
+  // tree (if present) to pick which local Cell owns this position;
+  // fall back to any single local Cell when geometry isn't published
+  // yet. Without a local Cell the entity still exists in
   // entity_population_ but no OffloadChecker/GhostMaintainer entry
   // will fire — acceptable in single-CellApp mode.
   if (auto* tree = space->GetBspTree(); tree != nullptr) {
@@ -489,11 +483,10 @@ void CellApp::OnCreateCellEntity(const Address& src, Channel* ch,
     }
   }
 
-  // PR 34 / Commit C2: creating a cell entity no longer auto-enables a
-  // witness. Client binding (BaseApp::BindClient, landed in C3) sends
-  // cellapp::EnableWitness separately — aligning with BigWorld's
-  // RealEntity::addWitness, where witness attachment is bound to client
-  // presence rather than entity creation.
+  // Creating a cell entity does not auto-enable a witness. Client
+  // binding (BaseApp::BindClient) sends cellapp::EnableWitness
+  // separately, binding witness attachment to client presence rather
+  // than entity creation.
   (void)src;
   (void)ch;
 }
@@ -525,12 +518,12 @@ void CellApp::OnDestroyCellEntity(const Address& /*src*/, Channel* /*ch*/,
 
 void CellApp::OnClientCellRpcForward(const Address& src, Channel* /*ch*/,
                                      const cellapp::ClientCellRpcForward& msg) {
-  // Phase 11 C7 / Phase 10 §10.1 #1 hard constraint: trust boundary.
-  // Accept only from registered BaseApps. An unregistered sender
-  // forging this message would bypass BaseApp's L1/L2 validation
-  // (proxy binding + Exposed check) — and since the source_entity_id
-  // is stamped BY that sender, would let any network peer impersonate
-  // any logged-in client for any exposed cell method.
+  // Trust boundary (hard constraint): accept only from registered
+  // BaseApps. An unregistered sender forging this message would bypass
+  // BaseApp's L1/L2 validation (proxy binding + Exposed check) — and
+  // since the source_entity_id is stamped BY that sender, would let
+  // any network peer impersonate any logged-in client for any exposed
+  // cell method.
   if (!trusted_baseapps_.contains(src)) {
     ATLAS_LOG_WARNING(
         "CellApp: ClientCellRpcForward from untrusted src {}:{} "
@@ -539,17 +532,16 @@ void CellApp::OnClientCellRpcForward(const Address& src, Channel* /*ch*/,
     return;
   }
 
-  // Four-layer defence — phase10_cellapp.md §3.8.1. BaseApp already
-  // validated direction + exposed + cross-entity rules, but re-checking
-  // here is cheap and keeps this handler self-defensive.
+  // BaseApp already validated direction + exposed + cross-entity rules,
+  // but re-checking here is cheap and keeps this handler self-defensive.
   auto* entity = FindEntityByBaseId(msg.target_entity_id);
   if (!entity) {
     ATLAS_LOG_WARNING("CellApp: ClientCellRpcForward for unknown target base_id={} rpc_id=0x{:06X}",
                       msg.target_entity_id, msg.rpc_id);
     return;
   }
-  // Phase 11: a client-bound RPC must never dispatch on a Ghost. If one
-  // arrived, BaseApp's routing is stale — log-and-skip (Q2 soft guard).
+  // A client-bound RPC must never dispatch on a Ghost. If one arrived,
+  // BaseApp's routing is stale — log-and-skip (soft guard).
   if (!entity->IsReal()) {
     ATLAS_LOG_WARNING(
         "CellApp: ClientCellRpcForward for Ghost base_id={} rpc_id=0x{:06X} — stale routing",
@@ -580,8 +572,7 @@ void CellApp::OnClientCellRpcForward(const Address& src, Channel* /*ch*/,
   }
 
   // Dispatch to C# via the native callback. entity->Id() is the
-  // cell_entity_id — that's the key C# registered the entity under
-  // (phase10_cellapp.md §9.6).
+  // cell_entity_id — the key C# registered the entity under.
   auto dispatch_fn = native_provider_ ? native_provider_->dispatch_rpc_fn() : nullptr;
   if (!dispatch_fn) {
     ATLAS_LOG_WARNING("CellApp: ClientCellRpcForward: dispatch_rpc callback not registered");
@@ -594,7 +585,7 @@ void CellApp::OnClientCellRpcForward(const Address& src, Channel* /*ch*/,
 void CellApp::OnInternalCellRpc(const Address& /*src*/, Channel* /*ch*/,
                                 const cellapp::InternalCellRpc& msg) {
   // Server-internal Base → Cell call. BaseApp is trusted; skip the
-  // exposed / sourceEntityID validation (see phase10_cellapp.md §3.8.2).
+  // exposed / sourceEntityID validation.
   auto* entity = FindEntityByBaseId(msg.target_entity_id);
   if (!entity) {
     ATLAS_LOG_WARNING("CellApp: InternalCellRpc for unknown target base_id={} rpc_id=0x{:06X}",
@@ -654,7 +645,7 @@ void CellApp::OnAvatarUpdate(const Address& /*src*/, Channel* /*ch*/,
     return;
   }
 
-  // Phase 10 §3.12 safety:
+  // Safety:
   //   1. NaN / Inf rejection.
   //   2. Per-tick displacement cap — anything bigger is treated as a
   //      teleport attempt from a compromised client.
@@ -724,9 +715,8 @@ void CellApp::OnEnableWitness(const Address& /*src*/, Channel* /*ch*/,
     ATLAS_LOG_WARNING("CellApp: EnableWitness for unknown base_id={}", msg.base_entity_id);
     return;
   }
-  // Radius + hysteresis come from CellAppConfig — BigWorld's ctor-time
-  // defaultAoIRadius/aoiHyst reads, lifted into runtime config. Scripts
-  // that want a non-default radius follow up with a SetAoIRadius RPC.
+  // Radius + hysteresis come from CellAppConfig. Scripts that want a
+  // non-default radius follow up with a SetAoIRadius RPC.
   AttachWitness(*entity, CellAppConfig::DefaultAoIRadius(), CellAppConfig::DefaultAoIHysteresis());
 }
 
@@ -737,9 +727,9 @@ void CellApp::OnDisableWitness(const Address& /*src*/, Channel* /*ch*/,
   entity->DisableWitness();
 }
 
-// BigWorld's setAoIRadius (witness.cpp:2109) — runtime AoI mutation from
-// script. The clamp + floor are applied inside Witness::SetAoIRadius;
-// this handler is strictly routing + Ghost rejection.
+// Runtime AoI mutation from script. The clamp + floor are applied
+// inside Witness::SetAoIRadius; this handler is strictly routing +
+// Ghost rejection.
 void CellApp::OnSetAoIRadius(const Address& /*src*/, Channel* /*ch*/,
                              const cellapp::SetAoIRadius& msg) {
   auto* entity = FindEntityByBaseId(msg.base_entity_id);
@@ -765,7 +755,7 @@ void CellApp::OnSetAoIRadius(const Address& /*src*/, Channel* /*ch*/,
 }
 
 // ============================================================================
-// Phase 11 — Ghost / Offload handlers
+// Ghost / Offload handlers
 // ============================================================================
 
 auto CellApp::FindPeerChannel(const Address& addr) const -> Channel* {
@@ -810,7 +800,7 @@ void CellApp::OnCreateGhost(const Address& /*src*/, Channel* ch, const cellapp::
   }
   entity_population_[msg.real_entity_id] = entity_ptr_raw;
   // Ghosts do NOT register in base_entity_population_; client RPCs must
-  // route to the Real (via BaseApp's CurrentCell table, PR-6).
+  // route to the Real (via BaseApp's CurrentCell table).
 }
 
 void CellApp::OnDeleteGhost(const Address& /*src*/, Channel* /*ch*/,
@@ -923,11 +913,11 @@ void CellApp::OnOffloadEntity(const Address& src, Channel* ch, const cellapp::Of
   // Install base-ID routing so subsequent RPCs land.
   base_entity_population_[msg.base_entity_id] = entity;
 
-  // Phase 11 PR-6: restore the C# entity instance from the sender's
-  // persistent_blob via RestoreEntity. Empty blob is valid (unit tests
-  // / C#-less setups): the Real then has no script state and any
-  // client-visible AoI is driven entirely from the replication
-  // baseline below, until the first successful C# publish.
+  // Restore the C# entity instance from the sender's persistent_blob
+  // via RestoreEntity. Empty blob is valid (unit tests / C#-less
+  // setups): the Real then has no script state and any client-visible
+  // AoI is driven entirely from the replication baseline below, until
+  // the first successful C# publish.
   if (!msg.persistent_blob.empty() && native_provider_ != nullptr &&
       native_provider_->restore_entity_fn() != nullptr) {
     ClearNativeApiError();
@@ -972,20 +962,20 @@ void CellApp::OnOffloadEntity(const Address& src, Channel* ch, const cellapp::Of
     space->LocalCells().begin()->second->AddRealEntity(entity);
   }
 
-  // Phase 11 C2: re-attach the Witness with the preserved radius +
-  // hysteresis. Runs AFTER PublishReplicationFrame / Cell membership so
-  // AoITrigger's initial sweep sees the right peer set + seq baselines.
-  // Without this, the client would stop receiving AoI envelopes the
-  // moment a Real crosses a cell boundary (BaseApp re-routes cell_addr
-  // via CurrentCell but has no channel to auto-fire EnableWitness).
+  // Re-attach the Witness with the preserved radius + hysteresis. Runs
+  // AFTER PublishReplicationFrame / Cell membership so AoITrigger's
+  // initial sweep sees the right peer set + seq baselines. Without
+  // this, the client would stop receiving AoI envelopes the moment a
+  // Real crosses a cell boundary (BaseApp re-routes cell_addr via
+  // CurrentCell but has no channel to auto-fire EnableWitness).
   if (msg.has_witness) {
     AttachWitness(*entity, msg.aoi_radius, msg.aoi_hysteresis);
   }
 
-  // Phase 11 PR-6 review-fix B2: rebuild controllers from the sender's
-  // snapshot. Must run AFTER the entity is registered with
-  // entity_population_ + the local Cell so the ProximityController's
-  // peer resolver can look up peers by entity_id.
+  // Rebuild controllers from the sender's snapshot. Must run AFTER the
+  // entity is registered with entity_population_ + the local Cell so
+  // the ProximityController's peer resolver can look up peers by
+  // entity_id.
   if (!msg.controller_data.empty()) {
     BinaryReader r(std::span<const std::byte>(msg.controller_data));
     const bool ok = DeserializeControllersForMigration(
@@ -1032,8 +1022,8 @@ void CellApp::OnOffloadEntity(const Address& src, Channel* ch, const cellapp::Of
 
 void CellApp::OnOffloadEntityAck(const Address& /*src*/, Channel* /*ch*/,
                                  const cellapp::OffloadEntityAck& msg) {
-  // Phase 11 PR-6 review fix (B3): on success, drop the pending entry;
-  // on failure, auto-revert the Ghost back to Real using the snapshot.
+  // On success, drop the pending entry; on failure, auto-revert the
+  // Ghost back to Real using the snapshot.
   auto pending_it = pending_offloads_.find(msg.real_entity_id);
   if (pending_it == pending_offloads_.end()) {
     ATLAS_LOG_WARNING(
@@ -1127,7 +1117,7 @@ void CellApp::RevertPendingOffload(EntityID entity_id, const char* reason) {
     }
   }
 
-  // Restore controllers from the serialised blob (review-fix B2).
+  // Restore controllers from the serialised blob.
   if (!po.controller_blob.empty()) {
     BinaryReader r{std::span<const std::byte>(po.controller_blob)};
     const bool ok = DeserializeControllersForMigration(
@@ -1139,10 +1129,9 @@ void CellApp::RevertPendingOffload(EntityID entity_id, const char* reason) {
     }
   }
 
-  // Phase 11 C2: reattach the witness with the pre-Offload radius/hyst.
-  // Mirrors the receive-path reattachment in OnOffloadEntity — in fact
-  // either path must produce an identical witness-bearing Real, so
-  // revert delegates to the same AttachWitness helper.
+  // Reattach the witness with the pre-Offload radius/hyst. Either path
+  // must produce an identical witness-bearing Real, so revert delegates
+  // to the same AttachWitness helper.
   if (po.had_witness) {
     AttachWitness(*entity, po.aoi_radius, po.aoi_hysteresis);
   }
@@ -1213,9 +1202,6 @@ void CellApp::UpdatePersistentLoad() {
   // Map work_time / expected_tick_period → [0, …] load fraction, then
   // feed the EWMA:
   //   persistent_load = (1-bias) * persistent_load + bias * frac
-  // This is BigWorld's `CellApp::addToLoad` applied to the persistent
-  // branch (cellapp.cpp:1166-1171). The `* update_hertz` factor in
-  // BigWorld cancels with the implicit /expected_tick_period here.
   const auto work = LastTickWorkDuration();
   const auto expected = ExpectedTickPeriod();
   if (expected.count() <= 0) return;  // defensive: ill-configured hertz
@@ -1263,13 +1249,12 @@ auto CellApp::BuildOffloadMessage(const CellEntity& entity) const -> cellapp::Of
   msg.on_ground = entity.OnGround();
   msg.base_addr = entity.BaseAddr();
   msg.base_entity_id = entity.BaseEntityId();
-  // Phase 11 §4 / PR-6: capture the C# entity state via SerializeEntity
-  // if the callback is registered. The destination CellApp's
-  // OnOffloadEntity will pass this blob through RestoreEntity, which
-  // reuses the Phase 10 Deserialize abstract. If no runtime is
-  // registered (unit tests, early boot) we ship an empty blob and
-  // rely on the replication baseline — the Ghost→Real promotion still
-  // works; just without script state restoration.
+  // Capture the C# entity state via SerializeEntity if the callback is
+  // registered. The destination CellApp's OnOffloadEntity will pass
+  // this blob through RestoreEntity. If no runtime is registered (unit
+  // tests, early boot) we ship an empty blob and rely on the
+  // replication baseline — the Ghost→Real promotion still works, just
+  // without script state restoration.
   if (native_provider_ != nullptr && native_provider_->serialize_entity_fn() != nullptr) {
     auto fn = native_provider_->serialize_entity_fn();
     // Size probe + one retry: ask C# for the required size with a
@@ -1311,21 +1296,19 @@ auto CellApp::BuildOffloadMessage(const CellEntity& entity) const -> cellapp::Of
       if (h.channel != nullptr) msg.existing_haunts.push_back(h.channel->RemoteAddress());
     }
   }
-  // Phase 11 PR-6 review-fix B2: serialise live controller state so the
-  // Offload receiver can resume MoveToPoint/Timer/Proximity without
-  // losing mid-motion progress or proximity membership. Serialised at
-  // send-time — before ConvertRealToGhost runs StopAll — so the
-  // controllers are still the authoritative live set.
+  // Serialise live controller state so the Offload receiver can resume
+  // MoveToPoint/Timer/Proximity without losing mid-motion progress or
+  // proximity membership. Serialised at send-time — before
+  // ConvertRealToGhost runs StopAll — so the controllers are still
+  // the authoritative live set.
   {
     BinaryWriter cw;
     SerializeControllersForMigration(entity, cw);
     auto buf = cw.Detach();
     msg.controller_data.assign(buf.begin(), buf.end());
   }
-  // Phase 11 C2: preserve Witness state across the Offload. Read
-  // BEFORE ConvertRealToGhost (the caller sequences this correctly).
-  // BigWorld parity — `Witness::writeBackupData` ships both aoiRadius_
-  // and aoiHyst_ (witness.cpp:723).
+  // Preserve Witness state across the Offload. Read BEFORE
+  // ConvertRealToGhost (the caller sequences this correctly).
   if (const auto* witness = entity.GetWitness()) {
     msg.has_witness = true;
     msg.aoi_radius = witness->AoIRadius();
@@ -1399,10 +1382,7 @@ void CellApp::TickGhostPump() {
         // broadcast — BuildDelta would only ship the latest frame's
         // other_delta, losing intermediate state. Fall back to a
         // GhostSnapshotRefresh that re-bases the Ghost on the current
-        // other_snapshot + latest_event_seq. See
-        // RealEntityData::ShouldUseSnapshotRefresh for the BigWorld
-        // cross-reference (addHistoryEventToGhosts is per-event, so the
-        // gap > 1 case doesn't arise in BigWorld's design).
+        // other_snapshot + latest_event_seq.
         if (RealEntityData::ShouldUseSnapshotRefresh(state->latest_event_seq,
                                                      rd->LastBroadcastEventSeq())) {
           const auto msg = rd->BuildSnapshotRefresh();
@@ -1411,13 +1391,12 @@ void CellApp::TickGhostPump() {
           }
         } else {
           const auto msg = rd->BuildDelta();
-          // Phase 10 §10.3 #12 bandwidth follow-up: the DeltaSyncEmitter
-          // ships a 1-4 byte flags prefix even when only owner-visible
-          // properties were dirty (SerializeOtherDelta runs whenever
-          // hasEvent==true). That produces an all-zero payload with no
-          // actual audience content. Skip the SendMessage — the seq
-          // still advances, so the Ghost catches up on the next non-
-          // empty delta without a spurious snapshot refresh.
+          // The DeltaSyncEmitter ships a 1-4 byte flags prefix even
+          // when only owner-visible properties were dirty. That
+          // produces an all-zero payload with no actual audience
+          // content. Skip the SendMessage — the seq still advances, so
+          // the Ghost catches up on the next non-empty delta without a
+          // spurious snapshot refresh.
           if (!RealEntityData::IsEmptyOtherDelta(msg.other_delta)) {
             for (const auto& h : rd->Haunts()) {
               if (h.channel) (void)h.channel->SendMessage(msg);
@@ -1498,8 +1477,7 @@ void CellApp::TickOffloadChecker() {
       pending_offloads_[op.entity->Id()] = std::move(po);
 
       // Step 5 (sender): local Real → Ghost immediately, using the peer
-      // channel as the new back-channel. Drops witness + controllers per
-      // Phase 11 §3.1 / §3.5 Step 9.
+      // channel as the new back-channel. Drops witness + controllers.
       op.entity->ConvertRealToGhost(peer);
 
       // Remove from all local Cells — we're no longer authoritative here.

@@ -66,9 +66,9 @@ void EncodeTimer(const TimerController& c, BinaryWriter& w) {
 void EncodeProximity(const ProximityController& c, BinaryWriter& w) {
   WriteF32(w, c.Range());
   // Translate each RangeListNode* in the inside-peer set to its owning
-  // CellEntity's id (cluster-wide unique since Phase 11 §9.6 Q8). Any
-  // peer whose OwnerData is null or not a CellEntity is skipped —
-  // shouldn't happen in practice but keeps the codec defensive.
+  // CellEntity's id (cluster-wide unique). Any peer whose OwnerData
+  // is null or not a CellEntity is skipped — shouldn't happen in
+  // practice but keeps the codec defensive.
   const auto& peers = c.InsidePeers();
   // Two-pass: count first (can't pre-compute — some might fail the
   // OwnerData check), then emit.
@@ -121,43 +121,18 @@ auto DecodeTimer(BinaryReader& r) -> std::unique_ptr<Controller> {
 
 }  // namespace
 
-// Wire layout (Phase 11 C9 — BigWorld writeRealsToStream parity):
-//   count                 : uint32   (was uint8 pre-C9; widened to match
-//                                     BigWorld's ControllerID-width count
-//                                     at controllers.cpp:197. The old
-//                                     uint8 silently capped at 255
-//                                     controllers per entity.)
+// Wire layout:
+//   count                 : uint32
 //   for each controller:
-//     kind                : uint8    (Atlas ControllerKind enum; Atlas
-//                                     has no DOMAIN_GHOST split so we
-//                                     always write type+user_arg here —
-//                                     BigWorld's conditional emission
-//                                     based on DOMAIN_GHOST does not
-//                                     apply to Atlas's simpler model;
-//                                     see phase11 §1.3 table)
+//     kind                : uint8
 //     id                  : uint32
 //     user_arg            : int32
 //     kind-specific data (EncodeMoveToPoint / EncodeTimer / EncodeProximity)
 //
-// Structural divergence (documented, not a bug): BigWorld puts the
-// write hook on each Controller subclass (virtual writeRealToStream),
-// enabling polymorphic dispatch. Atlas uses an external per-kind
-// switch here because ProximityController's receive-side construction
-// needs (central RangeListNode + RangeList + callback lambdas) that
-// can't ride the wire — so it can't be produced by a pure
-// Controller::create(kind) factory. The switch keeps the construction
-// asymmetry explicit. A future refactor could add virtuals for Write
-// and leave construction external, but the benefit is marginal at
-// three controller kinds.
-//
-// lastAllocatedID is NOT on the wire. BigWorld transmits it verbatim
-// (controllers.cpp:176) so the destination's next_id_ starts past any
-// cancelled-controller gap on the source. Atlas derives the equivalent
-// via `Controllers::AddWithPreservedId`, which advances next_id_ to
-// `preserved_id + 1` per restored controller — after the restore loop
-// next_id_ equals `max(preserved_ids) + 1`. Gap-reuse is safe: any
-// cancelled IDs on the source can legitimately be reassigned on the
-// destination.
+// lastAllocatedID is NOT on the wire. The destination derives the
+// equivalent via `Controllers::AddWithPreservedId`, which advances
+// next_id_ to `preserved_id + 1` per restored controller — after the
+// restore loop next_id_ equals `max(preserved_ids) + 1`.
 void SerializeControllersForMigration(const CellEntity& entity, BinaryWriter& w) {
   const auto& controllers = const_cast<CellEntity&>(entity).GetControllers();
   // Count-first. The iterator order is unspecified but consistent

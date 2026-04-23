@@ -14,25 +14,23 @@ namespace atlas {
 
 class Channel;
 
-// ============================================================================
-// CellAppMgr — CellApp cluster manager (Phase 11 §3.8)
+// CellAppMgr — CellApp cluster manager.
 //
 // Responsibilities:
-//   • Accept CellApp registration, assign a cluster-wide app_id in [1, 255].
-//     app_id drives §9.6 #2: CellApp derives its EntityID high byte from
-//     app_id so IDs never collide across CellApps.
+//   • Accept CellApp registration, assign a cluster-wide app_id in
+//     [1, 255]. CellApp derives its EntityID high byte from app_id so
+//     IDs never collide across CellApps.
 //   • Track CellApp load (InformCellLoad) and feed it into each Space's
 //     BSPTree for per-cycle Balance().
 //   • Answer CreateSpaceRequest by picking a hosting CellApp (least-
 //     loaded), installing a single-cell partition, and pushing the
 //     geometry out.
 //   • Tick: every ~1 s, rebalance every Space's BSP tree and broadcast
-//     the updated geometry. Broadcast is unconditional for PR-5 — the
-//     packets are small and CellApp consumes idempotently. A change-
-//     detecting send is a later optimisation.
-//   • Detect CellApp death via machined and drop the peer from cellapps_;
-//     full resurrection/rehoming of its cells is deferred beyond PR-5.
-// ============================================================================
+//     the updated geometry. Broadcast is unconditional — the packets
+//     are small and CellApp consumes idempotently. A change-detecting
+//     send is a later optimisation.
+//   • Detect CellApp death via machined and drop the peer from
+//     cellapps_.
 
 class CellAppMgr : public ManagerApp {
  public:
@@ -99,10 +97,8 @@ class CellAppMgr : public ManagerApp {
   // Alternate-host picker used on CellApp death: returns the least-
   // loaded surviving CellApp that is NOT on `exclude_addr`'s IP when
   // possible, falling back to any survivor when all remaining
-  // CellApps share that IP. Nullptr when no survivor exists.
-  // BigWorld parity: `CellApps::findAlternateApp` + `leastLoaded`
-  // (cellapps.cpp:91-158) — same two-tier "prefer different machine,
-  // break ties on load" preference.
+  // CellApps share that IP. Nullptr when no survivor exists. Two-tier
+  // "prefer different machine, break ties on load" preference.
   [[nodiscard]] auto PickAlternateHost(const Address& exclude_addr) const -> const CellAppInfo*;
 
   void SendAddCell(const CellAppInfo& target, SpaceID space_id, cellappmgr::CellID cell_id,
@@ -118,13 +114,13 @@ class CellAppMgr : public ManagerApp {
   // which Reals it needs to restore to which new host.
   std::unordered_map<Address, Channel*> baseapps_;
 
-  // EntityID cluster assignment: §9.6 #2 scheme A — high 8 bits = app_id.
-  // We hand out app_ids [1..255]; app_id 0 is reserved (matches
-  // kInvalidEntityID prefix and keeps "uninitialised" distinguishable).
+  // EntityID cluster assignment: high 8 bits = app_id. We hand out
+  // app_ids [1..255]; app_id 0 is reserved (matches kInvalidEntityID
+  // prefix and keeps "uninitialised" distinguishable).
   uint32_t next_cellapp_app_id_{1};
 
-  // Cell id pool (per Space): assigned 1-based on AddCellToSpace. For
-  // PR-5 every Space starts with exactly one Cell (id 1); splits come
+  // Cell id pool (per Space): assigned 1-based on AddCellToSpace. Every
+  // Space currently starts with exactly one Cell (id 1); splits come
   // later. Kept cluster-wide as a monotonic counter for simplicity.
   cellappmgr::CellID next_cell_id_{1};
 
@@ -135,7 +131,7 @@ class CellAppMgr : public ManagerApp {
 
   static constexpr float kBalanceSafetyBound = 0.9f;
   static constexpr uint64_t kBalanceTickInterval = 30;  // ~1 s @ 30 Hz
-  static constexpr uint32_t kMaxCellAppAppId = 255;     // §9.6 Q8 scheme A
+  static constexpr uint32_t kMaxCellAppAppId = 255;
 };
 
 }  // namespace atlas

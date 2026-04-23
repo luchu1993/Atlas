@@ -12,15 +12,12 @@ class Channel;
 class MachinedClient;
 class NetworkInterface;
 
-// ============================================================================
 // CellAppPeerRegistry — shared map of {Address → Channel*} for peer
 // CellApps, maintained by machined Birth/Death subscription.
 //
-// Phase 11 PR-6 review-fix C2. Previously BaseApp and CellApp each
-// maintained a private `cellapp_channels_` / `peer_cellapp_channels_`
-// map with duplicated Birth/Death logic. The registry consolidates both
-// into one class so future policy changes (rate-limiting, signed
-// envelope whitelists, etc.) land in a single place.
+// Consolidates BaseApp's and CellApp's CellApp-peer maps into one class
+// so future policy changes (rate-limiting, signed envelope whitelists,
+// etc.) land in a single place.
 //
 // `self_addr` filters the registry owner out of its own peer list when
 // machined re-broadcasts the owner's Birth. For callers that can never
@@ -29,7 +26,6 @@ class NetworkInterface;
 //
 // Thread safety: same as MachinedClient — must be used only from the
 // EventDispatcher thread.
-// ============================================================================
 
 class CellAppPeerRegistry {
  public:

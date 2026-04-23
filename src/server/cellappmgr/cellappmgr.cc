@@ -68,16 +68,15 @@ auto CellAppMgr::Init(int argc, char* argv[]) -> bool {
       });
 
   // Subscribe to CellApp death notifications so we can rehome BSP
-  // leaves onto surviving CellApps (PR-7 C6) and announce the death to
-  // BaseApps so they restore their Reals from cached backups (C6b).
+  // leaves onto surviving CellApps and announce the death to BaseApps
+  // so they restore their Reals from cached backups.
   GetMachinedClient().Subscribe(
       machined::ListenerType::kDeath, ProcessType::kCellApp, nullptr,
       [this](const machined::DeathNotification& n) { OnCellAppDeath(n.internal_addr); });
 
-  // Track BaseApps directly — the C6b death broadcast fans out to every
-  // BaseApp. BigWorld routes the notification through BaseAppMgr; Atlas
-  // takes the direct path to keep CellAppMgr's cross-process surface
-  // small (no new CellAppMgr↔BaseAppMgr channel).
+  // Track BaseApps directly — the death broadcast fans out to every
+  // BaseApp. Direct path keeps CellAppMgr's cross-process surface small
+  // (no new CellAppMgr↔BaseAppMgr channel).
   GetMachinedClient().Subscribe(
       machined::ListenerType::kBoth, ProcessType::kBaseApp,
       [this](const machined::BirthNotification& n) {
@@ -140,10 +139,10 @@ void CellAppMgr::OnRegisterCellApp(const Address& src, Channel* ch,
     return;
   }
 
-  // §9.6 Q8 scheme A — app_id lives in the entity_id high byte, so we
-  // cap allocations at 255. If we exhaust that pool the cluster has
-  // grown past what the current EntityID layout supports and the fix
-  // is a wider scheme, not a work-around here.
+  // app_id lives in the entity_id high byte, so we cap allocations at
+  // 255. If we exhaust that pool the cluster has grown past what the
+  // current EntityID layout supports and the fix is a wider scheme,
+  // not a work-around here.
   if (next_cellapp_app_id_ > kMaxCellAppAppId) {
     ATLAS_LOG_ERROR(
         "CellAppMgr: CellApp app_id pool exhausted (> {}) — rejecting register from {}:{}",
@@ -201,9 +200,9 @@ void CellAppMgr::OnInformCellLoad(const Address& /*src*/, Channel* /*ch*/,
 
 void CellAppMgr::OnCreateSpaceRequest(const Address& src, Channel* ch,
                                       const cellappmgr::CreateSpaceRequest& msg) {
-  // Review-fix S2/S3: always reply — success OR failure. The originator
-  // (BaseApp / script) tracks a per-request callback via request_id and
-  // needs a terminal signal to resolve it.
+  // Always reply — success OR failure. The originator (BaseApp /
+  // script) tracks a per-request callback via request_id and needs a
+  // terminal signal to resolve it.
   auto send_reply = [&](bool ok, cellappmgr::CellID cell_id, Address host_addr) {
     cellappmgr::SpaceCreatedResult reply;
     reply.request_id = msg.request_id;
@@ -275,16 +274,11 @@ void CellAppMgr::OnCellAppDeath(const Address& internal_addr) {
   const uint32_t dead_app_id = it->second.app_id;
   cellapps_.erase(it);
 
-  // BigWorld-style rehoming. All Real entities that were hosted on the
-  // dead CellApp are lost (BaseApp restores them from backup — orthogonal
-  // to mgr-side routing). Our job here is purely to re-point every BSP
-  // leaf owned by the dead app onto a surviving CellApp so future
-  // CreateCellEntity / Offload traffic for that cell lands somewhere
-  // reachable. BigWorld equivalent: CellApp::handleUnexpectedDeath
-  // (cellapp.cpp:312) walks the dead app's cells, picks
-  // findAlternateApp / leastLoaded, and streams
-  // `space.informCellAppsOfGeometry`. Atlas mirrors the algorithm
-  // minus the BaseApp-restoration side-channel.
+  // All Real entities hosted on the dead CellApp are lost (BaseApp
+  // restores them from backup — orthogonal to mgr-side routing). Our
+  // job here is purely to re-point every BSP leaf owned by the dead
+  // app onto a surviving CellApp so future CreateCellEntity / Offload
+  // traffic for that cell lands somewhere reachable.
   if (cellapps_.empty()) {
     ATLAS_LOG_CRITICAL(
         "CellAppMgr: CellApp app_id={} died and no survivors remain — all "
@@ -349,9 +343,9 @@ void CellAppMgr::OnCellAppDeath(const Address& internal_addr) {
     }
   }
 
-  // C6b: tell every BaseApp about the death so they restore Reals from
-  // backup onto the new hosts. BigWorld-analogue fans this out through
-  // BaseAppMgr; we take the direct path (see Init subscribe comment).
+  // Tell every BaseApp about the death so they restore Reals from
+  // backup onto the new hosts. Direct path — see the Init subscribe
+  // comment.
   if (!baseapps_.empty()) {
     baseapp::CellAppDeath notify;
     notify.dead_addr = internal_addr;
@@ -370,10 +364,10 @@ void CellAppMgr::TickLoadBalance() {
   if (spaces_.empty()) return;
   for (auto& [space_id, partition] : spaces_) {
     partition.bsp.Balance(kBalanceSafetyBound);
-    // Broadcast unconditionally. The bsp_blob is tens of bytes; skipping
-    // sends when the tree didn't move would require diffing which costs
-    // more than the redundant bytes for a ≤255-peer cluster. Revisit if
-    // profiling says otherwise.
+    // Broadcast unconditionally. The bsp_blob is tens of bytes;
+    // diffing to skip unchanged sends would cost more than the
+    // redundant bytes for a ≤255-peer cluster. Revisit if profiling
+    // says otherwise.
     BroadcastGeometry(partition);
     (void)space_id;
   }
@@ -399,8 +393,7 @@ auto CellAppMgr::PickHostForNewSpace() const -> const CellAppInfo* {
 }
 
 auto CellAppMgr::PickAlternateHost(const Address& exclude_addr) const -> const CellAppInfo* {
-  // Two-tier selection matching BigWorld CellApps::findAlternateApp
-  // (cellapps.cpp:91-130):
+  // Two-tier selection:
   //   Tier 1: prefer a survivor on a different machine (IP).
   //   Tier 2: if all survivors share exclude_addr's IP, fall back to
   //           the least-loaded on that same IP — better than nothing.

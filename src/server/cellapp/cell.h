@@ -14,20 +14,16 @@ namespace atlas {
 class Space;
 class CellEntity;
 
-// ============================================================================
-// Cell — a Space's sub-region hosted by this CellApp.
-//
-// Phase 11 §3.6. A Phase 10 Space maps 1:1 onto a Cell; Phase 11 lets one
-// Space span multiple Cells across several CellApps. A Cell tracks its
-// slice of the BSP partition (`bounds_`), the live Real entities whose
+// Cell — a Space's sub-region hosted by this CellApp. One Space may span
+// multiple Cells across several CellApps. A Cell tracks its slice of
+// the BSP partition (`bounds_`), the live Real entities whose
 // authoritative home is here, and the CellAppMgr-controlled offload
-// enable flag (ShouldOffload, Phase 11 §2.3).
+// enable flag (ShouldOffload).
 //
 // This class intentionally does NOT own the entities — the Space's
 // `entities_` map owns the unique_ptrs. Cell holds non-owning pointers
 // keyed by insertion order, removed via swap-back for O(1) membership
 // updates.
-// ============================================================================
 
 class Cell {
  public:
@@ -37,9 +33,9 @@ class Cell {
   [[nodiscard]] auto GetSpace() const -> const Space& { return space_; }
   [[nodiscard]] auto Id() const -> cellappmgr::CellID { return cell_id_; }
 
-  // UpdateGeometry (Phase 11 §2.3) rewrites bounds in-place. Does NOT
-  // re-partition the entity list — OffloadChecker reacts on the next
-  // tick by detecting entities that now fall outside `bounds_`.
+  // UpdateGeometry rewrites bounds in-place. Does NOT re-partition the
+  // entity list — OffloadChecker reacts on the next tick by detecting
+  // entities that now fall outside `bounds_`.
   [[nodiscard]] auto Bounds() const -> const CellBounds& { return bounds_; }
   void SetBounds(const CellBounds& b) { bounds_ = b; }
 

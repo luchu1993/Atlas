@@ -36,8 +36,8 @@ struct CellAppCallbackTable {
   EntityDestroyedFn entity_destroyed;
   DispatchRpcFn dispatch_rpc;
   GetOwnerSnapshotFn get_owner_snapshot;
-  SerializeEntityFn serialize_entity;  // Phase 11 PR-6
-  ProximityEventFn proximity_event;    // Phase 11 C8
+  SerializeEntityFn serialize_entity;
+  ProximityEventFn proximity_event;
 };
 #pragma pack(pop)
 
@@ -85,9 +85,9 @@ void CellAppNativeProvider::SetEntityPosition(uint32_t entity_id, float x, float
     ATLAS_LOG_WARNING("atlas_set_position: unknown entity_id={}", entity_id);
     return;
   }
-  // Phase 11 §3.1: Ghosts are read-only mirrors of a remote Real. A script
-  // running on this CellApp that tries to write a Ghost's position is
-  // almost always a logic bug — log and drop (Q2: soft guard).
+  // Ghosts are read-only mirrors of a remote Real. A script running on
+  // this CellApp that tries to write a Ghost's position is almost
+  // always a logic bug — log and drop (soft guard).
   if (!entity->IsReal()) {
     ATLAS_LOG_WARNING("atlas_set_position on Ghost entity_id={} — rejected", entity_id);
     return;
@@ -144,13 +144,9 @@ void CellAppNativeProvider::PublishReplicationFrame(
   entity->PublishReplicationFrame(std::move(frame), owner_snap_span, other_snap_span);
 
   // Owner-scope direct forward. Witness::HandleAoIEnter skips `&peer ==
-  // &owner_`, so its AoI pump never carries the owner's own client-visible
-  // property changes — observer_is_owner in Witness::SendEntityUpdate is
-  // always false and the generator-emitted owner_delta would otherwise
-  // die here. BigWorld solves this in the opposite direction (push per
-  // change, bigworld server/cellapp/entity.cpp:5670), but the effect is
-  // the same: own-scope flows on a dedicated path that does not go
-  // through the AoI witness.
+  // &owner_`, so its AoI pump never carries the owner's own
+  // client-visible property changes. Own-scope flows on a dedicated
+  // path that does not go through the AoI witness.
   //
   // Routing: envelope [kind=kEntityPropertyUpdate][base_id u32][event_seq
   // u64][owner_delta bytes] → ReplicatedReliableDeltaFromCell (msg 2017) to
@@ -223,8 +219,8 @@ auto CellAppNativeProvider::AddProximityController(uint32_t entity_id, float ran
     ATLAS_LOG_WARNING("atlas_add_proximity_controller on Ghost entity_id={} — rejected", entity_id);
     return 0;
   }
-  // C8 / §10.2 #9: route enter/leave crossings to the C# runtime via
-  // the proximity_event_fn_ callback. The lambdas capture (this,
+  // Route enter/leave crossings to the C# runtime via the
+  // proximity_event_fn_ callback. The lambdas capture (this,
   // entity_id, user_arg) so a single controller's events always carry
   // the script's disambiguation handle back to C#. Non-entity
   // crossings (sentinel / trigger-bound nodes) are filtered via the
@@ -275,20 +271,20 @@ void CellAppNativeProvider::SetNativeCallbacks(const void* native_callbacks, int
   restore_entity_fn_ = table.restore_entity;
   dispatch_rpc_fn_ = table.dispatch_rpc;
   entity_destroyed_fn_ = table.entity_destroyed;
-  // serialize_entity was appended in PR-6. Older runtimes leave it as
-  // the memset-initialised nullptr; CellApp treats that as "no C# blob
+  // Older runtimes without serialize_entity leave it as the
+  // memset-initialised nullptr; CellApp treats that as "no C# blob
   // available" and continues serving Offload with just the replication
   // baseline.
   serialize_entity_fn_ = table.serialize_entity;
-  // L4: get_owner_snapshot feeds CellApp::TickClientBaselinePump; without
-  // it the pump short-circuits and no baseline leaves the cell (acceptable
-  // on tests without a C# runtime). get_entity_data is CellApp-side
-  // unused today (no DB persistence from cell).
+  // get_owner_snapshot feeds CellApp::TickClientBaselinePump; without
+  // it the pump short-circuits and no baseline leaves the cell
+  // (acceptable on tests without a C# runtime). get_entity_data is
+  // CellApp-side unused today (no DB persistence from cell).
   get_owner_snapshot_fn_ = table.get_owner_snapshot;
-  // Phase 11 C8 / §10.2 #9 follow-up: consumed by AddProximityController's
-  // lambdas. Absence ⇒ no proximity events propagate to scripts; the
-  // trigger still fires internally (Offload membership still works) but
-  // script-side onProximityEnter / onProximityLeave never run.
+  // Consumed by AddProximityController's lambdas. Absence ⇒ no
+  // proximity events propagate to scripts; the trigger still fires
+  // internally (Offload membership still works) but script-side
+  // onProximityEnter / onProximityLeave never run.
   proximity_event_fn_ = table.proximity_event;
   ATLAS_LOG_INFO("CellApp: native callback table registered (len={})", len);
 }

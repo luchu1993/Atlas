@@ -13,14 +13,13 @@
 #include "network/address.h"
 #include "serialization/binary_stream.h"
 
-// ============================================================================
-// BSP tree — Phase 11 §3.7
+// BSP tree.
 //
-// CellAppMgr owns a BSPTree per Space. Leaves are Cells; internal nodes are
-// axis-aligned split lines that recursively partition the Space on (x, z).
-// At boot a fresh Space has a single leaf spanning ±inf². Splits add cells
-// for newly-joined CellApps; Balance() slides existing split lines to move
-// load between siblings.
+// CellAppMgr owns a BSPTree per Space. Leaves are Cells; internal nodes
+// are axis-aligned split lines that recursively partition the Space on
+// (x, z). At boot a fresh Space has a single leaf spanning ±inf².
+// Splits add cells for newly-joined CellApps; Balance() slides
+// existing split lines to move load between siblings.
 //
 // Data-flow with CellApp:
 //   CellAppMgr authoritative tree → Serialize() → UpdateGeometry blob →
@@ -28,9 +27,8 @@
 //   CellApp InformCellLoad → CellAppMgr sets leaf.info.load → Balance()
 //
 // Serialisation intentionally omits balance state (aggression, prev
-// direction) and runtime load (Phase 11 Q7): those are CellAppMgr-local.
-// Receivers never re-enter the balancer.
-// ============================================================================
+// direction) and runtime load; those are CellAppMgr-local. Receivers
+// never re-enter the balancer.
 
 namespace atlas {
 
@@ -210,8 +208,7 @@ class BSPTree {
   // edits; use them in a single synchronous pass.
   [[nodiscard]] auto LeavesMutable() -> std::vector<CellInfo*>;
 
-  // Pre-order wire format — see Phase 11 Q7. Balance state is intentionally
-  // excluded.
+  // Pre-order wire format. Balance state is intentionally excluded.
   void Serialize(BinaryWriter& w) const;
   static auto Deserialize(BinaryReader& r) -> Result<BSPTree>;
 

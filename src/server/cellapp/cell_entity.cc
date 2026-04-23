@@ -27,8 +27,8 @@ CellEntity::CellEntity(EntityID id, uint16_t type_id, Space& space, const math::
   // "new entity joined" signal those triggers want.
   space_.GetRangeList().Insert(&range_node_);
   linked_to_range_list_ = true;
-  // Phase 11: default-construct the Real sidecar so IsReal() holds from
-  // the first tick. Ghost construction uses the tag ctor below.
+  // Default-construct the Real sidecar so IsReal() holds from the first
+  // tick. Ghost construction uses the tag ctor below.
   real_data_ = std::make_unique<RealEntityData>(*this);
 }
 
@@ -52,7 +52,7 @@ CellEntity::CellEntity(GhostTag, EntityID id, uint16_t type_id, Space& space,
 }
 
 CellEntity::~CellEntity() {
-  // Order per phase10_cellapp.md §3.10 #4:
+  // Order:
   //   1. witness_.reset() — removes the AoITrigger's bound nodes while
   //      central is still linked.
   //   2. controllers_.StopAll() — ProximityController etc. hold their
@@ -66,18 +66,13 @@ CellEntity::~CellEntity() {
 
   if (linked_to_range_list_) {
     // Synthetic "vacate to infinity" shuffle BEFORE unlinking: sweeps
-    // the range_node_ past every live trigger upper bound, which fires
+    // the range_node_ past every live trigger upper bound, firing
     // HandleCrossX/Z → DispatchMembership → OnLeave on any trigger
     // that had us in its inside_peers_ set. Without this, other
     // Witnesses' aoi_map_ entries (which hold raw CellEntity* to this
     // object) would keep dangling references after we're deleted, and
     // the next Witness::Update would UAF on our GetReplicationState().
-    //
-    // RangeList::Remove itself doesn't fire cross events — by design,
-    // it's a pure unlink — so the workaround is to make the node
-    // "fly off the edge" first. The shuffle is O(N) in the list
-    // length (not position delta) on this pass, which is acceptable
-    // because entity destruction is rare relative to movement.
+    // RangeList::Remove itself doesn't fire cross events by design.
     const float old_x = range_node_.X();
     const float old_z = range_node_.Z();
     range_node_.SetXZ(FLT_MAX, FLT_MAX);
@@ -99,8 +94,8 @@ void CellEntity::ConvertRealToGhost(Channel* new_real_channel) {
     return;
   }
   // Tear down script-facing surfaces first so nothing fires during the
-  // handover. Witness destruction follows the Phase 10 §3.10 #4 order —
-  // Deactivate before reset to give AoITriggers a chance to unhook.
+  // handover. Deactivate before reset to give AoITriggers a chance to
+  // unhook.
   if (witness_) {
     witness_->Deactivate();
     witness_.reset();
@@ -159,8 +154,8 @@ void CellEntity::GhostApplyDelta(uint64_t event_seq, std::span<const std::byte> 
   }
   state.latest_event_seq = event_seq;
   // Parking the delta into history lets downstream Witnesses on this
-  // CellApp catch up through the Phase 10 replay path — same code,
-  // cross-process origin.
+  // CellApp catch up through the same replay path used for local
+  // deltas, just with a cross-process origin.
   ReplicationFrame frame;
   frame.event_seq = event_seq;
   frame.other_delta.assign(other_delta.begin(), other_delta.end());
@@ -189,8 +184,8 @@ void CellEntity::GhostApplySnapshot(uint64_t event_seq, std::span<const std::byt
   if (!replication_state_.has_value()) replication_state_.emplace();
   auto& state = *replication_state_;
   // Snapshot refreshes fire when the sender detected a gap beyond the
-  // history window, so they unconditionally reset the baseline — history
-  // is useless once we've missed more than Phase 10 can replay.
+  // history window, so they unconditionally reset the baseline —
+  // history is useless once we've missed more than replay can cover.
   state.latest_event_seq = event_seq;
   state.other_snapshot.assign(other_snapshot.begin(), other_snapshot.end());
   state.history.clear();

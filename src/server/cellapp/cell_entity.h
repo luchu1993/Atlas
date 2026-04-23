@@ -23,27 +23,13 @@ class RealEntityData;
 class Space;
 class Witness;
 
-// ============================================================================
-// CellEntity — server-side cell-layer entity
+// CellEntity — server-side cell-layer entity. A thin C++ shell over a C#
+// script instance: position/direction/on_ground live here because RangeList
+// shuffles must not cross the interop boundary; everything else stays in C#.
 //
-// CellEntity is deliberately a thin C++ shell (~few hundred LOC) on top of
-// a C# script instance held by handle. Position/direction/on_ground live
-// in C++ because the RangeList shuffle must read them without crossing
-// the interop boundary; everything else — scripting, RPC dispatch, game
-// logic — stays in C#. See phase10_cellapp.md §1.3.
-//
-// Lifecycle (see phase10_cellapp.md §3.10 #4):
-//   1. Construct with (id, type_id, space, pos, dir). Ctor inserts the
-//      range_node_ into space's RangeList.
-//   2. Attach witness / controllers as game logic demands.
-//   3. Per-tick:
-//        - C# script mutates properties and position
-//        - C# calls PublishReplicationFrame (via NativeApi) to hand the
-//          Witness layer a per-tick delta/snapshot bundle
-//   4. Destroy(): witness is torn down FIRST (so its AoITrigger bounds
-//      come out of RangeList while central is still live), then
-//      controllers, then the range_node_ itself.
-// ============================================================================
+// Destruction order: witness → controllers → range_node_ (reverse of field
+// declaration order below). The witness must come out of the RangeList
+// before the central range_node_ unlinks.
 
 class CellEntity : public IEntityMotion {
  public:
@@ -51,15 +37,15 @@ class CellEntity : public IEntityMotion {
   // accidental implicit conversion, and it makes call sites self-describing.
   struct GhostTag {};
 
-  // Phase 10 ctor — creates a REAL entity. The RealEntityData sidecar is
-  // allocated so is_real() returns true immediately.
+  // Real ctor. Allocates the RealEntityData sidecar so IsReal() holds
+  // from the first tick.
   CellEntity(EntityID id, uint16_t type_id, Space& space, const math::Vector3& position,
              const math::Vector3& direction);
 
-  // Phase 11 ctor — creates a GHOST replica. `real_channel` is the non-
-  // owning back-channel to the Real CellApp; it must remain valid for
-  // the lifetime of the ghost (cleared by ConvertGhostToReal on Offload
-  // promotion, or cleared externally before the entity is destroyed).
+  // Ghost ctor. `real_channel` is the non-owning back-channel to the Real
+  // CellApp; it must remain valid for the lifetime of the ghost (cleared
+  // by ConvertGhostToReal on Offload promotion, or cleared externally
+  // before the entity is destroyed).
   CellEntity(GhostTag, EntityID id, uint16_t type_id, Space& space, const math::Vector3& position,
              const math::Vector3& direction, Channel* real_channel);
 
@@ -78,13 +64,13 @@ class CellEntity : public IEntityMotion {
   // ---- Real / Ghost state ---------------------------------------------------
   //
   // An entity is exactly one of: Real (real_data_ set) or Ghost
-  // (real_channel_ set). The pair is kept mutually exclusive by
-  // Convert{Real,Ghost}To{Ghost,Real}. See Phase 11 §3.1.
+  // (real_channel_ set). Mutual exclusivity is maintained by the
+  // Convert{Real,Ghost}To{Ghost,Real} methods.
   //
   // Ghosts are passive C++ data containers — no Witness, no Controllers,
   // no script instance. Every writeable CellApp entry point must
-  // log-and-skip when it sees a Ghost (Q2 resolution: soft guard, never
-  // hard assert); see cellapp_native_provider.cc for the pattern.
+  // log-and-skip when it sees a Ghost (soft guard, never hard assert);
+  // see cellapp_native_provider.cc for the pattern.
 
   [[nodiscard]] auto IsReal() const -> bool { return real_data_ != nullptr; }
   [[nodiscard]] auto IsGhost() const -> bool { return real_channel_ != nullptr; }
@@ -159,8 +145,8 @@ class CellEntity : public IEntityMotion {
   //
   // Entities that watch a client attach a Witness via EnableWitness.
   // Server-only NPCs normally leave the witness unset. The witness must
-  // be torn down BEFORE the range_node_ unlinks — see phase10_cellapp.md
-  // §3.10 #4 — so CellEntity's destructor handles that ordering.
+  // be torn down BEFORE the range_node_ unlinks; CellEntity's destructor
+  // handles that ordering.
 
   [[nodiscard]] auto HasWitness() const -> bool { return witness_ != nullptr; }
   [[nodiscard]] auto GetWitness() -> Witness* { return witness_.get(); }
@@ -170,11 +156,10 @@ class CellEntity : public IEntityMotion {
   // delivery callbacks. The witness activates immediately. The
   // `send_unreliable` callback is optional — when omitted, volatile-path
   // envelopes fall back to the reliable callback so tests can exercise
-  // the state machine without wiring two transports.
-  // `hysteresis` defaults to 5.0f — matches BigWorld's Witness::aoiHyst_
-  // initial value (witness.cpp:136). Pass 0.f for strict single-band
-  // trigger semantics; pass a positive value for the dual-band hysteresis
-  // AoITrigger (enter at aoi_radius, leave at aoi_radius + hysteresis).
+  // the state machine without wiring two transports. `hysteresis`
+  // defaults to 5.0f; pass 0.f for strict single-band trigger semantics,
+  // or a positive value for dual-band hysteresis (enter at aoi_radius,
+  // leave at aoi_radius + hysteresis).
   template <typename ReliableFn>
   void EnableWitness(float aoi_radius, ReliableFn&& send_reliable, float hysteresis = 5.0f);
   template <typename ReliableFn, typename UnreliableFn>
@@ -222,11 +207,10 @@ class CellEntity : public IEntityMotion {
   };
 
   // Maximum frames kept in history. Chosen to cover the common latency
-  // window at 10 Hz (~800 ms). Larger values cost memory per entity; see
-  // phase10_cellapp.md §3.11 memory budget.
+  // window at 10 Hz (~800 ms). Larger values cost memory per entity.
   static constexpr std::size_t kReplicationHistoryWindow = 8;
 
-  // C# per-tick entry point (driven by NativeApi in Step 10.7):
+  // C# per-tick entry point (driven by NativeApi):
   //   - event_seq > latest_event_seq:
   //       advance latest_event_seq; replace owner/other snapshots with
   //       the supplied buffers; append frame to history; pop oldest if
@@ -279,14 +263,14 @@ class CellEntity : public IEntityMotion {
   // so the destructor (which runs in REVERSE declaration order) tears
   // them down in the correct sequence: range_node_ unlinks LAST, after
   // witness_ and controllers_ have had a chance to remove their own
-  // trigger bounds. See phase10_cellapp.md §3.10 #4.
+  // trigger bounds.
   std::unique_ptr<Witness> witness_;
   Controllers controllers_;
   EntityRangeListNode range_node_;
 
   std::optional<ReplicationState> replication_state_;
 
-  // Phase 11 Real/Ghost state (mutually exclusive):
+  // Real/Ghost state (mutually exclusive):
   //   real_data_    non-null → Real
   //   real_channel_ non-null → Ghost
   // next_real_addr_ is the Offload-transition hint a Ghost carries while
@@ -314,10 +298,10 @@ namespace atlas {
 
 template <typename ReliableFn>
 void CellEntity::EnableWitness(float aoi_radius, ReliableFn&& send_reliable, float hysteresis) {
-  // Ghost rejection (Phase 11 §3.1): a Witness observes peer AoI on behalf
-  // of a client-bound script, which only exists on a Real. Silently
-  // attaching one to a Ghost would leak events out through a channel
-  // that doesn't own the entity.
+  // Ghost rejection: a Witness observes peer AoI on behalf of a
+  // client-bound script, which only exists on a Real. Silently attaching
+  // one to a Ghost would leak events out through a channel that doesn't
+  // own the entity.
   if (!IsReal()) {
     ATLAS_LOG_WARNING("CellEntity::EnableWitness on non-Real entity id={} — ignored", id_);
     return;

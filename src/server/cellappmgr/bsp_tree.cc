@@ -82,13 +82,13 @@ void BSPInternal::UpdateLoad() {
 }
 
 void BSPInternal::Balance(float safety_bound) {
-  // §3.7. Compare sibling loads, decide direction, apply aggression
-  // damping, then shift position_. Leaves themselves are no-ops but the
-  // new split line has to be pushed back down via PropagateBounds after
+  // Compare sibling loads, decide direction, apply aggression damping,
+  // then shift position_. Leaves themselves are no-ops but the new
+  // split line has to be pushed back down via PropagateBounds after
   // all internal nodes in this subtree have settled.
   //
   // Hysteresis at 0.01f suppresses jitter when the tree is already
-  // balanced — BigWorld uses a similar dead band.
+  // balanced.
   constexpr float kLoadHysteresis = 0.01f;
   const float diff = left_load_ - right_load_;
   Direction d = Direction::kNone;

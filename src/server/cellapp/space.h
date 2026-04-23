@@ -17,21 +17,15 @@ namespace atlas {
 class Cell;
 class CellEntity;
 
-// ============================================================================
-// Space — a self-contained spatial partition
+// Space — a self-contained spatial partition.
 //
-// Phase 10 treats Space and Cell as one-to-one (single CellApp per space);
-// Phase 11 introduces distributed spaces spanning multiple CellApps, at
-// which point this class would own just the "real" portion.
-//
-// Space is the authority for:
+// Authority for:
 //   - the collection of CellEntity instances currently living here
 //   - the RangeList indexing those entities on (x, z)
 //
-// It does NOT know about:
+// Does NOT know about:
 //   - client sessions, RPC routing — those are BaseApp / Witness concerns
 //   - terrain, physics — deferred
-// ============================================================================
 
 class Space {
  public:
@@ -60,7 +54,7 @@ class Space {
   [[nodiscard]] auto GetRangeList() -> RangeList& { return range_list_; }
   [[nodiscard]] auto GetRangeList() const -> const RangeList& { return range_list_; }
 
-  // ---- Phase 11 Cells + BSP geometry ---------------------------------------
+  // ---- Cells + BSP geometry ---------------------------------------
   //
   // `local_cells_` holds the subset of Cells authoritative on THIS
   // CellApp (indexed by CellID assigned by CellAppMgr). Ghost-only
@@ -90,13 +84,11 @@ class Space {
 
   // Drive every entity's per-tick work: controllers first (may alter
   // position), then a compaction pass on destroyed entities. Does NOT
-  // drive Witness updates — that's a later stage of the CellApp tick,
-  // see phase10_cellapp.md §3.7.
+  // drive Witness updates — that's a later stage of the CellApp tick.
   void Tick(float dt);
 
   // Run `fn(entity)` over every live entity. Safe to call during tick
-  // outside of Witness::Update; inside Witness::Update the rules in
-  // phase10_cellapp.md §3.10 apply.
+  // outside of Witness::Update.
   template <typename Fn>
   void ForEachEntity(Fn&& fn) {
     for (auto& [_, entity] : entities_) {
@@ -114,10 +106,10 @@ class Space {
   RangeList range_list_;
   std::unordered_map<EntityID, std::unique_ptr<CellEntity>> entities_;
 
-  // Phase 11 additions. Cells are non-owning wrt entities (the map above
-  // owns); they just track membership. Declared AFTER entities_ so their
-  // destructors run first — Cell does not touch entity state at teardown,
-  // but this ordering keeps subsequent additions safe by default.
+  // Cells are non-owning wrt entities (the map above owns); they just
+  // track membership. Declared AFTER entities_ so their destructors
+  // run first — Cell does not touch entity state at teardown, but
+  // this ordering keeps subsequent additions safe by default.
   LocalCellMap local_cells_;
   std::optional<BSPTree> bsp_tree_;
 };

@@ -15,13 +15,12 @@ class CellEntity;
 class Channel;
 class Space;
 
-// ============================================================================
 // GhostMaintainer — computes per-tick Ghost membership changes.
 //
-// Phase 11 §3.3. Pull-model maintainer: for each Real entity in a Space,
-// compute the set of peer CellApps whose partition overlaps the entity's
-// interest area (`pos ± (ghost_distance + hysteresis)`). Compared against
-// the Real's current Haunt list, that gives two work queues:
+// Pull-model maintainer: for each Real entity in a Space, compute the
+// set of peer CellApps whose partition overlaps the entity's interest
+// area (`pos ± (ghost_distance + hysteresis)`). Compared against the
+// Real's current Haunt list, that gives two work queues:
 //
 //   CreateOp  — Haunt-less peers overlapped by interest → emit CreateGhost
 //   DeleteOp  — Haunts no longer overlapped AND past min-lifespan → emit
@@ -33,11 +32,9 @@ class Space;
 // on fakes.
 //
 // Hysteresis prevents flapping when entities sit exactly on a Cell
-// boundary — matches BigWorld's GHOST_FUDGE semantics.
-// min_ghost_lifespan prevents tearing down a Ghost that was just
-// created (same tick, or near-same tick), which would otherwise bounce
-// if the Real re-enters the interest area right after crossing out.
-// ============================================================================
+// boundary. min_ghost_lifespan prevents tearing down a Ghost that was
+// just created, which would otherwise bounce if the Real re-enters the
+// interest area right after crossing out.
 
 class GhostMaintainer {
  public:

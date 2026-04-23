@@ -57,12 +57,10 @@ auto RealEntityData::BuildDelta() const -> cellapp::GhostDelta {
 
   // Invariant: PublishReplicationFrame only appends to `history` when it
   // also advances `latest_event_seq`, so the back frame's seq should
-  // always equal the current latest. If they diverge — say, history
-  // was cleared externally but latest_event_seq wasn't reset, or
-  // vice-versa — forwarding back()'s delta bytes with a mismatched
-  // seq would hand the Ghost a corrupted record. Prefer to ship an
-  // empty delta so the pump's gap > 1 check on the next tick promotes
-  // the refresh to a GhostSnapshotRefresh.
+  // always equal the current latest. If they diverge, forwarding back()'s
+  // delta bytes with a mismatched seq would hand the Ghost a corrupted
+  // record. Prefer to ship an empty delta so the pump's gap > 1 check
+  // on the next tick promotes the refresh to a GhostSnapshotRefresh.
   const auto& latest = state->history.back();
   if (latest.event_seq != state->latest_event_seq) {
     ATLAS_LOG_WARNING(

@@ -13,9 +13,8 @@ namespace atlas {
 class CellEntity;
 class Controllers;
 
-// ============================================================================
 // ControllerCodec — serialize / deserialize an entity's Controllers for
-// cross-process Offload migration (Phase 11 PR-6 review-fix B2).
+// cross-process Offload migration.
 //
 // Wire format (version 1):
 //   u8  count
@@ -42,7 +41,6 @@ class Controllers;
 //     LeaveFn) are NOT serialised — they're script-layer closures. The
 //     arrival CellApp must re-attach them from the C# entity's
 //     RestoreEntity hook if the script wants them fired.
-// ============================================================================
 
 // Entity-id → CellEntity* lookup used by the codec on the receiving
 // side to resolve ProximityController peer membership. Returns nullptr
@@ -54,10 +52,10 @@ using EntityLookupByIdFn = std::function<CellEntity*(uint32_t)>;
 // entity has no Controllers. Does not mutate entity state.
 void SerializeControllersForMigration(const CellEntity& entity, BinaryWriter& w);
 
-// Rebuild controllers on `entity` from the blob. Called from
-// CellApp::OnOffloadEntity AFTER the CellEntity has been materialised
-// and added to entity_population_, so `lookup_peer` can resolve
-// ProximityController peer ids via the standard population index.
+// Rebuild controllers on `entity` from the blob. Must be called AFTER
+// the CellEntity has been materialised and added to
+// entity_population_, so `lookup_peer` can resolve ProximityController
+// peer ids via the standard population index.
 //
 // Returns true on success (controllers installed), false on wire-
 // format error. Partial restores are possible — an unknown Kind tag

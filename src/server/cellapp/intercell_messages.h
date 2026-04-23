@@ -11,11 +11,9 @@
 #include "serialization/binary_stream.h"
 #include "server/entity_types.h"
 
-// ============================================================================
-// Inter-CellApp messages — Real/Ghost replication + Offload (IDs 3100–3111)
-//
-// Phase 11 §2.1 / §2.2. All messages on this channel are CellApp ↔ CellApp;
-// the physical transport is the Atlas internal RUDP lane (Phase 11 §9.4).
+// Inter-CellApp messages — Real/Ghost replication + Offload
+// (IDs 3100-3111). All messages on this channel are CellApp ↔ CellApp;
+// the physical transport is the Atlas internal RUDP lane.
 //
 // Direction summary:
 //   Real → Ghost : CreateGhost, DeleteGhost, GhostPositionUpdate, GhostDelta,
@@ -23,20 +21,17 @@
 //   New Real → Ghost : GhostSetReal
 //   Offload src → dst : OffloadEntity
 //   Offload dst → src : OffloadEntityAck
-// ============================================================================
 
 namespace atlas::cellapp {
 
-// ----------------------------------------------------------------------------
 // CreateGhost  (Real CellApp → Ghost CellApp, ID 3100)
 //
 // Seeds a Ghost replica with the Real entity's other-audience snapshot
-// baseline. `event_seq` / `volatile_seq` give the receiving side a starting
-// point for ordering subsequent GhostDelta / GhostPositionUpdate messages
-// (Phase 11 §3.1 — these slot directly into ReplicationState's
-// latest_*_seq). `real_cellapp_addr` is the channel the Ghost uses to
-// forward anything back to the Real side.
-// ----------------------------------------------------------------------------
+// baseline. `event_seq` / `volatile_seq` give the receiving side a
+// starting point for ordering subsequent GhostDelta /
+// GhostPositionUpdate messages (they slot directly into
+// ReplicationState's latest_*_seq). `real_cellapp_addr` is the channel
+// the Ghost uses to forward anything back to the Real side.
 
 struct CreateGhost {
   EntityID real_entity_id{kInvalidEntityID};
@@ -124,9 +119,7 @@ struct CreateGhost {
 };
 static_assert(NetworkMessage<CreateGhost>);
 
-// ----------------------------------------------------------------------------
 // DeleteGhost  (Real CellApp → Ghost CellApp, ID 3101)
-// ----------------------------------------------------------------------------
 
 struct DeleteGhost {
   EntityID ghost_entity_id{kInvalidEntityID};
@@ -150,13 +143,11 @@ struct DeleteGhost {
 };
 static_assert(NetworkMessage<DeleteGhost>);
 
-// ----------------------------------------------------------------------------
 // GhostPositionUpdate  (Real → Ghost, ID 3102)
 //
 // Volatile (latest-wins) position + orientation. `volatile_seq` is the
-// Real side's ReplicationState::latest_volatile_seq at emit time; the Ghost
-// discards any frame whose seq is <= what it already holds.
-// ----------------------------------------------------------------------------
+// Real side's ReplicationState::latest_volatile_seq at emit time; the
+// Ghost discards any frame whose seq is <= what it already holds.
 
 struct GhostPositionUpdate {
   EntityID ghost_entity_id{kInvalidEntityID};
@@ -208,16 +199,14 @@ struct GhostPositionUpdate {
 };
 static_assert(NetworkMessage<GhostPositionUpdate>);
 
-// ----------------------------------------------------------------------------
 // GhostDelta  (Real → Ghost, ID 3103)
 //
 // Other-audience delta (output of DeltaSyncEmitter::SerializeOtherDelta
-// with the _dirtyFlags & OtherVisibleMask filter). `event_seq` is the Real
-// side's ReplicationState::latest_event_seq at emit time — Ghost appends
-// into its own history deque keyed by that seq. Gaps larger than
-// kReplicationHistoryWindow (8 frames) must be healed by a
+// with the _dirtyFlags & OtherVisibleMask filter). `event_seq` is the
+// Real side's ReplicationState::latest_event_seq at emit time — Ghost
+// appends into its own history deque keyed by that seq. Gaps larger
+// than kReplicationHistoryWindow (8 frames) must be healed by a
 // GhostSnapshotRefresh rather than by silent state loss.
-// ----------------------------------------------------------------------------
 
 struct GhostDelta {
   EntityID ghost_entity_id{kInvalidEntityID};
@@ -255,15 +244,13 @@ struct GhostDelta {
 };
 static_assert(NetworkMessage<GhostDelta>);
 
-// ----------------------------------------------------------------------------
 // GhostSnapshotRefresh  (Real → Ghost, ID 3106)
 //
-// Sent when the Real side detects that a given Ghost's event_seq trails by
-// more than the Phase 10 kReplicationHistoryWindow (= 8) frames —
-// continuous-delta catch-up is no longer feasible, so rebase the Ghost's
-// other_snapshot to a fresh full snapshot at `event_seq` and let future
-// GhostDelta streams resume from there.
-// ----------------------------------------------------------------------------
+// Sent when the Real side detects that a given Ghost's event_seq trails
+// by more than kReplicationHistoryWindow (= 8) frames —
+// continuous-delta catch-up is no longer feasible, so rebase the
+// Ghost's other_snapshot to a fresh full snapshot at `event_seq` and
+// let future GhostDelta streams resume from there.
 
 struct GhostSnapshotRefresh {
   EntityID ghost_entity_id{kInvalidEntityID};
@@ -304,12 +291,10 @@ struct GhostSnapshotRefresh {
 };
 static_assert(NetworkMessage<GhostSnapshotRefresh>);
 
-// ----------------------------------------------------------------------------
 // GhostSetReal  (new Real CellApp → Ghost CellApp, ID 3104)
 //
 // Sent after a successful Offload — the ghost redirects subsequent
 // forwarded-RPC / real-reply traffic to the new Real address.
-// ----------------------------------------------------------------------------
 
 struct GhostSetReal {
   EntityID ghost_entity_id{kInvalidEntityID};
@@ -342,12 +327,10 @@ struct GhostSetReal {
 };
 static_assert(NetworkMessage<GhostSetReal>);
 
-// ----------------------------------------------------------------------------
 // GhostSetNextReal  (old Real CellApp → Ghost CellApp, ID 3105)
 //
-// Pre-Offload notification; lets ghosts buffer traffic for the transition
-// window rather than drop it.
-// ----------------------------------------------------------------------------
+// Pre-Offload notification; lets ghosts buffer traffic for the
+// transition window rather than drop it.
 
 struct GhostSetNextReal {
   EntityID ghost_entity_id{kInvalidEntityID};
@@ -381,20 +364,17 @@ struct GhostSetNextReal {
 };
 static_assert(NetworkMessage<GhostSetNextReal>);
 
-// ----------------------------------------------------------------------------
 // OffloadEntity  (old CellApp → new CellApp, ID 3110)
 //
 // Carries the full state needed to promote a Ghost into Real on the
 // receiving side, or to materialise a fresh Real if the ghost does not
 // yet exist there. `persistent_blob` is the C# ServerEntity.Serialize
-// output — Phase 10's abstract, never a new SerializeFull variant
-// (Phase 11 §4).
+// output.
 //
 // owner_snapshot / other_snapshot / latest_*_seq let the receiver fill
 // ReplicationState on arrival without needing to wait for the first C#
-// publish_replication_frame tick. `existing_haunts` is the current Real's
-// Haunt list so the new Real can immediately resume broadcasts.
-// ----------------------------------------------------------------------------
+// publish_replication_frame tick. `existing_haunts` is the current
+// Real's Haunt list so the new Real can immediately resume broadcasts.
 
 struct OffloadEntity {
   EntityID real_entity_id{kInvalidEntityID};
@@ -415,16 +395,14 @@ struct OffloadEntity {
   // BEFORE ConvertRealToGhost's StopAll runs, so a mid-motion
   // controller resumes on the receiver at the same waypoint /
   // remaining interval / proximity membership without the script
-  // needing to re-arm. Empty when the sender had no live
-  // controllers — never structurally required to be non-empty.
+  // needing to re-arm. Empty when the sender had no live controllers.
   std::vector<std::byte> controller_data;
   std::vector<Address> existing_haunts;
 
   // Witness state preservation across the Offload boundary. The sender's
-  // Witness is torn down by ConvertRealToGhost; without these fields the
-  // receiver would re-enable with CellAppConfig defaults and silently
-  // drop any script-level SetAoIRadius. BigWorld parity: Witness's
-  // aoiRadius_ / aoiHyst_ both ride in writeBackupData (witness.cpp:723).
+  // Witness is torn down by ConvertRealToGhost; without these fields
+  // the receiver would re-enable with CellAppConfig defaults and
+  // silently drop any script-level SetAoIRadius.
   // `has_witness==false` ⇒ the other two floats are ignored.
   bool has_witness{false};
   float aoi_radius{0.f};
@@ -467,8 +445,7 @@ struct OffloadEntity {
     }
     // Witness state — appended at the tail so Deserialize can treat the
     // block as optional via `BinaryReader::Remaining() >= 9`. Keeps
-    // wire-format back-compat with older-boundary tests that pre-date
-    // Phase 11 C2.
+    // wire-format back-compat with older-boundary tests.
     w.Write(static_cast<uint8_t>(has_witness ? 1 : 0));
     w.Write(aoi_radius);
     w.Write(aoi_hysteresis);
@@ -566,13 +543,11 @@ struct OffloadEntity {
 };
 static_assert(NetworkMessage<OffloadEntity>);
 
-// ----------------------------------------------------------------------------
 // OffloadEntityAck  (new CellApp → old CellApp, ID 3111)
 //
-// `success == false` means the destination rejected the offload (no such
-// Space, unknown type, allocation failure, …); the source CellApp keeps
-// the entity put.
-// ----------------------------------------------------------------------------
+// `success == false` means the destination rejected the offload (no
+// such Space, unknown type, allocation failure, …); the source CellApp
+// keeps the entity put.
 
 struct OffloadEntityAck {
   EntityID real_entity_id{kInvalidEntityID};

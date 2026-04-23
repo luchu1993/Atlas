@@ -72,8 +72,8 @@ void Space::Tick(float dt) {
   // `entities_` synchronously. A dedicated compaction sweep would be a
   // second destruction path that bypasses CellApp's base/cell entity
   // indexes (`entity_population_` / `base_entity_population_` in
-  // cellapp.h), turning them into stale pointers. If Phase 11 ever
-  // needs deferred destruction (e.g. destroy-during-controller-update),
+  // cellapp.h), turning them into stale pointers. If deferred
+  // destruction is ever needed (e.g. destroy-during-controller-update),
   // add it with a CellApp-visible notification hook — not a silent
   // Space-local compaction.
   for (auto& [_, entity] : entities_) {

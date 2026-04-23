@@ -1,4 +1,4 @@
-// CellAppMgr process entry point — Phase 11 PR-5.
+// CellAppMgr process entry point.
 
 #include "cellappmgr.h"
 

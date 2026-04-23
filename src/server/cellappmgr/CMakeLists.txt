@@ -1,11 +1,8 @@
-# cellappmgr — cell manager (Phase 11)
-#
-# PR-1 landed the message INTERFACE lib; PR-2 adds the BSP tree. The process
-# executable + process lib follow in PR-5.
+# cellappmgr — cell manager.
 
 # Header-only message definitions.
 # Exposed as INTERFACE so both atlas_cellapp_lib (which needs to handle
-# AddCellToSpace / UpdateGeometry / ShouldOffload inbound) and the future
+# AddCellToSpace / UpdateGeometry / ShouldOffload inbound) and
 # atlas_cellappmgr_lib can consume the same message header without creating
 # a cellapp↔cellappmgr lib-level cycle.
 add_library(atlas_cellappmgr_messages INTERFACE)
@@ -20,7 +17,7 @@ target_link_libraries(atlas_cellappmgr_messages INTERFACE
 
 # BSP tree — spatial partition shared by CellAppMgr (authoritative) and
 # CellApp (deserialises UpdateGeometry blobs). Kept in its own STATIC lib
-# so PR-4's atlas_cellapp_lib can link it without pulling in the manager
+# so atlas_cellapp_lib can link it without pulling in the manager
 # process code.
 add_library(atlas_cellappmgr_bsp STATIC
   bsp_tree.cc

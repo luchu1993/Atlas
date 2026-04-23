@@ -44,25 +44,22 @@ struct OffloadEntityAck;
 // above — kept included rather than forward-declared so CellID and
 // message-struct fields are visible in inline helpers on this header.
 
-// ============================================================================
-// CellApp — spatial-simulation server process
+// CellApp — spatial-simulation server process.
 //
 // Inherits from EntityApp (same level as BaseApp) and wires:
 //   • Space map — the local set of spatial partitions this cell serves
 //   • Dual entity index (cell_id → *, base_id → *) — RPC / AoI route on
-//     base_id (phase10_cellapp.md §9.6) while internal management uses
-//     the cell-local id
+//     base_id while internal management uses the cell-local id
 //   • CellAppNativeProvider — C# ↔ C++ interop anchored to this CellApp's
 //     entity lookup
-//   • Message handlers for the nine CellApp inbound messages (IDs 3000-3099)
+//   • Message handlers for the CellApp inbound messages (IDs 3000-3099)
 //
-// Tick flow (phase10_cellapp.md §3.7):
+// Tick flow:
 //   OnStartOfTick  — drives EntityApp's C# on_tick
 //   … Updatables …
 //   C# on_tick → publish_replication_frame via NativeApi
 //   OnTickComplete — drives TickControllers(dt) then TickWitnesses()
-//   OnEndOfTick    — reserved for future inter-cell channel flush (Phase 11)
-// ============================================================================
+//   OnEndOfTick    — ghost pump + offload checker + ack timeouts
 
 class CellApp : public EntityApp {
  public:
@@ -102,7 +99,7 @@ class CellApp : public EntityApp {
   void OnDisableWitness(const Address& src, Channel* ch, const cellapp::DisableWitness& msg);
   void OnSetAoIRadius(const Address& src, Channel* ch, const cellapp::SetAoIRadius& msg);
 
-  // ---- Phase 11 inter-CellApp handlers ----
+  // ---- Inter-CellApp handlers ----
   void OnCreateGhost(const Address& src, Channel* ch, const cellapp::CreateGhost& msg);
   void OnDeleteGhost(const Address& src, Channel* ch, const cellapp::DeleteGhost& msg);
   void OnGhostPositionUpdate(const Address& src, Channel* ch,
@@ -115,14 +112,14 @@ class CellApp : public EntityApp {
   void OnOffloadEntity(const Address& src, Channel* ch, const cellapp::OffloadEntity& msg);
   void OnOffloadEntityAck(const Address& src, Channel* ch, const cellapp::OffloadEntityAck& msg);
 
-  // ---- Phase 11 CellAppMgr → CellApp handlers ----
+  // ---- CellAppMgr → CellApp handlers ----
   void OnAddCellToSpace(const Address& src, Channel* ch, const cellappmgr::AddCellToSpace& msg);
   void OnUpdateGeometry(const Address& src, Channel* ch, const cellappmgr::UpdateGeometry& msg);
   void OnShouldOffload(const Address& src, Channel* ch, const cellappmgr::ShouldOffload& msg);
   void OnRegisterCellAppAck(const Address& src, Channel* ch,
                             const cellappmgr::RegisterCellAppAck& msg);
 
-  // ---- app_id / EntityID bookkeeping (PR-5, §9.6 Q8 scheme A) --------
+  // ---- app_id / EntityID bookkeeping --------
   //
   // After RegisterCellApp succeeds, AppId() holds the non-zero value
   // assigned by CellAppMgr. AllocateCellEntityId packs it into the
@@ -140,21 +137,21 @@ class CellApp : public EntityApp {
   // ---- Offload orchestration (exposed for tests) --------------------------
 
   // Build an OffloadEntity message for `entity`. Does NOT send; caller
-  // decides transport. PR-6 wires the C# SerializeEntity callback here
-  // to fill `persistent_blob`. The receiver rebuilds its local Cell
-  // membership by querying its own BSP with the arriving position, so
-  // no target_cell_id needs to travel on the wire.
+  // decides transport. The C# SerializeEntity callback fills
+  // `persistent_blob` when registered. The receiver rebuilds its local
+  // Cell membership by querying its own BSP with the arriving position,
+  // so no target_cell_id needs to travel on the wire.
   auto BuildOffloadMessage(const CellEntity& entity) const -> cellapp::OffloadEntity;
 
-  // Per-tick BigWorld-style load estimate — EWMA of (work_time /
-  // expected_tick_period). Updated at the start of OnTickComplete so
-  // every tick feeds the smoother; the value feeds SendInformCellLoad.
+  // Per-tick load estimate — EWMA of (work_time / expected_tick_period).
+  // Updated at the start of OnTickComplete so every tick feeds the
+  // smoother; the value feeds SendInformCellLoad.
   [[nodiscard]] auto PersistentLoad() const -> float { return persistent_load_; }
 
   // Count of Real entities currently hosted on this CellApp. Walks
   // entity_population_ once per call — cheap at Atlas's entity scales
-  // (≤ tens of thousands per cell). Tests use this; InformCellLoad
-  // wire msg carries the same number.
+  // (≤ tens of thousands per cell). InformCellLoad wire msg carries
+  // the same number.
   [[nodiscard]] auto NumRealEntities() const -> uint32_t;
 
   // Ghost-pump + offload-checker pass, called from OnEndOfTick. Exposed
@@ -162,7 +159,7 @@ class CellApp : public EntityApp {
   void TickGhostPump();
   void TickOffloadChecker();
 
-  // ---- Phase 11 PR-6 review-fix B3 Offload rollback ---------------------
+  // ---- Offload rollback ---------------------
   //
   // PendingOffload captures everything the CellApp needs to re-install
   // a Real locally when the receiver rejects (or never acks) an
@@ -188,8 +185,6 @@ class CellApp : public EntityApp {
     std::vector<std::byte> controller_blob;
     // Witness state captured pre-ConvertRealToGhost so revert can
     // reattach with the script-authored radius / hysteresis intact.
-    // Mirrors the Offload wire payload's preservation of the same
-    // values on the happy path (BigWorld witness.cpp:723 parity).
     bool had_witness{false};
     float aoi_radius{0.f};
     float aoi_hysteresis{0.f};
@@ -231,22 +226,18 @@ class CellApp : public EntityApp {
   // Internal helpers.
   void TickControllers(float dt);
   void TickWitnesses();
-  // BigWorld-style cell→base state backup. Fires every
-  // kBackupIntervalTicks ticks for every entity with a live BaseAddr,
-  // capturing the cell-side Serialize output as opaque bytes and
-  // shipping BackupCellEntity (msg 2018) to the BaseApp. See
-  // baseapp_messages.h::BackupCellEntity for what the base does with
-  // the blob.
+  // Cell→base state backup. Fires every kBackupIntervalTicks ticks for
+  // every entity with a live BaseAddr, capturing the cell-side
+  // Serialize output as opaque bytes and shipping BackupCellEntity
+  // (msg 2018) to the BaseApp.
   void TickBackupPump();
 
-  // L4: CellApp-side owner baseline pump. Every
-  // kClientBaselineIntervalTicks ticks, every Real entity with a
-  // witness (client-bound) produces its owner-scope snapshot via the
-  // cell-side SerializeForOwnerClient (get_owner_snapshot callback)
-  // and ships it through BaseApp as ReplicatedBaselineFromCell (msg
-  // 2019) → ReplicatedBaselineToClient (0xF002). Replaces the
-  // M2-disabled BaseApp::EmitBaselineSnapshots and gives
-  // reliable="false" properties a genuine recovery channel.
+  // CellApp-side owner baseline pump. Every kClientBaselineIntervalTicks
+  // ticks, every Real entity with a witness (client-bound) produces its
+  // owner-scope snapshot via get_owner_snapshot and ships it through
+  // BaseApp as ReplicatedBaselineFromCell (msg 2019) →
+  // ReplicatedBaselineToClient (0xF002). Gives reliable="false"
+  // properties a genuine recovery channel.
   void TickClientBaselinePump();
 
   // Attach a Witness to the given Real entity with the specified radius
@@ -256,17 +247,14 @@ class CellApp : public EntityApp {
   void AttachWitness(CellEntity& entity, float aoi_radius, float hysteresis);
 
   // EWMA update of persistent_load_. Reads LastTickWorkDuration() +
-  // ExpectedTickPeriod() from the ServerApp base class. BigWorld parity:
-  // `CellApp::updateLoad` (cellapp.cpp:1177-1225) — the persistentLoad_
-  // branch, minus transient-load breakdown which Atlas doesn't track
-  // separately. Called every tick from OnTickComplete.
+  // ExpectedTickPeriod() from the ServerApp base class. Called every
+  // tick from OnTickComplete.
   void UpdatePersistentLoad();
 
   // Dispatch cellappmgr::InformCellLoad to the CellAppMgr channel with
   // current persistent_load_ + NumRealEntities(). No-op if not yet
   // registered (cellappmgr_channel_ is null or app_id_ is 0). Called
-  // every tick from OnTickComplete — BigWorld's cadence
-  // (`handleGameTickTimeSlice` line 1314).
+  // every tick from OnTickComplete.
   void SendInformCellLoad();
 
   [[nodiscard]] auto AllocateCellEntityId() -> EntityID;
@@ -275,41 +263,35 @@ class CellApp : public EntityApp {
 
   // cell_entity_id → CellEntity*. Non-owning — the owning unique_ptr lives
   // in the peer Space's entities_ map. Holds BOTH Real and Ghost entities
-  // (PR-4: §9.6 Q8 — EntityIDs are cluster-wide so no collision risk).
+  // (EntityIDs are cluster-wide so no collision risk).
   std::unordered_map<EntityID, CellEntity*> entity_population_;
 
   // base_entity_id → CellEntity*. Required for RPC routing because
   // clients and BaseApp both identify entities by their base_entity_id,
-  // which is stable across CellApp offloads (Phase 11). Only Real
-  // entities appear here — client RPCs never dispatch to a Ghost.
+  // which is stable across CellApp offloads. Only Real entities appear
+  // here — client RPCs never dispatch to a Ghost.
   std::unordered_map<EntityID, CellEntity*> base_entity_population_;
 
   EntityID next_entity_id_{1};
 
-  // Backup pump cadence. 50 ticks ≈ 1 s at 50 Hz. BigWorld's default
-  // is 10 s (cellapp_config.cpp::backupPeriod = 10.f); Atlas uses a
-  // tighter cadence because the absence of a separate baseline pump
-  // means backup bytes are the only authoritative cell-side state the
-  // base sees, and the DB write path wants reasonably fresh snapshots.
+  // Backup pump cadence. 50 ticks ≈ 1 s at 50 Hz. Tight cadence because
+  // backup bytes are the only authoritative cell-side state BaseApp
+  // sees, and the DB write path wants reasonably fresh snapshots.
   static constexpr uint32_t kBackupIntervalTicks = 50;
   uint32_t backup_tick_counter_{0};
 
-  // Client baseline pump cadence. 120 ticks — matches the pre-M2
-  // BaseApp::kBaselineInterval so the script-client smoke 场景 4
-  // ("unreliable 属性 + baseline 兜底") recovery expectation
-  // ("baseline arrives within ≤6 s") carries over unchanged.
-  // Baseline is a bandwidth-insensitive safety net for
-  // reliable="false" attributes; tighter than backup is unnecessary.
+  // Client baseline pump cadence. Baseline is a bandwidth-insensitive
+  // safety net for reliable="false" attributes; tighter than backup is
+  // unnecessary.
   static constexpr uint32_t kClientBaselineIntervalTicks = 120;
   uint32_t client_baseline_tick_counter_{0};
 
   // app_id assigned by CellAppMgr's RegisterCellAppAck. Forms the high
-  // 8 bits of every EntityID we mint (§9.6 Q8 scheme A).
-  // 0 ⇒ not yet registered; IDs allocated before registration use
-  // high byte 0 and will clash once a CellAppMgr is in the cluster,
-  // so callers should avoid creating entities pre-registration in
-  // production. Phase 10 unit tests never observe app_id and continue
-  // to work with app_id_ == 0.
+  // 8 bits of every EntityID we mint. 0 ⇒ not yet registered; IDs
+  // allocated before registration use high byte 0 and will clash once
+  // a CellAppMgr is in the cluster, so callers should avoid creating
+  // entities pre-registration in production. Unit tests never observe
+  // app_id and continue to work with app_id_ == 0.
   uint32_t app_id_{0};
   Channel* cellappmgr_channel_{nullptr};
 
@@ -317,18 +299,17 @@ class CellApp : public EntityApp {
   // balancer consumes. Updated every tick by UpdatePersistentLoad.
   float persistent_load_{0.f};
 
-  // Peer CellApp channels. Review-fix C2 replaced the local map with a
-  // shared registry (atlas_server) so both BaseApp and CellApp route
-  // through the same Birth/Death + self-filter code.
+  // Peer CellApp channels. Shared registry (atlas_server) so both
+  // BaseApp and CellApp route through the same Birth/Death +
+  // self-filter code.
   CellAppPeerRegistry peer_registry_;
 
   // Trusted BaseApp source addresses — any inbound ClientCellRpcForward
   // whose wire src isn't in this set is dropped. Populated via
-  // machined Birth/Death for ProcessType::kBaseApp in Init. BigWorld
-  // parity: CellApp trusts its BaseApp peers by virtue of their
-  // registered presence — an unregistered sender forging
-  // ClientCellRpcForward would bypass L1/L2 validation that BaseApp
-  // runs. Phase 10 §10.1 #1 hard constraint.
+  // machined Birth/Death for ProcessType::kBaseApp in Init. An
+  // unregistered sender forging ClientCellRpcForward would bypass
+  // BaseApp's L1/L2 validation, so this trust gate is a hard
+  // constraint.
   std::unordered_set<Address> trusted_baseapps_;
 
  public:
@@ -351,10 +332,9 @@ class CellApp : public EntityApp {
 
   static constexpr Duration kOffloadAckTimeout = std::chrono::seconds(5);
 
-  // Safety ceiling on per-tick AvatarUpdate displacement. phase10_cellapp.md
-  // §3.12 Phase 10 strategy: reject beyond 50 m/tick (roughly 500 m/s at
-  // 10 Hz — well above any realistic player speed). Replaced by a per-class
-  // maxSpeed in Phase 11.
+  // Safety ceiling on per-tick AvatarUpdate displacement. Reject beyond
+  // 50 m/tick (roughly 500 m/s at 10 Hz — well above any realistic
+  // player speed). TODO: replace with a per-class maxSpeed.
   static constexpr float kMaxSingleTickMove = 50.f;
 
   // The provider's concrete type so handlers can reach CellApp-specific

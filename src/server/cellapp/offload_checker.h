@@ -11,18 +11,15 @@ namespace atlas {
 class CellEntity;
 class Space;
 
-// ============================================================================
-// OffloadChecker — per-tick border-crossing detection.
-//
-// Phase 11 §3.4. For each Real entity in a Space's local Cells, ask the
-// authoritative BSP tree which Cell covers the entity's current
-// position. If that Cell lives on a peer CellApp, emit an OffloadOp.
-// CellApp consumes the list and drives the Offload handshake.
+// OffloadChecker — per-tick border-crossing detection. For each Real
+// entity in a Space's local Cells, ask the authoritative BSP tree which
+// Cell covers the entity's current position. If that Cell lives on a
+// peer CellApp, emit an OffloadOp. CellApp consumes the list and drives
+// the Offload handshake.
 //
 // Offload is suppressed when the Cell has `should_offload_ == false` —
 // CellAppMgr uses that flag to freeze migrations during sensitive
 // transitions (e.g. a BSP rebalance in flight).
-// ============================================================================
 
 class OffloadChecker {
  public:
