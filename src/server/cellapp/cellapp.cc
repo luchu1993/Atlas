@@ -191,6 +191,24 @@ auto CellApp::Init(int argc, char* argv[]) -> bool {
   // own Birth doesn't add us to the peer list.
   peer_registry_.Subscribe(GetMachinedClient(), /*self_addr=*/Network().RudpAddress());
 
+  // Phase 11 C7: track BaseApp peers so OnClientCellRpcForward can
+  // reject spoofed senders. Addresses only — we don't send anything
+  // back through this channel directly; responses ride the same
+  // Channel* the handler received on.
+  GetMachinedClient().Subscribe(
+      machined::ListenerType::kBoth, ProcessType::kBaseApp,
+      [this](const machined::BirthNotification& n) {
+        trusted_baseapps_.insert(n.internal_addr);
+        ATLAS_LOG_INFO("CellApp: trusted BaseApp at {}:{}", n.internal_addr.Ip(),
+                       n.internal_addr.Port());
+      },
+      [this](const machined::DeathNotification& n) {
+        if (trusted_baseapps_.erase(n.internal_addr) > 0) {
+          ATLAS_LOG_INFO("CellApp: untrusted BaseApp at {}:{}", n.internal_addr.Ip(),
+                         n.internal_addr.Port());
+        }
+      });
+
   ATLAS_LOG_INFO("CellApp: initialised");
   return true;
 }
@@ -505,8 +523,22 @@ void CellApp::OnDestroyCellEntity(const Address& /*src*/, Channel* /*ch*/,
   entity->GetSpace().RemoveEntity(cell_id);
 }
 
-void CellApp::OnClientCellRpcForward(const Address& /*src*/, Channel* /*ch*/,
+void CellApp::OnClientCellRpcForward(const Address& src, Channel* /*ch*/,
                                      const cellapp::ClientCellRpcForward& msg) {
+  // Phase 11 C7 / Phase 10 §10.1 #1 hard constraint: trust boundary.
+  // Accept only from registered BaseApps. An unregistered sender
+  // forging this message would bypass BaseApp's L1/L2 validation
+  // (proxy binding + Exposed check) — and since the source_entity_id
+  // is stamped BY that sender, would let any network peer impersonate
+  // any logged-in client for any exposed cell method.
+  if (!trusted_baseapps_.contains(src)) {
+    ATLAS_LOG_WARNING(
+        "CellApp: ClientCellRpcForward from untrusted src {}:{} "
+        "(target={}, rpc=0x{:06X}) — dropping",
+        src.Ip(), src.Port(), msg.target_entity_id, msg.rpc_id);
+    return;
+  }
+
   // Four-layer defence — phase10_cellapp.md §3.8.1. BaseApp already
   // validated direction + exposed + cross-entity rules, but re-checking
   // here is cheap and keeps this handler self-defensive.

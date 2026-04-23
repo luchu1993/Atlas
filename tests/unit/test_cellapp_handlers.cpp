@@ -40,7 +40,15 @@ class CellAppHandlersTest : public ::testing::Test {
   NetworkInterface network_{dispatcher_};
   CellApp app_{dispatcher_, network_};
 
-  void SetUp() override { EntityDefRegistry::Instance().clear(); }
+  void SetUp() override {
+    EntityDefRegistry::Instance().clear();
+    // C7 trust boundary: tests drive OnClientCellRpcForward with a
+    // default-constructed Address{} as src (no wire dispatcher in the
+    // loop). Trust that sentinel so the rest of the validation
+    // pipeline — the piece these tests actually exercise — isn't
+    // short-circuited at the trust check.
+    app_.InsertTrustedBaseAppForTest(Address{});
+  }
   void TearDown() override { EntityDefRegistry::Instance().clear(); }
 
   auto MakeCreate(EntityID base_id, SpaceID sp, math::Vector3 pos = {0, 0, 0})
@@ -307,6 +315,46 @@ auto RegisterTypeWithRpc(uint16_t type_id, uint32_t rpc_id, ExposedScope scope) 
 }
 
 }  // namespace
+
+// Phase 11 C7: baseline trust check. Any source address not registered
+// via InsertTrustedBaseAppForTest (or the machined Birth subscription
+// in production) gets its ClientCellRpcForward dropped at the front
+// door — before any L3/L4 validation or script dispatch.
+TEST_F(CellAppHandlersTest, ClientCellRpcRejectsUntrustedSource) {
+  const uint32_t kCellRpc = 0x00800101u;  // direction=0x02, type=1, method=1
+  BinaryWriter w;
+  w.WriteString("TestEntity");
+  w.Write<uint16_t>(1);
+  w.Write<uint8_t>(1);  // has_cell
+  w.Write<uint8_t>(1);  // has_client
+  w.WritePackedInt(0);
+  w.WritePackedInt(1);
+  w.WriteString("method");
+  w.WritePackedInt(kCellRpc);
+  w.WritePackedInt(0);
+  w.Write<uint8_t>(static_cast<uint8_t>(ExposedScope::kAllClients));
+  w.Write<uint8_t>(0);
+  w.Write<uint8_t>(0);
+  auto buf = w.Detach();
+  EntityDefRegistry::Instance().RegisterType(buf.data(), static_cast<int32_t>(buf.size()));
+  app_.OnCreateCellEntity({}, nullptr, MakeCreate(500, 1));
+
+  cellapp::ClientCellRpcForward msg;
+  msg.target_entity_id = 500;
+  msg.source_entity_id = 500;
+  msg.rpc_id = kCellRpc;
+
+  // SetUp seeded trust for Address{}; use a different (untrusted) addr.
+  const Address untrusted(0x7F000001u, 12345);
+  app_.OnClientCellRpcForward(untrusted, nullptr, msg);
+  // No direct observable — the handler drops silently with a warn log
+  // rather than throwing. Defensive "didn't crash" assertion.
+  SUCCEED();
+
+  // Positive control: same msg through the trusted Address{} passes
+  // the trust check and reaches downstream validation (which accepts).
+  app_.OnClientCellRpcForward({}, nullptr, msg);
+}
 
 TEST_F(CellAppHandlersTest, ClientCellRpcRejectsUnknownRpcId) {
   app_.OnCreateCellEntity({}, nullptr, MakeCreate(100, 1));

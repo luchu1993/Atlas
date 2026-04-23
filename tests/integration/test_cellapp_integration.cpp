@@ -285,7 +285,14 @@ class RpcSecurityFixture : public ::testing::Test {
   EntityID observer_base_id_{200};
   EntityID peer_base_id_{300};
 
-  void SetUp() override { EntityDefRegistry::Instance().clear(); }
+  void SetUp() override {
+    EntityDefRegistry::Instance().clear();
+    // C7 trust boundary: these tests dispatch ClientCellRpcForward with
+    // Address{} as the wire src. Without this the trust check would
+    // drop every test before reaching the RPC-scope validation they're
+    // supposed to exercise.
+    app_.InsertTrustedBaseAppForTest(Address{});
+  }
   void TearDown() override { EntityDefRegistry::Instance().clear(); }
 
   auto MakeCreate(EntityID base_id, SpaceID sp) -> cellapp::CreateCellEntity {

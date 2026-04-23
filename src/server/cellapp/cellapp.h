@@ -3,6 +3,7 @@
 
 #include <memory>
 #include <unordered_map>
+#include <unordered_set>
 
 #include "cellappmgr/cellappmgr_messages.h"  // cellappmgr::CellID
 #include "network/address.h"
@@ -321,6 +322,22 @@ class CellApp : public EntityApp {
   // through the same Birth/Death + self-filter code.
   CellAppPeerRegistry peer_registry_;
 
+  // Trusted BaseApp source addresses — any inbound ClientCellRpcForward
+  // whose wire src isn't in this set is dropped. Populated via
+  // machined Birth/Death for ProcessType::kBaseApp in Init. BigWorld
+  // parity: CellApp trusts its BaseApp peers by virtue of their
+  // registered presence — an unregistered sender forging
+  // ClientCellRpcForward would bypass L1/L2 validation that BaseApp
+  // runs. Phase 10 §10.1 #1 hard constraint.
+  std::unordered_set<Address> trusted_baseapps_;
+
+ public:
+  // Test-only hook — synthetic tests bypass machined subscription so
+  // they need to seed trusted BaseApps directly. Production callers
+  // don't touch this; the Subscribe callbacks in Init own the writes.
+  void InsertTrustedBaseAppForTest(const Address& addr) { trusted_baseapps_.insert(addr); }
+
+ private:
   std::unordered_map<EntityID, PendingOffload> pending_offloads_;
 
   // Monotonic epoch for CurrentCell ordering. Incremented each time this
