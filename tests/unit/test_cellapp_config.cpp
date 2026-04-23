@@ -29,6 +29,16 @@ TEST_F(CellAppConfigTest, DefaultsMatchExpectedValues) {
   EXPECT_FLOAT_EQ(CellAppConfig::DefaultAoIRadius(), 500.f);
   EXPECT_FLOAT_EQ(CellAppConfig::DefaultAoIHysteresis(), 5.f);
   EXPECT_FLOAT_EQ(CellAppConfig::MaxAoIRadius(), 500.f);
+  EXPECT_EQ(CellAppConfig::WitnessPerObserverBudgetBytes(), 4096u);
+}
+
+TEST_F(CellAppConfigTest, WitnessBudgetOverride) {
+  auto cfg = DataSection::FromJsonString(R"({
+    "witness_per_observer_budget_bytes": 16384
+  })");
+  ASSERT_TRUE(cfg.HasValue());
+  ServerAppOptionBase::ApplyAll(*(*cfg)->Root());
+  EXPECT_EQ(CellAppConfig::WitnessPerObserverBudgetBytes(), 16384u);
 }
 
 TEST_F(CellAppConfigTest, LoadsAllThreeKeysFromJson) {

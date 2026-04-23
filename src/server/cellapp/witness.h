@@ -180,6 +180,13 @@ class Witness {
   // effective budget so bursty Update work amortises evenly.
   int bandwidth_deficit_{0};
 
+  // Consecutive ticks in which the deficit exceeded a full budget (i.e.
+  // one whole tick of zero traffic wouldn't drain it). Used to rate-
+  // limit overload warnings so a sustained hot path logs once and stays
+  // quiet, rather than spamming every tick.
+  uint32_t deficit_warn_counter_{0};
+  static constexpr uint32_t kDeficitWarnEveryNTicks = 300;
+
   // Scratch buffers for Update() — promoted from locals to avoid
   // per-tick heap allocation on a 10Hz hot path.
   std::vector<EntityID> scratch_enter_;

@@ -25,6 +25,10 @@ ServerAppOption<float> s_load_smoothing_bias{
 ServerAppOption<uint32_t> s_ghost_update_interval_ms{
     50u, "ghost_update_interval_ms", "cellapp/ghost_update_interval_ms", WatcherMode::kReadWrite};
 
+ServerAppOption<uint32_t> s_witness_per_observer_budget_bytes{
+    4096u, "witness_per_observer_budget_bytes", "cellapp/witness_per_observer_budget_bytes",
+    WatcherMode::kReadWrite};
+
 }  // namespace
 
 auto CellAppConfig::DefaultAoIRadius() -> float {
@@ -45,6 +49,10 @@ auto CellAppConfig::LoadSmoothingBias() -> float {
 
 auto CellAppConfig::GhostUpdateIntervalMs() -> uint32_t {
   return s_ghost_update_interval_ms.Value();
+}
+
+auto CellAppConfig::WitnessPerObserverBudgetBytes() -> uint32_t {
+  return s_witness_per_observer_budget_bytes.Value();
 }
 
 }  // namespace atlas

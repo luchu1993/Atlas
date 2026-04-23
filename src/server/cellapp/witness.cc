@@ -304,6 +304,22 @@ void Witness::Update(uint32_t max_packet_bytes) {
 
   // Phase 4: bandwidth deficit for next tick.
   bandwidth_deficit_ = std::max(0, bytes_sent - static_cast<int>(max_packet_bytes));
+
+  // Deficit larger than a whole tick's budget means the next tick alone
+  // cannot drain it — the witness is structurally overloaded (too many
+  // peers, too-small budget, or a state burst). Warn rate-limited so a
+  // sustained issue logs once per ~10s at 30Hz rather than every tick.
+  if (bandwidth_deficit_ > static_cast<int>(max_packet_bytes)) {
+    if (deficit_warn_counter_ == 0) {
+      ATLAS_LOG_WARNING(
+          "Witness[{}]: bandwidth deficit {}B > per-observer budget {}B; peer catch-up "
+          "will lag. Consider increasing cellapp/witness_per_observer_budget_bytes.",
+          owner_.BaseEntityId(), bandwidth_deficit_, max_packet_bytes);
+    }
+    if (++deficit_warn_counter_ >= kDeficitWarnEveryNTicks) deficit_warn_counter_ = 0;
+  } else {
+    deficit_warn_counter_ = 0;
+  }
 }
 
 // ---------------------------------------------------------------------------

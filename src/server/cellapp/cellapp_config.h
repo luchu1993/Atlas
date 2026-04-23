@@ -41,6 +41,13 @@ class CellAppConfig {
   // i.e. roughly every other tick at a 30 Hz cadence. Set to 0 to
   // disable and broadcast every tick.
   [[nodiscard]] static auto GhostUpdateIntervalMs() -> uint32_t;
+
+  // Per-observer byte budget used by Witness::Update to gate how
+  // many catch-up deltas / snapshots flush in one tick. A witness
+  // whose queue over-spends gets a bandwidth_deficit that throttles
+  // the next tick's budget. JSON key:
+  // `witness_per_observer_budget_bytes`. Default 4096.
+  [[nodiscard]] static auto WitnessPerObserverBudgetBytes() -> uint32_t;
 };
 
 }  // namespace atlas

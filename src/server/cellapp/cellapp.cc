@@ -287,12 +287,10 @@ void CellApp::TickControllers(float dt) {
 }
 
 void CellApp::TickWitnesses() {
-  // 4 KB/tick per observer is the baseline budget; tests exercise the
-  // heap + catch-up plumbing regardless of the exact budget.
-  constexpr uint32_t kPerObserverBudget = 4096;
+  const uint32_t budget = CellAppConfig::WitnessPerObserverBudgetBytes();
   for (auto& [_, space] : spaces_) {
-    space->ForEachEntity([](CellEntity& e) {
-      if (auto* w = e.GetWitness()) w->Update(kPerObserverBudget);
+    space->ForEachEntity([budget](CellEntity& e) {
+      if (auto* w = e.GetWitness()) w->Update(budget);
     });
   }
 }
