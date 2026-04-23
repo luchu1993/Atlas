@@ -306,6 +306,17 @@ class CellApp : public EntityApp {
   // balancer consumes. Updated every tick by UpdatePersistentLoad.
   float persistent_load_{0.f};
 
+  // Last InformCellLoad payload and dispatch time. SendInformCellLoad
+  // skips the wire hop when neither value has shifted meaningfully
+  // since the last send AND a heartbeat interval hasn't elapsed, so a
+  // steady-state CellApp doesn't burn tick-rate bandwidth on the
+  // manager just to say "still nothing changed."
+  float last_sent_load_{-1.f};
+  uint32_t last_sent_entity_count_{UINT32_MAX};
+  TimePoint last_sent_load_time_{};
+  static constexpr float kInformCellLoadDelta = 0.01f;
+  static constexpr Duration kInformCellLoadHeartbeat = std::chrono::seconds(1);
+
   // Peer CellApp channels. Shared registry (atlas_server) so both
   // BaseApp and CellApp route through the same Birth/Death +
   // self-filter code.

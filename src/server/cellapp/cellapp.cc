@@ -1248,11 +1248,24 @@ void CellApp::UpdatePersistentLoad() {
 
 void CellApp::SendInformCellLoad() {
   if (cellappmgr_channel_ == nullptr || app_id_ == 0) return;
+  const auto count = NumRealEntities();
+  const auto now = Clock::now();
+  const bool first_send = last_sent_load_time_.time_since_epoch().count() == 0;
+  const bool load_changed = std::abs(persistent_load_ - last_sent_load_) >= kInformCellLoadDelta;
+  const bool count_changed = count != last_sent_entity_count_;
+  const bool heartbeat_due =
+      !first_send && (now - last_sent_load_time_) >= kInformCellLoadHeartbeat;
+  if (!first_send && !load_changed && !count_changed && !heartbeat_due) return;
+
   cellappmgr::InformCellLoad msg;
   msg.app_id = app_id_;
   msg.load = persistent_load_;
-  msg.entity_count = NumRealEntities();
+  msg.entity_count = count;
   (void)cellappmgr_channel_->SendMessage(msg);
+
+  last_sent_load_ = persistent_load_;
+  last_sent_entity_count_ = count;
+  last_sent_load_time_ = now;
 }
 
 void CellApp::OnRegisterCellAppAck(const Address& /*src*/, Channel* /*ch*/,
