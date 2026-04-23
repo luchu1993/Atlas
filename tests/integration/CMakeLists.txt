@@ -68,3 +68,9 @@ atlas_add_test(NAME test_distributed_space
   DEPS atlas_cellapp_lib atlas_server atlas_network
   LABEL integration
 )
+
+atlas_add_test(NAME test_aoi_hysteresis_churn
+  SOURCES test_aoi_hysteresis_churn.cpp
+  DEPS atlas_cellapp_lib atlas_server atlas_network
+  LABEL integration
+)
