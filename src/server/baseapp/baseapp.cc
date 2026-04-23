@@ -481,6 +481,11 @@ void BaseApp::RegisterInternalHandlers() {
         OnCurrentCell(*ch, msg);
       });
 
+  (void)table.RegisterTypedHandler<baseapp::CellAppDeath>(
+      [this](const Address& /*src*/, Channel* /*ch*/, const baseapp::CellAppDeath& msg) {
+        OnCellAppDeath(msg);
+      });
+
   (void)table.RegisterTypedHandler<baseapp::CellRpcForward>(
       [this](const Address& /*src*/, Channel* ch, const baseapp::CellRpcForward& msg) {
         OnCellRpcForward(*ch, msg);
@@ -803,6 +808,102 @@ void BaseApp::OnCurrentCell(Channel& /*ch*/, const baseapp::CurrentCell& msg) {
   auto* ent = entity_mgr_.Find(msg.base_entity_id);
   if (!ent) return;
   ent->SetCell(msg.cell_entity_id, msg.cell_addr, msg.epoch);
+}
+
+// BigWorld parity: BaseApp::handleCellAppDeath (baseapp.cpp:1942) +
+// DyingCellApp::tick (dead_cell_apps.cpp:234). For every BaseEntity we
+// know to have been Real-hosted on the dead CellApp, issue a fresh
+// CreateCellEntity to the rehome target with the last-cached
+// cell_backup_data as script_init_data — the receiving CellApp's
+// RestoreEntity callback rehydrates the C# instance from that blob.
+//
+// Witness re-attachment happens automatically via the Phase 10 race-fix
+// path: once the new host's CellEntityCreated ack lands at
+// OnCellEntityCreated, the proxy->HasClient() branch fires
+// cellapp::EnableWitness. The client stays connected throughout —
+// clients don't learn about the death at this layer (AoI traffic simply
+// pauses until the new Real is up).
+void BaseApp::OnCellAppDeath(const baseapp::CellAppDeath& msg) {
+  ATLAS_LOG_WARNING("BaseApp: CellAppDeath dead_addr={}:{} rehome_spaces={}", msg.dead_addr.Ip(),
+                    msg.dead_addr.Port(), msg.rehomes.size());
+
+  // Flatten the rehome list into a map for O(1) per-entity lookup.
+  std::unordered_map<SpaceID, Address> space_to_new_host;
+  space_to_new_host.reserve(msg.rehomes.size());
+  for (const auto& [sid, addr] : msg.rehomes) space_to_new_host[sid] = addr;
+
+  uint32_t restored = 0;
+  uint32_t lost = 0;
+
+  // Two-pass walk: collect affected entities first, then process. The
+  // entity_mgr_ ForEach iteration must not observe mutations from the
+  // restore (SetCell / ClearCell) mid-walk.
+  std::vector<EntityID> to_restore;
+  entity_mgr_.ForEach([&](BaseEntity& ent) {
+    if (ent.CellAddr() == msg.dead_addr) to_restore.push_back(ent.EntityId());
+  });
+
+  for (const EntityID eid : to_restore) {
+    auto* ent = entity_mgr_.Find(eid);
+    if (ent == nullptr) continue;
+    const SpaceID sid = ent->SpaceId();
+
+    auto it = space_to_new_host.find(sid);
+    if (it == space_to_new_host.end()) {
+      ATLAS_LOG_ERROR(
+          "BaseApp: CellAppDeath: no rehome target for entity={} space={} — "
+          "Real lost",
+          eid, sid);
+      ent->ClearCell();
+      ++lost;
+      continue;
+    }
+    if (ent->CellBackupData().empty()) {
+      ATLAS_LOG_ERROR(
+          "BaseApp: CellAppDeath: entity={} has no cached cell_backup_data "
+          "(CellApp died before first backup pump tick?) — Real lost",
+          eid);
+      ent->ClearCell();
+      ++lost;
+      continue;
+    }
+
+    const Address& new_addr = it->second;
+    auto ch_result = Network().ConnectRudpNocwnd(new_addr);
+    if (!ch_result) {
+      ATLAS_LOG_ERROR(
+          "BaseApp: CellAppDeath: cannot reach rehome target {}:{} for "
+          "entity={} — Real lost",
+          new_addr.Ip(), new_addr.Port(), eid);
+      ent->ClearCell();
+      ++lost;
+      continue;
+    }
+    auto* cell_ch = *ch_result;
+
+    // Clear the stale route so any ClientCellRpc that lands between
+    // now and OnCellEntityCreated ack gets dropped cleanly rather
+    // than shipped to the dead addr.
+    ent->ClearCell();
+
+    cellapp::CreateCellEntity restore;
+    restore.base_entity_id = eid;
+    restore.type_id = ent->TypeId();
+    restore.space_id = sid;
+    restore.position = {0.f, 0.f, 0.f};
+    restore.direction = {1.f, 0.f, 0.f};
+    restore.on_ground = false;
+    restore.base_addr = Network().RudpAddress();
+    restore.request_id = eid;
+    // The restore blob is exactly what BaseApp has been archiving via
+    // BackupCellEntity. CellApp's RestoreEntity callback reads the
+    // Phase 10 Deserialize abstract over it.
+    restore.script_init_data = ent->CellBackupData();
+    (void)cell_ch->SendMessage(restore);
+    ++restored;
+  }
+
+  ATLAS_LOG_INFO("BaseApp: CellAppDeath complete — restored={} lost={}", restored, lost);
 }
 
 void BaseApp::OnCellRpcForward(Channel& /*ch*/, const baseapp::CellRpcForward& msg) {
@@ -1759,6 +1860,12 @@ auto BaseApp::CreateBaseEntityFromScript(uint16_t type_id, SpaceID space_id) -> 
         return a.first.Port() < b.first.Port();
       });
       const SpaceID effective_space_id = space_id == kInvalidSpaceID ? SpaceID{1} : space_id;
+      // Stamp the space_id on the BaseEntity so a later CellApp-death
+      // restore (PR-7 C6b) can look up the new host keyed by
+      // {dead_addr, space_id}. Doing this regardless of whether the
+      // CreateCellEntity send below succeeds — if the send fails the
+      // entity has no cell to restore anyway.
+      ent->SetSpaceId(effective_space_id);
       const std::size_t cell_index =
           static_cast<std::size_t>(effective_space_id - 1) % sorted_peers.size();
       auto* cell_ch = sorted_peers[cell_index].second;

@@ -126,6 +126,11 @@ enum class BaseApp : uint16_t {
   // Without this, clients racing CreateCellEntity would have their first
   // cell RPCs dropped at BaseApp as "no cell channel for target entity".
   kCellReady = 2025,
+  // CellAppMgr → BaseApp: a CellApp has died and its BSP leaves have
+  // been rehomed. BaseApp uses the carried {space → new_host} map
+  // to re-ship any Reals it was hosting on the dead addr to their
+  // new homes, using the last BackupCellEntity data it has cached.
+  kCellAppDeath = 2026,
   // Internal: BaseApp ↔ BaseApp
   kForceLogoff = 2030,
   kForceLogoffAck = 2031,
@@ -279,6 +284,7 @@ ATLAS_ASSERT_ID_RANGE(BaseApp::kAuthenticate, 2000, 2999);
 ATLAS_ASSERT_ID_RANGE(BaseApp::kAuthenticateResult, 2000, 2999);
 ATLAS_ASSERT_ID_RANGE(BaseApp::kEntityTransferred, 2000, 2999);
 ATLAS_ASSERT_ID_RANGE(BaseApp::kCellReady, 2000, 2999);
+ATLAS_ASSERT_ID_RANGE(BaseApp::kCellAppDeath, 2000, 2999);
 ATLAS_ASSERT_ID_RANGE(BaseApp::kForceLogoff, 2000, 2999);
 ATLAS_ASSERT_ID_RANGE(BaseApp::kForceLogoffAck, 2000, 2999);
 

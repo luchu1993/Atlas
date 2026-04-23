@@ -38,6 +38,7 @@ struct BackupCellEntity;
 struct ReplicatedBaselineFromCell;
 struct ForceLogoff;
 struct ForceLogoffAck;
+struct CellAppDeath;
 struct Authenticate;
 struct ClientBaseRpc;
 struct ClientCellRpc;
@@ -154,6 +155,10 @@ class BaseApp : public EntityApp {
   void OnCellEntityCreated(Channel& ch, const baseapp::CellEntityCreated& msg);
   void OnCellEntityDestroyed(Channel& ch, const baseapp::CellEntityDestroyed& msg);
   void OnCurrentCell(Channel& ch, const baseapp::CurrentCell& msg);
+  // Phase 11 C6b: CellAppMgr announced a CellApp death. Re-ship every
+  // locally-tracked Real that was on the dead addr to its new host,
+  // seeding the new cell entity with the last cached cell_backup_data.
+  void OnCellAppDeath(const baseapp::CellAppDeath& msg);
   void OnCellRpcForward(Channel& ch, const baseapp::CellRpcForward& msg);
   void OnSelfRpcFromCell(Channel& ch, const baseapp::SelfRpcFromCell& msg);
   void OnBroadcastRpcFromCell(Channel& ch, const baseapp::BroadcastRpcFromCell& msg);

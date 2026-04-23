@@ -341,3 +341,33 @@ TEST(BaseAppMessages, PackedIntBoundaries) {
     EXPECT_EQ(rt->payload[299], std::byte{0xAB});
   }
 }
+
+// Phase 11 C6b: CellAppDeath carries a variable rehome list (one entry
+// per Space that had at least one leaf on the dead CellApp). Exercises
+// empty, single, and multi-entry cases to lock in the wire format.
+TEST(BaseAppMessages, CellAppDeathRoundTrip_EmptyRehomes) {
+  CellAppDeath msg;
+  msg.dead_addr = Address(0x7F000001u, 30001);
+  auto rt = round_trip(msg);
+  ASSERT_TRUE(rt.has_value());
+  EXPECT_EQ(rt->dead_addr.Ip(), 0x7F000001u);
+  EXPECT_EQ(rt->dead_addr.Port(), 30001u);
+  EXPECT_TRUE(rt->rehomes.empty());
+}
+
+TEST(BaseAppMessages, CellAppDeathRoundTrip_MultipleRehomes) {
+  CellAppDeath msg;
+  msg.dead_addr = Address(0x0A000001u, 40000);
+  msg.rehomes.emplace_back(SpaceID{1}, Address(0x0A000002u, 40001));
+  msg.rehomes.emplace_back(SpaceID{42}, Address(0x0A000003u, 40002));
+  msg.rehomes.emplace_back(SpaceID{999}, Address(0x0A000004u, 40003));
+
+  auto rt = round_trip(msg);
+  ASSERT_TRUE(rt.has_value());
+  EXPECT_EQ(rt->dead_addr.Port(), 40000u);
+  ASSERT_EQ(rt->rehomes.size(), 3u);
+  EXPECT_EQ(rt->rehomes[0].first, SpaceID{1});
+  EXPECT_EQ(rt->rehomes[0].second.Port(), 40001u);
+  EXPECT_EQ(rt->rehomes[2].first, SpaceID{999});
+  EXPECT_EQ(rt->rehomes[2].second.Ip(), 0x0A000004u);
+}

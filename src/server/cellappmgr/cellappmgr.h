@@ -69,6 +69,14 @@ class CellAppMgr : public ManagerApp {
   [[nodiscard]] auto CellApps() const -> const std::unordered_map<Address, CellAppInfo>& {
     return cellapps_;
   }
+
+  // Test-only: direct access to the BaseApp channel map so integration-
+  // shaped unit tests can seed a synthetic BaseApp without going
+  // through machined Birth. Production writers are the Subscribe
+  // callbacks in Init().
+  [[nodiscard]] auto BaseAppChannelsForTest() -> std::unordered_map<Address, Channel*>& {
+    return baseapps_;
+  }
   [[nodiscard]] auto Spaces() const -> const std::unordered_map<SpaceID, SpacePartition>& {
     return spaces_;
   }
@@ -104,6 +112,11 @@ class CellAppMgr : public ManagerApp {
   // ---- State ----
   std::unordered_map<Address, CellAppInfo> cellapps_;
   std::unordered_map<SpaceID, SpacePartition> spaces_;
+
+  // BaseApp channels, populated via machined Birth/Death. Used for the
+  // CellAppDeath broadcast in OnCellAppDeath — every BaseApp gets told
+  // which Reals it needs to restore to which new host.
+  std::unordered_map<Address, Channel*> baseapps_;
 
   // EntityID cluster assignment: §9.6 #2 scheme A — high 8 bits = app_id.
   // We hand out app_ids [1..255]; app_id 0 is reserved (matches

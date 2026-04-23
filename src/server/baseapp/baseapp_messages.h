@@ -851,6 +851,64 @@ struct ClientCellRpc {
 static_assert(NetworkMessage<ClientCellRpc>);
 
 // ============================================================================
+// CellAppDeath  (CellAppMgr → BaseApp, ID 2026)
+//
+// CellAppMgr fans this out to every BaseApp after it rehomes the dead
+// CellApp's BSP leaves. `dead_addr` identifies which CellApp died;
+// `rehomes` maps each affected Space to the surviving CellApp that now
+// owns a replacement Cell. BaseApps walk their entities: every
+// BaseEntity with `cell_addr == dead_addr` gets re-issued to the
+// corresponding new host via CreateCellEntity (script_init_data =
+// last cached cell_backup_data), which rehydrates the Real from the
+// base-side backup. BigWorld parity:
+// `BaseApp::handleCellAppDeath` + `DyingCellApp::tick`
+// (dead_cell_apps.cpp:234).
+// ============================================================================
+
+struct CellAppDeath {
+  Address dead_addr;
+  std::vector<std::pair<SpaceID, Address>> rehomes;
+
+  static auto Descriptor() -> const MessageDesc& {
+    static const MessageDesc kDesc{msg_id::Id(msg_id::BaseApp::kCellAppDeath),
+                                   "baseapp::CellAppDeath", MessageLengthStyle::kVariable, -1};
+    return kDesc;
+  }
+
+  void Serialize(BinaryWriter& w) const {
+    w.Write(dead_addr.Ip());
+    w.Write(dead_addr.Port());
+    w.WritePackedInt(static_cast<uint32_t>(rehomes.size()));
+    for (const auto& [sid, addr] : rehomes) {
+      w.Write(sid);
+      w.Write(addr.Ip());
+      w.Write(addr.Port());
+    }
+  }
+
+  static auto Deserialize(BinaryReader& r) -> Result<CellAppDeath> {
+    auto ip = r.Read<uint32_t>();
+    auto port = r.Read<uint16_t>();
+    auto count = r.ReadPackedInt();
+    if (!ip || !port || !count)
+      return Error{ErrorCode::kInvalidArgument, "CellAppDeath: truncated header"};
+    CellAppDeath msg;
+    msg.dead_addr = Address(*ip, *port);
+    msg.rehomes.reserve(*count);
+    for (uint32_t i = 0; i < *count; ++i) {
+      auto sid = r.Read<uint32_t>();
+      auto hip = r.Read<uint32_t>();
+      auto hport = r.Read<uint16_t>();
+      if (!sid || !hip || !hport)
+        return Error{ErrorCode::kInvalidArgument, "CellAppDeath: rehome entry truncated"};
+      msg.rehomes.emplace_back(*sid, Address(*hip, *hport));
+    }
+    return msg;
+  }
+};
+static_assert(NetworkMessage<CellAppDeath>);
+
+// ============================================================================
 // ForceLogoff  (BaseApp → BaseApp, ID 2030)
 // Sent to evict an existing Proxy so the new login can checkout the entity.
 // ============================================================================

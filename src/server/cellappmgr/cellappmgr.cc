@@ -5,6 +5,7 @@
 #include <limits>
 #include <utility>
 
+#include "baseapp/baseapp_messages.h"
 #include "foundation/log.h"
 #include "network/channel.h"
 #include "network/event_dispatcher.h"
@@ -66,12 +67,33 @@ auto CellAppMgr::Init(int argc, char* argv[]) -> bool {
         OnCreateSpaceRequest(src, ch, msg);
       });
 
-  // Subscribe to CellApp death notifications so we can drop peers from
-  // the routing table. Resurrection / reassignment of their Cells is
-  // out of PR-5 scope — see the doc's "初期不实现的功能" table.
+  // Subscribe to CellApp death notifications so we can rehome BSP
+  // leaves onto surviving CellApps (PR-7 C6) and announce the death to
+  // BaseApps so they restore their Reals from cached backups (C6b).
   GetMachinedClient().Subscribe(
       machined::ListenerType::kDeath, ProcessType::kCellApp, nullptr,
       [this](const machined::DeathNotification& n) { OnCellAppDeath(n.internal_addr); });
+
+  // Track BaseApps directly — the C6b death broadcast fans out to every
+  // BaseApp. BigWorld routes the notification through BaseAppMgr; Atlas
+  // takes the direct path to keep CellAppMgr's cross-process surface
+  // small (no new CellAppMgr↔BaseAppMgr channel).
+  GetMachinedClient().Subscribe(
+      machined::ListenerType::kBoth, ProcessType::kBaseApp,
+      [this](const machined::BirthNotification& n) {
+        auto ch = Network().ConnectRudpNocwnd(n.internal_addr);
+        if (ch) {
+          baseapps_.insert_or_assign(n.internal_addr, static_cast<Channel*>(*ch));
+          ATLAS_LOG_INFO("CellAppMgr: BaseApp born at {}:{}", n.internal_addr.Ip(),
+                         n.internal_addr.Port());
+        }
+      },
+      [this](const machined::DeathNotification& n) {
+        if (baseapps_.erase(n.internal_addr) > 0) {
+          ATLAS_LOG_INFO("CellAppMgr: BaseApp died at {}:{}", n.internal_addr.Ip(),
+                         n.internal_addr.Port());
+        }
+      });
 
   ATLAS_LOG_INFO("CellAppMgr: initialised");
   return true;
@@ -271,8 +293,19 @@ void CellAppMgr::OnCellAppDeath(const Address& internal_addr) {
     return;
   }
 
+  // Per-space {new_host} pairs collected during rehoming — the
+  // BaseApp side uses this to look up where each of its entities'
+  // cells went. We record ONE new_host per Space (the first
+  // successful reassignment); multi-cell spaces still work because
+  // each dead leaf is individually repointed above, but BaseApps
+  // target Reals by space, not by cell. If a Space had multiple dead
+  // cells split across different survivors, BaseApp may need to
+  // re-check; for the typical 1 cell per space case this is exact.
+  std::vector<std::pair<SpaceID, Address>> rehomes;
+
   for (auto& [space_id, partition] : spaces_) {
     bool reassigned_any = false;
+    Address first_new_host{};
     for (auto* leaf : partition.bsp.LeavesMutable()) {
       if (leaf->cellapp_addr != internal_addr) continue;
 
@@ -303,6 +336,7 @@ void CellAppMgr::OnCellAppDeath(const Address& internal_addr) {
       // never creates them (cellapp.cc:1141).
       SendAddCell(*alt, space_id, leaf->cell_id, leaf->bounds);
       reassigned_any = true;
+      if (first_new_host.Ip() == 0) first_new_host = alt->internal_addr;
     }
 
     if (reassigned_any) {
@@ -311,6 +345,19 @@ void CellAppMgr::OnCellAppDeath(const Address& internal_addr) {
       // list, so the new host is included in the fan-out and learns
       // about the full BSP in one pass.
       BroadcastGeometry(partition);
+      rehomes.emplace_back(space_id, first_new_host);
+    }
+  }
+
+  // C6b: tell every BaseApp about the death so they restore Reals from
+  // backup onto the new hosts. BigWorld-analogue fans this out through
+  // BaseAppMgr; we take the direct path (see Init subscribe comment).
+  if (!baseapps_.empty()) {
+    baseapp::CellAppDeath notify;
+    notify.dead_addr = internal_addr;
+    notify.rehomes = std::move(rehomes);
+    for (const auto& [addr, ch] : baseapps_) {
+      if (ch != nullptr) (void)ch->SendMessage(notify);
     }
   }
 }

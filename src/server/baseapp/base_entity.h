@@ -41,6 +41,12 @@ class BaseEntity {
   [[nodiscard]] auto CellEntityId() const -> EntityID { return cell_entity_id_; }
   [[nodiscard]] auto CellAddr() const -> const Address& { return cell_addr_; }
   [[nodiscard]] auto CellEpoch() const -> uint32_t { return cell_epoch_; }
+  // Space this entity's cell counterpart lives in (kInvalidSpaceID when
+  // base-only). Needed by the CellApp-death restore path to look up a
+  // new host in the mgr's rehome table. BigWorld parity: Base::spaceID_
+  // (base.hpp:371).
+  [[nodiscard]] auto SpaceId() const -> SpaceID { return space_id_; }
+  void SetSpaceId(SpaceID sid) { space_id_ = sid; }
 
   // Entity data blob (base-persistent properties serialised by C#
   // Base.Serialize — DATA_BASE scope under M2's BigWorld alignment).
@@ -79,6 +85,7 @@ class BaseEntity {
   EntityID cell_entity_id_{kInvalidEntityID};
   Address cell_addr_;
   uint32_t cell_epoch_{0};
+  SpaceID space_id_{kInvalidSpaceID};
   std::vector<std::byte> entity_data_;
   std::vector<std::byte> cell_backup_data_;
   bool pending_destroy_{false};
