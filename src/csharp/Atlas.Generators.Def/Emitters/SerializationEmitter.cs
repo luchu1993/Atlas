@@ -36,25 +36,21 @@ internal static class SerializationEmitter
         // PropertiesEmitter doesn't emit a backing field for them, so
         // referencing `_position` here would not compile.
         //
-        // BigWorld's base/cell split (data_description.ipp:113-131) gives us
-        // TWO independent "full state" wire formats, not one:
+        // The base/cell split gives us TWO independent "full state" wire
+        // formats:
         //   * Base.Serialize writes base-persistent fields (goes to DBApp
-        //     via GetEntityData → dbapp::WriteEntity). Matches BigWorld's
-        //     Base::addToStream restricted to DATA_BASE properties.
+        //     via GetEntityData → dbapp::WriteEntity) — DATA_BASE only.
         //   * Cell.Serialize writes cell-authoritative fields (goes to the
-        //     offload bundle and eventually to BaseApp as cellBackupData
-        //     opaque bytes once L1 lands). Matches BigWorld's
-        //     RealEntity::writeBackupProperties restricted to CELL_DATA.
-        // These two blobs are decoded in their matching ctx only — base
-        // never deserialises cell fields and vice versa. Client projects
-        // whatever it can observe regardless of which side authored it.
+        //     offload bundle and to BaseApp as cellBackupData opaque bytes)
+        //     — CELL_DATA only.
+        // Each blob is decoded in its matching ctx only; base never
+        // deserialises cell fields and vice versa. Client projects whatever
+        // it can observe regardless of which side authored it.
         //
-        // Cross-side persistence: once L2's cell→base BackupCellEntity
-        // path landed, Cell.Serialize no longer needs to piggy-back on
-        // the DB write path — BaseApp assembles base bytes +
-        // cell_backup_data_ into the persistent blob (PROPERTY_SYNC_DESIGN.md
-        // §5.1a). Cell-scope persistent="true" properties survive the
-        // DB round-trip even though Cell.Serialize emits cell-only bytes.
+        // Cross-side persistence: BaseApp stitches base bytes +
+        // cell_backup_data_ into the persistent blob, so cell-scope
+        // persistent="true" properties survive the DB round-trip even
+        // though Cell.Serialize emits cell-only bytes.
         var sideProps = GetPropertiesForContext(def.Properties, ctx)
             .Where(p => !p.IsReservedPosition).ToList();
 

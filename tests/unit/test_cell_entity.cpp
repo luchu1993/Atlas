@@ -1,4 +1,4 @@
-// CellEntity tests — Phase 10 Step 10.4.
+// CellEntity tests.
 //
 // Focus on the non-Space-mechanics surface: identity, position via the
 // IEntityMotion interface, base mailbox plumbing, the replication frame

@@ -61,21 +61,18 @@ class Controllers {
     return controllers_.find(id) != controllers_.end();
   }
 
-  // Iterate every live controller (read-only). Used by Phase 11 Offload
-  // serialisation to enumerate and persist state across processes.
-  // Order is unordered_map bucket order; stable iteration is NOT
-  // guaranteed.
+  // Iterate every live controller (read-only). Order is unordered_map
+  // bucket order; stable iteration is NOT guaranteed.
   template <typename Fn>
   void ForEach(Fn&& fn) const {
     for (const auto& [_, ctrl] : controllers_) fn(*ctrl);
   }
 
-  // Phase 11 PR-6 review-fix B2 migration restore path: Add a
-  // controller with a pre-assigned ID (origin-side value) so C#
-  // references to the ControllerID survive the Offload round-trip.
-  // `preserved_id` must not collide with any existing live ID;
-  // subsequent Add() calls start from max(preserved_id, next_id_) + 1.
-  // Returns the (preserved) ID on success or 0 if id already in use.
+  // Migration restore path: add a controller with a pre-assigned ID
+  // (origin-side value) so C# references to the ControllerID survive an
+  // Offload round-trip. `preserved_id` must not collide with any existing
+  // live ID; subsequent Add() calls start from max(preserved_id, next_id_)
+  // + 1. Returns the preserved ID on success or 0 if already in use.
   auto AddWithPreservedId(std::unique_ptr<Controller> ctrl, IEntityMotion* motion, int user_arg,
                           ControllerID preserved_id) -> ControllerID;
 

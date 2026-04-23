@@ -57,8 +57,8 @@ struct MockProvider final : public INativeApiProvider {
   void SetAoIRadius(uint32_t, float, float) override {}
   void SetNativeCallbacks(const void*, int32_t) override {}
 
-  // Phase 10 CellApp-specific no-op overrides — mock doesn't exercise
-  // these, it just needs to stay concrete as INativeApiProvider evolves.
+  // CellApp-specific no-op overrides — mock doesn't exercise these, it
+  // just needs to stay concrete as INativeApiProvider evolves.
   void SetEntityPosition(uint32_t, float, float, float) override {}
   void PublishReplicationFrame(uint32_t, uint64_t, uint64_t, const std::byte*, int32_t,
                                const std::byte*, int32_t, const std::byte*, int32_t,

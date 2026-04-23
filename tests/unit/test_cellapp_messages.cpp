@@ -1,4 +1,4 @@
-// CellApp message roundtrip tests — Phase 10 Step 10.6.
+// CellApp message roundtrip tests.
 //
 // Serialize/Deserialize contract lock-in for all nine CellApp inbound
 // messages. Any byte-format regression here would break wire compat with
@@ -143,8 +143,7 @@ TEST(CellAppMessages, EnableDisableWitnessRoundTrip) {
   EXPECT_EQ(rtd->base_entity_id, 17u);
 }
 
-// PR 34 / Commit C1: runtime SetAoIRadius (BigWorld's setAoIRadius in
-// witness.cpp:2109). Carries both radius and hysteresis so a single RPC
+// Runtime SetAoIRadius. Carries both radius and hysteresis so a single RPC
 // reshapes the dual-band AoITrigger.
 TEST(CellAppMessages, SetAoIRadiusRoundTrip) {
   SetAoIRadius s;
@@ -168,7 +167,7 @@ TEST(CellAppMessages, SetAoIRadiusRoundTrip) {
 
 // The two RPC flavours MUST resolve to distinct message IDs — collapsing
 // them would let a client-initiated call be mistaken for a trusted
-// internal call (and vice versa). phase10_cellapp.md §9.7.
+// internal call (and vice versa).
 TEST(CellAppMessages, ClientAndInternalRpcHaveDistinctIds) {
   EXPECT_NE(ClientCellRpcForward::Descriptor().id, InternalCellRpc::Descriptor().id);
   EXPECT_EQ(ClientCellRpcForward::Descriptor().id,

@@ -1,4 +1,4 @@
-// Phase 11 PR-3 — Cell (Space sub-region) tests.
+// Cell (Space sub-region) tests.
 
 #include <memory>
 

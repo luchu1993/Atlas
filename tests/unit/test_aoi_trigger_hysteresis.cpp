@@ -1,13 +1,11 @@
-// Hysteresis (double-band) AoITrigger — Commit 0b of PR 34 (BigWorld
-// AoI alignment). Tests cover:
+// Hysteresis (double-band) AoITrigger tests. Cover:
 //   - A peer inside the hysteresis window (between inner and outer
 //     radii) does NOT fire EntityLeave.
 //   - A peer oscillating across the inner boundary produces a single
 //     EntityEnter + zero EntityLeaves (the "boundary thrash" bug that
 //     single-band triggers suffer).
 //   - A peer crossing the outer boundary fires EntityLeave.
-//   - hysteresis = 0 degenerates to single-band behaviour (matches
-//     BigWorld's actually-implemented trigger semantics).
+//   - hysteresis = 0 degenerates to single-band behaviour.
 //   - SetAoIRadius(new_r, new_hyst) reshapes both bands in place.
 
 #include <cstddef>
@@ -133,7 +131,7 @@ TEST_F(AoIHysteresisTest, CrossingOuterBoundaryFiresLeave) {
 }
 
 // hysteresis = 0 collapses the outer band onto the inner. Crossing outward
-// fires Leave immediately — matches BigWorld's actual (non-hyst) behaviour.
+// fires Leave immediately — the single-band fallback behaviour.
 TEST_F(AoIHysteresisTest, ZeroHysteresisBehavesAsSingleBand) {
   Space space(1);
   auto* observer = MakeEntity(space, 1, 1, {0, 0, 0});

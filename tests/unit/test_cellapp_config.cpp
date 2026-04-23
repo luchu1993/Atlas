@@ -25,7 +25,7 @@ class CellAppConfigTest : public ::testing::Test {
   void TearDown() override { ResetCellAppConfigToDefaults(); }
 };
 
-TEST_F(CellAppConfigTest, DefaultsMatchBigWorldParityValues) {
+TEST_F(CellAppConfigTest, DefaultsMatchExpectedValues) {
   EXPECT_FLOAT_EQ(CellAppConfig::DefaultAoIRadius(), 500.f);
   EXPECT_FLOAT_EQ(CellAppConfig::DefaultAoIHysteresis(), 5.f);
   EXPECT_FLOAT_EQ(CellAppConfig::MaxAoIRadius(), 500.f);

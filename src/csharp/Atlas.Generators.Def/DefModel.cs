@@ -9,44 +9,36 @@ internal enum ExposedScope
     AllClients,
 }
 
-// PropertyScope values map one-to-one to BigWorld's EntityDataFlags
-// combinations (lib/entitydef/data_description.hpp:30-41). The architectural
-// invariant from BigWorld (data_description.ipp:113-131 — "data only lives
-// on a base or a cell but not both") is encoded here via the IsBase / IsCell
-// predicates below. Generators consult those predicates to decide which
-// side's generated class receives the backing field, the serializer, the
-// dirty-tracking setter, and the delta-apply code. Emitting a cell-scope
-// field on the base class (as Atlas's pre-M2 generator did) is what made
-// baseapp baseline corrupt the client's _hp with stale zeros.
+// The architectural invariant "data lives on either base or cell but
+// not both" is encoded here via the IsBase / IsCell predicates below.
+// Generators consult those predicates to decide which side's generated
+// class receives the backing field, the serializer, the dirty-tracking
+// setter, and the delta-apply code. Emitting a cell-scope field on the
+// base class corrupts the client's view — baseline on the base side
+// would overwrite cell-authoritative state with stale zeros.
 internal enum PropertyScope
 {
-    CellPrivate,       // BW: 0                                   — cell-only, ghost-free
-    CellPublic,        // BW: DATA_GHOSTED                        — cell, synced to ghosts
-    OwnClient,         // BW: DATA_GHOSTED|DATA_OWN_CLIENT        — cell, owner sees
-    OtherClients,      // BW: DATA_GHOSTED|DATA_OTHER_CLIENT      — cell, non-owner peers see
-    AllClients,        // BW: DATA_GHOSTED|DATA_OWN|DATA_OTHER    — cell, everyone sees
-    CellPublicAndOwn,  // BW: DATA_GHOSTED|DATA_OWN_CLIENT        — cell, owner sees (synonym)
-    Base,              // BW: DATA_BASE                           — base-only
-    BaseAndClient,     // BW: DATA_BASE|DATA_OWN_CLIENT           — base, owner sees
+    CellPrivate,       // cell-only, not ghosted to peer cells
+    CellPublic,        // cell, ghosted to peer cells
+    OwnClient,         // cell, owning client sees
+    OtherClients,      // cell, non-owner peers see
+    AllClients,        // cell, everyone sees
+    CellPublicAndOwn,  // cell, owning client sees (synonym of OwnClient)
+    Base,              // base-only
+    BaseAndClient,     // base, owning client sees
 }
 
 internal static class PropertyScopeExtensions
 {
-    // BigWorld's DataDescription::isBaseData(): returns true iff DATA_BASE
-    // bit is set. Atlas keeps it enum-driven rather than bitwise because
-    // the Scope value is a fixed combination parsed from XML, not something
-    // scripts compose at runtime.
+    // True for scopes that land on the base side (Base, BaseAndClient).
     public static bool IsBase(this PropertyScope scope) =>
         scope == PropertyScope.Base || scope == PropertyScope.BaseAndClient;
 
-    // BigWorld's DataDescription::isCellData(): return !isBaseData(). Pairs
-    // exactly with IsBase — no scope value straddles both sides.
+    // Pairs exactly with IsBase — no scope value straddles both sides.
     public static bool IsCell(this PropertyScope scope) => !scope.IsBase();
 
-    // BigWorld's DataDescription::isGhostedData(): DATA_GHOSTED bit. Every
-    // client-visible cell property ghosts to peer cells so AoI peers on a
-    // different cell can observe it; CellPrivate and base-side scopes do
-    // not.
+    // Ghosted = replicated to peer cells so AoI peers on a different cell
+    // can observe. CellPrivate and base-side scopes are not ghosted.
     public static bool IsGhosted(this PropertyScope scope) => scope switch
     {
         PropertyScope.CellPublic => true,
@@ -57,7 +49,6 @@ internal static class PropertyScopeExtensions
         _ => false,
     };
 
-    // BigWorld's DataDescription::isOwnClientData(): DATA_OWN_CLIENT bit.
     public static bool IsOwnClientVisible(this PropertyScope scope) => scope switch
     {
         PropertyScope.OwnClient => true,
@@ -67,7 +58,6 @@ internal static class PropertyScopeExtensions
         _ => false,
     };
 
-    // BigWorld's DataDescription::isOtherClientData(): DATA_OTHER_CLIENT bit.
     public static bool IsOtherClientsVisible(this PropertyScope scope) => scope switch
     {
         PropertyScope.OtherClients => true,
@@ -75,9 +65,7 @@ internal static class PropertyScopeExtensions
         _ => false,
     };
 
-    // Any client visibility — the union of own and other. BigWorld's
-    // DataDescription::isClientServerData() is roughly this, modulo the
-    // DATA_REPLAY bit Atlas doesn't yet support.
+    // Union of own and other client visibility.
     public static bool IsClientVisible(this PropertyScope scope) =>
         scope.IsOwnClientVisible() || scope.IsOtherClientsVisible();
 }
@@ -125,9 +113,7 @@ internal sealed class EntityDefModel
     public List<MethodDefModel> BaseMethods { get; } = new();
 
     // An entity is cell-resident if it exposes cell methods or any cell-side
-    // property (IsCell covers everything except Base / BaseAndClient). Mirrors
-    // BigWorld's "does this entity have a cell part?" check on the EntityType
-    // description.
+    // property (IsCell covers everything except Base / BaseAndClient).
     public bool HasCell =>
         CellMethods.Count > 0 ||
         Properties.Exists(p => p.Scope.IsCell());

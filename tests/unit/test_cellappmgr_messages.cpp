@@ -1,4 +1,4 @@
-// CellAppMgr message roundtrip tests — Phase 11 PR-1.
+// CellAppMgr message roundtrip tests.
 
 #include <cmath>
 #include <limits>

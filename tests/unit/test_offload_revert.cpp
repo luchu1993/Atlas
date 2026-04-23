@@ -1,4 +1,4 @@
-// Phase 11 PR-6 review-fix B3 — Offload rollback tests.
+// Offload rollback tests.
 //
 // Drives CellApp::RevertPendingOffload directly on a locally-constructed
 // CellApp (ctor only, no Init) with a hand-seeded PendingOffload + a
@@ -131,9 +131,9 @@ TEST(OffloadRevert, RevertRestoresRealWithHauntsCellAndControllers) {
   EXPECT_TRUE(saw_move);
 }
 
-// Phase 11 C2: revert must re-attach the Witness with the pre-Offload
-// radius + hysteresis. Losing it would silently drop a script-level
-// SetAoIRadius across a failed-Offload boundary.
+// Revert must re-attach the Witness with the pre-Offload radius +
+// hysteresis; otherwise a script-level SetAoIRadius would be silently
+// dropped across a failed-Offload boundary.
 TEST(OffloadRevert, RevertReattachesWitnessWithPreservedRadius) {
   Harness h;
   auto* peer_channel = FakeChannel(0xBEEF);  // needed for ConvertRealToGhost
@@ -164,8 +164,8 @@ TEST(OffloadRevert, RevertReattachesWitnessWithPreservedRadius) {
   EXPECT_FLOAT_EQ(entity->GetWitness()->Hysteresis(), 12.5f);
 }
 
-// Phase 11 C2: if the entity never had a witness (e.g. a server-only
-// headless entity), revert must not spuriously attach one.
+// If the entity never had a witness (e.g. a server-only headless
+// entity), revert must not spuriously attach one.
 TEST(OffloadRevert, RevertLeavesEntityWitnessless) {
   Harness h;
   auto* peer_channel = FakeChannel(0xDEAD);

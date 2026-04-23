@@ -87,7 +87,7 @@ class INativeApiProvider {
   // function pointer values whose layout is defined in clr_native_api.h.
   virtual void SetNativeCallbacks(const void* native_callbacks, int32_t len) = 0;
 
-  // ---- CellApp spatial/replication (Phase 10) -------------------------
+  // ---- CellApp spatial/replication ------------------------------------
   //
   // Only CellApp implements these non-trivially; other processes inherit
   // BaseNativeProvider's default no-op + error log. BaseApp might

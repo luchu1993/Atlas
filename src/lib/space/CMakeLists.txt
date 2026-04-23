@@ -1,7 +1,4 @@
 # atlas_space — spatial index primitives (RangeList, RangeTrigger, Controllers)
-#
-# Phase 10 Step 10.1 lands RangeList + RangeListNode; later steps add
-# RangeTrigger and Controller subclasses into this same library.
 
 add_library(atlas_space STATIC
   range_list.cc

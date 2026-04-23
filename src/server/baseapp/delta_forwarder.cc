@@ -26,11 +26,9 @@ void DeltaForwarder::Enqueue(EntityID entity_id, std::span<const std::byte> delt
 auto DeltaForwarder::Flush(Channel& client_ch, uint32_t budget_bytes) -> uint32_t {
   if (queue_.empty()) return 0;
 
-  // Sort key (descending lex): (priority, deferred_ticks). Higher-priority
-  // entries flush first so operators can bias bandwidth toward critical
-  // entities once Witness supplies real values; ties fall through to the
-  // anti-starvation rule so entries that have waited longest get sent
-  // before fresh arrivals inside the same priority band.
+  // Sort descending by (priority, deferred_ticks): higher priority first,
+  // ties broken by longest wait so starved entries flush before fresh
+  // arrivals inside the same priority band.
   std::sort(queue_.begin(), queue_.end(), [](const PendingDelta& a, const PendingDelta& b) {
     if (a.priority != b.priority) return a.priority > b.priority;
     return a.deferred_ticks > b.deferred_ticks;

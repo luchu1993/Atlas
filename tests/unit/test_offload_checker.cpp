@@ -1,4 +1,4 @@
-// Phase 11 PR-4 — OffloadChecker tests.
+// OffloadChecker tests.
 
 #include <memory>
 #include <set>

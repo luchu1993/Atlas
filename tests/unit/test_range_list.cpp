@@ -1,4 +1,4 @@
-// RangeList unit tests — Phase 10 Step 10.1.
+// RangeList unit tests.
 //
 // The index is the core of CellApp's spatial query path, so tests cover:
 //   1) insert produces a correctly sorted list on both axes
@@ -237,8 +237,8 @@ TEST(RangeList, CrossNotificationFiresWhenFlagsOptIn) {
 
   // The Insert path itself bubbles `b` right past `a`, which is a legitimate
   // cross event — entity-join fan-out is how triggers discover pre-existing
-  // neighbours in BigWorld. For this test we care about crosses produced by
-  // explicit movement, so reset counters to baseline after setup.
+  // neighbours. For this test we care about crosses produced by explicit
+  // movement, so reset counters to baseline after setup.
   a.x_crossed_count = 0;
   b.x_crossed_count = 0;
 

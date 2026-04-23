@@ -2,7 +2,7 @@ namespace Atlas.Entity;
 
 /// <summary>
 /// Controls what volatile (position/direction) data is sent for an entity
-/// and at what priority. Inspired by BigWorld's VolatileInfo.
+/// and at what priority.
 /// </summary>
 public sealed class VolatileInfo
 {

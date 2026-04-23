@@ -19,7 +19,7 @@ internal static class DeltaSyncEmitter
         // snapshot read/write. Position rides the volatile channel
         // exclusively, handled by ClientEntity base.
         //
-        // ctx gating mirrors the BigWorld invariant enforced in
+        // ctx gating mirrors the invariant enforced in
         // PropertiesEmitter.GetPropertiesForContext — a replicable scope
         // is "cell-side" (OwnClient / AllClients / OtherClients /
         // CellPublicAndOwn) or "base-side" (BaseAndClient). The delta
@@ -39,8 +39,7 @@ internal static class DeltaSyncEmitter
         // version+fieldCount+bodyLength framing used by full-state
         // Serialize/Deserialize. Wire format: raw fields in declaration
         // order, filtered by scope predicate — identical iteration
-        // produces identical wire on both sides (see PROPERTY_SYNC_DESIGN
-        // §9 / Phase B0).
+        // produces identical wire on both sides.
         if (ctx == ProcessContext.Client) return EmitClientSnapshotApplyMethods(
             def, className, namespaceName, replicableProps);
 
@@ -69,10 +68,7 @@ internal static class DeltaSyncEmitter
         EmitAudienceMasks(sb, replicableProps);
         sb.AppendLine();
 
-        // Phase 11 C10 retired the legacy SerializeReplicatedDelta /
-        // *Reliable / *Unreliable triad + HasReliableDirty / HasUnreliableDirty
-        // helpers + ReliableDirtyMask / UnreliableDirtyMask constants. The
-        // CellApp replication pump goes through SerializeOwnerDelta /
+        // The CellApp replication pump drives SerializeOwnerDelta /
         // SerializeOtherDelta (below) via BuildAndConsumeReplicationFrame
         // and publish_replication_frame. Reliability is a transport concern
         // picked at the BaseApp send path (ReplicatedReliableDeltaFromCell
@@ -133,10 +129,9 @@ internal static class DeltaSyncEmitter
     // counterparts of the CELL-side SerializeForOwnerClient /
     // SerializeForOtherClients. Base-scope client-visible props
     // (BaseAndClient) deliberately don't participate in this snapshot
-    // pair — their wire path is separate (BigWorld sends base-side
-    // properties via set_<propname> rather than bundling them into
-    // createCellPlayer), so client decodes them only on the delta
-    // channel (ApplyReplicatedDelta). Keeping base-scope out of
+    // pair — base-side properties arrive on the delta channel
+    // (ApplyReplicatedDelta) via set_<propname>, not bundled into the
+    // createCellPlayer snapshot. Keeping base-scope out of
     // ApplyOwnerSnapshot preserves lockstep between cell's serializer
     // and client's deserializer as enforced by
     // ClientContext_ScopeApplyOrder_MirrorsServerScopeSerialize.
@@ -181,8 +176,7 @@ internal static class DeltaSyncEmitter
         // ApplyReplicatedDelta — scope-agnostic at decode time. The server
         // audience mask guarantees only bits for scope-visible fields are
         // ever set in `flags`, so iterating every replicable prop is safe:
-        // non-audience bits can't fire the inner read. Matches BigWorld's
-        // `shouldUseCallback=true` incremental path — every field that
+        // non-audience bits can't fire the inner read. Every field that
         // actually changed fires OnXxxChanged so scripts observe the
         // transition. ReplicatedDirtyFlags is emitted by PropertiesEmitter
         // on the client side too (dirty-backing field is not).
@@ -217,12 +211,10 @@ internal static class DeltaSyncEmitter
     private static void EmitScopeApply(StringBuilder sb, List<PropertyDefModel> props,
                                        string methodName)
     {
-        // Direct-to-backing-field writes mirror BigWorld's
-        // `shouldUseCallback=false` initial-snapshot semantics: a snapshot
-        // is an authoritative state reset, not an observed change, so
-        // property-change callbacks (OnXxxChanged, emitted by
-        // PropertiesEmitter) MUST NOT fire here. Phase B2's setter-callback
-        // rework is for the delta path, which is a distinct method.
+        // Direct-to-backing-field writes: a snapshot is an authoritative
+        // state reset, not an observed change, so property-change callbacks
+        // (OnXxxChanged, emitted by PropertiesEmitter) MUST NOT fire here.
+        // Setter callbacks on the delta path live in a separate method.
         sb.AppendLine($"    public override void {methodName}(ref SpanReader reader)");
         sb.AppendLine("    {");
         foreach (var prop in props)
@@ -351,8 +343,7 @@ internal static class DeltaSyncEmitter
 
     // Delegate to the shared PropertyScopeExtensions helpers so every caller
     // (emitters, DEF008 detection, runtime) resolves scope membership
-    // against the same rulebook. See DefModel.cs for the BigWorld flag
-    // cross-reference.
+    // against the same rulebook.
     private static bool IsOwnerVisible(PropertyScope scope) => scope.IsOwnClientVisible();
     private static bool IsOtherVisible(PropertyScope scope) => scope.IsOtherClientsVisible();
 

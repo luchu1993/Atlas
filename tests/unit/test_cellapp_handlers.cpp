@@ -1,4 +1,4 @@
-// CellApp message handler tests — Phase 10 Step 10.8.
+// CellApp message handler tests.
 //
 // Drives the handlers directly (bypassing ServerApp::Init and the CLR
 // bring-up) to lock in handler behaviour: entity creation/destruction,
@@ -10,8 +10,6 @@
 //   - the C# script side of CreateCellEntity (RestoreEntity callback)
 //   - the BaseApp-reachable CellEntityCreated ack (requires a Channel;
 //     we pass nullptr and assert the local state mutations only)
-//
-// Those end-to-end paths land in test_cellapp_integration (Step 10.10).
 
 #include <cmath>
 #include <memory>
@@ -239,8 +237,8 @@ TEST_F(CellAppHandlersTest, OnSetAoIRadiusMissingWitnessIsNoop) {
   EXPECT_FALSE(app_.FindEntityByBaseId(100)->HasWitness());
 }
 
-// Phase 11 C1: CellApp reports NumRealEntities to CellAppMgr in every
-// InformCellLoad. Ghosts MUST NOT count — the balancer tracks Real load.
+// CellApp reports NumRealEntities to CellAppMgr in every InformCellLoad.
+// Ghosts MUST NOT count — the balancer tracks Real load.
 TEST_F(CellAppHandlersTest, NumRealEntitiesExcludesGhosts) {
   EXPECT_EQ(app_.NumRealEntities(), 0u);
 
@@ -248,17 +246,15 @@ TEST_F(CellAppHandlersTest, NumRealEntitiesExcludesGhosts) {
   app_.OnCreateCellEntity({}, nullptr, MakeCreate(101, 1));
   EXPECT_EQ(app_.NumRealEntities(), 2u);
 
-  // Convert one to a Ghost via the Phase 11 path. A Ghost no longer
-  // counts as Real-on-this-CellApp.
+  // Convert one to a Ghost. A Ghost no longer counts as Real-on-this-CellApp.
   auto* ent = app_.FindEntityByBaseId(100);
   ASSERT_NE(ent, nullptr);
   ent->ConvertRealToGhost(/*new_real_channel=*/nullptr);
   EXPECT_EQ(app_.NumRealEntities(), 1u);
 }
 
-// Phase 11 C1: persistent_load_ initial state is 0 until at least one
-// tick has driven UpdatePersistentLoad. Handler-level tests never call
-// AdvanceTime, so this is the stable observable state.
+// persistent_load_ is 0 until a tick drives UpdatePersistentLoad. Handler-
+// level tests never call AdvanceTime, so 0 is the stable observable state.
 TEST_F(CellAppHandlersTest, PersistentLoadStartsAtZero) {
   EXPECT_FLOAT_EQ(app_.PersistentLoad(), 0.f);
 }
@@ -280,7 +276,7 @@ TEST_F(CellAppHandlersTest, OnSetAoIRadiusClampsToMax) {
 }
 
 // ---------------------------------------------------------------------------
-// ClientCellRpcForward validation chain — phase10_cellapp.md §3.8.1
+// ClientCellRpcForward validation chain
 // ---------------------------------------------------------------------------
 //
 // Register a synthetic entity type with a cell_methods entry whose
@@ -317,10 +313,10 @@ auto RegisterTypeWithRpc(uint16_t type_id, uint32_t rpc_id, ExposedScope scope) 
 
 }  // namespace
 
-// Phase 11 C7: baseline trust check. Any source address not registered
-// via InsertTrustedBaseAppForTest (or the machined Birth subscription
-// in production) gets its ClientCellRpcForward dropped at the front
-// door — before any L3/L4 validation or script dispatch.
+// Baseline trust check. Any source address not registered via
+// InsertTrustedBaseAppForTest (or the machined Birth subscription in
+// production) gets its ClientCellRpcForward dropped at the front door —
+// before any L3/L4 validation or script dispatch.
 TEST_F(CellAppHandlersTest, ClientCellRpcRejectsUntrustedSource) {
   const uint32_t kCellRpc = 0x00800101u;  // direction=0x02, type=1, method=1
   BinaryWriter w;
@@ -445,7 +441,7 @@ TEST_F(CellAppHandlersTest, InternalCellRpcBypassesExposedCheck) {
 }
 
 // ---------------------------------------------------------------------------
-// Phase 11 inter-CellApp handler coverage
+// Inter-CellApp handler coverage
 // ---------------------------------------------------------------------------
 
 namespace {

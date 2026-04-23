@@ -53,18 +53,16 @@ class ProximityController final : public Controller {
     return ControllerKind::kProximity;
   }
 
-  // Snapshot of peers currently inside the trigger. Empty if the
-  // trigger hasn't been Start()ed yet. Phase 11 Offload serialisation
-  // consumes this to remember peer membership across process migration;
-  // see controller_codec.h.
+  // Snapshot of peers currently inside the trigger. Empty before Start().
+  // Offload serialisation consumes this to remember peer membership across
+  // process migration; see controller_codec.h.
   [[nodiscard]] auto InsidePeers() const -> const std::unordered_set<RangeListNode*>&;
 
-  // Seed the inside-peer set before Start() runs. Used by Offload
-  // arrival (review-fix B2): pre-populating with peers that were
-  // already "inside" at the origin suppresses duplicate OnEnter events
-  // for peers that remained in range across migration. Peers from the
-  // origin that no longer exist locally are simply dropped by the
-  // caller before passing them here — the trigger won't know about
+  // Seed the inside-peer set before Start() runs. Used on Offload arrival:
+  // pre-populating with peers that were already inside at the origin
+  // suppresses duplicate OnEnter events for peers that remained in range
+  // across migration. Peers from the origin that no longer exist locally
+  // must be dropped by the caller first — the trigger won't know about
   // them and will not emit phantom OnLeave events.
   void SeedInsidePeersForMigration(std::unordered_set<RangeListNode*> peers);
 

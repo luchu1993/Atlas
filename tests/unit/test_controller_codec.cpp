@@ -1,4 +1,4 @@
-// Phase 11 PR-6 review-fix B2 — Controller codec tests.
+// Controller codec tests.
 //
 // Exercises the per-tick-state round-trip for MoveToPoint / Timer /
 // Proximity, including the Proximity inside-peers seed that preserves
@@ -331,10 +331,8 @@ TEST(ControllerCodec, DoubleRoundTrip_Idempotent) {
   EXPECT_GT(c->Position().z, pos_before.z);
 }
 
-// Phase 11 C9: pre-C9 the count field was uint8, silently capping at
-// 255 controllers per entity. BigWorld's ControllerID-width count
-// (controllers.cpp:197) doesn't have the cap; Atlas now matches.
-// Round-tripping > 255 controllers exercises the new uint32 field.
+// The count field is uint32 so an entity can carry more than 255
+// controllers across an Offload. Round-tripping > 255 exercises it.
 TEST(ControllerCodec, CountField_HandlesMoreThan255Controllers) {
   Space src_space(1);
   Space dst_space(1);

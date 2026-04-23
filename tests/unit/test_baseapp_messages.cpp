@@ -166,7 +166,7 @@ TEST(BaseAppMessages, ReplicatedReliableDeltaFromCell) {
 
 // The reliable variant must declare Reliable delivery so the channel routes it
 // through the retransmitting path; the unreliable variant must declare the
-// opposite. Mixing these up would silently defeat the whole补强四 split.
+// opposite. Mixing these up would silently defeat the reliability split.
 TEST(BaseAppMessages, DeltaReliabilityDescriptors) {
   EXPECT_TRUE(ReplicatedDeltaFromCell::Descriptor().IsUnreliable());
   EXPECT_FALSE(ReplicatedReliableDeltaFromCell::Descriptor().IsUnreliable());
@@ -175,9 +175,9 @@ TEST(BaseAppMessages, DeltaReliabilityDescriptors) {
 }
 
 TEST(BaseAppMessages, BackupCellEntity) {
-  // BigWorld-style periodic cell→base opaque-bytes snapshot. The base
-  // stores the payload verbatim; the test confirms round-trip byte
-  // fidelity so DB writes / reviver never see mutated blobs.
+  // Periodic cell→base opaque-bytes snapshot. The base stores the payload
+  // verbatim; this test confirms round-trip byte fidelity so DB writes /
+  // reviver never see mutated blobs.
   BackupCellEntity msg;
   msg.base_entity_id = 0xCAFEBABE;
   msg.cell_backup_data = {std::byte{0x01}, std::byte{0x23}, std::byte{0x45}, std::byte{0x67},
@@ -293,9 +293,9 @@ TEST(BaseAppMessages, ReplicatedBaselineToClient) {
   EXPECT_EQ(rt->snapshot[3], std::byte{0xBE});
 }
 
-// Baseline is the补强一 loss-recovery channel — it MUST be reliable, and it
-// MUST use the reserved client-facing ID 0xF002 (neither 0xF001 unreliable
-// delta nor 0xF003 reliable delta).
+// Baseline is the loss-recovery channel — it MUST be reliable, and it MUST
+// use the reserved client-facing ID 0xF002 (neither 0xF001 unreliable delta
+// nor 0xF003 reliable delta).
 TEST(BaseAppMessages, BaselineDescriptor) {
   const auto& desc = ReplicatedBaselineToClient::Descriptor();
   EXPECT_FALSE(desc.IsUnreliable());
@@ -342,9 +342,9 @@ TEST(BaseAppMessages, PackedIntBoundaries) {
   }
 }
 
-// Phase 11 C6b: CellAppDeath carries a variable rehome list (one entry
-// per Space that had at least one leaf on the dead CellApp). Exercises
-// empty, single, and multi-entry cases to lock in the wire format.
+// CellAppDeath carries a variable rehome list (one entry per Space that
+// had at least one leaf on the dead CellApp). Exercises empty, single, and
+// multi-entry cases to lock in the wire format.
 TEST(BaseAppMessages, CellAppDeathRoundTrip_EmptyRehomes) {
   CellAppDeath msg;
   msg.dead_addr = Address(0x7F000001u, 30001);

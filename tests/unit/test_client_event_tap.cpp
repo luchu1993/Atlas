@@ -93,7 +93,7 @@ TEST(ClientEventTap, MultipleLinesAccumulate) {
 }
 
 // ============================================================================
-// Phase D2'.3 — event_seq gap warnings
+// event_seq gap warnings
 // ============================================================================
 
 TEST(ClientEventTap, EventSeqGap_AddsMissedCount) {

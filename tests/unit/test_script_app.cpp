@@ -77,8 +77,8 @@ class MockNativeProvider : public INativeApiProvider {
   void SetAoIRadius(uint32_t, float, float) override {}
   void SetNativeCallbacks(const void*, int32_t) override {}
 
-  // Phase 10 CellApp-specific stubs — non-CellApp test mocks just need
-  // to stay concrete as INativeApiProvider's surface grows.
+  // CellApp-specific stubs — non-CellApp test mocks just need to stay
+  // concrete as INativeApiProvider's surface grows.
   void SetEntityPosition(uint32_t, float, float, float) override {}
   void PublishReplicationFrame(uint32_t, uint64_t, uint64_t, const std::byte*, int32_t,
                                const std::byte*, int32_t, const std::byte*, int32_t,

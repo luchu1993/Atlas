@@ -71,26 +71,22 @@ using DispatchRpcFn = void (*)(uint32_t entity_id, uint32_t rpc_id, const uint8_
 using GetOwnerSnapshotFn = void (*)(uint32_t entity_id, uint8_t** out_data, int32_t* out_len);
 
 // ============================================================================
-// SerializeEntityFn — Phase 11 PR-6 Offload serialization path.
+// SerializeEntityFn — Offload serialization path.
 //
-// Called by CellApp::BuildOffloadMessage to capture the full entity state
-// that the destination CellApp will hand to RestoreEntityFn. The
-// zero-copy contract mirrors Phase 10's blob APIs but runs in reverse:
-//   - On success returns 0, writes the byte count into *out_len and the
-//     bytes into out_buf.
-//   - If out_buf_cap is too small, returns the required size without
-//     writing; caller reallocs and retries.
-//   - On error returns -1 and sets *out_len to -1.
-// Distinct from GetEntityDataFn (DB persistence) and GetOwnerSnapshotFn
-// (AoI baseline) per §4 "不新造 SerializeFull".
+// Called by CellApp::BuildOffloadMessage to capture full entity state for
+// the destination CellApp's RestoreEntityFn. On success returns 0 and
+// writes the byte count to *out_len. If out_buf_cap is too small, returns
+// the required size without writing. On error returns -1 and sets
+// *out_len to -1. Distinct from GetEntityDataFn (DB persistence) and
+// GetOwnerSnapshotFn (AoI baseline).
 // ============================================================================
 
 using SerializeEntityFn = int32_t (*)(uint32_t entity_id, uint8_t* out_buf, int32_t out_buf_cap,
                                       int32_t* out_len);
 
 // ============================================================================
-// ProximityEventFn — Phase 11 C8 / §10.2 #9. Raised when a peer enters or
-// leaves a ProximityController's radius. Arguments:
+// ProximityEventFn — raised when a peer enters or leaves a
+// ProximityController's radius. Arguments:
 //   entity_id       — the owner of the ProximityController (the "sensor")
 //   user_arg        — the int32_t handle the script passed to
 //                     AddProximityController; lets a script disambiguate

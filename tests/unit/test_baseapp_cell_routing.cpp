@@ -1,9 +1,7 @@
-// Phase 11 PR-6 review-fix S1 — BaseApp multi-CellApp routing.
-//
-// Exercises the pure ResolveCellChannelByAddr helper that backs
-// OnClientCellRpc's per-entity routing. The helper takes just a map and
-// an Address, so tests drive it with fake Channel* values (compared for
-// identity only, never dereferenced).
+// BaseApp multi-CellApp routing. Exercises the pure ResolveCellChannelByAddr
+// helper that backs OnClientCellRpc's per-entity routing. The helper takes
+// just a map and an Address, so tests drive it with fake Channel* values
+// (compared for identity only, never dereferenced).
 
 #include <cstdint>
 #include <unordered_map>

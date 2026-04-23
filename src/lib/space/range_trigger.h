@@ -14,8 +14,7 @@ namespace atlas {
 // A RangeTrigger fires OnEnter / OnLeave callbacks as other RangeListNodes
 // cross the square [(cx-r, cz-r), (cx+r, cz+r)] centred on its `central_`
 // node. The implementation decomposes the 2-D membership test into two
-// linked-list shuffles plus a cheap orthogonal-axis bounds check, reusing
-// BigWorld's 15-year-old algorithm.
+// linked-list shuffles plus a cheap orthogonal-axis bounds check.
 //
 // The trigger plants two sentinel-like nodes into the owning RangeList:
 //   - lower_bound_ at (cx - r, cz - r)
@@ -39,9 +38,8 @@ namespace atlas {
 //   trigger grow around it before the opposite side contracts past it, so
 //   transient "leave then immediately re-enter" glitches are avoided.
 //   The current implementation does the per-axis ordering on X only and
-//   folds Z into the same pass; for Phase 10's single-CellApp workloads
-//   this is enough. Mixed-direction moves remain correct but may fire a
-//   leave/enter pair at exactly-on-boundary peers (documented).
+//   folds Z into the same pass. Mixed-direction moves remain correct but
+//   may fire a leave/enter pair at exactly-on-boundary peers (documented).
 // ============================================================================
 
 class RangeTrigger {
@@ -59,9 +57,8 @@ class RangeTrigger {
 
   // Unlink the bound nodes. Fires no OnLeave events — callers that need
   // "tell me about peers still inside at teardown time" must walk the
-  // list themselves. (BigWorld callers almost always Remove during an
-  // entity-destroy flow where the trigger's observer is about to vanish,
-  // so spurious leaves would be noise.)
+  // list themselves. Remove typically runs during an entity-destroy flow
+  // where the observer is about to vanish, so spurious leaves would be noise.
   void Remove(RangeList& list);
 
   // Centre moved: bounds' computed (x, z) now disagree with their list
@@ -77,17 +74,15 @@ class RangeTrigger {
   [[nodiscard]] auto Central() const -> const RangeListNode& { return central_; }
   [[nodiscard]] auto Range() const -> float { return range_; }
 
-  // Phase 11 PR-6 review-fix B2: expose + seed the inside-peer set for
-  // cross-process migration.
+  // Inside-peer set for cross-process migration.
   //
-  // InsidePeers() returns the current 2-D-inside snapshot. Used at
+  // InsidePeers() returns the current 2-D-inside snapshot; used at
   // Offload send-time to persist peer membership.
   //
   // SeedInsidePeersForMigration pre-populates the set BEFORE Insert()
-  // runs. Insert's natural enter/leave dispatch then only fires leave
-  // events for pre-seeded peers that moved out of range, without re-
-  // firing enter for peers that stayed in — exactly the non-flapping
-  // behaviour we want on Offload arrival. Must NOT be called while the
+  // runs; the natural enter/leave dispatch then only fires leave events
+  // for seeded peers that moved out of range and suppresses redundant
+  // enter events for peers that stayed in. Must NOT be called while the
   // trigger is currently inserted (list_ != nullptr).
   [[nodiscard]] auto InsidePeers() const -> const std::unordered_set<RangeListNode*>& {
     return inside_peers_;

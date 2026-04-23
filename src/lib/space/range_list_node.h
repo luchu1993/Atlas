@@ -10,9 +10,8 @@ namespace atlas {
 // RangeList — a doubly-sorted linked list of world-space nodes
 //
 // This is the core spatial index for Atlas's single-CellApp AoI / trigger
-// system. The design is a direct port of BigWorld's RangeList (15 years of
-// MMO production) and exploits the fact that most entity movement is small
-// and frame-to-frame shuffles bubble only a handful of hops on average:
+// system. It exploits the fact that most entity movement is small and
+// frame-to-frame shuffles bubble only a handful of hops on average:
 //
 //   - Each node lives in TWO linked lists simultaneously: one sorted by x,
 //     one by z. The axes are decoupled on purpose; a 2D-distance check is

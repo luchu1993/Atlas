@@ -456,26 +456,15 @@ static_assert(NetworkMessage<ReplicatedReliableDeltaFromCell>);
 // ============================================================================
 // BackupCellEntity  (CellApp → BaseApp, ID 2018)
 //
-// BigWorld-style cell-to-base state backup. The CellApp emits this
-// periodically (every `CellApp::kBackupIntervalTicks`) for every entity
-// with a BaseApp binding. `cell_backup_data` is the opaque output of the
-// cell-side `ServerEntity.Serialize` — i.e. post-M2, only the CELL_DATA
-// subset of properties.
+// Periodic cell-to-base state backup (every CellApp::kBackupIntervalTicks).
+// `cell_backup_data` is the opaque output of cell-side ServerEntity.Serialize
+// — the CELL_DATA subset of properties.
 //
-// BaseApp stores the bytes verbatim on its Proxy (`cell_backup_data_`)
-// without deserialising. That blob is the authoritative mirror of the
-// cell-authoritative state for:
-//   * DB writes   (base has the full persistent record: its own
-//                  base-scope entity_data_ + the cell_backup_data_ blob)
-//   * Reviver     (restore the entity on a new CellApp after a crash)
-//   * Offload     (migration from one CellApp to another — the new cell
-//                  can bootstrap from the blob instead of waiting for
-//                  cross-cell ghost traffic)
-//
-// Mirrors BigWorld BaseAppIntInterface::backupCellEntity (bigworld/
-// server/cellapp/real_entity.cpp:884-906 for the sender;
-// bigworld/server/baseapp/base.cpp:1182-1200 for the "stash as opaque
-// bytes" receiver).
+// BaseApp stores the bytes verbatim on its Proxy (cell_backup_data_) without
+// deserialising. The blob is the authoritative mirror of cell-scope state
+// for: DB writes (base combines its entity_data_ with this blob), Reviver
+// (restore on a new CellApp after a crash), and Offload (the new cell
+// bootstraps from the blob instead of cross-cell ghost traffic).
 // ============================================================================
 
 struct BackupCellEntity {
@@ -512,18 +501,13 @@ static_assert(NetworkMessage<BackupCellEntity>);
 // ============================================================================
 // ReplicatedBaselineFromCell  (CellApp → BaseApp, ID 2019)
 //
-// L4: cell-authoritative owner snapshot, periodic. Cell has the live
-// cell-scope property values; BaseApp's own SerializeForOwnerClient
-// (post-M2) returns empty blobs for pure cell-scope entities because
-// the base-side partial has no backing field for those props. So the
-// baseline must originate where the data lives — exactly BigWorld's
-// stance of "cell-auth state stays on the cell". BaseApp's only job
-// is relay: on receipt it calls ResolveClientChannel(base_entity_id)
-// and forwards the blob as a ReplicatedBaselineToClient (0xF002).
+// Periodic cell-authoritative owner snapshot. The cell owns the live
+// cell-scope values; base-side SerializeForOwnerClient returns empty blobs
+// for pure cell-scope entities, so baselines must originate on the cell.
+// BaseApp's only job is relay: on receipt it resolves the owning client
+// and forwards the blob as ReplicatedBaselineToClient (0xF002).
 //
-// Payload format is the raw bytes of the cell-side
-// SerializeForOwnerClient — byte-identical to the pre-M2 baseapp-
-// sourced baseline, so no client-side decoder change.
+// Payload is the raw bytes of cell-side SerializeForOwnerClient.
 // ============================================================================
 
 struct ReplicatedBaselineFromCell {
@@ -807,10 +791,6 @@ static_assert(NetworkMessage<ClientBaseRpc>);
 // `target_entity_id` is the base_entity_id space — clients only ever know
 // base ids; CellApp's base_entity_population_ index resolves it to the
 // CellEntity on arrival.
-//
-// Phase 10 prerequisite PR-A: struct + handler skeleton. The full validation
-// chain (direction==0x02, IsExposed, cross-entity + AllClients) is wired in
-// Step 10.9 once the registry direction/exposed metadata is guaranteed.
 // ============================================================================
 
 struct ClientCellRpc {
@@ -856,13 +836,10 @@ static_assert(NetworkMessage<ClientCellRpc>);
 // CellAppMgr fans this out to every BaseApp after it rehomes the dead
 // CellApp's BSP leaves. `dead_addr` identifies which CellApp died;
 // `rehomes` maps each affected Space to the surviving CellApp that now
-// owns a replacement Cell. BaseApps walk their entities: every
-// BaseEntity with `cell_addr == dead_addr` gets re-issued to the
-// corresponding new host via CreateCellEntity (script_init_data =
-// last cached cell_backup_data), which rehydrates the Real from the
-// base-side backup. BigWorld parity:
-// `BaseApp::handleCellAppDeath` + `DyingCellApp::tick`
-// (dead_cell_apps.cpp:234).
+// owns a replacement Cell. BaseApps walk their entities: every BaseEntity
+// with `cell_addr == dead_addr` gets re-issued to the corresponding new
+// host via CreateCellEntity (script_init_data = last cached
+// cell_backup_data), which rehydrates the Real from the base-side backup.
 // ============================================================================
 
 struct CellAppDeath {

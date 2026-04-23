@@ -10,7 +10,7 @@ namespace atlas {
 //
 // Declared here in src/lib/space so the space library (RangeList, Range-
 // Trigger, Controller) stays independent of server/cellapp. CellEntity
-// (Step 10.4) implements this interface; tests stub it with a tiny mock.
+// implements this interface; tests stub it with a tiny mock.
 //
 // Every controller that physically moves an entity (MoveToPointController,
 // future navigation/steering controllers) goes through this surface. Pure

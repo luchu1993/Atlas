@@ -236,7 +236,7 @@ TEST_F(DeltaForwarderFlushTest, ReplacePreservesAccumulatedDeferredTicks) {
 }
 
 // ============================================================================
-// Priority ordering (Phase D1 — §8.4 task 2.6)
+// Priority ordering
 //
 // The three tests below lock the contract:
 //   (a) high-priority entries flush before low-priority ones;

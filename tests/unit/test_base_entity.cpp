@@ -78,8 +78,8 @@ TEST(Proxy, SessionKey) {
   EXPECT_EQ(p.GetSessionKey().bytes[31], 0xCD);
 }
 
-// Phase 11 C6b: BaseEntity tracks the Space its cell counterpart lives
-// in. Needed by OnCellAppDeath to look up the correct rehome target.
+// BaseEntity tracks the Space its cell counterpart lives in; needed by
+// OnCellAppDeath to look up the correct rehome target.
 TEST(BaseEntity, SpaceIdDefaultAndSet) {
   BaseEntity ent(1, 2);
   EXPECT_EQ(ent.SpaceId(), kInvalidSpaceID);

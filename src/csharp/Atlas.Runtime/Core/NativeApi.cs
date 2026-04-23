@@ -150,8 +150,7 @@ internal static unsafe partial class NativeApi
     /// Forward a SetAoIRadius to the cell hosting this entity's
     /// counterpart. Radius is clamped on the cell side to [0.1, max];
     /// hysteresis widens the leave boundary so peers inside
-    /// (radius, radius+hysteresis) stay in AoI. Mirrors BigWorld's
-    /// entity.setAoIRadius().
+    /// (radius, radius+hysteresis) stay in AoI.
     /// </summary>
     public static void SetAoIRadius(uint entityId, float radius, float hysteresis)
     {

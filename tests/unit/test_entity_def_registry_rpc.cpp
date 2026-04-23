@@ -1,8 +1,8 @@
 // Tests for RpcDescriptor direction/exposed metadata via the binary
 // descriptor path (EntityDefRegistry::RegisterType).
 //
-// Phase 10 Step 10.9 relies on RpcDescriptor::Direction() and
-// RpcDescriptor::exposed being populated correctly so the BaseApp can:
+// BaseApp relies on RpcDescriptor::Direction() and RpcDescriptor::exposed
+// being populated correctly so it can:
 //   - reject client→Base RPCs whose direction isn't 0x03
 //   - reject client→Cell RPCs whose direction isn't 0x02
 //   - reject non-exposed RPCs (exposed == kNone)
@@ -45,7 +45,7 @@ auto MakeDescriptor(std::string_view type_name, uint16_t type_id, bool has_cell,
   w.Write<uint16_t>(type_id);
   w.Write<uint8_t>(has_cell ? 1 : 0);
   w.Write<uint8_t>(has_client ? 1 : 0);
-  w.WritePackedInt(0);  // 0 properties (Phase 10 RPC tests don't need them)
+  w.WritePackedInt(0);  // 0 properties (RPC tests don't need them)
   w.WritePackedInt(static_cast<uint32_t>(rpcs.size()));
   for (const auto& r : rpcs) {
     w.WriteString(r.name);

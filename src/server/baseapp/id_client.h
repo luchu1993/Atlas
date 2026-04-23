@@ -9,7 +9,7 @@
 namespace atlas {
 
 // ============================================================================
-// IDClient — BigWorld-style water-level EntityID cache (lives in BaseApp)
+// IDClient — water-level EntityID cache (lives in BaseApp)
 //
 // Manages a local pool of pre-allocated EntityIDs obtained from DBApp.
 // Uses water-level thresholds to trigger asynchronous refill requests:

@@ -1,7 +1,8 @@
-// Controller system unit tests — Phase 10 Step 10.3.
+// Controller system unit tests.
 //
 // Covers: MoveToPointController, TimerController, Controllers container.
-// ProximityController is deferred to Step 10.2 because it needs RangeTrigger.
+// ProximityController coverage lives in the RangeTrigger test suite since
+// it depends on RangeTrigger.
 
 #include <cmath>
 #include <memory>

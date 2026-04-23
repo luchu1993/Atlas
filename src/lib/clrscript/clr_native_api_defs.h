@@ -114,8 +114,7 @@
     /* Forwards cellapp::SetAoIRadius to the cell hosting this entity's     */                    \
     /* counterpart. Radius is clamped on the cell side to [0.1, max];       */                    \
     /* hysteresis is the leave-band width. Logs a warning (no-op) if the    */                    \
-    /* entity has no cell counterpart. Mirrors BigWorld's                   */                    \
-    /* entity.setAoIRadius() from witness.cpp:2109.                         */                    \
+    /* entity has no cell counterpart.                                      */                    \
     X(void, SetAoIRadius,                                                                          \
         (uint32_t entity_id, float radius, float hysteresis),                                      \
         atlas::GetNativeApiProvider().SetAoIRadius(entity_id, radius, hysteresis))                 \
@@ -125,7 +124,7 @@
         (const void* native_callbacks, int32_t len),                                               \
         atlas::GetNativeApiProvider().SetNativeCallbacks(native_callbacks, len))                    \
                                                                                                    \
-    /* ---- CellApp spatial/replication (Phase 10) ----------------------- */                     \
+    /* ---- CellApp spatial/replication ---------------------------------- */                    \
     /* C# tells the cell layer about the entity's new world position. C++ */                     \
     /* side updates CellEntity::position_ + range_node_ + marks the C#     */                     \
     /* volatile-dirty bit so the next BuildAndConsumeReplicationFrame      */                     \
@@ -136,7 +135,7 @@
                                                                                                    \
     /* C# hands the cell layer one tick of ReplicationFrame output. The    */                     \
     /* owner/other snapshots are used whenever event_seq > 0; otherwise    */                     \
-    /* the caller passes zero-length spans. See phase10_cellapp.md §3.9.   */                     \
+    /* the caller passes zero-length spans.                                */                     \
     X(void, PublishReplicationFrame,                                                               \
         (uint32_t entity_id, uint64_t event_seq, uint64_t volatile_seq,                          \
          const uint8_t* owner_snap, int32_t owner_snap_len,                                        \
@@ -150,7 +149,7 @@
             reinterpret_cast<const std::byte*>(owner_delta), owner_delta_len,                      \
             reinterpret_cast<const std::byte*>(other_delta), other_delta_len))                     \
                                                                                                    \
-    /* ---- CellApp controllers (Phase 10) ------------------------------- */                    \
+    /* ---- CellApp controllers ------------------------------------------ */                    \
     X(int32_t, AddMoveController,                                                                  \
         (uint32_t entity_id, float dest_x, float dest_y, float dest_z,                            \
          float speed, int32_t user_arg),                                                           \

@@ -74,23 +74,9 @@ class Channel;
 //   • Scripted entity logic via ClrScriptEngine / BaseAppNativeProvider
 // ============================================================================
 
-// ============================================================================
-// Phase 11 PR-6 routing helper (pure function)
-// ============================================================================
-//
 // Looks up a CellApp Channel* for `cell_addr` in the peer-channel map.
-// Returns nullptr when:
-//   - cell_addr has port 0 (default-constructed Address; the entity has
-//     not yet been bound to a Cell via OnCellEntityCreated / OnCurrentCell);
-//   - the map has no entry for cell_addr (peer CellApp not known, either
-//     not yet connected or already died).
-//
-// Exposed at namespace scope so unit tests can drive it on a plain map +
-// synthetic Channel* values without having to construct a BaseApp. The
-// complete "entity → cell_addr → channel" chain is covered by
-// BaseApp::ResolveCellChannelForEntity which layers the entity lookup
-// on top of this helper.
-
+// Returns nullptr if cell_addr has port 0 or the map has no entry for it.
+// Exposed at namespace scope so unit tests can drive it without a BaseApp.
 [[nodiscard]] auto ResolveCellChannelByAddr(
     const std::unordered_map<Address, Channel*>& cellapp_channels, const Address& cell_addr)
     -> Channel*;
@@ -106,29 +92,19 @@ class BaseApp : public EntityApp {
   [[nodiscard]] auto GetEntityManager() -> EntityManager& { return entity_mgr_; }
   [[nodiscard]] auto GetNativeProvider() -> BaseAppNativeProvider& { return *native_provider_; }
 
-  // ---- Phase 11 PR-6 CellApp routing ------------------------------------
-  //
   // Returns the CellApp channel that currently owns `target_entity_id`'s
   // Real, or nullptr if the entity is unknown, has no Cell yet, or the
-  // peer channel map has no entry for its current cell_addr. Used by
-  // OnClientCellRpc. Wraps the pure ResolveCellChannelByAddr helper
-  // (see free-function declaration below) with the entity lookup.
+  // peer channel map has no entry for its current cell_addr.
   [[nodiscard]] auto ResolveCellChannelForEntity(EntityID target_entity_id) const -> Channel*;
 
-  // ---- Phase 11 PR-6 review-fix S2/S3: Space creation via CellAppMgr ----
-  //
   // Callback invoked when CellAppMgr replies to a CreateSpaceRequest.
-  // `success` indicates whether the Space exists afterwards; on success
-  // `cell_addr` holds the CellApp that now hosts the initial Cell.
-  // Scripts/game logic hook in via RequestCreateSpace() below.
+  // On success `cell_addr` holds the CellApp that now hosts the initial Cell.
   using SpaceCreatedCallback =
       std::function<void(bool success, SpaceID space_id, const Address& cell_addr)>;
 
   // Requests a new Space from CellAppMgr. Returns 0 if no CellAppMgr is
-  // currently connected (birth hasn't happened yet or it died); caller
-  // can retry. Non-zero return is the request_id assigned by BaseApp —
-  // the callback fires when CellAppMgr replies (or never, on timeout;
-  // the pending table is pruned by a periodic sweep).
+  // currently connected; caller can retry. Non-zero return is the
+  // request_id; the callback fires when CellAppMgr replies.
   auto RequestCreateSpace(SpaceID space_id, SpaceCreatedCallback callback) -> uint32_t;
 
  protected:
@@ -155,9 +131,9 @@ class BaseApp : public EntityApp {
   void OnCellEntityCreated(Channel& ch, const baseapp::CellEntityCreated& msg);
   void OnCellEntityDestroyed(Channel& ch, const baseapp::CellEntityDestroyed& msg);
   void OnCurrentCell(Channel& ch, const baseapp::CurrentCell& msg);
-  // Phase 11 C6b: CellAppMgr announced a CellApp death. Re-ship every
-  // locally-tracked Real that was on the dead addr to its new host,
-  // seeding the new cell entity with the last cached cell_backup_data.
+  // CellAppMgr announced a CellApp death. Re-ship every locally-tracked Real
+  // that was on the dead addr to its new host, seeding the new cell entity
+  // with the last cached cell_backup_data.
   void OnCellAppDeath(const baseapp::CellAppDeath& msg);
   void OnCellRpcForward(Channel& ch, const baseapp::CellRpcForward& msg);
   void OnSelfRpcFromCell(Channel& ch, const baseapp::SelfRpcFromCell& msg);
@@ -167,7 +143,6 @@ class BaseApp : public EntityApp {
                                          const baseapp::ReplicatedReliableDeltaFromCell& msg);
   void OnBackupCellEntity(const baseapp::BackupCellEntity& msg);
   void OnReplicatedBaselineFromCell(const baseapp::ReplicatedBaselineFromCell& msg);
-  // Phase 11 review-fix S2/S3.
   void OnSpaceCreatedResult(Channel& ch, const cellappmgr::SpaceCreatedResult& msg);
 
   // ---- Login flow handlers --------------------------------------------
@@ -227,15 +202,14 @@ class BaseApp : public EntityApp {
   BaseAppNativeProvider* native_provider_{nullptr};  // owned by ScriptApp
   Channel* dbapp_channel_{nullptr};                  // connection to DBApp
   Channel* baseappmgr_channel_{nullptr};             // connection to BaseAppMgr
-  // Phase 11 PR-6 / review-fix C2: multi-CellApp routing. The registry
-  // handles Birth/Death subscription + self-filter internally. Per-
-  // entity routing (which CellApp this entity's Real currently lives
-  // on) lives on BaseEntity.cell_addr_, maintained by
+  // Multi-CellApp routing. The registry handles Birth/Death subscription +
+  // self-filter internally. Per-entity routing (which CellApp this entity's
+  // Real currently lives on) lives on BaseEntity.cell_addr_, maintained by
   // OnCellEntityCreated + OnCurrentCell.
   CellAppPeerRegistry cellapp_peers_;
 
-  // Phase 11 PR-6 review-fix S2/S3: CellAppMgr control channel +
-  // pending Space-create callbacks keyed by request_id.
+  // CellAppMgr control channel + pending Space-create callbacks keyed by
+  // request_id.
   Channel* cellappmgr_channel_{nullptr};
   uint32_t next_space_request_id_{1};
   std::unordered_map<uint32_t, SpaceCreatedCallback> pending_space_creates_;
@@ -339,11 +313,10 @@ class BaseApp : public EntityApp {
   uint64_t baseline_tick_counter_{0};
   static constexpr uint32_t kDeltaBudgetPerTick = 16 * 1024;  // 16 KB per client per tick
   // Ticks between reliable full-state snapshots per entity. Baseline is the
-  // belt-and-braces recovery path for the unreliable delta channel
-  // (0xF001). With补强四's reliable delta channel (0xF003) in place for any
-  // property that can't tolerate loss, the unreliable path only carries
-  // volatile-type state whose next frame supersedes a stale one anyway —
-  // so the baseline cadence can be loose (PROPERTY_SYNC_DESIGN §8.5).
+  // belt-and-braces recovery path for the unreliable delta channel (0xF001).
+  // With the reliable delta channel (0xF003) covering loss-intolerant
+  // properties, the unreliable path only carries volatile-type state whose
+  // next frame supersedes a stale one anyway, so the cadence can be loose.
   // 120 ticks ≈ 4 s at 30 Hz / 12 s at 10 Hz.
   static constexpr uint64_t kBaselineInterval = 120;
   uint64_t auth_success_total_{0};

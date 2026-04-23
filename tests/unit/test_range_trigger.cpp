@@ -1,4 +1,4 @@
-// RangeTrigger 2D detection tests — Phase 10 Step 10.2.
+// RangeTrigger 2D detection tests.
 //
 // The trigger reduces 2-D region membership to two 1-D linked-list
 // shuffles. Tests cover:

@@ -1,4 +1,4 @@
-// Phase 11 PR-3 — CellEntity Real/Ghost + RealEntityData.
+// CellEntity Real/Ghost + RealEntityData.
 //
 // Exercises the dual-mode CellEntity surface without spinning up CellApp,
 // BaseApp, or a real network. Fake Channel* values are only ever compared
@@ -89,7 +89,7 @@ TEST(RealGhost, ConvertRealToGhost_IgnoredOnGhost) {
 }
 
 // ============================================================================
-// RebindRealChannel — review-fix B1
+// RebindRealChannel
 // ============================================================================
 
 TEST(RealGhost, RebindRealChannel_UpdatesBackChannelAndClearsNextRealAddr) {
@@ -382,9 +382,9 @@ TEST(RealEntityData, BuildDelta_EmptyWhenNoHistory) {
   EXPECT_TRUE(msg.other_delta.empty());
 }
 
-// Phase 11 C5: defend against a divergence between history.back().event_seq
-// and state->latest_event_seq. Invariant holds under normal publish flow,
-// but we'd rather produce an empty delta (and let the next pump upgrade
+// Defend against a divergence between history.back().event_seq and
+// state->latest_event_seq. The invariant holds under normal publish flow,
+// but we'd rather produce an empty delta (letting the next pump upgrade
 // to snapshot-refresh via gap > 1) than forward a corrupted pair of
 // (wire seq, other_delta bytes) that don't describe the same frame.
 TEST(RealEntityData, BuildDelta_EmptyWhenHistoryBackSeqMismatchesLatest) {
@@ -428,10 +428,10 @@ TEST(RealEntityData, BuildSnapshotRefresh_ReflectsOwnerSnapshot) {
   EXPECT_EQ(msg.other_snapshot[0], std::byte{0xCA});
 }
 
-// Phase 11 C4: empty-delta skip helper. All-zero or truly-empty
-// payloads carry no audience-visible content and must not incur
-// per-haunt wire traffic every tick. The DeltaSyncEmitter produces
-// such payloads whenever only owner-visible properties were dirty.
+// Empty-delta skip helper. All-zero or truly-empty payloads carry no
+// audience-visible content and must not incur per-haunt wire traffic
+// every tick. The DeltaSyncEmitter produces such payloads whenever only
+// owner-visible properties were dirty.
 TEST(RealEntityData, IsEmptyOtherDelta_TruthTable) {
   // Truly empty — the SerializeOtherDelta didn't even run (hasEvent=false).
   std::vector<std::byte> empty;
@@ -456,9 +456,8 @@ TEST(RealEntityData, IsEmptyOtherDelta_TruthTable) {
   EXPECT_FALSE(RealEntityData::IsEmptyOtherDelta(std::span<const std::byte>(mixed)));
 }
 
-// Phase 11 C3: broadcast decision helper — BigWorld's
-// addHistoryEventToGhosts fires per-event so the gap > 1 case doesn't
-// arise, but Atlas batches per tick so we need explicit detection.
+// Broadcast decision helper. Per-tick batching means gap > 1 is possible,
+// so we need explicit detection instead of firing per-event.
 TEST(RealEntityData, ShouldUseSnapshotRefresh_GapTruthTable) {
   // gap == 0: no broadcast needed (caller filters this out); helper
   // still returns false because there's nothing to fall back from.

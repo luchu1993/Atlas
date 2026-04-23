@@ -96,12 +96,9 @@ internal static class PropertiesEmitter
         //
         // The client setter intentionally does NOT fire OnXxxChanged — only
         // wire deltas do (via DeltaSyncEmitter's ApplyReplicatedDelta).
-        // Aligning with BigWorld's simple_client_entity.cpp::propertyEvent:
-        // set_<propname> script callbacks fire only on network-received
-        // changes, not on local Python assignment. Clients observe
-        // authoritative server state; a local write is an edge case
-        // (prediction, test fixtures, scratch UI state) that shouldn't
-        // masquerade as an observed transition.
+        // Clients observe authoritative server state; a local write is an
+        // edge case (prediction, test fixtures, scratch UI state) that
+        // shouldn't masquerade as an observed transition.
         foreach (var prop in props)
         {
             bool trackDirty = emitDirtyBacking && enumReplicableProps.Contains(prop);
@@ -173,12 +170,11 @@ internal static class PropertiesEmitter
 
     /// <summary>
     /// Returns the subset of <paramref name="allProps"/> whose backing field
-    /// lives on the given process side. Mirrors BigWorld's invariant that
-    /// "data only lives on a base or a cell but not both"
-    /// (lib/entitydef/data_description.ipp:113-131): Base only holds
-    /// DATA_BASE scoped properties; Cell holds everything else (cell-scope
-    /// plus client-visible cell-scope). Client is orthogonal — it keeps a
-    /// projection of whatever it can observe from either side. Server is the
+    /// lives on the given process side. Data lives on either base or cell
+    /// but never both: Base only holds DATA_BASE scoped properties; Cell
+    /// holds everything else (cell-scope plus client-visible cell-scope).
+    /// Client is orthogonal — it keeps a projection of whatever it can
+    /// observe from either side. Server is the
     /// legacy single-process fallback (no ATLAS_BASE/ATLAS_CELL compile
     /// symbol) and keeps the pre-refactor behaviour of emitting everything
     /// so existing server-mode samples don't regress.

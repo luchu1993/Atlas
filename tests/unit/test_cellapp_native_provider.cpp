@@ -1,4 +1,4 @@
-// CellAppNativeProvider tests — Phase 10 Step 10.7.
+// CellAppNativeProvider tests.
 //
 // Covers the C# → C++ NativeApi surface the CellApp process installs:
 //   - SetEntityPosition propagates into CellEntity + RangeList
@@ -116,10 +116,10 @@ TEST_F(CellAppNativeProviderTest, AddProximityControllerIsFunctional) {
   EXPECT_TRUE(e->GetControllers().Contains(static_cast<ControllerID>(id)));
 }
 
-// Phase 11 C8 / §10.2 #9: AddProximityController installs lambdas that
-// route enter/leave events into the registered ProximityEventFn. Use a
-// stateless recorder (must be a plain function for ProximityEventFn's
-// `void(*)(...)` signature) to capture events.
+// AddProximityController installs lambdas that route enter/leave events
+// into the registered ProximityEventFn. Use a stateless recorder (must be
+// a plain function for ProximityEventFn's `void(*)(...)` signature) to
+// capture events.
 namespace {
 struct ProximityRecord {
   uint32_t entity_id;
@@ -306,12 +306,12 @@ TEST_F(CellAppNativeProviderTest, SetNativeCallbacksDispatchRoundtrips) {
 }
 
 // ============================================================================
-// Phase 11 PR-3 — Ghost write guards
+// Ghost write guards
 // ============================================================================
 //
 // Every write path that mutates Real-only state must log-and-skip when its
-// entity is a Ghost. Resolution from Phase 11 Q2: soft guard, not a hard
-// assert, so a misbehaving script can't take the CellApp down.
+// entity is a Ghost. Soft guard rather than a hard assert so a misbehaving
+// script can't take the CellApp down.
 
 TEST_F(CellAppNativeProviderTest, SetPositionRejectedOnGhost) {
   auto* e = space_.AddEntity(std::make_unique<CellEntity>(

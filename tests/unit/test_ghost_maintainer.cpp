@@ -1,4 +1,4 @@
-// Phase 11 PR-4 — GhostMaintainer tests.
+// GhostMaintainer tests.
 //
 // Feeds the maintainer a hand-built Space + BSP tree + synthetic channel
 // lookups, then inspects the returned PendingWork. No network involved;

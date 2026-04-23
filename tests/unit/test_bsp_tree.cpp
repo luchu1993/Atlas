@@ -1,4 +1,4 @@
-// BSP tree — Phase 11 PR-2.
+// BSP tree tests.
 //
 // Covers: FindCell, VisitRect, Split, Balance (including aggression damping
 // and safety-bound guard), Serialize/Deserialize round-trip. Loads are
@@ -282,7 +282,7 @@ TEST(BSPTree, Serialize_RoundTrip_MultiLevelTree_PreservesStructureAndRouting) {
   ASSERT_TRUE(t.Split(1, BSPAxis::kX, 0.f, MakeLeafInfo(2, 30002)).HasValue());
   ASSERT_TRUE(t.Split(2, BSPAxis::kZ, 0.f, MakeLeafInfo(3, 30003)).HasValue());
 
-  // Mutate loads — they must NOT survive the round trip (§9.6 Q7).
+  // Mutate loads — they must NOT survive the round trip.
   t.FindCellByIdMutable(1)->load = 0.5f;
   t.FindCellByIdMutable(2)->load = 0.9f;
 

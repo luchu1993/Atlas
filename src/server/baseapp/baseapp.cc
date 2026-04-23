@@ -31,18 +31,12 @@ auto HasManagedEntityType(uint16_t type_id) -> bool {
   return EntityDefRegistry::Instance().FindById(type_id) != nullptr;
 }
 
-// ============================================================================
-// DB-blob framing — L2
+// DB-blob framing. Base's C# Serialize produces DATA_BASE-only bytes; the
+// CELL_DATA subset arrives separately via BackupCellEntity. Persistence
+// stitches the two together on write and unstitches on checkout so cell-
+// scope persistent properties survive a save/load cycle.
 //
-// Post-M2 the base side's C# Serialize produces DATA_BASE-only bytes,
-// and the CELL_DATA subset arrives separately via BackupCellEntity
-// (L1). Persisting an entity therefore has to stitch the two together
-// and unstitch them on checkout; if it didn't, cell-scope persistent
-// properties (marked persistent="true" in .def with a cell scope like
-// all_clients / own_client) would silently vanish through a save/load
-// cycle — the base would have no visibility into the cell state.
-//
-// Layout (prefix scheme, fixed-size):
+// Layout (fixed-size prefix):
 //     byte 0      0xA7   magic
 //     byte 1      0x01   version
 //     bytes 2..5  u32 LE base_len
@@ -50,11 +44,8 @@ auto HasManagedEntityType(uint16_t type_id) -> bool {
 //     next        u32 LE cell_len
 //     next        cell_bytes
 //
-// Total overhead per write: 10 bytes. Legacy blobs lacking the magic
-// byte (0xA7 was chosen because BigWorld's C# Serialize header starts
-// with kSerializationVersion == 0x01, never 0xA7) fall back to
-// "all base, no cell" — which preserves old databases exactly as
-// their bytes have always been interpreted.
+// Legacy blobs lacking the magic fall back to "all base, no cell", which
+// preserves old databases exactly as their bytes have always been read.
 constexpr std::byte kDbBlobMagic{0xA7};
 constexpr std::byte kDbBlobVersion{0x01};
 
@@ -222,20 +213,16 @@ auto BaseApp::Init(int argc, char* argv[]) -> bool {
         FailAllDbappPendingRequests("dbapp_disconnected");
       });
 
-  // ---- Subscribe to CellApps (Phase 11 PR-6 / review-fix C2) ---------
-  //
-  // Delegated to CellAppPeerRegistry which handles Birth/Death +
-  // self-filter consistently with CellApp's own peer list. BaseApp
-  // never self-registers as a CellApp, so self_addr is a default
-  // Address — the filter becomes a no-op.
+  // ---- Subscribe to CellApps -----------------------------------------
+  // Delegated to CellAppPeerRegistry which handles Birth/Death + self-filter
+  // consistently with CellApp's own peer list. BaseApp never self-registers
+  // as a CellApp, so self_addr is a default Address (filter is a no-op).
   cellapp_peers_.Subscribe(GetMachinedClient(), /*self_addr=*/Address{});
 
-  // ---- Subscribe to CellAppMgr (review-fix S2/S3) --------------------
-  //
-  // Connect to the CellAppMgr on birth so scripts can call
-  // RequestCreateSpace. On death we just clear the channel — pending
-  // create requests will time out (periodic sweep in a future tick, or
-  // explicit fail-all on reconnect retry).
+  // ---- Subscribe to CellAppMgr ---------------------------------------
+  // Connect on birth so scripts can call RequestCreateSpace. On death we
+  // just clear the channel — pending create requests fail via the loop
+  // below so callers don't hang.
   GetMachinedClient().Subscribe(
       machined::ListenerType::kBoth, ProcessType::kCellAppMgr,
       [this](const machined::BirthNotification& n) {
@@ -491,7 +478,7 @@ void BaseApp::RegisterInternalHandlers() {
         OnCellRpcForward(*ch, msg);
       });
 
-  // Phase 11 review-fix S2/S3: CellAppMgr replies to CreateSpaceRequest.
+  // CellAppMgr replies to CreateSpaceRequest.
   (void)table.RegisterTypedHandler<cellappmgr::SpaceCreatedResult>(
       [this](const Address& /*src*/, Channel* ch, const cellappmgr::SpaceCreatedResult& msg) {
         OnSpaceCreatedResult(*ch, msg);
@@ -810,19 +797,12 @@ void BaseApp::OnCurrentCell(Channel& /*ch*/, const baseapp::CurrentCell& msg) {
   ent->SetCell(msg.cell_entity_id, msg.cell_addr, msg.epoch);
 }
 
-// BigWorld parity: BaseApp::handleCellAppDeath (baseapp.cpp:1942) +
-// DyingCellApp::tick (dead_cell_apps.cpp:234). For every BaseEntity we
-// know to have been Real-hosted on the dead CellApp, issue a fresh
-// CreateCellEntity to the rehome target with the last-cached
-// cell_backup_data as script_init_data — the receiving CellApp's
-// RestoreEntity callback rehydrates the C# instance from that blob.
-//
-// Witness re-attachment happens automatically via the Phase 10 race-fix
-// path: once the new host's CellEntityCreated ack lands at
-// OnCellEntityCreated, the proxy->HasClient() branch fires
-// cellapp::EnableWitness. The client stays connected throughout —
-// clients don't learn about the death at this layer (AoI traffic simply
-// pauses until the new Real is up).
+// For every BaseEntity that was Real-hosted on the dead CellApp, issue a
+// fresh CreateCellEntity to the rehome target carrying the last-cached
+// cell_backup_data as script_init_data — the new CellApp's RestoreEntity
+// callback rehydrates the C# instance from that blob. Witness re-attach
+// happens when the new host's CellEntityCreated ack lands; the client
+// stays connected throughout (AoI pauses until the Real is back up).
 void BaseApp::OnCellAppDeath(const baseapp::CellAppDeath& msg) {
   ATLAS_LOG_WARNING("BaseApp: CellAppDeath dead_addr={}:{} rehome_spaces={}", msg.dead_addr.Ip(),
                     msg.dead_addr.Port(), msg.rehomes.size());
@@ -835,9 +815,8 @@ void BaseApp::OnCellAppDeath(const baseapp::CellAppDeath& msg) {
   uint32_t restored = 0;
   uint32_t lost = 0;
 
-  // Two-pass walk: collect affected entities first, then process. The
-  // entity_mgr_ ForEach iteration must not observe mutations from the
-  // restore (SetCell / ClearCell) mid-walk.
+  // Collect first, then process — entity_mgr_.ForEach must not observe
+  // SetCell / ClearCell mutations mid-walk.
   std::vector<EntityID> to_restore;
   entity_mgr_.ForEach([&](BaseEntity& ent) {
     if (ent.CellAddr() == msg.dead_addr) to_restore.push_back(ent.EntityId());
@@ -895,9 +874,8 @@ void BaseApp::OnCellAppDeath(const baseapp::CellAppDeath& msg) {
     restore.on_ground = false;
     restore.base_addr = Network().RudpAddress();
     restore.request_id = eid;
-    // The restore blob is exactly what BaseApp has been archiving via
-    // BackupCellEntity. CellApp's RestoreEntity callback reads the
-    // Phase 10 Deserialize abstract over it.
+    // The restore blob is what BaseApp has been archiving via
+    // BackupCellEntity; CellApp's RestoreEntity callback deserialises it.
     restore.script_init_data = ent->CellBackupData();
     (void)cell_ch->SendMessage(restore);
     ++restored;
@@ -988,10 +966,9 @@ void BaseApp::OnReplicatedReliableDeltaFromCell(
   ++reliable_delta_messages_sent_total_;
 }
 
-// Cell-to-base periodic state backup. BigWorld model: base caches
-// the cell-authoritative bytes without peeking inside them, and uses
-// them verbatim for DB writes / reviver restart / offload migration.
-// See baseapp_messages.h::BackupCellEntity for the flow.
+// Cell-to-base periodic state backup. Base caches the cell-authoritative
+// bytes opaquely and reuses them verbatim for DB writes / reviver restart
+// / offload migration. See baseapp_messages.h::BackupCellEntity.
 void BaseApp::OnBackupCellEntity(const baseapp::BackupCellEntity& msg) {
   auto* entity = entity_mgr_.Find(msg.base_entity_id);
   if (!entity) {
@@ -1007,16 +984,12 @@ void BaseApp::OnBackupCellEntity(const baseapp::BackupCellEntity& msg) {
   entity->SetCellBackupData(msg.cell_backup_data);
 }
 
-// L4: cell-authoritative baseline relayed to the owning client. Under
-// M2's scope split, base-side SerializeForOwnerClient returns empty
-// blobs for any entity whose client-visible fields are all cell-scope
-// (every stress-test entity today), so the pre-M2 BaseApp-sourced
-// baseline pump couldn't work — hence the hotfix disable. This handler
-// brings baselines back, sourced where the data actually lives.
-// Relay-only: the bytes arrive as a cell-side SerializeForOwnerClient
-// output (wire-compatible with the pre-M2 baseline) and leave as
-// ReplicatedBaselineToClient (0xF002) toward the proxy's attached
-// client channel.
+// Cell-authoritative baseline relayed to the owning client. Base-side
+// SerializeForOwnerClient returns empty blobs for entities whose client-
+// visible fields are all cell-scope, so baselines must come from the
+// CellApp where the data lives. Relay-only: bytes arrive as cell-side
+// SerializeForOwnerClient output and leave as ReplicatedBaselineToClient
+// (0xF002) toward the proxy's attached client channel.
 void BaseApp::OnReplicatedBaselineFromCell(const baseapp::ReplicatedBaselineFromCell& msg) {
   if (msg.snapshot.empty()) return;  // nothing to ship — skip the no-op round-trip
 
@@ -1063,19 +1036,11 @@ void BaseApp::FlushClientDeltas() {
 }
 
 void BaseApp::EmitBaselineSnapshots() {
-  // Intentional no-op. Post-M2 the baseline pump lives on the CellApp
-  // (see CellApp::TickClientBaselinePump + ReplicatedBaselineFromCell
-  // msg 2019), which is the side with authoritative cell-scope data.
-  // BaseApp is a relay-only participant: OnReplicatedBaselineFromCell
-  // forwards the opaque blob to the owning client as
-  // ReplicatedBaselineToClient (0xF002). See
-  // PROPERTY_SYNC_DESIGN.md §5.1a for the full baseline-path migration
-  // rationale (base/cell field ownership split and why a base-sourced
-  // baseline would serialize stale zeros).
-  //
-  // This method is kept so callers referencing the stats watcher don't
-  // lose the callback symbol, and so the "BaseApp doesn't emit
-  // baselines" decision is legible in the code, not silently implicit.
+  // Intentional no-op. The baseline pump runs on the CellApp (see
+  // CellApp::TickClientBaselinePump + ReplicatedBaselineFromCell msg
+  // 2019), which owns authoritative cell-scope data. BaseApp only
+  // relays (OnReplicatedBaselineFromCell → ReplicatedBaselineToClient
+  // 0xF002). The method stays to keep the stats watcher symbol alive.
   (void)baseline_tick_counter_;  // kept for stats watchers
 }
 
@@ -1108,10 +1073,9 @@ auto BaseApp::CaptureEntitySnapshot(EntityID entity_id, std::vector<std::byte>& 
     return false;
   }
 
-  // Step 1 — refresh the base-scope blob. GetEntityData callback runs
-  // the base-side C# Serialize, which under M2 emits DATA_BASE fields
-  // only. Cache result back into entity->entity_data_ so live-in-RAM
-  // state always matches what's about to hit the DB.
+  // Step 1 — refresh the base-scope blob. GetEntityData callback runs the
+  // base-side C# Serialize, which emits DATA_BASE fields only. Cache the
+  // result back so live-in-RAM state matches what's about to hit the DB.
   std::vector<std::byte> base_bytes;
   if (HasManagedEntityType(ent->TypeId()) && native_provider_) {
     if (auto fn = native_provider_->get_entity_data_fn()) {
@@ -1799,10 +1763,9 @@ void BaseApp::DoGiveClientToLocal(EntityID src_id, EntityID dest_id) {
   }
 
   // Tell the client its owning entity has changed. Without this message
-  // the client still thinks `src_id` is its entity (that's what it got
-  // from AuthenticateResult), and every ClientCellRpc it sends afterwards
-  // would target a detached Proxy at validation time. See BigWorld's
-  // Proxy::giveClientTo → currentEntityChanged analogue.
+  // the client still thinks `src_id` is its entity (from AuthenticateResult),
+  // so every subsequent ClientCellRpc would target a detached Proxy at
+  // validation time.
   if (auto* client_ch = ResolveClientChannel(dest_id)) {
     baseapp::EntityTransferred notify;
     notify.new_entity_id = dest_id;
@@ -1837,16 +1800,12 @@ auto BaseApp::CreateBaseEntityFromScript(uint16_t type_id, SpaceID space_id) -> 
   }
 
   // For cell-bearing types, materialise a cell counterpart on a CellApp.
-  // v2 wiring (P3.4): pick the CellApp deterministically by space_id over
-  // a stably-sorted peer list, so every entity in the same space lands
-  // on the same CellApp (required — CellApp auto-creates its view of a
-  // space on first CreateCellEntity, so a second CreateCellEntity for
-  // the same space_id that arrived at a different CellApp would materialise
-  // a second, disconnected copy of the "space"). Keyed by Address so the
-  // ordering is independent of the insertion order of Birth notifications.
-  // A proper CellAppMgr-routed allocation is still the right long-term
-  // design (load-aware, offload-aware); this is a 2-line placeholder that
-  // at least lights up every CellApp instead of pinning to peers.begin().
+  // Pick the CellApp deterministically by space_id over a stably-sorted
+  // peer list: every entity in the same space must land on the same
+  // CellApp, otherwise a second CreateCellEntity arriving at a different
+  // CellApp would auto-create a disconnected second copy of the space.
+  // Keyed by Address so ordering is independent of Birth arrival order.
+  // TODO: replace with a CellAppMgr-routed, load-aware allocation.
   if (type->has_cell) {
     const auto& peers = cellapp_peers_.Channels();
     if (peers.empty()) {
@@ -1861,10 +1820,9 @@ auto BaseApp::CreateBaseEntityFromScript(uint16_t type_id, SpaceID space_id) -> 
       });
       const SpaceID effective_space_id = space_id == kInvalidSpaceID ? SpaceID{1} : space_id;
       // Stamp the space_id on the BaseEntity so a later CellApp-death
-      // restore (PR-7 C6b) can look up the new host keyed by
-      // {dead_addr, space_id}. Doing this regardless of whether the
-      // CreateCellEntity send below succeeds — if the send fails the
-      // entity has no cell to restore anyway.
+      // restore can look up the new host keyed by {dead_addr, space_id}.
+      // Done unconditionally — if the send below fails, the entity has
+      // no cell to restore anyway.
       ent->SetSpaceId(effective_space_id);
       const std::size_t cell_index =
           static_cast<std::size_t>(effective_space_id - 1) % sorted_peers.size();
@@ -1878,7 +1836,7 @@ auto BaseApp::CreateBaseEntityFromScript(uint16_t type_id, SpaceID space_id) -> 
       msg.on_ground = false;
       msg.base_addr = Network().RudpAddress();
       msg.request_id = kEid;
-      // L2: if the Proxy holds cell_backup_data_ from a prior DB checkout
+      // If the Proxy holds cell_backup_data_ from a prior DB checkout
       // or cell-side backup push, hand it to the cell via script_init_data
       // so Cell.Deserialize can hydrate cell-scope properties. Empty on
       // first-time CreateBaseEntityFromScript — cell uses type defaults.
@@ -2008,11 +1966,10 @@ auto BaseApp::BindClient(EntityID entity_id, const Address& client_addr) -> bool
   client_entity_index_[client_addr] = entity_id;
   proxy->BindClient(client_addr);
 
-  // PR 34 C3: mirror BigWorld's RealEntity::addWitness, which fires from
-  // the proxy-binding handshake. Tell the cell to attach a witness now
-  // that this entity has a client. If the cell ack (OnCellEntityCreated)
-  // hasn't landed yet — HasCell() is false — the EnableWitness is
-  // emitted by the ack handler instead (see OnCellEntityCreated race fix).
+  // Tell the cell to attach a witness now that this entity has a client.
+  // If the cell ack (OnCellEntityCreated) hasn't landed yet — HasCell() is
+  // false — the EnableWitness is emitted by the ack handler instead (see
+  // OnCellEntityCreated race fix).
   if (proxy->HasCell()) {
     if (auto* cell_ch = ResolveCellChannelForEntity(entity_id)) {
       cellapp::EnableWitness ew;
@@ -2732,17 +2689,9 @@ void BaseApp::OnClientBaseRpc(Channel& ch, const baseapp::ClientBaseRpc& msg) {
               static_cast<int32_t>(msg.payload.size()));
 }
 
-// ============================================================================
-// OnClientCellRpc — full validation chain + forward to CellApp
-//
-// Four-layer defence-in-depth (phase10_cellapp.md §9.7):
-//   L1   authenticated channel (client_entity_index_ hit)
-//   L1.5 direction bits == 0x02 (reject Base RPCs sent through cell channel)
-//   L2   cross-entity + non-AllClients scope → reject
-//   — forward to CellApp —
-//   L3,L4 re-check in CellApp::OnClientCellRpcForward
-// ============================================================================
-
+// OnClientCellRpc — validate then forward to CellApp. Defence-in-depth: L1
+// authenticated channel, L1.5 direction bits, L2 cross-entity scope here;
+// CellApp::OnClientCellRpcForward re-checks on the other side.
 void BaseApp::OnClientCellRpc(Channel& ch, const baseapp::ClientCellRpc& msg) {
   // L1: authenticated proxy binding. An un-authenticated channel has no
   // right to an entity id, so there's no way to stamp source_entity_id.
@@ -2794,22 +2743,17 @@ void BaseApp::OnClientCellRpc(Channel& ch, const baseapp::ClientCellRpc& msg) {
   // authenticated proxy binding — the client cannot forge it. CellApp
   // re-checks everything (defence in depth) on the other side.
   //
-  // Phase 11 PR-6: ResolveCellChannelForEntity handles the multi-
-  // CellApp lookup (entity → cell_addr → channel map). Stale routing
-  // (Offload in flight) shows up as either an unknown peer (nullptr,
-  // drop with a warning) or the old CellApp rejecting the RPC because
-  // the entity is now a Ghost there — the Q2 soft guard on CellApp's
-  // OnClientCellRpcForward catches that case.
+  // ResolveCellChannelForEntity handles the multi-CellApp lookup
+  // (entity → cell_addr → channel map). Stale routing (Offload in flight)
+  // shows up either as an unknown peer (nullptr, drop with a warning) or
+  // as the old CellApp rejecting the RPC because the entity is now a
+  // Ghost there — CellApp's OnClientCellRpcForward soft guard catches it.
   auto* ch_out = ResolveCellChannelForEntity(msg.target_entity_id);
   if (ch_out == nullptr) {
-    // Rate-limit this one: under the P3.3 single-CellApp overload we
-    // measured 893 drops in 30s, each one a format + log flush that
-    // further stretched BaseApp's tick loop. After CellReady lands
-    // (eliminating the normal race), legitimate hits here indicate
-    // either a late-binding script path or a partitioned CellApp —
-    // both worth one log line per second, not one per packet.
-    // This site runs on the single dispatcher thread, so plain static
-    // locals without atomics are safe.
+    // Rate-limit: a partitioned or slow CellApp can flood this log, each
+    // line a format+flush that further stretches the tick loop. One line
+    // per second is enough to diagnose a late-binding or partition bug.
+    // Runs on the single dispatcher thread, so static locals are safe.
     using SteadyClock = std::chrono::steady_clock;
     static SteadyClock::time_point last_log{};
     static uint64_t suppressed = 0;
@@ -2838,10 +2782,7 @@ void BaseApp::OnClientCellRpc(Channel& ch, const baseapp::ClientCellRpc& msg) {
 
 auto ResolveCellChannelByAddr(const std::unordered_map<Address, Channel*>& cellapp_channels,
                               const Address& cell_addr) -> Channel* {
-  // Cell address 0:0 is the "not yet placed on any Cell" sentinel —
-  // BaseEntity default-constructs cell_addr_ to {0,0} and OnCellEntityCreated
-  // / OnCurrentCell replace it. A valid cell address always has a non-
-  // zero port.
+  // Cell address 0:0 is the "not yet placed on any Cell" sentinel.
   if (cell_addr.Port() == 0) return nullptr;
   auto it = cellapp_channels.find(cell_addr);
   return it == cellapp_channels.end() ? nullptr : it->second;
@@ -2854,7 +2795,7 @@ auto BaseApp::ResolveCellChannelForEntity(EntityID target_entity_id) const -> Ch
 }
 
 // ============================================================================
-// Phase 11 PR-6 review-fix S2/S3 — Space creation via CellAppMgr
+// Space creation via CellAppMgr
 // ============================================================================
 
 auto BaseApp::RequestCreateSpace(SpaceID space_id, SpaceCreatedCallback callback) -> uint32_t {

@@ -15,13 +15,13 @@ public abstract class ClientEntity
 
     public abstract string TypeName { get; }
 
-    // Phase D2'.2: event_seq gap observability. The server stamps every
+    // event_seq gap observability. The server stamps every
     // kEntityPropertyUpdate envelope with its originating frame's event_seq
     // (see witness.cc::BuildPropertyUpdatePayload). The client records the
-    // most recent seq it has observed; when the next delta's seq jumps by
-    // more than 1, the skipped count lands in EventSeqGapsTotal and a line
-    // hits Console.Error so world_stress's tap can aggregate gap counts
-    // across a script-child fleet (Phase D2'.3).
+    // most recent seq observed; when the next delta's seq jumps by more
+    // than 1, the skipped count lands in EventSeqGapsTotal and a line hits
+    // Console.Error so world_stress's tap can aggregate gap counts across
+    // a script-child fleet.
     public ulong LastEventSeq { get; private set; }
     public ulong EventSeqGapsTotal { get; private set; }
 
@@ -42,8 +42,8 @@ public abstract class ClientEntity
     /// <c>BaseAndClient</c>). Paired with the server's
     /// <c>SerializeForOwnerClient</c>. Used by the baseline channel
     /// (<c>0xF002</c>) for the local player's own entity. Writes directly
-    /// to backing fields — does NOT fire <c>OnXxxChanged</c>, matching
-    /// BigWorld's initial-snapshot semantics.
+    /// to backing fields — does NOT fire <c>OnXxxChanged</c> because a
+    /// snapshot is an authoritative state reset, not an observed change.
     /// </summary>
     public virtual void ApplyOwnerSnapshot(ref SpanReader reader) { }
 
@@ -58,11 +58,9 @@ public abstract class ClientEntity
 
     /// <summary>
     /// Apply an incremental property delta as produced by the server's
-    /// <c>SerializeOwnerDelta</c> / <c>SerializeOtherDelta</c> (Phase 11 C10
-    /// retired the legacy <c>SerializeReplicatedDelta*</c> triad — the
-    /// per-channel reliability split moved to the transport layer). The
-    /// wire body is a dirty-flag bitmap followed by the changed field
-    /// values; the generator overrides this per entity, base no-op keeps
+    /// <c>SerializeOwnerDelta</c> / <c>SerializeOtherDelta</c>. The wire
+    /// body is a dirty-flag bitmap followed by the changed field values;
+    /// the generator overrides this per entity, and the base no-op keeps
     /// the dispatcher valid for entities with no replicable properties.
     /// </summary>
     public virtual void ApplyReplicatedDelta(ref SpanReader reader) { }
@@ -83,12 +81,11 @@ public abstract class ClientEntity
     }
 
     /// <summary>
-    /// Script hook called after every volatile position update. Takes the
-    /// new position only — matches BigWorld's <c>BWEntity::onPositionUpdated</c>
-    /// signature. Deliberately distinct from the property-change callback
-    /// chain (<c>OnXxxChanged</c>): position arrives through its own high-
-    /// frequency channel and routing it through the per-field callback path
-    /// would muddle semantics and inflate dispatch cost.
+    /// Script hook called after every volatile position update.
+    /// Deliberately distinct from the property-change callback chain
+    /// (<c>OnXxxChanged</c>): position arrives through its own high-
+    /// frequency channel and routing it through the per-field callback
+    /// path would muddle semantics and inflate dispatch cost.
     /// </summary>
     protected internal virtual void OnPositionUpdated(Vector3 newPos) { }
 
@@ -125,9 +122,8 @@ public abstract class ClientEntity
     /// the other-scope snapshot from the AoI <c>kEntityEnter</c> envelope
     /// have all been applied. Scripts override this for setup that needs
     /// the complete starting state (attach visuals, register timers, etc.).
-    /// BigWorld analogue: <c>BWEntity::onEnterWorld</c>. Distinct from
-    /// <see cref="OnInit"/> which fires on the bare instance before any
-    /// server state is consumed.
+    /// Distinct from <see cref="OnInit"/>, which fires on the bare
+    /// instance before any server state is consumed.
     /// </summary>
     protected internal virtual void OnEnterWorld() { }
 

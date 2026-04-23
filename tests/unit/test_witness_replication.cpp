@@ -1,4 +1,4 @@
-// Witness replication-delta tests — Phase 10 Step 10.5b.
+// Witness replication-delta tests.
 //
 // Exercises the per-peer catch-up pump that Witness::Update invokes
 // once per AoI entry per tick. Focuses on:
@@ -40,8 +40,8 @@ auto PayloadBody(const Captured& c) -> std::span<const std::byte> {
   return std::span<const std::byte>(c.payload.data() + 5, c.payload.size() - 5);
 }
 
-// Phase D2'.2: kEntityPropertyUpdate envelopes prepend a uint64 LE event_seq
-// to their delta/snapshot bytes. The two helpers below extract each half.
+// kEntityPropertyUpdate envelopes prepend a uint64 LE event_seq to their
+// delta/snapshot bytes; the two helpers below extract each half.
 auto PropertyUpdateSeq(const Captured& c) -> uint64_t {
   auto body = PayloadBody(c);
   uint64_t seq = 0;

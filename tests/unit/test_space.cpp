@@ -1,4 +1,4 @@
-// Space tests — Phase 10 Step 10.4.
+// Space tests.
 //
 // Covers: entity add/remove, RangeList integration on spawn/despawn,
 // Tick driving controllers, destroyed-entity compaction.

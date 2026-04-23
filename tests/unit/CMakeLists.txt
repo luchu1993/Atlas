@@ -192,7 +192,7 @@ atlas_add_test(NAME test_entity_def_registry_rpc
   DEPS atlas_entitydef atlas_serialization
 )
 
-# ── Space (Phase 10: RangeList / RangeTrigger / Controller) ────────────────
+# ── Space (RangeList / RangeTrigger / Controller) ──────────────────────────
 
 atlas_add_test(NAME test_range_list
   SOURCES test_range_list.cpp

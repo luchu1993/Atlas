@@ -16,7 +16,7 @@ namespace atlas {
 // `face_movement`: when true, the entity's forward direction is rotated to
 // look along the motion vector; when false, direction is left alone (useful
 // for e.g. strafing NPCs). The actual direction mutation lives in CellEntity
-// so this module stays position-only; a Step 10.4 wiring plumbs it through.
+// so this module stays position-only.
 // ============================================================================
 
 class MoveToPointController final : public Controller {

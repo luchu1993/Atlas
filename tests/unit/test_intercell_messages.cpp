@@ -1,4 +1,4 @@
-// Inter-CellApp message roundtrip tests — Phase 11 PR-1.
+// Inter-CellApp message roundtrip tests.
 //
 // Locks down the Serialize/Deserialize contract for every Real/Ghost +
 // Offload message so wire format changes surface as test failures rather
@@ -246,9 +246,9 @@ TEST(IntercellMessages, OffloadEntity_RoundTrip_AllBlobsEmpty) {
   EXPECT_FLOAT_EQ(rt->aoi_hysteresis, 0.f);
 }
 
-// Phase 11 C2: explicit witness state survives the round-trip so the
-// receiver can re-attach with the script-authored radius + hysteresis
-// (not CellAppConfig defaults).
+// Explicit witness state survives the round-trip so the receiver can
+// re-attach with the script-authored radius + hysteresis (not
+// CellAppConfig defaults).
 TEST(IntercellMessages, OffloadEntity_RoundTrip_WithWitnessState) {
   OffloadEntity msg;
   msg.real_entity_id = 42;
@@ -267,9 +267,9 @@ TEST(IntercellMessages, OffloadEntity_RoundTrip_WithWitnessState) {
   EXPECT_FLOAT_EQ(rt->aoi_hysteresis, 7.5f);
 }
 
-// Phase 11 C2: a serialized payload missing the witness tail (pre-C2
-// format) must deserialize with has_witness=false and zero radius/hyst.
-// Remaining()-guarded decode keeps us resilient across version skew.
+// A serialized payload missing the witness tail must deserialize with
+// has_witness=false and zero radius/hyst. Remaining()-guarded decode
+// keeps us resilient across version skew.
 TEST(IntercellMessages, OffloadEntity_Deserialize_TolerantOfMissingWitnessTail) {
   OffloadEntity msg;
   msg.real_entity_id = 9;

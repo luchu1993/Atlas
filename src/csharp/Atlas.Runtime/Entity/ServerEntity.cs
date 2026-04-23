@@ -49,19 +49,13 @@ public abstract class ServerEntity
     /// property; the base implementation returns <see langword="false"/> so
     /// entities without client-visible state pay no cost.
     /// <para/>
-    /// Called once per tick by the CellApp replication pump, <b>after</b>
-    /// user <see cref="OnTick"/> code has had the chance to mutate
-    /// properties and flip volatile dirty bits. Clears both the dirty
-    /// flags and the volatile dirty flag as a side effect of consumption
-    /// — hence "AndConsume".
+    /// Called once per tick by the CellApp replication pump after user
+    /// <see cref="OnTick"/> has run. Clears the property-dirty and volatile-
+    /// dirty flags as a side effect of consumption — hence "AndConsume".
     /// <para/>
-    /// ZERO-ALLOC CONTRACT: the four <see cref="SpanWriter"/>s are caller-
-    /// owned; they MUST be reset before the call (so stale bytes from a
-    /// prior entity don't bleed in) and the caller consumes
-    /// <c>.WrittenSpan</c> before the next Reset/Dispose. The pump is
-    /// expected to pool one writer quartet across all entities per tick,
-    /// calling <c>Reset()</c> between each. See
-    /// phase10_cellapp.md §3.3 / §3.9 for the data-flow contract.
+    /// ZERO-ALLOC: the four <see cref="SpanWriter"/>s are caller-owned and
+    /// MUST be Reset before the call; the caller consumes
+    /// <c>.WrittenSpan</c> before the next Reset/Dispose.
     /// </summary>
     /// <param name="ownerSnapshot">Full-state snapshot for the owner audience. Written only when event_seq advances.</param>
     /// <param name="otherSnapshot">Full-state snapshot for observer audience.</param>
@@ -91,8 +85,6 @@ public abstract class ServerEntity
     // VolatileDirtyCore (so the next BuildAndConsumeReplicationFrame
     // advances VolatileSeq). Direction / OnGround piggyback on the volatile
     // seq — Witness reads them directly when volatile_seq advances.
-    //
-    // See PROPERTY_SYNC_DESIGN.md §9.3 "Position 走独立通道".
     public Vector3 Position
     {
         get => _position;
@@ -203,18 +195,11 @@ public abstract class ServerEntity
     /// valid for <c>has_cell</c> entity types after a witness has been
     /// attached (typically after <see cref="GiveClientTo"/> has landed
     /// and the cell has received the EnableWitness); the call is a
-    /// logged no-op otherwise. <para/>
-    /// Mirrors BigWorld's <c>entity.setAoIRadius(radius, hyst)</c>
-    /// (witness.cpp:2109). The cell side clamps radius to
+    /// logged no-op otherwise. The cell side clamps radius to
     /// <c>[0.1, cellApp/max_aoi_radius]</c> and uses hysteresis as the
     /// leave-band width (enters fire at <paramref name="radius"/>;
-    /// leaves fire at <c>radius + hysteresis</c>). In Atlas — unlike
-    /// BigWorld — hysteresis is actually applied to the trigger,
-    /// suppressing boundary thrash.
-    /// <para/>
-    /// Split note: <c>ServerEntity</c> will be split into base/cell
-    /// mixins in a later pass — at that point this method moves to the
-    /// base-side surface where it naturally lives.
+    /// leaves fire at <c>radius + hysteresis</c>), suppressing boundary
+    /// thrash.
     /// </summary>
     public void SetAoIRadius(float radius, float hysteresis = 5f)
     {

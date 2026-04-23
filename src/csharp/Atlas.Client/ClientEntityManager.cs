@@ -112,9 +112,9 @@ public sealed class ClientEntityManager
     /// <summary>
     /// Apply an ordered property delta (<c>kEntityPropertyUpdate</c>). The
     /// caller supplies the <paramref name="eventSeq"/> taken from the
-    /// envelope prefix (Phase D2'.2): the entity records it, logs a gap
-    /// warning if the seq jumped by more than 1, and then dispatches the
-    /// delta bytes through the generator-emitted
+    /// envelope prefix: the entity records it, logs a gap warning if the
+    /// seq jumped by more than 1, then dispatches the delta bytes through
+    /// the generator-emitted
     /// <see cref="ClientEntity.ApplyReplicatedDelta"/>.
     /// </summary>
     public void ApplyPropertyDelta(uint entityId, ulong eventSeq, ReadOnlySpan<byte> delta)

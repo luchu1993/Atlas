@@ -1,4 +1,4 @@
-// Witness + AoITrigger lifecycle tests — Phase 10 Step 10.5a.
+// Witness + AoITrigger lifecycle tests.
 //
 // Tests cover:
 //   - AoI radius driving Enter / Leave events through the trigger layer
@@ -7,9 +7,9 @@
 //   - SetAoIRadius growing / shrinking the trigger in place
 //   - Witness teardown removing the trigger bounds cleanly
 //
-// The ordered-property-delta and volatile-position catch-up logic is
-// deferred to Step 10.5b; this file exercises only the state-machine
-// skeleton (ENTER_PENDING, GONE, REFRESH transitions).
+// This file exercises only the state-machine skeleton (ENTER_PENDING,
+// GONE, REFRESH transitions); ordered-property-delta and volatile-position
+// catch-up logic live in test_witness_replication.
 
 #include <cstddef>
 #include <memory>

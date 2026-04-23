@@ -1,11 +1,10 @@
-// Phase 11 PR-5 — CellAppMgr logic tests.
+// CellAppMgr logic tests.
 //
 // These exercise the manager's bookkeeping paths (register, load, space
 // creation, death, rebalance) without spinning up an EventDispatcher or
-// real Channels. Handlers accept nullptr channels and the outbound-
-// send helpers null-guard the channel field on CellAppInfo, so the
-// state-side assertions are all we need. Protocol-level integration
-// lives in PR-6.
+// real Channels. Handlers accept nullptr channels and the outbound-send
+// helpers null-guard the channel field on CellAppInfo, so the state-side
+// assertions are all we need.
 
 #include <gtest/gtest.h>
 
@@ -229,10 +228,8 @@ TEST(CellAppMgr, CellAppDeath_UnknownAddrSilent) {
   EXPECT_TRUE(h.mgr.CellApps().empty());
 }
 
-// Phase 11 C6: a death with surviving peers rehomes every orphaned leaf
-// onto a survivor so BSP routing stays correct. BigWorld parity:
-// CellApp::handleUnexpectedDeath (cellapp.cpp:312) picks findAlternateApp
-// for each dead cell.
+// A death with surviving peers rehomes every orphaned leaf onto a
+// survivor so BSP routing stays correct.
 TEST(CellAppMgr, CellAppDeath_RehomesLeavesToSurvivor) {
   CellAppMgrHarness h;
   cellappmgr::RegisterCellApp reg_a;
@@ -268,9 +265,9 @@ TEST(CellAppMgr, CellAppDeath_RehomesLeavesToSurvivor) {
   EXPECT_EQ(h.mgr.CellApps().begin()->second.internal_addr, reg_b.internal_addr);
 }
 
-// Phase 11 C6: multi-leaf Space — several leaves on the dead app all
-// get rehomed to survivor(s) in a single pass. Verifies the loop
-// doesn't bail after the first reassignment.
+// Multi-leaf Space: several leaves on the dead app all get rehomed to
+// survivor(s) in a single pass. Verifies the loop doesn't bail after the
+// first reassignment.
 TEST(CellAppMgr, CellAppDeath_RehomesAllMatchingLeaves) {
   CellAppMgrHarness h;
   cellappmgr::RegisterCellApp reg_a;
@@ -298,10 +295,10 @@ TEST(CellAppMgr, CellAppDeath_RehomesAllMatchingLeaves) {
   EXPECT_EQ(h.mgr.Spaces().at(11).bsp.Leaves()[0]->cellapp_addr, reg_b.internal_addr);
 }
 
-// Phase 11 C6: death with no survivors is log-only; leaves remain
-// pointing at the dead addr so a subsequent CellApp join can optionally
-// reclaim them (not implemented here). Without this guard the code
-// would dereference a nullptr alt host.
+// Death with no survivors is log-only; leaves remain pointing at the
+// dead addr so a subsequent CellApp join can optionally reclaim them
+// (not implemented). Without this guard the code would deref a nullptr
+// alt host.
 TEST(CellAppMgr, CellAppDeath_LastPeerLeavesSpacesOrphaned) {
   CellAppMgrHarness h;
   cellappmgr::RegisterCellApp reg_a;

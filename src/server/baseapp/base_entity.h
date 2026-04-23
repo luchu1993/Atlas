@@ -43,23 +43,20 @@ class BaseEntity {
   [[nodiscard]] auto CellEpoch() const -> uint32_t { return cell_epoch_; }
   // Space this entity's cell counterpart lives in (kInvalidSpaceID when
   // base-only). Needed by the CellApp-death restore path to look up a
-  // new host in the mgr's rehome table. BigWorld parity: Base::spaceID_
-  // (base.hpp:371).
+  // new host in the mgr's rehome table.
   [[nodiscard]] auto SpaceId() const -> SpaceID { return space_id_; }
   void SetSpaceId(SpaceID sid) { space_id_ = sid; }
 
   // Entity data blob (base-persistent properties serialised by C#
-  // Base.Serialize — DATA_BASE scope under M2's BigWorld alignment).
+  // Base.Serialize — DATA_BASE scope).
   [[nodiscard]] auto EntityData() const -> const std::vector<std::byte>& { return entity_data_; }
   void SetEntityData(std::vector<std::byte> data) { entity_data_ = std::move(data); }
 
   // Cell backup blob. Periodically pushed up by the cell (CellApp's
   // BackupCellEntity pump → baseapp handler writes here). The bytes are
-  // the output of the cell-side C# ServerEntity.Serialize, i.e. the
-  // CELL_DATA subset of properties. BaseApp NEVER deserialises them — it
-  // just owns the blob long enough to hand it off to DB writes,
-  // reviver, or a migration target. Matches BigWorld Base::cellBackupData_
-  // (bigworld/server/baseapp/base.hpp:378).
+  // the output of cell-side C# ServerEntity.Serialize (CELL_DATA subset).
+  // BaseApp NEVER deserialises them — it just owns the blob long enough
+  // to hand it off to DB writes, reviver, or a migration target.
   [[nodiscard]] auto CellBackupData() const -> const std::vector<std::byte>& {
     return cell_backup_data_;
   }

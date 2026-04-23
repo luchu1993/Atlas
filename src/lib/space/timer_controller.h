@@ -45,8 +45,7 @@ class TimerController final : public Controller {
   // Migration restore: set the running accumulator + fire count so a
   // cross-process Offload preserves "half-elapsed" timer state. Only
   // valid to call before Start() — i.e. immediately after construction
-  // on the receiving CellApp. Production callers are the Phase 11
-  // ControllerCodec on Offload arrival; tests may also use it.
+  // on the receiving CellApp.
   void RestoreRunningStateForMigration(float accumulated, uint32_t fire_count) {
     accumulated_ = accumulated;
     fire_count_ = fire_count;

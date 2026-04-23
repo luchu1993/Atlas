@@ -93,9 +93,8 @@ void RangeList::ShuffleXThenZ(RangeListNode* node, float old_x, float old_z) {
   // rectangular membership queries correct.
   ShuffleX(node, old_z);
   ShuffleZ(node, node->X());
-  (void)old_x;  // `old_x` is kept in the API for parity with BigWorld's
-                // signature and may be needed if we ever expose a Z-first
-                // ordering (e.g. for test replay). Today it's unused.
+  (void)old_x;  // Kept in the API for symmetry; may be needed if a Z-first
+                // ordering ever surfaces (e.g. for test replay). Unused today.
 }
 
 void RangeList::ShuffleX(RangeListNode* node, float old_z_of_node) {
