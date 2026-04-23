@@ -31,10 +31,21 @@ function(atlas_add_test)
     # on some MSVC configurations when the IMPORTED SHARED target is reached
     # only transitively. Deploy both explicitly for CLR-dependent tests.
     atlas_deploy_clr_runtime_if_needed(${ARG_NAME})
+    atlas_deploy_db_plugins_if_needed(${ARG_NAME})
   endif()
 
   add_test(NAME ${ARG_NAME} COMMAND ${ARG_NAME})
   set_tests_properties(${ARG_NAME} PROPERTIES LABELS "${ARG_LABEL}")
+
+  # Output directory: bin/<config>/test/
+  # Per-config properties so the config directory sits at the top level.
+  foreach(_cfg IN ITEMS Debug Release RelWithDebInfo MinSizeRel)
+    _atlas_config_to_snake("${_cfg}" _snake)
+    string(TOUPPER "${_cfg}" _CFG)
+    set_target_properties(${ARG_NAME} PROPERTIES
+      RUNTIME_OUTPUT_DIRECTORY_${_CFG} "${CMAKE_SOURCE_DIR}/bin/${_snake}/test"
+    )
+  endforeach()
 
   # Organize test targets into solution folders by label
   if(ARG_LABEL STREQUAL "integration")

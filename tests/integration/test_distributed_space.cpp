@@ -155,7 +155,9 @@ struct RealGhostFixture {
 
     real = A.app.FindEntityByBaseId(kBaseId);
     EXPECT_NE(real, nullptr);
-    if (real != nullptr) EXPECT_TRUE(real->IsReal());
+    if (real != nullptr) {
+      EXPECT_TRUE(real->IsReal());
+    }
   }
 
   ~RealGhostFixture() { EntityDefRegistry::Instance().clear(); }

@@ -5,7 +5,7 @@ target_link_libraries(atlas_db_iface
   INTERFACE atlas_entitydef atlas_foundation atlas_network atlas_server_types
 )
 
-# atlas_db — database factory
+# atlas_db — database factory (loads backend plugins at runtime via DynamicLibrary)
 add_library(atlas_db STATIC
   database_factory.cc
 )
@@ -14,8 +14,6 @@ target_include_directories(atlas_db PUBLIC "${CMAKE_SOURCE_DIR}/src/lib")
 target_link_libraries(atlas_db
   PUBLIC
     atlas_db_iface
-    atlas_db_sqlite
-    atlas_db_xml
     atlas_foundation
     atlas_network
     atlas_platform

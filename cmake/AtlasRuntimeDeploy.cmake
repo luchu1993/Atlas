@@ -104,6 +104,48 @@ function(atlas_deploy_clr_runtime target)
   endif()
 endfunction()
 
+# ── Database plugin deployment ──────────────────────────────────────────────
+#
+# Copies atlas_db_sqlite.dll and atlas_db_xml.dll next to `target`'s output
+# file at POST_BUILD.  These DLLs are loaded at runtime by the database
+# factory via DynamicLibrary::Load (bare name), so they must sit next to the
+# executable.  Idempotent.
+function(atlas_deploy_db_plugins target)
+  if(NOT WIN32)
+    return()
+  endif()
+
+  get_target_property(_already ${target} _ATLAS_DB_PLUGINS_DEPLOYED)
+  if(_already)
+    return()
+  endif()
+  set_target_properties(${target} PROPERTIES _ATLAS_DB_PLUGINS_DEPLOYED TRUE)
+
+  foreach(_plugin IN ITEMS atlas_db_sqlite_plugin atlas_db_xml_plugin)
+    if(TARGET ${_plugin})
+      add_dependencies(${target} ${_plugin})
+      add_custom_command(TARGET ${target} POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                "$<TARGET_FILE:${_plugin}>"
+                "$<TARGET_FILE_DIR:${target}>"
+        VERBATIM
+      )
+    endif()
+  endforeach()
+endfunction()
+
+# Calls atlas_deploy_db_plugins(${target}) only if the target transitively
+# links atlas_db (the database factory that loads plugins at runtime).
+function(atlas_deploy_db_plugins_if_needed target)
+  if(NOT WIN32)
+    return()
+  endif()
+  _atlas_transitively_links(${target} atlas_db _need_db)
+  if(_need_db)
+    atlas_deploy_db_plugins(${target})
+  endif()
+endfunction()
+
 # Calls atlas_deploy_clr_runtime(${target}) only if the target transitively
 # links atlas_clrscript. For use in test helpers where the CLR dependency
 # may or may not be present depending on DEPS.

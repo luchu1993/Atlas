@@ -146,3 +146,55 @@ set(_atlas_stress_targets
 
 atlas_set_folder("Test/Stress" ${_atlas_stress_targets})
 atlas_add_ide_headers(${_atlas_stress_targets})
+
+# ── Output directories ─────────────────────────────────────────────────────
+# Route build artifacts into categorised subdirectories under bin/.
+# MSVC multi-config generators auto-append /<CONFIG>.
+include(AtlasOutputDirectory)
+
+# Server executables
+atlas_set_output_dir("server"
+  atlas_baseapp atlas_baseappmgr
+  atlas_cellapp atlas_cellappmgr
+  atlas_dbapp atlas_loginapp
+  atlas_echoapp machined
+)
+
+# Client executable
+atlas_set_output_dir("client" atlas_client)
+
+# Tools
+atlas_set_output_dir("tools" ${_atlas_stress_targets} ${_atlas_app_tool_targets})
+
+# Libraries (static + third-party)
+atlas_set_output_dir("lib"
+  ${_atlas_lib_targets}
+  atlas_db_iface atlas_db_sqlite atlas_db_xml
+  atlas_baseapp_lib atlas_baseappmgr_lib
+  atlas_cellapp_lib atlas_cellappmgr_lib atlas_cellappmgr_bsp
+  atlas_dbapp_lib atlas_loginapp_lib atlas_echoapp_lib
+  atlas_machined_lib atlas_client_lib
+  atlas_platform_config atlas_server_types
+  gtest gtest_main
+  pugixml-static pugixml sqlite3
+  zlib zlibstatic
+)
+
+# DB plugin DLLs: RUNTIME goes to lib/, but ARCHIVE (import lib) stays in the
+# build tree to avoid colliding with the static lib of the same name.
+set(_plugin_configs Debug Release RelWithDebInfo MinSizeRel)
+foreach(_plugin IN ITEMS atlas_db_sqlite_plugin atlas_db_xml_plugin)
+  if(TARGET ${_plugin})
+    foreach(_cfg IN LISTS _plugin_configs)
+      _atlas_config_to_snake("${_cfg}" _snake)
+      string(TOUPPER "${_cfg}" _CFG)
+      set_target_properties(${_plugin} PROPERTIES
+        RUNTIME_OUTPUT_DIRECTORY_${_CFG} "${CMAKE_SOURCE_DIR}/bin/${_snake}/lib"
+        LIBRARY_OUTPUT_DIRECTORY_${_CFG} "${CMAKE_SOURCE_DIR}/bin/${_snake}/lib"
+      )
+    endforeach()
+  endif()
+endforeach()
+
+# Test output directory is set per-target in atlas_add_test()
+# (see tests/CMakeLists.txt).

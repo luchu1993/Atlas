@@ -21,6 +21,7 @@ include(AtlasCompilerOptions)
 include(Dependencies)
 include(FindDotNet)
 include(AtlasRuntimeDeploy)
+include(AtlasOutputDirectory)
 
 if(ATLAS_BUILD_CSHARP)
   include(AtlasDotNetBuild)

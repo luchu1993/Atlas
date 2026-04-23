@@ -8,10 +8,13 @@
 #   PROJECT_FILE    <path_to_csproj>
 #   ASSEMBLY_NAME   <output.dll>
 #   CONFIGURATION   <Debug|Release>  (default: Release)
+#   TARGET_FRAMEWORK <framework>     (default: net9.0)
 #   DEPENDS         <target ...>     (other dotnet targets this depends on)
+#   DEPLOY_TO       <subdir ...>     (bin subdirs to copy the assembly into,
+#                                     e.g. "server" "client")
 # )
 function(atlas_dotnet_project)
-  cmake_parse_arguments(ARG "" "NAME;PROJECT_FILE;ASSEMBLY_NAME;CONFIGURATION;TARGET_FRAMEWORK" "DEPENDS" ${ARGN})
+  cmake_parse_arguments(ARG "" "NAME;PROJECT_FILE;ASSEMBLY_NAME;CONFIGURATION;TARGET_FRAMEWORK" "DEPENDS;DEPLOY_TO" ${ARGN})
 
   if(NOT ARG_CONFIGURATION)
     set(ARG_CONFIGURATION "Release")
@@ -72,6 +75,28 @@ function(atlas_dotnet_project)
       DOTNET_OUTPUT_DIR "${_output_dir}"
       DOTNET_ASSEMBLY "${_output_dll}"
     )
+
+    # Deploy assembly to requested bin/ subdirectories.
+    # include_external_msproject targets don't support POST_BUILD, so we
+    # create a separate custom target that copies the DLL after the build.
+    if(ARG_DEPLOY_TO)
+      set(_config_snake "$<IF:$<CONFIG:Debug>,debug,$<IF:$<CONFIG:Release>,release,$<IF:$<CONFIG:RelWithDebInfo>,rel_with_deb_info,min_size_rel>>>")
+      set(_src_dll "${CMAKE_CURRENT_SOURCE_DIR}/${_proj_dir}/bin/${_platform}/$<CONFIG>/${ARG_TARGET_FRAMEWORK}/${ARG_ASSEMBLY_NAME}")
+      set(_deploy_commands "")
+      foreach(_subdir IN LISTS ARG_DEPLOY_TO)
+        set(_deploy_dir "${CMAKE_SOURCE_DIR}/bin/${_config_snake}/${_subdir}")
+        list(APPEND _deploy_commands
+          COMMAND ${CMAKE_COMMAND} -E make_directory "${_deploy_dir}"
+          COMMAND ${CMAKE_COMMAND} -E copy_if_different "${_src_dll}" "${_deploy_dir}/"
+        )
+      endforeach()
+      add_custom_target(${ARG_NAME}_deploy ALL
+        ${_deploy_commands}
+        COMMENT "Deploying ${ARG_ASSEMBLY_NAME}"
+        VERBATIM
+      )
+      add_dependencies(${ARG_NAME}_deploy ${ARG_NAME})
+    endif()
   else()
     # ── Non-VS (Ninja, Make, etc.): build via dotnet CLI ─────────────────
     set(_output_dir "${CMAKE_BINARY_DIR}/csharp/${ARG_NAME}")
@@ -107,5 +132,19 @@ function(atlas_dotnet_project)
       DOTNET_OUTPUT_DIR "${_output_dir}"
       DOTNET_ASSEMBLY "${_output_dll}"
     )
+
+    # Deploy assembly to requested bin/ subdirectories.
+    # Single-config generators: deploy for CMAKE_BUILD_TYPE only.
+    if(ARG_DEPLOY_TO AND CMAKE_BUILD_TYPE)
+      _atlas_config_to_snake("${CMAKE_BUILD_TYPE}" _snake)
+      foreach(_subdir IN LISTS ARG_DEPLOY_TO)
+        set(_deploy_dir "${CMAKE_SOURCE_DIR}/bin/${_snake}/${_subdir}")
+        add_custom_command(TARGET ${ARG_NAME} POST_BUILD
+          COMMAND ${CMAKE_COMMAND} -E make_directory "${_deploy_dir}"
+          COMMAND ${CMAKE_COMMAND} -E copy_if_different "${_output_dll}" "${_deploy_dir}/"
+          VERBATIM
+        )
+      endforeach()
+    endif()
   endif()
 endfunction()

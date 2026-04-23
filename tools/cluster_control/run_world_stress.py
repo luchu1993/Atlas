@@ -225,20 +225,11 @@ def build_worker_plan(args: argparse.Namespace, source_ips: list[str]) -> list[d
     return workers
 
 
-def resolve_bin_dir(build_root: Path, config: str) -> Path:
-    # The repo's default Visual Studio layout scatters exe files under
-    # build/<cfg>/src/server/<proc>/<Config>/*.exe rather than a unified
-    # bin/ tree. Support both layouts: a unified bin/ tree is preferred if
-    # present, otherwise fall back to the per-target layout which requires
-    # resolve_program to search a set of well-known prefixes.
-    candidates = [
-        build_root / "bin" / config,
-        build_root / "bin",
-    ]
-    for candidate in candidates:
-        if candidate.exists():
-            return candidate
-    return build_root
+def _config_to_snake(config: str) -> str:
+    """Convert PascalCase config name to snake_case: Debug -> debug,
+    RelWithDebInfo -> rel_with_deb_info."""
+    import re
+    return re.sub(r"([a-z])([A-Z])", r"\1_\2", config).lower()
 
 
 def _exe_suffixes() -> list[str]:
@@ -246,19 +237,19 @@ def _exe_suffixes() -> list[str]:
 
 
 def resolve_program(
-    build_root: Path, config: str, search_roots: Iterable[Path], stem: str
+    build_root: Path, config: str, subdirs: Iterable[str], stem: str
 ) -> Path:
-    # Try unified bin/<cfg> first, then each known per-target directory.
-    unified = build_root / "bin" / config
-    roots: list[Path] = [unified, build_root / "bin"]
-    roots.extend(search_roots)
-    for root in roots:
+    """Locate an executable under bin/<config_snake>/<subdir>/."""
+    config_snake = _config_to_snake(config)
+    bin_base = build_root / "bin" / config_snake
+    # Search each candidate subdirectory under bin/<config_snake>/.
+    for subdir in subdirs:
         for suffix in _exe_suffixes():
-            candidate = root / f"{stem}{suffix}"
+            candidate = bin_base / subdir / f"{stem}{suffix}"
             if candidate.exists():
                 return candidate
-    # Return the platform-native expectation so the error message is stable.
-    return unified / f"{stem}{'.exe' if os.name == 'nt' else ''}"
+    # Return the most-likely path so the error message is useful.
+    return bin_base / "server" / f"{stem}{'.exe' if os.name == 'nt' else ''}"
 
 
 @dataclass
@@ -500,7 +491,8 @@ def build_stress_args(args: argparse.Namespace, worker: dict[str, object]) -> li
 
 
 def default_client_exe(args: argparse.Namespace) -> Path:
-    return resolve_repo_root() / args.build_dir / "src" / "client" / args.config / "atlas_client.exe"
+    config_snake = _config_to_snake(args.config)
+    return resolve_repo_root() / "bin" / config_snake / "client" / "atlas_client.exe"
 
 
 def default_client_assembly(args: argparse.Namespace) -> Path:
@@ -551,52 +543,26 @@ def main() -> int:
     cellapp_specs = build_cellapp_specs(args)
 
     repo_root = resolve_repo_root()
-    build_root = (repo_root / args.build_dir).resolve()
     runtime_config = repo_root / "runtime" / "atlas_server.runtimeconfig.json"
 
-    def resolve_dotnet_assembly(rel_sample_dir: str, dll_name: str) -> Path:
-        # Two layouts: non-VS (`dotnet build` writes under
-        # build/<cfg>/csharp/) and VS (`include_external_msproject` writes
-        # under the source tree's bin/x64/<Config>/net9.0/).
-        candidates = [
-            build_root / "csharp" / rel_sample_dir / dll_name,
-            repo_root / rel_sample_dir / "bin" / "x64" / args.config / "net9.0" / dll_name,
-        ]
-        return next((p for p in candidates if p.exists()), candidates[0])
+    config_snake = _config_to_snake(args.config)
+    bin_base = repo_root / "bin" / config_snake
 
-    # Stress-test script assemblies. BaseApp loads the .Base dll (contains
-    # Account + StressAvatar type registrations, plus Account.SelectAvatar
-    # base method); CellApp loads the .Cell dll (same type registrations,
-    # plus StressAvatar.Echo / ReportPos cell methods).
-    base_assembly = resolve_dotnet_assembly(
-        "samples/stress/Atlas.StressTest.Base", "Atlas.StressTest.Base.dll"
-    )
-    cell_assembly = resolve_dotnet_assembly(
-        "samples/stress/Atlas.StressTest.Cell", "Atlas.StressTest.Cell.dll"
-    )
+    # C# assemblies deployed by CMake into bin/<config>/tools/ and bin/<config>/server/.
+    base_assembly = bin_base / "tools" / "Atlas.StressTest.Base.dll"
+    cell_assembly = bin_base / "tools" / "Atlas.StressTest.Cell.dll"
 
-    # Per-target search roots for Visual Studio layout.
-    per_target_roots = [
-        build_root / "src" / "server" / "machined" / args.config,
-        build_root / "src" / "server" / "loginapp" / args.config,
-        build_root / "src" / "server" / "baseapp" / args.config,
-        build_root / "src" / "server" / "baseappmgr" / args.config,
-        build_root / "src" / "server" / "dbapp" / args.config,
-        build_root / "src" / "server" / "cellapp" / args.config,
-        build_root / "src" / "server" / "cellappmgr" / args.config,
-        build_root / "src" / "tools" / "atlas_tool" / args.config,
-        build_root / "src" / "tools" / "login_stress" / args.config,
-        build_root / "src" / "tools" / "world_stress" / args.config,
-    ]
+    # Subdirectories to search for executables.
+    search_subdirs = ["server", "tools"]
 
-    atlas_tool = resolve_program(build_root, args.config, per_target_roots, "atlas_tool")
-    machined = resolve_program(build_root, args.config, per_target_roots, "machined")
-    loginapp = resolve_program(build_root, args.config, per_target_roots, "atlas_loginapp")
-    baseapp = resolve_program(build_root, args.config, per_target_roots, "atlas_baseapp")
-    baseappmgr = resolve_program(build_root, args.config, per_target_roots, "atlas_baseappmgr")
-    dbapp = resolve_program(build_root, args.config, per_target_roots, "atlas_dbapp")
-    cellapp = resolve_program(build_root, args.config, per_target_roots, "atlas_cellapp")
-    cellappmgr = resolve_program(build_root, args.config, per_target_roots, "atlas_cellappmgr")
+    atlas_tool = resolve_program(repo_root, args.config, search_subdirs, "atlas_tool")
+    machined = resolve_program(repo_root, args.config, search_subdirs, "machined")
+    loginapp = resolve_program(repo_root, args.config, search_subdirs, "atlas_loginapp")
+    baseapp = resolve_program(repo_root, args.config, search_subdirs, "atlas_baseapp")
+    baseappmgr = resolve_program(repo_root, args.config, search_subdirs, "atlas_baseappmgr")
+    dbapp = resolve_program(repo_root, args.config, search_subdirs, "atlas_dbapp")
+    cellapp = resolve_program(repo_root, args.config, search_subdirs, "atlas_cellapp")
+    cellappmgr = resolve_program(repo_root, args.config, search_subdirs, "atlas_cellappmgr")
 
     assert_file_exists(machined, machined.name)
     assert_file_exists(loginapp, loginapp.name)
@@ -614,7 +580,7 @@ def main() -> int:
     world_stress: Path | None = None
     if worker_plan:
         world_stress = resolve_program(
-            build_root, args.config, per_target_roots, "world_stress"
+            repo_root, args.config, search_subdirs, "world_stress"
         )
         assert_file_exists(world_stress, world_stress.name)
 

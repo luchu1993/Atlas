@@ -13,7 +13,6 @@ target_include_directories(atlas_dbapp_lib PUBLIC
 target_link_libraries(atlas_dbapp_lib
   PUBLIC
     atlas_db
-    atlas_db_xml
     atlas_entitydef
     atlas_foundation
     atlas_network
@@ -25,3 +24,4 @@ target_link_libraries(atlas_dbapp_lib
 add_executable(atlas_dbapp main.cc)
 target_link_libraries(atlas_dbapp PRIVATE atlas_dbapp_lib)
 atlas_deploy_clr_runtime(atlas_dbapp)
+atlas_deploy_db_plugins(atlas_dbapp)

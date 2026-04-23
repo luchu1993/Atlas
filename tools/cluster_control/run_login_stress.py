@@ -164,25 +164,23 @@ def build_worker_plan(args: argparse.Namespace, source_ips: list[str]) -> list[d
     return workers
 
 
-def resolve_bin_dir(build_root: Path, config: str) -> Path:
-    candidates = [
-        build_root / "bin" / config,
-        build_root / "bin",
-    ]
-    for candidate in candidates:
-        if candidate.exists():
-            return candidate
-    return candidates[0]
+def _config_to_snake(config: str) -> str:
+    """Convert PascalCase config name to snake_case."""
+    import re
+    return re.sub(r"([a-z])([A-Z])", r"\1_\2", config).lower()
 
 
-def resolve_program(bin_dir: Path, stem: str) -> Path:
+def resolve_program(repo_root: Path, config: str, subdirs: Iterable[str], stem: str) -> Path:
+    """Locate an executable under bin/<config_snake>/<subdir>/."""
+    config_snake = _config_to_snake(config)
+    bin_base = repo_root / "bin" / config_snake
     suffixes = [".exe", ""] if os.name == "nt" else ["", ".exe"]
-    for suffix in suffixes:
-        candidate = bin_dir / f"{stem}{suffix}"
-        if candidate.exists():
-            return candidate
-    # Return the platform-native expectation so the error message is stable.
-    return bin_dir / f"{stem}{'.exe' if os.name == 'nt' else ''}"
+    for subdir in subdirs:
+        for suffix in suffixes:
+            candidate = bin_base / subdir / f"{stem}{suffix}"
+            if candidate.exists():
+                return candidate
+    return bin_base / "server" / f"{stem}{'.exe' if os.name == 'nt' else ''}"
 
 
 @dataclass
@@ -420,18 +418,19 @@ def main() -> int:
     baseapp_specs = build_baseapp_specs(args)
 
     repo_root = resolve_repo_root()
-    build_root = (repo_root / args.build_dir).resolve()
-    bin_dir = resolve_bin_dir(build_root, args.config)
+    config_snake = _config_to_snake(args.config)
+    bin_base = repo_root / "bin" / config_snake
     runtime_config = repo_root / "runtime" / "atlas_server.runtimeconfig.json"
-    runtime_assembly = build_root / "csharp" / "src" / "csharp" / "Atlas.Runtime" / "Atlas.Runtime.dll"
+    runtime_assembly = bin_base / "server" / "Atlas.Runtime.dll"
 
-    atlas_tool = resolve_program(bin_dir, "atlas_tool")
-    login_stress = resolve_program(bin_dir, "login_stress")
-    machined = resolve_program(bin_dir, "machined")
-    loginapp = resolve_program(bin_dir, "atlas_loginapp")
-    baseapp = resolve_program(bin_dir, "atlas_baseapp")
-    baseappmgr = resolve_program(bin_dir, "atlas_baseappmgr")
-    dbapp = resolve_program(bin_dir, "atlas_dbapp")
+    search_subdirs = ["server", "tools"]
+    atlas_tool = resolve_program(repo_root, args.config, search_subdirs, "atlas_tool")
+    login_stress = resolve_program(repo_root, args.config, search_subdirs, "login_stress")
+    machined = resolve_program(repo_root, args.config, search_subdirs, "machined")
+    loginapp = resolve_program(repo_root, args.config, search_subdirs, "atlas_loginapp")
+    baseapp = resolve_program(repo_root, args.config, search_subdirs, "atlas_baseapp")
+    baseappmgr = resolve_program(repo_root, args.config, search_subdirs, "atlas_baseappmgr")
+    dbapp = resolve_program(repo_root, args.config, search_subdirs, "atlas_dbapp")
 
     assert_file_exists(machined, machined.name)
     assert_file_exists(loginapp, loginapp.name)
