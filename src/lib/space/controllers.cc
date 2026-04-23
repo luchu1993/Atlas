@@ -53,17 +53,20 @@ auto Controllers::Cancel(ControllerID id) -> bool {
 }
 
 void Controllers::Update(float dt) {
+  if (controllers_.empty()) return;
+
   in_update_ = true;
 
   // Snapshot the keys we want to tick, so Add() during iteration doesn't
   // accidentally tick the newcomer this tick (deterministic frame
-  // boundary). unordered_map iteration is in bucket order not insertion
-  // order — good enough; Controllers don't rely on tick order.
-  std::vector<ControllerID> tick_keys;
-  tick_keys.reserve(controllers_.size());
-  for (auto& [id, _] : controllers_) tick_keys.push_back(id);
+  // boundary). Scratch buffer is a member field so the per-tick vector
+  // allocation is amortised away; reserve is kept as a tight bound
+  // against the current size.
+  tick_keys_.clear();
+  tick_keys_.reserve(controllers_.size());
+  for (auto& [id, _] : controllers_) tick_keys_.push_back(id);
 
-  for (auto id : tick_keys) {
+  for (auto id : tick_keys_) {
     auto it = controllers_.find(id);
     if (it == controllers_.end()) continue;  // cancelled mid-loop
     auto& ctrl = *it->second;

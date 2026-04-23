@@ -450,6 +450,7 @@ void CellApp::OnCreateCellEntity(const Address& src, Channel* ch,
   auto* entity = space->AddEntity(std::move(entity_ptr));
   entity_population_[cell_id] = entity;
   base_entity_population_[msg.base_entity_id] = entity;
+  MarkRealCountDirty();
 
   // Register the new Real with the appropriate local Cell. Use the BSP
   // tree (if present) to pick which local Cell owns this position;
@@ -522,6 +523,7 @@ void CellApp::OnDestroyCellEntity(const Address& /*src*/, Channel* /*ch*/,
   base_entity_population_.erase(msg.base_entity_id);
   entity_population_.erase(cell_id);
   entity->GetSpace().RemoveEntity(cell_id);
+  MarkRealCountDirty();
 }
 
 void CellApp::OnClientCellRpcForward(const Address& src, Channel* /*ch*/,
@@ -643,6 +645,7 @@ void CellApp::OnDestroySpace(const Address& /*src*/, Channel* /*ch*/,
     base_entity_population_.erase(e.BaseEntityId());
   });
   spaces_.erase(it);
+  MarkRealCountDirty();
 }
 
 void CellApp::OnAvatarUpdate(const Address& /*src*/, Channel* /*ch*/,
@@ -670,10 +673,15 @@ void CellApp::OnAvatarUpdate(const Address& /*src*/, Channel* /*ch*/,
   const math::Vector3 delta{msg.position.x - entity->Position().x,
                             msg.position.y - entity->Position().y,
                             msg.position.z - entity->Position().z};
-  const float dist = std::sqrt(delta.x * delta.x + delta.y * delta.y + delta.z * delta.z);
-  if (dist > kMaxSingleTickMove) {
+  // Compare squared distances to avoid a sqrt on every AvatarUpdate
+  // (every client sends these at tick rate). The limit squared stays
+  // below float32's 2^24 exact-integer window even for a 1 km cap, so
+  // precision is not a concern.
+  const float dist_sq = delta.x * delta.x + delta.y * delta.y + delta.z * delta.z;
+  constexpr float kMaxSingleTickMoveSq = kMaxSingleTickMove * kMaxSingleTickMove;
+  if (dist_sq > kMaxSingleTickMoveSq) {
     ATLAS_LOG_WARNING("AvatarUpdate rejected (teleport): base_id={} delta={:.2f}m > {:.2f}m limit",
-                      msg.base_entity_id, dist, kMaxSingleTickMove);
+                      msg.base_entity_id, std::sqrt(dist_sq), kMaxSingleTickMove);
     return;
   }
 
@@ -948,6 +956,7 @@ void CellApp::OnOffloadEntity(const Address& src, Channel* ch, const cellapp::Of
     entity = space->AddEntity(std::move(entity_ptr));
     entity_population_[msg.real_entity_id] = entity;
   }
+  MarkRealCountDirty();
 
   // Install base-ID routing so subsequent RPCs land.
   base_entity_population_[msg.base_entity_id] = entity;
@@ -1130,6 +1139,7 @@ void CellApp::RevertPendingOffload(EntityID entity_id, const char* reason) {
   // preserve it), so AoI continues serving from the baseline the ghost
   // was already replicating.
   entity->ConvertGhostToReal();
+  MarkRealCountDirty();
 
   // Re-install in base_entity_population_ so client RPCs that arrive
   // before BaseApp's CurrentCell re-sync still dispatch correctly. The
@@ -1230,10 +1240,13 @@ void CellApp::OnShouldOffload(const Address& /*src*/, Channel* /*ch*/,
 }
 
 auto CellApp::NumRealEntities() const -> uint32_t {
+  if (!real_count_dirty_) return real_count_cached_;
   uint32_t n = 0;
   for (const auto& [_, ent] : entity_population_) {
     if (ent != nullptr && ent->IsReal()) ++n;
   }
+  real_count_cached_ = n;
+  real_count_dirty_ = false;
   return n;
 }
 
@@ -1547,6 +1560,7 @@ void CellApp::TickOffloadChecker() {
       // Step 5 (sender): local Real → Ghost immediately, using the peer
       // channel as the new back-channel. Drops witness + controllers.
       op.entity->ConvertRealToGhost(peer);
+      MarkRealCountDirty();
 
       // Remove from all local Cells — we're no longer authoritative here.
       for (auto& [_cell_id, cell] : space->LocalCells()) {

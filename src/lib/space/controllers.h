@@ -82,6 +82,10 @@ class Controllers {
 
   std::unordered_map<ControllerID, std::unique_ptr<Controller>> controllers_;
   std::vector<ControllerID> pending_cancel_;
+  // Reused scratch buffer for Update's per-tick key snapshot. Avoids a
+  // fresh vector allocation every tick on entities with a steady
+  // controller population.
+  std::vector<ControllerID> tick_keys_;
   ControllerID next_id_{1};
   bool in_update_{false};
 };
