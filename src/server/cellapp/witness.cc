@@ -60,14 +60,22 @@ auto MakeEnvelope(CellAoIEnvelopeKind kind, EntityID public_entity_id,
   return out;
 }
 
-// kEntityPropertyUpdate payload: uint64 LE event_seq + delta/snapshot bytes.
-// The seq prefix lets the client detect gaps (missing or out-of-order
-// reliable deltas); the client decoder is
-// Atlas.Client.ClientCallbacks.DispatchAoIEnvelope.
-auto BuildPropertyUpdatePayload(uint64_t event_seq, std::span<const std::byte> delta)
-    -> std::vector<std::byte> {
+// Fused envelope builder for kEntityPropertyUpdate. Wire layout is
+// [u8 kind][u32 LE entity_id][u64 LE event_seq][delta bytes...]. A
+// two-helper composition (BuildPropertyUpdatePayload → MakeEnvelope)
+// would allocate two vectors and copy the event_seq + delta bytes
+// twice; this single-pass version packs directly into one buffer.
+// Property updates are the hottest per-tick envelope (sent per
+// observer per peer per frame), so the saving scales with aoi_map
+// size × publish rate.
+auto BuildPropertyUpdateEnvelope(EntityID public_entity_id, uint64_t event_seq,
+                                 std::span<const std::byte> delta) -> std::vector<std::byte> {
   std::vector<std::byte> out;
-  out.reserve(sizeof(uint64_t) + delta.size());
+  out.reserve(1 + 4 + sizeof(uint64_t) + delta.size());
+  out.push_back(static_cast<std::byte>(CellAoIEnvelopeKind::kEntityPropertyUpdate));
+  for (int i = 0; i < 4; ++i) {
+    out.push_back(static_cast<std::byte>((public_entity_id >> (i * 8)) & 0xFF));
+  }
   for (int i = 0; i < 8; ++i) {
     out.push_back(static_cast<std::byte>((event_seq >> (i * 8)) & 0xFF));
   }
@@ -397,10 +405,8 @@ auto Witness::SendEntityUpdate(EntityCache& cache) -> std::size_t {
       // still advances so the next non-empty frame doesn't look like a
       // gap.
       if (!delta_bytes.empty() && !IsAllZeroDelta(delta_bytes)) {
-        auto payload = BuildPropertyUpdatePayload(frame.event_seq, delta_bytes);
         auto envelope =
-            MakeEnvelope<0>(CellAoIEnvelopeKind::kEntityPropertyUpdate,
-                            cache.entity->BaseEntityId(), std::span<const std::byte>(payload));
+            BuildPropertyUpdateEnvelope(cache.entity->BaseEntityId(), frame.event_seq, delta_bytes);
         if (send_reliable_) send_reliable_(owner_.BaseEntityId(), envelope);
         bytes += envelope.size();
       }
@@ -416,10 +422,8 @@ auto Witness::SendEntityUpdate(EntityCache& cache) -> std::size_t {
     // the client's "last seen" seq moves forward to the publishing frame.
     // The next delta with seq = latest_event_seq+1 will not trigger a gap
     // warning.
-    auto payload = BuildPropertyUpdatePayload(state->latest_event_seq, snapshot);
-    auto envelope =
-        MakeEnvelope<0>(CellAoIEnvelopeKind::kEntityPropertyUpdate, cache.entity->BaseEntityId(),
-                        std::span<const std::byte>(payload));
+    auto envelope = BuildPropertyUpdateEnvelope(cache.entity->BaseEntityId(),
+                                                state->latest_event_seq, snapshot);
     if (send_reliable_) send_reliable_(owner_.BaseEntityId(), envelope);
     bytes += envelope.size();
     cache.last_event_seq = state->latest_event_seq;
