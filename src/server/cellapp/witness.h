@@ -124,10 +124,9 @@ class Witness {
 
     static constexpr uint8_t kEnterPending = 0x01;  // just joined AoI
     static constexpr uint8_t kGone = 0x08;          // left AoI, pending leave send
-    static constexpr uint8_t kRefresh = 0x10;       // resend snapshot (e.g. after radius change)
 
     [[nodiscard]] auto IsUpdatable() const -> bool {
-      return (flags & (kEnterPending | kGone | kRefresh)) == 0;
+      return (flags & (kEnterPending | kGone)) == 0;
     }
   };
 
@@ -191,7 +190,6 @@ class Witness {
   // per-tick heap allocation on a 10Hz hot path.
   std::vector<EntityID> scratch_enter_;
   std::vector<EntityID> scratch_gone_;
-  std::vector<EntityID> scratch_refresh_;
 };
 
 }  // namespace atlas

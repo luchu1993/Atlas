@@ -222,28 +222,23 @@ auto Witness::SendEntityLeave(EntityID peer_base_id) -> std::size_t {
 void Witness::Update(uint32_t max_packet_bytes) {
   if (!trigger_) return;
 
-  // Step 1: state transitions (enter, refresh, leave). Collect peers into
-  // scratch lists so mutations to aoi_map_ during this pass (possible if
-  // SendFn re-entrantly tears down the witness) don't invalidate iterators.
+  // Step 1: state transitions (enter, leave). Collect peers into scratch
+  // lists so mutations to aoi_map_ during this pass (possible if SendFn
+  // re-entrantly tears down the witness) don't invalidate iterators.
   // Scratch buffers are class members to avoid per-tick allocation.
   scratch_enter_.clear();
   scratch_gone_.clear();
-  scratch_refresh_.clear();
   auto& enter_ids = scratch_enter_;
   auto& gone_ids = scratch_gone_;
-  auto& refresh_ids = scratch_refresh_;
   for (auto& [id, cache] : aoi_map_) {
     if (cache.flags & EntityCache::kGone)
       gone_ids.push_back(id);
     else if (cache.flags & EntityCache::kEnterPending)
       enter_ids.push_back(id);
-    else if (cache.flags & EntityCache::kRefresh)
-      refresh_ids.push_back(id);
   }
 
   // Enter/Leave are mandatory state transitions and bypass the byte
   // budget — dropping them would deadlock the aoi_map_ state machine.
-  // Refresh traffic below the priority-heap pump honours the budget.
   (void)bandwidth_deficit_;
   int bytes_sent = 0;
 
@@ -253,14 +248,6 @@ void Witness::Update(uint32_t max_packet_bytes) {
     auto& cache = it->second;
     bytes_sent += static_cast<int>(SendEntityEnter(cache));
     cache.flags &= ~EntityCache::kEnterPending;
-  }
-
-  for (auto id : refresh_ids) {
-    auto it = aoi_map_.find(id);
-    if (it == aoi_map_.end()) continue;
-    auto& cache = it->second;
-    bytes_sent += static_cast<int>(SendEntityEnter(cache));  // refresh re-sends enter
-    cache.flags &= ~EntityCache::kRefresh;
   }
 
   for (auto id : gone_ids) {
@@ -434,7 +421,6 @@ auto Witness::SendEntityUpdate(EntityCache& cache) -> std::size_t {
     if (send_reliable_) send_reliable_(owner_.BaseEntityId(), envelope);
     bytes += envelope.size();
     cache.last_event_seq = state->latest_event_seq;
-    cache.flags &= ~EntityCache::kRefresh;
   }
   return bytes;
 }
