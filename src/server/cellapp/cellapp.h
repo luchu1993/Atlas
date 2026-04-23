@@ -160,12 +160,9 @@ class CellApp : public EntityApp {
   // smoother; the value feeds SendInformCellLoad.
   [[nodiscard]] auto PersistentLoad() const -> float { return persistent_load_; }
 
-  // Count of Real entities currently hosted on this CellApp. Result is
-  // memoised — a full O(N) walk of entity_population_ runs only after a
-  // mutation that could have moved a peer across the Real/Ghost line
-  // (create, destroy, Offload, Convert*). InformCellLoad's throttle
-  // reads this every tick, so avoiding the recount on a quiet entity
-  // population is the win.
+  // Count of Real entities currently hosted on this CellApp. Walks
+  // entity_population_ once per call — cheap at Atlas's entity scales
+  // (≤ tens of thousands per cell).
   [[nodiscard]] auto NumRealEntities() const -> uint32_t;
 
   // Ghost-pump + offload-checker pass, called from OnEndOfTick. Exposed
@@ -312,13 +309,6 @@ class CellApp : public EntityApp {
   // EWMA-smoothed load factor in [0, 1+] — the number CellAppMgr's BSP
   // balancer consumes. Updated every tick by UpdatePersistentLoad.
   float persistent_load_{0.f};
-
-  // Memo cache for NumRealEntities(). MarkRealCountDirty() at every
-  // site that could move an entry across the Real/Ghost boundary; the
-  // next NumRealEntities() call recomputes once and flips dirty off.
-  mutable bool real_count_dirty_{true};
-  mutable uint32_t real_count_cached_{0};
-  void MarkRealCountDirty() const { real_count_dirty_ = true; }
 
   // Last InformCellLoad payload and dispatch time. SendInformCellLoad
   // skips the wire hop when neither value has shifted meaningfully

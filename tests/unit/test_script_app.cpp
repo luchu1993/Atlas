@@ -89,6 +89,7 @@ class MockNativeProvider : public INativeApiProvider {
   auto AddTimerController(uint32_t, float, bool, int32_t) -> int32_t override { return 0; }
   auto AddProximityController(uint32_t, float, int32_t) -> int32_t override { return 0; }
   void CancelController(uint32_t, int32_t) override {}
+  void ReportClientEventSeqGap(uint32_t, uint32_t) override {}
 };
 
 // ============================================================================

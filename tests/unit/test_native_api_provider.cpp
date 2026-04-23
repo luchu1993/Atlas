@@ -69,6 +69,18 @@ struct MockProvider final : public INativeApiProvider {
   auto AddTimerController(uint32_t, float, bool, int32_t) -> int32_t override { return 0; }
   auto AddProximityController(uint32_t, float, int32_t) -> int32_t override { return 0; }
   void CancelController(uint32_t, int32_t) override {}
+
+  // Client-only surface; mock records calls so consumers can assert the
+  // ATLAS_NATIVE_API_TABLE row is wired through without spinning up a
+  // real ClientNativeProvider.
+  int report_client_event_seq_gap_count = 0;
+  uint32_t last_event_seq_gap_entity_id = 0;
+  uint32_t last_event_seq_gap_delta = 0;
+  void ReportClientEventSeqGap(uint32_t entity_id, uint32_t gap_delta) override {
+    ++report_client_event_seq_gap_count;
+    last_event_seq_gap_entity_id = entity_id;
+    last_event_seq_gap_delta = gap_delta;
+  }
 };
 
 // ============================================================================
@@ -150,6 +162,24 @@ TEST(NativeApiProvider, EntityTypeRegistryDelegates) {
 
   mock.UnregisterAllEntityTypes();
   EXPECT_TRUE(mock.unregister_all_called);
+}
+
+TEST(NativeApiProvider, ReportClientEventSeqGapDelegates) {
+  MockProvider mock;
+  SetNativeApiProvider(&mock);
+
+  mock.ReportClientEventSeqGap(42, 7);
+  EXPECT_EQ(mock.report_client_event_seq_gap_count, 1);
+  EXPECT_EQ(mock.last_event_seq_gap_entity_id, 42u);
+  EXPECT_EQ(mock.last_event_seq_gap_delta, 7u);
+
+  // Second call with distinct args accumulates the count and replaces
+  // the recorded snapshot, mirroring how a live C# client would stream
+  // successive gap reports through.
+  mock.ReportClientEventSeqGap(100, 3);
+  EXPECT_EQ(mock.report_client_event_seq_gap_count, 2);
+  EXPECT_EQ(mock.last_event_seq_gap_entity_id, 100u);
+  EXPECT_EQ(mock.last_event_seq_gap_delta, 3u);
 }
 
 // ============================================================================
