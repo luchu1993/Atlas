@@ -74,3 +74,9 @@ atlas_add_test(NAME test_aoi_hysteresis_churn
   DEPS atlas_cellapp_lib atlas_server atlas_network
   LABEL integration
 )
+
+atlas_add_test(NAME test_aoi_visibility
+  SOURCES test_aoi_visibility.cpp
+  DEPS atlas_cellapp_lib atlas_server atlas_network
+  LABEL integration
+)
