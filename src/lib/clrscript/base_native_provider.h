@@ -47,6 +47,7 @@ class BaseNativeProvider : public INativeApiProvider {
   // ---- Entity type registry (forwards to EntityDefRegistry singleton) --
   void RegisterEntityType(const std::byte* data, int32_t len) override;
   void UnregisterAllEntityTypes() override;
+  void RegisterStruct(const std::byte* data, int32_t len) override;
 
   // ---- Persistence (default: log error + no-op) -----------------------
   void WriteToDb(uint32_t entity_id, const std::byte* entity_data, int32_t len) override;

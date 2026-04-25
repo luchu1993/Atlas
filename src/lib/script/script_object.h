@@ -18,7 +18,7 @@ namespace atlas {
 // ============================================================================
 //
 // Concrete implementations:
-//   - ClrObject (.NET GCHandle wrapper)  [ScriptPhase 2]
+//   - ClrObject (.NET GCHandle wrapper)
 //
 // Thread safety: depends on the concrete implementation.
 

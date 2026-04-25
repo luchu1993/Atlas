@@ -42,6 +42,7 @@
          never fired. -->
     <AdditionalFiles Include="..\..\entity_defs\Account.def" />
     <AdditionalFiles Include="..\..\entity_defs\StressAvatar.def" />
+    <AdditionalFiles Include="..\..\entity_defs\StressLoadComponent.def" />
   </ItemGroup>
 
 </Project>

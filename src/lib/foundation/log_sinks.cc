@@ -58,13 +58,20 @@ struct ColorPair {
 
 auto LevelColor(LogLevel level) -> ColorPair {
   switch (level) {
-    case LogLevel::kTrace: return {"\033[37m", "\033[0m"};       // white
-    case LogLevel::kDebug: return {"\033[36m", "\033[0m"};       // cyan
-    case LogLevel::kInfo: return {"\033[32m", "\033[0m"};        // green
-    case LogLevel::kWarning: return {"\033[33m", "\033[0m"};     // yellow
-    case LogLevel::kError: return {"\033[31m", "\033[0m"};       // red
-    case LogLevel::kCritical: return {"\033[1;31m", "\033[0m"};  // bold red
-    default: return {"", ""};
+    case LogLevel::kTrace:
+      return {"\033[37m", "\033[0m"};  // white
+    case LogLevel::kDebug:
+      return {"\033[36m", "\033[0m"};  // cyan
+    case LogLevel::kInfo:
+      return {"\033[32m", "\033[0m"};  // green
+    case LogLevel::kWarning:
+      return {"\033[33m", "\033[0m"};  // yellow
+    case LogLevel::kError:
+      return {"\033[31m", "\033[0m"};  // red
+    case LogLevel::kCritical:
+      return {"\033[1;31m", "\033[0m"};  // bold red
+    default:
+      return {"", ""};
   }
 }
 
@@ -81,11 +88,11 @@ void ConsoleSink::Write(LogLevel level, std::string_view category, std::string_v
   auto [color_on, color_off] = LevelColor(level);
   std::string formatted;
   if (category.empty()) {
-    formatted = std::format("{}[{}]{} [{}:{}] {}\n", color_on, LogLevelName(level), color_off,
-                            file, location.line(), message);
+    formatted = std::format("{}[{}]{} [{}:{}] {}\n", color_on, LogLevelName(level), color_off, file,
+                            location.line(), message);
   } else {
-    formatted = std::format("{}[{}]{} [{}] [{}:{}] {}\n", color_on, LogLevelName(level),
-                            color_off, category, file, location.line(), message);
+    formatted = std::format("{}[{}]{} [{}] [{}:{}] {}\n", color_on, LogLevelName(level), color_off,
+                            category, file, location.line(), message);
   }
 
   // fflush on every line, for both streams. Without this, stdout stays in

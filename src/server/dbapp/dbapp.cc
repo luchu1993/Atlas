@@ -30,20 +30,26 @@ auto DBApp::Init(int argc, char* argv[]) -> bool {
 
   const auto& cfg = Config();
 
-  // ---- Load entity definitions from JSON ----------------------------------
-  if (cfg.entitydef_path.empty()) {
-    ATLAS_LOG_WARNING("DBApp: no --entitydef-path configured; entity_defs will be empty");
-    entity_defs_.emplace();  // empty registry
+  // ---- Load entity definitions ---------------------------------------------
+  // ATDF binary container produced by Atlas.Tools.DefDump from a built
+  // C# server assembly. DBApp doesn't host CoreCLR, so it can't run the
+  // codegen-emitted [ModuleInitializer] PInvoke registrations — the
+  // offline DefDump mirrors that path and writes a wire-compatible blob
+  // for RegisterFromBinaryFile to ingest.
+  if (cfg.entitydef_bin_path.empty()) {
+    ATLAS_LOG_WARNING("DBApp: no --entitydef-bin-path configured; entity_defs will be empty");
+    entity_defs_.emplace();
   } else {
-    auto result = EntityDefRegistry::FromJsonFile(cfg.entitydef_path);
+    entity_defs_.emplace();
+    auto result = entity_defs_->RegisterFromBinaryFile(cfg.entitydef_bin_path);
     if (!result) {
       ATLAS_LOG_ERROR("DBApp: failed to load entity_defs from '{}': {}",
-                      cfg.entitydef_path.string(), result.Error().Message());
+                      cfg.entitydef_bin_path.string(), result.Error().Message());
       return false;
     }
-    entity_defs_ = std::move(*result);
-    ATLAS_LOG_INFO("DBApp: loaded {} entity types from '{}'", entity_defs_->TypeCount(),
-                   cfg.entitydef_path.string());
+    ATLAS_LOG_INFO("DBApp: loaded entity_defs from '{}' (structs={}, components={}, types={})",
+                   cfg.entitydef_bin_path.string(), result->structs, result->components,
+                   result->types);
   }
 
   // ---- Create and start database backend ----------------------------------

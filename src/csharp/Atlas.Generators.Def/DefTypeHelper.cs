@@ -113,6 +113,56 @@ internal static class DefTypeHelper
         };
     }
 
+    /// <summary>
+    /// Fixed byte width of a scalar type; 0 for variable-width (string, bytes)
+    /// or non-scalar tokens. Used by the struct sync=auto heuristic to
+    /// estimate whole-struct packet size.
+    /// </summary>
+    public static int FixedWidth(string defType)
+    {
+        return defType.ToLowerInvariant() switch
+        {
+            "bool" => 1,
+            "int8" => 1,
+            "uint8" => 1,
+            "int16" => 2,
+            "uint16" => 2,
+            "int32" => 4,
+            "uint32" => 4,
+            "int64" => 8,
+            "uint64" => 8,
+            "float" => 4,
+            "double" => 8,
+            "vector3" => 12,
+            "quaternion" => 16,
+            _ => 0,
+        };
+    }
+
+    /// <summary>
+    /// Subset of <paramref name="allProps"/> whose backing field lives on
+    /// this process side. Data lives on base XOR cell (never both); Client
+    /// mirrors every visible prop; Server is the legacy single-process
+    /// fallback and emits everything. PropertiesEmitter and
+    /// SerializationEmitter MUST consult this helper so their field/
+    /// serializer sets stay aligned — a divergence means Serialize
+    /// references a field the partial class never emitted.
+    /// </summary>
+    public static System.Collections.Generic.List<PropertyDefModel> PropertiesForContext(
+        System.Collections.Generic.List<PropertyDefModel> allProps, ProcessContext ctx)
+    {
+        return ctx switch
+        {
+            ProcessContext.Base => System.Linq.Enumerable.ToList(
+                System.Linq.Enumerable.Where(allProps, p => p.Scope.IsBase())),
+            ProcessContext.Cell => System.Linq.Enumerable.ToList(
+                System.Linq.Enumerable.Where(allProps, p => p.Scope.IsCell())),
+            ProcessContext.Client => System.Linq.Enumerable.ToList(
+                System.Linq.Enumerable.Where(allProps, p => p.Scope.IsClientVisible())),
+            _ => allProps,
+        };
+    }
+
     /// <summary>C++ PropertyDataType enum value for binary descriptor serialization.</summary>
     public static byte DataTypeId(string defType)
     {

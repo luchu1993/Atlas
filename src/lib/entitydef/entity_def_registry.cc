@@ -5,12 +5,96 @@
 #include <cstdint>
 #include <cstring>
 #include <filesystem>
+#include <fstream>
+#include <functional>
+#include <span>
+#include <string>
 
 #include "foundation/log.h"
 #include "serialization/binary_stream.h"
-#include "serialization/data_section.h"
 
 namespace atlas {
+
+// ReadDataTypeRef reads [kind byte][body]; ReadDataTypeRefBody reads only
+// the body with kind supplied by the caller. The split exists because the
+// top-level kind of a container property is already carried by
+// PropertyDescriptor::data_type — repeating it on the wire would waste one
+// byte per container property.
+namespace {
+auto ReadDataTypeRef(BinaryReader& reader, std::size_t depth) -> std::optional<DataTypeRef>;
+auto ReadDataTypeRefBody(BinaryReader& reader, PropertyDataType kind, std::size_t depth)
+    -> std::optional<DataTypeRef>;
+
+// Shared property-record reader. RegisterType (entity body) and
+// RegisterComponent (component schema) emit identical property records —
+// keeping one reader prevents the two paths from drifting.
+bool ReadPropertyRecord(BinaryReader& reader, PropertyDescriptor& prop, std::string_view owner) {
+  auto prop_name = reader.ReadString();
+  auto data_type = reader.Read<uint8_t>();
+  auto scope = reader.Read<uint8_t>();
+  auto persistent = reader.Read<uint8_t>();
+  auto detail_level = reader.Read<uint8_t>();
+  auto index = reader.Read<uint16_t>();
+
+  if (!prop_name || !data_type || !scope || !persistent || !detail_level || !index) {
+    ATLAS_LOG_ERROR("read_property: header read failed for '{}'", owner);
+    return false;
+  }
+
+  prop.name = std::move(*prop_name);
+  prop.data_type = static_cast<PropertyDataType>(*data_type);
+  if (prop.data_type == PropertyDataType::kInvalid) {
+    ATLAS_LOG_ERROR("read_property: '{}.{}' has kInvalid data_type — generator bug", owner,
+                    prop.name);
+    return false;
+  }
+  prop.scope = static_cast<ReplicationScope>(*scope);
+  prop.persistent = *persistent != 0;
+  prop.detail_level = *detail_level;
+  prop.index = *index;
+
+  auto id_flag = reader.Read<uint8_t>();
+  auto reliable_flag = reader.Read<uint8_t>();
+  if (!id_flag || !reliable_flag) {
+    ATLAS_LOG_ERROR("read_property: flags read failed for '{}.{}'", owner, prop.name);
+    return false;
+  }
+  prop.identifier = *id_flag != 0;
+  prop.reliable = *reliable_flag != 0;
+
+  // Container properties carry `[DataTypeRef body] [PackedInt max_size]`.
+  // The body skips its leading kind byte because prop.data_type already
+  // pins the top-level kind; saving one byte per container property.
+  const bool is_container = prop.data_type == PropertyDataType::kList ||
+                            prop.data_type == PropertyDataType::kDict ||
+                            prop.data_type == PropertyDataType::kStruct;
+  if (is_container) {
+    auto type_ref = ReadDataTypeRefBody(reader, prop.data_type, /*depth=*/0);
+    if (!type_ref) {
+      ATLAS_LOG_ERROR("read_property: type_ref read failed for '{}.{}'", owner, prop.name);
+      return false;
+    }
+    prop.type_ref = std::move(*type_ref);
+
+    auto max_size = reader.ReadPackedInt();
+    if (!max_size) {
+      ATLAS_LOG_ERROR("read_property: max_size read failed for '{}.{}'", owner, prop.name);
+      return false;
+    }
+    prop.max_size = *max_size;
+  }
+
+  if (!ValidatePropertyInvariant(prop)) {
+    ATLAS_LOG_ERROR(
+        "read_property: '{}.{}' fails data_type/type_ref invariant "
+        "(data_type={}, type_ref={})",
+        owner, prop.name, static_cast<int>(prop.data_type),
+        prop.type_ref.has_value() ? "present" : "absent");
+    return false;
+  }
+  return true;
+}
+}  // namespace
 
 EntityDefRegistry& EntityDefRegistry::Instance() {
   static EntityDefRegistry registry;
@@ -60,35 +144,10 @@ bool EntityDefRegistry::RegisterType(const std::byte* data, int32_t len) {
 
   for (uint32_t i = 0; i < *prop_count_result; ++i) {
     PropertyDescriptor prop;
-    auto prop_name = reader.ReadString();
-    auto data_type = reader.Read<uint8_t>();
-    auto scope = reader.Read<uint8_t>();
-    auto persistent = reader.Read<uint8_t>();
-    auto detail_level = reader.Read<uint8_t>();
-    auto index = reader.Read<uint16_t>();
-
-    if (!prop_name || !data_type || !scope || !persistent || !detail_level || !index) {
+    if (!ReadPropertyRecord(reader, prop, desc.name)) {
       ATLAS_LOG_ERROR("register_type: failed to read property {} for '{}'", i, desc.name);
       return false;
     }
-
-    prop.name = std::move(*prop_name);
-    prop.data_type = static_cast<PropertyDataType>(*data_type);
-    prop.scope = static_cast<ReplicationScope>(*scope);
-    prop.persistent = *persistent != 0;
-    prop.detail_level = *detail_level;
-    prop.index = *index;
-
-    // Protocol v2: identifier + reliable flags are emitted explicitly per property.
-    auto id_flag = reader.Read<uint8_t>();
-    auto reliable_flag = reader.Read<uint8_t>();
-    if (!id_flag || !reliable_flag) {
-      ATLAS_LOG_ERROR("register_type: failed to read property flags for '{}'", desc.name);
-      return false;
-    }
-    prop.identifier = *id_flag != 0;
-    prop.reliable = *reliable_flag != 0;
-
     desc.properties.push_back(std::move(prop));
   }
 
@@ -138,6 +197,36 @@ bool EntityDefRegistry::RegisterType(const std::byte* data, int32_t len) {
     if (internal_comp && external_comp) {
       desc.internal_compression = static_cast<EntityCompression>(*internal_comp);
       desc.external_compression = static_cast<EntityCompression>(*external_comp);
+    }
+  }
+
+  // Slot section (optional). Older blobs omit it entirely; newer blobs that
+  // declare components emit at least the slot count. We treat any tail at
+  // this point as the slot section to avoid the trailing-bytes warning
+  // hiding a forgotten slot table.
+  if (reader.Remaining() > 0) {
+    auto slot_count = reader.ReadPackedInt();
+    if (!slot_count) {
+      ATLAS_LOG_ERROR("register_type: failed to read slot count for '{}'", desc.name);
+      return false;
+    }
+    for (uint32_t i = 0; i < *slot_count; ++i) {
+      EntitySlotDescriptor slot;
+      auto slot_idx = reader.Read<uint16_t>();
+      auto slot_name = reader.ReadString();
+      auto component_type_id = reader.Read<uint16_t>();
+      auto slot_scope = reader.Read<uint8_t>();
+      auto lazy = reader.Read<uint8_t>();
+      if (!slot_idx || !slot_name || !component_type_id || !slot_scope || !lazy) {
+        ATLAS_LOG_ERROR("register_type: failed to read slot {} for '{}'", i, desc.name);
+        return false;
+      }
+      slot.slot_idx = *slot_idx;
+      slot.slot_name = std::move(*slot_name);
+      slot.component_type_id = *component_type_id;
+      slot.scope = static_cast<ReplicationScope>(*slot_scope);
+      slot.lazy = *lazy != 0;
+      desc.slots.push_back(std::move(slot));
     }
   }
 
@@ -244,125 +333,441 @@ void EntityDefRegistry::clear() {
   name_index.clear();
   id_index.clear();
   rpc_to_type.clear();
+  structs.clear();
+  struct_id_index.clear();
+  struct_name_index.clear();
+  components.clear();
+  component_id_index.clear();
+  component_name_index.clear();
   ATLAS_LOG_INFO("EntityDefRegistry cleared");
 }
 
-// ============================================================================
-// from_json_file — load entity definitions from entity_defs.json
-// ============================================================================
+// DataTypeRef wire layout:
+//   [u8 kind]
+//   kind <= kCustom : no trailing bytes
+//   kind == kList   : [DataTypeRef elem]
+//   kind == kDict   : [DataTypeRef key] [DataTypeRef value]
+//   kind == kStruct : [u16 struct_id]
+//
+// StructDescriptor blob (consumed by RegisterStruct):
+//   [u16 struct_id] [string name] [PackedInt field_count]
+//   for each field: [string name] [DataTypeRef]
 
-auto EntityDefRegistry::FromJsonFile(const std::filesystem::path& path)
-    -> Result<EntityDefRegistry> {
-  auto tree_result = DataSection::FromJson(path);
-  if (!tree_result) {
-    return tree_result.Error();
+namespace {
+
+auto ReadDataTypeRefBody(BinaryReader& reader, PropertyDataType kind, std::size_t depth)
+    -> std::optional<DataTypeRef> {
+  if (depth > kMaxDataTypeDepth) {
+    ATLAS_LOG_ERROR("data_type_ref: nesting exceeds max depth {}", kMaxDataTypeDepth);
+    return std::nullopt;
   }
-  auto* root = (*tree_result)->Root();
-  if (root == nullptr) {
-    return Error{ErrorCode::kInvalidArgument, "entity_defs.json: empty document"};
-  }
 
-  // Root must have a "types" array child
-  auto* typesnode = root->Child("types");
-  if (typesnode == nullptr) {
-    return Error{ErrorCode::kInvalidArgument, "entity_defs.json: missing 'types' array"};
-  }
+  DataTypeRef out;
+  out.kind = kind;
 
-  EntityDefRegistry registry;
+  switch (kind) {
+    case PropertyDataType::kBool:
+    case PropertyDataType::kInt8:
+    case PropertyDataType::kUInt8:
+    case PropertyDataType::kInt16:
+    case PropertyDataType::kUInt16:
+    case PropertyDataType::kInt32:
+    case PropertyDataType::kUInt32:
+    case PropertyDataType::kInt64:
+    case PropertyDataType::kUInt64:
+    case PropertyDataType::kFloat:
+    case PropertyDataType::kDouble:
+    case PropertyDataType::kString:
+    case PropertyDataType::kBytes:
+    case PropertyDataType::kVector3:
+    case PropertyDataType::kQuaternion:
+    case PropertyDataType::kCustom:
+      // Scalar: no trailing data.
+      return out;
 
-  for (auto* type_node : typesnode->Children()) {
-    EntityTypeDescriptor desc;
-    desc.type_id = static_cast<uint16_t>(type_node->ReadUint("type_id", 0));
-    desc.name = type_node->ReadString("name");
-    desc.has_cell = type_node->ReadBool("has_cell", false);
-    desc.has_client = type_node->ReadBool("has_client", false);
+    case PropertyDataType::kList: {
+      auto elem = ReadDataTypeRef(reader, depth + 1);
+      if (!elem) return std::nullopt;
+      out.elem = std::make_shared<DataTypeRef>(std::move(*elem));
+      return out;
+    }
 
-    auto* props_node = type_node->Child("properties");
-    if (props_node != nullptr) {
-      for (auto* prop_node : props_node->Children()) {
-        PropertyDescriptor prop;
-        prop.name = prop_node->ReadString("name");
-        prop.persistent = prop_node->ReadBool("persistent", false);
-        prop.identifier = prop_node->ReadBool("identifier", false);
-        prop.reliable = prop_node->ReadBool("reliable", false);
-        prop.index = static_cast<uint16_t>(prop_node->ReadUint("index", 0));
+    case PropertyDataType::kDict: {
+      auto key = ReadDataTypeRef(reader, depth + 1);
+      if (!key) return std::nullopt;
+      auto val = ReadDataTypeRef(reader, depth + 1);
+      if (!val) return std::nullopt;
+      out.key = std::make_shared<DataTypeRef>(std::move(*key));
+      out.elem = std::make_shared<DataTypeRef>(std::move(*val));
+      return out;
+    }
 
-        // data_type from string
-        auto type_str = prop_node->ReadString("type");
-        if (type_str == "bool")
-          prop.data_type = PropertyDataType::kBool;
-        else if (type_str == "int8")
-          prop.data_type = PropertyDataType::kInt8;
-        else if (type_str == "uint8")
-          prop.data_type = PropertyDataType::kUInt8;
-        else if (type_str == "int16")
-          prop.data_type = PropertyDataType::kInt16;
-        else if (type_str == "uint16")
-          prop.data_type = PropertyDataType::kUInt16;
-        else if (type_str == "int32")
-          prop.data_type = PropertyDataType::kInt32;
-        else if (type_str == "uint32")
-          prop.data_type = PropertyDataType::kUInt32;
-        else if (type_str == "int64")
-          prop.data_type = PropertyDataType::kInt64;
-        else if (type_str == "uint64")
-          prop.data_type = PropertyDataType::kUInt64;
-        else if (type_str == "float")
-          prop.data_type = PropertyDataType::kFloat;
-        else if (type_str == "double")
-          prop.data_type = PropertyDataType::kDouble;
-        else if (type_str == "string")
-          prop.data_type = PropertyDataType::kString;
-        else if (type_str == "bytes")
-          prop.data_type = PropertyDataType::kBytes;
-        else if (type_str == "vector3")
-          prop.data_type = PropertyDataType::kVector3;
-        else if (type_str == "quaternion")
-          prop.data_type = PropertyDataType::kQuaternion;
-        else
-          prop.data_type = PropertyDataType::kCustom;
-
-        // scope
-        auto scope_str = prop_node->ReadString("scope", "cell_private");
-        if (scope_str == "cell_public")
-          prop.scope = ReplicationScope::kCellPublic;
-        else if (scope_str == "own_client")
-          prop.scope = ReplicationScope::kOwnClient;
-        else if (scope_str == "other_clients")
-          prop.scope = ReplicationScope::kOtherClients;
-        else if (scope_str == "all_clients")
-          prop.scope = ReplicationScope::kAllClients;
-        else if (scope_str == "cell_public_and_own")
-          prop.scope = ReplicationScope::kCellPublicAndOwn;
-        else if (scope_str == "base" || scope_str == "base_only")
-          prop.scope = ReplicationScope::kBase;
-        else if (scope_str == "base_and_client")
-          prop.scope = ReplicationScope::kBaseAndClient;
-        else
-          prop.scope = ReplicationScope::kCellPrivate;
-
-        prop.detail_level = static_cast<uint8_t>(prop_node->ReadUint("detail_level", 5));
-        desc.properties.push_back(std::move(prop));
+    case PropertyDataType::kStruct: {
+      auto sid = reader.Read<uint16_t>();
+      if (!sid) {
+        ATLAS_LOG_ERROR("data_type_ref: kStruct missing struct_id");
+        return std::nullopt;
       }
+      out.struct_id = *sid;
+      return out;
     }
-
-    if (desc.name.empty() || desc.type_id == 0) {
-      ATLAS_LOG_WARNING("from_json_file: skipping invalid type entry (name='{}', id={})", desc.name,
-                        desc.type_id);
-      continue;
-    }
-
-    auto idx = registry.types.size();
-    for (const auto& rpc : desc.rpcs) registry.rpc_to_type[rpc.rpc_id] = idx;
-    registry.name_index[desc.name] = idx;
-    registry.id_index[desc.type_id] = idx;
-
-    ATLAS_LOG_INFO("from_json_file: loaded type '{}' (id={}, {} props)", desc.name, desc.type_id,
-                   desc.properties.size());
-    registry.types.push_back(std::move(desc));
   }
 
-  return registry;
+  ATLAS_LOG_ERROR("data_type_ref: unknown kind {}", static_cast<int>(kind));
+  return std::nullopt;
+}
+
+auto ReadDataTypeRef(BinaryReader& reader, std::size_t depth) -> std::optional<DataTypeRef> {
+  auto kind_byte = reader.Read<uint8_t>();
+  if (!kind_byte) {
+    ATLAS_LOG_ERROR("data_type_ref: failed to read kind byte");
+    return std::nullopt;
+  }
+  return ReadDataTypeRefBody(reader, static_cast<PropertyDataType>(*kind_byte), depth);
+}
+
+}  // namespace
+
+bool EntityDefRegistry::RegisterStruct(const std::byte* data, int32_t len) {
+  if (data == nullptr || len <= 0) {
+    ATLAS_LOG_ERROR("register_struct: null data or zero length");
+    return false;
+  }
+
+  BinaryReader reader(std::span<const std::byte>(data, static_cast<size_t>(len)));
+
+  auto sid_result = reader.Read<uint16_t>();
+  if (!sid_result) {
+    ATLAS_LOG_ERROR("register_struct: failed to read struct_id");
+    return false;
+  }
+  const uint16_t sid = *sid_result;
+
+  auto name_result = reader.ReadString();
+  if (!name_result) {
+    ATLAS_LOG_ERROR("register_struct: failed to read name (struct_id={})", sid);
+    return false;
+  }
+
+  StructDescriptor desc;
+  desc.id = sid;
+  desc.name = std::move(*name_result);
+
+  auto field_count_result = reader.ReadPackedInt();
+  if (!field_count_result) {
+    ATLAS_LOG_ERROR("register_struct: failed to read field count for '{}'", desc.name);
+    return false;
+  }
+
+  for (uint32_t i = 0; i < *field_count_result; ++i) {
+    FieldDescriptor field;
+    auto fname = reader.ReadString();
+    if (!fname) {
+      ATLAS_LOG_ERROR("register_struct: failed to read field {} name for '{}'", i, desc.name);
+      return false;
+    }
+    field.name = std::move(*fname);
+    auto type = ReadDataTypeRef(reader, /*depth=*/0);
+    if (!type) {
+      ATLAS_LOG_ERROR("register_struct: failed to read field '{}' type for '{}'", field.name,
+                      desc.name);
+      return false;
+    }
+    field.type = std::move(*type);
+    desc.fields.push_back(std::move(field));
+  }
+
+  if (reader.Remaining() > 0) {
+    ATLAS_LOG_WARNING("register_struct: {} trailing bytes after '{}'", reader.Remaining(),
+                      desc.name);
+  }
+
+  // Collision handling: allow re-register of the same (id, name) as hot-reload,
+  // but reject name/id mismatch which almost certainly means a bug in the
+  // generator.
+  if (auto it = struct_id_index.find(desc.id); it != struct_id_index.end()) {
+    if (structs[it->second].name != desc.name) {
+      ATLAS_LOG_ERROR("register_struct: id {} already bound to '{}', rejecting '{}'", desc.id,
+                      structs[it->second].name, desc.name);
+      return false;
+    }
+    ATLAS_LOG_WARNING("register_struct: replacing existing struct '{}' (id={})", desc.name,
+                      desc.id);
+    structs[it->second] = std::move(desc);
+    return true;
+  }
+  if (auto it = struct_name_index.find(desc.name); it != struct_name_index.end()) {
+    if (structs[it->second].id != desc.id) {
+      ATLAS_LOG_ERROR("register_struct: name '{}' already bound to id {}, rejecting id {}",
+                      desc.name, structs[it->second].id, desc.id);
+      return false;
+    }
+    // An (id, name) pair that matches both would have returned in the id
+    // branch above. Only the id-new / name-duplicate case reaches here,
+    // which the `structs[it->second].id != desc.id` check catches and
+    // rejects. No matching-match fallthrough is possible.
+  }
+
+  auto idx = structs.size();
+  struct_id_index[desc.id] = idx;
+  struct_name_index[desc.name] = idx;
+  ATLAS_LOG_INFO("Registered struct '{}' (id={}, {} fields)", desc.name, desc.id,
+                 desc.fields.size());
+  structs.push_back(std::move(desc));
+  return true;
+}
+
+const StructDescriptor* EntityDefRegistry::FindStructById(uint16_t struct_id) const {
+  auto it = struct_id_index.find(struct_id);
+  if (it == struct_id_index.end()) return nullptr;
+  return &structs[it->second];
+}
+
+const StructDescriptor* EntityDefRegistry::FindStructByName(std::string_view name) const {
+  auto it = struct_name_index.find(std::string(name));
+  if (it == struct_name_index.end()) return nullptr;
+  return &structs[it->second];
+}
+
+bool EntityDefRegistry::RegisterComponent(const std::byte* data, int32_t len) {
+  if (data == nullptr || len <= 0) {
+    ATLAS_LOG_ERROR("register_component: null data or zero length");
+    return false;
+  }
+
+  BinaryReader reader(std::span<const std::byte>(data, static_cast<size_t>(len)));
+
+  ComponentDescriptor desc;
+
+  auto type_id_result = reader.Read<uint16_t>();
+  if (!type_id_result) {
+    ATLAS_LOG_ERROR("register_component: failed to read component_type_id");
+    return false;
+  }
+  desc.component_type_id = *type_id_result;
+
+  auto name_result = reader.ReadString();
+  if (!name_result) {
+    ATLAS_LOG_ERROR("register_component: failed to read name (id={})", desc.component_type_id);
+    return false;
+  }
+  desc.name = std::move(*name_result);
+
+  // Empty base_name (`""`) means "no inheritance". Resolution to a concrete
+  // ComponentDescriptor* happens at attach time, not here, because the base
+  // may be registered after this descriptor in a single startup batch.
+  auto base_name_result = reader.ReadString();
+  if (!base_name_result) {
+    ATLAS_LOG_ERROR("register_component: failed to read base_name for '{}'", desc.name);
+    return false;
+  }
+  desc.base_name = std::move(*base_name_result);
+
+  auto locality_result = reader.Read<uint8_t>();
+  if (!locality_result) {
+    ATLAS_LOG_ERROR("register_component: failed to read locality for '{}'", desc.name);
+    return false;
+  }
+  desc.locality = static_cast<ComponentLocality>(*locality_result);
+
+  auto prop_count_result = reader.ReadPackedInt();
+  if (!prop_count_result) {
+    ATLAS_LOG_ERROR("register_component: failed to read property count for '{}'", desc.name);
+    return false;
+  }
+
+  for (uint32_t i = 0; i < *prop_count_result; ++i) {
+    PropertyDescriptor prop;
+    if (!ReadPropertyRecord(reader, prop, desc.name)) {
+      ATLAS_LOG_ERROR("register_component: failed to read property {} for '{}'", i, desc.name);
+      return false;
+    }
+    desc.properties.push_back(std::move(prop));
+  }
+
+  if (reader.Remaining() > 0) {
+    ATLAS_LOG_WARNING("register_component: {} trailing bytes after '{}'", reader.Remaining(),
+                      desc.name);
+  }
+
+  // Mirror RegisterStruct's collision policy: same (id, name) is a tolerated
+  // hot-reload; mismatched id↔name is rejected because it is almost certainly
+  // a generator bug, and silently merging would corrupt later lookups.
+  if (auto it = component_id_index.find(desc.component_type_id); it != component_id_index.end()) {
+    if (components[it->second].name != desc.name) {
+      ATLAS_LOG_ERROR("register_component: id {} already bound to '{}', rejecting '{}'",
+                      desc.component_type_id, components[it->second].name, desc.name);
+      return false;
+    }
+    ATLAS_LOG_WARNING("register_component: replacing existing component '{}' (id={})", desc.name,
+                      desc.component_type_id);
+    components[it->second] = std::move(desc);
+    return true;
+  }
+  if (auto it = component_name_index.find(desc.name); it != component_name_index.end()) {
+    if (components[it->second].component_type_id != desc.component_type_id) {
+      ATLAS_LOG_ERROR("register_component: name '{}' already bound to id {}, rejecting id {}",
+                      desc.name, components[it->second].component_type_id, desc.component_type_id);
+      return false;
+    }
+  }
+
+  auto idx = components.size();
+  component_id_index[desc.component_type_id] = idx;
+  component_name_index[desc.name] = idx;
+  ATLAS_LOG_INFO("Registered component '{}' (id={}, base='{}', {} props, locality={})", desc.name,
+                 desc.component_type_id, desc.base_name, desc.properties.size(),
+                 static_cast<int>(desc.locality));
+  components.push_back(std::move(desc));
+  return true;
+}
+
+const ComponentDescriptor* EntityDefRegistry::FindComponentById(uint16_t component_type_id) const {
+  auto it = component_id_index.find(component_type_id);
+  if (it == component_id_index.end()) return nullptr;
+  return &components[it->second];
+}
+
+const ComponentDescriptor* EntityDefRegistry::FindComponentByName(std::string_view name) const {
+  auto it = component_name_index.find(std::string(name));
+  if (it == component_name_index.end()) return nullptr;
+  return &components[it->second];
+}
+
+// ============================================================================
+// Container-file reader — Atlas.Tools.DefDump → C++ registry
+// ============================================================================
+
+namespace {
+
+// Reads one [PackedInt blob_len][blob bytes] record, dispatches the bytes
+// to `register_fn`. Returns the number of bytes consumed via the reader's
+// own position tracking; an Error result signals a malformed record OR a
+// downstream Register* failure (whichever surfaces first).
+auto ReadAndRegisterRecord(BinaryReader& reader, std::string_view section,
+                           const std::function<bool(const std::byte*, int32_t)>& register_fn)
+    -> Result<void> {
+  auto blob_len_result = reader.ReadPackedInt();
+  if (!blob_len_result) {
+    return Error{ErrorCode::kInvalidArgument,
+                 std::string("RegisterFromBinaryFile: failed to read blob length in ") +
+                     std::string(section) + " section"};
+  }
+  auto blob_len = *blob_len_result;
+  auto bytes_result = reader.ReadBytes(blob_len);
+  if (!bytes_result) {
+    return Error{ErrorCode::kInvalidArgument,
+                 std::string("RegisterFromBinaryFile: failed to read blob bytes in ") +
+                     std::string(section) + " section"};
+  }
+  if (!register_fn(bytes_result->data(), static_cast<int32_t>(blob_len))) {
+    return Error{ErrorCode::kInvalidArgument,
+                 std::string("RegisterFromBinaryFile: register failed for ") +
+                     std::string(section) + " record"};
+  }
+  return {};
+}
+
+}  // namespace
+
+auto EntityDefRegistry::RegisterFromBinaryFile(const std::filesystem::path& path)
+    -> Result<LoadedCounts> {
+  std::ifstream f(path, std::ios::binary | std::ios::ate);
+  if (!f) {
+    return Error{ErrorCode::kInvalidArgument,
+                 std::string("RegisterFromBinaryFile: cannot open ") + path.string()};
+  }
+  // Slurp into a buffer — descriptor files are tens of KB at most.
+  // istreambuf_iterator<char> can't construct vector<std::byte> directly,
+  // so seek+read the raw bytes.
+  std::streamsize size = f.tellg();
+  if (size < 0) {
+    return Error{ErrorCode::kInvalidArgument,
+                 std::string("RegisterFromBinaryFile: tellg failed for ") + path.string()};
+  }
+  std::vector<std::byte> buf(static_cast<size_t>(size));
+  f.seekg(0, std::ios::beg);
+  if (size > 0) {
+    f.read(reinterpret_cast<char*>(buf.data()), size);
+    if (f.gcount() != size) {
+      return Error{ErrorCode::kInvalidArgument,
+                   std::string("RegisterFromBinaryFile: short read for ") + path.string()};
+    }
+  }
+  return RegisterFromBinaryBuffer(std::span<const std::byte>(buf.data(), buf.size()));
+}
+
+auto EntityDefRegistry::RegisterFromBinaryBuffer(std::span<const std::byte> buf)
+    -> Result<LoadedCounts> {
+  BinaryReader reader(buf);
+
+  auto magic_result = reader.Read<uint32_t>();
+  if (!magic_result || *magic_result != kBinaryFileMagic) {
+    return Error{ErrorCode::kInvalidArgument,
+                 "RegisterFromBinaryBuffer: bad magic (expected 'ATDF')"};
+  }
+  auto version_result = reader.Read<uint16_t>();
+  if (!version_result || *version_result != kBinaryFileVersion) {
+    return Error{ErrorCode::kInvalidArgument,
+                 std::string("RegisterFromBinaryBuffer: unsupported version ") +
+                     std::to_string(version_result.HasValue() ? *version_result : 0)};
+  }
+  auto flags_result = reader.Read<uint16_t>();
+  if (!flags_result) {
+    return Error{ErrorCode::kInvalidArgument,
+                 "RegisterFromBinaryBuffer: failed to read flags word"};
+  }
+  // Flags is reserved — non-zero is OK for forward compat as long as the
+  // bits don't change framing. Today we ignore them.
+  (void)*flags_result;
+
+  LoadedCounts out;
+
+  // Section order: structs → components → types. References resolve in
+  // this order: types reference component_type_id (must exist), and
+  // components / entity properties may reference struct_id (must exist).
+  auto struct_count_result = reader.ReadPackedInt();
+  if (!struct_count_result) {
+    return Error{ErrorCode::kInvalidArgument,
+                 "RegisterFromBinaryBuffer: failed to read struct count"};
+  }
+  for (uint32_t i = 0; i < *struct_count_result; ++i) {
+    auto r = ReadAndRegisterRecord(
+        reader, "struct", [this](const std::byte* d, int32_t n) { return RegisterStruct(d, n); });
+    if (!r) return r.Error();
+  }
+  out.structs = *struct_count_result;
+
+  auto component_count_result = reader.ReadPackedInt();
+  if (!component_count_result) {
+    return Error{ErrorCode::kInvalidArgument,
+                 "RegisterFromBinaryBuffer: failed to read component count"};
+  }
+  for (uint32_t i = 0; i < *component_count_result; ++i) {
+    auto r = ReadAndRegisterRecord(reader, "component", [this](const std::byte* d, int32_t n) {
+      return RegisterComponent(d, n);
+    });
+    if (!r) return r.Error();
+  }
+  out.components = *component_count_result;
+
+  auto type_count_result = reader.ReadPackedInt();
+  if (!type_count_result) {
+    return Error{ErrorCode::kInvalidArgument,
+                 "RegisterFromBinaryBuffer: failed to read type count"};
+  }
+  for (uint32_t i = 0; i < *type_count_result; ++i) {
+    auto r = ReadAndRegisterRecord(
+        reader, "type", [this](const std::byte* d, int32_t n) { return RegisterType(d, n); });
+    if (!r) return r.Error();
+  }
+  out.types = *type_count_result;
+
+  if (reader.Remaining() > 0) {
+    ATLAS_LOG_WARNING("RegisterFromBinaryBuffer: {} trailing bytes after type section",
+                      reader.Remaining());
+  }
+  return out;
 }
 
 // ============================================================================

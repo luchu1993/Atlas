@@ -25,6 +25,14 @@ struct ClientEventCounters {
   uint64_t on_destroy{0};
   uint64_t on_hp_changed{0};
   uint64_t on_position_updated{0};
+  // Component-coverage counters. These fire from server-side periodic
+  // RPCs that exercise the component RPC envelope (slot-encoded rpc_id)
+  // and container/struct RPC arg encoding. Non-zero counts are the
+  // success signal that component RPC end-to-end works.
+  uint64_t on_main_weapon_changed{0};  // entity-level struct prop
+  uint64_t on_weapon_broken{0};        // server→client struct-arg RPC
+  uint64_t on_scores_snapshot{0};      // server→client list-arg RPC
+  uint64_t on_affixes_updated{0};      // server→client component RPC
   // Count of property deltas missed in the middle of a reliable stream.
   // Populated from the `event_seq gap: last=A got=B missed=N` warning
   // lines ClientEntity emits when the incoming seq jumps by more than 1.

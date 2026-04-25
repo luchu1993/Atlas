@@ -33,6 +33,18 @@
     <AdditionalFiles Include="entity_defs\DirtyTestEntity.def" />
     <AdditionalFiles Include="entity_defs\FactoryTestEntity.def" />
     <AdditionalFiles Include="entity_defs\ReplicationFrameEntity.def" />
+    <AdditionalFiles Include="entity_defs\StructSyncTestEntity.def" />
+    <AdditionalFiles Include="entity_defs\ListSyncTestEntity.def" />
+    <AdditionalFiles Include="entity_defs\DictSyncTestEntity.def" />
+    <AdditionalFiles Include="entity_defs\NestedListTestEntity.def" />
+    <AdditionalFiles Include="entity_defs\StructWithContainerTestEntity.def" />
+    <AdditionalFiles Include="entity_defs\FieldStructTestEntity.def" />
+    <AdditionalFiles Include="entity_defs\ComponentEntity.def" />
+    <AdditionalFiles Include="entity_defs\AbilityComponent.def" />
+    <AdditionalFiles Include="entity_defs\AvatarAbility.def" />
+    <AdditionalFiles Include="entity_defs\MonsterAbility.def" />
+    <AdditionalFiles Include="entity_defs\AvatarWithAbility.def" />
+    <AdditionalFiles Include="entity_defs\MonsterWithAbility.def" />
   </ItemGroup>
 
 </Project>

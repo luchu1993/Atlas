@@ -1,0 +1,20 @@
+<entity name="ComponentEntity">
+  <properties>
+    <property name="hp" type="int32" scope="all_clients" />
+  </properties>
+
+  <components>
+    <component name="combat" type="GenCombat" scope="all_clients">
+      <properties>
+        <property name="atk" type="int32" scope="all_clients" />
+        <property name="def" type="int32" scope="all_clients" />
+      </properties>
+    </component>
+
+    <component name="inventory" type="GenInventory" scope="own_client">
+      <properties>
+        <property name="slots" type="int32" scope="own_client" />
+      </properties>
+    </component>
+  </components>
+</entity>

@@ -359,9 +359,10 @@ TEST(ClrScriptValueRoundtrip, BytesCopiesData) {
   EXPECT_NE(sv.AsBytes().data(), original.data());
 }
 
-TEST(ClrScriptValueRoundtrip, ObjectReturnsNoneUntilPhase22) {
-  // Phase 2.2 will implement proper GCHandle reconstruction.
-  // Until then, Object → from_script_value returns None.
+TEST(ClrScriptValueRoundtrip, ObjectReturnsNoneUntilGcHandleLanded) {
+  // Proper GCHandle reconstruction is not implemented yet; Object →
+  // from_script_value must return None rather than dereferencing an
+  // unmanaged raw pointer.
   ClrScriptValue cv{};
   cv.type = ClrScriptValueType::kObject;
   cv.object_val = reinterpret_cast<void*>(static_cast<uintptr_t>(0xDEADBEEFu));
@@ -406,7 +407,7 @@ TEST(ClrMarshalBounds, ToSpanRefNormalSpanWorks) {
 }
 
 // ============================================================================
-// Phase 6: Boundary tests
+// Boundary tests
 // ============================================================================
 
 TEST(ClrMarshalBoundary, EmptyStringRoundTrip) {

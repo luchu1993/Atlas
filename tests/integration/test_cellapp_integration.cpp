@@ -1,4 +1,4 @@
-// CellApp integration tests — Phase 11 review-fix.
+// CellApp integration tests.
 //
 // Categories:
 //   1. Smoke: CellApp constructs without CLR.

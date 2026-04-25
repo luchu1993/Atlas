@@ -53,6 +53,12 @@ class INativeApiProvider {
   virtual void RegisterEntityType(const std::byte* data, int32_t len) = 0;
   virtual void UnregisterAllEntityTypes() = 0;
 
+  // data is a serialised StructDescriptor blob (see EntityDefRegistry::
+  // RegisterStruct). Must be called before any RegisterEntityType that
+  // references the struct by id, so the wire-side struct_id → descriptor
+  // lookup is always populated in advance.
+  virtual void RegisterStruct(const std::byte* data, int32_t len) = 0;
+
   // ---- Persistence (BaseApp / CellApp) --------------------------------
   // Trigger an async write of the entity's persistent properties to DBApp.
   // entity_data: serialised property blob produced by C# Atlas.Runtime.

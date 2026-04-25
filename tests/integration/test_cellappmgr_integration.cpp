@@ -1,4 +1,4 @@
-// Phase 11 PR-6 — CellAppMgr wire-level integration.
+// CellAppMgr wire-level integration.
 //
 // Runs a real CellAppMgr in a background thread and drives it with
 // synthetic CellApp clients over real RUDP. This covers the Register →

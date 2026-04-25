@@ -1,0 +1,15 @@
+<entity name="StructWithContainerTestEntity">
+  <types>
+    <!-- Struct with a variable-width field — auto-sync rule 1 forces
+         whole-mode, but whole-mode codec now handles container fields
+         too (P2 uplift). Serialize writes all fields inline; scripts
+         re-assign the whole struct (or the bag slot) to trigger replication. -->
+    <struct name="QuestProgress">
+      <field name="id" type="int32" />
+      <field name="objectivesDone" type="list&lt;int32&gt;" />
+    </struct>
+  </types>
+  <properties>
+    <property name="quests" type="list&lt;QuestProgress&gt;" scope="all_clients" />
+  </properties>
+</entity>

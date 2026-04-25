@@ -1,0 +1,5 @@
+<entity name="AvatarWithAbility">
+  <components>
+    <component name="ability" type="AvatarAbility" scope="own_client" />
+  </components>
+</entity>

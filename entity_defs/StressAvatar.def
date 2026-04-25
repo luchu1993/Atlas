@@ -1,30 +1,122 @@
 <entity name="StressAvatar">
 
+  <types>
+    <!-- 7-byte fixed-width struct exercised by the world_stress wire-format
+         probe. Auto-sync chooses whole because S=7B (rule 2). -->
+    <struct name="StressWeapon">
+      <field name="id"        type="int32" />
+      <field name="sharpness" type="uint16" />
+      <field name="bound"     type="bool" />
+    </struct>
+
+    <!-- StressBuff drives list-of-struct + struct-arg RPC coverage.
+         Variable-width via the duration field's frequent updates;
+         the per-element op-log work stays meaningful at scale. -->
+    <struct name="StressBuff">
+      <field name="kind"       type="int32" />
+      <field name="stacks"     type="int32" />
+      <field name="durationMs" type="uint32" />
+    </struct>
+  </types>
+
   <properties>
-    <!-- hp drives Phase C2 end-to-end validation: a server-side OnTick
-         mutator flips the value, every in-AoI client observes OnHpChanged
-         through the reliable delta channel (0xF003). The `reliable` flag
-         also sets up the C3 drop-window test for retransmit behaviour. -->
+    <!-- ===== Entity-level coverage matrix ===== -->
+
+    <!-- (1) Scalar synced — reliable channel test. -->
     <property name="hp" type="int32" scope="all_clients" reliable="true" />
+
+    <!-- (2) Struct property — fixed-width whole-sync path. -->
+    <property name="mainWeapon" type="StressWeapon" scope="all_clients" />
+
+    <!-- (3) List of scalar — op-log baseline. -->
+    <property name="scores" type="list&lt;int32&gt;" scope="all_clients" />
+
+    <!-- (4) Dict of scalar — kDictSet / kDictErase coverage. -->
+    <property name="resists" type="dict&lt;string,int32&gt;" scope="all_clients" />
+
+    <!-- (5) Nested container: list of list — auto dirty-bubble path
+         on the outer container (P2d). -->
+    <property name="combos" type="list&lt;list&lt;int32&gt;&gt;" scope="all_clients" />
+
+    <!-- (6) Nested container: dict whose value is a list — distinct
+         from list-of-list. own_client because loadouts are private. -->
+    <property name="loadouts" type="dict&lt;string,list&lt;int32&gt;&gt;" scope="own_client" />
+
+    <!-- (7) List of struct — combines struct field-level sync with
+         op-log container ops. -->
+    <property name="buffs" type="list&lt;StressBuff&gt;" scope="all_clients" />
+
+    <!-- (8) Dict of struct — value-side struct sync inside dict ops. -->
+    <property name="spellSlots" type="dict&lt;string,StressWeapon&gt;" scope="own_client" />
   </properties>
 
   <cell_methods>
+    <!-- (R1) Scalar args — RTT measurement. -->
     <method name="Echo" exposed="own_client">
       <arg name="seq"        type="uint32" />
       <arg name="clientTsNs" type="uint64" />
     </method>
+
+    <!-- (R2) Vector3 scalar args — pos channel. -->
     <method name="ReportPos" exposed="all_clients">
       <arg name="pos" type="vector3" />
       <arg name="dir" type="vector3" />
     </method>
+
+    <!-- (R3) Container arg. -->
+    <method name="SubmitScores" exposed="own_client">
+      <arg name="batch" type="list&lt;int32&gt;" />
+    </method>
+
+    <!-- (R4) Mixed-type RPC: string + container. -->
+    <method name="UpdateLoadout" exposed="own_client">
+      <arg name="name"  type="string" />
+      <arg name="items" type="list&lt;int32&gt;" />
+    </method>
+
+    <!-- (R5) Struct arg. -->
+    <method name="EquipWeapon" exposed="own_client">
+      <arg name="w" type="StressWeapon" />
+    </method>
+
+    <!-- (R6) List-of-struct arg — heaviest single-message case. -->
+    <method name="ApplyBuffs" exposed="own_client">
+      <arg name="buffs" type="list&lt;StressBuff&gt;" />
+    </method>
   </cell_methods>
 
   <client_methods>
+    <!-- (C1) Scalar reply. -->
     <method name="EchoReply">
       <arg name="seq"        type="uint32" />
       <arg name="serverTsNs" type="uint64" />
       <arg name="clientTsNs" type="uint64" />
     </method>
+
+    <!-- (C2) Server→client struct push. -->
+    <method name="OnWeaponBroken">
+      <arg name="w" type="StressWeapon" />
+    </method>
+
+    <!-- (C3) Server→client list push. -->
+    <method name="OnScoresSnapshot">
+      <arg name="scores" type="list&lt;int32&gt;" />
+    </method>
   </client_methods>
+
+  <components>
+    <!-- Synced component mirrors the entity-level coverage matrix at
+         the slot level. Component RPCs route via slot_idx in rpc_id. -->
+    <component name="load" type="StressLoadComponent" scope="all_clients" />
+
+    <!-- ServerLocal — owns per-tick mutator state. Hides _hpTickAccum
+         et al. from the entity body; OnTick mutates entity Synced
+         props through the typed accessor. Hand-written class. -->
+    <component name="timer" type="StressTimerComponent" local="server" />
+
+    <!-- ClientLocal — populated client-side only; holds RTT samples
+         and observation counters. Hand-written class. -->
+    <component name="metrics" type="StressMetricsComponent" local="client" />
+  </components>
 
 </entity>

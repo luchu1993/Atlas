@@ -1,0 +1,20 @@
+<entity name="FieldStructTestEntity">
+  <types>
+    <!-- Explicit sync="field" — even with N=8 / S=32B this still
+         exercises the auto-rule-4 branch via override, removing the
+         coupling to the heuristic from the test fixture. -->
+    <struct name="StatsBlock" sync="field">
+      <field name="hp" type="int32" />
+      <field name="mp" type="int32" />
+      <field name="atk" type="int32" />
+      <field name="def" type="int32" />
+      <field name="agi" type="int32" />
+      <field name="luck" type="int32" />
+      <field name="vit" type="int32" />
+      <field name="ele" type="int32" />
+    </struct>
+  </types>
+  <properties>
+    <property name="party" type="list&lt;StatsBlock&gt;" scope="all_clients" />
+  </properties>
+</entity>

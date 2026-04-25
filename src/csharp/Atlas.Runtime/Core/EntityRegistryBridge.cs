@@ -13,4 +13,9 @@ public static class EntityRegistryBridge
     {
         NativeApi.RegisterEntityType(data);
     }
+
+    public static void RegisterStruct(ReadOnlySpan<byte> data)
+    {
+        NativeApi.RegisterStruct(data);
+    }
 }

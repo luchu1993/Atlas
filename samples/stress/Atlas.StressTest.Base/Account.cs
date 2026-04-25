@@ -17,9 +17,10 @@ public partial class Account : ServerEntity
 
     public partial void SelectAvatar(int avatarIndex)
     {
-        // P3.3: world_stress encodes the desired space_id into avatarIndex.
-        // Values <= 0 default to space 1 so the one-space case (all prior
-        // P2/P3 smoke runs) keeps working unchanged.
+        // world_stress encodes the desired space_id into avatarIndex so
+        // the harness can spread clients across multiple spaces with one
+        // login flow. Values <= 0 fall back to space 1 — keeps single-space
+        // smoke runs working without harness changes.
         uint spaceId = avatarIndex > 0 ? (uint)avatarIndex : 1u;
         Log.Info(
             $"[StressTest.Base] Account.SelectAvatar(index={avatarIndex}) entity={EntityId} -> space={spaceId}");

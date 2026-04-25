@@ -185,7 +185,7 @@ auto ScriptApp::CreateNativeProvider() -> std::unique_ptr<INativeApiProvider> {
 }
 
 void ScriptApp::ReloadScripts() {
-  // Hot-reload stub — full implementation in Script Phase 5.
+  // Stub — full hot-reload is not implemented yet.
   if (!script_engine_) return;
 
   ATLAS_LOG_INFO("ScriptApp: reloading scripts...");

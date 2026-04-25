@@ -462,51 +462,66 @@ auto ClientApp::MainLoop() -> int {
   //       without touching native envelope decoding.
   //   (b) any other MessageID — treated as a ClientRpc (BaseApp uses the
   //       rpc_id directly as the MessageID).
-  network_.InterfaceTable().SetDefaultHandler(
-      [this](const Address&, Channel*, MessageID msg_id, BinaryReader& reader) {
-        const bool is_state_channel = msg_id == DeltaForwarder::kClientDeltaMessageId ||
-                                      msg_id == DeltaForwarder::kClientBaselineMessageId ||
-                                      msg_id == DeltaForwarder::kClientReliableDeltaMessageId;
+  network_.InterfaceTable().SetDefaultHandler([this](const Address&, Channel*, MessageID msg_id,
+                                                     BinaryReader& reader) {
+    const bool is_state_channel = msg_id == DeltaForwarder::kClientDeltaMessageId ||
+                                  msg_id == DeltaForwarder::kClientBaselineMessageId ||
+                                  msg_id == DeltaForwarder::kClientReliableDeltaMessageId;
 
-        const uint8_t* payload_ptr = nullptr;
-        int32_t payload_len = 0;
-        const auto rem = reader.Remaining();
-        if (rem > 0) {
-          auto read = reader.ReadBytes(rem);
-          if (read) {
-            payload_ptr = reinterpret_cast<const uint8_t*>(read->data());
-            payload_len = static_cast<int32_t>(read->size());
-          }
+    const uint8_t* payload_ptr = nullptr;
+    int32_t payload_len = 0;
+    const auto rem = reader.Remaining();
+    if (rem > 0) {
+      auto read = reader.ReadBytes(rem);
+      if (read) {
+        payload_ptr = reinterpret_cast<const uint8_t*>(read->data());
+        payload_len = static_cast<int32_t>(read->size());
+      }
+    }
+
+    if (is_state_channel) {
+      // Test hook: silently drop state-channel traffic inside the
+      // [start, start+duration) window to simulate packet loss on
+      // reliable / volatile / baseline channels. RPCs and other traffic
+      // flow normally so login / auth / script method calls still work.
+      if (config_.drop_inbound_duration_ms > 0) {
+        const auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
+                                 std::chrono::steady_clock::now() - loop_start_)
+                                 .count();
+        if (elapsed >= config_.drop_inbound_start_ms &&
+            elapsed < config_.drop_inbound_start_ms + config_.drop_inbound_duration_ms) {
+          return;  // dropped
         }
+      }
+      if (native_provider_ && native_provider_->DeliverFromServerFn()) {
+        native_provider_->DeliverFromServerFn()(msg_id, payload_ptr, payload_len);
+      } else {
+        ATLAS_LOG_WARNING(
+            "Client: state-channel message 0x{:04X} arrived but no deliver_from_server "
+            "callback registered",
+            static_cast<unsigned>(msg_id));
+      }
+      return;
+    }
 
-        if (is_state_channel) {
-          // Test hook: silently drop state-channel traffic inside the
-          // [start, start+duration) window to simulate packet loss on
-          // reliable / volatile / baseline channels. RPCs and other traffic
-          // flow normally so login / auth / script method calls still work.
-          if (config_.drop_inbound_duration_ms > 0) {
-            const auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
-                                     std::chrono::steady_clock::now() - loop_start_)
-                                     .count();
-            if (elapsed >= config_.drop_inbound_start_ms &&
-                elapsed < config_.drop_inbound_start_ms + config_.drop_inbound_duration_ms) {
-              return;  // dropped
-            }
-          }
-          if (native_provider_ && native_provider_->DeliverFromServerFn()) {
-            native_provider_->DeliverFromServerFn()(msg_id, payload_ptr, payload_len);
-          } else {
-            ATLAS_LOG_WARNING(
-                "Client: state-channel message 0x{:04X} arrived but no deliver_from_server "
-                "callback registered",
-                static_cast<unsigned>(msg_id));
-          }
-          return;
-        }
-
-        OnRpcMessage(static_cast<uint32_t>(msg_id), reinterpret_cast<const std::byte*>(payload_ptr),
-                     payload_len);
-      });
+    // Extended RPC envelope (slot>0): payload starts with u32 rpc_id.
+    // Unwrap so the dispatcher sees the full 32-bit id (slot bits
+    // included) rather than the truncated 16-bit MessageID. Wire
+    // contract pairs with BaseApp::RelayRpcToClient.
+    if (msg_id == DeltaForwarder::kClientComponentRpcMessageId) {
+      if (payload_len < static_cast<int32_t>(sizeof(uint32_t))) {
+        ATLAS_LOG_WARNING("Client: extended RPC envelope too short ({} bytes)", payload_len);
+        return;
+      }
+      uint32_t rpc_id_full = 0;
+      std::memcpy(&rpc_id_full, payload_ptr, sizeof(uint32_t));
+      OnRpcMessage(rpc_id_full, reinterpret_cast<const std::byte*>(payload_ptr + sizeof(uint32_t)),
+                   payload_len - static_cast<int32_t>(sizeof(uint32_t)));
+      return;
+    }
+    OnRpcMessage(static_cast<uint32_t>(msg_id), reinterpret_cast<const std::byte*>(payload_ptr),
+                 payload_len);
+  });
 
   while (!shutdown_requested_) {
     dispatcher_.ProcessOnce();

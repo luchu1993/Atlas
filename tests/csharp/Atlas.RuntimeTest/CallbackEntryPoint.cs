@@ -68,7 +68,7 @@ public static class CallbackEntryPoint
     // =========================================================================
     //
     // Calls AtlasServerTime() and writes the result to *out.
-    // C++ verifies the value is >= 0 (stub returns 0.0 in Phase 2).
+    // C++ verifies the value is >= 0 (the current stub returns 0.0).
 
     [UnmanagedCallersOnly]
     public static unsafe int GetServerTime(double* out_time)

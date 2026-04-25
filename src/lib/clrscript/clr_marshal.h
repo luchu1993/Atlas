@@ -94,7 +94,7 @@ enum class ClrScriptValueType : int32_t {
   kDouble = 3,
   kString = 4,  // ClrStringRef — points into C++ std::string storage
   kBytes = 5,   // ClrSpanRef   — points into C++ std::vector<byte> storage
-  kObject = 6,  // void*        — opaque GCHandle; ownership managed by ClrObject (Phase 2.2)
+  kObject = 6,  // void*        — opaque GCHandle; ownership managed by ClrObject
 
   // Range [100, 199] is reserved for future composite types.
   // Extend here to preserve ABI compatibility with existing values.
@@ -112,7 +112,7 @@ struct ClrScriptValue {
     double double_val;        // offset 8
     ClrStringRef string_val;  // offset 8 — non-owning view into std::string
     ClrSpanRef bytes_val;     // offset 8 — non-owning view into vector<byte>
-    void* object_val;         // offset 8 — GCHandle (Phase 2.2)
+    void* object_val;         // offset 8 — GCHandle
   };
 };
 
@@ -202,7 +202,7 @@ namespace clr_marshal {
 //   sv must outlive the returned ClrScriptValue and any C# call using it.
 //
 // from_script_value: copies String/Bytes data onto the C++ heap.
-//   Object case returns ScriptValue{} (GCHandle reconstruction is Phase 2.2).
+//   Object case returns ScriptValue{} — GCHandle reconstruction is not implemented yet.
 
 [[nodiscard]] auto ToScriptValue(const ScriptValue& sv) -> ClrScriptValue;
 [[nodiscard]] auto FromScriptValue(const ClrScriptValue& cv) -> ScriptValue;

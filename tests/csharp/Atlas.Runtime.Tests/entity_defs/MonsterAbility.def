@@ -1,0 +1,5 @@
+<component name="MonsterAbility" extends="AbilityComponent">
+  <properties>
+    <property name="aggro" type="int32" scope="all_clients" />
+  </properties>
+</component>

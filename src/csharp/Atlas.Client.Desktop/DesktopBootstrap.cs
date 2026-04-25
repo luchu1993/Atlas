@@ -82,6 +82,7 @@ public static unsafe class DesktopBootstrap
             ClientHost.SendBaseRpcHandler = ClientNativeApi.SendBaseRpc;
             ClientHost.SendCellRpcHandler = ClientNativeApi.SendCellRpc;
             ClientHost.RegisterEntityTypeHandler = ClientNativeApi.RegisterEntityType;
+            ClientHost.RegisterStructHandler = ClientNativeApi.RegisterStruct;
             ClientHost.ReportEventSeqGapHandler = ClientNativeApi.ReportEventSeqGap;
 
             RegisterNativeCallbacks();

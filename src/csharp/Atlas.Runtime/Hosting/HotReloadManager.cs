@@ -20,8 +20,9 @@ internal static class HotReloadManager
     internal static ScriptHost? CurrentHost => _scriptHost;
 
     /// <summary>
-    /// Phase 1 of hot-reload: serialize all entity state and unload the script assembly.
-    /// Called by C++ via ClrHotReload::do_reload().
+    /// Serializes all entity state and unloads the script assembly. First half
+    /// of hot-reload; caller must follow up with LoadAndRestore to bring the
+    /// process back to a runnable state. Called by C++ via ClrHotReload::do_reload().
     /// </summary>
     [UnmanagedCallersOnly]
     public static int SerializeAndUnload()
@@ -71,8 +72,9 @@ internal static class HotReloadManager
     }
 
     /// <summary>
-    /// Phase 2 of hot-reload: load a new script assembly and restore entity state.
-    /// Called by C++ via ClrHotReload::do_reload().
+    /// Loads a new script assembly and restores entity state from the snapshot
+    /// captured by SerializeAndUnload. Second half of hot-reload; the process
+    /// is unusable between the two calls. Called by C++ via ClrHotReload::do_reload().
     /// </summary>
     [UnmanagedCallersOnly]
     public static unsafe int LoadAndRestore(byte* pathUtf8, int pathLen)

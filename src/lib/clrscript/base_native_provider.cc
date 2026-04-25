@@ -69,6 +69,10 @@ void BaseNativeProvider::UnregisterAllEntityTypes() {
   EntityDefRegistry::Instance().clear();
 }
 
+void BaseNativeProvider::RegisterStruct(const std::byte* data, int32_t len) {
+  EntityDefRegistry::Instance().RegisterStruct(data, len);
+}
+
 void BaseNativeProvider::WriteToDb(uint32_t entity_id, const std::byte* /*entity_data*/,
                                    int32_t /*len*/) {
   ATLAS_LOG_ERROR("write_to_db() not supported on this process type (entity_id={})", entity_id);

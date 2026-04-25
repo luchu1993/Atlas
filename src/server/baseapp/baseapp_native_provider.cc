@@ -45,8 +45,11 @@ void BaseAppNativeProvider::SendClientRpc(uint32_t entity_id, uint32_t rpc_id,
     ATLAS_LOG_WARNING("BaseApp: SendClientRpc: entity {} client channel unavailable", entity_id);
     return;
   }
-  (void)client_ch->SendMessage(static_cast<MessageID>(rpc_id),
-                               std::span<const std::byte>(payload, static_cast<size_t>(len)));
+  // Component RPCs (slot>0 in rpc_id bits 24-31) need the extended
+  // wire envelope; entity-level RPCs keep the legacy 16-bit-id path.
+  // Mirrors RelayRpcToClient in baseapp.cc — same envelope contract.
+  std::vector<std::byte> tmp(payload, payload + len);
+  app_.RelayRpcToClient(*client_ch, rpc_id, tmp);
 }
 
 void BaseAppNativeProvider::SendCellRpc(uint32_t entity_id, uint32_t rpc_id,

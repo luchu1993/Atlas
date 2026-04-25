@@ -561,7 +561,7 @@ public partial class Avatar : ClientEntity
         Assert.False(model.Properties[1].Reliable);  // position
     }
 
-    // Phase 11 C10 retired:
+    // Retired tests (kept as a pointer for anyone chasing git blame):
     //   - DeltaSync_EmitsReliableAndUnreliableMethods
     //   - DeltaSync_AllUnreliable_EmitsEmptyReliableMask
     // Both asserted on the now-deleted SerializeReplicatedDelta{,Reliable,
@@ -569,8 +569,8 @@ public partial class Avatar : ClientEntity
     // ReliableDirtyMask / UnreliableDirtyMask emitter surface. The per-
     // channel reliability split moved to the transport layer
     // (ReplicatedReliableDeltaFromCell vs ReplicatedDeltaFromCell); the
-    // serializer no longer has a reliability dimension, only the
-    // audience split (SerializeOwnerDelta vs SerializeOtherDelta).
+    // serializer now only has the audience split
+    // (SerializeOwnerDelta vs SerializeOtherDelta).
 
     // =========================================================================
     // Baseline snapshot support (补强一)
@@ -907,11 +907,13 @@ public partial class Avatar : ClientEntity
 
         // Every replicable field is present with guard + read + callback.
         // Replicable scopes in AvatarDef: hp, modelId, mana, secret, level.
+        // All scalar — guarded by `scalarFlags &` after the sectionMask
+        // dispatch.
         string[] replicableProps = { "Hp", "ModelId", "Mana", "Secret", "Level" };
         foreach (var prop in replicableProps)
         {
             var fieldName = "_" + char.ToLowerInvariant(prop[0]) + prop.Substring(1);
-            Assert.Contains($"flags & ReplicatedDirtyFlags.{prop}", body);
+            Assert.Contains($"scalarFlags & ReplicatedDirtyFlags.{prop}", body);
             Assert.Contains($"var old{prop} = {fieldName};", body);
             Assert.Contains($"{fieldName} = reader.", body);
             Assert.Contains($"On{prop}Changed(old{prop}, {fieldName});", body);
@@ -986,7 +988,11 @@ public partial class Bulk : ClientEntity
         var body = ExtractMethodBody(code, "ApplyReplicatedDelta(ref SpanReader reader)");
 
         Assert.Contains("reader.ReadUInt16()", body);
-        Assert.DoesNotContain("reader.ReadByte()", body);
+        // The flag-byte type for 9 props is ushort (ReadUInt16). The
+        // sectionMask byte at the top is ReadByte though — that's a
+        // fixed u8 regardless of prop count. Check that the flag bytes
+        // (post-sectionMask) use ushort and not byte.
+        Assert.Contains("scalarFlags = (ReplicatedDirtyFlags)reader.ReadUInt16()", body);
     }
 
     [Fact]
@@ -1032,13 +1038,16 @@ public partial class Avatar : ServerEntity
         var baseCode = baseResult.GeneratedTrees
             .First(t => t.FilePath.Contains("Avatar.DeltaSync")).GetText().ToString();
 
-        // Property-name sequence on both sides.
+        // Property-name sequence on both sides. ReplicatedDirtyFlags.None
+        // appears in section masks (e.g. `if (containerFlags != ReplicatedDirtyFlags.None)`)
+        // — strip those, only the per-prop entries matter for read/write order.
         var clientSeq = new System.Collections.Generic.List<string>();
         foreach (System.Text.RegularExpressions.Match m
             in System.Text.RegularExpressions.Regex.Matches(
                 ExtractMethodBody(clientCode, "ApplyReplicatedDelta(ref SpanReader reader)"),
                 @"ReplicatedDirtyFlags\.(\w+)"))
         {
+            if (m.Groups[1].Value == "None") continue;
             clientSeq.Add(m.Groups[1].Value);
         }
         var serverSeq = new System.Collections.Generic.List<string>();
@@ -1047,6 +1056,7 @@ public partial class Avatar : ServerEntity
                 ExtractMethodBody(baseCode, "SerializeOtherDelta(ref SpanWriter writer)"),
                 @"ReplicatedDirtyFlags\.(\w+)"))
         {
+            if (m.Groups[1].Value == "None") continue;
             serverSeq.Add(m.Groups[1].Value);
         }
         // Under M2, each server side writes a SUBSET of the replicable

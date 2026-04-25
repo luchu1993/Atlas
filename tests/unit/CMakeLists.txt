@@ -182,13 +182,28 @@ atlas_add_test(NAME test_script_value
 
 # ── Entity Definition ──────────────────────────────────────────────────────
 
-atlas_add_test(NAME test_entity_def_registry_json
-  SOURCES test_entity_def_registry_json.cpp
+atlas_add_test(NAME test_entity_def_registry_rpc
+  SOURCES test_entity_def_registry_rpc.cpp
   DEPS atlas_entitydef atlas_serialization
 )
 
-atlas_add_test(NAME test_entity_def_registry_rpc
-  SOURCES test_entity_def_registry_rpc.cpp
+atlas_add_test(NAME test_struct_descriptor
+  SOURCES test_struct_descriptor.cpp
+  DEPS atlas_entitydef atlas_serialization
+)
+
+atlas_add_test(NAME test_entity_def_registry_container_prop
+  SOURCES test_entity_def_registry_container_prop.cpp
+  DEPS atlas_entitydef atlas_serialization
+)
+
+atlas_add_test(NAME test_entity_def_registry_component
+  SOURCES test_entity_def_registry_component.cpp
+  DEPS atlas_entitydef atlas_serialization
+)
+
+atlas_add_test(NAME test_entity_def_registry_binary_file
+  SOURCES test_entity_def_registry_binary_file.cpp
   DEPS atlas_entitydef atlas_serialization
 )
 
@@ -446,6 +461,40 @@ set_tests_properties(test_native_api_exports PROPERTIES
 )
 set_target_properties(test_native_api_exports PROPERTIES FOLDER "Test/Unit")
 
+# The three CLR-hosting tests below can't use atlas_add_test (they
+# need custom ENVIRONMENT properties), so replicate every post-target
+# step that helper runs for the regular test targets:
+#   1. Route output to bin/<config>/test/ so the exe lands next to
+#      its CLR runtime DLLs (nethost.dll, atlas_engine.dll).
+#   2. On Windows, deploy transitively-linked runtime DLLs + the
+#      atlas_engine / nethost pair that TARGET_RUNTIME_DLLS misses
+#      (atlas_engine is loaded via DynamicLibrary::Load, not linked).
+#   3. Deploy DB plugin DLLs on the off chance any transitive link
+#      reaches them.
+# Without the deploy steps the exe lands in the right directory but
+# starts up with STATUS_DLL_NOT_FOUND because its DLL siblings never
+# got copied alongside.
+macro(_atlas_route_clr_test_binary _target)
+  foreach(_cfg IN ITEMS Debug Release RelWithDebInfo MinSizeRel)
+    _atlas_config_to_snake("${_cfg}" _snake)
+    string(TOUPPER "${_cfg}" _CFG)
+    set_target_properties(${_target} PROPERTIES
+      RUNTIME_OUTPUT_DIRECTORY_${_CFG} "${CMAKE_SOURCE_DIR}/bin/${_snake}/test"
+    )
+  endforeach()
+  if(WIN32)
+    add_custom_command(TARGET ${_target} POST_BUILD
+      COMMAND ${CMAKE_COMMAND}
+              "-DTARGET_DLLS=$<TARGET_RUNTIME_DLLS:${_target}>"
+              "-DTARGET_DIR=$<TARGET_FILE_DIR:${_target}>"
+              -P "${CMAKE_SOURCE_DIR}/cmake/CopyRuntimeDLLs.cmake"
+      VERBATIM
+    )
+    atlas_deploy_clr_runtime_if_needed(${_target})
+    atlas_deploy_db_plugins_if_needed(${_target})
+  endif()
+endmacro()
+
 add_executable(test_clr_host
   test_paths.h
   test_clr_host.cpp
@@ -460,6 +509,7 @@ set_tests_properties(test_clr_host PROPERTIES
     "ATLAS_RUNTIME_CONFIG_RLOC=${CMAKE_BINARY_DIR}/runtime/atlas_server.runtimeconfig.json;ATLAS_SMOKE_TEST_DLL_RLOC=$<GENEX_EVAL:$<TARGET_PROPERTY:atlas_smoke_test_dll,DOTNET_ASSEMBLY>>"
 )
 set_target_properties(test_clr_host PROPERTIES FOLDER "Test/Unit")
+_atlas_route_clr_test_binary(test_clr_host)
 
 add_executable(test_clr_callback
   test_paths.h
@@ -475,6 +525,7 @@ set_tests_properties(test_clr_callback PROPERTIES
     "ATLAS_ENGINE_RLOC=$<TARGET_FILE:atlas_engine>;ATLAS_RUNTIME_CONFIG_RLOC=${CMAKE_BINARY_DIR}/runtime/atlas_server.runtimeconfig.json;ATLAS_RUNTIME_TEST_DLL_RLOC=$<GENEX_EVAL:$<TARGET_PROPERTY:atlas_runtime_test_dll,DOTNET_ASSEMBLY>>"
 )
 set_target_properties(test_clr_callback PROPERTIES FOLDER "Test/Unit")
+_atlas_route_clr_test_binary(test_clr_callback)
 
 add_executable(test_clr_script_engine
   test_paths.h
@@ -490,6 +541,7 @@ set_tests_properties(test_clr_script_engine PROPERTIES
     "ATLAS_ENGINE_RLOC=$<TARGET_FILE:atlas_engine>;ATLAS_RUNTIME_CONFIG_RLOC=${CMAKE_BINARY_DIR}/runtime/atlas_server.runtimeconfig.json;ATLAS_RUNTIME_TEST_DLL_RLOC=$<GENEX_EVAL:$<TARGET_PROPERTY:atlas_runtime_test_dll,DOTNET_ASSEMBLY>>"
 )
 set_target_properties(test_clr_script_engine PROPERTIES FOLDER "Test/Unit")
+_atlas_route_clr_test_binary(test_clr_script_engine)
 
 # ── Server component tests ──────────────────────────────────────────────────
 

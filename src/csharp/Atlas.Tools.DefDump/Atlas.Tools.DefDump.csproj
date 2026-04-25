@@ -1,0 +1,18 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net9.0</TargetFramework>
+    <OutputType>Exe</OutputType>
+    <Nullable>enable</Nullable>
+    <RootNamespace>Atlas.Tools.DefDump</RootNamespace>
+    <AssemblyName>Atlas.Tools.DefDump</AssemblyName>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- Uses SpanWriter from Atlas.Shared (same writer + PackedInt
+         encoding the runtime emitters use, so the container format
+         stays byte-compatible with the C++ reader). -->
+    <ProjectReference Include="..\Atlas.Shared\Atlas.Shared.csproj" />
+  </ItemGroup>
+
+</Project>

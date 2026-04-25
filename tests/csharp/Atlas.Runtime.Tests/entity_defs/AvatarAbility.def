@@ -1,0 +1,34 @@
+<component name="AvatarAbility" extends="AbilityComponent">
+  <properties>
+    <property name="ranking" type="int32" scope="own_client" />
+  </properties>
+
+  <base_methods>
+    <!-- Echo: scalar args (existing). Server-side dispatcher decodes
+         rpcId → finds AvatarAbility on the entity → calls partial Echo. -->
+    <method name="Echo" exposed="own_client">
+      <arg name="seq" type="uint32" />
+      <arg name="ts"  type="int64" />
+    </method>
+
+    <!-- ApplyTags: list arg. RPC param goes through RpcArgCodec.EmitWrite/Read
+         which uses PropertyCodec's element path and produces plain
+         List&lt;int&gt; on the receive side. -->
+    <method name="ApplyTags" exposed="own_client">
+      <arg name="tags" type="list&lt;int32&gt;" />
+    </method>
+
+    <!-- EquipTestWeapon: struct arg. TestWeapon is declared in the test
+         project's StructSyncTestEntity.def — DefLinker globalises struct
+         names so any def in the same compile can reference it. -->
+    <method name="EquipTestWeapon" exposed="own_client">
+      <arg name="w" type="TestWeapon" />
+    </method>
+
+    <!-- ApplyKv: dict arg. Exercises the dict-arg path on top of the
+         dict property coverage already in place. -->
+    <method name="ApplyKv" exposed="own_client">
+      <arg name="kv" type="dict&lt;string,int32&gt;" />
+    </method>
+  </base_methods>
+</component>

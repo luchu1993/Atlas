@@ -24,6 +24,7 @@ struct MockProvider final : public INativeApiProvider {
   int send_cell_rpc_count = 0;
   int send_base_rpc_count = 0;
   int register_type_count = 0;
+  int register_struct_count = 0;
   bool unregister_all_called = false;
   uint8_t process_prefix = 42;
 
@@ -50,6 +51,8 @@ struct MockProvider final : public INativeApiProvider {
   void RegisterEntityType(const std::byte*, int32_t) override { ++register_type_count; }
 
   void UnregisterAllEntityTypes() override { unregister_all_called = true; }
+
+  void RegisterStruct(const std::byte*, int32_t) override { ++register_struct_count; }
 
   void WriteToDb(uint32_t, const std::byte*, int32_t) override {}
   void GiveClientTo(uint32_t, uint32_t) override {}

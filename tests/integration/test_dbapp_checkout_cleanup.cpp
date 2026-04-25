@@ -8,6 +8,7 @@
 
 #include <gtest/gtest.h>
 
+#include "atdf_account_fixture.h"
 #include "dbapp/dbapp.h"
 #include "dbapp/dbapp_messages.h"
 #include "network/event_dispatcher.h"
@@ -42,31 +43,13 @@ auto reserve_udp_port() -> uint16_t {
   return local ? local->Port() : 0;
 }
 
-auto write_entity_defs_json() -> std::filesystem::path {
-  auto path = std::filesystem::temp_directory_path() / "atlas_dbapp_checkout_entity_defs.json";
-  std::ofstream f(path, std::ios::trunc);
-  f << R"({
-        "version": 1,
-        "types": [
-            {
-                "type_id": 1,
-                "name": "Account",
-                "has_cell": false,
-                "has_client": true,
-                "properties": [
-                    {"name": "accountName", "type": "string", "persistent": true,
-                     "identifier": true, "scope": "base_only", "index": 0},
-                    {"name": "level", "type": "int32", "persistent": true,
-                     "identifier": false, "scope": "base_only", "index": 1}
-                ]
-            }
-        ]
-    })";
-  return path;
+auto write_entity_defs_bin() -> std::filesystem::path {
+  auto path = std::filesystem::temp_directory_path() / "atlas_dbapp_checkout_entity_defs.bin";
+  return atlas::test_fixtures::WriteAccountAtdfFile(path);
 }
 
 struct DBAppArgv {
-  DBAppArgv(uint16_t internal_port, const std::filesystem::path& entitydef_path,
+  DBAppArgv(uint16_t internal_port, const std::filesystem::path& entitydef_bin_path,
             const std::filesystem::path& sqlite_path)
       : storage{"dbapp",
                 "--type",
@@ -79,8 +62,8 @@ struct DBAppArgv {
                 std::to_string(internal_port),
                 "--machined",
                 "127.0.0.1:1",
-                "--entitydef-path",
-                entitydef_path.string(),
+                "--entitydef-bin-path",
+                entitydef_bin_path.string(),
                 "--db-type",
                 "sqlite",
                 "--db-sqlite-path",
@@ -168,7 +151,7 @@ TEST(DBAppIntegration, BaseAppDeathNotificationClearsCheckoutOwnership) {
   const uint16_t port = reserve_udp_port();
   ASSERT_NE(port, 0u);
 
-  const auto entity_defs = write_entity_defs_json();
+  const auto entity_defs = write_entity_defs_bin();
   const auto sqlite_path =
       std::filesystem::temp_directory_path() / "atlas_dbapp_checkout_cleanup.sqlite3";
   std::filesystem::remove(sqlite_path);

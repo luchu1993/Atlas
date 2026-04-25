@@ -26,11 +26,13 @@ public static class ClientHost
 {
     public delegate void SendRpcFn(uint entityId, uint rpcId, ReadOnlySpan<byte> payload);
     public delegate void RegisterEntityTypeFn(ReadOnlySpan<byte> data);
+    public delegate void RegisterStructFn(ReadOnlySpan<byte> data);
     public delegate void ReportEventSeqGapFn(uint entityId, uint gapDelta);
 
     public static SendRpcFn? SendBaseRpcHandler;
     public static SendRpcFn? SendCellRpcHandler;
     public static RegisterEntityTypeFn? RegisterEntityTypeHandler;
+    public static RegisterStructFn? RegisterStructHandler;
     // Optional — clients that don't route to a BaseApp (editor previews,
     // offline tests) leave this null and the report is silently dropped.
     public static ReportEventSeqGapFn? ReportEventSeqGapHandler;
@@ -60,6 +62,15 @@ public static class ClientHost
                 "ClientHost.RegisterEntityTypeHandler is not set — the host app must install "
                 + "its entity-type registry bridge at startup.");
         RegisterEntityTypeHandler(data);
+    }
+
+    internal static void RegisterStruct(ReadOnlySpan<byte> data)
+    {
+        if (RegisterStructHandler is null)
+            throw new InvalidOperationException(
+                "ClientHost.RegisterStructHandler is not set — the host app must install "
+                + "its struct registry bridge at startup.");
+        RegisterStructHandler(data);
     }
 
     internal static void ReportEventSeqGap(uint entityId, uint gapDelta)

@@ -15,14 +15,15 @@ public sealed class DefGenerator : IIncrementalGenerator
 {
     public void Initialize(IncrementalGeneratorInitializationContext context)
     {
-        // 1. Read .def files
+        // 1. Read .def files. Each one is either an entity or a
+        // standalone component, dispatched by root element.
         var defs = context.AdditionalTextsProvider
             .Where(static f => f.Path.EndsWith(".def", StringComparison.OrdinalIgnoreCase))
             .Select(static (f, ct) =>
             {
                 var text = f.GetText(ct);
                 if (text == null) return null;
-                return DefParser.Parse(text, f.Path, null);
+                return DefParser.ParseAny(text, f.Path, null);
             })
             .Where(static m => m is not null)
             .Select(static (m, _) => m!);
@@ -72,13 +73,19 @@ public sealed class DefGenerator : IIncrementalGenerator
     }
 
     private static void Execute(SourceProductionContext spc,
-        ((ImmutableArray<EntityDefModel> Defs, ImmutableArray<UserEntityInfo> Users), ProcessContext Ctx) input)
+        ((ImmutableArray<ParsedDef> Defs, ImmutableArray<UserEntityInfo> Users), ProcessContext Ctx) input)
     {
         var (defsAndUsers, ctx) = input;
-        var (defs, users) = defsAndUsers;
+        var (parsed, users) = defsAndUsers;
 
-        if (defs.IsDefaultOrEmpty || users.IsDefaultOrEmpty)
+        if (parsed.IsDefaultOrEmpty || users.IsDefaultOrEmpty)
             return;
+
+        // Split entities and standalone components — both come down the
+        // same .def pipeline; the parser flagged which is which by root.
+        var defs = parsed.Where(p => p.Entity != null).Select(p => p.Entity!).ToImmutableArray();
+        var standaloneComponents = parsed.Where(p => p.StandaloneComponent != null)
+                                          .Select(p => p.StandaloneComponent!).ToList();
 
         // Build def lookup.
         //
@@ -123,6 +130,16 @@ public sealed class DefGenerator : IIncrementalGenerator
 
         var entityList = new List<(EntityDefModel Def, string ClassName, string Namespace)>();
 
+        // Link pass: dedup structs, assign stable ids, resolve aliases,
+        // resolve component inheritance + cross-entity references. The
+        // emitters below consume linked.StructsByName instead of
+        // reassembling the map from defs[] — keeps DefLinker the
+        // single source of truth for which struct / component names
+        // are addressable.
+        var linked = DefLinker.Link(defs.ToList(), standaloneComponents, spc.ReportDiagnostic);
+        if (linked is null) return;
+        var structsByName = linked.StructsByName;
+
         // Match user entities to defs and generate per-entity code
         foreach (var user in users)
         {
@@ -136,12 +153,12 @@ public sealed class DefGenerator : IIncrementalGenerator
             entityList.Add((def, user.ClassName, user.Namespace));
 
             // Properties (fields, dirty tracking, change callbacks)
-            var properties = PropertiesEmitter.Emit(def, user.ClassName, user.Namespace, ctx);
+            var properties = PropertiesEmitter.Emit(def, user.ClassName, user.Namespace, ctx, structsByName);
             if (properties != null)
                 spc.AddSource($"{user.ClassName}.Properties.g.cs", SourceText.From(properties, System.Text.Encoding.UTF8));
 
-            // Serialization (Serialize/Deserialize + TypeName)
-            var serialization = SerializationEmitter.Emit(def, user.ClassName, user.Namespace, ctx);
+            // Serialization (Serialize/Deserialize + TypeName + TypeId)
+            var serialization = SerializationEmitter.Emit(def, user.ClassName, user.Namespace, ctx, typeIndexMap);
             spc.AddSource($"{user.ClassName}.Serialization.g.cs", SourceText.From(serialization, System.Text.Encoding.UTF8));
 
             // DeltaSync (delta/owner/other sync)
@@ -158,6 +175,58 @@ public sealed class DefGenerator : IIncrementalGenerator
             var mailboxes = MailboxEmitter.Emit(def, user.ClassName, user.Namespace, baseClassShort, ctx, typeIndexMap);
             if (!string.IsNullOrEmpty(mailboxes))
                 spc.AddSource($"{user.ClassName}.Mailboxes.g.cs", SourceText.From(mailboxes, System.Text.Encoding.UTF8));
+
+            // Component slot accessors. Server emits write-side helpers
+            // (HasOwnerDirtyComponent / WriteOwnerComponentSection /
+            // ClearDirtyComponents); client emits the read-side
+            // ApplyComponentSection. Both sides emit ResolveSyncedSlot
+            // and the typed accessor properties.
+            var accessors = EntityComponentAccessorEmitter.Emit(def, user.ClassName, user.Namespace, ctx);
+            if (accessors != null)
+                spc.AddSource($"{user.ClassName}.Components.g.cs",
+                              SourceText.From(accessors, System.Text.Encoding.UTF8));
+        }
+
+        // Component class emission. Each distinct TypeName is emitted
+        // exactly once — standalone defs win over inline (since they're
+        // the canonical type) and inline-only types still emit as one-
+        // off classes. A type is "leaf" (sealed) iff no other component
+        // extends it.
+        var emittedComponentTypes = new HashSet<string>(StringComparer.Ordinal);
+        var allComponents = new List<ComponentDefModel>();
+        // Standalone first — canonical type definitions.
+        allComponents.AddRange(standaloneComponents);
+        // Then inline-from-entities, but only those NOT shadowed by a
+        // standalone of the same name.
+        foreach (var def in defs)
+        {
+            foreach (var c in def.Components)
+            {
+                if (c.IsStandalone) continue;
+                if (allComponents.Exists(s => s.TypeName == c.TypeName)) continue;
+                allComponents.Add(c);
+            }
+        }
+
+        var nonLeafTypes = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var c in allComponents)
+        {
+            if (!string.IsNullOrEmpty(c.BaseTypeName)) nonLeafTypes.Add(c.BaseTypeName!);
+        }
+
+        // Server inherits Atlas.Entity.Components.ReplicatedComponent;
+        // Client inherits Atlas.Components.ClientReplicatedComponent.
+        // ComponentEmitter switches on ctx so each side emits the right
+        // base reference + only the methods it needs (server: WriteOwnerDelta;
+        // client: ApplyDelta).
+        foreach (var c in allComponents)
+        {
+            if (c.Locality != ComponentLocality.Synced) continue;
+            if (!emittedComponentTypes.Add(c.TypeName)) continue;
+            bool isLeaf = !nonLeafTypes.Contains(c.TypeName);
+            var src = ComponentEmitter.Emit(c, isLeaf, ctx);
+            spc.AddSource($"{c.TypeName}.Component.g.cs",
+                          SourceText.From(src, System.Text.Encoding.UTF8));
         }
 
         // Global: EntityFactory
@@ -175,8 +244,29 @@ public sealed class DefGenerator : IIncrementalGenerator
         if (entityList.Count > 0)
         {
             var dispatchBase = ctx == ProcessContext.Client ? "Atlas.Client.ClientEntity" : "Atlas.Entity.ServerEntity";
-            var dispatcher = DispatcherEmitter.Emit(entityList, ctx, typeIndexMap, dispatchBase);
+            var dispatcher = DispatcherEmitter.Emit(entityList, ctx, typeIndexMap, dispatchBase, allComponents);
             spc.AddSource("DefRpcDispatcher.g.cs", SourceText.From(dispatcher, System.Text.Encoding.UTF8));
+        }
+
+        // Per-struct code: partial struct body with field members and the
+        // whole-struct Serialize/Deserialize pair. Emitted into the
+        // Atlas.Def namespace so different entity defs can share a struct
+        // identity without namespace shopping.
+        foreach (var s in linked.Structs)
+        {
+            var structCode = Emitters.StructEmitter.Emit(s, spc.ReportDiagnostic);
+            spc.AddSource($"{s.Name}.Struct.g.cs",
+                          SourceText.From(structCode, System.Text.Encoding.UTF8));
+        }
+
+        // Global: StructRegistry — registers every <struct> before any
+        // entity type, so RegisterType's type_ref resolver sees a populated
+        // struct table.
+        if (linked.Structs.Count > 0)
+        {
+            var structRegistry = Emitters.StructRegistryEmitter.Emit(linked.Structs, ctx);
+            spc.AddSource("DefStructRegistry.g.cs",
+                          SourceText.From(structRegistry, System.Text.Encoding.UTF8));
         }
 
         // Global: TypeRegistry — serializes entity descriptors (with RPC + ExposedScope) to C++

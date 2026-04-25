@@ -17,4 +17,9 @@ public static class ClientEntityRegistryBridge
     {
         ClientHost.RegisterEntityType(data);
     }
+
+    public static void RegisterStruct(ReadOnlySpan<byte> data)
+    {
+        ClientHost.RegisterStruct(data);
+    }
 }

@@ -328,7 +328,7 @@ TEST_F(ClrObjectTest, TrackerLeakCountIsZeroAfterConstruct) {
 #endif  // ATLAS_DEBUG
 
 // ============================================================================
-// Phase 6: Boundary tests
+// Boundary tests
 // ============================================================================
 
 TEST_F(ClrObjectTest, DoubleRelease) {

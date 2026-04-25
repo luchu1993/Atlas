@@ -71,6 +71,7 @@ class MockNativeProvider : public INativeApiProvider {
   void SendBaseRpc(uint32_t, uint32_t, const std::byte*, int32_t) override {}
   void RegisterEntityType(const std::byte*, int32_t) override {}
   void UnregisterAllEntityTypes() override {}
+  void RegisterStruct(const std::byte*, int32_t) override {}
   void WriteToDb(uint32_t, const std::byte*, int32_t) override {}
   void GiveClientTo(uint32_t, uint32_t) override {}
   auto CreateBaseEntity(uint16_t, uint32_t) -> uint32_t override { return 0; }

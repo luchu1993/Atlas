@@ -41,13 +41,11 @@ auto ToScriptValue(const ScriptValue& sv) -> ClrScriptValue {
     cv.type = ClrScriptValueType::kBytes;
     cv.bytes_val = {b.data(), static_cast<int32_t>(b.size())};
   } else if (sv.IsObject()) {
-    // Phase 2.2: Implement GCHandle machinery (ClrObjectRegistry) before
-    // enabling Object transfer.  Passing a raw ScriptObject* is unsafe:
-    // the shared_ptr may expire before C# uses the pointer, causing a
-    // use-after-free.  Return None + log a warning until Phase 2.2.
-    ATLAS_LOG_WARNING(
-        "to_script_value: Object type not supported until Phase 2.2 "
-        "(GCHandle), converting to None");
+    // Passing a raw ScriptObject* across the boundary is unsafe — the
+    // shared_ptr may expire before C# uses the pointer (use-after-free).
+    // Until GCHandle-based transfer (ClrObjectRegistry) is wired up, degrade
+    // to None and warn.
+    ATLAS_LOG_WARNING("to_script_value: Object type not yet supported, converting to None");
     cv.type = ClrScriptValueType::kNone;
   }
 
@@ -88,9 +86,9 @@ auto FromScriptValue(const ClrScriptValue& cv) -> ScriptValue {
     }
 
     case ClrScriptValueType::kObject:
-      // Phase 2.2: reconstruct a ClrObject from the GCHandle stored in
-      // cv.object_val.  Until ClrObject exists, return None to avoid
-      // undefined behaviour from an unmanaged raw pointer.
+      // Would need to reconstruct a ClrObject from the GCHandle stored in
+      // cv.object_val. Until that lands, return None — using the raw pointer
+      // as an Object would be undefined behaviour.
       return ScriptValue{};
 
     default:

@@ -106,7 +106,7 @@ struct EntityTypeDescriptor {
 |------|------|
 | `static EntityDefRegistry& Instance()` | 进程级单例 |
 | `bool RegisterType(const std::byte* data, int32_t len)` | 由 `AtlasRegisterEntityType` 调用；反序列化 + 建索引 |
-| `static Result<EntityDefRegistry> FromJsonFile(path)` | DBApp 从 `entity_defs.json` 直接加载，不经 C# |
+| `Result<LoadedCounts> RegisterFromBinaryFile(path)` | DBApp 加载 `entity_defs.bin`（ATDF 容器，`Atlas.Tools.DefDump` 离线产出） |
 | `const EntityTypeDescriptor* FindByName(name)` / `FindById(type_id)` | 查找 |
 | `bool ValidateRpc(type_id, rpc_id)` | 检验 `rpc_id` 归属 |
 | `const RpcDescriptor* FindRpc(rpc_id)` | 按 packed ID 查找 |

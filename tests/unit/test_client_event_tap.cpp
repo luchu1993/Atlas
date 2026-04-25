@@ -43,6 +43,37 @@ TEST(ClientEventTap, OnDestroy) {
 }
 
 // ============================================================================
+// Component-coverage events (struct props, struct-arg RPC, list-arg RPC,
+// component-level RPC).
+// ============================================================================
+
+TEST(ClientEventTap, OnMainWeaponChanged) {
+  ClientEventCounters c;
+  EXPECT_TRUE(ParseAndCountClientEventLine(
+      "[StressAvatar:42] OnMainWeaponChanged old.id=999 new.id=1000", c));
+  EXPECT_EQ(c.on_main_weapon_changed, 1u);
+}
+
+TEST(ClientEventTap, OnWeaponBroken) {
+  ClientEventCounters c;
+  EXPECT_TRUE(
+      ParseAndCountClientEventLine("[StressAvatar:42] OnWeaponBroken id=42 sharpness=10", c));
+  EXPECT_EQ(c.on_weapon_broken, 1u);
+}
+
+TEST(ClientEventTap, OnScoresSnapshot) {
+  ClientEventCounters c;
+  EXPECT_TRUE(ParseAndCountClientEventLine("[StressAvatar:42] OnScoresSnapshot count=5", c));
+  EXPECT_EQ(c.on_scores_snapshot, 1u);
+}
+
+TEST(ClientEventTap, OnAffixesUpdated) {
+  ClientEventCounters c;
+  EXPECT_TRUE(ParseAndCountClientEventLine("[StressLoadComponent:42] OnAffixesUpdated count=3", c));
+  EXPECT_EQ(c.on_affixes_updated, 1u);
+}
+
+// ============================================================================
 // Unrelated / malformed inputs — harness must not crash or misattribute.
 // ============================================================================
 

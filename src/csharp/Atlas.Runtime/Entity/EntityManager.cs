@@ -70,8 +70,12 @@ public sealed class EntityManager
         _iterating = true;
         foreach (var entity in _entities.Values)
         {
-            if (!entity.IsDestroyed)
-                entity.OnTick(deltaTime);
+            if (entity.IsDestroyed) continue;
+            entity.OnTick(deltaTime);
+            // Fire component ticks AFTER the entity body so a component
+            // that depends on entity state sees the latest values; the
+            // pump still captures any dirty bits both touch this tick.
+            entity.TickAllComponents(deltaTime);
         }
         FlushPending();
     }

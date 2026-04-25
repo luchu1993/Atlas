@@ -29,7 +29,11 @@ internal static class TypeRegistryEmitter
         sb.AppendLine();
         sb.AppendLine("namespace Atlas.Def;");
         sb.AppendLine();
-        sb.AppendLine("internal static class DefEntityTypeRegistry");
+        // public so the offline Atlas.Tools.DefDump tool can reflect on
+        // BuildAll without IVT plumbing. RegisterAll itself stays an
+        // internal ModuleInitializer because it carries PInvoke side
+        // effects callers shouldn't trigger ad-hoc.
+        sb.AppendLine("public static class DefEntityTypeRegistry");
         sb.AppendLine("{");
         sb.AppendLine("    [System.Runtime.CompilerServices.ModuleInitializer]");
         sb.AppendLine("    internal static void RegisterAll()");
@@ -47,6 +51,25 @@ internal static class TypeRegistryEmitter
         sb.AppendLine("        catch (System.InvalidOperationException) { }");
         sb.AppendLine("    }");
 
+        // BuildAll — visits each entity blob without the PInvoke side
+        // effect. Used by Atlas.Tools.DefDump to materialise a binary
+        // descriptor file from a built assembly. Allocates a byte[] per
+        // entity (cheap — descriptor count is small at compile time).
+        sb.AppendLine();
+        sb.AppendLine("    public static void BuildAll(System.Action<byte[]> visit)");
+        sb.AppendLine("    {");
+        foreach (var (def, _, _) in sorted)
+        {
+            if (!typeIndexMap.TryGetValue(def.Name, out var typeId))
+                continue;
+            sb.AppendLine($"        {{");
+            sb.AppendLine($"            var w = new SpanWriter(1024);");
+            sb.AppendLine($"            try {{ Build_{def.Name}(ref w, {typeId}); visit(w.WrittenSpan.ToArray()); }}");
+            sb.AppendLine($"            finally {{ w.Dispose(); }}");
+            sb.AppendLine($"        }}");
+        }
+        sb.AppendLine("    }");
+
         foreach (var (def, className, ns) in sorted)
         {
             if (!typeIndexMap.TryGetValue(def.Name, out var typeId))
@@ -62,11 +85,27 @@ internal static class TypeRegistryEmitter
     private static void EmitRegisterMethod(StringBuilder sb, EntityDefModel def, ushort typeId,
         Dictionary<string, ushort> typeIndexMap, ProcessContext ctx)
     {
+        // Build_<Foo> contains the whole blob-build sequence; Register_<Foo>
+        // is a thin shim that adds the PInvoke side effect. Splitting keeps
+        // BuildAll (offline DefDump path) and RegisterAll (runtime PInvoke
+        // path) on a single source of truth for the wire layout.
         sb.AppendLine($"    private static void Register_{def.Name}(ushort typeId)");
         sb.AppendLine("    {");
         sb.AppendLine("        var writer = new SpanWriter(1024);");
         sb.AppendLine("        try");
         sb.AppendLine("        {");
+        sb.AppendLine($"            Build_{def.Name}(ref writer, typeId);");
+        if (ctx == ProcessContext.Client)
+            sb.AppendLine("            Atlas.Client.ClientEntityRegistryBridge.RegisterEntityType(writer.WrittenSpan);");
+        else
+            sb.AppendLine("            Atlas.Core.EntityRegistryBridge.RegisterEntityType(writer.WrittenSpan);");
+        sb.AppendLine("        }");
+        sb.AppendLine("        finally { writer.Dispose(); }");
+        sb.AppendLine("    }");
+        sb.AppendLine();
+
+        sb.AppendLine($"    private static void Build_{def.Name}(ref SpanWriter writer, ushort typeId)");
+        sb.AppendLine("    {");
 
         // Type header
         sb.AppendLine($"            writer.WriteString(\"{def.Name}\");");
@@ -82,50 +121,70 @@ internal static class TypeRegistryEmitter
         for (int i = 0; i < effectiveProps.Count; i++)
         {
             var prop = effectiveProps[i];
+            var topKind = ResolveTopLevelKind(prop);
             sb.AppendLine($"            writer.WriteString(\"{prop.Name}\");");
-            sb.AppendLine($"            writer.WriteByte({DefTypeHelper.DataTypeId(prop.Type)});");
+            sb.AppendLine($"            writer.WriteByte({(byte)topKind});");
             sb.AppendLine($"            writer.WriteByte({(byte)prop.Scope});");
             sb.AppendLine($"            writer.WriteBool({(prop.Persistent ? "true" : "false")});");
             sb.AppendLine($"            writer.WriteByte(5);");  // detail_level default
             sb.AppendLine($"            writer.WriteUInt16({(ushort)i});");
             sb.AppendLine($"            writer.WriteBool(false);");  // identifier (not parsed from .def yet)
             sb.AppendLine($"            writer.WriteBool({(prop.Reliable ? "true" : "false")});");
+
+            // Container tail — matches the wire format consumed by
+            // RegisterType in entity_def_registry.cc. Scalars emit nothing
+            // here; prop.data_type alone pins them down.
+            if (prop.TypeRef is not null && IsContainer(topKind))
+            {
+                EmitDataTypeRefBody(sb, prop.TypeRef);
+                sb.AppendLine($"            writer.WritePackedUInt32({prop.MaxSize});");
+            }
         }
 
-        // RPCs — collect ALL methods from all sections
-        var allRpcs = new List<(MethodDefModel Method, string Section, byte Direction)>();
-        foreach (var m in def.ClientMethods.OrderBy(m => m.Name))
-            allRpcs.Add((m, "client_methods", 0x00));
-        foreach (var m in def.CellMethods.OrderBy(m => m.Name))
-            allRpcs.Add((m, "cell_methods", 0x02));
-        foreach (var m in def.BaseMethods.OrderBy(m => m.Name))
-            allRpcs.Add((m, "base_methods", 0x03));
+        // RPCs — collect ALL methods from all sections, including those
+        // declared on Synced components. Each component method gets a
+        // slot-encoded rpc_id; the C++ registry stays oblivious to the
+        // entity-vs-component distinction (slot is just bits in the id).
+        var allRpcs = new List<(MethodDefModel Method, byte Direction, int Slot, int MethodIdx)>();
+
+        void AddSection(List<MethodDefModel> methods, byte direction, int slot)
+        {
+            var sorted = methods.OrderBy(m => m.Name).ToList();
+            for (int i = 0; i < sorted.Count; i++)
+                allRpcs.Add((sorted[i], direction, slot, i + 1));
+        }
+
+        AddSection(def.ClientMethods, 0x00, slot: 0);
+        AddSection(def.CellMethods,   0x02, slot: 0);
+        AddSection(def.BaseMethods,   0x03, slot: 0);
+
+        foreach (var c in def.Components)
+        {
+            if (c.Locality != ComponentLocality.Synced) continue;
+            AddSection(c.ClientMethods, 0x00, c.SlotIdx);
+            AddSection(c.CellMethods,   0x02, c.SlotIdx);
+            AddSection(c.BaseMethods,   0x03, c.SlotIdx);
+        }
 
         sb.AppendLine($"            writer.WritePackedUInt32({(uint)allRpcs.Count});");
 
-        foreach (var (method, section, direction) in allRpcs)
+        foreach (var (method, direction, slot, methodIdx) in allRpcs)
         {
-            // Compute RPC ID (must match RpcIdEmitter)
-            var methodsInSection = section switch
-            {
-                "client_methods" => def.ClientMethods.OrderBy(m => m.Name).ToList(),
-                "cell_methods" => def.CellMethods.OrderBy(m => m.Name).ToList(),
-                "base_methods" => def.BaseMethods.OrderBy(m => m.Name).ToList(),
-                _ => new List<MethodDefModel>(),
-            };
-            int methodIndex = methodsInSection.FindIndex(m => m.Name == method.Name) + 1;
-            int rpcId = (direction << 22) | (typeId << 8) | methodIndex;
+            int rpcId = RpcIdEncoder.Encode(slot, direction, typeId, methodIdx);
 
             // name (string)
             sb.AppendLine($"            writer.WriteString(\"{method.Name}\");");
             // rpc_id (packed uint32)
-            sb.AppendLine($"            writer.WritePackedUInt32(0x{rpcId:X6});");
+            sb.AppendLine($"            writer.WritePackedUInt32(0x{rpcId:X8});");
             // param_count (packed uint32)
             sb.AppendLine($"            writer.WritePackedUInt32({(uint)method.Args.Count});");
-            // param types (uint8 each)
+            // param types (uint8 each). Container / struct args surface
+            // as kList(16) / kDict(17) / kStruct(18); C++ stores the
+            // kind for descriptor logging but never decodes the payload
+            // body — actual arg parsing happens C#-side per codegen.
             foreach (var arg in method.Args)
             {
-                sb.AppendLine($"            writer.WriteByte({DefTypeHelper.DataTypeId(arg.Type)});");
+                sb.AppendLine($"            writer.WriteByte({RpcArgCodec.WireKind(arg)});");
             }
             // ExposedScope (uint8)
             sb.AppendLine($"            writer.WriteByte({(byte)method.Exposed});");
@@ -135,19 +194,59 @@ internal static class TypeRegistryEmitter
         sb.AppendLine("            writer.WriteByte(0);");
         sb.AppendLine("            writer.WriteByte(0);");
 
-        sb.AppendLine();
-
-        // Call NativeApi via the public bridge
-        if (ctx == ProcessContext.Client)
-            sb.AppendLine("            Atlas.Client.ClientEntityRegistryBridge.RegisterEntityType(writer.WrittenSpan);");
-        else
-            sb.AppendLine("            Atlas.Core.EntityRegistryBridge.RegisterEntityType(writer.WrittenSpan);");
-
-        sb.AppendLine("        }");
-        sb.AppendLine("        finally");
-        sb.AppendLine("        {");
-        sb.AppendLine("            writer.Dispose();");
-        sb.AppendLine("        }");
         sb.AppendLine("    }");
+    }
+
+    private static PropertyDataKind ResolveTopLevelKind(PropertyDefModel prop)
+    {
+        // Container properties are driven by TypeRef.Kind; scalars fall back
+        // to the flat DefTypeHelper mapping so the legacy code path
+        // (RegisterType reading [u8 kind] for scalar) stays wire-compatible.
+        if (prop.TypeRef is not null) return prop.TypeRef.Kind;
+
+        var scalar = (PropertyDataKind)DefTypeHelper.DataTypeId(prop.Type);
+        // DataTypeId returns kCustom (=15) as its "unknown name" fallback.
+        // By the time we reach the emitter, DefTypeExprParser has already
+        // classified every type string — an unrecognised name would have
+        // been mapped to a kStruct with prop.TypeRef set. So hitting
+        // kCustom here means a genuine scalar-typed "custom" property,
+        // not a parser miss. Treat that as fine; any future path that
+        // skips DefTypeExprParser is the one that needs to be fixed.
+        return scalar;
+    }
+
+    private static bool IsContainer(PropertyDataKind kind) =>
+        kind == PropertyDataKind.List ||
+        kind == PropertyDataKind.Dict ||
+        kind == PropertyDataKind.Struct;
+
+    // Emits bytes for a DataTypeRef body — kind-specific tail only, no
+    // leading kind byte. Callers that need a full self-describing
+    // DataTypeRef (list elem, dict key/value) wrap this with EmitDataTypeRef.
+    internal static void EmitDataTypeRefBody(StringBuilder sb, DataTypeRefModel t)
+    {
+        switch (t.Kind)
+        {
+            case PropertyDataKind.List:
+                EmitDataTypeRef(sb, t.Elem!);
+                break;
+            case PropertyDataKind.Dict:
+                EmitDataTypeRef(sb, t.Key!);
+                EmitDataTypeRef(sb, t.Elem!);
+                break;
+            case PropertyDataKind.Struct:
+                sb.AppendLine($"            writer.WriteUInt16((ushort){t.StructId});");
+                break;
+            default:
+                // Scalar kinds have no tail — body writer is only invoked on
+                // container properties, so hitting this branch is a bug.
+                break;
+        }
+    }
+
+    internal static void EmitDataTypeRef(StringBuilder sb, DataTypeRefModel t)
+    {
+        sb.AppendLine($"            writer.WriteByte({(byte)t.Kind});");
+        if (IsContainer(t.Kind)) EmitDataTypeRefBody(sb, t);
     }
 }

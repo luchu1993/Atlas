@@ -84,6 +84,10 @@
     X(void, UnregisterAllEntityTypes,                                                              \
         (),                                                                                        \
         atlas::GetNativeApiProvider().UnregisterAllEntityTypes())                                   \
+    X(void, RegisterStruct,                                                                        \
+        (const uint8_t* data, int32_t len),                                                        \
+        atlas::GetNativeApiProvider().RegisterStruct(                                               \
+            reinterpret_cast<const std::byte*>(data), len))                                        \
                                                                                                    \
     /* ---- Persistence ---------------------------------------------------- */                    \
     X(void, WriteToDb,                                                                             \

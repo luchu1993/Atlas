@@ -66,8 +66,10 @@ struct ServerConfig {
   std::filesystem::path runtime_config;
 
   // ---- Database -----------------------------------------------------------
-  std::filesystem::path entitydef_path;  // entity_defs.json (DBApp)
-  std::string db_type{"sqlite"};         // "xml", "sqlite", or "mysql"
+  // Binary descriptor (ATDF, emitted by Atlas.Tools.DefDump) consumed by
+  // EntityDefRegistry::RegisterFromBinaryFile on DBApp startup.
+  std::filesystem::path entitydef_bin_path;
+  std::string db_type{"sqlite"};  // "xml", "sqlite", or "mysql"
   std::filesystem::path db_xml_dir{"data/db"};
   std::filesystem::path db_sqlite_path{"data/atlas_dev.sqlite3"};
   bool db_sqlite_wal{true};

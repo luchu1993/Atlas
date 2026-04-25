@@ -166,27 +166,27 @@ auto ClrObject::AsBool() const -> Result<bool> {
 }
 
 auto ClrObject::AsBytes() const -> Result<std::vector<std::byte>> {
-  // Not implemented in Phase 2 — requires byte-array serialization (Phase 3+).
-  return Error{ErrorCode::kScriptError, "ClrObject::as_bytes() not implemented in Phase 2"};
+  // Needs byte-array serialization across the managed boundary — not wired yet.
+  return Error{ErrorCode::kScriptError, "ClrObject::as_bytes() not implemented"};
 }
 
 auto ClrObject::GetAttr(std::string_view /*name*/) -> std::unique_ptr<ScriptObject> {
-  // Attribute access requires Source Generator scaffolding (Phase 4).
-  // Return nullptr until then; callers should check for null.
+  // Generic attribute access needs Source Generator scaffolding to be wired
+  // up. Return nullptr until then; callers should check for null.
   return nullptr;
 }
 
 auto ClrObject::SetAttr(std::string_view /*name*/, const ScriptValue& /*value*/) -> Result<void> {
-  return Error{ErrorCode::kScriptError, "ClrObject::set_attr() not implemented in Phase 2"};
+  return Error{ErrorCode::kScriptError, "ClrObject::set_attr() not implemented"};
 }
 
 auto ClrObject::IsCallable() const -> bool {
-  // Generic callability requires Source Generator scaffolding (Phase 4).
+  // Generic callability needs Source Generator scaffolding to be wired up.
   return false;
 }
 
 auto ClrObject::Call(std::span<const ScriptValue> /*args*/) -> Result<ScriptValue> {
-  return Error{ErrorCode::kScriptError, "ClrObject::call() not implemented in Phase 2"};
+  return Error{ErrorCode::kScriptError, "ClrObject::call() not implemented"};
 }
 
 auto ClrObject::ToDebugString() const -> std::string {

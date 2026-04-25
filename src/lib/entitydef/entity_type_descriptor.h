@@ -2,29 +2,60 @@
 #define ATLAS_LIB_ENTITYDEF_ENTITY_TYPE_DESCRIPTOR_H_
 
 #include <cstdint>
+#include <memory>
+#include <optional>
 #include <string>
 #include <vector>
 
 namespace atlas {
 
+// Values <= kCustom (15) are scalar — a PropertyDescriptor with one of
+// these needs no companion type_ref. Values >= kList (16) are composite —
+// the descriptor MUST carry a matching DataTypeRef tail; see
+// ValidatePropertyInvariant. Numeric values are fixed because they're the
+// wire encoding: never renumber.
+//
+// kInvalid = 0xFF is reserved as the default-constructed sentinel so a
+// DataTypeRef that was never populated doesn't silently look like a valid
+// kBool. The binary decoder rejects it; any caller that sees kInvalid at
+// runtime holds a bug.
 enum class PropertyDataType : uint8_t {
-  kBool,
-  kInt8,
-  kUInt8,
-  kInt16,
-  kUInt16,
-  kInt32,
-  kUInt32,
-  kInt64,
-  kUInt64,
-  kFloat,
-  kDouble,
-  kString,
-  kBytes,
-  kVector3,
-  kQuaternion,
-  kCustom
+  kBool = 0,
+  kInt8 = 1,
+  kUInt8 = 2,
+  kInt16 = 3,
+  kUInt16 = 4,
+  kInt32 = 5,
+  kUInt32 = 6,
+  kInt64 = 7,
+  kUInt64 = 8,
+  kFloat = 9,
+  kDouble = 10,
+  kString = 11,
+  kBytes = 12,
+  kVector3 = 13,
+  kQuaternion = 14,
+  kCustom = 15,
+  kList = 16,
+  kDict = 17,
+  kStruct = 18,
+  kInvalid = 0xFF,
 };
+
+// kDict requires `key` to be scalar; other container element positions are
+// unconstrained. shared_ptr children are used instead of unique_ptr so the
+// node stays copyable — PropertyDescriptor is held by std::vector and must
+// remain regular; descriptors are read-only after registration, so sharing
+// is safe.
+struct DataTypeRef {
+  PropertyDataType kind = PropertyDataType::kInvalid;
+  uint16_t struct_id = 0;
+  std::shared_ptr<DataTypeRef> elem;  // kList.elem, kDict.value
+  std::shared_ptr<DataTypeRef> key;   // kDict.key
+};
+
+// Bounds recursion so a crafted descriptor can't blow the decoder's stack.
+inline constexpr std::size_t kMaxDataTypeDepth = 8;
 
 enum class ReplicationScope : uint8_t {
   kCellPrivate = 0,
@@ -56,24 +87,100 @@ struct PropertyDescriptor {
   bool reliable{false};
   uint8_t detail_level{5};
   uint16_t index{0};
+  // Set iff data_type is a container — see ValidatePropertyInvariant.
+  std::optional<DataTypeRef> type_ref;
+  // Ignored for scalar properties. 4 B overhead per scalar descriptor;
+  // acceptable today (PropertyDescriptor is not cache-line sensitive),
+  // flagged for the bit-pack compression pass to revisit if descriptor
+  // memory ever becomes a hot spot.
+  uint32_t max_size{4096};
 };
+
+// Enforced at registration so scalar and container properties can't silently
+// be mixed up. Violation = generator bug, not user error.
+//
+//   data_type ∈ {kList, kDict, kStruct}
+//     ⇔ type_ref.has_value() && type_ref->kind == data_type
+//
+// kCustom is specifically a scalar — legacy slot for user-defined types
+// the early registry couldn't describe. Any new "user-defined composite"
+// must use kStruct so its shape is addressable. Do NOT start attaching a
+// type_ref to kCustom; that combination is wired to fail this check.
+[[nodiscard]] inline bool ValidatePropertyInvariant(const PropertyDescriptor& prop) {
+  const bool is_container = prop.data_type == PropertyDataType::kList ||
+                            prop.data_type == PropertyDataType::kDict ||
+                            prop.data_type == PropertyDataType::kStruct;
+  if (is_container) {
+    return prop.type_ref.has_value() && prop.type_ref->kind == prop.data_type;
+  }
+  return !prop.type_ref.has_value();
+}
 
 struct RpcDescriptor {
   std::string name;
-  uint32_t rpc_id;  // Packed: [direction:2 | typeIndex:14 | method:8]
+  // Packed encoding of rpc_id:
+  //   bits 24-31  slot_idx     0 = entity body, >0 = component slot on entity
+  //   bits 22-23  direction    0=Client, 2=Cell, 3=Base
+  //   bits  8-21  typeIndex    entity type
+  //   bits  0-7   methodIdx    1-based per (slot, direction)
+  // Component RPCs share `typeIndex` with the owning entity; SlotIdx() of
+  // 0 means the legacy entity-body RPC, identical to pre-component encodings.
+  uint32_t rpc_id;
   std::vector<PropertyDataType> param_types;
   ExposedScope exposed{ExposedScope::kNone};
 
+  [[nodiscard]] uint8_t SlotIdx() const { return static_cast<uint8_t>((rpc_id >> 24) & 0xFF); }
   [[nodiscard]] uint8_t Direction() const { return static_cast<uint8_t>((rpc_id >> 22) & 0x3); }
   [[nodiscard]] uint16_t TypeIndex() const { return static_cast<uint16_t>((rpc_id >> 8) & 0x3FFF); }
   [[nodiscard]] uint8_t MethodIndex() const { return static_cast<uint8_t>(rpc_id & 0xFF); }
   [[nodiscard]] bool IsExposed() const { return exposed != ExposedScope::kNone; }
+  [[nodiscard]] bool IsComponentRpc() const { return SlotIdx() != 0; }
 };
 
 /// Compression algorithm for entity data on the wire (mirrors network::CompressionType).
 enum class EntityCompression : uint8_t {
   kNone = 0,
   kDeflate = 1,
+};
+
+// Three flavours, mirroring the C# class hierarchy:
+//   kSynced       — replicated to clients per the slot's ReplicationScope
+//   kServerLocal  — server-side only, not on the wire
+//   kClientLocal  — client-side only, not registered server-side normally
+// Numeric values are wire-stable.
+enum class ComponentLocality : uint8_t {
+  kSynced = 0,
+  kServerLocal = 1,
+  kClientLocal = 2,
+};
+
+// A reusable component schema. Multiple entity types can reference the same
+// ComponentDescriptor by `component_type_id`, and an entity slot's scope
+// further narrows which clients see the replicated properties.
+struct ComponentDescriptor {
+  std::string name;
+  uint16_t component_type_id{0};
+  // Empty when the component does not extend another. Single inheritance
+  // only — the C# generator enforces this; the C++ side trusts that and
+  // resolves the chain by name lookup at attach time.
+  std::string base_name;
+  ComponentLocality locality{ComponentLocality::kSynced};
+  // Properties OWN to this component — the base's properties are NOT inlined
+  // here; runtime walks `base_name` to flatten when needed. Keeps blobs
+  // small and avoids re-registering inherited fields with new indices.
+  std::vector<PropertyDescriptor> properties;
+};
+
+// A slot reference on an entity — names a `component_type_id` and the
+// per-entity attach metadata. The slot's `scope` is the upper bound of
+// visibility for any property in the component; a property with a tighter
+// scope still wins (P.scope ⊆ C.scope is enforced at C# parse time).
+struct EntitySlotDescriptor {
+  uint16_t slot_idx{0};   // 1-based; slot 0 reserved for entity body.
+  std::string slot_name;  // Accessor name on the entity, e.g. "ability".
+  uint16_t component_type_id{0};
+  ReplicationScope scope{ReplicationScope::kAllClients};
+  bool lazy{false};  // Reserved — not currently consulted at runtime.
 };
 
 struct EntityTypeDescriptor {
@@ -88,6 +195,10 @@ struct EntityTypeDescriptor {
   EntityCompression internal_compression = EntityCompression::kNone;
   /// Compression for external (server-to-client) large messages.
   EntityCompression external_compression = EntityCompression::kNone;
+
+  /// Component slots declared on this entity. Empty for entities without
+  /// components; not every entity has them.
+  std::vector<EntitySlotDescriptor> slots;
 };
 
 }  // namespace atlas

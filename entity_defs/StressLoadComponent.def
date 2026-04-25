@@ -1,0 +1,58 @@
+<!-- Component coverage matrix mirrors StressAvatar's entity-level grid:
+     scalar / dict / list / nested / struct / list-of-struct properties,
+     plus scalar / container / struct RPC argument shapes. Property +
+     RPC numbering is hierarchy-flat (no extends here). -->
+<component name="StressLoadComponent">
+  <properties>
+    <!-- (1) Scalar. -->
+    <property name="extraHp" type="int32" scope="all_clients" />
+
+    <!-- (2) List of scalar. -->
+    <property name="affixes" type="list&lt;int32&gt;" scope="all_clients" />
+
+    <!-- (3) Dict of scalar. -->
+    <property name="resistMap" type="dict&lt;string,int32&gt;" scope="all_clients" />
+
+    <!-- (4) Nested: list-of-list. -->
+    <property name="affixGroups" type="list&lt;list&lt;int32&gt;&gt;" scope="all_clients" />
+
+    <!-- (5) Struct property — field-level struct sync via component
+         WriteOwnerDelta. -->
+    <property name="offhand" type="StressWeapon" scope="all_clients" />
+
+    <!-- (6) List of struct. -->
+    <property name="quickBuffs" type="list&lt;StressBuff&gt;" scope="all_clients" />
+  </properties>
+
+  <cell_methods>
+    <!-- (R1) Scalar args. -->
+    <method name="Charge" exposed="own_client">
+      <arg name="seq"    type="uint32" />
+      <arg name="amount" type="int32" />
+    </method>
+
+    <!-- (R2) Container arg. -->
+    <method name="ApplyAffixes" exposed="own_client">
+      <arg name="ids" type="list&lt;int32&gt;" />
+    </method>
+
+    <!-- (R3) Struct arg. -->
+    <method name="SwapOffhand" exposed="own_client">
+      <arg name="w" type="StressWeapon" />
+    </method>
+
+    <!-- (R4) List-of-struct arg. -->
+    <method name="QueueBuffs" exposed="own_client">
+      <arg name="buffs" type="list&lt;StressBuff&gt;" />
+    </method>
+  </cell_methods>
+
+  <client_methods>
+    <!-- Server→client RPC delivered through the component slot —
+         dispatcher decodes slot_idx, finds the StressLoadComponent
+         instance on the entity, and runs this method. -->
+    <method name="OnAffixesUpdated">
+      <arg name="ids" type="list&lt;int32&gt;" />
+    </method>
+  </client_methods>
+</component>

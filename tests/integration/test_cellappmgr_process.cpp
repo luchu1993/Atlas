@@ -1,16 +1,16 @@
-// Phase 11 PR-6 review-fix S4 — multi-process CellAppMgr harness.
+// Multi-process CellAppMgr harness.
 //
 // Boots the actual `atlas_machined.exe` + `atlas_cellappmgr.exe`
 // binaries via CreateProcessW (same pattern as test_login_flow.cpp),
 // then drives them with synthetic CellApp-like clients over real RUDP.
-// This exercises the real binaries — static init, argv parsing,
-// machined registration, ManagerApp ctor → Init → RunLoop — not just
-// in-process threads.
+// Exercises the real binaries — static init, argv parsing, machined
+// registration, ManagerApp ctor → Init → RunLoop — not just in-process
+// threads.
 //
 // Scope deliberately stops at cellappmgr. The full 2×atlas_cellapp
 // scenario requires a healthy CLR bring-up (Atlas.Runtime.dll loaded
-// via hostfxr); that layer is orthogonal to Phase 11 and is covered
-// end-to-end by test_login_flow.cpp + follow-up work.
+// via hostfxr); that layer is orthogonal here and is covered end-to-end
+// by test_login_flow.cpp.
 
 #include <algorithm>
 #include <atomic>

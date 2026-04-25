@@ -17,6 +17,8 @@ ceiling Atlas must support comfortably.
 | [distance_lod.md](distance_lod.md) | Witness replication | P0 |
 | [property_dirty_flags.md](property_dirty_flags.md) | Entity replication | P0 |
 | [adaptive_bandwidth.md](adaptive_bandwidth.md) | Witness bandwidth | P0 |
+| [async_entity_lifecycle.md](async_entity_lifecycle.md) | Dispatcher / entity init | P1 |
+| [lazy_baseline.md](lazy_baseline.md) | Baseline serialization | P1 |
 | [incremental_priority_queue.md](incremental_priority_queue.md) | Witness update | P1 |
 | [history_window.md](history_window.md) | Replication catch-up | P1 |
 | [rangelist_grid.md](rangelist_grid.md) | Spatial partitioning | P1 |

@@ -1,0 +1,13 @@
+<entity name="StructSyncTestEntity">
+  <types>
+    <struct name="TestWeapon">
+      <field name="id" type="int32" />
+      <field name="sharpness" type="uint16" />
+      <field name="bound" type="bool" />
+    </struct>
+  </types>
+  <properties>
+    <property name="mainWeapon" type="TestWeapon" scope="all_clients" />
+    <property name="hp" type="int32" scope="own_client" />
+  </properties>
+</entity>

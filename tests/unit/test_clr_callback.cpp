@@ -290,7 +290,7 @@ TEST_F(ClrCallbackTest, ProcessPrefixRoundTrip) {
   auto res = m.Invoke(&prefix);
   ASSERT_TRUE(res.HasValue()) << res.Error().Message();
   EXPECT_EQ(*res, 0);
-  EXPECT_EQ(prefix, 0);  // Stub returns 0 in Phase 2.
+  EXPECT_EQ(prefix, 0);  // Stub returns 0.
 }
 
 }  // namespace atlas::test

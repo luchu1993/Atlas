@@ -288,7 +288,7 @@ TEST(RangeList, RandomInsertAndMovePreservesInvariants) {
   std::mt19937 rng(0xA71A5);  // deterministic seed for reproducible fail traces
   std::uniform_real_distribution<float> coord(-100.f, 100.f);
 
-  // Phase 1: bulk insert.
+  // Bulk insert.
   for (int i = 0; i < 200; ++i) {
     nodes.emplace_back(coord(rng), coord(rng), RangeListOrder::kEntity);
     list.Insert(&nodes.back());
@@ -296,7 +296,7 @@ TEST(RangeList, RandomInsertAndMovePreservesInvariants) {
   ASSERT_TRUE(ValidateXSort(list));
   ASSERT_TRUE(ValidateZSort(list));
 
-  // Phase 2: random tiny moves (simulates an AoI-heavy tick).
+  // Random tiny moves (simulates an AoI-heavy tick).
   std::uniform_real_distribution<float> jitter(-2.f, 2.f);
   for (int step = 0; step < 500; ++step) {
     auto& n = nodes[static_cast<size_t>(rng() % nodes.size())];

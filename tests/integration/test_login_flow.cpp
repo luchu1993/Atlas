@@ -12,6 +12,7 @@
 
 #include <gtest/gtest.h>
 
+#include "atdf_account_fixture.h"
 #include "baseapp/baseapp_messages.h"
 #include "loginapp/login_messages.h"
 #include "network/event_dispatcher.h"
@@ -263,27 +264,9 @@ struct ChildProcess {
   }
 };
 
-auto write_entity_defs_json() -> std::filesystem::path {
-  auto path = std::filesystem::temp_directory_path() / "atlas_login_flow_entity_defs.json";
-  std::ofstream f(path, std::ios::trunc);
-  f << R"({
-        "version": 1,
-        "types": [
-            {
-                "type_id": 1,
-                "name": "Account",
-                "has_cell": false,
-                "has_client": true,
-                "properties": [
-                    {"name": "accountName", "type": "string", "persistent": true,
-                     "identifier": true, "scope": "base_only", "index": 0},
-                    {"name": "level", "type": "int32", "persistent": true,
-                     "identifier": false, "scope": "base_only", "index": 1}
-                ]
-            }
-        ]
-    })";
-  return path;
+auto write_entity_defs_bin() -> std::filesystem::path {
+  auto path = std::filesystem::temp_directory_path() / "atlas_login_flow_entity_defs.bin";
+  return atlas::test_fixtures::WriteAccountAtdfFile(path);
 }
 
 auto write_baseapp_config_json(const std::filesystem::path& runtime_cfg,
@@ -403,7 +386,7 @@ TEST(LoginFlowIntegration, ClientCanLoginAndAuthenticateThroughFullStack) {
     GTEST_SKIP() << "server binaries missing under " << server_bin_dir();
   }
 
-  const auto entity_defs = write_entity_defs_json();
+  const auto entity_defs = write_entity_defs_bin();
   const auto baseapp_config = write_baseapp_config_json(runtime_cfg, runtime_dll);
   const auto sqlite_path = std::filesystem::temp_directory_path() / "atlas_login_flow.sqlite3";
   std::filesystem::remove(sqlite_path);
@@ -450,7 +433,7 @@ TEST(LoginFlowIntegration, ClientCanLoginAndAuthenticateThroughFullStack) {
                                              std::to_wstring(dbapp_port),
                                              L"--machined",
                                              machined_addr,
-                                             L"--entitydef-path",
+                                             L"--entitydef-bin-path",
                                              entity_defs.wstring(),
                                              L"--db-type",
                                              L"sqlite",

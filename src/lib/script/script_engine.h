@@ -18,7 +18,7 @@ namespace atlas {
 // ============================================================================
 //
 // Concrete implementations:
-//   - ClrScriptEngine (.NET / CoreCLR)  [ScriptPhase 1-3]
+//   - ClrScriptEngine (.NET / CoreCLR)
 //
 // Lifecycle: initialize() -> [load_module()* -> on_tick()*] -> finalize()
 

@@ -114,6 +114,19 @@ internal static unsafe partial class NativeApi
             RegisterEntityTypeNative(ptr, data.Length);
     }
 
+    [LibraryImport(LibName, EntryPoint = "AtlasRegisterStruct")]
+    private static partial void RegisterStructNative(byte* data, int len);
+
+    // Must be invoked before any RegisterEntityType whose descriptor
+    // references this struct by id — RegisterType's decoder resolves
+    // struct_id references against the registry's current state.
+    public static void RegisterStruct(ReadOnlySpan<byte> data)
+    {
+        ThreadGuard.EnsureMainThread();
+        fixed (byte* ptr = data)
+            RegisterStructNative(ptr, data.Length);
+    }
+
     [LibraryImport(LibName, EntryPoint = "AtlasUnregisterAllEntityTypes")]
     public static partial void UnregisterAllEntityTypes();
 

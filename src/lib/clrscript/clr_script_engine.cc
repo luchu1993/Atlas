@@ -38,7 +38,7 @@ auto ClrScriptEngine::Initialize() -> Result<void> {
     return Error{ErrorCode::kScriptError, std::format("ClrScriptEngine: CLR init failed: {}",
                                                       host_result.Error().Message())};
 
-  // 2. Run Phase 2 bootstrap (error bridge + vtable).
+  // 2. Wire the managed-side error bridge + vtable through bootstrap.
   auto bootstrap_result =
       config_.bootstrap_args
           ? ClrBootstrap(host_, config_.runtime_assembly_path, *config_.bootstrap_args)
@@ -47,9 +47,9 @@ auto ClrScriptEngine::Initialize() -> Result<void> {
     return Error{ErrorCode::kScriptError, std::format("ClrScriptEngine: bootstrap failed: {}",
                                                       bootstrap_result.Error().Message())};
 
-  // 3. Bind Phase 3 lifecycle methods. Optional: hosts that don't expose
-  // an Atlas.Core.Lifecycle entry point (desktop client) pass an empty
-  // lifecycle_type and the engine skips this block; the corresponding
+  // 3. Bind lifecycle methods. Optional: hosts that don't expose an
+  // Atlas.Core.Lifecycle entry point (desktop client) pass an empty
+  // lifecycle_type and this block is skipped; the corresponding
   // ScriptEngine virtuals become no-ops.
   const auto& asm_path = config_.runtime_assembly_path;
 

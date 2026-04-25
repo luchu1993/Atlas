@@ -139,6 +139,10 @@ class BaseApp : public EntityApp {
   void OnCellRpcForward(Channel& ch, const baseapp::CellRpcForward& msg);
   void OnSelfRpcFromCell(Channel& ch, const baseapp::SelfRpcFromCell& msg);
   void OnBroadcastRpcFromCell(Channel& ch, const baseapp::BroadcastRpcFromCell& msg);
+  // Shared envelope chooser for cell→client RPC relay. Picks the legacy
+  // 16-bit-id path for entity-level RPCs (slot=0) and the dedicated
+  // kClientComponentRpcMessageId path for component RPCs (slot>0).
+  void RelayRpcToClient(Channel& client_ch, uint32_t rpc_id, const std::vector<std::byte>& payload);
   void OnReplicatedDeltaFromCell(Channel& ch, const baseapp::ReplicatedDeltaFromCell& msg);
   void OnReplicatedReliableDeltaFromCell(Channel& ch,
                                          const baseapp::ReplicatedReliableDeltaFromCell& msg);

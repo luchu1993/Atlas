@@ -140,7 +140,7 @@ static const CliField kCliFields[] = {
     {"update-hertz",               &ServerConfig::update_hertz},
     {"assembly",                   &ServerConfig::script_assembly},
     {"runtime-config",             &ServerConfig::runtime_config},
-    {"entitydef-path",             &ServerConfig::entitydef_path},
+    {"entitydef-bin-path",         &ServerConfig::entitydef_bin_path},
     {"db-type",                    &ServerConfig::db_type},
     {"db-xml-dir",                 &ServerConfig::db_xml_dir},
     {"db-sqlite-path",             &ServerConfig::db_sqlite_path},
@@ -230,8 +230,8 @@ auto ServerConfig::FromJsonFile(const std::filesystem::path& path) -> Result<Ser
   }
 
   if (auto* db = root->Child("database")) {
-    auto edef = db->ReadString("entitydef_path", "");
-    if (!edef.empty()) cfg.entitydef_path = edef;
+    auto edef_bin = db->ReadString("entitydef_bin_path", "");
+    if (!edef_bin.empty()) cfg.entitydef_bin_path = edef_bin;
 
     auto dbtype = db->ReadString("type", "");
     if (!dbtype.empty()) cfg.db_type = dbtype;

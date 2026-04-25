@@ -1,6 +1,9 @@
 using System;
+using System.Collections.Generic;
 using Atlas.Client;
+using Atlas.Components;
 using Atlas.DataTypes;
+using Atlas.Def;
 
 namespace Atlas.ClientSample;
 
@@ -42,6 +45,12 @@ public partial class StressAvatar : ClientEntity
             $"[StressAvatar:{EntityId}] OnHpChanged old={oldValue} new={newValue}");
     }
 
+    partial void OnMainWeaponChanged(Atlas.Def.StressWeapon oldValue, Atlas.Def.StressWeapon newValue)
+    {
+        ClientLog.Info(
+            $"[StressAvatar:{EntityId}] OnMainWeaponChanged old.id={oldValue.Id} new.id={newValue.Id}");
+    }
+
     // -------- Transform (B4) -------------------------------------------------
 
     protected override void OnPositionUpdated(Vector3 newPos)
@@ -58,6 +67,28 @@ public partial class StressAvatar : ClientEntity
         // parsing the raw wire; the script path just confirms the RPC lands.
         ClientLog.Info(
             $"[StressAvatar:{EntityId}] EchoReply seq={seq} serverTsNs={serverTsNs} clientTsNs={clientTsNs}");
+        var m = Metrics;
+        if (m != null) m.EchoReplyCount++;
+    }
+
+    // ------ Component / struct / list-arg receive RPCs ---------------------
+
+    // Server→client struct push.
+    public partial void OnWeaponBroken(StressWeapon w)
+    {
+        ClientLog.Info(
+            $"[StressAvatar:{EntityId}] OnWeaponBroken id={w.Id} sharpness={w.Sharpness}");
+        var m = Metrics;
+        if (m != null) m.OnWeaponBrokenCount++;
+    }
+
+    // Server→client list push.
+    public partial void OnScoresSnapshot(List<int> scores)
+    {
+        ClientLog.Info(
+            $"[StressAvatar:{EntityId}] OnScoresSnapshot count={scores.Count}");
+        var m = Metrics;
+        if (m != null) m.OnScoresSnapshotCount++;
     }
 
     private static string FormatVec(Vector3 v) => $"({v.X:F2},{v.Y:F2},{v.Z:F2})";

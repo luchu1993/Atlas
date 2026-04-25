@@ -123,6 +123,11 @@ struct Metrics {
   std::size_t aoi_leave{0};
   std::size_t aoi_pos_update{0};
   std::size_t aoi_prop_update{0};
+  // Downlink traffic counters (counted in the client pre-dispatch hook, so
+  // every inbound message — typed + untyped — is captured exactly once).
+  std::size_t bytes_rx_total{0};
+  std::unordered_map<uint16_t, std::size_t> bytes_per_msg;
+  std::unordered_map<uint16_t, std::size_t> count_per_msg;
   std::vector<double> auth_latency_ms;
   std::vector<double> echo_rtt_ms;
   std::unordered_map<std::string, std::size_t> failure_reasons;
@@ -182,6 +187,14 @@ class Session {
           } else {
             echo_pending_ = false;  // one-shot mode
           }
+        }
+        // One-shot Charge after EntityTransferred. Single RPC per
+        // session validates the slot=1 component RPC dispatch path
+        // without adding bandwidth to the per-tick baseline. Cleared
+        // immediately so re-entry into kOnline doesn't double-fire.
+        if (charge_one_shot_pending_) {
+          SendChargeComponentRpc();
+          charge_one_shot_pending_ = false;
         }
         // Same shape for ReportPos at move_rate_hz.
         while (move_pending_ && now >= move_due_at_) {
@@ -379,15 +392,23 @@ class Session {
     echo_pending_ = true;
     move_due_at_ = kNow;
     move_pending_ = opts_.move_rate_hz > 0;
+    // Fire one Charge per session to exercise the slot=1 component
+    // RPC dispatch from the harness's raw protocol path.
+    charge_one_shot_pending_ = true;
   }
 
   void SendEcho() {
     if (!auth_channel_ || entity_id_ == kInvalidEntityID) return;
 
     // StressAvatar.Echo is a cell_method (exposed own_client). RPC id
-    // layout: (direction=2 <<22) | (type_index=2 <<8) | method_index=1
-    // = 0x00800201 (see RpcIdEmitter.cs).
-    constexpr uint32_t kEchoRpcId = (2u << 22) | (2u << 8) | 1u;
+    // layout: (slot=0 <<24) | (direction=2 <<22) | (type_index=2 <<8)
+    //          | method_index. Method index is 1-based, sorted by name
+    //          alphabetically across cell_methods. Current order:
+    //          ApplyBuffs(1), Echo(2), EquipWeapon(3), ReportPos(4),
+    //          SubmitScores(5), UpdateLoadout(6). Adding a method that
+    //          sorts before any of these shifts the indices — keep this
+    //          comment in sync with entity_defs/StressAvatar.def.
+    constexpr uint32_t kEchoRpcId = (2u << 22) | (2u << 8) | 2u;
 
     const uint32_t seq = next_echo_seq_++;
     const uint64_t client_ts_ns = static_cast<uint64_t>(
@@ -410,12 +431,41 @@ class Session {
     }
   }
 
+  // Client→cell component RPC. Exercises slot_idx encoding in rpc_id:
+  // slot=1 (StressLoadComponent) routes the dispatcher into the
+  // component instance instead of the entity body. Charge takes scalar
+  // args (kept that way deliberately — gives us a slot-encoded RPC that
+  // doesn't depend on the container/struct arg codec).
+  // method_index assignment per StressLoadComponent.def cell_methods,
+  // alphabetical: ApplyAffixes(1), Charge(2), QueueBuffs(3), SwapOffhand(4).
+  void SendChargeComponentRpc() {
+    if (!auth_channel_ || entity_id_ == kInvalidEntityID) return;
+    constexpr uint32_t kChargeRpcId = (1u << 24) |  // slot_idx = 1 (StressLoadComponent)
+                                      (2u << 22) |  // direction = 2 (cell)
+                                      (2u << 8) |   // type_index = 2 (StressAvatar)
+                                      2u;           // method_index = 2 (Charge)
+    const uint32_t seq = next_charge_seq_++;
+    const int32_t amount = 1 + static_cast<int32_t>(seq % 4);
+    std::vector<std::byte> payload(sizeof(seq) + sizeof(amount));
+    std::memcpy(payload.data(), &seq, sizeof(seq));
+    std::memcpy(payload.data() + sizeof(seq), &amount, sizeof(amount));
+    baseapp::ClientCellRpc rpc;
+    rpc.target_entity_id = entity_id_;
+    rpc.rpc_id = kChargeRpcId;
+    rpc.payload = std::move(payload);
+    const auto kSend = auth_channel_->SendMessage(rpc);
+    if (!kSend) {
+      RecordFailure(std::format("charge_send:{}", kSend.Error().Message()));
+    }
+  }
+
   void SendReportPos() {
     if (!auth_channel_ || entity_id_ == kInvalidEntityID) return;
 
     // StressAvatar.ReportPos is a cell_method (exposed all_clients).
-    // RPC id = 0x00800202 (direction=2 cell, type_index=2, method_index=2).
-    constexpr uint32_t kReportPosRpcId = (2u << 22) | (2u << 8) | 2u;
+    // method_index=4 follows the alphabetical ordering of cell_methods
+    // in StressAvatar.def (see SendEcho's comment for the full list).
+    constexpr uint32_t kReportPosRpcId = (2u << 22) | (2u << 8) | 4u;
 
     // Tiny random-walk in a 100 m square centred at (0,0,0); absolute
     // values stay well under CellApp's single-tick displacement cap so
@@ -444,10 +494,19 @@ class Session {
   }
 
   auto OnRawMessage(MessageID id, std::span<const std::byte> payload) -> bool {
+    const auto k_id_u16 = static_cast<uint16_t>(id);
+    metrics_.bytes_rx_total += payload.size();
+    metrics_.bytes_per_msg[k_id_u16] += payload.size();
+    ++metrics_.count_per_msg[k_id_u16];
+
     // EchoReply wire id = 0x0201 (direction=0, type_index=2, method_index=1).
     constexpr MessageID kEchoReplyWireId = 0x0201;
-    // Reliable-delta relay (BaseApp → client). Payload's first byte is a
-    // CellAoIEnvelopeKind (enter=1, leave=2, pos=3, prop=4).
+    // CellAoIEnvelope rides on two wire ids (delta_forwarder.h contract):
+    //   0xF001 — unreliable (volatile): kEntityPositionUpdate (kind=3)
+    //   0xF003 — reliable (event):      kEntityEnter/Leave/PropertyUpdate
+    // Witness::SendEntityUpdate dispatches volatile via send_unreliable_ and
+    // event via send_reliable_, so kind=3 never appears in 0xF003.
+    constexpr MessageID kUnreliableDeltaWireId = 0xF001;
     constexpr MessageID kReliableDeltaWireId = 0xF003;
 
     if (id == kEchoReplyWireId) {
@@ -478,14 +537,21 @@ class Session {
         case 2:
           ++metrics_.aoi_leave;
           break;
-        case 3:
-          ++metrics_.aoi_pos_update;
-          break;
         case 4:
           ++metrics_.aoi_prop_update;
           break;
         default:
+          // kind=3 never appears here — it rides 0xF001 (see below).
           break;
+      }
+      return true;
+    }
+
+    if (id == kUnreliableDeltaWireId && !payload.empty()) {
+      // Only kEntityPositionUpdate (kind=3) rides the unreliable path today.
+      // Left flexible in case future volatile envelopes land here.
+      if (static_cast<uint8_t>(payload[0]) == 3) {
+        ++metrics_.aoi_pos_update;
       }
       return true;
     }
@@ -544,6 +610,8 @@ class Session {
     // id and trip BaseApp's cross-entity reject.
     echo_pending_ = false;
     next_echo_seq_ = 0;
+    next_charge_seq_ = 0;
+    charge_one_shot_pending_ = false;
     move_pending_ = false;
     pos_x_ = 0.f;
     pos_z_ = 0.f;
@@ -610,6 +678,11 @@ class Session {
   uint32_t next_echo_seq_{0};
   TimePoint echo_due_at_{};
   bool echo_pending_{false};
+  // One-shot Charge after EntityTransferred — exercises the client→cell
+  // component RPC dispatch path (slot=1) without inflating the per-tick
+  // bytes baseline. Reset alongside echo state on disconnect.
+  uint32_t next_charge_seq_{0};
+  bool charge_one_shot_pending_{false};
   TimePoint move_due_at_{};
   bool move_pending_{false};
   float pos_x_{0.f};
@@ -1029,6 +1102,34 @@ void PrintSummary(const Options& opts, const Metrics& metrics,
                              PercentileMs(metrics.auth_latency_ms, 95.0));
     std::cout << std::format("  auth_latency_p99:   {:.2f} ms\n",
                              PercentileMs(metrics.auth_latency_ms, 99.0));
+  }
+
+  // Downlink traffic — approximate B/s uses the configured run duration as the
+  // denominator. Real elapsed time is typically within ±1s of this value.
+  std::cout << std::format("  bytes_rx_total:     {}\n", metrics.bytes_rx_total);
+  const double kDuration = std::max(1, opts.duration_sec);
+  const double kBytesPerSec = static_cast<double>(metrics.bytes_rx_total) / kDuration;
+  std::cout << std::format("  bytes_rx_per_sec:   {:.1f} B/s ({:.2f} KB/s)\n", kBytesPerSec,
+                           kBytesPerSec / 1024.0);
+  if (opts.clients > 0) {
+    const double kPerClient = kBytesPerSec / static_cast<double>(opts.clients);
+    std::cout << std::format("  bytes_rx_per_cli_s: {:.1f} B/s/client\n", kPerClient);
+  }
+  if (!metrics.bytes_per_msg.empty()) {
+    std::vector<std::pair<uint16_t, std::size_t>> entries(metrics.bytes_per_msg.begin(),
+                                                          metrics.bytes_per_msg.end());
+    std::sort(entries.begin(), entries.end(),
+              [](const auto& a, const auto& b) { return a.second > b.second; });
+    std::cout << "  bytes_rx_top_msg:\n";
+    const std::size_t kTopN = std::min<std::size_t>(8, entries.size());
+    for (std::size_t i = 0; i < kTopN; ++i) {
+      const auto k_id = entries[i].first;
+      const auto k_bytes = entries[i].second;
+      const auto k_count = metrics.count_per_msg.at(k_id);
+      const double kAvg = k_count > 0 ? static_cast<double>(k_bytes) / k_count : 0.0;
+      std::cout << std::format("    msg=0x{:04X}  count={:>6}  bytes={:>8}  avg={:.1f}B\n", k_id,
+                               k_count, k_bytes, kAvg);
+    }
   }
 
   if (!metrics.failure_reasons.empty()) {

@@ -911,9 +911,7 @@ void BaseApp::OnSelfRpcFromCell(Channel& /*ch*/, const baseapp::SelfRpcFromCell&
   if (!proxy || !proxy->HasClient()) return;
 
   if (auto* client_ch = ResolveClientChannel(proxy->EntityId())) {
-    (void)client_ch->SendMessage(
-        static_cast<MessageID>(msg.rpc_id),
-        std::span<const std::byte>(msg.payload.data(), msg.payload.size()));
+    RelayRpcToClient(*client_ch, msg.rpc_id, msg.payload);
   }
 }
 
@@ -922,10 +920,28 @@ void BaseApp::OnBroadcastRpcFromCell(Channel& /*ch*/, const baseapp::BroadcastRp
   if (!proxy || !proxy->HasClient()) return;
 
   if (auto* client_ch = ResolveClientChannel(proxy->EntityId())) {
-    (void)client_ch->SendMessage(
-        static_cast<MessageID>(msg.rpc_id),
-        std::span<const std::byte>(msg.payload.data(), msg.payload.size()));
+    RelayRpcToClient(*client_ch, msg.rpc_id, msg.payload);
   }
+}
+
+void BaseApp::RelayRpcToClient(Channel& client_ch, uint32_t rpc_id,
+                               const std::vector<std::byte>& payload) {
+  // rpc_id is 32 bits with a slot index in bits 24-31. Entity-level RPCs
+  // (slot=0) still fit into MessageID (u16) and ride the direct-cast path,
+  // which keeps the wire backwards-compatible with clients that don't know
+  // about components. Component RPCs (slot>0) lose their slot bits if cast
+  // to u16, so they go through a reserved envelope (kClientComponentRpcMessageId)
+  // with the full 32-bit id prepended to the payload.
+  if ((rpc_id >> 16) == 0) {
+    (void)client_ch.SendMessage(static_cast<MessageID>(rpc_id),
+                                std::span<const std::byte>(payload.data(), payload.size()));
+    return;
+  }
+  std::vector<std::byte> out(sizeof(uint32_t) + payload.size());
+  std::memcpy(out.data(), &rpc_id, sizeof(uint32_t));
+  if (!payload.empty()) std::memcpy(out.data() + sizeof(uint32_t), payload.data(), payload.size());
+  (void)client_ch.SendMessage(DeltaForwarder::kClientComponentRpcMessageId,
+                              std::span<const std::byte>(out.data(), out.size()));
 }
 
 // Path #1 of the three-path CellApp→Client delta contract (see

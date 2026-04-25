@@ -44,7 +44,7 @@ Phase 7 的目标是把数据库层收敛成一个**可持续演进的单 DBApp 
 - [x] `CheckoutManager` 已落地，支持 `Checking / Confirmed` 两阶段内存占位
 - [x] `DBApp` 已支持 `AbortCheckout`，用于登录回滚场景
 - [x] `DBApp` 已能处理 `LoginApp -> DBApp` 的 `AuthLogin`
-- [x] `EntityDefRegistry` 已支持 `DBApp` 从 `entity_defs.json` 加载
+- [x] `EntityDefRegistry` 已支持 `DBApp` 从 `entity_defs.bin`（ATDF 二进制容器，`Atlas.Tools.DefDump` 产出）加载；旧 `entity_defs.json` 路径已删除
 - [x] 单元测试已覆盖 `dbapp_messages`、`checkout_manager`、`xml_database`、`sqlite_database`、`database_factory` 与 `server_config` 的数据库配置分支
 - [x] `SQLite` backend 已实现，接入 `database_factory` / `ServerConfig` / `DBApp`
 - [x] 当前代码默认 `db_type` 已切换为 `sqlite`

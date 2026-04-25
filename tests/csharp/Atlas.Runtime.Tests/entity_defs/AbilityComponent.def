@@ -1,0 +1,5 @@
+<component name="AbilityComponent">
+  <properties>
+    <property name="cooldown" type="float" scope="own_client" />
+  </properties>
+</component>

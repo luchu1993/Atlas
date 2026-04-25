@@ -57,8 +57,10 @@ public class DirtyTrackingTests
         entity.SerializeOtherDelta(ref writer);
 
         var reader = new SpanReader(writer.WrittenSpan);
-        var flags = reader.ReadByte();
-        Assert.NotEqual((byte)0, flags);
+        var sectionMask = reader.ReadByte();
+        Assert.Equal(0x01, sectionMask);  // scalar section only
+        var scalarFlags = reader.ReadByte();
+        Assert.NotEqual((byte)0, scalarFlags);
         Assert.Equal(42, reader.ReadInt32());
         writer.Dispose();
     }

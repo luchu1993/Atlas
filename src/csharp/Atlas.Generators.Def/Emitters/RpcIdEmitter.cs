@@ -43,7 +43,7 @@ internal static class RpcIdEmitter
         var sorted = methods.OrderBy(m => m.Name).ToList();
         for (int i = 0; i < sorted.Count; i++)
         {
-            int id = (direction << 22) | (typeIndex << 8) | (i + 1);
+            int id = RpcIdEncoder.Encode(slot: 0, direction, typeIndex, i + 1);
             sb.AppendLine($"    public const int {entityName}_{sorted[i].Name} = 0x{id:X6};");
         }
     }

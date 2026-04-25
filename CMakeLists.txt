@@ -6,6 +6,14 @@ set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
+# Build every static library position-independent so they can be linked
+# into the SHARED plugin libraries (atlas_db_sqlite_plugin,
+# atlas_db_xml_plugin, atlas_engine). Without this GCC's default non-PIC
+# archives (sqlite3, pugixml, gtest, …) fail the ld link with
+# "relocation R_X86_64_PC32 ... can not be used when making a shared
+# object; recompile with -fPIC". A no-op on MSVC / Windows.
+set(CMAKE_POSITION_INDEPENDENT_CODE ON)
+
 # Export compile_commands.json for clangd / IDE integration
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 

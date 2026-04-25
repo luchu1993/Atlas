@@ -1,0 +1,6 @@
+<entity name="DictSyncTestEntity">
+  <properties>
+    <property name="scores" type="dict&lt;string,int32&gt;" scope="all_clients" />
+    <property name="hp" type="int32" scope="all_clients" />
+  </properties>
+</entity>

@@ -135,6 +135,26 @@ TEST(ServerConfig, FromArgsInvalidTypeReturnsError) {
   EXPECT_FALSE(r.HasValue());
 }
 
+TEST(ServerConfig, FromArgsParsesEntitydefBinPath) {
+  // DBApp's only entity-definition input: an ATDF container produced
+  // offline by Atlas.Tools.DefDump from a built C# server assembly.
+  FakeArgv args({"exe", "--entitydef-bin-path", "data/entity_defs.bin"});
+  auto r = ServerConfig::FromArgs(args.argc(), args.argv());
+  ASSERT_TRUE(r.HasValue());
+  EXPECT_EQ(r->entitydef_bin_path, std::filesystem::path("data/entity_defs.bin"));
+}
+
+TEST(ServerConfig, FromJsonFileParsesEntitydefBinPath) {
+  auto path = write_temp_json(R"({
+        "database": {
+            "entitydef_bin_path": "data/entity_defs.bin"
+        }
+    })");
+  auto r = ServerConfig::FromJsonFile(path);
+  ASSERT_TRUE(r.HasValue()) << r.Error().Message();
+  EXPECT_EQ(r->entitydef_bin_path, std::filesystem::path("data/entity_defs.bin"));
+}
+
 TEST(ServerConfig, FromArgsInvalidPortReturnsError) {
   FakeArgv args({"exe", "--internal-port", "not_a_number"});
   auto r = ServerConfig::FromArgs(args.argc(), args.argv());

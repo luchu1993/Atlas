@@ -1,6 +1,8 @@
 using System;
+using System.Collections.Generic;
 using Atlas.Core;
 using Atlas.DataTypes;
+using Atlas.Entity.Components;
 using Atlas.Serialization;
 
 namespace Atlas.Entity;
@@ -21,6 +23,16 @@ public abstract class ServerEntity
     /// the compile-time constant from [Entity("TypeName")].
     /// </summary>
     public abstract string TypeName { get; }
+
+    /// <summary>
+    /// Numeric type index assigned by the C# generator (typeIndexMap).
+    /// Mirrors the client side; used by component RPC stubs to compose
+    /// rpc_id at send time. Generated entity classes override. Public
+    /// to dodge CS0507 when derived classes live in a different assembly
+    /// (cross-assembly override of `protected internal` collapses to
+    /// `protected` and the codegen would have to emit two variants).
+    /// </summary>
+    public virtual ushort TypeId => 0;
 
     /// <summary>Full entity state for persistence and hot-reload (implemented by source generator).</summary>
     public abstract void Serialize(ref SpanWriter writer);
@@ -148,6 +160,141 @@ public abstract class ServerEntity
     }
 
     private bool _volatileDirty;
+
+    /// <summary>
+    /// Slot-bitmap reserved for the future Component pump. Bit N is set
+    /// when the Component at slot N has staged a frame's worth of changes.
+    /// Stays zero until a Component is attached, so emitter-generated
+    /// BuildAndConsumeReplicationFrame overrides can test <c>!= 0</c> and
+    /// skip the per-slot iteration at zero runtime cost.
+    ///
+    /// Kept here rather than in a partial so that any ServerEntity subclass
+    /// — regardless of whether the Component pump is wired up — has a
+    /// stable type-level hook.
+    /// </summary>
+    protected internal ulong _dirtyComponents;
+
+    // =========================================================================
+    // Component container — the entity owns a static slot table for Synced
+    // components plus a Type-keyed dict for ServerLocal components.
+    // _replicated[0] is permanently reserved for the entity body so user
+    // slot indices start at 1 and componentIdx=0 keeps its meaning on the
+    // wire.
+    // =========================================================================
+
+    // public so codegen-emitted entity partials AND the cross-assembly
+    // RPC dispatcher (DefRpcDispatcher.Dispatch*Rpc) can read it. The
+    // field is conceptually internal — scripts shouldn't poke it — but
+    // C#'s access rules can't both restrict scripts and let a static
+    // dispatcher in another assembly through. Documented as a "do not
+    // touch from script code" affordance.
+    public ReplicatedComponent?[]? _replicated;
+    private Dictionary<Type, ServerLocalComponent>? _serverLocal;
+
+    // Number of Synced slots this entity declares. Subclasses (codegen-
+    // emitted partials) override; tests hand-roll the count.
+    protected virtual int SyncedSlotCount => 0;
+
+    // Resolves a Synced component Type to its slot index. Returns -1 if
+    // the type isn't a declared Synced component on this entity. Codegen
+    // overrides for real entities; tests provide their own mapping.
+    protected virtual int ResolveSyncedSlot(Type componentType) => -1;
+
+    // Adds a declared Synced component. The slot is determined by the
+    // codegen-emitted ResolveSyncedSlot; if the slot is already active,
+    // the existing instance is returned (idempotent).
+    public T AddComponent<T>() where T : ReplicatedComponent, new()
+    {
+        var slot = ResolveSyncedSlot(typeof(T));
+        if (slot <= 0)
+            throw new InvalidOperationException(
+                $"{typeof(T).Name} is not declared as a Synced component on {GetType().Name}");
+        _replicated ??= new ReplicatedComponent?[SyncedSlotCount + 1];
+        if (slot >= _replicated.Length)
+            throw new InvalidOperationException(
+                $"Slot {slot} for {typeof(T).Name} exceeds declared SyncedSlotCount={SyncedSlotCount}");
+        if (_replicated[slot] is T existing) return existing;
+
+        var c = new T();
+        c.__Bind(this, slot);
+        _replicated[slot] = c;
+        _dirtyComponents |= 1UL << slot;
+        c.OnAttached();
+        return c;
+    }
+
+    public T? GetSyncedComponent<T>() where T : ReplicatedComponent
+    {
+        var slot = ResolveSyncedSlot(typeof(T));
+        if (slot <= 0 || _replicated == null || slot >= _replicated.Length) return null;
+        return _replicated[slot] as T;
+    }
+
+    public bool RemoveComponent<T>() where T : ReplicatedComponent
+    {
+        var slot = ResolveSyncedSlot(typeof(T));
+        if (slot <= 0 || _replicated == null || slot >= _replicated.Length) return false;
+        if (_replicated[slot] is not T c) return false;
+        c.OnDetached();
+        _replicated[slot] = null;
+        // Mark dirty so the pump emits the future kRemoveComponent op.
+        _dirtyComponents |= 1UL << slot;
+        return true;
+    }
+
+    public T AddLocalComponent<T>() where T : ServerLocalComponent, new()
+    {
+        _serverLocal ??= new();
+        if (_serverLocal.TryGetValue(typeof(T), out var existing)) return (T)existing;
+        var c = new T();
+        c._entity = this;
+        _serverLocal[typeof(T)] = c;
+        c.OnAttached();
+        return c;
+    }
+
+    public T? GetLocalComponent<T>() where T : ServerLocalComponent
+    {
+        if (_serverLocal == null) return null;
+        return _serverLocal.TryGetValue(typeof(T), out var c) ? (T)c : null;
+    }
+
+    public bool RemoveLocalComponent<T>() where T : ServerLocalComponent
+    {
+        if (_serverLocal == null) return false;
+        if (!_serverLocal.TryGetValue(typeof(T), out var c)) return false;
+        c.OnDetached();
+        _serverLocal.Remove(typeof(T));
+        return true;
+    }
+
+    // Per-tick component dispatch — Synced first (slot order, deterministic
+    // across runs) then ServerLocal (insertion order via Dictionary).
+    // Called by the cellapp tick loop AFTER the entity's own OnTick.
+    protected internal void TickAllComponents(float deltaTime)
+    {
+        if (_replicated != null)
+        {
+            for (int i = 1; i < _replicated.Length; ++i)
+                _replicated[i]?.OnTick(deltaTime);
+        }
+        if (_serverLocal != null)
+        {
+            foreach (var c in _serverLocal.Values) c.OnTick(deltaTime);
+        }
+    }
+
+    // Called by ReplicatedComponent.MarkDirty so the entity's
+    // _dirtyComponents bitmap reflects the slot's pending state — the
+    // replication pump only iterates components when this is non-zero.
+    internal void __MarkComponentDirty(int slotIdx)
+    {
+        _dirtyComponents |= 1UL << slotIdx;
+    }
+
+    // Used by tests + future codegen to walk active Synced slots.
+    internal ReadOnlySpan<ReplicatedComponent?> ReplicatedSlotsForTest =>
+        _replicated == null ? default : _replicated.AsSpan();
 
     /// <summary>Called when the entity is first created or after hot-reload.</summary>
     protected internal virtual void OnInit(bool isReload) { }

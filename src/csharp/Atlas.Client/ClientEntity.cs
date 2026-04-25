@@ -1,4 +1,6 @@
 using System;
+using System.Collections.Generic;
+using Atlas.Components;
 using Atlas.DataTypes;
 using Atlas.Serialization;
 
@@ -21,6 +23,11 @@ public abstract class ClientEntity
     public bool IsCorrupted { get; internal set; }
 
     public abstract string TypeName { get; }
+
+    // Numeric type index assigned by the C# generator (typeIndexMap).
+    // Mirrors the server's TypeId; used by component RPC stubs to
+    // compose rpc_id at send time. Generated entity classes override.
+    public virtual ushort TypeId => 0;
 
     // event_seq gap observability. The server stamps every
     // kEntityPropertyUpdate envelope with its originating frame's event_seq
@@ -156,5 +163,105 @@ public abstract class ClientEntity
     protected internal void SendBaseRpc(int rpcId, ReadOnlySpan<byte> payload)
     {
         ClientHost.SendBaseRpc(EntityId, (uint)rpcId, payload);
+    }
+
+    // =========================================================================
+    // Component container — mirrors the server side. _replicated[0] is
+    // permanently reserved for the entity body so user slot indices start
+    // at 1 and componentIdx=0 keeps its meaning on the wire.
+    //
+    // The client never builds outbound deltas, so there's no _dirtyComponents
+    // bitmap; ApplyReplicatedDelta walks the bit-2 component section and
+    // dispatches each per-slot delta through this array. Codegen-emitted
+    // partials override SyncedSlotCount + ResolveSyncedSlot; tests
+    // hand-roll their own mapping.
+    // =========================================================================
+
+    // public for the same reason as ServerEntity._replicated — the
+    // cross-assembly RPC dispatcher reads it. Scripts should treat it
+    // as internal and use the typed accessors instead.
+    public ClientReplicatedComponent?[]? _replicated;
+    private Dictionary<Type, ClientLocalComponent>? _clientLocal;
+
+    protected virtual int SyncedSlotCount => 0;
+    protected virtual int ResolveSyncedSlot(Type componentType) => -1;
+
+    public T AddComponent<T>() where T : ClientReplicatedComponent, new()
+    {
+        var slot = ResolveSyncedSlot(typeof(T));
+        if (slot <= 0)
+            throw new InvalidOperationException(
+                $"{typeof(T).Name} is not declared as a Synced component on {GetType().Name}");
+        _replicated ??= new ClientReplicatedComponent?[SyncedSlotCount + 1];
+        if (slot >= _replicated.Length)
+            throw new InvalidOperationException(
+                $"Slot {slot} for {typeof(T).Name} exceeds declared SyncedSlotCount={SyncedSlotCount}");
+        if (_replicated[slot] is T existing) return existing;
+
+        var c = new T();
+        c.__Bind(this, slot);
+        _replicated[slot] = c;
+        c.OnAttached();
+        return c;
+    }
+
+    public T? GetSyncedComponent<T>() where T : ClientReplicatedComponent
+    {
+        var slot = ResolveSyncedSlot(typeof(T));
+        if (slot <= 0 || _replicated == null || slot >= _replicated.Length) return null;
+        return _replicated[slot] as T;
+    }
+
+    public bool RemoveComponent<T>() where T : ClientReplicatedComponent
+    {
+        var slot = ResolveSyncedSlot(typeof(T));
+        if (slot <= 0 || _replicated == null || slot >= _replicated.Length) return false;
+        if (_replicated[slot] is not T c) return false;
+        c.OnDetached();
+        _replicated[slot] = null;
+        return true;
+    }
+
+    public T AddLocalComponent<T>() where T : ClientLocalComponent, new()
+    {
+        _clientLocal ??= new();
+        if (_clientLocal.TryGetValue(typeof(T), out var existing)) return (T)existing;
+        var c = new T();
+        c._entity = this;
+        _clientLocal[typeof(T)] = c;
+        c.OnAttached();
+        return c;
+    }
+
+    public T? GetLocalComponent<T>() where T : ClientLocalComponent
+    {
+        if (_clientLocal == null) return null;
+        return _clientLocal.TryGetValue(typeof(T), out var c) ? (T)c : null;
+    }
+
+    public bool RemoveLocalComponent<T>() where T : ClientLocalComponent
+    {
+        if (_clientLocal == null) return false;
+        if (!_clientLocal.TryGetValue(typeof(T), out var c)) return false;
+        c.OnDetached();
+        _clientLocal.Remove(typeof(T));
+        return true;
+    }
+
+    /// <summary>
+    /// Per-tick component dispatch. Synced first (slot order, deterministic
+    /// across runs) then ClientLocal (insertion order via Dictionary).
+    /// </summary>
+    protected internal void TickAllComponents(float deltaTime)
+    {
+        if (_replicated != null)
+        {
+            for (int i = 1; i < _replicated.Length; ++i)
+                _replicated[i]?.OnTick(deltaTime);
+        }
+        if (_clientLocal != null)
+        {
+            foreach (var c in _clientLocal.Values) c.OnTick(deltaTime);
+        }
     }
 }

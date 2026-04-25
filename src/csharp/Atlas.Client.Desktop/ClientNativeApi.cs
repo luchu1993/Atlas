@@ -65,6 +65,15 @@ internal static unsafe partial class ClientNativeApi
             RegisterEntityTypeNative(ptr, data.Length);
     }
 
+    [LibraryImport(LibName, EntryPoint = "AtlasRegisterStruct")]
+    private static partial void RegisterStructNative(byte* data, int len);
+
+    public static void RegisterStruct(ReadOnlySpan<byte> data)
+    {
+        fixed (byte* ptr = data)
+            RegisterStructNative(ptr, data.Length);
+    }
+
     // =========================================================================
     // Callback registration
     // =========================================================================

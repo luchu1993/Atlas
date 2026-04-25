@@ -1,0 +1,5 @@
+<entity name="MonsterWithAbility">
+  <components>
+    <component name="ability" type="MonsterAbility" scope="all_clients" />
+  </components>
+</entity>

@@ -77,6 +77,15 @@ class DeltaForwarder {
   /// carries fields marked reliable="true" in .def; bypasses the byte budget.
   static constexpr MessageID kClientReliableDeltaMessageId = static_cast<MessageID>(0xF003);
 
+  /// Reserved client-facing message ID for component-targeted RPCs.
+  /// Entity-level RPCs (slot=0) ride on `static_cast<MessageID>(rpc_id)`
+  /// directly because rpc_id fits in 16 bits when slot=0. Component
+  /// RPCs (slot>0) have non-zero high bits in rpc_id that cannot fit
+  /// into MessageID (u16), so the relay (BaseApp::OnSelfRpcFromCell)
+  /// switches to this dedicated wire id and prepends the full u32
+  /// rpc_id to the payload. The client unwraps it before dispatch.
+  static constexpr MessageID kClientComponentRpcMessageId = static_cast<MessageID>(0xF004);
+
  private:
   struct PendingDelta {
     EntityID entity_id{kInvalidEntityID};

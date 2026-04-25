@@ -72,6 +72,22 @@ auto ParseAndCountClientEventLine(std::string_view line, ClientEventCounters& ou
     ++out.on_position_updated;
     return true;
   }
+  if (StartsWithToken(rest, "OnMainWeaponChanged")) {
+    ++out.on_main_weapon_changed;
+    return true;
+  }
+  if (StartsWithToken(rest, "OnWeaponBroken")) {
+    ++out.on_weapon_broken;
+    return true;
+  }
+  if (StartsWithToken(rest, "OnScoresSnapshot")) {
+    ++out.on_scores_snapshot;
+    return true;
+  }
+  if (StartsWithToken(rest, "OnAffixesUpdated")) {
+    ++out.on_affixes_updated;
+    return true;
+  }
 
   // event_seq gap warning (from ClientEntity.NoteIncomingEventSeq):
   //   [<Type>:<Id>] event_seq gap: last=A got=B missed=N

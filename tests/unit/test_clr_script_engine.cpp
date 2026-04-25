@@ -57,7 +57,7 @@ static constexpr std::string_view kCallbackType =
 // Uses the same DLL-TLS workaround pattern as ClrCallbackTest:
 //   1. Load atlas_engine.dll and register provider through it.
 //   2. Bootstrap through Atlas.RuntimeTest.dll's RunBootstrap forwarder.
-//   3. Bind Phase 3 Lifecycle methods through Atlas.RuntimeTest.dll.
+//   3. Bind Lifecycle methods through Atlas.RuntimeTest.dll.
 
 namespace atlas::test {
 
@@ -247,7 +247,7 @@ TEST_F(ClrScriptEngineTest, EntityCountAfterInit) {
 }
 
 // ============================================================================
-// Phase 6: Boundary tests
+// Boundary tests
 // ============================================================================
 
 TEST_F(ClrScriptEngineTest, ReInitAfterShutdown) {
