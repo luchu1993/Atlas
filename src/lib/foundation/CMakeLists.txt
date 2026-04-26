@@ -22,6 +22,16 @@ if(ATLAS_ENABLE_PROFILER)
   target_link_libraries(atlas_heap PUBLIC Tracy::TracyClient)
 endif()
 
+# Heap backend link — only when the mimalloc backend is selected. The
+# default "std" path uses platform aligned-alloc / aligned-free and
+# needs no extra link. mimalloc is propagated PUBLIC so its DLL is
+# also a runtime dependency of every consumer, which is what
+# atlas_deploy_runtime / TARGET_RUNTIME_DLLS picks up to copy the
+# .dll alongside test exes.
+if(ATLAS_HEAP_ALLOCATOR STREQUAL "mimalloc")
+  target_link_libraries(atlas_heap PUBLIC Mimalloc::Mimalloc)
+endif()
+
 add_library(atlas_foundation STATIC
   clock.cc
   error.cc

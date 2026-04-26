@@ -457,23 +457,9 @@ atlas_add_test(NAME test_clr_object
 # CLR tests that load atlas_engine shared library at runtime.
 # Paths are supplied via env vars set in test properties.
 
-add_executable(test_native_api_exports
-  test_paths.h
-  test_native_api_exports.cpp
-)
-target_link_libraries(test_native_api_exports PRIVATE GTest::gtest_main atlas_platform)
-target_compile_definitions(test_native_api_exports PRIVATE _CRT_SECURE_NO_WARNINGS)
-add_dependencies(test_native_api_exports atlas_engine)
-add_test(NAME test_native_api_exports COMMAND test_native_api_exports)
-set_tests_properties(test_native_api_exports PROPERTIES
-  LABELS "unit"
-  ENVIRONMENT "ATLAS_ENGINE_RLOC=$<TARGET_FILE:atlas_engine>"
-)
-set_target_properties(test_native_api_exports PROPERTIES FOLDER "Test/Unit")
-
-# The three CLR-hosting tests below can't use atlas_add_test (they
-# need custom ENVIRONMENT properties), so replicate every post-target
-# step that helper runs for the regular test targets:
+# These tests can't use atlas_add_test (they need custom ENVIRONMENT
+# properties), so replicate every post-target step that helper runs
+# for the regular test targets:
 #   1. Route output to bin/<config>/test/ so the exe lands next to
 #      its CLR runtime DLLs (nethost.dll, atlas_engine.dll).
 #   2. On Windows, deploy transitively-linked runtime DLLs + the
@@ -482,8 +468,9 @@ set_target_properties(test_native_api_exports PROPERTIES FOLDER "Test/Unit")
 #   3. Deploy DB plugin DLLs on the off chance any transitive link
 #      reaches them.
 # Without the deploy steps the exe lands in the right directory but
-# starts up with STATUS_DLL_NOT_FOUND because its DLL siblings never
-# got copied alongside.
+# starts up with STATUS_DLL_NOT_FOUND because its DLL siblings (e.g.
+# mimalloc-debug.dll under ATLAS_HEAP_ALLOCATOR=mimalloc) never got
+# copied alongside.
 macro(_atlas_route_clr_test_binary _target)
   foreach(_cfg IN ITEMS Debug Release RelWithDebInfo MinSizeRel)
     _atlas_config_to_snake("${_cfg}" _snake)
@@ -504,6 +491,21 @@ macro(_atlas_route_clr_test_binary _target)
     atlas_deploy_db_plugins_if_needed(${_target})
   endif()
 endmacro()
+
+add_executable(test_native_api_exports
+  test_paths.h
+  test_native_api_exports.cpp
+)
+target_link_libraries(test_native_api_exports PRIVATE GTest::gtest_main atlas_platform)
+target_compile_definitions(test_native_api_exports PRIVATE _CRT_SECURE_NO_WARNINGS)
+add_dependencies(test_native_api_exports atlas_engine)
+add_test(NAME test_native_api_exports COMMAND test_native_api_exports)
+set_tests_properties(test_native_api_exports PROPERTIES
+  LABELS "unit"
+  ENVIRONMENT "ATLAS_ENGINE_RLOC=$<TARGET_FILE:atlas_engine>"
+)
+set_target_properties(test_native_api_exports PROPERTIES FOLDER "Test/Unit")
+_atlas_route_clr_test_binary(test_native_api_exports)
 
 add_executable(test_clr_host
   test_paths.h

@@ -51,3 +51,16 @@ if(ATLAS_ENABLE_PROFILER)
 else()
   target_compile_definitions(atlas_compiler_options INTERFACE ATLAS_PROFILE_ENABLED=0)
 endif()
+
+# ── Heap allocator backend ───────────────────────────────────────────────────
+# Each supported value of ATLAS_HEAP_ALLOCATOR emits a distinct
+# compile-time define so heap.cc can select the matching RawAlloc /
+# RawFree implementation. Call sites only see foundation/heap.h, which
+# is backend-agnostic — adding a new allocator means a new define here
+# and a matching #elif branch in heap.cc, nothing in the rest of the
+# codebase moves.
+if(ATLAS_HEAP_ALLOCATOR STREQUAL "std")
+  target_compile_definitions(atlas_compiler_options INTERFACE ATLAS_HEAP_STD=1)
+elseif(ATLAS_HEAP_ALLOCATOR STREQUAL "mimalloc")
+  target_compile_definitions(atlas_compiler_options INTERFACE ATLAS_HEAP_MIMALLOC=1)
+endif()

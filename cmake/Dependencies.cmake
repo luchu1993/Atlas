@@ -40,6 +40,26 @@ FetchContent_Declare(
   URL https://www.sqlite.org/2024/sqlite-amalgamation-3470200.zip
 )
 
+# ── mimalloc 2.3.1 (optional heap backend) ───────────────────────────────────
+# Fetched only when ATLAS_HEAP_ALLOCATOR=mimalloc. Built as a shared
+# library so a single mi_heap instance backs every Atlas binary —
+# under OBJECT-library propagation each DLL has its own copy of
+# atlas::HeapAlloc, but all of them must call into one mimalloc state
+# for cross-DLL pointer freeing to remain safe (see heap.h's
+# cross-DLL invariant note).
+#
+# MI_OVERRIDE=OFF: Atlas owns the operator new / delete override
+# itself (heap.cc), so mimalloc must NOT install its own — a
+# duplicate override would either lose to ours at link time (best
+# case) or, on platforms that resolve weak symbols differently,
+# fragment the heap policy (worst case).
+if(ATLAS_HEAP_ALLOCATOR STREQUAL "mimalloc")
+  FetchContent_Declare(
+    mimalloc
+    URL https://github.com/microsoft/mimalloc/archive/refs/tags/v2.3.1.tar.gz
+  )
+endif()
+
 # ── Tracy 0.13.1 ─────────────────────────────────────────────────────────────
 # Pinned in lockstep with the Tracy-NET 0.13.2 NuGet package referenced
 # from Atlas.Runtime.csproj — Tracy's wire protocol changes between
@@ -85,6 +105,26 @@ FetchContent_MakeAvailable(zlib)
 # zlib's CMakeLists.txt creates 'zlibstatic'; alias for consistency
 if(TARGET zlibstatic AND NOT TARGET ZLIB::ZLIB)
   add_library(ZLIB::ZLIB ALIAS zlibstatic)
+endif()
+
+# mimalloc — only populated when selected. The shared-only build keeps
+# one allocator instance per process (see Declare comment above).
+if(ATLAS_HEAP_ALLOCATOR STREQUAL "mimalloc")
+  set(MI_OVERRIDE      OFF CACHE BOOL "" FORCE)
+  # MI_WIN_REDIRECT pulls in mimalloc-redirect.dll, an extra
+  # process-injection helper that mimalloc loads at runtime to hook
+  # the system malloc surface. We don't want that — atlas::HeapAlloc
+  # is the explicit entry point here, and shipping redirect.dll
+  # alongside every Atlas binary just to never fire it is dead weight.
+  set(MI_WIN_REDIRECT  OFF CACHE BOOL "" FORCE)
+  set(MI_BUILD_SHARED  ON  CACHE BOOL "" FORCE)
+  set(MI_BUILD_STATIC  OFF CACHE BOOL "" FORCE)
+  set(MI_BUILD_OBJECT  OFF CACHE BOOL "" FORCE)
+  set(MI_BUILD_TESTS   OFF CACHE BOOL "" FORCE)
+  FetchContent_MakeAvailable(mimalloc)
+  if(TARGET mimalloc AND NOT TARGET Mimalloc::Mimalloc)
+    add_library(Mimalloc::Mimalloc ALIAS mimalloc)
+  endif()
 endif()
 
 # Tracy — only populated when the profiler is enabled. Tracy ships its

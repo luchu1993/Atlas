@@ -3,8 +3,20 @@
 #include <cstdlib>
 #include <new>
 
+// Backend selection. Exactly one ATLAS_HEAP_<NAME> must be set; the
+// CMake glue in cmake/AtlasCompilerOptions.cmake is the single source
+// of truth for which one. The hard #error catches any future build
+// path that forgets to plumb the define so a silent fallthrough never
+// fragments the heap policy across translation units.
+#if defined(ATLAS_HEAP_MIMALLOC)
+#include <mimalloc.h>
+#elif defined(ATLAS_HEAP_STD)
 #if defined(_WIN32)
 #include <malloc.h>  // _aligned_malloc, _aligned_free
+#endif
+#else
+#error \
+    "No heap backend selected — cmake should define exactly one ATLAS_HEAP_<NAME> via ATLAS_HEAP_ALLOCATOR"
 #endif
 
 #include "foundation/profiler.h"
@@ -31,14 +43,20 @@ class AllocDepthGuard {
 };
 
 [[nodiscard]] auto RawAlloc(std::size_t bytes, std::size_t align) noexcept -> void* {
-  // Aligned-alloc preconditions vary by platform but always require
-  // alignment to be a power of two and at least sizeof(void*). Atlas
-  // call sites pass alignof(T) which the language already guarantees
-  // is a power of two, so the only real coercion is the lower bound.
-  // Default-aligned allocations (the bulk of operator new traffic)
-  // still need a pow-2 ≥ sizeof(void*); clamp to max_align_t.
+  // Aligned-alloc preconditions vary by platform and backend but
+  // always require alignment to be a power of two and at least
+  // sizeof(void*). Atlas call sites pass alignof(T) which the
+  // language already guarantees is a power of two, so the only real
+  // coercion is the lower bound. Default-aligned allocations (the
+  // bulk of operator new traffic) still need a pow-2 ≥ sizeof(void*);
+  // clamp to max_align_t.
   if (align < alignof(std::max_align_t)) align = alignof(std::max_align_t);
-#if defined(_WIN32)
+#if defined(ATLAS_HEAP_MIMALLOC)
+  // mi_malloc_aligned handles the size↔align relationship internally;
+  // mi_free pairs with both aligned and unaligned allocations, so
+  // RawFree below is the single counterpart.
+  return mi_malloc_aligned(bytes, align);
+#elif defined(_WIN32)
   return _aligned_malloc(bytes, align);
 #else
   // POSIX std::aligned_alloc requires `bytes` to be a multiple of
@@ -51,7 +69,9 @@ class AllocDepthGuard {
 
 void RawFree(void* ptr) noexcept {
   if (!ptr) return;
-#if defined(_WIN32)
+#if defined(ATLAS_HEAP_MIMALLOC)
+  mi_free(ptr);
+#elif defined(_WIN32)
   _aligned_free(ptr);
 #else
   std::free(ptr);
