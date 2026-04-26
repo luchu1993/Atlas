@@ -42,12 +42,22 @@ class CellAppConfig {
   // disable and broadcast every tick.
   [[nodiscard]] static auto GhostUpdateIntervalMs() -> uint32_t;
 
-  // Per-observer byte budget used by Witness::Update to gate how
-  // many catch-up deltas / snapshots flush in one tick. A witness
-  // whose queue over-spends gets a bandwidth_deficit that throttles
-  // the next tick's budget. JSON key:
-  // `witness_per_observer_budget_bytes`. Default 4096.
-  [[nodiscard]] static auto WitnessPerObserverBudgetBytes() -> uint32_t;
+  // Total outbound byte budget for all witnesses in a space per tick.
+  // The per-observer allocation is total / observer_count, clamped to
+  // [WitnessMinPerObserverBudgetBytes, WitnessMaxPerObserverBudgetBytes].
+  // This caps total replication bandwidth even as observer count grows.
+  // JSON key: `witness_total_outbound_budget_bytes`. Default 409600 (400 KB).
+  [[nodiscard]] static auto WitnessTotalOutboundBudgetBytes() -> uint32_t;
+
+  // Floor on the per-observer allocation computed from the total budget.
+  // Prevents starvation when observer_count is large but budget is tight.
+  // JSON key: `witness_min_per_observer_budget_bytes`. Default 1024 (1 KB).
+  [[nodiscard]] static auto WitnessMinPerObserverBudgetBytes() -> uint32_t;
+
+  // Ceiling on the per-observer allocation. Lets sparse spaces send more
+  // per observer without unboundedly inflating individual send windows.
+  // JSON key: `witness_max_per_observer_budget_bytes`. Default 16384 (16 KB).
+  [[nodiscard]] static auto WitnessMaxPerObserverBudgetBytes() -> uint32_t;
 };
 
 }  // namespace atlas

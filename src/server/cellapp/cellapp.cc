@@ -1,5 +1,6 @@
 #include "cellapp.h"
 
+#include <algorithm>
 #include <chrono>
 #include <cmath>
 #include <memory>
@@ -292,8 +293,18 @@ void CellApp::TickControllers(float dt) {
 
 void CellApp::TickWitnesses() {
   ATLAS_PROFILE_ZONE_N("CellApp::TickWitnesses");
-  const uint32_t budget = CellAppConfig::WitnessPerObserverBudgetBytes();
+  const uint32_t total_budget = CellAppConfig::WitnessTotalOutboundBudgetBytes();
+  const uint32_t min_budget = CellAppConfig::WitnessMinPerObserverBudgetBytes();
+  const uint32_t max_budget = CellAppConfig::WitnessMaxPerObserverBudgetBytes();
   for (auto& [_, space] : spaces_) {
+    // Count observers first so we can divide the total budget evenly.
+    // Two passes over entities is O(2N) — cheap at any expected entity count.
+    uint32_t observer_count = 0;
+    space->ForEachEntity([&](CellEntity& e) {
+      if (e.GetWitness()) ++observer_count;
+    });
+    const uint32_t budget = std::clamp(
+        observer_count > 0 ? total_budget / observer_count : max_budget, min_budget, max_budget);
     space->ForEachEntity([budget](CellEntity& e) {
       if (auto* w = e.GetWitness()) w->Update(budget);
     });

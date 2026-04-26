@@ -25,9 +25,17 @@ ServerAppOption<float> s_load_smoothing_bias{
 ServerAppOption<uint32_t> s_ghost_update_interval_ms{
     50u, "ghost_update_interval_ms", "cellapp/ghost_update_interval_ms", WatcherMode::kReadWrite};
 
-ServerAppOption<uint32_t> s_witness_per_observer_budget_bytes{
-    4096u, "witness_per_observer_budget_bytes", "cellapp/witness_per_observer_budget_bytes",
+ServerAppOption<uint32_t> s_witness_total_outbound_budget_bytes{
+    409600u, "witness_total_outbound_budget_bytes", "cellapp/witness_total_outbound_budget_bytes",
     WatcherMode::kReadWrite};
+
+ServerAppOption<uint32_t> s_witness_min_per_observer_budget_bytes{
+    1024u, "witness_min_per_observer_budget_bytes", "cellapp/witness_min_per_observer_budget_bytes",
+    WatcherMode::kReadWrite};
+
+ServerAppOption<uint32_t> s_witness_max_per_observer_budget_bytes{
+    16384u, "witness_max_per_observer_budget_bytes",
+    "cellapp/witness_max_per_observer_budget_bytes", WatcherMode::kReadWrite};
 
 }  // namespace
 
@@ -51,8 +59,16 @@ auto CellAppConfig::GhostUpdateIntervalMs() -> uint32_t {
   return s_ghost_update_interval_ms.Value();
 }
 
-auto CellAppConfig::WitnessPerObserverBudgetBytes() -> uint32_t {
-  return s_witness_per_observer_budget_bytes.Value();
+auto CellAppConfig::WitnessTotalOutboundBudgetBytes() -> uint32_t {
+  return s_witness_total_outbound_budget_bytes.Value();
+}
+
+auto CellAppConfig::WitnessMinPerObserverBudgetBytes() -> uint32_t {
+  return s_witness_min_per_observer_budget_bytes.Value();
+}
+
+auto CellAppConfig::WitnessMaxPerObserverBudgetBytes() -> uint32_t {
+  return s_witness_max_per_observer_budget_bytes.Value();
 }
 
 }  // namespace atlas
