@@ -13,6 +13,12 @@ namespace Atlas.Runtime.Diagnostics
     /// trace timeline.
     /// </summary>
     /// <remarks>
+    /// Source-generated <see cref="LibraryImportAttribute"/> stubs match
+    /// Atlas's prevailing interop style (see Core/NativeApi.cs). All
+    /// arguments here are blittable (primitives or unmanaged pointers) so
+    /// the generator emits zero-marshalling fast paths — important on the
+    /// zone open/close hot path.
+    ///
     /// This file deliberately re-implements what packages like Tracy-NET
     /// would otherwise provide, because the available NuGet packages in
     /// April 2026 either pin the Tracy native version too low (Tracy-CSharp
@@ -22,7 +28,7 @@ namespace Atlas.Runtime.Diagnostics
     /// trivial: bump the Tracy native tag in cmake/Dependencies.cmake,
     /// then re-check the function list below against the new TracyC.h.
     /// </remarks>
-    internal static class TracyNative
+    internal static unsafe partial class TracyNative
     {
         private const string LibraryName = "TracyClient";
 
@@ -43,37 +49,37 @@ namespace Atlas.Runtime.Diagnostics
         // ___tracy_emit_zone_begin_alloc consumes. Tracy copies the bytes
         // from the supplied buffers into its own arena, so the caller's
         // buffers can be freed immediately after the call returns.
-        [DllImport(LibraryName, EntryPoint = "___tracy_alloc_srcloc_name", CallingConvention = CallingConvention.Cdecl)]
-        public static extern unsafe ulong AllocSrclocName(
+        [LibraryImport(LibraryName, EntryPoint = "___tracy_alloc_srcloc_name")]
+        public static partial ulong AllocSrclocName(
             uint line, byte* source, nuint sourceSz,
             byte* function, nuint functionSz,
             byte* name, nuint nameSz, uint color);
 
-        [DllImport(LibraryName, EntryPoint = "___tracy_emit_zone_begin_alloc", CallingConvention = CallingConvention.Cdecl)]
-        public static extern TracyCZoneCtx EmitZoneBeginAlloc(ulong srcloc, int active);
+        [LibraryImport(LibraryName, EntryPoint = "___tracy_emit_zone_begin_alloc")]
+        public static partial TracyCZoneCtx EmitZoneBeginAlloc(ulong srcloc, int active);
 
-        [DllImport(LibraryName, EntryPoint = "___tracy_emit_zone_end", CallingConvention = CallingConvention.Cdecl)]
-        public static extern void EmitZoneEnd(TracyCZoneCtx ctx);
+        [LibraryImport(LibraryName, EntryPoint = "___tracy_emit_zone_end")]
+        public static partial void EmitZoneEnd(TracyCZoneCtx ctx);
 
-        [DllImport(LibraryName, EntryPoint = "___tracy_emit_message", CallingConvention = CallingConvention.Cdecl)]
-        public static extern unsafe void EmitMessage(byte* txt, nuint size, int callstackDepth);
+        [LibraryImport(LibraryName, EntryPoint = "___tracy_emit_message")]
+        public static partial void EmitMessage(byte* txt, nuint size, int callstackDepth);
 
         // Frame mark accepts a const char* whose pointer identity Tracy uses
         // to key the frame group — so the buffer must outlive the program,
         // not the call. The managed wrapper caches a marshalled copy per
         // distinct frame name and re-passes that same pointer on every tick.
-        [DllImport(LibraryName, EntryPoint = "___tracy_emit_frame_mark", CallingConvention = CallingConvention.Cdecl)]
-        public static extern void EmitFrameMark(IntPtr name);
+        [LibraryImport(LibraryName, EntryPoint = "___tracy_emit_frame_mark")]
+        public static partial void EmitFrameMark(IntPtr name);
 
         // Same pointer-identity convention as frame names — the plot label
         // pointer must be stable for the life of the process.
-        [DllImport(LibraryName, EntryPoint = "___tracy_emit_plot", CallingConvention = CallingConvention.Cdecl)]
-        public static extern void EmitPlot(IntPtr name, double val);
+        [LibraryImport(LibraryName, EntryPoint = "___tracy_emit_plot")]
+        public static partial void EmitPlot(IntPtr name, double val);
 
-        [DllImport(LibraryName, EntryPoint = "___tracy_connected", CallingConvention = CallingConvention.Cdecl)]
-        public static extern int Connected();
+        [LibraryImport(LibraryName, EntryPoint = "___tracy_connected")]
+        public static partial int Connected();
 
-        [DllImport(LibraryName, EntryPoint = "___tracy_set_thread_name", CallingConvention = CallingConvention.Cdecl)]
-        public static extern unsafe void SetThreadName(byte* name);
+        [LibraryImport(LibraryName, EntryPoint = "___tracy_set_thread_name")]
+        public static partial void SetThreadName(byte* name);
     }
 }
