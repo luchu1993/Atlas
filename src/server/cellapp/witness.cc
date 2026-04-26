@@ -288,12 +288,13 @@ void Witness::Update(uint32_t max_packet_bytes) {
     // budget — dropping them would deadlock the aoi_map_ state machine.
     (void)bandwidth_deficit_;
 
-    for (auto id : enter_ids) {
-      auto it = aoi_map_.find(id);
+    for (std::size_t enter_idx = 0; enter_idx < enter_ids.size(); ++enter_idx) {
+      auto it = aoi_map_.find(enter_ids[enter_idx]);
       if (it == aoi_map_.end()) continue;
       auto& cache = it->second;
       bytes_sent += static_cast<int>(SendEntityEnter(cache));
       cache.flags &= ~EntityCache::kEnterPending;
+      cache.lod_enter_phase = enter_idx % kLodFarInterval;
     }
 
     for (auto id : gone_ids) {
@@ -341,7 +342,12 @@ void Witness::Update(uint32_t max_packet_bytes) {
   {
     ATLAS_PROFILE_ZONE_N("Witness::Update::Pump");
     const int tick_budget = static_cast<int>(max_packet_bytes) - bandwidth_deficit_;
-    while (!priority_queue_.empty() && bytes_sent < tick_budget) {
+    // Hard cap on peers serviced this tick — caps serialisation CPU even when
+    // the byte budget would allow more. Read once per Update; the config knob
+    // is RW so ops can retune live without rebuild.
+    const std::size_t max_peers = CellAppConfig::WitnessMaxPeersPerTick();
+    std::size_t peers_updated = 0;
+    while (!priority_queue_.empty() && bytes_sent < tick_budget && peers_updated < max_peers) {
       std::pop_heap(priority_queue_.begin(), priority_queue_.end(),
                     [](const auto& a, const auto& b) { return a.first > b.first; });
       const auto [prio, id] = priority_queue_.back();
@@ -353,10 +359,20 @@ void Witness::Update(uint32_t max_packet_bytes) {
       if (!cache.IsUpdatable()) continue;
 
       bytes_sent += static_cast<int>(SendEntityUpdate(cache));
-      // Schedule the next LOD window. Using the priority (dist²) computed
-      // in Step 2 avoids a redundant sqrt; the same value drove the heap
-      // ordering so it's already in cache.
-      cache.lod_next_update_tick = tick_count_ + LodIntervalForDistSq(cache.priority);
+      ++peers_updated;
+      // Schedule the next LOD window. lod_enter_phase is non-zero only on
+      // the first schedule (set at AoI-enter, cleared here); it offsets the
+      // window by up to kLodFarInterval-1 ticks to stagger simultaneous
+      // entries. % interval keeps the offset within one window regardless of
+      // which band the peer is in; Close (interval=1) always yields 0.
+      //
+      // Note: the very first delta after AoI-enter therefore lands at
+      // tick_count_ + interval + offset, i.e. up to interval + (kLodFarInterval-1)
+      // ticks later (worst case Far = 11 ticks ≈ 1.1 s at 10 Hz). Subsequent
+      // windows fall back to the regular tick_count_ + interval cadence.
+      const uint64_t interval = LodIntervalForDistSq(cache.priority);
+      cache.lod_next_update_tick = tick_count_ + interval + (cache.lod_enter_phase % interval);
+      cache.lod_enter_phase = 0;
     }
   }
 

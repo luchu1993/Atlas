@@ -29,16 +29,21 @@ TEST_F(CellAppConfigTest, DefaultsMatchExpectedValues) {
   EXPECT_FLOAT_EQ(CellAppConfig::DefaultAoIRadius(), 500.f);
   EXPECT_FLOAT_EQ(CellAppConfig::DefaultAoIHysteresis(), 5.f);
   EXPECT_FLOAT_EQ(CellAppConfig::MaxAoIRadius(), 500.f);
-  EXPECT_EQ(CellAppConfig::WitnessPerObserverBudgetBytes(), 4096u);
+  EXPECT_EQ(CellAppConfig::WitnessTotalOutboundBudgetBytes(), 409600u);
+  EXPECT_EQ(CellAppConfig::WitnessMinPerObserverBudgetBytes(), 1024u);
+  EXPECT_EQ(CellAppConfig::WitnessMaxPerObserverBudgetBytes(), 16384u);
+  EXPECT_EQ(CellAppConfig::WitnessMaxPeersPerTick(), 64u);
 }
 
 TEST_F(CellAppConfigTest, WitnessBudgetOverride) {
   auto cfg = DataSection::FromJsonString(R"({
-    "witness_per_observer_budget_bytes": 16384
+    "witness_min_per_observer_budget_bytes": 2048,
+    "witness_max_per_observer_budget_bytes": 32768
   })");
   ASSERT_TRUE(cfg.HasValue());
   ServerAppOptionBase::ApplyAll(*(*cfg)->Root());
-  EXPECT_EQ(CellAppConfig::WitnessPerObserverBudgetBytes(), 16384u);
+  EXPECT_EQ(CellAppConfig::WitnessMinPerObserverBudgetBytes(), 2048u);
+  EXPECT_EQ(CellAppConfig::WitnessMaxPerObserverBudgetBytes(), 32768u);
 }
 
 TEST_F(CellAppConfigTest, LoadsAllThreeKeysFromJson) {
@@ -75,6 +80,10 @@ TEST_F(CellAppConfigTest, ReadWriteWatcherPathsAreRegistered) {
   EXPECT_TRUE(reg.Get("cellapp/default_aoi_radius").has_value());
   EXPECT_TRUE(reg.Get("cellapp/default_aoi_hysteresis").has_value());
   EXPECT_TRUE(reg.Get("cellapp/max_aoi_radius").has_value());
+  EXPECT_TRUE(reg.Get("cellapp/witness_total_outbound_budget_bytes").has_value());
+  EXPECT_TRUE(reg.Get("cellapp/witness_min_per_observer_budget_bytes").has_value());
+  EXPECT_TRUE(reg.Get("cellapp/witness_max_per_observer_budget_bytes").has_value());
+  EXPECT_TRUE(reg.Get("cellapp/witness_max_peers_per_tick").has_value());
 
   // Watchers are RW — ops can retune at runtime.
   EXPECT_TRUE(reg.Set("cellapp/default_aoi_radius", "250"));

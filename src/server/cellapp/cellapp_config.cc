@@ -37,6 +37,10 @@ ServerAppOption<uint32_t> s_witness_max_per_observer_budget_bytes{
     16384u, "witness_max_per_observer_budget_bytes",
     "cellapp/witness_max_per_observer_budget_bytes", WatcherMode::kReadWrite};
 
+ServerAppOption<uint32_t> s_witness_max_peers_per_tick{64u, "witness_max_peers_per_tick",
+                                                       "cellapp/witness_max_peers_per_tick",
+                                                       WatcherMode::kReadWrite};
+
 }  // namespace
 
 auto CellAppConfig::DefaultAoIRadius() -> float {
@@ -69,6 +73,10 @@ auto CellAppConfig::WitnessMinPerObserverBudgetBytes() -> uint32_t {
 
 auto CellAppConfig::WitnessMaxPerObserverBudgetBytes() -> uint32_t {
   return s_witness_max_per_observer_budget_bytes.Value();
+}
+
+auto CellAppConfig::WitnessMaxPeersPerTick() -> uint32_t {
+  return s_witness_max_peers_per_tick.Value();
 }
 
 }  // namespace atlas

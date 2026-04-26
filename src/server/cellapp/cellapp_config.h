@@ -58,6 +58,15 @@ class CellAppConfig {
   // per observer without unboundedly inflating individual send windows.
   // JSON key: `witness_max_per_observer_budget_bytes`. Default 16384 (16 KB).
   [[nodiscard]] static auto WitnessMaxPerObserverBudgetBytes() -> uint32_t;
+
+  // Hard cap on SendEntityUpdate calls per observer per tick. Bounds
+  // serialisation CPU even when the byte budget would allow more — peers
+  // not served this tick stay in the priority queue and surface at the
+  // top next tick, so the nearest peers are always served first. Tune
+  // upward if dense scenes show stale peers; downward if Witness::Update
+  // dominates the tick.
+  // JSON key: `witness_max_peers_per_tick`. Default 64.
+  [[nodiscard]] static auto WitnessMaxPeersPerTick() -> uint32_t;
 };
 
 }  // namespace atlas

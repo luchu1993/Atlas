@@ -128,6 +128,13 @@ class Witness {
     // SendEntityUpdate() call based on current distance.
     uint64_t lod_next_update_tick{0};
 
+    // One-shot phase offset assigned at AoI-enter time. Spreads peers
+    // that enter on the same tick across the LOD interval so they don't
+    // all fire their first delta update together. Applied once in the
+    // first SendEntityUpdate(), then zeroed — subsequent windows use the
+    // regular tick_count_ + interval cadence and stay naturally staggered.
+    uint64_t lod_enter_phase{0};
+
     static constexpr uint8_t kEnterPending = 0x01;  // just joined AoI
     static constexpr uint8_t kGone = 0x08;          // left AoI, pending leave send
 
