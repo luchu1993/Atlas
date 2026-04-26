@@ -1,5 +1,6 @@
 using System;
 using Atlas.DataTypes;
+using Atlas.Diagnostics;
 using Atlas.Serialization;
 
 namespace Atlas.Client;
@@ -62,6 +63,7 @@ public static class ClientCallbacks
     /// </summary>
     public static void DispatchRpc(uint entityId, uint rpcId, ReadOnlySpan<byte> payload)
     {
+        using var _ = Profiler.ZoneN(ProfilerNames.ClientDispatchRpc);
         try
         {
             var entity = s_entityMgr.Get(entityId);
@@ -195,6 +197,7 @@ public static class ClientCallbacks
     private const int kEnterFixedBytes = 2 + 6 * 4 + 1;
     private static void DispatchEnter(uint entityId, ReadOnlySpan<byte> inner)
     {
+        using var _ = Profiler.ZoneN(ProfilerNames.ClientDispatchEnter);
         if (inner.Length < kEnterFixedBytes)
         {
             Console.Error.WriteLine($"DispatchEnter: truncated ({inner.Length} bytes)");
@@ -219,6 +222,7 @@ public static class ClientCallbacks
     private const int kPropertyUpdatePrefixBytes = 8;
     private static void DispatchPropertyUpdate(uint entityId, ReadOnlySpan<byte> inner)
     {
+        using var _ = Profiler.ZoneN(ProfilerNames.ClientDispatchPropertyUpdate);
         if (inner.Length < kPropertyUpdatePrefixBytes)
         {
             Console.Error.WriteLine(
@@ -236,6 +240,7 @@ public static class ClientCallbacks
     private const int kPositionUpdateBytes = 6 * 4 + 1;
     private static void DispatchPositionUpdate(uint entityId, ReadOnlySpan<byte> inner)
     {
+        using var _ = Profiler.ZoneN(ProfilerNames.ClientDispatchPositionUpdate);
         if (inner.Length < kPositionUpdateBytes)
         {
             Console.Error.WriteLine($"DispatchPositionUpdate: truncated ({inner.Length} bytes)");
@@ -252,6 +257,7 @@ public static class ClientCallbacks
     //   [PackedInt base_entity_id] [PackedInt snapshot_size] [snapshot bytes]
     private static void DispatchBaseline(ReadOnlySpan<byte> body)
     {
+        using var _ = Profiler.ZoneN(ProfilerNames.ClientDispatchBaseline);
         var reader = new SpanReader(body);
         uint entityId = reader.ReadPackedUInt32();
         uint size = reader.ReadPackedUInt32();

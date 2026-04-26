@@ -18,5 +18,23 @@ namespace Atlas.Diagnostics
         // matching server subsystems.
         public const string ScriptOnTick = "Script.OnTick";
         public const string PublishReplicationFrame = "Script.PublishReplicationFrame";
+
+        // Client-side dispatch zones. Names mirror the server's
+        // Channel::HandleMessage path so end-to-end traces align —
+        // a "ClientCallbacks.Dispatch*" zone follows the corresponding
+        // server "Channel::Send" zone on the timeline once a viewer
+        // can correlate the two processes.
+        public const string ClientDispatchRpc = "ClientCallbacks.DispatchRpc";
+        public const string ClientDispatchEnter = "ClientCallbacks.DispatchEnter";
+        public const string ClientDispatchPropertyUpdate = "ClientCallbacks.DispatchPropertyUpdate";
+        public const string ClientDispatchPositionUpdate = "ClientCallbacks.DispatchPositionUpdate";
+        public const string ClientDispatchBaseline = "ClientCallbacks.DispatchBaseline";
+
+        // Per-entity apply zones. These run inside the dispatch zone above
+        // and break out the per-entity work from the routing layer.
+        public const string ClientApplyOwnerSnapshot = "ClientEntity.ApplyOwnerSnapshot";
+        public const string ClientApplyOtherSnapshot = "ClientEntity.ApplyOtherSnapshot";
+        public const string ClientApplyReplicatedDelta = "ClientEntity.ApplyReplicatedDelta";
+        public const string ClientApplyPositionUpdate = "ClientEntity.ApplyPositionUpdate";
     }
 }

@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using Atlas.Components;
 using Atlas.DataTypes;
+using Atlas.Diagnostics;
 using Atlas.Serialization;
 
 namespace Atlas.Client;
@@ -88,6 +89,7 @@ public abstract class ClientEntity
     /// </summary>
     public virtual void ApplyPositionUpdate(Vector3 pos, Vector3 dir, bool onGround)
     {
+        using var _ = Profiler.ZoneN(ProfilerNames.ClientApplyPositionUpdate);
         Position = pos;
         Direction = dir;
         OnGround = onGround;

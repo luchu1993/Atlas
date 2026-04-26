@@ -1,0 +1,25 @@
+{
+    "name": "Atlas.Client.Unity",
+    "rootNamespace": "Atlas.Client.Unity",
+    "references": [],
+    "includePlatforms": [],
+    "excludePlatforms": [],
+    "allowUnsafeCode": true,
+    "overrideReferences": true,
+    "precompiledReferences": [
+        "Atlas.Shared.dll",
+        "Atlas.Client.dll"
+    ],
+    "autoReferenced": false,
+    "defineConstraints": [
+        "UNITY_2022_3_OR_NEWER"
+    ],
+    "versionDefines": [
+        {
+            "name": "com.unity.modules.profiler",
+            "expression": "1.0.0",
+            "define": "ATLAS_UNITY_PROFILER_AVAILABLE"
+        }
+    ],
+    "noEngineReferences": false
+}
