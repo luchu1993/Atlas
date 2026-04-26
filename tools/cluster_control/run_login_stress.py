@@ -170,10 +170,9 @@ def _config_to_snake(config: str) -> str:
     return re.sub(r"([a-z])([A-Z])", r"\1_\2", config).lower()
 
 
-def resolve_program(repo_root: Path, config: str, subdirs: Iterable[str], stem: str) -> Path:
-    """Locate an executable under bin/<config_snake>/<subdir>/."""
-    config_snake = _config_to_snake(config)
-    bin_base = repo_root / "bin" / config_snake
+def resolve_program(repo_root: Path, bin_name: str, subdirs: Iterable[str], stem: str) -> Path:
+    """Locate an executable under bin/<bin_name>/<subdir>/."""
+    bin_base = repo_root / "bin" / bin_name
     suffixes = [".exe", ""] if os.name == "nt" else ["", ".exe"]
     for subdir in subdirs:
         for suffix in suffixes:
@@ -286,6 +285,11 @@ def wait_for_registration(
     name: str,
     timeout_sec: int = 15,
 ) -> bool:
+    env = os.environ.copy()
+    server_dir = str(atlas_tool.parent.parent / "server")
+    path_sep = ";" if os.name == "nt" else ":"
+    env["PATH"] = server_dir + path_sep + env.get("PATH", "")
+
     deadline = time.monotonic() + timeout_sec
     while time.monotonic() < deadline:
         result = subprocess.run(
@@ -293,6 +297,7 @@ def wait_for_registration(
             capture_output=True,
             text=True,
             cwd=resolve_repo_root(),
+            env=env,
         )
         if result.returncode == 0 and name in result.stdout:
             return True
@@ -418,19 +423,19 @@ def main() -> int:
     baseapp_specs = build_baseapp_specs(args)
 
     repo_root = resolve_repo_root()
-    config_snake = _config_to_snake(args.config)
-    bin_base = repo_root / "bin" / config_snake
+    bin_name = Path(args.build_dir).name
+    bin_base = repo_root / "bin" / bin_name
     runtime_config = repo_root / "runtime" / "atlas_server.runtimeconfig.json"
     runtime_assembly = bin_base / "server" / "Atlas.Runtime.dll"
 
     search_subdirs = ["server", "tools"]
-    atlas_tool = resolve_program(repo_root, args.config, search_subdirs, "atlas_tool")
-    login_stress = resolve_program(repo_root, args.config, search_subdirs, "login_stress")
-    machined = resolve_program(repo_root, args.config, search_subdirs, "machined")
-    loginapp = resolve_program(repo_root, args.config, search_subdirs, "atlas_loginapp")
-    baseapp = resolve_program(repo_root, args.config, search_subdirs, "atlas_baseapp")
-    baseappmgr = resolve_program(repo_root, args.config, search_subdirs, "atlas_baseappmgr")
-    dbapp = resolve_program(repo_root, args.config, search_subdirs, "atlas_dbapp")
+    atlas_tool = resolve_program(repo_root, bin_name, search_subdirs, "atlas_tool")
+    login_stress = resolve_program(repo_root, bin_name, search_subdirs, "login_stress")
+    machined = resolve_program(repo_root, bin_name, search_subdirs, "machined")
+    loginapp = resolve_program(repo_root, bin_name, search_subdirs, "atlas_loginapp")
+    baseapp = resolve_program(repo_root, bin_name, search_subdirs, "atlas_baseapp")
+    baseappmgr = resolve_program(repo_root, bin_name, search_subdirs, "atlas_baseappmgr")
+    dbapp = resolve_program(repo_root, bin_name, search_subdirs, "atlas_dbapp")
 
     assert_file_exists(machined, machined.name)
     assert_file_exists(loginapp, loginapp.name)

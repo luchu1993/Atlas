@@ -80,6 +80,17 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--keep-cluster", action="store_true")
     parser.add_argument("--verbose-failures", action="store_true")
+    parser.add_argument(
+        "--capture-dir", default=None,
+        help="Save per-process Tracy captures (.tracy) to this directory. "
+             "Filenames include git short hash and timestamp. "
+             "Requires tracy-capture.exe in bin/<build>/tools/.",
+    )
+    parser.add_argument(
+        "--capture-procs",
+        default="loginapp,dbapp,baseappmgr,baseapp,cellappmgr,cellapp",
+        help="Comma-separated server process names to capture (default: all six).",
+    )
 
     # Phase C2/C3 — real atlas_client.exe subprocesses loaded with the
     # ClientSample assembly. world_stress orchestrates them alongside its
@@ -236,19 +247,145 @@ def _exe_suffixes() -> list[str]:
     return [".exe", ""] if os.name == "nt" else ["", ".exe"]
 
 
+def _dll_env(exe_path: Path) -> dict[str, str]:
+    """Return env dict with the sibling server/ directory prepended to PATH.
+
+    On Windows, DLL resolution starts from the executable's own directory.
+    Executables in tools/ share DLL dependencies with server/ (mimalloc,
+    TracyClient, atlas_engine), so we prepend server/ to PATH for any
+    process that lives outside that directory.
+    """
+    env = os.environ.copy()
+    server_dir = str(exe_path.parent.parent / "server")
+    path_sep = ";" if os.name == "nt" else ":"
+    env["PATH"] = server_dir + path_sep + env.get("PATH", "")
+    return env
+
+
+def _git_short(repo_root: Path) -> str:
+    try:
+        r = subprocess.run(
+            ["git", "rev-parse", "--short", "HEAD"],
+            capture_output=True, text=True, cwd=repo_root,
+        )
+        return r.stdout.strip() if r.returncode == 0 else "unknown"
+    except FileNotFoundError:
+        return "unknown"
+
+
+def _tracy_port_for_pid(pid: int, timeout_sec: float = 8.0) -> int | None:
+    """Return the Tracy TCP listener port for pid, or None if not found in time."""
+    deadline = time.monotonic() + timeout_sec
+    while time.monotonic() < deadline:
+        if os.name == "nt":
+            result = subprocess.run(
+                [
+                    "powershell", "-NoProfile", "-NonInteractive", "-Command",
+                    f"Get-NetTCPConnection -State Listen -ErrorAction SilentlyContinue "
+                    f"| Where-Object {{ $_.OwningProcess -eq {pid} "
+                    f"  -and $_.LocalPort -ge 8086 -and $_.LocalPort -le 8200 }} "
+                    f"| Select-Object -ExpandProperty LocalPort -First 1",
+                ],
+                capture_output=True, text=True,
+            )
+        else:
+            result = subprocess.run(
+                ["ss", "-tlnp"],
+                capture_output=True, text=True,
+            )
+            # crude grep for pid in ss output — good enough for dev use
+            port = None
+            for line in result.stdout.splitlines():
+                if f"pid={pid}" in line:
+                    parts = line.split()
+                    addr = parts[3] if len(parts) > 3 else ""
+                    if ":" in addr:
+                        try:
+                            p = int(addr.rsplit(":", 1)[1])
+                            if 8086 <= p <= 8200:
+                                port = p
+                                break
+                        except ValueError:
+                            pass
+            return port
+
+        port_str = result.stdout.strip()
+        if port_str.isdigit():
+            return int(port_str)
+        time.sleep(0.5)
+    return None
+
+
+def start_tracy_captures(
+    *,
+    capture_exe: Path,
+    processes: list["LoggedProcess"],
+    wanted_names: set[str],
+    capture_dir: Path,
+    git_hash: str,
+    timestamp: str,
+    duration_sec: int,
+) -> list[subprocess.Popen[str]]:
+    """Start tracy-capture for each wanted process; return launched Popen list."""
+    capture_dir = capture_dir.resolve()
+    capture_dir.mkdir(parents=True, exist_ok=True)
+    env = _dll_env(capture_exe)
+    captures: list[subprocess.Popen[str]] = []
+    for proc_entry in processes:
+        if proc_entry.name not in wanted_names:
+            continue
+        pid = proc_entry.process.pid
+        port = _tracy_port_for_pid(pid)
+        if port is None:
+            log(f"[capture] {proc_entry.name}: Tracy port not found for pid={pid}, skipping")
+            continue
+        out_file = capture_dir / f"{proc_entry.name}_{git_hash}_{timestamp}.tracy"
+        log(f"[capture] {proc_entry.name} pid={pid} port={port} → {out_file.name}")
+        captures.append(
+            subprocess.Popen(
+                [str(capture_exe), "-a", "127.0.0.1", "-p", str(port),
+                 "-s", str(duration_sec + 10), "-o", str(out_file)],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                env=env,
+            )
+        )
+    return captures
+
+
+def stop_tracy_captures(captures: list[subprocess.Popen[str]]) -> None:
+    """Wait for tracy-capture processes to finish writing, then force-kill stragglers.
+
+    tracy-capture flushes the .tracy file only on clean exit; hard-killing it
+    loses the capture.  We give it 20 s to finish (it should be nearly done
+    since -s was set to duration+10), then force-kill anything still running.
+    """
+    for p in captures:
+        try:
+            p.wait(timeout=20)
+        except subprocess.TimeoutExpired:
+            p.kill()
+            try:
+                p.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                pass
+
+
 def resolve_program(
-    build_root: Path, config: str, subdirs: Iterable[str], stem: str
+    build_root: Path, bin_name: str, subdirs: Iterable[str], stem: str
 ) -> Path:
-    """Locate an executable under bin/<config_snake>/<subdir>/."""
-    config_snake = _config_to_snake(config)
-    bin_base = build_root / "bin" / config_snake
-    # Search each candidate subdirectory under bin/<config_snake>/.
+    """Locate an executable under bin/<bin_name>/<subdir>/.
+
+    bin_name is the last path component of the CMake binary directory
+    (e.g. "profile-release", "debug") — Atlas's AtlasOutputDirectory.cmake
+    routes all artifacts into bin/<build_dir_name>/, not bin/<config_snake>/.
+    """
+    bin_base = build_root / "bin" / bin_name
     for subdir in subdirs:
         for suffix in _exe_suffixes():
             candidate = bin_base / subdir / f"{stem}{suffix}"
             if candidate.exists():
                 return candidate
-    # Return the most-likely path so the error message is useful.
     return bin_base / "server" / f"{stem}{'.exe' if os.name == 'nt' else ''}"
 
 
@@ -268,6 +405,7 @@ def start_logged_process(
     arguments: Iterable[str],
     working_directory: Path,
     log_directory: Path,
+    env: dict[str, str] | None = None,
 ) -> LoggedProcess:
     stdout_path = log_directory / f"{name}.stdout.log"
     stderr_path = log_directory / f"{name}.stderr.log"
@@ -290,6 +428,7 @@ def start_logged_process(
         stderr=stderr_handle,
         text=True,
         creationflags=creationflags,
+        env=env,
         **popen_kwargs,
     )
 
@@ -347,6 +486,7 @@ def wait_for_registration(
     name: str,
     timeout_sec: int = 15,
 ) -> bool:
+    env = _dll_env(atlas_tool)
     deadline = time.monotonic() + timeout_sec
     while time.monotonic() < deadline:
         result = subprocess.run(
@@ -354,6 +494,7 @@ def wait_for_registration(
             capture_output=True,
             text=True,
             cwd=resolve_repo_root(),
+            env=env,
         )
         if result.returncode == 0 and name in result.stdout:
             return True
@@ -491,8 +632,8 @@ def build_stress_args(args: argparse.Namespace, worker: dict[str, object]) -> li
 
 
 def default_client_exe(args: argparse.Namespace) -> Path:
-    config_snake = _config_to_snake(args.config)
-    return resolve_repo_root() / "bin" / config_snake / "client" / "atlas_client.exe"
+    bin_name = Path(args.build_dir).name
+    return resolve_repo_root() / "bin" / bin_name / "client" / "atlas_client.exe"
 
 
 def default_client_assembly(args: argparse.Namespace) -> Path:
@@ -545,24 +686,26 @@ def main() -> int:
     repo_root = resolve_repo_root()
     runtime_config = repo_root / "runtime" / "atlas_server.runtimeconfig.json"
 
-    config_snake = _config_to_snake(args.config)
-    bin_base = repo_root / "bin" / config_snake
+    # bin/ path is keyed on the build directory name, not the CMake config name.
+    # AtlasOutputDirectory.cmake routes all artifacts into bin/<build_dir_name>/.
+    bin_name = Path(args.build_dir).name
+    bin_base = repo_root / "bin" / bin_name
 
-    # C# assemblies deployed by CMake into bin/<config>/tools/ and bin/<config>/server/.
+    # C# assemblies deployed by CMake into bin/<bin_name>/tools/.
     base_assembly = bin_base / "tools" / "Atlas.StressTest.Base.dll"
     cell_assembly = bin_base / "tools" / "Atlas.StressTest.Cell.dll"
 
     # Subdirectories to search for executables.
     search_subdirs = ["server", "tools"]
 
-    atlas_tool = resolve_program(repo_root, args.config, search_subdirs, "atlas_tool")
-    machined = resolve_program(repo_root, args.config, search_subdirs, "machined")
-    loginapp = resolve_program(repo_root, args.config, search_subdirs, "atlas_loginapp")
-    baseapp = resolve_program(repo_root, args.config, search_subdirs, "atlas_baseapp")
-    baseappmgr = resolve_program(repo_root, args.config, search_subdirs, "atlas_baseappmgr")
-    dbapp = resolve_program(repo_root, args.config, search_subdirs, "atlas_dbapp")
-    cellapp = resolve_program(repo_root, args.config, search_subdirs, "atlas_cellapp")
-    cellappmgr = resolve_program(repo_root, args.config, search_subdirs, "atlas_cellappmgr")
+    atlas_tool = resolve_program(repo_root, bin_name, search_subdirs, "atlas_tool")
+    machined = resolve_program(repo_root, bin_name, search_subdirs, "machined")
+    loginapp = resolve_program(repo_root, bin_name, search_subdirs, "atlas_loginapp")
+    baseapp = resolve_program(repo_root, bin_name, search_subdirs, "atlas_baseapp")
+    baseappmgr = resolve_program(repo_root, bin_name, search_subdirs, "atlas_baseappmgr")
+    dbapp = resolve_program(repo_root, bin_name, search_subdirs, "atlas_dbapp")
+    cellapp = resolve_program(repo_root, bin_name, search_subdirs, "atlas_cellapp")
+    cellappmgr = resolve_program(repo_root, bin_name, search_subdirs, "atlas_cellappmgr")
 
     assert_file_exists(machined, machined.name)
     assert_file_exists(loginapp, loginapp.name)
@@ -580,15 +723,27 @@ def main() -> int:
     world_stress: Path | None = None
     if worker_plan:
         world_stress = resolve_program(
-            repo_root, args.config, search_subdirs, "world_stress"
+            repo_root, bin_name, search_subdirs, "world_stress"
         )
         assert_file_exists(world_stress, world_stress.name)
 
     timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+    git_hash = _git_short(repo_root)
     run_root = repo_root / ".tmp" / "world-stress" / timestamp
     log_dir = run_root / "logs"
     db_dir = run_root / "db"
     db_config_path = run_root / "dbapp.json"
+
+    capture_exe: Path | None = None
+    capture_dir: Path | None = None
+    if args.capture_dir:
+        capture_exe = resolve_program(repo_root, bin_name, search_subdirs, "tracy-capture")
+        if not capture_exe.exists():
+            fail(
+                f"--capture-dir set but tracy-capture not found at {capture_exe}. "
+                f"Build with -DATLAS_BUILD_TRACY_VIEWER=ON."
+            )
+        capture_dir = Path(args.capture_dir)
 
     log_dir.mkdir(parents=True, exist_ok=True)
     db_dir.mkdir(parents=True, exist_ok=True)
@@ -868,67 +1023,90 @@ def main() -> int:
                 [str(atlas_tool), "--machined", machined_address, "list"],
                 cwd=repo_root,
                 check=False,
+                env=_dll_env(atlas_tool),
             )
             log("")
 
-        if not worker_plan:
-            log(
-                f"No stress workers scheduled (clients={args.clients}); "
-                f"holding cluster for {args.duration_sec}s to verify stability..."
+        # Start Tracy captures for requested processes (after all are registered).
+        active_captures: list[subprocess.Popen[str]] = []
+        if capture_exe and capture_dir:
+            wanted = {n.strip() for n in args.capture_procs.split(",") if n.strip()}
+            active_captures = start_tracy_captures(
+                capture_exe=capture_exe,
+                processes=processes,
+                wanted_names=wanted,
+                capture_dir=capture_dir,
+                git_hash=git_hash,
+                timestamp=timestamp,
+                duration_sec=args.duration_sec,
             )
-            time.sleep(max(1, args.duration_sec))
-        elif args.local_workers == 1:
-            assert world_stress is not None
-            worker = worker_plan[0]
-            log(
-                "Running world_stress..."
-                f" worker={worker['global_worker_index']}/{worker['global_worker_count']}"
-                f" clients={worker['clients']} account_pool={worker['account_pool']}"
-                f" baseapps={len(baseapp_specs)} cellapps={len(cellapp_specs)}"
-                f" source_ips={len(worker['source_ips'])}"
-            )
-            stress_result = subprocess.run(
-                [str(world_stress), *build_stress_args(args, worker)], cwd=repo_root
-            )
-            if stress_result.returncode != 0:
-                fail(f"world_stress exited with code {stress_result.returncode}")
-        else:
-            assert world_stress is not None
-            stress_workers: list[LoggedProcess] = []
-            try:
-                for ordinal, worker in enumerate(worker_plan):
-                    name = f"world_stress_worker_{ordinal:02d}"
-                    log(
-                        f"Starting {name}: global_worker={worker['global_worker_index']}/"
-                        f"{worker['global_worker_count']} clients={worker['clients']} "
-                        f"account_pool={worker['account_pool']} baseapps={len(baseapp_specs)} "
-                        f"cellapps={len(cellapp_specs)} "
-                        f"source_ips={len(worker['source_ips'])}"
-                    )
-                    stress_workers.append(
-                        start_logged_process(
-                            name=name,
-                            file_path=world_stress,
-                            arguments=build_stress_args(args, worker),
-                            working_directory=repo_root,
-                            log_directory=log_dir,
-                        )
-                    )
 
-                for worker_proc in stress_workers:
-                    return_code = worker_proc.process.wait()
-                    if worker_proc.stdout_handle:
-                        worker_proc.stdout_handle.close()
-                    if worker_proc.stderr_handle:
-                        worker_proc.stderr_handle.close()
-                    worker_proc.stdout_handle = None
-                    worker_proc.stderr_handle = None
-                    if return_code != 0:
-                        fail(f"{worker_proc.name} exited with code {return_code}")
-            finally:
-                stop_logged_processes(
-                    [w for w in stress_workers if w.process.poll() is None]
+        try:
+            if not worker_plan:
+                log(
+                    f"No stress workers scheduled (clients={args.clients}); "
+                    f"holding cluster for {args.duration_sec}s to verify stability..."
                 )
+                time.sleep(max(1, args.duration_sec))
+            elif args.local_workers == 1:
+                assert world_stress is not None
+                worker = worker_plan[0]
+                log(
+                    "Running world_stress..."
+                    f" worker={worker['global_worker_index']}/{worker['global_worker_count']}"
+                    f" clients={worker['clients']} account_pool={worker['account_pool']}"
+                    f" baseapps={len(baseapp_specs)} cellapps={len(cellapp_specs)}"
+                    f" source_ips={len(worker['source_ips'])}"
+                )
+                stress_result = subprocess.run(
+                    [str(world_stress), *build_stress_args(args, worker)],
+                    cwd=repo_root,
+                    env=_dll_env(world_stress),
+                )
+                if stress_result.returncode != 0:
+                    fail(f"world_stress exited with code {stress_result.returncode}")
+            else:
+                assert world_stress is not None
+                stress_workers: list[LoggedProcess] = []
+                try:
+                    for ordinal, worker in enumerate(worker_plan):
+                        name = f"world_stress_worker_{ordinal:02d}"
+                        log(
+                            f"Starting {name}: global_worker={worker['global_worker_index']}/"
+                            f"{worker['global_worker_count']} clients={worker['clients']} "
+                            f"account_pool={worker['account_pool']} baseapps={len(baseapp_specs)} "
+                            f"cellapps={len(cellapp_specs)} "
+                            f"source_ips={len(worker['source_ips'])}"
+                        )
+                        stress_workers.append(
+                            start_logged_process(
+                                name=name,
+                                file_path=world_stress,
+                                arguments=build_stress_args(args, worker),
+                                working_directory=repo_root,
+                                log_directory=log_dir,
+                                env=_dll_env(world_stress),
+                            )
+                        )
+
+                    for worker_proc in stress_workers:
+                        return_code = worker_proc.process.wait()
+                        if worker_proc.stdout_handle:
+                            worker_proc.stdout_handle.close()
+                        if worker_proc.stderr_handle:
+                            worker_proc.stderr_handle.close()
+                        worker_proc.stdout_handle = None
+                        worker_proc.stderr_handle = None
+                        if return_code != 0:
+                            fail(f"{worker_proc.name} exited with code {return_code}")
+                finally:
+                    stop_logged_processes(
+                        [w for w in stress_workers if w.process.poll() is None]
+                    )
+        finally:
+            stop_tracy_captures(active_captures)
+            if active_captures and capture_dir:
+                log(f"[capture] Tracy traces saved to {capture_dir}")
 
         log("")
         log("Run artifacts:")

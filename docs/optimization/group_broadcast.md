@@ -1,8 +1,23 @@
 # Group Broadcast (Multicast Delta)
 
-**Priority:** P2
+**Priority:** P1 (upgraded from P2 based on profiling)
 **Subsystem:** `src/server/cellapp/witness.cc`, network layer
 **Impact:** Reduces serialization CPU by up to N-fold for shared-view entities
+
+## Profiling Evidence
+
+Baseline run (100 clients, 120 s, `b70b0ad`):
+
+| Zone | Calls | Total |
+|---|---|---|
+| `Witness::SendEntityUpdate` | 6,757,998 | 8.69 s |
+| `Channel::Send` (cellapp) | 1,795,770 | 7.15 s |
+
+`Witness::SendEntityUpdate` is the single hottest call site by total CPU
+after `Witness::Update::Pump`. Each call serializes the same `other_delta`
+for a different observer — 96 peers × 100 observers × 723 ticks = 6.76 M
+identical serializations. This directly matches the problem this optimization
+solves.
 
 ## Current Behavior
 

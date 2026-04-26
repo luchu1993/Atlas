@@ -1,8 +1,14 @@
 # RangeList Grid Acceleration
 
-**Priority:** P1
+**Priority:** P2 (downgraded from P1 based on profiling)
 **Subsystem:** `src/lib/space/range_list.h`
 **Impact:** Reduces AoI trigger cost from O(delta) to O(1) in dense regions
+
+> **Profiling note (100-client baseline, `b70b0ad`):** `Space::Tick` total =
+> 1.8 ms over 120 s — not measurable at current scale. Bottleneck only
+> materialises with clustered spawns or convergent movement in 200-entity
+> scenarios. Revisit when 100v100 load tests show `Space::Tick` > 1% of
+> frame time.
 
 ## Current Behavior
 

@@ -74,13 +74,16 @@ internal static class Lifecycle
     internal static void DoOnTick(float deltaTime)
     {
         using var _ = Profiler.ZoneN(ProfilerNames.ScriptOnTick);
-        EngineContext.SyncContext?.ProcessQueue();
-        EntityManager.Instance.OnTickAll(deltaTime);
+        using (Profiler.ZoneN(ProfilerNames.ScriptSyncContextFlush))
+            EngineContext.SyncContext?.ProcessQueue();
+        using (Profiler.ZoneN(ProfilerNames.ScriptEntityTickAll))
+            EntityManager.Instance.OnTickAll(deltaTime);
         // Collect property/volatile dirty bits that OnTick may have set and
         // forward them to the cell layer before witnesses sweep this tick's
         // updates. Skipping this step leaves event_seq pinned at 0 on the
         // C++ side and no property delta ever reaches a client.
-        EntityManager.Instance.PublishReplicationAll();
+        using (Profiler.ZoneN(ProfilerNames.ScriptPublishReplicationAll))
+            EntityManager.Instance.PublishReplicationAll();
     }
 
     internal static void DoOnShutdown()

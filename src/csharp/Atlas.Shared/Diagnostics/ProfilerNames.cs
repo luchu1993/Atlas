@@ -19,6 +19,13 @@ namespace Atlas.Diagnostics
         public const string ScriptOnTick = "Script.OnTick";
         public const string PublishReplicationFrame = "Script.PublishReplicationFrame";
 
+        // Sub-zones inside Script.OnTick — used to attribute spike time to
+        // one of the three phases without instrumenting every call site.
+        public const string ScriptSyncContextFlush = "Script.SyncContextFlush";
+        public const string ScriptEntityTickAll = "Script.EntityTickAll";
+        public const string ScriptPublishReplicationAll = "Script.PublishReplicationAll";
+        public const string ScriptComponentTickAll = "Script.ComponentTickAll";
+
         // Client-side dispatch zones. Names mirror the server's
         // Channel::HandleMessage path so end-to-end traces align —
         // a "ClientCallbacks.Dispatch*" zone follows the corresponding

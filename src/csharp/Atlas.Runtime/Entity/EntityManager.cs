@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using Atlas.Core;
+using Atlas.Diagnostics;
 using Atlas.Serialization;
 
 namespace Atlas.Entity;
@@ -71,11 +72,14 @@ public sealed class EntityManager
         foreach (var entity in _entities.Values)
         {
             if (entity.IsDestroyed) continue;
-            entity.OnTick(deltaTime);
+            // entity.GetType().Name is a CLR-interned string — no allocation per call.
+            using (Profiler.ZoneN(entity.GetType().Name))
+                entity.OnTick(deltaTime);
             // Fire component ticks AFTER the entity body so a component
             // that depends on entity state sees the latest values; the
             // pump still captures any dirty bits both touch this tick.
-            entity.TickAllComponents(deltaTime);
+            using (Profiler.ZoneN(ProfilerNames.ScriptComponentTickAll))
+                entity.TickAllComponents(deltaTime);
         }
         FlushPending();
     }

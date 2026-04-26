@@ -4,6 +4,11 @@
 **Subsystem:** `src/server/cellapp/witness.cc`
 **Impact:** Witness per-tick CPU reduction of ~50% in dense AoI
 
+> **Profiling note (100-client baseline, `b70b0ad`):** `Witness::Update::PriorityHeap`
+> total = 74 ms over 120 s = **0.054% of tick CPU**. Not a bottleneck at 100
+> peers per observer. This optimization becomes relevant at the 200-entity
+> (100v100) target where heap cost scales to O(N log N) × M observers.
+
 ## Current Behavior
 
 `Witness::Update()` rebuilds the entire priority heap every tick:
