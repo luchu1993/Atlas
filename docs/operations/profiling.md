@@ -15,6 +15,10 @@ memory tab、锁竞争——见 [`tracy_usage.md`](tracy_usage.md)。
 | `profile-release` | 开，RelWithDebInfo | 生产形态的性能测试——优化后代码 + Tracy zone + 符号信息 |
 | `hybrid` | 开（RelWithDebInfo） | 不需要 release 级代码生成的快速性能验证 |
 
+需要 Tracy 工具（GUI viewer + CLI 几件套）跟着构建落到
+`bin/<build_dir>/tools/` 时，加 `-DATLAS_BUILD_TRACY_VIEWER=ON` —— 详见
+[`tracy_usage.md`](tracy_usage.md) 的"拿 viewer"小节。
+
 ```bash
 # 生产形态的性能 trace
 cmake --preset profile-release

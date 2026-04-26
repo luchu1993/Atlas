@@ -26,6 +26,18 @@ option(ATLAS_ENABLE_PROFILER "Enable profiler instrumentation (Tracy backend)" O
 option(ATLAS_PROFILER_ON_DEMAND
        "Tracy ON_DEMAND mode — instrumentation goes inert until a client connects"
        ON)
+option(ATLAS_BUILD_TRACY_VIEWER
+       "Also build the Tracy viewer GUI from source into bin/<build_dir>/tools/. \
+Off by default because the viewer pulls in many vendored dependencies \
+(ImGui, GLFW, libcurl, FreeType, Capstone, …) and adds 30–60 s to a clean \
+configure+build."
+       OFF)
+if(ATLAS_BUILD_TRACY_VIEWER AND NOT ATLAS_ENABLE_PROFILER)
+  message(FATAL_ERROR
+    "ATLAS_BUILD_TRACY_VIEWER=ON requires ATLAS_ENABLE_PROFILER=ON — the "
+    "viewer is built from the same Tracy source FetchContent that the "
+    "profiler client pulls in.")
+endif()
 
 # Heap allocator backend used by atlas::Heap (foundation/heap.h). Drives
 # what RawAlloc/RawFree resolve to in heap.cc; user code stays
@@ -54,6 +66,72 @@ include(AtlasOutputDirectory)
 
 if(ATLAS_BUILD_CSHARP)
   include(AtlasDotNetBuild)
+endif()
+
+# ── Tracy viewer GUI (optional) ──────────────────────────────────────────────
+# We ship the viewer alongside Atlas binaries by downloading the
+# upstream prebuilt archive matched to our pinned Tracy version, then
+# extracting Tracy.exe into bin/<build_dir>/tools/. Building from
+# source via add_subdirectory(${tracy_SOURCE_DIR}/profiler) sounds
+# cleaner but Tracy's profiler CMakeLists invokes an embed helper as
+# `${CMAKE_CURRENT_BINARY_DIR}/embed`, which CMake strips to a bare
+# `embed` once it equals the rule's working directory — Windows CMD
+# then fails to find it because "." isn't in PATH. The prebuilt path
+# sidesteps that without patching Tracy upstream.
+#
+# Linux / macOS prebuilts aren't published officially by Tracy; on
+# those platforms a manual `cmake -S _deps/tracy-src/profiler` is the
+# documented path. That's flagged in docs/operations/tracy_usage.md.
+if(ATLAS_BUILD_TRACY_VIEWER)
+  if(WIN32)
+    set(_atlas_tracy_viewer_url
+        "https://github.com/wolfpld/tracy/releases/download/v0.13.1/windows-0.13.1.zip")
+    set(_atlas_tracy_viewer_archive "${CMAKE_BINARY_DIR}/_atlas_tracy_viewer.zip")
+    set(_atlas_tracy_viewer_dir "${CMAKE_BINARY_DIR}/_atlas_tracy_viewer")
+    set(_atlas_tracy_viewer_marker "${_atlas_tracy_viewer_dir}/tracy-profiler.exe")
+    if(NOT EXISTS "${_atlas_tracy_viewer_marker}")
+      message(STATUS "Atlas: downloading Tracy viewer ${_atlas_tracy_viewer_url}")
+      file(DOWNLOAD "${_atlas_tracy_viewer_url}" "${_atlas_tracy_viewer_archive}"
+           SHOW_PROGRESS STATUS _atlas_dl_status)
+      list(GET _atlas_dl_status 0 _atlas_dl_code)
+      if(NOT _atlas_dl_code EQUAL 0)
+        message(FATAL_ERROR "Tracy viewer download failed: ${_atlas_dl_status}")
+      endif()
+      file(MAKE_DIRECTORY "${_atlas_tracy_viewer_dir}")
+      file(ARCHIVE_EXTRACT INPUT "${_atlas_tracy_viewer_archive}"
+           DESTINATION "${_atlas_tracy_viewer_dir}")
+    endif()
+    if(NOT EXISTS "${_atlas_tracy_viewer_marker}")
+      message(FATAL_ERROR
+        "Tracy viewer archive extracted but tracy-profiler.exe not found "
+        "at ${_atlas_tracy_viewer_marker} — upstream archive layout may "
+        "have changed. Check ${_atlas_tracy_viewer_dir}.")
+    endif()
+    # The 0.13.1 release ships the GUI plus a few CLI helpers
+    # (capture, csvexport, import-chrome, import-fuchsia, update).
+    # Deploy the lot — they're tiny, all share the same provenance,
+    # and operators routinely use capture / csvexport alongside the
+    # GUI for non-interactive collection and post-processing.
+    file(GLOB _atlas_tracy_viewer_exes "${_atlas_tracy_viewer_dir}/tracy-*.exe")
+    add_custom_target(atlas_tracy_viewer ALL
+      COMMAND ${CMAKE_COMMAND} -E make_directory "${ATLAS_BIN_ROOT}/tools"
+      COMMAND ${CMAKE_COMMAND} -E copy_if_different
+              ${_atlas_tracy_viewer_exes} "${ATLAS_BIN_ROOT}/tools/"
+      COMMENT "Deploying Tracy viewer + CLI tools to bin/<build>/tools/"
+      VERBATIM
+    )
+    set_target_properties(atlas_tracy_viewer PROPERTIES FOLDER "ThirdParty/Tracy")
+    unset(_atlas_tracy_viewer_url)
+    unset(_atlas_tracy_viewer_archive)
+    unset(_atlas_tracy_viewer_dir)
+    unset(_atlas_tracy_viewer_marker)
+    unset(_atlas_tracy_viewer_exes)
+  else()
+    message(WARNING
+      "ATLAS_BUILD_TRACY_VIEWER on non-Windows: Tracy publishes no "
+      "official Linux/macOS prebuilt. Build the viewer manually from "
+      "${tracy_SOURCE_DIR}/profiler — see docs/operations/tracy_usage.md.")
+  endif()
 endif()
 
 # ── Threading ────────────────────────────────────────────────────────────────

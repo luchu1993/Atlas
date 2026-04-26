@@ -43,17 +43,52 @@ Tracy 默认**不**给你的：
 
 ## 拿 viewer
 
-Tracy 在 GitHub releases 上发布预编译的 viewer：
-
-```
-https://github.com/wolfpld/tracy/releases
-```
-
 Atlas 把 Tracy native 钉在 **0.13.1**（见 `cmake/Dependencies.cmake`）。
-viewer 的 wire protocol 必须**精确匹配**这个 minor 版本——拿一个
-0.12.x 的 viewer 接 0.13.1 的 client，能连上但 zone 会被静默丢弃。下载
-`Tracy-0.13.1.7z`（Windows）或 `Tracy-0.13.1.tar.gz`（Linux），把 GUI
-可执行解压到 `PATH` 上。
+viewer 的 wire protocol 必须**精确匹配**这个 minor 版本 —— 拿一个
+0.12.x 的 viewer 接 0.13.1 的 client，能连上但 zone 会被静默丢弃。
+
+### 推荐方式：让构建顺带拿过来（Windows）
+
+把 `ATLAS_BUILD_TRACY_VIEWER` 选项打开，CMake configure 时会从上游
+release 下载 `windows-0.13.1.zip`，把里面的 6 个 exe（`tracy-profiler`
+GUI 加上 `tracy-capture` / `tracy-csvexport` / `tracy-import-chrome` /
+`tracy-import-fuchsia` / `tracy-update` CLI 工具）部署到
+`bin/<build_dir>/tools/`：
+
+```bash
+cmake --preset profile-release -DATLAS_BUILD_TRACY_VIEWER=ON
+cmake --build build/profile-release --config RelWithDebInfo
+# 之后 Tracy 工具集就在：
+# bin/profile-release/tools/tracy-profiler.exe
+```
+
+下载只在第一次 configure 时发生（约 5 MB），之后 cache 在 build dir 里。
+版本严格匹配：升级 Tracy native 时（`cmake/Dependencies.cmake` 里那
+个 URL）顺手把这里的 release URL 也改了即可。
+
+### Linux / macOS
+
+Tracy 上游目前不发 Linux/macOS 预编译。CMake 在这些平台开
+`ATLAS_BUILD_TRACY_VIEWER=ON` 只会打 warning。要 viewer 的话单独从
+fetch 下来的源码手动构建：
+
+```bash
+# Atlas 已经把 Tracy 源码 fetch 到了 build dir
+cd build/<preset>/_deps/tracy-src/profiler
+cmake -B build -DCMAKE_BUILD_TYPE=Release
+cmake --build build
+# 出来的 tracy-profiler 在 build/ 下面
+```
+
+依赖：装系统包 `libglfw3-dev`、`libfreetype-dev`、`libcapstone-dev`、
+`libcurl4-openssl-dev`，以及 Wayland 或 X11 显示库。具体清单见 Tracy
+仓库里的 `profiler/README.md`。
+
+### 后路：自己去 GitHub 下
+
+任何时候不想走 CMake 选项，可以直接去
+<https://github.com/wolfpld/tracy/releases/tag/v0.13.1> 下
+`windows-0.13.1.zip` 自己解压。
 
 ## Attach 到服务器进程
 
