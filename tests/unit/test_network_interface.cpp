@@ -228,7 +228,13 @@ TEST_F(NetworkInterfaceTest, RateLimitRejectsExcess) {
   EXPECT_LE(ni_.ChannelCount(), 2u);
 }
 
-TEST_F(NetworkInterfaceTest, UdpRateLimitedDatagramsAlsoConsumePerPollBudget) {
+// With the per-poll loop now bounded by wall time (kReadableCallbackBudget)
+// rather than a fixed datagram count, we can no longer assert "the burst left
+// some packets in the OS buffer for the next poll". What we still guarantee
+// — and what this test pins — is that while rate-limiting is active, only the
+// first admitted source dispatches; lifting the limit then unblocks the path
+// for fresh traffic.
+TEST_F(NetworkInterfaceTest, UdpRateLimitOnlyAdmitsFirstSourcePerPoll) {
   ASSERT_TRUE(ni_.StartUdp(Address("127.0.0.1", 0)).HasValue());
 
   std::atomic<uint32_t> received_count{0};
@@ -254,13 +260,20 @@ TEST_F(NetworkInterfaceTest, UdpRateLimitedDatagramsAlsoConsumePerPollBudget) {
     ASSERT_EQ(*sent, payload.size());
   }
 
-  // A single ProcessOnce should not drain the whole UDP socket under flood;
-  // only one packet is admitted by the rate limiter and the rest should be
-  // left for future polls once the callback budget is exhausted.
+  // A single ProcessOnce should not dispatch more than one packet while the
+  // rate limiter is active — all received datagrams consume read budget but
+  // only the first IP is admitted.
   dispatcher_.ProcessOnce();
   EXPECT_EQ(received_count.load(std::memory_order_relaxed), 1u);
 
+  // After lifting the rate limit, fresh traffic must reach the handler.
+  // (The burst above may have drained the OS buffer via the time-based read
+  // loop — we send a new packet to verify the path is unblocked.)
   ni_.SetRateLimit(0);
+  Bundle extra;
+  extra.AddMessage(NetTestMsg{9999u});
+  auto extra_payload = extra.Finalize();
+  ASSERT_TRUE(sender->SendTo(extra_payload, ni_.UdpAddress()).HasValue());
 
   ASSERT_TRUE(poll_until(
       dispatcher_, [&] { return received_count.load(std::memory_order_relaxed) > 1u; },
@@ -527,7 +540,11 @@ TEST_F(NetworkInterfaceTest, ConnectRudpIsIdempotent) {
   EXPECT_EQ(ni_.ChannelCount(), 1u);
 }
 
-TEST_F(NetworkInterfaceTest, RudpRateLimitedDatagramsAlsoConsumePerPollBudget) {
+// Same rationale as UdpRateLimitOnlyAdmitsFirstSourcePerPoll: the time-based
+// read loop replaced the count-based exhaustion semantics, so the new
+// invariant is "only one source admitted while limited; new source admitted
+// after the limit lifts".
+TEST_F(NetworkInterfaceTest, RudpRateLimitOnlyAdmitsFirstSourcePerPoll) {
   ASSERT_TRUE(ni_.StartRudpServer(Address("127.0.0.1", 0)).HasValue());
   ni_.SetRateLimit(1);
 
@@ -554,7 +571,18 @@ TEST_F(NetworkInterfaceTest, RudpRateLimitedDatagramsAlsoConsumePerPollBudget) {
   dispatcher_.ProcessOnce();
   EXPECT_EQ(ni_.ChannelCount(), 1u);
 
+  // After lifting the rate limit, a fresh datagram from a new source address
+  // must create a second channel. The burst above may have drained the OS
+  // buffer via the time-based read loop, so we send a new packet here.
   ni_.SetRateLimit(0);
+  auto extra_sender = Socket::CreateUdp();
+  ASSERT_TRUE(extra_sender.HasValue());
+  ASSERT_TRUE(extra_sender->Bind(Address("127.0.0.1", 0)).HasValue());
+  std::array<std::byte, 9> extra_pkt{};
+  extra_pkt[0] = std::byte{rudp::kFlagHasSeq};
+  extra_pkt[4] = std::byte{1};
+  ASSERT_TRUE(extra_sender->SendTo(extra_pkt, ni_.RudpAddress()).HasValue());
+
   ASSERT_TRUE(poll_until(
       dispatcher_, [&] { return ni_.ChannelCount() > 1u; }, std::chrono::milliseconds(500)));
 }

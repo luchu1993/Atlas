@@ -25,6 +25,7 @@ exec "${PYTHON}" "${SCRIPT_DIR}/run_world_stress.py" \
     --ramp-per-sec 20 \
     --rpc-rate-hz 2 \
     --move-rate-hz 10 \
+    --spread-radius 200 \
     --space-count 1 \
     --shortline-pct 0 \
     --hold-min-ms 120000 \

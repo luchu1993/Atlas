@@ -183,7 +183,7 @@ class NetworkInterface : public FrequentTask {
   static constexpr std::size_t kMaxDatagramsPerCallback = 4096;
   // Per-callback time budget for UDP/RUDP receive loops. Bounding by wall
   // time (rather than datagram count) prevents bursty traffic from starving
-  // the EventDispatcher timer wheel: the loop exits after ~2 ms regardless
+  // the EventDispatcher timer wheel: the loop exits after ~10 ms regardless
   // of how many packets are waiting.
   static constexpr Duration kReadableCallbackBudget = std::chrono::milliseconds(10);
   StreamBuffer datagram_recv_scratch_;
