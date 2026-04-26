@@ -3,6 +3,7 @@
 #include <algorithm>
 
 #include "foundation/log.h"
+#include "foundation/profiler.h"
 #include "network/event_dispatcher.h"
 #include "network/reliable_udp.h"
 #include "network/tcp_channel.h"
@@ -133,9 +134,11 @@ auto NetworkInterface::ConnectTcp(const Address& addr) -> Result<TcpChannel*> {
   auto reg =
       dispatcher_.RegisterReader(channel->Fd(), [ch = channel.get()](FdHandle, IOEvent events) {
         if ((events & IOEvent::kReadable) != IOEvent::kNone) {
+          ATLAS_PROFILE_ZONE_N("TcpChannel::OnReadable");
           ch->OnReadable();
         }
         if ((events & IOEvent::kWritable) != IOEvent::kNone) {
+          ATLAS_PROFILE_ZONE_N("TcpChannel::OnWritable");
           ch->OnWritable();
         }
       });
@@ -414,6 +417,7 @@ void NetworkInterface::PrepareForShutdown() {
 // ============================================================================
 
 void NetworkInterface::DoTask() {
+  ATLAS_PROFILE_ZONE_N("NetworkInterface::DoTask");
   ProcessCondemnedChannels();
 
   if (rate_limit_ > 0) {
@@ -430,6 +434,7 @@ void NetworkInterface::DoTask() {
 // ============================================================================
 
 void NetworkInterface::OnTcpAccept() {
+  ATLAS_PROFILE_ZONE_N("NetworkInterface::OnTcpAccept");
   std::size_t accepts = 0;
   while (true) {
     if (CallbackBudgetExhausted(accepts, kMaxAcceptsPerCallback)) {
@@ -470,9 +475,11 @@ void NetworkInterface::OnTcpAccept() {
     auto reg =
         dispatcher_.RegisterReader(channel->Fd(), [ch = channel.get()](FdHandle, IOEvent events) {
           if ((events & IOEvent::kReadable) != IOEvent::kNone) {
+            ATLAS_PROFILE_ZONE_N("TcpChannel::OnReadable");
             ch->OnReadable();
           }
           if ((events & IOEvent::kWritable) != IOEvent::kNone) {
+            ATLAS_PROFILE_ZONE_N("TcpChannel::OnWritable");
             ch->OnWritable();
           }
         });
@@ -494,12 +501,12 @@ void NetworkInterface::OnTcpAccept() {
 }
 
 void NetworkInterface::OnUdpReadable() {
+  ATLAS_PROFILE_ZONE_N("NetworkInterface::OnUdpReadable");
+  const auto deadline = Clock::now() + kReadableCallbackBudget;
   auto recv_buffer = DatagramRecvBuffer();
   std::size_t datagrams = 0;
-  while (true) {
-    if (CallbackBudgetExhausted(datagrams, kMaxDatagramsPerCallback)) {
-      break;
-    }
+  while (datagrams < kMaxDatagramsPerCallback) {
+    if (Clock::now() >= deadline) break;
 
     auto result = udp_socket_->RecvFrom(recv_buffer);
     if (!result) {
@@ -548,12 +555,12 @@ void NetworkInterface::OnUdpReadable() {
 }
 
 void NetworkInterface::OnRudpReadable() {
+  ATLAS_PROFILE_ZONE_N("NetworkInterface::OnRudpReadable");
+  const auto deadline = Clock::now() + kReadableCallbackBudget;
   auto recv_buffer = DatagramRecvBuffer();
   std::size_t datagrams = 0;
-  while (true) {
-    if (CallbackBudgetExhausted(datagrams, kMaxDatagramsPerCallback)) {
-      break;
-    }
+  while (datagrams < kMaxDatagramsPerCallback) {
+    if (Clock::now() >= deadline) break;
 
     auto result = rudp_socket_->RecvFrom(recv_buffer);
     if (!result) {

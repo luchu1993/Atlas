@@ -178,7 +178,14 @@ class NetworkInterface : public FrequentTask {
   static constexpr std::size_t kMaxChannels = 8192;
   static constexpr std::size_t kMaxDatagramSize = 64 * 1024;
   static constexpr std::size_t kMaxAcceptsPerCallback = 128;
-  static constexpr std::size_t kMaxDatagramsPerCallback = 1024;
+  // Hard cap — safety net in case the OS recv queue never drains.
+  // Normal exit is via kReadableCallbackBudget (time-based).
+  static constexpr std::size_t kMaxDatagramsPerCallback = 4096;
+  // Per-callback time budget for UDP/RUDP receive loops. Bounding by wall
+  // time (rather than datagram count) prevents bursty traffic from starving
+  // the EventDispatcher timer wheel: the loop exits after ~2 ms regardless
+  // of how many packets are waiting.
+  static constexpr Duration kReadableCallbackBudget = std::chrono::milliseconds(10);
   StreamBuffer datagram_recv_scratch_;
 
   bool shutting_down_{false};
