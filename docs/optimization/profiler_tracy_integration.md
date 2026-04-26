@@ -4,6 +4,27 @@
 **Subsystem:** `src/lib/foundation/`, `src/lib/server/`, `src/lib/network/`, `src/lib/clrscript/`, `src/csharp/Atlas.Runtime/`
 **Impact:** Establishes the measurement substrate. Until this lands, every other doc in this directory is conjecture — we cannot quantify "before vs after" without a unified C++/C# timeline, frame markers, and zone-level breakdowns of the 100v100 hot path.
 
+## Status (April 2026)
+
+| Phase | Patch | Status | Notes |
+|---|---|---|---|
+| 1 — Dependency wiring + macro shell | 0001 | ✅ landed | Tracy fetch (later bumped to 0.13.1 in patch 0004); `foundation/profiler.h` macro surface |
+| 2 — Frame markers + tick driver | 0002 | ✅ landed | `ServerApp::AdvanceTime` zone + `TickWorkMs` plot + per-process frame name |
+| 3 — Hot-path zones for 100v100 | 0003 | ✅ landed | 24 zones across cellapp / witness / space / cell_entity / real_entity_data |
+| 4 — Tracy-CSharp integration | 0004, 0005 | ✅ landed (deviated) | Tracy bumped to 0.13.1, built SHARED. Self-written P/Invoke (LibraryImport) instead of Tracy-NET — that NuGet requires net10 and Atlas.Runtime is net9. Single TracyClient.dll backs both C++ and managed sides. |
+| 5a — Network zones + byte plots | 0006 | ✅ landed | `Channel::Send` / `Dispatch` zones + `BytesIn`/`BytesOut` plots + per-message id text |
+| 5b — OpenTelemetry cross-process | — | ❌ **deferred** | Wire-format envelope change + OTel SDK weight not justified by current 100v100 attribution needs. Tracy's in-process view covers what we need. |
+| 6 — Memory hooks + per-pool tracking | 0007 | ✅ landed | `atlas::Heap` abstraction + global `operator new`/`delete` override (20 variants) + named Tracy hooks per pool (`PoolAllocator(name, …)`) |
+| 6+ — mimalloc backend selectable | 0008 | ✅ landed | `ATLAS_HEAP_ALLOCATOR=std\|mimalloc` CMake string; future allocators (jemalloc, …) plug in with a 3-step extension |
+| (output layout) | 0009 | ✅ landed | `bin/<build_dir>/...` so parallel CMake build dirs (e.g. `build/debug` + `build/profile-release-mimalloc`) don't overwrite each other's artifacts |
+| 7 — Client zones + Unity backend | 0010 | ✅ landed (deviated) | `ClientCallbacks` + `ClientEntity.ApplyPositionUpdate` zones; `Atlas.Client.Unity` (asmdef + `UnityProfilerBackend`) outside Atlas's dotnet pipeline (Unity-only). `Atlas.Client.Desktop` keeps `NullProfilerBackend` rather than duplicating Tracy bindings. |
+| 8 — Build modes + runbook | 0011 | ✅ landed | `release` preset turns profiler OFF; new `profile-release` (RelWithDebInfo + profiler ON); operator runbook at [`docs/operations/profiling.md`](../operations/profiling.md). machined env-var TRACY_PORT injection skipped — Tracy auto-falls-back ports and the viewer's Discover scan handles multi-process attach. |
+
+The integration is **functionally complete** for the 100v100 attribution
+goal. The two intentional deferrals (5b OTel, 7 Atlas.Client.Desktop Tracy)
+are noted in the relevant phase descriptions below and have explicit
+"future work" entries in the operator runbook.
+
 ## Background
 
 Atlas runs C++ tick loops (20 Hz open world / 30 Hz dungeon) that call into C# combat
