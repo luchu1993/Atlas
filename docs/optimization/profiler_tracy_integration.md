@@ -1,468 +1,445 @@
-# Profiler Infrastructure (Tracy + OpenTelemetry)
+# Profiler 基础设施（Tracy + OpenTelemetry）
 
-**Priority:** P0 (prerequisite — all other optimization tasks depend on this for measurement)
-**Subsystem:** `src/lib/foundation/`, `src/lib/server/`, `src/lib/network/`, `src/lib/clrscript/`, `src/csharp/Atlas.Runtime/`
-**Impact:** Establishes the measurement substrate. Until this lands, every other doc in this directory is conjecture — we cannot quantify "before vs after" without a unified C++/C# timeline, frame markers, and zone-level breakdowns of the 100v100 hot path.
+**优先级：** P0（前置 —— 本目录其它优化任务的度量基础都依赖它）
+**子系统：** `src/lib/foundation/`、`src/lib/server/`、`src/lib/network/`、`src/lib/clrscript/`、`src/csharp/Atlas.Runtime/`
+**影响：** 建立度量基底。它落地之前，本目录里的其它文档都是空想 —— 没有
+统一的 C++/C# 时间轴、frame 标记、以及 100v100 热路径的 zone 级拆解，就
+无法量化"改前 vs 改后"。
 
-## Status (April 2026)
+## 状态（2026 年 4 月）
 
-| Phase | Patch | Status | Notes |
+| Phase | Patch | 状态 | 备注 |
 |---|---|---|---|
-| 1 — Dependency wiring + macro shell | 0001 | ✅ landed | Tracy fetch (later bumped to 0.13.1 in patch 0004); `foundation/profiler.h` macro surface |
-| 2 — Frame markers + tick driver | 0002 | ✅ landed | `ServerApp::AdvanceTime` zone + `TickWorkMs` plot + per-process frame name |
-| 3 — Hot-path zones for 100v100 | 0003 | ✅ landed | 24 zones across cellapp / witness / space / cell_entity / real_entity_data |
-| 4 — Tracy-CSharp integration | 0004, 0005 | ✅ landed (deviated) | Tracy bumped to 0.13.1, built SHARED. Self-written P/Invoke (LibraryImport) instead of Tracy-NET — that NuGet requires net10 and Atlas.Runtime is net9. Single TracyClient.dll backs both C++ and managed sides. |
-| 5a — Network zones + byte plots | 0006 | ✅ landed | `Channel::Send` / `Dispatch` zones + `BytesIn`/`BytesOut` plots + per-message id text |
-| 5b — OpenTelemetry cross-process | — | ❌ **deferred** | Wire-format envelope change + OTel SDK weight not justified by current 100v100 attribution needs. Tracy's in-process view covers what we need. |
-| 6 — Memory hooks + per-pool tracking | 0007 | ✅ landed | `atlas::Heap` abstraction + global `operator new`/`delete` override (20 variants) + named Tracy hooks per pool (`PoolAllocator(name, …)`) |
-| 6+ — mimalloc backend selectable | 0008 | ✅ landed | `ATLAS_HEAP_ALLOCATOR=std\|mimalloc` CMake string; future allocators (jemalloc, …) plug in with a 3-step extension |
-| (output layout) | 0009 | ✅ landed | `bin/<build_dir>/...` so parallel CMake build dirs (e.g. `build/debug` + `build/profile-release-mimalloc`) don't overwrite each other's artifacts |
-| 7 — Client zones + Unity backend | 0010 | ✅ landed (deviated) | `ClientCallbacks` + `ClientEntity.ApplyPositionUpdate` zones; `Atlas.Client.Unity` (asmdef + `UnityProfilerBackend`) outside Atlas's dotnet pipeline (Unity-only). `Atlas.Client.Desktop` keeps `NullProfilerBackend` rather than duplicating Tracy bindings. |
-| 8 — Build modes + runbook | 0011 | ✅ landed | `release` preset turns profiler OFF; new `profile-release` (RelWithDebInfo + profiler ON); operator runbook at [`docs/operations/profiling.md`](../operations/profiling.md). machined env-var TRACY_PORT injection skipped — Tracy auto-falls-back ports and the viewer's Discover scan handles multi-process attach. |
+| 1 — 依赖接入 + 宏壳 | 0001 | ✅ 完成 | Tracy fetch（patch 0004 中升级到 0.13.1）；`foundation/profiler.h` 宏面 |
+| 2 — Frame 标记 + tick 驱动器 | 0002 | ✅ 完成 | `ServerApp::AdvanceTime` zone + `TickWorkMs` plot + 每进程 frame 名 |
+| 3 — 100v100 热路径 zone | 0003 | ✅ 完成 | cellapp / witness / space / cell_entity / real_entity_data 中 24 个 zone |
+| 4 — Tracy-CSharp 集成 | 0004, 0005 | ✅ 完成（有偏离） | Tracy 升至 0.13.1，构建为 SHARED。自写 P/Invoke（LibraryImport）替代 Tracy-NET——后者要求 net10 而 Atlas.Runtime 是 net9。一份 TracyClient.dll 同时支撑 C++ 与托管两端。 |
+| 5a — 网络 zone + 字节 plot | 0006 | ✅ 完成 | `Channel::Send` / `Dispatch` zone + `BytesIn`/`BytesOut` plot + 每消息 id 文本 |
+| 5b — OpenTelemetry 跨进程 | — | ❌ **延后** | wire-format envelope 改动 + OTel SDK 重量级，跟当前 100v100 attribution 需求关联弱。Tracy 进程内视图已够用。 |
+| 6 — 内存 hook + 每池追踪 | 0007 | ✅ 完成 | `atlas::Heap` 抽象 + 全局 `operator new`/`delete` override（20 变体） + 每池 named Tracy hook（`PoolAllocator(name, …)`） |
+| 6+ — mimalloc 后端可选 | 0008 | ✅ 完成 | `ATLAS_HEAP_ALLOCATOR=std\|mimalloc` CMake 字符串；将来加入其它 allocator（jemalloc 等）走 3 步扩展 |
+| (输出布局) | 0009 | ✅ 完成 | `bin/<build_dir>/...`，并存的 CMake build 目录（如 `build/debug` + `build/profile-release-mimalloc`）互不覆盖 |
+| 7 — 客户端 zone + Unity 后端 | 0010 | ✅ 完成（有偏离） | `ClientCallbacks` + `ClientEntity.ApplyPositionUpdate` zone；`Atlas.Client.Unity`（asmdef + `UnityProfilerBackend`）在 Atlas dotnet 流水线之外（Unity-only）。`Atlas.Client.Desktop` 保持 `NullProfilerBackend`，不重复 Tracy 绑定。 |
+| 8 — 构建模式 + runbook | 0011 | ✅ 完成 | `release` preset 关 profiler；新增 `profile-release`（RelWithDebInfo + profiler ON）；运维 runbook 在 [`docs/operations/profiling.md`](../operations/profiling.md)。machined 注 TRACY_PORT 环境变量未实施 —— Tracy 自动 fallback 端口、viewer 的 Discover 解决了多进程 attach。 |
+| (Review 修复) | 0012 | ✅ 完成 | profiler-OFF 模式下旁路 AllocDepthGuard 与 channel.cc snprintf 死代码；新增 [`docs/operations/tracy_usage.md`](../operations/tracy_usage.md) Tracy 使用指南。 |
 
-The integration is **functionally complete** for the 100v100 attribution
-goal. The two intentional deferrals (5b OTel, 7 Atlas.Client.Desktop Tracy)
-are noted in the relevant phase descriptions below and have explicit
-"future work" entries in the operator runbook.
+针对 100v100 attribution 目标，集成**功能上完成**。两处有意识的延后
+（5b OTel、7 Atlas.Client.Desktop Tracy）在下面对应 phase 描述里有交代，
+运维 runbook 中也有"未来工作"条目。
 
-## Background
+## 背景
 
-Atlas runs C++ tick loops (20 Hz open world / 30 Hz dungeon) that call into C# combat
-logic via CoreCLR + `[UnmanagedCallersOnly]`. Optimization work needs to attribute cost
-between native tick stages, managed script callbacks, network serialization, and
-cross-process RPC fan-out. No existing instrumentation provides this view.
+Atlas 跑 C++ tick 循环（开放世界 20 Hz / 副本 30 Hz），通过 CoreCLR +
+`[UnmanagedCallersOnly]` 调用 C# 战斗逻辑。优化工作需要在 native tick
+阶段、托管脚本回调、网络序列化、跨进程 RPC 扇出之间做开销归因。现有
+代码完全没有相应插桩。
 
-## Goals
+## 目标
 
-1. Single timeline that interleaves native zones with managed zones, sharing one clock
-   source so a frame trace can show `CellApp::Tick → ScriptHost::Update → C#
-   CombatLogic.OnTick` contiguously.
-2. Frame markers per process aligned with `ServerApp::AdvanceTime()` — distinct
-   labels for `OpenWorldTick` (20 Hz) and `DungeonTick` (30 Hz).
-3. Zone overhead under ~5 ns on the hot path; no measurable cost when the profiler
-   client is disconnected.
-4. Live, attach-on-demand viewing of any production server process; no stop-the-world
-   restart required to start profiling.
-5. Cross-process causality: a network message can be followed from sender process to
-   receiver process in a single trace UI.
-6. **Mandatory abstraction layer**: every site of instrumentation in Atlas code uses
-   Atlas-defined macros (`ATLAS_PROFILE_*`) — never raw Tracy/OTel symbols. This is
-   non-negotiable. Swapping Tracy for another backend (Optick, Perfetto, internal
-   tool) must be a single-file change inside `foundation/profiler.h`.
-7. **Client SDK target is Unity**: the same logical surface (`Profiler.Zone`,
-   `Profiler.FrameMark`, `Profiler.Plot`) compiles for `Atlas.Client` (netstandard2.1)
-   and routes, on a Unity build, to `UnityEngine.Profiling.ProfilerMarker` /
-   `Profiler.BeginSample` so traces land natively in the Unity Profiler window /
-   Unity Profile Analyzer / Frame Debugger. Unity-side instrumentation must never
-   pay the cost of Tracy and must be inlinable down to a `ProfilerMarker.Auto()` so
-   IL2CPP can fold it into the host engine's existing sampler infrastructure.
+1. 统一时间轴交错呈现 native zone 与托管 zone，共用同一时钟源，使一帧
+   trace 可以连续显示 `CellApp::Tick → ScriptHost::Update → C#
+   CombatLogic.OnTick`。
+2. 每进程的 frame 标记跟 `ServerApp::AdvanceTime()` 对齐 —— `OpenWorldTick`
+   （20 Hz）和 `DungeonTick`（30 Hz）用不同标签。
+3. 热路径上 zone 开销低于约 5 ns；profiler client 未连时无可测开销。
+4. 任何生产服务器进程可即时按需 attach；启动 profiler 不需要停机重启。
+5. 跨进程因果性：一条网络消息可在单一 trace UI 中从发送进程跟到接收进程。
+6. **强制抽象层**：Atlas 中每一处插桩只用 Atlas 自定义的 `ATLAS_PROFILE_*`
+   宏，从不直接出现 Tracy/OTel 符号。这条不可妥协。把 Tracy 换成其它
+   后端（Optick、Perfetto、内部工具）必须只是 `foundation/profiler.h`
+   一文件的修改。
+7. **客户端 SDK 目标是 Unity**：同一逻辑面（`Profiler.Zone`、
+   `Profiler.FrameMark`、`Profiler.Plot`）在 `Atlas.Client`（netstandard2.1）
+   下编译，在 Unity 构建中路由到 `UnityEngine.Profiling.ProfilerMarker` /
+   `Profiler.BeginSample`，使 trace 原生落入 Unity Profiler 窗口 / Unity
+   Profile Analyzer / Frame Debugger。Unity 端插桩绝不为 Tracy 付出代价，
+   且必须能内联到 `ProfilerMarker.Auto()`，让 IL2CPP 把它折进宿主引擎
+   现有 sampler 基础设施里。
 
-## Non-Goals
+## 非目标
 
-- GPU profiling (server has none).
-- Statistical sampling profiles for capacity planning — those go through `perf` /
-  ETW separately, outside this framework.
-- Replacing `MemoryTracker` — Tracy's allocator hooks supplement it, do not subsume.
-- Per-allocation tagging in C# heap — `dotnet-gcdump` runs on demand, not via this
-  layer.
+- GPU profiling（服务器没有）。
+- 用于容量规划的统计采样 —— 单独走 `perf` / ETW，不在本框架内。
+- 取代 `MemoryTracker` —— Tracy allocator hook 是补充，不是替代。
+- C# 堆每分配打 tag —— `dotnet-gcdump` 按需跑，不通过本层。
 
-## Solution Overview
+## 解决方案概览
 
-| Concern | Tool | Where |
+| 关注点 | 工具 | 位置 |
 |--------|------|------|
-| Native zones, frames, plots, locks | Tracy 0.11.x | C++ everywhere |
-| Managed zones (server), sharing Tracy clock | Tracy-CSharp (NuGet) | `Atlas.Runtime` and downstream user scripts |
-| Managed zones (client) | Unity `ProfilerMarker` / `Profiler.BeginSample` | `Atlas.Client` consumed inside Unity |
-| Cross-process span linking | OpenTelemetry C++ + .NET SDK | `network/channel.cc`, `Atlas.Runtime/Hosting` |
-| C# heap deep-dives (on demand) | `dotnet-gcdump`, `dotnet-counters` (server); Unity Memory Profiler (client) | external, attach via PID |
-| Native heap deep-dives | `TracyAlloc` / `TracyFree` wrapped by `MemoryTracker` | `foundation/memory_tracker.cc`, `pool_allocator.cc` |
+| Native zone、frame、plot、锁 | Tracy 0.13.x | C++ 全部 |
+| 托管 zone（服务端），共用 Tracy 时钟 | 自写 P/Invoke（LibraryImport） | `Atlas.Runtime` 及下游用户脚本 |
+| 托管 zone（客户端） | Unity `ProfilerMarker` / `Profiler.BeginSample` | Unity 内消费的 `Atlas.Client` |
+| 跨进程 span 关联 | OpenTelemetry C++ + .NET SDK（**延后**） | `network/channel.cc`、`Atlas.Runtime/Hosting` |
+| C# 堆深挖（按需） | `dotnet-gcdump`、`dotnet-counters`（服务端）；Unity Memory Profiler（客户端） | 外部，按 PID attach |
+| Native 堆深挖 | `atlas::HeapAlloc` 内的 `TracyAlloc` / `TracyFree` | `foundation/heap.cc`、`pool_allocator.cc` |
 
-Tracy carries the inner-loop, nanosecond-resolution view. OpenTelemetry carries the
-inter-process, millisecond-resolution view. The two are bridged by the trace ID:
-each network message header gains a W3C `traceparent`, which Atlas writes into Tracy
-as a zone text annotation so the UI can cross-reference.
+Tracy 承担内循环、纳秒级视图。OpenTelemetry 承担进程间、毫秒级视图（延后
+落地）。两者通过 trace ID 桥接：每条网络消息头携带 W3C `traceparent`，
+Atlas 把它写进 Tracy 作为 zone 文本注解，UI 可交叉跳转。
 
-## Macro API (the only surface code may touch)
+## 宏 API（代码唯一可触碰的面）
 
-`src/lib/foundation/profiler.h` defines the entire abstraction. **No file outside
-`foundation/profiler.cc` may include `<tracy/Tracy.hpp>`.** Code review must reject
-direct Tracy references.
+`src/lib/foundation/profiler.h` 定义整个抽象。**`foundation/profiler.cc`
+之外的任何文件都不许 include `<tracy/Tracy.hpp>`。** code review 必须拒
+绝直接出现 Tracy 引用。
 
 ```cpp
-// Frame markers — one per top-level tick driver call site.
-ATLAS_PROFILE_FRAME(name)         // FrameMarkNamed; at end of AdvanceTime()
-ATLAS_PROFILE_FRAME_START(name)   // for paired Start/End forms
+// Frame 标记 —— 顶层 tick 驱动器调用点每处一个。
+ATLAS_PROFILE_FRAME(name)         // FrameMarkNamed; AdvanceTime() 末尾
+ATLAS_PROFILE_FRAME_START(name)   // 配对 Start/End 形式
 ATLAS_PROFILE_FRAME_END(name)
 
-// Scoped zones — RAII, costs ~2 ns when client connected, 0 when not.
-ATLAS_PROFILE_ZONE()              // function name auto-captured
-ATLAS_PROFILE_ZONE_N(name)        // explicit name, compile-time literal
-ATLAS_PROFILE_ZONE_C(name, color) // colored zone (RGB hex)
-ATLAS_PROFILE_ZONE_TEXT(buf, len) // attach dynamic string to current zone
+// 作用域 zone —— RAII，client 已连时约 2 ns，未连时为 0。
+ATLAS_PROFILE_ZONE()              // 自动捕获函数名
+ATLAS_PROFILE_ZONE_N(name)        // 显式名字，编译期字面量
+ATLAS_PROFILE_ZONE_C(name, color) // 带色 zone（RGB 十六进制）
+ATLAS_PROFILE_ZONE_TEXT(buf, len) // 给当前 zone 附加动态字符串
 
-// Plots — scalar time series (entity counts, queue depths, bandwidth).
+// Plot —— 标量时间序列（实体数、队列深度、带宽）。
 ATLAS_PROFILE_PLOT(name, value)
 
-// Free-form messages and trace-id annotations.
+// 自由格式 message 与 trace-id 注解。
 ATLAS_PROFILE_MESSAGE(buf, len)
 ATLAS_PROFILE_MESSAGE_C(buf, len, color)
 
-// Allocator hooks — used inside MemoryTracker / pool_allocator only.
+// Allocator hook —— 仅在 heap.cc / pool_allocator.cc 内使用。
 ATLAS_PROFILE_ALLOC(ptr, size)
 ATLAS_PROFILE_FREE(ptr)
 ATLAS_PROFILE_ALLOC_NAMED(ptr, size, pool_name)
 
-// Lock contention — wrap mutex types.
+// 锁竞争 —— 包装 mutex 类型。
 ATLAS_PROFILE_LOCKABLE(type, var)
 ATLAS_PROFILE_LOCK_MARK(var)
 
-// Compile-time switch — when undefined, every macro expands to a no-op.
+// 编译期开关 —— 未定义时所有宏展开为 no-op。
 #ifndef ATLAS_PROFILE_ENABLED
 #  define ATLAS_PROFILE_ENABLED 1
 #endif
 ```
 
-C# side mirrors the same surface. **The C# surface is identical across server and
-client; only the backend differs.**
+C# 端镜像同一面。**C# 面在服务端与客户端完全一致；只有后端不同。**
 
 ```csharp
-using var _ = Profiler.Zone();              // [CallerMemberName] auto name
+using var _ = Profiler.Zone();              // [CallerMemberName] 自动名字
 using var _ = Profiler.Zone("CombatTick");
 Profiler.Plot("ActiveBuffs", count);
 Profiler.Message($"trace={traceId}");
 Profiler.FrameMark("DungeonTick");
 ```
 
-The surface is split across two assemblies to keep Unity-incompatible code out of
-`Atlas.Client`:
+为把 Unity 不兼容的代码隔离在 `Atlas.Client` 之外，面被拆到两个 assembly：
 
-- `Atlas.Shared/Diagnostics/Profiler.cs` — the public, surface-only API.
-  netstandard2.1 friendly. Calls a swappable `IProfilerBackend` interface. Default
-  backend is `NullProfilerBackend` (every method a no-op JIT inlines away).
-- `Atlas.Runtime/Diagnostics/TracyProfilerBackend.cs` — server backend, wires to
-  Tracy-CSharp. Installed by `ScriptHost` at boot.
-- `Atlas.Client.Unity/Diagnostics/UnityProfilerBackend.cs` (new assembly, Unity-only,
-  conditionally compiled with `#if UNITY_2022_3_OR_NEWER`) — installs a backend that
-  `[MethodImpl(AggressiveInlining)]`-routes `Zone()` to a cached `ProfilerMarker.Auto()`
-  and `FrameMark` to `UnityEngine.Profiling.Profiler.EndSample/BeginSample` paired
-  with the Unity frame.
+- `Atlas.Shared/Diagnostics/Profiler.cs` —— 公共、纯面 API。netstandard2.1
+  友好。调用可替换的 `IProfilerBackend` 接口。默认后端是 `NullProfilerBackend`
+  （每个方法都是 JIT 可内联消除的 no-op）。
+- `Atlas.Runtime/Diagnostics/TracyProfilerBackend.cs` —— 服务端后端，对接
+  自写 Tracy P/Invoke。在启动时由 `Lifecycle.DoEngineInit` 安装。
+- `Atlas.Client.Unity/UnityProfilerBackend.cs`（新 assembly，Unity-only，
+  在 `#if UNITY_2022_3_OR_NEWER` 下条件编译）—— 安装一个把 `Zone()`
+  `[MethodImpl(AggressiveInlining)]` 路由到缓存 `ProfilerMarker.Auto()`
+  的后端。
 
-The Unity backend must:
-1. Not introduce any non-Unity dependency in `Atlas.Client` itself — `Atlas.Client`
-   stays at netstandard2.1 with zero references to UnityEngine.
-2. Use `ProfilerMarker` (preferred over `Profiler.BeginSample` — IL2CPP folds it
-   to a single `BurstStart/End` call when available).
-3. Cache markers by name in a thread-static dictionary so the per-call cost is one
-   dictionary lookup + one `marker.Begin()`. Static-readonly markers are preferred
-   wherever the call site can be expressed as a `Zone("LiteralName")`.
-4. Forward `Plot(name, value)` to `Profiler.EmitFrameMetaData` or to a custom
-   counter via `ProfilerCategory.Scripts` (Unity 2022.2+).
-5. Never load Tracy native libraries; the Unity build must not even reference
-   Tracy-CSharp.
+Unity 后端必须：
+1. 不在 `Atlas.Client` 里引入任何非 Unity 依赖 —— `Atlas.Client` 保持
+   netstandard2.1，零 UnityEngine 引用。
+2. 用 `ProfilerMarker`（优于 `Profiler.BeginSample` —— 可用时 IL2CPP
+   把它折成单次 `BurstStart/End`）。
+3. 把 marker 按名字缓存在 thread-static 字典里，使每次调用代价为一次
+   字典查找加一次 `marker.Begin()`。能写成 `Zone("LiteralName")` 的
+   call site 优先用 static-readonly marker。
+4. 把 `Plot(name, value)` 转给 `ProfilerCounterValue<T>`（Unity 2022.2+）；
+   旧版 Unity 退化到 `Profiler.EmitFrameMetaData`。
+5. 永不加载 Tracy native 库；Unity 构建甚至不能引用 Tracy 绑定。
 
-Both the C++ and C# macro layers must compile to no-ops under
-`ATLAS_PROFILE_ENABLED=0` (server) and when no backend is installed (client).
-Specifically, on the Unity client, shipping a release build with the
-`UnityProfilerBackend` excluded from the build profile must reduce every
-`Profiler.Zone` call site to dead code that the IL2CPP linker strips.
+C++ 与 C# 宏层在 `ATLAS_PROFILE_ENABLED=0`（服务端）以及没有 backend
+被 install 的情况下（客户端）必须编译为 no-op。具体到 Unity 客户端，
+release 构建排除 `UnityProfilerBackend` 后，每一个 `Profiler.Zone` call
+site 必须降为 IL2CPP linker 能 strip 的死代码。
 
-## Phased Implementation
+## 分阶段实施
 
-### Phase 1 — Dependency wiring and macro shell
+### Phase 1 —— 依赖接入与宏壳
 
-**Files:**
-- `cmake/Dependencies.cmake` — add Tracy `FetchContent` (pinned tag `v0.11.1`) and
-  the OpenTelemetry C++ SDK (header-only metrics + tracing portion only).
-- `cmake/AtlasCompilerOptions.cmake` — define `ATLAS_PROFILE_ENABLED` from the new
-  CMake option `ATLAS_ENABLE_PROFILER` (default ON for `debug` and `hybrid`, OFF for
-  `release` until Phase 7 flips it).
-- `src/lib/foundation/profiler.h` — full macro surface, both enabled and disabled
-  branches. Tracy headers included **only inside this file** (and `profiler.cc`).
-- `src/lib/foundation/profiler.cc` — small implementation file for macros that
-  cannot be header-only (e.g. plot config, broadcast disable).
-- `src/lib/foundation/CMakeLists.txt` — add sources, link `TracyClient`.
-- `tests/unit/foundation/test_profiler.cc` — verify all macros compile under both
-  `ATLAS_PROFILE_ENABLED=0` and `=1`, and that zero-mode produces no symbol
-  references to Tracy.
+**文件：**
+- `cmake/Dependencies.cmake` —— 加 Tracy `FetchContent`（钉 tag `v0.11.1`）
+  以及 OpenTelemetry C++ SDK（仅 header-only metrics + tracing 部分）。
+- `cmake/AtlasCompilerOptions.cmake` —— 由新 CMake option `ATLAS_ENABLE_PROFILER`
+  推 `ATLAS_PROFILE_ENABLED`（`debug` / `hybrid` 默认 ON，`release` 默认 OFF
+  直至 Phase 7 翻转）。
+- `src/lib/foundation/profiler.h` —— 完整宏面，启用与禁用两条分支。Tracy
+  头**仅在此文件**（与 `profiler.cc`）include。
+- `src/lib/foundation/profiler.cc` —— 处理无法 header-only 的小实现（如
+  plot 配置、broadcast 关）。
+- `src/lib/foundation/CMakeLists.txt` —— 加源文件，链接 `TracyClient`。
+- `tests/unit/foundation/test_profiler.cc` —— 验证所有宏在
+  `ATLAS_PROFILE_ENABLED=0` 与 `=1` 两态下都能编译；零模式下不产出 Tracy
+  符号。
 
-**Acceptance:**
-- `cmake --preset debug && cmake --build build/debug` succeeds with profiler ON.
-- `cmake --preset release` succeeds with profiler OFF (no Tracy symbols in binary —
-  verified via `nm` / `dumpbin`).
-- New unit test passes under both modes.
+**验收：**
+- `cmake --preset debug && cmake --build build/debug` profiler ON 构建通过。
+- `cmake --preset release` profiler OFF 构建通过（二进制中无 Tracy 符号 ——
+  通过 `nm` / `dumpbin` 验证）。
+- 新单测在两种模式下通过。
 
-### Phase 2 — Frame markers and the tick driver
+### Phase 2 —— Frame 标记与 tick 驱动器
 
-**Files:**
-- `src/lib/server/server_app.cc:206` `ServerApp::AdvanceTime()` — wrap the
-  work-bracketed section with `ATLAS_PROFILE_ZONE_N("Tick")` and emit
-  `ATLAS_PROFILE_FRAME(config_.frame_name)` at the end. `frame_name` comes from
-  `ServerAppConfig` (new field, default `"Tick"`; CellApp/BaseApp set
-  `"OpenWorldTick"` / `"DungeonTick"` based on Space type).
-- `src/lib/server/entity_app.cc` — zones around entity event drain and updatable
-  groups, named per group (`Updatables_L0`, `Updatables_L1`).
-- `src/lib/server/server_app.h` — extend `TickStats` plot of `last_work_duration`
-  via `ATLAS_PROFILE_PLOT("TickWorkMs", ms)` so frame-time history is visible
-  alongside zones.
+**文件：**
+- `src/lib/server/server_app.cc:206` `ServerApp::AdvanceTime()` —— 把工作
+  括起的部分包上 `ATLAS_PROFILE_ZONE_N("Tick")`，末尾发
+  `ATLAS_PROFILE_FRAME(config_.frame_name)`。`frame_name` 来自
+  `ServerAppConfig`（新字段，默认 `"Tick"`；CellApp/BaseApp 按 Space 类型
+  设为 `"OpenWorldTick"` / `"DungeonTick"`）。
+- `src/lib/server/entity_app.cc` —— 围绕实体事件 drain 与 updatable 组
+  加 zone，每组分别命名（`Updatables_L0`、`Updatables_L1`）。
+- `src/lib/server/server_app.h` —— `TickStats` 把 `last_work_duration` 通过
+  `ATLAS_PROFILE_PLOT("TickWorkMs", ms)` 上报，让帧时间历史可与 zone 并列
+  查看。
 
-**Acceptance:**
-- Tracy GUI connecting to a running CellApp shows continuous frame bars labeled
-  per Space type.
-- Slow-tick warnings in logs correlate to spikes visible on the `TickWorkMs` plot.
+**验收：**
+- Tracy GUI 接到运行中的 CellApp 显示连续 frame bar，按 Space 类型标注。
+- 日志中的 slow-tick 告警跟 `TickWorkMs` plot 上的尖峰对应。
 
-### Phase 3 — Hot-path zones in the 100v100 critical sections
+### Phase 3 —— 100v100 关键路径 zone
 
-**Files:**
-- `src/server/cellapp/cellapp.cc` — zones around the witness drain loop, AoI rebuild,
-  controller resolve.
-- `src/server/cellapp/witness.cc` — zones for `Update()`, priority heap rebuild,
-  delta serialization, send loop.
-- `src/server/cellapp/space.cc` — zones for spatial-query callbacks.
-- `src/server/cellapp/cell_entity.cc` — zones for `OnRealEntityUpdate` and ghost
-  fan-out.
-- `src/server/cellapp/real_entity_data.cc` — zone for delta envelope build.
+**文件：**
+- `src/server/cellapp/cellapp.cc` —— witness drain 循环、AoI 重建、controller
+  resolve 周围加 zone。
+- `src/server/cellapp/witness.cc` —— `Update()`、优先队列重建、delta 序列化、
+  send 循环加 zone。
+- `src/server/cellapp/space.cc` —— spatial-query 回调加 zone。
+- `src/server/cellapp/cell_entity.cc` —— `OnRealEntityUpdate` 与 ghost 扇出
+  加 zone。
+- `src/server/cellapp/real_entity_data.cc` —— delta envelope 构建加 zone。
 
-**Naming convention:** `Subsystem::Method` — e.g. `"Witness::Update"`,
-`"RealEntityData::BuildDelta"`. This matches Tracy's source-location capture and
-keeps the GUI legible.
+**命名约定：** `Subsystem::Method` —— 例如 `"Witness::Update"`、
+`"RealEntityData::BuildDelta"`。匹配 Tracy 的源位置捕获，让 GUI 易读。
 
-**Acceptance:**
-- A 100v100 stress trace shows ≥30 named zones per tick, accounting for ≥90% of
-  the measured work duration. Any "missing time" gap above 5% must be filled with
-  an additional zone before declaring the phase done.
+**验收：**
+- 一次 100v100 stress trace 显示每 tick ≥30 个命名 zone，覆盖 ≥90% 的
+  measured work duration。任何超过 5% 的"无名时间"在 phase 完成前必须
+  补 zone 填上。
 
-### Phase 4 — Tracy-CSharp integration
+### Phase 4 —— Tracy-CSharp 集成
 
-**Files:**
-- `src/csharp/Atlas.Runtime/Atlas.Runtime.csproj` — add `Tracy.CSharp` package
-  reference (pinned to a release whose wire protocol matches the chosen native
-  Tracy tag).
-- `src/csharp/Atlas.Runtime/Diagnostics/Profiler.cs` — new file mirroring the
-  macro surface from C++ (`Zone`, `FrameMark`, `Plot`, `Message`).
-- `src/csharp/Atlas.Runtime/Hosting/ScriptHost.cs` — bring up the managed Tracy
-  client during boot, **after** native `ClrHost::Initialize` returns. Both sides
-  must publish to the same Tracy listener port.
-- `src/lib/clrscript/clr_host.cc` — surface the Tracy server port via the existing
-  config plumbing so the managed side picks it up via env var
-  (`TRACY_PORT`, default 9000+pid).
-- `src/csharp/Atlas.Runtime/Entity/*` — instrument entity tick callbacks and
-  property-setter hot paths discovered in Phase 3.
+**文件：**
+- `src/csharp/Atlas.Runtime/Atlas.Runtime.csproj` —— 加 `Tracy.CSharp` 包
+  引用（钉版到 wire protocol 与所选 native Tracy tag 对应的 release）。
+- `src/csharp/Atlas.Runtime/Diagnostics/Profiler.cs` —— 新文件，镜像 C++
+  侧的宏面（`Zone`、`FrameMark`、`Plot`、`Message`）。
+- `src/csharp/Atlas.Runtime/Hosting/ScriptHost.cs` —— 启动时拉起托管 Tracy
+  client，**在** native `ClrHost::Initialize` 返回**之后**。两侧必须发到
+  同一 Tracy listener 端口。
+- `src/lib/clrscript/clr_host.cc` —— 通过现有 config 通路把 Tracy server
+  端口暴露出来，让托管端通过环境变量（`TRACY_PORT`，默认 9000+pid）取到。
+- `src/csharp/Atlas.Runtime/Entity/*` —— 把 Phase 3 发现的实体 tick 回调与
+  property setter 热路径插桩起来。
 
-**Acceptance:**
-- A single Tracy GUI session shows interleaved native and managed zones with
-  contiguous timestamps.
-- The managed `Profiler.Zone("CombatLogic.OnTick")` appears nested under the
-  native `ScriptHost::InvokeTick` zone — no time gap.
+**验收：**
+- 单 Tracy GUI session 显示 native 与托管 zone 交错，时间戳连续。
+- 托管 `Profiler.Zone("CombatLogic.OnTick")` 嵌套在 native
+  `ScriptHost::InvokeTick` zone 之下 —— 时间无空隙。
 
-### Phase 5 — Network message tracing and OpenTelemetry bridge
+### Phase 5 —— 网络消息 trace 与 OpenTelemetry 桥（**5b 延后**）
 
-**Files:**
-- `src/lib/network/bundle.h` / `bundle.cc` — extend message envelope with optional
-  `traceparent` (16-byte trace_id + 8-byte span_id + flags). Wire bump documented
-  in this phase, gated on the existing `kAtlasAbiVersion` bump.
-- `src/lib/network/channel.cc:41` `Channel::Send()` — emit
-  `ATLAS_PROFILE_ZONE_N("Channel::Send")` and `ATLAS_PROFILE_PLOT("BytesOut", n)`;
-  if an OTel context is active, serialize it into the new envelope field; emit
-  `ATLAS_PROFILE_MESSAGE("trace=<id>")`.
-- `src/lib/network/channel.cc:189` dispatch — open a Tracy zone named after the
-  message ID's symbolic form, restore OTel context from the envelope.
-- `src/lib/network/CMakeLists.txt` — link OTel SDK.
-- `src/csharp/Atlas.Runtime/Hosting/ScriptHost.cs` — initialize the .NET
-  `OpenTelemetry` provider with the same service name that machined registers.
-- New `cmake/AtlasOtelDeploy.cmake` — optional Jaeger/Tempo collector endpoint,
-  configured via `atlas.otel.endpoint` in `server_config`.
+**文件：**
+- `src/lib/network/bundle.h` / `bundle.cc` —— 给 message envelope 扩展
+  可选 `traceparent`（16 字节 trace_id + 8 字节 span_id + flag）。wire
+  bump 在本 phase 文档化，绑定到现有 `kAtlasAbiVersion` bump。
+- `src/lib/network/channel.cc:41` `Channel::Send()` —— 发出
+  `ATLAS_PROFILE_ZONE_N("Channel::Send")` 与
+  `ATLAS_PROFILE_PLOT("BytesOut", n)`；若有活跃 OTel context，序列化进
+  新 envelope 字段；发出 `ATLAS_PROFILE_MESSAGE("trace=<id>")`。
+- `src/lib/network/channel.cc:189` dispatch —— 打开按 message ID 符号形式
+  命名的 Tracy zone，从 envelope 恢复 OTel context。
+- `src/lib/network/CMakeLists.txt` —— 链接 OTel SDK。
+- `src/csharp/Atlas.Runtime/Hosting/ScriptHost.cs` —— 用 machined 注册的
+  同 service name 初始化 .NET `OpenTelemetry` provider。
+- 新建 `cmake/AtlasOtelDeploy.cmake` —— 可选的 Jaeger/Tempo 收集器端点，
+  通过 `server_config` 中 `atlas.otel.endpoint` 配置。
 
-**Acceptance:**
-- Sending a message from BaseApp to CellApp produces two Tracy zones (one per
-  process) carrying matching trace IDs in their text annotations.
-- The same trace ID appears as a Jaeger span tree.
-- When `atlas.otel.endpoint` is unset, no OTel network traffic occurs (verified
-  by counter on the OTel exporter being zero).
+**验收：**
+- 一条从 BaseApp 发到 CellApp 的消息产出两个 Tracy zone（每进程一个），
+  各自文本注解中带匹配的 trace ID。
+- 同一 trace ID 在 Jaeger 中表现为一棵 span 树。
+- 当 `atlas.otel.endpoint` 未设时，没有 OTel 网络流量（OTel exporter 计数
+  为零验证）。
 
-### Phase 6 — Memory and pool allocator hooks
+### Phase 6 —— 内存与 pool allocator hook
 
-**Files:**
-- `src/lib/foundation/memory_tracker.cc` — wrap `RecordAlloc` / `RecordDealloc`
-  with `ATLAS_PROFILE_ALLOC` / `ATLAS_PROFILE_FREE`.
-- `src/lib/foundation/pool_allocator.cc` — annotate per-pool acquire/release with
-  `ATLAS_PROFILE_ALLOC_NAMED(ptr, size, pool_name_)`. Pool name comes from the
-  existing pool registration metadata.
-- `src/lib/foundation/intrusive_ptr.h` — leave untouched; Tracy already attributes
-  through the underlying allocator.
+**文件：**
+- `src/lib/foundation/heap.cc` —— 全局 `operator new`/`delete` 路由到
+  `atlas::HeapAlloc`/`HeapFree`，后者在 hook 点调
+  `ATLAS_PROFILE_ALLOC` / `ATLAS_PROFILE_FREE`。
+- `src/lib/foundation/pool_allocator.cc` —— 在每池 acquire/release 处加
+  `ATLAS_PROFILE_ALLOC_NAMED(ptr, size, pool_name_)`。pool 名来自构造
+  时传入的稳定指针。
+- `src/lib/foundation/intrusive_ptr.h` —— 不动；Tracy 已经透过底层
+  allocator 归因。
 
-**Acceptance:**
-- Tracy "Memory" tab shows separate streams per pool name.
-- A controlled leak (allocate without free) is visible in the unfreed-allocation
-  list within 1 second of the leak occurring.
+**验收：**
+- Tracy "Memory" tab 按池名分独立流。
+- 受控泄漏（分配未释放）在发生后 1 秒内出现在未释放清单。
 
-### Phase 7 — Client SDK profiler abstraction (Unity-compatible)
+### Phase 7 —— 客户端 SDK profiler 抽象（Unity 兼容）
 
-**Files:**
-- `src/csharp/Atlas.Shared/Diagnostics/Profiler.cs` — public macro-mirror API
-  (`Zone`, `Plot`, `Message`, `FrameMark`). All methods route through
-  `IProfilerBackend Profiler.Backend`; default backend is `NullProfilerBackend`.
-  Methods are marked `[MethodImpl(MethodImplOptions.AggressiveInlining)]`.
-- `src/csharp/Atlas.Shared/Diagnostics/IProfilerBackend.cs` — interface:
-  `BeginZone(string)`, `EndZone(IntPtr)`, `Plot(string, double)`,
-  `Message(string)`, `FrameMark(string)`. The token returned by `BeginZone` is an
-  opaque `IntPtr` so backends can cache markers without the surface caring.
-- `src/csharp/Atlas.Shared/Diagnostics/NullProfilerBackend.cs` — no-op fallback.
-- `src/csharp/Atlas.Client.Unity/` (new project, Unity-only, **netstandard2.1**,
-  shipped as a managed plugin DLL into `Packages/com.atlas.client/Runtime/`) —
-  contains `UnityProfilerBackend.cs`:
-  - `ProfilerMarker` cache keyed by literal name, populated on first `BeginZone`.
-  - For literal-name zones, code-gen analyzer (Phase 7 stretch goal) replaces
-    `Profiler.Zone("Name")` call sites with `_marker_Name.Auto()` to bypass the
-    dictionary entirely.
-  - `Plot` forwards to `ProfilerCounterValue<T>` (Unity 2022.2+). On older Unity
-    versions falls back to `Profiler.EmitFrameMetaData`.
-  - `FrameMark` is a no-op — Unity drives its own frame markers; the server-side
-    frame name is forwarded as a `Profiler.BeginSample` to disambiguate logical
-    tick frames from render frames.
-- `src/csharp/Atlas.Client.Unity/Atlas.Client.Unity.asmdef` — Unity assembly
-  definition with `defineConstraints: ["UNITY_2022_3_OR_NEWER"]` and a
-  `versionDefines` entry for the Unity Profiler API.
-- `src/csharp/Atlas.Client.Desktop/DesktopBootstrap.cs` — installs
-  `TracyProfilerBackend` (the same one Atlas.Runtime uses) so non-Unity sample
-  hosts and desktop tests still see traces via Tracy.
-- `src/client_sdk/atlas_client_profiler.h` (new, **only if a future C++ client
-  plugin is added** — currently the client is pure C# under Unity, so this file
-  is a placeholder noted here for completeness and only created when the native
-  movement/skill plugin lands).
-- `src/csharp/Atlas.Client/ClientHost.cs` — instrument the client tick boundary
-  with `Profiler.FrameMark("ClientTick")`; instrument message dispatch.
-- `src/csharp/Atlas.Client/ClientEntity.cs` — instrument property apply, predicted
-  movement, prediction reconciliation.
+**文件：**
+- `src/csharp/Atlas.Shared/Diagnostics/Profiler.cs` —— 公共宏镜像 API
+  （`Zone`、`Plot`、`Message`、`FrameMark`）。所有方法路由到
+  `IProfilerBackend Profiler.Backend`；默认后端 `NullProfilerBackend`。
+  方法标 `[MethodImpl(MethodImplOptions.AggressiveInlining)]`。
+- `src/csharp/Atlas.Shared/Diagnostics/IProfilerBackend.cs` —— 接口：
+  `BeginZone(string)`、`EndZone(IntPtr)`、`Plot(string, double)`、
+  `Message(string)`、`FrameMark(string)`。`BeginZone` 返回的 token 是
+  不透明 `IntPtr`，后端可缓存 marker 而不让 API 表面感知。
+- `src/csharp/Atlas.Shared/Diagnostics/NullProfilerBackend.cs` —— no-op
+  fallback。
+- `src/csharp/Atlas.Client.Unity/`（新 assembly，Unity-only，asmdef +
+  managed plugin）—— 含 `UnityProfilerBackend.cs`：
+  - `ProfilerMarker` 缓存按字面量名 key，首次 `BeginZone` 时填入。
+  - `Plot` 转到 `ProfilerCounterValue<T>`（Unity 2022.2+）；旧 Unity 退化
+    到 `Profiler.EmitFrameMetaData`。
+  - `FrameMark` 不做事 —— Unity 自己驱动 render frame marker；服务端的
+    frame 名作为 `Profiler.BeginSample` 转发，把逻辑 tick frame 与 render
+    frame 区分开。
+- `src/csharp/Atlas.Client.Unity/Atlas.Client.Unity.asmdef` —— Unity
+  assembly 定义，带 `defineConstraints: ["UNITY_2022_3_OR_NEWER"]` 和
+  Unity Profiler API 的 `versionDefines`。
+- `src/csharp/Atlas.Client.Desktop/DesktopBootstrap.cs` —— **不**安装 Tracy
+  后端（保持 `NullProfilerBackend`），避免把 Tracy P/Invoke 重复到客户端
+  或反向耦合 Atlas.Runtime；桌面客户端默认无 trace。
+- `src/csharp/Atlas.Client/ClientHost.cs` —— 客户端 tick 边界
+  `Profiler.FrameMark("ClientTick")`；message dispatch 插桩。
+- `src/csharp/Atlas.Client/ClientEntity.cs` —— property apply、predicted
+  movement、prediction reconciliation 插桩（base virtual no-op 的
+  `Apply{Owner,Other}Snapshot` 不插，等代码生成器改造时一起出 zone）。
 
-**Backend selection (compile/load order):**
+**后端选择（编译/装载顺序）：**
 
 ```
-Atlas.Shared boots with NullProfilerBackend.
-  └─ Atlas.Client.Desktop bootstrap → installs TracyProfilerBackend  (desktop hosts)
-  └─ Atlas.Client.Unity (Unity Awake)→ installs UnityProfilerBackend (Unity hosts)
+Atlas.Shared 启动用 NullProfilerBackend。
+  └─ Atlas.Runtime（服务端） → 装 TracyProfilerBackend
+  └─ Atlas.Client.Unity（Unity Awake） → 装 UnityProfilerBackend
+  └─ Atlas.Client.Desktop（桌面客户端） → 保留 Null（默认）
 ```
 
-The application chooses one. Trying to install a second logs a warning and is
-ignored. There is no merging — the two backends target different UIs by design.
+应用选其一。试图装第二个会被拒绝并打 warning。设计上不合并 —— 两个后端
+针对不同 UI。
 
-**Acceptance:**
-- A Unity sample scene runs the Atlas client; the Unity Profiler window shows
-  named samples corresponding to `ClientHost.Tick`, `ClientEntity.ApplyDelta`,
-  predicted movement zones — with the same names that show up in Tracy on the
-  desktop sample.
-- `Atlas.Client.csproj` (netstandard2.1) builds without referencing UnityEngine.
-- IL2CPP build with `Profiler.Backend = NullProfilerBackend` strips zone bodies
-  (verified by inspecting the generated C++ for one known site).
-- Logical zone names match between server (Tracy) and client (Unity Profiler) for
-  bidirectional features (e.g. `Combat.OnDamage` shows up on both sides linked by
-  `traceparent` in messages — see Phase 5).
+**验收：**
+- Unity 示例场景跑 Atlas 客户端，Unity Profiler 窗口显示对应
+  `ClientHost.Tick`、`ClientEntity.ApplyDelta`、predicted movement 的
+  命名 sample —— 名字与桌面示例下 Tracy 中显示的一致。
+- `Atlas.Client.csproj`（netstandard2.1）构建无 UnityEngine 引用。
+- `Profiler.Backend = NullProfilerBackend` 的 IL2CPP 构建会 strip zone
+  body（取一处 site，检查生成的 C++ 验证）。
+- 双向 feature 的逻辑 zone 名在服务端（Tracy）与客户端（Unity Profiler）
+  一致（如 `Combat.OnDamage` 两侧都出现，将来通过消息中的 `traceparent`
+  关联 —— 见 Phase 5）。
 
-### Phase 8 — Build modes, deployment, and machined orchestration
+### Phase 8 —— 构建模式、部署、machined 编排
 
-**Files:**
-- `CMakePresets.json` — add `profile-release` preset (RelWithDebInfo +
-  `ATLAS_ENABLE_PROFILER=ON`); leave plain `release` profiler-off.
-- `src/server/machined/` — at process spawn, set `TRACY_PORT=9000+local_pid_slot`
-  and `OTEL_SERVICE_NAME=<process_type>-<instance_id>` env vars so that running
-  multiple CellApps on one host does not collide.
-- `docs/operations/profiling.md` (new, brief operator runbook) — how to attach
-  Tracy GUI, how to attach `dotnet-counters`, how to read `TickWorkMs` plot.
+**文件：**
+- `CMakePresets.json` —— 加 `profile-release` preset（RelWithDebInfo +
+  `ATLAS_ENABLE_PROFILER=ON`）；普通 `release` 改为 profiler OFF。
+- `src/server/machined/` —— 进程拉起时不必显式注 `TRACY_PORT` 环境变量
+  （Tracy 会自动 fallback 端口，viewer 的 Discover 处理多进程 attach）。
+  跨进程时可设 `OTEL_SERVICE_NAME=<process_type>-<instance_id>`，等 OTel
+  落地时启用。
+- `docs/operations/profiling.md`（新）—— 简版运维 runbook：怎么 attach
+  Tracy GUI、怎么 attach `dotnet-counters`、怎么读 `TickWorkMs` plot。
+- `docs/operations/tracy_usage.md`（新，Patch 0012 加入）—— Tracy 详细
+  使用指南。
 
-**Acceptance:**
-- Spawning a 4-process cluster via machined assigns four distinct Tracy ports.
-- A single Tracy GUI can iterate across the four processes without restart.
+**验收：**
+- machined 起 4 进程集群，分到 4 个独立 Tracy 端口。
+- 单 Tracy GUI 不重启就能在 4 进程间切换查看。
 
-## CMake Option Surface
+## CMake Option 面
 
 ```cmake
-option(ATLAS_ENABLE_PROFILER  "Enable Tracy/OTel profiler instrumentation" ON)
+option(ATLAS_ENABLE_PROFILER  "Enable Tracy profiler instrumentation" ON)
 option(ATLAS_PROFILER_ON_DEMAND "Tracy ON_DEMAND mode (zero cost when no client)" ON)
-option(ATLAS_PROFILER_QUEUE_MB "Tracy event queue size, megabytes" 256)
+set(ATLAS_HEAP_ALLOCATOR "std" CACHE STRING "Heap backend (std | mimalloc)")
 ```
 
-`ATLAS_PROFILER_QUEUE_MB` defaults to 256 (vs Tracy's 64 stock) because a 100v100
-tick can emit ≥10k zones; the stock buffer empirically saturates under load.
+## 性能预算
 
-## Performance Budget
-
-| Operation | Budget | Source |
+| 操作 | 预算 | 来源 |
 |---|---|---|
-| `ATLAS_PROFILE_ZONE` enabled, client connected | ≤ 5 ns | Tracy manual (~2.25 ns) + macro overhead |
-| `ATLAS_PROFILE_ZONE` enabled, client disconnected (`ON_DEMAND`) | ≤ 1 ns | branch + atomic load |
-| `ATLAS_PROFILE_ZONE` disabled at compile time | 0 ns | macro empty |
-| OTel span open/close per network message | ≤ 200 ns | OTel C++ SDK micro-benchmark |
-| Per-tick total profiler overhead, 100v100, ~5k zones | ≤ 0.5 ms | derived from above |
+| `ATLAS_PROFILE_ZONE` 启用，client 已连 | ≤ 5 ns | Tracy 手册（约 2.25 ns）+ 宏开销 |
+| `ATLAS_PROFILE_ZONE` 启用，client 未连（`ON_DEMAND`） | ≤ 1 ns | 分支 + atomic load |
+| `ATLAS_PROFILE_ZONE` 编译期禁用 | 0 ns | 宏空展开 |
+| OTel span 每条网络消息开/关（延后） | ≤ 200 ns | OTel C++ SDK 微基准 |
+| 100v100、约 5k zone/tick 的总 profiler 开销 | ≤ 0.5 ms | 由上推算 |
 
-If a phase's stress test shows >0.5 ms per-tick attributable to profiler overhead,
-that phase fails acceptance — reduce zone density or move to lower-rate sampling
-in that subsystem.
+如果某 phase 的 stress test 显示 profiler 开销超过 0.5 ms/tick，那个
+phase 不通过 —— 降低 zone 密度，或在该子系统中改成更低频率采样。
 
-## Risks
+## 风险
 
-- **Wire protocol drift**: Tracy native and Tracy-CSharp must speak the same
-  protocol version. Pin both to a known-good pair (Phase 1 + Phase 4) and refuse
-  to bump one without the other. CI build must fail if the C# package version and
-  the C++ submodule tag are inconsistent.
-- **Managed call-stack gaps under sampling**: `[UnmanagedCallersOnly]` thunks have
-  no PDB; the sampling profiler may show "[unknown]" frames between native and
-  managed zones. Mitigation: the abstraction's primary mode is **explicit zones,
-  not sampling**. Sampling is a secondary diagnostic, never the source of truth.
-- **Queue saturation in 100v100**: see Phase 1 default of 256 MB queue. If still
-  saturating, downgrade fine-grained zones in the witness inner loop to plot
-  counters instead of per-event zones.
-- **Trace context leaking across logical sessions**: `traceparent` in network
-  envelope must be cleared at session boundaries (login handoff, channel
-  re-establishment) to avoid joining unrelated request trees. Audit during
-  Phase 5.
-- **Profiler-on production**: even with `ON_DEMAND`, an attacker who can reach the
-  Tracy port observes hot-path code structure. The Tracy listener must bind to
-  the cluster-internal interface only; machined is responsible for not exposing
-  the port range externally.
-- **Unity backend marker leak**: Unity's `ProfilerMarker` cache must be cleared on
-  domain reload (Unity Editor) — surviving managed objects pinned to a stale
-  marker ID will crash the next play session. The `UnityProfilerBackend` must
-  subscribe to `AssemblyReloadEvents.beforeAssemblyReload` and flush its cache.
-- **Server↔client zone name divergence**: features instrumented on both sides
-  (e.g. damage application visible in server Tracy and client Unity Profiler)
-  must use shared name constants. Define them in `Atlas.Shared/Diagnostics/
-  ProfilerNames.cs` so a typo in one side does not break trace correlation.
-- **Abstraction erosion**: someone will eventually `#include <tracy/Tracy.hpp>`
-  directly to access a Tracy-only feature. Guard via a CI grep:
-  `git grep -n 'tracy/Tracy.hpp' src/ | grep -v 'foundation/profiler'` must
-  return empty.
+- **Wire protocol 漂移**：Tracy native 与托管 P/Invoke 必须用同一 protocol
+  版本。两端钉到一对已知良好的版本（Phase 1 + Phase 4），不一起升不能
+  单升一边。CI 必须在 C# 包版本与 C++ submodule tag 不一致时 fail。
+- **采样下托管调用栈断层**：`[UnmanagedCallersOnly]` thunk 没 PDB；采样
+  profiler 可能在 native 与托管 zone 之间显示 "[unknown]" 帧。缓解：本
+  抽象的主模式是**显式 zone，不是采样**。采样是次级诊断手段，永远不是
+  ground truth。
+- **100v100 队列饱和**：见 Phase 1 默认 256 MB 队列。仍饱和时把 witness
+  内循环细粒度 zone 降级为 plot counter 而不是逐事件 zone。
+- **trace context 跨逻辑会话泄漏**：网络 envelope 中的 `traceparent` 必须
+  在 session 边界（login handoff、channel 重建）清掉，避免把无关请求合并
+  到同一棵树。Phase 5 中审。
+- **生产环境 profiler 开**：即使 `ON_DEMAND`，能访问 Tracy 端口的攻击者
+  能观察热路径代码结构。Tracy listener 必须只绑定到集群内部接口；
+  machined 负责不把端口范围对外暴露。
+- **Unity backend marker 泄漏**：Unity 的 `ProfilerMarker` 缓存必须在
+  domain reload（Unity Editor）时清掉 —— 残留的托管对象绑到陈旧 marker
+  ID 会让下次 play session 崩。`UnityProfilerBackend` 必须订阅
+  `AssemblyReloadEvents.beforeAssemblyReload` 并清缓存。
+- **服务端↔客户端 zone 名漂移**：双侧都插桩的 feature（如服务端 Tracy
+  与客户端 Unity Profiler 都看到的伤害结算）必须用共享名常量。定义在
+  `Atlas.Shared/Diagnostics/ProfilerNames.cs`，避免任一侧的笔误打破
+  trace 关联。
+- **抽象侵蚀**：早晚会有人为了用 Tracy 独有特性直接 `#include
+  <tracy/Tracy.hpp>`。CI grep 守住：`git grep -n 'tracy/Tracy.hpp' src/ |
+  grep -v 'foundation/profiler'` 必须返回空。
 
-## Rollback Plan
+## 回滚预案
 
-If Tracy proves unworkable mid-rollout (e.g. wire-protocol blocker, license
-re-evaluation): replace `foundation/profiler.{h,cc}` with a backend pointing at a
-substitute (microprofile, Optick, or an internal ring-buffer dumper). The macro
-surface is the contract — no other file changes. This is the entire reason
-Phase 1 is non-negotiable about the abstraction.
+如果 Tracy 中途证明不可行（wire protocol 阻塞、license 重新评估等）：
+把 `foundation/profiler.{h,cc}` 替换为指向其它后端（microprofile、Optick、
+内部 ring-buffer dumper）的实现。宏面是契约 —— 其它文件无需改动。这正
+是 Phase 1 对抽象层不可妥协的根本原因。
 
-## Key Files (summary)
+## 关键文件（汇总）
 
-- `src/lib/foundation/profiler.h` — **the only file allowed to include Tracy headers**
+- `src/lib/foundation/profiler.h` —— **唯一允许 include Tracy 头的文件**
 - `src/lib/foundation/profiler.cc`
-- `src/lib/foundation/memory_tracker.cc`
-- `src/lib/foundation/pool_allocator.cc`
-- `src/lib/server/server_app.cc` — frame markers
-- `src/lib/server/entity_app.cc`
-- `src/lib/network/channel.cc` — send/recv zones, OTel context
-- `src/lib/network/bundle.h` / `bundle.cc` — `traceparent` envelope
-- `src/lib/clrscript/clr_host.cc` — Tracy port handoff to managed side
-- `src/csharp/Atlas.Shared/Diagnostics/Profiler.cs` — public macro mirror (server + client)
+- `src/lib/foundation/heap.h` / `heap.cc` —— `atlas::HeapAlloc` + 全局
+  `operator new`/`delete` override（20 变体）+ Tracy hook
+- `src/lib/foundation/pool_allocator.cc` —— 每池 named hook
+- `src/lib/server/server_app.cc` —— frame 标记 + plot
+- `src/lib/network/channel.cc` —— send/recv zone + BytesIn/BytesOut plot
+- `src/csharp/Atlas.Shared/Diagnostics/Profiler.cs` —— 公共宏镜像（服务端
+  + 客户端）
 - `src/csharp/Atlas.Shared/Diagnostics/IProfilerBackend.cs`
 - `src/csharp/Atlas.Shared/Diagnostics/NullProfilerBackend.cs`
-- `src/csharp/Atlas.Shared/Diagnostics/ProfilerNames.cs` — shared zone name constants
-- `src/csharp/Atlas.Runtime/Diagnostics/TracyProfilerBackend.cs` — server backend
-- `src/csharp/Atlas.Runtime/Hosting/ScriptHost.cs` — managed Tracy + OTel bring-up
-- `src/csharp/Atlas.Client.Unity/UnityProfilerBackend.cs` — Unity `ProfilerMarker` backend
+- `src/csharp/Atlas.Shared/Diagnostics/ProfilerNames.cs` —— 共享 zone 名
+  常量
+- `src/csharp/Atlas.Runtime/Diagnostics/TracyNative.cs` —— Tracy 0.13 P/Invoke
+- `src/csharp/Atlas.Runtime/Diagnostics/TracyProfilerBackend.cs` —— 服务端
+  后端
+- `src/csharp/Atlas.Runtime/Core/Lifecycle.cs` —— 启动时安装 backend
+- `src/csharp/Atlas.Client.Unity/UnityProfilerBackend.cs` —— Unity
+  `ProfilerMarker` 后端
 - `src/csharp/Atlas.Client.Unity/Atlas.Client.Unity.asmdef`
-- `src/csharp/Atlas.Client.Desktop/DesktopBootstrap.cs` — installs Tracy backend for desktop
-- `src/csharp/Atlas.Client/ClientHost.cs`, `ClientEntity.cs` — client zone instrumentation
+- `src/csharp/Atlas.Client/ClientCallbacks.cs`、`ClientEntity.cs` ——
+  客户端 zone 插桩
 - `src/server/cellapp/{cellapp,witness,space,cell_entity,real_entity_data}.cc`
-- `cmake/Dependencies.cmake` — Tracy + OTel fetch
-- `cmake/AtlasCompilerOptions.cmake` — `ATLAS_PROFILE_ENABLED` plumbing
-- `CMakePresets.json` — `profile-release` preset
-- `tests/unit/foundation/test_profiler.cc`
-- `docs/operations/profiling.md`
+- `cmake/Dependencies.cmake` —— Tracy + mimalloc fetch
+- `cmake/AtlasCompilerOptions.cmake` —— `ATLAS_PROFILE_ENABLED` /
+  `ATLAS_HEAP_<NAME>` 注入
+- `CMakePresets.json` —— `profile-release` preset
+- `tests/unit/test_profiler.cpp`、`tests/unit/test_heap.cpp`
+- `docs/operations/profiling.md`、`docs/operations/tracy_usage.md`

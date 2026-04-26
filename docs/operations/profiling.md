@@ -1,126 +1,115 @@
-# Profiling Atlas
+# Atlas Profiling
 
-This is the operator runbook for capturing performance traces of a running
-Atlas server cluster (and, where applicable, the Unity client). For the
-design rationale behind the layout below, see
-[`docs/optimization/profiler_tracy_integration.md`](../optimization/profiler_tracy_integration.md).
-For the practical "how do I use Tracy" walkthrough — viewer install, frame
-view, plots, memory tab, lock contention — see [`tracy_usage.md`](tracy_usage.md).
+这是抓取运行中 Atlas 服务器集群（以及适用时 Unity 客户端）性能 trace
+的运维 runbook。下面布局的设计依据见
+[`docs/optimization/profiler_tracy_integration.md`](../optimization/profiler_tracy_integration.md)。
+关于"具体怎么用 Tracy"的实操向走读——viewer 安装、frame 视图、plot、
+memory tab、锁竞争——见 [`tracy_usage.md`](tracy_usage.md)。
 
-## Build presets
+## 构建 preset
 
-| Preset | Profiler instrumentation | Use when |
+| Preset | profiler 插桩 | 何时用 |
 |---|---|---|
-| `debug` | ON (default) | day-to-day development |
-| `release` | OFF | shipping a player-facing binary; zero hidden cost |
-| `profile-release` | ON, RelWithDebInfo | production-shaped perf testing — optimised codegen + Tracy zones + symbol info |
-| `hybrid` | ON (RelWithDebInfo) | quick perf passes that don't need release-level codegen |
+| `debug` | 开（默认） | 日常开发 |
+| `release` | 关 | 上线给玩家用的二进制；零隐藏开销 |
+| `profile-release` | 开，RelWithDebInfo | 生产形态的性能测试——优化后代码 + Tracy zone + 符号信息 |
+| `hybrid` | 开（RelWithDebInfo） | 不需要 release 级代码生成的快速性能验证 |
 
 ```bash
-# Production-shaped perf trace
+# 生产形态的性能 trace
 cmake --preset profile-release
 cmake --build build/profile-release --config RelWithDebInfo
 ```
 
-The `release` preset builds with `ATLAS_ENABLE_PROFILER=OFF`, which compiles
-every `ATLAS_PROFILE_*` macro to a no-op at the preprocessor stage and drops
-the Tracy DLL link entirely. There is no runtime toggle that can re-enable
-profiling on a `release` binary — that is intentional, and matches the
-"shipping binary has no profiler" promise documented in the integration doc.
+`release` preset 用 `ATLAS_ENABLE_PROFILER=OFF` 构建，这把每一个
+`ATLAS_PROFILE_*` 宏在预处理阶段编译成 no-op，且完全去掉 Tracy DLL
+链接。**没有**任何运行时开关能在 `release` 二进制上把 profiler 重新
+打开——这是有意为之，跟集成文档里的"上线二进制无 profiler"承诺一致。
 
-## Capturing a server trace (Tracy)
+## 抓服务器 trace（Tracy）
 
-Atlas links Tracy as a SHARED library named `TracyClient.dll` (Windows) or
-`libTracyClient.so` (Linux). The client side runs in-process, listens for
-viewer connections on a TCP port, and stays inert until a viewer attaches
-(`TRACY_ON_DEMAND` is on by default — see `cmake/Dependencies.cmake`).
+Atlas 把 Tracy 链接为 SHARED 库，名字是 `TracyClient.dll`（Windows）或
+`libTracyClient.so`（Linux）。client 端进程内运行，监听一个 TCP 端口
+等 viewer 接入，viewer 没接之前完全 inert（默认 `TRACY_ON_DEMAND`
+打开——见 `cmake/Dependencies.cmake`）。
 
-### Single process
+### 单进程
 
-1. Start the server normally (e.g. `bin/profile-release/server/atlas_cellapp.exe`).
-2. Launch the Tracy viewer.
-3. Click **Connect**, leave the address as `127.0.0.1`, port `8086`.
+1. 正常启动服务器（如 `bin/profile-release/server/atlas_cellapp.exe`）。
+2. 启动 Tracy viewer。
+3. 点 **Connect**，地址保留 `127.0.0.1`，端口 `8086`。
 
-The first frame appears as soon as the viewer attaches; nothing earlier is
-buffered, by design — `ON_DEMAND` mode means zero cost when no one is looking.
+第一帧在 viewer 接上的瞬间就会出现；更早的内容不会被缓冲，这是设计
+——`ON_DEMAND` 模式意味着没人看的时候零开销。
 
-### Multiple processes on the same host
+### 同主机多进程
 
-Tracy auto-falls-back the listen port: the first process gets `8086`, the
-second `8087`, and so on. The viewer's **Discover** scan walks that range
-and lists every active session by program name. machined does not need to
-inject `TRACY_PORT` for this to work.
+Tracy 自动让出 listen 端口：第一个进程拿 `8086`，第二个 `8087`，依次
+类推。viewer 的 **Discover** 扫描这个端口范围，按程序名列出每一个
+活动 session。machined 不需要为此注 `TRACY_PORT` 环境变量。
 
-If two processes happen to grab adjacent ports and you want them on
-specific numbers (e.g. CellApp 0 always at 9000), pass the port at process
-spawn through Tracy's compile-time `TRACY_DATA_PORT` define and a custom
-build — the runtime override path is not currently wired in Atlas. See
-"Future work" below.
+如果两个进程恰好抢到了相邻端口而你想让它们落在固定号上（例如
+CellApp 0 始终在 9000），通过 Tracy 的编译期 `TRACY_DATA_PORT` 定义
+重新构建——运行时端口覆盖路径目前 Atlas 没接入。见下文"未来工作"。
 
-### Reading the trace
+### 读 trace
 
-The default view shows the timeline, one row per thread. Frame markers
-(`OpenWorldTick`, `<process_name>.Tick`, configurable via
-`ServerConfig::frame_name`) split the timeline into logical ticks. Useful
-plots:
+默认视图按线程分行。frame 标记（`OpenWorldTick`、
+`<process_name>.Tick`，可通过 `ServerConfig::frame_name` 配置）把时间
+轴切分成逻辑 tick。有用的 plot：
 
-| Plot | Source | What it tells you |
+| Plot | 来源 | 含义 |
 |---|---|---|
-| `TickWorkMs` | `ServerApp::AdvanceTime` | per-tick work time. Spikes correlate with slow-tick log warnings. |
-| `BytesOut` | `Channel::Send` | per-packet outbound size. Large values often correlate with `Witness::Update::Pump`. |
-| `BytesIn` | `Channel::OnDataReceived` | per-packet inbound size. |
+| `TickWorkMs` | `ServerApp::AdvanceTime` | 每 tick 工作时间。尖峰跟慢 tick 日志告警相关。 |
+| `BytesOut` | `Channel::Send` | 每包出方向大小。值大常跟 `Witness::Update::Pump` 关联。 |
+| `BytesIn` | `Channel::OnDataReceived` | 每包入方向大小。 |
 
-Per-pool memory streams (added in Phase 6 of the integration plan) appear
-in the **Memory** tab — `TimerNode` is one such stream; future pools added
-under `PoolAllocator(name, …)` show up here automatically.
+Per-pool 内存流出现在 **Memory** tab——`TimerNode` 是其中之一；后续在
+`PoolAllocator(name, …)` 下面新加的池会自动出现。
 
-### Cluster-wide trace
+### 集群级 trace
 
-A 4-process cluster spawned by machined (`atlas_cellapp` × 2, `atlas_baseapp`,
-`atlas_loginapp`) ends up with four Tracy listeners on adjacent ports. The
-viewer can attach to one at a time; switching between them keeps the timeline
-state clean. There is no single-window cluster view today — that is the OTel
-distributed-trace work intentionally deferred from Phase 5b of the
-integration plan.
+machined 起来的 4 进程集群（`atlas_cellapp` × 2、`atlas_baseapp`、
+`atlas_loginapp`）会有 4 个 Tracy listener 落在相邻端口。viewer 一次
+attach 一个；切换之间时间轴状态独立干净。今天**没有**单窗口集群视图
+——那是集成计划 Phase 5b 有意延后的 OTel 分布式 trace 工作。
 
-## Capturing a client trace (Unity Profiler)
+## 抓客户端 trace（Unity Profiler）
 
-The Atlas Unity client routes the same zone names through `ProfilerMarker`,
-visible in the Unity Profiler window:
+Atlas Unity 客户端把同一组 zone 名通过 `ProfilerMarker` 路由出去，
+在 Unity Profiler 窗口可见：
 
-1. Build the Unity client; ensure `Atlas.Client.Unity.dll` is present.
-2. Bootstrap the backend during application start:
+1. 构建 Unity 客户端，确保 `Atlas.Client.Unity.dll` 在场。
+2. 应用启动期 bootstrap backend：
    ```csharp
    Atlas.Diagnostics.Profiler.SetBackend(new Atlas.Client.Unity.UnityProfilerBackend());
    ```
-3. Open **Window → Analysis → Profiler**. Connect to the running player
-   (Editor or device).
+3. 打开 **Window → Analysis → Profiler**。连到运行中的 player
+   （Editor 或设备）。
 
-Zone names match the server's via `Atlas.Diagnostics.ProfilerNames` — for
-example `ClientCallbacks.DispatchPropertyUpdate` on the client lines up with
-the server's `Channel::Send` zone for the same logical property delta when
-both traces are timestamped. See `Atlas.Client.Unity/README.md` for the
-domain-reload caveat.
+Zone 名通过 `Atlas.Diagnostics.ProfilerNames` 跟服务器对齐——比如
+客户端的 `ClientCallbacks.DispatchPropertyUpdate` 跟服务器为同一个
+逻辑 property delta 触发的 `Channel::Send` 在两边时间戳上能对齐。
+domain reload 注意事项见 `Atlas.Client.Unity/README.md`。
 
-## C# heap and GC
+## C# 堆与 GC
 
-Tracy's memory hooks cover native (C++) allocations only. Managed
-allocations on the server go through `dotnet-counters` and `dotnet-gcdump`:
+Tracy 的内存 hook 只覆盖 native（C++）分配。服务端托管分配走
+`dotnet-counters` 和 `dotnet-gcdump`：
 
 ```bash
-# Live counters — GC pressure, allocation rate, server tick
+# 实时 counter——GC 压力、分配速率、服务器 tick
 dotnet-counters monitor --process-id <PID> System.Runtime Atlas.*
 
-# One-shot heap snapshot for leak hunting
+# 一次性堆快照，找泄漏
 dotnet-gcdump collect --process-id <PID> --output cellapp.gcdump
 ```
 
-Open `.gcdump` in Visual Studio or PerfView for object-graph analysis.
+用 Visual Studio 或 PerfView 打开 `.gcdump` 做对象图分析。
 
-## Allocator switching
+## 切换分配器
 
-The default heap is `std` (platform CRT). For perf comparison work, swap
-to mimalloc:
+默认堆是 `std`（平台 CRT）。做性能对比时切到 mimalloc：
 
 ```bash
 cmake -B build/profile-release-mimalloc \
@@ -128,32 +117,26 @@ cmake -B build/profile-release-mimalloc \
       -DATLAS_HEAP_ALLOCATOR=mimalloc
 ```
 
-Two configurations targeting the same `RelWithDebInfo` build coexist
-without overwriting each other's `bin/` outputs — the build directory
-name becomes the bin folder name (see patch 0009). Run both, compare
-Tracy traces side by side.
+两个配置同时 target `RelWithDebInfo`，互不覆盖各自的 `bin/` 输出
+——build 目录名就是 bin 目录名（见 patch 0009）。两个都跑起来，
+Tracy trace 并排比对。
 
-## Diagnosing missing zones
+## 排查"zone 缺失"
 
-Symptoms and likely causes:
-
-| Symptom | Likely cause |
+| 现象 | 可能原因 |
 |---|---|
-| Tracy viewer shows zero frames | `release` preset (profiler off), or the process hasn't ticked yet |
-| C# zones missing, C++ zones present | `Profiler.SetBackend(new TracyProfilerBackend())` not yet called by `Lifecycle.DoEngineInit` |
-| Plot stays at 0 | The plot value is reported only when its callsite executes; tick-driver plots like `TickWorkMs` need the work bracket to run at least once |
-| `Witness::Update::Pump` is empty | No witness peers — load real entities via stress harness |
+| Tracy viewer 一帧都没有 | `release` preset（profiler 关），或进程还没 tick |
+| C# zone 缺、C++ zone 在 | `Profiler.SetBackend(new TracyProfilerBackend())` 还没被 `Lifecycle.DoEngineInit` 调到 |
+| Plot 一直是 0 | plot 值只在 callsite 被执行时才上报；`TickWorkMs` 这种 tick-driver 的 plot 至少要让 work bracket 跑过一次 |
+| `Witness::Update::Pump` 是空的 | 没有 witness peer——通过 stress 框架加载真实实体 |
 
-## Future work (not in current phases)
+## 未来工作（不在当前 phase）
 
-- **Cross-process span correlation (OTel)**: Phase 5b in the integration
-  plan; not started. The wire-format envelope change required would touch
-  every `bundle.cc` consumer.
-- **Deterministic Tracy ports per process**: today's auto-fallback is
-  fine for development. Production deployments that want stable ports per
-  CellApp instance would route through a Tracy compile-time recompile or
-  a Tracy 0.13+ runtime port API once we wire it.
-- **Generator-emitted property apply zones**: the Atlas C# def generator
-  could emit `Profiler.Zone(...)` in each generated `ApplyReplicatedDelta`
-  override. Not in scope for the profiler integration phases — belongs
-  with the next codegen pass.
+- **跨进程 span 关联（OTel）**：集成计划里的 Phase 5b，没启动。所需的
+  wire-format envelope 改动会动到每一个 `bundle.cc` 消费者。
+- **每进程确定性 Tracy 端口**：今天的 auto-fallback 对开发够用。生产
+  部署想要每个 CellApp 实例稳定端口的话，要么走 Tracy 编译期重编，
+  要么等我们接 Tracy 0.13+ 的运行时端口 API。
+- **生成器输出的 property apply zone**：Atlas C# def 生成器可以在每个
+  生成的 `ApplyReplicatedDelta` override 里输出 `Profiler.Zone(...)`。
+  不在 profiler 集成 phase 范围内——属于下一轮代码生成器更新。

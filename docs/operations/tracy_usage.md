@@ -1,141 +1,130 @@
-# Tracy Profiler — Usage Guide
+# Tracy Profiler 使用指南
 
-This is the practical "how do I actually use Tracy on Atlas" guide. For the
-operator runbook (build presets, deploy, multi-process), see
-[`profiling.md`](profiling.md). For the design rationale (why Tracy, why this
-shape), see [`../optimization/profiler_tracy_integration.md`](../optimization/profiler_tracy_integration.md).
+本文档是"我具体怎么在 Atlas 上用 Tracy"的实操向说明。运维 runbook（构建
+preset、部署、多进程编排）见 [`profiling.md`](profiling.md)；设计依据
+（为什么选 Tracy、为什么是这个形态）见
+[`../optimization/profiler_tracy_integration.md`](../optimization/profiler_tracy_integration.md)。
 
-## What Tracy gives you
+## Tracy 能给你什么
 
-Tracy is a sampling-and-instrumentation hybrid profiler. Atlas wires it as an
-**instrumentation** profiler — every named region the engine emits
-(`ATLAS_PROFILE_ZONE_N(...)`) becomes a row on Tracy's timeline. The viewer
-also captures system-level samples (CPU context switches, kernel calls) on
-top of that, so you see Atlas's logical structure and the OS's underlying
-view side by side.
+Tracy 是采样 + 插桩的混合 profiler。Atlas 把它当**插桩** profiler 用——
+引擎中每一个 `ATLAS_PROFILE_ZONE_N(...)` 标注的命名区域都成为 Tracy 时间
+轴上的一行。viewer 同时也能在此基础上抓系统级采样（CPU 上下文切换、
+内核调用），所以你能在并排的两个视角下看到 Atlas 的逻辑结构和操作
+系统的底层视图。
 
-Concretely, after attaching the viewer to a running CellApp you get:
+具体来说，把 viewer 接到一个运行中的 CellApp 之后你能看到：
 
-- **Frame timeline** with one bar per logical tick (`OpenWorldTick`,
-  `<process_name>.Tick`, etc.). Hovering a bar shows its duration; clicking
-  zooms in.
-- **Per-frame zone tree**: `Tick → CellApp::OnTickComplete → TickWitnesses →
-  Witness::Update → Witness::Update::Pump → SendEntityUpdate → …`. Drill in
-  to the level where the cost lives.
-- **Plots**: `TickWorkMs`, `BytesIn`, `BytesOut` charted against the same
-  time axis. A spike in `TickWorkMs` lines up directly with whatever zone
-  was open when it happened.
-- **Memory tracking**: per-pool streams (`TimerNode`, future Atlas pools)
-  plus the global heap. The Memory tab shows allocation/free counts, current
-  usage, and the unfreed list — useful for leak hunting.
-- **Lock contention**: `std::mutex` instances wrapped via
-  `ATLAS_PROFILE_LOCKABLE` show their wait/hold ranges on the timeline.
-- **C# zones interleaved**: `Script.OnTick` and any
-  `Atlas.Diagnostics.Profiler.Zone(...)` call from managed code shows up on
-  the same timeline as the C++ zones — unified view.
+- **Frame 时间轴**：每个逻辑 tick 一根 bar（`OpenWorldTick`、
+  `<process_name>.Tick` 等）。鼠标悬停显示时长，点击放大。
+- **每帧 zone 树**：`Tick → CellApp::OnTickComplete → TickWitnesses →
+  Witness::Update → Witness::Update::Pump → SendEntityUpdate → …`。一直
+  向下钻到耗时所在层。
+- **Plot**：`TickWorkMs`、`BytesIn`、`BytesOut` 跟时间轴在同一时间维度
+  上画。`TickWorkMs` 上的尖峰直接对应当时打开的那个 zone。
+- **内存追踪**：每个池一条流（`TimerNode`、未来加入的 Atlas 池）外加
+  全局堆。Memory tab 显示分配/释放计数、当前用量、未释放清单——找泄漏
+  用得上。
+- **锁竞争**：用 `ATLAS_PROFILE_LOCKABLE` 包过的 `std::mutex` 实例会在
+  时间轴上画出等待/持有区间。
+- **C# zone 交错呈现**：`Script.OnTick` 以及任何来自托管代码的
+  `Atlas.Diagnostics.Profiler.Zone(...)` 调用跟 C++ zone 出现在同一条
+  时间轴上——统一视图。
 
-What Tracy **doesn't** give you out of the box:
+Tracy 默认**不**给你的：
 
-- **Cross-process views**: one viewer attaches to one process at a time. For
-  a 4-process cluster you switch between attached sessions. The viewer's
-  Discover dialog lists all of them; reconnecting is one click.
-- **Distributed traces**: no notion of "this RPC sent from BaseApp arrived
-  at CellApp". That's the OpenTelemetry work intentionally deferred from
-  Phase 5b of the integration plan.
-- **Continuous capture**: by default Tracy buffers everything in memory.
-  Long sessions accumulate hundreds of MB. Use **Save trace** before
-  closing to keep history.
+- **跨进程视图**：一个 viewer 同一时间只能 attach 一个进程。4 进程
+  集群要在 attach session 之间切换。viewer 的 Discover 对话框会列出全
+  部，重连一键。
+- **分布式 trace**：没有"BaseApp 发出的 RPC 到了 CellApp"这种概念，
+  那是 profiler 集成计划 Phase 5b 有意延后的 OpenTelemetry 工作。
+- **持续抓取**：默认 Tracy 在内存里全缓冲。长时间会话会累计几百 MB。
+  关闭前用 **Save trace** 留底。
 
-## Get the viewer
+## 拿 viewer
 
-Tracy ships pre-built viewer binaries on its GitHub releases:
+Tracy 在 GitHub releases 上发布预编译的 viewer：
 
 ```
 https://github.com/wolfpld/tracy/releases
 ```
 
-Atlas pins Tracy native to **0.13.1** (see `cmake/Dependencies.cmake`). The
-viewer's wire protocol must match that minor version exactly — using a
-0.12.x viewer against a 0.13.1 client connects but silently drops zones.
-Download `Tracy-0.13.1.7z` (Windows) or `Tracy-0.13.1.tar.gz` (Linux) and
-unpack the GUI executable somewhere in `PATH`.
+Atlas 把 Tracy native 钉在 **0.13.1**（见 `cmake/Dependencies.cmake`）。
+viewer 的 wire protocol 必须**精确匹配**这个 minor 版本——拿一个
+0.12.x 的 viewer 接 0.13.1 的 client，能连上但 zone 会被静默丢弃。下载
+`Tracy-0.13.1.7z`（Windows）或 `Tracy-0.13.1.tar.gz`（Linux），把 GUI
+可执行解压到 `PATH` 上。
 
-## Attach to a server process
+## Attach 到服务器进程
 
-### Step 1 — build with the profiler enabled
+### 第 1 步 —— 用启用 profiler 的方式构建
 
-Either preset works:
+下面任一 preset 都可以：
 
 ```bash
-cmake --preset debug              # day-to-day
-cmake --preset profile-release    # production-shaped
+cmake --preset debug              # 日常开发
+cmake --preset profile-release    # 生产形态
 cmake --build build/<preset> --config Debug
 ```
 
-The `release` preset has profiler **off** by design — production binaries
-ship without Tracy. `profile-release` is what you want for any "is this
-faster" experiment.
+`release` preset 故意**关掉** profiler——上线二进制不带 Tracy。
+`profile-release` 才是任何"这样改更快吗"实验的目标。
 
-### Step 2 — run the server
+### 第 2 步 —— 跑服务器
 
 ```bash
 bin/profile-release/server/atlas_cellapp.exe --config server.json
 ```
 
-By default Atlas's Tracy client runs in **on-demand** mode
-(`TRACY_ON_DEMAND=ON`). The process consumes ~0 CPU on profiler infrastructure
-until a viewer attaches. No flush, no broadcast, no buffering. This is
-deliberate: we want the option to leave instrumentation in production
-binaries (when using `profile-release` rather than `release`) without
-running profiler overhead 24/7.
+默认情况下 Atlas 的 Tracy client 跑在 **on-demand** 模式
+（`TRACY_ON_DEMAND=ON`）。在 viewer 接入之前，profiler 基础设施基本上
+0 CPU 占用——不 flush、不 broadcast、不缓冲。这是有意设计的：我们要
+保留把插桩留在生产二进制里的可能（用 `profile-release` 而不是
+`release`），同时不让 profiler 24/7 跑开销。
 
-### Step 3 — connect the viewer
+### 第 3 步 —— 接 viewer
 
-1. Launch `Tracy.exe` (or `tracy-profiler` on Linux).
-2. Click **Connect** in the toolbar.
-3. The address field defaults to `127.0.0.1`. Leave it. Port `8086` is the
-   default Tracy listen port.
-4. Click **Connect**.
+1. 启动 `Tracy.exe`（Linux 上是 `tracy-profiler`）。
+2. 工具栏点 **Connect**。
+3. 地址默认 `127.0.0.1`，保留。端口 `8086` 是 Tracy 默认 listen 端口。
+4. 点 **Connect**。
 
-The first frame appears in <100 ms. Anything before the moment of attach
-is gone — Tracy's on-demand mode buffers nothing in advance. Plan around
-this: if you're chasing a startup-time issue, build with
-`-DATLAS_PROFILER_ON_DEMAND=OFF` instead, which buffers from process start.
+第一帧 100 ms 以内就出来。attach 之前的所有数据都丢了——Tracy 的
+on-demand 模式不预先缓冲。围绕这点规划：要追启动期问题就改用
+`-DATLAS_PROFILER_ON_DEMAND=OFF` 构建，从进程起点就缓冲。
 
-### Multiple servers on one host
+### 同主机多个服务器
 
-Tracy auto-falls-back the listen port: process 1 takes 8086, process 2
-takes 8087, etc. The viewer's **Discover** button (next to Connect) scans
-the local range and lists every active session by program name. machined
-spawns each Atlas process with its own client; you don't need to inject
-`TRACY_PORT` env vars.
+Tracy 会自动把 listen 端口往后让：进程 1 拿 8086，进程 2 拿 8087，
+依次类推。viewer 的 **Discover** 按钮（在 Connect 旁边）扫描本地端口
+区间，按程序名列出每一个活动 session。machined 给每个 Atlas 进程都
+带各自的 client；你不需要注 `TRACY_PORT` 环境变量。
 
-When two CellApps are running, you'll see two entries:
+两个 CellApp 都在跑时你会看到两条：
 
 ```
 Discover ─┬─ atlas_cellapp [PID 12345] @ 127.0.0.1:8086
           └─ atlas_cellapp [PID 12346] @ 127.0.0.1:8087
 ```
 
-Click one to attach. Switch by clicking **Disconnect** then picking the
-other. State per session is independent.
+点其中一条 attach。要换到另一个就 **Disconnect** 再选另一条。session
+之间状态独立。
 
-## Read the timeline
+## 读时间轴
 
-### Frames row (top of the screen)
+### Frame 行（屏幕顶部）
 
-The thick bars at the top are **frames**. Atlas emits one named frame per
-tick (`<process_name>.Tick` by default, `DungeonTick` if `ServerConfig::frame_name`
-is overridden). Each bar's width is the tick's wall duration; the colour
-encodes "is this longer than the configured frame budget".
+顶部那根粗 bar 是**帧**。Atlas 每个 tick 触发一个命名 frame（默认
+`<process_name>.Tick`，`ServerConfig::frame_name` 覆盖时则是
+`DungeonTick` 之类）。每根 bar 的宽度是这个 tick 的墙钟时长；颜色
+编码"是否超出配置帧预算"。
 
-Slow ticks show up as red. Click one to zoom into its zone tree.
+慢 tick 显示成红色。点开一个就能放大到它的 zone 树。
 
-### Zone tree (main timeline)
+### Zone 树（主时间轴）
 
-Each row is a thread; each coloured block is a zone with a duration. The
-top-level Atlas zone is `Tick`. Underneath you'll typically see (for
-CellApp):
+每一行是一个线程；每块带颜色的方块是一个有时长的 zone。Atlas 顶层
+zone 是 `Tick`。下面（CellApp 上）通常会看到：
 
 ```
 Tick
@@ -145,161 +134,147 @@ Tick
 │   └─ CellApp::TickOffloadAckTimeouts
 ├─ Updatables
 ├─ CellApp::OnTickComplete
-│   ├─ Script.OnTick                ← C# combat / movement logic
+│   ├─ Script.OnTick                ← C# 战斗 / 移动逻辑
 │   ├─ CellApp::TickControllers
-│   │   └─ Space::Tick (× N spaces)
+│   │   └─ Space::Tick (× N 个 space)
 │   ├─ CellApp::TickWitnesses
-│   │   └─ Witness::Update (× N entities with witness)
+│   │   └─ Witness::Update (× N 个有 witness 的实体)
 │   │       ├─ Witness::Update::Transitions
 │   │       ├─ Witness::Update::PriorityHeap
 │   │       └─ Witness::Update::Pump
-│   │           └─ Witness::SendEntityUpdate (× N peers)
+│   │           └─ Witness::SendEntityUpdate (× N 个 peer)
 │   ├─ CellApp::TickBackupPump
 │   └─ CellApp::TickClientBaselinePump
 ```
 
-If a zone has a `Channel::Send` underneath it, that's the network outbound
-cost; `BytesOut` plot below the timeline shows the size at that moment.
+zone 下面挂着 `Channel::Send` 就是网络出方向的开销；时间轴下面的
+`BytesOut` plot 显示当时的字节数。
 
-### Plots (below the timeline)
+### Plot（时间轴下方）
 
-Plots stay in lock-step with frames. Atlas emits:
+plot 跟 frame 同步对齐。Atlas 输出：
 
-| Plot | Source | Typical reading |
+| Plot | 来源 | 典型读法 |
 |---|---|---|
-| `TickWorkMs` | Per-tick work time | should be well under `1000/update_hertz` (33 ms at 30 Hz) |
-| `BytesOut` | Per-packet outbound | spikes correlate with `Witness::Update::Pump` zones |
-| `BytesIn` | Per-packet inbound | spikes correlate with `Channel::Dispatch` zones |
+| `TickWorkMs` | 每 tick 工作时间 | 应当远低于 `1000/update_hertz`（30 Hz 是 33 ms） |
+| `BytesOut` | 每包出方向 | 尖峰对应 `Witness::Update::Pump` zone |
+| `BytesIn` | 每包入方向 | 尖峰对应 `Channel::Dispatch` zone |
 
-Hover any point to read the value at that moment. The **Edit plots** menu
-controls colour, formatting (e.g. show as memory rather than raw number),
-and scale.
+悬停任一点读当时的值。**Edit plots** 菜单可以改颜色、改格式（比如显示
+为内存而不是裸数字）、改刻度。
 
 ### Find / Find Zone
 
-`Ctrl-F` opens the zone search. Type any zone name to filter the list.
-**Find Zone** (separate dialog) shows the histogram of one zone's duration
-across the trace — useful for spotting outliers (`Witness::Update::Pump`
-mostly 0.5 ms, but tail at 8 ms? click the outlier, it jumps to that moment).
+`Ctrl-F` 打开 zone 搜索。输入任意 zone 名过滤列表。**Find Zone**（独立
+对话框）显示一个 zone 在整个 trace 里的时长直方图——找异常值很方便
+（`Witness::Update::Pump` 大多 0.5 ms，但有 8 ms 的尾巴？点尾巴上的
+那点，时间轴跳到那一刻）。
 
 ## Memory tab
 
-Atlas reports two kinds of allocations:
+Atlas 报两类分配：
 
-1. **Global heap** — every `new` / `delete` (and the C++17 / C++14 sized /
-   aligned variants), routed through `atlas::HeapAlloc`. Reported as
-   anonymous events.
-2. **Per-pool** — every `PoolAllocator(name, …)`. Reported with the pool's
-   name. Today's pools include `TimerNode`; new pools get their name
-   automatically when their constructor passes a stable pointer.
+1. **全局堆** —— 每一个 `new` / `delete`（含 C++17 / C++14 sized /
+   aligned 各变体），经过 `atlas::HeapAlloc` 路由。报告为匿名事件。
+2. **每池单独流** —— 每个 `PoolAllocator(name, …)`。带池名上报。
+   今天的池包含 `TimerNode`；新池只要构造时传稳定指针，名字就会自动
+   出现在这里。
 
-The Memory tab shows:
+Memory tab 显示：
 
-- **Total allocated / freed bytes** over time
-- **Per-allocator chart** — one stream per pool name plus "anonymous" for
-  the global heap
-- **Active allocations list** — what's still allocated at the cursor's
-  timestamp. Useful for leak detection: pause the cluster, jump to a known
-  steady state, look for anything that should have been freed but wasn't.
+- **总分配/释放字节** 随时间变化
+- **每分配器图表** —— 每个池名一条流，加上"匿名"代表全局堆
+- **当前活跃分配清单** —— 在光标时间戳处什么还没释放。找泄漏用：
+  暂停集群，跳到已知的稳定状态，找出本该释放却还在的项。
 
-### Picking a pool name
+### 池命名约定
 
-`PoolAllocator(pool_name, …)` requires `pool_name` to be a string literal
-or otherwise statically-allocated pointer. Tracy keys per-pool memory
-streams by pointer identity, not value, so a `std::string::c_str()` from
-a stack variable would corrupt the trace. Atlas's existing pools all pass
-literals; new ones should too.
+`PoolAllocator(pool_name, …)` 要求 `pool_name` 是字符串字面量或其它
+静态分配指针。Tracy 用指针 identity（不是值）作为 key 索引每池内存
+流——一个栈上 `std::string::c_str()` 会污染 trace。Atlas 现有的池都
+传字面量；新加的也要。
 
-## C# zones in the same trace
+## 同一 trace 中的 C# zone
 
-The server's C# layer (Atlas.Runtime) installs `TracyProfilerBackend`
-during `Lifecycle.DoEngineInit`. After that, every `Profiler.Zone(...)` /
-`Profiler.ZoneN(name)` from managed code emits to the same Tracy client
-the C++ side uses. Specifically:
+服务端 C# 层（Atlas.Runtime）在 `Lifecycle.DoEngineInit` 中安装
+`TracyProfilerBackend`。装上之后，托管代码里每一个
+`Profiler.Zone(...)` / `Profiler.ZoneN(name)` 都发到 C++ 端用的同一
+个 Tracy client。具体地：
 
-- `Script.OnTick` zone wraps the entire managed tick body
-- (Future) generator-emitted property apply zones will appear under
-  `Script.OnTick` once the def-codegen pass adds them
+- `Script.OnTick` zone 包住整个托管 tick 体
+- （未来）一旦 def 代码生成器更新，property apply 路径上生成器自动
+  输出的 zone 会出现在 `Script.OnTick` 之下
 
-The zones interleave with C++ zones contiguously. There is no separate
-"managed" pane — the trace looks the same as if Atlas were a single C++
-program that happened to call into more C++.
+zone 跟 C++ zone 连续交错——没有独立的"托管"面板，trace 看上去就像
+Atlas 是一个调用了更多 C++ 的单 C++ 程序。
 
-If managed zones are missing while C++ zones are present, the most likely
-cause is that `Lifecycle.DoEngineInit` hasn't run yet (the runtime hasn't
-booted) or the install was rejected (a non-null backend was already
-present). Check `ATLAS_LOG_INFO` output for `"Tracy profiler backend
-already installed"`.
+C++ zone 在但托管 zone 缺失时，最常见原因是 `Lifecycle.DoEngineInit`
+还没跑（runtime 没启动），或者 install 被拒（已经有非 null backend）。
+看 `ATLAS_LOG_INFO` 输出找 `"Tracy profiler backend already installed"`。
 
-## Lock contention
+## 锁竞争
 
-Wrap a contended mutex with `ATLAS_PROFILE_LOCKABLE(std::mutex, my_lock)`
-instead of `std::mutex my_lock` to add it to Tracy's contention timeline.
-The wrapped lock behaves identically at the source level (same `lock()`,
-`unlock()`, `lock_guard` interaction) but reports wait / hold ranges to
-the viewer.
+把竞争激烈的 mutex 用 `ATLAS_PROFILE_LOCKABLE(std::mutex, my_lock)`
+包起来代替 `std::mutex my_lock`，就把它加入了 Tracy 的竞争时间轴。
+包过的锁在源码层行为完全一样（一样的 `lock()` / `unlock()`、跟
+`lock_guard` 一样配合），但会向 viewer 报告等待 / 持有区间。
 
-The Lock tab then shows:
+Lock tab 然后会显示：
 
-- Which threads contended on this lock
-- How long each thread waited
-- Hold-time distribution
+- 哪些线程在这个锁上抢
+- 每个线程等了多久
+- 持有时长分布
 
-Useful for verifying that a hot-path mutex isn't quietly serialising work
-you assumed was parallel.
+用来确认热路径上的 mutex 没有把你以为是并行的工作悄悄串行化。
 
-`ATLAS_PROFILE_LOCK_MARK(var)` emits a sync point against the lock without
-actually claiming it — useful when you've manually serialised something
-with atomics and want to record the synchronisation moment for the viewer.
+`ATLAS_PROFILE_LOCK_MARK(var)` 不实际加锁，只对一个锁发一个同步事件
+——当你用原子手动串行化了一段东西、想让 viewer 记录这个同步时刻时
+有用。
 
-## Save and replay
+## 保存与回放
 
-The viewer's **File → Save** writes the trace to a `.tracy` file. Open it
-later with **File → Open** to re-explore without the source process running.
-Trace files are usually 50–500 MB for a few minutes of recording — fine
-for offline analysis, plan disk space accordingly.
+viewer 的 **File → Save** 把 trace 写到 `.tracy` 文件。之后用
+**File → Open** 打开，不用源进程跑也能再分析。trace 文件几分钟录制
+通常 50–500 MB——离线分析无压力，磁盘空间留出来就行。
 
-Production tip: when reproducing a customer-reported slow tick, capture a
-trace, save, and ship the `.tracy` to the engineer reproducing it.
-Everything they need is in the file — no need to set up the same cluster.
+线上小贴士：复现一个客户报告的慢 tick 时，抓一份 trace、Save、把
+`.tracy` 发给排查的工程师。文件里有他需要的一切——不用搭一个一样的
+集群。
 
-## Cost of having Tracy on
+## Tracy 开着的成本
 
-| Scenario | Per-zone overhead | Notes |
+| 场景 | 单 zone 开销 | 备注 |
 |---|---|---|
-| `release` preset (profiler off) | 0 ns | Macros expand to no-ops; Tracy DLL not linked. |
-| Profiler on, no viewer connected (`TRACY_ON_DEMAND`) | ~1 ns | Atomic load + branch. Inert. |
-| Profiler on, viewer connected | ~2.25 ns | RDTSC + queue push. Tracy's documented number. |
-| Heap alloc with profiler on | ~5–10 ns extra | Re-entry guard (3× TLS) + Tracy hook. |
+| `release` preset（profiler 关） | 0 ns | 宏展开 no-op；Tracy DLL 不链接。 |
+| profiler 开，无 viewer 连（`TRACY_ON_DEMAND`） | ~1 ns | atomic load + 分支。inert。 |
+| profiler 开，viewer 已连 | ~2.25 ns | RDTSC + 队列 push。Tracy 文档值。 |
+| 堆分配，profiler 开 | 额外 ~5–10 ns | re-entry guard（3× TLS）+ Tracy hook。 |
 
-For a 30 Hz CellApp at 100v100 with ~5k zones per tick, the worst case is
-~1.5 ms / s overhead — under 0.5% of CPU. Inert mode is unnoticeable.
+30 Hz 的 CellApp 在 100v100、每 tick ~5k zone 的最坏情况下，~1.5 ms / s
+的开销——CPU 占比不到 0.5%。inert 模式更是无感。
 
-## Common pitfalls
+## 常见踩坑
 
-- **No frames in the viewer**: process running but no `FrameMark` ever
-  fires. Check `ServerConfig::frame_name` is non-empty (it's auto-derived
-  from `process_name` if blank).
-- **Zones appear but timeline is "stuck"**: the process hasn't ticked yet
-  (still in init). Wait a few seconds.
-- **Memory tab shows churn far above what you allocate**: STL containers'
-  internal allocations are counted too — `std::vector::push_back` that
-  triggers a grow is a real `operator new`. Filter by allocator name to
-  separate intentional pool churn from incidental STL traffic.
-- **Lock zone never appears for a wrapped mutex**: the lock isn't actually
-  contended — Tracy only reports waits, not zero-contention acquisitions.
-  Force contention from another thread to verify the wrap.
-- **C++ and C# zones don't interleave (managed missing)**: backend
-  installation failed. Look for the "already installed" warning at boot.
+- **viewer 看不到任何 frame**：进程在跑但从来没触发 `FrameMark`。检查
+  `ServerConfig::frame_name` 不为空（空时会从 `process_name` 自动派生）。
+- **zone 出现了但时间轴"卡住"**：进程还没 tick（init 还在跑）。等几
+  秒钟。
+- **Memory tab churn 远高于你分配的量**：STL 容器的内部分配也算进来——
+  `std::vector::push_back` 触发 grow 就是一个真实的 `operator new`。
+  按分配器名过滤把刻意池子的流量跟 STL 顺带流量分开。
+- **包过的 mutex 一直没出现 lock zone**：锁实际没竞争——Tracy 只报告
+  等待，不报告零竞争获取。从另一个线程上故意制造竞争来验证 wrap
+  生效。
+- **C++ 跟 C# zone 没交错（托管缺失）**：backend install 失败。看启动
+  时 `"already installed"` 警告。
 
-## Where to dig deeper
+## 想再深入
 
-- Tracy's own manual: <https://github.com/wolfpld/tracy/releases> →
-  `tracy.pdf` next to each release. Comprehensive — every macro, every
-  viewer feature.
-- Atlas's profiler design: [`docs/optimization/profiler_tracy_integration.md`](../optimization/profiler_tracy_integration.md)
-- Atlas's macro surface: [`src/lib/foundation/profiler.h`](../../src/lib/foundation/profiler.h)
-- Atlas's managed facade: [`src/csharp/Atlas.Shared/Diagnostics/Profiler.cs`](../../src/csharp/Atlas.Shared/Diagnostics/Profiler.cs)
-- Tracy 0.13 protocol on the wire: source-only — read
-  `build/<preset>/_deps/tracy-src/server/TracyWorker.cpp` for the
-  authoritative version.
+- Tracy 自家手册：<https://github.com/wolfpld/tracy/releases> →
+  每个 release 旁边的 `tracy.pdf`。详尽——每个宏、每个 viewer 功能
+  都讲。
+- Atlas profiler 设计：[`docs/optimization/profiler_tracy_integration.md`](../optimization/profiler_tracy_integration.md)
+- Atlas 宏面：[`src/lib/foundation/profiler.h`](../../src/lib/foundation/profiler.h)
+- Atlas 托管 facade：[`src/csharp/Atlas.Shared/Diagnostics/Profiler.cs`](../../src/csharp/Atlas.Shared/Diagnostics/Profiler.cs)
+- Tracy 0.13 wire protocol：只有源码——读
+  `build/<preset>/_deps/tracy-src/server/TracyWorker.cpp` 是权威版本。
