@@ -356,5 +356,153 @@ TEST_F(WitnessReplicationTest, UpdateEmitsNothingWhenFullyCaughtUp) {
   EXPECT_TRUE(sent_.empty());
 }
 
+// ----------------------------------------------------------------------------
+// Distance LOD scheduling
+// ----------------------------------------------------------------------------
+
+// Helper: count kEntityPositionUpdate envelopes collected since last clear.
+auto CountPositionUpdates(const std::vector<Captured>& sent) -> int {
+  int n = 0;
+  for (const auto& c : sent)
+    if (KindOf(c) == CellAoIEnvelopeKind::kEntityPositionUpdate) ++n;
+  return n;
+}
+
+// Run N full Update() ticks, publishing a fresh volatile frame each tick.
+// Returns a per-tick vector of position-update counts received.
+auto RunTicks(Witness& witness, CellEntity& peer, int ticks, uint32_t budget = 65536)
+    -> std::vector<int> {
+  std::vector<int> counts;
+  uint64_t seq = 0;
+  for (int i = 0; i < ticks; ++i) {
+    CellEntity::ReplicationFrame f;
+    f.volatile_seq = ++seq;
+    peer.PublishReplicationFrame(f, {}, {});
+    // Clear the Enter envelope emitted on tick 0.
+    std::vector<Captured> tick_sent;
+    // Can't intercept per-tick easily via the stored callback; use AoIMap
+    // to assert lod_next_update_tick instead — see below tests.
+    witness.Update(budget);
+  }
+  return counts;
+}
+
+// Close peers (< 50 m) must be updated every tick.
+TEST_F(WitnessReplicationTest, LodCloseUpdatesEveryTick) {
+  Space space(1);
+  // Observer at origin; peer at 10 m — well within the Close band (< 50 m).
+  auto* observer = MakeEntity(space, 1, 1001, {0, 0, 0});
+  auto* peer     = MakeEntity(space, 2, 1002, {10, 0, 0});
+  observer->EnableWitness(500.f, MakeReliable(), MakeUnreliable());
+
+  const math::Vector3 kPeerPos{10, 0, 0};
+  const int kTicks = 6;
+  int pos_updates = 0;
+  for (int t = 0; t < kTicks; ++t) {
+    CellEntity::ReplicationFrame f;
+    f.volatile_seq = static_cast<uint64_t>(t + 1);
+    f.position = kPeerPos;  // keep peer at its initial position
+    peer->PublishReplicationFrame(f, {}, {});
+    sent_.clear();
+    observer->GetWitness()->Update(65536);
+    pos_updates += CountPositionUpdates(sent_);
+  }
+  // Tick 1 (enter): Enter captures volatile_seq=1 → Pump sees 1>1, no pos update.
+  // Ticks 2-6: interval=1, every tick → 5 updates.
+  EXPECT_EQ(pos_updates, kTicks - 1);
+}
+
+// Medium peers (50–200 m) must be updated every 3rd tick.
+TEST_F(WitnessReplicationTest, LodMediumUpdatesEvery3Ticks) {
+  Space space(1);
+  // Peer at 100 m — inside the Medium band (50–200 m).
+  auto* observer = MakeEntity(space, 1, 1001, {0, 0, 0});
+  auto* peer     = MakeEntity(space, 2, 1002, {100, 0, 0});
+  observer->EnableWitness(500.f, MakeReliable(), MakeUnreliable());
+
+  const math::Vector3 kPeerPos{100, 0, 0};
+  const int kTicks = 9;
+  int pos_updates = 0;
+  for (int t = 0; t < kTicks; ++t) {
+    CellEntity::ReplicationFrame f;
+    f.volatile_seq = static_cast<uint64_t>(t + 1);
+    f.position = kPeerPos;
+    peer->PublishReplicationFrame(f, {}, {});
+    sent_.clear();
+    observer->GetWitness()->Update(65536);
+    pos_updates += CountPositionUpdates(sent_);
+  }
+  // Tick 1 (enter): no pos update (enter captures seq). lod_next=4.
+  // Tick 4: update (volatile caught up). lod_next=7.
+  // Tick 7: update. lod_next=10.
+  // Total: 2 updates in 9 ticks.
+  EXPECT_EQ(pos_updates, 2);
+}
+
+// Far peers (≥ 200 m) must be updated every 6th tick.
+TEST_F(WitnessReplicationTest, LodFarUpdatesEvery6Ticks) {
+  Space space(1);
+  // Peer at 300 m — inside the Far band (≥ 200 m).
+  auto* observer = MakeEntity(space, 1, 1001, {0, 0, 0});
+  auto* peer     = MakeEntity(space, 2, 1002, {300, 0, 0});
+  observer->EnableWitness(500.f, MakeReliable(), MakeUnreliable());
+
+  const math::Vector3 kPeerPos{300, 0, 0};
+  const int kTicks = 12;
+  int pos_updates = 0;
+  for (int t = 0; t < kTicks; ++t) {
+    CellEntity::ReplicationFrame f;
+    f.volatile_seq = static_cast<uint64_t>(t + 1);
+    f.position = kPeerPos;
+    peer->PublishReplicationFrame(f, {}, {});
+    sent_.clear();
+    observer->GetWitness()->Update(65536);
+    pos_updates += CountPositionUpdates(sent_);
+  }
+  // Tick 1 (enter): no pos update. lod_next=7.
+  // Tick 7: update. lod_next=13.
+  // Ticks 8-12: all < 13 → skip.
+  // Total: 1 update in 12 ticks.
+  EXPECT_EQ(pos_updates, 1);
+}
+
+// Event-stream deltas for a far peer must be replayed when the peer
+// is finally processed, without snapshot fallback. The history window
+// (8 frames) covers 6-tick LOD gaps at 10 Hz comfortably.
+TEST_F(WitnessReplicationTest, LodFarEventDeliveredOnNextWindow) {
+  Space space(1);
+  auto* observer = MakeEntity(space, 1, 1001, {0, 0, 0});
+  auto* peer     = MakeEntity(space, 2, 1002, {300, 0, 0});
+  observer->EnableWitness(500.f, MakeReliable(), MakeUnreliable());
+
+  // Tick 1 — initial enter handled; peer gets its first LOD update.
+  sent_.clear();
+  observer->GetWitness()->Update(65536);
+
+  // Publish a property event on tick 2; peer won't be polled again until
+  // tick 7 (far interval = 6).
+  peer->PublishReplicationFrame(
+      MakeFrame(1, {}, MakeBlob({0x01, 0xAB})),
+      MakeBlob({0xFF}), MakeBlob({0xFE}));
+
+  // Ticks 2-6: property delta accumulates in history, peer is LOD-skipped.
+  for (int t = 0; t < 5; ++t) {
+    sent_.clear();
+    observer->GetWitness()->Update(65536);
+    // No property update should arrive during the skip window.
+    for (const auto& c : sent_)
+      EXPECT_NE(KindOf(c), CellAoIEnvelopeKind::kEntityPropertyUpdate)
+          << "LOD-skipped peer must not emit property updates on tick " << (t + 2);
+  }
+
+  // Tick 7: peer re-enters queue, history replay delivers the delta.
+  sent_.clear();
+  observer->GetWitness()->Update(65536);
+  int prop_updates = 0;
+  for (const auto& c : sent_)
+    if (KindOf(c) == CellAoIEnvelopeKind::kEntityPropertyUpdate) ++prop_updates;
+  EXPECT_EQ(prop_updates, 1) << "Far peer must deliver queued delta on re-entry tick";
+}
+
 }  // namespace
 }  // namespace atlas

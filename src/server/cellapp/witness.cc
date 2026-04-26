@@ -18,6 +18,24 @@ namespace atlas {
 
 namespace {
 
+// Distance-LOD thresholds (squared metres). Entities beyond each
+// boundary are updated at a reduced rate to shed Witness::Update::Pump
+// CPU and outbound bandwidth in dense scenes.
+//
+// Bands  (distance → update every N ticks at 10 Hz):
+//   Close   < 50 m  →  1 tick  (10 Hz, same as before)
+//   Medium  < 200 m →  3 ticks (~3.3 Hz)
+//   Far     ≥ 200 m →  6 ticks (~1.7 Hz)
+//
+// At 10 Hz the Far interval (600 ms) comfortably fits inside the
+// 8-frame history window (800 ms), so catch-up replay always covers
+// the gap without falling back to snapshot.
+static constexpr double kLodCloseSq  = 50.0  * 50.0;   //  2 500 m²
+static constexpr double kLodMediumSq = 200.0 * 200.0;  // 40 000 m²
+static constexpr uint64_t kLodCloseInterval  = 1;
+static constexpr uint64_t kLodMediumInterval = 3;
+static constexpr uint64_t kLodFarInterval    = 6;
+
 // Priority metric: squared distance. Smaller is more urgent. The
 // min-heap in Update only cares about ordering, so we skip the sqrt
 // that a true distance would require — a² < b² iff a < b for
@@ -236,9 +254,17 @@ auto Witness::SendEntityLeave(EntityID peer_base_id) -> std::size_t {
   return envelope.size();
 }
 
+auto Witness::LodIntervalForDistSq(double dist_sq) -> uint64_t {
+  if (dist_sq < kLodCloseSq)  return kLodCloseInterval;
+  if (dist_sq < kLodMediumSq) return kLodMediumInterval;
+  return kLodFarInterval;
+}
+
 void Witness::Update(uint32_t max_packet_bytes) {
   ATLAS_PROFILE_ZONE_N("Witness::Update");
   if (!trigger_) return;
+
+  ++tick_count_;
 
   // Step 1: state transitions (enter, leave). Collect peers into scratch
   // lists so mutations to aoi_map_ during this pass (possible if SendFn
@@ -286,12 +312,18 @@ void Witness::Update(uint32_t max_packet_bytes) {
   // Step 2: priority heap maintenance for Updatable peers. Rebuild rather
   // than maintain incrementally — observer positions change every tick so
   // priorities are stale anyway.
+  //
+  // LOD gate: skip peers whose scheduled next-update tick hasn't arrived.
+  // lod_next_update_tick starts at 0 so every peer is eligible on the
+  // first tick; after each SendEntityUpdate it is reset to
+  // tick_count_ + LodIntervalForDistSq(distance²).
   {
     ATLAS_PROFILE_ZONE_N("Witness::Update::PriorityHeap");
     priority_queue_.clear();
     priority_queue_.reserve(aoi_map_.size());
     for (auto& [id, cache] : aoi_map_) {
       if (!cache.IsUpdatable()) continue;
+      if (tick_count_ < cache.lod_next_update_tick) continue;  // LOD skip
       UpdatePriority(cache);
       priority_queue_.emplace_back(cache.priority, id);
     }
@@ -321,6 +353,10 @@ void Witness::Update(uint32_t max_packet_bytes) {
       if (!cache.IsUpdatable()) continue;
 
       bytes_sent += static_cast<int>(SendEntityUpdate(cache));
+      // Schedule the next LOD window. Using the priority (dist²) computed
+      // in Step 2 avoids a redundant sqrt; the same value drove the heap
+      // ordering so it's already in cache.
+      cache.lod_next_update_tick = tick_count_ + LodIntervalForDistSq(cache.priority);
     }
   }
 

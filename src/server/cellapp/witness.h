@@ -122,6 +122,12 @@ class Witness {
     uint64_t last_event_seq{0};
     uint64_t last_volatile_seq{0};
 
+    // Distance-LOD scheduling. The peer is excluded from the priority
+    // queue until tick_count_ reaches this value. Starts at 0 so the
+    // first Update() always processes the peer; reset after each
+    // SendEntityUpdate() call based on current distance.
+    uint64_t lod_next_update_tick{0};
+
     static constexpr uint8_t kEnterPending = 0x01;  // just joined AoI
     static constexpr uint8_t kGone = 0x08;          // left AoI, pending leave send
 
@@ -145,6 +151,11 @@ class Witness {
  private:
   // Re-compute the priority (distance/5 + 1) using our current position.
   void UpdatePriority(EntityCache& cache) const;
+
+  // Map squared distance to a LOD update interval (in ticks).
+  // Close (< 50 m²·1) → every tick; Medium (< 200 m) → every 3rd tick;
+  // Far (≥ 200 m) → every 6th tick.
+  [[nodiscard]] static auto LodIntervalForDistSq(double dist_sq) -> uint64_t;
 
   // Each Send* returns the envelope bytes actually dispatched, so the
   // tick-loop bandwidth accountant can bill precisely instead of using
@@ -174,6 +185,10 @@ class Witness {
   // pointers) so rehash of aoi_map_ can't dangle; every pop re-looks up.
   // std::pair<priority, id> makes std::greater ordering trivial.
   std::vector<std::pair<double, EntityID>> priority_queue_;
+
+  // Monotonically-increasing tick counter; incremented at the top of
+  // each Update() call. Used for LOD scheduling (lod_next_update_tick).
+  uint64_t tick_count_{0};
 
   // Bytes we went over budget last tick. Deducted from next tick's
   // effective budget so bursty Update work amortises evenly.
