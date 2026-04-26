@@ -25,6 +25,7 @@ public sealed class EntityManager
     private readonly List<ServerEntity> _pendingCreates = new();
     private readonly List<uint> _pendingDestroys = new();
     private bool _iterating;
+    private uint _tickCount;
 
     internal void SetProcessPrefix(byte prefix) => _processPrefix = prefix;
 
@@ -32,6 +33,11 @@ public sealed class EntityManager
     public T Create<T>() where T : ServerEntity, new()
     {
         var entity = new T { EntityId = AllocateEntityId() };
+        if (entity.TickInterval > 1)
+        {
+            var totalSoFar = (uint)(_entities.Count + _pendingCreates.Count);
+            entity.TickPhase = (int)(totalSoFar % (uint)entity.TickInterval);
+        }
         if (_iterating)
             _pendingCreates.Add(entity);
         else
@@ -68,11 +74,16 @@ public sealed class EntityManager
 
     internal void OnTickAll(float deltaTime)
     {
+        _tickCount++;
         _iterating = true;
         foreach (var entity in _entities.Values)
         {
             if (entity.IsDestroyed) continue;
-            // entity.GetType().Name is a CLR-interned string — no allocation per call.
+            if (entity.TickInterval > 1 &&
+                _tickCount % (uint)entity.TickInterval != (uint)entity.TickPhase) continue;
+            // Type.Name is cached on the Type instance by the runtime, so the
+            // hot loop sees the same string reference each call — safe to use
+            // as a Profiler zone label without per-tick allocation.
             using (Profiler.ZoneN(entity.GetType().Name))
                 entity.OnTick(deltaTime);
             // Fire component ticks AFTER the entity body so a component
@@ -171,6 +182,7 @@ public sealed class EntityManager
         _localSeq = 1;
         _processPrefix = 0;
         _iterating = false;
+        _tickCount = 0;
     }
 
     /// <summary>Get all entities (used by hot-reload serialization).</summary>

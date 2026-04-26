@@ -19,6 +19,29 @@ public abstract class ServerEntity
     public bool IsDestroyed { get; internal set; }
 
     /// <summary>
+    /// Tick update interval. OnTick is called every <c>TickInterval</c> engine
+    /// ticks instead of every tick. Default 1 = every tick.
+    /// <para/>
+    /// <b>MUST be set in the entity constructor.</b> EntityManager reads
+    /// <c>TickInterval</c> in <c>Create&lt;T&gt;()</c> right after
+    /// <c>new T()</c> to assign a staggered <see cref="TickPhase"/>; setting
+    /// it later (e.g. in <c>OnInit</c>) leaves all instances of that type
+    /// with phase 0, which clusters their ticks on the same frame and
+    /// defeats the spreading.
+    /// <para/>
+    /// Values &lt;= 1 disable spreading and behave as "every tick".
+    /// </summary>
+    public int TickInterval
+    {
+        get => _tickInterval;
+        protected set => _tickInterval = value < 1 ? 1 : value;
+    }
+    private int _tickInterval = 1;
+
+    /// <summary>Phase within the tick interval, assigned by EntityManager.</summary>
+    internal int TickPhase { get; set; }
+
+    /// <summary>
     /// Entity type name. Overridden by Entity Source Generator to return
     /// the compile-time constant from [Entity("TypeName")].
     /// </summary>
