@@ -48,12 +48,15 @@ atlas_set_folder("ThirdParty"
   rapidjson
   zlib zlibstatic
   sqlite3
+  mimalloc
+  TracyClient
 )
 
 # ── Lib ─────────────────────────────────────────────────────────────────────
 set(_atlas_lib_targets
   atlas_platform
   atlas_foundation
+  atlas_heap
   atlas_math
   atlas_script
   atlas_serialization
@@ -121,6 +124,7 @@ atlas_set_folder("CSharp"
   atlas_runtime_dll
   atlas_client_dll
   atlas_client_desktop_dll
+  atlas_client_sample_dll
 )
 
 atlas_set_folder("CSharp/Generators"
@@ -128,11 +132,28 @@ atlas_set_folder("CSharp/Generators"
   atlas_generators_def_dll
 )
 
+atlas_set_folder("CSharp/Tools"
+  atlas_tools_defdump
+)
+
 atlas_set_folder("CSharp/Test"
   atlas_smoke_test_dll
   atlas_runtime_test_dll
   atlas_stress_test_base_dll
   atlas_stress_test_cell_dll
+)
+
+atlas_set_folder("Deploy"
+  atlas_shared_dll_deploy
+  atlas_clrhost_dll_deploy
+  atlas_runtime_dll_deploy
+  atlas_client_dll_deploy
+  atlas_client_desktop_dll_deploy
+  atlas_client_sample_dll_deploy
+  atlas_smoke_test_dll_deploy
+  atlas_runtime_test_dll_deploy
+  atlas_stress_test_base_dll_deploy
+  atlas_stress_test_cell_dll_deploy
 )
 
 # ── Test ────────────────────────────────────────────────────────────────────
