@@ -102,6 +102,21 @@ function(atlas_deploy_clr_runtime target)
       VERBATIM
     )
   endif()
+
+  # Walk transitively-linked runtime DLLs (mimalloc, TracyClient, zlib's
+  # zlibd, …) and copy them next to the exe. atlas_add_test does this
+  # for tests via the same CopyRuntimeDLLs helper; server exes need the
+  # same coverage now that the default heap allocator (mimalloc) is a
+  # SHARED library propagated through atlas_foundation. Without this,
+  # bin/<build>/server/atlas_cellapp.exe starts up with
+  # STATUS_DLL_NOT_FOUND for mimalloc-debug.dll.
+  add_custom_command(TARGET ${target} POST_BUILD
+    COMMAND ${CMAKE_COMMAND}
+            "-DTARGET_DLLS=$<TARGET_RUNTIME_DLLS:${target}>"
+            "-DTARGET_DIR=$<TARGET_FILE_DIR:${target}>"
+            -P "${CMAKE_SOURCE_DIR}/cmake/CopyRuntimeDLLs.cmake"
+    VERBATIM
+  )
 endfunction()
 
 # ── Database plugin deployment ──────────────────────────────────────────────

@@ -45,7 +45,13 @@ endif()
 # extend the STRINGS list, plumb a new ATLAS_HEAP_<NAME> compile
 # definition in cmake/AtlasCompilerOptions.cmake, and add the
 # matching #elif branch in heap.cc.
-set(ATLAS_HEAP_ALLOCATOR "std" CACHE STRING
+#
+# Default is mimalloc — measurably faster than the platform CRT for
+# the small/short-lived allocation patterns Atlas hits hard (witness
+# scratch buffers, bundle composition, STL container resizes during
+# combat). Switch back to "std" when comparing against a baseline or
+# debugging an allocator-suspected issue.
+set(ATLAS_HEAP_ALLOCATOR "mimalloc" CACHE STRING
     "Heap allocator backend for atlas::Heap (std | mimalloc)")
 set_property(CACHE ATLAS_HEAP_ALLOCATOR PROPERTY STRINGS std mimalloc)
 set(_atlas_valid_heap_allocators std mimalloc)

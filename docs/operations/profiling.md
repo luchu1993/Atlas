@@ -113,17 +113,25 @@ dotnet-gcdump collect --process-id <PID> --output cellapp.gcdump
 
 ## 切换分配器
 
-默认堆是 `std`（平台 CRT）。做性能对比时切到 mimalloc：
+默认堆是 `mimalloc`。做基线对比或排查疑似 allocator 引发的问题时切回
+`std`（平台 CRT）：
 
 ```bash
-cmake -B build/profile-release-mimalloc \
+cmake -B build/profile-release-std \
       --preset profile-release \
-      -DATLAS_HEAP_ALLOCATOR=mimalloc
+      -DATLAS_HEAP_ALLOCATOR=std
 ```
 
 两个配置同时 target `RelWithDebInfo`，互不覆盖各自的 `bin/` 输出
 ——build 目录名就是 bin 目录名（见 patch 0009）。两个都跑起来，
 Tracy trace 并排比对。
+
+> **既存 build 目录不会自动跟到新默认。** CMake 一旦把
+> `ATLAS_HEAP_ALLOCATOR` 写进 cache，之后即便仓库默认值改了，那个
+> build dir 还会用 cached 值。要让旧 build dir 跟上：要么
+> `cmake --preset <name> --fresh`（CMake 3.24+），要么删掉
+> `build/<name>/CMakeCache.txt` 重新 configure，要么显式
+> `-DATLAS_HEAP_ALLOCATOR=mimalloc` 覆盖一次。
 
 ## 排查"zone 缺失"
 

@@ -18,6 +18,7 @@
 | 5b — OpenTelemetry 跨进程 | — | ❌ **延后** | wire-format envelope 改动 + OTel SDK 重量级，跟当前 100v100 attribution 需求关联弱。Tracy 进程内视图已够用。 |
 | 6 — 内存 hook + 每池追踪 | 0007 | ✅ 完成 | `atlas::Heap` 抽象 + 全局 `operator new`/`delete` override（20 变体） + 每池 named Tracy hook（`PoolAllocator(name, …)`） |
 | 6+ — mimalloc 后端可选 | 0008 | ✅ 完成 | `ATLAS_HEAP_ALLOCATOR=std\|mimalloc` CMake 字符串；将来加入其它 allocator（jemalloc 等）走 3 步扩展 |
+| (默认切换) | 0015 | ✅ 完成 | mimalloc 改为默认堆分配器；server exe 部署链路扩展（atlas_deploy_clr_runtime 现在也透 TARGET_RUNTIME_DLLS） |
 | (输出布局) | 0009 | ✅ 完成 | `bin/<build_dir>/...`，并存的 CMake build 目录（如 `build/debug` + `build/profile-release-mimalloc`）互不覆盖 |
 | 7 — 客户端 zone + Unity 后端 | 0010 | ✅ 完成（有偏离） | `ClientCallbacks` + `ClientEntity.ApplyPositionUpdate` zone；`Atlas.Client.Unity`（asmdef + `UnityProfilerBackend`）在 Atlas dotnet 流水线之外（Unity-only）。`Atlas.Client.Desktop` 保持 `NullProfilerBackend`，不重复 Tracy 绑定。 |
 | 8 — 构建模式 + runbook | 0011 | ✅ 完成 | `release` preset 关 profiler；新增 `profile-release`（RelWithDebInfo + profiler ON）；运维 runbook 在 [`docs/operations/profiling.md`](../operations/profiling.md)。machined 注 TRACY_PORT 环境变量未实施 —— Tracy 自动 fallback 端口、viewer 的 Discover 解决了多进程 attach。 |
