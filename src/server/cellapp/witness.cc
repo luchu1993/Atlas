@@ -30,11 +30,11 @@ namespace {
 // At 10 Hz the Far interval (600 ms) comfortably fits inside the
 // 8-frame history window (800 ms), so catch-up replay always covers
 // the gap without falling back to snapshot.
-static constexpr double kLodCloseSq  = 50.0  * 50.0;   //  2 500 m²
+static constexpr double kLodCloseSq = 50.0 * 50.0;     //  2 500 m²
 static constexpr double kLodMediumSq = 200.0 * 200.0;  // 40 000 m²
-static constexpr uint64_t kLodCloseInterval  = 1;
+static constexpr uint64_t kLodCloseInterval = 1;
 static constexpr uint64_t kLodMediumInterval = 3;
-static constexpr uint64_t kLodFarInterval    = 6;
+static constexpr uint64_t kLodFarInterval = 6;
 
 // Priority metric: squared distance. Smaller is more urgent. The
 // min-heap in Update only cares about ordering, so we skip the sqrt
@@ -255,7 +255,7 @@ auto Witness::SendEntityLeave(EntityID peer_base_id) -> std::size_t {
 }
 
 auto Witness::LodIntervalForDistSq(double dist_sq) -> uint64_t {
-  if (dist_sq < kLodCloseSq)  return kLodCloseInterval;
+  if (dist_sq < kLodCloseSq) return kLodCloseInterval;
   if (dist_sq < kLodMediumSq) return kLodMediumInterval;
   return kLodFarInterval;
 }
@@ -459,10 +459,17 @@ auto Witness::SendEntityUpdate(EntityCache& cache) -> std::size_t {
       // still advances so the next non-empty frame doesn't look like a
       // gap.
       if (!delta_bytes.empty() && !IsAllZeroDelta(delta_bytes)) {
-        auto envelope =
-            BuildPropertyUpdateEnvelope(cache.entity->BaseEntityId(), frame.event_seq, delta_bytes);
-        if (send_reliable_) send_reliable_(owner_.BaseEntityId(), envelope);
-        bytes += envelope.size();
+        // Reuse the cached envelope if already built by an earlier observer
+        // this tick. mutable cache on ReplicationFrame lets us share the
+        // allocation across all N witnesses watching the same peer.
+        auto& cached =
+            observer_is_owner ? frame.cached_owner_envelope : frame.cached_other_envelope;
+        if (cached.empty()) {
+          cached = BuildPropertyUpdateEnvelope(cache.entity->BaseEntityId(), frame.event_seq,
+                                               delta_bytes);
+        }
+        if (send_reliable_) send_reliable_(owner_.BaseEntityId(), cached);
+        bytes += cached.size();
       }
       cache.last_event_seq = frame.event_seq;
     }

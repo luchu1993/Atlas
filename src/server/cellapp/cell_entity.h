@@ -196,6 +196,14 @@ class CellEntity : public IEntityMotion {
     math::Vector3 position{0.f, 0.f, 0.f};
     math::Vector3 direction{1.f, 0.f, 0.f};
     bool on_ground{false};
+
+    // Lazily-built wire envelopes. The first Witness that needs to send
+    // this frame builds the envelope and stores it here; all subsequent
+    // Witnesses for the same peer reuse the cached bytes, eliminating
+    // N×M serialisation work (N entities × M observers) on the hot path.
+    // mutable: populated on first use while frame is accessed via const*.
+    mutable std::vector<std::byte> cached_owner_envelope;
+    mutable std::vector<std::byte> cached_other_envelope;
   };
 
   struct ReplicationState {
