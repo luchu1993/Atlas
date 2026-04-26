@@ -25,6 +25,7 @@ namespace atlas {
 
 namespace {
 
+#if ATLAS_PROFILE_ENABLED
 // Per-thread re-entry depth counter. Tracy's own internals are routed
 // through TracyClient.dll's separate CRT and don't come back through
 // this override, so the common case is depth never exceeds 1. The
@@ -33,6 +34,10 @@ namespace {
 // we didn't anticipate. Without it, that single misroute would loop
 // forever; with it, the inner alloc bypasses the Tracy hook and
 // terminates cleanly.
+//
+// Compiled out entirely when the profiler is off — there is no Tracy
+// to recurse into, and the TLS access cost would otherwise be paid
+// for every operator new in a release binary.
 thread_local int g_alloc_depth = 0;
 
 class AllocDepthGuard {
@@ -41,6 +46,7 @@ class AllocDepthGuard {
   ~AllocDepthGuard() noexcept { --g_alloc_depth; }
   [[nodiscard]] auto IsTopLevel() const noexcept -> bool { return g_alloc_depth == 1; }
 };
+#endif
 
 [[nodiscard]] auto RawAlloc(std::size_t bytes, std::size_t align) noexcept -> void* {
   // Aligned-alloc preconditions vary by platform and backend but
@@ -81,20 +87,26 @@ void RawFree(void* ptr) noexcept {
 }  // namespace
 
 auto HeapAlloc(std::size_t bytes, std::size_t align) noexcept -> void* {
+#if ATLAS_PROFILE_ENABLED
   AllocDepthGuard guard;
   void* p = RawAlloc(bytes, align);
   if (p && guard.IsTopLevel()) {
     ATLAS_PROFILE_ALLOC(p, bytes);
   }
   return p;
+#else
+  return RawAlloc(bytes, align);
+#endif
 }
 
 void HeapFree(void* ptr) noexcept {
   if (!ptr) return;
+#if ATLAS_PROFILE_ENABLED
   AllocDepthGuard guard;
   if (guard.IsTopLevel()) {
     ATLAS_PROFILE_FREE(ptr);
   }
+#endif
   RawFree(ptr);
 }
 

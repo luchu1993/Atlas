@@ -4,6 +4,8 @@ This is the operator runbook for capturing performance traces of a running
 Atlas server cluster (and, where applicable, the Unity client). For the
 design rationale behind the layout below, see
 [`docs/optimization/profiler_tracy_integration.md`](../optimization/profiler_tracy_integration.md).
+For the practical "how do I use Tracy" walkthrough — viewer install, frame
+view, plots, memory tab, lock contention — see [`tracy_usage.md`](tracy_usage.md).
 
 ## Build presets
 

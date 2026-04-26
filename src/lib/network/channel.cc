@@ -185,12 +185,20 @@ void Channel::DispatchMessages(std::span<const std::byte> frame_data) {
     // annotation when drilling into a specific instance. This is cheaper
     // than registering one zone name per id (which would need a process-
     // wide lifetime cache for the literal pointers Tracy keys on).
+    //
+    // The id-formatting snprintf only runs when the profiler is enabled —
+    // a release build would otherwise pay ~30 ns per dispatched message
+    // formatting a string that is then handed to a no-op macro.
     ATLAS_PROFILE_ZONE_N("Channel::HandleMessage");
-    char id_buf[16];
-    int id_len = std::snprintf(id_buf, sizeof(id_buf), "id=%u", static_cast<unsigned>(id));
-    if (id_len > 0) {
-      ATLAS_PROFILE_ZONE_TEXT(id_buf, static_cast<size_t>(id_len));
+#if ATLAS_PROFILE_ENABLED
+    {
+      char id_buf[16];
+      int id_len = std::snprintf(id_buf, sizeof(id_buf), "id=%u", static_cast<unsigned>(id));
+      if (id_len > 0) {
+        ATLAS_PROFILE_ZONE_TEXT(id_buf, static_cast<size_t>(id_len));
+      }
     }
+#endif
 
     BinaryReader msg_reader(*payload_span);
     if (!entry) {
