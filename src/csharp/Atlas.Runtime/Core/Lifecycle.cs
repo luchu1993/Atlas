@@ -1,4 +1,5 @@
 using System;
+using System.Diagnostics;
 using System.Runtime.InteropServices;
 using System.Threading;
 using Atlas.Diagnostics;
@@ -82,8 +83,36 @@ internal static class Lifecycle
         // forward them to the cell layer before witnesses sweep this tick's
         // updates. Skipping this step leaves event_seq pinned at 0 on the
         // C++ side and no property delta ever reaches a client.
+        PublishReplicationAllWithGCProbe();
+    }
+
+    // Wraps PublishReplicationAll with a lightweight GC collection detector.
+    // Snapshots GC generation counts before and after the call; logs a warning
+    // when a collection occurred, giving correlation data to confirm whether
+    // the observed max=6.59ms spike in Script.PublishReplicationAll is GC-induced
+    // rather than algorithmic. Zero overhead on the happy path (two int reads).
+    private static void PublishReplicationAllWithGCProbe()
+    {
+        var g0Before = GC.CollectionCount(0);
+        var g1Before = GC.CollectionCount(1);
+        var g2Before = GC.CollectionCount(2);
+        var sw = Stopwatch.GetTimestamp();
+
         using (Profiler.ZoneN(ProfilerNames.ScriptPublishReplicationAll))
             EntityManager.Instance.PublishReplicationAll();
+
+        var elapsedUs = (Stopwatch.GetTimestamp() - sw) * 1_000_000L / Stopwatch.Frequency;
+        var g0Delta = GC.CollectionCount(0) - g0Before;
+        var g1Delta = GC.CollectionCount(1) - g1Before;
+        var g2Delta = GC.CollectionCount(2) - g2Before;
+
+        if (g0Delta > 0 || g1Delta > 0 || g2Delta > 0)
+        {
+            Log.Warning(
+                $"[GC-in-tick] PublishReplicationAll took {elapsedUs} µs; " +
+                $"GC fired: gen0+{g0Delta} gen1+{g1Delta} gen2+{g2Delta}. " +
+                "Possible GC pressure from replication codegen — see docs/optimization/script_publish_gc.md");
+        }
     }
 
     internal static void DoOnShutdown()
