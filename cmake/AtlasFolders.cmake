@@ -181,16 +181,16 @@ atlas_set_output_dir("lib"
 )
 
 # DB plugin DLLs: RUNTIME goes to lib/, but ARCHIVE (import lib) stays in the
-# build tree to avoid colliding with the static lib of the same name.
-set(_plugin_configs Debug Release RelWithDebInfo MinSizeRel)
+# build tree to avoid colliding with the static lib of the same name. Output
+# path uses ATLAS_BIN_ROOT (build-dir-derived) so a parallel build directory
+# does not overwrite the default's plugin DLLs.
 foreach(_plugin IN ITEMS atlas_db_sqlite_plugin atlas_db_xml_plugin)
   if(TARGET ${_plugin})
-    foreach(_cfg IN LISTS _plugin_configs)
-      _atlas_config_to_snake("${_cfg}" _snake)
+    foreach(_cfg IN ITEMS Debug Release RelWithDebInfo MinSizeRel)
       string(TOUPPER "${_cfg}" _CFG)
       set_target_properties(${_plugin} PROPERTIES
-        RUNTIME_OUTPUT_DIRECTORY_${_CFG} "${CMAKE_SOURCE_DIR}/bin/${_snake}/lib"
-        LIBRARY_OUTPUT_DIRECTORY_${_CFG} "${CMAKE_SOURCE_DIR}/bin/${_snake}/lib"
+        RUNTIME_OUTPUT_DIRECTORY_${_CFG} "${ATLAS_BIN_ROOT}/lib"
+        LIBRARY_OUTPUT_DIRECTORY_${_CFG} "${ATLAS_BIN_ROOT}/lib"
       )
     endforeach()
   endif()

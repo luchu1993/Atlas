@@ -37,13 +37,14 @@ function(atlas_add_test)
   add_test(NAME ${ARG_NAME} COMMAND ${ARG_NAME})
   set_tests_properties(${ARG_NAME} PROPERTIES LABELS "${ARG_LABEL}")
 
-  # Output directory: bin/<config>/test/
-  # Per-config properties so the config directory sits at the top level.
+  # Output directory: ${ATLAS_BIN_ROOT}/test/ — derived from the build
+  # directory name so a parallel build (e.g. build/mimalloc alongside
+  # build/debug) keeps its test exes in its own bin/ tree rather than
+  # overwriting the default's.
   foreach(_cfg IN ITEMS Debug Release RelWithDebInfo MinSizeRel)
-    _atlas_config_to_snake("${_cfg}" _snake)
     string(TOUPPER "${_cfg}" _CFG)
     set_target_properties(${ARG_NAME} PROPERTIES
-      RUNTIME_OUTPUT_DIRECTORY_${_CFG} "${CMAKE_SOURCE_DIR}/bin/${_snake}/test"
+      RUNTIME_OUTPUT_DIRECTORY_${_CFG} "${ATLAS_BIN_ROOT}/test"
     )
   endforeach()
 

@@ -473,10 +473,9 @@ atlas_add_test(NAME test_clr_object
 # copied alongside.
 macro(_atlas_route_clr_test_binary _target)
   foreach(_cfg IN ITEMS Debug Release RelWithDebInfo MinSizeRel)
-    _atlas_config_to_snake("${_cfg}" _snake)
     string(TOUPPER "${_cfg}" _CFG)
     set_target_properties(${_target} PROPERTIES
-      RUNTIME_OUTPUT_DIRECTORY_${_CFG} "${CMAKE_SOURCE_DIR}/bin/${_snake}/test"
+      RUNTIME_OUTPUT_DIRECTORY_${_CFG} "${ATLAS_BIN_ROOT}/test"
     )
   endforeach()
   if(WIN32)

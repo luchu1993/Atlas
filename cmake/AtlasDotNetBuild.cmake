@@ -80,11 +80,10 @@ function(atlas_dotnet_project)
     # include_external_msproject targets don't support POST_BUILD, so we
     # create a separate custom target that copies the DLL after the build.
     if(ARG_DEPLOY_TO)
-      set(_config_snake "$<IF:$<CONFIG:Debug>,debug,$<IF:$<CONFIG:Release>,release,$<IF:$<CONFIG:RelWithDebInfo>,rel_with_deb_info,min_size_rel>>>")
       set(_src_dll "${CMAKE_CURRENT_SOURCE_DIR}/${_proj_dir}/bin/${_platform}/$<CONFIG>/${ARG_TARGET_FRAMEWORK}/${ARG_ASSEMBLY_NAME}")
       set(_deploy_commands "")
       foreach(_subdir IN LISTS ARG_DEPLOY_TO)
-        set(_deploy_dir "${CMAKE_SOURCE_DIR}/bin/${_config_snake}/${_subdir}")
+        set(_deploy_dir "${ATLAS_BIN_ROOT}/${_subdir}")
         list(APPEND _deploy_commands
           COMMAND ${CMAKE_COMMAND} -E make_directory "${_deploy_dir}"
           COMMAND ${CMAKE_COMMAND} -E copy_if_different "${_src_dll}" "${_deploy_dir}/"
@@ -136,9 +135,8 @@ function(atlas_dotnet_project)
     # Deploy assembly to requested bin/ subdirectories.
     # Single-config generators: deploy for CMAKE_BUILD_TYPE only.
     if(ARG_DEPLOY_TO AND CMAKE_BUILD_TYPE)
-      _atlas_config_to_snake("${CMAKE_BUILD_TYPE}" _snake)
       foreach(_subdir IN LISTS ARG_DEPLOY_TO)
-        set(_deploy_dir "${CMAKE_SOURCE_DIR}/bin/${_snake}/${_subdir}")
+        set(_deploy_dir "${ATLAS_BIN_ROOT}/${_subdir}")
         add_custom_command(TARGET ${ARG_NAME} POST_BUILD
           COMMAND ${CMAKE_COMMAND} -E make_directory "${_deploy_dir}"
           COMMAND ${CMAKE_COMMAND} -E copy_if_different "${_output_dll}" "${_deploy_dir}/"
