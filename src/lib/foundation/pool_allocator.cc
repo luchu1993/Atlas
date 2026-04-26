@@ -1,8 +1,10 @@
 #include "foundation/pool_allocator.h"
 
 #include <cassert>
-#include <cstdlib>
 #include <cstring>
+
+#include "foundation/heap.h"
+#include "foundation/profiler.h"
 
 namespace atlas {
 
@@ -12,9 +14,10 @@ constexpr auto AlignUp(std::size_t n, std::size_t alignment) -> std::size_t {
 }
 }  // namespace
 
-PoolAllocator::PoolAllocator(std::size_t block_size, std::size_t initial_blocks,
-                             std::size_t alignment)
-    : alignment_(alignment < alignof(FreeNode) ? alignof(FreeNode) : alignment) {
+PoolAllocator::PoolAllocator(const char* pool_name, std::size_t block_size,
+                             std::size_t initial_blocks, std::size_t alignment)
+    : pool_name_(pool_name),
+      alignment_(alignment < alignof(FreeNode) ? alignof(FreeNode) : alignment) {
   // block_size must be at least sizeof(FreeNode) AND a multiple of alignment
   // so that every block in the slab starts at an aligned address.
   std::size_t min_size = block_size < sizeof(FreeNode) ? sizeof(FreeNode) : block_size;
@@ -30,7 +33,7 @@ PoolAllocator::~PoolAllocator() {
   Chunk* chunk = chunks_;
   while (chunk) {
     Chunk* next = chunk->next;
-    std::free(chunk);
+    HeapFree(chunk);
     chunk = next;
   }
 }
@@ -42,7 +45,12 @@ auto PoolAllocator::Grow(std::size_t count) -> bool {
   // with alignof > 8 without this adjustment).
   std::size_t header_size = AlignUp(sizeof(Chunk), alignment_);
   std::size_t raw_size = header_size + block_size_ * count;
-  void* raw = std::malloc(raw_size);
+  // Slab itself goes through atlas::HeapAlloc — when the underlying
+  // allocator is later swapped (mimalloc, jemalloc), pools follow
+  // automatically. The slab is *not* reported to Tracy as a named
+  // alloc; only the per-block carve below is, so the viewer's per-pool
+  // memory line tracks user-visible blocks rather than slab geometry.
+  void* raw = HeapAlloc(raw_size, alignment_);
   if (!raw) return false;  // OOM — caller decides what to do
 
   Chunk* chunk = static_cast<Chunk*>(raw);
@@ -72,6 +80,11 @@ auto PoolAllocator::Allocate() -> void* {
   free_list_ = node->next;
   ++in_use_;
 
+  // Named Tracy track per pool — the viewer shows TimerNode, BundleSlot,
+  // etc. as separate memory streams. The block address here is what
+  // user code receives, so the FREE_NAMED below pairs cleanly without
+  // a wrapper layer the caller would need to know about.
+  ATLAS_PROFILE_ALLOC_NAMED(node, block_size_, pool_name_);
   return static_cast<void*>(node);
 }
 
@@ -79,6 +92,12 @@ void PoolAllocator::Deallocate(void* ptr) {
   if (!ptr) {
     return;
   }
+
+  // Reported before unlinking — the pointer is already invalid as far
+  // as the caller is concerned, and Tracy logs the free event with the
+  // pool's named track. Pairing with the ALLOC_NAMED above is what
+  // makes per-pool leak detection work in the viewer.
+  ATLAS_PROFILE_FREE_NAMED(ptr, pool_name_);
 
   std::lock_guard<std::mutex> lock(mutex_);
 

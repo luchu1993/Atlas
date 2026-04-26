@@ -66,8 +66,10 @@ class TimerQueue {
   };
 
   // Pool allocator for Node objects — avoids per-timer heap allocation.
-  // 64 pre-allocated slots; doubles on each grow.
-  TypedPool<Node> node_pool_{64};
+  // 64 pre-allocated slots; doubles on each grow. The "TimerNode" tag
+  // is what the Tracy memory view uses to attribute timer churn
+  // separately from generic heap traffic.
+  TypedPool<Node> node_pool_{"TimerNode", 64};
 
   std::vector<Node*> heap_;
   // O(1) lookup for cancel(): id → Node* (does not own the node)

@@ -11,7 +11,7 @@
 using namespace atlas;
 
 TEST(PoolAllocator, AllocateAndDeallocate) {
-  PoolAllocator pool(64, 4);
+  PoolAllocator pool("UnitTest.AllocAndDealloc", 64, 4);
   void* p = pool.Allocate();
   EXPECT_NE(p, nullptr);
   EXPECT_EQ(pool.BlocksInUse(), 1u);
@@ -21,7 +21,7 @@ TEST(PoolAllocator, AllocateAndDeallocate) {
 }
 
 TEST(PoolAllocator, ReuseAfterDeallocation) {
-  PoolAllocator pool(64, 4);
+  PoolAllocator pool("UnitTest.Reuse", 64, 4);
   void* p1 = pool.Allocate();
   pool.Deallocate(p1);
 
@@ -33,7 +33,7 @@ TEST(PoolAllocator, ReuseAfterDeallocation) {
 }
 
 TEST(PoolAllocator, GrowBeyondInitialCapacity) {
-  PoolAllocator pool(32, 2);  // only 2 initial blocks
+  PoolAllocator pool("UnitTest.Grow", 32, 2);  // only 2 initial blocks
   std::set<void*> ptrs;
 
   for (int i = 0; i < 10; ++i) {
@@ -58,7 +58,7 @@ TEST(TypedPool, ConstructAndDestroy) {
     Widget(std::string n, int v) : name(std::move(n)), value(v) {}
   };
 
-  TypedPool<Widget> pool(4);
+  TypedPool<Widget> pool("UnitTest.Widget", 4);
   Widget* w = pool.Construct("test", 42);
   EXPECT_NE(w, nullptr);
   EXPECT_EQ(w->name, "test");
@@ -95,7 +95,7 @@ TEST(MemoryTracker, RecordAllocDealloc) {
 // ============================================================================
 
 TEST(PoolAllocator, ConcurrentAllocateAndDeallocate) {
-  PoolAllocator pool(64, 8);
+  PoolAllocator pool("UnitTest.Concurrent", 64, 8);
 
   constexpr int kNumThreads = 4;
   constexpr int kOpsPerThread = 100;
@@ -134,7 +134,7 @@ TEST(TypedPool, AllocatedPointersAreAligned) {
     float v[4];
   };
 
-  TypedPool<Aligned16> pool(8);
+  TypedPool<Aligned16> pool("UnitTest.Aligned16", 8);
   std::vector<Aligned16*> ptrs;
 
   for (int i = 0; i < 10; ++i) {
@@ -154,7 +154,7 @@ TEST(TypedPool, AllocatedPointersAreAligned) {
 
 TEST(PoolAllocator, GrowBeyondInitialCapacityDoesNotThrow) {
   // Start with 1 block; force multiple grows by allocating many more.
-  PoolAllocator pool(32, 1);
+  PoolAllocator pool("UnitTest.GrowNoThrow", 32, 1);
   std::vector<void*> ptrs;
 
   EXPECT_NO_THROW({
