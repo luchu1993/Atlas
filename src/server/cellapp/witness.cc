@@ -23,15 +23,15 @@ namespace {
 // CPU and outbound bandwidth in dense scenes.
 //
 // Bands  (distance → update every N ticks at 10 Hz):
-//   Close   < 50 m  →  1 tick  (10 Hz, same as before)
-//   Medium  < 200 m →  3 ticks (~3.3 Hz)
-//   Far     ≥ 200 m →  6 ticks (~1.7 Hz)
+//   Close   < 25 m  →  1 tick  (10 Hz)
+//   Medium  < 100 m →  3 ticks (~3.3 Hz)
+//   Far     ≥ 100 m →  6 ticks (~1.7 Hz)
 //
 // At 10 Hz the Far interval (600 ms) comfortably fits inside the
 // 8-frame history window (800 ms), so catch-up replay always covers
 // the gap without falling back to snapshot.
-static constexpr double kLodCloseSq = 50.0 * 50.0;     //  2 500 m²
-static constexpr double kLodMediumSq = 200.0 * 200.0;  // 40 000 m²
+static constexpr double kLodCloseSq = 25.0 * 25.0;     //    625 m²
+static constexpr double kLodMediumSq = 100.0 * 100.0;  // 10 000 m²
 static constexpr uint64_t kLodCloseInterval = 1;
 static constexpr uint64_t kLodMediumInterval = 3;
 static constexpr uint64_t kLodFarInterval = 6;

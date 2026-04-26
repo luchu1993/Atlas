@@ -390,7 +390,7 @@ auto RunTicks(Witness& witness, CellEntity& peer, int ticks, uint32_t budget = 6
 // Close peers (< 50 m) must be updated every tick.
 TEST_F(WitnessReplicationTest, LodCloseUpdatesEveryTick) {
   Space space(1);
-  // Observer at origin; peer at 10 m — well within the Close band (< 50 m).
+  // Observer at origin; peer at 10 m — well within the Close band (< 25 m).
   auto* observer = MakeEntity(space, 1, 1001, {0, 0, 0});
   auto* peer     = MakeEntity(space, 2, 1002, {10, 0, 0});
   observer->EnableWitness(500.f, MakeReliable(), MakeUnreliable());
@@ -412,15 +412,15 @@ TEST_F(WitnessReplicationTest, LodCloseUpdatesEveryTick) {
   EXPECT_EQ(pos_updates, kTicks - 1);
 }
 
-// Medium peers (50–200 m) must be updated every 3rd tick.
+// Medium peers (25–100 m) must be updated every 3rd tick.
 TEST_F(WitnessReplicationTest, LodMediumUpdatesEvery3Ticks) {
   Space space(1);
-  // Peer at 100 m — inside the Medium band (50–200 m).
+  // Peer at 50 m — inside the Medium band (25–100 m).
   auto* observer = MakeEntity(space, 1, 1001, {0, 0, 0});
-  auto* peer     = MakeEntity(space, 2, 1002, {100, 0, 0});
+  auto* peer     = MakeEntity(space, 2, 1002, {50, 0, 0});
   observer->EnableWitness(500.f, MakeReliable(), MakeUnreliable());
 
-  const math::Vector3 kPeerPos{100, 0, 0};
+  const math::Vector3 kPeerPos{50, 0, 0};
   const int kTicks = 9;
   int pos_updates = 0;
   for (int t = 0; t < kTicks; ++t) {
@@ -439,15 +439,15 @@ TEST_F(WitnessReplicationTest, LodMediumUpdatesEvery3Ticks) {
   EXPECT_EQ(pos_updates, 2);
 }
 
-// Far peers (≥ 200 m) must be updated every 6th tick.
+// Far peers (≥ 100 m) must be updated every 6th tick.
 TEST_F(WitnessReplicationTest, LodFarUpdatesEvery6Ticks) {
   Space space(1);
-  // Peer at 300 m — inside the Far band (≥ 200 m).
+  // Peer at 150 m — inside the Far band (≥ 100 m).
   auto* observer = MakeEntity(space, 1, 1001, {0, 0, 0});
-  auto* peer     = MakeEntity(space, 2, 1002, {300, 0, 0});
+  auto* peer     = MakeEntity(space, 2, 1002, {150, 0, 0});
   observer->EnableWitness(500.f, MakeReliable(), MakeUnreliable());
 
-  const math::Vector3 kPeerPos{300, 0, 0};
+  const math::Vector3 kPeerPos{150, 0, 0};
   const int kTicks = 12;
   int pos_updates = 0;
   for (int t = 0; t < kTicks; ++t) {
@@ -472,7 +472,7 @@ TEST_F(WitnessReplicationTest, LodFarUpdatesEvery6Ticks) {
 TEST_F(WitnessReplicationTest, LodFarEventDeliveredOnNextWindow) {
   Space space(1);
   auto* observer = MakeEntity(space, 1, 1001, {0, 0, 0});
-  auto* peer     = MakeEntity(space, 2, 1002, {300, 0, 0});
+  auto* peer     = MakeEntity(space, 2, 1002, {150, 0, 0});
   observer->EnableWitness(500.f, MakeReliable(), MakeUnreliable());
 
   // Tick 1 — initial enter handled; peer gets its first LOD update.

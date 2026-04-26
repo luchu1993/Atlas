@@ -153,8 +153,8 @@ class Witness {
   void UpdatePriority(EntityCache& cache) const;
 
   // Map squared distance to a LOD update interval (in ticks).
-  // Close (< 50 m²·1) → every tick; Medium (< 200 m) → every 3rd tick;
-  // Far (≥ 200 m) → every 6th tick.
+  // Close (< 25 m) → every tick; Medium (< 100 m) → every 3rd tick;
+  // Far (≥ 100 m) → every 6th tick.
   [[nodiscard]] static auto LodIntervalForDistSq(double dist_sq) -> uint64_t;
 
   // Each Send* returns the envelope bytes actually dispatched, so the

@@ -64,6 +64,11 @@ struct Options {
   // Distinct cell-side spaces to spread avatars across. Each session picks
   // space_id = (session_id % space_count) + 1 and encodes it in SelectAvatar.
   int space_count{1};
+  // Radius (metres) of the circular zone from which each session's spawn
+  // position is drawn at startup. Each session picks a random point inside
+  // the disk; subsequent ReportPos calls random-walk within ±50 m of that
+  // initial point. 0 = legacy behaviour (everyone starts at origin).
+  float spread_radius{0.f};
   bool verbose_failures{false};
   uint32_t seed{12345};
 
@@ -143,7 +148,20 @@ class Session {
         opts_(opts),
         metrics_(metrics),
         rng_(rng),
-        source_ip_(source_ip) {}
+        source_ip_(source_ip) {
+    if (opts_.spread_radius > 0.f) {
+      // Uniform disk sampling: draw angle in [0, 2π) and radius in [0, R²)
+      // then sqrt so the area density is uniform (not bunched at the centre).
+      std::uniform_real_distribution<float> angle_dist(0.f, 6.283185f);
+      std::uniform_real_distribution<float> r2_dist(0.f, opts_.spread_radius * opts_.spread_radius);
+      const float r = std::sqrt(r2_dist(rng_));
+      const float a = angle_dist(rng_);
+      init_x_ = r * std::cos(a);
+      init_z_ = r * std::sin(a);
+    }
+    pos_x_ = init_x_;
+    pos_z_ = init_z_;
+  }
 
   void ScheduleInitial(TimePoint when) {
     state_ = SessionState::kScheduled;
@@ -467,12 +485,14 @@ class Session {
     // in StressAvatar.def (see SendEcho's comment for the full list).
     constexpr uint32_t kReportPosRpcId = (2u << 22) | (2u << 8) | 4u;
 
-    // Tiny random-walk in a 100 m square centred at (0,0,0); absolute
-    // values stay well under CellApp's single-tick displacement cap so
-    // AvatarUpdate-style rejects can't confuse this with a teleport.
+    // Random-walk within a 100 m square centred on this session's spawn
+    // point (init_x_, init_z_). With --spread-radius each session has its
+    // own spawn, so the fleet is distributed across the map rather than
+    // clustered at the origin. Step ≤ 1 m per call stays under CellApp's
+    // displacement cap, avoiding AvatarUpdate teleport rejects.
     std::uniform_real_distribution<float> walk(-1.f, 1.f);
-    pos_x_ = std::clamp(pos_x_ + walk(rng_), -50.f, 50.f);
-    pos_z_ = std::clamp(pos_z_ + walk(rng_), -50.f, 50.f);
+    pos_x_ = std::clamp(pos_x_ + walk(rng_), init_x_ - 50.f, init_x_ + 50.f);
+    pos_z_ = std::clamp(pos_z_ + walk(rng_), init_z_ - 50.f, init_z_ + 50.f);
     const float dx = 1.f, dy = 0.f, dz = 0.f;
 
     // Payload: Vector3 pos (x,y,z) + Vector3 dir (x,y,z) = 6 * float, LE.
@@ -613,8 +633,8 @@ class Session {
     next_charge_seq_ = 0;
     charge_one_shot_pending_ = false;
     move_pending_ = false;
-    pos_x_ = 0.f;
-    pos_z_ = 0.f;
+    pos_x_ = init_x_;
+    pos_z_ = init_z_;
     suppress_disconnect_callback_ = false;
   }
 
@@ -685,6 +705,8 @@ class Session {
   bool charge_one_shot_pending_{false};
   TimePoint move_due_at_{};
   bool move_pending_{false};
+  float init_x_{0.f};  // spawn-point set once at construction via --spread-radius
+  float init_z_{0.f};
   float pos_x_{0.f};
   float pos_z_{0.f};
 };
@@ -724,6 +746,9 @@ void PrintUsage() {
          "(default: 10, 0 = disabled)\n"
       << "  --space-count <n>          Distinct cell spaces to spread avatars across "
          "(default: 1)\n"
+      << "  --spread-radius <m>        Radius of spawn disk (metres); each session starts at a\n"
+      << "                             random point in this disk and wanders ±50m from it.\n"
+      << "                             0 = all sessions start at origin (default: 0)\n"
       << "  --seed <n>                 RNG seed (default: 12345)\n"
       << "  --verbose-failures         Print individual failures\n"
       << "  --script-clients <n>       Spawn N real atlas_client.exe subprocesses that load\n"
@@ -926,6 +951,15 @@ auto ParseOptions(int argc, char* argv[]) -> std::optional<Options> {
       auto parsed = ParseNumeric<int>(*value);
       if (!parsed) return std::nullopt;
       opts.space_count = *parsed;
+    } else if (kArg == "--spread-radius") {
+      auto value = require_value(kArg);
+      if (!value) return std::nullopt;
+      try {
+        opts.spread_radius = std::max(0.f, std::stof(std::string(*value)));
+      } catch (...) {
+        std::cerr << "Invalid --spread-radius value\n";
+        return std::nullopt;
+      }
     } else if (kArg == "--seed") {
       auto value = require_value(kArg);
       if (!value) return std::nullopt;
@@ -1074,6 +1108,7 @@ void PrintSummary(const Options& opts, const Metrics& metrics,
       metrics.echo_sent > metrics.echo_received ? metrics.echo_sent - metrics.echo_received : 0);
   std::cout << std::format("  move_rate_hz:       {}\n", opts.move_rate_hz);
   std::cout << std::format("  space_count:        {}\n", opts.space_count);
+  std::cout << std::format("  spread_radius:      {:.0f} m\n", opts.spread_radius);
   std::cout << std::format("  move_sent:          {}\n", metrics.move_sent);
   std::cout << std::format("  move_fail:          {}\n", metrics.move_fail);
   std::cout << std::format("  aoi_enter:          {}\n", metrics.aoi_enter);

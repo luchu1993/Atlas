@@ -59,6 +59,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--shortline-max-ms", type=int, default=5000)
     parser.add_argument("--rpc-rate-hz", type=int, default=2)
     parser.add_argument("--move-rate-hz", type=int, default=10)
+    parser.add_argument("--spread-radius", type=float, default=0.0)
     parser.add_argument("--space-count", type=int, default=1)
     parser.add_argument("--hold-min-ms", type=int, default=30000)
     parser.add_argument("--hold-max-ms", type=int, default=60000)
@@ -593,6 +594,8 @@ def build_stress_args(args: argparse.Namespace, worker: dict[str, object]) -> li
         str(args.rpc_rate_hz),
         "--move-rate-hz",
         str(args.move_rate_hz),
+        "--spread-radius",
+        str(args.spread_radius),
         "--space-count",
         str(args.space_count),
     ]
