@@ -4,6 +4,7 @@
 
 #include "cell_entity.h"
 #include "foundation/log.h"
+#include "foundation/profiler.h"
 
 namespace atlas {
 
@@ -39,6 +40,7 @@ auto RealEntityData::HasHaunt(Channel* channel) const -> bool {
 // ---- Message builders ------------------------------------------------------
 
 auto RealEntityData::BuildPositionUpdate() const -> cellapp::GhostPositionUpdate {
+  ATLAS_PROFILE_ZONE_N("RealEntityData::BuildPositionUpdate");
   cellapp::GhostPositionUpdate msg;
   msg.ghost_entity_id = owner_.Id();
   msg.position = owner_.Position();
@@ -50,6 +52,7 @@ auto RealEntityData::BuildPositionUpdate() const -> cellapp::GhostPositionUpdate
 }
 
 auto RealEntityData::BuildDelta() const -> cellapp::GhostDelta {
+  ATLAS_PROFILE_ZONE_N("RealEntityData::BuildDelta");
   cellapp::GhostDelta msg;
   msg.ghost_entity_id = owner_.Id();
   const auto* state = owner_.GetReplicationState();
@@ -75,6 +78,7 @@ auto RealEntityData::BuildDelta() const -> cellapp::GhostDelta {
 }
 
 auto RealEntityData::BuildSnapshotRefresh() const -> cellapp::GhostSnapshotRefresh {
+  ATLAS_PROFILE_ZONE_N("RealEntityData::BuildSnapshotRefresh");
   cellapp::GhostSnapshotRefresh msg;
   msg.ghost_entity_id = owner_.Id();
   const auto* state = owner_.GetReplicationState();

@@ -15,6 +15,7 @@
 #include "controller_codec.h"
 #include "foundation/clock.h"
 #include "foundation/log.h"
+#include "foundation/profiler.h"
 #include "ghost_maintainer.h"
 #include "intercell_messages.h"
 #include "math/vector3.h"
@@ -227,6 +228,7 @@ void CellApp::Fini() {
 }
 
 void CellApp::OnEndOfTick() {
+  ATLAS_PROFILE_ZONE_N("CellApp::OnEndOfTick");
   // Drive Ghost maintenance + Offload checks at tick tail so
   // controllers (which may have moved entities) have already committed
   // this frame's positions. GhostMaintainer runs first so a just-
@@ -246,6 +248,7 @@ void CellApp::OnEndOfTick() {
 }
 
 void CellApp::OnTickComplete() {
+  ATLAS_PROFILE_ZONE_N("CellApp::OnTickComplete");
   // ScriptApp::OnTickComplete drives the C# on_tick (which in turn calls
   // BuildAndConsumeReplicationFrame + publish_replication_frame via
   // NativeApi). Run it first so replication state is current before we
@@ -283,10 +286,12 @@ void CellApp::RegisterWatchers() {
 // ============================================================================
 
 void CellApp::TickControllers(float dt) {
+  ATLAS_PROFILE_ZONE_N("CellApp::TickControllers");
   for (auto& [_, space] : spaces_) space->Tick(dt);
 }
 
 void CellApp::TickWitnesses() {
+  ATLAS_PROFILE_ZONE_N("CellApp::TickWitnesses");
   const uint32_t budget = CellAppConfig::WitnessPerObserverBudgetBytes();
   for (auto& [_, space] : spaces_) {
     space->ForEachEntity([budget](CellEntity& e) {
@@ -296,6 +301,7 @@ void CellApp::TickWitnesses() {
 }
 
 void CellApp::TickBackupPump() {
+  ATLAS_PROFILE_ZONE_N("CellApp::TickBackupPump");
   ++backup_tick_counter_;
   if (backup_tick_counter_ % kBackupIntervalTicks != 0) return;
 
@@ -342,6 +348,7 @@ void CellApp::TickBackupPump() {
 }
 
 void CellApp::TickClientBaselinePump() {
+  ATLAS_PROFILE_ZONE_N("CellApp::TickClientBaselinePump");
   ++client_baseline_tick_counter_;
   if (client_baseline_tick_counter_ % kClientBaselineIntervalTicks != 0) return;
 
@@ -1096,6 +1103,7 @@ void CellApp::OnOffloadEntityAck(const Address& /*src*/, Channel* /*ch*/,
 
 void CellApp::TickOffloadAckTimeouts() {
   if (pending_offloads_.empty()) return;
+  ATLAS_PROFILE_ZONE_N("CellApp::TickOffloadAckTimeouts");
   const auto now = Clock::now();
   // Collect first so we can mutate the map while reverting.
   std::vector<EntityID> timed_out;
@@ -1375,6 +1383,7 @@ auto CellApp::BuildOffloadMessage(const CellEntity& entity) const -> cellapp::Of
 }
 
 void CellApp::TickGhostPump() {
+  ATLAS_PROFILE_ZONE_N("CellApp::TickGhostPump");
   GhostMaintainer::Config config{};
   const auto resolver = [this](const Address& a) -> Channel* { return FindPeerChannel(a); };
   GhostMaintainer maintainer(config, Network().RudpAddress(), resolver);
@@ -1483,6 +1492,7 @@ void CellApp::TickGhostPump() {
 }
 
 void CellApp::TickOffloadChecker() {
+  ATLAS_PROFILE_ZONE_N("CellApp::TickOffloadChecker");
   OffloadChecker checker(Network().RudpAddress());
   for (auto& [_, space] : spaces_) {
     auto ops = checker.Compute(*space);

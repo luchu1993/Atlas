@@ -9,6 +9,7 @@
 #include "cell_entity.h"
 #include "cellapp_config.h"
 #include "foundation/log.h"
+#include "foundation/profiler.h"
 #include "math/vector3.h"
 #include "space.h"
 #include "space/range_list.h"
@@ -203,6 +204,7 @@ void Witness::UpdatePriority(EntityCache& cache) const {
 }
 
 auto Witness::SendEntityEnter(EntityCache& cache) -> std::size_t {
+  ATLAS_PROFILE_ZONE_N("Witness::SendEntityEnter");
   // The snapshot we ship on Enter is the peer's *other* snapshot — the
   // observer is a non-owner for the peer (they see "other clients" data).
   // Owner-enter (the entity's own client observing itself) would use
@@ -228,87 +230,98 @@ auto Witness::SendEntityEnter(EntityCache& cache) -> std::size_t {
 }
 
 auto Witness::SendEntityLeave(EntityID peer_base_id) -> std::size_t {
+  ATLAS_PROFILE_ZONE_N("Witness::SendEntityLeave");
   auto envelope = MakeEnvelope<0>(CellAoIEnvelopeKind::kEntityLeave, peer_base_id, {});
   if (send_reliable_) send_reliable_(owner_.BaseEntityId(), envelope);
   return envelope.size();
 }
 
 void Witness::Update(uint32_t max_packet_bytes) {
+  ATLAS_PROFILE_ZONE_N("Witness::Update");
   if (!trigger_) return;
 
   // Step 1: state transitions (enter, leave). Collect peers into scratch
   // lists so mutations to aoi_map_ during this pass (possible if SendFn
   // re-entrantly tears down the witness) don't invalidate iterators.
   // Scratch buffers are class members to avoid per-tick allocation.
-  scratch_enter_.clear();
-  scratch_gone_.clear();
-  auto& enter_ids = scratch_enter_;
-  auto& gone_ids = scratch_gone_;
-  for (auto& [id, cache] : aoi_map_) {
-    if (cache.flags & EntityCache::kGone)
-      gone_ids.push_back(id);
-    else if (cache.flags & EntityCache::kEnterPending)
-      enter_ids.push_back(id);
-  }
-
-  // Enter/Leave are mandatory state transitions and bypass the byte
-  // budget — dropping them would deadlock the aoi_map_ state machine.
-  (void)bandwidth_deficit_;
   int bytes_sent = 0;
+  {
+    ATLAS_PROFILE_ZONE_N("Witness::Update::Transitions");
+    scratch_enter_.clear();
+    scratch_gone_.clear();
+    auto& enter_ids = scratch_enter_;
+    auto& gone_ids = scratch_gone_;
+    for (auto& [id, cache] : aoi_map_) {
+      if (cache.flags & EntityCache::kGone)
+        gone_ids.push_back(id);
+      else if (cache.flags & EntityCache::kEnterPending)
+        enter_ids.push_back(id);
+    }
 
-  for (auto id : enter_ids) {
-    auto it = aoi_map_.find(id);
-    if (it == aoi_map_.end()) continue;
-    auto& cache = it->second;
-    bytes_sent += static_cast<int>(SendEntityEnter(cache));
-    cache.flags &= ~EntityCache::kEnterPending;
-  }
+    // Enter/Leave are mandatory state transitions and bypass the byte
+    // budget — dropping them would deadlock the aoi_map_ state machine.
+    (void)bandwidth_deficit_;
 
-  for (auto id : gone_ids) {
-    auto it = aoi_map_.find(id);
-    if (it == aoi_map_.end()) continue;
-    // Use the id cached at enter/leave time, NOT cache.entity. When
-    // destruction fires the leave path, `cache.entity` is nulled and
-    // the underlying CellEntity has been freed; the base id we want
-    // to ship to the client was captured earlier. See EntityCache's
-    // comment on `peer_base_id`.
-    bytes_sent += static_cast<int>(SendEntityLeave(it->second.peer_base_id));
-    aoi_map_.erase(it);
+    for (auto id : enter_ids) {
+      auto it = aoi_map_.find(id);
+      if (it == aoi_map_.end()) continue;
+      auto& cache = it->second;
+      bytes_sent += static_cast<int>(SendEntityEnter(cache));
+      cache.flags &= ~EntityCache::kEnterPending;
+    }
+
+    for (auto id : gone_ids) {
+      auto it = aoi_map_.find(id);
+      if (it == aoi_map_.end()) continue;
+      // Use the id cached at enter/leave time, NOT cache.entity. When
+      // destruction fires the leave path, `cache.entity` is nulled and
+      // the underlying CellEntity has been freed; the base id we want
+      // to ship to the client was captured earlier. See EntityCache's
+      // comment on `peer_base_id`.
+      bytes_sent += static_cast<int>(SendEntityLeave(it->second.peer_base_id));
+      aoi_map_.erase(it);
+    }
   }
 
   // Step 2: priority heap maintenance for Updatable peers. Rebuild rather
   // than maintain incrementally — observer positions change every tick so
   // priorities are stale anyway.
-  priority_queue_.clear();
-  priority_queue_.reserve(aoi_map_.size());
-  for (auto& [id, cache] : aoi_map_) {
-    if (!cache.IsUpdatable()) continue;
-    UpdatePriority(cache);
-    priority_queue_.emplace_back(cache.priority, id);
+  {
+    ATLAS_PROFILE_ZONE_N("Witness::Update::PriorityHeap");
+    priority_queue_.clear();
+    priority_queue_.reserve(aoi_map_.size());
+    for (auto& [id, cache] : aoi_map_) {
+      if (!cache.IsUpdatable()) continue;
+      UpdatePriority(cache);
+      priority_queue_.emplace_back(cache.priority, id);
+    }
+    // Min-heap on priority: use std::greater so pop_heap yields smallest
+    // priority first.
+    std::make_heap(priority_queue_.begin(), priority_queue_.end(),
+                   [](const auto& a, const auto& b) { return a.first > b.first; });
   }
-  // Min-heap on priority: use std::greater so pop_heap yields smallest
-  // priority first.
-  std::make_heap(priority_queue_.begin(), priority_queue_.end(),
-                 [](const auto& a, const auto& b) { return a.first > b.first; });
 
   // Step 3: per-peer update pump — property deltas + volatile position.
   // Walk the heap in priority order; SendEntityUpdate picks between
   // catch-up delta, snapshot fallback, or a volatile position update.
   // The budget gates how many peers we service this tick; any that didn't
   // fit carry over (priority stays put, so next tick they float up).
-  const int tick_budget = static_cast<int>(max_packet_bytes) - bandwidth_deficit_;
-  while (!priority_queue_.empty() && bytes_sent < tick_budget) {
-    std::pop_heap(priority_queue_.begin(), priority_queue_.end(),
-                  [](const auto& a, const auto& b) { return a.first > b.first; });
-    const auto [prio, id] = priority_queue_.back();
-    priority_queue_.pop_back();
+  {
+    ATLAS_PROFILE_ZONE_N("Witness::Update::Pump");
+    const int tick_budget = static_cast<int>(max_packet_bytes) - bandwidth_deficit_;
+    while (!priority_queue_.empty() && bytes_sent < tick_budget) {
+      std::pop_heap(priority_queue_.begin(), priority_queue_.end(),
+                    [](const auto& a, const auto& b) { return a.first > b.first; });
+      const auto [prio, id] = priority_queue_.back();
+      priority_queue_.pop_back();
 
-    auto it = aoi_map_.find(id);
-    if (it == aoi_map_.end()) continue;  // evicted mid-loop
-    auto& cache = it->second;
-    if (!cache.IsUpdatable()) continue;
+      auto it = aoi_map_.find(id);
+      if (it == aoi_map_.end()) continue;  // evicted mid-loop
+      auto& cache = it->second;
+      if (!cache.IsUpdatable()) continue;
 
-    bytes_sent += static_cast<int>(SendEntityUpdate(cache));
+      bytes_sent += static_cast<int>(SendEntityUpdate(cache));
+    }
   }
 
   // Step 4: bandwidth deficit for next tick.
@@ -336,6 +349,7 @@ void Witness::Update(uint32_t max_packet_bytes) {
 // event (ordered, replays history from last_event_seq+1..latest; snapshot
 // fallback when the window no longer covers the observer's gap).
 auto Witness::SendEntityUpdate(EntityCache& cache) -> std::size_t {
+  ATLAS_PROFILE_ZONE_N("Witness::SendEntityUpdate");
   const auto* state = cache.entity->GetReplicationState();
   if (!state) return 0;
 

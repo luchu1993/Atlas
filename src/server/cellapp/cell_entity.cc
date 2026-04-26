@@ -4,6 +4,7 @@
 #include <utility>
 
 #include "foundation/log.h"
+#include "foundation/profiler.h"
 #include "real_entity_data.h"
 #include "space.h"
 #include "witness.h"
@@ -122,6 +123,7 @@ void CellEntity::ConvertGhostToReal() {
 
 void CellEntity::GhostUpdatePosition(const math::Vector3& pos, const math::Vector3& direction,
                                      bool on_ground, uint64_t volatile_seq) {
+  ATLAS_PROFILE_ZONE_N("CellEntity::GhostUpdatePosition");
   if (!IsGhost()) {
     ATLAS_LOG_WARNING("CellEntity::GhostUpdatePosition on non-Ghost entity id={} — ignored", id_);
     return;
@@ -140,6 +142,7 @@ void CellEntity::GhostUpdatePosition(const math::Vector3& pos, const math::Vecto
 }
 
 void CellEntity::GhostApplyDelta(uint64_t event_seq, std::span<const std::byte> other_delta) {
+  ATLAS_PROFILE_ZONE_N("CellEntity::GhostApplyDelta");
   if (!IsGhost()) {
     ATLAS_LOG_WARNING("CellEntity::GhostApplyDelta on non-Ghost entity id={} — ignored", id_);
     return;
@@ -177,6 +180,7 @@ void CellEntity::RebindRealChannel(Channel* new_real_channel) {
 }
 
 void CellEntity::GhostApplySnapshot(uint64_t event_seq, std::span<const std::byte> other_snapshot) {
+  ATLAS_PROFILE_ZONE_N("CellEntity::GhostApplySnapshot");
   if (!IsGhost()) {
     ATLAS_LOG_WARNING("CellEntity::GhostApplySnapshot on non-Ghost entity id={} — ignored", id_);
     return;
@@ -216,6 +220,7 @@ void CellEntity::SetPositionAndDirection(const math::Vector3& pos, const math::V
 void CellEntity::PublishReplicationFrame(ReplicationFrame frame,
                                          std::span<const std::byte> owner_snapshot,
                                          std::span<const std::byte> other_snapshot) {
+  ATLAS_PROFILE_ZONE_N("CellEntity::PublishReplicationFrame");
   if (!replication_state_.has_value()) replication_state_.emplace();
   auto& state = *replication_state_;
 

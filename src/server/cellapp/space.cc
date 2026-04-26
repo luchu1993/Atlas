@@ -4,6 +4,7 @@
 
 #include "cell.h"
 #include "cell_entity.h"
+#include "foundation/profiler.h"
 
 namespace atlas {
 
@@ -64,6 +65,7 @@ auto Space::FindEntity(EntityID id) const -> const CellEntity* {
 }
 
 void Space::Tick(float dt) {
+  ATLAS_PROFILE_ZONE_N("Space::Tick");
   // Controllers first so motion changes propagate into the RangeList
   // before any post-tick Witness pass reads it.
   //
