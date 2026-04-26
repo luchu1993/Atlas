@@ -40,6 +40,20 @@ FetchContent_Declare(
   URL https://www.sqlite.org/2024/sqlite-amalgamation-3470200.zip
 )
 
+# ── Tracy 0.11.1 ─────────────────────────────────────────────────────────────
+# Held back from upstream's current release (0.13.x at the time of
+# writing) because Tracy-CSharp — the managed-side binding the server
+# uses to surface C# zones in the same Tracy timeline — has only been
+# updated through Tracy 0.11.1. Tracy's wire protocol changes between
+# minor versions; mismatched native and managed clients connect but
+# silently lose zones. Until Tracy-CSharp catches up, this version is
+# the ceiling. Bump only in lockstep with the Tracy.CSharp NuGet
+# package referenced from Atlas.Runtime.csproj.
+FetchContent_Declare(
+  tracy
+  URL https://github.com/wolfpld/tracy/archive/refs/tags/v0.11.1.tar.gz
+)
+
 # ── Make available ───────────────────────────────────────────────────────────
 
 # googletest — ships CMakeLists.txt
@@ -72,6 +86,29 @@ FetchContent_MakeAvailable(zlib)
 # zlib's CMakeLists.txt creates 'zlibstatic'; alias for consistency
 if(TARGET zlibstatic AND NOT TARGET ZLIB::ZLIB)
   add_library(ZLIB::ZLIB ALIAS zlibstatic)
+endif()
+
+# Tracy — only populated when the profiler is enabled. Tracy ships its
+# own no-op headers when TRACY_ENABLE is undefined, so even with the
+# library linked, ATLAS_PROFILE_ENABLED=0 keeps everything inert. We
+# still skip the fetch entirely in that mode to spare CI download time.
+if(ATLAS_ENABLE_PROFILER)
+  set(TRACY_ENABLE      ON  CACHE BOOL "" FORCE)
+  if(ATLAS_PROFILER_ON_DEMAND)
+    set(TRACY_ON_DEMAND ON  CACHE BOOL "" FORCE)
+  else()
+    set(TRACY_ON_DEMAND OFF CACHE BOOL "" FORCE)
+  endif()
+  # Keep Tracy's own ancillary tools out of the build — we only need
+  # the in-process client library. The viewer is a separate desktop
+  # download.
+  set(TRACY_NO_BROADCAST     OFF CACHE BOOL "" FORCE)
+  set(TRACY_NO_CONTEXT_SWITCH OFF CACHE BOOL "" FORCE)
+  set(TRACY_STATIC           ON  CACHE BOOL "" FORCE)
+  FetchContent_MakeAvailable(tracy)
+  if(TARGET TracyClient AND NOT TARGET Tracy::TracyClient)
+    add_library(Tracy::TracyClient ALIAS TracyClient)
+  endif()
 endif()
 
 # sqlite3 — build manually from amalgamation

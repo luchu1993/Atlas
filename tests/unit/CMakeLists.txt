@@ -54,6 +54,11 @@ atlas_add_test(NAME test_log_sinks
   DEPS atlas_foundation
 )
 
+atlas_add_test(NAME test_profiler
+  SOURCES test_profiler.cpp
+  DEPS atlas_foundation
+)
+
 # ── Platform ────────────────────────────────────────────────────────────────
 
 atlas_add_test(NAME test_filesystem

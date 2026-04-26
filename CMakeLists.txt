@@ -22,6 +22,10 @@ option(ATLAS_BUILD_TESTS "Build unit and integration tests" ON)
 option(ATLAS_BUILD_CSHARP "Build C# projects via dotnet" ON)
 option(ATLAS_DB_MYSQL "Enable MySQL database backend" OFF)
 option(ATLAS_USE_IOURING "Enable io_uring I/O poller (Linux only)" OFF)
+option(ATLAS_ENABLE_PROFILER "Enable profiler instrumentation (Tracy backend)" ON)
+option(ATLAS_PROFILER_ON_DEMAND
+       "Tracy ON_DEMAND mode — instrumentation goes inert until a client connects"
+       ON)
 
 # ── CMake modules ────────────────────────────────────────────────────────────
 list(APPEND CMAKE_MODULE_PATH "${CMAKE_SOURCE_DIR}/cmake")

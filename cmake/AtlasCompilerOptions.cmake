@@ -39,3 +39,15 @@ target_compile_definitions(atlas_compiler_options INTERFACE
 target_compile_definitions(atlas_compiler_options INTERFACE
   $<$<CONFIG:Debug>:ATLAS_DEBUG=1>
 )
+
+# ── Profiler gate ────────────────────────────────────────────────────────────
+# Atlas-owned switch for the profiler abstraction in
+# src/lib/foundation/profiler.h. When 0, every ATLAS_PROFILE_* macro
+# expands to a no-op at the preprocessor stage — no Tracy symbol, no
+# hidden runtime cost. Tracy's own TRACY_ENABLE is plumbed in lockstep
+# from cmake/Dependencies.cmake so the two switches never diverge.
+if(ATLAS_ENABLE_PROFILER)
+  target_compile_definitions(atlas_compiler_options INTERFACE ATLAS_PROFILE_ENABLED=1)
+else()
+  target_compile_definitions(atlas_compiler_options INTERFACE ATLAS_PROFILE_ENABLED=0)
+endif()

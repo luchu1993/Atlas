@@ -14,6 +14,7 @@ ceiling Atlas must support comfortably.
 
 | Document | Subsystem | Priority |
 |----------|-----------|----------|
+| [profiler_tracy_integration.md](profiler_tracy_integration.md) | Profiling infrastructure (prerequisite) | P0 |
 | [distance_lod.md](distance_lod.md) | Witness replication | P0 |
 | [property_dirty_flags.md](property_dirty_flags.md) | Entity replication | P0 |
 | [adaptive_bandwidth.md](adaptive_bandwidth.md) | Witness bandwidth | P0 |
@@ -31,3 +32,8 @@ ceiling Atlas must support comfortably.
 - **P0** — Required to make 100v100 functional (solves "can it run")
 - **P1** — Required to make 100v100 smooth (solves "does it run well")
 - **P2** — Polish and advanced features (solves "does it feel good")
+
+`profiler_tracy_integration.md` is the only entry whose value is purely
+infrastructural — it produces no end-user improvement on its own, but every
+other P0/P1/P2 task depends on it for "before vs after" measurement. Land it
+first.
