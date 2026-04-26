@@ -60,6 +60,14 @@ struct ServerConfig {
 
   // ---- Tick ---------------------------------------------------------------
   int update_hertz = 10;
+  // Label the profiler attaches to each frame produced by AdvanceTime().
+  // Empty means "derive from process_name at startup", which is what we
+  // want by default — leaves the field free for explicit override (e.g.
+  // a CellApp dedicated to dungeons can be tagged "DungeonTick" so the
+  // Tracy timeline visually separates it from open-world cells).
+  // Whatever value is finalised at startup must outlive the process,
+  // because Tracy stores the pointer and uses it as the frame's identity.
+  std::string frame_name;
 
   // ---- Script -------------------------------------------------------------
   std::filesystem::path script_assembly;
