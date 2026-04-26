@@ -40,18 +40,17 @@ FetchContent_Declare(
   URL https://www.sqlite.org/2024/sqlite-amalgamation-3470200.zip
 )
 
-# ── Tracy 0.11.1 ─────────────────────────────────────────────────────────────
-# Held back from upstream's current release (0.13.x at the time of
-# writing) because Tracy-CSharp — the managed-side binding the server
-# uses to surface C# zones in the same Tracy timeline — has only been
-# updated through Tracy 0.11.1. Tracy's wire protocol changes between
-# minor versions; mismatched native and managed clients connect but
-# silently lose zones. Until Tracy-CSharp catches up, this version is
-# the ceiling. Bump only in lockstep with the Tracy.CSharp NuGet
-# package referenced from Atlas.Runtime.csproj.
+# ── Tracy 0.13.1 ─────────────────────────────────────────────────────────────
+# Pinned in lockstep with the Tracy-NET 0.13.2 NuGet package referenced
+# from Atlas.Runtime.csproj — Tracy's wire protocol changes between
+# minor versions, and a mismatched native↔managed pair connects but
+# silently drops zones. Tracy-NET (xLuxy fork of the original
+# clibequilibrium/Tracy-CSharp) tracks upstream Tracy actively; if it
+# stalls, prefer freezing here over splitting native and managed
+# protocol versions.
 FetchContent_Declare(
   tracy
-  URL https://github.com/wolfpld/tracy/archive/refs/tags/v0.11.1.tar.gz
+  URL https://github.com/wolfpld/tracy/archive/refs/tags/v0.13.1.tar.gz
 )
 
 # ── Make available ───────────────────────────────────────────────────────────
@@ -92,6 +91,13 @@ endif()
 # own no-op headers when TRACY_ENABLE is undefined, so even with the
 # library linked, ATLAS_PROFILE_ENABLED=0 keeps everything inert. We
 # still skip the fetch entirely in that mode to spare CI download time.
+#
+# Built as SHARED so the same TracyClient.dll/so backs both the C++
+# call sites (linked via Tracy::TracyClient) and the managed P/Invoke
+# surface in Tracy-NET ([DllImport("TracyClient")]). A single Tracy
+# instance per process is what makes the unified C++/C# timeline work —
+# two clients would publish to two different listener ports and split
+# the trace.
 if(ATLAS_ENABLE_PROFILER)
   set(TRACY_ENABLE      ON  CACHE BOOL "" FORCE)
   if(ATLAS_PROFILER_ON_DEMAND)
@@ -104,7 +110,7 @@ if(ATLAS_ENABLE_PROFILER)
   # download.
   set(TRACY_NO_BROADCAST     OFF CACHE BOOL "" FORCE)
   set(TRACY_NO_CONTEXT_SWITCH OFF CACHE BOOL "" FORCE)
-  set(TRACY_STATIC           ON  CACHE BOOL "" FORCE)
+  set(TRACY_STATIC           OFF CACHE BOOL "" FORCE)
   FetchContent_MakeAvailable(tracy)
   if(TARGET TracyClient AND NOT TARGET Tracy::TracyClient)
     add_library(Tracy::TracyClient ALIAS TracyClient)

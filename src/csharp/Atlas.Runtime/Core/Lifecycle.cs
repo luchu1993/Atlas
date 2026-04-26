@@ -1,7 +1,9 @@
 using System;
 using System.Runtime.InteropServices;
 using System.Threading;
+using Atlas.Diagnostics;
 using Atlas.Entity;
+using Atlas.Runtime.Diagnostics;
 
 namespace Atlas.Core;
 
@@ -30,6 +32,18 @@ internal static class Lifecycle
 
         ThreadGuard.SetMainThread();
 
+        // Install the Tracy backend before any script user code runs, so
+        // the first OnTick already produces zones — and so any module
+        // initializer that opens a zone during assembly load lands in the
+        // trace instead of falling silently into the null backend.
+        // SetBackend is idempotent on a fresh runtime: a re-init after
+        // hot-reload reaches this with the null backend re-established by
+        // DoEngineShutdown's ResetBackend, so the install succeeds again.
+        if (!Profiler.SetBackend(new TracyProfilerBackend()))
+        {
+            Log.Warning("Tracy profiler backend already installed — skipping re-install");
+        }
+
         EngineContext.Initialize();
         Log.Info("Atlas C# runtime initialized");
 #if DEBUG
@@ -44,6 +58,12 @@ internal static class Lifecycle
 #endif
         Log.Info("Atlas C# runtime shutting down");
         EngineContext.Shutdown();
+        // Drop the Tracy backend reference so a subsequent EngineInit (e.g.
+        // hot reload) can re-install cleanly. The cached frame/plot name
+        // pointers leak by design — Tracy keys streams by pointer
+        // identity and freeing would corrupt the trace history of any
+        // already-connected viewer.
+        Profiler.ResetBackend();
     }
 
     internal static void DoOnInit(bool isReload)
@@ -53,6 +73,7 @@ internal static class Lifecycle
 
     internal static void DoOnTick(float deltaTime)
     {
+        using var _ = Profiler.ZoneN(ProfilerNames.ScriptOnTick);
         EngineContext.SyncContext?.ProcessQueue();
         EntityManager.Instance.OnTickAll(deltaTime);
         // Collect property/volatile dirty bits that OnTick may have set and
