@@ -1,8 +1,10 @@
 #include "network/channel.h"
 
 #include <cassert>
+#include <cstdio>
 
 #include "foundation/log.h"
+#include "foundation/profiler.h"
 #include "network/event_dispatcher.h"
 #include "network/interface_table.h"
 
@@ -39,6 +41,7 @@ void Channel::Condemn() {
 }
 
 auto Channel::Send() -> Result<void> {
+  ATLAS_PROFILE_ZONE_N("Channel::Send");
   if (state_ == ChannelState::kCondemned) {
     return Error(ErrorCode::kChannelCondemned, "Cannot send on condemned channel");
   }
@@ -62,6 +65,7 @@ auto Channel::Send() -> Result<void> {
     return result.Error();
   }
   bytes_sent_ += *result;
+  ATLAS_PROFILE_PLOT("BytesOut", static_cast<double>(*result));
   return Result<void>{};
 }
 
@@ -114,6 +118,7 @@ void Channel::CheckInactivity() {
 void Channel::OnDataReceived(std::span<const std::byte> data) {
   bytes_received_ += data.size();
   last_activity_ = Clock::now();
+  ATLAS_PROFILE_PLOT("BytesIn", static_cast<double>(data.size()));
 }
 
 void Channel::OnDisconnect() {
@@ -124,6 +129,7 @@ void Channel::OnDisconnect() {
 }
 
 void Channel::DispatchMessages(std::span<const std::byte> frame_data) {
+  ATLAS_PROFILE_ZONE_N("Channel::Dispatch");
   BinaryReader reader(frame_data);
   while (reader.Remaining() >= 1) {
     // Read packed MessageID: 1 byte if < 0xFE, else 0xFE + uint16 LE
@@ -171,6 +177,19 @@ void Channel::DispatchMessages(std::span<const std::byte> frame_data) {
     // Let pre-dispatch hook (RPC registry) consume reply messages first
     if (interface_table_.TryPreDispatch(id, *payload_span)) {
       continue;
+    }
+
+    // Per-message zone with the numeric id attached as text. Tracy keys
+    // zones by source location so all dispatches collapse into one named
+    // group in the viewer; the id is recoverable from the zone's text
+    // annotation when drilling into a specific instance. This is cheaper
+    // than registering one zone name per id (which would need a process-
+    // wide lifetime cache for the literal pointers Tracy keys on).
+    ATLAS_PROFILE_ZONE_N("Channel::HandleMessage");
+    char id_buf[16];
+    int id_len = std::snprintf(id_buf, sizeof(id_buf), "id=%u", static_cast<unsigned>(id));
+    if (id_len > 0) {
+      ATLAS_PROFILE_ZONE_TEXT(id_buf, static_cast<size_t>(id_len));
     }
 
     BinaryReader msg_reader(*payload_span);
