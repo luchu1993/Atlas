@@ -4,6 +4,7 @@ target_include_directories(atlas_platform_config INTERFACE "${CMAKE_SOURCE_DIR}/
 
 # atlas_platform — OS abstraction layer
 add_library(atlas_platform STATIC
+  crash_handler.cc
   filesystem.cc
   io_poller.cc
   io_poller_select.cc
@@ -14,6 +15,7 @@ add_library(atlas_platform STATIC
 if(WIN32)
   target_sources(atlas_platform PRIVATE
     child_process_windows.cc
+    crash_handler_windows.cc
     dynamic_library_windows.cc
     io_poller_wsapoll.cc
     threading_windows.cc
@@ -21,6 +23,7 @@ if(WIN32)
 elseif(UNIX)
   target_sources(atlas_platform PRIVATE
     child_process_linux.cc
+    crash_handler_linux.cc
     dynamic_library_linux.cc
     io_poller_epoll.cc
     threading_linux.cc
@@ -37,7 +40,7 @@ target_link_libraries(atlas_platform
 )
 
 if(WIN32)
-  target_link_libraries(atlas_platform PUBLIC ws2_32)
+  target_link_libraries(atlas_platform PUBLIC ws2_32 dbghelp)
 elseif(UNIX)
   target_link_libraries(atlas_platform PUBLIC dl Threads::Threads)
 endif()

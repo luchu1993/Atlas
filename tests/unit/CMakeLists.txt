@@ -81,6 +81,11 @@ atlas_add_test(NAME test_signal_handler
   DEPS atlas_platform
 )
 
+atlas_add_test(NAME test_crash_handler
+  SOURCES test_crash_handler.cpp
+  DEPS atlas_platform
+)
+
 atlas_add_test(NAME test_dynamic_library
   SOURCES test_dynamic_library.cpp
   DEPS atlas_platform
