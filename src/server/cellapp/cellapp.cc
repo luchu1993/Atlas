@@ -337,6 +337,21 @@ void CellApp::TickBackupPump() {
     const int32_t needed = probe > 0 ? probe : (probe == 0 ? probe_out_len : -1);
     if (needed <= 0) continue;
 
+    // RUDP can only carry kMaxFragments * kMaxUdpPayload (~370 KB) per
+    // message; a backup blob that exceeds that can never be delivered and
+    // would otherwise allocate tens of MB only to be dropped by
+    // SendFragmented with kMessageTooLarge. Log loudly and skip — the next
+    // pump will retry, and the warning carries the entity id so the
+    // C# script side can be inspected.
+    constexpr int32_t kMaxBackupBlobBytes = 256 * 1024;
+    if (needed > kMaxBackupBlobBytes) {
+      ATLAS_LOG_WARNING(
+          "CellApp: SerializeEntity probe returned {} bytes for base_id={} "
+          "(limit={}); skipping backup pump for this entity",
+          needed, base_id, kMaxBackupBlobBytes);
+      continue;
+    }
+
     std::vector<std::byte> blob(static_cast<std::size_t>(needed));
     int32_t real_len = 0;
     const int32_t rc = fn(entity->Id(), reinterpret_cast<uint8_t*>(blob.data()), needed, &real_len);
@@ -354,7 +369,13 @@ void CellApp::TickBackupPump() {
     baseapp::BackupCellEntity msg;
     msg.base_entity_id = base_id;
     msg.cell_backup_data = std::move(blob);
-    (void)(*base_ch)->SendMessage(msg);
+    const auto blob_size = msg.cell_backup_data.size();
+    auto send_result = (*base_ch)->SendMessage(msg);
+    if (!send_result) {
+      ATLAS_LOG_WARNING(
+          "CellApp: BackupCellEntity send failed (base_id={}, blob_size={}, addr={}): {}", base_id,
+          blob_size, base_addr.ToString(), send_result.Error().Message());
+    }
   }
 }
 
