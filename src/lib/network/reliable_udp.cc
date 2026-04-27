@@ -480,25 +480,32 @@ void ReliableUdpChannel::RecordReceivedSeq(SeqNum seq) {
 }
 
 // ============================================================================
-// is_duplicate
+// is_duplicate — delivery-state based, NOT remote_seq_/ack_bits based.
+//
+// remote_seq_ + ack_bits is a 32-wide SACK reporting window: it tracks
+// "what we received recently for the sender's benefit". It is NOT a
+// duplicate-detection window. In a gappy stream (e.g. seq 1..49 lost,
+// 50..100 arrived) ack_bits only spans seq 68..100 while seq 50..67 have
+// fallen off the SACK window despite still sitting in rcv_buf_. Worse,
+// seq 1..49 have NEVER been received — yet a remote_seq_-based "too old"
+// check (diff > 32) would mark a retransmit of seq 1 as duplicate and
+// drop the only gap-filler that could ever advance rcv_nxt_, eventually
+// tripping dead-link condemn.
+//
+// True duplicate-detection state is the delivery frontier: rcv_nxt_
+// (everything below has been dispatched) plus rcv_buf_ (everything
+// already buffered awaiting in-order flush). KCP draws the line the same
+// way.
 // ============================================================================
 
 auto ReliableUdpChannel::IsDuplicate(SeqNum seq) const -> bool {
-  if (seq == 0) {
-    return false;
+  if (SeqLessThan(seq, rcv_nxt_)) {
+    return true;  // already delivered
   }
-  if (SeqLessThan(seq, remote_seq_)) {
-    // Old packet -- check if in ack_bits window
-    auto diff = static_cast<int32_t>(remote_seq_ - seq);
-    if (diff > 32) {
-      return true;  // too old
-    }
-    return AckBitsTest(recv_ack_bits_, remote_seq_, seq);
+  if (rcv_buf_.count(seq) != 0) {
+    return true;  // already buffered awaiting in-order flush
   }
-  if (seq == remote_seq_) {
-    return true;  // exact duplicate
-  }
-  return false;  // new packet
+  return false;
 }
 
 // ============================================================================

@@ -499,6 +499,80 @@ TEST_F(ReliableUdpTest, OrderedDeliveryWaitsForGap) {
   EXPECT_EQ(channel_b.RecvBufCount(), 0u);
 }
 
+TEST_F(ReliableUdpTest, GapFillerOutsideSackWindowNotDroppedAsDuplicate) {
+  // Regression: the receiver must not treat a never-seen seq as duplicate
+  // simply because it falls outside the 32-bit SACK reporting window
+  // (remote_seq_ - seq > 32). Pre-fix, IsDuplicate returned "too old" and
+  // dropped the only retransmit that could fill the gap, leading to dead
+  // link.
+  //
+  // Scenario: sender emits seq 1..40. Feed seq 40 first (advances
+  // remote_seq_ to 40), then feed the long-delayed gap-filler seq 1.
+  // diff = 39 > 32, so the old check would drop it. After the fix, seq 1
+  // is accepted and rcv_nxt_ advances to 2.
+  auto sock_a = Socket::CreateUdp();
+  ASSERT_TRUE(sock_a.HasValue());
+  ASSERT_TRUE(sock_a->Bind(Address("127.0.0.1", 0)).HasValue());
+  auto addr_a = sock_a->LocalAddress().Value();
+
+  auto sock_b = Socket::CreateUdp();
+  ASSERT_TRUE(sock_b.HasValue());
+  ASSERT_TRUE(sock_b->Bind(Address("127.0.0.1", 0)).HasValue());
+  auto addr_b = sock_b->LocalAddress().Value();
+
+  std::vector<uint32_t> received_order;
+  table_.RegisterTypedHandler<RudpTestMsg>([&](const Address&, Channel*, const RudpTestMsg& msg) {
+    received_order.push_back(msg.value);
+  });
+
+  ReliableUdpChannel channel_a(dispatcher_, table_, *sock_a, addr_b);
+  channel_a.SetNocwnd(true);
+  channel_a.Activate();
+
+  constexpr uint32_t kCount = 40;
+  for (uint32_t i = 1; i <= kCount; ++i) {
+    channel_a.Bundle().AddMessage(RudpTestMsg{i});
+    (void)channel_a.SendReliable();
+  }
+
+  std::this_thread::sleep_for(std::chrono::milliseconds(50));
+
+  std::vector<std::vector<std::byte>> datagrams;
+  std::array<std::byte, 2048> buf{};
+  while (true) {
+    auto result = sock_b->RecvFrom(buf);
+    if (!result || result->first == 0) break;
+    datagrams.emplace_back(buf.data(), buf.data() + result->first);
+  }
+  ASSERT_EQ(datagrams.size(), kCount);
+
+  ReliableUdpChannel channel_b(dispatcher_, table_, *sock_b, addr_a);
+  channel_b.Activate();
+
+  // Feed the highest seq first to push remote_seq_ far ahead of rcv_nxt_.
+  channel_b.OnDatagramReceived(datagrams[kCount - 1]);
+  EXPECT_EQ(channel_b.RecvNextSeq(), 1u);   // still waiting for seq 1
+  EXPECT_EQ(channel_b.RecvBufCount(), 1u);  // seq 40 buffered
+
+  // Now feed seq 1 — diff = 39 > SACK window (32). Pre-fix: dropped.
+  channel_b.OnDatagramReceived(datagrams[0]);
+  ASSERT_EQ(received_order.size(), 1u);
+  EXPECT_EQ(received_order[0], 1u);
+  EXPECT_EQ(channel_b.RecvNextSeq(), 2u);
+
+  // Feed the rest in arbitrary order; everything should drain in seq
+  // order without any drop.
+  for (uint32_t i = 2; i < kCount; ++i) {
+    channel_b.OnDatagramReceived(datagrams[i - 1]);
+  }
+  ASSERT_EQ(received_order.size(), kCount);
+  for (uint32_t i = 0; i < kCount; ++i) {
+    EXPECT_EQ(received_order[i], i + 1) << "Out of order at index " << i;
+  }
+  EXPECT_EQ(channel_b.RecvBufCount(), 0u);
+  EXPECT_EQ(channel_b.RecvNextSeq(), kCount + 1);
+}
+
 TEST_F(ReliableUdpTest, RecvWindowDropsExcessivePackets) {
   auto sock_a = Socket::CreateUdp();
   ASSERT_TRUE(sock_a.HasValue());
