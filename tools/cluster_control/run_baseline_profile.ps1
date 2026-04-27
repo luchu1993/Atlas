@@ -8,7 +8,7 @@
     Prerequisites: cmake --build build/profile --config RelWithDebInfo
 
 .PARAMETER Clients
-    Number of virtual clients (default: 100).
+    Number of virtual clients (default: 200).
 
 .PARAMETER DurationSec
     Stress duration in seconds (default: 120).
@@ -18,7 +18,7 @@
     .\tools\cluster_control\run_baseline_profile.ps1 -Clients 50 -DurationSec 60
 #>
 param(
-    [int]$Clients     = 100,
+    [int]$Clients     = 200,
     [int]$DurationSec = 120
 )
 
@@ -37,7 +37,7 @@ python $Script `
     --ramp-per-sec          20 `
     --rpc-rate-hz           2 `
     --move-rate-hz          10 `
-    --spread-radius         200 `
+    --spread-radius         500 `
     --space-count           1 `
     --shortline-pct         0 `
     --hold-min-ms           120000 `

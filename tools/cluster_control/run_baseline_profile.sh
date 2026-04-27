@@ -19,13 +19,13 @@ PYTHON="${PYTHON:-python}"
 exec "${PYTHON}" "${SCRIPT_DIR}/run_world_stress.py" \
     --build-dir   build/profile \
     --config      RelWithDebInfo \
-    --clients     100 \
-    --account-pool 100 \
+    --clients     200 \
+    --account-pool 200 \
     --duration-sec 120 \
     --ramp-per-sec 20 \
     --rpc-rate-hz 2 \
     --move-rate-hz 10 \
-    --spread-radius 200 \
+    --spread-radius 500 \
     --space-count 1 \
     --shortline-pct 0 \
     --hold-min-ms 120000 \

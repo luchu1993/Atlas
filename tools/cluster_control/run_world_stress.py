@@ -81,6 +81,17 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--keep-cluster", action="store_true")
     parser.add_argument("--verbose-failures", action="store_true")
+
+    # Per-process tick rate. cellapp is the authoritative spatial tick;
+    # baseapp ticks 1.5–2× the cellapp rate so DeltaForwarder doesn't
+    # backlog. Manager / persistence / machined processes do tiny per-
+    # tick work and run at 10 Hz to free dispatcher time for IO.
+    parser.add_argument("--cellapp-update-hertz", type=int, default=15)
+    parser.add_argument("--baseapp-update-hertz", type=int, default=15)
+    parser.add_argument("--loginapp-update-hertz", type=int, default=20)
+    parser.add_argument("--baseappmgr-update-hertz", type=int, default=10)
+    parser.add_argument("--cellappmgr-update-hertz", type=int, default=10)
+    parser.add_argument("--dbapp-update-hertz", type=int, default=10)
     parser.add_argument(
         "--capture-dir", default=None,
         help="Save per-process Tracy captures (.tracy) to this directory. "
@@ -546,7 +557,7 @@ def build_loginapp_args(args: argparse.Namespace, machined_address: str) -> list
         "--login-rate-limit-window-sec",
         str(args.login_rate_limit_window_sec),
         "--update-hertz",
-        "50",
+        str(args.loginapp_update_hertz),
         "--log-level",
         "info",
     ]
@@ -820,7 +831,7 @@ def main() -> int:
                     "--config",
                     str(db_config_path),
                     "--update-hertz",
-                    "50",
+                    str(args.dbapp_update_hertz),
                     "--log-level",
                     "info",
                 ],
@@ -845,7 +856,7 @@ def main() -> int:
                     "--internal-port",
                     str(args.baseappmgr_port),
                     "--update-hertz",
-                    "50",
+                    str(args.baseappmgr_update_hertz),
                     "--log-level",
                     "info",
                 ],
@@ -870,7 +881,7 @@ def main() -> int:
                     "--internal-port",
                     str(args.cellappmgr_port),
                     "--update-hertz",
-                    "50",
+                    str(args.cellappmgr_update_hertz),
                     "--log-level",
                     "info",
                 ],
@@ -902,7 +913,7 @@ def main() -> int:
                         "--runtime-config",
                         str(runtime_config),
                         "--update-hertz",
-                        "50",
+                        str(args.baseapp_update_hertz),
                         "--log-level",
                         "info",
                     ],
@@ -932,7 +943,7 @@ def main() -> int:
                         "--runtime-config",
                         str(runtime_config),
                         "--update-hertz",
-                        "10",
+                        str(args.cellapp_update_hertz),
                         "--log-level",
                         "info",
                     ],
