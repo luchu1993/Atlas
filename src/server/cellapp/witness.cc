@@ -178,6 +178,17 @@ void Witness::SetAoIRadius(float new_radius, float new_hysteresis) {
 void Witness::HandleAoIEnter(CellEntity& peer) {
   if (&peer == &owner_) return;  // a witness never tracks its own central
 
+  // The synthetic vacate-to-FLT_MAX shuffle in ~CellEntity drags the dying
+  // peer's range_node from its current X past observers' lower_bound (an
+  // INBOUND cross fires HandleAoIEnter on the inner trigger) and then past
+  // upper_bound (OUTBOUND, fires HandleAoILeave on the outer trigger).
+  // The Enter→Leave pair *should* leave cache.entity null at the end, but
+  // any path that performs the inbound cross without the matching outbound
+  // — different-cell witnesses, asymmetric ranges — would store a pointer
+  // to a now-freed CellEntity.  Reject Enters from a dying peer outright;
+  // Destroy() sets destroyed_ = true *before* the destructor's shuffle.
+  if (peer.IsDestroyed()) return;
+
   auto [it, inserted] = aoi_map_.try_emplace(peer.Id());
   auto& cache = it->second;
 
@@ -316,9 +327,22 @@ void Witness::Update(uint32_t max_packet_bytes) {
       // doesn't emit a stale Leave envelope.
       CellEntity* live = owner_.GetSpace().FindEntity(peer_id);
       if (live != cache.entity) {
-        ATLAS_LOG_WARNING("Witness: stale enter-pending cache for peer_id={} (cached={} live={})",
-                          static_cast<uint64_t>(peer_id), static_cast<const void*>(cache.entity),
-                          static_cast<const void*>(live));
+        // Rich context: the more we print, the easier it is to bisect
+        // which destruction path is missing a HandleAoILeave fan-out.
+        // observer / peer_base_id are the script-visible identities;
+        // cached vs live pointers tell us whether the peer is freed
+        // (live==null, cached!=null) or replaced in the map at the
+        // same id (live!=null, cached!=null && cached!=live).
+        const std::size_t observer_obs_count =
+            owner_.GetWitness() ? owner_.GetWitness()->AoIMap().size() : 0;
+        ATLAS_LOG_WARNING(
+            "Witness: stale enter-pending cache "
+            "observer={} peer_id={} peer_base={} cached={:p} live={:p} "
+            "flags=0x{:02x} aoi_map_size={} space_id={}",
+            owner_.BaseEntityId(), static_cast<uint64_t>(peer_id),
+            static_cast<uint64_t>(cache.peer_base_id), static_cast<const void*>(cache.entity),
+            static_cast<const void*>(live), cache.flags, observer_obs_count,
+            owner_.GetSpace().Id());
         // Erase outright — we never sent an Enter so no Leave is owed.
         // Iterators into aoi_map_ for OTHER keys are unaffected.
         aoi_map_.erase(it);

@@ -81,6 +81,30 @@ CellEntity::~CellEntity() {
     space_.GetRangeList().Remove(&range_node_);
     linked_to_range_list_ = false;
   }
+
+  // Destructor accounting: if any peer witness still holds a raw pointer
+  // to us at this point, the synthetic shuffle missed firing OnLeave on
+  // it.  Logging the offending observer + our own id lets us correlate
+  // with Witness::Update's stale-cache warning and identify which
+  // destruction path skipped the leave fan-out.  Cheap O(N) sweep —
+  // entity destruction is not on the per-tick hot path.  Skip during
+  // ~Space's map-teardown phase: every entity's ~CellEntity fires while
+  // entities_ is mid-destruction, so iterating it is UB.
+  if (space_.IsTearingDown()) return;
+  space_.ForEachEntity([this](CellEntity& other) {
+    if (&other == this) return;
+    auto* w = other.GetWitness();
+    if (!w) return;
+    auto it = w->AoIMap().find(id_);
+    if (it == w->AoIMap().end()) return;
+    if (it->second.entity == this) {
+      ATLAS_LOG_ERROR(
+          "~CellEntity: leave fan-out missed observer={} for peer id={} "
+          "(this={:p}, observer aoi_map_size={}, peer flags=0x{:02x})",
+          other.BaseEntityId(), id_, static_cast<const void*>(this), w->AoIMap().size(),
+          it->second.flags);
+    }
+  });
 }
 
 void CellEntity::DisableWitness() {

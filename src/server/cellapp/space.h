@@ -96,6 +96,12 @@ class Space {
     }
   }
 
+  // True from the moment ~Space starts unwinding — per-entity
+  // destructors fire as the entities_ map is being torn down, and
+  // iterating it during that window is UB.  Helpers that walk the
+  // map from inside ~CellEntity should bail out when this is set.
+  [[nodiscard]] auto IsTearingDown() const -> bool { return tearing_down_; }
+
  private:
   SpaceID id_;
 
@@ -112,6 +118,8 @@ class Space {
   // this ordering keeps subsequent additions safe by default.
   LocalCellMap local_cells_;
   std::optional<BSPTree> bsp_tree_;
+
+  bool tearing_down_{false};
 };
 
 }  // namespace atlas

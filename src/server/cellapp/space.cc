@@ -12,8 +12,13 @@ Space::Space(SpaceID id) : id_(id) {}
 
 // Out-of-line destructor: CellEntity (and Cell) are incomplete in
 // space.h (forward declared to break the include cycle), so the
-// unique_ptr deleter can't be instantiated inline there.
-Space::~Space() = default;
+// unique_ptr deleter can't be instantiated inline there.  We also
+// flip tearing_down_ so per-entity destructors that introspect
+// space state (e.g. ~CellEntity's leave-fanout audit) can short-
+// circuit before the map iteration races our teardown.
+Space::~Space() {
+  tearing_down_ = true;
+}
 
 auto Space::AddLocalCell(std::unique_ptr<Cell> cell) -> Cell* {
   auto* raw = cell.get();
