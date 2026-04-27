@@ -7,6 +7,7 @@
 
 #include "cellappmgr/cellappmgr_messages.h"  // cellappmgr::CellID
 #include "network/address.h"
+#include "network/reliable_udp.h"
 #include "server/cellapp_peer_registry.h"
 #include "server/entity_app.h"
 #include "server/entity_types.h"
@@ -347,6 +348,12 @@ class CellApp : public EntityApp {
   // CellApp sends a CurrentCell to BaseApp after an Offload arrival, so
   // BaseApp can reject stale updates from a slower old-CellApp path.
   uint32_t next_offload_epoch_{1};
+
+  // Channels touched by witness send lambdas during the current
+  // TickWitnesses pass. Drained at the end via FlushDeferred so all
+  // BufferMessageDeferred messages leave the host in one packet per
+  // (channel, reliability) pair instead of one packet per call.
+  std::unordered_set<ReliableUdpChannel*> pending_witness_channels_;
 
   // Scan pending_offloads_ for entries past the Ack deadline; revert
   // them in place. Called each tick from OnEndOfTick.

@@ -409,34 +409,50 @@ auto Witness::SendEntityUpdate(EntityCache& cache) -> std::size_t {
 
   // ---- Volatile stream ----
   if (state->latest_volatile_seq > cache.last_volatile_seq) {
-    // Build an EntityPositionUpdate envelope: pos (3f) + dir (3f) + on_ground (u8).
-    const auto& pos = cache.entity->Position();
-    const auto& dir = cache.entity->Direction();
-    const uint8_t og = cache.entity->OnGround() ? 1 : 0;
+    // Build the EntityPositionUpdate wire envelope into a stack buffer.
+    // Pre-fix this path took two heap allocations per call (one for the
+    // payload buffer, one for the envelope vector returned by
+    // MakeEnvelope); at 200 obs × ~30 visible peers × 10 Hz the alloc
+    // overhead alone dominated the SendEntityUpdate hot path. The
+    // lambda consumes a span via ReplicatedDeltaFromCellSpan, so this
+    // stack buffer is the single source of truth for the wire bytes —
+    // it must outlive the synchronous send_unreliable_ / send_reliable_
+    // call (it does: same scope).
+    //
+    // Wire layout (30 bytes):
+    //   [u8 kind][u32 entity_id][3f pos][3f dir][u8 on_ground]
+    constexpr std::size_t kEnvelopeSize = 1 + sizeof(uint32_t) + 6 * sizeof(float) + 1;
+    std::array<std::byte, kEnvelopeSize> envelope_buf;
+    std::size_t envelope_size = 0;
+    {
+      ATLAS_PROFILE_ZONE_N("Witness::Vol::Build");
+      const auto& pos = cache.entity->Position();
+      const auto& dir = cache.entity->Direction();
+      const uint8_t og = cache.entity->OnGround() ? 1 : 0;
+      const EntityID public_eid = cache.entity->BaseEntityId();
 
-    std::vector<std::byte> payload;
-    payload.reserve(6 * sizeof(float) + 1);
-    auto push = [&payload](const void* src, std::size_t n) {
-      const auto* bytes = static_cast<const std::byte*>(src);
-      payload.insert(payload.end(), bytes, bytes + n);
-    };
-    push(&pos.x, sizeof(float));
-    push(&pos.y, sizeof(float));
-    push(&pos.z, sizeof(float));
-    push(&dir.x, sizeof(float));
-    push(&dir.y, sizeof(float));
-    push(&dir.z, sizeof(float));
-    payload.push_back(static_cast<std::byte>(og));
-
-    auto envelope = MakeEnvelope<0>(CellAoIEnvelopeKind::kEntityPositionUpdate,
-                                    cache.entity->BaseEntityId(), payload);
-    // Volatile → unreliable path when wired; fall back to reliable only
-    // because the integration-layer caller may have left send_unreliable_
-    // unset (tests typically do).
-    if (send_unreliable_) {
-      send_unreliable_(owner_.BaseEntityId(), envelope);
-    } else if (send_reliable_) {
-      send_reliable_(owner_.BaseEntityId(), envelope);
+      auto* p = envelope_buf.data();
+      *p++ = static_cast<std::byte>(CellAoIEnvelopeKind::kEntityPositionUpdate);
+      std::memcpy(p, &public_eid, sizeof(public_eid));
+      p += sizeof(public_eid);
+      std::memcpy(p, &pos.x, sizeof(float) * 3);
+      p += sizeof(float) * 3;
+      std::memcpy(p, &dir.x, sizeof(float) * 3);
+      p += sizeof(float) * 3;
+      *p++ = static_cast<std::byte>(og);
+      envelope_size = static_cast<std::size_t>(p - envelope_buf.data());
+    }
+    std::span<const std::byte> envelope(envelope_buf.data(), envelope_size);
+    {
+      ATLAS_PROFILE_ZONE_N("Witness::Vol::Send");
+      // Volatile → unreliable path when wired; fall back to reliable only
+      // because the integration-layer caller may have left send_unreliable_
+      // unset (tests typically do).
+      if (send_unreliable_) {
+        send_unreliable_(owner_.BaseEntityId(), envelope);
+      } else if (send_reliable_) {
+        send_reliable_(owner_.BaseEntityId(), envelope);
+      }
     }
     bytes += envelope.size();
     cache.last_volatile_seq = state->latest_volatile_seq;
@@ -481,15 +497,20 @@ auto Witness::SendEntityUpdate(EntityCache& cache) -> std::size_t {
         auto& cached =
             observer_is_owner ? frame.cached_owner_envelope : frame.cached_other_envelope;
         if (cached.empty()) {
+          ATLAS_PROFILE_ZONE_N("Witness::Event::Build");
           cached = BuildPropertyUpdateEnvelope(cache.entity->BaseEntityId(), frame.event_seq,
                                                delta_bytes);
         }
-        if (send_reliable_) send_reliable_(owner_.BaseEntityId(), cached);
+        {
+          ATLAS_PROFILE_ZONE_N("Witness::Event::Send");
+          if (send_reliable_) send_reliable_(owner_.BaseEntityId(), cached);
+        }
         bytes += cached.size();
       }
       cache.last_event_seq = frame.event_seq;
     }
   } else {
+    ATLAS_PROFILE_ZONE_N("Witness::Snapshot");
     // Snapshot fallback — our observer fell too far behind and the
     // oldest history frame is newer than last_event_seq+1. Ship the
     // current audience-scope snapshot; the client resets its view of

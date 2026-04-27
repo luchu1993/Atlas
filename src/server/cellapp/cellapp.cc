@@ -309,6 +309,19 @@ void CellApp::TickWitnesses() {
       if (auto* w = e.GetWitness()) w->Update(budget);
     });
   }
+
+  // Drain every channel touched by the witness lambdas this tick so the
+  // batched envelope bytes actually leave the host. Doing this once
+  // here (instead of per-SendEntityUpdate) collapses thousands of
+  // sendto syscalls into a few hundred — the dominant cost reduction
+  // in dense-AoI scenes after the zero-copy refactor.
+  {
+    ATLAS_PROFILE_ZONE_N("CellApp::FlushWitnessChannels");
+    for (auto* ch : pending_witness_channels_) {
+      (void)ch->FlushDeferred();
+    }
+    pending_witness_channels_.clear();
+  }
 }
 
 void CellApp::TickBackupPump() {
@@ -734,15 +747,21 @@ void CellApp::AttachWitness(CellEntity& entity, float aoi_radius, float hysteres
       // Reliable path — AoI enter/leave + ordered property deltas.
       // Routed via ReplicatedReliableDeltaFromCell (msg 2017) which
       // bypasses DeltaForwarder and reaches the client reliably.
+      // The Span variant carries `env` through Serialize without an
+      // intermediate vector::assign — the witness owns the storage for
+      // the duration of the synchronous BufferMessageDeferred call.
+      // The bytes are appended to the channel's deferred reliable
+      // bundle and shipped in one packet at TickWitnesses end via
+      // FlushPendingWitnessChannels — collapses N×M observer/peer
+      // sendto syscalls into one per channel per tick.
       [this](EntityID observer_base_id, std::span<const std::byte> env) {
         auto* observer = FindEntityByBaseId(observer_base_id);
         if (!observer) return;
         auto ch = Network().ConnectRudpNocwnd(observer->BaseAddr());
         if (!ch) return;
-        baseapp::ReplicatedReliableDeltaFromCell msg;
-        msg.base_entity_id = observer_base_id;
-        msg.delta.assign(env.begin(), env.end());
-        (void)(*ch)->SendMessage(msg);
+        baseapp::ReplicatedReliableDeltaFromCellSpan msg{observer_base_id, env};
+        (void)(*ch)->BufferMessageDeferred(msg);
+        pending_witness_channels_.insert(*ch);
       },
       // Unreliable path — volatile position/orientation (latest-wins).
       // Routed via ReplicatedDeltaFromCell (msg 2015) which goes through
@@ -752,10 +771,9 @@ void CellApp::AttachWitness(CellEntity& entity, float aoi_radius, float hysteres
         if (!observer) return;
         auto ch = Network().ConnectRudpNocwnd(observer->BaseAddr());
         if (!ch) return;
-        baseapp::ReplicatedDeltaFromCell msg;
-        msg.base_entity_id = observer_base_id;
-        msg.delta.assign(env.begin(), env.end());
-        (void)(*ch)->SendMessage(msg);
+        baseapp::ReplicatedDeltaFromCellSpan msg{observer_base_id, env};
+        (void)(*ch)->BufferMessageDeferred(msg);
+        pending_witness_channels_.insert(*ch);
       },
       hysteresis);
 }

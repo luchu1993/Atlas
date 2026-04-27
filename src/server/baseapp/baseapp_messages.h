@@ -408,6 +408,38 @@ struct ReplicatedDeltaFromCell {
 };
 static_assert(NetworkMessage<ReplicatedDeltaFromCell>);
 
+// Send-only zero-copy view onto a ReplicatedDeltaFromCell wire payload.
+// Wire format and message id are identical to ReplicatedDeltaFromCell
+// (Descriptor() forwards), so receivers always decode into the
+// vector-owning struct above. The witness hot path builds envelope
+// bytes into a stack buffer, then ships them through this view to skip
+// the per-observer std::vector::assign that the owning struct's
+// callers would otherwise pay (~3 µs per observer at 200 obs / tick).
+struct ReplicatedDeltaFromCellSpan {
+  EntityID base_entity_id{kInvalidEntityID};
+  std::span<const std::byte> delta;
+
+  static auto Descriptor() -> const MessageDesc& {
+    return ReplicatedDeltaFromCell::Descriptor();
+  }
+
+  void Serialize(BinaryWriter& w) const {
+    w.WritePackedInt(base_entity_id);
+    w.WritePackedInt(static_cast<uint32_t>(delta.size()));
+    w.WriteBytes(delta);
+  }
+
+  // Span-typed deserialise would have to point into per-call scratch
+  // storage that the caller doesn't own — always wrong. Receivers
+  // decode into the vector struct above; this entry exists only so the
+  // type satisfies the NetworkMessage concept that SendMessage requires.
+  static auto Deserialize(BinaryReader&) -> Result<ReplicatedDeltaFromCellSpan> {
+    return Error{ErrorCode::kInvalidArgument,
+                 "ReplicatedDeltaFromCellSpan is send-only"};
+  }
+};
+static_assert(NetworkMessage<ReplicatedDeltaFromCellSpan>);
+
 // ============================================================================
 // ReplicatedReliableDeltaFromCell  (CellApp → BaseApp → Client, ID 2017)
 //
@@ -444,7 +476,8 @@ struct ReplicatedReliableDeltaFromCell {
       return Error{ErrorCode::kInvalidArgument, "ReplicatedReliableDeltaFromCell: truncated"};
     auto span = r.ReadBytes(*sz);
     if (!span)
-      return Error{ErrorCode::kInvalidArgument, "ReplicatedReliableDeltaFromCell: delta truncated"};
+      return Error{ErrorCode::kInvalidArgument,
+                   "ReplicatedReliableDeltaFromCell: delta truncated"};
     ReplicatedReliableDeltaFromCell msg;
     msg.base_entity_id = *eid;
     msg.delta.assign(span->begin(), span->end());
@@ -452,6 +485,31 @@ struct ReplicatedReliableDeltaFromCell {
   }
 };
 static_assert(NetworkMessage<ReplicatedReliableDeltaFromCell>);
+
+// Send-only zero-copy view onto a ReplicatedReliableDeltaFromCell payload.
+// See ReplicatedDeltaFromCellSpan for rationale; the reliable variant
+// is hit just as often on the witness hot path (cached envelope shared
+// across all observers seeing the same delta frame).
+struct ReplicatedReliableDeltaFromCellSpan {
+  EntityID base_entity_id{kInvalidEntityID};
+  std::span<const std::byte> delta;
+
+  static auto Descriptor() -> const MessageDesc& {
+    return ReplicatedReliableDeltaFromCell::Descriptor();
+  }
+
+  void Serialize(BinaryWriter& w) const {
+    w.WritePackedInt(base_entity_id);
+    w.WritePackedInt(static_cast<uint32_t>(delta.size()));
+    w.WriteBytes(delta);
+  }
+
+  static auto Deserialize(BinaryReader&) -> Result<ReplicatedReliableDeltaFromCellSpan> {
+    return Error{ErrorCode::kInvalidArgument,
+                 "ReplicatedReliableDeltaFromCellSpan is send-only"};
+  }
+};
+static_assert(NetworkMessage<ReplicatedReliableDeltaFromCellSpan>);
 
 // ============================================================================
 // BackupCellEntity  (CellApp → BaseApp, ID 2018)

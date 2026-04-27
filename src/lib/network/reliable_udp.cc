@@ -38,7 +38,14 @@ auto ReliableUdpChannel::EffectiveWindow() const -> uint32_t {
 }
 
 // ============================================================================
-// send_reliable
+// send_reliable / send_unreliable — public single-shot wrappers.
+//
+// SendReliable / SendUnreliable drain the inherited bundle_ (the
+// per-channel buffer Channel::SendMessage<Msg> writes into). The
+// real work lives in SendBundle{Reliable,Unreliable} which take the
+// source bundle as an out-parameter, so FlushDeferred can reuse the
+// same packet-building path for the deferred bundles without
+// duplicating the seq-allocation / unacked-tracking logic.
 // ============================================================================
 
 auto ReliableUdpChannel::SendReliable() -> Result<void> {
@@ -49,8 +56,49 @@ auto ReliableUdpChannel::SendReliable() -> Result<void> {
     bundle_.Clear();
     return Error(ErrorCode::kChannelCondemned, "Channel is condemned");
   }
+  return SendBundleReliable(bundle_);
+}
 
-  if (bundle_.empty()) {
+auto ReliableUdpChannel::SendUnreliable() -> Result<void> {
+  if (state_ == ChannelState::kCondemned) {
+    bundle_.Clear();
+    return Error(ErrorCode::kChannelCondemned, "Channel is condemned");
+  }
+  return SendBundleUnreliable(bundle_);
+}
+
+// ============================================================================
+// flush_deferred — drain both BufferMessageDeferred bundles in one call.
+// ============================================================================
+
+auto ReliableUdpChannel::FlushDeferred() -> Result<void> {
+  if (state_ == ChannelState::kCondemned) {
+    deferred_reliable_bundle_.Clear();
+    deferred_unreliable_bundle_.Clear();
+    return Error(ErrorCode::kChannelCondemned, "Channel is condemned");
+  }
+
+  // Send unreliable first — small, header-only, can't block on cwnd —
+  // so a transient kWouldBlock on the reliable side doesn't strand the
+  // unreliable batch. Surface the first error encountered.
+  Result<void> first_err{};
+  if (!deferred_unreliable_bundle_.empty()) {
+    auto r = SendBundleUnreliable(deferred_unreliable_bundle_);
+    if (!r) first_err = r.Error();
+  }
+  if (!deferred_reliable_bundle_.empty()) {
+    auto r = SendBundleReliable(deferred_reliable_bundle_);
+    if (!r && first_err.HasValue()) first_err = r.Error();
+  }
+  return first_err;
+}
+
+// ============================================================================
+// send_bundle_reliable / send_bundle_unreliable — internal helpers
+// ============================================================================
+
+auto ReliableUdpChannel::SendBundleReliable(class Bundle& b) -> Result<void> {
+  if (b.empty()) {
     return Result<void>{};
   }
 
@@ -59,7 +107,7 @@ auto ReliableUdpChannel::SendReliable() -> Result<void> {
     return Error(ErrorCode::kWouldBlock, "Send window full");
   }
 
-  auto payload = bundle_.Finalize();
+  auto payload = b.Finalize();
 
   // Auto-fragment if payload exceeds max UDP payload
   if (payload.size() > rudp::kMaxUdpPayload) {
@@ -92,21 +140,12 @@ auto ReliableUdpChannel::SendReliable() -> Result<void> {
   return Result<void>{};
 }
 
-// ============================================================================
-// send_unreliable
-// ============================================================================
-
-auto ReliableUdpChannel::SendUnreliable() -> Result<void> {
-  if (state_ == ChannelState::kCondemned) {
-    bundle_.Clear();
-    return Error(ErrorCode::kChannelCondemned, "Channel is condemned");
-  }
-
-  if (bundle_.empty()) {
+auto ReliableUdpChannel::SendBundleUnreliable(class Bundle& b) -> Result<void> {
+  if (b.empty()) {
     return Result<void>{};
   }
 
-  auto payload = bundle_.Finalize();
+  auto payload = b.Finalize();
 
   uint8_t flags = 0;
   if (remote_seq_ > 0) {
@@ -170,6 +209,8 @@ void ReliableUdpChannel::OnCondemned() {
   rcv_buf_.clear();
   pending_fragments_.clear();
   ack_pending_ = false;
+  deferred_reliable_bundle_.Clear();
+  deferred_unreliable_bundle_.Clear();
 }
 
 // ============================================================================

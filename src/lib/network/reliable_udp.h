@@ -8,6 +8,7 @@
 
 #include "foundation/clock.h"
 #include "foundation/timer_queue.h"
+#include "network/bundle.h"
 #include "network/channel.h"
 #include "network/rtt_estimator.h"
 #include "network/seq_num.h"
@@ -54,6 +55,37 @@ class ReliableUdpChannel : public Channel {
   // Overrides Channel::send_unreliable() so that typed messages whose
   // descriptor().reliability == Unreliable automatically use this path.
   [[nodiscard]] auto SendUnreliable() -> Result<void> override;
+
+  // Buffered (deferred) send. Appends `msg` to a per-channel batching
+  // bundle keyed on Msg::Descriptor()'s reliability; the wire packet is
+  // not built until FlushDeferred() runs. Lets cellapp's TickWitnesses
+  // collapse the N×M observer/peer SendEntityUpdate calls into one
+  // packet per (channel, reliability) pair per tick — slashing sendto
+  // syscall count by 1–2 orders of magnitude in dense scenes.
+  template <NetworkMessage Msg>
+  [[nodiscard]] auto BufferMessageDeferred(const Msg& msg) -> Result<void> {
+    if (state_ == ChannelState::kCondemned) {
+      return Error(ErrorCode::kChannelCondemned, "Channel is condemned");
+    }
+    if (Msg::Descriptor().IsUnreliable()) {
+      deferred_unreliable_bundle_.AddMessage(msg);
+    } else {
+      deferred_reliable_bundle_.AddMessage(msg);
+    }
+    return Result<void>{};
+  }
+
+  // Send any messages staged via BufferMessageDeferred. Returns the
+  // first error encountered while flushing the unreliable bundle, then
+  // (best effort) the reliable bundle. Idempotent — empty bundles
+  // short-circuit.
+  [[nodiscard]] auto FlushDeferred() -> Result<void>;
+
+  // Whether either deferred bundle has any pending messages. Lets the
+  // caller skip the FlushDeferred call cheaply when nothing was buffered.
+  [[nodiscard]] auto HasDeferredPayload() const -> bool {
+    return !deferred_reliable_bundle_.empty() || !deferred_unreliable_bundle_.empty();
+  }
 
   // Called by NetworkInterface when a datagram arrives from this peer
   void OnDatagramReceived(std::span<const std::byte> data);
@@ -151,6 +183,16 @@ class ReliableUdpChannel : public Channel {
   void StartResendTimer();
   void StopResendTimer();
 
+  // Internal flush helpers shared by SendReliable / SendUnreliable
+  // (which drain the inherited bundle_) and FlushDeferred (which
+  // drains the deferred bundles). Each takes the source bundle by
+  // reference so the same packet-building / unacked-tracking path
+  // serves both single-shot and batched callers.
+  // (Elaborated `class Bundle` disambiguates from Channel::Bundle()
+  // accessor that shadows the type name in derived-class scope.)
+  [[nodiscard]] auto SendBundleReliable(class Bundle& b) -> Result<void>;
+  [[nodiscard]] auto SendBundleUnreliable(class Bundle& b) -> Result<void>;
+
   // Independent ACK sending + delayed ACK
   void SendAck();
   void ScheduleDelayedAck();
@@ -180,6 +222,14 @@ class ReliableUdpChannel : public Channel {
   SeqNum next_send_seq_{1};
   std::map<SeqNum, UnackedPacket> unacked_;
   uint32_t send_window_{256};
+
+  // Deferred-batch bundles. Populated by BufferMessageDeferred, drained
+  // by FlushDeferred. Independent of the inherited bundle_ used by the
+  // single-shot SendMessage path, so existing immediate-send callers
+  // (handshakes, watcher RPCs, …) interleave cleanly with batched
+  // witness traffic. `class Bundle` disambiguates from Channel::Bundle().
+  class Bundle deferred_reliable_bundle_;
+  class Bundle deferred_unreliable_bundle_;
 
   // Receiving state — ACK tracking (tracks what we received, for telling sender)
   SeqNum remote_seq_{0};       // highest received seq from peer
