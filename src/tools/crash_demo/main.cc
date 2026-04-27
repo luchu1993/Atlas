@@ -57,10 +57,17 @@ void Recurse(volatile int depth) {
 #pragma warning(pop)
 #endif
 
+#if defined(_MSC_VER)
+#pragma warning(push)
+#pragma warning(disable : 4702)
+#endif
 [[noreturn]] void TriggerStackOverflow() {
   Recurse(0);
   std::_Exit(99);
 }
+#if defined(_MSC_VER)
+#pragma warning(pop)
+#endif
 
 [[noreturn]] void TriggerThrow() {
   throw std::runtime_error("crash_demo: uncaught exception");
