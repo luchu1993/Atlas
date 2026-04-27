@@ -66,8 +66,9 @@
       "binaryDir": "${sourceDir}/build/asan-msvc",
       "cacheVariables": {
         "CMAKE_BUILD_TYPE": "Debug",
-        "CMAKE_CXX_FLAGS": "/fsanitize=address",
-        "CMAKE_C_FLAGS": "/fsanitize=address"
+        "CMAKE_CXX_FLAGS": "/EHsc /fsanitize=address",
+        "CMAKE_C_FLAGS": "/fsanitize=address",
+        "ATLAS_HEAP_ALLOCATOR": "std"
       },
       "condition": {
         "type": "equals",
