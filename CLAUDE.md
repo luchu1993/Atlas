@@ -46,6 +46,8 @@ ctest --build-config Debug --output-on-failure
 - **`debug`** — full debug symbols, assertions enabled, `ATLAS_DEBUG=1`
 - **`release`** — fully optimized, `NDEBUG` defined
 - **`hybrid`** — optimized with debug symbols (RelWithDebInfo)
+- **`profile-release`** — RelWithDebInfo + `ATLAS_ENABLE_PROFILER=ON` (Tracy linked in)
+- **`profile-release-notest`** — same as `profile-release` but `ATLAS_BUILD_TESTS=OFF`; use for fast profiling iteration
 
 ### Sanitizers
 
@@ -162,6 +164,33 @@ meaningless Tracy data:
 cmake --build build/profile-release --config RelWithDebInfo
 ```
 
+For faster iteration during profiling work, use the test-free preset (skips
+~30 test executables — typical full rebuild drops from minutes to ~30 s):
+
+```bash
+cmake --preset profile-release-notest
+cmake --build build/profile-release-notest --config RelWithDebInfo
+```
+
+Note that the baseline scripts under `tools/cluster_control/` still launch
+binaries from `bin/profile-release/`; either keep both build dirs in sync or
+adapt the script paths when running off `profile-release-notest`.
+
+### Memory profiling (callstack-attributed allocs)
+
+Tracy's MemoryUsage view attributes every `operator new` / pool grab to a
+call stack when the project is built with the S-suffixed primitives. The
+allocator hooks in `src/lib/foundation/profiler.h` use `TracyAllocS` /
+`TracyFreeS` (depth 16), so live-allocation entries in the viewer show:
+
+- **Memory → Active allocations** — currently held bytes per call site
+- **Memory → Top callstack tree** — bytes aggregated by stack
+- **Memory → Allocations** — per-event list, click for full stack
+
+Stack capture costs ~1–3 µs per alloc on Windows and inflates trace files
+~3–5×. If overhead becomes a problem during long captures, downgrade the
+hooks back to `TracyAlloc` / `TracyFree` for the run, then restore.
+
 Run the baseline stress test (100 clients, 120 s, spread-radius 200 m, Tracy capture):
 
 ```bash
@@ -191,7 +220,7 @@ python tools/profile/compare_tracy.py \
 ```
 
 The script calls `tracy-csvexport` automatically (looked up from
-`bin/profile-release/tools/`), exports aggregate zone stats to CSV, and prints
+`bin/profile-release/`), exports aggregate zone stats to CSV, and prints
 a Markdown table of mean / p95 / p99 / max for the key CellApp zones with
 regression flags (default threshold: 10 %).
 

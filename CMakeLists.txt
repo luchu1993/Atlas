@@ -77,9 +77,9 @@ endif()
 # ── Tracy viewer GUI (optional) ──────────────────────────────────────────────
 # We ship the viewer alongside Atlas binaries by downloading the
 # upstream prebuilt archive matched to our pinned Tracy version, then
-# extracting Tracy.exe into bin/<build_dir>/tools/. Building from
-# source via add_subdirectory(${tracy_SOURCE_DIR}/profiler) sounds
-# cleaner but Tracy's profiler CMakeLists invokes an embed helper as
+# extracting Tracy.exe into bin/<build_dir>/. Building from source via
+# add_subdirectory(${tracy_SOURCE_DIR}/profiler) sounds cleaner but
+# Tracy's profiler CMakeLists invokes an embed helper as
 # `${CMAKE_CURRENT_BINARY_DIR}/embed`, which CMake strips to a bare
 # `embed` once it equals the rule's working directory — Windows CMD
 # then fails to find it because "." isn't in PATH. The prebuilt path
@@ -120,10 +120,10 @@ if(ATLAS_BUILD_TRACY_VIEWER)
     # GUI for non-interactive collection and post-processing.
     file(GLOB _atlas_tracy_viewer_exes "${_atlas_tracy_viewer_dir}/tracy-*.exe")
     add_custom_target(atlas_tracy_viewer ALL
-      COMMAND ${CMAKE_COMMAND} -E make_directory "${ATLAS_BIN_ROOT}/tools"
+      COMMAND ${CMAKE_COMMAND} -E make_directory "${ATLAS_BIN_ROOT}"
       COMMAND ${CMAKE_COMMAND} -E copy_if_different
-              ${_atlas_tracy_viewer_exes} "${ATLAS_BIN_ROOT}/tools/"
-      COMMENT "Deploying Tracy viewer + CLI tools to bin/<build>/tools/"
+              ${_atlas_tracy_viewer_exes} "${ATLAS_BIN_ROOT}/"
+      COMMENT "Deploying Tracy viewer + CLI tools to bin/<build>/"
       VERBATIM
     )
     set_target_properties(atlas_tracy_viewer PROPERTIES FOLDER "ThirdParty/Tracy")

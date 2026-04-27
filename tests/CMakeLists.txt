@@ -37,14 +37,15 @@ function(atlas_add_test)
   add_test(NAME ${ARG_NAME} COMMAND ${ARG_NAME})
   set_tests_properties(${ARG_NAME} PROPERTIES LABELS "${ARG_LABEL}")
 
-  # Output directory: ${ATLAS_BIN_ROOT}/test/ — derived from the build
-  # directory name so a parallel build (e.g. build/mimalloc alongside
-  # build/debug) keeps its test exes in its own bin/ tree rather than
-  # overwriting the default's.
+  # Output directory: ${ATLAS_BIN_ROOT} — derived from the build directory
+  # name so a parallel build (e.g. build/mimalloc alongside build/debug)
+  # keeps its test exes in its own bin/ tree rather than overwriting the
+  # default's. All EXE/DLL artifacts share the flat bin/ layout described
+  # in cmake/AtlasFolders.cmake.
   foreach(_cfg IN ITEMS Debug Release RelWithDebInfo MinSizeRel)
     string(TOUPPER "${_cfg}" _CFG)
     set_target_properties(${ARG_NAME} PROPERTIES
-      RUNTIME_OUTPUT_DIRECTORY_${_CFG} "${ATLAS_BIN_ROOT}/test"
+      RUNTIME_OUTPUT_DIRECTORY_${_CFG} "${ATLAS_BIN_ROOT}"
     )
   endforeach()
 

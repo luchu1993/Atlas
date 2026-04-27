@@ -1,11 +1,12 @@
 # AtlasOutputDirectory.cmake
 #
-# Directs build artifacts into categorised subdirectories under bin/.
+# Directs build artifacts into bin/<build_dir_name>/ as a flat layout —
+# every EXE, DLL and .lib lands in the same directory.
 #
-# Layout:  bin/<build_dir_name>/<subdir>/
-#   e.g.   bin/debug/server/atlas_cellapp.exe
-#          bin/release/lib/atlas_foundation.lib
-#          bin/mimalloc/lib/atlas_foundation.lib   (build dir = build/mimalloc)
+# Layout:  bin/<build_dir_name>/
+#   e.g.   bin/debug/atlas_cellapp.exe
+#          bin/release/atlas_foundation.lib
+#          bin/mimalloc/atlas_foundation.lib   (build dir = build/mimalloc)
 #
 # The leading directory is the BUILD DIRECTORY name (last component of
 # CMAKE_BINARY_DIR), not the configuration name. For Atlas's standard
@@ -22,8 +23,16 @@
 # one config"; users who deliberately build Debug + Release in one
 # tree must accept that artifacts overwrite.
 #
+# Why flat: the prior layout split outputs into server/, tools/, test/,
+# client/ and lib/ subdirs. Common runtime DLLs (TracyClient, mimalloc,
+# atlas_engine, nethost) ended up duplicated across subdirs, and Windows
+# treats two absolute paths to the same DLL as two distinct modules. Most
+# visibly this caused two TracyClient.dll instances inside cellapp/baseapp
+# when the CLR loaded a script assembly from tools/ alongside the EXE-
+# imported server/TracyClient.dll, splitting the in-process Tracy state.
+#
 # Usage:
-#   atlas_set_output_dir("server" atlas_cellapp atlas_baseapp ...)
+#   atlas_set_output_dir("" atlas_cellapp atlas_baseapp ...)
 
 # Convert a PascalCase config name to snake_case:
 #   Debug → debug,  Release → release,

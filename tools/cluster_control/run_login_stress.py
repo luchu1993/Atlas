@@ -171,15 +171,21 @@ def _config_to_snake(config: str) -> str:
 
 
 def resolve_program(repo_root: Path, bin_name: str, subdirs: Iterable[str], stem: str) -> Path:
-    """Locate an executable under bin/<bin_name>/<subdir>/."""
+    """Locate an executable under bin/<bin_name>/ (flat layout).
+
+    Atlas's AtlasOutputDirectory.cmake routes every artifact into
+    bin/<build_dir_name>/, so the bare bin root is the only location
+    that holds the binary. Legacy nested subdirs are still searched
+    for transitional builds.
+    """
     bin_base = repo_root / "bin" / bin_name
     suffixes = [".exe", ""] if os.name == "nt" else ["", ".exe"]
-    for subdir in subdirs:
+    for subdir in (*subdirs, ""):
         for suffix in suffixes:
             candidate = bin_base / subdir / f"{stem}{suffix}"
             if candidate.exists():
                 return candidate
-    return bin_base / "server" / f"{stem}{'.exe' if os.name == 'nt' else ''}"
+    return bin_base / f"{stem}{'.exe' if os.name == 'nt' else ''}"
 
 
 @dataclass
@@ -285,11 +291,9 @@ def wait_for_registration(
     name: str,
     timeout_sec: int = 15,
 ) -> bool:
+    # Atlas's flat bin/<build>/ layout puts every DLL next to atlas_tool, so
+    # the OS loader resolves them from the executable's own directory.
     env = os.environ.copy()
-    server_dir = str(atlas_tool.parent.parent / "server")
-    path_sep = ";" if os.name == "nt" else ":"
-    env["PATH"] = server_dir + path_sep + env.get("PATH", "")
-
     deadline = time.monotonic() + timeout_sec
     while time.monotonic() < deadline:
         result = subprocess.run(
@@ -426,9 +430,9 @@ def main() -> int:
     bin_name = Path(args.build_dir).name
     bin_base = repo_root / "bin" / bin_name
     runtime_config = repo_root / "runtime" / "atlas_server.runtimeconfig.json"
-    runtime_assembly = bin_base / "server" / "Atlas.Runtime.dll"
+    runtime_assembly = bin_base / "Atlas.Runtime.dll"
 
-    search_subdirs = ["server", "tools"]
+    search_subdirs = []
     atlas_tool = resolve_program(repo_root, bin_name, search_subdirs, "atlas_tool")
     login_stress = resolve_program(repo_root, bin_name, search_subdirs, "login_stress")
     machined = resolve_program(repo_root, bin_name, search_subdirs, "machined")

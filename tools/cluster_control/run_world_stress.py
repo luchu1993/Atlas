@@ -85,7 +85,7 @@ def parse_args() -> argparse.Namespace:
         "--capture-dir", default=None,
         help="Save per-process Tracy captures (.tracy) to this directory. "
              "Filenames include git short hash and timestamp. "
-             "Requires tracy-capture.exe in bin/<build>/tools/.",
+             "Requires tracy-capture.exe in bin/<build>/.",
     )
     parser.add_argument(
         "--capture-procs",
@@ -249,18 +249,15 @@ def _exe_suffixes() -> list[str]:
 
 
 def _dll_env(exe_path: Path) -> dict[str, str]:
-    """Return env dict with the sibling server/ directory prepended to PATH.
+    """Return a copy of the current process env.
 
-    On Windows, DLL resolution starts from the executable's own directory.
-    Executables in tools/ share DLL dependencies with server/ (mimalloc,
-    TracyClient, atlas_engine), so we prepend server/ to PATH for any
-    process that lives outside that directory.
+    Atlas now uses a flat bin/<build>/ layout (see cmake/AtlasFolders.cmake),
+    so every EXE sits next to its DLL siblings and the OS loader resolves
+    them from the executable's own directory. No PATH manipulation needed.
+    The argument is kept for call-site compatibility.
     """
-    env = os.environ.copy()
-    server_dir = str(exe_path.parent.parent / "server")
-    path_sep = ";" if os.name == "nt" else ":"
-    env["PATH"] = server_dir + path_sep + env.get("PATH", "")
-    return env
+    del exe_path
+    return os.environ.copy()
 
 
 def _git_short(repo_root: Path) -> str:
@@ -375,19 +372,22 @@ def stop_tracy_captures(captures: list[subprocess.Popen[str]]) -> None:
 def resolve_program(
     build_root: Path, bin_name: str, subdirs: Iterable[str], stem: str
 ) -> Path:
-    """Locate an executable under bin/<bin_name>/<subdir>/.
+    """Locate an executable under bin/<bin_name>/.
 
     bin_name is the last path component of the CMake binary directory
     (e.g. "profile-release", "debug") — Atlas's AtlasOutputDirectory.cmake
-    routes all artifacts into bin/<build_dir_name>/, not bin/<config_snake>/.
+    routes all artifacts into bin/<build_dir_name>/ as a flat layout.
+    The `subdirs` argument is preserved for call-site compatibility but
+    only the empty-string entry is used in practice; legacy nested
+    layouts are still searched in case the caller targets an older tree.
     """
     bin_base = build_root / "bin" / bin_name
-    for subdir in subdirs:
+    for subdir in (*subdirs, ""):
         for suffix in _exe_suffixes():
             candidate = bin_base / subdir / f"{stem}{suffix}"
             if candidate.exists():
                 return candidate
-    return bin_base / "server" / f"{stem}{'.exe' if os.name == 'nt' else ''}"
+    return bin_base / f"{stem}{'.exe' if os.name == 'nt' else ''}"
 
 
 @dataclass
@@ -636,7 +636,7 @@ def build_stress_args(args: argparse.Namespace, worker: dict[str, object]) -> li
 
 def default_client_exe(args: argparse.Namespace) -> Path:
     bin_name = Path(args.build_dir).name
-    return resolve_repo_root() / "bin" / bin_name / "client" / "atlas_client.exe"
+    return resolve_repo_root() / "bin" / bin_name / "atlas_client.exe"
 
 
 def default_client_assembly(args: argparse.Namespace) -> Path:
@@ -694,12 +694,13 @@ def main() -> int:
     bin_name = Path(args.build_dir).name
     bin_base = repo_root / "bin" / bin_name
 
-    # C# assemblies deployed by CMake into bin/<bin_name>/tools/.
-    base_assembly = bin_base / "tools" / "Atlas.StressTest.Base.dll"
-    cell_assembly = bin_base / "tools" / "Atlas.StressTest.Cell.dll"
+    # C# assemblies deployed by CMake into bin/<bin_name>/ (flat layout).
+    base_assembly = bin_base / "Atlas.StressTest.Base.dll"
+    cell_assembly = bin_base / "Atlas.StressTest.Cell.dll"
 
-    # Subdirectories to search for executables.
-    search_subdirs = ["server", "tools"]
+    # Legacy subdirectory hints kept for transitional builds; resolve_program
+    # also falls back to the flat bin/<bin_name>/ root.
+    search_subdirs = []
 
     atlas_tool = resolve_program(repo_root, bin_name, search_subdirs, "atlas_tool")
     machined = resolve_program(repo_root, bin_name, search_subdirs, "machined")

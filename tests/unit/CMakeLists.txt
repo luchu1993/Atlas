@@ -460,8 +460,9 @@ atlas_add_test(NAME test_clr_object
 # These tests can't use atlas_add_test (they need custom ENVIRONMENT
 # properties), so replicate every post-target step that helper runs
 # for the regular test targets:
-#   1. Route output to bin/<config>/test/ so the exe lands next to
-#      its CLR runtime DLLs (nethost.dll, atlas_engine.dll).
+#   1. Route output to bin/<config>/ so the exe lands next to its
+#      CLR runtime DLLs (nethost.dll, atlas_engine.dll). All artifacts
+#      share a single flat bin/ — see cmake/AtlasFolders.cmake.
 #   2. On Windows, deploy transitively-linked runtime DLLs + the
 #      atlas_engine / nethost pair that TARGET_RUNTIME_DLLS misses
 #      (atlas_engine is loaded via DynamicLibrary::Load, not linked).
@@ -475,7 +476,7 @@ macro(_atlas_route_clr_test_binary _target)
   foreach(_cfg IN ITEMS Debug Release RelWithDebInfo MinSizeRel)
     string(TOUPPER "${_cfg}" _CFG)
     set_target_properties(${_target} PROPERTIES
-      RUNTIME_OUTPUT_DIRECTORY_${_CFG} "${ATLAS_BIN_ROOT}/test"
+      RUNTIME_OUTPUT_DIRECTORY_${_CFG} "${ATLAS_BIN_ROOT}"
     )
   endforeach()
   if(WIN32)

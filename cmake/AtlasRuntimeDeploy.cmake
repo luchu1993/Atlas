@@ -71,17 +71,40 @@ function(atlas_deploy_clr_runtime target)
   if(NOT WIN32)
     return()
   endif()
-  if(NOT TARGET atlas_engine)
-    message(FATAL_ERROR
-      "atlas_deploy_clr_runtime(${target}): atlas_engine target not defined "
-      "(CLR features disabled?)")
-  endif()
 
   get_target_property(_already_deployed ${target} _ATLAS_CLR_DEPLOYED)
   if(_already_deployed)
     return()
   endif()
   set_target_properties(${target} PROPERTIES _ATLAS_CLR_DEPLOYED TRUE)
+
+  # Always: copy transitively-linked runtime DLLs (mimalloc, TracyClient,
+  # zlib's zlibd, …). Required even for non-CLR consumers because
+  # atlas_foundation propagates mimalloc as a SHARED runtime dep —
+  # otherwise the exe starts up with STATUS_DLL_NOT_FOUND.
+  add_custom_command(TARGET ${target} POST_BUILD
+    COMMAND ${CMAKE_COMMAND}
+            "-DTARGET_DLLS=$<TARGET_RUNTIME_DLLS:${target}>"
+            "-DTARGET_DIR=$<TARGET_FILE_DIR:${target}>"
+            -P "${CMAKE_SOURCE_DIR}/cmake/CopyRuntimeDLLs.cmake"
+    VERBATIM
+  )
+
+  # CLR-specific copies (atlas_engine.dll + nethost.dll) only apply when
+  # the target actually links the CLR bridge. Manager-style servers and
+  # CLI tools never start a CLR, so skipping these avoids deploying a
+  # second TracyClient.dll alongside a duplicated managed runtime —
+  # which split the in-process Tracy state across two singletons.
+  _atlas_transitively_links(${target} atlas_clrscript _need_clr)
+  if(NOT _need_clr)
+    return()
+  endif()
+
+  if(NOT TARGET atlas_engine)
+    message(FATAL_ERROR
+      "atlas_deploy_clr_runtime(${target}): atlas_engine target not defined "
+      "(CLR features disabled?)")
+  endif()
 
   # Ensure atlas_engine is built before `target` finishes linking, so the
   # POST_BUILD copy finds the DLL in place.
@@ -102,21 +125,6 @@ function(atlas_deploy_clr_runtime target)
       VERBATIM
     )
   endif()
-
-  # Walk transitively-linked runtime DLLs (mimalloc, TracyClient, zlib's
-  # zlibd, …) and copy them next to the exe. atlas_add_test does this
-  # for tests via the same CopyRuntimeDLLs helper; server exes need the
-  # same coverage now that the default heap allocator (mimalloc) is a
-  # SHARED library propagated through atlas_foundation. Without this,
-  # bin/<build>/server/atlas_cellapp.exe starts up with
-  # STATUS_DLL_NOT_FOUND for mimalloc-debug.dll.
-  add_custom_command(TARGET ${target} POST_BUILD
-    COMMAND ${CMAKE_COMMAND}
-            "-DTARGET_DLLS=$<TARGET_RUNTIME_DLLS:${target}>"
-            "-DTARGET_DIR=$<TARGET_FILE_DIR:${target}>"
-            -P "${CMAKE_SOURCE_DIR}/cmake/CopyRuntimeDLLs.cmake"
-    VERBATIM
-  )
 endfunction()
 
 # ── Database plugin deployment ──────────────────────────────────────────────

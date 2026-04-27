@@ -169,26 +169,29 @@ atlas_set_folder("Test/Stress" ${_atlas_stress_targets})
 atlas_add_ide_headers(${_atlas_stress_targets})
 
 # ── Output directories ─────────────────────────────────────────────────────
-# Route build artifacts into categorised subdirectories under bin/.
-# MSVC multi-config generators auto-append /<CONFIG>.
+# All build artifacts (EXE / DLL / .lib) land in bin/<build>/ as a single
+# flat directory. The previous layout split outputs across server/, tools/,
+# client/, test/ and lib/ subdirectories, but co-located runtime DLLs were
+# duplicated across every subdir and Windows treated each absolute path as
+# a separate module — most visibly causing two TracyClient.dll instances
+# inside CLR-hosting processes (cellapp/baseapp loaded the C# script
+# assembly from tools/ which dragged in tools/TracyClient.dll while the
+# EXE itself imported server/TracyClient.dll, splitting the in-process
+# Tracy state across two singletons). A flat layout makes co-loading
+# physically impossible.
 include(AtlasOutputDirectory)
 
-# Server executables
-atlas_set_output_dir("server"
+atlas_set_output_dir(""
+  # Server executables
   atlas_baseapp atlas_baseappmgr
   atlas_cellapp atlas_cellappmgr
   atlas_dbapp atlas_loginapp
   atlas_echoapp machined
-)
-
-# Client executable
-atlas_set_output_dir("client" atlas_client)
-
-# Tools
-atlas_set_output_dir("tools" ${_atlas_stress_targets} ${_atlas_app_tool_targets})
-
-# Libraries (static + third-party)
-atlas_set_output_dir("lib"
+  # Client executable
+  atlas_client
+  # Tools
+  ${_atlas_stress_targets} ${_atlas_app_tool_targets}
+  # Libraries (static + third-party)
   ${_atlas_lib_targets}
   atlas_db_iface atlas_db_sqlite atlas_db_xml
   atlas_baseapp_lib atlas_baseappmgr_lib
@@ -201,17 +204,16 @@ atlas_set_output_dir("lib"
   zlib zlibstatic
 )
 
-# DB plugin DLLs: RUNTIME goes to lib/, but ARCHIVE (import lib) stays in the
-# build tree to avoid colliding with the static lib of the same name. Output
-# path uses ATLAS_BIN_ROOT (build-dir-derived) so a parallel build directory
-# does not overwrite the default's plugin DLLs.
+# DB plugin DLLs share the flat output dir. ARCHIVE (import lib) collides
+# with the static lib of the same name if both land in the same dir, so
+# the plugin's import lib stays under the build tree.
 foreach(_plugin IN ITEMS atlas_db_sqlite_plugin atlas_db_xml_plugin)
   if(TARGET ${_plugin})
     foreach(_cfg IN ITEMS Debug Release RelWithDebInfo MinSizeRel)
       string(TOUPPER "${_cfg}" _CFG)
       set_target_properties(${_plugin} PROPERTIES
-        RUNTIME_OUTPUT_DIRECTORY_${_CFG} "${ATLAS_BIN_ROOT}/lib"
-        LIBRARY_OUTPUT_DIRECTORY_${_CFG} "${ATLAS_BIN_ROOT}/lib"
+        RUNTIME_OUTPUT_DIRECTORY_${_CFG} "${ATLAS_BIN_ROOT}"
+        LIBRARY_OUTPUT_DIRECTORY_${_CFG} "${ATLAS_BIN_ROOT}"
       )
     endforeach()
   endif()

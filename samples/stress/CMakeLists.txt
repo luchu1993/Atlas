@@ -11,7 +11,7 @@ atlas_dotnet_project(
   PROJECT_FILE Atlas.StressTest.Base/Atlas.StressTest.Base.csproj
   ASSEMBLY_NAME Atlas.StressTest.Base.dll
   DEPENDS atlas_runtime_dll
-  DEPLOY_TO tools
+  DEPLOY
 )
 
 atlas_dotnet_project(
@@ -19,5 +19,5 @@ atlas_dotnet_project(
   PROJECT_FILE Atlas.StressTest.Cell/Atlas.StressTest.Cell.csproj
   ASSEMBLY_NAME Atlas.StressTest.Cell.dll
   DEPENDS atlas_runtime_dll
-  DEPLOY_TO tools
+  DEPLOY
 )
