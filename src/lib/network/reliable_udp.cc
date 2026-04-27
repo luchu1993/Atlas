@@ -192,6 +192,9 @@ auto ReliableUdpChannel::BuildPacket(uint8_t flags, SeqNum seq, std::span<const 
     auto bits_le = endian::ToLittle(recv_ack_bits_);
     std::memcpy(hdr_buf.data() + hdr_len, &bits_le, sizeof(uint32_t));
     hdr_len += sizeof(uint32_t);
+    auto una_le = endian::ToLittle(static_cast<uint32_t>(rcv_nxt_));
+    std::memcpy(hdr_buf.data() + hdr_len, &una_le, sizeof(uint32_t));
+    hdr_len += sizeof(uint32_t);
   }
 
   if ((flags & rudp::kFlagFragment) && frag) {
@@ -252,8 +255,15 @@ void ReliableUdpChannel::OnDatagramReceived(std::span<const std::byte> data) {
   if (flags & rudp::kFlagHasAck) {
     auto ack_num = reader.Read<uint32_t>();
     auto ack_bits = reader.Read<uint32_t>();
-    if (!ack_num || !ack_bits) {
+    auto una = reader.Read<uint32_t>();
+    if (!ack_num || !ack_bits || !una) {
       return;
+    }
+    // Cumulative ACK first — clears anything before the receiver's
+    // delivery frontier in one shot, regardless of SACK bitmap reach.
+    auto una_acked = ProcessUna(*una);
+    if (una_acked != 0) {
+      OnAckCwndUpdate(una_acked);
     }
     ProcessAck(*ack_num, *ack_bits);
   }
@@ -279,8 +289,11 @@ void ReliableUdpChannel::OnDatagramReceived(std::span<const std::byte> data) {
     if (flags & rudp::kFlagHasSeq) {
       if (!IsDuplicate(seq) && !SeqGreaterThan(seq, rcv_nxt_ + rcv_wnd_)) {
         RecordReceivedSeq(seq);
-        ScheduleDelayedAck();
       }
+      // Always schedule an ACK on a reliable packet, even duplicates —
+      // ensures the sender's una marker keeps advancing if its earlier
+      // ACK was lost.
+      ScheduleDelayedAck();
     }
     return;
   }
@@ -291,9 +304,16 @@ void ReliableUdpChannel::OnDatagramReceived(std::span<const std::byte> data) {
   }
 
   if (flags & rudp::kFlagHasSeq) {
-    // Reliable packet -- check duplicate and receive window
+    // Reliable packet -- check duplicate and receive window.
+    // For both rejection paths we still schedule a delayed ACK so the
+    // sender's next ACK packet carries our current rcv_nxt_ (una) and
+    // any cumulative-stranded retransmits can drain. Without this, a
+    // lost ACK could leave the sender retrying packets the receiver
+    // already delivered — they hit IsDuplicate, get dropped silently,
+    // and the channel eventually trips dead-link condemn.
     if (IsDuplicate(seq)) {
       ATLAS_LOG_DEBUG("Duplicate packet seq={} from {}", seq, remote_.ToString());
+      ScheduleDelayedAck();
       return;
     }
 
@@ -301,6 +321,7 @@ void ReliableUdpChannel::OnDatagramReceived(std::span<const std::byte> data) {
     if (SeqGreaterThan(seq, rcv_nxt_ + rcv_wnd_)) {
       ATLAS_LOG_DEBUG("Packet seq={} outside receive window (nxt={}, wnd={})", seq, rcv_nxt_,
                       rcv_wnd_);
+      ScheduleDelayedAck();
       return;
     }
 
@@ -321,6 +342,43 @@ void ReliableUdpChannel::OnDatagramReceived(std::span<const std::byte> data) {
     OnDataReceived(*payload);
     DispatchMessages(*payload);
   }
+}
+
+// ============================================================================
+// process_una — KCP-style cumulative ACK. Erases everything strictly below
+// the receiver's rcv_nxt_ (una) frontier in one pass, freeing the sender from
+// the 32-bit ack_bits SACK reach. Returns the count cleared so the caller
+// can roll the increment into a single OnAckCwndUpdate pass alongside the
+// SACK-cleared count from ProcessAck.
+// ============================================================================
+
+auto ReliableUdpChannel::ProcessUna(SeqNum una) -> uint32_t {
+  uint32_t cleared = 0;
+  // Take a single RTT sample from the highest cleared first-time-sent
+  // packet (Karn's algorithm: never sample retransmits). std::map iterates
+  // ascending, so the last qualifying entry seen is the freshest sample.
+  bool have_rtt_sample = false;
+  Duration rtt_sample{};
+  const auto now = Clock::now();
+  for (auto it = unacked_.begin(); it != unacked_.end();) {
+    if (SeqLessThan(it->first, una)) {
+      if (it->second.send_count == 1) {
+        rtt_sample = now - it->second.sent_at;
+        have_rtt_sample = true;
+      }
+      it = unacked_.erase(it);
+      ++cleared;
+    } else {
+      ++it;
+    }
+  }
+  if (have_rtt_sample) {
+    rtt_.Update(rtt_sample);
+  }
+  if (cleared != 0 && unacked_.empty()) {
+    StopResendTimer();
+  }
+  return cleared;
 }
 
 // ============================================================================
@@ -684,9 +742,11 @@ auto ReliableUdpChannel::RebuildPacketHeader(const std::vector<std::byte>& origi
     seq = *s;
   }
 
-  // Skip old ACK fields
+  // Skip old ACK fields (ack_num + ack_bits + una). The new packet will
+  // get fresh ACK info from BuildPacket using current remote_seq_ /
+  // recv_ack_bits_ / rcv_nxt_.
   if (flags & rudp::kFlagHasAck) {
-    reader.Skip(sizeof(uint32_t) * 2);
+    reader.Skip(sizeof(uint32_t) * 3);
   }
 
   // Read fragment header if present
@@ -769,10 +829,10 @@ void ReliableUdpChannel::CheckResends() {
   // kCondemned check, leaking the bundle's buffer until the channel
   // eventually destructs.
   if (dead_link) {
-    ATLAS_LOG_WARNING("Dead link to {}: oldest unacked packet age >= {}ms, condemning channel",
-                      remote_.ToString(),
-                      std::chrono::duration_cast<std::chrono::milliseconds>(kDeadLinkTimeout)
-                          .count());
+    ATLAS_LOG_WARNING(
+        "Dead link to {}: oldest unacked packet age >= {}ms, condemning channel",
+        remote_.ToString(),
+        std::chrono::duration_cast<std::chrono::milliseconds>(kDeadLinkTimeout).count());
     OnDisconnect();
     return;
   }

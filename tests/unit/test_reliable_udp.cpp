@@ -772,3 +772,160 @@ TEST_F(ReliableUdpTest, CwndGrowsAfterFirstAckAllowsSecondSend) {
   auto r4 = channel_a.SendReliable();
   ASSERT_TRUE(r4.HasValue()) << "Second send should succeed with cwnd>=2";
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// KCP-style cumulative ACK (UNA) tests — guard the fix for the dead-link
+// regression where >33-packet bursts left the front of the send queue
+// permanently stranded once the SACK bitmap (32-bit window) lost reach.
+// ─────────────────────────────────────────────────────────────────────────────
+
+TEST_F(ReliableUdpTest, UnaClearsPacketsBeyondSackWindow) {
+  auto sock_a = Socket::CreateUdp();
+  ASSERT_TRUE(sock_a.HasValue());
+  ASSERT_TRUE(sock_a->Bind(Address("127.0.0.1", 0)).HasValue());
+  auto addr_a = sock_a->LocalAddress().Value();
+
+  auto sock_b = Socket::CreateUdp();
+  ASSERT_TRUE(sock_b.HasValue());
+  ASSERT_TRUE(sock_b->Bind(Address("127.0.0.1", 0)).HasValue());
+  auto addr_b = sock_b->LocalAddress().Value();
+
+  table_.RegisterTypedHandler<RudpTestMsg>([](const Address&, Channel*, const RudpTestMsg&) {});
+
+  ReliableUdpChannel channel_a(dispatcher_, table_, *sock_a, addr_b);
+  channel_a.Activate();
+  ReliableUdpChannel channel_b(dispatcher_, table_, *sock_b, addr_a);
+  channel_b.Activate();
+
+  // Fixed window, no slow start — needed to dispatch >33 reliable packets
+  // before any ACK round-trip has had a chance to land.
+  channel_a.SetNocwnd(true);
+  channel_a.SetSendWindow(128);
+  channel_b.SetRecvWindow(128);
+
+  // Send a burst that exceeds the SACK bitmap reach (33 packets).
+  constexpr uint32_t kBurst = 50;
+  for (uint32_t i = 0; i < kBurst; ++i) {
+    channel_a.Bundle().AddMessage(RudpTestMsg{i});
+    ASSERT_TRUE(channel_a.SendReliable().HasValue()) << "burst send #" << i;
+  }
+  EXPECT_EQ(channel_a.UnackedCount(), kBurst);
+
+  // B drains all 50 datagrams, advancing rcv_nxt_ to seq 51.
+  std::this_thread::sleep_for(std::chrono::milliseconds(50));
+  pump_datagrams(*sock_b, channel_b);
+  EXPECT_EQ(channel_b.RecvNextSeq(), kBurst + 1u);
+
+  // B sends a single reliable reply. Its ACK header carries
+  // una = rcv_nxt_ = 51, ack_num = 50, ack_bits covering 18..49.
+  // Pre-fix this would clear only seqs 18..50 (33 entries) and leave 1..17
+  // stranded; post-fix the una pass clears the whole 1..50 range first.
+  channel_b.Bundle().AddMessage(RudpTestMsg{999});
+  ASSERT_TRUE(channel_b.SendReliable().HasValue());
+
+  std::this_thread::sleep_for(std::chrono::milliseconds(50));
+  pump_datagrams(*sock_a, channel_a);
+
+  EXPECT_EQ(channel_a.UnackedCount(), 0u)
+      << "UNA cumulative ACK must clear the entire <una range, even when the "
+         "SACK bitmap (32 bits) cannot reach the oldest unacked entries.";
+}
+
+TEST_F(ReliableUdpTest, UnaEmptiesUnackedAndStopsResendTimer) {
+  // Smaller-scale variant: any single reliable round-trip should fully
+  // drain unacked_ via UNA (rcv_nxt_ advances past the only seq), even
+  // before any SACK bitmap bits would be relevant.
+  auto sock_a = Socket::CreateUdp();
+  ASSERT_TRUE(sock_a.HasValue());
+  ASSERT_TRUE(sock_a->Bind(Address("127.0.0.1", 0)).HasValue());
+  auto addr_a = sock_a->LocalAddress().Value();
+
+  auto sock_b = Socket::CreateUdp();
+  ASSERT_TRUE(sock_b.HasValue());
+  ASSERT_TRUE(sock_b->Bind(Address("127.0.0.1", 0)).HasValue());
+  auto addr_b = sock_b->LocalAddress().Value();
+
+  table_.RegisterTypedHandler<RudpTestMsg>([](const Address&, Channel*, const RudpTestMsg&) {});
+
+  ReliableUdpChannel channel_a(dispatcher_, table_, *sock_a, addr_b);
+  channel_a.Activate();
+  ReliableUdpChannel channel_b(dispatcher_, table_, *sock_b, addr_a);
+  channel_b.Activate();
+
+  channel_a.Bundle().AddMessage(RudpTestMsg{1});
+  ASSERT_TRUE(channel_a.SendReliable().HasValue());
+  EXPECT_EQ(channel_a.UnackedCount(), 1u);
+
+  std::this_thread::sleep_for(std::chrono::milliseconds(50));
+  pump_datagrams(*sock_b, channel_b);
+  EXPECT_EQ(channel_b.RecvNextSeq(), 2u);
+
+  channel_b.Bundle().AddMessage(RudpTestMsg{2});
+  ASSERT_TRUE(channel_b.SendReliable().HasValue());
+
+  std::this_thread::sleep_for(std::chrono::milliseconds(50));
+  pump_datagrams(*sock_a, channel_a);
+
+  EXPECT_EQ(channel_a.UnackedCount(), 0u);
+}
+
+TEST_F(ReliableUdpTest, DuplicateReliablePacketStillTriggersAck) {
+  // Replay scenario: A's original ACK from B is "lost", A retransmits
+  // the same wire packet. B sees IsDuplicate==true and previously dropped
+  // silently — leaving the sender starved of any ACK signal until
+  // dead-link condemned the channel. The fix unconditionally schedules a
+  // delayed ACK on every reliable receipt, so B's reply still carries an
+  // up-to-date una/ack and A's unacked drains.
+  auto sock_a = Socket::CreateUdp();
+  ASSERT_TRUE(sock_a.HasValue());
+  ASSERT_TRUE(sock_a->Bind(Address("127.0.0.1", 0)).HasValue());
+  auto addr_a = sock_a->LocalAddress().Value();
+
+  auto sock_b = Socket::CreateUdp();
+  ASSERT_TRUE(sock_b.HasValue());
+  ASSERT_TRUE(sock_b->Bind(Address("127.0.0.1", 0)).HasValue());
+  auto addr_b = sock_b->LocalAddress().Value();
+
+  table_.RegisterTypedHandler<RudpTestMsg>([](const Address&, Channel*, const RudpTestMsg&) {});
+
+  ReliableUdpChannel channel_a(dispatcher_, table_, *sock_a, addr_b);
+  channel_a.Activate();
+  ReliableUdpChannel channel_b(dispatcher_, table_, *sock_b, addr_a);
+  channel_b.Activate();
+
+  // A sends a reliable packet. Capture the wire bytes B receives so we can
+  // replay them — simulating the OS handing the same datagram twice
+  // because A's retransmit timer fires after a "lost" ACK.
+  channel_a.Bundle().AddMessage(RudpTestMsg{42});
+  ASSERT_TRUE(channel_a.SendReliable().HasValue());
+
+  std::this_thread::sleep_for(std::chrono::milliseconds(50));
+
+  std::array<std::byte, 2048> buf{};
+  auto first_recv = sock_b->RecvFrom(buf);
+  ASSERT_TRUE(first_recv.HasValue());
+  ASSERT_GT(first_recv->first, 0u);
+  std::vector<std::byte> wire_bytes(buf.begin(), buf.begin() + first_recv->first);
+
+  // First delivery — B advances rcv_nxt_ and (pre-fix) would mark this
+  // seq as already received.
+  channel_b.OnDatagramReceived(std::span<const std::byte>(wire_bytes));
+  EXPECT_EQ(channel_b.RecvNextSeq(), 2u);
+
+  // Replay the exact same bytes — B treats it as a duplicate. The fix
+  // requires it to still ScheduleDelayedAck so the next reply piggybacks
+  // an ACK pointer covering this seq.
+  channel_b.OnDatagramReceived(std::span<const std::byte>(wire_bytes));
+
+  // B sends back a reliable reply; its ACK header should now carry
+  // una = 2, which strictly clears A's unacked entry for seq 1.
+  channel_b.Bundle().AddMessage(RudpTestMsg{99});
+  ASSERT_TRUE(channel_b.SendReliable().HasValue());
+
+  std::this_thread::sleep_for(std::chrono::milliseconds(50));
+  pump_datagrams(*sock_a, channel_a);
+
+  EXPECT_EQ(channel_a.UnackedCount(), 0u)
+      << "Duplicate reliable receipt must still trigger an ACK so the "
+         "sender's unacked queue eventually drains.";
+}

@@ -19,11 +19,19 @@ namespace atlas {
 namespace rudp {
 inline constexpr uint8_t kFlagReliable = 0x01;
 inline constexpr uint8_t kFlagHasSeq = 0x02;
-inline constexpr uint8_t kFlagHasAck = 0x04;
+inline constexpr uint8_t kFlagHasAck = 0x04;    // implies ack(4) + ack_bits(4) + una(4)
 inline constexpr uint8_t kFlagFragment = 0x08;  // has fragment header (4 bytes)
 
-// Header overhead: flags(1) + seq(4) + ack(4) + ack_bits(4) + frag(4) = 17
-inline constexpr std::size_t kMaxHeaderSize = 17;
+// Header overhead: flags(1) + seq(4) + ack(4) + ack_bits(4) + una(4) + frag(4) = 21
+//
+// `una` carries the receiver's rcv_nxt_ (next expected in-order seq). The
+// sender treats it as a KCP-style cumulative ACK: every unacked packet with
+// seq < una has been delivered, regardless of whether it falls inside the
+// 32-bit ack_bits SACK window. Without una the SACK alone caps single-ACK
+// confirmations at 33 packets, so a >33-packet burst within one delayed-ACK
+// window would strand the front of the send queue and eventually trigger
+// dead-link condemn.
+inline constexpr std::size_t kMaxHeaderSize = 21;
 inline constexpr std::size_t kMtu = 1472;
 inline constexpr std::size_t kMaxUdpPayload = kMtu - kMaxHeaderSize;
 inline constexpr std::size_t kMaxFragments = 255;
@@ -129,6 +137,10 @@ class ReliableUdpChannel : public Channel {
   auto RebuildPacketHeader(const std::vector<std::byte>& original_packet) -> std::vector<std::byte>;
 
   // ACK processing
+  // ProcessUna applies the cumulative ACK pointer (KCP-style): every
+  // unacked entry with seq < `una` is removed. Returns the number cleared
+  // so the caller can roll the count into a single OnAckCwndUpdate.
+  auto ProcessUna(SeqNum una) -> uint32_t;
   void ProcessAck(SeqNum ack_num, uint32_t ack_bits);
 
   // Resend logic
