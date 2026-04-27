@@ -375,7 +375,7 @@ def resolve_program(
     """Locate an executable under bin/<bin_name>/.
 
     bin_name is the last path component of the CMake binary directory
-    (e.g. "profile-release", "debug") — Atlas's AtlasOutputDirectory.cmake
+    (e.g. "profile", "debug") — Atlas's AtlasOutputDirectory.cmake
     routes all artifacts into bin/<build_dir_name>/ as a flat layout.
     The `subdirs` argument is preserved for call-site compatibility but
     only the empty-string entry is used in practice; legacy nested

@@ -12,7 +12,7 @@ ceiling Atlas must support comfortably.
 
 ## Profiling Baseline
 
-Measured with `run_baseline_profile.sh` (100 clients, 120s, profile-release,
+Measured with `run_baseline_profile.sh` (100 clients, 120s, profile,
 `b70b0ad`). Tracy captures in `.tmp/prof/baseline/`.
 
 ### CellApp (10 Hz, budget = 100 ms/tick)

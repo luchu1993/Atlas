@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
-# Run a world_stress baseline against the profile-release build.
+# Run a world_stress baseline against the profile build.
 #
 # Prerequisites:
-#   cmake --preset profile-release && cmake --build build/profile-release --config RelWithDebInfo
+#   cmake --preset profile && cmake --build build/profile --config RelWithDebInfo
 #
 # Usage:
 #   ./tools/cluster_control/run_baseline_profile.sh [--clients N] [--duration-sec N] [extra args...]
@@ -17,7 +17,7 @@ REPO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 
 PYTHON="${PYTHON:-python}"
 exec "${PYTHON}" "${SCRIPT_DIR}/run_world_stress.py" \
-    --build-dir   build/profile-release \
+    --build-dir   build/profile \
     --config      RelWithDebInfo \
     --clients     100 \
     --account-pool 100 \

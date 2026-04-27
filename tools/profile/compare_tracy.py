@@ -10,7 +10,7 @@ CellApp performance. Regressions (new > baseline by more than --threshold %)
 are flagged with ▲; improvements with ▼.
 
 Prerequisites:
-    tracy-csvexport.exe must be in bin/profile-release/ or on PATH,
+    tracy-csvexport.exe must be in bin/profile/ or on PATH,
     or supplied via --csvexport.
 """
 
@@ -62,12 +62,12 @@ def find_csvexport(hint: str | None) -> Path:
         sys.exit(f"tracy-csvexport not found at: {hint}")
 
     candidates = [
-        REPO_ROOT / "bin" / "profile-release" / "tracy-csvexport.exe",
-        REPO_ROOT / "bin" / "profile-release" / "tracy-csvexport",
+        REPO_ROOT / "bin" / "profile" / "tracy-csvexport.exe",
+        REPO_ROOT / "bin" / "profile" / "tracy-csvexport",
         # Legacy nested layout (server/, tools/, …) — kept for transitional
         # builds before the flat bin/<build>/ refactor.
-        REPO_ROOT / "bin" / "profile-release" / "tools" / "tracy-csvexport.exe",
-        REPO_ROOT / "bin" / "profile-release" / "tools" / "tracy-csvexport",
+        REPO_ROOT / "bin" / "profile" / "tools" / "tracy-csvexport.exe",
+        REPO_ROOT / "bin" / "profile" / "tools" / "tracy-csvexport",
         Path("tracy-csvexport.exe"),
         Path("tracy-csvexport"),
     ]
@@ -75,7 +75,7 @@ def find_csvexport(hint: str | None) -> Path:
         if c.exists():
             return c
     sys.exit(
-        "tracy-csvexport not found. Pass --csvexport <path> or build profile-release."
+        "tracy-csvexport not found. Pass --csvexport <path> or build profile."
     )
 
 

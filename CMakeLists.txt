@@ -27,10 +27,9 @@ option(ATLAS_PROFILER_ON_DEMAND
        "Tracy ON_DEMAND mode — instrumentation goes inert until a client connects"
        ON)
 option(ATLAS_BUILD_TRACY_VIEWER
-       "Also build the Tracy viewer GUI from source into bin/<build_dir>/tools/. \
-Off by default because the viewer pulls in many vendored dependencies \
-(ImGui, GLFW, libcurl, FreeType, Capstone, …) and adds 30–60 s to a clean \
-configure+build."
+       "Also fetch the Tracy viewer + CLI helpers (tracy-capture / -profiler / \
+-csvexport / -import-* / -update) into bin/<build_dir>/. Off by default \
+because the prebuilt viewer download adds 30–60 s to a clean configure+build."
        OFF)
 if(ATLAS_BUILD_TRACY_VIEWER AND NOT ATLAS_ENABLE_PROFILER)
   message(FATAL_ERROR

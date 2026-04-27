@@ -19,9 +19,9 @@
 | 6 — 内存 hook + 每池追踪 | 0007 | ✅ 完成 | `atlas::Heap` 抽象 + 全局 `operator new`/`delete` override（20 变体） + 每池 named Tracy hook（`PoolAllocator(name, …)`） |
 | 6+ — mimalloc 后端可选 | 0008 | ✅ 完成 | `ATLAS_HEAP_ALLOCATOR=std\|mimalloc` CMake 字符串；将来加入其它 allocator（jemalloc 等）走 3 步扩展 |
 | (默认切换) | 0015 | ✅ 完成 | mimalloc 改为默认堆分配器；server exe 部署链路扩展（atlas_deploy_clr_runtime 现在也透 TARGET_RUNTIME_DLLS） |
-| (输出布局) | 0009 | ✅ 完成 | `bin/<build_dir>/...`，并存的 CMake build 目录（如 `build/debug` + `build/profile-release-mimalloc`）互不覆盖 |
+| (输出布局) | 0009 | ✅ 完成 | `bin/<build_dir>/...`，并存的 CMake build 目录（如 `build/debug` + `build/profile-mimalloc`）互不覆盖 |
 | 7 — 客户端 zone + Unity 后端 | 0010 | ✅ 完成（有偏离） | `ClientCallbacks` + `ClientEntity.ApplyPositionUpdate` zone；`Atlas.Client.Unity`（asmdef + `UnityProfilerBackend`）在 Atlas dotnet 流水线之外（Unity-only）。`Atlas.Client.Desktop` 保持 `NullProfilerBackend`，不重复 Tracy 绑定。 |
-| 8 — 构建模式 + runbook | 0011 | ✅ 完成 | `release` preset 关 profiler；新增 `profile-release`（RelWithDebInfo + profiler ON）；运维 runbook 在 [`docs/operations/profiling.md`](../operations/profiling.md)。machined 注 TRACY_PORT 环境变量未实施 —— Tracy 自动 fallback 端口、viewer 的 Discover 解决了多进程 attach。 |
+| 8 — 构建模式 + runbook | 0011 | ✅ 完成 | `release` preset 关 profiler；新增 `profile`（RelWithDebInfo + profiler ON）；运维 runbook 在 [`docs/operations/profiling.md`](../operations/profiling.md)。machined 注 TRACY_PORT 环境变量未实施 —— Tracy 自动 fallback 端口、viewer 的 Discover 解决了多进程 attach。 |
 | (Review 修复) | 0012 | ✅ 完成 | profiler-OFF 模式下旁路 AllocDepthGuard 与 channel.cc snprintf 死代码；新增 [`docs/operations/tracy_usage.md`](../operations/tracy_usage.md) Tracy 使用指南。 |
 
 针对 100v100 attribution 目标，集成**功能上完成**。两处有意识的延后
@@ -341,7 +341,7 @@ Atlas.Shared 启动用 NullProfilerBackend。
 ### Phase 8 —— 构建模式、部署、machined 编排
 
 **文件：**
-- `CMakePresets.json` —— 加 `profile-release` preset（RelWithDebInfo +
+- `CMakePresets.json` —— 加 `profile` preset（RelWithDebInfo +
   `ATLAS_ENABLE_PROFILER=ON`）；普通 `release` 改为 profiler OFF。
 - `src/server/machined/` —— 进程拉起时不必显式注 `TRACY_PORT` 环境变量
   （Tracy 会自动 fallback 端口，viewer 的 Discover 处理多进程 attach）。
@@ -441,6 +441,6 @@ phase 不通过 —— 降低 zone 密度，或在该子系统中改成更低频
 - `cmake/Dependencies.cmake` —— Tracy + mimalloc fetch
 - `cmake/AtlasCompilerOptions.cmake` —— `ATLAS_PROFILE_ENABLED` /
   `ATLAS_HEAP_<NAME>` 注入
-- `CMakePresets.json` —— `profile-release` preset
+- `CMakePresets.json` —— `profile` preset
 - `tests/unit/test_profiler.cpp`、`tests/unit/test_heap.cpp`
 - `docs/operations/profiling.md`、`docs/operations/tracy_usage.md`

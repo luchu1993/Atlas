@@ -56,10 +56,10 @@ GUI 加上 `tracy-capture` / `tracy-csvexport` / `tracy-import-chrome` /
 `bin/<build_dir>/tools/`：
 
 ```bash
-cmake --preset profile-release -DATLAS_BUILD_TRACY_VIEWER=ON
-cmake --build build/profile-release --config RelWithDebInfo
+cmake --preset profile -DATLAS_BUILD_TRACY_VIEWER=ON
+cmake --build build/profile --config RelWithDebInfo
 # 之后 Tracy 工具集就在：
-# bin/profile-release/tools/tracy-profiler.exe
+# bin/profile/tracy-profiler.exe
 ```
 
 下载只在第一次 configure 时发生（约 5 MB），之后 cache 在 build dir 里。
@@ -98,23 +98,23 @@ cmake --build build
 
 ```bash
 cmake --preset debug              # 日常开发
-cmake --preset profile-release    # 生产形态
+cmake --preset profile    # 生产形态
 cmake --build build/<preset> --config Debug
 ```
 
 `release` preset 故意**关掉** profiler——上线二进制不带 Tracy。
-`profile-release` 才是任何"这样改更快吗"实验的目标。
+`profile` 才是任何"这样改更快吗"实验的目标。
 
 ### 第 2 步 —— 跑服务器
 
 ```bash
-bin/profile-release/server/atlas_cellapp.exe --config server.json
+bin/profile/atlas_cellapp.exe --config server.json
 ```
 
 默认情况下 Atlas 的 Tracy client 跑在 **on-demand** 模式
 （`TRACY_ON_DEMAND=ON`）。在 viewer 接入之前，profiler 基础设施基本上
 0 CPU 占用——不 flush、不 broadcast、不缓冲。这是有意设计的：我们要
-保留把插桩留在生产二进制里的可能（用 `profile-release` 而不是
+保留把插桩留在生产二进制里的可能（用 `profile` 而不是
 `release`），同时不让 profiler 24/7 跑开销。
 
 ### 第 3 步 —— 接 viewer

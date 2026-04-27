@@ -16,20 +16,22 @@
     },
     {
       "name": "release",
-      "displayName": "Release",
+      "displayName": "Release (no tests)",
       "binaryDir": "${sourceDir}/build/release",
       "cacheVariables": {
         "CMAKE_BUILD_TYPE": "Release",
-        "ATLAS_ENABLE_PROFILER": "OFF"
+        "ATLAS_ENABLE_PROFILER": "OFF",
+        "ATLAS_BUILD_TESTS": "OFF"
       }
     },
     {
-      "name": "profile-release",
-      "displayName": "Profile-Release (RelWithDebInfo + Tracy, no tests)",
-      "binaryDir": "${sourceDir}/build/profile-release",
+      "name": "profile",
+      "displayName": "Profile (RelWithDebInfo + Tracy + viewer, no tests)",
+      "binaryDir": "${sourceDir}/build/profile",
       "cacheVariables": {
         "CMAKE_BUILD_TYPE": "RelWithDebInfo",
         "ATLAS_ENABLE_PROFILER": "ON",
+        "ATLAS_BUILD_TRACY_VIEWER": "ON",
         "ATLAS_BUILD_TESTS": "OFF"
       }
     },
@@ -118,8 +120,8 @@
       "configurePreset": "release"
     },
     {
-      "name": "profile-release",
-      "configurePreset": "profile-release"
+      "name": "profile",
+      "configurePreset": "profile"
     },
     {
       "name": "hybrid",
@@ -130,13 +132,6 @@
     {
       "name": "debug",
       "configurePreset": "debug",
-      "output": {
-        "outputOnFailure": true
-      }
-    },
-    {
-      "name": "release",
-      "configurePreset": "release",
       "output": {
         "outputOnFailure": true
       }

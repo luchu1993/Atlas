@@ -1,11 +1,11 @@
 #Requires -Version 5.1
 <#
 .SYNOPSIS
-    Run a world_stress baseline against the profile-release build.
+    Run a world_stress baseline against the profile build.
 
 .DESCRIPTION
     Wraps run_world_stress.py with the standard baseline parameters.
-    Prerequisites: cmake --build build/profile-release --config RelWithDebInfo
+    Prerequisites: cmake --build build/profile --config RelWithDebInfo
 
 .PARAMETER Clients
     Number of virtual clients (default: 100).
@@ -29,7 +29,7 @@ $RepoRoot  = (Resolve-Path "$PSScriptRoot\..\..")
 $Script    = "$PSScriptRoot\run_world_stress.py"
 
 python $Script `
-    --build-dir             build/profile-release `
+    --build-dir             build/profile `
     --config                RelWithDebInfo `
     --clients               $Clients `
     --account-pool          $Clients `

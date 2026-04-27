@@ -46,7 +46,7 @@ ctest --build-config Debug --output-on-failure
 - **`debug`** — full debug symbols, assertions enabled, `ATLAS_DEBUG=1`
 - **`release`** — fully optimized, `NDEBUG` defined
 - **`hybrid`** — optimized with debug symbols (RelWithDebInfo)
-- **`profile-release`** — RelWithDebInfo + `ATLAS_ENABLE_PROFILER=ON` (Tracy linked in); skips test exes for fast profiling iteration. Use `debug` or `release` to run unit tests.
+- **`profile`** — RelWithDebInfo + `ATLAS_ENABLE_PROFILER=ON` + `ATLAS_BUILD_TRACY_VIEWER=ON` (Tracy linked in, viewer + CLI helpers downloaded); skips test exes for fast profiling iteration. Use `debug` to run unit tests.
 
 ### Sanitizers
 
@@ -156,16 +156,16 @@ Do not commit if either check fails. Fix the issues first, then re-stage and com
 
 ### Baseline workflow
 
-Always rebuild profile-release before running a baseline — stale binaries produce
+Always rebuild profile before running a baseline — stale binaries produce
 meaningless Tracy data:
 
 ```bash
-cmake --build build/profile-release --config RelWithDebInfo
+cmake --build build/profile --config RelWithDebInfo
 ```
 
-The `profile-release` preset itself sets `ATLAS_BUILD_TESTS=OFF`, so a full
-rebuild drops from minutes to ~30 s by skipping the ~117 test executables.
-Run unit tests against `debug` or `release` instead.
+The `profile` preset sets `ATLAS_BUILD_TESTS=OFF`, so a full rebuild drops
+from minutes to ~30 s by skipping the ~117 test executables. Run unit tests
+against `debug` instead.
 
 ### Memory profiling (callstack-attributed allocs)
 
@@ -211,7 +211,7 @@ python tools/profile/compare_tracy.py \
 ```
 
 The script calls `tracy-csvexport` automatically (looked up from
-`bin/profile-release/`), exports aggregate zone stats to CSV, and prints
+`bin/profile/`), exports aggregate zone stats to CSV, and prints
 a Markdown table of mean / p95 / p99 / max for the key CellApp zones with
 regression flags (default threshold: 10 %).
 
@@ -236,5 +236,5 @@ Options:
 
 A healthy cellapp capture is **≥ 50 MB** for a 120 s run. A file smaller than
 a few MB means tracy-capture disconnected early — usually because the cellapp
-was overloaded (check the log for `Slow tick` warnings) or the profile-release
-binary was not rebuilt after instrumentation changes.
+was overloaded (check the log for `Slow tick` warnings) or the profile binary
+was not rebuilt after instrumentation changes.
