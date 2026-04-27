@@ -95,7 +95,7 @@ set(_atlas_app_login_targets    atlas_loginapp    atlas_loginapp_lib)
 set(_atlas_app_machined_targets machined          atlas_machined_lib)
 set(_atlas_app_echo_targets     atlas_echoapp     atlas_echoapp_lib)
 set(_atlas_app_client_targets   atlas_client      atlas_client_lib)
-set(_atlas_app_tool_targets     atlas_tool)
+set(_atlas_app_tool_targets     atlas_tool crash_demo)
 
 atlas_set_folder("App/base"     ${_atlas_app_base_targets})
 atlas_set_folder("App/cell"     ${_atlas_app_cell_targets})
