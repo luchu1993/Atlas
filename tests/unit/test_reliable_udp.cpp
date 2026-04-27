@@ -149,6 +149,105 @@ TEST_F(ReliableUdpTest, CondemnClearsReliableState) {
   EXPECT_EQ(channel_a.UnackedCount(), 0u);
 }
 
+TEST_F(ReliableUdpTest, CondemnedSendReliableClearsBundle) {
+  // Regression for #6: SendReliable on a condemned channel must drop
+  // staged bundle bytes — otherwise a caller holding a zombie pointer
+  // and repeatedly AddMessage + SendReliable grows bundle_ unboundedly
+  // until destructor (matches Channel::Send and SendUnreliable).
+  auto sock_a = Socket::CreateUdp();
+  ASSERT_TRUE(sock_a.HasValue());
+  ASSERT_TRUE(sock_a->Bind(Address("127.0.0.1", 0)).HasValue());
+  auto addr_b = Address("127.0.0.1", 9999);
+
+  ReliableUdpChannel channel_a(dispatcher_, table_, *sock_a, addr_b);
+  channel_a.Activate();
+  channel_a.Condemn();
+
+  channel_a.Bundle().AddMessage(RudpTestMsg{1});
+  EXPECT_FALSE(channel_a.Bundle().empty());
+  auto r = channel_a.SendReliable();
+  EXPECT_FALSE(r.HasValue());
+  EXPECT_EQ(r.Error().Code(), ErrorCode::kChannelCondemned);
+  EXPECT_TRUE(channel_a.Bundle().empty()) << "Bundle must drain on condemned-error path";
+}
+
+TEST_F(ReliableUdpTest, FragmentTableCappedUnderAttack) {
+  // Regression for #1: a peer fanning out unique fragment_ids with
+  // expected_count=255 and only fragment_index=0 must not balloon
+  // pending_fragments_. Cap is 16; LRU evicts oldest when full.
+  auto sock_b = Socket::CreateUdp();
+  ASSERT_TRUE(sock_b.HasValue());
+  ASSERT_TRUE(sock_b->Bind(Address("127.0.0.1", 0)).HasValue());
+  auto addr_a = Address("127.0.0.1", 1234);
+
+  ReliableUdpChannel channel_b(dispatcher_, table_, *sock_b, addr_a);
+  channel_b.Activate();
+
+  // Build a synthetic stream of fragmented packets with different
+  // fragment_ids but only fragment_index=0 (never completes). Feed
+  // them as if they came in-order so FlushReceiveBuffer reaches
+  // OnFragmentReceived for each.
+  constexpr uint32_t kAttackCount = 64;
+  std::array<std::byte, 32> buf{};
+  for (uint32_t i = 0; i < kAttackCount; ++i) {
+    // Wire layout: flags(1) seq(4) frag_id(2) frag_idx(1) frag_cnt(1) payload
+    std::size_t off = 0;
+    buf[off++] = std::byte{0x01 | 0x02 | 0x08};  // Reliable | HasSeq | Fragment
+    uint32_t seq_le = i + 1;                     // seq starts at 1
+    std::memcpy(buf.data() + off, &seq_le, 4);
+    off += 4;
+    uint16_t fid_le = static_cast<uint16_t>(i + 1);  // unique each round
+    std::memcpy(buf.data() + off, &fid_le, 2);
+    off += 2;
+    buf[off++] = std::byte{0};     // fragment_index = 0
+    buf[off++] = std::byte{255};   // fragment_count = 255 (max-fanout)
+    buf[off++] = std::byte{0xAB};  // 1 byte placeholder payload
+    channel_b.OnDatagramReceived(std::span<const std::byte>(buf.data(), off));
+  }
+
+  // Cap is 16; even with 64 attacks queued, pending must stay <= cap.
+  EXPECT_LE(channel_b.PendingFragmentGroupCount(), 16u);
+  EXPECT_GT(channel_b.PendingFragmentGroupCount(), 0u);
+}
+
+TEST_F(ReliableUdpTest, AckOnlyDatagramBumpsInactivity) {
+  // Regression for #5: pure-ACK datagrams (no payload) must reset
+  // last_activity_ — otherwise a server that pushes data while the
+  // client only ACKs back trips its inactivity timeout.
+  auto sock_a = Socket::CreateUdp();
+  ASSERT_TRUE(sock_a.HasValue());
+  ASSERT_TRUE(sock_a->Bind(Address("127.0.0.1", 0)).HasValue());
+  auto addr_b = Address("127.0.0.1", 1234);
+
+  ReliableUdpChannel channel_a(dispatcher_, table_, *sock_a, addr_b);
+  channel_a.Activate();
+  channel_a.SetInactivityTimeout(std::chrono::milliseconds(100));
+
+  // Wait past the inactivity threshold WITHOUT any inbound traffic.
+  // Then feed a pure-ACK datagram and verify state stays kActive.
+  std::this_thread::sleep_for(std::chrono::milliseconds(80));
+
+  // Synthetic ACK-only datagram: flags=kFlagHasAck(0x04) + ack_num(4) +
+  // ack_bits(4) + una(4). 13 bytes total, no seq, no payload.
+  std::array<std::byte, 13> ack_buf{};
+  ack_buf[0] = std::byte{0x04};  // kFlagHasAck only
+  uint32_t ack_num = 1;
+  uint32_t ack_bits = 0;
+  uint32_t una = 1;
+  std::memcpy(ack_buf.data() + 1, &ack_num, 4);
+  std::memcpy(ack_buf.data() + 5, &ack_bits, 4);
+  std::memcpy(ack_buf.data() + 9, &una, 4);
+  channel_a.OnDatagramReceived(std::span<const std::byte>(ack_buf));
+
+  // Drive dispatcher long enough that an unrefreshed inactivity timer
+  // would fire (cumulative > 100 ms since channel start).
+  std::this_thread::sleep_for(std::chrono::milliseconds(50));
+  dispatcher_.ProcessOnce();
+
+  EXPECT_EQ(channel_a.State(), ChannelState::kActive)
+      << "Pure-ACK datagram should reset last_activity_";
+}
+
 TEST_F(ReliableUdpTest, UnreliableSendNoTracking) {
   auto sock_a = Socket::CreateUdp();
   ASSERT_TRUE(sock_a.HasValue());

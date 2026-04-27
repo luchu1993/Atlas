@@ -99,6 +99,9 @@ class ReliableUdpChannel : public Channel {
   [[nodiscard]] auto Cwnd() const -> uint32_t { return cwnd_; }
   [[nodiscard]] auto Ssthresh() const -> uint32_t { return ssthresh_; }
   [[nodiscard]] auto EffectiveWindow() const -> uint32_t;
+  [[nodiscard]] auto PendingFragmentGroupCount() const -> uint32_t {
+    return static_cast<uint32_t>(pending_fragments_.size());
+  }
 
  protected:
   [[nodiscard]] auto DoSend(std::span<const std::byte> data) -> Result<size_t> override;
@@ -215,7 +218,15 @@ class ReliableUdpChannel : public Channel {
   // Fragmentation state
   uint16_t next_fragment_id_{1};
   std::unordered_map<uint16_t, FragmentGroup> pending_fragments_;
-  static constexpr std::size_t kMaxPendingFragmentGroups = 64;
+  // Hard cap on concurrent in-progress reassemblies per channel. A
+  // malicious peer can otherwise fan out unique fragment_ids with
+  // expected_count=255 to inflate state — even with lazy buffer growth
+  // the metadata + frag_sizes vector adds up. Legit traffic rarely
+  // overlaps more than a handful of fragmented messages at once. When
+  // this cap is hit we evict the oldest (by first_received) to make
+  // room — old groups that haven't completed are likely stalled
+  // attackers anyway.
+  static constexpr std::size_t kMaxPendingFragmentGroups = 16;
 
   // Resend timer
   TimerHandle resend_timer_;

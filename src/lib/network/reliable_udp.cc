@@ -43,6 +43,10 @@ auto ReliableUdpChannel::EffectiveWindow() const -> uint32_t {
 
 auto ReliableUdpChannel::SendReliable() -> Result<void> {
   if (state_ == ChannelState::kCondemned) {
+    // Drop staged messages so a caller holding a zombie pointer can't
+    // keep growing bundle_ unboundedly — mirrors Channel::Send and
+    // SendUnreliable.
+    bundle_.Clear();
     return Error(ErrorCode::kChannelCondemned, "Channel is condemned");
   }
 
@@ -221,6 +225,15 @@ void ReliableUdpChannel::OnDatagramReceived(std::span<const std::byte> data) {
     return;
   }
 
+  // Inbound datagrams — including pure-ACK packets with no payload —
+  // are evidence of peer liveness. Channel::OnDataReceived only fires
+  // for application payloads, so without this bump a server that pushes
+  // data while the client only ACKs back would trip its 10s inactivity
+  // timeout (see baseapp.cc:194 / loginapp.cc:126) and disconnect AFK
+  // clients. Reset before drop_window so injected drops still register
+  // as activity for the inactivity logic.
+  ResetInactivityTimer();
+
   // Transport-level drop injection (script_client_smoke.md 场景 3). The drop
   // happens BEFORE header parsing, ACK generation, or receive-window
   // tracking — exactly where a transport-layer packet loss would. The
@@ -390,6 +403,14 @@ void ReliableUdpChannel::ProcessAck(SeqNum ack_num, uint32_t ack_bits) {
   uint32_t acked_count = 0;
   auto now = Clock::now();
 
+  // Take at most one RTT sample per ACK — and only from the highest
+  // acked seq (diff == 0). Updating the smoothed RTT estimator 33 times
+  // in a tight loop with samples from the same delayed-ACK batch
+  // collapses (rtt*7 + s)/8 into ~98% the latest sample, wiping
+  // historical SRTT. KCP samples once per ACK by design (uses the ts
+  // field); we approximate by taking the freshest seq's sample.
+  // ProcessUna already covers the cumulative-cleared range, so this
+  // path only needs to sample when there's a gap (rcv_nxt_ < ack_num).
   for (int32_t diff = 0; diff <= 32; ++diff) {
     SeqNum candidate = ack_num - static_cast<SeqNum>(diff);
     if (diff > 0 && !(ack_bits & (1u << (diff - 1)))) {
@@ -401,7 +422,7 @@ void ReliableUdpChannel::ProcessAck(SeqNum ack_num, uint32_t ack_bits) {
       continue;
     }
 
-    if (it->second.send_count == 1) {
+    if (diff == 0 && it->second.send_count == 1) {
       rtt_.Update(now - it->second.sent_at);
     }
     acked_seqs[acked_count++] = candidate;
@@ -572,9 +593,12 @@ auto ReliableUdpChannel::SendFragmented(std::span<const std::byte> payload) -> R
     return Error(ErrorCode::kWouldBlock, "Send window too small for fragmented message");
   }
 
-  // Skip IDs that collide with in-progress fragment reassembly
+  // Outbound and inbound fragment_id spaces are independent: pending_fragments_
+  // tracks the peer's outbound IDs we're reassembling, while next_fragment_id_
+  // generates IDs for messages we send. There's no wire-level collision to
+  // guard against (each direction has its own datagram stream), so just take
+  // the next sequential id.
   auto frag_id = next_fragment_id_++;
-  while (pending_fragments_.contains(frag_id)) frag_id = next_fragment_id_++;
   auto frag_count = static_cast<uint8_t>(total);
 
   // Record rollback point in case of partial send failure
@@ -625,21 +649,39 @@ void ReliableUdpChannel::OnFragmentReceived(const FragmentHeader& hdr,
     return;
   }
 
-  auto& group = pending_fragments_[hdr.fragment_id];
-
-  if (group.expected_count == 0) {
-    group.expected_count = hdr.fragment_count;
-    group.buffer.reserve(hdr.fragment_count * rudp::kMaxUdpPayload);
-    group.frag_sizes.resize(hdr.fragment_count, 0);
-    group.first_received = Clock::now();
-
-    if (pending_fragments_.size() > kMaxPendingFragmentGroups) {
+  auto it = pending_fragments_.find(hdr.fragment_id);
+  if (it == pending_fragments_.end()) {
+    // Need to allocate a new reassembly slot — enforce the cap first so
+    // a peer can't fan out unique fragment_ids to balloon state. Try
+    // CleanupStaleFragments to harvest >30s-old groups, then LRU-evict
+    // the oldest if we're still over the cap (cleanup is no-op when
+    // every group is fresh, which is exactly the attack pattern).
+    if (pending_fragments_.size() >= kMaxPendingFragmentGroups) {
       CleanupStaleFragments();
     }
-  } else if (group.expected_count != hdr.fragment_count) {
+    if (pending_fragments_.size() >= kMaxPendingFragmentGroups) {
+      auto oldest = std::min_element(pending_fragments_.begin(), pending_fragments_.end(),
+                                     [](const auto& a, const auto& b) {
+                                       return a.second.first_received < b.second.first_received;
+                                     });
+      ATLAS_LOG_WARNING("Fragment table full from {}: evicting id={} (age first_received)",
+                        remote_.ToString(), oldest->first);
+      pending_fragments_.erase(oldest);
+    }
+    auto [inserted_it, _] = pending_fragments_.emplace(hdr.fragment_id, FragmentGroup{});
+    it = inserted_it;
+    auto& group_init = it->second;
+    group_init.expected_count = hdr.fragment_count;
+    // buffer left empty — grown on demand by the per-fragment resize
+    // below. Pre-reserving fragment_count*MTU (~371 KB) on the first
+    // fragment was wasteful when most fragments never arrive.
+    group_init.frag_sizes.resize(hdr.fragment_count, 0);
+    group_init.first_received = Clock::now();
+  } else if (it->second.expected_count != hdr.fragment_count) {
     ATLAS_LOG_WARNING("Fragment count mismatch for id={}", hdr.fragment_id);
     return;
   }
+  auto& group = it->second;
 
   if (group.frag_sizes[hdr.fragment_index] == 0) {
     auto offset = static_cast<std::size_t>(hdr.fragment_index) * rudp::kMaxUdpPayload;
