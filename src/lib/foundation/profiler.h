@@ -62,10 +62,14 @@
 // ── Allocator hooks ────────────────────────────────────────────────
 // Wrap operator new / pool acquire / pool release. The _NAMED variants
 // route per-pool so the viewer can attribute heap pressure by source.
-#define ATLAS_PROFILE_ALLOC(ptr, size) TracyAlloc(ptr, size)
-#define ATLAS_PROFILE_FREE(ptr) TracyFree(ptr)
-#define ATLAS_PROFILE_ALLOC_NAMED(p, s, n) TracyAllocN(p, s, n)
-#define ATLAS_PROFILE_FREE_NAMED(p, n) TracyFreeN(p, n)
+// The S-suffixed Tracy primitives capture a 16-frame call stack per
+// allocation so the viewer's Memory window can attribute live bytes
+// back to the originating call site. Stack capture costs ~1–3 µs per
+// alloc on Windows; only profile-release builds set TRACY_ENABLE.
+#define ATLAS_PROFILE_ALLOC(ptr, size) TracyAllocS(ptr, size, 16)
+#define ATLAS_PROFILE_FREE(ptr) TracyFreeS(ptr, 16)
+#define ATLAS_PROFILE_ALLOC_NAMED(p, s, n) TracyAllocNS(p, s, 16, n)
+#define ATLAS_PROFILE_FREE_NAMED(p, n) TracyFreeNS(p, 16, n)
 
 // ── Lock contention ────────────────────────────────────────────────
 // Replace `std::mutex m;` with `ATLAS_PROFILE_LOCKABLE(std::mutex, m);`
