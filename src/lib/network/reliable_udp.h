@@ -99,7 +99,8 @@ class ReliableUdpChannel : public Channel {
  private:
   struct UnackedPacket {
     std::vector<std::byte> data;
-    TimePoint sent_at;
+    TimePoint sent_at;        // Last transmission attempt; updated by every resend.
+    TimePoint first_sent_at;  // Initial send time; never updated, drives dead-link cutoff.
     uint32_t send_count{1};
     uint32_t skip_count{0};  // fast retransmit: incremented when later packets are ACK'd
   };
@@ -184,6 +185,14 @@ class ReliableUdpChannel : public Channel {
 
   // KCP-inspired optimizations
   uint32_t fast_resend_thresh_{2};  // fast retransmit after N skip-ACKs (0=disabled)
+
+  // Dead-link detection: condemn the channel after the oldest unacked
+  // packet has been in-flight this long without an ACK. Without this
+  // bound, unacked_ entries (and their backing packet vectors) would
+  // accumulate forever when the peer disappears mid-flight. Time-based
+  // (rather than retransmit-count-based) so the user-facing semantic is
+  // "peer silent for X seconds" — independent of RTO backoff schedule.
+  static constexpr Duration kDeadLinkTimeout = std::chrono::seconds(5);
 
   // Congestion control (KCP-style: slow start + congestion avoidance)
   bool nocwnd_{false};     // true: disable congestion control (for LAN)

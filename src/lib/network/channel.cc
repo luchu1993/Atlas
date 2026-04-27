@@ -43,6 +43,10 @@ void Channel::Condemn() {
 auto Channel::Send() -> Result<void> {
   ATLAS_PROFILE_ZONE_N("Channel::Send");
   if (state_ == ChannelState::kCondemned) {
+    // Drop whatever the caller staged via AddMessage — otherwise a caller
+    // that grabs a zombie channel pointer (state==kCondemned but still in
+    // some lookup map) keeps growing bundle_.buffer_ unboundedly.
+    bundle_.Clear();
     return Error(ErrorCode::kChannelCondemned, "Cannot send on condemned channel");
   }
   if (bundle_.empty()) {

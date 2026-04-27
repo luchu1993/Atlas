@@ -72,10 +72,13 @@ auto ReliableUdpChannel::SendReliable() -> Result<void> {
   CancelDelayedAck();
   auto packet = BuildPacket(flags, seq, std::span<const std::byte>(payload.data(), payload.size()));
 
-  // Store for potential retransmission
-  unacked_[seq] = UnackedPacket{packet, Clock::now(), 1};
+  // Store for potential retransmission. Move into the slot before SendTo so
+  // we keep a single heap allocation, then send a span over the stored bytes.
+  const auto now = Clock::now();
+  auto& slot = unacked_[seq];
+  slot = UnackedPacket{std::move(packet), now, now, 1};
 
-  auto result = shared_socket_.SendTo(packet, remote_);
+  auto result = shared_socket_.SendTo(slot.data, remote_);
   if (!result) {
     return result.Error();
   }
@@ -91,6 +94,7 @@ auto ReliableUdpChannel::SendReliable() -> Result<void> {
 
 auto ReliableUdpChannel::SendUnreliable() -> Result<void> {
   if (state_ == ChannelState::kCondemned) {
+    bundle_.Clear();
     return Error(ErrorCode::kChannelCondemned, "Channel is condemned");
   }
 
@@ -121,6 +125,10 @@ auto ReliableUdpChannel::SendUnreliable() -> Result<void> {
 // ============================================================================
 
 auto ReliableUdpChannel::DoSend(std::span<const std::byte> data) -> Result<size_t> {
+  if (state_ == ChannelState::kCondemned) {
+    return Error(ErrorCode::kChannelCondemned, "Channel is condemned");
+  }
+
   // Auto-fragment if payload exceeds max UDP payload
   if (data.size() > rudp::kMaxUdpPayload) {
     auto result = SendFragmented(data);
@@ -138,9 +146,11 @@ auto ReliableUdpChannel::DoSend(std::span<const std::byte> data) -> Result<size_
   CancelDelayedAck();
   auto packet = BuildPacket(flags, seq, data);
 
-  unacked_[seq] = UnackedPacket{packet, Clock::now(), 1};
+  const auto now = Clock::now();
+  auto& slot = unacked_[seq];
+  slot = UnackedPacket{std::move(packet), now, now, 1};
 
-  auto result = shared_socket_.SendTo(packet, remote_);
+  auto result = shared_socket_.SendTo(slot.data, remote_);
   if (!result) {
     return result.Error();
   }
@@ -521,9 +531,11 @@ auto ReliableUdpChannel::SendFragmented(std::span<const std::byte> payload) -> R
     FragmentHeader fhdr{frag_id, i, frag_count};
     auto packet = BuildPacket(flags, seq, chunk, &fhdr);
 
-    unacked_[seq] = UnackedPacket{packet, Clock::now(), 1};
+    const auto now = Clock::now();
+    auto& slot = unacked_[seq];
+    slot = UnackedPacket{std::move(packet), now, now, 1};
 
-    auto result = shared_socket_.SendTo(packet, remote_);
+    auto result = shared_socket_.SendTo(slot.data, remote_);
     if (!result) {
       // Roll back: remove all fragments we just enqueued in unacked_
       for (auto s = rollback_seq; s != next_send_seq_; ++s) unacked_.erase(s);
@@ -717,7 +729,13 @@ void ReliableUdpChannel::CheckResends() {
   }
 
   bool had_timeout = false;
+  bool dead_link = false;
   for (auto& [seq, pkt] : unacked_) {
+    if (now - pkt.first_sent_at >= kDeadLinkTimeout) {
+      dead_link = true;
+      break;
+    }
+
     auto backoff = rtt_.Rto();
     for (uint32_t i = 1; i < pkt.send_count && i < 5; ++i) {
       if (rtt_.Nodelay()) {
@@ -739,6 +757,24 @@ void ReliableUdpChannel::CheckResends() {
 
       ATLAS_LOG_DEBUG("Resend seq={} attempt={} to {}", seq, pkt.send_count, remote_.ToString());
     }
+  }
+
+  // Condemn AFTER the loop so the iterator we just held is no longer in use
+  // when OnCondemned() clears unacked_.
+  //
+  // Use OnDisconnect (not Condemn directly) so the disconnect_callback_ runs
+  // and NetworkInterface evicts the channel from channels_. A bare Condemn()
+  // leaves a zombie entry that ConnectRudp* will hand back to callers; their
+  // next SendMessage then writes into bundle_ and Send() bails on the
+  // kCondemned check, leaking the bundle's buffer until the channel
+  // eventually destructs.
+  if (dead_link) {
+    ATLAS_LOG_WARNING("Dead link to {}: oldest unacked packet age >= {}ms, condemning channel",
+                      remote_.ToString(),
+                      std::chrono::duration_cast<std::chrono::milliseconds>(kDeadLinkTimeout)
+                          .count());
+    OnDisconnect();
+    return;
   }
 
   if (had_timeout) {
