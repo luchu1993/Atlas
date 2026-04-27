@@ -116,9 +116,9 @@ TEST_F(CellAppIntegrationFixture, CreateCellEntityRegistersAndResponds) {
 // Locks in the cross-commit contract so a regression in any of C2/C3/C4
 // surfaces here.
 TEST_F(CellAppIntegrationFixture, Pr34EndToEndEnableThenSetAoIRadius) {
-  // Peer at ~250m — well inside the 500m CellAppConfig default but
+  // Peer at ~100m — inside the 150m CellAppConfig default radius but
   // well outside the 55m post-SetAoIRadius outer band.
-  app_.OnCreateCellEntity({}, nullptr, MakeCreate(/*base_id=*/200, /*space=*/1, {250.f, 0.f, 0.f}));
+  app_.OnCreateCellEntity({}, nullptr, MakeCreate(/*base_id=*/200, /*space=*/1, {100.f, 0.f, 0.f}));
 
   // Observer. After C2, creation doesn't auto-enable a witness.
   app_.OnCreateCellEntity({}, nullptr, MakeCreate(/*base_id=*/100, /*space=*/1, {0.f, 0.f, 0.f}));
@@ -131,9 +131,9 @@ TEST_F(CellAppIntegrationFixture, Pr34EndToEndEnableThenSetAoIRadius) {
   cellapp::EnableWitness e{100};
   app_.OnEnableWitness({}, nullptr, e);
   ASSERT_TRUE(observer->HasWitness());
-  EXPECT_FLOAT_EQ(observer->GetWitness()->AoIRadius(), 500.f);
+  EXPECT_FLOAT_EQ(observer->GetWitness()->AoIRadius(), 150.f);
   EXPECT_FLOAT_EQ(observer->GetWitness()->Hysteresis(), 5.f);
-  // Peer at 250m is inside the 500m AoI → witness saw it as ENTER_PENDING.
+  // Peer at 100m is inside the 150m AoI → witness saw it as ENTER_PENDING.
   EXPECT_EQ(observer->GetWitness()->AoIMap().size(), 1u);
 
   // Script-side SetAoIRadius(50, 5) — shrinks AoI to the stress-test band.
@@ -145,7 +145,7 @@ TEST_F(CellAppIntegrationFixture, Pr34EndToEndEnableThenSetAoIRadius) {
   EXPECT_FLOAT_EQ(observer->GetWitness()->AoIRadius(), 50.f);
   EXPECT_FLOAT_EQ(observer->GetWitness()->Hysteresis(), 5.f);
 
-  // Peer at 250m is now outside the new outer band (55m); the trigger
+  // Peer at 100m is now outside the new outer band (55m); the trigger
   // contraction marked it kGone. Update compacts the map.
   observer->GetWitness()->Update(/*max_packet_bytes=*/4096);
   EXPECT_TRUE(observer->GetWitness()->AoIMap().empty());

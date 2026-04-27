@@ -26,10 +26,10 @@ class CellAppConfigTest : public ::testing::Test {
 };
 
 TEST_F(CellAppConfigTest, DefaultsMatchExpectedValues) {
-  EXPECT_FLOAT_EQ(CellAppConfig::DefaultAoIRadius(), 500.f);
+  EXPECT_FLOAT_EQ(CellAppConfig::DefaultAoIRadius(), 150.f);
   EXPECT_FLOAT_EQ(CellAppConfig::DefaultAoIHysteresis(), 5.f);
   EXPECT_FLOAT_EQ(CellAppConfig::MaxAoIRadius(), 500.f);
-  EXPECT_EQ(CellAppConfig::WitnessTotalOutboundBudgetBytes(), 409600u);
+  EXPECT_EQ(CellAppConfig::WitnessTotalOutboundBudgetBytes(), 819200u);
   EXPECT_EQ(CellAppConfig::WitnessMinPerObserverBudgetBytes(), 1024u);
   EXPECT_EQ(CellAppConfig::WitnessMaxPerObserverBudgetBytes(), 16384u);
   EXPECT_EQ(CellAppConfig::WitnessMaxPeersPerTick(), 64u);
@@ -66,7 +66,7 @@ TEST_F(CellAppConfigTest, MissingKeysFallBackToDefaults) {
   ASSERT_TRUE(cfg.HasValue());
   ServerAppOptionBase::ApplyAll(*(*cfg)->Root());
 
-  EXPECT_FLOAT_EQ(CellAppConfig::DefaultAoIRadius(), 500.f);
+  EXPECT_FLOAT_EQ(CellAppConfig::DefaultAoIRadius(), 150.f);
   EXPECT_FLOAT_EQ(CellAppConfig::DefaultAoIHysteresis(), 5.f);
   EXPECT_FLOAT_EQ(CellAppConfig::MaxAoIRadius(), 800.f);
 }
