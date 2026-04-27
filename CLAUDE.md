@@ -46,8 +46,7 @@ ctest --build-config Debug --output-on-failure
 - **`debug`** — full debug symbols, assertions enabled, `ATLAS_DEBUG=1`
 - **`release`** — fully optimized, `NDEBUG` defined
 - **`hybrid`** — optimized with debug symbols (RelWithDebInfo)
-- **`profile-release`** — RelWithDebInfo + `ATLAS_ENABLE_PROFILER=ON` (Tracy linked in)
-- **`profile-release-notest`** — same as `profile-release` but `ATLAS_BUILD_TESTS=OFF`; use for fast profiling iteration
+- **`profile-release`** — RelWithDebInfo + `ATLAS_ENABLE_PROFILER=ON` (Tracy linked in); skips test exes for fast profiling iteration. Use `debug` or `release` to run unit tests.
 
 ### Sanitizers
 
@@ -164,17 +163,9 @@ meaningless Tracy data:
 cmake --build build/profile-release --config RelWithDebInfo
 ```
 
-For faster iteration during profiling work, use the test-free preset (skips
-~30 test executables — typical full rebuild drops from minutes to ~30 s):
-
-```bash
-cmake --preset profile-release-notest
-cmake --build build/profile-release-notest --config RelWithDebInfo
-```
-
-Note that the baseline scripts under `tools/cluster_control/` still launch
-binaries from `bin/profile-release/`; either keep both build dirs in sync or
-adapt the script paths when running off `profile-release-notest`.
+The `profile-release` preset itself sets `ATLAS_BUILD_TESTS=OFF`, so a full
+rebuild drops from minutes to ~30 s by skipping the ~117 test executables.
+Run unit tests against `debug` or `release` instead.
 
 ### Memory profiling (callstack-attributed allocs)
 
