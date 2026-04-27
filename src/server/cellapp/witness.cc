@@ -223,26 +223,37 @@ void Witness::UpdatePriority(EntityCache& cache) const {
 
 auto Witness::SendEntityEnter(EntityCache& cache) -> std::size_t {
   ATLAS_PROFILE_ZONE_N("Witness::SendEntityEnter");
+  // Pin the peer locally — send_reliable_ below can re-entrantly destroy
+  // entities (including this one), at which point HandleAoILeave nulls
+  // cache.entity.  Reading through the local pointer keeps both the
+  // pre-send envelope build and the post-send seq capture correct.
+  CellEntity* const entity = cache.entity;
+
   // The snapshot we ship on Enter is the peer's *other* snapshot — the
   // observer is a non-owner for the peer (they see "other clients" data).
   // Owner-enter (the entity's own client observing itself) would use
   // owner_snapshot instead, but that path goes through a separate initial
   // state message, not the AoI enter flow.
   std::span<const std::byte> enter_snapshot{};
-  if (const auto* state = cache.entity->GetReplicationState()) {
+  uint64_t pre_event_seq = 0;
+  uint64_t pre_volatile_seq = 0;
+  if (const auto* state = entity->GetReplicationState()) {
     enter_snapshot = std::span<const std::byte>(state->other_snapshot);
+    pre_event_seq = state->latest_event_seq;
+    pre_volatile_seq = state->latest_volatile_seq;
   }
 
-  auto envelope = BuildEnterEnvelope(cache.entity->BaseEntityId(), cache.entity->TypeId(),
-                                     cache.entity->Position(), cache.entity->Direction(),
-                                     cache.entity->OnGround(), enter_snapshot);
+  auto envelope = BuildEnterEnvelope(entity->BaseEntityId(), entity->TypeId(), entity->Position(),
+                                     entity->Direction(), entity->OnGround(), enter_snapshot);
   if (send_reliable_) send_reliable_(owner_.BaseEntityId(), envelope);
 
-  // Capture the peer's current seqs so the catch-up pump only replays
-  // events that happened AFTER this enter.
-  if (const auto* state = cache.entity->GetReplicationState()) {
-    cache.last_event_seq = state->latest_event_seq;
-    cache.last_volatile_seq = state->latest_volatile_seq;
+  // After send_reliable_ returns, the peer may have been destroyed
+  // re-entrantly — but `cache` is a reference into aoi_map_ which is
+  // stable under HandleAoILeave (no insertions, just flag/pointer
+  // mutations).  Only stamp the seqs if the entity wasn't yanked.
+  if (cache.entity == entity) {
+    cache.last_event_seq = pre_event_seq;
+    cache.last_volatile_seq = pre_volatile_seq;
   }
   return envelope.size();
 }
@@ -292,6 +303,12 @@ void Witness::Update(uint32_t max_packet_bytes) {
       auto it = aoi_map_.find(enter_ids[enter_idx]);
       if (it == aoi_map_.end()) continue;
       auto& cache = it->second;
+      // Re-check: send_reliable_ from a previous iteration may have
+      // re-entrantly destroyed this peer, in which case HandleAoILeave
+      // has cleared kEnterPending and nulled cache.entity.  Don't
+      // SendEntityEnter on a freed peer — the gone_ids loop below will
+      // emit the matching Leave envelope.
+      if (!(cache.flags & EntityCache::kEnterPending) || !cache.entity) continue;
       bytes_sent += static_cast<int>(SendEntityEnter(cache));
       cache.flags &= ~EntityCache::kEnterPending;
       cache.lod_enter_phase = enter_idx % kLodFarInterval;

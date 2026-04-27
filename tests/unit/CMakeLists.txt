@@ -319,6 +319,11 @@ atlas_add_test(NAME test_witness_peer_lifetime
   DEPS atlas_cellapp_lib atlas_space
 )
 
+atlas_add_test(NAME test_witness_enter_pending_uaf
+  SOURCES test_witness_enter_pending_uaf.cpp
+  DEPS atlas_cellapp_lib atlas_space
+)
+
 atlas_add_test(NAME test_range_trigger_lifetime
   SOURCES test_range_trigger_lifetime.cpp
   DEPS atlas_cellapp_lib atlas_space
