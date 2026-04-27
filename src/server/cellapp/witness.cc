@@ -300,15 +300,30 @@ void Witness::Update(uint32_t max_packet_bytes) {
     (void)bandwidth_deficit_;
 
     for (std::size_t enter_idx = 0; enter_idx < enter_ids.size(); ++enter_idx) {
-      auto it = aoi_map_.find(enter_ids[enter_idx]);
+      const EntityID peer_id = enter_ids[enter_idx];
+      auto it = aoi_map_.find(peer_id);
       if (it == aoi_map_.end()) continue;
       auto& cache = it->second;
-      // Re-check: send_reliable_ from a previous iteration may have
-      // re-entrantly destroyed this peer, in which case HandleAoILeave
-      // has cleared kEnterPending and nulled cache.entity.  Don't
-      // SendEntityEnter on a freed peer — the gone_ids loop below will
-      // emit the matching Leave envelope.
+      // First filter: send_reliable_ from a previous iteration may have
+      // re-entrantly destroyed this peer; HandleAoILeave then clears
+      // kEnterPending and nulls cache.entity.
       if (!(cache.flags & EntityCache::kEnterPending) || !cache.entity) continue;
+      // Second filter: cross-check against the authoritative entity map.
+      // Some destruction paths can free the peer without firing
+      // HandleAoILeave on this witness (cache.entity stays as a
+      // dangling non-null pointer).  Looking up by id catches that;
+      // we also patch the cache state so the gone-list loop below
+      // doesn't emit a stale Leave envelope.
+      CellEntity* live = owner_.GetSpace().FindEntity(peer_id);
+      if (live != cache.entity) {
+        ATLAS_LOG_WARNING("Witness: stale enter-pending cache for peer_id={} (cached={} live={})",
+                          static_cast<uint64_t>(peer_id), static_cast<const void*>(cache.entity),
+                          static_cast<const void*>(live));
+        // Erase outright — we never sent an Enter so no Leave is owed.
+        // Iterators into aoi_map_ for OTHER keys are unaffected.
+        aoi_map_.erase(it);
+        continue;
+      }
       bytes_sent += static_cast<int>(SendEntityEnter(cache));
       cache.flags &= ~EntityCache::kEnterPending;
       cache.lod_enter_phase = enter_idx % kLodFarInterval;

@@ -149,6 +149,37 @@ TEST_F(WitnessEnterPendingUafTest, SendCallbackDestroysAnotherPeer) {
   observer->GetWitness()->Update(64 * 1024);  // drain leaves too
 }
 
+// Defensive: cache.entity points at memory that is not in space.entities_.
+// In the live cellapp this happens via at least one not-yet-identified
+// destruction path that bypasses HandleAoILeave.  We simulate it by
+// poking the cache directly.  The Update loop must catch the stale
+// pointer (via space.FindEntity()) and skip rather than UAF.
+TEST_F(WitnessEnterPendingUafTest, StaleCacheDanglingPointerSurvives) {
+  auto* observer = MakeEntity(1, {0, 0, 0});
+  auto* peer = MakeEntity(2, {3, 0, 3});
+
+  observer->EnableWitness(10.f, [](EntityID, std::span<const std::byte>) {});
+  ASSERT_EQ(observer->GetWitness()->AoIMap().size(), 1u);
+
+  // Smuggle a dangling pointer into the cache without going through
+  // HandleAoILeave — this is what some live cellapp path manages to do
+  // by accident.  We point at a fake non-null address that doesn't
+  // correspond to any entity in space.entities_.
+  auto& mutable_cache =
+      const_cast<Witness::EntityCache&>(observer->GetWitness()->AoIMap().find(peer->Id())->second);
+  uintptr_t fake = 0xdeadbeefULL;
+  mutable_cache.entity = reinterpret_cast<CellEntity*>(fake);
+
+  // Real peer is removed too — Space::FindEntity will return nullptr
+  // for this id, exercising the live != cache.entity branch.
+  space_.RemoveEntity(peer->Id());
+
+  // Must NOT crash even though cache.entity is a dangling pointer.
+  observer->GetWitness()->Update(4096);
+  EXPECT_TRUE(observer->GetWitness()->AoIMap().empty())
+      << "stale cache must be evicted, not dispatched";
+}
+
 // Recreate-with-same-id: peer enters, dies, a fresh peer is spawned at
 // the same EntityID before Update runs.  The new peer ends up in the
 // SAME aoi_map slot via try_emplace.  Verifies that the cache is
