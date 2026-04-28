@@ -178,15 +178,12 @@ void Witness::SetAoIRadius(float new_radius, float new_hysteresis) {
 void Witness::HandleAoIEnter(CellEntity& peer) {
   if (&peer == &owner_) return;  // a witness never tracks its own central
 
-  // The synthetic vacate-to-FLT_MAX shuffle in ~CellEntity drags the dying
-  // peer's range_node from its current X past observers' lower_bound (an
-  // INBOUND cross fires HandleAoIEnter on the inner trigger) and then past
-  // upper_bound (OUTBOUND, fires HandleAoILeave on the outer trigger).
-  // The Enter→Leave pair *should* leave cache.entity null at the end, but
-  // any path that performs the inbound cross without the matching outbound
-  // — different-cell witnesses, asymmetric ranges — would store a pointer
-  // to a now-freed CellEntity.  Reject Enters from a dying peer outright;
-  // Destroy() sets destroyed_ = true *before* the destructor's shuffle.
+  // ~CellEntity's synthetic FLT_MAX shuffle drags the dying peer past
+  // observers' inner.lower (inbound cross → HandleAoIEnter), then past
+  // upper (outbound → HandleAoILeave).  Rejecting destroyed peers here
+  // keeps the cache from latching onto an about-to-be-freed pointer if
+  // the matching outbound cross ever slips.  Destroy() sets destroyed_
+  // before ~CellEntity runs, so this gate is reliable.
   if (peer.IsDestroyed()) return;
 
   auto [it, inserted] = aoi_map_.try_emplace(peer.Id());
@@ -207,6 +204,15 @@ void Witness::HandleAoIEnter(CellEntity& peer) {
   // left AoI and came back before Update had a chance to fire the Leave).
   cache.flags = EntityCache::kEnterPending;
   UpdatePriority(cache);
+}
+
+void Witness::ForceOuterInsidePeer(RangeListNode& peer) {
+  if (trigger_) trigger_->ForceOuterInsidePeer(peer);
+}
+
+void Witness::OnOwnerMoved(float old_x, float old_z) {
+  if (!trigger_) return;
+  trigger_->OnCentralMoved(old_x, old_z);
 }
 
 void Witness::HandleAoILeave(CellEntity& peer) {

@@ -98,11 +98,17 @@ CellEntity::~CellEntity() {
     auto it = w->AoIMap().find(id_);
     if (it == w->AoIMap().end()) return;
     if (it->second.entity == this) {
+      const auto& op = other.Position();
+      const float dx = op.x - position_.x;
+      const float dz = op.z - position_.z;
+      const float dist_sq = dx * dx + dz * dz;
       ATLAS_LOG_ERROR(
-          "~CellEntity: leave fan-out missed observer={} for peer id={} "
-          "(this={:p}, observer aoi_map_size={}, peer flags=0x{:02x})",
-          other.BaseEntityId(), id_, static_cast<const void*>(this), w->AoIMap().size(),
-          it->second.flags);
+          "~CellEntity: leave fan-out missed observer={} peer={} dist²={:.0f} "
+          "obs_pos=({:.0f},{:.0f}) peer_pos=({:.0f},{:.0f}) flags=0x{:02x} aoi_size={}",
+          static_cast<uint64_t>(other.Id()), static_cast<uint64_t>(id_),
+          static_cast<double>(dist_sq), static_cast<double>(op.x), static_cast<double>(op.z),
+          static_cast<double>(position_.x), static_cast<double>(position_.z), it->second.flags,
+          w->AoIMap().size());
     }
   });
 }
@@ -225,6 +231,10 @@ void CellEntity::SetPosition(const math::Vector3& pos) {
   position_ = pos;
   range_node_.SetXZ(pos.x, pos.z);
   space_.GetRangeList().ShuffleXThenZ(&range_node_, old.x, old.z);
+  // Resync our own witness's trigger bounds — they're tied to the
+  // central we just moved, but their list-position is still old, so
+  // their inside_peers_ stay stale until each bound shuffles too.
+  if (witness_) witness_->OnOwnerMoved(old.x, old.z);
 }
 
 void CellEntity::SetDirection(const math::Vector3& dir) {
@@ -239,6 +249,7 @@ void CellEntity::SetPositionAndDirection(const math::Vector3& pos, const math::V
   direction_ = dir;
   range_node_.SetXZ(pos.x, pos.z);
   space_.GetRangeList().ShuffleXThenZ(&range_node_, old.x, old.z);
+  if (witness_) witness_->OnOwnerMoved(old.x, old.z);
 }
 
 void CellEntity::PublishReplicationFrame(ReplicationFrame frame,

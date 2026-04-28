@@ -31,7 +31,16 @@ class AoITrigger::InnerTrigger final : public RangeTrigger {
       : RangeTrigger(central, range), witness_(w) {}
 
   void OnEnter(RangeListNode& other) override {
-    if (auto* peer = OwnerOf(other)) witness_.HandleAoIEnter(*peer);
+    if (auto* peer = OwnerOf(other)) {
+      witness_.HandleAoIEnter(*peer);
+      // Maintain peer ∈ inner ⊂ outer invariant: if peer entered the
+      // inner band via a fast-path that bypassed outer's inbound cross
+      // (e.g. observer move shuffles inner before outer, or a hysteresis
+      // re-cross), force outer's inside_peers_ to contain peer so the
+      // eventual outbound cross (incl. ~CellEntity's vacate shuffle)
+      // fires HandleAoILeave.
+      witness_.ForceOuterInsidePeer(other);
+    }
   }
 
   void OnLeave(RangeListNode& /*other*/) override {
@@ -87,6 +96,18 @@ void AoITrigger::Remove(RangeList& list) {
   // during Remove, so the order is cosmetic.
   outer_->Remove(list);
   inner_->Remove(list);
+}
+
+void AoITrigger::ForceOuterInsidePeer(RangeListNode& peer) {
+  outer_->ForceInsidePeer(&peer);
+}
+
+void AoITrigger::OnCentralMoved(float old_central_x, float old_central_z) {
+  // Update both bands against the new central.  Order is cosmetic —
+  // each band's bounds shuffle independently and produce their own
+  // OnEnter/OnLeave events.  Inner first matches the Insert order.
+  inner_->Update(old_central_x, old_central_z);
+  outer_->Update(old_central_x, old_central_z);
 }
 
 void AoITrigger::SetBounds(float inner_range, float outer_range) {

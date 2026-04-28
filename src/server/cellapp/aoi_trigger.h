@@ -54,6 +54,20 @@ class AoITrigger {
   // outer = inner + hysteresis and passes both explicitly.
   void SetBounds(float inner_range, float outer_range);
 
+  // Resync both bound pairs against the central's NEW position.  Must be
+  // called by the witness owner after the central's range_node has
+  // shuffled — bound nodes are tied to central via X()/Z() but their
+  // list-position reflects the OLD central, so their inside_peers_ stay
+  // stale until each bound shuffles to its new sorted slot.  Without
+  // this hook a moving observer's outer.OnLeave never fires for peers
+  // that drift out of range, leaking dangling pointers in aoi_map_.
+  void OnCentralMoved(float old_central_x, float old_central_z);
+
+  // Force-insert a peer into outer band's inside_peers_.  Called by
+  // InnerTrigger.OnEnter to keep the inner ⊂ outer invariant intact
+  // when cross-event ordering would otherwise leave outer stale.
+  void ForceOuterInsidePeer(class RangeListNode& peer);
+
   [[nodiscard]] auto InnerRange() const -> float;
   [[nodiscard]] auto OuterRange() const -> float;
 

@@ -180,6 +180,36 @@ TEST_F(WitnessEnterPendingUafTest, StaleCacheDanglingPointerSurvives) {
       << "stale cache must be evicted, not dispatched";
 }
 
+// Observer movement: when the *observer* moves, its own trigger bounds
+// must be resynced or peers it leaves behind get stranded in
+// outer.inside_peers_.  Then when those peers die, vacate-shuffle's
+// outer.OnLeave fires on a stale set and DispatchMembership bails
+// (was==now both stale-true), HandleAoILeave never fires, cache stays
+// dangling.
+TEST_F(WitnessEnterPendingUafTest, ObserverMovesAwayThenPeerDies) {
+  auto* observer = MakeEntity(1, {0, 0, 0});
+  auto* peer = MakeEntity(2, {3, 0, 3});
+  observer->EnableWitness(10.f, [](EntityID, std::span<const std::byte>) {});
+
+  // Peer enters at Update time (Activate's initial scan + first pump).
+  observer->GetWitness()->Update(4096);
+  ASSERT_EQ(observer->GetWitness()->AoIMap().size(), 1u);
+
+  // Now teleport the observer FAR from peer.  With the fix in
+  // CellEntity::SetPosition, OnOwnerMoved should resync trigger
+  // bounds and fire HandleAoILeave for `peer`.
+  observer->SetPosition({500, 0, 500});
+  observer->GetWitness()->Update(4096);  // drains any pending leave
+  EXPECT_TRUE(observer->GetWitness()->AoIMap().empty())
+      << "peer should have been compacted out after observer left it behind";
+
+  // Now destroy the peer.  If trigger bounds were left stale,
+  // ~CellEntity's leave-fan-out audit would log an error.  ASan would
+  // catch the UAF on a subsequent Update.  Both must be silent.
+  space_.RemoveEntity(peer->Id());
+  observer->GetWitness()->Update(4096);
+}
+
 // Recreate-with-same-id: peer enters, dies, a fresh peer is spawned at
 // the same EntityID before Update runs.  The new peer ends up in the
 // SAME aoi_map slot via try_emplace.  Verifies that the cache is

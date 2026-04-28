@@ -89,6 +89,13 @@ class RangeTrigger {
   }
   void SeedInsidePeersForMigration(std::unordered_set<RangeListNode*> peers);
 
+  // Force-insert a peer into inside_peers_ without firing OnEnter.
+  // Used by AoITrigger to keep the outer band's set consistent when a
+  // peer enters the inner band — peer ∈ inner ⊂ outer is an invariant
+  // but cross-event ordering can leave outer's set stale.  Returns
+  // true if the peer was newly inserted, false if already present.
+  bool ForceInsidePeer(RangeListNode* peer) { return inside_peers_.insert(peer).second; }
+
   // Callbacks — subclass (AoITrigger, ProximityTrigger) overrides. The
   // `other` node is guaranteed to be non-bound (a peer in the list) and
   // not the central itself.

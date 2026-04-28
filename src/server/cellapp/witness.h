@@ -93,6 +93,16 @@ class Witness {
   void HandleAoIEnter(CellEntity& peer);
   void HandleAoILeave(CellEntity& peer);
 
+  // Resync the witness's trigger bounds after the owner's range_node
+  // has been shuffled to a new position.  Called by CellEntity's
+  // SetPosition / SetPositionAndDirection.  Without it, the witness's
+  // inside_peers_ go stale and OnLeave fails to fire for peers the
+  // observer has drifted away from.
+  void OnOwnerMoved(float old_x, float old_z);
+
+  // Forwarded by InnerTrigger.OnEnter to maintain peer ∈ inner ⊂ outer.
+  void ForceOuterInsidePeer(class RangeListNode& peer);
+
   // Drive the per-tick replication pump. max_packet_bytes bounds the
   // total envelope payload emitted this tick (not including outer
   // framing). Deficit accumulates when Update overshoots — the next
