@@ -4,10 +4,14 @@
 Usage:
     python compare_tracy.py <baseline.tracy> <new.tracy> [options]
 
-The script exports both traces to CSV via tracy-csvexport, then prints a
-Markdown table of mean / p95 / p99 / max for the zones that matter most to
-CellApp performance. Regressions (new > baseline by more than --threshold %)
-are flagged with ▲; improvements with ▼.
+The script exports both traces to CSV via tracy-csvexport (stdout), then
+prints a Markdown table of mean / max / total for the zones that matter
+most to CellApp performance. Regressions (new > baseline by more than
+--threshold %) are flagged with ▲; improvements with ▼.
+
+Note: tracy-csvexport's aggregate output exposes mean/min/max/std/total but
+not p95/p99 (those used to be in earlier Tracy releases). For tail-percentile
+analysis open the trace in tracy-profiler directly.
 
 Prerequisites:
     tracy-csvexport.exe must be in bin/profile/ or on PATH,
@@ -49,9 +53,8 @@ ZONES_OF_INTEREST = [
 class ZoneStats(NamedTuple):
     count: int
     mean_us: float
-    p95_us: float
-    p99_us: float
     max_us: float
+    total_us: float
 
 
 def find_csvexport(hint: str | None) -> Path:
@@ -80,8 +83,9 @@ def find_csvexport(hint: str | None) -> Path:
 
 
 def export_to_csv(csvexport: Path, tracy_file: Path, out_csv: Path) -> None:
+    # tracy-csvexport writes CSV to stdout; capture and persist it.
     result = subprocess.run(
-        [str(csvexport), str(tracy_file), "-o", str(out_csv)],
+        [str(csvexport), str(tracy_file)],
         capture_output=True,
         text=True,
     )
@@ -91,17 +95,18 @@ def export_to_csv(csvexport: Path, tracy_file: Path, out_csv: Path) -> None:
             f"  stdout: {result.stdout.strip()}\n"
             f"  stderr: {result.stderr.strip()}"
         )
+    out_csv.write_text(result.stdout, encoding="utf-8")
 
 
 def ns_to_us(v: str) -> float:
     return float(v) / 1000.0
 
 
-# Columns we depend on from tracy-csvexport's aggregate output (v0.13.x).
-# A schema change in a newer Tracy build silently dropping these would make
-# the comparison table empty and the script return "no regressions" — fail
+# Columns we depend on from tracy-csvexport's aggregate output. A schema
+# change in a newer Tracy build silently dropping these would make the
+# comparison table empty and the script return "no regressions" — fail
 # loud on the first row instead of swallowing the mismatch.
-REQUIRED_CSV_COLUMNS = ("Name", "call_count", "mean_ns", "p95_ns", "p99_ns", "max_ns")
+REQUIRED_CSV_COLUMNS = ("name", "counts", "mean_ns", "max_ns", "total_ns")
 
 
 def parse_csv(csv_path: Path) -> dict[str, ZoneStats]:
@@ -118,15 +123,14 @@ def parse_csv(csv_path: Path) -> dict[str, ZoneStats]:
                 f"Missing columns: {missing}. Got: {list(reader.fieldnames)}"
             )
         for row in reader:
-            name = row["Name"].strip()
+            name = row["name"].strip()
             if not name:
                 continue
             stats[name] = ZoneStats(
-                count=int(row["call_count"]),
+                count=int(row["counts"]),
                 mean_us=ns_to_us(row["mean_ns"]),
-                p95_us=ns_to_us(row["p95_ns"]),
-                p99_us=ns_to_us(row["p99_ns"]),
                 max_us=ns_to_us(row["max_ns"]),
+                total_us=ns_to_us(row["total_ns"]),
             )
     return stats
 
@@ -161,22 +165,23 @@ def print_comparison(
 ) -> bool:
     """Print a Markdown comparison table. Returns True if any regression found."""
     col_zone = 38
+    col_count = 8
     col_val = 10
     col_delta = 10
 
     header = (
         f"| {'Zone':<{col_zone}} "
+        f"| {'calls b':>{col_count}} "
+        f"| {'calls n':>{col_count}} "
         f"| {'baseline mean':>{col_val}} "
         f"| {'new mean':>{col_val}} "
         f"| {'Δmean':>{col_delta}} "
-        f"| {'baseline p95':>{col_val}} "
-        f"| {'new p95':>{col_val}} "
-        f"| {'Δp95':>{col_delta}} "
-        f"| {'baseline p99':>{col_val}} "
-        f"| {'new p99':>{col_val}} "
-        f"| {'Δp99':>{col_delta}} "
         f"| {'baseline max':>{col_val}} "
         f"| {'new max':>{col_val}} "
+        f"| {'Δmax':>{col_delta}} "
+        f"| {'baseline total':>{col_val}} "
+        f"| {'new total':>{col_val}} "
+        f"| {'Δtotal':>{col_delta}} "
         f"|"
     )
     sep = re.sub(r"[^|]", "-", header)
@@ -198,6 +203,9 @@ def print_comparison(
         def v(stats: ZoneStats | None, attr: str) -> str:
             return fmt_us(getattr(stats, attr)) if stats else "—"
 
+        def cnt(stats: ZoneStats | None) -> str:
+            return str(stats.count) if stats else "—"
+
         def d(attr: str) -> str:
             if b is None or n is None:
                 return "n/a"
@@ -209,23 +217,23 @@ def print_comparison(
 
         print(
             f"| {zone:<{col_zone}} "
+            f"| {cnt(b):>{col_count}} "
+            f"| {cnt(n):>{col_count}} "
             f"| {v(b,'mean_us'):>{col_val}} "
             f"| {v(n,'mean_us'):>{col_val}} "
             f"| {d('mean_us'):>{col_delta}} "
-            f"| {v(b,'p95_us'):>{col_val}} "
-            f"| {v(n,'p95_us'):>{col_val}} "
-            f"| {d('p95_us'):>{col_delta}} "
-            f"| {v(b,'p99_us'):>{col_val}} "
-            f"| {v(n,'p99_us'):>{col_val}} "
-            f"| {d('p99_us'):>{col_delta}} "
             f"| {v(b,'max_us'):>{col_val}} "
             f"| {v(n,'max_us'):>{col_val}} "
+            f"| {d('max_us'):>{col_delta}} "
+            f"| {v(b,'total_us'):>{col_val}} "
+            f"| {v(n,'total_us'):>{col_val}} "
+            f"| {d('total_us'):>{col_delta}} "
             f"|"
         )
 
     print()
     if any_regression:
-        print(f"⚠  Regressions detected (threshold {threshold:.0f}%).")
+        print(f"⚠  Regressions detected (threshold {threshold:.0f}% on mean / max / total).")
     else:
         print("✓  No regressions above threshold.")
     return any_regression
