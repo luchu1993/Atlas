@@ -111,7 +111,7 @@ internal static class Lifecycle
             Log.Warning(
                 $"[GC-in-tick] PublishReplicationAll took {elapsedUs} µs; " +
                 $"GC fired: gen0+{g0Delta} gen1+{g1Delta} gen2+{g2Delta}. " +
-                "Possible GC pressure from replication codegen — see docs/optimization/script_publish_gc.md");
+                "Possible GC pressure from replication codegen.");
         }
     }
 
