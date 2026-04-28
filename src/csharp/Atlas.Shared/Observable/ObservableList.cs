@@ -66,8 +66,16 @@ public sealed class ObservableList<T> : IObservableChild, System.Collections.IEn
         _items.GetEnumerator();
 
     public IReadOnlyList<T> Items => _items;
-    public IReadOnlyList<ListOp> Ops => _ops;
-    public IReadOnlyList<T> OpValues => _opValues;
+    // Concrete List<T> exposure (not IReadOnlyList) so codegen's
+    //   foreach (var op in container.Ops)
+    // resolves to the struct List<T>.Enumerator instead of going
+    // through IEnumerable<T>.GetEnumerator() — the latter boxes one
+    // heap object per call, which dotnet-trace gc-verbose flagged as
+    // a top hot allocation site in the replication frame path.
+    // Read-only contract is enforced by ObservableList itself; nothing
+    // outside the delta-sync codegen is supposed to mutate _ops.
+    public List<ListOp> Ops => _ops;
+    public List<T> OpValues => _opValues;
 
     // Concrete HashSet return so the duck-typed foreach in generated
     // code uses the struct enumerator (zero-alloc) instead of boxing

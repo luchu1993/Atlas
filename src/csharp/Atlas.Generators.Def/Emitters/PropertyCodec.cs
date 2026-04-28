@@ -315,7 +315,13 @@ internal static class PropertyCodec
         var propName = DefTypeHelper.ToPropertyName(prop.Name);
         var names = new NameGen();
         sb.AppendLine($"{indent}{writerVar}.WriteUInt16((ushort){propName}.Count);");
-        sb.AppendLine($"{indent}foreach (var __v in {propName}.Items)");
+        // Iterate the ObservableList directly, not via .Items.  ObservableList
+        // exposes a struct GetEnumerator() returning List<T>.Enumerator —
+        // taking the enumerator off the IReadOnlyList<T> interface that .Items
+        // returns boxes one heap object per call (visible as the
+        // `List`1[T].IEnumerable<T>.GetEnumerator()` frames in dotnet-trace
+        // gc-verbose captures).
+        sb.AppendLine($"{indent}foreach (var __v in {propName})");
         sb.AppendLine($"{indent}{{");
         EmitElementWrite(sb, elemType, writerVar, "__v", indent + "    ", names);
         sb.AppendLine($"{indent}}}");
@@ -417,7 +423,11 @@ internal static class PropertyCodec
         var propName = DefTypeHelper.ToPropertyName(prop.Name);
         var names = new NameGen();
         sb.AppendLine($"{indent}{writerVar}.WriteUInt16((ushort){propName}.Count);");
-        sb.AppendLine($"{indent}foreach (var __kv in {propName}.Items)");
+        // Iterate the ObservableDict directly, not via .Items.  Same
+        // boxing rationale as EmitListWrite — ObservableDict's struct
+        // Dictionary<K,V>.Enumerator stays on the stack when iterated
+        // through the concrete type.
+        sb.AppendLine($"{indent}foreach (var __kv in {propName})");
         sb.AppendLine($"{indent}{{");
         EmitElementWrite(sb, keyType, writerVar, "__kv.Key", indent + "    ", names);
         EmitElementWrite(sb, elemType, writerVar, "__kv.Value", indent + "    ", names);
