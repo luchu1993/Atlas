@@ -1,27 +1,62 @@
 # Receive / Dispatch Decoupling (Plan B)
 
-**Status:** 📋 design-only · not implemented · superseded by Plan A
-(`2c3ced4`) for the 500-client/baseapp goal. Keep this on file as the
-next move if A's per-callback yield turns out to be insufficient at
-higher per-process loads (1 000+ clients/baseapp) or if Atlas's
-overall network model migrates toward strict tick-cadence semantics.
+**Status:** ✅ Shipped — replaces Plan A's intra-flush yield
+(`2c3ced4`) after the 500-cli baseline (`8846cc1`) showed A's
+per-packet bound was too coarse to eliminate Slow-tick warnings
+(still 16, max 214 ms). Plan B was prepared as a design-only
+fallback; the data made the case for promoting it to the actual
+fix.
 
 **Subsystem:** `src/lib/network/reliable_udp.{h,cc}`,
 `src/lib/network/network_interface.{h,cc}`,
 `src/lib/server/server_app.cc` (tick driver), application handlers
 that assume synchronous dispatch.
 
-**Relationship to Plan A:** Plan A (commit `2c3ced4`) yields *within*
-FlushReceiveBuffer when the per-callback deadline is hit and reschedules
-the rest. It preserves the contract that an arriving in-order packet
-fires its application handler before the receive callback returns, just
-sometimes across multiple receive callbacks. **Plan B unconditionally
-defers all dispatch to a tick-time drain, regardless of load.** The
-data structure (a hot-channel list / per-channel ready queue) is the
-same; only the trigger point differs. **Building A leaves the scaffold
-B needs**, so going from A→B is incremental, not a rewrite.
+**Relationship to Plan A:** Plan A (commit `2c3ced4`) yielded *within*
+FlushReceiveBuffer when the per-callback deadline was hit and
+rescheduled the rest. It preserved the contract that an arriving
+in-order packet fires its application handler before the receive
+callback returns, just sometimes across multiple receive callbacks.
+**Plan B unconditionally defers all dispatch to NetworkInterface's
+DoTask drain (frequent-task cadence), regardless of load.** The data
+structure (a hot-channel set) is the same; only the trigger point
+moves from "inside OnDatagramReceived" to "DoTask sweep". A's
+hot-channel plumbing was the scaffold B reused — the actual
+promotion was ~30 lines of behavioural change (split
+OnDatagramReceived into NoFlush + sync wrapper; swap which one the
+production path calls; remove the in-callback drain at the tail of
+OnRudpReadable).
 
-## Why we did not implement B initially
+## What we shipped
+
+- `ReliableUdpChannel::OnDatagramReceived(span)` — synchronous
+  wrapper retained for test ergonomics.  Does parse + enqueue + an
+  immediate `FlushReceiveBuffer(TimePoint::max())`.
+- `ReliableUdpChannel::OnDatagramReceivedNoFlush(span)` — the new
+  production receive path.  Parses headers, advances ACK / SACK /
+  receive-window state, enqueues into `rcv_buf_`, and notifies the
+  hot-callback iff `HasReceiveBacklog()` (i.e. `rcv_buf_` now
+  contains `rcv_nxt_`).  Does NOT dispatch.
+- `NetworkInterface::OnRudpReadable` — calls
+  `OnDatagramReceivedNoFlush`.  Drops the tail
+  `DrainHotChannels(deadline)` that Plan A added; receive is now
+  pure parse + enqueue.
+- `NetworkInterface::DoTask` — drains hot channels with budget
+  `kReadableCallbackBudget / 2` (5 ms) every dispatcher
+  frequent-task pass (~5 kHz on the 500-cli capture, so effective
+  drain capacity is whatever the dispatcher schedules).
+- `ReliableUdpChannel::FlushReceiveBuffer(deadline)` — kept its
+  Plan A contract (always make progress on at least one packet,
+  yield after each delivery if deadline passed).  Now invoked
+  exclusively from `DrainHotChannels` and from the legacy test
+  wrapper.
+- Tests: `pump_datagrams` helper unchanged (uses the sync wrapper);
+  `NoFlushOnReceiveAndDeadlineYieldOnExternalFlush` exercises the
+  Plan B contract directly.
+
+All 119 tests (105 unit + 14 integration) pass.
+
+## Original "why not B initially" — preserved for the record
 
 The 500-client / 2-baseapp baseline (`86aceee`) showed the production
 deployment shape — 250 clients per baseapp — already healthy with

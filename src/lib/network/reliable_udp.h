@@ -87,19 +87,21 @@ class ReliableUdpChannel : public Channel {
     return !deferred_reliable_bundle_.empty() || !deferred_unreliable_bundle_.empty();
   }
 
-  // Called by NetworkInterface when a datagram arrives from this peer.
-  // The optional `flush_deadline` bounds how long FlushReceiveBuffer
-  // (the in-order cascade) is allowed to run inside this callback —
-  // when a gap-fill arrives and many buffered packets become deliverable
-  // at once, the cascade can otherwise dispatch hundreds of synchronous
-  // application handlers and stall the dispatcher thread for 100s of ms.
-  // If the deadline is hit mid-cascade, the channel reports "more pending"
-  // by invoking hot_callback_; NetworkInterface re-drains it later in the
-  // same OnRudpReadable budget or on the next tick.
-  // The default deadline (TimePoint::max) preserves the synchronous
-  // behaviour for tests and any caller that has its own time bound.
-  void OnDatagramReceived(std::span<const std::byte> data,
-                          TimePoint flush_deadline = TimePoint::max());
+  // Synchronous wrapper retained for test ergonomics: parse + enqueue
+  // + immediate FlushReceiveBuffer.  Production callers
+  // (NetworkInterface::OnRudpReadable) use OnDatagramReceivedNoFlush
+  // directly so application dispatch is deferred to tick boundary
+  // (BigWorld-style receive/dispatch decoupling — see
+  // docs/optimization/network_dispatch_decoupling.md).
+  void OnDatagramReceived(std::span<const std::byte> data);
+
+  // Parse the datagram, advance ACK / SACK / receive-window state,
+  // enqueue any in-window payload into rcv_buf_, and notify the
+  // hot-callback if rcv_buf_ now contains rcv_nxt_ (i.e. there is
+  // deliverable backlog).  Does NOT call FlushReceiveBuffer — that is
+  // the caller's responsibility, on its own scheduling cadence
+  // (typically NetworkInterface::DrainHotChannels at tick / DoTask).
+  void OnDatagramReceivedNoFlush(std::span<const std::byte> data);
 
   // Hot-channel callback: fired when FlushReceiveBuffer stops on a
   // deadline with rcv_buf_ still containing `rcv_nxt_`. The receiver
