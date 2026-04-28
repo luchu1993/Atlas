@@ -45,7 +45,7 @@ python $Script `
     --shortline-pct         0 `
     --hold-min-ms           5000 `
     --hold-max-ms           30000 `
-    --login-rate-limit-per-ip    200 `
+    --login-rate-limit-per-ip    0 `
     --login-rate-limit-global    10000 `
     --capture-dir           "$RepoRoot\.tmp\prof\baseline" `
     --capture-procs         "loginapp,dbapp,baseappmgr,baseapp,cellappmgr,cellapp" `
