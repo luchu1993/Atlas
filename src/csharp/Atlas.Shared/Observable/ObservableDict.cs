@@ -54,13 +54,12 @@ public sealed class ObservableDict<TKey, TValue> : IObservableChild, System.Coll
         _items.GetEnumerator();
 
     public IReadOnlyDictionary<TKey, TValue> Items => _items;
-    // Concrete List<T> for the codegen-only delta accessors so the
-    // replication frame's foreach uses the struct List<T>.Enumerator
-    // instead of boxing through IEnumerable<T>.  See ObservableList.Ops
-    // for the same rationale and the dotnet-trace gc-verbose evidence.
-    public List<DictOp> Ops => _ops;
-    public List<TKey> OpKeys => _opKeys;
-    public List<TValue> OpValues => _opValues;
+    // ReadOnlyListView preserves the read-only API (no Add/Clear) while
+    // exposing a struct GetEnumerator() so codegen's foreach over Ops
+    // stays allocation-free.  Same rationale as ObservableList.Ops.
+    public ReadOnlyListView<DictOp> Ops => new(_ops);
+    public ReadOnlyListView<TKey> OpKeys => new(_opKeys);
+    public ReadOnlyListView<TValue> OpValues => new(_opValues);
 
     // Concrete HashSet so the duck-typed foreach in generated code uses
     // the struct enumerator. Empty fallback shared and read-only.
