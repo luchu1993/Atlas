@@ -420,6 +420,17 @@ void NetworkInterface::DoTask() {
   ATLAS_PROFILE_ZONE_N("NetworkInterface::DoTask");
   ProcessCondemnedChannels();
 
+  // Tick-cadence backup for hot channels.  OnRudpReadable normally
+  // re-flushes them within the same callback budget, but if a channel
+  // yielded and no fresh datagram arrived to retrigger
+  // OnRudpReadable, the backlog would otherwise stall until the
+  // peer's next packet.  Bound the per-DoTask drain to half the
+  // OnRudpReadable budget so we don't replicate the cascade-stall
+  // problem we set out to fix.
+  if (!hot_channels_.empty()) {
+    DrainHotChannels(Clock::now() + kReadableCallbackBudget / 2);
+  }
+
   if (rate_limit_ > 0) {
     auto now = Clock::now();
     if (now - last_rate_cleanup_ >= kRateCleanupInterval) {
@@ -587,6 +598,7 @@ void NetworkInterface::OnRudpReadable() {
                                                           *rudp_socket_, src_addr);
       channel->SetChannelId(next_channel_id_++);
       channel->SetDisconnectCallback([this](Channel& ch) { OnChannelDisconnect(ch); });
+      channel->SetHotCallback([this](ReliableUdpChannel& ch) { hot_channels_.insert(&ch); });
       ApplyRudpProfile(*channel, rudp_accept_profile_);
       channel->Activate();
 
@@ -598,7 +610,28 @@ void NetworkInterface::OnRudpReadable() {
     }
 
     auto* rudp_ch = static_cast<ReliableUdpChannel*>(it->second.get());
-    rudp_ch->OnDatagramReceived(recv_buffer.first(bytes));
+    rudp_ch->OnDatagramReceived(recv_buffer.first(bytes), deadline);
+  }
+
+  // Re-flush channels that yielded mid-cascade.  We share the same
+  // 10 ms deadline as the recv loop so a single OnRudpReadable callback
+  // is bounded end-to-end; whatever doesn't drain here gets a fresh
+  // budget on the next callback or via DoTask's tick-cadence backup.
+  if (!hot_channels_.empty()) {
+    DrainHotChannels(deadline);
+  }
+}
+
+void NetworkInterface::DrainHotChannels(TimePoint deadline) {
+  for (auto it = hot_channels_.begin(); it != hot_channels_.end();) {
+    if (Clock::now() >= deadline) break;
+    ReliableUdpChannel* ch = *it;
+    const bool still_hot = ch->FlushReceiveBuffer(deadline);
+    if (!still_hot) {
+      it = hot_channels_.erase(it);
+    } else {
+      ++it;
+    }
   }
 }
 
@@ -629,6 +662,13 @@ void NetworkInterface::CondemnChannel(const Address& addr) {
   auto channel = std::move(it->second);
   channels_.erase(it);
   channels_by_id_.erase(channel->ChannelId());
+
+  // hot_channels_ holds raw pointers; if this channel had pending
+  // backlog when it was condemned, scrub the entry so the next
+  // DrainHotChannels pass doesn't dereference the moved-out unique_ptr.
+  if (auto* rudp = dynamic_cast<ReliableUdpChannel*>(channel.get())) {
+    hot_channels_.erase(rudp);
+  }
 
   // UDP and RUDP channels share a single socket — deregistering it would
   // break all other channels on that socket. Only deregister for TCP.

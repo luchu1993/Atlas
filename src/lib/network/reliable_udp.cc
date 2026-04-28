@@ -261,7 +261,8 @@ auto ReliableUdpChannel::BuildPacket(uint8_t flags, SeqNum seq, std::span<const 
 // on_datagram_received
 // ============================================================================
 
-void ReliableUdpChannel::OnDatagramReceived(std::span<const std::byte> data) {
+void ReliableUdpChannel::OnDatagramReceived(std::span<const std::byte> data,
+                                            TimePoint flush_deadline) {
   if (data.empty()) {
     return;
   }
@@ -383,7 +384,12 @@ void ReliableUdpChannel::OnDatagramReceived(std::span<const std::byte> data) {
     bytes_received_ += remaining;
 
     EnqueueForDelivery(seq, *payload, is_fragment, frag_hdr);
-    FlushReceiveBuffer();
+    const bool more_pending = FlushReceiveBuffer(flush_deadline);
+    if (more_pending && hot_cb_) {
+      // NetworkInterface tracks us as "needs more flushing" and revisits
+      // either later in this OnRudpReadable callback or on the next tick.
+      hot_cb_(*this);
+    }
 
     if (seq != rcv_nxt_ - 1) {
       SendAck();
@@ -594,11 +600,11 @@ void ReliableUdpChannel::EnqueueForDelivery(SeqNum seq, std::span<const std::byt
 // flush_receive_buffer — deliver consecutive packets starting from rcv_nxt_
 // ============================================================================
 
-void ReliableUdpChannel::FlushReceiveBuffer() {
+auto ReliableUdpChannel::FlushReceiveBuffer(TimePoint deadline) -> bool {
   while (true) {
     auto it = rcv_buf_.find(rcv_nxt_);
     if (it == rcv_buf_.end()) {
-      break;  // gap — waiting for rcv_nxt_ to arrive
+      return false;  // gap — waiting for rcv_nxt_ to arrive
     }
 
     auto entry = std::move(it->second);
@@ -612,6 +618,17 @@ void ReliableUdpChannel::FlushReceiveBuffer() {
       // Non-fragment: dispatch immediately
       OnDataReceived(entry.payload);
       DispatchMessages(entry.payload);
+    }
+
+    // Yield-point: the deadline is checked AFTER each delivery, not
+    // before, so we always make progress on at least one packet per
+    // call.  Without this, a sufficiently bursty arrival rate combined
+    // with a tight deadline could starve the channel even though work
+    // is queued.  Stopping here is safe because rcv_nxt_ has already
+    // advanced past the just-delivered seq, so a follow-up call resumes
+    // exactly where we left off.
+    if (Clock::now() >= deadline) {
+      return rcv_buf_.find(rcv_nxt_) != rcv_buf_.end();
     }
   }
 }

@@ -598,6 +598,91 @@ TEST_F(ReliableUdpTest, OrderedDeliveryWaitsForGap) {
   EXPECT_EQ(channel_b.RecvBufCount(), 0u);
 }
 
+TEST_F(ReliableUdpTest, FlushReceiveBufferYieldsOnDeadline) {
+  // When a gap-filler arrives and many buffered packets become deliverable,
+  // FlushReceiveBuffer must (a) always make forward progress on at least
+  // one packet, (b) stop when the supplied deadline has passed, (c) report
+  // "still hot" so the caller can resume.  Without yielding, dispatch on
+  // baseapp at 500-cli load was hitting 200 ms callbacks via cascade
+  // (see docs/optimization/README.md, 500-client baseline).
+
+  auto sock_a = Socket::CreateUdp();
+  ASSERT_TRUE(sock_a.HasValue());
+  ASSERT_TRUE(sock_a->Bind(Address("127.0.0.1", 0)).HasValue());
+  auto addr_a = sock_a->LocalAddress().Value();
+
+  auto sock_b = Socket::CreateUdp();
+  ASSERT_TRUE(sock_b.HasValue());
+  ASSERT_TRUE(sock_b->Bind(Address("127.0.0.1", 0)).HasValue());
+  auto addr_b = sock_b->LocalAddress().Value();
+
+  std::vector<uint32_t> received_order;
+  table_.RegisterTypedHandler<RudpTestMsg>([&](const Address&, Channel*, const RudpTestMsg& msg) {
+    received_order.push_back(msg.value);
+  });
+
+  ReliableUdpChannel channel_a(dispatcher_, table_, *sock_a, addr_b);
+  channel_a.SetNocwnd(true);
+  channel_a.Activate();
+
+  // Send 5 reliable packets seq 1..5; capture each datagram off socket_b.
+  constexpr int kNumPackets = 5;
+  for (uint32_t i = 1; i <= kNumPackets; ++i) {
+    channel_a.Bundle().AddMessage(RudpTestMsg{i * 10});
+    (void)channel_a.SendReliable();
+  }
+  std::this_thread::sleep_for(std::chrono::milliseconds(50));
+
+  std::vector<std::vector<std::byte>> datagrams;
+  std::array<std::byte, 2048> buf{};
+  while (true) {
+    auto result = sock_b->RecvFrom(buf);
+    if (!result || result->first == 0) break;
+    datagrams.emplace_back(buf.data(), buf.data() + result->first);
+  }
+  ASSERT_EQ(datagrams.size(), static_cast<size_t>(kNumPackets));
+
+  ReliableUdpChannel channel_b(dispatcher_, table_, *sock_b, addr_a);
+  channel_b.Activate();
+
+  bool hot_cb_fired = false;
+  channel_b.SetHotCallback([&](ReliableUdpChannel&) { hot_cb_fired = true; });
+
+  // Feed seq 2..5 out of order — all buffered, none delivered (rcv_nxt_=1).
+  for (int i = 4; i >= 1; --i) {
+    channel_b.OnDatagramReceived(datagrams[i]);
+  }
+  ASSERT_EQ(received_order.size(), 0u);
+  EXPECT_EQ(channel_b.RecvBufCount(), 4u);
+  EXPECT_FALSE(hot_cb_fired) << "no flush yet — hot callback should not have fired";
+
+  // Feed seq 1 with an already-elapsed deadline.  FlushReceiveBuffer must
+  // deliver seq 1 (the always-make-progress invariant) and then return
+  // true with backlog still queued, prompting the hot-callback.
+  const auto past_deadline = Clock::now() - std::chrono::seconds(1);
+  channel_b.OnDatagramReceived(datagrams[0], past_deadline);
+
+  EXPECT_EQ(received_order.size(), 1u) << "seq 1 should be delivered before the yield";
+  EXPECT_EQ(received_order[0], 10u);
+  EXPECT_TRUE(hot_cb_fired) << "yield with backlog must announce via hot-callback";
+  EXPECT_EQ(channel_b.RecvBufCount(), 4u) << "seq 2..5 still queued after the yield";
+  // Sanity: the deadline-yield path leaves rcv_buf_ holding seq 2 onward.
+  EXPECT_TRUE(channel_b.HasReceiveBacklog());
+
+  // Drain remaining with a relaxed deadline — should fully flush and
+  // report "no more pending".
+  hot_cb_fired = false;
+  const bool still_hot = channel_b.FlushReceiveBuffer(Clock::now() + std::chrono::seconds(10));
+  EXPECT_FALSE(still_hot);
+  EXPECT_FALSE(hot_cb_fired) << "explicit drain must not re-fire the callback";
+  EXPECT_EQ(received_order.size(), 5u);
+  for (uint32_t i = 0; i < 5; ++i) {
+    EXPECT_EQ(received_order[i], (i + 1) * 10);
+  }
+  EXPECT_EQ(channel_b.RecvBufCount(), 0u);
+  EXPECT_FALSE(channel_b.HasReceiveBacklog());
+}
+
 TEST_F(ReliableUdpTest, GapFillerOutsideSackWindowNotDroppedAsDuplicate) {
   // Regression: the receiver must not treat a never-seen seq as duplicate
   // simply because it falls outside the 32-bit SACK reporting window

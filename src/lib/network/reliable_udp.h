@@ -87,8 +87,41 @@ class ReliableUdpChannel : public Channel {
     return !deferred_reliable_bundle_.empty() || !deferred_unreliable_bundle_.empty();
   }
 
-  // Called by NetworkInterface when a datagram arrives from this peer
-  void OnDatagramReceived(std::span<const std::byte> data);
+  // Called by NetworkInterface when a datagram arrives from this peer.
+  // The optional `flush_deadline` bounds how long FlushReceiveBuffer
+  // (the in-order cascade) is allowed to run inside this callback —
+  // when a gap-fill arrives and many buffered packets become deliverable
+  // at once, the cascade can otherwise dispatch hundreds of synchronous
+  // application handlers and stall the dispatcher thread for 100s of ms.
+  // If the deadline is hit mid-cascade, the channel reports "more pending"
+  // by invoking hot_callback_; NetworkInterface re-drains it later in the
+  // same OnRudpReadable budget or on the next tick.
+  // The default deadline (TimePoint::max) preserves the synchronous
+  // behaviour for tests and any caller that has its own time bound.
+  void OnDatagramReceived(std::span<const std::byte> data,
+                          TimePoint flush_deadline = TimePoint::max());
+
+  // Hot-channel callback: fired when FlushReceiveBuffer stops on a
+  // deadline with rcv_buf_ still containing `rcv_nxt_`. The receiver
+  // (NetworkInterface) records the channel and re-runs the flush with
+  // a fresh budget. Optional — leaving it unset preserves the
+  // pre-deadline behaviour (cascade always runs to completion).
+  using HotCallback = std::function<void(ReliableUdpChannel&)>;
+  void SetHotCallback(HotCallback cb) { hot_cb_ = std::move(cb); }
+
+  // Drain in-order delivery up to `deadline`.  Returns true iff
+  // rcv_buf_ still contains `rcv_nxt_` on return — i.e. more deliveries
+  // are queued and the caller should schedule another flush.  Public so
+  // NetworkInterface can re-flush a hot channel directly without
+  // pretending a datagram arrived.
+  [[nodiscard]] auto FlushReceiveBuffer(TimePoint deadline) -> bool;
+
+  // True iff the next-expected seq is already buffered.  Cheap O(1)
+  // probe NetworkInterface uses to decide whether a channel still owes
+  // more delivery work.
+  [[nodiscard]] auto HasReceiveBacklog() const -> bool {
+    return rcv_buf_.find(rcv_nxt_) != rcv_buf_.end();
+  }
 
   // Transport-level drop injection window — exercises the reliable
   // retransmit path end-to-end (see script_client_smoke.md 场景 3 for
@@ -210,7 +243,8 @@ class ReliableUdpChannel : public Channel {
   // Ordered delivery
   void EnqueueForDelivery(SeqNum seq, std::span<const std::byte> payload, bool is_fragment,
                           const FragmentHeader& frag_hdr);
-  void FlushReceiveBuffer();
+  // Internal entry point — exposes the deadline-aware variant publicly
+  // (declared earlier).
 
   // Congestion control
   void OnAckCwndUpdate(uint32_t acked_count);
@@ -244,6 +278,10 @@ class ReliableUdpChannel : public Channel {
   std::map<SeqNum, RecvEntry> rcv_buf_;  // out-of-order receive buffer
   SeqNum rcv_nxt_{1};                    // next expected seq for ordered delivery
   uint32_t rcv_wnd_{256};                // receive window size
+
+  // Set by NetworkInterface so the channel can ask to be re-flushed when
+  // FlushReceiveBuffer stops on a deadline with backlog remaining.
+  HotCallback hot_cb_;
 
   // RTT estimation (Jacobson/Karels per RFC 6298) — extracted to RttEstimator
   RttEstimator rtt_;

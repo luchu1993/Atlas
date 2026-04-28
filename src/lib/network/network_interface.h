@@ -6,6 +6,7 @@
 #include <memory>
 #include <optional>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 #include "foundation/clock.h"
@@ -121,6 +122,13 @@ class NetworkInterface : public FrequentTask {
   void ProcessCondemnedChannels();
   [[nodiscard]] auto DatagramRecvBuffer() -> std::span<std::byte>;
 
+  // Drain any RUDP channels that yielded mid-cascade in
+  // FlushReceiveBuffer.  Called: (1) at the tail of OnRudpReadable with
+  // whatever budget remains; (2) every dispatcher tick from DoTask as a
+  // backup so a stalled channel still drains even if no fresh datagrams
+  // arrive.  Returns when the deadline is hit or the hot set drains.
+  void DrainHotChannels(TimePoint deadline);
+
   // Rate limiting
   auto CheckRateLimit(uint32_t ip) -> bool;
   void CleanupStaleRateTrackers();
@@ -152,6 +160,12 @@ class NetworkInterface : public FrequentTask {
   std::unordered_map<Address, std::unique_ptr<Channel>> channels_;
   std::unordered_map<ChannelId, Channel*> channels_by_id_;
   ChannelId next_channel_id_{1};
+
+  // Channels that yielded mid-cascade and still have rcv_buf_ entries
+  // waiting for delivery.  ReliableUdpChannel inserts into this set via
+  // its hot-callback; DrainHotChannels removes entries that finish.
+  // Entries are bare pointers; CondemnChannel must scrub on teardown.
+  std::unordered_set<ReliableUdpChannel*> hot_channels_;
 
   // Condemned channels awaiting cleanup
   struct CondemnedEntry {
