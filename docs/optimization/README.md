@@ -205,41 +205,85 @@ to 940 ms because more traffic is now flowing — the previous
 1.6 MB/tick fleet cap was implicitly suppressing demand, masking how
 saturated the baseapp dispatcher actually was.
 
-## Where the next bottleneck is (`b1782e5`, NOT in the doc list)
+## 2-BaseApp / 500-client baseline (`86aceee`, 2026-04-28)
 
-The 500-client v2 capture pinpoints **single-threaded RUDP ingest on
-baseapp** as the structural ceiling:
+Same workload as the 1-BaseApp v2 run, with `--baseapp-count 2` so each
+BaseApp handles 250 clients (production-shape topology). Captures in
+`.tmp/prof/baseline-500-2ba/`. Single key finding: the
+"single-threaded RUDP ingest" symptom from the 1-BaseApp run is **not
+a structural defect** — it was a per-process saturation cliff at the
+500-client/proc operating point, and the system below that cliff is
+healthy.
 
-- `OnRudpReadable` mean **3.07 ms / call** at 500 clients — 24× worse
-  than the 200-client baseline (128 µs).
-- Total CPU on the RUDP read path: **68.9 %** of one baseapp core
-  across the capture (Channel::Dispatch + HandleMessage are nested,
-  not additive — they contribute to the same 68.9 %).
-- 16 `Slow tick` warnings on baseapp (max 230 ms vs 67 ms budget)
-  trace directly to inbound bursts blocking dispatch from yielding.
-- Adding more BaseApps (`run_world_stress.py --baseapp-count N`)
-  partitions sessions across processes and is the production scaling
-  story; **per-process** the read-path work needs to either move off
-  the dispatcher thread or accept multi-message vectored reads.
+### Stress-run health: 1-BaseApp vs 2-BaseApp (same 500 total clients)
 
-Concrete options to investigate before any code change:
+| Signal | 1-BA (`b1782e5`) | 2-BA (`86aceee`) | Δ |
+|---|---|---|---|
+| `unexpected_disc` | 1 302 | **0** | ✅ -100 % |
+| `echo_loss` (sent − received) | 24 736 / 87 604 = 28 % | **224 / 102 448 = 0.2 %** | ✅ -99 % |
+| `echo_rtt` p50 / p95 / p99 | 940 / 4332 / 4943 ms | **28.6 / 78.2 / 106.3 ms** | ✅ ~33–47× better |
+| `auth_latency` p50 / p95 / p99 | 437 / 4584 / 5364 ms | **87.8 / 175.7 / 193.4 ms** | ✅ ~5–28× better |
+| `Slow tick` (sum across baseapps) | 16 (max 230 ms) | 5 (max 152 ms) | -69 % |
+| `bytes_rx_per_sec` | 1.86 MB/s | **3.20 MB/s** | +72 % |
+| `aoi_enter` | 590 314 | 1 045 116 | +77 % |
+| `bandwidth deficit` | 0 | 0 | — |
+| `EntityID pool exhausted` | 0 | 0 | — |
 
-1. **Multi-baseapp deployment first** — re-run baseline with
-   `--baseapp-count 2` (250 clients/proc) to establish a per-process
-   curve. Action-MMO industry norm is 500–1000 clients per BaseApp;
-   our 500-on-one is already past that.
-2. **OnRudpReadable internals** — open `cellapp_b1782e5_*.tracy` /
-   `baseapp_b1782e5_*.tracy` in tracy-profiler to see what's inside
-   the 3 ms mean — is it ACK processing, fragment reassembly, queue
-   walks, or syscall overhead?
-3. **Yield budget** — `Slow tick` fires when the dispatcher loop runs
-   for too long without returning to the tick driver; a per-callback
-   wall-clock budget (similar to the existing witness send budget)
-   could bound the worst-case stall.
+The 2-BA configuration eliminates every operator-visible symptom and
+nearly doubles useful throughput. CellApp doesn't change (still single,
+still serving the whole 500-client space).
 
-Decide architecture direction (vectored reads vs worker threads vs
-per-tick yield) only after the per-process curve from option 1 says
-which one buys headroom.
+### Per-BaseApp Tracy at 2-BA 250-clients-each
+
+| Zone | calls (BA0 / BA1) | mean (BA0 / BA1) | max (BA0 / BA1) | % CPU each |
+|---|---|---|---|---|
+| Tick | 1 951 / 1 952 | 0.55 ms / 0.55 ms | 5.39 ms / 5.67 ms | 0.79 % |
+| NetworkInterface::OnRudpReadable | 165 339 / 99 455 | **449 µs / 755 µs** | 55.8 ms / 64.9 ms | **54.3 % / 54.8 %** |
+| Channel::Dispatch | 554 472 / 464 569 | 119 µs / 144 µs | 54.9 ms / 64.5 ms | 48.1 % / 48.9 % |
+| Channel::HandleMessage | 5.46 M / 5.60 M | 12.0 µs / 11.9 µs | 2.36 ms / 2.00 ms | 48.0 % / 48.7 % |
+| Channel::Send | 5.31 M / 5.46 M | 7.34 µs / 7.28 µs | 1.86 ms / 1.11 ms | 28.5 % / 29.0 % |
+
+Compared to 1-BA at 500 clients (`OnRudpReadable` mean 3.07 ms, max
+208 ms), the 2-BA per-process numbers are **6.8× / 4.1× lower mean**
+and **3.7× / 3.2× lower max**. Per-BaseApp CPU utilization is ~55 %
+on the RUDP read path — well clear of the saturation cliff.
+
+## Strategic conclusion (`86aceee`)
+
+There is no structural network bottleneck preventing the 5 000-client
+project target. The shape is **straightforward horizontal scaling**:
+
+- Atlas's per-BaseApp comfortable ceiling is around 250–400 clients
+  for this action-MMO load profile (10 Hz move + 2 Hz echo + dense AoI).
+  500-on-one is past the cliff; 250-on-each is in the linear regime.
+- Industry norm for BigWorld-family engines is 500–1000 clients per
+  BaseApp; Atlas's lower ceiling reflects (a) per-client property
+  density on `StressAvatar` and (b) the still-untuned RUDP read path.
+- 5 000 client target → 13–20 BaseApps + 1–3 CellApps (per Space
+  cellapp count is bounded by the single-Space target, not by load).
+- BaseAppMgr already round-robins logins across BaseApps with
+  least-loaded selection (`baseappmgr.cc:500`); no orchestration code
+  needs to change.
+
+**Open questions still worth investigating, but no longer urgent:**
+
+1. **Per-BaseApp ceiling tuning** — can we push 250-cli/proc to
+   400-cli/proc by shaving the OnRudpReadable mean (currently 449 µs
+   at 250 clients vs 144 µs at 200 clients on a shared baseapp — the
+   per-call work is super-linear in client count). Open
+   `baseapp_86aceee_*.tracy` in `tracy-profiler` to see what's inside.
+2. **Slow-tick magnitude** — the 5 remaining slow-ticks (138–152 ms)
+   are still 2× the 67 ms budget. Bursty rather than sustained, but
+   worth understanding before sustained 5k-client deployments.
+3. **CellApp scaling** — at 5 000 clients in many small spaces, single
+   cellapp suffices; at 5 000 clients in a few large 100v100 battles,
+   each Space pins a single cellapp and there's no horizontal scaling
+   inside a Space. Re-run with `--cellapp-count 2 --space-count 2` to
+   establish the multi-cellapp curve.
+
+These are scaling-curve refinements, not blockers. Update this doc
+the next time a single zone exceeds its budget at the chosen
+production topology.
 
 ## Priority Definitions
 
