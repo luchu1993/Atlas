@@ -1,10 +1,17 @@
 # Receive / Dispatch Decoupling (Plan B)
 
-**Status:** 📋 design-only · not implemented · superseded by Plan A
-(`2c3ced4`) for the 500-client/baseapp goal. Keep this on file as the
-next move if A's per-callback yield turns out to be insufficient at
-higher per-process loads (1 000+ clients/baseapp) or if Atlas's
-overall network model migrates toward strict tick-cadence semantics.
+**Status:** 📋 design-only · briefly implemented (`49703d8`) and
+**reverted** (`a78d540`) after the 500-cli single-baseapp validation
+showed B was a net regression for Atlas's mixed coroutine + RPC chain
+workload. See **Empirical revert reasoning** below before proposing
+B again.
+
+**Forward path:** the 500-cli single-baseapp goal will be pursued
+via **A2** — extending Plan A's deadline-yield from packet-level
+into `DispatchMessages` itself (handler-level yield + resume).  A2
+preserves Plan A's "synchronous when fast, yield when slow"
+semantic, which avoids the multi-hop RPC-chain regression that
+killed B in practice.
 
 **Subsystem:** `src/lib/network/reliable_udp.{h,cc}`,
 `src/lib/network/network_interface.{h,cc}`,
@@ -20,6 +27,49 @@ defers all dispatch to a tick-time drain, regardless of load.** The
 data structure (a hot-channel list / per-channel ready queue) is the
 same; only the trigger point differs. **Building A leaves the scaffold
 B needs**, so going from A→B is incremental, not a rewrite.
+
+## Empirical revert reasoning (post-`49703d8`)
+
+B was implemented and run against the 500-cli single-baseapp
+shape (capture `49703d8_20260429-003653`).  Headline numbers vs
+Plan A (`8846cc1`) on the same workload:
+
+| Signal | Plan A | Plan B | Δ |
+|---|---|---|---|
+| `OnRudpReadable` max | 166 ms | **11.4 ms** | ✅ ~14× |
+| `OnRudpReadable` mean | 2.74 ms | **0.41 ms** | ✅ ~7× |
+| `Slow tick` (baseapp) | 16 (max 214 ms) | 3 (max 168 ms) | ✅ -81 % |
+| **`DoTask` max** | trivial | **112.5 ms** | ❌ new hotspot |
+| `Channel::Dispatch` max | 166 ms | 111.7 ms | -33 % |
+| **`cell_ready`** | 3 395 | **1 204** | ❌ -65 % |
+| `timeout_fail` | 0 | **133** | ❌ login chain regression |
+| `auth_latency` p99 | 5.22 s | **6.28 s** | ❌ +20 % |
+| `bytes_rx_per_sec` | 1.97 MB/s | **0.58 MB/s** | ❌ -71 % (downstream of timeouts) |
+| `aoi_prop_update` | 3 499 k | **1 008 k** | ❌ -71 % (ditto) |
+
+**Root cause B did not eliminate:** a single MTU-sized reliable
+packet from cellapp can bundle 10+ entity property handlers.
+`Channel::DispatchMessages` runs all of them in one synchronous
+pass.  B moved that 100+ ms pass from `OnRudpReadable` (where Plan A
+saw it) into `DoTask` (where B sees it now).  The dispatcher thread
+still stalls; only the zone label changed.
+
+**The cost B paid that broke things:** every reliable packet now
+has +0–67 ms of tick-cadence delay before its handler runs.
+Atlas's login flow chains 4 + RPC hops (loginapp → DBApp →
+BaseAppMgr → BaseApp → cellapp setup → cell ready).  At 1 tick per
+hop the chain accumulates 200–400 ms of pure wait per login,
+which under 500-cli concurrent ramp pushes a third of clients past
+their 20 s connect timeout.  `cell_ready: 3395 → 1204` was the
+operator-visible failure mode.
+
+**Conclusion:** B is theoretically clean but mismatched to
+Atlas's RPC-heavy login / setup paths.  The right surgery is
+finer-grained yielding (A2), not architectural decoupling.  Keep
+this design doc for the case where Atlas migrates wholesale to
+tick-cadence semantics — at that point B becomes coherent with the
+broader engine model and the RPC-chain cost is paid by the design,
+not by the receive path.
 
 ## Why we did not implement B initially
 
