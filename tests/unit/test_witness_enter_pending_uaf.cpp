@@ -18,6 +18,9 @@
 // in isolation — the second one trips ASan iff there is still a path
 // where ~CellEntity bypasses the leave fan-out.
 
+#include <random>
+#include <vector>
+
 #include <gtest/gtest.h>
 
 #include "cell_entity.h"
@@ -208,6 +211,88 @@ TEST_F(WitnessEnterPendingUafTest, ObserverMovesAwayThenPeerDies) {
   // catch the UAF on a subsequent Update.  Both must be silent.
   space_.RemoveEntity(peer->Id());
   observer->GetWitness()->Update(4096);
+}
+
+// World_stress-style fuzz: many entities, all observers + peers, all
+// random-walking concurrently, with periodic destructions.  Mirrors the
+// load shape that exposed the original profile-build bug — every
+// SetPosition fires OnOwnerMoved, every step risks a hysteresis
+// re-cross, and inner-shuffles-before-outer can break the
+// peer ∈ inner ⊂ outer invariant.  Under ASan, any leave-missed
+// dangling pointer fires on the next Update; the audit in
+// ~CellEntity reports any cache that survives destruction.
+TEST_F(WitnessEnterPendingUafTest, FuzzRandomWalkAndDestroyMatchesWorldStress) {
+  constexpr int kNumEntities = 64;
+  constexpr int kSteps = 600;
+  constexpr float kAoIRadius = 150.f;  // matches production default
+  constexpr float kSpawnSpread = 500.f;
+  constexpr float kWalkStep = 5.f;
+
+  std::mt19937 rng(0xCAFEBABE);  // deterministic seed — bug must repro
+  std::uniform_real_distribution<float> spawn(-kSpawnSpread, kSpawnSpread);
+  std::uniform_real_distribution<float> step(-kWalkStep, kWalkStep);
+  std::uniform_int_distribution<int> coin(0, 99);
+
+  std::vector<EntityID> live_ids;
+  live_ids.reserve(kNumEntities);
+  for (int i = 0; i < kNumEntities; ++i) {
+    const EntityID id = 1000 + i;
+    auto* e = MakeEntity(id, {spawn(rng), 0.f, spawn(rng)});
+    e->EnableWitness(kAoIRadius, [](EntityID, std::span<const std::byte>) {});
+    live_ids.push_back(id);
+  }
+
+  EntityID next_id = 1000 + kNumEntities;
+  for (int t = 0; t < kSteps; ++t) {
+    // Random-walk every live entity through the production setter so
+    // CellEntity::SetPosition → Witness::OnOwnerMoved gets exercised.
+    for (auto id : live_ids) {
+      auto* e = space_.FindEntity(id);
+      ASSERT_NE(e, nullptr);
+      const auto& p = e->Position();
+      e->SetPosition({p.x + step(rng), 0.f, p.z + step(rng)});
+    }
+    // Drain witness updates so kEnterPending → cache.flags=0 transitions
+    // run, leave envelopes flush, and the priority pump touches caches.
+    for (auto id : live_ids) {
+      if (auto* e = space_.FindEntity(id)) {
+        if (auto* w = e->GetWitness()) w->Update(64 * 1024);
+      }
+    }
+    // Liveness invariant: every non-null cache.entity must point to a
+    // currently-live entity in space.entities_.  A dangling pointer is
+    // exactly the condition my fixes target.
+    for (auto id : live_ids) {
+      auto* obs = space_.FindEntity(id);
+      if (!obs) continue;
+      auto* w = obs->GetWitness();
+      if (!w) continue;
+      for (const auto& [peer_id, cache] : w->AoIMap()) {
+        if (cache.entity == nullptr) continue;
+        ASSERT_NE(space_.FindEntity(peer_id), nullptr)
+            << "obs=" << obs->Id() << " has dangling cache for peer=" << peer_id << " at tick "
+            << t;
+        EXPECT_EQ(space_.FindEntity(peer_id), cache.entity)
+            << "obs=" << obs->Id() << " cache.entity stale for peer=" << peer_id;
+      }
+    }
+    // Every ~50 ticks, churn the population: destroy a random entity and
+    // spawn a new one.  Forces ~CellEntity's leave-fanout audit to run
+    // while observers/peers are mid-flight.
+    if (t > 0 && t % 50 == 0 && !live_ids.empty()) {
+      const std::size_t idx = static_cast<std::size_t>(coin(rng)) % live_ids.size();
+      space_.RemoveEntity(live_ids[idx]);
+      live_ids[idx] = live_ids.back();
+      live_ids.pop_back();
+
+      const EntityID nid = next_id++;
+      auto* e = MakeEntity(nid, {spawn(rng), 0.f, spawn(rng)});
+      e->EnableWitness(kAoIRadius, [](EntityID, std::span<const std::byte>) {});
+      live_ids.push_back(nid);
+    }
+  }
+  // Tear-down: ~Space ⇒ each ~CellEntity's audit runs (skipped via
+  // IsTearingDown but the live-entity invariants must already be clean).
 }
 
 // Recreate-with-same-id: peer enters, dies, a fresh peer is spawned at
