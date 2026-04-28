@@ -137,6 +137,7 @@ Status legend: ✅ shipped · 🟡 unjustified at current data · 🔵 deferred
 | [visibility_culling.md](visibility_culling.md) | AoI filtering | ⚪ | game-design dependent (fog-of-war / team filtering); defer until combat specs land |
 | [adaptive_ghost_throttle.md](adaptive_ghost_throttle.md) | Cross-cell sync | 🔵 | `CellApp::TickGhostPump` is 0.045 % of CPU — single-cellapp deployment in the current baseline |
 | [network_dispatch_decoupling.md](network_dispatch_decoupling.md) | RUDP receive ↔ dispatch decoupling (Plan B) | 📋 design only | superseded by Plan A (`2c3ced4`) for the 500-client/baseapp goal; revisit if A's per-callback yield runs out at higher per-process loads |
+| [channel_send_batching.md](channel_send_batching.md) | RUDP send-side coalescing via descriptor `urgency` flag | 📋 design only | flips `Channel::SendMessage` default to deferred; addresses BaseApp `Channel::Send` 6.30 M calls / 31.8 % CPU at 500 clients; revisit after `network_dispatch_decoupling` lands |
 
 ## 500-client baseline (`b1782e5`, 2026-04-28)
 
