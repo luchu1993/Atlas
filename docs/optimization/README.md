@@ -265,6 +265,32 @@ project target. The shape is **straightforward horizontal scaling**:
   least-loaded selection (`baseappmgr.cc:500`); no orchestration code
   needs to change.
 
+### Single-point components — health check
+
+LoginApp, BaseAppMgr, and DBApp each run as a single process today
+and the architecture has no horizontal-scaling story for them. The
+2-BA capture says they're **all idle by a wide margin** at the
+5 000-client-equivalent throughput we just measured (3 135 logins
+in 138 s = 22.7 logins/s sustained):
+
+| Component | Tick mean | Tick max | % CPU | HandleMessage mean | Verdict |
+|---|---|---|---|---|---|
+| LoginApp | **1.26 µs** | 10 µs | 0.69 % | 80 µs | ~50× headroom for steady-state 5 000-cli reconnect rate (≈ 250 logins/s at 5 % churn) |
+| BaseAppMgr | 1.46 µs | 21 µs | 0.21 % | 16.4 µs | effectively idle |
+| DBApp | 220 µs | **9.14 ms** | 1.48 % | 24.9 µs | spikes from periodic DB flush, 60× headroom against the steady auth/checkout rate |
+
+The auth_latency p99 = 193 ms in the 2-BA run is **not** loginapp-bound:
+loginapp's local work per login is ~80 µs, the rest is wall-clock
+waiting on the chained RPCs (DBApp auth → BaseAppMgr alloc → BaseApp
+PrepareLogin). The improvement from 5 364 ms → 193 ms vs the 1-BA run
+came entirely from baseapp's PrepareLogin getting unstuck — not from
+loginapp speeding up.
+
+Single-point loginapp / baseappmgr is a **HA concern, not a perf
+concern**. Failover / hot-spare is a future deployment-architecture
+question; performance-wise the single instance has more than enough
+headroom for the project target.
+
 **Open questions still worth investigating, but no longer urgent:**
 
 1. **Per-BaseApp ceiling tuning** — can we push 250-cli/proc to
@@ -280,6 +306,10 @@ project target. The shape is **straightforward horizontal scaling**:
    each Space pins a single cellapp and there's no horizontal scaling
    inside a Space. Re-run with `--cellapp-count 2 --space-count 2` to
    establish the multi-cellapp curve.
+4. **DBApp tick spikes** — Tick max 9.14 ms is 14× the mean (220 µs);
+   likely the periodic counter persist (`EntityIdAllocator::Persist`).
+   At higher login rates this could chain into auth_latency tail. Worth
+   checking the 5 000-client reconnect-storm scenario.
 
 These are scaling-curve refinements, not blockers. Update this doc
 the next time a single zone exceeds its budget at the chosen
