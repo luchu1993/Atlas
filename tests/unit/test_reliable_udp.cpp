@@ -598,18 +598,13 @@ TEST_F(ReliableUdpTest, OrderedDeliveryWaitsForGap) {
   EXPECT_EQ(channel_b.RecvBufCount(), 0u);
 }
 
-TEST_F(ReliableUdpTest, NoFlushOnReceiveAndDeadlineYieldOnExternalFlush) {
-  // BigWorld-style decoupling contract:
-  //   1. OnDatagramReceivedNoFlush enqueues + reports "hot" via the
-  //      hot-callback, but does NOT dispatch application handlers
-  //      synchronously.
-  //   2. The caller (NetworkInterface::DrainHotChannels) drives
-  //      delivery on its own cadence by calling FlushReceiveBuffer
-  //      with a deadline.
-  //   3. FlushReceiveBuffer always delivers at least one packet per
-  //      call (forward progress) and yields after each delivery if
-  //      the deadline has passed, returning "still hot" so the next
-  //      drain pass picks up where it stopped.
+TEST_F(ReliableUdpTest, FlushReceiveBufferYieldsOnDeadline) {
+  // When a gap-filler arrives and many buffered packets become deliverable,
+  // FlushReceiveBuffer must (a) always make forward progress on at least
+  // one packet, (b) stop when the supplied deadline has passed, (c) report
+  // "still hot" so the caller can resume.  Without yielding, dispatch on
+  // baseapp at 500-cli load was hitting 200 ms callbacks via cascade
+  // (see docs/optimization/README.md, 500-client baseline).
 
   auto sock_a = Socket::CreateUdp();
   ASSERT_TRUE(sock_a.HasValue());
@@ -650,51 +645,42 @@ TEST_F(ReliableUdpTest, NoFlushOnReceiveAndDeadlineYieldOnExternalFlush) {
   ReliableUdpChannel channel_b(dispatcher_, table_, *sock_b, addr_a);
   channel_b.Activate();
 
-  int hot_cb_count = 0;
-  channel_b.SetHotCallback([&](ReliableUdpChannel&) { ++hot_cb_count; });
+  bool hot_cb_fired = false;
+  channel_b.SetHotCallback([&](ReliableUdpChannel&) { hot_cb_fired = true; });
 
-  // Feed seq 2..5 out of order via NoFlush — all buffered, none
-  // delivered (rcv_nxt_=1 still missing).  HasReceiveBacklog stays
-  // false (seq 1 not in buf yet) so the hot-callback must NOT fire.
+  // Feed seq 2..5 out of order — all buffered, none delivered (rcv_nxt_=1).
   for (int i = 4; i >= 1; --i) {
-    channel_b.OnDatagramReceivedNoFlush(datagrams[i]);
+    channel_b.OnDatagramReceived(datagrams[i]);
   }
-  ASSERT_EQ(received_order.size(), 0u) << "NoFlush must never dispatch synchronously";
+  ASSERT_EQ(received_order.size(), 0u);
   EXPECT_EQ(channel_b.RecvBufCount(), 4u);
-  EXPECT_EQ(hot_cb_count, 0) << "no rcv_nxt_ in buffer yet → hot-callback silent";
+  EXPECT_FALSE(hot_cb_fired) << "no flush yet — hot callback should not have fired";
 
-  // Feed seq 1 — now rcv_buf_ contains rcv_nxt_, hot-callback fires once.
-  channel_b.OnDatagramReceivedNoFlush(datagrams[0]);
-  EXPECT_EQ(received_order.size(), 0u) << "still no synchronous dispatch";
-  EXPECT_EQ(channel_b.RecvBufCount(), 5u);
-  EXPECT_EQ(hot_cb_count, 1) << "first time backlog became deliverable";
-  EXPECT_TRUE(channel_b.HasReceiveBacklog());
-
-  // Drive delivery externally with an already-elapsed deadline:
-  // FlushReceiveBuffer delivers seq 1 (forward progress), checks the
-  // deadline (passed), and returns "still hot".
+  // Feed seq 1 with an already-elapsed deadline.  FlushReceiveBuffer must
+  // deliver seq 1 (the always-make-progress invariant) and then return
+  // true with backlog still queued, prompting the hot-callback.
   const auto past_deadline = Clock::now() - std::chrono::seconds(1);
-  bool still_hot = channel_b.FlushReceiveBuffer(past_deadline);
-  EXPECT_TRUE(still_hot);
-  EXPECT_EQ(received_order.size(), 1u);
+  channel_b.OnDatagramReceived(datagrams[0], past_deadline);
+
+  EXPECT_EQ(received_order.size(), 1u) << "seq 1 should be delivered before the yield";
   EXPECT_EQ(received_order[0], 10u);
+  EXPECT_TRUE(hot_cb_fired) << "yield with backlog must announce via hot-callback";
   EXPECT_EQ(channel_b.RecvBufCount(), 4u) << "seq 2..5 still queued after the yield";
+  // Sanity: the deadline-yield path leaves rcv_buf_ holding seq 2 onward.
   EXPECT_TRUE(channel_b.HasReceiveBacklog());
 
-  // Drain the rest with a relaxed deadline.
-  still_hot = channel_b.FlushReceiveBuffer(Clock::now() + std::chrono::seconds(10));
+  // Drain remaining with a relaxed deadline — should fully flush and
+  // report "no more pending".
+  hot_cb_fired = false;
+  const bool still_hot = channel_b.FlushReceiveBuffer(Clock::now() + std::chrono::seconds(10));
   EXPECT_FALSE(still_hot);
+  EXPECT_FALSE(hot_cb_fired) << "explicit drain must not re-fire the callback";
   EXPECT_EQ(received_order.size(), 5u);
   for (uint32_t i = 0; i < 5; ++i) {
     EXPECT_EQ(received_order[i], (i + 1) * 10);
   }
   EXPECT_EQ(channel_b.RecvBufCount(), 0u);
   EXPECT_FALSE(channel_b.HasReceiveBacklog());
-
-  // The hot-callback was fired exactly once across the whole sequence
-  // (when seq 1 first connected the buffer to rcv_nxt_).  External
-  // FlushReceiveBuffer drains MUST NOT re-trigger it.
-  EXPECT_EQ(hot_cb_count, 1);
 }
 
 TEST_F(ReliableUdpTest, GapFillerOutsideSackWindowNotDroppedAsDuplicate) {

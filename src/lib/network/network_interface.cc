@@ -343,7 +343,6 @@ auto NetworkInterface::ConnectRudp(const Address& addr, const RudpProfile& profi
       std::make_unique<ReliableUdpChannel>(dispatcher_, interface_table_, *rudp_socket_, addr);
   channel->SetChannelId(next_channel_id_++);
   channel->SetDisconnectCallback([this](Channel& ch) { OnChannelDisconnect(ch); });
-  channel->SetHotCallback([this](ReliableUdpChannel& ch) { hot_channels_.insert(&ch); });
   ApplyRudpProfile(*channel, profile);
   channel->Activate();
 
@@ -421,13 +420,13 @@ void NetworkInterface::DoTask() {
   ATLAS_PROFILE_ZONE_N("NetworkInterface::DoTask");
   ProcessCondemnedChannels();
 
-  // Plan B: this is the PRIMARY dispatch path.  OnRudpReadable parses
-  // and enqueues only — application handlers run here, on the
-  // dispatcher's frequent-task cadence (~5 kHz observed).  Bound the
-  // per-call drain to half the OnRudpReadable budget so a single
-  // DoTask invocation cannot itself replicate the cascade-stall
-  // problem we set out to fix; remaining work waits for the next
-  // DoTask iteration.
+  // Tick-cadence backup for hot channels.  OnRudpReadable normally
+  // re-flushes them within the same callback budget, but if a channel
+  // yielded and no fresh datagram arrived to retrigger
+  // OnRudpReadable, the backlog would otherwise stall until the
+  // peer's next packet.  Bound the per-DoTask drain to half the
+  // OnRudpReadable budget so we don't replicate the cascade-stall
+  // problem we set out to fix.
   if (!hot_channels_.empty()) {
     DrainHotChannels(Clock::now() + kReadableCallbackBudget / 2);
   }
@@ -611,13 +610,16 @@ void NetworkInterface::OnRudpReadable() {
     }
 
     auto* rudp_ch = static_cast<ReliableUdpChannel*>(it->second.get());
-    rudp_ch->OnDatagramReceivedNoFlush(recv_buffer.first(bytes));
+    rudp_ch->OnDatagramReceived(recv_buffer.first(bytes), deadline);
   }
-  // Plan B: the recv loop ONLY parses + enqueues + ACK-accounts.
-  // Application dispatch happens on the next DoTask invocation
-  // (kReadableCallbackBudget / 2 budget) — keeping receive itself
-  // O(parse) per datagram so OnRudpReadable can never stall the
-  // dispatcher thread on a fat MTU packet's worth of handlers.
+
+  // Re-flush channels that yielded mid-cascade.  We share the same
+  // 10 ms deadline as the recv loop so a single OnRudpReadable callback
+  // is bounded end-to-end; whatever doesn't drain here gets a fresh
+  // budget on the next callback or via DoTask's tick-cadence backup.
+  if (!hot_channels_.empty()) {
+    DrainHotChannels(deadline);
+  }
 }
 
 void NetworkInterface::DrainHotChannels(TimePoint deadline) {

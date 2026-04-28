@@ -261,15 +261,8 @@ auto ReliableUdpChannel::BuildPacket(uint8_t flags, SeqNum seq, std::span<const 
 // on_datagram_received
 // ============================================================================
 
-void ReliableUdpChannel::OnDatagramReceived(std::span<const std::byte> data) {
-  // Legacy synchronous wrapper preserved for test ergonomics.
-  // NetworkInterface (production) calls OnDatagramReceivedNoFlush
-  // directly so dispatch is deferred to tick.
-  OnDatagramReceivedNoFlush(data);
-  (void)FlushReceiveBuffer(TimePoint::max());
-}
-
-void ReliableUdpChannel::OnDatagramReceivedNoFlush(std::span<const std::byte> data) {
+void ReliableUdpChannel::OnDatagramReceived(std::span<const std::byte> data,
+                                            TimePoint flush_deadline) {
   if (data.empty()) {
     return;
   }
@@ -391,25 +384,10 @@ void ReliableUdpChannel::OnDatagramReceivedNoFlush(std::span<const std::byte> da
     bytes_received_ += remaining;
 
     EnqueueForDelivery(seq, *payload, is_fragment, frag_hdr);
-
-    // BigWorld-style decoupling: receive does NOT dispatch.  We only
-    // parse, ACK-account, and enqueue here; application handlers run
-    // later when NetworkInterface drains hot channels (DoTask, tick
-    // boundary, or end-of-OnRudpReadable budget remainder).
-    //
-    // Without this split, a single Channel::DispatchMessages call
-    // from a fat MTU packet (10+ bundled handlers under load) could
-    // stall the dispatcher thread for 100+ ms — the 16 Slow-tick
-    // warnings we logged with Plan A's intra-flush yield (commit
-    // 2c3ced4) showed that a per-packet bound is too coarse.
-    // Decoupling shifts the bound to "one DrainHotChannels budget
-    // per call" at the cost of up to one tick of dispatch latency
-    // per packet.
-    //
-    // The legacy OnDatagramReceived(span) overload (used by tests)
-    // still calls FlushReceiveBuffer synchronously after enqueue so
-    // the existing assertion patterns keep working.
-    if (HasReceiveBacklog() && hot_cb_) {
+    const bool more_pending = FlushReceiveBuffer(flush_deadline);
+    if (more_pending && hot_cb_) {
+      // NetworkInterface tracks us as "needs more flushing" and revisits
+      // either later in this OnRudpReadable callback or on the next tick.
       hot_cb_(*this);
     }
 
