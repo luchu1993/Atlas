@@ -14,16 +14,30 @@ namespace atlas {
 // Manages a local pool of pre-allocated EntityIDs obtained from DBApp.
 // Uses water-level thresholds to trigger asynchronous refill requests:
 //
-//   critically_low (5)   — allocate_id() returns kInvalidEntityID
-//   low            (64)  — trigger refill request to DBApp
-//   desired        (256) — number of IDs to request per refill
-//   high           (1024)— stop requesting more IDs
+//   critically_low (16)    — allocate_id() returns kInvalidEntityID
+//   low            (1024)  — trigger refill request to DBApp
+//   desired        (4096)  — number of IDs to request per refill
+//   high           (16384) — stop requesting more IDs
+//
+// Thresholds were sized to absorb startup login bursts at 500+ clients
+// without falling into the dbapp-roundtrip gap on the first tick (a 200-
+// to 300-ms window during which allocation would otherwise refuse).
+// EntityID is uint32_t (4 B IDs); a 16k-cache leaked per crash is
+// negligible against the address space.
 //
 // Thread safety: single-threaded (called from BaseApp main loop only).
 // ============================================================================
 
 class IDClient {
  public:
+  // Watermark constants — public so tests can reference them by name
+  // instead of hard-coding the numeric values, which would silently rot
+  // any time the thresholds are retuned for a different load shape.
+  static constexpr uint64_t kCriticallyLow = 16;
+  static constexpr uint64_t kLow = 1024;
+  static constexpr uint64_t kDesired = 4096;
+  static constexpr uint64_t kHigh = 16384;
+
   IDClient() = default;
 
   // Allocate a single EntityID from the local cache.
@@ -53,11 +67,6 @@ class IDClient {
 
   std::deque<Range> ranges_;
   uint64_t total_available_{0};
-
-  static constexpr uint64_t kCriticallyLow = 5;
-  static constexpr uint64_t kLow = 64;
-  static constexpr uint64_t kDesired = 256;
-  static constexpr uint64_t kHigh = 1024;
 };
 
 }  // namespace atlas
