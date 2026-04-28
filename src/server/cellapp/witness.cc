@@ -1,7 +1,10 @@
 #include "witness.h"
 
 #include <algorithm>
+#include <array>
+#include <cstddef>
 #include <cstring>
+#include <span>
 #include <utility>
 
 #include "aoi_trigger.h"
