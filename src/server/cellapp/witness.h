@@ -231,10 +231,17 @@ class Witness {
   uint32_t deficit_warn_counter_{0};
   static constexpr uint32_t kDeficitWarnEveryNTicks = 300;
 
-  // Scratch buffers for Update() — promoted from locals to avoid
-  // per-tick heap allocation on a 10Hz hot path.
-  std::vector<EntityID> scratch_enter_;
-  std::vector<EntityID> scratch_gone_;
+  // Pending state-transition queues — populated incrementally by
+  // HandleAoIEnter / HandleAoILeave and drained by Witness::Update's
+  // Step 1.  Avoids the per-tick O(N) scan over aoi_map_ that the old
+  // "look for entries with kEnterPending / kGone flags" approach
+  // performed on every observer regardless of whether any transitions
+  // had actually happened.
+  //
+  // Duplicate entries are tolerated — Step 1's defensive flag check
+  // discards stale ones (e.g. an Enter overridden by a later Leave).
+  std::vector<EntityID> pending_enter_ids_;
+  std::vector<EntityID> pending_gone_ids_;
 };
 
 }  // namespace atlas

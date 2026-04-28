@@ -158,6 +158,8 @@ void Witness::Deactivate() {
   trigger_.reset();
   aoi_map_.clear();
   priority_queue_.clear();
+  pending_enter_ids_.clear();
+  pending_gone_ids_.clear();
 }
 
 void Witness::SetAoIRadius(float new_radius, float new_hysteresis) {
@@ -203,6 +205,7 @@ void Witness::HandleAoIEnter(CellEntity& peer) {
   // first entry and on any re-entry of a previously-kGone peer (the peer
   // left AoI and came back before Update had a chance to fire the Leave).
   cache.flags = EntityCache::kEnterPending;
+  pending_enter_ids_.push_back(peer.Id());
   UpdatePriority(cache);
 }
 
@@ -224,6 +227,7 @@ void Witness::HandleAoILeave(CellEntity& peer) {
   // leaves AoI mid-tick as a side effect of a trigger shuffle.
   it->second.flags |= EntityCache::kGone;
   it->second.flags &= ~EntityCache::kEnterPending;
+  pending_gone_ids_.push_back(peer.Id());
   // Refresh the cached base id — if the Leave fires during the peer's
   // destructor (synthetic FLT_MAX shuffle) this is our last chance to
   // read it. After this call the CellEntity* may become dangling.
@@ -294,30 +298,23 @@ void Witness::Update(uint32_t max_packet_bytes) {
 
   ++tick_count_;
 
-  // Step 1: state transitions (enter, leave). Collect peers into scratch
-  // lists so mutations to aoi_map_ during this pass (possible if SendFn
-  // re-entrantly tears down the witness) don't invalidate iterators.
-  // Scratch buffers are class members to avoid per-tick allocation.
+  // Step 1: state transitions (enter, leave).  HandleAoIEnter and
+  // HandleAoILeave incrementally populate pending_enter_ids_ and
+  // pending_gone_ids_ as transitions happen, so this loop iterates only
+  // the small subset of peers that changed state — no full aoi_map_
+  // scan in the steady state.  Defensive flag/cache checks below filter
+  // stale entries (e.g. an Enter overridden by a later Leave on the
+  // same peer in the same tick).
   int bytes_sent = 0;
   {
     ATLAS_PROFILE_ZONE_N("Witness::Update::Transitions");
-    scratch_enter_.clear();
-    scratch_gone_.clear();
-    auto& enter_ids = scratch_enter_;
-    auto& gone_ids = scratch_gone_;
-    for (auto& [id, cache] : aoi_map_) {
-      if (cache.flags & EntityCache::kGone)
-        gone_ids.push_back(id);
-      else if (cache.flags & EntityCache::kEnterPending)
-        enter_ids.push_back(id);
-    }
 
     // Enter/Leave are mandatory state transitions and bypass the byte
     // budget — dropping them would deadlock the aoi_map_ state machine.
     (void)bandwidth_deficit_;
 
-    for (std::size_t enter_idx = 0; enter_idx < enter_ids.size(); ++enter_idx) {
-      const EntityID peer_id = enter_ids[enter_idx];
+    for (std::size_t enter_idx = 0; enter_idx < pending_enter_ids_.size(); ++enter_idx) {
+      const EntityID peer_id = pending_enter_ids_[enter_idx];
       auto it = aoi_map_.find(peer_id);
       if (it == aoi_map_.end()) continue;
       auto& cache = it->second;
@@ -359,9 +356,15 @@ void Witness::Update(uint32_t max_packet_bytes) {
       cache.lod_enter_phase = enter_idx % kLodFarInterval;
     }
 
-    for (auto id : gone_ids) {
+    for (auto id : pending_gone_ids_) {
       auto it = aoi_map_.find(id);
       if (it == aoi_map_.end()) continue;
+      // Defensive: same id may appear twice in pending_gone_ids_ if a
+      // peer left, re-entered, and left again before Update fired.
+      // After the first Leave the cache is erased; subsequent finds
+      // return end() and we fall through.  Also tolerate the case
+      // where a follow-up Enter overrode kGone — flag check below.
+      if (!(it->second.flags & EntityCache::kGone)) continue;
       // Use the id cached at enter/leave time, NOT cache.entity. When
       // destruction fires the leave path, `cache.entity` is nulled and
       // the underlying CellEntity has been freed; the base id we want
@@ -370,6 +373,10 @@ void Witness::Update(uint32_t max_packet_bytes) {
       bytes_sent += static_cast<int>(SendEntityLeave(it->second.peer_base_id));
       aoi_map_.erase(it);
     }
+
+    // Both queues drained — clear in place so capacity persists.
+    pending_enter_ids_.clear();
+    pending_gone_ids_.clear();
   }
 
   // Step 2: priority heap maintenance for Updatable peers. Rebuild rather
