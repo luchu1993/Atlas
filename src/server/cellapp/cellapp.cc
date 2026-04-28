@@ -293,21 +293,40 @@ void CellApp::TickControllers(float dt) {
 
 void CellApp::TickWitnesses() {
   ATLAS_PROFILE_ZONE_N("CellApp::TickWitnesses");
-  const uint32_t total_budget = CellAppConfig::WitnessTotalOutboundBudgetBytes();
+  // Demand-based fair share — see docs/optimization for the analysis.
+  // Pass 1 collects each observer's estimated outbound demand (peers in
+  // AoI plus last tick's deficit carryover); Pass 2 normalises the
+  // requests against the cellapp-wide cap and dispatches Witness::Update
+  // with the allocated budget.  Avoids the equal-share pathology where
+  // a high-density observer gets the same 4 KB as a 2-peer observer.
+  const uint32_t cap = CellAppConfig::WitnessTotalOutboundCapBytes();
   const uint32_t min_budget = CellAppConfig::WitnessMinPerObserverBudgetBytes();
   const uint32_t max_budget = CellAppConfig::WitnessMaxPerObserverBudgetBytes();
+  const uint32_t per_peer_bytes = CellAppConfig::WitnessPerPeerBytes();
+
   for (auto& [_, space] : spaces_) {
-    // Count observers first so we can divide the total budget evenly.
-    // Two passes over entities is O(2N) — cheap at any expected entity count.
-    uint32_t observer_count = 0;
+    // Pass 1 — collect demand.  Reuse the scratch vector across ticks
+    // so the steady state is alloc-free.
+    witness_demand_scratch_.clear();
+    uint64_t total_want = 0;  // 64-bit so dense PvP can't overflow uint32
     space->ForEachEntity([&](CellEntity& e) {
-      if (e.GetWitness()) ++observer_count;
+      if (auto* w = e.GetWitness()) {
+        const uint32_t want = w->EstimateOutboundDemandBytes(per_peer_bytes);
+        witness_demand_scratch_.push_back({w, want});
+        total_want += want;
+      }
     });
-    const uint32_t budget = std::clamp(
-        observer_count > 0 ? total_budget / observer_count : max_budget, min_budget, max_budget);
-    space->ForEachEntity([budget](CellEntity& e) {
-      if (auto* w = e.GetWitness()) w->Update(budget);
-    });
+
+    // Pass 2 — scale-and-clamp.  When demand fits the cap every observer
+    // gets exactly what it asked for; when it doesn't, everyone scales
+    // down proportionally until min_budget kicks in as a fairness floor.
+    const float scale =
+        (total_want > cap) ? static_cast<float>(cap) / static_cast<float>(total_want) : 1.0f;
+    for (auto& d : witness_demand_scratch_) {
+      const uint32_t budget = std::clamp(static_cast<uint32_t>(static_cast<float>(d.want) * scale),
+                                         min_budget, max_budget);
+      d.w->Update(budget);
+    }
   }
 
   // Drain every channel touched by the witness lambdas this tick so the

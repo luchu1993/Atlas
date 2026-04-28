@@ -18,6 +18,7 @@ class Space;
 class CellEntity;
 class CellAppNativeProvider;
 class Channel;
+class Witness;
 
 namespace cellapp {
 struct CreateCellEntity;
@@ -354,6 +355,15 @@ class CellApp : public EntityApp {
   // BufferMessageDeferred messages leave the host in one packet per
   // (channel, reliability) pair instead of one packet per call.
   std::unordered_set<ReliableUdpChannel*> pending_witness_channels_;
+
+  // Reused per-tick scratch for demand-based witness budget allocation.
+  // Cleared (not deallocated) at the start of every TickWitnesses sweep
+  // so the vector keeps its capacity and steady-state ticks allocate 0.
+  struct ObserverDemand {
+    Witness* w;
+    uint32_t want;
+  };
+  std::vector<ObserverDemand> witness_demand_scratch_;
 
   // Scan pending_offloads_ for entries past the Ack deadline; revert
   // them in place. Called each tick from OnEndOfTick.

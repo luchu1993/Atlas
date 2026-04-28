@@ -42,12 +42,21 @@ class CellAppConfig {
   // disable and broadcast every tick.
   [[nodiscard]] static auto GhostUpdateIntervalMs() -> uint32_t;
 
-  // Total outbound byte budget for all witnesses in a space per tick.
-  // The per-observer allocation is total / observer_count, clamped to
-  // [WitnessMinPerObserverBudgetBytes, WitnessMaxPerObserverBudgetBytes].
-  // This caps total replication bandwidth even as observer count grows.
-  // JSON key: `witness_total_outbound_budget_bytes`. Default 409600 (400 KB).
-  [[nodiscard]] static auto WitnessTotalOutboundBudgetBytes() -> uint32_t;
+  // Cellapp-wide ceiling on per-tick witness outbound bytes. The demand-
+  // based allocator scales every observer's request down proportionally
+  // when the sum of requests exceeds this cap.  Sized to the host's NIC
+  // budget at the configured tick rate (default 1.6 MB/tick = 24 MB/s
+  // at the default 15 Hz cellapp cadence).
+  // JSON key: `witness_total_outbound_cap_bytes`. Default 1638400 (1.6 MB).
+  [[nodiscard]] static auto WitnessTotalOutboundCapBytes() -> uint32_t;
+
+  // Per-peer demand multiplier the allocator uses to estimate an
+  // observer's outbound bytes for the upcoming tick:
+  //   demand = peers_in_aoi * WitnessPerPeerBytes() + last_tick_deficit
+  // Set to roughly the average per-peer outbound size in your scene
+  // (steady-state position/property delta + amortised enter snapshot).
+  // JSON key: `witness_per_peer_bytes`. Default 150.
+  [[nodiscard]] static auto WitnessPerPeerBytes() -> uint32_t;
 
   // Floor on the per-observer allocation computed from the total budget.
   // Prevents starvation when observer_count is large but budget is tight.

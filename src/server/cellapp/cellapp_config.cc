@@ -35,16 +35,24 @@ ServerAppOption<float> s_load_smoothing_bias{
 ServerAppOption<uint32_t> s_ghost_update_interval_ms{
     50u, "ghost_update_interval_ms", "cellapp/ghost_update_interval_ms", WatcherMode::kReadWrite};
 
-// Per-tick cellapp-wide outbound replication budget. Divided across all
-// observers in TickWitnesses, then clamped per-observer to [min, max].
-// 800 KB/tick @ 10 Hz = 8 MB/s; with 200 observers each gets 4 KB/tick
-// (≈ 40 KB/s) — within real-world MMORPG per-client downstream
-// (BDO / Dragon Nest see 30–80 KB/s in dense scenes). The previous
-// 400 KB/tick clamped each observer to 2 KB at the 200-client mark,
-// which left witness priority queues non-empty every tick.
-ServerAppOption<uint32_t> s_witness_total_outbound_budget_bytes{
-    819200u, "witness_total_outbound_budget_bytes", "cellapp/witness_total_outbound_budget_bytes",
+// Demand-based allocator: NIC-shaped cellapp-wide cap.  At the default
+// 15 Hz cellapp cadence the 1.6 MB/tick cap is 24 MB/s, comfortably
+// under a 1 GbE link's 125 MB/s (TCP/RUDP framing overhead, other
+// server traffic, OS).
+ServerAppOption<uint32_t> s_witness_total_outbound_cap_bytes{
+    1638400u, "witness_total_outbound_cap_bytes", "cellapp/witness_total_outbound_cap_bytes",
     WatcherMode::kReadWrite};
+
+// Per-peer demand multiplier.  150 B/tick is the empirical mean from
+// the aggressive baseline (churn 5–30 s, 200 observers): ~30 B position
+// update + ~50 B property delta + ~70 B amortised enter snapshot under
+// realistic AoI churn.  Sparse scenes still get a comfortable margin
+// because the `min_per_observer_budget_bytes` clamp ensures observers
+// aren't starved when their request would otherwise round to zero.
+// Enter spikes that exceed the steady estimate carry over via
+// bandwidth_deficit_, costing one tick (~66 ms at 15 Hz) of allocation lag.
+ServerAppOption<uint32_t> s_witness_per_peer_bytes{
+    150u, "witness_per_peer_bytes", "cellapp/witness_per_peer_bytes", WatcherMode::kReadWrite};
 
 ServerAppOption<uint32_t> s_witness_min_per_observer_budget_bytes{
     1024u, "witness_min_per_observer_budget_bytes", "cellapp/witness_min_per_observer_budget_bytes",
@@ -80,8 +88,12 @@ auto CellAppConfig::GhostUpdateIntervalMs() -> uint32_t {
   return s_ghost_update_interval_ms.Value();
 }
 
-auto CellAppConfig::WitnessTotalOutboundBudgetBytes() -> uint32_t {
-  return s_witness_total_outbound_budget_bytes.Value();
+auto CellAppConfig::WitnessTotalOutboundCapBytes() -> uint32_t {
+  return s_witness_total_outbound_cap_bytes.Value();
+}
+
+auto CellAppConfig::WitnessPerPeerBytes() -> uint32_t {
+  return s_witness_per_peer_bytes.Value();
 }
 
 auto CellAppConfig::WitnessMinPerObserverBudgetBytes() -> uint32_t {

@@ -29,7 +29,8 @@ TEST_F(CellAppConfigTest, DefaultsMatchExpectedValues) {
   EXPECT_FLOAT_EQ(CellAppConfig::DefaultAoIRadius(), 150.f);
   EXPECT_FLOAT_EQ(CellAppConfig::DefaultAoIHysteresis(), 5.f);
   EXPECT_FLOAT_EQ(CellAppConfig::MaxAoIRadius(), 500.f);
-  EXPECT_EQ(CellAppConfig::WitnessTotalOutboundBudgetBytes(), 819200u);
+  EXPECT_EQ(CellAppConfig::WitnessTotalOutboundCapBytes(), 1638400u);
+  EXPECT_EQ(CellAppConfig::WitnessPerPeerBytes(), 150u);
   EXPECT_EQ(CellAppConfig::WitnessMinPerObserverBudgetBytes(), 1024u);
   EXPECT_EQ(CellAppConfig::WitnessMaxPerObserverBudgetBytes(), 16384u);
   EXPECT_EQ(CellAppConfig::WitnessMaxPeersPerTick(), 64u);
@@ -80,7 +81,8 @@ TEST_F(CellAppConfigTest, ReadWriteWatcherPathsAreRegistered) {
   EXPECT_TRUE(reg.Get("cellapp/default_aoi_radius").has_value());
   EXPECT_TRUE(reg.Get("cellapp/default_aoi_hysteresis").has_value());
   EXPECT_TRUE(reg.Get("cellapp/max_aoi_radius").has_value());
-  EXPECT_TRUE(reg.Get("cellapp/witness_total_outbound_budget_bytes").has_value());
+  EXPECT_TRUE(reg.Get("cellapp/witness_total_outbound_cap_bytes").has_value());
+  EXPECT_TRUE(reg.Get("cellapp/witness_per_peer_bytes").has_value());
   EXPECT_TRUE(reg.Get("cellapp/witness_min_per_observer_budget_bytes").has_value());
   EXPECT_TRUE(reg.Get("cellapp/witness_max_per_observer_budget_bytes").has_value());
   EXPECT_TRUE(reg.Get("cellapp/witness_max_peers_per_tick").has_value());

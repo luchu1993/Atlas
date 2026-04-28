@@ -1,6 +1,7 @@
 #ifndef ATLAS_SERVER_CELLAPP_WITNESS_H_
 #define ATLAS_SERVER_CELLAPP_WITNESS_H_
 
+#include <algorithm>
 #include <cstddef>
 #include <cstdint>
 #include <functional>
@@ -108,6 +109,18 @@ class Witness {
   // framing). Deficit accumulates when Update overshoots — the next
   // tick's budget is reduced accordingly.
   void Update(uint32_t max_packet_bytes);
+
+  // O(1) demand estimate for the cellapp's TickWitnesses fair-share
+  // budget allocator.  Models this tick's expected outbound payload as:
+  //   peers_in_aoi * per_peer_bytes  +  carryover_deficit_from_last_tick
+  // Enter bursts aren't separately accounted for; instead they show up
+  // next tick via bandwidth_deficit_, costing one tick (~100ms) of lag
+  // for the burst to claim its budget.  Trading that latency for an
+  // O(1) hot-path query worth ~5 µs at 200 observers.
+  [[nodiscard]] auto EstimateOutboundDemandBytes(uint32_t per_peer_bytes) const -> uint32_t {
+    return static_cast<uint32_t>(aoi_map_.size()) * per_peer_bytes +
+           static_cast<uint32_t>(std::max(0, bandwidth_deficit_));
+  }
 
   // ---- EntityCache (exposed for tests) -------------------------------------
 
