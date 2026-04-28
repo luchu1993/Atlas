@@ -29,8 +29,8 @@ TEST_F(CellAppConfigTest, DefaultsMatchExpectedValues) {
   EXPECT_FLOAT_EQ(CellAppConfig::DefaultAoIRadius(), 150.f);
   EXPECT_FLOAT_EQ(CellAppConfig::DefaultAoIHysteresis(), 5.f);
   EXPECT_FLOAT_EQ(CellAppConfig::MaxAoIRadius(), 500.f);
-  EXPECT_EQ(CellAppConfig::WitnessTotalOutboundCapBytes(), 1638400u);
-  EXPECT_EQ(CellAppConfig::WitnessPerPeerBytes(), 150u);
+  EXPECT_EQ(CellAppConfig::WitnessTotalOutboundCapBytes(), 4194304u);
+  EXPECT_EQ(CellAppConfig::WitnessPerPeerBytes(), 200u);
   EXPECT_EQ(CellAppConfig::WitnessMinPerObserverBudgetBytes(), 1024u);
   EXPECT_EQ(CellAppConfig::WitnessMaxPerObserverBudgetBytes(), 16384u);
   EXPECT_EQ(CellAppConfig::WitnessMaxPeersPerTick(), 64u);

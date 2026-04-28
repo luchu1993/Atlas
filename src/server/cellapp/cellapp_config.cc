@@ -36,23 +36,31 @@ ServerAppOption<uint32_t> s_ghost_update_interval_ms{
     50u, "ghost_update_interval_ms", "cellapp/ghost_update_interval_ms", WatcherMode::kReadWrite};
 
 // Demand-based allocator: NIC-shaped cellapp-wide cap.  At the default
-// 15 Hz cellapp cadence the 1.6 MB/tick cap is 24 MB/s, comfortably
-// under a 1 GbE link's 125 MB/s (TCP/RUDP framing overhead, other
-// server traffic, OS).
+// 15 Hz cellapp cadence the 4 MB/tick cap is 60 MB/s — leaves ~50%
+// headroom under a 1 GbE link (125 MB/s) for framing, retransmit, and
+// other server traffic.  Sized off the 500-client baseline (66a278c
+// 2026-04-28): 500 observers × ~7.3 KB/tick steady-state ≈ 3.65 MB/tick
+// fleet demand, which exceeded the prior 1.6 MB cap by 2.3× and pushed
+// every observer into deficit (103 `bandwidth deficit` warnings in the
+// 137 s capture).  Lower this on hardware with smaller NICs or when
+// the cellapp shares a NIC with other heavy services.
 ServerAppOption<uint32_t> s_witness_total_outbound_cap_bytes{
-    1638400u, "witness_total_outbound_cap_bytes", "cellapp/witness_total_outbound_cap_bytes",
+    4194304u, "witness_total_outbound_cap_bytes", "cellapp/witness_total_outbound_cap_bytes",
     WatcherMode::kReadWrite};
 
-// Per-peer demand multiplier.  150 B/tick is the empirical mean from
-// the aggressive baseline (churn 5–30 s, 200 observers): ~30 B position
-// update + ~50 B property delta + ~70 B amortised enter snapshot under
-// realistic AoI churn.  Sparse scenes still get a comfortable margin
-// because the `min_per_observer_budget_bytes` clamp ensures observers
-// aren't starved when their request would otherwise round to zero.
-// Enter spikes that exceed the steady estimate carry over via
-// bandwidth_deficit_, costing one tick (~66 ms at 15 Hz) of allocation lag.
+// Per-peer demand multiplier.  200 B/tick mirrors the per-peer share of
+// observed outbound at 500 observers / 150 m AoI / 200 m walk-range:
+// 7.3 KB/tick / ~36 in-AoI peers ≈ 200 B/peer (≈ 30 B position +
+// 50 B property delta + 120 B amortised enter snapshot under churn).
+// The 200-client baseline measured 150 B/peer; the bump to 200 reflects
+// increased AoI density at higher client counts and produces a more
+// accurate `demand` estimate for the proportional allocator.  Sparse
+// scenes still get a comfortable margin via
+// `min_per_observer_budget_bytes`. Enter spikes that exceed the steady
+// estimate carry over via bandwidth_deficit_, costing one tick
+// (~66 ms at 15 Hz) of allocation lag.
 ServerAppOption<uint32_t> s_witness_per_peer_bytes{
-    150u, "witness_per_peer_bytes", "cellapp/witness_per_peer_bytes", WatcherMode::kReadWrite};
+    200u, "witness_per_peer_bytes", "cellapp/witness_per_peer_bytes", WatcherMode::kReadWrite};
 
 ServerAppOption<uint32_t> s_witness_min_per_observer_budget_bytes{
     1024u, "witness_min_per_observer_budget_bytes", "cellapp/witness_min_per_observer_budget_bytes",

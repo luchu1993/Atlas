@@ -130,8 +130,8 @@ without needing a feedback controller.  The trade-off is one tick
 
 | Knob | Default | Why |
 |---|---|---|
-| `witness_per_peer_bytes` | **150** | ~30 B position + ~50 B property delta + ~70 B amortised enter snapshot.  Measured from `aoi_*` counters across the baseline. |
-| `witness_total_outbound_cap_bytes` | **1.6 MB/tick** (24 MB/s @ 15 Hz) | NIC-shaped; 1 GbE caps at 125 MB/s gross so we leave 80 % headroom for framing, retransmit, and other server traffic. |
+| `witness_per_peer_bytes` | **200** (was 150 pre-`66a278c`) | ~30 B position + ~50 B property delta + ~120 B amortised enter snapshot under churn.  Re-measured from the 500-client baseline (`66a278c`, 2026-04-28) where the 150 B estimate undershot actual per-peer outbound by ~30 %. |
+| `witness_total_outbound_cap_bytes` | **4 MB/tick** (60 MB/s @ 15 Hz, was 1.6 MB) | NIC-shaped; 1 GbE caps at 125 MB/s gross so 50 % headroom remains for framing / retransmit / other server traffic. The pre-bump 1.6 MB ceiling fit the 200-client baseline but capped fleet demand at 500 obs × ~7.3 KB/tick = 3.65 MB/tick, producing 103 `bandwidth deficit` warnings in the 500-client baseline. |
 | `witness_min_per_observer_budget_bytes` | 1024 | Floor so a sparse observer with `peers=0` still has room for the next Enter. |
 | `witness_max_per_observer_budget_bytes` | 16384 | Ceiling so a single dense PvP observer can't monopolise the NIC. |
 

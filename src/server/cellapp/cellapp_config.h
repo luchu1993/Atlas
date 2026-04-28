@@ -45,9 +45,9 @@ class CellAppConfig {
   // Cellapp-wide ceiling on per-tick witness outbound bytes. The demand-
   // based allocator scales every observer's request down proportionally
   // when the sum of requests exceeds this cap.  Sized to the host's NIC
-  // budget at the configured tick rate (default 1.6 MB/tick = 24 MB/s
-  // at the default 15 Hz cellapp cadence).
-  // JSON key: `witness_total_outbound_cap_bytes`. Default 1638400 (1.6 MB).
+  // budget at the configured tick rate (default 4 MB/tick = 60 MB/s
+  // at the default 15 Hz cellapp cadence — ≈ 50 % of a 1 GbE NIC).
+  // JSON key: `witness_total_outbound_cap_bytes`. Default 4194304 (4 MB).
   [[nodiscard]] static auto WitnessTotalOutboundCapBytes() -> uint32_t;
 
   // Per-peer demand multiplier the allocator uses to estimate an
@@ -55,7 +55,7 @@ class CellAppConfig {
   //   demand = peers_in_aoi * WitnessPerPeerBytes() + last_tick_deficit
   // Set to roughly the average per-peer outbound size in your scene
   // (steady-state position/property delta + amortised enter snapshot).
-  // JSON key: `witness_per_peer_bytes`. Default 150.
+  // JSON key: `witness_per_peer_bytes`. Default 200.
   [[nodiscard]] static auto WitnessPerPeerBytes() -> uint32_t;
 
   // Floor on the per-observer allocation computed from the total budget.
