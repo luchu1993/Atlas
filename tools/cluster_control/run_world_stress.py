@@ -81,6 +81,21 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--keep-cluster", action="store_true")
     parser.add_argument("--verbose-failures", action="store_true")
+    # By default any cellapp invariant-audit violation (leave fan-out
+    # missed, stale enter-pending) makes the run fail with exit 3.
+    # Disable the gate when intentionally exercising legacy paths.
+    parser.add_argument(
+        "--allow-audit-violations",
+        action="store_true",
+        help="Don't fail when cellapp reports invariant violations.",
+    )
+    # Forward to world_stress: per-tick walk step magnitude.
+    parser.add_argument("--walk-step-meters", type=float, default=None)
+    # Half-width of random-walk box around each session's spawn.
+    parser.add_argument("--walk-range-meters", type=float, default=None)
+    # Pct of ReportPos calls replaced by uniform jumps inside the walk-
+    # range box; surfaces RangeTrigger paths slow walks miss.
+    parser.add_argument("--teleport-pct", type=int, default=None)
 
     # Per-process tick rate. cellapp is the authoritative spatial tick;
     # baseapp ticks 1.5–2× the cellapp rate so DeltaForwarder doesn't
@@ -139,6 +154,31 @@ def log(message: str, *, stream: object = sys.stdout) -> None:
 
 def fail(message: str) -> NoReturn:
     raise RuntimeError(message)
+
+
+def scan_cellapp_audits(log_dir: Path) -> list[str]:
+    """Grep cellapp's stderr/stdout for invariant-audit messages.
+
+    cellapp's destruction-leave audit (~CellEntity::~CellEntity) and
+    Witness::Update's defensive cross-check both log a unique tag when
+    they fire — these are aggregated here so cluster_control can fail
+    the run loud and early instead of letting the line slip past.
+    """
+    needles = ("leave fan-out missed", "stale enter-pending")
+    found: list[str] = []
+    candidates: list[Path] = []
+    for ext in ("stderr.log", "stdout.log"):
+        candidates.append(log_dir / f"cellapp.{ext}")
+    for path in candidates:
+        if not path.exists():
+            continue
+        try:
+            for line in path.read_text(errors="replace").splitlines():
+                if any(n in line for n in needles):
+                    found.append(line.strip())
+        except OSError:
+            continue
+    return found
 
 
 def assert_file_exists(path: Path, label: str) -> None:
@@ -610,6 +650,12 @@ def build_stress_args(args: argparse.Namespace, worker: dict[str, object]) -> li
         "--space-count",
         str(args.space_count),
     ]
+    if args.walk_step_meters is not None:
+        stress_args.extend(["--walk-step-meters", str(args.walk_step_meters)])
+    if args.walk_range_meters is not None:
+        stress_args.extend(["--walk-range-meters", str(args.walk_range_meters)])
+    if args.teleport_pct is not None:
+        stress_args.extend(["--teleport-pct", str(args.teleport_pct)])
     extend_repeated_flag(stress_args, "--source-ip", worker["source_ips"])
     if args.verbose_failures:
         stress_args.append("--verbose-failures")
@@ -1131,6 +1177,20 @@ def main() -> int:
         if args.keep_cluster:
             log("Keeping cluster alive. Stop the spawned processes manually when done.")
             processes = []
+
+        # Audit: scan cellapp logs for invariant violations the cellapp's
+        # in-process checks reported.  These are normally harmless because
+        # the witness layer's defensive guards prevent the UAF, but they
+        # signal a regression in the destruction-leave fan-out contract
+        # and should fail the run loud and early.
+        audit_lines = scan_cellapp_audits(log_dir)
+        if audit_lines and not args.allow_audit_violations:
+            log(f"[audit] cellapp reported {len(audit_lines)} invariant violation(s):")
+            for line in audit_lines[:20]:
+                log(f"  {line}")
+            if len(audit_lines) > 20:
+                log(f"  ... and {len(audit_lines) - 20} more (truncated)")
+            return 3
 
         return 0 if not missing else 2
     finally:

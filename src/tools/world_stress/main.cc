@@ -66,9 +66,22 @@ struct Options {
   int space_count{1};
   // Radius (metres) of the circular zone from which each session's spawn
   // position is drawn at startup. Each session picks a random point inside
-  // the disk; subsequent ReportPos calls random-walk within ±50 m of that
-  // initial point. 0 = legacy behaviour (everyone starts at origin).
+  // the disk; subsequent ReportPos calls random-walk within ±walk_range_m
+  // of that initial point. 0 = legacy behaviour (everyone starts at origin).
   float spread_radius{0.f};
+
+  // Per-tick step magnitude for the random walk: each ReportPos shifts
+  // pos by uniform(-walk_step_m, +walk_step_m) on each axis.  Larger
+  // values exercise more AoI boundary crossings per second.
+  float walk_step_m{1.f};
+  // Half-width of the random-walk box around the spawn point.  Larger
+  // values let sessions wander into other sessions' AoI radii.
+  float walk_range_m{50.f};
+  // Probability (0-100) that a given ReportPos is replaced by a long-
+  // distance teleport — uniform jump within ±walk_range_m.  Stresses the
+  // RangeTrigger / Witness::OnOwnerMoved path with paths that bubble
+  // many bounds in a single shuffle.  0 = pure random walk.
+  int teleport_pct{0};
   bool verbose_failures{false};
   uint32_t seed{12345};
 
@@ -485,14 +498,24 @@ class Session {
     // in StressAvatar.def (see SendEcho's comment for the full list).
     constexpr uint32_t kReportPosRpcId = (2u << 22) | (2u << 8) | 4u;
 
-    // Random-walk within a 100 m square centred on this session's spawn
-    // point (init_x_, init_z_). With --spread-radius each session has its
-    // own spawn, so the fleet is distributed across the map rather than
-    // clustered at the origin. Step ≤ 1 m per call stays under CellApp's
-    // displacement cap, avoiding AvatarUpdate teleport rejects.
-    std::uniform_real_distribution<float> walk(-1.f, 1.f);
-    pos_x_ = std::clamp(pos_x_ + walk(rng_), init_x_ - 50.f, init_x_ + 50.f);
-    pos_z_ = std::clamp(pos_z_ + walk(rng_), init_z_ - 50.f, init_z_ + 50.f);
+    // Random-walk inside a (2 * walk_range_m)-wide square centred on
+    // this session's spawn point.  --teleport-pct % of calls replace
+    // the small step with a uniform jump within the same square so
+    // big-distance bound shuffles get exercised — those crosses bubble
+    // many list nodes per call and surface RangeTrigger ordering bugs.
+    const bool teleport = opts_.teleport_pct > 0 &&
+                          std::uniform_int_distribution<int>(0, 99)(rng_) < opts_.teleport_pct;
+    if (teleport) {
+      std::uniform_real_distribution<float> jump(-opts_.walk_range_m, opts_.walk_range_m);
+      pos_x_ = init_x_ + jump(rng_);
+      pos_z_ = init_z_ + jump(rng_);
+    } else {
+      std::uniform_real_distribution<float> walk(-opts_.walk_step_m, opts_.walk_step_m);
+      pos_x_ = std::clamp(pos_x_ + walk(rng_), init_x_ - opts_.walk_range_m,
+                          init_x_ + opts_.walk_range_m);
+      pos_z_ = std::clamp(pos_z_ + walk(rng_), init_z_ - opts_.walk_range_m,
+                          init_z_ + opts_.walk_range_m);
+    }
     const float dx = 1.f, dy = 0.f, dz = 0.f;
 
     // Payload: Vector3 pos (x,y,z) + Vector3 dir (x,y,z) = 6 * float, LE.
@@ -747,8 +770,13 @@ void PrintUsage() {
       << "  --space-count <n>          Distinct cell spaces to spread avatars across "
          "(default: 1)\n"
       << "  --spread-radius <m>        Radius of spawn disk (metres); each session starts at a\n"
-      << "                             random point in this disk and wanders ±50m from it.\n"
-      << "                             0 = all sessions start at origin (default: 0)\n"
+      << "                             random point in this disk and wanders within\n"
+      << "                             ±--walk-range-meters of it (default: 0).\n"
+      << "  --walk-step-meters <m>     Per-tick random-walk step magnitude (default: 1)\n"
+      << "  --walk-range-meters <m>    Half-width of random-walk box around spawn (default: 50)\n"
+      << "  --teleport-pct <0-100>     Pct of ReportPos calls that jump uniformly within the\n"
+      << "                             walk-range box instead of stepping; surfaces large-\n"
+      << "                             movement RangeTrigger paths (default: 0)\n"
       << "  --seed <n>                 RNG seed (default: 12345)\n"
       << "  --verbose-failures         Print individual failures\n"
       << "  --script-clients <n>       Spawn N real atlas_client.exe subprocesses that load\n"
@@ -960,6 +988,30 @@ auto ParseOptions(int argc, char* argv[]) -> std::optional<Options> {
         std::cerr << "Invalid --spread-radius value\n";
         return std::nullopt;
       }
+    } else if (kArg == "--walk-step-meters") {
+      auto value = require_value(kArg);
+      if (!value) return std::nullopt;
+      try {
+        opts.walk_step_m = std::max(0.f, std::stof(std::string(*value)));
+      } catch (...) {
+        std::cerr << "Invalid --walk-step-meters value\n";
+        return std::nullopt;
+      }
+    } else if (kArg == "--walk-range-meters") {
+      auto value = require_value(kArg);
+      if (!value) return std::nullopt;
+      try {
+        opts.walk_range_m = std::max(0.f, std::stof(std::string(*value)));
+      } catch (...) {
+        std::cerr << "Invalid --walk-range-meters value\n";
+        return std::nullopt;
+      }
+    } else if (kArg == "--teleport-pct") {
+      auto value = require_value(kArg);
+      if (!value) return std::nullopt;
+      auto parsed = ParseNumeric<int>(*value);
+      if (!parsed) return std::nullopt;
+      opts.teleport_pct = std::clamp(*parsed, 0, 100);
     } else if (kArg == "--seed") {
       auto value = require_value(kArg);
       if (!value) return std::nullopt;
@@ -1109,6 +1161,9 @@ void PrintSummary(const Options& opts, const Metrics& metrics,
   std::cout << std::format("  move_rate_hz:       {}\n", opts.move_rate_hz);
   std::cout << std::format("  space_count:        {}\n", opts.space_count);
   std::cout << std::format("  spread_radius:      {:.0f} m\n", opts.spread_radius);
+  std::cout << std::format("  walk_step:          {:.0f} m\n", opts.walk_step_m);
+  std::cout << std::format("  walk_range:         {:.0f} m\n", opts.walk_range_m);
+  std::cout << std::format("  teleport_pct:       {}\n", opts.teleport_pct);
   std::cout << std::format("  move_sent:          {}\n", metrics.move_sent);
   std::cout << std::format("  move_fail:          {}\n", metrics.move_fail);
   std::cout << std::format("  aoi_enter:          {}\n", metrics.aoi_enter);
