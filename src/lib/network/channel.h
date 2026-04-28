@@ -1,10 +1,12 @@
 #ifndef ATLAS_LIB_NETWORK_CHANNEL_H_
 #define ATLAS_LIB_NETWORK_CHANNEL_H_
 
+#include <cstddef>
 #include <cstdint>
 #include <functional>
 #include <memory>
 #include <span>
+#include <vector>
 
 #include "foundation/clock.h"
 #include "foundation/timer_queue.h"
@@ -105,15 +107,55 @@ class Channel {
   void OnDataReceived(std::span<const std::byte> data);
   void OnDisconnect();
 
-  // Message parsing helper: parse messages from a complete frame
+  // Run dispatch on a fully-received frame, no time bound.  Used by
+  // unreliable per-packet paths where there's no cascade concern, and
+  // by the legacy synchronous wrapper that tests rely on.
   void DispatchMessages(std::span<const std::byte> frame_data);
 
+  // Run dispatch with a per-handler deadline.  After every successful
+  // handler call we check `deadline`; if it has passed, the unprocessed
+  // tail of `frame_data` (everything after the last fully-dispatched
+  // message) is appended to the channel's pending-dispatch buffer and
+  // the function returns true.  The caller (typically
+  // ReliableUdpChannel::FlushReceiveBuffer) drains the pending buffer
+  // on its own cadence via DrainPendingDispatch.
+  //
+  // This bounds the dispatcher stall to one application handler's
+  // worth of work (~25 ms at 500-cli load) instead of one whole MTU-
+  // packet's worth (~166 ms with 10 bundled handlers).  See
+  // docs/optimization/network_dispatch_decoupling.md for the data that
+  // motivates this granularity.
+  //
+  // Returns true iff `frame_data` was not fully consumed AND/OR the
+  // pending buffer is non-empty after the call.
+  [[nodiscard]] auto DispatchMessagesBudgeted(std::span<const std::byte> frame_data,
+                                              TimePoint deadline) -> bool;
+
+  // Resume a previously-yielded dispatch.  Drains pending bytes up to
+  // `deadline`.  Returns true iff pending is still non-empty.
+  [[nodiscard]] auto DrainPendingDispatch(TimePoint deadline) -> bool;
+
+  // Probe.  Public so ReliableUdpChannel::HasReceiveBacklog can include
+  // pending-dispatch as well as rcv_buf_ when answering "is there work?"
+ public:
+  [[nodiscard]] auto HasPendingDispatch() const -> bool {
+    return pending_dispatch_pos_ < pending_dispatch_buf_.size();
+  }
+
+ protected:
   EventDispatcher& dispatcher_;
   InterfaceTable& interface_table_;
   Address remote_;
   ChannelState state_{ChannelState::kCreated};
   class Bundle bundle_;
   ::atlas::ChannelId channel_id_{kInvalidChannelId};
+
+  // A2 yield-buffer.  When DispatchMessagesBudgeted hits its deadline
+  // mid-frame, the un-dispatched tail is copied here.  pending_dispatch_pos_
+  // tracks how far the resume drain has progressed; both fields are
+  // cleared on Condemn.
+  std::vector<std::byte> pending_dispatch_buf_;
+  std::size_t pending_dispatch_pos_{0};
 
   uint64_t bytes_sent_{0};
   uint64_t bytes_received_{0};

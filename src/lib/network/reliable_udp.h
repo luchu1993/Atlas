@@ -116,11 +116,14 @@ class ReliableUdpChannel : public Channel {
   // pretending a datagram arrived.
   [[nodiscard]] auto FlushReceiveBuffer(TimePoint deadline) -> bool;
 
-  // True iff the next-expected seq is already buffered.  Cheap O(1)
-  // probe NetworkInterface uses to decide whether a channel still owes
-  // more delivery work.
+  // True iff the channel still owes any delivery work — either the
+  // next-expected seq is buffered, or a previous dispatch yielded
+  // mid-frame and left a pending tail.  Cheap O(1) probe; used by
+  // NetworkInterface and the hot-callback gate inside
+  // OnDatagramReceived to decide whether to mark the channel for
+  // re-flushing.
   [[nodiscard]] auto HasReceiveBacklog() const -> bool {
-    return rcv_buf_.find(rcv_nxt_) != rcv_buf_.end();
+    return HasPendingDispatch() || rcv_buf_.find(rcv_nxt_) != rcv_buf_.end();
   }
 
   // Transport-level drop injection window — exercises the reliable

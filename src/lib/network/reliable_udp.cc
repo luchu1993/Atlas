@@ -211,6 +211,12 @@ void ReliableUdpChannel::OnCondemned() {
   ack_pending_ = false;
   deferred_reliable_bundle_.Clear();
   deferred_unreliable_bundle_.Clear();
+  // Drop any A2 pending-dispatch tail — the channel is going away,
+  // dispatching the leftover handlers would just feed application
+  // state for a peer we're forgetting.
+  pending_dispatch_buf_.clear();
+  pending_dispatch_buf_.shrink_to_fit();
+  pending_dispatch_pos_ = 0;
 }
 
 // ============================================================================
@@ -601,6 +607,17 @@ void ReliableUdpChannel::EnqueueForDelivery(SeqNum seq, std::span<const std::byt
 // ============================================================================
 
 auto ReliableUdpChannel::FlushReceiveBuffer(TimePoint deadline) -> bool {
+  // A2: drain any previously-yielded mid-frame dispatch BEFORE starting
+  // new packets — head-of-line ordering must be preserved.  If the
+  // pending tail itself doesn't fit in this call's deadline, we stay
+  // hot and the caller resumes us next pass.
+  if (HasPendingDispatch()) {
+    if (DrainPendingDispatch(deadline)) return true;
+    if (Clock::now() >= deadline) {
+      return rcv_buf_.find(rcv_nxt_) != rcv_buf_.end();
+    }
+  }
+
   while (true) {
     auto it = rcv_buf_.find(rcv_nxt_);
     if (it == rcv_buf_.end()) {
@@ -615,9 +632,14 @@ auto ReliableUdpChannel::FlushReceiveBuffer(TimePoint deadline) -> bool {
       // Buffer the fragment for reassembly
       OnFragmentReceived(entry.frag_hdr, std::span<const std::byte>(entry.payload));
     } else {
-      // Non-fragment: dispatch immediately
+      // A2: dispatch with the same deadline.  When a fat MTU packet's
+      // bundled handlers would together exceed the deadline,
+      // DispatchMessagesBudgeted yields after the most recent
+      // successful handler and stashes the unprocessed tail in the
+      // channel's pending-dispatch buffer; we propagate the "still
+      // hot" signal so DrainHotChannels picks us up next pass.
       OnDataReceived(entry.payload);
-      DispatchMessages(entry.payload);
+      if (DispatchMessagesBudgeted(entry.payload, deadline)) return true;
     }
 
     // Yield-point: the deadline is checked AFTER each delivery, not

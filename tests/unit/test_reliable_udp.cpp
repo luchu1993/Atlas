@@ -683,6 +683,80 @@ TEST_F(ReliableUdpTest, FlushReceiveBufferYieldsOnDeadline) {
   EXPECT_FALSE(channel_b.HasReceiveBacklog());
 }
 
+TEST_F(ReliableUdpTest, DispatchMessagesBudgetedYieldsBetweenHandlers) {
+  // A2 contract: when a single MTU-sized packet bundles several
+  // messages whose handlers together exceed the deadline,
+  // DispatchMessagesBudgeted must yield AFTER the most recent
+  // successful handler and stash the un-dispatched tail so the next
+  // FlushReceiveBuffer call resumes mid-packet.  Without this
+  // granularity the per-call bound is "one whole packet's worth of
+  // handlers" — see docs/optimization/network_dispatch_decoupling.md
+  // for the data that ruled out coarser bounds.
+
+  auto sock_a = Socket::CreateUdp();
+  ASSERT_TRUE(sock_a.HasValue());
+  ASSERT_TRUE(sock_a->Bind(Address("127.0.0.1", 0)).HasValue());
+  auto addr_a = sock_a->LocalAddress().Value();
+
+  auto sock_b = Socket::CreateUdp();
+  ASSERT_TRUE(sock_b.HasValue());
+  ASSERT_TRUE(sock_b->Bind(Address("127.0.0.1", 0)).HasValue());
+  auto addr_b = sock_b->LocalAddress().Value();
+
+  std::vector<uint32_t> received_order;
+  table_.RegisterTypedHandler<RudpTestMsg>([&](const Address&, Channel*, const RudpTestMsg& msg) {
+    received_order.push_back(msg.value);
+  });
+
+  // Stage three messages into a single bundle on channel_a so they
+  // ride a single reliable packet (i.e. one DispatchMessages frame
+  // on the receiver side).
+  ReliableUdpChannel channel_a(dispatcher_, table_, *sock_a, addr_b);
+  channel_a.SetNocwnd(true);
+  channel_a.Activate();
+  channel_a.Bundle().AddMessage(RudpTestMsg{10});
+  channel_a.Bundle().AddMessage(RudpTestMsg{20});
+  channel_a.Bundle().AddMessage(RudpTestMsg{30});
+  ASSERT_TRUE(channel_a.SendReliable().HasValue());
+  std::this_thread::sleep_for(std::chrono::milliseconds(50));
+
+  std::array<std::byte, 2048> buf{};
+  auto recv = sock_b->RecvFrom(buf);
+  ASSERT_TRUE(recv.HasValue());
+  std::span<const std::byte> datagram(buf.data(), recv->first);
+
+  ReliableUdpChannel channel_b(dispatcher_, table_, *sock_b, addr_a);
+  channel_b.Activate();
+
+  // Receive the datagram with a tight (already-elapsed) flush deadline.
+  // OnDatagramReceived's internal call to FlushReceiveBuffer will
+  // dispatch the FIRST message of the bundle (forward progress), then
+  // notice the deadline passed and stash the remaining two messages
+  // in the channel's pending-dispatch buffer.
+  channel_b.OnDatagramReceived(datagram, Clock::now() - std::chrono::seconds(1));
+
+  EXPECT_EQ(received_order.size(), 1u) << "first message dispatches before yield";
+  EXPECT_EQ(received_order[0], 10u);
+  EXPECT_TRUE(channel_b.HasPendingDispatch()) << "remaining bundle bytes must be parked for resume";
+  EXPECT_TRUE(channel_b.HasReceiveBacklog());
+
+  // First resume call also has an already-elapsed deadline — drains
+  // exactly one more handler.
+  bool still_hot = channel_b.FlushReceiveBuffer(Clock::now() - std::chrono::seconds(1));
+  EXPECT_TRUE(still_hot);
+  EXPECT_EQ(received_order.size(), 2u);
+  EXPECT_EQ(received_order[1], 20u);
+  EXPECT_TRUE(channel_b.HasPendingDispatch());
+
+  // Final resume with relaxed deadline drains the last handler.
+  still_hot = channel_b.FlushReceiveBuffer(Clock::now() + std::chrono::seconds(10));
+  EXPECT_FALSE(still_hot);
+  EXPECT_EQ(received_order.size(), 3u);
+  EXPECT_EQ(received_order[2], 30u);
+  EXPECT_FALSE(channel_b.HasPendingDispatch());
+  EXPECT_FALSE(channel_b.HasReceiveBacklog());
+}
+
 TEST_F(ReliableUdpTest, GapFillerOutsideSackWindowNotDroppedAsDuplicate) {
   // Regression: the receiver must not treat a never-seen seq as duplicate
   // simply because it falls outside the 32-bit SACK reporting window

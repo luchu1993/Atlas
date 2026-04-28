@@ -132,14 +132,32 @@ void Channel::OnDisconnect() {
   }
 }
 
-void Channel::DispatchMessages(std::span<const std::byte> frame_data) {
+namespace {
+
+// Run the parse-and-dispatch loop on `frame_data` until either the
+// frame is exhausted or `deadline` has passed (checked AFTER each
+// successful handler call so forward progress is guaranteed).  Returns
+// the number of bytes consumed measured at the last safe boundary —
+// i.e. the byte offset of the next un-parsed message.  Callers:
+//   - DispatchMessages: deadline = TimePoint::max(), return value
+//     should equal frame_data.size() under normal operation.
+//   - DispatchMessagesBudgeted: real deadline; if return value <
+//     frame_data.size(), the tail [returned..end) needs to be saved
+//     for resume.
+//
+// On parse error mid-frame, we log + claim full consumption so the
+// bad bytes are dropped (matches pre-A2 behaviour); the alternative
+// would be to retry the same broken frame on every resume.
+auto DispatchFrameImpl(InterfaceTable& interface_table, const Address& remote, Channel* channel,
+                       std::span<const std::byte> frame_data, TimePoint deadline) -> std::size_t {
   ATLAS_PROFILE_ZONE_N("Channel::Dispatch");
   BinaryReader reader(frame_data);
+  std::size_t last_safe_pos = 0;
   while (reader.Remaining() >= 1) {
     // Read packed MessageID: 1 byte if < 0xFE, else 0xFE + uint16 LE
     auto tag_result = reader.Read<uint8_t>();
     if (!tag_result) {
-      break;
+      return frame_data.size();  // truncated header, drop
     }
     MessageID id;
     if (*tag_result < 0xFE) {
@@ -147,15 +165,15 @@ void Channel::DispatchMessages(std::span<const std::byte> frame_data) {
     } else if (*tag_result == 0xFE) {
       auto id16 = reader.Read<uint16_t>();
       if (!id16) {
-        break;
+        return frame_data.size();
       }
       id = *id16;
     } else {
-      ATLAS_LOG_WARNING("Invalid packed MessageID tag 0xFF from {}", remote_.ToString());
-      break;
+      ATLAS_LOG_WARNING("Invalid packed MessageID tag 0xFF from {}", remote.ToString());
+      return frame_data.size();
     }
 
-    const auto* entry = interface_table_.FindEntry(id);
+    const auto* entry = interface_table.FindEntry(id);
     std::size_t payload_size = 0;
 
     if (entry && entry->desc.IsFixed()) {
@@ -163,23 +181,25 @@ void Channel::DispatchMessages(std::span<const std::byte> frame_data) {
     } else {
       auto len = reader.ReadPackedInt();
       if (!len) {
-        break;
+        return frame_data.size();
       }
       payload_size = *len;
     }
 
     if (reader.Remaining() < payload_size) {
-      ATLAS_LOG_WARNING("Truncated message {} from {}", id, remote_.ToString());
-      break;
+      ATLAS_LOG_WARNING("Truncated message {} from {}", id, remote.ToString());
+      return frame_data.size();
     }
 
     auto payload_span = reader.ReadBytes(payload_size);
     if (!payload_span) {
-      break;
+      return frame_data.size();
     }
 
-    // Let pre-dispatch hook (RPC registry) consume reply messages first
-    if (interface_table_.TryPreDispatch(id, *payload_span)) {
+    // Let pre-dispatch hook (RPC registry) consume reply messages first.
+    if (interface_table.TryPreDispatch(id, *payload_span)) {
+      last_safe_pos = reader.Position();
+      if (Clock::now() >= deadline) return last_safe_pos;
       continue;
     }
 
@@ -193,32 +213,86 @@ void Channel::DispatchMessages(std::span<const std::byte> frame_data) {
     // The id-formatting snprintf only runs when the profiler is enabled —
     // a release build would otherwise pay ~30 ns per dispatched message
     // formatting a string that is then handed to a no-op macro.
-    ATLAS_PROFILE_ZONE_N("Channel::HandleMessage");
-#if ATLAS_PROFILE_ENABLED
     {
-      char id_buf[16];
-      int id_len = std::snprintf(id_buf, sizeof(id_buf), "id=%u", static_cast<unsigned>(id));
-      if (id_len > 0) {
-        ATLAS_PROFILE_ZONE_TEXT(id_buf, static_cast<size_t>(id_len));
+      ATLAS_PROFILE_ZONE_N("Channel::HandleMessage");
+#if ATLAS_PROFILE_ENABLED
+      {
+        char id_buf[16];
+        int id_len = std::snprintf(id_buf, sizeof(id_buf), "id=%u", static_cast<unsigned>(id));
+        if (id_len > 0) {
+          ATLAS_PROFILE_ZONE_TEXT(id_buf, static_cast<size_t>(id_len));
+        }
       }
-    }
 #endif
-
-    BinaryReader msg_reader(*payload_span);
-    if (!entry) {
-      // No typed handler — try the InterfaceTable's default handler. The
-      // client installs one on the default-handler slot to route the three
-      // reserved state-replication channels (0xF001 / 0xF002 / 0xF003) and
-      // every ClientRpc (anything in the dynamic rpc_id range). Only log
-      // "Unknown message ID" when nothing's installed either.
-      if (!interface_table_.TryDispatchDefault(remote_, this, id, msg_reader)) {
-        ATLAS_LOG_WARNING("Unknown message ID {} from {}", id, remote_.ToString());
+      BinaryReader msg_reader(*payload_span);
+      if (!entry) {
+        // No typed handler — try the InterfaceTable's default handler. The
+        // client installs one on the default-handler slot to route the three
+        // reserved state-replication channels (0xF001 / 0xF002 / 0xF003) and
+        // every ClientRpc (anything in the dynamic rpc_id range). Only log
+        // "Unknown message ID" when nothing's installed either.
+        if (!interface_table.TryDispatchDefault(remote, channel, id, msg_reader)) {
+          ATLAS_LOG_WARNING("Unknown message ID {} from {}", id, remote.ToString());
+        }
+      } else {
+        entry->handler->HandleMessage(remote, channel, id, msg_reader);
       }
-      continue;
     }
 
-    entry->handler->HandleMessage(remote_, this, id, msg_reader);
+    // Yield-point: deadline check is AFTER a successful dispatch so
+    // each call always makes progress on at least one message.
+    last_safe_pos = reader.Position();
+    if (Clock::now() >= deadline) return last_safe_pos;
   }
+  return frame_data.size();
+}
+
+}  // namespace
+
+void Channel::DispatchMessages(std::span<const std::byte> frame_data) {
+  // Synchronous variant: runs to completion, ignores the returned
+  // byte count (always == frame_data.size() on success or full-drop
+  // on parse error).
+  (void)DispatchFrameImpl(interface_table_, remote_, this, frame_data, TimePoint::max());
+}
+
+auto Channel::DispatchMessagesBudgeted(std::span<const std::byte> frame_data, TimePoint deadline)
+    -> bool {
+  if (frame_data.empty()) {
+    return HasPendingDispatch();
+  }
+  const auto consumed = DispatchFrameImpl(interface_table_, remote_, this, frame_data, deadline);
+  if (consumed < frame_data.size()) {
+    // Save the un-dispatched tail.  Compact pending_dispatch_buf_ first
+    // if the resume offset has advanced — keeps the buffer at most one
+    // MTU plus one yield-tail in size.
+    if (pending_dispatch_pos_ > 0) {
+      pending_dispatch_buf_.erase(
+          pending_dispatch_buf_.begin(),
+          pending_dispatch_buf_.begin() + static_cast<std::ptrdiff_t>(pending_dispatch_pos_));
+      pending_dispatch_pos_ = 0;
+    }
+    auto tail = frame_data.subspan(consumed);
+    pending_dispatch_buf_.insert(pending_dispatch_buf_.end(), tail.begin(), tail.end());
+  }
+  return HasPendingDispatch();
+}
+
+auto Channel::DrainPendingDispatch(TimePoint deadline) -> bool {
+  if (!HasPendingDispatch()) return false;
+  std::span<const std::byte> tail{pending_dispatch_buf_.data() + pending_dispatch_pos_,
+                                  pending_dispatch_buf_.size() - pending_dispatch_pos_};
+  const auto consumed = DispatchFrameImpl(interface_table_, remote_, this, tail, deadline);
+  pending_dispatch_pos_ += consumed;
+  if (!HasPendingDispatch()) {
+    // Fully drained — release the storage so a long-quiet channel
+    // doesn't hold onto a 1-MTU buffer indefinitely.
+    pending_dispatch_buf_.clear();
+    pending_dispatch_buf_.shrink_to_fit();
+    pending_dispatch_pos_ = 0;
+    return false;
+  }
+  return true;
 }
 
 void Channel::SetDisconnectCallback(DisconnectCallback cb) {
