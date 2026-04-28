@@ -1,8 +1,41 @@
 # Property Dirty-Flag Tracking
 
-**Priority:** P0
-**Subsystem:** `src/server/cellapp/cell_entity.h`, C# script layer
-**Impact:** Serialization cost reduction of 30-50% for mostly-static entities
+**Status:** ✅ Shipped (different shape than originally proposed —
+dirty tracking lives entirely on the C# side; no native bitset, no
+`MarkPropertyDirty` P/Invoke).
+**Priority:** ~~P0~~ done
+**Subsystem:** `src/csharp/Atlas.Generators.Def/Emitters/DeltaSyncEmitter.cs`,
+`src/csharp/Atlas.Generators.Def/Emitters/PropertiesEmitter.cs`,
+generated entity partials
+**Impact:** Only changed properties are serialized per tick; per-audience
+masks split scalar / container sections so default-zero containers cost
+1 byte (sectionMask) instead of a per-property tag.
+
+> **What we shipped:** the source generator emits a per-entity
+> `_dirtyFlags` field (sized to 8/16/32/64 bits depending on property
+> count) plus four compile-time audience masks
+> (`OwnerVisibleScalarMask`, `OwnerVisibleContainerMask`,
+> `OtherVisibleScalarMask`, `OtherVisibleContainerMask`). Each
+> property setter ANDs in its `ReplicatedDirtyFlags` bit; container
+> properties bubble up via the observable container's mutation hooks.
+> `BuildAndConsumeReplicationFrame` short-circuits with `return false`
+> when both `_dirtyFlags` and `_volatileDirty` are zero — the C++ side
+> never sees a frame for unchanged entities.
+>
+> **Wire format** (`SerializeOwnerDelta` / `SerializeOtherDelta`): one
+> sectionMask byte (bit0 = scalars, bit1 = containers, bit2 =
+> components), then a flag word + only the changed fields per section.
+> Effectively the "dirty mask + changed-only" layout the proposal
+> asked for, but generated per audience instead of using a single
+> 64-bit cross-audience bitmap.
+>
+> **Why no native bitset:** the C++ side doesn't read individual
+> property values, only the opaque delta byte stream produced by C#.
+> Tracking dirty state on both sides would have required a synchronised
+> mirror with no benefit. Keeping it C#-only also lets the codegen
+> tailor the flag word width per entity type (saves bytes for
+> small entities) and keeps `[EntityProperty]` setters from crossing
+> the managed/native boundary on every assignment.
 
 ## Current Behavior
 

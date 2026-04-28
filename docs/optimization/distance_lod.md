@@ -1,8 +1,16 @@
 # Distance-Based LOD for Witness Replication
 
-**Priority:** P0
-**Subsystem:** `src/server/cellapp/witness.cc`
+**Status:** ✅ Shipped (commit `54bd9df`).
+**Priority:** ~~P0~~ done
+**Subsystem:** `src/server/cellapp/witness.cc`, `src/server/cellapp/cellapp_config.h`
 **Impact:** Broadcast volume reduction of 60-80% in dense scenarios
+
+> Bands actually shipped (see `Witness::LodIntervalForDistSq` /
+> `kLodCloseSq` etc.): close < 25 m → every tick, medium < 100 m →
+> every 3rd tick, far ≥ 100 m → every 6th tick. Phase offset is
+> assigned at AoI-enter time via `EntityCache::lod_enter_phase` so the
+> first window stays naturally staggered without baking `entity_id %
+> interval` into the schedule.
 
 ## Current Behavior
 

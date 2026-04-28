@@ -1,8 +1,25 @@
 # Group Broadcast (Multicast Delta)
 
-**Priority:** P1 (upgraded from P2 based on profiling)
-**Subsystem:** `src/server/cellapp/witness.cc`, network layer
+**Status:** ✅ Shipped as the *envelope cache* variant (commit `0c1e755`,
+"feat(witness): OPT-04 envelope cache — share serialisation across
+observers"). Per-frame `cached_owner_envelope` / `cached_other_envelope`
+on `ReplicationFrame` lets the first observer that needs a delta build
+the wire envelope; every subsequent observer for that frame reuses the
+bytes verbatim.
+**Priority:** ~~P1~~ done
+**Subsystem:** `src/server/cellapp/cell_entity.h` (cache members),
+`src/server/cellapp/witness.cc::SendEntityUpdate` (cache lookup +
+`Witness::Event::Build` / `Witness::Event::Send` zones)
 **Impact:** Reduces serialization CPU by up to N-fold for shared-view entities
+
+> What landed differs from the original "multicast" proposal in two
+> ways: (1) the cache is keyed per `ReplicationFrame` (which already
+> lives in the entity's history window), not per-tick on the entity;
+> (2) the cache is opportunistic — first witness builds, all others
+> memcpy — so it covers both the same-tick fan-out *and* late observers
+> replaying older history frames. `SendEntityEnter` (baseline) is
+> *not* covered by this cache and is still per-observer; see
+> `lazy_baseline.md` Tactic 3 for the deferred follow-up.
 
 ## Profiling Evidence
 
