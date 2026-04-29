@@ -1352,3 +1352,21 @@ TEST_F(ReliableUdpTest, FlushDeferredAppliesPacketFilter) {
       << "SendBundle{Reliable,Unreliable} must call SendFilter once each";
   EXPECT_GT(filter->LastSendSize(), 0u) << "Filter must see non-empty bundle bytes";
 }
+
+TEST_F(ReliableUdpTest, SetMtuChangesMaxUdpPayload) {
+  // Per-channel MTU override drives MaxUdpPayload() and the fragment
+  // boundary.  Defaults to rudp::kDefaultMtu (1400).  Internet profile
+  // sets ~470; cluster profile keeps 1400.
+  auto sock = Socket::CreateUdp();
+  ASSERT_TRUE(sock.HasValue());
+  ASSERT_TRUE(sock->Bind(Address("127.0.0.1", 0)).HasValue());
+
+  ReliableUdpChannel ch(dispatcher_, table_, *sock, Address("127.0.0.1", 1));
+
+  EXPECT_EQ(ch.Mtu(), rudp::kDefaultMtu);
+  EXPECT_EQ(ch.MaxUdpPayload(), rudp::kDefaultMtu - rudp::kMaxHeaderSize);
+
+  ch.SetMtu(470);
+  EXPECT_EQ(ch.Mtu(), 470u);
+  EXPECT_EQ(ch.MaxUdpPayload(), 470u - rudp::kMaxHeaderSize);
+}

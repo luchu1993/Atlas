@@ -17,6 +17,7 @@ void ApplyRudpProfile(ReliableUdpChannel& channel, const NetworkInterface::RudpP
   channel.SetNocwnd(profile.nocwnd);
   channel.SetSendWindow(profile.send_window);
   channel.SetRecvWindow(profile.recv_window);
+  channel.SetMtu(profile.mtu);
 }
 
 }  // namespace
@@ -353,14 +354,25 @@ auto NetworkInterface::ConnectRudp(const Address& addr, const RudpProfile& profi
 }
 
 auto NetworkInterface::InternetRudpProfile() -> RudpProfile {
-  return RudpProfile{};
+  // ET-style outer profile.  MTU = 470 is calibrated against consumer
+  // ISP / VPN / mobile-carrier paths (PPPoE 1492, IPSec/WireGuard
+  // ~50 B overhead, mobile MSS sometimes ~1280) — well below KCP's
+  // 1400 default.  Window stays at 256 to bound retransmit memory on
+  // a wide-area lossy link.
+  RudpProfile profile;
+  profile.mtu = 470;
+  return profile;
 }
 
 auto NetworkInterface::ClusterRudpProfile() -> RudpProfile {
+  // Intra-DC profile.  cwnd disabled (no fairness pressure on a
+  // dedicated link), large window for high throughput, MTU at the
+  // KCP default (1400) which fits comfortably on 1500-byte Ethernet.
   RudpProfile profile;
   profile.nocwnd = true;
   profile.send_window = 4096;
   profile.recv_window = 4096;
+  profile.mtu = 1400;
   return profile;
 }
 

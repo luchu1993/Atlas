@@ -32,6 +32,12 @@ class NetworkInterface : public FrequentTask {
     bool nocwnd{false};
     uint32_t send_window{256};
     uint32_t recv_window{256};
+    // Per-channel MTU (UDP datagram body, excluding IP+UDP).  Default is
+    // rudp::kDefaultMtu (1400).  Public-internet client profiles should
+    // drop this to ~470 (ET-style outer) so PPPoE / IPSec / mobile paths
+    // don't fragment at the IP layer.  Both endpoints of a channel pair
+    // must use the same MTU — fragment reassembly relies on it.
+    std::size_t mtu{1400};
   };
 
   explicit NetworkInterface(EventDispatcher& dispatcher);

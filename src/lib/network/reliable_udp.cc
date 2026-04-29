@@ -125,7 +125,7 @@ auto ReliableUdpChannel::SendBundleReliable(class Bundle& b) -> Result<void> {
   }
 
   // Auto-fragment if payload exceeds max UDP payload
-  if (payload.size() > rudp::kMaxUdpPayload) {
+  if (payload.size() > MaxUdpPayload()) {
     return SendFragmented(payload);
   }
 
@@ -199,7 +199,7 @@ auto ReliableUdpChannel::DoSend(std::span<const std::byte> data) -> Result<size_
   }
 
   // Auto-fragment if payload exceeds max UDP payload
-  if (data.size() > rudp::kMaxUdpPayload) {
+  if (data.size() > MaxUdpPayload()) {
     auto result = SendFragmented(data);
     if (!result) return result.Error();
     return data.size();
@@ -686,7 +686,7 @@ auto ReliableUdpChannel::FlushReceiveBuffer(TimePoint deadline) -> bool {
 // ============================================================================
 
 auto ReliableUdpChannel::SendFragmented(std::span<const std::byte> payload) -> Result<void> {
-  auto frag_payload_size = rudp::kMaxUdpPayload;
+  auto frag_payload_size = MaxUdpPayload();
   auto total = (payload.size() + frag_payload_size - 1) / frag_payload_size;
 
   if (total > rudp::kMaxFragments) {
@@ -790,7 +790,11 @@ void ReliableUdpChannel::OnFragmentReceived(const FragmentHeader& hdr,
   auto& group = it->second;
 
   if (group.frag_sizes[hdr.fragment_index] == 0) {
-    auto offset = static_cast<std::size_t>(hdr.fragment_index) * rudp::kMaxUdpPayload;
+    // Use this channel's MaxUdpPayload as the per-fragment slot size.
+    // Sender and receiver agree on chunk size implicitly via matching
+    // RudpProfile.mtu — see SetMtu doc.  A mismatch would corrupt
+    // reassembly here.
+    auto offset = static_cast<std::size_t>(hdr.fragment_index) * MaxUdpPayload();
     auto needed = offset + payload.size();
     if (group.buffer.size() < needed) {
       group.buffer.resize(needed);
@@ -806,7 +810,7 @@ void ReliableUdpChannel::OnFragmentReceived(const FragmentHeader& hdr,
     std::vector<std::byte> full_payload;
     full_payload.reserve(group.total_size);
     for (uint8_t i = 0; i < group.expected_count; ++i) {
-      auto frag_offset = static_cast<std::size_t>(i) * rudp::kMaxUdpPayload;
+      auto frag_offset = static_cast<std::size_t>(i) * MaxUdpPayload();
       full_payload.insert(full_payload.end(), group.buffer.data() + frag_offset,
                           group.buffer.data() + frag_offset + group.frag_sizes[i]);
     }
@@ -1006,21 +1010,23 @@ void ReliableUdpChannel::OnAckCwndUpdate(uint32_t acked_count) {
     return;
   }
 
+  const auto mss = static_cast<uint32_t>(mtu_);
+
   for (uint32_t i = 0; i < acked_count; ++i) {
     if (cwnd_ < ssthresh_) {
       // Slow start: cwnd grows by 1 per ACK (doubles per RTT)
       cwnd_++;
-      cwnd_incr_ += rudp::kMtu;
+      cwnd_incr_ += mss;
     } else {
       // Congestion avoidance (KCP formula):
       // incr += mss * mss / incr + mss / 16
       if (cwnd_incr_ == 0) {
-        cwnd_incr_ = rudp::kMtu;
+        cwnd_incr_ = mss;
       }
-      cwnd_incr_ += static_cast<uint32_t>(rudp::kMtu * rudp::kMtu / cwnd_incr_ + rudp::kMtu / 16);
+      cwnd_incr_ += (mss * mss / cwnd_incr_ + mss / 16);
 
       // cwnd = incr / mss
-      auto new_cwnd = cwnd_incr_ / static_cast<uint32_t>(rudp::kMtu);
+      auto new_cwnd = cwnd_incr_ / mss;
       if (new_cwnd > cwnd_) {
         cwnd_ = new_cwnd;
       }
@@ -1030,7 +1036,7 @@ void ReliableUdpChannel::OnAckCwndUpdate(uint32_t acked_count) {
   // Cap at send_window_
   if (cwnd_ > send_window_) {
     cwnd_ = send_window_;
-    cwnd_incr_ = send_window_ * static_cast<uint32_t>(rudp::kMtu);
+    cwnd_incr_ = send_window_ * mss;
   }
 }
 
@@ -1040,18 +1046,19 @@ void ReliableUdpChannel::OnLossCwndUpdate(bool is_timeout) {
   }
 
   auto in_flight = static_cast<uint32_t>(unacked_.size());
+  const auto mss = static_cast<uint32_t>(mtu_);
 
   if (is_timeout) {
     // RTO timeout: aggressive reduction (TCP Tahoe style)
     ssthresh_ = std::max(cwnd_ / 2, 2u);
     cwnd_ = 1;
-    cwnd_incr_ = rudp::kMtu;
+    cwnd_incr_ = mss;
   } else {
     // Fast retransmit: moderate reduction (TCP Reno style)
     // ssthresh = max(in_flight / 2, 2)
     ssthresh_ = std::max(in_flight / 2, 2u);
     cwnd_ = ssthresh_ + fast_resend_thresh_;
-    cwnd_incr_ = cwnd_ * static_cast<uint32_t>(rudp::kMtu);
+    cwnd_incr_ = cwnd_ * mss;
   }
 }
 

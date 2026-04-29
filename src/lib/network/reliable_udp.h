@@ -33,8 +33,18 @@ inline constexpr uint8_t kFlagFragment = 0x08;  // has fragment header (4 bytes)
 // window would strand the front of the send queue and eventually trigger
 // dead-link condemn.
 inline constexpr std::size_t kMaxHeaderSize = 21;
-inline constexpr std::size_t kMtu = 1472;
-inline constexpr std::size_t kMaxUdpPayload = kMtu - kMaxHeaderSize;
+
+// Default MTU (UDP datagram body, excluding IP+UDP headers).  Matches
+// KCP's IKCP_MTU_DEF and ET inner profile; intra-DC paths can carry
+// this comfortably on 1500-byte Ethernet (1400 + 28 IP/UDP = 1428).
+//
+// Public-internet client connections should override via RudpProfile.mtu
+// to ~470 (ET-style outer) so PPPoE / IPSec / mobile-carrier paths don't
+// force per-packet IP-level fragmentation.  Override is per-channel and
+// MUST match between paired endpoints — fragment reassembly assumes the
+// receiver knows the sender's chunk size implicitly (see SendFragmented
+// / OnFragmentReceived).
+inline constexpr std::size_t kDefaultMtu = 1400;
 inline constexpr std::size_t kMaxFragments = 255;
 inline constexpr Duration kFragmentTimeout = std::chrono::seconds(30);
 }  // namespace rudp
@@ -151,6 +161,14 @@ class ReliableUdpChannel : public Channel {
   void SetRecvWindow(uint32_t wnd) { rcv_wnd_ = wnd; }
   [[nodiscard]] auto RecvWindow() const -> uint32_t { return rcv_wnd_; }
 
+  // Per-channel MTU override.  Default is rudp::kDefaultMtu (1400);
+  // public-internet client channels typically use ~470.  Both ends of
+  // a channel pair must agree — fragment reassembly assumes uniform
+  // chunk size implicit from MTU.
+  void SetMtu(std::size_t mtu) { mtu_ = mtu; }
+  [[nodiscard]] auto Mtu() const -> std::size_t { return mtu_; }
+  [[nodiscard]] auto MaxUdpPayload() const -> std::size_t { return mtu_ - rudp::kMaxHeaderSize; }
+
   // Congestion control: disable to use fixed send_window_ (for LAN)
   void SetNocwnd(bool enable) { nocwnd_ = enable; }
   [[nodiscard]] auto Nocwnd() const -> bool { return nocwnd_; }
@@ -254,6 +272,11 @@ class ReliableUdpChannel : public Channel {
   void OnLossCwndUpdate(bool is_timeout);
 
   Socket& shared_socket_;
+
+  // Per-channel MTU.  Drives MaxUdpPayload() and the cwnd-incr math.
+  // Defaults to rudp::kDefaultMtu; ApplyRudpProfile overrides from
+  // RudpProfile.mtu at channel construction.
+  std::size_t mtu_{rudp::kDefaultMtu};
 
   // Sending state
   SeqNum next_send_seq_{1};
