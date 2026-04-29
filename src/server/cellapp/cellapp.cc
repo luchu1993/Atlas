@@ -1009,7 +1009,17 @@ void CellApp::OnOffloadEntity(const Address& src, Channel* ch, const cellapp::Of
       cellapp::OffloadEntityAck ack;
       ack.real_entity_id = msg.real_entity_id;
       ack.success = false;
-      if (ch != nullptr) (void)ch->SendMessage(ack);
+      if (ch != nullptr) {
+        if (auto r = ch->SendMessage(ack); !r) {
+          // Sender's TickOffloadAckTimeouts will revert via the snapshot,
+          // but a dropped failure-ack races against a possibly-dropped
+          // success-ack which would double-revert.
+          ATLAS_LOG_ERROR(
+              "CellApp: failed to send OffloadEntityAck(success=false) entity_id={} "
+              "to {}: {} — sender may double-revert",
+              msg.real_entity_id, src.ToString(), r.Error().Message());
+        }
+      }
       return;
     }
     entity->ConvertGhostToReal();
@@ -1110,7 +1120,17 @@ void CellApp::OnOffloadEntity(const Address& src, Channel* ch, const cellapp::Of
   cc.cell_addr = Network().RudpAddress();
   cc.epoch = next_offload_epoch_++;
   auto base_ch = Network().ConnectRudpNocwnd(msg.base_addr);
-  if (base_ch) (void)(*base_ch)->SendMessage(cc);
+  if (base_ch) {
+    if (auto r = (*base_ch)->SendMessage(cc); !r) {
+      // BaseApp keeps the OLD cell_addr; subsequent ClientCellRpc routes
+      // to a Ghost or dead host until the next offload.  Epoch alone
+      // can't reconcile this if CurrentCell never arrives.
+      ATLAS_LOG_ERROR(
+          "CellApp: failed to send CurrentCell entity_id={} epoch={} to base {}: {} "
+          "— BaseApp split-brain risk",
+          msg.real_entity_id, cc.epoch, msg.base_addr.ToString(), r.Error().Message());
+    }
+  }
 
   // Tell existing haunts (except us and the sender) to redirect their
   // back-channel to us. The sender itself will convert its Real to a
@@ -1122,7 +1142,15 @@ void CellApp::OnOffloadEntity(const Address& src, Channel* ch, const cellapp::Of
     if (haunt_addr == Network().RudpAddress()) continue;
     if (haunt_addr == src) continue;
     if (auto* peer = FindPeerChannel(haunt_addr)) {
-      (void)peer->SendMessage(ghost_set_real);
+      if (auto r = peer->SendMessage(ghost_set_real); !r) {
+        // Haunt's ghost back-channel keeps pointing at the old Real
+        // host until OffloadChecker re-discovers the topology.  Its
+        // deltas vanish in the meantime.
+        ATLAS_LOG_ERROR(
+            "CellApp: failed to send GhostSetReal entity_id={} to haunt {}: {} "
+            "— haunt back-channel stale",
+            msg.real_entity_id, haunt_addr.ToString(), r.Error().Message());
+      }
     }
   }
 
@@ -1130,7 +1158,17 @@ void CellApp::OnOffloadEntity(const Address& src, Channel* ch, const cellapp::Of
   cellapp::OffloadEntityAck ack;
   ack.real_entity_id = msg.real_entity_id;
   ack.success = true;
-  if (ch != nullptr) (void)ch->SendMessage(ack);
+  if (ch != nullptr) {
+    if (auto r = ch->SendMessage(ack); !r) {
+      // Sender will time out and revert Ghost→Real, but receiver has
+      // already converted Ghost→Real here — result: two Reals for one
+      // entity until cluster heals.
+      ATLAS_LOG_ERROR(
+          "CellApp: failed to send OffloadEntityAck(success=true) entity_id={} to {}: {} "
+          "— two-Reals split-brain until sender's revert timeout fires",
+          msg.real_entity_id, src.ToString(), r.Error().Message());
+    }
+  }
 }
 
 void CellApp::OnOffloadEntityAck(const Address& /*src*/, Channel* /*ch*/,

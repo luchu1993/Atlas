@@ -552,7 +552,18 @@ auto BaseAppMgr::IsOverloaded() const -> bool {
 
 void BaseAppMgr::BroadcastToAllBaseapps(const baseappmgr::GlobalBaseNotification& notif) {
   for (auto& [addr, info] : baseapps_) {
-    if (info.is_ready && info.channel) (void)info.channel->SendMessage(notif);
+    if (info.is_ready && info.channel) {
+      if (auto r = info.channel->SendMessage(notif); !r) {
+        // A missed notification leaves peers permanently disagreeing on
+        // which BaseApp owns a singleton (e.g. ChatService) — RPCs to
+        // that mailbox land on stale or absent owner.  No automatic
+        // resync; operator must restart or rely on death detection.
+        ATLAS_LOG_ERROR(
+            "BaseAppMgr: GlobalBaseNotification dropped to baseapp {}: {} "
+            "— peer-view divergence on global mailbox",
+            addr.ToString(), r.Error().Message());
+      }
+    }
   }
 }
 

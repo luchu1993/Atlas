@@ -268,7 +268,15 @@ void DBApp::OnWriteEntity(const Address& src, Channel* ch, const dbapp::WriteEnt
     ack.dbid = result.dbid;
     ack.error = std::move(result.error);
     if (auto* reply_ch = this->ResolveReplyChannel(reply_addr)) {
-      (void)reply_ch->SendMessage(ack);
+      if (auto r = reply_ch->SendMessage(ack); !r) {
+        // BaseApp's pending-write entry never resolves — Proxy keeps
+        // thinking the save is in flight; for kLogOff writes the entity
+        // may already be freed before learning the DB rejected it.
+        ATLAS_LOG_ERROR(
+            "DBApp: WriteEntityAck dropped, dbid={} request_id={} success={} to {}: {} "
+            "— durability boundary desync",
+            ack.dbid, ack.request_id, ack.success, reply_addr.ToString(), r.Error().Message());
+      }
     }
   };
 
@@ -311,7 +319,17 @@ void DBApp::OnCheckoutEntity(const Address& src, Channel* ch, const dbapp::Check
       ack.blob = std::move(result.data.blob);
     }
     if (auto* reply_ch = this->ResolveReplyChannel(reply_addr)) {
-      (void)reply_ch->SendMessage(ack);
+      if (auto r = reply_ch->SendMessage(ack); !r) {
+        // checkout_mgr_ has already committed; if BaseApp never sees the
+        // ack, login times out but the DBID stays checked out until
+        // BaseApp death detection clears it — login retries from any
+        // BaseApp will fail in the meantime.
+        ATLAS_LOG_ERROR(
+            "DBApp: CheckoutEntityAck dropped, dbid={} request_id={} status={} to {}: {} "
+            "— DBID stays checked out, login wedge",
+            ack.dbid, ack.request_id, static_cast<int>(ack.status), reply_addr.ToString(),
+            r.Error().Message());
+      }
     }
   };
 

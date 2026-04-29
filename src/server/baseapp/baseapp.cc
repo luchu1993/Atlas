@@ -1588,7 +1588,15 @@ void BaseApp::BeginLogoffPersist(EntityID entity_id, DatabaseID dbid, uint16_t t
     msg.entity_id = entity_id;
     msg.request_id = next_prepare_request_id_++;
     msg.blob = std::move(blob);
-    (void)dbapp_channel_->SendMessage(msg);
+    if (auto r = dbapp_channel_->SendMessage(msg); !r) {
+      // FinalizeForceLogoff destroys the in-memory entity right after.
+      // If this WriteEntity is dropped, all unsaved player progress for
+      // dbid=N is permanently lost with no other log signal.
+      ATLAS_LOG_ERROR(
+          "BaseApp: logoff WriteEntity dropped, dbid={} entity_id={} request_id={}: {} "
+          "— player progress lost",
+          dbid, entity_id, msg.request_id, r.Error().Message());
+    }
   }
 
   // Destroy the local entity immediately.
@@ -2330,7 +2338,16 @@ void BaseApp::SendAbortCheckout(uint32_t request_id, DatabaseID dbid, uint16_t t
   abort.request_id = request_id;
   abort.type_id = type_id;
   abort.dbid = dbid;
-  (void)dbapp_channel_->SendMessage(abort);
+  if (auto r = dbapp_channel_->SendMessage(abort); !r) {
+    // DBApp keeps the slot checked out indefinitely.  Re-login of this
+    // dbid from any BaseApp returns kAlreadyCheckedOut against a holder
+    // that has already discarded the entity — wedges that account
+    // until BaseApp death detection clears it.
+    ATLAS_LOG_ERROR(
+        "BaseApp: AbortCheckout dropped, dbid={} type_id={} request_id={}: {} "
+        "— account wedge risk",
+        dbid, type_id, request_id, r.Error().Message());
+  }
 }
 
 auto BaseApp::RollbackPreparedLoginEntity(uint32_t login_request_id) -> bool {
