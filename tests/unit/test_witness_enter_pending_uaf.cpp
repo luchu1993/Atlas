@@ -36,8 +36,8 @@ class WitnessEnterPendingUafTest : public ::testing::Test {
   Space space_{1};
 
   CellEntity* MakeEntity(EntityID id, math::Vector3 pos = {0, 0, 0}) {
-    auto* e =
-        space_.AddEntity(std::make_unique<CellEntity>(id, 1, space_, pos, math::Vector3{1, 0, 0}));
+    auto* e = space_.AddEntity(
+        std::make_unique<CellEntity>(id, uint16_t{1}, space_, pos, math::Vector3{1, 0, 0}));
     e->SetBase(Address(0, 0), id + 1000);
     return e;
   }

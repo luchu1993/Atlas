@@ -25,7 +25,7 @@ TEST(Space, EmptyInitially) {
 TEST(Space, AddEntityLinksIntoRangeList) {
   Space space(1);
   auto* entity = space.AddEntity(std::make_unique<CellEntity>(
-      100, /*type_id=*/1, space, math::Vector3{5, 0, 5}, math::Vector3{1, 0, 0}));
+      100, /*type_id=*/uint16_t{1}, space, math::Vector3{5, 0, 5}, math::Vector3{1, 0, 0}));
   EXPECT_EQ(space.EntityCount(), 1u);
   EXPECT_EQ(space.FindEntity(100), entity);
   // The head sentinel's right-neighbour on X should eventually reach the
@@ -37,10 +37,10 @@ TEST(Space, AddEntityLinksIntoRangeList) {
 
 TEST(Space, RemoveEntityUnlinksFromRangeList) {
   Space space(1);
-  space.AddEntity(
-      std::make_unique<CellEntity>(100, 1, space, math::Vector3{0, 0, 0}, math::Vector3{1, 0, 0}));
-  space.AddEntity(
-      std::make_unique<CellEntity>(200, 1, space, math::Vector3{5, 0, 5}, math::Vector3{1, 0, 0}));
+  space.AddEntity(std::make_unique<CellEntity>(100, uint16_t{1}, space, math::Vector3{0, 0, 0},
+                                               math::Vector3{1, 0, 0}));
+  space.AddEntity(std::make_unique<CellEntity>(200, uint16_t{1}, space, math::Vector3{5, 0, 5},
+                                               math::Vector3{1, 0, 0}));
   EXPECT_EQ(space.EntityCount(), 2u);
 
   space.RemoveEntity(100);
@@ -57,10 +57,10 @@ TEST(Space, RemoveNonExistentIdIsNoop) {
 
 TEST(Space, SetPositionReshufflesRangeList) {
   Space space(1);
-  auto* a = space.AddEntity(
-      std::make_unique<CellEntity>(1, 1, space, math::Vector3{10, 0, 0}, math::Vector3{1, 0, 0}));
-  auto* b = space.AddEntity(
-      std::make_unique<CellEntity>(2, 1, space, math::Vector3{20, 0, 0}, math::Vector3{1, 0, 0}));
+  auto* a = space.AddEntity(std::make_unique<CellEntity>(
+      1, uint16_t{1}, space, math::Vector3{10, 0, 0}, math::Vector3{1, 0, 0}));
+  auto* b = space.AddEntity(std::make_unique<CellEntity>(
+      2, uint16_t{1}, space, math::Vector3{20, 0, 0}, math::Vector3{1, 0, 0}));
 
   // Initially X order: head, a (x=10), b (x=20), tail.
   ASSERT_EQ(space.GetRangeList().Head().next_x_, &a->RangeNode());
@@ -73,8 +73,8 @@ TEST(Space, SetPositionReshufflesRangeList) {
 
 TEST(Space, TickDrivesControllersOnEveryEntity) {
   Space space(1);
-  auto* entity = space.AddEntity(
-      std::make_unique<CellEntity>(1, 1, space, math::Vector3{0, 0, 0}, math::Vector3{1, 0, 0}));
+  auto* entity = space.AddEntity(std::make_unique<CellEntity>(
+      1, uint16_t{1}, space, math::Vector3{0, 0, 0}, math::Vector3{1, 0, 0}));
 
   int fires = 0;
   entity->GetControllers().Add(
@@ -96,8 +96,8 @@ TEST(Space, DestroyMarksButDoesNotErase) {
   // a second destruction path that silently invalidates CellApp's
   // base/cell-id indexes.
   Space space(1);
-  auto* entity = space.AddEntity(
-      std::make_unique<CellEntity>(1, 1, space, math::Vector3{0, 0, 0}, math::Vector3{1, 0, 0}));
+  auto* entity = space.AddEntity(std::make_unique<CellEntity>(
+      1, uint16_t{1}, space, math::Vector3{0, 0, 0}, math::Vector3{1, 0, 0}));
   ASSERT_EQ(space.EntityCount(), 1u);
 
   entity->Destroy();
@@ -114,12 +114,12 @@ TEST(Space, DestroyMarksButDoesNotErase) {
 
 TEST(Space, ForEachEntityIteratesAll) {
   Space space(1);
-  space.AddEntity(
-      std::make_unique<CellEntity>(1, 1, space, math::Vector3{0, 0, 0}, math::Vector3{1, 0, 0}));
-  space.AddEntity(
-      std::make_unique<CellEntity>(2, 1, space, math::Vector3{0, 0, 0}, math::Vector3{1, 0, 0}));
-  space.AddEntity(
-      std::make_unique<CellEntity>(3, 1, space, math::Vector3{0, 0, 0}, math::Vector3{1, 0, 0}));
+  space.AddEntity(std::make_unique<CellEntity>(1, uint16_t{1}, space, math::Vector3{0, 0, 0},
+                                               math::Vector3{1, 0, 0}));
+  space.AddEntity(std::make_unique<CellEntity>(2, uint16_t{1}, space, math::Vector3{0, 0, 0},
+                                               math::Vector3{1, 0, 0}));
+  space.AddEntity(std::make_unique<CellEntity>(3, uint16_t{1}, space, math::Vector3{0, 0, 0},
+                                               math::Vector3{1, 0, 0}));
 
   int count = 0;
   space.ForEachEntity([&count](CellEntity&) { ++count; });

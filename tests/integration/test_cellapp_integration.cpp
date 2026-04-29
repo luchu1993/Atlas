@@ -448,8 +448,8 @@ class PropertyDeltaFixture : public ::testing::Test {
 
   static auto MakeEntity(Space& space, EntityID id, EntityID base_id, math::Vector3 pos)
       -> CellEntity* {
-    auto* e = space.AddEntity(
-        std::make_unique<CellEntity>(id, /*type_id=*/1, space, pos, math::Vector3{1, 0, 0}));
+    auto* e = space.AddEntity(std::make_unique<CellEntity>(id, /*type_id=*/uint16_t{1}, space, pos,
+                                                           math::Vector3{1, 0, 0}));
     e->SetBase(Address(0, 0), base_id);
     return e;
   }
@@ -526,7 +526,7 @@ TEST_F(PropertyDeltaFixture, OwnerObserverReceivesOwnerDelta) {
 TEST(CellAppIntegration, MoveControllerDrivesSmoothMotion) {
   Space space(1);
   auto* entity = space.AddEntity(std::make_unique<CellEntity>(
-      1, /*type_id=*/1, space, math::Vector3{0, 0, 0}, math::Vector3{1, 0, 0}));
+      1, /*type_id=*/uint16_t{1}, space, math::Vector3{0, 0, 0}, math::Vector3{1, 0, 0}));
 
   // Add a MoveToPointController: destination (10, 0, 0), speed 10 m/s.
   auto ctrl_id = entity->GetControllers().Add(
@@ -557,7 +557,7 @@ TEST(CellAppIntegration, ThousandEntityTickWithinPerfBudget) {
   constexpr int kEntityCount = 1000;
   for (int i = 1; i <= kEntityCount; ++i) {
     auto* e = space.AddEntity(std::make_unique<CellEntity>(
-        static_cast<EntityID>(i), /*type_id=*/1, space,
+        static_cast<EntityID>(i), /*type_id=*/uint16_t{1}, space,
         math::Vector3{static_cast<float>(i % 100), 0, static_cast<float>(i / 100)},
         math::Vector3{1, 0, 0}));
     e->SetBase(Address(0, 0), static_cast<EntityID>(i + 10000));

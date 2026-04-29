@@ -17,7 +17,7 @@ namespace {
 
 auto MakeReal(Space& space, EntityID id, math::Vector3 pos) -> CellEntity* {
   return space.AddEntity(
-      std::make_unique<CellEntity>(id, /*type=*/1, space, pos, math::Vector3{1, 0, 0}));
+      std::make_unique<CellEntity>(id, /*type=*/uint16_t{1}, space, pos, math::Vector3{1, 0, 0}));
 }
 
 auto BuildTopology(Space& space, const Address& self, const Address& peer,
@@ -108,9 +108,9 @@ TEST(OffloadChecker, GhostEntitiesNotEvenInLocalCell_NoOp) {
   // Ghost on the far side — if it somehow got into local_cell it'd fire
   // an Offload, so this test also exercises the defensive IsReal() gate
   // in the checker.
-  auto* g = space.AddEntity(
-      std::make_unique<CellEntity>(CellEntity::GhostTag{}, 99, 1, space, math::Vector3{50, 0, 0},
-                                   math::Vector3{1, 0, 0}, reinterpret_cast<Channel*>(0xBEEF)));
+  auto* g = space.AddEntity(std::make_unique<CellEntity>(
+      CellEntity::GhostTag{}, 99, uint16_t{1}, space, math::Vector3{50, 0, 0},
+      math::Vector3{1, 0, 0}, reinterpret_cast<Channel*>(0xBEEF)));
   space.FindLocalCell(1)->AddRealEntity(g);  // deliberately misroute
 
   OffloadChecker checker(self);

@@ -42,8 +42,8 @@ auto MakeBlob(std::initializer_list<uint8_t> bytes) -> std::vector<std::byte> {
 
 TEST(RealGhost, DefaultCtorStartsAsReal) {
   Space space(1);
-  auto* e = space.AddEntity(
-      std::make_unique<CellEntity>(1, 1, space, math::Vector3{0, 0, 0}, math::Vector3{1, 0, 0}));
+  auto* e = space.AddEntity(std::make_unique<CellEntity>(
+      1, uint16_t{1}, space, math::Vector3{0, 0, 0}, math::Vector3{1, 0, 0}));
   EXPECT_TRUE(e->IsReal());
   EXPECT_FALSE(e->IsGhost());
   EXPECT_NE(e->GetRealData(), nullptr);
@@ -53,8 +53,9 @@ TEST(RealGhost, DefaultCtorStartsAsReal) {
 TEST(RealGhost, GhostTagCtorStartsAsGhost) {
   Space space(1);
   auto* c = FakeChannel(0xBEEF);
-  auto* e = space.AddEntity(std::make_unique<CellEntity>(
-      CellEntity::GhostTag{}, 2, 1, space, math::Vector3{10, 0, 10}, math::Vector3{1, 0, 0}, c));
+  auto* e = space.AddEntity(std::make_unique<CellEntity>(CellEntity::GhostTag{}, 2, uint16_t{1},
+                                                         space, math::Vector3{10, 0, 10},
+                                                         math::Vector3{1, 0, 0}, c));
   EXPECT_FALSE(e->IsReal());
   EXPECT_TRUE(e->IsGhost());
   EXPECT_EQ(e->GetRealData(), nullptr);
@@ -67,8 +68,8 @@ TEST(RealGhost, GhostTagCtorStartsAsGhost) {
 
 TEST(RealGhost, ConvertRealToGhost_DropsRealDataAndInstallsChannel) {
   Space space(1);
-  auto* e = space.AddEntity(
-      std::make_unique<CellEntity>(3, 1, space, math::Vector3{0, 0, 0}, math::Vector3{1, 0, 0}));
+  auto* e = space.AddEntity(std::make_unique<CellEntity>(
+      3, uint16_t{1}, space, math::Vector3{0, 0, 0}, math::Vector3{1, 0, 0}));
   ASSERT_TRUE(e->IsReal());
   auto* new_channel = FakeChannel(0xCAFE);
   e->ConvertRealToGhost(new_channel);
@@ -80,9 +81,9 @@ TEST(RealGhost, ConvertRealToGhost_DropsRealDataAndInstallsChannel) {
 
 TEST(RealGhost, ConvertRealToGhost_IgnoredOnGhost) {
   Space space(1);
-  auto* e = space.AddEntity(
-      std::make_unique<CellEntity>(CellEntity::GhostTag{}, 4, 1, space, math::Vector3{0, 0, 0},
-                                   math::Vector3{1, 0, 0}, FakeChannel(0xAA)));
+  auto* e = space.AddEntity(std::make_unique<CellEntity>(
+      CellEntity::GhostTag{}, 4, uint16_t{1}, space, math::Vector3{0, 0, 0}, math::Vector3{1, 0, 0},
+      FakeChannel(0xAA)));
   e->ConvertRealToGhost(FakeChannel(0xBB));
   // Original Ghost channel untouched.
   EXPECT_EQ(e->GetRealChannel(), FakeChannel(0xAA));
@@ -96,8 +97,8 @@ TEST(RealGhost, RebindRealChannel_UpdatesBackChannelAndClearsNextRealAddr) {
   Space space(1);
   auto* initial_ch = FakeChannel(0xAA);
   auto* new_ch = FakeChannel(0xBB);
-  auto* e = space.AddEntity(std::make_unique<CellEntity>(CellEntity::GhostTag{}, 42, 1, space,
-                                                         math::Vector3{0, 0, 0},
+  auto* e = space.AddEntity(std::make_unique<CellEntity>(CellEntity::GhostTag{}, 42, uint16_t{1},
+                                                         space, math::Vector3{0, 0, 0},
                                                          math::Vector3{1, 0, 0}, initial_ch));
   // Simulate mid-Offload state: pre-reg next_real_addr via GhostSetNextReal.
   e->SetNextRealAddr(Address(0x7F000001u, 30002));
@@ -112,8 +113,8 @@ TEST(RealGhost, RebindRealChannel_UpdatesBackChannelAndClearsNextRealAddr) {
 
 TEST(RealGhost, RebindRealChannel_IgnoredOnReal) {
   Space space(1);
-  auto* e = space.AddEntity(
-      std::make_unique<CellEntity>(99, 1, space, math::Vector3{0, 0, 0}, math::Vector3{1, 0, 0}));
+  auto* e = space.AddEntity(std::make_unique<CellEntity>(
+      99, uint16_t{1}, space, math::Vector3{0, 0, 0}, math::Vector3{1, 0, 0}));
   ASSERT_TRUE(e->IsReal());
   auto* new_ch = FakeChannel(0xBB);
   e->RebindRealChannel(new_ch);
@@ -128,9 +129,9 @@ TEST(RealGhost, RebindRealChannel_IgnoredOnReal) {
 
 TEST(RealGhost, ConvertGhostToReal_ClearsChannelAndReattachesSidecar) {
   Space space(1);
-  auto* e = space.AddEntity(
-      std::make_unique<CellEntity>(CellEntity::GhostTag{}, 5, 1, space, math::Vector3{0, 0, 0},
-                                   math::Vector3{1, 0, 0}, FakeChannel(0xAA)));
+  auto* e = space.AddEntity(std::make_unique<CellEntity>(
+      CellEntity::GhostTag{}, 5, uint16_t{1}, space, math::Vector3{0, 0, 0}, math::Vector3{1, 0, 0},
+      FakeChannel(0xAA)));
   ASSERT_TRUE(e->IsGhost());
   e->ConvertGhostToReal();
   EXPECT_TRUE(e->IsReal());
@@ -144,9 +145,9 @@ TEST(RealGhost, ConvertGhostToReal_PreservesReplicationBaseline) {
   // The new Real must inherit the snapshot so it can keep serving peers
   // until the C# layer publishes the first post-offload frame.
   Space space(1);
-  auto* e = space.AddEntity(
-      std::make_unique<CellEntity>(CellEntity::GhostTag{}, 6, 1, space, math::Vector3{0, 0, 0},
-                                   math::Vector3{1, 0, 0}, FakeChannel(0xAA)));
+  auto* e = space.AddEntity(std::make_unique<CellEntity>(
+      CellEntity::GhostTag{}, 6, uint16_t{1}, space, math::Vector3{0, 0, 0}, math::Vector3{1, 0, 0},
+      FakeChannel(0xAA)));
   auto snapshot = MakeBlob({0xDE, 0xAD, 0xBE, 0xEF});
   e->GhostApplySnapshot(100, std::span<const std::byte>(snapshot));
   ASSERT_NE(e->GetReplicationState(), nullptr);
@@ -165,9 +166,9 @@ TEST(RealGhost, ConvertGhostToReal_PreservesReplicationBaseline) {
 
 TEST(RealGhost, GhostUpdatePosition_AppliesWhenSeqAdvances) {
   Space space(1);
-  auto* e = space.AddEntity(
-      std::make_unique<CellEntity>(CellEntity::GhostTag{}, 7, 1, space, math::Vector3{0, 0, 0},
-                                   math::Vector3{1, 0, 0}, FakeChannel(0xAA)));
+  auto* e = space.AddEntity(std::make_unique<CellEntity>(
+      CellEntity::GhostTag{}, 7, uint16_t{1}, space, math::Vector3{0, 0, 0}, math::Vector3{1, 0, 0},
+      FakeChannel(0xAA)));
   e->GhostUpdatePosition(math::Vector3{5, 0, 7}, math::Vector3{0, 0, 1}, /*on_ground=*/true, 1);
   EXPECT_FLOAT_EQ(e->Position().x, 5.f);
   EXPECT_FLOAT_EQ(e->Position().z, 7.f);
@@ -182,9 +183,9 @@ TEST(RealGhost, GhostUpdatePosition_AppliesWhenSeqAdvances) {
 
 TEST(RealGhost, GhostUpdatePosition_IgnoresStaleSeq) {
   Space space(1);
-  auto* e = space.AddEntity(
-      std::make_unique<CellEntity>(CellEntity::GhostTag{}, 8, 1, space, math::Vector3{0, 0, 0},
-                                   math::Vector3{1, 0, 0}, FakeChannel(0xAA)));
+  auto* e = space.AddEntity(std::make_unique<CellEntity>(
+      CellEntity::GhostTag{}, 8, uint16_t{1}, space, math::Vector3{0, 0, 0}, math::Vector3{1, 0, 0},
+      FakeChannel(0xAA)));
   e->GhostUpdatePosition({5, 0, 7}, {0, 0, 1}, true, 10);
   e->GhostUpdatePosition({99, 0, 99}, {1, 0, 0}, false, 5);  // stale — drop
   EXPECT_FLOAT_EQ(e->Position().x, 5.f);
@@ -193,8 +194,8 @@ TEST(RealGhost, GhostUpdatePosition_IgnoresStaleSeq) {
 
 TEST(RealGhost, GhostUpdatePosition_RejectsOnReal) {
   Space space(1);
-  auto* e = space.AddEntity(
-      std::make_unique<CellEntity>(9, 1, space, math::Vector3{0, 0, 0}, math::Vector3{1, 0, 0}));
+  auto* e = space.AddEntity(std::make_unique<CellEntity>(
+      9, uint16_t{1}, space, math::Vector3{0, 0, 0}, math::Vector3{1, 0, 0}));
   e->GhostUpdatePosition({99, 0, 99}, {0, 0, 1}, true, 1);
   EXPECT_FLOAT_EQ(e->Position().x, 0.f);
   EXPECT_EQ(e->GetReplicationState(), nullptr);
@@ -206,9 +207,9 @@ TEST(RealGhost, GhostUpdatePosition_RejectsOnReal) {
 
 TEST(RealGhost, GhostApplyDelta_AppendsToHistoryAndAdvancesSeq) {
   Space space(1);
-  auto* e = space.AddEntity(
-      std::make_unique<CellEntity>(CellEntity::GhostTag{}, 10, 1, space, math::Vector3{0, 0, 0},
-                                   math::Vector3{1, 0, 0}, FakeChannel(0xAA)));
+  auto* e = space.AddEntity(std::make_unique<CellEntity>(
+      CellEntity::GhostTag{}, 10, uint16_t{1}, space, math::Vector3{0, 0, 0},
+      math::Vector3{1, 0, 0}, FakeChannel(0xAA)));
   auto d1 = MakeBlob({0x01});
   auto d2 = MakeBlob({0x02, 0x03});
   e->GhostApplyDelta(1, std::span<const std::byte>(d1));
@@ -222,9 +223,9 @@ TEST(RealGhost, GhostApplyDelta_AppendsToHistoryAndAdvancesSeq) {
 
 TEST(RealGhost, GhostApplyDelta_DropsStaleOrDuplicate) {
   Space space(1);
-  auto* e = space.AddEntity(
-      std::make_unique<CellEntity>(CellEntity::GhostTag{}, 11, 1, space, math::Vector3{0, 0, 0},
-                                   math::Vector3{1, 0, 0}, FakeChannel(0xAA)));
+  auto* e = space.AddEntity(std::make_unique<CellEntity>(
+      CellEntity::GhostTag{}, 11, uint16_t{1}, space, math::Vector3{0, 0, 0},
+      math::Vector3{1, 0, 0}, FakeChannel(0xAA)));
   auto d = MakeBlob({0xFF});
   e->GhostApplyDelta(5, std::span<const std::byte>(d));
   e->GhostApplyDelta(5, std::span<const std::byte>(d));  // duplicate — ignored
@@ -235,9 +236,9 @@ TEST(RealGhost, GhostApplyDelta_DropsStaleOrDuplicate) {
 
 TEST(RealGhost, GhostApplyDelta_HistoryBoundedByReplicationWindow) {
   Space space(1);
-  auto* e = space.AddEntity(
-      std::make_unique<CellEntity>(CellEntity::GhostTag{}, 12, 1, space, math::Vector3{0, 0, 0},
-                                   math::Vector3{1, 0, 0}, FakeChannel(0xAA)));
+  auto* e = space.AddEntity(std::make_unique<CellEntity>(
+      CellEntity::GhostTag{}, 12, uint16_t{1}, space, math::Vector3{0, 0, 0},
+      math::Vector3{1, 0, 0}, FakeChannel(0xAA)));
   auto d = MakeBlob({0xAB});
   // Push kReplicationHistoryWindow + 3 deltas; expect only the last WINDOW
   // to remain.
@@ -256,9 +257,9 @@ TEST(RealGhost, GhostApplyDelta_HistoryBoundedByReplicationWindow) {
 
 TEST(RealGhost, GhostApplySnapshot_ReplacesBaselineAndClearsHistory) {
   Space space(1);
-  auto* e = space.AddEntity(
-      std::make_unique<CellEntity>(CellEntity::GhostTag{}, 13, 1, space, math::Vector3{0, 0, 0},
-                                   math::Vector3{1, 0, 0}, FakeChannel(0xAA)));
+  auto* e = space.AddEntity(std::make_unique<CellEntity>(
+      CellEntity::GhostTag{}, 13, uint16_t{1}, space, math::Vector3{0, 0, 0},
+      math::Vector3{1, 0, 0}, FakeChannel(0xAA)));
   auto d = MakeBlob({0x00});
   e->GhostApplyDelta(1, std::span<const std::byte>(d));
   e->GhostApplyDelta(2, std::span<const std::byte>(d));
@@ -277,8 +278,8 @@ TEST(RealGhost, GhostApplySnapshot_ReplacesBaselineAndClearsHistory) {
 
 TEST(RealEntityData, AddHauntIsIdempotent) {
   Space space(1);
-  auto* e = space.AddEntity(
-      std::make_unique<CellEntity>(20, 1, space, math::Vector3{0, 0, 0}, math::Vector3{1, 0, 0}));
+  auto* e = space.AddEntity(std::make_unique<CellEntity>(
+      20, uint16_t{1}, space, math::Vector3{0, 0, 0}, math::Vector3{1, 0, 0}));
   auto* rd = e->GetRealData();
   ASSERT_NE(rd, nullptr);
   auto* c1 = FakeChannel(0x11);
@@ -295,16 +296,16 @@ TEST(RealEntityData, AddHauntIsIdempotent) {
 
 TEST(RealEntityData, AddHauntRejectsNullptr) {
   Space space(1);
-  auto* e = space.AddEntity(
-      std::make_unique<CellEntity>(21, 1, space, math::Vector3{0, 0, 0}, math::Vector3{1, 0, 0}));
+  auto* e = space.AddEntity(std::make_unique<CellEntity>(
+      21, uint16_t{1}, space, math::Vector3{0, 0, 0}, math::Vector3{1, 0, 0}));
   EXPECT_FALSE(e->GetRealData()->AddHaunt(nullptr, Address{}));
   EXPECT_EQ(e->GetRealData()->HauntCount(), 0u);
 }
 
 TEST(RealEntityData, RemoveHauntSwapBack) {
   Space space(1);
-  auto* e = space.AddEntity(
-      std::make_unique<CellEntity>(22, 1, space, math::Vector3{0, 0, 0}, math::Vector3{1, 0, 0}));
+  auto* e = space.AddEntity(std::make_unique<CellEntity>(
+      22, uint16_t{1}, space, math::Vector3{0, 0, 0}, math::Vector3{1, 0, 0}));
   auto* rd = e->GetRealData();
   auto* c1 = FakeChannel(0x11);
   auto* c2 = FakeChannel(0x22);
@@ -329,8 +330,8 @@ TEST(RealEntityData, RemoveHauntSwapBack) {
 
 TEST(RealEntityData, BuildPositionUpdate_ReflectsOwnerState) {
   Space space(1);
-  auto* e = space.AddEntity(
-      std::make_unique<CellEntity>(30, 1, space, math::Vector3{3, 4, 5}, math::Vector3{0, 0, 1}));
+  auto* e = space.AddEntity(std::make_unique<CellEntity>(
+      30, uint16_t{1}, space, math::Vector3{3, 4, 5}, math::Vector3{0, 0, 1}));
   e->SetOnGround(true);
   // Seed a volatile_seq via PublishReplicationFrame so BuildPositionUpdate
   // has a non-zero seq to copy.
@@ -353,8 +354,8 @@ TEST(RealEntityData, BuildPositionUpdate_ReflectsOwnerState) {
 
 TEST(RealEntityData, BuildDelta_ForwardsLatestHistoryFrame) {
   Space space(1);
-  auto* e = space.AddEntity(
-      std::make_unique<CellEntity>(31, 1, space, math::Vector3{0, 0, 0}, math::Vector3{1, 0, 0}));
+  auto* e = space.AddEntity(std::make_unique<CellEntity>(
+      31, uint16_t{1}, space, math::Vector3{0, 0, 0}, math::Vector3{1, 0, 0}));
   auto d1 = MakeBlob({0x01});
   auto d2 = MakeBlob({0x02, 0x02});
   CellEntity::ReplicationFrame f1;
@@ -375,8 +376,8 @@ TEST(RealEntityData, BuildDelta_ForwardsLatestHistoryFrame) {
 
 TEST(RealEntityData, BuildDelta_EmptyWhenNoHistory) {
   Space space(1);
-  auto* e = space.AddEntity(
-      std::make_unique<CellEntity>(32, 1, space, math::Vector3{0, 0, 0}, math::Vector3{1, 0, 0}));
+  auto* e = space.AddEntity(std::make_unique<CellEntity>(
+      32, uint16_t{1}, space, math::Vector3{0, 0, 0}, math::Vector3{1, 0, 0}));
   auto msg = e->GetRealData()->BuildDelta();
   EXPECT_EQ(msg.event_seq, 0u);
   EXPECT_TRUE(msg.other_delta.empty());
@@ -389,8 +390,8 @@ TEST(RealEntityData, BuildDelta_EmptyWhenNoHistory) {
 // (wire seq, other_delta bytes) that don't describe the same frame.
 TEST(RealEntityData, BuildDelta_EmptyWhenHistoryBackSeqMismatchesLatest) {
   Space space(1);
-  auto* e = space.AddEntity(
-      std::make_unique<CellEntity>(200, 1, space, math::Vector3{0, 0, 0}, math::Vector3{1, 0, 0}));
+  auto* e = space.AddEntity(std::make_unique<CellEntity>(
+      200, uint16_t{1}, space, math::Vector3{0, 0, 0}, math::Vector3{1, 0, 0}));
 
   // Publish a real frame so history has content + state->latest_event_seq == 5.
   auto real_delta = MakeBlob({0x01, 0xAB, 0xCD});
@@ -414,8 +415,8 @@ TEST(RealEntityData, BuildDelta_EmptyWhenHistoryBackSeqMismatchesLatest) {
 
 TEST(RealEntityData, BuildSnapshotRefresh_ReflectsOwnerSnapshot) {
   Space space(1);
-  auto* e = space.AddEntity(
-      std::make_unique<CellEntity>(33, 1, space, math::Vector3{0, 0, 0}, math::Vector3{1, 0, 0}));
+  auto* e = space.AddEntity(std::make_unique<CellEntity>(
+      33, uint16_t{1}, space, math::Vector3{0, 0, 0}, math::Vector3{1, 0, 0}));
   auto snap = MakeBlob({0xCA, 0xFE});
   CellEntity::ReplicationFrame f;
   f.event_seq = 7;
@@ -481,8 +482,8 @@ TEST(RealEntityData, ShouldUseSnapshotRefresh_GapTruthTable) {
 
 TEST(RealEntityData, Velocity_StartsZero_AdvancesByDeltaOverDt) {
   Space space(1);
-  auto* e = space.AddEntity(
-      std::make_unique<CellEntity>(40, 1, space, math::Vector3{0, 0, 0}, math::Vector3{1, 0, 0}));
+  auto* e = space.AddEntity(std::make_unique<CellEntity>(
+      40, uint16_t{1}, space, math::Vector3{0, 0, 0}, math::Vector3{1, 0, 0}));
   auto* rd = e->GetRealData();
   EXPECT_FLOAT_EQ(rd->Velocity().x, 0.f);
   rd->UpdateVelocity({0, 0, 0}, 0.1f);  // first sample — still zero.
@@ -493,8 +494,8 @@ TEST(RealEntityData, Velocity_StartsZero_AdvancesByDeltaOverDt) {
 
 TEST(RealEntityData, Velocity_DtZeroResetsSampleWithoutCrash) {
   Space space(1);
-  auto* e = space.AddEntity(
-      std::make_unique<CellEntity>(41, 1, space, math::Vector3{0, 0, 0}, math::Vector3{1, 0, 0}));
+  auto* e = space.AddEntity(std::make_unique<CellEntity>(
+      41, uint16_t{1}, space, math::Vector3{0, 0, 0}, math::Vector3{1, 0, 0}));
   auto* rd = e->GetRealData();
   rd->UpdateVelocity({1, 0, 1}, 0.f);  // dt=0 -> defensive reset, no div-by-zero.
   EXPECT_FLOAT_EQ(rd->Velocity().x, 0.f);
@@ -506,8 +507,8 @@ TEST(RealEntityData, Velocity_DtZeroResetsSampleWithoutCrash) {
 
 TEST(RealEntityData, MarkBroadcastSeqs_AreReadBack) {
   Space space(1);
-  auto* e = space.AddEntity(
-      std::make_unique<CellEntity>(50, 1, space, math::Vector3{0, 0, 0}, math::Vector3{1, 0, 0}));
+  auto* e = space.AddEntity(std::make_unique<CellEntity>(
+      50, uint16_t{1}, space, math::Vector3{0, 0, 0}, math::Vector3{1, 0, 0}));
   auto* rd = e->GetRealData();
   EXPECT_EQ(rd->LastBroadcastEventSeq(), 0u);
   EXPECT_EQ(rd->LastBroadcastVolatileSeq(), 0u);
@@ -523,9 +524,9 @@ TEST(RealEntityData, MarkBroadcastSeqs_AreReadBack) {
 
 TEST(RealGhost, GhostApplyDelta_StaleSeqDropped) {
   Space space(1);
-  auto* e = space.AddEntity(
-      std::make_unique<CellEntity>(CellEntity::GhostTag{}, 100, 1, space, math::Vector3{0, 0, 0},
-                                   math::Vector3{1, 0, 0}, FakeChannel(0xAA)));
+  auto* e = space.AddEntity(std::make_unique<CellEntity>(
+      CellEntity::GhostTag{}, 100, uint16_t{1}, space, math::Vector3{0, 0, 0},
+      math::Vector3{1, 0, 0}, FakeChannel(0xAA)));
   auto d = MakeBlob({0xAB});
   // Apply at seq=5.
   e->GhostApplyDelta(5, std::span<const std::byte>(d));
@@ -542,9 +543,9 @@ TEST(RealGhost, GhostApplyDelta_StaleSeqDropped) {
 
 TEST(RealGhost, GhostApplyDelta_OutOfOrderDropped) {
   Space space(1);
-  auto* e = space.AddEntity(
-      std::make_unique<CellEntity>(CellEntity::GhostTag{}, 101, 1, space, math::Vector3{0, 0, 0},
-                                   math::Vector3{1, 0, 0}, FakeChannel(0xAA)));
+  auto* e = space.AddEntity(std::make_unique<CellEntity>(
+      CellEntity::GhostTag{}, 101, uint16_t{1}, space, math::Vector3{0, 0, 0},
+      math::Vector3{1, 0, 0}, FakeChannel(0xAA)));
   auto d = MakeBlob({0xEF});
   // Apply at seq=5.
   e->GhostApplyDelta(5, std::span<const std::byte>(d));

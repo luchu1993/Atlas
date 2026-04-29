@@ -23,7 +23,8 @@ namespace atlas {
 namespace {
 
 auto MakeReal(Space& s, EntityID id, math::Vector3 pos = {0, 0, 0}) -> CellEntity* {
-  return s.AddEntity(std::make_unique<CellEntity>(id, /*type=*/1, s, pos, math::Vector3{1, 0, 0}));
+  return s.AddEntity(
+      std::make_unique<CellEntity>(id, /*type=*/uint16_t{1}, s, pos, math::Vector3{1, 0, 0}));
 }
 
 // ============================================================================

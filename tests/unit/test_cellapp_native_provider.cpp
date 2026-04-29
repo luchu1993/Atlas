@@ -30,7 +30,7 @@ class CellAppNativeProviderTest : public ::testing::Test {
 
   auto AddEntity(EntityID id, math::Vector3 pos = {0, 0, 0}) -> CellEntity* {
     return space_.AddEntity(
-        std::make_unique<CellEntity>(id, 1, space_, pos, math::Vector3{1, 0, 0}));
+        std::make_unique<CellEntity>(id, uint16_t{1}, space_, pos, math::Vector3{1, 0, 0}));
   }
 };
 
@@ -143,7 +143,7 @@ extern "C" void ProximityRecorder(uint32_t entity_id, int32_t user_arg, uint32_t
 // just-inserted peer crosses the trigger.
 auto MakePeerWithBase(Space& space, EntityID id, math::Vector3 pos, EntityID base_id)
     -> CellEntity* {
-  auto peer = std::make_unique<CellEntity>(id, 1, space, pos, math::Vector3{1, 0, 0});
+  auto peer = std::make_unique<CellEntity>(id, uint16_t{1}, space, pos, math::Vector3{1, 0, 0});
   peer->SetBase(Address{}, base_id);
   return space.AddEntity(std::move(peer));
 }
@@ -314,9 +314,10 @@ TEST_F(CellAppNativeProviderTest, SetNativeCallbacksDispatchRoundtrips) {
 // script can't take the CellApp down.
 
 TEST_F(CellAppNativeProviderTest, SetPositionRejectedOnGhost) {
-  auto* e = space_.AddEntity(std::make_unique<CellEntity>(
-      CellEntity::GhostTag{}, 500, 1, space_, math::Vector3{0, 0, 0}, math::Vector3{1, 0, 0},
-      /*real_channel=*/reinterpret_cast<Channel*>(0xBEEF)));
+  auto* e = space_.AddEntity(
+      std::make_unique<CellEntity>(CellEntity::GhostTag{}, 500, uint16_t{1}, space_,
+                                   math::Vector3{0, 0, 0}, math::Vector3{1, 0, 0},
+                                   /*real_channel=*/reinterpret_cast<Channel*>(0xBEEF)));
   ASSERT_TRUE(e->IsGhost());
   provider_.SetEntityPosition(500, 9.f, 9.f, 9.f);
   // Position unchanged — guard blocked the write.
@@ -325,9 +326,9 @@ TEST_F(CellAppNativeProviderTest, SetPositionRejectedOnGhost) {
 }
 
 TEST_F(CellAppNativeProviderTest, PublishReplicationFrameRejectedOnGhost) {
-  auto* e = space_.AddEntity(
-      std::make_unique<CellEntity>(CellEntity::GhostTag{}, 501, 1, space_, math::Vector3{0, 0, 0},
-                                   math::Vector3{1, 0, 0}, reinterpret_cast<Channel*>(0xBEEF)));
+  auto* e = space_.AddEntity(std::make_unique<CellEntity>(
+      CellEntity::GhostTag{}, 501, uint16_t{1}, space_, math::Vector3{0, 0, 0},
+      math::Vector3{1, 0, 0}, reinterpret_cast<Channel*>(0xBEEF)));
   provider_.PublishReplicationFrame(501, /*event_seq=*/1, /*volatile_seq=*/1, nullptr, 0, nullptr,
                                     0, nullptr, 0, nullptr, 0);
   // Ghost's replication_state_ was never allocated by the provider.
@@ -335,9 +336,9 @@ TEST_F(CellAppNativeProviderTest, PublishReplicationFrameRejectedOnGhost) {
 }
 
 TEST_F(CellAppNativeProviderTest, AddControllersRejectedOnGhost) {
-  auto* e = space_.AddEntity(
-      std::make_unique<CellEntity>(CellEntity::GhostTag{}, 502, 1, space_, math::Vector3{0, 0, 0},
-                                   math::Vector3{1, 0, 0}, reinterpret_cast<Channel*>(0xBEEF)));
+  auto* e = space_.AddEntity(std::make_unique<CellEntity>(
+      CellEntity::GhostTag{}, 502, uint16_t{1}, space_, math::Vector3{0, 0, 0},
+      math::Vector3{1, 0, 0}, reinterpret_cast<Channel*>(0xBEEF)));
   EXPECT_EQ(provider_.AddMoveController(502, 0, 0, 0, 1.f, 0), 0);
   EXPECT_EQ(provider_.AddTimerController(502, 1.f, false, 0), 0);
   EXPECT_EQ(provider_.AddProximityController(502, 5.f, 0), 0);

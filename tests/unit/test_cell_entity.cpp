@@ -28,7 +28,7 @@ auto MakeBlob(std::initializer_list<uint8_t> bytes) -> std::vector<std::byte> {
 TEST(CellEntity, IdentityAndInitialState) {
   Space space(1);
   auto* e = space.AddEntity(std::make_unique<CellEntity>(
-      42, /*type_id=*/7, space, math::Vector3{1, 2, 3}, math::Vector3{0, 0, 1}));
+      42, /*type_id=*/uint16_t{7}, space, math::Vector3{1, 2, 3}, math::Vector3{0, 0, 1}));
   EXPECT_EQ(e->Id(), 42u);
   EXPECT_EQ(e->TypeId(), 7u);
   EXPECT_EQ(e->Position().x, 1.f);
@@ -42,8 +42,8 @@ TEST(CellEntity, IdentityAndInitialState) {
 
 TEST(CellEntity, SetPositionUpdatesRangeNode) {
   Space space(1);
-  auto* e = space.AddEntity(
-      std::make_unique<CellEntity>(1, 1, space, math::Vector3{0, 0, 0}, math::Vector3{1, 0, 0}));
+  auto* e = space.AddEntity(std::make_unique<CellEntity>(
+      1, uint16_t{1}, space, math::Vector3{0, 0, 0}, math::Vector3{1, 0, 0}));
   e->SetPosition(math::Vector3{5, 0, 7});
   EXPECT_FLOAT_EQ(e->Position().x, 5.f);
   EXPECT_FLOAT_EQ(e->Position().z, 7.f);
@@ -53,8 +53,8 @@ TEST(CellEntity, SetPositionUpdatesRangeNode) {
 
 TEST(CellEntity, SetDirectionDoesNotShuffleRangeList) {
   Space space(1);
-  auto* e = space.AddEntity(
-      std::make_unique<CellEntity>(1, 1, space, math::Vector3{5, 0, 5}, math::Vector3{1, 0, 0}));
+  auto* e = space.AddEntity(std::make_unique<CellEntity>(
+      1, uint16_t{1}, space, math::Vector3{5, 0, 5}, math::Vector3{1, 0, 0}));
   const float x_before = e->RangeNode().X();
   e->SetDirection(math::Vector3{0, 0, 1});
   EXPECT_FLOAT_EQ(e->Direction().z, 1.f);
@@ -64,8 +64,8 @@ TEST(CellEntity, SetDirectionDoesNotShuffleRangeList) {
 
 TEST(CellEntity, BaseMailboxPlumbing) {
   Space space(1);
-  auto* e = space.AddEntity(
-      std::make_unique<CellEntity>(1, 1, space, math::Vector3{0, 0, 0}, math::Vector3{1, 0, 0}));
+  auto* e = space.AddEntity(std::make_unique<CellEntity>(
+      1, uint16_t{1}, space, math::Vector3{0, 0, 0}, math::Vector3{1, 0, 0}));
   Address addr(0x7F000001u, 1234);
   e->SetBase(addr, /*base_id=*/987);
   EXPECT_EQ(e->BaseAddr().Ip(), 0x7F000001u);
@@ -79,8 +79,8 @@ TEST(CellEntity, BaseMailboxPlumbing) {
 
 TEST(CellEntity, FirstEventFrameSeedsReplicationState) {
   Space space(1);
-  auto* e = space.AddEntity(
-      std::make_unique<CellEntity>(1, 1, space, math::Vector3{0, 0, 0}, math::Vector3{1, 0, 0}));
+  auto* e = space.AddEntity(std::make_unique<CellEntity>(
+      1, uint16_t{1}, space, math::Vector3{0, 0, 0}, math::Vector3{1, 0, 0}));
 
   CellEntity::ReplicationFrame frame;
   frame.event_seq = 1;
@@ -103,8 +103,8 @@ TEST(CellEntity, FirstEventFrameSeedsReplicationState) {
 
 TEST(CellEntity, HistoryWindowBounded) {
   Space space(1);
-  auto* e = space.AddEntity(
-      std::make_unique<CellEntity>(1, 1, space, math::Vector3{0, 0, 0}, math::Vector3{1, 0, 0}));
+  auto* e = space.AddEntity(std::make_unique<CellEntity>(
+      1, uint16_t{1}, space, math::Vector3{0, 0, 0}, math::Vector3{1, 0, 0}));
 
   // Publish more frames than the window size; old ones must be evicted
   // so the deque stays bounded.
@@ -125,8 +125,8 @@ TEST(CellEntity, HistoryWindowBounded) {
 
 TEST(CellEntity, StaleEventSeqIsIgnored) {
   Space space(1);
-  auto* e = space.AddEntity(
-      std::make_unique<CellEntity>(1, 1, space, math::Vector3{0, 0, 0}, math::Vector3{1, 0, 0}));
+  auto* e = space.AddEntity(std::make_unique<CellEntity>(
+      1, uint16_t{1}, space, math::Vector3{0, 0, 0}, math::Vector3{1, 0, 0}));
   CellEntity::ReplicationFrame f1;
   f1.event_seq = 5;
   e->PublishReplicationFrame(f1, MakeBlob({0x01}), {});
@@ -145,8 +145,8 @@ TEST(CellEntity, StaleEventSeqIsIgnored) {
 
 TEST(CellEntity, VolatileFrameUpdatesPosition) {
   Space space(1);
-  auto* e = space.AddEntity(
-      std::make_unique<CellEntity>(1, 1, space, math::Vector3{0, 0, 0}, math::Vector3{1, 0, 0}));
+  auto* e = space.AddEntity(std::make_unique<CellEntity>(
+      1, uint16_t{1}, space, math::Vector3{0, 0, 0}, math::Vector3{1, 0, 0}));
 
   CellEntity::ReplicationFrame frame;
   frame.volatile_seq = 1;
@@ -167,8 +167,8 @@ TEST(CellEntity, VolatileFrameUpdatesPosition) {
 
 TEST(CellEntity, CombinedFrameAdvancesBothSeqs) {
   Space space(1);
-  auto* e = space.AddEntity(
-      std::make_unique<CellEntity>(1, 1, space, math::Vector3{0, 0, 0}, math::Vector3{1, 0, 0}));
+  auto* e = space.AddEntity(std::make_unique<CellEntity>(
+      1, uint16_t{1}, space, math::Vector3{0, 0, 0}, math::Vector3{1, 0, 0}));
 
   CellEntity::ReplicationFrame frame;
   frame.event_seq = 1;
@@ -183,8 +183,8 @@ TEST(CellEntity, CombinedFrameAdvancesBothSeqs) {
 
 TEST(CellEntity, ZeroZeroFrameIsNoop) {
   Space space(1);
-  auto* e = space.AddEntity(
-      std::make_unique<CellEntity>(1, 1, space, math::Vector3{0, 0, 0}, math::Vector3{1, 0, 0}));
+  auto* e = space.AddEntity(std::make_unique<CellEntity>(
+      1, uint16_t{1}, space, math::Vector3{0, 0, 0}, math::Vector3{1, 0, 0}));
   CellEntity::ReplicationFrame frame;  // both seqs default zero
   e->PublishReplicationFrame(frame, {}, {});
   // State is still initialised (emplace happens regardless) but no

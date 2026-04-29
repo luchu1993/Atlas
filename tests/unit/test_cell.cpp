@@ -13,8 +13,8 @@ namespace atlas {
 namespace {
 
 auto MakeRealEntity(Space& s, EntityID id) -> CellEntity* {
-  return s.AddEntity(std::make_unique<CellEntity>(id, /*type_id=*/1, s, math::Vector3{0, 0, 0},
-                                                  math::Vector3{1, 0, 0}));
+  return s.AddEntity(std::make_unique<CellEntity>(id, /*type_id=*/uint16_t{1}, s,
+                                                  math::Vector3{0, 0, 0}, math::Vector3{1, 0, 0}));
 }
 
 TEST(Cell, StoresBoundsAndId) {

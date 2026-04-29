@@ -49,7 +49,7 @@ auto BuildTwoCellTopology(Space& space, const Address& self_addr, const Address&
 
 auto MakeReal(Space& space, EntityID id, math::Vector3 pos) -> CellEntity* {
   return space.AddEntity(
-      std::make_unique<CellEntity>(id, /*type=*/1, space, pos, math::Vector3{1, 0, 0}));
+      std::make_unique<CellEntity>(id, /*type=*/uint16_t{1}, space, pos, math::Vector3{1, 0, 0}));
 }
 
 // ============================================================================
@@ -202,7 +202,7 @@ TEST(GhostMaintainer, GhostEntitiesAreSkipped) {
 
   // Put a Ghost right next to the boundary; maintainer must not try to
   // create ghosts-of-a-ghost on the peer side.
-  space.AddEntity(std::make_unique<CellEntity>(CellEntity::GhostTag{}, 99, 1, space,
+  space.AddEntity(std::make_unique<CellEntity>(CellEntity::GhostTag{}, 99, uint16_t{1}, space,
                                                math::Vector3{-50, 0, 0}, math::Vector3{1, 0, 0},
                                                FakeChannel(0xAA)));
   std::unordered_map<Address, Channel*> peers;
