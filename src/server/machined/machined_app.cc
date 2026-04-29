@@ -281,7 +281,13 @@ void MachinedApp::OnListenerRegister(const Address& /*src*/, Channel* ch,
       notif.internal_addr = entry.internal_addr;
       notif.external_addr = entry.external_addr;
       notif.pid = entry.pid;
-      (void)ch->SendMessage(notif);
+      if (auto r = ch->SendMessage(notif); !r) {
+        // Snapshot replay on Listener (re-)register; loss means listener
+        // never learns about pre-existing peer until the next live
+        // BirthNotification — could be a long wait.
+        ATLAS_LOG_WARNING("Machined: BirthNotification snapshot send failed for {} (pid={}): {}",
+                          entry.name, entry.pid, r.Error().Message());
+      }
     }
   }
 }

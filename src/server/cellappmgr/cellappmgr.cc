@@ -135,7 +135,12 @@ void CellAppMgr::OnRegisterCellApp(const Address& src, Channel* ch,
                       kInternalAddr.Port());
     cellappmgr::RegisterCellAppAck ack;
     ack.success = false;
-    if (ch != nullptr) (void)ch->SendMessage(ack);
+    if (ch != nullptr) {
+      if (auto r = ch->SendMessage(ack); !r) {
+        ATLAS_LOG_WARNING("CellAppMgr: rejection ack send failed to {}: {}",
+                          kInternalAddr.ToString(), r.Error().Message());
+      }
+    }
     return;
   }
 
@@ -149,7 +154,12 @@ void CellAppMgr::OnRegisterCellApp(const Address& src, Channel* ch,
         kMaxCellAppAppId, kInternalAddr.Ip(), kInternalAddr.Port());
     cellappmgr::RegisterCellAppAck ack;
     ack.success = false;
-    if (ch != nullptr) (void)ch->SendMessage(ack);
+    if (ch != nullptr) {
+      if (auto r = ch->SendMessage(ack); !r) {
+        ATLAS_LOG_WARNING("CellAppMgr: pool-exhausted rejection ack send failed to {}: {}",
+                          kInternalAddr.ToString(), r.Error().Message());
+      }
+    }
     return;
   }
 
@@ -165,7 +175,14 @@ void CellAppMgr::OnRegisterCellApp(const Address& src, Channel* ch,
   ack.success = true;
   ack.app_id = app_id;
   ack.game_time = GameTime();
-  if (ch != nullptr) (void)ch->SendMessage(ack);
+  if (ch != nullptr) {
+    if (auto r = ch->SendMessage(ack); !r) {
+      // Cellapp blocks until it sees this ack — drop ⇒ orphaned cellapp
+      // until the registry's reconnect loop fires.
+      ATLAS_LOG_WARNING("CellAppMgr: success-ack send failed to {} (app_id={}): {}",
+                        kInternalAddr.ToString(), app_id, r.Error().Message());
+    }
+  }
 
   ATLAS_LOG_INFO("CellAppMgr: CellApp registered app_id={} internal={}:{}", app_id,
                  kInternalAddr.Ip(), kInternalAddr.Port());
@@ -216,9 +233,18 @@ void CellAppMgr::OnCreateSpaceRequest(const Address& src, Channel* ch,
     // Fall back to `ch` if reply_addr is default-constructed.
     if (msg.reply_addr.Port() != 0) {
       auto reply_ch = Network().ConnectRudpNocwnd(msg.reply_addr);
-      if (reply_ch) (void)(*reply_ch)->SendMessage(reply);
+      if (reply_ch) {
+        if (auto r = (*reply_ch)->SendMessage(reply); !r) {
+          ATLAS_LOG_WARNING(
+              "CellAppMgr: SpaceCreatedResult send failed (space_id={} via reply_addr {}): {}",
+              reply.space_id, msg.reply_addr.ToString(), r.Error().Message());
+        }
+      }
     } else if (ch != nullptr) {
-      (void)ch->SendMessage(reply);
+      if (auto r = ch->SendMessage(reply); !r) {
+        ATLAS_LOG_WARNING("CellAppMgr: SpaceCreatedResult send failed (space_id={}, src {}): {}",
+                          reply.space_id, src.ToString(), r.Error().Message());
+      }
     }
     (void)src;
   };

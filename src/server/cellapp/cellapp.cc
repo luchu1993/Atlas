@@ -182,7 +182,12 @@ auto CellApp::Init(int argc, char* argv[]) -> bool {
         cellappmgr_channel_ = static_cast<Channel*>(*ch);
         cellappmgr::RegisterCellApp reg;
         reg.internal_addr = Network().RudpAddress();
-        (void)cellappmgr_channel_->SendMessage(reg);
+        if (auto r = cellappmgr_channel_->SendMessage(reg); !r) {
+          // No ack ⇒ this CellApp orphaned (mgr won't route load
+          // queries / offloads to us) until next reconnect attempt.
+          ATLAS_LOG_WARNING("CellApp: RegisterCellApp send failed to mgr {}: {}",
+                            n.internal_addr.ToString(), r.Error().Message());
+        }
         ATLAS_LOG_INFO("CellApp: registering with CellAppMgr at {}:{}", n.internal_addr.Ip(),
                        n.internal_addr.Port());
       },
@@ -541,7 +546,12 @@ void CellApp::OnCreateCellEntity(const Address& src, Channel* ch,
     ack.base_entity_id = msg.base_entity_id;
     ack.cell_entity_id = cell_id;
     ack.cell_addr = Network().RudpAddress();
-    (void)ch->SendMessage(ack);
+    if (auto r = ch->SendMessage(ack); !r) {
+      // BaseApp times out and resends CreateCellEntity; the warn helps
+      // distinguish a dropped ack from a genuinely slow create.
+      ATLAS_LOG_WARNING("CellApp: CellEntityCreated ack send failed, base_entity_id={} to {}: {}",
+                        msg.base_entity_id, src.ToString(), r.Error().Message());
+    }
   }
 
   // Hydrate the C# entity object. The restore callback deserializes the
@@ -1379,7 +1389,11 @@ void CellApp::SendInformCellLoad() {
   msg.app_id = app_id_;
   msg.load = persistent_load_;
   msg.entity_count = count;
-  (void)cellappmgr_channel_->SendMessage(msg);
+  if (auto r = cellappmgr_channel_->SendMessage(msg); !r) {
+    // Consistently dropped reports leave mgr's load view stale,
+    // skewing balance decisions toward this overloaded host.
+    ATLAS_LOG_WARNING("CellApp: InformCellLoad send failed: {}", r.Error().Message());
+  }
 
   last_sent_load_ = persistent_load_;
   last_sent_entity_count_ = count;

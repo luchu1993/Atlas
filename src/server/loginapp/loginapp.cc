@@ -374,7 +374,14 @@ auto LoginApp::HandleLoginCoro(uint64_t client_channel_id, Address client_addr,
           login::CancelPrepareLogin cancel;
           cancel.request_id = rid;
           cancel.dbid = dbid;
-          (void)(*cancel_ch)->SendMessage(cancel);
+          if (auto r = (*cancel_ch)->SendMessage(cancel); !r) {
+            // Cleanup best-effort, but BaseApp leaks pending entry until
+            // its kPendingTimeout expires.  Warn so leaked entries don't
+            // look like a slow-cleanup bug.
+            ATLAS_LOG_WARNING(
+                "LoginApp: CancelPrepareLogin send failed (request_id={}, dbid={}, baseapp {}): {}",
+                rid, dbid, baseapp_addr.ToString(), r.Error().Message());
+          }
         } else {
           ATLAS_LOG_WARNING(
               "LoginApp: failed to send CancelPrepareLogin request_id={} to "

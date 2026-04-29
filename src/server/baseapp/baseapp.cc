@@ -264,7 +264,10 @@ auto BaseApp::Init(int argc, char* argv[]) -> bool {
           reg.internal_addr = Network().RudpAddress();
           reg.external_addr =
               Address(Network().RudpAddress().Ip(), external_network_.RudpAddress().Port());
-          (void)baseappmgr_channel_->SendMessage(reg);
+          if (auto r = baseappmgr_channel_->SendMessage(reg); !r) {
+            // No ack ⇒ baseapp orphaned until reconnect retry.
+            ATLAS_LOG_WARNING("BaseApp: RegisterBaseApp send failed: {}", r.Error().Message());
+          }
         }
       },
       nullptr);
@@ -1520,7 +1523,12 @@ void BaseApp::FlushRemoteForceLogoffAcks(EntityID entity_id, bool success) {
       baseapp::ForceLogoffAck ack;
       ack.request_id = pending_ack.request_id;
       ack.success = success;
-      (void)reply_ch->SendMessage(ack);
+      if (auto r = reply_ch->SendMessage(ack); !r) {
+        // Login flow stalls until requester's timeout fires.
+        ATLAS_LOG_WARNING("BaseApp: ForceLogoffAck send failed (request_id={}) to {}: {}",
+                          pending_ack.request_id, pending_ack.reply_addr.ToString(),
+                          r.Error().Message());
+      }
     }
   }
 
@@ -1538,7 +1546,11 @@ void BaseApp::FlushAllRemoteForceLogoffAcks(bool success) {
         baseapp::ForceLogoffAck ack;
         ack.request_id = pending_ack.request_id;
         ack.success = success;
-        (void)reply_ch->SendMessage(ack);
+        if (auto r = reply_ch->SendMessage(ack); !r) {
+          ATLAS_LOG_WARNING(
+              "BaseApp: ForceLogoffAck flush-all send failed (request_id={}) to {}: {}",
+              pending_ack.request_id, pending_ack.reply_addr.ToString(), r.Error().Message());
+        }
       }
     }
   }
@@ -1805,7 +1817,12 @@ void BaseApp::DoGiveClientToLocal(EntityID src_id, EntityID dest_id) {
     baseapp::EntityTransferred notify;
     notify.new_entity_id = dest_id;
     notify.new_type_id = dst_proxy->TypeId();
-    (void)client_ch->SendMessage(notify);
+    if (auto r = client_ch->SendMessage(notify); !r) {
+      // Without this, the client still thinks src_id is its entity —
+      // every subsequent ClientCellRpc targets a detached Proxy.
+      ATLAS_LOG_WARNING("BaseApp: EntityTransferred notify send failed, dest_id={} client {}: {}",
+                        dest_id, client_ch->RemoteAddress().ToString(), r.Error().Message());
+    }
   }
 }
 
@@ -1878,7 +1895,14 @@ auto BaseApp::CreateBaseEntityFromScript(uint16_t type_id, SpaceID space_id) -> 
       if (auto* ent_new = entity_mgr_.Find(kEid); ent_new) {
         msg.script_init_data = ent_new->CellBackupData();
       }
-      (void)cell_ch->SendMessage(msg);
+      if (auto r = cell_ch->SendMessage(msg); !r) {
+        // No retry — the entity exists locally but its cell-side never
+        // came up.  Surface so script-driven create regressions are
+        // visible.
+        ATLAS_LOG_WARNING(
+            "BaseApp: script-driven CreateCellEntity send failed (entity_id={}, type_id={}): {}",
+            kEid, type_id, r.Error().Message());
+      }
       ATLAS_LOG_INFO("BaseApp: sent CreateCellEntity for entity={} type={} space={} to {}", kEid,
                      type_id, effective_space_id, sorted_peers[cell_index].first.ToString());
     }
@@ -1905,7 +1929,12 @@ void BaseApp::DoGiveClientToRemote(EntityID src_id, EntityID /*dest_id*/,
   baseapp::AcceptClient accept;
   accept.dest_entity_id = src_id;
   accept.session_key = src_proxy->GetSessionKey();
-  (void)(*dest_ch_result)->SendMessage(accept);
+  if (auto r = (*dest_ch_result)->SendMessage(accept); !r) {
+    // We're about to UnbindClient on src; if dest never sees AcceptClient
+    // the client is left without an owner — visible UX bug.
+    ATLAS_LOG_WARNING("BaseApp: AcceptClient send failed (src_id={}, dest baseapp {}): {}", src_id,
+                      dest_baseapp.ToString(), r.Error().Message());
+  }
 
   UnbindClient(src_id);
 }
@@ -2867,7 +2896,12 @@ auto BaseApp::RequestCreateSpace(SpaceID space_id, SpaceCreatedCallback callback
   msg.space_id = space_id;
   msg.request_id = request_id;
   msg.reply_addr = Network().RudpAddress();
-  (void)cellappmgr_channel_->SendMessage(msg);
+  if (auto r = cellappmgr_channel_->SendMessage(msg); !r) {
+    // pending_space_creates_ entry expires on timeout; warn so user-
+    // visible space create stalls don't look mysterious.
+    ATLAS_LOG_WARNING("BaseApp: CreateSpaceRequest send failed (space_id={}, request_id={}): {}",
+                      space_id, request_id, r.Error().Message());
+  }
   return request_id;
 }
 
