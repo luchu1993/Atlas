@@ -15,6 +15,6 @@
     </struct>
   </types>
   <properties>
-    <property name="party" type="list&lt;StatsBlock&gt;" scope="all_clients" />
+    <property name="party" type="list[StatsBlock]" scope="all_clients" />
   </properties>
 </entity>

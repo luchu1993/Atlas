@@ -302,7 +302,7 @@ internal static class PropertyCodec
 
     // ---- List-property emit helpers (P1 integral-sync path) ------------
     //
-    // list<T> can't fit into a single Write/Read expression — the codec
+    // list[T] can't fit into a single Write/Read expression — the codec
     // needs a count prefix + a loop. The entity's property getter
     // (`Titles`, not `_titles`) is used on both sides so lazy-init
     // happens exactly once per entity even if a delta arrives before any

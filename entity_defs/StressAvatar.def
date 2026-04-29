@@ -29,25 +29,25 @@
     <property name="mainWeapon" type="StressWeapon" scope="all_clients" />
 
     <!-- (3) List of scalar — op-log baseline. -->
-    <property name="scores" type="list&lt;int32&gt;" scope="all_clients" />
+    <property name="scores" type="list[int32]" scope="all_clients" />
 
     <!-- (4) Dict of scalar — kDictSet / kDictErase coverage. -->
-    <property name="resists" type="dict&lt;string,int32&gt;" scope="all_clients" />
+    <property name="resists" type="dict[string,int32]" scope="all_clients" />
 
     <!-- (5) Nested container: list of list — auto dirty-bubble path
          on the outer container (P2d). -->
-    <property name="combos" type="list&lt;list&lt;int32&gt;&gt;" scope="all_clients" />
+    <property name="combos" type="list[list[int32]]" scope="all_clients" />
 
     <!-- (6) Nested container: dict whose value is a list — distinct
          from list-of-list. own_client because loadouts are private. -->
-    <property name="loadouts" type="dict&lt;string,list&lt;int32&gt;&gt;" scope="own_client" />
+    <property name="loadouts" type="dict[string,list[int32]]" scope="own_client" />
 
     <!-- (7) List of struct — combines struct field-level sync with
          op-log container ops. -->
-    <property name="buffs" type="list&lt;StressBuff&gt;" scope="all_clients" />
+    <property name="buffs" type="list[StressBuff]" scope="all_clients" />
 
     <!-- (8) Dict of struct — value-side struct sync inside dict ops. -->
-    <property name="spellSlots" type="dict&lt;string,StressWeapon&gt;" scope="own_client" />
+    <property name="spellSlots" type="dict[string,StressWeapon]" scope="own_client" />
   </properties>
 
   <cell_methods>
@@ -65,13 +65,13 @@
 
     <!-- (R3) Container arg. -->
     <method name="SubmitScores" exposed="own_client">
-      <arg name="batch" type="list&lt;int32&gt;" />
+      <arg name="batch" type="list[int32]" />
     </method>
 
     <!-- (R4) Mixed-type RPC: string + container. -->
     <method name="UpdateLoadout" exposed="own_client">
       <arg name="name"  type="string" />
-      <arg name="items" type="list&lt;int32&gt;" />
+      <arg name="items" type="list[int32]" />
     </method>
 
     <!-- (R5) Struct arg. -->
@@ -81,7 +81,7 @@
 
     <!-- (R6) List-of-struct arg — heaviest single-message case. -->
     <method name="ApplyBuffs" exposed="own_client">
-      <arg name="buffs" type="list&lt;StressBuff&gt;" />
+      <arg name="buffs" type="list[StressBuff]" />
     </method>
   </cell_methods>
 
@@ -100,7 +100,7 @@
 
     <!-- (C3) Server→client list push. -->
     <method name="OnScoresSnapshot">
-      <arg name="scores" type="list&lt;int32&gt;" />
+      <arg name="scores" type="list[int32]" />
     </method>
   </client_methods>
 

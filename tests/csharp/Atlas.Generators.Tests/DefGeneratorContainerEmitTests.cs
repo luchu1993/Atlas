@@ -248,7 +248,7 @@ public partial class Avatar : ServerEntity
     {
         var xml = @"<entity name=""Avatar"">
   <properties>
-    <property name=""titles"" type=""list&lt;int32&gt;"" scope=""own_client"" max_size=""128"" />
+    <property name=""titles"" type=""list[int32]"" scope=""own_client"" max_size=""128"" />
   </properties>
 </entity>";
         var result = Run(MinimalUserSource, xml);
@@ -267,7 +267,7 @@ public partial class Avatar : ServerEntity
     {
         var xml = @"<entity name=""Avatar"">
   <properties>
-    <property name=""counters"" type=""dict&lt;string,int32&gt;"" scope=""own_client"" max_size=""64"" />
+    <property name=""counters"" type=""dict[string,int32]"" scope=""own_client"" max_size=""64"" />
   </properties>
 </entity>";
         var result = Run(MinimalUserSource, xml);
@@ -327,7 +327,7 @@ public partial class Avatar : ServerEntity
     {
         var xml = @"<entity name=""Grid"">
   <properties>
-    <property name=""rows"" type=""list&lt;list&lt;int32&gt;&gt;"" scope=""own_client"" />
+    <property name=""rows"" type=""list[list[int32]]"" scope=""own_client"" />
   </properties>
 </entity>";
         var userSource = MinimalUserSource.Replace("Avatar", "Grid");

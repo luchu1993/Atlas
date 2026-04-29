@@ -207,7 +207,7 @@ TEST_F(RegistryStructTest, ResolveByName) {
 }
 
 TEST_F(RegistryStructTest, MaxDepthEnforced) {
-  // Build a list<list<list<...>>> with kMaxDataTypeDepth+1 nesting levels.
+  // Build a list[list[list[...]]] with kMaxDataTypeDepth+1 nesting levels.
   // The RegisterStruct decoder must reject the blob.
   BinaryWriter w;
   w.Write<uint16_t>(99);
@@ -296,7 +296,7 @@ TEST_F(RegistryStructTest, ClearWipesStructs) {
 
 TEST_F(RegistryStructTest, EmptyStructIsAccepted) {
   // A zero-field struct is legal — callers might use it as a tag / marker
-  // in a dict<string, TagStruct> "membership" construct. The decoder must
+  // in a dict[string, TagStruct] "membership" construct. The decoder must
   // round-trip it cleanly; the original coverage skipped this case.
   auto blob = MakeStructBlob(/*struct_id=*/100, "Empty", {});
   ASSERT_TRUE(
@@ -309,7 +309,7 @@ TEST_F(RegistryStructTest, EmptyStructIsAccepted) {
 }
 
 TEST_F(RegistryStructTest, FieldOfTypeListOfStructRef) {
-  // `list<ItemStack>` as a struct field — lands as kList(elem=kStruct).
+  // `list[ItemStack]` as a struct field — lands as kList(elem=kStruct).
   // This is the shape that the Inventory property in the .def docs uses;
   // the P1 ObservableList<ItemStack> emitter reads the elem kind off of
   // this shape and must find the resolved struct_id.
@@ -340,7 +340,7 @@ TEST_F(RegistryStructTest, FieldOfTypeListOfStructRef) {
 }
 
 TEST_F(RegistryStructTest, FieldOfTypeDictStringToStructRef) {
-  // `dict<string, ItemStack>` — the `equipped` shape from the docs.
+  // `dict[string, ItemStack]` — the `equipped` shape from the docs.
   // Verifies kDict(key=scalar, value=struct) decodes both sides and
   // surfaces a resolvable struct_id on the value side.
   auto inner = MakeStructBlob(

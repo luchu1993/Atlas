@@ -25,7 +25,7 @@ public interface IObservableChild
 }
 
 // Symmetric hook for generated structs that carry Observable container
-// fields (e.g., a struct with a `list<int>` field). When such a struct
+// fields (e.g., a struct with a `list[int]` field). When such a struct
 // lands in an outer ObservableList slot, the outer calls
 // `__RebindObservableFields` so the inner containers' dirty path bubbles
 // up to the outer slot. Struct is a value type but its container fields

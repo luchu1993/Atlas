@@ -10,14 +10,14 @@ public enum OpKind : byte
     // Scalar / struct-whole property update at a specific leaf index.
     Set = 0,
 
-    // list<T>: remove [start, end) then insert N values at start. A Set
+    // list[T]: remove [start, end) then insert N values at start. A Set
     // is the more compact encoding for in-place index assignment.
     ListSplice = 1,
 
-    // dict<K,V>: insert-or-overwrite key → value.
+    // dict[K,V]: insert-or-overwrite key → value.
     DictSet = 2,
 
-    // dict<K,V>: remove key.
+    // dict[K,V]: remove key.
     DictErase = 3,
 
     // Container-wide reset. Absorbs prior ops on the sender so the wire

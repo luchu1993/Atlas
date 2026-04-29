@@ -147,7 +147,7 @@ TEST_F(RegistryContainerPropTest, ScalarOnlyTypeStillWorks) {
 }
 
 TEST_F(RegistryContainerPropTest, ListPropertyDecoded) {
-  // list<int32>: body = one nested DataTypeRef (the elem), which is a
+  // list[int32]: body = one nested DataTypeRef (the elem), which is a
   // scalar and thus just its kind byte.
   auto blob = MakeTypeBlob("Avatar", 10,
                            {
@@ -177,7 +177,7 @@ TEST_F(RegistryContainerPropTest, ListPropertyDecoded) {
 }
 
 TEST_F(RegistryContainerPropTest, DictPropertyDecoded) {
-  // dict<string,int32>: body = two nested DataTypeRefs (key, then value).
+  // dict[string,int32]: body = two nested DataTypeRefs (key, then value).
   auto blob = MakeTypeBlob(
       "Avatar", 11,
       {
@@ -282,7 +282,7 @@ TEST_F(RegistryContainerPropTest, InvariantRejectsTruncatedContainerTail) {
 TEST_F(RegistryContainerPropTest, NestedListOfListProperty) {
   // Exercises the property-tail path on a deep type. The OUTER list is the
   // tail body (no leading kind), its elem is a full nested DataTypeRef —
-  // list<int32> — with its own kind byte.
+  // list[int32] — with its own kind byte.
   auto blob = MakeTypeBlob("Grid", 40,
                            {
                                PropSpec{.name = "rows",

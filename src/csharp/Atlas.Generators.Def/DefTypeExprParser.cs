@@ -4,11 +4,12 @@ using Microsoft.CodeAnalysis;
 namespace Atlas.Generators.Def;
 
 // Parses the type-expression grammar embedded in a .def <property type="...">
-// or <field type="..."> attribute:
+// or <field type="..."> attribute. Container delimiters are square brackets
+// so the .def XML doesn't need &lt; / &gt; escaping:
 //
 //   <type-expr> := <scalar>
-//                | "list<" <type-expr> ">"
-//                | "dict<" <key-type> "," <type-expr> ">"
+//                | "list[" <type-expr> "]"
+//                | "dict[" <key-type> "," <type-expr> "]"
 //                | <struct-or-alias-name>
 //   <scalar>    := bool | int8 | uint8 | int16 | uint16
 //                | int32 | uint32 | int64 | uint64
@@ -49,9 +50,9 @@ internal static class DefTypeExprParser
             return null;
         }
 
-        // Case-insensitive `list<...>` / `dict<...,...>` prefix matching so
+        // Case-insensitive `list[...]` / `dict[...,...]` prefix matching so
         // .def authors don't trip over capitalisation.
-        if (HasPrefixIgnoreCase(trimmed, "list<") && trimmed.EndsWith(">"))
+        if (HasPrefixIgnoreCase(trimmed, "list[") && trimmed.EndsWith("]"))
         {
             var inner = trimmed.Substring(5, trimmed.Length - 6);
             var elem = ParseInner(inner, depth + 1, reportDiagnostic);
@@ -59,7 +60,7 @@ internal static class DefTypeExprParser
             return new DataTypeRefModel { Kind = PropertyDataKind.List, Elem = elem };
         }
 
-        if (HasPrefixIgnoreCase(trimmed, "dict<") && trimmed.EndsWith(">"))
+        if (HasPrefixIgnoreCase(trimmed, "dict[") && trimmed.EndsWith("]"))
         {
             var inner = trimmed.Substring(5, trimmed.Length - 6);
             var commaIdx = FindTopLevelComma(inner);
@@ -67,7 +68,7 @@ internal static class DefTypeExprParser
             {
                 reportDiagnostic?.Invoke(Diagnostic.Create(
                     DefDiagnosticDescriptors.DEF009, Location.None, text,
-                    "dict<K,V> requires exactly one top-level comma"));
+                    "dict[K,V] requires exactly one top-level comma"));
                 return null;
             }
             var keyText = inner.Substring(0, commaIdx);
@@ -93,7 +94,7 @@ internal static class DefTypeExprParser
 
         // Anything else is assumed to be a struct or alias name; DefLinker
         // will reject unknowns. Names follow the usual XML identifier rules
-        // so containing "<" / "," / whitespace would have landed in a
+        // so containing "[" / "," / whitespace would have landed in a
         // container branch above — if we get here with those chars, the
         // expression is malformed.
         if (ContainsReservedChar(trimmed))
@@ -123,8 +124,8 @@ internal static class DefTypeExprParser
         for (int i = 0; i < inner.Length; ++i)
         {
             char c = inner[i];
-            if (c == '<') depth++;
-            else if (c == '>') depth--;
+            if (c == '[') depth++;
+            else if (c == ']') depth--;
             else if (c == ',' && depth == 0) return i;
         }
         return -1;
@@ -169,7 +170,7 @@ internal static class DefTypeExprParser
     {
         foreach (var c in s)
         {
-            if (c == '<' || c == '>' || c == ',' || char.IsWhiteSpace(c)) return true;
+            if (c == '[' || c == ']' || c == ',' || char.IsWhiteSpace(c)) return true;
         }
         return false;
     }

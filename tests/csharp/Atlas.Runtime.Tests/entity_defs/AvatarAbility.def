@@ -15,7 +15,7 @@
          which uses PropertyCodec's element path and produces plain
          List&lt;int&gt; on the receive side. -->
     <method name="ApplyTags" exposed="own_client">
-      <arg name="tags" type="list&lt;int32&gt;" />
+      <arg name="tags" type="list[int32]" />
     </method>
 
     <!-- EquipTestWeapon: struct arg. TestWeapon is declared in the test
@@ -28,7 +28,7 @@
     <!-- ApplyKv: dict arg. Exercises the dict-arg path on top of the
          dict property coverage already in place. -->
     <method name="ApplyKv" exposed="own_client">
-      <arg name="kv" type="dict&lt;string,int32&gt;" />
+      <arg name="kv" type="dict[string,int32]" />
     </method>
   </base_methods>
 </component>

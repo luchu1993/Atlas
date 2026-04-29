@@ -319,7 +319,7 @@ internal static class PropertiesEmitter
         sb.AppendLine($"    public {csType} {propName} => {backing} ??= new({markDirty});");
     }
 
-    // For list<FieldStruct>, emit `<PropName>At(int)` returning the
+    // For list[FieldStruct], emit `<PropName>At(int)` returning the
     // generated ItemAt that lets scripts mutate one struct field in
     // place via `entity.PartyAt(0).Hp = 5`. Allocates per call (~24 B);
     // a shared per-entity cache would race when scripts reference two

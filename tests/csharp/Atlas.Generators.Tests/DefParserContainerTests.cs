@@ -51,7 +51,7 @@ public class DefParserContainerTests
     [Fact]
     public void TypeExpr_ListOfInt32()
     {
-        var t = ParseExpr("list<int32>", out var diags)!;
+        var t = ParseExpr("list[int32]", out var diags)!;
         Assert.Empty(diags);
         Assert.Equal(PropertyDataKind.List, t.Kind);
         Assert.NotNull(t.Elem);
@@ -61,7 +61,7 @@ public class DefParserContainerTests
     [Fact]
     public void TypeExpr_DictStringToInt32()
     {
-        var t = ParseExpr("dict<string,int32>", out var diags)!;
+        var t = ParseExpr("dict[string,int32]", out var diags)!;
         Assert.Empty(diags);
         Assert.Equal(PropertyDataKind.Dict, t.Kind);
         Assert.NotNull(t.Key);
@@ -73,7 +73,7 @@ public class DefParserContainerTests
     [Fact]
     public void TypeExpr_NestedListOfList()
     {
-        var t = ParseExpr("list<list<int32>>", out var diags)!;
+        var t = ParseExpr("list[list[int32]]", out var diags)!;
         Assert.Empty(diags);
         Assert.Equal(PropertyDataKind.List, t.Kind);
         Assert.Equal(PropertyDataKind.List, t.Elem!.Kind);
@@ -83,7 +83,7 @@ public class DefParserContainerTests
     [Fact]
     public void TypeExpr_DictValueCanBeContainer()
     {
-        var t = ParseExpr("dict<uint32,list<int32>>", out var diags)!;
+        var t = ParseExpr("dict[uint32,list[int32]]", out var diags)!;
         Assert.Empty(diags);
         Assert.Equal(PropertyDataKind.Dict, t.Kind);
         Assert.Equal(PropertyDataKind.UInt32, t.Key!.Kind);
@@ -106,7 +106,7 @@ public class DefParserContainerTests
     [Fact]
     public void TypeExpr_MalformedDictMissingComma()
     {
-        var t = ParseExpr("dict<string>", out var diags);
+        var t = ParseExpr("dict[string]", out var diags);
         Assert.Null(t);
         Assert.Contains(diags, d => d.Id == "ATLAS_DEF009");
     }
@@ -116,7 +116,7 @@ public class DefParserContainerTests
     {
         // `Foo` could refer to a user struct. Accepting struct as a dict key
         // would pin us into key-hashing machinery we have no plans to build.
-        var t = ParseExpr("dict<Foo,int32>", out var diags);
+        var t = ParseExpr("dict[Foo,int32]", out var diags);
         Assert.Null(t);
         Assert.Contains(diags, d => d.Id == "ATLAS_DEF011");
     }
@@ -126,7 +126,7 @@ public class DefParserContainerTests
     {
         // Floats / doubles are technically scalar but aren't stable hash keys
         // (NaN, -0.0); disallow them explicitly.
-        var t = ParseExpr("dict<float,int32>", out var diags);
+        var t = ParseExpr("dict[float,int32]", out var diags);
         Assert.Null(t);
         Assert.Contains(diags, d => d.Id == "ATLAS_DEF011");
     }
@@ -135,8 +135,8 @@ public class DefParserContainerTests
     public void TypeExpr_DepthOverflowRejected()
     {
         // MaxDepth = 8 means 8 recursive descents are allowed; emit 9 to trip.
-        var expr = string.Concat(Enumerable.Repeat("list<", 9)) + "int32"
-                 + string.Concat(Enumerable.Repeat(">", 9));
+        var expr = string.Concat(Enumerable.Repeat("list[", 9)) + "int32"
+                 + string.Concat(Enumerable.Repeat("]", 9));
         var t = ParseExpr(expr, out var diags);
         Assert.Null(t);
         Assert.Contains(diags, d => d.Id == "ATLAS_DEF010");
@@ -186,7 +186,7 @@ public class DefParserContainerTests
         var xml = @"<entity name=""Avatar"">
   <types>
     <struct name=""Inventory"">
-      <field name=""slots"" type=""list&lt;int32&gt;"" />
+      <field name=""slots"" type=""list[int32]"" />
     </struct>
   </types>
 </entity>";
@@ -226,7 +226,7 @@ public class DefParserContainerTests
         var xml = @"<entity name=""Avatar"">
   <types>
     <struct name=""ItemStack""><field name=""id"" type=""int32"" /></struct>
-    <alias name=""Inventory"" type=""list&lt;ItemStack&gt;"" />
+    <alias name=""Inventory"" type=""list[ItemStack]"" />
   </types>
 </entity>";
         var diags = new List<Diagnostic>();
@@ -290,11 +290,11 @@ public class DefParserContainerTests
     [Fact]
     public void Types_CycleViaContainerStillRejected()
     {
-        // A field typed list<B> or dict<_,B> still creates a reference edge
+        // A field typed list[B] or dict[_,B] still creates a reference edge
         // A→B; the cycle detector must traverse container children.
         var xml = @"<entity name=""Avatar"">
   <types>
-    <struct name=""A""><field name=""bs"" type=""list&lt;B&gt;"" /></struct>
+    <struct name=""A""><field name=""bs"" type=""list[B]"" /></struct>
     <struct name=""B""><field name=""a"" type=""A"" /></struct>
   </types>
 </entity>";
@@ -313,7 +313,7 @@ public class DefParserContainerTests
     {
         var xml = @"<entity name=""Avatar"">
   <properties>
-    <property name=""bag"" type=""list&lt;int32&gt;"" scope=""own_client"" max_size=""128"" />
+    <property name=""bag"" type=""list[int32]"" scope=""own_client"" max_size=""128"" />
   </properties>
 </entity>";
         var diags = new List<Diagnostic>();
@@ -348,7 +348,7 @@ public class DefParserContainerTests
     {
         var xml = @"<entity name=""Avatar"">
   <properties>
-    <property name=""bag"" type=""list&lt;int32&gt;"" scope=""own_client"" />
+    <property name=""bag"" type=""list[int32]"" scope=""own_client"" />
   </properties>
 </entity>";
         var model = DefParser.Parse(SourceText.From(xml), "Avatar.def", null)!;
@@ -376,7 +376,7 @@ public class DefParserContainerTests
     {
         var xml = @"<entity name=""Avatar"">
   <properties>
-    <property name=""bag"" type=""list&lt;&gt;"" scope=""own_client"" />
+    <property name=""bag"" type=""list[]"" scope=""own_client"" />
   </properties>
 </entity>";
         var diags = new List<Diagnostic>();

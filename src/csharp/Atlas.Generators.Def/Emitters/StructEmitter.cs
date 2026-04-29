@@ -122,7 +122,7 @@ internal static class StructEmitter
         sb.AppendLine("    }");
     }
 
-    // ItemAt accessor: for `list<FieldStruct>` properties, scripts use
+    // ItemAt accessor: for `list[FieldStruct]` properties, scripts use
     // `entity.ListAt(slot).Field = value` to mutate one field. The
     // setter snapshots-and-records via ObservableList.RecordStructFieldSet
     // so the wire ships only that field's bytes instead of the whole

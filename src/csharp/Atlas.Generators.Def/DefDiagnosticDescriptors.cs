@@ -74,7 +74,7 @@ internal static class DefDiagnosticDescriptors
     public static readonly DiagnosticDescriptor DEF011 = new(
         "ATLAS_DEF011",
         "dict key type must be scalar",
-        "dict<K,V>: key type '{0}' must be a scalar (string / int{{8,16,32,64}} / uint{{8,16,32,64}})",
+        "dict[K,V]: key type '{0}' must be a scalar (string / int{{8,16,32,64}} / uint{{8,16,32,64}})",
         "Atlas.Def",
         DiagnosticSeverity.Error,
         isEnabledByDefault: true);

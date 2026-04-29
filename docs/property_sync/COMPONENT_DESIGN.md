@@ -45,7 +45,7 @@ Atlas 的 Entity 当前只有扁平属性。随着业务规模上升（战斗、
 | 两级 scope | `observer 可见 ⟺ observer ∈ C.scope ∧ observer ∈ P.scope`；parser 硬校验 `P.scope ⊆ C.scope` |
 | Component RPC | **允许**。路由 `(entityId, componentIdx, methodIdx)`；`componentIdx=0` 走 Entity 本体（向后兼容） |
 | RPC scope 约束 | `method.exposed ⊆ component.scope`；parser 注册期硬校验，违反失败 |
-| Component 嵌套 | **禁止**。Slot 表扁平，组合业务用 `list<struct>` |
+| Component 嵌套 | **禁止**。Slot 表扁平，组合业务用 `list[struct]` |
 | 位置一致性 | 同一 Component 的属性必须全在 Cell 或全在 Base，不允许跨进程 |
 | 同 tick `AddComponent + 改属性` 顺序 | 先 `kAddComponent`（含 Component 初始快照），再该 slot 的属性 op |
 | 新观察者进 AoI | 按 slot 顺序遍历已激活 Component 的快照塞进 baseline（`msg 2019`），**不发** `kAddComponent` |
@@ -101,8 +101,8 @@ Atlas 的 Entity 当前只有扁平属性。随着业务规模上升（战斗、
 <component name="CombatComponent" location="cell">
   <properties>
     <property name="atk"    type="int32" scope="all_clients" />
-    <property name="skills" type="list&lt;SkillEntry&gt;" scope="own_client" />
-    <property name="buffs"  type="dict&lt;uint32,BuffInst&gt;" scope="all_clients" />
+    <property name="skills" type="list[SkillEntry]" scope="own_client" />
+    <property name="buffs"  type="dict[uint32,BuffInst]" scope="all_clients" />
   </properties>
 
   <client_methods>

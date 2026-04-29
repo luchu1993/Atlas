@@ -1,6 +1,6 @@
 <entity name="ListSyncTestEntity">
   <properties>
-    <property name="titles" type="list&lt;int32&gt;" scope="all_clients" />
+    <property name="titles" type="list[int32]" scope="all_clients" />
     <property name="hp" type="int32" scope="all_clients" />
   </properties>
 </entity>

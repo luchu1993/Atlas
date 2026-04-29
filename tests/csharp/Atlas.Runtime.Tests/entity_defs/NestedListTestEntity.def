@@ -1,6 +1,6 @@
 <entity name="NestedListTestEntity">
   <properties>
-    <property name="matrix" type="list&lt;list&lt;int32&gt;&gt;" scope="all_clients" />
-    <property name="byTag" type="dict&lt;string,list&lt;int32&gt;&gt;" scope="all_clients" />
+    <property name="matrix" type="list[list[int32]]" scope="all_clients" />
+    <property name="byTag" type="dict[string,list[int32]]" scope="all_clients" />
   </properties>
 </entity>
