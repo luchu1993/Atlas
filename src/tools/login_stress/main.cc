@@ -153,7 +153,8 @@ class Session {
 
   void StartAttempt(TimePoint now) {
     EnsureNetwork();
-    const auto kResult = network_->ConnectRudp(opts_.login_addr);
+    const auto kResult =
+        network_->ConnectRudp(opts_.login_addr, NetworkInterface::InternetRudpProfile());
     if (!kResult) {
       ++metrics_.login_result_fail;
       RecordFailure(std::format("login_connect:{}", kResult.Error().Message()));
@@ -204,7 +205,8 @@ class Session {
     session_key_ = msg.session_key;
     baseapp_addr_ = msg.baseapp_addr;
 
-    const auto kResult = network_->ConnectRudp(baseapp_addr_);
+    const auto kResult =
+        network_->ConnectRudp(baseapp_addr_, NetworkInterface::InternetRudpProfile());
     if (!kResult) {
       ++metrics_.auth_fail;
       RecordFailure(std::format("baseapp_connect:{}", kResult.Error().Message()));

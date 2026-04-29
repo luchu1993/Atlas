@@ -97,8 +97,11 @@ auto ClientApp::Init(int argc, char* argv[]) -> bool {
   // Default password to empty hash
   if (config_.password_hash.empty()) config_.password_hash = "default_hash";
 
-  // Start RUDP server (for receiving replies)
-  auto listen_result = network_.StartRudpServer(Address("127.0.0.1", 0));
+  // Start RUDP server (for receiving replies).  Use the Internet profile
+  // so any auto-accepted channel matches the small MTU (470) the
+  // LoginApp / BaseApp servers advertise via their accept_profile.
+  auto listen_result =
+      network_.StartRudpServer(Address("127.0.0.1", 0), NetworkInterface::InternetRudpProfile());
   if (!listen_result) {
     ATLAS_LOG_ERROR("Client: failed to start RUDP listener: {}", listen_result.Error().Message());
     return false;
@@ -295,7 +298,7 @@ auto ClientApp::Login() -> bool {
                  config_.loginapp_port);
 
   auto login_addr = Address(config_.loginapp_host, config_.loginapp_port);
-  auto ch_result = network_.ConnectRudp(login_addr);
+  auto ch_result = network_.ConnectRudp(login_addr, NetworkInterface::InternetRudpProfile());
   if (!ch_result) {
     ATLAS_LOG_ERROR("Client: failed to connect to LoginApp: {}", ch_result.Error().Message());
     return false;
@@ -332,7 +335,7 @@ auto ClientApp::Login() -> bool {
 }
 
 auto ClientApp::Authenticate(const Address& baseapp_addr, const SessionKey& session_key) -> bool {
-  auto ch_result = network_.ConnectRudp(baseapp_addr);
+  auto ch_result = network_.ConnectRudp(baseapp_addr, NetworkInterface::InternetRudpProfile());
   if (!ch_result) {
     ATLAS_LOG_ERROR("Client: failed to connect to BaseApp: {}", ch_result.Error().Message());
     return false;
