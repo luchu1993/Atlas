@@ -66,10 +66,13 @@ class ReliableUdpChannel : public Channel {
   // descriptor().reliability == Unreliable automatically use this path.
   [[nodiscard]] auto SendUnreliable() -> Result<void> override;
 
-  // Size-threshold override.  Defaults to a value driven by
-  // RudpProfile.deferred_flush_threshold (350 B for Internet,
-  // 1200 B for Cluster).  When a deferred bundle's total size
-  // (TotalSize) exceeds this, a same-side flush fires inline.
+  // OOM safety net for the deferred bundle, applied per-side.  Set
+  // by RudpProfile.deferred_flush_threshold (Internet 32 KB / Cluster
+  // 60 KB, both well under kMaxBundleSize=64 KB).  Inline flush fires
+  // only when a single tick's accumulated payload would exceed the
+  // bundle cap; the primary drain is the tick-end FlushDirtySendChannels
+  // (see ServerApp::FlushTickDirtyChannels and the readable-callback
+  // tails in NetworkInterface).
   void SetDeferredFlushThreshold(std::size_t bytes) { deferred_flush_threshold_ = bytes; }
   [[nodiscard]] auto DeferredFlushThreshold() const -> std::size_t {
     return deferred_flush_threshold_;
@@ -286,10 +289,11 @@ class ReliableUdpChannel : public Channel {
   // RudpProfile.mtu at channel construction.
   std::size_t mtu_{rudp::kDefaultMtu};
 
-  // Mid-tick flush boundary for the deferred bundles.  Driven by
-  // RudpProfile.deferred_flush_threshold; the choice trades off
-  // batching density against fragmentation risk on the next append.
-  std::size_t deferred_flush_threshold_{1200};
+  // OOM safety net for the deferred bundles, applied per-side.
+  // Driven by RudpProfile.deferred_flush_threshold.  Default sits
+  // near kMaxBundleSize so tick-end flush stays the primary drain;
+  // see SetDeferredFlushThreshold doc.
+  std::size_t deferred_flush_threshold_{60 * 1024};
 
   // Sending state
   SeqNum next_send_seq_{1};

@@ -368,11 +368,18 @@ auto NetworkInterface::InternetRudpProfile() -> RudpProfile {
   // ISP / VPN / mobile-carrier paths (PPPoE 1492, IPSec/WireGuard
   // ~50 B overhead, mobile MSS sometimes ~1280) — well below KCP's
   // 1400 default.  Window stays at 256 to bound retransmit memory on
-  // a wide-area lossy link.  Deferred flush threshold = 350: 470 MTU
-  // - 21 RUDP header - ~100 headroom for the next message.
+  // a wide-area lossy link.
+  //
+  // Deferred flush threshold acts as an OOM safety net only: at
+  // ~32 KB the bundle is large enough that tick-end flush amortises
+  // the Finalize / filter / packet-building cost across many
+  // fragments in SendFragmented's tight loop.  Earlier mid-tick
+  // flushes (e.g. at MTU boundary) regress per-call overhead
+  // 3-4× under high-volume pumps — see 500-cli baseline 4057994
+  // vs b1782e5 in docs/optimization/.
   RudpProfile profile;
   profile.mtu = 470;
-  profile.deferred_flush_threshold = 350;
+  profile.deferred_flush_threshold = 32 * 1024;
   return profile;
 }
 
@@ -380,13 +387,15 @@ auto NetworkInterface::ClusterRudpProfile() -> RudpProfile {
   // Intra-DC profile.  cwnd disabled (no fairness pressure on a
   // dedicated link), large window for high throughput, MTU at the
   // KCP default (1400) which fits comfortably on 1500-byte Ethernet.
-  // Deferred flush threshold = 1200: 1400 - 21 - ~180 headroom.
+  // Deferred flush threshold sits just below kMaxBundleSize (64 KB)
+  // so it only fires as an OOM safety net — tick-end flush is the
+  // primary drain.  See InternetRudpProfile for rationale.
   RudpProfile profile;
   profile.nocwnd = true;
   profile.send_window = 4096;
   profile.recv_window = 4096;
   profile.mtu = 1400;
-  profile.deferred_flush_threshold = 1200;
+  profile.deferred_flush_threshold = 60 * 1024;
   return profile;
 }
 

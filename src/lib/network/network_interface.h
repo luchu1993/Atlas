@@ -38,11 +38,13 @@ class NetworkInterface : public FrequentTask {
     // don't fragment at the IP layer.  Both endpoints of a channel pair
     // must use the same MTU — fragment reassembly relies on it.
     std::size_t mtu{1400};
-    // Mid-tick flush boundary for the per-channel deferred bundle.
-    // Tuned per profile so a near-MTU bundle on a narrow path doesn't
-    // force fragmentation on the next append: Internet ~350 (470 MTU
-    // - 21 RUDP - 100 headroom), Cluster ~1200 (1400 - 21 - ~180).
-    std::size_t deferred_flush_threshold{1200};
+    // OOM safety net for the per-channel deferred bundle.  Set high
+    // enough that tick-end flush is the primary drain; mid-tick flush
+    // here only fires under sustained pumps that would exceed the
+    // 64 KB kMaxBundleSize cap.  See InternetRudpProfile / ClusterRudpProfile
+    // factories for the chosen values; setting it MTU-near (the early
+    // PR-2 design) regresses witness throughput by 3-4× per call.
+    std::size_t deferred_flush_threshold{60 * 1024};
   };
 
   explicit NetworkInterface(EventDispatcher& dispatcher);
