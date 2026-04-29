@@ -68,43 +68,34 @@ auto ReliableUdpChannel::SendUnreliable() -> Result<void> {
 }
 
 // ============================================================================
-// buffer_message_deferred (descriptor-driven) — Channel base override.
-// Writes the message into the per-channel deferred bundle, registers
-// the channel for tick-end flush via NotifyDirty, and flushes the
-// affected side inline if its bundle now exceeds
-// deferred_flush_threshold_.  Mid-tick flush is the only mechanism
-// that bounds memory and prevents the next append from forcing
-// fragmentation; periodic flush at tick end is what actually
-// coalesces the syscall count.
+// Batching hooks (Channel base virtuals).
+//
+// DeferredBundleFor selects the (reliability)-keyed deferred bundle.
+// OnDeferredAppend registers dirty for tick-end flush, then enforces
+// the same-side mid-tick flush guard once TotalSize crosses
+// deferred_flush_threshold_.  Mid-tick flush bounds memory and
+// prevents the next append from forcing fragmentation; periodic
+// flush at tick end is what coalesces the syscall count.
 // ============================================================================
 
-auto ReliableUdpChannel::BufferMessageDeferred(const MessageDesc& desc,
-                                               std::span<const std::byte> data) -> Result<void> {
-  if (state_ == ChannelState::kCondemned) {
-    return Error(ErrorCode::kChannelCondemned, "Channel is condemned");
-  }
-  auto& bundle = desc.IsUnreliable() ? deferred_unreliable_bundle_ : deferred_reliable_bundle_;
-  bundle.StartMessage(desc);
-  bundle.Writer().WriteBytes(data);
-  bundle.EndMessage();
+auto ReliableUdpChannel::DeferredBundleFor(const MessageDesc& desc) -> class Bundle* {
+  if (state_ == ChannelState::kCondemned) return nullptr;
+  return desc.IsUnreliable() ? &deferred_unreliable_bundle_ : &deferred_reliable_bundle_;
+}
 
-  // Register with NetworkInterface so the tick-end flush picks us up.
-  // No-op if no callback is installed (e.g. unit-test channels).
+auto ReliableUdpChannel::OnDeferredAppend(const MessageDesc& desc, std::size_t total_size)
+    -> Result<void> {
   NotifyDirty();
-
-  // Mid-tick flush guard.  Only flush the side whose bundle crossed
-  // the threshold; the other side stays staged for the tick-end
-  // sweep so we keep coalescing it.
-  if (bundle.TotalSize() >= deferred_flush_threshold_) {
-    Result<void> r =
-        desc.IsUnreliable() ? SendBundleUnreliable(bundle) : SendBundleReliable(bundle);
+  if (total_size >= deferred_flush_threshold_) {
+    auto& bundle = desc.IsUnreliable() ? deferred_unreliable_bundle_ : deferred_reliable_bundle_;
+    auto r = desc.IsUnreliable() ? SendBundleUnreliable(bundle) : SendBundleReliable(bundle);
     if (!r) return r.Error();
   }
   return Result<void>{};
 }
 
 // ============================================================================
-// flush_deferred — drain both BufferMessageDeferred bundles in one call.
+// flush_deferred — drain both deferred bundles in one call.
 // ============================================================================
 
 auto ReliableUdpChannel::FlushDeferred() -> Result<void> {

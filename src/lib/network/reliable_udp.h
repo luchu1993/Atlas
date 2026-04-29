@@ -66,40 +66,6 @@ class ReliableUdpChannel : public Channel {
   // descriptor().reliability == Unreliable automatically use this path.
   [[nodiscard]] auto SendUnreliable() -> Result<void> override;
 
-  // Buffered (deferred) send. Appends `msg` to a per-channel batching
-  // bundle keyed on Msg::Descriptor()'s reliability; the wire packet is
-  // not built until FlushDeferred() runs. Lets cellapp's TickWitnesses
-  // collapse the N×M observer/peer SendEntityUpdate calls into one
-  // packet per (channel, reliability) pair per tick — slashing sendto
-  // syscall count by 1–2 orders of magnitude in dense scenes.
-  //
-  // Note: this typed entry point intentionally does NOT call
-  // NotifyDirty() — callers that use it (cellapp witness path) own
-  // their own flush cadence via pending_witness_channels_.  The
-  // descriptor-driven entry point below (the Channel base virtual)
-  // does call NotifyDirty so SendMessage with kBatched urgency
-  // auto-flushes at tick end.
-  template <NetworkMessage Msg>
-  [[nodiscard]] auto BufferMessageDeferred(const Msg& msg) -> Result<void> {
-    if (state_ == ChannelState::kCondemned) {
-      return Error(ErrorCode::kChannelCondemned, "Channel is condemned");
-    }
-    if (Msg::Descriptor().IsUnreliable()) {
-      deferred_unreliable_bundle_.AddMessage(msg);
-    } else {
-      deferred_reliable_bundle_.AddMessage(msg);
-    }
-    return Result<void>{};
-  }
-
-  // Channel-base override.  Auto-registers the channel as dirty (so
-  // NetworkInterface::FlushDirtySendChannels picks it up at tick end)
-  // and triggers a same-side mid-tick flush when the bundle reaches
-  // deferred_flush_threshold_ bytes.  Bounds bundle growth and
-  // prevents the next message from forcing fragmentation.
-  [[nodiscard]] auto BufferMessageDeferred(const MessageDesc& desc, std::span<const std::byte> data)
-      -> Result<void> override;
-
   // Size-threshold override.  Defaults to a value driven by
   // RudpProfile.deferred_flush_threshold (350 B for Internet,
   // 1200 B for Cluster).  When a deferred bundle's total size
@@ -216,6 +182,14 @@ class ReliableUdpChannel : public Channel {
  protected:
   [[nodiscard]] auto DoSend(std::span<const std::byte> data) -> Result<size_t> override;
   void OnCondemned() override;
+
+  // Batching hooks (Channel base virtuals).  DeferredBundleFor returns
+  // the per-(reliability) deferred bundle; OnDeferredAppend marks the
+  // channel dirty and triggers same-side mid-tick flush when the
+  // bundle exceeds DeferredFlushThreshold.
+  [[nodiscard]] auto DeferredBundleFor(const MessageDesc& desc) -> class Bundle* override;
+  [[nodiscard]] auto OnDeferredAppend(const MessageDesc& desc, std::size_t total_size)
+      -> Result<void> override;
 
  private:
   struct UnackedPacket {

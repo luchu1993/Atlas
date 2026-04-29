@@ -1306,8 +1306,9 @@ struct RudpTestMsgUnreliable {
   uint32_t value;
 
   static auto Descriptor() -> const MessageDesc& {
-    static const MessageDesc desc{301, "RudpTestMsgUnreliable", MessageLengthStyle::kVariable, -1,
-                                  MessageReliability::kUnreliable};
+    static const MessageDesc desc{
+        301, "RudpTestMsgUnreliable",         MessageLengthStyle::kVariable,
+        -1,  MessageReliability::kUnreliable, MessageUrgency::kBatched};
     return desc;
   }
 
@@ -1317,6 +1318,26 @@ struct RudpTestMsgUnreliable {
     auto v = r.Read<uint32_t>();
     if (!v) return v.Error();
     return RudpTestMsgUnreliable{*v};
+  }
+};
+
+// Reliable + kBatched test message — used by tests that exercise the
+// deferred-bundle path through the public SendMessage entry.
+struct RudpTestMsgBatchedReliable {
+  uint32_t value;
+
+  static auto Descriptor() -> const MessageDesc& {
+    static const MessageDesc desc{302, "RudpTestMsgBatchedReliable",  MessageLengthStyle::kVariable,
+                                  -1,  MessageReliability::kReliable, MessageUrgency::kBatched};
+    return desc;
+  }
+
+  void Serialize(BinaryWriter& w) const { w.Write<uint32_t>(value); }
+
+  static auto Deserialize(BinaryReader& r) -> Result<RudpTestMsgBatchedReliable> {
+    auto v = r.Read<uint32_t>();
+    if (!v) return v.Error();
+    return RudpTestMsgBatchedReliable{*v};
   }
 };
 
@@ -1342,8 +1363,10 @@ TEST_F(ReliableUdpTest, FlushDeferredAppliesPacketFilter) {
   channel_a.SetPacketFilter(filter);
 
   // One reliable + one unreliable so both deferred bundles fire.
-  ASSERT_TRUE(channel_a.BufferMessageDeferred(RudpTestMsg{1}).HasValue());
-  ASSERT_TRUE(channel_a.BufferMessageDeferred(RudpTestMsgUnreliable{2}).HasValue());
+  // Both descriptors are kBatched so SendMessage routes through the
+  // deferred-bundle path (formerly BufferMessageDeferred).
+  ASSERT_TRUE(channel_a.SendMessage(RudpTestMsgBatchedReliable{1}).HasValue());
+  ASSERT_TRUE(channel_a.SendMessage(RudpTestMsgUnreliable{2}).HasValue());
   ASSERT_TRUE(channel_a.FlushDeferred().HasValue());
 
   // FlushDeferred sends unreliable first, then reliable — both go
@@ -1436,8 +1459,8 @@ struct RudpTestMsgBatched {
   }
 };
 
-TEST_F(ReliableUdpTest, BufferMessageDeferredNotifiesDirtyAndAutoFlushes) {
-  // BufferMessageDeferred (descriptor-driven) must:
+TEST_F(ReliableUdpTest, SendMessageBatchedNotifiesDirtyAndAutoFlushes) {
+  // SendMessage with a kBatched descriptor must:
   //   1. Register the channel via NotifyDirty so a NetworkInterface
   //      tick-end sweep can flush it.
   //   2. Trigger a same-side flush inline once TotalSize crosses
@@ -1455,13 +1478,14 @@ TEST_F(ReliableUdpTest, BufferMessageDeferredNotifiesDirtyAndAutoFlushes) {
   ch.SetMarkDirtyCallback([&](Channel&) { ++dirty_calls; });
 
   // 256-byte payload; framing pushes the second append above the
-  // 350-byte threshold so the inline flush fires.
-  std::array<std::byte, 256> blob{};
-  const auto& desc = RudpTestMsgBatched::Descriptor();
+  // 350-byte threshold so the inline flush fires.  RudpTestMsgBatched
+  // is kBatched + kReliable; its 256-byte fixed body plus per-message
+  // framing sums above 350 on the second call.
+  RudpTestMsgBatched msg{};
 
-  ASSERT_TRUE(ch.BufferMessageDeferred(desc, blob).HasValue());
-  EXPECT_EQ(dirty_calls, 1) << "First batched append must NotifyDirty";
-  ASSERT_TRUE(ch.BufferMessageDeferred(desc, blob).HasValue());
+  ASSERT_TRUE(ch.SendMessage(msg).HasValue());
+  EXPECT_EQ(dirty_calls, 1) << "First batched send must NotifyDirty";
+  ASSERT_TRUE(ch.SendMessage(msg).HasValue());
   EXPECT_GE(dirty_calls, 2);
   // After the inline flush, the relevant bundle was drained — UnackedCount
   // should reflect at least one packet on the wire.

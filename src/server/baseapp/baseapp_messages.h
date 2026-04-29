@@ -398,9 +398,12 @@ struct ReplicatedDeltaFromCell {
   // AoI / property replication deltas are superseded by the next tick —
   // best-effort delivery is preferred over head-of-line blocking.
   static auto Descriptor() -> const MessageDesc& {
-    static const MessageDesc kDesc{
-        msg_id::Id(msg_id::BaseApp::kReplicatedDeltaFromCell), "baseapp::ReplicatedDeltaFromCell",
-        MessageLengthStyle::kVariable, -1, MessageReliability::kUnreliable};
+    static const MessageDesc kDesc{msg_id::Id(msg_id::BaseApp::kReplicatedDeltaFromCell),
+                                   "baseapp::ReplicatedDeltaFromCell",
+                                   MessageLengthStyle::kVariable,
+                                   -1,
+                                   MessageReliability::kUnreliable,
+                                   MessageUrgency::kBatched};
     return kDesc;
   }
 

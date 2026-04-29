@@ -64,34 +64,26 @@ class Channel {
 
   template <NetworkMessage Msg>
   [[nodiscard]] auto SendMessage(const Msg& msg) -> Result<void> {
-    // The typed entry point intentionally ignores Descriptor().urgency:
-    // routing through the descriptor-driven BufferMessageDeferred would
-    // require an extra encode-into-scratch step (BinaryWriter has no
-    // public vector ctor).  Callers that want batching for a typed
-    // message use ReliableUdpChannel::BufferMessageDeferred<Msg> direct
-    // (cellapp witness path).  Raw-id SendMessage(MessageID, span) is
-    // the path that consumes urgency, since it already has bytes in
-    // hand.  PR-2 audit will revisit if a typed batched API is needed.
+    const auto& desc = Msg::Descriptor();
+    if (desc.IsBatched()) {
+      if (auto* deferred = DeferredBundleFor(desc)) {
+        // RUDP path: append directly to the per-channel deferred
+        // bundle without going through scratch, so witness-volume
+        // traffic stays single-copy.
+        deferred->AddMessage(msg);
+        return OnDeferredAppend(desc, deferred->TotalSize());
+      }
+      // Fallback (TCP / plain UDP / unit-test channels): no per-
+      // channel batching exists — send immediately.
+    }
     bundle_.AddMessage(msg);
-    if (Msg::Descriptor().IsUnreliable()) return SendUnreliable();
+    if (desc.IsUnreliable()) return SendUnreliable();
     return Send();
   }
 
   // Best-effort send — subclasses override to use unreliable path when available.
   // Default implementation falls back to send() (TCP is always reliable).
   [[nodiscard]] virtual auto SendUnreliable() -> Result<void>;
-
-  // Append a message to the channel's deferred bundle.  Subclasses that
-  // batch (ReliableUdpChannel) override to write into the per-channel
-  // deferred_*_bundle_ and register with NetworkInterface for tick-end
-  // flush; the default implementation falls through to immediate send
-  // for transports where batching has no syscall benefit (TCP coalesces
-  // at the kernel layer; plain UDP has no ordered framing).
-  //
-  // Public so callers (witness path, future caller-driven batching)
-  // can opt in directly without going through SendMessage.
-  [[nodiscard]] virtual auto BufferMessageDeferred(const MessageDesc& desc,
-                                                   std::span<const std::byte> data) -> Result<void>;
 
   // Mark-dirty callback installed by NetworkInterface.  When a channel
   // appends to its deferred bundle, it invokes the callback so the
@@ -137,6 +129,26 @@ class Channel {
   // schedules a tick-end flush.
   void NotifyDirty() {
     if (mark_dirty_cb_) mark_dirty_cb_(*this);
+  }
+
+  // Batching hooks.  A channel that supports per-channel deferred-send
+  // bundles (ReliableUdpChannel) overrides DeferredBundleFor to return
+  // the bundle matching the descriptor's reliability axis; channels
+  // without batching benefit (TCP — kernel-level coalesce already; UDP
+  // — no ordered framing) leave it returning nullptr and SendMessage
+  // falls through to the immediate path.
+  //
+  // OnDeferredAppend is invoked by SendMessage right after writing
+  // into the deferred bundle.  Subclasses use it to register dirty
+  // and to enforce the size threshold; default no-op.  Returns
+  // Result<void> so the size-threshold flush can surface its error
+  // back to the SendMessage caller.
+  [[nodiscard]] virtual auto DeferredBundleFor(const MessageDesc& /*desc*/) -> class Bundle* {
+    return nullptr;
+  }
+  [[nodiscard]] virtual auto OnDeferredAppend(const MessageDesc& /*desc*/,
+                                              std::size_t /*total_size*/) -> Result<void> {
+    return Result<void>{};
   }
 
   // Subclass hooks

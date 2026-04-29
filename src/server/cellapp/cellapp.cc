@@ -766,20 +766,22 @@ void CellApp::AttachWitness(CellEntity& entity, float aoi_radius, float hysteres
       // Reliable path — AoI enter/leave + ordered property deltas.
       // Routed via ReplicatedReliableDeltaFromCell (msg 2017) which
       // bypasses DeltaForwarder and reaches the client reliably.
-      // The Span variant carries `env` through Serialize without an
-      // intermediate vector::assign — the witness owns the storage for
-      // the duration of the synchronous BufferMessageDeferred call.
-      // The bytes are appended to the channel's deferred reliable
-      // bundle and shipped in one packet at TickWitnesses end via
-      // FlushPendingWitnessChannels — collapses N×M observer/peer
-      // sendto syscalls into one per channel per tick.
+      // SendMessage consults the descriptor's kBatched urgency and
+      // appends to the channel's per-side deferred bundle; the
+      // bundle ships in one packet at FlushDirtySendChannels time
+      // (end of OnRudpReadable / end of CellApp tick) — collapses
+      // N×M observer/peer sendto syscalls into one per (channel,
+      // reliability) per tick.  pending_witness_channels_ is kept
+      // for now as a backup explicit flush; it becomes redundant
+      // once the descriptor-driven dirty-set machinery has had a
+      // soak run.
       [this](EntityID observer_base_id, std::span<const std::byte> env) {
         auto* observer = FindEntityByBaseId(observer_base_id);
         if (!observer) return;
         auto ch = Network().ConnectRudpNocwnd(observer->BaseAddr());
         if (!ch) return;
         baseapp::ReplicatedReliableDeltaFromCellSpan msg{observer_base_id, env};
-        (void)(*ch)->BufferMessageDeferred(msg);
+        (void)(*ch)->SendMessage(msg);
         pending_witness_channels_.insert(*ch);
       },
       // Unreliable path — volatile position/orientation (latest-wins).
@@ -791,7 +793,7 @@ void CellApp::AttachWitness(CellEntity& entity, float aoi_radius, float hysteres
         auto ch = Network().ConnectRudpNocwnd(observer->BaseAddr());
         if (!ch) return;
         baseapp::ReplicatedDeltaFromCellSpan msg{observer_base_id, env};
-        (void)(*ch)->BufferMessageDeferred(msg);
+        (void)(*ch)->SendMessage(msg);
         pending_witness_channels_.insert(*ch);
       },
       hysteresis);
