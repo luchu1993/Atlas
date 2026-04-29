@@ -109,6 +109,21 @@ auto ReliableUdpChannel::SendBundleReliable(class Bundle& b) -> Result<void> {
 
   auto payload = b.Finalize();
 
+  // Run packet_filter_ on the finalized bundle before fragmentation /
+  // packet construction. Channel::Send already does this for the single-
+  // shot path; mirror it here so deferred-batch sends honour the
+  // compression / encryption installed on the channel. Without this,
+  // FlushDeferred-driven traffic (witness updates today, every batched
+  // path tomorrow) bypassed the filter chain entirely.
+  if (packet_filter_) {
+    auto filtered =
+        packet_filter_->SendFilter(std::span<const std::byte>(payload.data(), payload.size()));
+    if (!filtered) {
+      return filtered.Error();
+    }
+    payload = std::move(*filtered);
+  }
+
   // Auto-fragment if payload exceeds max UDP payload
   if (payload.size() > rudp::kMaxUdpPayload) {
     return SendFragmented(payload);
@@ -146,6 +161,17 @@ auto ReliableUdpChannel::SendBundleUnreliable(class Bundle& b) -> Result<void> {
   }
 
   auto payload = b.Finalize();
+
+  // See SendBundleReliable for rationale — keep deferred-path filter
+  // application symmetric across reliable / unreliable.
+  if (packet_filter_) {
+    auto filtered =
+        packet_filter_->SendFilter(std::span<const std::byte>(payload.data(), payload.size()));
+    if (!filtered) {
+      return filtered.Error();
+    }
+    payload = std::move(*filtered);
+  }
 
   uint8_t flags = 0;
   if (remote_seq_ > 0) {

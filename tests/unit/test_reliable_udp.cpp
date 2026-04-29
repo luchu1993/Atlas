@@ -1261,3 +1261,94 @@ TEST_F(ReliableUdpTest, DuplicateReliablePacketStillTriggersAck) {
       << "Duplicate reliable receipt must still trigger an ACK so the "
          "sender's unacked queue eventually drains.";
 }
+
+namespace {
+
+// Records every SendFilter / RecvFilter call.  SendFilter XOR's payload
+// with `xor_byte` so callers can verify the on-wire bytes were actually
+// transformed (ruling out a no-op pass-through that would also satisfy
+// the call-count check).
+class RecordingXorFilter : public PacketFilter {
+ public:
+  explicit RecordingXorFilter(std::byte xor_byte) : xor_byte_(xor_byte) {}
+
+  [[nodiscard]] auto SendFilter(std::span<const std::byte> data)
+      -> Result<std::vector<std::byte>> override {
+    ++send_calls_;
+    last_send_size_ = data.size();
+    std::vector<std::byte> out(data.begin(), data.end());
+    for (auto& b : out) b ^= xor_byte_;
+    return out;
+  }
+
+  [[nodiscard]] auto RecvFilter(std::span<const std::byte> data)
+      -> Result<std::vector<std::byte>> override {
+    ++recv_calls_;
+    std::vector<std::byte> out(data.begin(), data.end());
+    for (auto& b : out) b ^= xor_byte_;
+    return out;
+  }
+
+  [[nodiscard]] auto SendCalls() const -> int { return send_calls_; }
+  [[nodiscard]] auto RecvCalls() const -> int { return recv_calls_; }
+  [[nodiscard]] auto LastSendSize() const -> std::size_t { return last_send_size_; }
+
+ private:
+  std::byte xor_byte_;
+  int send_calls_{0};
+  int recv_calls_{0};
+  std::size_t last_send_size_{0};
+};
+
+}  // namespace
+
+struct RudpTestMsgUnreliable {
+  uint32_t value;
+
+  static auto Descriptor() -> const MessageDesc& {
+    static const MessageDesc desc{301, "RudpTestMsgUnreliable", MessageLengthStyle::kVariable, -1,
+                                  MessageReliability::kUnreliable};
+    return desc;
+  }
+
+  void Serialize(BinaryWriter& w) const { w.Write<uint32_t>(value); }
+
+  static auto Deserialize(BinaryReader& r) -> Result<RudpTestMsgUnreliable> {
+    auto v = r.Read<uint32_t>();
+    if (!v) return v.Error();
+    return RudpTestMsgUnreliable{*v};
+  }
+};
+
+TEST_F(ReliableUdpTest, FlushDeferredAppliesPacketFilter) {
+  // Regression: SendBundleReliable / SendBundleUnreliable used to bypass
+  // packet_filter_ entirely — a filter installed via SetPacketFilter
+  // applied to Channel::Send but not to FlushDeferred.  Cellapp's
+  // witness traffic and any future batched path therefore went out
+  // un-compressed / un-encrypted.  This test pins the fix.
+  auto sock_a = Socket::CreateUdp();
+  ASSERT_TRUE(sock_a.HasValue());
+  ASSERT_TRUE(sock_a->Bind(Address("127.0.0.1", 0)).HasValue());
+
+  auto sock_b = Socket::CreateUdp();
+  ASSERT_TRUE(sock_b.HasValue());
+  ASSERT_TRUE(sock_b->Bind(Address("127.0.0.1", 0)).HasValue());
+  auto addr_b = sock_b->LocalAddress().Value();
+
+  ReliableUdpChannel channel_a(dispatcher_, table_, *sock_a, addr_b);
+  channel_a.Activate();
+
+  auto filter = std::make_shared<RecordingXorFilter>(std::byte{0x5A});
+  channel_a.SetPacketFilter(filter);
+
+  // One reliable + one unreliable so both deferred bundles fire.
+  ASSERT_TRUE(channel_a.BufferMessageDeferred(RudpTestMsg{1}).HasValue());
+  ASSERT_TRUE(channel_a.BufferMessageDeferred(RudpTestMsgUnreliable{2}).HasValue());
+  ASSERT_TRUE(channel_a.FlushDeferred().HasValue());
+
+  // FlushDeferred sends unreliable first, then reliable — both go
+  // through SendFilter exactly once each.  Pre-fix this would be 0.
+  EXPECT_EQ(filter->SendCalls(), 2)
+      << "SendBundle{Reliable,Unreliable} must call SendFilter once each";
+  EXPECT_GT(filter->LastSendSize(), 0u) << "Filter must see non-empty bundle bytes";
+}
