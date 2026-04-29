@@ -129,9 +129,35 @@ auto ReliableUdpChannel::SendBundleReliable(class Bundle& b) -> Result<void> {
     return Result<void>{};
   }
 
-  auto eff_wnd = EffectiveWindow();
-  if (unacked_.size() >= eff_wnd) {
-    return Error(ErrorCode::kWouldBlock, "Send window full");
+  // Fragment-aware capacity check, run BEFORE Bundle::Finalize so the
+  // caller can still retry from an intact bundle on kWouldBlock.  The
+  // earlier naive `unacked_.size() >= eff_wnd` check assumed every
+  // bundle needs one slot, but a multi-fragment bundle would slip past
+  // and then trip kWouldBlock inside SendFragmented — by which point
+  // Finalize has moved the buffer out and recovery is impossible.
+  // SendFilter may shrink (compression) or grow (future encryption
+  // padding) by a small factor; the pre-filter estimate is conservative
+  // on the kWouldBlock side and fragment-count check too.  The bundle
+  // size > frag_size guard keeps short messages on the single-packet
+  // window check (matches MessageTooLargeReturnsError test ordering:
+  // fragment-count overflow takes precedence over kWouldBlock).
+  const auto eff_wnd = EffectiveWindow();
+  const auto frag_size = MaxUdpPayload();
+  const auto bundle_size = b.TotalSize();
+  if (bundle_size > frag_size) {
+    const auto packets_needed = (bundle_size + frag_size - 1) / frag_size;
+    if (packets_needed > rudp::kMaxFragments) {
+      return Error(ErrorCode::kMessageTooLarge,
+                   std::format("Bundle too large for fragmentation: {} bytes ({} fragments, max {})",
+                               bundle_size, packets_needed, rudp::kMaxFragments));
+    }
+    if (unacked_.size() + packets_needed > eff_wnd) {
+      return Error(ErrorCode::kWouldBlock, "Send window too small for fragmented bundle");
+    }
+  } else {
+    if (unacked_.size() >= eff_wnd) {
+      return Error(ErrorCode::kWouldBlock, "Send window full");
+    }
   }
 
   auto payload = b.Finalize();
@@ -146,6 +172,8 @@ auto ReliableUdpChannel::SendBundleReliable(class Bundle& b) -> Result<void> {
     auto filtered =
         packet_filter_->SendFilter(std::span<const std::byte>(payload.data(), payload.size()));
     if (!filtered) {
+      ATLAS_LOG_WARNING("RUDP send_filter failed for {}: {} ({} bytes lost)", remote_.ToString(),
+                        filtered.Error().Message(), payload.size());
       return filtered.Error();
     }
     payload = std::move(*filtered);
@@ -174,6 +202,12 @@ auto ReliableUdpChannel::SendBundleReliable(class Bundle& b) -> Result<void> {
 
   auto result = shared_socket_.SendTo(slot.data, remote_);
   if (!result) {
+    // Roll back the unacked slot + seq number — mirrors SendFragmented's
+    // failure path.  Without this the entry sits orphaned (no resend
+    // timer was started yet) until kDeadLinkTimeout finally condemns
+    // the channel ~5 s later.
+    unacked_.erase(seq);
+    next_send_seq_ = seq;
     return result.Error();
   }
   bytes_sent_ += *result;
@@ -195,6 +229,8 @@ auto ReliableUdpChannel::SendBundleUnreliable(class Bundle& b) -> Result<void> {
     auto filtered =
         packet_filter_->SendFilter(std::span<const std::byte>(payload.data(), payload.size()));
     if (!filtered) {
+      ATLAS_LOG_WARNING("RUDP send_filter failed (unreliable) for {}: {} ({} bytes lost)",
+                        remote_.ToString(), filtered.Error().Message(), payload.size());
       return filtered.Error();
     }
     payload = std::move(*filtered);
@@ -248,6 +284,11 @@ auto ReliableUdpChannel::DoSend(std::span<const std::byte> data) -> Result<size_
 
   auto result = shared_socket_.SendTo(slot.data, remote_);
   if (!result) {
+    // Roll back the unacked slot + seq — without this, the entry sits
+    // orphaned (no resend timer started yet) until kDeadLinkTimeout
+    // condemns the channel.  Mirrors SendBundleReliable / SendFragmented.
+    unacked_.erase(seq);
+    next_send_seq_ = seq;
     return result.Error();
   }
 

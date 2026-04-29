@@ -59,6 +59,8 @@ auto Channel::Send() -> Result<void> {
     auto filtered =
         packet_filter_->SendFilter(std::span<const std::byte>(data.data(), data.size()));
     if (!filtered) {
+      ATLAS_LOG_WARNING("Channel send_filter failed for {}: {} ({} bytes lost)", remote_.ToString(),
+                        filtered.Error().Message(), data.size());
       return filtered.Error();
     }
     data = std::move(*filtered);
