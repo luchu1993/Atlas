@@ -34,8 +34,11 @@ struct RegisterCellApp {
 
   static auto Descriptor() -> const MessageDesc& {
     static const MessageDesc kDesc{msg_id::Id(msg_id::CellAppMgr::kRegisterCellApp),
-                                   "cellappmgr::RegisterCellApp", MessageLengthStyle::kFixed,
-                                   static_cast<int>(sizeof(uint32_t) + sizeof(uint16_t))};
+                                   "cellappmgr::RegisterCellApp",
+                                   MessageLengthStyle::kFixed,
+                                   static_cast<int>(sizeof(uint32_t) + sizeof(uint16_t)),
+                                   MessageReliability::kReliable,
+                                   MessageUrgency::kImmediate};
     return kDesc;
   }
 
@@ -69,9 +72,12 @@ struct RegisterCellAppAck {
 
   static auto Descriptor() -> const MessageDesc& {
     static const MessageDesc kDesc{
-        msg_id::Id(msg_id::CellAppMgr::kRegisterCellAppAck), "cellappmgr::RegisterCellAppAck",
+        msg_id::Id(msg_id::CellAppMgr::kRegisterCellAppAck),
+        "cellappmgr::RegisterCellAppAck",
         MessageLengthStyle::kFixed,
-        static_cast<int>(sizeof(uint8_t) + sizeof(uint32_t) + sizeof(uint64_t))};
+        static_cast<int>(sizeof(uint8_t) + sizeof(uint32_t) + sizeof(uint64_t)),
+        MessageReliability::kReliable,
+        MessageUrgency::kImmediate};
     return kDesc;
   }
 
@@ -105,9 +111,12 @@ struct InformCellLoad {
 
   static auto Descriptor() -> const MessageDesc& {
     static const MessageDesc kDesc{
-        msg_id::Id(msg_id::CellAppMgr::kInformCellLoad), "cellappmgr::InformCellLoad",
+        msg_id::Id(msg_id::CellAppMgr::kInformCellLoad),
+        "cellappmgr::InformCellLoad",
         MessageLengthStyle::kFixed,
-        static_cast<int>(sizeof(uint32_t) + sizeof(float) + sizeof(uint32_t))};
+        static_cast<int>(sizeof(uint32_t) + sizeof(float) + sizeof(uint32_t)),
+        MessageReliability::kReliable,
+        MessageUrgency::kImmediate};
     return kDesc;
   }
 
@@ -140,9 +149,12 @@ struct CreateSpaceRequest {
 
   static auto Descriptor() -> const MessageDesc& {
     static const MessageDesc kDesc{
-        msg_id::Id(msg_id::CellAppMgr::kCreateSpaceRequest), "cellappmgr::CreateSpaceRequest",
+        msg_id::Id(msg_id::CellAppMgr::kCreateSpaceRequest),
+        "cellappmgr::CreateSpaceRequest",
         MessageLengthStyle::kFixed,
-        static_cast<int>(sizeof(uint32_t) * 2 + sizeof(uint32_t) + sizeof(uint16_t))};
+        static_cast<int>(sizeof(uint32_t) * 2 + sizeof(uint32_t) + sizeof(uint16_t)),
+        MessageReliability::kReliable,
+        MessageUrgency::kImmediate};
     return kDesc;
   }
 
@@ -178,8 +190,11 @@ struct AddCellToSpace {
 
   static auto Descriptor() -> const MessageDesc& {
     static const MessageDesc kDesc{msg_id::Id(msg_id::CellAppMgr::kAddCellToSpace),
-                                   "cellappmgr::AddCellToSpace", MessageLengthStyle::kFixed,
-                                   static_cast<int>(sizeof(uint32_t) * 2 + 4 * sizeof(float))};
+                                   "cellappmgr::AddCellToSpace",
+                                   MessageLengthStyle::kFixed,
+                                   static_cast<int>(sizeof(uint32_t) * 2 + 4 * sizeof(float)),
+                                   MessageReliability::kReliable,
+                                   MessageUrgency::kImmediate};
     return kDesc;
   }
 
@@ -216,7 +231,11 @@ struct UpdateGeometry {
 
   static auto Descriptor() -> const MessageDesc& {
     static const MessageDesc kDesc{msg_id::Id(msg_id::CellAppMgr::kUpdateGeometry),
-                                   "cellappmgr::UpdateGeometry", MessageLengthStyle::kVariable, -1};
+                                   "cellappmgr::UpdateGeometry",
+                                   MessageLengthStyle::kVariable,
+                                   -1,
+                                   MessageReliability::kReliable,
+                                   MessageUrgency::kImmediate};
     return kDesc;
   }
 
@@ -255,8 +274,11 @@ struct ShouldOffload {
 
   static auto Descriptor() -> const MessageDesc& {
     static const MessageDesc kDesc{msg_id::Id(msg_id::CellAppMgr::kShouldOffload),
-                                   "cellappmgr::ShouldOffload", MessageLengthStyle::kFixed,
-                                   static_cast<int>(sizeof(uint32_t) * 2 + sizeof(uint8_t))};
+                                   "cellappmgr::ShouldOffload",
+                                   MessageLengthStyle::kFixed,
+                                   static_cast<int>(sizeof(uint32_t) * 2 + sizeof(uint8_t)),
+                                   MessageReliability::kReliable,
+                                   MessageUrgency::kImmediate};
     return kDesc;
   }
 
@@ -298,10 +320,13 @@ struct SpaceCreatedResult {
 
   static auto Descriptor() -> const MessageDesc& {
     static const MessageDesc kDesc{
-        msg_id::Id(msg_id::CellAppMgr::kSpaceCreatedResult), "cellappmgr::SpaceCreatedResult",
+        msg_id::Id(msg_id::CellAppMgr::kSpaceCreatedResult),
+        "cellappmgr::SpaceCreatedResult",
         MessageLengthStyle::kFixed,
         static_cast<int>(sizeof(uint32_t) + sizeof(uint32_t) + sizeof(uint8_t) + sizeof(uint32_t) +
-                         sizeof(uint32_t) + sizeof(uint16_t))};
+                         sizeof(uint32_t) + sizeof(uint16_t)),
+        MessageReliability::kReliable,
+        MessageUrgency::kImmediate};
     return kDesc;
   }
 

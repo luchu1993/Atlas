@@ -44,8 +44,10 @@ struct RegisterMessage {
   uint32_t pid{0};
 
   static auto Descriptor() -> const MessageDesc& {
-    static const MessageDesc kDesc{msg_id::Id(msg_id::Machined::kRegister), "machined::Register",
-                                   MessageLengthStyle::kVariable, -1};
+    static const MessageDesc kDesc{
+        msg_id::Id(msg_id::Machined::kRegister), "machined::Register",
+        MessageLengthStyle::kVariable,           -1,
+        MessageReliability::kReliable,           MessageUrgency::kImmediate};
     return kDesc;
   }
 
@@ -90,7 +92,11 @@ struct RegisterAck {
 
   static auto Descriptor() -> const MessageDesc& {
     static const MessageDesc kDesc{msg_id::Id(msg_id::Machined::kRegisterAck),
-                                   "machined::RegisterAck", MessageLengthStyle::kVariable, -1};
+                                   "machined::RegisterAck",
+                                   MessageLengthStyle::kVariable,
+                                   -1,
+                                   MessageReliability::kReliable,
+                                   MessageUrgency::kImmediate};
     return kDesc;
   }
 
@@ -126,7 +132,11 @@ struct DeregisterMessage {
 
   static auto Descriptor() -> const MessageDesc& {
     static const MessageDesc kDesc{msg_id::Id(msg_id::Machined::kDeregister),
-                                   "machined::Deregister", MessageLengthStyle::kVariable, -1};
+                                   "machined::Deregister",
+                                   MessageLengthStyle::kVariable,
+                                   -1,
+                                   MessageReliability::kReliable,
+                                   MessageUrgency::kImmediate};
     return kDesc;
   }
 
@@ -159,8 +169,10 @@ struct QueryMessage {
   ProcessType process_type{ProcessType::kBaseApp};
 
   static auto Descriptor() -> const MessageDesc& {
-    static const MessageDesc kDesc{msg_id::Id(msg_id::Machined::kQuery), "machined::Query",
-                                   MessageLengthStyle::kVariable, -1};
+    static const MessageDesc kDesc{
+        msg_id::Id(msg_id::Machined::kQuery), "machined::Query",
+        MessageLengthStyle::kVariable,        -1,
+        MessageReliability::kReliable,        MessageUrgency::kImmediate};
     return kDesc;
   }
 
@@ -180,7 +192,11 @@ struct QueryResponse {
 
   static auto Descriptor() -> const MessageDesc& {
     static const MessageDesc kDesc{msg_id::Id(msg_id::Machined::kQueryResponse),
-                                   "machined::QueryResponse", MessageLengthStyle::kVariable, -1};
+                                   "machined::QueryResponse",
+                                   MessageLengthStyle::kVariable,
+                                   -1,
+                                   MessageReliability::kReliable,
+                                   MessageUrgency::kImmediate};
     return kDesc;
   }
 
@@ -249,8 +265,12 @@ struct HeartbeatMessage {
   uint32_t pid{0};
 
   static auto Descriptor() -> const MessageDesc& {
-    static const MessageDesc kDesc{msg_id::Id(msg_id::Machined::kHeartbeat), "machined::Heartbeat",
-                                   MessageLengthStyle::kVariable, -1};
+    static const MessageDesc kDesc{msg_id::Id(msg_id::Machined::kHeartbeat),
+                                   "machined::Heartbeat",
+                                   MessageLengthStyle::kVariable,
+                                   -1,
+                                   MessageReliability::kReliable,
+                                   MessageUrgency::kImmediate};
     return kDesc;
   }
 
@@ -279,7 +299,11 @@ struct HeartbeatAck {
 
   static auto Descriptor() -> const MessageDesc& {
     static const MessageDesc kDesc{msg_id::Id(msg_id::Machined::kHeartbeatAck),
-                                   "machined::HeartbeatAck", MessageLengthStyle::kVariable, -1};
+                                   "machined::HeartbeatAck",
+                                   MessageLengthStyle::kVariable,
+                                   -1,
+                                   MessageReliability::kReliable,
+                                   MessageUrgency::kImmediate};
     return kDesc;
   }
 
@@ -307,8 +331,11 @@ struct BirthNotification {
 
   static auto Descriptor() -> const MessageDesc& {
     static const MessageDesc kDesc{msg_id::Id(msg_id::Machined::kBirthNotification),
-                                   "machined::BirthNotification", MessageLengthStyle::kVariable,
-                                   -1};
+                                   "machined::BirthNotification",
+                                   MessageLengthStyle::kVariable,
+                                   -1,
+                                   MessageReliability::kReliable,
+                                   MessageUrgency::kImmediate};
     return kDesc;
   }
 
@@ -355,8 +382,11 @@ struct DeathNotification {
 
   static auto Descriptor() -> const MessageDesc& {
     static const MessageDesc kDesc{msg_id::Id(msg_id::Machined::kDeathNotification),
-                                   "machined::DeathNotification", MessageLengthStyle::kVariable,
-                                   -1};
+                                   "machined::DeathNotification",
+                                   MessageLengthStyle::kVariable,
+                                   -1,
+                                   MessageReliability::kReliable,
+                                   MessageUrgency::kImmediate};
     return kDesc;
   }
 
@@ -404,7 +434,11 @@ struct ListenerRegister {
 
   static auto Descriptor() -> const MessageDesc& {
     static const MessageDesc kDesc{msg_id::Id(msg_id::Machined::kListenerRegister),
-                                   "machined::ListenerRegister", MessageLengthStyle::kVariable, -1};
+                                   "machined::ListenerRegister",
+                                   MessageLengthStyle::kVariable,
+                                   -1,
+                                   MessageReliability::kReliable,
+                                   MessageUrgency::kImmediate};
     return kDesc;
   }
 
@@ -430,7 +464,11 @@ struct ListenerAck {
 
   static auto Descriptor() -> const MessageDesc& {
     static const MessageDesc kDesc{msg_id::Id(msg_id::Machined::kListenerAck),
-                                   "machined::ListenerAck", MessageLengthStyle::kVariable, -1};
+                                   "machined::ListenerAck",
+                                   MessageLengthStyle::kVariable,
+                                   -1,
+                                   MessageReliability::kReliable,
+                                   MessageUrgency::kImmediate};
     return kDesc;
   }
 
@@ -457,7 +495,11 @@ struct WatcherRequest {
 
   static auto Descriptor() -> const MessageDesc& {
     static const MessageDesc kDesc{msg_id::Id(msg_id::Machined::kWatcherRequest),
-                                   "machined::WatcherRequest", MessageLengthStyle::kVariable, -1};
+                                   "machined::WatcherRequest",
+                                   MessageLengthStyle::kVariable,
+                                   -1,
+                                   MessageReliability::kReliable,
+                                   MessageUrgency::kImmediate};
     return kDesc;
   }
 
@@ -494,7 +536,11 @@ struct WatcherResponse {
 
   static auto Descriptor() -> const MessageDesc& {
     static const MessageDesc kDesc{msg_id::Id(msg_id::Machined::kWatcherResponse),
-                                   "machined::WatcherResponse", MessageLengthStyle::kVariable, -1};
+                                   "machined::WatcherResponse",
+                                   MessageLengthStyle::kVariable,
+                                   -1,
+                                   MessageReliability::kReliable,
+                                   MessageUrgency::kImmediate};
     return kDesc;
   }
 
@@ -530,7 +576,11 @@ struct WatcherForward {
 
   static auto Descriptor() -> const MessageDesc& {
     static const MessageDesc kDesc{msg_id::Id(msg_id::Machined::kWatcherForward),
-                                   "machined::WatcherForward", MessageLengthStyle::kVariable, -1};
+                                   "machined::WatcherForward",
+                                   MessageLengthStyle::kVariable,
+                                   -1,
+                                   MessageReliability::kReliable,
+                                   MessageUrgency::kImmediate};
     return kDesc;
   }
 
@@ -562,7 +612,11 @@ struct WatcherReply {
 
   static auto Descriptor() -> const MessageDesc& {
     static const MessageDesc kDesc{msg_id::Id(msg_id::Machined::kWatcherReply),
-                                   "machined::WatcherReply", MessageLengthStyle::kVariable, -1};
+                                   "machined::WatcherReply",
+                                   MessageLengthStyle::kVariable,
+                                   -1,
+                                   MessageReliability::kReliable,
+                                   MessageUrgency::kImmediate};
     return kDesc;
   }
 

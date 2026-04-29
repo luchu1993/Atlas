@@ -113,8 +113,11 @@ struct AcceptClient {
 
   static auto Descriptor() -> const MessageDesc& {
     static const MessageDesc kDesc{msg_id::Id(msg_id::BaseApp::kAcceptClient),
-                                   "baseapp::AcceptClient", MessageLengthStyle::kFixed,
-                                   static_cast<int>(sizeof(uint32_t) + sizeof(SessionKey))};
+                                   "baseapp::AcceptClient",
+                                   MessageLengthStyle::kFixed,
+                                   static_cast<int>(sizeof(uint32_t) + sizeof(SessionKey)),
+                                   MessageReliability::kReliable,
+                                   MessageUrgency::kImmediate};
     return kDesc;
   }
 
@@ -148,9 +151,12 @@ struct CellEntityCreated {
 
   static auto Descriptor() -> const MessageDesc& {
     static const MessageDesc kDesc{
-        msg_id::Id(msg_id::BaseApp::kCellEntityCreated), "baseapp::CellEntityCreated",
+        msg_id::Id(msg_id::BaseApp::kCellEntityCreated),
+        "baseapp::CellEntityCreated",
         MessageLengthStyle::kFixed,
-        static_cast<int>(sizeof(uint32_t) * 2 + sizeof(uint32_t) + sizeof(uint16_t))};
+        static_cast<int>(sizeof(uint32_t) * 2 + sizeof(uint32_t) + sizeof(uint16_t)),
+        MessageReliability::kReliable,
+        MessageUrgency::kImmediate};
     return kDesc;
   }
 
@@ -186,8 +192,11 @@ struct CellEntityDestroyed {
 
   static auto Descriptor() -> const MessageDesc& {
     static const MessageDesc kDesc{msg_id::Id(msg_id::BaseApp::kCellEntityDestroyed),
-                                   "baseapp::CellEntityDestroyed", MessageLengthStyle::kFixed,
-                                   static_cast<int>(sizeof(uint32_t))};
+                                   "baseapp::CellEntityDestroyed",
+                                   MessageLengthStyle::kFixed,
+                                   static_cast<int>(sizeof(uint32_t)),
+                                   MessageReliability::kReliable,
+                                   MessageUrgency::kImmediate};
     return kDesc;
   }
 
@@ -215,9 +224,12 @@ struct CurrentCell {
 
   static auto Descriptor() -> const MessageDesc& {
     static const MessageDesc kDesc{
-        msg_id::Id(msg_id::BaseApp::kCurrentCell), "baseapp::CurrentCell",
+        msg_id::Id(msg_id::BaseApp::kCurrentCell),
+        "baseapp::CurrentCell",
         MessageLengthStyle::kFixed,
-        static_cast<int>(sizeof(uint32_t) * 3 + sizeof(uint32_t) + sizeof(uint16_t))};
+        static_cast<int>(sizeof(uint32_t) * 3 + sizeof(uint32_t) + sizeof(uint16_t)),
+        MessageReliability::kReliable,
+        MessageUrgency::kImmediate};
     return kDesc;
   }
 
@@ -549,8 +561,11 @@ struct BackupCellEntity {
 
   static auto Descriptor() -> const MessageDesc& {
     static const MessageDesc kDesc{msg_id::Id(msg_id::BaseApp::kBackupCellEntity),
-                                   "baseapp::BackupCellEntity", MessageLengthStyle::kVariable, -1,
-                                   MessageReliability::kReliable};
+                                   "baseapp::BackupCellEntity",
+                                   MessageLengthStyle::kVariable,
+                                   -1,
+                                   MessageReliability::kReliable,
+                                   MessageUrgency::kImmediate};
     return kDesc;
   }
 
@@ -682,8 +697,11 @@ struct Authenticate {
 
   static auto Descriptor() -> const MessageDesc& {
     static const MessageDesc kDesc{msg_id::Id(msg_id::BaseApp::kAuthenticate),
-                                   "baseapp::Authenticate", MessageLengthStyle::kFixed,
-                                   static_cast<int>(sizeof(SessionKey))};
+                                   "baseapp::Authenticate",
+                                   MessageLengthStyle::kFixed,
+                                   static_cast<int>(sizeof(SessionKey)),
+                                   MessageReliability::kReliable,
+                                   MessageUrgency::kImmediate};
     return kDesc;
   }
 
@@ -714,8 +732,11 @@ struct AuthenticateResult {
 
   static auto Descriptor() -> const MessageDesc& {
     static const MessageDesc kDesc{msg_id::Id(msg_id::BaseApp::kAuthenticateResult),
-                                   "baseapp::AuthenticateResult", MessageLengthStyle::kVariable,
-                                   -1};
+                                   "baseapp::AuthenticateResult",
+                                   MessageLengthStyle::kVariable,
+                                   -1,
+                                   MessageReliability::kReliable,
+                                   MessageUrgency::kImmediate};
     return kDesc;
   }
 
@@ -761,8 +782,11 @@ struct EntityTransferred {
 
   static auto Descriptor() -> const MessageDesc& {
     static const MessageDesc kDesc{msg_id::Id(msg_id::BaseApp::kEntityTransferred),
-                                   "baseapp::EntityTransferred", MessageLengthStyle::kFixed,
-                                   static_cast<int>(sizeof(uint32_t) + sizeof(uint16_t))};
+                                   "baseapp::EntityTransferred",
+                                   MessageLengthStyle::kFixed,
+                                   static_cast<int>(sizeof(uint32_t) + sizeof(uint16_t)),
+                                   MessageReliability::kReliable,
+                                   MessageUrgency::kImmediate};
     return kDesc;
   }
 
@@ -803,8 +827,12 @@ struct CellReady {
   EntityID entity_id{kInvalidEntityID};
 
   static auto Descriptor() -> const MessageDesc& {
-    static const MessageDesc kDesc{msg_id::Id(msg_id::BaseApp::kCellReady), "baseapp::CellReady",
-                                   MessageLengthStyle::kFixed, static_cast<int>(sizeof(uint32_t))};
+    static const MessageDesc kDesc{msg_id::Id(msg_id::BaseApp::kCellReady),
+                                   "baseapp::CellReady",
+                                   MessageLengthStyle::kFixed,
+                                   static_cast<int>(sizeof(uint32_t)),
+                                   MessageReliability::kReliable,
+                                   MessageUrgency::kImmediate};
     return kDesc;
   }
 
@@ -832,7 +860,11 @@ struct ClientBaseRpc {
 
   static auto Descriptor() -> const MessageDesc& {
     static const MessageDesc kDesc{msg_id::Id(msg_id::BaseApp::kClientBaseRpc),
-                                   "baseapp::ClientBaseRpc", MessageLengthStyle::kVariable, -1};
+                                   "baseapp::ClientBaseRpc",
+                                   MessageLengthStyle::kVariable,
+                                   -1,
+                                   MessageReliability::kReliable,
+                                   MessageUrgency::kImmediate};
     return kDesc;
   }
 
@@ -878,7 +910,11 @@ struct ClientCellRpc {
 
   static auto Descriptor() -> const MessageDesc& {
     static const MessageDesc kDesc{msg_id::Id(msg_id::BaseApp::kClientCellRpc),
-                                   "baseapp::ClientCellRpc", MessageLengthStyle::kVariable, -1};
+                                   "baseapp::ClientCellRpc",
+                                   MessageLengthStyle::kVariable,
+                                   -1,
+                                   MessageReliability::kReliable,
+                                   MessageUrgency::kImmediate};
     return kDesc;
   }
 
@@ -926,7 +962,11 @@ struct CellAppDeath {
 
   static auto Descriptor() -> const MessageDesc& {
     static const MessageDesc kDesc{msg_id::Id(msg_id::BaseApp::kCellAppDeath),
-                                   "baseapp::CellAppDeath", MessageLengthStyle::kVariable, -1};
+                                   "baseapp::CellAppDeath",
+                                   MessageLengthStyle::kVariable,
+                                   -1,
+                                   MessageReliability::kReliable,
+                                   MessageUrgency::kImmediate};
     return kDesc;
   }
 
@@ -1012,8 +1052,11 @@ struct ForceLogoff {
 
   static auto Descriptor() -> const MessageDesc& {
     static const MessageDesc kDesc{msg_id::Id(msg_id::BaseApp::kForceLogoff),
-                                   "baseapp::ForceLogoff", MessageLengthStyle::kFixed,
-                                   static_cast<int>(sizeof(int64_t) + sizeof(uint32_t))};
+                                   "baseapp::ForceLogoff",
+                                   MessageLengthStyle::kFixed,
+                                   static_cast<int>(sizeof(int64_t) + sizeof(uint32_t)),
+                                   MessageReliability::kReliable,
+                                   MessageUrgency::kImmediate};
     return kDesc;
   }
 
@@ -1044,8 +1087,11 @@ struct ForceLogoffAck {
 
   static auto Descriptor() -> const MessageDesc& {
     static const MessageDesc kDesc{msg_id::Id(msg_id::BaseApp::kForceLogoffAck),
-                                   "baseapp::ForceLogoffAck", MessageLengthStyle::kFixed,
-                                   static_cast<int>(sizeof(uint32_t) + sizeof(uint8_t))};
+                                   "baseapp::ForceLogoffAck",
+                                   MessageLengthStyle::kFixed,
+                                   static_cast<int>(sizeof(uint32_t) + sizeof(uint8_t)),
+                                   MessageReliability::kReliable,
+                                   MessageUrgency::kImmediate};
     return kDesc;
   }
 

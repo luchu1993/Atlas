@@ -35,9 +35,12 @@ struct Heartbeat {
   float load{0.0f};       // normalised load 0.0–1.0
 
   static auto Descriptor() -> const MessageDesc& {
-    static const MessageDesc desc{msg_id::Id(msg_id::Common::kHeartbeat), "Heartbeat",
+    static const MessageDesc desc{msg_id::Id(msg_id::Common::kHeartbeat),
+                                  "Heartbeat",
                                   MessageLengthStyle::kFixed,
-                                  static_cast<int32_t>(sizeof(uint64_t) + sizeof(float))};
+                                  static_cast<int32_t>(sizeof(uint64_t) + sizeof(float)),
+                                  MessageReliability::kReliable,
+                                  MessageUrgency::kImmediate};
     return desc;
   }
 
@@ -63,9 +66,12 @@ struct ShutdownRequest {
   uint8_t reason{0};  // 0=normal, 1=maintenance, 2=emergency
 
   static auto Descriptor() -> const MessageDesc& {
-    static const MessageDesc desc{msg_id::Id(msg_id::Common::kShutdownRequest), "ShutdownRequest",
+    static const MessageDesc desc{msg_id::Id(msg_id::Common::kShutdownRequest),
+                                  "ShutdownRequest",
                                   MessageLengthStyle::kFixed,
-                                  static_cast<int32_t>(sizeof(uint8_t))};
+                                  static_cast<int32_t>(sizeof(uint8_t)),
+                                  MessageReliability::kReliable,
+                                  MessageUrgency::kImmediate};
     return desc;
   }
 

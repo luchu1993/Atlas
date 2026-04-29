@@ -54,8 +54,12 @@ struct LoginRequest {
   std::string password_hash;  // SHA-256 hex of password
 
   static auto Descriptor() -> const MessageDesc& {
-    static const MessageDesc kDesc{msg_id::Id(msg_id::Login::kLoginRequest), "login::LoginRequest",
-                                   MessageLengthStyle::kVariable, -1};
+    static const MessageDesc kDesc{msg_id::Id(msg_id::Login::kLoginRequest),
+                                   "login::LoginRequest",
+                                   MessageLengthStyle::kVariable,
+                                   -1,
+                                   MessageReliability::kReliable,
+                                   MessageUrgency::kImmediate};
     return kDesc;
   }
 
@@ -87,8 +91,10 @@ struct LoginResult {
   std::string error_message;
 
   static auto Descriptor() -> const MessageDesc& {
-    static const MessageDesc kDesc{msg_id::Id(msg_id::Login::kLoginResult), "login::LoginResult",
-                                   MessageLengthStyle::kVariable, -1};
+    static const MessageDesc kDesc{
+        msg_id::Id(msg_id::Login::kLoginResult), "login::LoginResult",
+        MessageLengthStyle::kVariable,           -1,
+        MessageReliability::kReliable,           MessageUrgency::kImmediate};
     return kDesc;
   }
 
@@ -138,8 +144,10 @@ struct AuthLogin {
   bool auto_create{false};
 
   static auto Descriptor() -> const MessageDesc& {
-    static const MessageDesc kDesc{msg_id::Id(msg_id::Login::kAuthLogin), "login::AuthLogin",
-                                   MessageLengthStyle::kVariable, -1};
+    static const MessageDesc kDesc{
+        msg_id::Id(msg_id::Login::kAuthLogin), "login::AuthLogin",
+        MessageLengthStyle::kVariable,         -1,
+        MessageReliability::kReliable,         MessageUrgency::kImmediate};
     return kDesc;
   }
 
@@ -179,10 +187,13 @@ struct AuthLoginResult {
 
   static auto Descriptor() -> const MessageDesc& {
     static const MessageDesc kDesc{
-        msg_id::Id(msg_id::Login::kAuthLoginResult), "login::AuthLoginResult",
+        msg_id::Id(msg_id::Login::kAuthLoginResult),
+        "login::AuthLoginResult",
         MessageLengthStyle::kFixed,
         static_cast<int>(sizeof(uint32_t) + sizeof(uint8_t) + sizeof(uint8_t) + sizeof(int64_t) +
-                         sizeof(uint16_t))};
+                         sizeof(uint16_t)),
+        MessageReliability::kReliable,
+        MessageUrgency::kImmediate};
     return kDesc;
   }
 
@@ -224,9 +235,12 @@ struct AllocateBaseApp {
 
   static auto Descriptor() -> const MessageDesc& {
     static const MessageDesc kDesc{
-        msg_id::Id(msg_id::Login::kAllocateBaseApp), "login::AllocateBaseApp",
+        msg_id::Id(msg_id::Login::kAllocateBaseApp),
+        "login::AllocateBaseApp",
         MessageLengthStyle::kFixed,
-        static_cast<int>(sizeof(uint32_t) + sizeof(uint16_t) + sizeof(int64_t))};
+        static_cast<int>(sizeof(uint32_t) + sizeof(uint16_t) + sizeof(int64_t)),
+        MessageReliability::kReliable,
+        MessageUrgency::kImmediate};
     return kDesc;
   }
 
@@ -262,9 +276,12 @@ struct AllocateBaseAppResult {
 
   static auto Descriptor() -> const MessageDesc& {
     static const MessageDesc kDesc{msg_id::Id(msg_id::Login::kAllocateBaseAppResult),
-                                   "login::AllocateBaseAppResult", MessageLengthStyle::kFixed,
+                                   "login::AllocateBaseAppResult",
+                                   MessageLengthStyle::kFixed,
                                    static_cast<int>(sizeof(uint32_t) + sizeof(uint8_t) +
-                                                    (sizeof(uint32_t) + sizeof(uint16_t)) * 2)};
+                                                    (sizeof(uint32_t) + sizeof(uint16_t)) * 2),
+                                   MessageReliability::kReliable,
+                                   MessageUrgency::kImmediate};
     return kDesc;
   }
 
@@ -312,8 +329,12 @@ struct PrepareLogin {
   bool blob_prefetched{false};
 
   static auto Descriptor() -> const MessageDesc& {
-    static const MessageDesc kDesc{msg_id::Id(msg_id::Login::kPrepareLogin), "login::PrepareLogin",
-                                   MessageLengthStyle::kVariable, -1};
+    static const MessageDesc kDesc{msg_id::Id(msg_id::Login::kPrepareLogin),
+                                   "login::PrepareLogin",
+                                   MessageLengthStyle::kVariable,
+                                   -1,
+                                   MessageReliability::kReliable,
+                                   MessageUrgency::kImmediate};
     return kDesc;
   }
 
@@ -373,7 +394,11 @@ struct PrepareLoginResult {
 
   static auto Descriptor() -> const MessageDesc& {
     static const MessageDesc kDesc{msg_id::Id(msg_id::Login::kPrepareLoginResult),
-                                   "login::PrepareLoginResult", MessageLengthStyle::kVariable, -1};
+                                   "login::PrepareLoginResult",
+                                   MessageLengthStyle::kVariable,
+                                   -1,
+                                   MessageReliability::kReliable,
+                                   MessageUrgency::kImmediate};
     return kDesc;
   }
 
@@ -413,8 +438,11 @@ struct CancelPrepareLogin {
 
   static auto Descriptor() -> const MessageDesc& {
     static const MessageDesc kDesc{msg_id::Id(msg_id::Login::kCancelPrepareLogin),
-                                   "login::CancelPrepareLogin", MessageLengthStyle::kFixed,
-                                   static_cast<int>(sizeof(uint32_t) + sizeof(int64_t))};
+                                   "login::CancelPrepareLogin",
+                                   MessageLengthStyle::kFixed,
+                                   static_cast<int>(sizeof(uint32_t) + sizeof(int64_t)),
+                                   MessageReliability::kReliable,
+                                   MessageUrgency::kImmediate};
     return kDesc;
   }
 

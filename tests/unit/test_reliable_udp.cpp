@@ -17,7 +17,12 @@ struct RudpTestMsg {
   uint32_t value;
 
   static auto Descriptor() -> const MessageDesc& {
-    static const MessageDesc desc{300, "RudpTestMsg", MessageLengthStyle::kVariable, -1};
+    static const MessageDesc desc{300,
+                                  "RudpTestMsg",
+                                  MessageLengthStyle::kVariable,
+                                  -1,
+                                  MessageReliability::kReliable,
+                                  MessageUrgency::kImmediate};
     return desc;
   }
 

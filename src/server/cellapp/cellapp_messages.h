@@ -167,8 +167,11 @@ struct ClientCellRpcForward {
 
   static auto Descriptor() -> const MessageDesc& {
     static const MessageDesc kDesc{msg_id::Id(msg_id::CellApp::kClientCellRpcForward),
-                                   "cellapp::ClientCellRpcForward", MessageLengthStyle::kVariable,
-                                   -1};
+                                   "cellapp::ClientCellRpcForward",
+                                   MessageLengthStyle::kVariable,
+                                   -1,
+                                   MessageReliability::kReliable,
+                                   MessageUrgency::kImmediate};
     return kDesc;
   }
 
@@ -215,7 +218,11 @@ struct InternalCellRpc {
 
   static auto Descriptor() -> const MessageDesc& {
     static const MessageDesc kDesc{msg_id::Id(msg_id::CellApp::kInternalCellRpc),
-                                   "cellapp::InternalCellRpc", MessageLengthStyle::kVariable, -1};
+                                   "cellapp::InternalCellRpc",
+                                   MessageLengthStyle::kVariable,
+                                   -1,
+                                   MessageReliability::kReliable,
+                                   MessageUrgency::kImmediate};
     return kDesc;
   }
 
@@ -254,8 +261,11 @@ struct CreateSpace {
 
   static auto Descriptor() -> const MessageDesc& {
     static const MessageDesc kDesc{msg_id::Id(msg_id::CellApp::kCreateSpace),
-                                   "cellapp::CreateSpace", MessageLengthStyle::kFixed,
-                                   static_cast<int>(sizeof(SpaceID))};
+                                   "cellapp::CreateSpace",
+                                   MessageLengthStyle::kFixed,
+                                   static_cast<int>(sizeof(SpaceID)),
+                                   MessageReliability::kReliable,
+                                   MessageUrgency::kImmediate};
     return kDesc;
   }
 
@@ -280,8 +290,11 @@ struct DestroySpace {
 
   static auto Descriptor() -> const MessageDesc& {
     static const MessageDesc kDesc{msg_id::Id(msg_id::CellApp::kDestroySpace),
-                                   "cellapp::DestroySpace", MessageLengthStyle::kFixed,
-                                   static_cast<int>(sizeof(SpaceID))};
+                                   "cellapp::DestroySpace",
+                                   MessageLengthStyle::kFixed,
+                                   static_cast<int>(sizeof(SpaceID)),
+                                   MessageReliability::kReliable,
+                                   MessageUrgency::kImmediate};
     return kDesc;
   }
 
@@ -366,8 +379,11 @@ struct EnableWitness {
 
   static auto Descriptor() -> const MessageDesc& {
     static const MessageDesc kDesc{msg_id::Id(msg_id::CellApp::kEnableWitness),
-                                   "cellapp::EnableWitness", MessageLengthStyle::kFixed,
-                                   static_cast<int>(sizeof(EntityID))};
+                                   "cellapp::EnableWitness",
+                                   MessageLengthStyle::kFixed,
+                                   static_cast<int>(sizeof(EntityID)),
+                                   MessageReliability::kReliable,
+                                   MessageUrgency::kImmediate};
     return kDesc;
   }
 
@@ -392,8 +408,11 @@ struct DisableWitness {
 
   static auto Descriptor() -> const MessageDesc& {
     static const MessageDesc kDesc{msg_id::Id(msg_id::CellApp::kDisableWitness),
-                                   "cellapp::DisableWitness", MessageLengthStyle::kFixed,
-                                   static_cast<int>(sizeof(EntityID))};
+                                   "cellapp::DisableWitness",
+                                   MessageLengthStyle::kFixed,
+                                   static_cast<int>(sizeof(EntityID)),
+                                   MessageReliability::kReliable,
+                                   MessageUrgency::kImmediate};
     return kDesc;
   }
 
@@ -426,8 +445,11 @@ struct SetAoIRadius {
 
   static auto Descriptor() -> const MessageDesc& {
     static const MessageDesc kDesc{msg_id::Id(msg_id::CellApp::kSetAoIRadius),
-                                   "cellapp::SetAoIRadius", MessageLengthStyle::kFixed,
-                                   static_cast<int>(sizeof(EntityID) + 2 * sizeof(float))};
+                                   "cellapp::SetAoIRadius",
+                                   MessageLengthStyle::kFixed,
+                                   static_cast<int>(sizeof(EntityID) + 2 * sizeof(float)),
+                                   MessageReliability::kReliable,
+                                   MessageUrgency::kImmediate};
     return kDesc;
   }
 

@@ -319,9 +319,12 @@ struct GhostSetReal {
 
   static auto Descriptor() -> const MessageDesc& {
     static const MessageDesc kDesc{
-        msg_id::Id(msg_id::CellApp::kGhostSetReal), "cellapp::GhostSetReal",
+        msg_id::Id(msg_id::CellApp::kGhostSetReal),
+        "cellapp::GhostSetReal",
         MessageLengthStyle::kFixed,
-        static_cast<int>(sizeof(uint32_t) + sizeof(uint32_t) + sizeof(uint16_t))};
+        static_cast<int>(sizeof(uint32_t) + sizeof(uint32_t) + sizeof(uint16_t)),
+        MessageReliability::kReliable,
+        MessageUrgency::kImmediate};
     return kDesc;
   }
 
@@ -355,9 +358,12 @@ struct GhostSetNextReal {
 
   static auto Descriptor() -> const MessageDesc& {
     static const MessageDesc kDesc{
-        msg_id::Id(msg_id::CellApp::kGhostSetNextReal), "cellapp::GhostSetNextReal",
+        msg_id::Id(msg_id::CellApp::kGhostSetNextReal),
+        "cellapp::GhostSetNextReal",
         MessageLengthStyle::kFixed,
-        static_cast<int>(sizeof(uint32_t) + sizeof(uint32_t) + sizeof(uint16_t))};
+        static_cast<int>(sizeof(uint32_t) + sizeof(uint32_t) + sizeof(uint16_t)),
+        MessageReliability::kReliable,
+        MessageUrgency::kImmediate};
     return kDesc;
   }
 
@@ -427,7 +433,11 @@ struct OffloadEntity {
 
   static auto Descriptor() -> const MessageDesc& {
     static const MessageDesc kDesc{msg_id::Id(msg_id::CellApp::kOffloadEntity),
-                                   "cellapp::OffloadEntity", MessageLengthStyle::kVariable, -1};
+                                   "cellapp::OffloadEntity",
+                                   MessageLengthStyle::kVariable,
+                                   -1,
+                                   MessageReliability::kReliable,
+                                   MessageUrgency::kImmediate};
     return kDesc;
   }
 
@@ -572,8 +582,11 @@ struct OffloadEntityAck {
 
   static auto Descriptor() -> const MessageDesc& {
     static const MessageDesc kDesc{msg_id::Id(msg_id::CellApp::kOffloadEntityAck),
-                                   "cellapp::OffloadEntityAck", MessageLengthStyle::kFixed,
-                                   static_cast<int>(sizeof(uint32_t) + sizeof(uint8_t))};
+                                   "cellapp::OffloadEntityAck",
+                                   MessageLengthStyle::kFixed,
+                                   static_cast<int>(sizeof(uint32_t) + sizeof(uint8_t)),
+                                   MessageReliability::kReliable,
+                                   MessageUrgency::kImmediate};
     return kDesc;
   }
 

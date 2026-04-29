@@ -34,8 +34,11 @@ struct RegisterBaseApp {
 
   static auto Descriptor() -> const MessageDesc& {
     static const MessageDesc kDesc{msg_id::Id(msg_id::BaseAppMgr::kRegisterBaseApp),
-                                   "baseappmgr::RegisterBaseApp", MessageLengthStyle::kFixed,
-                                   static_cast<int>((sizeof(uint32_t) + sizeof(uint16_t)) * 2)};
+                                   "baseappmgr::RegisterBaseApp",
+                                   MessageLengthStyle::kFixed,
+                                   static_cast<int>((sizeof(uint32_t) + sizeof(uint16_t)) * 2),
+                                   MessageReliability::kReliable,
+                                   MessageUrgency::kImmediate};
     return kDesc;
   }
 
@@ -72,9 +75,12 @@ struct RegisterBaseAppAck {
 
   static auto Descriptor() -> const MessageDesc& {
     static const MessageDesc kDesc{
-        msg_id::Id(msg_id::BaseAppMgr::kRegisterBaseAppAck), "baseappmgr::RegisterBaseAppAck",
+        msg_id::Id(msg_id::BaseAppMgr::kRegisterBaseAppAck),
+        "baseappmgr::RegisterBaseAppAck",
         MessageLengthStyle::kFixed,
-        static_cast<int>(sizeof(uint8_t) + sizeof(uint32_t) + sizeof(uint64_t))};
+        static_cast<int>(sizeof(uint8_t) + sizeof(uint32_t) + sizeof(uint64_t)),
+        MessageReliability::kReliable,
+        MessageUrgency::kImmediate};
     return kDesc;
   }
 
@@ -108,8 +114,11 @@ struct BaseAppReady {
 
   static auto Descriptor() -> const MessageDesc& {
     static const MessageDesc kDesc{msg_id::Id(msg_id::BaseAppMgr::kBaseAppReady),
-                                   "baseappmgr::BaseAppReady", MessageLengthStyle::kFixed,
-                                   static_cast<int>(sizeof(uint32_t))};
+                                   "baseappmgr::BaseAppReady",
+                                   MessageLengthStyle::kFixed,
+                                   static_cast<int>(sizeof(uint32_t)),
+                                   MessageReliability::kReliable,
+                                   MessageUrgency::kImmediate};
     return kDesc;
   }
 
@@ -142,9 +151,12 @@ struct InformLoad {
 
   static auto Descriptor() -> const MessageDesc& {
     static const MessageDesc kDesc{
-        msg_id::Id(msg_id::BaseAppMgr::kInformLoad), "baseappmgr::InformLoad",
+        msg_id::Id(msg_id::BaseAppMgr::kInformLoad),
+        "baseappmgr::InformLoad",
         MessageLengthStyle::kFixed,
-        static_cast<int>(sizeof(uint32_t) + sizeof(float) + sizeof(uint32_t) * 7)};
+        static_cast<int>(sizeof(uint32_t) + sizeof(float) + sizeof(uint32_t) * 7),
+        MessageReliability::kReliable,
+        MessageUrgency::kImmediate};
     return kDesc;
   }
 
@@ -198,8 +210,11 @@ struct RegisterGlobalBase {
 
   static auto Descriptor() -> const MessageDesc& {
     static const MessageDesc kDesc{msg_id::Id(msg_id::BaseAppMgr::kRegisterGlobalBase),
-                                   "baseappmgr::RegisterGlobalBase", MessageLengthStyle::kVariable,
-                                   -1};
+                                   "baseappmgr::RegisterGlobalBase",
+                                   MessageLengthStyle::kVariable,
+                                   -1,
+                                   MessageReliability::kReliable,
+                                   MessageUrgency::kImmediate};
     return kDesc;
   }
 
@@ -234,7 +249,10 @@ struct DeregisterGlobalBase {
   static auto Descriptor() -> const MessageDesc& {
     static const MessageDesc kDesc{msg_id::Id(msg_id::BaseAppMgr::kDeregisterGlobalBase),
                                    "baseappmgr::DeregisterGlobalBase",
-                                   MessageLengthStyle::kVariable, -1};
+                                   MessageLengthStyle::kVariable,
+                                   -1,
+                                   MessageReliability::kReliable,
+                                   MessageUrgency::kImmediate};
     return kDesc;
   }
 
@@ -264,7 +282,10 @@ struct GlobalBaseNotification {
   static auto Descriptor() -> const MessageDesc& {
     static const MessageDesc kDesc{msg_id::Id(msg_id::BaseAppMgr::kGlobalBaseNotification),
                                    "baseappmgr::GlobalBaseNotification",
-                                   MessageLengthStyle::kVariable, -1};
+                                   MessageLengthStyle::kVariable,
+                                   -1,
+                                   MessageReliability::kReliable,
+                                   MessageUrgency::kImmediate};
     return kDesc;
   }
 

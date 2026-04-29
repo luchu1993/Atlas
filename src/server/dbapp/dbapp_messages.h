@@ -56,8 +56,10 @@ struct WriteEntity {
   std::vector<std::byte> blob;
 
   static auto Descriptor() -> const MessageDesc& {
-    static const MessageDesc kDesc{msg_id::Id(msg_id::DBApp::kWriteEntity), "dbapp::WriteEntity",
-                                   MessageLengthStyle::kVariable, -1};
+    static const MessageDesc kDesc{
+        msg_id::Id(msg_id::DBApp::kWriteEntity), "dbapp::WriteEntity",
+        MessageLengthStyle::kVariable,           -1,
+        MessageReliability::kReliable,           MessageUrgency::kImmediate};
     return kDesc;
   }
 
@@ -109,7 +111,11 @@ struct WriteEntityAck {
 
   static auto Descriptor() -> const MessageDesc& {
     static const MessageDesc kDesc{msg_id::Id(msg_id::DBApp::kWriteEntityAck),
-                                   "dbapp::WriteEntityAck", MessageLengthStyle::kVariable, -1};
+                                   "dbapp::WriteEntityAck",
+                                   MessageLengthStyle::kVariable,
+                                   -1,
+                                   MessageReliability::kReliable,
+                                   MessageUrgency::kImmediate};
     return kDesc;
   }
 
@@ -152,7 +158,11 @@ struct CheckoutEntity {
 
   static auto Descriptor() -> const MessageDesc& {
     static const MessageDesc kDesc{msg_id::Id(msg_id::DBApp::kCheckoutEntity),
-                                   "dbapp::CheckoutEntity", MessageLengthStyle::kVariable, -1};
+                                   "dbapp::CheckoutEntity",
+                                   MessageLengthStyle::kVariable,
+                                   -1,
+                                   MessageReliability::kReliable,
+                                   MessageUrgency::kImmediate};
     return kDesc;
   }
 
@@ -207,7 +217,11 @@ struct CheckoutEntityAck {
 
   static auto Descriptor() -> const MessageDesc& {
     static const MessageDesc kDesc{msg_id::Id(msg_id::DBApp::kCheckoutEntityAck),
-                                   "dbapp::CheckoutEntityAck", MessageLengthStyle::kVariable, -1};
+                                   "dbapp::CheckoutEntityAck",
+                                   MessageLengthStyle::kVariable,
+                                   -1,
+                                   MessageReliability::kReliable,
+                                   MessageUrgency::kImmediate};
     return kDesc;
   }
 
@@ -263,8 +277,11 @@ struct CheckinEntity {
 
   static auto Descriptor() -> const MessageDesc& {
     static const MessageDesc kDesc{msg_id::Id(msg_id::DBApp::kCheckinEntity),
-                                   "dbapp::CheckinEntity", MessageLengthStyle::kFixed,
-                                   static_cast<int>(sizeof(uint16_t) + sizeof(int64_t))};
+                                   "dbapp::CheckinEntity",
+                                   MessageLengthStyle::kFixed,
+                                   static_cast<int>(sizeof(uint16_t) + sizeof(int64_t)),
+                                   MessageReliability::kReliable,
+                                   MessageUrgency::kImmediate};
     return kDesc;
   }
 
@@ -296,8 +313,12 @@ struct DeleteEntity {
 
   static auto Descriptor() -> const MessageDesc& {
     static const MessageDesc kDesc{
-        msg_id::Id(msg_id::DBApp::kDeleteEntity), "dbapp::DeleteEntity", MessageLengthStyle::kFixed,
-        static_cast<int>(sizeof(uint16_t) + sizeof(int64_t) + sizeof(uint32_t))};
+        msg_id::Id(msg_id::DBApp::kDeleteEntity),
+        "dbapp::DeleteEntity",
+        MessageLengthStyle::kFixed,
+        static_cast<int>(sizeof(uint16_t) + sizeof(int64_t) + sizeof(uint32_t)),
+        MessageReliability::kReliable,
+        MessageUrgency::kImmediate};
     return kDesc;
   }
 
@@ -332,7 +353,11 @@ struct DeleteEntityAck {
 
   static auto Descriptor() -> const MessageDesc& {
     static const MessageDesc kDesc{msg_id::Id(msg_id::DBApp::kDeleteEntityAck),
-                                   "dbapp::DeleteEntityAck", MessageLengthStyle::kVariable, -1};
+                                   "dbapp::DeleteEntityAck",
+                                   MessageLengthStyle::kVariable,
+                                   -1,
+                                   MessageReliability::kReliable,
+                                   MessageUrgency::kImmediate};
     return kDesc;
   }
 
@@ -367,8 +392,12 @@ struct LookupEntity {
   uint32_t request_id{0};
 
   static auto Descriptor() -> const MessageDesc& {
-    static const MessageDesc kDesc{msg_id::Id(msg_id::DBApp::kLookupEntity), "dbapp::LookupEntity",
-                                   MessageLengthStyle::kVariable, -1};
+    static const MessageDesc kDesc{msg_id::Id(msg_id::DBApp::kLookupEntity),
+                                   "dbapp::LookupEntity",
+                                   MessageLengthStyle::kVariable,
+                                   -1,
+                                   MessageReliability::kReliable,
+                                   MessageUrgency::kImmediate};
     return kDesc;
   }
 
@@ -404,8 +433,11 @@ struct LookupEntityAck {
 
   static auto Descriptor() -> const MessageDesc& {
     static const MessageDesc kDesc{msg_id::Id(msg_id::DBApp::kLookupEntityAck),
-                                   "dbapp::LookupEntityAck", MessageLengthStyle::kFixed,
-                                   static_cast<int>(sizeof(uint32_t) + 1 + sizeof(int64_t))};
+                                   "dbapp::LookupEntityAck",
+                                   MessageLengthStyle::kFixed,
+                                   static_cast<int>(sizeof(uint32_t) + 1 + sizeof(int64_t)),
+                                   MessageReliability::kReliable,
+                                   MessageUrgency::kImmediate};
     return kDesc;
   }
 
@@ -441,9 +473,12 @@ struct AbortCheckout {
 
   static auto Descriptor() -> const MessageDesc& {
     static const MessageDesc kDesc{
-        msg_id::Id(msg_id::DBApp::kAbortCheckout), "dbapp::AbortCheckout",
+        msg_id::Id(msg_id::DBApp::kAbortCheckout),
+        "dbapp::AbortCheckout",
         MessageLengthStyle::kFixed,
-        static_cast<int>(sizeof(uint32_t) + sizeof(uint16_t) + sizeof(int64_t))};
+        static_cast<int>(sizeof(uint32_t) + sizeof(uint16_t) + sizeof(int64_t)),
+        MessageReliability::kReliable,
+        MessageUrgency::kImmediate};
     return kDesc;
   }
 
@@ -477,8 +512,11 @@ struct AbortCheckoutAck {
 
   static auto Descriptor() -> const MessageDesc& {
     static const MessageDesc kDesc{msg_id::Id(msg_id::DBApp::kAbortCheckoutAck),
-                                   "dbapp::AbortCheckoutAck", MessageLengthStyle::kFixed,
-                                   static_cast<int>(sizeof(uint32_t) + sizeof(uint8_t))};
+                                   "dbapp::AbortCheckoutAck",
+                                   MessageLengthStyle::kFixed,
+                                   static_cast<int>(sizeof(uint32_t) + sizeof(uint8_t)),
+                                   MessageReliability::kReliable,
+                                   MessageUrgency::kImmediate};
     return kDesc;
   }
 
@@ -508,8 +546,12 @@ struct GetEntityIds {
   uint32_t count{0};  // number of IDs requested
 
   static auto Descriptor() -> const MessageDesc& {
-    static const MessageDesc kDesc{msg_id::Id(msg_id::DBApp::kGetEntityIds), "dbapp::GetEntityIds",
-                                   MessageLengthStyle::kFixed, static_cast<int>(sizeof(uint32_t))};
+    static const MessageDesc kDesc{msg_id::Id(msg_id::DBApp::kGetEntityIds),
+                                   "dbapp::GetEntityIds",
+                                   MessageLengthStyle::kFixed,
+                                   static_cast<int>(sizeof(uint32_t)),
+                                   MessageReliability::kReliable,
+                                   MessageUrgency::kImmediate};
     return kDesc;
   }
 
@@ -537,8 +579,11 @@ struct GetEntityIdsAck {
 
   static auto Descriptor() -> const MessageDesc& {
     static const MessageDesc kDesc{msg_id::Id(msg_id::DBApp::kGetEntityIdsAck),
-                                   "dbapp::GetEntityIdsAck", MessageLengthStyle::kFixed,
-                                   static_cast<int>(sizeof(EntityID) * 2 + sizeof(uint32_t))};
+                                   "dbapp::GetEntityIdsAck",
+                                   MessageLengthStyle::kFixed,
+                                   static_cast<int>(sizeof(EntityID) * 2 + sizeof(uint32_t)),
+                                   MessageReliability::kReliable,
+                                   MessageUrgency::kImmediate};
     return kDesc;
   }
 
@@ -572,9 +617,12 @@ struct PutEntityIds {
   EntityID end{kInvalidEntityID};
 
   static auto Descriptor() -> const MessageDesc& {
-    static const MessageDesc kDesc{msg_id::Id(msg_id::DBApp::kPutEntityIds), "dbapp::PutEntityIds",
+    static const MessageDesc kDesc{msg_id::Id(msg_id::DBApp::kPutEntityIds),
+                                   "dbapp::PutEntityIds",
                                    MessageLengthStyle::kFixed,
-                                   static_cast<int>(sizeof(EntityID) * 2)};
+                                   static_cast<int>(sizeof(EntityID) * 2),
+                                   MessageReliability::kReliable,
+                                   MessageUrgency::kImmediate};
     return kDesc;
   }
 
@@ -604,8 +652,11 @@ struct PutEntityIdsAck {
 
   static auto Descriptor() -> const MessageDesc& {
     static const MessageDesc kDesc{msg_id::Id(msg_id::DBApp::kPutEntityIdsAck),
-                                   "dbapp::PutEntityIdsAck", MessageLengthStyle::kFixed,
-                                   static_cast<int>(sizeof(uint8_t))};
+                                   "dbapp::PutEntityIdsAck",
+                                   MessageLengthStyle::kFixed,
+                                   static_cast<int>(sizeof(uint8_t)),
+                                   MessageReliability::kReliable,
+                                   MessageUrgency::kImmediate};
     return kDesc;
   }
 
