@@ -49,7 +49,11 @@ struct CreateGhost {
 
   static auto Descriptor() -> const MessageDesc& {
     static const MessageDesc kDesc{msg_id::Id(msg_id::CellApp::kCreateGhost),
-                                   "cellapp::CreateGhost", MessageLengthStyle::kVariable, -1};
+                                   "cellapp::CreateGhost",
+                                   MessageLengthStyle::kVariable,
+                                   -1,
+                                   MessageReliability::kReliable,
+                                   MessageUrgency::kBatched};
     return kDesc;
   }
 
@@ -126,8 +130,11 @@ struct DeleteGhost {
 
   static auto Descriptor() -> const MessageDesc& {
     static const MessageDesc kDesc{msg_id::Id(msg_id::CellApp::kDeleteGhost),
-                                   "cellapp::DeleteGhost", MessageLengthStyle::kFixed,
-                                   static_cast<int>(sizeof(EntityID))};
+                                   "cellapp::DeleteGhost",
+                                   MessageLengthStyle::kFixed,
+                                   static_cast<int>(sizeof(EntityID)),
+                                   MessageReliability::kReliable,
+                                   MessageUrgency::kBatched};
     return kDesc;
   }
 
@@ -157,10 +164,13 @@ struct GhostPositionUpdate {
   uint64_t volatile_seq{0};
 
   static auto Descriptor() -> const MessageDesc& {
-    static const MessageDesc kDesc{msg_id::Id(msg_id::CellApp::kGhostPositionUpdate),
-                                   "cellapp::GhostPositionUpdate", MessageLengthStyle::kFixed,
-                                   static_cast<int>(sizeof(uint32_t) + 6 * sizeof(float) +
-                                                    sizeof(uint8_t) + sizeof(uint64_t))};
+    static const MessageDesc kDesc{
+        msg_id::Id(msg_id::CellApp::kGhostPositionUpdate),
+        "cellapp::GhostPositionUpdate",
+        MessageLengthStyle::kFixed,
+        static_cast<int>(sizeof(uint32_t) + 6 * sizeof(float) + sizeof(uint8_t) + sizeof(uint64_t)),
+        MessageReliability::kReliable,
+        MessageUrgency::kBatched};
     return kDesc;
   }
 
@@ -214,8 +224,12 @@ struct GhostDelta {
   std::vector<std::byte> other_delta;
 
   static auto Descriptor() -> const MessageDesc& {
-    static const MessageDesc kDesc{msg_id::Id(msg_id::CellApp::kGhostDelta), "cellapp::GhostDelta",
-                                   MessageLengthStyle::kVariable, -1};
+    static const MessageDesc kDesc{msg_id::Id(msg_id::CellApp::kGhostDelta),
+                                   "cellapp::GhostDelta",
+                                   MessageLengthStyle::kVariable,
+                                   -1,
+                                   MessageReliability::kReliable,
+                                   MessageUrgency::kBatched};
     return kDesc;
   }
 
@@ -259,8 +273,11 @@ struct GhostSnapshotRefresh {
 
   static auto Descriptor() -> const MessageDesc& {
     static const MessageDesc kDesc{msg_id::Id(msg_id::CellApp::kGhostSnapshotRefresh),
-                                   "cellapp::GhostSnapshotRefresh", MessageLengthStyle::kVariable,
-                                   -1};
+                                   "cellapp::GhostSnapshotRefresh",
+                                   MessageLengthStyle::kVariable,
+                                   -1,
+                                   MessageReliability::kReliable,
+                                   MessageUrgency::kBatched};
     return kDesc;
   }
 

@@ -54,7 +54,11 @@ struct CreateCellEntity {
 
   static auto Descriptor() -> const MessageDesc& {
     static const MessageDesc kDesc{msg_id::Id(msg_id::CellApp::kCreateCellEntity),
-                                   "cellapp::CreateCellEntity", MessageLengthStyle::kVariable, -1};
+                                   "cellapp::CreateCellEntity",
+                                   MessageLengthStyle::kVariable,
+                                   -1,
+                                   MessageReliability::kReliable,
+                                   MessageUrgency::kBatched};
     return kDesc;
   }
 
@@ -127,8 +131,11 @@ struct DestroyCellEntity {
 
   static auto Descriptor() -> const MessageDesc& {
     static const MessageDesc kDesc{msg_id::Id(msg_id::CellApp::kDestroyCellEntity),
-                                   "cellapp::DestroyCellEntity", MessageLengthStyle::kFixed,
-                                   static_cast<int>(sizeof(EntityID))};
+                                   "cellapp::DestroyCellEntity",
+                                   MessageLengthStyle::kFixed,
+                                   static_cast<int>(sizeof(EntityID)),
+                                   MessageReliability::kReliable,
+                                   MessageUrgency::kBatched};
     return kDesc;
   }
 

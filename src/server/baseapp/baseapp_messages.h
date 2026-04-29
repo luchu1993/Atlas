@@ -38,9 +38,12 @@ struct CreateBase {
   EntityID entity_id{kInvalidEntityID};  // 0 = BaseApp allocates locally
 
   static auto Descriptor() -> const MessageDesc& {
-    static const MessageDesc kDesc{msg_id::Id(msg_id::BaseApp::kCreateBase), "baseapp::CreateBase",
+    static const MessageDesc kDesc{msg_id::Id(msg_id::BaseApp::kCreateBase),
+                                   "baseapp::CreateBase",
                                    MessageLengthStyle::kFixed,
-                                   static_cast<int>(sizeof(uint16_t) + sizeof(uint32_t))};
+                                   static_cast<int>(sizeof(uint16_t) + sizeof(uint32_t)),
+                                   MessageReliability::kReliable,
+                                   MessageUrgency::kBatched};
     return kDesc;
   }
 
@@ -72,7 +75,11 @@ struct CreateBaseFromDB {
 
   static auto Descriptor() -> const MessageDesc& {
     static const MessageDesc kDesc{msg_id::Id(msg_id::BaseApp::kCreateBaseFromDb),
-                                   "baseapp::CreateBaseFromDB", MessageLengthStyle::kVariable, -1};
+                                   "baseapp::CreateBaseFromDB",
+                                   MessageLengthStyle::kVariable,
+                                   -1,
+                                   MessageReliability::kReliable,
+                                   MessageUrgency::kBatched};
     return kDesc;
   }
 
@@ -251,7 +258,11 @@ struct CellRpcForward {
 
   static auto Descriptor() -> const MessageDesc& {
     static const MessageDesc kDesc{msg_id::Id(msg_id::BaseApp::kCellRpcForward),
-                                   "baseapp::CellRpcForward", MessageLengthStyle::kVariable, -1};
+                                   "baseapp::CellRpcForward",
+                                   MessageLengthStyle::kVariable,
+                                   -1,
+                                   MessageReliability::kReliable,
+                                   MessageUrgency::kBatched};
     return kDesc;
   }
 
@@ -293,7 +304,11 @@ struct SelfRpcFromCell {
 
   static auto Descriptor() -> const MessageDesc& {
     static const MessageDesc kDesc{msg_id::Id(msg_id::BaseApp::kSelfRpcFromCell),
-                                   "baseapp::SelfRpcFromCell", MessageLengthStyle::kVariable, -1};
+                                   "baseapp::SelfRpcFromCell",
+                                   MessageLengthStyle::kVariable,
+                                   -1,
+                                   MessageReliability::kReliable,
+                                   MessageUrgency::kBatched};
     return kDesc;
   }
 
@@ -337,8 +352,11 @@ struct BroadcastRpcFromCell {
 
   static auto Descriptor() -> const MessageDesc& {
     static const MessageDesc kDesc{msg_id::Id(msg_id::BaseApp::kBroadcastRpcFromCell),
-                                   "baseapp::BroadcastRpcFromCell", MessageLengthStyle::kVariable,
-                                   -1, MessageReliability::kUnreliable};
+                                   "baseapp::BroadcastRpcFromCell",
+                                   MessageLengthStyle::kVariable,
+                                   -1,
+                                   MessageReliability::kUnreliable,
+                                   MessageUrgency::kBatched};
     return kDesc;
   }
 
@@ -419,9 +437,7 @@ struct ReplicatedDeltaFromCellSpan {
   EntityID base_entity_id{kInvalidEntityID};
   std::span<const std::byte> delta;
 
-  static auto Descriptor() -> const MessageDesc& {
-    return ReplicatedDeltaFromCell::Descriptor();
-  }
+  static auto Descriptor() -> const MessageDesc& { return ReplicatedDeltaFromCell::Descriptor(); }
 
   void Serialize(BinaryWriter& w) const {
     w.WritePackedInt(base_entity_id);
@@ -434,8 +450,7 @@ struct ReplicatedDeltaFromCellSpan {
   // decode into the vector struct above; this entry exists only so the
   // type satisfies the NetworkMessage concept that SendMessage requires.
   static auto Deserialize(BinaryReader&) -> Result<ReplicatedDeltaFromCellSpan> {
-    return Error{ErrorCode::kInvalidArgument,
-                 "ReplicatedDeltaFromCellSpan is send-only"};
+    return Error{ErrorCode::kInvalidArgument, "ReplicatedDeltaFromCellSpan is send-only"};
   }
 };
 static_assert(NetworkMessage<ReplicatedDeltaFromCellSpan>);
@@ -458,8 +473,10 @@ struct ReplicatedReliableDeltaFromCell {
   static auto Descriptor() -> const MessageDesc& {
     static const MessageDesc kDesc{msg_id::Id(msg_id::BaseApp::kReplicatedReliableDeltaFromCell),
                                    "baseapp::ReplicatedReliableDeltaFromCell",
-                                   MessageLengthStyle::kVariable, -1,
-                                   MessageReliability::kReliable};
+                                   MessageLengthStyle::kVariable,
+                                   -1,
+                                   MessageReliability::kReliable,
+                                   MessageUrgency::kBatched};
     return kDesc;
   }
 
@@ -476,8 +493,7 @@ struct ReplicatedReliableDeltaFromCell {
       return Error{ErrorCode::kInvalidArgument, "ReplicatedReliableDeltaFromCell: truncated"};
     auto span = r.ReadBytes(*sz);
     if (!span)
-      return Error{ErrorCode::kInvalidArgument,
-                   "ReplicatedReliableDeltaFromCell: delta truncated"};
+      return Error{ErrorCode::kInvalidArgument, "ReplicatedReliableDeltaFromCell: delta truncated"};
     ReplicatedReliableDeltaFromCell msg;
     msg.base_entity_id = *eid;
     msg.delta.assign(span->begin(), span->end());
@@ -505,8 +521,7 @@ struct ReplicatedReliableDeltaFromCellSpan {
   }
 
   static auto Deserialize(BinaryReader&) -> Result<ReplicatedReliableDeltaFromCellSpan> {
-    return Error{ErrorCode::kInvalidArgument,
-                 "ReplicatedReliableDeltaFromCellSpan is send-only"};
+    return Error{ErrorCode::kInvalidArgument, "ReplicatedReliableDeltaFromCellSpan is send-only"};
   }
 };
 static_assert(NetworkMessage<ReplicatedReliableDeltaFromCellSpan>);
@@ -575,8 +590,10 @@ struct ReplicatedBaselineFromCell {
   static auto Descriptor() -> const MessageDesc& {
     static const MessageDesc kDesc{msg_id::Id(msg_id::BaseApp::kReplicatedBaselineFromCell),
                                    "baseapp::ReplicatedBaselineFromCell",
-                                   MessageLengthStyle::kVariable, -1,
-                                   MessageReliability::kReliable};
+                                   MessageLengthStyle::kVariable,
+                                   -1,
+                                   MessageReliability::kReliable,
+                                   MessageUrgency::kBatched};
     return kDesc;
   }
 
@@ -956,8 +973,11 @@ struct ClientEventSeqReport {
 
   static auto Descriptor() -> const MessageDesc& {
     static const MessageDesc kDesc{msg_id::Id(msg_id::BaseApp::kClientEventSeqReport),
-                                   "baseapp::ClientEventSeqReport", MessageLengthStyle::kFixed,
-                                   static_cast<int>(sizeof(uint32_t) + sizeof(uint32_t))};
+                                   "baseapp::ClientEventSeqReport",
+                                   MessageLengthStyle::kFixed,
+                                   static_cast<int>(sizeof(uint32_t) + sizeof(uint32_t)),
+                                   MessageReliability::kReliable,
+                                   MessageUrgency::kBatched};
     return kDesc;
   }
 
