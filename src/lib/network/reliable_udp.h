@@ -72,6 +72,13 @@ class ReliableUdpChannel : public Channel {
   // collapse the N×M observer/peer SendEntityUpdate calls into one
   // packet per (channel, reliability) pair per tick — slashing sendto
   // syscall count by 1–2 orders of magnitude in dense scenes.
+  //
+  // Note: this typed entry point intentionally does NOT call
+  // NotifyDirty() — callers that use it (cellapp witness path) own
+  // their own flush cadence via pending_witness_channels_.  The
+  // descriptor-driven entry point below (the Channel base virtual)
+  // does call NotifyDirty so SendMessage with kBatched urgency
+  // auto-flushes at tick end.
   template <NetworkMessage Msg>
   [[nodiscard]] auto BufferMessageDeferred(const Msg& msg) -> Result<void> {
     if (state_ == ChannelState::kCondemned) {
@@ -83,6 +90,23 @@ class ReliableUdpChannel : public Channel {
       deferred_reliable_bundle_.AddMessage(msg);
     }
     return Result<void>{};
+  }
+
+  // Channel-base override.  Auto-registers the channel as dirty (so
+  // NetworkInterface::FlushDirtySendChannels picks it up at tick end)
+  // and triggers a same-side mid-tick flush when the bundle reaches
+  // deferred_flush_threshold_ bytes.  Bounds bundle growth and
+  // prevents the next message from forcing fragmentation.
+  [[nodiscard]] auto BufferMessageDeferred(const MessageDesc& desc, std::span<const std::byte> data)
+      -> Result<void> override;
+
+  // Size-threshold override.  Defaults to a value driven by
+  // RudpProfile.deferred_flush_threshold (350 B for Internet,
+  // 1200 B for Cluster).  When a deferred bundle's total size
+  // (TotalSize) exceeds this, a same-side flush fires inline.
+  void SetDeferredFlushThreshold(std::size_t bytes) { deferred_flush_threshold_ = bytes; }
+  [[nodiscard]] auto DeferredFlushThreshold() const -> std::size_t {
+    return deferred_flush_threshold_;
   }
 
   // Send any messages staged via BufferMessageDeferred. Returns the
@@ -287,6 +311,11 @@ class ReliableUdpChannel : public Channel {
   // Defaults to rudp::kDefaultMtu; ApplyRudpProfile overrides from
   // RudpProfile.mtu at channel construction.
   std::size_t mtu_{rudp::kDefaultMtu};
+
+  // Mid-tick flush boundary for the deferred bundles.  Driven by
+  // RudpProfile.deferred_flush_threshold; the choice trades off
+  // batching density against fragmentation risk on the next append.
+  std::size_t deferred_flush_threshold_{1200};
 
   // Sending state
   SeqNum next_send_seq_{1};

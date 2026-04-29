@@ -18,6 +18,7 @@ void ApplyRudpProfile(ReliableUdpChannel& channel, const NetworkInterface::RudpP
   channel.SetSendWindow(profile.send_window);
   channel.SetRecvWindow(profile.recv_window);
   channel.SetMtu(profile.mtu);
+  channel.SetDeferredFlushThreshold(profile.deferred_flush_threshold);
 }
 
 }  // namespace
@@ -132,22 +133,29 @@ auto NetworkInterface::ConnectTcp(const Address& addr) -> Result<TcpChannel*> {
       std::make_unique<TcpChannel>(dispatcher_, interface_table_, std::move(*sock), addr);
   channel->SetChannelId(next_channel_id_++);
 
-  auto reg =
-      dispatcher_.RegisterReader(channel->Fd(), [ch = channel.get()](FdHandle, IOEvent events) {
-        if ((events & IOEvent::kReadable) != IOEvent::kNone) {
-          ATLAS_PROFILE_ZONE_N("TcpChannel::OnReadable");
-          ch->OnReadable();
-        }
-        if ((events & IOEvent::kWritable) != IOEvent::kNone) {
-          ATLAS_PROFILE_ZONE_N("TcpChannel::OnWritable");
-          ch->OnWritable();
-        }
-      });
+  auto reg = dispatcher_.RegisterReader(channel->Fd(),
+                                        [this, ch = channel.get()](FdHandle, IOEvent events) {
+                                          if ((events & IOEvent::kReadable) != IOEvent::kNone) {
+                                            ATLAS_PROFILE_ZONE_N("TcpChannel::OnReadable");
+                                            ch->OnReadable();
+                                          }
+                                          if ((events & IOEvent::kWritable) != IOEvent::kNone) {
+                                            ATLAS_PROFILE_ZONE_N("TcpChannel::OnWritable");
+                                            ch->OnWritable();
+                                          }
+                                          // Flush any deferred sends staged by handlers run during
+                                          // OnReadable.  Same role as the FlushDirtySendChannels
+                                          // call at the end of OnRudpReadable: end-of-handler-batch
+                                          // is the canonical batching window for inbound-driven
+                                          // sends.
+                                          FlushDirtySendChannels();
+                                        });
   if (!reg) {
     return reg.Error();
   }
 
   channel->SetDisconnectCallback([this](Channel& ch) { OnChannelDisconnect(ch); });
+  channel->SetMarkDirtyCallback([this](Channel& ch) { MarkChannelDirty(ch); });
   channel->Activate();
 
   auto* raw = channel.get();
@@ -210,6 +218,7 @@ auto NetworkInterface::ConnectUdp(const Address& addr) -> Result<UdpChannel*> {
   auto channel = std::make_unique<UdpChannel>(dispatcher_, interface_table_, *udp_socket_, addr);
   channel->SetChannelId(next_channel_id_++);
   channel->SetDisconnectCallback([this](Channel& ch) { OnChannelDisconnect(ch); });
+  channel->SetMarkDirtyCallback([this](Channel& ch) { MarkChannelDirty(ch); });
   channel->Activate();
 
   auto* raw = static_cast<UdpChannel*>(channel.get());
@@ -344,6 +353,7 @@ auto NetworkInterface::ConnectRudp(const Address& addr, const RudpProfile& profi
       std::make_unique<ReliableUdpChannel>(dispatcher_, interface_table_, *rudp_socket_, addr);
   channel->SetChannelId(next_channel_id_++);
   channel->SetDisconnectCallback([this](Channel& ch) { OnChannelDisconnect(ch); });
+  channel->SetMarkDirtyCallback([this](Channel& ch) { MarkChannelDirty(ch); });
   ApplyRudpProfile(*channel, profile);
   channel->Activate();
 
@@ -358,9 +368,11 @@ auto NetworkInterface::InternetRudpProfile() -> RudpProfile {
   // ISP / VPN / mobile-carrier paths (PPPoE 1492, IPSec/WireGuard
   // ~50 B overhead, mobile MSS sometimes ~1280) — well below KCP's
   // 1400 default.  Window stays at 256 to bound retransmit memory on
-  // a wide-area lossy link.
+  // a wide-area lossy link.  Deferred flush threshold = 350: 470 MTU
+  // - 21 RUDP header - ~100 headroom for the next message.
   RudpProfile profile;
   profile.mtu = 470;
+  profile.deferred_flush_threshold = 350;
   return profile;
 }
 
@@ -368,11 +380,13 @@ auto NetworkInterface::ClusterRudpProfile() -> RudpProfile {
   // Intra-DC profile.  cwnd disabled (no fairness pressure on a
   // dedicated link), large window for high throughput, MTU at the
   // KCP default (1400) which fits comfortably on 1500-byte Ethernet.
+  // Deferred flush threshold = 1200: 1400 - 21 - ~180 headroom.
   RudpProfile profile;
   profile.nocwnd = true;
   profile.send_window = 4096;
   profile.recv_window = 4096;
   profile.mtu = 1400;
+  profile.deferred_flush_threshold = 1200;
   return profile;
 }
 
@@ -495,23 +509,25 @@ void NetworkInterface::OnTcpAccept() {
                                                 peer_addr);
     channel->SetChannelId(next_channel_id_++);
 
-    auto reg =
-        dispatcher_.RegisterReader(channel->Fd(), [ch = channel.get()](FdHandle, IOEvent events) {
-          if ((events & IOEvent::kReadable) != IOEvent::kNone) {
-            ATLAS_PROFILE_ZONE_N("TcpChannel::OnReadable");
-            ch->OnReadable();
-          }
-          if ((events & IOEvent::kWritable) != IOEvent::kNone) {
-            ATLAS_PROFILE_ZONE_N("TcpChannel::OnWritable");
-            ch->OnWritable();
-          }
-        });
+    auto reg = dispatcher_.RegisterReader(channel->Fd(),
+                                          [this, ch = channel.get()](FdHandle, IOEvent events) {
+                                            if ((events & IOEvent::kReadable) != IOEvent::kNone) {
+                                              ATLAS_PROFILE_ZONE_N("TcpChannel::OnReadable");
+                                              ch->OnReadable();
+                                            }
+                                            if ((events & IOEvent::kWritable) != IOEvent::kNone) {
+                                              ATLAS_PROFILE_ZONE_N("TcpChannel::OnWritable");
+                                              ch->OnWritable();
+                                            }
+                                            FlushDirtySendChannels();
+                                          });
     if (!reg) {
       ATLAS_LOG_ERROR("Failed to register channel fd: {}", reg.Error().Message());
       continue;
     }
 
     channel->SetDisconnectCallback([this](Channel& ch) { OnChannelDisconnect(ch); });
+    channel->SetMarkDirtyCallback([this](Channel& ch) { MarkChannelDirty(ch); });
     channel->Activate();
 
     ATLAS_LOG_DEBUG("Accepted TCP connection from {}", peer_addr.ToString());
@@ -566,6 +582,7 @@ void NetworkInterface::OnUdpReadable() {
           std::make_unique<UdpChannel>(dispatcher_, interface_table_, *udp_socket_, src_addr);
       channel->SetChannelId(next_channel_id_++);
       channel->SetDisconnectCallback([this](Channel& ch) { OnChannelDisconnect(ch); });
+      channel->SetMarkDirtyCallback([this](Channel& ch) { MarkChannelDirty(ch); });
       channel->Activate();
       channels_by_id_[channel->ChannelId()] = channel.get();
       auto [inserted_it, _] = channels_.emplace(src_addr, std::move(channel));
@@ -575,6 +592,11 @@ void NetworkInterface::OnUdpReadable() {
     auto* udp_ch = static_cast<UdpChannel*>(it->second.get());
     udp_ch->OnDatagramReceived(recv_buffer.first(bytes));
   }
+
+  // Flush any deferred sends staged by the handlers we just dispatched.
+  // For UdpChannel this is a no-op (TCP/UDP fall-through path doesn't
+  // populate dirty_channels_), kept for symmetry with the RUDP path.
+  FlushDirtySendChannels();
 }
 
 void NetworkInterface::OnRudpReadable() {
@@ -610,6 +632,7 @@ void NetworkInterface::OnRudpReadable() {
                                                           *rudp_socket_, src_addr);
       channel->SetChannelId(next_channel_id_++);
       channel->SetDisconnectCallback([this](Channel& ch) { OnChannelDisconnect(ch); });
+      channel->SetMarkDirtyCallback([this](Channel& ch) { MarkChannelDirty(ch); });
       channel->SetHotCallback([this](ReliableUdpChannel& ch) { hot_channels_.insert(&ch); });
       ApplyRudpProfile(*channel, rudp_accept_profile_);
       channel->Activate();
@@ -631,6 +654,35 @@ void NetworkInterface::OnRudpReadable() {
   // budget on the next callback or via DoTask's tick-cadence backup.
   if (!hot_channels_.empty()) {
     DrainHotChannels(deadline);
+  }
+
+  // Flush deferred sends staged by handlers run during this callback.
+  // Dispatch (handler) → SendMessage(kBatched) → BufferMessageDeferred
+  // → MarkChannelDirty.  This is the canonical batching window for
+  // any send triggered by inbound traffic.
+  FlushDirtySendChannels();
+}
+
+void NetworkInterface::FlushDirtySendChannels() {
+  // Iterate by move-and-clear so a channel that re-dirties itself
+  // mid-flush (e.g. a packet_filter chain that happens to call back
+  // into BufferMessageDeferred) lands in a fresh set instead of an
+  // iterator we're still walking.
+  if (dirty_channels_.empty()) return;
+  ATLAS_PROFILE_ZONE_N("NetworkInterface::FlushDirtySendChannels");
+  std::unordered_set<Channel*> snapshot;
+  snapshot.swap(dirty_channels_);
+  for (Channel* ch : snapshot) {
+    // Only RUDP channels actually batch (see Channel::BufferMessageDeferred
+    // default fallback for TCP/UDP), but the dirty set is base-class so
+    // the cast may legitimately fail for non-RUDP entries that called
+    // the fallback path — treat those as already flushed.
+    if (auto* rudp = dynamic_cast<ReliableUdpChannel*>(ch)) {
+      if (auto r = rudp->FlushDeferred(); !r) {
+        ATLAS_LOG_DEBUG("FlushDirty: channel {} returned {}", ch->RemoteAddress().ToString(),
+                        r.Error().Message());
+      }
+    }
   }
 }
 
@@ -681,6 +733,8 @@ void NetworkInterface::CondemnChannel(const Address& addr) {
   if (auto* rudp = dynamic_cast<ReliableUdpChannel*>(channel.get())) {
     hot_channels_.erase(rudp);
   }
+  // dirty_channels_ holds raw Channel* pointers; same scrub rule.
+  dirty_channels_.erase(channel.get());
 
   // UDP and RUDP channels share a single socket — deregistering it would
   // break all other channels on that socket. Only deregister for TCP.

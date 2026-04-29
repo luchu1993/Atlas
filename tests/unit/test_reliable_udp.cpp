@@ -1413,3 +1413,78 @@ TEST_F(ReliableUdpTest, SetMtuChangesMaxUdpPayload) {
   EXPECT_EQ(ch.Mtu(), 470u);
   EXPECT_EQ(ch.MaxUdpPayload(), 470u - rudp::kMaxHeaderSize);
 }
+
+// 256 bytes — body that, when bundled three times into one deferred
+// reliable bundle, easily exceeds a 350-byte (Internet profile) flush
+// threshold so the third write triggers a mid-tick flush.
+struct RudpTestMsgBatched {
+  std::array<std::byte, 256> blob{};
+  static auto Descriptor() -> const MessageDesc& {
+    static const MessageDesc desc{310, "RudpTestMsgBatched",          MessageLengthStyle::kVariable,
+                                  -1,  MessageReliability::kReliable, MessageUrgency::kBatched};
+    return desc;
+  }
+  void Serialize(BinaryWriter& w) const {
+    w.WriteBytes(std::span<const std::byte>(blob.data(), blob.size()));
+  }
+  static auto Deserialize(BinaryReader& r) -> Result<RudpTestMsgBatched> {
+    RudpTestMsgBatched m;
+    auto bytes = r.ReadBytes(m.blob.size());
+    if (!bytes) return bytes.Error();
+    std::memcpy(m.blob.data(), bytes->data(), m.blob.size());
+    return m;
+  }
+};
+
+TEST_F(ReliableUdpTest, BufferMessageDeferredNotifiesDirtyAndAutoFlushes) {
+  // BufferMessageDeferred (descriptor-driven) must:
+  //   1. Register the channel via NotifyDirty so a NetworkInterface
+  //      tick-end sweep can flush it.
+  //   2. Trigger a same-side flush inline once TotalSize crosses
+  //      DeferredFlushThreshold, bounding bundle growth.
+  auto sock = Socket::CreateUdp();
+  ASSERT_TRUE(sock.HasValue());
+  ASSERT_TRUE(sock->Bind(Address("127.0.0.1", 0)).HasValue());
+
+  ReliableUdpChannel ch(dispatcher_, table_, *sock, Address("127.0.0.1", 1));
+  ch.Activate();
+  // Internet-style: tight threshold to exercise the inline flush path.
+  ch.SetDeferredFlushThreshold(350);
+
+  int dirty_calls = 0;
+  ch.SetMarkDirtyCallback([&](Channel&) { ++dirty_calls; });
+
+  // 256-byte payload; framing pushes the second append above the
+  // 350-byte threshold so the inline flush fires.
+  std::array<std::byte, 256> blob{};
+  const auto& desc = RudpTestMsgBatched::Descriptor();
+
+  ASSERT_TRUE(ch.BufferMessageDeferred(desc, blob).HasValue());
+  EXPECT_EQ(dirty_calls, 1) << "First batched append must NotifyDirty";
+  ASSERT_TRUE(ch.BufferMessageDeferred(desc, blob).HasValue());
+  EXPECT_GE(dirty_calls, 2);
+  // After the inline flush, the relevant bundle was drained — UnackedCount
+  // should reflect at least one packet on the wire.
+  EXPECT_GE(ch.UnackedCount(), 1u);
+}
+
+TEST_F(ReliableUdpTest, ImmediateUrgencyBypassesDeferredPath) {
+  // Default MessageUrgency is kImmediate.  The standard test message
+  // (RudpTestMsg) leaves urgency at the default, so SendMessage must
+  // NOT register dirty / NOT touch the deferred bundle — preserving
+  // the pre-batching behaviour relied on by every existing caller.
+  auto sock = Socket::CreateUdp();
+  ASSERT_TRUE(sock.HasValue());
+  ASSERT_TRUE(sock->Bind(Address("127.0.0.1", 0)).HasValue());
+
+  ReliableUdpChannel ch(dispatcher_, table_, *sock, Address("127.0.0.1", 1));
+  ch.Activate();
+
+  int dirty_calls = 0;
+  ch.SetMarkDirtyCallback([&](Channel&) { ++dirty_calls; });
+
+  ASSERT_TRUE(ch.SendMessage(RudpTestMsg{1}).HasValue());
+  EXPECT_EQ(dirty_calls, 0) << "Immediate-urgency send must not mark dirty";
+  EXPECT_FALSE(ch.HasDeferredPayload()) << "Deferred bundles must stay empty";
+  EXPECT_EQ(ch.UnackedCount(), 1u) << "Immediate path must enqueue one unacked packet";
+}

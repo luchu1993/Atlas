@@ -84,6 +84,22 @@ auto Channel::SendMessage(MessageID id, std::span<const std::byte> data) -> Resu
   if (auto* found = interface_table_.Find(id)) {
     desc = *found;
   }
+  if (desc.IsBatched()) {
+    return BufferMessageDeferred(desc, data);
+  }
+  bundle_.StartMessage(desc);
+  bundle_.Writer().WriteBytes(data);
+  bundle_.EndMessage();
+  if (desc.IsUnreliable()) return SendUnreliable();
+  return Send();
+}
+
+auto Channel::BufferMessageDeferred(const MessageDesc& desc, std::span<const std::byte> data)
+    -> Result<void> {
+  // Default fallback: transports without a syscall-coalescing benefit
+  // (TCP relies on the write buffer + kernel; plain UDP has no ordered
+  // framing) flush immediately so kBatched is a hint, not a contract.
+  // RUDP overrides this to actually batch.
   bundle_.StartMessage(desc);
   bundle_.Writer().WriteBytes(data);
   bundle_.EndMessage();

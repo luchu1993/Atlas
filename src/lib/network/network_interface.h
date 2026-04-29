@@ -38,6 +38,11 @@ class NetworkInterface : public FrequentTask {
     // don't fragment at the IP layer.  Both endpoints of a channel pair
     // must use the same MTU — fragment reassembly relies on it.
     std::size_t mtu{1400};
+    // Mid-tick flush boundary for the per-channel deferred bundle.
+    // Tuned per profile so a near-MTU bundle on a narrow path doesn't
+    // force fragmentation on the next append: Internet ~350 (470 MTU
+    // - 21 RUDP - 100 headroom), Cluster ~1200 (1400 - 21 - ~180).
+    std::size_t deferred_flush_threshold{1200};
   };
 
   explicit NetworkInterface(EventDispatcher& dispatcher);
@@ -110,6 +115,15 @@ class NetworkInterface : public FrequentTask {
   using DisconnectCallback = std::function<void(Channel&)>;
   void SetDisconnectCallback(DisconnectCallback cb);
 
+  // Dirty-channel set.  Channels register themselves via
+  // MarkChannelDirty (typically from an override of
+  // Channel::BufferMessageDeferred) so the periodic flush sweeps
+  // them at logical batch boundaries (end of OnRudpReadable etc.).
+  // Public so apps with their own tick cadence (cellapp / baseapp)
+  // can also call FlushDirtySendChannels at end-of-Tick.
+  void MarkChannelDirty(Channel& channel) { dirty_channels_.insert(&channel); }
+  void FlushDirtySendChannels();
+
   // Shutdown
   void PrepareForShutdown();
 
@@ -172,6 +186,11 @@ class NetworkInterface : public FrequentTask {
   // its hot-callback; DrainHotChannels removes entries that finish.
   // Entries are bare pointers; CondemnChannel must scrub on teardown.
   std::unordered_set<ReliableUdpChannel*> hot_channels_;
+
+  // Channels with pending deferred bundles — registered via
+  // MarkChannelDirty when a kBatched message is appended, drained by
+  // FlushDirtySendChannels.  Bare pointers; CondemnChannel scrubs.
+  std::unordered_set<Channel*> dirty_channels_;
 
   // Condemned channels awaiting cleanup
   struct CondemnedEntry {

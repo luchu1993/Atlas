@@ -53,6 +53,8 @@ class Channel {
   // InterfaceTable entry for the raw-ID variant):
   //   Reliable   → send()            (ACK + retransmit on RUDP, always on TCP)
   //   Unreliable → send_unreliable() (best-effort on RUDP, natural path on TCP/UDP)
+  // Urgency is also consulted: kBatched routes through the deferred path
+  // (RUDP only — TCP/UDP fall through to immediate send).
   [[nodiscard]] auto SendMessage(MessageID id, std::span<const std::byte> data) -> Result<void>;
 
   template <NetworkMessage Msg>
@@ -62,6 +64,14 @@ class Channel {
 
   template <NetworkMessage Msg>
   [[nodiscard]] auto SendMessage(const Msg& msg) -> Result<void> {
+    // The typed entry point intentionally ignores Descriptor().urgency:
+    // routing through the descriptor-driven BufferMessageDeferred would
+    // require an extra encode-into-scratch step (BinaryWriter has no
+    // public vector ctor).  Callers that want batching for a typed
+    // message use ReliableUdpChannel::BufferMessageDeferred<Msg> direct
+    // (cellapp witness path).  Raw-id SendMessage(MessageID, span) is
+    // the path that consumes urgency, since it already has bytes in
+    // hand.  PR-2 audit will revisit if a typed batched API is needed.
     bundle_.AddMessage(msg);
     if (Msg::Descriptor().IsUnreliable()) return SendUnreliable();
     return Send();
@@ -70,6 +80,27 @@ class Channel {
   // Best-effort send — subclasses override to use unreliable path when available.
   // Default implementation falls back to send() (TCP is always reliable).
   [[nodiscard]] virtual auto SendUnreliable() -> Result<void>;
+
+  // Append a message to the channel's deferred bundle.  Subclasses that
+  // batch (ReliableUdpChannel) override to write into the per-channel
+  // deferred_*_bundle_ and register with NetworkInterface for tick-end
+  // flush; the default implementation falls through to immediate send
+  // for transports where batching has no syscall benefit (TCP coalesces
+  // at the kernel layer; plain UDP has no ordered framing).
+  //
+  // Public so callers (witness path, future caller-driven batching)
+  // can opt in directly without going through SendMessage.
+  [[nodiscard]] virtual auto BufferMessageDeferred(const MessageDesc& desc,
+                                                   std::span<const std::byte> data) -> Result<void>;
+
+  // Mark-dirty callback installed by NetworkInterface.  When a channel
+  // appends to its deferred bundle, it invokes the callback so the
+  // owning interface can register the channel for tick-end flush.  The
+  // callback is optional — channels created outside NetworkInterface
+  // (unit tests) leave it unset and are responsible for explicit
+  // FlushDeferred calls.
+  using MarkDirtyCallback = std::function<void(Channel&)>;
+  void SetMarkDirtyCallback(MarkDirtyCallback cb) { mark_dirty_cb_ = std::move(cb); }
 
   // State
   [[nodiscard]] auto State() const -> ChannelState { return state_; }
@@ -101,6 +132,13 @@ class Channel {
   [[nodiscard]] virtual auto Fd() const -> FdHandle = 0;
 
  protected:
+  // Invoke mark_dirty_cb_ if installed.  Subclass batching overrides
+  // call this after appending to a deferred bundle so NetworkInterface
+  // schedules a tick-end flush.
+  void NotifyDirty() {
+    if (mark_dirty_cb_) mark_dirty_cb_(*this);
+  }
+
   // Subclass hooks
   [[nodiscard]] virtual auto DoSend(std::span<const std::byte> data) -> Result<size_t> = 0;
   virtual void OnCondemned() {}
@@ -162,6 +200,7 @@ class Channel {
 
   PacketFilterPtr packet_filter_;
   DisconnectCallback disconnect_callback_;
+  MarkDirtyCallback mark_dirty_cb_;
   Duration inactivity_timeout_{};
   TimerHandle inactivity_timer_;
   TimePoint last_activity_{};
