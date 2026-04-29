@@ -66,7 +66,7 @@ class MockNativeProvider : public INativeApiProvider {
   double ServerTime() override { return 0.0; }
   float DeltaTime() override { return 0.0f; }
   uint8_t GetProcessPrefix() override { return 0; }
-  void SendClientRpc(uint32_t, uint32_t, const std::byte*, int32_t) override {}
+  void SendClientRpc(uint32_t, uint32_t, RpcTarget, const std::byte*, int32_t) override {}
   void SendCellRpc(uint32_t, uint32_t, const std::byte*, int32_t) override {}
   void SendBaseRpc(uint32_t, uint32_t, const std::byte*, int32_t) override {}
   void RegisterEntityType(const std::byte*, int32_t) override {}

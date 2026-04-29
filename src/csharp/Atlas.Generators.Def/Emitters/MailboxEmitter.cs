@@ -18,6 +18,7 @@ internal static class MailboxEmitter
         sb.AppendLine("#nullable enable");
         sb.AppendLine("using System;");
         sb.AppendLine("using System.Collections.Generic;");
+        sb.AppendLine("using Atlas.Core;");
         sb.AppendLine("using Atlas.Serialization;");
         // Generated structs land in Atlas.Def — the import lets struct
         // args appear unqualified in the mailbox method signatures.
@@ -59,7 +60,11 @@ internal static class MailboxEmitter
         sb.AppendLine($"partial class {className}");
         sb.AppendLine("{");
         if (emitClientMailbox && def.ClientMethods.Count > 0)
-            sb.AppendLine($"    public {className}ClientMailbox Client => new(this);");
+        {
+            sb.AppendLine($"    public {className}ClientMailbox Client => new(this, RpcTarget.Owner);");
+            sb.AppendLine($"    public {className}ClientMailbox OtherClients => new(this, RpcTarget.Others);");
+            sb.AppendLine($"    public {className}ClientMailbox AllClients => new(this, RpcTarget.All);");
+        }
         if (emitBaseMailbox && def.BaseMethods.Count > 0)
             sb.AppendLine($"    public {className}BaseMailbox Base => new(this);");
         if (emitCellMailbox && def.CellMethods.Count > 0)
@@ -68,7 +73,7 @@ internal static class MailboxEmitter
         sb.AppendLine("    // Internal forwarding methods — mailbox structs call these");
         sb.AppendLine("    // because SendXxxRpc is protected internal on the base class.");
         if (emitClientMailbox && def.ClientMethods.Count > 0)
-            sb.AppendLine("    internal void InternalSendClientRpc(int rpcId, ReadOnlySpan<byte> payload) => SendClientRpc(rpcId, payload);");
+            sb.AppendLine("    internal void InternalSendClientRpc(int rpcId, RpcTarget target, ReadOnlySpan<byte> payload) => SendClientRpc(rpcId, target, payload);");
         if (emitBaseMailbox || emitCellMailbox)
         {
             sb.AppendLine("    internal void InternalSendBaseRpc(int rpcId, ReadOnlySpan<byte> payload) => SendBaseRpc(rpcId, payload);");
@@ -84,10 +89,19 @@ internal static class MailboxEmitter
         string mailboxKind, string sendMethod, bool exposedOnly = false)
     {
         var structName = $"{className}{mailboxKind}Mailbox";
+        var isClientMailbox = mailboxKind == "Client";
         sb.AppendLine($"public readonly struct {structName}");
         sb.AppendLine("{");
         sb.AppendLine($"    private readonly {className} _entity;");
-        sb.AppendLine($"    internal {structName}({className} entity) => _entity = entity;");
+        if (isClientMailbox)
+        {
+            sb.AppendLine("    private readonly RpcTarget _target;");
+            sb.AppendLine($"    internal {structName}({className} entity, RpcTarget target) {{ _entity = entity; _target = target; }}");
+        }
+        else
+        {
+            sb.AppendLine($"    internal {structName}({className} entity) => _entity = entity;");
+        }
 
         var sorted = methods.OrderBy(m => m.Name).ToList();
         for (int i = 0; i < sorted.Count; i++)
@@ -98,13 +112,14 @@ internal static class MailboxEmitter
 
             int rpcId = RpcIdEncoder.Encode(slot: 0, direction, typeIndex, i + 1);
             var paramList = RpcArgCodec.BuildParamList(method.Args);
+            var sendArgs = isClientMailbox ? "_target, " : "";
 
             sb.AppendLine();
             sb.AppendLine($"    public void {method.Name}({paramList})");
             sb.AppendLine("    {");
             if (method.Args.Count == 0)
             {
-                sb.AppendLine($"        _entity.Internal{sendMethod}(0x{rpcId:X6}, ReadOnlySpan<byte>.Empty);");
+                sb.AppendLine($"        _entity.Internal{sendMethod}(0x{rpcId:X6}, {sendArgs}ReadOnlySpan<byte>.Empty);");
             }
             else
             {
@@ -113,7 +128,7 @@ internal static class MailboxEmitter
                 sb.AppendLine("        {");
                 foreach (var arg in method.Args)
                     RpcArgCodec.EmitWrite(sb, arg, "writer", "            ");
-                sb.AppendLine($"            _entity.Internal{sendMethod}(0x{rpcId:X6}, writer.WrittenSpan);");
+                sb.AppendLine($"            _entity.Internal{sendMethod}(0x{rpcId:X6}, {sendArgs}writer.WrittenSpan);");
                 sb.AppendLine("        }");
                 sb.AppendLine("        finally { writer.Dispose(); }");
             }

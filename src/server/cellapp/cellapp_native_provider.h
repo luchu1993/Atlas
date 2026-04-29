@@ -13,33 +13,24 @@ namespace atlas {
 class CellEntity;
 class NetworkInterface;
 
-// CellAppNativeProvider — INativeApiProvider wired to a CellApp process.
-// A thin façade: it doesn't own the CellApp state, it reaches into it
-// through a caller-supplied lookup. That lets tests and the real
-// CellApp process share the same provider class without the provider
-// having to know about Space, the tick loop, or BaseApp-bound routing.
-
+// INativeApiProvider for a CellApp process; thin façade — uses a
+// caller-supplied lookup so tests share the class without knowing
+// CellApp internals.
 class CellAppNativeProvider : public BaseNativeProvider {
  public:
-  // Resolve a CellEntity* from a C# entity id. Return nullptr if the
-  // id doesn't correspond to a live cell entity — the provider's methods
-  // log+skip in that case so a misbehaving script can't crash the
-  // process. The C# runtime identifies entities by their cell_entity_id.
+  // Returns nullptr for unknown ids; methods log+skip rather than crash.
   using EntityLookupFn = std::function<CellEntity*(uint32_t entity_id)>;
 
-  // `network` is used by SendClientRpc to open a RUDP connection back to
-  // the owning BaseApp. For handler-level tests that never exercise that
-  // path, the default ctor with just the lookup is still available.
+  // `network` only needed for SendClientRpc (handler tests can omit it).
   explicit CellAppNativeProvider(EntityLookupFn lookup);
   CellAppNativeProvider(EntityLookupFn lookup, NetworkInterface& network);
 
   uint8_t GetProcessPrefix() override;
 
-  // Cell → owning-client RPC. Wraps into baseapp::SelfRpcFromCell and
-  // sends to the entity's base_addr. BaseApp's OnSelfRpcFromCell relays
-  // to the client on the RUDP channel using rpc_id as the wire msg_id.
-  void SendClientRpc(uint32_t entity_id, uint32_t rpc_id, const std::byte* payload,
-                     int32_t len) override;
+  // kOwner targets the source's bound client; kOthers/kAll fan out to
+  // every witness with source in AoI, grouped by base_addr.
+  void SendClientRpc(uint32_t entity_id, uint32_t rpc_id, RpcTarget target,
+                     const std::byte* payload, int32_t len) override;
 
   // CellApp-specific surfaces.
   void SetEntityPosition(uint32_t entity_id, float x, float y, float z) override;
@@ -56,10 +47,8 @@ class CellAppNativeProvider : public BaseNativeProvider {
       -> int32_t override;
   void CancelController(uint32_t entity_id, int32_t controller_id) override;
 
-  // ---- C# → C++ callback table ------------------------------------------
   void SetNativeCallbacks(const void* native_callbacks, int32_t len) override;
 
-  // ---- Callback accessors (used by CellApp message handlers) -------------
   [[nodiscard]] auto restore_entity_fn() const -> RestoreEntityFn { return restore_entity_fn_; }
   [[nodiscard]] auto dispatch_rpc_fn() const -> DispatchRpcFn { return dispatch_rpc_fn_; }
   [[nodiscard]] auto entity_destroyed_fn() const -> EntityDestroyedFn {
@@ -68,38 +57,28 @@ class CellAppNativeProvider : public BaseNativeProvider {
   [[nodiscard]] auto serialize_entity_fn() const -> SerializeEntityFn {
     return serialize_entity_fn_;
   }
-  // CellApp-side baseline pump needs the owner-scope serializer, not
-  // the full Serialize (which includes cell-private). Consumer is
-  // CellApp::TickClientBaselinePump.
+  // Owner-scope serializer drives CellApp::TickClientBaselinePump.
   [[nodiscard]] auto get_owner_snapshot_fn() const -> GetOwnerSnapshotFn {
     return get_owner_snapshot_fn_;
   }
-  // Proximity-trigger event dispatch. Lambdas installed by
-  // AddProximityController capture (this, entity_id, user_arg) and
-  // invoke via this accessor so unit tests can install a recording
-  // function pointer without going through SetNativeCallbacks.
+  // Tests can swap in a recording fn without going through SetNativeCallbacks.
   [[nodiscard]] auto proximity_event_fn() const -> ProximityEventFn { return proximity_event_fn_; }
   void SetProximityEventFnForTest(ProximityEventFn fn) { proximity_event_fn_ = fn; }
 
  private:
   EntityLookupFn lookup_;
-  NetworkInterface* network_{nullptr};  // null for handler-level tests
+  NetworkInterface* network_{nullptr};  // null in handler-level tests
   RestoreEntityFn restore_entity_fn_{nullptr};
   DispatchRpcFn dispatch_rpc_fn_{nullptr};
   EntityDestroyedFn entity_destroyed_fn_{nullptr};
-  // Used by CellApp::BuildOffloadMessage to capture the outgoing Real
-  // entity's full state. nullptr until C# registers the expanded
-  // NativeCallbackTable; absence is not fatal (CellApp ships an empty
-  // persistent_blob and the receiver proceeds using only the
-  // replication baseline).
+  // nullptr until C# registers the expanded NativeCallbackTable;
+  // absence: Offload ships empty persistent_blob (replication baseline
+  // covers it).
   SerializeEntityFn serialize_entity_fn_{nullptr};
-  // Owner-scope snapshot for the CellApp-side baseline pump (ships
-  // 0xF002 ReplicatedBaselineToClient via BaseApp). Left nullptr on
-  // test builds that don't register a runtime; the pump
-  // short-circuits.
+  // nullptr ⇒ baseline pump short-circuits.
   GetOwnerSnapshotFn get_owner_snapshot_fn_{nullptr};
-  // Proximity enter/leave bridge — nullptr ⇒ events dropped at the
-  // lambda (trigger state stays correct for Offload / InsidePeers).
+  // nullptr ⇒ proximity events dropped at lambda; trigger state still
+  // correct for Offload / InsidePeers.
   ProximityEventFn proximity_event_fn_{nullptr};
 };
 

@@ -4,6 +4,15 @@ using Atlas.DataTypes;
 
 namespace Atlas.Core;
 
+// Broadcast scope for cell-side server→client RPCs. Mirrors atlas::RpcTarget
+// on the C++ side; BaseApp only supports Owner (no AoI graph).
+public enum RpcTarget : byte
+{
+    Owner = 0,
+    Others = 1,
+    All = 2,
+}
+
 // ============================================================================
 // NativeApi — C# → C++ interop via [LibraryImport]
 // ============================================================================
@@ -63,19 +72,19 @@ internal static unsafe partial class NativeApi
 
     [LibraryImport(LibName, EntryPoint = "AtlasSendClientRpc")]
     private static partial void SendClientRpcNative(
-        uint entityId, uint packedRpcId,
+        uint entityId, uint packedRpcId, byte target,
         byte* payload, int payloadLen);
 
     /// <summary>
     /// Send a client RPC. Direction is encoded in the top 2 bits of packedRpcId
     /// using the format: [direction:2 | typeIndex:14 | method:8].
     /// </summary>
-    public static void SendClientRpc(uint entityId, uint packedRpcId,
+    public static void SendClientRpc(uint entityId, uint packedRpcId, RpcTarget target,
         ReadOnlySpan<byte> payload)
     {
         ThreadGuard.EnsureMainThread();
         fixed (byte* ptr = payload)
-            SendClientRpcNative(entityId, packedRpcId, ptr, payload.Length);
+            SendClientRpcNative(entityId, packedRpcId, (byte)target, ptr, payload.Length);
     }
 
     [LibraryImport(LibName, EntryPoint = "AtlasSendCellRpc")]

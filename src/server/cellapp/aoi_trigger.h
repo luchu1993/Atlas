@@ -12,27 +12,9 @@ class EntityRangeListNode;
 class RangeList;
 class Witness;
 
-// ============================================================================
-// AoITrigger — hysteresis-banded AoI trigger for Witness
-//
-// Composes TWO underlying RangeTriggers centred on the same
-// EntityRangeListNode:
-//
-//   inner — range = aoi_radius. Fires OnEnter → Witness::HandleAoIEnter
-//           when a peer crosses inbound. Inner-band OnLeave is
-//           SUPPRESSED — the peer stays in AoI until it also leaves the
-//           outer band (that's the hysteresis window).
-//
-//   outer — range = aoi_radius + hysteresis. Fires OnLeave →
-//           Witness::HandleAoILeave when a peer crosses outbound.
-//           Outer-band OnEnter is SUPPRESSED — peers between outer and
-//           inner are in the hysteresis window, not yet in AoI.
-//
-// A peer oscillating at the exact aoi_radius boundary gets ONE enter
-// when it first crosses inner and stays in AoI as long as it stays
-// within outer — no per-tick enter/leave flap.
-// ============================================================================
-
+// Hysteresis-banded AoI trigger for Witness. Inner band (aoi_radius) fires
+// OnEnter; outer band (aoi_radius + hysteresis) fires OnLeave. Peers in
+// the gap stay in AoI but don't toggle. Eliminates per-tick boundary flap.
 class AoITrigger {
  public:
   AoITrigger(Witness& witness, EntityRangeListNode& central, float inner_range, float outer_range);
@@ -41,31 +23,23 @@ class AoITrigger {
   AoITrigger(const AoITrigger&) = delete;
   auto operator=(const AoITrigger&) -> AoITrigger& = delete;
 
-  // Insert both inner + outer bound pairs into the RangeList. Peers
-  // already 2-D inside at insertion time fire inner's OnEnter (dispatched
-  // to the witness as AoI enters) and outer's OnEnter (suppressed).
+  // Inserts both bands; existing-peers fire inner.OnEnter (delivered as
+  // AoI enter); outer.OnEnter is suppressed.
   void Insert(RangeList& list);
 
-  // Remove both inner + outer bound pairs. Fires no OnLeave events —
-  // mirror of RangeTrigger::Remove's contract.
+  // Remove both bands; no OnLeave fires (mirrors RangeTrigger::Remove).
   void Remove(RangeList& list);
 
-  // Resize both bands in place. The caller computes the absolute
-  // outer = inner + hysteresis and passes both explicitly.
+  // Caller computes outer = inner + hysteresis.
   void SetBounds(float inner_range, float outer_range);
 
-  // Resync both bound pairs against the central's NEW position.  Must be
-  // called by the witness owner after the central's range_node has
-  // shuffled — bound nodes are tied to central via X()/Z() but their
-  // list-position reflects the OLD central, so their inside_peers_ stay
-  // stale until each bound shuffles to its new sorted slot.  Without
-  // this hook a moving observer's outer.OnLeave never fires for peers
-  // that drift out of range, leaking dangling pointers in aoi_map_.
+  // Required after central's range_node shuffles: bound nodes still
+  // reflect the OLD central position, so inside_peers_ stay stale and
+  // outer.OnLeave fails to fire — leaks dangling aoi_map_ pointers.
   void OnCentralMoved(float old_central_x, float old_central_z);
 
-  // Force-insert a peer into outer band's inside_peers_.  Called by
-  // InnerTrigger.OnEnter to keep the inner ⊂ outer invariant intact
-  // when cross-event ordering would otherwise leave outer stale.
+  // Maintains inner ⊂ outer invariant when cross-event ordering would
+  // otherwise leave outer's inside_peers_ stale.
   void ForceOuterInsidePeer(class RangeListNode& peer);
 
   [[nodiscard]] auto InnerRange() const -> float;

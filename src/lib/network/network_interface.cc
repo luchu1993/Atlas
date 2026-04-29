@@ -364,19 +364,9 @@ auto NetworkInterface::ConnectRudp(const Address& addr, const RudpProfile& profi
 }
 
 auto NetworkInterface::InternetRudpProfile() -> RudpProfile {
-  // ET-style outer profile.  MTU = 470 is calibrated against consumer
-  // ISP / VPN / mobile-carrier paths (PPPoE 1492, IPSec/WireGuard
-  // ~50 B overhead, mobile MSS sometimes ~1280) — well below KCP's
-  // 1400 default.  Window stays at 256 to bound retransmit memory on
-  // a wide-area lossy link.
-  //
-  // Deferred flush threshold acts as an OOM safety net only: at
-  // ~32 KB the bundle is large enough that tick-end flush amortises
-  // the Finalize / filter / packet-building cost across many
-  // fragments in SendFragmented's tight loop.  Earlier mid-tick
-  // flushes (e.g. at MTU boundary) regress per-call overhead
-  // 3-4× under high-volume pumps — see 500-cli baseline 4057994
-  // vs b1782e5 in docs/optimization/.
+  // ET-style outer profile. MTU 470 dodges PPPoE/IPSec/mobile MSS
+  // ceilings; deferred flush is an OOM net so tick-end flush stays the
+  // primary drain (mid-tick flushes regress per-call overhead 3–4×).
   RudpProfile profile;
   profile.mtu = 470;
   profile.deferred_flush_threshold = 32 * 1024;

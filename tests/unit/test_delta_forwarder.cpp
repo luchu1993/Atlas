@@ -6,6 +6,7 @@
 
 #include <gtest/gtest.h>
 
+#include "baseapp/baseapp_messages.h"
 #include "baseapp/delta_forwarder.h"
 #include "network/event_dispatcher.h"
 #include "network/interface_table.h"
@@ -43,13 +44,12 @@ TEST(DeltaForwarderTest, InitiallyEmpty) {
 // let the client mis-dispatch, silently merging semantically different
 // streams.
 TEST(DeltaForwarderTest, ReservedClientMessageIdsAreDistinct) {
-  EXPECT_NE(DeltaForwarder::kClientDeltaMessageId, DeltaForwarder::kClientBaselineMessageId);
-  EXPECT_NE(DeltaForwarder::kClientDeltaMessageId, DeltaForwarder::kClientReliableDeltaMessageId);
-  EXPECT_NE(DeltaForwarder::kClientBaselineMessageId,
-            DeltaForwarder::kClientReliableDeltaMessageId);
-  EXPECT_EQ(DeltaForwarder::kClientDeltaMessageId, static_cast<MessageID>(0xF001));
-  EXPECT_EQ(DeltaForwarder::kClientBaselineMessageId, static_cast<MessageID>(0xF002));
-  EXPECT_EQ(DeltaForwarder::kClientReliableDeltaMessageId, static_cast<MessageID>(0xF003));
+  EXPECT_NE(baseapp::kClientDeltaMessageId, baseapp::kClientBaselineMessageId);
+  EXPECT_NE(baseapp::kClientDeltaMessageId, baseapp::kClientReliableDeltaMessageId);
+  EXPECT_NE(baseapp::kClientBaselineMessageId, baseapp::kClientReliableDeltaMessageId);
+  EXPECT_EQ(baseapp::kClientDeltaMessageId, static_cast<MessageID>(0xF001));
+  EXPECT_EQ(baseapp::kClientBaselineMessageId, static_cast<MessageID>(0xF002));
+  EXPECT_EQ(baseapp::kClientReliableDeltaMessageId, static_cast<MessageID>(0xF003));
 }
 
 TEST(DeltaForwarderTest, EnqueueIncreasesDepth) {

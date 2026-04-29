@@ -15,7 +15,7 @@
 // CellApp messages (IDs 3000–3999)
 //
 // Inbound-to-CellApp. CellApp's outbound traffic reuses BaseApp's message
-// enum (baseapp::CellEntityCreated, baseapp::SelfRpcFromCell, …) because
+// enum (baseapp::CellEntityCreated, baseapp::BroadcastRpcFromCell, …) because
 // the physical receiver is BaseApp and message IDs share one flat space.
 //
 // RPC split — exposed (client-facing) vs internal (server-only):

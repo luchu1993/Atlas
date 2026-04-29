@@ -14,17 +14,9 @@ namespace atlas {
 class Space;
 class CellEntity;
 
-// Cell — a Space's sub-region hosted by this CellApp. One Space may span
-// multiple Cells across several CellApps. A Cell tracks its slice of
-// the BSP partition (`bounds_`), the live Real entities whose
-// authoritative home is here, and the CellAppMgr-controlled offload
-// enable flag (ShouldOffload).
-//
-// This class intentionally does NOT own the entities — the Space's
-// `entities_` map owns the unique_ptrs. Cell holds non-owning pointers
-// keyed by insertion order, removed via swap-back for O(1) membership
-// updates.
-
+// Sub-region of a Space hosted on this CellApp; one Space can span many
+// Cells across CellApps. Holds non-owning pointers (Space owns entities)
+// with O(1) swap-back removal.
 class Cell {
  public:
   Cell(Space& space, cellappmgr::CellID cell_id, const CellBounds& bounds);
@@ -33,19 +25,13 @@ class Cell {
   [[nodiscard]] auto GetSpace() const -> const Space& { return space_; }
   [[nodiscard]] auto Id() const -> cellappmgr::CellID { return cell_id_; }
 
-  // UpdateGeometry rewrites bounds in-place. Does NOT re-partition the
-  // entity list — OffloadChecker reacts on the next tick by detecting
-  // entities that now fall outside `bounds_`.
+  // SetBounds rewrites in place; OffloadChecker re-partitions next tick.
   [[nodiscard]] auto Bounds() const -> const CellBounds& { return bounds_; }
   void SetBounds(const CellBounds& b) { bounds_ = b; }
 
-  // Real entities hosted by this Cell. Callers must call these whenever a
-  // Real arrives (CreateCellEntity, Offload arrival, Ghost→Real
-  // conversion) or leaves (Destroy, Offload departure, Real→Ghost
-  // conversion). Cell never infers entity ownership from bounds alone;
-  // explicit book-keeping is required so that a brief excursion outside
-  // bounds (during tick work, before OffloadChecker runs) doesn't drop
-  // the entity from the membership list.
+  // Membership is explicit — never inferred from bounds, so a tick-mid
+  // excursion does not drop the entity. Callers wire these on every
+  // arrival (Create, Offload-in, Ghost→Real) and departure.
   void AddRealEntity(CellEntity* entity);
   auto RemoveRealEntity(CellEntity* entity) -> bool;
   [[nodiscard]] auto HasRealEntity(const CellEntity* entity) const -> bool;
@@ -59,8 +45,7 @@ class Cell {
     for (auto* e : real_entities_) fn(*e);
   }
 
-  // Offload enable flag, toggled by CellAppMgr via ShouldOffload msg.
-  // Default true — fresh cells accept offload until told otherwise.
+  // Toggled by CellAppMgr; fresh cells default to true.
   [[nodiscard]] auto ShouldOffload() const -> bool { return should_offload_; }
   void SetShouldOffload(bool v) { should_offload_ = v; }
 

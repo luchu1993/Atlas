@@ -1,3 +1,4 @@
+using Atlas.Core;
 using Atlas.Serialization;
 
 namespace Atlas.Entity.Components;
@@ -41,10 +42,11 @@ public abstract class ReplicatedComponent : ComponentBase
     // generated stub method; slot and TypeId are per-instance, so a single
     // component class instance can be slotted onto different entity types
     // and still target the right server-side dispatcher table.
-    protected void SendClientRpc(int methodIdx, System.ReadOnlySpan<byte> payload)
+    protected void SendClientRpc(int methodIdx, RpcTarget target,
+        System.ReadOnlySpan<byte> payload)
     {
         int rpcId = (_slotIdx << 24) | (0x00 << 22) | (_entity.TypeId << 8) | methodIdx;
-        _entity.SendClientRpc(rpcId, payload);
+        _entity.SendClientRpc(rpcId, target, payload);
     }
 
     protected void SendCellRpc(int methodIdx, System.ReadOnlySpan<byte> payload)

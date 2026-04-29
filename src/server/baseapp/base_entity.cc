@@ -15,7 +15,7 @@ void BaseEntity::OnWriteAck(DatabaseID dbid, bool success) {
     ATLAS_LOG_WARNING("Entity {} write_to_db failed", entity_id_);
   }
   if (pending_destroy_) {
-    // Will be cleaned up by EntityManager on next tick scan
+    // EntityManager scan handles cleanup next tick.
   }
 }
 
@@ -35,10 +35,6 @@ void BaseEntity::ClearCell() {
   cell_addr_ = {};
   cell_epoch_ = 0;
 }
-
-// ============================================================================
-// Proxy
-// ============================================================================
 
 Proxy::Proxy(EntityID id, uint16_t type_id, DatabaseID dbid) : BaseEntity(id, type_id, dbid) {}
 

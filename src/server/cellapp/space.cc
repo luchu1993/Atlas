@@ -10,12 +10,8 @@ namespace atlas {
 
 Space::Space(SpaceID id) : id_(id) {}
 
-// Out-of-line destructor: CellEntity (and Cell) are incomplete in
-// space.h (forward declared to break the include cycle), so the
-// unique_ptr deleter can't be instantiated inline there.  We also
-// flip tearing_down_ so per-entity destructors that introspect
-// space state (e.g. ~CellEntity's leave-fanout audit) can short-
-// circuit before the map iteration races our teardown.
+// Out-of-line because CellEntity/Cell are forward-declared in space.h.
+// Sets tearing_down_ so ~CellEntity helpers can short-circuit map walks.
 Space::~Space() {
   tearing_down_ = true;
 }
@@ -71,18 +67,10 @@ auto Space::FindEntity(EntityID id) const -> const CellEntity* {
 
 void Space::Tick(float dt) {
   ATLAS_PROFILE_ZONE_N("Space::Tick");
-  // Controllers first so motion changes propagate into the RangeList
-  // before any post-tick Witness pass reads it.
-  //
-  // Intentionally NO compaction pass here. The only path that sets
-  // IsDestroyed is RemoveEntity, which erases the entity from
-  // `entities_` synchronously. A dedicated compaction sweep would be a
-  // second destruction path that bypasses CellApp's base/cell entity
-  // indexes (`entity_population_` / `base_entity_population_` in
-  // cellapp.h), turning them into stale pointers. If deferred
-  // destruction is ever needed (e.g. destroy-during-controller-update),
-  // add it with a CellApp-visible notification hook — not a silent
-  // Space-local compaction.
+  // Controllers run before any Witness pass reads RangeList.
+  // No compaction here: RemoveEntity is the sole destruction path and
+  // erases synchronously. A second sweep would bypass CellApp's
+  // entity_population_ / base_entity_population_ indexes.
   for (auto& [_, entity] : entities_) {
     if (!entity->IsDestroyed()) entity->GetControllers().Update(dt);
   }

@@ -6,18 +6,15 @@
 
 namespace atlas {
 
-// UDP channel — shares a socket with NetworkInterface.
-// Each datagram is a complete bundle (no framing needed).
+// Each datagram is a complete bundle; socket is owned by NetworkInterface.
 class UdpChannel : public Channel {
  public:
-  // Does NOT own the socket — NetworkInterface owns the UDP socket.
   UdpChannel(EventDispatcher& dispatcher, InterfaceTable& table, Socket& shared_socket,
              const Address& remote);
   ~UdpChannel() override = default;
 
   [[nodiscard]] auto Fd() const -> FdHandle override { return shared_socket_.Fd(); }
 
-  // Called by NetworkInterface when a datagram arrives from this channel's remote
   void OnDatagramReceived(std::span<const std::byte> data);
 
  protected:

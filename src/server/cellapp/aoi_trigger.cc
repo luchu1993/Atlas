@@ -11,9 +11,7 @@ namespace atlas {
 
 namespace {
 
-// Recover the CellEntity a RangeListNode belongs to. Returns nullptr
-// when the crosser is not an entity node (sentinel head/tail, another
-// trigger's bound). Only EntityRangeListNode carries an owner back-pointer.
+// Returns nullptr for non-entity nodes (sentinels, trigger bounds).
 auto OwnerOf(RangeListNode& node) -> CellEntity* {
   if (node.Order() != RangeListOrder::kEntity) return nullptr;
   auto& entity_node = static_cast<EntityRangeListNode&>(node);
@@ -22,9 +20,7 @@ auto OwnerOf(RangeListNode& node) -> CellEntity* {
 
 }  // namespace
 
-// Inner-band: fires OnEnter into the witness on inbound crossings. Leaves
-// between inner and outer are swallowed to produce hysteresis — the peer
-// stays in AoI until outer's OnLeave fires.
+// Inner band: fires OnEnter; OnLeave suppressed (hysteresis).
 class AoITrigger::InnerTrigger final : public RangeTrigger {
  public:
   InnerTrigger(Witness& w, RangeListNode& central, float range)
@@ -33,35 +29,26 @@ class AoITrigger::InnerTrigger final : public RangeTrigger {
   void OnEnter(RangeListNode& other) override {
     if (auto* peer = OwnerOf(other)) {
       witness_.HandleAoIEnter(*peer);
-      // Maintain peer ∈ inner ⊂ outer invariant: if peer entered the
-      // inner band via a fast-path that bypassed outer's inbound cross
-      // (e.g. observer move shuffles inner before outer, or a hysteresis
-      // re-cross), force outer's inside_peers_ to contain peer so the
-      // eventual outbound cross (incl. ~CellEntity's vacate shuffle)
-      // fires HandleAoILeave.
+      // Inner ⊂ outer invariant: a fast-path inner-enter (observer move
+      // shuffles inner before outer, hysteresis re-cross) leaves outer
+      // stale; force-insert so the eventual outbound cross fires Leave.
       witness_.ForceOuterInsidePeer(other);
     }
   }
 
-  void OnLeave(RangeListNode& /*other*/) override {
-    // Suppressed by design — see class comment in aoi_trigger.h.
-  }
+  void OnLeave(RangeListNode& /*other*/) override {}  // hysteresis
 
  private:
   Witness& witness_;
 };
 
-// Outer-band: fires OnLeave into the witness on outbound crossings. Enters
-// from far outside into the hysteresis window are swallowed — only inner's
-// OnEnter promotes a peer into AoI.
+// Outer band: fires OnLeave; OnEnter suppressed (hysteresis-only).
 class AoITrigger::OuterTrigger final : public RangeTrigger {
  public:
   OuterTrigger(Witness& w, RangeListNode& central, float range)
       : RangeTrigger(central, range), witness_(w) {}
 
-  void OnEnter(RangeListNode& /*other*/) override {
-    // Suppressed by design — see class comment in aoi_trigger.h.
-  }
+  void OnEnter(RangeListNode& /*other*/) override {}  // hysteresis
 
   void OnLeave(RangeListNode& other) override {
     if (auto* peer = OwnerOf(other)) witness_.HandleAoILeave(*peer);
@@ -82,18 +69,12 @@ AoITrigger::AoITrigger(Witness& witness, EntityRangeListNode& central, float inn
 AoITrigger::~AoITrigger() = default;
 
 void AoITrigger::Insert(RangeList& list) {
-  // Order: inner before outer. With two triggers on the same central,
-  // peers already 2-D inside at insertion time fire OnEnter on both
-  // during Insert's natural sweep. Inner first means the witness sees
-  // the AoI enter before outer's (suppressed) OnEnter fires — cleaner
-  // trace logs. Correctness is independent of order.
+  // Inner first for cleaner trace order; correctness is order-independent.
   inner_->Insert(list);
   outer_->Insert(list);
 }
 
 void AoITrigger::Remove(RangeList& list) {
-  // Reverse insertion order out of habit — neither trigger fires OnLeave
-  // during Remove, so the order is cosmetic.
   outer_->Remove(list);
   inner_->Remove(list);
 }
@@ -103,9 +84,6 @@ void AoITrigger::ForceOuterInsidePeer(RangeListNode& peer) {
 }
 
 void AoITrigger::OnCentralMoved(float old_central_x, float old_central_z) {
-  // Update both bands against the new central.  Order is cosmetic —
-  // each band's bounds shuffle independently and produce their own
-  // OnEnter/OnLeave events.  Inner first matches the Insert order.
   inner_->Update(old_central_x, old_central_z);
   outer_->Update(old_central_x, old_central_z);
 }
@@ -113,13 +91,8 @@ void AoITrigger::OnCentralMoved(float old_central_x, float old_central_z) {
 void AoITrigger::SetBounds(float inner_range, float outer_range) {
   assert(inner_range >= 0.f);
   assert(outer_range >= inner_range);
-  // "Expand first, contract second" applied across both bands. When
-  // expanding we grow outer first so a peer newly inside outer lands in
-  // the hysteresis window before inner reaches them; when contracting
-  // we shrink inner first so the suppressed inner-leaves run ahead of
-  // outer's (visible) leaves. Correctness is actually order-independent
-  // because inner's OnLeave and outer's OnEnter are both suppressed,
-  // but the ordering keeps user-visible trace sequences tidy.
+  // Expand outer first / contract inner first keeps trace order tidy;
+  // suppressed leaves on inner and enters on outer make this cosmetic.
   const bool expanding = outer_range > outer_->Range();
   if (expanding) {
     outer_->SetRange(outer_range);

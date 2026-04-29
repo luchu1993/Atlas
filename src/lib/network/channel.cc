@@ -140,9 +140,8 @@ namespace {
 //     frame_data.size(), the tail [returned..end) needs to be saved
 //     for resume.
 //
-// On parse error mid-frame, we log + claim full consumption so the
-// bad bytes are dropped (matches pre-A2 behaviour); the alternative
-// would be to retry the same broken frame on every resume.
+// On parse error mid-frame, log + claim full consumption so the bad
+// bytes are dropped; otherwise resume would retry the broken frame.
 auto DispatchFrameImpl(InterfaceTable& interface_table, const Address& remote, Channel* channel,
                        std::span<const std::byte> frame_data, TimePoint deadline) -> std::size_t {
   ATLAS_PROFILE_ZONE_N("Channel::Dispatch");

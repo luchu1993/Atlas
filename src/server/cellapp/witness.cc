@@ -159,6 +159,11 @@ void Witness::Deactivate() {
   if (!trigger_) return;
   trigger_->Remove(owner_.GetSpace().GetRangeList());
   trigger_.reset();
+  // cache.entity is nulled by HandleAoILeave, so non-null entries are the
+  // peers that haven't already drained the back-link.
+  for (auto& [_, cache] : aoi_map_) {
+    if (cache.entity) cache.entity->RemoveObserver(this);
+  }
   aoi_map_.clear();
   priority_queue_.clear();
   pending_enter_ids_.clear();
@@ -209,6 +214,7 @@ void Witness::HandleAoIEnter(CellEntity& peer) {
   // left AoI and came back before Update had a chance to fire the Leave).
   cache.flags = EntityCache::kEnterPending;
   pending_enter_ids_.push_back(peer.Id());
+  peer.AddObserver(this);  // reverse index for O(W) broadcast fan-out
   UpdatePriority(cache);
 }
 
@@ -239,6 +245,7 @@ void Witness::HandleAoILeave(CellEntity& peer) {
   // kGone before dereferencing gets a clean nullptr crash instead of
   // a use-after-free hidden by freed-memory coincidence.
   it->second.entity = nullptr;
+  peer.RemoveObserver(this);  // drop reverse index
 }
 
 void Witness::UpdatePriority(EntityCache& cache) const {

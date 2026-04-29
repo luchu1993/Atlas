@@ -19,17 +19,12 @@ CellEntity::CellEntity(EntityID id, uint16_t type_id, Space& space, const math::
       direction_(direction),
       space_(space),
       range_node_(position.x, position.z) {
-  // Stash the back-pointer so AoITrigger callbacks (which only get a
-  // RangeListNode&) can recover the owning CellEntity via reinterpret_cast.
+  // Back-pointer for AoITrigger callbacks (they only see RangeListNode&).
   range_node_.SetOwnerData(this);
-  // Link the node into the owning RangeList now; SetPosition afterwards
-  // will shuffle from this initial location. Insert does fire crosses
-  // with any triggers already in the list at this position — that's the
-  // "new entity joined" signal those triggers want.
+  // Insert fires crosses with already-present triggers — that's the
+  // "new entity joined" signal they want.
   space_.GetRangeList().Insert(&range_node_);
   linked_to_range_list_ = true;
-  // Default-construct the Real sidecar so IsReal() holds from the first
-  // tick. Ghost construction uses the tag ctor below.
   real_data_ = std::make_unique<RealEntityData>(*this);
 }
 
@@ -43,13 +38,10 @@ CellEntity::CellEntity(GhostTag, EntityID id, uint16_t type_id, Space& space,
       space_(space),
       range_node_(position.x, position.z),
       real_channel_(real_channel) {
-  // Ghost shares the same RangeList wiring as Real — cross-Cell observers'
-  // Witnesses will pick it up through the ordinary AoITrigger machinery.
+  // Same RangeList wiring as Real so peer Witness AoI works uniformly.
   range_node_.SetOwnerData(this);
   space_.GetRangeList().Insert(&range_node_);
   linked_to_range_list_ = true;
-  // No RealEntityData allocation: the Real side lives elsewhere; our
-  // cross-process bridge is real_channel_.
 }
 
 CellEntity::~CellEntity() {

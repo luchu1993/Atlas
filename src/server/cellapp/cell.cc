@@ -11,9 +11,7 @@ Cell::Cell(Space& space, cellappmgr::CellID cell_id, const CellBounds& bounds)
 
 void Cell::AddRealEntity(CellEntity* entity) {
   if (entity == nullptr) return;
-  // Duplicate-add is silently dropped. Callers that truly mean to re-link
-  // an entity must RemoveRealEntity first — that makes the membership
-  // transition explicit in logs.
+  // Duplicate-add is a no-op; relink callers must RemoveRealEntity first.
   if (HasRealEntity(entity)) return;
   real_entities_.push_back(entity);
 }
@@ -21,7 +19,7 @@ void Cell::AddRealEntity(CellEntity* entity) {
 auto Cell::RemoveRealEntity(CellEntity* entity) -> bool {
   auto it = std::find(real_entities_.begin(), real_entities_.end(), entity);
   if (it == real_entities_.end()) return false;
-  *it = real_entities_.back();  // swap-back keeps remove O(1).
+  *it = real_entities_.back();  // swap-back: O(1) remove
   real_entities_.pop_back();
   return true;
 }

@@ -14,16 +14,15 @@
 
 namespace atlas {
 
-// Packed layout of the callback table sent by C# Atlas.Runtime via set_native_callbacks.
-// Must match the [UnmanagedCallersOnly] exports in Atlas.Runtime.
-// New entries are appended at the end; C++ tolerates short tables (older runtimes).
+// Mirrors [UnmanagedCallersOnly] exports in Atlas.Runtime. Append-only;
+// C++ tolerates short tables (older runtimes).
 #pragma pack(push, 1)
 struct NativeCallbackTable {
   RestoreEntityFn restore_entity;
   GetEntityDataFn get_entity_data;
   EntityDestroyedFn entity_destroyed;
   DispatchRpcFn dispatch_rpc;
-  GetOwnerSnapshotFn get_owner_snapshot;  // appended — optional for older runtimes
+  GetOwnerSnapshotFn get_owner_snapshot;  // optional for older runtimes
 };
 #pragma pack(pop)
 
@@ -33,8 +32,16 @@ uint8_t BaseAppNativeProvider::GetProcessPrefix() {
   return static_cast<uint8_t>(ProcessType::kBaseApp);
 }
 
-void BaseAppNativeProvider::SendClientRpc(uint32_t entity_id, uint32_t rpc_id,
+void BaseAppNativeProvider::SendClientRpc(uint32_t entity_id, uint32_t rpc_id, RpcTarget target,
                                           const std::byte* payload, int32_t len) {
+  // BaseApp has no AoI/witness graph — broadcast scopes are cell-side only.
+  if (target != RpcTarget::kOwner) {
+    ATLAS_LOG_ERROR(
+        "BaseApp: SendClientRpc with target={} unsupported (entity={}); broadcast scopes require a "
+        "cell entity",
+        static_cast<int>(target), entity_id);
+    return;
+  }
   auto* proxy = app_.GetEntityManager().FindProxy(entity_id);
   if (!proxy || !proxy->HasClient()) {
     ATLAS_LOG_WARNING("BaseApp: SendClientRpc: entity {} has no client", entity_id);
@@ -45,7 +52,6 @@ void BaseAppNativeProvider::SendClientRpc(uint32_t entity_id, uint32_t rpc_id,
     ATLAS_LOG_WARNING("BaseApp: SendClientRpc: entity {} client channel unavailable", entity_id);
     return;
   }
-  // Unified envelope (see RelayRpcToClient).
   std::vector<std::byte> tmp(payload, payload + len);
   app_.RelayRpcToClient(*client_ch, rpc_id, tmp);
 }
@@ -57,17 +63,12 @@ void BaseAppNativeProvider::SendCellRpc(uint32_t entity_id, uint32_t rpc_id,
     ATLAS_LOG_WARNING("BaseApp: SendCellRpc: entity {} has no cell", entity_id);
     return;
   }
-  // Connect to cell — nocwnd disables congestion control for this intra-DC link
-  // where loss is negligible and round-trip latency is the dominant concern.
+  // nocwnd: intra-DC link, loss negligible, latency dominates.
   auto cell_ch_result = app_.Network().ConnectRudpNocwnd(ent->CellAddr());
   if (!cell_ch_result) {
     ATLAS_LOG_ERROR("BaseApp: SendCellRpc: cannot connect to cell for entity {}", entity_id);
     return;
   }
-  // Wrap in cellapp::InternalCellRpc so the cell side dispatches via
-  // its registered typed handler (CellApp::OnInternalCellRpc).  The
-  // protocol-level MessageID stays in the cellapp/ID space (3004); the
-  // application-level rpc_id rides in the body.
   cellapp::InternalCellRpc msg;
   msg.target_entity_id = entity_id;
   msg.rpc_id = rpc_id;
@@ -80,8 +81,7 @@ void BaseAppNativeProvider::SendCellRpc(uint32_t entity_id, uint32_t rpc_id,
 
 void BaseAppNativeProvider::SendBaseRpc(uint32_t entity_id, uint32_t rpc_id,
                                         const std::byte* payload, int32_t len) {
-  // Base-to-base RPC: the entity lives on this BaseApp.
-  // Dispatch directly via the C# callback (no network hop needed).
+  // Local: dispatch directly through C# (no network hop).
   if (!dispatch_rpc_fn_) {
     ATLAS_LOG_WARNING("BaseApp: SendBaseRpc: dispatch_rpc callback not registered");
     return;
@@ -95,7 +95,6 @@ void BaseAppNativeProvider::WriteToDb(uint32_t entity_id, const std::byte* entit
 }
 
 void BaseAppNativeProvider::GiveClientTo(uint32_t src_entity_id, uint32_t dest_entity_id) {
-  // If both are on this BaseApp, do local transfer.
   if (app_.GetEntityManager().FindProxy(dest_entity_id))
     app_.DoGiveClientToLocal(src_entity_id, dest_entity_id);
   else
@@ -114,10 +113,7 @@ void BaseAppNativeProvider::SetAoIRadius(uint32_t entity_id, float radius, float
     return;
   }
   if (!ent->HasCell()) {
-    ATLAS_LOG_WARNING(
-        "BaseApp: SetAoIRadius on entity_id={} with no cell counterpart — "
-        "call from a has_cell entity after the cell ack has landed",
-        entity_id);
+    ATLAS_LOG_WARNING("BaseApp: SetAoIRadius on entity_id={} with no cell counterpart", entity_id);
     return;
   }
   auto* cell_ch = app_.ResolveCellChannelForEntity(entity_id);
@@ -134,8 +130,7 @@ void BaseAppNativeProvider::SetAoIRadius(uint32_t entity_id, float radius, float
 }
 
 void BaseAppNativeProvider::SetNativeCallbacks(const void* native_callbacks, int32_t len) {
-  // Minimum accepted size = the original 4-entry table; new entries are
-  // optional so pre-baseline runtimes still register cleanly.
+  // Minimum = original 4-entry table; appended entries are optional.
   constexpr int32_t kMinTableBytes =
       static_cast<int32_t>(sizeof(RestoreEntityFn) + sizeof(GetEntityDataFn) +
                            sizeof(EntityDestroyedFn) + sizeof(DispatchRpcFn));

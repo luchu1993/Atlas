@@ -54,12 +54,10 @@ enum class MessageReliability : uint8_t {
 //   - UdpChannel         : urgency is ignored — each datagram is
 //                          independent, no application-level bundle.
 //
-// Default is kBatched.  Every must-stay-immediate descriptor (PvP
-// command path, login / handshake, all *Ack, machined control
-// plane, manager registration, cellapp migration handshake,
-// witness control, space topology, GlobalBase) is explicitly
-// annotated with kImmediate per docs/optimization/channel_send_batching.md
-// "Immediate whitelist" — see 0042 for the full audit pass.
+// Default is kBatched. Must-stay-immediate descriptors (PvP commands,
+// login/handshake, *Ack, machined control plane, manager registration,
+// cellapp migration handshake, witness control, space topology,
+// GlobalBase) are explicitly annotated kImmediate.
 //
 // kImmediate use cases:
 //   - Handshake / login / channel teardown

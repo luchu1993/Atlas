@@ -298,12 +298,9 @@ void CellApp::TickControllers(float dt) {
 
 void CellApp::TickWitnesses() {
   ATLAS_PROFILE_ZONE_N("CellApp::TickWitnesses");
-  // Demand-based fair share — see docs/optimization for the analysis.
-  // Pass 1 collects each observer's estimated outbound demand (peers in
-  // AoI plus last tick's deficit carryover); Pass 2 normalises the
-  // requests against the cellapp-wide cap and dispatches Witness::Update
-  // with the allocated budget.  Avoids the equal-share pathology where
-  // a high-density observer gets the same 4 KB as a 2-peer observer.
+  // Demand-based fair share. Pass 1 collects each observer's estimated
+  // outbound demand (AoI peers + last tick's deficit); Pass 2 normalises
+  // against the cellapp cap. Avoids equal-share starving dense observers.
   const uint32_t cap = CellAppConfig::WitnessTotalOutboundCapBytes();
   const uint32_t min_budget = CellAppConfig::WitnessMinPerObserverBudgetBytes();
   const uint32_t max_budget = CellAppConfig::WitnessMaxPerObserverBudgetBytes();

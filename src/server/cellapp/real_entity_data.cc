@@ -11,8 +11,6 @@ namespace atlas {
 RealEntityData::RealEntityData(CellEntity& owner) : owner_(owner) {}
 RealEntityData::~RealEntityData() = default;
 
-// ---- Haunt list ------------------------------------------------------------
-
 auto RealEntityData::AddHaunt(Channel* channel, const Address& addr) -> bool {
   if (channel == nullptr) return false;
   if (HasHaunt(channel)) return false;
@@ -24,9 +22,7 @@ auto RealEntityData::RemoveHaunt(Channel* channel) -> bool {
   auto it = std::find_if(haunts_.begin(), haunts_.end(),
                          [channel](const Haunt& h) { return h.channel == channel; });
   if (it == haunts_.end()) return false;
-  // Swap-back keeps the vector O(1) at the cost of ordering — callers of
-  // Haunts() don't rely on creation order (iteration target is fan-out,
-  // not sequence).
+  // Swap-back: O(1) at cost of order; Haunts() iterates as a fan-out set.
   *it = haunts_.back();
   haunts_.pop_back();
   return true;
@@ -36,8 +32,6 @@ auto RealEntityData::HasHaunt(Channel* channel) const -> bool {
   return std::any_of(haunts_.begin(), haunts_.end(),
                      [channel](const Haunt& h) { return h.channel == channel; });
 }
-
-// ---- Message builders ------------------------------------------------------
 
 auto RealEntityData::BuildPositionUpdate() const -> cellapp::GhostPositionUpdate {
   ATLAS_PROFILE_ZONE_N("RealEntityData::BuildPositionUpdate");
@@ -58,10 +52,8 @@ auto RealEntityData::BuildDelta() const -> cellapp::GhostDelta {
   const auto* state = owner_.GetReplicationState();
   if (state == nullptr || state->history.empty()) return msg;
 
-  // Invariant: PublishReplicationFrame only appends to `history` when it
-  // advances `latest_event_seq`, so back().event_seq should equal latest.
-  // On divergence, ship an empty delta instead of corrupt bytes; the next
-  // tick's gap check will promote the refresh to a GhostSnapshotRefresh.
+  // Invariant: history.back().event_seq == latest_event_seq (PublishReplicationFrame).
+  // On divergence ship empty; next tick's gap check upgrades to snapshot.
   const auto& latest = state->history.back();
   if (latest.event_seq != state->latest_event_seq) {
     ATLAS_LOG_WARNING(
@@ -88,8 +80,6 @@ auto RealEntityData::BuildSnapshotRefresh() const -> cellapp::GhostSnapshotRefre
   }
   return msg;
 }
-
-// ---- Velocity --------------------------------------------------------------
 
 void RealEntityData::UpdateVelocity(const math::Vector3& new_pos, float dt) {
   if (!has_position_sample_ || dt <= 0.f) {

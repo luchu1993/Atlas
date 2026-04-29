@@ -15,8 +15,7 @@
 #include "network/packet_filter.h"
 #include "platform/io_poller.h"
 
-// Windows <winuser.h> defines SendMessage as a macro, which collides with
-// Channel::SendMessage.  Undefine it so our method name compiles cleanly.
+// Windows <winuser.h> defines SendMessage as a macro.
 #ifdef SendMessage
 #undef SendMessage
 #endif
@@ -34,75 +33,51 @@ enum class ChannelState : uint8_t {
   kCondemned,
 };
 
-// Thread safety: NOT thread-safe. Used from EventDispatcher's thread only.
+// Not thread-safe; used from EventDispatcher's thread only.
 class Channel {
  public:
   Channel(EventDispatcher& dispatcher, InterfaceTable& table, const Address& remote);
   virtual ~Channel();
 
-  // Non-copyable, non-movable
   Channel(const Channel&) = delete;
   Channel& operator=(const Channel&) = delete;
   Channel(Channel&&) = delete;
   Channel& operator=(Channel&&) = delete;
 
-  // Sending
   [[nodiscard]] auto Bundle() -> Bundle& { return bundle_; }
   [[nodiscard]] auto Send() -> Result<void>;
 
-  // Single public sending entry point.  The descriptor's reliability
-  // selects Send() vs SendUnreliable(), and its urgency selects the
-  // deferred batching path vs immediate dispatch — see the transport
-  // matrix in MessageUrgency's doc comment.
-  template <NetworkMessage Msg>
-  void QueueMessage(const Msg& msg) {
-    bundle_.AddMessage(msg);
-  }
-
+  // Single public send entry point. Descriptor's reliability picks
+  // Send / SendUnreliable; urgency picks deferred batching vs immediate.
   template <NetworkMessage Msg>
   [[nodiscard]] auto SendMessage(const Msg& msg) -> Result<void> {
     if (IsCondemned()) return CondemnedSendError();
     const auto& desc = Msg::Descriptor();
     if (desc.IsBatched()) {
       if (auto* deferred = DeferredBundleFor(desc)) {
-        // RUDP path: append directly to the per-channel deferred
-        // bundle without going through scratch, so witness-volume
-        // traffic stays single-copy.
         deferred->AddMessage(msg);
         return OnDeferredAppend(desc, deferred->TotalSize());
       }
-      // Fallback (TCP / plain UDP / unit-test channels): no per-
-      // channel batching exists — send immediately.
+      // No batching available — fall through to immediate.
     }
     bundle_.AddMessage(msg);
     if (desc.IsUnreliable()) return SendUnreliable();
     return Send();
   }
 
-  // Best-effort send — subclasses override to use unreliable path when available.
-  // Default implementation falls back to send() (TCP is always reliable).
+  // TCP defaults to Send (always reliable); UDP/RUDP override.
   [[nodiscard]] virtual auto SendUnreliable() -> Result<void>;
 
-  // Drain any messages staged via the kBatched path (DeferredBundleFor +
-  // OnDeferredAppend).  Default no-op: a channel that returns nullptr
-  // from DeferredBundleFor never accumulates anything to flush.  RUDP
-  // and TCP override; UDP keeps the default since each datagram is an
-  // independent send and there is no application-level bundle to drain.
-  // Called by NetworkInterface::FlushDirtySendChannels at the end of
-  // every readable callback and by ServerApp::FlushTickDirtyChannels at
-  // tick close — see docs/optimization/channel_send_batching.md.
+  // Drain messages staged via the kBatched path. Invoked by
+  // NetworkInterface::FlushDirtySendChannels at I/O readable tail and
+  // ServerApp::FlushTickDirtyChannels at tick close.
   [[nodiscard]] virtual auto FlushDeferred() -> Result<void> { return Result<void>{}; }
 
-  // Mark-dirty callback installed by NetworkInterface.  When a channel
-  // appends to its deferred bundle, it invokes the callback so the
-  // owning interface can register the channel for tick-end flush.  The
-  // callback is optional — channels created outside NetworkInterface
-  // (unit tests) leave it unset and are responsible for explicit
-  // FlushDeferred calls.
+  // Optional — channels created outside NetworkInterface (tests) leave
+  // it unset and call FlushDeferred explicitly.
   using MarkDirtyCallback = std::function<void(Channel&)>;
   void SetMarkDirtyCallback(MarkDirtyCallback cb) { mark_dirty_cb_ = std::move(cb); }
 
-  // State
   [[nodiscard]] auto State() const -> ChannelState { return state_; }
   [[nodiscard]] auto ChannelId() const -> ChannelId { return channel_id_; }
   [[nodiscard]] auto RemoteAddress() const -> const Address& { return remote_; }
@@ -112,54 +87,33 @@ class Channel {
   void Activate();
   void Condemn();
 
-  // Inactivity detection
   void SetInactivityTimeout(Duration timeout);
   void ResetInactivityTimer();
 
-  // Statistics
   [[nodiscard]] auto BytesSent() const -> uint64_t { return bytes_sent_; }
   [[nodiscard]] auto BytesReceived() const -> uint64_t { return bytes_received_; }
 
-  // Packet filter (compression, encryption, etc.)
   void SetPacketFilter(PacketFilterPtr filter) { packet_filter_ = std::move(filter); }
   [[nodiscard]] auto PacketFilter() const -> PacketFilter* { return packet_filter_.get(); }
 
-  // Disconnect callback
   using DisconnectCallback = std::function<void(Channel&)>;
   void SetDisconnectCallback(DisconnectCallback cb);
   void SetChannelId(::atlas::ChannelId id);
 
-  // Access underlying fd for IOPoller registration
   [[nodiscard]] virtual auto Fd() const -> FdHandle = 0;
 
  protected:
-  // Build the canonical "send on condemned channel" error.  Logs at
-  // DEBUG so silent (void)-ignored sites surface without changing
-  // call sites.  Used by both SendMessage overloads — every other
-  // public send entry (Send / SendUnreliable / FlushDeferred) does
-  // its own pre-existing condemned check + bundle Clear, since they
-  // can be called outside SendMessage and own different bundles.
+  // Logs at DEBUG so silent (void)-ignored sites still surface.
   [[nodiscard]] auto CondemnedSendError() const -> Result<void>;
 
-  // Invoke mark_dirty_cb_ if installed.  Subclass batching overrides
-  // call this after appending to a deferred bundle so NetworkInterface
-  // schedules a tick-end flush.
   void NotifyDirty() {
     if (mark_dirty_cb_) mark_dirty_cb_(*this);
   }
 
-  // Batching hooks.  A channel that supports per-channel deferred-send
-  // bundles (ReliableUdpChannel) overrides DeferredBundleFor to return
-  // the bundle matching the descriptor's reliability axis; channels
-  // without batching benefit (TCP — kernel-level coalesce already; UDP
-  // — no ordered framing) leave it returning nullptr and SendMessage
-  // falls through to the immediate path.
-  //
-  // OnDeferredAppend is invoked by SendMessage right after writing
-  // into the deferred bundle.  Subclasses use it to register dirty
-  // and to enforce the size threshold; default no-op.  Returns
-  // Result<void> so the size-threshold flush can surface its error
-  // back to the SendMessage caller.
+  // Subclasses with per-channel deferred bundles (ReliableUdpChannel)
+  // override DeferredBundleFor; others return nullptr and SendMessage
+  // takes the immediate path. OnDeferredAppend marks dirty + enforces
+  // a size threshold; threshold-flush errors propagate back via Result.
   [[nodiscard]] virtual auto DeferredBundleFor(const MessageDesc& /*desc*/) -> class Bundle* {
     return nullptr;
   }
@@ -168,42 +122,25 @@ class Channel {
     return Result<void>{};
   }
 
-  // Subclass hooks
   [[nodiscard]] virtual auto DoSend(std::span<const std::byte> data) -> Result<size_t> = 0;
   virtual void OnCondemned() {}
   void OnDataReceived(std::span<const std::byte> data);
   void OnDisconnect();
 
-  // Run dispatch on a fully-received frame, no time bound.  Used by
-  // unreliable per-packet paths where there's no cascade concern, and
-  // by the legacy synchronous wrapper that tests rely on.
   void DispatchMessages(std::span<const std::byte> frame_data);
 
-  // Run dispatch with a per-handler deadline.  After every successful
-  // handler call we check `deadline`; if it has passed, the unprocessed
-  // tail of `frame_data` (everything after the last fully-dispatched
-  // message) is appended to the channel's pending-dispatch buffer and
-  // the function returns true.  The caller (typically
-  // ReliableUdpChannel::FlushReceiveBuffer) drains the pending buffer
-  // on its own cadence via DrainPendingDispatch.
-  //
-  // This bounds the dispatcher stall to one application handler's
-  // worth of work (~25 ms at 500-cli load) instead of one whole MTU-
-  // packet's worth (~166 ms with 10 bundled handlers).  See
-  // docs/optimization/network_dispatch_decoupling.md for the data that
-  // motivates this granularity.
-  //
-  // Returns true iff `frame_data` was not fully consumed AND/OR the
-  // pending buffer is non-empty after the call.
+  // Per-handler-deadline variant. Unprocessed tail parks in
+  // pending_dispatch_buf_; caller drains via DrainPendingDispatch.
+  // Returns true iff frame_data was not fully consumed OR pending is
+  // non-empty after the call.
   [[nodiscard]] auto DispatchMessagesBudgeted(std::span<const std::byte> frame_data,
                                               TimePoint deadline) -> bool;
 
-  // Resume a previously-yielded dispatch.  Drains pending bytes up to
-  // `deadline`.  Returns true iff pending is still non-empty.
+  // Returns true iff pending is still non-empty.
   [[nodiscard]] auto DrainPendingDispatch(TimePoint deadline) -> bool;
 
-  // Probe.  Public so ReliableUdpChannel::HasReceiveBacklog can include
-  // pending-dispatch as well as rcv_buf_ when answering "is there work?"
+  // Public so ReliableUdpChannel::HasReceiveBacklog can include
+  // pending-dispatch alongside rcv_buf_.
  public:
   [[nodiscard]] auto HasPendingDispatch() const -> bool {
     return pending_dispatch_pos_ < pending_dispatch_buf_.size();
@@ -217,10 +154,6 @@ class Channel {
   class Bundle bundle_;
   ::atlas::ChannelId channel_id_{kInvalidChannelId};
 
-  // A2 yield-buffer.  When DispatchMessagesBudgeted hits its deadline
-  // mid-frame, the un-dispatched tail is copied here.  pending_dispatch_pos_
-  // tracks how far the resume drain has progressed; both fields are
-  // cleared on Condemn.
   std::vector<std::byte> pending_dispatch_buf_;
   std::size_t pending_dispatch_pos_{0};
 

@@ -438,9 +438,12 @@ internal static class ComponentEmitter
             "base_methods"   => "SendBaseRpc",
             _                => "SendCellRpc",
         };
+        // Component-level client_methods stubs default to Owner scope; broadcast
+        // RPCs flow through entity-level mailbox accessors.
+        var sendArgs = section == "client_methods" ? "Atlas.Core.RpcTarget.Owner, " : "";
         if (method.Args.Count == 0)
         {
-            sb.AppendLine($"        {sendHelper}({methodIdx}, System.ReadOnlySpan<byte>.Empty);");
+            sb.AppendLine($"        {sendHelper}({methodIdx}, {sendArgs}System.ReadOnlySpan<byte>.Empty);");
             return;
         }
         sb.AppendLine("        var writer = new SpanWriter(64);");
@@ -448,7 +451,7 @@ internal static class ComponentEmitter
         sb.AppendLine("        {");
         foreach (var arg in method.Args)
             RpcArgCodec.EmitWrite(sb, arg, "writer", "            ");
-        sb.AppendLine($"            {sendHelper}({methodIdx}, writer.WrittenSpan);");
+        sb.AppendLine($"            {sendHelper}({methodIdx}, {sendArgs}writer.WrittenSpan);");
         sb.AppendLine("        }");
         sb.AppendLine("        finally { writer.Dispose(); }");
     }

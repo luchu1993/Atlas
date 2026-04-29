@@ -10,21 +10,16 @@
 
 namespace atlas {
 
-inline constexpr std::size_t kMaxBundleSize = 64 * 1024;  // 64 KB
+inline constexpr std::size_t kMaxBundleSize = 64 * 1024;
 
-// Messages are written directly into the bundle's wire buffer using a
-// reserve-and-backpatch strategy for variable-length prefixes.  This
-// eliminates the intermediate payload_writer_ copy that was here before.
+// Writes serialise directly into the wire buffer; variable-length
+// prefixes use reserve-and-backpatch to avoid an intermediate copy.
 class Bundle {
  public:
   Bundle() = default;
 
   void StartMessage(const MessageDesc& desc);
-
-  // Returns a writer that appends directly into the bundle buffer.
   [[nodiscard]] auto Writer() -> BinaryWriter&;
-
-  // Patches the length prefix for variable-length messages.
   void EndMessage();
 
   template <NetworkMessage Msg>
@@ -47,11 +42,11 @@ class Bundle {
 
  private:
   std::vector<std::byte> buffer_;
-  BinaryWriter writer_;  // writes directly into buffer_ (set via attach/detach)
+  BinaryWriter writer_;  // attached to buffer_
   uint32_t message_count_{0};
   bool writing_message_{false};
   MessageLengthStyle current_style_{};
-  std::size_t length_prefix_pos_{0};  // offset reserved for backpatching length
+  std::size_t length_prefix_pos_{0};
   std::size_t payload_start_{0};
 };
 

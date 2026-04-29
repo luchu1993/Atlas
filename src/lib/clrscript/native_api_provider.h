@@ -6,6 +6,13 @@
 
 namespace atlas {
 
+// Server → client RPC delivery scope (BigWorld-style).
+enum class RpcTarget : uint8_t {
+  kOwner = 0,   // entity's own bound client only
+  kOthers = 1,  // every witness in AoI except the entity's owner
+  kAll = 2,     // every witness in AoI (owner + others)
+};
+
 // ============================================================================
 // INativeApiProvider — per-process implementation of atlas_* export functions
 // ============================================================================
@@ -39,8 +46,11 @@ class INativeApiProvider {
 
   // ---- RPC dispatch ---------------------------------------------------
   // payload points to a length-prefixed serialised argument buffer.
-  virtual void SendClientRpc(uint32_t entity_id, uint32_t rpc_id, const std::byte* payload,
-                             int32_t len) = 0;
+  // target selects which subset of clients receives the call (BigWorld-
+  // style scopes — see RpcTarget).  Only CellAppNativeProvider supports
+  // kOthers/kAll; other process types log + no-op when target != kOwner.
+  virtual void SendClientRpc(uint32_t entity_id, uint32_t rpc_id, RpcTarget target,
+                             const std::byte* payload, int32_t len) = 0;
 
   virtual void SendCellRpc(uint32_t entity_id, uint32_t rpc_id, const std::byte* payload,
                            int32_t len) = 0;

@@ -333,9 +333,10 @@ public abstract class ServerEntity
     // Each method forwards to the C++ engine via NativeApi.
     // =========================================================================
 
-    protected internal void SendClientRpc(int rpcId, ReadOnlySpan<byte> payload)
+    protected internal void SendClientRpc(int rpcId, RpcTarget target,
+        ReadOnlySpan<byte> payload)
     {
-        NativeApi.SendClientRpc(EntityId, (uint)rpcId, payload);
+        NativeApi.SendClientRpc(EntityId, (uint)rpcId, target, payload);
     }
 
     protected internal void SendCellRpc(int rpcId, ReadOnlySpan<byte> payload)

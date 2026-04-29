@@ -31,21 +31,10 @@ auto HasManagedEntityType(uint16_t type_id) -> bool {
   return EntityDefRegistry::Instance().FindById(type_id) != nullptr;
 }
 
-// DB-blob framing. Base's C# Serialize produces DATA_BASE-only bytes; the
-// CELL_DATA subset arrives separately via BackupCellEntity. Persistence
-// stitches the two together on write and unstitches on checkout so cell-
-// scope persistent properties survive a save/load cycle.
-//
-// Layout (fixed-size prefix):
-//     byte 0      0xA7   magic
-//     byte 1      0x01   version
-//     bytes 2..5  u32 LE base_len
-//     bytes 6..   base_bytes
-//     next        u32 LE cell_len
-//     next        cell_bytes
-//
-// Legacy blobs lacking the magic fall back to "all base, no cell", which
-// preserves old databases exactly as their bytes have always been read.
+// DB-blob framing: stitches DATA_BASE + CELL_DATA so cell-scope persistent
+// state survives a save/load cycle.
+// Layout: magic(1) | version(1) | base_len(u32 LE) | base | cell_len(u32 LE) | cell.
+// Legacy pre-magic blobs are treated as "all base, no cell".
 constexpr std::byte kDbBlobMagic{0xA7};
 constexpr std::byte kDbBlobVersion{0x01};
 
@@ -65,21 +54,17 @@ auto EncodeDbBlob(std::span<const std::byte> base_bytes, std::span<const std::by
   return out;
 }
 
-// Decode a DB blob into (base_bytes, cell_bytes) spans referencing the
-// input. Returns false only on structural corruption (truncated length
-// prefix); legacy pre-L2 blobs without the magic return true with the
-// full blob reported as base and an empty cell span.
+// Returns spans into `blob`. False only on structural corruption; legacy
+// pre-magic blobs return true as base-only.
 auto DecodeDbBlob(std::span<const std::byte> blob, std::span<const std::byte>& base_out,
                   std::span<const std::byte>& cell_out) -> bool {
   if (blob.empty() || blob[0] != kDbBlobMagic) {
-    // Legacy: whole blob is base, no cell part.
     base_out = blob;
     cell_out = {};
     return true;
   }
-  if (blob.size() < 2 + 4) return false;  // magic + version + base_len
-  // blob[1] is version. Only version 0x01 exists today; reject unknown
-  // versions so a future layout bump can't be misread as v1.
+  if (blob.size() < 2 + 4) return false;
+  // Reject unknown versions so a future layout bump cannot be misread as v1.
   if (blob[1] != kDbBlobVersion) return false;
   auto read_u32 = [&](std::size_t off) -> uint32_t {
     return static_cast<uint32_t>(blob[off]) | (static_cast<uint32_t>(blob[off + 1]) << 8) |
@@ -140,10 +125,6 @@ auto BaseApp::LoadTracker::BuildReport(uint32_t app_id, const LoadSnapshot& snap
   return msg;
 }
 
-// ============================================================================
-// run — static entry point
-// ============================================================================
-
 auto BaseApp::Run(int argc, char* argv[]) -> int {
   EventDispatcher dispatcher;
   NetworkInterface internal_network(dispatcher);
@@ -160,10 +141,6 @@ BaseApp::BaseApp(EventDispatcher& dispatcher, NetworkInterface& internal_network
 
 BaseApp::~BaseApp() = default;
 
-// ============================================================================
-// init
-// ============================================================================
-
 auto BaseApp::Init(int argc, char* argv[]) -> bool {
   if (!EntityApp::Init(argc, argv)) return false;
 
@@ -171,10 +148,8 @@ auto BaseApp::Init(int argc, char* argv[]) -> bool {
 
   entity_mgr_.SetIdClient(&id_client_);
 
-  // ---- Register internal message handlers --------------------------------
   RegisterInternalHandlers();
 
-  // ---- Open external RUDP listener (client-facing) -----------------------
   if (cfg.external_port > 0) {
     Address ext_addr(0, cfg.external_port);
     auto listen_result =
@@ -186,16 +161,12 @@ auto BaseApp::Init(int argc, char* argv[]) -> bool {
     }
     ATLAS_LOG_INFO("BaseApp: external RUDP interface listening on port {}", cfg.external_port);
   }
-  // P5: apply an inactivity timeout on accept so a client that goes dark
-  // (crash / ungraceful close / network failure) is detected within
-  // bounded time instead of lingering as a zombie Proxy forever. Mirrors
-  // LoginApp's pattern; value is tuned for worldstate sessions that
-  // normally send traffic continuously via move/echo streams.
+  // Inactivity timeout bounds zombie Proxy lifetime when a client goes
+  // dark; tuned for worldstate sessions with continuous move/echo streams.
   external_network_.SetAcceptCallback(
       [](Channel& ch) { ch.SetInactivityTimeout(std::chrono::seconds(10)); });
   external_network_.SetDisconnectCallback([this](Channel& ch) { OnExternalClientDisconnect(ch); });
 
-  // ---- Subscribe to DBApp birth notification to connect ----------------
   GetMachinedClient().Subscribe(
       machined::ListenerType::kBoth, ProcessType::kDbApp,
       [this](const machined::BirthNotification& n) {
@@ -237,14 +208,12 @@ auto BaseApp::Init(int argc, char* argv[]) -> bool {
       [this](const machined::DeathNotification& /*n*/) {
         ATLAS_LOG_WARNING("BaseApp: CellAppMgr died, clearing channel");
         cellappmgr_channel_ = nullptr;
-        // Fail all pending space-create callbacks so callers don't hang.
         for (auto& [rid, cb] : pending_space_creates_) {
           if (cb) cb(/*success=*/false, /*space_id=*/0, Address{});
         }
         pending_space_creates_.clear();
       });
 
-  // ---- Subscribe to BaseAppMgr and register ourselves ----------------
   GetMachinedClient().Subscribe(
       machined::ListenerType::kBirth, ProcessType::kBaseAppMgr,
       [this](const machined::BirthNotification& n) {
@@ -258,21 +227,19 @@ auto BaseApp::Init(int argc, char* argv[]) -> bool {
           }
           baseappmgr_channel_ = static_cast<Channel*>(*ch);
 
-          // Register ourselves — advertise the RUDP internal address so
-          // LoginApp and other peers can connect_rudp() to reach us.
+          // Advertise the RUDP internal address so peers can connect to us.
           baseappmgr::RegisterBaseApp reg;
           reg.internal_addr = Network().RudpAddress();
           reg.external_addr =
               Address(Network().RudpAddress().Ip(), external_network_.RudpAddress().Port());
           if (auto r = baseappmgr_channel_->SendMessage(reg); !r) {
-            // No ack ⇒ baseapp orphaned until reconnect retry.
+            // No ack: baseapp stays orphaned until reconnect retry.
             ATLAS_LOG_WARNING("BaseApp: RegisterBaseApp send failed: {}", r.Error().Message());
           }
         }
       },
       nullptr);
 
-  // ---- Register login-flow internal message handlers ------------------
   auto& table = Network().InterfaceTable();
   (void)table.RegisterTypedHandler<login::PrepareLogin>(
       [this](const Address& /*src*/, Channel* ch, const login::PrepareLogin& msg) {
@@ -298,13 +265,11 @@ auto BaseApp::Init(int argc, char* argv[]) -> bool {
       [this](const Address& /*src*/, Channel* ch, const baseappmgr::RegisterBaseAppAck& msg) {
         OnRegisterBaseappAck(*ch, msg);
       });
-  // ---- EntityID allocation from DBApp --------------------------------
   (void)table.RegisterTypedHandler<dbapp::GetEntityIdsAck>(
       [this](const Address& /*src*/, Channel* ch, const dbapp::GetEntityIdsAck& msg) {
         OnGetEntityIdsAck(*ch, msg);
       });
 
-  // ---- Register external client handler -------------------------------
   auto& ext_table = external_network_.InterfaceTable();
   (void)ext_table.RegisterTypedHandler<baseapp::Authenticate>(
       [this](const Address& /*src*/, Channel* ch, const baseapp::Authenticate& msg) {
@@ -323,10 +288,6 @@ auto BaseApp::Init(int argc, char* argv[]) -> bool {
   return true;
 }
 
-// ============================================================================
-// fini
-// ============================================================================
-
 void BaseApp::Fini() {
   entity_mgr_.ForEach([this](const BaseEntity& ent) {
     if (ent.Dbid() != kInvalidDBID) ReleaseCheckout(ent.Dbid(), ent.TypeId());
@@ -334,10 +295,6 @@ void BaseApp::Fini() {
   entity_mgr_.FlushDestroyed();
   EntityApp::Fini();
 }
-
-// ============================================================================
-// OnTickComplete
-// ============================================================================
 
 void BaseApp::OnEndOfTick() {
   load_tracker_.MarkTickStarted();
@@ -362,19 +319,11 @@ void BaseApp::FlushTickDirtyChannels() {
   external_network_.FlushDirtySendChannels();
 }
 
-// ============================================================================
-// create_native_provider
-// ============================================================================
-
 auto BaseApp::CreateNativeProvider() -> std::unique_ptr<INativeApiProvider> {
   auto provider = std::make_unique<BaseAppNativeProvider>(*this);
   native_provider_ = provider.get();
   return provider;
 }
-
-// ============================================================================
-// register_watchers
-// ============================================================================
 
 void BaseApp::RegisterWatchers() {
   EntityApp::RegisterWatchers();
@@ -445,10 +394,6 @@ void BaseApp::RegisterWatchers() {
                    std::function<uint64_t()>([this] { return baseline_bytes_sent_total_; }));
 }
 
-// ============================================================================
-// register_internal_handlers
-// ============================================================================
-
 void BaseApp::RegisterInternalHandlers() {
   auto& table = Network().InterfaceTable();
 
@@ -492,15 +437,9 @@ void BaseApp::RegisterInternalHandlers() {
         OnCellRpcForward(*ch, msg);
       });
 
-  // CellAppMgr replies to CreateSpaceRequest.
   (void)table.RegisterTypedHandler<cellappmgr::SpaceCreatedResult>(
       [this](const Address& /*src*/, Channel* ch, const cellappmgr::SpaceCreatedResult& msg) {
         OnSpaceCreatedResult(*ch, msg);
-      });
-
-  (void)table.RegisterTypedHandler<baseapp::SelfRpcFromCell>(
-      [this](const Address& /*src*/, Channel* ch, const baseapp::SelfRpcFromCell& msg) {
-        OnSelfRpcFromCell(*ch, msg);
       });
 
   (void)table.RegisterTypedHandler<baseapp::BroadcastRpcFromCell>(
@@ -530,7 +469,6 @@ void BaseApp::RegisterInternalHandlers() {
         OnReplicatedBaselineFromCell(msg);
       });
 
-  // ---- WriteEntityAck (DBApp → BaseApp) ----------------------------------
   (void)table.RegisterTypedHandler<dbapp::WriteEntityAck>(
       [this](const Address& /*src*/, Channel* /*ch*/, const dbapp::WriteEntityAck& msg) {
         auto logoff_it = pending_logoff_writes_.find(msg.request_id);
@@ -612,7 +550,6 @@ void BaseApp::RegisterInternalHandlers() {
         }
       });
 
-  // ---- CheckoutEntityAck (DBApp → BaseApp) --------------------------------
   (void)table.RegisterTypedHandler<dbapp::CheckoutEntityAck>(
       [this](const Address& /*src*/, Channel* /*ch*/, const dbapp::CheckoutEntityAck& msg) {
         if (auto canceled_it = canceled_login_checkouts_.find(msg.request_id);
@@ -624,7 +561,7 @@ void BaseApp::RegisterInternalHandlers() {
           return;
         }
 
-        // Check if this is a login-flow checkout (request_id is a pending key)
+        // Login-flow checkout (request_id is a pending key).
         auto login_it = pending_logins_.find(msg.request_id);
         if (login_it != pending_logins_.end()) {
           PendingLogin pending = login_it->second;
@@ -659,7 +596,7 @@ void BaseApp::RegisterInternalHandlers() {
           return;
         }
 
-        // Fallback: CreateBaseFromDB checkout — request_id == entity_id
+        // CreateBaseFromDB checkout — request_id == entity_id.
         const EntityID kEid = msg.request_id;
         if (msg.status != dbapp::CheckoutStatus::kSuccess) {
           ATLAS_LOG_ERROR("BaseApp: checkout failed (entity_id={} status={})", kEid,
@@ -669,10 +606,8 @@ void BaseApp::RegisterInternalHandlers() {
         }
         auto* ent = entity_mgr_.Find(kEid);
         if (!ent) return;
-        // L2: split the DB blob into its base- and cell-scope halves.
-        // Base bytes feed the C# Base.Deserialize path via RestoreEntity;
-        // cell bytes get stashed on the Proxy so the next CreateCellEntity
-        // can hydrate the cell side through script_init_data.
+        // Split into base/cell halves; base feeds RestoreEntity, cell is
+        // stashed for the next CreateCellEntity's script_init_data.
         std::span<const std::byte> base_span, cell_span;
         if (!DecodeDbBlob(std::span<const std::byte>(msg.blob.data(), msg.blob.size()), base_span,
                           cell_span)) {
@@ -695,10 +630,6 @@ void BaseApp::RegisterInternalHandlers() {
         canceled_login_checkouts_.erase(msg.request_id);
       });
 }
-
-// ============================================================================
-// Message handlers
-// ============================================================================
 
 void BaseApp::OnCreateBase(Channel& /*ch*/, const baseapp::CreateBase& msg) {
   const auto& defs = EntityDefs();
@@ -759,11 +690,8 @@ void BaseApp::OnAcceptClient(Channel& /*ch*/, const baseapp::AcceptClient& msg) 
 void BaseApp::OnCellEntityCreated(Channel& ch, const baseapp::CellEntityCreated& msg) {
   auto* ent = entity_mgr_.Find(msg.base_entity_id);
   if (!ent) return;
-  // CellApp fills msg.cell_addr from its own Network().RudpAddress(), which
-  // for INADDR_ANY binds reports 0.0.0.0:<port> — useless for routing. The
-  // channel's RemoteAddress is the actual peer we just received from, and
-  // matches what machined's Birth notification put in cellapp_peers_, so
-  // use it when the wire value is unresolved.
+  // INADDR_ANY binds report 0.0.0.0 in msg.cell_addr — useless for routing.
+  // Fall back to ch.RemoteAddress() (matches the Birth notification).
   Address cell_addr = msg.cell_addr;
   if (cell_addr.Ip() == 0) {
     cell_addr = ch.RemoteAddress();
@@ -772,20 +700,13 @@ void BaseApp::OnCellEntityCreated(Channel& ch, const baseapp::CellEntityCreated&
   ATLAS_LOG_DEBUG("BaseApp: entity {} has cell at {}:{}", msg.base_entity_id, cell_addr.Ip(),
                   cell_addr.Port());
 
-  // Tell the client its cell is ready. Without this the client has no way
-  // to know when its ClientCellRpc will actually route vs. be dropped by
-  // the "no cell channel for target entity" path. A Proxy that doesn't
-  // have a client yet (e.g. entity created via CreateBaseEntity before
-  // GiveClientTo) gets nothing here — if a client binds later, CellReady
-  // doesn't fire retroactively, but in the world_stress script flow
-  // GiveClientTo runs strictly before the CellApp ack can arrive.
+  // CellReady tells the client its ClientCellRpc will now route. Note: not
+  // retroactive — a client binding after this point relies on world_stress's
+  // ordering where GiveClientTo runs before the CellApp ack.
   auto* proxy = entity_mgr_.FindProxy(msg.base_entity_id);
   if (proxy && proxy->HasClient()) {
-    // PR 34 C3 race fix: client may have been bound BEFORE this cell
-    // ack arrived (login's GiveClientTo runs before CellApp replies),
-    // in which case BindClient couldn't route EnableWitness — no
-    // cell_addr yet. Now that SetCell above populated it, send the
-    // EnableWitness we skipped.
+    // Race fix: BindClient may have run before cell_addr was known and
+    // skipped EnableWitness; SetCell above populated it, so send now.
     if (auto* cell_ch = ResolveCellChannelForEntity(msg.base_entity_id)) {
       cellapp::EnableWitness ew;
       ew.base_entity_id = msg.base_entity_id;
@@ -811,17 +732,13 @@ void BaseApp::OnCurrentCell(Channel& /*ch*/, const baseapp::CurrentCell& msg) {
   ent->SetCell(msg.cell_entity_id, msg.cell_addr, msg.epoch);
 }
 
-// For every BaseEntity that was Real-hosted on the dead CellApp, issue a
-// fresh CreateCellEntity to the rehome target carrying the last-cached
-// cell_backup_data as script_init_data — the new CellApp's RestoreEntity
-// callback rehydrates the C# instance from that blob. Witness re-attach
-// happens when the new host's CellEntityCreated ack lands; the client
-// stays connected throughout (AoI pauses until the Real is back up).
+// Re-creates each Real on the rehome target using the cached
+// cell_backup_data as script_init_data; client stays connected (AoI pauses
+// until CellEntityCreated ack lands).
 void BaseApp::OnCellAppDeath(const baseapp::CellAppDeath& msg) {
   ATLAS_LOG_WARNING("BaseApp: CellAppDeath dead_addr={}:{} rehome_spaces={}", msg.dead_addr.Ip(),
                     msg.dead_addr.Port(), msg.rehomes.size());
 
-  // Flatten the rehome list into a map for O(1) per-entity lookup.
   std::unordered_map<SpaceID, Address> space_to_new_host;
   space_to_new_host.reserve(msg.rehomes.size());
   for (const auto& [sid, addr] : msg.rehomes) space_to_new_host[sid] = addr;
@@ -829,8 +746,7 @@ void BaseApp::OnCellAppDeath(const baseapp::CellAppDeath& msg) {
   uint32_t restored = 0;
   uint32_t lost = 0;
 
-  // Collect first, then process — entity_mgr_.ForEach must not observe
-  // SetCell / ClearCell mutations mid-walk.
+  // Collect first; ForEach must not observe SetCell/ClearCell mid-walk.
   std::vector<EntityID> to_restore;
   entity_mgr_.ForEach([&](BaseEntity& ent) {
     if (ent.CellAddr() == msg.dead_addr) to_restore.push_back(ent.EntityId());
@@ -899,7 +815,6 @@ void BaseApp::OnCellAppDeath(const baseapp::CellAppDeath& msg) {
 }
 
 void BaseApp::OnCellRpcForward(Channel& /*ch*/, const baseapp::CellRpcForward& msg) {
-  // C# entity receives the base-directed RPC call via the native callback table.
   auto dispatch_fn = GetNativeProvider().dispatch_rpc_fn();
   if (!dispatch_fn) {
     ATLAS_LOG_WARNING("BaseApp: OnCellRpcForward: dispatch_rpc callback not registered");
@@ -909,45 +824,30 @@ void BaseApp::OnCellRpcForward(Channel& /*ch*/, const baseapp::CellRpcForward& m
               static_cast<int32_t>(msg.payload.size()));
 }
 
-// Path #3 of the three-path CellApp→Client delta contract (see
-// delta_forwarder.h for the full contract). SelfRpcFromCell is Reliable, sent
-// directly to the owner's client channel with the RPC's own method id. It
-// MUST NOT touch DeltaForwarder — that forwarder is latest-wins and would
-// silently drop intermediate RPCs.
-void BaseApp::OnSelfRpcFromCell(Channel& /*ch*/, const baseapp::SelfRpcFromCell& msg) {
-  auto* proxy = entity_mgr_.FindProxy(msg.base_entity_id);
-  if (!proxy || !proxy->HasClient()) return;
-
-  if (auto* client_ch = ResolveClientChannel(proxy->EntityId())) {
-    RelayRpcToClient(*client_ch, msg.rpc_id, msg.payload);
-  }
-}
-
+// Cell resolved scope to destinations on this BaseApp; deliver to each.
 void BaseApp::OnBroadcastRpcFromCell(Channel& /*ch*/, const baseapp::BroadcastRpcFromCell& msg) {
-  auto* proxy = entity_mgr_.FindProxy(msg.base_entity_id);
-  if (!proxy || !proxy->HasClient()) return;
-
-  if (auto* client_ch = ResolveClientChannel(proxy->EntityId())) {
-    RelayRpcToClient(*client_ch, msg.rpc_id, msg.payload);
+  for (auto base_entity_id : msg.dest_entity_ids) {
+    auto* proxy = entity_mgr_.FindProxy(base_entity_id);
+    if (!proxy || !proxy->HasClient()) continue;
+    if (auto* client_ch = ResolveClientChannel(proxy->EntityId())) {
+      RelayRpcToClient(*client_ch, msg.rpc_id, msg.payload);
+    }
   }
 }
 
 void BaseApp::RelayRpcToClient(Channel& client_ch, uint32_t rpc_id,
                                const std::vector<std::byte>& payload) {
-  ClientRpcEnvelope env{rpc_id, std::span<const std::byte>(payload.data(), payload.size())};
+  baseapp::ClientRpcEnvelope env{rpc_id,
+                                  std::span<const std::byte>(payload.data(), payload.size())};
   if (auto r = client_ch.SendMessage(env); !r) {
     ATLAS_LOG_DEBUG("BaseApp: RelayRpcToClient send failed (rpc_id=0x{:08X}): {}", rpc_id,
                     r.Error().Message());
   }
 }
 
-// Path #1 of the three-path CellApp→Client delta contract (seell
-// delta_forwarder.h for the full contract). ReplicatedDeltaFromCell is
-// Unreliable; its payload passes through the per-client DeltaForwarder,
-// which enforces LATEST-WINS for the same entity and a per-tick byte budget.
-// Use for Volatile position/orientation updates only — NEVER for anything
-// that carries event_seq or other cumulative counters, because the forwarder
-// will replace pending entries and silently drop intermediate frames.
+// Path #1 (Unreliable) — runs through per-client DeltaForwarder
+// (latest-wins, byte budget). Volatile state only; cumulative counters
+// would be silently coalesced (use Path #2). See delta_forwarder.h.
 void BaseApp::OnReplicatedDeltaFromCell(Channel& /*ch*/,
                                         const baseapp::ReplicatedDeltaFromCell& msg) {
   auto* proxy = entity_mgr_.FindProxy(msg.base_entity_id);
@@ -960,18 +860,10 @@ void BaseApp::OnReplicatedDeltaFromCell(Channel& /*ch*/,
       msg.base_entity_id, std::span<const std::byte>(msg.delta.data(), msg.delta.size()));
 }
 
-// Path #2 of the three-path CellApp→Client delta contract (see
-// delta_forwarder.h for the full contract). Reliable deltas carry
-// semantically-critical property changes (HP, state, inventory, AoI property
-// updates carrying event_seq). They BYPASS DeltaForwarder so the byte-budget
-// and same-entity replacement cannot drop them, and ride the reliable
-// client-facing message ID so the transport retransmits on loss.
+// Path #2 (Reliable) — bypasses DeltaForwarder so byte budget / same-entity
+// replacement cannot drop critical state (HP, inventory, event_seq).
 void BaseApp::OnReplicatedReliableDeltaFromCell(
     Channel& /*ch*/, const baseapp::ReplicatedReliableDeltaFromCell& msg) {
-  // Reliable deltas carry semantically-critical property changes (HP, state,
-  // inventory). They bypass the DeltaForwarder budget so the byte-limit cannot
-  // drop them, and they ride the reliable client-facing message ID so the
-  // transport retransmits on loss.
   auto* proxy = entity_mgr_.FindProxy(msg.base_entity_id);
   if (!proxy || !proxy->HasClient()) return;
 
@@ -979,38 +871,30 @@ void BaseApp::OnReplicatedReliableDeltaFromCell(
   if (!client_ch) return;
 
   (void)client_ch->SendMessage(
-      ClientReliableDeltaEnvelope{std::span<const std::byte>(msg.delta.data(), msg.delta.size())});
+      baseapp::ClientReliableDeltaEnvelope{
+          std::span<const std::byte>(msg.delta.data(), msg.delta.size())});
 
   reliable_delta_bytes_sent_total_ += msg.delta.size();
   ++reliable_delta_messages_sent_total_;
 }
 
-// Cell-to-base periodic state backup. Base caches the cell-authoritative
-// bytes opaquely and reuses them verbatim for DB writes / reviver restart
-// / offload migration. See baseapp_messages.h::BackupCellEntity.
+// Periodic cell-authoritative blob; opaque, reused verbatim for DB writes /
+// reviver / offload migration.
 void BaseApp::OnBackupCellEntity(const baseapp::BackupCellEntity& msg) {
   auto* entity = entity_mgr_.Find(msg.base_entity_id);
   if (!entity) {
-    // Not necessarily an error — entity might have just been destroyed
-    // and the last backup is still in flight. Debug-only signal.
+    // Not an error — entity may have been destroyed with backup in flight.
     ATLAS_LOG_DEBUG("BaseApp: BackupCellEntity for unknown entity_id={} (dropped)",
                     msg.base_entity_id);
     return;
   }
-  // The bytes are opaque — don't touch them. Copy into the entity's
-  // cell_backup_data_ slot; the next DB write / reviver / offload
-  // consumer will read them out.
   entity->SetCellBackupData(msg.cell_backup_data);
 }
 
-// Cell-authoritative baseline relayed to the owning client. Base-side
-// SerializeForOwnerClient returns empty blobs for entities whose client-
-// visible fields are all cell-scope, so baselines must come from the
-// CellApp where the data lives. Relay-only: bytes arrive as cell-side
-// SerializeForOwnerClient output and leave as ReplicatedBaselineToClient
-// (0xF002) toward the proxy's attached client channel.
+// Cell-authoritative baseline relay (cell-scope fields can't be serialized
+// from BaseApp). Bytes flow through unchanged to msg 0xF002.
 void BaseApp::OnReplicatedBaselineFromCell(const baseapp::ReplicatedBaselineFromCell& msg) {
-  if (msg.snapshot.empty()) return;  // nothing to ship — skip the no-op round-trip
+  if (msg.snapshot.empty()) return;
 
   auto* proxy = entity_mgr_.FindProxy(msg.base_entity_id);
   if (!proxy || !proxy->HasClient()) return;
@@ -1030,7 +914,6 @@ void BaseApp::FlushClientDeltas() {
   for (auto it = client_delta_forwarders_.begin(); it != client_delta_forwarders_.end();) {
     auto& [client_addr, forwarder] = *it;
 
-    // Resolve channel; if client disconnected, discard its forwarder.
     auto ent_it = client_entity_index_.find(client_addr);
     if (ent_it == client_entity_index_.end()) {
       it = client_delta_forwarders_.erase(it);
@@ -1046,7 +929,6 @@ void BaseApp::FlushClientDeltas() {
     auto bytes = forwarder.Flush(*client_ch, kDeltaBudgetPerTick);
     delta_bytes_sent_total_ += bytes;
 
-    // Remove empty forwarders to avoid map bloat.
     if (forwarder.QueueDepth() == 0)
       it = client_delta_forwarders_.erase(it);
     else
@@ -1055,17 +937,10 @@ void BaseApp::FlushClientDeltas() {
 }
 
 void BaseApp::EmitBaselineSnapshots() {
-  // Intentional no-op. The baseline pump runs on the CellApp (see
-  // CellApp::TickClientBaselinePump + ReplicatedBaselineFromCell msg
-  // 2019), which owns authoritative cell-scope data. BaseApp only
-  // relays (OnReplicatedBaselineFromCell → ReplicatedBaselineToClient
-  // 0xF002). The method stays to keep the stats watcher symbol alive.
-  (void)baseline_tick_counter_;  // kept for stats watchers
+  // No-op: pump lives on CellApp (TickClientBaselinePump). BaseApp only
+  // relays via OnReplicatedBaselineFromCell. Kept alive for stats watcher.
+  (void)baseline_tick_counter_;
 }
-
-// ============================================================================
-// NativeProvider bridging
-// ============================================================================
 
 void BaseApp::DoWriteToDb(EntityID entity_id, const std::byte* data, int32_t len) {
   if (!dbapp_channel_) {
@@ -1076,12 +951,11 @@ void BaseApp::DoWriteToDb(EntityID entity_id, const std::byte* data, int32_t len
   if (!ent) return;
 
   dbapp::WriteEntity msg;
-  // Use kCreateNew for first save (dbid=0), kExplicitDbid for updates
   msg.flags = (ent->Dbid() == kInvalidDBID) ? WriteFlags::kCreateNew : WriteFlags::kExplicitDbid;
   msg.type_id = ent->TypeId();
   msg.dbid = ent->Dbid();
   msg.entity_id = entity_id;
-  msg.request_id = entity_id;  // echo back in WriteEntityAck
+  msg.request_id = entity_id;  // echoed in WriteEntityAck
   msg.blob.assign(data, data + len);
   (void)dbapp_channel_->SendMessage(msg);
 }
@@ -1092,9 +966,7 @@ auto BaseApp::CaptureEntitySnapshot(EntityID entity_id, std::vector<std::byte>& 
     return false;
   }
 
-  // Step 1 — refresh the base-scope blob. GetEntityData callback runs the
-  // base-side C# Serialize, which emits DATA_BASE fields only. Cache the
-  // result back so live-in-RAM state matches what's about to hit the DB.
+  // Refresh base-scope blob (DATA_BASE only); cache so RAM matches DB.
   std::vector<std::byte> base_bytes;
   if (HasManagedEntityType(ent->TypeId()) && native_provider_) {
     if (auto fn = native_provider_->get_entity_data_fn()) {
@@ -1124,8 +996,7 @@ auto BaseApp::CaptureEntitySnapshot(EntityID entity_id, std::vector<std::byte>& 
       }
       ent->SetEntityData(base_bytes);
     } else {
-      // No GetEntityData — fall back to the cached blob so the base
-      // portion at least round-trips unchanged.
+      // No callback — round-trip the cached base blob unchanged.
       base_bytes = ent->EntityData();
       ATLAS_LOG_WARNING("BaseApp: no managed snapshot callback for entity={}, using cached blob",
                         entity_id);
@@ -1134,9 +1005,7 @@ auto BaseApp::CaptureEntitySnapshot(EntityID entity_id, std::vector<std::byte>& 
     base_bytes = ent->EntityData();
   }
 
-  // Step 2 — stitch in the cell-authoritative blob last pushed up by the
-  // CellApp backup pump (see baseapp_messages.h::BackupCellEntity).
-  // Entities without a cell side simply get an empty cell span.
+  // Stitch in last cell backup (empty span when no cell side).
   const auto& cell_bytes = ent->CellBackupData();
   out = EncodeDbBlob(std::span<const std::byte>(base_bytes.data(), base_bytes.size()),
                      std::span<const std::byte>(cell_bytes.data(), cell_bytes.size()));
@@ -1289,10 +1158,8 @@ void BaseApp::CompletePrepareLoginFromCheckout(PendingLogin pending, DatabaseID 
     return;
   }
 
-  // L2: split the DB blob here as well — the login checkout path is the
-  // analogue of CreateBaseFromDB. Base bytes go into entity_data_ /
-  // Base.Deserialize; cell bytes are parked on the Proxy until
-  // CreateCellEntity passes them through script_init_data.
+  // Same split as CreateBaseFromDB: base → Base.Deserialize, cell parked
+  // for the next CreateCellEntity's script_init_data.
   std::span<const std::byte> base_span, cell_span;
   if (!DecodeDbBlob(blob, base_span, cell_span)) {
     ATLAS_LOG_ERROR("BaseApp: login checkout blob corrupt (dbid={} type={})", dbid, type_id);
@@ -1436,7 +1303,6 @@ void BaseApp::DispatchPrepareLogin(PendingLogin pending) {
     return;
   }
 
-  // If LoginApp already checked out and provided the blob, skip DBApp round-trip
   if (pending.blob_prefetched) {
     const DatabaseID kDbid = pending.dbid;
     const uint16_t kTypeId = pending.type_id;
@@ -1573,14 +1439,11 @@ void BaseApp::BeginLogoffPersist(EntityID entity_id, DatabaseID dbid, uint16_t t
     return;
   }
 
-  // Optimistic checkin: release the DB-side checkout immediately so that a
-  // subsequent CheckoutEntity for the same DBID can succeed without waiting
-  // for the data write to complete.
+  // Optimistic checkin: a subsequent CheckoutEntity for the same DBID can
+  // proceed without waiting for the write to complete.
   ReleaseCheckout(dbid, type_id);
 
-  // Fire-and-forget data persistence — the checkout is already released so
-  // we don't use WriteFlags::LogOff.  The WriteEntityAck for this request
-  // will be silently ignored (entity already destroyed locally).
+  // Fire-and-forget — checkout already released, ack will be ignored.
   if (dbapp_channel_) {
     dbapp::WriteEntity msg;
     msg.flags = WriteFlags::kExplicitDbid;
@@ -1590,9 +1453,7 @@ void BaseApp::BeginLogoffPersist(EntityID entity_id, DatabaseID dbid, uint16_t t
     msg.request_id = next_prepare_request_id_++;
     msg.blob = std::move(blob);
     if (auto r = dbapp_channel_->SendMessage(msg); !r) {
-      // FinalizeForceLogoff destroys the in-memory entity right after.
-      // If this WriteEntity is dropped, all unsaved player progress for
-      // dbid=N is permanently lost with no other log signal.
+      // Destroy follows immediately; a dropped WriteEntity = silent data loss.
       ATLAS_LOG_ERROR(
           "BaseApp: logoff WriteEntity dropped, dbid={} entity_id={} request_id={}: {} "
           "— player progress lost",
@@ -1600,7 +1461,6 @@ void BaseApp::BeginLogoffPersist(EntityID entity_id, DatabaseID dbid, uint16_t t
     }
   }
 
-  // Destroy the local entity immediately.
   if (!FinalizeForceLogoff(entity_id)) {
     if (continuation_request_id != 0)
       FailPendingForceLogoff(continuation_request_id, "force_logoff_destroy_failed");
@@ -1616,8 +1476,7 @@ void BaseApp::BeginLogoffPersist(EntityID entity_id, DatabaseID dbid, uint16_t t
     return;
   }
 
-  // All post-logoff continuations are processed synchronously — no need to
-  // wait for WriteEntityAck.
+  // Continuations run synchronously; WriteEntityAck is not awaited.
   const bool kResumedDeferred = ResumeDeferredPrepareLogins(entity_id);
 
   if (auto waiter_it = pending_local_force_logoff_waiters_.find(entity_id);
@@ -1717,12 +1576,7 @@ auto BaseApp::FinalizeForceLogoff(EntityID entity_id) -> bool {
     return true;
   }
 
-  // If the entity has a cell counterpart, tell the owning CellApp to
-  // destroy it before we drop the base side. Without this the cell
-  // entity leaks forever — it has no independent destroy trigger.
-  // Covers the shortline / script-created path (StressAvatar et al.);
-  // DB-backed entities that go through BeginLogoffPersist also want
-  // this hook but can share the same helper call when that path lands.
+  // Cell entity has no independent destroy trigger; without this it leaks.
   if (ent->HasCell()) {
     if (auto* cell_ch = ResolveCellChannelForEntity(entity_id)) {
       cellapp::DestroyCellEntity msg;
@@ -1798,17 +1652,13 @@ void BaseApp::DoGiveClientToLocal(EntityID src_id, EntityID dest_id) {
     return;
   }
 
-  // Tell the client its owning entity has changed. Without this message
-  // the client still thinks `src_id` is its entity (from AuthenticateResult),
-  // so every subsequent ClientCellRpc would target a detached Proxy at
-  // validation time.
+  // Without EntityTransferred, the client still targets src_id (per
+  // AuthenticateResult) so every ClientCellRpc lands on a detached Proxy.
   if (auto* client_ch = ResolveClientChannel(dest_id)) {
     baseapp::EntityTransferred notify;
     notify.new_entity_id = dest_id;
     notify.new_type_id = dst_proxy->TypeId();
     if (auto r = client_ch->SendMessage(notify); !r) {
-      // Without this, the client still thinks src_id is its entity —
-      // every subsequent ClientCellRpc targets a detached Proxy.
       ATLAS_LOG_WARNING("BaseApp: EntityTransferred notify send failed, dest_id={} client {}: {}",
                         dest_id, client_ch->RemoteAddress().ToString(), r.Error().Message());
     }
@@ -1831,8 +1681,7 @@ auto BaseApp::CreateBaseEntityFromScript(uint16_t type_id, SpaceID space_id) -> 
   }
   const EntityID kEid = ent->EntityId();
 
-  // Instantiate the C# script-side via RestoreEntity with an empty blob
-  // (script defaults). Same path the login flow uses after DBApp checkout.
+  // Empty blob → C# defaults. Same path as post-checkout login.
   if (!RestoreManagedEntity(kEid, type_id, kInvalidDBID, {})) {
     ATLAS_LOG_ERROR("BaseApp: CreateBaseEntityFromScript: RestoreManagedEntity failed for {}",
                     kEid);
@@ -1840,13 +1689,10 @@ auto BaseApp::CreateBaseEntityFromScript(uint16_t type_id, SpaceID space_id) -> 
     return 0;
   }
 
-  // For cell-bearing types, materialise a cell counterpart on a CellApp.
-  // Pick the CellApp deterministically by space_id over a stably-sorted
-  // peer list: every entity in the same space must land on the same
-  // CellApp, otherwise a second CreateCellEntity arriving at a different
-  // CellApp would auto-create a disconnected second copy of the space.
-  // Keyed by Address so ordering is independent of Birth arrival order.
-  // TODO: replace with a CellAppMgr-routed, load-aware allocation.
+  // Pick CellApp deterministically by (sorted peer addr, space_id) so all
+  // entities in a space land on the same CellApp; otherwise a duplicate
+  // space is auto-created on each peer.
+  // TODO: replace with CellAppMgr-routed, load-aware allocation.
   if (type->has_cell) {
     const auto& peers = cellapp_peers_.Channels();
     if (peers.empty()) {
@@ -1860,10 +1706,7 @@ auto BaseApp::CreateBaseEntityFromScript(uint16_t type_id, SpaceID space_id) -> 
         return a.first.Port() < b.first.Port();
       });
       const SpaceID effective_space_id = space_id == kInvalidSpaceID ? SpaceID{1} : space_id;
-      // Stamp the space_id on the BaseEntity so a later CellApp-death
-      // restore can look up the new host keyed by {dead_addr, space_id}.
-      // Done unconditionally — if the send below fails, the entity has
-      // no cell to restore anyway.
+      // Required for CellApp-death restore lookup keyed by {dead_addr, space_id}.
       ent->SetSpaceId(effective_space_id);
       const std::size_t cell_index =
           static_cast<std::size_t>(effective_space_id - 1) % sorted_peers.size();
@@ -1885,9 +1728,7 @@ auto BaseApp::CreateBaseEntityFromScript(uint16_t type_id, SpaceID space_id) -> 
         msg.script_init_data = ent_new->CellBackupData();
       }
       if (auto r = cell_ch->SendMessage(msg); !r) {
-        // No retry — the entity exists locally but its cell-side never
-        // came up.  Surface so script-driven create regressions are
-        // visible.
+        // No retry: surface so script-driven create regressions are visible.
         ATLAS_LOG_WARNING(
             "BaseApp: script-driven CreateCellEntity send failed (entity_id={}, type_id={}): {}",
             kEid, type_id, r.Error().Message());
@@ -1907,7 +1748,6 @@ void BaseApp::DoGiveClientToRemote(EntityID src_id, EntityID /*dest_id*/,
     ATLAS_LOG_ERROR("BaseApp: give_client_to_remote: src={} has no client", src_id);
     return;
   }
-  // Send AcceptClient to the target BaseApp (its internal RUDP address)
   auto dest_ch_result = Network().ConnectRudpNocwnd(dest_baseapp);
   if (!dest_ch_result) {
     ATLAS_LOG_ERROR("BaseApp: give_client_to_remote: could not connect to {}:{}", dest_baseapp.Ip(),
@@ -1919,18 +1759,13 @@ void BaseApp::DoGiveClientToRemote(EntityID src_id, EntityID /*dest_id*/,
   accept.dest_entity_id = src_id;
   accept.session_key = src_proxy->GetSessionKey();
   if (auto r = (*dest_ch_result)->SendMessage(accept); !r) {
-    // We're about to UnbindClient on src; if dest never sees AcceptClient
-    // the client is left without an owner — visible UX bug.
+    // UnbindClient follows; a lost AcceptClient orphans the client (visible UX bug).
     ATLAS_LOG_WARNING("BaseApp: AcceptClient send failed (src_id={}, dest baseapp {}): {}", src_id,
                       dest_baseapp.ToString(), r.Error().Message());
   }
 
   UnbindClient(src_id);
 }
-
-// ============================================================================
-// Login flow handlers
-// ============================================================================
 
 void BaseApp::OnRegisterBaseappAck(Channel& /*ch*/, const baseappmgr::RegisterBaseAppAck& msg) {
   if (!msg.success) {
@@ -1940,10 +1775,8 @@ void BaseApp::OnRegisterBaseappAck(Channel& /*ch*/, const baseappmgr::RegisterBa
   }
   app_id_ = msg.app_id;
 
-  // Request initial batch of EntityIDs from DBApp
   MaybeRequestMoreIds();
 
-  // Notify BaseAppMgr that we are ready
   if (baseappmgr_channel_) {
     baseappmgr::BaseAppReady ready;
     ready.app_id = app_id_;
@@ -2019,10 +1852,8 @@ auto BaseApp::BindClient(EntityID entity_id, const Address& client_addr) -> bool
   client_entity_index_[client_addr] = entity_id;
   proxy->BindClient(client_addr);
 
-  // Tell the cell to attach a witness now that this entity has a client.
-  // If the cell ack (OnCellEntityCreated) hasn't landed yet — HasCell() is
-  // false — the EnableWitness is emitted by the ack handler instead (see
-  // OnCellEntityCreated race fix).
+  // Cell ack may not have landed yet; if so, OnCellEntityCreated emits
+  // the EnableWitness instead.
   if (proxy->HasCell()) {
     if (auto* cell_ch = ResolveCellChannelForEntity(entity_id)) {
       cellapp::EnableWitness ew;
@@ -2044,10 +1875,7 @@ void BaseApp::UnbindClient(EntityID entity_id) {
   }
 
   if (auto* proxy = entity_mgr_.FindProxy(entity_id)) {
-    // Symmetric to BindClient: tell the cell to drop the witness before
-    // the BaseApp-side proxy sheds the client binding. Idempotent on the
-    // cell side — OnDisableWitness is a no-op when no witness is attached,
-    // which covers the "client disconnected before cell ack" ordering.
+    // Idempotent on cell side; covers "disconnect before cell ack" race.
     if (proxy->HasCell()) {
       if (auto* cell_ch = ResolveCellChannelForEntity(entity_id)) {
         cellapp::DisableWitness dw;
@@ -2357,10 +2185,8 @@ void BaseApp::SendAbortCheckout(uint32_t request_id, DatabaseID dbid, uint16_t t
   abort.type_id = type_id;
   abort.dbid = dbid;
   if (auto r = dbapp_channel_->SendMessage(abort); !r) {
-    // DBApp keeps the slot checked out indefinitely.  Re-login of this
-    // dbid from any BaseApp returns kAlreadyCheckedOut against a holder
-    // that has already discarded the entity — wedges that account
-    // until BaseApp death detection clears it.
+    // DBApp wedges the slot until BaseApp-death detection clears it;
+    // re-login returns kAlreadyCheckedOut against a discarded holder.
     ATLAS_LOG_ERROR(
         "BaseApp: AbortCheckout dropped, dbid={} type_id={} request_id={}: {} "
         "— account wedge risk",
@@ -2673,15 +2499,10 @@ void BaseApp::OnForceLogoffAck(Channel& /*ch*/, const baseapp::ForceLogoffAck& m
     return;
   }
 
-  // Logoff succeeded — now checkout entity from DBApp
   it->second.waiting_for_remote_force_logoff_ack = false;
   it->second.next_force_logoff_retry_at = {};
   ContinueLoginAfterForceLogoff(msg.request_id);
 }
-
-// ============================================================================
-// on_client_authenticate — handle first message from a client
-// ============================================================================
 
 void BaseApp::OnClientAuthenticate(Channel& ch, const baseapp::Authenticate& msg) {
   auto* proxy = entity_mgr_.FindProxyBySession(msg.session_key);
@@ -2715,12 +2536,7 @@ void BaseApp::OnClientAuthenticate(Channel& ch, const baseapp::Authenticate& msg
   ATLAS_LOG_DEBUG("BaseApp: client authenticated as entity={}", proxy->EntityId());
 }
 
-// ============================================================================
-// on_client_base_rpc — handle exposed base method call from client
-// ============================================================================
-
 void BaseApp::OnClientBaseRpc(Channel& ch, const baseapp::ClientBaseRpc& msg) {
-  // 1. Find the proxy bound to this client channel
   auto it = client_entity_index_.find(ch.RemoteAddress());
   if (it == client_entity_index_.end()) {
     ATLAS_LOG_WARNING("BaseApp: ClientBaseRpc from unauthenticated channel");
@@ -2728,7 +2544,6 @@ void BaseApp::OnClientBaseRpc(Channel& ch, const baseapp::ClientBaseRpc& msg) {
   }
   auto entity_id = it->second;
 
-  // 2. Validate the RPC is exposed.
   auto& registry = EntityDefRegistry::Instance();
   auto* rpc_desc = registry.FindRpc(msg.rpc_id);
   if (!rpc_desc || rpc_desc->exposed == ExposedScope::kNone) {
@@ -2737,10 +2552,7 @@ void BaseApp::OnClientBaseRpc(Channel& ch, const baseapp::ClientBaseRpc& msg) {
     return;
   }
 
-  // 2.5. Direction check. A client that tries to invoke a cell_methods
-  // (direction 0x02) or client_methods (0x00) through the Base channel
-  // is probing — either exploitation, or a generator bug. Either way we
-  // reject loud and fast.
+  // Reject mis-directed RPCs (probe or generator bug).
   if (rpc_desc->Direction() != 0x03) {
     ATLAS_LOG_WARNING(
         "BaseApp: ClientBaseRpc rpc_id=0x{:06X} has direction {}, expected 0x03 (Base)", msg.rpc_id,
@@ -2748,7 +2560,6 @@ void BaseApp::OnClientBaseRpc(Channel& ch, const baseapp::ClientBaseRpc& msg) {
     return;
   }
 
-  // 3. Dispatch to C# via the native callback.
   auto dispatch_fn = GetNativeProvider().dispatch_rpc_fn();
   if (!dispatch_fn) {
     ATLAS_LOG_WARNING("BaseApp: ClientBaseRpc: dispatch_rpc callback not registered");
@@ -2758,12 +2569,9 @@ void BaseApp::OnClientBaseRpc(Channel& ch, const baseapp::ClientBaseRpc& msg) {
               static_cast<int32_t>(msg.payload.size()));
 }
 
-// OnClientCellRpc — validate then forward to CellApp. Defence-in-depth: L1
-// authenticated channel, L1.5 direction bits, L2 cross-entity scope here;
-// CellApp::OnClientCellRpcForward re-checks on the other side.
+// Validate then forward; CellApp re-checks (defence in depth).
 void BaseApp::OnClientCellRpc(Channel& ch, const baseapp::ClientCellRpc& msg) {
-  // L1: authenticated proxy binding. An un-authenticated channel has no
-  // right to an entity id, so there's no way to stamp source_entity_id.
+  // Authenticated binding: an un-auth channel has no entity_id to stamp.
   auto it = client_entity_index_.find(ch.RemoteAddress());
   if (it == client_entity_index_.end()) {
     ATLAS_LOG_WARNING("BaseApp: ClientCellRpc from unauthenticated channel (rpc_id=0x{:06X})",
@@ -2780,7 +2588,6 @@ void BaseApp::OnClientCellRpc(Channel& ch, const baseapp::ClientCellRpc& msg) {
     return;
   }
 
-  // L1.5: direction check. Cell RPCs must sit in the 0x02 space.
   if (rpc_desc->Direction() != 0x02) {
     ATLAS_LOG_WARNING(
         "BaseApp: ClientCellRpc rpc_id=0x{:06X} has direction {}, expected 0x02 (Cell)", msg.rpc_id,
@@ -2788,17 +2595,13 @@ void BaseApp::OnClientCellRpc(Channel& ch, const baseapp::ClientCellRpc& msg) {
     return;
   }
 
-  // Exposed check.
   if (rpc_desc->exposed == ExposedScope::kNone) {
     ATLAS_LOG_WARNING("BaseApp: client tried to call non-exposed cell method (rpc_id=0x{:06X})",
                       msg.rpc_id);
     return;
   }
 
-  // L2: cross-entity check. OWN_CLIENT methods may only be invoked on
-  // the caller's own entity; ALL_CLIENTS methods may target any entity
-  // the caller sees in AoI (we don't re-validate AoI here — the cell
-  // layer has that data and will drop misaddressed packets anyway).
+  // OWN_CLIENT: own entity only. ALL_CLIENTS: cell layer drops mis-AoI.
   if (msg.target_entity_id != source_entity_id && rpc_desc->exposed != ExposedScope::kAllClients) {
     ATLAS_LOG_WARNING(
         "BaseApp: cross-entity ClientCellRpc blocked (source={} target={} rpc_id=0x{:06X} "
@@ -2808,21 +2611,13 @@ void BaseApp::OnClientCellRpc(Channel& ch, const baseapp::ClientCellRpc& msg) {
     return;
   }
 
-  // Forward to the CellApp. `source_entity_id` is stamped HERE from the
-  // authenticated proxy binding — the client cannot forge it. CellApp
-  // re-checks everything (defence in depth) on the other side.
-  //
-  // ResolveCellChannelForEntity handles the multi-CellApp lookup
-  // (entity → cell_addr → channel map). Stale routing (Offload in flight)
-  // shows up either as an unknown peer (nullptr, drop with a warning) or
-  // as the old CellApp rejecting the RPC because the entity is now a
-  // Ghost there — CellApp's OnClientCellRpcForward soft guard catches it.
+  // source_entity_id is stamped here from the authenticated binding;
+  // client cannot forge it. Stale routing during Offload either drops
+  // here (unknown peer) or is caught by the cell's Ghost soft guard.
   auto* ch_out = ResolveCellChannelForEntity(msg.target_entity_id);
   if (ch_out == nullptr) {
-    // Rate-limit: a partitioned or slow CellApp can flood this log, each
-    // line a format+flush that further stretches the tick loop. One line
-    // per second is enough to diagnose a late-binding or partition bug.
-    // Runs on the single dispatcher thread, so static locals are safe.
+    // Rate-limit: a slow/partitioned CellApp would otherwise flood the
+    // tick loop with format+flush. Single dispatcher thread → statics OK.
     using SteadyClock = std::chrono::steady_clock;
     static SteadyClock::time_point last_log{};
     static uint64_t suppressed = 0;
@@ -2845,7 +2640,7 @@ void BaseApp::OnClientCellRpc(Channel& ch, const baseapp::ClientCellRpc& msg) {
   fwd.target_entity_id = msg.target_entity_id;
   fwd.source_entity_id = source_entity_id;
   fwd.rpc_id = msg.rpc_id;
-  fwd.payload = msg.payload;  // copy; Serialize/Deserialize owns bytes
+  fwd.payload = msg.payload;
   (void)ch_out->SendMessage(fwd);
 }
 
@@ -2862,10 +2657,6 @@ auto BaseApp::ResolveCellChannelForEntity(EntityID target_entity_id) const -> Ch
   if (target == nullptr) return nullptr;
   return ResolveCellChannelByAddr(cellapp_peers_.Channels(), target->CellAddr());
 }
-
-// ============================================================================
-// Space creation via CellAppMgr
-// ============================================================================
 
 auto BaseApp::RequestCreateSpace(SpaceID space_id, SpaceCreatedCallback callback) -> uint32_t {
   if (cellappmgr_channel_ == nullptr) {
@@ -2886,8 +2677,7 @@ auto BaseApp::RequestCreateSpace(SpaceID space_id, SpaceCreatedCallback callback
   msg.request_id = request_id;
   msg.reply_addr = Network().RudpAddress();
   if (auto r = cellappmgr_channel_->SendMessage(msg); !r) {
-    // pending_space_creates_ entry expires on timeout; warn so user-
-    // visible space create stalls don't look mysterious.
+    // pending_space_creates_ entry expires on timeout.
     ATLAS_LOG_WARNING("BaseApp: CreateSpaceRequest send failed (space_id={}, request_id={}): {}",
                       space_id, request_id, r.Error().Message());
   }

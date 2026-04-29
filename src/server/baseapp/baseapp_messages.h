@@ -12,27 +12,11 @@
 #include "network/message_ids.h"
 #include "server/entity_types.h"
 
-// ============================================================================
-// BaseApp messages (IDs 2000–2031)
-//
-// External interface (client ↔ BaseApp): 2020–2029
-// Internal interface (peer servers ↔ BaseApp): 2000–2019, 2030–2031
-//
-// Sources:
-//   BaseAppMgr → BaseApp : CreateBase, CreateBaseFromDB
-//   BaseApp    → BaseApp : AcceptClient
-//   CellApp    → BaseApp : CellEntityCreated, CellEntityDestroyed, CurrentCell,
-//                           CellRpcForward, SelfRpcFromCell, BroadcastRpcFromCell,
-//                           ReplicatedDeltaFromCell
-//   DBApp      → BaseApp : WriteEntityAck (re-used from dbapp_messages.hpp)
-// ============================================================================
+// BaseApp messages (IDs 2000-2031). External 2020-2029, internal otherwise.
 
 namespace atlas::baseapp {
 
-// ============================================================================
-// CreateBase  (BaseAppMgr → BaseApp, ID 2000)
-// ============================================================================
-
+// CreateBase (BaseAppMgr → BaseApp, ID 2000).
 struct CreateBase {
   uint16_t type_id{0};
   EntityID entity_id{kInvalidEntityID};  // 0 = BaseApp allocates locally
@@ -64,10 +48,7 @@ struct CreateBase {
 };
 static_assert(NetworkMessage<CreateBase>);
 
-// ============================================================================
-// CreateBaseFromDB  (BaseAppMgr → BaseApp, ID 2001)
-// ============================================================================
-
+// CreateBaseFromDB (BaseAppMgr → BaseApp, ID 2001).
 struct CreateBaseFromDB {
   uint16_t type_id{0};
   DatabaseID dbid{kInvalidDBID};
@@ -103,10 +84,7 @@ struct CreateBaseFromDB {
 };
 static_assert(NetworkMessage<CreateBaseFromDB>);
 
-// ============================================================================
-// AcceptClient  (BaseApp → BaseApp, remote give_client_to, ID 2002)
-// ============================================================================
-
+// AcceptClient (BaseApp → BaseApp, remote give_client_to, ID 2002).
 struct AcceptClient {
   EntityID dest_entity_id{kInvalidEntityID};
   SessionKey session_key;
@@ -140,10 +118,7 @@ struct AcceptClient {
 };
 static_assert(NetworkMessage<AcceptClient>);
 
-// ============================================================================
-// CellEntityCreated  (CellApp → BaseApp, ID 2010)
-// ============================================================================
-
+// CellEntityCreated (CellApp → BaseApp, ID 2010).
 struct CellEntityCreated {
   EntityID base_entity_id{kInvalidEntityID};
   EntityID cell_entity_id{kInvalidEntityID};
@@ -183,10 +158,7 @@ struct CellEntityCreated {
 };
 static_assert(NetworkMessage<CellEntityCreated>);
 
-// ============================================================================
-// CellEntityDestroyed  (CellApp → BaseApp, ID 2011)
-// ============================================================================
-
+// CellEntityDestroyed (CellApp → BaseApp, ID 2011).
 struct CellEntityDestroyed {
   EntityID base_entity_id{kInvalidEntityID};
 
@@ -212,10 +184,7 @@ struct CellEntityDestroyed {
 };
 static_assert(NetworkMessage<CellEntityDestroyed>);
 
-// ============================================================================
-// CurrentCell  (CellApp → BaseApp, cell address updated after offload, ID 2012)
-// ============================================================================
-
+// CurrentCell (CellApp → BaseApp, post-offload cell address, ID 2012).
 struct CurrentCell {
   EntityID base_entity_id{kInvalidEntityID};
   EntityID cell_entity_id{kInvalidEntityID};
@@ -259,10 +228,7 @@ struct CurrentCell {
 };
 static_assert(NetworkMessage<CurrentCell>);
 
-// ============================================================================
-// CellRpcForward  (CellApp → BaseApp, Cell→Base RPC, ID 2013)
-// ============================================================================
-
+// CellRpcForward (CellApp → BaseApp, Cell→Base RPC, ID 2013).
 struct CellRpcForward {
   EntityID base_entity_id{kInvalidEntityID};
   uint32_t rpc_id{0};
@@ -301,22 +267,16 @@ struct CellRpcForward {
 };
 static_assert(NetworkMessage<CellRpcForward>);
 
-// ============================================================================
-// SelfRpcFromCell  (CellApp → BaseApp → owning client, ID 2014)
-//
-// RPC directed at the entity's own client (target == self).
-// Must be delivered reliably — loss causes permanent client state desync
-// (e.g. skill hit confirmation, damage numbers, state transitions).
-// ============================================================================
-
-struct SelfRpcFromCell {
-  EntityID base_entity_id{kInvalidEntityID};
+// Cell-scope-resolved RPC fan-out (ID 2016); BaseApp dispatches to each
+// destination's bound client via the unified RPC envelope.
+struct BroadcastRpcFromCell {
   uint32_t rpc_id{0};
+  std::vector<EntityID> dest_entity_ids;
   std::vector<std::byte> payload;
 
   static auto Descriptor() -> const MessageDesc& {
-    static const MessageDesc kDesc{msg_id::Id(msg_id::BaseApp::kSelfRpcFromCell),
-                                   "baseapp::SelfRpcFromCell",
+    static const MessageDesc kDesc{msg_id::Id(msg_id::BaseApp::kBroadcastRpcFromCell),
+                                   "baseapp::BroadcastRpcFromCell",
                                    MessageLengthStyle::kVariable,
                                    -1,
                                    MessageReliability::kReliable,
@@ -325,90 +285,42 @@ struct SelfRpcFromCell {
   }
 
   void Serialize(BinaryWriter& w) const {
-    w.WritePackedInt(base_entity_id);
     w.WritePackedInt(rpc_id);
-    w.WritePackedInt(static_cast<uint32_t>(payload.size()));
-    w.WriteBytes(payload);
-  }
-
-  static auto Deserialize(BinaryReader& r) -> Result<SelfRpcFromCell> {
-    auto eid = r.ReadPackedInt();
-    auto rid = r.ReadPackedInt();
-    auto sz = r.ReadPackedInt();
-    if (!eid || !rid || !sz)
-      return Error{ErrorCode::kInvalidArgument, "SelfRpcFromCell: truncated"};
-    auto span = r.ReadBytes(*sz);
-    if (!span) return Error{ErrorCode::kInvalidArgument, "SelfRpcFromCell: payload truncated"};
-    SelfRpcFromCell msg;
-    msg.base_entity_id = *eid;
-    msg.rpc_id = *rid;
-    msg.payload.assign(span->begin(), span->end());
-    return msg;
-  }
-};
-static_assert(NetworkMessage<SelfRpcFromCell>);
-
-// ============================================================================
-// BroadcastRpcFromCell  (CellApp → BaseApp → nearby clients, ID 2016)
-//
-// RPC broadcast to otherClients or allClients.
-// High-frequency (animations, movement events); a newer frame supersedes the
-// old one, so best-effort delivery is preferred over retransmit latency.
-// ============================================================================
-
-struct BroadcastRpcFromCell {
-  EntityID base_entity_id{kInvalidEntityID};
-  uint32_t rpc_id{0};
-  uint8_t target{1};  // 1=otherClients, 2=allClients
-  std::vector<std::byte> payload;
-
-  static auto Descriptor() -> const MessageDesc& {
-    static const MessageDesc kDesc{msg_id::Id(msg_id::BaseApp::kBroadcastRpcFromCell),
-                                   "baseapp::BroadcastRpcFromCell",
-                                   MessageLengthStyle::kVariable,
-                                   -1,
-                                   MessageReliability::kUnreliable,
-                                   MessageUrgency::kBatched};
-    return kDesc;
-  }
-
-  void Serialize(BinaryWriter& w) const {
-    w.WritePackedInt(base_entity_id);
-    w.WritePackedInt(rpc_id);
-    w.Write(target);
+    w.WritePackedInt(static_cast<uint32_t>(dest_entity_ids.size()));
+    for (auto id : dest_entity_ids) w.WritePackedInt(id);
     w.WritePackedInt(static_cast<uint32_t>(payload.size()));
     w.WriteBytes(payload);
   }
 
   static auto Deserialize(BinaryReader& r) -> Result<BroadcastRpcFromCell> {
-    auto eid = r.ReadPackedInt();
     auto rid = r.ReadPackedInt();
-    auto tgt = r.Read<uint8_t>();
+    auto count = r.ReadPackedInt();
+    if (!rid || !count)
+      return Error{ErrorCode::kInvalidArgument, "BroadcastRpcFromCell: truncated header"};
+    BroadcastRpcFromCell msg;
+    msg.rpc_id = *rid;
+    msg.dest_entity_ids.reserve(*count);
+    for (uint32_t i = 0; i < *count; ++i) {
+      auto id = r.ReadPackedInt();
+      if (!id) return Error{ErrorCode::kInvalidArgument, "BroadcastRpcFromCell: dest list truncated"};
+      msg.dest_entity_ids.push_back(*id);
+    }
     auto sz = r.ReadPackedInt();
-    if (!eid || !rid || !tgt || !sz)
-      return Error{ErrorCode::kInvalidArgument, "BroadcastRpcFromCell: truncated"};
+    if (!sz) return Error{ErrorCode::kInvalidArgument, "BroadcastRpcFromCell: missing payload size"};
     auto span = r.ReadBytes(*sz);
     if (!span) return Error{ErrorCode::kInvalidArgument, "BroadcastRpcFromCell: payload truncated"};
-    BroadcastRpcFromCell msg;
-    msg.base_entity_id = *eid;
-    msg.rpc_id = *rid;
-    msg.target = *tgt;
     msg.payload.assign(span->begin(), span->end());
     return msg;
   }
 };
 static_assert(NetworkMessage<BroadcastRpcFromCell>);
 
-// ============================================================================
-// ReplicatedDeltaFromCell  (CellApp → BaseApp → Client, ID 2015)
-// ============================================================================
-
+// ReplicatedDeltaFromCell (CellApp → BaseApp → Client, ID 2015).
+// Unreliable: next tick supersedes; HoL blocking is worse than loss.
 struct ReplicatedDeltaFromCell {
   EntityID base_entity_id{kInvalidEntityID};
   std::vector<std::byte> delta;
 
-  // AoI / property replication deltas are superseded by the next tick —
-  // best-effort delivery is preferred over head-of-line blocking.
   static auto Descriptor() -> const MessageDesc& {
     static const MessageDesc kDesc{msg_id::Id(msg_id::BaseApp::kReplicatedDeltaFromCell),
                                    "baseapp::ReplicatedDeltaFromCell",
@@ -441,13 +353,8 @@ struct ReplicatedDeltaFromCell {
 };
 static_assert(NetworkMessage<ReplicatedDeltaFromCell>);
 
-// Send-only zero-copy view onto a ReplicatedDeltaFromCell wire payload.
-// Wire format and message id are identical to ReplicatedDeltaFromCell
-// (Descriptor() forwards), so receivers always decode into the
-// vector-owning struct above. The witness hot path builds envelope
-// bytes into a stack buffer, then ships them through this view to skip
-// the per-observer std::vector::assign that the owning struct's
-// callers would otherwise pay (~3 µs per observer at 200 obs / tick).
+// Send-only zero-copy view of ReplicatedDeltaFromCell. Saves ~3 µs/observer
+// at 200 obs/tick by skipping per-observer std::vector::assign.
 struct ReplicatedDeltaFromCellSpan {
   EntityID base_entity_id{kInvalidEntityID};
   std::span<const std::byte> delta;
@@ -460,27 +367,16 @@ struct ReplicatedDeltaFromCellSpan {
     w.WriteBytes(delta);
   }
 
-  // Span-typed deserialise would have to point into per-call scratch
-  // storage that the caller doesn't own — always wrong. Receivers
-  // decode into the vector struct above; this entry exists only so the
-  // type satisfies the NetworkMessage concept that SendMessage requires.
+  // Send-only stub to satisfy NetworkMessage concept.
   static auto Deserialize(BinaryReader&) -> Result<ReplicatedDeltaFromCellSpan> {
     return Error{ErrorCode::kInvalidArgument, "ReplicatedDeltaFromCellSpan is send-only"};
   }
 };
 static_assert(NetworkMessage<ReplicatedDeltaFromCellSpan>);
 
-// ============================================================================
-// ReplicatedReliableDeltaFromCell  (CellApp → BaseApp → Client, ID 2017)
-//
-// Reliable twin of ReplicatedDeltaFromCell. Carries delta bytes for properties
-// marked reliable="true" in .def — fields where a dropped UDP packet cannot be
-// tolerated (HP, state transitions, inventory). Bypasses the DeltaForwarder
-// byte budget on the BaseApp→Client hop; reliable deltas must not be dropped.
-// The payload format is identical to the unreliable variant (flags + values),
-// so the client reuses ApplyReplicatedDelta for both.
-// ============================================================================
-
+// Reliable twin of ReplicatedDeltaFromCell (ID 2017). For reliable="true"
+// fields (HP, state, inventory). Bypasses DeltaForwarder budget; same wire
+// format so the client reuses ApplyReplicatedDelta.
 struct ReplicatedReliableDeltaFromCell {
   EntityID base_entity_id{kInvalidEntityID};
   std::vector<std::byte> delta;
@@ -517,10 +413,7 @@ struct ReplicatedReliableDeltaFromCell {
 };
 static_assert(NetworkMessage<ReplicatedReliableDeltaFromCell>);
 
-// Send-only zero-copy view onto a ReplicatedReliableDeltaFromCell payload.
-// See ReplicatedDeltaFromCellSpan for rationale; the reliable variant
-// is hit just as often on the witness hot path (cached envelope shared
-// across all observers seeing the same delta frame).
+// Send-only zero-copy view; see ReplicatedDeltaFromCellSpan.
 struct ReplicatedReliableDeltaFromCellSpan {
   EntityID base_entity_id{kInvalidEntityID};
   std::span<const std::byte> delta;
@@ -541,20 +434,8 @@ struct ReplicatedReliableDeltaFromCellSpan {
 };
 static_assert(NetworkMessage<ReplicatedReliableDeltaFromCellSpan>);
 
-// ============================================================================
-// BackupCellEntity  (CellApp → BaseApp, ID 2018)
-//
-// Periodic cell-to-base state backup (every CellApp::kBackupIntervalTicks).
-// `cell_backup_data` is the opaque output of cell-side ServerEntity.Serialize
-// — the CELL_DATA subset of properties.
-//
-// BaseApp stores the bytes verbatim on its Proxy (cell_backup_data_) without
-// deserialising. The blob is the authoritative mirror of cell-scope state
-// for: DB writes (base combines its entity_data_ with this blob), Reviver
-// (restore on a new CellApp after a crash), and Offload (the new cell
-// bootstraps from the blob instead of cross-cell ghost traffic).
-// ============================================================================
-
+// Periodic cell-to-base state backup (ID 2018); opaque CELL_DATA bytes.
+// BaseApp stores verbatim for DB writes / Reviver / Offload bootstrap.
 struct BackupCellEntity {
   EntityID base_entity_id{kInvalidEntityID};
   std::vector<std::byte> cell_backup_data;
@@ -589,18 +470,8 @@ struct BackupCellEntity {
 };
 static_assert(NetworkMessage<BackupCellEntity>);
 
-// ============================================================================
-// ReplicatedBaselineFromCell  (CellApp → BaseApp, ID 2019)
-//
-// Periodic cell-authoritative owner snapshot. The cell owns the live
-// cell-scope values; base-side SerializeForOwnerClient returns empty blobs
-// for pure cell-scope entities, so baselines must originate on the cell.
-// BaseApp's only job is relay: on receipt it resolves the owning client
-// and forwards the blob as ReplicatedBaselineToClient (0xF002).
-//
-// Payload is the raw bytes of cell-side SerializeForOwnerClient.
-// ============================================================================
-
+// Periodic cell-authoritative owner snapshot (ID 2019). BaseApp relays as
+// ReplicatedBaselineToClient (0xF002).
 struct ReplicatedBaselineFromCell {
   EntityID base_entity_id{kInvalidEntityID};
   std::vector<std::byte> snapshot;
@@ -637,28 +508,13 @@ struct ReplicatedBaselineFromCell {
 };
 static_assert(NetworkMessage<ReplicatedBaselineFromCell>);
 
-// ============================================================================
-// ReplicatedBaselineToClient  (BaseApp → Client, client-facing ID 0xF002)
-//
-// Periodic full-state snapshot for an owning client's entity. Sent reliably
-// every `BaseApp::kBaselineInterval` ticks so that any property change lost on
-// the unreliable delta path is recovered within one baseline interval. The
-// payload is the owner-scope serialization produced by the source generator
-// (`SerializeForOwnerClient`), so the client reuses the same property reader
-// it would use for deltas — only the message ID differs.
-//
-// This is a client-facing message (no CellApp→BaseApp hop); BaseApp itself
-// assembles and sends it, so it does not appear in the BaseApp internal
-// enum range (2000-2031). The struct is defined here purely for typed
-// Serialize/Deserialize round-trip testing.
-// ============================================================================
-
+// Periodic owner-snapshot to client (client-facing ID 0xF002). Reliable;
+// recovers any property lost on the unreliable delta path.
 struct ReplicatedBaselineToClient {
   EntityID base_entity_id{kInvalidEntityID};
   std::vector<std::byte> snapshot;
 
   static auto Descriptor() -> const MessageDesc& {
-    // Reliability MUST be reliable — that is the entire point of baseline.
     static const MessageDesc kDesc{
         static_cast<MessageID>(0xF002), "baseapp::ReplicatedBaselineToClient",
         MessageLengthStyle::kVariable, -1, MessageReliability::kReliable};
@@ -687,11 +543,7 @@ struct ReplicatedBaselineToClient {
 };
 static_assert(NetworkMessage<ReplicatedBaselineToClient>);
 
-// ============================================================================
-// Authenticate  (Client → BaseApp external interface, ID 2020)
-// First message sent by client after connecting to BaseApp.
-// ============================================================================
-
+// Authenticate (Client → BaseApp external, ID 2020); first client message.
 struct Authenticate {
   SessionKey session_key;
 
@@ -720,10 +572,7 @@ struct Authenticate {
 };
 static_assert(NetworkMessage<Authenticate>);
 
-// ============================================================================
-// AuthenticateResult  (BaseApp → Client, ID 2021)
-// ============================================================================
-
+// AuthenticateResult (BaseApp → Client, ID 2021).
 struct AuthenticateResult {
   bool success{false};
   EntityID entity_id{kInvalidEntityID};
@@ -764,18 +613,9 @@ struct AuthenticateResult {
 };
 static_assert(NetworkMessage<AuthenticateResult>);
 
-// ============================================================================
-// EntityTransferred  (BaseApp → Client, ID 2024)
-//
-// Notifies the client that its owning entity has changed as a result of a
-// server-side GiveClientTo handoff (e.g. Account → Avatar at SelectAvatar).
-// After this arrives, the client must use `new_entity_id` as the
-// `target_entity_id` for subsequent ClientCellRpc messages; the previous
-// id is unbound from the RUDP channel and will be rejected at validation.
-// `new_type_id` lets the client identify which entity class is now active
-// (useful when the client needs to construct type-specific RPC ids).
-// ============================================================================
-
+// Owning-entity change after server-side GiveClientTo (ID 2024). Client
+// must use new_entity_id for subsequent ClientCellRpc; previous id is
+// unbound and will fail validation.
 struct EntityTransferred {
   EntityID new_entity_id{kInvalidEntityID};
   uint16_t new_type_id{0};
@@ -807,22 +647,9 @@ struct EntityTransferred {
 };
 static_assert(NetworkMessage<EntityTransferred>);
 
-// ============================================================================
-// CellReady  (BaseApp → Client, ID 2025)
-//
-// Fired when BaseApp records the cell_addr on a client-bound Proxy, i.e.
-// after CellEntityCreated arrives from the CellApp. Eliminates the race
-// where the client would try to ClientCellRpc before cell_addr was set
-// and see BaseApp's "no cell channel for target entity" drop.
-//
-// Emission: once per entity, at the first moment both
-//   (1) the entity has a cell (SetCell has fired), AND
-//   (2) the entity has a client (BindClient has fired)
-// are simultaneously true. In practice OnCellEntityCreated is the
-// second of those two edges on the world_stress script flow because
-// GiveClientTo runs synchronously before the CellApp ack can arrive.
-// ============================================================================
-
+// Tells client its cell is ready (ID 2025); fires once both BindClient
+// and SetCell have happened. Avoids race where ClientCellRpc would be
+// dropped for missing cell_addr.
 struct CellReady {
   EntityID entity_id{kInvalidEntityID};
 
@@ -848,12 +675,7 @@ struct CellReady {
 };
 static_assert(NetworkMessage<CellReady>);
 
-// ============================================================================
-// ClientBaseRpc  (Client → BaseApp external interface, ID 2022)
-// Client sends an exposed base method call. BaseApp validates the exposed scope
-// and dispatches to the C# entity via the dispatch_rpc callback.
-// ============================================================================
-
+// ClientBaseRpc (Client → BaseApp external, ID 2022); base method call.
 struct ClientBaseRpc {
   uint32_t rpc_id{0};
   std::vector<std::byte> payload;
@@ -890,19 +712,9 @@ struct ClientBaseRpc {
 };
 static_assert(NetworkMessage<ClientBaseRpc>);
 
-// ============================================================================
-// ClientCellRpc  (Client → BaseApp external interface, ID 2023)
-//
-// Client sends an exposed cell method call. BaseApp validates direction/
-// exposed/cross-entity rules, embeds `source_entity_id = proxy.entity_id()`
-// (un-spoofable), and forwards to the owning CellApp as ClientCellRpcForward.
-//
-// Wire format: [target_entity_id | rpc_id | payload].
-// `target_entity_id` is the base_entity_id space — clients only ever know
-// base ids; CellApp's base_entity_population_ index resolves it to the
-// CellEntity on arrival.
-// ============================================================================
-
+// ClientCellRpc (Client → BaseApp external, ID 2023). BaseApp validates
+// then forwards to CellApp with un-spoofable source_entity_id stamped.
+// target_entity_id is in base_entity_id space.
 struct ClientCellRpc {
   EntityID target_entity_id{kInvalidEntityID};
   uint32_t rpc_id{0};
@@ -944,18 +756,9 @@ struct ClientCellRpc {
 };
 static_assert(NetworkMessage<ClientCellRpc>);
 
-// ============================================================================
-// CellAppDeath  (CellAppMgr → BaseApp, ID 2026)
-//
-// CellAppMgr fans this out to every BaseApp after it rehomes the dead
-// CellApp's BSP leaves. `dead_addr` identifies which CellApp died;
-// `rehomes` maps each affected Space to the surviving CellApp that now
-// owns a replacement Cell. BaseApps walk their entities: every BaseEntity
-// with `cell_addr == dead_addr` gets re-issued to the corresponding new
-// host via CreateCellEntity (script_init_data = last cached
-// cell_backup_data), which rehydrates the Real from the base-side backup.
-// ============================================================================
-
+// CellAppDeath (CellAppMgr → BaseApp, ID 2026). dead_addr + Space→new-host
+// map. BaseApps re-issue affected entities via CreateCellEntity with
+// script_init_data = cached cell_backup_data.
 struct CellAppDeath {
   Address dead_addr;
   std::vector<std::pair<SpaceID, Address>> rehomes;
@@ -1003,13 +806,8 @@ struct CellAppDeath {
 };
 static_assert(NetworkMessage<CellAppDeath>);
 
-// ============================================================================
-// ClientEventSeqReport  (Client → BaseApp, ID 2027)
-// Accumulated reliable-delta gap count the client observed for a given
-// entity since the last report. BaseApp sums it into a process-wide
-// counter exposed via baseapp/client_event_seq_gaps_total.
-// ============================================================================
-
+// ClientEventSeqReport (Client → BaseApp, ID 2027); accumulated reliable-
+// delta gap count since last report.
 struct ClientEventSeqReport {
   EntityID base_entity_id{kInvalidEntityID};
   uint32_t gap_delta{0};
@@ -1041,11 +839,8 @@ struct ClientEventSeqReport {
 };
 static_assert(NetworkMessage<ClientEventSeqReport>);
 
-// ============================================================================
-// ForceLogoff  (BaseApp → BaseApp, ID 2030)
-// Sent to evict an existing Proxy so the new login can checkout the entity.
-// ============================================================================
-
+// ForceLogoff (BaseApp → BaseApp, ID 2030); evicts holder so a new login
+// can check out the entity.
 struct ForceLogoff {
   DatabaseID dbid{kInvalidDBID};
   uint32_t request_id{0};  // echoed back in ForceLogoffAck
@@ -1077,10 +872,7 @@ struct ForceLogoff {
 };
 static_assert(NetworkMessage<ForceLogoff>);
 
-// ============================================================================
-// ForceLogoffAck  (BaseApp → BaseApp, ID 2031)
-// ============================================================================
-
+// ForceLogoffAck (BaseApp → BaseApp, ID 2031).
 struct ForceLogoffAck {
   uint32_t request_id{0};
   bool success{false};
@@ -1112,16 +904,15 @@ struct ForceLogoffAck {
 };
 static_assert(NetworkMessage<ForceLogoffAck>);
 
-// Client-facing reserved wire IDs (0xF000 range).  Producers in BaseApp
-// + DeltaForwarder; client routes these via SetDefaultHandler.
+// Client-facing reserved wire IDs (0xF000 range); client routes via
+// SetDefaultHandler.
 inline constexpr MessageID kClientDeltaMessageId = static_cast<MessageID>(0xF001);
 inline constexpr MessageID kClientBaselineMessageId = static_cast<MessageID>(0xF002);
 inline constexpr MessageID kClientReliableDeltaMessageId = static_cast<MessageID>(0xF003);
 inline constexpr MessageID kClientRpcMessageId = static_cast<MessageID>(0xF004);
 
-// Send-only envelopes — span borrows caller's storage for the
-// synchronous SendMessage call.  Deserialize errors out because the
-// client intercepts these wire ids before typed dispatch fires.
+// Send-only envelopes; span borrows caller storage for the synchronous
+// SendMessage. Client intercepts these wire ids before typed dispatch.
 
 struct ClientDeltaEnvelope {
   std::span<const std::byte> bytes;

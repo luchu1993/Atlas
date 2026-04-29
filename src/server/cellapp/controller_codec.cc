@@ -46,8 +46,6 @@ auto ReadF32(BinaryReader& r) -> Result<float> {
   return r.Read<float>();
 }
 
-// ---- Per-kind encoders ----------------------------------------------------
-
 void EncodeMoveToPoint(const MoveToPointController& c, BinaryWriter& w) {
   WriteF32(w, c.Destination().x);
   WriteF32(w, c.Destination().y);
@@ -65,22 +63,14 @@ void EncodeTimer(const TimerController& c, BinaryWriter& w) {
 
 void EncodeProximity(const ProximityController& c, BinaryWriter& w) {
   WriteF32(w, c.Range());
-  // Translate each RangeListNode* in the inside-peer set to its owning
-  // CellEntity's id (cluster-wide unique). Any peer whose OwnerData
-  // is null or not a CellEntity is skipped — shouldn't happen in
-  // practice but keeps the codec defensive.
   const auto& peers = c.InsidePeers();
-  // Two-pass: count first (can't pre-compute — some might fail the
-  // OwnerData check), then emit.
+  // Two-pass: defensive OwnerData check may filter some peers.
   std::vector<uint32_t> peer_ids;
   peer_ids.reserve(peers.size());
   for (auto* peer_node : peers) {
     if (peer_node == nullptr) continue;
-    // All peers in a ProximityController's inside_peers_ set are the
-    // "central" nodes of CellEntity instances — see RangeTrigger's
-    // docs (bounds are filtered out by DispatchMembership). Those
-    // centrals are always EntityRangeListNode which carries
-    // OwnerData(). Static downcast is safe under this invariant.
+    // ProximityController inside_peers_ contains only entity centrals
+    // (RangeTrigger filters bound nodes), which are always EntityRangeListNode.
     auto* entity_node = static_cast<EntityRangeListNode*>(peer_node);
     auto* peer_entity = static_cast<CellEntity*>(entity_node->OwnerData());
     if (peer_entity == nullptr) continue;
@@ -89,8 +79,6 @@ void EncodeProximity(const ProximityController& c, BinaryWriter& w) {
   w.WritePackedInt(static_cast<uint32_t>(peer_ids.size()));
   for (auto id : peer_ids) WriteU32(w, id);
 }
-
-// ---- Per-kind decoders ---------------------------------------------------
 
 auto DecodeMoveToPoint(BinaryReader& r) -> std::unique_ptr<Controller> {
   auto dx = ReadF32(r);
@@ -114,32 +102,20 @@ auto DecodeTimer(BinaryReader& r) -> std::unique_ptr<Controller> {
   return timer;
 }
 
-// Proximity decode is split: we need the owning entity's RangeListNode
-// + its Space's RangeList + the peer lookup function. So the caller
-// (DeserializeControllersForMigration) performs it inline rather than
-// through a per-kind helper here.
+// Proximity decode is inline in the caller — needs the owner's RangeNode
+// + Space's RangeList + lookup_peer.
 
 }  // namespace
 
-// Wire layout:
-//   count                 : uint32
-//   for each controller:
-//     kind                : uint8
-//     id                  : uint32
-//     user_arg            : int32
-//     kind-specific data (EncodeMoveToPoint / EncodeTimer / EncodeProximity)
-//
-// lastAllocatedID is NOT on the wire. The destination derives the
-// equivalent via `Controllers::AddWithPreservedId`, which advances
-// next_id_ to `preserved_id + 1` per restored controller — after the
-// restore loop next_id_ equals `max(preserved_ids) + 1`.
+// Wire: u32 count | per-ctrl (u8 kind, u32 id, i32 user_arg, payload).
+// lastAllocatedID is not on the wire; AddWithPreservedId advances
+// next_id_ per restore so next_id_ ends at max(preserved_ids)+1.
 void SerializeControllersForMigration(const CellEntity& entity, BinaryWriter& w) {
   const auto& controllers = const_cast<CellEntity&>(entity).GetControllers();
-  // Count-first. The iterator order is unspecified but consistent
-  // within a single ForEach pass, so two passes yield the same sequence.
+  // Two-pass; ForEach order is consistent within a single CellApp run.
   uint32_t count = 0;
   controllers.ForEach([&](const Controller& c) {
-    if (c.TypeTag() == ControllerKind::kUnknown) return;  // skip bare/test controllers
+    if (c.TypeTag() == ControllerKind::kUnknown) return;
     if (c.IsFinished()) return;
     ++count;
   });
@@ -162,7 +138,7 @@ void SerializeControllersForMigration(const CellEntity& entity, BinaryWriter& w)
         EncodeProximity(static_cast<const ProximityController&>(c), w);
         break;
       case ControllerKind::kUnknown:
-        break;  // filtered above
+        break;
     }
   });
 }
@@ -197,10 +173,8 @@ auto DeserializeControllersForMigration(CellEntity& entity, BinaryReader& r,
         for (uint32_t p = 0; p < *peer_count; ++p) {
           auto peer_id = ReadU32(r);
           if (!peer_id) return false;
-          // Resolve peer id → local CellEntity → RangeListNode. Peers
-          // that don't exist locally (different partition) are silently
-          // dropped so the seed stays sound — the trigger's Insert
-          // can't fire events for nodes that aren't in the list.
+          // Cross-partition peers drop silently; trigger Insert can't
+          // fire events for nodes not in the list.
           if (lookup_peer) {
             if (auto* peer_entity = lookup_peer(*peer_id)) {
               prox_seed.insert(&peer_entity->RangeNode());
@@ -225,13 +199,11 @@ auto DeserializeControllersForMigration(CellEntity& entity, BinaryReader& r,
       return false;
     }
 
-    // Motion surface: MoveToPoint needs the entity, others don't. Match
-    // CellAppNativeProvider's convention.
+    // Only MoveToPoint needs the motion surface (matches CellAppNativeProvider).
     IEntityMotion* motion = (kind == ControllerKind::kMoveToPoint) ? &entity : nullptr;
     const auto assigned = controllers.AddWithPreservedId(std::move(ctrl), motion, *user_arg, *id);
     if (assigned == 0) {
       ATLAS_LOG_WARNING("ControllerCodec: preserved id {} already in use — skipping", *id);
-      // Continue with the rest; partial restore is better than nothing.
     }
   }
   return true;

@@ -88,7 +88,7 @@ enum class BaseApp : uint16_t {
   kCellEntityDestroyed = 2011,
   kCurrentCell = 2012,
   kCellRpcForward = 2013,
-  kSelfRpcFromCell = 2014,
+  // 2014 retired (was kSelfRpcFromCell; subsumed by kBroadcastRpcFromCell)
   kReplicatedDeltaFromCell = 2015,
   kBroadcastRpcFromCell = 2016,
   kReplicatedReliableDeltaFromCell = 2017,
@@ -273,7 +273,6 @@ ATLAS_ASSERT_ID_RANGE(BaseApp::kCellEntityCreated, 2000, 2999);
 ATLAS_ASSERT_ID_RANGE(BaseApp::kCellEntityDestroyed, 2000, 2999);
 ATLAS_ASSERT_ID_RANGE(BaseApp::kCurrentCell, 2000, 2999);
 ATLAS_ASSERT_ID_RANGE(BaseApp::kCellRpcForward, 2000, 2999);
-ATLAS_ASSERT_ID_RANGE(BaseApp::kSelfRpcFromCell, 2000, 2999);
 ATLAS_ASSERT_ID_RANGE(BaseApp::kReplicatedDeltaFromCell, 2000, 2999);
 ATLAS_ASSERT_ID_RANGE(BaseApp::kBroadcastRpcFromCell, 2000, 2999);
 ATLAS_ASSERT_ID_RANGE(BaseApp::kReplicatedReliableDeltaFromCell, 2000, 2999);

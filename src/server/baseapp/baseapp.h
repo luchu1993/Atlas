@@ -30,7 +30,6 @@ struct CellEntityCreated;
 struct CellEntityDestroyed;
 struct CurrentCell;
 struct CellRpcForward;
-struct SelfRpcFromCell;
 struct BroadcastRpcFromCell;
 struct ReplicatedDeltaFromCell;
 struct ReplicatedReliableDeltaFromCell;
@@ -62,22 +61,12 @@ struct SpaceCreatedResult;
 
 class Channel;
 
-// ============================================================================
-// BaseApp — entity-bearing server process
-//
-// Responsibilities:
-//   • Hosts BaseEntity / Proxy objects
-//   • Dual network interfaces: internal (peer servers) + external (clients)
-//   • Allocates EntityIDs locally (EntityManager)
-//   • Routes client RPCs from external interface to entities
-//   • Forwards DB persistence requests to DBApp
-//   • Implements give_client_to (local + remote)
-//   • Scripted entity logic via ClrScriptEngine / BaseAppNativeProvider
-// ============================================================================
+// Entity-bearing server process: hosts BaseEntity/Proxy, dual networks
+// (internal peers + external clients), drives DB persistence, scripted
+// entity logic via ClrScriptEngine / BaseAppNativeProvider.
 
-// Looks up a CellApp Channel* for `cell_addr` in the peer-channel map.
-// Returns nullptr if cell_addr has port 0 or the map has no entry for it.
-// Exposed at namespace scope so unit tests can drive it without a BaseApp.
+// Returns nullptr if cell_addr has port 0 or no entry exists.
+// Free function so unit tests can drive it without a BaseApp.
 [[nodiscard]] auto ResolveCellChannelByAddr(
     const std::unordered_map<Address, Channel*>& cellapp_channels, const Address& cell_addr)
     -> Channel*;
@@ -93,23 +82,17 @@ class BaseApp : public EntityApp {
   [[nodiscard]] auto GetEntityManager() -> EntityManager& { return entity_mgr_; }
   [[nodiscard]] auto GetNativeProvider() -> BaseAppNativeProvider& { return *native_provider_; }
 
-  // Returns the CellApp channel that currently owns `target_entity_id`'s
-  // Real, or nullptr if the entity is unknown, has no Cell yet, or the
-  // peer channel map has no entry for its current cell_addr.
+  // CellApp channel currently owning target_entity_id's Real; nullptr if
+  // unknown, no cell yet, or peer map missing entry.
   [[nodiscard]] auto ResolveCellChannelForEntity(EntityID target_entity_id) const -> Channel*;
 
-  // Callback invoked when CellAppMgr replies to a CreateSpaceRequest.
-  // On success `cell_addr` holds the CellApp that now hosts the initial Cell.
   using SpaceCreatedCallback =
       std::function<void(bool success, SpaceID space_id, const Address& cell_addr)>;
 
-  // Requests a new Space from CellAppMgr. Returns 0 if no CellAppMgr is
-  // currently connected; caller can retry. Non-zero return is the
-  // request_id; the callback fires when CellAppMgr replies.
+  // Returns 0 if no CellAppMgr connected (caller may retry); else request_id.
   auto RequestCreateSpace(SpaceID space_id, SpaceCreatedCallback callback) -> uint32_t;
 
  protected:
-  // ---- EntityApp / ScriptApp overrides --------------------------------
   [[nodiscard]] auto Init(int argc, char* argv[]) -> bool override;
   void Fini() override;
 
@@ -126,22 +109,18 @@ class BaseApp : public EntityApp {
   struct LoadSnapshot;
   struct LoadTracker;
 
-  // ---- Message handlers — internal interface --------------------------
   void OnCreateBase(Channel& ch, const baseapp::CreateBase& msg);
   void OnCreateBaseFromDb(Channel& ch, const baseapp::CreateBaseFromDB& msg);
   void OnAcceptClient(Channel& ch, const baseapp::AcceptClient& msg);
   void OnCellEntityCreated(Channel& ch, const baseapp::CellEntityCreated& msg);
   void OnCellEntityDestroyed(Channel& ch, const baseapp::CellEntityDestroyed& msg);
   void OnCurrentCell(Channel& ch, const baseapp::CurrentCell& msg);
-  // CellAppMgr announced a CellApp death. Re-ship every locally-tracked Real
-  // that was on the dead addr to its new host, seeding the new cell entity
-  // with the last cached cell_backup_data.
+  // Re-ships every locally-tracked Real on the dead addr to its new host,
+  // seeded with last cached cell_backup_data.
   void OnCellAppDeath(const baseapp::CellAppDeath& msg);
   void OnCellRpcForward(Channel& ch, const baseapp::CellRpcForward& msg);
-  void OnSelfRpcFromCell(Channel& ch, const baseapp::SelfRpcFromCell& msg);
   void OnBroadcastRpcFromCell(Channel& ch, const baseapp::BroadcastRpcFromCell& msg);
-  // Cell → client RPC relay.  Wraps `rpc_id` + `payload` in the unified
-  // kClientRpcMessageId envelope and ships it to the client channel.
+  // Wraps rpc_id + payload in kClientRpcMessageId envelope.
   void RelayRpcToClient(Channel& client_ch, uint32_t rpc_id, const std::vector<std::byte>& payload);
   void OnReplicatedDeltaFromCell(Channel& ch, const baseapp::ReplicatedDeltaFromCell& msg);
   void OnReplicatedReliableDeltaFromCell(Channel& ch,
@@ -150,7 +129,6 @@ class BaseApp : public EntityApp {
   void OnReplicatedBaselineFromCell(const baseapp::ReplicatedBaselineFromCell& msg);
   void OnSpaceCreatedResult(Channel& ch, const cellappmgr::SpaceCreatedResult& msg);
 
-  // ---- Login flow handlers --------------------------------------------
   void OnPrepareLogin(Channel& ch, const login::PrepareLogin& msg);
   void OnCancelPrepareLogin(Channel& ch, const login::CancelPrepareLogin& msg);
   void OnForceLogoff(Channel& ch, const baseapp::ForceLogoff& msg);
@@ -159,40 +137,27 @@ class BaseApp : public EntityApp {
   void OnRegisterBaseappAck(Channel& ch, const baseappmgr::RegisterBaseAppAck& msg);
   void OnGetEntityIdsAck(Channel& ch, const dbapp::GetEntityIdsAck& msg);
 
-  // ---- External client handler ----------------------------------------
   void OnClientAuthenticate(Channel& ch, const baseapp::Authenticate& msg);
   void OnClientBaseRpc(Channel& ch, const baseapp::ClientBaseRpc& msg);
   void OnClientCellRpc(Channel& ch, const baseapp::ClientCellRpc& msg);
 
-  // ---- Called by BaseAppNativeProvider --------------------------------
   friend class BaseAppNativeProvider;
   void DoWriteToDb(EntityID entity_id, const std::byte* data, int32_t len);
   void DoGiveClientToLocal(EntityID src_id, EntityID dest_id);
   void DoGiveClientToRemote(EntityID src_id, EntityID dest_id, const Address& dest_baseapp);
 
-  // Script-initiated entity creation. Allocates an EntityID from the local
-  // pool, creates the base entity, instantiates the C# script side via
-  // RestoreManagedEntity (empty blob — defaults), and if the type has a
-  // cell side, sends CreateCellEntity to a CellApp (picked from the
-  // cellapp_peer_registry_, position={0,0,0}). `space_id` is forwarded to
-  // the cell; CellApp auto-creates the Space if it doesn't yet exist.
-  // Witness attachment is handled by the client-bind path (BindClient →
-  // cellapp::EnableWitness); scripts that want a non-default AoI radius
-  // issue SetAoIRadius after the cell ack has landed. Returns the new
-  // EntityID, or 0 on failure.
+  // Allocates an ID, creates the base entity, hydrates C# with empty defaults,
+  // and (if cell-bound) sends CreateCellEntity at origin. Witness attaches
+  // via the client-bind path; scripts call SetAoIRadius post-ack. Returns
+  // the new EntityID, or 0 on failure.
   auto CreateBaseEntityFromScript(uint16_t type_id, SpaceID space_id) -> EntityID;
 
-  // ---- Delta forwarding ------------------------------------------------
   void FlushClientDeltas();
 
-  // ---- Baseline snapshot emission -------------------------------------
-  // Called each tick; sends a reliable full-state snapshot for every live
-  // client-bound entity once per kBaselineInterval ticks. Ensures that UDP
-  // loss on the unreliable delta path cannot leave the client permanently
-  // stale — the next baseline reconverges state within one interval.
+  // Reliable full-state snapshot per client-bound entity every
+  // kBaselineInterval ticks; recovers the unreliable delta path from loss.
   void EmitBaselineSnapshots();
 
-  // ---- Helpers --------------------------------------------------------
   void RegisterInternalHandlers();
   void ExpireDetachedProxies();
   void UpdateLoadEstimate();
@@ -201,28 +166,22 @@ class BaseApp : public EntityApp {
   void DrainFinishedLoginFlows(std::vector<DatabaseID> dbids);
   void MaybeRequestMoreIds();
 
-  // ---- State ----------------------------------------------------------
   NetworkInterface& external_network_;
   IDClient id_client_;
   EntityManager entity_mgr_;
   BaseAppNativeProvider* native_provider_{nullptr};  // owned by ScriptApp
-  Channel* dbapp_channel_{nullptr};                  // connection to DBApp
-  Channel* baseappmgr_channel_{nullptr};             // connection to BaseAppMgr
-  // Multi-CellApp routing. The registry handles Birth/Death subscription +
-  // self-filter internally. Per-entity routing (which CellApp this entity's
-  // Real currently lives on) lives on BaseEntity.cell_addr_, maintained by
-  // OnCellEntityCreated + OnCurrentCell.
+  Channel* dbapp_channel_{nullptr};
+  Channel* baseappmgr_channel_{nullptr};
+  // Per-entity routing (which CellApp owns its Real) lives on
+  // BaseEntity.cell_addr_; registry handles Birth/Death + self-filter.
   CellAppPeerRegistry cellapp_peers_;
 
-  // CellAppMgr control channel + pending Space-create callbacks keyed by
-  // request_id.
   Channel* cellappmgr_channel_{nullptr};
   uint32_t next_space_request_id_{1};
   std::unordered_map<uint32_t, SpaceCreatedCallback> pending_space_creates_;
 
   uint32_t app_id_{0};
 
-  // Pending login state: maps request_id → reply channel back to LoginApp
   struct PendingLogin {
     uint32_t login_request_id{0};
     Address loginapp_addr;
@@ -241,7 +200,6 @@ class BaseApp : public EntityApp {
   std::unordered_map<uint32_t, PendingLogin> pending_logins_;
   uint32_t next_prepare_request_id_{1};
 
-  // Pending ForceLogoff awaiting ack: maps request_id → PendingLogin
   std::unordered_map<uint32_t, PendingLogin> pending_force_logoffs_;
   struct PendingLogoffWrite {
     uint32_t continuation_request_id{0};
@@ -318,12 +276,8 @@ class BaseApp : public EntityApp {
   uint64_t baseline_bytes_sent_total_{0};
   uint64_t baseline_tick_counter_{0};
   static constexpr uint32_t kDeltaBudgetPerTick = 16 * 1024;  // 16 KB per client per tick
-  // Ticks between reliable full-state snapshots per entity. Baseline is the
-  // belt-and-braces recovery path for the unreliable delta channel (0xF001).
-  // With the reliable delta channel (0xF003) covering loss-intolerant
-  // properties, the unreliable path only carries volatile-type state whose
-  // next frame supersedes a stale one anyway, so the cadence can be loose.
-  // 120 ticks ≈ 4 s at 30 Hz / 12 s at 10 Hz.
+  // Reliable baseline cadence (~4s @ 30Hz / 12s @ 10Hz); unreliable 0xF001
+  // path's stale frame is superseded by next frame so cadence is loose.
   static constexpr uint64_t kBaselineInterval = 120;
   uint64_t auth_success_total_{0};
   uint64_t auth_fail_total_{0};
@@ -332,9 +286,7 @@ class BaseApp : public EntityApp {
   uint64_t detached_relogin_total_{0};
   uint64_t canceled_checkout_total_{0};
   uint64_t prepared_login_timeout_total_{0};
-  // Accumulated reliable-delta gap count reported by connected clients.
-  // Each ClientEventSeqReport adds gap_delta here; ops can alert on a
-  // sustained rate via baseapp/client_event_seq_gaps_total.
+  // Accumulated client-reported reliable-delta gap count.
   uint64_t client_event_seq_gaps_total_{0};
   LoadTracker load_tracker_{};
   static constexpr Duration kForceLogoffRetryBaseDelay = std::chrono::milliseconds(250);
@@ -342,8 +294,8 @@ class BaseApp : public EntityApp {
   static constexpr Duration kPendingTimeout = std::chrono::seconds(8);
   static constexpr Duration kCanceledCheckoutRetention = std::chrono::seconds(10);
   static constexpr Duration kPreparedLoginTimeout = std::chrono::seconds(10);
-  // Keep detached proxies around for one shortline reconnect window. Longer
-  // retention increases stale proxy pressure without improving the fast path.
+  // One shortline reconnect window — longer adds stale-proxy pressure with
+  // no fast-path benefit.
   static constexpr Duration kDetachedProxyGrace = std::chrono::milliseconds(1500);
   static constexpr float kLoadSmoothingBias = 0.25f;
 

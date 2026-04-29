@@ -52,6 +52,7 @@ namespace Atlas.Core
         public delegate void RpcDispatchDelegate(Atlas.Entity.ServerEntity entity, int rpcId, ref Atlas.Serialization.SpanReader reader);
         public static readonly RpcDispatchDelegate[] Dispatchers = new RpcDispatchDelegate[4];
     }
+    public enum RpcTarget : byte { Owner = 0, Others = 1, All = 2 }
 }
 namespace Atlas.Entity
 {
@@ -59,7 +60,7 @@ namespace Atlas.Entity
     {
         public uint EntityId { get; internal set; }
         public abstract string TypeName { get; }
-        protected internal void SendClientRpc(int rpcId, System.ReadOnlySpan<byte> payload) { }
+        protected internal void SendClientRpc(int rpcId, Atlas.Core.RpcTarget target, System.ReadOnlySpan<byte> payload) { }
         protected internal void SendCellRpc(int rpcId, System.ReadOnlySpan<byte> payload) { }
         protected internal void SendBaseRpc(int rpcId, System.ReadOnlySpan<byte> payload) { }
     }

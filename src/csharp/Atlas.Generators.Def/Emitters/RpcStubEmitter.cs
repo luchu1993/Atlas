@@ -18,6 +18,7 @@ internal static class RpcStubEmitter
         sb.AppendLine("#nullable enable");
         sb.AppendLine("using System;");
         sb.AppendLine("using System.Collections.Generic;");
+        sb.AppendLine("using Atlas.Core;");
         sb.AppendLine("using Atlas.Serialization;");
         // Lets struct args (TypeRef.Kind == Struct) resolve unqualified;
         // StructEmitter places generated structs in Atlas.Def.
@@ -90,9 +91,13 @@ internal static class RpcStubEmitter
     private static void EmitSerializeAndSend(StringBuilder sb, MethodDefModel method,
                                               int rpcId, string section)
     {
+        // Direct entity-level stubs default to Owner scope; scripts that need
+        // broadcast should use the mailbox accessors (entity.AllClients,
+        // entity.OtherClients) emitted by MailboxEmitter.
+        var sendArgs = section == "client_methods" ? "RpcTarget.Owner, " : "";
         if (method.Args.Count == 0)
         {
-            sb.AppendLine($"        {SendMethod(section)}(0x{rpcId:X6}, ReadOnlySpan<byte>.Empty);");
+            sb.AppendLine($"        {SendMethod(section)}(0x{rpcId:X6}, {sendArgs}ReadOnlySpan<byte>.Empty);");
             return;
         }
         sb.AppendLine("        var writer = new SpanWriter(256);");
@@ -100,7 +105,7 @@ internal static class RpcStubEmitter
         sb.AppendLine("        {");
         foreach (var arg in method.Args)
             RpcArgCodec.EmitWrite(sb, arg, "writer", "            ");
-        sb.AppendLine($"            {SendMethod(section)}(0x{rpcId:X6}, writer.WrittenSpan);");
+        sb.AppendLine($"            {SendMethod(section)}(0x{rpcId:X6}, {sendArgs}writer.WrittenSpan);");
         sb.AppendLine("        }");
         sb.AppendLine("        finally { writer.Dispose(); }");
     }

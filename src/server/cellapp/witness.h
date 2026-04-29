@@ -37,19 +37,19 @@ class AoITrigger;
 // Delivery interface:
 //   The witness doesn't know about BaseApp or the network. Instead a
 //   caller-supplied callback takes a CellAoIEnvelope blob and is
-//   responsible for routing it (via SelfRpcFromCell /
-//   ReplicatedReliableDeltaFromCell, whichever fits the payload's
-//   reliability class). Tests plug a recording callback; the real
-//   CellApp process plugs a BaseApp-forwarding callback.
+//   responsible for routing it (via ReplicatedReliableDeltaFromCell or
+//   ReplicatedDeltaFromCell, whichever fits the payload's reliability
+//   class). Tests plug a recording callback; the real CellApp process
+//   plugs a BaseApp-forwarding callback.
 // ============================================================================
 
 class Witness {
  public:
   // Witness forwards envelopes through two transport classes — the
   // caller (CellApp process) wires each to the matching BaseApp message:
-  //   - reliable: SelfRpcFromCell / ReplicatedReliableDeltaFromCell
-  //               (property deltas, enters, leaves — order matters;
-  //                dropping one permanently desyncs the client)
+  //   - reliable: ReplicatedReliableDeltaFromCell (property deltas,
+  //               enters, leaves — order matters; dropping one
+  //               permanently desyncs the client)
   //   - unreliable: ReplicatedDeltaFromCell (via DeltaForwarder, latest-
   //                wins — volatile position/orientation only)
   using SendFn =

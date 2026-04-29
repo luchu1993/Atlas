@@ -4,6 +4,8 @@
 #include <cstring>
 #include <utility>
 
+#include <unordered_map>
+
 #include "baseapp/baseapp_messages.h"
 #include "cell_aoi_envelope.h"
 #include "cell_entity.h"
@@ -18,17 +20,13 @@
 #include "space/move_controller.h"
 #include "space/proximity_controller.h"
 #include "space/timer_controller.h"
+#include "witness.h"
 
 namespace atlas {
 
-// Packed layout of the callback table sent by C# Atlas.Runtime via
-// set_native_callbacks. Must match the [UnmanagedCallersOnly] exports in
-// Atlas.Runtime. Identical struct as BaseAppNativeProvider uses — the C#
-// side fills the same table regardless of process type.
-//
-// Growth rule: new entries go at the tail. Older C# runtimes produce a
-// shorter table; SetNativeCallbacks below clamps the copy to what the
-// caller actually sent, so missing entries read back as nullptr.
+// Mirrors [UnmanagedCallersOnly] exports in Atlas.Runtime; same layout
+// as BaseApp's table. Append-only; SetNativeCallbacks clamps to caller's
+// len so missing entries read back as nullptr.
 #pragma pack(push, 1)
 struct CellAppCallbackTable {
   RestoreEntityFn restore_entity;
@@ -50,11 +48,15 @@ uint8_t CellAppNativeProvider::GetProcessPrefix() {
   return static_cast<uint8_t>(ProcessType::kCellApp);
 }
 
-void CellAppNativeProvider::SendClientRpc(uint32_t entity_id, uint32_t rpc_id,
+void CellAppNativeProvider::SendClientRpc(uint32_t entity_id, uint32_t rpc_id, RpcTarget target,
                                           const std::byte* payload, int32_t len) {
-  auto* entity = lookup_ ? lookup_(entity_id) : nullptr;
-  if (!entity) {
+  auto* source = lookup_ ? lookup_(entity_id) : nullptr;
+  if (!source) {
     ATLAS_LOG_WARNING("CellApp: SendClientRpc: unknown entity_id={}", entity_id);
+    return;
+  }
+  if (!source->IsReal()) {
+    ATLAS_LOG_WARNING("CellApp: SendClientRpc on Ghost entity_id={} — rejected", entity_id);
     return;
   }
   if (!network_) {
@@ -63,20 +65,36 @@ void CellAppNativeProvider::SendClientRpc(uint32_t entity_id, uint32_t rpc_id,
         "(handler-level test?); cannot route to BaseApp");
     return;
   }
-  // Route back to the owning BaseApp via SelfRpcFromCell. BaseApp's
-  // OnSelfRpcFromCell relays to the client on the RUDP channel using
-  // rpc_id as the wire msg_id.
-  auto base_ch = network_->ConnectRudpNocwnd(entity->BaseAddr());
-  if (!base_ch) {
-    ATLAS_LOG_ERROR("CellApp: SendClientRpc: cannot connect to base at {} for entity {}",
-                    entity->BaseAddr().ToString(), entity_id);
-    return;
+
+  // One BroadcastRpcFromCell per destination BaseApp.
+  std::unordered_map<Address, std::vector<EntityID>> by_baseapp;
+  const auto source_base_id = source->BaseEntityId();
+  const auto& source_base_addr = source->BaseAddr();
+
+  if (target != RpcTarget::kOthers) {
+    by_baseapp[source_base_addr].push_back(source_base_id);
   }
-  baseapp::SelfRpcFromCell msg;
-  msg.base_entity_id = entity->BaseEntityId();
-  msg.rpc_id = rpc_id;
-  msg.payload.assign(payload, payload + len);
-  (void)(*base_ch)->SendMessage(msg);
+  if (target != RpcTarget::kOwner) {
+    // O(W) over observers; independent of population size.
+    for (Witness* w : source->Observers()) {
+      CellEntity& observer = w->Owner();
+      by_baseapp[observer.BaseAddr()].push_back(observer.BaseEntityId());
+    }
+  }
+
+  for (auto& [base_addr, ids] : by_baseapp) {
+    auto base_ch = network_->ConnectRudpNocwnd(base_addr);
+    if (!base_ch) {
+      ATLAS_LOG_WARNING("CellApp: SendClientRpc: cannot connect to base at {}",
+                        base_addr.ToString());
+      continue;
+    }
+    baseapp::BroadcastRpcFromCell msg;
+    msg.rpc_id = rpc_id;
+    msg.dest_entity_ids = std::move(ids);
+    if (len > 0) msg.payload.assign(payload, payload + len);
+    (void)(*base_ch)->SendMessage(msg);
+  }
 }
 
 void CellAppNativeProvider::SetEntityPosition(uint32_t entity_id, float x, float y, float z) {
@@ -85,17 +103,11 @@ void CellAppNativeProvider::SetEntityPosition(uint32_t entity_id, float x, float
     ATLAS_LOG_WARNING("atlas_set_position: unknown entity_id={}", entity_id);
     return;
   }
-  // Ghosts are read-only mirrors of a remote Real. A script running on
-  // this CellApp that tries to write a Ghost's position is almost
-  // always a logic bug — log and drop (soft guard).
+  // Ghosts are read-only mirrors; reject (soft guard).
   if (!entity->IsReal()) {
     ATLAS_LOG_WARNING("atlas_set_position on Ghost entity_id={} — rejected", entity_id);
     return;
   }
-  // SetPosition handles the RangeList shuffle; the MarkVolatileDirty on
-  // the C# side happens when the script property setter runs, so here we
-  // just propagate the coordinate change. (The C#-layer dirty flip is
-  // what ultimately advances VolatileSeq in the next replication frame.)
   entity->SetPosition(math::Vector3{x, y, z});
 }
 
@@ -124,10 +136,8 @@ void CellAppNativeProvider::PublishReplicationFrame(
   if (other_delta_len > 0 && other_delta != nullptr) {
     frame.other_delta.assign(other_delta, other_delta + other_delta_len);
   }
-  // The C# side passes frame position/direction implicitly via the prior
-  // SetEntityPosition call; here we just adopt the entity's current
-  // position so PublishReplicationFrame's volatile branch doesn't
-  // overwrite it with stale zeros.
+  // Adopt current pos/dir (set earlier by SetEntityPosition) so the
+  // volatile branch doesn't overwrite with stale zeros.
   frame.position = entity->Position();
   frame.direction = entity->Direction();
   frame.on_ground = entity->OnGround();
@@ -143,16 +153,9 @@ void CellAppNativeProvider::PublishReplicationFrame(
 
   entity->PublishReplicationFrame(std::move(frame), owner_snap_span, other_snap_span);
 
-  // Owner-scope direct forward. Witness::HandleAoIEnter skips `&peer ==
-  // &owner_`, so its AoI pump never carries the owner's own
-  // client-visible property changes. Own-scope flows on a dedicated
-  // path that does not go through the AoI witness.
-  //
-  // Routing: envelope [kind=kEntityPropertyUpdate][base_id u32][event_seq
-  // u64][owner_delta bytes] → ReplicatedReliableDeltaFromCell (msg 2017) to
-  // the BaseApp → 0xF003 to the client. Format is byte-identical to what
-  // Witness produces for peer deltas, so Atlas.Client.ClientCallbacks
-  // decodes both paths with the same DispatchAoIEnvelope handler.
+  // Owner-scope direct path: Witness skips `&peer == &owner_`, so its
+  // AoI pump never carries owner-visible property changes. Envelope
+  // is byte-identical to Witness output; client uses the same decoder.
   if (owner_delta_len > 0 && event_seq > 0 && entity->HasWitness() && network_) {
     auto base_ch = network_->ConnectRudpNocwnd(entity->BaseAddr());
     if (base_ch) {
@@ -219,12 +222,9 @@ auto CellAppNativeProvider::AddProximityController(uint32_t entity_id, float ran
     ATLAS_LOG_WARNING("atlas_add_proximity_controller on Ghost entity_id={} — rejected", entity_id);
     return 0;
   }
-  // Route enter/leave crossings to the C# runtime via the
-  // proximity_event_fn_ callback. The lambdas capture (this,
-  // entity_id, user_arg) so a single controller's events always carry
-  // the script's disambiguation handle back to C#. Non-entity
-  // crossings (sentinel / trigger-bound nodes) are filtered via the
-  // RangeListOrder check — matching AoITrigger's OwnerOf helper.
+  // Lambdas capture (this, entity_id, user_arg) so each controller's
+  // events carry its script handle. RangeListOrder check filters non-
+  // entity crossings (matches AoITrigger::OwnerOf).
   auto dispatch = [this, entity_id, user_arg](RangeListNode& other, uint8_t is_enter) {
     if (proximity_event_fn_ == nullptr) return;
     if (other.Order() != RangeListOrder::kEntity) return;
@@ -254,7 +254,7 @@ void CellAppNativeProvider::CancelController(uint32_t entity_id, int32_t control
 }
 
 void CellAppNativeProvider::SetNativeCallbacks(const void* native_callbacks, int32_t len) {
-  // Minimum = 4 legacy entries (restore + get_data + destroyed + dispatch).
+  // Minimum = original 4 entries (restore + get_data + destroyed + dispatch).
   constexpr int32_t kMinTableBytes =
       static_cast<int32_t>(sizeof(RestoreEntityFn) + sizeof(GetEntityDataFn) +
                            sizeof(EntityDestroyedFn) + sizeof(DispatchRpcFn));
@@ -271,20 +271,12 @@ void CellAppNativeProvider::SetNativeCallbacks(const void* native_callbacks, int
   restore_entity_fn_ = table.restore_entity;
   dispatch_rpc_fn_ = table.dispatch_rpc;
   entity_destroyed_fn_ = table.entity_destroyed;
-  // Older runtimes without serialize_entity leave it as the
-  // memset-initialised nullptr; CellApp treats that as "no C# blob
-  // available" and continues serving Offload with just the replication
-  // baseline.
+  // nullptr ⇒ Offload ships empty persistent_blob (replication baseline covers it).
   serialize_entity_fn_ = table.serialize_entity;
-  // get_owner_snapshot feeds CellApp::TickClientBaselinePump; without
-  // it the pump short-circuits and no baseline leaves the cell
-  // (acceptable on tests without a C# runtime). get_entity_data is
-  // CellApp-side unused today (no DB persistence from cell).
+  // nullptr ⇒ TickClientBaselinePump short-circuits.
   get_owner_snapshot_fn_ = table.get_owner_snapshot;
-  // Consumed by AddProximityController's lambdas. Absence ⇒ no
-  // proximity events propagate to scripts; the trigger still fires
-  // internally (Offload membership still works) but script-side
-  // onProximityEnter / onProximityLeave never run.
+  // nullptr ⇒ trigger still fires for Offload bookkeeping, but script
+  // onProximityEnter/Leave never run.
   proximity_event_fn_ = table.proximity_event;
   ATLAS_LOG_INFO("CellApp: native callback table registered (len={})", len);
 }

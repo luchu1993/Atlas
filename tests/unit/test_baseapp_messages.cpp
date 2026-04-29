@@ -109,34 +109,20 @@ TEST(BaseAppMessages, CellRpcForward) {
   EXPECT_EQ(rt->payload[1], std::byte{0xBB});
 }
 
-TEST(BaseAppMessages, SelfRpcFromCell) {
-  SelfRpcFromCell msg;
-  msg.base_entity_id = 3;
-  msg.rpc_id = 77;
-  msg.payload = {std::byte{0x01}, std::byte{0x02}};
-
-  auto rt = round_trip(msg);
-  ASSERT_TRUE(rt.has_value());
-  EXPECT_EQ(rt->base_entity_id, 3u);
-  EXPECT_EQ(rt->rpc_id, 77u);
-  EXPECT_EQ(rt->payload.size(), 2u);
-  EXPECT_FALSE(SelfRpcFromCell::Descriptor().IsUnreliable());
-}
-
 TEST(BaseAppMessages, BroadcastRpcFromCell) {
   BroadcastRpcFromCell msg;
-  msg.base_entity_id = 4;
   msg.rpc_id = 88;
-  msg.target = 1;
+  msg.dest_entity_ids = {3u, 4u, 5u};
   msg.payload = {std::byte{0xAA}, std::byte{0xBB}, std::byte{0xCC}};
 
   auto rt = round_trip(msg);
   ASSERT_TRUE(rt.has_value());
-  EXPECT_EQ(rt->base_entity_id, 4u);
   EXPECT_EQ(rt->rpc_id, 88u);
-  EXPECT_EQ(rt->target, 1u);
+  ASSERT_EQ(rt->dest_entity_ids.size(), 3u);
+  EXPECT_EQ(rt->dest_entity_ids[0], 3u);
+  EXPECT_EQ(rt->dest_entity_ids[2], 5u);
   EXPECT_EQ(rt->payload.size(), 3u);
-  EXPECT_TRUE(BroadcastRpcFromCell::Descriptor().IsUnreliable());
+  EXPECT_FALSE(BroadcastRpcFromCell::Descriptor().IsUnreliable());
 }
 
 TEST(BaseAppMessages, ReplicatedDeltaFromCell) {
@@ -267,17 +253,17 @@ TEST(BaseAppMessages, ThreePathDeltaContract) {
   EXPECT_FALSE(ReplicatedReliableDeltaFromCell::Descriptor().IsUnreliable())
       << "Path #2 MUST be Reliable; it carries ordered property deltas (event_seq).";
 
-  // Path #3 — Reliable owner RPC, bypasses DeltaForwarder, direct via rpc_id.
-  EXPECT_FALSE(SelfRpcFromCell::Descriptor().IsUnreliable())
+  // Path #3 — Reliable owner/broadcast RPC, dispatched per-entity via rpc_id.
+  EXPECT_FALSE(BroadcastRpcFromCell::Descriptor().IsUnreliable())
       << "Path #3 MUST be Reliable; RPC calls cannot tolerate drops.";
 
   // All three paths use distinct internal message IDs (so dispatch is unambiguous).
   const auto unreliable_id = ReplicatedDeltaFromCell::Descriptor().id;
   const auto reliable_id = ReplicatedReliableDeltaFromCell::Descriptor().id;
-  const auto self_rpc_id = SelfRpcFromCell::Descriptor().id;
+  const auto rpc_id = BroadcastRpcFromCell::Descriptor().id;
   EXPECT_NE(unreliable_id, reliable_id);
-  EXPECT_NE(unreliable_id, self_rpc_id);
-  EXPECT_NE(reliable_id, self_rpc_id);
+  EXPECT_NE(unreliable_id, rpc_id);
+  EXPECT_NE(reliable_id, rpc_id);
 }
 
 TEST(BaseAppMessages, ReplicatedBaselineToClient) {
@@ -330,13 +316,13 @@ TEST(BaseAppMessages, PackedIntBoundaries) {
   // Large payload size in BroadcastRpcFromCell (crosses 0xFE boundary)
   {
     BroadcastRpcFromCell msg;
-    msg.base_entity_id = 42;
     msg.rpc_id = 1;
-    msg.target = 2;
+    msg.dest_entity_ids = {42u};
     msg.payload.assign(300, std::byte{0xAB});
     auto rt = round_trip(msg);
     ASSERT_TRUE(rt.has_value());
-    EXPECT_EQ(rt->base_entity_id, 42u);
+    ASSERT_EQ(rt->dest_entity_ids.size(), 1u);
+    EXPECT_EQ(rt->dest_entity_ids[0], 42u);
     EXPECT_EQ(rt->payload.size(), 300u);
     EXPECT_EQ(rt->payload[299], std::byte{0xAB});
   }

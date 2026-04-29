@@ -12,27 +12,10 @@ namespace atlas {
 
 class Channel;
 
-// ============================================================================
-// DeltaForwarder — per-client UNRELIABLE latest-wins delta relay.
-//
-// Queues ReplicatedDeltaFromCell (msg 2015) payloads and flushes them each
-// tick under a byte budget. Same-entity writes replace the queued entry
-// (latest-wins); deferred_ticks boosts starved entries on the next flush.
-//
-// INVARIANT: only unreliable volatile state (position/orientation) goes
-// here — anything cumulative must use ReplicatedReliableDeltaFromCell
-// (msg 2017, path #2 below) or its frames will be silently dropped.
-//
-// CellApp → Client paths:
-//   1. ReplicatedDeltaFromCell         (msg 2015, Unreliable)
-//        → this forwarder → client msg 0xF001
-//   2. ReplicatedReliableDeltaFromCell (msg 2017, Reliable)
-//        → direct to client channel   → client msg 0xF003
-//   3. SelfRpcFromCell / BroadcastRpcFromCell (msg 2014 / 2016)
-//        → BaseApp::RelayRpcToClient   → client msg 0xF004 (envelope:
-//                                        u32 rpc_id + serialized args)
-// ============================================================================
-
+// Per-client UNRELIABLE latest-wins delta relay for ReplicatedDeltaFromCell
+// (msg 2015) → client msg 0xF001. Same-entity writes replace the queued
+// entry. INVARIANT: only volatile state (pos/orientation); cumulative state
+// must use ReplicatedReliableDeltaFromCell (msg 2017) or it will be dropped.
 class DeltaForwarder {
  public:
   struct Stats {
@@ -41,25 +24,17 @@ class DeltaForwarder {
     uint64_t force_sent_count{0};  // entries flushed past the budget cap
   };
 
-  // Starvation cap: an entry that has been deferred this many consecutive
-  // flushes is force-sent on the next Flush, regardless of the byte
-  // budget. Prevents an entity stuck behind a steady stream of
-  // higher-priority traffic from waiting forever.
+  // Force-send threshold: prevents starvation behind steady high-priority
+  // traffic.
   static constexpr uint32_t kMaxDeferredTicks = 120;
 
-  /// Enqueue or replace a delta for the given entity.
-  /// `priority` biases Flush ordering — higher goes first. A same-entity
-  /// replace takes max(existing_priority, new_priority) so a low-priority
-  /// write can't demote an entry an earlier high-priority producer
-  /// deliberately boosted.
+  // Replace takes max(existing, new) priority so a low-priority write
+  // cannot demote an entry an earlier producer deliberately boosted.
   void Enqueue(EntityID entity_id, std::span<const std::byte> delta, uint16_t priority = 0);
 
-  /// Flush queued deltas to `client_ch` using reserved message ID,
-  /// stopping when `budget_bytes` would be exceeded.
-  /// Returns the number of bytes actually sent.
+  // Returns bytes actually sent.
   auto Flush(Channel& client_ch, uint32_t budget_bytes) -> uint32_t;
 
-  /// Current queue depth (number of pending entities).
   [[nodiscard]] auto QueueDepth() const -> std::size_t { return queue_.size(); }
 
   [[nodiscard]] auto GetStats() const -> const Stats& { return stats_; }
