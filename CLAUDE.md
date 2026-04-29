@@ -111,6 +111,7 @@ See `docs/CODING_STYLE.md` for the full project style guide.
 - Smart pointers: `std::unique_ptr`, `std::shared_ptr`, and custom `IntrusivePtr<T>`
 - All new code should have unit tests (Google Test)
 - In the absence of explicit style guidelines, follow Google C++ Style Guide
+- **Comments**: code self-documents; only comment when intent is non-obvious. Comments must be concise (one line preferred). Don't restate what the code says — explain *why*, hidden invariants, or surprising trade-offs. No long historical narratives, redundant section banners, or per-field obvious explanations.
 
 ## Testing
 

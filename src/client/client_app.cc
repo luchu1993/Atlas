@@ -16,7 +16,6 @@
 #include <thread>
 
 #include "baseapp/baseapp_messages.h"
-#include "baseapp/delta_forwarder.h"
 #include "loginapp/login_messages.h"
 
 namespace atlas {
@@ -473,9 +472,9 @@ auto ClientApp::MainLoop() -> int {
   //     fall-through here would be a wire-format mismatch.
   network_.InterfaceTable().SetDefaultHandler([this](const Address&, Channel*, MessageID msg_id,
                                                      BinaryReader& reader) {
-    const bool is_state_channel = msg_id == DeltaForwarder::kClientDeltaMessageId ||
-                                  msg_id == DeltaForwarder::kClientBaselineMessageId ||
-                                  msg_id == DeltaForwarder::kClientReliableDeltaMessageId;
+    const bool is_state_channel = msg_id == baseapp::kClientDeltaMessageId ||
+                                  msg_id == baseapp::kClientBaselineMessageId ||
+                                  msg_id == baseapp::kClientReliableDeltaMessageId;
 
     const uint8_t* payload_ptr = nullptr;
     int32_t payload_len = 0;
@@ -513,7 +512,7 @@ auto ClientApp::MainLoop() -> int {
       return;
     }
 
-    if (msg_id == DeltaForwarder::kClientRpcMessageId) {
+    if (msg_id == baseapp::kClientRpcMessageId) {
       if (payload_len < static_cast<int32_t>(sizeof(uint32_t))) {
         ATLAS_LOG_WARNING("Client: RPC envelope too short ({} bytes)", payload_len);
         return;

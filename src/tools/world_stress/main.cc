@@ -18,7 +18,6 @@
 #include <vector>
 
 #include "baseapp/baseapp_messages.h"
-#include "baseapp/delta_forwarder.h"
 #include "foundation/clock.h"
 #include "loginapp/login_messages.h"
 #include "network/channel.h"
@@ -553,7 +552,7 @@ class Session {
 
     // Server → client RPC envelope: body is [u32 rpc_id][serialized args].
     // EchoReply rpc_id = 0x0201 (direction=0, type_index=2, method_index=1).
-    if (id == DeltaForwarder::kClientRpcMessageId) {
+    if (id == baseapp::kClientRpcMessageId) {
       if (payload.size() < sizeof(uint32_t)) return true;
       uint32_t rpc_id = 0;
       std::memcpy(&rpc_id, payload.data(), sizeof(uint32_t));

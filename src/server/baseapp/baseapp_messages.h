@@ -1112,6 +1112,71 @@ struct ForceLogoffAck {
 };
 static_assert(NetworkMessage<ForceLogoffAck>);
 
+// Client-facing reserved wire IDs (0xF000 range).  Producers in BaseApp
+// + DeltaForwarder; client routes these via SetDefaultHandler.
+inline constexpr MessageID kClientDeltaMessageId = static_cast<MessageID>(0xF001);
+inline constexpr MessageID kClientBaselineMessageId = static_cast<MessageID>(0xF002);
+inline constexpr MessageID kClientReliableDeltaMessageId = static_cast<MessageID>(0xF003);
+inline constexpr MessageID kClientRpcMessageId = static_cast<MessageID>(0xF004);
+
+// Send-only envelopes — span borrows caller's storage for the
+// synchronous SendMessage call.  Deserialize errors out because the
+// client intercepts these wire ids before typed dispatch fires.
+
+struct ClientDeltaEnvelope {
+  std::span<const std::byte> bytes;
+
+  static auto Descriptor() -> const MessageDesc& {
+    static const MessageDesc kDesc{kClientDeltaMessageId,           "baseapp::ClientDeltaEnvelope",
+                                   MessageLengthStyle::kVariable,   -1,
+                                   MessageReliability::kUnreliable, MessageUrgency::kBatched};
+    return kDesc;
+  }
+  void Serialize(BinaryWriter& w) const { w.WriteBytes(bytes); }
+  static auto Deserialize(BinaryReader&) -> Result<ClientDeltaEnvelope> {
+    return Error{ErrorCode::kInvalidArgument, "ClientDeltaEnvelope is send-only"};
+  }
+};
+static_assert(NetworkMessage<ClientDeltaEnvelope>);
+
+struct ClientReliableDeltaEnvelope {
+  std::span<const std::byte> bytes;
+
+  static auto Descriptor() -> const MessageDesc& {
+    static const MessageDesc kDesc{
+        kClientReliableDeltaMessageId, "baseapp::ClientReliableDeltaEnvelope",
+        MessageLengthStyle::kVariable, -1,
+        MessageReliability::kReliable, MessageUrgency::kBatched};
+    return kDesc;
+  }
+  void Serialize(BinaryWriter& w) const { w.WriteBytes(bytes); }
+  static auto Deserialize(BinaryReader&) -> Result<ClientReliableDeltaEnvelope> {
+    return Error{ErrorCode::kInvalidArgument, "ClientReliableDeltaEnvelope is send-only"};
+  }
+};
+static_assert(NetworkMessage<ClientReliableDeltaEnvelope>);
+
+// Body: [u32 rpc_id][args].  rpc_id = slot:8 | method:24.
+struct ClientRpcEnvelope {
+  uint32_t rpc_id{0};
+  std::span<const std::byte> args;
+
+  static auto Descriptor() -> const MessageDesc& {
+    static const MessageDesc kDesc{kClientRpcMessageId,           "baseapp::ClientRpcEnvelope",
+                                   MessageLengthStyle::kVariable, -1,
+                                   MessageReliability::kReliable, MessageUrgency::kImmediate};
+    return kDesc;
+  }
+  void Serialize(BinaryWriter& w) const {
+    w.Write(rpc_id);
+    w.WriteBytes(args);
+  }
+  static auto Deserialize(BinaryReader&) -> Result<ClientRpcEnvelope> {
+    return Error{ErrorCode::kInvalidArgument, "ClientRpcEnvelope is send-only"};
+  }
+};
+static_assert(NetworkMessage<ClientRpcEnvelope>);
+
 }  // namespace atlas::baseapp
 
 #endif  // ATLAS_SERVER_BASEAPP_BASEAPP_MESSAGES_H_
