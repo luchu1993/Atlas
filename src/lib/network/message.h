@@ -42,10 +42,14 @@ enum class MessageReliability : uint8_t {
 // flushes immediately (kImmediate).  Independent of reliability —
 // every (reliability × urgency) combination is meaningful.
 //
-// Default is kImmediate so adding the field is behaviour-preserving;
-// the descriptor audit to flip the default lands in a separate commit.
+// Default is kBatched.  Every must-stay-immediate descriptor (PvP
+// command path, login / handshake, all *Ack, machined control
+// plane, manager registration, cellapp migration handshake,
+// witness control, space topology, GlobalBase) is explicitly
+// annotated with kImmediate per docs/optimization/channel_send_batching.md
+// "Immediate whitelist" — see 0042 for the full audit pass.
 //
-// kImmediate uses cases:
+// kImmediate use cases:
 //   - Handshake / login / channel teardown
 //   - PvP-critical command paths (combat actions, hit confirms)
 //   - Anything where the caller awaits the syscall result
@@ -63,7 +67,7 @@ struct MessageDesc {
   MessageLengthStyle length_style;
   int32_t fixed_length;                                           // bytes, only for Fixed style
   MessageReliability reliability{MessageReliability::kReliable};  // delivery guarantee
-  MessageUrgency urgency{MessageUrgency::kImmediate};             // batching opt-in
+  MessageUrgency urgency{MessageUrgency::kBatched};               // batching opt-out
 
   [[nodiscard]] constexpr auto IsFixed() const -> bool {
     return length_style == MessageLengthStyle::kFixed;

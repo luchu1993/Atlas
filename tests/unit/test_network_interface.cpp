@@ -19,7 +19,12 @@ struct NetTestMsg {
   uint32_t value;
 
   static auto Descriptor() -> const MessageDesc& {
-    static const MessageDesc desc{200, "NetTestMsg", MessageLengthStyle::kVariable, -1};
+    static const MessageDesc desc{200,
+                                  "NetTestMsg",
+                                  MessageLengthStyle::kVariable,
+                                  -1,
+                                  MessageReliability::kReliable,
+                                  MessageUrgency::kImmediate};
     return desc;
   }
 
