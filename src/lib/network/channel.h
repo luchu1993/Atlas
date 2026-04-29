@@ -86,6 +86,16 @@ class Channel {
   // Default implementation falls back to send() (TCP is always reliable).
   [[nodiscard]] virtual auto SendUnreliable() -> Result<void>;
 
+  // Drain any messages staged via the kBatched path (DeferredBundleFor +
+  // OnDeferredAppend).  Default no-op: a channel that returns nullptr
+  // from DeferredBundleFor never accumulates anything to flush.  RUDP
+  // and TCP override; UDP keeps the default since each datagram is an
+  // independent send and there is no application-level bundle to drain.
+  // Called by NetworkInterface::FlushDirtySendChannels at the end of
+  // every readable callback and by ServerApp::FlushTickDirtyChannels at
+  // tick close — see docs/optimization/channel_send_batching.md.
+  [[nodiscard]] virtual auto FlushDeferred() -> Result<void> { return Result<void>{}; }
+
   // Mark-dirty callback installed by NetworkInterface.  When a channel
   // appends to its deferred bundle, it invokes the callback so the
   // owning interface can register the channel for tick-end flush.  The

@@ -195,6 +195,57 @@ auto TcpChannel::DoSend(std::span<const std::byte> data) -> Result<size_t> {
   return static_cast<size_t>(data.size());
 }
 
+auto TcpChannel::DeferredBundleFor(const MessageDesc& /*desc*/) -> class Bundle* {
+  if (state_ == ChannelState::kCondemned) return nullptr;
+  // TCP is always reliable on the wire — descriptor.IsUnreliable() is a
+  // no-op here.  Single bundle for both reliability axes.
+  return &deferred_bundle_;
+}
+
+auto TcpChannel::OnDeferredAppend(const MessageDesc& /*desc*/, std::size_t total_size)
+    -> Result<void> {
+  NotifyDirty();
+  if (total_size >= kDeferredFlushThreshold) {
+    return FlushDeferred();
+  }
+  return Result<void>{};
+}
+
+auto TcpChannel::FlushDeferred() -> Result<void> {
+  if (state_ == ChannelState::kCondemned) {
+    deferred_bundle_.Clear();
+    return Error(ErrorCode::kChannelCondemned, "Channel is condemned");
+  }
+  if (deferred_bundle_.empty()) {
+    return Result<void>{};
+  }
+
+  // Drain the deferred bundle through the same Send() entry the
+  // immediate path uses — packet_filter, frame header, write buffer
+  // append all happen once for the whole batched payload.  bundle_
+  // (the parent Channel's per-immediate-send buffer) is independent
+  // and untouched here.
+  auto data = deferred_bundle_.Finalize();
+
+  if (packet_filter_) {
+    auto filtered =
+        packet_filter_->SendFilter(std::span<const std::byte>(data.data(), data.size()));
+    if (!filtered) {
+      ATLAS_LOG_WARNING("TcpChannel deferred send_filter failed for {}: {} ({} bytes lost)",
+                        remote_.ToString(), filtered.Error().Message(), data.size());
+      return filtered.Error();
+    }
+    data = std::move(*filtered);
+  }
+
+  auto result = DoSend(data);
+  if (!result) {
+    return result.Error();
+  }
+  bytes_sent_ += *result;
+  return Result<void>{};
+}
+
 void TcpChannel::OnCondemned() {
   CancelRecvBufferShrink();
   CancelWriteBufferShrink();
@@ -211,6 +262,8 @@ void TcpChannel::OnCondemned() {
 
   write_buffer_.Clear();
   write_buffer_.ShrinkToFit();
+
+  deferred_bundle_.Clear();
 
   write_registered_ = false;
 }

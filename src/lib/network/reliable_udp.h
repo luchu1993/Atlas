@@ -82,7 +82,7 @@ class ReliableUdpChannel : public Channel {
   // first error encountered while flushing the unreliable bundle, then
   // (best effort) the reliable bundle. Idempotent — empty bundles
   // short-circuit.
-  [[nodiscard]] auto FlushDeferred() -> Result<void>;
+  [[nodiscard]] auto FlushDeferred() -> Result<void> override;
 
   // Whether either deferred bundle has any pending messages. Lets the
   // caller skip the FlushDeferred call cheaply when nothing was buffered.

@@ -4,6 +4,7 @@
 #include <optional>
 
 #include "foundation/containers/byte_ring_buffer.h"
+#include "network/bundle.h"
 #include "network/channel.h"
 #include "network/socket.h"
 
@@ -33,9 +34,22 @@ class TcpChannel : public Channel {
   void OnReadable();
   void OnWritable();
 
+  // Drain the deferred bundle (kBatched messages) into a single TCP
+  // frame.  TCP is always reliable, so one bundle suffices (no
+  // unreliable side).  Idempotent — empty bundle short-circuits.
+  [[nodiscard]] auto FlushDeferred() -> Result<void> override;
+
  protected:
   [[nodiscard]] auto DoSend(std::span<const std::byte> data) -> Result<size_t> override;
   void OnCondemned() override;
+
+  // Channel batching hooks.  Returns the single deferred bundle (TCP
+  // has no reliability axis to split on); OnDeferredAppend marks the
+  // channel dirty and triggers an inline flush once the bundle would
+  // approach the TCP write_buffer_ cap.
+  [[nodiscard]] auto DeferredBundleFor(const MessageDesc& desc) -> class Bundle* override;
+  [[nodiscard]] auto OnDeferredAppend(const MessageDesc& desc, std::size_t total_size)
+      -> Result<void> override;
 
  private:
   [[nodiscard]] auto EnsureRecvWritable() -> bool;
@@ -58,6 +72,14 @@ class TcpChannel : public Channel {
   TimerHandle write_buffer_shrink_timer_;
 
   bool write_registered_{false};
+
+  // Deferred bundle for kBatched messages.  Single bundle (TCP is
+  // always reliable, no unreliable axis).  Drained by FlushDeferred.
+  // Threshold sits well under kMaxWriteBufferSize so an inline flush
+  // never overflows the ring buffer; it's an OOM safety net like
+  // RUDP's threshold, not a per-flush boundary.
+  class Bundle deferred_bundle_;
+  static constexpr std::size_t kDeferredFlushThreshold = 192 * 1024;
 };
 
 }  // namespace atlas

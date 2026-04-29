@@ -674,23 +674,20 @@ void NetworkInterface::OnRudpReadable() {
 
 void NetworkInterface::FlushDirtySendChannels() {
   // Iterate by move-and-clear so a channel that re-dirties itself
-  // mid-flush (e.g. a packet_filter chain that happens to call back
-  // into BufferMessageDeferred) lands in a fresh set instead of an
-  // iterator we're still walking.
+  // mid-flush (e.g. a packet_filter chain that calls back into
+  // SendMessage with kBatched urgency) lands in a fresh set instead
+  // of an iterator we're still walking.
   if (dirty_channels_.empty()) return;
   ATLAS_PROFILE_ZONE_N("NetworkInterface::FlushDirtySendChannels");
   std::unordered_set<Channel*> snapshot;
   snapshot.swap(dirty_channels_);
   for (Channel* ch : snapshot) {
-    // Only RUDP channels actually batch (see Channel::BufferMessageDeferred
-    // default fallback for TCP/UDP), but the dirty set is base-class so
-    // the cast may legitimately fail for non-RUDP entries that called
-    // the fallback path — treat those as already flushed.
-    if (auto* rudp = dynamic_cast<ReliableUdpChannel*>(ch)) {
-      if (auto r = rudp->FlushDeferred(); !r) {
-        ATLAS_LOG_DEBUG("FlushDirty: channel {} returned {}", ch->RemoteAddress().ToString(),
-                        r.Error().Message());
-      }
+    // Channel::FlushDeferred is virtual; the default no-op covers
+    // transports without a deferred bundle (plain UDP).  RUDP and
+    // TCP both override.  No dynamic_cast needed.
+    if (auto r = ch->FlushDeferred(); !r) {
+      ATLAS_LOG_DEBUG("FlushDirty: channel {} returned {}", ch->RemoteAddress().ToString(),
+                      r.Error().Message());
     }
   }
 }

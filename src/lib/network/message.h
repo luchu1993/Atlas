@@ -38,9 +38,21 @@ enum class MessageReliability : uint8_t {
 };
 
 // Urgency controls whether SendMessage on a batching-capable channel
-// (RUDP) appends to a per-channel deferred bundle (kBatched) or
-// flushes immediately (kImmediate).  Independent of reliability —
-// every (reliability × urgency) combination is meaningful.
+// appends to a per-channel deferred bundle (kBatched) or flushes
+// immediately (kImmediate).  Independent of reliability — every
+// (reliability × urgency) combination is meaningful.
+//
+// Transport behaviour:
+//   - ReliableUdpChannel : kBatched accumulates in deferred_*_bundle_,
+//                          flushed by FlushDirtySendChannels — real
+//                          syscall coalescing (the primary win).
+//   - TcpChannel         : kBatched accumulates in a single deferred
+//                          bundle, flushed at the same hooks —
+//                          amortises Bundle::Finalize + packet_filter
+//                          + frame-header writes; kernel write buffer
+//                          + Nagle still coalesce on the wire.
+//   - UdpChannel         : urgency is ignored — each datagram is
+//                          independent, no application-level bundle.
 //
 // Default is kBatched.  Every must-stay-immediate descriptor (PvP
 // command path, login / handshake, all *Ack, machined control

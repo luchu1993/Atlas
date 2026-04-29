@@ -18,7 +18,12 @@ struct ChannelTestMsg {
   std::string payload;
 
   static auto Descriptor() -> const MessageDesc& {
-    static const MessageDesc desc{100, "ChannelTestMsg", MessageLengthStyle::kVariable, -1};
+    static const MessageDesc desc{100,
+                                  "ChannelTestMsg",
+                                  MessageLengthStyle::kVariable,
+                                  -1,
+                                  MessageReliability::kReliable,
+                                  MessageUrgency::kImmediate};
     return desc;
   }
 
@@ -243,4 +248,76 @@ TEST_F(ChannelTest, BytesSentIncreasesAfterSend) {
 
   // bytes_sent should now be > 0
   EXPECT_GT(channel.BytesSent(), 0u);
+}
+
+// kBatched test message — exercises TcpChannel::DeferredBundleFor /
+// OnDeferredAppend / FlushDeferred end-to-end.
+struct TcpBatchedMsg {
+  uint32_t seq;
+
+  static auto Descriptor() -> const MessageDesc& {
+    static const MessageDesc desc{101,
+                                  "TcpBatchedMsg",
+                                  MessageLengthStyle::kVariable,
+                                  -1,
+                                  MessageReliability::kReliable,
+                                  MessageUrgency::kBatched};
+    return desc;
+  }
+
+  void Serialize(BinaryWriter& w) const { w.Write<uint32_t>(seq); }
+
+  static auto Deserialize(BinaryReader& r) -> Result<TcpBatchedMsg> {
+    auto s = r.Read<uint32_t>();
+    if (!s) return s.Error();
+    return TcpBatchedMsg{*s};
+  }
+};
+
+TEST_F(ChannelTest, TcpDeferredPathBatchesUntilFlush) {
+  // SendMessage with a kBatched descriptor should accumulate in
+  // TcpChannel's deferred bundle without hitting the wire — the
+  // dirty-channels callback fires (NotifyDirty) but bytes_sent_
+  // stays at 0 until FlushDeferred runs.  After FlushDeferred a
+  // single TCP frame containing both messages goes out.
+  auto sock = Socket::CreateTcp();
+  ASSERT_TRUE(sock.HasValue());
+  ASSERT_TRUE(sock->SetNonBlocking(true).HasValue());
+  ASSERT_TRUE(sock->Bind(Address("127.0.0.1", 0)).HasValue());
+  ASSERT_TRUE(sock->Listen().HasValue());
+  auto server_addr = sock->LocalAddress().Value();
+
+  auto client_sock = Socket::CreateTcp();
+  ASSERT_TRUE(client_sock.HasValue());
+  (void)client_sock->Connect(server_addr);
+
+  std::this_thread::sleep_for(std::chrono::milliseconds(50));
+
+  auto accepted = sock->Accept();
+  ASSERT_TRUE(accepted.HasValue());
+
+  TcpChannel channel(dispatcher_, table_, std::move(*client_sock), server_addr);
+  channel.Activate();
+
+  int dirty_calls = 0;
+  channel.SetMarkDirtyCallback([&](Channel&) { ++dirty_calls; });
+
+  // First batched send — accumulates in deferred bundle, no wire bytes.
+  ASSERT_TRUE(channel.SendMessage(TcpBatchedMsg{1}).HasValue());
+  EXPECT_EQ(dirty_calls, 1) << "first batched append must NotifyDirty";
+  EXPECT_EQ(channel.BytesSent(), 0u) << "deferred bundle, no wire send yet";
+
+  // Second batched send — same bundle, still no wire bytes.
+  ASSERT_TRUE(channel.SendMessage(TcpBatchedMsg{2}).HasValue());
+  EXPECT_GE(dirty_calls, 2);
+  EXPECT_EQ(channel.BytesSent(), 0u);
+
+  // Explicit drain — both messages ship in a single TCP frame.
+  ASSERT_TRUE(channel.FlushDeferred().HasValue());
+  EXPECT_GT(channel.BytesSent(), 0u) << "FlushDeferred must produce wire bytes";
+
+  // Idempotent — second flush is a no-op.
+  const auto bytes_after_first_flush = channel.BytesSent();
+  ASSERT_TRUE(channel.FlushDeferred().HasValue());
+  EXPECT_EQ(channel.BytesSent(), bytes_after_first_flush);
 }
