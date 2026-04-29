@@ -136,8 +136,9 @@ Status legend: ✅ shipped · 🟡 unjustified at current data · 🔵 deferred
 | [rangelist_grid.md](rangelist_grid.md) | Spatial partitioning | 🔵 | `Space::Tick` is 0.019 % of CPU; not on any visible critical path |
 | [visibility_culling.md](visibility_culling.md) | AoI filtering | ⚪ | game-design dependent (fog-of-war / team filtering); defer until combat specs land |
 | [adaptive_ghost_throttle.md](adaptive_ghost_throttle.md) | Cross-cell sync | 🔵 | `CellApp::TickGhostPump` is 0.045 % of CPU — single-cellapp deployment in the current baseline |
-| [network_dispatch_decoupling.md](network_dispatch_decoupling.md) | RUDP receive ↔ dispatch decoupling (Plan B) | 📋 design only | superseded by Plan A (`2c3ced4`) for the 500-client/baseapp goal; revisit if A's per-callback yield runs out at higher per-process loads |
-| [channel_send_batching.md](channel_send_batching.md) | RUDP send-side coalescing via descriptor `urgency` flag | 📋 design only | flips `Channel::SendMessage` default to deferred; addresses BaseApp `Channel::Send` 6.30 M calls / 31.8 % CPU at 500 clients; revisit after `network_dispatch_decoupling` lands |
+| [network_dispatch_decoupling.md](network_dispatch_decoupling.md) | RUDP receive ↔ dispatch decoupling (Plan B) | ❌ reverted; A2 shipped instead | full Plan B was attempted (`49703d8`) then rolled back (`a78d540`); the surgical A2 — per-handler deadline yield via `DispatchMessagesBudgeted` + `pending_dispatch_buf_` — shipped (`c5680bd`) and covers the 500-client goal; full decoupling now subsumed by Plan D (`network_io_thread.md`) |
+| [channel_send_batching.md](channel_send_batching.md) | RUDP send-side coalescing via descriptor `urgency` flag (Plan C) | ✅ shipped | `7cfbb27` plumbing → `4057994` default flip → `938ca28`/`c44cb32` whitelist → `201a80a` cellapp dedupe → `0bd984c` OOM-only threshold → `bd5ca36` correctness fixes. Net: BaseApp `Channel::Send` 6.30 M / 31.8 % → 631 k / 3.1 % (-90 %); see "post-PR-2 baseline" section below |
+| [network_io_thread.md](network_io_thread.md) | Multi-thread RUDP socket I/O via SPSC queues (Plan D) | 📋 design only · deferred | dedicated network thread + moodycamel `ReaderWriterQueue`; deferred until a fresh baseline shows dispatcher saturation persists post-A/B/C; targets 1 000+ clients/baseapp |
 
 ## 500-client baseline (`b1782e5`, 2026-04-28)
 
@@ -249,6 +250,126 @@ Compared to 1-BA at 500 clients (`OnRudpReadable` mean 3.07 ms, max
 208 ms), the 2-BA per-process numbers are **6.8× / 4.1× lower mean**
 and **3.7× / 3.2× lower max**. Per-BaseApp CPU utilization is ~55 %
 on the RUDP read path — well clear of the saturation cliff.
+
+## 500-client baseline post-PR-2 (`0bd984c`, 2026-04-29)
+
+Same workload as `b1782e5` (single-baseapp / single-cellapp / single-Space,
+500 clients × 120 s).  Captures in `.tmp/prof/baseline/*4057994_20260429-145817*`.
+Plan C send-side batching (commits `7cfbb27` → `0bd984c`) ships the
+`MessageUrgency` descriptor + per-channel deferred bundles + tick-end
+flush.  Direct hit on the BaseApp `Channel::Send` hotspot identified in
+the 1-BA b1782e5 capture.
+
+### BaseApp delta (`b1782e5` → `0bd984c`)
+
+| Zone | calls (b → n) | mean (b → n) | total (b → n) | % CPU (b → n) |
+|---|---|---|---|---|
+| **Channel::Send** | **6 296 525 → 631 199** (▼ -90 %) | 6.91 µs → 6.69 µs | 43.5 s → 4.22 s | **31.8 % → 3.1 %** (▼ -90 %) |
+| NetworkInterface::FlushDirtySendChannels | n/a → 13 491 | n/a → 1.88 ms | n/a → 25.4 s | n/a → **18.6 %** (new) |
+| **Net send-side CPU** | | | | **31.8 % → 21.7 %** (▼ -32 %) |
+| NetworkInterface::OnRudpReadable | 30 669 → 493 973 | 3.07 ms → 134 µs | 94.2 s → 66.1 s | **68.9 % → 48.5 %** (▼ -30 %) |
+| Channel::HandleMessage | 6.59 M → 18.3 M | 11.5 µs → 2.20 µs | 76.0 s → 40.1 s | 55.6 % → 29.4 % |
+
+`Channel::Send` 6.30 M → 631 k is exactly the 10× collapse the design
+predicted: every batched descriptor (replication delta / RPC forward /
+ghost broadcast / entity create) now appends to the channel's deferred
+bundle and ships in one packet per (channel × tick).  The new
+`FlushDirtySendChannels` line absorbs ~19 % of CPU as the batching
+machinery cost, but the net (send + flush) drops 31.8 % → 21.7 %.
+
+`OnRudpReadable` calls jumped 16× (30 k → 494 k callbacks) but mean
+duration dropped 23× — the dispatcher now wakes more often with
+smaller per-callback batches, leaving more headroom for the timer
+wheel.  `Channel::HandleMessage` mean dropped 5× because handlers no
+longer fan out one immediate `Channel::Send` syscall each.
+
+### CellApp delta (`b1782e5` → `0bd984c`)
+
+| Zone | mean (b → n) | max (b → n) | calls (b → n) |
+|---|---|---|---|
+| Tick | 7.27 ms → 8.94 ms (▲ +23 %) | **68.3 ms → 27.1 ms** (▼ -60 %) | 1 951 → 1 953 |
+| CellApp::TickWitnesses | 5.52 ms → 7.42 ms (▲ +34 %) | **59.7 ms → 17.6 ms** (▼ -71 %) | same |
+| Witness::Update::Pump | 3.42 µs → 5.28 µs (▲ +55 %) | **15.3 ms → 706 µs** (▼ -95 %) | 787 k → 989 k |
+| Witness::SendEntityUpdate | 285 ns → 426 ns (▲ +50 %) | **15.3 ms → 693 µs** (▼ -95 %) | 8.41 M → 11.34 M |
+
+Means crept up 23–55 % from the descriptor-routing + dirty-set + flush
+hooks added to the per-call hot path.  In absolute terms cellapp tick
+moved from 7 % to 9 % of the 100 ms budget — well clear.  **The actual
+product win is the max column**: tail latency dropped 60–95 % across
+the witness pipeline.  PvP tick spikes that previously hit 60–68 ms
+(near the 67 ms BaseApp budget) now cap around 27 ms.  The 0044
+threshold rework (60 KB OOM-only vs 1200 B per-flush) is responsible
+for most of the mean recovery — at the original threshold mean was
++109 % / +148 % / +338 %.
+
+### Stress-run health (post-PR-2 vs `b1782e5`)
+
+| Signal | `b1782e5` (pre) | `0bd984c` (post) | Δ |
+|---|---|---|---|
+| online_at_end | 483 | 468 | -3 % (1-BA still past the cliff) |
+| timeouts | n/a in v2 log | 17 | — |
+| auth_latency p50 / p95 / p99 | 437 / 4584 / 5364 ms | 95 / 233 / 280 ms | ✅ ~5–19× better |
+| `Slow tick` (baseapp) | 16 (max 230 ms) | not captured in 145817 run | — |
+| bytes_rx_per_sec | 1.86 MB/s | 3.09 MB/s | +66 % |
+
+**1-BaseApp at 500 clients is still past the per-process cliff** — the
+single-BaseApp topology was the structural bottleneck the 2-BA run
+already showed how to fix.  PR-2 doesn't change that.  What it does
+change: the BaseApp dispatcher now spends 32 % less of its CPU on the
+send path, so the **per-process ceiling rises** — operators get more
+headroom for the same client count, and 250-cli/proc shapes lift to
+something closer to 350 / 400 cli/proc.  Re-establish the 2-BA curve
+on top of PR-2 to know the new per-process ceiling.
+
+### Process memory cost
+
+Sampled `tasklist` Working Set every 5 s through both runs (same
+500-cli / single-BA / single-CA workload).  CSVs in
+`.tmp/prof/baseline/mem_sample_{pre,post}_pr2.csv`.
+
+| Process | Pre peak | Post peak | Δ peak | Pre avg | Post avg | Δ avg |
+|---|---|---|---|---|---|---|
+| atlas_baseapp | 227.7 MB | **336.0 MB** | **+108.3 MB / +48 %** | 208.3 MB | 233.1 MB | +24.8 MB / +12 % |
+| atlas_cellapp | 240.9 MB | 277.9 MB | +37.0 MB / +15 % | 220.8 MB | 256.0 MB | +35.2 MB / +16 % |
+| atlas_dbapp | 129.5 MB | 130.3 MB | +0.8 MB / +1 % | 128.3 MB | 130.2 MB | +1.9 MB | 
+| atlas_loginapp | 112.1 MB | 111.7 MB | −0.4 MB | 111.5 MB | 111.6 MB | ±0 |
+| atlas_baseappmgr | 105.9 MB | 107.4 MB | +1.5 MB | 105.2 MB | 107.3 MB | +2.1 MB |
+| atlas_cellappmgr | 103.1 MB | 105.3 MB | +2.2 MB | 102.1 MB | 104.5 MB | +2.4 MB |
+
+The two batched processes (BaseApp / CellApp) carry the per-channel
+deferred-bundle cost.  Each `ReliableUdpChannel` now owns two extra
+`std::vector<std::byte>` (reliable + unreliable deferred bundles)
+which retain their grown capacity until the channel is condemned.
+
+  * **BaseApp +108 MB peak** — 500 client channels × ~210 KB/channel
+    average peak bundle capacity (the highest-watermark of any tick's
+    315 KB witness payload, retained across ticks).  Linear in client
+    count; halving to 2-BA topology takes per-process delta down
+    proportionally.
+  * **CellApp +37 MB peak** — fewer outbound channels (BaseApp + ghost
+    peers + mgrs) but each one sees similar per-tick volume; the
+    delta is roughly 2 deferred-bundles × ~9 channels × ~2 MB peak
+    each.
+  * **DBApp / LoginApp / mgrs** — no batched send activity, ±2 MB
+    noise.
+
+The 60 KB OOM-only flush threshold (Cluster) bounds peak per-channel
+bundle to under 64 KB; the observed BaseApp peak of 336 MB is well
+under the OS commit budget.  If a future workload runs lean on RAM,
+two adjustments are available without code changes:
+
+  1. drop `RudpProfile.deferred_flush_threshold` from 60 KB to e.g.
+     16 KB — caps per-channel deferred capacity at the cost of more
+     mid-tick flushes.
+  2. drop `Bundle::Finalize` to copy-and-keep-capacity-as-zero (i.e.
+     match the existing move semantics but reset capacity post-move)
+     — frees the buffer between ticks; trades realloc churn for
+     resident set.
+
+For the 5 000-client target topology (5 000 / 250 = 20 BaseApps), the
+per-process +108 MB at 500-cli would drop to about +50 MB at 250-cli
+each — still well under typical 4 GB / process budget on a
+production host.
 
 ## Strategic conclusion (`86aceee`)
 
