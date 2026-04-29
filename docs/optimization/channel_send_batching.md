@@ -384,3 +384,68 @@ Recommend in two PRs to keep review manageable:
   cellapp becomes redundant infrastructure — remove it, the
   channel registers itself with the interface now. This is the
   cleanest evidence that the migration succeeded.
+
+## Immediate whitelist — PR-2 audit ground truth
+
+Snapshot taken after PR-1 (`7cfbb27`, MessageUrgency descriptor +
+Channel-base plumbing) landed.  Every descriptor below currently
+defaults to `kImmediate`; PR-2 keeps the table's left two columns
+unchanged and flips only the third column to `kBatched`.
+
+Total: **82 descriptors** (80 from `src/server/*/`*_messages.h` +
+`src/lib/network/machined_types.h`, plus 2 from
+`src/lib/server/common_messages.h`).  Inventory derived by
+`grep -h 'kDesc{' src/server/*/*.h src/lib/server/*.h
+src/lib/network/*.h | grep -oE 'msg_id::[A-Za-z]+::k[A-Za-z]+' | sort -u`.
+
+### Stay `kImmediate` (~ 35 descriptors)
+
+| Category | Descriptors | Why immediate |
+|---|---|---|
+| PvP command path | `BaseApp::kClientBaseRpc`, `BaseApp::kClientCellRpc`, `CellApp::kClientCellRpcForward`, `CellApp::kInternalCellRpc` | Combat / skill commands; +1 tick (~67 ms) breaks the 1v1 / 2v2 / 4v4 PvP feel target |
+| Login & handshake | `Login::kLoginRequest`, `Login::kLoginResult`, `Login::kAuthLogin`, `Login::kPrepareLogin`, `Login::kPrepareLoginResult`, `Login::kAllocateBaseAppResult`, `Login::kCancelPrepareLogin`, `BaseApp::kAuthenticate`, `BaseApp::kAuthenticateResult`, `BaseApp::kAcceptClient` | Coroutine `co_await`; caller blocks on the syscall result |
+| Disconnect / kick | `BaseApp::kForceLogoff`, `BaseApp::kForceLogoffAck`, `BaseApp::kCellAppDeath` | State-flip messages; user-visible behaviour gates on prompt delivery |
+| Cellapp migration barrier | `CellApp::kOffloadEntity`, `CellApp::kOffloadEntityAck`, `BaseApp::kEntityTransferred`, `BaseApp::kBackupCellEntity`, `BaseApp::kCellEntityDestroyed`, `BaseApp::kCellReady` | Entity lifecycle ordering; reordering corrupts the migration handshake |
+| All `*Ack` | `DBApp::kWriteEntityAck`, `kCheckoutEntityAck`, `kDeleteEntityAck`, `kLookupEntityAck`, `kAbortCheckoutAck`, `kGetEntityIdsAck`, `kPutEntityIdsAck`, `Machined::kHeartbeatAck`, `kRegisterAck`, `kListenerAck` | Reply messages; sender is in a `co_await` waiting for them |
+| Machined control plane | `Machined::kRegister`, `kDeregister`, `kHeartbeat`, `kQuery`, `kQueryResponse`, `kBirthNotification`, `kDeathNotification`, `kListenerRegister`, `kWatcherRequest`, `kWatcherResponse`, `kWatcherForward`, `kWatcherReply` | Service-discovery + watcher RPC; low frequency, latency-sensitive |
+| Heartbeat / shutdown | `Common::kHeartbeat`, `Common::kShutdownRequest` | Tiny, time-sensitive, low frequency |
+| Manager registration | `BaseAppMgr::kRegisterBaseApp`, `kBaseAppReady`, `CellAppMgr::kRegisterCellApp` | Cluster-bringup barrier |
+| Witness control | `CellApp::kEnableWitness`, `kDisableWitness`, `kSetAoIRadius` | Configuration flips, low frequency |
+| Space topology | `CellApp::kCreateSpace`, `kDestroySpace`, `CellAppMgr::kAddCellToSpace`, `kUpdateGeometry`, `kShouldOffload` | Cluster-topology messages |
+| GlobalBase registry | `BaseAppMgr::kRegisterGlobalBase`, `kDeregisterGlobalBase`, `kGlobalBaseNotification` | Naming-service updates |
+
+### Flip to `kBatched` (~ 20 descriptors)
+
+| Category | Descriptors | Expected payoff |
+|---|---|---|
+| **Replication (high-freq, primary target)** | `BaseApp::kReplicatedReliableDeltaFromCell`, `BaseApp::kReplicatedBaselineFromCell` | Direct hit on the documented 6.30 M / 31.8 % BaseApp `Channel::Send` hotspot |
+| Ghost sync (high-freq) | `CellApp::kGhostDelta`, `CellApp::kGhostPositionUpdate`, `CellApp::kGhostSnapshotRefresh` | Collapses cellapp's `O(reals × haunts)` ghost broadcast to `O(haunts × tick)` once multi-cellapp is exercised |
+| RPC forwarding (medium-freq) | `BaseApp::kCellRpcForward`, `BaseApp::kSelfRpcFromCell`, `BaseApp::kBroadcastRpcFromCell` | Cellapp → BaseApp → client chain; multiple to the same client coalesce per tick |
+| Ghost lifecycle | `CellApp::kCreateGhost`, `CellApp::kDeleteGhost` | Medium-frequency; coalesces with the next ghost-update bundle to the same peer |
+| Entity creation (bursty during login / cell migration) | `BaseApp::kCreateBase`, `BaseApp::kCreateBaseFromDb`, `CellApp::kCreateCellEntity`, `CellApp::kDestroyCellEntity` | Login wave / large-scale instance entry sees concurrent fan-out |
+| Client event report | `BaseApp::kClientEventSeqReport` | Periodic client-side sequence acks; mergeable into the next outbound bundle |
+
+### Defer evaluation (~ 13 descriptors, mostly DB)
+
+| Descriptor | Reason to defer |
+|---|---|
+| `DBApp::kWriteEntity`, `kCheckoutEntity`, `kCheckinEntity`, `kLookupEntity`, `kGetEntityIds`, `kPutEntityIds` | DBApp is not in the documented hotspot path; batching DB writes raises durability concerns (a batched-but-not-yet-flushed write loses on crash); risk > reward.  Re-evaluate if a future capture shows DBApp egress as the bottleneck |
+
+### Notes for the PR-2 implementer
+
+- Whitelist encoded **as descriptor field**, not as a runtime
+  override.  Per-call overrides (`SendMessageImmediate(...)`)
+  are an open question — see `Open decisions` §1 above.
+- Combat-action / hit-confirm messages enter the system as raw-id
+  `SendMessage(MessageID, span)` from the script layer, so the
+  PvP `kImmediate` set must include any descriptor that the C#
+  combat pipeline writes through.  Re-grep
+  `BaseApp::kClient*` after PR-2 audit to make sure nothing on
+  the combat path was misclassified.
+- Inter-cellapp ghost messages above are confirmed `kBatched`
+  candidates only **for ghost broadcast**.  The same wire ID
+  used during the offload handshake (e.g. a single `kGhostDelta`
+  pinning state during transfer) must keep its position-of-call
+  semantics — re-route those callers through the
+  `SendMessageImmediate` override if §1 lands, otherwise carve a
+  separate descriptor.
