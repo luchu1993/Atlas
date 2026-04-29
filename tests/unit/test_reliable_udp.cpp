@@ -1353,6 +1353,49 @@ TEST_F(ReliableUdpTest, FlushDeferredAppliesPacketFilter) {
   EXPECT_GT(filter->LastSendSize(), 0u) << "Filter must see non-empty bundle bytes";
 }
 
+TEST_F(ReliableUdpTest, PacketFilterAppliesOnRecvPath) {
+  // Round-trip with the same XOR filter on both ends: A's SendFilter
+  // XOR's the bytes outbound; B's RecvFilter must XOR them back before
+  // dispatch.  Pre-fix RUDP's OnDatagramReceived bypassed RecvFilter
+  // (only TcpChannel honoured it), so B saw raw filtered bytes and
+  // failed to deserialize.
+  auto sock_a = Socket::CreateUdp();
+  ASSERT_TRUE(sock_a.HasValue());
+  ASSERT_TRUE(sock_a->Bind(Address("127.0.0.1", 0)).HasValue());
+  auto addr_a = sock_a->LocalAddress().Value();
+
+  auto sock_b = Socket::CreateUdp();
+  ASSERT_TRUE(sock_b.HasValue());
+  ASSERT_TRUE(sock_b->Bind(Address("127.0.0.1", 0)).HasValue());
+  auto addr_b = sock_b->LocalAddress().Value();
+
+  bool received = false;
+  uint32_t received_value = 0;
+  table_.RegisterTypedHandler<RudpTestMsg>([&](const Address&, Channel*, const RudpTestMsg& msg) {
+    received = true;
+    received_value = msg.value;
+  });
+
+  ReliableUdpChannel channel_a(dispatcher_, table_, *sock_a, addr_b);
+  channel_a.Activate();
+  ReliableUdpChannel channel_b(dispatcher_, table_, *sock_b, addr_a);
+  channel_b.Activate();
+
+  channel_a.SetPacketFilter(std::make_shared<RecordingXorFilter>(std::byte{0x37}));
+  auto recv_filter = std::make_shared<RecordingXorFilter>(std::byte{0x37});
+  channel_b.SetPacketFilter(recv_filter);
+
+  channel_a.Bundle().AddMessage(RudpTestMsg{0xDEADBEEF});
+  ASSERT_TRUE(channel_a.SendReliable().HasValue());
+
+  std::this_thread::sleep_for(std::chrono::milliseconds(20));
+  pump_datagrams(*sock_b, channel_b);
+
+  EXPECT_TRUE(received) << "Recv-side filter must un-XOR before dispatch";
+  EXPECT_EQ(received_value, 0xDEADBEEFu);
+  EXPECT_GE(recv_filter->RecvCalls(), 1);
+}
+
 TEST_F(ReliableUdpTest, SetMtuChangesMaxUdpPayload) {
   // Per-channel MTU override drives MaxUdpPayload() and the fragment
   // boundary.  Defaults to rudp::kDefaultMtu (1400).  Internet profile

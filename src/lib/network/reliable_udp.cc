@@ -429,11 +429,36 @@ void ReliableUdpChannel::OnDatagramReceived(std::span<const std::byte> data,
       ScheduleDelayedAck();
     }
   } else {
-    // Unreliable packet — dispatch immediately (no ordering guarantee)
+    // Unreliable packet — dispatch immediately (no ordering guarantee).
+    // Apply RecvFilter inside DispatchFiltered so the unreliable path
+    // matches the reliable / fragment paths.
     bytes_received_ += remaining;
-    OnDataReceived(*payload);
-    DispatchMessages(*payload);
+    (void)DispatchFiltered(*payload);
   }
+}
+
+auto ReliableUdpChannel::DispatchFiltered(std::span<const std::byte> payload, TimePoint deadline)
+    -> bool {
+  // Mirrors tcp_channel.cc:148-160.  RecvFilter operates on the whole
+  // wire-bundle bytes — for fragmented messages, the caller has already
+  // reassembled before invoking us, so the filter sees the same byte
+  // stream the sender originally fed to SendFilter.
+  std::vector<std::byte> filtered_storage;
+  if (packet_filter_) {
+    auto filtered = packet_filter_->RecvFilter(payload);
+    if (!filtered) {
+      ATLAS_LOG_WARNING("RUDP recv_filter failed from {}: {}", remote_.ToString(),
+                        filtered.Error().Message());
+      return false;
+    }
+    filtered_storage = std::move(*filtered);
+    payload = std::span<const std::byte>(filtered_storage.data(), filtered_storage.size());
+  }
+  OnDataReceived(payload);
+  // DispatchMessagesBudgeted copies any un-dispatched tail into
+  // pending_dispatch_buf_ before returning, so it's safe for
+  // filtered_storage to go out of scope on return.
+  return DispatchMessagesBudgeted(payload, deadline);
 }
 
 // ============================================================================
@@ -664,8 +689,7 @@ auto ReliableUdpChannel::FlushReceiveBuffer(TimePoint deadline) -> bool {
       // successful handler and stashes the unprocessed tail in the
       // channel's pending-dispatch buffer; we propagate the "still
       // hot" signal so DrainHotChannels picks us up next pass.
-      OnDataReceived(entry.payload);
-      if (DispatchMessagesBudgeted(entry.payload, deadline)) return true;
+      if (DispatchFiltered(entry.payload, deadline)) return true;
     }
 
     // Yield-point: the deadline is checked AFTER each delivery, not
@@ -817,8 +841,7 @@ void ReliableUdpChannel::OnFragmentReceived(const FragmentHeader& hdr,
 
     pending_fragments_.erase(hdr.fragment_id);
 
-    OnDataReceived(full_payload);
-    DispatchMessages(full_payload);
+    (void)DispatchFiltered(full_payload);
   }
 }
 

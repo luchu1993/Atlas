@@ -267,6 +267,16 @@ class ReliableUdpChannel : public Channel {
   // Internal entry point — exposes the deadline-aware variant publicly
   // (declared earlier).
 
+  // Run RecvFilter (if installed) on a fully-received bundle and
+  // dispatch its handlers.  Centralises the filter+dispatch step that
+  // tcp_channel.cc does inline; called from the unreliable path, the
+  // ordered-delivery path (FlushReceiveBuffer) and the fragment
+  // reassembly path (OnFragmentReceived).  `deadline` propagates the
+  // A2 yield budget — pass TimePoint::max() for synchronous dispatch.
+  // Returns true iff DispatchMessagesBudgeted yielded mid-frame.
+  auto DispatchFiltered(std::span<const std::byte> payload, TimePoint deadline = TimePoint::max())
+      -> bool;
+
   // Congestion control
   void OnAckCwndUpdate(uint32_t acked_count);
   void OnLossCwndUpdate(bool is_timeout);
