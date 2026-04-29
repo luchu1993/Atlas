@@ -148,6 +148,11 @@ void LoginApp::OnTickComplete() {
   ManagerApp::OnTickComplete();
 }
 
+void LoginApp::FlushTickDirtyChannels() {
+  ServerApp::FlushTickDirtyChannels();
+  external_network_.FlushDirtySendChannels();
+}
+
 // ============================================================================
 // register_watchers
 // ============================================================================

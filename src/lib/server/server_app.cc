@@ -254,6 +254,12 @@ void ServerApp::AdvanceTime() {
       updatables_.Call();
     }
     OnTickComplete();
+    // Flush per-channel deferred-send bundles populated during the
+    // tick — timer-driven sends (witnesses, AI, replication pump)
+    // coalesce here.  Sends made from inbound-handler callbacks are
+    // flushed at the end of each NetworkInterface readable callback,
+    // so this hook only catches what the tick itself produced.
+    FlushTickDirtyChannels();
   }
   tick_stats_.last_work_duration = Clock::now() - work_start;
 

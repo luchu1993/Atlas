@@ -44,6 +44,7 @@ class LoginApp : public ManagerApp {
   [[nodiscard]] auto Init(int argc, char* argv[]) -> bool override;
   void Fini() override;
   void OnTickComplete() override;
+  void FlushTickDirtyChannels() override;
   void RegisterWatchers() override;
 
  private:

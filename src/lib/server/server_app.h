@@ -109,6 +109,16 @@ class ServerApp {
   // After all Updatables have been called.
   virtual void OnTickComplete() {}
 
+  // Flush deferred-send bundles staged by the just-completed tick.
+  // Runs after OnTickComplete inside AdvanceTime — pairs with the
+  // FlushDirtySendChannels calls at the end of NetworkInterface's
+  // readable callbacks: end-of-OnRudpReadable / OnTcpReadable
+  // catches handler-driven sends, end-of-Tick catches timer-driven
+  // sends.  Default flushes the base network_ only; apps that own
+  // additional NetworkInterface instances (LoginApp / BaseApp's
+  // external_network_) override and forward to the base first.
+  virtual void FlushTickDirtyChannels() { network_.FlushDirtySendChannels(); }
+
   // ---- Signal hook --------------------------------------------------------
 
   // Default: SIGINT / SIGTERM → shutdown().

@@ -354,6 +354,11 @@ void BaseApp::OnTickComplete() {
   EntityApp::OnTickComplete();
 }
 
+void BaseApp::FlushTickDirtyChannels() {
+  ServerApp::FlushTickDirtyChannels();
+  external_network_.FlushDirtySendChannels();
+}
+
 // ============================================================================
 // create_native_provider
 // ============================================================================
