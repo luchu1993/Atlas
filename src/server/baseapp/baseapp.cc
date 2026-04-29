@@ -934,22 +934,20 @@ void BaseApp::OnBroadcastRpcFromCell(Channel& /*ch*/, const baseapp::BroadcastRp
 
 void BaseApp::RelayRpcToClient(Channel& client_ch, uint32_t rpc_id,
                                const std::vector<std::byte>& payload) {
-  // rpc_id is 32 bits with a slot index in bits 24-31. Entity-level RPCs
-  // (slot=0) still fit into MessageID (u16) and ride the direct-cast path,
-  // which keeps the wire backwards-compatible with clients that don't know
-  // about components. Component RPCs (slot>0) lose their slot bits if cast
-  // to u16, so they go through a reserved envelope (kClientComponentRpcMessageId)
-  // with the full 32-bit id prepended to the payload.
-  if ((rpc_id >> 16) == 0) {
-    (void)client_ch.SendMessage(static_cast<MessageID>(rpc_id),
-                                std::span<const std::byte>(payload.data(), payload.size()));
-    return;
-  }
+  // Single envelope for every server → client RPC: protocol-level
+  // MessageID is the reserved kClientRpcMessageId; the full 32-bit
+  // rpc_id (slot:8 | method:24) lives in the body.  Decoupling these
+  // two ID spaces means future protocol-message IDs no longer have to
+  // sidestep the rpc_id range, and the client decoder is one branch.
   std::vector<std::byte> out(sizeof(uint32_t) + payload.size());
   std::memcpy(out.data(), &rpc_id, sizeof(uint32_t));
   if (!payload.empty()) std::memcpy(out.data() + sizeof(uint32_t), payload.data(), payload.size());
-  (void)client_ch.SendMessage(DeltaForwarder::kClientComponentRpcMessageId,
-                              std::span<const std::byte>(out.data(), out.size()));
+  if (auto r = client_ch.SendMessage(DeltaForwarder::kClientRpcMessageId,
+                                     std::span<const std::byte>(out.data(), out.size()));
+      !r) {
+    ATLAS_LOG_DEBUG("BaseApp: RelayRpcToClient send failed (rpc_id=0x{:08X}): {}", rpc_id,
+                    r.Error().Message());
+  }
 }
 
 // Path #1 of the three-path CellApp→Client delta contract (see

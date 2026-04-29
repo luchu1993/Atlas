@@ -30,7 +30,8 @@ class Channel;
 //   2. ReplicatedReliableDeltaFromCell (msg 2017, Reliable)
 //        → direct to client channel   → client msg 0xF003
 //   3. SelfRpcFromCell / BroadcastRpcFromCell (msg 2014 / 2016)
-//        → direct to client channel   → client msg = rpc_id
+//        → BaseApp::RelayRpcToClient   → client msg 0xF004 (envelope:
+//                                        u32 rpc_id + serialized args)
 // ============================================================================
 
 class DeltaForwarder {
@@ -77,14 +78,14 @@ class DeltaForwarder {
   /// carries fields marked reliable="true" in .def; bypasses the byte budget.
   static constexpr MessageID kClientReliableDeltaMessageId = static_cast<MessageID>(0xF003);
 
-  /// Reserved client-facing message ID for component-targeted RPCs.
-  /// Entity-level RPCs (slot=0) ride on `static_cast<MessageID>(rpc_id)`
-  /// directly because rpc_id fits in 16 bits when slot=0. Component
-  /// RPCs (slot>0) have non-zero high bits in rpc_id that cannot fit
-  /// into MessageID (u16), so the relay (BaseApp::OnSelfRpcFromCell)
-  /// switches to this dedicated wire id and prepends the full u32
-  /// rpc_id to the payload. The client unwraps it before dispatch.
-  static constexpr MessageID kClientComponentRpcMessageId = static_cast<MessageID>(0xF004);
+  /// Reserved client-facing message ID for ALL server → client RPCs
+  /// (entity-level and component-level alike).  Wire body:
+  ///   [u32 rpc_id (slot:8 | method:24)] [serialized args ...]
+  /// The client default handler unwraps the rpc_id and dispatches via
+  /// the C# DispatchRpc callback.  One envelope keeps the protocol-
+  /// level MessageID space (u16) distinct from the application-level
+  /// rpc_id space (u32) — see BaseApp::RelayRpcToClient.
+  static constexpr MessageID kClientRpcMessageId = static_cast<MessageID>(0xF004);
 
  private:
   struct PendingDelta {

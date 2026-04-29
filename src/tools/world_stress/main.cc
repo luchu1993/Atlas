@@ -18,6 +18,7 @@
 #include <vector>
 
 #include "baseapp/baseapp_messages.h"
+#include "baseapp/delta_forwarder.h"
 #include "foundation/clock.h"
 #include "loginapp/login_messages.h"
 #include "network/channel.h"
@@ -269,13 +270,11 @@ class Session {
         });
     (void)table.RegisterTypedHandler<baseapp::CellReady>(
         [this](const Address&, Channel*, const baseapp::CellReady& msg) { OnCellReady(msg); });
-    // EchoReply arrives as a raw packet — BaseApp forwards the cell-side
-    // SelfRpcFromCell to the client via `SendMessage(static_cast<MessageID>
-    // (rpc_id), payload)`, which truncates the 32-bit packed rpc_id to 16
-    // bits. There's no typed message struct for it (the id is dynamic per
-    // RPC), and Channel::DispatchMessages silently drops messages whose
-    // id isn't in the InterfaceTable. Catch it with the pre-dispatch hook
-    // instead, which runs *before* the entry check.
+    // EchoReply (and every other server → client RPC) arrives in the
+    // unified envelope (kClientRpcMessageId, body = [u32 rpc_id][args]).
+    // There's no typed message struct because rpc_id is application-
+    // layer dynamic, so we hook the pre-dispatch tap and decode the
+    // envelope ourselves.
     table.SetPreDispatchHook([this](MessageID id, std::span<const std::byte> payload) -> bool {
       return OnRawMessage(id, payload);
     });
@@ -544,8 +543,6 @@ class Session {
     metrics_.bytes_per_msg[k_id_u16] += payload.size();
     ++metrics_.count_per_msg[k_id_u16];
 
-    // EchoReply wire id = 0x0201 (direction=0, type_index=2, method_index=1).
-    constexpr MessageID kEchoReplyWireId = 0x0201;
     // CellAoIEnvelope rides on two wire ids (delta_forwarder.h contract):
     //   0xF001 — unreliable (volatile): kEntityPositionUpdate (kind=3)
     //   0xF003 — reliable (event):      kEntityEnter/Leave/PropertyUpdate
@@ -554,23 +551,33 @@ class Session {
     constexpr MessageID kUnreliableDeltaWireId = 0xF001;
     constexpr MessageID kReliableDeltaWireId = 0xF003;
 
-    if (id == kEchoReplyWireId) {
-      // Payload layout matches StressAvatar.def client_methods::EchoReply:
-      //   uint32 seq | uint64 serverTsNs | uint64 clientTsNs
-      BinaryReader reader(payload);
-      auto seq = reader.Read<uint32_t>();
-      auto server_ts_ns = reader.Read<uint64_t>();
-      auto client_ts_ns = reader.Read<uint64_t>();
-      if (!seq || !server_ts_ns || !client_ts_ns) return true;  // malformed but ours
+    // Server → client RPC envelope: body is [u32 rpc_id][serialized args].
+    // EchoReply rpc_id = 0x0201 (direction=0, type_index=2, method_index=1).
+    if (id == DeltaForwarder::kClientRpcMessageId) {
+      if (payload.size() < sizeof(uint32_t)) return true;
+      uint32_t rpc_id = 0;
+      std::memcpy(&rpc_id, payload.data(), sizeof(uint32_t));
+      auto args = payload.subspan(sizeof(uint32_t));
 
-      const uint64_t now_ns =
-          static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(
-                                    SteadyClock::now().time_since_epoch())
-                                    .count());
-      const double rtt_ms = static_cast<double>(now_ns - *client_ts_ns) / 1e6;
-      ++metrics_.echo_received;
-      metrics_.echo_rtt_ms.push_back(rtt_ms);
-      (void)*server_ts_ns;  // reserved for future up-leg / down-leg split
+      constexpr uint32_t kEchoReplyRpcId = 0x0201;
+      if (rpc_id == kEchoReplyRpcId) {
+        // Payload layout matches StressAvatar.def client_methods::EchoReply:
+        //   uint32 seq | uint64 serverTsNs | uint64 clientTsNs
+        BinaryReader reader(args);
+        auto seq = reader.Read<uint32_t>();
+        auto server_ts_ns = reader.Read<uint64_t>();
+        auto client_ts_ns = reader.Read<uint64_t>();
+        if (!seq || !server_ts_ns || !client_ts_ns) return true;  // malformed but ours
+
+        const uint64_t now_ns =
+            static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(
+                                      SteadyClock::now().time_since_epoch())
+                                      .count());
+        const double rtt_ms = static_cast<double>(now_ns - *client_ts_ns) / 1e6;
+        ++metrics_.echo_received;
+        metrics_.echo_rtt_ms.push_back(rtt_ms);
+        (void)*server_ts_ns;  // reserved for future up-leg / down-leg split
+      }
       return true;
     }
 

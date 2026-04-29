@@ -458,13 +458,19 @@ auto ClientApp::MainLoop() -> int {
         // knows the fixed-length payload layout.
       });
 
-  // Catch-all handler. Splits traffic into two lanes:
-  //   (a) state-replication channels 0xF001 (unreliable) / 0xF002 (baseline,
-  //       reliable) / 0xF003 (reliable delta) — forwarded opaquely to the
-  //       script host so alternative hosts (Lua, TS) can bind the same hook
-  //       without touching native envelope decoding.
-  //   (b) any other MessageID — treated as a ClientRpc (BaseApp uses the
-  //       rpc_id directly as the MessageID).
+  // Catch-all handler.  Splits traffic into three lanes by reserved
+  // wire id:
+  //   • State-replication channels 0xF001 / 0xF002 / 0xF003 — opaque
+  //     forward to the script host (Atlas.Client / Lua / TS bind the
+  //     same hook without touching native envelope decoding).
+  //   • RPC envelope 0xF004 — body is [u32 rpc_id][serialized args];
+  //     unwrap and dispatch via the C# DispatchRpc callback.  Keeps
+  //     the 16-bit MessageID space (protocol layer) decoupled from the
+  //     32-bit rpc_id space (application layer).
+  //   • Anything else — log + drop.  Typed handlers are registered
+  //     above for protocol messages this client cares about
+  //     (LoginResult, AuthenticateResult, EntityTransferred, …); a
+  //     fall-through here would be a wire-format mismatch.
   network_.InterfaceTable().SetDefaultHandler([this](const Address&, Channel*, MessageID msg_id,
                                                      BinaryReader& reader) {
     const bool is_state_channel = msg_id == DeltaForwarder::kClientDeltaMessageId ||
@@ -507,13 +513,9 @@ auto ClientApp::MainLoop() -> int {
       return;
     }
 
-    // Extended RPC envelope (slot>0): payload starts with u32 rpc_id.
-    // Unwrap so the dispatcher sees the full 32-bit id (slot bits
-    // included) rather than the truncated 16-bit MessageID. Wire
-    // contract pairs with BaseApp::RelayRpcToClient.
-    if (msg_id == DeltaForwarder::kClientComponentRpcMessageId) {
+    if (msg_id == DeltaForwarder::kClientRpcMessageId) {
       if (payload_len < static_cast<int32_t>(sizeof(uint32_t))) {
-        ATLAS_LOG_WARNING("Client: extended RPC envelope too short ({} bytes)", payload_len);
+        ATLAS_LOG_WARNING("Client: RPC envelope too short ({} bytes)", payload_len);
         return;
       }
       uint32_t rpc_id_full = 0;
@@ -522,8 +524,9 @@ auto ClientApp::MainLoop() -> int {
                    payload_len - static_cast<int32_t>(sizeof(uint32_t)));
       return;
     }
-    OnRpcMessage(static_cast<uint32_t>(msg_id), reinterpret_cast<const std::byte*>(payload_ptr),
-                 payload_len);
+
+    ATLAS_LOG_WARNING("Client: unknown MessageID 0x{:04X} ({} bytes payload)",
+                      static_cast<unsigned>(msg_id), payload_len);
   });
 
   while (!shutdown_requested_) {

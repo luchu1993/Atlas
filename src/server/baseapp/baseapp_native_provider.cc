@@ -45,9 +45,7 @@ void BaseAppNativeProvider::SendClientRpc(uint32_t entity_id, uint32_t rpc_id,
     ATLAS_LOG_WARNING("BaseApp: SendClientRpc: entity {} client channel unavailable", entity_id);
     return;
   }
-  // Component RPCs (slot>0 in rpc_id bits 24-31) need the extended
-  // wire envelope; entity-level RPCs keep the legacy 16-bit-id path.
-  // Mirrors RelayRpcToClient in baseapp.cc — same envelope contract.
+  // Unified envelope (see RelayRpcToClient).
   std::vector<std::byte> tmp(payload, payload + len);
   app_.RelayRpcToClient(*client_ch, rpc_id, tmp);
 }
@@ -66,9 +64,18 @@ void BaseAppNativeProvider::SendCellRpc(uint32_t entity_id, uint32_t rpc_id,
     ATLAS_LOG_ERROR("BaseApp: SendCellRpc: cannot connect to cell for entity {}", entity_id);
     return;
   }
-  (void)(*cell_ch_result)
-      ->SendMessage(static_cast<MessageID>(rpc_id),
-                    std::span<const std::byte>(payload, static_cast<size_t>(len)));
+  // Wrap in cellapp::InternalCellRpc so the cell side dispatches via
+  // its registered typed handler (CellApp::OnInternalCellRpc).  The
+  // protocol-level MessageID stays in the cellapp/ID space (3004); the
+  // application-level rpc_id rides in the body.
+  cellapp::InternalCellRpc msg;
+  msg.target_entity_id = entity_id;
+  msg.rpc_id = rpc_id;
+  if (len > 0) msg.payload.assign(payload, payload + static_cast<std::size_t>(len));
+  if (auto r = (*cell_ch_result)->SendMessage(msg); !r) {
+    ATLAS_LOG_DEBUG("BaseApp: SendCellRpc send failed (entity={}, rpc_id=0x{:08X}): {}", entity_id,
+                    rpc_id, r.Error().Message());
+  }
 }
 
 void BaseAppNativeProvider::SendBaseRpc(uint32_t entity_id, uint32_t rpc_id,
