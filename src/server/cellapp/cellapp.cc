@@ -329,18 +329,14 @@ void CellApp::TickWitnesses() {
     }
   }
 
-  // Drain every channel touched by the witness lambdas this tick so the
-  // batched envelope bytes actually leave the host. Doing this once
-  // here (instead of per-SendEntityUpdate) collapses thousands of
-  // sendto syscalls into a few hundred — the dominant cost reduction
-  // in dense-AoI scenes after the zero-copy refactor.
-  {
-    ATLAS_PROFILE_ZONE_N("CellApp::FlushWitnessChannels");
-    for (auto* ch : pending_witness_channels_) {
-      (void)ch->FlushDeferred();
-    }
-    pending_witness_channels_.clear();
-  }
+  // Witness sends route through SendMessage(kBatched) which auto-
+  // registers the channel via Channel::NotifyDirty.  The framework
+  // flushes those dirty channels at:
+  //   * end of NetworkInterface::OnRudpReadable (handler-driven sends)
+  //   * end of every Tick via ServerApp::FlushTickDirtyChannels
+  //     (timer-driven sends — exactly this witness path)
+  // No app-level pending_witness_channels_ bookkeeping needed; the
+  // tick-end framework flush is the single drain point.
 }
 
 void CellApp::TickBackupPump() {
@@ -768,13 +764,10 @@ void CellApp::AttachWitness(CellEntity& entity, float aoi_radius, float hysteres
       // bypasses DeltaForwarder and reaches the client reliably.
       // SendMessage consults the descriptor's kBatched urgency and
       // appends to the channel's per-side deferred bundle; the
-      // bundle ships in one packet at FlushDirtySendChannels time
-      // (end of OnRudpReadable / end of CellApp tick) — collapses
-      // N×M observer/peer sendto syscalls into one per (channel,
-      // reliability) per tick.  pending_witness_channels_ is kept
-      // for now as a backup explicit flush; it becomes redundant
-      // once the descriptor-driven dirty-set machinery has had a
-      // soak run.
+      // bundle ships in one packet via FlushDirtySendChannels at the
+      // end of NetworkInterface I/O callbacks and at the end of the
+      // app Tick — collapses N×M observer/peer sendto syscalls into
+      // one per (channel, reliability) per tick.
       [this](EntityID observer_base_id, std::span<const std::byte> env) {
         auto* observer = FindEntityByBaseId(observer_base_id);
         if (!observer) return;
@@ -782,7 +775,6 @@ void CellApp::AttachWitness(CellEntity& entity, float aoi_radius, float hysteres
         if (!ch) return;
         baseapp::ReplicatedReliableDeltaFromCellSpan msg{observer_base_id, env};
         (void)(*ch)->SendMessage(msg);
-        pending_witness_channels_.insert(*ch);
       },
       // Unreliable path — volatile position/orientation (latest-wins).
       // Routed via ReplicatedDeltaFromCell (msg 2015) which goes through
@@ -794,7 +786,6 @@ void CellApp::AttachWitness(CellEntity& entity, float aoi_radius, float hysteres
         if (!ch) return;
         baseapp::ReplicatedDeltaFromCellSpan msg{observer_base_id, env};
         (void)(*ch)->SendMessage(msg);
-        pending_witness_channels_.insert(*ch);
       },
       hysteresis);
 }

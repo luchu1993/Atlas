@@ -350,12 +350,6 @@ class CellApp : public EntityApp {
   // BaseApp can reject stale updates from a slower old-CellApp path.
   uint32_t next_offload_epoch_{1};
 
-  // Channels touched by witness send lambdas during the current
-  // TickWitnesses pass. Drained at the end via FlushDeferred so all
-  // BufferMessageDeferred messages leave the host in one packet per
-  // (channel, reliability) pair instead of one packet per call.
-  std::unordered_set<ReliableUdpChannel*> pending_witness_channels_;
-
   // Reused per-tick scratch for demand-based witness budget allocation.
   // Cleared (not deallocated) at the start of every TickWitnesses sweep
   // so the vector keeps its capacity and steady-state ticks allocate 0.
