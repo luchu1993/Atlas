@@ -64,6 +64,7 @@ class Channel {
 
   template <NetworkMessage Msg>
   [[nodiscard]] auto SendMessage(const Msg& msg) -> Result<void> {
+    if (IsCondemned()) return CondemnedSendError();
     const auto& desc = Msg::Descriptor();
     if (desc.IsBatched()) {
       if (auto* deferred = DeferredBundleFor(desc)) {
@@ -99,6 +100,7 @@ class Channel {
   [[nodiscard]] auto ChannelId() const -> ChannelId { return channel_id_; }
   [[nodiscard]] auto RemoteAddress() const -> const Address& { return remote_; }
   [[nodiscard]] auto IsConnected() const -> bool { return state_ == ChannelState::kActive; }
+  [[nodiscard]] auto IsCondemned() const -> bool { return state_ == ChannelState::kCondemned; }
 
   void Activate();
   void Condemn();
@@ -124,6 +126,14 @@ class Channel {
   [[nodiscard]] virtual auto Fd() const -> FdHandle = 0;
 
  protected:
+  // Build the canonical "send on condemned channel" error.  Logs at
+  // DEBUG so silent (void)-ignored sites surface without changing
+  // call sites.  Used by both SendMessage overloads — every other
+  // public send entry (Send / SendUnreliable / FlushDeferred) does
+  // its own pre-existing condemned check + bundle Clear, since they
+  // can be called outside SendMessage and own different bundles.
+  [[nodiscard]] auto CondemnedSendError() const -> Result<void>;
+
   // Invoke mark_dirty_cb_ if installed.  Subclass batching overrides
   // call this after appending to a deferred bundle so NetworkInterface
   // schedules a tick-end flush.

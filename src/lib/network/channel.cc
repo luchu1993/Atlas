@@ -79,7 +79,13 @@ auto Channel::SendUnreliable() -> Result<void> {
   return Send();
 }
 
+auto Channel::CondemnedSendError() const -> Result<void> {
+  ATLAS_LOG_DEBUG("SendMessage on condemned channel to {}", remote_.ToString());
+  return Error(ErrorCode::kChannelCondemned, "Cannot send on condemned channel");
+}
+
 auto Channel::SendMessage(MessageID id, std::span<const std::byte> data) -> Result<void> {
+  if (IsCondemned()) return CondemnedSendError();
   MessageDesc desc{id, "", MessageLengthStyle::kVariable, -1};
   if (auto* found = interface_table_.Find(id)) {
     desc = *found;
