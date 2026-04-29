@@ -36,7 +36,7 @@ auto DeltaForwarder::Flush(Channel& client_ch, uint32_t budget_bytes) -> uint32_
     return e.deferred_ticks < kMaxDeferredTicks;
   });
   for (auto it = starved_begin; it != queue_.end(); ++it) {
-    (void)client_ch.SendMessage(kClientDeltaMessageId, std::span<const std::byte>(it->delta));
+    (void)client_ch.SendMessage(ClientDeltaEnvelope{std::span<const std::byte>(it->delta)});
     bytes_sent += static_cast<uint32_t>(it->delta.size());
     ++stats_.force_sent_count;
   }
@@ -58,7 +58,7 @@ auto DeltaForwarder::Flush(Channel& client_ch, uint32_t budget_bytes) -> uint32_
     if (pass2_bytes + entry_size > budget_bytes && sent_count > 0) {
       break;
     }
-    (void)client_ch.SendMessage(kClientDeltaMessageId, std::span<const std::byte>(entry.delta));
+    (void)client_ch.SendMessage(ClientDeltaEnvelope{std::span<const std::byte>(entry.delta)});
     pass2_bytes += entry_size;
     ++sent_count;
   }

@@ -86,28 +86,6 @@ auto Channel::CondemnedSendError() const -> Result<void> {
   return Error(ErrorCode::kChannelCondemned, "Cannot send on condemned channel");
 }
 
-auto Channel::SendMessage(MessageID id, std::span<const std::byte> data) -> Result<void> {
-  if (IsCondemned()) return CondemnedSendError();
-  MessageDesc desc{id, "", MessageLengthStyle::kVariable, -1};
-  if (auto* found = interface_table_.Find(id)) {
-    desc = *found;
-  }
-  if (desc.IsBatched()) {
-    if (auto* deferred = DeferredBundleFor(desc)) {
-      deferred->StartMessage(desc);
-      deferred->Writer().WriteBytes(data);
-      deferred->EndMessage();
-      return OnDeferredAppend(desc, deferred->TotalSize());
-    }
-    // Fall through — channel has no batching support, just send now.
-  }
-  bundle_.StartMessage(desc);
-  bundle_.Writer().WriteBytes(data);
-  bundle_.EndMessage();
-  if (desc.IsUnreliable()) return SendUnreliable();
-  return Send();
-}
-
 void Channel::SetInactivityTimeout(Duration timeout) {
   inactivity_timeout_ = timeout;
   last_activity_ = Clock::now();

@@ -49,14 +49,11 @@ class Channel {
   // Sending
   [[nodiscard]] auto Bundle() -> Bundle& { return bundle_; }
   [[nodiscard]] auto Send() -> Result<void>;
-  // Both overloads honour Msg::descriptor().reliability (or the registered
-  // InterfaceTable entry for the raw-ID variant):
-  //   Reliable   → send()            (ACK + retransmit on RUDP, always on TCP)
-  //   Unreliable → send_unreliable() (best-effort on RUDP, natural path on TCP/UDP)
-  // Urgency is also consulted: kBatched routes through the deferred path
-  // (RUDP only — TCP/UDP fall through to immediate send).
-  [[nodiscard]] auto SendMessage(MessageID id, std::span<const std::byte> data) -> Result<void>;
 
+  // Single public sending entry point.  The descriptor's reliability
+  // selects Send() vs SendUnreliable(), and its urgency selects the
+  // deferred batching path vs immediate dispatch — see the transport
+  // matrix in MessageUrgency's doc comment.
   template <NetworkMessage Msg>
   void QueueMessage(const Msg& msg) {
     bundle_.AddMessage(msg);

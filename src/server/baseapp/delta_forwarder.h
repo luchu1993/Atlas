@@ -6,7 +6,9 @@
 #include <span>
 #include <vector>
 
+#include "foundation/error.h"
 #include "network/message.h"
+#include "serialization/binary_stream.h"
 #include "server/entity_types.h"
 
 namespace atlas {
@@ -98,6 +100,85 @@ class DeltaForwarder {
   std::vector<PendingDelta> queue_;
   Stats stats_;
 };
+
+// ============================================================================
+// Send-only envelopes for the three reserved client-facing wire ids.
+//
+// All three carry opaque body bytes; the C++ client intercepts them via its
+// SetDefaultHandler dispatch (state-channel forward / RPC unwrap), so no
+// Deserialize is ever invoked.  Span variants — caller owns the storage
+// for the duration of the synchronous SendMessage call.
+//
+// Defining these as NetworkMessage descriptors lets each one carry its
+// own (reliability × urgency) pair, fixing two semantic bugs that the
+// raw `SendMessage(MessageID, span)` fallback used to mask:
+//   • Unreliable lane (0xF001) was going via reliable Send because the
+//     fallback descriptor defaulted to kReliable.
+//   • RPCs (0xF004) were silently kBatched because the fallback default
+//     flipped to kBatched in 0043, contradicting the audit's
+//     PvP-latency-critical kImmediate verdict.
+// ============================================================================
+
+// 0xF001 — unreliable volatile delta (latest-wins per entity).
+struct ClientDeltaEnvelope {
+  std::span<const std::byte> bytes;
+
+  static auto Descriptor() -> const MessageDesc& {
+    static const MessageDesc kDesc{
+        DeltaForwarder::kClientDeltaMessageId, "baseapp::ClientDeltaEnvelope",
+        MessageLengthStyle::kVariable,         -1,
+        MessageReliability::kUnreliable,       MessageUrgency::kBatched};
+    return kDesc;
+  }
+  void Serialize(BinaryWriter& w) const { w.WriteBytes(bytes); }
+  static auto Deserialize(BinaryReader&) -> Result<ClientDeltaEnvelope> {
+    return Error{ErrorCode::kInvalidArgument, "ClientDeltaEnvelope is send-only"};
+  }
+};
+static_assert(NetworkMessage<ClientDeltaEnvelope>);
+
+// 0xF003 — reliable property delta (cumulative state, must not drop).
+struct ClientReliableDeltaEnvelope {
+  std::span<const std::byte> bytes;
+
+  static auto Descriptor() -> const MessageDesc& {
+    static const MessageDesc kDesc{DeltaForwarder::kClientReliableDeltaMessageId,
+                                   "baseapp::ClientReliableDeltaEnvelope",
+                                   MessageLengthStyle::kVariable,
+                                   -1,
+                                   MessageReliability::kReliable,
+                                   MessageUrgency::kBatched};
+    return kDesc;
+  }
+  void Serialize(BinaryWriter& w) const { w.WriteBytes(bytes); }
+  static auto Deserialize(BinaryReader&) -> Result<ClientReliableDeltaEnvelope> {
+    return Error{ErrorCode::kInvalidArgument, "ClientReliableDeltaEnvelope is send-only"};
+  }
+};
+static_assert(NetworkMessage<ClientReliableDeltaEnvelope>);
+
+// 0xF004 — unified server → client RPC envelope.  Body layout:
+//   [u32 rpc_id (slot:8 | method:24)] [args bytes ...]
+struct ClientRpcEnvelope {
+  uint32_t rpc_id{0};
+  std::span<const std::byte> args;
+
+  static auto Descriptor() -> const MessageDesc& {
+    static const MessageDesc kDesc{
+        DeltaForwarder::kClientRpcMessageId, "baseapp::ClientRpcEnvelope",
+        MessageLengthStyle::kVariable,       -1,
+        MessageReliability::kReliable,       MessageUrgency::kImmediate};
+    return kDesc;
+  }
+  void Serialize(BinaryWriter& w) const {
+    w.Write(rpc_id);
+    w.WriteBytes(args);
+  }
+  static auto Deserialize(BinaryReader&) -> Result<ClientRpcEnvelope> {
+    return Error{ErrorCode::kInvalidArgument, "ClientRpcEnvelope is send-only"};
+  }
+};
+static_assert(NetworkMessage<ClientRpcEnvelope>);
 
 }  // namespace atlas
 

@@ -934,23 +934,14 @@ void BaseApp::OnBroadcastRpcFromCell(Channel& /*ch*/, const baseapp::BroadcastRp
 
 void BaseApp::RelayRpcToClient(Channel& client_ch, uint32_t rpc_id,
                                const std::vector<std::byte>& payload) {
-  // Single envelope for every server → client RPC: protocol-level
-  // MessageID is the reserved kClientRpcMessageId; the full 32-bit
-  // rpc_id (slot:8 | method:24) lives in the body.  Decoupling these
-  // two ID spaces means future protocol-message IDs no longer have to
-  // sidestep the rpc_id range, and the client decoder is one branch.
-  std::vector<std::byte> out(sizeof(uint32_t) + payload.size());
-  std::memcpy(out.data(), &rpc_id, sizeof(uint32_t));
-  if (!payload.empty()) std::memcpy(out.data() + sizeof(uint32_t), payload.data(), payload.size());
-  if (auto r = client_ch.SendMessage(DeltaForwarder::kClientRpcMessageId,
-                                     std::span<const std::byte>(out.data(), out.size()));
-      !r) {
+  ClientRpcEnvelope env{rpc_id, std::span<const std::byte>(payload.data(), payload.size())};
+  if (auto r = client_ch.SendMessage(env); !r) {
     ATLAS_LOG_DEBUG("BaseApp: RelayRpcToClient send failed (rpc_id=0x{:08X}): {}", rpc_id,
                     r.Error().Message());
   }
 }
 
-// Path #1 of the three-path CellApp→Client delta contract (see
+// Path #1 of the three-path CellApp→Client delta contract (seell
 // delta_forwarder.h for the full contract). ReplicatedDeltaFromCell is
 // Unreliable; its payload passes through the per-client DeltaForwarder,
 // which enforces LATEST-WINS for the same entity and a per-tick byte budget.
@@ -987,8 +978,8 @@ void BaseApp::OnReplicatedReliableDeltaFromCell(
   auto* client_ch = ResolveClientChannel(proxy->EntityId());
   if (!client_ch) return;
 
-  (void)client_ch->SendMessage(DeltaForwarder::kClientReliableDeltaMessageId,
-                               std::span<const std::byte>(msg.delta.data(), msg.delta.size()));
+  (void)client_ch->SendMessage(
+      ClientReliableDeltaEnvelope{std::span<const std::byte>(msg.delta.data(), msg.delta.size())});
 
   reliable_delta_bytes_sent_total_ += msg.delta.size();
   ++reliable_delta_messages_sent_total_;
