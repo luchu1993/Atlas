@@ -97,7 +97,7 @@ void ScriptEvents::FireEvent(std::string_view event, std::span<const ScriptValue
   // avoids iterator invalidation when push_back reallocates the vector.
   const auto kCount = it->second.size();
   for (std::size_t i = 0; i < kCount; ++i) {
-    auto cb = it->second[i].callback;  // copy shared_ptr — keeps object alive across reallocation
+    auto cb = it->second[i].callback;
     auto result = cb->Call(args);
     if (!result) {
       ATLAS_LOG_WARNING("Event '{}' listener failed: {}", event, result.Error().Message());

@@ -22,10 +22,6 @@ TcpChannel::~TcpChannel() {
   }
 }
 
-// ============================================================================
-// Receive path
-// ============================================================================
-
 void TcpChannel::OnReadable() {
   std::size_t reads = 0;
   while (true) {
@@ -137,7 +133,6 @@ void TcpChannel::ProcessRecvBuffer() {
     }
 
     auto rspan = recv_buffer_.ReadableSpan();
-    // Ensure contiguous data for dispatch
     if (rspan.size() < total) {
       recv_buffer_.Linearize();
       rspan = recv_buffer_.ReadableSpan();
@@ -169,10 +164,6 @@ void TcpChannel::ProcessRecvBuffer() {
   }
 }
 
-// ============================================================================
-// Write path
-// ============================================================================
-
 void TcpChannel::OnWritable() {
   TryFlushWriteBuffer();
 }
@@ -197,8 +188,6 @@ auto TcpChannel::DoSend(std::span<const std::byte> data) -> Result<size_t> {
 
 auto TcpChannel::DeferredBundleFor(const MessageDesc& /*desc*/) -> class Bundle* {
   if (state_ == ChannelState::kCondemned) return nullptr;
-  // TCP is always reliable on the wire — descriptor.IsUnreliable() is a
-  // no-op here.  Single bundle for both reliability axes.
   return &deferred_bundle_;
 }
 
@@ -220,11 +209,6 @@ auto TcpChannel::FlushDeferred() -> Result<void> {
     return Result<void>{};
   }
 
-  // Drain the deferred bundle through the same Send() entry the
-  // immediate path uses — packet_filter, frame header, write buffer
-  // append all happen once for the whole batched payload.  bundle_
-  // (the parent Channel's per-immediate-send buffer) is independent
-  // and untouched here.
   auto data = deferred_bundle_.Finalize();
 
   if (packet_filter_) {
@@ -250,9 +234,6 @@ void TcpChannel::OnCondemned() {
   CancelRecvBufferShrink();
   CancelWriteBufferShrink();
 
-  // Deregister from IOPoller to prevent stale events on condemned channels.
-  // The destructor also deregisters, but doing it here avoids the window
-  // between condemn and destruction where the poller could still fire.
   if (socket_.IsValid()) {
     (void)dispatcher_.Deregister(socket_.Fd());
   }

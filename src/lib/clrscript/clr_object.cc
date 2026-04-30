@@ -10,18 +10,10 @@
 
 namespace atlas {
 
-// ============================================================================
-// GCHandleTracker (Debug only)
-// ============================================================================
-
 #if ATLAS_DEBUG
 std::atomic<int64_t> GCHandleTracker::alloc_count{0};
 std::atomic<int64_t> GCHandleTracker::free_count{0};
 #endif
-
-// ============================================================================
-// ClrObjectVTable — process-wide singleton
-// ============================================================================
 
 static ClrObjectVTable g_vtable{};
 
@@ -33,10 +25,6 @@ void SetClrObjectVtable(const ClrObjectVTable& vtable) {
 auto GetClrObjectVtable() -> const ClrObjectVTable& {
   return g_vtable;
 }
-
-// ============================================================================
-// ClrObject implementation
-// ============================================================================
 
 ClrObject::ClrObject(void* gc_handle) : gc_handle_(gc_handle) {
   ATLAS_ASSERT(gc_handle != nullptr && "GCHandle must not be null");
@@ -76,14 +64,12 @@ void ClrObject::Release() {
 #endif
   } else {
     ATLAS_LOG_WARNING(
-        "ClrObject::release() called but vtable.free_handle is null — GCHandle "
+        "ClrObject::release() called but vtable.free_handle is null - GCHandle "
         "leak!");
   }
 
   gc_handle_ = nullptr;
 }
-
-// ---- ScriptObject interface -------------------------------------------------
 
 auto ClrObject::IsNone() const -> bool {
   if (gc_handle_ == nullptr) return true;
@@ -166,13 +152,10 @@ auto ClrObject::AsBool() const -> Result<bool> {
 }
 
 auto ClrObject::AsBytes() const -> Result<std::vector<std::byte>> {
-  // Needs byte-array serialization across the managed boundary — not wired yet.
   return Error{ErrorCode::kScriptError, "ClrObject::as_bytes() not implemented"};
 }
 
 auto ClrObject::GetAttr(std::string_view /*name*/) -> std::unique_ptr<ScriptObject> {
-  // Generic attribute access needs Source Generator scaffolding to be wired
-  // up. Return nullptr until then; callers should check for null.
   return nullptr;
 }
 
@@ -181,7 +164,6 @@ auto ClrObject::SetAttr(std::string_view /*name*/, const ScriptValue& /*value*/)
 }
 
 auto ClrObject::IsCallable() const -> bool {
-  // Generic callability needs Source Generator scaffolding to be wired up.
   return false;
 }
 

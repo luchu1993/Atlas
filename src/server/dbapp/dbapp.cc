@@ -10,10 +10,6 @@
 
 namespace atlas {
 
-// ============================================================================
-// run — static entry point
-// ============================================================================
-
 auto DBApp::Run(int argc, char* argv[]) -> int {
   EventDispatcher dispatcher;
   NetworkInterface network(dispatcher);
@@ -21,19 +17,14 @@ auto DBApp::Run(int argc, char* argv[]) -> int {
   return app.RunApp(argc, argv);
 }
 
-// ============================================================================
-// init
-// ============================================================================
-
 auto DBApp::Init(int argc, char* argv[]) -> bool {
   if (!ManagerApp::Init(argc, argv)) return false;
 
   const auto& cfg = Config();
 
-  // ---- Load entity definitions ---------------------------------------------
   // ATDF binary container produced by Atlas.Tools.DefDump from a built
   // C# server assembly. DBApp doesn't host CoreCLR, so it can't run the
-  // codegen-emitted [ModuleInitializer] PInvoke registrations — the
+  // codegen-emitted [ModuleInitializer] PInvoke registrations - the
   // offline DefDump mirrors that path and writes a wire-compatible blob
   // for RegisterFromBinaryFile to ingest.
   if (cfg.entitydef_bin_path.empty()) {
@@ -52,7 +43,6 @@ auto DBApp::Init(int argc, char* argv[]) -> bool {
                    result->types);
   }
 
-  // ---- Create and start database backend ----------------------------------
   auto db_cfg = BuildDbConfig();
   database_ = CreateDatabase(db_cfg);
   if (!database_) {
@@ -68,7 +58,6 @@ auto DBApp::Init(int argc, char* argv[]) -> bool {
   database_->SetDeferredMode(true);
   database_->BeginBatch();
 
-  // ---- Register message handlers ------------------------------------------
   auto& table = Network().InterfaceTable();
 
   (void)table.RegisterTypedHandler<dbapp::WriteEntity>(
@@ -101,13 +90,11 @@ auto DBApp::Init(int argc, char* argv[]) -> bool {
         OnAbortCheckout(src, ch, msg);
       });
 
-  // ---- Authentication (LoginApp → DBApp) ----------------------------------
   (void)table.RegisterTypedHandler<login::AuthLogin>(
       [this](const Address& src, Channel* ch, const login::AuthLogin& msg) {
         OnAuthLogin(src, ch, msg);
       });
 
-  // ---- EntityID allocation handlers ----------------------------------------
   (void)table.RegisterTypedHandler<dbapp::GetEntityIds>(
       [this](const Address& src, Channel* ch, const dbapp::GetEntityIds& msg) {
         OnGetEntityIds(src, ch, msg);
@@ -118,18 +105,15 @@ auto DBApp::Init(int argc, char* argv[]) -> bool {
         OnPutEntityIds(src, ch, msg);
       });
 
-  // ---- Subscribe to BaseApp death notifications ---------------------------
   GetMachinedClient().Subscribe(machined::ListenerType::kDeath, ProcessType::kBaseApp,
                                 nullptr,  // no birth callback needed
                                 [this](const machined::DeathNotification& notif) {
                                   OnBaseappDeath(notif.internal_addr, notif.name);
                                 });
 
-  // ---- Configuration ------------------------------------------------------
   auto_create_accounts_ = cfg.auto_create_accounts;
   account_type_id_ = cfg.account_type_id;
 
-  // ---- EntityID allocator — authoritative ID source -----------------------
   id_allocator_ = std::make_unique<EntityIdAllocator>(*database_);
   id_allocator_->Startup([](bool ok) {
     if (!ok)
@@ -142,10 +126,6 @@ auto DBApp::Init(int argc, char* argv[]) -> bool {
                  auto_create_accounts_, account_type_id_);
   return true;
 }
-
-// ============================================================================
-// fini
-// ============================================================================
 
 void DBApp::Fini() {
   if (id_allocator_ && database_) {
@@ -167,10 +147,6 @@ void DBApp::Fini() {
   ManagerApp::Fini();
 }
 
-// ============================================================================
-// on_tick_complete — pump deferred DB callbacks
-// ============================================================================
-
 void DBApp::OnTickComplete() {
   ManagerApp::OnTickComplete();
   if (database_) {
@@ -180,10 +156,6 @@ void DBApp::OnTickComplete() {
   }
   if (id_allocator_) id_allocator_->PersistIfNeeded([](bool) {});
 }
-
-// ============================================================================
-// register_watchers
-// ============================================================================
 
 void DBApp::RegisterWatchers() {
   ManagerApp::RegisterWatchers();
@@ -218,9 +190,7 @@ void DBApp::RegisterWatchers() {
                        }});
 }
 
-// ============================================================================
 // build_db_config
-// ============================================================================
 
 auto DBApp::BuildDbConfig() const -> DatabaseConfig {
   const auto& cfg = Config();
@@ -254,9 +224,7 @@ auto DBApp::ResolveReplyChannel(const Address& addr) -> Channel* {
   return static_cast<Channel*>(*result);
 }
 
-// ============================================================================
 // on_write_entity
-// ============================================================================
 
 void DBApp::OnWriteEntity(const Address& src, Channel* ch, const dbapp::WriteEntity& msg) {
   if (ch == nullptr) return;
@@ -269,7 +237,7 @@ void DBApp::OnWriteEntity(const Address& src, Channel* ch, const dbapp::WriteEnt
     ack.error = std::move(result.error);
     if (auto* reply_ch = this->ResolveReplyChannel(reply_addr)) {
       if (auto r = reply_ch->SendMessage(ack); !r) {
-        // BaseApp's pending-write entry never resolves — Proxy keeps
+        // BaseApp's pending-write entry never resolves - Proxy keeps
         // thinking the save is in flight; for kLogOff writes the entity
         // may already be freed before learning the DB rejected it.
         ATLAS_LOG_ERROR(
@@ -280,16 +248,14 @@ void DBApp::OnWriteEntity(const Address& src, Channel* ch, const dbapp::WriteEnt
     }
   };
 
-  // Checkin path: LogOff flag means entity is going offline — clear checkout
+  // Checkin path: LogOff flag means entity is going offline - clear checkout
   if (HasFlag(msg.flags, WriteFlags::kLogOff)) checkout_mgr_.Checkin(msg.dbid, msg.type_id);
 
   database_->PutEntity(msg.dbid, msg.type_id, msg.flags, msg.blob, msg.identifier,
                        std::move(send_ack));
 }
 
-// ============================================================================
 // on_checkout_entity
-// ============================================================================
 
 void DBApp::OnCheckoutEntity(const Address& src, Channel* ch, const dbapp::CheckoutEntity& msg) {
   if (ch == nullptr) return;
@@ -322,7 +288,7 @@ void DBApp::OnCheckoutEntity(const Address& src, Channel* ch, const dbapp::Check
       if (auto r = reply_ch->SendMessage(ack); !r) {
         // checkout_mgr_ has already committed; if BaseApp never sees the
         // ack, login times out but the DBID stays checked out until
-        // BaseApp death detection clears it — login retries from any
+        // BaseApp death detection clears it - login retries from any
         // BaseApp will fail in the meantime.
         ATLAS_LOG_ERROR(
             "DBApp: CheckoutEntityAck dropped, dbid={} request_id={} status={} to {}: {} "
@@ -439,9 +405,7 @@ void DBApp::OnAbortCheckout(const Address& src, Channel* ch, const dbapp::AbortC
   }
 }
 
-// ============================================================================
 // on_checkin_entity
-// ============================================================================
 
 void DBApp::OnCheckinEntity(const Address& /*src*/, Channel* /*ch*/,
                             const dbapp::CheckinEntity& msg) {
@@ -450,9 +414,7 @@ void DBApp::OnCheckinEntity(const Address& /*src*/, Channel* /*ch*/,
   database_->MarkCheckoutCleared(msg.dbid, msg.type_id);
 }
 
-// ============================================================================
 // on_delete_entity
-// ============================================================================
 
 void DBApp::OnDeleteEntity(const Address& src, Channel* ch, const dbapp::DeleteEntity& msg) {
   if (ch == nullptr) return;
@@ -469,9 +431,7 @@ void DBApp::OnDeleteEntity(const Address& src, Channel* ch, const dbapp::DeleteE
                        });
 }
 
-// ============================================================================
 // on_lookup_entity
-// ============================================================================
 
 void DBApp::OnLookupEntity(const Address& src, Channel* ch, const dbapp::LookupEntity& msg) {
   if (ch == nullptr) return;
@@ -488,10 +448,6 @@ void DBApp::OnLookupEntity(const Address& src, Channel* ch, const dbapp::LookupE
         }
       });
 }
-
-// ============================================================================
-// on_get_entity_ids — allocate EntityIDs for a BaseApp
-// ============================================================================
 
 void DBApp::OnGetEntityIds(const Address& src, Channel* ch, const dbapp::GetEntityIds& msg) {
   if (ch == nullptr) return;
@@ -514,10 +470,6 @@ void DBApp::OnGetEntityIds(const Address& src, Channel* ch, const dbapp::GetEnti
   }
 }
 
-// ============================================================================
-// on_put_entity_ids — return unused EntityIDs (currently acknowledged only)
-// ============================================================================
-
 void DBApp::OnPutEntityIds(const Address& src, Channel* ch, const dbapp::PutEntityIds& msg) {
   if (ch == nullptr) return;
 
@@ -531,9 +483,7 @@ void DBApp::OnPutEntityIds(const Address& src, Channel* ch, const dbapp::PutEnti
   }
 }
 
-// ============================================================================
 // on_baseapp_death
-// ============================================================================
 
 void DBApp::OnBaseappDeath(const Address& internal_addr, std::string_view name) {
   int cleared_memory = checkout_mgr_.ClearAllFor(internal_addr);
@@ -545,10 +495,6 @@ void DBApp::OnBaseappDeath(const Address& internal_addr, std::string_view name) 
     ATLAS_LOG_WARNING("DBApp: cleared {} DB checkouts for dead BaseApp '{}'", cleared_db, name_str);
   });
 }
-
-// ============================================================================
-// on_auth_login — handle LoginApp authentication request
-// ============================================================================
 
 void DBApp::OnAuthLogin(const Address& src, Channel* ch, const login::AuthLogin& msg) {
   ATLAS_LOG_DEBUG("DBApp: auth login request_id={} user='{}' from {}:{}", msg.request_id,
@@ -574,7 +520,7 @@ void DBApp::OnAuthLogin(const Address& src, Channel* ch, const login::AuthLogin&
         reply.request_id = request_id;
 
         // A backend error (e.g. transient SQLite failure) must not be
-        // mistaken for "account does not exist" — surface it immediately.
+        // mistaken for "account does not exist" - surface it immediately.
         if (!result.error.empty()) {
           ATLAS_LOG_ERROR("DBApp: auth lookup failed for '{}': {}", username, result.error);
           reply.success = false;
@@ -591,7 +537,7 @@ void DBApp::OnAuthLogin(const Address& src, Channel* ch, const login::AuthLogin&
             EntityData data;
             data.type_id = account_type_id_;
             data.identifier = username;
-            // Empty blob for now — the entity will be populated by C# on first login.
+            // Empty blob for now - the entity will be populated by C# on first login.
             data.blob = {};
             database_->PutEntityWithPassword(
                 kInvalidDBID, account_type_id_, WriteFlags::kCreateNew, data.blob, data.identifier,

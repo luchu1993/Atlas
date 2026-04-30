@@ -22,21 +22,12 @@
 
 namespace atlas {
 
-// ============================================================================
-// Construction / destruction
-// ============================================================================
-
 ServerApp::ServerApp(EventDispatcher& dispatcher, NetworkInterface& network)
     : dispatcher_(dispatcher), network_(network), machined_client_(dispatcher, network) {}
 
 ServerApp::~ServerApp() = default;
 
-// ============================================================================
-// Public API
-// ============================================================================
-
 auto ServerApp::RunApp(int argc, char* argv[]) -> int {
-  // 1. Load configuration
   auto cfg_result = ServerConfig::Load(argc, argv);
   if (!cfg_result) {
     ATLAS_LOG_CRITICAL("Failed to load config: {}", cfg_result.Error().Message());
@@ -45,14 +36,13 @@ auto ServerApp::RunApp(int argc, char* argv[]) -> int {
   config_ = std::move(*cfg_result);
 
   // Resolve the frame label once, here, so the std::string lives for the
-  // remaining process lifetime. Tracy keys frames by pointer identity —
+  // remaining process lifetime. Tracy keys frames by pointer identity;
   // mutating frame_name after this point would split a single logical
   // frame into two unrelated ones in the viewer.
   if (config_.frame_name.empty()) {
     config_.frame_name = config_.process_name + ".Tick";
   }
 
-  // 2. Configure logger
   RuntimeConfig runtime_cfg;
   runtime_cfg.log_level = config_.log_level;
   auto runtime_result = Runtime::Initialize(runtime_cfg);
@@ -60,13 +50,10 @@ auto ServerApp::RunApp(int argc, char* argv[]) -> int {
     return 1;
   }
 
-  // 3. Apply ServerAppOption values from raw config
   if (config_.raw_config) ServerAppOptionBase::ApplyAll(*config_.raw_config->Root());
 
-  // 4. Raise fd / handle limits
   RaiseFdLimit();
 
-  // 5. Init
   if (!Init(argc, argv)) {
     ATLAS_LOG_CRITICAL("ServerApp::init() failed");
     Runtime::Finalize();
@@ -79,13 +66,10 @@ auto ServerApp::RunApp(int argc, char* argv[]) -> int {
 #endif
   ATLAS_LOG_INFO("{} started (pid={})", config_.process_name, pid);
 
-  // 6. Run
   bool run_ok = RunLoop();
 
-  // 7. Post-run hook
   OnRunComplete();
 
-  // 8. Cleanup
   Fini();
   Runtime::Finalize();
 
@@ -118,10 +102,6 @@ auto ServerApp::DeregisterForUpdate(Updatable* object) -> bool {
   return updatables_.Remove(object);
 }
 
-// ============================================================================
-// Protected lifecycle
-// ============================================================================
-
 auto ServerApp::Init(int argc, char* argv[]) -> bool {
   (void)argc;
   (void)argv;
@@ -129,28 +109,23 @@ auto ServerApp::Init(int argc, char* argv[]) -> bool {
   start_time_ = Clock::now();
   last_tick_time_ = start_time_;
 
-  // Install signal handlers — callbacks run on main thread via SignalDispatchTask
   InstallSignalHandler(Signal::kInterrupt, [this](Signal s) { OnSignal(s); });
   InstallSignalHandler(Signal::kTerminate, [this](Signal s) { OnSignal(s); });
 
-  // Register FrequentTask so dispatch_pending_signals() is called each loop
   signal_registration_ = dispatcher_.AddFrequentTask(&signal_task_);
 
-  // Register tick timer
   auto tick_interval = std::chrono::duration_cast<Duration>(
       std::chrono::duration<double>(1.0 / config_.update_hertz));
   tick_timer_ =
       dispatcher_.AddRepeatingTimer(tick_interval, [this](TimerHandle) { AdvanceTime(); });
 
-  // Register Watcher entries
   RegisterWatchers();
 
-  // Connect to machined (skip for the machined process itself)
   if (config_.process_type != ProcessType::kMachined) {
     if (machined_client_.Connect(config_.machined_address)) {
       machined_client_.SendRegister(config_);
     } else {
-      ATLAS_LOG_WARNING("ServerApp: could not connect to machined at {} — continuing",
+      ATLAS_LOG_WARNING("ServerApp: could not connect to machined at {} - continuing",
                         config_.machined_address.ToString());
     }
   }
@@ -159,17 +134,12 @@ auto ServerApp::Init(int argc, char* argv[]) -> bool {
 }
 
 void ServerApp::Fini() {
-  // Deregister from machined before shutting down
   if (config_.process_type != ProcessType::kMachined && machined_client_.IsConnected()) {
     machined_client_.SendDeregister(config_);
   }
 
-  // Cancel the tick timer to stop new AdvanceTime() calls
   if (tick_timer_.IsValid()) dispatcher_.CancelTimer(tick_timer_);
 
-  // Signal registration cleaned up by FrequentTaskRegistration RAII destructor
-
-  // Remove signal handlers
   RemoveSignalHandler(Signal::kInterrupt);
   RemoveSignalHandler(Signal::kTerminate);
 }
@@ -205,20 +175,14 @@ void ServerApp::RegisterWatchers() {
   w.Add("tick/slow_count", tick_stats_.slow_count);
   w.Add<uint64_t>("tick/total_count", [this]() { return GameTime(); });
 
-  // Register all ServerAppOption instances
   ServerAppOptionBase::RegisterAll(w);
 }
-
-// ============================================================================
-// Private: tick driver
-// ============================================================================
 
 void ServerApp::AdvanceTime() {
   auto now = Clock::now();
   auto actual_duration = now - last_tick_time_;
   last_tick_time_ = now;
 
-  // Slow-tick detection: actual elapsed > 2x the expected interval
   auto expected = std::chrono::duration_cast<Duration>(
       std::chrono::duration<double>(1.0 / config_.update_hertz));
 
@@ -233,15 +197,13 @@ void ServerApp::AdvanceTime() {
   tick_stats_.last_duration = actual_duration;
   if (actual_duration > tick_stats_.max_duration) tick_stats_.max_duration = actual_duration;
 
-  // Advance game clock by fixed step (deterministic)
   game_clock_.Tick(expected);
 
-  // Pump machined heartbeat
   if (config_.process_type != ProcessType::kMachined) {
     machined_client_.Tick();
   }
 
-  // Tick hooks — bracketed so we measure actual work time, distinct from
+  // Tick hooks are bracketed so we measure actual work time, distinct from
   // `actual_duration` which also covers the wait between timer fires.
   // Load reporting (CellApp::LastTickWorkDuration) needs work time alone.
   const auto work_start = Clock::now();
@@ -254,11 +216,6 @@ void ServerApp::AdvanceTime() {
       updatables_.Call();
     }
     OnTickComplete();
-    // Flush per-channel deferred-send bundles populated during the
-    // tick — timer-driven sends (witnesses, AI, replication pump)
-    // coalesce here.  Sends made from inbound-handler callbacks are
-    // flushed at the end of each NetworkInterface readable callback,
-    // so this hook only catches what the tick itself produced.
     FlushTickDirtyChannels();
   }
   tick_stats_.last_work_duration = Clock::now() - work_start;
@@ -272,10 +229,6 @@ void ServerApp::AdvanceTime() {
   ATLAS_PROFILE_PLOT("TickWorkMs", work_ms);
   ATLAS_PROFILE_FRAME(config_.frame_name.c_str());
 }
-
-// ============================================================================
-// Private: file descriptor / handle limit
-// ============================================================================
 
 void ServerApp::RaiseFdLimit() {
 #if defined(_WIN32)

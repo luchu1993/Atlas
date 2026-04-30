@@ -66,8 +66,7 @@ class TcpChannel : public Channel {
 
   bool write_registered_{false};
 
-  // OOM safety net — threshold sits well under kMaxWriteBufferSize so
-  // an inline flush never overflows the ring buffer.
+  // OOM safety net below kMaxWriteBufferSize.
   class Bundle deferred_bundle_;
   static constexpr std::size_t kDeferredFlushThreshold = 192 * 1024;
 };

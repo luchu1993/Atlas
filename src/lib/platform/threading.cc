@@ -7,10 +7,6 @@
 
 namespace atlas {
 
-// ============================================================================
-// ThreadPool::Impl
-// ============================================================================
-
 struct ThreadPool::Impl {
   std::vector<std::jthread> workers;
   std::queue<std::function<void()>> tasks;
@@ -19,10 +15,6 @@ struct ThreadPool::Impl {
   std::atomic<bool> stopped{false};
   std::atomic<uint32_t> pending{0};
 };
-
-// ============================================================================
-// ThreadPool
-// ============================================================================
 
 ThreadPool::ThreadPool(uint32_t num_threads) : impl_(std::make_unique<Impl>()) {
   if (num_threads == 0) {
@@ -73,7 +65,7 @@ void ThreadPool::Enqueue(std::function<void()> task) {
   {
     std::lock_guard lock(impl_->mutex);
     if (impl_->stopped.load(std::memory_order_relaxed)) {
-      return;  // Silently drop — packaged_task dtor sets broken_promise
+      return;  // packaged_task dtor sets broken_promise
     }
     impl_->tasks.push(std::move(task));
     impl_->pending.fetch_add(1, std::memory_order_relaxed);
@@ -89,14 +81,9 @@ void ThreadPool::Shutdown() {
     }
   }
 
-  // Wake all workers so they see stopped=true and drain remaining tasks.
-  // Setting stopped under the mutex above prevents a lost-wakeup race:
-  // a worker that holds the mutex for its predicate check cannot miss
-  // the transition, and a worker already in cv.wait() will be notified.
+  // Setting stopped under the mutex prevents a lost-wakeup race.
   impl_->cv.notify_all();
 
-  // jthread destructor joins — workers will process all queued tasks
-  // before exiting (they only exit when stopped && tasks.empty())
   impl_->workers.clear();
 }
 

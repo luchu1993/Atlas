@@ -11,10 +11,6 @@ namespace atlas {
 
 class CancellationToken;
 
-// ============================================================================
-// CancellationState — shared state between source and tokens
-// ============================================================================
-
 struct CancellationState {
   struct Entry {
     uint64_t id{0};
@@ -25,10 +21,6 @@ struct CancellationState {
   uint64_t next_id{1};
   std::vector<Entry> callbacks;
 };
-
-// ============================================================================
-// CancelRegistration — RAII handle that deregisters on destruction
-// ============================================================================
 
 class CancelRegistration {
  public:
@@ -46,7 +38,6 @@ class CancelRegistration {
 
   CancelRegistration& operator=(CancelRegistration&& other) noexcept {
     if (this != &other) {
-      // Deregister current
       if (state_ && id_ != 0) {
         std::erase_if(state_->callbacks,
                       [id = id_](const CancellationState::Entry& e) { return e.id == id; });
@@ -70,10 +61,6 @@ class CancelRegistration {
   uint64_t id_{0};
 };
 
-// ============================================================================
-// CancellationSource — owner calls request_cancellation()
-// ============================================================================
-
 class CancellationSource {
  public:
   CancellationSource() : state_(std::make_shared<CancellationState>()) {}
@@ -82,7 +69,6 @@ class CancellationSource {
     if (state_->cancelled) return;
     state_->cancelled = true;
 
-    // Copy callbacks before invoking — a callback might deregister others
     auto callbacks = std::move(state_->callbacks);
     state_->callbacks.clear();
     for (auto& entry : callbacks) {
@@ -97,10 +83,6 @@ class CancellationSource {
  private:
   std::shared_ptr<CancellationState> state_;
 };
-
-// ============================================================================
-// CancellationToken — read-only view, passed to awaitables
-// ============================================================================
 
 class CancellationToken {
  public:
@@ -131,7 +113,6 @@ class CancellationToken {
   std::shared_ptr<CancellationState> state_;
 };
 
-// Inline definition (needs CancellationToken to be complete)
 inline auto CancellationSource::Token() const -> CancellationToken {
   return CancellationToken{state_};
 }

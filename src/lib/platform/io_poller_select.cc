@@ -16,10 +16,6 @@
 
 namespace atlas {
 
-// ============================================================================
-// SelectPoller
-// ============================================================================
-
 class SelectPoller final : public IOPoller {
  public:
   auto Add(FdHandle fd, IOEvent interest, IOCallback callback) -> Result<void> override {
@@ -84,7 +80,6 @@ class SelectPoller final : public IOPoller {
       if ((entry.interest & IOEvent::kWritable) != IOEvent::kNone) {
         FD_SET(fd, &write_set);
       }
-      // Always monitor for errors
       FD_SET(fd, &except_set);
 
 #if !ATLAS_PLATFORM_WINDOWS
@@ -94,7 +89,6 @@ class SelectPoller final : public IOPoller {
 #endif
     }
 
-    // Convert Duration to timeval
     auto usec = std::chrono::duration_cast<Microseconds>(max_wait).count();
     if (usec < 0) {
       usec = 0;
@@ -128,9 +122,6 @@ class SelectPoller final : public IOPoller {
       return 0;
     }
 
-    // Collect only the ready {fd, events} pairs into a lightweight snapshot
-    // (O(ready) pairs, not O(n) full map copy with std::function heap allocs).
-    // ready_fds_ is a member to reuse its buffer across poll() calls.
     ready_fds_.clear();
     for (const auto& [fd, entry] : entries_) {
       IOEvent events = IOEvent::kNone;
@@ -169,7 +160,6 @@ class SelectPoller final : public IOPoller {
     IOCallback callback;
   };
 
-  // Reused across poll() calls to avoid per-call heap allocation.
   struct ReadyFd {
     FdHandle fd;
     IOEvent events;
@@ -179,10 +169,6 @@ class SelectPoller final : public IOPoller {
   std::unordered_map<FdHandle, Entry> entries_;
   std::vector<ReadyFd> ready_fds_;
 };
-
-// ============================================================================
-// Factory
-// ============================================================================
 
 std::unique_ptr<IOPoller> CreateSelectPoller() {
   return std::make_unique<SelectPoller>();

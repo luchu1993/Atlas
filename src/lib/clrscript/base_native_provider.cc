@@ -9,16 +9,10 @@
 namespace atlas {
 
 void BaseNativeProvider::LogMessage(int32_t level, const char* msg, int32_t len) {
-  // Guard against bad inputs from across the C#/C++ boundary.
   if (msg == nullptr || len <= 0) return;
 
   std::string_view message(msg, static_cast<std::size_t>(len));
   auto log_level = static_cast<LogLevel>(level);
-  // Call Logger directly rather than expanding 6 ATLAS_LOG_* macros.
-  // Each macro captures source_location and does compile-time level checks
-  // that are meaningless for C#-originated messages.  Direct Logger::Log()
-  // is one call with a single runtime level check, and adds a "clr" category
-  // to distinguish managed-side log output in filtered views.
   auto& logger = Logger::Instance();
   if (static_cast<uint8_t>(log_level) >= static_cast<uint8_t>(logger.Level()))
     logger.Log(log_level, "clr", message);
@@ -89,16 +83,7 @@ void BaseNativeProvider::SetAoIRadius(uint32_t entity_id, float /*radius*/, floa
   ATLAS_LOG_ERROR("set_aoi_radius() not supported on this process type (entity_id={})", entity_id);
 }
 
-void BaseNativeProvider::SetNativeCallbacks(const void* /*native_callbacks*/, int32_t /*len*/) {
-  // Default: silently ignore.  Processes without C# scripting never receive callbacks.
-}
-
-// ---------------------------------------------------------------------------
-// CellApp-specific defaults — every non-CellApp process gets these as
-// error-logging no-ops. Game scripts calling atlas_set_position on
-// BaseApp (where no RangeList exists) get a clear log instead of a
-// silent mis-operation.
-// ---------------------------------------------------------------------------
+void BaseNativeProvider::SetNativeCallbacks(const void* /*native_callbacks*/, int32_t /*len*/) {}
 
 void BaseNativeProvider::SetEntityPosition(uint32_t entity_id, float /*x*/, float /*y*/,
                                            float /*z*/) {

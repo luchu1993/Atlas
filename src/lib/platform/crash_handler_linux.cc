@@ -119,10 +119,6 @@ void Handler(int sig, siginfo_t* info, void* ucontext) {
 
 }  // namespace crash_internal
 
-// ============================================================================
-// Public API
-// ============================================================================
-
 bool InstallCrashHandler(const CrashHandlerOptions& opts) {
   using namespace crash_internal;
   std::lock_guard<std::mutex> lock(g_install_mutex);
@@ -135,7 +131,6 @@ bool InstallCrashHandler(const CrashHandlerOptions& opts) {
   std::snprintf(g_process_name_buf, sizeof(g_process_name_buf), "%s",
                 opts.process_name.empty() ? "process" : opts.process_name.c_str());
 
-  // Alternate signal stack so SIGSEGV from stack overflow can still run.
   stack_t ss{};
   ss.ss_sp = g_alt_stack;
   ss.ss_size = kAltStackSize;

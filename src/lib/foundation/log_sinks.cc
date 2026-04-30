@@ -39,8 +39,6 @@ void EnsureAnsiSupport() {
 void EnsureAnsiSupport() {}
 #endif
 
-// Return just the filename component of a path (e.g. "cellapp.cc").
-// Pure pointer arithmetic — no allocation, no copy.
 auto Basename(const char* path) -> const char* {
   const char* slash = std::strrchr(path, '/');
   const char* bslash = std::strrchr(path, '\\');
@@ -48,9 +46,6 @@ auto Basename(const char* path) -> const char* {
   return last ? last + 1 : path;
 }
 
-// ANSI colour escapes per log level, matching spdlog's palette.
-// Trace=white, Debug=cyan, Info=green, Warning=yellow, Error=red,
-// Critical=bold-red-on-white.
 struct ColorPair {
   const char* begin;
   const char* end;
@@ -77,10 +72,6 @@ auto LevelColor(LogLevel level) -> ColorPair {
 
 }  // namespace
 
-// ---------------------------------------------------------------------------
-// ConsoleSink
-// ---------------------------------------------------------------------------
-
 void ConsoleSink::Write(LogLevel level, std::string_view category, std::string_view message,
                         const std::source_location& location) {
   EnsureAnsiSupport();
@@ -95,13 +86,7 @@ void ConsoleSink::Write(LogLevel level, std::string_view category, std::string_v
                             category, file, location.line(), message);
   }
 
-  // fflush on every line, for both streams. Without this, stdout stays in
-  // the 4 KB C-runtime buffer when the process is redirected to a pipe —
-  // a harness that TerminateProcess'es the child (Windows world_stress
-  // script-client flow) loses every INFO log emitted before exit because
-  // TerminateProcess skips the C-runtime's exit-time flush. The cost is
-  // one fflush per log line, which is negligible for operator-facing
-  // diagnostic volume.
+  // Flush each line so terminated child processes do not lose buffered logs.
   if (level >= LogLevel::kError) {
     std::fwrite(formatted.data(), 1, formatted.size(), stderr);
     std::fflush(stderr);
@@ -115,10 +100,6 @@ void ConsoleSink::Flush() {
   fflush(stdout);
   fflush(stderr);
 }
-
-// ---------------------------------------------------------------------------
-// FileSink
-// ---------------------------------------------------------------------------
 
 struct FileSink::Impl {
   std::ofstream file;
@@ -159,9 +140,7 @@ void FileSink::Flush() {
 
   try {
     impl_->file.flush();
-  } catch (...) {
-    // Silently ignore ofstream failures
-  }
+  } catch (...) {}
 }
 
 }  // namespace atlas

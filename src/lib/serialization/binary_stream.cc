@@ -4,10 +4,6 @@
 
 namespace atlas {
 
-// ============================================================================
-// BinaryWriter
-// ============================================================================
-
 BinaryWriter::BinaryWriter(std::size_t reserve_bytes) {
   buffer_.reserve(reserve_bytes);
 }
@@ -71,10 +67,6 @@ void BinaryWriter::Clear() {
 auto BinaryWriter::Detach() -> std::vector<std::byte> {
   return std::move(buffer_);
 }
-
-// ============================================================================
-// BinaryReader
-// ============================================================================
 
 BinaryReader::BinaryReader(std::span<const std::byte> data) : data_(data) {}
 

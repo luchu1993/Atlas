@@ -16,10 +16,6 @@
 
 namespace atlas {
 
-// ============================================================================
-// PendingRpcRegistry — maps (MessageID, request_id) to coroutine callbacks
-// ============================================================================
-
 class PendingRpcRegistry {
  public:
   explicit PendingRpcRegistry(EventDispatcher& dispatcher);
@@ -37,18 +33,14 @@ class PendingRpcRegistry {
     [[nodiscard]] auto IsValid() const -> bool { return reply_id != 0; }
   };
 
-  // Register a pending RPC. Returns a handle for manual cancellation.
   auto RegisterPending(MessageID reply_id, uint32_t request_id, ReplyCallback on_reply,
                        ErrorCallback on_error, Duration timeout) -> PendingHandle;
 
-  // Try to consume an inbound message. Returns true if matched.
-  // Convention: request_id is the first uint32_t (LE) in payload.
+  // request_id is the first little-endian uint32_t in payload.
   auto TryDispatch(MessageID id, std::span<const std::byte> payload) -> bool;
 
-  // Cancel a specific pending entry.
   void Cancel(PendingHandle handle);
 
-  // Cancel all pending entries (process shutdown).
   void CancelAll();
 
   [[nodiscard]] auto PendingCount() const -> size_t;

@@ -13,7 +13,7 @@ namespace atlas {
 class CellEntity;
 class NetworkInterface;
 
-// INativeApiProvider for a CellApp process; thin façade — uses a
+// INativeApiProvider for a CellApp process; thin façade - uses a
 // caller-supplied lookup so tests share the class without knowing
 // CellApp internals.
 class CellAppNativeProvider : public BaseNativeProvider {
@@ -75,9 +75,9 @@ class CellAppNativeProvider : public BaseNativeProvider {
   // absence: Offload ships empty persistent_blob (replication baseline
   // covers it).
   SerializeEntityFn serialize_entity_fn_{nullptr};
-  // nullptr ⇒ baseline pump short-circuits.
+  // nullptr => baseline pump short-circuits.
   GetOwnerSnapshotFn get_owner_snapshot_fn_{nullptr};
-  // nullptr ⇒ proximity events dropped at lambda; trigger state still
+  // nullptr => proximity events dropped at lambda; trigger state still
   // correct for Offload / InsidePeers.
   ProximityEventFn proximity_event_fn_{nullptr};
 };

@@ -121,7 +121,6 @@ class ByteRingBuffer {
     auto ri = read_pos_ & mask_;
     if (ri == 0) return;
 
-    // Data doesn't wrap — simple shift to front
     if (ri + size <= capacity_) {
       std::memmove(buffer_.get(), buffer_.get() + ri, size);
     } else {
@@ -180,7 +179,7 @@ class ByteRingBuffer {
   std::size_t max_capacity_;
   std::size_t mask_;
   std::unique_ptr<std::byte[]> buffer_;
-  // Absolute positions — use & mask_ to get buffer index
+  // Absolute positions; use & mask_ to get buffer index.
   std::size_t read_pos_{0};
   std::size_t write_pos_{0};
 };

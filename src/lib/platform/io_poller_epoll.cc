@@ -12,10 +12,6 @@
 
 namespace atlas {
 
-// ============================================================================
-// EpollPoller
-// ============================================================================
-
 class EpollPoller final : public IOPoller {
  public:
   EpollPoller() : epfd_(::epoll_create1(EPOLL_CLOEXEC)) {}
@@ -26,7 +22,6 @@ class EpollPoller final : public IOPoller {
     }
   }
 
-  // Non-copyable, non-movable
   EpollPoller(const EpollPoller&) = delete;
   auto operator=(const EpollPoller&) -> EpollPoller& = delete;
   EpollPoller(EpollPoller&&) = delete;
@@ -93,7 +88,6 @@ class EpollPoller final : public IOPoller {
       return Error(ErrorCode::kInternalError, "epoll instance not initialized");
     }
 
-    // Convert Duration to milliseconds for epoll_wait
     auto ms = std::chrono::duration_cast<Milliseconds>(max_wait).count();
     int timeout_ms;
 
@@ -195,10 +189,6 @@ class EpollPoller final : public IOPoller {
   std::unordered_map<FdHandle, Entry> entries_;
   std::vector<ReadyFd> ready_fds_;
 };
-
-// ============================================================================
-// Factory
-// ============================================================================
 
 std::unique_ptr<IOPoller> CreateEpollPoller() {
   return std::make_unique<EpollPoller>();

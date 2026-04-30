@@ -102,7 +102,7 @@ auto DecodeTimer(BinaryReader& r) -> std::unique_ptr<Controller> {
   return timer;
 }
 
-// Proximity decode is inline in the caller — needs the owner's RangeNode
+// Proximity decode is inline in the caller - needs the owner's RangeNode
 // + Space's RangeList + lookup_peer.
 
 }  // namespace

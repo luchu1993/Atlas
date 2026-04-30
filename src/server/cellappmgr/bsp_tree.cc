@@ -6,10 +6,6 @@
 
 namespace atlas {
 
-// ============================================================================
-// BSPLeaf
-// ============================================================================
-
 auto BSPLeaf::FindCell(float x, float z) const -> const CellInfo* {
   return info_.bounds.Contains(x, z) ? &info_ : nullptr;
 }
@@ -23,10 +19,7 @@ void BSPLeaf::PropagateBounds(const CellBounds& sub_bounds) {
   info_.bounds = sub_bounds;
 }
 
-void BSPLeaf::UpdateLoad() {
-  // Leaf load is whatever CellAppMgr has most recently written to
-  // info_.load via InformCellLoad. Nothing to aggregate here.
-}
+void BSPLeaf::UpdateLoad() {}
 
 void BSPLeaf::Serialize(BinaryWriter& w) const {
   w.Write(static_cast<uint8_t>(0));  // type tag: 0 = leaf
@@ -34,10 +27,6 @@ void BSPLeaf::Serialize(BinaryWriter& w) const {
   w.Write(info_.cellapp_addr.Ip());
   w.Write(info_.cellapp_addr.Port());
 }
-
-// ============================================================================
-// BSPInternal
-// ============================================================================
 
 auto BSPInternal::FindCell(float x, float z) const -> const CellInfo* {
   // Half-open on position_ to match CellBounds::Contains.
@@ -86,7 +75,6 @@ void BSPInternal::Balance(float safety_bound) {
   // then shift position_. Leaves themselves are no-ops but the new
   // split line has to be pushed back down via PropagateBounds after
   // all internal nodes in this subtree have settled.
-  //
   // Hysteresis at 0.01f suppresses jitter when the tree is already
   // balanced.
   constexpr float kLoadHysteresis = 0.01f;
@@ -98,20 +86,20 @@ void BSPInternal::Balance(float safety_bound) {
     d = Direction::kRight;
 
   if (d != Direction::kNone) {
-    // Don't make the already-growing side worse — if the side that WOULD
+    // Don't make the already-growing side worse - if the side that WOULD
     // grow (i.e. the opposite of the heavy side) is already over
     // safety_bound, hold still.
     const float growing_side_load = (d == Direction::kLeft) ? right_load_ : left_load_;
     if (growing_side_load < safety_bound) {
       if (d != prev_direction_ && prev_direction_ != Direction::kNone) {
-        aggression_ *= 0.9f;  // direction reversed — damp
+        aggression_ *= 0.9f;  // direction reversed - damp
       } else {
-        aggression_ = std::min(aggression_ * 1.1f, 2.0f);  // keep going — accelerate
+        aggression_ = std::min(aggression_ * 1.1f, 2.0f);  // keep going - accelerate
       }
       prev_direction_ = d;
 
-      // Move 10% of the imbalance × aggression. Sign follows `diff`: when
-      // diff > 0 (left heavier), position_ increases → shrinks left.
+      // Move 10% of the imbalance x aggression. Sign follows `diff`: when
+      // diff > 0 (left heavier), position_ increases -> shrinks left.
       const float move = diff * 0.1f * aggression_;
       const float new_position = position_ + move;
 
@@ -146,10 +134,6 @@ void BSPInternal::Serialize(BinaryWriter& w) const {
   left_->Serialize(w);
   right_->Serialize(w);
 }
-
-// ============================================================================
-// BSPTree
-// ============================================================================
 
 namespace {
 
@@ -193,7 +177,7 @@ void BSPTree::InitSingleCell(CellInfo info) {
 
 namespace {
 
-// Recursive descent used by Split — we walk through unique_ptr slots so
+// Recursive descent used by Split - we walk through unique_ptr slots so
 // the matching leaf can be replaced in-place by a fresh internal node.
 auto SplitInSubtree(std::unique_ptr<BSPNode>& slot, const CellBounds& sub_bounds,
                     cellappmgr::CellID existing_cell_id, BSPAxis axis, float position,
@@ -210,7 +194,7 @@ auto SplitInSubtree(std::unique_ptr<BSPNode>& slot, const CellBounds& sub_bounds
       return Error{ErrorCode::kInvalidArgument,
                    "BSPTree::Split: position outside existing leaf bounds"};
     }
-    auto left_leaf = std::move(slot);  // old leaf → left side
+    auto left_leaf = std::move(slot);  // old leaf -> left side
     auto right_leaf = std::make_unique<BSPLeaf>(std::move(new_cell));
     slot =
         std::make_unique<BSPInternal>(axis, position, std::move(left_leaf), std::move(right_leaf));

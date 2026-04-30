@@ -113,7 +113,6 @@ class StreamBufferPool {
     if (!data) return;
 
     if (tier >= kNumTiers) {
-      // Oversized — just free it
       auto it = std::find_if(oversize_buffers_.begin(), oversize_buffers_.end(),
                              [data](const auto& p) { return p.get() == data; });
       if (it != oversize_buffers_.end())

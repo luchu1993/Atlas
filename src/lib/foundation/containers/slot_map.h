@@ -54,7 +54,6 @@ class SlotMap {
     auto& slot = slots_[handle.index];
     auto dense_idx = slot.dense_index;
 
-    // Swap with last element in dense array
     if (dense_idx != dense_.size() - 1) {
       auto last_sparse = dense_to_sparse_.back();
       dense_[dense_idx] = std::move(dense_.back());
@@ -65,7 +64,6 @@ class SlotMap {
     dense_.pop_back();
     dense_to_sparse_.pop_back();
 
-    // Recycle slot
     slot.generation++;
     slot.dense_index = kNullIndex;
     slot.next_free = free_head_;
@@ -101,7 +99,6 @@ class SlotMap {
     }
     dense_.clear();
     dense_to_sparse_.clear();
-    // Rebuild free list
     free_head_ = kNullIndex;
     for (uint32_t i = static_cast<uint32_t>(slots_.size()); i > 0; --i) {
       slots_[i - 1].next_free = free_head_;
@@ -109,7 +106,6 @@ class SlotMap {
     }
   }
 
-  // Dense iteration (no gaps)
   auto begin() { return dense_.begin(); }
   auto end() { return dense_.end(); }
   auto begin() const { return dense_.begin(); }

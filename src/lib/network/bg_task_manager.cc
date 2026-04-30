@@ -7,7 +7,6 @@
 
 namespace atlas {
 
-// Lambda adapter for the convenience API
 class LambdaTask : public BackgroundTask {
  public:
   LambdaTask(std::function<void()> bg, std::function<void()> main)
@@ -36,17 +35,15 @@ BgTaskManager::BgTaskManager(EventDispatcher& dispatcher, uint32_t num_threads)
       registration_(impl_->dispatcher.AddFrequentTask(this)) {}
 
 BgTaskManager::~BgTaskManager() {
-  // registration_ destructor removes us from the dispatcher automatically.
   registration_.Reset();
   impl_->pool.Shutdown();
-  // Process any remaining completed tasks
   DoTask();
 }
 
 void BgTaskManager::AddTask(std::unique_ptr<BackgroundTask> task) {
-  impl_->in_flight.fetch_add(1, std::memory_order_relaxed);  // publish order doesn't matter here
+  impl_->in_flight.fetch_add(1, std::memory_order_relaxed);
 
-  auto* raw = task.release();  // ThreadPool takes ownership via lambda
+  auto* raw = task.release();
   impl_->pool.Submit([this, raw]() {
     std::unique_ptr<BackgroundTask> owned(raw);
     SafeInvoke("BackgroundTask::do_background_task", [&] { owned->DoBackgroundTask(); });
@@ -66,7 +63,6 @@ auto BgTaskManager::PendingCount() const -> uint32_t {
 }
 
 auto BgTaskManager::InFlightCount() const -> uint32_t {
-  // acquire: ensures all worker writes are visible before we read the count
   return impl_->in_flight.load(std::memory_order_acquire);
 }
 
@@ -79,8 +75,6 @@ void BgTaskManager::DoTask() {
 
   for (auto& task : tasks) {
     SafeInvoke("BackgroundTask::do_main_thread_task", [&] { task->DoMainThreadTask(); });
-    // release: pairs with the acquire in in_flight_count(), ensuring the
-    // main thread sees all worker-side mutations before the count drops.
     impl_->in_flight.fetch_sub(1, std::memory_order_release);
   }
 }

@@ -15,9 +15,7 @@
 namespace atlas {
 namespace crash_internal {
 
-// Shared state used by the platform-specific compilation units.  A single
-// std::mutex guards installation/teardown so concurrent Install/Uninstall
-// from tests does not race with a real crash — the crash path itself does
+// A mutex guards installation; the crash path itself does
 // NOT take the mutex (locking inside a signal/SEH handler is unsafe).
 std::mutex g_install_mutex;
 
@@ -56,9 +54,7 @@ bool PrepareDumpDir(const std::string& dir) {
   return true;
 }
 
-// Writes a "<process>_<pid>_<YYYYMMDD-HHMMSS>" stem (no extension) into
-// `out`.  Async-signal-safe-ish: only uses time(), localtime_r/s, snprintf
-// — sufficient for our best-effort guarantee.
+// Best-effort crash-path helper: localtime + snprintf only.
 void FormatDumpStem(char* out, std::size_t out_size, int pid) {
   std::time_t now = std::time(nullptr);
   std::tm tm_buf{};
@@ -88,9 +84,6 @@ bool InstallDefaultCrashHandler(const std::string& process_name) {
     opts.full_memory = true;
   }
 
-  // Captured by value so the callback survives even if `process_name` goes
-  // out of scope (it shouldn't, but cheap insurance).  stderr is the only
-  // sink we trust on the crash path: the logger may have torn-down state.
   std::string tag = process_name;
   opts.on_crash = [tag](const std::string& path) {
     std::fprintf(stderr, "[%s] crash dump written: %s\n", tag.c_str(), path.c_str());

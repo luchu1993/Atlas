@@ -24,7 +24,7 @@ auto EventDispatcher::ModifyInterest(FdHandle fd, IOEvent interest) -> Result<vo
 }
 
 auto EventDispatcher::Deregister(FdHandle fd) -> Result<void> {
-  // Safe to call during poll dispatch — IOPoller implementations swap the
+  // Safe during poll dispatch: IOPoller implementations swap the
   // callback out for invocation and re-resolve the entry when the map changes.
   return poller_->Remove(fd);
 }
@@ -42,10 +42,6 @@ auto EventDispatcher::CancelTimer(TimerHandle handle) -> bool {
   return timers_.Cancel(handle);
 }
 
-// ============================================================================
-// FrequentTaskRegistration out-of-line definitions
-// ============================================================================
-
 FrequentTaskRegistration::~FrequentTaskRegistration() {
   Reset();
 }
@@ -57,10 +53,6 @@ void FrequentTaskRegistration::Reset() {
     task_ = nullptr;
   }
 }
-
-// ============================================================================
-// Frequent task management
-// ============================================================================
 
 auto EventDispatcher::AddFrequentTask(FrequentTask* task) -> FrequentTaskRegistration {
   auto it = std::find(tasks_.begin(), tasks_.end(), task);

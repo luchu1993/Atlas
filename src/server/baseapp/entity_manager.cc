@@ -159,7 +159,7 @@ void EntityManager::Destroy(EntityID id) {
 auto EntityManager::IsRangeLow() const -> bool {
   if (id_client_) return id_client_->NeedsRefill();
 
-  return true;  // no IDClient — always request more
+  return true;  // no IDClient - always request more
 }
 
 void EntityManager::FlushDestroyed() {

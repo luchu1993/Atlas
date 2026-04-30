@@ -22,10 +22,6 @@ MachinedClient::MachinedClient(EventDispatcher& dispatcher, NetworkInterface& ne
 
 MachinedClient::~MachinedClient() = default;
 
-// ============================================================================
-// Connection
-// ============================================================================
-
 auto MachinedClient::Connect(const Address& machined_addr) -> bool {
   if (!handlers_registered_) {
     RegisterHandlers();
@@ -45,10 +41,6 @@ auto MachinedClient::Connect(const Address& machined_addr) -> bool {
 auto MachinedClient::IsConnected() const -> bool {
   return channel_ != nullptr && channel_->IsConnected();
 }
-
-// ============================================================================
-// Registration
-// ============================================================================
 
 void MachinedClient::SendRegister(const ServerConfig& cfg) {
   if (!IsConnected()) {
@@ -92,10 +84,6 @@ void MachinedClient::SendDeregister(const ServerConfig& cfg) {
   registered_ = false;
 }
 
-// ============================================================================
-// Heartbeats
-// ============================================================================
-
 void MachinedClient::SendHeartbeat(float load, uint32_t entity_count) {
   if (!IsConnected()) return;
 
@@ -109,14 +97,12 @@ void MachinedClient::SendHeartbeat(float load, uint32_t entity_count) {
 #endif
 
   if (machined_heartbeat_udp_addr_.Port() != 0) {
-    // Fire-and-forget UDP heartbeat — no TCP round-trip, no ack expected
     auto udp_ch = network_.ConnectUdp(machined_heartbeat_udp_addr_);
     if (udp_ch) {
       (void)(*udp_ch)->SendMessage(msg);
       last_heartbeat_ = Clock::now();
       return;
     }
-    // Fall through to TCP on failure
   }
 
   if (auto r = channel_->SendMessage(msg); !r) {
@@ -133,10 +119,6 @@ void MachinedClient::Tick(float load, uint32_t entity_count) {
     SendHeartbeat(load, entity_count);
   }
 }
-
-// ============================================================================
-// Synchronous query
-// ============================================================================
 
 auto MachinedClient::QuerySync(ProcessType type, Duration timeout)
     -> std::vector<machined::ProcessInfo> {
@@ -162,10 +144,6 @@ auto MachinedClient::QuerySync(ProcessType type, Duration timeout)
   return result;
 }
 
-// ============================================================================
-// Async query
-// ============================================================================
-
 void MachinedClient::QueryAsync(ProcessType type, QueryCallback cb) {
   if (!IsConnected()) {
     cb({});
@@ -186,10 +164,6 @@ void MachinedClient::QueryAsync(ProcessType type, QueryCallback cb) {
   }
 }
 
-// ============================================================================
-// Listener subscriptions
-// ============================================================================
-
 void MachinedClient::Subscribe(machined::ListenerType listener_type, ProcessType target_type,
                                BirthCallback on_birth, DeathCallback on_death) {
   subscriptions_.push_back({listener_type, target_type, std::move(on_birth), std::move(on_death)});
@@ -201,10 +175,6 @@ void MachinedClient::Subscribe(machined::ListenerType listener_type, ProcessType
     (void)channel_->SendMessage(msg);
   }
 }
-
-// ============================================================================
-// Handler registration
-// ============================================================================
 
 void MachinedClient::RegisterHandlers() {
   auto& table = network_.InterfaceTable();
@@ -245,10 +215,6 @@ void MachinedClient::RegisterHandlers() {
       });
 }
 
-// ============================================================================
-// Message handlers
-// ============================================================================
-
 void MachinedClient::OnRegisterAck(const Address& src, Channel* /*ch*/,
                                    const machined::RegisterAck& msg) {
   if (msg.success) {
@@ -265,7 +231,7 @@ void MachinedClient::OnRegisterAck(const Address& src, Channel* /*ch*/,
 
     if (msg.heartbeat_udp_port != 0) {
       machined_heartbeat_udp_addr_ = Address(src.Ip(), msg.heartbeat_udp_port);
-      ATLAS_LOG_INFO("MachinedClient: registered with machined — heartbeats via UDP {}:{}",
+      ATLAS_LOG_INFO("MachinedClient: registered with machined - heartbeats via UDP {}:{}",
                      src.Ip(), msg.heartbeat_udp_port);
     } else {
       ATLAS_LOG_INFO("MachinedClient: registered with machined (server_time={})", msg.server_time);
@@ -276,9 +242,7 @@ void MachinedClient::OnRegisterAck(const Address& src, Channel* /*ch*/,
 }
 
 void MachinedClient::OnHeartbeatAck(const Address& /*src*/, Channel* /*ch*/,
-                                    const machined::HeartbeatAck& /*msg*/) {
-  // No action needed; receipt confirms liveness
-}
+                                    const machined::HeartbeatAck& /*msg*/) {}
 
 void MachinedClient::OnQueryResponse(const Address& /*src*/, Channel* /*ch*/,
                                      const machined::QueryResponse& msg) {

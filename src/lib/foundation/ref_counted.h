@@ -8,19 +8,9 @@
 
 namespace atlas {
 
-// Thread-safety tags for use with IntrusivePtr<T> in templates that need to
-// distinguish single-threaded from multi-threaded ref-counted objects.
-//
-// Example:
-//   template <IntrusiveRefCounted T>
-//   class SharedChannel {
-//     static_assert(std::is_same_v<typename T::thread_safety_tag, multi_thread_tag>,
-//                   "SharedChannel requires AtomicRefCounted");
-//   };
 struct single_thread_tag {};
 struct multi_thread_tag {};
 
-// C++20 concept for intrusive ref counting
 template <typename T>
 concept IntrusiveRefCounted = requires(const T& obj) {
   { obj.add_ref() } -> std::same_as<uint32_t>;
@@ -28,7 +18,6 @@ concept IntrusiveRefCounted = requires(const T& obj) {
   { obj.ref_count() } -> std::same_as<uint32_t>;
 };
 
-// Non-thread-safe reference count base
 class RefCounted {
  public:
   using thread_safety_tag = single_thread_tag;
@@ -47,7 +36,6 @@ class RefCounted {
  protected:
   RefCounted() = default;
 
-  // Copy: new object starts at 0 refs
   RefCounted(const RefCounted&) noexcept : ref_count_(0) {}
   auto operator=(const RefCounted&) noexcept -> RefCounted& { return *this; }
 
@@ -57,7 +45,6 @@ class RefCounted {
   mutable uint32_t ref_count_{0};
 };
 
-// Thread-safe reference count base
 class AtomicRefCounted {
  public:
   using thread_safety_tag = multi_thread_tag;

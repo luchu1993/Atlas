@@ -13,8 +13,6 @@ EntityApp::~EntityApp() = default;
 auto EntityApp::Init(int argc, char* argv[]) -> bool {
   if (!ScriptApp::Init(argc, argv)) return false;
 
-  // Open RUDP server on the internal port so peer services (LoginApp, CellApp,
-  // other BaseApps) can connect to this process via RUDP.
   const auto& cfg = Config();
   if (cfg.internal_port > 0) {
     Address listen_addr(0, cfg.internal_port);
@@ -28,7 +26,6 @@ auto EntityApp::Init(int argc, char* argv[]) -> bool {
                    Network().RudpAddress().ToString());
   }
 
-  // Install User1 handler for stack-trace dumps (Linux: map SIGQUIT → SIGUSR1).
   InstallSignalHandler(Signal::kUser1, [this](Signal s) { OnSignal(s); });
 
   return true;
@@ -39,22 +36,13 @@ void EntityApp::Fini() {
   ScriptApp::Fini();
 }
 
-void EntityApp::OnStartOfTick() {
-  // Script-side timers are driven by ScriptEngine::on_tick() in
-  // ScriptApp::on_tick_complete(), so nothing additional is needed here.
-  // Subclasses (BaseApp, CellApp) use this hook for entity-level bookkeeping.
-}
+void EntityApp::OnStartOfTick() {}
 
 void EntityApp::OnSignal(Signal sig) {
   if (sig == Signal::kUser1) {
-    // Diagnostic stack-trace dump requested (e.g. from Manager detecting a hung process).
-    // On Linux this is triggered by SIGUSR1 (or via SIGQUIT mapped to SIGUSR1).
-    ATLAS_LOG_CRITICAL("EntityApp: received diagnostic signal — dumping state");
-    // platform::print_stack_trace() will be added when the platform library
-    // gains stack-unwinding support. For now log a placeholder.
+    ATLAS_LOG_CRITICAL("EntityApp: received diagnostic signal - dumping state");
     ATLAS_LOG_CRITICAL("  game_time={}  uptime={:.1f}s  bg_tasks_pending={}", GameTime(),
                        UptimeSeconds(), bg_task_manager_.PendingCount());
-    // Do NOT call shutdown() — let the Manager decide what to do next.
     return;
   }
   ScriptApp::OnSignal(sig);

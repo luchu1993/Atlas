@@ -21,7 +21,7 @@ CellEntity::CellEntity(EntityID id, uint16_t type_id, Space& space, const math::
       range_node_(position.x, position.z) {
   // Back-pointer for AoITrigger callbacks (they only see RangeListNode&).
   range_node_.SetOwnerData(this);
-  // Insert fires crosses with already-present triggers — that's the
+  // Insert fires crosses with already-present triggers - that's the
   // "new entity joined" signal they want.
   space_.GetRangeList().Insert(&range_node_);
   linked_to_range_list_ = true;
@@ -46,11 +46,11 @@ CellEntity::CellEntity(GhostTag, EntityID id, uint16_t type_id, Space& space,
 
 CellEntity::~CellEntity() {
   // Order:
-  //   1. witness_.reset() — removes the AoITrigger's bound nodes while
+  //   1. witness_.reset() - removes the AoITrigger's bound nodes while
   //      central is still linked.
-  //   2. controllers_.StopAll() — ProximityController etc. hold their
+  //   2. controllers_.StopAll() - ProximityController etc. hold their
   //      own RangeTriggers; StopAll removes those bound nodes cleanly.
-  //   3. RangeList.Remove(&range_node_) — central leaves last.
+  //   3. RangeList.Remove(&range_node_) - central leaves last.
   if (witness_) {
     witness_->Deactivate();
     witness_.reset();
@@ -60,7 +60,7 @@ CellEntity::~CellEntity() {
   if (linked_to_range_list_) {
     // Synthetic "vacate to infinity" shuffle BEFORE unlinking: sweeps
     // the range_node_ past every live trigger upper bound, firing
-    // HandleCrossX/Z → DispatchMembership → OnLeave on any trigger
+    // HandleCrossX/Z -> DispatchMembership -> OnLeave on any trigger
     // that had us in its inside_peers_ set. Without this, other
     // Witnesses' aoi_map_ entries (which hold raw CellEntity* to this
     // object) would keep dangling references after we're deleted, and
@@ -78,7 +78,7 @@ CellEntity::~CellEntity() {
   // to us at this point, the synthetic shuffle missed firing OnLeave on
   // it.  Logging the offending observer + our own id lets us correlate
   // with Witness::Update's stale-cache warning and identify which
-  // destruction path skipped the leave fan-out.  Cheap O(N) sweep —
+  // destruction path skipped the leave fan-out.  Cheap O(N) sweep -
   // entity destruction is not on the per-tick hot path.  Skip during
   // ~Space's map-teardown phase: every entity's ~CellEntity fires while
   // entities_ is mid-destruction, so iterating it is UB.
@@ -124,7 +124,7 @@ void CellEntity::ConvertRealToGhost(Channel* new_real_channel) {
     witness_.reset();
   }
   controllers_.StopAll();
-  // Drop the haunt list and velocity sample — we're no longer authoritative.
+  // Drop the haunt list and velocity sample - we're no longer authoritative.
   real_data_.reset();
   real_channel_ = new_real_channel;
   // range_node_ stays in place; as a Ghost we're still spatially present
@@ -139,7 +139,7 @@ void CellEntity::ConvertGhostToReal() {
   real_channel_ = nullptr;
   next_real_addr_ = {};
   real_data_ = std::make_unique<RealEntityData>(*this);
-  // replication_state_ carries over — the freshly-minted Real inherits
+  // replication_state_ carries over - the freshly-minted Real inherits
   // the baseline the Ghost was already serving until the next C# publish.
 }
 
@@ -197,7 +197,7 @@ void CellEntity::RebindRealChannel(Channel* new_real_channel) {
     return;
   }
   real_channel_ = new_real_channel;
-  // Offload handoff is done — the transition-window hint no longer applies.
+  // Offload handoff is done - the transition-window hint no longer applies.
   next_real_addr_ = {};
 }
 
@@ -210,7 +210,7 @@ void CellEntity::GhostApplySnapshot(uint64_t event_seq, std::span<const std::byt
   if (!replication_state_.has_value()) replication_state_.emplace();
   auto& state = *replication_state_;
   // Snapshot refreshes fire when the sender detected a gap beyond the
-  // history window, so they unconditionally reset the baseline —
+  // history window, so they unconditionally reset the baseline -
   // history is useless once we've missed more than replay can cover.
   state.latest_event_seq = event_seq;
   state.other_snapshot.assign(other_snapshot.begin(), other_snapshot.end());
@@ -223,14 +223,14 @@ void CellEntity::SetPosition(const math::Vector3& pos) {
   position_ = pos;
   range_node_.SetXZ(pos.x, pos.z);
   space_.GetRangeList().ShuffleXThenZ(&range_node_, old.x, old.z);
-  // Resync our own witness's trigger bounds — they're tied to the
+  // Resync our own witness's trigger bounds - they're tied to the
   // central we just moved, but their list-position is still old, so
   // their inside_peers_ stay stale until each bound shuffles too.
   if (witness_) witness_->OnOwnerMoved(old.x, old.z);
 }
 
 void CellEntity::SetDirection(const math::Vector3& dir) {
-  // Direction doesn't affect RangeList sort — no shuffle needed.
+  // Direction doesn't affect RangeList sort - no shuffle needed.
   direction_ = dir;
 }
 

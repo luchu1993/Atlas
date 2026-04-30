@@ -7,22 +7,14 @@
 
 namespace atlas {
 
-/// Compression type for network messages.
 enum class CompressionType : uint8_t {
   kNone = 0,
-  /// zlib deflate compression — low-latency level 1 (Z_BEST_SPEED).
   kDeflate = 1,
 };
 
-/// Packet filter that compresses data above a size threshold.
-/// Wire format: [uint8 compression_type] [uint32 original_len (LE, only if compressed)] [data]
-/// Only compresses if the payload exceeds the threshold AND compression
-/// actually reduces the size.
+// Wire format: [uint8 type] [uint32 original_len LE, when compressed] [data].
 class CompressionFilter : public PacketFilter {
  public:
-  /// @param threshold Minimum payload size (bytes) before compression is attempted.
-  ///                  Small packets are passed through uncompressed.
-  /// @param type      Compression algorithm to use.
   explicit CompressionFilter(std::size_t threshold = 256,
                              CompressionType type = CompressionType::kDeflate);
 

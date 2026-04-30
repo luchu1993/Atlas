@@ -9,15 +9,7 @@
 
 namespace atlas {
 
-// 前向声明，避免与 script_object.hpp 循环依赖
 class ScriptObject;
-
-// ============================================================================
-// ScriptValue — Type-erased value container for script <-> engine data exchange
-// ============================================================================
-//
-// Covers the common types that cross the script boundary.
-// Complex/custom types should use ScriptObject or raw bytes.
 
 class ScriptValue {
  public:

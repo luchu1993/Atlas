@@ -849,10 +849,6 @@ void SqliteDatabase::ProcessResults() {
   }
 }
 
-// ============================================================================
-// Batch-transaction support
-// ============================================================================
-
 void SqliteDatabase::BeginBatch() {
   batch_active_ = true;
   batch_savepoint_seq_ = 0;
@@ -872,13 +868,11 @@ void SqliteDatabase::EndBatch() {
 
 auto SqliteDatabase::BeginWriteScope() -> Result<std::string> {
   if (!batch_active_) {
-    // Non-batch: open an individual transaction.
     auto r = ExecSql("BEGIN IMMEDIATE");
     if (!r) return r.Error();
     return std::string{};
   }
 
-  // Batch mode: lazily open the outer transaction on first write.
   if (!batch_txn_open_) {
     auto r = ExecSql("BEGIN IMMEDIATE");
     if (!r) return r.Error();
@@ -893,13 +887,11 @@ auto SqliteDatabase::BeginWriteScope() -> Result<std::string> {
 
 void SqliteDatabase::CommitWriteScope(const std::string& scope) {
   if (scope.empty()) {
-    // Non-batch: individual COMMIT.
     auto r = ExecSql("COMMIT");
     if (!r) {
       ATLAS_LOG_ERROR("SqliteDatabase: COMMIT failed: {}", r.Error().Message());
     }
   } else {
-    // Batch: release the savepoint.
     auto r = ExecSql(std::format("RELEASE {}", scope));
     if (!r) {
       ATLAS_LOG_ERROR("SqliteDatabase: RELEASE {} failed: {}", scope, r.Error().Message());
@@ -909,10 +901,8 @@ void SqliteDatabase::CommitWriteScope(const std::string& scope) {
 
 void SqliteDatabase::RollbackWriteScope(const std::string& scope) {
   if (scope.empty()) {
-    // Non-batch: individual ROLLBACK.
     (void)ExecSql("ROLLBACK");
   } else {
-    // Batch: roll back to the savepoint, then release it.
     (void)ExecSql(std::format("ROLLBACK TO {}", scope));
     (void)ExecSql(std::format("RELEASE {}", scope));
   }
@@ -1051,7 +1041,6 @@ auto SqliteDatabase::EnsureSchema() -> Result<void> {
     return index5.Error();
   }
 
-  // EntityID counter table -- used by EntityIdAllocator for crash-safe ID persistence
   auto eid_table_result = ExecSql(
       "CREATE TABLE IF NOT EXISTS atlas_entity_id_counter ("
       "id INTEGER PRIMARY KEY CHECK(id = 1),"
@@ -1061,7 +1050,6 @@ auto SqliteDatabase::EnsureSchema() -> Result<void> {
     return eid_table_result.Error();
   }
 
-  // Seed the single row if it doesn't exist yet
   auto eid_seed_result =
       ExecSql("INSERT OR IGNORE INTO atlas_entity_id_counter(id, next_id) VALUES(1, 1)");
   if (!eid_seed_result) {

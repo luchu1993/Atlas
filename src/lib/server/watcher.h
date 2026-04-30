@@ -13,10 +13,6 @@
 
 namespace atlas {
 
-// ============================================================================
-// WatcherMode / WatcherType
-// ============================================================================
-
 enum class WatcherMode : uint8_t {
   kReadOnly,
   kReadWrite,
@@ -29,10 +25,6 @@ enum class WatcherType : uint8_t {
   kBool,
   kString,
 };
-
-// ============================================================================
-// WatcherEntry — abstract base for a single observable value
-// ============================================================================
 
 class WatcherEntry {
  public:
@@ -56,10 +48,6 @@ class WatcherEntry {
   WatcherType type_;
   std::string desc_;
 };
-
-// ============================================================================
-// Type traits helpers
-// ============================================================================
 
 namespace detail {
 
@@ -131,16 +119,12 @@ auto StringToValue(std::string_view s, T& out) -> bool {
 
 }  // namespace detail
 
-// ============================================================================
-// DataWatcher — directly references an existing variable
-// ============================================================================
-
 template <typename T>
 class DataWatcher final : public WatcherEntry {
  public:
   DataWatcher(const T& ref, WatcherMode mode, std::string desc)
       : WatcherEntry(mode, detail::WatcherTypeFor<T>(), std::move(desc)),
-        ref_(const_cast<T&>(ref))  // const_cast safe: set_from_string guarded by mode
+        ref_(const_cast<T&>(ref))  // SetFromString is guarded by mode.
   {}
 
   [[nodiscard]] auto GetAsString() const -> std::string override {
@@ -155,10 +139,6 @@ class DataWatcher final : public WatcherEntry {
  private:
   T& ref_;
 };
-
-// ============================================================================
-// FunctionWatcher — value obtained via a getter (and optional setter) lambda
-// ============================================================================
 
 template <typename T>
 class FunctionWatcher final : public WatcherEntry {
@@ -185,45 +165,31 @@ class FunctionWatcher final : public WatcherEntry {
   std::function<bool(T)> setter_;
 };
 
-// ============================================================================
-// WatcherRegistry — hierarchical path-based registry
-//
-// Owned by ServerApp (not a global singleton) for testability.
-// Paths use '/' as separator, e.g. "tick/duration_ms".
-// ============================================================================
-
 class WatcherRegistry {
  public:
   WatcherRegistry() = default;
 
-  // Non-copyable, movable
   WatcherRegistry(const WatcherRegistry&) = delete;
   WatcherRegistry& operator=(const WatcherRegistry&) = delete;
   WatcherRegistry(WatcherRegistry&&) = default;
   WatcherRegistry& operator=(WatcherRegistry&&) = default;
 
-  // ---- Registration -------------------------------------------------------
-
-  /// Register a read-only reference to an existing variable.
   template <typename T>
   void Add(std::string_view path, const T& ref, std::string_view desc = "") {
     insert(path, std::make_unique<DataWatcher<T>>(ref, WatcherMode::kReadOnly, std::string(desc)));
   }
 
-  /// Register a read-write reference to an existing variable.
   template <typename T>
   void AddRw(std::string_view path, T& ref, std::string_view desc = "") {
     insert(path, std::make_unique<DataWatcher<T>>(ref, WatcherMode::kReadWrite, std::string(desc)));
   }
 
-  /// Register a getter-only lambda.
   template <typename T>
   void Add(std::string_view path, std::function<T()> getter, std::string_view desc = "") {
     insert(path,
            std::make_unique<FunctionWatcher<T>>(std::move(getter), nullptr, std::string(desc)));
   }
 
-  /// Register getter + setter lambdas (ReadWrite).
   template <typename T>
   void AddRw(std::string_view path, std::function<T()> getter, std::function<bool(T)> setter,
              std::string_view desc = "") {
@@ -231,17 +197,12 @@ class WatcherRegistry {
                                                       std::string(desc)));
   }
 
-  // ---- Query / Mutation ---------------------------------------------------
-
   [[nodiscard]] auto Get(std::string_view path) const -> std::optional<std::string>;
 
-  /// Returns false if path not found, not ReadWrite, or parse failure.
   auto Set(std::string_view path, std::string_view value) -> bool;
 
-  /// List all registered paths with the given prefix (empty = all).
   [[nodiscard]] auto List(std::string_view prefix = "") const -> std::vector<std::string>;
 
-  /// Snapshot all current values as (path, value) pairs.
   [[nodiscard]] auto Snapshot() const -> std::vector<std::pair<std::string, std::string>>;
 
   [[nodiscard]] auto size() const -> std::size_t { return count_; }

@@ -4,18 +4,10 @@
 
 namespace atlas::clr_marshal {
 
-// ---- String -----------------------------------------------------------------
-
 auto FromStringRef(ClrStringRef ref) -> std::string {
   if (ref.data == nullptr || ref.length <= 0) return {};
   return {ref.data, static_cast<std::size_t>(ref.length)};
 }
-
-// ---- ScriptValue → ClrScriptValue ------------------------------------------
-//
-// String and Bytes cases return a pointer into the ScriptValue's internal
-// storage.  The caller must ensure the ScriptValue outlives the returned
-// ClrScriptValue and any C# call that consumes it.
 
 auto ToScriptValue(const ScriptValue& sv) -> ClrScriptValue {
   ClrScriptValue cv{};
@@ -41,22 +33,12 @@ auto ToScriptValue(const ScriptValue& sv) -> ClrScriptValue {
     cv.type = ClrScriptValueType::kBytes;
     cv.bytes_val = {b.data(), static_cast<int32_t>(b.size())};
   } else if (sv.IsObject()) {
-    // Passing a raw ScriptObject* across the boundary is unsafe — the
-    // shared_ptr may expire before C# uses the pointer (use-after-free).
-    // Until GCHandle-based transfer (ClrObjectRegistry) is wired up, degrade
-    // to None and warn.
     ATLAS_LOG_WARNING("to_script_value: Object type not yet supported, converting to None");
     cv.type = ClrScriptValueType::kNone;
   }
 
   return cv;
 }
-
-// ---- ClrScriptValue → ScriptValue ------------------------------------------
-//
-// String and Bytes cases copy the data from the ClrScriptValue into C++ heap
-// storage.  The returned ScriptValue is fully owned and independent of the
-// source ClrScriptValue.
 
 auto FromScriptValue(const ClrScriptValue& cv) -> ScriptValue {
   switch (cv.type) {
@@ -86,9 +68,6 @@ auto FromScriptValue(const ClrScriptValue& cv) -> ScriptValue {
     }
 
     case ClrScriptValueType::kObject:
-      // Would need to reconstruct a ClrObject from the GCHandle stored in
-      // cv.object_val. Until that lands, return None — using the raw pointer
-      // as an Object would be undefined behaviour.
       return ScriptValue{};
 
     default:

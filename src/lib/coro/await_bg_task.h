@@ -11,10 +11,6 @@
 
 namespace atlas {
 
-// co_await await_bg_task(mgr, []{ return heavy_compute(); });
-// Runs work on a BgTaskManager thread pool thread, resumes coroutine on the
-// main (dispatcher) thread when done.
-
 template <typename F>
   requires(std::invocable<F> && !std::is_void_v<std::invoke_result_t<F>>)
 auto await_bg_task(BgTaskManager& mgr, F&& work) {
@@ -49,7 +45,6 @@ auto await_bg_task(BgTaskManager& mgr, F&& work) {
   return Awaiter{mgr, std::forward<F>(work), std::nullopt, nullptr};
 }
 
-// void specialization
 template <typename F>
   requires(std::invocable<F> && std::is_void_v<std::invoke_result_t<F>>)
 auto await_bg_task(BgTaskManager& mgr, F&& work) {

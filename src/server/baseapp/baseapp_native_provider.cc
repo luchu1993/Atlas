@@ -34,7 +34,7 @@ uint8_t BaseAppNativeProvider::GetProcessPrefix() {
 
 void BaseAppNativeProvider::SendClientRpc(uint32_t entity_id, uint32_t rpc_id, RpcTarget target,
                                           const std::byte* payload, int32_t len) {
-  // BaseApp has no AoI/witness graph — broadcast scopes are cell-side only.
+  // BaseApp has no AoI/witness graph - broadcast scopes are cell-side only.
   if (target != RpcTarget::kOwner) {
     ATLAS_LOG_ERROR(
         "BaseApp: SendClientRpc with target={} unsupported (entity={}); broadcast scopes require a "

@@ -40,7 +40,7 @@ auto EntityIdAllocator::Allocate(uint32_t count) -> std::pair<EntityID, EntityID
   next_id_ = end + 1;
 
   // One-shot warning when we cross into the last percent of the
-  // server id space — operationally a "you have ~21M ids left" alert.
+  // server id space - operationally a "you have ~21M ids left" alert.
   static constexpr EntityID kLowWaterMark = kFirstLocalEntityID - (kFirstLocalEntityID / 100);
   if (next_id_ >= kLowWaterMark && start < kLowWaterMark) {
     ATLAS_LOG_WARNING(

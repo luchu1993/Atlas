@@ -294,7 +294,7 @@ class BaseApp : public EntityApp {
   static constexpr Duration kPendingTimeout = std::chrono::seconds(8);
   static constexpr Duration kCanceledCheckoutRetention = std::chrono::seconds(10);
   static constexpr Duration kPreparedLoginTimeout = std::chrono::seconds(10);
-  // One shortline reconnect window — longer adds stale-proxy pressure with
+  // One shortline reconnect window - longer adds stale-proxy pressure with
   // no fast-path benefit.
   static constexpr Duration kDetachedProxyGrace = std::chrono::milliseconds(1500);
   static constexpr float kLoadSmoothingBias = 0.25f;

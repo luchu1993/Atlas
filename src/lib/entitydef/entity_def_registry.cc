@@ -18,7 +18,7 @@ namespace atlas {
 // ReadDataTypeRef reads [kind byte][body]; ReadDataTypeRefBody reads only
 // the body with kind supplied by the caller. The split exists because the
 // top-level kind of a container property is already carried by
-// PropertyDescriptor::data_type — repeating it on the wire would waste one
+// PropertyDescriptor::data_type; repeating it on the wire would waste one
 // byte per container property.
 namespace {
 auto ReadDataTypeRef(BinaryReader& reader, std::size_t depth) -> std::optional<DataTypeRef>;
@@ -26,7 +26,7 @@ auto ReadDataTypeRefBody(BinaryReader& reader, PropertyDataType kind, std::size_
     -> std::optional<DataTypeRef>;
 
 // Shared property-record reader. RegisterType (entity body) and
-// RegisterComponent (component schema) emit identical property records —
+// RegisterComponent (component schema) emit identical property records;
 // keeping one reader prevents the two paths from drifting.
 bool ReadPropertyRecord(BinaryReader& reader, PropertyDescriptor& prop, std::string_view owner) {
   auto prop_name = reader.ReadString();
@@ -111,7 +111,6 @@ bool EntityDefRegistry::RegisterType(const std::byte* data, int32_t len) {
 
   EntityTypeDescriptor desc;
 
-  // Type header
   auto name_result = reader.ReadString();
   if (!name_result) {
     ATLAS_LOG_ERROR("register_type: failed to read type name");
@@ -135,7 +134,6 @@ bool EntityDefRegistry::RegisterType(const std::byte* data, int32_t len) {
   desc.has_cell = *has_cell_result != 0;
   desc.has_client = *has_client_result != 0;
 
-  // Properties
   auto prop_count_result = reader.ReadPackedInt();
   if (!prop_count_result) {
     ATLAS_LOG_ERROR("register_type: failed to read property count for '{}'", desc.name);
@@ -151,7 +149,6 @@ bool EntityDefRegistry::RegisterType(const std::byte* data, int32_t len) {
     desc.properties.push_back(std::move(prop));
   }
 
-  // RPCs
   auto rpc_count_result = reader.ReadPackedInt();
   if (!rpc_count_result) {
     ATLAS_LOG_ERROR("register_type: failed to read RPC count for '{}'", desc.name);
@@ -181,7 +178,6 @@ bool EntityDefRegistry::RegisterType(const std::byte* data, int32_t len) {
       rpc.param_types.push_back(static_cast<PropertyDataType>(*pt));
     }
 
-    // ExposedScope — appended after param_types
     auto exposed_val = reader.Read<uint8_t>();
     if (exposed_val) {
       rpc.exposed = static_cast<ExposedScope>(*exposed_val);
@@ -190,7 +186,6 @@ bool EntityDefRegistry::RegisterType(const std::byte* data, int32_t len) {
     desc.rpcs.push_back(std::move(rpc));
   }
 
-  // Compression settings (optional — absent in older descriptors)
   if (reader.Remaining() >= 2) {
     auto internal_comp = reader.Read<uint8_t>();
     auto external_comp = reader.Read<uint8_t>();
@@ -200,10 +195,7 @@ bool EntityDefRegistry::RegisterType(const std::byte* data, int32_t len) {
     }
   }
 
-  // Slot section (optional). Older blobs omit it entirely; newer blobs that
-  // declare components emit at least the slot count. We treat any tail at
-  // this point as the slot section to avoid the trailing-bytes warning
-  // hiding a forgotten slot table.
+  // Any remaining bytes are the optional component slot section.
   if (reader.Remaining() > 0) {
     auto slot_count = reader.ReadPackedInt();
     if (!slot_count) {
@@ -341,17 +333,6 @@ void EntityDefRegistry::clear() {
   component_name_index.clear();
   ATLAS_LOG_INFO("EntityDefRegistry cleared");
 }
-
-// DataTypeRef wire layout:
-//   [u8 kind]
-//   kind <= kCustom : no trailing bytes
-//   kind == kList   : [DataTypeRef elem]
-//   kind == kDict   : [DataTypeRef key] [DataTypeRef value]
-//   kind == kStruct : [u16 struct_id]
-//
-// StructDescriptor blob (consumed by RegisterStruct):
-//   [u16 struct_id] [string name] [PackedInt field_count]
-//   for each field: [string name] [DataTypeRef]
 
 namespace {
 
@@ -594,9 +575,7 @@ bool EntityDefRegistry::RegisterComponent(const std::byte* data, int32_t len) {
                       desc.name);
   }
 
-  // Mirror RegisterStruct's collision policy: same (id, name) is a tolerated
-  // hot-reload; mismatched id↔name is rejected because it is almost certainly
-  // a generator bug, and silently merging would corrupt later lookups.
+  // Same (id, name) may be re-registered; mismatched pairs are generator bugs.
   if (auto it = component_id_index.find(desc.component_type_id); it != component_id_index.end()) {
     if (components[it->second].name != desc.name) {
       ATLAS_LOG_ERROR("register_component: id {} already bound to '{}', rejecting '{}'",
@@ -638,16 +617,8 @@ const ComponentDescriptor* EntityDefRegistry::FindComponentByName(std::string_vi
   return &components[it->second];
 }
 
-// ============================================================================
-// Container-file reader — Atlas.Tools.DefDump → C++ registry
-// ============================================================================
-
 namespace {
 
-// Reads one [PackedInt blob_len][blob bytes] record, dispatches the bytes
-// to `register_fn`. Returns the number of bytes consumed via the reader's
-// own position tracking; an Error result signals a malformed record OR a
-// downstream Register* failure (whichever surfaces first).
 auto ReadAndRegisterRecord(BinaryReader& reader, std::string_view section,
                            const std::function<bool(const std::byte*, int32_t)>& register_fn)
     -> Result<void> {
@@ -681,9 +652,6 @@ auto EntityDefRegistry::RegisterFromBinaryFile(const std::filesystem::path& path
     return Error{ErrorCode::kInvalidArgument,
                  std::string("RegisterFromBinaryFile: cannot open ") + path.string()};
   }
-  // Slurp into a buffer — descriptor files are tens of KB at most.
-  // istreambuf_iterator<char> can't construct vector<std::byte> directly,
-  // so seek+read the raw bytes.
   std::streamsize size = f.tellg();
   if (size < 0) {
     return Error{ErrorCode::kInvalidArgument,
@@ -721,13 +689,11 @@ auto EntityDefRegistry::RegisterFromBinaryBuffer(std::span<const std::byte> buf)
     return Error{ErrorCode::kInvalidArgument,
                  "RegisterFromBinaryBuffer: failed to read flags word"};
   }
-  // Flags is reserved — non-zero is OK for forward compat as long as the
-  // bits don't change framing. Today we ignore them.
   (void)*flags_result;
 
   LoadedCounts out;
 
-  // Section order: structs → components → types. References resolve in
+  // Section order: structs -> components -> types. References resolve in
   // this order: types reference component_type_id (must exist), and
   // components / entity properties may reference struct_id (must exist).
   auto struct_count_result = reader.ReadPackedInt();
@@ -774,14 +740,7 @@ auto EntityDefRegistry::RegisterFromBinaryBuffer(std::span<const std::byte> buf)
   return out;
 }
 
-// ============================================================================
-// persistent_properties_digest — MD5 over stable descriptor fields
-// ============================================================================
-//
-// Minimal self-contained MD5 (RFC 1321).  Only used for descriptor validation;
-// no security requirements.
-// ============================================================================
-
+// Minimal self-contained MD5 (RFC 1321), used only for descriptor validation.
 namespace detail {
 
 struct Md5Ctx {

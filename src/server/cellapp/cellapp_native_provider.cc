@@ -270,11 +270,11 @@ void CellAppNativeProvider::SetNativeCallbacks(const void* native_callbacks, int
   restore_entity_fn_ = table.restore_entity;
   dispatch_rpc_fn_ = table.dispatch_rpc;
   entity_destroyed_fn_ = table.entity_destroyed;
-  // nullptr ⇒ Offload ships empty persistent_blob (replication baseline covers it).
+  // nullptr => Offload ships empty persistent_blob (replication baseline covers it).
   serialize_entity_fn_ = table.serialize_entity;
-  // nullptr ⇒ TickClientBaselinePump short-circuits.
+  // nullptr => TickClientBaselinePump short-circuits.
   get_owner_snapshot_fn_ = table.get_owner_snapshot;
-  // nullptr ⇒ trigger still fires for Offload bookkeeping, but script
+  // nullptr => trigger still fires for Offload bookkeeping, but script
   // onProximityEnter/Leave never run.
   proximity_event_fn_ = table.proximity_event;
   ATLAS_LOG_INFO("CellApp: native callback table registered (len={})", len);

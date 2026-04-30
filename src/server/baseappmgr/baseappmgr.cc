@@ -150,10 +150,6 @@ auto ResolveAdvertisedAddr(const Address& advertised, const Address& src) -> Add
 
 }  // namespace
 
-// ============================================================================
-// run — static entry point
-// ============================================================================
-
 auto BaseAppMgr::Run(int argc, char* argv[]) -> int {
   EventDispatcher dispatcher;
   NetworkInterface network(dispatcher);
@@ -163,10 +159,6 @@ auto BaseAppMgr::Run(int argc, char* argv[]) -> int {
 
 BaseAppMgr::BaseAppMgr(EventDispatcher& dispatcher, NetworkInterface& network)
     : ManagerApp(dispatcher, network) {}
-
-// ============================================================================
-// init
-// ============================================================================
 
 auto BaseAppMgr::Init(int argc, char* argv[]) -> bool {
   if (!ManagerApp::Init(argc, argv)) return false;
@@ -216,10 +208,6 @@ void BaseAppMgr::Fini() {
   ManagerApp::Fini();
 }
 
-// ============================================================================
-// register_watchers
-// ============================================================================
-
 void BaseAppMgr::RegisterWatchers() {
   ManagerApp::RegisterWatchers();
   auto& wr = GetWatcherRegistry();
@@ -230,10 +218,6 @@ void BaseAppMgr::RegisterWatchers() {
   wr.Add<std::size_t>("baseappmgr/dbid_affinity_count",
                       std::function<std::size_t()>([this] { return dbid_affinity_.size(); }));
 }
-
-// ============================================================================
-// Message handlers
-// ============================================================================
 
 void BaseAppMgr::OnRegisterBaseapp(const Address& src, Channel* ch,
                                    const baseappmgr::RegisterBaseApp& msg) {
@@ -383,10 +367,6 @@ void BaseAppMgr::OnDeregisterGlobalBase(const Address& /*src*/, Channel* /*ch*/,
 
   ATLAS_LOG_INFO("BaseAppMgr: global base '{}' deregistered", msg.key);
 }
-
-// ============================================================================
-// Internal helpers
-// ============================================================================
 
 auto BaseAppMgr::FindBaseappByAppId(uint32_t app_id) -> BaseAppInfo* {
   const auto kIndexIt = app_id_index_.find(app_id);
@@ -555,7 +535,7 @@ void BaseAppMgr::BroadcastToAllBaseapps(const baseappmgr::GlobalBaseNotification
     if (info.is_ready && info.channel) {
       if (auto r = info.channel->SendMessage(notif); !r) {
         // A missed notification leaves peers permanently disagreeing on
-        // which BaseApp owns a singleton (e.g. ChatService) — RPCs to
+        // which BaseApp owns a singleton (e.g. ChatService) - RPCs to
         // that mailbox land on stale or absent owner.  No automatic
         // resync; operator must restart or rely on death detection.
         ATLAS_LOG_ERROR(

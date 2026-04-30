@@ -6,10 +6,6 @@
 
 namespace atlas {
 
-// ============================================================================
-// ErrorCodeName
-// ============================================================================
-
 auto ErrorCodeName(ErrorCode code) -> std::string_view {
   switch (code) {
     case ErrorCode::kNone:
@@ -66,10 +62,6 @@ auto ErrorCodeName(ErrorCode code) -> std::string_view {
   return "Unknown";
 }
 
-// ============================================================================
-// Error
-// ============================================================================
-
 Error::Error(ErrorCode code, std::string message) noexcept
     : code_(code), message_(std::move(message)) {}
 
@@ -82,10 +74,6 @@ auto Error::Message() const noexcept -> std::string_view {
 
 }  // namespace atlas
 
-// ============================================================================
-// Assertion support
-// ============================================================================
-
 static std::atomic<AssertHandler> s_assert_handler{nullptr};
 
 void SetAssertHandler(AssertHandler handler) {
@@ -96,9 +84,7 @@ void SetAssertHandler(AssertHandler handler) {
                                        std::source_location loc) {
   auto handler = s_assert_handler.load(std::memory_order_acquire);
   if (handler) {
-    // Custom handler is a full replacement — it must terminate (abort, throw,
-    // or longjmp).  If it returns, we abort with a diagnostic to satisfy the
-    // [[noreturn]] contract and prevent silent continuation after an assertion.
+    // If a custom handler returns, abort to preserve the [[noreturn]] contract.
     handler(expr, msg, loc);
     std::fprintf(stderr,
                  "FATAL: Custom assert handler returned instead of terminating.\n"

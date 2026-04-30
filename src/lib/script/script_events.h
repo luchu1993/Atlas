@@ -15,14 +15,8 @@
 
 namespace atlas {
 
-// ============================================================================
-// ScriptEvents — Language-agnostic event system for personality module callbacks
-// ============================================================================
-//
 // Thread safety: NOT thread-safe. Call from dispatcher thread only.
 
-// Transparent hasher: allows unordered_map<string> to accept string_view keys
-// in find() without constructing a temporary std::string (zero heap allocation).
 struct StringHash {
   using is_transparent = void;
   auto operator()(std::string_view sv) const -> std::size_t {
@@ -32,13 +26,6 @@ struct StringHash {
     return std::hash<std::string_view>{}(s);
   }
 };
-
-// ============================================================================
-// ListenerHandle — opaque token returned by register_listener()
-// ============================================================================
-//
-// Pass to unregister_listener() to remove a specific listener.
-// Default-constructed handle is invalid (is_valid() == false).
 
 class ListenerHandle {
  public:
@@ -59,20 +46,14 @@ class ScriptEvents {
   explicit ScriptEvents(std::shared_ptr<ScriptObject> personality_module);
   ~ScriptEvents() = default;
 
-  // Standard lifecycle events -- calls module.onInit(is_reload), etc.
-  // If the method doesn't exist on the module, silently succeeds.
   void OnInit(bool is_reload = false);
   void OnTick(float dt);
   void OnShutdown();
 
-  // Custom event system.
-  // register_listener returns a ListenerHandle that can be passed to
-  // unregister_listener() to remove the specific listener.
   [[nodiscard]] auto RegisterListener(std::string_view event, Callback callback) -> ListenerHandle;
   auto UnregisterListener(ListenerHandle handle) -> bool;
   void FireEvent(std::string_view event, std::span<const ScriptValue> args = {});
 
-  // Access the personality module
   [[nodiscard]] auto Module() const -> const std::shared_ptr<ScriptObject>& { return module_; }
 
  private:

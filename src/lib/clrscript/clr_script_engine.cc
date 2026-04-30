@@ -19,7 +19,6 @@ auto ClrScriptEngine::Initialize() -> Result<void> {
   if (!configured_)
     return Error{ErrorCode::kInvalidArgument, "Configure() must be called before Initialize()"};
 
-  // RAII rollback: on any failure, reset methods and shut down the CLR host.
   bool committed = false;
   struct Rollback {
     ClrScriptEngine& self;
@@ -32,13 +31,11 @@ auto ClrScriptEngine::Initialize() -> Result<void> {
     }
   } rollback{*this, committed};
 
-  // 1. Start the CLR host.
   auto host_result = host_.Initialize(config_.runtime_config_path);
   if (!host_result)
     return Error{ErrorCode::kScriptError, std::format("ClrScriptEngine: CLR init failed: {}",
                                                       host_result.Error().Message())};
 
-  // 2. Wire the managed-side error bridge + vtable through bootstrap.
   auto bootstrap_result =
       config_.bootstrap_args
           ? ClrBootstrap(host_, config_.runtime_assembly_path, *config_.bootstrap_args)
@@ -47,10 +44,6 @@ auto ClrScriptEngine::Initialize() -> Result<void> {
     return Error{ErrorCode::kScriptError, std::format("ClrScriptEngine: bootstrap failed: {}",
                                                       bootstrap_result.Error().Message())};
 
-  // 3. Bind lifecycle methods. Optional: hosts that don't expose an
-  // Atlas.Core.Lifecycle entry point (desktop client) pass an empty
-  // lifecycle_type and this block is skipped; the corresponding
-  // ScriptEngine virtuals become no-ops.
   const auto& asm_path = config_.runtime_assembly_path;
 
   auto bind = [&](auto& method, std::string_view type_name, std::string_view name) -> Result<void> {
@@ -75,9 +68,6 @@ auto ClrScriptEngine::Initialize() -> Result<void> {
     if (!r) return r.Error();
   }
 
-  // 3b. Bind HotReloadManager methods. Same optional pattern — LoadModule
-  // returns an error if hotreload_type is empty and a caller tries to use
-  // it, rather than failing Initialize when the host intentionally opts out.
   if (!config_.hotreload_type.empty()) {
     const std::string_view kHotReload{config_.hotreload_type};
     auto r = bind(load_scripts_, kHotReload, "LoadScripts");
@@ -88,8 +78,6 @@ auto ClrScriptEngine::Initialize() -> Result<void> {
     if (!r) return r.Error();
   }
 
-  // 4. Call C# EngineInit (sets up EngineContext, EntityManager, etc.)
-  // Skip when the lifecycle type wasn't configured.
   if (engine_init_.IsBound()) {
     auto init_result = engine_init_.Invoke();
     if (!init_result)
@@ -124,7 +112,7 @@ auto ClrScriptEngine::LoadModule(const std::filesystem::path& path) -> Result<vo
   if (!load_scripts_.IsBound()) {
     return Error{ErrorCode::kInvalidArgument,
                  "ClrScriptEngine::LoadModule: hotreload_type is empty, no LoadScripts entry "
-                 "bound — hosts that skip HotReloadManager must load assemblies by other means"};
+                 "bound - hosts that skip HotReloadManager must load assemblies by other means"};
   }
 
   auto path_str = path.u8string();
@@ -159,7 +147,7 @@ auto ClrScriptEngine::CallFunction(std::string_view /*module_name*/,
                                    std::string_view /*function_name*/,
                                    std::span<const ScriptValue> /*args*/) -> Result<ScriptValue> {
   return Error{ErrorCode::kNotSupported,
-               "CallFunction() not yet implemented — use lifecycle methods"};
+               "CallFunction() not yet implemented - use lifecycle methods"};
 }
 
 auto ClrScriptEngine::CallHotReload(std::string_view method_name) -> Result<void> {

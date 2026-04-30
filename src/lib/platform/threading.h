@@ -18,16 +18,8 @@
 
 namespace atlas {
 
-// ============================================================================
-// Thread naming
-// ============================================================================
-
 void SetThreadName(std::string_view name);
 void SetThreadName(std::jthread& thread, std::string_view name);
-
-// ============================================================================
-// SpinLock -- for very short critical sections
-// ============================================================================
 
 class SpinLock {
  public:
@@ -54,7 +46,6 @@ class SpinLock {
     return !flag_.test_and_set(std::memory_order_acquire);
   }
 
-  // STL Lockable interface aliases (BasicLockable / Lockable named requirements)
   void lock() noexcept { Lock(); }
   void unlock() noexcept { Unlock(); }
   [[nodiscard]] auto try_lock() noexcept -> bool { return TryLock(); }
@@ -62,10 +53,6 @@ class SpinLock {
  private:
   std::atomic_flag flag_ = ATOMIC_FLAG_INIT;
 };
-
-// ============================================================================
-// ThreadPool
-// ============================================================================
 
 class ThreadPool {
  public:

@@ -6,10 +6,6 @@
 
 namespace atlas {
 
-// ============================================================================
-// Lifetime
-// ============================================================================
-
 DynamicLibrary::~DynamicLibrary() {
   if (handle_) {
     FreeLibrary(static_cast<HMODULE>(handle_));
@@ -30,10 +26,6 @@ DynamicLibrary& DynamicLibrary::operator=(DynamicLibrary&& other) noexcept {
   return *this;
 }
 
-// ============================================================================
-// Loading
-// ============================================================================
-
 auto DynamicLibrary::Load(const std::filesystem::path& path) -> Result<DynamicLibrary> {
   HMODULE module = LoadLibraryW(path.wstring().c_str());
   if (!module) {
@@ -44,10 +36,6 @@ auto DynamicLibrary::Load(const std::filesystem::path& path) -> Result<DynamicLi
   return DynamicLibrary{static_cast<void*>(module)};
 }
 
-// ============================================================================
-// Symbol lookup
-// ============================================================================
-
 auto DynamicLibrary::GetSymbolRaw(std::string_view name) -> void* {
   if (!handle_) {
     return nullptr;
@@ -55,10 +43,6 @@ auto DynamicLibrary::GetSymbolRaw(std::string_view name) -> void* {
   std::string name_str(name);
   return reinterpret_cast<void*>(GetProcAddress(static_cast<HMODULE>(handle_), name_str.c_str()));
 }
-
-// ============================================================================
-// Unload
-// ============================================================================
 
 void DynamicLibrary::Unload() {
   if (handle_) {

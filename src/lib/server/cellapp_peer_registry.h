@@ -13,19 +13,11 @@ class Channel;
 class MachinedClient;
 class NetworkInterface;
 
-// CellAppPeerRegistry — shared map of {Address → Channel*} for peer
-// CellApps, maintained by machined Birth/Death subscription.
-//
-// Consolidates BaseApp's and CellApp's CellApp-peer maps into one class
-// so future policy changes (rate-limiting, signed envelope whitelists,
-// etc.) land in a single place.
-//
 // `self_addr` filters the registry owner out of its own peer list when
 // machined re-broadcasts the owner's Birth. For callers that can never
 // be their own peer (e.g. BaseApp), pass a default-constructed Address;
 // the filter becomes a no-op.
-//
-// Thread safety: same as MachinedClient — must be used only from the
+// Thread safety: same as MachinedClient; must be used only from the
 // EventDispatcher thread.
 
 class CellAppPeerRegistry {
@@ -35,42 +27,27 @@ class CellAppPeerRegistry {
   CellAppPeerRegistry(const CellAppPeerRegistry&) = delete;
   auto operator=(const CellAppPeerRegistry&) -> CellAppPeerRegistry& = delete;
 
-  // Fired on peer-death AFTER the channel is looked up but BEFORE it is
-  // erased from the registry, giving the callback a last chance to sweep
-  // application-level references (e.g. Ghost real_channel_, Haunt lists)
-  // while `dying` is still the right identity to compare against.
+  // Fired before the dying peer is erased from the registry.
   using PeerDeathHandler = std::function<void(const Address& addr, Channel* dying)>;
 
-  // Installs Birth/Death handlers on machined for ProcessType::kCellApp.
-  // Call once per process, typically from Init() after MachinedClient
-  // has been connected AND NetworkInterface has bound its RUDP port
-  // (so `self_addr` is known for the self-filter). Callers that can
-  // never be their own peer — BaseApp, DBApp — pass a default Address.
-  //
-  // `on_death` is optional; when provided it runs on every recognised
-  // CellApp death before the channel entry is dropped.
+  // `on_death` runs before a recognized CellApp death is dropped.
   void Subscribe(MachinedClient& machined, Address self_addr, PeerDeathHandler on_death = {});
 
-  // Returns the peer's channel or nullptr if not currently registered.
   [[nodiscard]] auto Find(const Address& addr) const -> Channel*;
 
-  // Direct map access — callers that need to iterate (e.g. broadcast
-  // UpdateGeometry) or hand the map to a pure-function helper.
   [[nodiscard]] auto Channels() const -> const std::unordered_map<Address, Channel*>& {
     return channels_;
   }
 
   [[nodiscard]] auto Size() const -> std::size_t { return channels_.size(); }
 
-  // Test-only mutators so unit tests can drive the routing helpers
-  // without a real machined. Production writers are the subscription
-  // callbacks installed by Subscribe(); no other path writes here.
+  // Test-only mutators; production writes come from Subscribe() callbacks.
   void InsertForTest(const Address& addr, Channel* ch);
   auto EraseForTest(const Address& addr) -> bool;
 
  private:
   NetworkInterface& network_;
-  Address self_addr_;  // latched by Subscribe(); Address{} disables self-filter
+  Address self_addr_;
   std::unordered_map<Address, Channel*> channels_;
 };
 

@@ -16,7 +16,6 @@ auto PendingRpcRegistry::RegisterPending(MessageID reply_id, uint32_t request_id
                                          Duration timeout) -> PendingHandle {
   auto key = PendingKey{reply_id, request_id};
 
-  // Cancel existing entry if present (prevents timer leak on duplicate keys)
   if (auto it = pending_.find(key); it != pending_.end()) {
     ATLAS_LOG_WARNING("PendingRpcRegistry: overwriting duplicate key (reply={}, req={})", reply_id,
                       request_id);
@@ -24,7 +23,6 @@ auto PendingRpcRegistry::RegisterPending(MessageID reply_id, uint32_t request_id
     pending_.erase(it);
   }
 
-  // Start timeout timer
   auto timer = dispatcher_.AddTimer(timeout, [this, key](TimerHandle) {
     auto it = pending_.find(key);
     if (it == pending_.end()) return;
@@ -48,10 +46,8 @@ auto PendingRpcRegistry::TryDispatch(MessageID id, std::span<const std::byte> pa
 
   if (it == pending_.end()) return false;
 
-  // Cancel timeout timer
   dispatcher_.CancelTimer(it->second.timeout_timer);
 
-  // Move callback out before erasing (prevent reentry issues)
   auto on_reply = std::move(it->second.on_reply);
   pending_.erase(it);
 
@@ -73,7 +69,6 @@ void PendingRpcRegistry::Cancel(PendingHandle handle) {
 }
 
 void PendingRpcRegistry::CancelAll() {
-  // Copy keys to avoid iterator invalidation (callbacks may re-enter)
   auto entries = std::move(pending_);
   pending_.clear();
 

@@ -9,24 +9,7 @@
 #include "network/message_ids.h"
 #include "server/entity_types.h"
 
-// ============================================================================
-// BaseAppMgr messages (IDs 6000–6012)
-//
-// Directions:
-//   BaseApp    → BaseAppMgr : RegisterBaseApp     (6000)
-//   BaseAppMgr → BaseApp    : RegisterBaseAppAck  (6001)
-//   BaseApp    → BaseAppMgr : BaseAppReady        (6002)
-//   BaseApp    → BaseAppMgr : InformLoad          (6003)
-//   BaseApp    → BaseAppMgr : RegisterGlobalBase  (6010)
-//   BaseApp    → BaseAppMgr : DeregisterGlobalBase(6011)
-//   BaseAppMgr → BaseApp    : GlobalBaseNotification (6012)
-// ============================================================================
-
 namespace atlas::baseappmgr {
-
-// ============================================================================
-// RegisterBaseApp  (BaseApp → BaseAppMgr, ID 6000)
-// ============================================================================
 
 struct RegisterBaseApp {
   Address internal_addr;
@@ -63,10 +46,6 @@ struct RegisterBaseApp {
   }
 };
 static_assert(NetworkMessage<RegisterBaseApp>);
-
-// ============================================================================
-// RegisterBaseAppAck  (BaseAppMgr → BaseApp, ID 6001)
-// ============================================================================
 
 struct RegisterBaseAppAck {
   bool success{false};
@@ -105,10 +84,6 @@ struct RegisterBaseAppAck {
 };
 static_assert(NetworkMessage<RegisterBaseAppAck>);
 
-// ============================================================================
-// BaseAppReady  (BaseApp → BaseAppMgr, ID 6002)
-// ============================================================================
-
 struct BaseAppReady {
   uint32_t app_id{0};
 
@@ -133,10 +108,6 @@ struct BaseAppReady {
   }
 };
 static_assert(NetworkMessage<BaseAppReady>);
-
-// ============================================================================
-// InformLoad  (BaseApp → BaseAppMgr, ID 6003)
-// ============================================================================
 
 struct InformLoad {
   uint32_t app_id{0};
@@ -199,10 +170,6 @@ struct InformLoad {
 };
 static_assert(NetworkMessage<InformLoad>);
 
-// ============================================================================
-// RegisterGlobalBase  (BaseApp → BaseAppMgr, ID 6010)
-// ============================================================================
-
 struct RegisterGlobalBase {
   std::string key;
   EntityID entity_id{kInvalidEntityID};
@@ -239,10 +206,6 @@ struct RegisterGlobalBase {
 };
 static_assert(NetworkMessage<RegisterGlobalBase>);
 
-// ============================================================================
-// DeregisterGlobalBase  (BaseApp → BaseAppMgr, ID 6011)
-// ============================================================================
-
 struct DeregisterGlobalBase {
   std::string key;
 
@@ -267,10 +230,6 @@ struct DeregisterGlobalBase {
   }
 };
 static_assert(NetworkMessage<DeregisterGlobalBase>);
-
-// ============================================================================
-// GlobalBaseNotification  (BaseAppMgr → BaseApp, ID 6012)
-// ============================================================================
 
 struct GlobalBaseNotification {
   std::string key;

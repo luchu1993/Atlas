@@ -11,28 +11,21 @@
 
 namespace atlas {
 
-/// Abstract interface for packet-level filtering (compression, encryption, etc.).
-/// Filters are applied at the Channel level, transforming data between Bundle
-/// serialization and transport send/recv.
+// Channel-level transform between bundle serialization and transport I/O.
 class PacketFilter {
  public:
   virtual ~PacketFilter() = default;
 
-  /// Transform outgoing data before it is sent on the wire.
-  /// Returns the filtered data. Default implementation passes through unchanged.
   [[nodiscard]] virtual auto SendFilter(std::span<const std::byte> data)
       -> Result<std::vector<std::byte>> {
     return std::vector<std::byte>(data.begin(), data.end());
   }
 
-  /// Transform incoming data after it is received from the wire.
-  /// Returns the filtered data. Default implementation passes through unchanged.
   [[nodiscard]] virtual auto RecvFilter(std::span<const std::byte> data)
       -> Result<std::vector<std::byte>> {
     return std::vector<std::byte>(data.begin(), data.end());
   }
 
-  /// Maximum extra bytes the filter may add to a packet (for buffer reservation).
   [[nodiscard]] virtual auto MaxOverhead() const -> std::size_t { return 0; }
 };
 

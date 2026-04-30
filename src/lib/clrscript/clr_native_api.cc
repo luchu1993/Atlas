@@ -7,13 +7,6 @@
 #include "clrscript/clr_error.h"
 #include "clrscript/native_api_provider.h"
 
-// ============================================================================
-// Atlas* export function implementations — generated from the API table
-// ============================================================================
-//
-// Each function delegates to the INativeApiProvider registered at startup.
-// To add a new export, edit clr_native_api_defs.hpp ONLY.
-
 #define X(ret, name, params, call)          \
   ATLAS_NATIVE_API ret Atlas##name params { \
     call;                                   \
@@ -21,24 +14,13 @@
 ATLAS_NATIVE_API_TABLE(X)
 #undef X
 
-// ---- ABI version ------------------------------------------------------------
-
 ATLAS_NATIVE_API uint32_t AtlasGetAbiVersion() {
   return atlas::kAtlasAbiVersion;
 }
 
-// ---- Provider registration --------------------------------------------------
-
 ATLAS_NATIVE_API void AtlasSetNativeApiProvider(void* provider) {
   atlas::SetNativeApiProvider(static_cast<atlas::INativeApiProvider*>(provider));
 }
-
-// ---- Error bridge (DLL-side TLS) --------------------------------------------
-//
-// These functions expose the DLL's own copy of t_clr_error and clr_error_set.
-// Test drivers that separately link atlas_clrscript (creating a second TLS copy)
-// must use these exports so that C# (writing) and C++ (reading) both access the
-// SAME TLS buffer inside this DLL.
 
 ATLAS_NATIVE_API void* AtlasGetClrErrorSetFn() {
   return reinterpret_cast<void*>(&atlas::ClrErrorSet);

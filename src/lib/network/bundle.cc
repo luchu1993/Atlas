@@ -10,15 +10,13 @@ void Bundle::StartMessage(const MessageDesc& desc) {
   writing_message_ = true;
   current_style_ = desc.length_style;
 
-  // Move buffer into writer so payload writes go directly into it
   writer_.Attach(std::move(buffer_));
 
-  // Write MessageID using packed encoding (1 byte if < 0xFE, else 3 bytes)
   writer_.WritePackedInt(desc.id);
 
   if (current_style_ == MessageLengthStyle::kVariable) {
     length_prefix_pos_ = writer_.Size();
-    static_cast<void>(writer_.Reserve(1));  // 1-byte slot; expanded in end_message if needed
+    static_cast<void>(writer_.Reserve(1));
   }
 
   payload_start_ = writer_.Size();
@@ -39,7 +37,6 @@ void Bundle::EndMessage() {
     if (payload_len < 0xFE) {
       writer_.MutableData()[length_prefix_pos_] = static_cast<std::byte>(payload_len);
     } else if (payload_len <= 0xFFFF) {
-      // Tag byte becomes 0xFE; need 2 more bytes for uint16 LE
       constexpr std::size_t kExtra = 2;
       static_cast<void>(writer_.Reserve(kExtra));
       auto* base = writer_.MutableData();
@@ -49,7 +46,6 @@ void Bundle::EndMessage() {
       auto le16 = endian::ToLittle(static_cast<uint16_t>(payload_len));
       std::memcpy(payload_ptr, &le16, sizeof(uint16_t));
     } else {
-      // Tag byte becomes 0xFF; need 4 more bytes for uint32 LE
       constexpr std::size_t kExtra = 4;
       static_cast<void>(writer_.Reserve(kExtra));
       auto* base = writer_.MutableData();

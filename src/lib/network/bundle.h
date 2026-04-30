@@ -12,8 +12,6 @@ namespace atlas {
 
 inline constexpr std::size_t kMaxBundleSize = 64 * 1024;
 
-// Writes serialise directly into the wire buffer; variable-length
-// prefixes use reserve-and-backpatch to avoid an intermediate copy.
 class Bundle {
  public:
   Bundle() = default;
@@ -42,7 +40,7 @@ class Bundle {
 
  private:
   std::vector<std::byte> buffer_;
-  BinaryWriter writer_;  // attached to buffer_
+  BinaryWriter writer_;
   uint32_t message_count_{0};
   bool writing_message_{false};
   MessageLengthStyle current_style_{};

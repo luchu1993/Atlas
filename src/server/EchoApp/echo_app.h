@@ -7,15 +7,6 @@
 
 namespace atlas {
 
-// ============================================================================
-// EchoApp — minimal ManagerApp for framework verification
-//
-// Verifies:
-//   • Process starts, tick fires at update_hertz, graceful shutdown on Ctrl+C
-//   • Watcher queries (app/uptime_seconds, tick/total_count, etc.)
-//   • Config loading from CLI / JSON
-// ============================================================================
-
 class EchoApp : public ManagerApp {
  public:
   EchoApp(EventDispatcher& dispatcher, NetworkInterface& network);

@@ -12,26 +12,7 @@
 #include "network/message_ids.h"
 #include "server/entity_types.h"
 
-// ============================================================================
-// Login-flow network messages (IDs 5000–5007)
-//
-// Directions:
-//   Client     → LoginApp  : LoginRequest       (5000)
-//   LoginApp   → Client    : LoginResult        (5001)
-//   LoginApp   → DBApp     : AuthLogin          (5002)
-//   DBApp      → LoginApp  : AuthLoginResult    (5003)
-//   LoginApp   → BaseAppMgr: AllocateBaseApp    (5004)
-//   BaseAppMgr → LoginApp  : AllocateBaseAppResult (5005)
-//   LoginApp   → BaseApp   : PrepareLogin       (5006)
-//   BaseApp    → LoginApp  : PrepareLoginResult (5007)
-//   LoginApp   → BaseApp   : CancelPrepareLogin (5008)
-// ============================================================================
-
 namespace atlas::login {
-
-// ============================================================================
-// LoginStatus
-// ============================================================================
 
 enum class LoginStatus : uint8_t {
   kSuccess = 0,
@@ -44,10 +25,6 @@ enum class LoginStatus : uint8_t {
   kLoginInProgress = 7,
   kServerBusy = 8,
 };
-
-// ============================================================================
-// LoginRequest  (Client → LoginApp, ID 5000)
-// ============================================================================
 
 struct LoginRequest {
   std::string username;
@@ -79,10 +56,6 @@ struct LoginRequest {
   }
 };
 static_assert(NetworkMessage<LoginRequest>);
-
-// ============================================================================
-// LoginResult  (LoginApp → Client, ID 5001)
-// ============================================================================
 
 struct LoginResult {
   LoginStatus status{LoginStatus::kInternalError};
@@ -133,10 +106,6 @@ struct LoginResult {
 };
 static_assert(NetworkMessage<LoginResult>);
 
-// ============================================================================
-// AuthLogin  (LoginApp → DBApp, ID 5002)
-// ============================================================================
-
 struct AuthLogin {
   uint32_t request_id{0};
   std::string username;
@@ -173,10 +142,6 @@ struct AuthLogin {
   }
 };
 static_assert(NetworkMessage<AuthLogin>);
-
-// ============================================================================
-// AuthLoginResult  (DBApp → LoginApp, ID 5003)
-// ============================================================================
 
 struct AuthLoginResult {
   uint32_t request_id{0};
@@ -224,10 +189,6 @@ struct AuthLoginResult {
 };
 static_assert(NetworkMessage<AuthLoginResult>);
 
-// ============================================================================
-// AllocateBaseApp  (LoginApp → BaseAppMgr, ID 5004)
-// ============================================================================
-
 struct AllocateBaseApp {
   uint32_t request_id{0};
   uint16_t type_id{0};
@@ -264,15 +225,11 @@ struct AllocateBaseApp {
 };
 static_assert(NetworkMessage<AllocateBaseApp>);
 
-// ============================================================================
-// AllocateBaseAppResult  (BaseAppMgr → LoginApp, ID 5005)
-// ============================================================================
-
 struct AllocateBaseAppResult {
   uint32_t request_id{0};
   bool success{false};
-  Address internal_addr;  // BaseApp 内部地址 (LoginApp → BaseApp 发 PrepareLogin)
-  Address external_addr;  // BaseApp 外部地址 (返回给客户端)
+  Address internal_addr;
+  Address external_addr;
 
   static auto Descriptor() -> const MessageDesc& {
     static const MessageDesc kDesc{msg_id::Id(msg_id::Login::kAllocateBaseAppResult),
@@ -313,12 +270,8 @@ struct AllocateBaseAppResult {
 };
 static_assert(NetworkMessage<AllocateBaseAppResult>);
 
-// ============================================================================
-// PrepareLogin  (LoginApp → BaseApp, ID 5006)
-// ============================================================================
-
 struct PrepareLogin {
-  static constexpr uint32_t kMaxBlobSize = 1024 * 1024;  // 1 MB
+  static constexpr uint32_t kMaxBlobSize = 1024 * 1024;
 
   uint32_t request_id{0};
   uint16_t type_id{0};
@@ -382,10 +335,6 @@ struct PrepareLogin {
 };
 static_assert(NetworkMessage<PrepareLogin>);
 
-// ============================================================================
-// PrepareLoginResult  (BaseApp → LoginApp, ID 5007)
-// ============================================================================
-
 struct PrepareLoginResult {
   uint32_t request_id{0};
   bool success{false};
@@ -426,12 +375,8 @@ struct PrepareLoginResult {
 };
 static_assert(NetworkMessage<PrepareLoginResult>);
 
-// ============================================================================
-// CancelPrepareLogin  (LoginApp → BaseApp, ID 5008)
 // Sent when the client disconnects before the login handoff completes so the
 // target BaseApp can roll back any pending prepare / checkout work.
-// ============================================================================
-
 struct CancelPrepareLogin {
   uint32_t request_id{0};
   DatabaseID dbid{kInvalidDBID};

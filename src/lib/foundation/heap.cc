@@ -3,11 +3,7 @@
 #include <cstdlib>
 #include <new>
 
-// Backend selection. Exactly one ATLAS_HEAP_<NAME> must be set; the
-// CMake glue in cmake/AtlasCompilerOptions.cmake is the single source
-// of truth for which one. The hard #error catches any future build
-// path that forgets to plumb the define so a silent fallthrough never
-// fragments the heap policy across translation units.
+// Exactly one ATLAS_HEAP_<NAME> must be set by CMake.
 #if defined(ATLAS_HEAP_MIMALLOC)
 #include <mimalloc.h>
 #elif defined(ATLAS_HEAP_STD)
@@ -16,7 +12,7 @@
 #endif
 #else
 #error \
-    "No heap backend selected — cmake should define exactly one ATLAS_HEAP_<NAME> via ATLAS_HEAP_ALLOCATOR"
+    "No heap backend selected - cmake should define exactly one ATLAS_HEAP_<NAME> via ATLAS_HEAP_ALLOCATOR"
 #endif
 
 #include "foundation/profiler.h"
@@ -26,18 +22,7 @@ namespace atlas {
 namespace {
 
 #if ATLAS_PROFILE_ENABLED
-// Per-thread re-entry depth counter. Tracy's own internals are routed
-// through TracyClient.dll's separate CRT and don't come back through
-// this override, so the common case is depth never exceeds 1. The
-// guard is a defence against pathological paths — for example, lazy
-// per-thread Tracy queue init that hits operator new on a code path
-// we didn't anticipate. Without it, that single misroute would loop
-// forever; with it, the inner alloc bypasses the Tracy hook and
-// terminates cleanly.
-//
-// Compiled out entirely when the profiler is off — there is no Tracy
-// to recurse into, and the TLS access cost would otherwise be paid
-// for every operator new in a release binary.
+// Prevent recursive Tracy allocation hooks if the profiler path allocates.
 thread_local int g_alloc_depth = 0;
 
 class AllocDepthGuard {
@@ -49,25 +34,14 @@ class AllocDepthGuard {
 #endif
 
 [[nodiscard]] auto RawAlloc(std::size_t bytes, std::size_t align) noexcept -> void* {
-  // Aligned-alloc preconditions vary by platform and backend but
-  // always require alignment to be a power of two and at least
-  // sizeof(void*). Atlas call sites pass alignof(T) which the
-  // language already guarantees is a power of two, so the only real
-  // coercion is the lower bound. Default-aligned allocations (the
-  // bulk of operator new traffic) still need a pow-2 ≥ sizeof(void*);
-  // clamp to max_align_t.
+  // Backend APIs require at least max_align_t for default-aligned allocations.
   if (align < alignof(std::max_align_t)) align = alignof(std::max_align_t);
 #if defined(ATLAS_HEAP_MIMALLOC)
-  // mi_malloc_aligned handles the size↔align relationship internally;
-  // mi_free pairs with both aligned and unaligned allocations, so
-  // RawFree below is the single counterpart.
   return mi_malloc_aligned(bytes, align);
 #elif defined(_WIN32)
   return _aligned_malloc(bytes, align);
 #else
-  // POSIX std::aligned_alloc requires `bytes` to be a multiple of
-  // `align`; round up. Returning a slightly larger block than asked
-  // for is harmless — operator delete passes only the pointer back.
+  // POSIX aligned_alloc requires size to be a multiple of alignment.
   std::size_t rounded = (bytes + align - 1) & ~(align - 1);
   return std::aligned_alloc(align, rounded);
 #endif
@@ -112,23 +86,7 @@ void HeapFree(void* ptr) noexcept {
 
 }  // namespace atlas
 
-// ============================================================================
-// Global operator new / delete overrides
-// ============================================================================
-//
-// The full C++17 replaceable-allocation surface, all forwarding to
-// atlas::HeapAlloc / atlas::HeapFree. Coverage matters because the linker
-// resolves `new` and `delete` per call-site, not as a single decision: a
-// missing override means that one variant silently hits the CRT default
-// instead, fragmenting allocator state across two backends.
-//
-// 8 `new` variants (throwing × array × aligned × nothrow combinations) and
-// 12 `delete` variants (the four `delete` axes plus C++14 sized delete,
-// crossed with array / aligned / nothrow) — 20 entry points total.
-//
-// Only C++ operator new is intercepted. C-style malloc/free remain the
-// platform CRT's; that's intentional, because Tracy itself uses malloc
-// internally and we don't want to recurse through it.
+// Keep the full replaceable-allocation surface on Atlas's heap backend.
 
 namespace {
 
@@ -144,7 +102,6 @@ namespace {
 
 }  // namespace
 
-// ── Throwing scalar / array ────────────────────────────────────────────────
 void* operator new(std::size_t size) {
   return AtlasOperatorNew(size, alignof(std::max_align_t));
 }
@@ -158,7 +115,6 @@ void* operator new[](std::size_t size, std::align_val_t align) {
   return AtlasOperatorNew(size, static_cast<std::size_t>(align));
 }
 
-// ── Nothrow scalar / array ─────────────────────────────────────────────────
 void* operator new(std::size_t size, const std::nothrow_t&) noexcept {
   return AtlasOperatorNewNothrow(size, alignof(std::max_align_t));
 }
@@ -172,7 +128,6 @@ void* operator new[](std::size_t size, std::align_val_t align, const std::nothro
   return AtlasOperatorNewNothrow(size, static_cast<std::size_t>(align));
 }
 
-// ── Scalar delete (6 variants) ─────────────────────────────────────────────
 void operator delete(void* ptr) noexcept {
   atlas::HeapFree(ptr);
 }
@@ -192,7 +147,6 @@ void operator delete(void* ptr, std::align_val_t, const std::nothrow_t&) noexcep
   atlas::HeapFree(ptr);
 }
 
-// ── Array delete (6 variants) ──────────────────────────────────────────────
 void operator delete[](void* ptr) noexcept {
   atlas::HeapFree(ptr);
 }

@@ -40,23 +40,15 @@ class InterfaceTable {
   using DefaultHandler = std::function<void(const Address&, Channel*, MessageID, BinaryReader&)>;
   void SetDefaultHandler(DefaultHandler handler) { default_handler_ = std::move(handler); }
 
-  // Pre-dispatch hook: if set, called before normal dispatch.
-  // Returns true if the message was consumed (e.g. by a coroutine RPC registry).
+  // Lets RPC registries consume replies before typed dispatch.
   using PreDispatchHook = std::function<bool(MessageID, std::span<const std::byte>)>;
   void SetPreDispatchHook(PreDispatchHook hook) { pre_dispatch_hook_ = std::move(hook); }
 
-  // Try the pre-dispatch hook directly (used by Channel for unregistered messages).
   auto TryPreDispatch(MessageID id, std::span<const std::byte> payload) -> bool {
     if (pre_dispatch_hook_) return pre_dispatch_hook_(id, payload);
     return false;
   }
 
-  // Invoke the registered default handler for an unrecognized MessageID.
-  // Returns false when no default handler has been installed, in which
-  // case the caller should log and drop. Used by Channel's inline per-
-  // message loop (which does its own typed-entry lookup and skips
-  // Dispatch()) so the client's state-channel fallback still runs for
-  // 0xF001 / 0xF002 / 0xF003.
   auto TryDispatchDefault(const Address& source, Channel* channel, MessageID id, BinaryReader& data)
       -> bool {
     if (!default_handler_) return false;

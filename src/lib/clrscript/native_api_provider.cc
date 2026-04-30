@@ -15,9 +15,7 @@ void SetNativeApiProvider(INativeApiProvider* provider) {
 
 INativeApiProvider& GetNativeApiProvider() {
   auto* p = g_provider.load(std::memory_order_acquire);
-  // This is a fatal configuration error — SetNativeApiProvider() must be
-  // called before ClrHost::Initialize() and before any Atlas* function is
-  // invoked.  Use hard abort (not assert) so the check survives Release builds.
+  // Hard abort so the configuration check survives Release builds.
   if (p == nullptr) [[unlikely]] {
     std::cerr << "FATAL: No INativeApiProvider registered. "
               << "Call SetNativeApiProvider() before initialising ClrHost.\n";

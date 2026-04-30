@@ -21,7 +21,7 @@ namespace atlas {
 
 namespace {
 
-// Mirror of BaseAppMgr's helper — rewrites a 0-IP advertised address to
+// Mirror of BaseAppMgr's helper - rewrites a 0-IP advertised address to
 // the packet's actual source so peers behind NAT / on loopback still end
 // up reachable.
 auto ResolveAdvertisedAddr(const Address& advertised, const Address& src) -> Address {
@@ -30,10 +30,6 @@ auto ResolveAdvertisedAddr(const Address& advertised, const Address& src) -> Add
 }
 
 }  // namespace
-
-// ============================================================================
-// Run / ctor
-// ============================================================================
 
 auto CellAppMgr::Run(int argc, char* argv[]) -> int {
   EventDispatcher dispatcher("cellappmgr");
@@ -44,10 +40,6 @@ auto CellAppMgr::Run(int argc, char* argv[]) -> int {
 
 CellAppMgr::CellAppMgr(EventDispatcher& dispatcher, NetworkInterface& network)
     : ManagerApp(dispatcher, network) {}
-
-// ============================================================================
-// Lifecycle
-// ============================================================================
 
 auto CellAppMgr::Init(int argc, char* argv[]) -> bool {
   if (!ManagerApp::Init(argc, argv)) return false;
@@ -74,9 +66,9 @@ auto CellAppMgr::Init(int argc, char* argv[]) -> bool {
       machined::ListenerType::kDeath, ProcessType::kCellApp, nullptr,
       [this](const machined::DeathNotification& n) { OnCellAppDeath(n.internal_addr); });
 
-  // Track BaseApps directly — the death broadcast fans out to every
+  // Track BaseApps directly - the death broadcast fans out to every
   // BaseApp. Direct path keeps CellAppMgr's cross-process surface small
-  // (no new CellAppMgr↔BaseAppMgr channel).
+  // (no new CellAppMgr<->BaseAppMgr channel).
   GetMachinedClient().Subscribe(
       machined::ListenerType::kBoth, ProcessType::kBaseApp,
       [this](const machined::BirthNotification& n) {
@@ -121,10 +113,6 @@ void CellAppMgr::OnTickComplete() {
     TickLoadBalance();
   }
 }
-
-// ============================================================================
-// Handlers
-// ============================================================================
 
 void CellAppMgr::OnRegisterCellApp(const Address& src, Channel* ch,
                                    const cellappmgr::RegisterCellApp& msg) {
@@ -177,7 +165,7 @@ void CellAppMgr::OnRegisterCellApp(const Address& src, Channel* ch,
   ack.game_time = GameTime();
   if (ch != nullptr) {
     if (auto r = ch->SendMessage(ack); !r) {
-      // Cellapp blocks until it sees this ack — drop ⇒ orphaned cellapp
+      // Cellapp blocks until it sees this ack - drop => orphaned cellapp
       // until the registry's reconnect loop fires.
       ATLAS_LOG_WARNING("CellAppMgr: success-ack send failed to {} (app_id={}): {}",
                         kInternalAddr.ToString(), app_id, r.Error().Message());
@@ -190,9 +178,9 @@ void CellAppMgr::OnRegisterCellApp(const Address& src, Channel* ch,
 
 void CellAppMgr::OnInformCellLoad(const Address& /*src*/, Channel* /*ch*/,
                                   const cellappmgr::InformCellLoad& msg) {
-  // Find the peer by app_id — InformCellLoad carries the CellApp's own
+  // Find the peer by app_id - InformCellLoad carries the CellApp's own
   // app_id rather than re-advertising its address, so we index the
-  // lookup linearly. CellApp counts are small (≤ 255) and load reports
+  // lookup linearly. CellApp counts are small (<= 255) and load reports
   // arrive at a low cadence; the O(N) lookup is well within budget.
   for (auto& [addr, info] : cellapps_) {
     if (info.app_id == msg.app_id) {
@@ -217,7 +205,7 @@ void CellAppMgr::OnInformCellLoad(const Address& /*src*/, Channel* /*ch*/,
 
 void CellAppMgr::OnCreateSpaceRequest(const Address& src, Channel* ch,
                                       const cellappmgr::CreateSpaceRequest& msg) {
-  // Always reply — success OR failure. The originator (BaseApp /
+  // Always reply - success OR failure. The originator (BaseApp /
   // script) tracks a per-request callback via request_id and needs a
   // terminal signal to resolve it.
   auto send_reply = [&](bool ok, cellappmgr::CellID cell_id, Address host_addr) {
@@ -301,7 +289,7 @@ void CellAppMgr::OnCellAppDeath(const Address& internal_addr) {
   cellapps_.erase(it);
 
   // All Real entities hosted on the dead CellApp are lost (BaseApp
-  // restores them from backup — orthogonal to mgr-side routing). Our
+  // restores them from backup - orthogonal to mgr-side routing). Our
   // job here is purely to re-point every BSP leaf owned by the dead
   // app onto a surviving CellApp so future CreateCellEntity / Offload
   // traffic for that cell lands somewhere reachable.
@@ -313,7 +301,7 @@ void CellAppMgr::OnCellAppDeath(const Address& internal_addr) {
     return;
   }
 
-  // Per-space {new_host} pairs collected during rehoming — the
+  // Per-space {new_host} pairs collected during rehoming - the
   // BaseApp side uses this to look up where each of its entities'
   // cells went. We record ONE new_host per Space (the first
   // successful reassignment); multi-cell spaces still work because
@@ -352,7 +340,7 @@ void CellAppMgr::OnCellAppDeath(const Address& internal_addr) {
       leaf->load = alt->load;
 
       // Tell the new host to materialise the local Cell. UpdateGeometry
-      // alone wouldn't — OnUpdateGeometry only resizes existing Cells,
+      // alone wouldn't - OnUpdateGeometry only resizes existing Cells,
       // never creates them (cellapp.cc:1141).
       SendAddCell(*alt, space_id, leaf->cell_id, leaf->bounds);
       reassigned_any = true;
@@ -370,7 +358,7 @@ void CellAppMgr::OnCellAppDeath(const Address& internal_addr) {
   }
 
   // Tell every BaseApp about the death so they restore Reals from
-  // backup onto the new hosts. Direct path — see the Init subscribe
+  // backup onto the new hosts. Direct path - see the Init subscribe
   // comment.
   if (!baseapps_.empty()) {
     baseapp::CellAppDeath notify;
@@ -382,26 +370,14 @@ void CellAppMgr::OnCellAppDeath(const Address& internal_addr) {
   }
 }
 
-// ============================================================================
-// Tick / Load balance
-// ============================================================================
-
 void CellAppMgr::TickLoadBalance() {
   if (spaces_.empty()) return;
   for (auto& [space_id, partition] : spaces_) {
     partition.bsp.Balance(kBalanceSafetyBound);
-    // Broadcast unconditionally. The bsp_blob is tens of bytes;
-    // diffing to skip unchanged sends would cost more than the
-    // redundant bytes for a ≤255-peer cluster. Revisit if profiling
-    // says otherwise.
     BroadcastGeometry(partition);
     (void)space_id;
   }
 }
-
-// ============================================================================
-// Helpers
-// ============================================================================
 
 auto CellAppMgr::PickHostForNewSpace() const -> const CellAppInfo* {
   // Least-loaded first; ties broken by lowest app_id for determinism.
@@ -419,12 +395,7 @@ auto CellAppMgr::PickHostForNewSpace() const -> const CellAppInfo* {
 }
 
 auto CellAppMgr::PickAlternateHost(const Address& exclude_addr) const -> const CellAppInfo* {
-  // Two-tier selection:
-  //   Tier 1: prefer a survivor on a different machine (IP).
-  //   Tier 2: if all survivors share exclude_addr's IP, fall back to
-  //           the least-loaded on that same IP — better than nothing.
-  // Within each tier, break ties on smoothed load (lower = less
-  // booked), then on app_id for determinism.
+  // Prefer a survivor on a different machine; otherwise choose least-loaded.
   const CellAppInfo* best_diff_ip = nullptr;
   const CellAppInfo* best_any = nullptr;
   for (const auto& [addr, info] : cellapps_) {
@@ -456,7 +427,7 @@ void CellAppMgr::SendAddCell(const CellAppInfo& target, SpaceID space_id,
 
 void CellAppMgr::BroadcastGeometry(SpacePartition& partition) {
   // Serialize the tree once, then fan it out to every peer hosting a
-  // Cell in this Space. Peers outside the Space don't care — shipping
+  // Cell in this Space. Peers outside the Space don't care - shipping
   // geometry to them would just burn bandwidth.
   BinaryWriter w;
   partition.bsp.Serialize(w);
@@ -465,8 +436,8 @@ void CellAppMgr::BroadcastGeometry(SpacePartition& partition) {
   // Short-circuit when the serialised bytes haven't changed since the
   // last fan-out. Steady-state balanced clusters can tick Balance()
   // without actually moving a split line, so without this every Space
-  // re-ships the same tree at TickLoadBalance cadence — wasted bandwidth
-  // that scales with peer × space count.
+  // re-ships the same tree at TickLoadBalance cadence - wasted bandwidth
+  // that scales with peer x space count.
   if (blob == partition.last_broadcast_blob) return;
 
   cellappmgr::UpdateGeometry msg;

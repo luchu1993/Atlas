@@ -12,10 +12,6 @@
 
 namespace atlas {
 
-// ============================================================================
-// run — static entry point
-// ============================================================================
-
 auto LoginApp::Run(int argc, char* argv[]) -> int {
   EventDispatcher dispatcher;
   NetworkInterface internal_network(dispatcher);
@@ -29,10 +25,6 @@ LoginApp::LoginApp(EventDispatcher& dispatcher, NetworkInterface& network,
     : ManagerApp(dispatcher, network),
       rpc_registry_(dispatcher),
       external_network_(external_network) {}
-
-// ============================================================================
-// init
-// ============================================================================
 
 auto LoginApp::Init(int argc, char* argv[]) -> bool {
   if (!ManagerApp::Init(argc, argv)) return false;
@@ -63,9 +55,6 @@ auto LoginApp::Init(int argc, char* argv[]) -> bool {
         OnLoginRequest(src, ch, msg);
       });
 
-  // Register RPC reply message descriptors so Channel knows their wire format
-  // (especially fixed-length messages). The pre-dispatch hook intercepts them
-  // before these no-op handlers run.
   auto& table = Network().InterfaceTable();
   (void)table.RegisterTypedHandler<login::AuthLoginResult>(
       [](const Address&, Channel*, const login::AuthLoginResult&) {});
@@ -74,13 +63,10 @@ auto LoginApp::Init(int argc, char* argv[]) -> bool {
   (void)table.RegisterTypedHandler<login::PrepareLoginResult>(
       [](const Address&, Channel*, const login::PrepareLoginResult&) {});
 
-  // Register pre-dispatch hook on internal network so rpc_call replies
-  // are routed to the PendingRpcRegistry before normal handler dispatch.
   table.SetPreDispatchHook([this](MessageID id, std::span<const std::byte> payload) -> bool {
     return rpc_registry_.TryDispatch(id, payload);
   });
 
-  // ---- Subscribe to DBApp birth ----------------------------------------
   GetMachinedClient().Subscribe(
       machined::ListenerType::kBoth, ProcessType::kDbApp,
       [this](const machined::BirthNotification& n) {
@@ -96,7 +82,6 @@ auto LoginApp::Init(int argc, char* argv[]) -> bool {
         dbapp_channel_ = nullptr;
       });
 
-  // ---- Subscribe to BaseAppMgr birth ------------------------------------
   GetMachinedClient().Subscribe(
       machined::ListenerType::kBoth, ProcessType::kBaseAppMgr,
       [this](const machined::BirthNotification& n) {
@@ -112,7 +97,6 @@ auto LoginApp::Init(int argc, char* argv[]) -> bool {
         baseappmgr_channel_ = nullptr;
       });
 
-  // Start RUDP listener for clients
   if (cfg.external_port > 0) {
     Address listen_addr(0, cfg.external_port);
     auto result =
@@ -153,10 +137,6 @@ void LoginApp::FlushTickDirtyChannels() {
   external_network_.FlushDirtySendChannels();
 }
 
-// ============================================================================
-// register_watchers
-// ============================================================================
-
 void LoginApp::RegisterWatchers() {
   ManagerApp::RegisterWatchers();
   auto& wr = GetWatcherRegistry();
@@ -185,10 +165,6 @@ void LoginApp::RegisterWatchers() {
                std::function<bool()>([this] { return baseappmgr_channel_ != nullptr; }));
 }
 
-// ============================================================================
-// on_login_request — step 1: client sends credentials
-// ============================================================================
-
 void LoginApp::OnLoginRequest(const Address& src, Channel* ch, const login::LoginRequest& msg) {
   if (ch == nullptr) {
     return;
@@ -206,7 +182,6 @@ void LoginApp::OnLoginRequest(const Address& src, Channel* ch, const login::Logi
   }
   RecordLoginAttempt(src);
 
-  // Reject if this channel already has a login in progress
   if (channel_cancel_sources_.contains(ch->ChannelId())) {
     ++login_dedup_total_;
     ATLAS_LOG_DEBUG("LoginApp: duplicate login from same channel {}:{}", src.Ip(), src.Port());
@@ -245,29 +220,20 @@ void LoginApp::OnLoginRequest(const Address& src, Channel* ch, const login::Logi
   HandleLoginCoro(ch->ChannelId(), src, msg);
 }
 
-// ============================================================================
-// handle_login_coro — coroutine: orchestrates the entire login flow
-// ============================================================================
-
 auto LoginApp::HandleLoginCoro(uint64_t client_channel_id, Address client_addr,
                                login::LoginRequest request) -> FireAndForget {
   uint32_t rid = next_request_id_++;
   std::string username = request.username;
 
-  // ---- Dedup guard: remove from pending_by_username_ on any exit path ----
   pending_by_username_[username] = rid;
   ScopeGuard dedup_guard([this, username] { pending_by_username_.erase(username); });
 
-  // ---- Cancellation: cancelled when client disconnects --------------------
   CancellationSource cancel_source;
   auto token = cancel_source.Token();
   channel_cancel_sources_[client_channel_id] = cancel_source;
   ScopeGuard cancel_guard(
       [this, client_channel_id] { channel_cancel_sources_.erase(client_channel_id); });
 
-  // ======================================================================
-  // Step 1: Authenticate with DBApp
-  // ======================================================================
   if (!dbapp_channel_) {
     SendLoginError(client_channel_id, login::LoginStatus::kServerNotReady, "no_dbapp");
     co_return;
@@ -305,9 +271,6 @@ auto LoginApp::HandleLoginCoro(uint64_t client_channel_id, Address client_addr,
     co_return;
   }
 
-  // ======================================================================
-  // Step 2: Allocate a BaseApp via BaseAppMgr
-  // ======================================================================
   if (!baseappmgr_channel_) {
     ATLAS_LOG_ERROR("LoginApp: no BaseAppMgr connection");
     SendLoginError(client_channel_id, login::LoginStatus::kServerNotReady, "no_baseappmgr");
@@ -345,9 +308,6 @@ auto LoginApp::HandleLoginCoro(uint64_t client_channel_id, Address client_addr,
     co_return;
   }
 
-  // ======================================================================
-  // Step 3: PrepareLogin on the allocated BaseApp
-  // ======================================================================
   auto ch_result = Network().ConnectRudpNocwnd(alloc_reply.internal_addr);
   if (!ch_result) {
     ATLAS_LOG_ERROR("LoginApp: could not connect to BaseApp {}:{}", alloc_reply.internal_addr.Ip(),
@@ -366,7 +326,6 @@ auto LoginApp::HandleLoginCoro(uint64_t client_channel_id, Address client_addr,
   prep.session_key = session_key;
   prep.client_addr = client_addr;
 
-  // ---- Rollback guard: send CancelPrepareLogin if we fail after this point
   ScopeGuard prepare_guard(
       [this, rid, dbid = auth_reply.dbid, baseapp_addr = alloc_reply.internal_addr] {
         auto cancel_ch = Network().ConnectRudpNocwnd(baseapp_addr);
@@ -375,9 +334,6 @@ auto LoginApp::HandleLoginCoro(uint64_t client_channel_id, Address client_addr,
           cancel.request_id = rid;
           cancel.dbid = dbid;
           if (auto r = (*cancel_ch)->SendMessage(cancel); !r) {
-            // Cleanup best-effort, but BaseApp leaks pending entry until
-            // its kPendingTimeout expires.  Warn so leaked entries don't
-            // look like a slow-cleanup bug.
             ATLAS_LOG_WARNING(
                 "LoginApp: CancelPrepareLogin send failed (request_id={}, dbid={}, baseapp {}): {}",
                 rid, dbid, baseapp_addr.ToString(), r.Error().Message());
@@ -396,13 +352,13 @@ auto LoginApp::HandleLoginCoro(uint64_t client_channel_id, Address client_addr,
     if (prep_result.Error().Code() == ErrorCode::kCancelled) {
       ++abandoned_login_total_;
       ATLAS_LOG_DEBUG("LoginApp: login cancelled for '{}' (client disconnected)", username);
-      co_return;  // prepare_guard fires → CancelPrepareLogin sent
+      co_return;
     }
     if (prep_result.Error().Code() == ErrorCode::kTimeout) ++login_timeout_total_;
     ATLAS_LOG_WARNING("LoginApp: prepare login RPC failed for '{}': {}", username,
                       prep_result.Error().Message());
     SendLoginError(client_channel_id, login::LoginStatus::kInternalError, "prepare_rpc_failed");
-    co_return;  // prepare_guard fires → CancelPrepareLogin sent
+    co_return;
   }
 
   const auto& prep_reply = prep_result.Value();
@@ -412,12 +368,9 @@ auto LoginApp::HandleLoginCoro(uint64_t client_channel_id, Address client_addr,
   if (!prep_reply.success) {
     ATLAS_LOG_ERROR("LoginApp: PrepareLogin failed for '{}': {}", username, prep_reply.error);
     SendLoginError(client_channel_id, login::LoginStatus::kInternalError, prep_reply.error);
-    co_return;  // prepare_guard fires → CancelPrepareLogin sent
+    co_return;
   }
 
-  // ======================================================================
-  // Success — dismiss rollback guard and send LoginResult to client
-  // ======================================================================
   prepare_guard.Dismiss();
 
   auto* client_ch = external_network_.FindChannel(client_channel_id);
@@ -445,17 +398,10 @@ auto LoginApp::HandleLoginCoro(uint64_t client_channel_id, Address client_addr,
                   alloc_reply.external_addr.Port());
 }
 
-// ============================================================================
-// Helpers
-// ============================================================================
-
 void LoginApp::OnClientDisconnect(Channel& ch) {
   auto it = channel_cancel_sources_.find(ch.ChannelId());
   if (it != channel_cancel_sources_.end()) {
     it->second.RequestCancellation();
-    // Note: the coroutine's ScopeGuard removes the entry from channel_cancel_sources_
-    // when it finishes, so we don't erase here — the cancellation callback resumes
-    // the coroutine synchronously, which erases the entry via cancel_guard.
   }
 }
 
@@ -482,7 +428,6 @@ auto LoginApp::IsRateLimited(const Address& src) -> bool {
     return false;
   }
 
-  // Global window check
   if (global_window_start_ == TimePoint{}) global_window_start_ = kNow;
   if (kNow - global_window_start_ > rate_limit_window_) {
     global_window_start_ = kNow;
@@ -490,7 +435,6 @@ auto LoginApp::IsRateLimited(const Address& src) -> bool {
   }
   if (rate_limit_global_ > 0 && global_login_count_ >= rate_limit_global_) return true;
 
-  // Per-IP window check
   if (rate_limit_per_ip_ <= 0) {
     return false;
   }

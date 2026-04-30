@@ -13,7 +13,7 @@ namespace atlas {
 class Channel;
 
 // Per-client UNRELIABLE latest-wins delta relay for ReplicatedDeltaFromCell
-// (msg 2015) → client msg 0xF001. Same-entity writes replace the queued
+// (msg 2015) -> client msg 0xF001. Same-entity writes replace the queued
 // entry. INVARIANT: only volatile state (pos/orientation); cumulative state
 // must use ReplicatedReliableDeltaFromCell (msg 2017) or it will be dropped.
 class DeltaForwarder {

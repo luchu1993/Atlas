@@ -30,7 +30,7 @@ class Space {
   [[nodiscard]] auto Id() const -> SpaceID { return id_; }
 
   // Entity inserts itself into RangeList in its ctor; AddEntity just
-  // parks it in the id→entity map.
+  // parks it in the id->entity map.
   auto AddEntity(std::unique_ptr<CellEntity> entity) -> CellEntity*;
 
   // Idempotent on missing id.

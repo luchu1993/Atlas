@@ -16,16 +16,8 @@
 
 namespace atlas {
 
-// ============================================================================
-// Trivial concept
-// ============================================================================
-
 template <typename T>
 concept Trivial = std::is_trivially_copyable_v<T> && !std::is_pointer_v<T>;
-
-// ============================================================================
-// Endianness helpers
-// ============================================================================
 
 namespace endian {
 
@@ -119,10 +111,6 @@ template <Trivial T>
 
 }  // namespace endian
 
-// ============================================================================
-// BinaryWriter
-// ============================================================================
-
 class BinaryWriter {
  public:
   BinaryWriter() = default;
@@ -147,7 +135,6 @@ class BinaryWriter {
   [[nodiscard]] auto Reserve(std::size_t bytes) -> std::byte*;
   void Truncate(std::size_t new_size);
 
-  // Attach/detach the internal buffer for zero-copy bundle composition
   void Attach(std::vector<std::byte> buf);
   void Clear();
   [[nodiscard]] auto Detach() -> std::vector<std::byte>;
@@ -155,10 +142,6 @@ class BinaryWriter {
  private:
   std::vector<std::byte> buffer_;
 };
-
-// ============================================================================
-// BinaryReader
-// ============================================================================
 
 class BinaryReader {
  public:

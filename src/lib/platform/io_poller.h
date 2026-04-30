@@ -10,10 +10,6 @@
 
 namespace atlas {
 
-// ============================================================================
-// Platform-specific file descriptor handle
-// ============================================================================
-
 #if ATLAS_PLATFORM_WINDOWS
 using FdHandle = uintptr_t;  // SOCKET is UINT_PTR on Windows
 #else
@@ -21,10 +17,6 @@ using FdHandle = int;
 #endif
 
 inline constexpr FdHandle kInvalidFd = static_cast<FdHandle>(-1);
-
-// ============================================================================
-// IOEvent flags
-// ============================================================================
 
 enum class IOEvent : uint8_t {
   kNone = 0x00,
@@ -56,15 +48,7 @@ constexpr auto operator&=(IOEvent& a, IOEvent b) -> IOEvent& {
   return a;
 }
 
-// ============================================================================
-// IOCallback
-// ============================================================================
-
 using IOCallback = std::function<void(FdHandle fd, IOEvent events)>;
-
-// ============================================================================
-// IOPoller — abstract reactor-pattern IO multiplexer
-// ============================================================================
 
 class IOPoller {
  public:

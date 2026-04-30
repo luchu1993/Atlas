@@ -42,7 +42,7 @@ class Witness {
 
   void Activate();
 
-  // Drops aoi_map_ entries WITHOUT firing OnLeave — the observer is
+  // Drops aoi_map_ entries WITHOUT firing OnLeave - the observer is
   // going away and the client channel will be recycled by BaseApp.
   void Deactivate();
 
@@ -70,7 +70,7 @@ class Witness {
   void Update(uint32_t max_packet_bytes);
 
   // O(1) demand estimate for the cellapp's fair-share budget allocator.
-  // Enter bursts aren't separately accounted for — they show up next
+  // Enter bursts aren't separately accounted for - they show up next
   // tick via bandwidth_deficit_, costing one tick of lag.
   [[nodiscard]] auto EstimateOutboundDemandBytes(uint32_t per_peer_bytes) const -> uint32_t {
     return static_cast<uint32_t>(aoi_map_.size()) * per_peer_bytes +
@@ -115,8 +115,8 @@ class Witness {
  private:
   void UpdatePriority(EntityCache& cache) const;
 
-  // Close (< 25 m) → every tick; Medium (< 100 m) → every 3rd tick;
-  // Far (≥ 100 m) → every 6th tick.
+  // Close (< 25 m) -> every tick; Medium (< 100 m) -> every 3rd tick;
+  // Far (>= 100 m) -> every 6th tick.
   [[nodiscard]] static auto LodIntervalForDistSq(double dist_sq) -> uint64_t;
 
   // Each Send* returns bytes actually dispatched so the tick-loop's
@@ -152,7 +152,7 @@ class Witness {
   static constexpr uint32_t kDeficitWarnEveryNTicks = 300;
 
   // Populated by HandleAoIEnter / HandleAoILeave, drained by Update.
-  // Duplicates tolerated — the drain loop's flag check filters stale
+  // Duplicates tolerated - the drain loop's flag check filters stale
   // entries (e.g. an Enter overridden by a later Leave).
   std::vector<EntityID> pending_enter_ids_;
   std::vector<EntityID> pending_gone_ids_;

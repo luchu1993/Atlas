@@ -13,8 +13,6 @@ namespace atlas {
 
 class ClrScriptEngine;
 
-/// C++ side hot-reload manager. Monitors script files, compiles, and
-/// coordinates with C# HotReloadManager for state migration.
 class ClrHotReload {
  public:
   struct Config {
@@ -30,14 +28,10 @@ class ClrHotReload {
 
   [[nodiscard]] auto Configure(const Config& config) -> Result<void>;
 
-  /// Manually trigger a hot-reload.
   [[nodiscard]] auto Reload() -> Result<void>;
 
-  /// Check for pending file changes (call from main loop).
-  /// Respects debounce delay.
   void Poll();
 
-  /// Process a pending reload if one is queued (call from main loop between ticks).
   [[nodiscard]] auto ProcessPending() -> Result<void>;
 
   [[nodiscard]] auto IsEnabled() const -> bool { return config_.enabled; }

@@ -4,10 +4,6 @@
 #include <bit>
 #include <cstddef>
 
-// ============================================================================
-// Compiler detection
-// ============================================================================
-
 #if defined(_MSC_VER)
 #define ATLAS_COMPILER_MSVC 1
 #define ATLAS_COMPILER_CLANG 0
@@ -25,10 +21,6 @@
 #define ATLAS_COMPILER_CLANG 0
 #define ATLAS_COMPILER_GCC 0
 #endif
-
-// ============================================================================
-// Platform defaults (may be overridden by CMake)
-// ============================================================================
 
 #ifndef ATLAS_PLATFORM_WINDOWS
 #define ATLAS_PLATFORM_WINDOWS 0
@@ -50,10 +42,6 @@
 #define ATLAS_DEBUG 0
 #endif
 
-// ============================================================================
-// Constexpr platform queries
-// ============================================================================
-
 namespace atlas::platform {
 
 inline constexpr bool kIsWindows = static_cast<bool>(ATLAS_PLATFORM_WINDOWS);
@@ -71,10 +59,6 @@ inline constexpr std::size_t kCacheLineSize = 64;
 
 }  // namespace atlas::platform
 
-// ============================================================================
-// Compiler hint macros
-// ============================================================================
-
 #if ATLAS_COMPILER_MSVC
 #define ATLAS_FORCE_INLINE __forceinline
 #define ATLAS_NO_INLINE __declspec(noinline)
@@ -85,10 +69,6 @@ inline constexpr std::size_t kCacheLineSize = 64;
 #define ATLAS_FORCE_INLINE inline
 #define ATLAS_NO_INLINE
 #endif
-
-// ============================================================================
-// Debug break
-// ============================================================================
 
 #if ATLAS_COMPILER_MSVC
 #define ATLAS_DEBUG_BREAK() __debugbreak()

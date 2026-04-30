@@ -7,17 +7,13 @@
 
 namespace atlas {
 
-// ============================================================================
-// EntityID — uniquely identifies a live entity within a server cluster
-// ============================================================================
-
 using EntityID = uint32_t;
 inline constexpr EntityID kInvalidEntityID = 0;
 
 // IDs in [1, kFirstLocalEntityID) are server-allocated by DBApp's
 // EntityIdAllocator and cluster-stable. IDs in [kFirstLocalEntityID,
 // 0xFFFFFFFF] are reserved for client-only entities (effects, HUD
-// markers, prediction stand-ins) — the server must never mint into
+// markers, prediction stand-ins); the server must never mint into
 // this range. Mirrors BigWorld's FIRST_LOCAL_ENTITY_ID convention.
 inline constexpr EntityID kFirstLocalEntityID = 0x7F000000;
 
@@ -25,18 +21,8 @@ inline constexpr EntityID kFirstLocalEntityID = 0x7F000000;
   return id != kInvalidEntityID && id < kFirstLocalEntityID;
 }
 
-// ============================================================================
-// SpaceID — uniquely identifies a spatial partition. In the single-CellApp
-// stage Space == Cell; the multi-CellApp path splits them.
-// ============================================================================
-
 using SpaceID = uint32_t;
 inline constexpr SpaceID kInvalidSpaceID = 0;
-
-// ============================================================================
-// SessionKey — 32-byte random token issued to a client at login
-// Used for authenticating the client <-> Proxy binding.
-// ============================================================================
 
 struct SessionKey {
   uint8_t bytes[32]{};
@@ -68,7 +54,6 @@ struct SessionKey {
 
 }  // namespace atlas
 
-// Allow SessionKey to be used as a key in std::unordered_map
 template <>
 struct std::hash<atlas::SessionKey> {
   auto operator()(const atlas::SessionKey& k) const noexcept -> std::size_t {

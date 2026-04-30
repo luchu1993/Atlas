@@ -20,52 +20,14 @@ enum class MessageLengthStyle : uint8_t {
   kVariable,  // packed-int length prefix before payload
 };
 
-// Reliability hint embedded in the message descriptor.
-//
-// Reliable   — the channel must guarantee delivery and ordering (default).
-//              On ReliableUdpChannel this uses the ACK/retransmit path.
-//              On TcpChannel it is always reliable regardless of this flag.
-//
-// Unreliable — delivery is best-effort; lost packets are NOT retransmitted.
-//              Use for high-frequency state updates (position, AoI deltas)
-//              where staleness is worse than loss.
-//              On non-RUDP channels (TCP, plain UDP) the channel falls back
-//              to its natural send path (TCP is always reliable; plain UDP
-//              never retransmits).
+// Transport hint; TCP remains reliable regardless of this value.
 enum class MessageReliability : uint8_t {
   kReliable,
   kUnreliable,
 };
 
-// Urgency controls whether SendMessage on a batching-capable channel
-// appends to a per-channel deferred bundle (kBatched) or flushes
-// immediately (kImmediate).  Independent of reliability — every
-// (reliability × urgency) combination is meaningful.
-//
-// Transport behaviour:
-//   - ReliableUdpChannel : kBatched accumulates in deferred_*_bundle_,
-//                          flushed by FlushDirtySendChannels — real
-//                          syscall coalescing (the primary win).
-//   - TcpChannel         : kBatched accumulates in a single deferred
-//                          bundle, flushed at the same hooks —
-//                          amortises Bundle::Finalize + packet_filter
-//                          + frame-header writes; kernel write buffer
-//                          + Nagle still coalesce on the wire.
-//   - UdpChannel         : urgency is ignored — each datagram is
-//                          independent, no application-level bundle.
-//
-// Default is kBatched. Must-stay-immediate descriptors (PvP commands,
-// login/handshake, *Ack, machined control plane, manager registration,
-// cellapp migration handshake, witness control, space topology,
-// GlobalBase) are explicitly annotated kImmediate.
-//
-// kImmediate use cases:
-//   - Handshake / login / channel teardown
-//   - PvP-critical command paths (combat actions, hit confirms)
-//   - Anything where the caller awaits the syscall result
-// kBatched use cases:
-//   - State replication, RPC results, inventory updates
-//   - Volatile position deltas (already covered by witness path today)
+// Batching hint; descriptors default to kBatched unless latency is part of
+// the protocol contract.
 enum class MessageUrgency : uint8_t {
   kImmediate,
   kBatched,
@@ -75,9 +37,9 @@ struct MessageDesc {
   MessageID id;
   std::string_view name;
   MessageLengthStyle length_style;
-  int32_t fixed_length;                                           // bytes, only for Fixed style
-  MessageReliability reliability{MessageReliability::kReliable};  // delivery guarantee
-  MessageUrgency urgency{MessageUrgency::kBatched};               // batching opt-out
+  int32_t fixed_length;
+  MessageReliability reliability{MessageReliability::kReliable};
+  MessageUrgency urgency{MessageUrgency::kBatched};
 
   [[nodiscard]] constexpr auto IsFixed() const -> bool {
     return length_style == MessageLengthStyle::kFixed;
@@ -92,10 +54,8 @@ struct MessageDesc {
   }
 };
 
-// Forward declare Channel
 class Channel;
 
-// Handler interface
 class MessageHandler {
  public:
   virtual ~MessageHandler() = default;
@@ -103,7 +63,6 @@ class MessageHandler {
                              BinaryReader& data) = 0;
 };
 
-// C++20 concept: a type is a NetworkMessage if it provides these
 template <typename T>
 concept NetworkMessage = requires(const T& msg, BinaryWriter& w, BinaryReader& r) {
   { T::Descriptor() } -> std::same_as<const MessageDesc&>;
@@ -111,7 +70,6 @@ concept NetworkMessage = requires(const T& msg, BinaryWriter& w, BinaryReader& r
   { T::Deserialize(r) } -> std::same_as<Result<T>>;
 };
 
-// Typed handler that auto-deserializes and calls a callback
 template <NetworkMessage Msg>
 class TypedMessageHandler : public MessageHandler {
  public:
@@ -133,7 +91,6 @@ class TypedMessageHandler : public MessageHandler {
   Callback callback_;
 };
 
-// Factory for typed handlers
 template <NetworkMessage Msg>
 [[nodiscard]] auto MakeHandler(typename TypedMessageHandler<Msg>::Callback callback)
     -> std::unique_ptr<MessageHandler> {

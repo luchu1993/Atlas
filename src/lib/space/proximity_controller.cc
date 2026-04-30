@@ -7,10 +7,6 @@
 
 namespace atlas {
 
-// The private TriggerImpl defers to the caller-supplied lambdas. Keeping
-// it PIMPL-style hides RangeTrigger's full definition from the header's
-// public surface — consumers of ProximityController don't need to know how
-// the bounds are stored.
 class ProximityController::TriggerImpl final : public RangeTrigger {
  public:
   TriggerImpl(ProximityController& owner, RangeListNode& central, float range)
@@ -38,10 +34,6 @@ ProximityController::ProximityController(RangeListNode& central, RangeList& list
 ProximityController::~ProximityController() = default;
 
 void ProximityController::Start() {
-  // Trigger is constructed here (rather than in the ctor) so no RangeList
-  // insertion happens until the Controllers container has finished
-  // registering this instance — matches the lifecycle of the other
-  // concrete controllers.
   trigger_ = std::make_unique<TriggerImpl>(*this, central_, range_);
   // On cross-process Offload arrival the caller pre-populates
   // pending_seed_peers_ with peers that were "inside" at the origin
@@ -60,9 +52,7 @@ auto ProximityController::InsidePeers() const -> const std::unordered_set<RangeL
 }
 
 void ProximityController::SeedInsidePeersForMigration(std::unordered_set<RangeListNode*> peers) {
-  // Must be called between ctor and Controllers::Add (which calls Start).
-  // If called after Start, the trigger is already inserted and the seed
-  // would be useless — this assertion catches the misuse.
+  // Must be called before Controllers::Add calls Start().
   assert(trigger_ == nullptr && "SeedInsidePeersForMigration after Start()");
   pending_seed_peers_ = std::move(peers);
 }

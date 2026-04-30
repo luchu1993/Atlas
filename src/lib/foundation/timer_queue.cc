@@ -74,7 +74,6 @@ auto TimerQueue::Process(TimePoint now) -> uint32_t {
       node->fire_time += node->interval;
       heap_.push_back(node);
       std::push_heap(heap_.begin(), heap_.end(), HeapCompare{});
-      // node stays in index_ — it can still be cancelled
     } else {
       index_.erase(node->id);
       node_pool_.Destroy(node);

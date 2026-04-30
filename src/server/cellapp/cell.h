@@ -29,9 +29,9 @@ class Cell {
   [[nodiscard]] auto Bounds() const -> const CellBounds& { return bounds_; }
   void SetBounds(const CellBounds& b) { bounds_ = b; }
 
-  // Membership is explicit — never inferred from bounds, so a tick-mid
+  // Membership is explicit - never inferred from bounds, so a tick-mid
   // excursion does not drop the entity. Callers wire these on every
-  // arrival (Create, Offload-in, Ghost→Real) and departure.
+  // arrival (Create, Offload-in, Ghost->Real) and departure.
   void AddRealEntity(CellEntity* entity);
   auto RemoveRealEntity(CellEntity* entity) -> bool;
   [[nodiscard]] auto HasRealEntity(const CellEntity* entity) const -> bool;

@@ -130,10 +130,6 @@ void MachinedApp::OnTickComplete() {
   watcher_forwarder_.CheckTimeouts();
 }
 
-// ============================================================================
-// Message handlers
-// ============================================================================
-
 void MachinedApp::OnRegister(const Address& /*src*/, Channel* ch, const RegisterMessage& msg) {
   if (ch == nullptr) return;
 
@@ -163,7 +159,7 @@ void MachinedApp::OnRegister(const Address& /*src*/, Channel* ch, const Register
     return;
   }
 
-  // Track heartbeat — TCP fallback if UDP socket not available
+  // Track heartbeat - TCP fallback if UDP socket not available
   heartbeat_entries_.push_back({ch, Clock::now()});
 
   ack.success = true;
@@ -284,7 +280,7 @@ void MachinedApp::OnListenerRegister(const Address& /*src*/, Channel* ch,
       if (auto r = ch->SendMessage(notif); !r) {
         // Snapshot replay on Listener (re-)register; loss means listener
         // never learns about pre-existing peer until the next live
-        // BirthNotification — could be a long wait.
+        // BirthNotification - could be a long wait.
         ATLAS_LOG_WARNING("Machined: BirthNotification snapshot send failed for {} (pid={}): {}",
                           entry.name, entry.pid, r.Error().Message());
       }
@@ -299,10 +295,6 @@ void MachinedApp::OnWatcherRequest(const Address& /*src*/, Channel* ch, const Wa
 void MachinedApp::OnWatcherReply(const Address& /*src*/, Channel* ch, const WatcherReply& msg) {
   watcher_forwarder_.HandleReply(ch, msg);
 }
-
-// ============================================================================
-// Connection lifecycle
-// ============================================================================
 
 void MachinedApp::OnAccept(Channel& ch) {
   ch.SetDisconnectCallback([this](Channel& c) { OnDisconnect(c); });
@@ -326,10 +318,6 @@ void MachinedApp::OnDisconnect(Channel& ch) {
   std::erase_if(heartbeat_entries_, [&ch](const HeartbeatEntry& e) { return e.channel == &ch; });
   listener_manager_.RemoveAll(&ch);
 }
-
-// ============================================================================
-// Heartbeat timeout checking
-// ============================================================================
 
 void MachinedApp::CheckHeartbeatTimeouts() {
   auto now = Clock::now();

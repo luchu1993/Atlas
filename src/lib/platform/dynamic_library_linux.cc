@@ -6,10 +6,6 @@
 
 namespace atlas {
 
-// ============================================================================
-// Lifetime
-// ============================================================================
-
 DynamicLibrary::~DynamicLibrary() {
   if (handle_) {
     dlclose(handle_);
@@ -30,10 +26,6 @@ DynamicLibrary& DynamicLibrary::operator=(DynamicLibrary&& other) noexcept {
   return *this;
 }
 
-// ============================================================================
-// Loading
-// ============================================================================
-
 auto DynamicLibrary::Load(const std::filesystem::path& path) -> Result<DynamicLibrary> {
   void* handle = dlopen(path.string().c_str(), RTLD_NOW);
   if (!handle) {
@@ -44,10 +36,6 @@ auto DynamicLibrary::Load(const std::filesystem::path& path) -> Result<DynamicLi
   return DynamicLibrary{handle};
 }
 
-// ============================================================================
-// Symbol lookup
-// ============================================================================
-
 auto DynamicLibrary::GetSymbolRaw(std::string_view name) -> void* {
   if (!handle_) {
     return nullptr;
@@ -55,10 +43,6 @@ auto DynamicLibrary::GetSymbolRaw(std::string_view name) -> void* {
   std::string name_str(name);
   return dlsym(handle_, name_str.c_str());
 }
-
-// ============================================================================
-// Unload
-// ============================================================================
 
 void DynamicLibrary::Unload() {
   if (handle_) {

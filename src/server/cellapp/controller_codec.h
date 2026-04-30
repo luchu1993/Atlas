@@ -15,11 +15,9 @@ class Controllers;
 
 // Controller serialise/deserialise for cross-process Offload migration.
 // Wire v1: u8 count | per-controller (u8 kind | u32 id | i32 user_arg | payload).
-//
-// Caveats:
 //   - ProximityController inside_peers is serialised as ids; non-local
 //     peers drop silently (cross-CellApp partition is legal).
-//   - Script-layer callbacks are NOT serialised — RestoreEntity must
+//   - Script-layer callbacks are NOT serialised - RestoreEntity must
 //     reattach them on arrival.
 
 // Returns nullptr for ids unknown on this CellApp.

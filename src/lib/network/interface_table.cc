@@ -17,11 +17,10 @@ auto InterfaceTable::RegisterHandler(MessageID id, const MessageDesc& desc,
 
 auto InterfaceTable::Dispatch(const Address& source, Channel* channel, MessageID id,
                               BinaryReader& data) -> Result<void> {
-  // Pre-dispatch hook: let coroutine RPC registry consume reply messages
   if (pre_dispatch_hook_) {
     auto payload = data.Data().subspan(data.Position());
     if (pre_dispatch_hook_(id, payload)) {
-      data.Skip(payload.size());  // advance reader past consumed message
+      data.Skip(payload.size());
       return {};
     }
   }

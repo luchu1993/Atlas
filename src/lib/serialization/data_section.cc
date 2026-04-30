@@ -30,10 +30,6 @@ auto Iequals(std::string_view a, std::string_view b) -> bool {
 
 }  // namespace
 
-// ============================================================================
-// DataSection
-// ============================================================================
-
 DataSection::DataSection(std::string name) : name_(std::move(name)) {}
 
 DataSection::DataSection(std::string name, std::string value)
@@ -136,7 +132,6 @@ auto DataSection::AddChild(std::string name) -> DataSection* {
   auto* node = tree_->AllocateNode(std::move(name));
   auto idx = children_.size();
   children_.push_back(node);
-  // Only store the first occurrence in the index for O(1) single-child lookup
   child_index_.try_emplace(std::string_view(children_.back()->name_), idx);
   return node;
 }
@@ -148,10 +143,6 @@ auto DataSection::AddChild(std::string name, std::string value) -> DataSection* 
   child_index_.try_emplace(std::string_view(children_.back()->name_), idx);
   return node;
 }
-
-// ============================================================================
-// DataSectionTree
-// ============================================================================
 
 DataSectionTree::DataSectionTree() {
   root_ = AllocateNode();
@@ -246,10 +237,6 @@ auto DataSectionTree::ArenaAlloc(std::size_t size, std::size_t align) -> void* {
   return ptr;
 }
 
-// ============================================================================
-// Factory methods
-// ============================================================================
-
 auto DataSectionTree::FromXml(const stdfs::path& path) -> Result<std::shared_ptr<DataSectionTree>> {
   return xml::ParseFile(path);
 }
@@ -268,10 +255,6 @@ auto DataSectionTree::FromJsonString(std::string_view json)
     -> Result<std::shared_ptr<DataSectionTree>> {
   return json::ParseString(json);
 }
-
-// ============================================================================
-// DataSection static forwarding methods
-// ============================================================================
 
 auto DataSection::FromXml(const stdfs::path& path) -> Result<Ptr> {
   return DataSectionTree::FromXml(path);

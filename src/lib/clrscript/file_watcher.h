@@ -7,16 +7,12 @@
 
 namespace atlas {
 
-/// Polling-based file watcher. Checks .cs files' last_write_time to detect changes.
-/// Excludes bin/, obj/, .git/, .reload_staging/, .reload_backup/ directories.
 class FileWatcher {
  public:
   explicit FileWatcher(const std::filesystem::path& directory);
 
-  /// Scan directory and return true if any .cs file has changed since last scan.
   [[nodiscard]] auto CheckChanges() -> bool;
 
-  /// Re-scan and record current timestamps without reporting changes.
   void Reset();
 
  private:

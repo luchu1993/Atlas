@@ -18,17 +18,6 @@ namespace atlas {
 
 class Channel;
 
-// ============================================================================
-// BaseAppMgr — BaseApp cluster manager
-//
-// Responsibilities:
-//   • Accept BaseApp registration and assign app_id + EntityID range
-//   • Track BaseApp load (InformLoad) for least-loaded selection
-//   • Allocate BaseApps for new logins (AllocateBaseApp)
-//   • Manage Global Bases registry and broadcast to all BaseApps
-//   • Handle BaseApp death (machined events)
-// ============================================================================
-
 class BaseAppMgr : public ManagerApp {
  public:
   static auto Run(int argc, char* argv[]) -> int;
@@ -41,7 +30,6 @@ class BaseAppMgr : public ManagerApp {
   void RegisterWatchers() override;
 
  private:
-  // ---- BaseApp tracking -----------------------------------------------
   struct BaseAppInfo {
     Address internal_addr;
     Address external_addr;
@@ -91,7 +79,6 @@ class BaseAppMgr : public ManagerApp {
     std::unordered_map<uint32_t, std::unordered_set<DatabaseID>> dbids_by_app_;
   };
 
-  // ---- Message handlers -----------------------------------------------
   void OnRegisterBaseapp(const Address& src, Channel* ch, const baseappmgr::RegisterBaseApp& msg);
   void OnBaseappReady(const Address& src, Channel* ch, const baseappmgr::BaseAppReady& msg);
   void OnInformLoad(const Address& src, Channel* ch, const baseappmgr::InformLoad& msg);
@@ -100,7 +87,6 @@ class BaseAppMgr : public ManagerApp {
                             const baseappmgr::RegisterGlobalBase& msg);
   void OnDeregisterGlobalBase(const Address& src, Channel* ch,
                               const baseappmgr::DeregisterGlobalBase& msg);
-  // ---- Internal helpers -----------------------------------------------
   [[nodiscard]] auto FindBaseappByAppId(uint32_t app_id) -> BaseAppInfo*;
   [[nodiscard]] auto FindBaseappByAppId(uint32_t app_id) const -> const BaseAppInfo*;
   [[nodiscard]] auto MatchesRegisteredSource(const BaseAppInfo& info, const Address& src,
@@ -120,7 +106,6 @@ class BaseAppMgr : public ManagerApp {
   void BroadcastToAllBaseapps(const baseappmgr::GlobalBaseNotification& notif);
   void OnBaseappDeath(const Address& addr);
 
-  // ---- State ----------------------------------------------------------
   std::unordered_map<Address, BaseAppInfo> baseapps_;
   std::unordered_map<uint32_t, Address> app_id_index_;
   uint32_t next_app_id_{1};
@@ -133,12 +118,10 @@ class BaseAppMgr : public ManagerApp {
   static constexpr uint32_t kHardOverloadLogoffLimit = 1024u;
   static constexpr auto kDbidAffinityTtl = std::chrono::seconds(30);
 
-  // Overload state
   mutable TimePoint overload_start_{};
   mutable int logins_since_overload_{0};
   DbidAffinityTable dbid_affinity_;
 
-  // Global Bases
   struct GlobalBaseEntry {
     std::string key;
     Address base_addr;

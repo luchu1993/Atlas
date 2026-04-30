@@ -9,7 +9,7 @@
 
 namespace atlas {
 
-// Field index in `fields` is the stable wire-side id — field-level ops
+// Field index in `fields` is the stable wire-side id; field-level ops
 // reference a field by its position, not its name. Don't reorder fields
 // without bumping a schema version.
 struct FieldDescriptor {
@@ -18,8 +18,7 @@ struct FieldDescriptor {
 };
 
 // `id` is the compact handle used on the wire; must be unique within a
-// process. Cycle detection is intentionally NOT done here — the caller is
-// responsible for topological validation before RegisterStruct.
+// process. Cycle detection stays with the registration caller.
 struct StructDescriptor {
   uint16_t id{0};
   std::string name;

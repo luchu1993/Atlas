@@ -113,9 +113,6 @@ class SqliteDatabase : public IDatabase {
   [[nodiscard]] auto SqliteError(std::string_view prefix, int code) const -> Error;
   void FireOrDefer(std::function<void()> cb);
 
-  // Write-scope helpers: in batch mode these use SAVEPOINTs inside a
-  // single outer transaction; outside batch mode they fall back to
-  // individual BEGIN IMMEDIATE / COMMIT / ROLLBACK.
   [[nodiscard]] auto BeginWriteScope() -> Result<std::string>;
   void CommitWriteScope(const std::string& scope);
   void RollbackWriteScope(const std::string& scope);

@@ -10,11 +10,8 @@
 
 namespace atlas {
 
-// Thread safety: Thread-safe (mutex-protected allocate/deallocate).
-// Fixed-size block allocator with free-list.
-//
 // `pool_name` must be a stable pointer (string literal or other static
-// storage). Tracy keys named-allocation streams by pointer identity —
+// storage). Tracy keys named-allocation streams by pointer identity;
 // a heap-allocated, transient name would corrupt the trace history of
 // any already-connected viewer the first time it was freed and reused.
 class PoolAllocator {
@@ -43,7 +40,6 @@ class PoolAllocator {
     Chunk* next;
   };
 
-  // Returns false on OOM instead of throwing (no-exception policy).
   auto Grow(std::size_t count) -> bool;
 
   FreeNode* free_list_{nullptr};
@@ -56,22 +52,17 @@ class PoolAllocator {
   std::mutex mutex_;
 };
 
-// Typed pool wrapper. `pool_name` carries the same lifetime contract as
-// the underlying PoolAllocator's pool_name argument (see above).
 template <typename T>
 class TypedPool {
  public:
   explicit TypedPool(const char* pool_name, std::size_t initial_count = 64)
-      : pool_(pool_name,
-              // Round block_size up to alignof(T) so every block in the slab
-              // is naturally aligned, regardless of Chunk header size.
-              (std::max(sizeof(T), sizeof(void*)) + alignof(T) - 1) & ~(alignof(T) - 1),
+      : pool_(pool_name, (std::max(sizeof(T), sizeof(void*)) + alignof(T) - 1) & ~(alignof(T) - 1),
               initial_count, alignof(T)) {}
 
   template <typename... Args>
   [[nodiscard]] auto Construct(Args&&... args) -> T* {
     void* mem = pool_.Allocate();
-    if (!mem) return nullptr;  // OOM — caller must check
+    if (!mem) return nullptr;
 
     try {
       return ::new (mem) T(std::forward<Args>(args)...);

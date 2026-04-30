@@ -14,8 +14,6 @@ auto Controllers::Add(std::unique_ptr<Controller> ctrl, IEntityMotion* motion, i
   ctrl->finished_ = false;
   auto* raw = ctrl.get();
   controllers_.emplace(id, std::move(ctrl));
-  // Start() may synchronously call Finish() — that's fine; the next
-  // Compact() pass will reap it.
   raw->Start();
   return id;
 }
@@ -29,7 +27,6 @@ auto Controllers::AddWithPreservedId(std::unique_ptr<Controller> ctrl, IEntityMo
   ctrl->finished_ = false;
   auto* raw = ctrl.get();
   controllers_.emplace(preserved_id, std::move(ctrl));
-  // Ensure future Add() calls don't collide with the preserved ID.
   if (preserved_id >= next_id_) next_id_ = preserved_id + 1;
   raw->Start();
   return preserved_id;
@@ -40,9 +37,6 @@ auto Controllers::Cancel(ControllerID id) -> bool {
   if (it == controllers_.end()) return false;
 
   if (in_update_) {
-    // Defer: erasing during iteration would invalidate the map's range.
-    // Duplicate entries in pending_cancel_ are harmless — Compact()
-    // treats them idempotently.
     pending_cancel_.push_back(id);
     return true;
   }
@@ -57,11 +51,6 @@ void Controllers::Update(float dt) {
 
   in_update_ = true;
 
-  // Snapshot the keys we want to tick, so Add() during iteration doesn't
-  // accidentally tick the newcomer this tick (deterministic frame
-  // boundary). Scratch buffer is a member field so the per-tick vector
-  // allocation is amortised away; reserve is kept as a tight bound
-  // against the current size.
   tick_keys_.clear();
   tick_keys_.reserve(controllers_.size());
   for (auto& [id, _] : controllers_) tick_keys_.push_back(id);
@@ -79,16 +68,8 @@ void Controllers::Update(float dt) {
 }
 
 void Controllers::StopAll() {
-  // Re-entering StopAll from inside a controller's Update — e.g. a
-  // script callback that triggers entity destruction mid-tick — would
-  // modify `controllers_` while Update is still iterating it and lead
-  // to UB. The supported pattern for "cancel during tick" is Cancel(),
-  // which defers the erase until Compact() at the end of the tick.
   assert(!in_update_ && "Controllers::StopAll called during Update; use Cancel() for defer");
 
-  // Drain pending cancels first in case a previous Update left any
-  // deferred items — we're about to destroy everything anyway, but
-  // calling Stop() in consistent order makes shutdown debugging saner.
   Compact();
   for (auto& [_, ctrl] : controllers_) ctrl->Stop();
   controllers_.clear();
@@ -96,7 +77,6 @@ void Controllers::StopAll() {
 }
 
 void Controllers::Compact() {
-  // 1) explicit cancels requested during Update
   for (auto id : pending_cancel_) {
     auto it = controllers_.find(id);
     if (it == controllers_.end()) continue;
@@ -105,7 +85,6 @@ void Controllers::Compact() {
   }
   pending_cancel_.clear();
 
-  // 2) controllers that finished naturally during Update
   for (auto it = controllers_.begin(); it != controllers_.end();) {
     if (it->second->finished_) {
       it->second->Stop();

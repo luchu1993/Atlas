@@ -13,47 +13,32 @@
 
 namespace atlas::machined {
 
-// ============================================================================
-// ProcessEntry — one registered process
-// ============================================================================
-
 struct ProcessEntry {
   ProcessType process_type{ProcessType::kBaseApp};
   std::string name;
   Address internal_addr;
-  Address external_addr;  // {0,0} if N/A
+  Address external_addr;
   uint32_t pid{0};
   float load{0.0f};
 
-  // Backpointer to the live TCP channel.  Null if the process has disconnected
-  // but cleanup has not yet run.  MUST be accessed only from the dispatcher thread.
+  // Dispatcher-thread backpointer to the live TCP registration channel.
   Channel* channel{nullptr};
 };
 
-// ============================================================================
-// ProcessRegistry
-// ============================================================================
-
 class ProcessRegistry {
  public:
-  // Returns false if the entry would violate uniqueness rules:
-  //   - (process_type, name) pair must be unique.
-  //   - channel must not already be associated with another entry.
+  // Rejects duplicate (process_type, name) pairs and reused channels.
   [[nodiscard]] auto RegisterProcess(ProcessEntry entry) -> bool;
 
-  // Remove by channel pointer.  Returns the removed entry, or nullopt if not found.
   auto UnregisterByChannel(Channel* channel) -> std::optional<ProcessEntry>;
 
-  // Remove by (type, name).  Returns the removed entry, or nullopt if not found.
   auto UnregisterByName(ProcessType type, const std::string& name) -> std::optional<ProcessEntry>;
 
-  // Query — returns a snapshot (copies)
   [[nodiscard]] auto FindByType(ProcessType type) const -> std::vector<ProcessEntry>;
   [[nodiscard]] auto FindByName(ProcessType type, const std::string& name) const
       -> std::optional<ProcessEntry>;
   [[nodiscard]] auto FindByChannel(Channel* channel) const -> std::optional<ProcessEntry>;
 
-  // Update load for a connected process
   void UpdateLoad(Channel* channel, float load, uint32_t entity_count);
 
   // Look up the TCP channel for a process by PID (+ optional source IP) to
@@ -66,7 +51,6 @@ class ProcessRegistry {
 
   [[nodiscard]] auto Size() const -> std::size_t { return entries_.size(); }
 
-  // Iterate all entries (read-only)
   using VisitorFn = std::function<void(const ProcessEntry&)>;
   void ForEach(VisitorFn fn) const;
 

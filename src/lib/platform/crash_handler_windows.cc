@@ -38,24 +38,16 @@ void (*g_prev_sigabrt)(int) = SIG_DFL;
 std::terminate_handler g_prev_terminate = nullptr;
 PVOID g_vectored_handle = nullptr;
 
-// Single dump per process — vectored, top-level filter and synthetic paths
-// can all race during teardown.  First one wins.
+// Vectored, top-level filter and synthetic paths can race; first dump wins.
 std::atomic<bool> g_dump_written{false};
 
-// Builds the absolute dump path into `out` (must be >= MAX_PATH).
 void BuildDumpPath(char* out, std::size_t out_size) {
   char stem[128];
   FormatDumpStem(stem, sizeof(stem), static_cast<int>(GetCurrentProcessId()));
   std::snprintf(out, out_size, "%s%s.dmp", g_dump_dir_buf, stem);
 }
 
-// Performs the actual MiniDumpWriteDump call.  Called from the SEH filter
-// (with real EXCEPTION_POINTERS) and from synthetic-context paths
-// (SIGABRT, pure call, invalid parameter).
 LONG WriteDump(EXCEPTION_POINTERS* ep, char* dump_path_out, std::size_t dump_path_size) {
-  // Race-safe: only the first caller writes a dump.  Subsequent callers on
-  // the same crash (e.g. SEH filter after our vectored handler already
-  // dumped) get EXCEPTION_CONTINUE_SEARCH and let the OS proceed.
   bool expected = false;
   if (!g_dump_written.compare_exchange_strong(expected, true)) {
     return EXCEPTION_CONTINUE_SEARCH;
@@ -130,9 +122,7 @@ const char* ExceptionCodeName(DWORD code) {
   }
 }
 
-// Logs a one-line exception summary plus a symbolic stack trace to stderr.
-// Best-effort: we call SymInitialize with fInvadeProcess=TRUE so loaded
-// modules are auto-discovered.  Symbols are not freed — we are crashing.
+// Best-effort stack trace; symbols are not freed because we are crashing.
 void LogExceptionAndStack(EXCEPTION_POINTERS* ep) {
   if (!ep || !ep->ExceptionRecord || !ep->ContextRecord) return;
 
@@ -214,22 +204,14 @@ void LogExceptionAndStack(EXCEPTION_POINTERS* ep) {
 }
 
 void NotifyAndExit(const char* dump_path, EXCEPTION_POINTERS* ep) {
-  // Stack first, dump second: if stack walking itself faults, we still
-  // want the user to see at least the exception code line.
   LogExceptionAndStack(ep);
 
   if (!g_opts.on_crash) return;
-  // C++ try/catch — cannot use __try here because std::function::operator()
-  // constructs a std::string parameter, which requires object unwinding.
-  // SEH coming back out of a misbehaving callback will still kill us, but
-  // that's acceptable: the dump is already on disk.
   try {
     g_opts.on_crash(dump_path);
   } catch (...) {}
 }
 
-// Top-level SEH filter.  Triggered by access violations, stack overflow,
-// divide-by-zero, RaiseException, etc.
 LONG WINAPI SehFilter(EXCEPTION_POINTERS* ep) {
   char dump_path[MAX_PATH];
   LONG result = WriteDump(ep, dump_path, sizeof(dump_path));
@@ -277,10 +259,9 @@ void OnInvalidParameter(const wchar_t* /*expression*/, const wchar_t* /*function
 }
 
 // Vectored handler runs *before* SEH unwinding, so it sees fatal exceptions
-// even when an inner SEH frame would otherwise swallow them — important for
+// even when an inner SEH frame would otherwise swallow them; important for
 // CLR-hosted code where CoreCLR installs its own filters higher in the chain
 // and may FailFast or re-throw without ever reaching SetUnhandledExceptionFilter.
-//
 // We restrict to fatal codes; CLR-hosted processes raise C++ exceptions
 // (0xE06D7363) and managed exceptions through SEH all the time, so we'd
 // dump on every Console.WriteLine without the filter.
@@ -297,7 +278,7 @@ LONG CALLBACK VectoredHandler(EXCEPTION_POINTERS* ep) {
     case EXCEPTION_IN_PAGE_ERROR:
     case EXCEPTION_ARRAY_BOUNDS_EXCEEDED:
     case 0xC0000374:  // STATUS_HEAP_CORRUPTION
-    case 0xC0000409:  // STATUS_STACK_BUFFER_OVERRUN — also __fastfail target
+    case 0xC0000409:  // STATUS_STACK_BUFFER_OVERRUN, also __fastfail target
     case 0xC0000420:  // STATUS_ASSERTION_FAILURE
     case 0xC000041D:  // STATUS_FATAL_USER_CALLBACK_EXCEPTION
       break;
@@ -313,8 +294,8 @@ LONG CALLBACK VectoredHandler(EXCEPTION_POINTERS* ep) {
   return EXCEPTION_CONTINUE_SEARCH;
 }
 
-// std::terminate replacement.  Default behaviour is abort(), which we'd
-// catch via SIGABRT — but the CLR's hosting layer can replace the
+// std::terminate replacement. Default behaviour is abort(), which we'd
+// catch via SIGABRT, but the CLR's hosting layer can replace the
 // terminate handler.  Reinstalling ours guarantees we always dump on
 // uncaught C++ exceptions regardless of who else messed with it.
 void OnTerminate() noexcept {
@@ -324,11 +305,6 @@ void OnTerminate() noexcept {
   std::abort();
 }
 
-// atexit hook: confirms whether main() returned cleanly.  If a dump was
-// written, this tells you the dumper ran *and* main also unwound — i.e.
-// a non-fatal crash on a worker thread.  If no dump and this fires, the
-// process exited normally.  If neither fires, the process was killed
-// (TerminateProcess, fastfail without our hook, or external SIGKILL).
 void OnAtExit() {
   std::fprintf(stderr, "[%s] atexit: process exiting cleanly (dump_written=%d)\n",
                g_process_name_buf, g_dump_written.load() ? 1 : 0);
@@ -336,10 +312,6 @@ void OnAtExit() {
 }
 
 }  // namespace crash_internal
-
-// ============================================================================
-// Public API
-// ============================================================================
 
 bool InstallCrashHandler(const CrashHandlerOptions& opts) {
   using namespace crash_internal;
@@ -365,7 +337,6 @@ bool InstallCrashHandler(const CrashHandlerOptions& opts) {
   g_vectored_handle = AddVectoredExceptionHandler(/*first=*/1, VectoredHandler);
   std::atexit(OnAtExit);
 
-  // Reserve a bit of stack so the SEH filter can run after a stack-overflow.
   ULONG stack_guarantee = 64 * 1024;
   SetThreadStackGuarantee(&stack_guarantee);
 
@@ -391,9 +362,6 @@ void UninstallCrashHandler() {
     RemoveVectoredExceptionHandler(g_vectored_handle);
     g_vectored_handle = nullptr;
   }
-  // Reset the dump-written latch so a subsequent Install (e.g. between
-  // unit tests) can fire WriteDump again.  In production the handler is
-  // never uninstalled, so this only matters for tests.
   g_dump_written.store(false);
 
   g_installed = false;

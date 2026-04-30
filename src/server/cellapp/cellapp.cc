@@ -62,7 +62,6 @@ auto CellApp::Init(int argc, char* argv[]) -> bool {
 
   auto& table = Network().InterfaceTable();
 
-  // Message handlers — IDs 3000-3099, see cellapp_messages.h.
   (void)table.RegisterTypedHandler<cellapp::CreateCellEntity>(
       [this](const Address& src, Channel* ch, const cellapp::CreateCellEntity& msg) {
         OnCreateCellEntity(src, ch, msg);
@@ -173,7 +172,7 @@ auto CellApp::Init(int argc, char* argv[]) -> bool {
         cellappmgr::RegisterCellApp reg;
         reg.internal_addr = Network().RudpAddress();
         if (auto r = cellappmgr_channel_->SendMessage(reg); !r) {
-          // No ack ⇒ this CellApp is orphaned (mgr won't route load
+          // No ack => this CellApp is orphaned (mgr won't route load
           // queries / offloads to us) until the next reconnect attempt.
           ATLAS_LOG_WARNING("CellApp: RegisterCellApp send failed to mgr {}: {}",
                             n.internal_addr.ToString(), r.Error().Message());
@@ -190,7 +189,7 @@ auto CellApp::Init(int argc, char* argv[]) -> bool {
       [this](const Address& addr, Channel* dying) { OnPeerCellAppDeath(addr, dying); });
 
   // Track BaseApp peers so OnClientCellRpcForward can reject spoofed
-  // senders. Addresses only — responses ride the same Channel* the
+  // senders. Addresses only - responses ride the same Channel* the
   // handler received on.
   GetMachinedClient().Subscribe(
       machined::ListenerType::kBoth, ProcessType::kBaseApp,
@@ -211,7 +210,7 @@ auto CellApp::Init(int argc, char* argv[]) -> bool {
 }
 
 void CellApp::Fini() {
-  // Clear spaces before EntityApp tears down the script engine —
+  // Clear spaces before EntityApp tears down the script engine -
   // CellEntity destructors touch the Witness (which may publish final
   // events) and we want that to happen while script state is still alive.
   spaces_.clear();
@@ -317,7 +316,7 @@ void CellApp::TickBackupPump() {
   for (const auto& [base_id, entity] : entity_population_) {
     if (entity == nullptr || !entity->IsReal()) continue;
     const Address& base_addr = entity->BaseAddr();
-    if (base_addr.Ip() == 0) continue;  // no base binding yet — skip until next pump
+    if (base_addr.Ip() == 0) continue;  // no base binding yet - skip until next pump
 
     // Two-phase size probe + fetch, same protocol as BuildOffloadMessage.
     int32_t probe_out_len = 0;
@@ -348,7 +347,7 @@ void CellApp::TickBackupPump() {
     blob.resize(static_cast<std::size_t>(real_len));
 
     auto base_ch = Network().ConnectRudpNocwnd(base_addr);
-    if (!base_ch) continue;  // base transiently unreachable — next pump will retry
+    if (!base_ch) continue;  // base transiently unreachable - next pump will retry
 
     baseapp::BackupCellEntity msg;
     msg.entity_id = base_id;
@@ -377,7 +376,7 @@ void CellApp::TickClientBaselinePump() {
 
   for (const auto& [base_id, entity] : entity_population_) {
     if (entity == nullptr || !entity->IsReal()) continue;
-    // Only client-bound (has Witness) entities receive baselines — keeps
+    // Only client-bound (has Witness) entities receive baselines - keeps
     // broadcast traffic proportional to client count, not entity count.
     if (!entity->HasWitness()) continue;
     const Address& base_addr = entity->BaseAddr();
@@ -391,7 +390,7 @@ void CellApp::TickClientBaselinePump() {
     if (len <= 0 || raw == nullptr) continue;
 
     auto base_ch = Network().ConnectRudpNocwnd(base_addr);
-    if (!base_ch) continue;  // base transiently unreachable — retry next pump
+    if (!base_ch) continue;  // base transiently unreachable - retry next pump
 
     baseapp::ReplicatedBaselineFromCell msg;
     msg.entity_id = base_id;
@@ -422,7 +421,7 @@ auto CellApp::FindSpace(SpaceID id) -> Space* {
 
 void CellApp::OnCreateCellEntity(const Address& src, Channel* ch,
                                  const cellapp::CreateCellEntity& msg) {
-  // Lazily create — the management CreateSpace path may not have run
+  // Lazily create - the management CreateSpace path may not have run
   // yet if this is the first entity in a fresh space.
   if (msg.space_id == kInvalidSpaceID) {
     ATLAS_LOG_WARNING("CellApp: CreateCellEntity rejected: space_id == kInvalidSpaceID");
@@ -456,7 +455,7 @@ void CellApp::OnCreateCellEntity(const Address& src, Channel* ch,
   entity_population_[cell_id] = entity;
 
   // BSP tree (if present) picks the owning local Cell; otherwise fall
-  // back to the only local Cell. No local Cell ⇒ no OffloadChecker /
+  // back to the only local Cell. No local Cell => no OffloadChecker /
   // GhostMaintainer entry, acceptable in single-CellApp mode.
   if (auto* tree = space->GetBspTree(); tree != nullptr) {
     if (const auto* info = tree->FindCell(msg.position.x, msg.position.z)) {
@@ -466,13 +465,13 @@ void CellApp::OnCreateCellEntity(const Address& src, Channel* ch,
     space->LocalCells().begin()->second->AddRealEntity(entity);
   }
 
-  // Ack carries our address — BaseApp uses it as cell_addr going forward.
+  // Ack carries our address - BaseApp uses it as cell_addr going forward.
   if (ch != nullptr) {
     baseapp::CellEntityCreated ack;
     ack.entity_id = msg.entity_id;
     ack.cell_addr = Network().RudpAddress();
     if (auto r = ch->SendMessage(ack); !r) {
-      // Dropped ack ⇒ BaseApp times out and resends CreateCellEntity;
+      // Dropped ack => BaseApp times out and resends CreateCellEntity;
       // logging here distinguishes that from a genuinely slow create.
       ATLAS_LOG_WARNING("CellApp: CellEntityCreated ack send failed, entity_id={} to {}: {}",
                         msg.entity_id, src.ToString(), r.Error().Message());
@@ -491,7 +490,7 @@ void CellApp::OnCreateCellEntity(const Address& src, Channel* ch,
     }
   }
 
-  // No auto-witness here — BaseApp::BindClient sends EnableWitness
+  // No auto-witness here - BaseApp::BindClient sends EnableWitness
   // separately so the witness lifecycle tracks client presence rather
   // than entity creation.
   (void)src;
@@ -523,7 +522,7 @@ void CellApp::OnDestroyCellEntity(const Address& /*src*/, Channel* /*ch*/,
 void CellApp::OnClientCellRpcForward(const Address& src, Channel* /*ch*/,
                                      const cellapp::ClientCellRpcForward& msg) {
   // Hard trust boundary: forging from outside the BaseApp set bypasses
-  // BaseApp's L1/L2 validation and source_entity_id stamping — letting
+  // BaseApp's L1/L2 validation and source_entity_id stamping - letting
   // any peer impersonate any client for any exposed cell method.
   if (!trusted_baseapps_.contains(src)) {
     ATLAS_LOG_WARNING(
@@ -541,7 +540,7 @@ void CellApp::OnClientCellRpcForward(const Address& src, Channel* /*ch*/,
                       msg.target_entity_id, msg.rpc_id);
     return;
   }
-  // Client RPCs must never dispatch on a Ghost — stale BaseApp routing.
+  // Client RPCs must never dispatch on a Ghost - stale BaseApp routing.
   if (!entity->IsReal()) {
     ATLAS_LOG_WARNING(
         "CellApp: ClientCellRpcForward for Ghost base_id={} rpc_id=0x{:06X} — stale routing",
@@ -571,7 +570,7 @@ void CellApp::OnClientCellRpcForward(const Address& src, Channel* /*ch*/,
     return;
   }
 
-  // entity->Id() is the cell_entity_id — the key C# registered under.
+  // entity->Id() is the cell_entity_id - the key C# registered under.
   auto dispatch_fn = native_provider_ ? native_provider_->dispatch_rpc_fn() : nullptr;
   if (!dispatch_fn) {
     ATLAS_LOG_WARNING("CellApp: ClientCellRpcForward: dispatch_rpc callback not registered");
@@ -583,7 +582,7 @@ void CellApp::OnClientCellRpcForward(const Address& src, Channel* /*ch*/,
 
 void CellApp::OnInternalCellRpc(const Address& /*src*/, Channel* /*ch*/,
                                 const cellapp::InternalCellRpc& msg) {
-  // Server-internal Base → Cell call; BaseApp is trusted so skip the
+  // Server-internal Base -> Cell call; BaseApp is trusted so skip the
   // exposed / sourceEntityID validation.
   auto* entity = FindEntityByBaseId(msg.target_entity_id);
   if (!entity) {
@@ -655,7 +654,7 @@ void CellApp::OnAvatarUpdate(const Address& /*src*/, Channel* /*ch*/,
   const math::Vector3 delta{msg.position.x - entity->Position().x,
                             msg.position.y - entity->Position().y,
                             msg.position.z - entity->Position().z};
-  // Compare squared distances to skip the per-tick sqrt; limit² stays
+  // Compare squared distances to skip the per-tick sqrt; limit^2 stays
   // inside float32's 2^24 exact-integer window even for a 1 km cap.
   const float dist_sq = delta.x * delta.x + delta.y * delta.y + delta.z * delta.z;
   constexpr float kMaxSingleTickMoveSq = kMaxSingleTickMove * kMaxSingleTickMove;
@@ -672,9 +671,9 @@ void CellApp::OnAvatarUpdate(const Address& /*src*/, Channel* /*ch*/,
 void CellApp::AttachWitness(CellEntity& entity, float aoi_radius, float hysteresis) {
   entity.EnableWitness(
       aoi_radius,
-      // Reliable path — enters/leaves + ordered property deltas via
+      // Reliable path - enters/leaves + ordered property deltas via
       // ReplicatedReliableDeltaFromCell (msg 2017). SendMessage's
-      // kBatched urgency lets FlushTickDirtyChannels coalesce N×M
+      // kBatched urgency lets FlushTickDirtyChannels coalesce NxM
       // observer/peer fan-out into one packet per (channel, reliability)
       // per tick.
       [this](EntityID observer_base_id, std::span<const std::byte> env) {
@@ -685,7 +684,7 @@ void CellApp::AttachWitness(CellEntity& entity, float aoi_radius, float hysteres
         baseapp::ReplicatedReliableDeltaFromCellSpan msg{observer_base_id, env};
         (void)(*ch)->SendMessage(msg);
       },
-      // Unreliable path — volatile pos/dir (latest-wins) via
+      // Unreliable path - volatile pos/dir (latest-wins) via
       // ReplicatedDeltaFromCell (msg 2015), which routes through
       // DeltaForwarder's per-entity replacement logic.
       [this](EntityID observer_base_id, std::span<const std::byte> env) {
@@ -725,7 +724,7 @@ void CellApp::OnSetAoIRadius(const Address& /*src*/, Channel* /*ch*/,
     ATLAS_LOG_WARNING("CellApp: SetAoIRadius for unknown base_id={}", msg.entity_id);
     return;
   }
-  // Only the Real side replicates AoI — reject stale-mailbox calls
+  // Only the Real side replicates AoI - reject stale-mailbox calls
   // landing on a Ghost.
   if (!entity->IsReal()) {
     ATLAS_LOG_WARNING("CellApp: SetAoIRadius on Ghost base_id={} — stale routing", msg.entity_id);
@@ -745,7 +744,7 @@ auto CellApp::FindPeerChannel(const Address& addr) const -> Channel* {
 }
 
 void CellApp::OnPeerCellAppDeath(const Address& addr, Channel* dying) {
-  // Collect orphan Ghost ids first — can't erase while iterating.
+  // Collect orphan Ghost ids first - can't erase while iterating.
   // Reals' Haunt-list repairs are map-key-preserving so safe mid-iter.
   std::vector<EntityID> orphan_ghosts;
   uint32_t haunts_cleared = 0;
@@ -947,7 +946,7 @@ void CellApp::OnOffloadEntity(const Address& src, Channel* ch, const cellapp::Of
     }
   }
 
-  // Seed replication snapshots — neither call uses the Ghost path
+  // Seed replication snapshots - neither call uses the Ghost path
   // (we're Real here).
   CellEntity::ReplicationFrame frame;
   frame.event_seq = msg.latest_event_seq;
@@ -980,7 +979,7 @@ void CellApp::OnOffloadEntity(const Address& src, Channel* ch, const cellapp::Of
   // Re-attach AFTER PublishReplicationFrame / Cell membership so
   // AoITrigger's initial sweep sees the right peer set + seq baselines.
   // Skipping this would silently drop AoI envelopes across a cell
-  // boundary — BaseApp re-routes cell_addr but won't re-fire
+  // boundary - BaseApp re-routes cell_addr but won't re-fire
   // EnableWitness on its own.
   if (msg.has_witness) {
     AttachWitness(*entity, msg.aoi_radius, msg.aoi_hysteresis);
@@ -1045,8 +1044,8 @@ void CellApp::OnOffloadEntity(const Address& src, Channel* ch, const cellapp::Of
   ack.success = true;
   if (ch != nullptr) {
     if (auto r = ch->SendMessage(ack); !r) {
-      // Sender will time out and revert Ghost→Real, but we've already
-      // converted Ghost→Real locally — two Reals for one entity until
+      // Sender will time out and revert Ghost->Real, but we've already
+      // converted Ghost->Real locally - two Reals for one entity until
       // the cluster heals.
       ATLAS_LOG_ERROR(
           "CellApp: failed to send OffloadEntityAck(success=true) entity_id={} to {}: {} "
@@ -1133,7 +1132,7 @@ void CellApp::RevertPendingOffload(EntityID entity_id, const char* reason) {
     }
   }
 
-  // Peers that died during the Offload window fall out — the next
+  // Peers that died during the Offload window fall out - the next
   // TickGhostPump pass would re-add them anyway.
   if (auto* rd = entity->GetRealData()) {
     for (const auto& ha : po.haunt_addrs) {
@@ -1281,7 +1280,7 @@ auto CellApp::BuildOffloadMessage(const CellEntity& entity) const -> cellapp::Of
   msg.base_addr = entity.BaseAddr();
   msg.entity_id = entity.Id();
   // Empty blob is valid (tests / early boot); receiver still promotes
-  // Ghost→Real but without script state restoration.
+  // Ghost->Real but without script state restoration.
   if (native_provider_ != nullptr && native_provider_->serialize_entity_fn() != nullptr) {
     auto fn = native_provider_->serialize_entity_fn();
     // Two-phase probe-then-fetch keeps buffer allocation on the C++
@@ -1392,7 +1391,7 @@ void CellApp::TickGhostPump() {
       const auto* state = entity.GetReplicationState();
       if (state == nullptr) return;
 
-      // Coalesce per-entity fan-out into one broadcast per interval —
+      // Coalesce per-entity fan-out into one broadcast per interval -
       // bounds wire cost at the cost of slight Ghost-side staleness.
       if (min_interval.count() > 0 && rd->LastBroadcastTime().time_since_epoch().count() != 0 &&
           now - rd->LastBroadcastTime() < min_interval) {
@@ -1409,7 +1408,7 @@ void CellApp::TickGhostPump() {
         broadcast_fired = true;
       }
       if (state->latest_event_seq > rd->LastBroadcastEventSeq()) {
-        // Gap > 1 ⇒ multiple frames published; BuildDelta would only
+        // Gap > 1 => multiple frames published; BuildDelta would only
         // ship the latest, losing intermediate state. Snapshot-refresh
         // re-bases the Ghost on other_snapshot + latest_event_seq.
         if (RealEntityData::ShouldUseSnapshotRefresh(state->latest_event_seq,
@@ -1492,7 +1491,7 @@ void CellApp::TickOffloadChecker() {
         auto buf = cw.Detach();
         po.controller_blob.assign(buf.begin(), buf.end());
       }
-      // Read BEFORE ConvertRealToGhost strips the witness — losing
+      // Read BEFORE ConvertRealToGhost strips the witness - losing
       // radius/hyst would silently break SetAoIRadius contracts across
       // a failed-Offload boundary.
       if (const auto* witness = op.entity->GetWitness()) {
@@ -1502,7 +1501,7 @@ void CellApp::TickOffloadChecker() {
       }
       pending_offloads_[op.entity->Id()] = std::move(po);
 
-      // Local Real → Ghost; drops witness + controllers and uses the
+      // Local Real -> Ghost; drops witness + controllers and uses the
       // peer channel as the new back-channel.
       op.entity->ConvertRealToGhost(peer);
 

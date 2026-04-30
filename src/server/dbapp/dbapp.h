@@ -36,7 +36,6 @@ class DBApp : public ManagerApp {
  private:
   friend class DBAppRollbackTest;
 
-  // ---- Message handlers ---------------------------------------------------
   void OnWriteEntity(const Address& src, Channel* ch, const dbapp::WriteEntity& msg);
   void OnCheckoutEntity(const Address& src, Channel* ch, const dbapp::CheckoutEntity& msg);
   void OnCheckinEntity(const Address& src, Channel* ch, const dbapp::CheckinEntity& msg);
@@ -44,21 +43,16 @@ class DBApp : public ManagerApp {
   void OnLookupEntity(const Address& src, Channel* ch, const dbapp::LookupEntity& msg);
   void OnAbortCheckout(const Address& src, Channel* ch, const dbapp::AbortCheckout& msg);
 
-  // ---- EntityID allocation (BaseApp → DBApp) --------------------------------
   void OnGetEntityIds(const Address& src, Channel* ch, const dbapp::GetEntityIds& msg);
   void OnPutEntityIds(const Address& src, Channel* ch, const dbapp::PutEntityIds& msg);
 
-  // ---- Authentication (LoginApp → DBApp) ----------------------------------
   void OnAuthLogin(const Address& src, Channel* ch, const login::AuthLogin& msg);
 
-  // ---- BaseApp death notification -----------------------------------------
   void OnBaseappDeath(const Address& internal_addr, std::string_view name);
 
-  // ---- Helpers ------------------------------------------------------------
   [[nodiscard]] auto BuildDbConfig() const -> DatabaseConfig;
   auto ResolveReplyChannel(const Address& addr) -> Channel*;
 
-  // ---- State --------------------------------------------------------------
   std::unique_ptr<IDatabase> database_;
   std::unique_ptr<EntityIdAllocator> id_allocator_;
   CheckoutManager checkout_mgr_;

@@ -13,7 +13,6 @@ class Task;
 
 namespace detail {
 
-// FinalAwaiter: symmetric transfer back to the caller on coroutine completion.
 struct FinalAwaiter {
   auto await_ready() noexcept -> bool { return false; }
 
@@ -26,7 +25,6 @@ struct FinalAwaiter {
   void await_resume() noexcept {}
 };
 
-// PromiseBase<T>: common promise machinery for non-void Task.
 template <typename T>
 struct PromiseBase {
   std::coroutine_handle<> continuation;
@@ -41,11 +39,9 @@ struct PromiseBase {
     return std::move(std::get<1>(result));
   }
 
-  // 0 = not set, 1 = value, 2 = exception
   std::variant<std::monostate, T, std::exception_ptr> result;
 };
 
-// PromiseBase<void>: specialization for Task<void>.
 template <>
 struct PromiseBase<void> {
   std::coroutine_handle<> continuation;
@@ -63,10 +59,6 @@ struct PromiseBase<void> {
 };
 
 }  // namespace detail
-
-// ============================================================================
-// Task<T> — lazy coroutine return type (starts only when co_awaited)
-// ============================================================================
 
 template <typename T = void>
 class [[nodiscard]] Task {
@@ -118,10 +110,6 @@ class [[nodiscard]] Task {
   explicit Task(std::coroutine_handle<promise_type> h) : handle_(h) {}
   std::coroutine_handle<promise_type> handle_;
 };
-
-// ============================================================================
-// Task<void> specialization
-// ============================================================================
 
 template <>
 struct Task<void>::promise_type : detail::PromiseBase<void> {

@@ -21,10 +21,8 @@ auto CompressionFilter::SendFilter(std::span<const std::byte> data)
     return result;
   }
 
-  // Compress with zlib deflate at Z_BEST_SPEED for low latency
   uLongf compressed_bound = compressBound(static_cast<uLong>(data.size()));
 
-  // Header: [uint8 type=1][uint32 original_len LE] = 5 bytes
   constexpr std::size_t kHeaderSize = 5;
   std::vector<std::byte> output(kHeaderSize + compressed_bound);
 
@@ -43,7 +41,6 @@ auto CompressionFilter::SendFilter(std::span<const std::byte> data)
 
   std::size_t total_compressed = kHeaderSize + dest_len;
 
-  // Fall back to uncompressed if compression didn't help
   if (total_compressed >= 1 + data.size()) {
     std::vector<std::byte> result(1 + data.size());
     result[0] = static_cast<std::byte>(CompressionType::kNone);
@@ -101,7 +98,6 @@ auto CompressionFilter::RecvFilter(std::span<const std::byte> data)
 }
 
 auto CompressionFilter::MaxOverhead() const -> std::size_t {
-  // 1 byte type tag + 4 bytes original length
   return 5;
 }
 

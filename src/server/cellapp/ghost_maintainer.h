@@ -16,7 +16,7 @@ class Channel;
 class Space;
 
 // Per-tick Ghost membership computation. For each Real, finds peer
-// CellApps overlapped by `pos ± (ghost_distance + hysteresis)` and diffs
+// CellApps overlapped by `pos +/- (ghost_distance + hysteresis)` and diffs
 // against the current Haunt list to produce create/delete ops. Pure;
 // CellApp does dispatch. Hysteresis dampens border flapping;
 // min_ghost_lifespan prevents bounce on quick re-entry.
@@ -45,7 +45,7 @@ class GhostMaintainer {
     std::vector<DeleteOp> deletes;
   };
 
-  // Maps peer addr → Channel*, isolating GhostMaintainer from CellApp's
+  // Maps peer addr -> Channel*, isolating GhostMaintainer from CellApp's
   // private connection map.
   using ChannelResolver = std::function<Channel*(const Address&)>;
 

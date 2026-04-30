@@ -13,15 +13,7 @@
 
 namespace atlas {
 
-// ============================================================================
-// ScriptObject — Language-agnostic script object interface
-// ============================================================================
-//
-// Concrete implementations:
-//   - ClrObject (.NET GCHandle wrapper)
-//
 // Thread safety: depends on the concrete implementation.
-
 class ScriptObject {
  public:
   virtual ~ScriptObject() = default;

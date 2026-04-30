@@ -11,35 +11,17 @@
 #include "serialization/binary_stream.h"
 #include "server/entity_types.h"
 
-// ============================================================================
-// CellApp messages (IDs 3000–3999)
-//
-// Inbound-to-CellApp. CellApp's outbound traffic reuses BaseApp's message
-// enum (baseapp::CellEntityCreated, baseapp::BroadcastRpcFromCell, …) because
-// the physical receiver is BaseApp and message IDs share one flat space.
-//
-// RPC split — exposed (client-facing) vs internal (server-only):
-//   - ClientCellRpcForward (3003): client-initiated, REAL_ONLY, carries
-//     `source_entity_id` stamped by BaseApp. CellApp re-validates
-//     direction + exposed + OwnClient binding (four-layer defence).
-//   - InternalCellRpc (3004): server-internal Base → Cell, REAL_ONLY, no
-//     exposed check because BaseApp is trusted.
-// Never collapse the two — a single "is_from_client" bool would be
-// another bit an attacker could aim for.
-// ============================================================================
+// Keep client-originated and server-internal cell RPCs separate so the exposed
+// method checks cannot be bypassed by a forged direction flag.
 
 namespace atlas::cellapp {
 
-// ----------------------------------------------------------------------------
-// CreateCellEntity  (BaseApp → CellApp, ID 3000)
-//
 // BaseApp asks the cell to materialise a cell-side counterpart for a Base
 // entity. `script_init_data` is the opaque Cell-side initialisation blob
 // produced by the script layer (anything from defaults to persisted
 // fields). CellApp composes it with runtime-supplied fields (space, base
 // mailbox, position/direction, on_ground) into the full restore blob
 // consumed by the C# RestoreEntity callback.
-// ----------------------------------------------------------------------------
 
 struct CreateCellEntity {
   EntityID entity_id{kInvalidEntityID};
@@ -118,12 +100,8 @@ struct CreateCellEntity {
 };
 static_assert(NetworkMessage<CreateCellEntity>);
 
-// ----------------------------------------------------------------------------
-// DestroyCellEntity  (BaseApp → CellApp, ID 3002)
-//
 // Targeted by the unified entity_id (cluster-stable, allocated by
 // DBApp's IDClient).
-// ----------------------------------------------------------------------------
 
 struct DestroyCellEntity {
   EntityID entity_id{kInvalidEntityID};
@@ -150,13 +128,9 @@ struct DestroyCellEntity {
 };
 static_assert(NetworkMessage<DestroyCellEntity>);
 
-// ----------------------------------------------------------------------------
-// ClientCellRpcForward  (BaseApp → CellApp, ID 3003)
-//
 // Exposed (client-facing) RPC forwarded from BaseApp. `source_entity_id`
 // is stamped by BaseApp from the client's proxy binding and cannot be
 // forged by the client. OWN_CLIENT methods require source == target.
-// ----------------------------------------------------------------------------
 
 struct ClientCellRpcForward {
   EntityID target_entity_id{kInvalidEntityID};
@@ -204,11 +178,7 @@ struct ClientCellRpcForward {
 };
 static_assert(NetworkMessage<ClientCellRpcForward>);
 
-// ----------------------------------------------------------------------------
-// InternalCellRpc  (BaseApp → CellApp, ID 3004)
-//
 // Server-to-server trusted RPC; skips exposed/source validation.
-// ----------------------------------------------------------------------------
 
 struct InternalCellRpc {
   EntityID target_entity_id{kInvalidEntityID};
@@ -251,10 +221,6 @@ struct InternalCellRpc {
 };
 static_assert(NetworkMessage<InternalCellRpc>);
 
-// ----------------------------------------------------------------------------
-// CreateSpace  (management/script → CellApp, ID 3010)
-// ----------------------------------------------------------------------------
-
 struct CreateSpace {
   SpaceID space_id{kInvalidSpaceID};
 
@@ -279,10 +245,6 @@ struct CreateSpace {
   }
 };
 static_assert(NetworkMessage<CreateSpace>);
-
-// ----------------------------------------------------------------------------
-// DestroySpace  (management/script → CellApp, ID 3011)
-// ----------------------------------------------------------------------------
 
 struct DestroySpace {
   SpaceID space_id{kInvalidSpaceID};
@@ -309,13 +271,9 @@ struct DestroySpace {
 };
 static_assert(NetworkMessage<DestroySpace>);
 
-// ----------------------------------------------------------------------------
-// AvatarUpdate  (BaseApp → CellApp, ID 3020)
-//
 // Client-authoritative position update. CellApp applies:
 //   1) std::isfinite on all three components (reject NaN/Inf);
 //   2) single-tick displacement bound (reject teleports).
-// ----------------------------------------------------------------------------
 
 struct AvatarUpdate {
   EntityID entity_id{kInvalidEntityID};
@@ -363,15 +321,10 @@ struct AvatarUpdate {
 };
 static_assert(NetworkMessage<AvatarUpdate>);
 
-// ----------------------------------------------------------------------------
-// EnableWitness  (BaseApp → CellApp, ID 3021)
-//
 // Attaches an AoI witness to a cell entity. Fired from BaseApp's
-// client-bind hooks (Proxy::BindClient → this message). The witness
 // uses config-driven defaults (cellApp/default_aoi_radius,
 // cellApp/default_aoi_hysteresis); script-level overrides arrive via
 // a subsequent SetAoIRadius message.
-// ----------------------------------------------------------------------------
 
 struct EnableWitness {
   EntityID entity_id{kInvalidEntityID};
@@ -398,10 +351,6 @@ struct EnableWitness {
 };
 static_assert(NetworkMessage<EnableWitness>);
 
-// ----------------------------------------------------------------------------
-// DisableWitness  (BaseApp/script → CellApp, ID 3022)
-// ----------------------------------------------------------------------------
-
 struct DisableWitness {
   EntityID entity_id{kInvalidEntityID};
 
@@ -427,15 +376,11 @@ struct DisableWitness {
 };
 static_assert(NetworkMessage<DisableWitness>);
 
-// ----------------------------------------------------------------------------
-// SetAoIRadius  (BaseApp/script → CellApp, ID 3023)
-//
 // Runtime AoI radius + hysteresis adjustment for an already-witnessed
 // cell entity. Mutates the Witness and reshapes its trigger in place.
 // The handler silently drops the message if the target has no
 // Witness attached (log-warn; the typical cause is a race where bind
 // notifications arrive after Witness teardown).
-// ----------------------------------------------------------------------------
 
 struct SetAoIRadius {
   EntityID entity_id{kInvalidEntityID};

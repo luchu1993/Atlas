@@ -1,13 +1,7 @@
 #ifndef ATLAS_LIB_FOUNDATION_CALLBACK_UTILS_H_
 #define ATLAS_LIB_FOUNDATION_CALLBACK_UTILS_H_
 
-// safe_invoke — uniform wrapper for calling user-supplied callbacks that may
-// throw, in a project that otherwise avoids exceptions.
-//
-// Usage:
-//   safe_invoke("context description", [&]{ user_callback(); });
-//
-// On exception: logs a warning and returns without re-throwing.
+// Runs user callbacks at exception-tolerant boundaries.
 
 #include <exception>
 #include <utility>

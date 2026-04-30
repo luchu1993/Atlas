@@ -22,14 +22,14 @@ namespace atlas {
 namespace {
 
 // LOD bands: close < 25 m every tick, medium < 100 m every 3, far
-// ≥ 100 m every 6 — fits the 8-frame history window at 10 Hz.
+// >= 100 m every 6 - fits the 8-frame history window at 10 Hz.
 static constexpr double kLodCloseSq = 25.0 * 25.0;
 static constexpr double kLodMediumSq = 100.0 * 100.0;
 static constexpr uint64_t kLodCloseInterval = 1;
 static constexpr uint64_t kLodMediumInterval = 3;
 static constexpr uint64_t kLodFarInterval = 6;
 
-// Squared distance: make_heap only cares about ordering and a² < b²
+// Squared distance: make_heap only cares about ordering and a^2 < b^2
 // iff a < b for non-negative magnitudes, so we skip the sqrt.
 auto ComputePriority(const math::Vector3& observer, const math::Vector3& target) -> double {
   const double dx = observer.x - target.x;
@@ -178,7 +178,7 @@ void Witness::OnOwnerMoved(float old_x, float old_z) {
 void Witness::HandleAoILeave(CellEntity& peer) {
   auto it = aoi_map_.find(peer.Id());
   if (it == aoi_map_.end()) return;
-  // Mark kGone, drain at next Update — keeps Update's iteration stable
+  // Mark kGone, drain at next Update - keeps Update's iteration stable
   // when a leave fires mid-tick from a trigger shuffle.
   it->second.flags |= EntityCache::kGone;
   it->second.flags &= ~EntityCache::kEnterPending;
@@ -241,7 +241,7 @@ void Witness::Update(uint32_t max_packet_bytes) {
   {
     ATLAS_PROFILE_ZONE_N("Witness::Update::Transitions");
 
-    // Enters/Leaves bypass the byte budget — dropping them would
+    // Enters/Leaves bypass the byte budget - dropping them would
     // deadlock the aoi_map_ state machine.
     (void)bandwidth_deficit_;
 
@@ -278,11 +278,9 @@ void Witness::Update(uint32_t max_packet_bytes) {
     for (auto id : pending_gone_ids_) {
       auto it = aoi_map_.find(id);
       if (it == aoi_map_.end()) continue;
-      // Same id may appear twice (left → re-entered → left); after the
+      // Same id may appear twice (left -> re-entered -> left); after the
       // first Leave the cache is erased so subsequent finds return end.
       if (!(it->second.flags & EntityCache::kGone)) continue;
-      // Map key carries the unified entity id — no need to cache it on
-      // the cache entry: peer.Id() == peer.Id() since phase 2.
       bytes_sent += static_cast<int>(SendEntityLeave(it->first));
       aoi_map_.erase(it);
     }
@@ -291,7 +289,7 @@ void Witness::Update(uint32_t max_packet_bytes) {
     pending_gone_ids_.clear();
   }
 
-  // Rebuild the priority heap each tick — observer position changes
+  // Rebuild the priority heap each tick - observer position changes
   // make priorities stale anyway. LOD gate filters scheduled peers.
   {
     ATLAS_PROFILE_ZONE_N("Witness::Update::PriorityHeap");
@@ -401,12 +399,12 @@ auto Witness::SendEntityUpdate(EntityCache& cache) -> std::size_t {
   if (state->latest_event_seq <= cache.last_event_seq) return bytes;
 
   // history seqs are consecutive (PublishReplicationFrame pushes one
-  // per call), so coverage = oldest frame's seq ≤ first_needed.
+  // per call), so coverage = oldest frame's seq <= first_needed.
   const uint64_t first_needed = cache.last_event_seq + 1;
   const bool have_continuous_coverage =
       !state->history.empty() && state->history.front().event_seq <= first_needed;
 
-  // Witness always serves the other-audience scope — HandleAoIEnter
+  // Witness always serves the other-audience scope - HandleAoIEnter
   // excludes &peer == &owner_, so owner-scope replication never flows
   // through here. The owner client receives its own deltas via the
   // CellAppNativeProvider direct path.
@@ -416,7 +414,7 @@ auto Witness::SendEntityUpdate(EntityCache& cache) -> std::size_t {
       if (frame.event_seq > state->latest_event_seq) break;
 
       const auto& delta_bytes = frame.other_delta;
-      // Skip empty / all-zero deltas — seq still advances so the next
+      // Skip empty / all-zero deltas - seq still advances so the next
       // non-empty frame doesn't look like a gap on the client.
       if (!delta_bytes.empty() && !IsAllZeroDelta(delta_bytes)) {
         // Reuse the cached envelope across all witnesses watching this
@@ -436,7 +434,7 @@ auto Witness::SendEntityUpdate(EntityCache& cache) -> std::size_t {
     }
   } else {
     ATLAS_PROFILE_ZONE_N("Witness::Snapshot");
-    // Snapshot fallback — observer fell out of the history window.
+    // Snapshot fallback - observer fell out of the history window.
     // Carry latest_event_seq so the next delta seq+1 doesn't gap-warn.
     auto envelope = BuildPropertyUpdateEnvelope(cache.entity->Id(), state->latest_event_seq,
                                                 state->other_snapshot);

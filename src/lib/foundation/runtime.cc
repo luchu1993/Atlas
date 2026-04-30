@@ -18,19 +18,12 @@ auto Runtime::Initialize(const RuntimeConfig& config) -> Result<void> {
     return {};
   }
 
-  // 1. Logging — must be first so subsequent subsystems can log.
   auto& logger = Logger::Instance();
   logger.SetLevel(config.log_level);
   logger.AddSink(std::make_shared<ConsoleSink>());
   if (config.enable_file_logging && !config.log_file.empty()) {
     logger.AddSink(std::make_shared<FileSink>(config.log_file));
   }
-
-  // 2. Signal handling — placeholder for install_default_signal_handlers()
-  //    Add call here when the signal_handler module is integrated.
-
-  // 3. Platform init — placeholder for WSAStartup / platform_initialize()
-  //    socket.cpp already self-initialises Winsock via ensure_winsock().
 
   init_count.store(1, std::memory_order_release);
   ATLAS_LOG_INFO("Atlas Runtime initialized");

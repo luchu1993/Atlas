@@ -8,21 +8,17 @@
 
 namespace atlas {
 
-// ============================================================================
-// CellBounds — axis-aligned 2D rectangle on (x, z) describing the portion of
+// CellBounds - axis-aligned 2D rectangle on (x, z) describing the portion of
 // a Space this Cell owns.
-//
 // Y is intentionally ignored: BSP partitioning runs on the horizontal
-// plane. The bounds may be infinite on any edge — a fresh Space has
-// exactly one Cell spanning [-inf, +inf]² until the first BSP split.
-//
+// plane. The bounds may be infinite on any edge - a fresh Space has
+// exactly one Cell spanning [-inf, +inf]^2 until the first BSP split.
 // Semantics:
 //   - Half-open on max (contains returns true for points strictly < max_*)
 //     so adjacent cells share an edge without double-ownership.
-//   - Infinite edges use ±std::numeric_limits<float>::infinity(); callers
+//   - Infinite edges use +/-std::numeric_limits<float>::infinity(); callers
 //     need never special-case them because std::isfinite/clamp treat them
 //     uniformly.
-// ============================================================================
 
 struct CellBounds {
   float min_x{-std::numeric_limits<float>::infinity()};
@@ -34,13 +30,13 @@ struct CellBounds {
     return x >= min_x && x < max_x && z >= min_z && z < max_z;
   }
 
-  // Rectangle-rectangle intersection test (half-open both sides — two cells
+  // Rectangle-rectangle intersection test (half-open both sides - two cells
   // that share an edge are NOT overlapping).
   [[nodiscard]] constexpr auto Overlaps(const CellBounds& o) const -> bool {
     return min_x < o.max_x && o.min_x < max_x && min_z < o.max_z && o.min_z < max_z;
   }
 
-  // Area; returns +inf for unbounded cells — callers either filter or
+  // Area; returns +inf for unbounded cells - callers either filter or
   // accept the poison value.
   [[nodiscard]] auto Area() const -> float {
     const float w = std::max(0.f, max_x - min_x);

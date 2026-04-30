@@ -14,25 +14,20 @@
 #include "serialization/binary_stream.h"
 
 // BSP tree.
-//
 // CellAppMgr owns a BSPTree per Space. Leaves are Cells; internal nodes
 // are axis-aligned split lines that recursively partition the Space on
-// (x, z). At boot a fresh Space has a single leaf spanning ±inf².
+// (x, z). At boot a fresh Space has a single leaf spanning +/-inf^2.
 // Splits add cells for newly-joined CellApps; Balance() slides
 // existing split lines to move load between siblings.
-//
 // Data-flow with CellApp:
-//   CellAppMgr authoritative tree → Serialize() → UpdateGeometry blob →
-//     CellApp Deserialize() → OffloadChecker / GhostMaintainer consume
-//   CellApp InformCellLoad → CellAppMgr sets leaf.info.load → Balance()
-//
+//   CellAppMgr authoritative tree -> Serialize() -> UpdateGeometry blob ->
+//     CellApp Deserialize() -> OffloadChecker / GhostMaintainer consume
+//   CellApp InformCellLoad -> CellAppMgr sets leaf.info.load -> Balance()
 // Serialisation intentionally omits balance state (aggression, prev
 // direction) and runtime load; those are CellAppMgr-local. Receivers
 // never re-enter the balancer.
 
 namespace atlas {
-
-// ---- Per-Cell record (shared between mgr and CellApp consumers) ------------
 
 struct CellInfo {
   cellappmgr::CellID cell_id{0};
@@ -42,8 +37,6 @@ struct CellInfo {
   uint32_t entity_count{0};  // authoritative only on CellAppMgr
 };
 
-// ---- Node hierarchy ---------------------------------------------------------
-
 enum class BSPAxis : uint8_t { kX = 0, kZ = 1 };
 
 class BSPNode {
@@ -52,11 +45,11 @@ class BSPNode {
 
   // Point query. Returns the leaf covering (x, z), or nullptr if outside
   // the serving area (shouldn't happen once the root is properly rooted
-  // at ±inf bounds).
+  // at +/-inf bounds).
   [[nodiscard]] virtual auto FindCell(float x, float z) const -> const CellInfo* = 0;
 
   // Enumerate every leaf whose bounds overlap `rect`. Leaves are visited
-  // in tree order (left-first, depth-first) — callers relying on
+  // in tree order (left-first, depth-first) - callers relying on
   // determinism can count on that.
   virtual void VisitRect(const CellBounds& rect,
                          const std::function<void(const CellInfo&)>& visitor) const = 0;
@@ -75,7 +68,7 @@ class BSPNode {
   [[nodiscard]] virtual auto TotalLoad() const -> float = 0;
 
   // Move split lines in descendants. No-op on leaves. `safety_bound` guards
-  // against pushing an already-overloaded side further into the red — if
+  // against pushing an already-overloaded side further into the red - if
   // the side that would grow is >= safety_bound, the internal holds still.
   virtual void Balance(float safety_bound) = 0;
 
@@ -84,13 +77,11 @@ class BSPNode {
   virtual void CollectLeaves(std::vector<CellInfo*>& out) = 0;
   virtual void CollectLeaves(std::vector<const CellInfo*>& out) const = 0;
 
-  // Pre-order serialization — internal nodes serialize themselves then
+  // Pre-order serialization - internal nodes serialize themselves then
   // left, then right; leaves serialize themselves and stop. See Deserialize
   // free function.
   virtual void Serialize(BinaryWriter& w) const = 0;
 };
-
-// ---- Leaf -------------------------------------------------------------------
 
 class BSPLeaf : public BSPNode {
  public:
@@ -113,8 +104,6 @@ class BSPLeaf : public BSPNode {
  private:
   CellInfo info_;
 };
-
-// ---- Internal ---------------------------------------------------------------
 
 class BSPInternal : public BSPNode {
  public:
@@ -162,7 +151,7 @@ class BSPInternal : public BSPNode {
   std::unique_ptr<BSPNode> left_;
   std::unique_ptr<BSPNode> right_;
 
-  // Balance state — NOT serialised. Fresh tree arrivals start at aggression
+  // Balance state - NOT serialised. Fresh tree arrivals start at aggression
   // = 1.0 as if the balancer had never run.
   float left_load_{0.f};
   float right_load_{0.f};
@@ -172,8 +161,6 @@ class BSPInternal : public BSPNode {
   // them for children after moving position_.
   CellBounds sub_bounds_;
 };
-
-// ---- BSPTree ----------------------------------------------------------------
 
 class BSPTree {
  public:
@@ -185,7 +172,7 @@ class BSPTree {
   // Split an existing leaf `cell_id`. `new_cell` gets the split's right/
   // positive side; the original leaf keeps the left/negative side, its
   // CellInfo (id + addr + load) untouched. `position` must lie strictly
-  // inside the existing leaf's bounds on `axis` — otherwise the split is
+  // inside the existing leaf's bounds on `axis` - otherwise the split is
   // degenerate and we return an error.
   auto Split(cellappmgr::CellID existing_cell_id, BSPAxis axis, float position, CellInfo new_cell)
       -> Result<void>;
@@ -220,7 +207,7 @@ class BSPTree {
 
  private:
   std::unique_ptr<BSPNode> root_;
-  CellBounds root_bounds_{};  // ±inf by default
+  CellBounds root_bounds_{};  // +/-inf by default
 };
 
 }  // namespace atlas

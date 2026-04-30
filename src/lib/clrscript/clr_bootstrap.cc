@@ -11,14 +11,8 @@ namespace {
 
 using BootstrapFn = int (*)(ClrBootstrapArgs*, ClrObjectVTableOut*);
 
-// Shared implementation.
 auto ClrBootstrapImpl(ClrHost& host, const std::filesystem::path& runtime_dll,
                       ClrBootstrapArgs args) -> Result<void> {
-  // Atlas.Core.Bootstrap lives in Atlas.ClrHost.dll — shared between
-  // atlas_server (loaded via Atlas.Runtime) and atlas_client (loaded via
-  // Atlas.Client). Both those assemblies ProjectReference Atlas.ClrHost,
-  // so when `runtime_dll` is the game-layer script assembly the runtime
-  // finds the Bootstrap type transitively.
   auto method = host.GetMethodAs<BootstrapFn>(runtime_dll, "Atlas.Core.Bootstrap, Atlas.ClrHost",
                                               "Initialize");
   if (!method)
@@ -31,7 +25,7 @@ auto ClrBootstrapImpl(ClrHost& host, const std::filesystem::path& runtime_dll,
   const int kRc = (*method)(&args, &vtable_out);
   if (kRc != 0)
     return Error{ErrorCode::kScriptError,
-                 "clr_bootstrap: Bootstrap.Initialize() returned non-zero — check stderr"};
+                 "clr_bootstrap: Bootstrap.Initialize() returned non-zero; check stderr"};
 
   if (!vtable_out.free_handle || !vtable_out.get_type_name || !vtable_out.is_none ||
       !vtable_out.to_int64 || !vtable_out.to_double || !vtable_out.to_string || !vtable_out.to_bool)
@@ -49,13 +43,12 @@ auto ClrBootstrapImpl(ClrHost& host, const std::filesystem::path& runtime_dll,
 
   SetClrObjectVtable(vtable);
 
-  ATLAS_LOG_INFO("CLR bootstrap complete — ErrorBridge and ClrObjectVTable registered");
+  ATLAS_LOG_INFO("CLR bootstrap complete: ErrorBridge and ClrObjectVTable registered");
   return {};
 }
 
 }  // namespace
 
-// Default: uses the local module's clr_error_* functions (production path).
 auto ClrBootstrap(ClrHost& host, const std::filesystem::path& runtime_dll) -> Result<void> {
   return ClrBootstrapImpl(host, runtime_dll, ClrBootstrapArgs{});
 }

@@ -46,13 +46,12 @@ struct OffloadEntityAck;
 // BaseApp) and owns the local Space map plus a single entity index
 // keyed by the unified entity id (DBApp-allocated, identical to
 // base_entity_id on the BaseApp side).
-//
 // Tick flow:
-//   OnStartOfTick — drives EntityApp's C# on_tick
-//   … Updatables …
-//   C# on_tick → publish_replication_frame via NativeApi
-//   OnTickComplete — drives TickControllers(dt) then TickWitnesses()
-//   OnEndOfTick    — ghost pump + offload checker + ack timeouts
+//   OnStartOfTick - drives EntityApp's C# on_tick
+//   ... Updatables ...
+//   C# on_tick -> publish_replication_frame via NativeApi
+//   OnTickComplete - drives TickControllers(dt) then TickWitnesses()
+//   OnEndOfTick    - ghost pump + offload checker + ack timeouts
 class CellApp : public EntityApp {
  public:
   static auto Run(int argc, char* argv[]) -> int;
@@ -123,7 +122,7 @@ class CellApp : public EntityApp {
   // later broadcasts don't chase a freed pointer.
   void OnPeerCellAppDeath(const Address& addr, Channel* dying);
 
-  // Build but don't send — caller chooses transport. The C#
+  // Build but don't send - caller chooses transport. The C#
   // SerializeEntity callback fills persistent_blob when registered;
   // the receiver rebuilds local Cell membership from the arriving
   // position so no target_cell_id needs to travel on the wire.
@@ -134,7 +133,7 @@ class CellApp : public EntityApp {
   [[nodiscard]] auto PersistentLoad() const -> float { return persistent_load_; }
 
   // Walks entity_population_ once per call; cheap at Atlas scales
-  // (≤ tens of thousands per cell).
+  // (<= tens of thousands per cell).
   [[nodiscard]] auto NumRealEntities() const -> uint32_t;
 
   // Ghost-pump + offload-checker pass, called from OnEndOfTick. Public
@@ -153,7 +152,7 @@ class CellApp : public EntityApp {
     Address target_addr;
     TimePoint sent_at;
     SpaceID space_id{kInvalidSpaceID};
-    cellappmgr::CellID cell_id{0};  // 0 ⇒ no local Cell membership to restore
+    cellappmgr::CellID cell_id{0};  // 0 => no local Cell membership to restore
     std::vector<Address> haunt_addrs;
     std::vector<std::byte> controller_blob;
     // Captured pre-ConvertRealToGhost so revert reattaches with the
@@ -168,13 +167,13 @@ class CellApp : public EntityApp {
   // tests that seed via PendingOffloadsForTest.
   void RevertPendingOffload(EntityID entity_id, const char* reason);
 
-  // Test hook — TickOffloadChecker (insert) and the Ack / timeout
+  // Test hook - TickOffloadChecker (insert) and the Ack / timeout
   // paths (erase) are the only production writers.
   [[nodiscard]] auto PendingOffloadsForTest() -> std::unordered_map<EntityID, PendingOffload>& {
     return pending_offloads_;
   }
 
-  // Test hook — production writers are OnCreateCellEntity /
+  // Test hook - production writers are OnCreateCellEntity /
   // OnOffloadEntity / OnCreateGhost. Tests that bypass those handlers
   // seed lookups here for RevertPendingOffload and the RPC dispatch
   // paths.
@@ -196,7 +195,7 @@ class CellApp : public EntityApp {
   void TickControllers(float dt);
   void TickWitnesses();
 
-  // Cell→base state backup. Fires every kBackupIntervalTicks for every
+  // Cell->base state backup. Fires every kBackupIntervalTicks for every
   // entity with a live BaseAddr, capturing the cell-side Serialize
   // output and shipping BackupCellEntity (msg 2018) to the BaseApp.
   void TickBackupPump();
@@ -222,14 +221,14 @@ class CellApp : public EntityApp {
 
   std::unordered_map<SpaceID, std::unique_ptr<Space>> spaces_;
 
-  // Non-owning — the owning unique_ptr lives in the peer Space's
+  // Non-owning - the owning unique_ptr lives in the peer Space's
   // entities_ map. Holds BOTH Real and Ghost entities. Keyed by the
   // unified entity id (DBApp-allocated, identical to base_entity_id);
   // FindEntityByBaseId gates on IsReal() to keep client RPC routing
   // off of Ghost entries.
   std::unordered_map<EntityID, CellEntity*> entity_population_;
 
-  // Tight cadence (50 ticks ≈ 1 s at 50 Hz) because backup bytes are
+  // Tight cadence (50 ticks ~ 1 s at 50 Hz) because backup bytes are
   // the only authoritative cell-side state BaseApp sees, and the DB
   // write path wants reasonably fresh snapshots.
   static constexpr uint32_t kBackupIntervalTicks = 50;
@@ -240,12 +239,12 @@ class CellApp : public EntityApp {
   static constexpr uint32_t kClientBaselineIntervalTicks = 120;
   uint32_t client_baseline_tick_counter_{0};
 
-  // Assigned by CellAppMgr's RegisterCellAppAck. 0 ⇒ not yet
+  // Assigned by CellAppMgr's RegisterCellAppAck. 0 => not yet
   // registered; SendInformCellLoad short-circuits while 0.
   uint32_t app_id_{0};
   Channel* cellappmgr_channel_{nullptr};
 
-  // EWMA-smoothed load factor in [0, 1+] — the number CellAppMgr's
+  // EWMA-smoothed load factor in [0, 1+] - the number CellAppMgr's
   // BSP balancer consumes.
   float persistent_load_{0.f};
 
@@ -264,12 +263,12 @@ class CellApp : public EntityApp {
   CellAppPeerRegistry peer_registry_;
 
   // Inbound ClientCellRpcForward whose wire src isn't in this set is
-  // dropped — an unregistered sender forging the message would bypass
+  // dropped - an unregistered sender forging the message would bypass
   // BaseApp's L1/L2 validation.
   std::unordered_set<Address> trusted_baseapps_;
 
  public:
-  // Test-only — production callers don't touch this; the machined
+  // Test-only - production callers don't touch this; the machined
   // Subscribe callback in Init is the only writer.
   void InsertTrustedBaseAppForTest(const Address& addr) { trusted_baseapps_.insert(addr); }
 
@@ -296,7 +295,7 @@ class CellApp : public EntityApp {
   static constexpr Duration kOffloadAckTimeout = std::chrono::seconds(5);
 
   // Reject AvatarUpdate displacement beyond 50 m/tick (~500 m/s at
-  // 10 Hz — well above any realistic player speed).
+  // 10 Hz - well above any realistic player speed).
   static constexpr float kMaxSingleTickMove = 50.f;
 
   // Concrete-typed alias so handlers can reach CellApp-specific state

@@ -13,7 +13,7 @@ namespace atlas {
 
 namespace {
 
-// Quote a single argv element per Microsoft C runtime rules — backslashes
+// Quote a single argv element per Microsoft C runtime rules: backslashes
 // before a double quote double up, surrounding quotes wrap any token
 // containing whitespace. Reference: "Parsing C Command-Line Arguments" in
 // the Win32 docs.
@@ -107,7 +107,7 @@ auto ChildProcess::Start(Options opts) -> Result<ChildProcess> {
     return Error{ErrorCode::kInternalError,
                  "ChildProcess::Start: CreatePipe failed, gle=" + std::to_string(GetLastError())};
   }
-  // Read end stays in parent and MUST NOT be inherited by the child —
+  // Read end stays in parent and MUST NOT be inherited by the child;
   // otherwise the pipe never reports EOF.
   if (!SetHandleInformation(read_end, HANDLE_FLAG_INHERIT, 0)) {
     CloseHandle(read_end);
@@ -124,11 +124,9 @@ auto ChildProcess::Start(Options opts) -> Result<ChildProcess> {
   std::wstring wcwd =
       opts.working_directory.empty() ? std::wstring{} : opts.working_directory.wstring();
 
-  // Open NUL as the child's stdin — safer than inheriting STD_INPUT_HANDLE,
+  // Open NUL as the child's stdin rather than inheriting STD_INPUT_HANDLE,
   // which may be a broken handle when the parent itself was launched with a
-  // redirected stdin (pipe from Python subprocess / bash, console-less
-  // service, etc.). CoreCLR's runtime init touches console handles and
-  // hangs or truncates output when stdin is in an odd state.
+  // redirected stdin.
   SECURITY_ATTRIBUTES nul_sa{};
   nul_sa.nLength = sizeof(nul_sa);
   nul_sa.bInheritHandle = TRUE;
@@ -146,7 +144,7 @@ auto ChildProcess::Start(Options opts) -> Result<ChildProcess> {
   si.dwFlags = STARTF_USESTDHANDLES;
   si.hStdInput = nul_in;
   si.hStdOutput = write_end;
-  si.hStdError = write_end;  // merge stderr into stdout — script writes to both
+  si.hStdError = write_end;
 
   PROCESS_INFORMATION pi{};
   const LPCWSTR cwd_arg = wcwd.empty() ? nullptr : wcwd.c_str();
@@ -172,9 +170,7 @@ auto ChildProcess::Start(Options opts) -> Result<ChildProcess> {
   cp.impl_->pid = pi.dwProcessId;
   cp.impl_->stdout_read = read_end;
 
-  // Reader thread: ReadFile → split on '\n' → push to queue. Unix-style line
-  // endings are the norm even on Windows for .NET Console.WriteLine in most
-  // shells, but we strip trailing '\r' defensively.
+  // .NET Console.WriteLine often emits Unix-style lines even on Windows.
   Impl* impl = cp.impl_.get();
   cp.impl_->reader = std::thread([impl] {
     char buf[4096];

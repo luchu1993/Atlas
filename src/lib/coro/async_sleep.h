@@ -11,9 +11,6 @@
 
 namespace atlas {
 
-// co_await async_sleep(dispatcher, Milliseconds(100));
-// co_await async_sleep(dispatcher, Milliseconds(100), cancel_token);
-// Returns Result<void>: success or Cancelled.
 inline auto async_sleep(EventDispatcher& dispatcher, Duration delay, CancellationToken token = {}) {
   struct Awaiter {
     EventDispatcher& dispatcher;

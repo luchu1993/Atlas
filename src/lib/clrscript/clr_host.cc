@@ -2,7 +2,7 @@
 
 #include "foundation/log.h"
 
-// hostfxr SDK headers — included only in implementation files, not the public header
+// hostfxr SDK headers stay out of the public header.
 #include <format>
 
 #include <coreclr_delegates.h>
@@ -94,11 +94,8 @@ ClrHost& ClrHost::operator=(ClrHost&& other) noexcept {
 auto ClrHost::Initialize(const std::filesystem::path& runtime_config_path) -> Result<void> {
   if (initialized_) return Error{ErrorCode::kScriptError, "ClrHost already initialized"};
 
-  // Step 1: Load hostfxr and resolve its entry points (platform-specific)
   if (auto r = LoadHostfxr(); !r) return r;
 
-// Step 2: Initialize CoreCLR with the supplied runtimeconfig.json
-// char_t = wchar_t on Windows, char on Linux/macOS
 #if ATLAS_PLATFORM_WINDOWS
   auto config_str = runtime_config_path.wstring();
 #else
@@ -113,7 +110,6 @@ auto ClrHost::Initialize(const std::filesystem::path& runtime_config_path) -> Re
   }
   host_context_ = ctx;
 
-  // Step 3: Obtain the load_assembly_and_get_function_pointer delegate
   void* load_assembly_fn = nullptr;
   rc =
       AsDelegateFn(fn_get_delegate_)(static_cast<hostfxr_handle>(host_context_),
@@ -142,14 +138,10 @@ void ClrHost::Finalize() {
     host_context_ = nullptr;
   }
 
-  // Null all function pointers that point into the shared library BEFORE
-  // unloading it, eliminating any window of dangling function pointers.
   fn_init_config_ = nullptr;
   fn_get_delegate_ = nullptr;
   fn_close_ = nullptr;
 
-  // hostfxr_lib_ destructor unloads the shared library — must happen after
-  // all function pointers referencing library symbols are cleared.
   hostfxr_lib_.reset();
 
   initialized_ = false;
@@ -164,7 +156,6 @@ auto ClrHost::GetMethod(const std::filesystem::path& assembly_path, std::string_
   void* method_ptr = nullptr;
 
 #if ATLAS_PLATFORM_WINDOWS
-  // char_t = wchar_t on Windows
   auto w_assembly = assembly_path.wstring();
   auto w_type = Utf8ToWide(type_name);
   auto w_method = Utf8ToWide(method_name);

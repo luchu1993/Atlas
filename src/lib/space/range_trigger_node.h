@@ -7,19 +7,6 @@ namespace atlas {
 
 class RangeTrigger;
 
-// ============================================================================
-// RangeTriggerNode — bound node (lower or upper) owned by a RangeTrigger
-//
-// The node's x/z are derived on demand from `trigger.central().{X,Z}()` plus
-// the signed `trigger.range_`. When the central entity moves, the bound's
-// reported coordinates change immediately; a subsequent RangeTrigger::Update()
-// drives the RangeList shuffle that realigns the bound's place in the list.
-//
-// Cross callbacks forward to the owning RangeTrigger, which reconstructs the
-// 2-D enter/leave decision using the `other_ortho` argument and the trigger's
-// known extent on the orthogonal axis.
-// ============================================================================
-
 class RangeTriggerNode final : public RangeListNode {
  public:
   RangeTriggerNode(RangeTrigger& owner, bool is_upper);

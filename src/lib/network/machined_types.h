@@ -12,28 +12,16 @@
 
 namespace atlas::machined {
 
-// ============================================================================
-// ProcessInfo — used in QueryResponse
-// ============================================================================
-
 struct ProcessInfo {
   ProcessType process_type{ProcessType::kBaseApp};
   std::string name;
   Address internal_addr;
-  Address external_addr;  // {0,0} if N/A
+  Address external_addr;
   uint32_t pid{0};
-  float load{0.0f};  // 0.0 ~ 1.0, from last heartbeat
+  float load{0.0f};
 };
 
-// ============================================================================
-// Protocol version
-// ============================================================================
-
 inline constexpr uint8_t kProtocolVersion = 1;
-
-// ============================================================================
-// Registration (ID 1000–1001)
-// ============================================================================
 
 struct RegisterMessage {
   uint8_t protocol_version{kProtocolVersion};
@@ -118,7 +106,7 @@ struct RegisterAck {
     auto ts = r.Read<uint64_t>();
     if (!ts) return ts.Error();
     msg.server_time = *ts;
-    // heartbeat_udp_port is optional (older machined sends nothing here)
+    // Optional for older machined replies.
     auto udp_port = r.Read<uint16_t>();
     msg.heartbeat_udp_port = udp_port ? *udp_port : 0;
     return msg;
@@ -160,10 +148,6 @@ struct DeregisterMessage {
     return msg;
   }
 };
-
-// ============================================================================
-// Query (ID 1002–1003)
-// ============================================================================
 
 struct QueryMessage {
   ProcessType process_type{ProcessType::kBaseApp};
@@ -255,12 +239,8 @@ struct QueryResponse {
   }
 };
 
-// ============================================================================
-// Heartbeat (ID 1005–1006)
-// ============================================================================
-
 struct HeartbeatMessage {
-  float load{0.0f};  // current load (0.0 ~ 1.0)
+  float load{0.0f};
   uint32_t entity_count{0};
   uint32_t pid{0};
 
@@ -317,10 +297,6 @@ struct HeartbeatAck {
     return msg;
   }
 };
-
-// ============================================================================
-// Birth / Death notifications (ID 1010–1011)
-// ============================================================================
 
 struct BirthNotification {
   ProcessType process_type{ProcessType::kBaseApp};
@@ -418,10 +394,6 @@ struct DeathNotification {
   }
 };
 
-// ============================================================================
-// Listener registration (ID 1012–1013)
-// ============================================================================
-
 enum class ListenerType : uint8_t {
   kBirth = 0,
   kDeath = 1,
@@ -483,13 +455,9 @@ struct ListenerAck {
   }
 };
 
-// ============================================================================
-// Watcher forwarding (ID 1020–1023)
-// ============================================================================
-
 struct WatcherRequest {
   ProcessType target_type{ProcessType::kBaseApp};
-  std::string target_name;  // empty = all of that type
+  std::string target_name;  // empty = all instances of target_type
   std::string watcher_path;
   uint32_t request_id{0};
 
@@ -640,10 +608,6 @@ struct WatcherReply {
     return msg;
   }
 };
-
-// ============================================================================
-// Static assertions
-// ============================================================================
 
 static_assert(NetworkMessage<RegisterMessage>);
 static_assert(NetworkMessage<RegisterAck>);

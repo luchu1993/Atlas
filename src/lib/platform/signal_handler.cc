@@ -12,24 +12,14 @@ namespace atlas {
 
 namespace {
 
-// ============================================================================
-// Global state
-// ============================================================================
-
 constexpr std::size_t kSignalCount = 5;
 
-// Callbacks — only accessed from non-signal contexts (under g_mutex).
+// Callbacks are only accessed from non-signal contexts under g_mutex.
 std::array<SignalCallback, kSignalCount> g_handlers{};
 std::mutex g_mutex;
 
-// Pending flags — written by OS signal handlers (async-signal-safe: only
-// plain reads/writes to volatile sig_atomic_t are permitted inside a signal
-// handler).  Read and cleared by dispatch_pending_signals() in the main loop.
+// Signal handlers may only touch volatile sig_atomic_t state.
 volatile sig_atomic_t g_pending[kSignalCount]{};
-
-// ============================================================================
-// Helpers
-// ============================================================================
 
 [[nodiscard]] auto SignalIndex(Signal sig) -> std::size_t {
   auto idx = static_cast<std::size_t>(sig);
@@ -43,10 +33,6 @@ volatile sig_atomic_t g_pending[kSignalCount]{};
 void MarkPending(Signal sig) {
   g_pending[SignalIndex(sig)] = 1;
 }
-
-// ============================================================================
-// Platform: Windows
-// ============================================================================
 
 #if ATLAS_PLATFORM_WINDOWS
 
@@ -103,7 +89,6 @@ void PlatformInstall(Signal sig) {
       break;
     case Signal::kUser1:
     case Signal::kUser2:
-      // Not supported on Windows
       break;
   }
 }
@@ -117,17 +102,12 @@ void PlatformRemove(Signal sig) {
       std::signal(SIGTERM, SIG_DFL);
       break;
     case Signal::kHangup:
-      // Console handler is shared; only remove if no Interrupt handler either
       break;
     case Signal::kUser1:
     case Signal::kUser2:
       break;
   }
 }
-
-// ============================================================================
-// Platform: Linux / POSIX
-// ============================================================================
 
 #elif ATLAS_PLATFORM_LINUX
 
@@ -198,10 +178,6 @@ void PlatformRemove(Signal sig) {
 #endif
 
 }  // anonymous namespace
-
-// ============================================================================
-// Public API
-// ============================================================================
 
 void InstallSignalHandler(Signal sig, SignalCallback callback) {
   std::lock_guard<std::mutex> lock(g_mutex);

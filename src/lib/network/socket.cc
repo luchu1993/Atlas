@@ -27,10 +27,6 @@
 
 namespace {
 
-// ============================================================================
-// Winsock initialization (Windows only)
-// ============================================================================
-
 struct WinsockInit {
   WinsockInit() {
 #if ATLAS_PLATFORM_WINDOWS
@@ -53,10 +49,6 @@ struct WinsockInit {
 void EnsureWinsock() {
   [[maybe_unused]] static WinsockInit init;
 }
-
-// ============================================================================
-// Error mapping
-// ============================================================================
 
 auto MapSocketError() -> atlas::Error {
 #if ATLAS_PLATFORM_WINDOWS
@@ -83,7 +75,7 @@ auto MapSocketError() -> atlas::Error {
 #else
   int err = errno;
   switch (err) {
-    case EWOULDBLOCK:  // same as EAGAIN on most systems
+    case EWOULDBLOCK:
     case EINPROGRESS:
     case EINTR:
       return atlas::Error(atlas::ErrorCode::kWouldBlock, "Operation would block");
@@ -103,10 +95,6 @@ auto MapSocketError() -> atlas::Error {
 #endif
 }
 
-// ============================================================================
-// Platform socket close
-// ============================================================================
-
 void CloseSocket(atlas::FdHandle fd) {
 #if ATLAS_PLATFORM_WINDOWS
   ::closesocket(static_cast<SOCKET>(fd));
@@ -118,10 +106,6 @@ void CloseSocket(atlas::FdHandle fd) {
 }  // anonymous namespace
 
 namespace atlas {
-
-// ============================================================================
-// Lifetime
-// ============================================================================
 
 Socket::~Socket() {
   if (IsValid()) {
@@ -147,10 +131,6 @@ void Socket::Close() {
     fd_ = kInvalidFd;
   }
 }
-
-// ============================================================================
-// Factory
-// ============================================================================
 
 auto Socket::CreateTcp() -> Result<Socket> {
   EnsureWinsock();
@@ -186,7 +166,7 @@ auto Socket::CreateUdp() -> Result<Socket> {
   if (raw == INVALID_SOCKET) {
     return MapSocketError();
   }
-  // Disable WSAECONNRESET on UDP sockets — Windows reports ICMP port
+  // Disable WSAECONNRESET; Windows reports ICMP port
   // unreachable as a recv error which disrupts the receive loop.
   BOOL new_behavior = FALSE;
   DWORD bytes_returned = 0;
@@ -208,10 +188,6 @@ auto Socket::CreateUdp() -> Result<Socket> {
   if (auto r = sock.SetRecvBufferSize(512 * 1024); !r) return r.Error();
   return sock;
 }
-
-// ============================================================================
-// Server operations
-// ============================================================================
 
 auto Socket::Bind(const Address& addr) -> Result<void> {
   auto sa = addr.ToSockaddr();
@@ -264,10 +240,6 @@ auto Socket::Accept() -> Result<std::pair<Socket, Address>> {
   return std::pair<Socket, Address>{std::move(client_sock), client_address};
 }
 
-// ============================================================================
-// Client operations
-// ============================================================================
-
 auto Socket::Connect(const Address& addr) -> Result<void> {
   auto sa = addr.ToSockaddr();
   int result = ::connect(static_cast<decltype(::socket(0, 0, 0))>(fd_),
@@ -285,15 +257,10 @@ auto Socket::Connect(const Address& addr) -> Result<void> {
       return Error(ErrorCode::kWouldBlock, "Connection in progress");
     }
 #endif
-    // Use already-captured err instead of re-reading errno/WSAGetLastError
     return Error(ErrorCode::kIoError, std::format("connect failed: {}", err));
   }
   return {};
 }
-
-// ============================================================================
-// Stream I/O (TCP)
-// ============================================================================
 
 auto Socket::Send(std::span<const std::byte> data) -> Result<size_t> {
 #if ATLAS_PLATFORM_WINDOWS
@@ -329,10 +296,6 @@ auto Socket::Recv(std::span<std::byte> buffer) -> Result<size_t> {
   return static_cast<size_t>(received);
 }
 
-// ============================================================================
-// Scatter-gather I/O (TCP)
-// ============================================================================
-
 auto Socket::SendIov(std::span<const IoVec> iov) -> Result<size_t> {
   if (iov.empty()) {
     return size_t{0};
@@ -341,7 +304,6 @@ auto Socket::SendIov(std::span<const IoVec> iov) -> Result<size_t> {
   static constexpr std::size_t kMaxBufs = 16;
   size_t total_sent = 0;
 
-  // Process in batches of kMaxBufs to avoid silent truncation
   for (std::size_t offset = 0; offset < iov.size(); offset += kMaxBufs) {
     auto count = (std::min)(iov.size() - offset, kMaxBufs);
 
@@ -376,10 +338,6 @@ auto Socket::SendIov(std::span<const IoVec> iov) -> Result<size_t> {
 
   return total_sent;
 }
-
-// ============================================================================
-// Datagram I/O (UDP)
-// ============================================================================
 
 auto Socket::SendTo(std::span<const std::byte> data, const Address& dest) -> Result<size_t> {
   auto sa = dest.ToSockaddr();
@@ -423,10 +381,6 @@ auto Socket::RecvFrom(std::span<std::byte> buffer) -> Result<std::pair<size_t, A
 
   return std::pair<size_t, Address>{static_cast<size_t>(received), Address(src)};
 }
-
-// ============================================================================
-// Socket options
-// ============================================================================
 
 auto Socket::SetNonBlocking(bool enable) -> Result<void> {
 #if ATLAS_PLATFORM_WINDOWS
@@ -480,10 +434,6 @@ auto Socket::SetRecvBufferSize(int size) -> Result<void> {
   }
   return Result<void>{};
 }
-
-// ============================================================================
-// Accessors
-// ============================================================================
 
 auto Socket::LocalAddress() const -> Result<Address> {
   sockaddr_in sa{};

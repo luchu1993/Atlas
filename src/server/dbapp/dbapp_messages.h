@@ -10,30 +10,12 @@
 #include "network/message.h"
 #include "network/message_ids.h"
 
-// ============================================================================
-// DBApp network messages (IDs 4000–4008)
-//
-// Direction:
-//   BaseApp → DBApp : WriteEntity, CheckoutEntity, CheckinEntity,
-//                     DeleteEntity, LookupEntity, AbortCheckout
-//   DBApp → BaseApp : WriteEntityAck, CheckoutEntityAck, DeleteEntityAck,
-//                     LookupEntityAck, AbortCheckoutAck
-// ============================================================================
-
 namespace atlas::dbapp {
-
-// ============================================================================
-// LoadMode — how to identify the entity to checkout
-// ============================================================================
 
 enum class LoadMode : uint8_t {
   kByDbid = 0,
   kByName = 1,
 };
-
-// ============================================================================
-// CheckoutStatus — result code for CheckoutEntityAck
-// ============================================================================
 
 enum class CheckoutStatus : uint8_t {
   kSuccess = 0,
@@ -41,10 +23,6 @@ enum class CheckoutStatus : uint8_t {
   kAlreadyCheckedOut = 2,
   kDbError = 3,
 };
-
-// ============================================================================
-// WriteEntity  (BaseApp → DBApp, ID 4000)
-// ============================================================================
 
 struct WriteEntity {
   WriteFlags flags{WriteFlags::kNone};
@@ -99,10 +77,6 @@ struct WriteEntity {
 };
 static_assert(NetworkMessage<WriteEntity>);
 
-// ============================================================================
-// WriteEntityAck  (DBApp → BaseApp, ID 4001)
-// ============================================================================
-
 struct WriteEntityAck {
   uint32_t request_id{0};
   bool success{false};
@@ -142,10 +116,6 @@ struct WriteEntityAck {
   }
 };
 static_assert(NetworkMessage<WriteEntityAck>);
-
-// ============================================================================
-// CheckoutEntity  (BaseApp → DBApp, ID 4002)
-// ============================================================================
 
 struct CheckoutEntity {
   LoadMode mode{LoadMode::kByDbid};
@@ -200,10 +170,6 @@ struct CheckoutEntity {
   }
 };
 static_assert(NetworkMessage<CheckoutEntity>);
-
-// ============================================================================
-// CheckoutEntityAck  (DBApp → BaseApp, ID 4003)
-// ============================================================================
 
 struct CheckoutEntityAck {
   uint32_t request_id{0};
@@ -267,10 +233,6 @@ struct CheckoutEntityAck {
 };
 static_assert(NetworkMessage<CheckoutEntityAck>);
 
-// ============================================================================
-// CheckinEntity  (BaseApp → DBApp, ID 4004)
-// ============================================================================
-
 struct CheckinEntity {
   uint16_t type_id{0};
   DatabaseID dbid{kInvalidDBID};
@@ -301,10 +263,6 @@ struct CheckinEntity {
   }
 };
 static_assert(NetworkMessage<CheckinEntity>);
-
-// ============================================================================
-// DeleteEntity  (BaseApp → DBApp, ID 4005)
-// ============================================================================
 
 struct DeleteEntity {
   uint16_t type_id{0};
@@ -342,10 +300,6 @@ struct DeleteEntity {
 };
 static_assert(NetworkMessage<DeleteEntity>);
 
-// ============================================================================
-// DeleteEntityAck  (DBApp → BaseApp, ID 4006)
-// ============================================================================
-
 struct DeleteEntityAck {
   uint32_t request_id{0};
   bool success{false};
@@ -381,10 +335,6 @@ struct DeleteEntityAck {
   }
 };
 static_assert(NetworkMessage<DeleteEntityAck>);
-
-// ============================================================================
-// LookupEntity  (BaseApp → DBApp, ID 4007)
-// ============================================================================
 
 struct LookupEntity {
   uint16_t type_id{0};
@@ -422,10 +372,6 @@ struct LookupEntity {
 };
 static_assert(NetworkMessage<LookupEntity>);
 
-// ============================================================================
-// LookupEntityAck  (DBApp → BaseApp, ID 4008)
-// ============================================================================
-
 struct LookupEntityAck {
   uint32_t request_id{0};
   bool found{false};
@@ -461,10 +407,7 @@ struct LookupEntityAck {
 };
 static_assert(NetworkMessage<LookupEntityAck>);
 
-// ============================================================================
-// AbortCheckout  (BaseApp → DBApp, ID 4009)
 // Cancel a previously issued CheckoutEntity request that is no longer needed.
-// ============================================================================
 
 struct AbortCheckout {
   uint32_t request_id{0};
@@ -502,10 +445,6 @@ struct AbortCheckout {
 };
 static_assert(NetworkMessage<AbortCheckout>);
 
-// ============================================================================
-// AbortCheckoutAck  (DBApp → BaseApp, ID 4010)
-// ============================================================================
-
 struct AbortCheckoutAck {
   uint32_t request_id{0};
   bool success{false};
@@ -537,10 +476,7 @@ struct AbortCheckoutAck {
 };
 static_assert(NetworkMessage<AbortCheckoutAck>);
 
-// ============================================================================
-// GetEntityIds  (BaseApp → DBApp, ID 4020)
 // Request a batch of EntityIDs from the authoritative allocator.
-// ============================================================================
 
 struct GetEntityIds {
   uint32_t count{0};  // number of IDs requested
@@ -567,10 +503,7 @@ struct GetEntityIds {
 };
 static_assert(NetworkMessage<GetEntityIds>);
 
-// ============================================================================
-// GetEntityIdsAck  (DBApp → BaseApp, ID 4021)
 // Returns a contiguous range [start, start + count - 1].
-// ============================================================================
 
 struct GetEntityIdsAck {
   EntityID start{kInvalidEntityID};
@@ -607,10 +540,7 @@ struct GetEntityIdsAck {
 };
 static_assert(NetworkMessage<GetEntityIdsAck>);
 
-// ============================================================================
-// PutEntityIds  (BaseApp → DBApp, ID 4022)
 // Return unused EntityIDs (currently a no-op on DBApp side).
-// ============================================================================
 
 struct PutEntityIds {
   EntityID start{kInvalidEntityID};
@@ -643,10 +573,6 @@ struct PutEntityIds {
 };
 static_assert(NetworkMessage<PutEntityIds>);
 
-// ============================================================================
-// PutEntityIdsAck  (DBApp → BaseApp, ID 4023)
-// ============================================================================
-
 struct PutEntityIdsAck {
   bool success{false};
 
@@ -674,15 +600,10 @@ static_assert(NetworkMessage<PutEntityIdsAck>);
 
 }  // namespace atlas::dbapp
 
-// ============================================================================
-// Authentication messages delegated to DBApp (IDs 5002–5003 reused here)
 // These are the same message types defined in login_messages.hpp, but
 // re-exported in this header so DBApp only needs to include one file.
-// DBApp registers handlers using the same atlas::login:: types.
-//
 // To avoid ODR issues, do NOT include both headers in the same translation
 // unit.  In practice, DBApp includes only this header for auth messages.
-// ============================================================================
 
 // AuthLogin / AuthLoginResult are defined in loginapp/login_messages.hpp.
 // DBApp includes that header directly when handling auth messages.

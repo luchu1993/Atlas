@@ -35,7 +35,7 @@ class AoITrigger {
 
   // Required after central's range_node shuffles: bound nodes still
   // reflect the OLD central position, so inside_peers_ stay stale and
-  // outer.OnLeave fails to fire — leaks dangling aoi_map_ pointers.
+  // outer.OnLeave fails to fire - leaks dangling aoi_map_ pointers.
   void OnCentralMoved(float old_central_x, float old_central_z);
 
   // Maintains inner ⊂ outer invariant when cross-event ordering would

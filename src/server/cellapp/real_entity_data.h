@@ -18,7 +18,7 @@ class CellEntity;
 class Channel;
 
 // Real-only sidecar: Haunt list (peer CellApps holding a Ghost), velocity
-// sample, broadcast bookkeeping. Dropped on Real→Ghost transition.
+// sample, broadcast bookkeeping. Dropped on Real->Ghost transition.
 // Channel* pointers are non-owning.
 class RealEntityData {
  public:
@@ -52,15 +52,15 @@ class RealEntityData {
   [[nodiscard]] auto BuildDelta() const -> cellapp::GhostDelta;
   [[nodiscard]] auto BuildSnapshotRefresh() const -> cellapp::GhostSnapshotRefresh;
 
-  // True when the seq gap > 1 (BuildDelta would drop intermediates ⇒
-  // use SnapshotRefresh). False for gap ≤ 1.
+  // True when the seq gap > 1 (BuildDelta would drop intermediates =>
+  // use SnapshotRefresh). False for gap <= 1.
   [[nodiscard]] static constexpr auto ShouldUseSnapshotRefresh(uint64_t latest_event_seq,
                                                                uint64_t last_broadcast_event_seq)
       -> bool {
     return latest_event_seq > last_broadcast_event_seq + 1;
   }
 
-  // All-zero ⇒ no audience-visible field update (only owner-visible
+  // All-zero => no audience-visible field update (only owner-visible
   // properties dirtied); skip SendMessage. Real still advances
   // last_broadcast_event_seq_ so next-tick gap arithmetic stays correct.
   [[nodiscard]] static auto IsEmptyOtherDelta(std::span<const std::byte> delta) -> bool {

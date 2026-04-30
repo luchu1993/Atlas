@@ -12,11 +12,8 @@
 #include "network/message_ids.h"
 #include "server/entity_types.h"
 
-// BaseApp messages (IDs 2000-2031). External 2020-2029, internal otherwise.
-
 namespace atlas::baseapp {
 
-// CreateBase (BaseAppMgr → BaseApp, ID 2000).
 struct CreateBase {
   uint16_t type_id{0};
   EntityID entity_id{kInvalidEntityID};  // 0 = BaseApp allocates locally
@@ -48,11 +45,10 @@ struct CreateBase {
 };
 static_assert(NetworkMessage<CreateBase>);
 
-// CreateBaseFromDB (BaseAppMgr → BaseApp, ID 2001).
 struct CreateBaseFromDB {
   uint16_t type_id{0};
   DatabaseID dbid{kInvalidDBID};
-  std::string identifier;  // non-empty → load by name
+  std::string identifier;  // non-empty -> load by name
 
   static auto Descriptor() -> const MessageDesc& {
     static const MessageDesc kDesc{msg_id::Id(msg_id::BaseApp::kCreateBaseFromDb),
@@ -84,7 +80,6 @@ struct CreateBaseFromDB {
 };
 static_assert(NetworkMessage<CreateBaseFromDB>);
 
-// AcceptClient (BaseApp → BaseApp, remote give_client_to, ID 2002).
 struct AcceptClient {
   EntityID dest_entity_id{kInvalidEntityID};
   SessionKey session_key;
@@ -118,7 +113,6 @@ struct AcceptClient {
 };
 static_assert(NetworkMessage<AcceptClient>);
 
-// CellEntityCreated (CellApp → BaseApp, ID 2010).
 struct CellEntityCreated {
   EntityID entity_id{kInvalidEntityID};
   Address cell_addr;
@@ -154,7 +148,6 @@ struct CellEntityCreated {
 };
 static_assert(NetworkMessage<CellEntityCreated>);
 
-// CellEntityDestroyed (CellApp → BaseApp, ID 2011).
 struct CellEntityDestroyed {
   EntityID entity_id{kInvalidEntityID};
 
@@ -180,7 +173,6 @@ struct CellEntityDestroyed {
 };
 static_assert(NetworkMessage<CellEntityDestroyed>);
 
-// CurrentCell (CellApp → BaseApp, post-offload cell address, ID 2012).
 struct CurrentCell {
   EntityID entity_id{kInvalidEntityID};
   Address cell_addr;
@@ -220,7 +212,6 @@ struct CurrentCell {
 };
 static_assert(NetworkMessage<CurrentCell>);
 
-// CellRpcForward (CellApp → BaseApp, Cell→Base RPC, ID 2013).
 struct CellRpcForward {
   EntityID entity_id{kInvalidEntityID};
   uint32_t rpc_id{0};
@@ -309,7 +300,6 @@ struct BroadcastRpcFromCell {
 };
 static_assert(NetworkMessage<BroadcastRpcFromCell>);
 
-// ReplicatedDeltaFromCell (CellApp → BaseApp → Client, ID 2015).
 // Unreliable: next tick supersedes; HoL blocking is worse than loss.
 struct ReplicatedDeltaFromCell {
   EntityID entity_id{kInvalidEntityID};
@@ -537,7 +527,6 @@ struct ReplicatedBaselineToClient {
 };
 static_assert(NetworkMessage<ReplicatedBaselineToClient>);
 
-// Authenticate (Client → BaseApp external, ID 2020); first client message.
 struct Authenticate {
   SessionKey session_key;
 
@@ -566,7 +555,6 @@ struct Authenticate {
 };
 static_assert(NetworkMessage<Authenticate>);
 
-// AuthenticateResult (BaseApp → Client, ID 2021).
 struct AuthenticateResult {
   bool success{false};
   EntityID entity_id{kInvalidEntityID};
@@ -669,7 +657,6 @@ struct CellReady {
 };
 static_assert(NetworkMessage<CellReady>);
 
-// ClientBaseRpc (Client → BaseApp external, ID 2022); base method call.
 struct ClientBaseRpc {
   uint32_t rpc_id{0};
   std::vector<std::byte> payload;
@@ -706,7 +693,6 @@ struct ClientBaseRpc {
 };
 static_assert(NetworkMessage<ClientBaseRpc>);
 
-// ClientCellRpc (Client → BaseApp external, ID 2023). BaseApp validates
 // then forwards to CellApp with un-spoofable source_entity_id stamped.
 struct ClientCellRpc {
   EntityID target_entity_id{kInvalidEntityID};
@@ -749,7 +735,6 @@ struct ClientCellRpc {
 };
 static_assert(NetworkMessage<ClientCellRpc>);
 
-// CellAppDeath (CellAppMgr → BaseApp, ID 2026). dead_addr + Space→new-host
 // map. BaseApps re-issue affected entities via CreateCellEntity with
 // script_init_data = cached cell_backup_data.
 struct CellAppDeath {
@@ -799,7 +784,6 @@ struct CellAppDeath {
 };
 static_assert(NetworkMessage<CellAppDeath>);
 
-// ClientEventSeqReport (Client → BaseApp, ID 2027); accumulated reliable-
 // delta gap count since last report.
 struct ClientEventSeqReport {
   EntityID entity_id{kInvalidEntityID};
@@ -832,7 +816,6 @@ struct ClientEventSeqReport {
 };
 static_assert(NetworkMessage<ClientEventSeqReport>);
 
-// ForceLogoff (BaseApp → BaseApp, ID 2030); evicts holder so a new login
 // can check out the entity.
 struct ForceLogoff {
   DatabaseID dbid{kInvalidDBID};
@@ -865,7 +848,6 @@ struct ForceLogoff {
 };
 static_assert(NetworkMessage<ForceLogoff>);
 
-// ForceLogoffAck (BaseApp → BaseApp, ID 2031).
 struct ForceLogoffAck {
   uint32_t request_id{0};
   bool success{false};

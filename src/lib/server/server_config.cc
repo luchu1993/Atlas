@@ -11,10 +11,6 @@
 
 namespace atlas {
 
-// ============================================================================
-// ProcessType helpers
-// ============================================================================
-
 auto ProcessTypeName(ProcessType type) -> std::string_view {
   switch (type) {
     case ProcessType::kMachined:
@@ -57,13 +53,8 @@ auto ProcessTypeFromName(std::string_view name) -> Result<ProcessType> {
   return Error{ErrorCode::kInvalidArgument, std::format("unknown process type: '{}'", name)};
 }
 
-// ============================================================================
-// Internal helpers
-// ============================================================================
-
 namespace {
 
-/// Parse "host:port" string into an Address.
 auto ParseAddress(std::string_view s) -> Result<Address> {
   auto colon = s.rfind(':');
   if (colon == std::string_view::npos)
@@ -117,16 +108,10 @@ void LoadStringArray(const DataSection* section, std::vector<std::string>& out) 
   }
 }
 
-// ============================================================================
-// CLI field descriptor table
-// ============================================================================
-
-/// Type-erased pointer to a ServerConfig member field.
 using FieldPtr =
     std::variant<std::string ServerConfig::*, int ServerConfig::*, uint16_t ServerConfig::*,
                  bool ServerConfig::*, std::filesystem::path ServerConfig::*>;
 
-/// Maps a CLI key name to its corresponding ServerConfig member.
 struct CliField {
   std::string_view key;
   FieldPtr ptr;
@@ -161,7 +146,6 @@ static const CliField kCliFields[] = {
 };
 // clang-format on
 
-/// Parse a string value and assign it to the config field identified by @p ptr.
 auto ParseAndAssign(ServerConfig& cfg, const FieldPtr& ptr, std::string_view key,
                     std::string_view val) -> std::optional<Error> {
   return std::visit(
@@ -193,10 +177,6 @@ auto ParseAndAssign(ServerConfig& cfg, const FieldPtr& ptr, std::string_view key
 }
 
 }  // namespace
-
-// ============================================================================
-// ServerConfig::from_json_file
-// ============================================================================
 
 auto ServerConfig::FromJsonFile(const std::filesystem::path& path) -> Result<ServerConfig> {
   auto tree_result = DataSectionTree::FromJson(path);
@@ -279,14 +259,9 @@ auto ServerConfig::FromJsonFile(const std::filesystem::path& path) -> Result<Ser
   return cfg;
 }
 
-// ============================================================================
-// ServerConfig::from_args
-// ============================================================================
-
 auto ServerConfig::FromArgs(int argc, char* argv[]) -> Result<ServerConfig> {
   ServerConfig cfg;
 
-  // Simple linear scan of argv pairs: --key value
   for (int i = 1; i < argc - 1; ++i) {
     std::string_view key = argv[i];
     std::string_view val = argv[i + 1];
@@ -296,7 +271,6 @@ auto ServerConfig::FromArgs(int argc, char* argv[]) -> Result<ServerConfig> {
     else
       continue;
 
-    // Special-case fields that need custom parsing
     if (key == "type") {
       auto pt = ProcessTypeFromName(val);
       if (!pt) return pt.Error();
@@ -314,7 +288,6 @@ auto ServerConfig::FromArgs(int argc, char* argv[]) -> Result<ServerConfig> {
       cfg.login_rate_limit_trusted_cidrs.emplace_back(val);
       ++i;
     } else {
-      // Table-driven: match key against cli_fields[]
       for (const auto& field : kCliFields) {
         if (key == field.key) {
           auto err = ParseAndAssign(cfg, field.ptr, key, val);
@@ -324,18 +297,12 @@ auto ServerConfig::FromArgs(int argc, char* argv[]) -> Result<ServerConfig> {
         }
       }
     }
-    // "--config" is consumed by load(), not here
   }
 
   return cfg;
 }
 
-// ============================================================================
-// ServerConfig::load  (JSON file + CLI override)
-// ============================================================================
-
 auto ServerConfig::Load(int argc, char* argv[]) -> Result<ServerConfig> {
-  // Find --config <path> in argv
   std::filesystem::path config_path;
   for (int i = 1; i < argc - 1; ++i) {
     std::string_view key = argv[i];
@@ -353,7 +320,6 @@ auto ServerConfig::Load(int argc, char* argv[]) -> Result<ServerConfig> {
     cfg = std::move(*file_result);
   }
 
-  // Apply CLI overrides
   auto cli_result = FromArgs(argc, argv);
   if (!cli_result) return cli_result.Error();
 
@@ -371,22 +337,18 @@ auto ServerConfig::Load(int argc, char* argv[]) -> Result<ServerConfig> {
 
   ServerConfig defaults;
 
-  // Special-case overrides
   if (kHasCliKey("type")) cfg.process_type = cli.process_type;
   if (kHasCliKey("machined")) cfg.machined_address = cli.machined_address;
   if (kHasCliKey("log-level")) cfg.log_level = cli.log_level;
   if (kHasCliKey("login-rate-limit-trusted-cidr"))
     cfg.login_rate_limit_trusted_cidrs = cli.login_rate_limit_trusted_cidrs;
 
-  // Table-driven overrides
   for (const auto& field : kCliFields) {
     if (kHasCliKey(field.key)) std::visit([&](auto m) { cfg.*m = cli.*m; }, field.ptr);
   }
 
-  // Derive process_name from type if not set
   if (cfg.process_name.empty()) cfg.process_name = std::string(ProcessTypeName(cfg.process_type));
 
-  // Apply default machined address if still unset
   if (cfg.machined_address == Address::kNone || cfg.machined_address == defaults.machined_address) {
     auto default_addr = Address::Resolve("127.0.0.1", 20018);
     if (default_addr) cfg.machined_address = *default_addr;

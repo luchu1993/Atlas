@@ -37,7 +37,7 @@ class CellAppConfig {
   // GhostDelta broadcasts a single Real can emit to a given Haunt.
   // Caps wire cost for fast-moving entities: position updates
   // coalesce into one send per interval instead of one per tick.
-  // JSON key: `ghost_update_interval_ms`. Default 50 ms (≈20 Hz),
+  // JSON key: `ghost_update_interval_ms`. Default 50 ms (~20 Hz),
   // i.e. roughly every other tick at a 30 Hz cadence. Set to 0 to
   // disable and broadcast every tick.
   [[nodiscard]] static auto GhostUpdateIntervalMs() -> uint32_t;
@@ -46,7 +46,7 @@ class CellAppConfig {
   // based allocator scales every observer's request down proportionally
   // when the sum of requests exceeds this cap.  Sized to the host's NIC
   // budget at the configured tick rate (default 4 MB/tick = 60 MB/s
-  // at the default 15 Hz cellapp cadence — ≈ 50 % of a 1 GbE NIC).
+  // at the default 15 Hz cellapp cadence - ~ 50 % of a 1 GbE NIC).
   // JSON key: `witness_total_outbound_cap_bytes`. Default 4194304 (4 MB).
   [[nodiscard]] static auto WitnessTotalOutboundCapBytes() -> uint32_t;
 
@@ -69,7 +69,7 @@ class CellAppConfig {
   [[nodiscard]] static auto WitnessMaxPerObserverBudgetBytes() -> uint32_t;
 
   // Hard cap on SendEntityUpdate calls per observer per tick. Bounds
-  // serialisation CPU even when the byte budget would allow more — peers
+  // serialisation CPU even when the byte budget would allow more - peers
   // not served this tick stay in the priority queue and surface at the
   // top next tick, so the nearest peers are always served first. Tune
   // upward if dense scenes show stale peers; downward if Witness::Update

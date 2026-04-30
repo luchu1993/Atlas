@@ -13,22 +13,6 @@
 
 namespace atlas {
 
-// ============================================================================
-// ClrScriptEngine — ScriptEngine implementation backed by .NET CoreCLR
-// ============================================================================
-//
-// Lifecycle:
-//   1. Configure()   — set paths for runtimeconfig.json and Atlas.Runtime.dll
-//   2. Initialize()  — start CLR, bootstrap, bind lifecycle methods
-//   3. LoadModule()  — load user game-script assemblies
-//   4. OnInit()      — trigger C# entity initialization
-//   5. OnTick()      — per-frame update (called from main loop)
-//   6. OnShutdown()  — trigger C# entity cleanup
-//   7. Finalize()    — shut down CLR
-//
-// All lifecycle methods use the "return 0 = ok, return -1 = error" convention.
-// Errors from C# are read via the TLS error bridge (clr_error.h).
-
 class ClrScriptEngine final : public ScriptEngine {
  public:
   struct Config {
@@ -47,8 +31,6 @@ class ClrScriptEngine final : public ScriptEngine {
 
   [[nodiscard]] auto Configure(const Config& config) -> Result<void>;
 
-  // -- ScriptEngine interface -----------------------------------------------
-
   [[nodiscard]] auto Initialize() -> Result<void> override;
   void Finalize() override;
   [[nodiscard]] auto LoadModule(const std::filesystem::path& path) -> Result<void> override;
@@ -62,16 +44,11 @@ class ClrScriptEngine final : public ScriptEngine {
 
   [[nodiscard]] auto IsInitialized() const -> bool { return initialized_; }
 
-  // -- Hot-reload support (used by ClrHotReload) ----------------------------
-
-  /// Call a no-argument [UnmanagedCallersOnly] method in HotReloadManager.
   [[nodiscard]] auto CallHotReload(std::string_view method_name) -> Result<void>;
 
-  /// Call a path-argument [UnmanagedCallersOnly] method in HotReloadManager.
   [[nodiscard]] auto CallHotReload(std::string_view method_name,
                                    const std::filesystem::path& assembly_path) -> Result<void>;
 
-  /// Access the CLR host (needed for rebinding methods after reload).
   [[nodiscard]] auto Host() -> ClrHost& { return host_; }
 
  private:
@@ -80,15 +57,12 @@ class ClrScriptEngine final : public ScriptEngine {
   bool configured_{false};
   bool initialized_{false};
 
-  // Cached C# [UnmanagedCallersOnly] entry points in Atlas.Runtime.dll.
-  // Bound during initialize() after CLR bootstrap.
   ClrFallibleMethod<> engine_init_;      // Lifecycle.EngineInit()
   ClrFallibleMethod<> engine_shutdown_;  // Lifecycle.EngineShutdown()
   ClrFallibleMethod<uint8_t> on_init_;   // Lifecycle.OnInit(byte isReload)
   ClrFallibleMethod<float> on_tick_;     // Lifecycle.OnTick(float dt)
   ClrFallibleMethod<> on_shutdown_;      // Lifecycle.OnShutdown()
 
-  // Script loading (HotReloadManager entry points)
   ClrFallibleMethod<const uint8_t*, int32_t> load_scripts_;      // LoadScripts
   ClrFallibleMethod<> serialize_and_unload_;                     // SerializeAndUnload
   ClrFallibleMethod<const uint8_t*, int32_t> load_and_restore_;  // LoadAndRestore

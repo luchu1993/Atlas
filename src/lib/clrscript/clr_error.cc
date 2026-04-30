@@ -6,15 +6,7 @@
 
 namespace atlas {
 
-// ============================================================================
-// Thread-local error storage
-// ============================================================================
-
 thread_local ClrErrorBuffer t_clr_error{};
-
-// ============================================================================
-// C++ API
-// ============================================================================
 
 auto ReadClrError() -> Error {
   // Snapshot the buffer then clear it so subsequent calls don't re-read.
@@ -33,16 +25,11 @@ auto ReadClrError() -> Error {
                                                     static_cast<uint32_t>(kCode), message)};
 }
 
-// ============================================================================
-// C# → C++ write path
-// ============================================================================
-
 extern "C" void ClrErrorSet(int32_t error_code, const char* msg, int32_t msg_len) {
   t_clr_error.error_code = error_code;
   t_clr_error.has_error = true;
 
-  // Clamp to buffer capacity (leave no room for null terminator — the buffer
-  // is NOT treated as a C string; message_length tracks the byte count).
+  // The buffer is not null-terminated; message_length tracks the byte count.
   constexpr int32_t kBufSize = static_cast<int32_t>(sizeof(ClrErrorBuffer::message));
   const int32_t kCopyLen = std::min(msg_len, kBufSize);
 

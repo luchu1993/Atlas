@@ -28,7 +28,6 @@ auto ClrHost::LoadHostfxr() -> Result<void> {
                                                       static_cast<unsigned>(rc))};
   }
 
-  // Load hostfxr.dll — stored as a member so the library stays loaded.
   auto lib_result = DynamicLibrary::Load(std::filesystem::path(buffer));
   if (!lib_result) {
     return Error{ErrorCode::kScriptError,
@@ -36,7 +35,6 @@ auto ClrHost::LoadHostfxr() -> Result<void> {
   }
   hostfxr_lib_ = std::move(*lib_result);
 
-  // Resolve the three hostfxr entry points we need.
   auto sym_init = hostfxr_lib_->GetSymbol<hostfxr_initialize_for_runtime_config_fn>(
       "hostfxr_initialize_for_runtime_config");
   auto sym_delegate =
@@ -48,7 +46,6 @@ auto ClrHost::LoadHostfxr() -> Result<void> {
     return Error{ErrorCode::kScriptError, "Failed to resolve required hostfxr symbols"};
   }
 
-  // Store as void* — cast back to typed pointers in clr_host.cpp via macros
   fn_init_config_ = reinterpret_cast<void*>(*sym_init);
   fn_get_delegate_ = reinterpret_cast<void*>(*sym_delegate);
   fn_close_ = reinterpret_cast<void*>(*sym_close);

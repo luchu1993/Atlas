@@ -11,14 +11,6 @@
 #include "serialization/binary_stream.h"
 #include "server/entity_types.h"
 
-// CellAppMgr messages (IDs 7000-7099).
-//
-// Directions:
-//   CellApp    → CellAppMgr : RegisterCellApp, InformCellLoad
-//   CellAppMgr → CellApp    : RegisterCellAppAck, AddCellToSpace,
-//                              UpdateGeometry, ShouldOffload
-//   BaseApp    → CellAppMgr : CreateSpaceRequest
-//
 // BSP tree geometry moves between CellAppMgr and CellApps as a
 // pre-serialised blob rather than typed fields; the mgr is
 // authoritative for the tree and CellApp only consumes it.
@@ -26,8 +18,6 @@
 namespace atlas::cellappmgr {
 
 using CellID = uint32_t;
-
-// RegisterCellApp  (CellApp → CellAppMgr, ID 7000)
 
 struct RegisterCellApp {
   Address internal_addr;
@@ -58,8 +48,6 @@ struct RegisterCellApp {
 };
 static_assert(NetworkMessage<RegisterCellApp>);
 
-// RegisterCellAppAck  (CellAppMgr → CellApp, ID 7001)
-//
 // The assigned `app_id` drives EntityID allocation: high 8 bits of the
 // EntityID are app_id, low 24 bits are CellApp-local monotonic.
 // Consequently app_id must be in [1, 255]; app_id == 0 is reserved
@@ -102,8 +90,6 @@ struct RegisterCellAppAck {
 };
 static_assert(NetworkMessage<RegisterCellAppAck>);
 
-// InformCellLoad  (CellApp → CellAppMgr, ID 7002)
-
 struct InformCellLoad {
   uint32_t app_id{0};
   float load{0.0f};
@@ -139,8 +125,6 @@ struct InformCellLoad {
   }
 };
 static_assert(NetworkMessage<InformCellLoad>);
-
-// CreateSpaceRequest  (BaseApp / script → CellAppMgr, ID 7003)
 
 struct CreateSpaceRequest {
   SpaceID space_id{kInvalidSpaceID};
@@ -181,8 +165,6 @@ struct CreateSpaceRequest {
 };
 static_assert(NetworkMessage<CreateSpaceRequest>);
 
-// AddCellToSpace  (CellAppMgr → CellApp, ID 7004)
-
 struct AddCellToSpace {
   SpaceID space_id{kInvalidSpaceID};
   CellID cell_id{0};
@@ -219,11 +201,9 @@ struct AddCellToSpace {
 };
 static_assert(NetworkMessage<AddCellToSpace>);
 
-// UpdateGeometry  (CellAppMgr → CellApp, ID 7005)
-//
 // `bsp_blob` is the BSPTree serialization; the structure itself is
 // defined in src/server/cellappmgr/bsp_tree.h and opaque to the
-// message layer — CellAppMgr owns the tree, CellApp replays it.
+// message layer - CellAppMgr owns the tree, CellApp replays it.
 
 struct UpdateGeometry {
   SpaceID space_id{kInvalidSpaceID};
@@ -261,8 +241,6 @@ struct UpdateGeometry {
 };
 static_assert(NetworkMessage<UpdateGeometry>);
 
-// ShouldOffload  (CellAppMgr → CellApp, ID 7006)
-//
 // Enables / disables entity migration for a Cell. CellAppMgr toggles
 // this off during sensitive transitions (e.g. a BSP rebalance is in
 // flight) and re-enables once the new geometry has quiesced.
@@ -302,8 +280,6 @@ struct ShouldOffload {
 };
 static_assert(NetworkMessage<ShouldOffload>);
 
-// SpaceCreatedResult  (CellAppMgr → BaseApp, ID 7007)
-//
 // CellAppMgr replies to every CreateSpaceRequest with this message so
 // the originating BaseApp (or script) can resolve its per-request
 // callback and learn which CellApp now hosts the initial Cell of the

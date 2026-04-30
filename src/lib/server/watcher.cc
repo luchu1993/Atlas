@@ -4,10 +4,6 @@
 
 namespace atlas {
 
-// ============================================================================
-// WatcherRegistry — private helpers
-// ============================================================================
-
 void WatcherRegistry::insert(std::string_view path, std::unique_ptr<WatcherEntry> entry) {
   Node* node = FindOrCreateNode(path);
   assert(node != nullptr);
@@ -56,10 +52,6 @@ void WatcherRegistry::CollectSnapshot(const Node& node, const std::string& prefi
     CollectSnapshot(child, child_prefix, out);
   }
 }
-
-// ============================================================================
-// WatcherRegistry — public interface
-// ============================================================================
 
 auto WatcherRegistry::Get(std::string_view path) const -> std::optional<std::string> {
   const Node* node = FindNode(path);

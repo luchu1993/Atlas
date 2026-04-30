@@ -24,7 +24,7 @@ void WatcherForwarder::HandleRequest(Channel* requester_channel, const WatcherRe
   }
 
   if (!target || target->channel == nullptr || !target->channel->IsConnected()) {
-    // Target not found — reply immediately with not-found
+    // Target not found - reply immediately with not-found
     WatcherResponse resp;
     resp.request_id = req.request_id;
     resp.found = false;

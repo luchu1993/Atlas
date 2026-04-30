@@ -8,20 +8,6 @@
 
 namespace atlas {
 
-// ============================================================================
-// EntityApp — base class for entity-bearing server processes
-//
-// Extends ScriptApp with:
-//   • BgTaskManager  — thread-pool for DB / IO work + main-thread callbacks
-//   • EntityDefRegistry ref — entity type definitions (populated by C# at startup)
-//   • on_start_of_tick() — drives script-side timers via ScriptEngine::on_tick
-//   • on_signal(User1) — prints a stack-trace for "hung process" diagnosis.
-//     On Linux, map SIGQUIT → SIGUSR1 at the process level to trigger this.
-//
-// Class hierarchy:
-//   ServerApp → ScriptApp → EntityApp → BaseApp / CellApp
-// ============================================================================
-
 class EntityApp : public ScriptApp {
  public:
   EntityApp(EventDispatcher& dispatcher, NetworkInterface& network);
@@ -36,7 +22,6 @@ class EntityApp : public ScriptApp {
 
   void OnStartOfTick() override;
 
-  // User1 (maps to SIGQUIT on Linux) → log call-stack for hung-process diagnosis.
   void OnSignal(Signal sig) override;
 
   void RegisterWatchers() override;

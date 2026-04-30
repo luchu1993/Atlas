@@ -13,27 +13,9 @@
 
 namespace atlas {
 
-// ============================================================================
-// ServerAppOption<T>
-//
-// Declare a static instance in a .cpp file to automatically:
-//   1. Load the value from the JSON config (via ServerConfig::raw_config).
-//   2. Register a Watcher entry when ServerApp::register_watchers() is called.
-//
-// Example usage in baseapp.cpp:
-//
-//   static ServerAppOption<int> s_backup_period{
-//       10, "backup_period", "baseapp/backup_period", WatcherMode::kReadWrite};
-//
 // The static instances register themselves in a process-global list at
 // construction time. ServerAppOptionBase::ApplyAll() and
 // ServerAppOptionBase::RegisterAll() iterate the list.
-// ============================================================================
-
-// Non-template base so the process-global registry is shared across all
-// ServerAppOption<T> instantiations. Without this, each template instance
-// would have its own static list and ApplyAll/RegisterAll would only see
-// options of a single T.
 class ServerAppOptionBase {
  public:
   virtual ~ServerAppOptionBase() {
@@ -44,18 +26,15 @@ class ServerAppOptionBase {
   virtual void LoadFrom(const DataSection& root) = 0;
   virtual void RegisterWatcher(WatcherRegistry& registry) = 0;
 
-  /// Process-wide list of all ServerAppOption instances across every T.
   static auto AllOptions() -> std::vector<ServerAppOptionBase*>& {
     static std::vector<ServerAppOptionBase*> s_options;
     return s_options;
   }
 
-  /// Apply all registered options from the given DataSection root.
   static void ApplyAll(const DataSection& root) {
     for (auto* opt : AllOptions()) opt->LoadFrom(root);
   }
 
-  /// Register all options into the given WatcherRegistry.
   static void RegisterAll(WatcherRegistry& registry) {
     for (auto* opt : AllOptions()) opt->RegisterWatcher(registry);
   }
@@ -84,8 +63,6 @@ class ServerAppOption : public ServerAppOptionBase {
     if (mode_ == WatcherMode::kReadWrite) value_ = v;
   }
 
-  /// Load value from the config's raw DataSection tree.
-  /// Called by ServerAppOptionBase::ApplyAll() after JSON loading.
   void LoadFrom(const DataSection& root) override {
     if constexpr (std::is_same_v<T, bool>)
       value_ = root.ReadBool(json_key_, default_);
@@ -99,7 +76,6 @@ class ServerAppOption : public ServerAppOptionBase {
       value_ = static_cast<T>(root.ReadString(json_key_, ""));
   }
 
-  /// Register this option's value as a Watcher entry.
   void RegisterWatcher(WatcherRegistry& registry) override {
     if (mode_ == WatcherMode::kReadWrite)
       registry.AddRw(watcher_path_, value_);

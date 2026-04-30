@@ -71,7 +71,6 @@ auto ClrHotReload::CompileScripts() const -> Result<void> {
                  std::format("dotnet build failed with exit code {}", exit_code)};
   }
 
-  // Backup current DLLs
   auto backup_dir = config_.output_directory / ".reload_backup";
   std::filesystem::create_directories(backup_dir);
 
@@ -84,7 +83,6 @@ auto ClrHotReload::CompileScripts() const -> Result<void> {
     }
   }
 
-  // Move compiled output to the real directory
   for (const auto& entry : std::filesystem::directory_iterator(temp_dir, ec)) {
     auto dest = config_.output_directory / entry.path().filename();
     std::filesystem::copy(entry.path(), dest, std::filesystem::copy_options::overwrite_existing,
@@ -99,7 +97,6 @@ auto ClrHotReload::CompileScripts() const -> Result<void> {
 auto ClrHotReload::DoReload() -> Result<void> {
   ATLAS_LOG_INFO("Hot reload: starting...");
 
-  // 1. Compile if enabled
   if (config_.auto_compile) {
     auto compile_result = CompileScripts();
     if (!compile_result) {
@@ -108,7 +105,6 @@ auto ClrHotReload::DoReload() -> Result<void> {
     }
   }
 
-  // 2. C# side: serialize entity state and unload script context
   auto serialize_result = engine_.CallHotReload("SerializeAndUnload");
   if (!serialize_result) {
     ATLAS_LOG_ERROR("Hot reload: SerializeAndUnload failed: {}",
@@ -116,20 +112,16 @@ auto ClrHotReload::DoReload() -> Result<void> {
     return serialize_result.Error();
   }
 
-  // Release all C++ ClrObject instances holding GCHandles to script-assembly objects
   ClrObjectRegistry::Instance().ReleaseAll();
 
-  // 3. Clear C++ entity type registry (C# will re-register after load)
   EntityDefRegistry::Instance().clear();
 
-  // 4. C# side: load new assembly and restore entity state
   auto assembly_path = config_.output_directory / "Atlas.GameScripts.dll";
   auto load_result = engine_.CallHotReload("LoadAndRestore", assembly_path);
 
   if (!load_result) {
     ATLAS_LOG_ERROR("Hot reload: LoadAndRestore failed: {}", load_result.Error().Message());
 
-    // Attempt rollback from backup
     auto backup_dir = config_.output_directory / ".reload_backup";
     std::error_code ec;
     if (std::filesystem::exists(backup_dir, ec) && !std::filesystem::is_empty(backup_dir, ec)) {
@@ -153,7 +145,6 @@ auto ClrHotReload::DoReload() -> Result<void> {
     return load_result.Error();
   }
 
-  // 5. Reset file watcher to avoid re-triggering
   if (watcher_) watcher_->Reset();
 
   ATLAS_LOG_INFO("Hot reload: complete");

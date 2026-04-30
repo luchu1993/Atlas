@@ -48,25 +48,20 @@ auto Matrix4::LookAt(const Vector3& eye, const Vector3& target, const Vector3& u
 
   Matrix4 result = Identity();
 
-  // Row 0: right
   result(0, 0) = right.x;
   result(0, 1) = right.y;
   result(0, 2) = right.z;
   result(0, 3) = -right.Dot(eye);
 
-  // Row 1: up
   result(1, 0) = cam_up.x;
   result(1, 1) = cam_up.y;
   result(1, 2) = cam_up.z;
   result(1, 3) = -cam_up.Dot(eye);
 
-  // Row 2: -forward (looking down -Z)
   result(2, 0) = -forward.x;
   result(2, 1) = -forward.y;
   result(2, 2) = -forward.z;
   result(2, 3) = forward.Dot(eye);
-
-  // Row 3: 0, 0, 0, 1 (already set by identity)
 
   return result;
 }
@@ -110,7 +105,6 @@ auto Matrix4::Transposed() const -> Matrix4 {
 }
 
 auto Matrix4::Determinant() const -> float {
-  // Cofactor expansion along row 0
   float a00 = m[0], a01 = m[1], a02 = m[2], a03 = m[3];
   float a10 = m[4], a11 = m[5], a12 = m[6], a13 = m[7];
   float a20 = m[8], a21 = m[9], a22 = m[10], a23 = m[11];

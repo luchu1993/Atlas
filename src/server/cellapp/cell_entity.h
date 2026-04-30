@@ -26,7 +26,7 @@ class Witness;
 
 // Server-side cell entity; thin C++ shell over a C# script. Position/dir/
 // on_ground live here so RangeList shuffles avoid the interop boundary.
-// Destruction is reverse-declaration: witness → controllers → range_node_;
+// Destruction is reverse-declaration: witness -> controllers -> range_node_;
 // witness must clear before range_node_ unlinks.
 class CellEntity : public IEntityMotion {
  public:
@@ -53,7 +53,7 @@ class CellEntity : public IEntityMotion {
   [[nodiscard]] auto GetSpace() const -> const Space& { return space_; }
 
   // Real (real_data_ set) XOR Ghost (real_channel_ set). Ghosts are
-  // passive — writes must log+skip (see cellapp_native_provider.cc).
+  // passive - writes must log+skip (see cellapp_native_provider.cc).
   [[nodiscard]] auto IsReal() const -> bool { return real_data_ != nullptr; }
   [[nodiscard]] auto IsGhost() const -> bool { return real_channel_ != nullptr; }
 
@@ -130,7 +130,7 @@ class CellEntity : public IEntityMotion {
 
   // event_seq: ordered/cumulative property changes (Witness replays
   // history or falls back to snapshot). volatile_seq: latest-wins
-  // pos/dir. event_seq == volatile_seq == 0 ⇒ no-op frame.
+  // pos/dir. event_seq == volatile_seq == 0 => no-op frame.
   struct ReplicationFrame {
     uint64_t event_seq{0};
     uint64_t volatile_seq{0};
@@ -140,8 +140,8 @@ class CellEntity : public IEntityMotion {
     math::Vector3 direction{1.f, 0.f, 0.f};
     bool on_ground{false};
 
-    // First Witness builds the envelope; siblings reuse → eliminates
-    // N×M serialisation. mutable: populated through const access.
+    // First Witness builds the envelope; siblings reuse -> eliminates
+    // NxM serialisation. mutable: populated through const access.
     mutable std::vector<std::byte> cached_other_envelope;
   };
 

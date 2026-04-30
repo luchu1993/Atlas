@@ -13,9 +13,6 @@
 
 namespace atlas {
 
-// Concrete instantiation of BaseNativeProvider (constructor is protected).
-// Used as the default provider when a subclass does not override
-// create_native_provider().
 class DefaultNativeProvider final : public BaseNativeProvider {};
 
 ScriptApp::ScriptApp(EventDispatcher& dispatcher, NetworkInterface& network)
@@ -23,14 +20,9 @@ ScriptApp::ScriptApp(EventDispatcher& dispatcher, NetworkInterface& network)
 
 ScriptApp::~ScriptApp() = default;
 
-// ============================================================================
-// Init
-// ============================================================================
-
 auto ScriptApp::Init(int argc, char* argv[]) -> bool {
   if (!ServerApp::Init(argc, argv)) return false;
 
-  // 1. Create native API provider (must happen before CLR starts)
   native_provider_ = CreateNativeProvider();
   SetNativeApiProvider(native_provider_.get());
 
@@ -95,7 +87,6 @@ auto ScriptApp::Init(int argc, char* argv[]) -> bool {
   bootstrap_args.error_get_code =
       reinterpret_cast<decltype(bootstrap_args.error_get_code)>((*error_code_result)());
 
-  // 2. Create and configure the CLR script engine
   auto clr = std::make_unique<ClrScriptEngine>();
 
   ClrScriptEngine::Config clr_config;
@@ -111,14 +102,12 @@ auto ScriptApp::Init(int argc, char* argv[]) -> bool {
   }
 
   script_engine_ = std::move(clr);
-  // 3. Start CoreCLR
   auto init_result = script_engine_->Initialize();
   if (!init_result) {
     ATLAS_LOG_ERROR("ScriptApp: script engine initialize failed: {}",
                     init_result.Error().Message());
     return false;
   }
-  // 4. Load Atlas.Runtime.dll (and user assemblies if configured)
   if (!Config().script_assembly.empty()) {
     auto load_result = script_engine_->LoadModule(Config().script_assembly);
     if (!load_result) {
@@ -128,18 +117,12 @@ auto ScriptApp::Init(int argc, char* argv[]) -> bool {
     }
   }
 
-  // 5. Trigger C# OnInit
   script_engine_->OnInit(false);
 
-  // 6. Subclass hook
   OnScriptReady();
 
   return true;
 }
-
-// ============================================================================
-// Fini
-// ============================================================================
 
 void ScriptApp::Fini() {
   using SetNativeApiProviderFn = void (*)(void*);
@@ -164,10 +147,6 @@ void ScriptApp::Fini() {
   ServerApp::Fini();
 }
 
-// ============================================================================
-// Tick
-// ============================================================================
-
 void ScriptApp::OnTickComplete() {
   if (script_engine_) {
     using namespace std::chrono;
@@ -176,21 +155,15 @@ void ScriptApp::OnTickComplete() {
   }
 }
 
-// ============================================================================
-// Subclass hooks
-// ============================================================================
-
 auto ScriptApp::CreateNativeProvider() -> std::unique_ptr<INativeApiProvider> {
   return std::make_unique<DefaultNativeProvider>();
 }
 
 void ScriptApp::ReloadScripts() {
-  // Stub — full hot-reload is not implemented yet.
   if (!script_engine_) return;
 
   ATLAS_LOG_INFO("ScriptApp: reloading scripts...");
   script_engine_->OnShutdown();
-  // reload_module would go here once ClrScriptEngine exposes it
   script_engine_->OnInit(true);
   OnScriptReady();
 }

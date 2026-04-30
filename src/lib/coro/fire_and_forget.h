@@ -8,13 +8,9 @@
 
 namespace atlas {
 
-// ============================================================================
-// FireAndForget — eager coroutine, nobody co_awaits the result
-// ============================================================================
-
 class FireAndForget {
  public:
-  struct promise_type {  // NOLINT(readability-identifier-naming) — required by coroutine protocol
+  struct promise_type {  // NOLINT(readability-identifier-naming)
     auto get_return_object() -> FireAndForget { return {}; }
     auto initial_suspend() noexcept -> std::suspend_never { return {}; }
     auto final_suspend() noexcept -> std::suspend_never { return {}; }

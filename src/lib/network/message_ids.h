@@ -6,58 +6,33 @@
 
 #include "network/message.h"
 
-// ============================================================================
-// Central MessageID registry
-//
-// Every Atlas message ID is defined here as an enum class value.
-// This file is the single source of truth — no numeric literals appear
-// in individual message headers.
-//
-// Rules for adding a new message:
-//   1. Find the enum class for the owning subsystem below.
-//   2. Append a new enumerator at the end of that block.
-//   3. Never re-use or rename an existing value (it breaks wire compatibility).
-//   4. If the subsystem does not exist yet, add a new enum class and update
-//      the range comment table at the top of common_messages.hpp.
-//
-// Duplicate values within the same enum class are a compile error on all
-// major compilers (-Wduplicate-enum / C4369).
-// Out-of-range values are caught by the static_assert blocks below.
-//
-// Range allocation (mirrors the comment in common_messages.hpp):
-//   0     –    99   reserved
-//   100   –   199   common      (Common)
-//   1000  –  1099   machined    (Machined)
-//   2000  –  2999   BaseApp     (BaseApp)
-//   3000  –  3999   CellApp     (CellApp)   — reserved
-//   4000  –  4999   DBApp       (DBApp)
-//   5000  –  5999   LoginApp    (Login)
-//   6000  –  6999   BaseAppMgr  (BaseAppMgr)
-//   7000  –  7999   CellAppMgr  (CellAppMgr)
-//   8000  –  8999   DBAppMgr    (DBAppMgr)   — reserved
-//   10000 – 19999   external client ↔ server — reserved
-//   50000 – 59999   C# RPC forwarding        — reserved
-// ============================================================================
+// Message IDs are wire-compatible; append only, never re-use or rename.
+// Ranges:
+//   0     -    99   reserved
+//   100   -   199   common
+//   1000  -  1099   machined
+//   2000  -  2999   BaseApp
+//   3000  -  3999   CellApp
+//   4000  -  4999   DBApp
+//   5000  -  5999   LoginApp
+//   6000  -  6999   BaseAppMgr
+//   7000  -  7999   CellAppMgr
+//   8000  -  8999   DBAppMgr
+//   10000 - 19999   external client/server
+//   50000 - 59999   C# RPC forwarding
 
 namespace atlas::msg_id {
 
-// ── helpers ──────────────────────────────────────────────────────────────────
-
-// Cast an enum class value to MessageID (uint16_t) for use in MessageDesc.
 template <typename E>
 [[nodiscard]] constexpr auto Id(E e) -> MessageID {
   static_assert(std::is_enum_v<E>);
   return static_cast<MessageID>(e);
 }
 
-// ── Common (100–199) ─────────────────────────────────────────────────────────
-
 enum class Common : uint16_t {
   kHeartbeat = 100,
   kShutdownRequest = 101,
 };
-
-// ── Machined (1000–1099) ─────────────────────────────────────────────────────
 
 enum class Machined : uint16_t {
   kRegister = 1000,
@@ -77,10 +52,7 @@ enum class Machined : uint16_t {
   kWatcherReply = 1023,
 };
 
-// ── BaseApp (2000–2999) ───────────────────────────────────────────────────────
-
 enum class BaseApp : uint16_t {
-  // Internal: BaseAppMgr / CellApp / DBApp → BaseApp
   kCreateBase = 2000,
   kCreateBaseFromDb = 2001,
   kAcceptClient = 2002,
@@ -88,68 +60,39 @@ enum class BaseApp : uint16_t {
   kCellEntityDestroyed = 2011,
   kCurrentCell = 2012,
   kCellRpcForward = 2013,
-  // 2014 retired (was kSelfRpcFromCell; subsumed by kBroadcastRpcFromCell)
+  // 2014 reserved.
   kReplicatedDeltaFromCell = 2015,
   kBroadcastRpcFromCell = 2016,
   kReplicatedReliableDeltaFromCell = 2017,
-  // Internal: CellApp → BaseApp. Periodic opaque-bytes snapshot of the
-  // cell-authoritative CELL_DATA properties, stored verbatim on the
-  // BaseApp's Proxy as cell_backup_data_ for DB writes / reviver /
-  // cell-migration. BaseApp never reads the bytes — only relays them.
+  // CellApp -> BaseApp opaque CELL_DATA snapshot for DB writes and recovery.
   kBackupCellEntity = 2018,
-  // Internal: CellApp → BaseApp. Periodic owner-scope full snapshot of
-  // cell-authoritative properties, for BaseApp to relay as
-  // ReplicatedBaselineToClient (0xF002) to the owning client. Baseline
-  // safety net for reliable="false" properties whose backing field lives
-  // on the cell side. Wire payload is the cell's SerializeForOwnerClient
-  // output.
+  // CellApp -> BaseApp owner baseline for reliable=false client properties.
   kReplicatedBaselineFromCell = 2019,
-  // External: Client ↔ BaseApp
   kAuthenticate = 2020,
   kAuthenticateResult = 2021,
-  kClientBaseRpc = 2022,  // Client → BaseApp: exposed base method call
-  kClientCellRpc = 2023,  // Client → BaseApp: exposed cell method call (forwarded to CellApp)
-  // BaseApp → Client: notifies the client that its owning entity has
-  // changed (e.g. after a script-initiated GiveClientTo handoff). The
-  // client must use the new entity_id as the target for subsequent
-  // ClientCellRpc messages; the old id is no longer bound to the channel.
+  kClientBaseRpc = 2022,
+  kClientCellRpc = 2023,
+  // BaseApp -> Client owner handoff; old entity_id is no longer channel-bound.
   kEntityTransferred = 2024,
-  // BaseApp → Client: notifies the client that its bound entity's cell
-  // counterpart is live and ready to accept ClientCellRpc. Arrives after
-  // CellEntityCreated from the CellApp has bound cell_addr on the proxy.
-  // Without this, clients racing CreateCellEntity would have their first
-  // cell RPCs dropped at BaseApp as "no cell channel for target entity".
+  // BaseApp -> Client gate for the first ClientCellRpc after cell creation.
   kCellReady = 2025,
-  // CellAppMgr → BaseApp: a CellApp has died and its BSP leaves have
-  // been rehomed. BaseApp uses the carried {space → new_host} map
-  // to re-ship any Reals it was hosting on the dead addr to their
-  // new homes, using the last BackupCellEntity data it has cached.
+  // CellAppMgr -> BaseApp remap for Reals hosted on a dead CellApp.
   kCellAppDeath = 2026,
-  // Client → BaseApp: accumulated event_seq gap report. Clients notice
-  // when a reliable delta stream arrives with a seq jump (dropped
-  // envelope on the wire or a dispatcher hiccup) and keep a running
-  // counter; this message relays the delta to the server so ops can
-  // alert on the aggregate `baseapp/client_event_seq_gaps_total`
-  // watcher.
+  // Client -> BaseApp delta for baseapp/client_event_seq_gaps_total.
   kClientEventSeqReport = 2027,
-  // Internal: BaseApp ↔ BaseApp
   kForceLogoff = 2030,
   kForceLogoffAck = 2031,
 };
 
-// ── CellApp (3000–3999) ───────────────────────────────────────────────────────
-//
-// These are CellApp's inbound messages; CellApp's outbound traffic reuses
-// the BaseApp enum (CellEntityCreated / CellRpcForward / …) because the
-// physical destination is BaseApp and message IDs are a single flat space.
+// CellApp outbound traffic to BaseApp reuses BaseApp IDs.
 
 enum class CellApp : uint16_t {
   kCreateCellEntity = 3000,
   kDestroyCellEntity = 3002,
-  // Client → BaseApp → CellApp (client-initiated cell RPC, REAL_ONLY,
+  // Client -> BaseApp -> CellApp (client-initiated cell RPC, REAL_ONLY,
   // requires Exposed + sourceEntityID validation on arrival).
   kClientCellRpcForward = 3003,
-  // Server-internal Base → CellApp (REAL_ONLY, no Exposed check — the
+  // Server-internal Base -> CellApp (REAL_ONLY, no Exposed check; the
   // base side is already trusted).
   kInternalCellRpc = 3004,
   kCreateSpace = 3010,
@@ -158,8 +101,7 @@ enum class CellApp : uint16_t {
   kEnableWitness = 3021,
   kDisableWitness = 3022,
   kSetAoIRadius = 3023,
-  // ── inter-CellApp Real/Ghost + Offload (3100–3199) ─────────────────────
-  // Real ↔ Ghost replication (Real CellApp → Ghost CellApp).
+  // Inter-CellApp Real/Ghost replication and offload.
   kCreateGhost = 3100,
   kDeleteGhost = 3101,
   kGhostPositionUpdate = 3102,
@@ -167,30 +109,22 @@ enum class CellApp : uint16_t {
   kGhostSetReal = 3104,
   kGhostSetNextReal = 3105,
   kGhostSnapshotRefresh = 3106,
-  // Entity migration between CellApps.
   kOffloadEntity = 3110,
   kOffloadEntityAck = 3111,
 };
 
-// ── CellAppMgr (7000–7099) ────────────────────────────────────────────────────
-//
-// Spans both CellApp↔CellAppMgr registration/load and CellAppMgr→CellApp
-// control plane (AddCell/UpdateGeometry/ShouldOffload). Convention: same
-// subsystem owns the enum regardless of direction (matches BaseAppMgr, where
-// RegisterBaseAppAck lives here despite the BaseAppMgr → BaseApp direction).
+// CellAppMgr owns both registration/load and control-plane IDs.
 
 enum class CellAppMgr : uint16_t {
-  kRegisterCellApp = 7000,     // CellApp → CellAppMgr
-  kRegisterCellAppAck = 7001,  // CellAppMgr → CellApp
-  kInformCellLoad = 7002,      // CellApp → CellAppMgr
-  kCreateSpaceRequest = 7003,  // BaseApp/script → CellAppMgr
-  kAddCellToSpace = 7004,      // CellAppMgr → CellApp
-  kUpdateGeometry = 7005,      // CellAppMgr → CellApp
-  kShouldOffload = 7006,       // CellAppMgr → CellApp
-  kSpaceCreatedResult = 7007,  // CellAppMgr → BaseApp (reply to CreateSpaceRequest)
+  kRegisterCellApp = 7000,
+  kRegisterCellAppAck = 7001,
+  kInformCellLoad = 7002,
+  kCreateSpaceRequest = 7003,
+  kAddCellToSpace = 7004,
+  kUpdateGeometry = 7005,
+  kShouldOffload = 7006,
+  kSpaceCreatedResult = 7007,
 };
-
-// ── DBApp (4000–4999) ─────────────────────────────────────────────────────────
 
 enum class DBApp : uint16_t {
   kWriteEntity = 4000,
@@ -210,8 +144,6 @@ enum class DBApp : uint16_t {
   kPutEntityIdsAck = 4023,
 };
 
-// ── LoginApp (5000–5999) ──────────────────────────────────────────────────────
-
 enum class Login : uint16_t {
   kLoginRequest = 5000,
   kLoginResult = 5001,
@@ -224,8 +156,6 @@ enum class Login : uint16_t {
   kCancelPrepareLogin = 5008,
 };
 
-// ── BaseAppMgr (6000–6999) ────────────────────────────────────────────────────
-
 enum class BaseAppMgr : uint16_t {
   kRegisterBaseApp = 6000,
   kRegisterBaseAppAck = 6001,
@@ -236,19 +166,14 @@ enum class BaseAppMgr : uint16_t {
   kGlobalBaseNotification = 6012,
 };
 
-// ── Range static_asserts ──────────────────────────────────────────────────────
-// Catch any value accidentally placed outside its allocated band.
-
 #define ATLAS_ASSERT_ID_RANGE(enumerator, lo, hi)                                             \
   static_assert(                                                                              \
       static_cast<uint16_t>(enumerator) >= (lo) && static_cast<uint16_t>(enumerator) <= (hi), \
       #enumerator " is outside its allocated ID range")
 
-// Common
 ATLAS_ASSERT_ID_RANGE(Common::kHeartbeat, 100, 199);
 ATLAS_ASSERT_ID_RANGE(Common::kShutdownRequest, 100, 199);
 
-// Machined
 ATLAS_ASSERT_ID_RANGE(Machined::kRegister, 1000, 1099);
 ATLAS_ASSERT_ID_RANGE(Machined::kDeregister, 1000, 1099);
 ATLAS_ASSERT_ID_RANGE(Machined::kQuery, 1000, 1099);
@@ -265,7 +190,6 @@ ATLAS_ASSERT_ID_RANGE(Machined::kWatcherResponse, 1000, 1099);
 ATLAS_ASSERT_ID_RANGE(Machined::kWatcherForward, 1000, 1099);
 ATLAS_ASSERT_ID_RANGE(Machined::kWatcherReply, 1000, 1099);
 
-// BaseApp
 ATLAS_ASSERT_ID_RANGE(BaseApp::kCreateBase, 2000, 2999);
 ATLAS_ASSERT_ID_RANGE(BaseApp::kCreateBaseFromDb, 2000, 2999);
 ATLAS_ASSERT_ID_RANGE(BaseApp::kAcceptClient, 2000, 2999);
@@ -286,7 +210,6 @@ ATLAS_ASSERT_ID_RANGE(BaseApp::kCellAppDeath, 2000, 2999);
 ATLAS_ASSERT_ID_RANGE(BaseApp::kForceLogoff, 2000, 2999);
 ATLAS_ASSERT_ID_RANGE(BaseApp::kForceLogoffAck, 2000, 2999);
 
-// CellApp
 ATLAS_ASSERT_ID_RANGE(CellApp::kCreateCellEntity, 3000, 3999);
 ATLAS_ASSERT_ID_RANGE(CellApp::kDestroyCellEntity, 3000, 3999);
 ATLAS_ASSERT_ID_RANGE(CellApp::kClientCellRpcForward, 3000, 3999);
@@ -307,7 +230,6 @@ ATLAS_ASSERT_ID_RANGE(CellApp::kGhostSnapshotRefresh, 3000, 3999);
 ATLAS_ASSERT_ID_RANGE(CellApp::kOffloadEntity, 3000, 3999);
 ATLAS_ASSERT_ID_RANGE(CellApp::kOffloadEntityAck, 3000, 3999);
 
-// CellAppMgr
 ATLAS_ASSERT_ID_RANGE(CellAppMgr::kRegisterCellApp, 7000, 7099);
 ATLAS_ASSERT_ID_RANGE(CellAppMgr::kRegisterCellAppAck, 7000, 7099);
 ATLAS_ASSERT_ID_RANGE(CellAppMgr::kInformCellLoad, 7000, 7099);
@@ -317,7 +239,6 @@ ATLAS_ASSERT_ID_RANGE(CellAppMgr::kUpdateGeometry, 7000, 7099);
 ATLAS_ASSERT_ID_RANGE(CellAppMgr::kShouldOffload, 7000, 7099);
 ATLAS_ASSERT_ID_RANGE(CellAppMgr::kSpaceCreatedResult, 7000, 7099);
 
-// DBApp
 ATLAS_ASSERT_ID_RANGE(DBApp::kWriteEntity, 4000, 4999);
 ATLAS_ASSERT_ID_RANGE(DBApp::kWriteEntityAck, 4000, 4999);
 ATLAS_ASSERT_ID_RANGE(DBApp::kCheckoutEntity, 4000, 4999);
@@ -334,7 +255,6 @@ ATLAS_ASSERT_ID_RANGE(DBApp::kGetEntityIdsAck, 4000, 4999);
 ATLAS_ASSERT_ID_RANGE(DBApp::kPutEntityIds, 4000, 4999);
 ATLAS_ASSERT_ID_RANGE(DBApp::kPutEntityIdsAck, 4000, 4999);
 
-// Login
 ATLAS_ASSERT_ID_RANGE(Login::kLoginRequest, 5000, 5999);
 ATLAS_ASSERT_ID_RANGE(Login::kLoginResult, 5000, 5999);
 ATLAS_ASSERT_ID_RANGE(Login::kAuthLogin, 5000, 5999);
@@ -345,7 +265,6 @@ ATLAS_ASSERT_ID_RANGE(Login::kPrepareLogin, 5000, 5999);
 ATLAS_ASSERT_ID_RANGE(Login::kPrepareLoginResult, 5000, 5999);
 ATLAS_ASSERT_ID_RANGE(Login::kCancelPrepareLogin, 5000, 5999);
 
-// BaseAppMgr
 ATLAS_ASSERT_ID_RANGE(BaseAppMgr::kRegisterBaseApp, 6000, 6999);
 ATLAS_ASSERT_ID_RANGE(BaseAppMgr::kRegisterBaseAppAck, 6000, 6999);
 ATLAS_ASSERT_ID_RANGE(BaseAppMgr::kBaseAppReady, 6000, 6999);

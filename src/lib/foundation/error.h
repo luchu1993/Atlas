@@ -13,10 +13,6 @@
 
 namespace atlas {
 
-// ============================================================================
-// ErrorCode
-// ============================================================================
-
 enum class ErrorCode : uint32_t {
   kNone = 0,
   kInvalidArgument,
@@ -30,7 +26,6 @@ enum class ErrorCode : uint32_t {
   kNotSupported,
   kInternalError,
 
-  // Network error codes
   kConnectionRefused,
   kConnectionReset,
   kAddressInUse,
@@ -40,10 +35,8 @@ enum class ErrorCode : uint32_t {
   kRateLimited,
   kChannelCondemned,
 
-  // Coroutine error codes
   kCancelled,
 
-  // Script error codes
   kScriptError,
   kScriptTypeError,
   kScriptValueError,
@@ -52,10 +45,6 @@ enum class ErrorCode : uint32_t {
 };
 
 [[nodiscard]] auto ErrorCodeName(ErrorCode code) -> std::string_view;
-
-// ============================================================================
-// Error
-// ============================================================================
 
 class Error {
  public:
@@ -78,15 +67,11 @@ class Error {
   std::string message_;
 };
 
-// ============================================================================
-// Result<T, E>
-// ============================================================================
-
 template <typename T, typename E = Error>
 class Result {
  public:
   // NOLINTBEGIN(google-explicit-constructor)
-  // Implicit construction from value or error — intentional for Result ergonomics.
+  // Implicit construction from value or error keeps Result returns concise.
   Result(const T& value) noexcept(std::is_nothrow_copy_constructible_v<T>) : storage_(value) {}
 
   Result(T&& value) noexcept(std::is_nothrow_move_constructible_v<T>)
@@ -172,14 +157,9 @@ class Result {
   std::variant<T, E> storage_;
 };
 
-// ============================================================================
-// Result<void, E> specialization
-// ============================================================================
-
 template <typename E>
 class Result<void, E> {
  public:
-  // Success: no E is constructed.
   Result() noexcept : storage_(std::in_place_index<0>) {}
 
   // NOLINTBEGIN(google-explicit-constructor)
@@ -197,15 +177,10 @@ class Result<void, E> {
   [[nodiscard]] auto Error() const& -> const E& { return std::get<1>(storage_); }
 
  private:
-  // index 0 = success (monostate), index 1 = error
   std::variant<std::monostate, E> storage_;
 };
 
 }  // namespace atlas
-
-// ============================================================================
-// Assertion support
-// ============================================================================
 
 using AssertHandler = void (*)(std::string_view expr, std::string_view msg,
                                std::source_location loc);
@@ -214,10 +189,6 @@ void SetAssertHandler(AssertHandler handler);
 
 [[noreturn]] void DefaultAssertHandler(std::string_view expr, std::string_view msg,
                                        std::source_location loc);
-
-// ============================================================================
-// Assertion macros
-// ============================================================================
 
 #if ATLAS_DEBUG
 #define ATLAS_ASSERT(expr)                                              \

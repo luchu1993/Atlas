@@ -41,7 +41,7 @@ class BaseEntity {
   void SetEntityData(std::vector<std::byte> data) { entity_data_ = std::move(data); }
 
   // CELL_DATA-scope blob pushed up by the cell. BaseApp NEVER deserialises
-  // it — just holds it for DB writes, reviver, or migration.
+  // it - just holds it for DB writes, reviver, or migration.
   [[nodiscard]] auto CellBackupData() const -> const std::vector<std::byte>& {
     return cell_backup_data_;
   }

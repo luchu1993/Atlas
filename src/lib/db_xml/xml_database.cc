@@ -42,10 +42,6 @@ auto EscapeJsonString(std::string_view value) -> std::string {
 
 namespace atlas {
 
-// ============================================================================
-// Destructor
-// ============================================================================
-
 XmlDatabase::~XmlDatabase() {
   if (started_) Shutdown();
 }
@@ -55,19 +51,13 @@ void XmlDatabase::SetFlushPolicy(FlushPolicy policy) {
   if (started_ && flush_policy_ == FlushPolicy::kImmediate) FlushDirtyState(true);
 }
 
-// ============================================================================
-// startup / shutdown
-// ============================================================================
-
 auto XmlDatabase::Startup(const DatabaseConfig& config, const EntityDefRegistry& entity_defs)
     -> Result<void> {
   base_dir_ = config.xml_dir;
   entity_defs_ = &entity_defs;
 
-  // Build type_names_ map
   for (const auto& type : entity_defs.AllTypes()) type_names_[type.type_id] = type.name;
 
-  // Ensure base directory exists
   std::error_code ec;
   std::filesystem::create_directories(base_dir_, ec);
   if (ec) {
@@ -93,10 +83,6 @@ void XmlDatabase::Shutdown() {
   ATLAS_LOG_INFO("XmlDatabase: shut down");
 }
 
-// ============================================================================
-// CRUD
-// ============================================================================
-
 void XmlDatabase::PutEntity(DatabaseID dbid, uint16_t type_id, WriteFlags flags,
                             std::span<const std::byte> blob, const std::string& identifier,
                             std::function<void(PutResult)> callback) {
@@ -105,7 +91,6 @@ void XmlDatabase::PutEntity(DatabaseID dbid, uint16_t type_id, WriteFlags flags,
 
   if (HasFlag(flags, WriteFlags::kDelete)) {
     StageBlobDelete(type_id, dbid);
-    // Remove name index entry
     auto it = name_index_.find(type_id);
     if (it != name_index_.end()) {
       for (auto nit = it->second.begin(); nit != it->second.end(); ++nit) {
@@ -116,7 +101,6 @@ void XmlDatabase::PutEntity(DatabaseID dbid, uint16_t type_id, WriteFlags flags,
         }
       }
     }
-    // Clear checkout if LogOff
     if (HasFlag(flags, WriteFlags::kLogOff)) {
       checkouts_.erase(kEy);
       MarkCheckoutsDirty();
@@ -136,14 +120,12 @@ void XmlDatabase::PutEntity(DatabaseID dbid, uint16_t type_id, WriteFlags flags,
 
   StageBlobWrite(type_id, dbid, blob);
 
-  // Update name index
   if (!identifier.empty()) {
     LoadIndex(type_id);
     name_index_[type_id][identifier] = dbid;
     MarkIndexDirty(type_id);
   }
 
-  // Update auto-load flags
   if (HasFlag(flags, WriteFlags::kAutoLoadOn)) {
     auto_load_set_.insert(CheckoutKey(type_id, dbid));
     MarkAutoLoadDirty();
@@ -152,7 +134,6 @@ void XmlDatabase::PutEntity(DatabaseID dbid, uint16_t type_id, WriteFlags flags,
     MarkAutoLoadDirty();
   }
 
-  // Clear checkout if LogOff
   if (HasFlag(flags, WriteFlags::kLogOff)) {
     checkouts_.erase(CheckoutKey(type_id, dbid));
     MarkCheckoutsDirty();
@@ -253,7 +234,6 @@ void XmlDatabase::DelEntity(DatabaseID dbid, uint16_t type_id,
   }
   StageBlobDelete(type_id, dbid);
 
-  // Remove name index entry
   auto it = name_index_.find(type_id);
   if (it != name_index_.end()) {
     for (auto nit = it->second.begin(); nit != it->second.end(); ++nit) {
@@ -295,10 +275,6 @@ void XmlDatabase::LookupByName(uint16_t type_id, const std::string& identifier,
   FireOrDefer([cb = std::move(callback), result]() mutable { cb(result); });
 }
 
-// ============================================================================
-// Checkout
-// ============================================================================
-
 void XmlDatabase::CheckoutEntity(DatabaseID dbid, uint16_t type_id, const CheckoutInfo& new_owner,
                                  std::function<void(GetResult)> callback) {
   GetResult result;
@@ -313,7 +289,6 @@ void XmlDatabase::CheckoutEntity(DatabaseID dbid, uint16_t type_id, const Checko
   auto key = CheckoutKey(type_id, dbid);
   auto cit = checkouts_.find(key);
   if (cit != checkouts_.end()) {
-    // Already checked out
     result.success = true;
     result.data.dbid = dbid;
     result.data.type_id = type_id;
@@ -381,10 +356,6 @@ void XmlDatabase::ClearCheckoutsForAddress(const Address& base_addr,
   FireOrDefer([cb = std::move(callback), count]() mutable { cb(count); });
 }
 
-// ============================================================================
-// Auto-load
-// ============================================================================
-
 void XmlDatabase::GetAutoLoadEntities(std::function<void(std::vector<EntityData>)> callback) {
   std::vector<EntityData> result;
   for (auto key : auto_load_set_) {
@@ -412,10 +383,6 @@ void XmlDatabase::SetAutoLoad(DatabaseID dbid, uint16_t type_id, bool auto_load)
   MarkAutoLoadDirty();
   FlushAfterMutation();
 }
-
-// ============================================================================
-// process_results
-// ============================================================================
 
 void XmlDatabase::ProcessResults() {
   FlushDirtyState();
@@ -564,10 +531,6 @@ void XmlDatabase::FlushDirtyState(bool force) {
   }
 }
 
-// ============================================================================
-// Private helpers — paths
-// ============================================================================
-
 auto XmlDatabase::TypeName(uint16_t type_id) const -> std::string {
   auto it = type_names_.find(type_id);
   if (it != type_names_.end()) return it->second;
@@ -581,10 +544,6 @@ auto XmlDatabase::TypeDir(uint16_t type_id) const -> std::filesystem::path {
 auto XmlDatabase::BlobPath(uint16_t type_id, DatabaseID dbid) const -> std::filesystem::path {
   return TypeDir(type_id) / std::format("{}.bin", dbid);
 }
-
-// ============================================================================
-// Private helpers — I/O
-// ============================================================================
 
 void XmlDatabase::LoadMeta() {
   auto path = base_dir_ / "meta.json";
@@ -840,10 +799,6 @@ void XmlDatabase::FlushPendingBlobWrites(int budget) {
     ++written;
   }
 }
-
-// ============================================================================
-// Private helpers — deferred dispatch
-// ============================================================================
 
 void XmlDatabase::FireOrDefer(std::function<void()> cb) {
   if (deferred_mode_) {

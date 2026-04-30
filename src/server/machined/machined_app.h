@@ -9,23 +9,10 @@
 
 namespace atlas::machined {
 
-// ============================================================================
-// MachinedApp — the machined process main application class
-//
-// Responsibilities:
-//   - Accept TCP connections from other server processes.
-//   - Handle Register / Deregister / Heartbeat / Query messages.
-//   - Manage birth/death subscriptions via ListenerManager.
-//   - Forward WatcherRequest to target processes via WatcherForwarder.
-//   - Send graceful-shutdown notification to registered processes on exit.
-//   - Expose runtime stats via WatcherRegistry.
-// ============================================================================
-
 class MachinedApp : public ManagerApp {
  public:
   MachinedApp(EventDispatcher& dispatcher, NetworkInterface& network);
 
-  // Entry point for the machined process (delegates to run_app)
   static auto Run(int argc, char* argv[]) -> int;
 
  protected:
@@ -37,7 +24,6 @@ class MachinedApp : public ManagerApp {
   void OnTickComplete() override;
 
  private:
-  // Message handlers — called from interface_table dispatch
   void OnRegister(const Address& src, Channel* ch, const RegisterMessage& msg);
   void OnDeregister(const Address& src, Channel* ch, const DeregisterMessage& msg);
   void OnHeartbeat(const Address& src, Channel* ch, const HeartbeatMessage& msg);
@@ -46,13 +32,10 @@ class MachinedApp : public ManagerApp {
   void OnWatcherRequest(const Address& src, Channel* ch, const WatcherRequest& msg);
   void OnWatcherReply(const Address& src, Channel* ch, const WatcherReply& msg);
 
-  // Called when a TCP connection is accepted
   void OnAccept(Channel& ch);
 
-  // Called when a channel disconnects
   void OnDisconnect(Channel& ch);
 
-  // Heartbeat timeout checker — runs each tick
   void CheckHeartbeatTimeouts();
 
   ProcessRegistry process_registry_;
@@ -67,7 +50,6 @@ class MachinedApp : public ManagerApp {
   };
   std::vector<HeartbeatEntry> heartbeat_entries_;
 
-  // UDP port on which heartbeat datagrams are received (0 = not started)
   uint16_t heartbeat_udp_port_{0};
 };
 

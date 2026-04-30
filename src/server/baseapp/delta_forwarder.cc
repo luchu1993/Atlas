@@ -38,7 +38,7 @@ auto DeltaForwarder::Flush(Channel& client_ch, uint32_t budget_bytes) -> uint32_
   }
   queue_.erase(starved_begin, queue_.end());
 
-  // Pass 2: sort by (priority, deferred_ticks) desc; budget is fresh — Pass 1
+  // Pass 2: sort by (priority, deferred_ticks) desc; budget is fresh - Pass 1
   // sends do not consume it because starvation already overrode it.
   std::sort(queue_.begin(), queue_.end(), [](const PendingDelta& a, const PendingDelta& b) {
     if (a.priority != b.priority) return a.priority > b.priority;

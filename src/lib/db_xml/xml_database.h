@@ -12,31 +12,12 @@
 
 namespace atlas {
 
-// ============================================================================
-// XmlDatabase — file-based development/test database backend
-//
-// Storage layout:
-//   <xml_dir>/meta.json          — { "next_dbid": N }
-//   <xml_dir>/<TypeName>/        — one subdirectory per entity type
-//   <xml_dir>/<TypeName>/<id>.bin — entity blob (binary)
-//   <xml_dir>/<TypeName>/index.json — { "<identifier>": <dbid> }
-//   <xml_dir>/auto_load.json     — [{ "type_id": N, "dbid": N }, ...]
-//
-// Callback execution mode:
-//   - Default (deferred_mode_=false): callbacks are invoked synchronously
-//     inside each API call, before it returns.
-//   - Deferred (deferred_mode_=true): callbacks are queued and only invoked
-//     when process_results() is called.  Use this mode in tests to simulate
-//     the asynchronous behavior of the MySQL backend.
-//
 // Flush policy:
 //   - Buffered (default): blob writes are staged in memory and flushed later
 //     to keep the XML backend cheap during development. Successful callbacks
 //     mean "visible in this process", not "durable on disk".
 //   - Immediate: each mutating call flushes staged state before callbacks are
 //     observed. Use this for tests that need durable-on-return semantics.
-// ============================================================================
-
 class XmlDatabase : public IDatabase {
  public:
   enum class FlushPolicy {
@@ -97,7 +78,6 @@ class XmlDatabase : public IDatabase {
   void ProcessResults() override;
 
  private:
-  // ---- Storage helpers ----
   [[nodiscard]] auto TypeDir(uint16_t type_id) const -> std::filesystem::path;
   [[nodiscard]] auto TypeName(uint16_t type_id) const -> std::string;
   [[nodiscard]] auto BlobPath(uint16_t type_id, DatabaseID dbid) const -> std::filesystem::path;
@@ -128,10 +108,8 @@ class XmlDatabase : public IDatabase {
   void WriteBlob(uint16_t type_id, DatabaseID dbid, std::span<const std::byte> data);
   void DeleteBlob(uint16_t type_id, DatabaseID dbid);
 
-  // ---- Deferred callback queue ----
   void FireOrDefer(std::function<void()> cb);
 
-  // ---- State ----
   std::filesystem::path base_dir_;
   const EntityDefRegistry* entity_defs_{nullptr};
   DatabaseID next_dbid_{1};
@@ -145,11 +123,9 @@ class XmlDatabase : public IDatabase {
   bool checkouts_dirty_{false};
   bool password_hashes_dirty_{false};
 
-  // name → DBID index (per type_id)
   std::unordered_map<uint16_t, std::unordered_map<std::string, DatabaseID>> name_index_;
   std::unordered_set<uint16_t> dirty_indexes_;
 
-  // checkout: key = (type_id << 48) | (dbid & 0xFFFFFFFFFFFF)
   std::unordered_map<uint64_t, CheckoutInfo> checkouts_;
   std::unordered_map<uint64_t, std::string> password_hashes_;
   struct PendingBlobWrite {
@@ -160,16 +136,12 @@ class XmlDatabase : public IDatabase {
   };
   std::unordered_map<uint64_t, PendingBlobWrite> pending_blob_writes_;
 
-  // auto-load set: same key encoding
   std::set<uint64_t> auto_load_set_;
 
-  // type_id → type name (from EntityDefRegistry)
   std::unordered_map<uint16_t, std::string> type_names_;
 
-  // deferred callbacks
   std::deque<std::function<void()>> deferred_;
 
-  // blob read cache — populated on flush and disk reads, avoids repeated I/O
   mutable std::unordered_map<uint64_t, std::vector<std::byte>> blob_cache_;
   size_t pending_blob_bytes_{0};
 

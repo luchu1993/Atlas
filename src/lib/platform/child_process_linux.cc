@@ -47,7 +47,7 @@ ChildProcess::~ChildProcess() {
         impl_->reaped.store(true);
         break;
       }
-      ::usleep(100 * 1000);  // 100 ms × 20 = 2 s
+      ::usleep(100 * 1000);
     }
     if (!impl_->reaped.load()) {
       kill(impl_->pid, SIGKILL);
@@ -203,7 +203,7 @@ void ChildProcess::Kill() {
 auto ChildProcess::Wait(std::chrono::milliseconds timeout) -> std::optional<int> {
   if (!impl_ || impl_->pid <= 0) return std::nullopt;
   if (impl_->reaped.load()) return impl_->cached_exit;
-  // Poll-based wait — waitpid has no native timeout. 10 ms granularity is
+  // Poll-based wait because waitpid has no native timeout. 10 ms granularity is
   // acceptable for a test harness.
   const auto deadline = std::chrono::steady_clock::now() + timeout;
   while (std::chrono::steady_clock::now() < deadline) {
