@@ -315,7 +315,7 @@ void CellApp::TickBackupPump() {
   }
   auto fn = native_provider_->serialize_entity_fn();
 
-  for (const auto& [base_id, entity] : base_entity_population_) {
+  for (const auto& [base_id, entity] : entity_population_) {
     if (entity == nullptr || !entity->IsReal()) continue;
     const Address& base_addr = entity->BaseAddr();
     if (base_addr.Ip() == 0) continue;  // no base binding yet — skip until next pump
@@ -376,7 +376,7 @@ void CellApp::TickClientBaselinePump() {
   }
   auto fn = native_provider_->get_owner_snapshot_fn();
 
-  for (const auto& [base_id, entity] : base_entity_population_) {
+  for (const auto& [base_id, entity] : entity_population_) {
     if (entity == nullptr || !entity->IsReal()) continue;
     // Only client-bound (has Witness) entities receive baselines — keeps
     // broadcast traffic proportional to client count, not entity count.
@@ -408,8 +408,12 @@ auto CellApp::FindEntity(EntityID cell_id) -> CellEntity* {
 }
 
 auto CellApp::FindEntityByBaseId(EntityID base_id) -> CellEntity* {
-  auto it = base_entity_population_.find(base_id);
-  return it == base_entity_population_.end() ? nullptr : it->second;
+  // Post-unification: cell_entity_id == base_entity_id, so a single
+  // entity_population_ lookup serves both ids. IsReal() preserves the
+  // legacy semantics where this entry point only resolves Real entities
+  // (client RPCs must never dispatch to a Ghost).
+  auto* entity = FindEntity(base_id);
+  return (entity != nullptr && entity->IsReal()) ? entity : nullptr;
 }
 
 auto CellApp::FindSpace(SpaceID id) -> Space* {
