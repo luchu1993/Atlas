@@ -14,6 +14,17 @@ namespace atlas {
 using EntityID = uint32_t;
 inline constexpr EntityID kInvalidEntityID = 0;
 
+// IDs in [1, kFirstLocalEntityID) are server-allocated by DBApp's
+// EntityIdAllocator and cluster-stable. IDs in [kFirstLocalEntityID,
+// 0xFFFFFFFF] are reserved for client-only entities (effects, HUD
+// markers, prediction stand-ins) — the server must never mint into
+// this range. Mirrors BigWorld's FIRST_LOCAL_ENTITY_ID convention.
+inline constexpr EntityID kFirstLocalEntityID = 0x7F000000;
+
+[[nodiscard]] inline constexpr auto IsServerEntityId(EntityID id) -> bool {
+  return id != kInvalidEntityID && id < kFirstLocalEntityID;
+}
+
 // ============================================================================
 // SpaceID — uniquely identifies a spatial partition. In the single-CellApp
 // stage Space == Cell; the multi-CellApp path splits them.

@@ -213,3 +213,45 @@ TEST(EntityIdAllocator, LargeAllocationIsContiguous) {
   EXPECT_EQ(e, 10'000u);
   EXPECT_EQ(alloc.next_id(), 10'001u);
 }
+
+TEST(EntityIdAllocator, AllocateRefusesPastReservedBoundary) {
+  // Seed the persisted counter just below kFirstLocalEntityID so the
+  // next allocation collides with the client-local reserved range.
+  StubDatabase db;
+  db.stored_next_id = kFirstLocalEntityID - 5;
+  EntityIdAllocator alloc(db);
+  alloc.Startup([](bool) {});
+
+  // Fits exactly: 5 ids before the ceiling.
+  auto [s1, e1] = alloc.Allocate(5);
+  EXPECT_EQ(s1, kFirstLocalEntityID - 5);
+  EXPECT_EQ(e1, kFirstLocalEntityID - 1);
+  EXPECT_EQ(alloc.next_id(), kFirstLocalEntityID);
+
+  // Any further allocation must be refused, leaving the counter put.
+  auto [s2, e2] = alloc.Allocate(1);
+  EXPECT_EQ(s2, kInvalidEntityID);
+  EXPECT_EQ(e2, kInvalidEntityID);
+  EXPECT_EQ(alloc.next_id(), kFirstLocalEntityID);
+}
+
+TEST(EntityIdAllocator, AllocateRefusesRangeStraddlingBoundary) {
+  StubDatabase db;
+  db.stored_next_id = kFirstLocalEntityID - 3;
+  EntityIdAllocator alloc(db);
+  alloc.Startup([](bool) {});
+
+  // Asking for 10 ids when only 3 fit: all-or-nothing rejection.
+  auto [s, e] = alloc.Allocate(10);
+  EXPECT_EQ(s, kInvalidEntityID);
+  EXPECT_EQ(e, kInvalidEntityID);
+  EXPECT_EQ(alloc.next_id(), kFirstLocalEntityID - 3);
+}
+
+TEST(EntityTypes, IsServerEntityIdHelper) {
+  EXPECT_FALSE(IsServerEntityId(kInvalidEntityID));
+  EXPECT_TRUE(IsServerEntityId(1));
+  EXPECT_TRUE(IsServerEntityId(kFirstLocalEntityID - 1));
+  EXPECT_FALSE(IsServerEntityId(kFirstLocalEntityID));
+  EXPECT_FALSE(IsServerEntityId(0xFFFFFFFFu));
+}
