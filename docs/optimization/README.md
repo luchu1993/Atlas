@@ -138,6 +138,7 @@ Status legend: ✅ shipped · 🟡 unjustified at current data · 🔵 deferred
 | [adaptive_ghost_throttle.md](adaptive_ghost_throttle.md) | Cross-cell sync | 🔵 | `CellApp::TickGhostPump` is 0.045 % of CPU — single-cellapp deployment in the current baseline |
 | [network_dispatch_decoupling.md](network_dispatch_decoupling.md) | RUDP receive ↔ dispatch decoupling (Plan B) | ❌ reverted; A2 shipped instead | full Plan B was attempted (`49703d8`) then rolled back (`a78d540`); the surgical A2 — per-handler deadline yield via `DispatchMessagesBudgeted` + `pending_dispatch_buf_` — shipped (`c5680bd`) and covers the 500-client goal; full decoupling now subsumed by Plan D (`network_io_thread.md`) |
 | [channel_send_batching.md](channel_send_batching.md) | RUDP send-side coalescing via descriptor `urgency` flag (Plan C) | ✅ shipped | `7cfbb27` plumbing → `4057994` default flip → `938ca28`/`c44cb32` whitelist → `201a80a` cellapp dedupe → `0bd984c` OOM-only threshold → `bd5ca36` correctness fixes. Net: BaseApp `Channel::Send` 6.30 M / 31.8 % → 631 k / 3.1 % (-90 %); see "post-PR-2 baseline" section below |
+| [witness_channel_cache.md](witness_channel_cache.md) | Witness send path: cache the observer's RUDP `Channel*` in lambda capture | ✅ shipped | patches `0072` / `0073` (`3ab62ca`, 2026-04-30). Eliminates 2 hash lookups + dynamic_cast per `Witness::Event::Send`. 500-cli: Event::Send mean 805 ns → 322 ns (-60 %), Pump -46 %, cellapp Tick -28 %; stress run goes from `echo_loss=10.8 %` / `login_fail=644` / `unexpected_disc=64` to all-zero. See "post-channel-cache baseline" section below |
 | [network_io_thread.md](network_io_thread.md) | Multi-thread RUDP socket I/O via SPSC queues (Plan D) | 📋 design only · deferred | dedicated network thread + moodycamel `ReaderWriterQueue`; deferred until a fresh baseline shows dispatcher saturation persists post-A/B/C; targets 1 000+ clients/baseapp |
 
 ## 500-client baseline (`b1782e5`, 2026-04-28)
@@ -370,6 +371,77 @@ For the 5 000-client target topology (5 000 / 250 = 20 BaseApps), the
 per-process +108 MB at 500-cli would drop to about +50 MB at 250-cli
 each — still well under typical 4 GB / process budget on a
 production host.
+
+## 500-client baseline post-channel-cache (`3ab62ca`, 2026-04-30)
+
+Same workload as the post-PR-2 baseline (single-baseapp / single-cellapp /
+single-Space, 500 clients × 120 s). Captures in
+`.tmp/prof/baseline/{baseapp,cellapp,...}_3ab62ca_20260430-225152.tracy`.
+The pre-baseline reference here is `e45866b_20260430-134645` — captured at
+the same workload moments earlier on the same day, with the
+[witness_channel_cache.md](witness_channel_cache.md) work as the only
+intervening source change.
+
+### CellApp delta (`e45866b` → `3ab62ca`)
+
+| Zone | mean (b → n) | max (b → n) | total (b → n) |
+|---|---|---|---|
+| Tick | 12.8 ms → 9.2 ms (▼ -28 %) | **41.7 ms → 28.2 ms** (▼ -32 %) | 25.0 s → 18.0 s |
+| CellApp::TickWitnesses | 11.0 ms → 7.6 ms (▼ -31 %) | 35.4 ms → 17.5 ms (▼ -50 %) | 21.4 s → 14.8 s |
+| Witness::Update::Pump | 9.5 µs → **5.2 µs** (▼ -46 %) | 6.7 ms → 670 µs (▼ -90 %) | 10.4 s → 5.6 s |
+| **Witness::Event::Send** | **805 ns → 322 ns** (▼ -60 %) | 6.6 ms → 652 µs (▼ -90 %) | 6.86 s → 2.54 s |
+| Witness::Update::PriorityHeap | 5.5 µs → 3.3 µs (▼ -41 %) | 14.6 ms → 3.8 ms (▼ -74 %) | 6.07 s → 3.54 s |
+| NetworkInterface::OnRudpReadable | 299 µs → 244 µs (▼ -19 %) | 17.2 ms → 10.7 ms | 19.2 s → 18.8 s |
+
+`Event::Send` retreated from 335 ns at 200 cli to 805 ns at 500 cli pre-fix
+(scale-induced, the two hash maps growing under it). Post-fix it is 322 ns at
+500 cli — **the per-call retreat is gone**. The PriorityHeap drop is collateral:
+warmer cache once the lookup-pressure vanishes.
+
+### BaseApp under post-channel-cache load
+
+| Zone | calls (b → n) | mean (b → n) | total (b → n) | Note |
+|---|---|---|---|---|
+| Tick | 1 705 → **1 952** (+14 %) | 10.6 ms → 10.9 ms | — | tick rate restored to ~15 Hz; was being dragged down by cellapp backpressure |
+| Channel::HandleMessage | 15.94 M → **20.26 M** (+27 %) | 2 930 ns → 2 753 ns (-6 %) | 46.7 s → 55.8 s | more useful traffic, slightly cheaper per call |
+| Channel::Send | 616 k → 760 k (+23 %) | 8 563 ns → **7 488 ns** (-13 %) | — | RUDP no longer backed up |
+| OnRudpReadable | 83 714 → 81 660 | 708 µs → 808 µs (+14 %) | 59.3 s → 66.0 s | higher datagram density per readable callback (more concurrent clients) |
+
+BaseApp **was never the bottleneck** — it was waiting on cellapp. After
+the cellapp fix, baseapp does ~25 % more work (more concurrent active
+clients, higher message volume) at roughly the same per-tick wall-clock.
+
+### Other processes (loginapp / dbapp / baseappmgr / cellappmgr)
+
+No regressions; all four show flat or slightly improved numbers, dominated
+by the disappearance of failure-retry traffic:
+
+| Process | `Tick` mean Δ | Notable |
+|---|---|---|
+| LoginApp | 2.28 µs → 1.85 µs (-19 %) | login retry storm gone |
+| DBApp | 225 µs → 198 µs (-12 %) | re-auth queries reduced |
+| BaseAppMgr | 2.51 µs → 2.77 µs (+10 %) | absolute Δ +261 ns/tick — noise |
+| CellAppMgr | 2.69 µs → 2.49 µs (-7 %) | — |
+
+### Stress-run health
+
+| Signal | Pre (`e45866b`) | Post (`3ab62ca`) |
+|---|---|---|
+| `echo_loss` | 9 640 / 89 317 (10.8 %) | **158 / 103 042 (0.15 %)** |
+| `echo_rtt` p50 / p95 / p99 | 24.5 / 145.8 / 441.3 ms | **18.7 / 47.7 / 60.7 ms** |
+| `auth_latency` p50 / p95 / p99 | 95.6 / 425.2 / 803.9 ms | **73.5 / 191.6 / 207.9 ms** |
+| `timeout_fail` | 53 | **0** |
+| `unexpected_disc` | 64 | **0** |
+| `login_fail` | 644 | **0** |
+| `cell_ready / entity_transferred` | 2 543 / 2 910 (87 %) | **3 183 / 3 183 (100 %)** |
+| `online_at_end` | 237 | **482** |
+
+500-cli on a single-BaseApp / single-CellApp now runs the way 200-cli
+ran before: every failure-class signal is zero. The 1-BA per-process
+ceiling has lifted enough that the 500-cli "saturation cliff" called
+out in the post-PR-2 section is no longer where it was. Re-establish
+the 2-BA curve on top of this baseline before refining the per-process
+ceiling further.
 
 ## Strategic conclusion (`86aceee`)
 
