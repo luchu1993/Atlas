@@ -98,10 +98,7 @@ class Witness {
     // first SendEntityUpdate.
     uint64_t lod_enter_phase{0};
 
-    // Tick of the most recent SendEntityUpdate; seeded at HandleAoIEnter
-    // so a fresh entry isn't born "starving". PriorityHeap forces
-    // effective priority to 0.0 once age > WitnessStarvationThresholdTicks
-    // so peers chronically pushed out of the rank cut still surface.
+    // Seeded at AoI enter so new peers do not start as starving.
     uint64_t last_serviced_tick{0};
 
     static constexpr uint8_t kEnterPending = 0x01;

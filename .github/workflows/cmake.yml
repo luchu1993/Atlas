@@ -82,6 +82,14 @@ jobs:
       - name: Setup sccache
         uses: mozilla-actions/sccache-action@v0.0.6
 
+      - name: Cache sccache
+        uses: actions/cache@v4
+        with:
+          path: .sccache
+          key: sccache-${{ runner.os }}-${{ matrix.preset }}-${{ github.sha }}
+          restore-keys: |
+            sccache-${{ runner.os }}-${{ matrix.preset }}-
+
       - name: Cache NuGet packages
         uses: actions/cache@v4
         with:
@@ -108,7 +116,7 @@ jobs:
 
       - name: Configure
         env:
-          SCCACHE_GHA_ENABLED: 'true'
+          SCCACHE_DIR: ${{ github.workspace }}/.sccache
         run: >
           cmake --preset ${{ matrix.preset }}
           -DCMAKE_C_COMPILER_LAUNCHER=sccache
@@ -116,10 +124,12 @@ jobs:
 
       - name: Build
         env:
-          SCCACHE_GHA_ENABLED: 'true'
+          SCCACHE_DIR: ${{ github.workspace }}/.sccache
         run: cmake --build build/${{ matrix.preset }} --config ${{ matrix.config }}
 
       - name: sccache stats
+        env:
+          SCCACHE_DIR: ${{ github.workspace }}/.sccache
         run: sccache --show-stats
 
       - name: Unit Tests

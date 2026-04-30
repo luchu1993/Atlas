@@ -304,14 +304,11 @@ void Witness::Update(uint32_t max_packet_bytes) {
       UpdatePriority(cache);
       const double effective =
           (starvation_enabled && tick_count_ - cache.last_serviced_tick > starvation_threshold)
-              ? 0.0
+              ? -1.0
               : cache.priority;
       priority_queue_.emplace_back(effective, id);
     }
-    // Pre-cap eligible count - operator-visible signal for whether the
-    // soft cap is actually firing in production. Ops compare the plot
-    // line against the cap config value; sustained excursions above
-    // mean dense scenes are losing far peers to the rank cut.
+    // Pre-cap count shows whether the rank cut is active in production.
     ATLAS_PROFILE_PLOT("Witness::AoICap::Eligible", static_cast<int64_t>(priority_queue_.size()));
     const std::size_t cap = CellAppConfig::WitnessMaxAoIPeers();
     if (priority_queue_.size() > cap) {
