@@ -85,10 +85,13 @@ struct RudpLargeMsg {
 // ============================================================================
 
 template <typename Pred>
-static bool poll_both_until(EventDispatcher& a, EventDispatcher& b, Pred pred,
+static bool poll_both_until(NetworkInterface& a_ni, EventDispatcher& a, NetworkInterface& b_ni,
+                            EventDispatcher& b, Pred pred,
                             std::chrono::milliseconds timeout = std::chrono::milliseconds(1000)) {
   auto deadline = std::chrono::steady_clock::now() + timeout;
   while (std::chrono::steady_clock::now() < deadline) {
+    a_ni.FlushDirtySendChannels();
+    b_ni.FlushDirtySendChannels();
     a.ProcessOnce();
     b.ProcessOnce();
     if (pred()) return true;
@@ -138,7 +141,7 @@ TEST_F(RudpTwoNiTest, ClientToServerOneMessage) {
   auto send_result = ch->SendMessage(RudpIntMsg{42, "hello"});
   ASSERT_TRUE(send_result.HasValue()) << send_result.Error().Message();
 
-  ASSERT_TRUE(poll_both_until(server_disp_, client_disp_, [&] {
+  ASSERT_TRUE(poll_both_until(server_ni_, server_disp_, client_ni_, client_disp_, [&] {
     return received.load(std::memory_order_acquire);
   })) << "Server did not receive the RUDP message";
 
@@ -175,12 +178,13 @@ TEST_F(RudpTwoNiTest, RoundTripRequestReply) {
   (void)(*conn)->SendMessage(RudpIntMsg{7, "ping"});
 
   ASSERT_TRUE(poll_both_until(
-      server_disp_, client_disp_, [&] { return server_ni_.ChannelCount() >= 1u; },
-      std::chrono::milliseconds(1000)));
+      server_ni_, server_disp_, client_ni_, client_disp_,
+      [&] { return server_ni_.ChannelCount() >= 1u; }, std::chrono::milliseconds(1000)));
 
   // Allow the round-trip to complete.
   ASSERT_TRUE(poll_both_until(
-      server_disp_, client_disp_, [&] { return reply_received.load(std::memory_order_acquire); },
+      server_ni_, server_disp_, client_ni_, client_disp_,
+      [&] { return reply_received.load(std::memory_order_acquire); },
       std::chrono::milliseconds(2000)))
       << "Client did not receive the echo reply";
 
@@ -216,7 +220,8 @@ TEST_F(RudpTwoNiTest, MultipleMessagesInOrder) {
   }
 
   ASSERT_TRUE(poll_both_until(
-      server_disp_, client_disp_, [&] { return count.load(std::memory_order_acquire) >= kCount; },
+      server_ni_, server_disp_, client_ni_, client_disp_,
+      [&] { return count.load(std::memory_order_acquire) >= kCount; },
       std::chrono::milliseconds(2000)));
 
   ASSERT_EQ(static_cast<int>(received_seqs.size()), kCount);
@@ -258,8 +263,8 @@ TEST_F(RudpTwoNiTest, LargePayloadFragmentedAndReassembled) {
   ASSERT_TRUE(send_result.HasValue()) << send_result.Error().Message();
 
   ASSERT_TRUE(poll_both_until(
-      server_disp_, client_disp_, [&] { return received.load(std::memory_order_acquire); },
-      std::chrono::milliseconds(3000)))
+      server_ni_, server_disp_, client_ni_, client_disp_,
+      [&] { return received.load(std::memory_order_acquire); }, std::chrono::milliseconds(3000)))
       << "Large payload was never reassembled on the server";
 
   ASSERT_EQ(received_payload.size(), kPayloadSize);
@@ -301,7 +306,7 @@ TEST_F(RudpTwoNiTest, ServerChannelCountIncrementsOnConnect) {
   ASSERT_TRUE(conn.HasValue());
   (void)(*conn)->SendMessage(RudpIntMsg{0, "probe"});
 
-  ASSERT_TRUE(poll_both_until(server_disp_, client_disp_, [&] {
+  ASSERT_TRUE(poll_both_until(server_ni_, server_disp_, client_ni_, client_disp_, [&] {
     return server_ni_.ChannelCount() >= 1u;
   })) << "Server channel count did not increase after first RUDP datagram";
 }
