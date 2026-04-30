@@ -334,6 +334,11 @@ atlas_add_test(NAME test_aoi_trigger_hysteresis
   DEPS atlas_cellapp_lib atlas_space
 )
 
+atlas_add_test(NAME test_witness_aoi_cap
+  SOURCES test_witness_aoi_cap.cpp
+  DEPS atlas_cellapp_lib atlas_space
+)
+
 atlas_add_test(NAME test_cellapp_native_provider
   SOURCES test_cellapp_native_provider.cpp
   DEPS atlas_cellapp_lib atlas_space atlas_clrscript

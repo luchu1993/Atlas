@@ -76,6 +76,33 @@ class CellAppConfig {
   // dominates the tick.
   // JSON key: `witness_max_peers_per_tick`. Default 64.
   [[nodiscard]] static auto WitnessMaxPeersPerTick() -> uint32_t;
+
+  // Soft ceiling on the per-tick priority queue size. Witness::Update
+  // ranks all visible peers by squared distance; only the closest
+  // WitnessMaxAoIPeers compete for WitnessMaxPeersPerTick service slots.
+  // Far peers stay tracked in aoi_map_ (so AoI membership stays correct
+  // for snapshots and Leave events) but skip the pump until they climb
+  // back into the top N. Caps Pump CPU at high AoI density without
+  // affecting Enter/Leave correctness.
+  //
+  // Complementary to WitnessMaxPeersPerTick:
+  //   MaxAoIPeers      = which peers are eligible to be pumped (rank cut)
+  //   MaxPeersPerTick  = absolute CPU ceiling once eligible (call cap)
+  // With defaults (50 < 64) the rank cut binds first; the call cap is a
+  // burst backstop kept in case ops widen MaxAoIPeers later.
+  //
+  // JSON key: `witness_max_aoi_peers`. Default 50.
+  [[nodiscard]] static auto WitnessMaxAoIPeers() -> uint32_t;
+
+  // Anti-starvation backstop. A peer skipped past this many ticks since
+  // its last SendEntityUpdate gets its effective priority forced to 0.0
+  // for the next PriorityHeap build, guaranteeing it clears the
+  // WitnessMaxAoIPeers rank cut. Without this a chronically far peer in
+  // a dense close band could be perpetually pushed out of the top N.
+  // Set to 0 to disable.
+  // JSON key: `witness_starvation_threshold_ticks`. Default 30 (~2 s at
+  // the default 15 Hz cellapp tick).
+  [[nodiscard]] static auto WitnessStarvationThresholdTicks() -> uint32_t;
 };
 
 }  // namespace atlas

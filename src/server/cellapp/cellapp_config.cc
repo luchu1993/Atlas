@@ -45,6 +45,13 @@ ServerAppOption<uint32_t> s_witness_max_peers_per_tick{64u, "witness_max_peers_p
                                                        "cellapp/witness_max_peers_per_tick",
                                                        WatcherMode::kReadWrite};
 
+ServerAppOption<uint32_t> s_witness_max_aoi_peers{
+    50u, "witness_max_aoi_peers", "cellapp/witness_max_aoi_peers", WatcherMode::kReadWrite};
+
+ServerAppOption<uint32_t> s_witness_starvation_threshold_ticks{
+    30u, "witness_starvation_threshold_ticks", "cellapp/witness_starvation_threshold_ticks",
+    WatcherMode::kReadWrite};
+
 }  // namespace
 
 auto CellAppConfig::DefaultAoIRadius() -> float {
@@ -85,6 +92,14 @@ auto CellAppConfig::WitnessMaxPerObserverBudgetBytes() -> uint32_t {
 
 auto CellAppConfig::WitnessMaxPeersPerTick() -> uint32_t {
   return s_witness_max_peers_per_tick.Value();
+}
+
+auto CellAppConfig::WitnessMaxAoIPeers() -> uint32_t {
+  return s_witness_max_aoi_peers.Value();
+}
+
+auto CellAppConfig::WitnessStarvationThresholdTicks() -> uint32_t {
+  return s_witness_starvation_threshold_ticks.Value();
 }
 
 }  // namespace atlas

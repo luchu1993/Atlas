@@ -161,6 +161,7 @@ void Witness::HandleAoIEnter(CellEntity& peer) {
 
   cache.entity = &peer;
   cache.flags = EntityCache::kEnterPending;
+  cache.last_serviced_tick = tick_count_;
   pending_enter_ids_.push_back(peer.Id());
   peer.AddObserver(this);
   UpdatePriority(cache);
@@ -295,11 +296,29 @@ void Witness::Update(uint32_t max_packet_bytes) {
     ATLAS_PROFILE_ZONE_N("Witness::Update::PriorityHeap");
     priority_queue_.clear();
     priority_queue_.reserve(aoi_map_.size());
+    const uint64_t starvation_threshold = CellAppConfig::WitnessStarvationThresholdTicks();
+    const bool starvation_enabled = starvation_threshold > 0;
     for (auto& [id, cache] : aoi_map_) {
       if (!cache.IsUpdatable()) continue;
       if (tick_count_ < cache.lod_next_update_tick) continue;
       UpdatePriority(cache);
-      priority_queue_.emplace_back(cache.priority, id);
+      const double effective =
+          (starvation_enabled && tick_count_ - cache.last_serviced_tick > starvation_threshold)
+              ? 0.0
+              : cache.priority;
+      priority_queue_.emplace_back(effective, id);
+    }
+    // Pre-cap eligible count - operator-visible signal for whether the
+    // soft cap is actually firing in production. Ops compare the plot
+    // line against the cap config value; sustained excursions above
+    // mean dense scenes are losing far peers to the rank cut.
+    ATLAS_PROFILE_PLOT("Witness::AoICap::Eligible", static_cast<int64_t>(priority_queue_.size()));
+    const std::size_t cap = CellAppConfig::WitnessMaxAoIPeers();
+    if (priority_queue_.size() > cap) {
+      std::nth_element(priority_queue_.begin(), priority_queue_.begin() + cap,
+                       priority_queue_.end(),
+                       [](const auto& a, const auto& b) { return a.first < b.first; });
+      priority_queue_.resize(cap);
     }
     std::make_heap(priority_queue_.begin(), priority_queue_.end(),
                    [](const auto& a, const auto& b) { return a.first > b.first; });
@@ -325,6 +344,7 @@ void Witness::Update(uint32_t max_packet_bytes) {
 
       bytes_sent += static_cast<int>(SendEntityUpdate(cache));
       ++peers_updated;
+      cache.last_serviced_tick = tick_count_;
       // lod_enter_phase offsets the first window only (set at AoI-enter,
       // cleared here) to stagger simultaneous entries.
       const uint64_t interval = LodIntervalForDistSq(cache.priority);
