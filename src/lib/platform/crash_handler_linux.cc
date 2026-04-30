@@ -36,7 +36,14 @@ struct sigaction g_prev_actions[sizeof(kFatalSignals) / sizeof(kFatalSignals[0])
 void SafeWrite(int fd, const char* s) {
   std::size_t n = 0;
   while (s[n] != '\0') ++n;
-  ::write(fd, s, n);
+
+  const char* p = s;
+  while (n > 0) {
+    const ssize_t written = ::write(fd, p, n);
+    if (written <= 0) return;
+    p += written;
+    n -= static_cast<std::size_t>(written);
+  }
 }
 
 void BuildDumpPath(char* out, std::size_t out_size) {

@@ -411,6 +411,10 @@ auto ReadDataTypeRefBody(BinaryReader& reader, PropertyDataType kind, std::size_
       out.struct_id = *sid;
       return out;
     }
+
+    case PropertyDataType::kInvalid:
+      ATLAS_LOG_ERROR("data_type_ref: kInvalid kind");
+      return std::nullopt;
   }
 
   ATLAS_LOG_ERROR("data_type_ref: unknown kind {}", static_cast<int>(kind));
