@@ -51,7 +51,7 @@ TEST(IntercellMessages, CreateGhost_RoundTrip) {
   msg.on_ground = true;
   msg.real_cellapp_addr = Address(0x7F000001u, 30001);
   msg.base_addr = Address(0x0A000002u, 20002);
-  msg.base_entity_id = 0x00ABCDEF;
+  msg.entity_id = 0x00ABCDEF;
   msg.event_seq = 100;
   msg.volatile_seq = 200;
   msg.other_snapshot = MakeBlob({0xDE, 0xAD, 0xBE, 0xEF, 0x42});
@@ -67,7 +67,7 @@ TEST(IntercellMessages, CreateGhost_RoundTrip) {
   EXPECT_TRUE(rt->on_ground);
   EXPECT_EQ(rt->real_cellapp_addr.Port(), 30001u);
   EXPECT_EQ(rt->base_addr.Ip(), 0x0A000002u);
-  EXPECT_EQ(rt->base_entity_id, 0x00ABCDEFu);
+  EXPECT_EQ(rt->entity_id, 0x00ABCDEFu);
   EXPECT_EQ(rt->event_seq, 100u);
   EXPECT_EQ(rt->volatile_seq, 200u);
   ASSERT_EQ(rt->other_snapshot.size(), 5u);
@@ -94,14 +94,14 @@ TEST(IntercellMessages, DeleteGhost_RoundTrip) {
   DeleteGhost msg{0x12345678};
   auto rt = RoundTrip(msg);
   ASSERT_TRUE(rt.has_value());
-  EXPECT_EQ(rt->ghost_entity_id, 0x12345678u);
+  EXPECT_EQ(rt->entity_id, 0x12345678u);
 }
 
 // ─── GhostPositionUpdate ──────────────────────────────────────────────────────
 
 TEST(IntercellMessages, GhostPositionUpdate_RoundTrip) {
   GhostPositionUpdate msg;
-  msg.ghost_entity_id = 99;
+  msg.entity_id = 99;
   msg.position = {10.0f, 20.0f, 30.0f};
   msg.direction = {-1.0f, 0.0f, 0.0f};
   msg.on_ground = false;
@@ -109,7 +109,7 @@ TEST(IntercellMessages, GhostPositionUpdate_RoundTrip) {
 
   auto rt = RoundTrip(msg);
   ASSERT_TRUE(rt.has_value());
-  EXPECT_EQ(rt->ghost_entity_id, 99u);
+  EXPECT_EQ(rt->entity_id, 99u);
   EXPECT_FLOAT_EQ(rt->position.y, 20.0f);
   EXPECT_FLOAT_EQ(rt->direction.x, -1.0f);
   EXPECT_FALSE(rt->on_ground);
@@ -120,13 +120,13 @@ TEST(IntercellMessages, GhostPositionUpdate_RoundTrip) {
 
 TEST(IntercellMessages, GhostDelta_RoundTrip) {
   GhostDelta msg;
-  msg.ghost_entity_id = 7;
+  msg.entity_id = 7;
   msg.event_seq = 50;
   msg.other_delta = MakeBlob({0x01, 0x02, 0x03});
 
   auto rt = RoundTrip(msg);
   ASSERT_TRUE(rt.has_value());
-  EXPECT_EQ(rt->ghost_entity_id, 7u);
+  EXPECT_EQ(rt->entity_id, 7u);
   EXPECT_EQ(rt->event_seq, 50u);
   ASSERT_EQ(rt->other_delta.size(), 3u);
   EXPECT_EQ(rt->other_delta[1], std::byte{0x02});
@@ -134,7 +134,7 @@ TEST(IntercellMessages, GhostDelta_RoundTrip) {
 
 TEST(IntercellMessages, GhostDelta_EmptyDelta) {
   GhostDelta msg;
-  msg.ghost_entity_id = 1;
+  msg.entity_id = 1;
   msg.event_seq = 1;
   auto rt = RoundTrip(msg);
   ASSERT_TRUE(rt.has_value());
@@ -145,13 +145,13 @@ TEST(IntercellMessages, GhostDelta_EmptyDelta) {
 
 TEST(IntercellMessages, GhostSnapshotRefresh_RoundTrip) {
   GhostSnapshotRefresh msg;
-  msg.ghost_entity_id = 55;
+  msg.entity_id = 55;
   msg.event_seq = 9999;
   msg.other_snapshot = MakeBlob({0xAB, 0xCD});
 
   auto rt = RoundTrip(msg);
   ASSERT_TRUE(rt.has_value());
-  EXPECT_EQ(rt->ghost_entity_id, 55u);
+  EXPECT_EQ(rt->entity_id, 55u);
   EXPECT_EQ(rt->event_seq, 9999u);
   ASSERT_EQ(rt->other_snapshot.size(), 2u);
   EXPECT_EQ(rt->other_snapshot[0], std::byte{0xAB});
@@ -161,24 +161,24 @@ TEST(IntercellMessages, GhostSnapshotRefresh_RoundTrip) {
 
 TEST(IntercellMessages, GhostSetReal_RoundTrip) {
   GhostSetReal msg;
-  msg.ghost_entity_id = 3;
+  msg.entity_id = 3;
   msg.new_real_addr = Address(0x7F000002u, 31337);
 
   auto rt = RoundTrip(msg);
   ASSERT_TRUE(rt.has_value());
-  EXPECT_EQ(rt->ghost_entity_id, 3u);
+  EXPECT_EQ(rt->entity_id, 3u);
   EXPECT_EQ(rt->new_real_addr.Ip(), 0x7F000002u);
   EXPECT_EQ(rt->new_real_addr.Port(), 31337u);
 }
 
 TEST(IntercellMessages, GhostSetNextReal_RoundTrip) {
   GhostSetNextReal msg;
-  msg.ghost_entity_id = 4;
+  msg.entity_id = 4;
   msg.next_real_addr = Address(0x0A010101u, 40404);
 
   auto rt = RoundTrip(msg);
   ASSERT_TRUE(rt.has_value());
-  EXPECT_EQ(rt->ghost_entity_id, 4u);
+  EXPECT_EQ(rt->entity_id, 4u);
   EXPECT_EQ(rt->next_real_addr.Port(), 40404u);
 }
 
@@ -193,7 +193,7 @@ TEST(IntercellMessages, OffloadEntity_RoundTrip_Full) {
   msg.direction = {1.f, 0.f, 0.f};
   msg.on_ground = true;
   msg.base_addr = Address(0x7F000001u, 20000);
-  msg.base_entity_id = 0x11223344;
+  msg.entity_id = 0x11223344;
   msg.persistent_blob = MakeBlob({0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08});
   msg.owner_snapshot = MakeBlob({0xA0, 0xA1});
   msg.other_snapshot = MakeBlob({0xB0, 0xB1, 0xB2});
@@ -210,7 +210,7 @@ TEST(IntercellMessages, OffloadEntity_RoundTrip_Full) {
   EXPECT_FLOAT_EQ(rt->position.x, -5.f);
   EXPECT_TRUE(rt->on_ground);
   EXPECT_EQ(rt->base_addr.Port(), 20000u);
-  EXPECT_EQ(rt->base_entity_id, 0x11223344u);
+  EXPECT_EQ(rt->entity_id, 0x11223344u);
   EXPECT_EQ(rt->persistent_blob.size(), 8u);
   EXPECT_EQ(rt->owner_snapshot.size(), 2u);
   EXPECT_EQ(rt->other_snapshot.size(), 3u);
@@ -231,7 +231,7 @@ TEST(IntercellMessages, OffloadEntity_RoundTrip_AllBlobsEmpty) {
   msg.type_id = 1;
   msg.space_id = 1;
   msg.base_addr = Address(0, 1);
-  msg.base_entity_id = 1;
+  msg.entity_id = 1;
 
   auto rt = RoundTrip(msg);
   ASSERT_TRUE(rt.has_value());
@@ -255,7 +255,7 @@ TEST(IntercellMessages, OffloadEntity_RoundTrip_WithWitnessState) {
   msg.type_id = 1;
   msg.space_id = 1;
   msg.base_addr = Address(0, 1);
-  msg.base_entity_id = 42;
+  msg.entity_id = 42;
   msg.has_witness = true;
   msg.aoi_radius = 123.5f;
   msg.aoi_hysteresis = 7.5f;
@@ -276,7 +276,7 @@ TEST(IntercellMessages, OffloadEntity_Deserialize_TolerantOfMissingWitnessTail) 
   msg.type_id = 2;
   msg.space_id = 3;
   msg.base_addr = Address(0, 4);
-  msg.base_entity_id = 9;
+  msg.entity_id = 9;
 
   BinaryWriter w;
   msg.Serialize(w);
@@ -298,21 +298,21 @@ TEST(IntercellMessages, OffloadEntity_Deserialize_TolerantOfMissingWitnessTail) 
 
 TEST(IntercellMessages, OffloadEntityAck_RoundTripSuccess) {
   OffloadEntityAck msg;
-  msg.real_entity_id = 100;
+  msg.entity_id = 100;
   msg.success = true;
   auto rt = RoundTrip(msg);
   ASSERT_TRUE(rt.has_value());
-  EXPECT_EQ(rt->real_entity_id, 100u);
+  EXPECT_EQ(rt->entity_id, 100u);
   EXPECT_TRUE(rt->success);
 }
 
 TEST(IntercellMessages, OffloadEntityAck_RoundTripFailure) {
   OffloadEntityAck msg;
-  msg.real_entity_id = 200;
+  msg.entity_id = 200;
   msg.success = false;
   auto rt = RoundTrip(msg);
   ASSERT_TRUE(rt.has_value());
-  EXPECT_EQ(rt->real_entity_id, 200u);
+  EXPECT_EQ(rt->entity_id, 200u);
   EXPECT_FALSE(rt->success);
 }
 
@@ -333,7 +333,7 @@ TEST(IntercellMessages, CreateGhost_Truncated_ReturnsNullopt) {
   msg.on_ground = true;
   msg.real_cellapp_addr = Address(0x7F000001u, 30001);
   msg.base_addr = Address(0x0A000002u, 20002);
-  msg.base_entity_id = 0x00ABCDEF;
+  msg.entity_id = 0x00ABCDEF;
   msg.event_seq = 100;
   msg.volatile_seq = 200;
   msg.other_snapshot = MakeBlob({0xDE, 0xAD, 0xBE, 0xEF});
@@ -358,7 +358,7 @@ TEST(IntercellMessages, OffloadEntity_Truncated_ReturnsNullopt) {
   msg.direction = {1.f, 0.f, 0.f};
   msg.on_ground = true;
   msg.base_addr = Address(0x7F000001u, 20000);
-  msg.base_entity_id = 0x11223344;
+  msg.entity_id = 0x11223344;
   msg.persistent_blob = MakeBlob({0x01, 0x02, 0x03, 0x04});
   msg.owner_snapshot = MakeBlob({0xA0, 0xA1});
   msg.other_snapshot = MakeBlob({0xB0, 0xB1, 0xB2});
@@ -387,7 +387,7 @@ TEST(IntercellMessages, GhostDelta_EmptyReader_ReturnsNullopt) {
 
 TEST(IntercellMessages, OffloadEntityAck_Truncated_ReturnsNullopt) {
   OffloadEntityAck msg;
-  msg.real_entity_id = 100;
+  msg.entity_id = 100;
   msg.success = true;
 
   BinaryWriter w;

@@ -129,7 +129,7 @@ TEST(OffloadTraversal, EntityCrossesBspSplit_PumpsOffload) {
   // Spawn a Real entity on A at x=-5 (inside cell 1) and register it
   // in the local Cell so TickOffloadChecker can iterate real entities.
   cellapp::CreateCellEntity cce;
-  cce.base_entity_id = 100;
+  cce.entity_id = 100;
   cce.type_id = 1;
   cce.space_id = kSpaceId;
   cce.position = {-5.f, 0.f, 0.f};
@@ -193,7 +193,7 @@ TEST(OffloadTraversal, EntityStaysInOwnCell_NoOffload) {
   (void)cell_a;
 
   cellapp::CreateCellEntity cce;
-  cce.base_entity_id = 101;
+  cce.entity_id = 101;
   cce.type_id = 1;
   cce.space_id = kSpaceId;
   cce.position = {-5.f, 0.f, 0.f};

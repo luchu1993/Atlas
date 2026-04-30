@@ -120,7 +120,7 @@ static_assert(NetworkMessage<AcceptClient>);
 
 // CellEntityCreated (CellApp → BaseApp, ID 2010).
 struct CellEntityCreated {
-  EntityID base_entity_id{kInvalidEntityID};
+  EntityID entity_id{kInvalidEntityID};
   EntityID cell_entity_id{kInvalidEntityID};
   Address cell_addr;
 
@@ -136,7 +136,7 @@ struct CellEntityCreated {
   }
 
   void Serialize(BinaryWriter& w) const {
-    w.Write(base_entity_id);
+    w.Write(entity_id);
     w.Write(cell_entity_id);
     w.Write(cell_addr.Ip());
     w.Write(cell_addr.Port());
@@ -150,7 +150,7 @@ struct CellEntityCreated {
     if (!beid || !ceid || !ip || !port)
       return Error{ErrorCode::kInvalidArgument, "CellEntityCreated: truncated"};
     CellEntityCreated msg;
-    msg.base_entity_id = *beid;
+    msg.entity_id = *beid;
     msg.cell_entity_id = *ceid;
     msg.cell_addr = Address(*ip, *port);
     return msg;
@@ -160,7 +160,7 @@ static_assert(NetworkMessage<CellEntityCreated>);
 
 // CellEntityDestroyed (CellApp → BaseApp, ID 2011).
 struct CellEntityDestroyed {
-  EntityID base_entity_id{kInvalidEntityID};
+  EntityID entity_id{kInvalidEntityID};
 
   static auto Descriptor() -> const MessageDesc& {
     static const MessageDesc kDesc{msg_id::Id(msg_id::BaseApp::kCellEntityDestroyed),
@@ -172,13 +172,13 @@ struct CellEntityDestroyed {
     return kDesc;
   }
 
-  void Serialize(BinaryWriter& w) const { w.Write(base_entity_id); }
+  void Serialize(BinaryWriter& w) const { w.Write(entity_id); }
 
   static auto Deserialize(BinaryReader& r) -> Result<CellEntityDestroyed> {
     auto eid = r.Read<uint32_t>();
     if (!eid) return Error{ErrorCode::kInvalidArgument, "CellEntityDestroyed: truncated"};
     CellEntityDestroyed msg;
-    msg.base_entity_id = *eid;
+    msg.entity_id = *eid;
     return msg;
   }
 };
@@ -186,7 +186,7 @@ static_assert(NetworkMessage<CellEntityDestroyed>);
 
 // CurrentCell (CellApp → BaseApp, post-offload cell address, ID 2012).
 struct CurrentCell {
-  EntityID base_entity_id{kInvalidEntityID};
+  EntityID entity_id{kInvalidEntityID};
   EntityID cell_entity_id{kInvalidEntityID};
   Address cell_addr;
   uint32_t epoch{0};  // Monotonic; BaseApp rejects stale updates (epoch < stored).
@@ -203,7 +203,7 @@ struct CurrentCell {
   }
 
   void Serialize(BinaryWriter& w) const {
-    w.Write(base_entity_id);
+    w.Write(entity_id);
     w.Write(cell_entity_id);
     w.Write(cell_addr.Ip());
     w.Write(cell_addr.Port());
@@ -219,7 +219,7 @@ struct CurrentCell {
     if (!beid || !ceid || !ip || !port || !ep)
       return Error{ErrorCode::kInvalidArgument, "CurrentCell: truncated"};
     CurrentCell msg;
-    msg.base_entity_id = *beid;
+    msg.entity_id = *beid;
     msg.cell_entity_id = *ceid;
     msg.cell_addr = Address(*ip, *port);
     msg.epoch = *ep;
@@ -230,7 +230,7 @@ static_assert(NetworkMessage<CurrentCell>);
 
 // CellRpcForward (CellApp → BaseApp, Cell→Base RPC, ID 2013).
 struct CellRpcForward {
-  EntityID base_entity_id{kInvalidEntityID};
+  EntityID entity_id{kInvalidEntityID};
   uint32_t rpc_id{0};
   std::vector<std::byte> payload;
 
@@ -245,7 +245,7 @@ struct CellRpcForward {
   }
 
   void Serialize(BinaryWriter& w) const {
-    w.WritePackedInt(base_entity_id);
+    w.WritePackedInt(entity_id);
     w.WritePackedInt(rpc_id);
     w.WritePackedInt(static_cast<uint32_t>(payload.size()));
     w.WriteBytes(payload);
@@ -259,7 +259,7 @@ struct CellRpcForward {
     auto span = r.ReadBytes(*sz);
     if (!span) return Error{ErrorCode::kInvalidArgument, "CellRpcForward: payload truncated"};
     CellRpcForward msg;
-    msg.base_entity_id = *eid;
+    msg.entity_id = *eid;
     msg.rpc_id = *rid;
     msg.payload.assign(span->begin(), span->end());
     return msg;
@@ -302,11 +302,13 @@ struct BroadcastRpcFromCell {
     msg.dest_entity_ids.reserve(*count);
     for (uint32_t i = 0; i < *count; ++i) {
       auto id = r.ReadPackedInt();
-      if (!id) return Error{ErrorCode::kInvalidArgument, "BroadcastRpcFromCell: dest list truncated"};
+      if (!id)
+        return Error{ErrorCode::kInvalidArgument, "BroadcastRpcFromCell: dest list truncated"};
       msg.dest_entity_ids.push_back(*id);
     }
     auto sz = r.ReadPackedInt();
-    if (!sz) return Error{ErrorCode::kInvalidArgument, "BroadcastRpcFromCell: missing payload size"};
+    if (!sz)
+      return Error{ErrorCode::kInvalidArgument, "BroadcastRpcFromCell: missing payload size"};
     auto span = r.ReadBytes(*sz);
     if (!span) return Error{ErrorCode::kInvalidArgument, "BroadcastRpcFromCell: payload truncated"};
     msg.payload.assign(span->begin(), span->end());
@@ -318,7 +320,7 @@ static_assert(NetworkMessage<BroadcastRpcFromCell>);
 // ReplicatedDeltaFromCell (CellApp → BaseApp → Client, ID 2015).
 // Unreliable: next tick supersedes; HoL blocking is worse than loss.
 struct ReplicatedDeltaFromCell {
-  EntityID base_entity_id{kInvalidEntityID};
+  EntityID entity_id{kInvalidEntityID};
   std::vector<std::byte> delta;
 
   static auto Descriptor() -> const MessageDesc& {
@@ -332,7 +334,7 @@ struct ReplicatedDeltaFromCell {
   }
 
   void Serialize(BinaryWriter& w) const {
-    w.WritePackedInt(base_entity_id);
+    w.WritePackedInt(entity_id);
     w.WritePackedInt(static_cast<uint32_t>(delta.size()));
     w.WriteBytes(delta);
   }
@@ -346,7 +348,7 @@ struct ReplicatedDeltaFromCell {
     if (!span)
       return Error{ErrorCode::kInvalidArgument, "ReplicatedDeltaFromCell: delta truncated"};
     ReplicatedDeltaFromCell msg;
-    msg.base_entity_id = *eid;
+    msg.entity_id = *eid;
     msg.delta.assign(span->begin(), span->end());
     return msg;
   }
@@ -356,13 +358,13 @@ static_assert(NetworkMessage<ReplicatedDeltaFromCell>);
 // Send-only zero-copy view of ReplicatedDeltaFromCell. Saves ~3 µs/observer
 // at 200 obs/tick by skipping per-observer std::vector::assign.
 struct ReplicatedDeltaFromCellSpan {
-  EntityID base_entity_id{kInvalidEntityID};
+  EntityID entity_id{kInvalidEntityID};
   std::span<const std::byte> delta;
 
   static auto Descriptor() -> const MessageDesc& { return ReplicatedDeltaFromCell::Descriptor(); }
 
   void Serialize(BinaryWriter& w) const {
-    w.WritePackedInt(base_entity_id);
+    w.WritePackedInt(entity_id);
     w.WritePackedInt(static_cast<uint32_t>(delta.size()));
     w.WriteBytes(delta);
   }
@@ -378,7 +380,7 @@ static_assert(NetworkMessage<ReplicatedDeltaFromCellSpan>);
 // fields (HP, state, inventory). Bypasses DeltaForwarder budget; same wire
 // format so the client reuses ApplyReplicatedDelta.
 struct ReplicatedReliableDeltaFromCell {
-  EntityID base_entity_id{kInvalidEntityID};
+  EntityID entity_id{kInvalidEntityID};
   std::vector<std::byte> delta;
 
   static auto Descriptor() -> const MessageDesc& {
@@ -392,7 +394,7 @@ struct ReplicatedReliableDeltaFromCell {
   }
 
   void Serialize(BinaryWriter& w) const {
-    w.WritePackedInt(base_entity_id);
+    w.WritePackedInt(entity_id);
     w.WritePackedInt(static_cast<uint32_t>(delta.size()));
     w.WriteBytes(delta);
   }
@@ -406,7 +408,7 @@ struct ReplicatedReliableDeltaFromCell {
     if (!span)
       return Error{ErrorCode::kInvalidArgument, "ReplicatedReliableDeltaFromCell: delta truncated"};
     ReplicatedReliableDeltaFromCell msg;
-    msg.base_entity_id = *eid;
+    msg.entity_id = *eid;
     msg.delta.assign(span->begin(), span->end());
     return msg;
   }
@@ -415,7 +417,7 @@ static_assert(NetworkMessage<ReplicatedReliableDeltaFromCell>);
 
 // Send-only zero-copy view; see ReplicatedDeltaFromCellSpan.
 struct ReplicatedReliableDeltaFromCellSpan {
-  EntityID base_entity_id{kInvalidEntityID};
+  EntityID entity_id{kInvalidEntityID};
   std::span<const std::byte> delta;
 
   static auto Descriptor() -> const MessageDesc& {
@@ -423,7 +425,7 @@ struct ReplicatedReliableDeltaFromCellSpan {
   }
 
   void Serialize(BinaryWriter& w) const {
-    w.WritePackedInt(base_entity_id);
+    w.WritePackedInt(entity_id);
     w.WritePackedInt(static_cast<uint32_t>(delta.size()));
     w.WriteBytes(delta);
   }
@@ -437,7 +439,7 @@ static_assert(NetworkMessage<ReplicatedReliableDeltaFromCellSpan>);
 // Periodic cell-to-base state backup (ID 2018); opaque CELL_DATA bytes.
 // BaseApp stores verbatim for DB writes / Reviver / Offload bootstrap.
 struct BackupCellEntity {
-  EntityID base_entity_id{kInvalidEntityID};
+  EntityID entity_id{kInvalidEntityID};
   std::vector<std::byte> cell_backup_data;
 
   static auto Descriptor() -> const MessageDesc& {
@@ -451,7 +453,7 @@ struct BackupCellEntity {
   }
 
   void Serialize(BinaryWriter& w) const {
-    w.WritePackedInt(base_entity_id);
+    w.WritePackedInt(entity_id);
     w.WritePackedInt(static_cast<uint32_t>(cell_backup_data.size()));
     w.WriteBytes(cell_backup_data);
   }
@@ -463,7 +465,7 @@ struct BackupCellEntity {
     auto span = r.ReadBytes(*sz);
     if (!span) return Error{ErrorCode::kInvalidArgument, "BackupCellEntity: blob truncated"};
     BackupCellEntity msg;
-    msg.base_entity_id = *eid;
+    msg.entity_id = *eid;
     msg.cell_backup_data.assign(span->begin(), span->end());
     return msg;
   }
@@ -473,7 +475,7 @@ static_assert(NetworkMessage<BackupCellEntity>);
 // Periodic cell-authoritative owner snapshot (ID 2019). BaseApp relays as
 // ReplicatedBaselineToClient (0xF002).
 struct ReplicatedBaselineFromCell {
-  EntityID base_entity_id{kInvalidEntityID};
+  EntityID entity_id{kInvalidEntityID};
   std::vector<std::byte> snapshot;
 
   static auto Descriptor() -> const MessageDesc& {
@@ -487,7 +489,7 @@ struct ReplicatedBaselineFromCell {
   }
 
   void Serialize(BinaryWriter& w) const {
-    w.WritePackedInt(base_entity_id);
+    w.WritePackedInt(entity_id);
     w.WritePackedInt(static_cast<uint32_t>(snapshot.size()));
     w.WriteBytes(snapshot);
   }
@@ -501,7 +503,7 @@ struct ReplicatedBaselineFromCell {
     if (!span)
       return Error{ErrorCode::kInvalidArgument, "ReplicatedBaselineFromCell: snapshot truncated"};
     ReplicatedBaselineFromCell msg;
-    msg.base_entity_id = *eid;
+    msg.entity_id = *eid;
     msg.snapshot.assign(span->begin(), span->end());
     return msg;
   }
@@ -511,7 +513,7 @@ static_assert(NetworkMessage<ReplicatedBaselineFromCell>);
 // Periodic owner-snapshot to client (client-facing ID 0xF002). Reliable;
 // recovers any property lost on the unreliable delta path.
 struct ReplicatedBaselineToClient {
-  EntityID base_entity_id{kInvalidEntityID};
+  EntityID entity_id{kInvalidEntityID};
   std::vector<std::byte> snapshot;
 
   static auto Descriptor() -> const MessageDesc& {
@@ -522,7 +524,7 @@ struct ReplicatedBaselineToClient {
   }
 
   void Serialize(BinaryWriter& w) const {
-    w.WritePackedInt(base_entity_id);
+    w.WritePackedInt(entity_id);
     w.WritePackedInt(static_cast<uint32_t>(snapshot.size()));
     w.WriteBytes(snapshot);
   }
@@ -536,7 +538,7 @@ struct ReplicatedBaselineToClient {
     if (!span)
       return Error{ErrorCode::kInvalidArgument, "ReplicatedBaselineToClient: snapshot truncated"};
     ReplicatedBaselineToClient msg;
-    msg.base_entity_id = *eid;
+    msg.entity_id = *eid;
     msg.snapshot.assign(span->begin(), span->end());
     return msg;
   }
@@ -714,7 +716,6 @@ static_assert(NetworkMessage<ClientBaseRpc>);
 
 // ClientCellRpc (Client → BaseApp external, ID 2023). BaseApp validates
 // then forwards to CellApp with un-spoofable source_entity_id stamped.
-// target_entity_id is in base_entity_id space.
 struct ClientCellRpc {
   EntityID target_entity_id{kInvalidEntityID};
   uint32_t rpc_id{0};
@@ -809,7 +810,7 @@ static_assert(NetworkMessage<CellAppDeath>);
 // ClientEventSeqReport (Client → BaseApp, ID 2027); accumulated reliable-
 // delta gap count since last report.
 struct ClientEventSeqReport {
-  EntityID base_entity_id{kInvalidEntityID};
+  EntityID entity_id{kInvalidEntityID};
   uint32_t gap_delta{0};
 
   static auto Descriptor() -> const MessageDesc& {
@@ -823,7 +824,7 @@ struct ClientEventSeqReport {
   }
 
   void Serialize(BinaryWriter& w) const {
-    w.Write(base_entity_id);
+    w.Write(entity_id);
     w.Write(gap_delta);
   }
 
@@ -832,7 +833,7 @@ struct ClientEventSeqReport {
     auto gap = r.Read<uint32_t>();
     if (!eid || !gap) return Error{ErrorCode::kInvalidArgument, "ClientEventSeqReport: truncated"};
     ClientEventSeqReport msg;
-    msg.base_entity_id = *eid;
+    msg.entity_id = *eid;
     msg.gap_delta = *gap;
     return msg;
   }

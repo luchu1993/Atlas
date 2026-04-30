@@ -28,7 +28,7 @@ auto RoundTrip(const Msg& msg) -> std::optional<Msg> {
 
 TEST(CellAppMessages, CreateCellEntityRoundTrip) {
   CreateCellEntity msg;
-  msg.base_entity_id = 42;
+  msg.entity_id = 42;
   msg.type_id = 7;
   msg.space_id = 100;
   msg.position = {1.5f, 2.5f, 3.5f};
@@ -40,7 +40,7 @@ TEST(CellAppMessages, CreateCellEntityRoundTrip) {
 
   auto rt = RoundTrip(msg);
   ASSERT_TRUE(rt.has_value());
-  EXPECT_EQ(rt->base_entity_id, 42u);
+  EXPECT_EQ(rt->entity_id, 42u);
   EXPECT_EQ(rt->type_id, 7u);
   EXPECT_EQ(rt->space_id, 100u);
   EXPECT_FLOAT_EQ(rt->position.x, 1.5f);
@@ -57,7 +57,7 @@ TEST(CellAppMessages, CreateCellEntityRoundTrip) {
 
 TEST(CellAppMessages, CreateCellEntityEmptyScriptDataRoundTrip) {
   CreateCellEntity msg;
-  msg.base_entity_id = 1;
+  msg.entity_id = 1;
   msg.type_id = 1;
   msg.space_id = 1;
 
@@ -71,7 +71,7 @@ TEST(CellAppMessages, DestroyCellEntityRoundTrip) {
 
   auto rt = RoundTrip(msg);
   ASSERT_TRUE(rt.has_value());
-  EXPECT_EQ(rt->base_entity_id, 123u);
+  EXPECT_EQ(rt->entity_id, 123u);
 }
 
 TEST(CellAppMessages, ClientCellRpcForwardRoundTrip) {
@@ -116,14 +116,14 @@ TEST(CellAppMessages, CreateAndDestroySpaceRoundTrip) {
 
 TEST(CellAppMessages, AvatarUpdateRoundTrip) {
   AvatarUpdate msg;
-  msg.base_entity_id = 9;
+  msg.entity_id = 9;
   msg.position = {100.f, 0.f, -50.f};
   msg.direction = {0.7071f, 0.f, 0.7071f};
   msg.on_ground = false;
 
   auto rt = RoundTrip(msg);
   ASSERT_TRUE(rt.has_value());
-  EXPECT_EQ(rt->base_entity_id, 9u);
+  EXPECT_EQ(rt->entity_id, 9u);
   EXPECT_FLOAT_EQ(rt->position.x, 100.f);
   EXPECT_FLOAT_EQ(rt->position.z, -50.f);
   EXPECT_FLOAT_EQ(rt->direction.x, 0.7071f);
@@ -132,28 +132,28 @@ TEST(CellAppMessages, AvatarUpdateRoundTrip) {
 
 TEST(CellAppMessages, EnableDisableWitnessRoundTrip) {
   EnableWitness e;
-  e.base_entity_id = 17;
+  e.entity_id = 17;
   auto rte = RoundTrip(e);
   ASSERT_TRUE(rte.has_value());
-  EXPECT_EQ(rte->base_entity_id, 17u);
+  EXPECT_EQ(rte->entity_id, 17u);
 
   DisableWitness d{17};
   auto rtd = RoundTrip(d);
   ASSERT_TRUE(rtd.has_value());
-  EXPECT_EQ(rtd->base_entity_id, 17u);
+  EXPECT_EQ(rtd->entity_id, 17u);
 }
 
 // Runtime SetAoIRadius. Carries both radius and hysteresis so a single RPC
 // reshapes the dual-band AoITrigger.
 TEST(CellAppMessages, SetAoIRadiusRoundTrip) {
   SetAoIRadius s;
-  s.base_entity_id = 42;
+  s.entity_id = 42;
   s.radius = 120.25f;
   s.hysteresis = 8.5f;
 
   auto rt = RoundTrip(s);
   ASSERT_TRUE(rt.has_value());
-  EXPECT_EQ(rt->base_entity_id, 42u);
+  EXPECT_EQ(rt->entity_id, 42u);
   EXPECT_FLOAT_EQ(rt->radius, 120.25f);
   EXPECT_FLOAT_EQ(rt->hysteresis, 8.5f);
 

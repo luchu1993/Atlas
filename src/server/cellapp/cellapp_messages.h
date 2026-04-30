@@ -42,7 +42,7 @@ namespace atlas::cellapp {
 // ----------------------------------------------------------------------------
 
 struct CreateCellEntity {
-  EntityID base_entity_id{kInvalidEntityID};
+  EntityID entity_id{kInvalidEntityID};
   uint16_t type_id{0};
   SpaceID space_id{kInvalidSpaceID};
   math::Vector3 position{0.f, 0.f, 0.f};
@@ -63,7 +63,7 @@ struct CreateCellEntity {
   }
 
   void Serialize(BinaryWriter& w) const {
-    w.Write(base_entity_id);
+    w.Write(entity_id);
     w.Write(type_id);
     w.Write(space_id);
     w.Write(position.x);
@@ -99,7 +99,7 @@ struct CreateCellEntity {
         !rid || !slen)
       return Error{ErrorCode::kInvalidArgument, "CreateCellEntity: truncated"};
     CreateCellEntity msg;
-    msg.base_entity_id = *eid;
+    msg.entity_id = *eid;
     msg.type_id = *ti;
     msg.space_id = *sid;
     msg.position = {*px, *py, *pz};
@@ -121,12 +121,12 @@ static_assert(NetworkMessage<CreateCellEntity>);
 // ----------------------------------------------------------------------------
 // DestroyCellEntity  (BaseApp → CellApp, ID 3002)
 //
-// Targeted by `base_entity_id` — the stable cluster-wide id used by both
-// sides for RPC routing.
+// Targeted by the unified entity_id (cluster-stable, allocated by
+// DBApp's IDClient).
 // ----------------------------------------------------------------------------
 
 struct DestroyCellEntity {
-  EntityID base_entity_id{kInvalidEntityID};
+  EntityID entity_id{kInvalidEntityID};
 
   static auto Descriptor() -> const MessageDesc& {
     static const MessageDesc kDesc{msg_id::Id(msg_id::CellApp::kDestroyCellEntity),
@@ -138,13 +138,13 @@ struct DestroyCellEntity {
     return kDesc;
   }
 
-  void Serialize(BinaryWriter& w) const { w.Write(base_entity_id); }
+  void Serialize(BinaryWriter& w) const { w.Write(entity_id); }
 
   static auto Deserialize(BinaryReader& r) -> Result<DestroyCellEntity> {
     auto eid = r.Read<uint32_t>();
     if (!eid) return Error{ErrorCode::kInvalidArgument, "DestroyCellEntity: truncated"};
     DestroyCellEntity msg;
-    msg.base_entity_id = *eid;
+    msg.entity_id = *eid;
     return msg;
   }
 };
@@ -318,7 +318,7 @@ static_assert(NetworkMessage<DestroySpace>);
 // ----------------------------------------------------------------------------
 
 struct AvatarUpdate {
-  EntityID base_entity_id{kInvalidEntityID};
+  EntityID entity_id{kInvalidEntityID};
   math::Vector3 position{0.f, 0.f, 0.f};
   math::Vector3 direction{1.f, 0.f, 0.f};
   bool on_ground{false};
@@ -332,7 +332,7 @@ struct AvatarUpdate {
   }
 
   void Serialize(BinaryWriter& w) const {
-    w.Write(base_entity_id);
+    w.Write(entity_id);
     w.Write(position.x);
     w.Write(position.y);
     w.Write(position.z);
@@ -354,7 +354,7 @@ struct AvatarUpdate {
     if (!eid || !px || !py || !pz || !dx || !dy || !dz || !og)
       return Error{ErrorCode::kInvalidArgument, "AvatarUpdate: truncated"};
     AvatarUpdate msg;
-    msg.base_entity_id = *eid;
+    msg.entity_id = *eid;
     msg.position = {*px, *py, *pz};
     msg.direction = {*dx, *dy, *dz};
     msg.on_ground = (*og != 0);
@@ -374,7 +374,7 @@ static_assert(NetworkMessage<AvatarUpdate>);
 // ----------------------------------------------------------------------------
 
 struct EnableWitness {
-  EntityID base_entity_id{kInvalidEntityID};
+  EntityID entity_id{kInvalidEntityID};
 
   static auto Descriptor() -> const MessageDesc& {
     static const MessageDesc kDesc{msg_id::Id(msg_id::CellApp::kEnableWitness),
@@ -386,13 +386,13 @@ struct EnableWitness {
     return kDesc;
   }
 
-  void Serialize(BinaryWriter& w) const { w.Write(base_entity_id); }
+  void Serialize(BinaryWriter& w) const { w.Write(entity_id); }
 
   static auto Deserialize(BinaryReader& r) -> Result<EnableWitness> {
     auto eid = r.Read<uint32_t>();
     if (!eid) return Error{ErrorCode::kInvalidArgument, "EnableWitness: truncated"};
     EnableWitness msg;
-    msg.base_entity_id = *eid;
+    msg.entity_id = *eid;
     return msg;
   }
 };
@@ -403,7 +403,7 @@ static_assert(NetworkMessage<EnableWitness>);
 // ----------------------------------------------------------------------------
 
 struct DisableWitness {
-  EntityID base_entity_id{kInvalidEntityID};
+  EntityID entity_id{kInvalidEntityID};
 
   static auto Descriptor() -> const MessageDesc& {
     static const MessageDesc kDesc{msg_id::Id(msg_id::CellApp::kDisableWitness),
@@ -415,13 +415,13 @@ struct DisableWitness {
     return kDesc;
   }
 
-  void Serialize(BinaryWriter& w) const { w.Write(base_entity_id); }
+  void Serialize(BinaryWriter& w) const { w.Write(entity_id); }
 
   static auto Deserialize(BinaryReader& r) -> Result<DisableWitness> {
     auto eid = r.Read<uint32_t>();
     if (!eid) return Error{ErrorCode::kInvalidArgument, "DisableWitness: truncated"};
     DisableWitness msg;
-    msg.base_entity_id = *eid;
+    msg.entity_id = *eid;
     return msg;
   }
 };
@@ -438,7 +438,7 @@ static_assert(NetworkMessage<DisableWitness>);
 // ----------------------------------------------------------------------------
 
 struct SetAoIRadius {
-  EntityID base_entity_id{kInvalidEntityID};
+  EntityID entity_id{kInvalidEntityID};
   float radius{0.f};
   float hysteresis{0.f};
 
@@ -453,7 +453,7 @@ struct SetAoIRadius {
   }
 
   void Serialize(BinaryWriter& w) const {
-    w.Write(base_entity_id);
+    w.Write(entity_id);
     w.Write(radius);
     w.Write(hysteresis);
   }
@@ -464,7 +464,7 @@ struct SetAoIRadius {
     auto hyst = r.Read<float>();
     if (!eid || !rad || !hyst) return Error{ErrorCode::kInvalidArgument, "SetAoIRadius: truncated"};
     SetAoIRadius msg;
-    msg.base_entity_id = *eid;
+    msg.entity_id = *eid;
     msg.radius = *rad;
     msg.hysteresis = *hyst;
     return msg;

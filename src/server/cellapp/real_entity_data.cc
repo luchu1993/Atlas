@@ -36,7 +36,7 @@ auto RealEntityData::HasHaunt(Channel* channel) const -> bool {
 auto RealEntityData::BuildPositionUpdate() const -> cellapp::GhostPositionUpdate {
   ATLAS_PROFILE_ZONE_N("RealEntityData::BuildPositionUpdate");
   cellapp::GhostPositionUpdate msg;
-  msg.ghost_entity_id = owner_.Id();
+  msg.entity_id = owner_.Id();
   msg.position = owner_.Position();
   msg.direction = owner_.Direction();
   msg.on_ground = owner_.OnGround();
@@ -48,7 +48,7 @@ auto RealEntityData::BuildPositionUpdate() const -> cellapp::GhostPositionUpdate
 auto RealEntityData::BuildDelta() const -> cellapp::GhostDelta {
   ATLAS_PROFILE_ZONE_N("RealEntityData::BuildDelta");
   cellapp::GhostDelta msg;
-  msg.ghost_entity_id = owner_.Id();
+  msg.entity_id = owner_.Id();
   const auto* state = owner_.GetReplicationState();
   if (state == nullptr || state->history.empty()) return msg;
 
@@ -72,7 +72,7 @@ auto RealEntityData::BuildDelta() const -> cellapp::GhostDelta {
 auto RealEntityData::BuildSnapshotRefresh() const -> cellapp::GhostSnapshotRefresh {
   ATLAS_PROFILE_ZONE_N("RealEntityData::BuildSnapshotRefresh");
   cellapp::GhostSnapshotRefresh msg;
-  msg.ghost_entity_id = owner_.Id();
+  msg.entity_id = owner_.Id();
   const auto* state = owner_.GetReplicationState();
   if (state) {
     msg.event_seq = state->latest_event_seq;

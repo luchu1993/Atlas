@@ -688,7 +688,7 @@ void BaseApp::OnAcceptClient(Channel& /*ch*/, const baseapp::AcceptClient& msg) 
 }
 
 void BaseApp::OnCellEntityCreated(Channel& ch, const baseapp::CellEntityCreated& msg) {
-  auto* ent = entity_mgr_.Find(msg.base_entity_id);
+  auto* ent = entity_mgr_.Find(msg.entity_id);
   if (!ent) return;
   // INADDR_ANY binds report 0.0.0.0 in msg.cell_addr — useless for routing.
   // Fall back to ch.RemoteAddress() (matches the Birth notification).
@@ -697,37 +697,37 @@ void BaseApp::OnCellEntityCreated(Channel& ch, const baseapp::CellEntityCreated&
     cell_addr = ch.RemoteAddress();
   }
   ent->SetCell(msg.cell_entity_id, cell_addr);
-  ATLAS_LOG_DEBUG("BaseApp: entity {} has cell at {}:{}", msg.base_entity_id, cell_addr.Ip(),
+  ATLAS_LOG_DEBUG("BaseApp: entity {} has cell at {}:{}", msg.entity_id, cell_addr.Ip(),
                   cell_addr.Port());
 
   // CellReady tells the client its ClientCellRpc will now route. Note: not
   // retroactive — a client binding after this point relies on world_stress's
   // ordering where GiveClientTo runs before the CellApp ack.
-  auto* proxy = entity_mgr_.FindProxy(msg.base_entity_id);
+  auto* proxy = entity_mgr_.FindProxy(msg.entity_id);
   if (proxy && proxy->HasClient()) {
     // Race fix: BindClient may have run before cell_addr was known and
     // skipped EnableWitness; SetCell above populated it, so send now.
-    if (auto* cell_ch = ResolveCellChannelForEntity(msg.base_entity_id)) {
+    if (auto* cell_ch = ResolveCellChannelForEntity(msg.entity_id)) {
       cellapp::EnableWitness ew;
-      ew.base_entity_id = msg.base_entity_id;
+      ew.entity_id = msg.entity_id;
       (void)cell_ch->SendMessage(ew);
     }
-    if (auto* client_ch = ResolveClientChannel(msg.base_entity_id)) {
+    if (auto* client_ch = ResolveClientChannel(msg.entity_id)) {
       baseapp::CellReady ready;
-      ready.entity_id = msg.base_entity_id;
+      ready.entity_id = msg.entity_id;
       (void)client_ch->SendMessage(ready);
     }
   }
 }
 
 void BaseApp::OnCellEntityDestroyed(Channel& /*ch*/, const baseapp::CellEntityDestroyed& msg) {
-  auto* ent = entity_mgr_.Find(msg.base_entity_id);
+  auto* ent = entity_mgr_.Find(msg.entity_id);
   if (!ent) return;
   ent->ClearCell();
 }
 
 void BaseApp::OnCurrentCell(Channel& /*ch*/, const baseapp::CurrentCell& msg) {
-  auto* ent = entity_mgr_.Find(msg.base_entity_id);
+  auto* ent = entity_mgr_.Find(msg.entity_id);
   if (!ent) return;
   ent->SetCell(msg.cell_entity_id, msg.cell_addr, msg.epoch);
 }
@@ -796,7 +796,7 @@ void BaseApp::OnCellAppDeath(const baseapp::CellAppDeath& msg) {
     ent->ClearCell();
 
     cellapp::CreateCellEntity restore;
-    restore.base_entity_id = eid;
+    restore.entity_id = eid;
     restore.type_id = ent->TypeId();
     restore.space_id = sid;
     restore.position = {0.f, 0.f, 0.f};
@@ -820,14 +820,14 @@ void BaseApp::OnCellRpcForward(Channel& /*ch*/, const baseapp::CellRpcForward& m
     ATLAS_LOG_WARNING("BaseApp: OnCellRpcForward: dispatch_rpc callback not registered");
     return;
   }
-  dispatch_fn(msg.base_entity_id, msg.rpc_id, reinterpret_cast<const uint8_t*>(msg.payload.data()),
+  dispatch_fn(msg.entity_id, msg.rpc_id, reinterpret_cast<const uint8_t*>(msg.payload.data()),
               static_cast<int32_t>(msg.payload.size()));
 }
 
 // Cell resolved scope to destinations on this BaseApp; deliver to each.
 void BaseApp::OnBroadcastRpcFromCell(Channel& /*ch*/, const baseapp::BroadcastRpcFromCell& msg) {
-  for (auto base_entity_id : msg.dest_entity_ids) {
-    auto* proxy = entity_mgr_.FindProxy(base_entity_id);
+  for (auto entity_id : msg.dest_entity_ids) {
+    auto* proxy = entity_mgr_.FindProxy(entity_id);
     if (!proxy || !proxy->HasClient()) continue;
     if (auto* client_ch = ResolveClientChannel(proxy->EntityId())) {
       RelayRpcToClient(*client_ch, msg.rpc_id, msg.payload);
@@ -838,7 +838,7 @@ void BaseApp::OnBroadcastRpcFromCell(Channel& /*ch*/, const baseapp::BroadcastRp
 void BaseApp::RelayRpcToClient(Channel& client_ch, uint32_t rpc_id,
                                const std::vector<std::byte>& payload) {
   baseapp::ClientRpcEnvelope env{rpc_id,
-                                  std::span<const std::byte>(payload.data(), payload.size())};
+                                 std::span<const std::byte>(payload.data(), payload.size())};
   if (auto r = client_ch.SendMessage(env); !r) {
     ATLAS_LOG_DEBUG("BaseApp: RelayRpcToClient send failed (rpc_id=0x{:08X}): {}", rpc_id,
                     r.Error().Message());
@@ -850,29 +850,28 @@ void BaseApp::RelayRpcToClient(Channel& client_ch, uint32_t rpc_id,
 // would be silently coalesced (use Path #2). See delta_forwarder.h.
 void BaseApp::OnReplicatedDeltaFromCell(Channel& /*ch*/,
                                         const baseapp::ReplicatedDeltaFromCell& msg) {
-  auto* proxy = entity_mgr_.FindProxy(msg.base_entity_id);
+  auto* proxy = entity_mgr_.FindProxy(msg.entity_id);
   if (!proxy || !proxy->HasClient()) return;
 
   auto it = entity_client_index_.find(proxy->EntityId());
   if (it == entity_client_index_.end()) return;
 
   client_delta_forwarders_[it->second].Enqueue(
-      msg.base_entity_id, std::span<const std::byte>(msg.delta.data(), msg.delta.size()));
+      msg.entity_id, std::span<const std::byte>(msg.delta.data(), msg.delta.size()));
 }
 
 // Path #2 (Reliable) — bypasses DeltaForwarder so byte budget / same-entity
 // replacement cannot drop critical state (HP, inventory, event_seq).
 void BaseApp::OnReplicatedReliableDeltaFromCell(
     Channel& /*ch*/, const baseapp::ReplicatedReliableDeltaFromCell& msg) {
-  auto* proxy = entity_mgr_.FindProxy(msg.base_entity_id);
+  auto* proxy = entity_mgr_.FindProxy(msg.entity_id);
   if (!proxy || !proxy->HasClient()) return;
 
   auto* client_ch = ResolveClientChannel(proxy->EntityId());
   if (!client_ch) return;
 
-  (void)client_ch->SendMessage(
-      baseapp::ClientReliableDeltaEnvelope{
-          std::span<const std::byte>(msg.delta.data(), msg.delta.size())});
+  (void)client_ch->SendMessage(baseapp::ClientReliableDeltaEnvelope{
+      std::span<const std::byte>(msg.delta.data(), msg.delta.size())});
 
   reliable_delta_bytes_sent_total_ += msg.delta.size();
   ++reliable_delta_messages_sent_total_;
@@ -881,11 +880,10 @@ void BaseApp::OnReplicatedReliableDeltaFromCell(
 // Periodic cell-authoritative blob; opaque, reused verbatim for DB writes /
 // reviver / offload migration.
 void BaseApp::OnBackupCellEntity(const baseapp::BackupCellEntity& msg) {
-  auto* entity = entity_mgr_.Find(msg.base_entity_id);
+  auto* entity = entity_mgr_.Find(msg.entity_id);
   if (!entity) {
     // Not an error — entity may have been destroyed with backup in flight.
-    ATLAS_LOG_DEBUG("BaseApp: BackupCellEntity for unknown entity_id={} (dropped)",
-                    msg.base_entity_id);
+    ATLAS_LOG_DEBUG("BaseApp: BackupCellEntity for unknown entity_id={} (dropped)", msg.entity_id);
     return;
   }
   entity->SetCellBackupData(msg.cell_backup_data);
@@ -896,14 +894,14 @@ void BaseApp::OnBackupCellEntity(const baseapp::BackupCellEntity& msg) {
 void BaseApp::OnReplicatedBaselineFromCell(const baseapp::ReplicatedBaselineFromCell& msg) {
   if (msg.snapshot.empty()) return;
 
-  auto* proxy = entity_mgr_.FindProxy(msg.base_entity_id);
+  auto* proxy = entity_mgr_.FindProxy(msg.entity_id);
   if (!proxy || !proxy->HasClient()) return;
 
   auto* client_ch = ResolveClientChannel(proxy->EntityId());
   if (!client_ch) return;
 
   baseapp::ReplicatedBaselineToClient out;
-  out.base_entity_id = msg.base_entity_id;
+  out.entity_id = msg.entity_id;
   out.snapshot = msg.snapshot;
   (void)client_ch->SendMessage(out);
   baseline_bytes_sent_total_ += static_cast<uint64_t>(msg.snapshot.size());
@@ -1580,7 +1578,7 @@ auto BaseApp::FinalizeForceLogoff(EntityID entity_id) -> bool {
   if (ent->HasCell()) {
     if (auto* cell_ch = ResolveCellChannelForEntity(entity_id)) {
       cellapp::DestroyCellEntity msg;
-      msg.base_entity_id = entity_id;
+      msg.entity_id = entity_id;
       (void)cell_ch->SendMessage(msg);
       ATLAS_LOG_DEBUG("BaseApp: sent DestroyCellEntity for entity={}", entity_id);
     }
@@ -1712,7 +1710,7 @@ auto BaseApp::CreateBaseEntityFromScript(uint16_t type_id, SpaceID space_id) -> 
           static_cast<std::size_t>(effective_space_id - 1) % sorted_peers.size();
       auto* cell_ch = sorted_peers[cell_index].second;
       cellapp::CreateCellEntity msg;
-      msg.base_entity_id = kEid;
+      msg.entity_id = kEid;
       msg.type_id = type_id;
       msg.space_id = effective_space_id;
       msg.position = {0.f, 0.f, 0.f};
@@ -1857,7 +1855,7 @@ auto BaseApp::BindClient(EntityID entity_id, const Address& client_addr) -> bool
   if (proxy->HasCell()) {
     if (auto* cell_ch = ResolveCellChannelForEntity(entity_id)) {
       cellapp::EnableWitness ew;
-      ew.base_entity_id = entity_id;
+      ew.entity_id = entity_id;
       (void)cell_ch->SendMessage(ew);
     }
   }
@@ -1879,7 +1877,7 @@ void BaseApp::UnbindClient(EntityID entity_id) {
     if (proxy->HasCell()) {
       if (auto* cell_ch = ResolveCellChannelForEntity(entity_id)) {
         cellapp::DisableWitness dw;
-        dw.base_entity_id = entity_id;
+        dw.entity_id = entity_id;
         (void)cell_ch->SendMessage(dw);
       }
     }
@@ -2443,7 +2441,7 @@ void BaseApp::OnClientEventSeqReport(const baseapp::ClientEventSeqReport& msg) {
   if (msg.gap_delta == 0) return;
   client_event_seq_gaps_total_ += msg.gap_delta;
   ATLAS_LOG_WARNING("Client reported reliable-delta gap: entity={} delta={} total={}",
-                    msg.base_entity_id, msg.gap_delta, client_event_seq_gaps_total_);
+                    msg.entity_id, msg.gap_delta, client_event_seq_gaps_total_);
 }
 
 void BaseApp::OnForceLogoff(Channel& ch, const baseapp::ForceLogoff& msg) {

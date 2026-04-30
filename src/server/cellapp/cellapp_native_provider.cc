@@ -2,9 +2,8 @@
 
 #include <algorithm>
 #include <cstring>
-#include <utility>
-
 #include <unordered_map>
+#include <utility>
 
 #include "baseapp/baseapp_messages.h"
 #include "cell_aoi_envelope.h"
@@ -170,7 +169,7 @@ void CellAppNativeProvider::PublishReplicationFrame(
       envelope.insert(envelope.end(), owner_delta, owner_delta + owner_delta_len);
 
       baseapp::ReplicatedReliableDeltaFromCell outgoing;
-      outgoing.base_entity_id = base_id;
+      outgoing.entity_id = base_id;
       outgoing.delta = std::move(envelope);
       (void)(*base_ch)->SendMessage(outgoing);
     }

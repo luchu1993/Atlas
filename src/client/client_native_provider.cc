@@ -53,8 +53,7 @@ void ClientNativeProvider::SendCellRpc(uint32_t entity_id, uint32_t rpc_id,
     return;
   }
 
-  // Client uses the unified entity id (== base_entity_id == cell_entity_id);
-  // BaseApp routes via CurrentCell to the owning CellApp.
+  // Unified entity id; BaseApp routes via CurrentCell to the owning CellApp.
   baseapp::ClientCellRpc msg;
   msg.target_entity_id = entity_id;
   msg.rpc_id = rpc_id;
@@ -71,7 +70,7 @@ void ClientNativeProvider::ReportClientEventSeqGap(uint32_t entity_id, uint32_t 
     return;
   }
   baseapp::ClientEventSeqReport msg;
-  msg.base_entity_id = entity_id;
+  msg.entity_id = entity_id;
   msg.gap_delta = gap_delta;
   (void)ch->SendMessage(msg);
 }

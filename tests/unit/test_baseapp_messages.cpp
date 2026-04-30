@@ -60,36 +60,36 @@ TEST(BaseAppMessages, AcceptClient) {
 
 TEST(BaseAppMessages, CellEntityCreated) {
   CellEntityCreated msg;
-  msg.base_entity_id = 100;
+  msg.entity_id = 100;
   msg.cell_entity_id = 200;
   msg.cell_addr = Address(0x7F000001u, 7002);
 
   auto rt = round_trip(msg);
   ASSERT_TRUE(rt.has_value());
-  EXPECT_EQ(rt->base_entity_id, 100u);
+  EXPECT_EQ(rt->entity_id, 100u);
   EXPECT_EQ(rt->cell_entity_id, 200u);
   EXPECT_EQ(rt->cell_addr.Port(), 7002u);
 }
 
 TEST(BaseAppMessages, CellEntityDestroyed) {
   CellEntityDestroyed msg;
-  msg.base_entity_id = 55;
+  msg.entity_id = 55;
 
   auto rt = round_trip(msg);
   ASSERT_TRUE(rt.has_value());
-  EXPECT_EQ(rt->base_entity_id, 55u);
+  EXPECT_EQ(rt->entity_id, 55u);
 }
 
 TEST(BaseAppMessages, CurrentCell) {
   CurrentCell msg;
-  msg.base_entity_id = 10;
+  msg.entity_id = 10;
   msg.cell_entity_id = 20;
   msg.cell_addr = Address(0x0A000001u, 7003);
   msg.epoch = 42;
 
   auto rt = round_trip(msg);
   ASSERT_TRUE(rt.has_value());
-  EXPECT_EQ(rt->base_entity_id, 10u);
+  EXPECT_EQ(rt->entity_id, 10u);
   EXPECT_EQ(rt->cell_entity_id, 20u);
   EXPECT_EQ(rt->cell_addr.Port(), 7003u);
   EXPECT_EQ(rt->epoch, 42u);
@@ -97,13 +97,13 @@ TEST(BaseAppMessages, CurrentCell) {
 
 TEST(BaseAppMessages, CellRpcForward) {
   CellRpcForward msg;
-  msg.base_entity_id = 5;
+  msg.entity_id = 5;
   msg.rpc_id = 42;
   msg.payload = {std::byte{0xAA}, std::byte{0xBB}, std::byte{0xCC}};
 
   auto rt = round_trip(msg);
   ASSERT_TRUE(rt.has_value());
-  EXPECT_EQ(rt->base_entity_id, 5u);
+  EXPECT_EQ(rt->entity_id, 5u);
   EXPECT_EQ(rt->rpc_id, 42u);
   ASSERT_EQ(rt->payload.size(), 3u);
   EXPECT_EQ(rt->payload[1], std::byte{0xBB});
@@ -127,24 +127,24 @@ TEST(BaseAppMessages, BroadcastRpcFromCell) {
 
 TEST(BaseAppMessages, ReplicatedDeltaFromCell) {
   ReplicatedDeltaFromCell msg;
-  msg.base_entity_id = 8;
+  msg.entity_id = 8;
   msg.delta = {std::byte{0x10}, std::byte{0x20}, std::byte{0x30}, std::byte{0x40}};
 
   auto rt = round_trip(msg);
   ASSERT_TRUE(rt.has_value());
-  EXPECT_EQ(rt->base_entity_id, 8u);
+  EXPECT_EQ(rt->entity_id, 8u);
   EXPECT_EQ(rt->delta.size(), 4u);
   EXPECT_EQ(rt->delta[3], std::byte{0x40});
 }
 
 TEST(BaseAppMessages, ReplicatedReliableDeltaFromCell) {
   ReplicatedReliableDeltaFromCell msg;
-  msg.base_entity_id = 8;
+  msg.entity_id = 8;
   msg.delta = {std::byte{0xDE}, std::byte{0xAD}, std::byte{0xBE}, std::byte{0xEF}};
 
   auto rt = round_trip(msg);
   ASSERT_TRUE(rt.has_value());
-  EXPECT_EQ(rt->base_entity_id, 8u);
+  EXPECT_EQ(rt->entity_id, 8u);
   EXPECT_EQ(rt->delta.size(), 4u);
   EXPECT_EQ(rt->delta[0], std::byte{0xDE});
   EXPECT_EQ(rt->delta[3], std::byte{0xEF});
@@ -165,13 +165,13 @@ TEST(BaseAppMessages, BackupCellEntity) {
   // verbatim; this test confirms round-trip byte fidelity so DB writes /
   // reviver never see mutated blobs.
   BackupCellEntity msg;
-  msg.base_entity_id = 0xCAFEBABE;
+  msg.entity_id = 0xCAFEBABE;
   msg.cell_backup_data = {std::byte{0x01}, std::byte{0x23}, std::byte{0x45}, std::byte{0x67},
                           std::byte{0x89}};
 
   auto rt = round_trip(msg);
   ASSERT_TRUE(rt.has_value());
-  EXPECT_EQ(rt->base_entity_id, 0xCAFEBABEu);
+  EXPECT_EQ(rt->entity_id, 0xCAFEBABEu);
   ASSERT_EQ(rt->cell_backup_data.size(), 5u);
   EXPECT_EQ(rt->cell_backup_data[0], std::byte{0x01});
   EXPECT_EQ(rt->cell_backup_data[4], std::byte{0x89});
@@ -190,12 +190,12 @@ TEST(BaseAppMessages, ReplicatedBaselineFromCell) {
   // mutation — a single flipped byte would mis-deserialize on the client
   // and recover _hp to the wrong value.
   ReplicatedBaselineFromCell msg;
-  msg.base_entity_id = 42;
+  msg.entity_id = 42;
   msg.snapshot = {std::byte{0xAA}, std::byte{0xBB}, std::byte{0xCC}, std::byte{0xDD}};
 
   auto rt = round_trip(msg);
   ASSERT_TRUE(rt.has_value());
-  EXPECT_EQ(rt->base_entity_id, 42u);
+  EXPECT_EQ(rt->entity_id, 42u);
   ASSERT_EQ(rt->snapshot.size(), 4u);
   EXPECT_EQ(rt->snapshot[0], std::byte{0xAA});
   EXPECT_EQ(rt->snapshot[3], std::byte{0xDD});
@@ -268,12 +268,12 @@ TEST(BaseAppMessages, ThreePathDeltaContract) {
 
 TEST(BaseAppMessages, ReplicatedBaselineToClient) {
   ReplicatedBaselineToClient msg;
-  msg.base_entity_id = 42;
+  msg.entity_id = 42;
   msg.snapshot = {std::byte{0xCA}, std::byte{0xFE}, std::byte{0xBA}, std::byte{0xBE}};
 
   auto rt = round_trip(msg);
   ASSERT_TRUE(rt.has_value());
-  EXPECT_EQ(rt->base_entity_id, 42u);
+  EXPECT_EQ(rt->entity_id, 42u);
   EXPECT_EQ(rt->snapshot.size(), 4u);
   EXPECT_EQ(rt->snapshot[0], std::byte{0xCA});
   EXPECT_EQ(rt->snapshot[3], std::byte{0xBE});
@@ -294,22 +294,22 @@ TEST(BaseAppMessages, PackedIntBoundaries) {
   // 3-byte entity_id (0xFE tag + uint16 LE)
   {
     ReplicatedDeltaFromCell msg;
-    msg.base_entity_id = 1000;
+    msg.entity_id = 1000;
     msg.delta = {std::byte{0xFF}};
     auto rt = round_trip(msg);
     ASSERT_TRUE(rt.has_value());
-    EXPECT_EQ(rt->base_entity_id, 1000u);
+    EXPECT_EQ(rt->entity_id, 1000u);
     EXPECT_EQ(rt->delta.size(), 1u);
   }
   // 5-byte entity_id (0xFF tag + uint32 LE)
   {
     CellRpcForward msg;
-    msg.base_entity_id = 0x00010001u;
+    msg.entity_id = 0x00010001u;
     msg.rpc_id = 500;
     msg.payload = {std::byte{0x01}, std::byte{0x02}};
     auto rt = round_trip(msg);
     ASSERT_TRUE(rt.has_value());
-    EXPECT_EQ(rt->base_entity_id, 0x00010001u);
+    EXPECT_EQ(rt->entity_id, 0x00010001u);
     EXPECT_EQ(rt->rpc_id, 500u);
     EXPECT_EQ(rt->payload.size(), 2u);
   }

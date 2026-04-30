@@ -123,7 +123,7 @@ void BaseAppNativeProvider::SetAoIRadius(uint32_t entity_id, float radius, float
     return;
   }
   cellapp::SetAoIRadius msg;
-  msg.base_entity_id = entity_id;
+  msg.entity_id = entity_id;
   msg.radius = radius;
   msg.hysteresis = hysteresis;
   (void)cell_ch->SendMessage(msg);

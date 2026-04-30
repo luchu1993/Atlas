@@ -42,7 +42,7 @@ struct CreateGhost {
   bool on_ground{false};
   Address real_cellapp_addr;
   Address base_addr;
-  EntityID base_entity_id{kInvalidEntityID};
+  EntityID entity_id{kInvalidEntityID};
   uint64_t event_seq{0};
   uint64_t volatile_seq{0};
   std::vector<std::byte> other_snapshot;
@@ -72,7 +72,7 @@ struct CreateGhost {
     w.Write(real_cellapp_addr.Port());
     w.Write(base_addr.Ip());
     w.Write(base_addr.Port());
-    w.Write(base_entity_id);
+    w.Write(entity_id);
     w.Write(event_seq);
     w.Write(volatile_seq);
     w.WritePackedInt(static_cast<uint32_t>(other_snapshot.size()));
@@ -110,7 +110,7 @@ struct CreateGhost {
     msg.on_ground = (*og != 0);
     msg.real_cellapp_addr = Address(*rip, *rport);
     msg.base_addr = Address(*bip, *bport);
-    msg.base_entity_id = *bid;
+    msg.entity_id = *bid;
     msg.event_seq = *es;
     msg.volatile_seq = *vs;
     if (*snlen > 0) {
@@ -126,7 +126,7 @@ static_assert(NetworkMessage<CreateGhost>);
 // DeleteGhost  (Real CellApp → Ghost CellApp, ID 3101)
 
 struct DeleteGhost {
-  EntityID ghost_entity_id{kInvalidEntityID};
+  EntityID entity_id{kInvalidEntityID};
 
   static auto Descriptor() -> const MessageDesc& {
     static const MessageDesc kDesc{msg_id::Id(msg_id::CellApp::kDeleteGhost),
@@ -138,13 +138,13 @@ struct DeleteGhost {
     return kDesc;
   }
 
-  void Serialize(BinaryWriter& w) const { w.Write(ghost_entity_id); }
+  void Serialize(BinaryWriter& w) const { w.Write(entity_id); }
 
   static auto Deserialize(BinaryReader& r) -> Result<DeleteGhost> {
     auto eid = r.Read<uint32_t>();
     if (!eid) return Error{ErrorCode::kInvalidArgument, "DeleteGhost: truncated"};
     DeleteGhost msg;
-    msg.ghost_entity_id = *eid;
+    msg.entity_id = *eid;
     return msg;
   }
 };
@@ -157,7 +157,7 @@ static_assert(NetworkMessage<DeleteGhost>);
 // Ghost discards any frame whose seq is <= what it already holds.
 
 struct GhostPositionUpdate {
-  EntityID ghost_entity_id{kInvalidEntityID};
+  EntityID entity_id{kInvalidEntityID};
   math::Vector3 position{0.f, 0.f, 0.f};
   math::Vector3 direction{1.f, 0.f, 0.f};
   bool on_ground{false};
@@ -175,7 +175,7 @@ struct GhostPositionUpdate {
   }
 
   void Serialize(BinaryWriter& w) const {
-    w.Write(ghost_entity_id);
+    w.Write(entity_id);
     w.Write(position.x);
     w.Write(position.y);
     w.Write(position.z);
@@ -199,7 +199,7 @@ struct GhostPositionUpdate {
     if (!eid || !px || !py || !pz || !dx || !dy || !dz || !og || !vs)
       return Error{ErrorCode::kInvalidArgument, "GhostPositionUpdate: truncated"};
     GhostPositionUpdate msg;
-    msg.ghost_entity_id = *eid;
+    msg.entity_id = *eid;
     msg.position = {*px, *py, *pz};
     msg.direction = {*dx, *dy, *dz};
     msg.on_ground = (*og != 0);
@@ -219,7 +219,7 @@ static_assert(NetworkMessage<GhostPositionUpdate>);
 // GhostSnapshotRefresh rather than by silent state loss.
 
 struct GhostDelta {
-  EntityID ghost_entity_id{kInvalidEntityID};
+  EntityID entity_id{kInvalidEntityID};
   uint64_t event_seq{0};
   std::vector<std::byte> other_delta;
 
@@ -234,7 +234,7 @@ struct GhostDelta {
   }
 
   void Serialize(BinaryWriter& w) const {
-    w.Write(ghost_entity_id);
+    w.Write(entity_id);
     w.Write(event_seq);
     w.WritePackedInt(static_cast<uint32_t>(other_delta.size()));
     if (!other_delta.empty()) w.WriteBytes(std::span<const std::byte>(other_delta));
@@ -246,7 +246,7 @@ struct GhostDelta {
     auto dlen = r.ReadPackedInt();
     if (!eid || !es || !dlen) return Error{ErrorCode::kInvalidArgument, "GhostDelta: truncated"};
     GhostDelta msg;
-    msg.ghost_entity_id = *eid;
+    msg.entity_id = *eid;
     msg.event_seq = *es;
     if (*dlen > 0) {
       auto data = r.ReadBytes(*dlen);
@@ -267,7 +267,7 @@ static_assert(NetworkMessage<GhostDelta>);
 // let future GhostDelta streams resume from there.
 
 struct GhostSnapshotRefresh {
-  EntityID ghost_entity_id{kInvalidEntityID};
+  EntityID entity_id{kInvalidEntityID};
   uint64_t event_seq{0};
   std::vector<std::byte> other_snapshot;
 
@@ -282,7 +282,7 @@ struct GhostSnapshotRefresh {
   }
 
   void Serialize(BinaryWriter& w) const {
-    w.Write(ghost_entity_id);
+    w.Write(entity_id);
     w.Write(event_seq);
     w.WritePackedInt(static_cast<uint32_t>(other_snapshot.size()));
     if (!other_snapshot.empty()) w.WriteBytes(std::span<const std::byte>(other_snapshot));
@@ -295,7 +295,7 @@ struct GhostSnapshotRefresh {
     if (!eid || !es || !snlen)
       return Error{ErrorCode::kInvalidArgument, "GhostSnapshotRefresh: truncated"};
     GhostSnapshotRefresh msg;
-    msg.ghost_entity_id = *eid;
+    msg.entity_id = *eid;
     msg.event_seq = *es;
     if (*snlen > 0) {
       auto data = r.ReadBytes(*snlen);
@@ -314,7 +314,7 @@ static_assert(NetworkMessage<GhostSnapshotRefresh>);
 // forwarded-RPC / real-reply traffic to the new Real address.
 
 struct GhostSetReal {
-  EntityID ghost_entity_id{kInvalidEntityID};
+  EntityID entity_id{kInvalidEntityID};
   Address new_real_addr;
 
   static auto Descriptor() -> const MessageDesc& {
@@ -329,7 +329,7 @@ struct GhostSetReal {
   }
 
   void Serialize(BinaryWriter& w) const {
-    w.Write(ghost_entity_id);
+    w.Write(entity_id);
     w.Write(new_real_addr.Ip());
     w.Write(new_real_addr.Port());
   }
@@ -340,7 +340,7 @@ struct GhostSetReal {
     auto port = r.Read<uint16_t>();
     if (!eid || !ip || !port) return Error{ErrorCode::kInvalidArgument, "GhostSetReal: truncated"};
     GhostSetReal msg;
-    msg.ghost_entity_id = *eid;
+    msg.entity_id = *eid;
     msg.new_real_addr = Address(*ip, *port);
     return msg;
   }
@@ -353,7 +353,7 @@ static_assert(NetworkMessage<GhostSetReal>);
 // transition window rather than drop it.
 
 struct GhostSetNextReal {
-  EntityID ghost_entity_id{kInvalidEntityID};
+  EntityID entity_id{kInvalidEntityID};
   Address next_real_addr;
 
   static auto Descriptor() -> const MessageDesc& {
@@ -368,7 +368,7 @@ struct GhostSetNextReal {
   }
 
   void Serialize(BinaryWriter& w) const {
-    w.Write(ghost_entity_id);
+    w.Write(entity_id);
     w.Write(next_real_addr.Ip());
     w.Write(next_real_addr.Port());
   }
@@ -380,7 +380,7 @@ struct GhostSetNextReal {
     if (!eid || !ip || !port)
       return Error{ErrorCode::kInvalidArgument, "GhostSetNextReal: truncated"};
     GhostSetNextReal msg;
-    msg.ghost_entity_id = *eid;
+    msg.entity_id = *eid;
     msg.next_real_addr = Address(*ip, *port);
     return msg;
   }
@@ -407,7 +407,7 @@ struct OffloadEntity {
   math::Vector3 direction{1.f, 0.f, 0.f};
   bool on_ground{false};
   Address base_addr;
-  EntityID base_entity_id{kInvalidEntityID};
+  EntityID entity_id{kInvalidEntityID};
   std::vector<std::byte> persistent_blob;
   std::vector<std::byte> owner_snapshot;
   std::vector<std::byte> other_snapshot;
@@ -454,7 +454,7 @@ struct OffloadEntity {
     w.Write(static_cast<uint8_t>(on_ground ? 1 : 0));
     w.Write(base_addr.Ip());
     w.Write(base_addr.Port());
-    w.Write(base_entity_id);
+    w.Write(entity_id);
     w.WritePackedInt(static_cast<uint32_t>(persistent_blob.size()));
     if (!persistent_blob.empty()) w.WriteBytes(std::span<const std::byte>(persistent_blob));
     w.WritePackedInt(static_cast<uint32_t>(owner_snapshot.size()));
@@ -504,7 +504,7 @@ struct OffloadEntity {
     msg.direction = {*dx, *dy, *dz};
     msg.on_ground = (*og != 0);
     msg.base_addr = Address(*bip, *bport);
-    msg.base_entity_id = *bid;
+    msg.entity_id = *bid;
     if (*pblen > 0) {
       auto data = r.ReadBytes(*pblen);
       if (!data) return Error{ErrorCode::kInvalidArgument, "OffloadEntity: blob truncated"};
@@ -577,7 +577,7 @@ static_assert(NetworkMessage<OffloadEntity>);
 // keeps the entity put.
 
 struct OffloadEntityAck {
-  EntityID real_entity_id{kInvalidEntityID};
+  EntityID entity_id{kInvalidEntityID};
   bool success{false};
 
   static auto Descriptor() -> const MessageDesc& {
@@ -591,7 +591,7 @@ struct OffloadEntityAck {
   }
 
   void Serialize(BinaryWriter& w) const {
-    w.Write(real_entity_id);
+    w.Write(entity_id);
     w.Write(static_cast<uint8_t>(success ? 1 : 0));
   }
 
@@ -600,7 +600,7 @@ struct OffloadEntityAck {
     auto ok = r.Read<uint8_t>();
     if (!eid || !ok) return Error{ErrorCode::kInvalidArgument, "OffloadEntityAck: truncated"};
     OffloadEntityAck msg;
-    msg.real_entity_id = *eid;
+    msg.entity_id = *eid;
     msg.success = (*ok != 0);
     return msg;
   }

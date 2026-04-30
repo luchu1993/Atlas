@@ -75,7 +75,7 @@ class CellAppIntegrationFixture : public ::testing::Test {
   auto MakeCreate(EntityID base_id, SpaceID sp, math::Vector3 pos = {0, 0, 0})
       -> cellapp::CreateCellEntity {
     cellapp::CreateCellEntity msg;
-    msg.base_entity_id = base_id;
+    msg.entity_id = base_id;
     msg.type_id = 1;
     msg.space_id = sp;
     msg.position = pos;
@@ -138,7 +138,7 @@ TEST_F(CellAppIntegrationFixture, Pr34EndToEndEnableThenSetAoIRadius) {
 
   // Script-side SetAoIRadius(50, 5) — shrinks AoI to the stress-test band.
   cellapp::SetAoIRadius s;
-  s.base_entity_id = 100;
+  s.entity_id = 100;
   s.radius = 50.f;
   s.hysteresis = 5.f;
   app_.OnSetAoIRadius({}, nullptr, s);
@@ -297,7 +297,7 @@ class RpcSecurityFixture : public ::testing::Test {
 
   auto MakeCreate(EntityID base_id, SpaceID sp) -> cellapp::CreateCellEntity {
     cellapp::CreateCellEntity msg;
-    msg.base_entity_id = base_id;
+    msg.entity_id = base_id;
     msg.type_id = 1;
     msg.space_id = sp;
     msg.position = {0, 0, 0};

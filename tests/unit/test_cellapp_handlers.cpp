@@ -53,7 +53,7 @@ class CellAppHandlersTest : public ::testing::Test {
   auto MakeCreate(EntityID base_id, SpaceID sp, math::Vector3 pos = {0, 0, 0})
       -> cellapp::CreateCellEntity {
     cellapp::CreateCellEntity msg;
-    msg.base_entity_id = base_id;
+    msg.entity_id = base_id;
     msg.type_id = 1;
     msg.space_id = sp;
     msg.position = pos;
@@ -132,7 +132,7 @@ TEST_F(CellAppHandlersTest, AvatarUpdateMovesEntity) {
   app_.OnCreateCellEntity({}, nullptr, MakeCreate(100, 1, {0, 0, 0}));
 
   cellapp::AvatarUpdate u;
-  u.base_entity_id = 100;
+  u.entity_id = 100;
   u.position = {5.f, 0.f, 5.f};
   u.direction = {0, 0, 1};
   u.on_ground = true;
@@ -149,7 +149,7 @@ TEST_F(CellAppHandlersTest, AvatarUpdateRejectsTeleport) {
   app_.OnCreateCellEntity({}, nullptr, MakeCreate(100, 1, {0, 0, 0}));
 
   cellapp::AvatarUpdate u;
-  u.base_entity_id = 100;
+  u.entity_id = 100;
   u.position = {10000.f, 0, 0};  // way beyond kMaxSingleTickMove
   app_.OnAvatarUpdate({}, nullptr, u);
 
@@ -161,7 +161,7 @@ TEST_F(CellAppHandlersTest, AvatarUpdateRejectsNaN) {
   app_.OnCreateCellEntity({}, nullptr, MakeCreate(100, 1, {0, 0, 0}));
 
   cellapp::AvatarUpdate u;
-  u.base_entity_id = 100;
+  u.entity_id = 100;
   u.position = {std::nanf(""), 0, 0};
   app_.OnAvatarUpdate({}, nullptr, u);
 
@@ -173,7 +173,7 @@ TEST_F(CellAppHandlersTest, AvatarUpdateRejectsNaNDirection) {
   app_.OnCreateCellEntity({}, nullptr, MakeCreate(100, 1, {0, 0, 0}));
 
   cellapp::AvatarUpdate u;
-  u.base_entity_id = 100;
+  u.entity_id = 100;
   u.position = {1, 0, 0};
   u.direction = {0, std::nanf(""), 0};
   app_.OnAvatarUpdate({}, nullptr, u);
@@ -189,7 +189,7 @@ TEST_F(CellAppHandlersTest, EnableDisableWitnessTogglesOnEntity) {
   // After C2: EnableWitness carries only the entity id; radius +
   // hysteresis come from CellAppConfig.
   cellapp::EnableWitness e;
-  e.base_entity_id = 100;
+  e.entity_id = 100;
   app_.OnEnableWitness({}, nullptr, e);
   EXPECT_TRUE(app_.FindEntityByBaseId(100)->HasWitness());
 
@@ -216,7 +216,7 @@ TEST_F(CellAppHandlersTest, OnSetAoIRadiusUpdatesActiveWitness) {
   ASSERT_TRUE(entity->HasWitness());
 
   cellapp::SetAoIRadius s;
-  s.base_entity_id = 100;
+  s.entity_id = 100;
   s.radius = 42.5f;
   s.hysteresis = 7.f;
   app_.OnSetAoIRadius({}, nullptr, s);
@@ -229,7 +229,7 @@ TEST_F(CellAppHandlersTest, OnSetAoIRadiusMissingWitnessIsNoop) {
   app_.OnCreateCellEntity({}, nullptr, MakeCreate(100, 1));
   // No EnableWitness — witness is absent.
   cellapp::SetAoIRadius s;
-  s.base_entity_id = 100;
+  s.entity_id = 100;
   s.radius = 42.5f;
   s.hysteresis = 7.f;
   app_.OnSetAoIRadius({}, nullptr, s);  // should log-warn, not crash
@@ -267,7 +267,7 @@ TEST_F(CellAppHandlersTest, OnSetAoIRadiusClampsToMax) {
   // CellAppConfig::MaxAoIRadius() defaults to 500m. A value beyond that
   // must be clamped inside Witness::SetAoIRadius.
   cellapp::SetAoIRadius s;
-  s.base_entity_id = 100;
+  s.entity_id = 100;
   s.radius = 10'000.f;
   s.hysteresis = 5.f;
   app_.OnSetAoIRadius({}, nullptr, s);
@@ -467,7 +467,7 @@ TEST_F(CellAppHandlersTest, CreateGhostWithNullChannelRejected) {
   msg.on_ground = false;
   msg.real_cellapp_addr = Address(0x7F000001u, 30001);
   msg.base_addr = Address(0x7F000001u, 20000);
-  msg.base_entity_id = 500;
+  msg.entity_id = 500;
   msg.event_seq = 0;
   msg.volatile_seq = 0;
 
@@ -493,7 +493,7 @@ TEST_F(CellAppHandlersTest, GhostPositionUpdateRejectsNaN) {
   cg.on_ground = false;
   cg.real_cellapp_addr = Address(0x7F000001u, 30001);
   cg.base_addr = Address(0x7F000001u, 20000);
-  cg.base_entity_id = 600;
+  cg.entity_id = 600;
   cg.event_seq = 0;
   cg.volatile_seq = 0;
 
@@ -506,7 +506,7 @@ TEST_F(CellAppHandlersTest, GhostPositionUpdateRejectsNaN) {
 
   // Send a position update containing NaN — must be rejected.
   cellapp::GhostPositionUpdate upd;
-  upd.ghost_entity_id = 600;
+  upd.entity_id = 600;
   upd.position = {std::nanf(""), 0, 0};
   upd.direction = {1, 0, 0};
   upd.on_ground = true;
@@ -538,7 +538,7 @@ TEST_F(CellAppHandlersTest, PeerDeathDropsOrphanGhostsAndClearsHaunts) {
   cg.position = {0, 0, 0};
   cg.direction = {1, 0, 0};
   cg.real_cellapp_addr = Address(0x7F000001u, 40001);
-  cg.base_entity_id = 700;
+  cg.entity_id = 700;
   app_.OnCreateGhost({}, dying_ch, cg);
   ASSERT_NE(app_.FindEntity(700), nullptr);
 
@@ -550,7 +550,7 @@ TEST_F(CellAppHandlersTest, PeerDeathDropsOrphanGhostsAndClearsHaunts) {
   cg_ok.position = {5, 0, 5};
   cg_ok.direction = {1, 0, 0};
   cg_ok.real_cellapp_addr = Address(0x7F000001u, 40002);
-  cg_ok.base_entity_id = 701;
+  cg_ok.entity_id = 701;
   app_.OnCreateGhost({}, other_ch, cg_ok);
   ASSERT_NE(app_.FindEntity(701), nullptr);
 

@@ -146,7 +146,7 @@ struct RealGhostFixture {
     B.app.OnCreateSpace({}, nullptr, cs);
 
     cellapp::CreateCellEntity cce;
-    cce.base_entity_id = kBaseId;
+    cce.entity_id = kBaseId;
     cce.type_id = 1;
     cce.space_id = kSpaceId;
     cce.position = {50.f, 0.f, 50.f};
@@ -172,7 +172,7 @@ struct RealGhostFixture {
     cg.on_ground = real->OnGround();
     cg.real_cellapp_addr = addr_a;
     cg.base_addr = Address(0, 0);
-    cg.base_entity_id = real->BaseEntityId();
+    cg.entity_id = real->BaseEntityId();
     cg.event_seq = event_seq;
     cg.volatile_seq = volatile_seq;
     return cg;
@@ -204,7 +204,7 @@ TEST(DistributedSpaceOverRudp, CreateGhost_InstantiatesGhostOnPeer) {
   EXPECT_TRUE(ghost->IsGhost());
   EXPECT_FLOAT_EQ(ghost->Position().x, cg.position.x);
   EXPECT_FLOAT_EQ(ghost->Position().z, cg.position.z);
-  EXPECT_EQ(ghost->BaseEntityId(), cg.base_entity_id);
+  EXPECT_EQ(ghost->BaseEntityId(), cg.entity_id);
 }
 
 // =============================================================================
@@ -221,7 +221,7 @@ TEST(DistributedSpaceOverRudp, GhostPositionUpdate_AdvancesPeerGhost) {
       PumpUntil(fx.A, fx.B, [&] { return fx.B.app.FindEntity(cg.real_entity_id) != nullptr; }));
 
   cellapp::GhostPositionUpdate gpu;
-  gpu.ghost_entity_id = cg.real_entity_id;
+  gpu.entity_id = cg.real_entity_id;
   gpu.position = {75.f, 0.f, 80.f};
   gpu.direction = {0.f, 0.f, 1.f};
   gpu.on_ground = true;
@@ -261,7 +261,7 @@ TEST(DistributedSpaceOverRudp, GhostDelta_AdvancesPeerReplicationSeq) {
   })) << "Ghost did not pick up seeded event_seq from CreateGhost";
 
   cellapp::GhostDelta gd;
-  gd.ghost_entity_id = cg.real_entity_id;
+  gd.entity_id = cg.real_entity_id;
   gd.event_seq = 6;
   gd.other_delta = {std::byte{0x01}, std::byte{0x02}, std::byte{0x03}};
   ASSERT_TRUE(fx.ch_a_to_b->SendMessage(gd).HasValue());
@@ -290,7 +290,7 @@ TEST(DistributedSpaceOverRudp, OffloadEntity_RehydratesPeerRealAndAcks) {
   auto offload = fx.A.app.BuildOffloadMessage(*fx.real);
   ASSERT_EQ(offload.real_entity_id, fx.real->Id());
   ASSERT_EQ(offload.space_id, fx.real->GetSpace().Id());
-  ASSERT_EQ(offload.base_entity_id, fx.real->BaseEntityId());
+  ASSERT_EQ(offload.entity_id, fx.real->BaseEntityId());
 
   // Install a pending entry so the receiver's ack has something to
   // resolve on A. Production path inserts this in TickOffloadChecker.
@@ -313,10 +313,10 @@ TEST(DistributedSpaceOverRudp, OffloadEntity_RehydratesPeerRealAndAcks) {
   auto* rehydrated = fx.B.app.FindEntity(offload.real_entity_id);
   ASSERT_NE(rehydrated, nullptr);
   EXPECT_TRUE(rehydrated->IsReal());
-  EXPECT_EQ(rehydrated->BaseEntityId(), offload.base_entity_id);
+  EXPECT_EQ(rehydrated->BaseEntityId(), offload.entity_id);
   EXPECT_FLOAT_EQ(rehydrated->Position().x, offload.position.x);
   EXPECT_FLOAT_EQ(rehydrated->Position().z, offload.position.z);
-  EXPECT_EQ(fx.B.app.FindEntityByBaseId(offload.base_entity_id), rehydrated);
+  EXPECT_EQ(fx.B.app.FindEntityByBaseId(offload.entity_id), rehydrated);
 
   // OffloadEntityAck round-trip: A's pending entry drains once the ack
   // arrives on the bidirectional RUDP channel.

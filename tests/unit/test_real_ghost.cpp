@@ -343,7 +343,7 @@ TEST(RealEntityData, BuildPositionUpdate_ReflectsOwnerState) {
   e->PublishReplicationFrame(std::move(frame), {}, {});
 
   auto msg = e->GetRealData()->BuildPositionUpdate();
-  EXPECT_EQ(msg.ghost_entity_id, 30u);
+  EXPECT_EQ(msg.entity_id, 30u);
   EXPECT_FLOAT_EQ(msg.position.x, 3.f);
   EXPECT_FLOAT_EQ(msg.position.y, 4.f);
   EXPECT_FLOAT_EQ(msg.position.z, 5.f);
@@ -368,7 +368,7 @@ TEST(RealEntityData, BuildDelta_ForwardsLatestHistoryFrame) {
   e->PublishReplicationFrame(std::move(f2), {}, {});
 
   auto msg = e->GetRealData()->BuildDelta();
-  EXPECT_EQ(msg.ghost_entity_id, 31u);
+  EXPECT_EQ(msg.entity_id, 31u);
   EXPECT_EQ(msg.event_seq, 2u);
   ASSERT_EQ(msg.other_delta.size(), 2u);
   EXPECT_EQ(msg.other_delta[0], std::byte{0x02});
@@ -423,7 +423,7 @@ TEST(RealEntityData, BuildSnapshotRefresh_ReflectsOwnerSnapshot) {
   e->PublishReplicationFrame(std::move(f), {}, std::span<const std::byte>(snap));
 
   auto msg = e->GetRealData()->BuildSnapshotRefresh();
-  EXPECT_EQ(msg.ghost_entity_id, 33u);
+  EXPECT_EQ(msg.entity_id, 33u);
   EXPECT_EQ(msg.event_seq, 7u);
   ASSERT_EQ(msg.other_snapshot.size(), 2u);
   EXPECT_EQ(msg.other_snapshot[0], std::byte{0xCA});
