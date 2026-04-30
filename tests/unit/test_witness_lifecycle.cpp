@@ -56,7 +56,7 @@ class WitnessLifecycleTest : public ::testing::Test {
       -> CellEntity* {
     auto* e = space.AddEntity(
         std::make_unique<CellEntity>(id, type_id, space, pos, math::Vector3{1, 0, 0}));
-    e->SetBase(Address(0, 0), /*base_id=*/id);
+    e->SetBaseAddr(Address(0, 0));
     return e;
   }
 };
@@ -86,8 +86,8 @@ TEST_F(WitnessLifecycleTest, PeerEntersFiresEntityEnter) {
 
   ASSERT_EQ(sent_.size(), 1u);
   EXPECT_EQ(KindOf(sent_[0]), CellAoIEnvelopeKind::kEntityEnter);
-  EXPECT_EQ(PublicIdOf(sent_[0]), peer->BaseEntityId());
-  EXPECT_EQ(sent_[0].observer_base_id, observer->BaseEntityId());
+  EXPECT_EQ(PublicIdOf(sent_[0]), peer->Id());
+  EXPECT_EQ(sent_[0].observer_base_id, observer->Id());
 
   // Follow-up Update with no state change produces nothing.
   sent_.clear();
@@ -115,7 +115,7 @@ TEST_F(WitnessLifecycleTest, PeerLeavesFiresEntityLeave) {
 
   ASSERT_EQ(sent_.size(), 1u);
   EXPECT_EQ(KindOf(sent_[0]), CellAoIEnvelopeKind::kEntityLeave);
-  EXPECT_EQ(PublicIdOf(sent_[0]), peer->BaseEntityId());
+  EXPECT_EQ(PublicIdOf(sent_[0]), peer->Id());
   // After Update, the cache is compacted.
   EXPECT_TRUE(observer->GetWitness()->AoIMap().empty());
 }
@@ -138,7 +138,7 @@ TEST_F(WitnessLifecycleTest, SetAoIRadiusExpandSweepsInPeer) {
   observer->GetWitness()->Update(4096);
   ASSERT_EQ(sent_.size(), 1u);
   EXPECT_EQ(KindOf(sent_[0]), CellAoIEnvelopeKind::kEntityEnter);
-  EXPECT_EQ(PublicIdOf(sent_[0]), peer->BaseEntityId());
+  EXPECT_EQ(PublicIdOf(sent_[0]), peer->Id());
 }
 
 TEST_F(WitnessLifecycleTest, DeactivateClearsState) {

@@ -451,7 +451,7 @@ void CellApp::OnCreateCellEntity(const Address& src, Channel* ch,
   if (base_addr.Ip() == 0 && ch != nullptr) {
     base_addr = ch->RemoteAddress();
   }
-  entity_ptr->SetBase(base_addr, msg.entity_id);
+  entity_ptr->SetBaseAddr(base_addr);
   auto* entity = space->AddEntity(std::move(entity_ptr));
   entity_population_[cell_id] = entity;
 
@@ -470,12 +470,11 @@ void CellApp::OnCreateCellEntity(const Address& src, Channel* ch,
   if (ch != nullptr) {
     baseapp::CellEntityCreated ack;
     ack.entity_id = msg.entity_id;
-    ack.cell_entity_id = cell_id;
     ack.cell_addr = Network().RudpAddress();
     if (auto r = ch->SendMessage(ack); !r) {
       // Dropped ack ⇒ BaseApp times out and resends CreateCellEntity;
       // logging here distinguishes that from a genuinely slow create.
-      ATLAS_LOG_WARNING("CellApp: CellEntityCreated ack send failed, base_entity_id={} to {}: {}",
+      ATLAS_LOG_WARNING("CellApp: CellEntityCreated ack send failed, entity_id={} to {}: {}",
                         msg.entity_id, src.ToString(), r.Error().Message());
     }
   }
@@ -782,23 +781,22 @@ void CellApp::OnCreateGhost(const Address& /*src*/, Channel* ch, const cellapp::
     space = inserted.first->second.get();
     ATLAS_LOG_INFO("CellApp: auto-created Space {} for incoming Ghost", msg.space_id);
   }
-  if (entity_population_.contains(msg.real_entity_id)) {
+  if (entity_population_.contains(msg.entity_id)) {
     ATLAS_LOG_WARNING("CellApp: CreateGhost for already-present entity_id={} — ignoring",
-                      msg.real_entity_id);
+                      msg.entity_id);
     return;
   }
   if (ch == nullptr) {
     ATLAS_LOG_WARNING("CellApp: CreateGhost for entity_id={} with null channel — ignoring",
-                      msg.real_entity_id);
+                      msg.entity_id);
     return;
   }
   // CreateGhost arrives on the peer's connection (ch), so latch it as
   // the Real-side back-channel.
-  auto* entity_ptr_raw = space->AddEntity(
-      std::make_unique<CellEntity>(CellEntity::GhostTag{}, msg.real_entity_id, msg.type_id, *space,
-                                   msg.position, msg.direction, ch));
+  auto* entity_ptr_raw = space->AddEntity(std::make_unique<CellEntity>(
+      CellEntity::GhostTag{}, msg.entity_id, msg.type_id, *space, msg.position, msg.direction, ch));
   entity_ptr_raw->SetOnGround(msg.on_ground);
-  entity_ptr_raw->SetBase(msg.base_addr, msg.entity_id);
+  entity_ptr_raw->SetBaseAddr(msg.base_addr);
   // Seed snapshot baseline so subsequent GhostDelta frames have
   // something to append to.
   if (!msg.other_snapshot.empty() || msg.event_seq > 0) {
@@ -814,7 +812,7 @@ void CellApp::OnCreateGhost(const Address& /*src*/, Channel* ch, const cellapp::
   // Ghosts share entity_population_ with Reals; FindEntityByBaseId
   // gates on IsReal() so client RPCs still route only to the owning
   // Real (via BaseApp's CurrentCell table).
-  entity_population_[msg.real_entity_id] = entity_ptr_raw;
+  entity_population_[msg.entity_id] = entity_ptr_raw;
 }
 
 void CellApp::OnDeleteGhost(const Address& /*src*/, Channel* /*ch*/,
@@ -894,7 +892,7 @@ void CellApp::OnOffloadEntity(const Address& src, Channel* ch, const cellapp::Of
   }
 
   CellEntity* entity = nullptr;
-  auto it = entity_population_.find(msg.real_entity_id);
+  auto it = entity_population_.find(msg.entity_id);
   if (it != entity_population_.end()) {
     // Promote a pre-existing Ghost. ConvertGhostToReal preserves
     // replication_state_; the offload owner_snapshot layers on top.
@@ -902,9 +900,9 @@ void CellApp::OnOffloadEntity(const Address& src, Channel* ch, const cellapp::Of
     if (!entity->IsGhost()) {
       ATLAS_LOG_ERROR(
           "CellApp: OffloadEntity for existing non-Ghost entity_id={} — aborting offload",
-          msg.real_entity_id);
+          msg.entity_id);
       cellapp::OffloadEntityAck ack;
-      ack.entity_id = msg.real_entity_id;
+      ack.entity_id = msg.entity_id;
       ack.success = false;
       if (ch != nullptr) {
         if (auto r = ch->SendMessage(ack); !r) {
@@ -913,27 +911,25 @@ void CellApp::OnOffloadEntity(const Address& src, Channel* ch, const cellapp::Of
           ATLAS_LOG_ERROR(
               "CellApp: failed to send OffloadEntityAck(success=false) entity_id={} "
               "to {}: {} — sender may double-revert",
-              msg.real_entity_id, src.ToString(), r.Error().Message());
+              msg.entity_id, src.ToString(), r.Error().Message());
         }
       }
       return;
     }
     entity->ConvertGhostToReal();
   } else {
-    auto entity_ptr = std::make_unique<CellEntity>(msg.real_entity_id, msg.type_id, *space,
-                                                   msg.position, msg.direction);
+    auto entity_ptr = std::make_unique<CellEntity>(msg.entity_id, msg.type_id, *space, msg.position,
+                                                   msg.direction);
     entity_ptr->SetOnGround(msg.on_ground);
-    entity_ptr->SetBase(msg.base_addr, msg.entity_id);
+    entity_ptr->SetBaseAddr(msg.base_addr);
     entity = space->AddEntity(std::move(entity_ptr));
-    entity_population_[msg.real_entity_id] = entity;
+    entity_population_[msg.entity_id] = entity;
   }
 
-  // Offload preserves cell_entity_id end-to-end (sender packs its
-  // local id into msg.real_entity_id; receiver promotes the matching
-  // ghost or constructs a fresh Real with the same id). base_entity_id
-  // is the cluster-stable identity from BaseApp's IDClient.
-  assert(entity->Id() == msg.real_entity_id);
-  assert(entity->BaseEntityId() == msg.entity_id);
+  // Offload preserves entity_id end-to-end (sender packs its id into
+  // msg.entity_id; receiver promotes the matching ghost or constructs
+  // a fresh Real with the same id).
+  assert(entity->Id() == msg.entity_id);
 
   // Empty blob is valid (tests / C#-less setups): the Real has no
   // script state and AoI runs off the replication baseline below until
@@ -1000,7 +996,7 @@ void CellApp::OnOffloadEntity(const Address& src, Channel* ch, const cellapp::Of
       ATLAS_LOG_ERROR(
           "CellApp: Offload controller restore failed for entity_id={} — arriving "
           "controllers partially / empty",
-          msg.real_entity_id);
+          msg.entity_id);
     }
   }
 
@@ -1008,7 +1004,6 @@ void CellApp::OnOffloadEntity(const Address& src, Channel* ch, const cellapp::Of
   // CellApp path during rapid re-offload.
   baseapp::CurrentCell cc;
   cc.entity_id = msg.entity_id;
-  cc.cell_entity_id = entity->Id();
   cc.cell_addr = Network().RudpAddress();
   cc.epoch = next_offload_epoch_++;
   auto base_ch = Network().ConnectRudpNocwnd(msg.base_addr);
@@ -1020,14 +1015,14 @@ void CellApp::OnOffloadEntity(const Address& src, Channel* ch, const cellapp::Of
       ATLAS_LOG_ERROR(
           "CellApp: failed to send CurrentCell entity_id={} epoch={} to base {}: {} "
           "— BaseApp split-brain risk",
-          msg.real_entity_id, cc.epoch, msg.base_addr.ToString(), r.Error().Message());
+          msg.entity_id, cc.epoch, msg.base_addr.ToString(), r.Error().Message());
     }
   }
 
   // Redirect every existing haunt's back-channel to us. The sender is
   // already in Ghost state by the time Offload arrives here.
   cellapp::GhostSetReal ghost_set_real;
-  ghost_set_real.entity_id = msg.real_entity_id;
+  ghost_set_real.entity_id = msg.entity_id;
   ghost_set_real.new_real_addr = Network().RudpAddress();
   for (const auto& haunt_addr : msg.existing_haunts) {
     if (haunt_addr == Network().RudpAddress()) continue;
@@ -1040,13 +1035,13 @@ void CellApp::OnOffloadEntity(const Address& src, Channel* ch, const cellapp::Of
         ATLAS_LOG_ERROR(
             "CellApp: failed to send GhostSetReal entity_id={} to haunt {}: {} "
             "— haunt back-channel stale",
-            msg.real_entity_id, haunt_addr.ToString(), r.Error().Message());
+            msg.entity_id, haunt_addr.ToString(), r.Error().Message());
       }
     }
   }
 
   cellapp::OffloadEntityAck ack;
-  ack.entity_id = msg.real_entity_id;
+  ack.entity_id = msg.entity_id;
   ack.success = true;
   if (ch != nullptr) {
     if (auto r = ch->SendMessage(ack); !r) {
@@ -1056,7 +1051,7 @@ void CellApp::OnOffloadEntity(const Address& src, Channel* ch, const cellapp::Of
       ATLAS_LOG_ERROR(
           "CellApp: failed to send OffloadEntityAck(success=true) entity_id={} to {}: {} "
           "— two-Reals split-brain until sender's revert timeout fires",
-          msg.real_entity_id, src.ToString(), r.Error().Message());
+          msg.entity_id, src.ToString(), r.Error().Message());
     }
   }
 }
@@ -1277,14 +1272,14 @@ void CellApp::OnRegisterCellAppAck(const Address& /*src*/, Channel* /*ch*/,
 
 auto CellApp::BuildOffloadMessage(const CellEntity& entity) const -> cellapp::OffloadEntity {
   cellapp::OffloadEntity msg;
-  msg.real_entity_id = entity.Id();
+  msg.entity_id = entity.Id();
   msg.type_id = entity.TypeId();
   msg.space_id = entity.GetSpace().Id();
   msg.position = entity.Position();
   msg.direction = entity.Direction();
   msg.on_ground = entity.OnGround();
   msg.base_addr = entity.BaseAddr();
-  msg.entity_id = entity.BaseEntityId();
+  msg.entity_id = entity.Id();
   // Empty blob is valid (tests / early boot); receiver still promotes
   // Ghost→Real but without script state restoration.
   if (native_provider_ != nullptr && native_provider_->serialize_entity_fn() != nullptr) {
@@ -1361,7 +1356,7 @@ void CellApp::TickGhostPump() {
       if (rd == nullptr) continue;
 
       cellapp::CreateGhost msg;
-      msg.real_entity_id = op.entity->Id();
+      msg.entity_id = op.entity->Id();
       msg.type_id = op.entity->TypeId();
       msg.space_id = op.entity->GetSpace().Id();
       msg.position = op.entity->Position();
@@ -1369,7 +1364,7 @@ void CellApp::TickGhostPump() {
       msg.on_ground = op.entity->OnGround();
       msg.real_cellapp_addr = Network().RudpAddress();
       msg.base_addr = op.entity->BaseAddr();
-      msg.entity_id = op.entity->BaseEntityId();
+      msg.entity_id = op.entity->Id();
       if (const auto* state = op.entity->GetReplicationState()) {
         msg.event_seq = state->latest_event_seq;
         msg.volatile_seq = state->latest_volatile_seq;

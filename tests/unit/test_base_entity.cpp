@@ -21,9 +21,8 @@ TEST(BaseEntity, DefaultState) {
 TEST(BaseEntity, SetCellAndClear) {
   BaseEntity ent(1, 2);
   Address addr(0x7F000001u, 7001);
-  ent.SetCell(99, addr);
+  ent.SetCell(addr);
   EXPECT_TRUE(ent.HasCell());
-  EXPECT_EQ(ent.CellEntityId(), 99u);
   EXPECT_EQ(ent.CellAddr().Port(), 7001u);
 
   ent.ClearCell();

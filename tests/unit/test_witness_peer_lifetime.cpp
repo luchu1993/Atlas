@@ -26,7 +26,7 @@ class WitnessPeerLifetimeTest : public ::testing::Test {
   auto MakeEntity(EntityID id, math::Vector3 pos = {0, 0, 0}) -> CellEntity* {
     auto* e = space_.AddEntity(
         std::make_unique<CellEntity>(id, uint16_t{1}, space_, pos, math::Vector3{1, 0, 0}));
-    e->SetBase(Address(0, 0), id);
+    e->SetBaseAddr(Address(0, 0));
     return e;
   }
 };
@@ -77,7 +77,7 @@ TEST_F(WitnessPeerLifetimeTest, PeerDestructionTriggersLeaveEventAndCleansCache)
 TEST_F(WitnessPeerLifetimeTest, LeaveEnvelopeCarriesCorrectBaseIdAfterPeerFreed) {
   auto* observer = MakeEntity(1, {0, 0, 0});
   auto* peer = MakeEntity(2, {3, 0, 3});
-  const EntityID expected_base = peer->BaseEntityId();
+  const EntityID expected_base = peer->Id();
 
   EntityID last_leave_base = 0;
   observer->EnableWitness(10.f, [&](EntityID, std::span<const std::byte> env) {

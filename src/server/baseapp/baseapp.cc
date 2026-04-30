@@ -696,7 +696,7 @@ void BaseApp::OnCellEntityCreated(Channel& ch, const baseapp::CellEntityCreated&
   if (cell_addr.Ip() == 0) {
     cell_addr = ch.RemoteAddress();
   }
-  ent->SetCell(msg.cell_entity_id, cell_addr);
+  ent->SetCell(cell_addr);
   ATLAS_LOG_DEBUG("BaseApp: entity {} has cell at {}:{}", msg.entity_id, cell_addr.Ip(),
                   cell_addr.Port());
 
@@ -729,7 +729,7 @@ void BaseApp::OnCellEntityDestroyed(Channel& /*ch*/, const baseapp::CellEntityDe
 void BaseApp::OnCurrentCell(Channel& /*ch*/, const baseapp::CurrentCell& msg) {
   auto* ent = entity_mgr_.Find(msg.entity_id);
   if (!ent) return;
-  ent->SetCell(msg.cell_entity_id, msg.cell_addr, msg.epoch);
+  ent->SetCell(msg.cell_addr, msg.epoch);
 }
 
 // Re-creates each Real on the rehome target using the cached

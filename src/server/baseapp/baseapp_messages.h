@@ -121,7 +121,6 @@ static_assert(NetworkMessage<AcceptClient>);
 // CellEntityCreated (CellApp → BaseApp, ID 2010).
 struct CellEntityCreated {
   EntityID entity_id{kInvalidEntityID};
-  EntityID cell_entity_id{kInvalidEntityID};
   Address cell_addr;
 
   static auto Descriptor() -> const MessageDesc& {
@@ -129,7 +128,7 @@ struct CellEntityCreated {
         msg_id::Id(msg_id::BaseApp::kCellEntityCreated),
         "baseapp::CellEntityCreated",
         MessageLengthStyle::kFixed,
-        static_cast<int>(sizeof(uint32_t) * 2 + sizeof(uint32_t) + sizeof(uint16_t)),
+        static_cast<int>(sizeof(uint32_t) + sizeof(uint32_t) + sizeof(uint16_t)),
         MessageReliability::kReliable,
         MessageUrgency::kImmediate};
     return kDesc;
@@ -137,21 +136,18 @@ struct CellEntityCreated {
 
   void Serialize(BinaryWriter& w) const {
     w.Write(entity_id);
-    w.Write(cell_entity_id);
     w.Write(cell_addr.Ip());
     w.Write(cell_addr.Port());
   }
 
   static auto Deserialize(BinaryReader& r) -> Result<CellEntityCreated> {
-    auto beid = r.Read<uint32_t>();
-    auto ceid = r.Read<uint32_t>();
+    auto eid = r.Read<uint32_t>();
     auto ip = r.Read<uint32_t>();
     auto port = r.Read<uint16_t>();
-    if (!beid || !ceid || !ip || !port)
+    if (!eid || !ip || !port)
       return Error{ErrorCode::kInvalidArgument, "CellEntityCreated: truncated"};
     CellEntityCreated msg;
-    msg.entity_id = *beid;
-    msg.cell_entity_id = *ceid;
+    msg.entity_id = *eid;
     msg.cell_addr = Address(*ip, *port);
     return msg;
   }
@@ -187,7 +183,6 @@ static_assert(NetworkMessage<CellEntityDestroyed>);
 // CurrentCell (CellApp → BaseApp, post-offload cell address, ID 2012).
 struct CurrentCell {
   EntityID entity_id{kInvalidEntityID};
-  EntityID cell_entity_id{kInvalidEntityID};
   Address cell_addr;
   uint32_t epoch{0};  // Monotonic; BaseApp rejects stale updates (epoch < stored).
 
@@ -196,7 +191,7 @@ struct CurrentCell {
         msg_id::Id(msg_id::BaseApp::kCurrentCell),
         "baseapp::CurrentCell",
         MessageLengthStyle::kFixed,
-        static_cast<int>(sizeof(uint32_t) * 3 + sizeof(uint32_t) + sizeof(uint16_t)),
+        static_cast<int>(sizeof(uint32_t) * 2 + sizeof(uint32_t) + sizeof(uint16_t)),
         MessageReliability::kReliable,
         MessageUrgency::kImmediate};
     return kDesc;
@@ -204,23 +199,20 @@ struct CurrentCell {
 
   void Serialize(BinaryWriter& w) const {
     w.Write(entity_id);
-    w.Write(cell_entity_id);
     w.Write(cell_addr.Ip());
     w.Write(cell_addr.Port());
     w.Write(epoch);
   }
 
   static auto Deserialize(BinaryReader& r) -> Result<CurrentCell> {
-    auto beid = r.Read<uint32_t>();
-    auto ceid = r.Read<uint32_t>();
+    auto eid = r.Read<uint32_t>();
     auto ip = r.Read<uint32_t>();
     auto port = r.Read<uint16_t>();
     auto ep = r.Read<uint32_t>();
-    if (!beid || !ceid || !ip || !port || !ep)
+    if (!eid || !ip || !port || !ep)
       return Error{ErrorCode::kInvalidArgument, "CurrentCell: truncated"};
     CurrentCell msg;
-    msg.entity_id = *beid;
-    msg.cell_entity_id = *ceid;
+    msg.entity_id = *eid;
     msg.cell_addr = Address(*ip, *port);
     msg.epoch = *ep;
     return msg;

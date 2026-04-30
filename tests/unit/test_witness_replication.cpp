@@ -89,11 +89,10 @@ class WitnessReplicationTest : public ::testing::Test {
     };
   }
 
-  static auto MakeEntity(Space& space, EntityID id, EntityID base_id, math::Vector3 pos)
-      -> CellEntity* {
+  static auto MakeEntity(Space& space, EntityID id, math::Vector3 pos) -> CellEntity* {
     auto* e = space.AddEntity(std::make_unique<CellEntity>(id, /*type_id=*/uint16_t{1}, space, pos,
                                                            math::Vector3{1, 0, 0}));
-    e->SetBase(Address(0, 0), base_id);
+    e->SetBaseAddr(Address(0, 0));
     return e;
   }
 };
@@ -104,8 +103,8 @@ class WitnessReplicationTest : public ::testing::Test {
 
 TEST_F(WitnessReplicationTest, VolatileJumpsToLatestSeq) {
   Space space(1);
-  auto* observer = MakeEntity(space, 1, /*base=*/1001, {0, 0, 0});
-  auto* peer = MakeEntity(space, 2, /*base=*/1002, {3, 0, 3});
+  auto* observer = MakeEntity(space, 1, {0, 0, 0});
+  auto* peer = MakeEntity(space, 2, {3, 0, 3});
 
   observer->EnableWitness(10.f, MakeReliable(), MakeUnreliable());
 
@@ -134,8 +133,8 @@ TEST_F(WitnessReplicationTest, VolatileJumpsToLatestSeq) {
 
 TEST_F(WitnessReplicationTest, VolatileNoOpWhenUpToDate) {
   Space space(1);
-  auto* observer = MakeEntity(space, 1, 1001, {0, 0, 0});
-  auto* peer = MakeEntity(space, 2, 1002, {3, 0, 3});
+  auto* observer = MakeEntity(space, 1, {0, 0, 0});
+  auto* peer = MakeEntity(space, 2, {3, 0, 3});
   observer->EnableWitness(10.f, MakeReliable(), MakeUnreliable());
 
   CellEntity::ReplicationFrame v1;
@@ -160,8 +159,8 @@ TEST_F(WitnessReplicationTest, VolatileNoOpWhenUpToDate) {
 
 TEST_F(WitnessReplicationTest, PropertyDeltasReplayInOrder) {
   Space space(1);
-  auto* observer = MakeEntity(space, 1, 1001, {0, 0, 0});
-  auto* peer = MakeEntity(space, 2, 1002, {3, 0, 3});
+  auto* observer = MakeEntity(space, 1, {0, 0, 0});
+  auto* peer = MakeEntity(space, 2, {3, 0, 3});
   observer->EnableWitness(10.f, MakeReliable(), MakeUnreliable());
 
   // Publish 3 frames (1..3). Each frame's other_delta carries the
@@ -209,8 +208,8 @@ TEST_F(WitnessReplicationTest, PropertyDeltasReplayInOrder) {
 // so the next non-empty frame doesn't look like a gap.
 TEST_F(WitnessReplicationTest, AllZeroDeltaIsSkippedButSeqAdvances) {
   Space space(1);
-  auto* observer = MakeEntity(space, 1, 1001, {0, 0, 0});
-  auto* peer = MakeEntity(space, 2, 1002, {3, 0, 3});
+  auto* observer = MakeEntity(space, 1, {0, 0, 0});
+  auto* peer = MakeEntity(space, 2, {3, 0, 3});
   observer->EnableWitness(10.f, MakeReliable(), MakeUnreliable());
 
   // Frame with a non-empty owner_delta but an all-zero other_delta
@@ -233,39 +232,14 @@ TEST_F(WitnessReplicationTest, AllZeroDeltaIsSkippedButSeqAdvances) {
   EXPECT_EQ(cache.last_event_seq, 1u);
 }
 
-TEST_F(WitnessReplicationTest, PropertyDeltaOwnerAudienceWhenObserverIsOwner) {
-  Space space(1);
-  // Observer IS the peer's owner: both entities share a base_entity_id
-  // (contrived, but realistic for the owner-watches-own-cell case).
-  auto* observer = MakeEntity(space, 1, /*base=*/1001, {0, 0, 0});
-  auto* peer = MakeEntity(space, 2, /*base=*/1001, {3, 0, 3});
-  observer->EnableWitness(10.f, MakeReliable(), MakeUnreliable());
-
-  peer->PublishReplicationFrame(MakeFrame(1, MakeBlob({0xCC}), MakeBlob({0xDD})), {}, {});
-  auto& cache = observer->GetWitness()->AoIMapMutable().at(peer->Id());
-  cache.flags = 0;
-  cache.last_event_seq = 0;
-
-  sent_.clear();
-  observer->GetWitness()->TestOnlySendEntityUpdate(cache);
-  std::vector<Captured> updates;
-  for (auto& c : sent_) {
-    if (KindOf(c) == CellAoIEnvelopeKind::kEntityPropertyUpdate) updates.push_back(c);
-  }
-  ASSERT_EQ(updates.size(), 1u);
-  // Owner-audience byte (0xCC) not other-audience (0xDD).
-  EXPECT_EQ(PropertyUpdateDelta(updates[0])[0], std::byte{0xCC});
-  EXPECT_EQ(PropertyUpdateSeq(updates[0]), 1u);
-}
-
 // ----------------------------------------------------------------------------
 // Snapshot fallback — observer beyond the history window
 // ----------------------------------------------------------------------------
 
 TEST_F(WitnessReplicationTest, SnapshotFallbackWhenBeyondHistoryWindow) {
   Space space(1);
-  auto* observer = MakeEntity(space, 1, 1001, {0, 0, 0});
-  auto* peer = MakeEntity(space, 2, 1002, {3, 0, 3});
+  auto* observer = MakeEntity(space, 1, {0, 0, 0});
+  auto* peer = MakeEntity(space, 2, {3, 0, 3});
   observer->EnableWitness(10.f, MakeReliable(), MakeUnreliable());
 
   // Publish more frames than the history window so earlier ones are
@@ -303,8 +277,8 @@ TEST_F(WitnessReplicationTest, SnapshotFallbackWhenBeyondHistoryWindow) {
 
 TEST_F(WitnessReplicationTest, SnapshotFallbackFollowedByIncrementalCatchup) {
   Space space(1);
-  auto* observer = MakeEntity(space, 1, 1001, {0, 0, 0});
-  auto* peer = MakeEntity(space, 2, 1002, {3, 0, 3});
+  auto* observer = MakeEntity(space, 1, {0, 0, 0});
+  auto* peer = MakeEntity(space, 2, {3, 0, 3});
   observer->EnableWitness(10.f, MakeReliable(), MakeUnreliable());
 
   const auto window = CellEntity::kReplicationHistoryWindow;
@@ -340,8 +314,8 @@ TEST_F(WitnessReplicationTest, SnapshotFallbackFollowedByIncrementalCatchup) {
 
 TEST_F(WitnessReplicationTest, UpdateEmitsNothingWhenFullyCaughtUp) {
   Space space(1);
-  auto* observer = MakeEntity(space, 1, 1001, {0, 0, 0});
-  auto* peer = MakeEntity(space, 2, 1002, {3, 0, 3});
+  auto* observer = MakeEntity(space, 1, {0, 0, 0});
+  auto* peer = MakeEntity(space, 2, {3, 0, 3});
   observer->EnableWitness(10.f, MakeReliable(), MakeUnreliable());
 
   peer->PublishReplicationFrame(MakeFrame(1, {}, MakeBlob({0xAA})), MakeBlob({0x01}),
@@ -391,8 +365,8 @@ auto RunTicks(Witness& witness, CellEntity& peer, int ticks, uint32_t budget = 6
 TEST_F(WitnessReplicationTest, LodCloseUpdatesEveryTick) {
   Space space(1);
   // Observer at origin; peer at 10 m — well within the Close band (< 25 m).
-  auto* observer = MakeEntity(space, 1, 1001, {0, 0, 0});
-  auto* peer = MakeEntity(space, 2, 1002, {10, 0, 0});
+  auto* observer = MakeEntity(space, 1, {0, 0, 0});
+  auto* peer = MakeEntity(space, 2, {10, 0, 0});
   observer->EnableWitness(500.f, MakeReliable(), MakeUnreliable());
 
   const math::Vector3 kPeerPos{10, 0, 0};
@@ -416,8 +390,8 @@ TEST_F(WitnessReplicationTest, LodCloseUpdatesEveryTick) {
 TEST_F(WitnessReplicationTest, LodMediumUpdatesEvery3Ticks) {
   Space space(1);
   // Peer at 50 m — inside the Medium band (25–100 m).
-  auto* observer = MakeEntity(space, 1, 1001, {0, 0, 0});
-  auto* peer = MakeEntity(space, 2, 1002, {50, 0, 0});
+  auto* observer = MakeEntity(space, 1, {0, 0, 0});
+  auto* peer = MakeEntity(space, 2, {50, 0, 0});
   observer->EnableWitness(500.f, MakeReliable(), MakeUnreliable());
 
   const math::Vector3 kPeerPos{50, 0, 0};
@@ -443,8 +417,8 @@ TEST_F(WitnessReplicationTest, LodMediumUpdatesEvery3Ticks) {
 TEST_F(WitnessReplicationTest, LodFarUpdatesEvery6Ticks) {
   Space space(1);
   // Peer at 150 m — inside the Far band (≥ 100 m).
-  auto* observer = MakeEntity(space, 1, 1001, {0, 0, 0});
-  auto* peer = MakeEntity(space, 2, 1002, {150, 0, 0});
+  auto* observer = MakeEntity(space, 1, {0, 0, 0});
+  auto* peer = MakeEntity(space, 2, {150, 0, 0});
   observer->EnableWitness(500.f, MakeReliable(), MakeUnreliable());
 
   const math::Vector3 kPeerPos{150, 0, 0};
@@ -471,8 +445,8 @@ TEST_F(WitnessReplicationTest, LodFarUpdatesEvery6Ticks) {
 // (8 frames) covers 6-tick LOD gaps at 10 Hz comfortably.
 TEST_F(WitnessReplicationTest, LodFarEventDeliveredOnNextWindow) {
   Space space(1);
-  auto* observer = MakeEntity(space, 1, 1001, {0, 0, 0});
-  auto* peer = MakeEntity(space, 2, 1002, {150, 0, 0});
+  auto* observer = MakeEntity(space, 1, {0, 0, 0});
+  auto* peer = MakeEntity(space, 2, {150, 0, 0});
   observer->EnableWitness(500.f, MakeReliable(), MakeUnreliable());
 
   // Tick 1 — initial enter handled; peer gets its first LOD update.

@@ -137,7 +137,7 @@ void Witness::SetAoIRadius(float new_radius, float new_hysteresis) {
   const float max_radius = CellAppConfig::MaxAoIRadius();
   if (new_radius > max_radius) {
     ATLAS_LOG_WARNING("Witness::SetAoIRadius: clamping entity {}'s AoI radius ({}) to max ({})",
-                      owner_.BaseEntityId(), new_radius, max_radius);
+                      owner_.Id(), new_radius, max_radius);
     new_radius = max_radius;
   }
   aoi_radius_ = new_radius;
@@ -206,9 +206,9 @@ auto Witness::SendEntityEnter(EntityCache& cache) -> std::size_t {
     pre_volatile_seq = state->latest_volatile_seq;
   }
 
-  auto envelope = BuildEnterEnvelope(entity->BaseEntityId(), entity->TypeId(), entity->Position(),
+  auto envelope = BuildEnterEnvelope(entity->Id(), entity->TypeId(), entity->Position(),
                                      entity->Direction(), entity->OnGround(), enter_snapshot);
-  if (send_reliable_) send_reliable_(owner_.BaseEntityId(), envelope);
+  if (send_reliable_) send_reliable_(owner_.Id(), envelope);
 
   // Skip the seq stamp if HandleAoILeave yanked cache.entity during send.
   if (cache.entity == entity) {
@@ -221,7 +221,7 @@ auto Witness::SendEntityEnter(EntityCache& cache) -> std::size_t {
 auto Witness::SendEntityLeave(EntityID peer_id) -> std::size_t {
   ATLAS_PROFILE_ZONE_N("Witness::SendEntityLeave");
   auto envelope = MakeEnvelope<0>(CellAoIEnvelopeKind::kEntityLeave, peer_id, {});
-  if (send_reliable_) send_reliable_(owner_.BaseEntityId(), envelope);
+  if (send_reliable_) send_reliable_(owner_.Id(), envelope);
   return envelope.size();
 }
 
@@ -264,9 +264,9 @@ void Witness::Update(uint32_t max_packet_bytes) {
             "Witness: stale enter-pending cache "
             "observer={} peer_id={} cached={:p} live={:p} "
             "flags=0x{:02x} aoi_map_size={} space_id={}",
-            owner_.BaseEntityId(), static_cast<uint64_t>(peer_id),
-            static_cast<const void*>(cache.entity), static_cast<const void*>(live), cache.flags,
-            observer_obs_count, owner_.GetSpace().Id());
+            owner_.Id(), static_cast<uint64_t>(peer_id), static_cast<const void*>(cache.entity),
+            static_cast<const void*>(live), cache.flags, observer_obs_count,
+            owner_.GetSpace().Id());
         aoi_map_.erase(it);
         continue;
       }
@@ -282,7 +282,7 @@ void Witness::Update(uint32_t max_packet_bytes) {
       // first Leave the cache is erased so subsequent finds return end.
       if (!(it->second.flags & EntityCache::kGone)) continue;
       // Map key carries the unified entity id — no need to cache it on
-      // the cache entry: peer.Id() == peer.BaseEntityId() since phase 2.
+      // the cache entry: peer.Id() == peer.Id() since phase 2.
       bytes_sent += static_cast<int>(SendEntityLeave(it->first));
       aoi_map_.erase(it);
     }
@@ -344,7 +344,7 @@ void Witness::Update(uint32_t max_packet_bytes) {
       ATLAS_LOG_WARNING(
           "Witness[{}]: bandwidth deficit {}B > per-observer budget {}B; peer catch-up "
           "will lag. Consider increasing cellapp/witness_per_observer_budget_bytes.",
-          owner_.BaseEntityId(), bandwidth_deficit_, max_packet_bytes);
+          owner_.Id(), bandwidth_deficit_, max_packet_bytes);
     }
     if (++deficit_warn_counter_ >= kDeficitWarnEveryNTicks) deficit_warn_counter_ = 0;
   } else {
@@ -370,7 +370,7 @@ auto Witness::SendEntityUpdate(EntityCache& cache) -> std::size_t {
       const auto& pos = cache.entity->Position();
       const auto& dir = cache.entity->Direction();
       const uint8_t og = cache.entity->OnGround() ? 1 : 0;
-      const EntityID public_eid = cache.entity->BaseEntityId();
+      const EntityID public_eid = cache.entity->Id();
 
       auto* p = envelope_buf.data();
       *p++ = static_cast<std::byte>(CellAoIEnvelopeKind::kEntityPositionUpdate);
@@ -389,9 +389,9 @@ auto Witness::SendEntityUpdate(EntityCache& cache) -> std::size_t {
       // Volatile prefers unreliable; fall back to reliable when tests
       // leave send_unreliable_ unset.
       if (send_unreliable_) {
-        send_unreliable_(owner_.BaseEntityId(), envelope);
+        send_unreliable_(owner_.Id(), envelope);
       } else if (send_reliable_) {
-        send_reliable_(owner_.BaseEntityId(), envelope);
+        send_reliable_(owner_.Id(), envelope);
       }
     }
     bytes += envelope.size();
@@ -406,31 +406,29 @@ auto Witness::SendEntityUpdate(EntityCache& cache) -> std::size_t {
   const bool have_continuous_coverage =
       !state->history.empty() && state->history.front().event_seq <= first_needed;
 
-  // observer is audience=owner iff its base id matches the peer's;
-  // otherwise audience=other.
-  const bool observer_is_owner = cache.entity->BaseEntityId() == owner_.BaseEntityId();
-
+  // Witness always serves the other-audience scope — HandleAoIEnter
+  // excludes &peer == &owner_, so owner-scope replication never flows
+  // through here. The owner client receives its own deltas via the
+  // CellAppNativeProvider direct path.
   if (have_continuous_coverage) {
     for (const auto& frame : state->history) {
       if (frame.event_seq < first_needed) continue;
       if (frame.event_seq > state->latest_event_seq) break;
 
-      const auto& delta_bytes = observer_is_owner ? frame.owner_delta : frame.other_delta;
+      const auto& delta_bytes = frame.other_delta;
       // Skip empty / all-zero deltas — seq still advances so the next
       // non-empty frame doesn't look like a gap on the client.
       if (!delta_bytes.empty() && !IsAllZeroDelta(delta_bytes)) {
         // Reuse the cached envelope across all witnesses watching this
         // peer this tick.
-        auto& cached =
-            observer_is_owner ? frame.cached_owner_envelope : frame.cached_other_envelope;
+        auto& cached = frame.cached_other_envelope;
         if (cached.empty()) {
           ATLAS_PROFILE_ZONE_N("Witness::Event::Build");
-          cached = BuildPropertyUpdateEnvelope(cache.entity->BaseEntityId(), frame.event_seq,
-                                               delta_bytes);
+          cached = BuildPropertyUpdateEnvelope(cache.entity->Id(), frame.event_seq, delta_bytes);
         }
         {
           ATLAS_PROFILE_ZONE_N("Witness::Event::Send");
-          if (send_reliable_) send_reliable_(owner_.BaseEntityId(), cached);
+          if (send_reliable_) send_reliable_(owner_.Id(), cached);
         }
         bytes += cached.size();
       }
@@ -440,10 +438,9 @@ auto Witness::SendEntityUpdate(EntityCache& cache) -> std::size_t {
     ATLAS_PROFILE_ZONE_N("Witness::Snapshot");
     // Snapshot fallback — observer fell out of the history window.
     // Carry latest_event_seq so the next delta seq+1 doesn't gap-warn.
-    const auto& snapshot = observer_is_owner ? state->owner_snapshot : state->other_snapshot;
-    auto envelope = BuildPropertyUpdateEnvelope(cache.entity->BaseEntityId(),
-                                                state->latest_event_seq, snapshot);
-    if (send_reliable_) send_reliable_(owner_.BaseEntityId(), envelope);
+    auto envelope = BuildPropertyUpdateEnvelope(cache.entity->Id(), state->latest_event_seq,
+                                                state->other_snapshot);
+    if (send_reliable_) send_reliable_(owner_.Id(), envelope);
     bytes += envelope.size();
     cache.last_event_seq = state->latest_event_seq;
   }

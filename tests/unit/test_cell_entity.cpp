@@ -36,7 +36,6 @@ TEST(CellEntity, IdentityAndInitialState) {
   EXPECT_FALSE(e->OnGround());
   EXPECT_FALSE(e->IsDestroyed());
   EXPECT_EQ(e->ScriptHandle(), 0u);
-  EXPECT_EQ(e->BaseEntityId(), kInvalidEntityID);
   EXPECT_EQ(e->GetReplicationState(), nullptr);
 }
 
@@ -65,12 +64,12 @@ TEST(CellEntity, SetDirectionDoesNotShuffleRangeList) {
 TEST(CellEntity, BaseMailboxPlumbing) {
   Space space(1);
   auto* e = space.AddEntity(std::make_unique<CellEntity>(
-      1, uint16_t{1}, space, math::Vector3{0, 0, 0}, math::Vector3{1, 0, 0}));
+      987, uint16_t{1}, space, math::Vector3{0, 0, 0}, math::Vector3{1, 0, 0}));
   Address addr(0x7F000001u, 1234);
-  e->SetBase(addr, /*base_id=*/987);
+  e->SetBaseAddr(addr);
   EXPECT_EQ(e->BaseAddr().Ip(), 0x7F000001u);
   EXPECT_EQ(e->BaseAddr().Port(), 1234u);
-  EXPECT_EQ(e->BaseEntityId(), 987u);
+  EXPECT_EQ(e->Id(), 987u);
 }
 
 // ============================================================================

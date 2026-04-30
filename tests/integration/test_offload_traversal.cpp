@@ -167,7 +167,7 @@ TEST(OffloadTraversal, EntityCrossesBspSplit_PumpsOffload) {
   ASSERT_NE(on_b, nullptr);
   EXPECT_TRUE(on_b->IsReal());
   EXPECT_FLOAT_EQ(on_b->Position().x, 5.f);
-  EXPECT_EQ(on_b->BaseEntityId(), 100u);
+  EXPECT_EQ(on_b->Id(), 100u);
 }
 
 // Entity that stays inside its original cell must not trigger an

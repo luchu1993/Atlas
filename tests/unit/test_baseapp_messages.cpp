@@ -61,13 +61,11 @@ TEST(BaseAppMessages, AcceptClient) {
 TEST(BaseAppMessages, CellEntityCreated) {
   CellEntityCreated msg;
   msg.entity_id = 100;
-  msg.cell_entity_id = 200;
   msg.cell_addr = Address(0x7F000001u, 7002);
 
   auto rt = round_trip(msg);
   ASSERT_TRUE(rt.has_value());
   EXPECT_EQ(rt->entity_id, 100u);
-  EXPECT_EQ(rt->cell_entity_id, 200u);
   EXPECT_EQ(rt->cell_addr.Port(), 7002u);
 }
 
@@ -83,14 +81,12 @@ TEST(BaseAppMessages, CellEntityDestroyed) {
 TEST(BaseAppMessages, CurrentCell) {
   CurrentCell msg;
   msg.entity_id = 10;
-  msg.cell_entity_id = 20;
   msg.cell_addr = Address(0x0A000001u, 7003);
   msg.epoch = 42;
 
   auto rt = round_trip(msg);
   ASSERT_TRUE(rt.has_value());
   EXPECT_EQ(rt->entity_id, 10u);
-  EXPECT_EQ(rt->cell_entity_id, 20u);
   EXPECT_EQ(rt->cell_addr.Port(), 7003u);
   EXPECT_EQ(rt->epoch, 42u);
 }

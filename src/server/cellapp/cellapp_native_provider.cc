@@ -67,7 +67,7 @@ void CellAppNativeProvider::SendClientRpc(uint32_t entity_id, uint32_t rpc_id, R
 
   // One BroadcastRpcFromCell per destination BaseApp.
   std::unordered_map<Address, std::vector<EntityID>> by_baseapp;
-  const auto source_base_id = source->BaseEntityId();
+  const auto source_base_id = source->Id();
   const auto& source_base_addr = source->BaseAddr();
 
   if (target != RpcTarget::kOthers) {
@@ -77,7 +77,7 @@ void CellAppNativeProvider::SendClientRpc(uint32_t entity_id, uint32_t rpc_id, R
     // O(W) over observers; independent of population size.
     for (Witness* w : source->Observers()) {
       CellEntity& observer = w->Owner();
-      by_baseapp[observer.BaseAddr()].push_back(observer.BaseEntityId());
+      by_baseapp[observer.BaseAddr()].push_back(observer.Id());
     }
   }
 
@@ -158,7 +158,7 @@ void CellAppNativeProvider::PublishReplicationFrame(
   if (owner_delta_len > 0 && event_seq > 0 && entity->HasWitness() && network_) {
     auto base_ch = network_->ConnectRudpNocwnd(entity->BaseAddr());
     if (base_ch) {
-      const auto base_id = entity->BaseEntityId();
+      const auto base_id = entity->Id();
       std::vector<std::byte> envelope;
       envelope.reserve(1 + 4 + 8 + static_cast<std::size_t>(owner_delta_len));
       envelope.push_back(static_cast<std::byte>(CellAoIEnvelopeKind::kEntityPropertyUpdate));
@@ -229,7 +229,7 @@ auto CellAppNativeProvider::AddProximityController(uint32_t entity_id, float ran
     if (other.Order() != RangeListOrder::kEntity) return;
     auto* peer = static_cast<CellEntity*>(static_cast<EntityRangeListNode&>(other).OwnerData());
     if (peer == nullptr) return;
-    proximity_event_fn_(entity_id, user_arg, peer->BaseEntityId(), is_enter);
+    proximity_event_fn_(entity_id, user_arg, peer->Id(), is_enter);
   };
   auto on_enter = [dispatch](ProximityController&, RangeListNode& other) {
     dispatch(other, /*is_enter=*/1);

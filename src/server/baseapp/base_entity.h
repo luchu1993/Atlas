@@ -28,8 +28,7 @@ class BaseEntity {
   [[nodiscard]] auto Dbid() const -> DatabaseID { return dbid_; }
   void SetDbid(DatabaseID id) { dbid_ = id; }
 
-  [[nodiscard]] auto HasCell() const -> bool { return cell_entity_id_ != kInvalidEntityID; }
-  [[nodiscard]] auto CellEntityId() const -> EntityID { return cell_entity_id_; }
+  [[nodiscard]] auto HasCell() const -> bool { return cell_addr_.Ip() != 0; }
   [[nodiscard]] auto CellAddr() const -> const Address& { return cell_addr_; }
   [[nodiscard]] auto CellEpoch() const -> uint32_t { return cell_epoch_; }
   // kInvalidSpaceID when base-only; used by CellApp-death restore to find
@@ -52,7 +51,7 @@ class BaseEntity {
 
   // Epoch prevents stale CurrentCell from overwriting newer placement;
   // initial create uses 0, Offload uses monotonically increasing values.
-  void SetCell(EntityID cell_eid, const Address& addr, uint32_t epoch = 0);
+  void SetCell(const Address& addr, uint32_t epoch = 0);
   void ClearCell();
 
   void MarkForDestroy() { pending_destroy_ = true; }
@@ -62,7 +61,6 @@ class BaseEntity {
   EntityID entity_id_;
   uint16_t type_id_;
   DatabaseID dbid_;
-  EntityID cell_entity_id_{kInvalidEntityID};
   Address cell_addr_;
   uint32_t cell_epoch_{0};
   SpaceID space_id_{kInvalidSpaceID};

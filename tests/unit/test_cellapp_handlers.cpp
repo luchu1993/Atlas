@@ -72,7 +72,7 @@ TEST_F(CellAppHandlersTest, CreateCellEntityRegistersInBothIndexes) {
 
   auto* by_base = app_.FindEntityByBaseId(100);
   ASSERT_NE(by_base, nullptr);
-  EXPECT_EQ(by_base->BaseEntityId(), 100u);
+  EXPECT_EQ(by_base->Id(), 100u);
   EXPECT_FLOAT_EQ(by_base->Position().x, 10.f);
 
   auto* by_cell = app_.FindEntity(by_base->Id());
@@ -459,7 +459,7 @@ TEST_F(CellAppHandlersTest, CreateGhostWithNullChannelRejected) {
   app_.OnCreateSpace({}, nullptr, cs);
 
   cellapp::CreateGhost msg;
-  msg.real_entity_id = 500;
+  msg.entity_id = 500;
   msg.type_id = 1;
   msg.space_id = 1;
   msg.position = {0, 0, 0};
@@ -485,7 +485,7 @@ TEST_F(CellAppHandlersTest, GhostPositionUpdateRejectsNaN) {
 
   // Create a ghost via the handler with a non-null fake channel.
   cellapp::CreateGhost cg;
-  cg.real_entity_id = 600;
+  cg.entity_id = 600;
   cg.type_id = 1;
   cg.space_id = 1;
   cg.position = {10, 0, 20};
@@ -532,7 +532,7 @@ TEST_F(CellAppHandlersTest, PeerDeathDropsOrphanGhostsAndClearsHaunts) {
 
   // Ghost whose Real lives on the dying peer → must be dropped.
   cellapp::CreateGhost cg;
-  cg.real_entity_id = 700;
+  cg.entity_id = 700;
   cg.type_id = 1;
   cg.space_id = 1;
   cg.position = {0, 0, 0};
@@ -544,7 +544,7 @@ TEST_F(CellAppHandlersTest, PeerDeathDropsOrphanGhostsAndClearsHaunts) {
 
   // Ghost whose Real lives elsewhere → must survive the sweep.
   cellapp::CreateGhost cg_ok;
-  cg_ok.real_entity_id = 701;
+  cg_ok.entity_id = 701;
   cg_ok.type_id = 1;
   cg_ok.space_id = 1;
   cg_ok.position = {5, 0, 5};

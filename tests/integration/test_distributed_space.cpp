@@ -164,7 +164,7 @@ struct RealGhostFixture {
 
   auto MakeCreateGhost(uint64_t event_seq = 0, uint64_t volatile_seq = 0) -> cellapp::CreateGhost {
     cellapp::CreateGhost cg;
-    cg.real_entity_id = real->Id();
+    cg.entity_id = real->Id();
     cg.type_id = 1;
     cg.space_id = kSpaceId;
     cg.position = real->Position();
@@ -172,7 +172,7 @@ struct RealGhostFixture {
     cg.on_ground = real->OnGround();
     cg.real_cellapp_addr = addr_a;
     cg.base_addr = Address(0, 0);
-    cg.entity_id = real->BaseEntityId();
+    cg.entity_id = real->Id();
     cg.event_seq = event_seq;
     cg.volatile_seq = volatile_seq;
     return cg;
@@ -195,16 +195,15 @@ TEST(DistributedSpaceOverRudp, CreateGhost_InstantiatesGhostOnPeer) {
   auto cg = fx.MakeCreateGhost();
   ASSERT_TRUE(fx.ch_a_to_b->SendMessage(cg).HasValue());
 
-  ASSERT_TRUE(PumpUntil(fx.A, fx.B, [&] {
-    return fx.B.app.FindEntity(cg.real_entity_id) != nullptr;
-  })) << "Ghost never materialised on peer CellApp";
+  ASSERT_TRUE(PumpUntil(fx.A, fx.B, [&] { return fx.B.app.FindEntity(cg.entity_id) != nullptr; }))
+      << "Ghost never materialised on peer CellApp";
 
-  auto* ghost = fx.B.app.FindEntity(cg.real_entity_id);
+  auto* ghost = fx.B.app.FindEntity(cg.entity_id);
   ASSERT_NE(ghost, nullptr);
   EXPECT_TRUE(ghost->IsGhost());
   EXPECT_FLOAT_EQ(ghost->Position().x, cg.position.x);
   EXPECT_FLOAT_EQ(ghost->Position().z, cg.position.z);
-  EXPECT_EQ(ghost->BaseEntityId(), cg.entity_id);
+  EXPECT_EQ(ghost->Id(), cg.entity_id);
 }
 
 // =============================================================================
@@ -217,11 +216,10 @@ TEST(DistributedSpaceOverRudp, GhostPositionUpdate_AdvancesPeerGhost) {
 
   auto cg = fx.MakeCreateGhost();
   ASSERT_TRUE(fx.ch_a_to_b->SendMessage(cg).HasValue());
-  ASSERT_TRUE(
-      PumpUntil(fx.A, fx.B, [&] { return fx.B.app.FindEntity(cg.real_entity_id) != nullptr; }));
+  ASSERT_TRUE(PumpUntil(fx.A, fx.B, [&] { return fx.B.app.FindEntity(cg.entity_id) != nullptr; }));
 
   cellapp::GhostPositionUpdate gpu;
-  gpu.entity_id = cg.real_entity_id;
+  gpu.entity_id = cg.entity_id;
   gpu.position = {75.f, 0.f, 80.f};
   gpu.direction = {0.f, 0.f, 1.f};
   gpu.on_ground = true;
@@ -229,11 +227,11 @@ TEST(DistributedSpaceOverRudp, GhostPositionUpdate_AdvancesPeerGhost) {
   ASSERT_TRUE(fx.ch_a_to_b->SendMessage(gpu).HasValue());
 
   ASSERT_TRUE(PumpUntil(fx.A, fx.B, [&] {
-    auto* g = fx.B.app.FindEntity(cg.real_entity_id);
+    auto* g = fx.B.app.FindEntity(cg.entity_id);
     return g != nullptr && g->Position().x > 74.f && g->Position().z > 79.f;
   })) << "GhostPositionUpdate did not advance peer Ghost";
 
-  auto* g = fx.B.app.FindEntity(cg.real_entity_id);
+  auto* g = fx.B.app.FindEntity(cg.entity_id);
   ASSERT_NE(g, nullptr);
   EXPECT_TRUE(g->OnGround());
   EXPECT_FLOAT_EQ(g->Direction().z, 1.f);
@@ -255,19 +253,19 @@ TEST(DistributedSpaceOverRudp, GhostDelta_AdvancesPeerReplicationSeq) {
   ASSERT_TRUE(fx.ch_a_to_b->SendMessage(cg).HasValue());
 
   ASSERT_TRUE(PumpUntil(fx.A, fx.B, [&] {
-    auto* g = fx.B.app.FindEntity(cg.real_entity_id);
+    auto* g = fx.B.app.FindEntity(cg.entity_id);
     return g != nullptr && g->GetReplicationState() != nullptr &&
            g->GetReplicationState()->latest_event_seq == 5u;
   })) << "Ghost did not pick up seeded event_seq from CreateGhost";
 
   cellapp::GhostDelta gd;
-  gd.entity_id = cg.real_entity_id;
+  gd.entity_id = cg.entity_id;
   gd.event_seq = 6;
   gd.other_delta = {std::byte{0x01}, std::byte{0x02}, std::byte{0x03}};
   ASSERT_TRUE(fx.ch_a_to_b->SendMessage(gd).HasValue());
 
   ASSERT_TRUE(PumpUntil(fx.A, fx.B, [&] {
-    auto* g = fx.B.app.FindEntity(cg.real_entity_id);
+    auto* g = fx.B.app.FindEntity(cg.entity_id);
     return g != nullptr && g->GetReplicationState() != nullptr &&
            g->GetReplicationState()->latest_event_seq == 6u;
   })) << "GhostDelta did not advance Ghost replication seq on peer";
@@ -288,9 +286,9 @@ TEST(DistributedSpaceOverRudp, OffloadEntity_RehydratesPeerRealAndAcks) {
   ASSERT_NE(fx.ch_a_to_b, nullptr);
 
   auto offload = fx.A.app.BuildOffloadMessage(*fx.real);
-  ASSERT_EQ(offload.real_entity_id, fx.real->Id());
+  ASSERT_EQ(offload.entity_id, fx.real->Id());
   ASSERT_EQ(offload.space_id, fx.real->GetSpace().Id());
-  ASSERT_EQ(offload.entity_id, fx.real->BaseEntityId());
+  ASSERT_EQ(offload.entity_id, fx.real->Id());
 
   // Install a pending entry so the receiver's ack has something to
   // resolve on A. Production path inserts this in TickOffloadChecker.
@@ -299,21 +297,21 @@ TEST(DistributedSpaceOverRudp, OffloadEntity_RehydratesPeerRealAndAcks) {
   p.target_addr = fx.addr_b;
   p.sent_at = Clock::now();
   p.space_id = offload.space_id;
-  pending[offload.real_entity_id] = std::move(p);
+  pending[offload.entity_id] = std::move(p);
   ASSERT_EQ(pending.size(), 1u);
 
   ASSERT_TRUE(fx.ch_a_to_b->SendMessage(offload).HasValue());
 
   // B rehydrates a Real at the offloaded id.
   ASSERT_TRUE(PumpUntil(fx.A, fx.B, [&] {
-    auto* e = fx.B.app.FindEntity(offload.real_entity_id);
+    auto* e = fx.B.app.FindEntity(offload.entity_id);
     return e != nullptr && e->IsReal();
   })) << "Peer did not rehydrate Real from OffloadEntity";
 
-  auto* rehydrated = fx.B.app.FindEntity(offload.real_entity_id);
+  auto* rehydrated = fx.B.app.FindEntity(offload.entity_id);
   ASSERT_NE(rehydrated, nullptr);
   EXPECT_TRUE(rehydrated->IsReal());
-  EXPECT_EQ(rehydrated->BaseEntityId(), offload.entity_id);
+  EXPECT_EQ(rehydrated->Id(), offload.entity_id);
   EXPECT_FLOAT_EQ(rehydrated->Position().x, offload.position.x);
   EXPECT_FLOAT_EQ(rehydrated->Position().z, offload.position.z);
   EXPECT_EQ(fx.B.app.FindEntityByBaseId(offload.entity_id), rehydrated);

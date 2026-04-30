@@ -34,7 +34,7 @@ namespace atlas::cellapp {
 // the Ghost uses to forward anything back to the Real side.
 
 struct CreateGhost {
-  EntityID real_entity_id{kInvalidEntityID};
+  EntityID entity_id{kInvalidEntityID};
   uint16_t type_id{0};
   SpaceID space_id{kInvalidSpaceID};
   math::Vector3 position{0.f, 0.f, 0.f};
@@ -42,7 +42,6 @@ struct CreateGhost {
   bool on_ground{false};
   Address real_cellapp_addr;
   Address base_addr;
-  EntityID entity_id{kInvalidEntityID};
   uint64_t event_seq{0};
   uint64_t volatile_seq{0};
   std::vector<std::byte> other_snapshot;
@@ -58,7 +57,7 @@ struct CreateGhost {
   }
 
   void Serialize(BinaryWriter& w) const {
-    w.Write(real_entity_id);
+    w.Write(entity_id);
     w.Write(type_id);
     w.Write(space_id);
     w.Write(position.x);
@@ -72,7 +71,6 @@ struct CreateGhost {
     w.Write(real_cellapp_addr.Port());
     w.Write(base_addr.Ip());
     w.Write(base_addr.Port());
-    w.Write(entity_id);
     w.Write(event_seq);
     w.Write(volatile_seq);
     w.WritePackedInt(static_cast<uint32_t>(other_snapshot.size()));
@@ -94,15 +92,14 @@ struct CreateGhost {
     auto rport = r.Read<uint16_t>();
     auto bip = r.Read<uint32_t>();
     auto bport = r.Read<uint16_t>();
-    auto bid = r.Read<uint32_t>();
     auto es = r.Read<uint64_t>();
     auto vs = r.Read<uint64_t>();
     auto snlen = r.ReadPackedInt();
     if (!eid || !ti || !sid || !px || !py || !pz || !dx || !dy || !dz || !og || !rip || !rport ||
-        !bip || !bport || !bid || !es || !vs || !snlen)
+        !bip || !bport || !es || !vs || !snlen)
       return Error{ErrorCode::kInvalidArgument, "CreateGhost: truncated"};
     CreateGhost msg;
-    msg.real_entity_id = *eid;
+    msg.entity_id = *eid;
     msg.type_id = *ti;
     msg.space_id = *sid;
     msg.position = {*px, *py, *pz};
@@ -110,7 +107,6 @@ struct CreateGhost {
     msg.on_ground = (*og != 0);
     msg.real_cellapp_addr = Address(*rip, *rport);
     msg.base_addr = Address(*bip, *bport);
-    msg.entity_id = *bid;
     msg.event_seq = *es;
     msg.volatile_seq = *vs;
     if (*snlen > 0) {
@@ -400,14 +396,13 @@ static_assert(NetworkMessage<GhostSetNextReal>);
 // Real's Haunt list so the new Real can immediately resume broadcasts.
 
 struct OffloadEntity {
-  EntityID real_entity_id{kInvalidEntityID};
+  EntityID entity_id{kInvalidEntityID};
   uint16_t type_id{0};
   SpaceID space_id{kInvalidSpaceID};
   math::Vector3 position{0.f, 0.f, 0.f};
   math::Vector3 direction{1.f, 0.f, 0.f};
   bool on_ground{false};
   Address base_addr;
-  EntityID entity_id{kInvalidEntityID};
   std::vector<std::byte> persistent_blob;
   std::vector<std::byte> owner_snapshot;
   std::vector<std::byte> other_snapshot;
@@ -442,7 +437,7 @@ struct OffloadEntity {
   }
 
   void Serialize(BinaryWriter& w) const {
-    w.Write(real_entity_id);
+    w.Write(entity_id);
     w.Write(type_id);
     w.Write(space_id);
     w.Write(position.x);
@@ -454,7 +449,6 @@ struct OffloadEntity {
     w.Write(static_cast<uint8_t>(on_ground ? 1 : 0));
     w.Write(base_addr.Ip());
     w.Write(base_addr.Port());
-    w.Write(entity_id);
     w.WritePackedInt(static_cast<uint32_t>(persistent_blob.size()));
     if (!persistent_blob.empty()) w.WriteBytes(std::span<const std::byte>(persistent_blob));
     w.WritePackedInt(static_cast<uint32_t>(owner_snapshot.size()));
@@ -491,20 +485,18 @@ struct OffloadEntity {
     auto og = r.Read<uint8_t>();
     auto bip = r.Read<uint32_t>();
     auto bport = r.Read<uint16_t>();
-    auto bid = r.Read<uint32_t>();
     auto pblen = r.ReadPackedInt();
     if (!eid || !ti || !sid || !px || !py || !pz || !dx || !dy || !dz || !og || !bip || !bport ||
-        !bid || !pblen)
+        !pblen)
       return Error{ErrorCode::kInvalidArgument, "OffloadEntity: truncated"};
     OffloadEntity msg;
-    msg.real_entity_id = *eid;
+    msg.entity_id = *eid;
     msg.type_id = *ti;
     msg.space_id = *sid;
     msg.position = {*px, *py, *pz};
     msg.direction = {*dx, *dy, *dz};
     msg.on_ground = (*og != 0);
     msg.base_addr = Address(*bip, *bport);
-    msg.entity_id = *bid;
     if (*pblen > 0) {
       auto data = r.ReadBytes(*pblen);
       if (!data) return Error{ErrorCode::kInvalidArgument, "OffloadEntity: blob truncated"};

@@ -100,11 +100,7 @@ class CellEntity : public IEntityMotion {
   void SetScriptHandle(uint64_t h) { script_handle_ = h; }
 
   [[nodiscard]] auto BaseAddr() const -> const Address& { return base_addr_; }
-  [[nodiscard]] auto BaseEntityId() const -> EntityID { return base_entity_id_; }
-  void SetBase(const Address& addr, EntityID base_id) {
-    base_addr_ = addr;
-    base_entity_id_ = base_id;
-  }
+  void SetBaseAddr(const Address& addr) { base_addr_ = addr; }
 
   // Client-bound entities attach a Witness via EnableWitness; server-only
   // NPCs leave it unset. Dtor tears it down before range_node_ unlinks.
@@ -126,9 +122,7 @@ class CellEntity : public IEntityMotion {
   // Reverse AoI index for O(W) fan-out (W = observers).
   void AddObserver(Witness* w) { observers_.insert(w); }
   void RemoveObserver(Witness* w) { observers_.erase(w); }
-  [[nodiscard]] auto Observers() const -> const std::unordered_set<Witness*>& {
-    return observers_;
-  }
+  [[nodiscard]] auto Observers() const -> const std::unordered_set<Witness*>& { return observers_; }
 
   [[nodiscard]] auto GetControllers() -> Controllers& { return controllers_; }
 
@@ -148,7 +142,6 @@ class CellEntity : public IEntityMotion {
 
     // First Witness builds the envelope; siblings reuse → eliminates
     // N×M serialisation. mutable: populated through const access.
-    mutable std::vector<std::byte> cached_owner_envelope;
     mutable std::vector<std::byte> cached_other_envelope;
   };
 
@@ -193,7 +186,6 @@ class CellEntity : public IEntityMotion {
   uint64_t script_handle_{0};
 
   Address base_addr_{};
-  EntityID base_entity_id_{kInvalidEntityID};
 
   // Order matters: dtor runs reverse-declaration. range_node_ MUST unlink
   // last, after witness_/controllers_ remove their own trigger bounds.

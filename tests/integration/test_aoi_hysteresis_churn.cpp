@@ -60,7 +60,7 @@ auto CountLeaves(const std::vector<CapturedEnvelope>& env) -> int {
 auto MakeEntity(Space& space, EntityID id, math::Vector3 pos) -> CellEntity* {
   auto* e = space.AddEntity(std::make_unique<CellEntity>(id, /*type_id=*/uint16_t{1}, space, pos,
                                                          math::Vector3{1, 0, 0}));
-  e->SetBase(Address(0, 0), /*base_id=*/id);
+  e->SetBaseAddr(Address(0, 0));
   return e;
 }
 

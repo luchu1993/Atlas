@@ -43,7 +43,7 @@ auto MakeBlob(std::initializer_list<uint8_t> xs) -> std::vector<std::byte> {
 
 TEST(IntercellMessages, CreateGhost_RoundTrip) {
   CreateGhost msg;
-  msg.real_entity_id = 0x01020304;
+  msg.entity_id = 0x01020304;
   msg.type_id = 42;
   msg.space_id = 7;
   msg.position = {1.5f, -2.25f, 3.75f};
@@ -51,14 +51,13 @@ TEST(IntercellMessages, CreateGhost_RoundTrip) {
   msg.on_ground = true;
   msg.real_cellapp_addr = Address(0x7F000001u, 30001);
   msg.base_addr = Address(0x0A000002u, 20002);
-  msg.entity_id = 0x00ABCDEF;
   msg.event_seq = 100;
   msg.volatile_seq = 200;
   msg.other_snapshot = MakeBlob({0xDE, 0xAD, 0xBE, 0xEF, 0x42});
 
   auto rt = RoundTrip(msg);
   ASSERT_TRUE(rt.has_value());
-  EXPECT_EQ(rt->real_entity_id, msg.real_entity_id);
+  EXPECT_EQ(rt->entity_id, msg.entity_id);
   EXPECT_EQ(rt->type_id, msg.type_id);
   EXPECT_EQ(rt->space_id, msg.space_id);
   EXPECT_FLOAT_EQ(rt->position.x, msg.position.x);
@@ -67,7 +66,6 @@ TEST(IntercellMessages, CreateGhost_RoundTrip) {
   EXPECT_TRUE(rt->on_ground);
   EXPECT_EQ(rt->real_cellapp_addr.Port(), 30001u);
   EXPECT_EQ(rt->base_addr.Ip(), 0x0A000002u);
-  EXPECT_EQ(rt->entity_id, 0x00ABCDEFu);
   EXPECT_EQ(rt->event_seq, 100u);
   EXPECT_EQ(rt->volatile_seq, 200u);
   ASSERT_EQ(rt->other_snapshot.size(), 5u);
@@ -77,7 +75,7 @@ TEST(IntercellMessages, CreateGhost_RoundTrip) {
 
 TEST(IntercellMessages, CreateGhost_EmptySnapshot) {
   CreateGhost msg;
-  msg.real_entity_id = 1;
+  msg.entity_id = 1;
   msg.type_id = 1;
   msg.space_id = 1;
   msg.real_cellapp_addr = Address(0, 1);
@@ -186,14 +184,13 @@ TEST(IntercellMessages, GhostSetNextReal_RoundTrip) {
 
 TEST(IntercellMessages, OffloadEntity_RoundTrip_Full) {
   OffloadEntity msg;
-  msg.real_entity_id = 0xCAFEBABE;
+  msg.entity_id = 0xCAFEBABE;
   msg.type_id = 12;
   msg.space_id = 77;
   msg.position = {-5.f, 0.f, 7.f};
   msg.direction = {1.f, 0.f, 0.f};
   msg.on_ground = true;
   msg.base_addr = Address(0x7F000001u, 20000);
-  msg.entity_id = 0x11223344;
   msg.persistent_blob = MakeBlob({0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08});
   msg.owner_snapshot = MakeBlob({0xA0, 0xA1});
   msg.other_snapshot = MakeBlob({0xB0, 0xB1, 0xB2});
@@ -204,13 +201,12 @@ TEST(IntercellMessages, OffloadEntity_RoundTrip_Full) {
 
   auto rt = RoundTrip(msg);
   ASSERT_TRUE(rt.has_value());
-  EXPECT_EQ(rt->real_entity_id, 0xCAFEBABEu);
+  EXPECT_EQ(rt->entity_id, 0xCAFEBABEu);
   EXPECT_EQ(rt->type_id, 12u);
   EXPECT_EQ(rt->space_id, 77u);
   EXPECT_FLOAT_EQ(rt->position.x, -5.f);
   EXPECT_TRUE(rt->on_ground);
   EXPECT_EQ(rt->base_addr.Port(), 20000u);
-  EXPECT_EQ(rt->entity_id, 0x11223344u);
   EXPECT_EQ(rt->persistent_blob.size(), 8u);
   EXPECT_EQ(rt->owner_snapshot.size(), 2u);
   EXPECT_EQ(rt->other_snapshot.size(), 3u);
@@ -227,7 +223,7 @@ TEST(IntercellMessages, OffloadEntity_RoundTrip_AllBlobsEmpty) {
   // Minimal offload: no persistent blob, no snapshots, no haunts. Exercises
   // the zero-length branches so a later optimisation cannot regress them.
   OffloadEntity msg;
-  msg.real_entity_id = 1;
+  msg.entity_id = 1;
   msg.type_id = 1;
   msg.space_id = 1;
   msg.base_addr = Address(0, 1);
@@ -251,7 +247,7 @@ TEST(IntercellMessages, OffloadEntity_RoundTrip_AllBlobsEmpty) {
 // CellAppConfig defaults).
 TEST(IntercellMessages, OffloadEntity_RoundTrip_WithWitnessState) {
   OffloadEntity msg;
-  msg.real_entity_id = 42;
+  msg.entity_id = 42;
   msg.type_id = 1;
   msg.space_id = 1;
   msg.base_addr = Address(0, 1);
@@ -272,7 +268,7 @@ TEST(IntercellMessages, OffloadEntity_RoundTrip_WithWitnessState) {
 // keeps us resilient across version skew.
 TEST(IntercellMessages, OffloadEntity_Deserialize_TolerantOfMissingWitnessTail) {
   OffloadEntity msg;
-  msg.real_entity_id = 9;
+  msg.entity_id = 9;
   msg.type_id = 2;
   msg.space_id = 3;
   msg.base_addr = Address(0, 4);
@@ -325,7 +321,7 @@ TEST(IntercellMessages, OffloadEntityAck_RoundTripFailure) {
 
 TEST(IntercellMessages, CreateGhost_Truncated_ReturnsNullopt) {
   CreateGhost msg;
-  msg.real_entity_id = 42;
+  msg.entity_id = 42;
   msg.type_id = 7;
   msg.space_id = 3;
   msg.position = {1.f, 2.f, 3.f};
@@ -333,7 +329,6 @@ TEST(IntercellMessages, CreateGhost_Truncated_ReturnsNullopt) {
   msg.on_ground = true;
   msg.real_cellapp_addr = Address(0x7F000001u, 30001);
   msg.base_addr = Address(0x0A000002u, 20002);
-  msg.entity_id = 0x00ABCDEF;
   msg.event_seq = 100;
   msg.volatile_seq = 200;
   msg.other_snapshot = MakeBlob({0xDE, 0xAD, 0xBE, 0xEF});
@@ -351,14 +346,13 @@ TEST(IntercellMessages, CreateGhost_Truncated_ReturnsNullopt) {
 
 TEST(IntercellMessages, OffloadEntity_Truncated_ReturnsNullopt) {
   OffloadEntity msg;
-  msg.real_entity_id = 0xCAFEBABE;
+  msg.entity_id = 0xCAFEBABE;
   msg.type_id = 12;
   msg.space_id = 77;
   msg.position = {-5.f, 0.f, 7.f};
   msg.direction = {1.f, 0.f, 0.f};
   msg.on_ground = true;
   msg.base_addr = Address(0x7F000001u, 20000);
-  msg.entity_id = 0x11223344;
   msg.persistent_blob = MakeBlob({0x01, 0x02, 0x03, 0x04});
   msg.owner_snapshot = MakeBlob({0xA0, 0xA1});
   msg.other_snapshot = MakeBlob({0xB0, 0xB1, 0xB2});

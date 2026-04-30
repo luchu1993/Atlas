@@ -46,7 +46,7 @@ class AoIHysteresisTest : public ::testing::Test {
       -> CellEntity* {
     auto* e = space.AddEntity(
         std::make_unique<CellEntity>(id, type_id, space, pos, math::Vector3{1, 0, 0}));
-    e->SetBase(Address(0, 0), /*base_id=*/id);
+    e->SetBaseAddr(Address(0, 0));
     return e;
   }
 

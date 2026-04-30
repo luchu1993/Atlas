@@ -96,7 +96,7 @@ TEST_F(CellAppIntegrationFixture, CreateCellEntityRegistersAndResponds) {
   // Entity registered in both indexes.
   auto* by_base = app_.FindEntityByBaseId(100);
   ASSERT_NE(by_base, nullptr);
-  EXPECT_EQ(by_base->BaseEntityId(), 100u);
+  EXPECT_EQ(by_base->Id(), 100u);
   EXPECT_FLOAT_EQ(by_base->Position().x, 10.f);
 
   auto* by_cell = app_.FindEntity(by_base->Id());
@@ -196,7 +196,7 @@ class WitnessIntegrationFixture : public ::testing::Test {
       -> CellEntity* {
     auto* e = space.AddEntity(
         std::make_unique<CellEntity>(id, type_id, space, pos, math::Vector3{1, 0, 0}));
-    e->SetBase(Address(0, 0), /*base_id=*/id);
+    e->SetBaseAddr(Address(0, 0));
     return e;
   }
 };
@@ -205,10 +205,10 @@ TEST_F(WitnessIntegrationFixture, EnableWitnessFiresEnterForExistingPeers) {
   Space space(1);
 
   // Peer spawns first.
-  auto* peer = MakeEntity(space, 100, 7, {3, 0, 3});
+  auto* peer = MakeEntity(space, 100, /*type_id=*/uint16_t{7}, {3, 0, 3});
 
   // Observer spawns and enables witness — peer is already in range.
-  auto* observer = MakeEntity(space, 1, 1, {0, 0, 0});
+  auto* observer = MakeEntity(space, 1, /*type_id=*/uint16_t{1}, {0, 0, 0});
   observer->EnableWitness(/*radius=*/10.f, MakeSendFn());
 
   // Peer should be ENTER_PENDING in the AoI map.
@@ -218,16 +218,16 @@ TEST_F(WitnessIntegrationFixture, EnableWitnessFiresEnterForExistingPeers) {
   observer->GetWitness()->Update(/*max_packet_bytes=*/4096);
   ASSERT_EQ(sent_.size(), 1u);
   EXPECT_EQ(KindOf(sent_[0]), CellAoIEnvelopeKind::kEntityEnter);
-  EXPECT_EQ(PublicIdOf(sent_[0]), peer->BaseEntityId());
+  EXPECT_EQ(PublicIdOf(sent_[0]), peer->Id());
 }
 
 TEST_F(WitnessIntegrationFixture, PeerEnterAndLeaveFireEvents) {
   Space space(1);
-  auto* observer = MakeEntity(space, 1, 1, {0, 0, 0});
+  auto* observer = MakeEntity(space, 1, /*type_id=*/uint16_t{1}, {0, 0, 0});
   observer->EnableWitness(10.f, MakeSendFn());
 
   // Peer enters AoI.
-  auto* peer = MakeEntity(space, 100, 7, {3, 0, 3});
+  auto* peer = MakeEntity(space, 100, /*type_id=*/uint16_t{7}, {3, 0, 3});
   observer->GetWitness()->Update(4096);
   ASSERT_EQ(sent_.size(), 1u);
   EXPECT_EQ(KindOf(sent_[0]), CellAoIEnvelopeKind::kEntityEnter);
@@ -238,7 +238,7 @@ TEST_F(WitnessIntegrationFixture, PeerEnterAndLeaveFireEvents) {
   observer->GetWitness()->Update(4096);
   ASSERT_EQ(sent_.size(), 1u);
   EXPECT_EQ(KindOf(sent_[0]), CellAoIEnvelopeKind::kEntityLeave);
-  EXPECT_EQ(PublicIdOf(sent_[0]), peer->BaseEntityId());
+  EXPECT_EQ(PublicIdOf(sent_[0]), peer->Id());
 }
 
 // ============================================================================
@@ -375,8 +375,8 @@ TEST_F(RpcSecurityFixture, InternalCellRpcBypassesExposedCheck) {
 
 TEST_F(WitnessIntegrationFixture, AvatarUpdatePropagatesToObservers) {
   Space space(1);
-  auto* observer = MakeEntity(space, 1, 1, {0, 0, 0});
-  auto* peer = MakeEntity(space, 100, 7, {3, 0, 3});
+  auto* observer = MakeEntity(space, 1, /*type_id=*/uint16_t{1}, {0, 0, 0});
+  auto* peer = MakeEntity(space, 100, /*type_id=*/uint16_t{7}, {3, 0, 3});
   observer->EnableWitness(50.f, MakeSendFn());
 
   // Flush the initial Enter event.
@@ -401,7 +401,7 @@ TEST_F(WitnessIntegrationFixture, AvatarUpdatePropagatesToObservers) {
   for (const auto& c : sent_) {
     if (KindOf(c) == CellAoIEnvelopeKind::kEntityPositionUpdate) {
       found_pos_update = true;
-      EXPECT_EQ(PublicIdOf(c), peer->BaseEntityId());
+      EXPECT_EQ(PublicIdOf(c), peer->Id());
     }
   }
   EXPECT_TRUE(found_pos_update) << "Observer should receive position update from moved peer";
@@ -446,11 +446,10 @@ class PropertyDeltaFixture : public ::testing::Test {
     return PayloadBody(e).subspan(8);
   }
 
-  static auto MakeEntity(Space& space, EntityID id, EntityID base_id, math::Vector3 pos)
-      -> CellEntity* {
+  static auto MakeEntity(Space& space, EntityID id, math::Vector3 pos) -> CellEntity* {
     auto* e = space.AddEntity(std::make_unique<CellEntity>(id, /*type_id=*/uint16_t{1}, space, pos,
                                                            math::Vector3{1, 0, 0}));
-    e->SetBase(Address(0, 0), base_id);
+    e->SetBaseAddr(Address(0, 0));
     return e;
   }
   static auto MakeBlob(std::initializer_list<uint8_t> bytes) -> std::vector<std::byte> {
@@ -464,8 +463,8 @@ class PropertyDeltaFixture : public ::testing::Test {
 TEST_F(PropertyDeltaFixture, OtherObserverReceivesOtherDelta) {
   Space space(1);
   // Observer and peer have DIFFERENT base_entity_ids → observer is "other".
-  auto* observer = MakeEntity(space, 1, /*base=*/1001, {0, 0, 0});
-  auto* peer = MakeEntity(space, 2, /*base=*/1002, {3, 0, 3});
+  auto* observer = MakeEntity(space, 1, {0, 0, 0});
+  auto* peer = MakeEntity(space, 2, {3, 0, 3});
   observer->EnableWitness(10.f, MakeReliable(), MakeUnreliable());
 
   // Publish a property frame with distinct owner/other deltas.
@@ -488,34 +487,6 @@ TEST_F(PropertyDeltaFixture, OtherObserverReceivesOtherDelta) {
   ASSERT_EQ(updates.size(), 1u);
   EXPECT_EQ(PropertyUpdateDelta(updates[0])[0], std::byte{0xBB})
       << "Other-audience observer should receive other_delta (0xBB), not owner_delta (0xAA)";
-}
-
-TEST_F(PropertyDeltaFixture, OwnerObserverReceivesOwnerDelta) {
-  Space space(1);
-  // Observer and peer share the SAME base_entity_id → observer is "owner".
-  auto* observer = MakeEntity(space, 1, /*base=*/1001, {0, 0, 0});
-  auto* peer = MakeEntity(space, 2, /*base=*/1001, {3, 0, 3});
-  observer->EnableWitness(10.f, MakeReliable(), MakeUnreliable());
-
-  CellEntity::ReplicationFrame f;
-  f.event_seq = 1;
-  f.owner_delta = MakeBlob({0xCC});
-  f.other_delta = MakeBlob({0xDD});
-  peer->PublishReplicationFrame(f, {}, {});
-
-  auto& cache = observer->GetWitness()->AoIMapMutable().at(peer->Id());
-  cache.flags = 0;
-  cache.last_event_seq = 0;
-  sent_.clear();
-  observer->GetWitness()->TestOnlySendEntityUpdate(cache);
-
-  std::vector<ReplicationCapture> updates;
-  for (auto& c : sent_) {
-    if (KindOf(c) == CellAoIEnvelopeKind::kEntityPropertyUpdate) updates.push_back(c);
-  }
-  ASSERT_EQ(updates.size(), 1u);
-  EXPECT_EQ(PropertyUpdateDelta(updates[0])[0], std::byte{0xCC})
-      << "Owner-audience observer should receive owner_delta (0xCC), not other_delta (0xDD)";
 }
 
 // ============================================================================
@@ -560,7 +531,7 @@ TEST(CellAppIntegration, ThousandEntityTickWithinPerfBudget) {
         static_cast<EntityID>(i), /*type_id=*/uint16_t{1}, space,
         math::Vector3{static_cast<float>(i % 100), 0, static_cast<float>(i / 100)},
         math::Vector3{1, 0, 0}));
-    e->SetBase(Address(0, 0), static_cast<EntityID>(i));
+    e->SetBaseAddr(Address(0, 0));
   }
   ASSERT_EQ(space.EntityCount(), static_cast<size_t>(kEntityCount));
 

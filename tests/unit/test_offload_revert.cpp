@@ -48,7 +48,7 @@ auto SeedEntityWithState(Harness& h, EntityID id, Channel* haunt_channel) -> Cel
   auto* cell = space->AddLocalCell(std::make_unique<Cell>(*space, /*cell_id=*/7, CellBounds{}));
   auto* entity = space->AddEntity(std::make_unique<CellEntity>(
       id, /*type=*/uint16_t{1}, *space, math::Vector3{0, 0, 0}, math::Vector3{1, 0, 0}));
-  entity->SetBase(Address(0x7F000001u, 20000), /*base_id=*/id);
+  entity->SetBaseAddr(Address(0x7F000001u, 20000));
   cell->AddRealEntity(entity);
   // Register with CellApp's population map so RevertPendingOffload's
   // FindEntity lookup resolves. In production this happens via
