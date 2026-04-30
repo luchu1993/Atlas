@@ -190,10 +190,6 @@ internal static class TypeRegistryEmitter
             sb.AppendLine($"            writer.WriteByte({(byte)method.Exposed});");
         }
 
-        // Compression — default none for now
-        sb.AppendLine("            writer.WriteByte(0);");
-        sb.AppendLine("            writer.WriteByte(0);");
-
         sb.AppendLine("    }");
     }
 

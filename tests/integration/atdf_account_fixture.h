@@ -52,8 +52,6 @@ inline auto MakeAccountTypeBlob() -> std::vector<std::byte> {
   w.Write<uint8_t>(0);   // reliable
 
   w.WritePackedInt(0);  // rpc_count
-  w.Write<uint8_t>(0);  // internal_compression
-  w.Write<uint8_t>(0);  // external_compression
   return w.Detach();
 }
 

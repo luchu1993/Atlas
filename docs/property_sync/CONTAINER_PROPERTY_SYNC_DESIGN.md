@@ -30,7 +30,7 @@
 ### 1.2 非目标
 
 - **Merkle diff**：AoI 进入 / Cell 迁移 / 冷启动场景接收方无旧版本，退化成全量；op-log 已覆盖热路径。拒绝。
-- **懒 baseline 缓存**：需要客户端维护 `(entityId, componentIdx) → (version, snapshot)` 缓存子系统，复杂度与收益不匹配；现有 `EntityCompression` 的 deflate 路径足以压缩 baseline。拒绝。见 [§11 明确不做的事](#11-明确不做的事)。
+- **懒 baseline 缓存**：需要客户端维护 `(entityId, componentIdx) → (version, snapshot)` 缓存子系统，复杂度与收益不匹配。拒绝。见 [§11 明确不做的事](#11-明确不做的事)。
 - **运行时反射**：所有代码走源生成器，IL2CPP 友好。
 
 ---
@@ -569,7 +569,6 @@ Unity Mono/IL2CPP 下：
 **拒绝**。理由：
 
 - 看似加一个 `u32 version`，实际需要客户端维护 `(entityId, componentIdx) → (version, snapshot)` 缓存子系统（内存上限 / LRU / 重连恢复 / 首次 fallback）
-- 现有 `EntityCompression` 可让 baseline 走 deflate，收益更大成本更低
 - 短断线场景在 Atlas 常伴随 AoI 重建与 entity reap，命中窗口窄
 - 无线上 profile 数据前属于过早优化
 

@@ -77,8 +77,6 @@ auto MakeTypeBlobWithSlots(std::string_view type_name, uint16_t type_id,
   w.Write<uint8_t>(1);  // has_client
   w.WritePackedInt(0);  // 0 properties
   w.WritePackedInt(0);  // 0 rpcs
-  w.Write<uint8_t>(0);  // internal_compression = kNone
-  w.Write<uint8_t>(0);  // external_compression = kNone
 
   // Slot section
   w.WritePackedInt(static_cast<uint32_t>(slots.size()));
@@ -217,8 +215,6 @@ TEST_F(RegistryComponentTest, EntityWithoutSlotSectionStillWorks) {
   w.Write<uint8_t>(1);  // has_client
   w.WritePackedInt(0);  // 0 properties
   w.WritePackedInt(0);  // 0 rpcs
-  w.Write<uint8_t>(0);  // internal_compression
-  w.Write<uint8_t>(0);  // external_compression
   // No slot section — the trailing-bytes branch is not entered.
   auto blob = w.Detach();
 

@@ -113,8 +113,6 @@ auto MakeTypeBlob(std::string_view type_name, uint16_t type_id,
     }
   }
   w.WritePackedInt(0);  // 0 rpcs
-  w.Write<uint8_t>(0);  // internal_compression = kNone
-  w.Write<uint8_t>(0);  // external_compression = kNone
   return w.Detach();
 }
 

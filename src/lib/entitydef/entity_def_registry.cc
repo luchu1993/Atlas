@@ -186,15 +186,6 @@ bool EntityDefRegistry::RegisterType(const std::byte* data, int32_t len) {
     desc.rpcs.push_back(std::move(rpc));
   }
 
-  if (reader.Remaining() >= 2) {
-    auto internal_comp = reader.Read<uint8_t>();
-    auto external_comp = reader.Read<uint8_t>();
-    if (internal_comp && external_comp) {
-      desc.internal_compression = static_cast<EntityCompression>(*internal_comp);
-      desc.external_compression = static_cast<EntityCompression>(*external_comp);
-    }
-  }
-
   // Any remaining bytes are the optional component slot section.
   if (reader.Remaining() > 0) {
     auto slot_count = reader.ReadPackedInt();

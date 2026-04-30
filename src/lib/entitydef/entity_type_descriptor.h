@@ -119,11 +119,6 @@ struct RpcDescriptor {
   [[nodiscard]] bool IsComponentRpc() const { return SlotIdx() != 0; }
 };
 
-enum class EntityCompression : uint8_t {
-  kNone = 0,
-  kDeflate = 1,
-};
-
 enum class ComponentLocality : uint8_t {
   kSynced = 0,
   kServerLocal = 1,
@@ -166,10 +161,6 @@ struct EntityTypeDescriptor {
   bool has_client;
   std::vector<PropertyDescriptor> properties;
   std::vector<RpcDescriptor> rpcs;
-
-  EntityCompression internal_compression = EntityCompression::kNone;
-  EntityCompression external_compression = EntityCompression::kNone;
-
   std::vector<EntitySlotDescriptor> slots;
 };
 

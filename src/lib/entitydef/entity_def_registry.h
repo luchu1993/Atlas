@@ -32,7 +32,8 @@ class EntityDefRegistry {
   // component_type_id, and component / entity properties may reference
   // struct_id; both must already be registered before the referrer is parsed.
   static constexpr uint32_t kBinaryFileMagic = 0x46445441u;  // 'A''T''D''F'
-  static constexpr uint16_t kBinaryFileVersion = 1;
+  // v2: dropped per-type internal/external compression bytes (dead).
+  static constexpr uint16_t kBinaryFileVersion = 2;
 
   struct LoadedCounts {
     size_t structs{0};

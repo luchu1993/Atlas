@@ -84,17 +84,14 @@ struct RpcDescriptor {
   bool     IsExposed() const;
 };
 
-enum class EntityCompression : uint8_t { kNone = 0, kDeflate = 1 };
-
 struct EntityTypeDescriptor {
-  std::string                     name;
-  uint16_t                        type_id;
-  bool                            has_cell;
-  bool                            has_client;
-  std::vector<PropertyDescriptor> properties;
-  std::vector<RpcDescriptor>      rpcs;
-  EntityCompression               internal_compression{EntityCompression::kNone};
-  EntityCompression               external_compression{EntityCompression::kNone};
+  std::string                       name;
+  uint16_t                          type_id;
+  bool                              has_cell;
+  bool                              has_client;
+  std::vector<PropertyDescriptor>   properties;
+  std::vector<RpcDescriptor>        rpcs;
+  std::vector<EntitySlotDescriptor> slots;
 };
 ```
 
