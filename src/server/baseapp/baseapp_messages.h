@@ -14,6 +14,9 @@
 
 namespace atlas::baseapp {
 
+inline constexpr uint32_t kMaxBroadcastRpcDestinations = 64 * 1024;
+inline constexpr uint32_t kMaxCellAppDeathRehomes = 64 * 1024;
+
 struct CreateBase {
   uint16_t type_id{0};
   EntityID entity_id{kInvalidEntityID};  // 0 = BaseApp allocates locally
@@ -280,6 +283,9 @@ struct BroadcastRpcFromCell {
     auto count = r.ReadPackedInt();
     if (!rid || !count)
       return Error{ErrorCode::kInvalidArgument, "BroadcastRpcFromCell: truncated header"};
+    if (*count > kMaxBroadcastRpcDestinations) {
+      return Error{ErrorCode::kInvalidArgument, "BroadcastRpcFromCell: too many destinations"};
+    }
     BroadcastRpcFromCell msg;
     msg.rpc_id = *rid;
     msg.dest_entity_ids.reserve(*count);
@@ -768,6 +774,9 @@ struct CellAppDeath {
     auto count = r.ReadPackedInt();
     if (!ip || !port || !count)
       return Error{ErrorCode::kInvalidArgument, "CellAppDeath: truncated header"};
+    if (*count > kMaxCellAppDeathRehomes) {
+      return Error{ErrorCode::kInvalidArgument, "CellAppDeath: too many rehomes"};
+    }
     CellAppDeath msg;
     msg.dead_addr = Address(*ip, *port);
     msg.rehomes.reserve(*count);

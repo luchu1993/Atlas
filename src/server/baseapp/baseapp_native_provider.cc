@@ -14,6 +14,18 @@
 
 namespace atlas {
 
+namespace {
+
+auto IsValidNativePayload(const std::byte* payload, int32_t len) -> bool {
+  return len >= 0 && (payload != nullptr || len == 0);
+}
+
+auto IsValidRpcTarget(RpcTarget target) -> bool {
+  return target == RpcTarget::kOwner || target == RpcTarget::kOthers || target == RpcTarget::kAll;
+}
+
+}  // namespace
+
 // Mirrors [UnmanagedCallersOnly] exports in Atlas.Runtime. Append-only;
 // C++ tolerates short tables (older runtimes).
 #pragma pack(push, 1)
@@ -34,6 +46,15 @@ uint8_t BaseAppNativeProvider::GetProcessPrefix() {
 
 void BaseAppNativeProvider::SendClientRpc(uint32_t entity_id, uint32_t rpc_id, RpcTarget target,
                                           const std::byte* payload, int32_t len) {
+  if (!IsValidNativePayload(payload, len)) {
+    ATLAS_LOG_WARNING("BaseApp: SendClientRpc rejected invalid payload len={}", len);
+    return;
+  }
+  if (!IsValidRpcTarget(target)) {
+    ATLAS_LOG_WARNING("BaseApp: SendClientRpc rejected invalid target={}",
+                      static_cast<int>(target));
+    return;
+  }
   // BaseApp has no AoI/witness graph - broadcast scopes are cell-side only.
   if (target != RpcTarget::kOwner) {
     ATLAS_LOG_ERROR(
@@ -52,12 +73,17 @@ void BaseAppNativeProvider::SendClientRpc(uint32_t entity_id, uint32_t rpc_id, R
     ATLAS_LOG_WARNING("BaseApp: SendClientRpc: entity {} client channel unavailable", entity_id);
     return;
   }
-  std::vector<std::byte> tmp(payload, payload + len);
+  std::vector<std::byte> tmp;
+  if (len > 0) tmp.assign(payload, payload + static_cast<std::size_t>(len));
   app_.RelayRpcToClient(*client_ch, rpc_id, tmp);
 }
 
 void BaseAppNativeProvider::SendCellRpc(uint32_t entity_id, uint32_t rpc_id,
                                         const std::byte* payload, int32_t len) {
+  if (!IsValidNativePayload(payload, len)) {
+    ATLAS_LOG_WARNING("BaseApp: SendCellRpc rejected invalid payload len={}", len);
+    return;
+  }
   auto* ent = app_.GetEntityManager().Find(entity_id);
   if (!ent || !ent->HasCell()) {
     ATLAS_LOG_WARNING("BaseApp: SendCellRpc: entity {} has no cell", entity_id);
@@ -81,6 +107,10 @@ void BaseAppNativeProvider::SendCellRpc(uint32_t entity_id, uint32_t rpc_id,
 
 void BaseAppNativeProvider::SendBaseRpc(uint32_t entity_id, uint32_t rpc_id,
                                         const std::byte* payload, int32_t len) {
+  if (!IsValidNativePayload(payload, len)) {
+    ATLAS_LOG_WARNING("BaseApp: SendBaseRpc rejected invalid payload len={}", len);
+    return;
+  }
   // Local: dispatch directly through C# (no network hop).
   if (!dispatch_rpc_fn_) {
     ATLAS_LOG_WARNING("BaseApp: SendBaseRpc: dispatch_rpc callback not registered");

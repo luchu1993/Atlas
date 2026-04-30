@@ -13,28 +13,10 @@ public enum RpcTarget : byte
     All = 2,
 }
 
-// ============================================================================
-// NativeApi — C# → C++ interop via [LibraryImport]
-// ============================================================================
-//
-// All declarations here bind to functions exported from atlas_engine.dll/.so
-// (built as a CMake SHARED library from src/lib/clrscript/clr_native_api.hpp).
-//
-// Naming convention:
-//   - Private `*Native` methods: raw [LibraryImport] with pointer parameters.
-//   - Public wrapper methods: safe API converting Span/string → pointer+length.
-//
-// Thread safety:
-//   All functions forward to INativeApiProvider; see that interface for
-//   thread-safety guarantees per function.
 
 internal static unsafe partial class NativeApi
 {
     private const string LibName = "atlas_engine";
-
-    // =========================================================================
-    // Logging
-    // =========================================================================
 
     [LibraryImport(LibName, EntryPoint = "AtlasLogMessage")]
     private static partial void LogMessageNative(int level, byte* msg, int len);
@@ -49,26 +31,14 @@ internal static unsafe partial class NativeApi
             LogMessageNative(level, ptr, message.Length);
     }
 
-    // =========================================================================
-    // Time
-    // =========================================================================
-
     [LibraryImport(LibName, EntryPoint = "AtlasServerTime")]
     public static partial double ServerTime();
 
     [LibraryImport(LibName, EntryPoint = "AtlasDeltaTime")]
     public static partial float DeltaTime();
 
-    // =========================================================================
-    // Process identity
-    // =========================================================================
-
     [LibraryImport(LibName, EntryPoint = "AtlasGetProcessPrefix")]
     public static partial byte GetProcessPrefix();
-
-    // =========================================================================
-    // RPC dispatch
-    // =========================================================================
 
     [LibraryImport(LibName, EntryPoint = "AtlasSendClientRpc")]
     private static partial void SendClientRpcNative(
@@ -108,10 +78,6 @@ internal static unsafe partial class NativeApi
         fixed (byte* ptr = payload)
             SendBaseRpcNative(entityId, rpcId, ptr, payload.Length);
     }
-
-    // =========================================================================
-    // Entity type registry
-    // =========================================================================
 
     [LibraryImport(LibName, EntryPoint = "AtlasRegisterEntityType")]
     private static partial void RegisterEntityTypeNative(byte* data, int len);
@@ -188,10 +154,6 @@ internal static unsafe partial class NativeApi
         SetNativeCallbacksNative(nativeCallbacks, len);
     }
 
-    // =========================================================================
-    // CellApp spatial
-    // =========================================================================
-    //
     // AtlasSetEntityPosition forwards to the active INativeApiProvider. On
     // CellApp that updates the CellEntity's C++ position_ + range_node_ so
     // AoI triggers see the move. On any other process type the provider
@@ -207,10 +169,6 @@ internal static unsafe partial class NativeApi
         SetEntityPositionNative(entityId, position.X, position.Y, position.Z);
     }
 
-    // =========================================================================
-    // Replication frame pump (CellApp)
-    // =========================================================================
-    //
     // Hand one tick of replication output for a single entity to the cell
     // layer. BuildAndConsumeReplicationFrame on the C# side produces the four
     // audience-filtered buffers (+ event_seq / volatile_seq); this routes
@@ -248,10 +206,6 @@ internal static unsafe partial class NativeApi
                 otherDeltaPtr, otherDelta.Length);
         }
     }
-
-    // =========================================================================
-    // ABI version (diagnostic)
-    // =========================================================================
 
     [LibraryImport(LibName, EntryPoint = "AtlasGetAbiVersion")]
     public static partial uint GetAbiVersion();

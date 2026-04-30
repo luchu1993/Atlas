@@ -30,17 +30,14 @@ internal static class MailboxEmitter
             sb.AppendLine();
         }
 
-        // Determine which mailboxes to generate
         bool emitClientMailbox = ShouldEmitClientMailbox(ctx);
         bool emitBaseMailbox = ShouldEmitBaseMailbox(ctx);
         bool emitCellMailbox = ShouldEmitCellMailbox(ctx);
 
-        // Client mailbox (for calling client_methods)
         if (emitClientMailbox && def.ClientMethods.Count > 0)
             EmitMailboxStruct(sb, def, className, def.ClientMethods, typeIndex, 0x00,
                               "Client", "SendClientRpc");
 
-        // Base mailbox (for calling exposed base_methods from client)
         if (emitBaseMailbox && def.BaseMethods.Count > 0)
         {
             var exposedOnly = ctx == ProcessContext.Client;
@@ -48,7 +45,6 @@ internal static class MailboxEmitter
                               "Base", "SendBaseRpc", exposedOnly);
         }
 
-        // Cell mailbox (for calling exposed cell_methods from client)
         if (emitCellMailbox && def.CellMethods.Count > 0)
         {
             var exposedOnly = ctx == ProcessContext.Client;
@@ -56,7 +52,6 @@ internal static class MailboxEmitter
                               "Cell", "SendCellRpc", exposedOnly);
         }
 
-        // Partial class with mailbox property accessors and internal RPC forwarding
         sb.AppendLine($"partial class {className}");
         sb.AppendLine("{");
         if (emitClientMailbox && def.ClientMethods.Count > 0)
@@ -70,8 +65,6 @@ internal static class MailboxEmitter
         if (emitCellMailbox && def.CellMethods.Count > 0)
             sb.AppendLine($"    public {className}CellMailbox Cell => new(this);");
         sb.AppendLine();
-        sb.AppendLine("    // Internal forwarding methods — mailbox structs call these");
-        sb.AppendLine("    // because SendXxxRpc is protected internal on the base class.");
         if (emitClientMailbox && def.ClientMethods.Count > 0)
             sb.AppendLine("    internal void InternalSendClientRpc(int rpcId, RpcTarget target, ReadOnlySpan<byte> payload) => SendClientRpc(rpcId, target, payload);");
         if (emitBaseMailbox || emitCellMailbox)

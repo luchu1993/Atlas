@@ -121,6 +121,19 @@ TEST(BaseAppMessages, BroadcastRpcFromCell) {
   EXPECT_FALSE(BroadcastRpcFromCell::Descriptor().IsUnreliable());
 }
 
+TEST(BaseAppMessages, BroadcastRpcFromCellRejectsTooManyDestinations) {
+  BinaryWriter w;
+  w.WritePackedInt(88);
+  w.WritePackedInt(kMaxBroadcastRpcDestinations + 1);
+
+  auto buf = w.Detach();
+  BinaryReader r(buf);
+  auto result = BroadcastRpcFromCell::Deserialize(r);
+
+  ASSERT_FALSE(result.HasValue());
+  EXPECT_EQ(result.Error().Code(), ErrorCode::kInvalidArgument);
+}
+
 TEST(BaseAppMessages, ReplicatedDeltaFromCell) {
   ReplicatedDeltaFromCell msg;
   msg.entity_id = 8;
@@ -202,6 +215,20 @@ TEST(BaseAppMessages, ReplicatedBaselineFromCellReliable) {
   // channel — the one job a dropped baseline *cannot* have is being
   // silent. Must ride the reliable channel.
   EXPECT_FALSE(ReplicatedBaselineFromCell::Descriptor().IsUnreliable());
+}
+
+TEST(BaseAppMessages, CellAppDeathRejectsTooManyRehomes) {
+  BinaryWriter w;
+  w.Write<uint32_t>(0x7F000001u);
+  w.Write<uint16_t>(30001);
+  w.WritePackedInt(kMaxCellAppDeathRehomes + 1);
+
+  auto buf = w.Detach();
+  BinaryReader r(buf);
+  auto result = CellAppDeath::Deserialize(r);
+
+  ASSERT_FALSE(result.HasValue());
+  EXPECT_EQ(result.Error().Code(), ErrorCode::kInvalidArgument);
 }
 
 TEST(BaseAppMessages, ClientCellRpc) {

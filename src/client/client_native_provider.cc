@@ -9,8 +9,14 @@
 
 namespace atlas {
 
-// Packed layout of the callback table sent by C# Atlas.Client via set_native_callbacks.
-// Field order and packing must mirror Atlas.Client.ClientCallbackTable exactly.
+namespace {
+
+auto IsValidNativePayload(const std::byte* payload, int32_t len) -> bool {
+  return len >= 0 && (payload != nullptr || len == 0);
+}
+
+}  // namespace
+
 #pragma pack(push, 1)
 struct ClientCallbackTable {
   ClientDispatchRpcFn dispatch_rpc;
@@ -23,19 +29,21 @@ struct ClientCallbackTable {
 ClientNativeProvider::ClientNativeProvider(ClientApp& app) : app_(app) {}
 
 uint8_t ClientNativeProvider::GetProcessPrefix() {
-  // 'C' for Client
   return static_cast<uint8_t>('C');
 }
 
 void ClientNativeProvider::SendBaseRpc(uint32_t entity_id, uint32_t rpc_id,
                                        const std::byte* payload, int32_t len) {
+  if (!IsValidNativePayload(payload, len)) {
+    ATLAS_LOG_WARNING("Client: send_base_rpc rejected invalid payload len={}", len);
+    return;
+  }
   auto* ch = app_.BaseappChannel();
   if (!ch) {
     ATLAS_LOG_WARNING("Client: send_base_rpc: not connected to BaseApp");
     return;
   }
 
-  // Build and send ClientBaseRpc message
   baseapp::ClientBaseRpc msg;
   msg.rpc_id = rpc_id;
   if (len > 0) msg.payload.assign(payload, payload + static_cast<std::size_t>(len));
@@ -47,13 +55,16 @@ void ClientNativeProvider::SendBaseRpc(uint32_t entity_id, uint32_t rpc_id,
 
 void ClientNativeProvider::SendCellRpc(uint32_t entity_id, uint32_t rpc_id,
                                        const std::byte* payload, int32_t len) {
+  if (!IsValidNativePayload(payload, len)) {
+    ATLAS_LOG_WARNING("Client: send_cell_rpc rejected invalid payload len={}", len);
+    return;
+  }
   auto* ch = app_.BaseappChannel();
   if (!ch) {
     ATLAS_LOG_WARNING("Client: send_cell_rpc: not connected to BaseApp");
     return;
   }
 
-  // Unified entity id; BaseApp routes via CurrentCell to the owning CellApp.
   baseapp::ClientCellRpc msg;
   msg.target_entity_id = entity_id;
   msg.rpc_id = rpc_id;

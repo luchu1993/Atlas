@@ -23,6 +23,18 @@
 
 namespace atlas {
 
+namespace {
+
+auto IsValidNativePayload(const std::byte* payload, int32_t len) -> bool {
+  return len >= 0 && (payload != nullptr || len == 0);
+}
+
+auto IsValidRpcTarget(RpcTarget target) -> bool {
+  return target == RpcTarget::kOwner || target == RpcTarget::kOthers || target == RpcTarget::kAll;
+}
+
+}  // namespace
+
 // Mirrors [UnmanagedCallersOnly] exports in Atlas.Runtime; same layout
 // as BaseApp's table. Append-only; SetNativeCallbacks clamps to caller's
 // len so missing entries read back as nullptr.
@@ -49,6 +61,15 @@ uint8_t CellAppNativeProvider::GetProcessPrefix() {
 
 void CellAppNativeProvider::SendClientRpc(uint32_t entity_id, uint32_t rpc_id, RpcTarget target,
                                           const std::byte* payload, int32_t len) {
+  if (!IsValidNativePayload(payload, len)) {
+    ATLAS_LOG_WARNING("CellApp: SendClientRpc rejected invalid payload len={}", len);
+    return;
+  }
+  if (!IsValidRpcTarget(target)) {
+    ATLAS_LOG_WARNING("CellApp: SendClientRpc rejected invalid target={}",
+                      static_cast<int>(target));
+    return;
+  }
   auto* source = lookup_ ? lookup_(entity_id) : nullptr;
   if (!source) {
     ATLAS_LOG_WARNING("CellApp: SendClientRpc: unknown entity_id={}", entity_id);
@@ -91,7 +112,7 @@ void CellAppNativeProvider::SendClientRpc(uint32_t entity_id, uint32_t rpc_id, R
     baseapp::BroadcastRpcFromCell msg;
     msg.rpc_id = rpc_id;
     msg.dest_entity_ids = std::move(ids);
-    if (len > 0) msg.payload.assign(payload, payload + len);
+    if (len > 0) msg.payload.assign(payload, payload + static_cast<std::size_t>(len));
     (void)(*base_ch)->SendMessage(msg);
   }
 }

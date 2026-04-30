@@ -32,13 +32,8 @@ internal static class RpcStubEmitter
         sb.AppendLine($"partial class {className}");
         sb.AppendLine("{");
 
-        // Client methods
         EmitMethods(sb, def.ClientMethods, "client_methods", ctx, typeIndex, 0x00);
-
-        // Cell methods
         EmitMethods(sb, def.CellMethods, "cell_methods", ctx, typeIndex, 0x02);
-
-        // Base methods
         EmitMethods(sb, def.BaseMethods, "base_methods", ctx, typeIndex, 0x03);
 
         sb.AppendLine("}");
@@ -71,7 +66,6 @@ internal static class RpcStubEmitter
                 break;
 
             case RpcRole.Send:
-                sb.AppendLine($"    // Send stub for {section}.{method.Name}");
                 sb.AppendLine($"    public void {method.Name}({paramList})");
                 sb.AppendLine("    {");
                 EmitSerializeAndSend(sb, method, rpcId, section);

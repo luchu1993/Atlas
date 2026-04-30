@@ -366,7 +366,12 @@ public partial class Avatar : ServerEntity
 
         var code = mailboxes!.GetText().ToString();
         Assert.Contains("AvatarClientMailbox", code);
-        Assert.Contains("public AvatarClientMailbox Client =>", code);
+        Assert.Contains("public AvatarClientMailbox Client => new(this, RpcTarget.Owner);", code);
+        Assert.Contains("public AvatarClientMailbox OtherClients => new(this, RpcTarget.Others);", code);
+        Assert.Contains("public AvatarClientMailbox AllClients => new(this, RpcTarget.All);", code);
+        Assert.Contains("internal AvatarClientMailbox(Avatar entity, RpcTarget target)", code);
+        Assert.Contains("_entity.InternalSendClientRpc(0x", code);
+        Assert.Contains("_target, writer.WrittenSpan", code);
     }
 
     // =========================================================================

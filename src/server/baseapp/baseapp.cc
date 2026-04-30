@@ -822,7 +822,6 @@ void BaseApp::OnCellRpcForward(Channel& /*ch*/, const baseapp::CellRpcForward& m
               static_cast<int32_t>(msg.payload.size()));
 }
 
-// Cell resolved scope to destinations on this BaseApp; deliver to each.
 void BaseApp::OnBroadcastRpcFromCell(Channel& /*ch*/, const baseapp::BroadcastRpcFromCell& msg) {
   for (auto entity_id : msg.dest_entity_ids) {
     auto* proxy = entity_mgr_.FindProxy(entity_id);
@@ -835,8 +834,9 @@ void BaseApp::OnBroadcastRpcFromCell(Channel& /*ch*/, const baseapp::BroadcastRp
 
 void BaseApp::RelayRpcToClient(Channel& client_ch, uint32_t rpc_id,
                                const std::vector<std::byte>& payload) {
-  baseapp::ClientRpcEnvelope env{rpc_id,
-                                 std::span<const std::byte>(payload.data(), payload.size())};
+  auto args = payload.empty() ? std::span<const std::byte>{}
+                              : std::span<const std::byte>(payload.data(), payload.size());
+  baseapp::ClientRpcEnvelope env{rpc_id, args};
   if (auto r = client_ch.SendMessage(env); !r) {
     ATLAS_LOG_DEBUG("BaseApp: RelayRpcToClient send failed (rpc_id=0x{:08X}): {}", rpc_id,
                     r.Error().Message());
