@@ -70,7 +70,7 @@ void Space::Tick(float dt) {
   // Controllers run before any Witness pass reads RangeList.
   // No compaction here: RemoveEntity is the sole destruction path and
   // erases synchronously. A second sweep would bypass CellApp's
-  // entity_population_ / base_entity_population_ indexes.
+  // entity_population_ index.
   for (auto& [_, entity] : entities_) {
     if (!entity->IsDestroyed()) entity->GetControllers().Update(dt);
   }

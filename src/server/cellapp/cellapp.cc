@@ -216,7 +216,6 @@ void CellApp::Fini() {
   // events) and we want that to happen while script state is still alive.
   spaces_.clear();
   entity_population_.clear();
-  base_entity_population_.clear();
   EntityApp::Fini();
 }
 
@@ -455,7 +454,6 @@ void CellApp::OnCreateCellEntity(const Address& src, Channel* ch,
   entity_ptr->SetBase(base_addr, msg.base_entity_id);
   auto* entity = space->AddEntity(std::move(entity_ptr));
   entity_population_[cell_id] = entity;
-  base_entity_population_[msg.base_entity_id] = entity;
 
   // BSP tree (if present) picks the owning local Cell; otherwise fall
   // back to the only local Cell. No local Cell ⇒ no OffloadChecker /
@@ -519,7 +517,6 @@ void CellApp::OnDestroyCellEntity(const Address& /*src*/, Channel* /*ch*/,
     cell->RemoveRealEntity(entity);
   }
 
-  base_entity_population_.erase(msg.base_entity_id);
   entity_population_.erase(cell_id);
   entity->GetSpace().RemoveEntity(cell_id);
 }
@@ -632,10 +629,7 @@ void CellApp::OnDestroySpace(const Address& /*src*/, Channel* /*ch*/,
   }
   // Drop entity-population entries for everything in this space.
   auto& space = *it->second;
-  space.ForEachEntity([this](CellEntity& e) {
-    entity_population_.erase(e.Id());
-    base_entity_population_.erase(e.BaseEntityId());
-  });
+  space.ForEachEntity([this](CellEntity& e) { entity_population_.erase(e.Id()); });
   spaces_.erase(it);
 }
 
@@ -818,9 +812,10 @@ void CellApp::OnCreateGhost(const Address& /*src*/, Channel* ch, const cellapp::
     entity_ptr_raw->GhostUpdatePosition(msg.position, msg.direction, msg.on_ground,
                                         msg.volatile_seq);
   }
+  // Ghosts share entity_population_ with Reals; FindEntityByBaseId
+  // gates on IsReal() so client RPCs still route only to the owning
+  // Real (via BaseApp's CurrentCell table).
   entity_population_[msg.real_entity_id] = entity_ptr_raw;
-  // Ghosts stay out of base_entity_population_ — client RPCs must route
-  // to the Real via BaseApp's CurrentCell table.
 }
 
 void CellApp::OnDeleteGhost(const Address& /*src*/, Channel* /*ch*/,
@@ -941,8 +936,6 @@ void CellApp::OnOffloadEntity(const Address& src, Channel* ch, const cellapp::Of
   // is the cluster-stable identity from BaseApp's IDClient.
   assert(entity->Id() == msg.real_entity_id);
   assert(entity->BaseEntityId() == msg.base_entity_id);
-
-  base_entity_population_[msg.base_entity_id] = entity;
 
   // Empty blob is valid (tests / C#-less setups): the Real has no
   // script state and AoI runs off the replication baseline below until
@@ -1139,11 +1132,6 @@ void CellApp::RevertPendingOffload(EntityID entity_id, const char* reason) {
   // Both Convert methods preserve replication_state_, so AoI continues
   // serving from the baseline the Ghost was already replicating.
   entity->ConvertGhostToReal();
-
-  // BaseApp's cell_addr is still us (CurrentCell is sent by the
-  // receiver on success, not the sender on send), so client RPCs land
-  // here — re-install routing before they arrive.
-  base_entity_population_[entity->BaseEntityId()] = entity;
 
   // Restore local-Cell membership if the captured Cell still exists.
   if (po.cell_id != 0) {
@@ -1528,9 +1516,6 @@ void CellApp::TickOffloadChecker() {
       for (auto& [_cell_id, cell] : space->LocalCells()) {
         cell->RemoveRealEntity(op.entity);
       }
-      // Ghosts stay out of base_entity_population_ — client RPCs must
-      // route to the new Real.
-      base_entity_population_.erase(op.entity->BaseEntityId());
     }
   }
 }

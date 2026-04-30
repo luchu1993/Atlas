@@ -10,7 +10,7 @@
 //   1. Query the BSP for the target cell at the new position,
 //   2. Build an OffloadEntity, GhostSetNextReal, and ship them to B,
 //   3. ConvertRealToGhost on A so the peer becomes a back-channel,
-//   4. Drop the entity from A's local Cell + base_entity_population_,
+//   4. Drop the entity from A's local Cell,
 //   5. Receive OffloadEntityAck and drain the pending_offloads_ entry.
 //
 // B's side:

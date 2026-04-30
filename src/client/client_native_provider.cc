@@ -53,8 +53,8 @@ void ClientNativeProvider::SendCellRpc(uint32_t entity_id, uint32_t rpc_id,
     return;
   }
 
-  // The client-visible entity id space is base_entity_id; BaseApp resolves
-  // target -> CellEntity via its base_entity_population_ index.
+  // Client uses the unified entity id (== base_entity_id == cell_entity_id);
+  // BaseApp routes via CurrentCell to the owning CellApp.
   baseapp::ClientCellRpc msg;
   msg.target_entity_id = entity_id;
   msg.rpc_id = rpc_id;

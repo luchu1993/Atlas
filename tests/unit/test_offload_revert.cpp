@@ -97,8 +97,8 @@ TEST(OffloadRevert, RevertRestoresRealWithHauntsCellAndControllers) {
   CaptureSnapshot(po, *entity, /*sid=*/42, /*cid=*/7, target,
                   /*haunt_addrs=*/{fake_haunt_addr});
 
-  // Simulate the Offload send: convert Real→Ghost and remove from Cell
-  // + base_entity_population_ the way TickOffloadChecker would.
+  // Simulate the Offload send: convert Real→Ghost and remove from
+  // Cell membership the way TickOffloadChecker would.
   entity->ConvertRealToGhost(peer_channel);
   ASSERT_TRUE(entity->IsGhost());
   EXPECT_EQ(entity->GetControllers().Count(), 0u);  // StopAll cleared

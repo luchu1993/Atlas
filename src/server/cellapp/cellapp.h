@@ -223,14 +223,11 @@ class CellApp : public EntityApp {
   std::unordered_map<SpaceID, std::unique_ptr<Space>> spaces_;
 
   // Non-owning — the owning unique_ptr lives in the peer Space's
-  // entities_ map. Holds BOTH Real and Ghost entities (EntityIDs are
-  // cluster-wide so no collision risk).
+  // entities_ map. Holds BOTH Real and Ghost entities. Keyed by the
+  // unified entity id (DBApp-allocated, identical to base_entity_id);
+  // FindEntityByBaseId gates on IsReal() to keep client RPC routing
+  // off of Ghost entries.
   std::unordered_map<EntityID, CellEntity*> entity_population_;
-
-  // Required for RPC routing: clients and BaseApp identify entities
-  // by base_entity_id, which is stable across CellApp offloads. Only
-  // Real entities appear here — client RPCs never dispatch to a Ghost.
-  std::unordered_map<EntityID, CellEntity*> base_entity_population_;
 
   // Tight cadence (50 ticks ≈ 1 s at 50 Hz) because backup bytes are
   // the only authoritative cell-side state BaseApp sees, and the DB
