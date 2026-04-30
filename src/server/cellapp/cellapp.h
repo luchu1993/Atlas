@@ -103,8 +103,9 @@ class CellApp : public EntityApp {
   void OnRegisterCellAppAck(const Address& src, Channel* ch,
                             const cellappmgr::RegisterCellAppAck& msg);
 
-  // Non-zero after RegisterCellApp completes; AllocateCellEntityId
-  // packs it into the high 8 bits so EntityIDs are unique cluster-wide.
+  // Non-zero after RegisterCellApp completes; reported back to
+  // CellAppMgr in load updates so the manager can attribute traffic to
+  // the right CellApp instance.
   [[nodiscard]] auto AppId() const -> uint32_t { return app_id_; }
 
   // Returns nullptr if the peer isn't known (not yet connected or
@@ -219,8 +220,6 @@ class CellApp : public EntityApp {
   // (cellappmgr_channel_ null or app_id_ == 0).
   void SendInformCellLoad();
 
-  [[nodiscard]] auto AllocateCellEntityId() -> EntityID;
-
   std::unordered_map<SpaceID, std::unique_ptr<Space>> spaces_;
 
   // Non-owning — the owning unique_ptr lives in the peer Space's
@@ -232,8 +231,6 @@ class CellApp : public EntityApp {
   // by base_entity_id, which is stable across CellApp offloads. Only
   // Real entities appear here — client RPCs never dispatch to a Ghost.
   std::unordered_map<EntityID, CellEntity*> base_entity_population_;
-
-  EntityID next_entity_id_{1};
 
   // Tight cadence (50 ticks ≈ 1 s at 50 Hz) because backup bytes are
   // the only authoritative cell-side state BaseApp sees, and the DB

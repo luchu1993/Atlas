@@ -259,24 +259,6 @@ void CellApp::RegisterWatchers() {
                       std::function<std::size_t()>([this] { return entity_population_.size(); }));
   wr.Add<std::size_t>("cellapp/space_count",
                       std::function<std::size_t()>([this] { return spaces_.size(); }));
-  // Real entities partitioned by cell_id high-8-bit ownership tag. A
-  // non-zero `foreign_id_real_entity_count` is the steady-state signal
-  // for entities offloaded in from peer CellApps; a sudden imbalance
-  // signals a leak in the offload protocol.
-  wr.Add<uint32_t>("cellapp/local_id_real_entity_count", std::function<uint32_t()>([this] {
-                     uint32_t count = 0;
-                     for (const auto& [cell_id, entity] : entity_population_) {
-                       if (entity->IsReal() && (cell_id >> 24) == app_id_) ++count;
-                     }
-                     return count;
-                   }));
-  wr.Add<uint32_t>("cellapp/foreign_id_real_entity_count", std::function<uint32_t()>([this] {
-                     uint32_t count = 0;
-                     for (const auto& [cell_id, entity] : entity_population_) {
-                       if (entity->IsReal() && (cell_id >> 24) != app_id_) ++count;
-                     }
-                     return count;
-                   }));
 }
 
 void CellApp::TickControllers(float dt) {
@@ -435,20 +417,16 @@ auto CellApp::FindSpace(SpaceID id) -> Space* {
   return it == spaces_.end() ? nullptr : it->second.get();
 }
 
-auto CellApp::AllocateCellEntityId() -> EntityID {
-  // High 8 bits = app_id, low 24 bits = local monotonic counter.
-  // Pre-RegisterCellAppAck app_id_ == 0; production registers before
-  // any CreateCellEntity arrives, tests run with high byte 0.
-  const uint32_t local = next_entity_id_++ & 0x00FFFFFFu;
-  return (app_id_ << 24) | local;
-}
-
 void CellApp::OnCreateCellEntity(const Address& src, Channel* ch,
                                  const cellapp::CreateCellEntity& msg) {
   // Lazily create — the management CreateSpace path may not have run
   // yet if this is the first entity in a fresh space.
   if (msg.space_id == kInvalidSpaceID) {
     ATLAS_LOG_WARNING("CellApp: CreateCellEntity rejected: space_id == kInvalidSpaceID");
+    return;
+  }
+  if (msg.base_entity_id == kInvalidEntityID) {
+    ATLAS_LOG_WARNING("CellApp: CreateCellEntity rejected: base_entity_id == kInvalidEntityID");
     return;
   }
   auto* space = FindSpace(msg.space_id);
@@ -458,7 +436,9 @@ void CellApp::OnCreateCellEntity(const Address& src, Channel* ch,
     ATLAS_LOG_INFO("CellApp: auto-created Space {} for CreateCellEntity", msg.space_id);
   }
 
-  const EntityID cell_id = AllocateCellEntityId();
+  // cell_id == base_entity_id: DBApp's IDClient is the single cluster
+  // authority; CellApp no longer mints its own ids.
+  const EntityID cell_id = msg.base_entity_id;
   auto entity_ptr =
       std::make_unique<CellEntity>(cell_id, msg.type_id, *space, msg.position, msg.direction);
   entity_ptr->SetOnGround(msg.on_ground);
