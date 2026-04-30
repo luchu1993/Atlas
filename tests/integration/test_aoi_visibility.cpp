@@ -50,7 +50,7 @@ auto VisiblePeers(const Witness& w) -> std::set<EntityID> {
 TEST(AoIVisibility, InsidePeersMatchExpectedSet) {
   Space space(1);
   auto* observer = MakeEntity(space, 1, {0, 0, 0});
-  observer->EnableWitness(/*radius=*/10.f, [](EntityID, std::span<const std::byte>) {},
+  observer->EnableWitness(/*radius=*/10.f, [](std::span<const std::byte>) {},
                           /*hysteresis=*/0.f);
 
   // Three peers inside the 10 m square, three outside, one on the edge
@@ -79,7 +79,7 @@ TEST(AoIVisibility, InsidePeersMatchExpectedSet) {
 TEST(AoIVisibility, MovesUpdateMembership) {
   Space space(1);
   auto* observer = MakeEntity(space, 1, {0, 0, 0});
-  observer->EnableWitness(10.f, [](EntityID, std::span<const std::byte>) {}, /*hysteresis=*/0.f);
+  observer->EnableWitness(10.f, [](std::span<const std::byte>) {}, /*hysteresis=*/0.f);
 
   auto* p = MakeEntity(space, 100, {5.f, 0.f, 5.f});  // inside
   EXPECT_EQ(VisiblePeers(*observer->GetWitness()), (std::set<EntityID>{p->Id()}));
@@ -108,7 +108,7 @@ TEST(AoIVisibility, MovesUpdateMembership) {
 TEST(AoIVisibility, SetAoIRadiusAdjustsSet) {
   Space space(1);
   auto* observer = MakeEntity(space, 1, {0, 0, 0});
-  observer->EnableWitness(10.f, [](EntityID, std::span<const std::byte>) {}, /*hysteresis=*/0.f);
+  observer->EnableWitness(10.f, [](std::span<const std::byte>) {}, /*hysteresis=*/0.f);
 
   auto* near_peer = MakeEntity(space, 100, {3.f, 0.f, 3.f});
   auto* far_peer = MakeEntity(space, 101, {8.f, 0.f, 8.f});
@@ -135,8 +135,8 @@ TEST(AoIVisibility, ObserversTrackIndependentSets) {
   Space space(1);
   auto* observer_a = MakeEntity(space, 1, {0.f, 0.f, 0.f});
   auto* observer_b = MakeEntity(space, 2, {100.f, 0.f, 0.f});
-  observer_a->EnableWitness(10.f, [](EntityID, std::span<const std::byte>) {}, 0.f);
-  observer_b->EnableWitness(10.f, [](EntityID, std::span<const std::byte>) {}, 0.f);
+  observer_a->EnableWitness(10.f, [](std::span<const std::byte>) {}, 0.f);
+  observer_b->EnableWitness(10.f, [](std::span<const std::byte>) {}, 0.f);
 
   auto* near_a = MakeEntity(space, 100, {3.f, 0.f, 3.f});    // near A only
   auto* near_b = MakeEntity(space, 101, {103.f, 0.f, 0.f});  // near B only

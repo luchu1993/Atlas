@@ -46,7 +46,7 @@ TEST_F(RangeTriggerLifetimeTest, EnableWitnessTwiceReleasesOldTriggerBounds) {
   auto* observer = MakeEntity(1, {0, 0, 0});
 
   int enters_on_first = 0;
-  observer->EnableWitness(5.f, [&](EntityID, std::span<const std::byte> env) {
+  observer->EnableWitness(5.f, [&](std::span<const std::byte> env) {
     if (!env.empty() && static_cast<uint8_t>(env[0]) == 1) ++enters_on_first;
   });
 
@@ -54,7 +54,7 @@ TEST_F(RangeTriggerLifetimeTest, EnableWitnessTwiceReleasesOldTriggerBounds) {
   // AoITrigger destroys. Without a safety net in ~RangeTrigger, its
   // lower/upper bound nodes stay in the RangeList as zombies.
   int enters_on_second = 0;
-  observer->EnableWitness(5.f, [&](EntityID, std::span<const std::byte> env) {
+  observer->EnableWitness(5.f, [&](std::span<const std::byte> env) {
     if (!env.empty() && static_cast<uint8_t>(env[0]) == 1) ++enters_on_second;
   });
 

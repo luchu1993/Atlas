@@ -44,7 +44,7 @@ TEST_F(WitnessPeerLifetimeTest, PeerDestructionTriggersLeaveEventAndCleansCache)
   auto* peer = MakeEntity(2, {3, 0, 3});
 
   int leave_count = 0;
-  observer->EnableWitness(10.f, [&](EntityID, std::span<const std::byte> env) {
+  observer->EnableWitness(10.f, [&](std::span<const std::byte> env) {
     // Kind == EntityLeave (2) → counts as a leave event.
     if (!env.empty() && static_cast<uint8_t>(env[0]) == 2) ++leave_count;
   });
@@ -80,7 +80,7 @@ TEST_F(WitnessPeerLifetimeTest, LeaveEnvelopeCarriesCorrectBaseIdAfterPeerFreed)
   const EntityID expected_base = peer->Id();
 
   EntityID last_leave_base = 0;
-  observer->EnableWitness(10.f, [&](EntityID, std::span<const std::byte> env) {
+  observer->EnableWitness(10.f, [&](std::span<const std::byte> env) {
     if (env.size() >= 5 && static_cast<uint8_t>(env[0]) == 2) {
       // Decode base_id: bytes [1..4] little-endian.
       last_leave_base = static_cast<EntityID>(env[1]) | (static_cast<EntityID>(env[2]) << 8) |

@@ -33,7 +33,6 @@ namespace atlas {
 namespace {
 
 struct CapturedEnvelope {
-  EntityID observer_base_id;
   CellAoIEnvelopeKind kind;
 };
 
@@ -73,9 +72,7 @@ TEST(AoIHysteresisChurn, PeerInBandDoesNotFlap) {
   std::vector<CapturedEnvelope> sent;
   observer->EnableWitness(
       /*radius=*/50.f,
-      [&sent](EntityID obs, std::span<const std::byte> env) {
-        sent.push_back({obs, KindFromBytes(env)});
-      },
+      [&sent](std::span<const std::byte> env) { sent.push_back({KindFromBytes(env)}); },
       /*hysteresis=*/5.f);
 
   // Peer spawns deep inside the AoI, giving us a clean baseline of
@@ -121,10 +118,7 @@ TEST(AoIHysteresisChurn, WiggleOnInnerBoundary_NoEvents) {
   auto* observer = MakeEntity(space, 1, {0, 0, 0});
   std::vector<CapturedEnvelope> sent;
   observer->EnableWitness(
-      100.f,
-      [&sent](EntityID obs, std::span<const std::byte> env) {
-        sent.push_back({obs, KindFromBytes(env)});
-      },
+      100.f, [&sent](std::span<const std::byte> env) { sent.push_back({KindFromBytes(env)}); },
       /*hysteresis=*/10.f);
 
   // Peer enters once from well inside so we have a baseline.

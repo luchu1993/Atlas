@@ -26,7 +26,6 @@ namespace atlas {
 namespace {
 
 struct Captured {
-  EntityID observer_base_id{0};
   std::vector<std::byte> payload;
   bool reliable{true};
 };
@@ -79,13 +78,13 @@ class WitnessReplicationTest : public ::testing::Test {
   std::vector<Captured> sent_;
 
   auto MakeReliable() {
-    return [this](EntityID obs, std::span<const std::byte> env) {
-      sent_.push_back({obs, std::vector<std::byte>(env.begin(), env.end()), /*reliable=*/true});
+    return [this](std::span<const std::byte> env) {
+      sent_.push_back({std::vector<std::byte>(env.begin(), env.end()), /*reliable=*/true});
     };
   }
   auto MakeUnreliable() {
-    return [this](EntityID obs, std::span<const std::byte> env) {
-      sent_.push_back({obs, std::vector<std::byte>(env.begin(), env.end()), /*reliable=*/false});
+    return [this](std::span<const std::byte> env) {
+      sent_.push_back({std::vector<std::byte>(env.begin(), env.end()), /*reliable=*/false});
     };
   }
 

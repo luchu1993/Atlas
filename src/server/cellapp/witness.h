@@ -28,8 +28,9 @@ class Witness {
   // reliable carries enters, leaves, and event deltas; a dropped
   // reliable envelope desyncs the client permanently. unreliable is
   // optional (volatile position) and falls back to reliable when unset.
-  using SendFn =
-      std::function<void(EntityID observer_base_id, std::span<const std::byte> envelope)>;
+  // The callback receives the envelope only; the observer-side routing
+  // hint (channel, observer id) is captured by the producer at install.
+  using SendFn = std::function<void(std::span<const std::byte> envelope)>;
 
   // hysteresis widens the leave boundary: enters fire at aoi_radius,
   // leaves at aoi_radius + hysteresis. Pass 0.f for single-band.

@@ -24,7 +24,6 @@ namespace atlas {
 namespace {
 
 struct CapturedEnvelope {
-  EntityID observer_base_id;
   std::vector<std::byte> payload;
 };
 
@@ -33,8 +32,8 @@ class AoIHysteresisTest : public ::testing::Test {
   std::vector<CapturedEnvelope> sent_;
 
   auto MakeSendFn() {
-    return [this](EntityID observer_id, std::span<const std::byte> env) {
-      sent_.push_back({observer_id, std::vector<std::byte>(env.begin(), env.end())});
+    return [this](std::span<const std::byte> env) {
+      sent_.push_back({std::vector<std::byte>(env.begin(), env.end())});
     };
   }
 

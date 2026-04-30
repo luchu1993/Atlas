@@ -166,7 +166,6 @@ TEST_F(CellAppIntegrationFixture, Pr34EnableWitnessForUnknownEntityIsNoop) {
 // proves the C++ trigger integration without CLR.
 
 struct CapturedEnvelope {
-  EntityID observer_base_id;
   std::vector<std::byte> payload;
 };
 
@@ -175,8 +174,8 @@ class WitnessIntegrationFixture : public ::testing::Test {
   std::vector<CapturedEnvelope> sent_;
 
   auto MakeSendFn() {
-    return [this](EntityID observer_id, std::span<const std::byte> env) {
-      sent_.push_back({observer_id, std::vector<std::byte>(env.begin(), env.end())});
+    return [this](std::span<const std::byte> env) {
+      sent_.push_back({std::vector<std::byte>(env.begin(), env.end())});
     };
   }
 
@@ -413,7 +412,6 @@ TEST_F(WitnessIntegrationFixture, AvatarUpdatePropagatesToObservers) {
 // ============================================================================
 
 struct ReplicationCapture {
-  EntityID observer_base_id{0};
   std::vector<std::byte> payload;
   bool reliable{true};
 };
@@ -423,13 +421,13 @@ class PropertyDeltaFixture : public ::testing::Test {
   std::vector<ReplicationCapture> sent_;
 
   auto MakeReliable() {
-    return [this](EntityID obs, std::span<const std::byte> env) {
-      sent_.push_back({obs, std::vector<std::byte>(env.begin(), env.end()), true});
+    return [this](std::span<const std::byte> env) {
+      sent_.push_back({std::vector<std::byte>(env.begin(), env.end()), true});
     };
   }
   auto MakeUnreliable() {
-    return [this](EntityID obs, std::span<const std::byte> env) {
-      sent_.push_back({obs, std::vector<std::byte>(env.begin(), env.end()), false});
+    return [this](std::span<const std::byte> env) {
+      sent_.push_back({std::vector<std::byte>(env.begin(), env.end()), false});
     };
   }
 

@@ -47,7 +47,7 @@ class WitnessEnterPendingUafTest : public ::testing::Test {
 TEST_F(WitnessEnterPendingUafTest, EnterPendingFlushedNormally) {
   auto* observer = MakeEntity(1, {0, 0, 0});
   /* peer = */ MakeEntity(2, {3, 0, 3});
-  observer->EnableWitness(10.f, [](EntityID, std::span<const std::byte>) {});
+  observer->EnableWitness(10.f, [](std::span<const std::byte>) {});
 
   // Observer's witness was activated by EnableWitness; peer should be
   // inside on first Update.  No destruction in between.
@@ -66,7 +66,7 @@ TEST_F(WitnessEnterPendingUafTest, PeerDestroyedWhileEnterPending) {
 
   int leave_count = 0;
   int enter_count = 0;
-  observer->EnableWitness(10.f, [&](EntityID, std::span<const std::byte> env) {
+  observer->EnableWitness(10.f, [&](std::span<const std::byte> env) {
     if (env.empty()) return;
     const auto kind = static_cast<uint8_t>(env[0]);
     if (kind == 1) ++enter_count;  // kEntityEnter
@@ -107,7 +107,7 @@ TEST_F(WitnessEnterPendingUafTest, ManyPeersDestroyedWhileEnterPending) {
     peer_ids.push_back(id);
   }
 
-  observer->EnableWitness(20.f, [](EntityID, std::span<const std::byte>) {});
+  observer->EnableWitness(20.f, [](std::span<const std::byte>) {});
   ASSERT_EQ(observer->GetWitness()->AoIMap().size(), peer_ids.size());
 
   // Tear them all down before the first Update.
@@ -137,7 +137,7 @@ TEST_F(WitnessEnterPendingUafTest, SendCallbackDestroysAnotherPeer) {
   // reuse of the freed cache.entity slot (if any path leaves it
   // dangling) within the same Update pass.
   std::size_t send_count = 0;
-  observer->EnableWitness(20.f, [&](EntityID, std::span<const std::byte>) {
+  observer->EnableWitness(20.f, [&](std::span<const std::byte>) {
     if (send_count < peer_ids.size() - 1) {
       space_.RemoveEntity(peer_ids[send_count + 1]);
     }
@@ -161,7 +161,7 @@ TEST_F(WitnessEnterPendingUafTest, StaleCacheDanglingPointerSurvives) {
   auto* observer = MakeEntity(1, {0, 0, 0});
   auto* peer = MakeEntity(2, {3, 0, 3});
 
-  observer->EnableWitness(10.f, [](EntityID, std::span<const std::byte>) {});
+  observer->EnableWitness(10.f, [](std::span<const std::byte>) {});
   ASSERT_EQ(observer->GetWitness()->AoIMap().size(), 1u);
 
   // Smuggle a dangling pointer into the cache without going through
@@ -192,7 +192,7 @@ TEST_F(WitnessEnterPendingUafTest, StaleCacheDanglingPointerSurvives) {
 TEST_F(WitnessEnterPendingUafTest, ObserverMovesAwayThenPeerDies) {
   auto* observer = MakeEntity(1, {0, 0, 0});
   auto* peer = MakeEntity(2, {3, 0, 3});
-  observer->EnableWitness(10.f, [](EntityID, std::span<const std::byte>) {});
+  observer->EnableWitness(10.f, [](std::span<const std::byte>) {});
 
   // Peer enters at Update time (Activate's initial scan + first pump).
   observer->GetWitness()->Update(4096);
@@ -238,7 +238,7 @@ TEST_F(WitnessEnterPendingUafTest, FuzzRandomWalkAndDestroyMatchesWorldStress) {
   for (int i = 0; i < kNumEntities; ++i) {
     const EntityID id = 1000 + i;
     auto* e = MakeEntity(id, {spawn(rng), 0.f, spawn(rng)});
-    e->EnableWitness(kAoIRadius, [](EntityID, std::span<const std::byte>) {});
+    e->EnableWitness(kAoIRadius, [](std::span<const std::byte>) {});
     live_ids.push_back(id);
   }
 
@@ -287,7 +287,7 @@ TEST_F(WitnessEnterPendingUafTest, FuzzRandomWalkAndDestroyMatchesWorldStress) {
 
       const EntityID nid = next_id++;
       auto* e = MakeEntity(nid, {spawn(rng), 0.f, spawn(rng)});
-      e->EnableWitness(kAoIRadius, [](EntityID, std::span<const std::byte>) {});
+      e->EnableWitness(kAoIRadius, [](std::span<const std::byte>) {});
       live_ids.push_back(nid);
     }
   }
@@ -303,7 +303,7 @@ TEST_F(WitnessEnterPendingUafTest, PeerRecreatedAtSameIdWhileEnterPending) {
   auto* observer = MakeEntity(1, {0, 0, 0});
   /*peer_v1 =*/MakeEntity(2, {3, 0, 3});
 
-  observer->EnableWitness(10.f, [](EntityID, std::span<const std::byte>) {});
+  observer->EnableWitness(10.f, [](std::span<const std::byte>) {});
   ASSERT_EQ(observer->GetWitness()->AoIMap().size(), 1u);
 
   space_.RemoveEntity(2);

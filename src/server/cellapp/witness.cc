@@ -208,7 +208,7 @@ auto Witness::SendEntityEnter(EntityCache& cache) -> std::size_t {
 
   auto envelope = BuildEnterEnvelope(entity->Id(), entity->TypeId(), entity->Position(),
                                      entity->Direction(), entity->OnGround(), enter_snapshot);
-  if (send_reliable_) send_reliable_(owner_.Id(), envelope);
+  if (send_reliable_) send_reliable_(envelope);
 
   // Skip the seq stamp if HandleAoILeave yanked cache.entity during send.
   if (cache.entity == entity) {
@@ -221,7 +221,7 @@ auto Witness::SendEntityEnter(EntityCache& cache) -> std::size_t {
 auto Witness::SendEntityLeave(EntityID peer_id) -> std::size_t {
   ATLAS_PROFILE_ZONE_N("Witness::SendEntityLeave");
   auto envelope = MakeEnvelope<0>(CellAoIEnvelopeKind::kEntityLeave, peer_id, {});
-  if (send_reliable_) send_reliable_(owner_.Id(), envelope);
+  if (send_reliable_) send_reliable_(envelope);
   return envelope.size();
 }
 
@@ -387,9 +387,9 @@ auto Witness::SendEntityUpdate(EntityCache& cache) -> std::size_t {
       // Volatile prefers unreliable; fall back to reliable when tests
       // leave send_unreliable_ unset.
       if (send_unreliable_) {
-        send_unreliable_(owner_.Id(), envelope);
+        send_unreliable_(envelope);
       } else if (send_reliable_) {
-        send_reliable_(owner_.Id(), envelope);
+        send_reliable_(envelope);
       }
     }
     bytes += envelope.size();
@@ -426,7 +426,7 @@ auto Witness::SendEntityUpdate(EntityCache& cache) -> std::size_t {
         }
         {
           ATLAS_PROFILE_ZONE_N("Witness::Event::Send");
-          if (send_reliable_) send_reliable_(owner_.Id(), cached);
+          if (send_reliable_) send_reliable_(cached);
         }
         bytes += cached.size();
       }
@@ -438,7 +438,7 @@ auto Witness::SendEntityUpdate(EntityCache& cache) -> std::size_t {
     // Carry latest_event_seq so the next delta seq+1 doesn't gap-warn.
     auto envelope = BuildPropertyUpdateEnvelope(cache.entity->Id(), state->latest_event_seq,
                                                 state->other_snapshot);
-    if (send_reliable_) send_reliable_(owner_.Id(), envelope);
+    if (send_reliable_) send_reliable_(envelope);
     bytes += envelope.size();
     cache.last_event_seq = state->latest_event_seq;
   }

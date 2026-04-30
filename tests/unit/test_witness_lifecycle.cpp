@@ -27,7 +27,6 @@ namespace atlas {
 namespace {
 
 struct CapturedEnvelope {
-  EntityID observer_base_id;
   std::vector<std::byte> payload;
 };
 
@@ -36,8 +35,8 @@ class WitnessLifecycleTest : public ::testing::Test {
   std::vector<CapturedEnvelope> sent_;
 
   auto MakeSendFn() {
-    return [this](EntityID observer_id, std::span<const std::byte> env) {
-      sent_.push_back({observer_id, std::vector<std::byte>(env.begin(), env.end())});
+    return [this](std::span<const std::byte> env) {
+      sent_.push_back({std::vector<std::byte>(env.begin(), env.end())});
     };
   }
 
@@ -87,7 +86,6 @@ TEST_F(WitnessLifecycleTest, PeerEntersFiresEntityEnter) {
   ASSERT_EQ(sent_.size(), 1u);
   EXPECT_EQ(KindOf(sent_[0]), CellAoIEnvelopeKind::kEntityEnter);
   EXPECT_EQ(PublicIdOf(sent_[0]), peer->Id());
-  EXPECT_EQ(sent_[0].observer_base_id, observer->Id());
 
   // Follow-up Update with no state change produces nothing.
   sent_.clear();

@@ -669,6 +669,7 @@ void CellApp::OnAvatarUpdate(const Address& /*src*/, Channel* /*ch*/,
 }
 
 void CellApp::AttachWitness(CellEntity& entity, float aoi_radius, float hysteresis) {
+  const EntityID observer_id = entity.Id();
   entity.EnableWitness(
       aoi_radius,
       // Reliable path - enters/leaves + ordered property deltas via
@@ -676,23 +677,23 @@ void CellApp::AttachWitness(CellEntity& entity, float aoi_radius, float hysteres
       // kBatched urgency lets FlushTickDirtyChannels coalesce NxM
       // observer/peer fan-out into one packet per (channel, reliability)
       // per tick.
-      [this](EntityID observer_base_id, std::span<const std::byte> env) {
-        auto* observer = FindEntityByBaseId(observer_base_id);
+      [this, observer_id](std::span<const std::byte> env) {
+        auto* observer = FindEntityByBaseId(observer_id);
         if (!observer) return;
         auto ch = Network().ConnectRudpNocwnd(observer->BaseAddr());
         if (!ch) return;
-        baseapp::ReplicatedReliableDeltaFromCellSpan msg{observer_base_id, env};
+        baseapp::ReplicatedReliableDeltaFromCellSpan msg{observer_id, env};
         (void)(*ch)->SendMessage(msg);
       },
       // Unreliable path - volatile pos/dir (latest-wins) via
       // ReplicatedDeltaFromCell (msg 2015), which routes through
       // DeltaForwarder's per-entity replacement logic.
-      [this](EntityID observer_base_id, std::span<const std::byte> env) {
-        auto* observer = FindEntityByBaseId(observer_base_id);
+      [this, observer_id](std::span<const std::byte> env) {
+        auto* observer = FindEntityByBaseId(observer_id);
         if (!observer) return;
         auto ch = Network().ConnectRudpNocwnd(observer->BaseAddr());
         if (!ch) return;
-        baseapp::ReplicatedDeltaFromCellSpan msg{observer_base_id, env};
+        baseapp::ReplicatedDeltaFromCellSpan msg{observer_id, env};
         (void)(*ch)->SendMessage(msg);
       },
       hysteresis);
