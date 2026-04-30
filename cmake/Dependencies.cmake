@@ -22,9 +22,12 @@ FetchContent_Declare(
 )
 
 # ── rapidjson (header-only, pinned commit) ───────────────────────────────────
+# Header-only: skip rapidjson's own CMakeLists.txt (which builds tests /
+# examples) by pointing SOURCE_SUBDIR at a non-existent path.
 FetchContent_Declare(
   rapidjson
   URL https://github.com/Tencent/rapidjson/archive/ab1842a2dae061284c0a62dca1cc6d5e7e37e346.tar.gz
+  SOURCE_SUBDIR cmake-noop
 )
 
 # ── zlib 1.3.1 ───────────────────────────────────────────────────────────────
@@ -35,9 +38,12 @@ FetchContent_Declare(
 )
 
 # ── sqlite3 3.47.2 (amalgamation, no CMakeLists.txt) ────────────────────────
+# SOURCE_SUBDIR points to a non-existent path so FetchContent_MakeAvailable
+# skips add_subdirectory — we build the static lib manually below.
 FetchContent_Declare(
   sqlite3
   URL https://www.sqlite.org/2024/sqlite-amalgamation-3470200.zip
+  SOURCE_SUBDIR cmake-noop
 )
 
 # ── mimalloc 2.3.1 (optional heap backend) ───────────────────────────────────
@@ -92,9 +98,8 @@ list(REMOVE_ITEM CMAKE_MODULE_PATH "${_atlas_ctest_stub_dir}")
 unset(_atlas_ctest_stub_dir)
 
 # rapidjson — header-only, avoid its complex CMakeLists.txt
-FetchContent_GetProperties(rapidjson)
-if(NOT rapidjson_POPULATED)
-  FetchContent_Populate(rapidjson)
+FetchContent_MakeAvailable(rapidjson)
+if(NOT TARGET rapidjson)
   add_library(rapidjson INTERFACE)
   target_include_directories(rapidjson INTERFACE "${rapidjson_SOURCE_DIR}/include")
 endif()
@@ -158,9 +163,8 @@ if(ATLAS_ENABLE_PROFILER)
 endif()
 
 # sqlite3 — build manually from amalgamation
-FetchContent_GetProperties(sqlite3)
-if(NOT sqlite3_POPULATED)
-  FetchContent_Populate(sqlite3)
+FetchContent_MakeAvailable(sqlite3)
+if(NOT TARGET sqlite3)
   add_library(sqlite3 STATIC
     "${sqlite3_SOURCE_DIR}/sqlite3.c"
   )
