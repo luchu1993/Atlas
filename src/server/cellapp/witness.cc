@@ -21,29 +21,16 @@ namespace atlas {
 
 namespace {
 
-// Distance-LOD thresholds (squared metres). Entities beyond each
-// boundary are updated at a reduced rate to shed Witness::Update::Pump
-// CPU and outbound bandwidth in dense scenes.
-//
-// Bands  (distance → update every N ticks at 10 Hz):
-//   Close   < 25 m  →  1 tick  (10 Hz)
-//   Medium  < 100 m →  3 ticks (~3.3 Hz)
-//   Far     ≥ 100 m →  6 ticks (~1.7 Hz)
-//
-// At 10 Hz the Far interval (600 ms) comfortably fits inside the
-// 8-frame history window (800 ms), so catch-up replay always covers
-// the gap without falling back to snapshot.
-static constexpr double kLodCloseSq = 25.0 * 25.0;     //    625 m²
-static constexpr double kLodMediumSq = 100.0 * 100.0;  // 10 000 m²
+// LOD bands: close < 25 m every tick, medium < 100 m every 3, far
+// ≥ 100 m every 6 — fits the 8-frame history window at 10 Hz.
+static constexpr double kLodCloseSq = 25.0 * 25.0;
+static constexpr double kLodMediumSq = 100.0 * 100.0;
 static constexpr uint64_t kLodCloseInterval = 1;
 static constexpr uint64_t kLodMediumInterval = 3;
 static constexpr uint64_t kLodFarInterval = 6;
 
-// Priority metric: squared distance. Smaller is more urgent. The
-// min-heap in Update only cares about ordering, so we skip the sqrt
-// that a true distance would require — a² < b² iff a < b for
-// non-negative magnitudes, which distance always is. Saves one sqrt
-// per updatable peer per tick.
+// Squared distance: make_heap only cares about ordering and a² < b²
+// iff a < b for non-negative magnitudes, so we skip the sqrt.
 auto ComputePriority(const math::Vector3& observer, const math::Vector3& target) -> double {
   const double dx = observer.x - target.x;
   const double dy = observer.y - target.y;
@@ -51,27 +38,15 @@ auto ComputePriority(const math::Vector3& observer, const math::Vector3& target)
   return dx * dx + dy * dy + dz * dz;
 }
 
-// A per-audience delta with only the flag prefix and every byte zero
-// means "no audience-visible field changed this frame" — usually
-// produced when only owner-scope props were dirty but this side is
-// serving the other-scope projection. Shipping it would burn a 1-4 B
-// envelope to tell the client "nothing happened". Safe to skip because
-// the client's seq catches up when the next non-empty frame arrives.
 auto IsAllZeroDelta(std::span<const std::byte> delta) -> bool {
   return std::all_of(delta.begin(), delta.end(), [](std::byte b) { return b == std::byte{0}; });
 }
 
-// Encode CellAoIEnvelope { kind, public_entity_id, payload } into a byte
-// buffer. Wire format, LE:
-//   [uint8 kind] [uint32 LE public_entity_id] [variable payload bytes]
-//
-// Keeping this inline rather than routing through BinaryWriter avoids
-// pulling a heavyweight dependency into the Witness hot path for what
-// are trivially small messages.
+// Wire: [u8 kind][u32 LE entity_id][payload bytes...].
 template <std::size_t N>
 auto MakeEnvelope(CellAoIEnvelopeKind kind, EntityID public_entity_id,
                   std::span<const std::byte> payload) -> std::vector<std::byte> {
-  (void)N;  // placeholder in case we want a small-buffer optimisation
+  (void)N;
   std::vector<std::byte> out;
   out.reserve(1 + 4 + payload.size());
   out.push_back(static_cast<std::byte>(kind));
@@ -82,14 +57,7 @@ auto MakeEnvelope(CellAoIEnvelopeKind kind, EntityID public_entity_id,
   return out;
 }
 
-// Fused envelope builder for kEntityPropertyUpdate. Wire layout is
-// [u8 kind][u32 LE entity_id][u64 LE event_seq][delta bytes...]. A
-// two-helper composition (BuildPropertyUpdatePayload → MakeEnvelope)
-// would allocate two vectors and copy the event_seq + delta bytes
-// twice; this single-pass version packs directly into one buffer.
-// Property updates are the hottest per-tick envelope (sent per
-// observer per peer per frame), so the saving scales with aoi_map
-// size × publish rate.
+// Wire: [u8 kind][u32 LE entity_id][u64 LE event_seq][delta bytes].
 auto BuildPropertyUpdateEnvelope(EntityID public_entity_id, uint64_t event_seq,
                                  std::span<const std::byte> delta) -> std::vector<std::byte> {
   std::vector<std::byte> out;
@@ -105,12 +73,8 @@ auto BuildPropertyUpdateEnvelope(EntityID public_entity_id, uint64_t event_seq,
   return out;
 }
 
-// Fused envelope builder for kEntityEnter. Wire layout:
-//   [u8 kind][u32 LE entity_id][u16 LE type_id][3x float LE pos]
-//   [3x float LE dir][u8 on_ground][peer_snapshot bytes...]
-// Client decoder mirrors this in reverse. Single-pass memcpy into a
-// pre-sized buffer avoids the 7 insert-shift operations the previous
-// BuildEnterPayload→MakeEnvelope composition racked up per call.
+// Wire: [u8 kind][u32 LE id][u16 LE type][3f LE pos][3f LE dir]
+//       [u8 on_ground][peer_snapshot bytes].
 auto BuildEnterEnvelope(EntityID public_entity_id, uint16_t type_id, const math::Vector3& pos,
                         const math::Vector3& dir, bool on_ground,
                         std::span<const std::byte> owner_snapshot) -> std::vector<std::byte> {
@@ -159,8 +123,6 @@ void Witness::Deactivate() {
   if (!trigger_) return;
   trigger_->Remove(owner_.GetSpace().GetRangeList());
   trigger_.reset();
-  // cache.entity is nulled by HandleAoILeave, so non-null entries are the
-  // peers that haven't already drained the back-link.
   for (auto& [_, cache] : aoi_map_) {
     if (cache.entity) cache.entity->RemoveObserver(this);
   }
@@ -171,8 +133,6 @@ void Witness::Deactivate() {
 }
 
 void Witness::SetAoIRadius(float new_radius, float new_hysteresis) {
-  // Clamp radius to a 0.1m floor and a configurable ceiling;
-  // hysteresis is accepted as-given.
   new_radius = std::max(0.1f, new_radius);
   const float max_radius = CellAppConfig::MaxAoIRadius();
   if (new_radius > max_radius) {
@@ -186,35 +146,24 @@ void Witness::SetAoIRadius(float new_radius, float new_hysteresis) {
 }
 
 void Witness::HandleAoIEnter(CellEntity& peer) {
-  if (&peer == &owner_) return;  // a witness never tracks its own central
+  if (&peer == &owner_) return;
 
-  // ~CellEntity's synthetic FLT_MAX shuffle drags the dying peer past
-  // observers' inner.lower (inbound cross → HandleAoIEnter), then past
-  // upper (outbound → HandleAoILeave).  Rejecting destroyed peers here
-  // keeps the cache from latching onto an about-to-be-freed pointer if
-  // the matching outbound cross ever slips.  Destroy() sets destroyed_
-  // before ~CellEntity runs, so this gate is reliable.
+  // ~CellEntity's FLT_MAX shuffle drags dying peers past inner.lower;
+  // reject so the cache can't latch onto an about-to-be-freed pointer.
   if (peer.IsDestroyed()) return;
 
   auto [it, inserted] = aoi_map_.try_emplace(peer.Id());
   auto& cache = it->second;
 
-  // Dual-band hysteresis: inner's OnEnter fires every time a peer crosses
-  // the inner boundary inbound — including re-crossings from within the
-  // hysteresis band (outer > distance > inner). If the peer is already in
-  // aoi_map_ and NOT flagged kGone, this is a hysteresis re-cross: the
-  // client already sees the peer as in AoI, re-emitting a snapshot would
-  // be wasteful and out-of-contract. Skip the state update.
+  // Hysteresis re-cross while still in AoI: client already sees the
+  // peer, re-emitting a snapshot would be wasteful.
   if (!inserted && (cache.flags & EntityCache::kGone) == 0) return;
 
   cache.entity = &peer;
-  cache.peer_base_id = peer.BaseEntityId();  // safe-for-leave copy
-  // ENTER_PENDING is "send a fresh snapshot to this observer" — set on
-  // first entry and on any re-entry of a previously-kGone peer (the peer
-  // left AoI and came back before Update had a chance to fire the Leave).
+  cache.peer_base_id = peer.BaseEntityId();
   cache.flags = EntityCache::kEnterPending;
   pending_enter_ids_.push_back(peer.Id());
-  peer.AddObserver(this);  // reverse index for O(W) broadcast fan-out
+  peer.AddObserver(this);
   UpdatePriority(cache);
 }
 
@@ -230,22 +179,15 @@ void Witness::OnOwnerMoved(float old_x, float old_z) {
 void Witness::HandleAoILeave(CellEntity& peer) {
   auto it = aoi_map_.find(peer.Id());
   if (it == aoi_map_.end()) return;
-  // Mark GONE rather than erase immediately; the Update pass will fire
-  // the actual EntityLeave envelope and then compact the entry. This
-  // deferred erase keeps Witness::Update's iteration stable when a peer
-  // leaves AoI mid-tick as a side effect of a trigger shuffle.
+  // Mark kGone, drain at next Update — keeps Update's iteration stable
+  // when a leave fires mid-tick from a trigger shuffle.
   it->second.flags |= EntityCache::kGone;
   it->second.flags &= ~EntityCache::kEnterPending;
   pending_gone_ids_.push_back(peer.Id());
-  // Refresh the cached base id — if the Leave fires during the peer's
-  // destructor (synthetic FLT_MAX shuffle) this is our last chance to
-  // read it. After this call the CellEntity* may become dangling.
+  // Last chance to read base id before the destructor frees CellEntity.
   it->second.peer_base_id = peer.BaseEntityId();
-  // Null the entity pointer so any path that forgets to filter by
-  // kGone before dereferencing gets a clean nullptr crash instead of
-  // a use-after-free hidden by freed-memory coincidence.
   it->second.entity = nullptr;
-  peer.RemoveObserver(this);  // drop reverse index
+  peer.RemoveObserver(this);
 }
 
 void Witness::UpdatePriority(EntityCache& cache) const {
@@ -254,17 +196,10 @@ void Witness::UpdatePriority(EntityCache& cache) const {
 
 auto Witness::SendEntityEnter(EntityCache& cache) -> std::size_t {
   ATLAS_PROFILE_ZONE_N("Witness::SendEntityEnter");
-  // Pin the peer locally — send_reliable_ below can re-entrantly destroy
-  // entities (including this one), at which point HandleAoILeave nulls
-  // cache.entity.  Reading through the local pointer keeps both the
-  // pre-send envelope build and the post-send seq capture correct.
+  // send_reliable_ may re-entrantly destroy the peer; pin a local
+  // pointer so the post-send seq capture stays consistent.
   CellEntity* const entity = cache.entity;
 
-  // The snapshot we ship on Enter is the peer's *other* snapshot — the
-  // observer is a non-owner for the peer (they see "other clients" data).
-  // Owner-enter (the entity's own client observing itself) would use
-  // owner_snapshot instead, but that path goes through a separate initial
-  // state message, not the AoI enter flow.
   std::span<const std::byte> enter_snapshot{};
   uint64_t pre_event_seq = 0;
   uint64_t pre_volatile_seq = 0;
@@ -278,10 +213,7 @@ auto Witness::SendEntityEnter(EntityCache& cache) -> std::size_t {
                                      entity->Direction(), entity->OnGround(), enter_snapshot);
   if (send_reliable_) send_reliable_(owner_.BaseEntityId(), envelope);
 
-  // After send_reliable_ returns, the peer may have been destroyed
-  // re-entrantly — but `cache` is a reference into aoi_map_ which is
-  // stable under HandleAoILeave (no insertions, just flag/pointer
-  // mutations).  Only stamp the seqs if the entity wasn't yanked.
+  // Skip the seq stamp if HandleAoILeave yanked cache.entity during send.
   if (cache.entity == entity) {
     cache.last_event_seq = pre_event_seq;
     cache.last_volatile_seq = pre_volatile_seq;
@@ -308,19 +240,12 @@ void Witness::Update(uint32_t max_packet_bytes) {
 
   ++tick_count_;
 
-  // Step 1: state transitions (enter, leave).  HandleAoIEnter and
-  // HandleAoILeave incrementally populate pending_enter_ids_ and
-  // pending_gone_ids_ as transitions happen, so this loop iterates only
-  // the small subset of peers that changed state — no full aoi_map_
-  // scan in the steady state.  Defensive flag/cache checks below filter
-  // stale entries (e.g. an Enter overridden by a later Leave on the
-  // same peer in the same tick).
   int bytes_sent = 0;
   {
     ATLAS_PROFILE_ZONE_N("Witness::Update::Transitions");
 
-    // Enter/Leave are mandatory state transitions and bypass the byte
-    // budget — dropping them would deadlock the aoi_map_ state machine.
+    // Enters/Leaves bypass the byte budget — dropping them would
+    // deadlock the aoi_map_ state machine.
     (void)bandwidth_deficit_;
 
     for (std::size_t enter_idx = 0; enter_idx < pending_enter_ids_.size(); ++enter_idx) {
@@ -328,24 +253,14 @@ void Witness::Update(uint32_t max_packet_bytes) {
       auto it = aoi_map_.find(peer_id);
       if (it == aoi_map_.end()) continue;
       auto& cache = it->second;
-      // First filter: send_reliable_ from a previous iteration may have
-      // re-entrantly destroyed this peer; HandleAoILeave then clears
-      // kEnterPending and nulls cache.entity.
+      // Re-entrant destruction during a previous iteration may have
+      // cleared kEnterPending and nulled cache.entity.
       if (!(cache.flags & EntityCache::kEnterPending) || !cache.entity) continue;
-      // Second filter: cross-check against the authoritative entity map.
-      // Some destruction paths can free the peer without firing
-      // HandleAoILeave on this witness (cache.entity stays as a
-      // dangling non-null pointer).  Looking up by id catches that;
-      // we also patch the cache state so the gone-list loop below
-      // doesn't emit a stale Leave envelope.
+      // Some destruction paths free the peer without firing
+      // HandleAoILeave; cross-check against the entity map and patch
+      // the cache so the gone-list loop won't emit a stale Leave.
       CellEntity* live = owner_.GetSpace().FindEntity(peer_id);
       if (live != cache.entity) {
-        // Rich context: the more we print, the easier it is to bisect
-        // which destruction path is missing a HandleAoILeave fan-out.
-        // observer / peer_base_id are the script-visible identities;
-        // cached vs live pointers tell us whether the peer is freed
-        // (live==null, cached!=null) or replaced in the map at the
-        // same id (live!=null, cached!=null && cached!=live).
         const std::size_t observer_obs_count =
             owner_.GetWitness() ? owner_.GetWitness()->AoIMap().size() : 0;
         ATLAS_LOG_WARNING(
@@ -356,8 +271,6 @@ void Witness::Update(uint32_t max_packet_bytes) {
             static_cast<uint64_t>(cache.peer_base_id), static_cast<const void*>(cache.entity),
             static_cast<const void*>(live), cache.flags, observer_obs_count,
             owner_.GetSpace().Id());
-        // Erase outright — we never sent an Enter so no Leave is owed.
-        // Iterators into aoi_map_ for OTHER keys are unaffected.
         aoi_map_.erase(it);
         continue;
       }
@@ -369,61 +282,38 @@ void Witness::Update(uint32_t max_packet_bytes) {
     for (auto id : pending_gone_ids_) {
       auto it = aoi_map_.find(id);
       if (it == aoi_map_.end()) continue;
-      // Defensive: same id may appear twice in pending_gone_ids_ if a
-      // peer left, re-entered, and left again before Update fired.
-      // After the first Leave the cache is erased; subsequent finds
-      // return end() and we fall through.  Also tolerate the case
-      // where a follow-up Enter overrode kGone — flag check below.
+      // Same id may appear twice (left → re-entered → left); after the
+      // first Leave the cache is erased so subsequent finds return end.
       if (!(it->second.flags & EntityCache::kGone)) continue;
-      // Use the id cached at enter/leave time, NOT cache.entity. When
-      // destruction fires the leave path, `cache.entity` is nulled and
-      // the underlying CellEntity has been freed; the base id we want
-      // to ship to the client was captured earlier. See EntityCache's
-      // comment on `peer_base_id`.
       bytes_sent += static_cast<int>(SendEntityLeave(it->second.peer_base_id));
       aoi_map_.erase(it);
     }
 
-    // Both queues drained — clear in place so capacity persists.
     pending_enter_ids_.clear();
     pending_gone_ids_.clear();
   }
 
-  // Step 2: priority heap maintenance for Updatable peers. Rebuild rather
-  // than maintain incrementally — observer positions change every tick so
-  // priorities are stale anyway.
-  //
-  // LOD gate: skip peers whose scheduled next-update tick hasn't arrived.
-  // lod_next_update_tick starts at 0 so every peer is eligible on the
-  // first tick; after each SendEntityUpdate it is reset to
-  // tick_count_ + LodIntervalForDistSq(distance²).
+  // Rebuild the priority heap each tick — observer position changes
+  // make priorities stale anyway. LOD gate filters scheduled peers.
   {
     ATLAS_PROFILE_ZONE_N("Witness::Update::PriorityHeap");
     priority_queue_.clear();
     priority_queue_.reserve(aoi_map_.size());
     for (auto& [id, cache] : aoi_map_) {
       if (!cache.IsUpdatable()) continue;
-      if (tick_count_ < cache.lod_next_update_tick) continue;  // LOD skip
+      if (tick_count_ < cache.lod_next_update_tick) continue;
       UpdatePriority(cache);
       priority_queue_.emplace_back(cache.priority, id);
     }
-    // Min-heap on priority: use std::greater so pop_heap yields smallest
-    // priority first.
     std::make_heap(priority_queue_.begin(), priority_queue_.end(),
                    [](const auto& a, const auto& b) { return a.first > b.first; });
   }
 
-  // Step 3: per-peer update pump — property deltas + volatile position.
-  // Walk the heap in priority order; SendEntityUpdate picks between
-  // catch-up delta, snapshot fallback, or a volatile position update.
-  // The budget gates how many peers we service this tick; any that didn't
-  // fit carry over (priority stays put, so next tick they float up).
   {
     ATLAS_PROFILE_ZONE_N("Witness::Update::Pump");
     const int tick_budget = static_cast<int>(max_packet_bytes) - bandwidth_deficit_;
-    // Hard cap on peers serviced this tick — caps serialisation CPU even when
-    // the byte budget would allow more. Read once per Update; the config knob
-    // is RW so ops can retune live without rebuild.
+    // Cap peers/tick to bound serialisation CPU; RW config so ops can
+    // retune live without rebuild.
     const std::size_t max_peers = CellAppConfig::WitnessMaxPeersPerTick();
     std::size_t peers_updated = 0;
     while (!priority_queue_.empty() && bytes_sent < tick_budget && peers_updated < max_peers) {
@@ -433,35 +323,24 @@ void Witness::Update(uint32_t max_packet_bytes) {
       priority_queue_.pop_back();
 
       auto it = aoi_map_.find(id);
-      if (it == aoi_map_.end()) continue;  // evicted mid-loop
+      if (it == aoi_map_.end()) continue;
       auto& cache = it->second;
       if (!cache.IsUpdatable()) continue;
 
       bytes_sent += static_cast<int>(SendEntityUpdate(cache));
       ++peers_updated;
-      // Schedule the next LOD window. lod_enter_phase is non-zero only on
-      // the first schedule (set at AoI-enter, cleared here); it offsets the
-      // window by up to kLodFarInterval-1 ticks to stagger simultaneous
-      // entries. % interval keeps the offset within one window regardless of
-      // which band the peer is in; Close (interval=1) always yields 0.
-      //
-      // Note: the very first delta after AoI-enter therefore lands at
-      // tick_count_ + interval + offset, i.e. up to interval + (kLodFarInterval-1)
-      // ticks later (worst case Far = 11 ticks ≈ 1.1 s at 10 Hz). Subsequent
-      // windows fall back to the regular tick_count_ + interval cadence.
+      // lod_enter_phase offsets the first window only (set at AoI-enter,
+      // cleared here) to stagger simultaneous entries.
       const uint64_t interval = LodIntervalForDistSq(cache.priority);
       cache.lod_next_update_tick = tick_count_ + interval + (cache.lod_enter_phase % interval);
       cache.lod_enter_phase = 0;
     }
   }
 
-  // Step 4: bandwidth deficit for next tick.
   bandwidth_deficit_ = std::max(0, bytes_sent - static_cast<int>(max_packet_bytes));
 
-  // Deficit larger than a whole tick's budget means the next tick alone
-  // cannot drain it — the witness is structurally overloaded (too many
-  // peers, too-small budget, or a state burst). Warn rate-limited so a
-  // sustained issue logs once per ~10s at 30Hz rather than every tick.
+  // Deficit > one tick's budget signals structural overload; rate-limit
+  // so a sustained issue logs once per ~10 s instead of every tick.
   if (bandwidth_deficit_ > static_cast<int>(max_packet_bytes)) {
     if (deficit_warn_counter_ == 0) {
       ATLAS_LOG_WARNING(
@@ -475,10 +354,6 @@ void Witness::Update(uint32_t max_packet_bytes) {
   }
 }
 
-// SendEntityUpdate — per-peer catch-up pump. Pulls two streams off the
-// peer's ReplicationState: volatile (latest-wins position update) and
-// event (ordered, replays history from last_event_seq+1..latest; snapshot
-// fallback when the window no longer covers the observer's gap).
 auto Witness::SendEntityUpdate(EntityCache& cache) -> std::size_t {
   ATLAS_PROFILE_ZONE_N("Witness::SendEntityUpdate");
   const auto* state = cache.entity->GetReplicationState();
@@ -486,20 +361,9 @@ auto Witness::SendEntityUpdate(EntityCache& cache) -> std::size_t {
 
   std::size_t bytes = 0;
 
-  // ---- Volatile stream ----
   if (state->latest_volatile_seq > cache.last_volatile_seq) {
-    // Build the EntityPositionUpdate wire envelope into a stack buffer.
-    // Pre-fix this path took two heap allocations per call (one for the
-    // payload buffer, one for the envelope vector returned by
-    // MakeEnvelope); at 200 obs × ~30 visible peers × 10 Hz the alloc
-    // overhead alone dominated the SendEntityUpdate hot path. The
-    // lambda consumes a span via ReplicatedDeltaFromCellSpan, so this
-    // stack buffer is the single source of truth for the wire bytes —
-    // it must outlive the synchronous send_unreliable_ / send_reliable_
-    // call (it does: same scope).
-    //
-    // Wire layout (30 bytes):
-    //   [u8 kind][u32 entity_id][3f pos][3f dir][u8 on_ground]
+    // EntityPositionUpdate built into a stack buffer (30 B). Wire:
+    // [u8 kind][u32 id][3f pos][3f dir][u8 on_ground].
     constexpr std::size_t kEnvelopeSize = 1 + sizeof(uint32_t) + 6 * sizeof(float) + 1;
     std::array<std::byte, kEnvelopeSize> envelope_buf;
     std::size_t envelope_size = 0;
@@ -524,9 +388,8 @@ auto Witness::SendEntityUpdate(EntityCache& cache) -> std::size_t {
     std::span<const std::byte> envelope(envelope_buf.data(), envelope_size);
     {
       ATLAS_PROFILE_ZONE_N("Witness::Vol::Send");
-      // Volatile → unreliable path when wired; fall back to reliable only
-      // because the integration-layer caller may have left send_unreliable_
-      // unset (tests typically do).
+      // Volatile prefers unreliable; fall back to reliable when tests
+      // leave send_unreliable_ unset.
       if (send_unreliable_) {
         send_unreliable_(owner_.BaseEntityId(), envelope);
       } else if (send_reliable_) {
@@ -537,42 +400,29 @@ auto Witness::SendEntityUpdate(EntityCache& cache) -> std::size_t {
     cache.last_volatile_seq = state->latest_volatile_seq;
   }
 
-  // ---- Event stream ----
-  if (state->latest_event_seq <= cache.last_event_seq) return bytes;  // up to date
+  if (state->latest_event_seq <= cache.last_event_seq) return bytes;
 
-  // Decide: can we replay from history, or do we need snapshot fallback?
-  //
-  // history holds frames with event_seq values — by construction in
-  // PublishReplicationFrame, those values are consecutive (we only push
-  // frames whose event_seq equals latest_event_seq at the time of the
-  // call, which increases by 1 each publish). So "can we cover the
-  // observer's gap" boils down to "does history contain a frame with
-  // event_seq == cache.last_event_seq + 1"?
+  // history seqs are consecutive (PublishReplicationFrame pushes one
+  // per call), so coverage = oldest frame's seq ≤ first_needed.
   const uint64_t first_needed = cache.last_event_seq + 1;
   const bool have_continuous_coverage =
       !state->history.empty() && state->history.front().event_seq <= first_needed;
 
-  // Observer is audience=owner if owner_.base_entity_id() matches the
-  // peer's base_entity_id (i.e. the peer's client is THIS observer).
-  // Otherwise audience=other — use the peer's other_snapshot / other_delta.
+  // observer is audience=owner iff its base id matches the peer's;
+  // otherwise audience=other.
   const bool observer_is_owner = cache.entity->BaseEntityId() == owner_.BaseEntityId();
 
   if (have_continuous_coverage) {
-    // Walk forward through history; skip entries older than first_needed
-    // (they were already delivered earlier).
     for (const auto& frame : state->history) {
       if (frame.event_seq < first_needed) continue;
-      if (frame.event_seq > state->latest_event_seq) break;  // defensive
+      if (frame.event_seq > state->latest_event_seq) break;
 
       const auto& delta_bytes = observer_is_owner ? frame.owner_delta : frame.other_delta;
-      // Skip the send when either the delta is truly empty OR the flag
-      // prefix is all-zero (no audience-visible fields touched). Seq
-      // still advances so the next non-empty frame doesn't look like a
-      // gap.
+      // Skip empty / all-zero deltas — seq still advances so the next
+      // non-empty frame doesn't look like a gap on the client.
       if (!delta_bytes.empty() && !IsAllZeroDelta(delta_bytes)) {
-        // Reuse the cached envelope if already built by an earlier observer
-        // this tick. mutable cache on ReplicationFrame lets us share the
-        // allocation across all N witnesses watching the same peer.
+        // Reuse the cached envelope across all witnesses watching this
+        // peer this tick.
         auto& cached =
             observer_is_owner ? frame.cached_owner_envelope : frame.cached_other_envelope;
         if (cached.empty()) {
@@ -590,15 +440,9 @@ auto Witness::SendEntityUpdate(EntityCache& cache) -> std::size_t {
     }
   } else {
     ATLAS_PROFILE_ZONE_N("Witness::Snapshot");
-    // Snapshot fallback — our observer fell too far behind and the
-    // oldest history frame is newer than last_event_seq+1. Ship the
-    // current audience-scope snapshot; the client resets its view of
-    // the peer and resumes catch-up from there.
+    // Snapshot fallback — observer fell out of the history window.
+    // Carry latest_event_seq so the next delta seq+1 doesn't gap-warn.
     const auto& snapshot = observer_is_owner ? state->owner_snapshot : state->other_snapshot;
-    // Carry latest_event_seq as the envelope's seq: after snapshot apply
-    // the client's "last seen" seq moves forward to the publishing frame.
-    // The next delta with seq = latest_event_seq+1 will not trigger a gap
-    // warning.
     auto envelope = BuildPropertyUpdateEnvelope(cache.entity->BaseEntityId(),
                                                 state->latest_event_seq, snapshot);
     if (send_reliable_) send_reliable_(owner_.BaseEntityId(), envelope);

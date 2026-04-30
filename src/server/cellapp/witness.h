@@ -17,47 +17,22 @@ namespace atlas {
 class CellEntity;
 class AoITrigger;
 
-// ============================================================================
-// Witness — per-observer AoI replication manager
-//
-// Every CellEntity that acts as an AoI observer (today: every entity with
-// a bound client; tomorrow: also AI "sensor" entities) owns one Witness.
-// The witness plants an AoITrigger into the RangeList; entities entering
-// and leaving the trigger produce EntityCache entries that the per-tick
-// Witness::Update schedules for replication.
-//
-// Responsibilities:
-//   - AoITrigger attaches and fires enter/leave events into the witness.
-//   - An EntityCache state machine handles ENTER_PENDING, GONE, REFRESH.
-//   - The priority heap (distance/5 + 1) orders per-tick work.
-//   - Update emits CellAoIEnvelope-framed EntityEnter / EntityLeave events
-//     through the provided delivery callback, plus event and volatile
-//     delta streams keyed to CellEntity::ReplicationState seqs.
-//
-// Delivery interface:
-//   The witness doesn't know about BaseApp or the network. Instead a
-//   caller-supplied callback takes a CellAoIEnvelope blob and is
-//   responsible for routing it (via ReplicatedReliableDeltaFromCell or
-//   ReplicatedDeltaFromCell, whichever fits the payload's reliability
-//   class). Tests plug a recording callback; the real CellApp process
-//   plugs a BaseApp-forwarding callback.
-// ============================================================================
-
+// Per-observer AoI replication manager. Plants an AoITrigger into the
+// owning Space's RangeList; the trigger feeds an EntityCache state
+// machine; Update() drains the per-tick replication queue and emits
+// CellAoIEnvelope-framed messages through caller-supplied transports
+// (reliable for state transitions / event deltas, unreliable for
+// volatile position).
 class Witness {
  public:
-  // Witness forwards envelopes through two transport classes — the
-  // caller (CellApp process) wires each to the matching BaseApp message:
-  //   - reliable: ReplicatedReliableDeltaFromCell (property deltas,
-  //               enters, leaves — order matters; dropping one
-  //               permanently desyncs the client)
-  //   - unreliable: ReplicatedDeltaFromCell (via DeltaForwarder, latest-
-  //                wins — volatile position/orientation only)
+  // reliable carries enters, leaves, and event deltas; a dropped
+  // reliable envelope desyncs the client permanently. unreliable is
+  // optional (volatile position) and falls back to reliable when unset.
   using SendFn =
       std::function<void(EntityID observer_base_id, std::span<const std::byte> envelope)>;
 
-  // hysteresis widens the *leave* boundary: enters fire at `aoi_radius`,
-  // leaves at `aoi_radius + hysteresis`. Pass 0.f to disable hysteresis
-  // (single-band behaviour).
+  // hysteresis widens the leave boundary: enters fire at aoi_radius,
+  // leaves at aoi_radius + hysteresis. Pass 0.f for single-band.
   Witness(CellEntity& owner, float aoi_radius, float hysteresis, SendFn send_reliable,
           SendFn send_unreliable = {});
   ~Witness();
@@ -65,14 +40,10 @@ class Witness {
   Witness(const Witness&) = delete;
   auto operator=(const Witness&) -> Witness& = delete;
 
-  // Plant the trigger into the owning Space's RangeList and start
-  // receiving enter/leave events. Returns self-pointer for caller
-  // convenience; the owner CellEntity typically holds the unique_ptr.
   void Activate();
 
-  // Tear down the trigger. Any remaining entries in aoi_map_ are dropped
-  // WITHOUT firing OnLeave — the observer is (presumably) going away and
-  // the client channel will be recycled by BaseApp.
+  // Drops aoi_map_ entries WITHOUT firing OnLeave — the observer is
+  // going away and the client channel will be recycled by BaseApp.
   void Deactivate();
 
   [[nodiscard]] auto Owner() -> CellEntity& { return owner_; }
@@ -80,121 +51,84 @@ class Witness {
   [[nodiscard]] auto Hysteresis() const -> float { return hysteresis_; }
   [[nodiscard]] auto IsActive() const -> bool { return trigger_ != nullptr; }
 
-  // Resize the AoI radius + hysteresis in place. AoITrigger uses
-  // RangeTrigger::SetRange's expand-first semantics on both bands, so
-  // enters precede leaves when the new radius strictly contains or is
-  // contained by the old one.
   void SetAoIRadius(float new_radius, float new_hysteresis);
-
-  // Convenience overload — keeps the current hysteresis_ value. Useful
-  // for call sites (and legacy tests) that only want to resize radius.
   void SetAoIRadius(float new_radius) { SetAoIRadius(new_radius, hysteresis_); }
 
-  // Called by the AoITrigger when a peer crosses the trigger boundary.
   void HandleAoIEnter(CellEntity& peer);
   void HandleAoILeave(CellEntity& peer);
 
-  // Resync the witness's trigger bounds after the owner's range_node
-  // has been shuffled to a new position.  Called by CellEntity's
-  // SetPosition / SetPositionAndDirection.  Without it, the witness's
-  // inside_peers_ go stale and OnLeave fails to fire for peers the
-  // observer has drifted away from.
+  // Resync trigger bounds after the owner's range_node has shuffled.
+  // Without it inside_peers_ goes stale and OnLeave fails to fire for
+  // peers the observer has drifted away from.
   void OnOwnerMoved(float old_x, float old_z);
 
-  // Forwarded by InnerTrigger.OnEnter to maintain peer ∈ inner ⊂ outer.
   void ForceOuterInsidePeer(class RangeListNode& peer);
 
-  // Drive the per-tick replication pump. max_packet_bytes bounds the
-  // total envelope payload emitted this tick (not including outer
-  // framing). Deficit accumulates when Update overshoots — the next
-  // tick's budget is reduced accordingly.
+  // max_packet_bytes bounds the envelope payload emitted this tick;
+  // overshoot accumulates as bandwidth_deficit_ and shrinks next
+  // tick's budget.
   void Update(uint32_t max_packet_bytes);
 
-  // O(1) demand estimate for the cellapp's TickWitnesses fair-share
-  // budget allocator.  Models this tick's expected outbound payload as:
-  //   peers_in_aoi * per_peer_bytes  +  carryover_deficit_from_last_tick
-  // Enter bursts aren't separately accounted for; instead they show up
-  // next tick via bandwidth_deficit_, costing one tick (~100ms) of lag
-  // for the burst to claim its budget.  Trading that latency for an
-  // O(1) hot-path query worth ~5 µs at 200 observers.
+  // O(1) demand estimate for the cellapp's fair-share budget allocator.
+  // Enter bursts aren't separately accounted for — they show up next
+  // tick via bandwidth_deficit_, costing one tick of lag.
   [[nodiscard]] auto EstimateOutboundDemandBytes(uint32_t per_peer_bytes) const -> uint32_t {
     return static_cast<uint32_t>(aoi_map_.size()) * per_peer_bytes +
            static_cast<uint32_t>(std::max(0, bandwidth_deficit_));
   }
 
-  // ---- EntityCache (exposed for tests) -------------------------------------
-
   struct EntityCache {
     CellEntity* entity{nullptr};
 
-    // Cached at AoI entry time so the EntityLeave envelope we emit at
-    // compaction can survive the peer's destruction. When a peer is
-    // destroyed while still inside AoI, the synthetic FLT_MAX shuffle
-    // in `~CellEntity` fires OnLeave → HandleAoILeave (which marks
-    // kGone on the cache) DURING the peer's destructor. Between that
-    // moment and our next Update, the CellEntity is freed. Without a
-    // cached id, `entity->BaseEntityId()` at Leave time is a UAF.
+    // Cached at AoI entry so EntityLeave survives the peer's
+    // destruction: ~CellEntity's synthetic FLT_MAX shuffle fires
+    // OnLeave during the destructor; reading entity->BaseEntityId() at
+    // Leave time would be a use-after-free.
     EntityID peer_base_id{kInvalidEntityID};
 
-    double priority{0.0};  // distance-based, smaller = higher priority
+    double priority{0.0};  // squared distance, smaller = higher priority
     uint8_t flags{0};
 
-    // Per-observer replication progress. Witness compares these against
-    // the entity's CellEntity::ReplicationState to decide what needs
-    // forwarding this tick.
     uint64_t last_event_seq{0};
     uint64_t last_volatile_seq{0};
 
-    // Distance-LOD scheduling. The peer is excluded from the priority
-    // queue until tick_count_ reaches this value. Starts at 0 so the
-    // first Update() always processes the peer; reset after each
-    // SendEntityUpdate() call based on current distance.
+    // Peer is excluded from the priority queue until tick_count_
+    // reaches this value; reset after each SendEntityUpdate based on
+    // the current distance band.
     uint64_t lod_next_update_tick{0};
 
-    // One-shot phase offset assigned at AoI-enter time. Spreads peers
-    // that enter on the same tick across the LOD interval so they don't
-    // all fire their first delta update together. Applied once in the
-    // first SendEntityUpdate(), then zeroed — subsequent windows use the
-    // regular tick_count_ + interval cadence and stay naturally staggered.
+    // One-shot offset applied at AoI-enter to stagger peers entering
+    // on the same tick across the LOD interval; cleared after the
+    // first SendEntityUpdate.
     uint64_t lod_enter_phase{0};
 
-    static constexpr uint8_t kEnterPending = 0x01;  // just joined AoI
-    static constexpr uint8_t kGone = 0x08;          // left AoI, pending leave send
+    static constexpr uint8_t kEnterPending = 0x01;
+    static constexpr uint8_t kGone = 0x08;
 
     [[nodiscard]] auto IsUpdatable() const -> bool {
       return (flags & (kEnterPending | kGone)) == 0;
     }
   };
 
-  // Read-only access for tests.
   [[nodiscard]] auto AoIMap() const -> const std::unordered_map<EntityID, EntityCache>& {
     return aoi_map_;
   }
   [[nodiscard]] auto AoIMapMutable() -> std::unordered_map<EntityID, EntityCache>& {
     return aoi_map_;
   }
-  // Drive the per-peer update pump once. Tests use this to assert
-  // catch-up / snapshot-fallback behaviour without spinning the full
-  // Update() tick loop.
   void TestOnlySendEntityUpdate(EntityCache& cache) { (void)SendEntityUpdate(cache); }
 
  private:
-  // Re-compute the priority (distance/5 + 1) using our current position.
   void UpdatePriority(EntityCache& cache) const;
 
-  // Map squared distance to a LOD update interval (in ticks).
   // Close (< 25 m) → every tick; Medium (< 100 m) → every 3rd tick;
   // Far (≥ 100 m) → every 6th tick.
   [[nodiscard]] static auto LodIntervalForDistSq(double dist_sq) -> uint64_t;
 
-  // Each Send* returns the envelope bytes actually dispatched, so the
-  // tick-loop bandwidth accountant can bill precisely instead of using
-  // fixed per-call placeholders.
+  // Each Send* returns bytes actually dispatched so the tick-loop's
+  // bandwidth accountant can bill precisely.
   auto SendEntityEnter(EntityCache& cache) -> std::size_t;
   auto SendEntityLeave(EntityID peer_base_id) -> std::size_t;
-
-  // Per-peer update pump — replays history delta OR falls back to a
-  // snapshot when the observer has dropped out of the history window.
   auto SendEntityUpdate(EntityCache& cache) -> std::size_t;
 
   CellEntity& owner_;
@@ -205,41 +139,27 @@ class Witness {
 
   std::unique_ptr<AoITrigger> trigger_;
 
-  // Keyed by peer's base_entity_id (the stable id the client sees).
-  // Using EntityID rather than CellEntity* keeps the reference weak;
-  // if the peer gets destroyed its cache stays until the next Update
-  // compacts it.
+  // Keyed by EntityID rather than CellEntity* so a peer destroyed
+  // mid-tick can't dangle the cache; every Update re-looks-up.
   std::unordered_map<EntityID, EntityCache> aoi_map_;
 
-  // Min-heap of peer ids keyed on priority. IDs (not iterators / raw
-  // pointers) so rehash of aoi_map_ can't dangle; every pop re-looks up.
-  // std::pair<priority, id> makes std::greater ordering trivial.
+  // Min-heap of (priority, id). IDs (not iterators) so a rehash of
+  // aoi_map_ can't dangle. std::greater gives ascending priority order.
   std::vector<std::pair<double, EntityID>> priority_queue_;
 
-  // Monotonically-increasing tick counter; incremented at the top of
-  // each Update() call. Used for LOD scheduling (lod_next_update_tick).
   uint64_t tick_count_{0};
 
-  // Bytes we went over budget last tick. Deducted from next tick's
-  // effective budget so bursty Update work amortises evenly.
+  // Bytes over budget last tick; deducted from next tick's budget.
   int bandwidth_deficit_{0};
 
-  // Consecutive ticks in which the deficit exceeded a full budget (i.e.
-  // one whole tick of zero traffic wouldn't drain it). Used to rate-
-  // limit overload warnings so a sustained hot path logs once and stays
-  // quiet, rather than spamming every tick.
+  // Rate-limit overload warnings: a sustained deficit logs once and
+  // stays quiet rather than spamming every tick.
   uint32_t deficit_warn_counter_{0};
   static constexpr uint32_t kDeficitWarnEveryNTicks = 300;
 
-  // Pending state-transition queues — populated incrementally by
-  // HandleAoIEnter / HandleAoILeave and drained by Witness::Update's
-  // Step 1.  Avoids the per-tick O(N) scan over aoi_map_ that the old
-  // "look for entries with kEnterPending / kGone flags" approach
-  // performed on every observer regardless of whether any transitions
-  // had actually happened.
-  //
-  // Duplicate entries are tolerated — Step 1's defensive flag check
-  // discards stale ones (e.g. an Enter overridden by a later Leave).
+  // Populated by HandleAoIEnter / HandleAoILeave, drained by Update.
+  // Duplicates tolerated — the drain loop's flag check filters stale
+  // entries (e.g. an Enter overridden by a later Leave).
   std::vector<EntityID> pending_enter_ids_;
   std::vector<EntityID> pending_gone_ids_;
 };
