@@ -316,6 +316,10 @@ void ReliableUdpChannel::OnDatagramReceived(std::span<const std::byte> data,
       OnAckCwndUpdate(una_acked);
     }
     ProcessAck(*ack_num, *ack_bits);
+    // Acks may have freed cwnd / send-window slots; re-arm a dirty pass
+    // so any deferred bundle that previously failed with kWouldBlock
+    // gets a fresh attempt on the next FlushDirtySendChannels.
+    if (HasDeferredPayload()) NotifyDirty();
   }
 
   if (state_ == ChannelState::kCondemned) {

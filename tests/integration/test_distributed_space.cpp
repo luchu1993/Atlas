@@ -102,12 +102,15 @@ struct CellAppHost {
 };
 
 // Pump both dispatchers in round-robin until `pred` holds or timeout.
-// Both sides must make forward progress: one end's send only flushes on
-// its own poll, the other end's receive only drains on its own poll.
+// FlushDirtySendChannels drains kBatched messages out of the per-channel
+// deferred bundle - without it, CreateGhost/GhostDelta/GhostPositionUpdate
+// (all kBatched) never leave the sender.
 auto PumpUntil(CellAppHost& a, CellAppHost& b, const std::function<bool()>& pred,
                std::chrono::milliseconds timeout = std::chrono::milliseconds(2000)) -> bool {
   const auto deadline = std::chrono::steady_clock::now() + timeout;
   while (std::chrono::steady_clock::now() < deadline) {
+    a.network.FlushDirtySendChannels();
+    b.network.FlushDirtySendChannels();
     a.dispatcher.ProcessOnce();
     b.dispatcher.ProcessOnce();
     if (pred()) return true;
