@@ -122,6 +122,11 @@ class CellApp : public EntityApp {
   // later broadcasts don't chase a freed pointer.
   void OnPeerCellAppDeath(const Address& addr, Channel* dying);
 
+  // Invoked from NetworkInterface's disconnect callback. Disables any
+  // witness whose cached send channel pointer matches the dying channel
+  // before the underlying Channel object is destroyed.
+  void OnOutboundChannelDeath(Channel& dying);
+
   // Build but don't send - caller chooses transport. The C#
   // SerializeEntity callback fills persistent_blob when registered;
   // the receiver rebuilds local Cell membership from the arriving

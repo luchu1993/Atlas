@@ -188,6 +188,13 @@ auto CellApp::Init(int argc, char* argv[]) -> bool {
       GetMachinedClient(), /*self_addr=*/Network().RudpAddress(),
       [this](const Address& addr, Channel* dying) { OnPeerCellAppDeath(addr, dying); });
 
+  // AttachWitness caches the observer's RUDP channel pointer in lambda
+  // captures. NetworkInterface's disconnect callback fires synchronously
+  // *before* the channel's destructor runs (5s condemned window), giving
+  // us a safe point to disable affected witnesses so the captures stop
+  // dereferencing a soon-to-be-freed channel.
+  Network().SetDisconnectCallback([this](Channel& ch) { OnOutboundChannelDeath(ch); });
+
   // Track BaseApp peers so OnClientCellRpcForward can reject spoofed
   // senders. Addresses only - responses ride the same Channel* the
   // handler received on.
@@ -669,7 +676,21 @@ void CellApp::OnAvatarUpdate(const Address& /*src*/, Channel* /*ch*/,
 }
 
 void CellApp::AttachWitness(CellEntity& entity, float aoi_radius, float hysteresis) {
+  // Resolve the observer's baseapp channel once; the AoI fan-out path
+  // hits this several times per tick per visible peer, so paying
+  // FindEntityByBaseId + ConnectRudpNocwnd + dynamic_cast every send was
+  // the dominant cost in Witness::Event::Send at 500 cli (805 ns/call).
+  // Caching the resolved Channel* drops it to a load + IsCondemned()
+  // branch.
+  auto ch_result = Network().ConnectRudpNocwnd(entity.BaseAddr());
+  if (!ch_result) {
+    ATLAS_LOG_WARNING("CellApp::AttachWitness: no channel to baseapp {} for observer {}",
+                      entity.BaseAddr().ToString(), entity.Id());
+    return;
+  }
+  ReliableUdpChannel* const ch = *ch_result;
   const EntityID observer_id = entity.Id();
+
   entity.EnableWitness(
       aoi_radius,
       // Reliable path - enters/leaves + ordered property deltas via
@@ -677,26 +698,24 @@ void CellApp::AttachWitness(CellEntity& entity, float aoi_radius, float hysteres
       // kBatched urgency lets FlushTickDirtyChannels coalesce NxM
       // observer/peer fan-out into one packet per (channel, reliability)
       // per tick.
-      [this, observer_id](std::span<const std::byte> env) {
-        auto* observer = FindEntityByBaseId(observer_id);
-        if (!observer) return;
-        auto ch = Network().ConnectRudpNocwnd(observer->BaseAddr());
-        if (!ch) return;
+      [ch, observer_id](std::span<const std::byte> env) {
+        if (ch->IsCondemned()) return;
         baseapp::ReplicatedReliableDeltaFromCellSpan msg{observer_id, env};
-        (void)(*ch)->SendMessage(msg);
+        (void)ch->SendMessage(msg);
       },
       // Unreliable path - volatile pos/dir (latest-wins) via
       // ReplicatedDeltaFromCell (msg 2015), which routes through
       // DeltaForwarder's per-entity replacement logic.
-      [this, observer_id](std::span<const std::byte> env) {
-        auto* observer = FindEntityByBaseId(observer_id);
-        if (!observer) return;
-        auto ch = Network().ConnectRudpNocwnd(observer->BaseAddr());
-        if (!ch) return;
+      [ch, observer_id](std::span<const std::byte> env) {
+        if (ch->IsCondemned()) return;
         baseapp::ReplicatedDeltaFromCellSpan msg{observer_id, env};
-        (void)(*ch)->SendMessage(msg);
+        (void)ch->SendMessage(msg);
       },
       hysteresis);
+
+  // Hint for OnBaseAppChannelDeath; lambda captures own the live pointer,
+  // this mirror is the disconnect-side reverse index.
+  if (auto* w = entity.GetWitness()) w->SetOutboundChannel(ch);
 }
 
 void CellApp::OnEnableWitness(const Address& /*src*/, Channel* /*ch*/,
@@ -771,6 +790,24 @@ void CellApp::OnPeerCellAppDeath(const Address& addr, Channel* dying) {
     ATLAS_LOG_WARNING(
         "CellApp: peer CellApp {}:{} died — dropped {} orphan Ghost(s), cleared {} Haunt(s)",
         addr.Ip(), addr.Port(), orphan_ghosts.size(), haunts_cleared);
+  }
+}
+
+void CellApp::OnOutboundChannelDeath(Channel& dying) {
+  // Fires for every channel disconnect (cellapp peers, machined,
+  // baseapps); only baseapp channels match a witness, so peers/machined
+  // disconnects naturally no-op without an explicit kind filter.
+  std::vector<EntityID> orphans;
+  for (auto& [id, entity] : entity_population_) {
+    auto* w = entity->GetWitness();
+    if (w && w->OutboundChannel() == &dying) orphans.push_back(id);
+  }
+  for (EntityID id : orphans) {
+    if (auto* e = FindEntityByBaseId(id)) e->DisableWitness();
+  }
+  if (!orphans.empty()) {
+    ATLAS_LOG_INFO("CellApp: outbound channel {} died — disabled {} witness(es)",
+                   dying.RemoteAddress().ToString(), orphans.size());
   }
 }
 

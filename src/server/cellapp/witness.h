@@ -16,6 +16,7 @@ namespace atlas {
 
 class CellEntity;
 class AoITrigger;
+class Channel;
 
 // Per-observer AoI replication manager. Plants an AoITrigger into the
 // owning Space's RangeList; the trigger feeds an EntityCache state
@@ -113,6 +114,12 @@ class Witness {
   }
   void TestOnlySendEntityUpdate(EntityCache& cache) { (void)SendEntityUpdate(cache); }
 
+  // Hint mirroring the channel captured by send_reliable_/send_unreliable_;
+  // cellapp scans entity_population_ for matches on baseapp channel
+  // disconnect to invalidate witnesses before the channel is destroyed.
+  [[nodiscard]] auto OutboundChannel() const -> Channel* { return outbound_channel_; }
+  void SetOutboundChannel(Channel* ch) { outbound_channel_ = ch; }
+
  private:
   void UpdatePriority(EntityCache& cache) const;
 
@@ -131,6 +138,12 @@ class Witness {
   float hysteresis_;
   SendFn send_reliable_;
   SendFn send_unreliable_;
+
+  // Mirrors the channel pointer captured by the send callbacks above.
+  // Owned by NetworkInterface; cellapp clears this (via DisableWitness)
+  // synchronously on channel disconnect so the captured pointer never
+  // outlives the underlying Channel.
+  Channel* outbound_channel_{nullptr};
 
   std::unique_ptr<AoITrigger> trigger_;
 
