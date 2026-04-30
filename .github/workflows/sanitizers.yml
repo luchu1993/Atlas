@@ -1,60 +1,25 @@
-name: CMake CI
+name: Sanitizers
 
+# Sanitizers (asan / ubsan) are slow and disk-heavy, so they don't gate PRs.
+# Run weekly and on demand. tsan is excluded — TSan + custom allocator paths
+# in atlas::HeapAlloc produce noisy false positives that need a dedicated pass.
 on:
-  push:
-    branches: [main]
-    paths-ignore:
-      - '**/*.md'
-      - 'docs/**'
-      - 'tools/profile/**'
-      - 'tools/cluster_control/**'
-      - '.gitignore'
-      - 'memory/**'
-  pull_request:
-    branches: [main]
-    paths-ignore:
-      - '**/*.md'
-      - 'docs/**'
-      - 'tools/profile/**'
-      - 'tools/cluster_control/**'
-      - '.gitignore'
-      - 'memory/**'
+  workflow_dispatch:
+  schedule:
+    - cron: '0 3 * * 0'   # Sunday 03:00 UTC
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
-  build-and-test:
-    name: ${{ matrix.name }}
-    runs-on: ${{ matrix.os }}
+  sanitize:
+    name: ${{ matrix.preset }}
+    runs-on: ubuntu-24.04
     strategy:
       fail-fast: false
       matrix:
-        include:
-          - name: Windows (MSVC, Debug)
-            os: windows-2022
-            preset: debug
-            config: Debug
-            run_tests: true
-
-          - name: Windows (MSVC, Release)
-            os: windows-2022
-            preset: release
-            config: Release
-            run_tests: false
-
-          - name: Linux (GCC, Debug)
-            os: ubuntu-24.04
-            preset: debug
-            config: Debug
-            run_tests: true
-
-          - name: Linux (GCC, Release)
-            os: ubuntu-24.04
-            preset: release
-            config: Release
-            run_tests: false
+        preset: [asan, ubsan]
 
     steps:
       - name: Checkout
@@ -65,14 +30,7 @@ jobs:
         with:
           dotnet-version: '9.0.x'
 
-      - name: Setup MSVC environment (Windows)
-        if: runner.os == 'Windows'
-        uses: ilammy/msvc-dev-cmd@v1
-        with:
-          arch: x64
-
-      - name: Install GCC 13 + Ninja (Linux)
-        if: runner.os == 'Linux'
+      - name: Install GCC 13 + Ninja
         run: |
           sudo apt-get update
           sudo apt-get install -y g++-13 ninja-build
@@ -109,6 +67,7 @@ jobs:
       - name: Configure
         env:
           SCCACHE_GHA_ENABLED: 'true'
+          CMAKE_GENERATOR: Ninja
         run: >
           cmake --preset ${{ matrix.preset }}
           -DCMAKE_C_COMPILER_LAUNCHER=sccache
@@ -117,17 +76,18 @@ jobs:
       - name: Build
         env:
           SCCACHE_GHA_ENABLED: 'true'
-        run: cmake --build build/${{ matrix.preset }} --config ${{ matrix.config }}
+        run: cmake --build build/${{ matrix.preset }} --config Debug
 
       - name: sccache stats
         run: sccache --show-stats
 
       - name: Unit Tests
-        if: matrix.run_tests
         working-directory: build/${{ matrix.preset }}
-        run: ctest --build-config ${{ matrix.config }} --label-regex unit --output-on-failure
-
-      - name: Integration Tests
-        if: matrix.run_tests
-        working-directory: build/${{ matrix.preset }}
-        run: ctest --build-config ${{ matrix.config }} --label-regex integration --output-on-failure
+        env:
+          # Atlas's pool allocator legitimately leaks at static-init shutdown;
+          # the asan preset doesn't switch to std heap on Linux (only asan-msvc
+          # does), so leak detection would dominate noise. Keep heap-use-
+          # after-free etc., drop leaks.
+          ASAN_OPTIONS: detect_leaks=0:halt_on_error=1:abort_on_error=1
+          UBSAN_OPTIONS: halt_on_error=1:print_stacktrace=1:abort_on_error=1
+        run: ctest --build-config Debug --label-regex unit --output-on-failure

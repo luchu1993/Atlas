@@ -3,13 +3,31 @@ name: Clang Format
 on:
   push:
     branches: [main]
+    paths:
+      - '**/*.cc'
+      - '**/*.cpp'
+      - '**/*.h'
+      - '**/*.hpp'
+      - '.clang-format'
+      - '.github/workflows/clang-format.yml'
   pull_request:
     branches: [main]
+    paths:
+      - '**/*.cc'
+      - '**/*.cpp'
+      - '**/*.h'
+      - '**/*.hpp'
+      - '.clang-format'
+      - '.github/workflows/clang-format.yml'
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   format-check:
     name: Check Code Format
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
 
     steps:
       - name: Checkout
@@ -20,5 +38,5 @@ jobs:
 
       - name: Run clang-format check
         run: |
-          find src tests -name '*.cc' -o -name '*.cpp' -o -name '*.h' -o -name '*.hpp' | \
-            xargs clang-format --dry-run --Werror
+          find src tests \( -name '*.cc' -o -name '*.cpp' -o -name '*.h' -o -name '*.hpp' \) -print0 \
+            | xargs -0 clang-format --dry-run --Werror
