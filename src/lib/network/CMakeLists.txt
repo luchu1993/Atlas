@@ -23,3 +23,5 @@ target_link_libraries(atlas_network
 if(WIN32)
   target_link_libraries(atlas_network PUBLIC ws2_32)
 endif()
+
+target_precompile_headers(atlas_network REUSE_FROM atlas_foundation)

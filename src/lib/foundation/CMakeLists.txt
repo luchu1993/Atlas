@@ -61,3 +61,8 @@ target_link_libraries(atlas_foundation
 if(UNIX)
   target_link_libraries(atlas_foundation PUBLIC Threads::Threads)
 endif()
+
+# Precompiled header — built once for atlas_foundation, then REUSE_FROM'd by
+# the largest downstream libs (network/server/platform/clrscript). PRIVATE so
+# the PCH itself isn't transitively forced into other targets that opt out.
+target_precompile_headers(atlas_foundation PRIVATE atlas_common.h)

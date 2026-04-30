@@ -17,6 +17,15 @@ set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 # Export compile_commands.json for clangd / IDE integration
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
+# /Z7 — embed CodeView records into each .obj so cl.exe TUs don't serialize
+# through mspdbsrv.exe writing to a single PDB. Linker still emits a final
+# PDB. Restricted to configs that already request debug info; Release stays
+# untouched. Requires CMP0141 NEW (default at cmake_minimum_required 3.25+).
+if(MSVC)
+  set(CMAKE_MSVC_DEBUG_INFORMATION_FORMAT
+      "$<$<CONFIG:Debug,RelWithDebInfo>:Embedded>")
+endif()
+
 # ── Options ──────────────────────────────────────────────────────────────────
 option(ATLAS_BUILD_TESTS "Build unit and integration tests" ON)
 option(ATLAS_BUILD_CSHARP "Build C# projects via dotnet" ON)

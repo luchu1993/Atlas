@@ -32,3 +32,5 @@ target_link_libraries(atlas_server
     atlas_serialization
     atlas_compiler_options
 )
+
+target_precompile_headers(atlas_server REUSE_FROM atlas_foundation)

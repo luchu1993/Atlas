@@ -9,9 +9,11 @@
     {
       "name": "debug",
       "displayName": "Debug",
+      "generator": "Ninja Multi-Config",
       "binaryDir": "${sourceDir}/build/debug",
       "cacheVariables": {
-        "CMAKE_BUILD_TYPE": "Debug"
+        "CMAKE_BUILD_TYPE": "Debug",
+        "CMAKE_DEFAULT_BUILD_TYPE": "Debug"
       }
     },
     {
