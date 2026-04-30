@@ -56,9 +56,7 @@ class WitnessLifecycleTest : public ::testing::Test {
       -> CellEntity* {
     auto* e = space.AddEntity(
         std::make_unique<CellEntity>(id, type_id, space, pos, math::Vector3{1, 0, 0}));
-    // Give the entity a base_entity_id distinct from its cell id so the
-    // envelope's public_entity_id is observable in tests.
-    e->SetBase(Address(0, 0), /*base_id=*/id + 1000);
+    e->SetBase(Address(0, 0), /*base_id=*/id);
     return e;
   }
 };

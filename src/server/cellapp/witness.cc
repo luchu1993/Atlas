@@ -160,7 +160,6 @@ void Witness::HandleAoIEnter(CellEntity& peer) {
   if (!inserted && (cache.flags & EntityCache::kGone) == 0) return;
 
   cache.entity = &peer;
-  cache.peer_base_id = peer.BaseEntityId();
   cache.flags = EntityCache::kEnterPending;
   pending_enter_ids_.push_back(peer.Id());
   peer.AddObserver(this);
@@ -184,8 +183,6 @@ void Witness::HandleAoILeave(CellEntity& peer) {
   it->second.flags |= EntityCache::kGone;
   it->second.flags &= ~EntityCache::kEnterPending;
   pending_gone_ids_.push_back(peer.Id());
-  // Last chance to read base id before the destructor frees CellEntity.
-  it->second.peer_base_id = peer.BaseEntityId();
   it->second.entity = nullptr;
   peer.RemoveObserver(this);
 }
@@ -221,9 +218,9 @@ auto Witness::SendEntityEnter(EntityCache& cache) -> std::size_t {
   return envelope.size();
 }
 
-auto Witness::SendEntityLeave(EntityID peer_base_id) -> std::size_t {
+auto Witness::SendEntityLeave(EntityID peer_id) -> std::size_t {
   ATLAS_PROFILE_ZONE_N("Witness::SendEntityLeave");
-  auto envelope = MakeEnvelope<0>(CellAoIEnvelopeKind::kEntityLeave, peer_base_id, {});
+  auto envelope = MakeEnvelope<0>(CellAoIEnvelopeKind::kEntityLeave, peer_id, {});
   if (send_reliable_) send_reliable_(owner_.BaseEntityId(), envelope);
   return envelope.size();
 }
@@ -265,12 +262,11 @@ void Witness::Update(uint32_t max_packet_bytes) {
             owner_.GetWitness() ? owner_.GetWitness()->AoIMap().size() : 0;
         ATLAS_LOG_WARNING(
             "Witness: stale enter-pending cache "
-            "observer={} peer_id={} peer_base={} cached={:p} live={:p} "
+            "observer={} peer_id={} cached={:p} live={:p} "
             "flags=0x{:02x} aoi_map_size={} space_id={}",
             owner_.BaseEntityId(), static_cast<uint64_t>(peer_id),
-            static_cast<uint64_t>(cache.peer_base_id), static_cast<const void*>(cache.entity),
-            static_cast<const void*>(live), cache.flags, observer_obs_count,
-            owner_.GetSpace().Id());
+            static_cast<const void*>(cache.entity), static_cast<const void*>(live), cache.flags,
+            observer_obs_count, owner_.GetSpace().Id());
         aoi_map_.erase(it);
         continue;
       }
@@ -285,7 +281,9 @@ void Witness::Update(uint32_t max_packet_bytes) {
       // Same id may appear twice (left → re-entered → left); after the
       // first Leave the cache is erased so subsequent finds return end.
       if (!(it->second.flags & EntityCache::kGone)) continue;
-      bytes_sent += static_cast<int>(SendEntityLeave(it->second.peer_base_id));
+      // Map key carries the unified entity id — no need to cache it on
+      // the cache entry: peer.Id() == peer.BaseEntityId() since phase 2.
+      bytes_sent += static_cast<int>(SendEntityLeave(it->first));
       aoi_map_.erase(it);
     }
 

@@ -26,7 +26,7 @@ class WitnessPeerLifetimeTest : public ::testing::Test {
   auto MakeEntity(EntityID id, math::Vector3 pos = {0, 0, 0}) -> CellEntity* {
     auto* e = space_.AddEntity(
         std::make_unique<CellEntity>(id, uint16_t{1}, space_, pos, math::Vector3{1, 0, 0}));
-    e->SetBase(Address(0, 0), id + 1000);
+    e->SetBase(Address(0, 0), id);
     return e;
   }
 };
@@ -35,11 +35,10 @@ class WitnessPeerLifetimeTest : public ::testing::Test {
 // still inside the observer's AoI:
 //   (a) the next Update fires an EntityLeave envelope (no missing leaves)
 //   (b) the witness must NOT dereference the freed peer during that
-//       Update — we cache the peer's base_entity_id at enter time so
-//       SendEntityLeave has its own copy to work with.
-// This test exercises both. Without (b) in place, the Update below
-// would UAF on cache.entity->BaseEntityId() — in debug builds it
-// usually crashes or produces garbage base ids; ASan would catch it.
+//       Update — the leave envelope's id comes from aoi_map_'s key
+//       (peer.Id() captured at enter), not from cache.entity.
+// Without (b) in place, the Update below would UAF on
+// cache.entity->BaseEntityId(); ASan would catch it.
 TEST_F(WitnessPeerLifetimeTest, PeerDestructionTriggersLeaveEventAndCleansCache) {
   auto* observer = MakeEntity(1, {0, 0, 0});
   auto* peer = MakeEntity(2, {3, 0, 3});
@@ -62,8 +61,8 @@ TEST_F(WitnessPeerLifetimeTest, PeerDestructionTriggersLeaveEventAndCleansCache)
   space_.RemoveEntity(peer->Id());
 
   // Now the peer is freed. The next Update iterates gone_ids and must
-  // NOT dereference cache.entity — it has to use the base_id cached at
-  // enter time.
+  // NOT dereference cache.entity — the leave envelope's id comes from
+  // the aoi_map_ key (peer.Id() captured at enter).
   observer->GetWitness()->Update(4096);
 
   ASSERT_EQ(leave_count, 1) << "peer destruction should produce exactly one OnLeave";

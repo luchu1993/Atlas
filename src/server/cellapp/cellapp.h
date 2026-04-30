@@ -43,9 +43,9 @@ struct OffloadEntityAck;
 }  // namespace cellapp
 
 // Spatial-simulation server process. Inherits from EntityApp (peer of
-// BaseApp) and owns the local Space map plus a dual entity index
-// (cell_id → *, base_id → *) so internal management uses cell-local
-// ids while RPC / AoI route on the stable base id.
+// BaseApp) and owns the local Space map plus a single entity index
+// keyed by the unified entity id (DBApp-allocated, identical to
+// base_entity_id on the BaseApp side).
 //
 // Tick flow:
 //   OnStartOfTick — drives EntityApp's C# on_tick
@@ -241,9 +241,7 @@ class CellApp : public EntityApp {
   uint32_t client_baseline_tick_counter_{0};
 
   // Assigned by CellAppMgr's RegisterCellAppAck. 0 ⇒ not yet
-  // registered; pre-registration IDs use high byte 0 and clash once a
-  // CellAppMgr joins the cluster, so production callers must avoid
-  // CreateCellEntity before registration. Unit tests run with 0.
+  // registered; SendInformCellLoad short-circuits while 0.
   uint32_t app_id_{0};
   Channel* cellappmgr_channel_{nullptr};
 
@@ -292,8 +290,7 @@ class CellApp : public EntityApp {
   };
   std::vector<ObserverDemand> witness_demand_scratch_;
 
-  // Scan pending_offloads_ for entries past the Ack deadline; revert
-  // them in place. Called each tick from OnEndOfTick.
+  // Called each tick from OnEndOfTick.
   void TickOffloadAckTimeouts();
 
   static constexpr Duration kOffloadAckTimeout = std::chrono::seconds(5);

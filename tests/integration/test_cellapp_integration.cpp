@@ -196,7 +196,7 @@ class WitnessIntegrationFixture : public ::testing::Test {
       -> CellEntity* {
     auto* e = space.AddEntity(
         std::make_unique<CellEntity>(id, type_id, space, pos, math::Vector3{1, 0, 0}));
-    e->SetBase(Address(0, 0), /*base_id=*/id + 1000);
+    e->SetBase(Address(0, 0), /*base_id=*/id);
     return e;
   }
 };
@@ -560,7 +560,7 @@ TEST(CellAppIntegration, ThousandEntityTickWithinPerfBudget) {
         static_cast<EntityID>(i), /*type_id=*/uint16_t{1}, space,
         math::Vector3{static_cast<float>(i % 100), 0, static_cast<float>(i / 100)},
         math::Vector3{1, 0, 0}));
-    e->SetBase(Address(0, 0), static_cast<EntityID>(i + 10000));
+    e->SetBase(Address(0, 0), static_cast<EntityID>(i));
   }
   ASSERT_EQ(space.EntityCount(), static_cast<size_t>(kEntityCount));
 

@@ -80,12 +80,6 @@ class Witness {
   struct EntityCache {
     CellEntity* entity{nullptr};
 
-    // Cached at AoI entry so EntityLeave survives the peer's
-    // destruction: ~CellEntity's synthetic FLT_MAX shuffle fires
-    // OnLeave during the destructor; reading entity->BaseEntityId() at
-    // Leave time would be a use-after-free.
-    EntityID peer_base_id{kInvalidEntityID};
-
     double priority{0.0};  // squared distance, smaller = higher priority
     uint8_t flags{0};
 
@@ -128,7 +122,7 @@ class Witness {
   // Each Send* returns bytes actually dispatched so the tick-loop's
   // bandwidth accountant can bill precisely.
   auto SendEntityEnter(EntityCache& cache) -> std::size_t;
-  auto SendEntityLeave(EntityID peer_base_id) -> std::size_t;
+  auto SendEntityLeave(EntityID peer_id) -> std::size_t;
   auto SendEntityUpdate(EntityCache& cache) -> std::size_t;
 
   CellEntity& owner_;
