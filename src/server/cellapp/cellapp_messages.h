@@ -121,9 +121,8 @@ static_assert(NetworkMessage<CreateCellEntity>);
 // ----------------------------------------------------------------------------
 // DestroyCellEntity  (BaseApp → CellApp, ID 3002)
 //
-// Targeted by `base_entity_id` since that is the stable id CellApp's
-// base_entity_population_ indexes by — the internal cell_entity_id can
-// change across offloads.
+// Targeted by `base_entity_id` — the stable cluster-wide id used by both
+// sides for RPC routing.
 // ----------------------------------------------------------------------------
 
 struct DestroyCellEntity {

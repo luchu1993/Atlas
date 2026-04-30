@@ -1,6 +1,7 @@
 #include "cellapp.h"
 
 #include <algorithm>
+#include <cassert>
 #include <chrono>
 #include <cmath>
 #include <memory>
@@ -258,6 +259,24 @@ void CellApp::RegisterWatchers() {
                       std::function<std::size_t()>([this] { return entity_population_.size(); }));
   wr.Add<std::size_t>("cellapp/space_count",
                       std::function<std::size_t()>([this] { return spaces_.size(); }));
+  // Real entities partitioned by cell_id high-8-bit ownership tag. A
+  // non-zero `foreign_id_real_entity_count` is the steady-state signal
+  // for entities offloaded in from peer CellApps; a sudden imbalance
+  // signals a leak in the offload protocol.
+  wr.Add<uint32_t>("cellapp/local_id_real_entity_count", std::function<uint32_t()>([this] {
+                     uint32_t count = 0;
+                     for (const auto& [cell_id, entity] : entity_population_) {
+                       if (entity->IsReal() && (cell_id >> 24) == app_id_) ++count;
+                     }
+                     return count;
+                   }));
+  wr.Add<uint32_t>("cellapp/foreign_id_real_entity_count", std::function<uint32_t()>([this] {
+                     uint32_t count = 0;
+                     for (const auto& [cell_id, entity] : entity_population_) {
+                       if (entity->IsReal() && (cell_id >> 24) != app_id_) ++count;
+                     }
+                     return count;
+                   }));
 }
 
 void CellApp::TickControllers(float dt) {
@@ -931,6 +950,13 @@ void CellApp::OnOffloadEntity(const Address& src, Channel* ch, const cellapp::Of
     entity = space->AddEntity(std::move(entity_ptr));
     entity_population_[msg.real_entity_id] = entity;
   }
+
+  // Offload preserves cell_entity_id end-to-end (sender packs its
+  // local id into msg.real_entity_id; receiver promotes the matching
+  // ghost or constructs a fresh Real with the same id). base_entity_id
+  // is the cluster-stable identity from BaseApp's IDClient.
+  assert(entity->Id() == msg.real_entity_id);
+  assert(entity->BaseEntityId() == msg.base_entity_id);
 
   base_entity_population_[msg.base_entity_id] = entity;
 
