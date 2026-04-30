@@ -16,19 +16,16 @@
 
 namespace atlas {
 
-// Reliable UDP wire format flags
 namespace rudp {
 inline constexpr uint8_t kFlagReliable = 0x01;
 inline constexpr uint8_t kFlagHasSeq = 0x02;
-inline constexpr uint8_t kFlagHasAck = 0x04;    // implies ack(4) + ack_bits(4) + una(4)
-inline constexpr uint8_t kFlagFragment = 0x08;  // implies fragment header (4 bytes)
+inline constexpr uint8_t kFlagHasAck = 0x04;
+inline constexpr uint8_t kFlagFragment = 0x08;
 
-// flags(1) + seq(4) + ack(4) + ack_bits(4) + una(4) + frag(4); `una`
-// is rcv_nxt_ (KCP-style cumulative ACK, lifts the 33-packet SACK cap).
+// flags + seq + ack + ack_bits + una + fragment header.
 inline constexpr std::size_t kMaxHeaderSize = 21;
 
-// Intra-DC default; public-internet uses ~470 via RudpProfile.mtu.
-// Both endpoints must agree — reassembly assumes uniform chunk size.
+// Both endpoints must agree; reassembly assumes uniform chunk size.
 inline constexpr std::size_t kDefaultMtu = 1400;
 inline constexpr std::size_t kMaxFragments = 255;
 inline constexpr Duration kFragmentTimeout = std::chrono::seconds(30);
@@ -46,8 +43,7 @@ class ReliableUdpChannel : public Channel {
   [[nodiscard]] auto SendReliable() -> Result<void>;
   [[nodiscard]] auto SendUnreliable() -> Result<void> override;
 
-  // Per-side OOM safety net (Internet 32 KB / Cluster 60 KB); primary
-  // drain is FlushDirtySendChannels at tick close.
+  // OOM safety net; FlushDirtySendChannels is the primary drain.
   void SetDeferredFlushThreshold(std::size_t bytes) { deferred_flush_threshold_ = bytes; }
   [[nodiscard]] auto DeferredFlushThreshold() const -> std::size_t {
     return deferred_flush_threshold_;
@@ -59,26 +55,20 @@ class ReliableUdpChannel : public Channel {
     return !deferred_reliable_bundle_.empty() || !deferred_unreliable_bundle_.empty();
   }
 
-  // `flush_deadline` bounds the in-order cascade; on hit, hot_cb_ asks
-  // NetworkInterface to re-drain later (default = synchronous).
+  // flush_deadline bounds in-order delivery cascades.
   void OnDatagramReceived(std::span<const std::byte> data,
                           TimePoint flush_deadline = TimePoint::max());
 
-  // Fired when FlushReceiveBuffer yields with rcv_nxt_ still buffered.
   using HotCallback = std::function<void(ReliableUdpChannel&)>;
   void SetHotCallback(HotCallback cb) { hot_cb_ = std::move(cb); }
 
-  // Returns true iff rcv_nxt_ is still buffered after the drain — caller
-  // should schedule another flush.
   [[nodiscard]] auto FlushReceiveBuffer(TimePoint deadline) -> bool;
 
-  // O(1) probe: rcv_nxt_ buffered or a prior dispatch yielded mid-frame.
   [[nodiscard]] auto HasReceiveBacklog() const -> bool {
     return HasPendingDispatch() || rcv_buf_.find(rcv_nxt_) != rcv_buf_.end();
   }
 
-  // Drops every inbound datagram during [start, start+duration) relative
-  // to `origin`, BEFORE header parsing. duration_ms == 0 disables.
+  // Test hook: drops inbound datagrams before header parsing.
   void SetInboundDropWindow(TimePoint origin, uint32_t start_ms, uint32_t duration_ms) {
     drop_origin_ = origin;
     drop_start_ms_ = start_ms;
@@ -88,20 +78,17 @@ class ReliableUdpChannel : public Channel {
   void SetNodelay(bool enable) { rtt_.SetNodelay(enable); }
   [[nodiscard]] auto Nodelay() const -> bool { return rtt_.Nodelay(); }
 
-  // 0 disables fast retransmit.
   void SetFastResendThresh(uint32_t thresh) { fast_resend_thresh_ = thresh; }
 
   void SetSendWindow(uint32_t wnd) { send_window_ = wnd; }
   void SetRecvWindow(uint32_t wnd) { rcv_wnd_ = wnd; }
   [[nodiscard]] auto RecvWindow() const -> uint32_t { return rcv_wnd_; }
 
-  // Default rudp::kDefaultMtu (1400, intra-DC); public-internet uses ~470.
   // Both endpoints must agree.
   void SetMtu(std::size_t mtu) { mtu_ = mtu; }
   [[nodiscard]] auto Mtu() const -> std::size_t { return mtu_; }
   [[nodiscard]] auto MaxUdpPayload() const -> std::size_t { return mtu_ - rudp::kMaxHeaderSize; }
 
-  // Disable for LAN to use fixed send_window_.
   void SetNocwnd(bool enable) { nocwnd_ = enable; }
   [[nodiscard]] auto Nocwnd() const -> bool { return nocwnd_; }
 
@@ -109,6 +96,10 @@ class ReliableUdpChannel : public Channel {
   [[nodiscard]] auto UnackedCount() const -> uint32_t {
     return static_cast<uint32_t>(unacked_.size());
   }
+  [[nodiscard]] auto HasUnackedReliablePackets() const -> bool override {
+    return !unacked_.empty();
+  }
+  [[nodiscard]] auto HasRemoteFailed() const -> bool override { return remote_failed_; }
   [[nodiscard]] auto RecvNextSeq() const -> SeqNum { return rcv_nxt_; }
   [[nodiscard]] auto RecvBufCount() const -> uint32_t {
     return static_cast<uint32_t>(rcv_buf_.size());
@@ -131,10 +122,10 @@ class ReliableUdpChannel : public Channel {
  private:
   struct UnackedPacket {
     std::vector<std::byte> data;
-    TimePoint sent_at;        // last attempt; updated on every resend
-    TimePoint first_sent_at;  // initial send; drives dead-link cutoff
+    TimePoint sent_at;
+    TimePoint first_sent_at;
     uint32_t send_count{1};
-    uint32_t skip_count{0};  // fast-retransmit counter
+    uint32_t skip_count{0};
   };
 
   struct FragmentHeader {
@@ -147,7 +138,7 @@ class ReliableUdpChannel : public Channel {
     uint8_t expected_count{0};
     uint8_t received_count{0};
     std::vector<std::byte> buffer;
-    std::vector<uint16_t> frag_sizes;  // 0 = not received
+    std::vector<uint16_t> frag_sizes;
     std::size_t total_size{0};
     TimePoint first_received;
   };
@@ -155,11 +146,8 @@ class ReliableUdpChannel : public Channel {
   auto BuildPacket(uint8_t flags, SeqNum seq, std::span<const std::byte> payload,
                    const FragmentHeader* frag = nullptr) -> std::vector<std::byte>;
 
-  // Rebuild packet header with fresh ACK info for retransmission.
   auto RebuildPacketHeader(const std::vector<std::byte>& original_packet) -> std::vector<std::byte>;
 
-  // KCP cumulative ACK: clears unacked with seq < una; returns count for
-  // a single folded OnAckCwndUpdate.
   auto ProcessUna(SeqNum una) -> uint32_t;
   void ProcessAck(SeqNum ack_num, uint32_t ack_bits);
 
@@ -167,8 +155,6 @@ class ReliableUdpChannel : public Channel {
   void StartResendTimer();
   void StopResendTimer();
 
-  // Shared by single-shot Send* and FlushDeferred. Elaborated `class
-  // Bundle` disambiguates from the inherited Channel::Bundle() accessor.
   [[nodiscard]] auto SendBundleReliable(class Bundle& b) -> Result<void>;
   [[nodiscard]] auto SendBundleUnreliable(class Bundle& b) -> Result<void>;
 
@@ -186,7 +172,6 @@ class ReliableUdpChannel : public Channel {
   void EnqueueForDelivery(SeqNum seq, std::span<const std::byte> payload, bool is_fragment,
                           const FragmentHeader& frag_hdr);
 
-  // RecvFilter + dispatch. Returns true iff dispatch yielded mid-frame.
   auto DispatchFiltered(std::span<const std::byte> payload, TimePoint deadline = TimePoint::max())
       -> bool;
 
@@ -198,21 +183,16 @@ class ReliableUdpChannel : public Channel {
   std::size_t mtu_{rudp::kDefaultMtu};
   std::size_t deferred_flush_threshold_{60 * 1024};
 
-  // Sending state.
   SeqNum next_send_seq_{1};
   std::map<SeqNum, UnackedPacket> unacked_;
   uint32_t send_window_{256};
 
-  // Deferred bundles independent of the inherited bundle_, so single-shot
-  // sends interleave cleanly with batched witness traffic.
   class Bundle deferred_reliable_bundle_;
   class Bundle deferred_unreliable_bundle_;
 
-  // ACK tracking — what we've received, for telling the sender.
   SeqNum remote_seq_{0};
-  uint32_t recv_ack_bits_{0};  // bitmask of received before remote_seq_
+  uint32_t recv_ack_bits_{0};
 
-  // KCP-style rcv_buf → rcv_queue ordered delivery.
   struct RecvEntry {
     std::vector<std::byte> payload;
     bool is_fragment{false};
@@ -224,34 +204,29 @@ class ReliableUdpChannel : public Channel {
 
   HotCallback hot_cb_;
 
-  RttEstimator rtt_;  // Jacobson/Karels (RFC 6298)
+  RttEstimator rtt_;
 
-  uint32_t fast_resend_thresh_{2};  // 0 disables
+  uint32_t fast_resend_thresh_{2};
 
-  // "Peer silent for X seconds" — time-based, independent of RTO backoff.
   static constexpr Duration kDeadLinkTimeout = std::chrono::seconds(5);
+  bool remote_failed_{false};
 
-  // KCP-style slow start + congestion avoidance.
   bool nocwnd_{false};
   uint32_t cwnd_{1};
   uint32_t ssthresh_{16};
-  uint32_t cwnd_incr_{0};  // byte-level increment for congestion avoidance
+  uint32_t cwnd_incr_{0};
 
   uint16_t next_fragment_id_{1};
   std::unordered_map<uint16_t, FragmentGroup> pending_fragments_;
-  // Cap concurrent reassemblies; overflow evicts the oldest by
-  // first_received (defends against malicious fragment_id fan-out).
+  // Bounds fragment_id fan-out.
   static constexpr std::size_t kMaxPendingFragmentGroups = 16;
 
   TimerHandle resend_timer_;
 
-  // Aligned with KCP's IKCP_INTERVAL_DEFAULT so ACK feedback matches
-  // the sender's tick cadence.
   TimerHandle delayed_ack_timer_;
   bool ack_pending_{false};
   static constexpr Duration kDelayedAckTimeout = std::chrono::milliseconds(10);
 
-  // Drop-injection window (see SetInboundDropWindow).
   TimePoint drop_origin_{};
   uint32_t drop_start_ms_{0};
   uint32_t drop_duration_ms_{0};

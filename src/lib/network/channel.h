@@ -47,8 +47,7 @@ class Channel {
   [[nodiscard]] auto Bundle() -> Bundle& { return bundle_; }
   [[nodiscard]] auto Send() -> Result<void>;
 
-  // Single public send entry point. Descriptor's reliability picks
-  // Send / SendUnreliable; urgency picks deferred batching vs immediate.
+  // Message descriptors select reliability and batching policy.
   template <NetworkMessage Msg>
   [[nodiscard]] auto SendMessage(const Msg& msg) -> Result<void> {
     if (IsCondemned()) return CondemnedSendError();
@@ -58,23 +57,17 @@ class Channel {
         deferred->AddMessage(msg);
         return OnDeferredAppend(desc, deferred->TotalSize());
       }
-      // No batching available — fall through to immediate.
     }
     bundle_.AddMessage(msg);
     if (desc.IsUnreliable()) return SendUnreliable();
     return Send();
   }
 
-  // TCP defaults to Send (always reliable); UDP/RUDP override.
   [[nodiscard]] virtual auto SendUnreliable() -> Result<void>;
 
-  // Drain messages staged via the kBatched path. Invoked by
-  // NetworkInterface::FlushDirtySendChannels at I/O readable tail and
-  // ServerApp::FlushTickDirtyChannels at tick close.
+  // Drains messages staged through the kBatched path.
   [[nodiscard]] virtual auto FlushDeferred() -> Result<void> { return Result<void>{}; }
 
-  // Optional — channels created outside NetworkInterface (tests) leave
-  // it unset and call FlushDeferred explicitly.
   using MarkDirtyCallback = std::function<void(Channel&)>;
   void SetMarkDirtyCallback(MarkDirtyCallback cb) { mark_dirty_cb_ = std::move(cb); }
 
@@ -83,6 +76,10 @@ class Channel {
   [[nodiscard]] auto RemoteAddress() const -> const Address& { return remote_; }
   [[nodiscard]] auto IsConnected() const -> bool { return state_ == ChannelState::kActive; }
   [[nodiscard]] auto IsCondemned() const -> bool { return state_ == ChannelState::kCondemned; }
+
+  // Condemned RUDP channels may need to outlive active map removal.
+  [[nodiscard]] virtual auto HasUnackedReliablePackets() const -> bool { return false; }
+  [[nodiscard]] virtual auto HasRemoteFailed() const -> bool { return false; }
 
   void Activate();
   void Condemn();
@@ -103,17 +100,13 @@ class Channel {
   [[nodiscard]] virtual auto Fd() const -> FdHandle = 0;
 
  protected:
-  // Logs at DEBUG so silent (void)-ignored sites still surface.
   [[nodiscard]] auto CondemnedSendError() const -> Result<void>;
 
   void NotifyDirty() {
     if (mark_dirty_cb_) mark_dirty_cb_(*this);
   }
 
-  // Subclasses with per-channel deferred bundles (ReliableUdpChannel)
-  // override DeferredBundleFor; others return nullptr and SendMessage
-  // takes the immediate path. OnDeferredAppend marks dirty + enforces
-  // a size threshold; threshold-flush errors propagate back via Result.
+  // nullptr keeps kBatched messages on the immediate send path.
   [[nodiscard]] virtual auto DeferredBundleFor(const MessageDesc& /*desc*/) -> class Bundle* {
     return nullptr;
   }
@@ -129,18 +122,12 @@ class Channel {
 
   void DispatchMessages(std::span<const std::byte> frame_data);
 
-  // Per-handler-deadline variant. Unprocessed tail parks in
-  // pending_dispatch_buf_; caller drains via DrainPendingDispatch.
-  // Returns true iff frame_data was not fully consumed OR pending is
-  // non-empty after the call.
+  // Returns true when dispatch yielded and left a tail for later.
   [[nodiscard]] auto DispatchMessagesBudgeted(std::span<const std::byte> frame_data,
                                               TimePoint deadline) -> bool;
 
-  // Returns true iff pending is still non-empty.
   [[nodiscard]] auto DrainPendingDispatch(TimePoint deadline) -> bool;
 
-  // Public so ReliableUdpChannel::HasReceiveBacklog can include
-  // pending-dispatch alongside rcv_buf_.
  public:
   [[nodiscard]] auto HasPendingDispatch() const -> bool {
     return pending_dispatch_pos_ < pending_dispatch_buf_.size();

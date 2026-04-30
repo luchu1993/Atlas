@@ -43,9 +43,6 @@ void Channel::Condemn() {
 auto Channel::Send() -> Result<void> {
   ATLAS_PROFILE_ZONE_N("Channel::Send");
   if (state_ == ChannelState::kCondemned) {
-    // Drop whatever the caller staged via AddMessage — otherwise a caller
-    // that grabs a zombie channel pointer (state==kCondemned but still in
-    // some lookup map) keeps growing bundle_.buffer_ unboundedly.
     bundle_.Clear();
     return Error(ErrorCode::kChannelCondemned, "Cannot send on condemned channel");
   }
@@ -76,8 +73,6 @@ auto Channel::Send() -> Result<void> {
 }
 
 auto Channel::SendUnreliable() -> Result<void> {
-  // Default: TCP (and other reliable-only channels) have no unreliable path —
-  // fall back to the normal reliable send so callers need no channel-type check.
   return Send();
 }
 
@@ -121,6 +116,9 @@ void Channel::OnDataReceived(std::span<const std::byte> data) {
 }
 
 void Channel::OnDisconnect() {
+  if (state_ == ChannelState::kCondemned) {
+    return;
+  }
   Condemn();
   if (disconnect_callback_) {
     disconnect_callback_(*this);
@@ -129,29 +127,17 @@ void Channel::OnDisconnect() {
 
 namespace {
 
-// Run the parse-and-dispatch loop on `frame_data` until either the
-// frame is exhausted or `deadline` has passed (checked AFTER each
-// successful handler call so forward progress is guaranteed).  Returns
-// the number of bytes consumed measured at the last safe boundary —
-// i.e. the byte offset of the next un-parsed message.  Callers:
-//   - DispatchMessages: deadline = TimePoint::max(), return value
-//     should equal frame_data.size() under normal operation.
-//   - DispatchMessagesBudgeted: real deadline; if return value <
-//     frame_data.size(), the tail [returned..end) needs to be saved
-//     for resume.
-//
-// On parse error mid-frame, log + claim full consumption so the bad
-// bytes are dropped; otherwise resume would retry the broken frame.
+// Returns the next safe byte offset; parse errors consume the frame so resume
+// never retries corrupt bytes.
 auto DispatchFrameImpl(InterfaceTable& interface_table, const Address& remote, Channel* channel,
                        std::span<const std::byte> frame_data, TimePoint deadline) -> std::size_t {
   ATLAS_PROFILE_ZONE_N("Channel::Dispatch");
   BinaryReader reader(frame_data);
   std::size_t last_safe_pos = 0;
   while (reader.Remaining() >= 1) {
-    // Read packed MessageID: 1 byte if < 0xFE, else 0xFE + uint16 LE
     auto tag_result = reader.Read<uint8_t>();
     if (!tag_result) {
-      return frame_data.size();  // truncated header, drop
+      return frame_data.size();
     }
     MessageID id;
     if (*tag_result < 0xFE) {
@@ -190,23 +176,12 @@ auto DispatchFrameImpl(InterfaceTable& interface_table, const Address& remote, C
       return frame_data.size();
     }
 
-    // Let pre-dispatch hook (RPC registry) consume reply messages first.
     if (interface_table.TryPreDispatch(id, *payload_span)) {
       last_safe_pos = reader.Position();
       if (Clock::now() >= deadline) return last_safe_pos;
       continue;
     }
 
-    // Per-message zone with the numeric id attached as text. Tracy keys
-    // zones by source location so all dispatches collapse into one named
-    // group in the viewer; the id is recoverable from the zone's text
-    // annotation when drilling into a specific instance. This is cheaper
-    // than registering one zone name per id (which would need a process-
-    // wide lifetime cache for the literal pointers Tracy keys on).
-    //
-    // The id-formatting snprintf only runs when the profiler is enabled —
-    // a release build would otherwise pay ~30 ns per dispatched message
-    // formatting a string that is then handed to a no-op macro.
     {
       ATLAS_PROFILE_ZONE_N("Channel::HandleMessage");
 #if ATLAS_PROFILE_ENABLED
@@ -220,11 +195,6 @@ auto DispatchFrameImpl(InterfaceTable& interface_table, const Address& remote, C
 #endif
       BinaryReader msg_reader(*payload_span);
       if (!entry) {
-        // No typed handler — try the InterfaceTable's default handler. The
-        // client installs one on the default-handler slot to route the three
-        // reserved state-replication channels (0xF001 / 0xF002 / 0xF003) and
-        // every ClientRpc (anything in the dynamic rpc_id range). Only log
-        // "Unknown message ID" when nothing's installed either.
         if (!interface_table.TryDispatchDefault(remote, channel, id, msg_reader)) {
           ATLAS_LOG_WARNING("Unknown message ID {} from {}", id, remote.ToString());
         }
@@ -233,8 +203,6 @@ auto DispatchFrameImpl(InterfaceTable& interface_table, const Address& remote, C
       }
     }
 
-    // Yield-point: deadline check is AFTER a successful dispatch so
-    // each call always makes progress on at least one message.
     last_safe_pos = reader.Position();
     if (Clock::now() >= deadline) return last_safe_pos;
   }
@@ -244,9 +212,6 @@ auto DispatchFrameImpl(InterfaceTable& interface_table, const Address& remote, C
 }  // namespace
 
 void Channel::DispatchMessages(std::span<const std::byte> frame_data) {
-  // Synchronous variant: runs to completion, ignores the returned
-  // byte count (always == frame_data.size() on success or full-drop
-  // on parse error).
   (void)DispatchFrameImpl(interface_table_, remote_, this, frame_data, TimePoint::max());
 }
 
@@ -257,9 +222,6 @@ auto Channel::DispatchMessagesBudgeted(std::span<const std::byte> frame_data, Ti
   }
   const auto consumed = DispatchFrameImpl(interface_table_, remote_, this, frame_data, deadline);
   if (consumed < frame_data.size()) {
-    // Save the un-dispatched tail.  Compact pending_dispatch_buf_ first
-    // if the resume offset has advanced — keeps the buffer at most one
-    // MTU plus one yield-tail in size.
     if (pending_dispatch_pos_ > 0) {
       pending_dispatch_buf_.erase(
           pending_dispatch_buf_.begin(),
@@ -279,8 +241,6 @@ auto Channel::DrainPendingDispatch(TimePoint deadline) -> bool {
   const auto consumed = DispatchFrameImpl(interface_table_, remote_, this, tail, deadline);
   pending_dispatch_pos_ += consumed;
   if (!HasPendingDispatch()) {
-    // Fully drained — release the storage so a long-quiet channel
-    // doesn't hold onto a 1-MTU buffer indefinitely.
     pending_dispatch_buf_.clear();
     pending_dispatch_buf_.shrink_to_fit();
     pending_dispatch_pos_ = 0;

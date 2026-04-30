@@ -29,9 +29,6 @@ auto ReliableUdpChannel::EffectiveWindow() const -> uint32_t {
   return std::min(send_window_, cwnd_);
 }
 
-// SendReliable/SendUnreliable drain the inherited bundle_; the deferred
-// path reuses SendBundle* via FlushDeferred.
-
 auto ReliableUdpChannel::SendReliable() -> Result<void> {
   if (state_ == ChannelState::kCondemned) {
     bundle_.Clear();
@@ -71,8 +68,6 @@ auto ReliableUdpChannel::FlushDeferred() -> Result<void> {
     return Error(ErrorCode::kChannelCondemned, "Channel is condemned");
   }
 
-  // Unreliable first so a transient reliable-side kWouldBlock doesn't
-  // strand it; surface the first error.
   Result<void> first_err{};
   if (!deferred_unreliable_bundle_.empty()) {
     auto r = SendBundleUnreliable(deferred_unreliable_bundle_);
@@ -90,18 +85,16 @@ auto ReliableUdpChannel::SendBundleReliable(class Bundle& b) -> Result<void> {
     return Result<void>{};
   }
 
-  // Fragment-aware capacity check BEFORE Finalize so caller can retry on
-  // kWouldBlock with an intact bundle. Fragment-count overflow takes
-  // precedence over kWouldBlock (per MessageTooLargeReturnsError test).
   const auto eff_wnd = EffectiveWindow();
   const auto frag_size = MaxUdpPayload();
   const auto bundle_size = b.TotalSize();
   if (bundle_size > frag_size) {
     const auto packets_needed = (bundle_size + frag_size - 1) / frag_size;
     if (packets_needed > rudp::kMaxFragments) {
-      return Error(ErrorCode::kMessageTooLarge,
-                   std::format("Bundle too large for fragmentation: {} bytes ({} fragments, max {})",
-                               bundle_size, packets_needed, rudp::kMaxFragments));
+      return Error(
+          ErrorCode::kMessageTooLarge,
+          std::format("Bundle too large for fragmentation: {} bytes ({} fragments, max {})",
+                      bundle_size, packets_needed, rudp::kMaxFragments));
     }
     if (unacked_.size() + packets_needed > eff_wnd) {
       return Error(ErrorCode::kWouldBlock, "Send window too small for fragmented bundle");
@@ -114,8 +107,6 @@ auto ReliableUdpChannel::SendBundleReliable(class Bundle& b) -> Result<void> {
 
   auto payload = b.Finalize();
 
-  // Mirror Channel::Send so deferred-batch sends honour the channel's
-  // packet filter chain (compression / future encryption).
   if (packet_filter_) {
     auto filtered =
         packet_filter_->SendFilter(std::span<const std::byte>(payload.data(), payload.size()));
@@ -141,15 +132,12 @@ auto ReliableUdpChannel::SendBundleReliable(class Bundle& b) -> Result<void> {
   CancelDelayedAck();
   auto packet = BuildPacket(flags, seq, std::span<const std::byte>(payload.data(), payload.size()));
 
-  // Move into unacked_ before SendTo to keep a single heap allocation;
-  // send a span over the stored bytes.
   const auto now = Clock::now();
   auto& slot = unacked_[seq];
   slot = UnackedPacket{std::move(packet), now, now, 1};
 
   auto result = shared_socket_.SendTo(slot.data, remote_);
   if (!result) {
-    // Roll back so the slot doesn't sit orphaned until kDeadLinkTimeout.
     unacked_.erase(seq);
     next_send_seq_ = seq;
     return result.Error();
@@ -180,7 +168,7 @@ auto ReliableUdpChannel::SendBundleUnreliable(class Bundle& b) -> Result<void> {
 
   uint8_t flags = 0;
   if (remote_seq_ > 0) {
-    flags |= rudp::kFlagHasAck;  // piggyback ACK even on unreliable
+    flags |= rudp::kFlagHasAck;
   }
 
   CancelDelayedAck();
@@ -194,7 +182,6 @@ auto ReliableUdpChannel::SendBundleUnreliable(class Bundle& b) -> Result<void> {
   return Result<void>{};
 }
 
-// Channel virtual — treats raw data as reliable.
 auto ReliableUdpChannel::DoSend(std::span<const std::byte> data) -> Result<size_t> {
   if (state_ == ChannelState::kCondemned) {
     return Error(ErrorCode::kChannelCondemned, "Channel is condemned");
@@ -233,8 +220,6 @@ auto ReliableUdpChannel::DoSend(std::span<const std::byte> data) -> Result<size_
 
 void ReliableUdpChannel::OnCondemned() {
   CancelDelayedAck();
-  StopResendTimer();
-  unacked_.clear();
   rcv_buf_.clear();
   pending_fragments_.clear();
   ack_pending_ = false;
@@ -244,7 +229,6 @@ void ReliableUdpChannel::OnCondemned() {
   pending_dispatch_buf_.shrink_to_fit();
   pending_dispatch_pos_ = 0;
 }
-
 
 auto ReliableUdpChannel::BuildPacket(uint8_t flags, SeqNum seq, std::span<const std::byte> payload,
                                      const FragmentHeader* frag) -> std::vector<std::byte> {
@@ -292,8 +276,6 @@ void ReliableUdpChannel::OnDatagramReceived(std::span<const std::byte> data,
     return;
   }
 
-  // Pure-ACK packets are still peer liveness; reset before drop_window
-  // so injected drops don't trip the inactivity timeout.
   ResetInactivityTimer();
 
   if (drop_duration_ms_ > 0) {
@@ -329,12 +311,15 @@ void ReliableUdpChannel::OnDatagramReceived(std::span<const std::byte> data,
     if (!ack_num || !ack_bits || !una) {
       return;
     }
-    // Cumulative ACK first; SACK fills the post-una gap.
     auto una_acked = ProcessUna(*una);
     if (una_acked != 0) {
       OnAckCwndUpdate(una_acked);
     }
     ProcessAck(*ack_num, *ack_bits);
+  }
+
+  if (state_ == ChannelState::kCondemned) {
+    return;
   }
 
   FragmentHeader frag_hdr{};
@@ -351,8 +336,6 @@ void ReliableUdpChannel::OnDatagramReceived(std::span<const std::byte> data,
 
   auto remaining = reader.Remaining();
   if (remaining == 0) {
-    // Zero-payload reliable packet still records seq so the sender's
-    // una can advance even when its prior ACK was lost.
     if (flags & rudp::kFlagHasSeq) {
       if (!IsDuplicate(seq) && !SeqGreaterThan(seq, rcv_nxt_ + rcv_wnd_)) {
         RecordReceivedSeq(seq);
@@ -368,8 +351,6 @@ void ReliableUdpChannel::OnDatagramReceived(std::span<const std::byte> data,
   }
 
   if (flags & rudp::kFlagHasSeq) {
-    // Reject paths still ScheduleDelayedAck so a lost prior ACK doesn't
-    // strand the sender retransmitting packets we've already delivered.
     if (IsDuplicate(seq)) {
       ATLAS_LOG_DEBUG("Duplicate packet seq={} from {}", seq, remote_.ToString());
       ScheduleDelayedAck();
@@ -416,15 +397,11 @@ auto ReliableUdpChannel::DispatchFiltered(std::span<const std::byte> payload, Ti
     payload = std::span<const std::byte>(filtered_storage.data(), filtered_storage.size());
   }
   OnDataReceived(payload);
-  // DispatchMessagesBudgeted copies any un-dispatched tail before
-  // returning — filtered_storage is safe to drop here.
   return DispatchMessagesBudgeted(payload, deadline);
 }
 
 auto ReliableUdpChannel::ProcessUna(SeqNum una) -> uint32_t {
   uint32_t cleared = 0;
-  // Karn's algorithm: never sample retransmits. The last qualifying
-  // entry std::map iteration sees is the freshest sample.
   bool have_rtt_sample = false;
   Duration rtt_sample{};
   const auto now = Clock::now();
@@ -454,8 +431,6 @@ void ReliableUdpChannel::ProcessAck(SeqNum ack_num, uint32_t ack_bits) {
   uint32_t acked_count = 0;
   auto now = Clock::now();
 
-  // At most one RTT sample per ACK (only from diff == 0). Sampling 33
-  // times collapses SRTT toward the latest sample.
   for (int32_t diff = 0; diff <= 32; ++diff) {
     SeqNum candidate = ack_num - static_cast<SeqNum>(diff);
     if (diff > 0 && !(ack_bits & (1u << (diff - 1)))) {
@@ -538,9 +513,7 @@ void ReliableUdpChannel::RecordReceivedSeq(SeqNum seq) {
   }
 }
 
-// Delivery-state based (rcv_nxt_ + rcv_buf_), NOT remote_seq_/ack_bits:
-// in a gappy stream the SACK window slides off retransmits we still
-// need, so a SACK-based check would mis-drop gap-fillers.
+// Uses delivery state, not SACK state; gaps can slide SACK past needed fills.
 auto ReliableUdpChannel::IsDuplicate(SeqNum seq) const -> bool {
   if (SeqLessThan(seq, rcv_nxt_)) {
     return true;
@@ -551,10 +524,8 @@ auto ReliableUdpChannel::IsDuplicate(SeqNum seq) const -> bool {
   return false;
 }
 
-
 void ReliableUdpChannel::EnqueueForDelivery(SeqNum seq, std::span<const std::byte> payload,
                                             bool is_fragment, const FragmentHeader& frag_hdr) {
-  // Already delivered (seq < rcv_nxt_) — should have been caught by IsDuplicate
   if (SeqLessThan(seq, rcv_nxt_)) {
     return;
   }
@@ -568,8 +539,6 @@ void ReliableUdpChannel::EnqueueForDelivery(SeqNum seq, std::span<const std::byt
 }
 
 auto ReliableUdpChannel::FlushReceiveBuffer(TimePoint deadline) -> bool {
-  // Drain any previously-yielded tail before new packets — preserves
-  // head-of-line ordering across yield/resume.
   if (HasPendingDispatch()) {
     if (DrainPendingDispatch(deadline)) return true;
     if (Clock::now() >= deadline) {
@@ -593,14 +562,11 @@ auto ReliableUdpChannel::FlushReceiveBuffer(TimePoint deadline) -> bool {
       if (DispatchFiltered(entry.payload, deadline)) return true;
     }
 
-    // Deadline check AFTER each delivery so we always progress on at
-    // least one packet per call.
     if (Clock::now() >= deadline) {
       return rcv_buf_.find(rcv_nxt_) != rcv_buf_.end();
     }
   }
 }
-
 
 auto ReliableUdpChannel::SendFragmented(std::span<const std::byte> payload) -> Result<void> {
   auto frag_payload_size = MaxUdpPayload();
@@ -616,8 +582,6 @@ auto ReliableUdpChannel::SendFragmented(std::span<const std::byte> payload) -> R
     return Error(ErrorCode::kWouldBlock, "Send window too small for fragmented message");
   }
 
-  // Outbound/inbound fragment_id spaces are independent (each direction
-  // has its own datagram stream).
   auto frag_id = next_fragment_id_++;
   auto frag_count = static_cast<uint8_t>(total);
 
@@ -656,7 +620,6 @@ auto ReliableUdpChannel::SendFragmented(std::span<const std::byte> payload) -> R
   return Result<void>{};
 }
 
-
 void ReliableUdpChannel::OnFragmentReceived(const FragmentHeader& hdr,
                                             std::span<const std::byte> payload) {
   if (hdr.fragment_count == 0 || hdr.fragment_index >= hdr.fragment_count) {
@@ -666,8 +629,6 @@ void ReliableUdpChannel::OnFragmentReceived(const FragmentHeader& hdr,
 
   auto it = pending_fragments_.find(hdr.fragment_id);
   if (it == pending_fragments_.end()) {
-    // Cap before insert so a peer can't fan unique fragment_ids to
-    // balloon state. Cleanup harvests >30s groups; if still full, LRU.
     if (pending_fragments_.size() >= kMaxPendingFragmentGroups) {
       CleanupStaleFragments();
     }
@@ -684,8 +645,6 @@ void ReliableUdpChannel::OnFragmentReceived(const FragmentHeader& hdr,
     it = inserted_it;
     auto& group_init = it->second;
     group_init.expected_count = hdr.fragment_count;
-    // Buffer grows lazily per fragment — pre-reserving fragment_count*MTU
-    // would waste up to ~371 KB on groups whose fragments never complete.
     group_init.frag_sizes.resize(hdr.fragment_count, 0);
     group_init.first_received = Clock::now();
   } else if (it->second.expected_count != hdr.fragment_count) {
@@ -695,8 +654,6 @@ void ReliableUdpChannel::OnFragmentReceived(const FragmentHeader& hdr,
   auto& group = it->second;
 
   if (group.frag_sizes[hdr.fragment_index] == 0) {
-    // Slot size = MaxUdpPayload(); sender and receiver MTU must match,
-    // otherwise reassembly here corrupts the message.
     auto offset = static_cast<std::size_t>(hdr.fragment_index) * MaxUdpPayload();
     auto needed = offset + payload.size();
     if (group.buffer.size() < needed) {
@@ -729,7 +686,6 @@ void ReliableUdpChannel::CleanupStaleFragments() {
     return (now - pair.second.first_received) >= rudp::kFragmentTimeout;
   });
 }
-
 
 void ReliableUdpChannel::SendAck() {
   if (remote_seq_ == 0) {
@@ -791,7 +747,6 @@ auto ReliableUdpChannel::RebuildPacketHeader(const std::vector<std::byte>& origi
     seq = *s;
   }
 
-  // Skip old ack/ack_bits/una; BuildPacket repopulates from current state.
   if (flags & rudp::kFlagHasAck) {
     reader.Skip(sizeof(uint32_t) * 3);
   }
@@ -859,14 +814,12 @@ void ReliableUdpChannel::CheckResends() {
     }
   }
 
-  // Condemn AFTER the loop (iterator still in use). OnDisconnect (not
-  // Condemn) so disconnect_callback_ runs and NetworkInterface evicts the
-  // channel — a bare Condemn leaks the channel in channels_.
   if (dead_link) {
     ATLAS_LOG_WARNING(
         "Dead link to {}: oldest unacked packet age >= {}ms, condemning channel",
         remote_.ToString(),
         std::chrono::duration_cast<std::chrono::milliseconds>(kDeadLinkTimeout).count());
+    remote_failed_ = true;
     OnDisconnect();
     return;
   }
@@ -876,7 +829,6 @@ void ReliableUdpChannel::CheckResends() {
   }
 }
 
-// KCP-style: slow start + congestion avoidance.
 void ReliableUdpChannel::OnAckCwndUpdate(uint32_t acked_count) {
   if (nocwnd_) {
     return;
@@ -886,11 +838,9 @@ void ReliableUdpChannel::OnAckCwndUpdate(uint32_t acked_count) {
 
   for (uint32_t i = 0; i < acked_count; ++i) {
     if (cwnd_ < ssthresh_) {
-      // Slow start: cwnd doubles per RTT.
       cwnd_++;
       cwnd_incr_ += mss;
     } else {
-      // KCP congestion-avoidance formula.
       if (cwnd_incr_ == 0) {
         cwnd_incr_ = mss;
       }
@@ -918,12 +868,10 @@ void ReliableUdpChannel::OnLossCwndUpdate(bool is_timeout) {
   const auto mss = static_cast<uint32_t>(mtu_);
 
   if (is_timeout) {
-    // TCP Tahoe — aggressive on RTO.
     ssthresh_ = std::max(cwnd_ / 2, 2u);
     cwnd_ = 1;
     cwnd_incr_ = mss;
   } else {
-    // TCP Reno — moderate on fast retransmit.
     ssthresh_ = std::max(in_flight / 2, 2u);
     cwnd_ = ssthresh_ + fast_resend_thresh_;
     cwnd_incr_ = cwnd_ * mss;

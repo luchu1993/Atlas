@@ -630,3 +630,82 @@ TEST_F(NetworkInterfaceTest, RudpServerClusterProfileDisablesCongestionControl) 
   EXPECT_TRUE(server_ch->Nocwnd());
   EXPECT_GT(server_ch->EffectiveWindow(), 1u);
 }
+
+// ============================================================================
+// Condemned channel lifecycle
+// ============================================================================
+
+// TCP has no app-level reliability state — the condemned-channels list
+// drops it on the next ProcessCondemnedChannels tick (sub-tick latency).
+TEST_F(NetworkInterfaceTest, CondemnedTcpChannelDropsOnNextTick) {
+  ASSERT_TRUE(ni_.StartTcpServer(Address("127.0.0.1", 0)).HasValue());
+
+  auto client_sock = Socket::CreateTcp();
+  ASSERT_TRUE(client_sock.HasValue());
+  auto cr = client_sock->Connect(ni_.TcpAddress());
+  ASSERT_TRUE(cr.HasValue() || cr.Error().Code() == ErrorCode::kWouldBlock);
+
+  ASSERT_TRUE(poll_until(dispatcher_, [&] { return ni_.ChannelCount() >= 1u; }));
+
+  ni_.PrepareForShutdown();
+  EXPECT_EQ(ni_.ChannelCount(), 0u);
+  EXPECT_EQ(ni_.CondemnedChannelCount(), 1u);
+
+  // One DoTask sweep is enough — TCP has no unacked.
+  ASSERT_TRUE(poll_until(dispatcher_, [&] { return ni_.CondemnedChannelCount() == 0u; }));
+}
+
+// RUDP with in-flight reliable: condemned channel survives until the
+// peer's ACK drains unacked_, then drops on the following sweep. Tail
+// ACK datagrams from the peer route to the condemned channel via
+// condemned_rudp_by_addr_ (PrepareForShutdown gates new-channel spawn,
+// so the only way the ACK can be processed is through that index).
+TEST_F(NetworkInterfaceTest, CondemnedRudpDrainsAfterPeerAck) {
+  EventDispatcher server_disp{"rudp_drain_server"};
+  server_disp.SetMaxPollWait(Milliseconds(1));
+  NetworkInterface server_ni(server_disp);
+  ASSERT_TRUE(
+      server_ni.StartRudpServer(Address("127.0.0.1", 0), NetworkInterface::ClusterRudpProfile())
+          .HasValue());
+  server_ni.InterfaceTable().RegisterTypedHandler<NetTestMsg>(
+      [](const Address&, Channel*, const NetTestMsg&) {});
+
+  auto cr = ni_.ConnectRudp(server_ni.RudpAddress());
+  ASSERT_TRUE(cr.HasValue());
+  auto* client_ch = *cr;
+  ASSERT_TRUE(client_ch->SendMessage(NetTestMsg{1}).HasValue());
+  EXPECT_GT(client_ch->UnackedCount(), 0u);
+
+  // Sanity: confirm a normal ACK round-trip works in this setup.
+  {
+    auto ack_deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(500);
+    while (std::chrono::steady_clock::now() < ack_deadline && client_ch->UnackedCount() > 0) {
+      server_disp.ProcessOnce();
+      dispatcher_.ProcessOnce();
+      std::this_thread::sleep_for(std::chrono::milliseconds(2));
+    }
+    ASSERT_EQ(client_ch->UnackedCount(), 0u) << "ACK round-trip pre-condition failed";
+  }
+
+  // Now stage a NEW unacked packet, then condemn — the condemned-list
+  // path is what we actually want to exercise.
+  ASSERT_TRUE(client_ch->SendMessage(NetTestMsg{2}).HasValue());
+  EXPECT_GT(client_ch->UnackedCount(), 0u);
+  ni_.PrepareForShutdown();
+  EXPECT_EQ(ni_.ChannelCount(), 0u);
+  EXPECT_EQ(ni_.CondemnedChannelCount(), 1u);
+  EXPECT_GT(client_ch->UnackedCount(), 0u) << "Unacked must persist across Condemn()";
+
+  // Drive both dispatchers; the server's ACK comes back, lands on the
+  // condemned channel via condemned_rudp_by_addr_, drains unacked, and
+  // the next sweep destroys the channel. Allow a generous margin —
+  // server's delayed ACK timer is 10ms.
+  auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(3000);
+  while (std::chrono::steady_clock::now() < deadline && ni_.CondemnedChannelCount() > 0) {
+    server_disp.ProcessOnce();
+    dispatcher_.ProcessOnce();
+    std::this_thread::sleep_for(std::chrono::milliseconds(2));
+  }
+  EXPECT_EQ(ni_.CondemnedChannelCount(), 0u);
+}
+

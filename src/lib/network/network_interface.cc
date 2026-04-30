@@ -23,20 +23,15 @@ void ApplyRudpProfile(ReliableUdpChannel& channel, const NetworkInterface::RudpP
 
 }  // namespace
 
-// ============================================================================
-// Constructor / Destructor
-// ============================================================================
-
 NetworkInterface::NetworkInterface(EventDispatcher& dispatcher)
     : dispatcher_(dispatcher), registration_(dispatcher_.AddFrequentTask(this)) {}
 
 NetworkInterface::~NetworkInterface() {
-  // registration_ destructor automatically calls dispatcher_.remove_frequent_task(this).
-  // Explicitly reset here to ensure removal happens before channel teardown.
   registration_.Reset();
 
   channels_.clear();
   channels_by_id_.clear();
+  condemned_rudp_by_addr_.clear();
   condemned_.clear();
 
   if (tcp_listen_socket_) {
@@ -58,12 +53,7 @@ NetworkInterface::~NetworkInterface() {
   }
 }
 
-// ============================================================================
-// TCP server
-// ============================================================================
-
 auto NetworkInterface::StartTcpServer(const Address& addr) -> Result<void> {
-  // Close existing listen socket if called more than once
   if (tcp_listen_socket_) {
     (void)dispatcher_.Deregister(tcp_listen_socket_->Fd());
     tcp_listen_socket_->Close();
@@ -96,7 +86,6 @@ auto NetworkInterface::StartTcpServer(const Address& addr) -> Result<void> {
 
   tcp_listen_socket_ = std::move(*sock);
 
-  // Register for accept events
   auto reg = dispatcher_.RegisterReader(tcp_listen_socket_->Fd(),
                                         [this](FdHandle, IOEvent) { OnTcpAccept(); });
   if (!reg) {
@@ -106,10 +95,6 @@ auto NetworkInterface::StartTcpServer(const Address& addr) -> Result<void> {
   ATLAS_LOG_INFO("TCP server listening on {}", tcp_address_.ToString());
   return Result<void>{};
 }
-
-// ============================================================================
-// TCP client (async connect)
-// ============================================================================
 
 auto NetworkInterface::ConnectTcp(const Address& addr) -> Result<TcpChannel*> {
   if (shutting_down_) {
@@ -143,11 +128,6 @@ auto NetworkInterface::ConnectTcp(const Address& addr) -> Result<TcpChannel*> {
                                             ATLAS_PROFILE_ZONE_N("TcpChannel::OnWritable");
                                             ch->OnWritable();
                                           }
-                                          // Flush any deferred sends staged by handlers run during
-                                          // OnReadable.  Same role as the FlushDirtySendChannels
-                                          // call at the end of OnRudpReadable: end-of-handler-batch
-                                          // is the canonical batching window for inbound-driven
-                                          // sends.
                                           FlushDirtySendChannels();
                                         });
   if (!reg) {
@@ -163,10 +143,6 @@ auto NetworkInterface::ConnectTcp(const Address& addr) -> Result<TcpChannel*> {
   channels_[addr] = std::move(channel);
   return raw;
 }
-
-// ============================================================================
-// UDP endpoint
-// ============================================================================
 
 auto NetworkInterface::StartUdp(const Address& addr) -> Result<void> {
   auto sock = Socket::CreateUdp();
@@ -203,12 +179,10 @@ auto NetworkInterface::StartUdp(const Address& addr) -> Result<void> {
 auto NetworkInterface::ConnectUdp(const Address& addr) -> Result<UdpChannel*> {
   if (shutting_down_) return Error(ErrorCode::kChannelCondemned, "Shutting down");
 
-  // Open shared UDP socket on first use (bind to any port)
   if (!udp_socket_) {
     if (auto r = StartUdp(Address(0, 0)); !r) return r.Error();
   }
 
-  // Re-use existing channel if already targeting this peer
   if (auto it = channels_.find(addr); it != channels_.end()) {
     auto* udp = dynamic_cast<UdpChannel*>(it->second.get());
     if (!udp) return Error(ErrorCode::kAlreadyExists, "Channel exists with different protocol");
@@ -226,10 +200,6 @@ auto NetworkInterface::ConnectUdp(const Address& addr) -> Result<UdpChannel*> {
   channels_[addr] = std::move(channel);
   return raw;
 }
-
-// ============================================================================
-// Channel access
-// ============================================================================
 
 auto NetworkInterface::FindChannel(const Address& addr) -> Channel* {
   auto it = channels_.find(addr);
@@ -251,10 +221,6 @@ auto NetworkInterface::ChannelCount() const -> size_t {
   return channels_.size();
 }
 
-// ============================================================================
-// Addresses
-// ============================================================================
-
 auto NetworkInterface::TcpAddress() const -> Address {
   return tcp_address_;
 }
@@ -266,10 +232,6 @@ auto NetworkInterface::UdpAddress() const -> Address {
 auto NetworkInterface::RudpAddress() const -> Address {
   return rudp_address_;
 }
-
-// ============================================================================
-// RUDP server / client
-// ============================================================================
 
 auto NetworkInterface::StartRudpServer(const Address& addr) -> Result<void> {
   return StartRudpServer(addr, RudpProfile{});
@@ -317,7 +279,6 @@ auto NetworkInterface::ConnectRudp(const Address& addr, const RudpProfile& profi
     -> Result<ReliableUdpChannel*> {
   if (shutting_down_) return Error(ErrorCode::kChannelCondemned, "Shutting down");
 
-  // Open shared RUDP socket on first use (client side: bind to any port)
   if (!rudp_socket_) {
     auto sock = Socket::CreateUdp();
     if (!sock) return sock.Error();
@@ -342,7 +303,6 @@ auto NetworkInterface::ConnectRudp(const Address& addr, const RudpProfile& profi
     if (!reg) return reg.Error();
   }
 
-  // Re-use existing channel if already connected to this peer
   if (auto it = channels_.find(addr); it != channels_.end()) {
     auto* rudp = dynamic_cast<ReliableUdpChannel*>(it->second.get());
     if (!rudp) return Error(ErrorCode::kAlreadyExists, "Channel exists with different protocol");
@@ -364,9 +324,6 @@ auto NetworkInterface::ConnectRudp(const Address& addr, const RudpProfile& profi
 }
 
 auto NetworkInterface::InternetRudpProfile() -> RudpProfile {
-  // ET-style outer profile. MTU 470 dodges PPPoE/IPSec/mobile MSS
-  // ceilings; deferred flush is an OOM net so tick-end flush stays the
-  // primary drain (mid-tick flushes regress per-call overhead 3–4×).
   RudpProfile profile;
   profile.mtu = 470;
   profile.deferred_flush_threshold = 32 * 1024;
@@ -374,12 +331,6 @@ auto NetworkInterface::InternetRudpProfile() -> RudpProfile {
 }
 
 auto NetworkInterface::ClusterRudpProfile() -> RudpProfile {
-  // Intra-DC profile.  cwnd disabled (no fairness pressure on a
-  // dedicated link), large window for high throughput, MTU at the
-  // KCP default (1400) which fits comfortably on 1500-byte Ethernet.
-  // Deferred flush threshold sits just below kMaxBundleSize (64 KB)
-  // so it only fires as an OOM safety net — tick-end flush is the
-  // primary drain.  See InternetRudpProfile for rationale.
   RudpProfile profile;
   profile.nocwnd = true;
   profile.send_window = 4096;
@@ -394,7 +345,6 @@ void NetworkInterface::SetRudpClientBindAddress(const Address& addr) {
 }
 
 auto NetworkInterface::ConnectRudpNocwnd(const Address& addr) -> Result<ReliableUdpChannel*> {
-  // Re-use existing channel without changing its nocwnd flag
   if (auto it = channels_.find(addr); it != channels_.end()) {
     auto* rudp = dynamic_cast<ReliableUdpChannel*>(it->second.get());
     if (!rudp) return Error(ErrorCode::kAlreadyExists, "Channel exists with different protocol");
@@ -405,10 +355,6 @@ auto NetworkInterface::ConnectRudpNocwnd(const Address& addr) -> Result<Reliable
   if (!result) return result;
   return result;
 }
-
-// ============================================================================
-// Rate limiting
-// ============================================================================
 
 void NetworkInterface::SetRateLimit(uint32_t max_per_second) {
   rate_limit_ = max_per_second;
@@ -422,10 +368,6 @@ void NetworkInterface::SetDisconnectCallback(DisconnectCallback cb) {
   disconnect_callback_ = std::move(cb);
 }
 
-// ============================================================================
-// Shutdown
-// ============================================================================
-
 void NetworkInterface::PrepareForShutdown() {
   shutting_down_ = true;
 
@@ -437,21 +379,11 @@ void NetworkInterface::PrepareForShutdown() {
                  condemned_.size());
 }
 
-// ============================================================================
-// FrequentTask
-// ============================================================================
-
 void NetworkInterface::DoTask() {
   ATLAS_PROFILE_ZONE_N("NetworkInterface::DoTask");
   ProcessCondemnedChannels();
 
-  // Tick-cadence backup for hot channels.  OnRudpReadable normally
-  // re-flushes them within the same callback budget, but if a channel
-  // yielded and no fresh datagram arrived to retrigger
-  // OnRudpReadable, the backlog would otherwise stall until the
-  // peer's next packet.  Bound the per-DoTask drain to half the
-  // OnRudpReadable budget so we don't replicate the cascade-stall
-  // problem we set out to fix.
+  // Backup drain so yielded RUDP channels don't wait for the next datagram.
   if (!hot_channels_.empty()) {
     DrainHotChannels(Clock::now() + kReadableCallbackBudget / 2);
   }
@@ -464,10 +396,6 @@ void NetworkInterface::DoTask() {
     }
   }
 }
-
-// ============================================================================
-// IO callbacks
-// ============================================================================
 
 void NetworkInterface::OnTcpAccept() {
   ATLAS_PROFILE_ZONE_N("NetworkInterface::OnTcpAccept");
@@ -489,10 +417,9 @@ void NetworkInterface::OnTcpAccept() {
     auto& [peer_sock, peer_addr] = *result;
     ++accepts;
 
-    // Rate check
     if (rate_limit_ > 0 && !CheckRateLimit(peer_addr.Ip())) {
       ATLAS_LOG_WARNING("Rate limited connection from {}", peer_addr.ToString());
-      continue;  // Socket destructor closes it
+      continue;
     }
 
     if (shutting_down_) {
@@ -565,12 +492,10 @@ void NetworkInterface::OnUdpReadable() {
       continue;
     }
 
-    // Rate check
     if (rate_limit_ > 0 && !CheckRateLimit(src_addr.Ip())) {
       continue;
     }
 
-    // Find or create UDP channel for this peer
     auto it = channels_.find(src_addr);
     if (it == channels_.end()) {
       if (shutting_down_ || channels_.size() >= kMaxChannels) {
@@ -592,9 +517,6 @@ void NetworkInterface::OnUdpReadable() {
     udp_ch->OnDatagramReceived(recv_buffer.first(bytes));
   }
 
-  // Flush any deferred sends staged by the handlers we just dispatched.
-  // For UdpChannel this is a no-op (TCP/UDP fall-through path doesn't
-  // populate dirty_channels_), kept for symmetry with the RUDP path.
   FlushDirtySendChannels();
 }
 
@@ -625,6 +547,12 @@ void NetworkInterface::OnRudpReadable() {
 
     auto it = channels_.find(src_addr);
     if (it == channels_.end()) {
+      if (auto cond_it = condemned_rudp_by_addr_.find(src_addr);
+          cond_it != condemned_rudp_by_addr_.end()) {
+        cond_it->second->OnDatagramReceived(recv_buffer.first(bytes), deadline);
+        continue;
+      }
+
       if (!rudp_server_mode_ || shutting_down_ || channels_.size() >= kMaxChannels) continue;
 
       auto channel = std::make_unique<ReliableUdpChannel>(dispatcher_, interface_table_,
@@ -647,34 +575,21 @@ void NetworkInterface::OnRudpReadable() {
     rudp_ch->OnDatagramReceived(recv_buffer.first(bytes), deadline);
   }
 
-  // Re-flush channels that yielded mid-cascade.  We share the same
-  // 10 ms deadline as the recv loop so a single OnRudpReadable callback
-  // is bounded end-to-end; whatever doesn't drain here gets a fresh
-  // budget on the next callback or via DoTask's tick-cadence backup.
   if (!hot_channels_.empty()) {
     DrainHotChannels(deadline);
   }
 
-  // Flush deferred sends staged by handlers run during this callback.
-  // Dispatch (handler) → SendMessage(kBatched) → BufferMessageDeferred
-  // → MarkChannelDirty.  This is the canonical batching window for
-  // any send triggered by inbound traffic.
   FlushDirtySendChannels();
 }
 
 void NetworkInterface::FlushDirtySendChannels() {
-  // Iterate by move-and-clear so a channel that re-dirties itself
-  // mid-flush (e.g. a packet_filter chain that calls back into
-  // SendMessage with kBatched urgency) lands in a fresh set instead
-  // of an iterator we're still walking.
+  // Move-and-clear so a channel that re-dirties itself mid-flush lands
+  // in a fresh set instead of the iterator we're still walking.
   if (dirty_channels_.empty()) return;
   ATLAS_PROFILE_ZONE_N("NetworkInterface::FlushDirtySendChannels");
   std::unordered_set<Channel*> snapshot;
   snapshot.swap(dirty_channels_);
   for (Channel* ch : snapshot) {
-    // Channel::FlushDeferred is virtual; the default no-op covers
-    // transports without a deferred bundle (plain UDP).  RUDP and
-    // TCP both override.  No dynamic_cast needed.
     if (auto r = ch->FlushDeferred(); !r) {
       ATLAS_LOG_DEBUG("FlushDirty: channel {} returned {}", ch->RemoteAddress().ToString(),
                       r.Error().Message());
@@ -695,25 +610,16 @@ void NetworkInterface::DrainHotChannels(TimePoint deadline) {
   }
 }
 
-// ============================================================================
-// Channel lifecycle
-// ============================================================================
-
 void NetworkInterface::OnChannelDisconnect(Channel& channel) {
-  // Copy callback data before condemn_channel, which may re-enter
-  // on_channel_disconnect if the disconnect_callback_ triggers further
-  // disconnects (cascading). Condemning first ensures the channel is
-  // removed from the active set before any callback runs.
   auto addr = channel.RemoteAddress();
   CondemnChannel(addr);
 
-  // Invoke after condemn to avoid re-entrancy on the same channel.
   if (disconnect_callback_) {
     disconnect_callback_(channel);
   }
 }
 
-void NetworkInterface::CondemnChannel(const Address& addr) {
+void NetworkInterface::CondemnChannel(Address addr) {
   auto it = channels_.find(addr);
   if (it == channels_.end()) {
     return;
@@ -723,38 +629,60 @@ void NetworkInterface::CondemnChannel(const Address& addr) {
   channels_.erase(it);
   channels_by_id_.erase(channel->ChannelId());
 
-  // hot_channels_ holds raw pointers; if this channel had pending
-  // backlog when it was condemned, scrub the entry so the next
-  // DrainHotChannels pass doesn't dereference the moved-out unique_ptr.
-  if (auto* rudp = dynamic_cast<ReliableUdpChannel*>(channel.get())) {
+  auto* rudp = dynamic_cast<ReliableUdpChannel*>(channel.get());
+  if (rudp) {
     hot_channels_.erase(rudp);
   }
-  // dirty_channels_ holds raw Channel* pointers; same scrub rule.
   dirty_channels_.erase(channel.get());
 
-  // UDP and RUDP channels share a single socket — deregistering it would
-  // break all other channels on that socket. Only deregister for TCP.
   const bool kSharedFd = (rudp_socket_ && channel->Fd() == rudp_socket_->Fd()) ||
                          (udp_socket_ && channel->Fd() == udp_socket_->Fd());
   if (!kSharedFd) (void)dispatcher_.Deregister(channel->Fd());
   channel->Condemn();
 
+  if (rudp && rudp->HasUnackedReliablePackets()) {
+    condemned_rudp_by_addr_[addr] = rudp;
+  }
   condemned_.push_back({std::move(channel), Clock::now()});
 
-  // Enforce the cap: force-close the oldest entry if we are over the limit.
   while (condemned_.size() > kMaxCondemnedChannels) {
     ATLAS_LOG_WARNING(
         "NetworkInterface: condemned channel list at capacity ({}), "
         "force-closing oldest entry",
         kMaxCondemnedChannels);
+    EraseCondemnedRudpIndex(condemned_.front().channel.get());
     condemned_.pop_front();
   }
 }
 
+void NetworkInterface::EraseCondemnedRudpIndex(Channel* channel) {
+  auto* rudp = dynamic_cast<ReliableUdpChannel*>(channel);
+  if (!rudp) return;
+  auto idx_it = condemned_rudp_by_addr_.find(rudp->RemoteAddress());
+  if (idx_it != condemned_rudp_by_addr_.end() && idx_it->second == rudp) {
+    condemned_rudp_by_addr_.erase(idx_it);
+  }
+}
+
+auto NetworkInterface::ShouldDeleteCondemned(const Channel& channel, TimePoint condemned_at,
+                                             TimePoint now) const -> bool {
+  return !channel.HasUnackedReliablePackets() || channel.HasRemoteFailed() ||
+         (now - condemned_at) >= kCondemnAgeLimit;
+}
+
 void NetworkInterface::ProcessCondemnedChannels() {
-  auto now = Clock::now();
-  while (!condemned_.empty() && (now - condemned_.front().condemned_at) >= kCondemnTimeout) {
-    condemned_.pop_front();
+  const auto now = Clock::now();
+  for (auto it = condemned_.begin(); it != condemned_.end();) {
+    if (!ShouldDeleteCondemned(*it->channel, it->condemned_at, now)) {
+      ++it;
+      continue;
+    }
+    if ((now - it->condemned_at) >= kCondemnAgeLimit && it->channel->HasUnackedReliablePackets()) {
+      ATLAS_LOG_WARNING("Condemned channel {} hit age limit with unacked packets — discarding",
+                        it->channel->RemoteAddress().ToString());
+    }
+    EraseCondemnedRudpIndex(it->channel.get());
+    it = condemned_.erase(it);
   }
 }
 
@@ -765,10 +693,6 @@ auto NetworkInterface::DatagramRecvBuffer() -> std::span<std::byte> {
 
   return {datagram_recv_scratch_.data(), datagram_recv_scratch_.Capacity()};
 }
-
-// ============================================================================
-// Rate limiting
-// ============================================================================
 
 auto NetworkInterface::CheckRateLimit(uint32_t ip) -> bool {
   static constexpr std::size_t kMaxRateTrackers = 100'000;
@@ -794,7 +718,6 @@ auto NetworkInterface::CallbackBudgetExhausted(std::size_t processed, std::size_
 }
 
 void NetworkInterface::CleanupStaleRateTrackers() {
-  // Remove entries whose window started more than 2 seconds ago (i.e. inactive IPs).
   auto now = Clock::now();
   std::erase_if(rate_trackers_, [now](const auto& kv) {
     return (now - kv.second.window_start) > std::chrono::seconds(2);

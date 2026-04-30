@@ -132,7 +132,12 @@ TEST_F(ReliableUdpTest, AckClearsUnacked) {
   EXPECT_EQ(channel_a.UnackedCount(), 0u);
 }
 
-TEST_F(ReliableUdpTest, CondemnClearsReliableState) {
+TEST_F(ReliableUdpTest, CondemnPreservesUnackedForAckDrain) {
+  // unacked_ is preserved after Condemn() so the peer can finish
+  // ACKing in-flight reliable packets. Destruction is deferred to
+  // NetworkInterface::ProcessCondemnedChannels, which sweeps once
+  // HasUnackedReliablePackets() is false (or HasRemoteFailed() / age
+  // limit).
   auto sock_a = Socket::CreateUdp();
   ASSERT_TRUE(sock_a.HasValue());
   ASSERT_TRUE(sock_a->Bind(Address("127.0.0.1", 0)).HasValue());
@@ -151,7 +156,86 @@ TEST_F(ReliableUdpTest, CondemnClearsReliableState) {
 
   channel_a.Condemn();
   EXPECT_EQ(channel_a.State(), ChannelState::kCondemned);
-  EXPECT_EQ(channel_a.UnackedCount(), 0u);
+  EXPECT_EQ(channel_a.UnackedCount(), 1u);
+  EXPECT_TRUE(channel_a.HasUnackedReliablePackets());
+  EXPECT_FALSE(channel_a.HasRemoteFailed());
+}
+
+TEST_F(ReliableUdpTest, CondemnedChannelDrainsUnackedAfterPeerAck) {
+  // Peer ACK still reaches a condemned channel and empties unacked_,
+  // allowing the condemned-channels list to delete it on the next sweep.
+  auto sock_a = Socket::CreateUdp();
+  ASSERT_TRUE(sock_a.HasValue());
+  ASSERT_TRUE(sock_a->Bind(Address("127.0.0.1", 0)).HasValue());
+  auto addr_a = sock_a->LocalAddress().Value();
+
+  auto sock_b = Socket::CreateUdp();
+  ASSERT_TRUE(sock_b.HasValue());
+  ASSERT_TRUE(sock_b->Bind(Address("127.0.0.1", 0)).HasValue());
+  auto addr_b = sock_b->LocalAddress().Value();
+
+  table_.RegisterTypedHandler<RudpTestMsg>([](const Address&, Channel*, const RudpTestMsg&) {});
+
+  ReliableUdpChannel channel_a(dispatcher_, table_, *sock_a, addr_b);
+  channel_a.Activate();
+  ReliableUdpChannel channel_b(dispatcher_, table_, *sock_b, addr_a);
+  channel_b.Activate();
+
+  channel_a.Bundle().AddMessage(RudpTestMsg{1});
+  ASSERT_TRUE(channel_a.SendReliable().HasValue());
+  EXPECT_EQ(channel_a.UnackedCount(), 1u);
+
+  std::this_thread::sleep_for(std::chrono::milliseconds(50));
+  pump_datagrams(*sock_b, channel_b);
+
+  // Condemn A — unacked must persist since B's ACK has not arrived.
+  channel_a.Condemn();
+  EXPECT_TRUE(channel_a.HasUnackedReliablePackets());
+
+  // B replies (piggybacks ACK); A processes the datagram on the
+  // condemned path and unacked drains.
+  channel_b.Bundle().AddMessage(RudpTestMsg{2});
+  (void)channel_b.SendReliable();
+
+  std::this_thread::sleep_for(std::chrono::milliseconds(50));
+  pump_datagrams(*sock_a, channel_a);
+
+  EXPECT_FALSE(channel_a.HasUnackedReliablePackets());
+}
+
+TEST_F(ReliableUdpTest, CondemnedChannelSuppressesPayloadDispatch) {
+  // After Condemn(), inbound reliable payload must NOT reach handlers
+  // — the channel is dead from the app's perspective even though it
+  // still drains its own unacked.
+  auto sock_a = Socket::CreateUdp();
+  ASSERT_TRUE(sock_a.HasValue());
+  ASSERT_TRUE(sock_a->Bind(Address("127.0.0.1", 0)).HasValue());
+  auto addr_a = sock_a->LocalAddress().Value();
+
+  auto sock_b = Socket::CreateUdp();
+  ASSERT_TRUE(sock_b.HasValue());
+  ASSERT_TRUE(sock_b->Bind(Address("127.0.0.1", 0)).HasValue());
+  auto addr_b = sock_b->LocalAddress().Value();
+
+  uint32_t handler_calls = 0;
+  table_.RegisterTypedHandler<RudpTestMsg>(
+      [&](const Address&, Channel*, const RudpTestMsg&) { ++handler_calls; });
+
+  ReliableUdpChannel channel_a(dispatcher_, table_, *sock_a, addr_b);
+  channel_a.Activate();
+  ReliableUdpChannel channel_b(dispatcher_, table_, *sock_b, addr_a);
+  channel_b.Activate();
+
+  channel_b.Condemn();
+  EXPECT_TRUE(channel_b.IsCondemned());
+
+  channel_a.Bundle().AddMessage(RudpTestMsg{42});
+  ASSERT_TRUE(channel_a.SendReliable().HasValue());
+
+  std::this_thread::sleep_for(std::chrono::milliseconds(50));
+  pump_datagrams(*sock_b, channel_b);
+
+  EXPECT_EQ(handler_calls, 0u);
 }
 
 TEST_F(ReliableUdpTest, CondemnedSendReliableClearsBundle) {
