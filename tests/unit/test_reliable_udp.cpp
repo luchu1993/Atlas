@@ -42,7 +42,6 @@ class ReliableUdpTest : public ::testing::Test {
 
   void SetUp() override { dispatcher_.SetMaxPollWait(Milliseconds(1)); }
 
-  // Helper: read all pending datagrams from a socket and feed to channel
   void pump_datagrams(Socket& sock, ReliableUdpChannel& channel) {
     std::array<std::byte, 2048> buf{};
     while (true) {
@@ -54,7 +53,6 @@ class ReliableUdpTest : public ::testing::Test {
 };
 
 TEST_F(ReliableUdpTest, ReliableSendAndReceive) {
-  // Create two UDP sockets for peer A and peer B
   auto sock_a = Socket::CreateUdp();
   ASSERT_TRUE(sock_a.HasValue());
   ASSERT_TRUE(sock_a->Bind(Address("127.0.0.1", 0)).HasValue());
@@ -65,7 +63,6 @@ TEST_F(ReliableUdpTest, ReliableSendAndReceive) {
   ASSERT_TRUE(sock_b->Bind(Address("127.0.0.1", 0)).HasValue());
   auto addr_b = sock_b->LocalAddress().Value();
 
-  // Register handler on B's interface table
   bool received = false;
   uint32_t received_value = 0;
   table_.RegisterTypedHandler<RudpTestMsg>([&](const Address&, Channel*, const RudpTestMsg& msg) {
@@ -73,25 +70,22 @@ TEST_F(ReliableUdpTest, ReliableSendAndReceive) {
     received_value = msg.value;
   });
 
-  // Create channels
   ReliableUdpChannel channel_a(dispatcher_, table_, *sock_a, addr_b);
   channel_a.Activate();
 
   ReliableUdpChannel channel_b(dispatcher_, table_, *sock_b, addr_a);
   channel_b.Activate();
 
-  // A sends reliable message to B
   channel_a.Bundle().AddMessage(RudpTestMsg{42});
   auto send_result = channel_a.SendReliable();
   ASSERT_TRUE(send_result.HasValue()) << send_result.Error().Message();
 
-  // B receives
   std::this_thread::sleep_for(std::chrono::milliseconds(50));
   pump_datagrams(*sock_b, channel_b);
 
   EXPECT_TRUE(received);
   EXPECT_EQ(received_value, 42u);
-  EXPECT_EQ(channel_a.UnackedCount(), 1u);  // still unacked (B hasn't sent ACK back)
+  EXPECT_EQ(channel_a.UnackedCount(), 1u);
 }
 
 TEST_F(ReliableUdpTest, AckClearsUnacked) {
@@ -112,7 +106,6 @@ TEST_F(ReliableUdpTest, AckClearsUnacked) {
   ReliableUdpChannel channel_b(dispatcher_, table_, *sock_b, addr_a);
   channel_b.Activate();
 
-  // A sends to B
   channel_a.Bundle().AddMessage(RudpTestMsg{1});
   (void)channel_a.SendReliable();
 
@@ -128,7 +121,6 @@ TEST_F(ReliableUdpTest, AckClearsUnacked) {
   std::this_thread::sleep_for(std::chrono::milliseconds(50));
   pump_datagrams(*sock_a, channel_a);
 
-  // A should have processed B's ACK
   EXPECT_EQ(channel_a.UnackedCount(), 0u);
 }
 
@@ -239,10 +231,6 @@ TEST_F(ReliableUdpTest, CondemnedChannelSuppressesPayloadDispatch) {
 }
 
 TEST_F(ReliableUdpTest, CondemnedSendReliableClearsBundle) {
-  // Regression for #6: SendReliable on a condemned channel must drop
-  // staged bundle bytes — otherwise a caller holding a zombie pointer
-  // and repeatedly AddMessage + SendReliable grows bundle_ unboundedly
-  // until destructor (matches Channel::Send and SendUnreliable).
   auto sock_a = Socket::CreateUdp();
   ASSERT_TRUE(sock_a.HasValue());
   ASSERT_TRUE(sock_a->Bind(Address("127.0.0.1", 0)).HasValue());
@@ -261,9 +249,6 @@ TEST_F(ReliableUdpTest, CondemnedSendReliableClearsBundle) {
 }
 
 TEST_F(ReliableUdpTest, FragmentTableCappedUnderAttack) {
-  // Regression for #1: a peer fanning out unique fragment_ids with
-  // expected_count=255 and only fragment_index=0 must not balloon
-  // pending_fragments_. Cap is 16; LRU evicts oldest when full.
   auto sock_b = Socket::CreateUdp();
   ASSERT_TRUE(sock_b.HasValue());
   ASSERT_TRUE(sock_b->Bind(Address("127.0.0.1", 0)).HasValue());
@@ -272,37 +257,28 @@ TEST_F(ReliableUdpTest, FragmentTableCappedUnderAttack) {
   ReliableUdpChannel channel_b(dispatcher_, table_, *sock_b, addr_a);
   channel_b.Activate();
 
-  // Build a synthetic stream of fragmented packets with different
-  // fragment_ids but only fragment_index=0 (never completes). Feed
-  // them as if they came in-order so FlushReceiveBuffer reaches
-  // OnFragmentReceived for each.
   constexpr uint32_t kAttackCount = 64;
   std::array<std::byte, 32> buf{};
   for (uint32_t i = 0; i < kAttackCount; ++i) {
-    // Wire layout: flags(1) seq(4) frag_id(2) frag_idx(1) frag_cnt(1) payload
     std::size_t off = 0;
-    buf[off++] = std::byte{0x01 | 0x02 | 0x08};  // Reliable | HasSeq | Fragment
-    uint32_t seq_le = i + 1;                     // seq starts at 1
+    buf[off++] = std::byte{0x01 | 0x02 | 0x08};
+    uint32_t seq_le = i + 1;
     std::memcpy(buf.data() + off, &seq_le, 4);
     off += 4;
-    uint16_t fid_le = static_cast<uint16_t>(i + 1);  // unique each round
+    uint16_t fid_le = static_cast<uint16_t>(i + 1);
     std::memcpy(buf.data() + off, &fid_le, 2);
     off += 2;
-    buf[off++] = std::byte{0};     // fragment_index = 0
-    buf[off++] = std::byte{255};   // fragment_count = 255 (max-fanout)
-    buf[off++] = std::byte{0xAB};  // 1 byte placeholder payload
+    buf[off++] = std::byte{0};
+    buf[off++] = std::byte{255};
+    buf[off++] = std::byte{0xAB};
     channel_b.OnDatagramReceived(std::span<const std::byte>(buf.data(), off));
   }
 
-  // Cap is 16; even with 64 attacks queued, pending must stay <= cap.
   EXPECT_LE(channel_b.PendingFragmentGroupCount(), 16u);
   EXPECT_GT(channel_b.PendingFragmentGroupCount(), 0u);
 }
 
 TEST_F(ReliableUdpTest, AckOnlyDatagramBumpsInactivity) {
-  // Regression for #5: pure-ACK datagrams (no payload) must reset
-  // last_activity_ — otherwise a server that pushes data while the
-  // client only ACKs back trips its inactivity timeout.
   auto sock_a = Socket::CreateUdp();
   ASSERT_TRUE(sock_a.HasValue());
   ASSERT_TRUE(sock_a->Bind(Address("127.0.0.1", 0)).HasValue());
@@ -312,14 +288,10 @@ TEST_F(ReliableUdpTest, AckOnlyDatagramBumpsInactivity) {
   channel_a.Activate();
   channel_a.SetInactivityTimeout(std::chrono::milliseconds(100));
 
-  // Wait past the inactivity threshold WITHOUT any inbound traffic.
-  // Then feed a pure-ACK datagram and verify state stays kActive.
   std::this_thread::sleep_for(std::chrono::milliseconds(80));
 
-  // Synthetic ACK-only datagram: flags=kFlagHasAck(0x04) + ack_num(4) +
-  // ack_bits(4) + una(4). 13 bytes total, no seq, no payload.
   std::array<std::byte, 13> ack_buf{};
-  ack_buf[0] = std::byte{0x04};  // kFlagHasAck only
+  ack_buf[0] = std::byte{0x04};
   uint32_t ack_num = 1;
   uint32_t ack_bits = 0;
   uint32_t una = 1;
@@ -328,8 +300,6 @@ TEST_F(ReliableUdpTest, AckOnlyDatagramBumpsInactivity) {
   std::memcpy(ack_buf.data() + 9, &una, 4);
   channel_a.OnDatagramReceived(std::span<const std::byte>(ack_buf));
 
-  // Drive dispatcher long enough that an unrefreshed inactivity timer
-  // would fire (cumulative > 100 ms since channel start).
   std::this_thread::sleep_for(std::chrono::milliseconds(50));
   dispatcher_.ProcessOnce();
 
@@ -423,10 +393,6 @@ TEST_F(ReliableUdpTest, RttEstimation) {
   EXPECT_LT(updated_us, 100'000) << "RTT should be reasonable on loopback";
 }
 
-// ============================================================================
-// KCP-inspired optimizations
-// ============================================================================
-
 TEST_F(ReliableUdpTest, NodelayLowersMinRto) {
   auto sock_a = Socket::CreateUdp();
   ASSERT_TRUE(sock_a.HasValue());
@@ -480,10 +446,6 @@ TEST_F(ReliableUdpTest, FastResendConfiguration) {
   channel_a.SetNodelay(true);
   EXPECT_TRUE(channel_a.Nodelay());
 }
-
-// ============================================================================
-// Fragmentation tests
-// ============================================================================
 
 // A large message that exceeds MTU
 struct LargeMsg {
@@ -566,10 +528,6 @@ TEST_F(ReliableUdpTest, FragmentedSendAndReceive) {
     EXPECT_EQ(received_data[i], static_cast<uint8_t>(i % 256)) << "Mismatch at byte " << i;
   }
 }
-
-// ============================================================================
-// Ordered delivery tests
-// ============================================================================
 
 TEST_F(ReliableUdpTest, OrderedDelivery) {
   // Verify messages are dispatched in order even if received out-of-order.
@@ -847,16 +805,6 @@ TEST_F(ReliableUdpTest, DispatchMessagesBudgetedYieldsBetweenHandlers) {
 }
 
 TEST_F(ReliableUdpTest, GapFillerOutsideSackWindowNotDroppedAsDuplicate) {
-  // Regression: the receiver must not treat a never-seen seq as duplicate
-  // simply because it falls outside the 32-bit SACK reporting window
-  // (remote_seq_ - seq > 32). Pre-fix, IsDuplicate returned "too old" and
-  // dropped the only retransmit that could fill the gap, leading to dead
-  // link.
-  //
-  // Scenario: sender emits seq 1..40. Feed seq 40 first (advances
-  // remote_seq_ to 40), then feed the long-delayed gap-filler seq 1.
-  // diff = 39 > 32, so the old check would drop it. After the fix, seq 1
-  // is accepted and rcv_nxt_ advances to 2.
   auto sock_a = Socket::CreateUdp();
   ASSERT_TRUE(sock_a.HasValue());
   ASSERT_TRUE(sock_a->Bind(Address("127.0.0.1", 0)).HasValue());
@@ -896,19 +844,15 @@ TEST_F(ReliableUdpTest, GapFillerOutsideSackWindowNotDroppedAsDuplicate) {
   ReliableUdpChannel channel_b(dispatcher_, table_, *sock_b, addr_a);
   channel_b.Activate();
 
-  // Feed the highest seq first to push remote_seq_ far ahead of rcv_nxt_.
   channel_b.OnDatagramReceived(datagrams[kCount - 1]);
-  EXPECT_EQ(channel_b.RecvNextSeq(), 1u);   // still waiting for seq 1
-  EXPECT_EQ(channel_b.RecvBufCount(), 1u);  // seq 40 buffered
+  EXPECT_EQ(channel_b.RecvNextSeq(), 1u);
+  EXPECT_EQ(channel_b.RecvBufCount(), 1u);
 
-  // Now feed seq 1 — diff = 39 > SACK window (32). Pre-fix: dropped.
   channel_b.OnDatagramReceived(datagrams[0]);
   ASSERT_EQ(received_order.size(), 1u);
   EXPECT_EQ(received_order[0], 1u);
   EXPECT_EQ(channel_b.RecvNextSeq(), 2u);
 
-  // Feed the rest in arbitrary order; everything should drain in seq
-  // order without any drop.
   for (uint32_t i = 2; i < kCount; ++i) {
     channel_b.OnDatagramReceived(datagrams[i - 1]);
   }
@@ -1000,10 +944,6 @@ TEST_F(ReliableUdpTest, UnreliableBypassesOrdering) {
   EXPECT_TRUE(received);
   EXPECT_EQ(channel_b.RecvNextSeq(), 1u);  // rcv_nxt unchanged (no seq tracking)
 }
-
-// ============================================================================
-// Congestion control tests
-// ============================================================================
 
 TEST_F(ReliableUdpTest, CwndStartsAtOne) {
   auto sock = Socket::CreateUdp();
@@ -1133,11 +1073,6 @@ TEST_F(ReliableUdpTest, MessageTooLargeReturnsError) {
   EXPECT_EQ(result.Error().Code(), ErrorCode::kMessageTooLarge);
 }
 
-// ============================================================================
-// Review issue #10: cwnd=1 correctly limits initial sends, and after first
-// ACK exchange cwnd grows to 2 allowing a second send.
-// ============================================================================
-
 TEST_F(ReliableUdpTest, CwndGrowsAfterFirstAckAllowsSecondSend) {
   auto sock_a = Socket::CreateUdp();
   ASSERT_TRUE(sock_a.HasValue());
@@ -1194,12 +1129,6 @@ TEST_F(ReliableUdpTest, CwndGrowsAfterFirstAckAllowsSecondSend) {
   ASSERT_TRUE(r4.HasValue()) << "Second send should succeed with cwnd>=2";
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// KCP-style cumulative ACK (UNA) tests — guard the fix for the dead-link
-// regression where >33-packet bursts left the front of the send queue
-// permanently stranded once the SACK bitmap (32-bit window) lost reach.
-// ─────────────────────────────────────────────────────────────────────────────
-
 TEST_F(ReliableUdpTest, UnaClearsPacketsBeyondSackWindow) {
   auto sock_a = Socket::CreateUdp();
   ASSERT_TRUE(sock_a.HasValue());
@@ -1237,10 +1166,7 @@ TEST_F(ReliableUdpTest, UnaClearsPacketsBeyondSackWindow) {
   pump_datagrams(*sock_b, channel_b);
   EXPECT_EQ(channel_b.RecvNextSeq(), kBurst + 1u);
 
-  // B sends a single reliable reply. Its ACK header carries
-  // una = rcv_nxt_ = 51, ack_num = 50, ack_bits covering 18..49.
-  // Pre-fix this would clear only seqs 18..50 (33 entries) and leave 1..17
-  // stranded; post-fix the una pass clears the whole 1..50 range first.
+  // una covers the whole received prefix even when ack_bits cannot reach the oldest entries.
   channel_b.Bundle().AddMessage(RudpTestMsg{999});
   ASSERT_TRUE(channel_b.SendReliable().HasValue());
 
@@ -1431,11 +1357,6 @@ struct RudpTestMsgBatchedReliable {
 };
 
 TEST_F(ReliableUdpTest, FlushDeferredAppliesPacketFilter) {
-  // Regression: SendBundleReliable / SendBundleUnreliable used to bypass
-  // packet_filter_ entirely — a filter installed via SetPacketFilter
-  // applied to Channel::Send but not to FlushDeferred.  Cellapp's
-  // witness traffic and any future batched path therefore went out
-  // un-compressed / un-encrypted.  This test pins the fix.
   auto sock_a = Socket::CreateUdp();
   ASSERT_TRUE(sock_a.HasValue());
   ASSERT_TRUE(sock_a->Bind(Address("127.0.0.1", 0)).HasValue());
@@ -1451,26 +1372,16 @@ TEST_F(ReliableUdpTest, FlushDeferredAppliesPacketFilter) {
   auto filter = std::make_shared<RecordingXorFilter>(std::byte{0x5A});
   channel_a.SetPacketFilter(filter);
 
-  // One reliable + one unreliable so both deferred bundles fire.
-  // Both descriptors are kBatched so SendMessage routes through the
-  // deferred-bundle path (formerly BufferMessageDeferred).
   ASSERT_TRUE(channel_a.SendMessage(RudpTestMsgBatchedReliable{1}).HasValue());
   ASSERT_TRUE(channel_a.SendMessage(RudpTestMsgUnreliable{2}).HasValue());
   ASSERT_TRUE(channel_a.FlushDeferred().HasValue());
 
-  // FlushDeferred sends unreliable first, then reliable — both go
-  // through SendFilter exactly once each.  Pre-fix this would be 0.
   EXPECT_EQ(filter->SendCalls(), 2)
       << "SendBundle{Reliable,Unreliable} must call SendFilter once each";
   EXPECT_GT(filter->LastSendSize(), 0u) << "Filter must see non-empty bundle bytes";
 }
 
 TEST_F(ReliableUdpTest, PacketFilterAppliesOnRecvPath) {
-  // Round-trip with the same XOR filter on both ends: A's SendFilter
-  // XOR's the bytes outbound; B's RecvFilter must XOR them back before
-  // dispatch.  Pre-fix RUDP's OnDatagramReceived bypassed RecvFilter
-  // (only TcpChannel honoured it), so B saw raw filtered bytes and
-  // failed to deserialize.
   auto sock_a = Socket::CreateUdp();
   ASSERT_TRUE(sock_a.HasValue());
   ASSERT_TRUE(sock_a->Bind(Address("127.0.0.1", 0)).HasValue());
@@ -1509,9 +1420,6 @@ TEST_F(ReliableUdpTest, PacketFilterAppliesOnRecvPath) {
 }
 
 TEST_F(ReliableUdpTest, SetMtuChangesMaxUdpPayload) {
-  // Per-channel MTU override drives MaxUdpPayload() and the fragment
-  // boundary.  Defaults to rudp::kDefaultMtu (1400).  Internet profile
-  // sets ~470; cluster profile keeps 1400.
   auto sock = Socket::CreateUdp();
   ASSERT_TRUE(sock.HasValue());
   ASSERT_TRUE(sock->Bind(Address("127.0.0.1", 0)).HasValue());
@@ -1524,6 +1432,31 @@ TEST_F(ReliableUdpTest, SetMtuChangesMaxUdpPayload) {
   ch.SetMtu(470);
   EXPECT_EQ(ch.Mtu(), 470u);
   EXPECT_EQ(ch.MaxUdpPayload(), 470u - rudp::kMaxHeaderSize);
+}
+
+TEST_F(ReliableUdpTest, SetMtuClampsBelowHeaderSize) {
+  auto sock = Socket::CreateUdp();
+  ASSERT_TRUE(sock.HasValue());
+  ASSERT_TRUE(sock->Bind(Address("127.0.0.1", 0)).HasValue());
+
+  ReliableUdpChannel ch(dispatcher_, table_, *sock, Address("127.0.0.1", 1));
+  ch.SetMtu(1);
+
+  EXPECT_EQ(ch.Mtu(), rudp::kMinMtu);
+  EXPECT_EQ(ch.MaxUdpPayload(), 1u);
+}
+
+TEST_F(ReliableUdpTest, WindowSettersClampToOne) {
+  auto sock = Socket::CreateUdp();
+  ASSERT_TRUE(sock.HasValue());
+  ASSERT_TRUE(sock->Bind(Address("127.0.0.1", 0)).HasValue());
+
+  ReliableUdpChannel ch(dispatcher_, table_, *sock, Address("127.0.0.1", 1));
+  ch.SetSendWindow(0);
+  ch.SetRecvWindow(0);
+
+  EXPECT_EQ(ch.EffectiveWindow(), 1u);
+  EXPECT_EQ(ch.RecvWindow(), 1u);
 }
 
 // 256 bytes — body that, when bundled three times into one deferred

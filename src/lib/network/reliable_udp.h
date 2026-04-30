@@ -1,6 +1,7 @@
 #ifndef ATLAS_LIB_NETWORK_RELIABLE_UDP_H_
 #define ATLAS_LIB_NETWORK_RELIABLE_UDP_H_
 
+#include <algorithm>
 #include <cstdint>
 #include <map>
 #include <unordered_map>
@@ -24,6 +25,7 @@ inline constexpr uint8_t kFlagFragment = 0x08;
 
 // flags + seq + ack + ack_bits + una + fragment header.
 inline constexpr std::size_t kMaxHeaderSize = 21;
+inline constexpr std::size_t kMinMtu = kMaxHeaderSize + 1;
 
 // Both endpoints must agree; reassembly assumes uniform chunk size.
 inline constexpr std::size_t kDefaultMtu = 1400;
@@ -80,12 +82,12 @@ class ReliableUdpChannel : public Channel {
 
   void SetFastResendThresh(uint32_t thresh) { fast_resend_thresh_ = thresh; }
 
-  void SetSendWindow(uint32_t wnd) { send_window_ = wnd; }
-  void SetRecvWindow(uint32_t wnd) { rcv_wnd_ = wnd; }
+  void SetSendWindow(uint32_t wnd) { send_window_ = std::max(wnd, 1u); }
+  void SetRecvWindow(uint32_t wnd) { rcv_wnd_ = std::max(wnd, 1u); }
   [[nodiscard]] auto RecvWindow() const -> uint32_t { return rcv_wnd_; }
 
   // Both endpoints must agree.
-  void SetMtu(std::size_t mtu) { mtu_ = mtu; }
+  void SetMtu(std::size_t mtu) { mtu_ = std::max(mtu, rudp::kMinMtu); }
   [[nodiscard]] auto Mtu() const -> std::size_t { return mtu_; }
   [[nodiscard]] auto MaxUdpPayload() const -> std::size_t { return mtu_ - rudp::kMaxHeaderSize; }
 

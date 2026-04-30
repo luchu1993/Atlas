@@ -1,13 +1,3 @@
-// Integration test: Bidirectional RUDP messaging between two NetworkInterface
-// instances, exercising the full NetworkInterface → ReliableUdpChannel path.
-//
-// Scenarios:
-//   1. Client connects to server via RUDP; sends a message; server receives it.
-//   2. Server sends a reply back; client receives it (full round-trip).
-//   3. Multiple messages in one direction are received in order.
-//   4. Large (fragmented) payload is reassembled correctly end-to-end.
-//   5. connect_rudp_nocwnd creates a channel with congestion control disabled.
-
 #include <atomic>
 #include <chrono>
 #include <string>
@@ -22,10 +12,6 @@
 #include "network/reliable_udp.h"
 
 using namespace atlas;
-
-// ============================================================================
-// Message definitions
-// ============================================================================
 
 struct RudpIntMsg {
   uint32_t seq{0};
@@ -80,10 +66,6 @@ struct RudpLargeMsg {
   }
 };
 
-// ============================================================================
-// Helpers
-// ============================================================================
-
 template <typename Pred>
 static bool poll_both_until(NetworkInterface& a_ni, EventDispatcher& a, NetworkInterface& b_ni,
                             EventDispatcher& b, Pred pred,
@@ -100,10 +82,6 @@ static bool poll_both_until(NetworkInterface& a_ni, EventDispatcher& a, NetworkI
   return false;
 }
 
-// ============================================================================
-// Fixture
-// ============================================================================
-
 class RudpTwoNiTest : public ::testing::Test {
  protected:
   EventDispatcher server_disp_{"server"};
@@ -116,10 +94,6 @@ class RudpTwoNiTest : public ::testing::Test {
     client_disp_.SetMaxPollWait(Milliseconds(1));
   }
 };
-
-// ============================================================================
-// Test 1: Client sends message → server receives it
-// ============================================================================
 
 TEST_F(RudpTwoNiTest, ClientToServerOneMessage) {
   ASSERT_TRUE(server_ni_.StartRudpServer(Address("127.0.0.1", 0)).HasValue());
@@ -148,15 +122,10 @@ TEST_F(RudpTwoNiTest, ClientToServerOneMessage) {
   EXPECT_EQ(received_seq.load(), 42u);
 }
 
-// ============================================================================
-// Test 2: Full round-trip (client → server → client)
-// ============================================================================
-
 TEST_F(RudpTwoNiTest, RoundTripRequestReply) {
   ASSERT_TRUE(server_ni_.StartRudpServer(Address("127.0.0.1", 0)).HasValue());
   auto server_addr = server_ni_.RudpAddress();
 
-  // Server echoes the message back using the incoming channel.
   server_ni_.InterfaceTable().RegisterTypedHandler<RudpIntMsg>(
       [&](const Address&, Channel* ch, const RudpIntMsg& msg) {
         if (ch) (void)ch->SendMessage(RudpIntMsg{msg.seq + 1000, "echo:" + msg.text});
@@ -174,26 +143,20 @@ TEST_F(RudpTwoNiTest, RoundTripRequestReply) {
   auto conn = client_ni_.ConnectRudp(server_addr);
   ASSERT_TRUE(conn.HasValue());
 
-  // Wait for the server to create a reverse channel (first datagram triggers it).
   (void)(*conn)->SendMessage(RudpIntMsg{7, "ping"});
 
   ASSERT_TRUE(poll_both_until(
       server_ni_, server_disp_, client_ni_, client_disp_,
       [&] { return server_ni_.ChannelCount() >= 1u; }, std::chrono::milliseconds(1000)));
 
-  // Allow the round-trip to complete.
   ASSERT_TRUE(poll_both_until(
       server_ni_, server_disp_, client_ni_, client_disp_,
       [&] { return reply_received.load(std::memory_order_acquire); },
       std::chrono::milliseconds(2000)))
       << "Client did not receive the echo reply";
 
-  EXPECT_EQ(reply_seq.load(), 1007u);  // 7 + 1000
+  EXPECT_EQ(reply_seq.load(), 1007u);
 }
-
-// ============================================================================
-// Test 3: Multiple messages received in order
-// ============================================================================
 
 TEST_F(RudpTwoNiTest, MultipleMessagesInOrder) {
   ASSERT_TRUE(server_ni_.StartRudpServer(Address("127.0.0.1", 0)).HasValue());
@@ -212,7 +175,6 @@ TEST_F(RudpTwoNiTest, MultipleMessagesInOrder) {
   ASSERT_TRUE(conn.HasValue());
 
   auto* ch = *conn;
-  // Disable congestion window so all messages are sent without blocking.
   ch->SetNocwnd(true);
 
   for (uint32_t i = 0; i < kCount; ++i) {
@@ -229,10 +191,6 @@ TEST_F(RudpTwoNiTest, MultipleMessagesInOrder) {
     EXPECT_EQ(received_seqs[i], static_cast<uint32_t>(i)) << "Order mismatch at index " << i;
   }
 }
-
-// ============================================================================
-// Test 4: Large (fragmented) payload reassembled end-to-end
-// ============================================================================
 
 TEST_F(RudpTwoNiTest, LargePayloadFragmentedAndReassembled) {
   ASSERT_TRUE(server_ni_.StartRudpServer(Address("127.0.0.1", 0)).HasValue());
@@ -252,7 +210,6 @@ TEST_F(RudpTwoNiTest, LargePayloadFragmentedAndReassembled) {
   ASSERT_TRUE(conn.HasValue());
 
   auto* ch = *conn;
-  // Disable cwnd so all fragments are sent in one burst.
   ch->SetNocwnd(true);
 
   RudpLargeMsg big;
@@ -274,10 +231,6 @@ TEST_F(RudpTwoNiTest, LargePayloadFragmentedAndReassembled) {
   }
 }
 
-// ============================================================================
-// Test 5: connect_rudp_nocwnd creates channel with nocwnd=true
-// ============================================================================
-
 TEST_F(RudpTwoNiTest, ConnectRudpNocwndCreatesNocwndChannel) {
   ASSERT_TRUE(server_ni_.StartRudpServer(Address("127.0.0.1", 0)).HasValue());
 
@@ -287,13 +240,8 @@ TEST_F(RudpTwoNiTest, ConnectRudpNocwndCreatesNocwndChannel) {
   auto* rudp_ch = dynamic_cast<ReliableUdpChannel*>(*conn);
   ASSERT_NE(rudp_ch, nullptr);
   EXPECT_TRUE(rudp_ch->Nocwnd());
-  // With nocwnd the effective window equals the full send window.
   EXPECT_GT(rudp_ch->EffectiveWindow(), 1u);
 }
-
-// ============================================================================
-// Test 6: Server channel count increases on first client datagram
-// ============================================================================
 
 TEST_F(RudpTwoNiTest, ServerChannelCountIncrementsOnConnect) {
   ASSERT_TRUE(server_ni_.StartRudpServer(Address("127.0.0.1", 0)).HasValue());
