@@ -152,6 +152,7 @@ TEST_F(TcpEchoRoundtripTest, SingleRequestReply) {
   auto* channel = *conn;
   auto send_result = channel->SendMessage(EchoRequest{7, "hello"});
   ASSERT_TRUE(send_result.HasValue()) << send_result.Error().Message();
+  client_ni_.FlushDirtySendChannels();
 
   // Wait for the round-trip to complete.
   ASSERT_TRUE(poll_both_until(server_disp_, client_disp_, [&] {
@@ -190,6 +191,7 @@ TEST_F(TcpEchoRoundtripTest, LargeFrameRoundtripTriggersDynamicBufferGrowth) {
   std::string payload(48 * 1024, 'x');
   auto send_result = (*conn)->SendMessage(EchoRequest{99, payload});
   ASSERT_TRUE(send_result.HasValue()) << send_result.Error().Message();
+  client_ni_.FlushDirtySendChannels();
 
   ASSERT_TRUE(poll_both_until(
       server_disp_, client_disp_, [&] { return reply_received.load(std::memory_order_acquire); },
@@ -230,6 +232,7 @@ TEST_F(TcpEchoRoundtripTest, MultipleRequestsInOrder) {
   auto* ch = *conn;
   for (uint32_t i = 0; i < kRequests; ++i) {
     (void)ch->SendMessage(EchoRequest{i, std::to_string(i)});
+    client_ni_.FlushDirtySendChannels();
   }
 
   ASSERT_TRUE(poll_both_until(
@@ -263,6 +266,7 @@ TEST_F(TcpEchoRoundtripTest, BytesSentTracked) {
   EXPECT_EQ(ch->BytesSent(), 0u);
 
   (void)ch->SendMessage(EchoRequest{1, "payload"});
+  client_ni_.FlushDirtySendChannels();
   EXPECT_GT(ch->BytesSent(), 0u);
 }
 
