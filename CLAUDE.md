@@ -1,241 +1,160 @@
 # CLAUDE.md
 
-This file provides guidance to Claude Code when working with the Atlas Engine codebase.
+Guidance for Claude Code when working in the Atlas Engine repository.
 
-## What is Atlas Engine?
+## What is Atlas
 
-Atlas is a modern distributed MMO game server framework written in C++20 with C# (.NET 9) scripting. It is inspired by the BigWorld Engine architecture, featuring a distributed multi-process server design with load balancing, scalability, and fault tolerance. The scripting layer embeds CoreCLR via hostfxr and uses [UnmanagedCallersOnly] for zero-overhead C++ ↔ C# interop.
+Distributed MMO server framework: C++20 core + C# (.NET 9) gameplay scripting via embedded CoreCLR. Multi-process layout (machined / login / base / baseappmgr / cell / cellappmgr / db / dbappmgr / reviver / EchoApp). Inspired by BigWorld; Mailbox-based RPC; spatial partition via BSP tree; Tracy-instrumented for performance work.
 
-## Build System (CMake)
+User-facing docs: `README.md` (English), `README_CN.md` (中文). Design docs under `docs/`.
 
-### Build
+## Build
+
+Use the helper instead of raw cmake whenever possible — it loads MSVC env on Windows and provisions Ninja on demand:
 
 ```bash
-# Configure (debug)
+tools\build.bat <preset> [--clean] [--config-only] [--build-only]   # Windows
+tools/build.sh   <preset> [--clean] [--config-only] [--build-only]  # Linux / macOS
+```
+
+Presets: `debug` (Ninja Multi-Config + `/Z7` + PCH, fast iteration), `release` (no tests), `profile` (Tracy + viewer, no tests), `hybrid` (RelWithDebInfo). Sanitizer presets: `asan`, `asan-msvc`, `tsan` (Linux), `ubsan` (Linux).
+
+Direct cmake also works:
+
+```bash
 cmake --preset debug
-
-# Build
 cmake --build build/debug --config Debug
-
-# Configure + build (release)
-cmake --preset release
-cmake --build build/release --config Release
 ```
 
-### Run Tests
-
-```bash
-# All tests
-cd build/debug && ctest --build-config Debug
-
-# Unit tests only
-ctest --build-config Debug --label-regex unit
-
-# Integration tests only
-ctest --build-config Debug --label-regex integration
-
-# Specific test
-ctest --build-config Debug -R test_hello
-
-# Verbose output
-ctest --build-config Debug --output-on-failure
-```
-
-### Build Presets (via CMakePresets.json)
-
-- **`debug`** — full debug symbols, assertions enabled, `ATLAS_DEBUG=1`
-- **`release`** — fully optimized, `NDEBUG` defined
-- **`hybrid`** — optimized with debug symbols (RelWithDebInfo)
-- **`profile`** — RelWithDebInfo + `ATLAS_ENABLE_PROFILER=ON` + `ATLAS_BUILD_TRACY_VIEWER=ON` (Tracy linked in, viewer + CLI helpers downloaded); skips test exes for fast profiling iteration. Use `debug` to run unit tests.
-
-### Sanitizers
-
-- `--preset asan` — AddressSanitizer (Linux / GCC / Clang)
-- `--preset asan-msvc` — AddressSanitizer (Windows / MSVC)
-- `--preset tsan` — ThreadSanitizer (Linux only)
-- `--preset ubsan` — UndefinedBehaviorSanitizer (Linux only)
-
-### CMake Options
-
-- `ATLAS_BUILD_TESTS` — Build tests (default: ON)
-- `ATLAS_BUILD_CSHARP` — Build C# projects via dotnet (default: ON)
-- `ATLAS_DB_MYSQL` — Enable MySQL database backend (default: OFF)
-- `ATLAS_USE_IOURING` — Enable io_uring I/O poller, Linux only (default: OFF)
-
-## Architecture
-
-### Server Components (`src/server/`)
-
-Distributed multi-process architecture:
-
-- **machined** — machine daemon, process registration, service discovery
-- **LoginApp** — client authentication and connection
-- **BaseApp** — entity behavior, state, client proxy
-- **CellApp** — spatial partitioning, entity movement, AoI
-- **DBApp** — database persistence (MySQL/XML)
-- **BaseAppMgr / CellAppMgr / DBAppMgr** — cluster management
-- **Reviver** — crash detection and recovery
-
-### Libraries (`src/lib/`)
-
-- **platform** — OS abstraction (I/O, threading, signals, filesystem)
-- **foundation** — core utilities (logging, memory, containers, time)
-- **network** — sockets, event dispatcher, channels, messages
-- **serialization** — binary streams, XML/JSON parsing
-- **script** — language-agnostic scripting abstraction (ScriptEngine / ScriptValue / ScriptObject)
-- **entitydef** — entity type definitions, data types, mailbox
-- **connection** — client-server protocol definitions
-- **db / db_mysql / db_xml** — database abstraction and backends
-- **server** — server framework base classes
-- **math** — vectors, matrices, quaternions
-
-### Client SDK (`src/client_sdk/`)
-
-Lightweight SDK for game clients to connect to Atlas servers.
-
-## Code Conventions
-
-Follows the [Google C++ Style Guide](https://google.github.io/styleguide/cppguide.html).
-See `docs/CODING_STYLE.md` for the full project style guide.
-
-### Key rules
-
-- C++20 standard, no compiler extensions
-- **Formatting**: 2-space indent, attached braces, 100-column limit (enforced by `.clang-format`)
-- **Naming**: `PascalCase` functions (including accessors/mutators), `snake_case` variables, `kPascalCase` enum values/constants, `snake_case_` class members
-- Coroutine protocol functions (`await_ready`, `initial_suspend`, etc.) and STL interface functions (`begin`, `end`, `size`, etc.) stay `snake_case`
-- Platform-specific code uses suffix: `_windows.cc`, `_linux.cc`
-- Namespace: `atlas::`
-- Use `std::format` for string formatting
-- Use `std::expected` or custom `Result<T,E>` for error handling (no exceptions)
-- Smart pointers: `std::unique_ptr`, `std::shared_ptr`, and custom `IntrusivePtr<T>`
-- All new code should have unit tests (Google Test)
-- In the absence of explicit style guidelines, follow Google C++ Style Guide
-- **Comments**: code self-documents; only comment when intent is non-obvious. Comments must be concise (one line preferred). Don't restate what the code says — explain *why*, hidden invariants, or surprising trade-offs. No long historical narratives, redundant section banners, or per-field obvious explanations.
+The `debug` preset uses Ninja Multi-Config — `tools/build.bat` handles Ninja + MSVC env automatically; raw cmake requires both pre-arranged.
 
 ## Testing
 
-Unit tests use Google Test. Each library's tests are in `tests/unit/`.
-
 ```bash
-# Run all unit tests
-cd build/debug && ctest --build-config Debug --label-regex unit
-
-# Run specific test
-ctest --build-config Debug -R test_hello
-
-# Run with verbose output
-ctest --build-config Debug -R test_hello --output-on-failure
+cd build/debug
+ctest --build-config Debug --label-regex unit       --output-on-failure
+ctest --build-config Debug --label-regex integration --output-on-failure
+ctest --build-config Debug -R test_<name>           --output-on-failure   # specific test
 ```
 
-## Pre-Commit Requirements
+C# tests: `dotnet test tests/csharp`.
 
-Before every commit, ensure the following two checks pass:
+## Pre-commit checks
 
-**1. All unit tests pass**
+Both must pass before committing:
 
 ```bash
+# Unit tests
 cd build/debug && ctest --build-config Debug --label-regex unit --output-on-failure
-```
 
-**2. clang-format has no violations**
-
-```bash
-# Check (dry-run)
+# clang-format (CI uses 19.1.5; VS-bundled binary is fine locally)
 clang-format --dry-run --Werror <changed files>
-
-# Fix in place
-clang-format -i <changed files>
+clang-format -i <changed files>          # fix in place
 ```
 
-On Windows, clang-format is at:
-`C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Tools\Llvm\x64\bin\clang-format.exe`
+Windows clang-format path: `C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Tools\Llvm\x64\bin\clang-format.exe`.
 
-Do not commit if either check fails. Fix the issues first, then re-stage and commit.
+## Repository layout
 
-## Performance Profiling
+| Path | Contents |
+|---|---|
+| `src/lib/` | Core libs: `platform`, `foundation` (PCH source `atlas_common.h`), `network`, `serialization`, `math`, `physics`, `resmgr`, `coro`, `script`, `clrscript`, `entitydef`, `connection`, `space`, `db`, `db_mysql`, `db_sqlite`, `db_xml`, `server` |
+| `src/server/` | Processes: `machined`, `loginapp`, `baseappmgr`, `baseapp`, `cellappmgr`, `cellapp`, `dbapp`, `dbappmgr` (placeholder), `reviver` (placeholder), `EchoApp` |
+| `src/csharp/` | C# libs: `Atlas.Shared`, `Atlas.Runtime`, `Atlas.Client`, `Atlas.Client.Desktop`, `Atlas.Client.Unity`, `Atlas.ClrHost`, `Atlas.Generators.{Def,Events}`, `Atlas.Tools.DefDump` |
+| `src/client/` | Console / desktop client app |
+| `src/tools/` | `atlas_tool`, `login_stress`, `world_stress`, `crash_demo` |
+| `samples/` | Sample game scripts: `base/`, `client/`, `stress/` |
+| `tests/` | `unit/` (Google Test), `integration/` (Google Test), `csharp/` |
+| `tools/` | `build.{py,bat,sh}`, `cluster_control/`, `profile/` |
+| `docs/` | Design docs: `roadmap/`, `scripting/`, `gameplay/`, `rpc/`, `optimization/`, `property_sync/`, `coro/`, `generator/`, `client/`, `operations/`, `bigworld_ref/`, `stress_test/`, `CODING_STYLE.md` |
+| `bin/<preset>/` | Flat output dir for all EXE / DLL / .lib (configured by `cmake/AtlasOutputDirectory.cmake`) |
 
-### Baseline workflow
+## Server framework hierarchy (`src/lib/server/`)
 
-Always rebuild profile before running a baseline — stale binaries produce
-meaningless Tracy data:
+```
+ServerApp
+├── ManagerApp     — manager / daemon (no scripting): BaseAppMgr, CellAppMgr, DBAppMgr, machined, EchoApp
+└── ScriptApp      — ServerApp + CoreCLR
+    └── EntityApp  — ScriptApp + entity defs + bg-task pool: BaseApp, CellApp
+```
+
+Provided by `ServerApp`: `ServerConfig` (CLI + JSON), `MachinedClient` (registration / heartbeat / Birth-Death), `WatcherRegistry` (path-based metrics), `Updatable`/`Updatables` (level-ordered tick callbacks), `SignalDispatchTask`.
+
+## Code conventions
+
+Follows the [Google C++ Style Guide](https://google.github.io/styleguide/cppguide.html); see `docs/CODING_STYLE.md` for project-specific overrides.
+
+- C++20, no compiler extensions
+- 2-space indent, attached braces, 100-col limit (enforced by `.clang-format`)
+- `PascalCase` functions (incl. accessors/mutators); `snake_case` variables; `kPascalCase` enum values / constants; `snake_case_` class members
+- `snake_case` stays for STL interface (`begin`, `end`, `size`, …) and coroutine protocol (`await_ready`, `initial_suspend`, …)
+- Platform-specific files: `_windows.cc` / `_linux.cc`
+- Namespace: `atlas::`
+- String formatting: `std::format`
+- Error handling: `std::expected` or custom `Result<T,E>` — no exceptions
+- Smart pointers: `std::unique_ptr`, `std::shared_ptr`, custom `IntrusivePtr<T>`
+- All new code needs unit tests (Google Test)
+
+### Comments
+
+Comments are a debt — pay them only when the code itself can't carry the meaning. Write in English; explain *why*, not *what*; never embed task / phase / ticket numbers (`P0.1`, `Phase 12`, `#1234`) — they rot the moment scope shifts.
+
+1. **Default to no comment.** A comment must justify its existence: hidden invariant, surprising trade-off, workaround for a specific bug, contract a reader can't infer from the signature. If removing the comment wouldn't confuse a future reader, delete it.
+2. **`.cc` / `.cpp`: prefer zero comments.** Implementation files should read top-to-bottom as plain code; the *why* belongs in the header next to the API. When a comment is unavoidable in a `.cc`, keep it ≤ 2 lines and place it immediately above the surprising line — no paragraph blocks, no section banners, no historical narratives.
+3. **Self-documenting code beats explanatory comments.** A long comment masking a tangled function is a refactor request, not documentation. Rename the variable, extract the helper, split the branch — and the comment goes away on its own.
+4. **Clean up violations on contact.** When you read or edit a source file whose comments break these rules — restating the obvious, narrating history, padding with banners, repeating the function name — refactor them out as part of the same change. Don't leave stale prose behind for someone else.
+
+### Refactoring
+
+Refactoring is a first-class part of every change, not a separate "cleanup PR" that never lands.
+
+1. **Refactor proactively.** When a change touches code that has decayed — overly long function, tangled branching, unclear ownership, name that no longer fits — fix it as part of the same commit. Do not file the cleanup as a TODO. The further refactors get from the original change, the less likely they are to happen.
+2. **Delete dead code and config promptly.** When a feature is removed, replaced, or made obsolete, remove its code paths, dead branches, unused fields, stale CMake options, abandoned config keys, and orphaned tests in the *same* change. Do not leave `_unused` shims, `// removed` comment markers, deprecated wrappers, or feature flags pointing at empty implementations. If the old API still has callers, migrate them first.
+3. **No band-aid / patch-style fixes.** When the old design has a problem, think through the proper fix and apply it. Symptom-suppressing workarounds are forbidden: extra layers wrapping the broken layer, special cases sprinkled at call sites, "just in case" defensive checks that hide the underlying contract violation, comments saying "FIXME: works around X". If the proper fix is too large for the current change, stop, describe the situation, and discuss scope before writing code.
+4. **New work surfaces old problems — fix them in place.** While implementing a new feature, if you discover the existing feature it depends on or conflicts with is broken / misdesigned, do not route around it. Stop and think: should the new feature change shape, or should the old one? Then refactor whichever is wrong. Building a new feature on top of broken foundations multiplies the debt instead of paying it down.
+
+The bias is: when in doubt, refactor. Half-measures rot fast. Either commit to the proper fix or push back on scope before code lands.
+
+## CI workflows (`.github/workflows/`)
+
+- `cmake.yml` — Windows + Linux × Debug + Release. Uses sccache, NuGet + `_deps` caching, paths-ignore for docs / tooling. Runs unit + integration tests on Debug.
+- `clang-format.yml` — clang-format 19.1.5 dry-run on `.cc/.cpp/.h/.hpp` changes only.
+- `sanitizers.yml` — `workflow_dispatch` + weekly schedule. asan + ubsan on Linux. Off the PR critical path; tsan deferred (atlas heap pool produces noisy false positives).
+
+Concurrency cancellation is enabled on every workflow.
+
+## Performance profiling
+
+Tracy-instrumented; `profile` preset includes the viewer + CLI helpers in `bin/profile/`.
 
 ```bash
-cmake --build build/profile --config RelWithDebInfo
-```
+# Build profile (needs to be re-built before every baseline — stale binaries lie)
+tools\build.bat profile
 
-The `profile` preset sets `ATLAS_BUILD_TESTS=OFF`, so a full rebuild drops
-from minutes to ~30 s by skipping the ~117 test executables. Run unit tests
-against `debug` instead.
+# Stress baseline (200 clients, 120 s by default; override with -Clients / -DurationSec)
+.\tools\cluster_control\run_baseline_profile.ps1     # Windows
+bash tools/cluster_control/run_baseline_profile.sh   # Linux / Git Bash
 
-### Memory profiling (callstack-attributed allocs)
-
-Tracy's MemoryUsage view attributes every `operator new` / pool grab to a
-call stack when the project is built with the S-suffixed primitives. The
-allocator hooks in `src/lib/foundation/profiler.h` use `TracyAllocS` /
-`TracyFreeS` (depth 16), so live-allocation entries in the viewer show:
-
-- **Memory → Active allocations** — currently held bytes per call site
-- **Memory → Top callstack tree** — bytes aggregated by stack
-- **Memory → Allocations** — per-event list, click for full stack
-
-Stack capture costs ~1–3 µs per alloc on Windows and inflates trace files
-~3–5×. If overhead becomes a problem during long captures, downgrade the
-hooks back to `TracyAlloc` / `TracyFree` for the run, then restore.
-
-Run the baseline stress test (100 clients, 120 s, spread-radius 200 m, Tracy capture):
-
-```bash
-# Linux / Git Bash
-bash tools/cluster_control/run_baseline_profile.sh
-```
-
-```powershell
-# Windows PowerShell
-.\tools\cluster_control\run_baseline_profile.ps1
-
-# Custom parameters
-.\tools\cluster_control\run_baseline_profile.ps1 -Clients 50 -DurationSec 60
-```
-
-Tracy captures land in `.tmp/prof/baseline/` named
-`<process>_<git-short>_<timestamp>.tracy`.
-
-### Comparing captures
-
-Use `tools/profile/compare_tracy.py` to diff two cellapp captures:
-
-```bash
+# Compare two cellapp captures (mean / p95 / p99 / max with regression flags)
 python tools/profile/compare_tracy.py \
     .tmp/prof/baseline/cellapp_<old>.tracy \
     .tmp/prof/baseline/cellapp_<new>.tracy
 ```
 
-The script calls `tracy-csvexport` automatically (looked up from
-`bin/profile/`), exports aggregate zone stats to CSV, and prints
-a Markdown table of mean / p95 / p99 / max for the key CellApp zones with
-regression flags (default threshold: 10 %).
+Captures land in `.tmp/prof/baseline/` named `<process>_<git-short>_<timestamp>.tracy`. A healthy cellapp capture for 120 s is ≥ 50 MB; smaller usually means tracy-capture disconnected early (overload — check log for `Slow tick`).
 
-Options:
-- `--threshold N` — change regression threshold (default 10 %)
-- `--csvexport <path>` — override csvexport binary location
-- `--keep-csv` — save the intermediate CSVs to `tracy_csv_export/`
+### Memory profiling (callstack-attributed allocations)
 
-### Key zones to watch (CellApp)
+Allocator hooks in `src/lib/foundation/profiler.h` use `TracyAllocS` / `TracyFreeS` (depth 16). In Tracy's Memory view: **Active allocations**, **Top callstack tree**, **Allocations**. Stack capture costs ~1–3 µs/alloc on Windows and inflates traces ~3–5×; downgrade to `TracyAlloc` / `TracyFree` for long captures if needed.
+
+### Key cellapp Tracy zones
 
 | Zone | Notes |
 |---|---|
 | `Tick` | Overall tick wall time; budget = 100 ms at 10 Hz |
-| `CellApp::TickWitnesses` | Dominant cost; should be < 80 % of Tick mean |
+| `CellApp::TickWitnesses` | Dominant cost; should be < 80 % of `Tick` mean |
 | `Witness::Update::Pump` | Per-observer serialization loop |
 | `Witness::SendEntityUpdate` | Per-peer delta/snapshot send |
 | `Script.OnTick` | Total C# script time per tick |
 | `Script.EntityTickAll` | Entity `OnTick` dispatch |
 | `Script.PublishReplicationAll` | Replication frame pump; watch for GC spikes |
-
-### Validating a capture is healthy
-
-A healthy cellapp capture is **≥ 50 MB** for a 120 s run. A file smaller than
-a few MB means tracy-capture disconnected early — usually because the cellapp
-was overloaded (check the log for `Slow tick` warnings) or the profile binary
-was not rebuilt after instrumentation changes.
