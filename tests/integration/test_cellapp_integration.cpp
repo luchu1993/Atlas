@@ -1,14 +1,3 @@
-// CellApp integration tests.
-//
-// Categories:
-//   1. Smoke: CellApp constructs without CLR.
-//   2. Handler-level: exercises CellApp handlers directly. Covers entity
-//      creation, EnableWitness AoI, avatar movement, property deltas,
-//      MoveToPointController, RPC security chain, and 1000-entity perf.
-//   3. Multi-process: CellApp binary registers with CellAppMgr via machined.
-//
-// All tests are pure C++ — no CLR runtime needed.
-
 #include <algorithm>
 #include <chrono>
 #include <cstddef>
@@ -48,20 +37,12 @@
 namespace atlas {
 namespace {
 
-// ============================================================================
-// Smoke
-// ============================================================================
-
 TEST(CellAppIntegration, ConstructsCleanly) {
   EventDispatcher dispatcher("smoke");
   NetworkInterface network(dispatcher);
   CellApp app(dispatcher, network);
   EXPECT_EQ(app.Spaces().size(), 0u);
 }
-
-// ============================================================================
-// Handler-level integration — no CLR required
-// ============================================================================
 
 class CellAppIntegrationFixture : public ::testing::Test {
  protected:
@@ -72,10 +53,10 @@ class CellAppIntegrationFixture : public ::testing::Test {
   void SetUp() override { EntityDefRegistry::Instance().clear(); }
   void TearDown() override { EntityDefRegistry::Instance().clear(); }
 
-  auto MakeCreate(EntityID base_id, SpaceID sp, math::Vector3 pos = {0, 0, 0})
+  auto MakeCreate(EntityID entity_id, SpaceID sp, math::Vector3 pos = {0, 0, 0})
       -> cellapp::CreateCellEntity {
     cellapp::CreateCellEntity msg;
-    msg.entity_id = base_id;
+    msg.entity_id = entity_id;
     msg.type_id = 1;
     msg.space_id = sp;
     msg.position = pos;
@@ -85,58 +66,37 @@ class CellAppIntegrationFixture : public ::testing::Test {
   }
 };
 
-// Scenario #2 — CreateCellEntity registers the entity and responds with
-// a CellEntityCreated ack that carries cell_addr. We test the local state
-// mutations here (ack dispatch requires a real channel, tested in
-// test_cellappmgr_integration).
 TEST_F(CellAppIntegrationFixture, CreateCellEntityRegistersAndResponds) {
-  auto msg = MakeCreate(/*base_id=*/100, /*space=*/5, {10, 0, 10});
+  auto msg = MakeCreate(/*entity_id=*/100, /*space=*/5, {10, 0, 10});
   app_.OnCreateCellEntity({}, /*ch=*/nullptr, msg);
 
-  // Entity registered in both indexes.
-  auto* by_base = app_.FindEntityByBaseId(100);
-  ASSERT_NE(by_base, nullptr);
-  EXPECT_EQ(by_base->Id(), 100u);
-  EXPECT_FLOAT_EQ(by_base->Position().x, 10.f);
+  auto* real_entity = app_.FindRealEntity(100);
+  ASSERT_NE(real_entity, nullptr);
+  EXPECT_EQ(real_entity->Id(), 100u);
+  EXPECT_FLOAT_EQ(real_entity->Position().x, 10.f);
 
-  auto* by_cell = app_.FindEntity(by_base->Id());
-  EXPECT_EQ(by_cell, by_base);
+  auto* by_entity_id = app_.FindEntity(real_entity->Id());
+  EXPECT_EQ(by_entity_id, real_entity);
 
-  // Space auto-created.
   EXPECT_NE(app_.FindSpace(5), nullptr);
 }
 
-// PR 34 end-to-end cell-side flow. Mirrors what BaseApp does on login:
-//   1. CreateCellEntity — entity exists, no witness yet (C2 decoupled).
-//   2. EnableWitness     — fires from BaseApp::BindClient (C3). No radius
-//                          on the wire; CellAppConfig defaults pick up.
-//   3. SetAoIRadius      — script call (C4/C5). Shrinks the witness's
-//                          dual-band trigger, peers outside the new
-//                          outer band get marked for leave.
-// Locks in the cross-commit contract so a regression in any of C2/C3/C4
-// surfaces here.
-TEST_F(CellAppIntegrationFixture, Pr34EndToEndEnableThenSetAoIRadius) {
-  // Peer at ~100m — inside the 150m CellAppConfig default radius but
-  // well outside the 55m post-SetAoIRadius outer band.
-  app_.OnCreateCellEntity({}, nullptr, MakeCreate(/*base_id=*/200, /*space=*/1, {100.f, 0.f, 0.f}));
+TEST_F(CellAppIntegrationFixture, EnableThenSetAoIRadiusShrinksWitness) {
+  app_.OnCreateCellEntity({}, nullptr,
+                          MakeCreate(/*entity_id=*/200, /*space=*/1, {100.f, 0.f, 0.f}));
 
-  // Observer. After C2, creation doesn't auto-enable a witness.
-  app_.OnCreateCellEntity({}, nullptr, MakeCreate(/*base_id=*/100, /*space=*/1, {0.f, 0.f, 0.f}));
-  auto* observer = app_.FindEntityByBaseId(100);
+  app_.OnCreateCellEntity({}, nullptr, MakeCreate(/*entity_id=*/100, /*space=*/1, {0.f, 0.f, 0.f}));
+  auto* observer = app_.FindRealEntity(100);
   ASSERT_NE(observer, nullptr);
   EXPECT_FALSE(observer->HasWitness());
 
-  // BindClient would now fire EnableWitness. After C2 the wire form
-  // carries only base_entity_id; radius + hysteresis come from config.
   cellapp::EnableWitness e{100};
   app_.OnEnableWitness({}, nullptr, e);
   ASSERT_TRUE(observer->HasWitness());
   EXPECT_FLOAT_EQ(observer->GetWitness()->AoIRadius(), 150.f);
   EXPECT_FLOAT_EQ(observer->GetWitness()->Hysteresis(), 5.f);
-  // Peer at 100m is inside the 150m AoI → witness saw it as ENTER_PENDING.
   EXPECT_EQ(observer->GetWitness()->AoIMap().size(), 1u);
 
-  // Script-side SetAoIRadius(50, 5) — shrinks AoI to the stress-test band.
   cellapp::SetAoIRadius s;
   s.entity_id = 100;
   s.radius = 50.f;
@@ -145,25 +105,15 @@ TEST_F(CellAppIntegrationFixture, Pr34EndToEndEnableThenSetAoIRadius) {
   EXPECT_FLOAT_EQ(observer->GetWitness()->AoIRadius(), 50.f);
   EXPECT_FLOAT_EQ(observer->GetWitness()->Hysteresis(), 5.f);
 
-  // Peer at 100m is now outside the new outer band (55m); the trigger
-  // contraction marked it kGone. Update compacts the map.
   observer->GetWitness()->Update(/*max_packet_bytes=*/4096);
   EXPECT_TRUE(observer->GetWitness()->AoIMap().empty());
 }
 
-// PR 34 C2: EnableWitness with no valid entity should log-warn and
-// leave the cell app in a sane state. This is defensive — the BindClient
-// → cell race window allows EnableWitness to arrive for an entity that
-// got destroyed in the interim.
-TEST_F(CellAppIntegrationFixture, Pr34EnableWitnessForUnknownEntityIsNoop) {
-  cellapp::EnableWitness e{9999};        // never created
-  app_.OnEnableWitness({}, nullptr, e);  // must not crash
-  EXPECT_EQ(app_.FindEntityByBaseId(9999), nullptr);
+TEST_F(CellAppIntegrationFixture, EnableWitnessForUnknownEntityIsNoop) {
+  cellapp::EnableWitness e{9999};
+  app_.OnEnableWitness({}, nullptr, e);
+  EXPECT_EQ(app_.FindRealEntity(9999), nullptr);
 }
-
-// Scenario #3 — EnableWitness creates an AoITrigger; existing peers
-// already in range appear as ENTER_PENDING in the aoi_map. This test
-// proves the C++ trigger integration without CLR.
 
 struct CapturedEnvelope {
   std::vector<std::byte> payload;
@@ -203,17 +153,13 @@ class WitnessIntegrationFixture : public ::testing::Test {
 TEST_F(WitnessIntegrationFixture, EnableWitnessFiresEnterForExistingPeers) {
   Space space(1);
 
-  // Peer spawns first.
   auto* peer = MakeEntity(space, 100, /*type_id=*/uint16_t{7}, {3, 0, 3});
 
-  // Observer spawns and enables witness — peer is already in range.
   auto* observer = MakeEntity(space, 1, /*type_id=*/uint16_t{1}, {0, 0, 0});
   observer->EnableWitness(/*radius=*/10.f, MakeSendFn());
 
-  // Peer should be ENTER_PENDING in the AoI map.
   ASSERT_EQ(observer->GetWitness()->AoIMap().size(), 1u);
 
-  // Update flushes the enter.
   observer->GetWitness()->Update(/*max_packet_bytes=*/4096);
   ASSERT_EQ(sent_.size(), 1u);
   EXPECT_EQ(KindOf(sent_[0]), CellAoIEnvelopeKind::kEntityEnter);
@@ -225,29 +171,18 @@ TEST_F(WitnessIntegrationFixture, PeerEnterAndLeaveFireEvents) {
   auto* observer = MakeEntity(space, 1, /*type_id=*/uint16_t{1}, {0, 0, 0});
   observer->EnableWitness(10.f, MakeSendFn());
 
-  // Peer enters AoI.
   auto* peer = MakeEntity(space, 100, /*type_id=*/uint16_t{7}, {3, 0, 3});
   observer->GetWitness()->Update(4096);
   ASSERT_EQ(sent_.size(), 1u);
   EXPECT_EQ(KindOf(sent_[0]), CellAoIEnvelopeKind::kEntityEnter);
   sent_.clear();
 
-  // Peer moves out of AoI.
   peer->SetPosition({100.f, 0.f, 100.f});
   observer->GetWitness()->Update(4096);
   ASSERT_EQ(sent_.size(), 1u);
   EXPECT_EQ(KindOf(sent_[0]), CellAoIEnvelopeKind::kEntityLeave);
   EXPECT_EQ(PublicIdOf(sent_[0]), peer->Id());
 }
-
-// ============================================================================
-// RPC security — scenario #10
-//
-// Handler-level RPC validation (defence-in-depth layers L1–L4). These
-// tests drive handlers directly with synthetic EntityDef entries and
-// confirm accept/reject behaviour at each layer. Uses the same
-// RegisterTypeWithRpc + PackRpcId pattern as test_cellapp_handlers.
-// ============================================================================
 
 namespace {
 
@@ -281,22 +216,18 @@ class RpcSecurityFixture : public ::testing::Test {
   EventDispatcher dispatcher_{"rpc_security"};
   NetworkInterface network_{dispatcher_};
   CellApp app_{dispatcher_, network_};
-  EntityID observer_base_id_{200};
-  EntityID peer_base_id_{300};
+  EntityID observer_id_{200};
+  EntityID peer_id_{300};
 
   void SetUp() override {
     EntityDefRegistry::Instance().clear();
-    // C7 trust boundary: these tests dispatch ClientCellRpcForward with
-    // Address{} as the wire src. Without this the trust check would
-    // drop every test before reaching the RPC-scope validation they're
-    // supposed to exercise.
     app_.InsertTrustedBaseAppForTest(Address{});
   }
   void TearDown() override { EntityDefRegistry::Instance().clear(); }
 
-  auto MakeCreate(EntityID base_id, SpaceID sp) -> cellapp::CreateCellEntity {
+  auto MakeCreate(EntityID entity_id, SpaceID sp) -> cellapp::CreateCellEntity {
     cellapp::CreateCellEntity msg;
-    msg.entity_id = base_id;
+    msg.entity_id = entity_id;
     msg.type_id = 1;
     msg.space_id = sp;
     msg.position = {0, 0, 0};
@@ -309,11 +240,11 @@ class RpcSecurityFixture : public ::testing::Test {
 TEST_F(RpcSecurityFixture, NonExposedCellRpcRejected) {
   const uint32_t kCellRpc = PackRpcId(0x02, 1, 1);
   RegisterTypeWithRpc(1, kCellRpc, ExposedScope::kNone);
-  app_.OnCreateCellEntity({}, nullptr, MakeCreate(observer_base_id_, 1));
+  app_.OnCreateCellEntity({}, nullptr, MakeCreate(observer_id_, 1));
 
   cellapp::ClientCellRpcForward msg;
-  msg.target_entity_id = observer_base_id_;
-  msg.source_entity_id = observer_base_id_;
+  msg.target_entity_id = observer_id_;
+  msg.source_entity_id = observer_id_;
   msg.rpc_id = kCellRpc;
   app_.OnClientCellRpcForward({}, nullptr, msg);
 }
@@ -321,12 +252,12 @@ TEST_F(RpcSecurityFixture, NonExposedCellRpcRejected) {
 TEST_F(RpcSecurityFixture, OwnClientRpcRejectedWhenSourceNeTarget) {
   const uint32_t kCellRpc = PackRpcId(0x02, 1, 1);
   RegisterTypeWithRpc(1, kCellRpc, ExposedScope::kOwnClient);
-  app_.OnCreateCellEntity({}, nullptr, MakeCreate(observer_base_id_, 1));
-  app_.OnCreateCellEntity({}, nullptr, MakeCreate(peer_base_id_, 1));
+  app_.OnCreateCellEntity({}, nullptr, MakeCreate(observer_id_, 1));
+  app_.OnCreateCellEntity({}, nullptr, MakeCreate(peer_id_, 1));
 
   cellapp::ClientCellRpcForward msg;
-  msg.target_entity_id = observer_base_id_;
-  msg.source_entity_id = peer_base_id_;  // different → rejected
+  msg.target_entity_id = observer_id_;
+  msg.source_entity_id = peer_id_;
   msg.rpc_id = kCellRpc;
   app_.OnClientCellRpcForward({}, nullptr, msg);
 }
@@ -334,43 +265,38 @@ TEST_F(RpcSecurityFixture, OwnClientRpcRejectedWhenSourceNeTarget) {
 TEST_F(RpcSecurityFixture, AllClientsRpcAcceptedAcrossEntities) {
   const uint32_t kCellRpc = PackRpcId(0x02, 1, 1);
   RegisterTypeWithRpc(1, kCellRpc, ExposedScope::kAllClients);
-  app_.OnCreateCellEntity({}, nullptr, MakeCreate(observer_base_id_, 1));
-  app_.OnCreateCellEntity({}, nullptr, MakeCreate(peer_base_id_, 1));
+  app_.OnCreateCellEntity({}, nullptr, MakeCreate(observer_id_, 1));
+  app_.OnCreateCellEntity({}, nullptr, MakeCreate(peer_id_, 1));
 
   cellapp::ClientCellRpcForward msg;
-  msg.target_entity_id = observer_base_id_;
-  msg.source_entity_id = peer_base_id_;
+  msg.target_entity_id = observer_id_;
+  msg.source_entity_id = peer_id_;
   msg.rpc_id = kCellRpc;
   app_.OnClientCellRpcForward({}, nullptr, msg);
 }
 
 TEST_F(RpcSecurityFixture, WrongDirectionRpcRejected) {
-  const uint32_t kBaseRpc = PackRpcId(0x03, 1, 1);  // direction=Base
+  const uint32_t kBaseRpc = PackRpcId(0x03, 1, 1);
   RegisterTypeWithRpc(1, kBaseRpc, ExposedScope::kAllClients);
-  app_.OnCreateCellEntity({}, nullptr, MakeCreate(observer_base_id_, 1));
+  app_.OnCreateCellEntity({}, nullptr, MakeCreate(observer_id_, 1));
 
   cellapp::ClientCellRpcForward msg;
-  msg.target_entity_id = observer_base_id_;
-  msg.source_entity_id = observer_base_id_;
+  msg.target_entity_id = observer_id_;
+  msg.source_entity_id = observer_id_;
   msg.rpc_id = kBaseRpc;
   app_.OnClientCellRpcForward({}, nullptr, msg);
 }
 
 TEST_F(RpcSecurityFixture, InternalCellRpcBypassesExposedCheck) {
   const uint32_t kCellRpc = PackRpcId(0x02, 1, 1);
-  RegisterTypeWithRpc(1, kCellRpc, ExposedScope::kNone);  // NOT exposed
-  app_.OnCreateCellEntity({}, nullptr, MakeCreate(observer_base_id_, 1));
+  RegisterTypeWithRpc(1, kCellRpc, ExposedScope::kNone);
+  app_.OnCreateCellEntity({}, nullptr, MakeCreate(observer_id_, 1));
 
   cellapp::InternalCellRpc msg;
-  msg.target_entity_id = observer_base_id_;
+  msg.target_entity_id = observer_id_;
   msg.rpc_id = kCellRpc;
   app_.OnInternalCellRpc({}, nullptr, msg);
 }
-
-// ============================================================================
-// Scenario #4 — AvatarUpdate moves an entity; observers with overlapping
-// AoI receive a volatile position update via the Witness pump.
-// ============================================================================
 
 TEST_F(WitnessIntegrationFixture, AvatarUpdatePropagatesToObservers) {
   Space space(1);
@@ -378,11 +304,9 @@ TEST_F(WitnessIntegrationFixture, AvatarUpdatePropagatesToObservers) {
   auto* peer = MakeEntity(space, 100, /*type_id=*/uint16_t{7}, {3, 0, 3});
   observer->EnableWitness(50.f, MakeSendFn());
 
-  // Flush the initial Enter event.
   observer->GetWitness()->Update(4096);
   sent_.clear();
 
-  // Peer moves and publishes a volatile position frame.
   peer->SetPosition({5, 0, 5});
   CellEntity::ReplicationFrame v;
   v.volatile_seq = 1;
@@ -391,7 +315,6 @@ TEST_F(WitnessIntegrationFixture, AvatarUpdatePropagatesToObservers) {
   v.on_ground = true;
   peer->PublishReplicationFrame(v, {}, {});
 
-  // Drive the witness pump — should produce a position update envelope.
   auto& cache = observer->GetWitness()->AoIMapMutable().at(peer->Id());
   cache.flags = 0;
   observer->GetWitness()->TestOnlySendEntityUpdate(cache);
@@ -405,11 +328,6 @@ TEST_F(WitnessIntegrationFixture, AvatarUpdatePropagatesToObservers) {
   }
   EXPECT_TRUE(found_pos_update) << "Observer should receive position update from moved peer";
 }
-
-// ============================================================================
-// Scenario #7 — Property changes produce audience-filtered deltas:
-// owner_delta for the owning client, other_delta for everyone else.
-// ============================================================================
 
 struct ReplicationCapture {
   std::vector<std::byte> payload;
@@ -437,9 +355,6 @@ class PropertyDeltaFixture : public ::testing::Test {
   static auto PayloadBody(const ReplicationCapture& e) -> std::span<const std::byte> {
     return std::span<const std::byte>(e.payload.data() + 5, e.payload.size() - 5);
   }
-  // Phase D2'.2: kEntityPropertyUpdate envelopes carry an 8-byte LE
-  // event_seq prefix before the delta bytes. Skip it to get at the
-  // audience-specific delta payload.
   static auto PropertyUpdateDelta(const ReplicationCapture& e) -> std::span<const std::byte> {
     return PayloadBody(e).subspan(8);
   }
@@ -460,12 +375,10 @@ class PropertyDeltaFixture : public ::testing::Test {
 
 TEST_F(PropertyDeltaFixture, OtherObserverReceivesOtherDelta) {
   Space space(1);
-  // Observer and peer have DIFFERENT base_entity_ids → observer is "other".
   auto* observer = MakeEntity(space, 1, {0, 0, 0});
   auto* peer = MakeEntity(space, 2, {3, 0, 3});
   observer->EnableWitness(10.f, MakeReliable(), MakeUnreliable());
 
-  // Publish a property frame with distinct owner/other deltas.
   CellEntity::ReplicationFrame f;
   f.event_seq = 1;
   f.owner_delta = MakeBlob({0xAA});
@@ -487,39 +400,25 @@ TEST_F(PropertyDeltaFixture, OtherObserverReceivesOtherDelta) {
       << "Other-audience observer should receive other_delta (0xBB), not owner_delta (0xAA)";
 }
 
-// ============================================================================
-// Scenario #8 — MoveToPointController drives smooth entity motion across
-// multiple ticks via Space::Tick. Pure C++, no CLR needed.
-// ============================================================================
-
 TEST(CellAppIntegration, MoveControllerDrivesSmoothMotion) {
   Space space(1);
   auto* entity = space.AddEntity(std::make_unique<CellEntity>(
       1, /*type_id=*/uint16_t{1}, space, math::Vector3{0, 0, 0}, math::Vector3{1, 0, 0}));
 
-  // Add a MoveToPointController: destination (10, 0, 0), speed 10 m/s.
   auto ctrl_id = entity->GetControllers().Add(
       std::make_unique<MoveToPointController>(math::Vector3{10, 0, 0}, /*speed=*/10.f,
                                               /*face_movement=*/false),
       entity, 0);
   EXPECT_TRUE(entity->GetControllers().Contains(ctrl_id));
 
-  // Tick 0.5s → 5m progress.
   space.Tick(0.5f);
   EXPECT_NEAR(entity->Position().x, 5.f, 0.1f);
   EXPECT_TRUE(entity->GetControllers().Contains(ctrl_id));
 
-  // Tick 0.5s → 10m, arrives at destination.
   space.Tick(0.5f);
   EXPECT_NEAR(entity->Position().x, 10.f, 0.1f);
-  // Controller finishes and is reaped.
   EXPECT_FALSE(entity->GetControllers().Contains(ctrl_id));
 }
-
-// ============================================================================
-// Scenario #9 — 1000-entity tick performance budget: p50 < 20 ms,
-// p99 < 50 ms at 10 Hz. Space::Tick + controller updates are pure C++.
-// ============================================================================
 
 TEST(CellAppIntegration, ThousandEntityTickWithinPerfBudget) {
   Space space(1);
@@ -533,7 +432,6 @@ TEST(CellAppIntegration, ThousandEntityTickWithinPerfBudget) {
   }
   ASSERT_EQ(space.EntityCount(), static_cast<size_t>(kEntityCount));
 
-  // Run 100 ticks at 10 Hz (dt=0.1s), collect timing.
   constexpr int kTickCount = 100;
   std::vector<double> tick_ms;
   tick_ms.reserve(kTickCount);
@@ -551,11 +449,6 @@ TEST(CellAppIntegration, ThousandEntityTickWithinPerfBudget) {
   EXPECT_LT(p50, 20.0) << "p50 tick time should be < 20 ms";
   EXPECT_LT(p99, 50.0) << "p99 tick time should be < 50 ms";
 }
-
-// ============================================================================
-// Scenario #1 — Multi-process: machined + CellAppMgr + CellApp all start
-// and register with each other. Windows-only (uses CreateProcessW).
-// ============================================================================
 
 #if defined(_WIN32)
 
@@ -782,7 +675,6 @@ TEST(CellAppIntegration, AllProcessesStartAndRegister) {
     GTEST_SKIP() << "server binaries not found; build_root=" << BuildRootInteg();
   }
 
-  // 1. Launch machined.
   uint16_t machined_port = 0;
   ChildProcess machined;
   for (int attempt = 0; attempt < kRetryCount; ++attempt) {
@@ -803,7 +695,6 @@ TEST(CellAppIntegration, AllProcessesStartAndRegister) {
 
   const std::wstring machined_addr = L"127.0.0.1:" + std::to_wstring(machined_port);
 
-  // 2. Launch CellAppMgr.
   uint16_t cellappmgr_port = 0;
   ChildProcess cellappmgr;
   for (int attempt = 0; attempt < kRetryCount; ++attempt) {
@@ -822,7 +713,6 @@ TEST(CellAppIntegration, AllProcessesStartAndRegister) {
   }
   ASSERT_NE(cellappmgr_port, 0u) << "cellappmgr failed to start\n" << machined.Diagnostic();
 
-  // 3. Launch CellApp.
   uint16_t cellapp_port = 0;
   ChildProcess cellapp;
   for (int attempt = 0; attempt < kRetryCount; ++attempt) {
@@ -843,7 +733,6 @@ TEST(CellAppIntegration, AllProcessesStartAndRegister) {
                               << machined.Diagnostic() << "\n"
                               << cellappmgr.Diagnostic();
 
-  // 4. Verify both CellAppMgr and CellApp registered with machined.
   EventDispatcher disp{"integ_registry"};
   disp.SetMaxPollWait(Milliseconds(1));
   NetworkInterface net(disp);

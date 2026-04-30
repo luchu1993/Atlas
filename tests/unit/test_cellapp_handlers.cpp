@@ -1,17 +1,5 @@
-// CellApp message handler tests.
-//
-// Drives the handlers directly (bypassing ServerApp::Init and the CLR
-// bring-up) to lock in handler behaviour: entity creation/destruction,
-// space lifecycle, avatar validation, witness enable/disable, and the
-// client-cell-rpc validation chain.
-//
-// What this test CAN'T cover:
-//   - real network dispatch (needs a live BaseApp)
-//   - the C# script side of CreateCellEntity (RestoreEntity callback)
-//   - the BaseApp-reachable CellEntityCreated ack (requires a Channel;
-//     we pass nullptr and assert the local state mutations only)
-
 #include <cmath>
+#include <cstdint>
 #include <memory>
 
 #include <gtest/gtest.h>
@@ -33,27 +21,20 @@ namespace {
 
 class CellAppHandlersTest : public ::testing::Test {
  protected:
-  // Plain CellApp instance without ServerApp::Init() — handlers that
-  // don't need the network / CLR work fine on this setup.
   EventDispatcher dispatcher_{"test_cellapp_handlers"};
   NetworkInterface network_{dispatcher_};
   CellApp app_{dispatcher_, network_};
 
   void SetUp() override {
     EntityDefRegistry::Instance().clear();
-    // C7 trust boundary: tests drive OnClientCellRpcForward with a
-    // default-constructed Address{} as src (no wire dispatcher in the
-    // loop). Trust that sentinel so the rest of the validation
-    // pipeline — the piece these tests actually exercise — isn't
-    // short-circuited at the trust check.
     app_.InsertTrustedBaseAppForTest(Address{});
   }
   void TearDown() override { EntityDefRegistry::Instance().clear(); }
 
-  auto MakeCreate(EntityID base_id, SpaceID sp, math::Vector3 pos = {0, 0, 0})
+  auto MakeCreate(EntityID entity_id, SpaceID sp, math::Vector3 pos = {0, 0, 0})
       -> cellapp::CreateCellEntity {
     cellapp::CreateCellEntity msg;
-    msg.entity_id = base_id;
+    msg.entity_id = entity_id;
     msg.type_id = 1;
     msg.space_id = sp;
     msg.position = pos;
@@ -63,32 +44,36 @@ class CellAppHandlersTest : public ::testing::Test {
   }
 };
 
-TEST_F(CellAppHandlersTest, CreateCellEntityRegistersInBothIndexes) {
-  auto msg = MakeCreate(/*base_id=*/100, /*space=*/5, {10, 0, 10});
+auto FakeChannel(uintptr_t tag) -> Channel* {
+  return reinterpret_cast<Channel*>(tag);
+}
+
+TEST_F(CellAppHandlersTest, CreateCellEntityUsesUnifiedEntityId) {
+  auto msg = MakeCreate(/*entity_id=*/100, /*space=*/5, {10, 0, 10});
   app_.OnCreateCellEntity({}, /*ch=*/nullptr, msg);
 
   ASSERT_EQ(app_.Spaces().size(), 1u);
   EXPECT_NE(app_.FindSpace(5), nullptr);
 
-  auto* by_base = app_.FindEntityByBaseId(100);
-  ASSERT_NE(by_base, nullptr);
-  EXPECT_EQ(by_base->Id(), 100u);
-  EXPECT_FLOAT_EQ(by_base->Position().x, 10.f);
+  auto* real_entity = app_.FindRealEntity(100);
+  ASSERT_NE(real_entity, nullptr);
+  EXPECT_EQ(real_entity->Id(), 100u);
+  EXPECT_FLOAT_EQ(real_entity->Position().x, 10.f);
 
-  auto* by_cell = app_.FindEntity(by_base->Id());
-  EXPECT_EQ(by_cell, by_base);
+  auto* by_entity_id = app_.FindEntity(real_entity->Id());
+  EXPECT_EQ(by_entity_id, real_entity);
 }
 
 TEST_F(CellAppHandlersTest, CreateCellEntityRejectsInvalidSpaceId) {
-  auto msg = MakeCreate(100, /*space_id=*/0);  // kInvalidSpaceID
+  auto msg = MakeCreate(100, /*space_id=*/0);
   app_.OnCreateCellEntity({}, nullptr, msg);
-  EXPECT_EQ(app_.FindEntityByBaseId(100), nullptr);
+  EXPECT_EQ(app_.FindRealEntity(100), nullptr);
   EXPECT_TRUE(app_.Spaces().empty());
 }
 
 TEST_F(CellAppHandlersTest, CreateSpaceRejectsInvalidSpaceId) {
   cellapp::CreateSpace cs;
-  cs.space_id = 0;  // kInvalidSpaceID
+  cs.space_id = 0;
   app_.OnCreateSpace({}, nullptr, cs);
   EXPECT_TRUE(app_.Spaces().empty());
 }
@@ -101,17 +86,56 @@ TEST_F(CellAppHandlersTest, CreateCellEntityUsesExistingSpace) {
 
   auto msg = MakeCreate(1, 42);
   app_.OnCreateCellEntity({}, nullptr, msg);
-  EXPECT_EQ(app_.Spaces().size(), 1u);  // no auto-created duplicate
+  EXPECT_EQ(app_.Spaces().size(), 1u);
 }
 
-TEST_F(CellAppHandlersTest, DestroyCellEntityRemovesFromBothIndexes) {
+TEST_F(CellAppHandlersTest, DuplicateCreateCellEntityKeepsExistingReal) {
+  app_.OnCreateCellEntity({}, nullptr, MakeCreate(100, 1, {1, 0, 1}));
+  auto* original = app_.FindRealEntity(100);
+  ASSERT_NE(original, nullptr);
+  ASSERT_EQ(app_.FindSpace(1)->EntityCount(), 1u);
+
+  app_.OnCreateCellEntity({}, nullptr, MakeCreate(100, 2, {9, 0, 9}));
+
+  EXPECT_EQ(app_.FindRealEntity(100), original);
+  EXPECT_EQ(app_.FindEntity(100), original);
+  EXPECT_EQ(app_.FindSpace(1)->EntityCount(), 1u);
+  EXPECT_EQ(app_.FindSpace(2), nullptr);
+  EXPECT_FLOAT_EQ(original->Position().x, 1.f);
+  EXPECT_FLOAT_EQ(original->Position().z, 1.f);
+}
+
+TEST_F(CellAppHandlersTest, DuplicateCreateCellEntityRejectsExistingGhost) {
+  cellapp::CreateGhost ghost;
+  ghost.entity_id = 200;
+  ghost.type_id = 1;
+  ghost.space_id = 1;
+  ghost.position = {2, 0, 2};
+  ghost.direction = {1, 0, 0};
+  app_.OnCreateGhost({}, FakeChannel(0xBEEF), ghost);
+
+  auto* original = app_.FindEntity(200);
+  ASSERT_NE(original, nullptr);
+  ASSERT_TRUE(original->IsGhost());
+  ASSERT_EQ(app_.FindSpace(1)->EntityCount(), 1u);
+
+  app_.OnCreateCellEntity({}, nullptr, MakeCreate(200, 2, {9, 0, 9}));
+
+  EXPECT_EQ(app_.FindEntity(200), original);
+  EXPECT_EQ(app_.FindRealEntity(200), nullptr);
+  EXPECT_TRUE(original->IsGhost());
+  EXPECT_EQ(app_.FindSpace(1)->EntityCount(), 1u);
+  EXPECT_EQ(app_.FindSpace(2), nullptr);
+}
+
+TEST_F(CellAppHandlersTest, DestroyCellEntityRemovesEntity) {
   app_.OnCreateCellEntity({}, nullptr, MakeCreate(100, 1));
-  ASSERT_NE(app_.FindEntityByBaseId(100), nullptr);
+  ASSERT_NE(app_.FindRealEntity(100), nullptr);
 
   cellapp::DestroyCellEntity d{100};
   app_.OnDestroyCellEntity({}, nullptr, d);
 
-  EXPECT_EQ(app_.FindEntityByBaseId(100), nullptr);
+  EXPECT_EQ(app_.FindRealEntity(100), nullptr);
   EXPECT_EQ(app_.FindSpace(1)->EntityCount(), 0u);
 }
 
@@ -124,8 +148,8 @@ TEST_F(CellAppHandlersTest, DestroySpaceEvictsEntities) {
   app_.OnDestroySpace({}, nullptr, ds);
 
   EXPECT_EQ(app_.Spaces().size(), 0u);
-  EXPECT_EQ(app_.FindEntityByBaseId(100), nullptr);
-  EXPECT_EQ(app_.FindEntityByBaseId(101), nullptr);
+  EXPECT_EQ(app_.FindRealEntity(100), nullptr);
+  EXPECT_EQ(app_.FindRealEntity(101), nullptr);
 }
 
 TEST_F(CellAppHandlersTest, AvatarUpdateMovesEntity) {
@@ -138,7 +162,7 @@ TEST_F(CellAppHandlersTest, AvatarUpdateMovesEntity) {
   u.on_ground = true;
   app_.OnAvatarUpdate({}, nullptr, u);
 
-  auto* e = app_.FindEntityByBaseId(100);
+  auto* e = app_.FindRealEntity(100);
   ASSERT_NE(e, nullptr);
   EXPECT_FLOAT_EQ(e->Position().x, 5.f);
   EXPECT_FLOAT_EQ(e->Direction().z, 1.f);
@@ -150,10 +174,10 @@ TEST_F(CellAppHandlersTest, AvatarUpdateRejectsTeleport) {
 
   cellapp::AvatarUpdate u;
   u.entity_id = 100;
-  u.position = {10000.f, 0, 0};  // way beyond kMaxSingleTickMove
+  u.position = {10000.f, 0, 0};
   app_.OnAvatarUpdate({}, nullptr, u);
 
-  auto* e = app_.FindEntityByBaseId(100);
+  auto* e = app_.FindRealEntity(100);
   EXPECT_FLOAT_EQ(e->Position().x, 0.f) << "teleport must be rejected";
 }
 
@@ -165,7 +189,7 @@ TEST_F(CellAppHandlersTest, AvatarUpdateRejectsNaN) {
   u.position = {std::nanf(""), 0, 0};
   app_.OnAvatarUpdate({}, nullptr, u);
 
-  auto* e = app_.FindEntityByBaseId(100);
+  auto* e = app_.FindRealEntity(100);
   EXPECT_FLOAT_EQ(e->Position().x, 0.f);
 }
 
@@ -178,32 +202,26 @@ TEST_F(CellAppHandlersTest, AvatarUpdateRejectsNaNDirection) {
   u.direction = {0, std::nanf(""), 0};
   app_.OnAvatarUpdate({}, nullptr, u);
 
-  auto* e = app_.FindEntityByBaseId(100);
-  // Position must not have changed — the entire update is rejected.
+  auto* e = app_.FindRealEntity(100);
   EXPECT_FLOAT_EQ(e->Position().x, 0.f);
 }
 
 TEST_F(CellAppHandlersTest, EnableDisableWitnessTogglesOnEntity) {
   app_.OnCreateCellEntity({}, nullptr, MakeCreate(100, 1));
 
-  // After C2: EnableWitness carries only the entity id; radius +
-  // hysteresis come from CellAppConfig.
   cellapp::EnableWitness e;
   e.entity_id = 100;
   app_.OnEnableWitness({}, nullptr, e);
-  EXPECT_TRUE(app_.FindEntityByBaseId(100)->HasWitness());
+  EXPECT_TRUE(app_.FindRealEntity(100)->HasWitness());
 
   cellapp::DisableWitness d{100};
   app_.OnDisableWitness({}, nullptr, d);
-  EXPECT_FALSE(app_.FindEntityByBaseId(100)->HasWitness());
+  EXPECT_FALSE(app_.FindRealEntity(100)->HasWitness());
 }
 
-// OnCreateCellEntity no longer auto-enables a witness — witnesses are
-// attached via the client-bind path (C3 hooks) or an explicit
-// EnableWitness message. This test locks in the new contract.
 TEST_F(CellAppHandlersTest, CreateCellEntityDoesNotAutoEnableWitness) {
   app_.OnCreateCellEntity({}, nullptr, MakeCreate(100, 1));
-  auto* entity = app_.FindEntityByBaseId(100);
+  auto* entity = app_.FindRealEntity(100);
   ASSERT_NE(entity, nullptr);
   EXPECT_FALSE(entity->HasWitness());
 }
@@ -212,7 +230,7 @@ TEST_F(CellAppHandlersTest, OnSetAoIRadiusUpdatesActiveWitness) {
   app_.OnCreateCellEntity({}, nullptr, MakeCreate(100, 1));
   cellapp::EnableWitness e{100};
   app_.OnEnableWitness({}, nullptr, e);
-  auto* entity = app_.FindEntityByBaseId(100);
+  auto* entity = app_.FindRealEntity(100);
   ASSERT_TRUE(entity->HasWitness());
 
   cellapp::SetAoIRadius s;
@@ -227,18 +245,15 @@ TEST_F(CellAppHandlersTest, OnSetAoIRadiusUpdatesActiveWitness) {
 
 TEST_F(CellAppHandlersTest, OnSetAoIRadiusMissingWitnessIsNoop) {
   app_.OnCreateCellEntity({}, nullptr, MakeCreate(100, 1));
-  // No EnableWitness — witness is absent.
   cellapp::SetAoIRadius s;
   s.entity_id = 100;
   s.radius = 42.5f;
   s.hysteresis = 7.f;
-  app_.OnSetAoIRadius({}, nullptr, s);  // should log-warn, not crash
+  app_.OnSetAoIRadius({}, nullptr, s);
 
-  EXPECT_FALSE(app_.FindEntityByBaseId(100)->HasWitness());
+  EXPECT_FALSE(app_.FindRealEntity(100)->HasWitness());
 }
 
-// CellApp reports NumRealEntities to CellAppMgr in every InformCellLoad.
-// Ghosts MUST NOT count — the balancer tracks Real load.
 TEST_F(CellAppHandlersTest, NumRealEntitiesExcludesGhosts) {
   EXPECT_EQ(app_.NumRealEntities(), 0u);
 
@@ -246,15 +261,12 @@ TEST_F(CellAppHandlersTest, NumRealEntitiesExcludesGhosts) {
   app_.OnCreateCellEntity({}, nullptr, MakeCreate(101, 1));
   EXPECT_EQ(app_.NumRealEntities(), 2u);
 
-  // Convert one to a Ghost. A Ghost no longer counts as Real-on-this-CellApp.
-  auto* ent = app_.FindEntityByBaseId(100);
+  auto* ent = app_.FindRealEntity(100);
   ASSERT_NE(ent, nullptr);
   ent->ConvertRealToGhost(/*new_real_channel=*/nullptr);
   EXPECT_EQ(app_.NumRealEntities(), 1u);
 }
 
-// persistent_load_ is 0 until a tick drives UpdatePersistentLoad. Handler-
-// level tests never call AdvanceTime, so 0 is the stable observable state.
 TEST_F(CellAppHandlersTest, PersistentLoadStartsAtZero) {
   EXPECT_FLOAT_EQ(app_.PersistentLoad(), 0.f);
 }
@@ -264,25 +276,14 @@ TEST_F(CellAppHandlersTest, OnSetAoIRadiusClampsToMax) {
   cellapp::EnableWitness e{100};
   app_.OnEnableWitness({}, nullptr, e);
 
-  // CellAppConfig::MaxAoIRadius() defaults to 500m. A value beyond that
-  // must be clamped inside Witness::SetAoIRadius.
   cellapp::SetAoIRadius s;
   s.entity_id = 100;
   s.radius = 10'000.f;
   s.hysteresis = 5.f;
   app_.OnSetAoIRadius({}, nullptr, s);
 
-  EXPECT_FLOAT_EQ(app_.FindEntityByBaseId(100)->GetWitness()->AoIRadius(), 500.f);
+  EXPECT_FLOAT_EQ(app_.FindRealEntity(100)->GetWitness()->AoIRadius(), 500.f);
 }
-
-// ---------------------------------------------------------------------------
-// ClientCellRpcForward validation chain
-// ---------------------------------------------------------------------------
-//
-// Register a synthetic entity type with a cell_methods entry whose
-// direction bits are 0x02 and exposed=AllClients, then verify the
-// handler accepts valid calls and rejects each of the misconfigurations
-// the four-layer defence guards against.
 
 namespace {
 
@@ -292,8 +293,6 @@ auto PackRpcId(uint8_t direction, uint16_t type_index, uint8_t method_index) -> 
 }
 
 auto RegisterTypeWithRpc(uint16_t type_id, uint32_t rpc_id, ExposedScope scope) {
-  // Synthesize the binary descriptor shape consumed by RegisterType
-  // (see entity_def_registry.cc). Minimal — 0 properties, 1 RPC.
   BinaryWriter w;
   w.WriteString("TestEntity");
   w.Write<uint16_t>(type_id);
@@ -313,27 +312,9 @@ auto RegisterTypeWithRpc(uint16_t type_id, uint32_t rpc_id, ExposedScope scope) 
 
 }  // namespace
 
-// Baseline trust check. Any source address not registered via
-// InsertTrustedBaseAppForTest (or the machined Birth subscription in
-// production) gets its ClientCellRpcForward dropped at the front door —
-// before any L3/L4 validation or script dispatch.
 TEST_F(CellAppHandlersTest, ClientCellRpcRejectsUntrustedSource) {
-  const uint32_t kCellRpc = 0x00800101u;  // direction=0x02, type=1, method=1
-  BinaryWriter w;
-  w.WriteString("TestEntity");
-  w.Write<uint16_t>(1);
-  w.Write<uint8_t>(1);  // has_cell
-  w.Write<uint8_t>(1);  // has_client
-  w.WritePackedInt(0);
-  w.WritePackedInt(1);
-  w.WriteString("method");
-  w.WritePackedInt(kCellRpc);
-  w.WritePackedInt(0);
-  w.Write<uint8_t>(static_cast<uint8_t>(ExposedScope::kAllClients));
-  w.Write<uint8_t>(0);
-  w.Write<uint8_t>(0);
-  auto buf = w.Detach();
-  EntityDefRegistry::Instance().RegisterType(buf.data(), static_cast<int32_t>(buf.size()));
+  const uint32_t kCellRpc = PackRpcId(0x02, 1, 1);
+  RegisterTypeWithRpc(1, kCellRpc, ExposedScope::kAllClients);
   app_.OnCreateCellEntity({}, nullptr, MakeCreate(500, 1));
 
   cellapp::ClientCellRpcForward msg;
@@ -341,15 +322,10 @@ TEST_F(CellAppHandlersTest, ClientCellRpcRejectsUntrustedSource) {
   msg.source_entity_id = 500;
   msg.rpc_id = kCellRpc;
 
-  // SetUp seeded trust for Address{}; use a different (untrusted) addr.
   const Address untrusted(0x7F000001u, 12345);
   app_.OnClientCellRpcForward(untrusted, nullptr, msg);
-  // No direct observable — the handler drops silently with a warn log
-  // rather than throwing. Defensive "didn't crash" assertion.
   SUCCEED();
 
-  // Positive control: same msg through the trusted Address{} passes
-  // the trust check and reaches downstream validation (which accepts).
   app_.OnClientCellRpcForward({}, nullptr, msg);
 }
 
@@ -360,8 +336,6 @@ TEST_F(CellAppHandlersTest, ClientCellRpcRejectsUnknownRpcId) {
   msg.target_entity_id = 100;
   msg.source_entity_id = 100;
   msg.rpc_id = 0xDEADBEEF;
-  // No registered RPC → handler WARN-logs and returns. Not crashing is
-  // the assertion.
   app_.OnClientCellRpcForward({}, nullptr, msg);
 }
 
@@ -375,14 +349,11 @@ TEST_F(CellAppHandlersTest, ClientCellRpcRejectsNonExposed) {
   msg.target_entity_id = 100;
   msg.source_entity_id = 100;
   msg.rpc_id = kCellRpc;
-  // Non-exposed → rejected at layer 3 (no crash assertion).
   app_.OnClientCellRpcForward({}, nullptr, msg);
 }
 
 TEST_F(CellAppHandlersTest, ClientCellRpcRejectsWrongDirection) {
   const uint16_t kTypeId = 1;
-  // Direction 0x03 (Base method) but sent through the cell RPC channel —
-  // must be rejected.
   const uint32_t kBaseRpc = PackRpcId(0x03, kTypeId, 1);
   RegisterTypeWithRpc(kTypeId, kBaseRpc, ExposedScope::kAllClients);
   app_.OnCreateCellEntity({}, nullptr, MakeCreate(100, 1));
@@ -403,9 +374,8 @@ TEST_F(CellAppHandlersTest, ClientCellRpcOwnClientRejectsCrossEntity) {
 
   cellapp::ClientCellRpcForward msg;
   msg.target_entity_id = 100;
-  msg.source_entity_id = 200;  // different from target
+  msg.source_entity_id = 200;
   msg.rpc_id = kCellRpc;
-  // OwnClient requires source == target; cross-entity call rejected.
   app_.OnClientCellRpcForward({}, nullptr, msg);
 }
 
@@ -420,14 +390,11 @@ TEST_F(CellAppHandlersTest, ClientCellRpcAcceptsAllClientsCrossEntity) {
   msg.target_entity_id = 100;
   msg.source_entity_id = 200;
   msg.rpc_id = kCellRpc;
-  // AllClients accepts cross-entity; handler reaches the (stubbed)
-  // dispatch branch.
   app_.OnClientCellRpcForward({}, nullptr, msg);
 }
 
 TEST_F(CellAppHandlersTest, InternalCellRpcBypassesExposedCheck) {
   const uint16_t kTypeId = 1;
-  // Not exposed, but internal path doesn't care — BaseApp is trusted.
   const uint32_t kCellRpc = PackRpcId(0x02, kTypeId, 1);
   RegisterTypeWithRpc(kTypeId, kCellRpc, ExposedScope::kNone);
   app_.OnCreateCellEntity({}, nullptr, MakeCreate(100, 1));
@@ -436,24 +403,9 @@ TEST_F(CellAppHandlersTest, InternalCellRpcBypassesExposedCheck) {
   msg.target_entity_id = 100;
   msg.rpc_id = kCellRpc;
   app_.OnInternalCellRpc({}, nullptr, msg);
-  // No way to assert success without a dispatched C# callback; the
-  // test passes if the handler does not crash.
 }
-
-// ---------------------------------------------------------------------------
-// Inter-CellApp handler coverage
-// ---------------------------------------------------------------------------
-
-namespace {
-
-auto FakeChannel(uintptr_t tag) -> Channel* {
-  return reinterpret_cast<Channel*>(tag);
-}
-
-}  // namespace
 
 TEST_F(CellAppHandlersTest, CreateGhostWithNullChannelRejected) {
-  // Pre-create the space so the handler doesn't bail for a missing space.
   cellapp::CreateSpace cs;
   cs.space_id = 1;
   app_.OnCreateSpace({}, nullptr, cs);
@@ -467,23 +419,19 @@ TEST_F(CellAppHandlersTest, CreateGhostWithNullChannelRejected) {
   msg.on_ground = false;
   msg.real_cellapp_addr = Address(0x7F000001u, 30001);
   msg.base_addr = Address(0x7F000001u, 20000);
-  msg.entity_id = 500;
   msg.event_seq = 0;
   msg.volatile_seq = 0;
 
   app_.OnCreateGhost({}, /*ch=*/nullptr, msg);
 
-  // Null channel must cause the handler to bail out — no ghost created.
   EXPECT_EQ(app_.FindEntity(500), nullptr);
 }
 
 TEST_F(CellAppHandlersTest, GhostPositionUpdateRejectsNaN) {
-  // Create a space for the ghost to live in.
   cellapp::CreateSpace cs;
   cs.space_id = 1;
   app_.OnCreateSpace({}, nullptr, cs);
 
-  // Create a ghost via the handler with a non-null fake channel.
   cellapp::CreateGhost cg;
   cg.entity_id = 600;
   cg.type_id = 1;
@@ -493,7 +441,6 @@ TEST_F(CellAppHandlersTest, GhostPositionUpdateRejectsNaN) {
   cg.on_ground = false;
   cg.real_cellapp_addr = Address(0x7F000001u, 30001);
   cg.base_addr = Address(0x7F000001u, 20000);
-  cg.entity_id = 600;
   cg.event_seq = 0;
   cg.volatile_seq = 0;
 
@@ -504,7 +451,6 @@ TEST_F(CellAppHandlersTest, GhostPositionUpdateRejectsNaN) {
   EXPECT_FLOAT_EQ(ghost->Position().x, 10.f);
   EXPECT_FLOAT_EQ(ghost->Position().z, 20.f);
 
-  // Send a position update containing NaN — must be rejected.
   cellapp::GhostPositionUpdate upd;
   upd.entity_id = 600;
   upd.position = {std::nanf(""), 0, 0};
@@ -513,15 +459,12 @@ TEST_F(CellAppHandlersTest, GhostPositionUpdateRejectsNaN) {
   upd.volatile_seq = 1;
   app_.OnGhostPositionUpdate({}, nullptr, upd);
 
-  // Position must remain at the original values.
   EXPECT_FLOAT_EQ(ghost->Position().x, 10.f);
   EXPECT_FLOAT_EQ(ghost->Position().z, 20.f);
 }
 
-// Peer death must drop Ghosts whose real_channel points at the dying
-// peer AND scrub the dead Channel* from every surviving Real's Haunt
-// list; otherwise a later GhostMaintainer broadcast would chase a
-// pointer the NetworkInterface has since condemned.
+// Dead Channel* entries must be scrubbed before GhostMaintainer can
+// reuse a pointer that NetworkInterface has condemned.
 TEST_F(CellAppHandlersTest, PeerDeathDropsOrphanGhostsAndClearsHaunts) {
   cellapp::CreateSpace cs;
   cs.space_id = 1;
@@ -530,7 +473,6 @@ TEST_F(CellAppHandlersTest, PeerDeathDropsOrphanGhostsAndClearsHaunts) {
   auto* dying_ch = FakeChannel(0xDEAD);
   auto* other_ch = FakeChannel(0xCAFE);
 
-  // Ghost whose Real lives on the dying peer → must be dropped.
   cellapp::CreateGhost cg;
   cg.entity_id = 700;
   cg.type_id = 1;
@@ -538,11 +480,9 @@ TEST_F(CellAppHandlersTest, PeerDeathDropsOrphanGhostsAndClearsHaunts) {
   cg.position = {0, 0, 0};
   cg.direction = {1, 0, 0};
   cg.real_cellapp_addr = Address(0x7F000001u, 40001);
-  cg.entity_id = 700;
   app_.OnCreateGhost({}, dying_ch, cg);
   ASSERT_NE(app_.FindEntity(700), nullptr);
 
-  // Ghost whose Real lives elsewhere → must survive the sweep.
   cellapp::CreateGhost cg_ok;
   cg_ok.entity_id = 701;
   cg_ok.type_id = 1;
@@ -550,13 +490,11 @@ TEST_F(CellAppHandlersTest, PeerDeathDropsOrphanGhostsAndClearsHaunts) {
   cg_ok.position = {5, 0, 5};
   cg_ok.direction = {1, 0, 0};
   cg_ok.real_cellapp_addr = Address(0x7F000001u, 40002);
-  cg_ok.entity_id = 701;
   app_.OnCreateGhost({}, other_ch, cg_ok);
   ASSERT_NE(app_.FindEntity(701), nullptr);
 
-  // Real with Haunt pointing at the dying peer → Haunt must be cleared.
   app_.OnCreateCellEntity({}, nullptr, MakeCreate(800, 1, {20, 0, 20}));
-  auto* real = app_.FindEntityByBaseId(800);
+  auto* real = app_.FindRealEntity(800);
   ASSERT_NE(real, nullptr);
   ASSERT_TRUE(real->IsReal());
   auto* rd = real->GetRealData();

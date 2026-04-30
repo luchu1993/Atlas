@@ -101,10 +101,7 @@ struct CellAppHost {
   }
 };
 
-// Pump both dispatchers in round-robin until `pred` holds or timeout.
-// FlushDirtySendChannels drains kBatched messages out of the per-channel
-// deferred bundle - without it, CreateGhost/GhostDelta/GhostPositionUpdate
-// (all kBatched) never leave the sender.
+// Pump both dispatchers and kBatched sends until `pred` holds or timeout.
 auto PumpUntil(CellAppHost& a, CellAppHost& b, const std::function<bool()>& pred,
                std::chrono::milliseconds timeout = std::chrono::milliseconds(2000)) -> bool {
   const auto deadline = std::chrono::steady_clock::now() + timeout;
@@ -156,7 +153,7 @@ struct RealGhostFixture {
     cce.direction = {1.f, 0.f, 0.f};
     A.app.OnCreateCellEntity({}, nullptr, cce);
 
-    real = A.app.FindEntityByBaseId(kBaseId);
+    real = A.app.FindRealEntity(kBaseId);
     EXPECT_NE(real, nullptr);
     if (real != nullptr) {
       EXPECT_TRUE(real->IsReal());
@@ -317,7 +314,7 @@ TEST(DistributedSpaceOverRudp, OffloadEntity_RehydratesPeerRealAndAcks) {
   EXPECT_EQ(rehydrated->Id(), offload.entity_id);
   EXPECT_FLOAT_EQ(rehydrated->Position().x, offload.position.x);
   EXPECT_FLOAT_EQ(rehydrated->Position().z, offload.position.z);
-  EXPECT_EQ(fx.B.app.FindEntityByBaseId(offload.entity_id), rehydrated);
+  EXPECT_EQ(fx.B.app.FindRealEntity(offload.entity_id), rehydrated);
 
   // OffloadEntityAck round-trip: A's pending entry drains once the ack
   // arrives on the bidirectional RUDP channel.

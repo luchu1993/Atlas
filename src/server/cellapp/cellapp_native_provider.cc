@@ -67,11 +67,11 @@ void CellAppNativeProvider::SendClientRpc(uint32_t entity_id, uint32_t rpc_id, R
 
   // One BroadcastRpcFromCell per destination BaseApp.
   std::unordered_map<Address, std::vector<EntityID>> by_baseapp;
-  const auto source_base_id = source->Id();
+  const EntityID source_entity_id = source->Id();
   const auto& source_base_addr = source->BaseAddr();
 
   if (target != RpcTarget::kOthers) {
-    by_baseapp[source_base_addr].push_back(source_base_id);
+    by_baseapp[source_base_addr].push_back(source_entity_id);
   }
   if (target != RpcTarget::kOwner) {
     // O(W) over observers; independent of population size.
@@ -158,18 +158,18 @@ void CellAppNativeProvider::PublishReplicationFrame(
   if (owner_delta_len > 0 && event_seq > 0 && entity->HasWitness() && network_) {
     auto base_ch = network_->ConnectRudpNocwnd(entity->BaseAddr());
     if (base_ch) {
-      const auto base_id = entity->Id();
+      const EntityID owner_entity_id = entity->Id();
       std::vector<std::byte> envelope;
       envelope.reserve(1 + 4 + 8 + static_cast<std::size_t>(owner_delta_len));
       envelope.push_back(static_cast<std::byte>(CellAoIEnvelopeKind::kEntityPropertyUpdate));
       for (int i = 0; i < 4; ++i)
-        envelope.push_back(static_cast<std::byte>((base_id >> (i * 8)) & 0xFF));
+        envelope.push_back(static_cast<std::byte>((owner_entity_id >> (i * 8)) & 0xFF));
       for (int i = 0; i < 8; ++i)
         envelope.push_back(static_cast<std::byte>((event_seq >> (i * 8)) & 0xFF));
       envelope.insert(envelope.end(), owner_delta, owner_delta + owner_delta_len);
 
       baseapp::ReplicatedReliableDeltaFromCell outgoing;
-      outgoing.entity_id = base_id;
+      outgoing.entity_id = owner_entity_id;
       outgoing.delta = std::move(envelope);
       (void)(*base_ch)->SendMessage(outgoing);
     }

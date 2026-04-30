@@ -44,8 +44,7 @@ struct OffloadEntityAck;
 
 // Spatial-simulation server process. Inherits from EntityApp (peer of
 // BaseApp) and owns the local Space map plus a single entity index
-// keyed by the unified entity id (DBApp-allocated, identical to
-// base_entity_id on the BaseApp side).
+// keyed by the unified entity id allocated by DBApp.
 // Tick flow:
 //   OnStartOfTick - drives EntityApp's C# on_tick
 //   ... Updatables ...
@@ -66,7 +65,7 @@ class CellApp : public EntityApp {
     return spaces_;
   }
   [[nodiscard]] auto FindEntity(EntityID cell_id) -> CellEntity*;
-  [[nodiscard]] auto FindEntityByBaseId(EntityID base_id) -> CellEntity*;
+  [[nodiscard]] auto FindRealEntity(EntityID entity_id) -> CellEntity*;
   [[nodiscard]] auto FindSpace(SpaceID id) -> Space*;
   [[nodiscard]] auto NativeProvider() -> CellAppNativeProvider* { return native_provider_; }
 
@@ -122,9 +121,6 @@ class CellApp : public EntityApp {
   // later broadcasts don't chase a freed pointer.
   void OnPeerCellAppDeath(const Address& addr, Channel* dying);
 
-  // Invoked from NetworkInterface's disconnect callback. Disables any
-  // witness whose cached send channel pointer matches the dying channel
-  // before the underlying Channel object is destroyed.
   void OnOutboundChannelDeath(Channel& dying);
 
   // Build but don't send - caller chooses transport. The C#
@@ -227,10 +223,8 @@ class CellApp : public EntityApp {
   std::unordered_map<SpaceID, std::unique_ptr<Space>> spaces_;
 
   // Non-owning - the owning unique_ptr lives in the peer Space's
-  // entities_ map. Holds BOTH Real and Ghost entities. Keyed by the
-  // unified entity id (DBApp-allocated, identical to base_entity_id);
-  // FindEntityByBaseId gates on IsReal() to keep client RPC routing
-  // off of Ghost entries.
+  // entities_ map. Holds both Real and Ghost entities; FindRealEntity
+  // gates on IsReal() to keep client RPC routing off Ghost entries.
   std::unordered_map<EntityID, CellEntity*> entity_population_;
 
   // Tight cadence (50 ticks ~ 1 s at 50 Hz) because backup bytes are

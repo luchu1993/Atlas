@@ -135,7 +135,7 @@ TEST(OffloadTraversal, EntityCrossesBspSplit_PumpsOffload) {
   cce.position = {-5.f, 0.f, 0.f};
   cce.direction = {1.f, 0.f, 0.f};
   A.app.OnCreateCellEntity({}, nullptr, cce);
-  auto* real = A.app.FindEntityByBaseId(100);
+  auto* real = A.app.FindRealEntity(100);
   ASSERT_NE(real, nullptr);
   ASSERT_TRUE(real->IsReal());
 
@@ -147,7 +147,7 @@ TEST(OffloadTraversal, EntityCrossesBspSplit_PumpsOffload) {
   A.app.TickOffloadChecker();
 
   // Wait for the round-trip:
-  //   - B rehydrates a Real at base_id=100 (OnOffloadEntity fires),
+  //   - B rehydrates a Real at entity_id=100 (OnOffloadEntity fires),
   //   - A's pending_offloads_ drains when OffloadEntityAck arrives.
   const auto real_cell_id = real->Id();
   ASSERT_TRUE(PumpUntil(A, B, [&] {
@@ -199,7 +199,7 @@ TEST(OffloadTraversal, EntityStaysInOwnCell_NoOffload) {
   cce.position = {-5.f, 0.f, 0.f};
   cce.direction = {1.f, 0.f, 0.f};
   A.app.OnCreateCellEntity({}, nullptr, cce);
-  auto* real = A.app.FindEntityByBaseId(101);
+  auto* real = A.app.FindRealEntity(101);
   ASSERT_TRUE(real->IsReal());
 
   // Move the entity but keep it inside cell 1 (x stays < 0).

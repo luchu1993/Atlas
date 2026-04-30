@@ -188,11 +188,7 @@ auto CellApp::Init(int argc, char* argv[]) -> bool {
       GetMachinedClient(), /*self_addr=*/Network().RudpAddress(),
       [this](const Address& addr, Channel* dying) { OnPeerCellAppDeath(addr, dying); });
 
-  // AttachWitness caches the observer's RUDP channel pointer in lambda
-  // captures. NetworkInterface's disconnect callback fires synchronously
-  // *before* the channel's destructor runs (5s condemned window), giving
-  // us a safe point to disable affected witnesses so the captures stop
-  // dereferencing a soon-to-be-freed channel.
+  // Witness send callbacks cache Channel*, so clear them on disconnect.
   Network().SetDisconnectCallback([this](Channel& ch) { OnOutboundChannelDeath(ch); });
 
   // Track BaseApp peers so OnClientCellRpcForward can reject spoofed
@@ -320,7 +316,7 @@ void CellApp::TickBackupPump() {
   }
   auto fn = native_provider_->serialize_entity_fn();
 
-  for (const auto& [base_id, entity] : entity_population_) {
+  for (const auto& [entity_id, entity] : entity_population_) {
     if (entity == nullptr || !entity->IsReal()) continue;
     const Address& base_addr = entity->BaseAddr();
     if (base_addr.Ip() == 0) continue;  // no base binding yet - skip until next pump
@@ -336,9 +332,9 @@ void CellApp::TickBackupPump() {
     constexpr int32_t kMaxBackupBlobBytes = 256 * 1024;
     if (needed > kMaxBackupBlobBytes) {
       ATLAS_LOG_WARNING(
-          "CellApp: SerializeEntity probe returned {} bytes for base_id={} "
+          "CellApp: SerializeEntity probe returned {} bytes for entity_id={} "
           "(limit={}); skipping backup pump for this entity",
-          needed, base_id, kMaxBackupBlobBytes);
+          needed, entity_id, kMaxBackupBlobBytes);
       continue;
     }
 
@@ -347,8 +343,8 @@ void CellApp::TickBackupPump() {
     const int32_t rc = fn(entity->Id(), reinterpret_cast<uint8_t*>(blob.data()), needed, &real_len);
     if (rc != 0 || real_len <= 0) {
       ATLAS_LOG_WARNING(
-          "CellApp: SerializeEntity for backup pump failed (base_id={}, rc={}, real_len={})",
-          base_id, rc, real_len);
+          "CellApp: SerializeEntity for backup pump failed (entity_id={}, rc={}, real_len={})",
+          entity_id, rc, real_len);
       continue;
     }
     blob.resize(static_cast<std::size_t>(real_len));
@@ -357,14 +353,14 @@ void CellApp::TickBackupPump() {
     if (!base_ch) continue;  // base transiently unreachable - next pump will retry
 
     baseapp::BackupCellEntity msg;
-    msg.entity_id = base_id;
+    msg.entity_id = entity_id;
     msg.cell_backup_data = std::move(blob);
     const auto blob_size = msg.cell_backup_data.size();
     auto send_result = (*base_ch)->SendMessage(msg);
     if (!send_result) {
       ATLAS_LOG_WARNING(
-          "CellApp: BackupCellEntity send failed (base_id={}, blob_size={}, addr={}): {}", base_id,
-          blob_size, base_addr.ToString(), send_result.Error().Message());
+          "CellApp: BackupCellEntity send failed (entity_id={}, blob_size={}, addr={}): {}",
+          entity_id, blob_size, base_addr.ToString(), send_result.Error().Message());
     }
   }
 }
@@ -381,7 +377,7 @@ void CellApp::TickClientBaselinePump() {
   }
   auto fn = native_provider_->get_owner_snapshot_fn();
 
-  for (const auto& [base_id, entity] : entity_population_) {
+  for (const auto& [entity_id, entity] : entity_population_) {
     if (entity == nullptr || !entity->IsReal()) continue;
     // Only client-bound (has Witness) entities receive baselines - keeps
     // broadcast traffic proportional to client count, not entity count.
@@ -400,7 +396,7 @@ void CellApp::TickClientBaselinePump() {
     if (!base_ch) continue;  // base transiently unreachable - retry next pump
 
     baseapp::ReplicatedBaselineFromCell msg;
-    msg.entity_id = base_id;
+    msg.entity_id = entity_id;
     msg.snapshot.assign(reinterpret_cast<const std::byte*>(raw),
                         reinterpret_cast<const std::byte*>(raw) + len);
     (void)(*base_ch)->SendMessage(msg);
@@ -412,12 +408,8 @@ auto CellApp::FindEntity(EntityID cell_id) -> CellEntity* {
   return it == entity_population_.end() ? nullptr : it->second;
 }
 
-auto CellApp::FindEntityByBaseId(EntityID base_id) -> CellEntity* {
-  // Post-unification: cell_entity_id == base_entity_id, so a single
-  // entity_population_ lookup serves both ids. IsReal() preserves the
-  // legacy semantics where this entry point only resolves Real entities
-  // (client RPCs must never dispatch to a Ghost).
-  auto* entity = FindEntity(base_id);
+auto CellApp::FindRealEntity(EntityID entity_id) -> CellEntity* {
+  auto* entity = FindEntity(entity_id);
   return (entity != nullptr && entity->IsReal()) ? entity : nullptr;
 }
 
@@ -428,16 +420,38 @@ auto CellApp::FindSpace(SpaceID id) -> Space* {
 
 void CellApp::OnCreateCellEntity(const Address& src, Channel* ch,
                                  const cellapp::CreateCellEntity& msg) {
-  // Lazily create - the management CreateSpace path may not have run
-  // yet if this is the first entity in a fresh space.
   if (msg.space_id == kInvalidSpaceID) {
     ATLAS_LOG_WARNING("CellApp: CreateCellEntity rejected: space_id == kInvalidSpaceID");
     return;
   }
   if (msg.entity_id == kInvalidEntityID) {
-    ATLAS_LOG_WARNING("CellApp: CreateCellEntity rejected: base_entity_id == kInvalidEntityID");
+    ATLAS_LOG_WARNING("CellApp: CreateCellEntity rejected: entity_id == kInvalidEntityID");
     return;
   }
+
+  const EntityID cell_id = msg.entity_id;
+  auto send_ack = [this, ch, cell_id, &src] {
+    if (ch == nullptr) return;
+    baseapp::CellEntityCreated ack;
+    ack.entity_id = cell_id;
+    ack.cell_addr = Network().RudpAddress();
+    if (auto r = ch->SendMessage(ack); !r) {
+      ATLAS_LOG_WARNING("CellApp: CellEntityCreated ack send failed, entity_id={} to {}: {}",
+                        cell_id, src.ToString(), r.Error().Message());
+    }
+  };
+
+  if (auto it = entity_population_.find(cell_id); it != entity_population_.end()) {
+    auto* entity = it->second;
+    if (entity != nullptr && entity->IsReal()) {
+      send_ack();
+      return;
+    }
+    ATLAS_LOG_WARNING("CellApp: CreateCellEntity for existing non-Real entity_id={} rejected",
+                      cell_id);
+    return;
+  }
+
   auto* space = FindSpace(msg.space_id);
   if (!space) {
     auto inserted = spaces_.emplace(msg.space_id, std::make_unique<Space>(msg.space_id));
@@ -445,9 +459,6 @@ void CellApp::OnCreateCellEntity(const Address& src, Channel* ch,
     ATLAS_LOG_INFO("CellApp: auto-created Space {} for CreateCellEntity", msg.space_id);
   }
 
-  // cell_id == base_entity_id: DBApp's IDClient is the single cluster
-  // authority; CellApp no longer mints its own ids.
-  const EntityID cell_id = msg.entity_id;
   auto entity_ptr =
       std::make_unique<CellEntity>(cell_id, msg.type_id, *space, msg.position, msg.direction);
   entity_ptr->SetOnGround(msg.on_ground);
@@ -472,18 +483,7 @@ void CellApp::OnCreateCellEntity(const Address& src, Channel* ch,
     space->LocalCells().begin()->second->AddRealEntity(entity);
   }
 
-  // Ack carries our address - BaseApp uses it as cell_addr going forward.
-  if (ch != nullptr) {
-    baseapp::CellEntityCreated ack;
-    ack.entity_id = msg.entity_id;
-    ack.cell_addr = Network().RudpAddress();
-    if (auto r = ch->SendMessage(ack); !r) {
-      // Dropped ack => BaseApp times out and resends CreateCellEntity;
-      // logging here distinguishes that from a genuinely slow create.
-      ATLAS_LOG_WARNING("CellApp: CellEntityCreated ack send failed, entity_id={} to {}: {}",
-                        msg.entity_id, src.ToString(), r.Error().Message());
-    }
-  }
+  send_ack();
 
   if (native_provider_ && native_provider_->restore_entity_fn()) {
     ClearNativeApiError();
@@ -500,15 +500,13 @@ void CellApp::OnCreateCellEntity(const Address& src, Channel* ch,
   // No auto-witness here - BaseApp::BindClient sends EnableWitness
   // separately so the witness lifecycle tracks client presence rather
   // than entity creation.
-  (void)src;
-  (void)ch;
 }
 
 void CellApp::OnDestroyCellEntity(const Address& /*src*/, Channel* /*ch*/,
                                   const cellapp::DestroyCellEntity& msg) {
-  auto* entity = FindEntityByBaseId(msg.entity_id);
+  auto* entity = FindRealEntity(msg.entity_id);
   if (!entity) {
-    ATLAS_LOG_WARNING("CellApp: DestroyCellEntity for unknown base_id={}", msg.entity_id);
+    ATLAS_LOG_WARNING("CellApp: DestroyCellEntity for unknown entity_id={}", msg.entity_id);
     return;
   }
   const EntityID cell_id = entity->Id();
@@ -541,16 +539,17 @@ void CellApp::OnClientCellRpcForward(const Address& src, Channel* /*ch*/,
 
   // Re-validate cheaply even though BaseApp already checked direction +
   // exposed + cross-entity rules, so this handler is self-defensive.
-  auto* entity = FindEntityByBaseId(msg.target_entity_id);
+  auto* entity = FindRealEntity(msg.target_entity_id);
   if (!entity) {
-    ATLAS_LOG_WARNING("CellApp: ClientCellRpcForward for unknown target base_id={} rpc_id=0x{:06X}",
-                      msg.target_entity_id, msg.rpc_id);
+    ATLAS_LOG_WARNING(
+        "CellApp: ClientCellRpcForward for unknown target entity_id={} rpc_id=0x{:06X}",
+        msg.target_entity_id, msg.rpc_id);
     return;
   }
   // Client RPCs must never dispatch on a Ghost - stale BaseApp routing.
   if (!entity->IsReal()) {
     ATLAS_LOG_WARNING(
-        "CellApp: ClientCellRpcForward for Ghost base_id={} rpc_id=0x{:06X} — stale routing",
+        "CellApp: ClientCellRpcForward for Ghost entity_id={} rpc_id=0x{:06X} — stale routing",
         msg.target_entity_id, msg.rpc_id);
     return;
   }
@@ -591,15 +590,15 @@ void CellApp::OnInternalCellRpc(const Address& /*src*/, Channel* /*ch*/,
                                 const cellapp::InternalCellRpc& msg) {
   // Server-internal Base -> Cell call; BaseApp is trusted so skip the
   // exposed / sourceEntityID validation.
-  auto* entity = FindEntityByBaseId(msg.target_entity_id);
+  auto* entity = FindRealEntity(msg.target_entity_id);
   if (!entity) {
-    ATLAS_LOG_WARNING("CellApp: InternalCellRpc for unknown target base_id={} rpc_id=0x{:06X}",
+    ATLAS_LOG_WARNING("CellApp: InternalCellRpc for unknown target entity_id={} rpc_id=0x{:06X}",
                       msg.target_entity_id, msg.rpc_id);
     return;
   }
   if (!entity->IsReal()) {
     ATLAS_LOG_WARNING(
-        "CellApp: InternalCellRpc for Ghost base_id={} rpc_id=0x{:06X} — stale routing",
+        "CellApp: InternalCellRpc for Ghost entity_id={} rpc_id=0x{:06X} — stale routing",
         msg.target_entity_id, msg.rpc_id);
     return;
   }
@@ -640,9 +639,9 @@ void CellApp::OnDestroySpace(const Address& /*src*/, Channel* /*ch*/,
 
 void CellApp::OnAvatarUpdate(const Address& /*src*/, Channel* /*ch*/,
                              const cellapp::AvatarUpdate& msg) {
-  auto* entity = FindEntityByBaseId(msg.entity_id);
+  auto* entity = FindRealEntity(msg.entity_id);
   if (!entity) {
-    ATLAS_LOG_WARNING("CellApp: AvatarUpdate for unknown base_id={}", msg.entity_id);
+    ATLAS_LOG_WARNING("CellApp: AvatarUpdate for unknown entity_id={}", msg.entity_id);
     return;
   }
 
@@ -650,12 +649,12 @@ void CellApp::OnAvatarUpdate(const Address& /*src*/, Channel* /*ch*/,
   // teleport attempt from a compromised client.
   if (!std::isfinite(msg.position.x) || !std::isfinite(msg.position.y) ||
       !std::isfinite(msg.position.z)) {
-    ATLAS_LOG_WARNING("AvatarUpdate rejected: non-finite position base_id={}", msg.entity_id);
+    ATLAS_LOG_WARNING("AvatarUpdate rejected: non-finite position entity_id={}", msg.entity_id);
     return;
   }
   if (!std::isfinite(msg.direction.x) || !std::isfinite(msg.direction.y) ||
       !std::isfinite(msg.direction.z)) {
-    ATLAS_LOG_WARNING("AvatarUpdate rejected: non-finite direction base_id={}", msg.entity_id);
+    ATLAS_LOG_WARNING("AvatarUpdate rejected: non-finite direction entity_id={}", msg.entity_id);
     return;
   }
   const math::Vector3 delta{msg.position.x - entity->Position().x,
@@ -666,8 +665,9 @@ void CellApp::OnAvatarUpdate(const Address& /*src*/, Channel* /*ch*/,
   const float dist_sq = delta.x * delta.x + delta.y * delta.y + delta.z * delta.z;
   constexpr float kMaxSingleTickMoveSq = kMaxSingleTickMove * kMaxSingleTickMove;
   if (dist_sq > kMaxSingleTickMoveSq) {
-    ATLAS_LOG_WARNING("AvatarUpdate rejected (teleport): base_id={} delta={:.2f}m > {:.2f}m limit",
-                      msg.entity_id, std::sqrt(dist_sq), kMaxSingleTickMove);
+    ATLAS_LOG_WARNING(
+        "AvatarUpdate rejected (teleport): entity_id={} delta={:.2f}m > {:.2f}m limit",
+        msg.entity_id, std::sqrt(dist_sq), kMaxSingleTickMove);
     return;
   }
 
@@ -676,12 +676,6 @@ void CellApp::OnAvatarUpdate(const Address& /*src*/, Channel* /*ch*/,
 }
 
 void CellApp::AttachWitness(CellEntity& entity, float aoi_radius, float hysteresis) {
-  // Resolve the observer's baseapp channel once; the AoI fan-out path
-  // hits this several times per tick per visible peer, so paying
-  // FindEntityByBaseId + ConnectRudpNocwnd + dynamic_cast every send was
-  // the dominant cost in Witness::Event::Send at 500 cli (805 ns/call).
-  // Caching the resolved Channel* drops it to a load + IsCondemned()
-  // branch.
   auto ch_result = Network().ConnectRudpNocwnd(entity.BaseAddr());
   if (!ch_result) {
     ATLAS_LOG_WARNING("CellApp::AttachWitness: no channel to baseapp {} for observer {}",
@@ -693,19 +687,11 @@ void CellApp::AttachWitness(CellEntity& entity, float aoi_radius, float hysteres
 
   entity.EnableWitness(
       aoi_radius,
-      // Reliable path - enters/leaves + ordered property deltas via
-      // ReplicatedReliableDeltaFromCell (msg 2017). SendMessage's
-      // kBatched urgency lets FlushTickDirtyChannels coalesce NxM
-      // observer/peer fan-out into one packet per (channel, reliability)
-      // per tick.
       [ch, observer_id](std::span<const std::byte> env) {
         if (ch->IsCondemned()) return;
         baseapp::ReplicatedReliableDeltaFromCellSpan msg{observer_id, env};
         (void)ch->SendMessage(msg);
       },
-      // Unreliable path - volatile pos/dir (latest-wins) via
-      // ReplicatedDeltaFromCell (msg 2015), which routes through
-      // DeltaForwarder's per-entity replacement logic.
       [ch, observer_id](std::span<const std::byte> env) {
         if (ch->IsCondemned()) return;
         baseapp::ReplicatedDeltaFromCellSpan msg{observer_id, env};
@@ -713,16 +699,14 @@ void CellApp::AttachWitness(CellEntity& entity, float aoi_radius, float hysteres
       },
       hysteresis);
 
-  // Hint for OnBaseAppChannelDeath; lambda captures own the live pointer,
-  // this mirror is the disconnect-side reverse index.
   if (auto* w = entity.GetWitness()) w->SetOutboundChannel(ch);
 }
 
 void CellApp::OnEnableWitness(const Address& /*src*/, Channel* /*ch*/,
                               const cellapp::EnableWitness& msg) {
-  auto* entity = FindEntityByBaseId(msg.entity_id);
+  auto* entity = FindRealEntity(msg.entity_id);
   if (!entity) {
-    ATLAS_LOG_WARNING("CellApp: EnableWitness for unknown base_id={}", msg.entity_id);
+    ATLAS_LOG_WARNING("CellApp: EnableWitness for unknown entity_id={}", msg.entity_id);
     return;
   }
   // Defaults from config; scripts wanting a custom radius follow up
@@ -732,27 +716,27 @@ void CellApp::OnEnableWitness(const Address& /*src*/, Channel* /*ch*/,
 
 void CellApp::OnDisableWitness(const Address& /*src*/, Channel* /*ch*/,
                                const cellapp::DisableWitness& msg) {
-  auto* entity = FindEntityByBaseId(msg.entity_id);
+  auto* entity = FindRealEntity(msg.entity_id);
   if (!entity) return;
   entity->DisableWitness();
 }
 
 void CellApp::OnSetAoIRadius(const Address& /*src*/, Channel* /*ch*/,
                              const cellapp::SetAoIRadius& msg) {
-  auto* entity = FindEntityByBaseId(msg.entity_id);
+  auto* entity = FindRealEntity(msg.entity_id);
   if (!entity) {
-    ATLAS_LOG_WARNING("CellApp: SetAoIRadius for unknown base_id={}", msg.entity_id);
+    ATLAS_LOG_WARNING("CellApp: SetAoIRadius for unknown entity_id={}", msg.entity_id);
     return;
   }
   // Only the Real side replicates AoI - reject stale-mailbox calls
   // landing on a Ghost.
   if (!entity->IsReal()) {
-    ATLAS_LOG_WARNING("CellApp: SetAoIRadius on Ghost base_id={} — stale routing", msg.entity_id);
+    ATLAS_LOG_WARNING("CellApp: SetAoIRadius on Ghost entity_id={} — stale routing", msg.entity_id);
     return;
   }
   auto* witness = entity->GetWitness();
   if (!witness) {
-    ATLAS_LOG_WARNING("CellApp: SetAoIRadius on base_id={} with no witness attached",
+    ATLAS_LOG_WARNING("CellApp: SetAoIRadius on entity_id={} with no witness attached",
                       msg.entity_id);
     return;
   }
@@ -794,16 +778,13 @@ void CellApp::OnPeerCellAppDeath(const Address& addr, Channel* dying) {
 }
 
 void CellApp::OnOutboundChannelDeath(Channel& dying) {
-  // Fires for every channel disconnect (cellapp peers, machined,
-  // baseapps); only baseapp channels match a witness, so peers/machined
-  // disconnects naturally no-op without an explicit kind filter.
   std::vector<EntityID> orphans;
   for (auto& [id, entity] : entity_population_) {
     auto* w = entity->GetWitness();
     if (w && w->OutboundChannel() == &dying) orphans.push_back(id);
   }
   for (EntityID id : orphans) {
-    if (auto* e = FindEntityByBaseId(id)) e->DisableWitness();
+    if (auto* e = FindRealEntity(id)) e->DisableWitness();
   }
   if (!orphans.empty()) {
     ATLAS_LOG_INFO("CellApp: outbound channel {} died — disabled {} witness(es)",
@@ -846,7 +827,7 @@ void CellApp::OnCreateGhost(const Address& /*src*/, Channel* ch, const cellapp::
     entity_ptr_raw->GhostUpdatePosition(msg.position, msg.direction, msg.on_ground,
                                         msg.volatile_seq);
   }
-  // Ghosts share entity_population_ with Reals; FindEntityByBaseId
+  // Ghosts share entity_population_ with Reals; FindRealEntity
   // gates on IsReal() so client RPCs still route only to the owning
   // Real (via BaseApp's CurrentCell table).
   entity_population_[msg.entity_id] = entity_ptr_raw;
