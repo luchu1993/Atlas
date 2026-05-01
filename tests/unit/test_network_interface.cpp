@@ -708,4 +708,3 @@ TEST_F(NetworkInterfaceTest, CondemnedRudpDrainsAfterPeerAck) {
   }
   EXPECT_EQ(ni_.CondemnedChannelCount(), 0u);
 }
-

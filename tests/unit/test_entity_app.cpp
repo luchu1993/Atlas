@@ -1,3 +1,4 @@
+#include <atomic>
 #include <memory>
 #include <vector>
 
@@ -7,28 +8,20 @@
 
 using namespace atlas;
 
-// ============================================================================
-// Minimal concrete EntityApp for testing — bypasses real CLR via init override
-// ============================================================================
-
 class TestEntityApp : public EntityApp {
  public:
   int max_ticks{1};
   bool script_ready_called{false};
 
-  // Watcher snapshot captured before shutdown
   uint32_t captured_bg_pending{0};
   uint32_t captured_bg_inflight{0};
 
   TestEntityApp(EventDispatcher& d, NetworkInterface& n) : EntityApp(d, n) {}
 
  protected:
-  // Skip real CLR; wire up just enough for the framework to function.
   auto Init(int argc, char* argv[]) -> bool override {
-    // Call ServerApp::Init() directly to set up tick timer + watchers
     if (!ServerApp::Init(argc, argv)) return false;
 
-    // Install User1 handler (mirrors EntityApp::Init)
     InstallSignalHandler(Signal::kUser1, [this](Signal s) { OnSignal(s); });
 
     return true;
@@ -62,10 +55,6 @@ struct EntityArgv {
   char** argv() { return ptrs.data(); }
 };
 
-// ============================================================================
-// Tests
-// ============================================================================
-
 TEST(EntityApp, StartsAndStops) {
   EventDispatcher dispatcher("test");
   NetworkInterface network(dispatcher);
@@ -86,7 +75,6 @@ TEST(EntityApp, BgTaskManagerAccessible) {
   EntityArgv args;
   app.RunApp(args.argc(), args.argv());
 
-  // BgTaskManager should be idle after a clean shutdown
   EXPECT_EQ(app.captured_bg_pending, 0u);
   EXPECT_EQ(app.captured_bg_inflight, 0u);
 }
@@ -100,7 +88,6 @@ TEST(EntityApp, EntityDefsAccessible) {
   EntityArgv args;
   app.RunApp(args.argc(), args.argv());
 
-  // Registry is global and starts empty; just confirm it's reachable.
   EXPECT_EQ(app.EntityDefs().TypeCount(), 0u);
 }
 
@@ -115,7 +102,6 @@ TEST(EntityApp, WatchersBgTasksRegistered) {
 
   EXPECT_TRUE(app.GetWatcherRegistry().Get("bg_tasks/pending").has_value());
   EXPECT_TRUE(app.GetWatcherRegistry().Get("bg_tasks/in_flight").has_value());
-  // Inherited app watchers also present
   EXPECT_TRUE(app.GetWatcherRegistry().Get("app/type").has_value());
   EXPECT_TRUE(app.GetWatcherRegistry().Get("tick/total_count").has_value());
 }
@@ -123,21 +109,8 @@ TEST(EntityApp, WatchersBgTasksRegistered) {
 TEST(EntityApp, BgTaskRunsOnBackgroundThread) {
   EventDispatcher dispatcher("test");
   NetworkInterface network(dispatcher);
-  TestEntityApp app(dispatcher, network);
-
   std::atomic<bool> bg_ran{false};
   std::atomic<bool> main_ran{false};
-
-  struct WorkItem : BackgroundTask {
-    std::atomic<bool>* bg;
-    std::atomic<bool>* main;
-
-    void DoBackgroundTask() override { *bg = true; }
-    void DoMainThreadTask() override { *main = true; }
-  };
-
-  // Use a larger max_ticks so the bg task can complete
-  app.max_ticks = 20;
 
   struct BgApp : TestEntityApp {
     std::atomic<bool>* bg_ran;
@@ -153,7 +126,7 @@ TEST(EntityApp, BgTaskRunsOnBackgroundThread) {
       GetBgTaskManager().AddTask([this]() { *bg_ran = true; },
                                  [this]() {
                                    *main_ran = true;
-                                   max_ticks = 1;  // stop after main callback fires
+                                   Shutdown();
                                  });
       return true;
     }

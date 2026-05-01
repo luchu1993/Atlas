@@ -42,16 +42,18 @@ namespace {
   std::_Exit(99);
 }
 
-// MSVC warns "recursive on all control paths"; that's the whole point.
+void Recurse(int depth);
+using RecurseFn = void (*)(int);
+RecurseFn volatile recurse_fn = Recurse;
+
 #if defined(_MSC_VER)
 #pragma warning(push)
 #pragma warning(disable : 4717)
 #endif
-void Recurse(volatile int depth) {
-  // 1 KiB frame so stack overflow lands quickly.  volatile prevents TCO.
+void Recurse(int depth) {
   volatile char pad[1024];
   for (std::size_t i = 0; i < sizeof(pad); ++i) pad[i] = static_cast<char>(depth + i);
-  Recurse(depth + 1);
+  recurse_fn(depth + 1);
 }
 #if defined(_MSC_VER)
 #pragma warning(pop)
