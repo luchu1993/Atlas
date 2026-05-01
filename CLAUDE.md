@@ -115,6 +115,15 @@ Refactoring is a first-class part of every change, not a separate "cleanup PR" t
 
 The bias is: when in doubt, refactor. Half-measures rot fast. Either commit to the proper fix or push back on scope before code lands.
 
+### Documentation
+
+Design docs under `docs/` carry the same debt as comments — keep them lean and current, or delete them. A stale doc is worse than no doc: it actively misleads.
+
+1. **Prune obsolete docs promptly.** When a design is superseded, rejected, or replaced, delete the document in the same change that retires the feature. Do not leave outdated design notes around — readers will mistake them for current intent. Half a dozen `_old`, `_v1`, `_deprecated` files is a smell; commit to one source of truth.
+2. **Update doc status when the task lands.** When a piece of work completes, update the corresponding doc's status in the same commit (e.g., `Proposed` → `Implemented`, `Planned` → `Done`, or delete the planning doc outright if it has no lasting value). Never leave docs claiming "in progress" or "planned" for work that already shipped.
+3. **Strip implementation detail after landing.** Once a feature ships, the doc's job is to explain *what exists and why*, not to relive the implementation journey. Remove step-by-step plans, phase breakdowns, abandoned alternatives, intermediate TODO checklists, and migration notes that no longer apply. The code is the source of truth for *how*; the doc is the source of truth for *what / why*.
+4. **Review the whole doc on contact.** When editing any part of a doc, scan the rest for violations of these rules — stale status, lingering implementation steps, references to deleted code or removed APIs, broken cross-links — and fix them in the same change. Don't leave rot for someone else.
+
 ## CI workflows (`.github/workflows/`)
 
 - `cmake.yml` — Windows + Linux × Debug + Release. Uses sccache, NuGet + `_deps` caching, paths-ignore for docs / tooling. Runs unit + integration tests on Debug.
