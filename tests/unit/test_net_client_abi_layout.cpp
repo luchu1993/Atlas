@@ -1,7 +1,11 @@
+#include <atomic>
 #include <cstddef>
+#include <cstdint>
+#include <string>
 
 #include <gtest/gtest.h>
 
+#include "foundation/log.h"
 #include "net_client/client_api.h"
 
 static_assert(sizeof(AtlasNetCallbacks) == 10 * sizeof(void*));
@@ -57,6 +61,37 @@ TEST(NetClientAbi, NullCtxReturnsInvalArg) {
   EXPECT_EQ(AtlasNetSendCellRpc(nullptr, 0, 0, nullptr, 0), ATLAS_NET_ERR_INVAL);
   EXPECT_EQ(AtlasNetSetCallbacks(nullptr, nullptr), ATLAS_NET_ERR_INVAL);
   EXPECT_EQ(AtlasNetGetStats(nullptr, nullptr), ATLAS_NET_ERR_INVAL);
+}
+
+namespace {
+struct LogCapture {
+  std::atomic<int> count{0};
+  std::string last;
+  int last_level{-1};
+};
+LogCapture* g_capture = nullptr;
+
+void CaptureLog(int32_t level, const char* msg, int32_t len) {
+  if (!g_capture) return;
+  g_capture->count.fetch_add(1, std::memory_order_relaxed);
+  g_capture->last.assign(msg, static_cast<size_t>(len));
+  g_capture->last_level = level;
+}
+}  // namespace
+
+TEST(NetClientAbi, LogHandlerReceivesMessages) {
+  LogCapture capture;
+  g_capture = &capture;
+  AtlasNetSetLogHandler(&CaptureLog);
+
+  ATLAS_LOG_ERROR("net_client log probe {}", 42);
+
+  AtlasNetSetLogHandler(nullptr);
+  g_capture = nullptr;
+
+  EXPECT_GE(capture.count.load(), 1);
+  EXPECT_NE(capture.last.find("net_client log probe 42"), std::string::npos);
+  EXPECT_EQ(capture.last_level, static_cast<int>(atlas::LogLevel::kError));
 }
 
 TEST(NetClientAbi, StateMatrixRejectsIllegalCalls) {

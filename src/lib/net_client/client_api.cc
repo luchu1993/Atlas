@@ -1,6 +1,8 @@
 #include "net_client/client_api.h"
 
 #include <atomic>
+#include <memory>
+#include <mutex>
 #include <new>
 #include <string>
 
@@ -11,6 +13,25 @@ namespace {
 
 thread_local std::string g_global_last_error;
 std::atomic<AtlasLogFn> g_log_handler{nullptr};
+
+class CallbackLogSink final : public atlas::LogSink {
+ public:
+  void Write(atlas::LogLevel level, std::string_view /*category*/,
+             std::string_view message,
+             const std::source_location& /*location*/) override {
+    AtlasLogFn fn = g_log_handler.load(std::memory_order_acquire);
+    if (!fn) return;
+    fn(static_cast<int32_t>(level), message.data(), static_cast<int32_t>(message.size()));
+  }
+  void Flush() override {}
+};
+
+void EnsureLogSinkInstalled() {
+  static std::once_flag once;
+  std::call_once(once, [] {
+    atlas::Logger::Instance().AddSink(std::make_shared<CallbackLogSink>());
+  });
+}
 
 auto AbiCompatible(uint32_t expected) -> bool {
   constexpr uint32_t kOur = ATLAS_NET_ABI_VERSION;
@@ -118,6 +139,7 @@ int32_t AtlasNetSetCallbacks(AtlasNetContext* ctx,
 
 void AtlasNetSetLogHandler(AtlasLogFn handler) {
   g_log_handler.store(handler, std::memory_order_release);
+  if (handler) EnsureLogSinkInstalled();
 }
 
 int32_t AtlasNetGetStats(AtlasNetContext* ctx, AtlasNetStats* out_stats) {
