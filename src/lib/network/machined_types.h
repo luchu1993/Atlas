@@ -5,10 +5,10 @@
 #include <string>
 #include <vector>
 
+#include "foundation/process_type.h"
 #include "network/address.h"
 #include "network/message.h"
 #include "network/message_ids.h"
-#include "server/server_config.h"
 
 namespace atlas::machined {
 

@@ -10,27 +10,13 @@
 
 #include "foundation/error.h"
 #include "foundation/log.h"
+#include "foundation/process_type.h"
 #include "network/address.h"
 
 namespace atlas {
 
 class DataSection;
 class DataSectionTree;
-
-enum class ProcessType : uint8_t {
-  kMachined = 0,
-  kLoginApp = 1,
-  kBaseApp = 2,
-  kBaseAppMgr = 3,
-  kCellApp = 4,
-  kCellAppMgr = 5,
-  kDbApp = 6,
-  kDbAppMgr = 7,
-  kReviver = 8,
-};
-
-[[nodiscard]] auto ProcessTypeName(ProcessType type) -> std::string_view;
-[[nodiscard]] auto ProcessTypeFromName(std::string_view name) -> Result<ProcessType>;
 
 // The raw DataSectionTree is retained so that ServerAppOption<T> instances
 // can extract their own keys without requiring explicit support here.

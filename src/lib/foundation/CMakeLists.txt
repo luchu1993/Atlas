@@ -39,6 +39,7 @@ add_library(atlas_foundation STATIC
   log_sinks.cc
   memory_tracker.cc
   pool_allocator.cc
+  process_type.cc
   profiler.cc
   runtime.cc
   string_utils.cc

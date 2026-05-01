@@ -6,7 +6,6 @@
 #include <string>
 #include <vector>
 
-#include "db/idatabase.h"
 #include "network/address.h"
 #include "network/message.h"
 #include "network/message_ids.h"

@@ -10,6 +10,9 @@ namespace atlas {
 using EntityID = uint32_t;
 inline constexpr EntityID kInvalidEntityID = 0;
 
+using DatabaseID = int64_t;
+inline constexpr DatabaseID kInvalidDBID = 0;
+
 // IDs in [1, kFirstLocalEntityID) are server-allocated by DBApp's
 // EntityIdAllocator and cluster-stable. IDs in [kFirstLocalEntityID,
 // 0xFFFFFFFF] are reserved for client-only entities (effects, HUD

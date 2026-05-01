@@ -16,9 +16,6 @@
 
 namespace atlas {
 
-using DatabaseID = int64_t;
-inline constexpr DatabaseID kInvalidDBID = 0;
-
 struct DatabaseConfig {
   std::string type{"sqlite"};  // "xml", "sqlite", or "mysql"
 
