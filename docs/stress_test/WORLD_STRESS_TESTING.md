@@ -37,7 +37,12 @@ client
 
 ### 2.1 集群拉起
 
-- `tools/cluster_control/run_world_stress.py`
+- `tools/cluster_control/run_world_stress.py` — 完整 stress driver（启动集群 +
+  跑客户端 + 收日志 + 审计）。
+- `tools/cluster_control/run_cluster.{ps1,sh}` — 只起集群，不跑客户端。
+  适合本地 dev / Unity 客户端调试（只想要个 LoginApp 接客户端）。
+  默认 `build/debug` Debug 配置，1 BaseApp + 1 CellApp，`--keep-cluster`
+  保持进程不退出。
 
 相对 `run_login_stress.py` 的增量：
 - 启动 CellAppMgr + N 个 CellApp
@@ -81,6 +86,12 @@ python tools/cluster_control/run_world_stress.py `
 ```
 
 期望：7 个进程都注册到 machined，10 秒 hold 无错误，优雅退出。
+
+或用 wrapper（默认 `--keep-cluster`，不会自动退）：
+
+```powershell
+.\tools\cluster_control\run_cluster.ps1
+```
 
 ### 4.2 P2 最小活体（端到端闭环）
 

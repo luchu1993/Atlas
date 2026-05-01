@@ -249,9 +249,23 @@ public class TestBootstrap : MonoBehaviour
 }
 ```
 
-Press **Play** with an Atlas cluster running locally
-(`tools/cluster_control/`). Console should show the login → auth →
-entity-creation chain.
+Press **Play** with an Atlas cluster running locally. Start one in a
+separate terminal:
+
+```bash
+# Windows
+tools\cluster_control\run_cluster.ps1
+# Linux / macOS
+tools/cluster_control/run_cluster.sh
+```
+
+That brings up machined / loginapp / dbapp / baseappmgr / baseapp /
+cellappmgr / cellapp from `build/debug` and parks LoginApp on
+`127.0.0.1:20013` (the AtlasNetworkManager Inspector default). Stop
+the cluster with Ctrl+C in that terminal — see the script header
+for orphan-cleanup notes.
+
+Console should then show the login → auth → entity-creation chain.
 
 ## Mobile targets
 
