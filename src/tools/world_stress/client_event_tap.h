@@ -33,6 +33,7 @@ struct ClientEventCounters {
   uint64_t on_weapon_broken{0};        // server→client struct-arg RPC
   uint64_t on_scores_snapshot{0};      // server→client list-arg RPC
   uint64_t on_affixes_updated{0};      // server→client component RPC
+  uint64_t on_area_broadcast{0};       // server→client RpcTarget.All RPC
   // Count of property deltas missed in the middle of a reliable stream.
   // Populated from the `event_seq gap: last=A got=B missed=N` warning
   // lines ClientEntity emits when the incoming seq jumps by more than 1.

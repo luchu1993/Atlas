@@ -128,7 +128,6 @@ atlas_set_folder("CSharp"
 )
 
 atlas_set_folder("CSharp/Generators"
-  atlas_generators_events_dll
   atlas_generators_def_dll
 )
 

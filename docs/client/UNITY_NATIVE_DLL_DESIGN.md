@@ -1,36 +1,25 @@
 # Unity Native Network DLL 设计文档
 
-**Status:** ✅ Phase 0–6 全部完成（Phase 6 CI 任务待首次跑过实际验证）。
+**Status:** ✅ 已落地。Unity Plugins/ 目录待用 CI artifact 填充后做端到端验证。
 
-- ✅ Phase 0 — IL2CPP 回调可行性 spike 完成。**D0 决策：采用 Pattern B**
-  (`[MonoPInvokeCallback]` + delegate + `Marshal.GetFunctionPointerForDelegate`)。
-  Unity 2022 至 6.5 全系列均不支持 `[UnmanagedCallersOnly]`（Unity 嵌入的
-  Mono / 老 .NET 4.x runtime 不识别该 attribute）。详细矩阵与前向兼容路径
-  见 [`docs/spike_il2cpp_callback.md`](../spike_il2cpp_callback.md)。Pattern A
-  迁移留待 Unity 6.6+（计划嵌入 .NET 10）落地后重测；探针保留在
-  `src/tools/il2cpp_probe/` 供届时回归。
-- ✅ Phase 1 — `ProcessType` 提取到 `foundation/process_type.{h,cc}`；
-  `DatabaseID` 迁到 `server/entity_types.h`；`network/foundation/platform/serialization`
-  四层不再 include `server/` / `db/` / `entitydef/`。
-- ✅ Phase 2 — `atlas_serialization_binary` target 已落地；`atlas_network`
-  改 link binary 子集；依赖闭包零 pugixml / rapidjson 引用。
-- ✅ Phase 3 — `src/lib/net_client/` C API 层；`ClientSession` 异步状态机；
-  `atlas_net_client.dll` + `atlas_net_client_core` STATIC + iOS static 三 target；
-  `test_net_client_abi_layout` 锁定 sizeof / offsetof。
-- ✅ Phase 4 — `Atlas.Client/Native/`（DllImport + Pattern B 桥 +
-  `IAtlasNetEvents`）；`Atlas.Tools.NetClientDemo` net9.0 控制台 FFI roundtrip
-  验证。
-- ✅ Phase 5 — `Packages/com.atlas.client/` Unity 包（package.json + asmdef
-  + `AtlasNetworkManager` MonoBehaviour）；Plugins/ 目录占位待 Phase 6 填充。
-- ✅ Phase 6 — `CMakePresets.json` 加 `net-client-{android-arm64,ios-arm64,
-  macos-arm64,linux-x64}` 四套 configure + build preset；
-  `.github/workflows/net_client_cross.yml` 矩阵跑这四个目标，校验 ABI
-  并上传 artifact（30 天保留）。Unity 工程实际接入由 Plugins/ 填充
-  artifact 后验证。
+**目标:** 把 C++ 网络层抽取为独立 native DLL,Unity 客户端通过 P/Invoke
+调用。Phase 12 客户端 SDK 的高层 C# API(`AtlasClient` / `AvatarFilter` /
+`LoginClient`)在此 DLL 的 C API 之上构建。
 
-**目标:** 把 C++ 网络层抽取为独立 native DLL，Unity 客户端通过 P/Invoke
-调用。Phase 12 客户端 SDK 的高层 C# API（`AtlasClient` / `AvatarFilter` /
-`LoginClient`）依赖此 DLL 的 C API 完成后才能开工。
+**关键决策记录:**
+
+- IL2CPP 回调采用 **Pattern B**(`[MonoPInvokeCallback]` + delegate +
+  `Marshal.GetFunctionPointerForDelegate`)。Unity 2022 至 6.5 全系列均
+  不支持 `[UnmanagedCallersOnly]`,迁移到 Pattern A 留待 Unity 6.6+
+  (.NET 10)落地后重测;探针保留在 `src/tools/il2cpp_probe/`,
+  矩阵详见 [`docs/spike_il2cpp_callback.md`](../spike_il2cpp_callback.md)。
+- 依赖解耦:`ProcessType` 落在 `foundation/process_type.{h,cc}`,
+  `DatabaseID` 落在 `server/entity_types.h`,`atlas_serialization_binary`
+  独立成 target;`network` / `foundation` / `platform` / `serialization`
+  四层依赖闭包不再含 `server` / `db` / `entitydef` / pugixml / rapidjson。
+- 跨平台构建:`CMakePresets.json` 含
+  `net-client-{android-arm64, ios-arm64, macos-arm64, linux-x64}`,
+  `.github/workflows/net_client_cross.yml` 矩阵编译 + artifact 30 天保留。
 
 ---
 
@@ -1436,12 +1425,9 @@ public:
 
 ### 6.1 AtlasNetNative.cs
 
-> **D0 决策已落地（Pattern B）：** 见
-> [`docs/spike_il2cpp_callback.md`](../spike_il2cpp_callback.md)。本节的
-> P/Invoke 声明与回调路径无关，A 与 B 共用同一 `[LibraryImport]` 声明集；
-> 回调注册的 §6.3 走 Pattern B（`[MonoPInvokeCallback]` + delegate）。
-> Sentinel 不再暴露为 DLL 导出（§4.0.4 简化后由 DLL 内部替换），
-> 旧版 §6.1 罗列的 `AtlasNetNoop<Event>` `[LibraryImport]` 声明已删除。
+> Pattern A / B 共用同一份 `[LibraryImport]` 声明;回调注册的 §6.3 走
+> Pattern B(`[MonoPInvokeCallback]` + delegate)。Sentinel 不暴露为 DLL
+> 导出,由 DLL 内部替换(§4.0.4)。
 
 ```csharp
 // Atlas.Client/Native/AtlasNetNative.cs
@@ -1981,59 +1967,45 @@ public enum AtlasDisconnectReason : int { User = 0, Logout = 1, Internal = 2 }
 
 ## 8. SourceGenerator 集成
 
-> **前置依赖**: DefGenerator 统一重构 (详见 `docs/DEFGEN_CONSOLIDATION_DESIGN.md`)。  
-> 重构已完成，`.def` 文件是实体定义的唯一来源，EntityGenerator 和 RpcGenerator 已合并入 DefGenerator 并删除。
+`.def` 文件是实体定义的唯一来源,`Atlas.Generators.Def` 是仓库内
+唯一的 Source Generator,Unity 客户端按 `ATLAS_CLIENT` 上下文消费同一份
+生成器:
 
-### 8.1 Generator 概览 (重构后)
-
-| Generator | 用途 | Unity 客户端需要 |
-|-----------|------|-----------------|
-| **DefGenerator** | 从 `.def` 生成: RPC stubs, Mailbox, 属性字段/Property/DirtyTracking, Serialization, DeltaSync, Factory, Dispatcher, TypeRegistry | 是 (ATLAS_CLIENT 上下文) |
-| **EventGenerator** | 从 `[EventHandler]` 生成: 事件注册/分发 | 是 |
-| ~~EntityGenerator~~ | 已合并入 DefGenerator | 已删除 |
-| ~~RpcGenerator~~ | 已合并入 DefGenerator | 已删除 |
-
-Unity 客户端编译时定义 `ATLAS_CLIENT` 符号，DefGenerator 自动生成客户端上下文代码:
-- client_methods → **Receive** (partial method, 用户实现)
-- exposed cell_methods/base_methods → **Send** (自动序列化参数并调用 native DLL)
-- 非 exposed 的 cell/base methods → **Forbidden** (编译期阻断)
+- `client_methods` → **Receive**(partial method,用户实现)
+- exposed `cell_methods` / `base_methods` → **Send**(自动序列化参数并调用 native DLL)
+- 非 exposed 的 cell/base methods → 编译期阻断
 - 属性字段 → 只生成 scope ≥ OwnClient 的字段 + `ApplyReplicatedDelta`
 
-### 8.2 Unity 中集成 SourceGenerator
+### 8.1 Unity 中集成步骤
 
-1. 将 DefGenerator 和 EventGenerator 编译为 `netstandard2.0` DLL
-2. 将 DLL 放入 Unity Package 中 (如 `Packages/com.atlas.client/Analyzers/`)
+1. 将 `Atlas.Generators.Def` 编译为 `netstandard2.0` DLL
+2. 将 DLL 放入 Unity Package(如 `Packages/com.atlas.client/Analyzers/`)
 3. 在 Unity Inspector 中将其标记为 `RoslynAnalyzer`
 4. Unity 2022.2+ 自动在编译时执行 Generator
-5. `.def` 文件作为 `AdditionalFiles` 引入 (在 `.asmdef` 或 `.csproj` 中配置)
+5. `.def` 文件作为 `AdditionalFiles` 引入(在 `.asmdef` 或 `.csproj` 中配置)
 
-### 8.3 兼容性注意事项
+### 8.2 兼容性注意事项
 
 | 项目 | 注意 |
 |------|------|
 | Target Framework | Generator 必须编译为 `netstandard2.0` |
-| Roslyn 版本 | 需匹配 Unity 内置版本 (检查 Unity 发行说明) |
+| Roslyn 版本 | 需匹配 Unity 内置版本(检查 Unity 发行说明) |
 | Span/ref struct | 生成的代码使用 `ref struct` 需要 Unity 2021.2+ |
 | 依赖 | Generator DLL 需放入同目录 |
-| ATLAS_CLIENT 符号 | 在 Unity 的 Player Settings → Scripting Define Symbols 中添加 |
+| `ATLAS_CLIENT` 符号 | 在 Unity Player Settings → Scripting Define Symbols 中添加 |
 
-### 8.4 Atlas.Shared 复用
+### 8.3 Atlas.Shared 复用
 
-`Atlas.Shared` 中的序列化/协议代码可以直接作为源文件复用到 Unity Package 中:
+`Atlas.Shared` 中的序列化 / 协议代码可直接作为源文件复用到 Unity Package:
 
-- `SpanWriter.cs` / `SpanReader.cs` — 使用 `System.Buffers.BinaryPrimitives`, Unity 支持
+- `SpanWriter.cs` / `SpanReader.cs` — 基于 `System.Buffers.BinaryPrimitives`
 - `MessageIds.cs` — 纯常量定义
-- `EventBus.cs` — 事件总线
 - `EntityRef.cs` — 实体引用
 
-**不再需要的 Attribute** (由 `.def` 文件替代):
-- ~~`[Replicated]`~~, ~~`[Persistent]`~~, ~~`[ServerOnly]`~~ — 已删除，属性元数据在 `.def` 中定义
-- ~~`[BaseRpc]`~~, ~~`[CellRpc]`~~, ~~`[ClientRpc]`~~ — 已删除，RPC 声明在 `.def` 中定义
-- `[Entity("Name")]` — **保留**, 用于关联 C# class 与 `.def` 文件
-- `[EventHandler("name")]` — **保留**, EventGenerator 独立使用
-
-**需要适配的部分**:
-- `Vector3` / `Quaternion` — Atlas.Shared 定义了自己的，Unity 有 `UnityEngine.Vector3`。方案: 条件编译 `#if UNITY_ENGINE` 提供隐式转换运算符
+属性元数据 / RPC 声明全部由 `.def` 提供;C# 侧仅保留
+`[Entity("Name")]` 用来把 partial class 关联到具体的 `.def` 文件。
+`Vector3` / `Quaternion` 与 Unity 引擎的同名类型用条件编译
+`#if UNITY_ENGINE` 提供隐式转换。
 
 ---
 
@@ -2177,349 +2149,37 @@ Xcode 主工程直接链接入最终二进制 (见 §7 Plugins/iOS 目录)。
 
 ---
 
-## 10. 实施步骤
+## 10. 落地概览
 
-### Phase 0: IL2CPP 可行性 Spike — ✅ 完成
+> 整套工作已完成,以下仅记录最终的代码 / 构建 / 验收落点。原本的 Phase
+> 0–6 实施步骤随着代码 land 一并删除。
 
-**结论：** Pattern B（`[MonoPInvokeCallback]` + delegate +
-`Marshal.GetFunctionPointerForDelegate`）。Unity 2022 至 6.5 全系列 IL2CPP 均
-不支持 `[UnmanagedCallersOnly]`。Pattern A 留待 Unity 6.6+（嵌入 .NET 10）
-落地后重跑探针验证。
+| 区块 | 落地 |
+|------|------|
+| IL2CPP 可行性 Spike | `src/tools/il2cpp_probe/`(probe.cc + Unity ProbeComponent + README);Pattern B 决议见上方"关键决策记录" |
+| 依赖解耦 | `foundation/process_type.{h,cc}`、`server/entity_types.h::DatabaseID`、`atlas_serialization_binary` STATIC target;`atlas_network` 闭包零 `server` / `db` / `entitydef` / pugixml / rapidjson |
+| C API 导出层 | `src/lib/net_client/`(`client_api.cc` + `client_session.cc`),`atlas_net_client.dll` SHARED + `atlas_net_client_core` STATIC + iOS `_static` 三 target;`test_net_client_abi_layout` 锁 sizeof / offsetof |
+| C# P/Invoke | `Atlas.Client/Native/`(DllImport + Pattern B 桥 + `IAtlasNetEvents`);`Atlas.Tools.NetClientDemo`(net9.0 控制台)做 FFI roundtrip |
+| Unity 包 | `Packages/com.atlas.client/`(package.json + asmdef + `AtlasNetworkManager` MonoBehaviour);Plugins/ 目录待 CI artifact 填充后做端到端验证 |
+| 跨平台构建 | `CMakePresets.json` 含 `net-client-{android-arm64, ios-arm64, macos-arm64, linux-x64}`;`.github/workflows/net_client_cross.yml` 矩阵 + 30 天 artifact |
 
-详细矩阵 + 前向兼容迁移步骤：
-[`docs/spike_il2cpp_callback.md`](../spike_il2cpp_callback.md)。
+### 落地映射(供修改时定位)
 
-**产物（保留供 Unity 6.6 回归测试用）：**
+`src/lib/foundation/process_type.{h,cc}` — `ProcessType` 枚举与
+`ProcessTypeName / ProcessTypeFromName` 函数。`server/server_config.h`
+与 `network/machined_types.h` 都 include 它。
 
-- `src/tools/il2cpp_probe/probe.cc` + `CMakeLists.txt`：极小 native
-  探针，2 个导出（`probe_set_callback` / `probe_fire`），由
-  `ATLAS_BUILD_IL2CPP_PROBE=ON` 开关控制
-- `src/tools/il2cpp_probe/Unity/ProbeComponent.cs`：Unity 测试组件，
-  Pattern A 与 B 并存（`unsafe` + `delegate*` 块只有 Unity 6.6+ 会成功
-  执行；当前 IL2CPP 上 Pattern A 静默失败或抛异常），跑完日志显示哪
-  个 pattern 触发了回调
-- `src/tools/il2cpp_probe/README.md`：4 个目标的交叉编译命令 + Unity
-  Plugins 目录布置 + 决策矩阵
+`src/lib/server/entity_types.h` — `EntityID / SessionKey / DatabaseID`;
+`db/idatabase.h`、`login_messages.h`、`baseapp_messages.h` 全部走这一头。
 
-### Phase 1: 依赖解耦 (预计 1-2 天)
+### 关键测试
 
-**目标**: 让 network 模块可以不依赖 server/db/entitydef 独立编译。
-
-1. **提取 ProcessType**
-   - 创建 `src/lib/foundation/process_type.h` (项目使用 `.h` 不是 `.hpp`)
-   - 将 `ProcessType` 枚举及 `ProcessTypeName()` / `ProcessTypeFromName()`
-     从 `src/lib/server/server_config.h` 移到新文件 (命名保持 PascalCase)
-   - `server/server_config.h` 改为 include 新文件
-   - `network/machined_types.h` 改为 include 新文件
-
-2. **提取 DatabaseID**
-   - 在 `src/lib/server/entity_types.h` 中添加 `DatabaseID` 类型别名
-   - `src/lib/db/idatabase.h` 改为从 `entity_types.h` 获取 DatabaseID
-   - `src/server/loginapp/login_messages.h` 和 `baseapp_messages.h` 移除
-     `#include "db/idatabase.h"`, 确认只需 `#include "server/entity_types.h"`
-
-3. **验证** (每一步都必须过)
-
-   a. 目标独立编译:
-      ```bash
-      cmake --preset debug
-      cmake --build build/debug --target atlas_network --config Debug
-      ```
-
-   b. 依赖图检查 — 读取 CMake 生成的依赖元数据, 确认
-      `atlas_network` 不再传递依赖到 `atlas_server` / `atlas_db` / `atlas_entitydef`:
-      ```bash
-      # 方式 1: 用 cmake-file-api / CMake graphviz 导出依赖图
-      cmake --preset debug --graphviz=build/debug/deps.dot
-      # 然后 grep / 看图, 期望 atlas_network 节点的出边只到:
-      #   atlas_foundation, atlas_platform, atlas_serialization
-      #   (及可选 ZLIB::ZLIB)
-      # 禁止出现: atlas_server, atlas_db*, atlas_entitydef
-
-      # 方式 2: 直接读 target 的 LINK_LIBRARIES 属性
-      cmake -P - <<'EOF'
-      get_target_property(libs atlas_network INTERFACE_LINK_LIBRARIES)
-      message(STATUS "atlas_network deps: ${libs}")
-      EOF
-      ```
-
-      若怀疑残留路径, 用 `include-what-you-use` 或直接 grep 头文件
-      `#include` 关系定位。
-
-   c. 全量测试不回退:
-      ```bash
-      cd build/debug && ctest --build-config Debug --label-regex unit \
-          --output-on-failure
-      cd build/debug && ctest --build-config Debug --label-regex integration \
-          --output-on-failure
-      ```
-
-   d. 格式检查:
-      ```bash
-      clang-format --dry-run --Werror <修改的 .h/.cc 文件>
-      ```
-
-### Phase 2: 序列化模块拆分 (预计 0.5 天)
-
-1. **创建 `atlas_serialization_binary` target**
-   - 修改 `src/lib/serialization/CMakeLists.txt`
-   - 新增 `add_library(atlas_serialization_binary STATIC binary_stream.cc)`,
-     仅 `PUBLIC` 链接 `atlas_foundation atlas_platform atlas_compiler_options`,
-     不引入 pugixml/rapidjson
-   - 现有 `atlas_serialization` target 保持不变 (继续包含全部 4 个 .cc)
-
-3. **验证**
-   - 独立编译:
-     ```bash
-     cmake --preset debug
-     cmake --build build/debug --target atlas_serialization_binary --config Debug
-     ```
-   - 最小 smoke test: 在 `tests/unit/CMakeLists.txt` 添加
-     ```cmake
-     atlas_add_test(NAME test_binary_stream_only
-       SOURCES test_binary_stream_only.cpp
-       DEPS atlas_serialization_binary
-     )
-     ```
-     能编译使用 `BinaryReader / BinaryWriter` 的用例
-   - `atlas_network` 的闭包不再回溯到 pugixml / rapidjson:
-     ```bash
-     # 导出依赖图检查
-     cmake --preset debug --graphviz=build/debug/deps.dot
-     # 期望 atlas_network 节点的出边
-     # 不包含 pugixml / rapidjson / atlas_serialization(完整版) 节点
-     grep -E '"atlas_network" -> "(pugixml|rapidjson)"' build/debug/deps.dot
-     # 期望: 无输出
-     ```
-   - 全量单元测试不回退:
-     ```bash
-     cd build/debug && ctest --build-config Debug --label-regex unit --output-on-failure
-     ```
-
-### Phase 3: C API 导出层 (预计 3-4 天)
-
-1. **创建目录和文件**
-   - `src/lib/net_client/` 目录
-   - `net_client_export.h` — 导出宏定义 (§4.1)
-   - `client_session.h` / `client_session.cc` — Login/Auth 状态机
-     (从 `src/client/client_app.cc:209-289` 提取并异步化, 见 §5.2 + M4)
-   - `client_api.h` — C API 头文件 (公开接口)
-   - `client_api.cc` — C API 实现
-   - `CMakeLists.txt` — 按 §3.1 配置 `atlas_net_client_core` (STATIC) +
-     `atlas_net_client` (SHARED), 并在 `src/lib/CMakeLists.txt` 追加
-     `add_subdirectory(net_client)`
-   - 顶层 `CMakeLists.txt` 增加 `option(ATLAS_BUILD_NET_CLIENT ... OFF)` (§3.2)
-
-   **[M4] 异步化范围界定**: 现有 `client_app.cc:209-289` 的 Login/Authenticate
-   是阻塞 `while + ProcessOnce + sleep` 轮询模式; 要迁成 DLL 内的回调驱动需:
-   - `ClientApp::Login()` (行 209–244) → `ClientSession::StartLogin(callback,user_data)`:
-     保留 `network_.ConnectRudp`, `InterfaceTable::RegisterTypedHandler<LoginResult>`
-     的结构; 把 `while` 循环+超时逻辑改成 `TimerQueue::Schedule(timeout_ms,
-     []{ fire_callback_with_timeout })`。收到 LoginResult 后由 `typed handler`
-     触发 callback 并取消定时器。
-   - `ClientApp::Authenticate()` (行 247–289) → `ClientSession::StartAuthenticate`:
-     同上模式。
-   - 现有阻塞版本 `ClientApp` 仅服务端内部集成测试仍在用, 保留不删;
-     `ClientSession` 是 DLL 内部的异步版本, 两者长期并存一段时间。
-     Phase 12 上线 + 集成测试通过后, 考虑让 `ClientApp` 也改走 `ClientSession`。
-
-2. **实现 ClientSession** (§5.2 详细行为)
-   - 封装 `EventDispatcher` + `NetworkInterface`
-   - 实现 Login 状态机 (ConnectRudp → SendMessage<LoginRequest> → Handle LoginResult)
-   - 实现 Auth 状态机 (ConnectRudp → SendMessage<Authenticate> → Handle AuthenticateResult)
-   - 实现 RPC Default Handler (§5.3.1)
-   - `SecureZero` 清除 SessionKey (§5.2.1)
-
-3. **实现 C API**
-   - 生命周期: `AtlasNetCreate(abi)` / `AtlasNetDestroy`
-   - Tick: `AtlasNetPoll`
-   - Login/Auth/Disconnect: §4.5
-   - 消息: `AtlasNetSendBaseRpc` / `AtlasNetSendCellRpc`
-   - 回调: `AtlasNetSetCallbacks` (原子替换) / `AtlasNetSetLogHandler`
-   - 诊断: `AtlasNetGetStats` / `AtlasNetGetState` / `AtlasNetLastError`
-   - Sentinel: `AtlasNetNoopRpc` 等 (§5.2.2)
-
-4. **验证** — 三类测试必须齐备
-
-   a. 单元测试 (`tests/unit/test_client_session.cpp`)
-      - 用 `MockNetworkInterface` 驱动 `ClientSession` 状态机
-      - 覆盖用例:
-        - Login 成功 → LoginSucceeded
-        - Login 超时 → Disconnected
-        - Login 期间服务端关闭 → on_disconnect 触发
-        - Auth 成功 → Connected
-        - Auth 失败 → ClearSessionKey 被调用, 状态 Disconnected
-        - 状态矩阵 (§4.5.6) 所有非法调用返回预期错误码
-        - Disconnect 幂等性
-      ```bash
-      cd build/debug && ctest --build-config Debug -R test_client_session \
-          --output-on-failure
-      ```
-
-   b. 集成测试 (`tests/integration/test_client_flow.cpp`)
-      - 启动真实 LoginApp + BaseApp + DBApp (复用现有 integration fixture)
-      - 驱动完整 C API: `AtlasNetCreate` → `login` → `authenticate` → RPC → `disconnect` → `destroy`
-      - 验证端到端线格式兼容性
-      ```bash
-      cd build/debug && ctest --build-config Debug -R test_client_flow \
-          --output-on-failure
-      ```
-
-   c. FFI 验证 (独立 .NET 控制台 demo, 不依赖 Unity)
-      - `tools/net_client_demo/Program.cs` — 最小可运行 demo
-      - 构建与运行:
-        ```bash
-        cmake --preset debug -DATLAS_BUILD_NET_CLIENT=ON
-        cmake --build build/debug --target atlas_net_client --config Debug
-        dotnet run --project tools/net_client_demo/net_client_demo.csproj
-        ```
-      - 手工验证 P/Invoke 路径: `Create(abi)` → `Login` → `Authenticate`
-        → 收 1 条 RPC → `Disconnect` → `Destroy`
-      - 确认回调从 C++ → C# 正常触发, GCHandle/user_data 正确回传
-      - ABI 版本不匹配时 `Create()` 抛异常而非崩溃 (故意用错版本号验证)
-
-   d. 导出符号清单审核 (Windows)
-      ```bash
-      cmake --build build/release --target atlas_net_client --config Release
-      dumpbin /exports build/release/src/lib/net_client/Release/atlas_net_client.dll \
-          | findstr "atlas_net_"
-      # 对照 §4.10 表, 确认所有 API 均已导出且无多余符号
-      ```
-
-      Linux/macOS 对应:
-      ```bash
-      nm -D --defined-only build/release/src/lib/net_client/libatlas_net_client.so \
-          | grep atlas_net_
-      ```
-
-   e. ABI 回归防护: 在 `tests/unit/` 下加一个
-      `test_net_client_abi_layout.cpp`, 对每个跨 FFI 结构体做
-      `static_assert` 锁定 `sizeof` / `offsetof` (§4.7 10 字段回调表,
-      64-bit 指针 → 80 字节):
-      ```cpp
-      // AtlasNetCallbacks: 10 个函数指针 * 8B (64-bit), Pack=1 已隐含
-      static_assert(sizeof(AtlasNetCallbacks) == 10 * sizeof(void*));
-      static_assert(offsetof(AtlasNetCallbacks, on_disconnect)         == 0);
-      static_assert(offsetof(AtlasNetCallbacks, on_player_base_create) ==  1 * sizeof(void*));
-      static_assert(offsetof(AtlasNetCallbacks, on_player_cell_create) ==  2 * sizeof(void*));
-      static_assert(offsetof(AtlasNetCallbacks, on_reset_entities)     ==  3 * sizeof(void*));
-      static_assert(offsetof(AtlasNetCallbacks, on_entity_enter)       ==  4 * sizeof(void*));
-      static_assert(offsetof(AtlasNetCallbacks, on_entity_leave)       ==  5 * sizeof(void*));
-      static_assert(offsetof(AtlasNetCallbacks, on_entity_position)    ==  6 * sizeof(void*));
-      static_assert(offsetof(AtlasNetCallbacks, on_entity_property)    ==  7 * sizeof(void*));
-      static_assert(offsetof(AtlasNetCallbacks, on_forced_position)    ==  8 * sizeof(void*));
-      static_assert(offsetof(AtlasNetCallbacks, on_rpc)                ==  9 * sizeof(void*));
-
-      // AtlasNetStats: 5*u32 + 1*float = 24B
-      static_assert(sizeof(AtlasNetStats) == 24);
-      ```
-      C# 侧在 `AtlasNetNativeTests` 里再加运行期 `Marshal.SizeOf<AtlasNetCallbacks>()`
-      比对, 双向锁定布局。任何破坏 ABI 的修改都在编译期爆出, 而不是运行期 Unity 崩溃。
-
-### Phase 4: C# P/Invoke 适配 (预计 2-3 天)
-
-1. **创建 AtlasNetNative.cs** (§6.1)
-   - 所有 P/Invoke 声明, 使用 `[LibraryImport]` (source-generated marshalling)
-   - 反映新 API: `AtlasNetCreate(uint expectedAbi)` 等
-   - iOS 条件编译 `LibName = "__Internal"`
-   - 顶部 `AtlasNet.Create()` 薄封装统一做 ABI 校验 + 异常
-
-2. **创建 AtlasNetCallbackBridge.cs** (§6.3)
-   - 10 个 `[UnmanagedCallersOnly]` 事件回调 (OnDisconnect / OnPlayerBaseCreate /
-     OnPlayerCellCreate / OnResetEntities / OnEntityEnter / OnEntityLeave /
-     OnEntityPosition / OnEntityProperty / OnForcedPosition / OnRpc), 每个首参
-     均为 `nint ctx`, 通过 `FromCtx(ctx)` 查回 `AtlasClient` 实例
-   - 进程级 `ConcurrentDictionary<nint, AtlasClient>` 用于 ctx→实例映射
-     (AtlasClient 构造 `Bind`, Dispose `Unbind`)
-   - 单独的 `AtlasNetLoginBridge` / `AtlasNetAuthBridge` 处理 user_data + GCHandle
-     (login/auth 的回调走独立的 trampoline 模式, 见 phase12 §3.6)
-   - 所有回调内立即复制指针数据 (§4.0.1)
-
-3. **适配 ClientNativeApi.cs**
-   - 改为调用 `atlas_net_client` 而非 `atlas_engine`
-   - 增加 `nint ctx` 参数传递; ctx 由 `AtlasNetworkManager` 管理生命周期
-
-4. **验证**
-   - Phase 3 §4.c 的 `tools/net_client_demo/` 控制台项目走通完整流程
-   - 回调从 C++ → C# 正常触发, `user_data` 透传回 `GCHandle.FromIntPtr` 可解回原始对象
-   - ABI 版本不匹配时 `Create()` 抛出清晰异常
-
-### Phase 5: Unity Package 集成 (预计 2-3 天)
-
-> **前置**: Phase 0 Spike 结论已落地; 若选方案 B (delegate), Phase 4
-> 的 bridge 代码走 delegate 路径, 本阶段保持不变。
-
-1. **创建 Package 目录结构** (§7)
-   - `package.json` 配置
-   - `Runtime/` 和 `Editor/` 目录
-   - Assembly Definition 文件 (`Atlas.Client.asmdef`)
-
-2. **集成 C# 代码**
-   - 复制 Atlas.Shared 序列化/协议代码
-   - 复制 Atlas.Client 实体/RPC 代码
-   - 创建 `AtlasNetworkManager` MonoBehaviour (§7.1)
-
-3. **集成 Native 插件**
-   - 放置各平台 DLL/SO/A 文件 (由 Phase 6 交叉编译产出)
-   - 配置 Unity 平台过滤器
-   - iOS `__Internal` 条件编译 (§9.2)
-
-4. **SourceGenerator 集成** (§8)
-   - 编译 Generator 为 netstandard2.0
-   - 放入包中标记为 RoslynAnalyzer
-   - 验证生成代码正确
-
-5. **验证**
-   - Unity 工程中引用包, 场景挂载 `AtlasNetworkManager`
-   - 连本地服务端跑完整流程 (login → authenticate → RPC → logout)
-   - ABI 不匹配时 `AtlasNet.Create()` 抛异常而非崩溃
-
-### Phase 6: 跨平台构建 (预计 2-3 天)
-
-1. **Android NDK 构建**
-   - 安装 Android NDK r25+, 设置 `$ANDROID_NDK_HOME`
-   - 在 `CMakePresets.json` 追加 `android-arm64` / `android-armv7`
-     configurePreset (§9.3 的示例)
-   - 命令:
-     ```bash
-     cmake --preset android-arm64
-     cmake --build build/android_arm64 --target atlas_net_client
-     ```
-   - 产物位置: `build/android_arm64/src/lib/net_client/libatlas_net_client.so`
-   - 验证:
-     ```bash
-     # 检查 ABI (ARM64)
-     file build/android_arm64/src/lib/net_client/libatlas_net_client.so
-     # 预期: "ELF 64-bit LSB shared object, ARM aarch64, ..."
-     # 符号导出检查
-     nm -D --defined-only build/android_arm64/.../libatlas_net_client.so \
-         | grep atlas_net_
-     ```
-
-2. **iOS 构建** (⚠ **必须在 macOS 宿主上执行**, 见 §9.3 — Xcode 无 Windows 版本)
-   - 在 macOS 机器或 CI (GitHub Actions `macos-latest`) 上执行
-   - 安装 Xcode + CLT, 引入 `ios.toolchain.cmake`
-     (或使用 `-G Xcode -DCMAKE_SYSTEM_NAME=iOS`, 见 §9.3)
-   - 使用 `atlas_net_client_static` target 产出 `.a` (§9.3)
-   - 命令:
-     ```bash
-     cmake -S . -B build/ios_arm64 -G Xcode \
-         -DCMAKE_SYSTEM_NAME=iOS \
-         -DCMAKE_OSX_ARCHITECTURES=arm64 \
-         -DCMAKE_OSX_DEPLOYMENT_TARGET=13.0 \
-         -DATLAS_BUILD_NET_CLIENT=ON \
-         -DATLAS_BUILD_TESTS=OFF -DATLAS_BUILD_CSHARP=OFF
-     cmake --build build/ios_arm64 --target atlas_net_client_static \
-         --config Release
-     ```
-   - 产物位置:
-     `build/ios_arm64/src/lib/net_client/Release-iphoneos/libatlas_net_client_static.a`
-   - 验证: 将 `.a` 放入 Unity `Plugins/iOS/`, Unity iOS 构建出包后
-     `.ipa` 内 symbol table 包含 `_AtlasNetCreate` 等
-
-3. **CI 集成** (可选)
-   - 在 GitHub Actions 或等价 CI 上注册矩阵构建任务
-   - 产物统一打包 (tar/zip) 上传到 release artifacts
+| 测试 | 文件 | 锁定的不变量 |
+|------|------|-------------|
+| `test_client_session` | `tests/unit/test_client_session.cpp` | 状态机:Login/Auth 成功、超时、断开、`Disconnect` 幂等;非法状态调用返回 §4.5.6 表上的错误码 |
+| `test_client_flow` | `tests/integration/test_client_flow.cpp` | 真实 LoginApp + BaseApp + DBApp 端到端线格式 |
+| `test_net_client_abi_layout` | `tests/unit/test_net_client_abi_layout.cpp` | `static_assert` 锁定 `AtlasNetCallbacks` / `AtlasNetStats` 的 `sizeof` / `offsetof`;C# 侧用 `Marshal.SizeOf<>` 双向核对 |
+| FFI roundtrip | `Atlas.Tools.NetClientDemo`(net9.0 控制台) | `Create(abi)` → `Login` → `Authenticate` → 1 条 RPC → `Disconnect` → `Destroy`,验证 `user_data` 透传与 ABI 不匹配时的清晰异常 |
 
 ---
 
@@ -2603,8 +2263,7 @@ password_hash = Base64( SHA-256( username + ":" + password ) )
 
 | 风险 | 影响 | 缓解措施 |
 |------|------|----------|
-| ~~IL2CPP 不支持 `[UnmanagedCallersOnly]` + 函数指针~~ | ~~Android/iOS 回调失效, Unity 崩溃~~ | **已解决** — Phase 0 Spike 确认 Unity 2022–6.5 必须用 Pattern B (`[MonoPInvokeCallback]`)，§6.3 已按此实现；前向兼容 Unity 6.6+ Pattern A 路径见 §6.3.1 |
-| Unity 6.6 嵌入 .NET 10 上线时 Pattern A 仍不工作 | 切换到 Pattern A 失败回滚 | 落地时**先重跑** `src/tools/il2cpp_probe/`；保留 Pattern B 路径以 `#if !ATLAS_CALLBACK_PATTERN_A` 包住，可灰度回退 |
+| Unity 6.6 嵌入 .NET 10 上线时 Pattern A 仍不工作 | 切换到 Pattern A 失败回滚 | 落地时**先重跑** `src/tools/il2cpp_probe/`;保留 Pattern B 路径以 `#if !ATLAS_CALLBACK_PATTERN_A` 包住,可灰度回退 |
 | Unity Roslyn 版本不兼容 SourceGenerator | 编译失败 | 检查 Unity 版本对应 Roslyn 版本, 锁定 Generator 为 netstandard2.0 + Roslyn 4.3 以下 API |
 | iOS 静态链接符号冲突 | 链接错误 | `-fvisibility=hidden` 只导出 `atlas_net_*`; 与 Unity 内置 .NET 运行时符号必不冲突 |
 | 回调线程安全 | 崩溃/数据竞争 | 所有回调在 `poll()` 内同步触发, 与 Unity 主线程一致 (§4.0.6) |

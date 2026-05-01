@@ -161,7 +161,7 @@ public sealed class StressTimerComponent : ServerLocalComponent
         TickClientRpcs(a, dt);
     }
 
-    private int _weaponBrokenSeq, _scoresSnapshotSeq, _affixesUpdatedSeq;
+    private int _weaponBrokenSeq, _scoresSnapshotSeq, _affixesUpdatedSeq, _areaBroadcastSeq;
 
     private void TickClientRpcs(StressAvatar a, float dt)
     {
@@ -206,6 +206,15 @@ public sealed class StressTimerComponent : ServerLocalComponent
             for (int i = 0; i < 3; i++) ids.Add(_affixesUpdatedSeq * 7 + i);
             a.Load!.OnAffixesUpdated(ids);
         }
+
+        _onAreaBroadcastAccum += dt;
+        while (_onAreaBroadcastAccum >= kOnAreaBroadcastPeriod)
+        {
+            _onAreaBroadcastAccum -= kOnAreaBroadcastPeriod;
+            _areaBroadcastSeq++;
+            // RpcTarget.All — fan-out routes through every Witness queue.
+            a.AllClients.OnAreaBroadcast((uint)_areaBroadcastSeq, _areaBroadcastSeq * 3);
+        }
     }
 
     private float _extraHpAccum, _affixesAccum, _resistMapAccum;
@@ -217,9 +226,11 @@ public sealed class StressTimerComponent : ServerLocalComponent
     // within a 30 s hold window even at 25 clients (Config-S25), but
     // sparse enough that the bytes/s baseline doesn't flip pass/fail.
     private float _onWeaponBrokenAccum, _onScoresSnapshotAccum, _onAffixesUpdatedAccum;
+    private float _onAreaBroadcastAccum;
     private const float kOnWeaponBrokenPeriod    = 7.0f;
     private const float kOnScoresSnapshotPeriod  = 9.0f;
     private const float kOnAffixesUpdatedPeriod  = 11.0f;
+    private const float kOnAreaBroadcastPeriod   = 8.0f;
 
     private void TickLoadComponent(StressAvatar a, float dt)
     {

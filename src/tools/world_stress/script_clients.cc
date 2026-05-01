@@ -94,18 +94,19 @@ auto ScriptClientHarness::PrintSummary() const -> bool {
 
   std::cout << "\n[script-clients] per-child event summary:\n";
   std::cout << std::format(
-      "  {:<24}  {:>5}  {:>5}  {:>3}  {:>4}  {:>5}  {:>4}  {:>4}  {:>4}  {:>4}  {:>5}  {:>5}\n",
-      "username", "init", "enter", "dst", "hp", "wepCh", "wepBr", "scrSn", "afxUp", "pos", "gaps",
-      "unprs");
+      "  {:<24}  {:>5}  {:>5}  {:>3}  {:>4}  {:>5}  {:>4}  {:>4}  {:>4}  {:>4}  {:>4}  {:>5}  {:>5}\n",
+      "username", "init", "enter", "dst", "hp", "wepCh", "wepBr", "scrSn", "afxUp", "bcst", "pos",
+      "gaps", "unprs");
 
   bool all_ok = true;
   for (const auto& child : children_) {
     const auto& c = child.counters;
     std::cout << std::format(
-        "  {:<24}  {:>5}  {:>5}  {:>3}  {:>4}  {:>5}  {:>4}  {:>5}  {:>5}  {:>4}  {:>5}  {:>5}\n",
+        "  {:<24}  {:>5}  {:>5}  {:>3}  {:>4}  {:>5}  {:>4}  {:>5}  {:>5}  {:>4}  {:>4}  {:>5}  "
+        "{:>5}\n",
         child.username, c.on_init, c.on_enter_world, c.on_destroy, c.on_hp_changed,
         c.on_main_weapon_changed, c.on_weapon_broken, c.on_scores_snapshot, c.on_affixes_updated,
-        c.on_position_updated, c.event_seq_gaps, c.unparsed_lines);
+        c.on_area_broadcast, c.on_position_updated, c.event_seq_gaps, c.unparsed_lines);
     if (opts_.verify) {
       // Minimum bar: the child's own StressAvatar at least got created.
       // OnEnterWorld is nice-to-have (depends on AoI peer or baseline

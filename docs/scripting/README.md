@@ -1,227 +1,163 @@
-# Atlas Engine — C# 脚本层迁移规划
+# C# 脚本层架构
 
-> 版本 1.0 | 目标运行时: .NET 9 | 策略: 全面放弃 Python，Source Generator 零反射
+> **状态**:架构主线 ✅ 已落地 / 集成与验证 🚧 进行中(详见 §7)
 
----
+Atlas 服务端的玩法脚本运行在嵌入式 .NET 9 CoreCLR 上;`Atlas.Generators.Def`
+在编译期生成所有反射敏感代码(序列化、脏标记、RPC 分发、Mailbox 代理、
+实体工厂、类型注册),使同一套 `Atlas.Shared` 程序集可在 .NET 9 服务端
+和 Unity IL2CPP 客户端共存。
 
-## 1. 目标
+## 1. 目录速览
 
-将 Atlas Engine 的服务端脚本语言从 **Python 3** 完全迁移到 **C# (.NET 9)**，实现：
+| 文档 | 内容 |
+|---|---|
+| [native_api_architecture.md](native_api_architecture.md) | `atlas_engine` 共享库、`INativeApiProvider` 进程级适配、`AtlasSynchronizationContext` 主线程模型、DLL TLS 隔离与 CLR 双 Assembly 实例的踩坑约束 |
+| [entity_mailbox_design.md](entity_mailbox_design.md) | BigWorld 风格 `entity.Client.Xxx()` 跨端 RPC 在 Source Generator 下的代码生成与分发 |
+| [entity_type_registration.md](entity_type_registration.md) | `.def` → `Atlas.Generators.Def.TypeRegistryEmitter` → `EntityDefRegistry` 的元数据注册链路 |
+| [serialization_alignment.md](serialization_alignment.md) | `SpanWriter` / `SpanReader` 与 C++ `BinaryStream` 的字节级兼容约定 |
+| [hot_reload.md](hot_reload.md) | `AssemblyLoadContext` 隔离、状态快照格式、`ClrHotReload` + `HotReloadManager` 协作 |
 
-1. 服务端与 Unity 客户端通过 `Atlas.Shared` 共享实体定义和业务逻辑
-2. 深度使用 C# Source Generator，**零反射、零动态代码生成**，完全兼容 Unity IL2CPP
-3. 保持引擎侧干净的 `ScriptEngine` 抽象接口（便于测试和未来扩展）
-4. 支持开发期 C# 程序集热重载
-5. 性能优于 CPython，GC 暂停可控（Server GC + DATAS）
+延伸阅读:[`docs/generator/`](../generator/) 收录 `.def` 驱动的 Source Generator
+设计;[`docs/property_sync/`](../property_sync/) 收录属性同步与 Component 设计。
 
-## 2. 核心架构决策
-
-### 2.1 为什么选择 .NET 9
-
-| 特性 | 收益 |
-|------|------|
-| Source Generator (IIncrementalGenerator) | 编译期生成绑定/序列化/RPC 代码，零运行时反射 |
-| Server GC + DATAS | 动态自适应低延迟 GC，适合游戏服务器 |
-| `delegate* unmanaged` | 与 C++ 函数指针直接互操作，零 marshaling |
-| `UnmanagedCallersOnly` | C# 方法可直接被 C++ 以原生调用约定调用 |
-| NativeAOT 成熟 | 未来可将服务端也 AOT 编译 |
-| `FrozenDictionary` / `UnsafeAccessor` | 适合 AOT 场景的高性能基础设施 |
-
-### 2.2 为什么深度使用 Source Generator
-
-Unity IL2CPP（AOT 编译）的限制：
-
-| IL2CPP 禁区 | 传统做法（IL2CPP 崩溃） | Source Generator 做法（安全） |
-|-------------|----------------------|---------------------------|
-| 动态创建类型 | `Activator.CreateInstance(type)` | 编译期生成工厂 `switch` |
-| 序列化 | `PropertyInfo.GetValue()` 反射 | 编译期生成直接字段读写 |
-| RPC 分发 | `MethodInfo.Invoke(target, args)` | 编译期生成 `switch(rpcId)` |
-| 脏标记 | 运行时 Proxy / IL weaving | 编译期生成属性 setter 标记 |
-| 事件绑定 | 反射扫描 `[EventHandler]` | 编译期生成 `RegisterAll()` |
-| Native 互操作 | `Marshal.GetDelegateForFunctionPointer` | 编译期生成 `delegate* unmanaged` 包装 |
-
-### 2.3 整体架构
+## 2. 进程内分层
 
 ```
-┌──────────────────────────────────────────────────────────────┐
-│                    编译期 (Source Generator)                   │
-│  ┌────────────────┐ ┌──────────┐ ┌──────────┐ ┌──────────┐  │
-│  │ Interop Gen    │ │Entity Gen│ │  RPC Gen │ │Event Gen │  │
-│  │ Native函数绑定 │ │序列化    │ │存根/代理 │ │事件注册  │  │
-│  │ 类型编组       │ │脏标记    │ │消息路由  │ │          │  │
-│  │ LibraryImport  │ │工厂注册  │ │ID分配    │ │          │  │
-│  └───────┬────────┘ └────┬─────┘ └────┬─────┘ └────┬─────┘  │
-│          └───────────────┴────────────┴─────────────┘        │
-│                          │                                    │
-│                 生成的纯 C# 代码 (零反射)                     │
-└──────────────────────────┼────────────────────────────────────┘
-                           │
-               ┌───────────┴───────────┐
-               ▼                       ▼
-        ┌──────────────┐      ┌──────────────┐
-        │  服务端       │      │  Unity 客户端 │
-        │  .NET 9 CLR │      │  IL2CPP (AOT)│
-        │  JIT + 热重载 │      │  零反射限制   │
-        └──────┬───────┘      └──────────────┘
-               │
-        ┌──────┴───────┐
-        │  C++ Engine  │
-        │  hostfxr嵌入  │
-        └──────────────┘
+┌────────────────────────────── C# 用户脚本 (热重载) ────────────────────────────┐
+│   Atlas.GameScripts.dll      —  实体逻辑、事件订阅、玩家 AI                    │
+└──────────────────────────────────────┬─────────────────────────────────────────┘
+                                       ▼
+┌──────────────────────────── 引擎运行时 (Default ALC) ──────────────────────────┐
+│   Atlas.Runtime.dll                                                             │
+│   ├── Core/ Lifecycle / NativeApi / RpcBridge / SyncContext / ThreadGuard      │
+│   ├── Entity/ ServerEntity / EntityManager / EntityFactory / DeltaHistory      │
+│   ├── Hosting/ ScriptHost / ScriptLoadContext / HotReloadManager               │
+│   ├── Log + Time + Diagnostics                                                  │
+│   Atlas.ClrHost.dll  ←  Bootstrap / ErrorBridge / GCHandleHelper (CoreCLR 桥)   │
+│   Atlas.Shared.dll   ←  DataTypes / SpanWriter / SpanReader / Mailbox / RpcId   │
+│   Atlas.Generators.Def.dll  ←  编译期 Source Generator(只在 build 时使用)        │
+└──────────────────────────────────────┬─────────────────────────────────────────┘
+                                       ▼  delegate* unmanaged / [LibraryImport]
+┌──────────────────────────── C++ 引擎 (atlas_engine.dll) ───────────────────────┐
+│   src/lib/script/         语言无关 ScriptEngine / ScriptValue / ScriptObject    │
+│   src/lib/clrscript/      ClrHost / ClrScriptEngine / NativeApi / HotReload     │
+│   src/lib/entitydef/      EntityDefRegistry                                     │
+└─────────────────────────────────────────────────────────────────────────────────┘
 ```
 
-## 3. 当前架构快照（Python 时代）
+`Atlas.Shared` 目标 `netstandard2.1`,在 Unity (Mono / IL2CPP) 上原样使用;
+`Atlas.ClrHost` / `Atlas.Runtime` 目标 `net9.0`,只在服务端宿主上加载。
+客户端宿主分两层:可被 Unity 直接消费的 `Atlas.Client`(`netstandard2.1`,
+仅依赖 `Atlas.Shared`)、桌面 .NET 宿主使用的 `Atlas.Client.Desktop`
+(`net9.0`,持有 `DesktopBootstrap` + `[LibraryImport("atlas_engine")]`)。
+
+## 3. 关键设计原则
+
+1. **零反射**。所有序列化、脏标记、RPC 分发、Mailbox 代理、实体工厂、
+   类型注册由 `Atlas.Generators.Def` 在编译期生成 `partial class` 与
+   `[ModuleInitializer]`;运行时不出现 `System.Reflection` /
+   `Activator.CreateInstance` / `MethodInfo.Invoke`。
+
+2. **单一引擎共享库**。所有 `src/lib/*` 目标聚合为 `atlas_engine.dll/.so`,
+   C# 端 `[LibraryImport("atlas_engine")]` 走标准 DLL 查找,服务端可执行
+   文件薄壳化,同时绕开 Windows 上"DLL 与 EXE TLS 副本独立"造成的错误桥
+   隔离问题(细节见 native_api_architecture.md)。
+
+3. **Provider 进程级特化**。`atlas_*` 导出函数在 C++ 侧统一委托给当前
+   `INativeApiProvider`;BaseApp / CellApp / DBApp / Reviver 各自注册一份
+   实现,使 `SendClientRpc` 等方法在不同进程上自动路由到合理的目标。
+
+4. **主线程语义**。安装 `AtlasSynchronizationContext` 后,所有 `await` 续体
+   默认回到 Tick 主线程;每帧 `Lifecycle.DoOnTick` 先 drain 队列再驱动实体
+   `OnTick`,确保 NativeApi 调用永远在主线程触发。
+
+5. **热重载只换用户脚本**。`Atlas.GameScripts.dll` 加载在可卸载的
+   `ScriptLoadContext` 中,引擎运行时与共享库留在 Default ALC;序列化
+   快照按实体逐条带 `payloadByteLen` 前缀,允许重载前后类型增删。
+
+## 4. C# / C++ 入口对照
+
+| 方向 | C# 入口 | C++ 入口 |
+|---|---|---|
+| 引擎握手 | `Atlas.Core.Bootstrap.Initialize(BootstrapArgs*, ObjectVTableOut*)`(in `Atlas.ClrHost`) | `clr_bootstrap()` → `ClrHost::GetMethodAs<>` |
+| 引擎生命周期 | `Atlas.Core.Lifecycle.{EngineInit, EngineShutdown, OnInit, OnTick, OnShutdown}` | `ClrScriptEngine::{Initialize, OnInit, OnTick, OnShutdown, Finalize}` |
+| C# → C++ | `Atlas.Core.NativeApi.Atlas*` `[LibraryImport]` | `ATLAS_NATIVE_API_TABLE` X-macro 展开的 `atlas_*` 函数 |
+| C++ → C# | C++ 端缓存的 `[UnmanagedCallersOnly]` 函数指针 | `Atlas.Generators.Def` 生成的 RPC dispatcher / EntityFactory |
+| 错误桥 | `Atlas.Core.ErrorBridge.SetError(ex)`(`Atlas.ClrHost`) | `clr_error_set / clear / get_code`(thread-local;DLL 内导出 `AtlasGetClrError*Fn` 提供函数指针) |
+| GCHandle 桥 | `Atlas.Core.GCHandleHelper`(`Atlas.ClrHost`) 提供 7 个 `[UnmanagedCallersOnly]` | `ClrObjectVTable` 一次性注入,所有 `ClrObject` 共享 |
+| 热重载 | `Atlas.Hosting.HotReloadManager.{SerializeAndUnload, LoadAndRestore}` | `ClrHotReload::Reload / ProcessPending` |
+
+## 5. 测试矩阵速览
+
+| 层 | 项目 / 文件 | 覆盖 |
+|---|---|---|
+| C++ 单测 | `tests/unit/test_clr_*` | `ClrHost / ClrMarshal / ClrObject / ClrInvoke / ClrCallback / ClrError / ClrScriptEngine / NativeApi*` 全套生命周期与导出符号校验 |
+| C++ 单测 | `tests/unit/test_script_*`、`test_entity_def_registry_*` | 语言无关脚本接口与 `EntityDefRegistry` 注册/RPC/Component/Container |
+| C# 单测 | `tests/csharp/Atlas.Runtime.Tests/` | 实体序列化、脏标记、工厂、ScriptHost 加载/卸载、SpanWriter/Reader、Component / 容器同步 |
+| C# 单测 | `tests/csharp/Atlas.Generators.Tests/DefGeneratorTests.cs` | DefGenerator 各 Emitter 的快照与诊断 |
+| C# 单测 | `tests/csharp/Atlas.Client.Tests/` | 客户端实体注册与回放 |
+| 集成 | `tests/csharp/Atlas.RuntimeTest/`、`tests/csharp/Atlas.SmokeTest/` | 测试 forwarder + 冒烟入口,用于 C++ 集成测试加载完整 CLR |
+
+## 7. 完成状态
+
+> 核对于 `main` 分支,2026-05-01。✅ 表示主路径已落地并有测试覆盖,
+> 🚧 表示已具备基础设施但尚未在生产路径上接通,⬜ 表示未开始。
+
+### 已落地(✅)
+
+| 模块 | 关键代码 |
+|---|---|
+| 语言无关脚本抽象 | `src/lib/script/` (`script_engine.h` / `script_value` / `script_object` / `script_events`) |
+| `atlas_engine` 共享库 + 导出宏 | `src/lib/clrscript/clr_export.h`、CMake `OBJECT` 聚合目标 |
+| CoreCLR 嵌入(Win + Linux) | `clr_host.{h,cc}` + `clr_host_windows.cc` + `clr_host_linux.cc` |
+| CLR 握手 / 错误桥 / GCHandle 桥 | `Atlas.ClrHost`(`Bootstrap.cs` / `ErrorBridge.cs` / `GCHandleHelper.cs`) + `clr_bootstrap.{h,cc}` + `clr_error.{h,cc}` |
+| Marshal / Object / Invoke / VTable | `clr_marshal.{h,cc}` / `clr_object.{h,cc}` + `clr_object_registry.{h,cc}` / `clr_invoke.h` |
+| `ATLAS_NATIVE_API_TABLE` X-macro | `clr_native_api_defs.h` + `clr_native_api.{h,cc}` |
+| `INativeApiProvider` + 默认实现 | `native_api_provider.{h,cc}` + `base_native_provider.{h,cc}` |
+| BaseApp / CellApp Provider 特化 | `src/server/baseapp/baseapp_native_provider.*`、`src/server/cellapp/cellapp_native_provider.*` |
+| `ClrScriptEngine` 全生命周期 | `clr_script_engine.{h,cc}` + `Atlas.Runtime/Core/Lifecycle.cs` |
+| 主线程模型 | `AtlasSynchronizationContext.cs` + `ThreadGuard.cs` |
+| Atlas.Runtime: Entity / Hosting / Log / Time / Diagnostics | `src/csharp/Atlas.Runtime/` |
+| Atlas.Shared: SpanWriter/Reader / DataTypes / Mailbox / RpcId | `src/csharp/Atlas.Shared/` |
+| `Atlas.Generators.Def` 全套 emitter | `Properties / Serialization / DeltaSync / Factory / Mailbox / RpcStub / Dispatcher / RpcId / TypeRegistry / Component / EntityComponentAccessor / Struct / StructRegistry` 等 16 个 |
+| EntityDefRegistry | `src/lib/entitydef/`(C# 注册路径 + DBApp `RegisterFromBinaryFile` 已接通) |
+| 客户端宿主分层 | `Atlas.Client`(`netstandard2.1`)+ `Atlas.Client.Desktop`(`net9.0`)+ `Atlas.Client.Unity`(asmdef + IL2CPP defines) |
+| 离线工具 | `Atlas.Tools.DefDump`(`.def` → `entity_defs.bin`) |
+| 示例脚本 | `samples/base/`(Account / Avatar)、`samples/client/`(StressAvatar + Component) |
+| 热重载基础设施 | `clr_hot_reload.{h,cc}` + `file_watcher.{h,cc}` + `Hosting/{ScriptHost, ScriptLoadContext, HotReloadManager}.cs` |
+| 热重载接入 + 测试 | `ScriptApp::Init` 读 `ServerConfig.enable_hot_reload` 等字段构造 `ClrHotReload`,`OnTickComplete` 驱动 `Poll/ProcessPending`;集成测试 `tests/integration/test_hot_reload.cpp` |
+| C++ 测试(脚本相关 ~12 个文件) | `tests/unit/test_clr_*` + `test_script_*` + `test_native_api_*` + `test_entity_def_registry_*` |
+| C# 测试 | `Atlas.Runtime.Tests` 18 个文件、`Atlas.Generators.Tests` 5 个文件、`Atlas.Client.Tests` |
+| 集成 forwarder / 冒烟 | `Atlas.RuntimeTest` + `Atlas.SmokeTest` |
+
+### 进行中(🚧)
+
+| 项 | 现状 / 缺什么 |
+|---|---|
+| 其余进程的 Provider | 仅 `BaseApp` / `CellApp` 已实现;`DBApp` / `Reviver` / `DBAppMgr` 当前依赖 `BaseNativeProvider` 默认实现,差异化能力(如 `WriteToDb` 真正落库)尚未接通 |
+| 端到端引擎生命周期测试 | 缺 `tests/integration/test_engine_lifecycle.*`(C++ 启动 → C# 初始化 → Tick N 帧 → 关闭) |
+| Unity IL2CPP 端到端验收 | `Atlas.Client.Unity.asmdef` 已就位,但 `link.xml` + iOS/Android IL2CPP build + 序列化/RPC 往返尚未验证 |
+
+### 未开始(⬜)
+
+| 项 | 备注 |
+|---|---|
+| 10K 实体 1 小时稳定性压测 | 监控 RSS / GC 暂停,验收无泄漏 |
+| `BenchmarkDotNet` 基准 | 调用延迟、序列化、`EntityFactory`、`RpcDispatch`、10K Tick |
+| GC 暂停 p99 < 5 ms 验证 | `runtime/atlas_server.runtimeconfig.json` 已启用 Server GC + DATAS,缺持续负载下的 p99 数据 |
+| `delegate* unmanaged` < 100 ns / string < 500 ns 延迟基准 | 同上,需要对应测试台 |
+
+## 8. 部署形态
 
 ```
-src/lib/
-├── script/                    # 语言无关抽象（实际耦合 Python）
-│   ├── script_object.hpp      # 纯虚基类 ScriptObject
-│   ├── script_events.hpp/cpp  # ScriptEvents — 直接使用 PyObjectPtr
-│   └── CMakeLists.txt         # 依赖 atlas_pyscript
-│
-└── pyscript/                  # Python 3 实现（16 个文件，待删除）
-    ├── py_interpreter.hpp/cpp
-    ├── py_object.hpp
-    ├── py_type.hpp/cpp
-    ├── py_module.hpp/cpp
-    ├── py_convert.hpp
-    ├── py_pickler.hpp/cpp
-    ├── py_gil.hpp
-    ├── py_error.hpp/cpp
-    ├── atlas_module.hpp/cpp
-    └── CMakeLists.txt
+deploy/
+├── BaseApp / CellApp / DBApp / Reviver        — 薄壳可执行,动态链接 atlas_engine
+├── atlas_engine.dll/.so                        — 引擎核心,导出 atlas_* 符号
+├── dotnet/                                     — .NET 9 运行时(随机编随)
+├── scripts/
+│   ├── Atlas.Runtime.dll
+│   ├── Atlas.Shared.dll
+│   ├── Atlas.ClrHost.dll
+│   └── Atlas.GameScripts.dll                   — 用户脚本,可热重载
+└── runtime/atlas_server.runtimeconfig.json     — Server GC + DATAS + 分层编译
 ```
-
-**核心问题**: `script_events.hpp` 第 2 行 `#include "pyscript/py_object.hpp"` 直接耦合 Python。
-
-## 4. 目标架构（.NET 9 + Source Generator）
-
-### 4.1 C++ 侧
-
-```
-src/lib/
-├── script/                        # 语言无关抽象层（零 Python 依赖）
-│   ├── script_engine.hpp          # [新建] ScriptEngine 抽象接口
-│   ├── script_object.hpp          # [修改] 扩展调用/设置属性能力
-│   ├── script_value.hpp/cpp       # [新建] 类型擦除值容器
-│   ├── script_events.hpp/cpp      # [重写] 去 Python 化
-│   └── CMakeLists.txt             # [修改] 不再依赖 pyscript
-│
-├── clrscript/                     # [新建] .NET CLR 实现
-│   ├── clr_host.hpp/cpp           # CoreCLR 生命周期 (hostfxr)
-│   ├── clr_host_windows.cpp       # Windows 平台适配
-│   ├── clr_host_linux.cpp         # Linux 平台适配
-│   ├── clr_object.hpp/cpp         # ClrObject (ScriptObject 实现)
-│   ├── clr_marshal.hpp/cpp        # 类型编组
-│   ├── clr_invoke.hpp/cpp         # C++ → C# 调用
-│   ├── clr_native_api.hpp/cpp     # C# → C++ 导出函数（LibraryImport 目标）
-│   ├── clr_export.hpp             # ATLAS_NATIVE_API 导出宏
-│   ├── native_api_provider.hpp    # INativeApiProvider 接口（进程级适配）
-│   ├── base_native_provider.hpp   # 基础 Provider（日志/时间/注册通用逻辑）
-│   ├── clr_error.hpp/cpp          # 异常桥接
-│   ├── clr_script_engine.hpp/cpp  # ClrScriptEngine (ScriptEngine 实现)
-│   ├── clr_hot_reload.hpp/cpp     # 热重载管理
-│   └── CMakeLists.txt
-│
-└── pyscript/                      # [删除] 整个目录
-```
-
-### 4.2 C# 侧
-
-```
-src/csharp/
-├── Atlas.Generators.Def/         # Source Generator: 实体系统 (属性/序列化/RPC/工厂/Mailbox/类型注册)
-├── Atlas.Generators.Events/      # Source Generator: 事件系统
-├── Atlas.Shared/                 # 共享库 (netstandard2.1, IL2CPP 安全)
-├── Atlas.Runtime/                # 服务端运行时 (net9.0)
-└── Atlas.Client/                 # 客户端运行时 (net9.0, 共享 Atlas.Shared — Unity 侧仍按 netstandard2.1 共享源码)
-
-tests/csharp/
-├── Atlas.Runtime.Tests/          # Runtime xUnit 测试
-├── Atlas.Generators.Tests/       # Generator 快照/编译测试
-├── Atlas.RuntimeTest/            # C++ 集成测试使用的 forwarder 程序集
-└── Atlas.SmokeTest/              # ClrHost 冒烟 (Ping/Add/StringLength)
-```
-
-> 说明：原 `Atlas.Generators.Interop` 已移除（手写 `NativeApi.cs` 即可，见 [implementation_notes.md](implementation_notes.md) §3）；
-> 原 `Atlas.Generators.Entity` 与 `Atlas.Generators.Rpc` 已合并入 `Atlas.Generators.Def`，从 `.def` 文件直接驱动代码生成。
-
-## 5. 阶段总览
-
-| 阶段 | 名称 | 预估周期 | 关键交付物 |
-|------|------|----------|-----------|
-| 0 | 清理 Python + 建立抽象层 | 1.5-2 周 | `ScriptEngine` / `ScriptValue` 接口; pyscript 删除 |
-| 1 | .NET 9 运行时嵌入 | 2-3 周 | `ClrHost`; C++ 进程能调用 C# 方法 |
-| 2 | C++ ↔ C# 互操作层 | 4-5 周 | `ClrMarshal` / `ClrObject`; `atlas_engine` 共享库 + `NativeApi.cs` |
-| 3† | Atlas 引擎 C# 绑定 | 3-4 周 | `Atlas.Runtime`; `ClrScriptEngine`; 日志/时间/实体回调 |
-| 4 | 共享程序集 + Source Generator | 3-4 周 | `Atlas.Shared`; 统一 `Atlas.Generators.Def` + `Atlas.Generators.Events` |
-
-> † ScriptPhase 3 启动前需先执行 ScriptPhase 4 的任务 4.1 (Atlas.Shared 项目) + 4.2 (Attribute 定义) + 4.3 (SpanWriter/SpanReader)，因为 `Atlas.Runtime` 引用 `Atlas.Shared`。
-| 5 | 热重载机制 | 2-3 周 | `AssemblyLoadContext` 隔离; 文件监控; 状态迁移 |
-| 6 | 测试与稳定化 | 3-4 周 | 完整测试矩阵; GC 调优; 性能基准; 文档 |
-| **总计** | | **17-22 周** | |
-
-## 6. 里程碑与验收标准
-
-> 下表状态核对于 2026-04-18。
-
-| 里程碑 | 验收标准 | 状态 |
-|--------|----------|------|
-| **M0: 抽象层就位** | `ScriptEvents` 不再依赖 `PyObjectPtr`; 项目编译不需要 Python SDK; 所有非 Python 测试通过 | ✅ 完成 |
-| **M1: .NET 可加载** | C++ 进程能加载 CoreCLR 并调用 C# `[UnmanagedCallersOnly]` 方法返回正确结果 | ✅ 完成 |
-| **M2: 双向互操作** | C++ 可调用 C# 方法, C# 可调用 C++ 导出函数; 支持基本类型 + string + byte[]; Interop 桥接代码可用 | ✅ 完成 — `atlas_engine.dll` 共享库输出 + `NativeApi.cs` [LibraryImport] + `ClrObjectVTable`；~116 个 C++ 测试到位。自定义 `Atlas.Generators.Interop` 已移除，详见 [implementation_notes.md](implementation_notes.md) |
-| **M3: 引擎可脚本化** | C# 脚本中可调用 `Atlas.Log.Info()`, `Atlas.Time.ServerTime`; Entity 生命周期回调工作 | 🟡 进行中 — `Atlas.Runtime.Core.Bootstrap`（CLR handshake）+ `Lifecycle`（引擎生命周期入口）+ `ClrScriptEngine` 已落地；`atlas_module.cpp` 的全量 C# 对等能力仍在补齐 |
-| **M4: 跨端共享** | 同一 `Atlas.Shared.dll` 在服务端 (.NET 9) 和 Unity IL2CPP 上编译运行; Source Generator 输出零反射代码 | 🟡 进行中 — `Atlas.Shared` + 统一后的 `Atlas.Generators.Def`（吸收原 Entity/Rpc Generator）+ `Atlas.Generators.Events` 已落地，Unity IL2CPP 全量验收仍未完成 |
-| **M5: 热重载可用** | 修改 C# 脚本后无需重启服务端进程即可生效 | 🟡 进行中 — `ScriptLoadContext`、`HotReloadManager`、`ClrHotReload`、`FileWatcher` 已落地，`test_hot_reload` 集成测试与生产开关收口待补 |
-| **M6: 生产就绪** | 全部测试通过; 10K 实体压测无内存泄漏; GC 暂停 < 5ms@p99 | 🟡 进行中 — C++ ~12 个脚本相关测试 + C# 6 个 Runtime 测试文件（~102 `[Fact]`）+ `DefGeneratorTests`；长稳压测、BenchmarkDotNet、GC p99 指标仍缺 |
-
-## 7. Python 删除清单（已完成，核对于 2026-04-18）
-
-以下清单为 M0 验收时的历史记录，仓库中 `grep pyscript|PyObject|py_object` 已无命中，`cmake/AtlasFindPackages.cmake` 已不复存在，全部条目已消化。
-
-### 已删除的文件（24 个）
-
-| 类型 | 文件 | 数量 |
-|------|------|------|
-| 源码 | `src/lib/pyscript/` 整个目录 | 16 |
-| 测试 | `tests/unit/test_py_interpreter.cpp` | 1 |
-| 测试 | `tests/unit/test_py_object.cpp` | 1 |
-| 测试 | `tests/unit/test_py_convert.cpp` | 1 |
-| 测试 | `tests/unit/test_py_gil.cpp` | 1 |
-| 测试 | `tests/unit/test_py_type.cpp` | 1 |
-| 测试 | `tests/unit/test_py_module.cpp` | 1 |
-| 测试 | `tests/unit/test_py_pickler.cpp` | 1 |
-| 测试 | `tests/unit/test_atlas_module.cpp` | 1 |
-
-### 已修改/替换的文件
-
-| 文件 | 当前状态 |
-|------|---------|
-| `src/lib/CMakeLists.txt` | 仅 `clrscript`，无 `pyscript` |
-| `src/lib/script/CMakeLists.txt` | 不再依赖 `atlas_pyscript` |
-| `src/lib/script/script_events.{h,cc}` | 统一使用 `ScriptObject` / `ScriptValue`，无 Python 耦合 |
-| `cmake/` | 现为 `AtlasCompilerOptions.cmake` / `AtlasDotNetBuild.cmake` / `Dependencies.cmake` / `FindDotNet.cmake`，不再有 `AtlasFindPackages.cmake` 或 `find_package(Python3)` |
-| `tests/unit/CMakeLists.txt` | 所有 `test_py_*` 条目已移除 |
-
-## 8. 详细阶段文档
-
-各阶段的完整任务分解请参阅:
-
-- [ScriptPhase 0: 清理 Python + 建立抽象层](script_phase0_cleanup_abstraction.md)
-- [ScriptPhase 1: .NET 9 运行时嵌入](script_phase1_dotnet_host.md)
-- [ScriptPhase 2: C++ ↔ C# 互操作层](script_phase2_interop_layer.md)
-- [ScriptPhase 3: Atlas 引擎 C# 绑定](script_phase3_engine_bindings.md) ← 含序列化对齐
-- [ScriptPhase 4: 共享程序集 + Source Generator](script_phase4_shared_generators.md) ← 含 Mailbox + EntityDef
-- [ScriptPhase 5: 热重载机制](script_phase5_hot_reload.md)
-- [ScriptPhase 6: 测试与稳定化](script_phase6_testing.md)
-
-### 架构基础设施
-
-- [NativeApi 架构基础设施](native_api_architecture.md) — **必读**: 共享库构建、INativeApiProvider 进程适配、线程安全（ScriptPhase 2–6 的基础）
-- [实现笔记与经验教训](implementation_notes.md) — DLL TLS 隔离、CLR 双 Assembly 实例、Source Generator 链式限制等实现中发现的关键问题及解决方案
-
-### 专题设计文档
-
-- [Entity Mailbox 代理机制设计](entity_mailbox_design.md) — BigWorld 风格 `entity.client.SayHi()` 在 C# Source Generator 下的实现
-- [C++ / C# 序列化格式对齐](serialization_alignment.md) — `SpanWriter`/`SpanReader` 与 `BinaryWriter`/`BinaryReader` 字节级兼容
-- [实体类型注册机制](entity_type_registration.md) — 替代传统 `.def` XML，C# Attribute + Source Generator → C++ `EntityDefRegistry`

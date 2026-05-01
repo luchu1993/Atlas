@@ -13,6 +13,8 @@
 
 namespace atlas {
 
+class ClrHotReload;
+
 class ScriptApp : public ServerApp {
  public:
   ScriptApp(EventDispatcher& dispatcher, NetworkInterface& network);
@@ -60,6 +62,7 @@ class ScriptApp : public ServerApp {
   NativeApiErrorExports native_api_error_exports_;
   std::unique_ptr<ScriptEngine> script_engine_;
   std::unique_ptr<INativeApiProvider> native_provider_;
+  std::unique_ptr<ClrHotReload> hot_reload_;
   float last_dt_{0.0f};  // seconds, updated each tick
 };
 

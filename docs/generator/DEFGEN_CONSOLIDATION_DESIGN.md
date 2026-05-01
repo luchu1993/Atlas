@@ -54,14 +54,13 @@ Atlas 有 4 个 SourceGenerator，其中 3 个存在功能重叠：
 | **DefGenerator** | .def + `[Entity]` | RPC stubs, Mailbox, RpcIds, Dispatcher, TypeRegistry | 不处理属性序列化 |
 | ~~EntityGenerator~~ | `[Entity]` + `[Replicated]` + `[Persistent]` | Serialization, DirtyTracking, DeltaSync, Factory, TypeRegistry | 与 .def 信息重复，**已删除** |
 | ~~RpcGenerator~~ | `[Entity]` + `[*Rpc]` | RPC stubs, Mailbox, RpcIds, Dispatcher | 与 DefGenerator 完全重叠，**已删除** |
-| **EventGenerator** | `[EventHandler]` | Event handler 注册/反注册 | 独立，无重叠 |
 
 ### 1.3 已解决的冲突
 
 - **RpcIds.g.cs**: ~~DefGenerator 和 RpcGenerator 各自生成一份~~ → 现在仅 DefGenerator 生成
 - **Dispatcher**: ~~两套并存~~ → 现在仅 DefGenerator 生成 `DefRpcDispatcher.g.cs`
 - **TypeRegistry**: ~~EntityGenerator 缺少 RPC 信息~~ → 现在由 DefGenerator 的 `DefEntityTypeRegistry` 统一生成，含完整属性和 RPC 信息
-- **类型映射**: ~~四份几乎相同的代码~~ → 仅保留 `DefTypeHelper` 和 `EventTypeHelper`
+- **类型映射**: ~~四份几乎相同的代码~~ → 仅保留 `DefTypeHelper`
 
 ---
 
@@ -72,9 +71,9 @@ Atlas 有 4 个 SourceGenerator，其中 3 个存在功能重叠：
 | Generator | 输入 | 输出 | 状态 |
 |-----------|------|------|------|
 | **DefGenerator** (合并后) | `.def` + `[Entity]` | **全部**: RPC stubs, Mailbox, RpcIds, Dispatcher, TypeRegistry, **Properties, Serialization, DirtyTracking, DeltaSync, Factory** | 唯一实体 Generator, **已完成** |
-| **EventGenerator** | `[EventHandler]` | Event handler 注册/反注册 | 保持独立 |
 | ~~EntityGenerator~~ | - | - | **已删除** |
 | ~~RpcGenerator~~ | - | - | **已删除** |
+| ~~EventGenerator~~ | - | - | **已删除** |
 
 ### 2.2 单一数据流
 
@@ -131,7 +130,7 @@ Avatar.def (唯一定义)               Avatar.cs (纯业务逻辑)
 | ~~`[ClientRpc]`~~ | **已删除** | `.def` 的 `<client_methods>` 替代 |
 | ~~`[CellRpc]`~~ | **已删除** | `.def` 的 `<cell_methods>` 替代 |
 | ~~`[BaseRpc]`~~ | **已删除** | `.def` 的 `<base_methods>` 替代 |
-| `[EventHandler]` | **保留** | EventGenerator 独立，不受影响 |
+| ~~`[EventHandler]`~~ | **已删除** | EventBus 与 EventGenerator 已整体移除（无业务调用方） |
 
 > **注意**: 原计划是先标记 `[Obsolete]` 再删除。实际实施中因无外部消费者，直接删除了所有废弃属性及其关联的 `ReplicationScope` 枚举。
 
@@ -421,7 +420,6 @@ partial class Avatar
 | 项目 | 理由 |
 |------|------|
 | `Atlas.Generators.Def` | 合并后的唯一实体 Generator |
-| `Atlas.Generators.Events` | 独立功能，不依赖 .def |
 
 ---
 
@@ -429,28 +427,14 @@ partial class Avatar
 
 ### 7.1 当前状况
 
-四个 Generator 各有一份几乎相同的类型映射代码：
+合并前四个 Generator 各有一份几乎相同的类型映射代码：
 
 - `DefTypeHelper.cs` — .def 类型 → C# 类型 / Writer/Reader 方法 / DataType ID
 - `EntityTypeHelper.cs` — C# 类型 → Writer/Reader 方法 / DataType ID
 - `RpcTypeHelper.cs` — C# 类型 → Writer/Reader 方法 / DataType ID + 大小估算
-- `EventTypeHelper.cs` — C# 类型 → Reader 方法
 
-### 7.2 合并方案
-
-创建共享 Analyzer 项目 `Atlas.Generators.Common`：
-
-```
-Atlas.Generators.Common/
-├── TypeMapping.cs        ← 统一的类型映射 (def type ↔ C# type ↔ Writer/Reader/ID)
-├── TypeIndexer.cs        ← 统一的实体类型索引 (按名称排序, 1-based)
-├── RpcIdComputer.cs      ← 统一的 RPC ID 计算
-└── DiagnosticDescriptors.cs ← 共享诊断代码
-```
-
-DefGenerator 和 EventGenerator 都引用此项目。
-
-**注意**: SourceGenerator 引用的库必须是 `netstandard2.0` 且打包为 Analyzer 依赖。
+合并完成后仅保留 `DefTypeHelper`，无需进一步引入 `Atlas.Generators.Common`
+共享项目（仅一个 Generator，没有共享需求）。
 
 ---
 
@@ -562,7 +546,7 @@ public partial class Avatar : CellEntity
 
 ### Phase 1: 共享代码提取 — 跳过
 
-原计划创建 `Atlas.Generators.Common` 项目，实际评估后认为目前 Generator 仅两个（DefGenerator + EventGenerator），各自的 TypeHelper 差异足够大，提取收益不高。保持各自独立的 TypeHelper。
+原计划创建 `Atlas.Generators.Common` 项目；EventGenerator 后续整体移除后，仅剩 DefGenerator，无共享需求。
 
 ### Phase 2: DefGenerator 增加属性生成 — **已完成**
 

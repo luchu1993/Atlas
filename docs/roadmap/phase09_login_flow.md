@@ -6,7 +6,7 @@
 `lib/connection/login_interface.hpp`
 
 多 `LoginApp` / `LoginAppMgr` 扩展设计见
-[../scripting/MULTI_LOGINAPP_DESIGN.md](../scripting/MULTI_LOGINAPP_DESIGN.md)。
+[login_multi_loginapp_design.md](login_multi_loginapp_design.md)。
 
 ## 目标
 
@@ -59,7 +59,7 @@ detached proxy grace；本地重登快路径；远端 `ForceLogoff` + `ForceLogo
 ## 边界
 
 **本文档不再负责**（统一见
-[../scripting/MULTI_LOGINAPP_DESIGN.md](../scripting/MULTI_LOGINAPP_DESIGN.md)）：
+[login_multi_loginapp_design.md](login_multi_loginapp_design.md)）：
 
 - 多 `LoginApp` 入口与 `LoginAppMgr` 外部暴露方案
 - `route_token`

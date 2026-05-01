@@ -102,6 +102,12 @@
     <method name="OnScoresSnapshot">
       <arg name="scores" type="list[int32]" />
     </method>
+
+    <!-- (C4) Broadcast via RpcTarget.All — fan-out hits owner + AoI peers. -->
+    <method name="OnAreaBroadcast">
+      <arg name="seq"     type="uint32" />
+      <arg name="payload" type="int32" />
+    </method>
   </client_methods>
 
   <components>

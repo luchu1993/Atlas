@@ -73,6 +73,14 @@ TEST(ClientEventTap, OnAffixesUpdated) {
   EXPECT_EQ(c.on_affixes_updated, 1u);
 }
 
+TEST(ClientEventTap, OnAreaBroadcast) {
+  ClientEventCounters c;
+  EXPECT_TRUE(ParseAndCountClientEventLine(
+      "[StressAvatar:42] OnAreaBroadcast seq=1 payload=3", c));
+  EXPECT_EQ(c.on_area_broadcast, 1u);
+  EXPECT_EQ(c.unparsed_lines, 0u);
+}
+
 // ============================================================================
 // Unrelated / malformed inputs — harness must not crash or misattribute.
 // ============================================================================

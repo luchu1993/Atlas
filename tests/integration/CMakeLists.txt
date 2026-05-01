@@ -95,3 +95,41 @@ atlas_add_test(NAME test_offload_traversal
   DEPS atlas_cellapp_lib atlas_cellappmgr_bsp atlas_server atlas_network
   LABEL integration
 )
+
+# Hot reload: bootstraps real ClrScriptEngine + Atlas.Runtime, exercises
+# ClrHotReload state machine + failure paths. End-to-end SerializeAndUnload
+# round-trip is covered by C# ScriptHostTests.
+add_executable(test_hot_reload
+  test_hot_reload.cpp
+)
+target_link_libraries(test_hot_reload PRIVATE GTest::gtest_main atlas_clrscript atlas_platform)
+target_include_directories(test_hot_reload PRIVATE "${CMAKE_SOURCE_DIR}/tests")
+target_compile_definitions(test_hot_reload PRIVATE _CRT_SECURE_NO_WARNINGS)
+add_dependencies(test_hot_reload atlas_engine atlas_runtime_dll)
+if(TARGET atlas_runtime_dll_deploy)
+  add_dependencies(test_hot_reload atlas_runtime_dll_deploy)
+endif()
+add_test(NAME test_hot_reload COMMAND test_hot_reload)
+set_tests_properties(test_hot_reload PROPERTIES
+  LABELS "integration"
+  ENVIRONMENT
+    "ATLAS_ENGINE_RLOC=$<TARGET_FILE:atlas_engine>;ATLAS_RUNTIME_CONFIG_RLOC=${CMAKE_BINARY_DIR}/runtime/atlas_server.runtimeconfig.json;ATLAS_RUNTIME_DLL_RLOC=${ATLAS_BIN_ROOT}/Atlas.Runtime.dll"
+)
+foreach(_cfg IN ITEMS Debug Release RelWithDebInfo MinSizeRel)
+  string(TOUPPER "${_cfg}" _CFG)
+  set_target_properties(test_hot_reload PROPERTIES
+    RUNTIME_OUTPUT_DIRECTORY_${_CFG} "${ATLAS_BIN_ROOT}"
+  )
+endforeach()
+set_target_properties(test_hot_reload PROPERTIES FOLDER "Test/Integration")
+if(WIN32)
+  add_custom_command(TARGET test_hot_reload POST_BUILD
+    COMMAND ${CMAKE_COMMAND}
+            "-DTARGET_DLLS=$<TARGET_RUNTIME_DLLS:test_hot_reload>"
+            "-DTARGET_DIR=$<TARGET_FILE_DIR:test_hot_reload>"
+            -P "${CMAKE_SOURCE_DIR}/cmake/CopyRuntimeDLLs.cmake"
+    VERBATIM
+  )
+  atlas_deploy_clr_runtime_if_needed(test_hot_reload)
+  atlas_deploy_db_plugins_if_needed(test_hot_reload)
+endif()

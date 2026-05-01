@@ -16,10 +16,4 @@
     <ProjectReference Include="..\Atlas.ClrHost\Atlas.ClrHost.csproj" />
   </ItemGroup>
 
-  <ItemGroup>
-    <ProjectReference Include="..\Atlas.Generators.Events\Atlas.Generators.Events.csproj"
-                      OutputItemType="Analyzer"
-                      ReferenceOutputAssembly="false" />
-  </ItemGroup>
-
 </Project>

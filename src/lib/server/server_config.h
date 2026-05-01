@@ -53,6 +53,14 @@ struct ServerConfig {
   std::string db_mysql_database{"atlas"};
   int db_mysql_pool_size{4};
 
+  bool enable_hot_reload{false};
+  std::filesystem::path hot_reload_script_project_path;
+  std::filesystem::path hot_reload_output_directory;
+  std::string hot_reload_assembly_name{"Atlas.GameScripts.dll"};
+  int hot_reload_debounce_ms{500};
+  int hot_reload_unload_timeout_ms{5000};
+  bool hot_reload_auto_compile{true};
+
   bool auto_create_accounts{false};
   uint16_t account_type_id{0};
   int login_rate_limit_per_ip{5};

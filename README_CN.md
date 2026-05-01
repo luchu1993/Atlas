@@ -424,7 +424,6 @@ atlas/
 │   │   ├── Atlas.Client.Unity/       Unity asmdef + 适配
 │   │   ├── Atlas.ClrHost/            CoreCLR hostfxr 包装
 │   │   ├── Atlas.Generators.Def/     Source Generator：.def → 实体类 / delta 同步
-│   │   ├── Atlas.Generators.Events/  Source Generator：事件绑定
 │   │   └── Atlas.Tools.DefDump/      .def 检视 / dump 工具
 │   ├── client/                 控制台客户端应用（连接 + native provider）
 │   └── tools/                  运维工具

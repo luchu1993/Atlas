@@ -424,7 +424,6 @@ atlas/
 │   │   ├── Atlas.Client.Unity/       Unity asmdef + adapters
 │   │   ├── Atlas.ClrHost/            CoreCLR hostfxr wrapper
 │   │   ├── Atlas.Generators.Def/     Source generator: .def → entity classes / delta sync
-│   │   ├── Atlas.Generators.Events/  Source generator: event wiring
 │   │   └── Atlas.Tools.DefDump/      .def inspector / dumper
 │   ├── client/                 Console client application (connection + native provider)
 │   └── tools/                  Operator tooling

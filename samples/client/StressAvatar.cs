@@ -91,5 +91,15 @@ public partial class StressAvatar : ClientEntity
         if (m != null) m.OnScoresSnapshotCount++;
     }
 
+    // Broadcast (RpcTarget.All) RPC — every client witnessing this
+    // avatar logs receipt, including the owner.
+    public partial void OnAreaBroadcast(uint seq, int payload)
+    {
+        ClientLog.Info(
+            $"[StressAvatar:{EntityId}] OnAreaBroadcast seq={seq} payload={payload}");
+        var m = Metrics;
+        if (m != null) m.OnAreaBroadcastCount++;
+    }
+
     private static string FormatVec(Vector3 v) => $"({v.X:F2},{v.Y:F2},{v.Z:F2})";
 }

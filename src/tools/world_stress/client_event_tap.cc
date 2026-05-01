@@ -88,6 +88,10 @@ auto ParseAndCountClientEventLine(std::string_view line, ClientEventCounters& ou
     ++out.on_affixes_updated;
     return true;
   }
+  if (StartsWithToken(rest, "OnAreaBroadcast")) {
+    ++out.on_area_broadcast;
+    return true;
+  }
 
   // event_seq gap warning (from ClientEntity.NoteIncomingEventSeq):
   //   [<Type>:<Id>] event_seq gap: last=A got=B missed=N

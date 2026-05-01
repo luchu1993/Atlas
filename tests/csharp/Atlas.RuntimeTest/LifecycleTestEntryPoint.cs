@@ -11,7 +11,7 @@ namespace Atlas.RuntimeTest;
 //
 // These methods forward to Lifecycle.DoXxx() in Atlas.Runtime.
 // They must live in Atlas.RuntimeTest to avoid the dual-Assembly-instance
-// issue (see implementation_notes.md §2).
+// issue (see docs/scripting/native_api_architecture.md §5).
 
 public static class LifecycleTestEntryPoint
 {

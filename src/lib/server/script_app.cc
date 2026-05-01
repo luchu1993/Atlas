@@ -7,6 +7,7 @@
 
 #include "clrscript/base_native_provider.h"
 #include "clrscript/clr_bootstrap.h"
+#include "clrscript/clr_hot_reload.h"
 #include "clrscript/clr_native_api.h"
 #include "clrscript/clr_script_engine.h"
 #include "foundation/log.h"
@@ -121,11 +122,43 @@ auto ScriptApp::Init(int argc, char* argv[]) -> bool {
 
   OnScriptReady();
 
+  if (Config().enable_hot_reload) {
+    auto* clr_engine = dynamic_cast<ClrScriptEngine*>(script_engine_.get());
+    if (clr_engine == nullptr) {
+      ATLAS_LOG_WARNING(
+          "ScriptApp: enable_hot_reload set but script engine is not a ClrScriptEngine; ignoring");
+    } else {
+      hot_reload_ = std::make_unique<ClrHotReload>(*clr_engine);
+      ClrHotReload::Config hr_config;
+      hr_config.script_project_path = Config().hot_reload_script_project_path;
+      hr_config.output_directory = Config().hot_reload_output_directory.empty()
+                                       ? Config().script_assembly.parent_path()
+                                       : Config().hot_reload_output_directory;
+      hr_config.assembly_name = Config().hot_reload_assembly_name;
+      hr_config.debounce_delay = std::chrono::milliseconds{Config().hot_reload_debounce_ms};
+      hr_config.unload_timeout = std::chrono::seconds{
+          (Config().hot_reload_unload_timeout_ms + 999) / 1000};
+      hr_config.auto_compile = Config().hot_reload_auto_compile;
+      hr_config.enabled = true;
+
+      auto cfg = hot_reload_->Configure(hr_config);
+      if (!cfg) {
+        ATLAS_LOG_ERROR("ScriptApp: hot reload configure failed: {}", cfg.Error().Message());
+        hot_reload_.reset();
+      } else {
+        ATLAS_LOG_INFO("ScriptApp: hot reload enabled (project={}, output={})",
+                       hr_config.script_project_path.string(), hr_config.output_directory.string());
+      }
+    }
+  }
+
   return true;
 }
 
 void ScriptApp::Fini() {
   using SetNativeApiProviderFn = void (*)(void*);
+
+  hot_reload_.reset();
 
   if (script_engine_) {
     script_engine_->OnShutdown();
@@ -152,6 +185,14 @@ void ScriptApp::OnTickComplete() {
     using namespace std::chrono;
     last_dt_ = static_cast<float>(duration_cast<Seconds>(GetGameClock().FrameDelta()).count());
     script_engine_->OnTick(last_dt_);
+  }
+
+  if (hot_reload_) {
+    hot_reload_->Poll();
+    auto pending = hot_reload_->ProcessPending();
+    if (!pending) {
+      ATLAS_LOG_ERROR("ScriptApp: hot reload failed: {}", pending.Error().Message());
+    }
   }
 }
 

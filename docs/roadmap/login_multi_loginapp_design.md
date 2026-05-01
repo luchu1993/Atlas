@@ -4,7 +4,7 @@
 > 状态: 修订草案
 > 适用范围: Atlas 多 LoginApp 扩展
 > 说明: 本文档是多 `LoginApp` / `LoginAppMgr` 的**目标设计草案**，不是当前仓库实现快照。
-> 当前代码仍以 [phase09_login_flow.md](../roadmap/phase09_login_flow.md) 中描述的
+> 当前代码仍以 [phase09_login_flow.md](phase09_login_flow.md) 中描述的
 > “单 `LoginApp` 直接对外”链路为准；若与当前实现冲突，以 Phase 9 文档为准。
 
 ## 1. 设计结论

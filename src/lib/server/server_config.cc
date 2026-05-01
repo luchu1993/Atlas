@@ -101,6 +101,13 @@ static const CliField kCliFields[] = {
     {"login-rate-limit-per-ip",    &ServerConfig::login_rate_limit_per_ip},
     {"login-rate-limit-global",    &ServerConfig::login_rate_limit_global},
     {"login-rate-limit-window-sec",&ServerConfig::login_rate_limit_window_sec},
+    {"enable-hot-reload",           &ServerConfig::enable_hot_reload},
+    {"hot-reload-project",          &ServerConfig::hot_reload_script_project_path},
+    {"hot-reload-output-dir",       &ServerConfig::hot_reload_output_directory},
+    {"hot-reload-assembly-name",    &ServerConfig::hot_reload_assembly_name},
+    {"hot-reload-debounce-ms",      &ServerConfig::hot_reload_debounce_ms},
+    {"hot-reload-unload-timeout-ms",&ServerConfig::hot_reload_unload_timeout_ms},
+    {"hot-reload-auto-compile",     &ServerConfig::hot_reload_auto_compile},
 };
 // clang-format on
 
@@ -165,6 +172,19 @@ auto ServerConfig::FromJsonFile(const std::filesystem::path& path) -> Result<Ser
 
     auto runtimecfg = script->ReadString("runtime_config", "");
     if (!runtimecfg.empty()) cfg.runtime_config = runtimecfg;
+  }
+
+  if (auto* hr = root->Child("hot_reload")) {
+    cfg.enable_hot_reload = hr->ReadBool("enabled", cfg.enable_hot_reload);
+    cfg.hot_reload_script_project_path =
+        hr->ReadString("script_project_path", cfg.hot_reload_script_project_path.string());
+    cfg.hot_reload_output_directory =
+        hr->ReadString("output_directory", cfg.hot_reload_output_directory.string());
+    cfg.hot_reload_assembly_name = hr->ReadString("assembly_name", cfg.hot_reload_assembly_name);
+    cfg.hot_reload_debounce_ms = hr->ReadInt("debounce_ms", cfg.hot_reload_debounce_ms);
+    cfg.hot_reload_unload_timeout_ms =
+        hr->ReadInt("unload_timeout_ms", cfg.hot_reload_unload_timeout_ms);
+    cfg.hot_reload_auto_compile = hr->ReadBool("auto_compile", cfg.hot_reload_auto_compile);
   }
 
   if (auto* db = root->Child("database")) {

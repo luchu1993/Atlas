@@ -116,7 +116,7 @@ auto ClrHotReload::DoReload() -> Result<void> {
 
   EntityDefRegistry::Instance().clear();
 
-  auto assembly_path = config_.output_directory / "Atlas.GameScripts.dll";
+  auto assembly_path = config_.output_directory / config_.assembly_name;
   auto load_result = engine_.CallHotReload("LoadAndRestore", assembly_path);
 
   if (!load_result) {

@@ -12,4 +12,5 @@ public sealed class StressMetricsComponent : ClientLocalComponent
     public int OnHpChangedCount;
     public int OnWeaponBrokenCount;
     public int OnScoresSnapshotCount;
+    public int OnAreaBroadcastCount;
 }

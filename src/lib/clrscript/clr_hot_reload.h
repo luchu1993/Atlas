@@ -18,6 +18,7 @@ class ClrHotReload {
   struct Config {
     std::filesystem::path script_project_path;  // .csproj or directory
     std::filesystem::path output_directory;     // compiled DLL output
+    std::string assembly_name{"Atlas.GameScripts.dll"};
     std::chrono::milliseconds debounce_delay{500};
     std::chrono::seconds unload_timeout{5};
     bool auto_compile{true};
