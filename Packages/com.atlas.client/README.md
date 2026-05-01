@@ -27,7 +27,28 @@ com.atlas.client/
 `Plugins/` is empty until the binaries are populated. See *Building the
 binaries* below.
 
-## Building the binaries
+## Quick start (one-shot tool)
+
+For local Unity 2022.3 LTS testing, the helper script does everything:
+
+```bash
+# Windows
+tools\setup_unity_client.bat --unity-project C:\path\to\YourUnityProject
+
+# Linux / macOS
+tools/setup_unity_client.sh --unity-project ~/path/to/YourUnityProject
+```
+
+It builds the host-platform native + managed artefacts, copies them
+into `Plugins/`, and adds a `file:` reference to the project's
+`Packages/manifest.json`. Pass `--config Debug` for the dev path,
+`--skip-build` to reuse an existing build.
+
+For mobile platforms (Android arm64 / iOS arm64), download the
+artefact from the `net_client cross-platform` GitHub Actions run and
+drop into `Plugins/Android/arm64-v8a/` or `Plugins/iOS/`.
+
+## Manual layout (what the tool produces)
 
 Native (`atlas_net_client`) — built from the Atlas source tree:
 
