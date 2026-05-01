@@ -1,35 +1,13 @@
 # Atlas Client SDK (Unity)
 
 Drop-in Unity package for the Atlas Engine client. Wraps the native
-`atlas_net_client` DLL plus the managed `Atlas.Client` / `Atlas.Shared`
-assemblies, exposes a single `AtlasNetworkManager` MonoBehaviour as the
-game-code entry point.
+`atlas_net_client` DLL plus the managed `Atlas.Client` /
+`Atlas.Shared` assemblies, exposes `AtlasNetworkManager` as the single
+MonoBehaviour entry point.
 
-## Layout
+## Quick start
 
-```
-com.atlas.client/
-├── package.json
-├── README.md
-├── Runtime/
-│   ├── Atlas.Client.Unity.asmdef     # references managed plugins below
-│   └── AtlasNetworkManager.cs        # MonoBehaviour glue
-└── Plugins/
-    ├── Atlas.Client.dll              # netstandard2.1 — compiled from src/csharp/Atlas.Client
-    ├── Atlas.Shared.dll              # netstandard2.1 — compiled from src/csharp/Atlas.Shared
-    ├── Windows/x86_64/atlas_net_client.dll
-    ├── Linux/x86_64/libatlas_net_client.so
-    ├── Android/arm64-v8a/libatlas_net_client.so
-    ├── iOS/libatlas_net_client.a
-    └── macOS/atlas_net_client.bundle
-```
-
-`Plugins/` is empty until the binaries are populated. See *Building the
-binaries* below.
-
-## Quick start (one-shot tool)
-
-For local Unity 2022.3 LTS testing, the helper script does everything:
+From the Atlas repo root:
 
 ```bash
 # Windows
@@ -39,85 +17,40 @@ tools\setup_unity_client.bat --unity-project C:\path\to\YourUnityProject
 tools/setup_unity_client.sh --unity-project ~/path/to/YourUnityProject
 ```
 
-It builds the host-platform native + managed artefacts, copies them
-into `Plugins/`, and adds a `file:` reference to the project's
-`Packages/manifest.json`. Pass `--config Debug` for the dev path,
-`--skip-build` to reuse an existing build.
+The tool builds the host-platform binaries, copies them into
+`Plugins/`, and registers the package in your Unity project's
+`Packages/manifest.json`. Open the project in Unity Hub and play.
 
-For mobile platforms (Android arm64 / iOS arm64), download the
-artefact from the `net_client cross-platform` GitHub Actions run and
-drop into `Plugins/Android/arm64-v8a/` or `Plugins/iOS/`.
+## Documentation
 
-## Manual layout (what the tool produces)
+Full integration guide:
+[`docs/client/UNITY_INTEGRATION.md`](../../docs/client/UNITY_INTEGRATION.md)
+— Plugin Import Settings, API surface, Android / iOS targets,
+troubleshooting.
 
-Native (`atlas_net_client`) — built from the Atlas source tree:
+Architecture rationale:
+[`docs/client/UNITY_NATIVE_DLL_DESIGN.md`](../../docs/client/UNITY_NATIVE_DLL_DESIGN.md)
+— ABI contract, Pattern B vs Pattern A migration plan.
 
-```bash
-# Windows host, builds Windows x86_64
-cmake --preset release -DATLAS_BUILD_NET_CLIENT=ON
-cmake --build build/release --target atlas_net_client --config Release
-# → bin/release/atlas_net_client.dll
+## Layout
 
-# Cross-compile to Android arm64 (NDK r25+)
-cmake -S . -B build/android_arm64 \
-    -DCMAKE_TOOLCHAIN_FILE=$ANDROID_NDK_HOME/build/cmake/android.toolchain.cmake \
-    -DANDROID_ABI=arm64-v8a -DANDROID_PLATFORM=android-24 \
-    -DATLAS_BUILD_NET_CLIENT=ON \
-    -DATLAS_BUILD_TESTS=OFF -DATLAS_BUILD_CSHARP=OFF \
-    -DCMAKE_BUILD_TYPE=Release
-cmake --build build/android_arm64 --target atlas_net_client
-
-# iOS arm64 — must run on macOS host
-cmake -S . -B build/ios_arm64 -G Xcode \
-    -DCMAKE_SYSTEM_NAME=iOS -DCMAKE_OSX_ARCHITECTURES=arm64 \
-    -DCMAKE_OSX_DEPLOYMENT_TARGET=13.0 \
-    -DATLAS_BUILD_NET_CLIENT=ON \
-    -DATLAS_BUILD_TESTS=OFF -DATLAS_BUILD_CSHARP=OFF
-cmake --build build/ios_arm64 --target atlas_net_client_static --config Release
+```
+com.atlas.client/
+├── package.json
+├── README.md (this file)
+├── Runtime/
+│   ├── Atlas.Client.Unity.asmdef
+│   └── AtlasNetworkManager.cs
+└── Plugins/                     # populated by setup_unity_client tool
+    ├── Atlas.Client.dll
+    ├── Atlas.Shared.dll
+    ├── Windows/x86_64/atlas_net_client.dll
+    ├── Linux/x86_64/libatlas_net_client.so
+    ├── macOS/atlas_net_client.bundle
+    ├── Android/arm64-v8a/libatlas_net_client.so
+    └── iOS/libatlas_net_client.a
 ```
 
-Managed (`Atlas.Client.dll` / `Atlas.Shared.dll`):
-
-```bash
-dotnet build src/csharp/Atlas.Client/Atlas.Client.csproj -c Release
-dotnet build src/csharp/Atlas.Shared/Atlas.Shared.csproj -c Release
-```
-
-Copy the `.dll` outputs into `Packages/com.atlas.client/Plugins/` (root
-of `Plugins/` for the managed assemblies; platform subfolders for the
-native artefacts as shown in the layout above).
-
-## Usage
-
-```csharp
-using Atlas.Client.Native;
-using Atlas.Client.Unity;
-using UnityEngine;
-
-public class Bootstrap : MonoBehaviour
-{
-    [SerializeField] AtlasNetworkManager net;
-
-    void Start()
-    {
-        net.LoginFinished += (status, err) =>
-        {
-            if (status == AtlasLoginStatus.Success) net.Authenticate();
-            else Debug.LogError($"login failed: {status} {err}");
-        };
-        net.AuthFinished += (ok, eid, tid, err) =>
-        {
-            if (ok) Debug.Log($"connected as entity {eid}");
-        };
-        net.Login("alice", PasswordHash.Of("alice", "hunter2"));
-    }
-}
-```
-
-## Phase status
-
-- Phase 5 (this package skeleton) — ✅
-- Phase 6 (cross-platform native builds in CI) — ⬜
-
-See [`docs/client/UNITY_NATIVE_DLL_DESIGN.md`](../../docs/client/UNITY_NATIVE_DLL_DESIGN.md)
-§7 for the architectural rationale.
+Mobile binaries come from the `net_client cross-platform` GitHub
+Actions workflow artefact — the local setup tool only builds for the
+host platform.
