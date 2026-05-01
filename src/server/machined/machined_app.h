@@ -31,6 +31,7 @@ class MachinedApp : public ManagerApp {
   void OnListenerRegister(const Address& src, Channel* ch, const ListenerRegister& msg);
   void OnWatcherRequest(const Address& src, Channel* ch, const WatcherRequest& msg);
   void OnWatcherReply(const Address& src, Channel* ch, const WatcherReply& msg);
+  void OnShutdownTarget(const Address& src, Channel* ch, const ShutdownTarget& msg);
 
   void OnAccept(Channel& ch);
 

@@ -6,6 +6,8 @@
 #include "foundation/log.h"
 #include "foundation/profiler.h"
 #include "foundation/runtime.h"
+#include "network/interface_table.h"
+#include "server/common_messages.h"
 #include "server/server_app_option.h"
 
 #if defined(_WIN32)
@@ -121,13 +123,19 @@ auto ServerApp::Init(int argc, char* argv[]) -> bool {
 
   RegisterWatchers();
 
+  (void)network_.InterfaceTable().RegisterTypedHandler<msg::ShutdownRequest>(
+      [this](const Address&, Channel*, const msg::ShutdownRequest& req) {
+        ATLAS_LOG_INFO("Received ShutdownRequest (reason={}); shutting down", req.reason);
+        Shutdown();
+      });
+
   if (config_.process_type != ProcessType::kMachined) {
-    if (machined_client_.Connect(config_.machined_address)) {
-      machined_client_.SendRegister(config_);
-    } else {
-      ATLAS_LOG_WARNING("ServerApp: could not connect to machined at {} - continuing",
+    if (!machined_client_.Connect(config_.machined_address)) {
+      ATLAS_LOG_WARNING("ServerApp: could not connect to machined at {} - will retry",
                         config_.machined_address.ToString());
     }
+    // Caches the registration so reconnect attempts auto-replay.
+    machined_client_.SendRegister(config_);
   }
 
   return true;

@@ -1,5 +1,7 @@
 #include "server/machined_client.h"
 
+#include <algorithm>
+
 #include "foundation/clock.h"
 #include "foundation/log.h"
 #include "network/channel.h"
@@ -17,6 +19,16 @@
 
 namespace atlas {
 
+namespace {
+auto CurrentPid() -> uint32_t {
+#if defined(_WIN32)
+  return static_cast<uint32_t>(_getpid());
+#else
+  return static_cast<uint32_t>(getpid());
+#endif
+}
+}  // namespace
+
 MachinedClient::MachinedClient(EventDispatcher& dispatcher, NetworkInterface& network)
     : dispatcher_(dispatcher), network_(network) {}
 
@@ -28,9 +40,13 @@ auto MachinedClient::Connect(const Address& machined_addr) -> bool {
     handlers_registered_ = true;
   }
 
+  machined_addr_ = machined_addr;
+  reconnect_enabled_ = true;
+
   auto result = network_.ConnectTcp(machined_addr);
   if (!result) {
     ATLAS_LOG_ERROR("MachinedClient: connect failed: {}", result.Error().Message());
+    next_reconnect_attempt_ = Clock::now() + reconnect_backoff_;
     return false;
   }
   channel_ = *result;
@@ -43,22 +59,27 @@ auto MachinedClient::IsConnected() const -> bool {
 }
 
 void MachinedClient::SendRegister(const ServerConfig& cfg) {
+  cached_reg_ =
+      RegistrationInfo{cfg.process_type, cfg.process_name, cfg.internal_port, cfg.external_port};
+
   if (!IsConnected()) {
-    ATLAS_LOG_WARNING("MachinedClient: send_register called but not connected");
+    ATLAS_LOG_DEBUG("MachinedClient: send_register deferred until reconnect");
     return;
   }
 
+  SendCachedRegister();
+}
+
+void MachinedClient::SendCachedRegister() {
+  if (!cached_reg_ || !IsConnected()) return;
+
   machined::RegisterMessage msg;
   msg.protocol_version = machined::kProtocolVersion;
-  msg.process_type = cfg.process_type;
-  msg.name = cfg.process_name;
-  msg.internal_port = cfg.internal_port;
-  msg.external_port = cfg.external_port;
-#if defined(_WIN32)
-  msg.pid = static_cast<uint32_t>(_getpid());
-#else
-  msg.pid = static_cast<uint32_t>(getpid());
-#endif
+  msg.process_type = cached_reg_->process_type;
+  msg.name = cached_reg_->name;
+  msg.internal_port = cached_reg_->internal_port;
+  msg.external_port = cached_reg_->external_port;
+  msg.pid = CurrentPid();
 
   if (auto r = channel_->SendMessage(msg); !r) {
     ATLAS_LOG_ERROR("MachinedClient: failed to send register: {}", r.Error().Message());
@@ -66,16 +87,15 @@ void MachinedClient::SendRegister(const ServerConfig& cfg) {
 }
 
 void MachinedClient::SendDeregister(const ServerConfig& cfg) {
+  reconnect_enabled_ = false;
+  cached_reg_.reset();
+
   if (!IsConnected()) return;
 
   machined::DeregisterMessage msg;
   msg.process_type = cfg.process_type;
   msg.name = cfg.process_name;
-#if defined(_WIN32)
-  msg.pid = static_cast<uint32_t>(_getpid());
-#else
-  msg.pid = static_cast<uint32_t>(getpid());
-#endif
+  msg.pid = CurrentPid();
 
   if (auto r = channel_->SendMessage(msg); !r) {
     ATLAS_LOG_WARNING("MachinedClient: failed to send deregister: {}", r.Error().Message());
@@ -90,11 +110,7 @@ void MachinedClient::SendHeartbeat(float load, uint32_t entity_count) {
   machined::HeartbeatMessage msg;
   msg.load = load;
   msg.entity_count = entity_count;
-#if defined(_WIN32)
-  msg.pid = static_cast<uint32_t>(_getpid());
-#else
-  msg.pid = static_cast<uint32_t>(getpid());
-#endif
+  msg.pid = CurrentPid();
 
   if (machined_heartbeat_udp_addr_.Port() != 0) {
     auto udp_ch = network_.ConnectUdp(machined_heartbeat_udp_addr_);
@@ -112,12 +128,59 @@ void MachinedClient::SendHeartbeat(float load, uint32_t entity_count) {
 }
 
 void MachinedClient::Tick(float load, uint32_t entity_count) {
-  if (!IsConnected()) return;
+  DetectStaleChannel();
+
+  if (!IsConnected()) {
+    if (reconnect_enabled_ && cached_reg_ && machined_addr_.Port() != 0) {
+      MaybeReconnect();
+    }
+    return;
+  }
 
   auto now = Clock::now();
   if (now - last_heartbeat_ >= kHeartbeatInterval) {
     SendHeartbeat(load, entity_count);
   }
+}
+
+void MachinedClient::DetectStaleChannel() {
+  if (channel_ == nullptr) return;
+  // The channel was condemned/removed by NI when its peer disconnected;
+  // FindChannel returns nullptr (or a fresh replacement) once that happens.
+  if (network_.FindChannel(machined_addr_) != channel_) {
+    HandleDisconnect();
+  } else if (!channel_->IsConnected()) {
+    HandleDisconnect();
+  }
+}
+
+void MachinedClient::HandleDisconnect() {
+  if (channel_ == nullptr && !registered_) return;
+  ATLAS_LOG_WARNING("MachinedClient: connection to machined lost; reconnect={}",
+                    reconnect_enabled_ ? "enabled" : "disabled");
+  channel_ = nullptr;
+  registered_ = false;
+  machined_heartbeat_udp_addr_ = Address{};
+  next_reconnect_attempt_ = Clock::now() + reconnect_backoff_;
+}
+
+void MachinedClient::MaybeReconnect() {
+  auto now = Clock::now();
+  if (now < next_reconnect_attempt_) return;
+
+  ATLAS_LOG_INFO("MachinedClient: reconnect attempt to {}", machined_addr_.ToString());
+  auto result = network_.ConnectTcp(machined_addr_);
+  if (!result) {
+    ATLAS_LOG_WARNING("MachinedClient: reconnect failed: {}", result.Error().Message());
+    reconnect_backoff_ = std::min(reconnect_backoff_ * 2, kMaxReconnectBackoff);
+    next_reconnect_attempt_ = now + reconnect_backoff_;
+    return;
+  }
+  channel_ = *result;
+  reconnect_backoff_ = kInitialReconnectBackoff;
+
+  // Subscriptions replay inside OnRegisterAck once machined ACKs.
+  SendCachedRegister();
 }
 
 auto MachinedClient::QuerySync(ProcessType type, Duration timeout)
@@ -173,6 +236,51 @@ void MachinedClient::Subscribe(machined::ListenerType listener_type, ProcessType
     msg.listener_type = listener_type;
     msg.target_type = target_type;
     (void)channel_->SendMessage(msg);
+  }
+}
+
+auto MachinedClient::QueryWatcher(ProcessType target_type, std::string_view target_name,
+                                  std::string_view watcher_path, WatcherCallback cb) -> uint32_t {
+  if (!IsConnected()) {
+    if (cb) cb(false, std::string(target_name), {});
+    return 0;
+  }
+
+  uint32_t rid = next_watcher_request_id_++;
+  if (cb) pending_watchers_.emplace(rid, std::move(cb));
+
+  machined::WatcherRequest msg;
+  msg.target_type = target_type;
+  msg.target_name = std::string(target_name);
+  msg.watcher_path = std::string(watcher_path);
+  msg.request_id = rid;
+
+  if (auto r = channel_->SendMessage(msg); !r) {
+    ATLAS_LOG_ERROR("MachinedClient: failed to send watcher request: {}", r.Error().Message());
+    auto it = pending_watchers_.find(rid);
+    if (it != pending_watchers_.end()) {
+      auto cb_local = std::move(it->second);
+      pending_watchers_.erase(it);
+      if (cb_local) cb_local(false, std::string(target_name), {});
+    }
+  }
+  return rid;
+}
+
+void MachinedClient::RequestShutdownTarget(ProcessType target_type, std::string_view target_name,
+                                           uint8_t reason) {
+  if (!IsConnected()) {
+    ATLAS_LOG_WARNING("MachinedClient: shutdown forward requested but not connected");
+    return;
+  }
+
+  machined::ShutdownTarget msg;
+  msg.target_type = target_type;
+  msg.target_name = std::string(target_name);
+  msg.reason = reason;
+
+  if (auto r = channel_->SendMessage(msg); !r) {
+    ATLAS_LOG_ERROR("MachinedClient: failed to send shutdown forward: {}", r.Error().Message());
   }
 }
 
@@ -284,8 +392,15 @@ void MachinedClient::OnListenerAck(const Address& /*src*/, Channel* /*ch*/,
 
 void MachinedClient::OnWatcherResponse(const Address& /*src*/, Channel* /*ch*/,
                                        const machined::WatcherResponse& msg) {
-  ATLAS_LOG_DEBUG("MachinedClient: watcher response rid={} found={} value='{}'", msg.request_id,
-                  msg.found, msg.value);
+  auto it = pending_watchers_.find(msg.request_id);
+  if (it == pending_watchers_.end()) {
+    ATLAS_LOG_DEBUG("MachinedClient: watcher response rid={} has no pending callback",
+                    msg.request_id);
+    return;
+  }
+  auto cb = std::move(it->second);
+  pending_watchers_.erase(it);
+  if (cb) cb(msg.found, msg.source_name, msg.value);
 }
 
 }  // namespace atlas

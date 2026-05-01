@@ -6,6 +6,7 @@
 #include "foundation/log.h"
 #include "network/event_dispatcher.h"
 #include "network/network_interface.h"
+#include "server/common_messages.h"
 #include "server/server_config.h"
 
 namespace atlas::machined {
@@ -88,6 +89,11 @@ auto MachinedApp::Init(int argc, char* argv[]) -> bool {
   (void)table.RegisterTypedHandler<WatcherReply>(
       [this](const Address& src, Channel* ch, const WatcherReply& msg) {
         OnWatcherReply(src, ch, msg);
+      });
+
+  (void)table.RegisterTypedHandler<ShutdownTarget>(
+      [this](const Address& src, Channel* ch, const ShutdownTarget& msg) {
+        OnShutdownTarget(src, ch, msg);
       });
 
   ATLAS_LOG_INFO("MachinedApp: TCP listening on {}", Network().TcpAddress().ToString());
@@ -294,6 +300,38 @@ void MachinedApp::OnWatcherRequest(const Address& /*src*/, Channel* ch, const Wa
 
 void MachinedApp::OnWatcherReply(const Address& /*src*/, Channel* ch, const WatcherReply& msg) {
   watcher_forwarder_.HandleReply(ch, msg);
+}
+
+void MachinedApp::OnShutdownTarget(const Address& /*src*/, Channel* /*ch*/,
+                                   const ShutdownTarget& msg) {
+  msg::ShutdownRequest fwd;
+  fwd.reason = msg.reason;
+
+  auto deliver = [&](const ProcessEntry& entry) {
+    if (entry.channel == nullptr || !entry.channel->IsConnected()) return;
+    if (auto r = entry.channel->SendMessage(fwd); !r) {
+      ATLAS_LOG_WARNING("MachinedApp: failed to forward shutdown to {}: {}", entry.name,
+                        r.Error().Message());
+    } else {
+      ATLAS_LOG_INFO("MachinedApp: forwarded shutdown to ({}, {})",
+                     static_cast<int>(entry.process_type), entry.name);
+    }
+  };
+
+  if (!msg.target_name.empty()) {
+    auto target = process_registry_.FindByName(msg.target_type, msg.target_name);
+    if (!target) {
+      ATLAS_LOG_WARNING("MachinedApp: shutdown target not found ({}, {})",
+                        static_cast<int>(msg.target_type), msg.target_name);
+      return;
+    }
+    deliver(*target);
+    return;
+  }
+
+  for (const auto& entry : process_registry_.FindByType(msg.target_type)) {
+    deliver(entry);
+  }
 }
 
 void MachinedApp::OnAccept(Channel& ch) {

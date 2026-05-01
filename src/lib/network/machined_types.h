@@ -609,6 +609,42 @@ struct WatcherReply {
   }
 };
 
+struct ShutdownTarget {
+  ProcessType target_type{ProcessType::kBaseApp};
+  std::string target_name;  // empty = all instances of target_type
+  uint8_t reason{0};
+
+  static auto Descriptor() -> const MessageDesc& {
+    static const MessageDesc kDesc{msg_id::Id(msg_id::Machined::kShutdownTarget),
+                                   "machined::ShutdownTarget",
+                                   MessageLengthStyle::kVariable,
+                                   -1,
+                                   MessageReliability::kReliable,
+                                   MessageUrgency::kImmediate};
+    return kDesc;
+  }
+
+  void Serialize(BinaryWriter& w) const {
+    w.Write<uint8_t>(static_cast<uint8_t>(target_type));
+    w.WriteString(target_name);
+    w.Write<uint8_t>(reason);
+  }
+
+  static auto Deserialize(BinaryReader& r) -> Result<ShutdownTarget> {
+    ShutdownTarget msg;
+    auto pt = r.Read<uint8_t>();
+    if (!pt) return pt.Error();
+    msg.target_type = static_cast<ProcessType>(*pt);
+    auto name = r.ReadString();
+    if (!name) return name.Error();
+    msg.target_name = std::move(*name);
+    auto reason = r.Read<uint8_t>();
+    if (!reason) return reason.Error();
+    msg.reason = *reason;
+    return msg;
+  }
+};
+
 static_assert(NetworkMessage<RegisterMessage>);
 static_assert(NetworkMessage<RegisterAck>);
 static_assert(NetworkMessage<DeregisterMessage>);
@@ -624,6 +660,7 @@ static_assert(NetworkMessage<WatcherRequest>);
 static_assert(NetworkMessage<WatcherResponse>);
 static_assert(NetworkMessage<WatcherForward>);
 static_assert(NetworkMessage<WatcherReply>);
+static_assert(NetworkMessage<ShutdownTarget>);
 
 }  // namespace atlas::machined
 

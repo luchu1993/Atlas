@@ -326,3 +326,29 @@ TEST(MachinedTypes, WatcherReplyRoundTrip) {
   EXPECT_TRUE(result->found);
   EXPECT_EQ(result->value, "10");
 }
+
+TEST(MachinedTypes, ShutdownTargetRoundTripNamed) {
+  ShutdownTarget orig;
+  orig.target_type = ProcessType::kBaseApp;
+  orig.target_name = "baseapp-2";
+  orig.reason = 3;
+
+  auto result = round_trip(orig);
+  ASSERT_TRUE(result.HasValue());
+  EXPECT_EQ(result->target_type, ProcessType::kBaseApp);
+  EXPECT_EQ(result->target_name, "baseapp-2");
+  EXPECT_EQ(result->reason, 3u);
+}
+
+TEST(MachinedTypes, ShutdownTargetRoundTripBroadcast) {
+  ShutdownTarget orig;
+  orig.target_type = ProcessType::kCellApp;
+  orig.target_name = "";  // broadcast to all of target_type
+  orig.reason = 0;
+
+  auto result = round_trip(orig);
+  ASSERT_TRUE(result.HasValue());
+  EXPECT_EQ(result->target_type, ProcessType::kCellApp);
+  EXPECT_TRUE(result->target_name.empty());
+  EXPECT_EQ(result->reason, 0u);
+}

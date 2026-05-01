@@ -21,19 +21,53 @@ static void PrintUsage() {
   std::cerr << "Usage: atlas_tool [--machined <host:port>] <command> [args]\n"
             << "\n"
             << "Commands:\n"
-            << "  list [type]          List registered processes (optional type filter)\n"
-            << "  watch <target> <path> Query a watcher path from a target process\n"
+            << "  list [type]            List registered processes (optional type filter)\n"
+            << "  watch <type[:name]> <path>\n"
+            << "                         Query a watcher path on a target process\n"
+            << "                         (no name = first instance of type)\n"
+            << "  shutdown <type[:name]> [reason]\n"
+            << "                         Forward a shutdown request via machined\n"
+            << "                         (no name = all instances of type)\n"
             << "\n"
             << "Examples:\n"
             << "  atlas_tool list\n"
             << "  atlas_tool list baseapp\n"
-            << "  atlas_tool watch baseapp-1 server/tick_rate\n";
+            << "  atlas_tool watch baseapp:baseapp-1 app/uptime_seconds\n"
+            << "  atlas_tool watch cellapp tick/duration_ms\n"
+            << "  atlas_tool shutdown baseapp:baseapp-1\n"
+            << "  atlas_tool shutdown cellapp 1\n";
 }
 
 static auto ParseProcessType(std::string_view name) -> std::optional<ProcessType> {
   auto r = ProcessTypeFromName(name);
   if (!r) return std::nullopt;
   return *r;
+}
+
+struct TargetSpec {
+  ProcessType type;
+  std::string name;
+};
+
+// Parses "type" or "type:name".
+static auto ParseTargetSpec(std::string_view spec) -> std::optional<TargetSpec> {
+  auto colon = spec.find(':');
+  std::string_view type_str = (colon == std::string_view::npos) ? spec : spec.substr(0, colon);
+  std::string_view name_str =
+      (colon == std::string_view::npos) ? std::string_view{} : spec.substr(colon + 1);
+
+  auto type = ParseProcessType(type_str);
+  if (!type) return std::nullopt;
+  return TargetSpec{*type, std::string(name_str)};
+}
+
+template <typename Pred>
+static void DrainUntil(EventDispatcher& disp, Pred pred,
+                       std::chrono::milliseconds timeout = std::chrono::milliseconds(3000)) {
+  auto deadline = std::chrono::steady_clock::now() + timeout;
+  while (!pred() && std::chrono::steady_clock::now() < deadline) {
+    disp.ProcessOnce();
+  }
 }
 
 // ============================================================================
@@ -75,16 +109,49 @@ static auto CmdList(MachinedClient& client, std::optional<ProcessType> type_filt
   return 0;
 }
 
-static auto CmdWatch(MachinedClient& client, std::string_view target_name,
+static auto CmdWatch(EventDispatcher& dispatcher, MachinedClient& client, const TargetSpec& target,
                      std::string_view watcher_path) -> int {
-  // We can't directly send a WatcherRequest from atlas_tool since MachinedClient
-  // doesn't expose a raw watcher API.  For now, print a message noting this
-  // feature is implemented server-side and can be accessed from processes.
-  // A future iteration will wire WatcherRequest through MachinedClient.
-  std::cout << std::format("watch {} {} — watcher forwarding requires a registered process\n",
-                           target_name, watcher_path);
-  std::cout << "(connect a server process to machined and use its MachinedClient to query)\n";
-  (void)client;
+  bool done = false;
+  bool found = false;
+  std::string source_name;
+  std::string value;
+  client.QueryWatcher(target.type, target.name, watcher_path,
+                      [&](bool f, const std::string& src, const std::string& v) {
+                        found = f;
+                        source_name = src;
+                        value = v;
+                        done = true;
+                      });
+
+  DrainUntil(dispatcher, [&] { return done; });
+
+  if (!done) {
+    std::cerr << "watch: timeout waiting for response from machined\n";
+    return 1;
+  }
+  if (!found) {
+    std::cerr << std::format("watch: no value (target={}, path={})\n",
+                             source_name.empty() ? std::string(target.name) : source_name,
+                             watcher_path);
+    return 1;
+  }
+  std::cout << std::format("{:<24} {}\n", source_name, value);
+  return 0;
+}
+
+static auto CmdShutdown(EventDispatcher& dispatcher, MachinedClient& client,
+                        const TargetSpec& target, uint8_t reason) -> int {
+  client.RequestShutdownTarget(target.type, target.name, reason);
+  // Drain briefly so the message actually flushes to machined.
+  DrainUntil(dispatcher, [] { return false; }, std::chrono::milliseconds(200));
+
+  if (target.name.empty()) {
+    std::cout << std::format("shutdown forwarded to all {} processes (reason={})\n",
+                             ProcessTypeName(target.type), reason);
+  } else {
+    std::cout << std::format("shutdown forwarded to {}:{} (reason={})\n",
+                             ProcessTypeName(target.type), target.name, reason);
+  }
   return 0;
 }
 
@@ -154,11 +221,32 @@ int main(int argc, char* argv[]) {
     return CmdList(client, type_filter);
   } else if (command == "watch") {
     if (arg_idx + 1 >= argc) {
-      std::cerr << "watch requires <target> <path>\n";
+      std::cerr << "watch requires <type[:name]> <path>\n";
       PrintUsage();
       return 1;
     }
-    return CmdWatch(client, argv[arg_idx], argv[arg_idx + 1]);
+    auto target = ParseTargetSpec(argv[arg_idx]);
+    if (!target) {
+      std::cerr << "watch: bad target spec: " << argv[arg_idx] << "\n";
+      return 1;
+    }
+    return CmdWatch(dispatcher, client, *target, argv[arg_idx + 1]);
+  } else if (command == "shutdown") {
+    if (arg_idx >= argc) {
+      std::cerr << "shutdown requires <type[:name]>\n";
+      PrintUsage();
+      return 1;
+    }
+    auto target = ParseTargetSpec(argv[arg_idx]);
+    if (!target) {
+      std::cerr << "shutdown: bad target spec: " << argv[arg_idx] << "\n";
+      return 1;
+    }
+    uint8_t reason = 0;
+    if (arg_idx + 1 < argc) {
+      reason = static_cast<uint8_t>(std::stoul(argv[arg_idx + 1]));
+    }
+    return CmdShutdown(dispatcher, client, *target, reason);
   } else {
     std::cerr << "Unknown command: " << command << "\n";
     PrintUsage();
