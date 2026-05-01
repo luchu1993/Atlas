@@ -111,6 +111,78 @@
         "lhs": "${hostSystemName}",
         "rhs": "Linux"
       }
+    },
+    {
+      "name": "net-client-android-arm64",
+      "displayName": "atlas_net_client (Android arm64 / IL2CPP)",
+      "binaryDir": "${sourceDir}/build/net-client-android-arm64",
+      "toolchainFile": "$env{ANDROID_NDK_HOME}/build/cmake/android.toolchain.cmake",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "ANDROID_ABI": "arm64-v8a",
+        "ANDROID_PLATFORM": "android-24",
+        "ATLAS_BUILD_NET_CLIENT": "ON",
+        "ATLAS_BUILD_TESTS": "OFF",
+        "ATLAS_BUILD_CSHARP": "OFF",
+        "ATLAS_ENABLE_PROFILER": "OFF",
+        "ATLAS_HEAP_ALLOCATOR": "std"
+      }
+    },
+    {
+      "name": "net-client-ios-arm64",
+      "displayName": "atlas_net_client (iOS arm64 static, macOS host required)",
+      "binaryDir": "${sourceDir}/build/net-client-ios-arm64",
+      "generator": "Xcode",
+      "cacheVariables": {
+        "CMAKE_SYSTEM_NAME": "iOS",
+        "CMAKE_OSX_ARCHITECTURES": "arm64",
+        "CMAKE_OSX_DEPLOYMENT_TARGET": "13.0",
+        "ATLAS_BUILD_NET_CLIENT": "ON",
+        "ATLAS_BUILD_TESTS": "OFF",
+        "ATLAS_BUILD_CSHARP": "OFF",
+        "ATLAS_ENABLE_PROFILER": "OFF",
+        "ATLAS_HEAP_ALLOCATOR": "std"
+      },
+      "condition": {
+        "type": "equals",
+        "lhs": "${hostSystemName}",
+        "rhs": "Darwin"
+      }
+    },
+    {
+      "name": "net-client-macos-arm64",
+      "displayName": "atlas_net_client (macOS arm64 .bundle)",
+      "binaryDir": "${sourceDir}/build/net-client-macos-arm64",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "CMAKE_OSX_ARCHITECTURES": "arm64",
+        "ATLAS_BUILD_NET_CLIENT": "ON",
+        "ATLAS_BUILD_TESTS": "OFF",
+        "ATLAS_BUILD_CSHARP": "OFF",
+        "ATLAS_ENABLE_PROFILER": "OFF"
+      },
+      "condition": {
+        "type": "equals",
+        "lhs": "${hostSystemName}",
+        "rhs": "Darwin"
+      }
+    },
+    {
+      "name": "net-client-linux-x64",
+      "displayName": "atlas_net_client (Linux x64)",
+      "binaryDir": "${sourceDir}/build/net-client-linux-x64",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "ATLAS_BUILD_NET_CLIENT": "ON",
+        "ATLAS_BUILD_TESTS": "OFF",
+        "ATLAS_BUILD_CSHARP": "OFF",
+        "ATLAS_ENABLE_PROFILER": "OFF"
+      },
+      "condition": {
+        "type": "equals",
+        "lhs": "${hostSystemName}",
+        "rhs": "Linux"
+      }
     }
   ],
   "buildPresets": [
@@ -129,6 +201,35 @@
     {
       "name": "hybrid",
       "configurePreset": "hybrid"
+    },
+    {
+      "name": "net-client-android-arm64",
+      "configurePreset": "net-client-android-arm64",
+      "targets": [
+        "atlas_net_client"
+      ]
+    },
+    {
+      "name": "net-client-ios-arm64",
+      "configurePreset": "net-client-ios-arm64",
+      "targets": [
+        "atlas_net_client_static"
+      ],
+      "configuration": "Release"
+    },
+    {
+      "name": "net-client-macos-arm64",
+      "configurePreset": "net-client-macos-arm64",
+      "targets": [
+        "atlas_net_client"
+      ]
+    },
+    {
+      "name": "net-client-linux-x64",
+      "configurePreset": "net-client-linux-x64",
+      "targets": [
+        "atlas_net_client"
+      ]
     }
   ],
   "testPresets": [

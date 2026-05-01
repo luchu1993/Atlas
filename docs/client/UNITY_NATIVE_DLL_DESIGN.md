@@ -1,6 +1,6 @@
 # Unity Native Network DLL 设计文档
 
-**Status:** 🚧 Phase 0–5 完成；Phase 6（跨平台 native 构建）未开工。
+**Status:** ✅ Phase 0–6 全部完成（Phase 6 CI 任务待首次跑过实际验证）。
 
 - ✅ Phase 0 — IL2CPP 回调可行性 spike 完成。**D0 决策：采用 Pattern B**
   (`[MonoPInvokeCallback]` + delegate + `Marshal.GetFunctionPointerForDelegate`)。
@@ -22,8 +22,11 @@
   验证。
 - ✅ Phase 5 — `Packages/com.atlas.client/` Unity 包（package.json + asmdef
   + `AtlasNetworkManager` MonoBehaviour）；Plugins/ 目录占位待 Phase 6 填充。
-- ⬜ Phase 6 — Android arm64 / iOS arm64 / macOS / Linux 交叉编译；CI 任务
-  未配置；Unity 工程实际接入未验证。
+- ✅ Phase 6 — `CMakePresets.json` 加 `net-client-{android-arm64,ios-arm64,
+  macos-arm64,linux-x64}` 四套 configure + build preset；
+  `.github/workflows/net_client_cross.yml` 矩阵跑这四个目标，校验 ABI
+  并上传 artifact（30 天保留）。Unity 工程实际接入由 Plugins/ 填充
+  artifact 后验证。
 
 **目标:** 把 C++ 网络层抽取为独立 native DLL，Unity 客户端通过 P/Invoke
 调用。Phase 12 客户端 SDK 的高层 C# API（`AtlasClient` / `AvatarFilter` /

@@ -1,0 +1,118 @@
+name: net_client cross-platform
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - 'src/lib/net_client/**'
+      - 'src/lib/network/**'
+      - 'src/lib/foundation/**'
+      - 'src/lib/serialization/**'
+      - 'src/lib/platform/**'
+      - 'CMakePresets.json'
+      - '.github/workflows/net_client_cross.yml'
+  pull_request:
+    branches: [main]
+    paths:
+      - 'src/lib/net_client/**'
+      - 'CMakePresets.json'
+      - '.github/workflows/net_client_cross.yml'
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  android-arm64:
+    name: Android arm64 (NDK)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - name: Set up NDK
+        run: echo "ANDROID_NDK_HOME=$ANDROID_NDK_LATEST_HOME" >> "$GITHUB_ENV"
+      - name: Configure
+        run: cmake --preset net-client-android-arm64
+      - name: Build
+        run: cmake --build --preset net-client-android-arm64
+      - name: Verify ABI
+        run: |
+          file build/net-client-android-arm64/src/lib/net_client/libatlas_net_client.so \
+            | tee /dev/stderr | grep -q "ARM aarch64"
+          nm -D --defined-only build/net-client-android-arm64/src/lib/net_client/libatlas_net_client.so \
+            | grep -E "^[0-9a-f]+ T AtlasNet" | head
+      - uses: actions/upload-artifact@v4
+        with:
+          name: atlas_net_client-android-arm64
+          path: build/net-client-android-arm64/src/lib/net_client/libatlas_net_client.so
+          retention-days: 30
+
+  ios-arm64:
+    name: iOS arm64 (static, macOS host)
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - name: Configure
+        run: cmake --preset net-client-ios-arm64
+      - name: Build
+        run: cmake --build --preset net-client-ios-arm64
+      - name: Verify static archive
+        run: |
+          ARCHIVE=$(find build/net-client-ios-arm64 -name 'libatlas_net_client_static.a' | head -1)
+          test -n "$ARCHIVE"
+          lipo -info "$ARCHIVE" | grep -q arm64
+          nm "$ARCHIVE" | grep -E " T _AtlasNet" | head
+      - uses: actions/upload-artifact@v4
+        with:
+          name: atlas_net_client-ios-arm64
+          path: build/net-client-ios-arm64/**/libatlas_net_client_static.a
+          retention-days: 30
+
+  macos-arm64:
+    name: macOS arm64 (.bundle)
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - name: Configure
+        run: cmake --preset net-client-macos-arm64
+      - name: Build
+        run: cmake --build --preset net-client-macos-arm64
+      - name: Verify bundle
+        run: |
+          BUNDLE=$(find build/net-client-macos-arm64 -name 'atlas_net_client.bundle' | head -1)
+          test -n "$BUNDLE"
+          lipo -info "$BUNDLE" | grep -q arm64
+      - uses: actions/upload-artifact@v4
+        with:
+          name: atlas_net_client-macos-arm64
+          path: build/net-client-macos-arm64/**/atlas_net_client.bundle
+          retention-days: 30
+
+  linux-x64:
+    name: Linux x64 (.so)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - name: Configure
+        run: cmake --preset net-client-linux-x64
+      - name: Build
+        run: cmake --build --preset net-client-linux-x64
+      - name: Verify ABI
+        run: |
+          SO=$(find build/net-client-linux-x64 -name 'libatlas_net_client.so' | head -1)
+          test -n "$SO"
+          file "$SO" | grep -q "x86-64"
+          nm -D --defined-only "$SO" | grep -E "^[0-9a-f]+ T AtlasNet" | head
+      - uses: actions/upload-artifact@v4
+        with:
+          name: atlas_net_client-linux-x64
+          path: build/net-client-linux-x64/src/lib/net_client/libatlas_net_client.so
+          retention-days: 30
