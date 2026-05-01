@@ -30,7 +30,8 @@ import tempfile
 from pathlib import Path
 from typing import NamedTuple
 
-REPO_ROOT = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+from common.paths import REPO_ROOT  # noqa: F401
 
 # Zones to include in the comparison table, in display order.
 ZONES_OF_INTEREST = [

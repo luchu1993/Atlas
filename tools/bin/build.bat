@@ -1,8 +1,8 @@
 @echo off
 where /q python
 if not errorlevel 1 (
-  python "%~dp0setup_unity_client.py" %*
+  python "%~dp0..\build.py" %*
 ) else (
-  py "%~dp0setup_unity_client.py" %*
+  py "%~dp0..\build.py" %*
 )
 exit /b %errorlevel%

@@ -29,7 +29,7 @@
 | 1 | AoI 广播事件计数（多 peer 负载） | `... --clients 50 --duration-sec 30` | ~669 | **0** |
 | 2 | 应用层丢包（reliable 属性）| `... --client-drop-inbound-ms 5000 4000` | 31 | 8 |
 | 3 | 传输层丢包（RUDP 重传验证） | `... --client-drop-transport-ms 5000 4000` | **39** | **0** |
-| 4 | 应用层丢包（unreliable 属性 + baseline 兜底）| `python tools/cluster_control/run_unreliable_recovery.py` | 31-33 | 6-8 |
+| 4 | 应用层丢包（unreliable 属性 + baseline 兜底）| `tools\bin\run_unreliable_recovery.bat` | 31-33 | 6-8 |
 
 **关键对比**：
 
@@ -47,7 +47,7 @@
 `run_world_stress.py` 透传 `--login-rate-limit-per-ip` / `--login-rate-limit-trusted-cidr` 给 LoginApp —— 所有本地 client 共享 `127.0.0.1`，默认 5/60s 的 per-IP 限额撑不起 50 个 client 并发登录：
 
 ```bash
-python tools/cluster_control/run_world_stress.py \
+tools/bin/run_world_stress.sh \
     --clients 50 --account-pool 50 \
     --duration-sec 30 \
     --script-clients 2 \
@@ -91,7 +91,7 @@ Summary
 2 个 script client 互为 peer，在第 5-9 秒由 **client 的应用层**（`client_app.cc::MainLoop` 默认 handler）丢弃入站 state-channel 消息。此时 RUDP 已经 ACK 过 —— 发送方不知道包丢了，**不会触发重传**，丢的事件就永久丢失，`event_seq` 跳号被 client 检出累加到 `seqgaps`。
 
 ```bash
-python tools/cluster_control/run_world_stress.py \
+tools/bin/run_world_stress.sh \
     --clients 0 --duration-sec 20 \
     --script-clients 2 \
     --script-verify \
@@ -115,7 +115,7 @@ python tools/cluster_control/run_world_stress.py \
 和场景 2 同样的丢窗口，但改由 **RUDP 层**（`ReliableUdpChannel::OnDatagramReceived`）在 ACK 生成之前丢包。发送方等不到 ACK → RTO → 重传，**reliable 流量全部恢复**，脚本事件不丢。
 
 ```bash
-python tools/cluster_control/run_world_stress.py \
+tools/bin/run_world_stress.sh \
     --clients 0 --duration-sec 20 \
     --script-clients 2 \
     --script-verify \
@@ -141,8 +141,8 @@ python tools/cluster_control/run_world_stress.py \
 一键 runner 包装了 patch → rebuild → smoke → restore，`try/finally` 保证 def 退出时一定回到 `reliable="true"`：
 
 ```bash
-python tools/cluster_control/run_unreliable_recovery.py              # 默认 20s / drop 5..9s
-python tools/cluster_control/run_unreliable_recovery.py --duration-sec 30
+tools\bin\run_unreliable_recovery.bat              # 默认 20s / drop 5..9s
+tools\bin\run_unreliable_recovery.bat --duration-sec 30
 ```
 
 跑出来的 `hp / seqgaps` 和场景 2 几乎相同（因为 `--client-drop-inbound-ms` 是应用层过滤，不区分 reliable / unreliable）。**差异在字段层面而非脚本层面**：baseline 静默把 `_hp` 拉回服务端真值，脚本看不到补调的事件（见 [`PROPERTY_SYNC_DESIGN.md §5.1b`](../property_sync/PROPERTY_SYNC_DESIGN.md) 的 `isInitialising / shouldUseCallback` 契约）。

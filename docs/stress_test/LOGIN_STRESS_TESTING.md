@@ -85,7 +85,7 @@
 - 先看成功率和基本延迟
 
 ```powershell
-python tools/cluster_control/run_login_stress.py `
+tools\bin\run_login_stress.bat `
   --build-dir build/debug-windows `
   --config Debug `
   --clients 200 `
@@ -112,7 +112,7 @@ python tools/cluster_control/run_login_stress.py `
 - 观察单进程内状态机是否能收敛
 
 ```powershell
-python tools/cluster_control/run_login_stress.py `
+tools\bin\run_login_stress.bat `
   --build-dir build/debug-windows `
   --config Debug `
   --clients 800 `
@@ -141,7 +141,7 @@ python tools/cluster_control/run_login_stress.py `
 - 当前是最高优先级问题场景
 
 ```powershell
-python tools/cluster_control/run_login_stress.py `
+tools\bin\run_login_stress.bat `
   --build-dir build/debug-windows `
   --config Debug `
   --clients 3200 `

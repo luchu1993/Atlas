@@ -13,8 +13,8 @@ User-facing docs: `README.md` (English), `README_CN.md` (中文). Design docs un
 Use the helper instead of raw cmake whenever possible — it loads MSVC env on Windows and provisions Ninja on demand:
 
 ```bash
-tools\build.bat <preset> [--clean] [--config-only] [--build-only]   # Windows
-tools/build.sh   <preset> [--clean] [--config-only] [--build-only]  # Linux / macOS
+tools\bin\build.bat <preset> [--clean] [--config-only] [--build-only]   # Windows
+tools/bin/build.sh   <preset> [--clean] [--config-only] [--build-only]  # Linux / macOS
 ```
 
 Presets: `debug` (Ninja Multi-Config + `/Z7` + PCH, fast iteration), `release` (no tests), `profile` (Tracy + viewer, no tests), `hybrid` (RelWithDebInfo). Sanitizer presets: `asan`, `asan-msvc`, `tsan` (Linux), `ubsan` (Linux).
@@ -26,7 +26,7 @@ cmake --preset debug
 cmake --build build/debug --config Debug
 ```
 
-The `debug` preset uses Ninja Multi-Config — `tools/build.bat` handles Ninja + MSVC env automatically; raw cmake requires both pre-arranged.
+The `debug` preset uses Ninja Multi-Config — `tools/bin/build.bat` handles Ninja + MSVC env automatically; raw cmake requires both pre-arranged.
 
 ## Testing
 
@@ -129,12 +129,12 @@ Design docs under `docs/` carry the same debt as comments — keep them lean and
 Developer-facing tools (build helpers, cluster launchers, dev-loop setup) follow a fixed shape so the same name works on every platform.
 
 1. **Logic in Python.** The actual work lives in `<tool>/name.py` — stdlib only (`argparse`, `pathlib`, `subprocess`). Third-party deps creep into CI install lists, so reach for them only when the stdlib path is genuinely worse. The `.py` is grouped by topic under `tools/` (`tools/build.py`, `tools/cluster_control/run_world_stress.py`, etc.).
-2. **All wrappers in `tools/bin/`.** Every platform wrapper — `name.bat`, `name.sh`, the preset-variant `.ps1` — lives in `tools/bin/`, never next to the `.py`. One directory to add to PATH, one place a user looks for "what tools does this repo have". Each wrapper is a one-liner that locates Python and invokes the matching `.py` via a relative path (`"%~dp0..\cluster_control\run_world_stress.py"` / `"$(dirname "$0")/../cluster_control/run_world_stress.py"`).
+2. **All wrappers in `tools/bin/`.** Every platform wrapper (`name.bat` for Windows, `name.sh` for Linux / macOS) lives in `tools/bin/`, never next to the `.py`. One directory to add to PATH, one place a user looks for "what tools does this repo have". Each wrapper is a one-liner that locates Python and invokes the matching `.py` via a relative path (`"%~dp0..\cluster_control\run_world_stress.py"` / `"$(dirname "$0")/../cluster_control/run_world_stress.py"`). PowerShell (`.ps1`) is **not** used — `.bat` keeps the Windows surface uniform with the rest of the build tooling.
 3. **Wrapper name = `.py` name.** `tools/bin/build.{bat,sh}` invokes `tools/build.py`; `tools/bin/run_world_stress.{bat,sh}` invokes `tools/cluster_control/run_world_stress.py`. Drift between the two breaks user expectations; rename both at the same time.
 4. **Share via `tools/common/`.** Repeated helpers (repo-root resolution, MSVC env loading, port reservation, subprocess runners, structured log printers) belong in `tools/common/` as a proper Python package, not copy-pasted across scripts. Each script's `.py` is the *glue* that wires arg parsing to `common/` calls; the *work* lives in `common/`. New shared logic enters `common/` on its second use, not its first.
 5. **Treat `tools/` as one Python project.** Cohesion inside each `common/` module (one job per file), reuse across scripts, and a stable internal API are first-class concerns. Same for UX: every tool ships meaningful `--help`, `-h` shortcut, sensible defaults, idempotent re-runs, and error messages that name the missing thing or the bad arg with a fix suggestion. A tool that needs a wiki page to operate has failed.
 
-Variant: a *preset wrapper* (a thin shortcut into another tool's Python) ships `tools/bin/name.{ps1,sh}` without its own `.py` — `tools/bin/run_baseline_profile.{ps1,sh}` and `tools/bin/run_cluster.{ps1,sh}` are the established examples. PowerShell here is fine for typed parameters; bash mirrors it for non-Windows hosts. Don't introduce this variant when a fresh tool would do, but keep the door open for "shortcut into existing driver."
+Variant: a *preset wrapper* (a thin shortcut into another tool's Python) ships `tools/bin/name.{bat,sh}` without its own `.py` — `tools/bin/run_baseline_profile.{bat,sh}` and `tools/bin/run_cluster.{bat,sh}` are the established examples. The wrapper sets default flags and forwards `%*` / `"$@"` so users override on the fly without touching the underlying driver. Don't introduce this variant when a fresh tool would do, but keep the door open for "shortcut into existing driver."
 
 ## CI workflows (`.github/workflows/`)
 
@@ -150,14 +150,14 @@ Tracy-instrumented; `profile` preset includes the viewer + CLI helpers in `bin/p
 
 ```bash
 # Build profile (needs to be re-built before every baseline — stale binaries lie)
-tools\build.bat profile
+tools\bin\build.bat profile
 
-# Stress baseline (200 clients, 120 s by default; override with -Clients / -DurationSec)
-.\tools\cluster_control\run_baseline_profile.ps1     # Windows
-bash tools/cluster_control/run_baseline_profile.sh   # Linux / Git Bash
+# Stress baseline (200 clients, 120 s by default; pass --clients / --duration-sec to override)
+tools\bin\run_baseline_profile.bat     # Windows
+tools/bin/run_baseline_profile.sh      # Linux / Git Bash
 
 # Compare two cellapp captures (mean / p95 / p99 / max with regression flags)
-python tools/profile/compare_tracy.py \
+tools\bin\compare_tracy.bat \
     .tmp/prof/baseline/cellapp_<old>.tracy \
     .tmp/prof/baseline/cellapp_<new>.tracy
 ```

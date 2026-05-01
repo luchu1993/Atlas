@@ -40,10 +40,10 @@ From the Atlas repo root:
 
 ```bash
 # Windows
-tools\setup_unity_client.bat --unity-project C:\path\to\YourUnityProject
+tools\bin\setup_unity_client.bat --unity-project C:\path\to\YourUnityProject
 
 # Linux / macOS
-tools/setup_unity_client.sh --unity-project ~/path/to/YourUnityProject
+tools/bin/setup_unity_client.sh --unity-project ~/path/to/YourUnityProject
 ```
 
 The tool builds the host-platform native (`atlas_net_client.{dll,so,bundle}`)
@@ -254,9 +254,9 @@ separate terminal:
 
 ```bash
 # Windows
-tools\cluster_control\run_cluster.ps1
+tools\bin\run_cluster.bat
 # Linux / macOS
-tools/cluster_control/run_cluster.sh
+tools/bin/run_cluster.sh
 ```
 
 That brings up machined / loginapp / dbapp / baseappmgr / baseapp /

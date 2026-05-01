@@ -14,12 +14,8 @@ from datetime import datetime
 from pathlib import Path
 from typing import Iterable, NoReturn
 
-
-REPO_ROOT = Path(__file__).resolve().parents[2]
-
-
-def resolve_repo_root() -> Path:
-    return REPO_ROOT
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+from common.paths import REPO_ROOT, resolve_repo_root  # noqa: F401
 
 
 def parse_args() -> argparse.Namespace:

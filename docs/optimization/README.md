@@ -5,7 +5,7 @@ the current shipped design (or a deferred future-work proposal) and
 the trigger for revisiting it.
 
 > **Read this first.** Numbers in this doc drive priority. Before
-> opening any task in this directory, re-run `run_baseline_profile.sh`
+> opening any task in this directory, re-run `tools/bin/run_baseline_profile.sh`
 > and confirm the bottleneck the doc claims is *still* visible. Most
 > of the originally-prioritised items have shipped; do not pick from
 > the list and run — drive from a fresh capture.

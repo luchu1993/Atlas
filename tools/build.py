@@ -24,7 +24,8 @@ import urllib.request
 import zipfile
 from pathlib import Path
 
-REPO_ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from common.paths import REPO_ROOT
 
 PRESET_CONFIGS = {
     "debug": "Debug",

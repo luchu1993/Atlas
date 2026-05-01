@@ -40,7 +40,7 @@ done
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PYTHON="${PYTHON:-python3}"
 
-exec "${PYTHON}" "${SCRIPT_DIR}/run_world_stress.py" \
+exec "${PYTHON}" "${SCRIPT_DIR}/../cluster_control/run_world_stress.py" \
     --build-dir       "${BUILD}" \
     --config          "${CONFIG}" \
     --baseapp-count   "${BASEAPP_COUNT}" \

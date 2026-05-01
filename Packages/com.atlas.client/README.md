@@ -11,10 +11,10 @@ From the Atlas repo root:
 
 ```bash
 # Windows
-tools\setup_unity_client.bat --unity-project C:\path\to\YourUnityProject
+tools\bin\setup_unity_client.bat --unity-project C:\path\to\YourUnityProject
 
 # Linux / macOS
-tools/setup_unity_client.sh --unity-project ~/path/to/YourUnityProject
+tools/bin/setup_unity_client.sh --unity-project ~/path/to/YourUnityProject
 ```
 
 The tool builds the host-platform binaries, copies them into

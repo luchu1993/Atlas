@@ -1,22 +1,13 @@
 #!/usr/bin/env bash
-# Run a world_stress baseline against the profile build.
-#
-# Prerequisites:
-#   cmake --preset profile && cmake --build build/profile --config RelWithDebInfo
-#
-# Usage:
-#   ./tools/cluster_control/run_baseline_profile.sh [--clients N] [--duration-sec N] [extra args...]
-#
-# Defaults: 100 clients, 120 s, 1 baseapp, 1 cellapp, 1 space.
-# Pass --keep-cluster to leave the cluster running after world_stress exits.
+# world_stress baseline preset; full driver lives at tools/cluster_control/run_world_stress.py.
 
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 
-PYTHON="${PYTHON:-python}"
-exec "${PYTHON}" "${SCRIPT_DIR}/run_world_stress.py" \
+PYTHON="${PYTHON:-python3}"
+exec "${PYTHON}" "${SCRIPT_DIR}/../cluster_control/run_world_stress.py" \
     --build-dir   build/profile \
     --config      RelWithDebInfo \
     --clients     200 \

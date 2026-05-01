@@ -44,7 +44,7 @@ world_stress 客户端 pre-dispatch hook 对**所有进站消息**按 msg_id 累
 **命令**：
 
 ```bash
-python tools/cluster_control/run_world_stress.py \
+tools/bin/run_world_stress.sh \
   --build-dir build/release --config Release \
   --clients 25 --account-pool 25 \
   --duration-sec 20 --ramp-per-sec 12 \

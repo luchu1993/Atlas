@@ -23,7 +23,9 @@ import subprocess
 import sys
 from pathlib import Path
 
-REPO_ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from common.paths import REPO_ROOT
+
 PACKAGE_DIR = REPO_ROOT / "Packages" / "com.atlas.client"
 PLUGINS_ROOT = PACKAGE_DIR / "Plugins"
 
