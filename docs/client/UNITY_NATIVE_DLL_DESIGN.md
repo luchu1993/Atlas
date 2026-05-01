@@ -1,22 +1,23 @@
 # Unity Native Network DLL 设计文档
 
-**Status:** 🚧 Phase 0（IL2CPP spike 脚手架）+ Phase 1（依赖解耦）已落地，
-Phase 2–6 未开工。当前进度：
+**Status:** 🚧 Phase 0–2 完成；Phase 3–6 未开工。
 
-- ✅ Phase 0 — `src/tools/il2cpp_probe/` 探针库 + Unity 测试脚手架
-  （`ATLAS_BUILD_IL2CPP_PROBE=ON` 时编出 `atlas_il2cpp_probe.dll/.so/.bundle/.a`）
-  待用户在 4 个 Unity 目标（Editor Mono / Win IL2CPP / Android arm64 / iOS arm64）
-  跑回调矩阵，结果记入 `docs/spike_il2cpp_callback.md`，决定 §6.3 走 Pattern A
-  还是 B
+- ✅ Phase 0 — IL2CPP 回调可行性 spike 完成。**D0 决策：采用 Pattern B**
+  (`[MonoPInvokeCallback]` + delegate + `Marshal.GetFunctionPointerForDelegate`)。
+  Unity 2022 至 6.5 全系列均不支持 `[UnmanagedCallersOnly]`（Unity 嵌入的
+  Mono / 老 .NET 4.x runtime 不识别该 attribute）。详细矩阵与前向兼容路径
+  见 [`docs/spike_il2cpp_callback.md`](../spike_il2cpp_callback.md)。Pattern A
+  迁移留待 Unity 6.6+（计划嵌入 .NET 10）落地后重测；探针保留在
+  `src/tools/il2cpp_probe/` 供届时回归。
 - ✅ Phase 1 — `ProcessType` 提取到 `foundation/process_type.{h,cc}`；
   `DatabaseID` 迁到 `server/entity_types.h`；`network/foundation/platform/serialization`
-  四层不再 include `server/` / `db/` / `entitydef/`
-- ⬜ Phase 2 — `atlas_serialization_binary` target 未建；`atlas_network` 仍
-  link 完整 `atlas_serialization`（含 pugixml + rapidjson）
-- ⬜ Phase 3 — `src/lib/net_client/` 目录不存在
+  四层不再 include `server/` / `db/` / `entitydef/`。
+- ✅ Phase 2 — `atlas_serialization_binary` target 已落地；`atlas_network`
+  改 link binary 子集；依赖闭包零 pugixml / rapidjson 引用。
+- ⬜ Phase 3 — `src/lib/net_client/` 目录不存在。
 - ⬜ Phase 4 — `ClientNativeApi.cs` 仍绑 `atlas_engine` 而非
-  `atlas_net_client`；`ClientApp::Login/Authenticate` 仍是 blocking-poll
-- ⬜ Phase 5–6 — Unity Package、跨平台构建未启动
+  `atlas_net_client`；`ClientApp::Login/Authenticate` 仍是 blocking-poll。
+- ⬜ Phase 5–6 — Unity Package、跨平台构建未启动。
 
 **目标:** 把 C++ 网络层抽取为独立 native DLL，Unity 客户端通过 P/Invoke
 调用。Phase 12 客户端 SDK 的高层 C# API（`AtlasClient` / `AvatarFilter` /
@@ -531,8 +532,9 @@ atlas_add_test(NAME test_client_flow
 - 不得保存裸指针、不得跨 `AtlasNetPoll()` 周期使用
 
 ```csharp
-[UnmanagedCallersOnly]
-static void OnRpc(uint entId, uint rpcId, byte* payload, int len) {
+// Pattern B (当前)；Unity 6.6+ 切到 Pattern A 时，仅 attribute 改名。
+[MonoPInvokeCallback(typeof(RpcFn))]
+static void OnRpc(nint ctx, uint entId, uint rpcId, byte* payload, int len) {
     // ✓ 立即复制
     byte[] copy = new Span<byte>(payload, len).ToArray();
     RpcQueue.Enqueue((entId, rpcId, copy));
@@ -562,11 +564,11 @@ static void OnRpc(uint entId, uint rpcId, byte* payload, int len) {
 
 #### 4.0.4 Callback Table 初始化
 
-- `AtlasNetCreate` 成功后, ctx 内置 noop 回调表 (每个字段指向 DLL 导出的
-  `AtlasNetNoop<Event>` sentinel), 未注册即收消息不会 null 解引用
-- `AtlasNetSetCallbacks` 的结构体字段**不得为 NULL** — 未使用的槽位
-  必须填入对应 sentinel (§4.7 末尾声明); DLL 入口处若检测到任一字段
-  为 NULL 返回 `-EINVAL`, 便于启动期就断出配置错误
+- `AtlasNetCreate` 成功后, ctx 内置 noop 回调表 (每个字段指向 DLL 内部的
+  `AtlasNetNoop<Event>` 静态实现), 未注册即收消息不会 null 解引用
+- `AtlasNetSetCallbacks` 的结构体字段允许为 `NULL` — DLL 入口处对每个 NULL
+  槽位用对应的内部 noop 替换后再原子写入, C# 侧无需获取 noop 函数指针
+  (sentinels 不暴露为导出符号)
 - 热替换: `AtlasNetSetCallbacks` 在 poll 外任何时刻可调用,
   ctx 原子切换 (`std::atomic<AtlasNetCallbacks*>`, 读侧 `memory_order_acquire`,
   写侧 `memory_order_release`)
@@ -574,33 +576,12 @@ static void OnRpc(uint entId, uint rpcId, byte* payload, int len) {
   (§4.0.6) 的唯一路径: C# 侧用静态 `Dictionary<nint,AtlasClient>` 在 ctx
   指针 → AtlasClient 实例之间做映射
 
-#### 4.0.4.1 C# 侧获取 sentinel 函数指针的模式
-
-C# 没法直接 `&AtlasNetNoopRpc` — 这些符号存在于 DLL 内部。用以下两种模式:
-
-```csharp
-// 模式 A: [LibraryImport] 声明每个 sentinel, 再用 &AtlasNetNoopRpc 取地址
-//         (需要 .NET 7+ 的函数指针支持; Unity IL2CPP 已经接受)
-internal static unsafe partial class AtlasNetNative {
-    [LibraryImport(LibName)] internal static partial void
-        AtlasNetNoopRpc(nint ctx, uint eid, uint rid, byte* payload, int len);
-    // ... 其余 sentinel 同样声明
-}
-
-var cbs = new AtlasNetCallbacks {
-    OnRpc            = (nint)(delegate* unmanaged<nint,uint,uint,byte*,int,void>)
-                             &AtlasNetNative.AtlasNetNoopRpc,
-    OnEntityEnter    = (nint)(delegate* unmanaged<...>)&AtlasNetNative.AtlasNetNoopEntityEnter,
-    // ...
-};
-
-// 模式 B: C# 侧提供空 [UnmanagedCallersOnly] 方法 (IL2CPP 下若 Phase 0 Spike
-//         选方案 B 时使用)。比模式 A 多一次跨 FFI 调用, 但省去从 DLL 取符号地址。
-```
-
-推荐模式 A (符号直接从 DLL 解析, 零额外跨 FFI)。`AtlasClient` 构造函数里
-统一把所有字段预填 sentinel, 然后让上层按需 override 具体字段, 再调
-`AtlasNetSetCallbacks`。
+> **简化记录 (D0 决策后):** 旧版要求 C# 必须从 DLL 拉取 sentinel 函数指针
+> 填满每个槽位, 这在 Pattern B (`[MonoPInvokeCallback]` + delegate) 下做不
+> 干净——`Marshal.GetFunctionPointerForDelegate` 只能给托管 delegate 取指,
+> 不能给 `[LibraryImport]` 声明的 native 入口取指。**改为 NULL 由 DLL 替换**
+> 之后, Pattern A 与 Pattern B 共用同一注册路径, 前向兼容代价归零。
+> 历史方案见 git log。
 
 #### 4.0.5 ABI 版本
 
@@ -960,9 +941,10 @@ ATLAS_NET_CALL int32_t AtlasNetSendCellRpc(
 ### 4.7 消息接收回调
 
 > **设计约束** (B2 + B4 修订):
-> - **每个回调首参必须是 `AtlasNetContext* ctx`** — `[UnmanagedCallersOnly]`
->   静态方法无法闭包 this, 没有 ctx 就无法从回调路由回 C# 的 `AtlasClient`
->   实例。`AtlasNetPoll(ctx)` 触发回调时由 DLL 填入当前 ctx。
+> - **每个回调首参必须是 `AtlasNetContext* ctx`** — Pattern B 下的
+>   `[MonoPInvokeCallback]` 静态方法（同 Pattern A 的 `[UnmanagedCallersOnly]`）
+>   都无法闭包 this, 没有 ctx 就无法从回调路由回 C# 的 `AtlasClient` 实例。
+>   `AtlasNetPoll(ctx)` 触发回调时由 DLL 填入当前 ctx。
 > - **回调集必须覆盖 Phase 12 协议** (见 `docs/roadmap/phase12_client_sdk.md §2.2`)
 >   的全部服务器→客户端消息。生成器不应该要求 DLL 新增回调才能支持新业务消息,
 >   但连接/实体/RPC 三类稳定协议保留为强类型回调以方便 C# Source Generator 分发。
@@ -1445,10 +1427,12 @@ public:
 
 ### 6.1 AtlasNetNative.cs
 
-> **前置**: 若 P0-1 IL2CPP Spike (§10 Phase 0) 结论为方案 A 可行,则使用
-> 下方 `[UnmanagedCallersOnly]` + 函数指针风格。若 Spike 结论为必须
-> 退回方案 B,则所有回调改为 `[MonoPInvokeCallback] delegate + GCHandle`
-> 模式,Marshal.GetFunctionPointerForDelegate 取 nint。
+> **D0 决策已落地（Pattern B）：** 见
+> [`docs/spike_il2cpp_callback.md`](../spike_il2cpp_callback.md)。本节的
+> P/Invoke 声明与回调路径无关，A 与 B 共用同一 `[LibraryImport]` 声明集；
+> 回调注册的 §6.3 走 Pattern B（`[MonoPInvokeCallback]` + delegate）。
+> Sentinel 不再暴露为 DLL 导出（§4.0.4 简化后由 DLL 内部替换），
+> 旧版 §6.1 罗列的 `AtlasNetNoop<Event>` `[LibraryImport]` 声明已删除。
 
 ```csharp
 // Atlas.Client/Native/AtlasNetNative.cs
@@ -1485,41 +1469,8 @@ internal static unsafe partial class AtlasNetNative
     [LibraryImport(LibName)]
     internal static partial void AtlasNetSetLogHandler(nint handler);
 
-    // --- Sentinel 函数导出 (§4.0.4.1 模式 A, 每字段一份) ---
-    [LibraryImport(LibName)] internal static partial void
-        AtlasNetNoopDisconnect(nint ctx, int reason);
-    [LibraryImport(LibName)] internal static unsafe partial void
-        AtlasNetNoopPlayerBaseCreate(nint ctx, uint eid, ushort tid,
-                                     byte* props, int len);
-    [LibraryImport(LibName)] internal static unsafe partial void
-        AtlasNetNoopPlayerCellCreate(nint ctx, uint space_id,
-                                     float px, float py, float pz,
-                                     float dx, float dy, float dz,
-                                     byte* props, int len);
-    [LibraryImport(LibName)] internal static partial void
-        AtlasNetNoopResetEntities(nint ctx);
-    [LibraryImport(LibName)] internal static unsafe partial void
-        AtlasNetNoopEntityEnter(nint ctx, uint eid, ushort tid,
-                                float px, float py, float pz,
-                                float dx, float dy, float dz,
-                                byte* props, int len);
-    [LibraryImport(LibName)] internal static partial void
-        AtlasNetNoopEntityLeave(nint ctx, uint eid);
-    [LibraryImport(LibName)] internal static partial void
-        AtlasNetNoopEntityPosition(nint ctx, uint eid,
-                                   float px, float py, float pz,
-                                   float dx, float dy, float dz,
-                                   byte on_ground);
-    [LibraryImport(LibName)] internal static unsafe partial void
-        AtlasNetNoopEntityProperty(nint ctx, uint eid, byte scope,
-                                   byte* delta, int len);
-    [LibraryImport(LibName)] internal static partial void
-        AtlasNetNoopForcedPosition(nint ctx, uint eid,
-                                   float px, float py, float pz,
-                                   float dx, float dy, float dz);
-    [LibraryImport(LibName)] internal static unsafe partial void
-        AtlasNetNoopRpc(nint ctx, uint eid, uint rid,
-                        byte* payload, int len);
+    // §4.0.4 简化后：DLL 在 SetCallbacks 入口对 NULL 槽位用内部 noop 替换，
+    // C# 不再需要拉 sentinel 导出符号。
 
     // --- Login/Auth/Disconnect (新 API:无 host/key 参数传回) ---
     [LibraryImport(LibName, StringMarshalling = StringMarshalling.Utf8)]
@@ -1596,30 +1547,76 @@ internal unsafe struct AtlasNetCallbacks
 }
 ```
 
-### 6.3 回调注册
+### 6.3 回调注册（Pattern B — 当前路径）
 
-> **全部 `[UnmanagedCallersOnly]` 方法首参都是 `nint ctx`** — 用于从
-> 进程级 `Dictionary<nint, AtlasClient>` 查回托管实例, 支持多 ctx 并发。
+> **D0 决策（[`docs/spike_il2cpp_callback.md`](../spike_il2cpp_callback.md)）：**
+> 全部 `[MonoPInvokeCallback]` + delegate + `Marshal.GetFunctionPointerForDelegate`。
+> Unity 2022 至 6.5 全系列 IL2CPP 不识别 `[UnmanagedCallersOnly]`，没有第二条
+> 路。Unity 6.6+（计划嵌入 .NET 10）落地后再走 §6.3.1 的迁移路径。
+
+> **首参 `nint ctx` 不变** — 所有回调都从 `AtlasNetCallbackBridge.FromCtx(ctx)`
+> 查回托管实例，支持多 ctx 并发（§4.0.6）。
 
 ```csharp
+using System.Runtime.InteropServices;
+using AOT;
+
 internal static unsafe class AtlasNetCallbackBridge
 {
     // ---- 进程级 ctx 注册表 ------------------------------------------------
-    // AtlasClient 构造时 Put, Destroy 时 Remove。读侧在 poll 线程内执行,
-    // 与构造/销毁路径通过 ConcurrentDictionary 隔离。
     private static readonly ConcurrentDictionary<nint, AtlasClient> _ctxMap = new();
     internal static void Bind(nint ctx, AtlasClient client) => _ctxMap[ctx] = client;
     internal static void Unbind(nint ctx) => _ctxMap.TryRemove(ctx, out _);
     internal static AtlasClient FromCtx(nint ctx) => _ctxMap[ctx];
 
-    // ---- 事件回调 (消息/实体/断开) ----------------------------------------
-    // 所有指针/字节数据在本方法返回后失效 (§4.0.1), 必须立即复制。
+    // ---- Delegate 类型（与 §4.7 C 端 typedef 一一对应）---------------------
+    delegate void DisconnectFn(nint ctx, int reason);
+    delegate void PlayerBaseCreateFn(nint ctx, uint eid, ushort tid,
+                                     byte* props, int len);
+    delegate void PlayerCellCreateFn(nint ctx, uint spaceId,
+                                     float px, float py, float pz,
+                                     float dx, float dy, float dz,
+                                     byte* props, int len);
+    delegate void ResetEntitiesFn(nint ctx);
+    delegate void EntityEnterFn(nint ctx, uint eid, ushort tid,
+                                float px, float py, float pz,
+                                float dx, float dy, float dz,
+                                byte* props, int len);
+    delegate void EntityLeaveFn(nint ctx, uint eid);
+    delegate void EntityPositionFn(nint ctx, uint eid,
+                                   float px, float py, float pz,
+                                   float dx, float dy, float dz,
+                                   byte onGround);
+    delegate void EntityPropertyFn(nint ctx, uint eid, byte scope,
+                                   byte* delta, int len);
+    delegate void ForcedPositionFn(nint ctx, uint eid,
+                                   float px, float py, float pz,
+                                   float dx, float dy, float dz);
+    delegate void RpcFn(nint ctx, uint eid, uint rid,
+                        byte* payload, int len);
 
-    [UnmanagedCallersOnly]
+    // ---- 静态实例（GC 必须 pin 住 delegate 直到 ctx 销毁）-----------------
+    // process-lifetime 单例：全部 ctx 共享同一份 delegate 实例。函数指针
+    // 一次性取出后写入每个 ctx 的 callbacks 表，IL2CPP AOT 把 delegate
+    // 编译成稳定 trampoline，函数指针寿命与 process 一致 → 不需要 GCHandle.Alloc。
+    static readonly DisconnectFn         s_disconnect       = OnDisconnect;
+    static readonly PlayerBaseCreateFn   s_playerBaseCreate = OnPlayerBaseCreate;
+    static readonly PlayerCellCreateFn   s_playerCellCreate = OnPlayerCellCreate;
+    static readonly ResetEntitiesFn      s_resetEntities    = OnResetEntities;
+    static readonly EntityEnterFn        s_entityEnter      = OnEntityEnter;
+    static readonly EntityLeaveFn        s_entityLeave      = OnEntityLeave;
+    static readonly EntityPositionFn     s_entityPosition   = OnEntityPosition;
+    static readonly EntityPropertyFn     s_entityProperty   = OnEntityProperty;
+    static readonly ForcedPositionFn     s_forcedPosition   = OnForcedPosition;
+    static readonly RpcFn                s_rpc              = OnRpc;
+
+    // ---- 处理函数（payload 在回调返回后失效 → 立即复制，§4.0.1）-----------
+
+    [MonoPInvokeCallback(typeof(DisconnectFn))]
     static void OnDisconnect(nint ctx, int reason)
         => FromCtx(ctx).HandleDisconnect(reason);
 
-    [UnmanagedCallersOnly]
+    [MonoPInvokeCallback(typeof(PlayerBaseCreateFn))]
     static void OnPlayerBaseCreate(nint ctx, uint eid, ushort tid,
                                    byte* props, int len)
     {
@@ -1628,7 +1625,7 @@ internal static unsafe class AtlasNetCallbackBridge
         FromCtx(ctx).Entities.HandlePlayerBaseCreate(eid, tid, copy);
     }
 
-    [UnmanagedCallersOnly]
+    [MonoPInvokeCallback(typeof(PlayerCellCreateFn))]
     static void OnPlayerCellCreate(nint ctx, uint spaceId,
                                    float px, float py, float pz,
                                    float dx, float dy, float dz,
@@ -1640,11 +1637,11 @@ internal static unsafe class AtlasNetCallbackBridge
             new Vector3(px, py, pz), new Vector3(dx, dy, dz), copy);
     }
 
-    [UnmanagedCallersOnly]
+    [MonoPInvokeCallback(typeof(ResetEntitiesFn))]
     static void OnResetEntities(nint ctx)
         => FromCtx(ctx).Entities.HandleReset();
 
-    [UnmanagedCallersOnly]
+    [MonoPInvokeCallback(typeof(EntityEnterFn))]
     static void OnEntityEnter(nint ctx, uint eid, ushort tid,
                               float px, float py, float pz,
                               float dx, float dy, float dz,
@@ -1656,11 +1653,11 @@ internal static unsafe class AtlasNetCallbackBridge
             new Vector3(px, py, pz), new Vector3(dx, dy, dz), copy);
     }
 
-    [UnmanagedCallersOnly]
+    [MonoPInvokeCallback(typeof(EntityLeaveFn))]
     static void OnEntityLeave(nint ctx, uint eid)
         => FromCtx(ctx).Entities.HandleEntityLeave(eid);
 
-    [UnmanagedCallersOnly]
+    [MonoPInvokeCallback(typeof(EntityPositionFn))]
     static void OnEntityPosition(nint ctx, uint eid,
                                  float px, float py, float pz,
                                  float dx, float dy, float dz,
@@ -1668,7 +1665,7 @@ internal static unsafe class AtlasNetCallbackBridge
         => FromCtx(ctx).Entities.HandleEntityPosition(eid,
                new Vector3(px, py, pz), new Vector3(dx, dy, dz), onGround != 0);
 
-    [UnmanagedCallersOnly]
+    [MonoPInvokeCallback(typeof(EntityPropertyFn))]
     static void OnEntityProperty(nint ctx, uint eid, byte scope,
                                  byte* delta, int len)
     {
@@ -1677,14 +1674,14 @@ internal static unsafe class AtlasNetCallbackBridge
         FromCtx(ctx).Entities.HandleEntityProperty(eid, scope, copy);
     }
 
-    [UnmanagedCallersOnly]
+    [MonoPInvokeCallback(typeof(ForcedPositionFn))]
     static void OnForcedPosition(nint ctx, uint eid,
                                  float px, float py, float pz,
                                  float dx, float dy, float dz)
         => FromCtx(ctx).Entities.HandleForcedPosition(eid,
                new Vector3(px, py, pz), new Vector3(dx, dy, dz));
 
-    [UnmanagedCallersOnly]
+    [MonoPInvokeCallback(typeof(RpcFn))]
     static void OnRpc(nint ctx, uint eid, uint rid, byte* payload, int len)
     {
         var copy = len > 0 ? new Span<byte>(payload, len).ToArray()
@@ -1692,23 +1689,23 @@ internal static unsafe class AtlasNetCallbackBridge
         FromCtx(ctx).RpcDispatcher.Enqueue(eid, rid, copy);
     }
 
+    // ---- 注册到 ctx --------------------------------------------------------
     internal static void Register(nint ctx)
     {
         AtlasNetCallbacks table;
-        // 每字段都必须非 NULL (§4.0.4); 如果业务不关心某事件, 填 sentinel
-        // 而不是 (nint)0。这里示例全部接入真实 handler, sentinel 仅在更
-        // 细粒度的 "只订阅部分事件" 场景下使用。
-        table.OnDisconnect        = (nint)(delegate* unmanaged<nint,int,void>)&OnDisconnect;
-        table.OnPlayerBaseCreate  = (nint)(delegate* unmanaged<nint,uint,ushort,byte*,int,void>)&OnPlayerBaseCreate;
-        table.OnPlayerCellCreate  = (nint)(delegate* unmanaged<nint,uint,float,float,float,float,float,float,byte*,int,void>)&OnPlayerCellCreate;
-        table.OnResetEntities     = (nint)(delegate* unmanaged<nint,void>)&OnResetEntities;
-        table.OnEntityEnter       = (nint)(delegate* unmanaged<nint,uint,ushort,float,float,float,float,float,float,byte*,int,void>)&OnEntityEnter;
-        table.OnEntityLeave       = (nint)(delegate* unmanaged<nint,uint,void>)&OnEntityLeave;
-        table.OnEntityPosition    = (nint)(delegate* unmanaged<nint,uint,float,float,float,float,float,float,byte,void>)&OnEntityPosition;
-        table.OnEntityProperty    = (nint)(delegate* unmanaged<nint,uint,byte,byte*,int,void>)&OnEntityProperty;
-        table.OnForcedPosition    = (nint)(delegate* unmanaged<nint,uint,float,float,float,float,float,float,void>)&OnForcedPosition;
-        table.OnRpc               = (nint)(delegate* unmanaged<nint,uint,uint,byte*,int,void>)&OnRpc;
+        table.OnDisconnect        = Marshal.GetFunctionPointerForDelegate(s_disconnect);
+        table.OnPlayerBaseCreate  = Marshal.GetFunctionPointerForDelegate(s_playerBaseCreate);
+        table.OnPlayerCellCreate  = Marshal.GetFunctionPointerForDelegate(s_playerCellCreate);
+        table.OnResetEntities     = Marshal.GetFunctionPointerForDelegate(s_resetEntities);
+        table.OnEntityEnter       = Marshal.GetFunctionPointerForDelegate(s_entityEnter);
+        table.OnEntityLeave       = Marshal.GetFunctionPointerForDelegate(s_entityLeave);
+        table.OnEntityPosition    = Marshal.GetFunctionPointerForDelegate(s_entityPosition);
+        table.OnEntityProperty    = Marshal.GetFunctionPointerForDelegate(s_entityProperty);
+        table.OnForcedPosition    = Marshal.GetFunctionPointerForDelegate(s_forcedPosition);
+        table.OnRpc               = Marshal.GetFunctionPointerForDelegate(s_rpc);
 
+        // §4.0.4 简化后允许任一字段为 0; DLL 会在 set 时替换为内部 noop。
+        // 上面把全部字段都填了真实 handler, 业务上不需要按事件订阅。
         int rc = AtlasNetNative.AtlasNetSetCallbacks(ctx, &table);
         if (rc != 0) throw new InvalidOperationException(
             $"AtlasNetSetCallbacks failed: {rc}");
@@ -1716,16 +1713,22 @@ internal static unsafe class AtlasNetCallbackBridge
 }
 
 // ---- Login / Auth 回调 ----
-// 注意: Login/Auth 回调通过 nint 指针单独传入, 不走 callbacks 结构体。
-// user_data 是 GCHandle 的 IntPtr, 让 C++ 透传回来, 便于定位 caller。
+// Login/Auth 单次回调，user_data 是 GCHandle.IntPtr，C++ 透传回来后我们 Free 掉。
 internal static unsafe class AtlasNetLoginBridge
 {
-    [UnmanagedCallersOnly]
+    delegate void LoginResultFn(nint userData, byte status,
+                                byte* baseappHost, ushort baseappPort,
+                                byte* errorMessage);
+
+    static readonly LoginResultFn s_callback = OnLoginResult;
+    internal static nint Pointer { get; } =
+        Marshal.GetFunctionPointerForDelegate(s_callback);
+
+    [MonoPInvokeCallback(typeof(LoginResultFn))]
     static void OnLoginResult(nint userData, byte status,
                               byte* baseappHost, ushort baseappPort,
                               byte* errorMessage)
     {
-        // 通过 userData (GCHandle) 取回原始 AtlasNetworkManager 实例
         var handle = GCHandle.FromIntPtr(userData);
         var mgr = (AtlasNetworkManager)handle.Target!;
         string? host = baseappHost != null
@@ -1735,14 +1738,18 @@ internal static unsafe class AtlasNetLoginBridge
         handle.Free();  // 一次性 handle
         mgr.OnLoginCompleted((AtlasLoginStatus)status, host, baseappPort, err);
     }
-
-    internal static nint Pointer =>
-        (nint)(delegate* unmanaged<nint, byte, byte*, ushort, byte*, void>)&OnLoginResult;
 }
 
 internal static unsafe class AtlasNetAuthBridge
 {
-    [UnmanagedCallersOnly]
+    delegate void AuthResultFn(nint userData, byte success,
+                               uint entityId, ushort typeId, byte* errorMessage);
+
+    static readonly AuthResultFn s_callback = OnAuthResult;
+    internal static nint Pointer { get; } =
+        Marshal.GetFunctionPointerForDelegate(s_callback);
+
+    [MonoPInvokeCallback(typeof(AuthResultFn))]
     static void OnAuthResult(nint userData, byte success,
                              uint entityId, ushort typeId, byte* errorMessage)
     {
@@ -1753,9 +1760,6 @@ internal static unsafe class AtlasNetAuthBridge
         handle.Free();
         mgr.OnAuthCompleted(success != 0, entityId, typeId, err);
     }
-
-    internal static nint Pointer =>
-        (nint)(delegate* unmanaged<nint, byte, uint, ushort, byte*, void>)&OnAuthResult;
 }
 
 public enum AtlasLoginStatus : byte {
@@ -1763,6 +1767,46 @@ public enum AtlasLoginStatus : byte {
     ServerFull = 3, Timeout = 4, NetworkError = 5, InternalError = 255,
 }
 ```
+
+#### 6.3.1 前向兼容：Unity 6.6+（.NET 10）迁移到 Pattern A
+
+Unity 6.6+ 嵌入 .NET 10 后，`[UnmanagedCallersOnly]` 应当可用。**先重跑
+`src/tools/il2cpp_probe/` 在新版本验证**，再开始迁移。
+
+迁移逐回调机械化、无 wire 协议变化、无 DLL 改动。每个 handler 改三处：
+
+```diff
+-using AOT;
+-
+-delegate void RpcFn(nint ctx, uint eid, uint rid, byte* payload, int len);
+-static readonly RpcFn s_rpc = OnRpc;
+-
+-[MonoPInvokeCallback(typeof(RpcFn))]
+-static void OnRpc(nint ctx, uint eid, uint rid, byte* payload, int len) { ... }
+-
+-table.OnRpc = Marshal.GetFunctionPointerForDelegate(s_rpc);
++[UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
++static void OnRpc(nint ctx, uint eid, uint rid, byte* payload, int len) { ... }
++
++table.OnRpc = (nint)(delegate* unmanaged[Cdecl]<nint,uint,uint,byte*,int,void>)&OnRpc;
+```
+
+机械步骤：
+
+1. 加 Scripting Define `ATLAS_CALLBACK_PATTERN_A`（用 `#if`/`#endif` 包住
+   两份并存，灰度切换）
+2. 砍 `using AOT;`
+3. 每个 `delegate XxxFn(...)` 类型可以保留也可以删 — Pattern A 不再依赖
+4. 每个 `static readonly XxxFn s_xxx = ...;` keep-alive 字段删掉
+5. `[MonoPInvokeCallback(typeof(XxxFn))]` → `[UnmanagedCallersOnly(...)]`
+6. `Marshal.GetFunctionPointerForDelegate(s_xxx)` → `(nint)&OnXxx` 取址
+7. ABI 版本号**不动** — C++ 端看到的函数指针 ABI 完全相同
+
+迁移完成后跑：
+
+- 全部 4 个 Unity 目标的回调矩阵复测
+- 桌面 `tools/net_client_demo/` 的 FFI 验证
+- ABI layout 单测（`test_net_client_abi_layout.cpp`，§3.1 + §10 Phase 3）
 
 ### 6.4 ClientNativeApi 适配
 
@@ -1997,6 +2041,14 @@ Unity 客户端编译时定义 `ATLAS_CLIENT` 符号，DefGenerator 自动生成
 | macOS arm64 | .bundle | kqueue/select | CMake + AppleClang | 开发调试 (Unity 编辑器);  `.bundle` 是 Unity macOS Plugin 的标准格式, 实际内部是 Mach-O 动态库 |
 | Linux x64 | .so | epoll | CMake + GCC/Clang | 服务端/CI |
 
+**Unity 版本兼容性 / C# 回调模式：**
+
+| Unity 区间 | 嵌入 runtime | C# 回调模式 (§6.3) | 备注 |
+|---|---|---|---|
+| 2022.3 LTS — 6.5 | Mono / 老 .NET 4.x（IL2CPP 同样基于此） | **Pattern B** (`[MonoPInvokeCallback]` + delegate) | 当前主线；`[UnmanagedCallersOnly]` 不支持 |
+| 6.6+ (计划) | .NET 10 | **Pattern A** (`[UnmanagedCallersOnly]` + 函数指针) | 落地后须重跑 `src/tools/il2cpp_probe/` 验证再切换；迁移路径见 §6.3.1 |
+| Atlas 最低支持 | 2022.3 LTS | — | 与项目 Unity 客户端目标一致 |
+
 ### 9.2 iOS 静态库处理
 
 iOS 不允许加载第三方 `.dylib`，必须编译为 `.a` 静态库。
@@ -2118,55 +2170,27 @@ Xcode 主工程直接链接入最终二进制 (见 §7 Plugins/iOS 目录)。
 
 ## 10. 实施步骤
 
-### Phase 0: IL2CPP 可行性 Spike (预计 1 天) ⚠ 必须先于其他 Phase
+### Phase 0: IL2CPP 可行性 Spike — ✅ 完成
 
-**目标**: 在投入深度重构前, 确认 Unity IL2CPP 能正确触发 C# 函数指针回调。
-这直接决定移动端方案: 若 `[UnmanagedCallersOnly]` 在 IL2CPP 下失效,
-§6.3 的全部回调桥接代码需要重写为 `[MonoPInvokeCallback] + delegate`。
+**结论：** Pattern B（`[MonoPInvokeCallback]` + delegate +
+`Marshal.GetFunctionPointerForDelegate`）。Unity 2022 至 6.5 全系列 IL2CPP 均
+不支持 `[UnmanagedCallersOnly]`。Pattern A 留待 Unity 6.6+（嵌入 .NET 10）
+落地后重跑探针验证。
 
-**产出** (独立分支, 不合入主干):
+详细矩阵 + 前向兼容迁移步骤：
+[`docs/spike_il2cpp_callback.md`](../spike_il2cpp_callback.md)。
 
-1. **最小 native 探测库** `atlas_il2cpp_probe`
-   - 只导出 2 个符号:
-     ```cpp
-     extern "C" ATLAS_NET_API void probe_set_callback(void (*cb)(int32_t));
-     extern "C" ATLAS_NET_API void probe_fire(int32_t value);
-     ```
-   - 用同一 CMake toolchain 交叉编译 Windows / Android-arm64 / iOS-arm64 三份
+**产物（保留供 Unity 6.6 回归测试用）：**
 
-2. **Unity 测试工程** (Unity 2022.3 LTS 作为下限基准)
-   - 场景中挂载 `ProbeComponent`, 调 `probe_set_callback(&OnFire)` 然后 `probe_fire(42)`
-   - 预期 Debug.Log "fired with 42"
-   - 四个目标分别出包验证:
-     - Editor Mono (基线)
-     - Standalone Windows IL2CPP
-     - Android arm64 IL2CPP
-     - iOS arm64 IL2CPP (静态库 + `[DllImport("__Internal")]`)
-
-3. **两套方案对比代码**
-   ```csharp
-   // 方案 A: [UnmanagedCallersOnly] + 函数指针 (.NET 5+ 原生风格)
-   [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
-   static void OnProbeA(int v) { Debug.Log($"A fired {v}"); }
-
-   // 方案 B: MonoPInvokeCallback + delegate (IL2CPP 兼容风格)
-   delegate void ProbeDelegate(int v);
-   [MonoPInvokeCallback(typeof(ProbeDelegate))]
-   static void OnProbeB(int v) { Debug.Log($"B fired {v}"); }
-   ```
-
-**决策门槛**:
-
-| Spike 结果 | 行动 |
-|-----------|------|
-| 方案 A 在全部 4 个目标都触发回调 | 采用 A（符合当前设计文档）, 进入 Phase 1 |
-| 方案 A 仅 Mono/.NET 可用, IL2CPP 需要 B | 设计文档 §6.3 全部回调改 delegate + GCHandle 模式, 然后进入 Phase 1 |
-| 两方案均失败 | 提升 Unity 最低版本 (2023 LTS), 重跑; 仍失败则改走 reverse P/Invoke + 自定义 trampoline |
-
-**产物**:
-- `docs/spike_il2cpp_callback.md` 记录矩阵结果和最终选型
-- 若选方案 B, 同步更新本设计文档 §6.1 / §6.3
-- 设计文档 §9.1 兼容性矩阵增列 "Unity 最低版本" 和 "C# 回调模式"
+- `src/tools/il2cpp_probe/probe.cc` + `CMakeLists.txt`：极小 native
+  探针，2 个导出（`probe_set_callback` / `probe_fire`），由
+  `ATLAS_BUILD_IL2CPP_PROBE=ON` 开关控制
+- `src/tools/il2cpp_probe/Unity/ProbeComponent.cs`：Unity 测试组件，
+  Pattern A 与 B 并存（`unsafe` + `delegate*` 块只有 Unity 6.6+ 会成功
+  执行；当前 IL2CPP 上 Pattern A 静默失败或抛异常），跑完日志显示哪
+  个 pattern 触发了回调
+- `src/tools/il2cpp_probe/README.md`：4 个目标的交叉编译命令 + Unity
+  Plugins 目录布置 + 决策矩阵
 
 ### Phase 1: 依赖解耦 (预计 1-2 天)
 
@@ -2570,7 +2594,8 @@ password_hash = Base64( SHA-256( username + ":" + password ) )
 
 | 风险 | 影响 | 缓解措施 |
 |------|------|----------|
-| IL2CPP 不支持 `[UnmanagedCallersOnly]` + 函数指针 | Android/iOS 回调失效, Unity 崩溃 | **Phase 0 Spike (§10) 强制前置**; fallback 到 `MonoPInvokeCallback` + delegate + GCHandle |
+| ~~IL2CPP 不支持 `[UnmanagedCallersOnly]` + 函数指针~~ | ~~Android/iOS 回调失效, Unity 崩溃~~ | **已解决** — Phase 0 Spike 确认 Unity 2022–6.5 必须用 Pattern B (`[MonoPInvokeCallback]`)，§6.3 已按此实现；前向兼容 Unity 6.6+ Pattern A 路径见 §6.3.1 |
+| Unity 6.6 嵌入 .NET 10 上线时 Pattern A 仍不工作 | 切换到 Pattern A 失败回滚 | 落地时**先重跑** `src/tools/il2cpp_probe/`；保留 Pattern B 路径以 `#if !ATLAS_CALLBACK_PATTERN_A` 包住，可灰度回退 |
 | Unity Roslyn 版本不兼容 SourceGenerator | 编译失败 | 检查 Unity 版本对应 Roslyn 版本, 锁定 Generator 为 netstandard2.0 + Roslyn 4.3 以下 API |
 | iOS 静态链接符号冲突 | 链接错误 | `-fvisibility=hidden` 只导出 `atlas_net_*`; 与 Unity 内置 .NET 运行时符号必不冲突 |
 | 回调线程安全 | 崩溃/数据竞争 | 所有回调在 `poll()` 内同步触发, 与 Unity 主线程一致 (§4.0.6) |

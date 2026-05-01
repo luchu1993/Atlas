@@ -1,10 +1,15 @@
 # IL2CPP Callback Spike (Phase 0)
 
-Validates which C# callback registration pattern survives Unity IL2CPP on
-all target platforms before we commit to it for `atlas_net_client.dll`.
-Decision matrix lives in
-[`docs/client/UNITY_NATIVE_DLL_DESIGN.md`](../../../docs/client/UNITY_NATIVE_DLL_DESIGN.md)
-§10 Phase 0.
+**Status:** ✅ Decision recorded. Unity 2022 — 6.5 require **Pattern B**
+(`[MonoPInvokeCallback]` + delegate). Pattern A (`[UnmanagedCallersOnly]`)
+is unsupported across the entire range. Full matrix and forward-compat
+migration path:
+[`docs/spike_il2cpp_callback.md`](../../../docs/spike_il2cpp_callback.md).
+
+The probe stays in the tree as a regression check for Unity 6.6+
+(planned to embed .NET 10, where Pattern A should light up). Rerun the
+matrix against any new Unity LTS before flipping
+`UNITY_NATIVE_DLL_DESIGN.md` §6.3 to Pattern A.
 
 ## What this is
 
