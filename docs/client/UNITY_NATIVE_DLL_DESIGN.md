@@ -1,6 +1,6 @@
 # Unity Native Network DLL 设计文档
 
-**Status:** 🚧 Phase 0–2 完成；Phase 3–6 未开工。
+**Status:** 🚧 Phase 0–5 完成；Phase 6（跨平台 native 构建）未开工。
 
 - ✅ Phase 0 — IL2CPP 回调可行性 spike 完成。**D0 决策：采用 Pattern B**
   (`[MonoPInvokeCallback]` + delegate + `Marshal.GetFunctionPointerForDelegate`)。
@@ -14,10 +14,16 @@
   四层不再 include `server/` / `db/` / `entitydef/`。
 - ✅ Phase 2 — `atlas_serialization_binary` target 已落地；`atlas_network`
   改 link binary 子集；依赖闭包零 pugixml / rapidjson 引用。
-- ⬜ Phase 3 — `src/lib/net_client/` 目录不存在。
-- ⬜ Phase 4 — `ClientNativeApi.cs` 仍绑 `atlas_engine` 而非
-  `atlas_net_client`；`ClientApp::Login/Authenticate` 仍是 blocking-poll。
-- ⬜ Phase 5–6 — Unity Package、跨平台构建未启动。
+- ✅ Phase 3 — `src/lib/net_client/` C API 层；`ClientSession` 异步状态机；
+  `atlas_net_client.dll` + `atlas_net_client_core` STATIC + iOS static 三 target；
+  `test_net_client_abi_layout` 锁定 sizeof / offsetof。
+- ✅ Phase 4 — `Atlas.Client/Native/`（DllImport + Pattern B 桥 +
+  `IAtlasNetEvents`）；`Atlas.Tools.NetClientDemo` net9.0 控制台 FFI roundtrip
+  验证。
+- ✅ Phase 5 — `Packages/com.atlas.client/` Unity 包（package.json + asmdef
+  + `AtlasNetworkManager` MonoBehaviour）；Plugins/ 目录占位待 Phase 6 填充。
+- ⬜ Phase 6 — Android arm64 / iOS arm64 / macOS / Linux 交叉编译；CI 任务
+  未配置；Unity 工程实际接入未验证。
 
 **目标:** 把 C++ 网络层抽取为独立 native DLL，Unity 客户端通过 P/Invoke
 调用。Phase 12 客户端 SDK 的高层 C# API（`AtlasClient` / `AvatarFilter` /

@@ -36,11 +36,13 @@
 | Source Generator 客户端集成 | ✅ | `ATLAS_CLIENT` 宏下生成 `ApplyReplicatedDelta / Deserialize` + exposed RPC 发送存根 + `client_methods` 接收分发 |
 | `Atlas.Client.Desktop` P/Invoke | ✅ | `ClientNativeApi` 绑 `atlas_engine`：`AtlasLogMessage / SendBaseRpc / SendCellRpc / RegisterEntityType / RegisterStruct / SetNativeCallbacks / GetAbiVersion / ReportClientEventSeqGap` |
 | `src/client/` 控制台测试客户端 | ✅ | 600+ 行可工作的登录 / 实体接收 / AOI / RPC dispatch；支持 `--loginapp-host / --username / --password / --assembly`、丢包注入 |
-| 独立 `atlas_net_client.dll` + C API | ⬜ | `src/lib/connection/CMakeLists.txt` 仅占位；登录 / Auth 状态机当前在 `atlas_engine` 内闭环 |
-| `LoginClient` async/await 包装 | ⬜ | 未实现 |
-| `AtlasClient` 主入口（`ConnectAsync` / `Update` / 事件） | ⬜ | 未实现；当前 RPC 直接走 `ClientEntity.SendCellRpc/SendBaseRpc → ClientNativeApi` |
-| `AvatarFilter` 位置插值 | ⬜ | 未实现 |
-| `Atlas.Client.Tests` 单元 / 集成测试 | ⬜ | `tests/csharp/` 下尚无该工程 |
+| 独立 `atlas_net_client.dll` + C API | ✅ | `src/lib/net_client/`；ClientSession 异步状态机；`ATLAS_NET_ABI_VERSION = v1.0.0`；ABI 锁定测试 `test_net_client_abi_layout` |
+| `Atlas.Client/Native` C# P/Invoke 层 | ✅ | DllImport 绑 `atlas_net_client`；`AtlasNetCallbackBridge` Pattern B（Unity 2022–6.5）；`IAtlasNetEvents` 业务接口 |
+| `tools/Atlas.Tools.NetClientDemo` FFI 验证 | ✅ | net9.0 控制台：ABI mismatch 拒绝 + Create / SetCallbacks / Disconnect 幂等 roundtrip |
+| `Packages/com.atlas.client/` Unity 包骨架 | ✅ | `package.json` + `Atlas.Client.Unity.asmdef` + `AtlasNetworkManager` MonoBehaviour（Update→Poll，事件转发）；Plugins/ 目录占位待 Phase 6 |
+| `AvatarFilter` 位置插值 | ✅ | 8-sample 环形缓冲 + 自适应延迟（`|diff|^curvePower`）+ 线性插值 + `MaxExtrapolation` 外推上限；`Atlas.Client.Tests` 8/8 xunit |
+| `LoginClient` async/await 包装 | ⬜ | 未实现；当前由 `AtlasNetworkManager.Login + LoginFinished` event 提供 |
+| `AtlasClient` 主入口（`ConnectAsync` / `Update` / 事件） | ⬜ | 未实现；MonoBehaviour 已覆盖 Unity 路径 |
 
 ## 架构差异（与最初设计稿不同的点）
 
@@ -72,8 +74,10 @@
 
 ## 剩余工作
 
-- 独立 `atlas_net_client.dll` 抽出（Login/Auth 从 `atlas_engine` 内剥离，
-  Unity IL2CPP 友好的 C API）
-- `AvatarFilter` 实现 + 集成
-- 高层 `AtlasClient` / `LoginClient` async/await 包装
-- `Atlas.Client.Tests` 单元 / 集成测试工程
+- Phase 6 — 跨平台 native 构建（Android arm64 / iOS arm64 / macOS / Linux）
+  + Unity Plugins/ 目录填充
+- `AvatarFilter` 与 `AtlasNetworkManager.EntityPositionUpdated` 事件流的
+  接线（feed Input on receive，Update 时 TryEvaluate）
+- `LoginClient` async/await 包装（当前为 event-based）
+- 端到端集成测试（`tests/integration/test_client_flow.cpp` 拉真 LoginApp +
+  BaseApp + DBApp 集群，驱动完整 Create→Login→Authenticate→RPC→Disconnect）

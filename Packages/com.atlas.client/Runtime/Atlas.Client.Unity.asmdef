@@ -1,0 +1,17 @@
+{
+  "name": "Atlas.Client.Unity",
+  "rootNamespace": "Atlas.Client.Unity",
+  "references": [],
+  "includePlatforms": [],
+  "excludePlatforms": [],
+  "allowUnsafeCode": true,
+  "overrideReferences": true,
+  "precompiledReferences": [
+    "Atlas.Client.dll",
+    "Atlas.Shared.dll"
+  ],
+  "autoReferenced": true,
+  "defineConstraints": [],
+  "versionDefines": [],
+  "noEngineReferences": false
+}
