@@ -167,13 +167,7 @@ def _config_to_snake(config: str) -> str:
 
 
 def resolve_program(repo_root: Path, bin_name: str, subdirs: Iterable[str], stem: str) -> Path:
-    """Locate an executable under bin/<bin_name>/ (flat layout).
-
-    Atlas's AtlasOutputDirectory.cmake routes every artifact into
-    bin/<build_dir_name>/, so the bare bin root is the only location
-    that holds the binary. Legacy nested subdirs are still searched
-    for transitional builds.
-    """
+    """Locate an executable under bin/<bin_name>/; legacy nested subdirs also searched."""
     bin_base = repo_root / "bin" / bin_name
     suffixes = [".exe", ""] if os.name == "nt" else ["", ".exe"]
     for subdir in (*subdirs, ""):
@@ -225,10 +219,7 @@ def start_logged_process(
         **popen_kwargs,
     )
 
-    # Close the parent's copy of the file handles.  The child already has
-    # its own inherited copy and will keep writing to it.  Closing here
-    # prevents handle leakage to subsequent Popen() calls on Windows
-    # (bInheritHandles=TRUE inherits ALL open inheritable handles).
+    # Close the parent's handles; child has its own inherited copies.
     stdout_handle.close()
     stderr_handle.close()
 
@@ -248,10 +239,7 @@ def stop_logged_processes(processes: list[LoggedProcess]) -> None:
             log(f"Stopping {entry.name} (pid={proc.pid})")
             try:
                 if os.name == "nt":
-                    # CTRL_BREAK_EVENT triggers a graceful shutdown
-                    # (fini → flush → exit) instead of hard-killing with
-                    # TerminateProcess.  Works because the child was
-                    # started with CREATE_NEW_PROCESS_GROUP.
+                    # CTRL_BREAK_EVENT graceful shutdown via CREATE_NEW_PROCESS_GROUP.
                     os.kill(proc.pid, signal.CTRL_BREAK_EVENT)
                 else:
                     os.killpg(proc.pid, signal.SIGTERM)

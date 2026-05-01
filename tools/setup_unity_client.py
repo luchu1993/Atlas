@@ -1,17 +1,5 @@
 #!/usr/bin/env python3
-"""Wire `Packages/com.atlas.client` into a Unity 2022.3 LTS project.
-
-Steps:
-  1. Build host-platform native (atlas_net_client) + managed
-     (Atlas.Shared, Atlas.Client) artefacts.
-  2. Copy them under Packages/com.atlas.client/Plugins/.
-  3. Add a "file:..." dependency for com.atlas.client to the user-
-     picked UnityProject's Packages/manifest.json.
-
-Run via the platform wrapper:
-  Windows: tools\\setup_unity_client.bat [--unity-project PATH] [--config Debug|Release] [--skip-build]
-  Linux:   tools/setup_unity_client.sh   [...]
-"""
+"""Wire Packages/com.atlas.client into a Unity project: build, copy, manifest."""
 
 from __future__ import annotations
 

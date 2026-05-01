@@ -1,14 +1,5 @@
 #!/usr/bin/env python3
-"""Atlas one-shot configure + build helper.
-
-Wraps cmake configure/build with:
-  - MSVC environment auto-load via vswhere + vcvars64.bat (Windows only).
-  - Ninja auto-provisioning to .tmp/ninja/ when missing from PATH.
-
-Run via the platform wrapper:
-  Windows: tools\\build.bat <preset> [options]
-  Linux:   tools/build.sh   <preset> [options]
-"""
+"""One-shot cmake configure + build helper; loads MSVC env, provisions Ninja."""
 
 from __future__ import annotations
 

@@ -1,22 +1,5 @@
 #!/usr/bin/env python3
-"""Compare two CellApp Tracy captures and report zone timing regressions.
-
-Usage:
-    python compare_tracy.py <baseline.tracy> <new.tracy> [options]
-
-The script exports both traces to CSV via tracy-csvexport (stdout), then
-prints a Markdown table of mean / max / total for the zones that matter
-most to CellApp performance. Regressions (new > baseline by more than
---threshold %) are flagged with ▲; improvements with ▼.
-
-Note: tracy-csvexport's aggregate output exposes mean/min/max/std/total but
-not p95/p99 (those used to be in earlier Tracy releases). For tail-percentile
-analysis open the trace in tracy-profiler directly.
-
-Prerequisites:
-    tracy-csvexport.exe must be in bin/profile/ or on PATH,
-    or supplied via --csvexport.
-"""
+"""Compare two CellApp Tracy captures via tracy-csvexport; flag regressions."""
 
 from __future__ import annotations
 
@@ -103,10 +86,7 @@ def ns_to_us(v: str) -> float:
     return float(v) / 1000.0
 
 
-# Columns we depend on from tracy-csvexport's aggregate output. A schema
-# change in a newer Tracy build silently dropping these would make the
-# comparison table empty and the script return "no regressions" — fail
-# loud on the first row instead of swallowing the mismatch.
+# Schema we depend on from tracy-csvexport's aggregate output; fail loud if Tracy drops one.
 REQUIRED_CSV_COLUMNS = ("name", "counts", "mean_ns", "max_ns", "total_ns")
 
 

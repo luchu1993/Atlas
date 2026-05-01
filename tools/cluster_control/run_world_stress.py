@@ -1,11 +1,5 @@
 #!/usr/bin/env python3
-
-# Bring up the full Atlas cluster (machined / loginapp / dbapp / baseappmgr /
-# baseapp / cellappmgr / cellapp) and optionally drive it with `world_stress`.
-#
-# P1 milestone: allow --clients 0 to bring up the cluster only and verify
-# that every process registers with machined. The world_stress binary is
-# resolved lazily so P1 does not require it to exist yet.
+"""Bring up the full Atlas cluster + optionally drive it with world_stress."""
 
 from __future__ import annotations
 
@@ -77,26 +71,20 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--keep-cluster", action="store_true")
     parser.add_argument("--verbose-failures", action="store_true")
-    # By default any cellapp invariant-audit violation (leave fan-out
-    # missed, stale enter-pending) makes the run fail with exit 3.
-    # Disable the gate when intentionally exercising legacy paths.
     parser.add_argument(
         "--allow-audit-violations",
         action="store_true",
-        help="Don't fail when cellapp reports invariant violations.",
+        help="Don't fail when cellapp reports invariant violations (leave fan-out "
+             "missed, stale enter-pending).",
     )
-    # Forward to world_stress: per-tick walk step magnitude.
-    parser.add_argument("--walk-step-meters", type=float, default=None)
-    # Half-width of random-walk box around each session's spawn.
-    parser.add_argument("--walk-range-meters", type=float, default=None)
-    # Pct of ReportPos calls replaced by uniform jumps inside the walk-
-    # range box; surfaces RangeTrigger paths slow walks miss.
-    parser.add_argument("--teleport-pct", type=int, default=None)
+    parser.add_argument("--walk-step-meters", type=float, default=None,
+                        help="Per-tick walk step magnitude.")
+    parser.add_argument("--walk-range-meters", type=float, default=None,
+                        help="Half-width of random-walk box around each session's spawn.")
+    parser.add_argument("--teleport-pct", type=int, default=None,
+                        help="Pct of ReportPos replaced by jumps; exercises RangeTrigger paths.")
 
-    # Per-process tick rate. cellapp is the authoritative spatial tick;
-    # baseapp ticks 1.5–2× the cellapp rate so DeltaForwarder doesn't
-    # backlog. Manager / persistence / machined processes do tiny per-
-    # tick work and run at 10 Hz to free dispatcher time for IO.
+    # cellapp is the authoritative spatial tick; baseapp 1.5–2× cellapp; managers 10 Hz.
     parser.add_argument("--cellapp-update-hertz", type=int, default=15)
     parser.add_argument("--baseapp-update-hertz", type=int, default=15)
     parser.add_argument("--loginapp-update-hertz", type=int, default=20)
@@ -115,10 +103,7 @@ def parse_args() -> argparse.Namespace:
         help="Comma-separated server process names to capture (default: all six).",
     )
 
-    # Phase C2/C3 — real atlas_client.exe subprocesses loaded with the
-    # ClientSample assembly. world_stress orchestrates them alongside its
-    # raw-protocol virtual clients and parses per-child stdout events.
-    # See docs/script_client_smoke.md for the scenarios these flags enable.
+    # Real atlas_client.exe subprocesses; see docs/stress_test/script_client_smoke.md.
     parser.add_argument("--script-clients", type=int, default=0,
                         help="Spawn N real atlas_client.exe subprocesses "
                              "alongside virtual clients (script_client_smoke.md)")
@@ -153,13 +138,7 @@ def fail(message: str) -> NoReturn:
 
 
 def scan_cellapp_audits(log_dir: Path) -> list[str]:
-    """Grep cellapp's stderr/stdout for invariant-audit messages.
-
-    cellapp's destruction-leave audit (~CellEntity::~CellEntity) and
-    Witness::Update's defensive cross-check both log a unique tag when
-    they fire — these are aggregated here so cluster_control can fail
-    the run loud and early instead of letting the line slip past.
-    """
+    """Grep cellapp logs for invariant-audit messages so a regression fails the run."""
     needles = ("leave fan-out missed", "stale enter-pending")
     found: list[str] = []
     candidates: list[Path] = []
@@ -236,10 +215,7 @@ def build_worker_plan(args: argparse.Namespace, source_ips: list[str]) -> list[d
     if args.worker_index < 0 or args.worker_index >= args.worker_count:
         fail("--worker-index must be in [0, worker-count)")
 
-    # P1: clients=0 means cluster-only smoke test; no stress workers. Phase
-    # C2 relaxes this: if --script-clients > 0 we still need a single stress
-    # worker shard to carry the script children even though there are zero
-    # virtual clients.
+    # clients=0 = cluster-only smoke; --script-clients still keeps shard 0 alive.
     if args.clients <= 0 and args.script_clients <= 0:
         return []
 
@@ -250,9 +226,7 @@ def build_worker_plan(args: argparse.Namespace, source_ips: list[str]) -> list[d
     for local_index in range(args.local_workers):
         global_worker_index = base_worker_index + local_index
         client_offset, client_count = split_range(args.clients, total_workers, global_worker_index)
-        # The primary shard owns the script-client fleet and must be
-        # scheduled even with zero virtual clients; other shards fall through
-        # when their slice is empty.
+        # Shard 0 owns the script-client fleet; other empty shards skip.
         if client_count <= 0 and not (args.script_clients > 0 and global_worker_index == 0):
             continue
 
@@ -285,8 +259,7 @@ def build_worker_plan(args: argparse.Namespace, source_ips: list[str]) -> list[d
 
 
 def _config_to_snake(config: str) -> str:
-    """Convert PascalCase config name to snake_case: Debug -> debug,
-    RelWithDebInfo -> rel_with_deb_info."""
+    """Convert PascalCase config name to snake_case (RelWithDebInfo → rel_with_deb_info)."""
     import re
     return re.sub(r"([a-z])([A-Z])", r"\1_\2", config).lower()
 
@@ -296,13 +269,7 @@ def _exe_suffixes() -> list[str]:
 
 
 def _dll_env(exe_path: Path) -> dict[str, str]:
-    """Return a copy of the current process env.
-
-    Atlas now uses a flat bin/<build>/ layout (see cmake/AtlasFolders.cmake),
-    so every EXE sits next to its DLL siblings and the OS loader resolves
-    them from the executable's own directory. No PATH manipulation needed.
-    The argument is kept for call-site compatibility.
-    """
+    """Return os.environ.copy(); flat bin/<build>/ layout means no PATH munging needed."""
     del exe_path
     return os.environ.copy()
 
@@ -399,12 +366,7 @@ def start_tracy_captures(
 
 
 def stop_tracy_captures(captures: list[subprocess.Popen[str]]) -> None:
-    """Wait for tracy-capture processes to finish writing, then force-kill stragglers.
-
-    tracy-capture flushes the .tracy file only on clean exit; hard-killing it
-    loses the capture.  We give it 20 s to finish (it should be nearly done
-    since -s was set to duration+10), then force-kill anything still running.
-    """
+    """Let tracy-capture flush (it writes .tracy only on clean exit); kill after 20s."""
     for p in captures:
         try:
             p.wait(timeout=20)
@@ -419,15 +381,7 @@ def stop_tracy_captures(captures: list[subprocess.Popen[str]]) -> None:
 def resolve_program(
     build_root: Path, bin_name: str, subdirs: Iterable[str], stem: str
 ) -> Path:
-    """Locate an executable under bin/<bin_name>/.
-
-    bin_name is the last path component of the CMake binary directory
-    (e.g. "profile", "debug") — Atlas's AtlasOutputDirectory.cmake
-    routes all artifacts into bin/<build_dir_name>/ as a flat layout.
-    The `subdirs` argument is preserved for call-site compatibility but
-    only the empty-string entry is used in practice; legacy nested
-    layouts are still searched in case the caller targets an older tree.
-    """
+    """Locate an executable under bin/<bin_name>/; legacy nested subdirs are also searched."""
     bin_base = build_root / "bin" / bin_name
     for subdir in (*subdirs, ""):
         for suffix in _exe_suffixes():
@@ -656,11 +610,7 @@ def build_stress_args(args: argparse.Namespace, worker: dict[str, object]) -> li
     if args.verbose_failures:
         stress_args.append("--verbose-failures")
 
-    # Phase C2/C3 pass-through. Only the first worker shard carries the
-    # script-client fleet: launching the same children from every shard would
-    # multiply the subprocess count and all children would race for the same
-    # username pool. Downstream shards fall back to zero script-clients even
-    # when --script-clients is set on the command line.
+    # Only shard 0 spawns script children — others would race for the same usernames.
     is_primary_worker = int(worker["global_worker_index"]) == 0
     if args.script_clients > 0 and is_primary_worker:
         stress_args.extend(["--script-clients", str(args.script_clients)])
@@ -693,9 +643,7 @@ def default_client_exe(args: argparse.Namespace) -> Path:
 
 
 def default_client_assembly(args: argparse.Namespace) -> Path:
-    # The ClientSample csproj does not set AppendPlatformToOutputPath, so
-    # `dotnet build` drops the assembly under bin/<Config>/net9.0/ (no x64
-    # segment). Keep the default aligned with reality.
+    # ClientSample csproj has no AppendPlatformToOutputPath — drops to bin/<Config>/net9.0/.
     return (resolve_repo_root() / "samples" / "client" / "bin" / args.config
             / "net9.0" / "Atlas.ClientSample.dll")
 
@@ -1174,11 +1122,7 @@ def main() -> int:
             log("Keeping cluster alive. Stop the spawned processes manually when done.")
             processes = []
 
-        # Audit: scan cellapp logs for invariant violations the cellapp's
-        # in-process checks reported.  These are normally harmless because
-        # the witness layer's defensive guards prevent the UAF, but they
-        # signal a regression in the destruction-leave fan-out contract
-        # and should fail the run loud and early.
+        # Cellapp invariant violations: usually a regression in destruction-leave fan-out.
         audit_lines = scan_cellapp_audits(log_dir)
         if audit_lines and not args.allow_audit_violations:
             log(f"[audit] cellapp reported {len(audit_lines)} invariant violation(s):")

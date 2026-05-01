@@ -1,43 +1,5 @@
 #!/usr/bin/env python3
-"""Validate unreliable-delta recovery under packet drop.
-
-Flips `StressAvatar.hp` from `reliable="true"` to `reliable="false"` in
-`entity_defs/`, rebuilds the native + C# targets that embed the def,
-runs a world_stress smoke with an inbound drop window, and restores the
-def (and rebuilds back to the reliable baseline) — all under try/finally
-so a failed smoke never leaves the def in the `reliable="false"` state
-that would silently break every subsequent stress run.
-
-Why this script exists — the surprising thing about `reliable="false"`
-is what WON'T happen when packets are dropped:
-
-    * Transport doesn't retransmit       (reliable='false' ⇒ no ACK-wait)
-    * App-layer gap counter still ticks  (event_seq prefixes are always on)
-    * L4 baseline pump on CellApp silently pulls `_hp` back to truth
-      within ≤6 s (`kClientBaselineIntervalTicks=120` at 50 Hz)
-    * Script-side `OnHpChanged` is NOT fired for baseline-driven repairs
-      — matches BigWorld `simple_client_entity.cpp`'s
-      `shouldUseCallback=false` path
-
-Corresponds to script_client_smoke.md 场景 4 ("应用层丢包 + unreliable
-属性 + baseline 兜底"). The one-button automation here removes the
-"forgot to change the def back" failure mode — every step the human
-had to remember is now a numbered subprocess call.
-
-    1. Patch StressAvatar.def: reliable="true" -> reliable="false"
-    2. cmake + dotnet rebuild of the affected targets
-    3. run tools/cluster_control/run_world_stress.py with the drop window
-    4. Restore the def + rebuild back to reliable="true" (always runs,
-       even on smoke failure; bypass with --skip-restore for dev loop)
-
-Usage (from the repo root):
-
-    python tools/cluster_control/run_unreliable_recovery.py
-    python tools/cluster_control/run_unreliable_recovery.py --duration-sec 30
-
-Flags mirror the underlying run_world_stress.py ones where useful
-(--duration-sec, --script-clients, --drop-start-ms, --drop-duration-ms).
-"""
+"""Validate unreliable-delta recovery under drops; see docs/stress_test/script_client_smoke.md §4."""
 
 from __future__ import annotations
 
@@ -59,12 +21,7 @@ LOG_PREFIX = "[unreliable-recovery]"
 
 
 def patch_def_to(mode: str) -> None:
-    """Flip the `hp` property's reliable attribute to the requested mode.
-
-    Idempotent: a noop if the def is already in the target state, which
-    makes the try/finally restore step safe even when the smoke wrote
-    the def in advance.
-    """
+    """Flip `hp` reliable attr to the requested mode; idempotent (try/finally-safe)."""
     if mode not in ("true", "false"):
         raise ValueError(f"invalid mode: {mode}")
     text = DEF_PATH.read_text(encoding="utf-8")
@@ -110,9 +67,7 @@ def rebuild() -> None:
 
 
 def run_smoke(args: argparse.Namespace) -> int:
-    """Invoke run_world_stress.py with the drop-window args. Returns the
-    subprocess exit code (0 on success, non-zero on --script-verify
-    failure)."""
+    """Invoke run_world_stress.py with the drop-window args; returns subprocess rc."""
     cmd = [
         sys.executable,
         str(REPO_ROOT / "tools" / "cluster_control" / "run_world_stress.py"),

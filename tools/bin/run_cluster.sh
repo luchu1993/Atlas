@@ -1,7 +1,5 @@
 #!/usr/bin/env bash
-# Bring up a local Atlas cluster for dev / Unity client testing (no stress).
-# Wraps run_world_stress.py --clients 0 --keep-cluster.
-
+# Cluster preset: run_world_stress.py with --clients 0 --keep-cluster.
 set -euo pipefail
 
 usage() {
