@@ -1,89 +1,72 @@
 # Atlas Engine — 后脚本层开发路线图
 
-> 本目录包含 C# 脚本层（docs/scripting/ Phase 0–6）完成之后的引擎开发规划。
-> 每个 Phase 对应一个独立文档，方便后续细化需求和任务分解。
+C# 脚本层（[`docs/scripting/`](../scripting/) Phase 0–6）完成后的引擎
+开发规划。每个 Phase 独立文档承载该阶段的设计决策、当前状态与剩余工作。
 
----
-
-## 前置: 脚本层（规划文档 + 当前代码基线）
+## 脚本层基线
 
 | Phase | 名称 | 状态 | 文档 |
-|-------|------|------|------|
-| Script 0 | 清理 Python + 建立抽象层 | ✅ 完成 | [script_phase0](../scripting/script_phase0_cleanup_abstraction.md) |
-| Script 1 | .NET 9 运行时嵌入 | ✅ 完成 | [script_phase1](../scripting/script_phase1_dotnet_host.md) |
-| Script 2 | C++ ↔ C# 互操作层 | ✅ 完成 | [script_phase2](../scripting/script_phase2_interop_layer.md) |
-| Script 3 | Atlas 引擎 C# 绑定 | 部分落地（主路径可用，仍在补齐） | [script_phase3](../scripting/script_phase3_engine_bindings.md) |
-| Script 4 | 共享程序集 + Source Generator | 部分落地（服务端依赖子集已可用） | [script_phase4](../scripting/script_phase4_shared_generators.md) |
-| Script 5 | 热重载机制 | 部分落地（基础设施已在库内） | [script_phase5](../scripting/script_phase5_hot_reload.md) |
-| Script 6 | 测试与稳定化 | 部分落地（测试矩阵已铺开） | [script_phase6](../scripting/script_phase6_testing.md) |
-
-说明:
-
-- 上表的“状态”表示脚本文档整体收敛度，不等于仓库当前代码是否已经具备某些最小能力子集。
-- 后续服务器 phase 中提到的 “Script Phase 4 依赖”，通常是指当前代码已经在使用的最小共享能力:
-  `Atlas.Shared`、属性标记、`SpanWriter/SpanReader`、实体定义导出/注册、基础 Source Generator 输出。
-- Script Phase 5/6 仍是后续完善项，但仓库中已经有热重载基础设施和脚本层测试矩阵，不应再按“完全未开始”描述。
-
----
+|---|---|---|---|
+| Script 0 | 清理 Python + 建立抽象层 | ✅ | [script_phase0](../scripting/script_phase0_cleanup_abstraction.md) |
+| Script 1 | .NET 9 运行时嵌入 | ✅ | [script_phase1](../scripting/script_phase1_dotnet_host.md) |
+| Script 2 | C++ ↔ C# 互操作层 | ✅ | [script_phase2](../scripting/script_phase2_interop_layer.md) |
+| Script 3 | Atlas 引擎 C# 绑定 | 🚧 主路径可用 | [script_phase3](../scripting/script_phase3_engine_bindings.md) |
+| Script 4 | 共享程序集 + Source Generator | 🚧 服务端依赖子集可用 | [script_phase4](../scripting/script_phase4_shared_generators.md) |
+| Script 5 | 热重载机制 | 🚧 基础设施已在库内 | [script_phase5](../scripting/script_phase5_hot_reload.md) |
+| Script 6 | 测试与稳定化 | 🚧 测试矩阵已铺开 | [script_phase6](../scripting/script_phase6_testing.md) |
 
 ## 后脚本层阶段
 
-当前进度基线: 2026-04-22。
-
 | Phase | 名称 | 状态 | 关键交付 | 文档 |
-|-------|------|------|----------|------|
-| 5 | 服务器框架基类 | ✅ 完成 | ServerApp 主循环、消息接口注册、Watcher | [phase05_server_framework.md](phase05_server_framework.md) |
-| 6 | machined 进程管理 | ✅ 主线完成（auto-reconnect / `atlas_tool watch`/`shutdown` 待补） | 服务发现、进程注册、心跳监控 | [phase06_machined.md](phase06_machined.md) |
-| 7 | DBApp + 数据库层 | ✅ SQLite/XML 主线；🚧 集成补强；⬜ MySQL 未开始 | IDatabase 接口、SQLite/XML/MySQL 路线、异步持久化 | [phase07_dbapp.md](phase07_dbapp.md) |
-| 8 | BaseApp 实体宿主 | ✅ 主线完成（AOI fan-out、HeartbeatPing 延至 Phase 10/12） | Base/Proxy 实体、客户端代理、writeToDB | [phase08_baseapp.md](phase08_baseapp.md) |
-| 9 | LoginApp + BaseAppMgr | ✅ 主线完成；🚧 churn 压测收敛待做 | 登录流程、SessionKey、负载分配 | [phase09_login_flow.md](phase09_login_flow.md) |
-| 10 | CellApp 空间模拟 | 🚧 基础实现已落地（CellApp ~5500 行 + 前置 PR-A/B/C/D 合入），性能 / AvatarUpdate 安全 / 压测指标待系统性验收 | Space、RangeList、AOI/Witness、Controller | [phase10_cellapp.md](phase10_cellapp.md) · [前置](phase10_prerequisites.md) |
-| 11 | 分布式空间 (Real/Ghost + CellAppMgr) | ⬜ 未启动（等待 Phase 10 收敛） | Ghost 机制、Entity Offload、BSP 分区 | [phase11_distributed_space.md](phase11_distributed_space.md) |
-| 12 | 客户端 SDK | 🚧 C# `Atlas.Client` 骨架可用（`ClientEntity` / 回调 / DefGenerator 产物 + property_sync 客户端对齐完成），`atlas_client.exe` 已能接入登录与 AoI 广播；Unity 集成与 movement filter 未开工 | 连接协议、实体同步、Avatar Filter | [phase12_client_sdk.md](phase12_client_sdk.md) |
-| 13 | 高可用 (Reviver + DBAppMgr) | ⬜ 未启动 | 崩溃恢复、Manager 热备、集群管理 | [phase13_high_availability.md](phase13_high_availability.md) |
-
----
+|---|---|---|---|---|
+| 5 | 服务器框架基类 | ✅ | ServerApp 主循环、消息接口注册、Watcher | [phase05](phase05_server_framework.md) |
+| 6 | machined 进程管理 | ✅ 主线 / 🚧 atlas_tool & 重连 | 服务发现、进程注册、心跳监控 | [phase06](phase06_machined.md) |
+| 7 | DBApp + 数据库层 | 🚧 SQLite 默认 / MySQL ⬜ | IDatabase / SQLite/XML 后端 / DB watcher | [phase07](phase07_dbapp.md) |
+| 8 | BaseApp 实体宿主 | ✅ | Base/Proxy 实体、客户端代理、WriteToDB | [phase08](phase08_baseapp.md) |
+| 9 | LoginApp + BaseAppMgr | ✅ 主线 / 🚧 churn 收敛 | 登录流程、SessionKey、负载分配 | [phase09](phase09_login_flow.md) |
+| 10 | CellApp 空间模拟 | ✅ | Space、RangeList、AOI/Witness、Controller；持续优化在 docs/optimization | [phase10](phase10_cellapp.md) |
+| 11 | 分布式空间（Real/Ghost + CellAppMgr） | ✅ 主线 | Ghost 机制、Entity Offload、BSP 分区、CellAppMgr 负载均衡 | [phase11](phase11_distributed_space.md) |
+| 12 | 客户端 SDK | 🚧 核心骨架 / AvatarFilter ⬜ | 连接协议、实体同步、控制台测试客户端 | [phase12](phase12_client_sdk.md) |
+| 13 | 高可用（Reviver + DBAppMgr） | ⬜ | 崩溃恢复、Manager 热备、集群管理 | [phase13](phase13_high_availability.md) |
 
 ## 依赖关系
 
 ```
-脚本层基线
-(Script 0-3 + Script 4 最小子集)
+脚本层基线 (Script 0–3 + Script 4 最小子集)
         │
         ▼
-   Phase 5: 服务器框架
+   Phase 5  服务器框架
         │
         ▼
-   Phase 6: machined ──────────────────────┐
-        │                                   │
-        ▼                                   │
-   Phase 7: DBApp + DB层                   │
-        │                                   │
-        ▼                                   │
-   Phase 8: BaseApp ◄──────────────────────┘
+   Phase 6  machined ────────────────┐
+        │                             │
+        ▼                             │
+   Phase 7  DBApp + DB 层            │
+        │                             │
+        ▼                             │
+   Phase 8  BaseApp ◄─────────────────┘
         │
-        ├──────────────┐
-        ▼              ▼
-   Phase 9:        Phase 10:
-   LoginApp +      CellApp
-   BaseAppMgr         │
-        │              ▼
-        │         Phase 11:
-        │         Real/Ghost +
-        │         CellAppMgr
-        │              │
-        ▼              ▼
-   Phase 12: 客户端 SDK
+        ├──────────┐
+        ▼          ▼
+   Phase 9    Phase 10
+   LoginApp + CellApp
+   BaseAppMgr     │
+        │         ▼
+        │    Phase 11
+        │    Real/Ghost + CellAppMgr
+        │         │
+        ▼         ▼
+   Phase 12 客户端 SDK
         │
         ▼
-   Phase 13: 高可用
+   Phase 13 高可用
 ```
 
 ## 里程碑
 
 | 里程碑 | 覆盖阶段 | 验收标准 |
-|--------|----------|----------|
-| **M-Single** | Phase 5-8 | 单 BaseApp + 单 DBApp 可创建/持久化实体 |
+|---|---|---|
+| **M-Single** | Phase 5–8 | 单 BaseApp + 单 DBApp 可创建 / 持久化实体 |
 | **M-Login** | + Phase 9 | 客户端可登录并创建角色 |
 | **M-World** | + Phase 10 | 角色在空间中移动，AOI 可工作 |
 | **M-Distributed** | + Phase 11 | 多 CellApp 负载均衡，跨 Cell 无缝迁移 |
