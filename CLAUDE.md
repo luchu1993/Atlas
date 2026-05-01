@@ -124,6 +124,16 @@ Design docs under `docs/` carry the same debt as comments — keep them lean and
 3. **Strip implementation detail after landing.** Once a feature ships, the doc's job is to explain *what exists and why*, not to relive the implementation journey. Remove step-by-step plans, phase breakdowns, abandoned alternatives, intermediate TODO checklists, and migration notes that no longer apply. The code is the source of truth for *how*; the doc is the source of truth for *what / why*.
 4. **Review the whole doc on contact.** When editing any part of a doc, scan the rest for violations of these rules — stale status, lingering implementation steps, references to deleted code or removed APIs, broken cross-links — and fix them in the same change. Don't leave rot for someone else.
 
+### Tool scripts
+
+Developer-facing tools (build helpers, cluster launchers, dev-loop setup) follow a fixed shape so the same name works on every platform.
+
+1. **Logic in Python.** The actual work lives in `name.py` — stdlib only (`argparse`, `pathlib`, `subprocess`). Third-party deps creep into CI install lists, so reach for them only when the stdlib path is genuinely worse.
+2. **Thin platform wrappers.** `name.bat` for Windows and `name.sh` for Linux / macOS are one-liners that locate Python and invoke `name.py` with `%*` / `"$@"`. Reference shape in `tools/build.bat` and `tools/build.sh`. Users invoke the wrapper; never tell anyone to run the `.py` directly.
+3. **Co-located.** All three files live in the same directory as the tool they implement (`tools/build/`, `tools/cluster_control/`, `tools/setup_unity_client/`). Don't fan a tool's `.bat` out to `tools/` while its `.py` lives under `tools/foo/` — keeps `git mv` honest and lets `--help` paths stay short.
+
+Variant: a *preset wrapper* (a thin shortcut into another tool's Python) ships `name.{ps1,sh}` without its own `.py` — `tools/cluster_control/run_baseline_profile.{ps1,sh}` and `run_cluster.{ps1,sh}` are the established examples. PowerShell here is fine for typed parameters; bash mirrors it for non-Windows hosts. Don't introduce this variant when a fresh tool would do, but keep the door open for "shortcut into existing driver."
+
 ## CI workflows (`.github/workflows/`)
 
 - `cmake.yml` — Windows + Linux × Debug + Release. Uses sccache, NuGet + `_deps` caching, paths-ignore for docs / tooling. Runs unit + integration tests on Debug.
