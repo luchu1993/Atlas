@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using Atlas.Client;
 using Atlas.Client.Native;
 using Atlas.DataTypes;
@@ -10,6 +11,13 @@ namespace Atlas.Client.Unity
     {
         [SerializeField] private string loginappHost = "127.0.0.1";
         [SerializeField] private ushort loginappPort = 20018;
+
+        [SerializeField] private double avatarFilterLatencyFrames = 3.0;
+        [SerializeField] private double avatarFilterServerInterval = 0.1;
+        [SerializeField] private double avatarFilterCurvePower = 2.0;
+        [SerializeField] private double avatarFilterMaxExtrapolation = 0.05;
+
+        private readonly Dictionary<uint, AvatarFilter> _filters = new();
 
         public event Action<AtlasLoginStatus, string?>? LoginFinished;
         public event Action<bool, uint, ushort, string?>? AuthFinished;
@@ -40,6 +48,33 @@ namespace Atlas.Client.Unity
         private void Update()
         {
             if (_ctx != IntPtr.Zero) AtlasNetNative.AtlasNetPoll(_ctx);
+            float dt = Time.deltaTime;
+            foreach (var f in _filters.Values) f.UpdateLatency(dt);
+        }
+
+        public bool TryGetInterpolatedTransform(uint entityId,
+                                                out Vector3 pos, out Vector3 dir, out bool onGround)
+        {
+            if (_filters.TryGetValue(entityId, out var f))
+                return f.TryEvaluate(Time.timeAsDouble, out pos, out dir, out onGround);
+            pos = default;
+            dir = default;
+            onGround = false;
+            return false;
+        }
+
+        private AvatarFilter GetOrCreateFilter(uint entityId)
+        {
+            if (_filters.TryGetValue(entityId, out var existing)) return existing;
+            var f = new AvatarFilter
+            {
+                LatencyFrames = avatarFilterLatencyFrames,
+                ServerInterval = avatarFilterServerInterval,
+                CurvePower = avatarFilterCurvePower,
+                MaxExtrapolation = avatarFilterMaxExtrapolation,
+            };
+            _filters[entityId] = f;
+            return f;
         }
 
         private void OnDestroy()
@@ -115,23 +150,39 @@ namespace Atlas.Client.Unity
             => PlayerCellCreated?.Invoke(sid, new Vector3(px, py, pz),
                                          new Vector3(dx, dy, dz), p.ToArray());
 
-        void IAtlasNetEvents.OnResetEntities() => EntitiesReset?.Invoke();
+        void IAtlasNetEvents.OnResetEntities()
+        {
+            _filters.Clear();
+            EntitiesReset?.Invoke();
+        }
 
         void IAtlasNetEvents.OnEntityEnter(uint eid, ushort tid,
                                            float px, float py, float pz,
                                            float dx, float dy, float dz,
                                            ReadOnlySpan<byte> p)
-            => EntityEntered?.Invoke(eid, tid, new Vector3(px, py, pz),
-                                     new Vector3(dx, dy, dz), p.ToArray());
+        {
+            var pos = new Vector3(px, py, pz);
+            var dir = new Vector3(dx, dy, dz);
+            GetOrCreateFilter(eid).Input(Time.timeAsDouble, pos, dir, onGround: true);
+            EntityEntered?.Invoke(eid, tid, pos, dir, p.ToArray());
+        }
 
-        void IAtlasNetEvents.OnEntityLeave(uint eid) => EntityLeft?.Invoke(eid);
+        void IAtlasNetEvents.OnEntityLeave(uint eid)
+        {
+            _filters.Remove(eid);
+            EntityLeft?.Invoke(eid);
+        }
 
         void IAtlasNetEvents.OnEntityPosition(uint eid,
                                               float px, float py, float pz,
                                               float dx, float dy, float dz,
                                               bool onGround)
-            => EntityPositionUpdated?.Invoke(eid, new Vector3(px, py, pz),
-                                             new Vector3(dx, dy, dz), onGround);
+        {
+            var pos = new Vector3(px, py, pz);
+            var dir = new Vector3(dx, dy, dz);
+            GetOrCreateFilter(eid).Input(Time.timeAsDouble, pos, dir, onGround);
+            EntityPositionUpdated?.Invoke(eid, pos, dir, onGround);
+        }
 
         void IAtlasNetEvents.OnEntityProperty(uint eid, byte scope, ReadOnlySpan<byte> d)
             => EntityPropertyUpdated?.Invoke(eid, scope, d.ToArray());
@@ -139,8 +190,12 @@ namespace Atlas.Client.Unity
         void IAtlasNetEvents.OnForcedPosition(uint eid,
                                               float px, float py, float pz,
                                               float dx, float dy, float dz)
-            => EntityForcedPosition?.Invoke(eid, new Vector3(px, py, pz),
-                                            new Vector3(dx, dy, dz));
+        {
+            // Server-authoritative snap; reset filter to avoid lerp from stale samples.
+            if (_filters.TryGetValue(eid, out var f)) f.Reset();
+            EntityForcedPosition?.Invoke(eid, new Vector3(px, py, pz),
+                                         new Vector3(dx, dy, dz));
+        }
 
         void IAtlasNetEvents.OnRpc(uint eid, uint rid, ReadOnlySpan<byte> p)
             => Rpc?.Invoke(eid, rid, p.ToArray());
