@@ -12,6 +12,7 @@ add_subdirectory(script)
 add_subdirectory(serialization)
 add_subdirectory(entitydef)
 add_subdirectory(network)
+add_subdirectory(net_client)
 add_subdirectory(coro)
 
 # Layer 3: server framework + database

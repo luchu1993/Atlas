@@ -1,19 +1,4 @@
-// Minimal native callback probe for the Phase 0 IL2CPP feasibility spike
-// (see docs/client/UNITY_NATIVE_DLL_DESIGN.md §10 Phase 0).
-//
-// Exports two symbols:
-//   probe_set_callback(cb)  — caller registers a function pointer
-//   probe_fire(value)       — DLL invokes the registered callback with `value`
-//
-// The Unity test project calls these via P/Invoke and checks both
-// callback-registration patterns (`[UnmanagedCallersOnly]` function pointer
-// and `[MonoPInvokeCallback]` delegate) on every Unity build target
-// (Editor Mono, Standalone Win IL2CPP, Android arm64 IL2CPP, iOS arm64
-// static + `__Internal`). If both Mono and IL2CPP fire the callback we
-// pick pattern A for the real DLL; if only Mono fires we drop to B.
-//
-// Library is intentionally header-less and dependency-less: the spike
-// must isolate the FFI layer, not Atlas's code.
+// IL2CPP feasibility probe — see docs/spike_il2cpp_callback.md.
 
 #include <cstdint>
 

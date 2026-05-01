@@ -1,8 +1,4 @@
-# Phase 0 IL2CPP feasibility spike — minimal callback probe.
-# Built only when ATLAS_BUILD_IL2CPP_PROBE is ON; pure isolation, no
-# Atlas dependencies so the spike measures the FFI layer alone.
-
-option(ATLAS_BUILD_IL2CPP_PROBE "Build the Phase 0 IL2CPP callback spike DLL" OFF)
+option(ATLAS_BUILD_IL2CPP_PROBE "Build the IL2CPP callback spike DLL" OFF)
 
 if(ATLAS_BUILD_IL2CPP_PROBE)
   add_library(atlas_il2cpp_probe SHARED probe.cc)
