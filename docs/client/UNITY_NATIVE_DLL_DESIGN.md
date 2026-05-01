@@ -1,23 +1,26 @@
 # Unity Native Network DLL 设计文档
 
-> **状态**: 草案 v2 (已评审修订)
-> **日期**: 2026-04-18
-> **目标**: 将 C++ 网络层抽取为独立 native DLL, 供 Unity 客户端通过 P/Invoke 调用
->
-> **v2 修订要点**:
-> - 新增 §4.0 ABI 约定 (内存所有权 / 版本 / 重入 / 返回码)
-> - §4.5 Login/Auth API 精简: SessionKey/baseapp 地址不跨 FFI, authenticate 参数从 4 降为 2
-> - §4.5.4 新增 `AtlasNetDisconnect` API
-> - §4.5.6 状态转换矩阵
-> - §5.2.1 SessionKey 生命周期与 `SecureZero` 清除
-> - §5.2.2 Callback table 原子替换 + noop sentinel
-> - §5.3 澄清客户端 RPC 线格式 (MessageID 位置编码, 无独立 rpc_id 字段)
-> - §10 Phase 0: IL2CPP 可行性 Spike (前置所有其他 Phase)
-> - §10 各 Phase 细化验证命令 (含依赖图检查 / ABI `static_assert`)
-> - §3 / §9.3 构建系统全面对齐 CMake 3.28+ (target 加 `atlas_` 前缀,
->   动态库用 `add_library(... SHARED)` + `CXX_VISIBILITY_PRESET hidden`,
->   对齐 `CLAUDE.md` 与 `CMakePresets.json` 约定)
-> - §12 风险表新增 6 项具体风险与缓解
+**Status:** 🚧 Phase 0（IL2CPP spike 脚手架）+ Phase 1（依赖解耦）已落地，
+Phase 2–6 未开工。当前进度：
+
+- ✅ Phase 0 — `src/tools/il2cpp_probe/` 探针库 + Unity 测试脚手架
+  （`ATLAS_BUILD_IL2CPP_PROBE=ON` 时编出 `atlas_il2cpp_probe.dll/.so/.bundle/.a`）
+  待用户在 4 个 Unity 目标（Editor Mono / Win IL2CPP / Android arm64 / iOS arm64）
+  跑回调矩阵，结果记入 `docs/spike_il2cpp_callback.md`，决定 §6.3 走 Pattern A
+  还是 B
+- ✅ Phase 1 — `ProcessType` 提取到 `foundation/process_type.{h,cc}`；
+  `DatabaseID` 迁到 `server/entity_types.h`；`network/foundation/platform/serialization`
+  四层不再 include `server/` / `db/` / `entitydef/`
+- ⬜ Phase 2 — `atlas_serialization_binary` target 未建；`atlas_network` 仍
+  link 完整 `atlas_serialization`（含 pugixml + rapidjson）
+- ⬜ Phase 3 — `src/lib/net_client/` 目录不存在
+- ⬜ Phase 4 — `ClientNativeApi.cs` 仍绑 `atlas_engine` 而非
+  `atlas_net_client`；`ClientApp::Login/Authenticate` 仍是 blocking-poll
+- ⬜ Phase 5–6 — Unity Package、跨平台构建未启动
+
+**目标:** 把 C++ 网络层抽取为独立 native DLL，Unity 客户端通过 P/Invoke
+调用。Phase 12 客户端 SDK 的高层 C# API（`AtlasClient` / `AvatarFilter` /
+`LoginClient`）依赖此 DLL 的 C API 完成后才能开工。
 
 ---
 
