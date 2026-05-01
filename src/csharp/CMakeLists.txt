@@ -77,3 +77,15 @@ atlas_dotnet_project(
   ASSEMBLY_NAME Atlas.Tools.DefDump.dll
   DEPENDS atlas_shared_dll
 )
+
+# Atlas.Tools.NetClientDemo — Phase 4 FFI verification harness for
+# atlas_net_client.dll. Only built when ATLAS_BUILD_NET_CLIENT is ON.
+# Run from its bin output, expects atlas_net_client.dll on PATH.
+if(ATLAS_BUILD_NET_CLIENT)
+  atlas_dotnet_project(
+    NAME atlas_tools_net_client_demo
+    PROJECT_FILE Atlas.Tools.NetClientDemo/Atlas.Tools.NetClientDemo.csproj
+    ASSEMBLY_NAME Atlas.Tools.NetClientDemo.dll
+    DEPENDS atlas_shared_dll atlas_client_dll
+  )
+endif()
