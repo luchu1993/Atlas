@@ -17,7 +17,8 @@ add_library(atlas_network STATIC
 
 target_include_directories(atlas_network PUBLIC "${CMAKE_SOURCE_DIR}/src/lib")
 target_link_libraries(atlas_network
-  PUBLIC atlas_foundation atlas_platform atlas_serialization ZLIB::ZLIB atlas_compiler_options
+  PUBLIC atlas_foundation atlas_platform atlas_serialization_binary
+         ZLIB::ZLIB atlas_compiler_options
 )
 
 if(WIN32)
