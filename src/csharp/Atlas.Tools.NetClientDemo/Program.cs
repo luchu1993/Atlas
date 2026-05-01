@@ -3,10 +3,7 @@ using Atlas.Client.Native;
 
 namespace Atlas.Tools.NetClientDemo
 {
-    // Standalone .NET 9 console verification of the atlas_net_client.dll
-    // FFI roundtrip — proves Phase 4 P/Invoke wiring without a live server.
-    // For end-to-end login/RPC: pass --connect host:port with a running
-    // LoginApp + BaseApp + DBApp cluster.
+    // .NET 9 FFI roundtrip verifier for atlas_net_client.dll.
     internal static class Program
     {
         private static int Main(string[] args)

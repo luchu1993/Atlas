@@ -40,7 +40,7 @@ namespace Atlas.Client.Native
         public const int ErrAbi   = -1000;
     }
 
-    // 10 fn-ptr fields, Pack=1, layout pinned by tests/unit/test_net_client_abi_layout.cpp.
+    // Layout pinned by tests/unit/test_net_client_abi_layout.cpp.
     [StructLayout(LayoutKind.Sequential, Pack = 1)]
     public struct AtlasNetCallbacks
     {

@@ -4,10 +4,7 @@ using System.Runtime.InteropServices;
 
 namespace Atlas.Client.Native
 {
-    // Pattern B: delegates pinned via static fields, function pointers obtained
-    // through Marshal.GetFunctionPointerForDelegate. Required for Unity 2022 –
-    // 6.5 (no [UnmanagedCallersOnly] support); see docs/spike_il2cpp_callback.md
-    // for the migration plan to Pattern A on Unity 6.6+.
+    // Pattern B per D0; see docs/spike_il2cpp_callback.md.
     public static unsafe class AtlasNetCallbackBridge
     {
         private static readonly ConcurrentDictionary<IntPtr, IAtlasNetEvents> CtxMap = new();
@@ -36,9 +33,7 @@ namespace Atlas.Client.Native
                                               float dx, float dy, float dz);
         public delegate void RpcFn(IntPtr ctx, uint eid, uint rid, byte* payload, int len);
 
-        // Process-lifetime keep-alive — IL2CPP AOT compiles delegates into
-        // stable trampolines; the function pointers stay valid as long as
-        // the static delegate field does.
+        // GC keep-alive; static lifetime keeps IL2CPP trampolines valid.
         private static readonly DisconnectFn        SDisconnect       = OnDisconnect;
         private static readonly PlayerBaseCreateFn  SPlayerBaseCreate = OnPlayerBaseCreate;
         private static readonly PlayerCellCreateFn  SPlayerCellCreate = OnPlayerCellCreate;
@@ -50,8 +45,6 @@ namespace Atlas.Client.Native
         private static readonly ForcedPositionFn    SForcedPosition   = OnForcedPosition;
         private static readonly RpcFn               SRpc              = OnRpc;
 
-        // Builds a callbacks struct fully wired to OnXxx static methods,
-        // pushes it into the ctx, and stores the IAtlasNetEvents binding.
         public static void Register(IntPtr ctx, IAtlasNetEvents events)
         {
             if (ctx == IntPtr.Zero)  throw new ArgumentNullException(nameof(ctx));

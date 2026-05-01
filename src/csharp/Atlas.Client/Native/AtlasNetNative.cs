@@ -3,10 +3,7 @@ using System.Runtime.InteropServices;
 
 namespace Atlas.Client.Native
 {
-    // Stays netstandard2.1 + DllImport (no LibraryImport) so Unity's Mono /
-    // IL2CPP can consume the same source. Lib name resolution: the runtime
-    // appends platform extension (.dll / .so / .bundle / .dylib); on iOS
-    // the static-linked path uses "__Internal".
+    // netstandard2.1 + DllImport so Unity Mono / IL2CPP shares this source.
     public static unsafe class AtlasNetNative
     {
         public const uint AbiVersion = 0x01000000u;
@@ -80,7 +77,6 @@ namespace Atlas.Client.Native
         [DllImport(LibName)]
         public static extern int AtlasNetGetStats(IntPtr ctx, out AtlasNetStats stats);
 
-        // ABI-checked Create. Throws on mismatch with the DLL's reported reason.
         public static IntPtr Create()
         {
             IntPtr ctx = AtlasNetCreate(AbiVersion);
