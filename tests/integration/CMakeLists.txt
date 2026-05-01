@@ -38,6 +38,15 @@ atlas_add_test(NAME test_login_flow
   LABEL integration
 )
 
+if(ATLAS_BUILD_NET_CLIENT)
+  atlas_add_test(NAME test_client_flow
+    SOURCES test_client_flow.cpp
+    DEPS atlas_net_client_core atlas_baseapp_lib atlas_loginapp_lib
+         atlas_network atlas_platform
+    LABEL integration
+  )
+endif()
+
 atlas_add_test(NAME test_rudp_two_network_interfaces
   SOURCES test_rudp_two_network_interfaces.cpp
   DEPS atlas_network
