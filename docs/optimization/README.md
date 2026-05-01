@@ -1,523 +1,146 @@
 # Optimization Roadmap
 
-This directory documents planned optimizations for Atlas Engine, organized by
-subsystem. Each document describes the current bottleneck, proposed solution,
-expected impact, and implementation notes.
+Per-subsystem optimization docs for Atlas Engine. Each doc describes
+the current shipped design (or a deferred future-work proposal) and
+the trigger for revisiting it.
 
-> **Read this first.** The numbers in this document drive priority. Before
-> opening any task in this directory, re-run `run_baseline_profile.sh` and
-> confirm the bottleneck the doc claims is *still* visible — most of the
-> P0/P1 items shipped between `b70b0ad` and `dfed976`, and the picture has
-> changed substantially. **Do not pick optimizations from the list and run;
-> drive from a fresh capture.**
+> **Read this first.** Numbers in this doc drive priority. Before
+> opening any task in this directory, re-run `run_baseline_profile.sh`
+> and confirm the bottleneck the doc claims is *still* visible. Most
+> of the originally-prioritised items have shipped; do not pick from
+> the list and run — drive from a fresh capture.
 
-## Target Scenario
+## Target scenario
 
-**100v100 large-scale battle**: 200 entities in a single Space, all within AoI
-range, with complex combat logic running in C# scripts. This is the design
-ceiling Atlas must support comfortably.
+**100v100 large-scale battle**: 200 entities in a single Space, all
+within AoI range, complex combat logic in C# scripts. This is the
+design ceiling Atlas must support comfortably. The cluster target
+is **5 000 concurrent clients** across 13–20 BaseApps + 1–3
+CellApps; per-Space scaling is bounded by the single-Space target,
+not by load.
 
-## Profiling Baseline (`dfed976`, 2026-04-28, 200 clients × 120 s)
+## Current baseline (`3ab62ca`, 2026-04-30, 500 cli × 120 s, 1-BA / 1-CA)
 
-Captured by `run_baseline_profile.sh` against the `profile` build (200
-clients, 120 s run + ~17 s ramp/cooldown → ~137 s capture window). Tracy
-files in `.tmp/prof/baseline/cellapp_dfed976_20260428-155158.tracy` and
-the `baseapp_*` companion. Numbers below are from `tracy-csvexport`
-(mean / max / total). Tail percentiles aren't in the exporter today —
-open the trace in `tracy-profiler` for p95 / p99.
+Captures in `.tmp/prof/baseline/{baseapp,cellapp,…}_3ab62ca_*.tracy`.
+Single-baseapp / single-cellapp / single-Space, deliberately above
+the comfortable per-baseapp ceiling so cluster-scale bottlenecks
+surface.
 
 ### CellApp (10 Hz, 100 ms tick budget)
 
-| Zone | calls | mean | max | total | % CPU |
-|---|---|---|---|---|---|
-| Tick | 1 952 | 2.83 ms | 14.2 ms | 5.53 s | 4.05 % |
-| CellApp::OnTickComplete | 1 952 | 2.80 ms | 14.2 ms | 5.46 s | 4.00 % |
-| CellApp::TickWitnesses | 1 952 | 1.63 ms | 5.33 ms | 3.18 s | 2.33 % |
-| Witness::Update | 428 041 | 6.34 µs | 2.70 ms | 2.72 s | 1.99 % |
-| Witness::Update::Transitions | 428 041 | 3.10 µs | 2.70 ms | 1.33 s | 0.97 % |
-| Witness::Update::Pump | 428 041 | 1.93 µs | 1.44 ms | 0.83 s | 0.60 % |
-| Witness::Update::PriorityHeap | 428 041 | 1.27 µs | 1.54 ms | 0.54 s | 0.40 % |
-| Witness::SendEntityUpdate | 1 931 841 | 389 ns | 1.43 ms | 0.75 s | 0.55 % |
-| Witness::SendEntityEnter | 284 983 | 1.63 µs | 1.43 ms | 0.46 s | 0.34 % |
-| Witness::SendEntityLeave | 426 114 | 1.30 µs | 2.60 ms | 0.56 s | 0.41 % |
-| Witness::Event::Build | 56 166 | 662 ns | 71 µs | 37 ms | 0.027 % |
-| Witness::Event::Send | 984 598 | 226 ns | 255 µs | 222 ms | 0.16 % |
-| Witness::Vol::Send | 1 220 523 | 143 ns | 308 µs | 175 ms | 0.13 % |
-| Script.OnTick | 1 952 | 987 µs | 10.18 ms | 1.93 s | 1.41 % |
-| Script.PublishReplicationAll | 1 952 | 701 µs | 8.63 ms | 1.37 s | 1.00 % |
-| Script.EntityTickAll | 1 952 | 283 µs | 6.96 ms | 0.55 s | 0.40 % |
-| Space::Tick | 1 946 | 13 µs | 0.62 ms | 26 ms | 0.019 % |
-| Channel::Send | 124 207 | 9.58 µs | 4.52 ms | 1.19 s | 0.87 % |
-| NetworkInterface::OnRudpReadable | 86 512 | 69 µs | 10.0 ms | 6.01 s | 4.40 % |
+| Zone | mean | max | total | % CPU |
+|---|---|---|---|---|
+| Tick | 9.2 ms | 28.2 ms | 18.0 s | 9.2 % |
+| CellApp::TickWitnesses | 7.6 ms | 17.5 ms | 14.8 s | 7.6 % |
+| Witness::Update::Pump | 5.2 µs | 670 µs | 5.6 s | 2.9 % |
+| Witness::Event::Send | 322 ns | 652 µs | 2.54 s | 1.3 % |
+| Witness::Update::PriorityHeap | 3.3 µs | 3.8 ms | 3.54 s | 1.8 % |
+| NetworkInterface::OnRudpReadable | 244 µs | 10.7 ms | 18.8 s | 9.6 % |
 
-**Health summary (cellapp).** Tick mean is 2.8 % of the 10 Hz budget;
-worst tick is 14.2 ms = 14 % of budget. Across 137 s the run logged
-**zero** `[GC-in-tick]`, `bandwidth deficit`, `Slow tick`, or snapshot-
-fallback warnings. CellApp **is not the current bottleneck** at 200
-clients. Inside `TickWitnesses` (still 58 % of mean tick), per-witness
-work is `Witness::Update` ≈ 6.3 µs amortised over 219 active witnesses
-per tick — there is no single dominant cost left to attack.
+Tick mean 9 % of budget; max 28 % — comfortable headroom. Per-call
+`Witness::Event::Send` (322 ns) is below the 200-cli pre-cache
+baseline (335 ns), so the scale-induced retreat seen earlier is
+gone.
 
 ### BaseApp (10 Hz, 100 ms tick budget)
 
-The historical claim that BaseApp is "effectively idle" no longer
-holds. Tick wall-clock is healthy, but the network fan-out path
-absorbs the majority of baseapp CPU.
+| Zone | calls | mean | total | % CPU |
+|---|---|---|---|---|
+| Tick | 1 952 | 10.9 ms | 21.3 s | — |
+| Channel::HandleMessage | 20.26 M | 2.75 µs | 55.8 s | — |
+| Channel::Send | 760 k | 7.49 µs | 5.7 s | — |
+| OnRudpReadable | 81 660 | 808 µs | 66.0 s | — |
 
-| Zone | calls | mean | max | total | % CPU |
-|---|---|---|---|---|---|
-| Tick | 1 952 | 3.87 ms | 9.05 ms | 7.56 s | 5.52 % |
-| NetworkInterface::OnRudpReadable | 105 248 | 331 µs | 29.0 ms | 34.9 s | **25.5 %** |
-| Channel::Dispatch | 394 562 | 75 µs | 27.0 ms | 29.7 s | **21.7 %** |
-| Channel::HandleMessage | 3 307 111 | 8.95 µs | 5.20 ms | 29.6 s | **21.6 %** |
-| Channel::Send | 2 445 172 | 8.39 µs | 5.19 ms | 20.5 s | **15.0 %** |
-| Script.OnTick | 1 952 | 102 µs | 0.84 ms | 200 ms | 0.15 % |
-| Script.PublishReplicationAll | 1 952 | 10.2 µs | 0.40 ms | 20 ms | 0.014 % |
-| Script.EntityTickAll | 1 952 | 88.9 µs | 0.50 ms | 174 ms | 0.13 % |
+Send-side coalescing brought BaseApp `Channel::Send` calls from
+6.30 M (pre-batching) to under a million while raising effective
+throughput; see [channel_send_batching.md](channel_send_batching.md).
 
-**Health summary (baseapp).** Tick mean 3.87 ms (3.9 % budget); max
-9.05 ms (9 % budget). But ~80 % of CPU is in the network layer:
-3.31 M `Channel::HandleMessage` + 2.45 M `Channel::Send` calls = the
-cellapp delta channel fanning out to 200 client channels (one cellapp
-envelope → ≤ 200 baseapp sends). `OnRudpReadable` max 29 ms indicates
-intermittent socket-burst stalls; no tick-budget violation yet, but the
-slope is what breaks first when client count rises.
-
-### Stress run health
-
-`/.tmp/world-stress/20260428-155158/`:
+### Stress-run health
 
 | Signal | Count |
 |---|---|
 | `[GC-in-tick]` warnings | 0 |
 | `bandwidth deficit` warnings | 0 |
 | `Slow tick` warnings | 0 |
-| Snapshot fallback log | 0 |
-| stderr errors / unexpected warnings | 0 |
+| `unexpected_disc` | 0 |
+| `timeout_fail` | 0 |
+| `login_fail` | 0 |
+| `cell_ready / entity_transferred` | 3 183 / 3 183 (100 %) |
+| `online_at_end` | 482 |
+| `echo_loss` | 158 / 103 042 (0.15 %) |
+| `echo_rtt` p50 / p95 / p99 | 18.7 / 47.7 / 60.7 ms |
+| `auth_latency` p50 / p95 / p99 | 73.5 / 191.6 / 207.9 ms |
 
-Earlier baseline numbers in this README claimed `echo_rtt p99 = 2.35 s`
-(commit `b70b0ad`); that signal is **gone** at 200 clients. The
-world_stress harness stdout for this run was not teed to file, so
-fresh client-side RTT percentiles aren't available here — re-run
-baseline with stdout capture before relying on those numbers.
-
-## What's already shipped (post-`b70b0ad`)
-
-These changes drove the cellapp tick from `b70b0ad`'s 13.1 ms / 58.2 ms
-(mean / max) down to today's 2.83 ms / 14.2 ms:
-
-| Optimization | Commit | Effect |
-|---|---|---|
-| Distance LOD | `54bd9df` | Far-band updates 1× / 6 ticks; reduced per-observer fan-out |
-| Demand-based bandwidth allocator | `50ac6b8` | Eliminated `bandwidth deficit` warnings; per-observer demand sized to peer count + NIC cap |
-| Envelope cache (group broadcast) | `0c1e755` | `Witness::SendEntityUpdate` calls 6.76 M → 1.93 M (-71 %); total CPU -91 % |
-| C# GC pass round 1 | `f382f08` | Eliminated `IEnumerable<T>` boxing in delta-sync codegen; recurring `[GC-in-tick]` gone |
-| Property dirty-flag tracking | codegen `_dirtyFlags` + sectionMask | Only changed properties cross the wire |
-| Per-tick witness send batching | `0dced2f` | Cellapp `Channel::Send` calls 1.80 M → 124 k |
-| Incremental transition lists | `4a6fcf7` | `Witness::Update::Transitions` is O(Δ), not O(N) |
+500-cli on 1-BA / 1-CA now runs the way 200-cli ran before every
+optimization landed: every failure-class signal is zero.
 
 ## Documents
 
-Status legend: ✅ shipped · 🟡 unjustified at current data · 🔵 deferred
-(future scale only) · ⚪ open / game-design dependent.
+Status legend: ✅ shipped · 🔵 deferred (future scale) · ⚪ open
+(game-design dependent).
 
-| Document | Subsystem | Status | Note from current data |
-|---|---|---|---|
-| [profiler_tracy_integration.md](profiler_tracy_integration.md) | Profiling infrastructure | ✅ | baseline pipeline established |
-| [distance_lod.md](distance_lod.md) | Witness replication | ✅ | `54bd9df` |
-| [property_dirty_flags.md](property_dirty_flags.md) | Entity replication | ✅ | shipped via codegen, not via the proposed C++ bitset path |
-| [adaptive_bandwidth.md](adaptive_bandwidth.md) | Witness bandwidth | ✅ | `50ac6b8`; zero `bandwidth deficit` warnings in current run |
-| [group_broadcast.md](group_broadcast.md) | Network fan-out | ✅ | `0c1e755` envelope cache |
-| [script_publish_gc.md](script_publish_gc.md) | Managed heap / GC | ✅ (round 1) | `f382f08`; `Script.PublishReplicationAll` mean 701 µs / max 8.6 ms — slightly above the round-1 verification numbers but no recurring `[GC-in-tick]` |
-| [history_window.md](history_window.md) | Replication catch-up | 🟡 | original signal (`echo_rtt p99 = 2.3 s`) is from `b70b0ad` and gone. Zero snapshot fallbacks in the current capture; re-evaluate after a higher-load capture exposes the symptom. |
-| [incremental_priority_queue.md](incremental_priority_queue.md) | Witness update | 🔵 | `Witness::Update::PriorityHeap` is 0.40 % of CPU at 200 clients; revisit if it scales above ~5 % |
-| [async_entity_lifecycle.md](async_entity_lifecycle.md) | Dispatcher / entity init | 🟡 | no slow-tick lifecycle storms in current capture; re-instrument the spawn path before deciding |
-| [lazy_baseline.md](lazy_baseline.md) | Baseline serialization | 🔵 | `SendEntityEnter` total 0.46 s / 285 k calls = 0.34 % CPU; `cached_*_envelope` already covers deltas (Tactic 3 spirit). Defer until a denser AoI scenario shows enter-storm cost. |
-| [rangelist_grid.md](rangelist_grid.md) | Spatial partitioning | 🔵 | `Space::Tick` is 0.019 % of CPU; not on any visible critical path |
-| [visibility_culling.md](visibility_culling.md) | AoI filtering | ⚪ | game-design dependent (fog-of-war / team filtering); defer until combat specs land |
-| [adaptive_ghost_throttle.md](adaptive_ghost_throttle.md) | Cross-cell sync | 🔵 | `CellApp::TickGhostPump` is 0.045 % of CPU — single-cellapp deployment in the current baseline |
-| [network_dispatch_decoupling.md](network_dispatch_decoupling.md) | RUDP receive ↔ dispatch decoupling (Plan B) | ❌ reverted; A2 shipped instead | full Plan B was attempted (`49703d8`) then rolled back (`a78d540`); the surgical A2 — per-handler deadline yield via `DispatchMessagesBudgeted` + `pending_dispatch_buf_` — shipped (`c5680bd`) and covers the 500-client goal; full decoupling now subsumed by Plan D (`network_io_thread.md`) |
-| [channel_send_batching.md](channel_send_batching.md) | RUDP send-side coalescing via descriptor `urgency` flag (Plan C) | ✅ shipped | `7cfbb27` plumbing → `4057994` default flip → `938ca28`/`c44cb32` whitelist → `201a80a` cellapp dedupe → `0bd984c` OOM-only threshold → `bd5ca36` correctness fixes. Net: BaseApp `Channel::Send` 6.30 M / 31.8 % → 631 k / 3.1 % (-90 %); see "post-PR-2 baseline" section below |
-| [witness_channel_cache.md](witness_channel_cache.md) | Witness send path: cache the observer's RUDP `Channel*` in lambda capture | ✅ shipped | patches `0072` / `0073` (`3ab62ca`, 2026-04-30). Eliminates 2 hash lookups + dynamic_cast per `Witness::Event::Send`. 500-cli: Event::Send mean 805 ns → 322 ns (-60 %), Pump -46 %, cellapp Tick -28 %; stress run goes from `echo_loss=10.8 %` / `login_fail=644` / `unexpected_disc=64` to all-zero. See "post-channel-cache baseline" section below |
-| [network_io_thread.md](network_io_thread.md) | Multi-thread RUDP socket I/O via SPSC queues (Plan D) | 📋 design only · deferred | dedicated network thread + moodycamel `ReaderWriterQueue`; deferred until a fresh baseline shows dispatcher saturation persists post-A/B/C; targets 1 000+ clients/baseapp |
-
-## 500-client baseline (`b1782e5`, 2026-04-28)
-
-Single-baseapp / single-cellapp / single-Space, 500 clients × 120 s
-(`run_20260428-190132.log`, `cellapp_b1782e5_*.tracy`,
-`baseapp_b1782e5_*.tracy`). This is **above the comfortable per-baseapp
-ceiling** for action-MMO workloads; we run it deliberately to surface
-the first cluster-scale bottleneck. Test-bed config bugs surfaced by
-the v1 (`66a278c`) run were fixed in `228e67a` (EntityID pool
-watermarks) and `b1782e5` (witness bandwidth budget retune); v2
-numbers are reported here.
-
-### CellApp under 500-client load
-
-| Zone | calls | mean | max | total | % CPU |
-|---|---|---|---|---|---|
-| Tick | 1 951 | **7.27 ms** | **68.3 ms** | 14.2 s | 7.3 % |
-| CellApp::TickWitnesses | 1 951 | 5.52 ms | 59.7 ms | 10.8 s | 5.5 % |
-| Witness::Update | 787 291 | 12.1 µs | 16.6 ms | 9.49 s | 4.9 % |
-| Witness::SendEntityUpdate | 8 410 065 | 285 ns | 15.3 ms | 2.39 s | 1.2 % |
-| Script.OnTick | 1 951 | 1.42 ms | 9.32 ms | 2.77 s | 1.4 % |
-| Script.PublishReplicationAll | 1 951 | 1.10 ms | 7.20 ms | 2.14 s | 1.1 % |
-| NetworkInterface::OnRudpReadable | 115 438 | 144 µs | 28.4 ms | 16.6 s | 8.5 % |
-
-CellApp tick mean 7.3 ms = 7 % of the 100 ms budget. Tick max **68 ms
-= 68 % of budget** — getting close but no slow-tick yet. Headroom
-remains, but `Witness::Update::Pump` max climbed to 15 ms (vs 1.4 ms
-at 200-client), reflecting bursty per-witness work when AoI density
-spikes.
-
-### BaseApp under 500-client load — **the structural bottleneck**
-
-| Zone | calls | mean | max | total | % CPU |
-|---|---|---|---|---|---|
-| Tick | 1 952 | 0.73 ms | 7.26 ms | 1.42 s | 1.0 % |
-| **NetworkInterface::OnRudpReadable** | 30 669 | **3.07 ms** | **208 ms** | 94.2 s | **68.9 %** |
-| Channel::Dispatch | 650 058 | 117 µs | 204 ms | 76.2 s | **55.7 %** |
-| Channel::HandleMessage | 6 592 504 | 11.5 µs | 53.9 ms | 76.0 s | **55.6 %** |
-| Channel::Send | 6 296 525 | 6.91 µs | 53.9 ms | 43.5 s | **31.8 %** |
-
-`OnRudpReadable` is doing **3 ms per call on average, 208 ms worst
-case**. With every callback running on the dispatcher thread, the
-`Slow tick` warnings (16 events, 230 ms / 210 ms / 160 ms / 157 ms /
-148 ms over a 67 ms budget) are **direct consequences of the single-
-threaded RUDP read path being unable to clear its queue between ticks**.
-
-### Stress-run health (v2)
-
-| Signal | v1 (`66a278c`, no fix) | v2 (`b1782e5`, fixed) |
+| Document | Subsystem | Status |
 |---|---|---|
-| `EntityID pool exhausted` | 387 | **0** |
-| `bandwidth deficit` | 103 | **0** |
-| `[GC-in-tick]` | 1 | 1 |
-| `Slow tick` (baseapp) | 14 | 16 |
-| online_at_end | 449 | **483** |
-| auth_success | 3 484 | 3 547 |
-| entity_transferred | 3 077 | **3 511** |
-| unexpected_disc | 1 424 | 1 302 |
-| echo_rtt p50 / p95 / p99 | 384 / 4111 / 5203 ms | **940** / 4332 / 4943 ms |
-| auth_latency p50 / p95 / p99 | 392 / 4219 / 5042 ms | 437 / 4584 / 5364 ms |
-| bytes_rx_per_sec | 1.64 MB/s | 1.86 MB/s |
+| [profiler_tracy_integration.md](profiler_tracy_integration.md) | Profiling infrastructure | ✅ |
+| [distance_lod.md](distance_lod.md) | Witness replication LOD bands | ✅ |
+| [property_dirty_flags.md](property_dirty_flags.md) | Codegen dirty-flag tracking | ✅ |
+| [adaptive_bandwidth.md](adaptive_bandwidth.md) | Demand-based witness bandwidth | ✅ |
+| [group_broadcast.md](group_broadcast.md) | Envelope cache for shared deltas | ✅ |
+| [script_publish_gc.md](script_publish_gc.md) | C# replication GC pressure | ✅ (round 1) |
+| [channel_send_batching.md](channel_send_batching.md) | RUDP send-side coalescing | ✅ |
+| [witness_channel_cache.md](witness_channel_cache.md) | Witness send-path channel cache | ✅ |
+| [incremental_priority_queue.md](incremental_priority_queue.md) | Witness priority heap incremental update | 🔵 |
+| [lazy_baseline.md](lazy_baseline.md) | Compact / lazy baseline snapshot | 🔵 |
+| [rangelist_grid.md](rangelist_grid.md) | Spatial grid overlay on RangeList | 🔵 |
+| [adaptive_ghost_throttle.md](adaptive_ghost_throttle.md) | Velocity-adaptive ghost interval | 🔵 |
+| [visibility_culling.md](visibility_culling.md) | Pluggable AoI visibility filter | ⚪ |
 
-**A and D worked.** v2's `[GC-in-tick]` count (1) and `Slow tick`
-count (16) are unchanged because both fixes targeted v1 noise, not
-the structural baseapp bottleneck. The echo_rtt p50 doubled from 384
-to 940 ms because more traffic is now flowing — the previous
-1.6 MB/tick fleet cap was implicitly suppressing demand, masking how
-saturated the baseapp dispatcher actually was.
+## Strategic conclusion
 
-## 2-BaseApp / 500-client baseline (`86aceee`, 2026-04-28)
-
-Same workload as the 1-BaseApp v2 run, with `--baseapp-count 2` so each
-BaseApp handles 250 clients (production-shape topology). Captures in
-`.tmp/prof/baseline-500-2ba/`. Single key finding: the
-"single-threaded RUDP ingest" symptom from the 1-BaseApp run is **not
-a structural defect** — it was a per-process saturation cliff at the
-500-client/proc operating point, and the system below that cliff is
-healthy.
-
-### Stress-run health: 1-BaseApp vs 2-BaseApp (same 500 total clients)
-
-| Signal | 1-BA (`b1782e5`) | 2-BA (`86aceee`) | Δ |
-|---|---|---|---|
-| `unexpected_disc` | 1 302 | **0** | ✅ -100 % |
-| `echo_loss` (sent − received) | 24 736 / 87 604 = 28 % | **224 / 102 448 = 0.2 %** | ✅ -99 % |
-| `echo_rtt` p50 / p95 / p99 | 940 / 4332 / 4943 ms | **28.6 / 78.2 / 106.3 ms** | ✅ ~33–47× better |
-| `auth_latency` p50 / p95 / p99 | 437 / 4584 / 5364 ms | **87.8 / 175.7 / 193.4 ms** | ✅ ~5–28× better |
-| `Slow tick` (sum across baseapps) | 16 (max 230 ms) | 5 (max 152 ms) | -69 % |
-| `bytes_rx_per_sec` | 1.86 MB/s | **3.20 MB/s** | +72 % |
-| `aoi_enter` | 590 314 | 1 045 116 | +77 % |
-| `bandwidth deficit` | 0 | 0 | — |
-| `EntityID pool exhausted` | 0 | 0 | — |
-
-The 2-BA configuration eliminates every operator-visible symptom and
-nearly doubles useful throughput. CellApp doesn't change (still single,
-still serving the whole 500-client space).
-
-### Per-BaseApp Tracy at 2-BA 250-clients-each
-
-| Zone | calls (BA0 / BA1) | mean (BA0 / BA1) | max (BA0 / BA1) | % CPU each |
-|---|---|---|---|---|
-| Tick | 1 951 / 1 952 | 0.55 ms / 0.55 ms | 5.39 ms / 5.67 ms | 0.79 % |
-| NetworkInterface::OnRudpReadable | 165 339 / 99 455 | **449 µs / 755 µs** | 55.8 ms / 64.9 ms | **54.3 % / 54.8 %** |
-| Channel::Dispatch | 554 472 / 464 569 | 119 µs / 144 µs | 54.9 ms / 64.5 ms | 48.1 % / 48.9 % |
-| Channel::HandleMessage | 5.46 M / 5.60 M | 12.0 µs / 11.9 µs | 2.36 ms / 2.00 ms | 48.0 % / 48.7 % |
-| Channel::Send | 5.31 M / 5.46 M | 7.34 µs / 7.28 µs | 1.86 ms / 1.11 ms | 28.5 % / 29.0 % |
-
-Compared to 1-BA at 500 clients (`OnRudpReadable` mean 3.07 ms, max
-208 ms), the 2-BA per-process numbers are **6.8× / 4.1× lower mean**
-and **3.7× / 3.2× lower max**. Per-BaseApp CPU utilization is ~55 %
-on the RUDP read path — well clear of the saturation cliff.
-
-## 500-client baseline post-PR-2 (`0bd984c`, 2026-04-29)
-
-Same workload as `b1782e5` (single-baseapp / single-cellapp / single-Space,
-500 clients × 120 s).  Captures in `.tmp/prof/baseline/*4057994_20260429-145817*`.
-Plan C send-side batching (commits `7cfbb27` → `0bd984c`) ships the
-`MessageUrgency` descriptor + per-channel deferred bundles + tick-end
-flush.  Direct hit on the BaseApp `Channel::Send` hotspot identified in
-the 1-BA b1782e5 capture.
-
-### BaseApp delta (`b1782e5` → `0bd984c`)
-
-| Zone | calls (b → n) | mean (b → n) | total (b → n) | % CPU (b → n) |
-|---|---|---|---|---|
-| **Channel::Send** | **6 296 525 → 631 199** (▼ -90 %) | 6.91 µs → 6.69 µs | 43.5 s → 4.22 s | **31.8 % → 3.1 %** (▼ -90 %) |
-| NetworkInterface::FlushDirtySendChannels | n/a → 13 491 | n/a → 1.88 ms | n/a → 25.4 s | n/a → **18.6 %** (new) |
-| **Net send-side CPU** | | | | **31.8 % → 21.7 %** (▼ -32 %) |
-| NetworkInterface::OnRudpReadable | 30 669 → 493 973 | 3.07 ms → 134 µs | 94.2 s → 66.1 s | **68.9 % → 48.5 %** (▼ -30 %) |
-| Channel::HandleMessage | 6.59 M → 18.3 M | 11.5 µs → 2.20 µs | 76.0 s → 40.1 s | 55.6 % → 29.4 % |
-
-`Channel::Send` 6.30 M → 631 k is exactly the 10× collapse the design
-predicted: every batched descriptor (replication delta / RPC forward /
-ghost broadcast / entity create) now appends to the channel's deferred
-bundle and ships in one packet per (channel × tick).  The new
-`FlushDirtySendChannels` line absorbs ~19 % of CPU as the batching
-machinery cost, but the net (send + flush) drops 31.8 % → 21.7 %.
-
-`OnRudpReadable` calls jumped 16× (30 k → 494 k callbacks) but mean
-duration dropped 23× — the dispatcher now wakes more often with
-smaller per-callback batches, leaving more headroom for the timer
-wheel.  `Channel::HandleMessage` mean dropped 5× because handlers no
-longer fan out one immediate `Channel::Send` syscall each.
-
-### CellApp delta (`b1782e5` → `0bd984c`)
-
-| Zone | mean (b → n) | max (b → n) | calls (b → n) |
-|---|---|---|---|
-| Tick | 7.27 ms → 8.94 ms (▲ +23 %) | **68.3 ms → 27.1 ms** (▼ -60 %) | 1 951 → 1 953 |
-| CellApp::TickWitnesses | 5.52 ms → 7.42 ms (▲ +34 %) | **59.7 ms → 17.6 ms** (▼ -71 %) | same |
-| Witness::Update::Pump | 3.42 µs → 5.28 µs (▲ +55 %) | **15.3 ms → 706 µs** (▼ -95 %) | 787 k → 989 k |
-| Witness::SendEntityUpdate | 285 ns → 426 ns (▲ +50 %) | **15.3 ms → 693 µs** (▼ -95 %) | 8.41 M → 11.34 M |
-
-Means crept up 23–55 % from the descriptor-routing + dirty-set + flush
-hooks added to the per-call hot path.  In absolute terms cellapp tick
-moved from 7 % to 9 % of the 100 ms budget — well clear.  **The actual
-product win is the max column**: tail latency dropped 60–95 % across
-the witness pipeline.  PvP tick spikes that previously hit 60–68 ms
-(near the 67 ms BaseApp budget) now cap around 27 ms.  The 0044
-threshold rework (60 KB OOM-only vs 1200 B per-flush) is responsible
-for most of the mean recovery — at the original threshold mean was
-+109 % / +148 % / +338 %.
-
-### Stress-run health (post-PR-2 vs `b1782e5`)
-
-| Signal | `b1782e5` (pre) | `0bd984c` (post) | Δ |
-|---|---|---|---|
-| online_at_end | 483 | 468 | -3 % (1-BA still past the cliff) |
-| timeouts | n/a in v2 log | 17 | — |
-| auth_latency p50 / p95 / p99 | 437 / 4584 / 5364 ms | 95 / 233 / 280 ms | ✅ ~5–19× better |
-| `Slow tick` (baseapp) | 16 (max 230 ms) | not captured in 145817 run | — |
-| bytes_rx_per_sec | 1.86 MB/s | 3.09 MB/s | +66 % |
-
-**1-BaseApp at 500 clients is still past the per-process cliff** — the
-single-BaseApp topology was the structural bottleneck the 2-BA run
-already showed how to fix.  PR-2 doesn't change that.  What it does
-change: the BaseApp dispatcher now spends 32 % less of its CPU on the
-send path, so the **per-process ceiling rises** — operators get more
-headroom for the same client count, and 250-cli/proc shapes lift to
-something closer to 350 / 400 cli/proc.  Re-establish the 2-BA curve
-on top of PR-2 to know the new per-process ceiling.
-
-### Process memory cost
-
-Sampled `tasklist` Working Set every 5 s through both runs (same
-500-cli / single-BA / single-CA workload).  CSVs in
-`.tmp/prof/baseline/mem_sample_{pre,post}_pr2.csv`.
-
-| Process | Pre peak | Post peak | Δ peak | Pre avg | Post avg | Δ avg |
-|---|---|---|---|---|---|---|
-| atlas_baseapp | 227.7 MB | **336.0 MB** | **+108.3 MB / +48 %** | 208.3 MB | 233.1 MB | +24.8 MB / +12 % |
-| atlas_cellapp | 240.9 MB | 277.9 MB | +37.0 MB / +15 % | 220.8 MB | 256.0 MB | +35.2 MB / +16 % |
-| atlas_dbapp | 129.5 MB | 130.3 MB | +0.8 MB / +1 % | 128.3 MB | 130.2 MB | +1.9 MB | 
-| atlas_loginapp | 112.1 MB | 111.7 MB | −0.4 MB | 111.5 MB | 111.6 MB | ±0 |
-| atlas_baseappmgr | 105.9 MB | 107.4 MB | +1.5 MB | 105.2 MB | 107.3 MB | +2.1 MB |
-| atlas_cellappmgr | 103.1 MB | 105.3 MB | +2.2 MB | 102.1 MB | 104.5 MB | +2.4 MB |
-
-The two batched processes (BaseApp / CellApp) carry the per-channel
-deferred-bundle cost.  Each `ReliableUdpChannel` now owns two extra
-`std::vector<std::byte>` (reliable + unreliable deferred bundles)
-which retain their grown capacity until the channel is condemned.
-
-  * **BaseApp +108 MB peak** — 500 client channels × ~210 KB/channel
-    average peak bundle capacity (the highest-watermark of any tick's
-    315 KB witness payload, retained across ticks).  Linear in client
-    count; halving to 2-BA topology takes per-process delta down
-    proportionally.
-  * **CellApp +37 MB peak** — fewer outbound channels (BaseApp + ghost
-    peers + mgrs) but each one sees similar per-tick volume; the
-    delta is roughly 2 deferred-bundles × ~9 channels × ~2 MB peak
-    each.
-  * **DBApp / LoginApp / mgrs** — no batched send activity, ±2 MB
-    noise.
-
-The 60 KB OOM-only flush threshold (Cluster) bounds peak per-channel
-bundle to under 64 KB; the observed BaseApp peak of 336 MB is well
-under the OS commit budget.  If a future workload runs lean on RAM,
-two adjustments are available without code changes:
-
-  1. drop `RudpProfile.deferred_flush_threshold` from 60 KB to e.g.
-     16 KB — caps per-channel deferred capacity at the cost of more
-     mid-tick flushes.
-  2. drop `Bundle::Finalize` to copy-and-keep-capacity-as-zero (i.e.
-     match the existing move semantics but reset capacity post-move)
-     — frees the buffer between ticks; trades realloc churn for
-     resident set.
-
-For the 5 000-client target topology (5 000 / 250 = 20 BaseApps), the
-per-process +108 MB at 500-cli would drop to about +50 MB at 250-cli
-each — still well under typical 4 GB / process budget on a
-production host.
-
-## 500-client baseline post-channel-cache (`3ab62ca`, 2026-04-30)
-
-Same workload as the post-PR-2 baseline (single-baseapp / single-cellapp /
-single-Space, 500 clients × 120 s). Captures in
-`.tmp/prof/baseline/{baseapp,cellapp,...}_3ab62ca_20260430-225152.tracy`.
-The pre-baseline reference here is `e45866b_20260430-134645` — captured at
-the same workload moments earlier on the same day, with the
-[witness_channel_cache.md](witness_channel_cache.md) work as the only
-intervening source change.
-
-### CellApp delta (`e45866b` → `3ab62ca`)
-
-| Zone | mean (b → n) | max (b → n) | total (b → n) |
-|---|---|---|---|
-| Tick | 12.8 ms → 9.2 ms (▼ -28 %) | **41.7 ms → 28.2 ms** (▼ -32 %) | 25.0 s → 18.0 s |
-| CellApp::TickWitnesses | 11.0 ms → 7.6 ms (▼ -31 %) | 35.4 ms → 17.5 ms (▼ -50 %) | 21.4 s → 14.8 s |
-| Witness::Update::Pump | 9.5 µs → **5.2 µs** (▼ -46 %) | 6.7 ms → 670 µs (▼ -90 %) | 10.4 s → 5.6 s |
-| **Witness::Event::Send** | **805 ns → 322 ns** (▼ -60 %) | 6.6 ms → 652 µs (▼ -90 %) | 6.86 s → 2.54 s |
-| Witness::Update::PriorityHeap | 5.5 µs → 3.3 µs (▼ -41 %) | 14.6 ms → 3.8 ms (▼ -74 %) | 6.07 s → 3.54 s |
-| NetworkInterface::OnRudpReadable | 299 µs → 244 µs (▼ -19 %) | 17.2 ms → 10.7 ms | 19.2 s → 18.8 s |
-
-`Event::Send` retreated from 335 ns at 200 cli to 805 ns at 500 cli pre-fix
-(scale-induced, the two hash maps growing under it). Post-fix it is 322 ns at
-500 cli — **the per-call retreat is gone**. The PriorityHeap drop is collateral:
-warmer cache once the lookup-pressure vanishes.
-
-### BaseApp under post-channel-cache load
-
-| Zone | calls (b → n) | mean (b → n) | total (b → n) | Note |
-|---|---|---|---|---|
-| Tick | 1 705 → **1 952** (+14 %) | 10.6 ms → 10.9 ms | — | tick rate restored to ~15 Hz; was being dragged down by cellapp backpressure |
-| Channel::HandleMessage | 15.94 M → **20.26 M** (+27 %) | 2 930 ns → 2 753 ns (-6 %) | 46.7 s → 55.8 s | more useful traffic, slightly cheaper per call |
-| Channel::Send | 616 k → 760 k (+23 %) | 8 563 ns → **7 488 ns** (-13 %) | — | RUDP no longer backed up |
-| OnRudpReadable | 83 714 → 81 660 | 708 µs → 808 µs (+14 %) | 59.3 s → 66.0 s | higher datagram density per readable callback (more concurrent clients) |
-
-BaseApp **was never the bottleneck** — it was waiting on cellapp. After
-the cellapp fix, baseapp does ~25 % more work (more concurrent active
-clients, higher message volume) at roughly the same per-tick wall-clock.
-
-### Other processes (loginapp / dbapp / baseappmgr / cellappmgr)
-
-No regressions; all four show flat or slightly improved numbers, dominated
-by the disappearance of failure-retry traffic:
-
-| Process | `Tick` mean Δ | Notable |
-|---|---|---|
-| LoginApp | 2.28 µs → 1.85 µs (-19 %) | login retry storm gone |
-| DBApp | 225 µs → 198 µs (-12 %) | re-auth queries reduced |
-| BaseAppMgr | 2.51 µs → 2.77 µs (+10 %) | absolute Δ +261 ns/tick — noise |
-| CellAppMgr | 2.69 µs → 2.49 µs (-7 %) | — |
-
-### Stress-run health
-
-| Signal | Pre (`e45866b`) | Post (`3ab62ca`) |
-|---|---|---|
-| `echo_loss` | 9 640 / 89 317 (10.8 %) | **158 / 103 042 (0.15 %)** |
-| `echo_rtt` p50 / p95 / p99 | 24.5 / 145.8 / 441.3 ms | **18.7 / 47.7 / 60.7 ms** |
-| `auth_latency` p50 / p95 / p99 | 95.6 / 425.2 / 803.9 ms | **73.5 / 191.6 / 207.9 ms** |
-| `timeout_fail` | 53 | **0** |
-| `unexpected_disc` | 64 | **0** |
-| `login_fail` | 644 | **0** |
-| `cell_ready / entity_transferred` | 2 543 / 2 910 (87 %) | **3 183 / 3 183 (100 %)** |
-| `online_at_end` | 237 | **482** |
-
-500-cli on a single-BaseApp / single-CellApp now runs the way 200-cli
-ran before: every failure-class signal is zero. The 1-BA per-process
-ceiling has lifted enough that the 500-cli "saturation cliff" called
-out in the post-PR-2 section is no longer where it was. Re-establish
-the 2-BA curve on top of this baseline before refining the per-process
-ceiling further.
-
-## Strategic conclusion (`86aceee`)
-
-There is no structural network bottleneck preventing the 5 000-client
+There is no structural network bottleneck preventing the 5 000-cli
 project target. The shape is **straightforward horizontal scaling**:
 
 - Atlas's per-BaseApp comfortable ceiling is around 250–400 clients
-  for this action-MMO load profile (10 Hz move + 2 Hz echo + dense AoI).
-  500-on-one is past the cliff; 250-on-each is in the linear regime.
-- Industry norm for BigWorld-family engines is 500–1000 clients per
-  BaseApp; Atlas's lower ceiling reflects (a) per-client property
-  density on `StressAvatar` and (b) the still-untuned RUDP read path.
-- 5 000 client target → 13–20 BaseApps + 1–3 CellApps (per Space
-  cellapp count is bounded by the single-Space target, not by load).
-- BaseAppMgr already round-robins logins across BaseApps with
-  least-loaded selection (`baseappmgr.cc:500`); no orchestration code
-  needs to change.
+  for this action-MMO load profile (10 Hz move + 2 Hz echo + dense
+  AoI). Industry norm for BigWorld-family engines is 500–1 000
+  clients per BaseApp; Atlas's lower ceiling reflects per-client
+  property density on `StressAvatar` and the still-untuned RUDP
+  read path.
+- 5 000-client target → 13–20 BaseApps + 1–3 CellApps. Per-Space
+  cellapp count is bounded by the single-Space target, not by load.
+- BaseAppMgr already round-robins logins with least-loaded selection
+  (`baseappmgr.cc:500`); no orchestration code needs to change.
+- Single-instance LoginApp / BaseAppMgr / DBApp run at < 1.5 % CPU
+  with 50–60× headroom for the steady-state 5 000-cli reconnect
+  rate. Single-instance is an HA concern (failover / hot-spare),
+  not a perf concern.
 
-### Single-point components — health check
+### Open questions (not blockers)
 
-LoginApp, BaseAppMgr, and DBApp each run as a single process today
-and the architecture has no horizontal-scaling story for them. The
-2-BA capture says they're **all idle by a wide margin** at the
-5 000-client-equivalent throughput we just measured (3 135 logins
-in 138 s = 22.7 logins/s sustained):
+1. **Per-BaseApp ceiling tuning.** Push 250-cli/proc to 400-cli/proc
+   by shaving the `OnRudpReadable` mean — at 250 clients the per-
+   call work is super-linear in client count.
+2. **Slow-tick magnitude.** Remaining bursty slow-ticks (138–152 ms,
+   ~2× the 67 ms BaseApp budget) are worth understanding before
+   sustained 5 000-cli deployments.
+3. **Multi-cellapp scaling.** At 5 000 clients in many small spaces
+   single cellapp suffices; in a few large 100v100 battles each
+   Space pins one cellapp. Re-run with
+   `--cellapp-count 2 --space-count 2` to establish the multi-
+   cellapp curve.
+4. **DBApp tick spikes.** Tick max 9.14 ms is 14× the mean (220 µs);
+   likely the periodic counter persist
+   (`EntityIdAllocator::Persist`). Could chain into `auth_latency`
+   tail under high reconnect-storm load. Worth checking the
+   5 000-cli reconnect-storm scenario.
 
-| Component | Tick mean | Tick max | % CPU | HandleMessage mean | Verdict |
-|---|---|---|---|---|---|
-| LoginApp | **1.26 µs** | 10 µs | 0.69 % | 80 µs | ~50× headroom for steady-state 5 000-cli reconnect rate (≈ 250 logins/s at 5 % churn) |
-| BaseAppMgr | 1.46 µs | 21 µs | 0.21 % | 16.4 µs | effectively idle |
-| DBApp | 220 µs | **9.14 ms** | 1.48 % | 24.9 µs | spikes from periodic DB flush, 60× headroom against the steady auth/checkout rate |
+## Priority definitions
 
-The auth_latency p99 = 193 ms in the 2-BA run is **not** loginapp-bound:
-loginapp's local work per login is ~80 µs, the rest is wall-clock
-waiting on the chained RPCs (DBApp auth → BaseAppMgr alloc → BaseApp
-PrepareLogin). The improvement from 5 364 ms → 193 ms vs the 1-BA run
-came entirely from baseapp's PrepareLogin getting unstuck — not from
-loginapp speeding up.
+- **P0** — Required to make 100v100 functional ("can it run").
+- **P1** — Required to make 100v100 smooth ("does it run well").
+- **P2** — Polish ("does it feel good").
 
-Single-point loginapp / baseappmgr is a **HA concern, not a perf
-concern**. Failover / hot-spare is a future deployment-architecture
-question; performance-wise the single instance has more than enough
-headroom for the project target.
-
-**Open questions still worth investigating, but no longer urgent:**
-
-1. **Per-BaseApp ceiling tuning** — can we push 250-cli/proc to
-   400-cli/proc by shaving the OnRudpReadable mean (currently 449 µs
-   at 250 clients vs 144 µs at 200 clients on a shared baseapp — the
-   per-call work is super-linear in client count). Open
-   `baseapp_86aceee_*.tracy` in `tracy-profiler` to see what's inside.
-2. **Slow-tick magnitude** — the 5 remaining slow-ticks (138–152 ms)
-   are still 2× the 67 ms budget. Bursty rather than sustained, but
-   worth understanding before sustained 5k-client deployments.
-3. **CellApp scaling** — at 5 000 clients in many small spaces, single
-   cellapp suffices; at 5 000 clients in a few large 100v100 battles,
-   each Space pins a single cellapp and there's no horizontal scaling
-   inside a Space. Re-run with `--cellapp-count 2 --space-count 2` to
-   establish the multi-cellapp curve.
-4. **DBApp tick spikes** — Tick max 9.14 ms is 14× the mean (220 µs);
-   likely the periodic counter persist (`EntityIdAllocator::Persist`).
-   At higher login rates this could chain into auth_latency tail. Worth
-   checking the 5 000-client reconnect-storm scenario.
-
-These are scaling-curve refinements, not blockers. Update this doc
-the next time a single zone exceeds its budget at the chosen
-production topology.
-
-## Priority Definitions
-
-- **P0** — Required to make 100v100 functional ("can it run")
-- **P1** — Required to make 100v100 smooth ("does it run well")
-- **P2** — Polish ("does it feel good")
-
-At the current data point, every P0/P1 in the list has either shipped
-or fallen below its evidence threshold. **Do not** add new tasks to
-this directory based on the headings alone — add them after a fresh
-capture shows a specific zone overrunning its budget, and link the
-capture path in the "Profiling evidence" section of the new doc.
+Every P0 / P1 item is shipped or below its evidence threshold. Do
+**not** add new tasks based on these headings alone — add them
+after a fresh capture shows a specific zone overrunning its budget,
+and link the capture path in the new doc's evidence section.

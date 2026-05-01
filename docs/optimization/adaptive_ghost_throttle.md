@@ -1,90 +1,40 @@
 # Adaptive Ghost Throttle
 
-**Priority:** P2
-**Subsystem:** `src/server/cellapp/ghost_maintainer.cc`
-**Impact:** Reduces cross-cell bandwidth for static entities, improves
-responsiveness for fast-moving ones
+**Status:** 🔵 Deferred — `CellApp::TickGhostPump` is 0.045 % of
+cellapp CPU under the current single-cellapp deployment. Not
+exercised until multi-cellapp Spaces become routine.
+**Subsystem:** `src/server/cellapp/ghost_maintainer.{h,cc}`
 
-## Current Behavior
+## What this would be
 
-Ghost position updates are throttled uniformly at 50ms intervals
-(`ghost_update_interval_ms`). Every Real entity that has Ghost replicas on
-peer CellApps sends a `GhostPositionUpdate` message at this fixed rate,
-regardless of whether the entity moved.
-
-## Problem
-
+Ghost position updates currently fire at a fixed
+`ghost_update_interval_ms` (50 ms) per Real entity per peer cellapp.
 Two inefficiencies:
 
-1. **Static entities waste bandwidth.** An entity standing still sends 20
-   position updates per second to each peer CellApp — identical payloads
-   every time.
+- **Static entities** waste bandwidth — 20 identical position
+  payloads/sec/peer.
+- **Fast movers** are under-sampled — at 20 m/s a 50 ms gap leaves
+  the Ghost's AoI trigger position 1 m behind, delaying enter /
+  leave events near boundaries.
 
-2. **Fast-moving entities are under-sampled.** A player dashing at 20 m/s
-   covers 1m between updates. On the peer CellApp, the Ghost's AoI trigger
-   position lags by up to 1m, which can delay enter/leave events for
-   observers near the boundary.
+The fix is a velocity-adaptive interval (e.g. 500 ms when
+`speed_sq < 0.01`, 20 ms when `> 100`, linear between) plus a
+skip-if-unchanged short-circuit before the interval check.
 
-## Proposed Solution
+## Trigger to revisit
 
-Replace the fixed interval with a velocity-adaptive throttle:
+- A multi-cellapp Space topology in the production target shape, or
+- `CellApp::TickGhostPump` exceeds ~3 % of cellapp CPU on a fresh
+  capture.
 
-```cpp
-Duration GhostMaintainer::ComputeUpdateInterval(const CellEntity& entity) const {
-  float speed_sq = LengthSq(entity.Velocity());
-  if (speed_sq < 0.01f) {
-    // Stationary: update every 500ms (2 Hz) — enough for AoI housekeeping
-    return std::chrono::milliseconds(500);
-  }
-  if (speed_sq > 100.f) {  // > 10 m/s
-    // Fast: update every 20ms (50 Hz) — keeps Ghost position tight
-    return std::chrono::milliseconds(20);
-  }
-  // Linear interpolation between 20ms and 500ms
-  float t = (speed_sq - 0.01f) / 99.99f;
-  int ms = static_cast<int>(500.f - t * 480.f);
-  return std::chrono::milliseconds(ms);
-}
-```
+## Caveats (when implementing)
 
-### Bandwidth Impact (100v100)
-
-Assume 200 entities, 2 CellApps, all entities have Ghosts on the peer:
-
-| | Fixed 50ms | Adaptive |
-|---|-----------|----------|
-| 100 stationary (buffing, dead) | 2000/s | 200/s |
-| 50 walking (5 m/s) | 1000/s | 500/s |
-| 50 sprinting (15 m/s) | 1000/s | 2500/s |
-| **Total** | **4000/s** | **3200/s** (-20%) |
-
-More importantly, the fast movers get 2.5x better Ghost fidelity, reducing
-AoI boundary lag.
-
-### Skip-If-Unchanged
-
-Additionally, skip the update entirely if position hasn't changed since
-the last broadcast:
-
-```cpp
-if (position == last_broadcast_position_ && !force_update) {
-  return;  // nothing to send
-}
-```
-
-This catches stationary entities even more cheaply than the interval check.
-
-## Key Files
-
-- `src/server/cellapp/ghost_maintainer.h` — Per-haunt adaptive interval
-- `src/server/cellapp/ghost_maintainer.cc` — `ComputeUpdateInterval()`, skip-if-unchanged
-
-## Risks
-
-- Velocity must be available on the CellEntity. Currently position is set
-  via `AvatarUpdate`; velocity may need to be derived from successive
-  positions (finite difference).
-- Very low update rates for stationary entities mean AoI enter events
-  from a Ghost may be delayed by up to 500ms. Acceptable for non-combat
-  entities; may need a "force update on state change" path for combat
-  transitions (e.g. entity starts attacking).
+- Velocity is currently derived from successive positions
+  (`AvatarUpdate`); a derived value lags by one tick. For PvP
+  combat-state transitions (entity starts attacking) the throttle
+  needs a force-update path so the peer cellapp doesn't see stale
+  ghost state across a state change.
+- 500 ms intervals for stationary entities mean Ghost-side AoI
+  enter events can lag by half a second. Acceptable for non-combat
+  entities; not for anything where the cross-cell handoff is
+  latency-sensitive.
