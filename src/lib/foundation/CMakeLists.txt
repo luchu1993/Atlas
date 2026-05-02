@@ -35,6 +35,7 @@ endif()
 add_library(atlas_foundation STATIC
   clock.cc
   error.cc
+  latency_histogram.cc
   log.cc
   log_sinks.cc
   memory_tracker.cc

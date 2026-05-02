@@ -11,6 +11,7 @@
 #include "coro/fire_and_forget.h"
 #include "coro/pending_rpc_registry.h"
 #include "foundation/clock.h"
+#include "foundation/latency_histogram.h"
 #include "login_messages.h"
 #include "server/entity_types.h"
 #include "server/ipv4_networks.h"
@@ -88,6 +89,8 @@ class LoginApp : public ManagerApp {
   uint64_t login_dedup_total_{0};
   uint64_t login_busy_total_{0};
   uint64_t abandoned_login_total_{0};
+
+  LatencyHistogram login_latency_;
 };
 
 }  // namespace atlas

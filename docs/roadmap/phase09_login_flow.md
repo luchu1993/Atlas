@@ -1,6 +1,6 @@
 # Phase 9: LoginApp + BaseAppMgr — 登录流程
 
-**Status:** ✅ 功能主线完成 / 🚧 极端 churn 稳定性收敛中。
+**Status:** ✅ 功能主线完成 / ✅ 端到端延迟观测就位。
 **前置依赖:** Phase 8 (BaseApp)、Phase 7 (DBApp)、Phase 6 (machined)
 **BigWorld 参考:** `server/loginapp/`, `server/baseappmgr/`,
 `lib/connection/login_interface.hpp`
@@ -45,16 +45,22 @@ detached proxy grace；本地重登快路径；远端 `ForceLogoff` + `ForceLogo
 重试；deferred checkout / retry；`CancelPrepareLogin` 回滚；本地 + 跨 BaseApp
 重复登录处理。
 
-## 收敛中的稳定性问题 🚧
+## 延迟观测
 
-截至 2026-04-18，主要残余是**极端 churn 下跨进程生命周期收敛**，不是
-功能缺失。具体压测方法与参数见
+各进程通过 `WatcherRegistry` 暴露登录链路各腿的延迟直方图（µs，
+log-linear，~12.5% 相对分辨率），watcher 路径形如
+`{prefix}/{count,p50_us,p95_us,p99_us,max_us}`。长尾告警阈值由外部
+Prometheus / Grafana 消费，不在 server 进程内做。压测方法见
 [../stress_test/LOGIN_STRESS_TESTING.md](../stress_test/LOGIN_STRESS_TESTING.md)。
 
-- `force-logoff -> relogin -> checkout -> authenticate` 长链路量化
-- `BaseApp` 本地状态机推进顺序竞争核查
-- `DBApp` 在多 BaseApp 压力下排队与回复长尾
-- 端到端行为测试覆盖（不再只靠压测日志猜测）
+| watcher 前缀 | 测量起止 |
+|---|---|
+| `loginapp/login_latency` | `LoginRequest` 接受 → `LoginResult` 发出（成功路径） |
+| `baseapp/prepare_login_latency` | `PrepareLogin` 进入 → `PrepareLoginResult(success)` 发出 |
+| `baseapp/authenticate_latency` | `Authenticate` 进入 → `AuthenticateResult(success)` 发出 |
+| `baseapp/force_logoff_latency` | 远端 `ForceLogoff` 发出 → `ForceLogoffAck(success)` 收到 |
+| `dbapp/checkout_reply_latency` | `CheckoutEntity` 入队 → `CheckoutEntityAck` 发出（含冲突回复） |
+| `dbapp/write_reply_latency` | `WriteEntity` 入队 → `WriteEntityAck` 发出（覆盖 logoff/writeback 两路） |
 
 ## 边界
 

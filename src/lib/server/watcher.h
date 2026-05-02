@@ -11,6 +11,8 @@
 #include <utility>
 #include <vector>
 
+#include "foundation/latency_histogram.h"
+
 namespace atlas {
 
 enum class WatcherMode : uint8_t {
@@ -227,6 +229,11 @@ class WatcherRegistry {
   Node root_;
   std::size_t count_{0};
 };
+
+// Registers count + p50/p95/p99/max watchers (microseconds) for a histogram.
+// `prefix` is the path stem; values become {prefix}/count, {prefix}/p50_us, etc.
+// `hist` must outlive the WatcherRegistry.
+void RegisterLatencyWatchers(WatcherRegistry& wr, std::string_view prefix, LatencyHistogram& hist);
 
 }  // namespace atlas
 

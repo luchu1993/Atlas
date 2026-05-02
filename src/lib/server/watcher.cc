@@ -84,4 +84,16 @@ auto WatcherRegistry::Snapshot() const -> std::vector<std::pair<std::string, std
   return result;
 }
 
+void RegisterLatencyWatchers(WatcherRegistry& wr, std::string_view prefix, LatencyHistogram& hist) {
+  std::string base(prefix);
+  wr.Add<uint64_t>(base + "/count", std::function<uint64_t()>([&hist] { return hist.Count(); }));
+  wr.Add<double>(base + "/p50_us",
+                 std::function<double()>([&hist] { return hist.QuantileMicros(0.50); }));
+  wr.Add<double>(base + "/p95_us",
+                 std::function<double()>([&hist] { return hist.QuantileMicros(0.95); }));
+  wr.Add<double>(base + "/p99_us",
+                 std::function<double()>([&hist] { return hist.QuantileMicros(0.99); }));
+  wr.Add<double>(base + "/max_us", std::function<double()>([&hist] { return hist.MaxMicros(); }));
+}
+
 }  // namespace atlas

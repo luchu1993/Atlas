@@ -12,6 +12,7 @@
 #include "dbapp_messages.h"
 #include "entity_id_allocator.h"
 #include "entitydef/entity_def_registry.h"
+#include "foundation/latency_histogram.h"
 #include "server/manager_app.h"
 
 namespace atlas {
@@ -70,6 +71,9 @@ class DBApp : public ManagerApp {
   uint64_t abort_checkout_total_{0};
   uint64_t abort_checkout_pending_hit_total_{0};
   uint64_t abort_checkout_late_hit_total_{0};
+
+  LatencyHistogram checkout_reply_latency_;
+  LatencyHistogram write_reply_latency_;
 };
 
 }  // namespace atlas

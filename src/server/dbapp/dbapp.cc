@@ -2,11 +2,13 @@
 
 #include <format>
 
+#include "foundation/clock.h"
 #include "foundation/log.h"
 #include "loginapp/login_messages.h"
 #include "network/channel.h"
 #include "network/machined_types.h"
 #include "network/reliable_udp.h"
+#include "server/watcher.h"
 
 namespace atlas {
 
@@ -188,6 +190,8 @@ void DBApp::RegisterWatchers() {
   reg.Add<std::string>("dbapp/next_entity_id", std::function<std::string()>{[this]() {
                          return std::to_string(id_allocator_ ? id_allocator_->next_id() : 0u);
                        }});
+  RegisterLatencyWatchers(reg, "dbapp/checkout_reply_latency", checkout_reply_latency_);
+  RegisterLatencyWatchers(reg, "dbapp/write_reply_latency", write_reply_latency_);
 }
 
 // build_db_config
@@ -229,12 +233,14 @@ auto DBApp::ResolveReplyChannel(const Address& addr) -> Channel* {
 void DBApp::OnWriteEntity(const Address& src, Channel* ch, const dbapp::WriteEntity& msg) {
   if (ch == nullptr) return;
 
-  auto send_ack = [this, reply_addr = src, request_id = msg.request_id](PutResult result) {
+  TimePoint t0 = Clock::now();
+  auto send_ack = [this, reply_addr = src, request_id = msg.request_id, t0](PutResult result) {
     dbapp::WriteEntityAck ack;
     ack.request_id = request_id;
     ack.success = result.success;
     ack.dbid = result.dbid;
     ack.error = std::move(result.error);
+    write_reply_latency_.Record(Clock::now() - t0);
     if (auto* reply_ch = this->ResolveReplyChannel(reply_addr)) {
       if (auto r = reply_ch->SendMessage(ack); !r) {
         // BaseApp's pending-write entry never resolves - Proxy keeps
@@ -263,11 +269,12 @@ void DBApp::OnCheckoutEntity(const Address& src, Channel* ch, const dbapp::Check
   ATLAS_LOG_DEBUG("DBApp: checkout request_id={} dbid={} type_id={} from {}:{}", msg.request_id,
                   msg.dbid, msg.type_id, src.Ip(), src.Port());
 
+  TimePoint t0 = Clock::now();
   CheckoutInfo owner;
   owner.base_addr = (msg.owner_addr.Port() != 0) ? msg.owner_addr : src;
   owner.entity_id = msg.entity_id;
 
-  auto send_ack = [this, reply_addr = src, request_id = msg.request_id](GetResult result) {
+  auto send_ack = [this, reply_addr = src, request_id = msg.request_id, t0](GetResult result) {
     dbapp::CheckoutEntityAck ack;
     ack.request_id = request_id;
     ack.dbid = result.data.dbid;
@@ -284,6 +291,7 @@ void DBApp::OnCheckoutEntity(const Address& src, Channel* ch, const dbapp::Check
       ack.status = dbapp::CheckoutStatus::kSuccess;
       ack.blob = std::move(result.data.blob);
     }
+    checkout_reply_latency_.Record(Clock::now() - t0);
     if (auto* reply_ch = this->ResolveReplyChannel(reply_addr)) {
       if (auto r = reply_ch->SendMessage(ack); !r) {
         // checkout_mgr_ has already committed; if BaseApp never sees the
@@ -320,6 +328,7 @@ void DBApp::OnCheckoutEntity(const Address& src, Channel* ch, const dbapp::Check
     ack.holder_addr = co_result.current_owner.base_addr;
     ack.holder_app_id = co_result.current_owner.app_id;
     ack.holder_entity_id = co_result.current_owner.entity_id;
+    checkout_reply_latency_.Record(Clock::now() - t0);
     (void)ch->SendMessage(ack);
     return;
   }

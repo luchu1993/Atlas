@@ -59,6 +59,11 @@ atlas_add_test(NAME test_profiler
   DEPS atlas_foundation
 )
 
+atlas_add_test(NAME test_latency_histogram
+  SOURCES test_latency_histogram.cpp
+  DEPS atlas_foundation
+)
+
 atlas_add_test(NAME test_heap
   SOURCES test_heap.cpp
   DEPS atlas_foundation

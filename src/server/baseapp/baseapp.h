@@ -15,6 +15,7 @@
 #include "delta_forwarder.h"
 #include "entity_manager.h"
 #include "foundation/clock.h"
+#include "foundation/latency_histogram.h"
 #include "id_client.h"
 #include "server/cellapp_peer_registry.h"
 #include "server/entity_app.h"
@@ -189,6 +190,7 @@ class BaseApp : public EntityApp {
     DatabaseID dbid{kInvalidDBID};
     SessionKey session_key;
     TimePoint created_at{};
+    TimePoint force_logoff_sent_at{};
     TimePoint next_force_logoff_retry_at{};
     Address force_logoff_holder_addr;
     uint8_t force_logoff_retry_count{0};
@@ -288,6 +290,10 @@ class BaseApp : public EntityApp {
   uint64_t prepared_login_timeout_total_{0};
   // Accumulated client-reported reliable-delta gap count.
   uint64_t client_event_seq_gaps_total_{0};
+
+  LatencyHistogram prepare_login_latency_;
+  LatencyHistogram authenticate_latency_;
+  LatencyHistogram force_logoff_latency_;
   LoadTracker load_tracker_{};
   static constexpr Duration kForceLogoffRetryBaseDelay = std::chrono::milliseconds(250);
   static constexpr Duration kForceLogoffRetryMaxDelay = std::chrono::seconds(2);

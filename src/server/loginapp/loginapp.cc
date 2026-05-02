@@ -163,6 +163,7 @@ void LoginApp::RegisterWatchers() {
                std::function<bool()>([this] { return dbapp_channel_ != nullptr; }));
   wr.Add<bool>("loginapp/baseappmgr_connected",
                std::function<bool()>([this] { return baseappmgr_channel_ != nullptr; }));
+  RegisterLatencyWatchers(wr, "loginapp/login_latency", login_latency_);
 }
 
 void LoginApp::OnLoginRequest(const Address& src, Channel* ch, const login::LoginRequest& msg) {
@@ -222,6 +223,7 @@ void LoginApp::OnLoginRequest(const Address& src, Channel* ch, const login::Logi
 
 auto LoginApp::HandleLoginCoro(uint64_t client_channel_id, Address client_addr,
                                login::LoginRequest request) -> FireAndForget {
+  TimePoint t0 = Clock::now();
   uint32_t rid = next_request_id_++;
   std::string username = request.username;
 
@@ -392,6 +394,7 @@ auto LoginApp::HandleLoginCoro(uint64_t client_channel_id, Address client_addr,
     co_return;
   }
 
+  login_latency_.Record(Clock::now() - t0);
   ++login_success_total_;
   ATLAS_LOG_DEBUG("LoginApp: login complete for '{}' entity={} baseapp={}:{}", username,
                   prep_reply.entity_id, alloc_reply.external_addr.Ip(),

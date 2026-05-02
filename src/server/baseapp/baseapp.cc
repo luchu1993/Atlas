@@ -390,6 +390,9 @@ void BaseApp::RegisterWatchers() {
                    std::function<uint64_t()>([this] { return baseline_messages_sent_total_; }));
   wr.Add<uint64_t>("baseapp/baseline_bytes_sent_total",
                    std::function<uint64_t()>([this] { return baseline_bytes_sent_total_; }));
+  RegisterLatencyWatchers(wr, "baseapp/prepare_login_latency", prepare_login_latency_);
+  RegisterLatencyWatchers(wr, "baseapp/authenticate_latency", authenticate_latency_);
+  RegisterLatencyWatchers(wr, "baseapp/force_logoff_latency", force_logoff_latency_);
 }
 
 void BaseApp::RegisterInternalHandlers() {
@@ -1105,6 +1108,7 @@ auto BaseApp::TryCompleteLocalRelogin(PendingLogin pending) -> bool {
   reply.success = true;
   reply.entity_id = proxy->EntityId();
   SendPrepareLoginResult(pending.loginapp_addr, reply);
+  prepare_login_latency_.Record(Clock::now() - pending.created_at);
 
   ++fast_relogin_total_;
   if (kWasDetached) {
@@ -1216,6 +1220,7 @@ void BaseApp::CompletePrepareLoginFromCheckout(PendingLogin pending, DatabaseID 
   reply.success = true;
   reply.entity_id = ent->EntityId();
   SendPrepareLoginResult(pending.loginapp_addr, reply);
+  prepare_login_latency_.Record(Clock::now() - pending.created_at);
   FinishLoginFlow(pending.dbid);
 
   ATLAS_LOG_DEBUG("BaseApp: login entity created id={} dbid={}", ent->EntityId(), dbid);
@@ -2298,6 +2303,7 @@ auto BaseApp::RetryLoginAfterCheckoutConflict(PendingLogin pending, DatabaseID d
 
   const uint32_t kForceRequestId = next_prepare_request_id_++;
   pending.force_logoff_holder_addr = holder_addr;
+  pending.force_logoff_sent_at = Clock::now();
   pending.next_force_logoff_retry_at = {};
   pending.force_logoff_retry_count = 0;
   pending.waiting_for_remote_force_logoff_ack = false;
@@ -2494,12 +2500,16 @@ void BaseApp::OnForceLogoffAck(Channel& /*ch*/, const baseapp::ForceLogoffAck& m
     return;
   }
 
+  if (it->second.force_logoff_sent_at != TimePoint{}) {
+    force_logoff_latency_.Record(Clock::now() - it->second.force_logoff_sent_at);
+  }
   it->second.waiting_for_remote_force_logoff_ack = false;
   it->second.next_force_logoff_retry_at = {};
   ContinueLoginAfterForceLogoff(msg.request_id);
 }
 
 void BaseApp::OnClientAuthenticate(Channel& ch, const baseapp::Authenticate& msg) {
+  TimePoint t0 = Clock::now();
   auto* proxy = entity_mgr_.FindProxyBySession(msg.session_key);
   if (!proxy) {
     ++auth_fail_total_;
@@ -2525,6 +2535,7 @@ void BaseApp::OnClientAuthenticate(Channel& ch, const baseapp::Authenticate& msg
   res.entity_id = proxy->EntityId();
   res.type_id = proxy->TypeId();
   (void)ch.SendMessage(res);
+  authenticate_latency_.Record(Clock::now() - t0);
   ++auth_success_total_;
   ClearPreparedLoginEntity(proxy->EntityId());
 
