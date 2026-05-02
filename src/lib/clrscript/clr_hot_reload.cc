@@ -105,6 +105,18 @@ auto ClrHotReload::DoReload() -> Result<void> {
     }
   }
 
+  auto assembly_path = config_.output_directory / config_.assembly_name;
+
+  // Verify before tearing the live state down: an absent assembly after this
+  // point would unload entities and clear the registry with nothing to load.
+  std::error_code path_ec;
+  if (!std::filesystem::exists(assembly_path, path_ec) || path_ec) {
+    auto err = Error{ErrorCode::kNotFound,
+                     std::format("Hot reload: assembly not found at {}", assembly_path.string())};
+    ATLAS_LOG_ERROR("{}", err.Message());
+    return err;
+  }
+
   auto serialize_result = engine_.CallHotReload("SerializeAndUnload");
   if (!serialize_result) {
     ATLAS_LOG_ERROR("Hot reload: SerializeAndUnload failed: {}",
@@ -116,7 +128,6 @@ auto ClrHotReload::DoReload() -> Result<void> {
 
   EntityDefRegistry::Instance().clear();
 
-  auto assembly_path = config_.output_directory / config_.assembly_name;
   auto load_result = engine_.CallHotReload("LoadAndRestore", assembly_path);
 
   if (!load_result) {

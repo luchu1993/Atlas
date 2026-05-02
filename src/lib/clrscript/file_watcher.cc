@@ -44,17 +44,24 @@ void FileWatcher::Reset() {
 
 void FileWatcher::Scan(
     std::unordered_map<std::string, std::filesystem::file_time_type>& out) const {
-  if (!std::filesystem::exists(directory_)) return;
-
   std::error_code ec;
-  for (const auto& entry : std::filesystem::recursive_directory_iterator(directory_, ec)) {
-    if (ec) break;
-    if (!entry.is_regular_file()) continue;
-    if (entry.path().extension() != ".cs") continue;
-    if (IsExcluded(entry.path())) continue;
+  if (!std::filesystem::exists(directory_, ec) || ec) return;
 
-    auto write_time = entry.last_write_time(ec);
-    if (!ec) out[entry.path().string()] = write_time;
+  std::filesystem::recursive_directory_iterator it(
+      directory_, std::filesystem::directory_options::skip_permission_denied, ec);
+  if (ec) return;
+
+  // ec-overloads throughout: watched dirs may contain unstattable entries
+  // (pipes, sockets) that would throw from the no-arg status() calls.
+  for (const std::filesystem::recursive_directory_iterator end; it != end; it.increment(ec)) {
+    if (ec) break;
+    std::error_code entry_ec;
+    if (!it->is_regular_file(entry_ec) || entry_ec) continue;
+    const auto& path = it->path();
+    if (path.extension() != ".cs") continue;
+    if (IsExcluded(path)) continue;
+    auto write_time = it->last_write_time(entry_ec);
+    if (!entry_ec) out[path.string()] = write_time;
   }
 }
 
