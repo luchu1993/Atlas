@@ -1,9 +1,10 @@
 # Phase 11: 分布式空间 — Real/Ghost + CellAppMgr
 
-**Status:** ✅ 主线完成。CellAppMgr、Real/Ghost 双模 CellEntity、
-GhostMaintainer / OffloadChecker、9 条 inter-cellapp 消息全部落地并接入
-cellapp 主循环。剩余收尾：CellAppMgr 的 `ShouldOffload` 广播尚未在
-rebalance 时调度（消息结构与 handler 已就位）。
+**Status:** ✅ 完成。CellAppMgr（注册 / app_id 分配 / BSP 负载均衡 / 死亡
+通知）、Real/Ghost 双模 CellEntity、GhostMaintainer / OffloadChecker、9 条
+inter-cellapp 消息全部落地并接入 cellapp 主循环。`ShouldOffload` (7006) 消息
+结构存在但**当前未使用** — offload 由各 CellApp 本地 OffloadChecker 通过
+BSP 几何驱动，非 mgr 推送。
 **前置依赖:** Phase 10 (CellApp 单机)、Phase 9 (BaseAppMgr)
 **BigWorld 参考:** `server/cellapp/real_entity.hpp`,
 `entity_ghost_maintainer.cpp`, `server/cellappmgr/`
@@ -60,8 +61,7 @@ Phase 10 的析构序（`witness_.reset() → controllers_.StopAll() → 合成
 FLT_MAX shuffle → RangeList::Remove`）是 UAF 防护的关键。Phase 11 在
 `CellEntity` 上**追加** Real/Ghost 区分字段（`real_data_` /
 `real_channel_`），不动 Phase 10 已有字段（`witness_` / `controllers_` /
-`range_node_` / `replication_state_` / `script_handle_` /
-`base_addr_` / `base_entity_id_`）。
+`range_node_` / `replication_state_` / `script_handle_` / `base_addr_`）。
 
 `EnableWitness` / `Add*Controller` / `atlas_set_position` 等路径入口都
 `assert(IsReal())` — Ghost 是纯数据镜像，脚本钩子只能活在 Real 上。
@@ -75,21 +75,29 @@ Atlas 服务进程之间已经统一跑在 `NetworkInterface::StartRudpServer()`
 
 ### BSP 负载均衡简化
 
-去掉 BigWorld 的多级 `EntityBoundLevels`，用简单负载差驱动：
-`TickLoadBalance()` 每 30 ticks（≈1s）调 `partition.bsp.Balance(safety_bound = 0.9)`，
-广播新 geometry 给受影响的 peers。需要更精细再加 EntityBoundLevels。
+去掉 BigWorld 的多级 `EntityBoundLevels`，用简单负载差驱动：CellAppMgr
+`OnTickComplete` 每 `kBalanceTickInterval = 30` ticks 调
+`partition.bsp.Balance(kBalanceSafetyBound = 0.9f)`，调整后通过
+`UpdateGeometry` (7005) 广播新 BSP 给受影响 CellApp。需要更精细再加
+EntityBoundLevels。
 
 ### EntityID 跨 CellApp 唯一
 
-CellAppMgr 在 `OnRegisterCellApp()` 中分配 `app_id ∈ [1, 255]` 作为
-EntityID 高字节；CellApp 本地使用低 24 位单调递增。Phase 10 的
-`next_entity_id_` 本地分配模式已被替换。最大 255 个 CellApp。
+CellAppMgr 在 `OnRegisterCellApp()` 中为每个 CellApp 分配
+`app_id ∈ [1, 255]`（`kMaxCellAppAppId = 255`），作为 EntityID 编码与负载
+上报 / Ghost 寻址的 namespace。集群级 EntityID 由 DBApp `IDClient` 池统一
+分配（详见 Phase 7），CellApp 本身不在本地生成 EntityID — 实体随
+`CreateCellEntity` (3000) 或 `OffloadEntity` (3110) 携带的 ID 进入
+`entity_population_`。
 
 ### 信任边界
 
-`ClientCellRpcForward` 信封含 `source_forwarding_cellapp` 字段；CellAppMgr
-维护可信 peer 白名单（基于 machined 注册），CellApp 在 `OnClientCellRpcForward`
-中校验。
+CellApp 维护 `trusted_baseapps_: unordered_set<Address>`，订阅 machined 的
+BaseApp Birth/Death 事件实时维护白名单。`OnClientCellRpcForward` 首先校验
+来源 channel 的 internal address 在白名单内；不在白名单的消息直接丢弃，
+然后再做 target 是否 Real、RPC 是否 Exposed、direction、source==target
+（OWN_CLIENT）等业务校验。CellApp ↔ CellApp 通道（GhostDelta /
+OffloadEntity 等）走 RUDP，未额外建白名单。
 
 ## 协议
 
@@ -119,13 +127,14 @@ CellApp `3000–3099` 段已被 Phase 10 占用；Phase 11 从 `3100` 起。
 
 | 消息 | ID | 方向 | 用途 |
 |---|---|---|---|
-| `RegisterCellApp` / `RegisterCellAppAck` | 7000 / 7001 | 注册 + `app_id` 分配 + 配置回包 |
+| `RegisterCellApp` / `RegisterCellAppAck` | 7000 / 7001 | 双向 | 注册 + `app_id` 分配 + 配置回包 |
 | `InformCellLoad` | 7002 | CellApp → Mgr | 负载 / entity_count 上报 |
 | `CreateSpaceRequest` | 7003 | BaseApp / 脚本 → Mgr | 创建 Space |
+| `SpaceCreatedResult` | 7007 | Mgr → 请求方 | 创建结果回包 |
 | `AddCellToSpace` | 7004 | Mgr → CellApp | 分配 Cell |
-| `UpdateGeometry` | 7005 | Mgr → CellApp | BSP 树 / Cell 边界更新 |
-| `ShouldOffload` | 7006 | Mgr → CellApp | 启用 / 禁用迁移（消息已定义；尚未在 rebalance 路径调用） |
-| `baseapp::CellAppDeath` | — | Mgr → BaseApp | CellApp 死亡时通知 BaseApp 触发备份恢复 |
+| `UpdateGeometry` | 7005 | Mgr → CellApp | BSP 树 / Cell 边界更新（rebalance 后广播） |
+| `ShouldOffload` | 7006 | Mgr → CellApp | **已定义未使用** — offload 由本地 OffloadChecker 驱动 |
+| `baseapp::CellAppDeath` | 2026 | Mgr → BaseApp | CellApp 死亡时通知 BaseApp 触发备份恢复，含 `dead_addr` + rehome 列表 |
 
 ## CellApp 死亡处理
 
@@ -135,8 +144,11 @@ CellApp `3000–3099` 段已被 Phase 10 占用；Phase 11 从 `3100` 起。
 
 ## 收尾 TODO
 
-- [ ] CellAppMgr 在 BSP rebalance 后调度 `ShouldOffload` 广播（消息和
-      handler 已就位，缺调用点）
+- [ ] 决定 `ShouldOffload` (7006) 的去留 — 当前 offload 完全由本地
+      OffloadChecker 在 BSP 几何更新后自然触发，mgr 推送路径未连线；要么
+      接入 rebalance 调度，要么在协议层面删除该消息
 - [ ] `EntityRangeListNode::owner_data_` 仍是 `void*` + `reinterpret_cast`
       （契约由 `AoITrigger::OnEnter/OnLeave` 注释维护）；可换为
       `IRangeListOwner*` 强类型接口
+- [ ] CellApp ↔ CellApp 通道（GhostDelta / OffloadEntity）尚未基于
+      machined CellApp 注册做白名单；当前依赖 RUDP 内网假设

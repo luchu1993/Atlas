@@ -1,15 +1,11 @@
 # Multi-LoginApp + LoginAppMgr 设计方案
 
-> 日期: 2026-04-12
-> 状态: 修订草案
+> 状态: ⬜ 未启动 — 目标设计文档
 > 适用范围: Atlas 多 LoginApp 扩展
-> 说明: 本文档是多 `LoginApp` / `LoginAppMgr` 的**目标设计草案**，不是当前仓库实现快照。
-> 当前代码仍以 [phase09_login_flow.md](phase09_login_flow.md) 中描述的
-> “单 `LoginApp` 直接对外”链路为准；若与当前实现冲突，以 Phase 9 文档为准。
+> 当前实现以 [phase09_login_flow.md](phase09_login_flow.md) 中描述的
+> “单 `LoginApp` 直接对外”链路为准；若与本文冲突，以 Phase 9 文档为准。
 
 ## 1. 设计结论
-
-本次修订后的核心结论如下:
 
 - 首个多 `LoginApp` 版本建议优先采用 **`Client -> LoginAppMgr -> LoginApp`** 的入口模式。
 - `LoginAppMgr` 同时承担两类职责:
@@ -25,19 +21,8 @@
 这份设计的目标不是最省代码，而是先把“首个多 LoginApp 版本可上线的入口方案”与“未来可平滑切到 LB 的扩展点”
 一起设计好，避免下一轮推翻协议。
 
-## 1.1 当前代码基线
-
-截至 2026-04-12，仓库当前已落地的仍然是:
-
-- 客户端直接连接 `LoginApp`
-- `LoginApp` 直接处理 `LoginRequest`
-- `LoginAppMgr` 尚未实现
-- `ResolveLoginApp` / `route_token` / 全局 username claim 尚未进入当前 wire contract
-
-因此本文后续所有“当前阶段”表述，都应理解为:
-
-- **首个多 LoginApp 实现阶段的目标设计**
-- 不是当前 `main` 分支已经存在的行为
+本文后续所有“当前阶段”表述，均指**首个多 LoginApp 实现阶段的目标设计**，
+不是 `main` 分支已经存在的行为。
 
 ## 2. 背景与约束
 
@@ -761,22 +746,9 @@ src/server/loginappmgr/
 - 这些都不是“把当前入口方案做对”的必要条件
 - 过早加入只会显著提高协议和恢复复杂度
 
-## 16. 实施阶段
+## 16. 交付标准
 
-按工程优先级调整为 6 个阶段:
-
-| 阶段 | 内容 | 是否进入当前范围 |
-|------|------|------------------|
-| P1 | `ProcessType` / message IDs / config 开关 | 是 |
-| P2 | `loginappmgr_messages.hpp` + 单元测试 | 是 |
-| P3 | `LoginAppMgr` 内部协调层: register / validate / claim / renew / release | 是 |
-| P4 | `LoginAppMgr` 外部入口层: resolve / route lease / external RUDP | 是 |
-| P5 | `LoginApp` 集成: route token + claim-first 状态机 + fail-closed | 是 |
-| P6 | `LBIngress` 切换支持与开关验证 | 预留接口，暂不完整实现 |
-
-### 当前交付标准
-
-本期只有满足以下条件才算完成:
+本设计落地后必须满足:
 
 - 客户端可以先连 `LoginAppMgr` 并拿到目标 `LoginApp`
 - `route_token` 只能被目标 `LoginApp` 单次消费
@@ -799,28 +771,7 @@ src/server/loginappmgr/
 
 换句话说，未来切换时被替换的是**入口选路层**，不是**内部协调层**。
 
-## 18. 变更文件清单
-
-| 操作 | 文件 | 阶段 |
-|------|------|------|
-| 修改 | `src/lib/server/server_config.hpp` | P1 |
-| 修改 | `src/lib/server/server_config.cpp` | P1 |
-| 修改 | `src/lib/network/message_ids.hpp` | P1 |
-| 修改 | `src/server/CMakeLists.txt` | P3/P4 |
-| 新增 | `src/server/loginappmgr/CMakeLists.txt` | P3/P4 |
-| 新增 | `src/server/loginappmgr/loginappmgr_messages.hpp` | P2 |
-| 新增 | `src/server/loginappmgr/loginappmgr.hpp` | P3/P4 |
-| 新增 | `src/server/loginappmgr/loginappmgr.cpp` | P3 |
-| 新增 | `src/server/loginappmgr/loginappmgr_ingress.hpp` | P4 |
-| 新增 | `src/server/loginappmgr/loginappmgr_ingress.cpp` | P4 |
-| 新增 | `src/server/loginappmgr/main.cpp` | P3/P4 |
-| 修改 | `src/server/loginapp/login_messages.hpp` | P5 |
-| 修改 | `src/server/loginapp/loginapp.hpp` | P5 |
-| 修改 | `src/server/loginapp/loginapp.cpp` | P5 |
-| 修改 | `tests/unit/` 下 LoginAppMgr 消息与 lease/claim 测试 | P2/P3/P4 |
-| 修改 | `tests/integration/` 下多 LoginApp 登录竞争测试 | P5 |
-
-## 19. 部署拓扑示例
+## 18. 部署拓扑示例
 
 ### 当前阶段
 
@@ -843,18 +794,9 @@ LoginAppMgr:
     只保留 internal control-plane
 ```
 
-## 20. 与前一版草案的关键差异
+## 19. 工业级约束
 
-本次修订相对前一版文档的变化:
-
-- 恢复 `LoginAppMgr` 对外入口方案
-- 不再强行要求当前阶段必须使用 `LB`
-- 引入 `route_token` 作为两段式入口的核心租约机制
-- 明确拆分 `Resolve` 与 `Claim`
-- 保留未来 `LBIngress` 的协议与代码扩展点
-- 明确 `LoginAppMgr` 将长期保留，不因未来引入 `LB` 而消失
-
-保持不变的工业级约束:
+无论入口模式如何切换，下列约束必须始终保持:
 
 - claim/release 必须具备 owner 校验
 - manager 重启后不 replay 旧 claim

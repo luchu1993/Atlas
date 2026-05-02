@@ -2,8 +2,8 @@
 
 **Status:** ✅ 完成。`ClientCellRpc` 与 AOI 多观察者 fan-out 已在 Phase 10
 落地；`EnableEntities` / `HeartbeatPing` 仍由 Phase 12 承接。
-**前置依赖:** Phase 7 (DBApp)、Phase 5 (ScriptApp/EntityApp)、Script Phase 4
-最小实体 / RPC 子集
+**前置依赖:** Phase 7 (DBApp)、Phase 5 (ScriptApp/EntityApp)、脚本层实体
+与 RPC 子集（[`docs/scripting/`](../scripting/)）
 **BigWorld 参考:** `server/baseapp/baseapp.hpp`, `base.hpp`, `proxy.hpp`
 
 ## 目标

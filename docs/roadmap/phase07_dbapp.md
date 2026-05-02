@@ -2,7 +2,7 @@
 
 **Status:** 🚧 主体已落地（XML / SQLite 后端可用，SQLite 为默认）；
 集成补强进行中；MySQL 后端尚未实现。
-**前置依赖:** Phase 5、Phase 6、Script Phase 4 最小持久化元数据子集
+**前置依赖:** Phase 5、Phase 6、脚本层 EntityDef 元数据（[`docs/scripting/`](../scripting/)）
 **BigWorld 参考:** `server/dbapp/`, `lib/db_storage/idatabase.hpp`,
 `lib/db_storage_xml/`
 
@@ -68,27 +68,19 @@ CheckinEntity / DeleteEntity[Ack] / LookupEntity[Ack] / AbortCheckout[Ack]
 busy_timeout_ms / foreign_keys`、`db_mysql_*` 系列字段。开发推荐
 `db_type: sqlite`，最小 fallback `xml`，正式预选 `mysql`。
 
-## 当前剩余工作 🚧
+## 当前剩余工作
 
-### P7.3 — DBApp 集成补强
+### P7.3 — DBApp 集成补强 🚧
 
-`AuthLogin` 基线 + `BaseApp death → clear_checkouts_for_address` 已有集成
-测试覆盖（`test_dbapp_login_flow` / `test_dbapp_checkout_cleanup` /
-`test_login_flow`）。`AbortCheckout` / `CheckinEntity` 消息往返单测已落
-（`test_dbapp_messages.cpp`）；DBApp watcher 已注册（`abort_checkout_total`
-/ `abort_checkout_pending_hit_total` / `abort_checkout_late_hit_total` /
-`checkouts`）。仍需补强：
-
-- `WriteFlags::LogOff` / `auto_load` 在 SQLite 路径下的更多回归
-- `test_login_flow` 长稳运行、短线重登 churn 与故障注入
-- XML / SQLite（以及后续 MySQL）后端契约一致性验证
+主链路（`AuthLogin`、`AbortCheckout`、`CheckinEntity`、BaseApp death
+回收）已有集成与单测覆盖；DBApp watcher 已注册。后续补强 SQLite 路径下
+`WriteFlags::LogOff` / `auto_load` 回归、长稳 churn 与多后端契约一致性
+验证。
 
 ### P7.4 — MySQL backend ⬜
 
 `src/lib/db_mysql/CMakeLists.txt` 仅占位；`ATLAS_DB_MYSQL` 默认 OFF。
-范围：实现 `src/lib/db_mysql/` 完整源码、建表 / 索引 / 唯一约束 / 事务、
-对齐 SQLite 的数据模型与语义。
-
+范围：实现完整源码、建表 / 索引 / 事务，对齐 SQLite 的数据模型与语义。
 完成标准：消息面与 SQLite/XML 完全一致，差异只体现在性能 / 运维。
 
 ## 边界

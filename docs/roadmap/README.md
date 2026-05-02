@@ -10,13 +10,13 @@ Generator + 热重载)已落地,详见
 | Phase | 名称 | 状态 | 关键交付 | 文档 |
 |---|---|---|---|---|
 | 5 | 服务器框架基类 | ✅ | ServerApp 主循环、消息接口注册、Watcher | [phase05](phase05_server_framework.md) |
-| 6 | machined 进程管理 | ✅ 主线 / 🚧 atlas_tool & 重连 | 服务发现、进程注册、心跳监控 | [phase06](phase06_machined.md) |
+| 6 | machined 进程管理 | ✅ | 服务发现、进程注册、心跳监控、atlas_tool watch/shutdown | [phase06](phase06_machined.md) |
 | 7 | DBApp + 数据库层 | 🚧 SQLite 默认 / MySQL ⬜ | IDatabase / SQLite/XML 后端 / DB watcher | [phase07](phase07_dbapp.md) |
 | 8 | BaseApp 实体宿主 | ✅ | Base/Proxy 实体、客户端代理、WriteToDB | [phase08](phase08_baseapp.md) |
 | 9 | LoginApp + BaseAppMgr | ✅ 主线 / 🚧 churn 收敛 | 登录流程、SessionKey、负载分配 | [phase09](phase09_login_flow.md) |
 | 10 | CellApp 空间模拟 | ✅ | Space、RangeList、AOI/Witness、Controller；持续优化在 docs/optimization | [phase10](phase10_cellapp.md) |
 | 11 | 分布式空间（Real/Ghost + CellAppMgr） | ✅ 主线 | Ghost 机制、Entity Offload、BSP 分区、CellAppMgr 负载均衡 | [phase11](phase11_distributed_space.md) |
-| 12 | 客户端 SDK | 🚧 核心骨架 / AvatarFilter ⬜ | 连接协议、实体同步、控制台测试客户端 | [phase12](phase12_client_sdk.md) |
+| 12 | 客户端 SDK | ✅ 主线 / ⬜ 高层 async API | atlas_net_client、Atlas.Client、AvatarFilter、Unity 包骨架 | [phase12](phase12_client_sdk.md) |
 | 13 | 高可用（Reviver + DBAppMgr） | ⬜ | 崩溃恢复、Manager 热备、集群管理 | [phase13](phase13_high_availability.md) |
 
 ## 依赖关系

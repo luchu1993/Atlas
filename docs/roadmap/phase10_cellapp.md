@@ -1,13 +1,13 @@
 # Phase 10: CellApp — 空间模拟
 
-**Status:** ✅ 主线完成。`src/server/cellapp/` 全套已落地：cellapp /
-cell / cell_entity / witness / space / aoi_trigger / ghost_maintainer /
-controller_codec / real_entity_data / offload_checker / cellapp_messages /
-intercell_messages / cellapp_native_provider。前置 PR-A/B/C/D 已合入；
-§10.1 列出的结构性遗留项已在 Phase 11 解决；§10.2 / §10.3 代码硬化
-绝大多数已修（详见末尾 follow-up）。Witness 性能优化（envelope cache、
-distance LOD、demand-based bandwidth、channel cache 等）持续在 docs/optimization/
-跟踪。
+**Status:** ✅ 完成。`src/server/cellapp/` 已落地完整空间模拟栈：
+cellapp / cell / space / cell_entity / witness / aoi_trigger /
+ghost_maintainer / real_entity_data / offload_checker / controller_codec /
+cellapp_messages / intercell_messages / cellapp_native_provider /
+cell_aoi_envelope / cell_bounds。RangeList / RangeTrigger / Controllers
+共享库位于 `src/lib/space/`。Phase 11 的 Real/Ghost/Offload 已回填到本
+阶段代码（见下文）。Witness 性能优化（distance LOD、demand-based
+bandwidth、priority heap）持续在 `docs/optimization/` 跟踪。
 **前置依赖:** Phase 8 (BaseApp)、Phase 9 (BaseAppMgr)、DefGenerator
 （按受众过滤的 delta API）
 **BigWorld 参考:** `server/cellapp/cellapp.hpp`, `entity.hpp`, `witness.hpp`
@@ -16,22 +16,25 @@ distance LOD、demand-based bandwidth、channel cache 等）持续在 docs/optim
 
 实现 MMO 核心 — 空间模拟引擎。CellApp 负责实时模拟：实体在空间中的
 位置管理、RangeList 空间索引、AOI 计算、带宽感知的增量属性同步、
-Controller 行为系统。
-
-**本阶段仅实现单 CellApp**（无 Real/Ghost），Phase 11 扩展为分布式多
-CellApp。
+Controller 行为系统。Space / Cell 两级结构 + Real/Ghost 复制 + offload
+迁移使得分布式多 CellApp 在本阶段已可工作。
 
 ## 类层次
 
 ```
-CellApp : EntityApp                — 与 BaseApp 同级
-  ├── Space = Cell（初期合一）       — Phase 11 才分离
-  ├── CellEntity (~500 LOC C++ 薄壳) — 属性 / 逻辑由 C# 管理
-  ├── RangeList                       — 双轴排序链表（完全对齐 BigWorld）
-  ├── RangeTrigger                    — 2D 交叉检测（完全对齐 BigWorld）
-  ├── Witness                         — AoITrigger + EntityCache 优先级堆
-  ├── Controller                      — MoveToPoint / Timer / Proximity（C# 可扩展）
-  └── CellAppNativeProvider           — INativeApiProvider C++ ↔ C# 桥
+CellApp : EntityApp                  — 与 BaseApp 同级
+  ├── Space                            — 跨 CellApp 的逻辑空间，拥有所有 CellEntity
+  │     └── Cell                       — Space 在本进程的子区域，持非拥有指针
+  ├── CellEntity (C++ 薄壳)            — 属性 / 逻辑由 C# 管理；Real XOR Ghost
+  │     ├── RealEntityData             — Real 专属：haunt 列表 + 复制状态
+  │     └── (real_channel)             — Ghost 专属：指向 Real 所在 CellApp
+  ├── RangeList / RangeTrigger         — `src/lib/space/`，完全对齐 BigWorld
+  ├── AoITrigger                       — RangeTrigger 子类，驱动 Witness
+  ├── Witness                          — AoI 复制管理：LOD + priority heap + 带宽预算
+  ├── Controllers                      — MoveTo / Timer / Proximity（`src/lib/space/`）
+  ├── GhostMaintainer                  — 每 tick 检查跨边界，diff haunt 列表
+  ├── OffloadChecker                   — Real 跨 Cell 边界时发起 OffloadEntity
+  └── CellAppNativeProvider            — INativeApiProvider C++ ↔ C# 桥
 ```
 
 ## 关键设计决策
@@ -67,10 +70,15 @@ CellApp : EntityApp                — 与 BaseApp 同级
 `x() / z()`；位置在 C# 会迫使每次 shuffle P/Invoke 回 C#，成本不可接受。
 C# 通过 `atlas_set_position()` NativeApi 设置位置；C++ 直接读。
 
-### 本阶段无 Real/Ghost
+### Real / Ghost / Offload
 
-所有实体都是 Real。Phase 11 引入 Ghost 时：`CellEntity` 加 `IsReal()` /
-`IsGhost()`；Witness 只附加到 Real；Controller 只在 Real 执行。
+`CellEntity` 是 Real 与 Ghost 的合体：通过 `real_data_` (Real) 与
+`real_channel_` (Ghost) 互斥区分。Real 持 `RealEntityData`（haunt 列表 +
+复制序号），Ghost 是被动副本，写操作 log+skip（`cellapp_native_provider.cc`）。
+Witness / Controller 只在 Real 上运行。`ConvertRealToGhost` /
+`ConvertGhostToReal` 完成 offload 两端的状态切换；`GhostMaintainer` 每
+tick 比对 BSP 边界生成 haunt diff，`OffloadChecker` 在 Real 跨 Cell 时
+发起 `OffloadEntity` (3110)。
 
 ### `INativeApiProvider` 区分 BaseApp 与 CellApp
 
@@ -83,18 +91,12 @@ C# 通过 `atlas_set_position()` NativeApi 设置位置；C++ 直接读。
 
 同一 C# `entity.Client.ShowDamage()` 在不同进程自动路由到正确路径。
 
-### EntityID 分层与 RPC 路由
+### EntityID 全集群唯一
 
-- `base_entity_id` — BaseApp / 客户端可见的稳定标识
-- `cell_entity_id` — CellApp 内部路由标识，可在 offload / 重建时变化
-
-CellApp 维护双索引：
-
-- `entity_population_`：`cell_entity_id → CellEntity*`（生命周期）
-- `base_entity_population_`：`base_entity_id → CellEntity*`（RPC 路由 / AOI 下行）
-
-面向客户端的 AOI / RPC / 属性更新 payload 必须携带稳定的 `base_entity_id`，
-不能直接泄露 CellApp 局部 ID。
+`EntityID` 由 DBApp `IDClient` 在集群范围分配（CellAppMgr 通过 `app_id`
+高字节避开冲突），不区分 base / cell 局部 ID。CellApp 单一索引
+`entity_population_: EntityID → CellEntity*` 即为生命周期与 RPC 路由的
+共同入口；offload 后 ID 不变。
 
 ### RPC 安全：双消息 + 四层纵深
 
@@ -119,15 +121,17 @@ CellApp 接收 RPC 拆分为 `ClientCellRpcForward`（客户端发起，REAL_ONL
 
 | 段 | 用途 |
 |---|---|
-| `3000–3099` | CellApp 自有消息：`CreateCellEntity` / `DestroyCellEntity` / `ClientCellRpcForward` (3003) / `InternalCellRpc` (3004) / `CreateSpace` / `DestroySpace` / `AvatarUpdate` / `EnableWitness` / `DisableWitness` / `SetAoIRadius` |
-| `2010–2017` | 复用现有 `BaseApp` 入站消息：`CellEntityCreated / CellEntityDestroyed / CurrentCell / CellRpcForward / SelfRpcFromCell / ReplicatedDeltaFromCell / BroadcastRpcFromCell / ReplicatedReliableDeltaFromCell` |
-| `2022–2023` | BaseApp 外部接口：`ClientBaseRpc` (2022) / `ClientCellRpc` (2023) |
+| `3000–3023` | CellApp 自有消息：`CreateCellEntity` (3000) / `DestroyCellEntity` (3002) / `ClientCellRpcForward` (3003) / `InternalCellRpc` (3004) / `CreateSpace` (3010) / `DestroySpace` (3011) / `AvatarUpdate` (3020) / `EnableWitness` (3021) / `DisableWitness` (3022) / `SetAoIRadius` (3023) |
+| `3100–3111` | Inter-CellApp Real/Ghost 复制与 offload：`CreateGhost` (3100) / `DeleteGhost` (3101) / `GhostPositionUpdate` (3102) / `GhostDelta` (3103) / `GhostSetReal` (3104) / `GhostSetNextReal` (3105) / `GhostSnapshotRefresh` (3106) / `OffloadEntity` (3110) / `OffloadEntityAck` (3111) |
+| `2010–2019` | 复用现有 `BaseApp` 入站消息：`CellEntityCreated` (2010) / `CellEntityDestroyed` (2011) / `CurrentCell` (2012) / `CellRpcForward` (2013) / `ReplicatedDeltaFromCell` (2015) / `BroadcastRpcFromCell` (2016) / `ReplicatedReliableDeltaFromCell` (2017) / `BackupCellEntity` (2018) / `ReplicatedBaselineFromCell` (2019)。**2014 已废弃保留**（曾为 `SelfRpcFromCell`） |
+| `2022–2027` | BaseApp 外部接口：`ClientBaseRpc` (2022) / `ClientCellRpc` (2023) / `EntityTransferred` (2024) / `CellReady` (2025) / `CellAppDeath` (2026) / `ClientEventSeqReport` (2027) |
 
 **传输可靠性约束：**
 
-- `SelfRpcFromCell` (2014) — **Reliable**：拥有者客户端 RPC、有序属性 delta
+- `ReplicatedReliableDeltaFromCell` (2017) — **Reliable**：有序属性 delta、owner 基线、reliable=false 字段的快照补包
 - `ReplicatedDeltaFromCell` (2015) — **Unreliable**：Volatile 位置 / 朝向（latest-wins）
 - `BroadcastRpcFromCell` (2016) — **Unreliable**：广播 ClientRpc
+- `CellRpcForward` (2013) — **Reliable**：BaseApp ↔ CellApp 服务端 RPC
 
 属性 delta 必须按 `event_seq` 有序到达，**必须走 Reliable**。
 
@@ -150,12 +154,12 @@ struct CellAoIEnvelope {
 ```
 
 **约束：** `DeltaForwarder` 是 latest-wins，不能承载有序属性 delta。
-属性 delta 改走 `SelfRpcFromCell`（Reliable，BaseApp 侧直达 client channel，
-不经 `DeltaForwarder`）；Volatile 位置走 `ReplicatedDeltaFromCell` →
-`DeltaForwarder` → `0xF001`。
+属性 delta 改走 `ReplicatedReliableDeltaFromCell` (2017)（Reliable，BaseApp
+侧直达 client channel，不经 `DeltaForwarder`）；Volatile 位置走
+`ReplicatedDeltaFromCell` (2015) → `DeltaForwarder` → `0xF001`。
 
-Phase 12 落地真实客户端协议（`10102/10103/10104/10111`）后，由 BaseApp
-在下行前解包 `CellAoIEnvelope`。
+Phase 12 落地真实客户端协议后，由 BaseApp 在下行前解包 `CellAoIEnvelope`；
+当前 client 仍以 `0xF001` opaque envelope 路径接收（`src/client/client_app.cc`）。
 
 ## Tick 内并发 / 重入约束
 
@@ -191,13 +195,14 @@ Controller 可改变位置 → `RangeList::Shuffle` → `AoITrigger::OnEnter/OnL
 | Tick 时长 | `ServerApp::Tick()` 单次 wall-clock | p50 < 20ms / p99 < 50ms @ 10Hz / 1000 实体 |
 | RangeList shuffle CPU | 聚合耗时 | 占单 tick CPU < 20% |
 | Witness tick CPU | `TickWitnesses()` 聚合耗时 | 占单 tick CPU < 50% |
-| 单观察者带宽 | 经 `SelfRpcFromCell + ReplicatedDeltaFromCell` 出口字节 | < 4 KB/tick（≈ 40 KB/s @ 10Hz） |
+| 单观察者带宽 | 经 `ReplicatedReliableDeltaFromCell + ReplicatedDeltaFromCell` 出口字节 | < 4 KB/tick（≈ 40 KB/s @ 10Hz） |
 | history 内存 | `Σ replication_state.history × sizeof(ReplicationFrame)` | < 4 MB / Space / 1000 实体 @ window=8 |
 | snapshot fallback 率 | fallback 触发 / 总发送 | < 1%（稳态） |
 
-`max_packet_bytes` 测度位置：Witness 构造 `SelfRpcFromCell::payload` 的
-**内层**字节数，不含 header 与网络 frame；deficit 以"溢出字节"计，下 tick
-扣预算。压测用例放在 `tests/integration/test_cellapp_perf.cpp`（默认不跑）。
+`max_packet_bytes` 测度位置：Witness 构造 `ReplicatedReliableDeltaFromCell::payload`
+的**内层**字节数（即 `CellAoIEnvelope` 序列序列），不含 header 与网络 frame；
+deficit 以"溢出字节"计，下 tick 扣预算。压测用例放在
+`tests/integration/test_cellapp_perf.cpp`（默认不跑）。
 
 ## AvatarUpdate 安全策略
 
@@ -213,16 +218,22 @@ Phase 10 采取**不做复杂反作弊但保留安全上限**：
 
 ## 待跟进 follow-up
 
-### 已落实到 Phase 11（参考）
+### 已合并的结构性变更
 
-Phase 10 §10.1 列出的 4 条结构性遗留项均在 Phase 11 落地：
-`ClientCellRpcForward` 信任边界（信封增 `source_forwarding_cellapp` +
-machined peer 白名单）、`Space::Tick` silent compaction 不复存在、
-EntityID 跨 CellApp 唯一（CellAppMgr 分配 `app_id` 作为高字节）。客户端
-RPC 速率预算仍待统一 rate limiter（建议走 machined 层）。
+- Real / Ghost / Offload 已与 Phase 10 同步落地（`ghost_maintainer`、
+  `real_entity_data`、`offload_checker`，3100–3111 消息段）
+- `ClientCellRpcForward` 信任边界：信封带 `source_forwarding_cellapp` +
+  machined peer 白名单
+- `Space::Tick` silent compaction 已移除
+- EntityID 跨 CellApp 唯一：CellAppMgr 分配 `app_id` 作为高字节
+- `SelfRpcFromCell` (2014) 已删除；reliable owner 流统一走
+  `ReplicatedReliableDeltaFromCell` (2017)
+- `SerializeReplicatedDelta*` legacy API 已移除；只剩
+  `BuildAndConsumeReplicationFrame`
 
 ### 仍待处理
 
+- 客户端 RPC 速率预算尚无统一 rate limiter（建议走 machined 层）
 - `Witness::HandleAoIEnter` 在 `try_emplace` 时不覆盖刚设的 `kGone` flag
   （peer 同 tick 内 leave-then-re-enter 的冗余 Enter，无害但浪费带宽）
 - `EntityRangeListNode::owner_data_` 用 `void*` + `reinterpret_cast`；契约
@@ -233,5 +244,3 @@ RPC 速率预算仍待统一 rate limiter（建议走 machined 层）。
   当前 0.40 % CPU，未达触发线）
 - `DeltaSyncEmitter` 在所有 audience mask 都没命中脏位时仍写 1-byte
   flags 头；short-circuit `if flags == 0 return` 跳过整段序列化
-- `SerializeReplicatedDelta*` legacy API 与 `BuildAndConsumeReplicationFrame`
-  新 API 互斥；老 API 标 deprecated，新代码只用新 API
