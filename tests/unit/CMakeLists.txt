@@ -393,6 +393,11 @@ atlas_add_test(NAME test_coro_rpc
   DEPS atlas_coro
 )
 
+atlas_add_test(NAME test_coro_bridge
+  SOURCES test_coro_bridge.cpp
+  DEPS atlas_clrscript atlas_coro
+)
+
 # ── Server Framework ───────────────────────────────────────────────────────
 
 atlas_add_test(NAME test_watcher

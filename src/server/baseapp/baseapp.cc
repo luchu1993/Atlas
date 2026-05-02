@@ -137,6 +137,7 @@ BaseApp::BaseApp(EventDispatcher& dispatcher, NetworkInterface& internal_network
                  NetworkInterface& external_network)
     : EntityApp(dispatcher, internal_network),
       external_network_(external_network),
+      rpc_registry_(dispatcher),
       cellapp_peers_(internal_network) {}
 
 BaseApp::~BaseApp() = default;
@@ -147,6 +148,12 @@ auto BaseApp::Init(int argc, char* argv[]) -> bool {
   const auto& cfg = Config();
 
   entity_mgr_.SetIdClient(&id_client_);
+
+  // RPC replies match here first; unmatched messages fall through to handlers.
+  Network().InterfaceTable().SetPreDispatchHook(
+      [this](MessageID id, std::span<const std::byte> payload) -> bool {
+        return rpc_registry_.TryDispatch(id, payload);
+      });
 
   RegisterInternalHandlers();
 
@@ -287,6 +294,7 @@ auto BaseApp::Init(int argc, char* argv[]) -> bool {
 }
 
 void BaseApp::Fini() {
+  rpc_registry_.CancelAll();
   entity_mgr_.ForEach([this](const BaseEntity& ent) {
     if (ent.Dbid() != kInvalidDBID) ReleaseCheckout(ent.Dbid(), ent.TypeId());
   });

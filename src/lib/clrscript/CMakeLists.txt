@@ -10,6 +10,7 @@ add_library(atlas_clrscript STATIC
   clr_object.cc
   clr_object_registry.cc
   clr_script_engine.cc
+  coro_bridge.cc
   file_watcher.cc
   native_api_provider.cc
 )
@@ -24,9 +25,11 @@ target_include_directories(atlas_clrscript PUBLIC "${CMAKE_SOURCE_DIR}/src/lib")
 target_compile_definitions(atlas_clrscript PUBLIC ATLAS_ENGINE_EXPORTS)
 target_link_libraries(atlas_clrscript
   PUBLIC
+    atlas_coro
     atlas_entitydef
     atlas_foundation
     atlas_math
+    atlas_network
     atlas_platform
     atlas_script
     atlas_compiler_options

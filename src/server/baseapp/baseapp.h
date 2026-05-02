@@ -10,6 +10,7 @@
 #include <vector>
 
 #include "baseapp_native_provider.h"
+#include "coro/pending_rpc_registry.h"
 #include "db/idatabase.h"
 #include "dbapp/dbapp_messages.h"
 #include "delta_forwarder.h"
@@ -82,6 +83,10 @@ class BaseApp : public EntityApp {
 
   [[nodiscard]] auto GetEntityManager() -> EntityManager& { return entity_mgr_; }
   [[nodiscard]] auto GetNativeProvider() -> BaseAppNativeProvider& { return *native_provider_; }
+
+  // Shared (reply_id, request_id) registry — backs both C++ coroutines and
+  // managed AtlasTask RPCs via coro_bridge.
+  [[nodiscard]] auto GetRpcRegistry() -> PendingRpcRegistry& { return rpc_registry_; }
 
   // CellApp channel currently owning target_entity_id's Real; nullptr if
   // unknown, no cell yet, or peer map missing entry.
@@ -170,6 +175,7 @@ class BaseApp : public EntityApp {
   NetworkInterface& external_network_;
   IDClient id_client_;
   EntityManager entity_mgr_;
+  PendingRpcRegistry rpc_registry_;
   BaseAppNativeProvider* native_provider_{nullptr};  // owned by ScriptApp
   Channel* dbapp_channel_{nullptr};
   Channel* baseappmgr_channel_{nullptr};

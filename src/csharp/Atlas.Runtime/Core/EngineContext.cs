@@ -1,5 +1,6 @@
 using System;
 using System.Threading;
+using Atlas.Coro.Hosting;
 using Atlas.Entity;
 
 namespace Atlas.Core;
@@ -26,6 +27,12 @@ internal static class EngineContext
     /// </summary>
     public static AtlasSynchronizationContext? SyncContext { get; set; }
 
+    /// <summary>
+    /// IAtlasLoop implementation backing AtlasTask coroutines on the server.
+    /// OnTick calls Drain() to fire main-thread posts and timer fire-outs.
+    /// </summary>
+    public static ManagedAtlasLoop? CoroLoop { get; set; }
+
     public static void Initialize()
     {
         if (_initialized)
@@ -48,6 +55,9 @@ internal static class EngineContext
         NativeApi.UnregisterAllEntityTypes();
         EntityManager.Instance.Reset();
         SyncContext = null;
+        CoroLoop?.Dispose();
+        CoroLoop = null;
+        Atlas.Coro.AtlasLoop.Reset();
         _initialized = false;
     }
 }

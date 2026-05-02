@@ -6,6 +6,7 @@
 #include <functional>
 
 #include "clrscript/base_native_provider.h"
+#include "clrscript/coro_bridge.h"
 #include "server/entity_types.h"
 
 namespace atlas {
@@ -70,6 +71,10 @@ class BaseAppNativeProvider : public BaseNativeProvider {
 
   void SetNativeCallbacks(const void* native_callbacks, int32_t len) override;
 
+  auto CoroRegisterPending(uint16_t reply_id, uint32_t request_id, int32_t timeout_ms,
+                           intptr_t managed_handle) -> uint64_t override;
+  void CoroCancelPending(uint64_t handle) override;
+
   [[nodiscard]] auto restore_entity_fn() const -> RestoreEntityFn { return restore_entity_fn_; }
   [[nodiscard]] auto get_entity_data_fn() const -> GetEntityDataFn { return get_entity_data_fn_; }
   [[nodiscard]] auto entity_destroyed_fn() const -> EntityDestroyedFn {
@@ -87,6 +92,7 @@ class BaseAppNativeProvider : public BaseNativeProvider {
   EntityDestroyedFn entity_destroyed_fn_{nullptr};
   DispatchRpcFn dispatch_rpc_fn_{nullptr};
   GetOwnerSnapshotFn get_owner_snapshot_fn_{nullptr};
+  CoroOnRpcCompleteFn coro_on_rpc_complete_fn_{nullptr};
 };
 
 }  // namespace atlas

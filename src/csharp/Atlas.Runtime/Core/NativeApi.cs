@@ -209,4 +209,12 @@ internal static unsafe partial class NativeApi
 
     [LibraryImport(LibName, EntryPoint = "AtlasGetAbiVersion")]
     public static partial uint GetAbiVersion();
+
+    // Returns 0 when the process has no PendingRpcRegistry or callback fn.
+    [LibraryImport(LibName, EntryPoint = "AtlasCoroRegisterPending")]
+    public static partial ulong CoroRegisterPending(ushort replyId, uint requestId,
+        int timeoutMs, IntPtr managedHandle);
+
+    [LibraryImport(LibName, EntryPoint = "AtlasCoroCancelPending")]
+    public static partial void CoroCancelPending(ulong handle);
 }

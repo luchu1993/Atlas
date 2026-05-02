@@ -24,6 +24,8 @@ internal unsafe struct NativeCallbackTable
     // boundary. Routed via user_arg so scripts can disambiguate multiple
     // proximity sensors on one entity. is_enter == 1 inbound, 0 outbound.
     public nint ProximityEvent;
+    // GCHandle of the IAtlasRpcCallback is freed inside this callback.
+    public nint OnRpcComplete;
 }
 
 internal static unsafe class NativeCallbacks
@@ -49,6 +51,8 @@ internal static unsafe class NativeCallbacks
             (nint)(delegate* unmanaged<uint, byte*, int, int*, int>)&SerializeEntity;
         table.ProximityEvent =
             (nint)(delegate* unmanaged<uint, int, uint, byte, void>)&ProximityEvent;
+        table.OnRpcComplete =
+            (nint)(delegate* unmanaged<IntPtr, int, byte*, int, void>)&OnRpcComplete;
 
         NativeApi.SetNativeCallbacks(&table, sizeof(NativeCallbackTable));
     }
@@ -367,6 +371,41 @@ internal static unsafe class NativeCallbacks
             {
                 Log.Debug(
                     $"ProximityEvent: entity={entityId} userArg={userArg} peer={peerEntityId} LEAVE");
+            }
+        }
+        catch (Exception ex)
+        {
+            ErrorBridge.SetError(ex);
+        }
+    }
+
+    // managedHandle is the GCHandle of the IAtlasRpcCallback; freed here on
+    // every completion path. status mirrors Atlas.Coro.Rpc.RpcCompletionStatus.
+    [UnmanagedCallersOnly]
+    public static void OnRpcComplete(IntPtr managedHandle, int status, byte* payload, int len)
+    {
+        try
+        {
+            ThreadGuard.EnsureMainThread();
+
+            if (managedHandle == IntPtr.Zero) return;
+            var gch = GCHandle.FromIntPtr(managedHandle);
+            var callback = gch.Target as Atlas.Coro.Rpc.IAtlasRpcCallback;
+            gch.Free();
+            if (callback is null)
+            {
+                Log.Warning("OnRpcComplete: managed handle did not resolve to a callback");
+                return;
+            }
+
+            if (status == 0)
+            {
+                var span = len > 0 ? new ReadOnlySpan<byte>(payload, len) : ReadOnlySpan<byte>.Empty;
+                callback.OnReply(span);
+            }
+            else
+            {
+                callback.OnError((Atlas.Coro.Rpc.RpcCompletionStatus)status);
             }
         }
         catch (Exception ex)

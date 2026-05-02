@@ -107,7 +107,15 @@
                                                                                                    \
     X(void, ReportClientEventSeqGap,                                                               \
         (uint32_t entity_id, uint32_t gap_delta),                                                 \
-        atlas::GetNativeApiProvider().ReportClientEventSeqGap(entity_id, gap_delta))
+        atlas::GetNativeApiProvider().ReportClientEventSeqGap(entity_id, gap_delta))               \
+                                                                                                   \
+    X(uint64_t, CoroRegisterPending,                                                               \
+        (uint16_t reply_id, uint32_t request_id, int32_t timeout_ms, intptr_t managed_handle),    \
+        return atlas::GetNativeApiProvider().CoroRegisterPending(                                  \
+            reply_id, request_id, timeout_ms, managed_handle))                                     \
+    X(void, CoroCancelPending,                                                                     \
+        (uint64_t handle),                                                                         \
+        atlas::GetNativeApiProvider().CoroCancelPending(handle))
 // clang-format on
 
 #endif  // ATLAS_LIB_CLRSCRIPT_CLR_NATIVE_API_DEFS_H_

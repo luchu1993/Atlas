@@ -180,16 +180,15 @@ auto ClientApp::InitClr(const char* exe_path) -> bool {
   bootstrap_args.error_get_code =
       reinterpret_cast<decltype(bootstrap_args.error_get_code)>((*error_code)());
 
-  // Desktop client does NOT bind Atlas.Core.Lifecycle or
-  // Atlas.Hosting.HotReloadManager — server-only types. Clearing the type
-  // strings makes Initialize skip those bindings; LoadModule and the
-  // OnTick/OnInit/OnShutdown hooks then become client-unused no-ops.
+  // Desktop client uses Atlas.Client.DesktopLifecycle — it owns the
+  // AtlasTask coroutine loop install + drain (OnTick). Hotreload bindings
+  // remain server-only.
   auto clr = std::make_unique<ClrScriptEngine>();
   ClrScriptEngine::Config clr_config;
   clr_config.runtime_config_path = config_.runtime_config;
   clr_config.runtime_assembly_path = config_.script_assembly;
   clr_config.bootstrap_args = bootstrap_args;
-  clr_config.lifecycle_type.clear();
+  clr_config.lifecycle_type = "Atlas.Client.DesktopLifecycle";
   clr_config.hotreload_type.clear();
 
   auto cfg_result = clr->Configure(clr_config);

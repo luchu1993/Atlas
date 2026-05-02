@@ -2,8 +2,12 @@ using System;
 using System.Diagnostics;
 using System.Runtime.InteropServices;
 using System.Threading;
+using Atlas.Coro;
+using Atlas.Coro.Hosting;
+using Atlas.Coro.Rpc;
 using Atlas.Diagnostics;
 using Atlas.Entity;
+using Atlas.Runtime.Coro;
 using Atlas.Runtime.Diagnostics;
 
 namespace Atlas.Core;
@@ -33,6 +37,14 @@ internal static class Lifecycle
 
         ThreadGuard.SetMainThread();
 
+        var coroLoop = new ManagedAtlasLoop();
+        coroLoop.UnhandledException += static ex =>
+            Log.Error($"AtlasTask continuation threw: {ex.Message}");
+        EngineContext.CoroLoop = coroLoop;
+        AtlasLoop.Install(coroLoop);
+        AtlasRpcRegistryHost.Install(NativeRpcRegistry.Instance);
+        AtlasShutdownToken.Reset();
+
         // Install the Tracy backend before any script user code runs, so
         // the first OnTick already produces zones — and so any module
         // initializer that opens a zone during assembly load lands in the
@@ -58,6 +70,8 @@ internal static class Lifecycle
         Atlas.Diagnostics.GCMonitor.Stop();
 #endif
         Log.Info("Atlas C# runtime shutting down");
+        AtlasShutdownToken.RequestShutdown();
+        AtlasRpcRegistryHost.Reset();
         EngineContext.Shutdown();
         // Drop the Tracy backend reference so a subsequent EngineInit (e.g.
         // hot reload) can re-install cleanly. The cached frame/plot name
@@ -77,6 +91,7 @@ internal static class Lifecycle
         using var _ = Profiler.ZoneN(ProfilerNames.ScriptOnTick);
         using (Profiler.ZoneN(ProfilerNames.ScriptSyncContextFlush))
             EngineContext.SyncContext?.ProcessQueue();
+        EngineContext.CoroLoop?.Drain();
         using (Profiler.ZoneN(ProfilerNames.ScriptEntityTickAll))
             EntityManager.Instance.OnTickAll(deltaTime);
         // Collect property/volatile dirty bits that OnTick may have set and

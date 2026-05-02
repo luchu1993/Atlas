@@ -35,6 +35,9 @@ struct NativeCallbackTable {
   EntityDestroyedFn entity_destroyed;
   DispatchRpcFn dispatch_rpc;
   GetOwnerSnapshotFn get_owner_snapshot;  // optional for older runtimes
+  SerializeEntityFn serialize_entity;
+  ProximityEventFn proximity_event;
+  CoroOnRpcCompleteFn coro_on_rpc_complete;
 };
 #pragma pack(pop)
 
@@ -176,7 +179,23 @@ void BaseAppNativeProvider::SetNativeCallbacks(const void* native_callbacks, int
   entity_destroyed_fn_ = table.entity_destroyed;
   dispatch_rpc_fn_ = table.dispatch_rpc;
   get_owner_snapshot_fn_ = table.get_owner_snapshot;  // nullptr if runtime predates baseline
+  coro_on_rpc_complete_fn_ = table.coro_on_rpc_complete;  // nullptr on older runtimes
   ATLAS_LOG_INFO("BaseApp: native callback table registered (len={})", len);
+}
+
+auto BaseAppNativeProvider::CoroRegisterPending(uint16_t reply_id, uint32_t request_id,
+                                                int32_t timeout_ms,
+                                                intptr_t managed_handle) -> uint64_t {
+  if (coro_on_rpc_complete_fn_ == nullptr) {
+    ATLAS_LOG_WARNING("BaseApp: CoroRegisterPending: managed runtime did not register callback");
+    return 0;
+  }
+  return coro_bridge::RegisterPending(app_.GetRpcRegistry(), coro_on_rpc_complete_fn_, reply_id,
+                                      request_id, timeout_ms, managed_handle);
+}
+
+void BaseAppNativeProvider::CoroCancelPending(uint64_t handle) {
+  coro_bridge::CancelPending(app_.GetRpcRegistry(), handle);
 }
 
 }  // namespace atlas

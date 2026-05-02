@@ -89,6 +89,15 @@ class INativeApiProvider {
   virtual void CancelController(uint32_t entity_id, int32_t controller_id) = 0;
 
   virtual void ReportClientEventSeqGap(uint32_t entity_id, uint32_t gap_delta) = 0;
+
+  // Default no-op so processes without a PendingRpcRegistry don't have to
+  // implement them. Returns 0 on failure.
+  virtual auto CoroRegisterPending(uint16_t /*reply_id*/, uint32_t /*request_id*/,
+                                   int32_t /*timeout_ms*/, intptr_t /*managed_handle*/)
+      -> uint64_t {
+    return 0;
+  }
+  virtual void CoroCancelPending(uint64_t /*handle*/) {}
 };
 
 void SetNativeApiProvider(INativeApiProvider* provider);
