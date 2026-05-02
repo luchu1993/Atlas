@@ -6,7 +6,9 @@
 #include "foundation/log.h"
 #include "foundation/profiler.h"
 #include "foundation/runtime.h"
+#include "network/channel.h"
 #include "network/interface_table.h"
+#include "network/machined_types.h"
 #include "server/common_messages.h"
 #include "server/server_app_option.h"
 
@@ -127,6 +129,18 @@ auto ServerApp::Init(int argc, char* argv[]) -> bool {
       [this](const Address&, Channel*, const msg::ShutdownRequest& req) {
         ATLAS_LOG_INFO("Received ShutdownRequest (reason={}); shutting down", req.reason);
         Shutdown();
+      });
+
+  (void)network_.InterfaceTable().RegisterTypedHandler<machined::WatcherForward>(
+      [this](const Address&, Channel* ch, const machined::WatcherForward& fwd) {
+        if (ch == nullptr) return;
+        machined::WatcherReply reply;
+        reply.request_id = fwd.request_id;
+        if (auto v = watcher_registry_.Get(fwd.watcher_path); v.has_value()) {
+          reply.found = true;
+          reply.value = std::move(*v);
+        }
+        (void)ch->SendMessage(reply);
       });
 
   if (config_.process_type != ProcessType::kMachined) {
