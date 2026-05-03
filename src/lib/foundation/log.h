@@ -62,11 +62,8 @@ class Logger {
  private:
   Logger();
 
-  // Sinks are published as an immutable snapshot. Readers grab a shared
-  // lock briefly to copy the shared_ptr; writers take the unique lock and
-  // swap a freshly-built list. shared_mutex chosen over std::atomic<
-  // std::shared_ptr<>> because libc++ on Apple Clang / older Android NDK
-  // does not yet ship the C++20 specialization.
+  // shared_mutex over std::atomic<shared_ptr<>> — libc++ on Apple Clang
+  // and older Android NDK still lacks the C++20 specialization.
   using SinkList = std::vector<std::shared_ptr<LogSink>>;
   mutable std::shared_mutex mutex_;
   // runtime_level_ is read on every log call; use atomic to avoid mutex

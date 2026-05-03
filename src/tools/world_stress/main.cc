@@ -436,12 +436,8 @@ class Session {
   void SendEcho() {
     if (!auth_channel_ || entity_id_ == kInvalidEntityID) return;
 
-    // StressAvatar.Echo is a cell_method (exposed own_client). RPC id
-    // layout: (slot=0 <<24) | (direction=2 <<22) | (type_index=3 <<8)
-    //          | method_index. type_index = entity_ids.xml manifest id.
-    //          method_index is 1-based, in .def declaration order:
-    //          Echo(1), ReportPos(2), SubmitScores(3), UpdateLoadout(4),
-    //          EquipWeapon(5), ApplyBuffs(6).
+    // type_index from entity_ids.xml, method_index by .def declaration
+    // order — see RpcIds.g.cs for the canonical mapping.
     constexpr uint32_t kEchoRpcId = (2u << 22) | (3u << 8) | 1u;
 
     const uint32_t seq = next_echo_seq_++;
@@ -465,13 +461,8 @@ class Session {
     }
   }
 
-  // Client→cell component RPC. Exercises slot_idx encoding in rpc_id:
-  // slot=1 (StressLoadComponent) routes the dispatcher into the
-  // component instance instead of the entity body. Charge takes scalar
-  // args (kept that way deliberately — gives us a slot-encoded RPC that
-  // doesn't depend on the container/struct arg codec).
-  // method_index per StressLoadComponent.def cell_methods, declaration
-  // order: Charge(1), ApplyAffixes(2), SwapOffhand(3), QueueBuffs(4).
+  // Slot=1 routes the dispatcher into StressLoadComponent (vs the entity
+  // body); Charge has scalar args so it isolates the slot encoding test.
   void SendChargeComponentRpc() {
     if (!auth_channel_ || entity_id_ == kInvalidEntityID) return;
     constexpr uint32_t kChargeRpcId = (1u << 24) |  // slot_idx = 1 (StressLoadComponent)
@@ -496,9 +487,7 @@ class Session {
   void SendReportPos() {
     if (!auth_channel_ || entity_id_ == kInvalidEntityID) return;
 
-    // StressAvatar.ReportPos is a cell_method (exposed all_clients).
-    // method_index=2 — second cell_method declared in StressAvatar.def
-    // (see SendEcho's comment for the full declaration order).
+    // method_index=2: second cell_method declared in StressAvatar.def.
     constexpr uint32_t kReportPosRpcId = (2u << 22) | (3u << 8) | 2u;
 
     // Random-walk inside a (2 * walk_range_m)-wide square centred on

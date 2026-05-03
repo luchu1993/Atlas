@@ -24,9 +24,7 @@ class SpinLock {
  public:
   void Lock() noexcept {
     while (flag_.test_and_set(std::memory_order_acquire)) {
-      // Inner loop re-reads without a costly test_and_set until the flag
-      // looks free, then retries the atomic exchange.  The pause hint
-      // reduces pipeline pressure and improves hyper-thread throughput.
+      // Spin-wait with pause hints, then retry the exchange.
       while (flag_.test(std::memory_order_relaxed)) {
 #if defined(_MSC_VER)
         _mm_pause();

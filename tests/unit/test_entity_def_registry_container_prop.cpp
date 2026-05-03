@@ -23,16 +23,8 @@ namespace {
 
 // ---- DataTypeRef writers.
 //
-// Two flavours:
-//   "Full" writers (WriteScalarType / WriteListType) emit a complete
-//   DataTypeRef with leading kind byte. Used for NESTED children
-//   (list.elem, dict.key, dict.value) — the recursive decoder needs
-//   the kind byte there.
-//
-//   "Body" writers (WriteListBody / WriteDictBody / WriteStructBody) emit
-//   only the kind-specific tail, no leading kind byte. Used for the
-//   top-level property tail in RegisterType where prop.data_type doubles
-//   as the top-level kind and the wire skips the redundant byte.
+// "Full" writers prefix the kind byte (used for nested children); "Body"
+// writers omit it (used for the top-level property tail in RegisterType).
 
 void WriteScalarType(BinaryWriter& w, PropertyDataType kind) {
   w.Write<uint8_t>(static_cast<uint8_t>(kind));

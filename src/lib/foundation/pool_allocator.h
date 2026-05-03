@@ -10,10 +10,8 @@
 
 namespace atlas {
 
-// `pool_name` must be a stable pointer (string literal or other static
-// storage). Tracy keys named-allocation streams by pointer identity;
-// a heap-allocated, transient name would corrupt the trace history of
-// any already-connected viewer the first time it was freed and reused.
+// `pool_name` must be a stable pointer — Tracy keys named-allocation
+// streams by pointer identity, so transient names corrupt traces.
 class PoolAllocator {
  public:
   explicit PoolAllocator(const char* pool_name, std::size_t block_size,
@@ -44,9 +42,7 @@ class PoolAllocator {
 
   FreeNode* free_list_{nullptr};
   Chunk* chunks_{nullptr};
-  // Only consumed by ATLAS_PROFILE_*_NAMED; becomes dead when the
-  // profiler is compiled out (ATLAS_ENABLE_PROFILER=OFF), which trips
-  // -Wunused-private-field on Apple/NDK Clang.
+  // Consumed only by ATLAS_PROFILE_*_NAMED; dead when the profiler is off.
   [[maybe_unused]] const char* pool_name_;
   std::size_t block_size_;
   std::size_t alignment_;

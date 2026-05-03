@@ -8,9 +8,8 @@
 namespace atlas {
 
 struct ThreadPool::Impl {
-  // std::thread (not std::jthread) keeps this portable to Apple Clang
-  // libc++ on iOS, which still doesn't ship the C++20 jthread/stop_token
-  // pieces. We never used the stop_token in the worker loop anyway.
+  // std::thread, not std::jthread — Apple Clang libc++ on iOS lacks the
+  // C++20 jthread/stop_token pieces, and the worker loop never used them.
   std::vector<std::thread> workers;
   std::queue<std::function<void()>> tasks;
   std::mutex mutex;

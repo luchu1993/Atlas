@@ -95,9 +95,7 @@ class SelectPoller final : public IOPoller {
     }
 
     struct timeval tv;
-    // tv_sec / tv_usec field widths differ across platforms (Darwin uses
-    // int for tv_usec, Linux uses long); cast through decltype so we
-    // never trip -Wshorten-64-to-32.
+    // tv_usec is int on Darwin, long on Linux — cast through decltype.
     tv.tv_sec = static_cast<decltype(tv.tv_sec)>(usec / 1'000'000);
     tv.tv_usec = static_cast<decltype(tv.tv_usec)>(usec % 1'000'000);
 
