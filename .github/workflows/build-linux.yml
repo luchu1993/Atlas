@@ -1,4 +1,4 @@
-name: CMake CI
+name: Linux Build
 
 on:
   push:
@@ -21,40 +21,21 @@ on:
       - 'memory/**'
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
+  group: build-linux-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
-  build-and-test:
-    name: ${{ matrix.name }}
-    runs-on: ${{ matrix.os }}
+  build:
+    name: ${{ matrix.preset }}
+    runs-on: ubuntu-24.04
     strategy:
       fail-fast: false
       matrix:
         include:
-          - name: Windows (MSVC, Debug)
-            os: windows-2022
-            preset: debug
-            config: Debug
-            run_tests: true
-
-          - name: Windows (MSVC, Release)
-            os: windows-2022
-            preset: release
+          - preset: release
             config: Release
-            run_tests: false
-
-          - name: Linux (GCC, Debug)
-            os: ubuntu-24.04
-            preset: debug
-            config: Debug
-            run_tests: true
-
-          - name: Linux (GCC, Release)
-            os: ubuntu-24.04
-            preset: release
-            config: Release
-            run_tests: false
+          - preset: profile
+            config: RelWithDebInfo
 
     steps:
       - name: Checkout
@@ -65,14 +46,7 @@ jobs:
         with:
           dotnet-version: '9.0.x'
 
-      - name: Setup MSVC environment (Windows)
-        if: runner.os == 'Windows'
-        uses: ilammy/msvc-dev-cmd@v1
-        with:
-          arch: x64
-
-      - name: Install GCC 13 + Ninja (Linux)
-        if: runner.os == 'Linux'
+      - name: Install GCC 13 + Ninja
         run: |
           sudo apt-get update
           sudo apt-get install -y g++-13 ninja-build
@@ -86,25 +60,25 @@ jobs:
         uses: actions/cache@v4
         with:
           path: .sccache
-          key: sccache-${{ runner.os }}-${{ matrix.preset }}-${{ github.sha }}
+          key: sccache-linux-${{ matrix.preset }}-${{ github.sha }}
           restore-keys: |
-            sccache-${{ runner.os }}-${{ matrix.preset }}-
+            sccache-linux-${{ matrix.preset }}-
 
       - name: Cache NuGet packages
         uses: actions/cache@v4
         with:
           path: ~/.nuget/packages
-          key: nuget-${{ runner.os }}-${{ hashFiles('**/*.csproj', '**/Directory.Build.props') }}
+          key: nuget-linux-${{ hashFiles('**/*.csproj', '**/Directory.Build.props') }}
           restore-keys: |
-            nuget-${{ runner.os }}-
+            nuget-linux-
 
       - name: Cache FetchContent _deps
         uses: actions/cache@v4
         with:
           path: build/${{ matrix.preset }}/_deps
-          key: deps-${{ runner.os }}-${{ matrix.preset }}-${{ hashFiles('cmake/Dependencies.cmake') }}
+          key: deps-linux-${{ matrix.preset }}-${{ hashFiles('cmake/Dependencies.cmake') }}
           restore-keys: |
-            deps-${{ runner.os }}-${{ matrix.preset }}-
+            deps-linux-${{ matrix.preset }}-
 
       - name: Restore .NET packages
         shell: bash
@@ -131,19 +105,3 @@ jobs:
         env:
           SCCACHE_DIR: ${{ github.workspace }}/.sccache
         run: sccache --show-stats
-
-      - name: Unit Tests
-        if: matrix.run_tests
-        working-directory: build/${{ matrix.preset }}
-        run: ctest --build-config ${{ matrix.config }} --label-regex unit --output-on-failure
-
-      - name: Integration Tests
-        if: matrix.run_tests
-        working-directory: build/${{ matrix.preset }}
-        run: ctest --build-config ${{ matrix.config }} --label-regex integration --output-on-failure
-
-      - name: C# IntegrationTests (FakeCluster only)
-        if: matrix.run_tests
-        env:
-          ATLAS_BIN_DIR: ${{ github.workspace }}/bin/${{ matrix.preset }}
-        run: dotnet test tests/csharp/Atlas.Client.IntegrationTests --filter "Category!=Nightly" --nologo

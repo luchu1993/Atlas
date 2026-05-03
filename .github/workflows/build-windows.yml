@@ -1,0 +1,105 @@
+name: Windows Build
+
+on:
+  push:
+    branches: [main]
+    paths-ignore:
+      - '**/*.md'
+      - 'docs/**'
+      - 'tools/profile/**'
+      - 'tools/cluster_control/**'
+      - '.gitignore'
+      - 'memory/**'
+  pull_request:
+    branches: [main]
+    paths-ignore:
+      - '**/*.md'
+      - 'docs/**'
+      - 'tools/profile/**'
+      - 'tools/cluster_control/**'
+      - '.gitignore'
+      - 'memory/**'
+
+concurrency:
+  group: build-windows-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: ${{ matrix.preset }}
+    runs-on: windows-2022
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - preset: release
+            config: Release
+          - preset: profile
+            config: RelWithDebInfo
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup .NET SDK
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '9.0.x'
+
+      - name: Setup MSVC environment
+        uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x64
+
+      - name: Setup sccache
+        uses: mozilla-actions/sccache-action@v0.0.6
+
+      - name: Cache sccache
+        uses: actions/cache@v4
+        with:
+          path: .sccache
+          key: sccache-windows-${{ matrix.preset }}-${{ github.sha }}
+          restore-keys: |
+            sccache-windows-${{ matrix.preset }}-
+
+      - name: Cache NuGet packages
+        uses: actions/cache@v4
+        with:
+          path: ~/.nuget/packages
+          key: nuget-windows-${{ hashFiles('**/*.csproj', '**/Directory.Build.props') }}
+          restore-keys: |
+            nuget-windows-
+
+      - name: Cache FetchContent _deps
+        uses: actions/cache@v4
+        with:
+          path: build/${{ matrix.preset }}/_deps
+          key: deps-windows-${{ matrix.preset }}-${{ hashFiles('cmake/Dependencies.cmake') }}
+          restore-keys: |
+            deps-windows-${{ matrix.preset }}-
+
+      - name: Restore .NET packages
+        shell: bash
+        run: |
+          shopt -s globstar nullglob
+          for proj in src/**/*.csproj tests/**/*.csproj samples/**/*.csproj; do
+            dotnet restore "$proj"
+          done
+
+      - name: Configure
+        env:
+          SCCACHE_DIR: ${{ github.workspace }}/.sccache
+        run: >
+          cmake --preset ${{ matrix.preset }}
+          -DCMAKE_C_COMPILER_LAUNCHER=sccache
+          -DCMAKE_CXX_COMPILER_LAUNCHER=sccache
+
+      - name: Build
+        env:
+          SCCACHE_DIR: ${{ github.workspace }}/.sccache
+        run: cmake --build build/${{ matrix.preset }} --config ${{ matrix.config }}
+
+      - name: sccache stats
+        env:
+          SCCACHE_DIR: ${{ github.workspace }}/.sccache
+        run: sccache --show-stats

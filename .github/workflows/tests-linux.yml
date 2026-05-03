@@ -1,0 +1,122 @@
+name: Linux Tests
+
+on:
+  push:
+    branches: [main]
+    paths-ignore:
+      - '**/*.md'
+      - 'docs/**'
+      - 'tools/profile/**'
+      - 'tools/cluster_control/**'
+      - '.gitignore'
+      - 'memory/**'
+  pull_request:
+    branches: [main]
+    paths-ignore:
+      - '**/*.md'
+      - 'docs/**'
+      - 'tools/profile/**'
+      - 'tools/cluster_control/**'
+      - '.gitignore'
+      - 'memory/**'
+
+concurrency:
+  group: tests-linux-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: ${{ matrix.category }}
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - category: Unit
+            kind: ctest
+            label: unit
+          - category: Integration
+            kind: ctest
+            label: integration
+          - category: C#
+            kind: dotnet
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup .NET SDK
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '9.0.x'
+
+      - name: Install GCC 13 + Ninja
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y g++-13 ninja-build
+          sudo update-alternatives --install /usr/bin/g++ g++ /usr/bin/g++-13 100
+          sudo update-alternatives --install /usr/bin/gcc gcc /usr/bin/gcc-13 100
+
+      - name: Setup sccache
+        uses: mozilla-actions/sccache-action@v0.0.6
+
+      - name: Cache sccache
+        uses: actions/cache@v4
+        with:
+          path: .sccache
+          key: sccache-linux-debug-${{ github.sha }}
+          restore-keys: |
+            sccache-linux-debug-
+
+      - name: Cache NuGet packages
+        uses: actions/cache@v4
+        with:
+          path: ~/.nuget/packages
+          key: nuget-linux-${{ hashFiles('**/*.csproj', '**/Directory.Build.props') }}
+          restore-keys: |
+            nuget-linux-
+
+      - name: Cache FetchContent _deps
+        uses: actions/cache@v4
+        with:
+          path: build/debug/_deps
+          key: deps-linux-debug-${{ hashFiles('cmake/Dependencies.cmake') }}
+          restore-keys: |
+            deps-linux-debug-
+
+      - name: Restore .NET packages
+        shell: bash
+        run: |
+          shopt -s globstar nullglob
+          for proj in src/**/*.csproj tests/**/*.csproj samples/**/*.csproj; do
+            dotnet restore "$proj"
+          done
+
+      - name: Configure
+        env:
+          SCCACHE_DIR: ${{ github.workspace }}/.sccache
+        run: >
+          cmake --preset debug
+          -DCMAKE_C_COMPILER_LAUNCHER=sccache
+          -DCMAKE_CXX_COMPILER_LAUNCHER=sccache
+
+      - name: Build
+        env:
+          SCCACHE_DIR: ${{ github.workspace }}/.sccache
+        run: cmake --build build/debug --config Debug
+
+      - name: sccache stats
+        env:
+          SCCACHE_DIR: ${{ github.workspace }}/.sccache
+        run: sccache --show-stats
+
+      - name: ctest (${{ matrix.label }})
+        if: matrix.kind == 'ctest'
+        working-directory: build/debug
+        run: ctest --build-config Debug --label-regex ${{ matrix.label }} --output-on-failure
+
+      - name: dotnet test
+        if: matrix.kind == 'dotnet'
+        env:
+          ATLAS_BIN_DIR: ${{ github.workspace }}/bin/debug
+        run: dotnet test tests/csharp/Atlas.Client.IntegrationTests --filter "Category!=Nightly" --nologo
