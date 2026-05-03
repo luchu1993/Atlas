@@ -44,7 +44,10 @@ class PoolAllocator {
 
   FreeNode* free_list_{nullptr};
   Chunk* chunks_{nullptr};
-  const char* pool_name_;
+  // Only consumed by ATLAS_PROFILE_*_NAMED; becomes dead when the
+  // profiler is compiled out (ATLAS_ENABLE_PROFILER=OFF), which trips
+  // -Wunused-private-field on Apple/NDK Clang.
+  [[maybe_unused]] const char* pool_name_;
   std::size_t block_size_;
   std::size_t alignment_;
   std::size_t in_use_{0};

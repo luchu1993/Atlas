@@ -24,10 +24,10 @@ namespace {
 // ---- DataTypeRef writers.
 //
 // Two flavours:
-//   "Full" writers (WriteScalarType / WriteListType / WriteDictType /
-//   WriteStructType) emit a complete DataTypeRef with leading kind byte.
-//   Used for NESTED children (list.elem, dict.key, dict.value) — the recursive
-//   decoder needs the kind byte there.
+//   "Full" writers (WriteScalarType / WriteListType) emit a complete
+//   DataTypeRef with leading kind byte. Used for NESTED children
+//   (list.elem, dict.key, dict.value) — the recursive decoder needs
+//   the kind byte there.
 //
 //   "Body" writers (WriteListBody / WriteDictBody / WriteStructBody) emit
 //   only the kind-specific tail, no leading kind byte. Used for the
@@ -41,18 +41,6 @@ void WriteScalarType(BinaryWriter& w, PropertyDataType kind) {
 void WriteListType(BinaryWriter& w, const std::function<void(BinaryWriter&)>& write_elem) {
   w.Write<uint8_t>(static_cast<uint8_t>(PropertyDataType::kList));
   write_elem(w);
-}
-
-void WriteDictType(BinaryWriter& w, const std::function<void(BinaryWriter&)>& write_key,
-                   const std::function<void(BinaryWriter&)>& write_value) {
-  w.Write<uint8_t>(static_cast<uint8_t>(PropertyDataType::kDict));
-  write_key(w);
-  write_value(w);
-}
-
-void WriteStructType(BinaryWriter& w, uint16_t struct_id) {
-  w.Write<uint8_t>(static_cast<uint8_t>(PropertyDataType::kStruct));
-  w.Write<uint16_t>(struct_id);
 }
 
 void WriteListBody(BinaryWriter& w, const std::function<void(BinaryWriter&)>& write_elem) {
@@ -80,7 +68,7 @@ struct PropSpec {
   bool reliable = false;
   uint16_t index = 0;
   // Only populated for container kinds; writer emits the DataTypeRef body.
-  std::function<void(BinaryWriter&)> write_type_ref;
+  std::function<void(BinaryWriter&)> write_type_ref{};
   // Only honoured for container kinds. Default = 4096 matches the struct
   // default so "don't care" tests stay clean.
   uint32_t max_size = 4096;

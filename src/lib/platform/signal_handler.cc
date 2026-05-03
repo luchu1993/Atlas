@@ -109,7 +109,7 @@ void PlatformRemove(Signal sig) {
   }
 }
 
-#elif ATLAS_PLATFORM_LINUX
+#else  // POSIX (Linux, macOS, iOS, Android)
 
 [[nodiscard]] auto SignalToSignum(Signal sig) -> int {
   switch (sig) {
