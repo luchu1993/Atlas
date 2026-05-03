@@ -1,37 +1,29 @@
 name: Linux Tests
 
+# Fires after Linux Build completes; runs only when the build succeeded.
+# Re-builds the debug preset locally so it has the test binaries (sccache
+# restores the populated cache from the build run, so it's an incremental
+# link rather than a full compile).
 on:
-  push:
-    branches: [main]
-    paths-ignore:
-      - '**/*.md'
-      - 'docs/**'
-      - 'tools/profile/**'
-      - 'tools/cluster_control/**'
-      - '.gitignore'
-      - 'memory/**'
-  pull_request:
-    branches: [main]
-    paths-ignore:
-      - '**/*.md'
-      - 'docs/**'
-      - 'tools/profile/**'
-      - 'tools/cluster_control/**'
-      - '.gitignore'
-      - 'memory/**'
+  workflow_run:
+    workflows: ["Linux Build"]
+    types: [completed]
 
 concurrency:
-  group: tests-linux-${{ github.ref }}
+  group: tests-linux-${{ github.event.workflow_run.head_branch }}
   cancel-in-progress: true
 
 jobs:
   test:
     name: Build + Tests
+    if: ${{ github.event.workflow_run.conclusion == 'success' }}
     runs-on: ubuntu-24.04
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.workflow_run.head_sha }}
 
       - name: Setup .NET SDK
         uses: actions/setup-dotnet@v4
@@ -52,7 +44,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: .sccache
-          key: sccache-linux-debug-${{ github.sha }}
+          key: sccache-linux-debug-${{ github.event.workflow_run.head_sha }}
           restore-keys: |
             sccache-linux-debug-
 

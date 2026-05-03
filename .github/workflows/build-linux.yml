@@ -32,10 +32,12 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - preset: release
-            config: Release
+          - preset: debug
+            config: Debug
           - preset: profile
             config: RelWithDebInfo
+          - preset: release
+            config: Release
 
     steps:
       - name: Checkout
