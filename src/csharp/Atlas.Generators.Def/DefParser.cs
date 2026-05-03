@@ -128,13 +128,20 @@ internal static class DefParser
         {
             foreach (var methodEl in clientMethodsEl.Elements("method"))
             {
-                var method = ParseMethod(methodEl);
+                var method = ParseMethod(methodEl, reportDiagnostic);
                 // Validate: client_methods must not have exposed
                 if (method.Exposed != ExposedScope.None)
                 {
                     reportDiagnostic?.Invoke(Diagnostic.Create(
                         DefDiagnosticDescriptors.DEF002, Location.None, method.Name));
                     method.Exposed = ExposedScope.None;
+                }
+                if (method.HasReply)
+                {
+                    reportDiagnostic?.Invoke(Diagnostic.Create(
+                        DefDiagnosticDescriptors.DEF018, Location.None, method.Name));
+                    method.Reply = null;
+                    method.ReplyTypeRef = null;
                 }
                 model.ClientMethods.Add(method);
             }
@@ -146,7 +153,7 @@ internal static class DefParser
         {
             foreach (var methodEl in cellMethodsEl.Elements("method"))
             {
-                model.CellMethods.Add(ParseMethod(methodEl));
+                model.CellMethods.Add(ParseMethod(methodEl, reportDiagnostic));
             }
         }
 
@@ -156,7 +163,7 @@ internal static class DefParser
         {
             foreach (var methodEl in baseMethodsEl.Elements("method"))
             {
-                var method = ParseMethod(methodEl);
+                var method = ParseMethod(methodEl, reportDiagnostic);
                 // Validate: base_methods must not use all_clients
                 if (method.Exposed == ExposedScope.AllClients)
                 {
@@ -289,12 +296,19 @@ internal static class DefParser
         {
             foreach (var methodEl in clientEl.Elements("method"))
             {
-                var method = ParseMethod(methodEl);
+                var method = ParseMethod(methodEl, reportDiagnostic);
                 if (method.Exposed != ExposedScope.None)
                 {
                     reportDiagnostic?.Invoke(Diagnostic.Create(
                         DefDiagnosticDescriptors.DEF002, Location.None, method.Name));
                     method.Exposed = ExposedScope.None;
+                }
+                if (method.HasReply)
+                {
+                    reportDiagnostic?.Invoke(Diagnostic.Create(
+                        DefDiagnosticDescriptors.DEF018, Location.None, method.Name));
+                    method.Reply = null;
+                    method.ReplyTypeRef = null;
                 }
                 comp.ClientMethods.Add(method);
             }
@@ -304,7 +318,7 @@ internal static class DefParser
         if (cellEl != null)
         {
             foreach (var methodEl in cellEl.Elements("method"))
-                comp.CellMethods.Add(ParseMethod(methodEl));
+                comp.CellMethods.Add(ParseMethod(methodEl, reportDiagnostic));
         }
 
         var baseEl = compEl.Element("base_methods");
@@ -312,7 +326,7 @@ internal static class DefParser
         {
             foreach (var methodEl in baseEl.Elements("method"))
             {
-                var method = ParseMethod(methodEl);
+                var method = ParseMethod(methodEl, reportDiagnostic);
                 if (method.Exposed == ExposedScope.AllClients)
                 {
                     reportDiagnostic?.Invoke(Diagnostic.Create(
@@ -559,13 +573,21 @@ internal static class DefParser
         }
     }
 
-    private static MethodDefModel ParseMethod(XElement el)
+    private static MethodDefModel ParseMethod(XElement el,
+                                              Action<Diagnostic>? reportDiagnostic = null)
     {
         var method = new MethodDefModel
         {
             Name = el.Attribute("name")?.Value ?? "",
             Exposed = ParseExposed(el.Attribute("exposed")?.Value),
         };
+
+        var replyAttr = el.Attribute("reply")?.Value;
+        if (!string.IsNullOrWhiteSpace(replyAttr))
+        {
+            method.Reply = replyAttr;
+            method.ReplyTypeRef = DefTypeExprParser.Parse(replyAttr!, reportDiagnostic);
+        }
 
         foreach (var argEl in el.Elements("arg"))
         {
@@ -575,10 +597,8 @@ internal static class DefParser
                 Name = argEl.Attribute("name")?.Value ?? "",
                 Type = typeText,
             };
-            // Parse the type expression so container / struct args carry a
-            // resolvable TypeRef alongside the raw string. Scalar args
-            // (the common case) leave TypeRef null and the emitters fall
-            // back to DefTypeHelper.{Read,Write}Method like before.
+            // Containers / structs carry a resolvable TypeRef; scalar args
+            // leave TypeRef null and the emitters use DefTypeHelper directly.
             var parsed = DefTypeExprParser.Parse(typeText, reportDiagnostic: null);
             if (parsed != null && IsCompositeKind(parsed.Kind))
                 arg.TypeRef = parsed;

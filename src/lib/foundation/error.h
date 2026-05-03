@@ -36,6 +36,7 @@ enum class ErrorCode : uint32_t {
   kChannelCondemned,
 
   kCancelled,
+  kReceiverGone,
 
   kScriptError,
   kScriptTypeError,

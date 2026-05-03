@@ -4,10 +4,11 @@ namespace Atlas.Coro.Rpc;
 
 public enum RpcCompletionStatus : byte
 {
-    Success   = 0,
-    Timeout   = 1,
-    Cancelled = 2,
-    SendError = 3,
+    Success      = 0,
+    Timeout      = 1,
+    Cancelled    = 2,
+    SendError    = 3,
+    ReceiverGone = 4,
 }
 
 // OnReply must consume payload synchronously — the buffer is not retained.

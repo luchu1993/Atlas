@@ -1,10 +1,13 @@
 #include "clrscript/base_native_provider.h"
 
 #include <cstddef>
+#include <span>
 #include <string_view>
 
+#include "coro/entity_rpc_reply.h"
 #include "entitydef/entity_def_registry.h"
 #include "foundation/log.h"
+#include "network/channel.h"
 
 namespace atlas {
 
@@ -133,6 +136,32 @@ void BaseNativeProvider::ReportClientEventSeqGap(uint32_t entity_id, uint32_t /*
   ATLAS_LOG_ERROR(
       "atlas_report_client_event_seq_gap() called on a non-client process (entity_id={})",
       entity_id);
+}
+
+void BaseNativeProvider::SendEntityRpcSuccess(intptr_t reply_channel, uint32_t request_id,
+                                              const std::byte* body, int32_t len) {
+  if (reply_channel == 0) return;  // in-process call, no remote to reply to
+  auto* ch = reinterpret_cast<Channel*>(reply_channel);
+  std::span<const std::byte> body_span =
+      (body != nullptr && len > 0) ? std::span<const std::byte>{body, static_cast<size_t>(len)}
+                                   : std::span<const std::byte>{};
+  if (auto r = entity_rpc_reply::SendSuccess(*ch, request_id, body_span); !r) {
+    ATLAS_LOG_WARNING("SendEntityRpcSuccess: send failed (req={}, err={})", request_id,
+                      r.Error().Message());
+  }
+}
+
+void BaseNativeProvider::SendEntityRpcFailure(intptr_t reply_channel, uint32_t request_id,
+                                              int32_t error_code, const char* msg,
+                                              int32_t msg_len) {
+  if (reply_channel == 0) return;
+  auto* ch = reinterpret_cast<Channel*>(reply_channel);
+  std::string_view msg_view{msg != nullptr ? msg : "",
+                            msg_len > 0 ? static_cast<size_t>(msg_len) : 0};
+  if (auto r = entity_rpc_reply::SendFailure(*ch, request_id, error_code, msg_view); !r) {
+    ATLAS_LOG_WARNING("SendEntityRpcFailure: send failed (req={}, code={}, err={})", request_id,
+                      error_code, r.Error().Message());
+  }
 }
 
 }  // namespace atlas

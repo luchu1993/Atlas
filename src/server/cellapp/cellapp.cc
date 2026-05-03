@@ -44,7 +44,7 @@ auto CellApp::Run(int argc, char* argv[]) -> int {
 }
 
 CellApp::CellApp(EventDispatcher& dispatcher, NetworkInterface& network)
-    : EntityApp(dispatcher, network), peer_registry_(network) {}
+    : EntityApp(dispatcher, network), peer_registry_(network), rpc_registry_(dispatcher) {}
 
 CellApp::~CellApp() = default;
 
@@ -61,6 +61,11 @@ auto CellApp::Init(int argc, char* argv[]) -> bool {
   if (!EntityApp::Init(argc, argv)) return false;
 
   auto& table = Network().InterfaceTable();
+
+  // Entity-RPC replies match here first; unmatched ids fall through to typed handlers.
+  table.SetPreDispatchHook([this](MessageID id, std::span<const std::byte> payload) -> bool {
+    return rpc_registry_.TryDispatch(id, payload);
+  });
 
   (void)table.RegisterTypedHandler<cellapp::CreateCellEntity>(
       [this](const Address& src, Channel* ch, const cellapp::CreateCellEntity& msg) {
@@ -524,7 +529,7 @@ void CellApp::OnDestroyCellEntity(const Address& /*src*/, Channel* /*ch*/,
   entity->GetSpace().RemoveEntity(cell_id);
 }
 
-void CellApp::OnClientCellRpcForward(const Address& src, Channel* /*ch*/,
+void CellApp::OnClientCellRpcForward(const Address& src, Channel* ch,
                                      const cellapp::ClientCellRpcForward& msg) {
   // Hard trust boundary: forging from outside the BaseApp set bypasses
   // BaseApp's L1/L2 validation and source_entity_id stamping - letting
@@ -582,11 +587,12 @@ void CellApp::OnClientCellRpcForward(const Address& src, Channel* /*ch*/,
     ATLAS_LOG_WARNING("CellApp: ClientCellRpcForward: dispatch_rpc callback not registered");
     return;
   }
-  dispatch_fn(entity->Id(), msg.rpc_id, reinterpret_cast<const uint8_t*>(msg.payload.data()),
+  dispatch_fn(entity->Id(), msg.rpc_id, reinterpret_cast<intptr_t>(ch),
+              reinterpret_cast<const uint8_t*>(msg.payload.data()),
               static_cast<int32_t>(msg.payload.size()));
 }
 
-void CellApp::OnInternalCellRpc(const Address& /*src*/, Channel* /*ch*/,
+void CellApp::OnInternalCellRpc(const Address& /*src*/, Channel* ch,
                                 const cellapp::InternalCellRpc& msg) {
   // Server-internal Base -> Cell call; BaseApp is trusted so skip the
   // exposed / sourceEntityID validation.
@@ -607,7 +613,8 @@ void CellApp::OnInternalCellRpc(const Address& /*src*/, Channel* /*ch*/,
     ATLAS_LOG_WARNING("CellApp: InternalCellRpc: dispatch_rpc callback not registered");
     return;
   }
-  dispatch_fn(entity->Id(), msg.rpc_id, reinterpret_cast<const uint8_t*>(msg.payload.data()),
+  dispatch_fn(entity->Id(), msg.rpc_id, reinterpret_cast<intptr_t>(ch),
+              reinterpret_cast<const uint8_t*>(msg.payload.data()),
               static_cast<int32_t>(msg.payload.size()));
 }
 
@@ -778,6 +785,8 @@ void CellApp::OnPeerCellAppDeath(const Address& addr, Channel* dying) {
 }
 
 void CellApp::OnOutboundChannelDeath(Channel& dying) {
+  rpc_registry_.CancelByChannel(&dying);
+
   std::vector<EntityID> orphans;
   for (auto& [id, entity] : entity_population_) {
     auto* w = entity->GetWitness();
@@ -1467,6 +1476,14 @@ void CellApp::TickOffloadChecker() {
         ATLAS_LOG_WARNING("CellApp: Offload target {}:{} has no peer channel — deferring",
                           op.target_cellapp_addr.Ip(), op.target_cellapp_addr.Port());
         continue;
+      }
+
+      // Notify the C# side first so any in-flight RPCs that took
+      // LifecycleCancellation cancel before we ship the offload bytes.
+      if (auto cancel_fn =
+              native_provider_ ? native_provider_->entity_lifecycle_cancel_fn() : nullptr;
+          cancel_fn != nullptr) {
+        cancel_fn(op.entity->Id());
       }
 
       // Build the message and warn existing haunts Real is moving.

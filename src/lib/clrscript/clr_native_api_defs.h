@@ -115,7 +115,17 @@
             reply_id, request_id, timeout_ms, managed_handle))                                     \
     X(void, CoroCancelPending,                                                                     \
         (uint64_t handle),                                                                         \
-        atlas::GetNativeApiProvider().CoroCancelPending(handle))
+        atlas::GetNativeApiProvider().CoroCancelPending(handle))                                   \
+                                                                                                   \
+    X(void, SendEntityRpcSuccess,                                                                  \
+        (intptr_t reply_channel, uint32_t request_id, const std::byte* body, int32_t len),         \
+        atlas::GetNativeApiProvider().SendEntityRpcSuccess(                                        \
+            reply_channel, request_id, body, len))                                                 \
+    X(void, SendEntityRpcFailure,                                                                  \
+        (intptr_t reply_channel, uint32_t request_id, int32_t error_code,                          \
+         const char* msg, int32_t msg_len),                                                        \
+        atlas::GetNativeApiProvider().SendEntityRpcFailure(                                        \
+            reply_channel, request_id, error_code, msg, msg_len))
 // clang-format on
 
 #endif  // ATLAS_LIB_CLRSCRIPT_CLR_NATIVE_API_DEFS_H_

@@ -64,6 +64,9 @@ class CellAppNativeProvider : public BaseNativeProvider {
   // Tests can swap in a recording fn without going through SetNativeCallbacks.
   [[nodiscard]] auto proximity_event_fn() const -> ProximityEventFn { return proximity_event_fn_; }
   void SetProximityEventFnForTest(ProximityEventFn fn) { proximity_event_fn_ = fn; }
+  [[nodiscard]] auto entity_lifecycle_cancel_fn() const -> EntityLifecycleCancelFn {
+    return entity_lifecycle_cancel_fn_;
+  }
 
  private:
   EntityLookupFn lookup_;
@@ -80,6 +83,9 @@ class CellAppNativeProvider : public BaseNativeProvider {
   // nullptr => proximity events dropped at lambda; trigger state still
   // correct for Offload / InsidePeers.
   ProximityEventFn proximity_event_fn_{nullptr};
+  // nullptr on older runtimes — offload still proceeds, in-flight RPCs
+  // fall back to their timeouts.
+  EntityLifecycleCancelFn entity_lifecycle_cancel_fn_{nullptr};
 };
 
 }  // namespace atlas

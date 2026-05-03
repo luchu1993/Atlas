@@ -174,6 +174,8 @@ auto BaseApp::Init(int argc, char* argv[]) -> bool {
       [](Channel& ch) { ch.SetInactivityTimeout(std::chrono::seconds(10)); });
   external_network_.SetDisconnectCallback([this](Channel& ch) { OnExternalClientDisconnect(ch); });
 
+  Network().SetDisconnectCallback([this](Channel& ch) { rpc_registry_.CancelByChannel(&ch); });
+
   GetMachinedClient().Subscribe(
       machined::ListenerType::kBoth, ProcessType::kDbApp,
       [this](const machined::BirthNotification& n) {
@@ -823,13 +825,14 @@ void BaseApp::OnCellAppDeath(const baseapp::CellAppDeath& msg) {
   ATLAS_LOG_INFO("BaseApp: CellAppDeath complete — restored={} lost={}", restored, lost);
 }
 
-void BaseApp::OnCellRpcForward(Channel& /*ch*/, const baseapp::CellRpcForward& msg) {
+void BaseApp::OnCellRpcForward(Channel& ch, const baseapp::CellRpcForward& msg) {
   auto dispatch_fn = GetNativeProvider().dispatch_rpc_fn();
   if (!dispatch_fn) {
     ATLAS_LOG_WARNING("BaseApp: OnCellRpcForward: dispatch_rpc callback not registered");
     return;
   }
-  dispatch_fn(msg.entity_id, msg.rpc_id, reinterpret_cast<const uint8_t*>(msg.payload.data()),
+  dispatch_fn(msg.entity_id, msg.rpc_id, reinterpret_cast<intptr_t>(&ch),
+              reinterpret_cast<const uint8_t*>(msg.payload.data()),
               static_cast<int32_t>(msg.payload.size()));
 }
 
@@ -1896,6 +1899,8 @@ void BaseApp::UnbindClient(EntityID entity_id) {
 }
 
 void BaseApp::OnExternalClientDisconnect(Channel& ch) {
+  rpc_registry_.CancelByChannel(&ch);
+
   auto it = client_entity_index_.find(ch.RemoteAddress());
   if (it == client_entity_index_.end()) {
     return;
@@ -2579,7 +2584,8 @@ void BaseApp::OnClientBaseRpc(Channel& ch, const baseapp::ClientBaseRpc& msg) {
     ATLAS_LOG_WARNING("BaseApp: ClientBaseRpc: dispatch_rpc callback not registered");
     return;
   }
-  dispatch_fn(entity_id, msg.rpc_id, reinterpret_cast<const uint8_t*>(msg.payload.data()),
+  dispatch_fn(entity_id, msg.rpc_id, reinterpret_cast<intptr_t>(&ch),
+              reinterpret_cast<const uint8_t*>(msg.payload.data()),
               static_cast<int32_t>(msg.payload.size()));
 }
 

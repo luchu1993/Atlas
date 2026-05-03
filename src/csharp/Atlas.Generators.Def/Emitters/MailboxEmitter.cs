@@ -19,6 +19,9 @@ internal static class MailboxEmitter
         sb.AppendLine("using System;");
         sb.AppendLine("using System.Collections.Generic;");
         sb.AppendLine("using Atlas.Core;");
+        sb.AppendLine("using Atlas.Coro;");
+        sb.AppendLine("using Atlas.Coro.Rpc;");
+        sb.AppendLine("using Atlas.Protocol;");
         sb.AppendLine("using Atlas.Serialization;");
         // Generated structs land in Atlas.Def — the import lets struct
         // args appear unqualified in the mailbox method signatures.
@@ -97,6 +100,17 @@ internal static class MailboxEmitter
         }
 
         var sorted = methods.OrderBy(m => m.Name).ToList();
+
+        // Static reply deserializers — one per method-with-reply, defined
+        // up-front so the per-call body has no closure / no allocation.
+        for (int i = 0; i < sorted.Count; i++)
+        {
+            var method = sorted[i];
+            if (exposedOnly && method.Exposed == ExposedScope.None) continue;
+            if (!method.HasReply) continue;
+            EmitReplyDeserializerField(sb, method);
+        }
+
         for (int i = 0; i < sorted.Count; i++)
         {
             var method = sorted[i];
@@ -104,41 +118,85 @@ internal static class MailboxEmitter
                 continue;
 
             int rpcId = RpcIdEncoder.Encode(slot: 0, direction, typeIndex, i + 1);
-            var paramList = RpcArgCodec.BuildParamList(method.Args);
-            var sendArgs = isClientMailbox ? "_target, " : "";
-
             sb.AppendLine();
-            sb.AppendLine($"    public void {method.Name}({paramList})");
-            sb.AppendLine("    {");
-            if (method.Args.Count == 0)
-            {
-                sb.AppendLine($"        _entity.Internal{sendMethod}(0x{rpcId:X6}, {sendArgs}ReadOnlySpan<byte>.Empty);");
-            }
+            if (method.HasReply)
+                EmitReplyMethod(sb, method, rpcId, sendMethod, isClientMailbox);
             else
-            {
-                sb.AppendLine("        var writer = new SpanWriter(256);");
-                sb.AppendLine("        try");
-                sb.AppendLine("        {");
-                foreach (var arg in method.Args)
-                    RpcArgCodec.EmitWrite(sb, arg, "writer", "            ");
-                sb.AppendLine($"            _entity.Internal{sendMethod}(0x{rpcId:X6}, {sendArgs}writer.WrittenSpan);");
-                sb.AppendLine("        }");
-                sb.AppendLine("        finally { writer.Dispose(); }");
-            }
-            sb.AppendLine("    }");
+                EmitFireAndForgetMethod(sb, method, rpcId, sendMethod, isClientMailbox);
         }
 
         sb.AppendLine("}");
         sb.AppendLine();
     }
 
-    private static string BuildParamList(List<ArgDefModel> args)
+    private static void EmitFireAndForgetMethod(StringBuilder sb, MethodDefModel method,
+                                                int rpcId, string sendMethod, bool isClientMailbox)
     {
-        if (args.Count == 0) return "";
-        var parts = new string[args.Count];
-        for (int i = 0; i < args.Count; i++)
-            parts[i] = $"{DefTypeHelper.ToCSharpType(args[i].Type)} {args[i].Name}";
-        return string.Join(", ", parts);
+        var paramList = RpcArgCodec.BuildParamList(method.Args);
+        var sendArgs = isClientMailbox ? "_target, " : "";
+        sb.AppendLine($"    public void {method.Name}({paramList})");
+        sb.AppendLine("    {");
+        if (method.Args.Count == 0)
+        {
+            sb.AppendLine($"        _entity.Internal{sendMethod}(0x{rpcId:X6}, {sendArgs}ReadOnlySpan<byte>.Empty);");
+        }
+        else
+        {
+            sb.AppendLine("        var writer = new SpanWriter(256);");
+            sb.AppendLine("        try");
+            sb.AppendLine("        {");
+            foreach (var arg in method.Args)
+                RpcArgCodec.EmitWrite(sb, arg, "writer", "            ");
+            sb.AppendLine($"            _entity.Internal{sendMethod}(0x{rpcId:X6}, {sendArgs}writer.WrittenSpan);");
+            sb.AppendLine("        }");
+            sb.AppendLine("        finally { writer.Dispose(); }");
+        }
+        sb.AppendLine("    }");
+    }
+
+    private static void EmitReplyMethod(StringBuilder sb, MethodDefModel method,
+                                        int rpcId, string sendMethod, bool isClientMailbox)
+    {
+        // Reply-style RPCs are not used on the Client mailbox path —
+        // P9 (DEF018) rejects reply= on client_methods. Defensive: keep
+        // the same rpcId-with-reply-bit shape so future changes won't
+        // accidentally diverge.
+        var sendArgs = isClientMailbox ? "_target, " : "";
+        var paramList = RpcArgCodec.BuildParamList(method.Args);
+        var ctParam = paramList.Length > 0 ? ", " : "";
+        var replyType = PropertyCodec.CSharpTypeForStructField(method.ReplyTypeRef!);
+        var rpcIdWithReplyBit = unchecked((uint)rpcId) | RpcIdEncoder.kReplyBit;
+
+        sb.AppendLine($"    public AtlasTask<RpcReply<{replyType}>> {method.Name}({paramList}{ctParam}AtlasCancellationToken ct = default, int timeoutMs = AtlasRpc.DefaultTimeoutMs)");
+        sb.AppendLine("    {");
+        sb.AppendLine("        var requestId = AtlasRpc.NextRequestId();");
+        sb.AppendLine($"        var src = AtlasRpcSource<RpcReply<{replyType}>>.Rent();");
+        sb.AppendLine($"        src.Start(AtlasRpcRegistryHost.Current, MessageIds.EntityRpcReply, requestId,");
+        sb.AppendLine($"            s_{method.Name}Deserializer, RpcReplyHelpers.For<{replyType}>(), timeoutMs, ct);");
+        sb.AppendLine("        var writer = new SpanWriter(256);");
+        sb.AppendLine("        try");
+        sb.AppendLine("        {");
+        sb.AppendLine("            writer.WriteUInt32(requestId);");
+        foreach (var arg in method.Args)
+            RpcArgCodec.EmitWrite(sb, arg, "writer", "            ");
+        sb.AppendLine($"            _entity.Internal{sendMethod}(unchecked((int)0x{rpcIdWithReplyBit:X8}), {sendArgs}writer.WrittenSpan);");
+        sb.AppendLine("        }");
+        sb.AppendLine("        finally { writer.Dispose(); }");
+        sb.AppendLine("        return src.Task;");
+        sb.AppendLine("    }");
+    }
+
+    private static void EmitReplyDeserializerField(StringBuilder sb, MethodDefModel method)
+    {
+        var replyType = PropertyCodec.CSharpTypeForStructField(method.ReplyTypeRef!);
+        sb.AppendLine($"    private static readonly AtlasRpcSource<RpcReply<{replyType}>>.SpanDeserializer s_{method.Name}Deserializer =");
+        sb.AppendLine("        static (ref SpanReader r) =>");
+        sb.AppendLine("        {");
+        var names = new PropertyCodec.NameGen();
+        var local = PropertyCodec.EmitElementRead(sb, method.ReplyTypeRef!, "r",
+                                                  "            ", names, plainContainers: true);
+        sb.AppendLine($"            return RpcReply<{replyType}>.Ok({local});");
+        sb.AppendLine("        };");
     }
 
     private static bool ShouldEmitClientMailbox(ProcessContext ctx)

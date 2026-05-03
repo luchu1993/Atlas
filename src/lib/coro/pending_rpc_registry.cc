@@ -1,5 +1,7 @@
 #include "coro/pending_rpc_registry.h"
 
+#include <vector>
+
 #include "foundation/log.h"
 #include "serialization/binary_stream.h"
 
@@ -13,7 +15,7 @@ PendingRpcRegistry::~PendingRpcRegistry() {
 
 auto PendingRpcRegistry::RegisterPending(MessageID reply_id, uint32_t request_id,
                                          ReplyCallback on_reply, ErrorCallback on_error,
-                                         Duration timeout) -> PendingHandle {
+                                         Duration timeout, Channel* channel) -> PendingHandle {
   auto key = PendingKey{reply_id, request_id};
 
   if (auto it = pending_.find(key); it != pending_.end()) {
@@ -33,7 +35,7 @@ auto PendingRpcRegistry::RegisterPending(MessageID reply_id, uint32_t request_id
     if (error_cb) error_cb(Error{ErrorCode::kTimeout, "RPC timed out"});
   });
 
-  pending_[key] = PendingEntry{std::move(on_reply), std::move(on_error), timer};
+  pending_[key] = PendingEntry{std::move(on_reply), std::move(on_error), timer, channel};
   return PendingHandle{reply_id, request_id};
 }
 
@@ -66,6 +68,27 @@ void PendingRpcRegistry::Cancel(PendingHandle handle) {
   pending_.erase(it);
 
   if (error_cb) error_cb(Error{ErrorCode::kCancelled, "RPC cancelled"});
+}
+
+void PendingRpcRegistry::CancelByChannel(Channel* channel) {
+  if (channel == nullptr) return;
+
+  // Snapshot keys first; on_error may re-enter the registry to cancel
+  // its own peers and we'd otherwise iterate while erasing.
+  std::vector<PendingKey> doomed;
+  doomed.reserve(pending_.size());
+  for (const auto& [key, entry] : pending_) {
+    if (entry.channel == channel) doomed.push_back(key);
+  }
+
+  for (const auto& key : doomed) {
+    auto it = pending_.find(key);
+    if (it == pending_.end()) continue;
+    dispatcher_.CancelTimer(it->second.timeout_timer);
+    auto error_cb = std::move(it->second.on_error);
+    pending_.erase(it);
+    if (error_cb) error_cb(Error{ErrorCode::kReceiverGone, "RPC peer channel disconnected"});
+  }
 }
 
 void PendingRpcRegistry::CancelAll() {

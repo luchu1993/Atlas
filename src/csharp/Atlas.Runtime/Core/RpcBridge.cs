@@ -1,23 +1,19 @@
+using System;
 using Atlas.Entity;
 using Atlas.Serialization;
 
 namespace Atlas.Core;
 
-/// <summary>
-/// Public bridge for generated RPC dispatchers to register themselves.
-/// Generated code calls <see cref="Dispatchers"/> during module initialisation
-/// so that <see cref="NativeCallbacks.DispatchRpc"/> can route incoming RPCs.
-/// </summary>
+// Generated dispatchers register here at module-init time so that
+// NativeCallbacks.DispatchRpc can route incoming RPCs.
 public static class RpcBridge
 {
-    public delegate void RpcDispatchDelegate(ServerEntity entity, int rpcId, ref SpanReader reader);
+    // replyChannel is a Channel* recast (nullptr = in-process); receivers
+    // hand it back via NativeApi.SendEntityRpcReply when a reply-style
+    // RPC's user method completes.
+    public delegate void RpcDispatchDelegate(ServerEntity entity, int rpcId,
+                                             IntPtr replyChannel, ref SpanReader reader);
 
-    /// <summary>
-    /// Per-direction dispatch delegates.
-    /// Index: 0 = ClientRpc, 1 = (reserved), 2 = CellRpc, 3 = BaseRpc.
-    /// Note: slot 1 was previously ServerRpc, now removed.
-    /// Exposed cell/base methods are dispatched via CellRpc (2) / BaseRpc (3);
-    /// the exposed attribute is handled by C++ EntityDefRegistry, not C# direction.
-    /// </summary>
+    // Index: 0 = ClientRpc, 1 = (reserved), 2 = CellRpc, 3 = BaseRpc.
     public static readonly RpcDispatchDelegate?[] Dispatchers = new RpcDispatchDelegate?[4];
 }

@@ -68,8 +68,8 @@ TEST_F(CoroBridgeTest, RegisterAndDispatchSuccess) {
 }
 
 TEST_F(CoroBridgeTest, CancelPendingFiresCancelledStatus) {
-  auto handle = atlas::coro_bridge::RegisterPending(registry_, &RecordCompletion, 42, 200, 5000,
-                                                    0x1234);
+  auto handle =
+      atlas::coro_bridge::RegisterPending(registry_, &RecordCompletion, 42, 200, 5000, 0x1234);
   atlas::coro_bridge::CancelPending(registry_, handle);
 
   ASSERT_EQ(Records().size(), 1u);
@@ -90,8 +90,8 @@ TEST_F(CoroBridgeTest, TimeoutFiresTimeoutStatus) {
 }
 
 TEST_F(CoroBridgeTest, NullCallbackReturnsZero) {
-  auto handle = atlas::coro_bridge::RegisterPending(registry_, /*on_complete=*/nullptr, 42, 1, 5000,
-                                                    0x1);
+  auto handle =
+      atlas::coro_bridge::RegisterPending(registry_, /*on_complete=*/nullptr, 42, 1, 5000, 0x1);
   EXPECT_EQ(handle, 0u);
   EXPECT_EQ(registry_.PendingCount(), 0u);
 }
@@ -112,8 +112,8 @@ TEST_F(CoroBridgeTest, HandleRoundTripsReplyAndRequestId) {
 }
 
 TEST_F(CoroBridgeTest, DispatchAfterCancelDoesNotFire) {
-  auto handle = atlas::coro_bridge::RegisterPending(registry_, &RecordCompletion, 42, 400, 5000,
-                                                    0xF1);
+  auto handle =
+      atlas::coro_bridge::RegisterPending(registry_, &RecordCompletion, 42, 400, 5000, 0xF1);
   atlas::coro_bridge::CancelPending(registry_, handle);
   Records().clear();
 

@@ -24,8 +24,10 @@ internal unsafe struct NativeCallbackTable
     // boundary. Routed via user_arg so scripts can disambiguate multiple
     // proximity sensors on one entity. is_enter == 1 inbound, 0 outbound.
     public nint ProximityEvent;
-    // GCHandle of the IAtlasRpcCallback is freed inside this callback.
+    // GCHandle of the IAtlasRpcCallback is returned to GCHandlePool here.
     public nint OnRpcComplete;
+    // Triggers the entity's LifecycleCancellation source.
+    public nint EntityLifecycleCancel;
 }
 
 internal static unsafe class NativeCallbacks
@@ -44,7 +46,8 @@ internal static unsafe class NativeCallbacks
             (nint)(delegate* unmanaged<uint, ushort, long, byte*, int, void>)&RestoreEntity;
         table.GetEntityData = (nint)(delegate* unmanaged<uint, byte**, int*, void>)&GetEntityData;
         table.EntityDestroyed = (nint)(delegate* unmanaged<uint, void>)&EntityDestroyed;
-        table.DispatchRpc = (nint)(delegate* unmanaged<uint, uint, byte*, int, void>)&DispatchRpc;
+        table.DispatchRpc =
+            (nint)(delegate* unmanaged<uint, uint, IntPtr, byte*, int, void>)&DispatchRpc;
         table.GetOwnerSnapshot =
             (nint)(delegate* unmanaged<uint, byte**, int*, void>)&GetOwnerSnapshot;
         table.SerializeEntity =
@@ -53,6 +56,8 @@ internal static unsafe class NativeCallbacks
             (nint)(delegate* unmanaged<uint, int, uint, byte, void>)&ProximityEvent;
         table.OnRpcComplete =
             (nint)(delegate* unmanaged<IntPtr, int, byte*, int, void>)&OnRpcComplete;
+        table.EntityLifecycleCancel =
+            (nint)(delegate* unmanaged<uint, void>)&EntityLifecycleCancel;
 
         NativeApi.SetNativeCallbacks(&table, sizeof(NativeCallbackTable));
     }
@@ -305,7 +310,8 @@ internal static unsafe class NativeCallbacks
     }
 
     [UnmanagedCallersOnly]
-    public static void DispatchRpc(uint entityId, uint rpcId, byte* payload, int len)
+    public static void DispatchRpc(uint entityId, uint rpcId, IntPtr replyChannel,
+                                   byte* payload, int len)
     {
         try
         {
@@ -320,9 +326,10 @@ internal static unsafe class NativeCallbacks
 
             var reader = new SpanReader(new ReadOnlySpan<byte>(payload, len));
 
-            // Determine direction from the packed rpc_id: bits 22-23
-            // 0=ClientRpc, 1=reserved (unused), 2=CellRpc, 3=BaseRpc
-            int direction = (int)((rpcId >> 22) & 0x3);
+            // direction lives in bits 22-23 of the *real* rpc_id; mask off
+            // kReplyBit first so that bit doesn't leak into the index calc.
+            uint maskedId = rpcId & 0x7FFFFFFFu;
+            int direction = (int)((maskedId >> 22) & 0x3);
             if (direction == 1)
             {
                 Log.Warning($"DispatchRpc: direction=1 is reserved (rpcId=0x{rpcId:X6})");
@@ -331,7 +338,7 @@ internal static unsafe class NativeCallbacks
             int id = (int)rpcId;
 
             var dispatcher = RpcBridge.Dispatchers[direction];
-            dispatcher?.Invoke(entity, id, ref reader);
+            dispatcher?.Invoke(entity, id, replyChannel, ref reader);
         }
         catch (Exception ex)
         {
@@ -379,8 +386,22 @@ internal static unsafe class NativeCallbacks
         }
     }
 
-    // managedHandle is the GCHandle of the IAtlasRpcCallback; freed here on
-    // every completion path. status mirrors Atlas.Coro.Rpc.RpcCompletionStatus.
+    [UnmanagedCallersOnly]
+    public static void EntityLifecycleCancel(uint entityId)
+    {
+        try
+        {
+            ThreadGuard.EnsureMainThread();
+            EntityManager.Instance.Get(entityId)?.TriggerLifecycleCancellation();
+        }
+        catch (Exception ex)
+        {
+            ErrorBridge.SetError(ex);
+        }
+    }
+
+    // managedHandle is returned to GCHandlePool on every completion path.
+    // status mirrors Atlas.Coro.Rpc.RpcCompletionStatus.
     [UnmanagedCallersOnly]
     public static void OnRpcComplete(IntPtr managedHandle, int status, byte* payload, int len)
     {
@@ -389,9 +410,8 @@ internal static unsafe class NativeCallbacks
             ThreadGuard.EnsureMainThread();
 
             if (managedHandle == IntPtr.Zero) return;
-            var gch = GCHandle.FromIntPtr(managedHandle);
-            var callback = gch.Target as Atlas.Coro.Rpc.IAtlasRpcCallback;
-            gch.Free();
+            var callback = GCHandle.FromIntPtr(managedHandle).Target as Atlas.Coro.Rpc.IAtlasRpcCallback;
+            Atlas.Runtime.Coro.GCHandlePool.Return(managedHandle);
             if (callback is null)
             {
                 Log.Warning("OnRpcComplete: managed handle did not resolve to a callback");

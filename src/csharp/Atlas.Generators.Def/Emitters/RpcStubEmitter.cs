@@ -19,6 +19,8 @@ internal static class RpcStubEmitter
         sb.AppendLine("using System;");
         sb.AppendLine("using System.Collections.Generic;");
         sb.AppendLine("using Atlas.Core;");
+        sb.AppendLine("using Atlas.Coro;");
+        sb.AppendLine("using Atlas.Coro.Rpc;");
         sb.AppendLine("using Atlas.Serialization;");
         // Lets struct args (TypeRef.Kind == Struct) resolve unqualified;
         // StructEmitter places generated structs in Atlas.Def.
@@ -59,6 +61,12 @@ internal static class RpcStubEmitter
         var paramList = RpcArgCodec.BuildParamList(method.Args);
         sb.AppendLine();
 
+        if (method.HasReply)
+        {
+            EmitReplyMethod(sb, method, role, paramList);
+            return;
+        }
+
         switch (role)
         {
             case RpcRole.Receive:
@@ -80,6 +88,19 @@ internal static class RpcStubEmitter
                 sb.AppendLine("    }");
                 break;
         }
+    }
+
+    private static void EmitReplyMethod(StringBuilder sb, MethodDefModel method, RpcRole role,
+                                        string paramList)
+    {
+        if (role != RpcRole.Receive) return;
+
+        // Receivers implement the reply-style method as a partial — the
+        // dispatcher invokes it and the body returns RpcReply<T>.Ok / Fail.
+        // Senders go through the mailbox struct (MailboxEmitter), so no
+        // entity-level Send stub is emitted for reply methods.
+        var replyType = PropertyCodec.CSharpTypeForStructField(method.ReplyTypeRef!);
+        sb.AppendLine($"    public partial AtlasTask<RpcReply<{replyType}>> {method.Name}({paramList});");
     }
 
     private static void EmitSerializeAndSend(StringBuilder sb, MethodDefModel method,

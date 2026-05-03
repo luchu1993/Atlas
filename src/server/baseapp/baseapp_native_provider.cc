@@ -38,6 +38,7 @@ struct NativeCallbackTable {
   SerializeEntityFn serialize_entity;
   ProximityEventFn proximity_event;
   CoroOnRpcCompleteFn coro_on_rpc_complete;
+  EntityLifecycleCancelFn entity_lifecycle_cancel;
 };
 #pragma pack(pop)
 
@@ -114,12 +115,14 @@ void BaseAppNativeProvider::SendBaseRpc(uint32_t entity_id, uint32_t rpc_id,
     ATLAS_LOG_WARNING("BaseApp: SendBaseRpc rejected invalid payload len={}", len);
     return;
   }
-  // Local: dispatch directly through C# (no network hop).
+  // Local: dispatch directly through C# (no network hop). reply_channel=0
+  // means in-process; reply-style RPCs to a local target won't get a reply.
   if (!dispatch_rpc_fn_) {
     ATLAS_LOG_WARNING("BaseApp: SendBaseRpc: dispatch_rpc callback not registered");
     return;
   }
-  dispatch_rpc_fn_(entity_id, rpc_id, reinterpret_cast<const uint8_t*>(payload), len);
+  dispatch_rpc_fn_(entity_id, rpc_id, /*reply_channel=*/0,
+                   reinterpret_cast<const uint8_t*>(payload), len);
 }
 
 void BaseAppNativeProvider::WriteToDb(uint32_t entity_id, const std::byte* entity_data,
@@ -178,14 +181,15 @@ void BaseAppNativeProvider::SetNativeCallbacks(const void* native_callbacks, int
   get_entity_data_fn_ = table.get_entity_data;
   entity_destroyed_fn_ = table.entity_destroyed;
   dispatch_rpc_fn_ = table.dispatch_rpc;
-  get_owner_snapshot_fn_ = table.get_owner_snapshot;  // nullptr if runtime predates baseline
+  get_owner_snapshot_fn_ = table.get_owner_snapshot;      // nullptr if runtime predates baseline
   coro_on_rpc_complete_fn_ = table.coro_on_rpc_complete;  // nullptr on older runtimes
+  entity_lifecycle_cancel_fn_ = table.entity_lifecycle_cancel;  // nullptr on older runtimes
   ATLAS_LOG_INFO("BaseApp: native callback table registered (len={})", len);
 }
 
 auto BaseAppNativeProvider::CoroRegisterPending(uint16_t reply_id, uint32_t request_id,
-                                                int32_t timeout_ms,
-                                                intptr_t managed_handle) -> uint64_t {
+                                                int32_t timeout_ms, intptr_t managed_handle)
+    -> uint64_t {
   if (coro_on_rpc_complete_fn_ == nullptr) {
     ATLAS_LOG_WARNING("BaseApp: CoroRegisterPending: managed runtime did not register callback");
     return 0;

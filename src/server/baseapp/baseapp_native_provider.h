@@ -23,10 +23,11 @@ using GetEntityDataFn = void (*)(uint32_t entity_id, uint8_t** out_data, int32_t
 // Notifies C# that an entity has been removed natively.
 using EntityDestroyedFn = void (*)(uint32_t entity_id);
 
-// Dispatches a validated incoming RPC to the C# entity.
-// rpc_id is packed [direction:2 | typeIndex:14 | method:8].
-using DispatchRpcFn = void (*)(uint32_t entity_id, uint32_t rpc_id, const uint8_t* payload,
-                               int32_t len);
+// Dispatches a validated incoming RPC to the C# entity. reply_channel is
+// the source Channel* recast to intptr_t — C# hands it back to
+// SendEntityRpcReply when the user method completes.
+using DispatchRpcFn = void (*)(uint32_t entity_id, uint32_t rpc_id, intptr_t reply_channel,
+                               const uint8_t* payload, int32_t len);
 
 // Owner-scope baseline snapshot via SerializeForOwnerClient (filtered to
 // client-visible fields). Distinct from GetEntityData (scope-agnostic DB
@@ -43,6 +44,10 @@ using SerializeEntityFn = int32_t (*)(uint32_t entity_id, uint8_t* out_buf, int3
 // native side does not interpret it.
 using ProximityEventFn = void (*)(uint32_t entity_id, int32_t user_arg, uint32_t peer_entity_id,
                                   uint8_t is_enter);
+
+// Triggers the C# entity's LifecycleCancellation. Fired by CellApp before
+// offload and by any process that needs to drain in-flight RPCs early.
+using EntityLifecycleCancelFn = void (*)(uint32_t entity_id);
 
 // INativeApiProvider for the BaseApp process.
 class BaseAppNativeProvider : public BaseNativeProvider {
@@ -84,6 +89,9 @@ class BaseAppNativeProvider : public BaseNativeProvider {
   [[nodiscard]] auto get_owner_snapshot_fn() const -> GetOwnerSnapshotFn {
     return get_owner_snapshot_fn_;
   }
+  [[nodiscard]] auto entity_lifecycle_cancel_fn() const -> EntityLifecycleCancelFn {
+    return entity_lifecycle_cancel_fn_;
+  }
 
  private:
   BaseApp& app_;
@@ -92,6 +100,7 @@ class BaseAppNativeProvider : public BaseNativeProvider {
   EntityDestroyedFn entity_destroyed_fn_{nullptr};
   DispatchRpcFn dispatch_rpc_fn_{nullptr};
   GetOwnerSnapshotFn get_owner_snapshot_fn_{nullptr};
+  EntityLifecycleCancelFn entity_lifecycle_cancel_fn_{nullptr};
   CoroOnRpcCompleteFn coro_on_rpc_complete_fn_{nullptr};
 };
 

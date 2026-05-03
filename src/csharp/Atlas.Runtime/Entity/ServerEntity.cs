@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using Atlas.Core;
+using Atlas.Coro;
 using Atlas.DataTypes;
 using Atlas.Entity.Components;
 using Atlas.Serialization;
@@ -17,6 +18,12 @@ public abstract class ServerEntity
 {
     public uint EntityId { get; internal set; }
     public bool IsDestroyed { get; internal set; }
+
+    // Cancelled on destroy / offload / hot-reload. RPCs that pass this
+    // token complete with RpcErrorCodes.Cancelled instead of stranding.
+    private readonly AtlasCancellationSource _lifecycle = new();
+    public AtlasCancellationToken LifecycleCancellation => _lifecycle.Token;
+    internal void TriggerLifecycleCancellation() => _lifecycle.Cancel();
 
     /// <summary>
     /// Tick update interval. OnTick is called every <c>TickInterval</c> engine

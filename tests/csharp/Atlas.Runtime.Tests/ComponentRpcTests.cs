@@ -60,7 +60,7 @@ public class ComponentRpcTests
             w.WriteUInt32(0xCAFEBABEu);
             w.WriteInt64(0x1122334455667788L);
             var reader = new SpanReader(w.WrittenSpan);
-            DefRpcDispatcher.DispatchBaseRpc(avatar, rpcId, ref reader);
+            DefRpcDispatcher.DispatchBaseRpc(avatar, rpcId, System.IntPtr.Zero, ref reader);
         }
         finally { w.Dispose(); }
 
@@ -80,7 +80,7 @@ public class ComponentRpcTests
         int rpcId = (99 << 24) | (0x03 << 22) | (avatar.TypeId << 8) | 3;
         var reader = new SpanReader(System.ReadOnlySpan<byte>.Empty);
         // Should not throw.
-        DefRpcDispatcher.DispatchBaseRpc(avatar, rpcId, ref reader);
+        DefRpcDispatcher.DispatchBaseRpc(avatar, rpcId, System.IntPtr.Zero, ref reader);
     }
 
     [Fact]
@@ -90,7 +90,7 @@ public class ComponentRpcTests
         var avatar = new AvatarWithAbility();
         int rpcId = (1 << 24) | (0x03 << 22) | (avatar.TypeId << 8) | 3;
         var reader = new SpanReader(System.ReadOnlySpan<byte>.Empty);
-        DefRpcDispatcher.DispatchBaseRpc(avatar, rpcId, ref reader);
+        DefRpcDispatcher.DispatchBaseRpc(avatar, rpcId, System.IntPtr.Zero, ref reader);
         // Reaches here without exceptions — Echo was never invoked.
     }
 
@@ -113,7 +113,7 @@ public class ComponentRpcTests
             w.WriteInt32(22);
             w.WriteInt32(33);
             var reader = new SpanReader(w.WrittenSpan);
-            DefRpcDispatcher.DispatchBaseRpc(avatar, rpcId, ref reader);
+            DefRpcDispatcher.DispatchBaseRpc(avatar, rpcId, System.IntPtr.Zero, ref reader);
         }
         finally { w.Dispose(); }
 
@@ -137,7 +137,7 @@ public class ComponentRpcTests
             w.WriteString("ice");
             w.WriteInt32(75);
             var reader = new SpanReader(w.WrittenSpan);
-            DefRpcDispatcher.DispatchBaseRpc(avatar, rpcId, ref reader);
+            DefRpcDispatcher.DispatchBaseRpc(avatar, rpcId, System.IntPtr.Zero, ref reader);
         }
         finally { w.Dispose(); }
 
@@ -160,7 +160,7 @@ public class ComponentRpcTests
         {
             src.Serialize(ref w);
             var reader = new SpanReader(w.WrittenSpan);
-            DefRpcDispatcher.DispatchBaseRpc(avatar, rpcId, ref reader);
+            DefRpcDispatcher.DispatchBaseRpc(avatar, rpcId, System.IntPtr.Zero, ref reader);
         }
         finally { w.Dispose(); }
 

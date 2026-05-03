@@ -408,6 +408,74 @@ public class DefParserContainerTests
     }
 
     [Fact]
+    public void Method_Reply_Scalar_ParsesIntoModel()
+    {
+        var xml = @"<entity name=""Avatar"">
+  <base_methods>
+    <method name=""GetLevel"" reply=""int32"" />
+  </base_methods>
+</entity>";
+        var diags = new List<Diagnostic>();
+        var model = DefParser.Parse(SourceText.From(xml), "Avatar.def", diags.Add);
+        Assert.NotNull(model);
+        Assert.Empty(diags);
+        var m = model!.BaseMethods[0];
+        Assert.True(m.HasReply);
+        Assert.Equal("int32", m.Reply);
+        Assert.NotNull(m.ReplyTypeRef);
+        Assert.Equal(PropertyDataKind.Int32, m.ReplyTypeRef!.Kind);
+    }
+
+    [Fact]
+    public void Method_Reply_ContainerType_ResolvesElement()
+    {
+        var xml = @"<entity name=""Avatar"">
+  <base_methods>
+    <method name=""GetTitles"" reply=""list[string]"" />
+  </base_methods>
+</entity>";
+        var diags = new List<Diagnostic>();
+        var model = DefParser.Parse(SourceText.From(xml), "Avatar.def", diags.Add);
+        Assert.NotNull(model);
+        Assert.Empty(diags);
+        var m = model!.BaseMethods[0];
+        Assert.True(m.HasReply);
+        Assert.Equal(PropertyDataKind.List, m.ReplyTypeRef!.Kind);
+        Assert.Equal(PropertyDataKind.String, m.ReplyTypeRef.Elem!.Kind);
+    }
+
+    [Fact]
+    public void Method_NoReplyAttribute_HasReplyIsFalse()
+    {
+        var xml = @"<entity name=""Avatar"">
+  <base_methods>
+    <method name=""UseItem"" exposed=""own_client""><arg name=""itemId"" type=""int32""/></method>
+  </base_methods>
+</entity>";
+        var diags = new List<Diagnostic>();
+        var model = DefParser.Parse(SourceText.From(xml), "Avatar.def", diags.Add);
+        Assert.NotNull(model);
+        Assert.False(model!.BaseMethods[0].HasReply);
+        Assert.Null(model.BaseMethods[0].Reply);
+    }
+
+    [Fact]
+    public void Method_ClientMethodsWithReply_EmitsDEF018()
+    {
+        var xml = @"<entity name=""Avatar"">
+  <client_methods>
+    <method name=""ShowPing"" reply=""int32"" />
+  </client_methods>
+</entity>";
+        var diags = new List<Diagnostic>();
+        var model = DefParser.Parse(SourceText.From(xml), "Avatar.def", diags.Add);
+        Assert.NotNull(model);
+        Assert.Contains(diags, d => d.Id == "ATLAS_DEF018");
+        // Reply attribute is stripped after the diagnostic.
+        Assert.False(model!.ClientMethods[0].HasReply);
+    }
+
+    [Fact]
     public void Existing_ScalarOnlyEntityDefStillParses()
     {
         // Guards against the types-section / typeref / max_size additions

@@ -47,6 +47,8 @@ struct CellAppCallbackTable {
   GetOwnerSnapshotFn get_owner_snapshot;
   SerializeEntityFn serialize_entity;
   ProximityEventFn proximity_event;
+  CoroOnRpcCompleteFn coro_on_rpc_complete;
+  EntityLifecycleCancelFn entity_lifecycle_cancel;
 };
 #pragma pack(pop)
 
@@ -298,6 +300,7 @@ void CellAppNativeProvider::SetNativeCallbacks(const void* native_callbacks, int
   // nullptr => trigger still fires for Offload bookkeeping, but script
   // onProximityEnter/Leave never run.
   proximity_event_fn_ = table.proximity_event;
+  entity_lifecycle_cancel_fn_ = table.entity_lifecycle_cancel;  // nullptr on older runtimes
   ATLAS_LOG_INFO("CellApp: native callback table registered (len={})", len);
 }
 

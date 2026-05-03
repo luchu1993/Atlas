@@ -38,6 +38,48 @@ class PendingRpcRegistryTest : public ::testing::Test {
   }
 };
 
+TEST_F(PendingRpcRegistryTest, CancelByChannelFiresReceiverGone) {
+  PendingRpcRegistry registry(dispatcher_);
+
+  // Use distinct sentinel pointers — registry treats them as opaque keys.
+  auto* alive = reinterpret_cast<Channel*>(0xA1A1);
+  auto* doomed = reinterpret_cast<Channel*>(0xB2B2);
+
+  std::vector<ErrorCode> alive_errors;
+  std::vector<ErrorCode> doomed_errors;
+  bool alive_replied = false;
+
+  registry.RegisterPending(
+      10, 1, [&](std::span<const std::byte>) { alive_replied = true; },
+      [&](Error e) { alive_errors.push_back(e.Code()); }, Milliseconds(60'000), alive);
+  registry.RegisterPending(
+      10, 2, [](std::span<const std::byte>) {}, [&](Error e) { doomed_errors.push_back(e.Code()); },
+      Milliseconds(60'000), doomed);
+  registry.RegisterPending(
+      10, 3, [](std::span<const std::byte>) {}, [&](Error e) { doomed_errors.push_back(e.Code()); },
+      Milliseconds(60'000), doomed);
+
+  EXPECT_EQ(registry.PendingCount(), 3u);
+  registry.CancelByChannel(doomed);
+  EXPECT_EQ(registry.PendingCount(), 1u);
+  EXPECT_EQ(doomed_errors.size(), 2u);
+  EXPECT_EQ(doomed_errors[0], ErrorCode::kReceiverGone);
+  EXPECT_EQ(doomed_errors[1], ErrorCode::kReceiverGone);
+  EXPECT_TRUE(alive_errors.empty());
+
+  auto payload = make_payload(1);
+  EXPECT_TRUE(registry.TryDispatch(10, payload));
+  EXPECT_TRUE(alive_replied);
+}
+
+TEST_F(PendingRpcRegistryTest, CancelByChannelNullIgnored) {
+  PendingRpcRegistry registry(dispatcher_);
+  registry.RegisterPending(
+      10, 1, [](std::span<const std::byte>) {}, [](Error) {}, Milliseconds(60'000));
+  registry.CancelByChannel(nullptr);
+  EXPECT_EQ(registry.PendingCount(), 1u);
+}
+
 TEST_F(PendingRpcRegistryTest, BasicDispatch) {
   PendingRpcRegistry registry(dispatcher_);
 

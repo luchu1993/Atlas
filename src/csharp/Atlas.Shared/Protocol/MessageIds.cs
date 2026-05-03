@@ -22,4 +22,8 @@ public static class MessageIds
     public const int EntityDeltaSyncAliased    = 10;
     public const int RpcMessageAliased         = 11;
     public const int VolatilePositionAliased   = 12;
+
+    // Server-side reply for await-style entity RPCs. Mirrors C++
+    // atlas::msg_id::Common::kEntityRpcReply.
+    public const int EntityRpcReply            = 102;
 }

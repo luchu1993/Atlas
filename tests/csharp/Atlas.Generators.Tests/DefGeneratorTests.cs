@@ -341,6 +341,124 @@ public partial class Avatar : ServerEntity
     }
 
     [Fact]
+    public void BaseContext_ReplyMethod_MailboxReturnsAtlasTaskRpcReply()
+    {
+        const string defXml = @"<entity name=""Avatar"">
+  <base_methods>
+    <method name=""GetLevel"" reply=""int32"" />
+    <method name=""LookupName"" reply=""string"">
+      <arg name=""dbid"" type=""int64"" />
+    </method>
+  </base_methods>
+</entity>";
+        const string source = @"
+using Atlas.Coro;
+using Atlas.Coro.Rpc;
+using Atlas.Entity;
+using Atlas.Serialization;
+namespace Test;
+
+[Entity(""Avatar"")]
+public partial class Avatar : ServerEntity
+{
+    public override string TypeName => ""Avatar"";
+    public override void Serialize(ref SpanWriter w) {}
+    public override void Deserialize(ref SpanReader r) {}
+    public partial AtlasTask<RpcReply<int>> GetLevel() => RpcReply<int>.Ok(0);
+    public partial AtlasTask<RpcReply<string>> LookupName(long dbid) => RpcReply<string>.Ok("""");
+}
+";
+        var (result, _) = RunDefGenerator(source, defXml, "ATLAS_CELL");
+        var mailboxes = result.GeneratedTrees
+            .FirstOrDefault(t => t.FilePath.Contains("Avatar.Mailboxes"));
+        Assert.NotNull(mailboxes);
+        var code = mailboxes!.GetText().ToString();
+
+        Assert.Contains("public AtlasTask<RpcReply<int>> GetLevel(", code);
+        Assert.Contains("public AtlasTask<RpcReply<string>> LookupName(long dbid", code);
+        Assert.Contains("AtlasCancellationToken ct = default", code);
+        Assert.Contains("MessageIds.EntityRpcReply", code);
+        Assert.Contains("RpcReplyHelpers.For<int>()", code);
+        Assert.Contains("RpcReplyHelpers.For<string>()", code);
+        Assert.Contains("AtlasRpcSource<RpcReply<int>>.Rent()", code);
+        // request_id header is the first thing written into the request body.
+        Assert.Contains("writer.WriteUInt32(requestId);", code);
+        // Reply bit must be OR'd into rpc_id (high nibble has 8 in it).
+        Assert.Contains("unchecked((int)0x", code);
+    }
+
+    [Fact]
+    public void BaseContext_ReplyMethod_DispatcherInvokesAndForwardsReply()
+    {
+        const string defXml = @"<entity name=""Avatar"">
+  <base_methods>
+    <method name=""GetLevel"" reply=""int32"" />
+  </base_methods>
+</entity>";
+        const string source = @"
+using Atlas.Coro;
+using Atlas.Coro.Rpc;
+using Atlas.Entity;
+using Atlas.Serialization;
+namespace Test;
+
+[Entity(""Avatar"")]
+public partial class Avatar : ServerEntity
+{
+    public override string TypeName => ""Avatar"";
+    public override void Serialize(ref SpanWriter w) {}
+    public override void Deserialize(ref SpanReader r) {}
+    public partial AtlasTask<RpcReply<int>> GetLevel() => RpcReply<int>.Ok(0);
+}
+";
+        var (result, _) = RunDefGenerator(source, defXml, "ATLAS_BASE");
+        var dispatcher = result.GeneratedTrees
+            .FirstOrDefault(t => t.FilePath.Contains("DefRpcDispatcher"));
+        Assert.NotNull(dispatcher);
+        var code = dispatcher!.GetText().ToString();
+
+        Assert.Contains("IntPtr replyChannel", code);
+        Assert.Contains("uint requestId = reader.ReadUInt32();", code);
+        Assert.Contains("var __task = target.GetLevel(", code);
+        Assert.Contains("EntityRpcReplyHelpers.SendReplyOnComplete(__task, replyChannel, requestId,", code);
+        // Reply serializer is emitted as a static field — closure-free.
+        Assert.Contains("EntityRpcReplyHelpers.ReplySerializer<int> s_Avatar_GetLevelReplySerializer", code);
+    }
+
+    [Fact]
+    public void BaseContext_ReplyMethod_RpcStubEmitsPartialDeclaration()
+    {
+        const string defXml = @"<entity name=""Avatar"">
+  <base_methods>
+    <method name=""GetLevel"" reply=""int32"" />
+  </base_methods>
+</entity>";
+        const string source = @"
+using Atlas.Coro;
+using Atlas.Coro.Rpc;
+using Atlas.Entity;
+using Atlas.Serialization;
+namespace Test;
+
+[Entity(""Avatar"")]
+public partial class Avatar : ServerEntity
+{
+    public override string TypeName => ""Avatar"";
+    public override void Serialize(ref SpanWriter w) {}
+    public override void Deserialize(ref SpanReader r) {}
+    public partial AtlasTask<RpcReply<int>> GetLevel() => RpcReply<int>.Ok(0);
+}
+";
+        var (result, _) = RunDefGenerator(source, defXml, "ATLAS_BASE");
+        var stubs = result.GeneratedTrees
+            .FirstOrDefault(t => t.FilePath.Contains("Avatar.RpcStubs"));
+        Assert.NotNull(stubs);
+        var code = stubs!.GetText().ToString();
+
+        Assert.Contains("public partial AtlasTask<RpcReply<int>> GetLevel();", code);
+    }
+
+    [Fact]
     public void BaseContext_GeneratesClientMailbox()
     {
         var source = @"
@@ -653,17 +771,6 @@ public partial class Avatar : ServerEntity
         Assert.Contains("WriteBool(true)", code);
         Assert.Contains("WriteBool(false)", code);
     }
-
-    // =========================================================================
-    // Phase B0 — paired scope-aware snapshot deserializers
-    //
-    // The AoI enter envelope carries bytes produced by the server's
-    // SerializeForOtherClients; baseline carries SerializeForOwnerClient
-    // output. These are raw-field scope subsets (no version/fieldCount/
-    // bodyLength framing), so the client side needs paired Apply*Snapshot
-    // methods that iterate the same scope filter in the same declaration
-    // order — see PROPERTY_SYNC_DESIGN.md §9 / Phase B0.
-    // =========================================================================
 
     // Pull the body of a method named `methodName` out of a generated file's
     // text. Naive but sufficient for these tests (one `{` / `}` nesting).

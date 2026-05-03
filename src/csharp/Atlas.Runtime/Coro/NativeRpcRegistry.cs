@@ -1,12 +1,11 @@
 using System;
-using System.Runtime.InteropServices;
 using Atlas.Core;
 using Atlas.Coro.Rpc;
 
 namespace Atlas.Runtime.Coro;
 
-// Server impl: delegates to the C++ PendingRpcRegistry owned by the ScriptApp.
-// GCHandle is freed by NativeCallbacks.OnRpcComplete on every completion path.
+// Delegates to the ScriptApp's C++ PendingRpcRegistry. The managed handle
+// is returned to GCHandlePool by NativeCallbacks.OnRpcComplete.
 public sealed class NativeRpcRegistry : IAtlasRpcRegistry
 {
     public static readonly NativeRpcRegistry Instance = new();
@@ -18,13 +17,12 @@ public sealed class NativeRpcRegistry : IAtlasRpcRegistry
     {
         if (callback is null) throw new ArgumentNullException(nameof(callback));
 
-        var gch = GCHandle.Alloc(callback, GCHandleType.Normal);
+        var managed = GCHandlePool.Rent(callback);
         var handle = NativeApi.CoroRegisterPending(
-            (ushort)replyId, requestId, timeoutMs, GCHandle.ToIntPtr(gch));
+            (ushort)replyId, requestId, timeoutMs, managed);
         if (handle == 0)
         {
-            // Native rejected — surface as SendError so caller's await throws.
-            gch.Free();
+            GCHandlePool.Return(managed);
             callback.OnError(RpcCompletionStatus.SendError);
             return 0;
         }

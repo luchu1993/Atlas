@@ -12,6 +12,7 @@ constexpr int32_t kStatusSuccess = 0;
 constexpr int32_t kStatusTimeout = 1;
 constexpr int32_t kStatusCancelled = 2;
 constexpr int32_t kStatusSendError = 3;
+constexpr int32_t kStatusReceiverGone = 4;
 
 // "Never times out" is approximated by a year — the dispatcher won't reach it.
 constexpr auto kNoTimeoutDuration = std::chrono::hours{24 * 365};
@@ -46,8 +47,12 @@ auto RegisterPending(PendingRpcRegistry& registry, CoroOnRpcCompleteFn on_comple
       },
       [on_complete, managed_handle](Error err) {
         int32_t status = kStatusSendError;
-        if (err.Code() == ErrorCode::kTimeout) status = kStatusTimeout;
-        else if (err.Code() == ErrorCode::kCancelled) status = kStatusCancelled;
+        if (err.Code() == ErrorCode::kTimeout)
+          status = kStatusTimeout;
+        else if (err.Code() == ErrorCode::kCancelled)
+          status = kStatusCancelled;
+        else if (err.Code() == ErrorCode::kReceiverGone)
+          status = kStatusReceiverGone;
         on_complete(managed_handle, status, nullptr, 0);
       },
       timeout);

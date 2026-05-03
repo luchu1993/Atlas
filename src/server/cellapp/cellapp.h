@@ -6,6 +6,7 @@
 #include <unordered_set>
 
 #include "cellappmgr/cellappmgr_messages.h"  // cellappmgr::CellID
+#include "coro/pending_rpc_registry.h"
 #include "network/address.h"
 #include "network/reliable_udp.h"
 #include "server/cellapp_peer_registry.h"
@@ -110,6 +111,8 @@ class CellApp : public EntityApp {
   // already died). Populated by the machined ProcessType::kCellApp
   // Birth/Death subscription in Init.
   [[nodiscard]] auto FindPeerChannel(const Address& addr) const -> Channel*;
+
+  [[nodiscard]] auto GetRpcRegistry() -> PendingRpcRegistry& { return rpc_registry_; }
 
   // Test hook; the registry's Birth/Death subscription is the only
   // production writer.
@@ -273,6 +276,8 @@ class CellApp : public EntityApp {
 
  private:
   std::unordered_map<EntityID, PendingOffload> pending_offloads_;
+
+  PendingRpcRegistry rpc_registry_;
 
   // Monotonic epoch for CurrentCell ordering. Incremented when this
   // CellApp sends a CurrentCell after an Offload arrival so BaseApp

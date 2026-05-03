@@ -136,6 +136,11 @@ internal sealed class MethodDefModel
     public string Name { get; set; } = "";
     public ExposedScope Exposed { get; set; } = ExposedScope.None;
     public List<ArgDefModel> Args { get; } = new();
+
+    // reply="..." attribute. Null = fire-and-forget; non-null = await-reply.
+    public string? Reply { get; set; }
+    public DataTypeRefModel? ReplyTypeRef { get; set; }
+    public bool HasReply => Reply is not null;
 }
 
 internal sealed class PropertyDefModel
@@ -172,16 +177,8 @@ internal sealed class FieldDefModel
     public DataTypeRefModel Type { get; set; } = new();
 }
 
-// Controls how a struct's mutations are wired:
-//
-//   Whole  — atomic value; setters replace the struct and serialise
-//            all fields together. Zero-GC, good for small structs.
-//   Field  — each field gets its own wire op (kStructFieldSet). Saves
-//            bandwidth on wide structs whose hot field is a small slice
-//            of the body. Not yet implemented.
-//   Auto   — emitter picks between Whole and Field via the heuristic
-//            in CONTAINER_PROPERTY_SYNC_DESIGN §9 and surfaces its
-//            choice via an Info diagnostic.
+// Whole = atomic struct serialise; Field = per-field op (StructFieldSet);
+// Auto = StructEmitter.DecideSyncMode picks one + emits DEF014 Info.
 internal enum StructSyncMode : byte
 {
     Auto,

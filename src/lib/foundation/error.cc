@@ -48,6 +48,8 @@ auto ErrorCodeName(ErrorCode code) -> std::string_view {
       return "ChannelCondemned";
     case ErrorCode::kCancelled:
       return "Cancelled";
+    case ErrorCode::kReceiverGone:
+      return "ReceiverGone";
     case ErrorCode::kScriptError:
       return "ScriptError";
     case ErrorCode::kScriptTypeError:

@@ -1,7 +1,10 @@
 using System;
+using System.Collections.Generic;
 using System.Runtime.InteropServices;
 using System.Text;
 using Atlas.Core;
+using Atlas.Coro;
+using Atlas.Coro.Hosting;
 using Atlas.Entity;
 using Atlas.Serialization;
 
@@ -19,6 +22,9 @@ internal static class HotReloadManager
     /// <summary>Current script host (set after first load).</summary>
     internal static ScriptHost? CurrentHost => _scriptHost;
 
+    // Caps drain so a runaway continuation chain can't stall reload.
+    private const int kDrainPasses = 16;
+
     /// <summary>
     /// Serializes all entity state and unloads the script assembly. First half
     /// of hot-reload; caller must follow up with LoadAndRestore to bring the
@@ -30,6 +36,9 @@ internal static class HotReloadManager
         try
         {
             var entities = EntityManager.Instance.GetAllEntities();
+
+            CancelLifecyclesAndDrain(entities);
+
             var writer = new SpanWriter(64 * 1024);
             try
             {
@@ -121,6 +130,18 @@ internal static class HotReloadManager
             ErrorBridge.SetError(ex);
             return -1;
         }
+    }
+
+    internal static void CancelLifecyclesAndDrain(IReadOnlyCollection<ServerEntity> entities)
+    {
+        foreach (var entity in entities)
+            entity.TriggerLifecycleCancellation();
+        if (AtlasLoop.Current is not ManagedAtlasLoop loop) return;
+        for (int i = 0; i < kDrainPasses; i++)
+        {
+            if (loop.Drain() == 0) return;
+        }
+        Log.Warning($"Hot reload: continuation queue still draining after {kDrainPasses} passes; user code likely awaiting an RPC without LifecycleCancellation");
     }
 
     private static void RestoreEntities(byte[] snapshot)

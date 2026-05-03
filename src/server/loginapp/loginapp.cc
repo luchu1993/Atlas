@@ -67,6 +67,8 @@ auto LoginApp::Init(int argc, char* argv[]) -> bool {
     return rpc_registry_.TryDispatch(id, payload);
   });
 
+  Network().SetDisconnectCallback([this](Channel& ch) { rpc_registry_.CancelByChannel(&ch); });
+
   GetMachinedClient().Subscribe(
       machined::ListenerType::kBoth, ProcessType::kDbApp,
       [this](const machined::BirthNotification& n) {

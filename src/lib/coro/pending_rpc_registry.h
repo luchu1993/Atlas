@@ -16,6 +16,8 @@
 
 namespace atlas {
 
+class Channel;
+
 class PendingRpcRegistry {
  public:
   explicit PendingRpcRegistry(EventDispatcher& dispatcher);
@@ -34,12 +36,16 @@ class PendingRpcRegistry {
   };
 
   auto RegisterPending(MessageID reply_id, uint32_t request_id, ReplyCallback on_reply,
-                       ErrorCallback on_error, Duration timeout) -> PendingHandle;
+                       ErrorCallback on_error, Duration timeout, Channel* channel = nullptr)
+      -> PendingHandle;
 
   // request_id is the first little-endian uint32_t in payload.
   auto TryDispatch(MessageID id, std::span<const std::byte> payload) -> bool;
 
   void Cancel(PendingHandle handle);
+
+  // Fires kReceiverGone on every pending registered against the given channel.
+  void CancelByChannel(Channel* channel);
 
   void CancelAll();
 
@@ -64,6 +70,7 @@ class PendingRpcRegistry {
     ReplyCallback on_reply;
     ErrorCallback on_error;
     TimerHandle timeout_timer;
+    Channel* channel{nullptr};
   };
 
   static auto ExtractRequestId(std::span<const std::byte> payload) -> uint32_t;

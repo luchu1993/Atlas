@@ -1,16 +1,18 @@
 using System;
-using System.Threading;
+using Atlas.Serialization;
 
 namespace Atlas.Coro.Rpc;
 
-// Pooled IAtlasTaskSource that awaits one RPC reply. Caller registers the
-// source then sends the request; reply / timeout / cancel feeds back via this.
+// Reply wire: [request_id: u32][error_code: i32]([error_msg] | [body]).
+// All failure paths go through errorMapper, so awaits never throw.
 public sealed class AtlasRpcSource<T> : IAtlasTaskSource<T>, IAtlasRpcCallback
 {
-    public delegate T SpanDeserializer(ReadOnlySpan<byte> payload);
+    public delegate T SpanDeserializer(ref SpanReader reader);
+    public delegate T ErrorMapper(int code, string message);
 
     private AtlasTaskCompletionSourceCore<T> _core;
     private SpanDeserializer? _deserializer;
+    private ErrorMapper? _errorMapper;
     private IAtlasRpcRegistry? _registry;
     private long _pendingHandle;
     private CancelRegistration _cancelReg;
@@ -27,28 +29,27 @@ public sealed class AtlasRpcSource<T> : IAtlasTaskSource<T>, IAtlasRpcCallback
     public AtlasTask<T> Task => new(this, _core.Version);
 
     public void Start(IAtlasRpcRegistry registry, int replyId, uint requestId,
-        SpanDeserializer deserializer, int timeoutMs, AtlasCancellationToken ct = default)
+        SpanDeserializer deserializer, ErrorMapper errorMapper,
+        int timeoutMs = AtlasRpc.DefaultTimeoutMs, AtlasCancellationToken ct = default)
     {
         if (registry is null) throw new ArgumentNullException(nameof(registry));
         if (deserializer is null) throw new ArgumentNullException(nameof(deserializer));
+        if (errorMapper is null) throw new ArgumentNullException(nameof(errorMapper));
 
         _registry = registry;
         _deserializer = deserializer;
+        _errorMapper = errorMapper;
 
         if (ct.IsCancellationRequested)
         {
-            _core.TrySetCanceled();
+            _core.TrySetResult(errorMapper(RpcErrorCodes.Cancelled, RpcFrameworkMessages.Cancelled));
             return;
         }
 
         _pendingHandle = registry.RegisterPending(replyId, requestId, timeoutMs, this);
 
         if (ct.CanBeCanceled)
-        {
-            // If token cancelled between the IsCancellationRequested check
-            // and Register, the registry's entry is torn down via CancelPending.
             _cancelReg = ct.Register(CancelTokenCallback, this);
-        }
     }
 
     private void OnCancellationRequested()
@@ -60,27 +61,46 @@ public sealed class AtlasRpcSource<T> : IAtlasTaskSource<T>, IAtlasRpcCallback
 
     public void OnReply(ReadOnlySpan<byte> payload)
     {
+        var reader = new SpanReader(payload);
+        try
+        {
+            _ = reader.ReadUInt32();
+            int errorCode = reader.ReadInt32();
+            if (errorCode != 0)
+            {
+                string msg;
+                try { msg = reader.ReadString(); }
+                catch { msg = ""; }
+                _core.TrySetResult(_errorMapper!(errorCode, msg));
+                return;
+            }
+        }
+        catch (Exception ex)
+        {
+            _core.TrySetResult(_errorMapper!(RpcErrorCodes.PayloadMalformed, ex.Message));
+            return;
+        }
+
         T value;
-        try { value = _deserializer!(payload); }
-        catch (Exception ex) { _core.TrySetException(ex); return; }
+        try { value = _deserializer!(ref reader); }
+        catch (Exception ex)
+        {
+            _core.TrySetResult(_errorMapper!(RpcErrorCodes.PayloadMalformed, ex.Message));
+            return;
+        }
         _core.TrySetResult(value);
     }
 
     public void OnError(RpcCompletionStatus status)
     {
-        switch (status)
+        var (code, msg) = status switch
         {
-            case RpcCompletionStatus.Cancelled:
-                _core.TrySetCanceled();
-                break;
-            case RpcCompletionStatus.Timeout:
-                _core.TrySetException(new TimeoutException("RPC timed out"));
-                break;
-            default:
-                _core.TrySetException(new InvalidOperationException(
-                    $"RPC failed with status {status}"));
-                break;
-        }
+            RpcCompletionStatus.Timeout      => (RpcErrorCodes.Timeout,      RpcFrameworkMessages.Timeout),
+            RpcCompletionStatus.Cancelled    => (RpcErrorCodes.Cancelled,    RpcFrameworkMessages.Cancelled),
+            RpcCompletionStatus.ReceiverGone => (RpcErrorCodes.ReceiverGone, RpcFrameworkMessages.ReceiverGone),
+            _                                => (RpcErrorCodes.SendFailed,  RpcFrameworkMessages.SendFailed),
+        };
+        _core.TrySetResult(_errorMapper!(code, msg));
     }
 
     public short Version => _core.Version;
@@ -100,6 +120,7 @@ public sealed class AtlasRpcSource<T> : IAtlasTaskSource<T>, IAtlasRpcCallback
         _cancelReg = default;
         _registry = null;
         _deserializer = null;
+        _errorMapper = null;
         _pendingHandle = 0;
         _core.Reset();
         TaskPool<AtlasRpcSource<T>>.Return(this);

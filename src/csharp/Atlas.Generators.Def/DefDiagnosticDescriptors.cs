@@ -131,4 +131,21 @@ internal static class DefDiagnosticDescriptors
         "Atlas.Def",
         DiagnosticSeverity.Error,
         isEnabledByDefault: true);
+
+    public static readonly DiagnosticDescriptor DEF018 = new(
+        "ATLAS_DEF018",
+        "client_methods cannot declare reply",
+        "client_methods.{0}: 'reply' is not allowed (clients receive RPCs, do not answer them)",
+        "Atlas.Def",
+        DiagnosticSeverity.Error,
+        isEnabledByDefault: true);
+
+    public static readonly DiagnosticDescriptor RPC001 = new(
+        "ATLAS_RPC001",
+        "RpcReply<T>.Value accessed without checking IsOk",
+        "RpcReply<T>.Value on '{0}' is reached without first checking IsOk / TryGetValue — "
+            + "framework errors will throw at the access site",
+        "Atlas.Coro.Rpc",
+        DiagnosticSeverity.Warning,
+        isEnabledByDefault: true);
 }

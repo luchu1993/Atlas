@@ -162,7 +162,10 @@ public sealed class EntityManager
     {
         _iterating = true;
         foreach (var entity in _entities.Values)
+        {
+            entity.TriggerLifecycleCancellation();
             entity.OnDestroy();
+        }
         _iterating = false;
         _pendingCreates.Clear();
         _pendingDestroys.Clear();
@@ -205,6 +208,9 @@ public sealed class EntityManager
     {
         if (_entities.Remove(entityId, out var entity))
         {
+            // Cancel before OnDestroy so any in-flight RPC the user awaits
+            // inside OnDestroy resolves to a Cancelled reply.
+            entity.TriggerLifecycleCancellation();
             entity.OnDestroy();
             entity.IsDestroyed = true;
         }

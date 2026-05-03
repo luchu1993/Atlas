@@ -229,7 +229,7 @@ void FakeRestore(uint32_t eid, uint16_t tid, int64_t, const uint8_t*, int32_t) {
 bool g_dispatch_called = false;
 uint32_t g_dispatch_entity_id = 0;
 uint32_t g_dispatch_rpc_id = 0;
-void FakeDispatch(uint32_t eid, uint32_t rid, const uint8_t*, int32_t) {
+void FakeDispatch(uint32_t eid, uint32_t rid, intptr_t, const uint8_t*, int32_t) {
   g_dispatch_called = true;
   g_dispatch_entity_id = eid;
   g_dispatch_rpc_id = rid;
@@ -242,13 +242,27 @@ void FakeDestroyed(uint32_t eid) {
   g_destroyed_entity_id = eid;
 }
 
-// Matches the packed table C# would send (see NativeCallbackTable layout).
+bool g_lifecycle_cancel_called = false;
+uint32_t g_lifecycle_cancel_entity_id = 0;
+void FakeLifecycleCancel(uint32_t eid) {
+  g_lifecycle_cancel_called = true;
+  g_lifecycle_cancel_entity_id = eid;
+}
+
+// Matches the packed table C# would send (see CellAppCallbackTable in
+// cellapp_native_provider.cc — slots beyond `dispatch_rpc` may be null on
+// older runtimes, hence the trailing optionals).
 #pragma pack(push, 1)
 struct TestCallbackTable {
   void* restore;
   void* get_entity_data;
   void* entity_destroyed;
   void* dispatch_rpc;
+  void* get_owner_snapshot;
+  void* serialize_entity;
+  void* proximity_event;
+  void* coro_on_rpc_complete;
+  void* entity_lifecycle_cancel;
 };
 #pragma pack(pop)
 
@@ -288,6 +302,21 @@ TEST_F(CellAppNativeProviderTest, SetNativeCallbacksRestoreRoundtrips) {
   EXPECT_EQ(g_restore_type_id, 7u);
 }
 
+TEST_F(CellAppNativeProviderTest, SetNativeCallbacksLifecycleCancelRoundtrips) {
+  g_lifecycle_cancel_called = false;
+  TestCallbackTable table{};
+  table.restore = reinterpret_cast<void*>(&FakeRestore);
+  table.dispatch_rpc = reinterpret_cast<void*>(&FakeDispatch);
+  table.entity_destroyed = reinterpret_cast<void*>(&FakeDestroyed);
+  table.entity_lifecycle_cancel = reinterpret_cast<void*>(&FakeLifecycleCancel);
+  provider_.SetNativeCallbacks(&table, sizeof(table));
+
+  ASSERT_NE(provider_.entity_lifecycle_cancel_fn(), nullptr);
+  provider_.entity_lifecycle_cancel_fn()(7);
+  EXPECT_TRUE(g_lifecycle_cancel_called);
+  EXPECT_EQ(g_lifecycle_cancel_entity_id, 7u);
+}
+
 TEST_F(CellAppNativeProviderTest, SetNativeCallbacksDispatchRoundtrips) {
   g_dispatch_called = false;
   TestCallbackTable table{};
@@ -296,7 +325,7 @@ TEST_F(CellAppNativeProviderTest, SetNativeCallbacksDispatchRoundtrips) {
   table.entity_destroyed = reinterpret_cast<void*>(&FakeDestroyed);
   provider_.SetNativeCallbacks(&table, sizeof(table));
 
-  provider_.dispatch_rpc_fn()(100, 0x00800001, nullptr, 0);
+  provider_.dispatch_rpc_fn()(100, 0x00800001, /*reply_channel=*/0, nullptr, 0);
   EXPECT_TRUE(g_dispatch_called);
   EXPECT_EQ(g_dispatch_entity_id, 100u);
   EXPECT_EQ(g_dispatch_rpc_id, 0x00800001u);

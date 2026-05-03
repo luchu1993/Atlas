@@ -98,6 +98,14 @@ class INativeApiProvider {
     return 0;
   }
   virtual void CoroCancelPending(uint64_t /*handle*/) {}
+
+  // EntityRpcReply send hooks. reply_channel == 0 means in-process — drop
+  // silently and let the caller's await time out.
+  virtual void SendEntityRpcSuccess(intptr_t /*reply_channel*/, uint32_t /*request_id*/,
+                                    const std::byte* /*body*/, int32_t /*len*/) {}
+  virtual void SendEntityRpcFailure(intptr_t /*reply_channel*/, uint32_t /*request_id*/,
+                                    int32_t /*error_code*/, const char* /*msg*/,
+                                    int32_t /*msg_len*/) {}
 };
 
 void SetNativeApiProvider(INativeApiProvider* provider);

@@ -2,6 +2,7 @@ using System;
 using Atlas.Coro;
 using Atlas.Coro.Rpc;
 using Atlas.Coro.Testing;
+using Atlas.Serialization;
 using Xunit;
 
 namespace Atlas.Tests.Coro;
@@ -28,15 +29,20 @@ public sealed class AtlasRpcHelperTests : IDisposable
         AtlasLoop.Reset();
     }
 
-    private static int DeserializeInt(ReadOnlySpan<byte> payload) =>
-        BitConverter.ToInt32(payload.Slice(4, 4));
+    private static readonly AtlasRpcSource<RpcReply<int>>.SpanDeserializer DeserInt =
+        static (ref SpanReader r) => RpcReply<int>.Ok(r.ReadInt32());
 
-    private static byte[] BuildIntReply(uint requestId, int value)
+    private static byte[] BuildOkReply(uint requestId, int value)
     {
-        var buf = new byte[8];
-        BitConverter.GetBytes(requestId).CopyTo(buf.AsSpan(0, 4));
-        BitConverter.GetBytes(value).CopyTo(buf.AsSpan(4, 4));
-        return buf;
+        var w = new SpanWriter(16);
+        try
+        {
+            w.WriteUInt32(requestId);
+            w.WriteInt32(0);
+            w.WriteInt32(value);
+            return w.WrittenSpan.ToArray();
+        }
+        finally { w.Dispose(); }
     }
 
     [Fact]
@@ -44,7 +50,7 @@ public sealed class AtlasRpcHelperTests : IDisposable
     {
         AtlasRpcRegistryHost.Reset();
         Assert.Throws<InvalidOperationException>(() => _ = AtlasRpcRegistryHost.Current);
-        AtlasRpcRegistryHost.Install(_registry);   // restore for Dispose
+        AtlasRpcRegistryHost.Install(_registry);
     }
 
     [Fact]
@@ -68,9 +74,11 @@ public sealed class AtlasRpcHelperTests : IDisposable
     public void Await_UsesHostRegistry_ResolvesOnDispatch()
     {
         var requestId = AtlasRpc.NextRequestId();
-        var task = AtlasRpc.Await<int>(replyId: 50, requestId, DeserializeInt);
-        _registry.TryDispatch(50, requestId, BuildIntReply(requestId, 123));
-        Assert.Equal(123, _loop.RunAwait(task));
+        var task = AtlasRpc.Await<int>(replyId: 50, requestId, DeserInt);
+        _registry.TryDispatch(50, requestId, BuildOkReply(requestId, 123));
+        var reply = _loop.RunAwait(task);
+        Assert.True(reply.IsOk);
+        Assert.Equal(123, reply.Value);
     }
 
     [Fact]
@@ -78,21 +86,21 @@ public sealed class AtlasRpcHelperTests : IDisposable
     {
         using var other = new ManagedRpcRegistry(_loop);
         var requestId = AtlasRpc.NextRequestId();
-        var task = AtlasRpc.Await<int>(other, replyId: 60, requestId, DeserializeInt);
-        // Dispatch through the explicit registry, not the host one.
+        var task = AtlasRpc.Await<int>(other, replyId: 60, requestId, DeserInt);
         Assert.Equal(0, _registry.PendingCount);
         Assert.Equal(1, other.PendingCount);
-        other.TryDispatch(60, requestId, BuildIntReply(requestId, 9));
-        Assert.Equal(9, _loop.RunAwait(task));
+        other.TryDispatch(60, requestId, BuildOkReply(requestId, 9));
+        Assert.Equal(9, _loop.RunAwait(task).Value);
     }
 
     [Fact]
     public void Await_TimeoutFiresOnLoopAdvance()
     {
         var requestId = AtlasRpc.NextRequestId();
-        var task = AtlasRpc.Await<int>(70, requestId, DeserializeInt, timeoutMs: 50);
+        var task = AtlasRpc.Await<int>(70, requestId, DeserInt, timeoutMs: 50);
         _loop.AdvanceTime(60);
-        Assert.Throws<TimeoutException>(() => _loop.RunAwait(task));
+        var reply = _loop.RunAwait(task);
+        Assert.Equal(RpcErrorCodes.Timeout, reply.Error);
     }
 
     [Fact]
@@ -100,11 +108,32 @@ public sealed class AtlasRpcHelperTests : IDisposable
     {
         var cts = new AtlasCancellationSource();
         var requestId = AtlasRpc.NextRequestId();
-        var task = AtlasRpc.Await<int>(80, requestId, DeserializeInt, ct: cts.Token);
+        var task = AtlasRpc.Await<int>(80, requestId, DeserInt, ct: cts.Token);
         Assert.Equal(1, _registry.PendingCount);
         cts.Cancel();
         Assert.Equal(0, _registry.PendingCount);
-        Assert.Throws<OperationCanceledException>(() => _loop.RunAwait(task));
+        var reply = _loop.RunAwait(task);
+        Assert.Equal(RpcErrorCodes.Cancelled, reply.Error);
+    }
+
+    [Fact]
+    public void OrThrow_OkReturnsValue()
+    {
+        var requestId = AtlasRpc.NextRequestId();
+        var task = AtlasRpc.Await<int>(110, requestId, DeserInt).OrThrow();
+        _registry.TryDispatch(110, requestId, BuildOkReply(requestId, 42));
+        Assert.Equal(42, _loop.RunAwait(task));
+    }
+
+    [Fact]
+    public void OrThrow_ErrorRaisesRpcException()
+    {
+        var requestId = AtlasRpc.NextRequestId();
+        var task = AtlasRpc.Await<int>(120, requestId, DeserInt, timeoutMs: 50).OrThrow();
+        _loop.AdvanceTime(60);
+        var ex = Assert.Throws<RpcException>(() => _loop.RunAwait(task));
+        Assert.Equal(RpcErrorCodes.Timeout, ex.ErrorCode);
+        Assert.Equal(RpcFrameworkMessages.Timeout, ex.Message);
     }
 
     [Fact]
@@ -118,12 +147,13 @@ public sealed class AtlasRpcHelperTests : IDisposable
     public void ShutdownToken_AfterRequest_PropagatesToAwaitingRpc()
     {
         var requestId = AtlasRpc.NextRequestId();
-        var task = AtlasRpc.Await<int>(90, requestId, DeserializeInt,
+        var task = AtlasRpc.Await<int>(90, requestId, DeserInt,
             ct: AtlasShutdownToken.Token);
 
         AtlasShutdownToken.RequestShutdown();
         Assert.True(AtlasShutdownToken.IsShutdownRequested);
-        Assert.Throws<OperationCanceledException>(() => _loop.RunAwait(task));
+        var reply = _loop.RunAwait(task);
+        Assert.Equal(RpcErrorCodes.Cancelled, reply.Error);
     }
 
     [Fact]
@@ -133,5 +163,24 @@ public sealed class AtlasRpcHelperTests : IDisposable
         Assert.True(AtlasShutdownToken.IsShutdownRequested);
         AtlasShutdownToken.Reset();
         Assert.False(AtlasShutdownToken.IsShutdownRequested);
+    }
+
+    [Fact]
+    public void RpcReplyHelpers_For_ReturnsCachedDelegate()
+    {
+        var a = RpcReplyHelpers.For<int>();
+        var b = RpcReplyHelpers.For<int>();
+        Assert.Same(a, b);
+    }
+
+    [Fact]
+    public void RpcReplyHelpers_For_DistinctTypesGetDistinctMappers()
+    {
+        // Verify Cache<T> specialises per T (cannot Assert.NotEqual delegates
+        // of different generic types — use behavior to distinguish).
+        var intMap = RpcReplyHelpers.For<int>();
+        var strMap = RpcReplyHelpers.For<string>();
+        Assert.Equal(7, intMap(7, "x").Error);
+        Assert.Equal(7, strMap(7, "x").Error);
     }
 }

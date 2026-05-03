@@ -1,6 +1,7 @@
 #ifndef ATLAS_LIB_CLRSCRIPT_CLR_NATIVE_API_H_
 #define ATLAS_LIB_CLRSCRIPT_CLR_NATIVE_API_H_
 
+#include <cstddef>
 #include <cstdint>
 
 #include "clrscript/clr_export.h"

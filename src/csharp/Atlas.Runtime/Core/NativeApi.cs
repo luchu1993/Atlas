@@ -217,4 +217,33 @@ internal static unsafe partial class NativeApi
 
     [LibraryImport(LibName, EntryPoint = "AtlasCoroCancelPending")]
     public static partial void CoroCancelPending(ulong handle);
+
+    [LibraryImport(LibName, EntryPoint = "AtlasSendEntityRpcSuccess")]
+    public static unsafe partial void SendEntityRpcSuccessRaw(IntPtr replyChannel,
+        uint requestId, byte* body, int len);
+
+    public static unsafe void SendEntityRpcSuccess(IntPtr replyChannel, uint requestId,
+        ReadOnlySpan<byte> body)
+    {
+        fixed (byte* p = body)
+        {
+            SendEntityRpcSuccessRaw(replyChannel, requestId, p, body.Length);
+        }
+    }
+
+    [LibraryImport(LibName, EntryPoint = "AtlasSendEntityRpcFailure")]
+    public static unsafe partial void SendEntityRpcFailureRaw(IntPtr replyChannel,
+        uint requestId, int errorCode, byte* msg, int msgLen);
+
+    public static unsafe void SendEntityRpcFailure(IntPtr replyChannel, uint requestId,
+        int errorCode, string? msg)
+    {
+        var buf = msg is null
+            ? ReadOnlySpan<byte>.Empty
+            : System.Text.Encoding.UTF8.GetBytes(msg).AsSpan();
+        fixed (byte* p = buf)
+        {
+            SendEntityRpcFailureRaw(replyChannel, requestId, errorCode, p, buf.Length);
+        }
+    }
 }

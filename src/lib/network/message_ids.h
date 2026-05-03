@@ -32,6 +32,8 @@ template <typename E>
 enum class Common : uint16_t {
   kHeartbeat = 100,
   kShutdownRequest = 101,
+  // Entity-RPC reply (matched in PendingRpcRegistry by request_id).
+  kEntityRpcReply = 102,
 };
 
 enum class Machined : uint16_t {
@@ -174,6 +176,7 @@ enum class BaseAppMgr : uint16_t {
 
 ATLAS_ASSERT_ID_RANGE(Common::kHeartbeat, 100, 199);
 ATLAS_ASSERT_ID_RANGE(Common::kShutdownRequest, 100, 199);
+ATLAS_ASSERT_ID_RANGE(Common::kEntityRpcReply, 100, 199);
 
 ATLAS_ASSERT_ID_RANGE(Machined::kRegister, 1000, 1099);
 ATLAS_ASSERT_ID_RANGE(Machined::kDeregister, 1000, 1099);

@@ -58,6 +58,11 @@ class BaseNativeProvider : public INativeApiProvider {
 
   void ReportClientEventSeqGap(uint32_t entity_id, uint32_t gap_delta) override;
 
+  void SendEntityRpcSuccess(intptr_t reply_channel, uint32_t request_id, const std::byte* body,
+                            int32_t len) override;
+  void SendEntityRpcFailure(intptr_t reply_channel, uint32_t request_id, int32_t error_code,
+                            const char* msg, int32_t msg_len) override;
+
  protected:
   BaseNativeProvider() = default;
 };
