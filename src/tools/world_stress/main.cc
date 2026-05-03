@@ -437,14 +437,12 @@ class Session {
     if (!auth_channel_ || entity_id_ == kInvalidEntityID) return;
 
     // StressAvatar.Echo is a cell_method (exposed own_client). RPC id
-    // layout: (slot=0 <<24) | (direction=2 <<22) | (type_index=2 <<8)
-    //          | method_index. Method index is 1-based, sorted by name
-    //          alphabetically across cell_methods. Current order:
-    //          ApplyBuffs(1), Echo(2), EquipWeapon(3), ReportPos(4),
-    //          SubmitScores(5), UpdateLoadout(6). Adding a method that
-    //          sorts before any of these shifts the indices — keep this
-    //          comment in sync with entity_defs/StressAvatar.def.
-    constexpr uint32_t kEchoRpcId = (2u << 22) | (2u << 8) | 2u;
+    // layout: (slot=0 <<24) | (direction=2 <<22) | (type_index=3 <<8)
+    //          | method_index. type_index = entity_ids.xml manifest id.
+    //          method_index is 1-based, in .def declaration order:
+    //          Echo(1), ReportPos(2), SubmitScores(3), UpdateLoadout(4),
+    //          EquipWeapon(5), ApplyBuffs(6).
+    constexpr uint32_t kEchoRpcId = (2u << 22) | (3u << 8) | 1u;
 
     const uint32_t seq = next_echo_seq_++;
     const uint64_t client_ts_ns = static_cast<uint64_t>(
@@ -472,14 +470,14 @@ class Session {
   // component instance instead of the entity body. Charge takes scalar
   // args (kept that way deliberately — gives us a slot-encoded RPC that
   // doesn't depend on the container/struct arg codec).
-  // method_index assignment per StressLoadComponent.def cell_methods,
-  // alphabetical: ApplyAffixes(1), Charge(2), QueueBuffs(3), SwapOffhand(4).
+  // method_index per StressLoadComponent.def cell_methods, declaration
+  // order: Charge(1), ApplyAffixes(2), SwapOffhand(3), QueueBuffs(4).
   void SendChargeComponentRpc() {
     if (!auth_channel_ || entity_id_ == kInvalidEntityID) return;
     constexpr uint32_t kChargeRpcId = (1u << 24) |  // slot_idx = 1 (StressLoadComponent)
                                       (2u << 22) |  // direction = 2 (cell)
-                                      (2u << 8) |   // type_index = 2 (StressAvatar)
-                                      2u;           // method_index = 2 (Charge)
+                                      (3u << 8) |   // type_index = 3 (StressAvatar)
+                                      1u;           // method_index = 1 (Charge)
     const uint32_t seq = next_charge_seq_++;
     const int32_t amount = 1 + static_cast<int32_t>(seq % 4);
     std::vector<std::byte> payload(sizeof(seq) + sizeof(amount));
@@ -499,9 +497,9 @@ class Session {
     if (!auth_channel_ || entity_id_ == kInvalidEntityID) return;
 
     // StressAvatar.ReportPos is a cell_method (exposed all_clients).
-    // method_index=4 follows the alphabetical ordering of cell_methods
-    // in StressAvatar.def (see SendEcho's comment for the full list).
-    constexpr uint32_t kReportPosRpcId = (2u << 22) | (2u << 8) | 4u;
+    // method_index=2 — second cell_method declared in StressAvatar.def
+    // (see SendEcho's comment for the full declaration order).
+    constexpr uint32_t kReportPosRpcId = (2u << 22) | (3u << 8) | 2u;
 
     // Random-walk inside a (2 * walk_range_m)-wide square centred on
     // this session's spawn point.  --teleport-pct % of calls replace
@@ -555,15 +553,16 @@ class Session {
     constexpr MessageID kUnreliableDeltaWireId = 0xF001;
     constexpr MessageID kReliableDeltaWireId = 0xF003;
 
-    // Server → client RPC envelope: body is [u32 rpc_id][serialized args].
-    // EchoReply rpc_id = 0x0201 (direction=0, type_index=2, method_index=1).
+    // Server → client RPC envelope: [u32 rpc_id][u64 trace_id][serialized args].
+    // EchoReply rpc_id = 0x000301 (direction=0, type_index=3, method_index=1).
     if (id == baseapp::kClientRpcMessageId) {
-      if (payload.size() < sizeof(uint32_t)) return true;
+      constexpr size_t kEnvelopePrefix = sizeof(uint32_t) + sizeof(uint64_t);
+      if (payload.size() < kEnvelopePrefix) return true;
       uint32_t rpc_id = 0;
       std::memcpy(&rpc_id, payload.data(), sizeof(uint32_t));
-      auto args = payload.subspan(sizeof(uint32_t));
+      auto args = payload.subspan(kEnvelopePrefix);
 
-      constexpr uint32_t kEchoReplyRpcId = 0x0201;
+      constexpr uint32_t kEchoReplyRpcId = (3u << 8) | 1u;
       if (rpc_id == kEchoReplyRpcId) {
         // Payload layout matches StressAvatar.def client_methods::EchoReply:
         //   uint32 seq | uint64 serverTsNs | uint64 clientTsNs
