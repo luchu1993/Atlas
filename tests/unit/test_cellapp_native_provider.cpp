@@ -25,8 +25,11 @@ namespace {
 
 class CellAppNativeProviderTest : public ::testing::Test {
  protected:
-  Space space_{1};
+  // provider_ before space_: entity controllers store dispatch lambdas
+  // capturing `this` into proximity-trigger callbacks, so the provider
+  // must outlive the entities that fire those callbacks during teardown.
   CellAppNativeProvider provider_{[this](uint32_t id) { return space_.FindEntity(id); }};
+  Space space_{1};
 
   auto AddEntity(EntityID id, math::Vector3 pos = {0, 0, 0}) -> CellEntity* {
     return space_.AddEntity(
