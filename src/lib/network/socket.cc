@@ -221,7 +221,9 @@ auto Socket::Accept() -> Result<std::pair<Socket, Address>> {
   }
   auto client_fd = static_cast<FdHandle>(client_raw);
 #else
-  int client_raw = ::accept4(fd_, reinterpret_cast<sockaddr*>(&client_addr), &len, SOCK_NONBLOCK);
+  // accept4 with SOCK_NONBLOCK is a Linux extension; Darwin / older NDK
+  // ABIs lack it. Plain accept() + SetNonBlocking is universally portable.
+  int client_raw = ::accept(fd_, reinterpret_cast<sockaddr*>(&client_addr), &len);
   if (client_raw == -1) {
     return MapSocketError();
   }
@@ -229,9 +231,7 @@ auto Socket::Accept() -> Result<std::pair<Socket, Address>> {
 #endif
 
   Socket client_sock(client_fd);
-#if ATLAS_PLATFORM_WINDOWS
   if (auto r = client_sock.SetNonBlocking(true); !r) return r.Error();
-#endif
   if (auto r = client_sock.SetNoDelay(true); !r) return r.Error();
   if (auto r = client_sock.SetSendBufferSize(256 * 1024); !r) return r.Error();
   if (auto r = client_sock.SetRecvBufferSize(256 * 1024); !r) return r.Error();
