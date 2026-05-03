@@ -1,326 +1,176 @@
 # Atlas Engine
 
-A modern distributed MMO game server framework written in **C++20** with **C# (.NET 9)** scripting, inspired by the **BigWorld Engine** architecture. Features multi-process distributed design with load balancing, spatial partitioning, and fault tolerance, supporting **Windows** and **Linux** cross-platform deployment.
+Atlas is a distributed MMO server framework built with **C++20** and **C# (.NET 9)**. It uses a BigWorld-style split between login, base, cell, database, and manager processes, while gameplay logic runs in managed code through embedded CoreCLR.
 
 **[中文文档](README_CN.md)**
 
-## Features
+## Why Atlas Exists
 
-- **Distributed Multi-Process Architecture** — LoginApp, BaseApp, CellApp, DBApp and their managers, with load balancing and fault tolerance
-- **Spatial Partitioning** — CellApp + CellAppMgr maintain a BSP-tree partition with witness-based AoI, ghost entities, and cross-cell offload
-- **Entity System** — Entities distributed across Base / Cell / Client, communicating via Mailbox RPC
-- **C# (.NET 9) Scripting** — High-performance C# scripting via embedded CoreCLR; zero-overhead interop with `[UnmanagedCallersOnly]`
-- **Cross-Platform** — Full OS API abstraction, unified build on Windows and Linux
-- **Pluggable Database** — MySQL (production), SQLite (development), and XML (lightweight fallback) backends
-- **Client Runtime** — C# `Atlas.Client` with desktop and Unity surfaces; `Atlas.Generators.Def` source generator emits typed entity classes / delta sync from `.def` files
+Atlas is aimed at large, long-running online worlds where the server must scale across processes, keep simulation authority on the server, and still let gameplay teams work in C#. The C++ core owns networking, process coordination, persistence, spatial simulation, and profiling; the C# layer owns entity behavior, shared gameplay contracts, generated client/server types, and sample game logic.
+
+## Current Capabilities
+
+- Multi-process cluster layout with service discovery through `machined`.
+- Base/Cell entity model with mailbox RPC and generated C# entity code.
+- CellApp spatial simulation with witness-based AoI, ghost entities, BSP partitioning, and offload coordination.
+- Embedded .NET 9 runtime for server-side gameplay scripting.
+- C# client runtime with desktop and Unity integration surfaces.
+- Runtime-loaded XML and SQLite database plugins.
+- Tracy instrumentation, baseline stress drivers, and trace comparison tools.
+
+MySQL, DBAppMgr, and Reviver are represented in the tree, but they are not complete production features yet.
 
 ## Architecture
 
+```text
+Client
+  │
+  ▼
+LoginApp ──► BaseAppMgr ──► BaseApp ◄──► CellApp
+                         │               │
+                         ▼               ▼
+                       DBApp         CellAppMgr
+                         │
+                    XML / SQLite
 ```
-Client ──► LoginApp ──► BaseAppMgr ──► BaseApp ◄──► CellApp
-                                          │              │
-                                        DBApp        CellAppMgr
-                                          │
-                                   MySQL / SQLite / XML
-```
 
-| Process | Role |
-|---------|------|
-| **LoginApp** | Client authentication and login |
-| **BaseApp** | Entity state management, client proxy, persistence |
-| **CellApp** | Spatial simulation, entity movement, AoI (Area of Interest), ghost replication |
-| **CellAppMgr** | BSP-tree spatial partitioning, cell offload, geometry distribution |
-| **DBApp** | Asynchronous database read/write across XML, SQLite, or MySQL backends |
-| **BaseAppMgr / DBAppMgr** | Cluster load balancing and coordination |
-| **Reviver** | Crash detection and automatic recovery (placeholder) |
-| **machined** | Machine daemon, service registration and discovery |
+| Process | Responsibility |
+|---|---|
+| `machined` | Local service registry, heartbeat target, and Birth/Death notification hub. |
+| `LoginApp` | Client-facing login gateway. |
+| `BaseAppMgr` | BaseApp registration, selection, and cluster coordination. |
+| `BaseApp` | Base entity ownership, client proxy state, mailbox routing, persistence handoff, and scripting. |
+| `CellAppMgr` | CellApp registration, space geometry, BSP partitioning, and offload coordination. |
+| `CellApp` | Spatial entities, movement, witness updates, AoI, ghosting, and scripting. |
+| `DBApp` | Asynchronous entity persistence through configured database backends. |
+| `EchoApp` | Minimal server process for verifying framework wiring and build output. |
 
-## Server Framework (`src/lib/server/`)
+Server processes share a small framework hierarchy:
 
-The `server` library provides the base class hierarchy shared by all Atlas server processes:
-
-```
+```text
 ServerApp
-├── ManagerApp          — manager/daemon processes (no scripting)
-│   ├── BaseAppMgr
-│   ├── CellAppMgr
-│   ├── DBAppMgr
-│   ├── machined
-│   └── EchoApp         — minimal verification app
-└── ScriptApp           — ServerApp + CoreCLR scripting layer
-    └── EntityApp       — ScriptApp + entity definitions + background task pool
-        ├── BaseApp
-        └── CellApp
+├── ManagerApp     daemon and manager processes without CoreCLR
+└── ScriptApp      ServerApp plus embedded CoreCLR
+    └── EntityApp  ScriptApp plus entity definitions and background tasks
 ```
 
-Key components provided by `ServerApp`:
+`ServerApp` provides configuration, machined registration, watcher metrics, tick callbacks, and signal dispatch. `BaseApp` and `CellApp` extend it through `EntityApp` so C# gameplay can run on top of the C++ server core.
 
-- **`ServerConfig`** — loads process configuration from CLI flags and JSON
-- **`MachinedClient`** — TCP connection to machined for registration, heartbeats, service discovery, and Birth/Death notifications
-- **`WatcherRegistry`** — hierarchical path-based registry for observable process metrics (read/write via path strings)
-- **`Updatable` / `Updatables`** — level-ordered per-tick callback system; safe for add/remove during iteration
-- **`SignalDispatchTask`** — dispatches OS signals (SIGINT, SIGTERM, etc.) into the event loop
+## Requirements
 
-## Development Setup
+Windows:
 
-### Prerequisites
+- Visual Studio 2022 with the Desktop development with C++ workload
+- CMake 3.28+
+- .NET 9 SDK
+- Python 3.9+
+- Git
 
-#### Windows
+Linux:
 
-| Tool | Version | Notes |
-|------|---------|-------|
-| [Visual Studio 2022](https://visualstudio.microsoft.com/) | 17.x | Select **"Desktop development with C++"** workload |
-| [CMake](https://cmake.org/download/) | 3.28+ | Build system; the version bundled with Visual Studio also works |
-| [.NET 9 SDK](https://dotnet.microsoft.com/download/dotnet/9.0) | 9.0+ | Required for C# scripting layer; auto-detected at build time |
-| [Python](https://www.python.org/) | 3.9+ | Required only for `tools/build.{bat,sh}` and profiling helpers |
-| [Git](https://git-scm.com/) | Any | Version control |
-| [Ninja](https://ninja-build.org/) | 1.11+ | Optional — auto-downloaded to `.tmp/ninja/` on first run if missing |
+- GCC 13+ or Clang with C++20 support
+- CMake 3.28+
+- Ninja for the debug preset
+- .NET 9 SDK
+- Python 3.9+
+- Git
 
-> The `tools/build.bat` helper auto-loads the MSVC environment via `vswhere` + `vcvars64.bat`, so you don't need to launch the **x64 Native Tools Command Prompt** manually.
+The Windows build wrapper loads the MSVC environment automatically. Ninja is provisioned automatically for the Windows debug preset when it is not already available.
 
-Verify after installation:
-```bat
-cmake --version        :: should be 3.28+
-dotnet --version       :: should be 9.x.x
-python --version       :: should be 3.9+
-```
+## Build
 
-#### Linux (Ubuntu 22.04+)
+Use the wrappers for normal development:
 
 ```bash
-# Compiler, build tools, CMake, Ninja
-sudo apt update
-sudo apt install -y build-essential g++-13 cmake ninja-build git python3
+# Windows
+tools\bin\build.bat debug
+tools\bin\build.bat release
+tools\bin\build.bat profile
 
-# .NET 9 SDK — https://learn.microsoft.com/dotnet/core/install/linux
-wget https://dot.net/v1/dotnet-install.sh
-chmod +x dotnet-install.sh
-./dotnet-install.sh --channel 9.0
-echo 'export PATH="$HOME/.dotnet:$PATH"' >> ~/.bashrc
-source ~/.bashrc
-
-# Verify
-g++ --version          # should be 13+
-cmake --version        # should be 3.28+
-dotnet --version       # should be 9.x.x
+# Linux / macOS / Git Bash
+tools/bin/build.sh debug
+tools/bin/build.sh release
+tools/bin/build.sh profile
 ```
 
-> **Third-party dependencies** (Google Test, pugixml, RapidJSON, zlib, SQLite, Tracy, mimalloc) are managed by CMake via `FetchContent` and downloaded on first configure.
-
-### Clone
+Common options:
 
 ```bash
-git clone <repo-url>
-cd Atlas
+tools\bin\build.bat debug --clean
+tools\bin\build.bat debug --config-only
+tools\bin\build.bat debug --build-only
 ```
 
-### IDE / Editor Setup (optional)
-
-#### VS Code + clangd
-
-1. Install the recommended extensions (prompted automatically, or manually from `.vscode/extensions.json`):
-   - **clangd** — C++ IntelliSense via compile_commands.json
-   - **CMake Tools** — CMake integration (auto-loads MSVC env on Windows)
-2. Copy the settings template:
-   ```bash
-   cp .vscode/settings.json.example .vscode/settings.json
-   ```
-3. CMake generates `compile_commands.json` automatically (`CMAKE_EXPORT_COMPILE_COMMANDS` is on by default).
-
-#### CLion / Visual Studio
-
-Open the Atlas root directory directly. The IDE detects `CMakePresets.json` and loads the toolchain (including MSVC env) automatically.
-
-## Building
-
-### One-shot helper (recommended)
-
-`tools/build.py` wraps cmake configure + build with two daily papercuts handled:
-
-- **Windows**: auto-loads MSVC env via vswhere + vcvars64.bat (no x64 Native Tools shell needed)
-- **Any OS**: auto-downloads the matching Ninja binary to `.tmp/ninja/` if missing from PATH
+Direct CMake remains supported:
 
 ```bash
-# Windows (cmd or PowerShell)
-tools\build.bat debug
-tools\build.bat profile
-tools\build.bat release
-
-# Linux / macOS
-tools/build.sh debug
-tools/build.sh profile
-tools/build.sh release
-
-# Options (apply to any preset)
-tools\build.bat debug --clean         # wipe build/<preset> before configuring
-tools\build.bat debug --config-only   # cmake configure, skip build
-tools\build.bat debug --build-only    # skip configure, just build
-```
-
-### Direct cmake (advanced)
-
-```bash
-# debug preset uses Ninja Multi-Config; requires Ninja on PATH and MSVC env loaded
 cmake --preset debug
 cmake --build build/debug --config Debug
-
-# profile / release stay on the default generator (VS solution on Windows, Make on Linux)
-cmake --preset profile
-cmake --build build/profile --config RelWithDebInfo
-
-cmake --preset release
-cmake --build build/release --config Release
 ```
 
-### Build Presets
+| Preset | Purpose |
+|---|---|
+| `debug` | Fast iteration with Ninja Multi-Config, Debug, MSVC `/Z7`, PCH, and tests. |
+| `release` | Optimized build with tests disabled. |
+| `hybrid` | RelWithDebInfo for optimized debugging. |
+| `profile` | RelWithDebInfo with Tracy and profiling helpers; tests disabled. |
 
-| Preset | Generator | Config | Notes |
-|--------|-----------|--------|-------|
-| `debug` | Ninja Multi-Config | Debug | `/Z7` debug info + `atlas_common.h` PCH; fastest iteration |
-| `release` | Default | Release | Fully optimized, `NDEBUG`, **no tests** |
-| `hybrid` | Default | RelWithDebInfo | Optimized + debug symbols |
-| `profile` | Default | RelWithDebInfo | Tracy + viewer + CLI helpers; **no tests**; for performance work |
+Sanitizer presets are available where supported: `asan`, `asan-msvc`, `tsan`, and `ubsan`.
 
-> The `debug` preset switched to Ninja Multi-Config because MSBuild's per-project overhead dominated full-debug iteration time. `/Z7` (embedded CodeView) avoids the mspdbsrv.exe lock contention `/Zi` introduces under parallel cl.exe.
-
-### Sanitizers
-
-| Preset | Platform | Description |
-|--------|----------|-------------|
-| `asan` | Linux | AddressSanitizer (GCC/Clang) |
-| `asan-msvc` | Windows | AddressSanitizer (MSVC) |
-| `tsan` | Linux | ThreadSanitizer |
-| `ubsan` | Linux | UndefinedBehaviorSanitizer |
-
-> TSan and UBSan are not supported by MSVC. CI runs `asan` + `ubsan` weekly via `.github/workflows/sanitizers.yml`.
-
-### CMake Options
-
-| Option | Default | Description |
-|--------|---------|-------------|
-| `ATLAS_BUILD_TESTS` | `ON` | Build unit and integration tests |
-| `ATLAS_BUILD_CSHARP` | `ON` | Build C# projects via dotnet |
-| `ATLAS_DB_MYSQL` | `OFF` | Enable MySQL database backend |
-| `ATLAS_USE_IOURING` | `OFF` | Enable io_uring poller (Linux only) |
-| `ATLAS_HEAP_ALLOCATOR` | `mimalloc` | `std` or `mimalloc` heap backend |
-
-### Build Outputs
-
-All EXE / DLL / .lib artifacts land in a flat `bin/<preset>/` tree, regardless of generator:
-
-```
-bin/debug/
-├── machined.exe
-├── atlas_loginapp.exe
-├── atlas_baseappmgr.exe
-├── atlas_baseapp.exe
-├── atlas_cellappmgr.exe
-├── atlas_cellapp.exe
-├── atlas_dbapp.exe
-├── atlas_echoapp.exe
-├── atlas_client.exe
-├── atlas_tool.exe
-├── Atlas.Runtime.dll
-├── Atlas.Shared.dll
-├── ...                  (other managed assemblies, runtime DLLs)
-└── test_*.exe           (test executables, debug preset only)
-```
-
-On Linux, omit the `.exe` suffix.
-
-## Testing
+## Test
 
 ```bash
 cd build/debug
-
-# All tests
-ctest --build-config Debug --output-on-failure
-
-# Unit tests only
-ctest --build-config Debug --label-regex unit
-
-# Integration tests only
-ctest --build-config Debug --label-regex integration
-
-# Single test
+ctest --build-config Debug --label-regex unit --output-on-failure
+ctest --build-config Debug --label-regex integration --output-on-failure
 ctest --build-config Debug -R test_math --output-on-failure
 ```
 
-### C# Tests
+C# tests:
 
 ```bash
 dotnet test tests/csharp
 ```
 
-### Code Style Check (pre-commit)
+Before committing C++ changes, run unit tests and clang-format on changed C++ files:
 
 ```bash
-# Windows (clang-format shipped with VS)
-"C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Tools\Llvm\x64\bin\clang-format.exe" --dry-run --Werror <changed files>
-
-# Linux / cross-platform
 clang-format --dry-run --Werror <changed files>
-
-# Fix in place
-clang-format -i <changed files>
 ```
 
-CI enforces clang-format 19.1.5 via `.github/workflows/clang-format.yml`.
+## Run a Local Cluster
 
-## Running
+For a minimal build check:
 
-Atlas uses a multi-process architecture. Each process must be started **in order** in separate terminals.
-
-### Startup Order
-
+```bash
+./bin/debug/atlas_echoapp
 ```
+
+A development cluster starts in this order:
+
+```text
 machined → BaseAppMgr → CellAppMgr → DBApp → BaseApp → CellApp → LoginApp
 ```
 
-> **Important**: `machined` is the service discovery hub for all processes and must be started first.
-
-### Quick Start — EchoApp (build verification)
-
-`EchoApp` is a minimal standalone process with no external dependencies, useful for validating a build:
+On Linux or Git Bash, the cluster wrapper starts the same stack through the world-stress driver with zero clients and keeps it alive until interrupted:
 
 ```bash
-./bin/debug/atlas_echoapp        # add .exe on Windows
+tools/bin/run_cluster.sh
 ```
 
-### Full Cluster (development)
-
-Open a separate terminal per process and start in order:
+Scripted cluster validation:
 
 ```bash
-./bin/debug/machined
-./bin/debug/atlas_baseappmgr
-./bin/debug/atlas_cellappmgr
-./bin/debug/atlas_dbapp
-./bin/debug/atlas_baseapp
-./bin/debug/atlas_cellapp
-./bin/debug/atlas_loginapp        # last — opens external port for clients
+tools/bin/test_cluster.sh
+# Windows
+tools\bin\test_cluster.bat
 ```
 
-For multi-client load testing see `tools/cluster_control/run_baseline_profile.{sh,ps1}` and `src/tools/world_stress/`.
+## Database
 
-### Configuration
+Atlas loads database backends as plugins through the database factory. XML is the lightweight local backend; SQLite provides a single-file relational backend with WAL and busy-timeout support. The MySQL option exists, but the implementation is not complete in the current tree.
 
-Each process loads configuration from CLI flags and a JSON config file (via `ServerConfig`). Common options:
-
-| Flag | Description | Example |
-|------|-------------|---------|
-| `--config <path>` | Path to JSON config file | `--config conf/baseapp.json` |
-| `--machined <host:port>` | Address of the machined daemon | `--machined 127.0.0.1:20018` |
-| `--internal-port <n>` | Internal listen port for this process | `--internal-port 20010` |
-| `--external-port <n>` | External/client-facing port when applicable | `--external-port 20013` |
-
-### Database Backend
-
-- **XML backend** (development/testing) — zero configuration, file-based storage; default fallback
-- **SQLite backend** (development) — single-file relational backend with checkout / lookup semantics close to MySQL; supports `sqlite_path`, `sqlite_wal`, `sqlite_busy_timeout_ms`
-- **MySQL backend** (production candidate) — requires a running MySQL instance; build with `-DATLAS_DB_MYSQL=ON`
-
-Example database config:
+Example DBApp configuration:
 
 ```json
 {
@@ -333,114 +183,39 @@ Example database config:
 }
 ```
 
-Common DBApp CLI overrides:
+## C# Gameplay and Client Runtime
+
+Managed code lives under the C# project tree and is built with the native server when `ATLAS_BUILD_CSHARP=ON`. `Atlas.Shared` carries shared contracts, `Atlas.Runtime` binds server gameplay to the engine, `Atlas.Client` powers client-side entity state, and `Atlas.Generators.Def` turns entity definitions into typed code.
+
+Sample gameplay projects cover base, client, and stress scenarios.
+
+Unity integration stages the Atlas managed client assemblies and the native `atlas_net_client` plugin for a Unity project.
 
 ```bash
---db-type sqlite
---db-sqlite-path data/atlas_dev.sqlite3
---db-sqlite-wal true
---db-sqlite-busy-timeout-ms 5000
+tools/bin/setup_unity_client.sh --unity-project <path>
+# Windows
+tools\bin\setup_unity_client.bat --unity-project <path>
 ```
 
-### C# Scripts
+## Profiling and Stress
 
-Game logic lives in `src/csharp/` (`Atlas.Shared`, `Atlas.Runtime`) and is loaded at runtime via embedded CoreCLR. Sample script projects live in `samples/base/`, `samples/client/`, and `samples/stress/`. Generated entity classes / delta sync come from `Atlas.Generators.Def` (driven by `.def` files).
-
-The .NET runtime configuration is at `runtime/atlas_server.runtimeconfig.json`.
-
-## Profiling
-
-The `profile` preset enables Tracy instrumentation and downloads the viewer + CLI helpers (`tracy-capture`, `tracy-csvexport`) to `bin/profile/`.
+The `profile` preset enables Tracy instrumentation and profiling helpers. The default baseline runs 200 clients for 120 seconds and writes captures under `.tmp/prof/baseline/`.
 
 ```bash
-# Build profile
-tools\build.bat profile
+tools\bin\build.bat profile
+tools/bin/run_baseline_profile.sh
+```
 
-# Run a baseline (200 clients, 120 s) — Linux / Git Bash
-bash tools/cluster_control/run_baseline_profile.sh
+Compare CellApp captures:
 
-# Windows PowerShell
-.\tools\cluster_control\run_baseline_profile.ps1 -Clients 50 -DurationSec 60
-
-# Compare two cellapp captures
+```bash
 python tools/profile/compare_tracy.py \
-    .tmp/prof/baseline/cellapp_<old>.tracy \
-    .tmp/prof/baseline/cellapp_<new>.tracy
+  .tmp/prof/baseline/cellapp_<old>.tracy \
+  .tmp/prof/baseline/cellapp_<new>.tracy
 ```
 
-Captures land in `.tmp/prof/baseline/` named `<process>_<git-short>_<timestamp>.tracy`.
-
-## Project Structure
-
-```
-atlas/
-├── CMakeLists.txt              Root build file
-├── CMakePresets.json           Build presets (debug, release, profile, hybrid, sanitizers)
-├── cmake/                      CMake modules
-│   ├── AtlasCompilerOptions.cmake
-│   ├── AtlasOutputDirectory.cmake  Flat bin/<preset>/ layout
-│   ├── Dependencies.cmake          Third-party deps via FetchContent
-│   ├── FindDotNet.cmake            .NET SDK auto-detection
-│   └── AtlasDotNetBuild.cmake      C# project build helper
-├── docs/                       Design docs (roadmap, scripting, gameplay, rpc, optimization, …)
-├── runtime/                    .NET runtime configuration
-├── samples/                    Sample game scripts (base / client / stress)
-├── src/
-│   ├── lib/                    Core libraries
-│   │   ├── platform/             OS abstraction (I/O, threading, signals, filesystem)
-│   │   ├── foundation/           Core utilities (logging, memory, containers, time, atlas_common.h PCH)
-│   │   ├── network/              Sockets, RUDP, event dispatcher, channels, messages
-│   │   ├── serialization/        Binary streams, XML/JSON parsing
-│   │   ├── math/                 Vectors, matrices, quaternions
-│   │   ├── physics/              Physics / collision (placeholder)
-│   │   ├── resmgr/               Resource manager (placeholder)
-│   │   ├── coro/                 C++20 coroutine helpers (RPC await, cancellation)
-│   │   ├── script/               Script abstraction (ScriptEngine / ScriptValue)
-│   │   ├── clrscript/            .NET 9 CoreCLR embedding (ClrHost, native-API provider)
-│   │   ├── entitydef/            Entity type definitions, data types, mailbox
-│   │   ├── connection/           Client-server protocol definitions
-│   │   ├── space/                Space + cell shared types (used by cellapp / cellappmgr)
-│   │   ├── db/                   Database abstraction (IDatabase + DatabaseFactory)
-│   │   ├── db_mysql/             MySQL backend
-│   │   ├── db_sqlite/            SQLite backend
-│   │   ├── db_xml/               XML backend
-│   │   └── server/               Server framework base classes (ServerApp / EntityApp / ManagerApp)
-│   ├── server/                 Server processes
-│   │   ├── machined/             Machine daemon
-│   │   ├── loginapp/             Login gateway
-│   │   ├── baseappmgr/           BaseApp cluster manager
-│   │   ├── baseapp/              Base entity host
-│   │   ├── cellappmgr/           CellApp cluster manager (BSP-tree partition, offload)
-│   │   ├── cellapp/              Spatial simulation (witness, AoI, ghost, controller)
-│   │   ├── dbapp/                Database process
-│   │   ├── dbappmgr/             DBApp cluster manager (placeholder)
-│   │   ├── reviver/              Crash detection and recovery (placeholder)
-│   │   └── EchoApp/              Minimal verification process
-│   ├── csharp/                 C# managed libraries
-│   │   ├── Atlas.Shared/             Protocol types, entity definitions, RPC contracts
-│   │   ├── Atlas.Runtime/            Server-side CoreCLR hosting and engine bindings
-│   │   ├── Atlas.Client/             Client entity runtime (callbacks / factory / manager)
-│   │   ├── Atlas.Client.Desktop/     Desktop client adapter
-│   │   ├── Atlas.Client.Unity/       Unity asmdef + adapters
-│   │   ├── Atlas.ClrHost/            CoreCLR hostfxr wrapper
-│   │   ├── Atlas.Generators.Def/     Source generator: .def → entity classes / delta sync
-│   │   └── Atlas.Tools.DefDump/      .def inspector / dumper
-│   ├── client/                 Console client application (connection + native provider)
-│   └── tools/                  Operator tooling
-│       ├── atlas_tool/            Multi-purpose CLI (config validation, watcher inspect, …)
-│       ├── login_stress/          Login-only stress driver
-│       ├── world_stress/          Full-cluster stress driver (used by run_baseline_profile)
-│       └── crash_demo/            Crash-handler verification
-├── tests/
-│   ├── unit/                   C++ unit tests (Google Test)
-│   ├── integration/            End-to-end integration tests (Google Test)
-│   └── csharp/                 C# tests (Atlas.Runtime.Tests, Atlas.Generators.Tests, Atlas.SmokeTest)
-└── tools/                      Build / cluster / profile helpers
-    ├── build.py / .bat / .sh     One-shot configure + build with auto vcvars + Ninja provisioning
-    ├── cluster_control/          Multi-process orchestration + baseline runners
-    └── profile/                  Tracy capture comparison + analysis scripts
-```
+For deeper context, start with the profiling, scripting, gameplay, stress-test, Unity, and coding-style docs under `docs/`.
 
 ## License
 
-This project is licensed under the [MIT License](LICENSE).
+Atlas is released under the [MIT License](LICENSE).

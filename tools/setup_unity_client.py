@@ -58,9 +58,9 @@ def build_native(config: str) -> Path:
 
     build_dir = REPO_ROOT / "build" / preset
     if HOST == "Windows":
-        run([str(REPO_ROOT / "tools" / "build.bat"), preset, "--config-only"])
+        run([str(REPO_ROOT / "tools" / "bin" / "build.bat"), preset, "--config-only"])
     else:
-        run([str(REPO_ROOT / "tools" / "build.sh"), preset, "--config-only"])
+        run([str(REPO_ROOT / "tools" / "bin" / "build.sh"), preset, "--config-only"])
     run(["cmake", "-S", str(REPO_ROOT), "-B", str(build_dir),
          "-DATLAS_BUILD_NET_CLIENT=ON"])
     run(["cmake", "--build", str(build_dir),

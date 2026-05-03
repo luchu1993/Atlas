@@ -1,326 +1,176 @@
 # Atlas Engine
 
-Atlas 是一个基于 **C++20** 与 **C# (.NET 9)** 的现代分布式 MMO 游戏服务器框架，灵感来自 **BigWorld 引擎**架构，支持多进程分布式设计、负载均衡、空间分区与容错恢复，并提供 **Windows / Linux** 跨平台运行支持。
+Atlas 是一个基于 **C++20** 与 **C# (.NET 9)** 的分布式 MMO 服务器框架。它采用类似 BigWorld 的 Login、Base、Cell、Database 与 Manager 多进程拆分，同时通过嵌入式 CoreCLR 运行托管玩法逻辑。
 
 **[English](README.md)**
 
-## 特性
+## Atlas 为什么存在
 
-- **分布式多进程架构** — LoginApp、BaseApp、CellApp、DBApp 及其 Manager 多进程协作，支持负载均衡与故障恢复
-- **空间分区** — CellApp + CellAppMgr 维护 BSP 树分区，支持基于 Witness 的 AoI、Ghost 实体与跨 Cell offload
-- **实体系统** — 实体在 Base / Cell / Client 三端分布，通过 Mailbox 进行 RPC 通信
-- **C# (.NET 9) 脚本驱动** — 通过嵌入式 CoreCLR 运行 C# 脚本，`[UnmanagedCallersOnly]` 零开销互操作
-- **跨平台** — 完整的 OS API 封装，Windows 和 Linux 统一构建
-- **可插拔数据库** — 支持 MySQL（生产）、SQLite（开发）和 XML（轻量回退）后端
-- **客户端运行时** — C# `Atlas.Client` 已落地桌面与 Unity 两套适配；`Atlas.Generators.Def` Source Generator 从 `.def` 自动生成实体类 / delta 同步代码
+Atlas 面向大型、长线在线世界：服务器需要跨进程扩展，模拟权威需要留在服务端，玩法团队仍然需要用 C# 高效迭代。C++ 核心负责网络、进程协调、持久化、空间模拟与性能分析；C# 层负责实体行为、共享玩法契约、生成式客户端/服务端类型和示例玩法逻辑。
+
+## 当前能力
+
+- 通过 `machined` 做服务发现的多进程集群布局。
+- Base/Cell 实体模型、Mailbox RPC 与生成式 C# 实体代码。
+- CellApp 空间模拟，包括基于 Witness 的 AoI、Ghost 实体、BSP 分区与 offload 协调。
+- 面向服务端玩法脚本的嵌入式 .NET 9 运行时。
+- C# 客户端运行时，提供桌面与 Unity 集成表面。
+- 运行时加载的 XML 与 SQLite 数据库插件。
+- Tracy instrumentation、基线压测驱动与 trace 对比工具。
+
+MySQL、DBAppMgr 与 Reviver 已在代码树中占位，但还不是完整的生产功能。
 
 ## 架构
 
-```
-客户端 ──► LoginApp ──► BaseAppMgr ──► BaseApp ◄──► CellApp
-                                          │              │
-                                        DBApp        CellAppMgr
-                                          │
-                                   MySQL / SQLite / XML
+```text
+Client
+  │
+  ▼
+LoginApp ──► BaseAppMgr ──► BaseApp ◄──► CellApp
+                         │               │
+                         ▼               ▼
+                       DBApp         CellAppMgr
+                         │
+                    XML / SQLite
 ```
 
 | 进程 | 职责 |
-|------|------|
-| **LoginApp** | 客户端认证与登录 |
-| **BaseApp** | 实体状态管理、客户端代理、持久化 |
-| **CellApp** | 空间模拟、实体移动、AoI（感兴趣区域）、Ghost 复制 |
-| **CellAppMgr** | BSP 树空间分区、Cell offload、几何分发 |
-| **DBApp** | 基于 XML、SQLite 或 MySQL 后端的异步数据库读写 |
-| **BaseAppMgr / DBAppMgr** | 集群负载均衡与协调 |
-| **Reviver** | 进程崩溃检测与自动恢复（占位） |
-| **machined** | 机器守护进程，服务注册与发现 |
+|---|---|
+| `machined` | 本机服务注册、心跳目标与 Birth/Death 通知中心。 |
+| `LoginApp` | 面向客户端的登录网关。 |
+| `BaseAppMgr` | BaseApp 注册、选择与集群协调。 |
+| `BaseApp` | Base 实体所有权、客户端代理状态、Mailbox 路由、持久化转交与脚本运行。 |
+| `CellAppMgr` | CellApp 注册、空间几何、BSP 分区与 offload 协调。 |
+| `CellApp` | 空间实体、移动、Witness 更新、AoI、Ghost 与脚本运行。 |
+| `DBApp` | 通过配置的数据库后端异步持久化实体。 |
+| `EchoApp` | 用于验证框架连线和构建产物的最小服务器进程。 |
 
-## 服务器框架（`src/lib/server/`）
+服务器进程共享一套小型框架层级：
 
-`server` 库提供所有 Atlas 服务器进程共用的基类层级：
-
-```
+```text
 ServerApp
-├── ManagerApp          — 管理/守护进程（无脚本引擎）
-│   ├── BaseAppMgr
-│   ├── CellAppMgr
-│   ├── DBAppMgr
-│   ├── machined
-│   └── EchoApp         — 最小验证进程
-└── ScriptApp           — ServerApp + CoreCLR 脚本层
-    └── EntityApp       — ScriptApp + 实体定义 + 后台任务线程池
-        ├── BaseApp
-        └── CellApp
+├── ManagerApp     不带 CoreCLR 的守护/管理进程
+└── ScriptApp      ServerApp 加嵌入式 CoreCLR
+    └── EntityApp  ScriptApp 加实体定义与后台任务
 ```
 
-`ServerApp` 提供的核心组件：
+`ServerApp` 提供配置、machined 注册、watcher 指标、tick 回调与信号分发。`BaseApp` 和 `CellApp` 通过 `EntityApp` 扩展它，使 C# 玩法运行在 C++ 服务器核心之上。
 
-- **`ServerConfig`** — 从命令行参数和 JSON 配置文件加载进程配置
-- **`MachinedClient`** — 与 machined 的 TCP 连接，用于注册、心跳、服务发现和 Birth/Death 通知
-- **`WatcherRegistry`** — 基于层级路径的进程指标可观测注册表
-- **`Updatable` / `Updatables`** — 按优先级分层的每帧回调系统，迭代期间安全支持增删
-- **`SignalDispatchTask`** — 将 OS 信号（SIGINT、SIGTERM 等）分发到事件循环
+## 环境要求
 
-## 开发环境配置
+Windows：
 
-### 前置要求
+- Visual Studio 2022，安装 Desktop development with C++ 工作负载
+- CMake 3.28+
+- .NET 9 SDK
+- Python 3.9+
+- Git
 
-#### Windows
+Linux：
 
-| 工具 | 版本要求 | 说明 |
-|------|----------|------|
-| [Visual Studio 2022](https://visualstudio.microsoft.com/) | 17.x | 需勾选 **"使用 C++ 的桌面开发"** 工作负载 |
-| [CMake](https://cmake.org/download/) | 3.28+ | 构建系统；也可使用 Visual Studio 自带版本 |
-| [.NET 9 SDK](https://dotnet.microsoft.com/download/dotnet/9.0) | 9.0+ | C# 脚本层必需；构建时自动检测 |
-| [Python](https://www.python.org/) | 3.9+ | 仅 `tools/build.{bat,sh}` 与性能分析脚本需要 |
-| [Git](https://git-scm.com/) | 任意版本 | 版本控制 |
-| [Ninja](https://ninja-build.org/) | 1.11+ | 可选 — 首次运行 `tools/build.bat` 时若未找到会自动下载到 `.tmp/ninja/` |
+- GCC 13+ 或支持 C++20 的 Clang
+- CMake 3.28+
+- debug 预设需要 Ninja
+- .NET 9 SDK
+- Python 3.9+
+- Git
 
-> `tools/build.bat` 内部通过 `vswhere` + `vcvars64.bat` 自动加载 MSVC 环境，**无需手动打开 x64 Native Tools Command Prompt**。
-
-安装完成后验证：
-```bat
-cmake --version        :: 应为 3.28+
-dotnet --version       :: 应输出 9.x.x
-python --version       :: 应为 3.9+
-```
-
-#### Linux（Ubuntu 22.04+）
-
-```bash
-# 编译器、构建工具、CMake、Ninja
-sudo apt update
-sudo apt install -y build-essential g++-13 cmake ninja-build git python3
-
-# .NET 9 SDK（参考 https://learn.microsoft.com/dotnet/core/install/linux）
-wget https://dot.net/v1/dotnet-install.sh
-chmod +x dotnet-install.sh
-./dotnet-install.sh --channel 9.0
-echo 'export PATH="$HOME/.dotnet:$PATH"' >> ~/.bashrc
-source ~/.bashrc
-
-# 验证
-g++ --version          # 应为 13+
-cmake --version        # 应为 3.28+
-dotnet --version       # 应为 9.x.x
-```
-
-> **第三方依赖**（Google Test、pugixml、RapidJSON、zlib、SQLite、Tracy、mimalloc）由 CMake 通过 `FetchContent` 管理，首次配置时自动下载。
-
-### 克隆仓库
-
-```bash
-git clone <repo-url>
-cd Atlas
-```
-
-### IDE / 编辑器配置（可选）
-
-#### VS Code + clangd
-
-1. 安装推荐插件（首次打开项目时自动提示，或参考 `.vscode/extensions.json`）：
-   - **clangd** — 基于 compile_commands.json 的 C++ 智能感知
-   - **CMake Tools** — CMake 集成（Windows 下自动加载 MSVC 环境）
-2. 复制配置模板：
-   ```bash
-   cp .vscode/settings.json.example .vscode/settings.json
-   ```
-3. CMake 自动生成 `compile_commands.json`（已默认开启 `CMAKE_EXPORT_COMPILE_COMMANDS`）。
-
-#### CLion / Visual Studio
-
-直接打开 Atlas 根目录，IDE 会自动识别 `CMakePresets.json` 并加载工具链（含 MSVC 环境）。
+Windows 构建包装脚本会自动加载 MSVC 环境。debug 预设需要 Ninja 时，包装脚本会自动准备。
 
 ## 构建
 
-### 一键脚本（推荐）
-
-`tools/build.py` 包装了 cmake 配置 + 构建，并自动处理两个日常痛点：
-
-- **Windows**：通过 vswhere + vcvars64.bat 自动加载 MSVC 环境，无需手动打开 x64 Native Tools Shell
-- **任意 OS**：检测不到 `ninja` 时自动从官方 GitHub Release 下载对应平台二进制到 `.tmp/ninja/`
+日常开发优先使用包装脚本：
 
 ```bash
-# Windows（cmd 或 PowerShell）
-tools\build.bat debug
-tools\build.bat profile
-tools\build.bat release
+# Windows
+tools\bin\build.bat debug
+tools\bin\build.bat release
+tools\bin\build.bat profile
 
-# Linux / macOS
-tools/build.sh debug
-tools/build.sh profile
-tools/build.sh release
-
-# 选项（适用于所有 preset）
-tools\build.bat debug --clean         # 配置前清空 build/<preset>
-tools\build.bat debug --config-only   # 只 configure，不 build
-tools\build.bat debug --build-only    # 跳过 configure，直接 build
+# Linux / macOS / Git Bash
+tools/bin/build.sh debug
+tools/bin/build.sh release
+tools/bin/build.sh profile
 ```
 
-### 直接调用 cmake（进阶）
+常用选项：
 
 ```bash
-# debug 预设使用 Ninja Multi-Config，需要 ninja 在 PATH 且 MSVC 环境已加载
+tools\bin\build.bat debug --clean
+tools\bin\build.bat debug --config-only
+tools\bin\build.bat debug --build-only
+```
+
+也支持直接调用 CMake：
+
+```bash
 cmake --preset debug
 cmake --build build/debug --config Debug
-
-# profile / release 仍走默认生成器（Windows 是 VS solution，Linux 是 Make）
-cmake --preset profile
-cmake --build build/profile --config RelWithDebInfo
-
-cmake --preset release
-cmake --build build/release --config Release
 ```
 
-### 构建预设
+| 预设 | 用途 |
+|---|---|
+| `debug` | 快速迭代，使用 Ninja Multi-Config、Debug、MSVC `/Z7`、PCH 与测试。 |
+| `release` | 优化构建，禁用测试。 |
+| `hybrid` | RelWithDebInfo，用于带符号的优化调试。 |
+| `profile` | RelWithDebInfo，启用 Tracy 与 profiling helpers，禁用测试。 |
 
-| 预设 | 生成器 | 配置 | 说明 |
-|------|--------|------|------|
-| `debug` | Ninja Multi-Config | Debug | `/Z7` 调试信息 + `atlas_common.h` PCH，迭代最快 |
-| `release` | 默认 | Release | 完全优化，`NDEBUG`，**不含测试** |
-| `hybrid` | 默认 | RelWithDebInfo | 优化 + 调试符号 |
-| `profile` | 默认 | RelWithDebInfo | Tracy + viewer + CLI 工具，**不含测试**，性能分析专用 |
-
-> `debug` 预设切到 Ninja Multi-Config 是因为 MSBuild 的项目级开销主导了完整 Debug 迭代；`/Z7`（嵌入 CodeView）规避了并发 cl.exe 在 `/Zi` 下争抢 mspdbsrv.exe 锁的问题。
-
-### Sanitizer
-
-| 预设 | 平台 | 说明 |
-|------|------|------|
-| `asan` | Linux | AddressSanitizer（GCC/Clang） |
-| `asan-msvc` | Windows | AddressSanitizer（MSVC） |
-| `tsan` | Linux | ThreadSanitizer |
-| `ubsan` | Linux | UndefinedBehaviorSanitizer |
-
-> TSan 与 UBSan 不支持 MSVC。CI 在 `.github/workflows/sanitizers.yml` 中每周跑一次 `asan` + `ubsan`。
-
-### CMake 选项
-
-| 选项 | 默认值 | 说明 |
-|------|--------|------|
-| `ATLAS_BUILD_TESTS` | `ON` | 构建单元 + 集成测试 |
-| `ATLAS_BUILD_CSHARP` | `ON` | 通过 dotnet 构建 C# 项目 |
-| `ATLAS_DB_MYSQL` | `OFF` | 启用 MySQL 数据库后端 |
-| `ATLAS_USE_IOURING` | `OFF` | 启用 io_uring poller（仅 Linux） |
-| `ATLAS_HEAP_ALLOCATOR` | `mimalloc` | `std` 或 `mimalloc` 堆后端 |
-
-### 构建产物
-
-无论使用哪个生成器，所有 EXE / DLL / .lib 都落到扁平的 `bin/<preset>/` 目录：
-
-```
-bin/debug/
-├── machined.exe
-├── atlas_loginapp.exe
-├── atlas_baseappmgr.exe
-├── atlas_baseapp.exe
-├── atlas_cellappmgr.exe
-├── atlas_cellapp.exe
-├── atlas_dbapp.exe
-├── atlas_echoapp.exe
-├── atlas_client.exe
-├── atlas_tool.exe
-├── Atlas.Runtime.dll
-├── Atlas.Shared.dll
-├── ...                  （其他托管程序集 / 运行时 DLL）
-└── test_*.exe           （仅 debug 预设包含测试 exe）
-```
-
-Linux 下省略 `.exe` 后缀。
+支持的平台还提供 sanitizer 预设：`asan`、`asan-msvc`、`tsan`、`ubsan`。
 
 ## 测试
 
 ```bash
 cd build/debug
-
-# 全部测试
-ctest --build-config Debug --output-on-failure
-
-# 仅单元测试
-ctest --build-config Debug --label-regex unit
-
-# 仅集成测试
-ctest --build-config Debug --label-regex integration
-
-# 单个测试
+ctest --build-config Debug --label-regex unit --output-on-failure
+ctest --build-config Debug --label-regex integration --output-on-failure
 ctest --build-config Debug -R test_math --output-on-failure
 ```
 
-### C# 测试
+C# 测试：
 
 ```bash
 dotnet test tests/csharp
 ```
 
-### 代码风格检查（提交前必须通过）
+提交 C++ 修改前，运行单元测试并对改动的 C++ 文件执行 clang-format：
 
 ```bash
-# Windows（使用 VS 内置 clang-format）
-"C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Tools\Llvm\x64\bin\clang-format.exe" --dry-run --Werror <修改的文件>
-
-# Linux / 跨平台
-clang-format --dry-run --Werror <修改的文件>
-
-# 自动修复
-clang-format -i <修改的文件>
+clang-format --dry-run --Werror <changed files>
 ```
 
-CI 在 `.github/workflows/clang-format.yml` 中强制使用 clang-format 19.1.5。
+## 运行本地集群
 
-## 运行
+最小构建验证：
 
-Atlas 采用多进程架构，各进程需**按顺序**独立启动。
-
-### 进程启动顺序
-
+```bash
+./bin/debug/atlas_echoapp
 ```
+
+开发集群启动顺序：
+
+```text
 machined → BaseAppMgr → CellAppMgr → DBApp → BaseApp → CellApp → LoginApp
 ```
 
-> **注意**：`machined` 是所有进程的服务发现中心，必须最先启动。
-
-### 快速启动 — EchoApp（验证构建）
-
-`EchoApp` 是无外部依赖的最小独立进程，用于验证构建：
+在 Linux 或 Git Bash 下，集群包装脚本会通过 0 客户端的 world-stress 驱动启动同一套进程，并保持运行直到被中断：
 
 ```bash
-./bin/debug/atlas_echoapp        # Windows 加 .exe 后缀
+tools/bin/run_cluster.sh
 ```
 
-### 完整集群启动（开发环境）
-
-每个进程开一个终端，按顺序启动：
+脚本化集群验证：
 
 ```bash
-./bin/debug/machined
-./bin/debug/atlas_baseappmgr
-./bin/debug/atlas_cellappmgr
-./bin/debug/atlas_dbapp
-./bin/debug/atlas_baseapp
-./bin/debug/atlas_cellapp
-./bin/debug/atlas_loginapp        # 最后启动 — 打开外部端口接受客户端
+tools/bin/test_cluster.sh
+# Windows
+tools\bin\test_cluster.bat
 ```
 
-多客户端压测请使用 `tools/cluster_control/run_baseline_profile.{sh,ps1}` 与 `src/tools/world_stress/`。
+## 数据库
 
-### 配置说明
+Atlas 通过 database factory 以插件形式加载数据库后端。XML 是轻量本地后端；SQLite 提供单文件关系型后端，支持 WAL 与 busy-timeout。MySQL 选项已经存在，但当前代码树中的实现尚未完成。
 
-各进程通过命令行参数和 JSON 配置文件加载配置（由 `ServerConfig` 处理）。常用参数：
-
-| 参数 | 说明 | 示例 |
-|------|------|------|
-| `--config <path>` | 指定 JSON 配置文件路径 | `--config conf/baseapp.json` |
-| `--machined <host:port>` | machined 监听地址 | `--machined 127.0.0.1:20018` |
-| `--internal-port <n>` | 进程内部监听端口 | `--internal-port 20010` |
-| `--external-port <n>` | 对外/客户端监听端口（如适用） | `--external-port 20013` |
-
-### 数据库后端选择
-
-- **XML 后端**（开发/测试）：零配置、文件式存储；默认回退选项
-- **SQLite 后端**（开发）：单文件关系型后端，`checkout` / `lookup` 语义接近 MySQL；支持 `sqlite_path`、`sqlite_wal`、`sqlite_busy_timeout_ms`
-- **MySQL 后端**（生产候选）：需运行 MySQL 实例；构建时需 `-DATLAS_DB_MYSQL=ON`
-
-数据库配置示例：
+DBApp 配置示例：
 
 ```json
 {
@@ -333,114 +183,39 @@ machined → BaseAppMgr → CellAppMgr → DBApp → BaseApp → CellApp → Log
 }
 ```
 
-常用 DBApp CLI 覆盖参数：
+## C# 玩法与客户端运行时
+
+托管代码位于 C# 项目树中，并在 `ATLAS_BUILD_CSHARP=ON` 时随 native server 一起构建。`Atlas.Shared` 承载共享契约，`Atlas.Runtime` 将服务端玩法绑定到引擎，`Atlas.Client` 驱动客户端实体状态，`Atlas.Generators.Def` 将实体定义转成强类型代码。
+
+示例玩法项目覆盖 base、client 与 stress 场景。
+
+Unity 接入会为 Unity 工程准备 Atlas 托管客户端程序集和 native `atlas_net_client` 插件。
 
 ```bash
---db-type sqlite
---db-sqlite-path data/atlas_dev.sqlite3
---db-sqlite-wal true
---db-sqlite-busy-timeout-ms 5000
+tools/bin/setup_unity_client.sh --unity-project <path>
+# Windows
+tools\bin\setup_unity_client.bat --unity-project <path>
 ```
 
-### C# 脚本
+## Profiling 与压测
 
-游戏逻辑以 C# 库形式组织在 `src/csharp/` 下（`Atlas.Shared`、`Atlas.Runtime`），运行时通过嵌入式 CoreCLR 加载。脚本示例项目位于 `samples/base/`、`samples/client/`、`samples/stress/`。`Atlas.Generators.Def` Source Generator 基于 `.def` 文件生成实体类与 delta 同步代码。
-
-`.NET` 运行时配置见 `runtime/atlas_server.runtimeconfig.json`。
-
-## 性能分析
-
-`profile` 预设启用 Tracy 仪器并自动下载 viewer + CLI 工具（`tracy-capture`、`tracy-csvexport`）到 `bin/profile/`。
+`profile` 预设启用 Tracy instrumentation 与 profiling helpers。默认基线为 200 客户端、120 秒，捕获文件写入 `.tmp/prof/baseline/`。
 
 ```bash
-# 构建 profile
-tools\build.bat profile
+tools\bin\build.bat profile
+tools/bin/run_baseline_profile.sh
+```
 
-# 跑基线（200 客户端、120 秒）— Linux / Git Bash
-bash tools/cluster_control/run_baseline_profile.sh
+对比 CellApp 捕获：
 
-# Windows PowerShell
-.\tools\cluster_control\run_baseline_profile.ps1 -Clients 50 -DurationSec 60
-
-# 对比两次 cellapp 捕获
+```bash
 python tools/profile/compare_tracy.py \
-    .tmp/prof/baseline/cellapp_<old>.tracy \
-    .tmp/prof/baseline/cellapp_<new>.tracy
+  .tmp/prof/baseline/cellapp_<old>.tracy \
+  .tmp/prof/baseline/cellapp_<new>.tracy
 ```
 
-捕获文件落在 `.tmp/prof/baseline/`，命名格式 `<进程>_<git短哈希>_<时间戳>.tracy`。
-
-## 目录结构
-
-```
-atlas/
-├── CMakeLists.txt              根构建文件
-├── CMakePresets.json           构建预设（debug、release、profile、hybrid、sanitizers）
-├── cmake/                      CMake 模块
-│   ├── AtlasCompilerOptions.cmake
-│   ├── AtlasOutputDirectory.cmake  扁平 bin/<preset>/ 布局
-│   ├── Dependencies.cmake          第三方依赖（FetchContent）
-│   ├── FindDotNet.cmake            .NET SDK 自动检测
-│   └── AtlasDotNetBuild.cmake      C# 项目构建辅助
-├── docs/                       设计文档（roadmap、scripting、gameplay、rpc、optimization 等）
-├── runtime/                    .NET 运行时配置
-├── samples/                    示例游戏脚本（base / client / stress）
-├── src/
-│   ├── lib/                    核心库
-│   │   ├── platform/             OS 抽象层（I/O、线程、信号、文件系统）
-│   │   ├── foundation/           基础设施（日志、内存、容器、时间、atlas_common.h PCH）
-│   │   ├── network/              Socket、RUDP、EventDispatcher、Channel、消息
-│   │   ├── serialization/        二进制流、XML/JSON 解析
-│   │   ├── math/                 向量、矩阵、四元数
-│   │   ├── physics/              物理 / 碰撞（占位）
-│   │   ├── resmgr/               资源管理器（占位）
-│   │   ├── coro/                 C++20 协程辅助（RPC await、取消传播）
-│   │   ├── script/               脚本抽象（ScriptEngine / ScriptValue）
-│   │   ├── clrscript/            .NET 9 CoreCLR 嵌入（ClrHost、native-API provider）
-│   │   ├── entitydef/            实体类型定义、数据类型、Mailbox
-│   │   ├── connection/           客户端-服务器协议定义
-│   │   ├── space/                Space / Cell 共享类型（cellapp / cellappmgr 共用）
-│   │   ├── db/                   数据库抽象（IDatabase + DatabaseFactory）
-│   │   ├── db_mysql/             MySQL 后端
-│   │   ├── db_sqlite/            SQLite 后端
-│   │   ├── db_xml/               XML 后端
-│   │   └── server/               服务器框架基类（ServerApp / EntityApp / ManagerApp）
-│   ├── server/                 服务器进程
-│   │   ├── machined/             机器守护进程
-│   │   ├── loginapp/             登录网关
-│   │   ├── baseappmgr/           BaseApp 集群管理器
-│   │   ├── baseapp/              Base 实体宿主
-│   │   ├── cellappmgr/           CellApp 集群管理器（BSP 树分区、offload）
-│   │   ├── cellapp/              空间模拟（witness、AoI、ghost、controller）
-│   │   ├── dbapp/                数据库进程
-│   │   ├── dbappmgr/             DBApp 集群管理器（占位）
-│   │   ├── reviver/              崩溃检测与恢复（占位）
-│   │   └── EchoApp/              最小验证进程
-│   ├── csharp/                 C# 托管库
-│   │   ├── Atlas.Shared/             协议类型、实体定义、RPC 契约
-│   │   ├── Atlas.Runtime/            服务器侧 CoreCLR 宿主与引擎绑定
-│   │   ├── Atlas.Client/             客户端实体运行时（callbacks / factory / manager）
-│   │   ├── Atlas.Client.Desktop/     桌面客户端适配
-│   │   ├── Atlas.Client.Unity/       Unity asmdef + 适配
-│   │   ├── Atlas.ClrHost/            CoreCLR hostfxr 包装
-│   │   ├── Atlas.Generators.Def/     Source Generator：.def → 实体类 / delta 同步
-│   │   └── Atlas.Tools.DefDump/      .def 检视 / dump 工具
-│   ├── client/                 控制台客户端应用（连接 + native provider）
-│   └── tools/                  运维工具
-│       ├── atlas_tool/            多功能 CLI（配置校验、watcher 检视等）
-│       ├── login_stress/          仅登录的压测驱动
-│       ├── world_stress/          完整集群压测驱动（被 run_baseline_profile 调用）
-│       └── crash_demo/            崩溃处理验证
-├── tests/
-│   ├── unit/                   C++ 单元测试（Google Test）
-│   ├── integration/            端到端集成测试（Google Test）
-│   └── csharp/                 C# 测试（Atlas.Runtime.Tests、Atlas.Generators.Tests、Atlas.SmokeTest）
-└── tools/                      构建 / 集群 / 性能分析辅助
-    ├── build.py / .bat / .sh     一键 configure + build，自动 vcvars + Ninja 下载
-    ├── cluster_control/          多进程编排 + 基线 runner
-    └── profile/                  Tracy 捕获对比与分析脚本
-```
+更深入的背景可从 `docs/` 下的 profiling、scripting、gameplay、stress-test、Unity 与 coding-style 文档开始。
 
 ## 许可证
 
-本项目基于 [MIT](LICENSE) 协议开源。
+Atlas 基于 [MIT License](LICENSE) 发布。
