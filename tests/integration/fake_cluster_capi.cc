@@ -9,9 +9,13 @@ struct AtlasFakeCluster {
   atlas::test::FakeCluster impl;
 };
 
-ATLAS_TEST_API AtlasFakeCluster* AtlasFakeClusterCreate() { return new AtlasFakeCluster{}; }
+ATLAS_TEST_API AtlasFakeCluster* AtlasFakeClusterCreate() {
+  return new AtlasFakeCluster{};
+}
 
-ATLAS_TEST_API void AtlasFakeClusterDestroy(AtlasFakeCluster* cluster) { delete cluster; }
+ATLAS_TEST_API void AtlasFakeClusterDestroy(AtlasFakeCluster* cluster) {
+  delete cluster;
+}
 
 ATLAS_TEST_API int AtlasFakeClusterStart(AtlasFakeCluster* cluster) {
   return cluster && cluster->impl.Start() ? 1 : 0;
