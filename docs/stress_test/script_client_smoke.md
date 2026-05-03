@@ -5,7 +5,7 @@
 `[StressAvatar:<id>] <Event>` 日志计事件数，用来验证服务端属性 / 位置变更是否端到端到达客户端脚本
 回调。
 
-> 架构背景见 [PROPERTY_SYNC_DESIGN.md §5.1 / §5.1a / §5.1b](../property_sync/PROPERTY_SYNC_DESIGN.md)（baseline / backup 路径 + `OnXxxChanged` 触发规则）。本文档只讲"怎么跑、看啥数字"。
+> 架构背景见 [property_sync_design.md](../property_sync/property_sync_design.md)（通道、baseline / backup 路径、`OnXxxChanged` 触发规则）。本文档只讲"怎么跑、看啥数字"。
 
 ---
 
@@ -145,7 +145,7 @@ tools\bin\run_unreliable_recovery.bat              # 默认 20s / drop 5..9s
 tools\bin\run_unreliable_recovery.bat --duration-sec 30
 ```
 
-跑出来的 `hp / seqgaps` 和场景 2 几乎相同（因为 `--client-drop-inbound-ms` 是应用层过滤，不区分 reliable / unreliable）。**差异在字段层面而非脚本层面**：baseline 静默把 `_hp` 拉回服务端真值，脚本看不到补调的事件（见 [`PROPERTY_SYNC_DESIGN.md §5.1b`](../property_sync/PROPERTY_SYNC_DESIGN.md) 的 `isInitialising / shouldUseCallback` 契约）。
+跑出来的 `hp / seqgaps` 和场景 2 几乎相同（因为 `--client-drop-inbound-ms` 是应用层过滤，不区分 reliable / unreliable）。**差异在字段层面而非脚本层面**：baseline 静默把 `_hp` 拉回服务端真值，脚本看不到补调的事件（见 [property_sync_design.md §5](../property_sync/property_sync_design.md#5-客户端接收侧bigworld-对齐的回调语义) 的回调触发规则）。
 
 想看 baseline 实际收敛可以给 `StressAvatar.cs` 加周期性字段打印（`Hp` 值每 30 tick 打一次），观察 drop 窗口结束后 6 s 内值从 drop-前值漂移到服务端当前值。
 

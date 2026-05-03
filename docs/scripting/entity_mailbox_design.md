@@ -81,5 +81,5 @@ C++ 网络层收到 RPC 消息
 
 - [entity_type_registration.md](entity_type_registration.md) — RPC ID 编码与 `EntityDefRegistry` 元数据。
 - [serialization_alignment.md](serialization_alignment.md) — 参数序列化字节格式。
-- [../generator/DEF_GENERATOR_DESIGN.md](../generator/DEF_GENERATOR_DESIGN.md) — `.def` 文件格式与 DefGenerator 整体设计。
+- [../generator/def_generator_design.md](../generator/def_generator_design.md) — `.def` 文件格式与 DefGenerator 整体设计。
 - [../bigworld_ref/BIGWORLD_RPC_REFERENCE.md](../bigworld_ref/BIGWORLD_RPC_REFERENCE.md) — BigWorld RPC 语义参考。

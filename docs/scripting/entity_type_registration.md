@@ -154,7 +154,7 @@ Component / Struct 等扩展元素由 `ComponentEmitter` /
 
 ## 7. 关联
 
-- [../generator/DEF_GENERATOR_DESIGN.md](../generator/DEF_GENERATOR_DESIGN.md) — `.def` 文件格式与 DefGenerator 整体设计。
-- [../property_sync/PROPERTY_SYNC_DESIGN.md](../property_sync/PROPERTY_SYNC_DESIGN.md) — 属性同步与 delta 细节。
-- [../property_sync/COMPONENT_DESIGN.md](../property_sync/COMPONENT_DESIGN.md) — Component 描述与同步。
+- [../generator/def_generator_design.md](../generator/def_generator_design.md) — `.def` 文件格式与 DefGenerator 整体设计。
+- [../property_sync/property_sync_design.md](../property_sync/property_sync_design.md) — 属性同步与 delta 细节。
+- [../property_sync/component_design.md](../property_sync/component_design.md) — Component 描述与同步。
 - [entity_mailbox_design.md](entity_mailbox_design.md) — RPC ID 在 Mailbox 路径上的使用。
