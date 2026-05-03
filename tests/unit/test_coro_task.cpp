@@ -11,19 +11,28 @@
 
 using namespace atlas;
 
-// ============================================================================
-// Helper: synchronously drive a Task<T> to completion.
-// Only works for tasks that complete without external suspension (no async I/O).
-// ============================================================================
+// Helpers take a factory rather than a Task& so the factory (and any
+// lambda captures it owns) outlive every coroutine frame they produce.
+// Calling a lambda-coroutine as a temporary leaves the frame's `this`
+// dangling once the temporary dies, which ASAN flags as
+// stack-use-after-scope on the very first capture access.
 
 template <typename T>
-auto sync_wait(Task<T>& task) -> T {
-  // Use FireAndForget (eager start) to drive the lazy Task chain.
-  // Avoids calling operator co_await() in a non-coroutine function,
-  // which MSVC incorrectly treats as making the enclosing function a coroutine.
+struct TaskValueType;
+template <typename T>
+struct TaskValueType<Task<T>> {
+  using type = T;
+};
+
+template <typename Fn>
+auto sync_wait(Fn&& factory) -> typename TaskValueType<std::invoke_result_t<Fn>>::type {
+  using T = typename TaskValueType<std::invoke_result_t<Fn>>::type;
+  auto task = std::forward<Fn>(factory)();
   T result{};
   bool done = false;
 
+  // FireAndForget (eager start) drives the lazy Task chain without making
+  // sync_wait itself a coroutine — MSVC otherwise flags co_await here.
   auto driver = [&]() -> FireAndForget {
     result = co_await task;
     done = true;
@@ -34,7 +43,9 @@ auto sync_wait(Task<T>& task) -> T {
   return result;
 }
 
-inline void sync_wait_void(Task<void>& task) {
+template <typename Fn>
+inline void sync_wait_void(Fn&& factory) {
+  auto task = std::forward<Fn>(factory)();
   bool done = false;
 
   auto driver = [&]() -> FireAndForget {
@@ -51,49 +62,44 @@ inline void sync_wait_void(Task<void>& task) {
 // ============================================================================
 
 TEST(Task, BasicReturn) {
-  auto task = []() -> Task<int> { co_return 42; }();
-  EXPECT_EQ(sync_wait(task), 42);
+  EXPECT_EQ(sync_wait([]() -> Task<int> { co_return 42; }), 42);
 }
 
 TEST(Task, StringReturn) {
-  auto task = []() -> Task<std::string> { co_return "hello"; }();
-  EXPECT_EQ(sync_wait(task), "hello");
+  EXPECT_EQ(sync_wait([]() -> Task<std::string> { co_return "hello"; }), "hello");
 }
 
 TEST(Task, VoidTask) {
   bool executed = false;
-  auto task = [&]() -> Task<void> {
+  sync_wait_void([&]() -> Task<void> {
     executed = true;
     co_return;
-  }();
-  sync_wait_void(task);
+  });
   EXPECT_TRUE(executed);
 }
 
 TEST(Task, ChainedAwait) {
   auto inner = []() -> Task<int> { co_return 10; };
 
-  auto outer = [&]() -> Task<int> {
-    auto t1 = inner();
-    auto t2 = inner();
-    auto a = co_await t1;
-    auto b = co_await t2;
-    co_return a + b;
-  }();
-
-  EXPECT_EQ(sync_wait(outer), 20);
+  EXPECT_EQ(sync_wait([&]() -> Task<int> {
+              auto t1 = inner();
+              auto t2 = inner();
+              auto a = co_await t1;
+              auto b = co_await t2;
+              co_return a + b;
+            }),
+            20);
 }
 
 TEST(Task, DeepChain) {
   // 4 levels deep — exercises symmetric transfer (O(1) stack depth)
   auto level3 = []() -> Task<int> { co_return 1; };
 
-  auto outer = [&]() -> Task<int> {
-    auto t3 = level3();
-    co_return co_await t3;
-  }();
-
-  EXPECT_EQ(sync_wait(outer), 1);
+  EXPECT_EQ(sync_wait([&]() -> Task<int> {
+              auto t3 = level3();
+              co_return co_await t3;
+            }),
+            1);
 }
 
 TEST(Task, ExceptionPropagation) {
@@ -102,22 +108,24 @@ TEST(Task, ExceptionPropagation) {
     co_return 0;  // unreachable
   };
 
-  auto catcher = [&]() -> Task<int> {
-    try {
-      auto t = thrower();
-      co_return co_await t;
-    } catch (const std::runtime_error&) {
-      co_return -1;
-    }
-  }();
-
-  EXPECT_EQ(sync_wait(catcher), -1);
+  EXPECT_EQ(sync_wait([&]() -> Task<int> {
+              try {
+                auto t = thrower();
+                co_return co_await t;
+              } catch (const std::runtime_error&) {
+                co_return -1;
+              }
+            }),
+            -1);
 }
 
 TEST(Task, MoveOnlySemantics) {
-  auto task = []() -> Task<int> { co_return 1; }();
+  auto factory = []() -> Task<int> { co_return 1; };
+  auto task = factory();
   auto moved = std::move(task);
-  EXPECT_EQ(sync_wait(moved), 1);
+  // The factory stays alive; sync_wait would re-invoke it, so drive `moved`
+  // directly via a one-shot factory that yields the moved task.
+  EXPECT_EQ(sync_wait([&]() -> Task<int> { co_return co_await moved; }), 1);
 }
 
 // ============================================================================
