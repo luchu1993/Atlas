@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import subprocess
 import sys
 import time
@@ -218,12 +219,34 @@ def build_loginapp_args(args: argparse.Namespace, machined_address: str) -> list
     return loginapp_args
 
 
-def build_stress_args(args: argparse.Namespace, worker: dict[str, object]) -> list[str]:
+_DIGEST_FILE = (
+    Path("samples") / "stress" / "Atlas.StressTest.Base" / "obj" / "generated"
+    / "Atlas.Generators.Def" / "Atlas.Generators.Def.DefGenerator"
+    / "EntityDefDigest.g.cs"
+)
+_DIGEST_RE = re.compile(r'Sha256Hex\s*=\s*"([0-9A-Fa-f]{64})"')
+
+
+def load_entity_def_digest(repo_root: Path) -> str:
+    path = repo_root / _DIGEST_FILE
+    if not path.is_file():
+        fail(f"EntityDefDigest.g.cs not found at {path}; build the C# stress projects first.")
+    match = _DIGEST_RE.search(path.read_text(encoding="utf-8"))
+    if not match:
+        fail(f"Could not extract Sha256Hex from {path}.")
+    return match.group(1)
+
+
+def build_stress_args(
+    args: argparse.Namespace, worker: dict[str, object], entity_def_digest: str
+) -> list[str]:
     stress_args = [
         "--login",
         f"{args.machined_host}:{args.login_port}",
         "--password-hash",
         args.password_hash,
+        "--entity-def-digest",
+        entity_def_digest,
         "--clients",
         str(worker["clients"]),
         "--account-pool",
@@ -306,6 +329,8 @@ def main() -> int:
     assert_file_exists(login_stress, login_stress.name)
     assert_file_exists(runtime_config, runtime_config.name)
     assert_file_exists(runtime_assembly, runtime_assembly.name)
+
+    entity_def_digest = load_entity_def_digest(repo_root)
 
     timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
     run_root = repo_root / ".tmp" / "login-stress" / timestamp
@@ -506,7 +531,8 @@ def main() -> int:
                 f" source_ips={len(worker['source_ips'])}"
             )
             stress_result = subprocess.run(
-                [str(login_stress), *build_stress_args(args, worker)], cwd=repo_root
+                [str(login_stress), *build_stress_args(args, worker, entity_def_digest)],
+                cwd=repo_root,
             )
             if stress_result.returncode != 0:
                 fail(f"login_stress exited with code {stress_result.returncode}")
@@ -525,7 +551,7 @@ def main() -> int:
                         start_logged_process(
                             name=name,
                             file_path=login_stress,
-                            arguments=build_stress_args(args, worker),
+                            arguments=build_stress_args(args, worker, entity_def_digest),
                             working_directory=repo_root,
                             log_directory=log_dir,
                         )

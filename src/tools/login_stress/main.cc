@@ -1,4 +1,5 @@
 #include <algorithm>
+#include <array>
 #include <chrono>
 #include <cstdint>
 #include <cstdlib>
@@ -34,6 +35,9 @@ struct Options {
   Address login_addr{"127.0.0.1", 0};
   std::string username_prefix{"stress_user_"};
   std::string password_hash;
+  // SHA-256 of the server's entity-def surface; BaseApp rejects mismatched
+  // builds. All-zero default keeps ungated test harnesses (fake_cluster) working.
+  std::array<uint8_t, 32> entity_def_digest{};
   std::vector<Address> source_ips;
   std::size_t clients{100};
   std::size_t account_pool{0};
@@ -167,6 +171,7 @@ class Session {
     login::LoginRequest req;
     req.username = username_;
     req.password_hash = opts_.password_hash;
+    req.entity_def_digest = opts_.entity_def_digest;
 
     const auto kSendResult = login_channel_->SendMessage(req);
     if (!kSendResult) {
@@ -368,6 +373,8 @@ void PrintUsage() {
       << "Usage: login_stress --login <host:port> --password-hash <sha256hex> [options]\n"
       << "\n"
       << "Options:\n"
+      << "  --entity-def-digest <hex>  64-char SHA-256 (Atlas.Rpc.EntityDefDigest.Sha256Hex)\n"
+      << "                             stamped onto LoginRequest; required when BaseApp gates\n"
       << "  --clients <n>              Virtual clients to run (default: 100)\n"
       << "  --account-pool <n>         Distinct account count; smaller than clients triggers "
          "relogin\n"
@@ -443,6 +450,24 @@ auto ParseNumeric(std::string_view text) -> std::optional<T> {
   }
 }
 
+auto ParseHexDigest(std::string_view hex) -> std::optional<std::array<uint8_t, 32>> {
+  if (hex.size() != 64) return std::nullopt;
+  auto nibble = [](char c) -> int {
+    if (c >= '0' && c <= '9') return c - '0';
+    if (c >= 'a' && c <= 'f') return c - 'a' + 10;
+    if (c >= 'A' && c <= 'F') return c - 'A' + 10;
+    return -1;
+  };
+  std::array<uint8_t, 32> out{};
+  for (size_t i = 0; i < 32; ++i) {
+    const int hi = nibble(hex[i * 2]);
+    const int lo = nibble(hex[i * 2 + 1]);
+    if (hi < 0 || lo < 0) return std::nullopt;
+    out[i] = static_cast<uint8_t>((hi << 4) | lo);
+  }
+  return out;
+}
+
 auto ParseOptions(int argc, char* argv[]) -> std::optional<Options> {
   Options opts;
   bool have_login = false;
@@ -473,6 +498,15 @@ auto ParseOptions(int argc, char* argv[]) -> std::optional<Options> {
       if (!value) return std::nullopt;
       opts.password_hash = std::string(*value);
       have_password_hash = true;
+    } else if (kArg == "--entity-def-digest") {
+      auto value = require_value(kArg);
+      if (!value) return std::nullopt;
+      auto digest = ParseHexDigest(*value);
+      if (!digest) {
+        std::cerr << "Invalid --entity-def-digest, expected 64-char hex (SHA-256)\n";
+        return std::nullopt;
+      }
+      opts.entity_def_digest = *digest;
     } else if (kArg == "--clients") {
       auto value = require_value(kArg);
       if (!value) return std::nullopt;

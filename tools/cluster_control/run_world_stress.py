@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import signal
 import subprocess
 import sys
@@ -557,12 +558,16 @@ def build_loginapp_args(args: argparse.Namespace, machined_address: str) -> list
     return loginapp_args
 
 
-def build_stress_args(args: argparse.Namespace, worker: dict[str, object]) -> list[str]:
+def build_stress_args(
+    args: argparse.Namespace, worker: dict[str, object], entity_def_digest: str
+) -> list[str]:
     stress_args = [
         "--login",
         f"{args.machined_host}:{args.login_port}",
         "--password-hash",
         args.password_hash,
+        "--entity-def-digest",
+        entity_def_digest,
         "--clients",
         str(worker["clients"]),
         "--account-pool",
@@ -635,6 +640,24 @@ def build_stress_args(args: argparse.Namespace, worker: dict[str, object]) -> li
                 "--client-drop-transport-ms", str(start_ms), str(duration_ms),
             ])
     return stress_args
+
+
+_DIGEST_FILE = (
+    Path("samples") / "stress" / "Atlas.StressTest.Base" / "obj" / "generated"
+    / "Atlas.Generators.Def" / "Atlas.Generators.Def.DefGenerator"
+    / "EntityDefDigest.g.cs"
+)
+_DIGEST_RE = re.compile(r'Sha256Hex\s*=\s*"([0-9A-Fa-f]{64})"')
+
+
+def load_entity_def_digest(repo_root: Path) -> str:
+    path = repo_root / _DIGEST_FILE
+    if not path.is_file():
+        fail(f"EntityDefDigest.g.cs not found at {path}; build the C# stress projects first.")
+    match = _DIGEST_RE.search(path.read_text(encoding="utf-8"))
+    if not match:
+        fail(f"Could not extract Sha256Hex from {path}.")
+    return match.group(1)
 
 
 def default_client_exe(args: argparse.Namespace) -> Path:
@@ -726,11 +749,13 @@ def main() -> int:
 
     # world_stress is only required when clients > 0.
     world_stress: Path | None = None
+    entity_def_digest: str | None = None
     if worker_plan:
         world_stress = resolve_program(
             repo_root, bin_name, search_subdirs, "world_stress"
         )
         assert_file_exists(world_stress, world_stress.name)
+        entity_def_digest = load_entity_def_digest(repo_root)
 
     timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
     git_hash = _git_short(repo_root)
@@ -1063,8 +1088,9 @@ def main() -> int:
                     f" baseapps={len(baseapp_specs)} cellapps={len(cellapp_specs)}"
                     f" source_ips={len(worker['source_ips'])}"
                 )
+                assert entity_def_digest is not None
                 stress_result = subprocess.run(
-                    [str(world_stress), *build_stress_args(args, worker)],
+                    [str(world_stress), *build_stress_args(args, worker, entity_def_digest)],
                     cwd=repo_root,
                     env=_dll_env(world_stress),
                 )
@@ -1083,11 +1109,12 @@ def main() -> int:
                             f"cellapps={len(cellapp_specs)} "
                             f"source_ips={len(worker['source_ips'])}"
                         )
+                        assert entity_def_digest is not None
                         stress_workers.append(
                             start_logged_process(
                                 name=name,
                                 file_path=world_stress,
-                                arguments=build_stress_args(args, worker),
+                                arguments=build_stress_args(args, worker, entity_def_digest),
                                 working_directory=repo_root,
                                 log_directory=log_dir,
                                 env=_dll_env(world_stress),
