@@ -39,12 +39,27 @@ atlas_add_test(NAME test_login_flow
 )
 
 if(ATLAS_BUILD_NET_CLIENT)
+  # Shared FakeCluster for the C++ integration test and the C# IntegrationTests
+  # P/Invoke surface (atlas_test_helpers below). Static so it can be linked
+  # into both an executable and a shared library without ODR clashes.
+  add_library(atlas_fake_cluster STATIC fake_cluster.cc)
+  target_include_directories(atlas_fake_cluster PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}")
+  target_link_libraries(atlas_fake_cluster
+    PUBLIC atlas_baseapp_lib atlas_loginapp_lib atlas_network atlas_platform
+  )
+
   atlas_add_test(NAME test_client_flow
     SOURCES test_client_flow.cpp
-    DEPS atlas_net_client_core atlas_baseapp_lib atlas_loginapp_lib
-         atlas_network atlas_platform
+    DEPS atlas_net_client_core atlas_fake_cluster
     LABEL integration
   )
+
+  add_library(atlas_test_helpers SHARED fake_cluster_capi.cc)
+  target_link_libraries(atlas_test_helpers PRIVATE atlas_fake_cluster)
+  set_target_properties(atlas_test_helpers PROPERTIES
+    POSITION_INDEPENDENT_CODE ON
+  )
+  atlas_set_output_dir("" atlas_test_helpers)
 endif()
 
 atlas_add_test(NAME test_rudp_two_network_interfaces

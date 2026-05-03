@@ -1,13 +1,13 @@
 <Project Sdk="Microsoft.NET.Sdk">
 
   <PropertyGroup>
-    <AssemblyName>Atlas.Client.Tests</AssemblyName>
+    <AssemblyName>Atlas.Client.IntegrationTests</AssemblyName>
     <TargetFramework>net9.0</TargetFramework>
     <Nullable>enable</Nullable>
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
     <IsPackable>false</IsPackable>
     <IsTestProject>true</IsTestProject>
-    <RootNamespace>Atlas.Client.Tests</RootNamespace>
+    <RootNamespace>Atlas.Client.IntegrationTests</RootNamespace>
   </PropertyGroup>
 
   <ItemGroup>
