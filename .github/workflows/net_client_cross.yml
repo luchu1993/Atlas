@@ -39,14 +39,14 @@ jobs:
         run: cmake --build --preset net-client-android-arm64
       - name: Verify ABI
         run: |
-          file build/net-client-android-arm64/src/lib/net_client/libatlas_net_client.so \
-            | tee /dev/stderr | grep -q "ARM aarch64"
-          nm -D --defined-only build/net-client-android-arm64/src/lib/net_client/libatlas_net_client.so \
-            | grep -E "^[0-9a-f]+ T AtlasNet" | head
+          SO=$(find bin/net-client-android-arm64 -name 'libatlas_net_client.so' | head -1)
+          test -n "$SO"
+          file "$SO" | tee /dev/stderr | grep -q "ARM aarch64"
+          nm -D --defined-only "$SO" | grep -E "^[0-9a-f]+ T AtlasNet" | head
       - uses: actions/upload-artifact@v4
         with:
           name: atlas_net_client-android-arm64
-          path: build/net-client-android-arm64/src/lib/net_client/libatlas_net_client.so
+          path: bin/net-client-android-arm64/libatlas_net_client.so
           retention-days: 30
 
   ios-arm64:
@@ -62,14 +62,16 @@ jobs:
         run: cmake --build --preset net-client-ios-arm64
       - name: Verify static archive
         run: |
-          ARCHIVE=$(find build/net-client-ios-arm64 -name 'libatlas_net_client_static.a' | head -1)
+          ARCHIVE=$(find bin/net-client-ios-arm64 build/net-client-ios-arm64 -name 'libatlas_net_client_static.a' 2>/dev/null | head -1)
           test -n "$ARCHIVE"
           lipo -info "$ARCHIVE" | grep -q arm64
           nm "$ARCHIVE" | grep -E " T _AtlasNet" | head
       - uses: actions/upload-artifact@v4
         with:
           name: atlas_net_client-ios-arm64
-          path: build/net-client-ios-arm64/**/libatlas_net_client_static.a
+          path: |
+            bin/net-client-ios-arm64/**/libatlas_net_client_static.a
+            build/net-client-ios-arm64/**/libatlas_net_client_static.a
           retention-days: 30
 
   macos-arm64:
@@ -85,13 +87,13 @@ jobs:
         run: cmake --build --preset net-client-macos-arm64
       - name: Verify bundle
         run: |
-          BUNDLE=$(find build/net-client-macos-arm64 -name 'atlas_net_client.bundle' | head -1)
+          BUNDLE=$(find bin/net-client-macos-arm64 -name 'atlas_net_client.bundle' | head -1)
           test -n "$BUNDLE"
           lipo -info "$BUNDLE" | grep -q arm64
       - uses: actions/upload-artifact@v4
         with:
           name: atlas_net_client-macos-arm64
-          path: build/net-client-macos-arm64/**/atlas_net_client.bundle
+          path: bin/net-client-macos-arm64/atlas_net_client.bundle
           retention-days: 30
 
   linux-x64:
@@ -107,12 +109,12 @@ jobs:
         run: cmake --build --preset net-client-linux-x64
       - name: Verify ABI
         run: |
-          SO=$(find build/net-client-linux-x64 -name 'libatlas_net_client.so' | head -1)
+          SO=$(find bin/net-client-linux-x64 -name 'libatlas_net_client.so' | head -1)
           test -n "$SO"
           file "$SO" | grep -q "x86-64"
           nm -D --defined-only "$SO" | grep -E "^[0-9a-f]+ T AtlasNet" | head
       - uses: actions/upload-artifact@v4
         with:
           name: atlas_net_client-linux-x64
-          path: build/net-client-linux-x64/src/lib/net_client/libatlas_net_client.so
+          path: bin/net-client-linux-x64/libatlas_net_client.so
           retention-days: 30

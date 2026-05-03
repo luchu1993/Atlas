@@ -41,9 +41,11 @@ class AllocDepthGuard {
 #elif defined(_WIN32)
   return _aligned_malloc(bytes, align);
 #else
-  // POSIX aligned_alloc requires size to be a multiple of alignment.
-  std::size_t rounded = (bytes + align - 1) & ~(align - 1);
-  return std::aligned_alloc(align, rounded);
+  // posix_memalign over std::aligned_alloc — bionic gained the latter
+  // only in API 28, so the Android NDK net-client target won't link.
+  void* ptr = nullptr;
+  if (::posix_memalign(&ptr, align, bytes) != 0) return nullptr;
+  return ptr;
 #endif
 }
 

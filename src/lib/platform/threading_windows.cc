@@ -14,11 +14,6 @@ void SetThreadName(std::string_view name) {
   SetThreadDescription(GetCurrentThread(), wname.c_str());
 }
 
-void SetThreadName(std::jthread& thread, std::string_view name) {
-  std::wstring wname(name.begin(), name.end());
-  SetThreadDescription(thread.native_handle(), wname.c_str());
-}
-
 }  // namespace atlas
 
 #endif  // ATLAS_PLATFORM_WINDOWS

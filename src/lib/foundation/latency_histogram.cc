@@ -58,7 +58,7 @@ void LatencyHistogram::Record(std::chrono::microseconds latency) {
   uint64_t us = latency.count() < 0 ? 0 : static_cast<uint64_t>(latency.count());
   int idx = BucketIndex(us);
   std::lock_guard lock(mu_);
-  ++buckets_[idx];
+  ++buckets_[static_cast<std::size_t>(idx)];
   ++count_;
   if (us > max_micros_) max_micros_ = us;
 }
@@ -82,7 +82,7 @@ auto LatencyHistogram::QuantileMicros(double q) const -> double {
   if (target > count_) target = count_;
   uint64_t cum = 0;
   for (int i = 0; i < kBucketCount; ++i) {
-    cum += buckets_[i];
+    cum += buckets_[static_cast<std::size_t>(i)];
     if (cum >= target) {
       double lo = BucketLowerBoundMicros(i);
       double hi = BucketUpperBoundMicros(i);

@@ -19,7 +19,6 @@
 namespace atlas {
 
 void SetThreadName(std::string_view name);
-void SetThreadName(std::jthread& thread, std::string_view name);
 
 class SpinLock {
  public:

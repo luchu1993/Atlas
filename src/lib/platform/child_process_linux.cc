@@ -1,3 +1,8 @@
+#include "child_process.h"
+#include "platform/platform_config.h"
+
+#if ATLAS_PLATFORM_LINUX
+
 #include <errno.h>
 #include <fcntl.h>
 #include <signal.h>
@@ -11,8 +16,6 @@
 #include <mutex>
 #include <thread>
 #include <vector>
-
-#include "child_process.h"
 
 namespace atlas {
 
@@ -224,3 +227,5 @@ auto ChildProcess::Wait(std::chrono::milliseconds timeout) -> std::optional<int>
 }
 
 }  // namespace atlas
+
+#endif  // ATLAS_PLATFORM_LINUX

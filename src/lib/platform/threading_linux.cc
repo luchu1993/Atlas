@@ -18,14 +18,6 @@ void SetThreadName(std::string_view name) {
   pthread_setname_np(pthread_self(), buf);
 }
 
-void SetThreadName(std::jthread& thread, std::string_view name) {
-  char buf[16];
-  auto len = std::min(name.size(), static_cast<std::size_t>(15));
-  std::copy_n(name.data(), len, buf);
-  buf[len] = '\0';
-  pthread_setname_np(thread.native_handle(), buf);
-}
-
 }  // namespace atlas
 
 #endif  // ATLAS_PLATFORM_LINUX

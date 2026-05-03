@@ -8,7 +8,10 @@
 namespace atlas {
 
 struct ThreadPool::Impl {
-  std::vector<std::jthread> workers;
+  // std::thread (not std::jthread) keeps this portable to Apple Clang
+  // libc++ on iOS, which still doesn't ship the C++20 jthread/stop_token
+  // pieces. We never used the stop_token in the worker loop anyway.
+  std::vector<std::thread> workers;
   std::queue<std::function<void()>> tasks;
   std::mutex mutex;
   std::condition_variable cv;
@@ -27,7 +30,7 @@ ThreadPool::ThreadPool(uint32_t num_threads) : impl_(std::make_unique<Impl>()) {
   impl_->workers.reserve(num_threads);
 
   for (uint32_t i = 0; i < num_threads; ++i) {
-    impl_->workers.emplace_back([this](std::stop_token /*stop_token*/) {
+    impl_->workers.emplace_back([this]() {
       while (true) {
         std::function<void()> task;
 
@@ -84,6 +87,10 @@ void ThreadPool::Shutdown() {
   // Setting stopped under the mutex prevents a lost-wakeup race.
   impl_->cv.notify_all();
 
+  // std::thread does not auto-join; do it explicitly before clearing.
+  for (auto& worker : impl_->workers) {
+    if (worker.joinable()) worker.join();
+  }
   impl_->workers.clear();
 }
 
