@@ -95,8 +95,11 @@ class SelectPoller final : public IOPoller {
     }
 
     struct timeval tv;
-    tv.tv_sec = static_cast<long>(usec / 1'000'000);
-    tv.tv_usec = static_cast<long>(usec % 1'000'000);
+    // tv_sec / tv_usec field widths differ across platforms (Darwin uses
+    // int for tv_usec, Linux uses long); cast through decltype so we
+    // never trip -Wshorten-64-to-32.
+    tv.tv_sec = static_cast<decltype(tv.tv_sec)>(usec / 1'000'000);
+    tv.tv_usec = static_cast<decltype(tv.tv_usec)>(usec % 1'000'000);
 
 #if ATLAS_PLATFORM_WINDOWS
     // Winsock select ignores the nfds parameter
