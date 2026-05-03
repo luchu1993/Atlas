@@ -26,20 +26,8 @@ concurrency:
 
 jobs:
   test:
-    name: ${{ matrix.category }}
+    name: Build + Tests
     runs-on: windows-2022
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - category: Unit
-            kind: ctest
-            label: unit
-          - category: Integration
-            kind: ctest
-            label: integration
-          - category: C#
-            kind: dotnet
 
     steps:
       - name: Checkout
@@ -108,13 +96,15 @@ jobs:
           SCCACHE_DIR: ${{ github.workspace }}/.sccache
         run: sccache --show-stats
 
-      - name: ctest (${{ matrix.label }})
-        if: matrix.kind == 'ctest'
+      - name: Unit Tests
         working-directory: build/debug
-        run: ctest --build-config Debug --label-regex ${{ matrix.label }} --output-on-failure
+        run: ctest --build-config Debug --label-regex unit --output-on-failure
 
-      - name: dotnet test
-        if: matrix.kind == 'dotnet'
+      - name: Integration Tests
+        working-directory: build/debug
+        run: ctest --build-config Debug --label-regex integration --output-on-failure
+
+      - name: C# IntegrationTests
         env:
           ATLAS_BIN_DIR: ${{ github.workspace }}/bin/debug
         run: dotnet test tests/csharp/Atlas.Client.IntegrationTests --filter "Category!=Nightly" --nologo
