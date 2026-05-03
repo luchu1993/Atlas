@@ -90,7 +90,7 @@ TEST_F(WitnessAoICapTest, DefaultCapNoTruncationUnderForty) {
   observer->EnableWitness(/*radius=*/500.f, MakeSendFn(), /*hysteresis=*/0.f);
 
   for (int i = 0; i < 40; ++i) {
-    MakeEntity(space, 100 + i, {1.f + i * 5.f, 0, 0});
+    MakeEntity(space, 100 + i, {1.f + static_cast<float>(i) * 5.f, 0, 0});
   }
   ASSERT_EQ(observer->GetWitness()->AoIMap().size(), 40u);
 
