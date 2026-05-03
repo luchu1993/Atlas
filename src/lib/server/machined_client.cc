@@ -55,7 +55,12 @@ auto MachinedClient::Connect(const Address& machined_addr) -> bool {
 }
 
 auto MachinedClient::IsConnected() const -> bool {
-  return channel_ != nullptr && channel_->IsConnected();
+  if (channel_ == nullptr) return false;
+  // Re-validate against the registry: a condemned channel is removed from
+  // channels_ and may already be freed, so the cached pointer can dangle
+  // between Tick()s. Pointer compare without deref is safe even if stale.
+  if (network_.FindChannel(machined_addr_) != channel_) return false;
+  return channel_->IsConnected();
 }
 
 void MachinedClient::SendRegister(const ServerConfig& cfg) {
