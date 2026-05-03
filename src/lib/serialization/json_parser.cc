@@ -10,6 +10,7 @@
 
 #include <cassert>
 #include <charconv>
+#include <format>
 
 #include <rapidjson/document.h>
 #include <rapidjson/error/en.h>
@@ -110,11 +111,10 @@ auto ParseString(std::string_view json) -> Result<std::shared_ptr<DataSectionTre
   doc.Parse(json.data(), json.size());
 
   if (doc.HasParseError()) {
-    std::string msg = "JSON parse error: ";
-    msg += rapidjson::GetParseError_En(doc.GetParseError());
-    msg += " at offset ";
-    msg += std::to_string(doc.GetErrorOffset());
-    return Error(ErrorCode::kInvalidArgument, std::move(msg));
+    return Error(
+        ErrorCode::kInvalidArgument,
+        std::format("JSON parse error: {} at offset {}",
+                    rapidjson::GetParseError_En(doc.GetParseError()), doc.GetErrorOffset()));
   }
 
   auto tree = std::make_shared<DataSectionTree>("root");

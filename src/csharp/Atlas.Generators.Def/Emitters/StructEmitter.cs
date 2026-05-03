@@ -6,23 +6,8 @@ using Microsoft.CodeAnalysis;
 
 namespace Atlas.Generators.Def.Emitters;
 
-// Emits one `partial struct` per <struct> declaration: public fields plus
-// a Serialize / Deserialize pair (always) and — for Field-mode structs —
-// per-field op codecs (__WriteFieldOp / __ApplyFieldOp) that the list
-// op-log uses to ship a single field's bytes instead of the whole body.
-//
-// Structs land in the `Atlas.Def` namespace so different entity defs can
-// share a struct without namespace-shopping — DefLinker already enforced
-// global name uniqueness, so "Atlas.Def.ItemStack" always refers to the
-// same descriptor.
-//
-// The auto-sync decision is surfaced per struct via a DEF014 Info
-// diagnostic, matching CONTAINER_PROPERTY_SYNC_DESIGN §9's heuristic:
-//   rule 1  any variable-width field  → whole
-//   rule 2  total ≤ 8 bytes            → whole (header beats savings)
-//   rule 3  ≤ 4 fields                 → whole (GC overhead)
-//   rule 4  ≥ 32 bytes & ≥ 8 fields    → field
-//   rule 5  otherwise                  → whole (conservative default)
+// Emits one `partial struct` per <struct> with Serialize / Deserialize;
+// Field-mode structs additionally get per-field __WriteFieldOp / __ApplyFieldOp.
 internal static class StructEmitter
 {
     // Namespace every generated struct lands in. Kept as a constant so the

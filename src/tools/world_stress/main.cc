@@ -1224,7 +1224,8 @@ void PrintSummary(const Options& opts, const Metrics& metrics,
       const auto k_id = entries[i].first;
       const auto k_bytes = entries[i].second;
       const auto k_count = metrics.count_per_msg.at(k_id);
-      const double kAvg = k_count > 0 ? static_cast<double>(k_bytes) / k_count : 0.0;
+      const double kAvg =
+          k_count > 0 ? static_cast<double>(k_bytes) / static_cast<double>(k_count) : 0.0;
       std::cout << std::format("    msg=0x{:04X}  count={:>6}  bytes={:>8}  avg={:.1f}B\n", k_id,
                                k_count, k_bytes, kAvg);
     }

@@ -12,8 +12,12 @@
 #include "network/network_interface.h"
 #include "server/entity_types.h"
 
-namespace atlas::login { struct LoginResult; }
-namespace atlas::baseapp { struct AuthenticateResult; }
+namespace atlas::login {
+struct LoginResult;
+}
+namespace atlas::baseapp {
+struct AuthenticateResult;
+}
 
 namespace atlas::net_client {
 
@@ -32,9 +36,9 @@ class ClientSession {
   [[nodiscard]] auto GetState() const -> AtlasNetState { return state_; }
 
   // Legal only in DISCONNECTED.
-  auto StartLogin(std::string_view loginapp_host, uint16_t loginapp_port,
-                  std::string_view username, std::string_view password_hash,
-                  AtlasLoginResultFn callback, void* user_data) -> int32_t;
+  auto StartLogin(std::string_view loginapp_host, uint16_t loginapp_port, std::string_view username,
+                  std::string_view password_hash, AtlasLoginResultFn callback, void* user_data)
+      -> int32_t;
 
   // Legal only in LOGIN_SUCCEEDED. Reads cached SessionKey + BaseApp addr.
   auto StartAuthenticate(AtlasAuthResultFn callback, void* user_data) -> int32_t;
@@ -42,11 +46,11 @@ class ClientSession {
   // Idempotent. LOGOUT fires on_disconnect with reason=3; USER is silent.
   auto Disconnect(AtlasDisconnectReason reason) -> int32_t;
 
-  auto SendBaseRpc(uint32_t entity_id, uint32_t rpc_id, const uint8_t* payload,
-                   int32_t len) -> int32_t;
+  auto SendBaseRpc(uint32_t entity_id, uint32_t rpc_id, const uint8_t* payload, int32_t len)
+      -> int32_t;
 
-  auto SendCellRpc(uint32_t entity_id, uint32_t rpc_id, const uint8_t* payload,
-                   int32_t len) -> int32_t;
+  auto SendCellRpc(uint32_t entity_id, uint32_t rpc_id, const uint8_t* payload, int32_t len)
+      -> int32_t;
 
   // NULL fields in `cb` are substituted with internal noops.
   auto SetCallbacks(const AtlasNetCallbacks& cb) -> int32_t;
@@ -62,8 +66,7 @@ class ClientSession {
   void CancelLoginTimeout();
 
   void OnAuthResult(const ::atlas::baseapp::AuthenticateResult& msg);
-  void FireAuthCallback(bool success, EntityID entity_id, uint16_t type_id,
-                        std::string_view error);
+  void FireAuthCallback(bool success, EntityID entity_id, uint16_t type_id, std::string_view error);
   void CancelAuthTimeout();
 
   void InstallDefaultHandler();

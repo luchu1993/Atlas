@@ -1,10 +1,7 @@
 namespace Atlas.Observable;
 
-// Op kinds emitted on the container-delta wire. Values are reserved
-// for the 4-bit external bit-pack encoding documented in
-// docs/property_sync/CONTAINER_PROPERTY_SYNC_DESIGN.md — the cap at 16
-// values means new kinds need to fit in 4 bits. Wire width today is a
-// full byte; the bit-pack lands together with reliable-channel framing.
+// Container-delta op kinds. Capped at 16 to fit a 4-bit wire field —
+// today encoded as a full byte, but new kinds still need to fit.
 public enum OpKind : byte
 {
     // Scalar / struct-whole property update at a specific leaf index.

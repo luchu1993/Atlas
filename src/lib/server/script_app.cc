@@ -136,8 +136,8 @@ auto ScriptApp::Init(int argc, char* argv[]) -> bool {
                                        : Config().hot_reload_output_directory;
       hr_config.assembly_name = Config().hot_reload_assembly_name;
       hr_config.debounce_delay = std::chrono::milliseconds{Config().hot_reload_debounce_ms};
-      hr_config.unload_timeout = std::chrono::seconds{
-          (Config().hot_reload_unload_timeout_ms + 999) / 1000};
+      hr_config.unload_timeout =
+          std::chrono::seconds{(Config().hot_reload_unload_timeout_ms + 999) / 1000};
       hr_config.auto_compile = Config().hot_reload_auto_compile;
       hr_config.enabled = true;
 

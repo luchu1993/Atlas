@@ -1,16 +1,25 @@
 #include "serialization/xml_parser.h"
 
+#include <format>
+
 #include <pugixml.hpp>
 
 namespace atlas::xml {
 
 namespace {
 
+auto HasElementChildren(const pugi::xml_node& node) -> bool {
+  for (auto c = node.first_child(); c; c = c.next_sibling()) {
+    if (c.type() == pugi::node_element) {
+      return true;
+    }
+  }
+  return false;
+}
+
 void AddAttributes(DataSection* section, const pugi::xml_node& node) {
   for (auto attr = node.first_attribute(); attr; attr = attr.next_attribute()) {
-    std::string key = "@";
-    key += attr.name();
-    section->AddChild(std::move(key), std::string(attr.value()));
+    section->AddChild(std::format("@{}", attr.name()), std::string(attr.value()));
   }
 }
 
@@ -20,16 +29,8 @@ void PopulateSection(DataSection* section, const pugi::xml_node& node) {
       continue;
     }
 
-    bool child_has_elements = false;
-    for (auto gc = child.first_child(); gc; gc = gc.next_sibling()) {
-      if (gc.type() == pugi::node_element) {
-        child_has_elements = true;
-        break;
-      }
-    }
-
     DataSection* child_section;
-    if (!child_has_elements) {
+    if (!HasElementChildren(child)) {
       child_section =
           section->AddChild(std::string(child.name()), std::string(child.text().as_string()));
     } else {
@@ -54,15 +55,7 @@ auto BuildTreeFromDoc(pugi::xml_document& doc) -> Result<std::shared_ptr<DataSec
   auto tree = std::make_shared<DataSectionTree>(std::string(root_node.name()));
   auto* root = tree->Root();
 
-  bool has_element_children = false;
-  for (auto child = root_node.first_child(); child; child = child.next_sibling()) {
-    if (child.type() == pugi::node_element) {
-      has_element_children = true;
-      break;
-    }
-  }
-
-  if (!has_element_children) {
+  if (!HasElementChildren(root_node)) {
     root->SetValue(root_node.text().as_string());
   } else {
     PopulateSection(root, root_node);
@@ -80,11 +73,8 @@ auto ParseFile(const std::filesystem::path& path) -> Result<std::shared_ptr<Data
   pugi::xml_parse_result result = doc.load_file(path.c_str());
 
   if (!result) {
-    std::string msg = "XML parse error: ";
-    msg += result.description();
-    msg += " at offset ";
-    msg += std::to_string(result.offset);
-    return Error(ErrorCode::kIoError, std::move(msg));
+    return Error(ErrorCode::kIoError, std::format("XML parse error: {} at offset {}",
+                                                  result.description(), result.offset));
   }
 
   return BuildTreeFromDoc(doc);
@@ -95,11 +85,8 @@ auto ParseString(std::string_view xml) -> Result<std::shared_ptr<DataSectionTree
   pugi::xml_parse_result result = doc.load_buffer(xml.data(), xml.size());
 
   if (!result) {
-    std::string msg = "XML parse error: ";
-    msg += result.description();
-    msg += " at offset ";
-    msg += std::to_string(result.offset);
-    return Error(ErrorCode::kInvalidArgument, std::move(msg));
+    return Error(ErrorCode::kInvalidArgument, std::format("XML parse error: {} at offset {}",
+                                                          result.description(), result.offset));
   }
 
   return BuildTreeFromDoc(doc);

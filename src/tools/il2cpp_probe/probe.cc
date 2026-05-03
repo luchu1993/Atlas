@@ -13,7 +13,9 @@ using ProbeCallback = void (*)(int32_t);
 ProbeCallback g_callback = nullptr;
 }  // namespace
 
-PROBE_API void probe_set_callback(ProbeCallback cb) { g_callback = cb; }
+PROBE_API void probe_set_callback(ProbeCallback cb) {
+  g_callback = cb;
+}
 
 PROBE_API void probe_fire(int32_t value) {
   if (g_callback) g_callback(value);

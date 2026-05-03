@@ -94,7 +94,8 @@ auto ScriptClientHarness::PrintSummary() const -> bool {
 
   std::cout << "\n[script-clients] per-child event summary:\n";
   std::cout << std::format(
-      "  {:<24}  {:>5}  {:>5}  {:>3}  {:>4}  {:>5}  {:>4}  {:>4}  {:>4}  {:>4}  {:>4}  {:>5}  {:>5}\n",
+      "  {:<24}  {:>5}  {:>5}  {:>3}  {:>4}  {:>5}  {:>4}  {:>4}  {:>4}  {:>4}  {:>4}  {:>5}  "
+      "{:>5}\n",
       "username", "init", "enter", "dst", "hp", "wepCh", "wepBr", "scrSn", "afxUp", "bcst", "pos",
       "gaps", "unprs");
 

@@ -2,7 +2,9 @@ namespace Atlas.Generators.Def;
 
 internal enum ProcessContext
 {
-    Server, // All-in-one fallback (no ATLAS_* preprocessor symbol)
+    // Fallback when none of ATLAS_BASE/CELL/CLIENT is defined — emits every
+    // RPC direction. Not a synonym for "server-side"; Base and Cell are too.
+    Server,
     Base,
     Cell,
     Client,
@@ -10,17 +12,14 @@ internal enum ProcessContext
 
 internal enum RpcRole
 {
-    Send,      // Generate a send stub (serialize + call NativeApi)
-    Receive,   // Generate a partial method declaration (user implements)
-    Forbidden, // Generate a throw stub (client calling non-exposed method)
+    Send,
+    Receive,
+    Forbidden,
 }
 
 internal static class RpcRoleHelper
 {
-    /// <summary>
-    /// Determine the RPC role for a method given its section and the current process context.
-    /// See DEF_GENERATOR_DESIGN.md section 4.1 for the full matrix.
-    /// </summary>
+    // See def_generator_design.md §3.1 for the full matrix.
     public static RpcRole GetRole(string section, ProcessContext ctx, ExposedScope exposed)
     {
         return (section, ctx) switch
@@ -38,7 +37,6 @@ internal static class RpcRoleHelper
             ("base_methods", ProcessContext.Client)    => exposed != ExposedScope.None
                                                            ? RpcRole.Send : RpcRole.Forbidden,
 
-            // Server mode: base_methods receive, cell_methods receive, client_methods send
             ("base_methods", ProcessContext.Server)    => RpcRole.Receive,
             ("cell_methods", ProcessContext.Server)    => RpcRole.Receive,
 

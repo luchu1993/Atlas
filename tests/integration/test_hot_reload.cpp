@@ -67,12 +67,9 @@ class HotReloadTest : public ::testing::Test {
     ASSERT_TRUE(get_set.HasValue() && get_clear.HasValue() && get_code.HasValue());
 
     ClrBootstrapArgs args;
-    args.error_set =
-        reinterpret_cast<decltype(args.error_set)>((*get_set)());
-    args.error_clear =
-        reinterpret_cast<decltype(args.error_clear)>((*get_clear)());
-    args.error_get_code =
-        reinterpret_cast<decltype(args.error_get_code)>((*get_code)());
+    args.error_set = reinterpret_cast<decltype(args.error_set)>((*get_set)());
+    args.error_clear = reinterpret_cast<decltype(args.error_clear)>((*get_clear)());
+    args.error_get_code = reinterpret_cast<decltype(args.error_get_code)>((*get_code)());
 
     s_engine = std::make_unique<ClrScriptEngine>();
 

@@ -16,8 +16,7 @@ std::atomic<AtlasLogFn> g_log_handler{nullptr};
 
 class CallbackLogSink final : public atlas::LogSink {
  public:
-  void Write(atlas::LogLevel level, std::string_view /*category*/,
-             std::string_view message,
+  void Write(atlas::LogLevel level, std::string_view /*category*/, std::string_view message,
              const std::source_location& /*location*/) override {
     AtlasLogFn fn = g_log_handler.load(std::memory_order_acquire);
     if (!fn) return;
@@ -28,17 +27,16 @@ class CallbackLogSink final : public atlas::LogSink {
 
 void EnsureLogSinkInstalled() {
   static std::once_flag once;
-  std::call_once(once, [] {
-    atlas::Logger::Instance().AddSink(std::make_shared<CallbackLogSink>());
-  });
+  std::call_once(once,
+                 [] { atlas::Logger::Instance().AddSink(std::make_shared<CallbackLogSink>()); });
 }
 
 auto AbiCompatible(uint32_t expected) -> bool {
   constexpr uint32_t kOur = ATLAS_NET_ABI_VERSION;
-  const uint32_t our_major  = (kOur     >> 24) & 0xFFu;
-  const uint32_t our_minor  = (kOur     >> 16) & 0xFFu;
-  const uint32_t exp_major  = (expected >> 24) & 0xFFu;
-  const uint32_t exp_minor  = (expected >> 16) & 0xFFu;
+  const uint32_t our_major = (kOur >> 24) & 0xFFu;
+  const uint32_t our_minor = (kOur >> 16) & 0xFFu;
+  const uint32_t exp_major = (expected >> 24) & 0xFFu;
+  const uint32_t exp_minor = (expected >> 16) & 0xFFu;
   return exp_major == our_major && exp_minor <= our_minor;
 }
 
@@ -46,7 +44,9 @@ auto AbiCompatible(uint32_t expected) -> bool {
 
 extern "C" {
 
-uint32_t AtlasNetGetAbiVersion(void) { return ATLAS_NET_ABI_VERSION; }
+uint32_t AtlasNetGetAbiVersion(void) {
+  return ATLAS_NET_ABI_VERSION;
+}
 
 const char* AtlasNetLastError(AtlasNetContext* ctx) {
   if (!ctx) return AtlasNetGlobalLastError();
@@ -61,8 +61,8 @@ const char* AtlasNetGlobalLastError(void) {
 AtlasNetContext* AtlasNetCreate(uint32_t expected_abi) {
   if (!AbiCompatible(expected_abi)) {
     g_global_last_error = "ABI version mismatch";
-    ATLAS_LOG_ERROR("AtlasNetCreate: ABI mismatch (caller=0x{:08x}, dll=0x{:08x})",
-                    expected_abi, static_cast<uint32_t>(ATLAS_NET_ABI_VERSION));
+    ATLAS_LOG_ERROR("AtlasNetCreate: ABI mismatch (caller=0x{:08x}, dll=0x{:08x})", expected_abi,
+                    static_cast<uint32_t>(ATLAS_NET_ABI_VERSION));
     return nullptr;
   }
 
@@ -95,19 +95,17 @@ AtlasNetState AtlasNetGetState(AtlasNetContext* ctx) {
   return ctx->GetState();
 }
 
-int32_t AtlasNetLogin(AtlasNetContext* ctx, const char* loginapp_host,
-                      uint16_t loginapp_port, const char* username,
-                      const char* password_hash, AtlasLoginResultFn callback,
+int32_t AtlasNetLogin(AtlasNetContext* ctx, const char* loginapp_host, uint16_t loginapp_port,
+                      const char* username, const char* password_hash, AtlasLoginResultFn callback,
                       void* user_data) {
   if (!ctx || !loginapp_host || !username || !password_hash) {
     return ATLAS_NET_ERR_INVAL;
   }
-  return ctx->StartLogin(loginapp_host, loginapp_port, username, password_hash,
-                         callback, user_data);
+  return ctx->StartLogin(loginapp_host, loginapp_port, username, password_hash, callback,
+                         user_data);
 }
 
-int32_t AtlasNetAuthenticate(AtlasNetContext* ctx, AtlasAuthResultFn callback,
-                             void* user_data) {
+int32_t AtlasNetAuthenticate(AtlasNetContext* ctx, AtlasAuthResultFn callback, void* user_data) {
   if (!ctx) return ATLAS_NET_ERR_INVAL;
   return ctx->StartAuthenticate(callback, user_data);
 }
@@ -117,22 +115,19 @@ int32_t AtlasNetDisconnect(AtlasNetContext* ctx, AtlasDisconnectReason reason) {
   return ctx->Disconnect(reason);
 }
 
-int32_t AtlasNetSendBaseRpc(AtlasNetContext* ctx, uint32_t entity_id,
-                            uint32_t rpc_id, const uint8_t* payload,
-                            int32_t len) {
+int32_t AtlasNetSendBaseRpc(AtlasNetContext* ctx, uint32_t entity_id, uint32_t rpc_id,
+                            const uint8_t* payload, int32_t len) {
   if (!ctx) return ATLAS_NET_ERR_INVAL;
   return ctx->SendBaseRpc(entity_id, rpc_id, payload, len);
 }
 
-int32_t AtlasNetSendCellRpc(AtlasNetContext* ctx, uint32_t entity_id,
-                            uint32_t rpc_id, const uint8_t* payload,
-                            int32_t len) {
+int32_t AtlasNetSendCellRpc(AtlasNetContext* ctx, uint32_t entity_id, uint32_t rpc_id,
+                            const uint8_t* payload, int32_t len) {
   if (!ctx) return ATLAS_NET_ERR_INVAL;
   return ctx->SendCellRpc(entity_id, rpc_id, payload, len);
 }
 
-int32_t AtlasNetSetCallbacks(AtlasNetContext* ctx,
-                             const AtlasNetCallbacks* callbacks) {
+int32_t AtlasNetSetCallbacks(AtlasNetContext* ctx, const AtlasNetCallbacks* callbacks) {
   if (!ctx || !callbacks) return ATLAS_NET_ERR_INVAL;
   return ctx->SetCallbacks(*callbacks);
 }
