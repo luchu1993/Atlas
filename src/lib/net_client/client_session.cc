@@ -38,6 +38,8 @@ auto MapLoginStatus(::atlas::login::LoginStatus status) -> AtlasLoginStatus {
     case LoginStatus::kServerNotReady:
     case LoginStatus::kServerBusy:
       return ATLAS_LOGIN_SERVER_FULL;
+    case LoginStatus::kDefMismatch:
+      return ATLAS_LOGIN_DEF_MISMATCH;
     case LoginStatus::kInternalError:
     case LoginStatus::kLoginInProgress:
       return ATLAS_LOGIN_INTERNAL_ERROR;

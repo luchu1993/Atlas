@@ -22,14 +22,16 @@ target_compile_definitions(atlas_compiler_options INTERFACE
 
 # ── Linux / GCC / Clang ─────────────────────────────────────────────────────
 target_compile_options(atlas_compiler_options INTERFACE
-  $<$<CXX_COMPILER_ID:GNU,Clang>:
+  $<$<CXX_COMPILER_ID:GNU,Clang,AppleClang>:
     -Wall -Wextra -Wpedantic -Werror
     -Wno-unused-parameter
-    -Wno-stringop-overflow
     -Wconversion
     -Wnon-virtual-dtor
     -fPIC
   >
+  # -Wno-stringop-overflow silences a GCC false positive in stdlib code;
+  # Clang doesn't define the warning at all, so passing it errors out.
+  $<$<CXX_COMPILER_ID:GNU>:-Wno-stringop-overflow>
 )
 target_compile_definitions(atlas_compiler_options INTERFACE
   $<$<PLATFORM_ID:Linux>:ATLAS_PLATFORM_LINUX=1>

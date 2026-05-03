@@ -5,7 +5,7 @@
 #include <cstdint>
 #include <format>
 #include <memory>
-#include <mutex>
+#include <shared_mutex>
 #include <source_location>
 #include <string>
 #include <string_view>
@@ -62,14 +62,17 @@ class Logger {
  private:
   Logger();
 
-  // Sinks are published as an immutable snapshot via atomic shared_ptr.
-  // log() does a single lock-free load; writers serialize with mutex_.
+  // Sinks are published as an immutable snapshot. Readers grab a shared
+  // lock briefly to copy the shared_ptr; writers take the unique lock and
+  // swap a freshly-built list. shared_mutex chosen over std::atomic<
+  // std::shared_ptr<>> because libc++ on Apple Clang / older Android NDK
+  // does not yet ship the C++20 specialization.
   using SinkList = std::vector<std::shared_ptr<LogSink>>;
-  mutable std::mutex mutex_;  // guards sink list mutations only
+  mutable std::shared_mutex mutex_;
   // runtime_level_ is read on every log call; use atomic to avoid mutex
   // contention on the hot path.  LogLevel is uint8_t so this is lock-free.
   std::atomic<LogLevel> runtime_level_{LogLevel::kTrace};
-  std::atomic<std::shared_ptr<SinkList>> sinks_{std::make_shared<SinkList>()};
+  std::shared_ptr<SinkList> sinks_{std::make_shared<SinkList>()};
 };
 
 // Proxy object to forward format args to std::format properly (avoids MSVC macro issues)

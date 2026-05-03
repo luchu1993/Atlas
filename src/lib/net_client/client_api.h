@@ -59,6 +59,9 @@ typedef enum AtlasLoginStatus {
   ATLAS_LOGIN_SERVER_FULL = 3,
   ATLAS_LOGIN_TIMEOUT = 4,
   ATLAS_LOGIN_NETWORK_ERROR = 5,
+  // Server's entity-def SHA-256 disagrees with what the client stamped onto
+  // LoginRequest; client must update its build before reconnecting.
+  ATLAS_LOGIN_DEF_MISMATCH = 6,
   ATLAS_LOGIN_INTERNAL_ERROR = 255,
 } AtlasLoginStatus;
 
