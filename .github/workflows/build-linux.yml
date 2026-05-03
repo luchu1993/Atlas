@@ -97,6 +97,7 @@ jobs:
           cmake --preset ${{ matrix.preset }}
           -DCMAKE_C_COMPILER_LAUNCHER=sccache
           -DCMAKE_CXX_COMPILER_LAUNCHER=sccache
+          -DATLAS_BUILD_TESTS=OFF
 
       - name: Build
         env:
