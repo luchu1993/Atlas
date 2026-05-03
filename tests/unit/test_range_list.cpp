@@ -134,6 +134,25 @@ TEST(RangeList, InsertSortsOnBothAxes) {
   EXPECT_TRUE(ValidateZSort(list));
 }
 
+TEST(RangeList, NodeDestructorUnlinksToProtectNeighbors) {
+  // Owner forgot Remove(): the node's destructor must unlink itself so the
+  // surviving neighbors don't end up with dangling prev/next pointers.
+  RangeList list;
+  MovableNode a(1.f, 1.f, RangeListOrder::kEntity);
+  MovableNode c(3.f, 3.f, RangeListOrder::kEntity);
+  list.Insert(&a);
+  list.Insert(&c);
+  {
+    MovableNode b(2.f, 2.f, RangeListOrder::kEntity);
+    list.Insert(&b);
+    ASSERT_TRUE(ValidateXSort(list));
+  }
+  EXPECT_TRUE(ValidateXSort(list));
+  EXPECT_TRUE(ValidateZSort(list));
+  EXPECT_EQ(a.next_x_, &c);
+  EXPECT_EQ(c.prev_x_, &a);
+}
+
 TEST(RangeList, RemoveClearsPointersAndKeepsListValid) {
   RangeList list;
   MovableNode a(1.f, 1.f, RangeListOrder::kEntity);

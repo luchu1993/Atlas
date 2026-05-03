@@ -56,7 +56,19 @@ class RangeList;
 class RangeListNode {
  public:
   RangeListNode() = default;
-  virtual ~RangeListNode() = default;
+
+  // RAII: a linked node unlinks itself so neighbors never see a dangling
+  // pointer if the owner forgets to call RangeList::Remove first.
+  virtual ~RangeListNode() {
+    if (prev_x_ != nullptr && next_x_ != nullptr) {
+      prev_x_->next_x_ = next_x_;
+      next_x_->prev_x_ = prev_x_;
+    }
+    if (prev_z_ != nullptr && next_z_ != nullptr) {
+      prev_z_->next_z_ = next_z_;
+      next_z_->prev_z_ = prev_z_;
+    }
+  }
 
   RangeListNode(const RangeListNode&) = delete;
   auto operator=(const RangeListNode&) -> RangeListNode& = delete;
