@@ -341,25 +341,6 @@ auto CountPositionUpdates(const std::vector<Captured>& sent) -> int {
   return n;
 }
 
-// Run N full Update() ticks, publishing a fresh volatile frame each tick.
-// Returns a per-tick vector of position-update counts received.
-auto RunTicks(Witness& witness, CellEntity& peer, int ticks, uint32_t budget = 65536)
-    -> std::vector<int> {
-  std::vector<int> counts;
-  uint64_t seq = 0;
-  for (int i = 0; i < ticks; ++i) {
-    CellEntity::ReplicationFrame f;
-    f.volatile_seq = ++seq;
-    peer.PublishReplicationFrame(f, {}, {});
-    // Clear the Enter envelope emitted on tick 0.
-    std::vector<Captured> tick_sent;
-    // Can't intercept per-tick easily via the stored callback; use AoIMap
-    // to assert lod_next_update_tick instead — see below tests.
-    witness.Update(budget);
-  }
-  return counts;
-}
-
 // Close peers (< 50 m) must be updated every tick.
 TEST_F(WitnessReplicationTest, LodCloseUpdatesEveryTick) {
   Space space(1);

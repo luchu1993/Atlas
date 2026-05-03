@@ -129,7 +129,7 @@ TEST_F(WitnessEnterPendingUafTest, SendCallbackDestroysAnotherPeer) {
   std::vector<EntityID> peer_ids;
   for (int i = 0; i < 8; ++i) {
     const EntityID id = 200 + i;
-    MakeEntity(id, {1.f + i * 0.5f, 0, 0.5f});
+    MakeEntity(id, {1.f + static_cast<float>(i) * 0.5f, 0, 0.5f});
     peer_ids.push_back(id);
   }
 
