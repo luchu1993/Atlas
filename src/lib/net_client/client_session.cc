@@ -100,6 +100,7 @@ auto ClientSession::StartLogin(std::string_view loginapp_host, uint16_t loginapp
   ::atlas::login::LoginRequest req;
   req.username = std::string(username);
   req.password_hash = std::string(password_hash);
+  req.entity_def_digest = entity_def_digest_;
   (void)loginapp_channel_->SendMessage(req);
 
   login_callback_ = callback;
@@ -358,6 +359,11 @@ auto ClientSession::FillStats(AtlasNetStats* out) const -> int32_t {
   if (!out) return ATLAS_NET_ERR_INVAL;
   std::memset(out, 0, sizeof(*out));
   return ATLAS_NET_OK;
+}
+
+void ClientSession::SetEntityDefDigest(const uint8_t* data, int32_t len) {
+  if (!data || len != static_cast<int32_t>(entity_def_digest_.size())) return;
+  std::memcpy(entity_def_digest_.data(), data, entity_def_digest_.size());
 }
 
 void ClientSession::CloseLoginAppChannel() {

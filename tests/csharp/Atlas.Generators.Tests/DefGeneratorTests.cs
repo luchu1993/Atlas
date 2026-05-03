@@ -144,7 +144,12 @@ namespace Atlas.Client
 
         var generator = new DefGenerator();
         var defText = SourceText.From(defXml, System.Text.Encoding.UTF8);
-        var additionalTexts = new AdditionalText[] { new InMemoryAdditionalText("Avatar.def", defText) };
+        var manifestText = SourceText.From(TestManifest.Derive(defXml), System.Text.Encoding.UTF8);
+        var additionalTexts = new AdditionalText[]
+        {
+            new InMemoryAdditionalText("Avatar.def", defText),
+            new InMemoryAdditionalText("entity_ids.xml", manifestText),
+        };
 
         var driver = CSharpGeneratorDriver.Create(
             generators: new[] { generator.AsSourceGenerator() },

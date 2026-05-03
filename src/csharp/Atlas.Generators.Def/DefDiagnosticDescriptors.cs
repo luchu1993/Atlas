@@ -140,6 +140,62 @@ internal static class DefDiagnosticDescriptors
         DiagnosticSeverity.Error,
         isEnabledByDefault: true);
 
+    public static readonly DiagnosticDescriptor DEF019 = new(
+        "ATLAS_DEF019",
+        "entity_ids.xml manifest missing",
+        "Entity '{0}' cannot resolve a type_id; include entity_ids.xml in <AdditionalFiles> alongside the .def files",
+        "Atlas.Def",
+        DiagnosticSeverity.Error,
+        isEnabledByDefault: true);
+
+    public static readonly DiagnosticDescriptor DEF020 = new(
+        "ATLAS_DEF020",
+        "Manifest entry id out of range",
+        "Manifest entry '{0}' id={1} is out of range; must be in [1, 16383]",
+        "Atlas.Def",
+        DiagnosticSeverity.Error,
+        isEnabledByDefault: true);
+
+    public static readonly DiagnosticDescriptor DEF021 = new(
+        "ATLAS_DEF021",
+        "Duplicate manifest id",
+        "Manifest entry '{0}' id={1} duplicates entry '{2}'",
+        "Atlas.Def",
+        DiagnosticSeverity.Error,
+        isEnabledByDefault: true);
+
+    public static readonly DiagnosticDescriptor DEF023 = new(
+        "ATLAS_DEF023",
+        "Entity uses deprecated manifest entry",
+        "Entity '{0}' is marked deprecated=\"true\" in {1}; rename the .def or restore the manifest entry",
+        "Atlas.Def",
+        DiagnosticSeverity.Error,
+        isEnabledByDefault: true);
+
+    public static readonly DiagnosticDescriptor DEF024 = new(
+        "ATLAS_DEF024",
+        "Entity missing from manifest",
+        "Entity '{0}' is not listed in {1}; run `atlas_tool def add {0}` (or add an <entity name=\"{0}\" id=\"...\"/> entry by hand)",
+        "Atlas.Def",
+        DiagnosticSeverity.Error,
+        isEnabledByDefault: true);
+
+    public static readonly DiagnosticDescriptor DEF025 = new(
+        "ATLAS_DEF025",
+        "Malformed entity_ids manifest",
+        "Failed to parse manifest {0}: {1}",
+        "Atlas.Def",
+        DiagnosticSeverity.Error,
+        isEnabledByDefault: true);
+
+    public static readonly DiagnosticDescriptor DEF026 = new(
+        "ATLAS_DEF026",
+        "Duplicate manifest entry name",
+        "Entity name '{0}' is listed more than once in {1}",
+        "Atlas.Def",
+        DiagnosticSeverity.Error,
+        isEnabledByDefault: true);
+
     public static readonly DiagnosticDescriptor RPC001 = new(
         "ATLAS_RPC001",
         "RpcReply<T>.Value accessed without checking IsOk",

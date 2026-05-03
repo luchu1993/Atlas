@@ -75,7 +75,7 @@ class ClientApp {
   auto Authenticate(const Address& baseapp_addr, const SessionKey& session_key) -> bool;
 
   // RPC handling — dispatch incoming messages from BaseApp
-  void OnRpcMessage(uint32_t rpc_id, const std::byte* payload, int32_t len);
+  void OnRpcMessage(uint32_t rpc_id, uint64_t trace_id, const std::byte* payload, int32_t len);
 
   Config config_;
   EventDispatcher dispatcher_{"client"};

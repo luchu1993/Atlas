@@ -269,6 +269,14 @@ class CellApp : public EntityApp {
   // BaseApp's L1/L2 validation.
   std::unordered_set<Address> trusted_baseapps_;
 
+  // Per-source caller-spoofing audit: BaseApp must stamp source_entity_id
+  // from the authenticated channel binding, so source != target on an
+  // OWN_CLIENT method indicates either a desync or a forged/exploited
+  // path. Aggregated by source so a single misbehaving client surfaces
+  // even when target jitters across nearby entities.
+  std::unordered_map<EntityID, uint64_t> caller_spoof_violations_;
+  uint64_t caller_spoof_violations_total_{0};
+
  public:
   // Test-only - production callers don't touch this; the machined
   // Subscribe callback in Init is the only writer.

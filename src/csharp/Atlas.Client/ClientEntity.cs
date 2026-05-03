@@ -159,12 +159,14 @@ public abstract class ClientEntity
 
     protected internal void SendCellRpc(int rpcId, ReadOnlySpan<byte> payload)
     {
-        ClientHost.SendCellRpc(EntityId, (uint)rpcId, payload);
+        ClientHost.SendCellRpc(EntityId, (uint)rpcId, payload,
+                               (ulong)Atlas.Diagnostics.TraceContext.Current);
     }
 
     protected internal void SendBaseRpc(int rpcId, ReadOnlySpan<byte> payload)
     {
-        ClientHost.SendBaseRpc(EntityId, (uint)rpcId, payload);
+        ClientHost.SendBaseRpc(EntityId, (uint)rpcId, payload,
+                               (ulong)Atlas.Diagnostics.TraceContext.Current);
     }
 
     // =========================================================================

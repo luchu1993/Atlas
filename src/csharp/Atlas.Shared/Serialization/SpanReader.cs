@@ -30,6 +30,10 @@ public ref struct SpanReader
 
     public bool ReadBool() => ReadByte() != 0;
 
+    public sbyte ReadInt8() => (sbyte)ReadByte();
+
+    public byte ReadUInt8() => ReadByte();
+
     public short ReadInt16()
     {
         CheckRemaining(2);

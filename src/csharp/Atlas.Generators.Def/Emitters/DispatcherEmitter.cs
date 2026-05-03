@@ -28,7 +28,12 @@ internal static class DispatcherEmitter
         sb.AppendLine("using System.Collections.Generic;");
         sb.AppendLine("using Atlas.Coro;");
         sb.AppendLine("using Atlas.Coro.Rpc;");
-        sb.AppendLine("using Atlas.Runtime.Coro;");
+        // EntityRpcReplyHelpers lives in Atlas.Runtime (server only). Client
+        // dispatchers never call SendReplyOnComplete (HasReply paths are
+        // gated on serverSide), so we leave the using off the client emit
+        // — Atlas.Client does not reference Atlas.Runtime.
+        if (ctx != ProcessContext.Client)
+            sb.AppendLine("using Atlas.Runtime.Coro;");
         sb.AppendLine("using Atlas.Serialization;");
         // Lets struct args (RPC params with TypeRef.Kind==Struct) resolve
         // unqualified — StructEmitter places them in Atlas.Def.
@@ -76,9 +81,8 @@ internal static class DispatcherEmitter
             }
         }
 
-        // Module initializer to register dispatchers
+        // Called by DefBootstrap after struct/entity/factory registration.
         sb.AppendLine();
-        sb.AppendLine("    [System.Runtime.CompilerServices.ModuleInitializer]");
         sb.AppendLine("    internal static void RegisterDefDispatchers()");
         sb.AppendLine("    {");
         if (ctx == ProcessContext.Client)
@@ -137,10 +141,14 @@ internal static class DispatcherEmitter
             sb.AppendLine($"                case {fullName} t: Dispatch_{className}_{dirName}(t, {forwardArgs}); break;");
             emittedEntityCases++;
         }
+        sb.AppendLine("                default:");
         if (emittedEntityCases == 0)
-            sb.AppendLine("                default: _ = rpcId; _ = reader; break;");
-        else
-            sb.AppendLine("                default: break;");
+        {
+            sb.AppendLine("                    _ = reader;");
+        }
+        EmitUnknownRpcWarn(sb, "                    ", $"{dirName} for entity",
+                           "target?.GetType().Name ?? \"<null>\"", ctx);
+        sb.AppendLine("                    break;");
         sb.AppendLine("            }");
         sb.AppendLine("            return;");
         sb.AppendLine("        }");
@@ -161,7 +169,10 @@ internal static class DispatcherEmitter
                 var fq = $"global::{ComponentEmitter.ComponentNamespace}.{c.TypeName}";
                 sb.AppendLine($"            case {fq} cc: Dispatch_{c.TypeName}_{dirName}(cc, {forwardArgs}); break;");
             }
-            sb.AppendLine("            default: break;");
+            sb.AppendLine("            default:");
+            EmitUnknownRpcWarn(sb, "                ", $"{dirName} for component",
+                               "comp?.GetType().Name ?? \"<null>\"", ctx);
+            sb.AppendLine("                break;");
             sb.AppendLine("        }");
         }
         else
@@ -170,6 +181,19 @@ internal static class DispatcherEmitter
             if (serverSide) sb.AppendLine("        _ = replyChannel;");
         }
         sb.AppendLine("    }");
+    }
+
+    // Emits a context-appropriate warning for an unknown rpcId — Atlas.Log on
+    // the server, Console.Error on the client (matching ClientCallbacks).
+    private static void EmitUnknownRpcWarn(StringBuilder sb, string indent, string what,
+                                           string typeNameExpr, ProcessContext ctx)
+    {
+        var msg = $"\"DefRpcDispatcher: unknown {what} type \" + ({typeNameExpr}) + " +
+                  $"\" rpcId=0x\" + rpcId.ToString(\"X8\")";
+        if (ctx != ProcessContext.Client)
+            sb.AppendLine($"{indent}Atlas.Log.Warning({msg});");
+        else
+            sb.AppendLine($"{indent}System.Console.Error.WriteLine({msg});");
     }
 
     private static void EmitEntityDispatch(StringBuilder sb, string fullName, string className,
@@ -200,29 +224,37 @@ internal static class DispatcherEmitter
         sb.AppendLine("        switch (rpcId)");
         sb.AppendLine("        {");
 
-        var sorted = methods.OrderBy(m => m.Name).ToList();
-        for (int i = 0; i < sorted.Count; i++)
+        for (int i = 0; i < methods.Count; i++)
         {
-            var method = sorted[i];
+            var method = methods[i];
             int baseId = RpcIdEncoder.Encode(slot: 0, direction, typeIndex, i + 1);
             if (serverSide && method.HasReply)
                 EmitReplyCase(sb, method, baseId, "target", className);
             else
-                EmitFireAndForgetCase(sb, method, baseId);
+                EmitFireAndForgetCase(sb, method, baseId, className);
         }
 
+        sb.AppendLine("            default:");
+        EmitUnknownRpcWarn(sb, "                ", $"{dirName} method on {className} entity",
+                           $"\"{className}\"", ctx);
+        sb.AppendLine("                break;");
         sb.AppendLine("        }");
         sb.AppendLine("    }");
     }
 
-    private static void EmitFireAndForgetCase(StringBuilder sb, MethodDefModel method, int id)
+    private static void EmitFireAndForgetCase(StringBuilder sb, MethodDefModel method, int id,
+                                               string typeName)
     {
         sb.AppendLine($"            case 0x{id:X6}:");
         sb.AppendLine("            {");
+        sb.AppendLine("                try");
+        sb.AppendLine("                {");
         var argLocals = new List<string>(method.Args.Count);
         foreach (var arg in method.Args)
-            argLocals.Add(RpcArgCodec.EmitRead(sb, arg, "reader", "                "));
-        sb.AppendLine($"                target.{method.Name}({string.Join(", ", argLocals)});");
+            argLocals.Add(RpcArgCodec.EmitRead(sb, arg, "reader", "                    "));
+        sb.AppendLine($"                    target.{method.Name}({string.Join(", ", argLocals)});");
+        sb.AppendLine("                }");
+        EmitDispatchCatch(sb, typeName, method.Name);
         sb.AppendLine("                break;");
         sb.AppendLine("            }");
     }
@@ -233,15 +265,30 @@ internal static class DispatcherEmitter
         var idWithBit = unchecked((uint)baseId) | RpcIdEncoder.kReplyBit;
         sb.AppendLine($"            case unchecked((int)0x{idWithBit:X8}):");
         sb.AppendLine("            {");
-        sb.AppendLine("                uint requestId = reader.ReadUInt32();");
+        sb.AppendLine("                try");
+        sb.AppendLine("                {");
+        sb.AppendLine("                    uint requestId = reader.ReadUInt32();");
         var argLocals = new List<string>(method.Args.Count);
         foreach (var arg in method.Args)
-            argLocals.Add(RpcArgCodec.EmitRead(sb, arg, "reader", "                "));
-        sb.AppendLine($"                var __task = {targetExpr}.{method.Name}({string.Join(", ", argLocals)});");
-        sb.AppendLine($"                EntityRpcReplyHelpers.SendReplyOnComplete(__task, replyChannel, requestId,");
-        sb.AppendLine($"                    s_{typeName}_{method.Name}ReplySerializer);");
+            argLocals.Add(RpcArgCodec.EmitRead(sb, arg, "reader", "                    "));
+        sb.AppendLine($"                    var __task = {targetExpr}.{method.Name}({string.Join(", ", argLocals)});");
+        sb.AppendLine($"                    EntityRpcReplyHelpers.SendReplyOnComplete(__task, replyChannel, requestId,");
+        sb.AppendLine($"                        s_{typeName}_{method.Name}ReplySerializer);");
+        sb.AppendLine("                }");
+        EmitDispatchCatch(sb, typeName, method.Name);
         sb.AppendLine("                break;");
         sb.AppendLine("            }");
+    }
+
+    // Wraps deserialization + invocation so a malformed payload surfaces with
+    // entity / method / rpcId context, instead of a bare "underflow" stack.
+    private static void EmitDispatchCatch(StringBuilder sb, string typeName, string methodName)
+    {
+        sb.AppendLine("                catch (global::Atlas.Rpc.RpcDispatchException) { throw; }");
+        sb.AppendLine("                catch (System.Exception __ex)");
+        sb.AppendLine("                {");
+        sb.AppendLine($"                    throw new global::Atlas.Rpc.RpcDispatchException(\"{typeName}\", \"{methodName}\", unchecked((uint)rpcId), __ex);");
+        sb.AppendLine("                }");
     }
 
     private static void EmitReplySerializerField(StringBuilder sb, MethodDefModel method,
@@ -288,34 +335,40 @@ internal static class DispatcherEmitter
         sb.AppendLine("        switch (methodIdx)");
         sb.AppendLine("        {");
 
-        var sorted = methods.OrderBy(m => m.Name).ToList();
-        for (int i = 0; i < sorted.Count; i++)
+        for (int i = 0; i < methods.Count; i++)
         {
-            var method = sorted[i];
+            var method = methods[i];
             sb.AppendLine($"            case {i + 1}:");
             sb.AppendLine("            {");
+            sb.AppendLine("                try");
+            sb.AppendLine("                {");
             if (serverSide && method.HasReply)
             {
-                sb.AppendLine("                uint requestId = reader.ReadUInt32();");
+                sb.AppendLine("                    uint requestId = reader.ReadUInt32();");
                 var argLocals = new List<string>(method.Args.Count);
                 foreach (var arg in method.Args)
-                    argLocals.Add(RpcArgCodec.EmitRead(sb, arg, "reader", "                "));
-                sb.AppendLine($"                var __task = target.{method.Name}({string.Join(", ", argLocals)});");
-                sb.AppendLine($"                EntityRpcReplyHelpers.SendReplyOnComplete(__task, replyChannel, requestId,");
-                sb.AppendLine($"                    s_{componentTypeName}_{method.Name}ReplySerializer);");
-                sb.AppendLine("                break;");
+                    argLocals.Add(RpcArgCodec.EmitRead(sb, arg, "reader", "                    "));
+                sb.AppendLine($"                    var __task = target.{method.Name}({string.Join(", ", argLocals)});");
+                sb.AppendLine($"                    EntityRpcReplyHelpers.SendReplyOnComplete(__task, replyChannel, requestId,");
+                sb.AppendLine($"                        s_{componentTypeName}_{method.Name}ReplySerializer);");
             }
             else
             {
                 var argLocals = new List<string>(method.Args.Count);
                 foreach (var arg in method.Args)
-                    argLocals.Add(RpcArgCodec.EmitRead(sb, arg, "reader", "                "));
-                sb.AppendLine($"                target.{method.Name}({string.Join(", ", argLocals)});");
-                sb.AppendLine("                break;");
+                    argLocals.Add(RpcArgCodec.EmitRead(sb, arg, "reader", "                    "));
+                sb.AppendLine($"                    target.{method.Name}({string.Join(", ", argLocals)});");
             }
+            sb.AppendLine("                }");
+            EmitDispatchCatch(sb, componentTypeName, method.Name);
+            sb.AppendLine("                break;");
             sb.AppendLine("            }");
         }
 
+        sb.AppendLine("            default:");
+        EmitUnknownRpcWarn(sb, "                ", $"{dirName} method on {componentTypeName} component",
+                           $"\"{componentTypeName}\"", ctx);
+        sb.AppendLine("                break;");
         sb.AppendLine("        }");
         sb.AppendLine("    }");
     }

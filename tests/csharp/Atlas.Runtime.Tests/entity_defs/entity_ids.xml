@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Test-only entity id manifest. Same rules as the production manifest at
+  entity_defs/entity_ids.xml. These ids are scoped to the unit-test compilation
+  and don't need to coordinate with production ids.
+-->
+<entity_ids>
+  <entity name="AvatarWithAbility"             id="1"/>
+  <entity name="ComponentEntity"               id="2"/>
+  <entity name="DictSyncTestEntity"            id="3"/>
+  <entity name="DirtyTestEntity"               id="4"/>
+  <entity name="FactoryTestEntity"             id="5"/>
+  <entity name="FieldStructTestEntity"         id="6"/>
+  <entity name="ListSyncTestEntity"            id="7"/>
+  <entity name="MonsterWithAbility"            id="8"/>
+  <entity name="NestedListTestEntity"          id="9"/>
+  <entity name="ReplicationFrameEntity"        id="10"/>
+  <entity name="StructSyncTestEntity"          id="11"/>
+  <entity name="StructWithContainerTestEntity" id="12"/>
+</entity_ids>

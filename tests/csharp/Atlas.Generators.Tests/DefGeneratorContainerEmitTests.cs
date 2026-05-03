@@ -127,9 +127,11 @@ namespace Atlas.Client
             compilation = compilation.AddReferences(MetadataReference.CreateFromFile(systemRuntime));
 
         var defText = SourceText.From(defXml, Encoding.UTF8);
+        var manifestText = SourceText.From(TestManifest.Derive(defXml), Encoding.UTF8);
         var additionalTexts = new AdditionalText[]
         {
-            new InMemoryAdditionalText("Avatar.def", defText)
+            new InMemoryAdditionalText("Avatar.def", defText),
+            new InMemoryAdditionalText("entity_ids.xml", manifestText),
         };
 
         var driver = CSharpGeneratorDriver.Create(
@@ -186,17 +188,24 @@ public partial class Avatar : ServerEntity
         var code = FindGenerated(result, "DefStructRegistry");
         Assert.NotNull(code);
 
-        // Each declared struct gets its own Register_<Name> method and a
-        // corresponding call from the module initializer.
+        // Each declared struct gets its own Register_<Name> method and the
+        // bootstrap drives them via RegisterAllStructs.
         Assert.Contains("Register_ItemStack", code);
         Assert.Contains("Register_SkillEntry", code);
-        Assert.Contains("ModuleInitializer", code);
         Assert.Contains("RegisterAllStructs", code);
 
         // Both register methods must feed the bridge; missing this means
         // the struct table on the native side stays empty and any
         // RegisterEntityType that references a struct_id will reject.
         Assert.Contains("EntityRegistryBridge.RegisterStruct", code);
+
+        // The single ModuleInitializer lives on DefBootstrap and chains all
+        // register steps in fixed struct → entity → factory → dispatcher
+        // order; the per-emitter ModuleInitializers are intentionally gone.
+        var bootstrap = FindGenerated(result, "DefBootstrap");
+        Assert.NotNull(bootstrap);
+        Assert.Contains("ModuleInitializer", bootstrap);
+        Assert.Contains("DefStructRegistry.RegisterAllStructs()", bootstrap);
     }
 
     [Fact]

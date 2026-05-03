@@ -343,17 +343,20 @@ public abstract class ServerEntity
     protected internal void SendClientRpc(int rpcId, RpcTarget target,
         ReadOnlySpan<byte> payload)
     {
-        NativeApi.SendClientRpc(EntityId, (uint)rpcId, target, payload);
+        NativeApi.SendClientRpc(EntityId, (uint)rpcId, target, payload,
+                                (ulong)Atlas.Diagnostics.TraceContext.Current);
     }
 
     protected internal void SendCellRpc(int rpcId, ReadOnlySpan<byte> payload)
     {
-        NativeApi.SendCellRpc(EntityId, (uint)rpcId, payload);
+        NativeApi.SendCellRpc(EntityId, (uint)rpcId, payload,
+                              (ulong)Atlas.Diagnostics.TraceContext.Current);
     }
 
     protected internal void SendBaseRpc(int rpcId, ReadOnlySpan<byte> payload)
     {
-        NativeApi.SendBaseRpc(EntityId, (uint)rpcId, payload);
+        NativeApi.SendBaseRpc(EntityId, (uint)rpcId, payload,
+                              (ulong)Atlas.Diagnostics.TraceContext.Current);
     }
 
     /// <summary>

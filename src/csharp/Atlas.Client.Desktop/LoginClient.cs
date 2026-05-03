@@ -22,6 +22,12 @@ public sealed unsafe class LoginClient : IDisposable
     {
         _ctx = AtlasNetNative.Create();
         _selfHandle = GCHandle.Alloc(this, GCHandleType.Normal);
+        var digest = ClientHost.EntityDefDigest;
+        if (digest is not null)
+        {
+            fixed (byte* ptr = digest)
+                AtlasNetNative.AtlasNetSetEntityDefDigest(_ctx, ptr, digest.Length);
+        }
     }
 
     public int Poll()

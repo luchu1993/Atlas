@@ -36,12 +36,13 @@ uint8_t BaseNativeProvider::GetProcessPrefix() {
 
 void BaseNativeProvider::SendClientRpc(uint32_t entity_id, uint32_t /*rpc_id*/,
                                        RpcTarget /*target*/, const std::byte* /*payload*/,
-                                       int32_t /*len*/) {
+                                       int32_t /*len*/, uint64_t /*trace_id*/) {
   ATLAS_LOG_ERROR("send_client_rpc() not supported on this process type (entity_id={})", entity_id);
 }
 
 void BaseNativeProvider::SendCellRpc(uint32_t entity_id, uint32_t /*rpc_id*/,
-                                     const std::byte* /*payload*/, int32_t /*len*/) {
+                                     const std::byte* /*payload*/, int32_t /*len*/,
+                                     uint64_t /*trace_id*/) {
   ATLAS_LOG_ERROR(
       "send_cell_rpc() not supported on this process type "
       "(entity_id={})",
@@ -49,7 +50,8 @@ void BaseNativeProvider::SendCellRpc(uint32_t entity_id, uint32_t /*rpc_id*/,
 }
 
 void BaseNativeProvider::SendBaseRpc(uint32_t entity_id, uint32_t /*rpc_id*/,
-                                     const std::byte* /*payload*/, int32_t /*len*/) {
+                                     const std::byte* /*payload*/, int32_t /*len*/,
+                                     uint64_t /*trace_id*/) {
   ATLAS_LOG_ERROR(
       "send_base_rpc() not supported on this process type "
       "(entity_id={})",
@@ -66,6 +68,10 @@ void BaseNativeProvider::UnregisterAllEntityTypes() {
 
 void BaseNativeProvider::RegisterStruct(const std::byte* data, int32_t len) {
   EntityDefRegistry::Instance().RegisterStruct(data, len);
+}
+
+void BaseNativeProvider::SetEntityDefDigest(const std::byte* data, int32_t len) {
+  EntityDefRegistry::Instance().SetDigest(data, len);
 }
 
 void BaseNativeProvider::WriteToDb(uint32_t entity_id, const std::byte* /*entity_data*/,

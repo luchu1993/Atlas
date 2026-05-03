@@ -48,10 +48,10 @@ public class ComponentRpcTests
         var avatar = new AvatarWithAbility();
         var ability = avatar.AddComponent<AvatarAbility>();
 
-        // Methods sort alphabetically: ApplyKv(1), ApplyTags(2), Echo(3),
-        // EquipTestWeapon(4). slot=1 is AvatarAbility, direction=Base(0x03).
+        // .def declaration order: Echo(1), ApplyTags(2), EquipTestWeapon(3),
+        // ApplyKv(4). slot=1 is AvatarAbility, direction=Base(0x03).
         ushort entityTypeId = avatar.TypeId;
-        int rpcId = (1 << 24) | (0x03 << 22) | (entityTypeId << 8) | 3;
+        int rpcId = (1 << 24) | (0x03 << 22) | (entityTypeId << 8) | 1;
 
         // Build payload: [u32 seq][i64 ts]
         var w = new SpanWriter(64);
@@ -94,8 +94,8 @@ public class ComponentRpcTests
         // Reaches here without exceptions — Echo was never invoked.
     }
 
-    // Methods are sorted by name within each section: ApplyKv(1), ApplyTags(2),
-    // Echo(3), EquipTestWeapon(4). The base_methods section direction is 0x03.
+    // .def declaration order within base_methods: Echo(1), ApplyTags(2),
+    // EquipTestWeapon(3), ApplyKv(4). Direction is 0x03.
 
     [Fact]
     public void DispatchBaseRpc_ListArg_RoundTrips()
@@ -126,7 +126,7 @@ public class ComponentRpcTests
     {
         var avatar = new AvatarWithAbility();
         var ability = avatar.AddComponent<AvatarAbility>();
-        int rpcId = (1 << 24) | (0x03 << 22) | (avatar.TypeId << 8) | 1;  // ApplyKv
+        int rpcId = (1 << 24) | (0x03 << 22) | (avatar.TypeId << 8) | 4;  // ApplyKv
 
         var w = new SpanWriter(64);
         try
@@ -152,7 +152,7 @@ public class ComponentRpcTests
     {
         var avatar = new AvatarWithAbility();
         var ability = avatar.AddComponent<AvatarAbility>();
-        int rpcId = (1 << 24) | (0x03 << 22) | (avatar.TypeId << 8) | 4;  // EquipTestWeapon
+        int rpcId = (1 << 24) | (0x03 << 22) | (avatar.TypeId << 8) | 3;  // EquipTestWeapon
 
         var src = new Atlas.Def.TestWeapon { Id = 999, Sharpness = 50, Bound = true };
         var w = new SpanWriter(64);

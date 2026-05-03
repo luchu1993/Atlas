@@ -19,6 +19,7 @@
   </ItemGroup>
 
   <ItemGroup>
+    <AdditionalFiles Include="..\..\entity_defs\entity_ids.xml" />
     <AdditionalFiles Include="..\..\entity_defs\Avatar.def" />
     <AdditionalFiles Include="..\..\entity_defs\Account.def" />
   </ItemGroup>

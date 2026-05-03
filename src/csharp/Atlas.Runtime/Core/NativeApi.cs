@@ -43,40 +43,42 @@ internal static unsafe partial class NativeApi
     [LibraryImport(LibName, EntryPoint = "AtlasSendClientRpc")]
     private static partial void SendClientRpcNative(
         uint entityId, uint packedRpcId, byte target,
-        byte* payload, int payloadLen);
+        byte* payload, int payloadLen, ulong traceId);
 
     /// <summary>
     /// Send a client RPC. Direction is encoded in the top 2 bits of packedRpcId
     /// using the format: [direction:2 | typeIndex:14 | method:8].
     /// </summary>
     public static void SendClientRpc(uint entityId, uint packedRpcId, RpcTarget target,
-        ReadOnlySpan<byte> payload)
+        ReadOnlySpan<byte> payload, ulong traceId)
     {
         ThreadGuard.EnsureMainThread();
         fixed (byte* ptr = payload)
-            SendClientRpcNative(entityId, packedRpcId, (byte)target, ptr, payload.Length);
+            SendClientRpcNative(entityId, packedRpcId, (byte)target, ptr, payload.Length, traceId);
     }
 
     [LibraryImport(LibName, EntryPoint = "AtlasSendCellRpc")]
     private static partial void SendCellRpcNative(
-        uint entityId, uint rpcId, byte* payload, int payloadLen);
+        uint entityId, uint rpcId, byte* payload, int payloadLen, ulong traceId);
 
-    public static void SendCellRpc(uint entityId, uint rpcId, ReadOnlySpan<byte> payload)
+    public static void SendCellRpc(uint entityId, uint rpcId, ReadOnlySpan<byte> payload,
+                                   ulong traceId)
     {
         ThreadGuard.EnsureMainThread();
         fixed (byte* ptr = payload)
-            SendCellRpcNative(entityId, rpcId, ptr, payload.Length);
+            SendCellRpcNative(entityId, rpcId, ptr, payload.Length, traceId);
     }
 
     [LibraryImport(LibName, EntryPoint = "AtlasSendBaseRpc")]
     private static partial void SendBaseRpcNative(
-        uint entityId, uint rpcId, byte* payload, int payloadLen);
+        uint entityId, uint rpcId, byte* payload, int payloadLen, ulong traceId);
 
-    public static void SendBaseRpc(uint entityId, uint rpcId, ReadOnlySpan<byte> payload)
+    public static void SendBaseRpc(uint entityId, uint rpcId, ReadOnlySpan<byte> payload,
+                                   ulong traceId)
     {
         ThreadGuard.EnsureMainThread();
         fixed (byte* ptr = payload)
-            SendBaseRpcNative(entityId, rpcId, ptr, payload.Length);
+            SendBaseRpcNative(entityId, rpcId, ptr, payload.Length, traceId);
     }
 
     [LibraryImport(LibName, EntryPoint = "AtlasRegisterEntityType")]
@@ -100,6 +102,16 @@ internal static unsafe partial class NativeApi
         ThreadGuard.EnsureMainThread();
         fixed (byte* ptr = data)
             RegisterStructNative(ptr, data.Length);
+    }
+
+    [LibraryImport(LibName, EntryPoint = "AtlasSetEntityDefDigest")]
+    private static partial void SetEntityDefDigestNative(byte* data, int len);
+
+    public static void SetEntityDefDigest(ReadOnlySpan<byte> data)
+    {
+        ThreadGuard.EnsureMainThread();
+        fixed (byte* ptr = data)
+            SetEntityDefDigestNative(ptr, data.Length);
     }
 
     [LibraryImport(LibName, EntryPoint = "AtlasUnregisterAllEntityTypes")]

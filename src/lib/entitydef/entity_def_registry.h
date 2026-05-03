@@ -16,6 +16,10 @@
 
 namespace atlas {
 
+// Per-call RPC payload cap; legitimate args fit well under this, larger
+// payloads are dropped at message boundary before reaching C# dispatch.
+inline constexpr size_t kMaxRpcPayloadBytes = 64 * 1024;
+
 // Lookup results point into vectors mutated by registration; cache ids or names,
 // not returned pointers, across registry updates.
 class EntityDefRegistry {
@@ -90,6 +94,15 @@ class EntityDefRegistry {
 
   [[nodiscard]] auto PersistentPropertiesDigest() const -> std::array<uint8_t, 16>;
 
+  // 32-byte SHA-256 of the entity-def surface, pushed in by C# at bootstrap.
+  // All-zero until C# DefBootstrap calls SetDigest; BaseApp uses this to
+  // reject mismatched client builds at the login handshake.
+  void SetDigest(const std::byte* data, int32_t len);
+  [[nodiscard]] auto Digest() const -> std::span<const uint8_t> {
+    return std::span<const uint8_t>(entity_def_digest_.data(), entity_def_digest_.size());
+  }
+  static constexpr size_t kDigestSize = 32;
+
   void clear();
 
   EntityDefRegistry() = default;
@@ -106,6 +119,8 @@ class EntityDefRegistry {
   std::vector<ComponentDescriptor> components;
   std::unordered_map<uint16_t, size_t> component_id_index;
   std::unordered_map<std::string, size_t> component_name_index;
+
+  std::array<uint8_t, kDigestSize> entity_def_digest_{};
 };
 
 }  // namespace atlas

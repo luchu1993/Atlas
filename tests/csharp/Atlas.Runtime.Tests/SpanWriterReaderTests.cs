@@ -28,6 +28,33 @@ public class SpanWriterReaderTests
         writer.Dispose();
     }
 
+    [Theory]
+    [InlineData((sbyte)0)]
+    [InlineData((sbyte)127)]
+    [InlineData((sbyte)-128)]
+    [InlineData((sbyte)-1)]
+    public void WriteReadInt8_RoundTrip(sbyte value)
+    {
+        var writer = new SpanWriter(64);
+        writer.WriteInt8(value);
+        var reader = new SpanReader(writer.WrittenSpan);
+        Assert.Equal(value, reader.ReadInt8());
+        writer.Dispose();
+    }
+
+    [Theory]
+    [InlineData((byte)0)]
+    [InlineData((byte)128)]
+    [InlineData((byte)255)]
+    public void WriteReadUInt8_RoundTrip(byte value)
+    {
+        var writer = new SpanWriter(64);
+        writer.WriteUInt8(value);
+        var reader = new SpanReader(writer.WrittenSpan);
+        Assert.Equal(value, reader.ReadUInt8());
+        writer.Dispose();
+    }
+
     [Fact]
     public void WriteReadInt32()
     {

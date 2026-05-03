@@ -75,6 +75,13 @@ ATLAS_NET_API int32_t AtlasNetLogin(AtlasNetContext* ctx, const char* loginapp_h
                                     const char* password_hash, AtlasLoginResultFn callback,
                                     void* user_data);
 
+// Set the 32-byte SHA-256 of the client's entity-def surface; stamped into
+// every LoginRequest so BaseApp can reject mismatched .def builds. Caller
+// passes Atlas.Rpc.EntityDefDigest.Bytes once at startup; safe to call
+// repeatedly. `len` must be 32 or the call is a no-op.
+ATLAS_NET_API int32_t AtlasNetSetEntityDefDigest(AtlasNetContext* ctx, const uint8_t* data,
+                                                 int32_t len);
+
 // SessionKey + BaseApp address come from cached state — never crosses FFI.
 ATLAS_NET_API int32_t AtlasNetAuthenticate(AtlasNetContext* ctx, AtlasAuthResultFn callback,
                                            void* user_data);

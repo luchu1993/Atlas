@@ -219,12 +219,19 @@ bool EntityDefRegistry::RegisterType(const std::byte* data, int32_t len) {
                       desc.name);
   }
 
-  // Check for duplicate registration
-  if (name_index.count(desc.name) > 0) {
-    ATLAS_LOG_WARNING("register_type: duplicate type name '{}', replacing", desc.name);
+  // Hard guard: cross-assembly id/name collision can corrupt persistence
+  // and routing — fail loud instead of silently overwriting the prior entry.
+  if (auto it = name_index.find(desc.name); it != name_index.end()) {
+    auto msg = std::format("entity '{}' already registered (prev id={}); cross-assembly conflict",
+                           desc.name, types[it->second].type_id);
+    DefaultAssertHandler("EntityDefRegistry::RegisterType: duplicate name", msg,
+                         std::source_location::current());
   }
-  if (id_index.count(desc.type_id) > 0) {
-    ATLAS_LOG_WARNING("register_type: duplicate type_id {}, replacing", desc.type_id);
+  if (auto it = id_index.find(desc.type_id); it != id_index.end()) {
+    auto msg = std::format("type_id {} already registered (prev name='{}', new name='{}')",
+                           desc.type_id, types[it->second].name, desc.name);
+    DefaultAssertHandler("EntityDefRegistry::RegisterType: duplicate id", msg,
+                         std::source_location::current());
   }
 
   // Store
@@ -322,7 +329,16 @@ void EntityDefRegistry::clear() {
   components.clear();
   component_id_index.clear();
   component_name_index.clear();
+  entity_def_digest_.fill(0);
   ATLAS_LOG_INFO("EntityDefRegistry cleared");
+}
+
+void EntityDefRegistry::SetDigest(const std::byte* data, int32_t len) {
+  if (data == nullptr || len != static_cast<int32_t>(kDigestSize)) {
+    ATLAS_LOG_ERROR("SetDigest: expected {} bytes, got {}", kDigestSize, len);
+    return;
+  }
+  std::memcpy(entity_def_digest_.data(), data, kDigestSize);
 }
 
 namespace {

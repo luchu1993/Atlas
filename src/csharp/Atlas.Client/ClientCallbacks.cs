@@ -56,14 +56,11 @@ public static class ClientCallbacks
     // host-specific assembly and Atlas.Client keeps a runtime-agnostic ABI.
     // =========================================================================
 
-    /// <summary>
-    /// Dispatch an incoming ClientRpc to the current entity. The host app
-    /// resolves the native-side pointer / length into a ReadOnlySpan before
-    /// calling through.
-    /// </summary>
-    public static void DispatchRpc(uint entityId, uint rpcId, ReadOnlySpan<byte> payload)
+    public static void DispatchRpc(uint entityId, uint rpcId, ulong traceId,
+                                   ReadOnlySpan<byte> payload)
     {
         using var _ = Profiler.ZoneN(ProfilerNames.ClientDispatchRpc);
+        using var __trace = Atlas.Diagnostics.TraceContext.BeginInbound((long)traceId);
         try
         {
             var entity = s_entityMgr.Get(entityId);

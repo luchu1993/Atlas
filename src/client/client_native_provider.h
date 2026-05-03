@@ -14,7 +14,7 @@ class ClientApp;
 // ============================================================================
 
 using ClientDispatchRpcFn = void (*)(uint32_t entity_id, uint32_t rpc_id, const uint8_t* payload,
-                                     int32_t len);
+                                     int32_t len, uint64_t trace_id);
 using ClientCreateEntityFn = void (*)(uint32_t entity_id, uint16_t type_id);
 using ClientDestroyEntityFn = void (*)(uint32_t entity_id);
 
@@ -37,10 +37,10 @@ class ClientNativeProvider : public BaseNativeProvider {
   uint8_t GetProcessPrefix() override;
 
   // Client sends exposed RPCs to server via BaseApp
-  void SendBaseRpc(uint32_t entity_id, uint32_t rpc_id, const std::byte* payload,
-                   int32_t len) override;
-  void SendCellRpc(uint32_t entity_id, uint32_t rpc_id, const std::byte* payload,
-                   int32_t len) override;
+  void SendBaseRpc(uint32_t entity_id, uint32_t rpc_id, const std::byte* payload, int32_t len,
+                   uint64_t trace_id) override;
+  void SendCellRpc(uint32_t entity_id, uint32_t rpc_id, const std::byte* payload, int32_t len,
+                   uint64_t trace_id) override;
 
   // Client telemetry: periodic gap-count report to BaseApp.
   void ReportClientEventSeqGap(uint32_t entity_id, uint32_t gap_delta) override;

@@ -28,11 +28,9 @@ internal static class StructRegistryEmitter
         // without IVT plumbing.
         sb.AppendLine("public static class DefStructRegistry");
         sb.AppendLine("{");
-        // Priority ensures RegisterAllStructs fires before
-        // DefEntityTypeRegistry.RegisterAll; entity descriptors that
-        // reference a struct by id would otherwise find an empty struct
-        // table on RegisterType.
-        sb.AppendLine("    [System.Runtime.CompilerServices.ModuleInitializer]");
+        // Order is enforced by DefBootstrap (structs → entities → factory →
+        // dispatcher), not by [ModuleInitializer] which has no ordering
+        // guarantee across emitters within the same assembly.
         sb.AppendLine("    internal static void RegisterAllStructs()");
         sb.AppendLine("    {");
         sb.AppendLine("        try");

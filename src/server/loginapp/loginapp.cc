@@ -329,6 +329,7 @@ auto LoginApp::HandleLoginCoro(uint64_t client_channel_id, Address client_addr,
   prep.dbid = auth_reply.dbid;
   prep.session_key = session_key;
   prep.client_addr = client_addr;
+  prep.entity_def_digest = request.entity_def_digest;
 
   ScopeGuard prepare_guard(
       [this, rid, dbid = auth_reply.dbid, baseapp_addr = alloc_reply.internal_addr] {
@@ -371,7 +372,9 @@ auto LoginApp::HandleLoginCoro(uint64_t client_channel_id, Address client_addr,
 
   if (!prep_reply.success) {
     ATLAS_LOG_ERROR("LoginApp: PrepareLogin failed for '{}': {}", username, prep_reply.error);
-    SendLoginError(client_channel_id, login::LoginStatus::kInternalError, prep_reply.error);
+    auto status = prep_reply.error == "def_mismatch" ? login::LoginStatus::kDefMismatch
+                                                     : login::LoginStatus::kInternalError;
+    SendLoginError(client_channel_id, status, prep_reply.error);
     co_return;
   }
 

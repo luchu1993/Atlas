@@ -49,7 +49,8 @@ uint8_t BaseAppNativeProvider::GetProcessPrefix() {
 }
 
 void BaseAppNativeProvider::SendClientRpc(uint32_t entity_id, uint32_t rpc_id, RpcTarget target,
-                                          const std::byte* payload, int32_t len) {
+                                          const std::byte* payload, int32_t len,
+                                          uint64_t trace_id) {
   if (!IsValidNativePayload(payload, len)) {
     ATLAS_LOG_WARNING("BaseApp: SendClientRpc rejected invalid payload len={}", len);
     return;
@@ -79,11 +80,11 @@ void BaseAppNativeProvider::SendClientRpc(uint32_t entity_id, uint32_t rpc_id, R
   }
   std::vector<std::byte> tmp;
   if (len > 0) tmp.assign(payload, payload + static_cast<std::size_t>(len));
-  app_.RelayRpcToClient(*client_ch, rpc_id, tmp);
+  app_.RelayRpcToClient(*client_ch, rpc_id, tmp, trace_id);
 }
 
 void BaseAppNativeProvider::SendCellRpc(uint32_t entity_id, uint32_t rpc_id,
-                                        const std::byte* payload, int32_t len) {
+                                        const std::byte* payload, int32_t len, uint64_t trace_id) {
   if (!IsValidNativePayload(payload, len)) {
     ATLAS_LOG_WARNING("BaseApp: SendCellRpc rejected invalid payload len={}", len);
     return;
@@ -102,6 +103,7 @@ void BaseAppNativeProvider::SendCellRpc(uint32_t entity_id, uint32_t rpc_id,
   cellapp::InternalCellRpc msg;
   msg.target_entity_id = entity_id;
   msg.rpc_id = rpc_id;
+  msg.trace_id = trace_id;
   if (len > 0) msg.payload.assign(payload, payload + static_cast<std::size_t>(len));
   if (auto r = (*cell_ch_result)->SendMessage(msg); !r) {
     ATLAS_LOG_DEBUG("BaseApp: SendCellRpc send failed (entity={}, rpc_id=0x{:08X}): {}", entity_id,
@@ -110,7 +112,7 @@ void BaseAppNativeProvider::SendCellRpc(uint32_t entity_id, uint32_t rpc_id,
 }
 
 void BaseAppNativeProvider::SendBaseRpc(uint32_t entity_id, uint32_t rpc_id,
-                                        const std::byte* payload, int32_t len) {
+                                        const std::byte* payload, int32_t len, uint64_t trace_id) {
   if (!IsValidNativePayload(payload, len)) {
     ATLAS_LOG_WARNING("BaseApp: SendBaseRpc rejected invalid payload len={}", len);
     return;
@@ -122,7 +124,7 @@ void BaseAppNativeProvider::SendBaseRpc(uint32_t entity_id, uint32_t rpc_id,
     return;
   }
   dispatch_rpc_fn_(entity_id, rpc_id, /*reply_channel=*/0,
-                   reinterpret_cast<const uint8_t*>(payload), len);
+                   reinterpret_cast<const uint8_t*>(payload), len, trace_id);
 }
 
 void BaseAppNativeProvider::WriteToDb(uint32_t entity_id, const std::byte* entity_data,

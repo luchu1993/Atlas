@@ -19,10 +19,12 @@
                       ReferenceOutputAssembly="false" />
   </ItemGroup>
 
-  <!-- Both defs must be present in every assembly so the alphabetical
-       type-id assignment stays consistent between BaseApp and CellApp.
-       Account is base-only; StressAvatar lives on both sides. -->
+  <!-- Type ids are pinned by entity_defs/entity_ids.xml so cross-assembly
+       inclusion-set drift no longer shifts ids, but the .def class set still
+       has to match peer assemblies for delta apply to resolve. Account is
+       base-only; StressAvatar lives on both sides. -->
   <ItemGroup>
+    <AdditionalFiles Include="..\..\..\entity_defs\entity_ids.xml" />
     <AdditionalFiles Include="..\..\..\entity_defs\Account.def" />
     <AdditionalFiles Include="..\..\..\entity_defs\StressAvatar.def" />
     <AdditionalFiles Include="..\..\..\entity_defs\StressLoadComponent.def" />

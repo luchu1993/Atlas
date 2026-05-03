@@ -52,6 +52,9 @@ class ClientSession {
   auto SendCellRpc(uint32_t entity_id, uint32_t rpc_id, const uint8_t* payload, int32_t len)
       -> int32_t;
 
+  // Stamped into LoginRequest so BaseApp can reject mismatched .def builds.
+  void SetEntityDefDigest(const uint8_t* data, int32_t len);
+
   // NULL fields in `cb` are substituted with internal noops.
   auto SetCallbacks(const AtlasNetCallbacks& cb) -> int32_t;
 
@@ -96,6 +99,8 @@ class ClientSession {
   TimerHandle auth_timeout_{};
 
   AtlasNetCallbacks callbacks_{};
+
+  std::array<uint8_t, 32> entity_def_digest_{};
 
   std::string last_error_;
 

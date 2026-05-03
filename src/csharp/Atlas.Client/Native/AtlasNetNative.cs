@@ -58,6 +58,9 @@ namespace Atlas.Client.Native
         public static extern int AtlasNetAuthenticate(IntPtr ctx, IntPtr callback, IntPtr userData);
 
         [DllImport(LibName)]
+        public static extern int AtlasNetSetEntityDefDigest(IntPtr ctx, byte* data, int len);
+
+        [DllImport(LibName)]
         public static extern int AtlasNetDisconnect(IntPtr ctx, AtlasDisconnectReason reason);
 
         [DllImport(LibName)]

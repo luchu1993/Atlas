@@ -159,7 +159,8 @@ public static unsafe class DesktopBootstrap
     public static void RegisterNativeCallbacks()
     {
         ClientCallbackTable table;
-        table.DispatchRpc = (nint)(delegate* unmanaged<uint, uint, byte*, int, void>)&DispatchRpc;
+        table.DispatchRpc =
+            (nint)(delegate* unmanaged<uint, uint, byte*, int, ulong, void>)&DispatchRpc;
         table.CreateEntity = (nint)(delegate* unmanaged<uint, ushort, void>)&CreateEntity;
         table.DestroyEntity = (nint)(delegate* unmanaged<uint, void>)&DestroyEntity;
         table.DeliverFromServer =
@@ -175,10 +176,11 @@ public static unsafe class DesktopBootstrap
     // -------------------------------------------------------------------------
 
     [UnmanagedCallersOnly]
-    public static void DispatchRpc(uint entityId, uint rpcId, byte* payload, int len)
+    public static void DispatchRpc(uint entityId, uint rpcId, byte* payload, int len,
+                                   ulong traceId)
     {
         var span = len > 0 ? new ReadOnlySpan<byte>(payload, len) : ReadOnlySpan<byte>.Empty;
-        ClientCallbacks.DispatchRpc(entityId, rpcId, span);
+        ClientCallbacks.DispatchRpc(entityId, rpcId, traceId, span);
     }
 
     [UnmanagedCallersOnly]

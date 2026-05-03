@@ -33,19 +33,24 @@ class INativeApiProvider {
   // style scopes; only CellAppNativeProvider supports
   // kOthers/kAll; other process types log + no-op when target != kOwner.
   virtual void SendClientRpc(uint32_t entity_id, uint32_t rpc_id, RpcTarget target,
-                             const std::byte* payload, int32_t len) = 0;
+                             const std::byte* payload, int32_t len, uint64_t trace_id) = 0;
 
   virtual void SendCellRpc(uint32_t entity_id, uint32_t rpc_id, const std::byte* payload,
-                           int32_t len) = 0;
+                           int32_t len, uint64_t trace_id) = 0;
 
   virtual void SendBaseRpc(uint32_t entity_id, uint32_t rpc_id, const std::byte* payload,
-                           int32_t len) = 0;
+                           int32_t len, uint64_t trace_id) = 0;
 
   virtual void RegisterEntityType(const std::byte* data, int32_t len) = 0;
   virtual void UnregisterAllEntityTypes() = 0;
 
   // Struct descriptors must be registered before entity types that reference them.
   virtual void RegisterStruct(const std::byte* data, int32_t len) = 0;
+
+  // 32-byte SHA-256 of the entity-def surface, computed at C# codegen time.
+  // BaseApp compares this to LoginRequest.entity_def_digest to reject
+  // mismatched client/server builds before any RPC dispatch.
+  virtual void SetEntityDefDigest(const std::byte* data, int32_t len) = 0;
 
   virtual void WriteToDb(uint32_t entity_id, const std::byte* entity_data, int32_t len) = 0;
 

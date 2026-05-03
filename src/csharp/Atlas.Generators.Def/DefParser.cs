@@ -77,10 +77,6 @@ internal static class DefParser
             Name = root.Attribute("name")?.Value ?? ""
         };
 
-        var idAttr = root.Attribute("id");
-        if (idAttr != null && int.TryParse(idAttr.Value, out var id))
-            model.ExplicitTypeId = id;
-
         // <types> must be parsed before <properties> so property type-exprs
         // can refer to entity-local structs/aliases declared above them.
         var typesEl = root.Element("types");

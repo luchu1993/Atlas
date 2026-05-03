@@ -47,7 +47,7 @@ internal static unsafe class NativeCallbacks
         table.GetEntityData = (nint)(delegate* unmanaged<uint, byte**, int*, void>)&GetEntityData;
         table.EntityDestroyed = (nint)(delegate* unmanaged<uint, void>)&EntityDestroyed;
         table.DispatchRpc =
-            (nint)(delegate* unmanaged<uint, uint, IntPtr, byte*, int, void>)&DispatchRpc;
+            (nint)(delegate* unmanaged<uint, uint, IntPtr, byte*, int, ulong, void>)&DispatchRpc;
         table.GetOwnerSnapshot =
             (nint)(delegate* unmanaged<uint, byte**, int*, void>)&GetOwnerSnapshot;
         table.SerializeEntity =
@@ -311,16 +311,23 @@ internal static unsafe class NativeCallbacks
 
     [UnmanagedCallersOnly]
     public static void DispatchRpc(uint entityId, uint rpcId, IntPtr replyChannel,
-                                   byte* payload, int len)
+                                   byte* payload, int len, ulong traceId)
     {
         try
         {
             ThreadGuard.EnsureMainThread();
+            using var __depth = new ThreadGuard.RpcScope(rpcId);
+            using var __trace = Atlas.Diagnostics.TraceContext.BeginInbound((long)traceId);
 
             var entity = EntityManager.Instance.Get(entityId);
             if (entity is null)
             {
                 Log.Warning($"DispatchRpc: unknown entity {entityId}");
+                return;
+            }
+            if (entity.IsDestroyed)
+            {
+                Log.Debug($"DispatchRpc: dropping rpc 0x{rpcId:X8} for destroyed entity {entityId}");
                 return;
             }
 

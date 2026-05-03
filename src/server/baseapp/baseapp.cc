@@ -31,6 +31,13 @@ auto HasManagedEntityType(uint16_t type_id) -> bool {
   return EntityDefRegistry::Instance().FindById(type_id) != nullptr;
 }
 
+// Token-bucket parameters for the per-client RPC rate limiter.
+// 50 rps sustained handles legitimate human input plus protocol overhead;
+// 100-token burst absorbs short flurries (skill chains, batched UI events).
+inline constexpr double kRpcRefillTokensPerSec = 50.0;
+inline constexpr double kRpcBurstCapacity = 100.0;
+inline constexpr uint32_t kRpcRateViolationDisconnectThreshold = 250;
+
 // DB-blob framing: stitches DATA_BASE + CELL_DATA so cell-scope persistent
 // state survives a save/load cycle.
 // Layout: magic(1) | version(1) | base_len(u32 LE) | base | cell_len(u32 LE) | cell.
@@ -366,6 +373,24 @@ void BaseApp::RegisterWatchers() {
                       std::function<std::size_t()>([this] { return detached_proxies_.size(); }));
   wr.Add<uint64_t>("baseapp/client_event_seq_gaps_total",
                    std::function<uint64_t()>([this] { return client_event_seq_gaps_total_; }));
+  wr.Add<uint64_t>("baseapp/client_base_rpc_received_total",
+                   std::function<uint64_t()>([this] { return client_base_rpc_received_total_; }));
+  wr.Add<uint64_t>("baseapp/client_cell_rpc_received_total",
+                   std::function<uint64_t()>([this] { return client_cell_rpc_received_total_; }));
+  wr.Add<uint64_t>("baseapp/cell_rpc_forward_received_total",
+                   std::function<uint64_t()>([this] { return cell_rpc_forward_received_total_; }));
+  wr.Add<uint64_t>("baseapp/broadcast_rpc_received_total",
+                   std::function<uint64_t()>([this] { return broadcast_rpc_received_total_; }));
+  wr.Add<uint64_t>("baseapp/client_rpc_dropped_oversize_total", std::function<uint64_t()>([this] {
+                     return client_rpc_dropped_oversize_total_;
+                   }));
+  wr.Add<uint64_t>("baseapp/client_rpc_dropped_unknown_total",
+                   std::function<uint64_t()>([this] { return client_rpc_dropped_unknown_total_; }));
+  wr.Add<uint64_t>(
+      "baseapp/client_rpc_dropped_unauthorized_total",
+      std::function<uint64_t()>([this] { return client_rpc_dropped_unauthorized_total_; }));
+  wr.Add<uint64_t>("baseapp/client_rpc_dropped_rate_total",
+                   std::function<uint64_t()>([this] { return client_rpc_dropped_rate_total_; }));
   wr.Add<std::size_t>("baseapp/logoff_in_flight_count", std::function<std::size_t()>([this] {
                         return logoff_entities_in_flight_.size();
                       }));
@@ -826,31 +851,38 @@ void BaseApp::OnCellAppDeath(const baseapp::CellAppDeath& msg) {
 }
 
 void BaseApp::OnCellRpcForward(Channel& ch, const baseapp::CellRpcForward& msg) {
+  if (entity_mgr_.Find(msg.entity_id) == nullptr) {
+    ATLAS_LOG_WARNING("BaseApp: CellRpcForward for unknown entity {} (rpc_id=0x{:08X})",
+                      msg.entity_id, msg.rpc_id);
+    return;
+  }
   auto dispatch_fn = GetNativeProvider().dispatch_rpc_fn();
   if (!dispatch_fn) {
     ATLAS_LOG_WARNING("BaseApp: OnCellRpcForward: dispatch_rpc callback not registered");
     return;
   }
+  ++cell_rpc_forward_received_total_;
   dispatch_fn(msg.entity_id, msg.rpc_id, reinterpret_cast<intptr_t>(&ch),
               reinterpret_cast<const uint8_t*>(msg.payload.data()),
-              static_cast<int32_t>(msg.payload.size()));
+              static_cast<int32_t>(msg.payload.size()), msg.trace_id);
 }
 
 void BaseApp::OnBroadcastRpcFromCell(Channel& /*ch*/, const baseapp::BroadcastRpcFromCell& msg) {
+  ++broadcast_rpc_received_total_;
   for (auto entity_id : msg.dest_entity_ids) {
     auto* proxy = entity_mgr_.FindProxy(entity_id);
     if (!proxy || !proxy->HasClient()) continue;
     if (auto* client_ch = ResolveClientChannel(proxy->EntityId())) {
-      RelayRpcToClient(*client_ch, msg.rpc_id, msg.payload);
+      RelayRpcToClient(*client_ch, msg.rpc_id, msg.payload, msg.trace_id);
     }
   }
 }
 
 void BaseApp::RelayRpcToClient(Channel& client_ch, uint32_t rpc_id,
-                               const std::vector<std::byte>& payload) {
+                               const std::vector<std::byte>& payload, uint64_t trace_id) {
   auto args = payload.empty() ? std::span<const std::byte>{}
                               : std::span<const std::byte>(payload.data(), payload.size());
-  baseapp::ClientRpcEnvelope env{rpc_id, args};
+  baseapp::ClientRpcEnvelope env{rpc_id, trace_id, args};
   if (auto r = client_ch.SendMessage(env); !r) {
     ATLAS_LOG_DEBUG("BaseApp: RelayRpcToClient send failed (rpc_id=0x{:08X}): {}", rpc_id,
                     r.Error().Message());
@@ -1900,6 +1932,7 @@ void BaseApp::UnbindClient(EntityID entity_id) {
 
 void BaseApp::OnExternalClientDisconnect(Channel& ch) {
   rpc_registry_.CancelByChannel(&ch);
+  rpc_rate_buckets_.erase(ch.RemoteAddress());
 
   auto it = client_entity_index_.find(ch.RemoteAddress());
   if (it == client_entity_index_.end()) {
@@ -1917,6 +1950,27 @@ void BaseApp::OnExternalClientDisconnect(Channel& ch) {
 
   StartDisconnectLogoff(kEntityId);
   ATLAS_LOG_DEBUG("BaseApp: client disconnected from entity={}", kEntityId);
+}
+
+bool BaseApp::ConsumeRpcRateToken(const Address& client_addr) {
+  using Clock = std::chrono::steady_clock;
+  auto& bucket = rpc_rate_buckets_[client_addr];
+  const auto now = Clock::now();
+  if (bucket.last_refill.time_since_epoch().count() == 0) {
+    bucket.tokens = kRpcBurstCapacity;
+    bucket.last_refill = now;
+  } else {
+    const auto elapsed = std::chrono::duration<double>(now - bucket.last_refill).count();
+    bucket.tokens = std::min(kRpcBurstCapacity, bucket.tokens + elapsed * kRpcRefillTokensPerSec);
+    bucket.last_refill = now;
+  }
+  if (bucket.tokens >= 1.0) {
+    bucket.tokens -= 1.0;
+    bucket.consecutive_violations = 0;
+    return true;
+  }
+  ++bucket.consecutive_violations;
+  return false;
 }
 
 void BaseApp::SendPrepareLoginResult(const Address& reply_addr,
@@ -2436,6 +2490,24 @@ void BaseApp::OnPrepareLogin(Channel& ch, const login::PrepareLogin& msg) {
   ATLAS_LOG_DEBUG("BaseApp: prepare login request_id={} dbid={} type_id={} blob={}B from {}:{}",
                   msg.request_id, msg.dbid, msg.type_id, msg.entity_blob.size(),
                   ch.RemoteAddress().Ip(), ch.RemoteAddress().Port());
+
+  const auto server_digest = EntityDefRegistry::Instance().Digest();
+  if (!std::equal(msg.entity_def_digest.begin(), msg.entity_def_digest.end(), server_digest.begin(),
+                  server_digest.end())) {
+    ATLAS_LOG_WARNING(
+        "BaseApp: PrepareLogin rejected request_id={} dbid={}: entity-def digest mismatch",
+        msg.request_id, msg.dbid);
+    login::PrepareLoginResult result;
+    result.request_id = msg.request_id;
+    result.success = false;
+    result.error = "def_mismatch";
+    if (auto r = ch.SendMessage(result); !r) {
+      ATLAS_LOG_WARNING("BaseApp: PrepareLoginResult(def_mismatch) send failed: {}",
+                        r.Error().Message());
+    }
+    return;
+  }
+
   PendingLogin pending;
   pending.login_request_id = msg.request_id;
   pending.loginapp_addr = ch.RemoteAddress();
@@ -2556,16 +2628,41 @@ void BaseApp::OnClientAuthenticate(Channel& ch, const baseapp::Authenticate& msg
 }
 
 void BaseApp::OnClientBaseRpc(Channel& ch, const baseapp::ClientBaseRpc& msg) {
+  if (msg.payload.size() > kMaxRpcPayloadBytes) {
+    ++client_rpc_dropped_oversize_total_;
+    const auto& addr = ch.RemoteAddress();
+    ATLAS_LOG_WARNING("BaseApp: ClientBaseRpc payload {} bytes exceeds {} from {}:{}",
+                      msg.payload.size(), kMaxRpcPayloadBytes, addr.Ip(), addr.Port());
+    return;
+  }
   auto it = client_entity_index_.find(ch.RemoteAddress());
   if (it == client_entity_index_.end()) {
+    ++client_rpc_dropped_unauthorized_total_;
     ATLAS_LOG_WARNING("BaseApp: ClientBaseRpc from unauthenticated channel");
     return;
   }
   auto entity_id = it->second;
 
+  if (!ConsumeRpcRateToken(ch.RemoteAddress())) {
+    ++client_rpc_dropped_rate_total_;
+    auto& bucket = rpc_rate_buckets_[ch.RemoteAddress()];
+    if (bucket.consecutive_violations == 1) {
+      const auto& addr = ch.RemoteAddress();
+      ATLAS_LOG_WARNING("BaseApp: ClientBaseRpc rate-limited from {}:{} (entity={})", addr.Ip(),
+                        addr.Port(), entity_id);
+    }
+    if (bucket.consecutive_violations >= kRpcRateViolationDisconnectThreshold) {
+      ATLAS_LOG_WARNING("BaseApp: dropping client entity={} after {} rate violations", entity_id,
+                        bucket.consecutive_violations);
+      ch.Condemn();
+    }
+    return;
+  }
+
   auto& registry = EntityDefRegistry::Instance();
   auto* rpc_desc = registry.FindRpc(msg.rpc_id);
   if (!rpc_desc || rpc_desc->exposed == ExposedScope::kNone) {
+    ++client_rpc_dropped_unauthorized_total_;
     ATLAS_LOG_WARNING("BaseApp: client tried to call non-exposed base method (rpc_id=0x{:06X})",
                       msg.rpc_id);
     return;
@@ -2573,6 +2670,7 @@ void BaseApp::OnClientBaseRpc(Channel& ch, const baseapp::ClientBaseRpc& msg) {
 
   // Reject mis-directed RPCs (probe or generator bug).
   if (rpc_desc->Direction() != 0x03) {
+    ++client_rpc_dropped_unknown_total_;
     ATLAS_LOG_WARNING(
         "BaseApp: ClientBaseRpc rpc_id=0x{:06X} has direction {}, expected 0x03 (Base)", msg.rpc_id,
         rpc_desc->Direction());
@@ -2584,31 +2682,58 @@ void BaseApp::OnClientBaseRpc(Channel& ch, const baseapp::ClientBaseRpc& msg) {
     ATLAS_LOG_WARNING("BaseApp: ClientBaseRpc: dispatch_rpc callback not registered");
     return;
   }
+  ++client_base_rpc_received_total_;
   dispatch_fn(entity_id, msg.rpc_id, reinterpret_cast<intptr_t>(&ch),
               reinterpret_cast<const uint8_t*>(msg.payload.data()),
-              static_cast<int32_t>(msg.payload.size()));
+              static_cast<int32_t>(msg.payload.size()), msg.trace_id);
 }
 
 // Validate then forward; CellApp re-checks (defence in depth).
 void BaseApp::OnClientCellRpc(Channel& ch, const baseapp::ClientCellRpc& msg) {
+  if (msg.payload.size() > kMaxRpcPayloadBytes) {
+    ++client_rpc_dropped_oversize_total_;
+    const auto& addr = ch.RemoteAddress();
+    ATLAS_LOG_WARNING("BaseApp: ClientCellRpc payload {} bytes exceeds {} from {}:{}",
+                      msg.payload.size(), kMaxRpcPayloadBytes, addr.Ip(), addr.Port());
+    return;
+  }
   // Authenticated binding: an un-auth channel has no entity_id to stamp.
   auto it = client_entity_index_.find(ch.RemoteAddress());
   if (it == client_entity_index_.end()) {
+    ++client_rpc_dropped_unauthorized_total_;
     ATLAS_LOG_WARNING("BaseApp: ClientCellRpc from unauthenticated channel (rpc_id=0x{:06X})",
                       msg.rpc_id);
     return;
   }
   const auto source_entity_id = it->second;
 
+  if (!ConsumeRpcRateToken(ch.RemoteAddress())) {
+    ++client_rpc_dropped_rate_total_;
+    auto& bucket = rpc_rate_buckets_[ch.RemoteAddress()];
+    if (bucket.consecutive_violations == 1) {
+      const auto& addr = ch.RemoteAddress();
+      ATLAS_LOG_WARNING("BaseApp: ClientCellRpc rate-limited from {}:{} (entity={})", addr.Ip(),
+                        addr.Port(), source_entity_id);
+    }
+    if (bucket.consecutive_violations >= kRpcRateViolationDisconnectThreshold) {
+      ATLAS_LOG_WARNING("BaseApp: dropping client entity={} after {} rate violations",
+                        source_entity_id, bucket.consecutive_violations);
+      ch.Condemn();
+    }
+    return;
+  }
+
   auto& registry = EntityDefRegistry::Instance();
   const auto* rpc_desc = registry.FindRpc(msg.rpc_id);
   if (rpc_desc == nullptr) {
+    ++client_rpc_dropped_unknown_total_;
     ATLAS_LOG_WARNING("BaseApp: ClientCellRpc unknown rpc_id=0x{:06X} (source entity={})",
                       msg.rpc_id, source_entity_id);
     return;
   }
 
   if (rpc_desc->Direction() != 0x02) {
+    ++client_rpc_dropped_unknown_total_;
     ATLAS_LOG_WARNING(
         "BaseApp: ClientCellRpc rpc_id=0x{:06X} has direction {}, expected 0x02 (Cell)", msg.rpc_id,
         rpc_desc->Direction());
@@ -2616,6 +2741,7 @@ void BaseApp::OnClientCellRpc(Channel& ch, const baseapp::ClientCellRpc& msg) {
   }
 
   if (rpc_desc->exposed == ExposedScope::kNone) {
+    ++client_rpc_dropped_unauthorized_total_;
     ATLAS_LOG_WARNING("BaseApp: client tried to call non-exposed cell method (rpc_id=0x{:06X})",
                       msg.rpc_id);
     return;
@@ -2623,6 +2749,7 @@ void BaseApp::OnClientCellRpc(Channel& ch, const baseapp::ClientCellRpc& msg) {
 
   // OWN_CLIENT: own entity only. ALL_CLIENTS: cell layer drops mis-AoI.
   if (msg.target_entity_id != source_entity_id && rpc_desc->exposed != ExposedScope::kAllClients) {
+    ++client_rpc_dropped_unauthorized_total_;
     ATLAS_LOG_WARNING(
         "BaseApp: cross-entity ClientCellRpc blocked (source={} target={} rpc_id=0x{:06X} "
         "exposed={})",
@@ -2661,6 +2788,8 @@ void BaseApp::OnClientCellRpc(Channel& ch, const baseapp::ClientCellRpc& msg) {
   fwd.source_entity_id = source_entity_id;
   fwd.rpc_id = msg.rpc_id;
   fwd.payload = msg.payload;
+  fwd.trace_id = msg.trace_id;
+  ++client_cell_rpc_received_total_;
   (void)ch_out->SendMessage(fwd);
 }
 

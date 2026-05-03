@@ -376,10 +376,9 @@ internal static class ComponentEmitter
                                       string section, ProcessContext ctx)
     {
         if (methods.Count == 0) return;
-        var sorted = methods.OrderBy(m => m.Name).ToList();
-        for (int i = 0; i < sorted.Count; i++)
+        for (int i = 0; i < methods.Count; i++)
         {
-            var method = sorted[i];
+            var method = methods[i];
             var role = RpcRoleHelper.GetRole(section, ctx, method.Exposed);
             int methodIdx = i + 1;
             EmitRpcMethod(sb, method, role, methodIdx, section, ctx);

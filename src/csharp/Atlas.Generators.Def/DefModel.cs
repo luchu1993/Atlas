@@ -260,7 +260,6 @@ internal enum ComponentLocality
 internal sealed class EntityDefModel
 {
     public string Name { get; set; } = "";
-    public int? ExplicitTypeId { get; set; }
     public List<PropertyDefModel> Properties { get; } = new();
     public List<MethodDefModel> ClientMethods { get; } = new();
     public List<MethodDefModel> CellMethods { get; } = new();

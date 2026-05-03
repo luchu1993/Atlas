@@ -24,7 +24,8 @@ namespace Atlas.Client;
 
 public static class ClientHost
 {
-    public delegate void SendRpcFn(uint entityId, uint rpcId, ReadOnlySpan<byte> payload);
+    public delegate void SendRpcFn(uint entityId, uint rpcId, ReadOnlySpan<byte> payload,
+                                   ulong traceId);
     public delegate void RegisterEntityTypeFn(ReadOnlySpan<byte> data);
     public delegate void RegisterStructFn(ReadOnlySpan<byte> data);
     public delegate void ReportEventSeqGapFn(uint entityId, uint gapDelta);
@@ -37,22 +38,29 @@ public static class ClientHost
     // offline tests) leave this null and the report is silently dropped.
     public static ReportEventSeqGapFn? ReportEventSeqGapHandler;
 
-    internal static void SendBaseRpc(uint entityId, uint rpcId, ReadOnlySpan<byte> payload)
+    // Build-time SHA-256 of the entity-def surface; LoginClient stamps it
+    // into LoginRequest so a mismatched .def build is bounced before any
+    // RPC dispatch. Set once by DefBootstrap and never mutated after.
+    public static byte[]? EntityDefDigest { get; private set; }
+
+    internal static void SendBaseRpc(uint entityId, uint rpcId, ReadOnlySpan<byte> payload,
+                                     ulong traceId)
     {
         if (SendBaseRpcHandler is null)
             throw new InvalidOperationException(
                 "ClientHost.SendBaseRpcHandler is not set — the host app (Atlas.Client.Desktop "
                 + "or the Unity package) must install its P/Invoke handler at startup.");
-        SendBaseRpcHandler(entityId, rpcId, payload);
+        SendBaseRpcHandler(entityId, rpcId, payload, traceId);
     }
 
-    internal static void SendCellRpc(uint entityId, uint rpcId, ReadOnlySpan<byte> payload)
+    internal static void SendCellRpc(uint entityId, uint rpcId, ReadOnlySpan<byte> payload,
+                                     ulong traceId)
     {
         if (SendCellRpcHandler is null)
             throw new InvalidOperationException(
                 "ClientHost.SendCellRpcHandler is not set — the host app (Atlas.Client.Desktop "
                 + "or the Unity package) must install its P/Invoke handler at startup.");
-        SendCellRpcHandler(entityId, rpcId, payload);
+        SendCellRpcHandler(entityId, rpcId, payload, traceId);
     }
 
     internal static void RegisterEntityType(ReadOnlySpan<byte> data)
@@ -72,6 +80,9 @@ public static class ClientHost
                 + "its struct registry bridge at startup.");
         RegisterStructHandler(data);
     }
+
+    internal static void SetEntityDefDigest(ReadOnlySpan<byte> data)
+        => EntityDefDigest = data.ToArray();
 
     internal static void ReportEventSeqGap(uint entityId, uint gapDelta)
     {

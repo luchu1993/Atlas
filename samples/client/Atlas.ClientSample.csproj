@@ -33,13 +33,12 @@
   </ItemGroup>
 
   <ItemGroup>
-    <!-- Entity defs must be the exact set the stress cluster's server apps
-         use (samples/stress/Atlas.StressTest.Base + .Cell) so that the
-         generator assigns matching numeric type IDs to both sides. Client
-         once included Avatar.def, which pushed StressAvatar from id 2 to
-         id 3; the server sent typeId=2 on the wire and the client
-         instantiated Avatar instead of StressAvatar, so OnHpChanged et al
-         never fired. -->
+    <!-- Entity defs must mirror what the stress cluster's server apps include
+         so the client instantiates the same C# classes the server replicates.
+         Type ids are pinned by entity_defs/entity_ids.xml so the included set
+         no longer affects id assignment, but mismatched class lists still
+         break delta apply. -->
+    <AdditionalFiles Include="..\..\entity_defs\entity_ids.xml" />
     <AdditionalFiles Include="..\..\entity_defs\Account.def" />
     <AdditionalFiles Include="..\..\entity_defs\StressAvatar.def" />
     <AdditionalFiles Include="..\..\entity_defs\StressLoadComponent.def" />

@@ -18,17 +18,18 @@ class BaseNativeProvider : public INativeApiProvider {
   uint8_t GetProcessPrefix() override;
 
   void SendClientRpc(uint32_t entity_id, uint32_t rpc_id, RpcTarget target,
-                     const std::byte* payload, int32_t len) override;
+                     const std::byte* payload, int32_t len, uint64_t trace_id) override;
 
-  void SendCellRpc(uint32_t entity_id, uint32_t rpc_id, const std::byte* payload,
-                   int32_t len) override;
+  void SendCellRpc(uint32_t entity_id, uint32_t rpc_id, const std::byte* payload, int32_t len,
+                   uint64_t trace_id) override;
 
-  void SendBaseRpc(uint32_t entity_id, uint32_t rpc_id, const std::byte* payload,
-                   int32_t len) override;
+  void SendBaseRpc(uint32_t entity_id, uint32_t rpc_id, const std::byte* payload, int32_t len,
+                   uint64_t trace_id) override;
 
   void RegisterEntityType(const std::byte* data, int32_t len) override;
   void UnregisterAllEntityTypes() override;
   void RegisterStruct(const std::byte* data, int32_t len) override;
+  void SetEntityDefDigest(const std::byte* data, int32_t len) override;
 
   void WriteToDb(uint32_t entity_id, const std::byte* entity_data, int32_t len) override;
 

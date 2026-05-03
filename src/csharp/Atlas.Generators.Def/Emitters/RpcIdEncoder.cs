@@ -1,3 +1,5 @@
+using System;
+
 namespace Atlas.Generators.Def.Emitters;
 
 // rpc_id wire layout (32-bit):
@@ -9,10 +11,25 @@ namespace Atlas.Generators.Def.Emitters;
 internal static class RpcIdEncoder
 {
     public const uint kReplyBit = 1u << 31;
+    public const int kMaxSlot = 0x7F;
+    public const int kMaxDirection = 0x3;
+    public const int kMaxTypeIndex = 0x3FFF;
+    public const int kMaxMethodIdx = 0xFF;
 
     public static int Encode(int slot, byte direction, ushort typeIndex, int methodIdx)
     {
-        // slot is 7 bits now; component count was already capped well below 128.
+        if ((uint)slot > kMaxSlot)
+            throw new InvalidOperationException(
+                $"RpcId slot={slot} exceeds 7-bit limit ({kMaxSlot}); too many synced components on one entity.");
+        if (direction > kMaxDirection)
+            throw new InvalidOperationException(
+                $"RpcId direction={direction} exceeds 2-bit limit ({kMaxDirection}).");
+        if (typeIndex > kMaxTypeIndex)
+            throw new InvalidOperationException(
+                $"RpcId typeIndex={typeIndex} exceeds 14-bit limit ({kMaxTypeIndex}); too many entity types.");
+        if ((uint)methodIdx > kMaxMethodIdx)
+            throw new InvalidOperationException(
+                $"RpcId methodIdx={methodIdx} exceeds 8-bit limit ({kMaxMethodIdx}); too many methods per direction on one entity/component.");
         return (slot << 24) | (direction << 22) | (typeIndex << 8) | methodIdx;
     }
 }

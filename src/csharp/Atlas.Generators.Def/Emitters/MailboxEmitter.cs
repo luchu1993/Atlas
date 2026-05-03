@@ -99,21 +99,19 @@ internal static class MailboxEmitter
             sb.AppendLine($"    internal {structName}({className} entity) => _entity = entity;");
         }
 
-        var sorted = methods.OrderBy(m => m.Name).ToList();
-
         // Static reply deserializers — one per method-with-reply, defined
         // up-front so the per-call body has no closure / no allocation.
-        for (int i = 0; i < sorted.Count; i++)
+        for (int i = 0; i < methods.Count; i++)
         {
-            var method = sorted[i];
+            var method = methods[i];
             if (exposedOnly && method.Exposed == ExposedScope.None) continue;
             if (!method.HasReply) continue;
             EmitReplyDeserializerField(sb, method);
         }
 
-        for (int i = 0; i < sorted.Count; i++)
+        for (int i = 0; i < methods.Count; i++)
         {
-            var method = sorted[i];
+            var method = methods[i];
             if (exposedOnly && method.Exposed == ExposedScope.None)
                 continue;
 

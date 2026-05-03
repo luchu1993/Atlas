@@ -40,11 +40,10 @@ internal static class RpcIdEmitter
         if (methods.Count == 0) return;
 
         sb.AppendLine($"    // {entityName} {comment}");
-        var sorted = methods.OrderBy(m => m.Name).ToList();
-        for (int i = 0; i < sorted.Count; i++)
+        for (int i = 0; i < methods.Count; i++)
         {
             int id = RpcIdEncoder.Encode(slot: 0, direction, typeIndex, i + 1);
-            sb.AppendLine($"    public const int {entityName}_{sorted[i].Name} = 0x{id:X6};");
+            sb.AppendLine($"    public const int {entityName}_{methods[i].Name} = 0x{id:X6};");
         }
     }
 }

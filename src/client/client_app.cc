@@ -381,13 +381,14 @@ auto ClientApp::Authenticate(const Address& baseapp_addr, const SessionKey& sess
 // RPC message handling
 // ============================================================================
 
-void ClientApp::OnRpcMessage(uint32_t rpc_id, const std::byte* payload, int32_t len) {
+void ClientApp::OnRpcMessage(uint32_t rpc_id, uint64_t trace_id, const std::byte* payload,
+                             int32_t len) {
   if (!native_provider_ || !native_provider_->DispatchRpcFn()) {
     ATLAS_LOG_WARNING("Client: received RPC but no dispatcher registered");
     return;
   }
   native_provider_->DispatchRpcFn()(player_entity_id_, rpc_id,
-                                    reinterpret_cast<const uint8_t*>(payload), len);
+                                    reinterpret_cast<const uint8_t*>(payload), len, trace_id);
 }
 
 // ============================================================================
@@ -469,63 +470,67 @@ auto ClientApp::MainLoop() -> int {
   //     above for protocol messages this client cares about
   //     (LoginResult, AuthenticateResult, EntityTransferred, …); a
   //     fall-through here would be a wire-format mismatch.
-  network_.InterfaceTable().SetDefaultHandler([this](const Address&, Channel*, MessageID msg_id,
-                                                     BinaryReader& reader) {
-    const bool is_state_channel = msg_id == baseapp::kClientDeltaMessageId ||
-                                  msg_id == baseapp::kClientBaselineMessageId ||
-                                  msg_id == baseapp::kClientReliableDeltaMessageId;
+  network_.InterfaceTable().SetDefaultHandler(
+      [this](const Address&, Channel*, MessageID msg_id, BinaryReader& reader) {
+        const bool is_state_channel = msg_id == baseapp::kClientDeltaMessageId ||
+                                      msg_id == baseapp::kClientBaselineMessageId ||
+                                      msg_id == baseapp::kClientReliableDeltaMessageId;
 
-    const uint8_t* payload_ptr = nullptr;
-    int32_t payload_len = 0;
-    const auto rem = reader.Remaining();
-    if (rem > 0) {
-      auto read = reader.ReadBytes(rem);
-      if (read) {
-        payload_ptr = reinterpret_cast<const uint8_t*>(read->data());
-        payload_len = static_cast<int32_t>(read->size());
-      }
-    }
-
-    if (is_state_channel) {
-      // Test hook: silently drop state-channel traffic inside the
-      // [start, start+duration) window to simulate packet loss on
-      // reliable / volatile / baseline channels. RPCs and other traffic
-      // flow normally so login / auth / script method calls still work.
-      if (config_.drop_inbound_duration_ms > 0) {
-        const auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
-                                 std::chrono::steady_clock::now() - loop_start_)
-                                 .count();
-        if (elapsed >= config_.drop_inbound_start_ms &&
-            elapsed < config_.drop_inbound_start_ms + config_.drop_inbound_duration_ms) {
-          return;  // dropped
+        const uint8_t* payload_ptr = nullptr;
+        int32_t payload_len = 0;
+        const auto rem = reader.Remaining();
+        if (rem > 0) {
+          auto read = reader.ReadBytes(rem);
+          if (read) {
+            payload_ptr = reinterpret_cast<const uint8_t*>(read->data());
+            payload_len = static_cast<int32_t>(read->size());
+          }
         }
-      }
-      if (native_provider_ && native_provider_->DeliverFromServerFn()) {
-        native_provider_->DeliverFromServerFn()(msg_id, payload_ptr, payload_len);
-      } else {
-        ATLAS_LOG_WARNING(
-            "Client: state-channel message 0x{:04X} arrived but no deliver_from_server "
-            "callback registered",
-            static_cast<unsigned>(msg_id));
-      }
-      return;
-    }
 
-    if (msg_id == baseapp::kClientRpcMessageId) {
-      if (payload_len < static_cast<int32_t>(sizeof(uint32_t))) {
-        ATLAS_LOG_WARNING("Client: RPC envelope too short ({} bytes)", payload_len);
-        return;
-      }
-      uint32_t rpc_id_full = 0;
-      std::memcpy(&rpc_id_full, payload_ptr, sizeof(uint32_t));
-      OnRpcMessage(rpc_id_full, reinterpret_cast<const std::byte*>(payload_ptr + sizeof(uint32_t)),
-                   payload_len - static_cast<int32_t>(sizeof(uint32_t)));
-      return;
-    }
+        if (is_state_channel) {
+          // Test hook: silently drop state-channel traffic inside the
+          // [start, start+duration) window to simulate packet loss on
+          // reliable / volatile / baseline channels. RPCs and other traffic
+          // flow normally so login / auth / script method calls still work.
+          if (config_.drop_inbound_duration_ms > 0) {
+            const auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
+                                     std::chrono::steady_clock::now() - loop_start_)
+                                     .count();
+            if (elapsed >= config_.drop_inbound_start_ms &&
+                elapsed < config_.drop_inbound_start_ms + config_.drop_inbound_duration_ms) {
+              return;  // dropped
+            }
+          }
+          if (native_provider_ && native_provider_->DeliverFromServerFn()) {
+            native_provider_->DeliverFromServerFn()(msg_id, payload_ptr, payload_len);
+          } else {
+            ATLAS_LOG_WARNING(
+                "Client: state-channel message 0x{:04X} arrived but no deliver_from_server "
+                "callback registered",
+                static_cast<unsigned>(msg_id));
+          }
+          return;
+        }
 
-    ATLAS_LOG_WARNING("Client: unknown MessageID 0x{:04X} ({} bytes payload)",
-                      static_cast<unsigned>(msg_id), payload_len);
-  });
+        if (msg_id == baseapp::kClientRpcMessageId) {
+          constexpr int32_t kHeaderLen = static_cast<int32_t>(sizeof(uint32_t) + sizeof(uint64_t));
+          if (payload_len < kHeaderLen) {
+            ATLAS_LOG_WARNING("Client: RPC envelope too short ({} bytes)", payload_len);
+            return;
+          }
+          uint32_t rpc_id_full = 0;
+          std::memcpy(&rpc_id_full, payload_ptr, sizeof(uint32_t));
+          uint64_t trace_id = 0;
+          std::memcpy(&trace_id, payload_ptr + sizeof(uint32_t), sizeof(uint64_t));
+          OnRpcMessage(rpc_id_full, trace_id,
+                       reinterpret_cast<const std::byte*>(payload_ptr + kHeaderLen),
+                       payload_len - kHeaderLen);
+          return;
+        }
+
+        ATLAS_LOG_WARNING("Client: unknown MessageID 0x{:04X} ({} bytes payload)",
+                          static_cast<unsigned>(msg_id), payload_len);
+      });
 
   while (!shutdown_requested_) {
     dispatcher_.ProcessOnce();

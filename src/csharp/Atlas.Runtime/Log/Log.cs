@@ -1,13 +1,10 @@
 using System;
 using System.Text;
 using Atlas.Core;
+using Atlas.Diagnostics;
 
 namespace Atlas;
 
-/// <summary>
-/// Engine logging facade. Forwards messages to the C++ logging system
-/// via <see cref="NativeApi.LogMessage"/>.
-/// </summary>
 public static class Log
 {
     public static void Trace(string message) => Send(0, message);
@@ -23,6 +20,8 @@ public static class Log
 
     private static void Send(int level, string message)
     {
+        long traceId = TraceContext.Current;
+        if (traceId != 0) message = $"[trace={traceId:X16}] {message}";
         if (message.Length <= StackAllocCharLimit)
         {
             Span<byte> buf = stackalloc byte[StackAllocByteSize];

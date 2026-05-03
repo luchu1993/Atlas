@@ -27,7 +27,7 @@ using EntityDestroyedFn = void (*)(uint32_t entity_id);
 // the source Channel* recast to intptr_t — C# hands it back to
 // SendEntityRpcReply when the user method completes.
 using DispatchRpcFn = void (*)(uint32_t entity_id, uint32_t rpc_id, intptr_t reply_channel,
-                               const uint8_t* payload, int32_t len);
+                               const uint8_t* payload, int32_t len, uint64_t trace_id);
 
 // Owner-scope baseline snapshot via SerializeForOwnerClient (filtered to
 // client-visible fields). Distinct from GetEntityData (scope-agnostic DB
@@ -57,14 +57,14 @@ class BaseAppNativeProvider : public BaseNativeProvider {
   uint8_t GetProcessPrefix() override;
 
   void SendClientRpc(uint32_t entity_id, uint32_t rpc_id, RpcTarget target,
-                     const std::byte* payload, int32_t len) override;
+                     const std::byte* payload, int32_t len, uint64_t trace_id) override;
 
-  void SendCellRpc(uint32_t entity_id, uint32_t rpc_id, const std::byte* payload,
-                   int32_t len) override;
+  void SendCellRpc(uint32_t entity_id, uint32_t rpc_id, const std::byte* payload, int32_t len,
+                   uint64_t trace_id) override;
 
   // Forward to another BaseEntity on this BaseApp.
-  void SendBaseRpc(uint32_t entity_id, uint32_t rpc_id, const std::byte* payload,
-                   int32_t len) override;
+  void SendBaseRpc(uint32_t entity_id, uint32_t rpc_id, const std::byte* payload, int32_t len,
+                   uint64_t trace_id) override;
 
   void WriteToDb(uint32_t entity_id, const std::byte* entity_data, int32_t len) override;
 

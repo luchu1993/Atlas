@@ -218,6 +218,7 @@ struct CellRpcForward {
   EntityID entity_id{kInvalidEntityID};
   uint32_t rpc_id{0};
   std::vector<std::byte> payload;
+  uint64_t trace_id{0};
 
   static auto Descriptor() -> const MessageDesc& {
     static const MessageDesc kDesc{msg_id::Id(msg_id::BaseApp::kCellRpcForward),
@@ -234,6 +235,7 @@ struct CellRpcForward {
     w.WritePackedInt(rpc_id);
     w.WritePackedInt(static_cast<uint32_t>(payload.size()));
     w.WriteBytes(payload);
+    w.Write(trace_id);
   }
 
   static auto Deserialize(BinaryReader& r) -> Result<CellRpcForward> {
@@ -243,10 +245,13 @@ struct CellRpcForward {
     if (!eid || !rid || !sz) return Error{ErrorCode::kInvalidArgument, "CellRpcForward: truncated"};
     auto span = r.ReadBytes(*sz);
     if (!span) return Error{ErrorCode::kInvalidArgument, "CellRpcForward: payload truncated"};
+    auto tid = r.Read<uint64_t>();
+    if (!tid) return Error{ErrorCode::kInvalidArgument, "CellRpcForward: trace_id truncated"};
     CellRpcForward msg;
     msg.entity_id = *eid;
     msg.rpc_id = *rid;
     msg.payload.assign(span->begin(), span->end());
+    msg.trace_id = *tid;
     return msg;
   }
 };
@@ -258,6 +263,7 @@ struct BroadcastRpcFromCell {
   uint32_t rpc_id{0};
   std::vector<EntityID> dest_entity_ids;
   std::vector<std::byte> payload;
+  uint64_t trace_id{0};
 
   static auto Descriptor() -> const MessageDesc& {
     static const MessageDesc kDesc{msg_id::Id(msg_id::BaseApp::kBroadcastRpcFromCell),
@@ -275,6 +281,7 @@ struct BroadcastRpcFromCell {
     for (auto id : dest_entity_ids) w.WritePackedInt(id);
     w.WritePackedInt(static_cast<uint32_t>(payload.size()));
     w.WriteBytes(payload);
+    w.Write(trace_id);
   }
 
   static auto Deserialize(BinaryReader& r) -> Result<BroadcastRpcFromCell> {
@@ -300,6 +307,9 @@ struct BroadcastRpcFromCell {
     auto span = r.ReadBytes(*sz);
     if (!span) return Error{ErrorCode::kInvalidArgument, "BroadcastRpcFromCell: payload truncated"};
     msg.payload.assign(span->begin(), span->end());
+    auto tid = r.Read<uint64_t>();
+    if (!tid) return Error{ErrorCode::kInvalidArgument, "BroadcastRpcFromCell: trace_id truncated"};
+    msg.trace_id = *tid;
     return msg;
   }
 };
@@ -665,6 +675,7 @@ static_assert(NetworkMessage<CellReady>);
 struct ClientBaseRpc {
   uint32_t rpc_id{0};
   std::vector<std::byte> payload;
+  uint64_t trace_id{0};
 
   static auto Descriptor() -> const MessageDesc& {
     static const MessageDesc kDesc{msg_id::Id(msg_id::BaseApp::kClientBaseRpc),
@@ -680,6 +691,7 @@ struct ClientBaseRpc {
     w.Write(rpc_id);
     w.WritePackedInt(static_cast<uint32_t>(payload.size()));
     if (!payload.empty()) w.WriteBytes(std::span<const std::byte>(payload));
+    w.Write(trace_id);
   }
 
   static auto Deserialize(BinaryReader& r) -> Result<ClientBaseRpc> {
@@ -693,6 +705,9 @@ struct ClientBaseRpc {
       if (!pdata) return Error{ErrorCode::kInvalidArgument, "ClientBaseRpc: payload truncated"};
       msg.payload.assign(pdata->begin(), pdata->end());
     }
+    auto tid = r.Read<uint64_t>();
+    if (!tid) return Error{ErrorCode::kInvalidArgument, "ClientBaseRpc: trace_id truncated"};
+    msg.trace_id = *tid;
     return msg;
   }
 };
@@ -703,6 +718,7 @@ struct ClientCellRpc {
   EntityID target_entity_id{kInvalidEntityID};
   uint32_t rpc_id{0};
   std::vector<std::byte> payload;
+  uint64_t trace_id{0};
 
   static auto Descriptor() -> const MessageDesc& {
     static const MessageDesc kDesc{msg_id::Id(msg_id::BaseApp::kClientCellRpc),
@@ -719,6 +735,7 @@ struct ClientCellRpc {
     w.Write(rpc_id);
     w.WritePackedInt(static_cast<uint32_t>(payload.size()));
     if (!payload.empty()) w.WriteBytes(std::span<const std::byte>(payload));
+    w.Write(trace_id);
   }
 
   static auto Deserialize(BinaryReader& r) -> Result<ClientCellRpc> {
@@ -735,6 +752,9 @@ struct ClientCellRpc {
       if (!pdata) return Error{ErrorCode::kInvalidArgument, "ClientCellRpc: payload truncated"};
       msg.payload.assign(pdata->begin(), pdata->end());
     }
+    auto trace = r.Read<uint64_t>();
+    if (!trace) return Error{ErrorCode::kInvalidArgument, "ClientCellRpc: trace_id truncated"};
+    msg.trace_id = *trace;
     return msg;
   }
 };
@@ -930,9 +950,10 @@ struct ClientReliableDeltaEnvelope {
 };
 static_assert(NetworkMessage<ClientReliableDeltaEnvelope>);
 
-// Body: [u32 rpc_id][args].  rpc_id = slot:8 | method:24.
+// Body: [u32 rpc_id][u64 trace_id][args].  rpc_id = slot:8 | method:24.
 struct ClientRpcEnvelope {
   uint32_t rpc_id{0};
+  uint64_t trace_id{0};
   std::span<const std::byte> args;
 
   static auto Descriptor() -> const MessageDesc& {
@@ -943,6 +964,7 @@ struct ClientRpcEnvelope {
   }
   void Serialize(BinaryWriter& w) const {
     w.Write(rpc_id);
+    w.Write(trace_id);
     w.WriteBytes(args);
   }
   static auto Deserialize(BinaryReader&) -> Result<ClientRpcEnvelope> {

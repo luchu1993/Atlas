@@ -22,4 +22,9 @@ public static class ClientEntityRegistryBridge
     {
         ClientHost.RegisterStruct(data);
     }
+
+    public static void SetEntityDefDigest(ReadOnlySpan<byte> data)
+    {
+        ClientHost.SetEntityDefDigest(data);
+    }
 }

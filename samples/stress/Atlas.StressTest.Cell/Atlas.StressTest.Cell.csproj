@@ -19,10 +19,12 @@
                       ReferenceOutputAssembly="false" />
   </ItemGroup>
 
-  <!-- Both defs must be present so alphabetical type-id assignment matches
-       the Base assembly. Account has no cell side (no cell_methods, no
-       cell-scoped props); it registers as metadata only on CellApp. -->
+  <!-- Type ids come from entity_defs/entity_ids.xml so the inclusion set
+       no longer affects ids, but the class set still must mirror the Base
+       assembly. Account has no cell side (no cell_methods, no cell-scoped
+       props); it registers as metadata only on CellApp. -->
   <ItemGroup>
+    <AdditionalFiles Include="..\..\..\entity_defs\entity_ids.xml" />
     <AdditionalFiles Include="..\..\..\entity_defs\Account.def" />
     <AdditionalFiles Include="..\..\..\entity_defs\StressAvatar.def" />
     <AdditionalFiles Include="..\..\..\entity_defs\StressLoadComponent.def" />

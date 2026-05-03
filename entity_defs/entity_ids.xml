@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Source of truth for entity type_id assignment. Read by Atlas.Generators.Def.
+
+  Rules:
+  - Every <entity> in this directory's .def files must have a matching
+    <entity name="..." id="..."/> entry below.
+  - id values are permanent contracts: never change a value, never reuse
+    an id even after deletion. To remove an entity, set deprecated="true"
+    and keep the entry forever.
+  - Allocate the next free id with `tools/bin/def_id.{bat,sh} alloc <Name>`.
+-->
+<entity_ids>
+  <entity name="Account"      id="1"/>
+  <entity name="Avatar"       id="2"/>
+  <entity name="StressAvatar" id="3"/>
+</entity_ids>

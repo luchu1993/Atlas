@@ -23,20 +23,22 @@
                                                                                                    \
     X(void, SendClientRpc,                                                                         \
         (uint32_t entity_id, uint32_t rpc_id, uint8_t target,                                      \
-         const uint8_t* payload, int32_t len),                                                     \
+         const uint8_t* payload, int32_t len, uint64_t trace_id),                                  \
         atlas::GetNativeApiProvider().SendClientRpc(                                                \
             entity_id, rpc_id, static_cast<atlas::RpcTarget>(target),                              \
-            reinterpret_cast<const std::byte*>(payload), len))                                     \
+            reinterpret_cast<const std::byte*>(payload), len, trace_id))                           \
     X(void, SendCellRpc,                                                                           \
-        (uint32_t entity_id, uint32_t rpc_id, const uint8_t* payload, int32_t len),               \
+        (uint32_t entity_id, uint32_t rpc_id, const uint8_t* payload, int32_t len,                 \
+         uint64_t trace_id),                                                                       \
         atlas::GetNativeApiProvider().SendCellRpc(                                                  \
             entity_id, rpc_id,                                                                     \
-            reinterpret_cast<const std::byte*>(payload), len))                                     \
+            reinterpret_cast<const std::byte*>(payload), len, trace_id))                           \
     X(void, SendBaseRpc,                                                                           \
-        (uint32_t entity_id, uint32_t rpc_id, const uint8_t* payload, int32_t len),               \
+        (uint32_t entity_id, uint32_t rpc_id, const uint8_t* payload, int32_t len,                 \
+         uint64_t trace_id),                                                                       \
         atlas::GetNativeApiProvider().SendBaseRpc(                                                  \
             entity_id, rpc_id,                                                                     \
-            reinterpret_cast<const std::byte*>(payload), len))                                     \
+            reinterpret_cast<const std::byte*>(payload), len, trace_id))                           \
                                                                                                    \
     X(void, RegisterEntityType,                                                                    \
         (const uint8_t* data, int32_t len),                                                        \
@@ -48,6 +50,10 @@
     X(void, RegisterStruct,                                                                        \
         (const uint8_t* data, int32_t len),                                                        \
         atlas::GetNativeApiProvider().RegisterStruct(                                               \
+            reinterpret_cast<const std::byte*>(data), len))                                        \
+    X(void, SetEntityDefDigest,                                                                    \
+        (const uint8_t* data, int32_t len),                                                        \
+        atlas::GetNativeApiProvider().SetEntityDefDigest(                                           \
             reinterpret_cast<const std::byte*>(data), len))                                        \
                                                                                                    \
     X(void, WriteToDb,                                                                             \

@@ -229,7 +229,7 @@ void FakeRestore(uint32_t eid, uint16_t tid, int64_t, const uint8_t*, int32_t) {
 bool g_dispatch_called = false;
 uint32_t g_dispatch_entity_id = 0;
 uint32_t g_dispatch_rpc_id = 0;
-void FakeDispatch(uint32_t eid, uint32_t rid, intptr_t, const uint8_t*, int32_t) {
+void FakeDispatch(uint32_t eid, uint32_t rid, intptr_t, const uint8_t*, int32_t, uint64_t) {
   g_dispatch_called = true;
   g_dispatch_entity_id = eid;
   g_dispatch_rpc_id = rid;
@@ -325,7 +325,7 @@ TEST_F(CellAppNativeProviderTest, SetNativeCallbacksDispatchRoundtrips) {
   table.entity_destroyed = reinterpret_cast<void*>(&FakeDestroyed);
   provider_.SetNativeCallbacks(&table, sizeof(table));
 
-  provider_.dispatch_rpc_fn()(100, 0x00800001, /*reply_channel=*/0, nullptr, 0);
+  provider_.dispatch_rpc_fn()(100, 0x00800001, /*reply_channel=*/0, nullptr, 0, 0);
   EXPECT_TRUE(g_dispatch_called);
   EXPECT_EQ(g_dispatch_entity_id, 100u);
   EXPECT_EQ(g_dispatch_rpc_id, 0x00800001u);

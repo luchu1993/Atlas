@@ -11,6 +11,9 @@ namespace Atlas.Core;
 internal static class ThreadGuard
 {
     private static int _mainThreadId;
+    public const int kMaxRpcDepth = 32;
+
+    [ThreadStatic] private static int _rpcDepth;
 
     internal static void SetMainThread()
         => _mainThreadId = Environment.CurrentManagedThreadId;
@@ -27,5 +30,19 @@ internal static class ThreadGuard
                 $"main thread: {_mainThreadId}. " +
                 $"Use 'await' to automatically return to the main thread.");
         }
+    }
+
+    // Caps RPC dispatch nesting so an in-process loopback path (test
+    // doubles, future feature flags) can't recurse into a stack overflow.
+    internal readonly struct RpcScope : IDisposable
+    {
+        public RpcScope(uint rpcId)
+        {
+            if (_rpcDepth >= kMaxRpcDepth)
+                throw new InvalidOperationException(
+                    $"RPC dispatch depth exceeded {kMaxRpcDepth}; possible recursion at rpcId=0x{rpcId:X8}");
+            _rpcDepth++;
+        }
+        public void Dispose() => _rpcDepth--;
     }
 }

@@ -137,6 +137,7 @@ struct ClientCellRpcForward {
   EntityID source_entity_id{kInvalidEntityID};
   uint32_t rpc_id{0};
   std::vector<std::byte> payload;
+  uint64_t trace_id{0};
 
   static auto Descriptor() -> const MessageDesc& {
     static const MessageDesc kDesc{msg_id::Id(msg_id::CellApp::kClientCellRpcForward),
@@ -154,6 +155,7 @@ struct ClientCellRpcForward {
     w.Write(rpc_id);
     w.WritePackedInt(static_cast<uint32_t>(payload.size()));
     if (!payload.empty()) w.WriteBytes(std::span<const std::byte>(payload));
+    w.Write(trace_id);
   }
 
   static auto Deserialize(BinaryReader& r) -> Result<ClientCellRpcForward> {
@@ -173,6 +175,10 @@ struct ClientCellRpcForward {
         return Error{ErrorCode::kInvalidArgument, "ClientCellRpcForward: payload truncated"};
       msg.payload.assign(pdata->begin(), pdata->end());
     }
+    auto trace = r.Read<uint64_t>();
+    if (!trace)
+      return Error{ErrorCode::kInvalidArgument, "ClientCellRpcForward: trace_id truncated"};
+    msg.trace_id = *trace;
     return msg;
   }
 };
@@ -184,6 +190,7 @@ struct InternalCellRpc {
   EntityID target_entity_id{kInvalidEntityID};
   uint32_t rpc_id{0};
   std::vector<std::byte> payload;
+  uint64_t trace_id{0};
 
   static auto Descriptor() -> const MessageDesc& {
     static const MessageDesc kDesc{msg_id::Id(msg_id::CellApp::kInternalCellRpc),
@@ -200,6 +207,7 @@ struct InternalCellRpc {
     w.Write(rpc_id);
     w.WritePackedInt(static_cast<uint32_t>(payload.size()));
     if (!payload.empty()) w.WriteBytes(std::span<const std::byte>(payload));
+    w.Write(trace_id);
   }
 
   static auto Deserialize(BinaryReader& r) -> Result<InternalCellRpc> {
@@ -216,6 +224,9 @@ struct InternalCellRpc {
       if (!pdata) return Error{ErrorCode::kInvalidArgument, "InternalCellRpc: payload truncated"};
       msg.payload.assign(pdata->begin(), pdata->end());
     }
+    auto trace = r.Read<uint64_t>();
+    if (!trace) return Error{ErrorCode::kInvalidArgument, "InternalCellRpc: trace_id truncated"};
+    msg.trace_id = *trace;
     return msg;
   }
 };

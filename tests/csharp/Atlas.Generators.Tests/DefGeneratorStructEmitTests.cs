@@ -144,7 +144,9 @@ namespace Atlas.Client
 
         var additionalTexts = new AdditionalText[]
         {
-            new InMemoryAdditionalText("Avatar.def", SourceText.From(defXml, Encoding.UTF8))
+            new InMemoryAdditionalText("Avatar.def", SourceText.From(defXml, Encoding.UTF8)),
+            new InMemoryAdditionalText("entity_ids.xml",
+                SourceText.From(TestManifest.Derive(defXml), Encoding.UTF8)),
         };
 
         var driver = CSharpGeneratorDriver.Create(

@@ -39,6 +39,10 @@ public ref struct SpanWriter
 
     public void WriteBool(bool value) => WriteByte(value ? (byte)1 : (byte)0);
 
+    public void WriteInt8(sbyte value) => WriteByte((byte)value);
+
+    public void WriteUInt8(byte value) => WriteByte(value);
+
     public void WriteInt16(short value)
     {
         EnsureCapacity(2);

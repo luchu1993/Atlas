@@ -29,7 +29,6 @@ internal static class FactoryEmitter
         sb.AppendLine();
         sb.AppendLine("internal static class DefEntityFactoryRegistrations");
         sb.AppendLine("{");
-        sb.AppendLine("    [System.Runtime.CompilerServices.ModuleInitializer]");
         sb.AppendLine("    internal static void RegisterAll()");
         sb.AppendLine("    {");
 

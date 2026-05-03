@@ -35,7 +35,6 @@ internal static class TypeRegistryEmitter
         // effects callers shouldn't trigger ad-hoc.
         sb.AppendLine("public static class DefEntityTypeRegistry");
         sb.AppendLine("{");
-        sb.AppendLine("    [System.Runtime.CompilerServices.ModuleInitializer]");
         sb.AppendLine("    internal static void RegisterAll()");
         sb.AppendLine("    {");
         sb.AppendLine("        try");
@@ -149,9 +148,8 @@ internal static class TypeRegistryEmitter
 
         void AddSection(List<MethodDefModel> methods, byte direction, int slot)
         {
-            var sorted = methods.OrderBy(m => m.Name).ToList();
-            for (int i = 0; i < sorted.Count; i++)
-                allRpcs.Add((sorted[i], direction, slot, i + 1));
+            for (int i = 0; i < methods.Count; i++)
+                allRpcs.Add((methods[i], direction, slot, i + 1));
         }
 
         AddSection(def.ClientMethods, 0x00, slot: 0);

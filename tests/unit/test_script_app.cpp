@@ -66,12 +66,14 @@ class MockNativeProvider : public INativeApiProvider {
   double ServerTime() override { return 0.0; }
   float DeltaTime() override { return 0.0f; }
   uint8_t GetProcessPrefix() override { return 0; }
-  void SendClientRpc(uint32_t, uint32_t, RpcTarget, const std::byte*, int32_t) override {}
-  void SendCellRpc(uint32_t, uint32_t, const std::byte*, int32_t) override {}
-  void SendBaseRpc(uint32_t, uint32_t, const std::byte*, int32_t) override {}
+  void SendClientRpc(uint32_t, uint32_t, RpcTarget, const std::byte*, int32_t,
+                     uint64_t) override {}
+  void SendCellRpc(uint32_t, uint32_t, const std::byte*, int32_t, uint64_t) override {}
+  void SendBaseRpc(uint32_t, uint32_t, const std::byte*, int32_t, uint64_t) override {}
   void RegisterEntityType(const std::byte*, int32_t) override {}
   void UnregisterAllEntityTypes() override {}
   void RegisterStruct(const std::byte*, int32_t) override {}
+  void SetEntityDefDigest(const std::byte*, int32_t) override {}
   void WriteToDb(uint32_t, const std::byte*, int32_t) override {}
   void GiveClientTo(uint32_t, uint32_t) override {}
   auto CreateBaseEntity(uint16_t, uint32_t) -> uint32_t override { return 0; }

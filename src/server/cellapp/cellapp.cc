@@ -265,6 +265,11 @@ void CellApp::RegisterWatchers() {
                       std::function<std::size_t()>([this] { return entity_population_.size(); }));
   wr.Add<std::size_t>("cellapp/space_count",
                       std::function<std::size_t()>([this] { return spaces_.size(); }));
+  wr.Add<uint64_t>("cellapp/caller_spoof_violations_total",
+                   std::function<uint64_t()>([this] { return caller_spoof_violations_total_; }));
+  wr.Add<std::size_t>("cellapp/caller_spoof_sources_count", std::function<std::size_t()>([this] {
+                        return caller_spoof_violations_.size();
+                      }));
 }
 
 void CellApp::TickControllers(float dt) {
@@ -575,9 +580,21 @@ void CellApp::OnClientCellRpcForward(const Address& src, Channel* ch,
     return;
   }
   if (rpc->exposed == ExposedScope::kOwnClient && msg.source_entity_id != msg.target_entity_id) {
-    ATLAS_LOG_WARNING(
-        "CellApp: OwnClient rpc_id=0x{:06X} target={} source={} — cross-entity blocked", msg.rpc_id,
-        msg.target_entity_id, msg.source_entity_id);
+    ++caller_spoof_violations_total_;
+    auto& count = caller_spoof_violations_[msg.source_entity_id];
+    ++count;
+    constexpr uint64_t kSpoofEscalateThreshold = 32;
+    if (count == 1 || count == kSpoofEscalateThreshold) {
+      ATLAS_LOG_WARNING(
+          "CellApp: OwnClient rpc_id=0x{:06X} target={} source={} — cross-entity blocked (source "
+          "violations={})",
+          msg.rpc_id, msg.target_entity_id, msg.source_entity_id, count);
+    }
+    if (count >= kSpoofEscalateThreshold && (count % kSpoofEscalateThreshold) == 0) {
+      ATLAS_LOG_ERROR(
+          "CellApp: caller-spoof escalation: source entity={} accumulated {} OWN_CLIENT violations",
+          msg.source_entity_id, count);
+    }
     return;
   }
 
@@ -589,7 +606,7 @@ void CellApp::OnClientCellRpcForward(const Address& src, Channel* ch,
   }
   dispatch_fn(entity->Id(), msg.rpc_id, reinterpret_cast<intptr_t>(ch),
               reinterpret_cast<const uint8_t*>(msg.payload.data()),
-              static_cast<int32_t>(msg.payload.size()));
+              static_cast<int32_t>(msg.payload.size()), msg.trace_id);
 }
 
 void CellApp::OnInternalCellRpc(const Address& /*src*/, Channel* ch,
@@ -615,7 +632,7 @@ void CellApp::OnInternalCellRpc(const Address& /*src*/, Channel* ch,
   }
   dispatch_fn(entity->Id(), msg.rpc_id, reinterpret_cast<intptr_t>(ch),
               reinterpret_cast<const uint8_t*>(msg.payload.data()),
-              static_cast<int32_t>(msg.payload.size()));
+              static_cast<int32_t>(msg.payload.size()), msg.trace_id);
 }
 
 void CellApp::OnCreateSpace(const Address& /*src*/, Channel* /*ch*/,

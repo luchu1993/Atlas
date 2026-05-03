@@ -110,6 +110,12 @@ int32_t AtlasNetAuthenticate(AtlasNetContext* ctx, AtlasAuthResultFn callback, v
   return ctx->StartAuthenticate(callback, user_data);
 }
 
+int32_t AtlasNetSetEntityDefDigest(AtlasNetContext* ctx, const uint8_t* data, int32_t len) {
+  if (!ctx || !data || len != 32) return ATLAS_NET_ERR_INVAL;
+  ctx->SetEntityDefDigest(data, len);
+  return ATLAS_NET_OK;
+}
+
 int32_t AtlasNetDisconnect(AtlasNetContext* ctx, AtlasDisconnectReason reason) {
   if (!ctx) return ATLAS_NET_ERR_INVAL;
   return ctx->Disconnect(reason);

@@ -30,7 +30,7 @@ class CellAppNativeProvider : public BaseNativeProvider {
   // kOwner targets the source's bound client; kOthers/kAll fan out to
   // every witness with source in AoI, grouped by base_addr.
   void SendClientRpc(uint32_t entity_id, uint32_t rpc_id, RpcTarget target,
-                     const std::byte* payload, int32_t len) override;
+                     const std::byte* payload, int32_t len, uint64_t trace_id) override;
 
   // CellApp-specific surfaces.
   void SetEntityPosition(uint32_t entity_id, float x, float y, float z) override;

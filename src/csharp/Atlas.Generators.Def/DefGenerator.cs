@@ -28,6 +28,23 @@ public sealed class DefGenerator : IIncrementalGenerator
             .Where(static m => m is not null)
             .Select(static (m, _) => m!);
 
+        // 1b. Read entity_ids.xml manifest(s). At most one is expected per
+        // compilation; the manifest is the source of truth for type_id when
+        // it is provided. .def files in the same compilation must drop their
+        // inline `id` attribute.
+        var manifestSources = context.AdditionalTextsProvider
+            .Where(static f => string.Equals(
+                System.IO.Path.GetFileName(f.Path),
+                EntityIdManifestParser.FileName,
+                StringComparison.OrdinalIgnoreCase))
+            .Select(static (f, ct) =>
+            {
+                var text = f.GetText(ct);
+                return text == null ? null : new ManifestSource(f.Path, text.ToString());
+            })
+            .Where(static m => m is not null)
+            .Select(static (m, _) => m!);
+
         // 2. Read process context from preprocessor symbols
         var processCtx = context.CompilationProvider
             .Select(static (c, _) =>
@@ -67,15 +84,18 @@ public sealed class DefGenerator : IIncrementalGenerator
         // 4. Combine and generate
         var combined = defs.Collect()
             .Combine(userEntities.Collect())
-            .Combine(processCtx);
+            .Combine(processCtx)
+            .Combine(manifestSources.Collect());
 
         context.RegisterSourceOutput(combined, Execute);
     }
 
     private static void Execute(SourceProductionContext spc,
-        ((ImmutableArray<ParsedDef> Defs, ImmutableArray<UserEntityInfo> Users), ProcessContext Ctx) input)
+        (((ImmutableArray<ParsedDef> Defs, ImmutableArray<UserEntityInfo> Users) DefsAndUsers,
+          ProcessContext Ctx),
+         ImmutableArray<ManifestSource> Manifests) input)
     {
-        var (defsAndUsers, ctx) = input;
+        var ((defsAndUsers, ctx), manifestSources) = input;
         var (parsed, users) = defsAndUsers;
 
         if (parsed.IsDefaultOrEmpty || users.IsDefaultOrEmpty)
@@ -110,11 +130,12 @@ public sealed class DefGenerator : IIncrementalGenerator
             }
         }
 
-        // Build type index map (1-based, alphabetically sorted by entity name)
-        var allNames = defs.Select(d => d.Name).OrderBy(n => n).ToList();
-        var typeIndexMap = new Dictionary<string, ushort>();
-        for (int i = 0; i < allNames.Count; i++)
-            typeIndexMap[allNames[i]] = (ushort)(i + 1);
+        // Resolve type_id from entity_ids.xml manifest when present.
+        // Inline `id` on .def is reserved as a fallback for unit-test
+        // pipelines that feed XML through DefParser without an AdditionalFile
+        // for the manifest.
+        var manifest = DefGeneratorHelpers.ResolveManifest(manifestSources, spc);
+        var typeIndexMap = DefGeneratorHelpers.BuildTypeIndexMap(defs, manifest, spc);
 
         // Determine base class name based on context
         var baseClass = ctx switch
@@ -275,6 +296,94 @@ public sealed class DefGenerator : IIncrementalGenerator
             var typeRegistry = Emitters.TypeRegistryEmitter.Emit(entityList, typeIndexMap, ctx);
             spc.AddSource("DefEntityTypeRegistry.g.cs", SourceText.From(typeRegistry, System.Text.Encoding.UTF8));
         }
+
+        // EntityDef digest: SHA-256 of normalized entity/struct/component
+        // surface so client and server reject mismatched .def builds at the
+        // login handshake.
+        if (entityList.Count > 0 || linked.Structs.Count > 0 || standaloneComponents.Count > 0)
+        {
+            var digest = Emitters.DigestEmitter.Emit(defs, linked.Structs, standaloneComponents,
+                                                    typeIndexMap);
+            spc.AddSource("EntityDefDigest.g.cs",
+                          SourceText.From(digest, System.Text.Encoding.UTF8));
+        }
+
+        // Single ModuleInitializer entry: replaces per-emitter ones so the
+        // four registration steps run in a fixed order within the assembly.
+        bool hasStructs = linked.Structs.Count > 0;
+        bool hasEntities = entityList.Count > 0;
+        bool hasDispatcher = entityList.Count > 0;
+        if (hasStructs || hasEntities || hasDispatcher)
+        {
+            var bootstrap = Emitters.BootstrapEmitter.Emit(hasStructs, hasEntities, hasDispatcher, ctx);
+            spc.AddSource("DefBootstrap.g.cs",
+                          SourceText.From(bootstrap, System.Text.Encoding.UTF8));
+        }
+    }
+}
+
+internal static class DefGeneratorHelpers
+{
+    public static EntityIdManifest? ResolveManifest(ImmutableArray<ManifestSource> sources,
+                                                    SourceProductionContext spc)
+    {
+        if (sources.IsDefaultOrEmpty) return null;
+        if (sources.Length > 1)
+        {
+            var paths = string.Join(", ", sources.Select(s => s.Path));
+            spc.ReportDiagnostic(Diagnostic.Create(
+                DefDiagnosticDescriptors.DEF025, Location.None, paths,
+                "multiple entity_ids.xml manifests in compilation; expected exactly one"));
+        }
+        var primary = sources[0];
+        return EntityIdManifestParser.Parse(primary.Xml, primary.Path, spc.ReportDiagnostic);
+    }
+
+    public static Dictionary<string, ushort> BuildTypeIndexMap(IEnumerable<EntityDefModel> defs,
+                                                               EntityIdManifest? manifest,
+                                                               SourceProductionContext spc)
+    {
+        var map = new Dictionary<string, ushort>(StringComparer.Ordinal);
+        var owners = new Dictionary<ushort, string>();
+        foreach (var def in defs)
+        {
+            if (string.IsNullOrEmpty(def.Name)) continue;
+            if (!TryResolveId(def, manifest, spc, out var id)) continue;
+            if (owners.TryGetValue(id, out var prev) && prev != def.Name)
+            {
+                spc.ReportDiagnostic(Diagnostic.Create(
+                    DefDiagnosticDescriptors.DEF021, Location.None, def.Name, id, prev));
+                continue;
+            }
+            owners[id] = def.Name;
+            map[def.Name] = id;
+        }
+        return map;
+    }
+
+    private static bool TryResolveId(EntityDefModel def, EntityIdManifest? manifest,
+                                     SourceProductionContext spc, out ushort id)
+    {
+        id = 0;
+        if (manifest == null)
+        {
+            spc.ReportDiagnostic(Diagnostic.Create(
+                DefDiagnosticDescriptors.DEF019, Location.None, def.Name));
+            return false;
+        }
+        if (manifest.DeprecatedNames.Contains(def.Name))
+        {
+            spc.ReportDiagnostic(Diagnostic.Create(
+                DefDiagnosticDescriptors.DEF023, Location.None, def.Name, manifest.SourcePath));
+            return false;
+        }
+        if (!manifest.ActiveByName.TryGetValue(def.Name, out id))
+        {
+            spc.ReportDiagnostic(Diagnostic.Create(
+                DefDiagnosticDescriptors.DEF024, Location.None, def.Name, manifest.SourcePath));
+            return false;
+        }
+        return true;
     }
 }
 
@@ -291,5 +400,17 @@ internal sealed class UserEntityInfo
         Namespace = ns;
         TypeName = typeName;
         BaseClassName = baseClassName;
+    }
+}
+
+internal sealed class ManifestSource
+{
+    public string Path { get; }
+    public string Xml { get; }
+
+    public ManifestSource(string path, string xml)
+    {
+        Path = path;
+        Xml = xml;
     }
 }

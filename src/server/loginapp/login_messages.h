@@ -1,6 +1,7 @@
 #ifndef ATLAS_SERVER_LOGINAPP_LOGIN_MESSAGES_H_
 #define ATLAS_SERVER_LOGINAPP_LOGIN_MESSAGES_H_
 
+#include <array>
 #include <cstdint>
 #include <cstring>
 #include <string>
@@ -23,11 +24,16 @@ enum class LoginStatus : uint8_t {
   kInternalError = 6,
   kLoginInProgress = 7,
   kServerBusy = 8,
+  kDefMismatch = 9,
 };
 
 struct LoginRequest {
   std::string username;
   std::string password_hash;  // SHA-256 hex of password
+  // SHA-256 of the client's entity-def surface; compared at BaseApp against
+  // its own digest so mismatched .def builds bounce on the handshake instead
+  // of mis-routing RPCs at runtime. All-zero from pre-handshake clients.
+  std::array<uint8_t, 32> entity_def_digest{};
 
   static auto Descriptor() -> const MessageDesc& {
     static const MessageDesc kDesc{msg_id::Id(msg_id::Login::kLoginRequest),
@@ -42,15 +48,19 @@ struct LoginRequest {
   void Serialize(BinaryWriter& w) const {
     w.WriteString(username);
     w.WriteString(password_hash);
+    w.WriteBytes(std::span<const std::byte>(
+        reinterpret_cast<const std::byte*>(entity_def_digest.data()), entity_def_digest.size()));
   }
 
   static auto Deserialize(BinaryReader& r) -> Result<LoginRequest> {
     auto u = r.ReadString();
     auto p = r.ReadString();
-    if (!u || !p) return Error{ErrorCode::kInvalidArgument, "LoginRequest: truncated"};
+    auto d = r.ReadBytes(32);
+    if (!u || !p || !d) return Error{ErrorCode::kInvalidArgument, "LoginRequest: truncated"};
     LoginRequest msg;
     msg.username = std::move(*u);
     msg.password_hash = std::move(*p);
+    std::memcpy(msg.entity_def_digest.data(), d->data(), 32);
     return msg;
   }
 };
@@ -279,6 +289,9 @@ struct PrepareLogin {
   Address client_addr;
   std::vector<std::byte> entity_blob;
   bool blob_prefetched{false};
+  // Stamped from LoginRequest; BaseApp matches it against its own digest
+  // so a mismatched .def build is rejected before any RPC dispatch.
+  std::array<uint8_t, 32> entity_def_digest{};
 
   static auto Descriptor() -> const MessageDesc& {
     static const MessageDesc kDesc{msg_id::Id(msg_id::Login::kPrepareLogin),
@@ -301,6 +314,8 @@ struct PrepareLogin {
     w.Write(static_cast<uint8_t>(blob_prefetched ? 1 : 0));
     w.Write(static_cast<uint32_t>(entity_blob.size()));
     if (!entity_blob.empty()) w.WriteBytes(entity_blob);
+    w.WriteBytes(std::span<const std::byte>(
+        reinterpret_cast<const std::byte*>(entity_def_digest.data()), entity_def_digest.size()));
   }
 
   static auto Deserialize(BinaryReader& r) -> Result<PrepareLogin> {
@@ -329,6 +344,9 @@ struct PrepareLogin {
       if (!blob_span) return Error{ErrorCode::kInvalidArgument, "PrepareLogin: blob truncated"};
       msg.entity_blob.assign(blob_span->begin(), blob_span->end());
     }
+    auto digest_span = r.ReadBytes(32);
+    if (!digest_span) return Error{ErrorCode::kInvalidArgument, "PrepareLogin: digest truncated"};
+    std::memcpy(msg.entity_def_digest.data(), digest_span->data(), 32);
     return msg;
   }
 };

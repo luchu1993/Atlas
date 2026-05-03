@@ -126,8 +126,9 @@ class BaseApp : public EntityApp {
   void OnCellAppDeath(const baseapp::CellAppDeath& msg);
   void OnCellRpcForward(Channel& ch, const baseapp::CellRpcForward& msg);
   void OnBroadcastRpcFromCell(Channel& ch, const baseapp::BroadcastRpcFromCell& msg);
-  // Wraps rpc_id + payload in kClientRpcMessageId envelope.
-  void RelayRpcToClient(Channel& client_ch, uint32_t rpc_id, const std::vector<std::byte>& payload);
+  // Wraps rpc_id + trace_id + payload in kClientRpcMessageId envelope.
+  void RelayRpcToClient(Channel& client_ch, uint32_t rpc_id, const std::vector<std::byte>& payload,
+                        uint64_t trace_id);
   void OnReplicatedDeltaFromCell(Channel& ch, const baseapp::ReplicatedDeltaFromCell& msg);
   void OnReplicatedReliableDeltaFromCell(Channel& ch,
                                          const baseapp::ReplicatedReliableDeltaFromCell& msg);
@@ -276,6 +277,13 @@ class BaseApp : public EntityApp {
   std::unordered_map<EntityID, Address> entity_client_index_;
   std::unordered_map<Address, EntityID> client_entity_index_;
   std::unordered_map<Address, DeltaForwarder> client_delta_forwarders_;
+
+  struct RpcRateBucket {
+    double tokens{0.0};
+    std::chrono::steady_clock::time_point last_refill{};
+    uint32_t consecutive_violations{0};
+  };
+  std::unordered_map<Address, RpcRateBucket> rpc_rate_buckets_;
   uint64_t delta_bytes_sent_total_{0};
   uint64_t delta_bytes_deferred_total_{0};
   uint64_t reliable_delta_bytes_sent_total_{0};
@@ -296,6 +304,14 @@ class BaseApp : public EntityApp {
   uint64_t prepared_login_timeout_total_{0};
   // Accumulated client-reported reliable-delta gap count.
   uint64_t client_event_seq_gaps_total_{0};
+  uint64_t client_base_rpc_received_total_{0};
+  uint64_t client_cell_rpc_received_total_{0};
+  uint64_t cell_rpc_forward_received_total_{0};
+  uint64_t broadcast_rpc_received_total_{0};
+  uint64_t client_rpc_dropped_oversize_total_{0};
+  uint64_t client_rpc_dropped_unknown_total_{0};
+  uint64_t client_rpc_dropped_unauthorized_total_{0};
+  uint64_t client_rpc_dropped_rate_total_{0};
 
   LatencyHistogram prepare_login_latency_;
   LatencyHistogram authenticate_latency_;
@@ -362,6 +378,9 @@ class BaseApp : public EntityApp {
   auto BindClient(EntityID entity_id, const Address& client_addr) -> bool;
   void UnbindClient(EntityID entity_id);
   void OnExternalClientDisconnect(Channel& ch);
+  // Returns true when one token is consumed; false when the bucket is empty
+  // and the call should be dropped at the message boundary.
+  bool ConsumeRpcRateToken(const Address& client_addr);
   void SendPrepareLoginResult(const Address& reply_addr, const login::PrepareLoginResult& msg);
 };
 

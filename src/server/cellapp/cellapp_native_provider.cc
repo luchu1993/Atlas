@@ -62,7 +62,8 @@ uint8_t CellAppNativeProvider::GetProcessPrefix() {
 }
 
 void CellAppNativeProvider::SendClientRpc(uint32_t entity_id, uint32_t rpc_id, RpcTarget target,
-                                          const std::byte* payload, int32_t len) {
+                                          const std::byte* payload, int32_t len,
+                                          uint64_t trace_id) {
   if (!IsValidNativePayload(payload, len)) {
     ATLAS_LOG_WARNING("CellApp: SendClientRpc rejected invalid payload len={}", len);
     return;
@@ -114,6 +115,7 @@ void CellAppNativeProvider::SendClientRpc(uint32_t entity_id, uint32_t rpc_id, R
     baseapp::BroadcastRpcFromCell msg;
     msg.rpc_id = rpc_id;
     msg.dest_entity_ids = std::move(ids);
+    msg.trace_id = trace_id;
     if (len > 0) msg.payload.assign(payload, payload + static_cast<std::size_t>(len));
     (void)(*base_ch)->SendMessage(msg);
   }

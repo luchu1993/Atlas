@@ -45,10 +45,9 @@ internal static class RpcStubEmitter
     private static void EmitMethods(StringBuilder sb, List<MethodDefModel> methods,
         string section, ProcessContext ctx, ushort typeIndex, byte direction)
     {
-        var sorted = methods.OrderBy(m => m.Name).ToList();
-        for (int i = 0; i < sorted.Count; i++)
+        for (int i = 0; i < methods.Count; i++)
         {
-            var method = sorted[i];
+            var method = methods[i];
             var role = RpcRoleHelper.GetRole(section, ctx, method.Exposed);
             int rpcId = RpcIdEncoder.Encode(slot: 0, direction, typeIndex, i + 1);
             EmitMethod(sb, method, role, rpcId, section);

@@ -25,6 +25,7 @@ struct MockProvider final : public INativeApiProvider {
   int send_base_rpc_count = 0;
   int register_type_count = 0;
   int register_struct_count = 0;
+  int set_digest_count = 0;
   bool unregister_all_called = false;
   uint8_t process_prefix = 42;
 
@@ -36,15 +37,16 @@ struct MockProvider final : public INativeApiProvider {
   float DeltaTime() override { return 0.016f; }
   uint8_t GetProcessPrefix() override { return process_prefix; }
 
-  void SendClientRpc(uint32_t, uint32_t, RpcTarget, const std::byte*, int32_t) override {
+  void SendClientRpc(uint32_t, uint32_t, RpcTarget, const std::byte*, int32_t,
+                     uint64_t) override {
     ++send_client_rpc_count;
   }
 
-  void SendCellRpc(uint32_t, uint32_t, const std::byte*, int32_t) override {
+  void SendCellRpc(uint32_t, uint32_t, const std::byte*, int32_t, uint64_t) override {
     ++send_cell_rpc_count;
   }
 
-  void SendBaseRpc(uint32_t, uint32_t, const std::byte*, int32_t) override {
+  void SendBaseRpc(uint32_t, uint32_t, const std::byte*, int32_t, uint64_t) override {
     ++send_base_rpc_count;
   }
 
@@ -53,6 +55,8 @@ struct MockProvider final : public INativeApiProvider {
   void UnregisterAllEntityTypes() override { unregister_all_called = true; }
 
   void RegisterStruct(const std::byte*, int32_t) override { ++register_struct_count; }
+
+  void SetEntityDefDigest(const std::byte*, int32_t) override { ++set_digest_count; }
 
   void WriteToDb(uint32_t, const std::byte*, int32_t) override {}
   void GiveClientTo(uint32_t, uint32_t) override {}
@@ -146,9 +150,9 @@ TEST(NativeApiProvider, RpcCallsDelegateCorrectly) {
   MockProvider mock;
   SetNativeApiProvider(&mock);
 
-  mock.SendClientRpc(1, 2, RpcTarget::kOwner, nullptr, 0);
-  mock.SendCellRpc(1, 2, nullptr, 0);
-  mock.SendBaseRpc(1, 2, nullptr, 0);
+  mock.SendClientRpc(1, 2, RpcTarget::kOwner, nullptr, 0, 0);
+  mock.SendCellRpc(1, 2, nullptr, 0, 0);
+  mock.SendBaseRpc(1, 2, nullptr, 0, 0);
 
   EXPECT_EQ(mock.send_client_rpc_count, 1);
   EXPECT_EQ(mock.send_cell_rpc_count, 1);
