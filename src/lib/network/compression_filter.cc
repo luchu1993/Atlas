@@ -9,16 +9,28 @@
 
 namespace atlas {
 
+namespace {
+
+// memcpy(dst, nullptr, 0) is UB even when n == 0, and span::data() may
+// return null for an empty range — guard the source pointer here.
+auto WrapUncompressed(std::span<const std::byte> data) -> std::vector<std::byte> {
+  std::vector<std::byte> result(1 + data.size());
+  result[0] = static_cast<std::byte>(CompressionType::kNone);
+  if (!data.empty()) {
+    std::memcpy(result.data() + 1, data.data(), data.size());
+  }
+  return result;
+}
+
+}  // namespace
+
 CompressionFilter::CompressionFilter(std::size_t threshold, CompressionType type)
     : threshold_(threshold), type_(type) {}
 
 auto CompressionFilter::SendFilter(std::span<const std::byte> data)
     -> Result<std::vector<std::byte>> {
   if (data.size() < threshold_ || type_ == CompressionType::kNone) {
-    std::vector<std::byte> result(1 + data.size());
-    result[0] = static_cast<std::byte>(CompressionType::kNone);
-    std::memcpy(result.data() + 1, data.data(), data.size());
-    return result;
+    return WrapUncompressed(data);
   }
 
   uLongf compressed_bound = compressBound(static_cast<uLong>(data.size()));
@@ -42,10 +54,7 @@ auto CompressionFilter::SendFilter(std::span<const std::byte> data)
   std::size_t total_compressed = kHeaderSize + dest_len;
 
   if (total_compressed >= 1 + data.size()) {
-    std::vector<std::byte> result(1 + data.size());
-    result[0] = static_cast<std::byte>(CompressionType::kNone);
-    std::memcpy(result.data() + 1, data.data(), data.size());
-    return result;
+    return WrapUncompressed(data);
   }
 
   output.resize(total_compressed);
