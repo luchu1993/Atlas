@@ -1,4 +1,4 @@
-name: net_client cross-platform
+name: atlas_net_client (Cross-Platform)
 
 on:
   workflow_dispatch:
@@ -11,13 +11,13 @@ on:
       - 'src/lib/serialization/**'
       - 'src/lib/platform/**'
       - 'CMakePresets.json'
-      - '.github/workflows/net_client_cross.yml'
+      - '.github/workflows/atlas-net-client.yml'
   pull_request:
     branches: [main]
     paths:
       - 'src/lib/net_client/**'
       - 'CMakePresets.json'
-      - '.github/workflows/net_client_cross.yml'
+      - '.github/workflows/atlas-net-client.yml'
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
