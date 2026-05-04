@@ -117,6 +117,28 @@ cmake --build build/debug --config Debug
 
 支持的平台还提供 sanitizer 预设：`asan`、`asan-msvc`、`tsan`、`ubsan`。
 
+### 在 Windows 下通过 WSL 构建与测试 Linux 版本
+
+在同一份 Windows clone 上验证 Linux 构建——无需第二份 checkout、无需手动同步。源码就地从 `/mnt/<drive>/...` 读取；构建产物写到 WSL 文件系统的 `~/atlas-builds/<preset>`，避免跨文件系统写入拖慢编译。检测到 `sccache` 时自动启用，与 CI 一致。
+
+前置条件（管理员 PowerShell，仅一次）：`wsl --install -d Ubuntu-24.04`。
+
+```bash
+# 一次性安装工具链（g++-13、ninja、.NET 9、sccache、clang-format 等）
+tools\bin\setup_linux.bat
+
+# 构建（语义与 build.bat 对齐）
+tools\bin\build_linux.bat
+tools\bin\build_linux.bat release
+tools\bin\build_linux.bat --clean
+
+# 构建 + ctest
+tools\bin\build_linux.bat --with-tests
+tools\bin\build_linux.bat --with-tests --label "unit|integration"
+```
+
+需要换 build 目录时通过 `ATLAS_LINUX_BUILD_DIR` 覆盖默认路径。
+
 ## 测试
 
 ```bash

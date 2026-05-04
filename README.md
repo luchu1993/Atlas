@@ -117,6 +117,28 @@ cmake --build build/debug --config Debug
 
 Sanitizer presets are available where supported: `asan`, `asan-msvc`, `tsan`, and `ubsan`.
 
+### Linux build and test from Windows (WSL)
+
+Verify the Linux build against the same Windows clone — no second checkout, no manual sync. Source is read in place from `/mnt/<drive>/...`; build artefacts land in `~/atlas-builds/<preset>` inside the WSL filesystem so cross-FS writes don't cap compile speed. `sccache` is picked up automatically when present, mirroring CI.
+
+One-time prerequisite (elevated PowerShell): `wsl --install -d Ubuntu-24.04`.
+
+```bash
+# One-time toolchain install (g++-13, ninja, .NET 9, sccache, clang-format, ...)
+tools\bin\setup_linux.bat
+
+# Build (mirrors build.bat semantics)
+tools\bin\build_linux.bat
+tools\bin\build_linux.bat release
+tools\bin\build_linux.bat --clean
+
+# Build + ctest
+tools\bin\build_linux.bat --with-tests
+tools\bin\build_linux.bat --with-tests --label "unit|integration"
+```
+
+Override the build dir with `ATLAS_LINUX_BUILD_DIR` if you want it elsewhere.
+
 ## Test
 
 ```bash
