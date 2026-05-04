@@ -2,19 +2,59 @@
 
 from __future__ import annotations
 
+import os
 import shutil
 import subprocess
 import sys
 from pathlib import Path
 
 
+_SKIP_DISTROS = {
+    "docker-desktop",
+    "docker-desktop-data",
+    "rancher-desktop",
+    "rancher-desktop-data",
+}
+
+
 def is_available() -> bool:
     return shutil.which("wsl.exe") is not None
 
 
-def to_wsl_path(win_path: Path) -> str:
+def _list_distros() -> list[str]:
     res = subprocess.run(
-        ["wsl.exe", "wslpath", "-a", str(win_path)],
+        ["wsl.exe", "--list", "--quiet"],
+        capture_output=True, check=True,
+    )
+    text = res.stdout.decode("utf-16-le", errors="ignore").lstrip("﻿")
+    return [line.strip() for line in text.splitlines() if line.strip()]
+
+
+def pick_distro() -> str:
+    """Linux distro for Atlas builds; honors $ATLAS_WSL_DISTRO.
+    Prefers Ubuntu/Debian (apt-based — the toolchain installer needs it).
+    Skips Docker/Rancher Desktop distros: no apt, /mnt/host/<drive> mounts."""
+    override = os.environ.get("ATLAS_WSL_DISTRO")
+    if override:
+        return override
+    candidates = [n for n in _list_distros() if n.lower() not in _SKIP_DISTROS]
+    if not candidates:
+        raise RuntimeError(
+            "no usable WSL distro found. Install one with "
+            "'wsl --install -d Ubuntu-24.04' (elevated PowerShell), "
+            "or override with $ATLAS_WSL_DISTRO."
+        )
+    for name in candidates:
+        if "ubuntu" in name.lower() or "debian" in name.lower():
+            return name
+    return candidates[0]
+
+
+def to_wsl_path(win_path: Path, distro: str | None = None) -> str:
+    distro = distro or pick_distro()
+    arg = win_path.as_posix() if isinstance(win_path, Path) else str(win_path).replace("\\", "/")
+    res = subprocess.run(
+        ["wsl.exe", "-d", distro, "wslpath", "-a", arg],
         capture_output=True, check=True, text=True,
     )
     return res.stdout.strip()
@@ -29,6 +69,8 @@ def reinvoke_python(script: Path, args: list[str] | None = None) -> int:
         )
     if args is None:
         args = sys.argv[1:]
-    cmd = ["wsl.exe", "-e", "python3", to_wsl_path(script.resolve()), *args]
+    distro = pick_distro()
+    cmd = ["wsl.exe", "-d", distro, "-e", "python3",
+           to_wsl_path(script.resolve(), distro), *args]
     print(f"[wsl] -> {' '.join(cmd)}", flush=True)
     return subprocess.call(cmd)
