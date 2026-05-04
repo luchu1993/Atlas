@@ -17,6 +17,15 @@ set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 # Export compile_commands.json for clangd / IDE integration
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
+# Every Atlas binary lands in a flat bin/<preset>/, so RPATH=$ORIGIN lets
+# the loader find sibling .so files (mimalloc, atlas_engine, db plugins,
+# atlas_test_helpers) without LD_LIBRARY_PATH. No-op on Windows.
+if(UNIX AND NOT APPLE)
+  set(CMAKE_BUILD_RPATH_USE_ORIGIN TRUE)
+  set(CMAKE_BUILD_RPATH "$ORIGIN")
+  set(CMAKE_INSTALL_RPATH "$ORIGIN")
+endif()
+
 # /Z7 — embed CodeView records into each .obj so cl.exe TUs don't serialize
 # through mspdbsrv.exe writing to a single PDB. Linker still emits a final
 # PDB. Restricted to configs that already request debug info; Release stays

@@ -7,27 +7,37 @@ namespace Atlas.Client.IntegrationTests;
 
 internal static partial class NativeLibraryResolver
 {
+    private const string TestHelpersName = "atlas_test_helpers";
+
     [ModuleInitializer]
     public static void Install()
     {
         var binDir = ResolveBinDir();
         if (binDir is null) return;
 
-        // OS DLL search must locate atlas_test_helpers.dll's transitive
-        // deps (TracyClient, mimalloc, atlas_engine). Setting PATH after
-        // process start is too late on Windows; SetDllDirectory + the
-        // PATH fallback covers Win + Linux.
+        // Windows: SetDllDirectory teaches LoadLibrary about transitive deps
+        // (TracyClient, mimalloc, atlas_engine) before any DllImport fires.
         if (OperatingSystem.IsWindows())
         {
             SetDllDirectory(binDir);
         }
-        else
-        {
-            var existing = Environment.GetEnvironmentVariable("LD_LIBRARY_PATH") ?? "";
-            if (!existing.Contains(binDir, StringComparison.Ordinal))
-                Environment.SetEnvironmentVariable("LD_LIBRARY_PATH", $"{binDir}:{existing}");
-        }
+
+        // Linux: LD_LIBRARY_PATH is read once at process startup, so setting
+        // it now is too late. Resolve atlas_test_helpers by absolute path via
+        // a DllImportResolver instead.
+        NativeLibrary.SetDllImportResolver(typeof(NativeLibraryResolver).Assembly,
+            (name, asm, search) =>
+            {
+                if (name != TestHelpersName) return IntPtr.Zero;
+                var path = Path.Combine(binDir, NativeFilename(name));
+                return NativeLibrary.TryLoad(path, out var handle) ? handle : IntPtr.Zero;
+            });
     }
+
+    private static string NativeFilename(string name) =>
+        OperatingSystem.IsWindows() ? $"{name}.dll" :
+        OperatingSystem.IsMacOS()   ? $"lib{name}.dylib" :
+                                      $"lib{name}.so";
 
     [LibraryImport("kernel32.dll", EntryPoint = "SetDllDirectoryW", StringMarshalling = StringMarshalling.Utf16)]
     [return: MarshalAs(UnmanagedType.Bool)]
@@ -39,10 +49,11 @@ internal static partial class NativeLibraryResolver
         if (!string.IsNullOrEmpty(env) && Directory.Exists(env)) return env;
 
         var dir = Path.GetDirectoryName(typeof(NativeLibraryResolver).Assembly.Location);
+        var probeFile = NativeFilename(TestHelpersName);
         for (int i = 0; i < 10 && dir is not null; i++)
         {
             var probe = Path.Combine(dir, "bin", "debug");
-            if (Directory.Exists(probe) && File.Exists(Path.Combine(probe, "atlas_test_helpers.dll")))
+            if (Directory.Exists(probe) && File.Exists(Path.Combine(probe, probeFile)))
                 return probe;
             dir = Path.GetDirectoryName(dir);
         }
