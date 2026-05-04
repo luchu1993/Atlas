@@ -109,6 +109,7 @@ class TestScriptApp : public ScriptApp {
   int captured_on_init_count{0};
   int captured_on_tick_count{0};
   int captured_on_shutdown_count{0};
+  bool captured_initialized{false};
   bool captured_finalized{false};
   bool captured_last_is_reload{false};
 
@@ -161,6 +162,7 @@ class TestScriptApp : public ScriptApp {
       captured_on_init_count = injected_engine_->on_init_count;
       captured_on_tick_count = injected_engine_->on_tick_count;
       captured_on_shutdown_count = injected_engine_->on_shutdown_count;
+      captured_initialized = injected_engine_->initialized;
       captured_finalized = injected_engine_->finalized;
       captured_last_is_reload = injected_engine_->last_is_reload;
       injected_engine_.reset();
@@ -263,8 +265,7 @@ TEST(ScriptApp, ScriptEngineInitCalledOnStartup) {
   ScriptArgv args;
   app.RunApp(args.argc(), args.argv());
 
-  ASSERT_NE(app.mock_engine, nullptr);
-  EXPECT_TRUE(app.mock_engine->initialized);
+  EXPECT_TRUE(app.captured_initialized);
   EXPECT_EQ(app.captured_on_init_count, 1);
   EXPECT_FALSE(app.captured_last_is_reload);
 }
