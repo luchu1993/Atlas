@@ -75,10 +75,13 @@ jobs:
       - name: Configure
         env:
           SCCACHE_DIR: ${{ github.workspace }}/.sccache
+        # ATLAS_BUILD_NET_CLIENT=ON pulls in atlas_test_helpers, the
+        # P/Invoke surface for the Atlas.Client.IntegrationTests step below.
         run: >
           cmake --preset debug
           -DCMAKE_C_COMPILER_LAUNCHER=sccache
           -DCMAKE_CXX_COMPILER_LAUNCHER=sccache
+          -DATLAS_BUILD_NET_CLIENT=ON
 
       - name: Build
         env:

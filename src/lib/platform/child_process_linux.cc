@@ -76,26 +76,52 @@ auto ChildProcess::Start(Options opts) -> Result<ChildProcess> {
     return Error{ErrorCode::kInternalError, std::string("pipe() failed: ") + strerror(errno)};
   }
 
+  // Self-pipe + FD_CLOEXEC: a successful exec closes the write end (parent
+  // reads EOF), a failure writes errno through it for synchronous reporting.
+  int errpipe[2] = {-1, -1};
+  if (pipe(errpipe) != 0) {
+    int err = errno;
+    close(pipefd[0]);
+    close(pipefd[1]);
+    return Error{ErrorCode::kInternalError, std::string("pipe() failed: ") + strerror(err)};
+  }
+  if (fcntl(errpipe[1], F_SETFD, FD_CLOEXEC) != 0) {
+    int err = errno;
+    close(pipefd[0]);
+    close(pipefd[1]);
+    close(errpipe[0]);
+    close(errpipe[1]);
+    return Error{ErrorCode::kInternalError,
+                 std::string("fcntl(FD_CLOEXEC) failed: ") + strerror(err)};
+  }
+
   pid_t pid = fork();
   if (pid < 0) {
     int err = errno;
     close(pipefd[0]);
     close(pipefd[1]);
+    close(errpipe[0]);
+    close(errpipe[1]);
     return Error{ErrorCode::kInternalError, std::string("fork() failed: ") + strerror(err)};
   }
 
   if (pid == 0) {
-    // Child. Redirect stdout + stderr to the write end, then exec.
     close(pipefd[0]);
+    close(errpipe[0]);
     dup2(pipefd[1], STDOUT_FILENO);
     dup2(pipefd[1], STDERR_FILENO);
     close(pipefd[1]);
 
+    auto report_and_exit = [&](int err) {
+      ssize_t n = ::write(errpipe[1], &err, sizeof(err));
+      (void)n;
+      _exit(127);
+    };
+
     if (!opts.working_directory.empty()) {
-      if (chdir(opts.working_directory.c_str()) != 0) _exit(127);
+      if (chdir(opts.working_directory.c_str()) != 0) report_and_exit(errno);
     }
 
-    // Build argv array. argv[0] is the exe path.
     std::vector<std::string> storage;
     storage.reserve(1 + opts.args.size());
     storage.emplace_back(opts.exe.string());
@@ -107,12 +133,28 @@ auto ChildProcess::Start(Options opts) -> Result<ChildProcess> {
     argv_ptrs.push_back(nullptr);
 
     execvp(argv_ptrs[0], argv_ptrs.data());
-    // execvp only returns on failure.
-    _exit(127);
+    report_and_exit(errno);
   }
 
-  // Parent.
-  close(pipefd[1]);  // parent won't write
+  close(pipefd[1]);
+  close(errpipe[1]);
+
+  int child_errno = 0;
+  ssize_t er = 0;
+  while (true) {
+    er = ::read(errpipe[0], &child_errno, sizeof(child_errno));
+    if (er >= 0 || errno != EINTR) break;
+  }
+  close(errpipe[0]);
+
+  if (er > 0) {
+    // Reap so the failed exec doesn't leave a zombie behind.
+    int status = 0;
+    waitpid(pid, &status, 0);
+    close(pipefd[0]);
+    return Error{ErrorCode::kInternalError,
+                 std::string("execvp(") + opts.exe.string() + ") failed: " + strerror(child_errno)};
+  }
 
   ChildProcess cp;
   cp.impl_ = std::make_unique<Impl>();
