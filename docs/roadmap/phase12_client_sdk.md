@@ -1,11 +1,12 @@
 # Phase 12: 客户端 SDK
 
-**Status:** ✅ 主线完成（`atlas_net_client.dll` C API、`Atlas.Client`
-实体管理 / 回调 / 组件、`Atlas.Client.Desktop` + `Atlas.Client.Unity`
-对称的 `LoginClient` / `AtlasClient` async 包装、`AvatarFilter` 插值算法类、
-控制台测试客户端 `src/client/` 登录+AOI+RPC 全链路、Unity `com.atlas.client`
-包骨架、跨平台 CI 矩阵均已落地）；剩余 C# 端到端集成测试 + 客户端解码路径
-统一（`AvatarFilter` 接入生产）⬜。
+**Status:** ✅ 已落地。`atlas_net_client.dll` 单 `on_deliver` C API
+(ABI 0x02000000)、`Atlas.Client` 实体管理 + `AvatarFilter` peer 路径接入
+生产、`Atlas.Client.Desktop`（`AtlasClient` / `LoginClient`）+ Unity
+`AtlasNetworkManager` 共用 `ClientCallbacks.DeliverFromServer` 解码、
+控制台 `atlas_client.exe` 登录 + AoI + RPC 全链路、跨平台 CI 矩阵均已
+就绪；FakeCluster 集成测试覆盖 enter/volatile envelope → AvatarFilter
+完整 wire path。
 **前置依赖:** Phase 9 (LoginApp)、Phase 10 (CellApp AOI)、脚本层
 `Atlas.Shared` + Source Generator（[`docs/scripting/`](../scripting/)）
 
@@ -82,32 +83,32 @@ await client.ConnectAsync("login.example.com", 20013, user, pwHash, ct);
   pending source 置 Canceled，最后释放自身 `GCHandle`。`AtlasClient` 在
   `Dispose` 时同样清理它持有的 coro loop + RPC registry（除非 ctor 传
   `installCoroLoop: false`，由 host 自管）。
-- **桌面 vs Unity 差异**：API 形态完全一致；底层只在 native callback 装载
-  方式上不同 —— 桌面用 `[UnmanagedCallersOnly]` + `delegate* unmanaged[Cdecl]`，
-  Unity 用 `[MonoPInvokeCallback]` + `Marshal.GetFunctionPointerForDelegate`
-  + 缓存 delegate 实例（防 GC）。两端共用 `Atlas.Client/Native/AtlasNetNative.cs`
-  PInvoke 表。
+- **桌面 vs Unity 差异**：API 形态完全一致；两端各自实现 `IAtlasNetEvents`
+  并经 `AtlasNetCallbackBridge.Register` 接入 `on_deliver`，再把 payload
+  交给共享的 `Atlas.Client.ClientCallbacks.DeliverFromServer` 解码。底层
+  P/Invoke trampoline 装载方式不同（桌面 `[UnmanagedCallersOnly]`，
+  Unity `[MonoPInvokeCallback]` + 缓存 delegate 防 GC），其余共享。
 - **`AtlasTask<T>.FromSource(IAtlasTaskSource<T>, short)`** 是 Atlas.Coro
   暴露给外部 assembly 的公共工厂：让 `LoginClient` 用自己的 source 类型
   包装 PInvoke 完成事件，无需走运行期分配路径。
 - **Update 语义差异**：桌面 `AtlasClient.Update()` 同时 Poll +
   ManagedAtlasLoop.Drain；Unity 端 `Update()` 只 Poll，`UnityLoop` 由
-  PlayerLoop 自动 tick。
+  PlayerLoop 自动 tick。两端在 `Update` 里调
+  `ClientCallbacks.EntityManager.TickInterpolation(dt)` 推动 peer 实体的
+  AvatarFilter 收敛。
 
-## 剩余工作
+## AvatarFilter 数据路径
 
-- **端到端集成测试** ⬜ —— 在 `tests/integration/test_client_flow.cpp` 已覆盖
-  底层 C API 的基础上，加 C# 测试拉真 LoginApp + BaseApp + DBApp 集群，
-  驱动 `AtlasClient.ConnectAsync` → RPC → Disconnect 全链路。
-
-- **客户端解码路径统一 + `AvatarFilter` 接入生产** ⬜ ——
-  `AvatarFilter` 类只跑单元测试，没有任何生产路径喂数据。Desktop 解码
-  贯通但 `ClientEntity.ApplyPositionUpdate` **直接 snap 位置**，没用插值；
-  Unity 在 `AtlasNetworkManager` 把 `OnEntityPosition` 接到了
-  `AvatarFilter.Input`，但 `client_session.cc` 从未注册 AoI 信封 handler，
-  `callbacks_.on_entity_position` 在生产里永远是 noop。
-  方向：把 `net_client.dll` 的 10 个 typed callback 收敛为单一
-  `deliver_from_server`（与 Desktop 同形）→ 两端共用 `ClientCallbacks`
-  解码（major ABI bump）；把 `AvatarFilter` 实例化提到 `ClientEntity`
-  基类（owner entity 例外）；位置信封加 `serverTime` 字段并 bump
-  `EntityDefDigest`；扩展 FakeCluster CAPI 加端到端测试。
+- 服务端 `Witness::SendEntityUpdate` / `BuildEnterEnvelope` 把
+  `Clock::now()` 作为 `serverTime` 直接写进 38B volatile envelope
+  （`[u8 kind=3][u32 eid][3f pos][3f dir][u8 og][f64 server_time]`）；
+  enter envelope 同样在 on_ground 与 peer snapshot 之间夹一个 `serverTime`。
+  服务端只读 `chrono::steady_clock`，不需要把时钟参数沿调用链下传。
+- 客户端 `ClientCallbacks.DispatchPositionUpdate` / `DispatchEnter` 解
+  `serverTime` 后转给 `ClientEntityManager.ApplyPosition` / `OnEnter`，
+  最终落到 `ClientEntity.ApplyPositionUpdate`。
+- `ClientEntity` 在第一次收到 peer 样本时 lazy-allocate `Filter`；owner
+  实体（`ClientCallbacks.CreateEntity` 路径）置 `IsOwner = true` 跳过
+  filter 走 snap 路径。
+- 渲染端调 `ClientEntity.TryGetInterpolated(clientTime)` 拉插值结果；
+  服务端授权纠正触发 `ResetInterpolation()` 清环重启。

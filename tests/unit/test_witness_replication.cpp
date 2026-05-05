@@ -96,10 +96,6 @@ class WitnessReplicationTest : public ::testing::Test {
   }
 };
 
-// ----------------------------------------------------------------------------
-// Volatile position updates
-// ----------------------------------------------------------------------------
-
 TEST_F(WitnessReplicationTest, VolatileJumpsToLatestSeq) {
   Space space(1);
   auto* observer = MakeEntity(space, 1, {0, 0, 0});
@@ -194,10 +190,6 @@ TEST_F(WitnessReplicationTest, VolatileEnvelopeCarriesMonotonicServerTime) {
   EXPECT_GE(t2, t1) << "server_time must be monotonically non-decreasing";
 }
 
-// ----------------------------------------------------------------------------
-// Property delta replay
-// ----------------------------------------------------------------------------
-
 TEST_F(WitnessReplicationTest, PropertyDeltasReplayInOrder) {
   Space space(1);
   auto* observer = MakeEntity(space, 1, {0, 0, 0});
@@ -272,10 +264,6 @@ TEST_F(WitnessReplicationTest, AllZeroDeltaIsSkippedButSeqAdvances) {
   // Seq advanced so a later non-empty frame isn't mistaken for a gap.
   EXPECT_EQ(cache.last_event_seq, 1u);
 }
-
-// ----------------------------------------------------------------------------
-// Snapshot fallback — observer beyond the history window
-// ----------------------------------------------------------------------------
 
 TEST_F(WitnessReplicationTest, SnapshotFallbackWhenBeyondHistoryWindow) {
   Space space(1);
@@ -371,11 +359,7 @@ TEST_F(WitnessReplicationTest, UpdateEmitsNothingWhenFullyCaughtUp) {
   EXPECT_TRUE(sent_.empty());
 }
 
-// ----------------------------------------------------------------------------
-// Distance LOD scheduling
-// ----------------------------------------------------------------------------
-
-// Helper: count kEntityPositionUpdate envelopes collected since last clear.
+// Count kEntityPositionUpdate envelopes collected since last clear.
 auto CountPositionUpdates(const std::vector<Captured>& sent) -> int {
   int n = 0;
   for (const auto& c : sent)

@@ -8,35 +8,8 @@ using Atlas.Diagnostics;
 
 namespace Atlas.Client;
 
-// ============================================================================
-// DesktopBootstrap — CoreCLR-host specific glue, invoked explicitly by the
-// host app (atlas_client.exe) once the CLR is up.
-//
-// * Installs ClientHost delegate slots so pure-managed Atlas.Client RPC-send
-//   and entity-registry calls reach atlas_engine via P/Invoke.
-// * Owns the [UnmanagedCallersOnly] bridge methods that expose managed
-//   decoders to native callback tables.
-// * Registers the callback table with atlas_engine via
-//   ClientNativeApi.SetNativeCallbacks.
-//
-// Everything here requires .NET 5+ features (function pointers,
-// [UnmanagedCallersOnly], [LibraryImport]) and consequently lives in
-// Atlas.Client.Desktop. Unity builds do not include this assembly — the
-// Unity package installs equivalent handlers via its own P/Invoke surface
-// against atlas_net_client.dll.
-//
-// Invocation contract — client_app.cc (desktop host) is expected to:
-//   1. Initialise the CLR (Atlas.ClrHost's Bootstrap runs, ErrorBridge /
-//      GCHandleHelper registered).
-//   2. Call DesktopBootstrap.Initialize() via ClrHost::GetMethodAs.
-//   3. Then DesktopBootstrap.LoadUserAssembly() to load the user's script
-//      assembly — the call forces every [ModuleInitializer] in the target
-//      assembly to run immediately, wiring the generator-emitted entity
-//      factory and RPC dispatcher before the first CreateEntity callback
-//      reaches managed code.
-// The call is explicit rather than a [ModuleInitializer] so library
-// consumers never have hidden side-effects on load (CA2255).
-// ============================================================================
+// CoreCLR-host glue invoked explicitly by atlas_client.exe; Unity uses its
+// own P/Invoke surface against atlas_net_client.dll instead.
 
 [StructLayout(LayoutKind.Sequential, Pack = 1)]
 internal unsafe struct ClientCallbackTable
@@ -49,17 +22,9 @@ internal unsafe struct ClientCallbackTable
 
 public static unsafe class DesktopBootstrap
 {
-    /// <summary>
-    /// Fill ClientHost delegate slots with P/Invoke handlers and register
-    /// the native callback table with atlas_engine. Must be called exactly
-    /// once per process, after CLR bootstrap and before the generated
-    /// ModuleInitializer code in the user's script assembly runs.
-    /// Idempotent — repeat calls overwrite the slots with the same values.
-    /// <para/>
-    /// Exposed as an <c>[UnmanagedCallersOnly]</c> entry point so C++ can
-    /// resolve it via <c>ClrHost::GetMethodAs</c>. Returns 0 on success,
-    /// -1 on failure (with the error message set through ErrorBridge).
-    /// </summary>
+    // Idempotent. Must run after CLR bootstrap and before the user assembly's
+    // ModuleInitializer fires (which calls into ClientHost for digest /
+    // entity-type registration).
     [UnmanagedCallersOnly]
     public static int Initialize()
     {
@@ -100,15 +65,8 @@ public static unsafe class DesktopBootstrap
         }
     }
 
-    /// <summary>
-    /// Load the user's script assembly from <paramref name="pathUtf8"/>
-    /// (UTF-8 bytes). Triggers every <c>[ModuleInitializer]</c> in the
-    /// assembly, which wires the generator-emitted RPC dispatcher,
-    /// entity factory, and type registry into <see cref="ClientHost"/>.
-    /// The host must have called <see cref="Initialize"/> first so the
-    /// ClientHost slots are populated before any of those initializers
-    /// run.
-    /// </summary>
+    // Triggers every [ModuleInitializer] in the user assembly, which wires
+    // the generator-emitted dispatcher / factory / digest into ClientHost.
     [UnmanagedCallersOnly]
     public static int LoadUserAssembly(byte* pathUtf8, int pathLen)
     {
@@ -156,11 +114,8 @@ public static unsafe class DesktopBootstrap
         }
     }
 
-    /// <summary>
-    /// Build the native callback table and hand it to atlas_engine. Split
-    /// out so tests can exercise the wire path without reinstalling the
-    /// ClientHost handler slots.
-    /// </summary>
+    // Split from Initialize so tests can exercise the wire path without
+    // reinstalling the ClientHost handler slots.
     public static void RegisterNativeCallbacks()
     {
         ClientCallbackTable table;
@@ -174,11 +129,7 @@ public static unsafe class DesktopBootstrap
         ClientNativeApi.SetNativeCallbacks(&table, sizeof(ClientCallbackTable));
     }
 
-    // -------------------------------------------------------------------------
-    // [UnmanagedCallersOnly] bridges — materialise native pointers/lengths
-    // into ReadOnlySpan and delegate to the shared managed decoders in
-    // Atlas.Client.ClientCallbacks.
-    // -------------------------------------------------------------------------
+    // [UnmanagedCallersOnly] bridges to Atlas.Client.ClientCallbacks.
 
     [UnmanagedCallersOnly]
     public static void DispatchRpc(uint entityId, uint rpcId, byte* payload, int len,

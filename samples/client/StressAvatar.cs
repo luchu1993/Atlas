@@ -8,20 +8,11 @@ using Atlas.Diagnostics;
 
 namespace Atlas.ClientSample;
 
-// Client-side StressAvatar: the entity the stress cluster creates via
-// Account.SelectAvatar. world_stress `--script-clients N` launches real
-// atlas_client.exe subprocesses that load this assembly; every breadcrumb
-// here is grepped against by the Phase C2 harness to verify the Phase B
-// callback contract end-to-end.
-//
-// The log line format (the `[StressAvatar:<id>] <event> key=value …` shape)
-// is a test contract — keep it parse-stable unless updating
-// client_event_tap.* in world_stress at the same time.
+// `[StressAvatar:<id>] <event> key=value …` log shape is parsed by
+// world_stress client_event_tap; keep the prefix stable.
 [Atlas.Entity.Entity("StressAvatar")]
 public partial class StressAvatar : ClientEntity
 {
-    // -------- Lifecycle (A / B3) --------------------------------------------
-
     protected override void OnInit()
     {
         Log.Info($"[StressAvatar:{EntityId}] OnInit");
@@ -38,8 +29,6 @@ public partial class StressAvatar : ClientEntity
         Log.Info($"[StressAvatar:{EntityId}] OnDestroy");
     }
 
-    // -------- Property-change callback (B1, wire-delta-only per B2) --------
-
     partial void OnHpChanged(int oldValue, int newValue)
     {
         Log.Info(
@@ -52,20 +41,15 @@ public partial class StressAvatar : ClientEntity
             $"[StressAvatar:{EntityId}] OnMainWeaponChanged old.id={oldValue.Id} new.id={newValue.Id}");
     }
 
-    // -------- Transform (B4) -------------------------------------------------
-
     protected override void OnPositionUpdated(Vector3 newPos)
     {
-        // Probe: peers should show samples>0 + lat>0 (filter-driven); owner shows
-        // samples=-1 + lat=0.000 (snap path skips AvatarFilter). Format is parsed
-        // by world_stress client_event_tap; keep the prefix stable.
+        // Peers show samples>0 + lat>0 (filter-driven); owner shows samples=-1
+        // + lat=0.000 (snap path skips AvatarFilter).
         int samples = Filter?.SampleCount ?? -1;
         double lat = Filter?.CurrentLatency ?? 0.0;
         Log.Info(
             $"[StressAvatar:{EntityId}] OnPositionUpdated pos={FormatVec(newPos)} samples={samples} lat={lat:F3}");
     }
-
-    // -------- RPC receiver (pre-existing) -----------------------------------
 
     public partial void EchoReply(uint seq, ulong serverTsNs, ulong clientTsNs)
     {
@@ -77,9 +61,6 @@ public partial class StressAvatar : ClientEntity
         if (m != null) m.EchoReplyCount++;
     }
 
-    // ------ Component / struct / list-arg receive RPCs ---------------------
-
-    // Server→client struct push.
     public partial void OnWeaponBroken(StressWeapon w)
     {
         Log.Info(

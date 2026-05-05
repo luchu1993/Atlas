@@ -938,167 +938,52 @@ ATLAS_NET_CALL int32_t AtlasNetSendCellRpc(
 
 ### 4.7 消息接收回调
 
-> **设计约束** (B2 + B4 修订):
-> - **每个回调首参必须是 `AtlasNetContext* ctx`** — Pattern B 下的
->   `[MonoPInvokeCallback]` 静态方法（同 Pattern A 的 `[UnmanagedCallersOnly]`）
->   都无法闭包 this, 没有 ctx 就无法从回调路由回 C# 的 `AtlasClient` 实例。
->   `AtlasNetPoll(ctx)` 触发回调时由 DLL 填入当前 ctx。
-> - **回调集必须覆盖 Phase 12 协议** (见 `docs/roadmap/phase12_client_sdk.md §2.2`)
->   的全部服务器→客户端消息。生成器不应该要求 DLL 新增回调才能支持新业务消息,
->   但连接/实体/RPC 三类稳定协议保留为强类型回调以方便 C# Source Generator 分发。
->
-> 约定:
-> - 所有 `on_*` 指针不得为 NULL (§4.0.4) — 未用的填 DLL 导出的
->   `AtlasNetNoop<Event>` sentinel
-> - payload 指针生命周期只到回调返回 (§4.0.1)
-> - 全部在 `AtlasNetPoll(ctx)` 线程同步触发, 不跨线程
+DLL 是纯传输层。除了一次性的连接断开通知, 所有服务端下行消息（AoI 信封
+0xF001 / 0xF002 / 0xF003、RPC 信封 0xF004、login/auth typed 消息以外
+的任何 wire id）都经单一 `on_deliver` 把原始 payload 透传到 C#, 由
+`Atlas.Client.ClientCallbacks.DeliverFromServer` 完成解码。
+
+> **设计约束**:
+> - 每个回调首参是 `AtlasNetContext* ctx` —— Pattern B 的
+>   `[MonoPInvokeCallback]` 与 Pattern A 的 `[UnmanagedCallersOnly]`
+>   都无法闭包 this, 没有 ctx 就无法从回调路由回 C# 实例。
+> - payload 指针生命周期只到回调返回 (§4.0.1)。
+> - 全部在 `AtlasNetPoll(ctx)` 线程同步触发, 不跨线程。
+> - NULL 字段在 `AtlasNetSetCallbacks` 内部替换成 noop, 以便测试 / 部分
+>   宿主只关心子集时不必显式填 sentinel。
 
 ```cpp
 // ============================================================================
 // 回调注册 (在 AtlasNetCreate 之后, login 之前调用)
 // ============================================================================
 
-// ---- 连接 / 会话事件 --------------------------------------------------------
-
-// 服务器主动关闭或 DLL 检测到断线 (USER-initiated disconnect 不触发此回调, §4.5.4)
+// 服务器主动关闭或 DLL 检测到断线 (USER-initiated disconnect 不触发此回调)
 // reason: 0=服务端关闭, 1=超时, 2=网络错误, 3=LoggedOff (服务端踢下线)
 typedef void (*AtlasDisconnectFn)(AtlasNetContext* ctx, int32_t reason);
 
-// ---- 玩家实体 (Login 后一次性创建) -----------------------------------------
-
-// CreateBasePlayer (MessageID 10105): 玩家 Base 实体创建
-// base_props 是 [BASE_AND_CLIENT] 属性 blob, 由 C# 侧 ApplyReplicatedDelta 解析
-typedef void (*AtlasPlayerBaseCreateFn)(
+// 服务端下行的所有非 login/auth 消息: msg_id 是原始 wire id
+// (0xF001/0xF002/0xF003 = AoI envelope, 0xF004 = RPC envelope, 其他 =
+// 客户端 RPC 直接以 rpc_id 当作 MessageID 发出)。C# 侧 switch 后再解码。
+typedef void (*AtlasDeliverFromServerFn)(
     AtlasNetContext* ctx,
-    uint32_t entity_id,
-    uint16_t type_id,
-    const uint8_t* base_props, int32_t base_props_len);
-
-// CreateCellPlayer (MessageID 10110): 玩家 Cell 实体创建 (进入世界)
-typedef void (*AtlasPlayerCellCreateFn)(
-    AtlasNetContext* ctx,
-    uint32_t space_id,
-    float pos_x, float pos_y, float pos_z,
-    float dir_x, float dir_y, float dir_z,
-    const uint8_t* cell_props, int32_t cell_props_len);
-
-// ResetEntities (MessageID 10106): 服务端触发 giveClientTo, 客户端清空 AOI
-typedef void (*AtlasResetEntitiesFn)(AtlasNetContext* ctx);
-
-// ---- AOI 实体生命周期 ------------------------------------------------------
-
-// EntityEnter (MessageID 10102): AOI 内其他实体进入
-typedef void (*AtlasEntityEnterFn)(
-    AtlasNetContext* ctx,
-    uint32_t entity_id,
-    uint16_t type_id,
-    float pos_x, float pos_y, float pos_z,
-    float dir_x, float dir_y, float dir_z,
-    const uint8_t* properties, int32_t properties_len);
-
-// EntityLeave (MessageID 10103): AOI 内实体离开
-typedef void (*AtlasEntityLeaveFn)(
-    AtlasNetContext* ctx,
-    uint32_t entity_id);
-
-// ---- 实体状态同步 ----------------------------------------------------------
-
-// EntityPositionUpdate (MessageID 10111): 位置/朝向变化, 供 AvatarFilter.Input 消费
-typedef void (*AtlasEntityPositionFn)(
-    AtlasNetContext* ctx,
-    uint32_t entity_id,
-    float pos_x, float pos_y, float pos_z,
-    float dir_x, float dir_y, float dir_z,
-    uint8_t on_ground);
-
-// EntityPropertyUpdate (MessageID 10104): 属性 delta
-// scope: PropertyScope 枚举 (见 .def); delta 由 Source Generator 的
-// ApplyReplicatedDelta 解析
-typedef void (*AtlasEntityPropertyFn)(
-    AtlasNetContext* ctx,
-    uint32_t entity_id,
-    uint8_t scope,
-    const uint8_t* delta, int32_t delta_len);
-
-// ForcedPosition (MessageID 10112): 服务端强制纠正位置 (e.g., 反作弊 rewind)
-typedef void (*AtlasForcedPositionFn)(
-    AtlasNetContext* ctx,
-    uint32_t entity_id,
-    float pos_x, float pos_y, float pos_z,
-    float dir_x, float dir_y, float dir_z);
-
-// ---- RPC (服务端 → 客户端) -------------------------------------------------
-
-// ClientRpcCall (MessageID 10101): 服务端调用客户端的 client_methods
-// 由 C# Source Generator 生成的 RpcDispatcher 按 rpc_id 分发到目标 entity 的方法
-typedef void (*AtlasRpcCallbackFn)(
-    AtlasNetContext* ctx,
-    uint32_t entity_id,
-    uint32_t rpc_id,
-    const uint8_t* payload, int32_t payload_len);
-
-// ---- 回调表 ----------------------------------------------------------------
-// #pragma pack(push, 1) 保证 C/C# 侧结构体布局一致 (C# 侧用 Pack=1)
-// 任何新增字段只能追加在末尾 (不破坏 MINOR 兼容, §4.0.5)
+    uint16_t msg_id,
+    const uint8_t* payload, int32_t len);
 
 #pragma pack(push, 1)
 typedef struct {
-    // 连接事件
     AtlasDisconnectFn          on_disconnect;
-    // 玩家会话
-    AtlasPlayerBaseCreateFn    on_player_base_create;
-    AtlasPlayerCellCreateFn    on_player_cell_create;
-    AtlasResetEntitiesFn       on_reset_entities;
-    // AOI 实体生命周期
-    AtlasEntityEnterFn         on_entity_enter;
-    AtlasEntityLeaveFn         on_entity_leave;
-    // 实体状态
-    AtlasEntityPositionFn      on_entity_position;
-    AtlasEntityPropertyFn      on_entity_property;
-    AtlasForcedPositionFn      on_forced_position;
-    // RPC
-    AtlasRpcCallbackFn         on_rpc;
+    AtlasDeliverFromServerFn   on_deliver;
 } AtlasNetCallbacks;
 #pragma pack(pop)
 
-// 注册回调 (原子替换, §4.0.4)。返回码:
+// 原子替换。返回码:
 //   0        : 成功
-//   -EINVAL  : callbacks 为 NULL 或任何字段为 NULL
+//   -EINVAL  : callbacks 为 NULL
 //   -EBUSY   : 在回调内调用 (§4.0.3 禁止)
 ATLAS_NET_CALL int32_t AtlasNetSetCallbacks(
     AtlasNetContext* ctx,
     const AtlasNetCallbacks* callbacks);
-
-// ---- Noop sentinel 导出 ----------------------------------------------------
-// §4.0.4 要求 AtlasNetCallbacks 每个字段非 NULL。未使用的槽位填入下列 sentinel
-// (C# 侧通过 GetProcAddress / GetSymbol 取函数指针填入)。
-// 每个 sentinel 与对应回调 typedef 签名严格一致, 函数体为空。
-
-ATLAS_NET_CALL void AtlasNetNoopDisconnect(AtlasNetContext*, int32_t);
-ATLAS_NET_CALL void AtlasNetNoopPlayerBaseCreate(
-    AtlasNetContext*, uint32_t, uint16_t, const uint8_t*, int32_t);
-ATLAS_NET_CALL void AtlasNetNoopPlayerCellCreate(
-    AtlasNetContext*, uint32_t, float, float, float, float, float, float,
-    const uint8_t*, int32_t);
-ATLAS_NET_CALL void AtlasNetNoopResetEntities(AtlasNetContext*);
-ATLAS_NET_CALL void AtlasNetNoopEntityEnter(
-    AtlasNetContext*, uint32_t, uint16_t, float, float, float,
-    float, float, float, const uint8_t*, int32_t);
-ATLAS_NET_CALL void AtlasNetNoopEntityLeave(AtlasNetContext*, uint32_t);
-ATLAS_NET_CALL void AtlasNetNoopEntityPosition(
-    AtlasNetContext*, uint32_t, float, float, float, float, float, float, uint8_t);
-ATLAS_NET_CALL void AtlasNetNoopEntityProperty(
-    AtlasNetContext*, uint32_t, uint8_t, const uint8_t*, int32_t);
-ATLAS_NET_CALL void AtlasNetNoopForcedPosition(
-    AtlasNetContext*, uint32_t, float, float, float, float, float, float);
-ATLAS_NET_CALL void AtlasNetNoopRpc(
-    AtlasNetContext*, uint32_t, uint32_t, const uint8_t*, int32_t);
 ```
-
-#### 4.7.1 `AtlasNetSetCallbacks` 返回码
-
-**[I2 修复]** 旧版签名为 `void`, 现改为 `int32_t`, 与 §4.0.7 返回码公约一致,
-以便 C# 侧把 "有字段为 NULL" 这类配置错误当作启动期断言捕获, 而不是静默生效。
 
 ### 4.8 日志
 
@@ -1153,19 +1038,10 @@ ATLAS_NET_CALL int32_t AtlasNetGetStats(
 | `AtlasNetSendBaseRpc` | C#→C++ | 发送 Base RPC |
 | `AtlasNetSendCellRpc` | C#→C++ | 发送 Cell RPC |
 | `AtlasNetGetStats` | C#→C++ | 获取网络统计 |
-| `AtlasNetNoop<Event>` × 10 | 内部 | 每个事件回调的 sentinel 空实现 (§4.7 末尾列表) |
 | `AtlasLoginResultFn` | C++→C# | 登录结果通知 (user_data + status + baseapp addr) |
 | `AtlasAuthResultFn` | C++→C# | 认证结果通知 (user_data + entity_id + type_id) |
 | `AtlasDisconnectFn` | C++→C# | **(ctx, reason)** 服务器关闭/超时/踢下线 |
-| `AtlasPlayerBaseCreateFn` | C++→C# | **(ctx, entity_id, type_id, base_props)** 玩家 Base 创建 |
-| `AtlasPlayerCellCreateFn` | C++→C# | **(ctx, space_id, pos, dir, cell_props)** 玩家 Cell 创建 (进入世界) |
-| `AtlasResetEntitiesFn` | C++→C# | **(ctx)** giveClientTo 触发 AOI 重置 |
-| `AtlasEntityEnterFn` | C++→C# | **(ctx, entity_id, type_id, pos, dir, props)** AOI 实体进入 |
-| `AtlasEntityLeaveFn` | C++→C# | **(ctx, entity_id)** AOI 实体离开 |
-| `AtlasEntityPositionFn` | C++→C# | **(ctx, entity_id, pos, dir, on_ground)** 位置更新 → AvatarFilter |
-| `AtlasEntityPropertyFn` | C++→C# | **(ctx, entity_id, scope, delta)** 属性 delta → ApplyReplicatedDelta |
-| `AtlasForcedPositionFn` | C++→C# | **(ctx, entity_id, pos, dir)** 服务端强制位置 |
-| `AtlasRpcCallbackFn` | C++→C# | **(ctx, entity_id, rpc_id, payload)** client_methods 分发 |
+| `AtlasDeliverFromServerFn` | C++→C# | **(ctx, msg_id, payload, len)** 所有非 login/auth 下行消息;C# `ClientCallbacks.DeliverFromServer` 解码 |
 | `AtlasLogFn` | C++→C# | 日志转发 |
 
 ---
@@ -1278,85 +1154,27 @@ class ClientSession {
 
 #### 5.2.2 Callback Table 原子热替换
 
-`callbacks_` 使用 `std::atomic<AtlasNetCallbacks>` (若结构体可平凡)
-或 `std::atomic<std::shared_ptr<AtlasNetCallbacks>>`。
-
-`AtlasNetCreate` 成功返回前必须已写入一份 noop 表:
-
-```cpp
-// src/lib/net_client/client_api.cc
-// 每个 sentinel 与 §4.7 对应回调 typedef 签名严格一致, 且 ATLAS_NET_CALL
-// 导出 (让 C# 通过 [LibraryImport] 取函数指针, §4.0.4.1 模式 A)。
-
-ATLAS_NET_CALL void AtlasNetNoopDisconnect(AtlasNetContext*, int32_t) {}
-ATLAS_NET_CALL void AtlasNetNoopPlayerBaseCreate(
-    AtlasNetContext*, uint32_t, uint16_t, const uint8_t*, int32_t) {}
-ATLAS_NET_CALL void AtlasNetNoopPlayerCellCreate(
-    AtlasNetContext*, uint32_t, float, float, float, float, float, float,
-    const uint8_t*, int32_t) {}
-ATLAS_NET_CALL void AtlasNetNoopResetEntities(AtlasNetContext*) {}
-ATLAS_NET_CALL void AtlasNetNoopEntityEnter(
-    AtlasNetContext*, uint32_t, uint16_t, float, float, float,
-    float, float, float, const uint8_t*, int32_t) {}
-ATLAS_NET_CALL void AtlasNetNoopEntityLeave(AtlasNetContext*, uint32_t) {}
-ATLAS_NET_CALL void AtlasNetNoopEntityPosition(
-    AtlasNetContext*, uint32_t, float, float, float, float, float, float, uint8_t) {}
-ATLAS_NET_CALL void AtlasNetNoopEntityProperty(
-    AtlasNetContext*, uint32_t, uint8_t, const uint8_t*, int32_t) {}
-ATLAS_NET_CALL void AtlasNetNoopForcedPosition(
-    AtlasNetContext*, uint32_t, float, float, float, float, float, float) {}
-ATLAS_NET_CALL void AtlasNetNoopRpc(
-    AtlasNetContext*, uint32_t, uint32_t, const uint8_t*, int32_t) {}
-
-AtlasNetContext* AtlasNetCreate(uint32_t expected_abi) {
-  // ... ABI 校验 ...
-  auto* ctx = new AtlasNetContext{/* ... */};
-  AtlasNetCallbacks noop{
-    .on_disconnect         = &AtlasNetNoopDisconnect,
-    .on_player_base_create = &AtlasNetNoopPlayerBaseCreate,
-    .on_player_cell_create = &AtlasNetNoopPlayerCellCreate,
-    .on_reset_entities     = &AtlasNetNoopResetEntities,
-    .on_entity_enter       = &AtlasNetNoopEntityEnter,
-    .on_entity_leave       = &AtlasNetNoopEntityLeave,
-    .on_entity_position    = &AtlasNetNoopEntityPosition,
-    .on_entity_property    = &AtlasNetNoopEntityProperty,
-    .on_forced_position    = &AtlasNetNoopForcedPosition,
-    .on_rpc                = &AtlasNetNoopRpc,
-  };
-  ctx->callbacks_.store(noop, std::memory_order_release);
-  return ctx;
-}
-```
-
-C# 通过 `[LibraryImport]` 取各 sentinel 函数指针填入未使用字段 (§4.0.4.1);
-`AtlasNetSetCallbacks` 见到任一字段为 NULL 直接返回 `-EINVAL`。
+`AtlasNetCreate` 在返回前安装一份 noop 表; `AtlasNetSetCallbacks` 用调用者
+传入的 ctx-绑定 lambda 把 NULL 字段替换成 noop, 旧表整体替换。
 
 ### 5.3 消息分发流程
 
+ClientSession 在 `kConnected` 后注册一个 default handler, 把所有 wire id
+原样投到 `on_deliver`。Login / Auth typed 消息照常被它们的 typed handler
+拦截; LoggedOff 在 ClientSession 内部映射到 `on_disconnect`。
+
 ```
-AtlasNetPoll(ctx) 调用
-  │
-  ▼
-EventDispatcher::ProcessOnce()      [单线程, tick 驱动, 见 event_dispatcher.h]
-  ├── IOPoller::Poll() → 读取网络数据
-  ├── ReliableUdpChannel → 解包 RUDP → 提取 Bundle
-  ├── InterfaceTable::Dispatch()
-  │   ├── 匹配 Typed Handler
-  │   │   ├── LoginResult / AuthenticateResult
-  │   │   │   └── ClientSession 处理 → 触发 login/auth 一次性回调
-  │   │   ├── CreateBasePlayer (10105)     → callbacks_.on_player_base_create(ctx, ...)
-  │   │   ├── CreateCellPlayer (10110)     → callbacks_.on_player_cell_create(ctx, ...)
-  │   │   ├── ResetEntities    (10106)     → callbacks_.on_reset_entities(ctx)
-  │   │   ├── EntityEnter      (10102)     → callbacks_.on_entity_enter(ctx, ...)
-  │   │   ├── EntityLeave      (10103)     → callbacks_.on_entity_leave(ctx, id)
-  │   │   ├── EntityPositionUpdate (10111) → callbacks_.on_entity_position(ctx, ...)
-  │   │   ├── EntityPropertyUpdate (10104) → callbacks_.on_entity_property(ctx, ...)
-  │   │   ├── ForcedPosition   (10112)     → callbacks_.on_forced_position(ctx, ...)
-  │   │   └── LoggedOff        (10113)     → callbacks_.on_disconnect(ctx, 3 /*LoggedOff*/)
-  │   └── Default Handler (未知 MessageID = 服务端 RPC, 见 §5.3.1)
-  │       └── 将 MessageID 升级为 uint32_t rpc_id
-  │           └── callbacks_.on_rpc(ctx, entity_id, rpc_id, payload, len)
-  └── TimerQueue::Process() → 重传、心跳等
+AtlasNetPoll(ctx)
+  └── EventDispatcher::ProcessOnce()    [单线程, tick 驱动]
+        ├── IOPoller::Poll() → 读包
+        ├── ReliableUdpChannel → 解 RUDP → Bundle
+        ├── InterfaceTable::Dispatch()
+        │   ├── LoginResult / AuthenticateResult → ClientSession typed
+        │   │      → login/auth 一次性回调
+        │   ├── LoggedOff → callbacks_.on_disconnect(ctx, kLoggedOff)
+        │   └── Default Handler (其它一切)
+        │         → callbacks_.on_deliver(ctx, msg_id, payload, len)
+        └── TimerQueue::Process() → 重传 / 心跳
 ```
 
 > **线程模型**: `EventDispatcher::ProcessOnce()` (`src/lib/network/event_dispatcher.h:103`)
