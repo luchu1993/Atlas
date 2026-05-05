@@ -12,4 +12,8 @@
     <!-- One dependency only: Atlas.Shared. CoreCLR hosting types must not leak in here. -->
     <ProjectReference Include="..\Atlas.Shared\Atlas.Shared.csproj" />
   </ItemGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="Atlas.Client.Tests" />
+  </ItemGroup>
 </Project>

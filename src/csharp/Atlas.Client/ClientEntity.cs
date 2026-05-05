@@ -15,6 +15,10 @@ public abstract class ClientEntity
     // Sticky flag set when an Apply* threw mid-delivery; cleared by a fresh AoI enter or baseline.
     public bool IsCorrupted { get; internal set; }
 
+    // Owner = local player on this client. Owner trusts server snapshots directly
+    // (auth movement); peers ride the AvatarFilter ring and lerp on the client tick.
+    public bool IsOwner { get; internal set; }
+
     public abstract string TypeName { get; }
 
     // Generator-assigned type index, mirrors server TypeId; used by component RPC stubs.
@@ -28,6 +32,8 @@ public abstract class ClientEntity
     public bool OnGround { get; private set; }
     public double LastPositionServerTime { get; private set; }
 
+    public AvatarFilter? Filter { get; private set; }
+
     public virtual void Deserialize(ref SpanReader reader) { }
 
     // Snapshot applies write directly to backing fields; OnXxxChanged is suppressed by design.
@@ -35,6 +41,8 @@ public abstract class ClientEntity
     public virtual void ApplyOtherSnapshot(ref SpanReader reader) { }
     public virtual void ApplyReplicatedDelta(ref SpanReader reader) { }
 
+    // Owner snaps to authoritative state; peers feed the filter ring (initialised lazily
+    // on first sample) and the rendered transform reads back via TryGetInterpolated.
     public virtual void ApplyPositionUpdate(double serverTime, Vector3 pos, Vector3 dir, bool onGround)
     {
         using var _ = Profiler.ZoneN(ProfilerNames.ClientApplyPositionUpdate);
@@ -42,7 +50,37 @@ public abstract class ClientEntity
         Direction = dir;
         OnGround = onGround;
         LastPositionServerTime = serverTime;
+
+        if (!IsOwner)
+        {
+            Filter ??= new AvatarFilter();
+            Filter.Input(serverTime, pos, dir, onGround);
+        }
+
         OnPositionUpdated(pos);
+    }
+
+    public bool TryGetInterpolated(double clientTime,
+                                   out Vector3 pos, out Vector3 dir, out bool onGround)
+    {
+        if (Filter is { SampleCount: > 0 })
+            return Filter.TryEvaluate(clientTime, out pos, out dir, out onGround);
+        pos = Position;
+        dir = Direction;
+        onGround = OnGround;
+        return false;
+    }
+
+    // Server-authoritative teleport: drop the filter buffer so the next sample
+    // restarts the interpolation window without lerping from a stale position.
+    public void ResetInterpolation()
+    {
+        Filter?.Reset();
+    }
+
+    public void UpdateInterpolation(float dt)
+    {
+        Filter?.UpdateLatency(dt);
     }
 
     // Distinct from OnXxxChanged: high-frequency channel, kept off the per-field callback path.

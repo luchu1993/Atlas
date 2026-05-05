@@ -59,6 +59,7 @@ public static class ClientCallbacks
             }
 
             entity.EntityId = entityId;
+            entity.IsOwner = true;
             s_entityMgr.Register(entity);
             entity.OnInit();
         }

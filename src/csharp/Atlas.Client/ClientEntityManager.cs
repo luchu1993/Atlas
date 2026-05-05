@@ -43,6 +43,19 @@ public sealed class ClientEntityManager
 
     public int Count => _entities.Count;
 
+    public IEnumerable<ClientEntity> Entities => _entities.Values;
+
+    // Drives AvatarFilter latency convergence. Hosts (Desktop loop / Unity Update)
+    // call once per frame; peers with no samples short-circuit inside the filter.
+    public void TickInterpolation(float dt)
+    {
+        foreach (var entity in _entities.Values)
+        {
+            if (entity.IsCorrupted) continue;
+            entity.UpdateInterpolation(dt);
+        }
+    }
+
     // Idempotent re-enter: refreshes transform/state but does NOT re-fire OnInit / OnEnterWorld.
     public void OnEnter(uint entityId, ushort typeId, double serverTime,
                         Vector3 pos, Vector3 dir, bool onGround,
