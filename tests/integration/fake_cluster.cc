@@ -1,8 +1,10 @@
 #include "fake_cluster.h"
 
 #include <cstring>
+#include <vector>
 
 #include "baseapp/baseapp_messages.h"
+#include "network/channel.h"
 #include "network/reliable_udp.h"
 #include "network/socket.h"
 
@@ -67,6 +69,8 @@ bool FakeCluster::Start() {
 
         auto ch_result = net_baseapp_.ConnectRudp(src, NetworkInterface::InternetRudpProfile());
         if (!ch_result) return;
+        // Latch the channel so AvatarFilter tests can push 0xF001/0xF003 later.
+        auth_channel_ = *ch_result;
 
         baseapp::AuthenticateResult reply;
         if (auth_policy_ == AuthPolicy::kAccept) {
@@ -76,7 +80,7 @@ bool FakeCluster::Start() {
         } else {
           reply.success = false;
         }
-        (void)(*ch_result)->SendMessage(reply);
+        (void)auth_channel_->SendMessage(reply);
       });
   if (!reg_auth) return false;
 
@@ -89,6 +93,76 @@ bool FakeCluster::Start() {
         rpc_received_ = true;
       });
   return reg_rpc.HasValue();
+}
+
+bool FakeCluster::PushAoIEnvelope(bool reliable, std::span<const std::byte> payload) {
+  if (!auth_channel_) return false;
+  if (reliable) {
+    return auth_channel_->SendMessage(baseapp::ClientReliableDeltaEnvelope{payload}).HasValue();
+  }
+  return auth_channel_->SendMessage(baseapp::ClientDeltaEnvelope{payload}).HasValue();
+}
+
+namespace {
+
+// Mirror src/server/cellapp/cell_aoi_envelope.h kinds; duplicated here to keep
+// the test helper independent of the cellapp link dependency.
+constexpr std::byte kEntityEnter{1};
+constexpr std::byte kEntityPositionUpdate{3};
+
+void WriteUInt32LE(std::vector<std::byte>& out, uint32_t v) {
+  for (int i = 0; i < 4; ++i) out.push_back(static_cast<std::byte>((v >> (i * 8)) & 0xFF));
+}
+
+void WriteFloatLE(std::vector<std::byte>& out, float v) {
+  uint32_t bits;
+  std::memcpy(&bits, &v, sizeof(bits));
+  WriteUInt32LE(out, bits);
+}
+
+void WriteDoubleLE(std::vector<std::byte>& out, double v) {
+  uint64_t bits;
+  std::memcpy(&bits, &v, sizeof(bits));
+  for (int i = 0; i < 8; ++i) out.push_back(static_cast<std::byte>((bits >> (i * 8)) & 0xFF));
+}
+
+}  // namespace
+
+bool FakeCluster::PushEntityEnter(EntityID eid, uint16_t type_id, float px, float py, float pz,
+                                  float dx, float dy, float dz, bool on_ground,
+                                  double server_time) {
+  std::vector<std::byte> payload;
+  payload.reserve(1 + 4 + 2 + 6 * 4 + 1 + 8);
+  payload.push_back(kEntityEnter);
+  WriteUInt32LE(payload, eid);
+  payload.push_back(static_cast<std::byte>(type_id & 0xFF));
+  payload.push_back(static_cast<std::byte>((type_id >> 8) & 0xFF));
+  WriteFloatLE(payload, px);
+  WriteFloatLE(payload, py);
+  WriteFloatLE(payload, pz);
+  WriteFloatLE(payload, dx);
+  WriteFloatLE(payload, dy);
+  WriteFloatLE(payload, dz);
+  payload.push_back(static_cast<std::byte>(on_ground ? 1 : 0));
+  WriteDoubleLE(payload, server_time);
+  return PushAoIEnvelope(/*reliable=*/true, payload);
+}
+
+bool FakeCluster::PushEntityPositionUpdate(EntityID eid, float px, float py, float pz, float dx,
+                                           float dy, float dz, bool on_ground, double server_time) {
+  std::vector<std::byte> payload;
+  payload.reserve(1 + 4 + 6 * 4 + 1 + 8);
+  payload.push_back(kEntityPositionUpdate);
+  WriteUInt32LE(payload, eid);
+  WriteFloatLE(payload, px);
+  WriteFloatLE(payload, py);
+  WriteFloatLE(payload, pz);
+  WriteFloatLE(payload, dx);
+  WriteFloatLE(payload, dy);
+  WriteFloatLE(payload, dz);
+  payload.push_back(static_cast<std::byte>(on_ground ? 1 : 0));
+  WriteDoubleLE(payload, server_time);
+  return PushAoIEnvelope(/*reliable=*/false, payload);
 }
 
 }  // namespace atlas::test

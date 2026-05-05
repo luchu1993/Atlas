@@ -32,4 +32,16 @@ ATLAS_TEST_API int AtlasFakeClusterAuthenticateRequestSeen(AtlasFakeCluster* clu
 ATLAS_TEST_API int AtlasFakeClusterRpcReceived(AtlasFakeCluster* cluster);
 ATLAS_TEST_API uint32_t AtlasFakeClusterLastRpcId(AtlasFakeCluster* cluster);
 
+// AvatarFilter end-to-end probes: send AoI envelopes through the latched auth
+// channel. Returns 1 on success, 0 if no auth channel yet (caller must Pump
+// past Authenticate first).
+ATLAS_TEST_API int AtlasFakeClusterPushEntityEnter(AtlasFakeCluster* cluster, uint32_t eid,
+                                                   uint16_t type_id, float px, float py, float pz,
+                                                   float dx, float dy, float dz, int on_ground,
+                                                   double server_time);
+ATLAS_TEST_API int AtlasFakeClusterPushEntityPositionUpdate(AtlasFakeCluster* cluster, uint32_t eid,
+                                                            float px, float py, float pz, float dx,
+                                                            float dy, float dz, int on_ground,
+                                                            double server_time);
+
 #endif  // ATLAS_TESTS_INTEGRATION_FAKE_CLUSTER_CAPI_H_

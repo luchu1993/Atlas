@@ -58,3 +58,25 @@ ATLAS_TEST_API int AtlasFakeClusterRpcReceived(AtlasFakeCluster* cluster) {
 ATLAS_TEST_API uint32_t AtlasFakeClusterLastRpcId(AtlasFakeCluster* cluster) {
   return cluster ? cluster->impl.LastRpcId() : 0;
 }
+
+ATLAS_TEST_API int AtlasFakeClusterPushEntityEnter(AtlasFakeCluster* cluster, uint32_t eid,
+                                                   uint16_t type_id, float px, float py, float pz,
+                                                   float dx, float dy, float dz, int on_ground,
+                                                   double server_time) {
+  if (!cluster) return 0;
+  return cluster->impl.PushEntityEnter(eid, type_id, px, py, pz, dx, dy, dz, on_ground != 0,
+                                       server_time)
+             ? 1
+             : 0;
+}
+
+ATLAS_TEST_API int AtlasFakeClusterPushEntityPositionUpdate(AtlasFakeCluster* cluster, uint32_t eid,
+                                                            float px, float py, float pz, float dx,
+                                                            float dy, float dz, int on_ground,
+                                                            double server_time) {
+  if (!cluster) return 0;
+  return cluster->impl.PushEntityPositionUpdate(eid, px, py, pz, dx, dy, dz, on_ground != 0,
+                                                server_time)
+             ? 1
+             : 0;
+}

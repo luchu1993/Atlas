@@ -39,6 +39,16 @@ internal static class FakeClusterNative
 
     [DllImport(LibName)]
     public static extern uint AtlasFakeClusterLastRpcId(IntPtr cluster);
+
+    [DllImport(LibName)]
+    public static extern int AtlasFakeClusterPushEntityEnter(IntPtr cluster, uint eid,
+        ushort typeId, float px, float py, float pz, float dx, float dy, float dz,
+        int onGround, double serverTime);
+
+    [DllImport(LibName)]
+    public static extern int AtlasFakeClusterPushEntityPositionUpdate(IntPtr cluster, uint eid,
+        float px, float py, float pz, float dx, float dy, float dz,
+        int onGround, double serverTime);
 }
 
 public enum FakeLoginPolicy : byte

@@ -10,7 +10,7 @@ namespace Atlas.Client.Desktop;
 
 // Native callbacks fire inside Poll() on the same main thread, so no
 // synchronisation is needed between the source and the callback.
-public sealed unsafe class LoginClient : IDisposable
+public sealed unsafe class LoginClient : IDisposable, IAtlasNetEvents
 {
     private readonly IntPtr _ctx;
     private GCHandle _selfHandle;
@@ -22,6 +22,10 @@ public sealed unsafe class LoginClient : IDisposable
     {
         _ctx = AtlasNetNative.Create();
         _selfHandle = GCHandle.Alloc(this, GCHandleType.Normal);
+        // Route net_client's on_deliver through the shared decode path so AoI
+        // envelopes feed ClientCallbacks.EntityManager just like the Unity
+        // AtlasNetworkManager does.
+        AtlasNetCallbackBridge.Register(_ctx, this);
         var digest = ClientHost.EntityDefDigest;
         if (digest is not null)
         {
@@ -29,6 +33,15 @@ public sealed unsafe class LoginClient : IDisposable
                 AtlasNetNative.AtlasNetSetEntityDefDigest(_ctx, ptr, digest.Length);
         }
     }
+
+    void IAtlasNetEvents.OnDisconnect(int reason)
+    {
+        // Inflight sources are already cleared on Dispose(); a late disconnect
+        // here just means the server closed the channel. No-op for now.
+    }
+
+    void IAtlasNetEvents.OnDeliver(ushort msgId, ReadOnlySpan<byte> payload)
+        => ClientCallbacks.DeliverFromServer(msgId, payload);
 
     public int Poll()
     {
@@ -118,6 +131,7 @@ public sealed unsafe class LoginClient : IDisposable
         _disposed = true;
         // Native first: it cannot fire any more callbacks once destroyed.
         AtlasNetNative.AtlasNetDestroy(_ctx);
+        AtlasNetCallbackBridge.Unregister(_ctx);
         _loginInflight?.OnNativeShutdown(); _loginInflight = null;
         _authInflight?.OnNativeShutdown(); _authInflight = null;
         if (_selfHandle.IsAllocated) _selfHandle.Free();

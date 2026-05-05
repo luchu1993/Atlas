@@ -40,6 +40,17 @@ public sealed class FakeClusterFixture : IDisposable
     public uint LastRpcId
         => FakeClusterNative.AtlasFakeClusterLastRpcId(_handle);
 
+    public bool PushEntityEnter(uint eid, ushort typeId, float px, float py, float pz,
+                                float dx, float dy, float dz, bool onGround, double serverTime)
+        => FakeClusterNative.AtlasFakeClusterPushEntityEnter(_handle, eid, typeId,
+               px, py, pz, dx, dy, dz, onGround ? 1 : 0, serverTime) != 0;
+
+    public bool PushEntityPositionUpdate(uint eid, float px, float py, float pz,
+                                         float dx, float dy, float dz, bool onGround,
+                                         double serverTime)
+        => FakeClusterNative.AtlasFakeClusterPushEntityPositionUpdate(_handle, eid,
+               px, py, pz, dx, dy, dz, onGround ? 1 : 0, serverTime) != 0;
+
     public void Dispose()
     {
         if (_handle == IntPtr.Zero) return;
