@@ -55,7 +55,7 @@ public abstract class ClientEntity
         {
             ulong missed = seq - LastEventSeq - 1;
             EventSeqGapsTotal += missed;
-            ClientLog.Warn(
+            Log.Warning(
                 $"[{TypeName}:{EntityId}] event_seq gap: last={LastEventSeq} got={seq} missed={missed}");
             // Clamp to u32 — a single jump >4G is paging-worthy, not silent-dropping.
             uint reportDelta = missed > uint.MaxValue ? uint.MaxValue : (uint)missed;

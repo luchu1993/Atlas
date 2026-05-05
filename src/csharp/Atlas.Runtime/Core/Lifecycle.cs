@@ -31,6 +31,10 @@ internal static class Lifecycle
 
     internal static void DoEngineInit()
     {
+        // Install before any init step touches Log; ResetBackend on shutdown
+        // makes this idempotent across hot-reload init cycles.
+        Log.SetBackend(new NativeLogBackend());
+
         var syncContext = new AtlasSynchronizationContext();
         SynchronizationContext.SetSynchronizationContext(syncContext);
         EngineContext.SyncContext = syncContext;
@@ -79,6 +83,7 @@ internal static class Lifecycle
         // identity and freeing would corrupt the trace history of any
         // already-connected viewer.
         Profiler.ResetBackend();
+        Log.ResetBackend();
     }
 
     internal static void DoOnInit(bool isReload)

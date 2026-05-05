@@ -15,7 +15,7 @@ public sealed class ManagedAtlasLoop : IAtlasLoop, IDisposable
     private readonly int _mainThreadId;
     private bool _disposed;
 
-    // Hosts wanting logging install their own handler (e.g. Atlas.Log.Error).
+    // Hosts wanting logging install their own handler (e.g. Atlas.Diagnostics.Log.Error).
     public event Action<Exception>? UnhandledException;
 
     public ManagedAtlasLoop()

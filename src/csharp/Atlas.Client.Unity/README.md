@@ -43,20 +43,20 @@ the server's Tracy trace via `Atlas.Diagnostics.ProfilerNames`.
 
 ## Logging (Unity-side)
 
-`Atlas.Client` logs through the `IClientLogger` interface and defaults to a
-no-op sink. Install the Unity backend during the same boot step so
-`ClientCallbacks` / `ClientEntityManager` errors land in Unity's console:
+`Atlas.Diagnostics.Log` is a shared facade backed by an `ILogBackend`; it
+defaults to a no-op sink. Install the Unity backend during the same boot
+step so server-emitted errors (`ClientCallbacks`, `ClientEntityManager`,
+generated dispatchers) land in Unity's console:
 
 ```csharp
-using Atlas.Client;
+using Atlas.Diagnostics;
 using Atlas.Client.Unity;
 
-ClientLog.SetLogger(new UnityClientLogger());
+Log.SetBackend(new UnityLogBackend());
 ```
 
-`Info` routes to `Debug.Log`, `Warn` to `Debug.LogWarning`, `Error` to
-`Debug.LogError` — so the standard Unity log filters and on-device log
-handlers apply unchanged.
+Trace/Debug/Info route to `Debug.Log`, Warning to `Debug.LogWarning`,
+Error/Critical to `Debug.LogError` — standard Unity log filters apply.
 
 ## Domain reload caveat (Editor only)
 

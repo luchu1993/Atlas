@@ -175,7 +175,7 @@ tools\bin\run_unreliable_recovery.bat --duration-sec 30
 | `[StressAvatar:42] OnPositionUpdated pos=(..)` | `on_position_updated` | volatile delta `0xF001` kEntityPositionUpdate |
 | `[StressAvatar:42] event_seq gap: last=A got=B missed=N` | `event_seq_gaps += N` | 客户端检测到 `kEntityPropertyUpdate` 的 u64 seq 前缀跳号 |
 
-每条日志前还有 `[t=<seconds>.sss]` 前缀（`Atlas.Client.ClientLog`）—— tap 会 strip 掉不参与匹配，但后续收敛分析可以 `grep '^\[t=\([0-9.]*\)\]'` 把时间戳抽回来对 drop window 边界做自动断言。
+每条日志前还有 `[t=<seconds>.sss]` 前缀（`Atlas.Client.Desktop.ConsoleLogBackend`）—— tap 会 strip 掉不参与匹配，但后续收敛分析可以 `grep '^\[t=\([0-9.]*\)\]'` 把时间戳抽回来对 drop window 边界做自动断言。
 
 修改日志格式时两边同步更新，否则 `unparsed_lines` 会飙升且对应计数会失准。
 

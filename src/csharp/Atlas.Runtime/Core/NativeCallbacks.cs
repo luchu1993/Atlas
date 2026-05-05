@@ -1,5 +1,6 @@
 using System;
 using System.Runtime.InteropServices;
+using Atlas.Diagnostics;
 using Atlas.Entity;
 using Atlas.Serialization;
 

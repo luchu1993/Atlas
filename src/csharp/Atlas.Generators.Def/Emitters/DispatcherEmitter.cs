@@ -147,7 +147,7 @@ internal static class DispatcherEmitter
             sb.AppendLine("                    _ = reader;");
         }
         EmitUnknownRpcWarn(sb, "                    ", $"{dirName} for entity",
-                           "target?.GetType().Name ?? \"<null>\"", ctx);
+                           "target?.GetType().Name ?? \"<null>\"");
         sb.AppendLine("                    break;");
         sb.AppendLine("            }");
         sb.AppendLine("            return;");
@@ -171,7 +171,7 @@ internal static class DispatcherEmitter
             }
             sb.AppendLine("            default:");
             EmitUnknownRpcWarn(sb, "                ", $"{dirName} for component",
-                               "comp?.GetType().Name ?? \"<null>\"", ctx);
+                               "comp?.GetType().Name ?? \"<null>\"");
             sb.AppendLine("                break;");
             sb.AppendLine("        }");
         }
@@ -183,17 +183,12 @@ internal static class DispatcherEmitter
         sb.AppendLine("    }");
     }
 
-    // Emits a context-appropriate warning for an unknown rpcId — Atlas.Log on
-    // the server, Console.Error on the client (matching ClientCallbacks).
     private static void EmitUnknownRpcWarn(StringBuilder sb, string indent, string what,
-                                           string typeNameExpr, ProcessContext ctx)
+                                           string typeNameExpr)
     {
         var msg = $"\"DefRpcDispatcher: unknown {what} type \" + ({typeNameExpr}) + " +
                   $"\" rpcId=0x\" + rpcId.ToString(\"X8\")";
-        if (ctx != ProcessContext.Client)
-            sb.AppendLine($"{indent}Atlas.Log.Warning({msg});");
-        else
-            sb.AppendLine($"{indent}System.Console.Error.WriteLine({msg});");
+        sb.AppendLine($"{indent}Atlas.Diagnostics.Log.Warning({msg});");
     }
 
     private static void EmitEntityDispatch(StringBuilder sb, string fullName, string className,
@@ -236,7 +231,7 @@ internal static class DispatcherEmitter
 
         sb.AppendLine("            default:");
         EmitUnknownRpcWarn(sb, "                ", $"{dirName} method on {className} entity",
-                           $"\"{className}\"", ctx);
+                           $"\"{className}\"");
         sb.AppendLine("                break;");
         sb.AppendLine("        }");
         sb.AppendLine("    }");
@@ -367,7 +362,7 @@ internal static class DispatcherEmitter
 
         sb.AppendLine("            default:");
         EmitUnknownRpcWarn(sb, "                ", $"{dirName} method on {componentTypeName} component",
-                           $"\"{componentTypeName}\"", ctx);
+                           $"\"{componentTypeName}\"");
         sb.AppendLine("                break;");
         sb.AppendLine("        }");
         sb.AppendLine("    }");

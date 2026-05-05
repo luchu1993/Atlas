@@ -61,7 +61,7 @@ C# 侧 — `src/csharp/Atlas.Runtime/Hosting/`:
 | 文件 | 关键 API |
 |---|---|
 | `ScriptLoadContext.cs` | `internal sealed class ScriptLoadContext : AssemblyLoadContext`,`isCollectible: true` |
-| `ScriptHost.cs` | `Load / Unload(TimeSpan) → bool / Dispose`;`Unload` 内 `GC.Collect` + `WaitForPendingFinalizers` 循环直到 `WeakReference` 失效,超时 `Atlas.Log.Warning` |
+| `ScriptHost.cs` | `Load / Unload(TimeSpan) → bool / Dispose`;`Unload` 内 `GC.Collect` + `WaitForPendingFinalizers` 循环直到 `WeakReference` 失效,超时 `Atlas.Diagnostics.Log.Warning` |
 | `HotReloadManager.cs` | `[UnmanagedCallersOnly] SerializeAndUnload()`、`LoadAndRestore(byte* pathUtf8, int pathLen)` |
 
 ## 4. 状态快照格式

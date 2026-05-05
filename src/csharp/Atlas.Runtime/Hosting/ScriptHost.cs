@@ -51,7 +51,7 @@ internal sealed class ScriptHost : IDisposable
                 // etc.) that should fail the load loudly.
                 var root = ex;
                 while (root.InnerException != null) root = root.InnerException;
-                Atlas.Log.Error(
+                Atlas.Diagnostics.Log.Error(
                     $"ScriptHost.Load: module init '{module.Name}' failed. "
                     + $"Outer={ex.GetType().Name}: {ex.Message}. "
                     + $"Root={root.GetType().Name}: {root.Message}");
@@ -83,7 +83,7 @@ internal sealed class ScriptHost : IDisposable
 
         if (_contextRef.IsAlive)
         {
-            Atlas.Log.Warning(
+            Atlas.Diagnostics.Log.Warning(
                 "ScriptLoadContext was not collected within timeout — possible GCHandle leak");
             return false;
         }

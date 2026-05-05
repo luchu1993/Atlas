@@ -30,4 +30,4 @@ bits  0-7    methodIdx       1-based by .def declaration order
 
 每个 RPC 消息（`ClientBaseRpc` / `ClientCellRpc` / `ClientRpcEnvelope` / `CellRpcForward` / `BroadcastRpcFromCell` / `cellapp::ClientCellRpcForward` / `cellapp::InternalCellRpc`）末尾带 `uint64 trace_id`。`0` = 未追踪，由 `Atlas.Diagnostics.TraceContext.BeginInbound` 在接收边界自动 mint 一个 snowflake id；非零透传。
 
-`Atlas.Log.{Info/Warning/Error}` 在 `TraceContext.Current != 0` 时自动前置 `[trace=...]`。
+`Atlas.Diagnostics.Log.{Info/Warning/Error}` 在 `TraceContext.Current != 0` 时自动前置 `[trace=...]`（由 `NativeLogBackend` 实现）。

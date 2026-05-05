@@ -4,6 +4,7 @@ using Atlas.Client;
 using Atlas.Components;
 using Atlas.DataTypes;
 using Atlas.Def;
+using Atlas.Diagnostics;
 
 namespace Atlas.ClientSample;
 
@@ -23,31 +24,31 @@ public partial class StressAvatar : ClientEntity
 
     protected override void OnInit()
     {
-        ClientLog.Info($"[StressAvatar:{EntityId}] OnInit");
+        Log.Info($"[StressAvatar:{EntityId}] OnInit");
     }
 
     protected override void OnEnterWorld()
     {
-        ClientLog.Info(
+        Log.Info(
             $"[StressAvatar:{EntityId}] OnEnterWorld pos={FormatVec(Position)} hp={Hp}");
     }
 
     protected override void OnDestroy()
     {
-        ClientLog.Info($"[StressAvatar:{EntityId}] OnDestroy");
+        Log.Info($"[StressAvatar:{EntityId}] OnDestroy");
     }
 
     // -------- Property-change callback (B1, wire-delta-only per B2) --------
 
     partial void OnHpChanged(int oldValue, int newValue)
     {
-        ClientLog.Info(
+        Log.Info(
             $"[StressAvatar:{EntityId}] OnHpChanged old={oldValue} new={newValue}");
     }
 
     partial void OnMainWeaponChanged(Atlas.Def.StressWeapon oldValue, Atlas.Def.StressWeapon newValue)
     {
-        ClientLog.Info(
+        Log.Info(
             $"[StressAvatar:{EntityId}] OnMainWeaponChanged old.id={oldValue.Id} new.id={newValue.Id}");
     }
 
@@ -55,7 +56,7 @@ public partial class StressAvatar : ClientEntity
 
     protected override void OnPositionUpdated(Vector3 newPos)
     {
-        ClientLog.Info(
+        Log.Info(
             $"[StressAvatar:{EntityId}] OnPositionUpdated pos={FormatVec(newPos)}");
     }
 
@@ -65,7 +66,7 @@ public partial class StressAvatar : ClientEntity
     {
         // Real stress measurement is done by world_stress virtual clients
         // parsing the raw wire; the script path just confirms the RPC lands.
-        ClientLog.Info(
+        Log.Info(
             $"[StressAvatar:{EntityId}] EchoReply seq={seq} serverTsNs={serverTsNs} clientTsNs={clientTsNs}");
         var m = Metrics;
         if (m != null) m.EchoReplyCount++;
@@ -76,7 +77,7 @@ public partial class StressAvatar : ClientEntity
     // Server→client struct push.
     public partial void OnWeaponBroken(StressWeapon w)
     {
-        ClientLog.Info(
+        Log.Info(
             $"[StressAvatar:{EntityId}] OnWeaponBroken id={w.Id} sharpness={w.Sharpness}");
         var m = Metrics;
         if (m != null) m.OnWeaponBrokenCount++;
@@ -85,7 +86,7 @@ public partial class StressAvatar : ClientEntity
     // Server→client list push.
     public partial void OnScoresSnapshot(List<int> scores)
     {
-        ClientLog.Info(
+        Log.Info(
             $"[StressAvatar:{EntityId}] OnScoresSnapshot count={scores.Count}");
         var m = Metrics;
         if (m != null) m.OnScoresSnapshotCount++;
@@ -95,7 +96,7 @@ public partial class StressAvatar : ClientEntity
     // avatar logs receipt, including the owner.
     public partial void OnAreaBroadcast(uint seq, int payload)
     {
-        ClientLog.Info(
+        Log.Info(
             $"[StressAvatar:{EntityId}] OnAreaBroadcast seq={seq} payload={payload}");
         var m = Metrics;
         if (m != null) m.OnAreaBroadcastCount++;

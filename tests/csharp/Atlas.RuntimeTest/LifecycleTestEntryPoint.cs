@@ -100,7 +100,7 @@ public static class LifecycleTestEntryPoint
         try
         {
             var msg = System.Text.Encoding.UTF8.GetString(utf8, len);
-            Atlas.Log.Info(msg);
+            Atlas.Diagnostics.Log.Info(msg);
             return 0;
         }
         catch (Exception ex)

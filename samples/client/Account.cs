@@ -1,5 +1,6 @@
 using System;
 using Atlas.Client;
+using Atlas.Diagnostics;
 
 namespace Atlas.ClientSample;
 
@@ -24,14 +25,14 @@ public partial class Account : ClientEntity
 
     protected override void OnInit()
     {
-        ClientLog.Info(
+        Log.Info(
             $"[Account:{EntityId}] OnInit — calling SelectAvatar({kDefaultAvatarIndex})");
         SelectAvatar(kDefaultAvatarIndex);
     }
 
     protected override void OnDestroy()
     {
-        ClientLog.Info($"[Account:{EntityId}] OnDestroy");
+        Log.Info($"[Account:{EntityId}] OnDestroy");
     }
 
     // RequestAvatarList is declared in Account.def but the stress harness

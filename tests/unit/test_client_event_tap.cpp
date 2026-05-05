@@ -160,7 +160,7 @@ TEST(ClientEventTap, EventSeqGap_MissingMissedField_CountsLineButNoMiss) {
 }
 
 // ============================================================================
-// L6 — optional [t=...] timestamp prefix (ClientLog in Atlas.Client)
+// L6 — optional [t=...] timestamp prefix (Atlas.Client.Desktop.ConsoleLogBackend)
 // ============================================================================
 
 TEST(ClientEventTap, TimestampPrefix_Stripped_OnInit) {
@@ -178,10 +178,9 @@ TEST(ClientEventTap, TimestampPrefix_Stripped_HpChanged) {
 }
 
 TEST(ClientEventTap, TimestampPrefix_Stripped_EventSeqGap) {
-  // Both the event_seq gap warning (stderr) and the regular events
-  // (stdout) carry the prefix because ClientLog.Warn/Info share the
-  // same Timestamp() helper. Missing any one path would desync the
-  // harness counter from the on-wire state.
+  // Warning (stderr) and Info (stdout) lines both carry the prefix because
+  // ConsoleLogBackend stamps it for every level — without that the harness
+  // would desync from the on-wire state on the gap path.
   ClientEventCounters c;
   EXPECT_TRUE(ParseAndCountClientEventLine(
       "[t=5.000] [StressAvatar:42] event_seq gap: last=10 got=15 missed=4", c));

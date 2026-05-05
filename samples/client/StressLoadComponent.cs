@@ -1,5 +1,6 @@
 using System.Collections.Generic;
 using Atlas.Client;
+using Atlas.Diagnostics;
 
 namespace Atlas.Components;
 
@@ -11,7 +12,7 @@ public sealed partial class StressLoadComponent
 {
     public partial void OnAffixesUpdated(List<int> ids)
     {
-        ClientLog.Info(
+        Log.Info(
             $"[StressLoadComponent:{Entity.EntityId}] OnAffixesUpdated count={ids.Count}");
     }
 }

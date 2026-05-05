@@ -1,19 +1,12 @@
 using System;
 using System.Threading;
-using Atlas;
 
 namespace Atlas.Diagnostics;
 
-/// <summary>
-/// Periodic GC statistics reporter. Logs heap size, generation counts,
-/// and pause percentages at a configurable interval.
-/// Only active in debug/development mode.
-/// </summary>
 internal static class GCMonitor
 {
     private static Timer? _timer;
 
-    /// <summary>Start periodic GC reporting.</summary>
     public static void Start(TimeSpan interval)
     {
         Stop();
@@ -21,14 +14,12 @@ internal static class GCMonitor
         Log.Info($"GCMonitor: started with interval {interval.TotalSeconds}s");
     }
 
-    /// <summary>Stop periodic GC reporting.</summary>
     public static void Stop()
     {
         _timer?.Dispose();
         _timer = null;
     }
 
-    /// <summary>Log current GC statistics once.</summary>
     public static void Report()
     {
         try

@@ -5,6 +5,7 @@ using System.Text;
 using Atlas.Core;
 using Atlas.Coro;
 using Atlas.Coro.Hosting;
+using Atlas.Diagnostics;
 using Atlas.Entity;
 using Atlas.Serialization;
 

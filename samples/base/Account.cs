@@ -1,3 +1,4 @@
+using Atlas.Diagnostics;
 using Atlas.Entity;
 
 namespace Atlas.BaseSample;
