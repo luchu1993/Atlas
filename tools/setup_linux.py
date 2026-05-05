@@ -76,8 +76,8 @@ def check_distro() -> None:
     except (FileNotFoundError, subprocess.CalledProcessError):
         log("warning: cannot detect distro version (lsb_release missing)")
         return
-    if out != "24.04":
-        log(f"warning: Ubuntu 24.04 expected, found {out} — package versions may differ from CI")
+    if out != "26.04":
+        log(f"warning: Ubuntu 26.04 expected, found {out} — package versions may differ from CI")
 
 
 def ensure_inotify_limit(sudo: list[str]) -> None:

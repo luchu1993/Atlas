@@ -120,7 +120,7 @@ cmake --build build/debug --config Debug
 
 在同一份 Windows clone 上验证 Linux 构建——无需第二份 checkout、无需手动同步。源码就地从 `/mnt/<drive>/...` 读取；构建产物写到 WSL 文件系统的 `~/atlas-builds/<preset>`，避免跨文件系统写入拖慢编译。检测到 `sccache` 时自动启用，与 CI 一致。
 
-前置条件（管理员 PowerShell，仅一次）：`wsl --install -d Ubuntu-24.04`。
+前置条件（管理员 PowerShell，仅一次）：`wsl --install -d Ubuntu-26.04`。
 
 ```bash
 # 一次性安装工具链（g++-13、ninja、.NET 10、sccache、clang-format 等）

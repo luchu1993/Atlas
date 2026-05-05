@@ -120,7 +120,7 @@ Sanitizer presets are available where supported: `asan`, `asan-msvc`, `tsan`, an
 
 Verify the Linux build against the same Windows clone — no second checkout, no manual sync. Source is read in place from `/mnt/<drive>/...`; build artefacts land in `~/atlas-builds/<preset>` inside the WSL filesystem so cross-FS writes don't cap compile speed. `sccache` is picked up automatically when present, mirroring CI.
 
-One-time prerequisite (elevated PowerShell): `wsl --install -d Ubuntu-24.04`.
+One-time prerequisite (elevated PowerShell): `wsl --install -d Ubuntu-26.04`.
 
 ```bash
 # One-time toolchain install (g++-13, ninja, .NET 10, sccache, clang-format, ...)

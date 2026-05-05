@@ -260,7 +260,13 @@ TEST_F(NetworkInterfaceTest, UdpRateLimitOnlyAdmitsFirstSourcePerPoll) {
     bundle.AddMessage(NetTestMsg{i});
     auto payload = bundle.Finalize();
 
-    auto sent = sender->SendTo(payload, ni_.UdpAddress());
+    // WSL2 loopback throttles bursts via skb-overhead-bounded queues much
+    // earlier than native Linux; retry on kWouldBlock instead of failing.
+    Result<size_t> sent = sender->SendTo(payload, ni_.UdpAddress());
+    while (!sent && sent.Error().Code() == ErrorCode::kWouldBlock) {
+      std::this_thread::sleep_for(std::chrono::microseconds(100));
+      sent = sender->SendTo(payload, ni_.UdpAddress());
+    }
     ASSERT_TRUE(sent.HasValue()) << sent.Error().Message();
     ASSERT_EQ(*sent, payload.size());
   }

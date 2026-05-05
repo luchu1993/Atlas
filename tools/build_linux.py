@@ -120,7 +120,12 @@ def run_on_linux(args: argparse.Namespace) -> int:
     test_cmd = ["ctest", "--build-config", config,
                 "--label-regex", args.label, "--output-on-failure"]
     log(" ".join(test_cmd))
-    subprocess.run(test_cmd, cwd=build, check=True)
+    test_env = os.environ.copy()
+    if wsl.is_running_inside():
+        # WSL2's virtualized CPU doesn't expose invariant TSC; Tracy aborts
+        # without this. The bypass is documented by Tracy itself.
+        test_env["TRACY_NO_INVARIANT_CHECK"] = "1"
+    subprocess.run(test_cmd, cwd=build, check=True, env=test_env)
 
     log(f"done in {time.monotonic() - t0:.1f}s")
     return 0

@@ -86,7 +86,7 @@ message(STATUS "  Runtime: ${DOTNET_RUNTIME_VERSION} (${DOTNET_RUNTIME_TFM})")
 
 # ── Find nethost native pack ────────────────────────────────────────────────
 # Match host RID across installers: Microsoft tarball uses portable IDs
-# (linux-x64), Ubuntu apt uses distro-flavored ones (ubuntu.24.04-x64).
+# (linux-x64), Ubuntu apt uses distro-flavored ones (ubuntu.26.04-x64).
 if(WIN32)
   set(_pack_patterns "win-x64")
 elseif(APPLE)
