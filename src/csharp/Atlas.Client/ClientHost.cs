@@ -2,26 +2,8 @@ using System;
 
 namespace Atlas.Client;
 
-// ============================================================================
-// ClientHost — host-specific entry points exposed to pure-managed Atlas.Client.
-//
-// Atlas.Client targets netstandard2.1 and must stay free of any particular
-// runtime's native-interop story (hostfxr / Mono / IL2CPP). Everything that
-// eventually calls into a native DLL (RPC send, entity-type registry) goes
-// through the delegate slots below; the host app wires them up at startup:
-//
-//   * atlas_client.exe (desktop CoreCLR host): Atlas.Client.Desktop fills
-//     the slots with P/Invoke calls to atlas_engine via
-//     Atlas.Client.ClientNativeApi.
-//
-//   * Unity (Mono/IL2CPP host): the Unity package fills the slots with
-//     P/Invoke calls to atlas_net_client.dll.
-//
-// If a slot is left null, the corresponding Atlas.Client call throws
-// `InvalidOperationException` with a clear message instead of silently
-// dropping the work.
-// ============================================================================
-
+// Delegate slots wired by the host app at startup (Atlas.Client.Desktop or the Unity package).
+// Unset slots throw InvalidOperationException on call rather than silently dropping work.
 public static class ClientHost
 {
     public delegate void SendRpcFn(uint entityId, uint rpcId, ReadOnlySpan<byte> payload,
@@ -34,61 +16,34 @@ public static class ClientHost
     public static SendRpcFn? SendCellRpcHandler;
     public static RegisterEntityTypeFn? RegisterEntityTypeHandler;
     public static RegisterStructFn? RegisterStructHandler;
-    // Optional — clients that don't route to a BaseApp (editor previews,
-    // offline tests) leave this null and the report is silently dropped.
+    // Optional: hosts without a BaseApp route (editor previews, tests) leave null; report is dropped.
     public static ReportEventSeqGapFn? ReportEventSeqGapHandler;
 
-    // Build-time SHA-256 of the entity-def surface; LoginClient stamps it
-    // into LoginRequest so a mismatched .def build is bounced before any
-    // RPC dispatch. Set once by DefBootstrap and never mutated after.
+    // Build-time SHA-256 of the entity-def surface; LoginRequest carries it so mismatched builds bounce.
     public static byte[]? EntityDefDigest { get; private set; }
+
+    private static T Required<T>(T? handler, string name) where T : Delegate
+        => handler ?? throw new InvalidOperationException(
+            $"ClientHost.{name} is not set — the host app (Atlas.Client.Desktop or the Unity package) "
+            + "must install its handler at startup.");
 
     internal static void SendBaseRpc(uint entityId, uint rpcId, ReadOnlySpan<byte> payload,
                                      ulong traceId)
-    {
-        if (SendBaseRpcHandler is null)
-            throw new InvalidOperationException(
-                "ClientHost.SendBaseRpcHandler is not set — the host app (Atlas.Client.Desktop "
-                + "or the Unity package) must install its P/Invoke handler at startup.");
-        SendBaseRpcHandler(entityId, rpcId, payload, traceId);
-    }
+        => Required(SendBaseRpcHandler, nameof(SendBaseRpcHandler))(entityId, rpcId, payload, traceId);
 
     internal static void SendCellRpc(uint entityId, uint rpcId, ReadOnlySpan<byte> payload,
                                      ulong traceId)
-    {
-        if (SendCellRpcHandler is null)
-            throw new InvalidOperationException(
-                "ClientHost.SendCellRpcHandler is not set — the host app (Atlas.Client.Desktop "
-                + "or the Unity package) must install its P/Invoke handler at startup.");
-        SendCellRpcHandler(entityId, rpcId, payload, traceId);
-    }
+        => Required(SendCellRpcHandler, nameof(SendCellRpcHandler))(entityId, rpcId, payload, traceId);
 
     internal static void RegisterEntityType(ReadOnlySpan<byte> data)
-    {
-        if (RegisterEntityTypeHandler is null)
-            throw new InvalidOperationException(
-                "ClientHost.RegisterEntityTypeHandler is not set — the host app must install "
-                + "its entity-type registry bridge at startup.");
-        RegisterEntityTypeHandler(data);
-    }
+        => Required(RegisterEntityTypeHandler, nameof(RegisterEntityTypeHandler))(data);
 
     internal static void RegisterStruct(ReadOnlySpan<byte> data)
-    {
-        if (RegisterStructHandler is null)
-            throw new InvalidOperationException(
-                "ClientHost.RegisterStructHandler is not set — the host app must install "
-                + "its struct registry bridge at startup.");
-        RegisterStructHandler(data);
-    }
+        => Required(RegisterStructHandler, nameof(RegisterStructHandler))(data);
 
     internal static void SetEntityDefDigest(ReadOnlySpan<byte> data)
         => EntityDefDigest = data.ToArray();
 
     internal static void ReportEventSeqGap(uint entityId, uint gapDelta)
-    {
-        // Non-fatal telemetry hop: if the host didn't wire it (Unity in
-        // offline mode, test fixtures), drop the report rather than
-        // throwing from deep inside a packet decoder.
-        ReportEventSeqGapHandler?.Invoke(entityId, gapDelta);
-    }
+        => ReportEventSeqGapHandler?.Invoke(entityId, gapDelta);
 }

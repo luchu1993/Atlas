@@ -3,40 +3,17 @@ using Atlas.Serialization;
 
 namespace Atlas.Components;
 
-// Client-side counterpart of `Atlas.Entity.Components.ReplicatedComponent`.
-//
-// The client never builds outbound deltas, so this base has none of the
-// server's dirty-tracking machinery. It exposes:
-//   * `ApplyDelta` — overridden by codegen; consumes a per-component
-//     delta written by the server's `WriteOwnerDelta` / `WriteOtherDelta`.
-//   * `SendCellRpc` / `SendBaseRpc` — outbound component RPCs. Encode
-//     the slot into the rpc_id (bits 24-31) so the server-side dispatcher
-//     can route to the right component on the entity. ClientRpc isn't
-//     emitted because clients never call client_methods on themselves.
-//
-// Slot index is set once at attach time by ClientEntity; instances never
-// migrate slots, so caching the rpc_id base on first send would shave
-// bookkeeping at a tiny memory cost — punted unless profiling demands it.
+// Client counterpart of server ReplicatedComponent — no dirty tracking; client never sends deltas.
 public abstract class ClientReplicatedComponent : ClientComponentBase
 {
     internal int _slotIdx;
     public int SlotIdx => _slotIdx;
 
-    /// <summary>
-    /// Apply an incoming per-component delta. Wire layout mirrors the
-    /// entity-level delta:
-    ///   [u8 sectionMask]  bit0=scalar, bit1=container
-    ///   if bit0: [u64 scalarFlags][values...]
-    ///   if bit1: [u64 containerFlags][ops...]
-    /// Codegen overrides per concrete component class.
-    /// </summary>
-    // public so an override can live in any assembly without IVT
-    // plumbing. Symmetry with the server-side ReplicatedComponent.
+    // Wire: [u8 sectionMask] [if bit0: u64 scalarFlags + values] [if bit1: u64 containerFlags + ops].
+    // public for cross-assembly codegen overrides without IVT plumbing.
     public virtual void ApplyDelta(ref SpanReader reader) { }
 
-    // RPC sends compute rpc_id at runtime from (slot, direction, entity
-    // type id, methodIdx). Direction + methodIdx are constants per
-    // generated stub; slot and entity-type are per-instance, supplied here.
+    // rpc_id = slot<<24 | dir<<22 | typeId<<8 | methodIdx. Slot + typeId are per-instance.
     protected void SendCellRpc(int methodIdx, ReadOnlySpan<byte> payload)
     {
         int rpcId = (_slotIdx << 24) | (0x02 << 22) | (_entity.TypeId << 8) | methodIdx;
@@ -49,10 +26,7 @@ public abstract class ClientReplicatedComponent : ClientComponentBase
         _entity.SendBaseRpc(rpcId, payload);
     }
 
-    // public so cross-assembly codegen can call it from the entity's
-    // ApplyComponentSection (auto-attaches missing components). The
-    // double-underscore prefix marks it as runtime-only — scripts never
-    // call it directly.
+    // public for cross-assembly codegen; double-underscore marks runtime-only — scripts never call it.
     public void __Bind(Atlas.Client.ClientEntity entity, int slotIdx)
     {
         _entity = entity;

@@ -5,41 +5,18 @@ using Atlas.Serialization;
 
 namespace Atlas.Client;
 
-/// <summary>
-/// Pure-managed surface of the client callback layer. The host app (desktop
-/// CoreCLR or Unity IL2CPP) owns the native-side callback table and routes
-/// incoming wire bytes into the static <c>Dispatch*</c> decoders below.
-/// </summary>
-/// <remarks>
-/// Atlas.Client targets netstandard2.1 for Unity consumption. Everything
-/// that requires .NET 5+ primitives — [UnmanagedCallersOnly] bridges, raw
-/// delegate* unmanaged, P/Invoke to a specific native dll — lives in
-/// Atlas.Client.Desktop (CoreCLR) or the Unity package (Mono / IL2CPP).
-/// Both hosts call into the same decoders here so wire-format parsing is
-/// defined exactly once.
-/// </remarks>
 public static class ClientCallbacks
 {
-    /// <summary>
-    /// Delegate type for dispatching an incoming ClientRpc to a managed entity.
-    /// </summary>
     public delegate void RpcDispatchDelegate(ClientEntity entity, int rpcId, ref SpanReader reader);
 
-    /// <summary>
-    /// RPC dispatcher set by generated code (<c>[ModuleInitializer]</c>).
-    /// </summary>
     public static RpcDispatchDelegate? ClientRpcDispatcher;
 
-    // Reserved client-facing MessageIDs — must match
-    // src/server/baseapp/delta_forwarder.h::kClient*MessageId exactly.
-    // Duplicated here (rather than imported) because Atlas.Client must
-    // remain independent of any server header.
-    public const ushort kClientDeltaMessageId = 0xF001;          // volatile / unreliable
-    public const ushort kClientBaselineMessageId = 0xF002;       // owner-scope full baseline (reliable)
-    public const ushort kClientReliableDeltaMessageId = 0xF003;  // ordered property delta (reliable)
+    // Must match src/server/baseapp/delta_forwarder.h::kClient*MessageId byte-for-byte.
+    public const ushort kClientDeltaMessageId = 0xF001;
+    public const ushort kClientBaselineMessageId = 0xF002;
+    public const ushort kClientReliableDeltaMessageId = 0xF003;
 
-    // CellAoIEnvelopeKind — must match src/server/cellapp/cell_aoi_envelope.h
-    // byte-for-byte.
+    // Must match src/server/cellapp/cell_aoi_envelope.h::CellAoIEnvelopeKind.
     private const byte kEntityEnter = 1;
     private const byte kEntityLeave = 2;
     private const byte kEntityPositionUpdate = 3;
@@ -48,13 +25,6 @@ public static class ClientCallbacks
     private static readonly ClientEntityManager s_entityMgr = new();
 
     public static ClientEntityManager EntityManager => s_entityMgr;
-
-    // =========================================================================
-    // Host entry points — called by native-callback glue in the host app
-    // (Atlas.Client.Desktop / Unity package). Signatures take pre-materialised
-    // ReadOnlySpan<byte> so the unmanaged-to-managed conversion stays in the
-    // host-specific assembly and Atlas.Client keeps a runtime-agnostic ABI.
-    // =========================================================================
 
     public static void DispatchRpc(uint entityId, uint rpcId, ulong traceId,
                                    ReadOnlySpan<byte> payload)
@@ -75,11 +45,6 @@ public static class ClientCallbacks
         }
     }
 
-    /// <summary>
-    /// Create the client-side instance for the local player's own entity
-    /// (called once during desktop-client Authenticate flow; Unity's
-    /// equivalent path differs).
-    /// </summary>
     public static void CreateEntity(uint entityId, ushort typeId)
     {
         try
@@ -103,7 +68,6 @@ public static class ClientCallbacks
         }
     }
 
-    /// <summary>Tear down the local-player entity (logout or forced DC).</summary>
     public static void DestroyEntity(uint entityId)
     {
         try
@@ -116,12 +80,6 @@ public static class ClientCallbacks
         }
     }
 
-    /// <summary>
-    /// Entry point for the three reserved state-replication MessageIDs
-    /// (<c>0xF001</c> unreliable delta / <c>0xF002</c> baseline /
-    /// <c>0xF003</c> reliable delta). Host delivers the already-extracted
-    /// payload; this method owns all envelope decoding.
-    /// </summary>
     public static void DeliverFromServer(ushort msgId, ReadOnlySpan<byte> body)
     {
         try
@@ -147,12 +105,7 @@ public static class ClientCallbacks
         }
     }
 
-    // =========================================================================
-    // Envelope decoders
-    // =========================================================================
-
-    // Wire layout for 0xF001 / 0xF003 (CellAoIEnvelope, src/server/cellapp/cell_aoi_envelope.h):
-    //   [u8 kind] [u32 LE public_entity_id] [payload bytes...]
+    // 0xF001 / 0xF003 envelope (cell_aoi_envelope.h): [u8 kind][u32 LE eid][payload].
     private const int kEnvelopeHeaderBytes = 1 + 4;
     private static void DispatchAoIEnvelope(ReadOnlySpan<byte> body)
     {
@@ -187,10 +140,7 @@ public static class ClientCallbacks
         }
     }
 
-    // kEntityEnter inner payload (witness.cc::BuildEnterPayload):
-    //   [u16 type_id] [3f pos] [3f dir] [u8 on_ground] [... peer_snapshot ...]
-    // The peer_snapshot tail is scope-subset bytes (SerializeForOtherClients)
-    // for AoI peers.
+    // kEntityEnter (witness.cc::BuildEnterPayload): [u16 typeId][3f pos][3f dir][u8 onGround][peerSnapshot].
     private const int kEnterFixedBytes = 2 + 6 * 4 + 1;
     private static void DispatchEnter(uint entityId, ReadOnlySpan<byte> inner)
     {
@@ -210,12 +160,7 @@ public static class ClientCallbacks
         s_entityMgr.OnEnter(entityId, typeId, pos, dir, onGround, snapshot);
     }
 
-    // kEntityPropertyUpdate inner payload (witness.cc::BuildPropertyUpdatePayload):
-    //   [u64 event_seq] [delta or snapshot bytes]
-    // The seq prefix lets the client detect missing reliable deltas. It is
-    // authoritative on the delta channel (ordered, nominally gap-free) and
-    // approximately correct on snapshot fallback (reflects state up to
-    // latest_event_seq).
+    // kEntityPropertyUpdate (witness.cc::BuildPropertyUpdatePayload): [u64 eventSeq][delta|snapshot].
     private const int kPropertyUpdatePrefixBytes = 8;
     private static void DispatchPropertyUpdate(uint entityId, ReadOnlySpan<byte> inner)
     {
