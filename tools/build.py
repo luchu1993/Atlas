@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import platform
 import shutil
@@ -22,6 +23,13 @@ PRESET_CONFIGS = {
     "debug": "Debug",
     "profile": "RelWithDebInfo",
     "release": "Release",
+}
+
+# VS major → CMake generator name. Drives Windows non-debug presets so the
+# generator always tracks the highest installed VS (incl. Insiders).
+VS_GENERATOR = {
+    17: "Visual Studio 17 2022",
+    18: "Visual Studio 18 2026",
 }
 
 NINJA_VERSION = "1.12.1"
@@ -65,29 +73,39 @@ def parse_args() -> argparse.Namespace:
     return p.parse_args()
 
 
-def load_msvc_env() -> dict[str, str]:
-    """Return env with MSVC tooling loaded; pass-through if cl.exe is on PATH."""
-    if shutil.which("cl.exe"):
-        return os.environ.copy()
-
+def detect_vs_install() -> tuple[Path, int]:
+    """Return (installationPath, majorVersion) for the highest VS install (incl. prerelease)."""
     pf86 = os.environ.get("ProgramFiles(x86)") or r"C:\Program Files (x86)"
     vswhere = Path(pf86) / "Microsoft Visual Studio" / "Installer" / "vswhere.exe"
     if not vswhere.is_file():
         raise RuntimeError(f"vswhere.exe not found at {vswhere}")
 
-    vs_path = subprocess.run(
-        [str(vswhere), "-latest", "-property", "installationPath"],
+    raw = subprocess.run(
+        [str(vswhere), "-prerelease", "-products", "*", "-format", "json"],
         capture_output=True, check=True,
-    ).stdout.decode(errors="replace").strip()
-    if not vs_path:
+    ).stdout.decode(errors="replace")
+    installs = json.loads(raw) if raw.strip() else []
+    if not installs:
         raise RuntimeError("No Visual Studio installation detected via vswhere.")
 
-    vcvars = Path(vs_path) / "VC" / "Auxiliary" / "Build" / "vcvars64.bat"
+    def _ver(s: str) -> tuple[int, ...]:
+        return tuple(int(p) for p in s.split(".") if p.isdigit())
+
+    best = max(installs, key=lambda i: _ver(i.get("installationVersion", "0")))
+    return Path(best["installationPath"]), _ver(best["installationVersion"])[0]
+
+
+def load_msvc_env() -> tuple[dict[str, str], int | None]:
+    """Return (env, vs_major) with MSVC tooling loaded; pass-through if cl.exe is on PATH."""
+    if shutil.which("cl.exe"):
+        return os.environ.copy(), None
+
+    vs_path, vs_major = detect_vs_install()
+    vcvars = vs_path / "VC" / "Auxiliary" / "Build" / "vcvars64.bat"
     if not vcvars.is_file():
         raise RuntimeError(f"vcvars64.bat not found at {vcvars}")
 
-    log(f"Loading MSVC env via {vcvars.name}")
-    # Run vcvars then dump env vars; "set" prints NAME=VALUE per line.
+    log(f"Loading MSVC env from VS {vs_major} at {vs_path}")
     res = subprocess.run(
         f'"{vcvars}" >nul && set',
         capture_output=True, shell=True, check=True,
@@ -97,7 +115,7 @@ def load_msvc_env() -> dict[str, str]:
         if "=" in line:
             key, _, value = line.partition("=")
             env[key] = value
-    return env
+    return env, vs_major
 
 
 def ensure_ninja(env: dict[str, str]) -> None:
@@ -139,7 +157,13 @@ def main() -> int:
     config = PRESET_CONFIGS[args.preset]
 
     if platform.system() == "Windows":
-        env = load_msvc_env()
+        env, vs_major = load_msvc_env()
+        # Pin CMAKE_GENERATOR to the VS we just loaded vcvars from, so cmake
+        # doesn't fall back to vswhere -latest (which skips Insiders) and
+        # pick a different VS than the one supplying our toolchain.
+        if vs_major is not None and vs_major in VS_GENERATOR:
+            env["CMAKE_GENERATOR"] = VS_GENERATOR[vs_major]
+            log(f"CMAKE_GENERATOR={env['CMAKE_GENERATOR']}")
     else:
         env = os.environ.copy()
 
