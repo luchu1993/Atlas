@@ -78,6 +78,15 @@ internal static unsafe partial class ClientNativeApi
             RegisterStructNative(ptr, data.Length);
     }
 
+    [LibraryImport(LibName, EntryPoint = "AtlasSetEntityDefDigest")]
+    private static partial void SetEntityDefDigestNative(byte* data, int len);
+
+    public static void SetEntityDefDigest(ReadOnlySpan<byte> data)
+    {
+        fixed (byte* ptr = data)
+            SetEntityDefDigestNative(ptr, data.Length);
+    }
+
     // =========================================================================
     // Callback registration
     // =========================================================================

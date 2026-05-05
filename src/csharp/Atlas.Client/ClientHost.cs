@@ -10,12 +10,17 @@ public static class ClientHost
                                    ulong traceId);
     public delegate void RegisterEntityTypeFn(ReadOnlySpan<byte> data);
     public delegate void RegisterStructFn(ReadOnlySpan<byte> data);
+    public delegate void SetEntityDefDigestFn(ReadOnlySpan<byte> data);
     public delegate void ReportEventSeqGapFn(uint entityId, uint gapDelta);
 
     public static SendRpcFn? SendBaseRpcHandler;
     public static SendRpcFn? SendCellRpcHandler;
     public static RegisterEntityTypeFn? RegisterEntityTypeHandler;
     public static RegisterStructFn? RegisterStructHandler;
+    // Pushes the digest into the C++ EntityDefRegistry on hosts that need it
+    // (atlas_client.exe stamps it into LoginRequest from C++). Unity / editor
+    // previews leave it null and rely on the managed EntityDefDigest only.
+    public static SetEntityDefDigestFn? SetEntityDefDigestHandler;
     // Optional: hosts without a BaseApp route (editor previews, tests) leave null; report is dropped.
     public static ReportEventSeqGapFn? ReportEventSeqGapHandler;
 
@@ -42,7 +47,10 @@ public static class ClientHost
         => Required(RegisterStructHandler, nameof(RegisterStructHandler))(data);
 
     internal static void SetEntityDefDigest(ReadOnlySpan<byte> data)
-        => EntityDefDigest = data.ToArray();
+    {
+        EntityDefDigest = data.ToArray();
+        SetEntityDefDigestHandler?.Invoke(data);
+    }
 
     internal static void ReportEventSeqGap(uint entityId, uint gapDelta)
         => ReportEventSeqGapHandler?.Invoke(entityId, gapDelta);

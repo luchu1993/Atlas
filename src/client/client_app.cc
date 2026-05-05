@@ -2,6 +2,7 @@
 
 #include "clrscript/clr_bootstrap.h"
 #include "clrscript/clr_invoke.h"
+#include "entitydef/entity_def_registry.h"
 #include "foundation/log.h"
 #include "network/channel.h"
 #include "network/reliable_udp.h"
@@ -188,7 +189,11 @@ auto ClientApp::InitClr(const char* exe_path) -> bool {
   clr_config.runtime_config_path = config_.runtime_config;
   clr_config.runtime_assembly_path = config_.script_assembly;
   clr_config.bootstrap_args = bootstrap_args;
-  clr_config.lifecycle_type = "Atlas.Client.DesktopLifecycle";
+  // Fully-qualified: lifecycle lives in Atlas.Client.Desktop, but the script
+  // assembly path points at Atlas.ClientSample.dll. Without the assembly
+  // hint, load_assembly_and_get_function_pointer can't resolve the type
+  // across assemblies in the same load context.
+  clr_config.lifecycle_type = "Atlas.Client.DesktopLifecycle, Atlas.Client.Desktop";
   clr_config.hotreload_type.clear();
 
   auto cfg_result = clr->Configure(clr_config);
@@ -303,10 +308,19 @@ auto ClientApp::Login() -> bool {
   }
   auto* login_ch = *ch_result;
 
-  // Send LoginRequest
+  // Send LoginRequest. The digest was pushed into the native registry by
+  // ClientHost.SetEntityDefDigestHandler when the user assembly's
+  // ModuleInitializer ran; BaseApp rejects with def_mismatch otherwise.
   login::LoginRequest req;
   req.username = config_.username;
   req.password_hash = config_.password_hash;
+  const auto digest = EntityDefRegistry::Instance().Digest();
+  if (digest.size() == req.entity_def_digest.size()) {
+    std::memcpy(req.entity_def_digest.data(), digest.data(), req.entity_def_digest.size());
+  } else {
+    ATLAS_LOG_WARNING("Client: entity-def digest size mismatch ({} vs {}); login will likely fail",
+                      digest.size(), req.entity_def_digest.size());
+  }
   (void)login_ch->SendMessage(req);
 
   // Wait for LoginResult
