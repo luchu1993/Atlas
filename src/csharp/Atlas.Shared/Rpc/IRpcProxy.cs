@@ -1,6 +1,4 @@
 namespace Atlas.Rpc;
 
-/// <summary>
-/// Marker interface for generated Mailbox proxy structs.
-/// </summary>
+// Marker for generated Mailbox proxy structs.
 public interface IRpcProxy { }

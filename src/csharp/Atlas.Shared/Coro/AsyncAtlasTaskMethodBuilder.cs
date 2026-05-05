@@ -61,7 +61,7 @@ public struct AsyncAtlasTaskMethodBuilder<T>
         awaiter.UnsafeOnCompleted(box.MoveNextAction);
     }
 
-    public void SetStateMachine(IAsyncStateMachine _) { /* struct builder: no boxing fallback */ }
+    public void SetStateMachine(IAsyncStateMachine _) { }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private AtlasTaskSourceBox<TStateMachine, T> EnsureBox<TStateMachine>(ref TStateMachine sm)
@@ -69,8 +69,8 @@ public struct AsyncAtlasTaskMethodBuilder<T>
     {
         if (_source is AtlasTaskSourceBox<TStateMachine, T> existing) return existing;
         var box = AtlasTaskSourceBox<TStateMachine, T>.Rent();
-        // Order matters: store the box reference into _source before copying the
-        // state machine so the boxed copy of the builder picks up the same source.
+        // Store _source before copying the state machine so the boxed
+        // copy picks up the same source reference.
         _token = box.Version;
         _source = box;
         box.SetStateMachine(ref sm);

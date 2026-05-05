@@ -3,8 +3,7 @@ using System.Runtime.CompilerServices;
 
 namespace Atlas.Coro;
 
-// Producer-side surface the builder talks to. The non-generic-state-machine
-// reference lets the builder hold the box without leaking TStateMachine.
+// The non-generic base lets the builder hold the box without leaking TStateMachine.
 internal abstract class AtlasTaskSourceBoxBase<T> : IAtlasTaskSource<T>
 {
     protected AtlasTaskCompletionSourceCore<T> Core;

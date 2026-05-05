@@ -5,7 +5,7 @@ using System.Threading;
 
 namespace Atlas.Coro;
 
-// completedCount gates exactly-once Pending→Completed; version bumps on Reset
+// completedCount gates exactly-once Pending→Completed; Reset bumps version
 // for ABA defence when the source is pooled.
 public struct AtlasTaskCompletionSourceCore<T>
 {

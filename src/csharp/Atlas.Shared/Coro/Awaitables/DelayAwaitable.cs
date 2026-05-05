@@ -91,7 +91,7 @@ public sealed class DelayAwaitable
             if (continuation is null) throw new ArgumentNullException(nameof(continuation));
             if (Volatile.Read(ref _parent._completed) != 0) { continuation(); return; }
             _parent._continuation = continuation;
-            // Drain inline if completion raced past the IsCompleted check.
+            // Re-check for a completion that raced past IsCompleted.
             if (Volatile.Read(ref _parent._completed) != 0)
             {
                 var c = Interlocked.Exchange(ref _parent._continuation, null);

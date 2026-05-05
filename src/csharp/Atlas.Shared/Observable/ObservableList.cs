@@ -3,12 +3,8 @@ using System.Collections.Generic;
 
 namespace Atlas.Observable;
 
-// Growable list with dirty tracking at the container level AND pass-
-// through to nested observable children. Mutations record an op locally;
-// nested ObservableList / ObservableDict children bubble their dirty
-// state via MarkChildDirty so the recursive serializer can emit a
-// targeted op into the inner stream instead of re-shipping the whole
-// slot.
+// Container-level dirty tracking with pass-through for nested observable
+// children — see docs/property_sync/container_property_sync_design.md.
 public sealed class ObservableList<T> : IObservableChild, System.Collections.IEnumerable
 {
     public readonly struct ListOp
@@ -35,18 +31,11 @@ public sealed class ObservableList<T> : IObservableChild, System.Collections.IEn
     private readonly List<ListOp> _ops = new();
     private readonly List<T> _opValues = new();
 
-    // Slots whose inner containers have pending ops. Lazy: lists with
-    // scalar / struct elements never call MarkChildDirty (only nested
-    // observable children fire it), so the HashSet stays null and we
-    // skip ~100B of fixed cost per such instance. Code paths that read
-    // _childDirtySlots fall through cleanly when it's null.
+    // Lazy: scalar/struct lists never fire MarkChildDirty so the HashSet
+    // stays null and skips ~100B fixed cost per instance.
     private static readonly HashSet<int> _emptyChildDirty = new();
     private HashSet<int>? _childDirtySlots;
 
-    // Per-slot markDirty closure cache. Each closure is allocated once
-    // per slot ever used and reused on every Attach hitting that slot —
-    // so a steady-state Add / RemoveAt cycle only pays the closure cost
-    // the first time a fresh slot index appears.
     private List<Action>? _slotMarkDirtyCache;
 
     private Action _markDirty;
@@ -56,31 +45,17 @@ public sealed class ObservableList<T> : IObservableChild, System.Collections.IEn
 
     public int Count => _items.Count;
 
-    // Concrete return type so the compiler picks duck-typed foreach over
-    // the IEnumerable interface — keeps the hot path zero-alloc.
+    // Concrete return types so duck-typed foreach in codegen stays
+    // allocation-free instead of boxing through IEnumerable<T>.
     public List<T>.Enumerator GetEnumerator() => _items.GetEnumerator();
 
-    // Non-generic IEnumerable is required by C# collection-initializer
-    // syntax. foreach prefers the struct-returning overload above.
     System.Collections.IEnumerator System.Collections.IEnumerable.GetEnumerator() =>
         _items.GetEnumerator();
 
     public IReadOnlyList<T> Items => _items;
-    // ReadOnlyListView wraps the underlying List<T> so:
-    //   • foreach (var op in container.Ops)  uses the struct enumerator
-    //     (no IEnumerable<T>.GetEnumerator boxing — historical hot
-    //     allocation source flagged by dotnet-trace gc-verbose).
-    //   • container.Ops.Count / container.Ops[i] stay constant-time.
-    //   • There is no Add / Clear surface, so external readers cannot
-    //     corrupt the delta log even though the wrapper has access to
-    //     the live backing list.
     public ReadOnlyListView<ListOp> Ops => new(_ops);
     public ReadOnlyListView<T> OpValues => new(_opValues);
 
-    // Concrete HashSet return so the duck-typed foreach in generated
-    // code uses the struct enumerator (zero-alloc) instead of boxing
-    // through IEnumerable<int>. Empty fallback is shared and never
-    // mutated — never expose it for Add/Remove externally.
     public HashSet<int> ChildDirtySlots => _childDirtySlots ?? _emptyChildDirty;
 
     public void ClearOpLog()
@@ -95,8 +70,6 @@ public sealed class ObservableList<T> : IObservableChild, System.Collections.IEn
 
     void IObservableChild.__ForceClear()
     {
-        // Parent's outer op already ships our integral state. Drain so
-        // next tick doesn't re-emit folded-in mutations as new deltas.
         ClearOpLog();
         if (_childDirtySlots == null || _childDirtySlots.Count == 0) return;
         foreach (var slot in _childDirtySlots)
@@ -154,8 +127,7 @@ public sealed class ObservableList<T> : IObservableChild, System.Collections.IEn
         _items.RemoveAt(index);
         ShiftChildDirtyForRemove(index);
         _ops.Add(new ListOp(OpKind.ListSplice, index, index + 1, 0, 0));
-        // Surviving children at index..count-1 shifted down — their
-        // markDirty closures captured stale slot indices.
+        // Surviving children shifted down — their captured slot indices are stale.
         RebindShiftedSlots(index);
         _markDirty();
     }
@@ -176,8 +148,7 @@ public sealed class ObservableList<T> : IObservableChild, System.Collections.IEn
     {
         _items.Insert(index, item);
         ShiftChildDirtyForInsert(index);
-        // Existing items at index+1..count-1 shifted up — rebind their
-        // captured slot indices BEFORE the new item attaches at `index`.
+        // Rebind shifted children BEFORE attaching the new item at `index`.
         RebindShiftedSlots(index + 1);
         AttachNewChild(index, item);
         var offset = _opValues.Count;
@@ -189,14 +160,8 @@ public sealed class ObservableList<T> : IObservableChild, System.Collections.IEn
     public bool Contains(T item) => _items.Contains(item);
     public int IndexOf(T item) => _items.IndexOf(item);
 
-    // Records that one field of the struct at `slot` changed. The op
-    // snapshots the whole struct into _opValues so subsequent
-    // structural mutations (RemoveAt etc.) can't drift the slot index
-    // before serialize reaches this op — the writer reads from
-    // OpValues directly, not from _items.
-    //
-    // Called by the generator-emitted ItemAt accessor for list-of-
-    // Field-mode-struct properties.
+    // Snapshots the whole struct into _opValues so later structural
+    // mutations can't drift the slot before serialize reaches this op.
     public void RecordStructFieldSet(int slot, byte fieldIdx)
     {
         var offset = _opValues.Count;
@@ -204,13 +169,6 @@ public sealed class ObservableList<T> : IObservableChild, System.Collections.IEn
         _ops.Add(new ListOp(OpKind.StructFieldSet, slot, fieldIdx, offset, 1));
         _markDirty();
     }
-
-    // ---- Apply path -----------------------------------------------------
-    //
-    // Client-side apply routes here. Bind / unbind still runs so that
-    // future client-local mutations (prediction, test fixtures) report
-    // correctly; WithoutDirty variants skip the op log + markDirty since
-    // server is authoritative.
 
     public void ClearWithoutDirty()
     {
@@ -251,19 +209,10 @@ public sealed class ObservableList<T> : IObservableChild, System.Collections.IEn
         if (_items.Capacity < capacity) _items.Capacity = capacity;
     }
 
-    // ---- Compaction (called by generator before serialize) --------------
-
     public void CompactOpLog() => CompactOpLog(elementWireBytes: 4);
 
-    // Byte-aware fallback. Generator passes the element's estimated
-    // wire width so we can compare op-log bytes to the integral rewrite
-    // bytes properly. Without this hint, wide-element lists fallback
-    // too eagerly and narrow-element lists fallback too late.
-    //
-    // op-log byte estimate = ops × (kind + Splice-header worst case 6)
-    //                       + opValues × elementBytes
-    // fallback estimate    = Clear (1) + Splice header (7)
-    //                       + items × elementBytes
+    // elementWireBytes lets the byte-aware fallback compare op-log size
+    // vs integral-rewrite size correctly across narrow and wide elements.
     public void CompactOpLog(int elementWireBytes)
     {
         if (_ops.Count >= 2) MergeAdjacentAppends();
@@ -278,10 +227,8 @@ public sealed class ObservableList<T> : IObservableChild, System.Collections.IEn
     private void DedupChildDirtyAgainstOuterOps()
     {
         if (_childDirtySlots == null || _childDirtySlots.Count == 0) return;
-        // Clear() already nuked _childDirtySlots when it ran; any markers
-        // here are post-Clear (legitimate fresh child mutations). Walk
-        // the ops and drain whichever slots are covered by the outer
-        // payload — that's Set's exact slot or Splice's inserted range.
+        // Clear() already wiped _childDirtySlots; remaining entries are
+        // post-Clear, so drain whichever slots the outer ops cover.
         foreach (var op in _ops)
         {
             if (op.Kind == OpKind.Set)
@@ -293,7 +240,6 @@ public sealed class ObservableList<T> : IObservableChild, System.Collections.IEn
                 for (int s = op.Start; s < op.Start + op.ValueCount; ++s)
                     DrainCoveredSlot(s);
             }
-            // Clear: no per-op action — see comment above.
         }
     }
 
@@ -345,16 +291,9 @@ public sealed class ObservableList<T> : IObservableChild, System.Collections.IEn
         _ops.Add(new ListOp(OpKind.ListSplice, 0, 0, offset, _items.Count));
     }
 
-    // ---- Attach / detach helpers ----------------------------------------
-    //
-    // AttachNewChild = adoption (new ref entering this list). Drain stale
-    // ops from before adoption so collection-initializer mutations don't
-    // re-apply on the receiver.
-    //
-    // RebindChildSlot = same ref staying, just at a new index. NEVER
-    // drain — the child may hold legitimate ops registered against its
-    // old slot that still need to ship under the new slot.
-
+    // AttachNewChild drains pre-adoption ops; RebindChildSlot must NOT —
+    // a same-ref-shifted-slot still has legitimate ops queued under its
+    // old slot that need to ship under the new one.
     private void AttachNewChild(int slotIdx, T item)
     {
         if (item is IObservableChild child)
@@ -376,10 +315,8 @@ public sealed class ObservableList<T> : IObservableChild, System.Collections.IEn
             fields.__RebindObservableFields(GetCachedSlotMarkDirty(slotIdx));
     }
 
-    // Lazy per-slot closure cache. The capture `() => MarkChildDirty(s)`
-    // is the cheapest way to get a typed callback into the child without
-    // changing IObservableChild's signature; caching by slot keeps that
-    // alloc one-time-per-slot instead of per-mutation.
+    // Per-slot closure cache: `() => MarkChildDirty(s)` allocates once
+    // per slot ever used, not per mutation.
     private Action GetCachedSlotMarkDirty(int slot)
     {
         _slotMarkDirtyCache ??= new List<Action>();
@@ -407,14 +344,6 @@ public sealed class ObservableList<T> : IObservableChild, System.Collections.IEn
             RebindChildSlot(i, _items[i]);
     }
 
-    // ---- Slot-shift bookkeeping for ChildDirtySlots ---------------------
-    //
-    // In-place rewriting via two cursors avoids the snapshot allocation
-    // the previous List<int> clone-and-rebuild incurred per structural
-    // change. Walks the bucket once and overwrites entries in-place;
-    // HashSet<int>'s iterator tolerates Add/Remove only via this
-    // pull-then-push ordering.
-
     private void ShiftChildDirtyForRemove(int removedIdx)
     {
         if (_childDirtySlots == null || _childDirtySlots.Count == 0) return;
@@ -430,8 +359,7 @@ public sealed class ObservableList<T> : IObservableChild, System.Collections.IEn
 
     private void ShiftChildDirty(int threshold, int delta, bool includeThreshold = false)
     {
-        // Find slots needing shift, then apply. Two-phase to avoid
-        // mutating the set during enumeration.
+        // Two-phase to avoid mutating the set during enumeration.
         var set = _childDirtySlots!;
         List<int>? toShift = null;
         foreach (var s in set)

@@ -50,6 +50,7 @@ public readonly partial struct AtlasTask
         return new AtlasTask<(int, T)>(src, src.Version);
     }
 
+    // Losing tasks: errors are dropped; we just need GetResult to release pooled boxes.
     private static void DrainOthers(AtlasTask[] tasks, int skipIndex)
     {
         for (var i = 0; i < tasks.Length; i++)
@@ -57,7 +58,7 @@ public readonly partial struct AtlasTask
             if (i == skipIndex) continue;
             if (tasks[i].Status == AtlasTaskStatus.Pending) continue;
             try { tasks[i].GetAwaiter().GetResult(); }
-            catch (Exception) { /* losing tasks: errors are dropped */ }
+            catch (Exception) { }
         }
     }
 
@@ -68,7 +69,7 @@ public readonly partial struct AtlasTask
             if (i == skipIndex) continue;
             if (tasks[i].Status == AtlasTaskStatus.Pending) continue;
             try { tasks[i].GetAwaiter().GetResult(); }
-            catch (Exception) { /* losing tasks: errors are dropped */ }
+            catch (Exception) { }
         }
     }
 }

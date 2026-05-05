@@ -46,9 +46,7 @@ public readonly partial struct AtlasTask<T>
     public static AtlasTask<T> FromCanceled() =>
         new(new OperationCanceledException("Operation canceled"));
 
-    // Wraps a hand-rolled IAtlasTaskSource<T> (e.g. a P/Invoke result
-    // pump) into an AtlasTask. Token must equal source.Version at the
-    // moment of capture; mismatched tokens fault on first GetStatus.
+    // Token must equal source.Version at capture; mismatch faults on GetStatus.
     public static AtlasTask<T> FromSource(IAtlasTaskSource<T> source, short token)
     {
         if (source is null) throw new ArgumentNullException(nameof(source));

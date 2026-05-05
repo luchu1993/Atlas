@@ -72,7 +72,7 @@ public sealed class TestLoop : IAtlasLoop
     private int DrainDueTimers()
     {
         var fired = 0;
-        for (var i = 0; i < _timers.Count; /* incremented inline */)
+        for (var i = 0; i < _timers.Count;)
         {
             if (_timers[i].DueMs <= _currentTimeMs)
             {

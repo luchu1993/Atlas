@@ -6,10 +6,7 @@ using Atlas.DataTypes;
 
 namespace Atlas.Serialization;
 
-/// <summary>
-/// Binary reader over a ReadOnlySpan&lt;byte&gt;. ref struct for zero GC pressure.
-/// Wire format: little-endian, matching C++ BinaryReader byte-for-byte.
-/// </summary>
+// Wire format matches C++ BinaryReader byte-for-byte (little-endian).
 public ref struct SpanReader
 {
     private readonly ReadOnlySpan<byte> _data;
@@ -88,12 +85,7 @@ public ref struct SpanReader
     public double ReadDouble()
         => BitConverter.Int64BitsToDouble(ReadInt64());
 
-    /// <summary>
-    /// Three-tier packed_int matching C++ BinaryReader::read_packed_int:
-    /// tag &lt; 0xFE → value = tag;
-    /// tag == 0xFE → value = next uint16 LE;
-    /// tag == 0xFF → value = next uint32 LE.
-    /// </summary>
+    // Three-tier packed_int: tag < 0xFE → tag itself; 0xFE → next u16; 0xFF → next u32.
     public uint ReadPackedUInt32()
     {
         byte tag = ReadByte();
@@ -101,9 +93,6 @@ public ref struct SpanReader
         return tag == 0xFE ? ReadUInt16() : ReadUInt32();
     }
 
-    /// <summary>
-    /// String format matching C++ BinaryReader::read_string.
-    /// </summary>
     public string ReadString()
     {
         int length = (int)ReadPackedUInt32();
@@ -128,7 +117,7 @@ public ref struct SpanReader
         return data;
     }
 
-    /// <summary>Dequantize uint16 to yaw radian [0, 2π).</summary>
+    // Dequantize uint16 → yaw radian [0, 2π).
     public float ReadQuantizedYaw()
     {
         ushort quantized = ReadUInt16();
@@ -136,7 +125,7 @@ public ref struct SpanReader
         return quantized / 65536.0f * TwoPi;
     }
 
-    /// <summary>Dequantize int8 to pitch radian [-π/2, π/2].</summary>
+    // Dequantize int8 → pitch radian [-π/2, π/2].
     public float ReadQuantizedPitch()
     {
         sbyte quantized = (sbyte)ReadByte();
@@ -146,7 +135,6 @@ public ref struct SpanReader
     public readonly int Remaining => _data.Length - _position;
     public readonly int Position => _position;
 
-    /// <summary>Skip forward by <paramref name="count"/> bytes.</summary>
     public void Advance(int count)
     {
         CheckRemaining(count);

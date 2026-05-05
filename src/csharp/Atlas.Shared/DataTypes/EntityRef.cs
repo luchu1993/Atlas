@@ -2,10 +2,6 @@ using System;
 
 namespace Atlas.DataTypes;
 
-/// <summary>
-/// Lightweight reference to an entity by ID and type name.
-/// Does not hold a strong reference to the entity object.
-/// </summary>
 public readonly struct EntityRef : IEquatable<EntityRef>
 {
     public readonly uint EntityId;

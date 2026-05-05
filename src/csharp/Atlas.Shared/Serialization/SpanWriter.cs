@@ -7,21 +7,14 @@ using Atlas.DataTypes;
 
 namespace Atlas.Serialization;
 
-/// <summary>
-/// Binary writer using ArrayPool-backed buffer. ref struct for zero GC pressure.
-/// Wire format: little-endian, matching C++ BinaryWriter byte-for-byte.
-/// </summary>
+// Wire format matches C++ BinaryWriter byte-for-byte (little-endian).
 public ref struct SpanWriter
 {
     private byte[] _buffer;
     private int _position;
 
-    // C# structs get an implicit parameterless ctor that zero-inits
-    // fields — which would leave `_buffer` null and the first Write call
-    // NREs inside EnsureCapacity. An explicit parameterless ctor that
-    // chains to the sized overload ensures `new SpanWriter()` (the
-    // zero-args form callers reach for) produces a writer with a live
-    // pool-rented buffer.
+    // Explicit parameterless ctor so `new SpanWriter()` rents a live buffer
+    // instead of zero-initing _buffer to null and NREing on first write.
     public SpanWriter() : this(256) {}
 
     public SpanWriter(int initialCapacity)
@@ -91,12 +84,7 @@ public ref struct SpanWriter
     public void WriteDouble(double value)
         => WriteInt64(BitConverter.DoubleToInt64Bits(value));
 
-    /// <summary>
-    /// Three-tier packed_int matching C++ BinaryWriter::write_packed_int:
-    /// value &lt; 0xFE → 1 byte;
-    /// value 0xFE..0xFFFF → 0xFE + 2 bytes LE uint16;
-    /// value &gt; 0xFFFF → 0xFF + 4 bytes LE uint32.
-    /// </summary>
+    // Three-tier packed_int: < 0xFE → 1 byte; ≤ 0xFFFF → 0xFE + u16; else 0xFF + u32.
     public void WritePackedUInt32(uint value)
     {
         if (value < 0xFE)
@@ -115,10 +103,7 @@ public ref struct SpanWriter
         }
     }
 
-    /// <summary>
-    /// String format matching C++ BinaryWriter::write_string:
-    /// packed_int(byte_length) + UTF-8 bytes.
-    /// </summary>
+    // packed_int(utf8_byte_length) + UTF-8 bytes.
     public void WriteString(string value)
     {
         if (value == null) value = "";
@@ -152,7 +137,7 @@ public ref struct SpanWriter
         _position += data.Length;
     }
 
-    /// <summary>Quantize a radian angle [0, 2π) to uint16.</summary>
+    // Quantize radian [0, 2π) → uint16.
     public void WriteQuantizedYaw(float radians)
     {
         const float TwoPi = MathF.PI * 2.0f;
@@ -161,7 +146,7 @@ public ref struct SpanWriter
         WriteUInt16(quantized);
     }
 
-    /// <summary>Quantize a pitch angle [-π/2, π/2] to int8.</summary>
+    // Quantize radian [-π/2, π/2] → int8.
     public void WriteQuantizedPitch(float radians)
     {
         float clamped = Math.Clamp(radians, -MathF.PI / 2, MathF.PI / 2);
@@ -169,7 +154,7 @@ public ref struct SpanWriter
         WriteByte((byte)quantized);
     }
 
-    /// <summary>Write raw bytes without a length prefix.</summary>
+    // Write raw bytes without a length prefix.
     public void WriteRawBytes(ReadOnlySpan<byte> data)
     {
         EnsureCapacity(data.Length);
@@ -181,18 +166,9 @@ public ref struct SpanWriter
     public readonly int Length => _position;
     public readonly int Position => _position;
 
-    /// <summary>
-    /// Rewind position to 0 so the underlying pool-rented buffer can be
-    /// reused for a fresh serialisation. No reallocation; the high-water
-    /// capacity sticks around. Intended for "pool one writer, serialise
-    /// N entities" loops (e.g. CellApp replication pump) where
-    /// per-entity <c>new SpanWriter()</c> would add ArrayPool.Rent
-    /// traffic to the hot path.
-    /// </summary>
-    public void Reset()
-    {
-        _position = 0;
-    }
+    // Rewinds position to 0; keeps the rented buffer so per-entity
+    // serialise loops avoid ArrayPool.Rent traffic on the hot path.
+    public void Reset() => _position = 0;
 
     public void Dispose()
     {

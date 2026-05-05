@@ -3,10 +3,7 @@ using System.Collections.Generic;
 
 namespace Atlas.Observable;
 
-// Keyed analog of ObservableList. Mutations record an op locally;
-// nested Observable values bubble dirty state via MarkChildDirty so the
-// recursive serializer can emit per-key inner streams without re-
-// shipping covered keys.
+// Keyed analog of ObservableList — see ObservableList for the model.
 public sealed class ObservableDict<TKey, TValue> : IObservableChild, System.Collections.IEnumerable
     where TKey : notnull
 {
@@ -35,10 +32,7 @@ public sealed class ObservableDict<TKey, TValue> : IObservableChild, System.Coll
     private static readonly HashSet<TKey> _emptyChildDirty = new();
     private HashSet<TKey>? _childDirtyKeys;
 
-    // Per-key markDirty closure cache. Keys typically have stable
-    // lifetime within a dict, so caching by key keeps Attach allocations
-    // to one-per-distinct-key over the dict's life. Pruned on Remove
-    // so a key that comes-and-goes doesn't leak entries.
+    // Pruned on Remove so a key that comes-and-goes doesn't leak entries.
     private Dictionary<TKey, Action>? _keyMarkDirtyCache;
 
     private Action _markDirty;
@@ -54,15 +48,10 @@ public sealed class ObservableDict<TKey, TValue> : IObservableChild, System.Coll
         _items.GetEnumerator();
 
     public IReadOnlyDictionary<TKey, TValue> Items => _items;
-    // ReadOnlyListView preserves the read-only API (no Add/Clear) while
-    // exposing a struct GetEnumerator() so codegen's foreach over Ops
-    // stays allocation-free.  Same rationale as ObservableList.Ops.
     public ReadOnlyListView<DictOp> Ops => new(_ops);
     public ReadOnlyListView<TKey> OpKeys => new(_opKeys);
     public ReadOnlyListView<TValue> OpValues => new(_opValues);
 
-    // Concrete HashSet so the duck-typed foreach in generated code uses
-    // the struct enumerator. Empty fallback shared and read-only.
     public HashSet<TKey> ChildDirtyKeys => _childDirtyKeys ?? _emptyChildDirty;
 
     public void ClearOpLog()
@@ -155,11 +144,8 @@ public sealed class ObservableDict<TKey, TValue> : IObservableChild, System.Coll
     public bool ContainsKey(TKey key) => _items.ContainsKey(key);
     public bool TryGetValue(TKey key, out TValue value) => _items.TryGetValue(key, out value!);
 
-    // Pre-size the backing dictionary so apply-side reads of large
-    // payloads avoid log(N) rehashes during AddWithoutDirty.
+    // Pre-size to avoid log(N) rehashes during bulk AddWithoutDirty apply.
     public void EnsureCapacity(int capacity) => _items.EnsureCapacity(capacity);
-
-    // ---- Apply path ----
 
     public void ClearWithoutDirty()
     {
@@ -184,9 +170,7 @@ public sealed class ObservableDict<TKey, TValue> : IObservableChild, System.Coll
 
     public void CompactOpLog() => CompactOpLog(keyWireBytes: 8, valueWireBytes: 4);
 
-    // Byte-aware fallback. _opValues.Count is the count of DictSet ops
-    // (only those push values); op kind + key payload is paid by every
-    // op. Fallback writes a Clear plus one DictSet per remaining item.
+    // Byte-aware fallback: writes a Clear plus one DictSet per remaining item.
     public void CompactOpLog(int keyWireBytes, int valueWireBytes)
     {
         if (_ops.Count >= 2) DedupPerKey();
@@ -201,9 +185,7 @@ public sealed class ObservableDict<TKey, TValue> : IObservableChild, System.Coll
     private void DedupChildDirtyAgainstOuterOps()
     {
         if (_childDirtyKeys == null || _childDirtyKeys.Count == 0) return;
-        // Clear() pre-wiped _childDirtyKeys; whatever remains is from
-        // post-Clear (or no Clear at all). Drain only keys covered by
-        // Set/Erase ops — Clear doesn't cover any specific key.
+        // Clear() pre-wiped the set; remaining entries are post-Clear.
         foreach (var op in _ops)
         {
             if (op.Kind == OpKind.DictSet || op.Kind == OpKind.DictErase)
@@ -269,12 +251,6 @@ public sealed class ObservableDict<TKey, TValue> : IObservableChild, System.Coll
             _ops.Add(new DictOp(OpKind.DictSet, kIdx, vIdx));
         }
     }
-
-    // ---- Attach / detach helpers ----
-    //
-    // AttachNewChild drains stale ops from pre-adoption (collection-
-    // initializer mutations etc.). Detach rebinds to no-op; orphans
-    // continue to function but no longer fire upward.
 
     private void AttachNewChild(TKey key, TValue item)
     {
