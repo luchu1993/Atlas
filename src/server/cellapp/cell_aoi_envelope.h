@@ -7,11 +7,13 @@ namespace atlas {
 
 // Inner framing inside CellApp->Client delta messages; client dispatches
 // on `kind`. Single-byte tag for forward-compat.
+// Position-bearing kinds (Enter, PositionUpdate) carry an f64 server_time
+// stamped from the cellapp's monotonic clock so AvatarFilter can interpolate.
 enum class CellAoIEnvelopeKind : uint8_t {
-  kEntityEnter = 1,           // peer entered AoI - payload: type_id + pos/dir + owner snapshot
-  kEntityLeave = 2,           // peer left AoI - payload: empty
-  kEntityPositionUpdate = 3,  // volatile position/direction - payload: pos/dir/on_ground
-  kEntityPropertyUpdate = 4,  // ordered property delta - payload: audience-filtered delta bytes
+  kEntityEnter = 1,           // type_id + pos/dir + on_ground + server_time + peer snapshot
+  kEntityLeave = 2,           // empty
+  kEntityPositionUpdate = 3,  // pos/dir/on_ground + server_time
+  kEntityPropertyUpdate = 4,  // event_seq + audience-filtered delta bytes
 };
 
 }  // namespace atlas

@@ -286,6 +286,7 @@ void CellApp::TickWitnesses() {
   const uint32_t min_budget = CellAppConfig::WitnessMinPerObserverBudgetBytes();
   const uint32_t max_budget = CellAppConfig::WitnessMaxPerObserverBudgetBytes();
   const uint32_t per_peer_bytes = CellAppConfig::WitnessPerPeerBytes();
+  const double server_time = GameTimeSeconds();
 
   for (auto& [_, space] : spaces_) {
     witness_demand_scratch_.clear();
@@ -306,7 +307,7 @@ void CellApp::TickWitnesses() {
     for (auto& d : witness_demand_scratch_) {
       const uint32_t budget = std::clamp(static_cast<uint32_t>(static_cast<float>(d.want) * scale),
                                          min_budget, max_budget);
-      d.w->Update(budget);
+      d.w->Update(budget, server_time);
     }
   }
   // Witness sends use SendMessage(kBatched); the framework's tick-end

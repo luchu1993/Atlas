@@ -26,6 +26,7 @@ public abstract class ClientEntity
     public Vector3 Position { get; private set; }
     public Vector3 Direction { get; private set; }
     public bool OnGround { get; private set; }
+    public double LastPositionServerTime { get; private set; }
 
     public virtual void Deserialize(ref SpanReader reader) { }
 
@@ -34,12 +35,13 @@ public abstract class ClientEntity
     public virtual void ApplyOtherSnapshot(ref SpanReader reader) { }
     public virtual void ApplyReplicatedDelta(ref SpanReader reader) { }
 
-    public virtual void ApplyPositionUpdate(Vector3 pos, Vector3 dir, bool onGround)
+    public virtual void ApplyPositionUpdate(double serverTime, Vector3 pos, Vector3 dir, bool onGround)
     {
         using var _ = Profiler.ZoneN(ProfilerNames.ClientApplyPositionUpdate);
         Position = pos;
         Direction = dir;
         OnGround = onGround;
+        LastPositionServerTime = serverTime;
         OnPositionUpdated(pos);
     }
 

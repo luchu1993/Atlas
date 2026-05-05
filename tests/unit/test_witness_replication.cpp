@@ -152,6 +152,45 @@ TEST_F(WitnessReplicationTest, VolatileNoOpWhenUpToDate) {
   }
 }
 
+TEST_F(WitnessReplicationTest, VolatileEnvelopeCarriesServerTimeMonotonic) {
+  Space space(1);
+  auto* observer = MakeEntity(space, 1, {0, 0, 0});
+  auto* peer = MakeEntity(space, 2, {3, 0, 3});
+  observer->EnableWitness(10.f, MakeReliable(), MakeUnreliable());
+
+  auto extract_server_time = [](const Captured& c) -> double {
+    auto body = PayloadBody(c);
+    // Layout after [u8 kind][u32 id]: [3f pos][3f dir][u8 og][f64 server_time].
+    constexpr std::size_t kOffset = 6 * sizeof(float) + 1;
+    EXPECT_EQ(body.size(), kOffset + sizeof(double));
+    double t = 0;
+    std::memcpy(&t, body.data() + kOffset, sizeof(double));
+    return t;
+  };
+
+  CellEntity::ReplicationFrame v1;
+  v1.volatile_seq = 1;
+  v1.position = {5, 0, 5};
+  peer->PublishReplicationFrame(v1, {}, {});
+  auto& cache = observer->GetWitness()->AoIMapMutable().at(peer->Id());
+  cache.flags = 0;
+
+  sent_.clear();
+  observer->GetWitness()->TestOnlySendEntityUpdate(cache, /*server_time=*/12.5);
+  ASSERT_EQ(sent_.size(), 1u);
+  EXPECT_DOUBLE_EQ(extract_server_time(sent_[0]), 12.5);
+
+  CellEntity::ReplicationFrame v2;
+  v2.volatile_seq = 2;
+  v2.position = {6, 0, 6};
+  peer->PublishReplicationFrame(v2, {}, {});
+
+  sent_.clear();
+  observer->GetWitness()->TestOnlySendEntityUpdate(cache, /*server_time=*/12.6);
+  ASSERT_EQ(sent_.size(), 1u);
+  EXPECT_DOUBLE_EQ(extract_server_time(sent_[0]), 12.6);
+}
+
 // ----------------------------------------------------------------------------
 // Property delta replay
 // ----------------------------------------------------------------------------

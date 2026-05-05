@@ -140,8 +140,8 @@ public static class ClientCallbacks
         }
     }
 
-    // kEntityEnter (witness.cc::BuildEnterPayload): [u16 typeId][3f pos][3f dir][u8 onGround][peerSnapshot].
-    private const int kEnterFixedBytes = 2 + 6 * 4 + 1;
+    // kEntityEnter (witness.cc::BuildEnterEnvelope): [u16 typeId][3f pos][3f dir][u8 onGround][f64 serverTime][peerSnapshot].
+    private const int kEnterFixedBytes = 2 + 6 * 4 + 1 + 8;
     private static void DispatchEnter(uint entityId, ReadOnlySpan<byte> inner)
     {
         using var _ = Profiler.ZoneN(ProfilerNames.ClientDispatchEnter);
@@ -155,9 +155,10 @@ public static class ClientCallbacks
         var pos = reader.ReadVector3();
         var dir = reader.ReadVector3();
         bool onGround = reader.ReadByte() != 0;
+        double serverTime = reader.ReadDouble();
 
         var snapshot = inner.Slice(kEnterFixedBytes);
-        s_entityMgr.OnEnter(entityId, typeId, pos, dir, onGround, snapshot);
+        s_entityMgr.OnEnter(entityId, typeId, serverTime, pos, dir, onGround, snapshot);
     }
 
     // kEntityPropertyUpdate (witness.cc::BuildPropertyUpdatePayload): [u64 eventSeq][delta|snapshot].
@@ -178,8 +179,8 @@ public static class ClientCallbacks
     }
 
     // kEntityPositionUpdate inner payload (witness.cc::SendEntityUpdate volatile branch):
-    //   [3f pos] [3f dir] [u8 on_ground]
-    private const int kPositionUpdateBytes = 6 * 4 + 1;
+    //   [3f pos] [3f dir] [u8 on_ground] [f64 server_time]
+    private const int kPositionUpdateBytes = 6 * 4 + 1 + 8;
     private static void DispatchPositionUpdate(uint entityId, ReadOnlySpan<byte> inner)
     {
         using var _ = Profiler.ZoneN(ProfilerNames.ClientDispatchPositionUpdate);
@@ -192,7 +193,8 @@ public static class ClientCallbacks
         var pos = reader.ReadVector3();
         var dir = reader.ReadVector3();
         bool onGround = reader.ReadByte() != 0;
-        s_entityMgr.ApplyPosition(entityId, pos, dir, onGround);
+        double serverTime = reader.ReadDouble();
+        s_entityMgr.ApplyPosition(entityId, serverTime, pos, dir, onGround);
     }
 
     // Wire layout for 0xF002 (baseapp_messages.h::ReplicatedBaselineToClient):

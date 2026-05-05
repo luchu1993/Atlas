@@ -44,7 +44,8 @@ public sealed class ClientEntityManager
     public int Count => _entities.Count;
 
     // Idempotent re-enter: refreshes transform/state but does NOT re-fire OnInit / OnEnterWorld.
-    public void OnEnter(uint entityId, ushort typeId, Vector3 pos, Vector3 dir, bool onGround,
+    public void OnEnter(uint entityId, ushort typeId, double serverTime,
+                        Vector3 pos, Vector3 dir, bool onGround,
                         ReadOnlySpan<byte> peerSnapshot)
     {
         bool freshlyCreated = false;
@@ -64,7 +65,7 @@ public sealed class ClientEntityManager
             freshlyCreated = true;
         }
 
-        entity.ApplyPositionUpdate(pos, dir, onGround);
+        entity.ApplyPositionUpdate(serverTime, pos, dir, onGround);
 
         if (!peerSnapshot.IsEmpty && !entity.IsCorrupted)
         {
@@ -81,11 +82,11 @@ public sealed class ClientEntityManager
 
     public void OnLeave(uint entityId) => Destroy(entityId);
 
-    public void ApplyPosition(uint entityId, Vector3 pos, Vector3 dir, bool onGround)
+    public void ApplyPosition(uint entityId, double serverTime, Vector3 pos, Vector3 dir, bool onGround)
     {
         if (!_entities.TryGetValue(entityId, out var entity)) return;
         if (entity.IsCorrupted) return;
-        try { entity.ApplyPositionUpdate(pos, dir, onGround); }
+        try { entity.ApplyPositionUpdate(serverTime, pos, dir, onGround); }
         catch (Exception ex) { MarkCorrupted(entity, "ApplyPositionUpdate", ex); }
     }
 

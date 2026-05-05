@@ -74,12 +74,13 @@ auto BuildPropertyUpdateEnvelope(EntityID public_entity_id, uint64_t event_seq,
 }
 
 // Wire: [u8 kind][u32 LE id][u16 LE type][3f LE pos][3f LE dir]
-//       [u8 on_ground][peer_snapshot bytes].
+//       [u8 on_ground][f64 LE server_time][peer_snapshot bytes].
 auto BuildEnterEnvelope(EntityID public_entity_id, uint16_t type_id, const math::Vector3& pos,
-                        const math::Vector3& dir, bool on_ground,
+                        const math::Vector3& dir, bool on_ground, double server_time,
                         std::span<const std::byte> owner_snapshot) -> std::vector<std::byte> {
   constexpr std::size_t kHeaderBytes = 1 + sizeof(uint32_t);
-  constexpr std::size_t kFixedPayload = sizeof(uint16_t) + 6 * sizeof(float) + sizeof(uint8_t);
+  constexpr std::size_t kFixedPayload =
+      sizeof(uint16_t) + 6 * sizeof(float) + sizeof(uint8_t) + sizeof(double);
   std::vector<std::byte> out;
   out.resize(kHeaderBytes + kFixedPayload + owner_snapshot.size());
   auto* p = out.data();
@@ -94,6 +95,8 @@ auto BuildEnterEnvelope(EntityID public_entity_id, uint16_t type_id, const math:
   std::memcpy(p, &dir.x, sizeof(float) * 3);
   p += sizeof(float) * 3;
   *p++ = static_cast<std::byte>(on_ground ? 1 : 0);
+  std::memcpy(p, &server_time, sizeof(double));
+  p += sizeof(double);
   if (!owner_snapshot.empty()) {
     std::memcpy(p, owner_snapshot.data(), owner_snapshot.size());
   }
@@ -192,7 +195,7 @@ void Witness::UpdatePriority(EntityCache& cache) const {
   cache.priority = ComputePriority(owner_.Position(), cache.entity->Position());
 }
 
-auto Witness::SendEntityEnter(EntityCache& cache) -> std::size_t {
+auto Witness::SendEntityEnter(EntityCache& cache, double server_time) -> std::size_t {
   ATLAS_PROFILE_ZONE_N("Witness::SendEntityEnter");
   // send_reliable_ may re-entrantly destroy the peer; pin a local
   // pointer so the post-send seq capture stays consistent.
@@ -207,8 +210,9 @@ auto Witness::SendEntityEnter(EntityCache& cache) -> std::size_t {
     pre_volatile_seq = state->latest_volatile_seq;
   }
 
-  auto envelope = BuildEnterEnvelope(entity->Id(), entity->TypeId(), entity->Position(),
-                                     entity->Direction(), entity->OnGround(), enter_snapshot);
+  auto envelope =
+      BuildEnterEnvelope(entity->Id(), entity->TypeId(), entity->Position(), entity->Direction(),
+                         entity->OnGround(), server_time, enter_snapshot);
   if (send_reliable_) send_reliable_(envelope);
 
   // Skip the seq stamp if HandleAoILeave yanked cache.entity during send.
@@ -232,7 +236,7 @@ auto Witness::LodIntervalForDistSq(double dist_sq) -> uint64_t {
   return kLodFarInterval;
 }
 
-void Witness::Update(uint32_t max_packet_bytes) {
+void Witness::Update(uint32_t max_packet_bytes, double server_time) {
   ATLAS_PROFILE_ZONE_N("Witness::Update");
   if (!trigger_) return;
 
@@ -271,7 +275,7 @@ void Witness::Update(uint32_t max_packet_bytes) {
         aoi_map_.erase(it);
         continue;
       }
-      bytes_sent += static_cast<int>(SendEntityEnter(cache));
+      bytes_sent += static_cast<int>(SendEntityEnter(cache, server_time));
       cache.flags &= ~EntityCache::kEnterPending;
       cache.lod_enter_phase = enter_idx % kLodFarInterval;
     }
@@ -339,7 +343,7 @@ void Witness::Update(uint32_t max_packet_bytes) {
       auto& cache = it->second;
       if (!cache.IsUpdatable()) continue;
 
-      bytes_sent += static_cast<int>(SendEntityUpdate(cache));
+      bytes_sent += static_cast<int>(SendEntityUpdate(cache, server_time));
       ++peers_updated;
       cache.last_serviced_tick = tick_count_;
       // lod_enter_phase offsets the first window only (set at AoI-enter,
@@ -367,7 +371,7 @@ void Witness::Update(uint32_t max_packet_bytes) {
   }
 }
 
-auto Witness::SendEntityUpdate(EntityCache& cache) -> std::size_t {
+auto Witness::SendEntityUpdate(EntityCache& cache, double server_time) -> std::size_t {
   ATLAS_PROFILE_ZONE_N("Witness::SendEntityUpdate");
   const auto* state = cache.entity->GetReplicationState();
   if (!state) return 0;
@@ -375,9 +379,10 @@ auto Witness::SendEntityUpdate(EntityCache& cache) -> std::size_t {
   std::size_t bytes = 0;
 
   if (state->latest_volatile_seq > cache.last_volatile_seq) {
-    // EntityPositionUpdate built into a stack buffer (30 B). Wire:
-    // [u8 kind][u32 id][3f pos][3f dir][u8 on_ground].
-    constexpr std::size_t kEnvelopeSize = 1 + sizeof(uint32_t) + 6 * sizeof(float) + 1;
+    // EntityPositionUpdate built into a stack buffer (38 B). Wire:
+    // [u8 kind][u32 id][3f pos][3f dir][u8 on_ground][f64 server_time].
+    constexpr std::size_t kEnvelopeSize =
+        1 + sizeof(uint32_t) + 6 * sizeof(float) + 1 + sizeof(double);
     std::array<std::byte, kEnvelopeSize> envelope_buf;
     std::size_t envelope_size = 0;
     {
@@ -396,6 +401,8 @@ auto Witness::SendEntityUpdate(EntityCache& cache) -> std::size_t {
       std::memcpy(p, &dir.x, sizeof(float) * 3);
       p += sizeof(float) * 3;
       *p++ = static_cast<std::byte>(og);
+      std::memcpy(p, &server_time, sizeof(double));
+      p += sizeof(double);
       envelope_size = static_cast<std::size_t>(p - envelope_buf.data());
     }
     std::span<const std::byte> envelope(envelope_buf.data(), envelope_size);
