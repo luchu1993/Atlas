@@ -2,6 +2,7 @@ using System;
 using System.Reflection;
 using System.Runtime.InteropServices;
 using System.Text;
+using Atlas.Client.Desktop;
 using Atlas.Core;
 
 namespace Atlas.Client;
@@ -78,6 +79,8 @@ public static unsafe class DesktopBootstrap
             {
                 AutoFlush = true,
             });
+
+            ClientLog.SetLogger(new ConsoleClientLogger());
 
             ClientHost.SendBaseRpcHandler = ClientNativeApi.SendBaseRpc;
             ClientHost.SendCellRpcHandler = ClientNativeApi.SendCellRpc;

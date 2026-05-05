@@ -41,7 +41,7 @@ public static class ClientCallbacks
         }
         catch (Exception ex)
         {
-            Console.Error.WriteLine($"DispatchRpc error: {ex}");
+            ClientLog.Error($"DispatchRpc error: {ex}");
         }
     }
 
@@ -52,7 +52,7 @@ public static class ClientCallbacks
             var entity = ClientEntityFactory.Create(typeId);
             if (entity == null)
             {
-                Console.Error.WriteLine(
+                ClientLog.Error(
                     $"ClientCallbacks.CreateEntity: no factory registered for typeId={typeId} "
                     + $"(entityId={entityId})");
                 return;
@@ -64,7 +64,7 @@ public static class ClientCallbacks
         }
         catch (Exception ex)
         {
-            Console.Error.WriteLine($"CreateEntity error: {ex}");
+            ClientLog.Error($"CreateEntity error: {ex}");
         }
     }
 
@@ -76,7 +76,7 @@ public static class ClientCallbacks
         }
         catch (Exception ex)
         {
-            Console.Error.WriteLine($"DestroyEntity error: {ex}");
+            ClientLog.Error($"DestroyEntity error: {ex}");
         }
     }
 
@@ -94,14 +94,14 @@ public static class ClientCallbacks
                     DispatchBaseline(body);
                     break;
                 default:
-                    Console.Error.WriteLine(
+                    ClientLog.Error(
                         $"DeliverFromServer: unexpected msgId=0x{msgId:X4} len={body.Length}");
                     break;
             }
         }
         catch (Exception ex)
         {
-            Console.Error.WriteLine($"DeliverFromServer error (msgId=0x{msgId:X4}): {ex}");
+            ClientLog.Error($"DeliverFromServer error (msgId=0x{msgId:X4}): {ex}");
         }
     }
 
@@ -111,7 +111,7 @@ public static class ClientCallbacks
     {
         if (body.Length < kEnvelopeHeaderBytes)
         {
-            Console.Error.WriteLine($"DispatchAoIEnvelope: truncated envelope ({body.Length} bytes)");
+            ClientLog.Error($"DispatchAoIEnvelope: truncated envelope ({body.Length} bytes)");
             return;
         }
         var reader = new SpanReader(body);
@@ -134,7 +134,7 @@ public static class ClientCallbacks
                 DispatchPropertyUpdate(entityId, inner);
                 break;
             default:
-                Console.Error.WriteLine(
+                ClientLog.Error(
                     $"DispatchAoIEnvelope: unknown kind={kind} entityId={entityId}");
                 break;
         }
@@ -147,7 +147,7 @@ public static class ClientCallbacks
         using var _ = Profiler.ZoneN(ProfilerNames.ClientDispatchEnter);
         if (inner.Length < kEnterFixedBytes)
         {
-            Console.Error.WriteLine($"DispatchEnter: truncated ({inner.Length} bytes)");
+            ClientLog.Error($"DispatchEnter: truncated ({inner.Length} bytes)");
             return;
         }
         var reader = new SpanReader(inner);
@@ -167,7 +167,7 @@ public static class ClientCallbacks
         using var _ = Profiler.ZoneN(ProfilerNames.ClientDispatchPropertyUpdate);
         if (inner.Length < kPropertyUpdatePrefixBytes)
         {
-            Console.Error.WriteLine(
+            ClientLog.Error(
                 $"DispatchPropertyUpdate: truncated ({inner.Length} bytes, need at least 8)");
             return;
         }
@@ -185,7 +185,7 @@ public static class ClientCallbacks
         using var _ = Profiler.ZoneN(ProfilerNames.ClientDispatchPositionUpdate);
         if (inner.Length < kPositionUpdateBytes)
         {
-            Console.Error.WriteLine($"DispatchPositionUpdate: truncated ({inner.Length} bytes)");
+            ClientLog.Error($"DispatchPositionUpdate: truncated ({inner.Length} bytes)");
             return;
         }
         var reader = new SpanReader(inner);
@@ -205,7 +205,7 @@ public static class ClientCallbacks
         uint size = reader.ReadPackedUInt32();
         if ((uint)reader.Remaining < size)
         {
-            Console.Error.WriteLine(
+            ClientLog.Error(
                 $"DispatchBaseline: truncated snapshot (want={size} have={reader.Remaining})");
             return;
         }

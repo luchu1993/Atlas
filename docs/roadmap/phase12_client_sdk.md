@@ -2,9 +2,10 @@
 
 **Status:** ✅ 主线完成（`atlas_net_client.dll` C API、`Atlas.Client`
 实体管理 / 回调 / 组件、`Atlas.Client.Desktop` + `Atlas.Client.Unity`
-对称的 `LoginClient` / `AtlasClient` async 包装、`AvatarFilter` 位置插值、
+对称的 `LoginClient` / `AtlasClient` async 包装、`AvatarFilter` 插值算法类、
 控制台测试客户端 `src/client/` 登录+AOI+RPC 全链路、Unity `com.atlas.client`
-包骨架、跨平台 CI 矩阵均已落地）；剩余 C# 端到端集成测试 ⬜。
+包骨架、跨平台 CI 矩阵均已落地）；剩余 C# 端到端集成测试 + 客户端解码路径
+统一（`AvatarFilter` 接入生产）⬜。
 **前置依赖:** Phase 9 (LoginApp)、Phase 10 (CellApp AOI)、脚本层
 `Atlas.Shared` + Source Generator（[`docs/scripting/`](../scripting/)）
 
@@ -95,6 +96,18 @@ await client.ConnectAsync("login.example.com", 20013, user, pwHash, ct);
 
 ## 剩余工作
 
-- 端到端集成测试（在 `tests/integration/test_client_flow.cpp` 已覆盖底层
-  C API 的基础上，加 C# 测试拉真 LoginApp + BaseApp + DBApp 集群，驱动
-  `AtlasClient.ConnectAsync` → RPC → Disconnect 全链路）
+- **端到端集成测试** ⬜ —— 在 `tests/integration/test_client_flow.cpp` 已覆盖
+  底层 C API 的基础上，加 C# 测试拉真 LoginApp + BaseApp + DBApp 集群，
+  驱动 `AtlasClient.ConnectAsync` → RPC → Disconnect 全链路。
+
+- **客户端解码路径统一 + `AvatarFilter` 接入生产** ⬜ ——
+  `AvatarFilter` 类只跑单元测试，没有任何生产路径喂数据。Desktop 解码
+  贯通但 `ClientEntity.ApplyPositionUpdate` **直接 snap 位置**，没用插值；
+  Unity 在 `AtlasNetworkManager` 把 `OnEntityPosition` 接到了
+  `AvatarFilter.Input`，但 `client_session.cc` 从未注册 AoI 信封 handler，
+  `callbacks_.on_entity_position` 在生产里永远是 noop。
+  方向：把 `net_client.dll` 的 10 个 typed callback 收敛为单一
+  `deliver_from_server`（与 Desktop 同形）→ 两端共用 `ClientCallbacks`
+  解码（major ABI bump）；把 `AvatarFilter` 实例化提到 `ClientEntity`
+  基类（owner entity 例外）；位置信封加 `serverTime` 字段并 bump
+  `EntityDefDigest`；扩展 FakeCluster CAPI 加端到端测试。

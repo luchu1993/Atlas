@@ -20,7 +20,7 @@ public sealed class ClientEntityManager
     {
         if (entity.IsCorrupted) return;
         entity.IsCorrupted = true;
-        Console.Error.WriteLine(
+        ClientLog.Error(
             $"ClientEntity[{entity.EntityId} type={entity.TypeName}] corrupted at {site}: {ex}. "
             + "Subsequent apply calls will be skipped until the entity re-enters AoI.");
     }
@@ -52,7 +52,7 @@ public sealed class ClientEntityManager
             entity = ClientEntityFactory.Create(typeId);
             if (entity is null)
             {
-                Console.Error.WriteLine(
+                ClientLog.Error(
                     $"ClientEntityManager.OnEnter: no factory registered for typeId={typeId} "
                     + $"(entityId={entityId})");
                 return;

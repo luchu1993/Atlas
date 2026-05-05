@@ -41,6 +41,23 @@ After that, every `using var _ = Profiler.Zone(...)` call inside Atlas.Client
 shows up as a sample in the Unity Profiler window, sharing zone names with
 the server's Tracy trace via `Atlas.Diagnostics.ProfilerNames`.
 
+## Logging (Unity-side)
+
+`Atlas.Client` logs through the `IClientLogger` interface and defaults to a
+no-op sink. Install the Unity backend during the same boot step so
+`ClientCallbacks` / `ClientEntityManager` errors land in Unity's console:
+
+```csharp
+using Atlas.Client;
+using Atlas.Client.Unity;
+
+ClientLog.SetLogger(new UnityClientLogger());
+```
+
+`Info` routes to `Debug.Log`, `Warn` to `Debug.LogWarning`, `Error` to
+`Debug.LogError` — so the standard Unity log filters and on-device log
+handlers apply unchanged.
+
 ## Domain reload caveat (Editor only)
 
 `UnityProfilerBackend` caches `ProfilerMarker` instances for the life of the
