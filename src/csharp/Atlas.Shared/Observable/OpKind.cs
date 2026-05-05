@@ -7,8 +7,7 @@ public enum OpKind : byte
     // Scalar / struct-whole property update at a specific leaf index.
     Set = 0,
 
-    // list[T]: remove [start, end) then insert N values at start. A Set
-    // is the more compact encoding for in-place index assignment.
+    // list[T]: remove [start, end) then insert N values at start.
     ListSplice = 1,
 
     // dict[K,V]: insert-or-overwrite key → value.
@@ -21,10 +20,6 @@ public enum OpKind : byte
     // never carries more than one Clear per tick per container.
     Clear = 4,
 
-    // Reserved for struct field-sync mode (not yet implemented).
+    // Field-level mutation on a list-of-struct slot.
     StructFieldSet = 5,
-
-    // Reserved for Component slot mutations (not yet implemented).
-    AddComponent = 6,
-    RemoveComponent = 7,
 }
