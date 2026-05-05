@@ -53,6 +53,16 @@ atlas_dotnet_project(
   DEPLOY
 )
 
+# IDE-only mirror of the Unity asmdef. Sources are #if UNITY_2022_3_OR_NEWER,
+# so this csproj compiles to an empty assembly and needs no UnityEngine refs.
+atlas_dotnet_project(
+  NAME atlas_client_unity_dll
+  PROJECT_FILE Atlas.Client.Unity/Atlas.Client.Unity.csproj
+  ASSEMBLY_NAME Atlas.Client.Unity.dll
+  TARGET_FRAMEWORK netstandard2.1
+  DEPENDS atlas_shared_dll atlas_client_dll
+)
+
 # Atlas.Tools.DefDump — offline `.def` → `entity_defs.bin` tool. Not deployed
 # because the console exe needs its sibling `*.runtimeconfig.json`; invoke from bin/.
 atlas_dotnet_project(

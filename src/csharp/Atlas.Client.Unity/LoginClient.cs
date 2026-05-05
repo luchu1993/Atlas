@@ -1,5 +1,3 @@
-#if UNITY_2022_3_OR_NEWER
-
 using System;
 using System.Runtime.InteropServices;
 using AOT;
@@ -248,5 +246,3 @@ namespace Atlas.Client.Unity
         }
     }
 }
-
-#endif

@@ -1,0 +1,39 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>netstandard2.1</TargetFramework>
+    <LangVersion>latest</LangVersion>
+    <Nullable>enable</Nullable>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <RootNamespace>Atlas.Client.Unity</RootNamespace>
+    <IsPackable>false</IsPackable>
+  </PropertyGroup>
+
+  <!-- IDE-only mirror of the Unity asmdef. UnityEditorPath env var opts the
+       csproj into a real Unity install for IntelliSense + API drift checks;
+       without it the .cs files are excluded and the assembly compiles empty.
+       Unity Editor remains the sole compiler for shipping bits via the
+       sibling asmdef once this folder is dropped into a Unity project. -->
+  <PropertyGroup Condition="'$(UnityEditorPath)' != '' AND Exists('$(UnityEditorPath)\Data\Managed\UnityEngine')">
+    <UnityManagedDir>$(UnityEditorPath)\Data\Managed\UnityEngine</UnityManagedDir>
+    <DefineConstants>$(DefineConstants);UNITY_2022_3_OR_NEWER</DefineConstants>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Atlas.Client\Atlas.Client.csproj" />
+  </ItemGroup>
+
+  <ItemGroup Condition="'$(UnityManagedDir)' != ''">
+    <Reference Include="$(UnityManagedDir)\*.dll">
+      <Private>false</Private>
+    </Reference>
+  </ItemGroup>
+
+  <!-- Unity not detected: keep .cs visible in Solution Explorer but out of
+       the compile graph (they reference UnityEngine types unconditionally). -->
+  <ItemGroup Condition="'$(UnityManagedDir)' == ''">
+    <Compile Remove="**\*.cs" />
+    <None Include="**\*.cs" Exclude="$(DefaultItemExcludes)" />
+  </ItemGroup>
+
+</Project>

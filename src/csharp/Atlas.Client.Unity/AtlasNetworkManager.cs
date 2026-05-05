@@ -1,7 +1,6 @@
 using System;
 using Atlas.Client;
 using Atlas.Client.Native;
-using Atlas.DataTypes;
 using UnityEngine;
 
 namespace Atlas.Client.Unity
@@ -39,8 +38,16 @@ namespace Atlas.Client.Unity
                                                 out Vector3 pos, out Vector3 dir, out bool onGround)
         {
             var entity = ClientCallbacks.EntityManager.Get(entityId);
-            if (entity != null)
-                return entity.TryGetInterpolated(Time.timeAsDouble, out pos, out dir, out onGround);
+            if (entity != null &&
+                entity.TryGetInterpolated(Time.timeAsDouble,
+                    out Atlas.DataTypes.Vector3 atlasPos,
+                    out Atlas.DataTypes.Vector3 atlasDir,
+                    out onGround))
+            {
+                pos = atlasPos.ToUnity();
+                dir = atlasDir.ToUnity();
+                return true;
+            }
             pos = default;
             dir = default;
             onGround = false;

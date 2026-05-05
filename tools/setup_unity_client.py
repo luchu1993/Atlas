@@ -1,10 +1,9 @@
 #!/usr/bin/env python3
-"""Wire Packages/com.atlas.client into a Unity project: build, copy, manifest."""
+"""Build Atlas Client SDK + copy it into a Unity project's Assets/Atlas.Client.Unity/."""
 
 from __future__ import annotations
 
 import argparse
-import json
 import platform
 import shutil
 import subprocess
@@ -14,8 +13,11 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from common.paths import REPO_ROOT
 
-PACKAGE_DIR = REPO_ROOT / "Packages" / "com.atlas.client"
-PLUGINS_ROOT = PACKAGE_DIR / "Plugins"
+UNITY_SDK_DIR = REPO_ROOT / "src" / "csharp" / "Atlas.Client.Unity"
+PLUGINS_ROOT = UNITY_SDK_DIR / "Plugins"
+
+# Excluded from the copy into the user's Assets/ — IDE-only or build artefacts.
+EXCLUDED_FROM_COPY = {"Atlas.Client.Unity.csproj", "bin", "obj", ".gitkeep"}
 
 HOST = platform.system()
 
@@ -91,12 +93,12 @@ def stage_plugins(native_dll: Path, shared_dll: Path, client_dll: Path) -> None:
     native_dir = PLUGINS_ROOT / native_plugin_subdir()
     native_dir.mkdir(parents=True, exist_ok=True)
     shutil.copy2(native_dll, native_dir / native_dll.name)
-    info(f"copied {native_dll.name} -> {native_dir.relative_to(REPO_ROOT)}")
+    info(f"staged {native_dll.name} -> {native_dir.relative_to(REPO_ROOT)}")
 
     PLUGINS_ROOT.mkdir(parents=True, exist_ok=True)
     shutil.copy2(shared_dll, PLUGINS_ROOT / shared_dll.name)
     shutil.copy2(client_dll, PLUGINS_ROOT / client_dll.name)
-    info(f"copied {shared_dll.name} + {client_dll.name} -> "
+    info(f"staged {shared_dll.name} + {client_dll.name} -> "
          f"{PLUGINS_ROOT.relative_to(REPO_ROOT)}")
 
 
@@ -114,39 +116,31 @@ def resolve_unity_project(arg: str | None) -> Path:
 
     if not candidate.is_dir():
         fail(f"{candidate} is not a directory")
-    if not (candidate / "Assets").is_dir() or not (candidate / "Packages").is_dir():
-        fail(f"{candidate} doesn't look like a Unity project (missing Assets/ + Packages/)")
+    if not (candidate / "Assets").is_dir():
+        fail(f"{candidate} doesn't look like a Unity project (missing Assets/)")
     return candidate
 
 
-def update_manifest(unity_project: Path) -> None:
-    manifest = unity_project / "Packages" / "manifest.json"
-    if not manifest.exists():
-        fail(f"{manifest} not found")
+def _ignore_for_unity(_src: str, names: list[str]) -> list[str]:
+    return [n for n in names if n in EXCLUDED_FROM_COPY]
 
-    text = manifest.read_text(encoding="utf-8")
-    try:
-        data = json.loads(text)
-    except json.JSONDecodeError as exc:
-        fail(f"{manifest} is not valid JSON ({exc}); please clean comments / trailing commas")
 
-    deps = data.setdefault("dependencies", {})
-    file_uri = "file:" + PACKAGE_DIR.resolve().as_posix()
-    previous = deps.get("com.atlas.client")
-    deps["com.atlas.client"] = file_uri
+def copy_to_unity_project(unity_project: Path) -> None:
+    target = unity_project / "Assets" / "Atlas.Client.Unity"
+    if target.exists():
+        info(f"removing existing {target.relative_to(unity_project)} (clean replace)")
+        shutil.rmtree(target, onerror=_force_remove)
+    shutil.copytree(UNITY_SDK_DIR, target, ignore=_ignore_for_unity)
+    info(f"copied SDK -> {target}")
 
-    backup = manifest.with_suffix(".json.bak")
-    if not backup.exists():
-        backup.write_text(text, encoding="utf-8")
-        info(f"wrote backup {backup.relative_to(unity_project)}")
 
-    manifest.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
-    if previous == file_uri:
-        info(f"manifest.json already pointed at {file_uri} (unchanged)")
-    elif previous is None:
-        info(f"manifest.json: added com.atlas.client -> {file_uri}")
-    else:
-        info(f"manifest.json: rewired com.atlas.client {previous} -> {file_uri}")
+def _force_remove(func, path, exc_info) -> None:
+    # Windows: shutil.rmtree fails on read-only files (e.g. git-tracked .meta).
+    # Strip the read-only bit and retry once.
+    import os
+    import stat
+    os.chmod(path, stat.S_IWRITE)
+    func(path)
 
 
 def parse_args() -> argparse.Namespace:
@@ -177,7 +171,7 @@ def main() -> int:
         shared_dll, client_dll = build_managed(args.config)
 
     stage_plugins(native_dll, shared_dll, client_dll)
-    update_manifest(unity_project)
+    copy_to_unity_project(unity_project)
 
     info("done.")
     info(f"open {unity_project} in Unity Hub (2022.3 LTS), wait for refresh,")

@@ -122,6 +122,7 @@ atlas_set_folder("CSharp"
   atlas_runtime_dll
   atlas_client_dll
   atlas_client_desktop_dll
+  atlas_client_unity_dll
   atlas_client_sample_dll
 )
 

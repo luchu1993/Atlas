@@ -1,5 +1,3 @@
-#if UNITY_2022_3_OR_NEWER
-
 using System.Globalization;
 using Atlas.Diagnostics;
 using UnityEngine;
@@ -23,5 +21,3 @@ namespace Atlas.Client.Unity
         }
     }
 }
-
-#endif

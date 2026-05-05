@@ -1,5 +1,3 @@
-#if UNITY_2022_3_OR_NEWER
-
 using System;
 using Atlas.Client;
 using Atlas.Client.Native;
@@ -62,5 +60,3 @@ namespace Atlas.Client.Unity
         }
     }
 }
-
-#endif
