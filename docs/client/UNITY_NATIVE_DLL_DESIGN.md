@@ -1635,59 +1635,38 @@ Unity 6.6+ 嵌入 .NET 10 后，`[UnmanagedCallersOnly]` 应当可用。**先重
 
 ---
 
-## 7. Unity Package 结构
+## 7. Unity SDK 目录结构
+
+仓库内的规范位置在 `src/csharp/Atlas.Client.Unity/`。`tools/setup_unity_client`
+build 完后,把整个目录(剔除 csproj / bin / obj)拷贝到用户 Unity 项目的
+`Assets/Atlas.Client.Unity/`,native + 托管 dll 摆在子目录 `Plugins/` 下。
 
 ```
-Packages/
-└── com.atlas.client/
-    ├── package.json
-    ├── Runtime/
-    │   ├── Atlas.Client.asmdef
-    │   ├── Core/
-    │   │   ├── AtlasNetworkManager.cs       # MonoBehaviour, 驱动 Tick
-    │   │   ├── AtlasNetworkConfig.cs        # ScriptableObject, 连接配置
-    │   │   └── AtlasNetworkState.cs         # 连接状态枚举
-    │   ├── Native/
-    │   │   ├── AtlasNetNative.cs            # P/Invoke 声明
-    │   │   ├── AtlasNetCallbackBridge.cs    # [UnmanagedCallersOnly] 回调
-    │   │   └── AtlasNetStats.cs             # 统计结构体
-    │   ├── Entity/
-    │   │   ├── ClientEntity.cs              # 复用, 适配
-    │   │   ├── ClientEntityManager.cs       # 复用
-    │   │   └── ClientEntityFactory.cs       # 复用
-    │   ├── Rpc/
-    │   │   └── RpcDispatcher.cs             # RPC 分发 (从 ClientCallbacks 提取)
-    │   ├── Shared/                          # 来自 Atlas.Shared
-    │   │   ├── Serialization/
-    │   │   │   ├── SpanWriter.cs            # 直接复用
-    │   │   │   └── SpanReader.cs            # 直接复用
-    │   │   ├── Protocol/
-    │   │   │   └── MessageIds.cs            # 直接复用
-    │   │   └── DataTypes/
-    │   │       ├── Vector3.cs               # 或映射到 UnityEngine.Vector3
-    │   │       └── EntityRef.cs             # 直接复用
-    │   └── Generated/                       # SourceGenerator 输出目录
-    │       └── .gitkeep
-    ├── Plugins/
-    │   ├── Windows/
-    │   │   └── x86_64/
-    │   │       └── atlas_net_client.dll      # Windows native
-    │   ├── Android/
-    │   │   ├── arm64-v8a/
-    │   │   │   └── libatlas_net_client.so    # Android ARM64
-    │   │   └── armeabi-v7a/
-    │   │       └── libatlas_net_client.so    # Android ARMv7
-    │   ├── iOS/
-    │   │   └── libatlas_net_client.a         # iOS 静态库
-    │   ├── macOS/
-    │   │   └── atlas_net_client.bundle       # macOS
-    │   └── Linux/
-    │       └── x86_64/
-    │           └── libatlas_net_client.so    # Linux
-    └── Editor/
-        ├── Atlas.Client.Editor.asmdef
-        └── AtlasCodeGenMenu.cs              # 手动触发代码生成 (可选)
+src/csharp/Atlas.Client.Unity/
+├── Atlas.Client.Unity.asmdef        # Unity 编译单元
+├── Atlas.Client.Unity.csproj        # IDE-only mirror, 不进 Unity
+├── README.md
+├── AtlasClient.cs                    # 高层 connect/auth wrapper
+├── AtlasNetworkManager.cs            # MonoBehaviour 入口
+├── LoginClient.cs                    # 登录 / 鉴权流程
+├── UnityLogBackend.cs                # Atlas.Diagnostics.Log → Debug.Log
+├── UnityProfilerBackend.cs           # Atlas.Diagnostics.Profiler → ProfilerMarker
+├── UnityConversions.cs               # Atlas↔Unity Vector3/Quaternion 扩展
+├── Coro/
+│   └── UnityLoop.cs                  # PlayerLoop 驱动 Atlas 协程
+└── Plugins/                          # setup_unity_client 填充
+    ├── Atlas.Client.dll              # 托管,任意平台
+    ├── Atlas.Shared.dll              # 托管,任意平台
+    ├── Windows/x86_64/atlas_net_client.dll
+    ├── Linux/x86_64/libatlas_net_client.so
+    ├── macOS/atlas_net_client.bundle
+    ├── Android/arm64-v8a/libatlas_net_client.so
+    └── iOS/libatlas_net_client.a
 ```
+
+`ClientEntity` / `ClientEntityManager` / `RpcDispatcher` / `SpanReader` /
+`SpanWriter` / `MessageIds` 这些复用自 `Atlas.Client.dll` / `Atlas.Shared.dll`,
+以预编译 plugin 形式从 `Plugins/` 引入,不重复源码。
 
 ### 7.1 AtlasNetworkManager (核心 MonoBehaviour)
 
@@ -1797,7 +1776,7 @@ public enum AtlasDisconnectReason : int { User = 0, Logout = 1, Internal = 2 }
 ### 8.1 Unity 中集成步骤
 
 1. 将 `Atlas.Generators.Def` 编译为 `netstandard2.0` DLL
-2. 将 DLL 放入 Unity Package(如 `Packages/com.atlas.client/Analyzers/`)
+2. 将 DLL 放入 SDK 目录(如 `src/csharp/Atlas.Client.Unity/Analyzers/`,setup 脚本会一并复制到用户工程的 `Assets/Atlas.Client.Unity/Analyzers/`)
 3. 在 Unity Inspector 中将其标记为 `RoslynAnalyzer`
 4. Unity 2022.2+ 自动在编译时执行 Generator
 5. `.def` 文件作为 `AdditionalFiles` 引入(在 `.asmdef` 或 `.csproj` 中配置)
@@ -1978,7 +1957,7 @@ Xcode 主工程直接链接入最终二进制 (见 §7 Plugins/iOS 目录)。
 | 依赖解耦 | `foundation/process_type.{h,cc}`、`server/entity_types.h::DatabaseID`、`atlas_serialization_binary` STATIC target;`atlas_network` 闭包零 `server` / `db` / `entitydef` / pugixml / rapidjson |
 | C API 导出层 | `src/lib/net_client/`(`client_api.cc` + `client_session.cc`),`atlas_net_client.dll` SHARED + `atlas_net_client_core` STATIC + iOS `_static` 三 target;`test_net_client_abi_layout` 锁 sizeof / offsetof |
 | C# P/Invoke | `Atlas.Client/Native/`(DllImport + Pattern B 桥 + `IAtlasNetEvents`);`Atlas.Tools.NetClientDemo`(CoreCLR 控制台)做 FFI roundtrip |
-| Unity 包 | `Packages/com.atlas.client/`(package.json + asmdef + `AtlasNetworkManager` MonoBehaviour);Plugins/ 目录待 CI artifact 填充后做端到端验证 |
+| Unity SDK | `src/csharp/Atlas.Client.Unity/`(asmdef + `AtlasNetworkManager` MonoBehaviour + `tools/setup_unity_client` 一键拷到用户 Unity `Assets/`);`Plugins/` 目录待 CI artifact 填充后做端到端验证 |
 | 跨平台构建 | `CMakePresets.json` 含 `net-client-{android-arm64, ios-arm64, macos-arm64, linux-x64}`;`.github/workflows/net_client_cross.yml` 矩阵 + 30 天 artifact |
 
 ### 落地映射(供修改时定位)

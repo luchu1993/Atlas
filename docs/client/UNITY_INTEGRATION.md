@@ -47,11 +47,12 @@ tools/bin/setup_unity_client.sh --unity-project ~/path/to/YourUnityProject
 ```
 
 The tool builds the host-platform native (`atlas_net_client.{dll,so,bundle}`)
-+ managed (`Atlas.Shared.dll`, `Atlas.Client.dll`) binaries, copies them
-into `Packages/com.atlas.client/Plugins/<platform>/`, and adds a
-`file:` dependency for `com.atlas.client` to your project's
-`Packages/manifest.json`. Open the project in Unity Hub and the package
-appears under **Packages → Atlas Client SDK** in the Project window.
++ managed (`Atlas.Shared.dll`, `Atlas.Client.dll`) binaries, stages them
+into `src/csharp/Atlas.Client.Unity/Plugins/<platform>/` (in this repo),
+and copies the entire `src/csharp/Atlas.Client.Unity/` folder into your
+project's `Assets/Atlas.Client.Unity/`. Open the project in Unity Hub
+and the SDK appears under **Assets/Atlas.Client.Unity/** in the Project
+window; the asmdef compiles automatically.
 
 Useful flags:
 
@@ -61,8 +62,8 @@ Useful flags:
 | `--config Debug` | Debug symbols + Tracy hooks; bigger DLLs. |
 | `--skip-build` | Reuse existing `bin/<config>/` + dotnet outputs. |
 
-The script is idempotent — re-running rewires bindings to the latest
-binaries and updates the manifest in place.
+The script is idempotent — re-running rebuilds, refreshes `Plugins/`,
+and clean-replaces `Assets/Atlas.Client.Unity/` in your project.
 
 ## Manual setup
 
@@ -91,10 +92,10 @@ Outputs:
 | `Atlas.Shared.dll` | `src/csharp/Atlas.Shared/bin/Release/netstandard2.1/Atlas.Shared.dll` |
 | `Atlas.Client.dll` | `src/csharp/Atlas.Client/bin/Release/netstandard2.1/Atlas.Client.dll` |
 
-### 2. Copy into the package
+### 2. Stage binaries into the SDK folder
 
 ```
-Packages/com.atlas.client/
+src/csharp/Atlas.Client.Unity/
 └── Plugins/
     ├── Atlas.Shared.dll                     # managed, any platform
     ├── Atlas.Client.dll                     # managed, any platform
@@ -108,21 +109,15 @@ Packages/com.atlas.client/
 Create the platform subdirectories as needed; Unity infers platform
 filters from the path.
 
-### 3. Reference the package from your Unity project
+### 3. Copy the SDK folder into your Unity project
 
-Edit `<UnityProjectRoot>/Packages/manifest.json` — add an entry under
-`dependencies` (replace the path with your absolute Atlas repo path):
-
-```json
-{
-  "dependencies": {
-    "com.atlas.client": "file:E:/Atlas/Packages/com.atlas.client",
-    "com.unity.collab-proxy": "..."
-  }
-}
+```bash
+cp -r src/csharp/Atlas.Client.Unity <UnityProjectRoot>/Assets/Atlas.Client.Unity
 ```
 
-Restart Unity (the manifest isn't hot-reloaded mid-session).
+Skip `Atlas.Client.Unity.csproj` (IDE-only — would confuse Unity Editor)
+and any `bin/` / `obj/` artefacts. Unity picks up the asmdef on next
+focus and compiles the assembly.
 
 ## Plugin Import Settings
 
@@ -310,7 +305,7 @@ When Unity 6.6 ships with embedded .NET 10, re-run the spike to
 verify `[UnmanagedCallersOnly]` works:
 
 ```bash
-tools\build.bat release -DATLAS_BUILD_IL2CPP_PROBE=ON
+tools\bin\build.bat release -DATLAS_BUILD_IL2CPP_PROBE=ON
 # Drop atlas_il2cpp_probe.dll/.so/.bundle into a Unity test project
 # under Assets/Plugins/IL2CPPProbe/, attach ProbeComponent.
 ```
@@ -327,12 +322,12 @@ field, a new exposed RPC), regenerate the C# bindings via
 `Atlas.Generators.Def` and re-run the setup tool:
 
 ```bash
-tools\setup_unity_client.bat --unity-project C:\path\to\YourUnityProject
+tools\bin\setup_unity_client.bat --unity-project C:\path\to\YourUnityProject
 ```
 
-The tool overwrites the existing `Plugins/` binaries in place. Unity
-will reimport the changed DLLs on next focus; close and reopen the
-editor if you see stale references.
+The tool clean-replaces `Assets/Atlas.Client.Unity/` in your project
+with the freshly-built SDK + binaries. Unity will reimport on next
+focus; close and reopen the editor if you see stale references.
 
 For a faster iteration loop during gameplay tuning (no protocol
 changes), use `--config Debug --skip-build` to just refresh from your
@@ -349,14 +344,17 @@ existing build outputs without recompiling.
   the DLL on a platform it thinks is unsupported. See
   [Plugin Import Settings](#plugin-import-settings).
 - On macOS, Gatekeeper may block unsigned `.bundle` — `xattr -cr
-  Packages/com.atlas.client/Plugins/macOS/atlas_net_client.bundle`.
+  <UnityProjectRoot>/Assets/Atlas.Client.Unity/Plugins/macOS/atlas_net_client.bundle`.
 
-### `Couldn't resolve dependency: com.atlas.client`
+### `Atlas.Client.Unity` not appearing in the Project window
 
-- `manifest.json` `file:` URI has wrong path. Use forward slashes even
-  on Windows: `"file:E:/Atlas/Packages/com.atlas.client"`.
-- The path must point at the **package directory**, not the parent
-  `Packages/` directory.
+- The setup tool didn't run, or its target Unity project path was
+  wrong. Re-run with `--unity-project <path>` and verify
+  `<UnityProjectRoot>/Assets/Atlas.Client.Unity/Atlas.Client.Unity.asmdef`
+  exists afterwards.
+- The asmdef requires Unity 2022.3+ (via `defineConstraints:
+  ["UNITY_2022_3_OR_NEWER"]`). On older Unity the assembly is silently
+  skipped — check **Project Settings → Player → Other Settings**.
 
 ### `atlas_net_client.AtlasNetCreate failed (abi=0x01000000): ABI version mismatch`
 
