@@ -76,9 +76,9 @@ jobs:
         uses: actions/cache@v4
         with:
           path: build/${{ matrix.preset }}/_deps
-          key: deps-windows-${{ matrix.preset }}-${{ hashFiles('cmake/Dependencies.cmake') }}
+          key: deps-windows-vs2026-${{ matrix.preset }}-${{ hashFiles('cmake/Dependencies.cmake') }}
           restore-keys: |
-            deps-windows-${{ matrix.preset }}-
+            deps-windows-vs2026-${{ matrix.preset }}-
 
       - name: Restore .NET packages
         shell: bash
