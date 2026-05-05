@@ -59,6 +59,7 @@ set(_atlas_lib_targets
   atlas_heap
   atlas_math
   atlas_script
+  atlas_serialization_binary
   atlas_serialization
   atlas_entitydef
   atlas_network
@@ -137,6 +138,7 @@ atlas_set_folder("CSharp/Test"
   atlas_runtime_test_dll
   atlas_stress_test_base_dll
   atlas_stress_test_cell_dll
+  atlas_client_tests_dll
 )
 
 atlas_set_folder("Deploy"

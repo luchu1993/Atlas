@@ -17,7 +17,7 @@ tools\bin\build.bat <preset> [--clean] [--config-only] [--build-only]   # Window
 tools/bin/build.sh   <preset> [--clean] [--config-only] [--build-only]  # Linux / macOS
 ```
 
-Presets: `debug` (Ninja Multi-Config + `/Z7` + PCH, fast iteration), `release` (no tests), `profile` (Tracy + viewer, no tests), `hybrid` (RelWithDebInfo). Sanitizer presets: `asan`, `asan-msvc`, `tsan` (Linux), `ubsan` (Linux).
+Presets: `debug` (Ninja Multi-Config + `/Z7` + PCH, fast iteration), `release` (no tests), `profile` (Tracy + viewer, no tests), `hybrid` (RelWithDebInfo), `vs` (Visual Studio solution under `build/vs/`, Debug default, with tests, Windows-only). Sanitizer presets: `asan`, `asan-msvc`, `tsan` (Linux), `ubsan` (Linux).
 
 Direct cmake also works:
 

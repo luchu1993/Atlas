@@ -113,6 +113,7 @@ cmake --build build/debug --config Debug
 | `release` | 优化构建，禁用测试。 |
 | `hybrid` | RelWithDebInfo，用于带符号的优化调试。 |
 | `profile` | RelWithDebInfo，启用 Tracy 与 profiling helpers，禁用测试。 |
+| `vs` | 在 `build/vs/` 生成 Visual Studio 解决方案，默认 Debug，包含全部测试（仅 Windows）。 |
 
 支持的平台还提供 sanitizer 预设：`asan`、`asan-msvc`、`tsan`、`ubsan`。
 

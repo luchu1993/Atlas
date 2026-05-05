@@ -23,6 +23,7 @@ PRESET_CONFIGS = {
     "debug": "Debug",
     "profile": "RelWithDebInfo",
     "release": "Release",
+    "vs": "Debug",
 }
 
 # VS major → CMake generator name. Drives Windows non-debug presets so the
@@ -52,7 +53,8 @@ def parse_args() -> argparse.Namespace:
             "Presets:\n"
             "  debug    Ninja Multi-Config, Debug    (fast dev iteration, /Z7 + PCH)\n"
             "  profile  RelWithDebInfo + Tracy + viewer (no tests)\n"
-            "  release  Release (no tests)"
+            "  release  Release (no tests)\n"
+            "  vs       Visual Studio solution, Debug default (Windows only, with tests)"
         ),
     )
     p.add_argument(

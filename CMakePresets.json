@@ -46,6 +46,16 @@
       }
     },
     {
+      "name": "vs",
+      "displayName": "Visual Studio solution (Debug, with tests)",
+      "binaryDir": "${sourceDir}/build/vs",
+      "condition": {
+        "type": "equals",
+        "lhs": "${hostSystemName}",
+        "rhs": "Windows"
+      }
+    },
+    {
       "name": "asan",
       "displayName": "AddressSanitizer (Linux)",
       "binaryDir": "${sourceDir}/build/asan",
@@ -203,6 +213,11 @@
       "configurePreset": "hybrid"
     },
     {
+      "name": "vs",
+      "configurePreset": "vs",
+      "configuration": "Debug"
+    },
+    {
       "name": "net-client-android-arm64",
       "configurePreset": "net-client-android-arm64",
       "targets": [
@@ -236,6 +251,14 @@
     {
       "name": "debug",
       "configurePreset": "debug",
+      "output": {
+        "outputOnFailure": true
+      }
+    },
+    {
+      "name": "vs",
+      "configurePreset": "vs",
+      "configuration": "Debug",
       "output": {
         "outputOnFailure": true
       }

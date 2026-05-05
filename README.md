@@ -113,6 +113,7 @@ cmake --build build/debug --config Debug
 | `release` | Optimized build with tests disabled. |
 | `hybrid` | RelWithDebInfo for optimized debugging. |
 | `profile` | RelWithDebInfo with Tracy and profiling helpers; tests disabled. |
+| `vs` | Visual Studio solution under `build/vs/`, Debug default, with tests (Windows). |
 
 Sanitizer presets are available where supported: `asan`, `asan-msvc`, `tsan`, and `ubsan`.
 
