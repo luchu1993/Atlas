@@ -5,9 +5,9 @@ namespace Atlas.Diagnostics;
 
 public static class TraceContext
 {
-    private static readonly AsyncLocal<long> s_current = new();
+    private static readonly AsyncLocal<long> _current = new();
 
-    public static long Current => s_current.Value;
+    public static long Current => _current.Value;
 
     public static Scope Push(long traceId) => new(traceId);
 
@@ -21,9 +21,9 @@ public static class TraceContext
         private readonly long _previous;
         internal Scope(long traceId)
         {
-            _previous = s_current.Value;
-            s_current.Value = traceId;
+            _previous = _current.Value;
+            _current.Value = traceId;
         }
-        public void Dispose() => s_current.Value = _previous;
+        public void Dispose() => _current.Value = _previous;
     }
 }

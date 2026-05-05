@@ -7,21 +7,21 @@ namespace Atlas.Diagnostics;
 // Time-sortable across processes; 65536 ids/sec/proc cap.
 public static class SnowflakeGen
 {
-    private static readonly ushort s_procTag = ComputeProcTag();
-    private static long s_lastEpoch;
-    private static int s_seq;
-    private static readonly object s_lock = new();
+    private static readonly ushort _procTag = ComputeProcTag();
+    private static long _lastEpoch;
+    private static int _seq;
+    private static readonly object _lock = new();
 
     public static long Next()
     {
         long unixSec = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
         ushort seq;
-        lock (s_lock)
+        lock (_lock)
         {
-            if (unixSec != s_lastEpoch) { s_lastEpoch = unixSec; s_seq = 0; }
-            seq = (ushort)(s_seq++ & 0xFFFF);
+            if (unixSec != _lastEpoch) { _lastEpoch = unixSec; _seq = 0; }
+            seq = (ushort)(_seq++ & 0xFFFF);
         }
-        return (unixSec << 32) | ((long)s_procTag << 16) | seq;
+        return (unixSec << 32) | ((long)_procTag << 16) | seq;
     }
 
     private static ushort ComputeProcTag()

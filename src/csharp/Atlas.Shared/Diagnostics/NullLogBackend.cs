@@ -1,13 +1,10 @@
-namespace Atlas.Diagnostics
+namespace Atlas.Diagnostics;
+
+public sealed class NullLogBackend : ILogBackend
 {
-    public sealed class NullLogBackend : ILogBackend
-    {
-        public static readonly NullLogBackend Instance = new NullLogBackend();
+    public static readonly NullLogBackend Instance = new();
 
-        private NullLogBackend()
-        {
-        }
+    private NullLogBackend() { }
 
-        public void Log(int level, string message) { }
-    }
+    public void Log(int level, string message) { }
 }
