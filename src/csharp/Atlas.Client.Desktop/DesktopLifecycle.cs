@@ -65,6 +65,7 @@ public static class DesktopLifecycle
         try
         {
             _coroLoop?.Drain();
+            ClientCallbacks.EntityManager.TickInterpolation(deltaTime);
             return 0;
         }
         catch (Exception ex)

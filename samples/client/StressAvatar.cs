@@ -56,8 +56,13 @@ public partial class StressAvatar : ClientEntity
 
     protected override void OnPositionUpdated(Vector3 newPos)
     {
+        // Probe: peers should show samples>0 + lat>0 (filter-driven); owner shows
+        // samples=-1 + lat=0.000 (snap path skips AvatarFilter). Format is parsed
+        // by world_stress client_event_tap; keep the prefix stable.
+        int samples = Filter?.SampleCount ?? -1;
+        double lat = Filter?.CurrentLatency ?? 0.0;
         Log.Info(
-            $"[StressAvatar:{EntityId}] OnPositionUpdated pos={FormatVec(newPos)}");
+            $"[StressAvatar:{EntityId}] OnPositionUpdated pos={FormatVec(newPos)} samples={samples} lat={lat:F3}");
     }
 
     // -------- RPC receiver (pre-existing) -----------------------------------
