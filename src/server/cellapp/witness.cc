@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <array>
+#include <chrono>
 #include <cstddef>
 #include <cstring>
 #include <span>
@@ -11,6 +12,7 @@
 #include "cell_aoi_envelope.h"
 #include "cell_entity.h"
 #include "cellapp_config.h"
+#include "foundation/clock.h"
 #include "foundation/log.h"
 #include "foundation/profiler.h"
 #include "math/vector3.h"
@@ -40,6 +42,14 @@ auto ComputePriority(const math::Vector3& observer, const math::Vector3& target)
 
 auto IsAllZeroDelta(std::span<const std::byte> delta) -> bool {
   return std::all_of(delta.begin(), delta.end(), [](std::byte b) { return b == std::byte{0}; });
+}
+
+// Process-wide monotonic clock; AvatarFilter consumes deltas, so absolute
+// origin doesn't matter as long as readings within a single entity stream
+// are monotonic.
+auto MonotonicSeconds() -> double {
+  using namespace std::chrono;
+  return duration_cast<duration<double>>(Clock::now().time_since_epoch()).count();
 }
 
 // Wire: [u8 kind][u32 LE entity_id][payload bytes...].
@@ -76,7 +86,7 @@ auto BuildPropertyUpdateEnvelope(EntityID public_entity_id, uint64_t event_seq,
 // Wire: [u8 kind][u32 LE id][u16 LE type][3f LE pos][3f LE dir]
 //       [u8 on_ground][f64 LE server_time][peer_snapshot bytes].
 auto BuildEnterEnvelope(EntityID public_entity_id, uint16_t type_id, const math::Vector3& pos,
-                        const math::Vector3& dir, bool on_ground, double server_time,
+                        const math::Vector3& dir, bool on_ground,
                         std::span<const std::byte> owner_snapshot) -> std::vector<std::byte> {
   constexpr std::size_t kHeaderBytes = 1 + sizeof(uint32_t);
   constexpr std::size_t kFixedPayload =
@@ -95,6 +105,7 @@ auto BuildEnterEnvelope(EntityID public_entity_id, uint16_t type_id, const math:
   std::memcpy(p, &dir.x, sizeof(float) * 3);
   p += sizeof(float) * 3;
   *p++ = static_cast<std::byte>(on_ground ? 1 : 0);
+  const double server_time = MonotonicSeconds();
   std::memcpy(p, &server_time, sizeof(double));
   p += sizeof(double);
   if (!owner_snapshot.empty()) {
@@ -195,7 +206,7 @@ void Witness::UpdatePriority(EntityCache& cache) const {
   cache.priority = ComputePriority(owner_.Position(), cache.entity->Position());
 }
 
-auto Witness::SendEntityEnter(EntityCache& cache, double server_time) -> std::size_t {
+auto Witness::SendEntityEnter(EntityCache& cache) -> std::size_t {
   ATLAS_PROFILE_ZONE_N("Witness::SendEntityEnter");
   // send_reliable_ may re-entrantly destroy the peer; pin a local
   // pointer so the post-send seq capture stays consistent.
@@ -210,9 +221,8 @@ auto Witness::SendEntityEnter(EntityCache& cache, double server_time) -> std::si
     pre_volatile_seq = state->latest_volatile_seq;
   }
 
-  auto envelope =
-      BuildEnterEnvelope(entity->Id(), entity->TypeId(), entity->Position(), entity->Direction(),
-                         entity->OnGround(), server_time, enter_snapshot);
+  auto envelope = BuildEnterEnvelope(entity->Id(), entity->TypeId(), entity->Position(),
+                                     entity->Direction(), entity->OnGround(), enter_snapshot);
   if (send_reliable_) send_reliable_(envelope);
 
   // Skip the seq stamp if HandleAoILeave yanked cache.entity during send.
@@ -236,7 +246,7 @@ auto Witness::LodIntervalForDistSq(double dist_sq) -> uint64_t {
   return kLodFarInterval;
 }
 
-void Witness::Update(uint32_t max_packet_bytes, double server_time) {
+void Witness::Update(uint32_t max_packet_bytes) {
   ATLAS_PROFILE_ZONE_N("Witness::Update");
   if (!trigger_) return;
 
@@ -275,7 +285,7 @@ void Witness::Update(uint32_t max_packet_bytes, double server_time) {
         aoi_map_.erase(it);
         continue;
       }
-      bytes_sent += static_cast<int>(SendEntityEnter(cache, server_time));
+      bytes_sent += static_cast<int>(SendEntityEnter(cache));
       cache.flags &= ~EntityCache::kEnterPending;
       cache.lod_enter_phase = enter_idx % kLodFarInterval;
     }
@@ -343,7 +353,7 @@ void Witness::Update(uint32_t max_packet_bytes, double server_time) {
       auto& cache = it->second;
       if (!cache.IsUpdatable()) continue;
 
-      bytes_sent += static_cast<int>(SendEntityUpdate(cache, server_time));
+      bytes_sent += static_cast<int>(SendEntityUpdate(cache));
       ++peers_updated;
       cache.last_serviced_tick = tick_count_;
       // lod_enter_phase offsets the first window only (set at AoI-enter,
@@ -371,7 +381,7 @@ void Witness::Update(uint32_t max_packet_bytes, double server_time) {
   }
 }
 
-auto Witness::SendEntityUpdate(EntityCache& cache, double server_time) -> std::size_t {
+auto Witness::SendEntityUpdate(EntityCache& cache) -> std::size_t {
   ATLAS_PROFILE_ZONE_N("Witness::SendEntityUpdate");
   const auto* state = cache.entity->GetReplicationState();
   if (!state) return 0;
@@ -391,6 +401,7 @@ auto Witness::SendEntityUpdate(EntityCache& cache, double server_time) -> std::s
       const auto& dir = cache.entity->Direction();
       const uint8_t og = cache.entity->OnGround() ? 1 : 0;
       const EntityID public_eid = cache.entity->Id();
+      const double server_time = MonotonicSeconds();
 
       auto* p = envelope_buf.data();
       *p++ = static_cast<std::byte>(CellAoIEnvelopeKind::kEntityPositionUpdate);

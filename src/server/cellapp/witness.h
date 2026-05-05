@@ -69,10 +69,7 @@ class Witness {
   // max_packet_bytes bounds the envelope payload emitted this tick;
   // overshoot accumulates as bandwidth_deficit_ and shrinks next
   // tick's budget.
-  // server_time is the cellapp's monotonic clock (seconds since boot), stamped
-  // into volatile/enter envelopes so AvatarFilter can derive ServerInterval.
-  // Defaulted to 0 for tests that don't care about the timestamp.
-  void Update(uint32_t max_packet_bytes, double server_time = 0.0);
+  void Update(uint32_t max_packet_bytes);
 
   // O(1) demand estimate for the cellapp's fair-share budget allocator.
   // Enter bursts aren't separately accounted for - they show up next
@@ -118,9 +115,7 @@ class Witness {
   [[nodiscard]] auto AoIMapMutable() -> std::unordered_map<EntityID, EntityCache>& {
     return aoi_map_;
   }
-  void TestOnlySendEntityUpdate(EntityCache& cache, double server_time = 0.0) {
-    (void)SendEntityUpdate(cache, server_time);
-  }
+  void TestOnlySendEntityUpdate(EntityCache& cache) { (void)SendEntityUpdate(cache); }
 
   [[nodiscard]] auto OutboundChannel() const -> Channel* { return outbound_channel_; }
   void SetOutboundChannel(Channel* ch) { outbound_channel_ = ch; }
@@ -134,9 +129,9 @@ class Witness {
 
   // Each Send* returns bytes actually dispatched so the tick-loop's
   // bandwidth accountant can bill precisely.
-  auto SendEntityEnter(EntityCache& cache, double server_time) -> std::size_t;
+  auto SendEntityEnter(EntityCache& cache) -> std::size_t;
   auto SendEntityLeave(EntityID peer_id) -> std::size_t;
-  auto SendEntityUpdate(EntityCache& cache, double server_time) -> std::size_t;
+  auto SendEntityUpdate(EntityCache& cache) -> std::size_t;
 
   CellEntity& owner_;
   float aoi_radius_;

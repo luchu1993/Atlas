@@ -152,7 +152,7 @@ TEST_F(WitnessReplicationTest, VolatileNoOpWhenUpToDate) {
   }
 }
 
-TEST_F(WitnessReplicationTest, VolatileEnvelopeCarriesServerTimeMonotonic) {
+TEST_F(WitnessReplicationTest, VolatileEnvelopeCarriesMonotonicServerTime) {
   Space space(1);
   auto* observer = MakeEntity(space, 1, {0, 0, 0});
   auto* peer = MakeEntity(space, 2, {3, 0, 3});
@@ -176,9 +176,9 @@ TEST_F(WitnessReplicationTest, VolatileEnvelopeCarriesServerTimeMonotonic) {
   cache.flags = 0;
 
   sent_.clear();
-  observer->GetWitness()->TestOnlySendEntityUpdate(cache, /*server_time=*/12.5);
+  observer->GetWitness()->TestOnlySendEntityUpdate(cache);
   ASSERT_EQ(sent_.size(), 1u);
-  EXPECT_DOUBLE_EQ(extract_server_time(sent_[0]), 12.5);
+  const double t1 = extract_server_time(sent_[0]);
 
   CellEntity::ReplicationFrame v2;
   v2.volatile_seq = 2;
@@ -186,9 +186,12 @@ TEST_F(WitnessReplicationTest, VolatileEnvelopeCarriesServerTimeMonotonic) {
   peer->PublishReplicationFrame(v2, {}, {});
 
   sent_.clear();
-  observer->GetWitness()->TestOnlySendEntityUpdate(cache, /*server_time=*/12.6);
+  observer->GetWitness()->TestOnlySendEntityUpdate(cache);
   ASSERT_EQ(sent_.size(), 1u);
-  EXPECT_DOUBLE_EQ(extract_server_time(sent_[0]), 12.6);
+  const double t2 = extract_server_time(sent_[0]);
+
+  EXPECT_GT(t1, 0.0) << "server_time must be a real reading, not zero";
+  EXPECT_GE(t2, t1) << "server_time must be monotonically non-decreasing";
 }
 
 // ----------------------------------------------------------------------------
