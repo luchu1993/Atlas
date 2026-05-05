@@ -70,12 +70,4 @@ public readonly struct Vector3 : IEquatable<Vector3>
 
     public override string ToString()
         => $"({X}, {Y}, {Z})";
-
-#if UNITY_5_3_OR_NEWER
-    public static implicit operator UnityEngine.Vector3(Vector3 v)
-        => new UnityEngine.Vector3(v.X, v.Y, v.Z);
-
-    public static implicit operator Vector3(UnityEngine.Vector3 v)
-        => new Vector3(v.x, v.y, v.z);
-#endif
 }
