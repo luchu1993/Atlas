@@ -13,7 +13,10 @@ extern "C" {
 
 // Layout: [MAJOR:8][MINOR:8][PATCH:16]. Create rejects MAJOR mismatch
 // or caller MINOR > our MINOR.
-#define ATLAS_NET_ABI_VERSION 0x01000000u
+//
+// 0x02000000: collapsed 9 typed message callbacks into a single on_deliver.
+// Net_client is now transport-only; C# parses every server-bound message.
+#define ATLAS_NET_ABI_VERSION 0x02000000u
 
 #define ATLAS_NET_OK 0
 #define ATLAS_NET_ERR_BUSY -16
@@ -105,50 +108,18 @@ ATLAS_NET_API int32_t AtlasNetSendCellRpc(AtlasNetContext* ctx, uint32_t entity_
 // All payload pointers are views; copy before returning.
 typedef void (*AtlasDisconnectFn)(AtlasNetContext* ctx, int32_t reason);
 
-typedef void (*AtlasPlayerBaseCreateFn)(AtlasNetContext* ctx, uint32_t entity_id, uint16_t type_id,
-                                        const uint8_t* base_props, int32_t base_props_len);
-
-typedef void (*AtlasPlayerCellCreateFn)(AtlasNetContext* ctx, uint32_t space_id, float pos_x,
-                                        float pos_y, float pos_z, float dir_x, float dir_y,
-                                        float dir_z, const uint8_t* cell_props,
-                                        int32_t cell_props_len);
-
-typedef void (*AtlasResetEntitiesFn)(AtlasNetContext* ctx);
-
-typedef void (*AtlasEntityEnterFn)(AtlasNetContext* ctx, uint32_t entity_id, uint16_t type_id,
-                                   float pos_x, float pos_y, float pos_z, float dir_x, float dir_y,
-                                   float dir_z, const uint8_t* properties, int32_t properties_len);
-
-typedef void (*AtlasEntityLeaveFn)(AtlasNetContext* ctx, uint32_t entity_id);
-
-typedef void (*AtlasEntityPositionFn)(AtlasNetContext* ctx, uint32_t entity_id, float pos_x,
-                                      float pos_y, float pos_z, float dir_x, float dir_y,
-                                      float dir_z, uint8_t on_ground);
-
-typedef void (*AtlasEntityPropertyFn)(AtlasNetContext* ctx, uint32_t entity_id, uint8_t scope,
-                                      const uint8_t* delta, int32_t delta_len);
-
-typedef void (*AtlasForcedPositionFn)(AtlasNetContext* ctx, uint32_t entity_id, float pos_x,
-                                      float pos_y, float pos_z, float dir_x, float dir_y,
-                                      float dir_z);
-
-typedef void (*AtlasRpcCallbackFn)(AtlasNetContext* ctx, uint32_t entity_id, uint32_t rpc_id,
-                                   const uint8_t* payload, int32_t len);
+// Every server-bound message lands here once authentication completes. msg_id is the
+// raw wire id (0xF001 / 0xF002 / 0xF003 / 0xF004 / login + auth ids handled internally
+// fire their dedicated callbacks instead). Payload is a view valid only for the call.
+typedef void (*AtlasDeliverFromServerFn)(AtlasNetContext* ctx, uint16_t msg_id,
+                                         const uint8_t* payload, int32_t len);
 
 // NULL fields are substituted with internal noops on SetCallbacks.
 // New fields must append; layout pinned for ABI.
 #pragma pack(push, 1)
 typedef struct AtlasNetCallbacks {
   AtlasDisconnectFn on_disconnect;
-  AtlasPlayerBaseCreateFn on_player_base_create;
-  AtlasPlayerCellCreateFn on_player_cell_create;
-  AtlasResetEntitiesFn on_reset_entities;
-  AtlasEntityEnterFn on_entity_enter;
-  AtlasEntityLeaveFn on_entity_leave;
-  AtlasEntityPositionFn on_entity_position;
-  AtlasEntityPropertyFn on_entity_property;
-  AtlasForcedPositionFn on_forced_position;
-  AtlasRpcCallbackFn on_rpc;
+  AtlasDeliverFromServerFn on_deliver;
 } AtlasNetCallbacks;
 #pragma pack(pop)
 

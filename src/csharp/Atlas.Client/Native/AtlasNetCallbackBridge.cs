@@ -4,46 +4,19 @@ using System.Runtime.InteropServices;
 
 namespace Atlas.Client.Native;
 
-// See docs/spike_il2cpp_callback.md for the IL2CPP callback strategy.
+// Single-callback bridge into net_client.dll. Hosts (Unity, Desktop, tests)
+// register an IAtlasNetEvents implementation against an AtlasNetContext;
+// every server-bound message routes through OnDeliver.
 public static unsafe class AtlasNetCallbackBridge
 {
     private static readonly ConcurrentDictionary<IntPtr, IAtlasNetEvents> CtxMap = new();
 
     public delegate void DisconnectFn(IntPtr ctx, int reason);
-    public delegate void PlayerBaseCreateFn(IntPtr ctx, uint eid, ushort tid,
-                                            byte* props, int len);
-    public delegate void PlayerCellCreateFn(IntPtr ctx, uint spaceId,
-                                            float px, float py, float pz,
-                                            float dx, float dy, float dz,
-                                            byte* props, int len);
-    public delegate void ResetEntitiesFn(IntPtr ctx);
-    public delegate void EntityEnterFn(IntPtr ctx, uint eid, ushort tid,
-                                       float px, float py, float pz,
-                                       float dx, float dy, float dz,
-                                       byte* props, int len);
-    public delegate void EntityLeaveFn(IntPtr ctx, uint eid);
-    public delegate void EntityPositionFn(IntPtr ctx, uint eid,
-                                          float px, float py, float pz,
-                                          float dx, float dy, float dz,
-                                          byte onGround);
-    public delegate void EntityPropertyFn(IntPtr ctx, uint eid, byte scope,
-                                          byte* delta, int len);
-    public delegate void ForcedPositionFn(IntPtr ctx, uint eid,
-                                          float px, float py, float pz,
-                                          float dx, float dy, float dz);
-    public delegate void RpcFn(IntPtr ctx, uint eid, uint rid, byte* payload, int len);
+    public delegate void DeliverFn(IntPtr ctx, ushort msgId, byte* payload, int len);
 
     // GC keep-alive; static lifetime keeps IL2CPP trampolines valid.
-    private static readonly DisconnectFn        SDisconnect       = OnDisconnect;
-    private static readonly PlayerBaseCreateFn  SPlayerBaseCreate = OnPlayerBaseCreate;
-    private static readonly PlayerCellCreateFn  SPlayerCellCreate = OnPlayerCellCreate;
-    private static readonly ResetEntitiesFn     SResetEntities    = OnResetEntities;
-    private static readonly EntityEnterFn       SEntityEnter      = OnEntityEnter;
-    private static readonly EntityLeaveFn       SEntityLeave      = OnEntityLeave;
-    private static readonly EntityPositionFn    SEntityPosition   = OnEntityPosition;
-    private static readonly EntityPropertyFn    SEntityProperty   = OnEntityProperty;
-    private static readonly ForcedPositionFn    SForcedPosition   = OnForcedPosition;
-    private static readonly RpcFn               SRpc              = OnRpc;
+    private static readonly DisconnectFn SDisconnect = OnDisconnect;
+    private static readonly DeliverFn    SDeliver    = OnDeliver;
 
     public static void Register(IntPtr ctx, IAtlasNetEvents events)
     {
@@ -53,16 +26,8 @@ public static unsafe class AtlasNetCallbackBridge
 
         var table = new AtlasNetCallbacks
         {
-            OnDisconnect       = Marshal.GetFunctionPointerForDelegate(SDisconnect),
-            OnPlayerBaseCreate = Marshal.GetFunctionPointerForDelegate(SPlayerBaseCreate),
-            OnPlayerCellCreate = Marshal.GetFunctionPointerForDelegate(SPlayerCellCreate),
-            OnResetEntities    = Marshal.GetFunctionPointerForDelegate(SResetEntities),
-            OnEntityEnter      = Marshal.GetFunctionPointerForDelegate(SEntityEnter),
-            OnEntityLeave      = Marshal.GetFunctionPointerForDelegate(SEntityLeave),
-            OnEntityPosition   = Marshal.GetFunctionPointerForDelegate(SEntityPosition),
-            OnEntityProperty   = Marshal.GetFunctionPointerForDelegate(SEntityProperty),
-            OnForcedPosition   = Marshal.GetFunctionPointerForDelegate(SForcedPosition),
-            OnRpc              = Marshal.GetFunctionPointerForDelegate(SRpc),
+            OnDisconnect = Marshal.GetFunctionPointerForDelegate(SDisconnect),
+            OnDeliver    = Marshal.GetFunctionPointerForDelegate(SDeliver),
         };
 
         int rc = AtlasNetNative.AtlasNetSetCallbacks(ctx, ref table);
@@ -85,72 +50,10 @@ public static unsafe class AtlasNetCallbackBridge
         => FromCtx(ctx)?.OnDisconnect(reason);
 
 #if UNITY_5_3_OR_NEWER
-    [UnityEngine.AOT.MonoPInvokeCallback(typeof(PlayerBaseCreateFn))]
+    [UnityEngine.AOT.MonoPInvokeCallback(typeof(DeliverFn))]
 #endif
-    private static void OnPlayerBaseCreate(IntPtr ctx, uint eid, ushort tid,
-                                           byte* props, int len)
-        => FromCtx(ctx)?.OnPlayerBaseCreate(eid, tid, MakeSpan(props, len));
-
-#if UNITY_5_3_OR_NEWER
-    [UnityEngine.AOT.MonoPInvokeCallback(typeof(PlayerCellCreateFn))]
-#endif
-    private static void OnPlayerCellCreate(IntPtr ctx, uint spaceId,
-                                           float px, float py, float pz,
-                                           float dx, float dy, float dz,
-                                           byte* props, int len)
-        => FromCtx(ctx)?.OnPlayerCellCreate(spaceId, px, py, pz, dx, dy, dz,
-                                            MakeSpan(props, len));
-
-#if UNITY_5_3_OR_NEWER
-    [UnityEngine.AOT.MonoPInvokeCallback(typeof(ResetEntitiesFn))]
-#endif
-    private static void OnResetEntities(IntPtr ctx) => FromCtx(ctx)?.OnResetEntities();
-
-#if UNITY_5_3_OR_NEWER
-    [UnityEngine.AOT.MonoPInvokeCallback(typeof(EntityEnterFn))]
-#endif
-    private static void OnEntityEnter(IntPtr ctx, uint eid, ushort tid,
-                                      float px, float py, float pz,
-                                      float dx, float dy, float dz,
-                                      byte* props, int len)
-        => FromCtx(ctx)?.OnEntityEnter(eid, tid, px, py, pz, dx, dy, dz,
-                                       MakeSpan(props, len));
-
-#if UNITY_5_3_OR_NEWER
-    [UnityEngine.AOT.MonoPInvokeCallback(typeof(EntityLeaveFn))]
-#endif
-    private static void OnEntityLeave(IntPtr ctx, uint eid)
-        => FromCtx(ctx)?.OnEntityLeave(eid);
-
-#if UNITY_5_3_OR_NEWER
-    [UnityEngine.AOT.MonoPInvokeCallback(typeof(EntityPositionFn))]
-#endif
-    private static void OnEntityPosition(IntPtr ctx, uint eid,
-                                         float px, float py, float pz,
-                                         float dx, float dy, float dz,
-                                         byte onGround)
-        => FromCtx(ctx)?.OnEntityPosition(eid, px, py, pz, dx, dy, dz, onGround != 0);
-
-#if UNITY_5_3_OR_NEWER
-    [UnityEngine.AOT.MonoPInvokeCallback(typeof(EntityPropertyFn))]
-#endif
-    private static void OnEntityProperty(IntPtr ctx, uint eid, byte scope,
-                                         byte* delta, int len)
-        => FromCtx(ctx)?.OnEntityProperty(eid, scope, MakeSpan(delta, len));
-
-#if UNITY_5_3_OR_NEWER
-    [UnityEngine.AOT.MonoPInvokeCallback(typeof(ForcedPositionFn))]
-#endif
-    private static void OnForcedPosition(IntPtr ctx, uint eid,
-                                         float px, float py, float pz,
-                                         float dx, float dy, float dz)
-        => FromCtx(ctx)?.OnForcedPosition(eid, px, py, pz, dx, dy, dz);
-
-#if UNITY_5_3_OR_NEWER
-    [UnityEngine.AOT.MonoPInvokeCallback(typeof(RpcFn))]
-#endif
-    private static void OnRpc(IntPtr ctx, uint eid, uint rid, byte* payload, int len)
-        => FromCtx(ctx)?.OnRpc(eid, rid, MakeSpan(payload, len));
+    private static void OnDeliver(IntPtr ctx, ushort msgId, byte* payload, int len)
+        => FromCtx(ctx)?.OnDeliver(msgId, MakeSpan(payload, len));
 
     private static ReadOnlySpan<byte> MakeSpan(byte* p, int len)
         => p == null || len <= 0 ? default : new ReadOnlySpan<byte>(p, len);

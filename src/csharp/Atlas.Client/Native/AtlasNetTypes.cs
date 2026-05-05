@@ -45,15 +45,7 @@ public static class AtlasNetReturnCode
 public struct AtlasNetCallbacks
 {
     public IntPtr OnDisconnect;
-    public IntPtr OnPlayerBaseCreate;
-    public IntPtr OnPlayerCellCreate;
-    public IntPtr OnResetEntities;
-    public IntPtr OnEntityEnter;
-    public IntPtr OnEntityLeave;
-    public IntPtr OnEntityPosition;
-    public IntPtr OnEntityProperty;
-    public IntPtr OnForcedPosition;
-    public IntPtr OnRpc;
+    public IntPtr OnDeliver;
 }
 
 [StructLayout(LayoutKind.Sequential, Pack = 1)]

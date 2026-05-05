@@ -8,17 +8,9 @@
 #include "foundation/log.h"
 #include "net_client/client_api.h"
 
-static_assert(sizeof(AtlasNetCallbacks) == 10 * sizeof(void*));
+static_assert(sizeof(AtlasNetCallbacks) == 2 * sizeof(void*));
 static_assert(offsetof(AtlasNetCallbacks, on_disconnect) == 0 * sizeof(void*));
-static_assert(offsetof(AtlasNetCallbacks, on_player_base_create) == 1 * sizeof(void*));
-static_assert(offsetof(AtlasNetCallbacks, on_player_cell_create) == 2 * sizeof(void*));
-static_assert(offsetof(AtlasNetCallbacks, on_reset_entities) == 3 * sizeof(void*));
-static_assert(offsetof(AtlasNetCallbacks, on_entity_enter) == 4 * sizeof(void*));
-static_assert(offsetof(AtlasNetCallbacks, on_entity_leave) == 5 * sizeof(void*));
-static_assert(offsetof(AtlasNetCallbacks, on_entity_position) == 6 * sizeof(void*));
-static_assert(offsetof(AtlasNetCallbacks, on_entity_property) == 7 * sizeof(void*));
-static_assert(offsetof(AtlasNetCallbacks, on_forced_position) == 8 * sizeof(void*));
-static_assert(offsetof(AtlasNetCallbacks, on_rpc) == 9 * sizeof(void*));
+static_assert(offsetof(AtlasNetCallbacks, on_deliver) == 1 * sizeof(void*));
 
 static_assert(sizeof(AtlasNetStats) == 24);
 static_assert(offsetof(AtlasNetStats, rtt_ms) == 0);
@@ -33,7 +25,7 @@ TEST(NetClientAbi, VersionMatchesHeaderConstant) {
 }
 
 TEST(NetClientAbi, CreateRejectsMajorMismatch) {
-  constexpr uint32_t kBadMajor = 0x02000000u;
+  constexpr uint32_t kBadMajor = 0x03000000u;
   auto* ctx = AtlasNetCreate(kBadMajor);
   EXPECT_EQ(ctx, nullptr);
   EXPECT_NE(AtlasNetGlobalLastError(), nullptr);

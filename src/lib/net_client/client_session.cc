@@ -268,8 +268,8 @@ void ClientSession::InstallDefaultHandler() {
             len = static_cast<int32_t>(bytes_result->size());
           }
         }
-        callbacks_.on_rpc(reinterpret_cast<AtlasNetContext*>(this), player_entity_id_,
-                          static_cast<uint32_t>(id), payload, len);
+        callbacks_.on_deliver(reinterpret_cast<AtlasNetContext*>(this), static_cast<uint16_t>(id),
+                              payload, len);
       });
 }
 
@@ -330,30 +330,10 @@ auto ClientSession::SetCallbacks(const AtlasNetCallbacks& cb) -> int32_t {
   callbacks_ = cb;
 
   auto noop_disconnect = [](AtlasNetContext*, int32_t) {};
-  auto noop_player_base = [](AtlasNetContext*, uint32_t, uint16_t, const uint8_t*, int32_t) {};
-  auto noop_player_cell = [](AtlasNetContext*, uint32_t, float, float, float, float, float, float,
-                             const uint8_t*, int32_t) {};
-  auto noop_reset = [](AtlasNetContext*) {};
-  auto noop_entity_enter = [](AtlasNetContext*, uint32_t, uint16_t, float, float, float, float,
-                              float, float, const uint8_t*, int32_t) {};
-  auto noop_entity_leave = [](AtlasNetContext*, uint32_t) {};
-  auto noop_entity_position = [](AtlasNetContext*, uint32_t, float, float, float, float, float,
-                                 float, uint8_t) {};
-  auto noop_entity_property = [](AtlasNetContext*, uint32_t, uint8_t, const uint8_t*, int32_t) {};
-  auto noop_forced_position = [](AtlasNetContext*, uint32_t, float, float, float, float, float,
-                                 float) {};
-  auto noop_rpc = [](AtlasNetContext*, uint32_t, uint32_t, const uint8_t*, int32_t) {};
+  auto noop_deliver = [](AtlasNetContext*, uint16_t, const uint8_t*, int32_t) {};
 
   if (!callbacks_.on_disconnect) callbacks_.on_disconnect = +noop_disconnect;
-  if (!callbacks_.on_player_base_create) callbacks_.on_player_base_create = +noop_player_base;
-  if (!callbacks_.on_player_cell_create) callbacks_.on_player_cell_create = +noop_player_cell;
-  if (!callbacks_.on_reset_entities) callbacks_.on_reset_entities = +noop_reset;
-  if (!callbacks_.on_entity_enter) callbacks_.on_entity_enter = +noop_entity_enter;
-  if (!callbacks_.on_entity_leave) callbacks_.on_entity_leave = +noop_entity_leave;
-  if (!callbacks_.on_entity_position) callbacks_.on_entity_position = +noop_entity_position;
-  if (!callbacks_.on_entity_property) callbacks_.on_entity_property = +noop_entity_property;
-  if (!callbacks_.on_forced_position) callbacks_.on_forced_position = +noop_forced_position;
-  if (!callbacks_.on_rpc) callbacks_.on_rpc = +noop_rpc;
+  if (!callbacks_.on_deliver) callbacks_.on_deliver = +noop_deliver;
   return ATLAS_NET_OK;
 }
 

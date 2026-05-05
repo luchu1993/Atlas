@@ -6,7 +6,7 @@ namespace Atlas.Client.Native;
 // netstandard2.1 + DllImport so Unity Mono / IL2CPP shares this source.
 public static unsafe class AtlasNetNative
 {
-    public const uint AbiVersion = 0x01000000u;
+    public const uint AbiVersion = 0x02000000u;
 
 #if UNITY_IOS && !UNITY_EDITOR
     private const string LibName = "__Internal";

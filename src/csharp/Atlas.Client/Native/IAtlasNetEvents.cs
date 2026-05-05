@@ -2,26 +2,14 @@ using System;
 
 namespace Atlas.Client.Native;
 
+// Hosts (Unity AtlasNetworkManager, Desktop bootstrap, integration tests)
+// implement this to observe transport-level events. AoI envelope decode and
+// entity lifecycle live in Atlas.Client.ClientCallbacks.DeliverFromServer.
 public interface IAtlasNetEvents
 {
     void OnDisconnect(int reason);
-    void OnPlayerBaseCreate(uint entityId, ushort typeId, ReadOnlySpan<byte> baseProps);
-    void OnPlayerCellCreate(uint spaceId, float px, float py, float pz,
-                            float dx, float dy, float dz,
-                            ReadOnlySpan<byte> cellProps);
-    void OnResetEntities();
-    void OnEntityEnter(uint entityId, ushort typeId,
-                       float px, float py, float pz,
-                       float dx, float dy, float dz,
-                       ReadOnlySpan<byte> properties);
-    void OnEntityLeave(uint entityId);
-    void OnEntityPosition(uint entityId,
-                          float px, float py, float pz,
-                          float dx, float dy, float dz,
-                          bool onGround);
-    void OnEntityProperty(uint entityId, byte scope, ReadOnlySpan<byte> delta);
-    void OnForcedPosition(uint entityId,
-                          float px, float py, float pz,
-                          float dx, float dy, float dz);
-    void OnRpc(uint entityId, uint rpcId, ReadOnlySpan<byte> payload);
+
+    // Forwarded raw from net_client.dll's on_deliver. msgId is the wire id;
+    // payload is a view valid only for the call.
+    void OnDeliver(ushort msgId, ReadOnlySpan<byte> payload);
 }
