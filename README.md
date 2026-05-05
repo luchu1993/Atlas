@@ -1,6 +1,6 @@
 # Atlas Engine
 
-Atlas is a distributed MMO server framework built with **C++20** and **C# (.NET 9)**. It uses a BigWorld-style split between login, base, cell, database, and manager processes, while gameplay logic runs in managed code through embedded CoreCLR.
+Atlas is a distributed MMO server framework built with **C++20** and **C# (.NET)**. It uses a BigWorld-style split between login, base, cell, database, and manager processes, while gameplay logic runs in managed code through embedded CoreCLR.
 
 **[中文文档](README_CN.md)**
 
@@ -13,7 +13,7 @@ Atlas is aimed at large, long-running online worlds where the server must scale 
 - Multi-process cluster layout with service discovery through `machined`.
 - Base/Cell entity model with mailbox RPC and generated C# entity code.
 - CellApp spatial simulation with witness-based AoI, ghost entities, BSP partitioning, and offload coordination.
-- Embedded .NET 9 runtime for server-side gameplay scripting.
+- Embedded .NET runtime for server-side gameplay scripting.
 - C# client runtime with desktop and Unity integration surfaces.
 - Runtime-loaded XML and SQLite database plugins.
 - Tracy instrumentation, baseline stress drivers, and trace comparison tools.
@@ -62,7 +62,7 @@ Windows:
 
 - Visual Studio 2022 with the Desktop development with C++ workload
 - CMake 3.28+
-- .NET 9 SDK
+- .NET 10 SDK
 - Python 3.9+
 - Git
 
@@ -71,7 +71,7 @@ Linux:
 - GCC 13+ or Clang with C++20 support
 - CMake 3.28+
 - Ninja for the debug preset
-- .NET 9 SDK
+- .NET 10 SDK
 - Python 3.9+
 - Git
 
@@ -124,7 +124,7 @@ Verify the Linux build against the same Windows clone — no second checkout, no
 One-time prerequisite (elevated PowerShell): `wsl --install -d Ubuntu-24.04`.
 
 ```bash
-# One-time toolchain install (g++-13, ninja, .NET 9, sccache, clang-format, ...)
+# One-time toolchain install (g++-13, ninja, .NET 10, sccache, clang-format, ...)
 tools\bin\setup_linux.bat
 
 # Build (mirrors build.bat semantics)

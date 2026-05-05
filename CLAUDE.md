@@ -4,7 +4,7 @@ Guidance for Claude Code when working in the Atlas Engine repository.
 
 ## What is Atlas
 
-Distributed MMO server framework: C++20 core + C# (.NET 9) gameplay scripting via embedded CoreCLR. Multi-process layout (machined / login / base / baseappmgr / cell / cellappmgr / db / dbappmgr / reviver / EchoApp). Inspired by BigWorld; Mailbox-based RPC; spatial partition via BSP tree; Tracy-instrumented for performance work.
+Distributed MMO server framework: C++20 core + C# (.NET) gameplay scripting via embedded CoreCLR. Multi-process layout (machined / login / base / baseappmgr / cell / cellappmgr / db / dbappmgr / reviver / EchoApp). Inspired by BigWorld; Mailbox-based RPC; spatial partition via BSP tree; Tracy-instrumented for performance work.
 
 User-facing docs: `README.md` (English), `README_CN.md` (中文). Design docs under `docs/`.
 

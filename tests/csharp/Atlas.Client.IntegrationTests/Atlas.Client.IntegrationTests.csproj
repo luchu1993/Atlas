@@ -2,7 +2,7 @@
 
   <PropertyGroup>
     <AssemblyName>Atlas.Client.IntegrationTests</AssemblyName>
-    <TargetFramework>net9.0</TargetFramework>
+    <TargetFramework>$(AtlasTargetFramework)</TargetFramework>
     <Nullable>enable</Nullable>
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
     <IsPackable>false</IsPackable>

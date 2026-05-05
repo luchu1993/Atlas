@@ -2,9 +2,9 @@
 
 > **状态**:架构主线 ✅ 已落地 / 集成与验证 🚧 进行中(详见 §7)
 
-Atlas 服务端的玩法脚本运行在嵌入式 .NET 9 CoreCLR 上;`Atlas.Generators.Def`
+Atlas 服务端的玩法脚本运行在嵌入式 .NET CoreCLR 上;`Atlas.Generators.Def`
 在编译期生成所有反射敏感代码(序列化、脏标记、RPC 分发、Mailbox 代理、
-实体工厂、类型注册),使同一套 `Atlas.Shared` 程序集可在 .NET 9 服务端
+实体工厂、类型注册),使同一套 `Atlas.Shared` 程序集可在 .NET 服务端
 和 Unity IL2CPP 客户端共存。
 
 ## 1. 目录速览
@@ -46,10 +46,10 @@ Atlas 服务端的玩法脚本运行在嵌入式 .NET 9 CoreCLR 上;`Atlas.Gener
 ```
 
 `Atlas.Shared` 目标 `netstandard2.1`,在 Unity (Mono / IL2CPP) 上原样使用;
-`Atlas.ClrHost` / `Atlas.Runtime` 目标 `net9.0`,只在服务端宿主上加载。
+`Atlas.ClrHost` / `Atlas.Runtime` 是 .NET 程序集,只在服务端宿主上加载。
 客户端宿主分两层:可被 Unity 直接消费的 `Atlas.Client`(`netstandard2.1`,
 仅依赖 `Atlas.Shared`)、桌面 .NET 宿主使用的 `Atlas.Client.Desktop`
-(`net9.0`,持有 `DesktopBootstrap` + `[LibraryImport("atlas_engine")]`)。
+(持有 `DesktopBootstrap` + `[LibraryImport("atlas_engine")]`)。
 
 ## 3. 关键设计原则
 
@@ -121,7 +121,7 @@ Atlas 服务端的玩法脚本运行在嵌入式 .NET 9 CoreCLR 上;`Atlas.Gener
 | Atlas.Shared: SpanWriter/Reader / DataTypes / Mailbox / RpcId | `src/csharp/Atlas.Shared/` |
 | `Atlas.Generators.Def` 全套 emitter | `Properties / Serialization / DeltaSync / Factory / Mailbox / RpcStub / Dispatcher / RpcId / TypeRegistry / Component / EntityComponentAccessor / Struct / StructRegistry` 等 16 个 |
 | EntityDefRegistry | `src/lib/entitydef/`(C# 注册路径 + DBApp `RegisterFromBinaryFile` 已接通) |
-| 客户端宿主分层 | `Atlas.Client`(`netstandard2.1`)+ `Atlas.Client.Desktop`(`net9.0`)+ `Atlas.Client.Unity`(asmdef + IL2CPP defines) |
+| 客户端宿主分层 | `Atlas.Client`(`netstandard2.1`)+ `Atlas.Client.Desktop`(.NET)+ `Atlas.Client.Unity`(asmdef + IL2CPP defines) |
 | 离线工具 | `Atlas.Tools.DefDump`(`.def` → `entity_defs.bin`) |
 | 示例脚本 | `samples/base/`(Account / Avatar)、`samples/client/`(StressAvatar + Component) |
 | 热重载基础设施 | `clr_hot_reload.{h,cc}` + `file_watcher.{h,cc}` + `Hosting/{ScriptHost, ScriptLoadContext, HotReloadManager}.cs` |
@@ -153,7 +153,7 @@ Atlas 服务端的玩法脚本运行在嵌入式 .NET 9 CoreCLR 上;`Atlas.Gener
 deploy/
 ├── BaseApp / CellApp / DBApp / Reviver        — 薄壳可执行,动态链接 atlas_engine
 ├── atlas_engine.dll/.so                        — 引擎核心,导出 atlas_* 符号
-├── dotnet/                                     — .NET 9 运行时(随机编随)
+├── dotnet/                                     — .NET 运行时(随构建打包)
 ├── scripts/
 │   ├── Atlas.Runtime.dll
 │   ├── Atlas.Shared.dll

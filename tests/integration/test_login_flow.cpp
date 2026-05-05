@@ -98,8 +98,21 @@ auto server_bin_dir() -> std::filesystem::path {
 }
 
 auto runtime_config_path() -> std::filesystem::path {
-  return repo_root() / "tests" / "csharp" / "Atlas.Runtime.Tests" / "bin" / "Debug" / "net9.0" /
-         "Atlas.Tests.runtimeconfig.json";
+  // bin/Debug/<tfm>/ — pick the single net*/ subdirectory so a runtime
+  // bump (net10 → net11) doesn't require touching this file.
+  const auto cfg_dir = repo_root() / "tests" / "csharp" / "Atlas.Runtime.Tests" / "bin" / "Debug";
+  std::filesystem::path tfm_dir;
+  if (std::filesystem::is_directory(cfg_dir)) {
+    for (const auto& entry : std::filesystem::directory_iterator(cfg_dir)) {
+      if (!entry.is_directory()) continue;
+      const auto name = entry.path().filename().string();
+      if (name.starts_with("net")) {
+        tfm_dir = entry.path();
+        break;
+      }
+    }
+  }
+  return (tfm_dir.empty() ? cfg_dir : tfm_dir) / "Atlas.Tests.runtimeconfig.json";
 }
 
 auto runtime_assembly_path() -> std::filesystem::path {

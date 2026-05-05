@@ -17,7 +17,7 @@ from pathlib import Path
 from typing import Iterable, NoReturn
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-from common.paths import REPO_ROOT, resolve_repo_root  # noqa: F401
+from common.paths import REPO_ROOT, dotnet_tfm_dir, resolve_repo_root  # noqa: F401
 
 
 def parse_args() -> argparse.Namespace:
@@ -113,7 +113,7 @@ def parse_args() -> argparse.Namespace:
                              "<build-dir>/src/client/<config>/atlas_client.exe")
     parser.add_argument("--client-assembly", default=None,
                         help="Path to Atlas.ClientSample.dll. Defaults to "
-                             "samples/client/bin/<config>/net9.0/Atlas.ClientSample.dll")
+                             "samples/client/bin/<config>/<tfm>/Atlas.ClientSample.dll")
     parser.add_argument("--client-runtime-config", default=None,
                         help="Optional hostfxr *.runtimeconfig.json forwarded to each child")
     parser.add_argument("--script-username-prefix", default="script_user_")
@@ -666,9 +666,9 @@ def default_client_exe(args: argparse.Namespace) -> Path:
 
 
 def default_client_assembly(args: argparse.Namespace) -> Path:
-    # ClientSample csproj has no AppendPlatformToOutputPath — drops to bin/<Config>/net9.0/.
-    return (resolve_repo_root() / "samples" / "client" / "bin" / args.config
-            / "net9.0" / "Atlas.ClientSample.dll")
+    # ClientSample csproj has no AppendPlatformToOutputPath — drops to bin/<Config>/<tfm>/.
+    config_dir = resolve_repo_root() / "samples" / "client" / "bin" / args.config
+    return dotnet_tfm_dir(config_dir) / "Atlas.ClientSample.dll"
 
 
 def build_baseapp_specs(args: argparse.Namespace) -> list[dict[str, object]]:

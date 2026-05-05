@@ -379,7 +379,7 @@ public static class SkillTable {
 ### 6.2 端共享程序集
 
 生成代码放在 `csharp/Atlas.CombatCore.Data/`：
-- 项目目标 `netstandard2.1`（Unity + .NET 9 都支持）
+- 项目目标 `netstandard2.1`（Unity + 服务端 CoreCLR 都支持）
 - 编译为 `Atlas.CombatCore.Data.dll`
 - 服务端引用：CoreCLR 加载
 - Unity 客户端引用：通过 Assembly Definition 引用

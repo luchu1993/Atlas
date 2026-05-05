@@ -35,7 +35,7 @@ APT_BASE = [
     "sccache",
 ]
 
-APT_DOTNET = ["dotnet-sdk-9.0"]
+APT_DOTNET = ["dotnet-sdk-10.0"]
 APT_CLANG_FORMAT = ["clang-format"]
 
 
@@ -45,13 +45,13 @@ def log(msg: str) -> None:
 
 def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(
-        description="Install the Linux toolchain Atlas needs (g++-13, Ninja, .NET 9, ...).",
+        description="Install the Linux toolchain Atlas needs (g++-13, Ninja, .NET 10, ...).",
         epilog="Idempotent — safe to re-run after upgrades. Re-invokes via WSL on Windows.",
     )
     p.add_argument("--no-clang-format", action="store_true",
                    help="Skip clang-format (otherwise needed to pass pre-commit lint).")
     p.add_argument("--no-dotnet", action="store_true",
-                   help="Skip .NET 9 SDK (otherwise needed for C# scripting + tests).")
+                   help="Skip .NET 10 SDK (otherwise needed for C# scripting + tests).")
     return p.parse_args()
 
 

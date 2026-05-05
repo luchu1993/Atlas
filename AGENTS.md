@@ -1,7 +1,7 @@
 # Repository Guidelines
 
 ## Project Structure & Module Organization
-Atlas is a distributed MMO server framework. `src/server/` contains processes such as `machined`, `loginapp`, `baseapp`, `cellapp`, `dbapp`, their manager apps, and `reviver`. Shared C++20 code lives in `src/lib/` modules such as `platform`, `foundation`, `network`, `serialization`, `script`, `entitydef`, `db_*`, and `server`. `src/client_sdk/` contains the client SDK, `src/csharp/` the .NET 9 scripting/runtime layer, and `src/tools/` developer tools. Tests live in `tests/unit/`, `tests/integration/`, and `tests/csharp/`; runtime assets and configs are under `data/` and `runtime/`.
+Atlas is a distributed MMO server framework. `src/server/` contains processes such as `machined`, `loginapp`, `baseapp`, `cellapp`, `dbapp`, their manager apps, and `reviver`. Shared C++20 code lives in `src/lib/` modules such as `platform`, `foundation`, `network`, `serialization`, `script`, `entitydef`, `db_*`, and `server`. `src/client_sdk/` contains the client SDK, `src/csharp/` the .NET scripting/runtime layer, and `src/tools/` developer tools. Tests live in `tests/unit/`, `tests/integration/`, and `tests/csharp/`; runtime assets and configs are under `data/` and `runtime/`.
 
 ## Build, Test, and Development Commands
 Use CMake presets from the repository root.

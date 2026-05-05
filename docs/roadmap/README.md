@@ -1,6 +1,6 @@
 # Atlas Engine — 引擎开发路线图
 
-C# 脚本层架构(`atlas_engine` 共享库 + .NET 9 CoreCLR + Source
+C# 脚本层架构(`atlas_engine` 共享库 + 嵌入式 CoreCLR + Source
 Generator + 热重载)已落地,详见
 [`docs/scripting/`](../scripting/);本文档负责脚本层之上的引擎能力分阶段
 规划。每个 Phase 独立文档承载该阶段的设计决策、当前状态与剩余工作。

@@ -3,31 +3,8 @@ using System.Runtime.InteropServices;
 
 namespace Atlas.Runtime.Diagnostics
 {
-    /// <summary>
-    /// Minimal P/Invoke bindings for Tracy 0.13.x's TracyC.h surface — just
-    /// the entry points <see cref="TracyProfilerBackend"/> needs.
-    /// Library name <c>TracyClient</c> matches the CMake target built as a
-    /// SHARED library in cmake/Dependencies.cmake; both the C++ link path
-    /// and these P/Invoke calls resolve to the same in-process Tracy
-    /// instance, which is what merges native and managed zones into one
-    /// trace timeline.
-    /// </summary>
-    /// <remarks>
-    /// Source-generated <see cref="LibraryImportAttribute"/> stubs match
-    /// Atlas's prevailing interop style (see Core/NativeApi.cs). All
-    /// arguments here are blittable (primitives or unmanaged pointers) so
-    /// the generator emits zero-marshalling fast paths — important on the
-    /// zone open/close hot path.
-    ///
-    /// This file deliberately re-implements what packages like Tracy-NET
-    /// would otherwise provide, because the available NuGet packages in
-    /// April 2026 either pin the Tracy native version too low (Tracy-CSharp
-    /// 0.11.1) or require net10.0 (Tracy-NET 0.13.x) — Atlas.Runtime is
-    /// net9.0 and the native layer just bumped to Tracy 0.13.1, so neither
-    /// fits. Ownership of the bindings keeps the version-pin policy
-    /// trivial: bump the Tracy native tag in cmake/Dependencies.cmake,
-    /// then re-check the function list below against the new TracyC.h.
-    /// </remarks>
+    // P/Invoke surface for TracyC.h — we own the bindings so the version
+    // pin is `cmake/Dependencies.cmake` alone, no NuGet dance on bumps.
     internal static unsafe partial class TracyNative
     {
         private const string LibraryName = "TracyClient";

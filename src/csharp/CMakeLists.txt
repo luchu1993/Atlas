@@ -53,16 +53,8 @@ atlas_dotnet_project(
   DEPLOY
 )
 
-# Atlas.Tools.DefDump — offline build-time tool that extracts struct +
-# entity blobs from a built server assembly and writes a binary
-# descriptor container consumable by EntityDefRegistry::RegisterFromBinaryFile
-# (DBApp's load path on processes that don't host CoreCLR).
-#
-# Not deployed via DEPLOY because dotnet console exes need the sibling
-# `*.runtimeconfig.json` next to the DLL to bootstrap CoreCLR — the
-# AtlasDotNetBuild deploy step only copies the .dll. Invoke this tool
-# from its build directory:
-#   src/csharp/Atlas.Tools.DefDump/bin/x64/<Config>/net9.0/Atlas.Tools.DefDump.exe
+# Atlas.Tools.DefDump — offline `.def` → `entity_defs.bin` tool. Not deployed
+# because the console exe needs its sibling `*.runtimeconfig.json`; invoke from bin/.
 atlas_dotnet_project(
   NAME atlas_tools_defdump
   PROJECT_FILE Atlas.Tools.DefDump/Atlas.Tools.DefDump.csproj

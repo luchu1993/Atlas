@@ -63,8 +63,8 @@ client
   - `world_stress`
 - C# Runtime：
   - `runtime/atlas_server.runtimeconfig.json`
-  - `samples/stress/Atlas.StressTest.Base/bin/x64/Debug/net9.0/Atlas.StressTest.Base.dll`
-  - `samples/stress/Atlas.StressTest.Cell/bin/x64/Debug/net9.0/Atlas.StressTest.Cell.dll`
+  - `samples/stress/Atlas.StressTest.Base/bin/x64/Debug/<tfm>/Atlas.StressTest.Base.dll`
+  - `samples/stress/Atlas.StressTest.Cell/bin/x64/Debug/<tfm>/Atlas.StressTest.Cell.dll`
 - 端口段（默认）：
   - 20013 LoginApp external
   - 20018 machined

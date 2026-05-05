@@ -8,7 +8,7 @@
 #   DOTNET_EXECUTABLE        - Path to dotnet executable
 #   DOTNET_ROOT              - .NET SDK root directory
 #   DOTNET_RUNTIME_VERSION   - Detected runtime version (e.g. "9.0.0")
-#   DOTNET_RUNTIME_TFM       - Target framework moniker (e.g. "net9.0")
+#   DOTNET_RUNTIME_TFM       - Target framework moniker (e.g. "net10.0")
 #
 # Creates:
 #   DotNet::nethost          - IMPORTED library target
@@ -101,9 +101,10 @@ if(NOT EXISTS "${_packs_dir}")
   return()
 endif()
 
-# Find the latest version directory with nethost.h
+# Find the latest version directory with nethost.h. NATURAL sort so "10.0.7"
+# beats "9.0.14" — lex sort would pick the older 9.x because '9' > '1'.
 file(GLOB _version_dirs "${_packs_dir}/*")
-list(SORT _version_dirs ORDER DESCENDING)
+list(SORT _version_dirs COMPARE NATURAL ORDER DESCENDING)
 
 set(_native_dir "")
 foreach(_vdir IN LISTS _version_dirs)

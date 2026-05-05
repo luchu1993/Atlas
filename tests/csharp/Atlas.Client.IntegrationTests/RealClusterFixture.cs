@@ -94,7 +94,7 @@ public sealed class RealClusterFixture : IDisposable
 
     private static string ResolveRepoRoot()
     {
-        // tests/csharp/Atlas.Client.IntegrationTests/bin/Debug/net9.0/ → repo root.
+        // tests/csharp/Atlas.Client.IntegrationTests/bin/Debug/<tfm>/ → repo root.
         var dir = AppContext.BaseDirectory;
         for (int i = 0; i < 6 && dir is not null; i++)
         {

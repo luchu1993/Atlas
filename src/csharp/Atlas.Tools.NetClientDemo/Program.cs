@@ -3,7 +3,7 @@ using Atlas.Client.Native;
 
 namespace Atlas.Tools.NetClientDemo
 {
-    // .NET 9 FFI roundtrip verifier for atlas_net_client.dll.
+    // FFI roundtrip verifier for atlas_net_client.dll.
     internal static class Program
     {
         private static int Main(string[] args)

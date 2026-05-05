@@ -535,9 +535,9 @@ public static class FMath {
 
 **会**。Burst 默认启用 `-ffast-math`。**确定性代码路径禁止用 Burst**，即使性能有损失。Burst 只用于非权威的批处理（如远端实体位置插值批量计算）。
 
-### Q4: `System.Math.Sin` 在 .NET 8 / .NET 9 跨平台一致吗？
+### Q4: `System.Math.Sin` 跨 .NET 版本一致吗？
 
-**.NET 6+ 统一使用 `libsys` 中的实现**（基于 Intel 数学内核），**在相同 .NET 版本下跨 OS 是一致的**。但跨 .NET 主版本不保证，Unity Mono 实现又是另一套。
+**.NET 6+ 统一使用 `libsys` 中的实现**（基于 Intel 数学内核），**在相同 .NET 版本下跨 OS 是一致的**。但**跨 .NET 主版本不保证**——升级运行时主版本时 `Math.Sin` 的低位 bit 可能变化。Unity Mono 实现又是另一套。
 
 Atlas 选择自研是**根治不确定性**，避免未来升级 .NET 版本或切换到 IL2CPP 时的惊喜。
 

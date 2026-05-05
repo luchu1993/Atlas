@@ -8,7 +8,7 @@
 #   PROJECT_FILE    <path_to_csproj>
 #   ASSEMBLY_NAME   <output.dll>
 #   CONFIGURATION   <Debug|Release>  (default: Release)
-#   TARGET_FRAMEWORK <framework>     (default: net9.0)
+#   TARGET_FRAMEWORK <framework>     (default: ${DOTNET_RUNTIME_TFM} from FindDotNet)
 #   DEPENDS         <target ...>     (other dotnet targets this depends on)
 #   DEPLOY                            (copy the built assembly into
 #                                      ${ATLAS_BIN_ROOT} alongside every
@@ -23,7 +23,12 @@ function(atlas_dotnet_project)
   endif()
 
   if(NOT ARG_TARGET_FRAMEWORK)
-    set(ARG_TARGET_FRAMEWORK "net9.0")
+    if(NOT DOTNET_RUNTIME_TFM)
+      message(FATAL_ERROR
+        "atlas_dotnet_project(${ARG_NAME}): TARGET_FRAMEWORK not set and "
+        "DOTNET_RUNTIME_TFM not detected — include FindDotNet first.")
+    endif()
+    set(ARG_TARGET_FRAMEWORK "${DOTNET_RUNTIME_TFM}")
   endif()
 
   # Resolve the .csproj file path relative to current source dir

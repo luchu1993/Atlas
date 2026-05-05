@@ -2159,7 +2159,7 @@ Xcode 主工程直接链接入最终二进制 (见 §7 Plugins/iOS 目录)。
 | IL2CPP 可行性 Spike | `src/tools/il2cpp_probe/`(probe.cc + Unity ProbeComponent + README);Pattern B 决议见上方"关键决策记录" |
 | 依赖解耦 | `foundation/process_type.{h,cc}`、`server/entity_types.h::DatabaseID`、`atlas_serialization_binary` STATIC target;`atlas_network` 闭包零 `server` / `db` / `entitydef` / pugixml / rapidjson |
 | C API 导出层 | `src/lib/net_client/`(`client_api.cc` + `client_session.cc`),`atlas_net_client.dll` SHARED + `atlas_net_client_core` STATIC + iOS `_static` 三 target;`test_net_client_abi_layout` 锁 sizeof / offsetof |
-| C# P/Invoke | `Atlas.Client/Native/`(DllImport + Pattern B 桥 + `IAtlasNetEvents`);`Atlas.Tools.NetClientDemo`(net9.0 控制台)做 FFI roundtrip |
+| C# P/Invoke | `Atlas.Client/Native/`(DllImport + Pattern B 桥 + `IAtlasNetEvents`);`Atlas.Tools.NetClientDemo`(CoreCLR 控制台)做 FFI roundtrip |
 | Unity 包 | `Packages/com.atlas.client/`(package.json + asmdef + `AtlasNetworkManager` MonoBehaviour);Plugins/ 目录待 CI artifact 填充后做端到端验证 |
 | 跨平台构建 | `CMakePresets.json` 含 `net-client-{android-arm64, ios-arm64, macos-arm64, linux-x64}`;`.github/workflows/net_client_cross.yml` 矩阵 + 30 天 artifact |
 
@@ -2179,7 +2179,7 @@ Xcode 主工程直接链接入最终二进制 (见 §7 Plugins/iOS 目录)。
 | `test_client_session` | `tests/unit/test_client_session.cpp` | 状态机:Login/Auth 成功、超时、断开、`Disconnect` 幂等;非法状态调用返回 §4.5.6 表上的错误码 |
 | `test_client_flow` | `tests/integration/test_client_flow.cpp` | 真实 LoginApp + BaseApp + DBApp 端到端线格式 |
 | `test_net_client_abi_layout` | `tests/unit/test_net_client_abi_layout.cpp` | `static_assert` 锁定 `AtlasNetCallbacks` / `AtlasNetStats` 的 `sizeof` / `offsetof`;C# 侧用 `Marshal.SizeOf<>` 双向核对 |
-| FFI roundtrip | `Atlas.Tools.NetClientDemo`(net9.0 控制台) | `Create(abi)` → `Login` → `Authenticate` → 1 条 RPC → `Disconnect` → `Destroy`,验证 `user_data` 透传与 ABI 不匹配时的清晰异常 |
+| FFI roundtrip | `Atlas.Tools.NetClientDemo`(CoreCLR 控制台) | `Create(abi)` → `Login` → `Authenticate` → 1 条 RPC → `Disconnect` → `Destroy`,验证 `user_data` 透传与 ABI 不匹配时的清晰异常 |
 
 ---
 

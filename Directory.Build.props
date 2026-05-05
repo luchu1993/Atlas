@@ -1,0 +1,7 @@
+<Project>
+
+  <PropertyGroup>
+    <AtlasTargetFramework>net10.0</AtlasTargetFramework>
+  </PropertyGroup>
+
+</Project>

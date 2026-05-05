@@ -40,7 +40,7 @@ class ClrScriptEngine final : public ScriptEngine {
   [[nodiscard]] auto CallFunction(std::string_view module_name, std::string_view function_name,
                                   std::span<const ScriptValue> args)
       -> Result<ScriptValue> override;
-  [[nodiscard]] auto RuntimeName() const -> std::string_view override { return "CLR (.NET 9)"; }
+  [[nodiscard]] auto RuntimeName() const -> std::string_view override { return "CLR (CoreCLR)"; }
 
   [[nodiscard]] auto IsInitialized() const -> bool { return initialized_; }
 
