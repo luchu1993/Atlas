@@ -72,8 +72,12 @@ class WSAPollPoller final : public IOPoller {
 
     auto ms = std::chrono::duration_cast<Milliseconds>(max_wait).count();
     int timeout_ms;
-    if (ms <= 0) {
+    if (max_wait <= Duration::zero()) {
       timeout_ms = 0;
+    } else if (ms <= 0) {
+      // Positive sub-ms: WSAPoll has only ms resolution; rounding to 0 would
+      // silently make this non-blocking. Bump to 1ms so the wait happens.
+      timeout_ms = 1;
     } else if (ms > static_cast<decltype(ms)>((std::numeric_limits<int>::max)())) {
       timeout_ms = -1;
     } else {

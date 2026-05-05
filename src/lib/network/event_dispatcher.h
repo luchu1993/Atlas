@@ -99,7 +99,9 @@ class EventDispatcher {
   bool stop_requested_{false};
   Duration max_poll_wait_{Milliseconds(100)};
   Duration adaptive_poll_wait_{Milliseconds(1)};
-  static constexpr Duration kMinPollWait{Microseconds(100)};
+  // 1ms floor matches what epoll/WSAPoll can express; sub-ms truncates to 0
+  // (non-blocking) and races with packets in flight on the same loop iteration.
+  static constexpr Duration kMinPollWait{Milliseconds(1)};
   static constexpr Duration kMaxAdaptivePollWait{Milliseconds(10)};
 };
 
