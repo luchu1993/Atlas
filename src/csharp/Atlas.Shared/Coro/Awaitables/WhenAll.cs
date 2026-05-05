@@ -10,13 +10,12 @@ public readonly partial struct AtlasTask
     {
         if (t1.Status != AtlasTaskStatus.Pending && t2.Status != AtlasTaskStatus.Pending)
         {
-            try
-            {
-                var r1 = t1.GetAwaiter().GetResult();
-                var r2 = t2.GetAwaiter().GetResult();
-                return new AtlasTask<(T1, T2)>((r1, r2));
-            }
+            T1 r1; T2 r2;
+            try { r1 = t1.GetAwaiter().GetResult(); }
+            catch (Exception ex) { DrainSilently(t2); return AtlasTask<(T1, T2)>.FromException(ex); }
+            try { r2 = t2.GetAwaiter().GetResult(); }
             catch (Exception ex) { return AtlasTask<(T1, T2)>.FromException(ex); }
+            return new AtlasTask<(T1, T2)>((r1, r2));
         }
         var src = new WhenAllSource2<T1, T2>(t1, t2);
         return new AtlasTask<(T1, T2)>(src, src.Version);
@@ -29,14 +28,22 @@ public readonly partial struct AtlasTask
             t2.Status != AtlasTaskStatus.Pending &&
             t3.Status != AtlasTaskStatus.Pending)
         {
-            try
+            T1 r1; T2 r2; T3 r3;
+            try { r1 = t1.GetAwaiter().GetResult(); }
+            catch (Exception ex)
             {
-                var r1 = t1.GetAwaiter().GetResult();
-                var r2 = t2.GetAwaiter().GetResult();
-                var r3 = t3.GetAwaiter().GetResult();
-                return new AtlasTask<(T1, T2, T3)>((r1, r2, r3));
+                DrainSilently(t2); DrainSilently(t3);
+                return AtlasTask<(T1, T2, T3)>.FromException(ex);
             }
+            try { r2 = t2.GetAwaiter().GetResult(); }
+            catch (Exception ex)
+            {
+                DrainSilently(t3);
+                return AtlasTask<(T1, T2, T3)>.FromException(ex);
+            }
+            try { r3 = t3.GetAwaiter().GetResult(); }
             catch (Exception ex) { return AtlasTask<(T1, T2, T3)>.FromException(ex); }
+            return new AtlasTask<(T1, T2, T3)>((r1, r2, r3));
         }
         var src = new WhenAllSource3<T1, T2, T3>(t1, t2, t3);
         return new AtlasTask<(T1, T2, T3)>(src, src.Version);
@@ -59,7 +66,11 @@ public readonly partial struct AtlasTask
             for (var i = 0; i < arr.Length; i++)
             {
                 try { results[i] = arr[i].GetAwaiter().GetResult(); }
-                catch (Exception ex) { return AtlasTask<T[]>.FromException(ex); }
+                catch (Exception ex)
+                {
+                    for (var j = i + 1; j < arr.Length; j++) DrainSilently(arr[j]);
+                    return AtlasTask<T[]>.FromException(ex);
+                }
             }
             return new AtlasTask<T[]>(results);
         }
@@ -72,11 +83,30 @@ public readonly partial struct AtlasTask
     {
         if (t1.Status != AtlasTaskStatus.Pending && t2.Status != AtlasTaskStatus.Pending)
         {
-            try { t1.GetAwaiter().GetResult(); t2.GetAwaiter().GetResult(); return CompletedTask; }
+            try { t1.GetAwaiter().GetResult(); }
+            catch (Exception ex) { DrainSilently(t2); return FromException(ex); }
+            try { t2.GetAwaiter().GetResult(); }
             catch (Exception ex) { return FromException(ex); }
+            return CompletedTask;
         }
         var src = new WhenAllSourceVoid2(t1, t2);
         return new AtlasTask(src, src.Version);
+    }
+
+    // GetResult releases pooled IAtlasTaskSource boxes; failing siblings
+    // must still be drained or the box stays out of the pool.
+    private static void DrainSilently<T>(AtlasTask<T> task)
+    {
+        if (task.Status == AtlasTaskStatus.Pending) return;
+        try { task.GetAwaiter().GetResult(); }
+        catch (Exception) { }
+    }
+
+    private static void DrainSilently(AtlasTask task)
+    {
+        if (task.Status == AtlasTaskStatus.Pending) return;
+        try { task.GetAwaiter().GetResult(); }
+        catch (Exception) { }
     }
 }
 
