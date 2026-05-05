@@ -24,8 +24,10 @@ find_program(DOTNET_EXECUTABLE dotnet)
 if(DEFINED ENV{DOTNET_ROOT} AND EXISTS "$ENV{DOTNET_ROOT}")
   set(_dotnet_root "$ENV{DOTNET_ROOT}")
 elseif(DOTNET_EXECUTABLE)
-  # Derive root from dotnet executable location
-  cmake_path(GET DOTNET_EXECUTABLE PARENT_PATH _dotnet_root)
+  # Resolve symlinks first — apt's /usr/bin/dotnet points into /usr/lib/dotnet
+  # where packs/ actually lives.
+  file(REAL_PATH "${DOTNET_EXECUTABLE}" _dotnet_resolved)
+  cmake_path(GET _dotnet_resolved PARENT_PATH _dotnet_root)
 else()
   # Well-known defaults
   if(WIN32)
@@ -47,7 +49,9 @@ if(NOT _dotnet_root)
   return()
 endif()
 
-set(DOTNET_ROOT "${_dotnet_root}" CACHE PATH ".NET SDK root directory")
+# Plain variable (not CACHE): re-detect each configure. Caching would freeze
+# a wrong path past a fix here. User override via ENV{DOTNET_ROOT}.
+set(DOTNET_ROOT "${_dotnet_root}")
 
 # ── Detect runtime version ───────────────────────────────────────────────────
 if(DOTNET_EXECUTABLE)
@@ -81,42 +85,56 @@ message(STATUS "Found .NET SDK: ${DOTNET_ROOT}")
 message(STATUS "  Runtime: ${DOTNET_RUNTIME_VERSION} (${DOTNET_RUNTIME_TFM})")
 
 # ── Find nethost native pack ────────────────────────────────────────────────
+# Match host RID across installers: Microsoft tarball uses portable IDs
+# (linux-x64), Ubuntu apt uses distro-flavored ones (ubuntu.24.04-x64).
 if(WIN32)
-  set(_rid "win-x64")
+  set(_pack_patterns "win-x64")
 elseif(APPLE)
   if(CMAKE_SYSTEM_PROCESSOR STREQUAL "arm64")
-    set(_rid "osx-arm64")
+    set(_pack_patterns "osx-arm64")
   else()
-    set(_rid "osx-x64")
+    set(_pack_patterns "osx-x64")
   endif()
 else()
-  set(_rid "linux-x64")
+  set(_pack_patterns "linux-x64" "linux-*-x64" "*linux*-x64"
+                     "ubuntu*-x64" "debian*-x64" "rhel*-x64" "fedora*-x64"
+                     "alpine*-x64" "centos*-x64" "sles*-x64")
 endif()
 
-set(_packs_dir "${DOTNET_ROOT}/packs/Microsoft.NETCore.App.Host.${_rid}")
-
-if(NOT EXISTS "${_packs_dir}")
-  message(WARNING "Cannot find .NET host pack at: ${_packs_dir}")
-  set(DOTNET_FOUND FALSE)
-  return()
-endif()
-
-# Find the latest version directory with nethost.h. NATURAL sort so "10.0.7"
-# beats "9.0.14" — lex sort would pick the older 9.x because '9' > '1'.
-file(GLOB _version_dirs "${_packs_dir}/*")
-list(SORT _version_dirs COMPARE NATURAL ORDER DESCENDING)
+set(_packs_candidates "")
+foreach(_pat IN LISTS _pack_patterns)
+  file(GLOB _matched "${DOTNET_ROOT}/packs/Microsoft.NETCore.App.Host.${_pat}")
+  list(APPEND _packs_candidates ${_matched})
+endforeach()
+list(REMOVE_DUPLICATES _packs_candidates)
+list(SORT _packs_candidates COMPARE NATURAL ORDER DESCENDING)
 
 set(_native_dir "")
-foreach(_vdir IN LISTS _version_dirs)
-  set(_candidate "${_vdir}/runtimes/${_rid}/native")
-  if(EXISTS "${_candidate}/nethost.h")
-    set(_native_dir "${_candidate}")
+foreach(_packs_dir IN LISTS _packs_candidates)
+  file(GLOB _version_dirs "${_packs_dir}/*")
+  list(SORT _version_dirs COMPARE NATURAL ORDER DESCENDING)
+  foreach(_vdir IN LISTS _version_dirs)
+    file(GLOB _rid_dirs "${_vdir}/runtimes/*")
+    foreach(_rid_dir IN LISTS _rid_dirs)
+      set(_candidate "${_rid_dir}/native")
+      if(EXISTS "${_candidate}/nethost.h")
+        set(_native_dir "${_candidate}")
+        break()
+      endif()
+    endforeach()
+    if(_native_dir)
+      break()
+    endif()
+  endforeach()
+  if(_native_dir)
     break()
   endif()
 endforeach()
 
 if(NOT _native_dir)
-  message(WARNING "Found .NET host pack but no version contains nethost.h")
+  message(WARNING
+    "No nethost.h found under ${DOTNET_ROOT}/packs/Microsoft.NETCore.App.Host.* — "
+    "install the apphost pack (Ubuntu: dotnet-apphost-pack-<ver>).")
   set(DOTNET_FOUND FALSE)
   return()
 endif()
