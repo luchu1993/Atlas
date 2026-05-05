@@ -10,4 +10,9 @@ public sealed class RpcException : Exception
     {
         ErrorCode = code;
     }
+
+    public RpcException(int code, string? message, Exception? inner) : base(message, inner)
+    {
+        ErrorCode = code;
+    }
 }

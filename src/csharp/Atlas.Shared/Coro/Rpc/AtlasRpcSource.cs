@@ -62,22 +62,28 @@ public sealed class AtlasRpcSource<T> : IAtlasTaskSource<T>, IAtlasRpcCallback
     public void OnReply(ReadOnlySpan<byte> payload)
     {
         var reader = new SpanReader(payload);
+        int errorCode;
         try
         {
             _ = reader.ReadUInt32();
-            int errorCode = reader.ReadInt32();
-            if (errorCode != 0)
-            {
-                string msg;
-                try { msg = reader.ReadString(); }
-                catch { msg = ""; }
-                _core.TrySetResult(_errorMapper!(errorCode, msg));
-                return;
-            }
+            errorCode = reader.ReadInt32();
         }
         catch (Exception ex)
         {
             _core.TrySetResult(_errorMapper!(RpcErrorCodes.PayloadMalformed, ex.Message));
+            return;
+        }
+
+        if (errorCode != 0)
+        {
+            string msg;
+            try { msg = reader.ReadString(); }
+            catch (Exception ex)
+            {
+                _core.TrySetResult(_errorMapper!(RpcErrorCodes.PayloadMalformed, ex.Message));
+                return;
+            }
+            _core.TrySetResult(_errorMapper!(errorCode, msg));
             return;
         }
 

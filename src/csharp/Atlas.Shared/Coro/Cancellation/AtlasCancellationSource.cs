@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using Atlas.Diagnostics;
 
 namespace Atlas.Coro;
 
@@ -27,8 +28,10 @@ public sealed class AtlasCancellationSource : IDisposable
         _callbacks = null;
         for (var i = 0; i < cbs.Count; i++)
         {
+            // One source must drive all callbacks: keep going on failure
+            // but surface the exception via Log so the bug isn't silent.
             try { cbs[i].Callback(cbs[i].State); }
-            catch (Exception) { /* swallow — single source must drive all callbacks */ }
+            catch (Exception ex) { Log.Error($"AtlasCancellationSource callback threw: {ex}"); }
         }
     }
 
@@ -54,7 +57,8 @@ public sealed class AtlasCancellationSource : IDisposable
     {
         if (_cancelled)
         {
-            try { cb(state); } catch (Exception) { }
+            try { cb(state); }
+            catch (Exception ex) { Log.Error($"AtlasCancellationSource callback threw: {ex}"); }
             return 0;
         }
         _callbacks ??= new List<Entry>(2);
