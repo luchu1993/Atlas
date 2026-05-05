@@ -13,14 +13,6 @@
       "preLaunchTask": "CMake: Build machined"
     },
     {
-      "name": "EchoApp",
-      "type": "cppvsdbg",
-      "request": "launch",
-      "program": "${workspaceFolder}/build/debug/src/server/EchoApp/Debug/atlas_echoapp.exe",
-      "cwd": "${workspaceFolder}",
-      "preLaunchTask": "CMake: Build EchoApp"
-    },
-    {
       "name": "LoginApp",
       "type": "cppvsdbg",
       "request": "launch",
@@ -61,22 +53,11 @@
       "preLaunchTask": "CMake: Build Client"
     },
 
-    // ── Compound: Full Cluster ────────────────────────────────────────
-    // Use VS Code compound launch to start multiple processes at once.
-    // See "compounds" section below.
-
     // ── Attach to running process ─────────────────────────────────────
     {
       "name": "Attach to Process",
       "type": "cppvsdbg",
       "request": "attach"
-    }
-  ],
-  "compounds": [
-    {
-      "name": "Cluster: machined + EchoApp",
-      "configurations": ["machined", "EchoApp"],
-      "stopAll": true
     }
   ]
 }

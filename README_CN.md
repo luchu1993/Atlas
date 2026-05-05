@@ -43,7 +43,6 @@ LoginApp ──► BaseAppMgr ──► BaseApp ◄──► CellApp
 | `CellAppMgr` | CellApp 注册、空间几何、BSP 分区与 offload 协调。 |
 | `CellApp` | 空间实体、移动、Witness 更新、AoI、Ghost 与脚本运行。 |
 | `DBApp` | 通过配置的数据库后端异步持久化实体。 |
-| `EchoApp` | 用于验证框架连线和构建产物的最小服务器进程。 |
 
 服务器进程共享一套小型框架层级：
 
@@ -161,12 +160,6 @@ clang-format --dry-run --Werror <changed files>
 ```
 
 ## 运行本地集群
-
-最小构建验证：
-
-```bash
-./bin/debug/atlas_echoapp
-```
 
 开发集群启动顺序：
 

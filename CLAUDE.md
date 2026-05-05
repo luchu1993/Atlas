@@ -4,7 +4,7 @@ Guidance for Claude Code when working in the Atlas Engine repository.
 
 ## What is Atlas
 
-Distributed MMO server framework: C++20 core + C# (.NET) gameplay scripting via embedded CoreCLR. Multi-process layout (machined / login / base / baseappmgr / cell / cellappmgr / db / dbappmgr / reviver / EchoApp). Inspired by BigWorld; Mailbox-based RPC; spatial partition via BSP tree; Tracy-instrumented for performance work.
+Distributed MMO server framework: C++20 core + C# (.NET) gameplay scripting via embedded CoreCLR. Multi-process layout (machined / login / base / baseappmgr / cell / cellappmgr / db / dbappmgr / reviver). Inspired by BigWorld; Mailbox-based RPC; spatial partition via BSP tree; Tracy-instrumented for performance work.
 
 User-facing docs: `README.md` (English), `README_CN.md` (中文). Design docs under `docs/`.
 
@@ -59,7 +59,7 @@ Windows clang-format path: `C:\Program Files\Microsoft Visual Studio\2022\Commun
 | Path | Contents |
 |---|---|
 | `src/lib/` | Core libs: `platform`, `foundation` (PCH source `atlas_common.h`), `network`, `serialization`, `math`, `physics`, `resmgr`, `coro`, `script`, `clrscript`, `entitydef`, `connection`, `space`, `db`, `db_mysql`, `db_sqlite`, `db_xml`, `server` |
-| `src/server/` | Processes: `machined`, `loginapp`, `baseappmgr`, `baseapp`, `cellappmgr`, `cellapp`, `dbapp`, `dbappmgr` (placeholder), `reviver` (placeholder), `EchoApp` |
+| `src/server/` | Processes: `machined`, `loginapp`, `baseappmgr`, `baseapp`, `cellappmgr`, `cellapp`, `dbapp`, `dbappmgr` (placeholder), `reviver` (placeholder) |
 | `src/csharp/` | C# libs: `Atlas.Shared`, `Atlas.Runtime`, `Atlas.Client`, `Atlas.Client.Desktop`, `Atlas.Client.Unity`, `Atlas.ClrHost`, `Atlas.Generators.{Def,Events}`, `Atlas.Tools.DefDump` |
 | `src/client/` | Console / desktop client app |
 | `src/tools/` | `atlas_tool`, `login_stress`, `world_stress`, `crash_demo` |
@@ -73,7 +73,7 @@ Windows clang-format path: `C:\Program Files\Microsoft Visual Studio\2022\Commun
 
 ```
 ServerApp
-├── ManagerApp     — manager / daemon (no scripting): BaseAppMgr, CellAppMgr, DBAppMgr, machined, EchoApp
+├── ManagerApp     — manager / daemon (no scripting): BaseAppMgr, CellAppMgr, DBAppMgr, machined
 └── ScriptApp      — ServerApp + CoreCLR
     └── EntityApp  — ScriptApp + entity defs + bg-task pool: BaseApp, CellApp
 ```

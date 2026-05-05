@@ -5,7 +5,6 @@ add_subdirectory(loginapp)
 add_subdirectory(baseappmgr)
 add_subdirectory(dbapp)
 add_subdirectory(baseapp)
-add_subdirectory(EchoApp)
 
 # Placeholders
 add_subdirectory(cellapp)

@@ -43,7 +43,6 @@ LoginApp ──► BaseAppMgr ──► BaseApp ◄──► CellApp
 | `CellAppMgr` | CellApp registration, space geometry, BSP partitioning, and offload coordination. |
 | `CellApp` | Spatial entities, movement, witness updates, AoI, ghosting, and scripting. |
 | `DBApp` | Asynchronous entity persistence through configured database backends. |
-| `EchoApp` | Minimal server process for verifying framework wiring and build output. |
 
 Server processes share a small framework hierarchy:
 
@@ -161,12 +160,6 @@ clang-format --dry-run --Werror <changed files>
 ```
 
 ## Run a Local Cluster
-
-For a minimal build check:
-
-```bash
-./bin/debug/atlas_echoapp
-```
 
 A development cluster starts in this order:
 

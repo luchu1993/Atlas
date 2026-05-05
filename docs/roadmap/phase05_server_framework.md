@@ -1,7 +1,7 @@
 # Phase 5: 服务器框架基类 (`src/lib/server/`)
 
 **Status:** ✅ 已完成。所有子系统已实现并通过单元测试，是 `machined`、
-`DBApp`、`BaseApp`、`LoginApp`、`EchoApp` 的共同运行时基线。
+`DBApp`、`BaseApp`、`CellApp`、`LoginApp` 等所有服务器进程的共同运行时基线。
 **BigWorld 参考:** `lib/server/server_app.hpp`, `lib/server/script_app.hpp`,
 `lib/server/entity_app.hpp`
 
@@ -21,8 +21,6 @@ ServerApp                — 事件循环、GameClock、信号、Updatable、Wat
               ├── BaseApp
               └── CellApp
 ```
-
-`EchoApp`（继承 `ManagerApp`）作为最小示例进程贯通框架。
 
 ## 关键设计决策
 

@@ -43,13 +43,6 @@
       "problemMatcher": ["$msCompile"]
     },
     {
-      "label": "CMake: Build EchoApp",
-      "type": "shell",
-      "command": "cmake --build build/debug --config Debug --target atlas_echoapp",
-      "group": "build",
-      "problemMatcher": ["$msCompile"]
-    },
-    {
       "label": "CMake: Build LoginApp",
       "type": "shell",
       "command": "cmake --build build/debug --config Debug --target atlas_loginapp",
