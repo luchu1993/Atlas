@@ -5,6 +5,7 @@
 #include "baseapp/baseapp_messages.h"
 #include "client_app.h"
 #include "foundation/log.h"
+#include "foundation/process_type.h"
 #include "network/channel.h"
 
 namespace atlas {
@@ -17,6 +18,7 @@ auto IsValidNativePayload(const std::byte* payload, int32_t len) -> bool {
 
 }  // namespace
 
+// Mirrors [UnmanagedCallersOnly] exports in Atlas.Client. Append-only.
 #pragma pack(push, 1)
 struct ClientCallbackTable {
   ClientDispatchRpcFn dispatch_rpc;
@@ -29,10 +31,10 @@ struct ClientCallbackTable {
 ClientNativeProvider::ClientNativeProvider(ClientApp& app) : app_(app) {}
 
 uint8_t ClientNativeProvider::GetProcessPrefix() {
-  return static_cast<uint8_t>('C');
+  return static_cast<uint8_t>(ProcessType::kClient);
 }
 
-void ClientNativeProvider::SendBaseRpc(uint32_t entity_id, uint32_t rpc_id,
+void ClientNativeProvider::SendBaseRpc(uint32_t /*entity_id*/, uint32_t rpc_id,
                                        const std::byte* payload, int32_t len, uint64_t trace_id) {
   if (!IsValidNativePayload(payload, len)) {
     ATLAS_LOG_WARNING("Client: send_base_rpc rejected invalid payload len={}", len);
@@ -44,14 +46,13 @@ void ClientNativeProvider::SendBaseRpc(uint32_t entity_id, uint32_t rpc_id,
     return;
   }
 
+  // entity_id is implicit on the proxy-bound channel.
   baseapp::ClientBaseRpc msg;
   msg.rpc_id = rpc_id;
   msg.trace_id = trace_id;
   if (len > 0) msg.payload.assign(payload, payload + static_cast<std::size_t>(len));
 
   (void)ch->SendMessage(msg);
-
-  (void)entity_id;  // entity_id is implicit (proxy-bound)
 }
 
 void ClientNativeProvider::SendCellRpc(uint32_t entity_id, uint32_t rpc_id,
@@ -78,10 +79,8 @@ void ClientNativeProvider::SendCellRpc(uint32_t entity_id, uint32_t rpc_id,
 void ClientNativeProvider::ReportClientEventSeqGap(uint32_t entity_id, uint32_t gap_delta) {
   if (gap_delta == 0) return;
   auto* ch = app_.BaseappChannel();
-  if (ch == nullptr) {
-    // Channel may be torn down during shutdown — drop the report silently.
-    return;
-  }
+  // Channel may be torn down during shutdown — drop the report silently.
+  if (ch == nullptr) return;
   baseapp::ClientEventSeqReport msg;
   msg.entity_id = entity_id;
   msg.gap_delta = gap_delta;

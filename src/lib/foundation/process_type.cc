@@ -27,6 +27,8 @@ auto ProcessTypeName(ProcessType type) -> std::string_view {
       return "dbappmgr";
     case ProcessType::kReviver:
       return "reviver";
+    case ProcessType::kClient:
+      return "client";
   }
   return "unknown";
 }
@@ -45,6 +47,7 @@ auto ProcessTypeFromName(std::string_view name) -> Result<ProcessType> {
   if (lower == "dbapp") return ProcessType::kDbApp;
   if (lower == "dbappmgr") return ProcessType::kDbAppMgr;
   if (lower == "reviver") return ProcessType::kReviver;
+  if (lower == "client") return ProcessType::kClient;
 
   return Error{ErrorCode::kInvalidArgument, std::format("unknown process type: '{}'", name)};
 }

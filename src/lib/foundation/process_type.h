@@ -18,6 +18,7 @@ enum class ProcessType : uint8_t {
   kDbApp = 6,
   kDbAppMgr = 7,
   kReviver = 8,
+  kClient = 9,
 };
 
 [[nodiscard]] auto ProcessTypeName(ProcessType type) -> std::string_view;

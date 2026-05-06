@@ -1,15 +1,5 @@
 #include "client_app.h"
 
-#include "clrscript/clr_bootstrap.h"
-#include "clrscript/clr_invoke.h"
-#include "entitydef/entity_def_registry.h"
-#include "foundation/log.h"
-#include "network/channel.h"
-#include "network/reliable_udp.h"
-#include "serialization/binary_stream.h"
-#include "server/entity_types.h"
-
-// Reuse login/baseapp message definitions
 #include <chrono>
 #include <filesystem>
 #include <format>
@@ -17,13 +7,30 @@
 #include <thread>
 
 #include "baseapp/baseapp_messages.h"
+#include "clrscript/clr_bootstrap.h"
+#include "clrscript/clr_invoke.h"
+#include "entitydef/entity_def_registry.h"
+#include "foundation/log.h"
 #include "loginapp/login_messages.h"
+#include "network/channel.h"
+#include "network/reliable_udp.h"
+#include "serialization/binary_stream.h"
+#include "server/entity_types.h"
 
 namespace atlas {
 
-// ============================================================================
-// Static entry point
-// ============================================================================
+namespace {
+
+auto ParseUint32Arg(std::string_view sv, uint32_t& out) -> bool {
+  try {
+    out = static_cast<uint32_t>(std::stoul(std::string(sv)));
+    return true;
+  } catch (...) {
+    return false;
+  }
+}
+
+}  // namespace
 
 auto ClientApp::Run(int argc, char* argv[]) -> int {
   ClientApp app;
@@ -33,73 +40,57 @@ auto ClientApp::Run(int argc, char* argv[]) -> int {
   return rc;
 }
 
-// ============================================================================
-// Constructor / Destructor
-// ============================================================================
-
 ClientApp::ClientApp() = default;
 ClientApp::~ClientApp() = default;
 
-// ============================================================================
-// Init
-// ============================================================================
-
 auto ClientApp::Init(int argc, char* argv[]) -> bool {
-  // Parse command-line arguments
   for (int i = 1; i < argc; ++i) {
     std::string_view arg(argv[i]);
     auto next = [&]() -> std::string_view {
       return (i + 1 < argc) ? std::string_view(argv[++i]) : "";
     };
 
-    if (arg == "--loginapp-host")
+    if (arg == "--loginapp-host") {
       config_.loginapp_host = std::string(next());
-    else if (arg == "--loginapp-port")
+    } else if (arg == "--loginapp-port") {
       config_.loginapp_port = static_cast<uint16_t>(std::stoul(std::string(next())));
-    else if (arg == "--username")
+    } else if (arg == "--username") {
       config_.username = std::string(next());
-    else if (arg == "--password")
+    } else if (arg == "--password") {
       config_.password_hash = std::string(next());
-    else if (arg == "--assembly")
+    } else if (arg == "--assembly") {
       config_.script_assembly = std::filesystem::path(std::string(next()));
-    else if (arg == "--runtime-config")
+    } else if (arg == "--runtime-config") {
       config_.runtime_config = std::filesystem::path(std::string(next()));
-    else if (arg == "--drop-inbound-ms") {
-      // Two-argument flag: start_ms duration_ms.
+    } else if (arg == "--drop-inbound-ms") {
       auto start_sv = next();
       auto duration_sv = next();
-      try {
-        config_.drop_inbound_start_ms = std::stoi(std::string(start_sv));
-        config_.drop_inbound_duration_ms = std::stoi(std::string(duration_sv));
-      } catch (...) {
-        ATLAS_LOG_ERROR("Client: --drop-inbound-ms requires two integer args (got '{}', '{}')",
+      if (!ParseUint32Arg(start_sv, config_.drop_inbound_start_ms) ||
+          !ParseUint32Arg(duration_sv, config_.drop_inbound_duration_ms)) {
+        ATLAS_LOG_ERROR("Client: --drop-inbound-ms requires two unsigned integers (got '{}', '{}')",
                         start_sv, duration_sv);
         return false;
       }
     } else if (arg == "--drop-transport-ms") {
-      // Like --drop-inbound-ms, but installed at the RUDP layer so reliable
-      // packets lost in the window are eventually retransmitted. Validates
-      // transport-level recovery; --drop-inbound-ms validates app-level
-      // gap detection.
       auto start_sv = next();
       auto duration_sv = next();
-      try {
-        config_.drop_transport_start_ms = std::stoi(std::string(start_sv));
-        config_.drop_transport_duration_ms = std::stoi(std::string(duration_sv));
-      } catch (...) {
-        ATLAS_LOG_ERROR("Client: --drop-transport-ms requires two integer args (got '{}', '{}')",
-                        start_sv, duration_sv);
+      if (!ParseUint32Arg(start_sv, config_.drop_transport_start_ms) ||
+          !ParseUint32Arg(duration_sv, config_.drop_transport_duration_ms)) {
+        ATLAS_LOG_ERROR(
+            "Client: --drop-transport-ms requires two unsigned integers (got '{}', '{}')", start_sv,
+            duration_sv);
         return false;
       }
     }
   }
 
-  // Default password to empty hash
-  if (config_.password_hash.empty()) config_.password_hash = "default_hash";
+  if (config_.password_hash.empty()) {
+    ATLAS_LOG_ERROR("Client: --password is required");
+    return false;
+  }
 
-  // Start RUDP server (for receiving replies).  Use the Internet profile
-  // so any auto-accepted channel matches the small MTU (470) the
-  // LoginApp / BaseApp servers advertise via their accept_profile.
+  // Internet profile matches the small MTU (470) that LoginApp / BaseApp
+  // advertise via their accept_profile.
   auto listen_result =
       network_.StartRudpServer(Address("127.0.0.1", 0), NetworkInterface::InternetRudpProfile());
   if (!listen_result) {
@@ -107,16 +98,13 @@ auto ClientApp::Init(int argc, char* argv[]) -> bool {
     return false;
   }
 
-  // Configure fast polling
   dispatcher_.SetMaxPollWait(std::chrono::milliseconds(1));
 
   ATLAS_LOG_INFO("Client: initialized");
 
-  // Init CLR if assembly is specified. If --runtime-config wasn't supplied,
-  // auto-locate `<AssemblyStem>.runtimeconfig.json` next to the assembly —
-  // `dotnet build` emits it when GenerateRuntimeConfigurationFiles=true,
-  // so the typical build path has one available even for library projects.
   if (!config_.script_assembly.empty()) {
+    // Auto-locate the sibling runtimeconfig.json `dotnet build` emits when
+    // GenerateRuntimeConfigurationFiles=true, so callers can skip the flag.
     if (config_.runtime_config.empty()) {
       auto sibling = config_.script_assembly.parent_path() /
                      (config_.script_assembly.stem().string() + ".runtimeconfig.json");
@@ -130,10 +118,6 @@ auto ClientApp::Init(int argc, char* argv[]) -> bool {
 
   return true;
 }
-
-// ============================================================================
-// CLR initialization
-// ============================================================================
 
 auto ClientApp::InitClr(const char* exe_path) -> bool {
   native_provider_ = std::make_unique<ClientNativeProvider>(*this);
@@ -165,7 +149,6 @@ auto ClientApp::InitClr(const char* exe_path) -> bool {
   }
   (*set_provider)(native_provider_.get());
 
-  // Resolve CLR error bridge
   auto error_set = native_api_library_->GetSymbol<GetClrBridgeFn>("AtlasGetClrErrorSetFn");
   auto error_clear = native_api_library_->GetSymbol<GetClrBridgeFn>("AtlasGetClrErrorClearFn");
   auto error_code = native_api_library_->GetSymbol<GetClrBridgeFn>("AtlasGetClrErrorGetCodeFn");
@@ -181,18 +164,13 @@ auto ClientApp::InitClr(const char* exe_path) -> bool {
   bootstrap_args.error_get_code =
       reinterpret_cast<decltype(bootstrap_args.error_get_code)>((*error_code)());
 
-  // Desktop client uses Atlas.Client.DesktopLifecycle — it owns the
-  // AtlasTask coroutine loop install + drain (OnTick). Hotreload bindings
-  // remain server-only.
   auto clr = std::make_unique<ClrScriptEngine>();
   ClrScriptEngine::Config clr_config;
   clr_config.runtime_config_path = config_.runtime_config;
   clr_config.runtime_assembly_path = config_.script_assembly;
   clr_config.bootstrap_args = bootstrap_args;
-  // Fully-qualified: lifecycle lives in Atlas.Client.Desktop, but the script
-  // assembly path points at Atlas.ClientSample.dll. Without the assembly
-  // hint, load_assembly_and_get_function_pointer can't resolve the type
-  // across assemblies in the same load context.
+  // Lifecycle lives in Atlas.Client.Desktop, which is a transitive reference of
+  // the script assembly — fully-qualify so the bind crosses assemblies cleanly.
   clr_config.lifecycle_type = "Atlas.Client.DesktopLifecycle, Atlas.Client.Desktop";
   clr_config.hotreload_type.clear();
 
@@ -209,19 +187,13 @@ auto ClientApp::InitClr(const char* exe_path) -> bool {
     return false;
   }
 
-  // Install desktop host glue (ClientHost delegate slots + native callback
-  // table) before the user assembly's ModuleInitializer fires — the emitted
-  // [ModuleInitializer] in TypeRegistryEmitter calls ClientHost.
-  // RegisterEntityType and would NRE without the slots in place.
+  // Bootstrap fills ClientHost slots before the user assembly's
+  // [ModuleInitializer] fires; otherwise TypeRegistryEmitter hits a NRE.
   if (auto r = InvokeDesktopBootstrap(); !r) {
     ATLAS_LOG_ERROR("Client: DesktopBootstrap.Initialize failed: {}", r.Error().Message());
     return false;
   }
 
-  // Client doesn't bind HotReloadManager, so load the user assembly directly
-  // via DesktopBootstrap.LoadUserAssembly (Assembly.LoadFrom wrapper). This
-  // triggers module initializers that wire the generated RPC dispatcher /
-  // entity factory / type registry against the filled ClientHost slots.
   if (auto r = LoadUserAssembly(config_.script_assembly); !r) {
     ATLAS_LOG_ERROR("Client: LoadUserAssembly({}) failed: {}", config_.script_assembly.string(),
                     r.Error().Message());
@@ -235,9 +207,6 @@ auto ClientApp::InitClr(const char* exe_path) -> bool {
 }
 
 auto ClientApp::InvokeDesktopBootstrap() -> Result<void> {
-  // Atlas.Client.Desktop ships alongside the user assembly as a transitive
-  // ProjectReference; binding through the script-assembly path matches how
-  // ClrBootstrap resolves Atlas.ClrHost and keeps the type-load graph intact.
   ClrFallibleMethod<> init_method;
   auto bind_result =
       init_method.Bind(script_engine_->Host(), config_.script_assembly,
@@ -283,18 +252,10 @@ void ClientApp::FiniClr() {
   native_provider_.reset();
 }
 
-// ============================================================================
-// Fini
-// ============================================================================
-
 void ClientApp::Fini() {
   FiniClr();
   ATLAS_LOG_INFO("Client: finalized");
 }
-
-// ============================================================================
-// Login flow
-// ============================================================================
 
 auto ClientApp::Login() -> bool {
   ATLAS_LOG_INFO("Client: connecting to LoginApp at {}:{}", config_.loginapp_host,
@@ -308,9 +269,8 @@ auto ClientApp::Login() -> bool {
   }
   auto* login_ch = *ch_result;
 
-  // Send LoginRequest. The digest was pushed into the native registry by
-  // ClientHost.SetEntityDefDigestHandler when the user assembly's
-  // ModuleInitializer ran; BaseApp rejects with def_mismatch otherwise.
+  // Digest is pushed into the native registry by the user assembly's module
+  // initializer; BaseApp rejects login on def_mismatch otherwise.
   login::LoginRequest req;
   req.username = config_.username;
   req.password_hash = config_.password_hash;
@@ -323,7 +283,6 @@ auto ClientApp::Login() -> bool {
   }
   (void)login_ch->SendMessage(req);
 
-  // Wait for LoginResult
   std::optional<login::LoginResult> login_result;
   network_.InterfaceTable().RegisterTypedHandler<login::LoginResult>(
       [&](const Address&, Channel*, const login::LoginResult& msg) { login_result = msg; });
@@ -342,7 +301,6 @@ auto ClientApp::Login() -> bool {
 
   ATLAS_LOG_INFO("Client: login succeeded, BaseApp at {}", login_result->baseapp_addr.ToString());
 
-  // Authenticate on BaseApp
   return Authenticate(login_result->baseapp_addr, login_result->session_key);
 }
 
@@ -354,12 +312,10 @@ auto ClientApp::Authenticate(const Address& baseapp_addr, const SessionKey& sess
   }
   baseapp_channel_ = *ch_result;
 
-  // Send Authenticate
   baseapp::Authenticate auth_msg;
   auth_msg.session_key = session_key;
   (void)baseapp_channel_->SendMessage(auth_msg);
 
-  // Wait for AuthenticateResult
   std::optional<std::tuple<bool, EntityID, uint16_t>> auth_result;
   network_.InterfaceTable().RegisterTypedHandler<baseapp::AuthenticateResult>(
       [&](const Address&, Channel*, const baseapp::AuthenticateResult& msg) {
@@ -383,17 +339,12 @@ auto ClientApp::Authenticate(const Address& baseapp_addr, const SessionKey& sess
 
   ATLAS_LOG_INFO("Client: authenticated as entity={} type={}", player_entity_id_, player_type_id_);
 
-  // Create the client-side entity via C# callback
   if (native_provider_ && native_provider_->CreateEntityFn()) {
     native_provider_->CreateEntityFn()(player_entity_id_, player_type_id_);
   }
 
   return true;
 }
-
-// ============================================================================
-// RPC message handling
-// ============================================================================
 
 void ClientApp::OnRpcMessage(uint32_t rpc_id, uint64_t trace_id, const std::byte* payload,
                              int32_t len) {
@@ -405,13 +356,79 @@ void ClientApp::OnRpcMessage(uint32_t rpc_id, uint64_t trace_id, const std::byte
                                     reinterpret_cast<const uint8_t*>(payload), len, trace_id);
 }
 
-// ============================================================================
-// Main loop
-// ============================================================================
+void ClientApp::RegisterMessageHandlers() {
+  // Typed entries are required for fixed-length BaseApp→Client messages —
+  // untyped dispatch misreads them as packed-int length prefixes.
+  network_.InterfaceTable().RegisterTypedHandler<baseapp::EntityTransferred>(
+      [this](const Address&, Channel*, const baseapp::EntityTransferred& msg) {
+        player_entity_id_ = msg.new_entity_id;
+        player_type_id_ = msg.new_type_id;
+        // Spawn the matching client-side entity so owner-scope deltas land on
+        // a script instance — Witness never ships kEntityEnter for self.
+        if (native_provider_ && native_provider_->CreateEntityFn()) {
+          native_provider_->CreateEntityFn()(msg.new_entity_id, msg.new_type_id);
+        }
+      });
+  network_.InterfaceTable().RegisterTypedHandler<baseapp::CellReady>(
+      [](const Address&, Channel*, const baseapp::CellReady&) {});
+
+  // 0xF001/2/3 — opaque state-replication forward; 0xF004 — RPC envelope
+  // [u32 rpc_id][u64 trace_id][args]; anything else logs and drops.
+  network_.InterfaceTable().SetDefaultHandler(
+      [this](const Address&, Channel*, MessageID msg_id, BinaryReader& reader) {
+        const bool is_state_channel = msg_id == baseapp::kClientDeltaMessageId ||
+                                      msg_id == baseapp::kClientBaselineMessageId ||
+                                      msg_id == baseapp::kClientReliableDeltaMessageId;
+
+        if (is_state_channel) {
+          if (config_.drop_inbound_duration_ms > 0) {
+            const auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
+                                     std::chrono::steady_clock::now() - loop_start_)
+                                     .count();
+            if (elapsed >= config_.drop_inbound_start_ms &&
+                elapsed < config_.drop_inbound_start_ms + config_.drop_inbound_duration_ms) {
+              return;
+            }
+          }
+          const auto rem = reader.Remaining();
+          auto bytes = reader.ReadBytes(rem);
+          if (!bytes) return;
+          if (native_provider_ && native_provider_->DeliverFromServerFn()) {
+            native_provider_->DeliverFromServerFn()(msg_id,
+                                                    reinterpret_cast<const uint8_t*>(bytes->data()),
+                                                    static_cast<int32_t>(bytes->size()));
+          } else {
+            ATLAS_LOG_WARNING(
+                "Client: state-channel message 0x{:04X} arrived but no deliver_from_server "
+                "callback registered",
+                static_cast<unsigned>(msg_id));
+          }
+          return;
+        }
+
+        if (msg_id == baseapp::kClientRpcMessageId) {
+          auto rpc_id = reader.Read<uint32_t>();
+          auto trace_id = reader.Read<uint64_t>();
+          if (!rpc_id || !trace_id) {
+            ATLAS_LOG_WARNING("Client: RPC envelope header truncated");
+            return;
+          }
+          const auto rem = reader.Remaining();
+          auto args = reader.ReadBytes(rem);
+          if (!args) return;
+          OnRpcMessage(*rpc_id, *trace_id, args->data(), static_cast<int32_t>(args->size()));
+          return;
+        }
+
+        ATLAS_LOG_WARNING("Client: unknown MessageID 0x{:04X} ({} bytes payload)",
+                          static_cast<unsigned>(msg_id), reader.Remaining());
+      });
+}
 
 auto ClientApp::MainLoop() -> int {
-  // Login first
   if (!Login()) return 1;
+
+  RegisterMessageHandlers();
 
   ATLAS_LOG_INFO("Client: entering main loop (press Ctrl+C to exit)");
 
@@ -426,14 +443,12 @@ auto ClientApp::MainLoop() -> int {
   if (config_.drop_transport_duration_ms > 0) {
     ATLAS_LOG_WARNING(
         "Client: --drop-transport-ms active: every inbound datagram in "
-        "[{} ms, {} ms) after MainLoop entry is dropped at the RUDP layer "
-        "(reliable retransmit should recover lost reliable traffic)",
+        "[{} ms, {} ms) after MainLoop entry is dropped at the RUDP layer",
         config_.drop_transport_start_ms,
         config_.drop_transport_start_ms + config_.drop_transport_duration_ms);
     if (auto* rudp = dynamic_cast<ReliableUdpChannel*>(baseapp_channel_)) {
-      rudp->SetInboundDropWindow(loop_start_,
-                                 static_cast<uint32_t>(config_.drop_transport_start_ms),
-                                 static_cast<uint32_t>(config_.drop_transport_duration_ms));
+      rudp->SetInboundDropWindow(loop_start_, config_.drop_transport_start_ms,
+                                 config_.drop_transport_duration_ms);
     } else {
       ATLAS_LOG_ERROR(
           "Client: --drop-transport-ms set but baseapp_channel_ is not a "
@@ -441,120 +456,20 @@ auto ClientApp::MainLoop() -> int {
     }
   }
 
-  // Typed-handler registration for two fixed-length BaseApp → Client messages
-  // (EntityTransferred=2024 after GiveClientTo; CellReady=2025 when the proxy
-  // gains a cell address). Typed entries are REQUIRED — Channel dispatch uses
-  // the MessageDesc length style to advance the read cursor, and an untyped
-  // fixed-length payload is misparsed as a packed-int length prefix, causing
-  // every subsequent message in the same datagram to be dropped.
-  network_.InterfaceTable().RegisterTypedHandler<baseapp::EntityTransferred>(
-      [this](const Address&, Channel*, const baseapp::EntityTransferred& msg) {
-        // Rebind the proxy identity so subsequent base-RPCs target the new
-        // entity. Cell-RPC path is script-tracked via ClientEntity.EntityId.
-        player_entity_id_ = msg.new_entity_id;
-        player_type_id_ = msg.new_type_id;
-
-        // Instantiate the matching client-side entity so owner-scope state
-        // deltas (0xF003 kEntityPropertyUpdate for the owner itself) have a
-        // script instance to land on. Witness never ships a kEntityEnter for
-        // the owner's own entity; CreateEntity fills that role, and the
-        // initial snapshot arrives via the BaseApp baseline pump. Without
-        // this step, any subsequent OnHpChanged delta finds no matching
-        // ClientEntity and never fires.
-        if (native_provider_ && native_provider_->CreateEntityFn()) {
-          native_provider_->CreateEntityFn()(msg.new_entity_id, msg.new_type_id);
-        }
-      });
-  network_.InterfaceTable().RegisterTypedHandler<baseapp::CellReady>(
-      [](const Address&, Channel*, const baseapp::CellReady&) {
-        // Informational — registration exists solely so the dispatcher
-        // knows the fixed-length payload layout.
-      });
-
-  // Catch-all handler.  Splits traffic into three lanes by reserved
-  // wire id:
-  //   • State-replication channels 0xF001 / 0xF002 / 0xF003 — opaque
-  //     forward to the script host (Atlas.Client / Lua / TS bind the
-  //     same hook without touching native envelope decoding).
-  //   • RPC envelope 0xF004 — body is [u32 rpc_id][serialized args];
-  //     unwrap and dispatch via the C# DispatchRpc callback.  Keeps
-  //     the 16-bit MessageID space (protocol layer) decoupled from the
-  //     32-bit rpc_id space (application layer).
-  //   • Anything else — log + drop.  Typed handlers are registered
-  //     above for protocol messages this client cares about
-  //     (LoginResult, AuthenticateResult, EntityTransferred, …); a
-  //     fall-through here would be a wire-format mismatch.
-  network_.InterfaceTable().SetDefaultHandler(
-      [this](const Address&, Channel*, MessageID msg_id, BinaryReader& reader) {
-        const bool is_state_channel = msg_id == baseapp::kClientDeltaMessageId ||
-                                      msg_id == baseapp::kClientBaselineMessageId ||
-                                      msg_id == baseapp::kClientReliableDeltaMessageId;
-
-        const uint8_t* payload_ptr = nullptr;
-        int32_t payload_len = 0;
-        const auto rem = reader.Remaining();
-        if (rem > 0) {
-          auto read = reader.ReadBytes(rem);
-          if (read) {
-            payload_ptr = reinterpret_cast<const uint8_t*>(read->data());
-            payload_len = static_cast<int32_t>(read->size());
-          }
-        }
-
-        if (is_state_channel) {
-          // Test hook: silently drop state-channel traffic inside the
-          // [start, start+duration) window to simulate packet loss on
-          // reliable / volatile / baseline channels. RPCs and other traffic
-          // flow normally so login / auth / script method calls still work.
-          if (config_.drop_inbound_duration_ms > 0) {
-            const auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
-                                     std::chrono::steady_clock::now() - loop_start_)
-                                     .count();
-            if (elapsed >= config_.drop_inbound_start_ms &&
-                elapsed < config_.drop_inbound_start_ms + config_.drop_inbound_duration_ms) {
-              return;  // dropped
-            }
-          }
-          if (native_provider_ && native_provider_->DeliverFromServerFn()) {
-            native_provider_->DeliverFromServerFn()(msg_id, payload_ptr, payload_len);
-          } else {
-            ATLAS_LOG_WARNING(
-                "Client: state-channel message 0x{:04X} arrived but no deliver_from_server "
-                "callback registered",
-                static_cast<unsigned>(msg_id));
-          }
-          return;
-        }
-
-        if (msg_id == baseapp::kClientRpcMessageId) {
-          constexpr int32_t kHeaderLen = static_cast<int32_t>(sizeof(uint32_t) + sizeof(uint64_t));
-          if (payload_len < kHeaderLen) {
-            ATLAS_LOG_WARNING("Client: RPC envelope too short ({} bytes)", payload_len);
-            return;
-          }
-          uint32_t rpc_id_full = 0;
-          std::memcpy(&rpc_id_full, payload_ptr, sizeof(uint32_t));
-          uint64_t trace_id = 0;
-          std::memcpy(&trace_id, payload_ptr + sizeof(uint32_t), sizeof(uint64_t));
-          OnRpcMessage(rpc_id_full, trace_id,
-                       reinterpret_cast<const std::byte*>(payload_ptr + kHeaderLen),
-                       payload_len - kHeaderLen);
-          return;
-        }
-
-        ATLAS_LOG_WARNING("Client: unknown MessageID 0x{:04X} ({} bytes payload)",
-                          static_cast<unsigned>(msg_id), payload_len);
-      });
+  constexpr auto kTickPeriod = std::chrono::milliseconds(16);
+  auto last_tick = std::chrono::steady_clock::now();
 
   while (!shutdown_requested_) {
     dispatcher_.ProcessOnce();
 
-    // Drive C# tick if CLR is loaded
     if (script_engine_) {
-      script_engine_->OnTick(0.016f);
+      const auto now = std::chrono::steady_clock::now();
+      const auto dt = std::chrono::duration<float>(now - last_tick).count();
+      last_tick = now;
+      script_engine_->OnTick(dt);
     }
 
-    std::this_thread::sleep_for(std::chrono::milliseconds(16));
+    std::this_thread::sleep_for(kTickPeriod);
   }
 
   return 0;

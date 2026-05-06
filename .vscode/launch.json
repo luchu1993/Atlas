@@ -49,6 +49,10 @@
       "type": "cppvsdbg",
       "request": "launch",
       "program": "${workspaceFolder}/build/debug/src/client/Debug/atlas_client.exe",
+      "args": [
+        "--username", "testuser",
+        "--password", "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      ],
       "cwd": "${workspaceFolder}",
       "preLaunchTask": "CMake: Build Client"
     },
