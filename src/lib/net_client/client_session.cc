@@ -332,8 +332,8 @@ auto ClientSession::SetCallbacks(const AtlasNetCallbacks& cb) -> int32_t {
   auto noop_disconnect = [](AtlasNetContext*, int32_t) {};
   auto noop_deliver = [](AtlasNetContext*, uint16_t, const uint8_t*, int32_t) {};
 
-  if (!callbacks_.on_disconnect) callbacks_.on_disconnect = +noop_disconnect;
-  if (!callbacks_.on_deliver) callbacks_.on_deliver = +noop_deliver;
+  if (!callbacks_.on_disconnect) callbacks_.on_disconnect = noop_disconnect;
+  if (!callbacks_.on_deliver) callbacks_.on_deliver = noop_deliver;
   return ATLAS_NET_OK;
 }
 
