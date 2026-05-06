@@ -213,6 +213,64 @@ tools/bin/setup_unity_client.sh --unity-project <path>
 tools\bin\setup_unity_client.bat --unity-project <path>
 ```
 
+## Properties and RPC
+
+Entities are declared in `entity_defs/<Name>.def`. The generator turns each definition into a typed `partial` class on both server and client; gameplay code only fills in implementations.
+
+```xml
+<!-- entity_defs/Avatar.def -->
+<entity name="Avatar">
+  <properties>
+    <property name="hp"    type="int32" scope="all_clients" reliable="true" />
+    <property name="gold"  type="int32" scope="base"        persistent="true" />
+    <property name="level" type="int32" scope="own_client" />
+  </properties>
+
+  <client_methods>
+    <method name="ShowDamage">
+      <arg name="amount"     type="int32" />
+      <arg name="attackerId" type="uint32" />
+    </method>
+  </client_methods>
+
+  <base_methods>
+    <method name="UseItem" exposed="own_client">
+      <arg name="itemId" type="int32" />
+    </method>
+  </base_methods>
+</entity>
+```
+
+Property `scope` controls who sees a write: `all_clients`, `own_client`, `other_clients`, `cell_public`, `cell_public_and_own`, `base`, `base_and_client`. `persistent="true"` opts a field into DBApp persistence; `reliable="true"` routes the delta on the reliable channel.
+
+Server side — assigning to a generated property emits a delta to every observer in scope; `Client.<Method>(...)` is a typed stub that fans out to the matching client RPC.
+
+```csharp
+[Entity("Avatar")]
+public partial class Avatar : ServerEntity
+{
+    public partial void UseItem(int itemId)        // exposed="own_client"
+    {
+        Hp -= 5;                                    // synced to all_clients
+        Client.ShowDamage(50, EntityId);            // server → owning client
+    }
+}
+```
+
+Client side — `OnXxxChanged(old, new)` is the generated change hook; client-method partials are invoked when the server pushes an RPC.
+
+```csharp
+[Entity("Avatar")]
+public partial class Avatar : ClientEntity
+{
+    partial void OnHpChanged(int oldValue, int newValue) { /* react to sync */ }
+
+    public partial void ShowDamage(int amount, uint attackerId) { /* handle push */ }
+}
+```
+
+Containers (`list[T]`, `dict[K,V]`, `list[list[int32]]`, …) and user `<struct>` types replicate field- or op-level deltas through the same setter path; see `entity_defs/StressAvatar.def` and `samples/stress/` for the full coverage matrix.
+
 ## Profiling and Stress
 
 The `profile` preset enables Tracy instrumentation and profiling helpers. The default baseline runs 200 clients for 120 seconds and writes captures under `.tmp/prof/baseline/`.

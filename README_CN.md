@@ -213,6 +213,64 @@ tools/bin/setup_unity_client.sh --unity-project <path>
 tools\bin\setup_unity_client.bat --unity-project <path>
 ```
 
+## 属性同步与 RPC
+
+实体在 `entity_defs/<Name>.def` 中声明。生成器为服务端与客户端各产出一个强类型 `partial` 类，玩法代码只需要补实现。
+
+```xml
+<!-- entity_defs/Avatar.def -->
+<entity name="Avatar">
+  <properties>
+    <property name="hp"    type="int32" scope="all_clients" reliable="true" />
+    <property name="gold"  type="int32" scope="base"        persistent="true" />
+    <property name="level" type="int32" scope="own_client" />
+  </properties>
+
+  <client_methods>
+    <method name="ShowDamage">
+      <arg name="amount"     type="int32" />
+      <arg name="attackerId" type="uint32" />
+    </method>
+  </client_methods>
+
+  <base_methods>
+    <method name="UseItem" exposed="own_client">
+      <arg name="itemId" type="int32" />
+    </method>
+  </base_methods>
+</entity>
+```
+
+属性的 `scope` 决定哪些观察者能看到写入：`all_clients`、`own_client`、`other_clients`、`cell_public`、`cell_public_and_own`、`base`、`base_and_client`。`persistent="true"` 接入 DBApp 持久化；`reliable="true"` 走可靠通道下发 delta。
+
+服务端 — 给生成属性赋值会向 scope 内每个观察者发出 delta；`Client.<Method>(...)` 是强类型 stub，自动路由到对应的客户端 RPC。
+
+```csharp
+[Entity("Avatar")]
+public partial class Avatar : ServerEntity
+{
+    public partial void UseItem(int itemId)        // exposed="own_client"
+    {
+        Hp -= 5;                                    // 同步到 all_clients
+        Client.ShowDamage(50, EntityId);            // 服务端 → 拥有者客户端
+    }
+}
+```
+
+客户端 — `OnXxxChanged(old, new)` 是生成的变更钩子；客户端方法的 partial 会在服务端推送时被调用。
+
+```csharp
+[Entity("Avatar")]
+public partial class Avatar : ClientEntity
+{
+    partial void OnHpChanged(int oldValue, int newValue) { /* 响应同步 */ }
+
+    public partial void ShowDamage(int amount, uint attackerId) { /* 处理推送 */ }
+}
+```
+
+容器（`list[T]`、`dict[K,V]`、`list[list[int32]]` …）与用户 `<struct>` 类型同样通过 setter 路径以字段级 / op-log 级别 delta 复制；完整覆盖矩阵参见 `entity_defs/StressAvatar.def` 与 `samples/stress/`。
+
 ## Profiling 与压测
 
 `profile` 预设启用 Tracy instrumentation 与 profiling helpers。默认基线为 200 客户端、120 秒，捕获文件写入 `.tmp/prof/baseline/`。
