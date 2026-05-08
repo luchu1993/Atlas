@@ -2,9 +2,11 @@
 
 **Status:** ✅ 完成。CellAppMgr（注册 / app_id 分配 / BSP 负载均衡 / 死亡
 通知）、Real/Ghost 双模 CellEntity、GhostMaintainer / OffloadChecker、9 条
-inter-cellapp 消息全部落地并接入 cellapp 主循环。`ShouldOffload` (7006) 消息
-结构存在但**当前未使用** — offload 由各 CellApp 本地 OffloadChecker 通过
-BSP 几何驱动，非 mgr 推送。
+inter-cellapp 消息全部落地并接入 cellapp 主循环。`ShouldOffload` (7006)
+**接收端已接线**（cellapp handler 切换 `Cell::should_offload_`，
+OffloadChecker 读该标志决定是否跳过本 Cell），但 **CellAppMgr 侧无发送方** —
+offload 当前由各 CellApp 本地 OffloadChecker 通过 BSP 几何自然驱动，
+mgr 推送链路未连线。
 **前置依赖:** Phase 10 (CellApp 单机)、Phase 9 (BaseAppMgr)
 **BigWorld 参考:** `server/cellapp/real_entity.hpp`,
 `entity_ghost_maintainer.cpp`, `server/cellappmgr/`
@@ -133,7 +135,7 @@ CellApp `3000–3099` 段已被 Phase 10 占用；Phase 11 从 `3100` 起。
 | `SpaceCreatedResult` | 7007 | Mgr → 请求方 | 创建结果回包 |
 | `AddCellToSpace` | 7004 | Mgr → CellApp | 分配 Cell |
 | `UpdateGeometry` | 7005 | Mgr → CellApp | BSP 树 / Cell 边界更新（rebalance 后广播） |
-| `ShouldOffload` | 7006 | Mgr → CellApp | **已定义未使用** — offload 由本地 OffloadChecker 驱动 |
+| `ShouldOffload` | 7006 | Mgr → CellApp | 接收端已接线（切换 `Cell::should_offload_`），但 mgr 侧无发送方 — 由本地 OffloadChecker 自然驱动 |
 | `baseapp::CellAppDeath` | 2026 | Mgr → BaseApp | CellApp 死亡时通知 BaseApp 触发备份恢复，含 `dead_addr` + rehome 列表 |
 
 ## CellApp 死亡处理

@@ -104,8 +104,8 @@ CellApp 接收 RPC 拆分为 `ClientCellRpcForward`（客户端发起，REAL_ONL
 需要 Exposed 校验 + direction 验证 + sourceEntityID 验证）和
 `InternalCellRpc`（来自可信 BaseApp，无需校验）两条消息。合并会需要
 `is_from_client` 标志，标志本身可被错误设置；拆分对齐 BigWorld
-`runExposedMethod` vs `runScriptMethod`，且 Phase 11 引入 Ghost 时两条
-都标记 REAL_ONLY，Ghost 透明转发。
+`runExposedMethod` vs `runScriptMethod`。两条消息都标记 REAL_ONLY，
+Ghost 透明转发到 Real。
 
 四层纵深校验：
 
@@ -135,31 +135,33 @@ CellApp 接收 RPC 拆分为 `ClientCellRpcForward`（客户端发起，REAL_ONL
 
 属性 delta 必须按 `event_seq` 有序到达，**必须走 Reliable**。
 
-### `0xF001` 过渡协议
+### 客户端下行 wire id
 
-Phase 10 首阶段通过 `BaseApp::FlushClientDeltas()` 用
-`DeltaForwarder::kClientDeltaMessageId = 0xF001` 把 `client_delta_forwarders_`
-中的 payload 发给客户端，载荷内含 `CellAoIEnvelope`：
+BaseApp → Client 的 AoI 流量按 `CellAoIEnvelopeKind` 拆到独立 wire id，
+client `on_deliver` 直接按 id 分派，不再共用单条不透明通道：
 
 ```cpp
 enum class CellAoIEnvelopeKind : uint8_t {
-    EntityEnter = 1, EntityLeave = 2,
-    EntityPositionUpdate = 3, EntityPropertyUpdate = 4,
-};
-struct CellAoIEnvelope {
-    CellAoIEnvelopeKind kind;
-    EntityID public_entity_id;     // 当前阶段使用 base_entity_id
-    std::vector<std::byte> payload;
+    kEntityEnter = 1,           // type_id + pos/dir + on_ground + server_time + peer snapshot
+    kEntityLeave = 2,           // empty
+    kEntityPositionUpdate = 3,  // pos/dir/on_ground + server_time
+    kEntityPropertyUpdate = 4,  // event_seq + audience-filtered delta bytes
 };
 ```
 
-**约束：** `DeltaForwarder` 是 latest-wins，不能承载有序属性 delta。
-属性 delta 改走 `ReplicatedReliableDeltaFromCell` (2017)（Reliable，BaseApp
-侧直达 client channel，不经 `DeltaForwarder`）；Volatile 位置走
-`ReplicatedDeltaFromCell` (2015) → `DeltaForwarder` → `0xF001`。
+| Wire id | 可靠性 | 承载内容 |
+|---|---|---|
+| `kClientDeltaMessageId` (`0xF001`) | Unreliable | volatile 位置 / 朝向（`kEntityPositionUpdate`） |
+| `kClientBaselineMessageId` (`0xF002`) | Reliable | owner 基线快照（兜底 UDP 丢包） |
+| `kClientReliableDeltaMessageId` (`0xF003`) | Reliable | 有序属性 delta、enter/leave 信封（`kEntityEnter` / `kEntityLeave` / `kEntityPropertyUpdate`） |
+| `kClientRpcMessageId` (`0xF004`) | Reliable | client-bound RPC envelope |
 
-Phase 12 落地真实客户端协议后，由 BaseApp 在下行前解包 `CellAoIEnvelope`；
-当前 client 仍以 `0xF001` opaque envelope 路径接收（`src/client/client_app.cc`）。
+**路径：** Volatile 位置走 `ReplicatedDeltaFromCell` (2015) →
+`DeltaForwarder`（latest-wins）→ `0xF001`；属性 delta 与 enter/leave
+信封走 `ReplicatedReliableDeltaFromCell` (2017) → BaseApp 直达 client
+channel（不经 `DeltaForwarder`）→ `0xF003`；owner 基线走
+`ReplicatedBaselineFromCell` (2019) → `0xF002`。client `on_deliver` 按
+wire id 直接分派到 `ClientCallbacks.DeliverFromServer`。
 
 ## Tick 内并发 / 重入约束
 
