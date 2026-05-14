@@ -2,25 +2,36 @@ using UnityEngine;
 
 namespace Atlas.Mvp.Unity
 {
-    // Visualizes the server AABB AoI from range_trigger.cc IsXInRange && IsZInRange.
-    // Inner = enter boundary, outer = enter + hysteresis (leave boundary).
     public sealed class AoIDebugRing : MonoBehaviour
     {
         const float kLineWidth = 0.15f;
+        public static bool Visible { get; private set; }
         Transform _boxRoot = null!;
+
+        public static void SetVisible(bool visible)
+        {
+            Visible = visible;
+            foreach (var ring in FindObjectsByType<AoIDebugRing>(FindObjectsSortMode.None))
+                ring.ApplyVisibility();
+        }
 
         public void Configure(float innerRadius, float outerRadius, Color innerColor, Color outerColor)
         {
-            // Parent-less root keeps world rotation identity regardless of owner yaw.
             var root = new GameObject($"AoIBoxes.{name}");
             _boxRoot = root.transform;
             BuildBox(_boxRoot, "Inner", innerRadius, innerColor);
             BuildBox(_boxRoot, "Outer", outerRadius, outerColor);
+            ApplyVisibility();
         }
 
         void Update()
         {
             if (_boxRoot != null) _boxRoot.position = transform.position;
+        }
+
+        void ApplyVisibility()
+        {
+            if (_boxRoot != null) _boxRoot.gameObject.SetActive(Visible);
         }
 
         void OnDestroy()

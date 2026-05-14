@@ -1,7 +1,6 @@
 #!/usr/bin/env bash
-# Cluster preset for the samples/mvp/ demo. Wraps run_world_stress.py with
-# --clients 0 --keep-cluster + points the BaseApp / CellApp at the Mvp
-# script assemblies instead of the stress-test ones.
+# Cluster preset for samples/mvp; wraps run_world_stress.py with --clients 0
+# --keep-cluster and Mvp BaseApp / CellApp script assemblies.
 set -euo pipefail
 
 usage() {
@@ -51,4 +50,5 @@ exec "${PYTHON}" "${SCRIPT_DIR}/../cluster_control/run_world_stress.py" \
     --baseapp-update-hertz 20 \
     --clients         0 \
     --keep-cluster \
+    --load-refresh-sec 0 \
     "${EXTRA[@]}"

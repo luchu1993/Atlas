@@ -44,11 +44,14 @@ namespace Atlas.Mvp.Unity
                 _bg.Apply();
             }
             const float w = 150f;
-            const float h = 50f;
+            const float h = 74f;
             var rect = new Rect(Screen.width - w - 6f, 6f, w, h);
             GUI.DrawTexture(rect, _bg);
             var inner = new Rect(rect.x + 8f, rect.y + 4f, rect.width - 16f, rect.height - 8f);
             GUI.Label(inner, $"fps  {_fps:F0}\nping {_rttMs}ms", _style);
+            var toggleRect = new Rect(inner.x, inner.y + 44f, inner.width, 22f);
+            bool showAoi = GUI.Toggle(toggleRect, AoIDebugRing.Visible, "show AoI");
+            if (showAoi != AoIDebugRing.Visible) AoIDebugRing.SetVisible(showAoi);
         }
     }
 }

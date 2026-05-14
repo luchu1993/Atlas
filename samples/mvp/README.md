@@ -21,7 +21,7 @@ base + cell, `Npc` is cell-only.
 
 ## Prerequisites
 
-- Unity Hub + Unity 6 LTS (project pinned to `6000.0.40f1`)
+- Unity Hub + Unity 6 LTS (project pinned to `6000.0.28f1c1`)
 - .NET 10 SDK
 - CMake + Ninja (build helper provisions Ninja on demand)
 - Windows: MSVC 2022 (build helper loads env). Linux/macOS: clang or gcc.
@@ -41,12 +41,31 @@ tools\bin\setup_mvp_unity.bat
 tools/bin/run_mvp_cluster.sh
 tools\bin\run_mvp_cluster.bat
 
-# 4. Open samples/mvp/UnityClient in Unity Hub, wait for asset import,
-#    add Bootstrap.cs to an empty GameObject in a new scene, hit Play.
+# 4. Open samples/mvp/UnityClient in Unity Hub and hit Play.
 ```
 
 LoginApp port defaults to `20018` on both sides. Cluster runs cellapp /
-baseapp at 20 Hz (50 ms tick).
+baseapp at 20 Hz (50 ms tick). `UnityClient/Assets/Scenes/Main.unity`
+already contains the runtime `Bootstrap` object.
+
+## Package the Unity client
+
+```bash
+# One-shot staging + Unity batchmode player build.
+tools/bin/build_mvp_unity.sh
+tools\bin\build_mvp_unity.bat
+
+# If assets are already staged, skip the setup phase.
+tools/bin/build_mvp_unity.sh --skip-setup --clean-output
+tools\bin\build_mvp_unity.bat --skip-setup --clean-output
+```
+
+The script discovers the Unity executable from `--unity`, `UNITY_EXE`,
+`UNITY_PATH`, then the Unity Hub install path for the pinned project version.
+Default Windows output is `out/mvp-unity/windows/AtlasMvp.exe`; logs land at
+`out/mvp-unity/unity-build.log`. Pass `--target StandaloneLinux64` or
+`--target StandaloneOSX` for non-Windows players. Standalone builds launch in a
+resizable window.
 
 ## Controls
 
@@ -54,8 +73,7 @@ baseapp at 20 Hz (50 ms tick).
 |---|---|
 | **W A S D** | Move (camera-relative; W = camera forward) |
 | **Mouse — right-button hold** | Orbit camera (yaw + pitch ±25°/60°), cursor locked |
-| **Mouse — scroll wheel** | Zoom (0.5×–6×) |
-| **Mouse — left click** | Cast skill on nearest target in 30 m (10 dmg) |
+| **Mouse — scroll wheel** | Zoom (0.5×–12×) |
 | **Space** | Fire projectile in facing direction (10 dmg on hit) |
 
 When the player walks, the camera yaw smoothly catches up to the avatar's
@@ -75,8 +93,9 @@ oriented forward so the camera-follow loop stays stable.
   position so hit FX lands where damage was applied.
 - **HUD**: per-entity name + HP label projected to screen via
   `LabelOverlay`; damage popups float up from the strike point and fade.
-  Top-right shows fps / ping. Green box = AoI enter boundary (50 m),
-  yellow box = leave boundary (55 m, hysteresis).
+  Top-right shows fps / ping and a `show AoI` toggle. AoI debug is hidden by
+  default; when enabled, green box = enter boundary (50 m) and yellow box =
+  leave boundary (55 m, hysteresis).
 
 ## Architecture in one paragraph
 
@@ -89,8 +108,7 @@ scatter 50 NPCs. `Avatar.OnInit` on the base side sets a 50 m AoI radius,
 so the client streams in everything within reach. Movement is client-
 authoritative: `PlayerInputController` writes `transform.position` from
 WASD each frame and reports to the cell at 20 Hz via
-`Avatar.Cell.ReportPos`. Skill and projectile damage are server-
-authoritative: `CastSkill` deals damage directly, `LaunchProjectile`
+`Avatar.Cell.ReportPos`. Projectile damage is server-authoritative: `LaunchProjectile`
 registers a shot in the per-space `ProjectileSimulator` which integrates
 each cellapp tick and broadcasts `OnProjectileFired` / `OnProjectileEnded`
 RPCs so all clients in AoI render a synchronised arc. Property
@@ -110,7 +128,9 @@ replication (HP, NpcType, etc.) rides the normal delta pump.
 ## Troubleshooting
 
 - **Unity compile errors about missing `Atlas.Mvp.Client`** — you forgot
-  to run `setup_mvp_unity` before opening the project.
+  to run `setup_mvp_unity`, or run `build_mvp_unity` without `--skip-setup`.
+- **`build_mvp_unity` cannot find Unity** — pass `--unity <Unity.exe>` or set
+  `UNITY_EXE` to the editor version pinned in `ProjectSettings/ProjectVersion.txt`.
 - **`Login failed: BadCredentials`** — LoginApp's `accept_any_user` is off
   in your loginapp config. Either enable it for dev or pre-create the user.
 - **No NPCs visible** — check the server log for

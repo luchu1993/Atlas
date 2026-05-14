@@ -29,7 +29,7 @@ namespace Atlas.Mvp.Unity
         [SerializeField] float pitchMax = 60f;
         [SerializeField] float initialPitch = 15f;
         [SerializeField] float zoomMin = 0.5f;
-        [SerializeField] float zoomMax = 6f;
+        [SerializeField] float zoomMax = 12f;
         [SerializeField] float zoomStep = 0.1f;
         // Inspector slot for the grid material; null falls back to plain gray.
         [SerializeField] Material groundMaterial = null!;
@@ -166,7 +166,6 @@ namespace Atlas.Mvp.Unity
                 // Owner may switch via EntityTransferred (Account → Avatar handoff).
                 _ownerEntityId = entity.EntityId;
                 go.AddComponent<PlayerInputController>().Bind(avatar, _net);
-                go.AddComponent<AttackInputController>().Bind(avatar);
                 // Inner = enter boundary, outer = enter + hysteresis (leave boundary).
                 go.AddComponent<AoIDebugRing>().Configure(
                     50f, 55f,

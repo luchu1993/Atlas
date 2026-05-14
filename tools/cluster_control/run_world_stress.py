@@ -71,6 +71,12 @@ def parse_args() -> argparse.Namespace:
         default="aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
     )
     parser.add_argument("--keep-cluster", action="store_true")
+    parser.add_argument(
+        "--load-refresh-sec",
+        type=float,
+        default=2.0,
+        help="Seconds between keep-cluster process-list refreshes; 0 disables refresh.",
+    )
     parser.add_argument("--base-assembly", default=None,
                         help="Override BaseApp script DLL (default: "
                              "bin/<build>/Atlas.StressTest.Base.dll)")
@@ -142,6 +148,15 @@ def log(message: str, *, stream: object = sys.stdout) -> None:
 
 def fail(message: str) -> NoReturn:
     raise RuntimeError(message)
+
+
+def print_registered_processes(atlas_tool: Path, machined_address: str, repo_root: Path) -> None:
+    subprocess.run(
+        [str(atlas_tool), "--machined", machined_address, "list"],
+        cwd=repo_root,
+        check=False,
+        env=_dll_env(atlas_tool),
+    )
 
 
 def scan_cellapp_audits(log_dir: Path) -> list[str]:
@@ -1057,12 +1072,7 @@ def main() -> int:
         else:
             log("")
             log("Registered processes:")
-            subprocess.run(
-                [str(atlas_tool), "--machined", machined_address, "list"],
-                cwd=repo_root,
-                check=False,
-                env=_dll_env(atlas_tool),
-            )
+            print_registered_processes(atlas_tool, machined_address, repo_root)
             log("")
 
         # Start Tracy captures for requested processes (after all are registered).
@@ -1082,14 +1092,25 @@ def main() -> int:
         try:
             if not worker_plan:
                 if args.keep_cluster:
-                    log("No stress workers scheduled; cluster running. Ctrl+C to stop.")
+                    refresh_sec = args.load_refresh_sec
+                    if refresh_sec > 0:
+                        log(
+                            "No stress workers scheduled; cluster running. "
+                            f"Refreshing LOAD every {max(0.5, refresh_sec):g}s. Ctrl+C to stop."
+                        )
+                    else:
+                        log("No stress workers scheduled; cluster running. Ctrl+C to stop.")
                     try:
                         while True:
-                            time.sleep(60)
+                            if refresh_sec <= 0:
+                                time.sleep(3600)
+                                continue
+                            time.sleep(max(0.5, refresh_sec))
+                            log("")
+                            log("Registered processes:")
+                            print_registered_processes(atlas_tool, machined_address, repo_root)
                     except KeyboardInterrupt:
                         log("Interrupted; shutting cluster down...")
-                        # Force the post-block cleanup path: skip the keep_cluster
-                        # gate below so the outer finally tears down processes.
                         args.keep_cluster = False
                 else:
                     log(

@@ -8,7 +8,6 @@ namespace Atlas.Mvp.Cell;
 public partial class Avatar : CellServerEntity, IDamageable
 {
     private const int kInitialHp = 100;
-    private const int kSkillDamage = 10;
     private const float kRespawnSeconds = 3.0f;
     private const float kProjectileHorizSpeed = 12f;
     private const float kProjectileUpSpeed = 4f;
@@ -49,15 +48,6 @@ public partial class Avatar : CellServerEntity, IDamageable
         if (_isDead) return;
         Position = pos;
         Direction = dir;
-    }
-
-    public partial void CastSkill(int skillId, uint targetId)
-    {
-        if (_isDead) return;
-        var target = EntityManager.Instance.Get(targetId) as IDamageable;
-        if (target == null) return;
-        target.Hp -= kSkillDamage;
-        target.BroadcastDamage(kSkillDamage, EntityId);
     }
 
     public partial void LaunchProjectile(Vector3 forward)

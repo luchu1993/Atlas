@@ -40,4 +40,5 @@ python "%~dp0..\cluster_control\run_world_stress.py" ^
     --cellapp-update-hertz 20 ^
     --baseapp-update-hertz 20 ^
     --clients         0 ^
-    --keep-cluster %EXTRA%
+    --keep-cluster ^
+    --load-refresh-sec 0 %EXTRA%

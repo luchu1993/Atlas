@@ -38,10 +38,6 @@
       <arg name="pos" type="vector3" />
       <arg name="dir" type="vector3" />
     </method>
-    <method name="CastSkill" exposed="own_client">
-      <arg name="skillId"  type="int32" />
-      <arg name="targetId" type="uint32" />
-    </method>
     <method name="LaunchProjectile" exposed="own_client">
       <arg name="forward" type="vector3" />
     </method>
