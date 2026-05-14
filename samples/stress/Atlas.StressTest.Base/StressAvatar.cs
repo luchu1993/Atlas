@@ -10,6 +10,6 @@ namespace Atlas.StressTest.Base;
 // users.IsDefaultOrEmpty) return;"). Base-side scripts never run Echo /
 // ReportPos — those are cell methods, implemented in the .Cell assembly.
 [Entity("StressAvatar")]
-public partial class StressAvatar : ServerEntity
+public partial class StressAvatar : BaseServerEntity
 {
 }

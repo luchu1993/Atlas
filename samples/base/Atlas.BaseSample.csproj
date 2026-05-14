@@ -2,7 +2,6 @@
 
   <PropertyGroup>
     <TargetFramework>$(AtlasTargetFramework)</TargetFramework>
-    <Nullable>enable</Nullable>
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
     <RootNamespace>Atlas.BaseSample</RootNamespace>
     <!-- Process context: this project compiles for the BaseApp process -->

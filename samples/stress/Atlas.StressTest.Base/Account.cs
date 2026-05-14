@@ -9,7 +9,7 @@ namespace Atlas.StressTest.Base;
 // StressAvatar (has_cell=true), and the client proxy is handed over to
 // the new avatar so subsequent cell RPCs target it.
 [Entity("Account")]
-public partial class Account : ServerEntity
+public partial class Account : BaseServerEntity
 {
     public partial void RequestAvatarList()
     {

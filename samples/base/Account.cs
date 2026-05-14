@@ -4,7 +4,7 @@ using Atlas.Entity;
 namespace Atlas.BaseSample;
 
 [Entity("Account")]
-public partial class Account : ServerEntity
+public partial class Account : BaseServerEntity
 {
     // Generated from Account.def (base_methods, exposed):
     //   public partial void RequestAvatarList();

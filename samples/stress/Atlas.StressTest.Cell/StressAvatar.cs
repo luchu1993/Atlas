@@ -13,7 +13,7 @@ namespace Atlas.StressTest.Cell;
 // state still flows through the auto-generated property setters, which
 // the timer component drives through the typed accessors.
 [Entity("StressAvatar")]
-public partial class StressAvatar : ServerEntity
+public partial class StressAvatar : CellServerEntity
 {
     protected override void OnInit(bool isReload)
     {
