@@ -15,26 +15,36 @@
       <arg name="amount"     type="int32" />
       <arg name="attackerId" type="uint32" />
     </method>
-    <method name="ShowHeal">
-      <arg name="amount" type="int32" />
+    <method name="OnDied">
+      <arg name="attackerId" type="uint32" />
+    </method>
+    <method name="OnRespawned">
+      <arg name="pos" type="vector3" />
+    </method>
+    <method name="OnProjectileFired">
+      <arg name="shotId"   type="uint32" />
+      <arg name="origin"   type="vector3" />
+      <arg name="velocity" type="vector3" />
+    </method>
+    <method name="OnProjectileEnded">
+      <arg name="shotId"      type="uint32" />
+      <arg name="endPos"      type="vector3" />
+      <arg name="hitTargetId" type="uint32" />
     </method>
   </client_methods>
 
   <cell_methods>
+    <method name="ReportPos" exposed="own_client">
+      <arg name="pos" type="vector3" />
+      <arg name="dir" type="vector3" />
+    </method>
     <method name="CastSkill" exposed="own_client">
       <arg name="skillId"  type="int32" />
       <arg name="targetId" type="uint32" />
     </method>
-    <method name="OnEnterRegion">
-      <arg name="regionId" type="int32" />
+    <method name="LaunchProjectile" exposed="own_client">
+      <arg name="forward" type="vector3" />
     </method>
   </cell_methods>
-
-  <base_methods>
-    <method name="UseItem" exposed="own_client">
-      <arg name="itemId" type="int32" />
-    </method>
-    <method name="OnPlayerDead" />
-  </base_methods>
 
 </entity>

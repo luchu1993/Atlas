@@ -1,0 +1,37 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFrameworks>netstandard2.1;net10.0</TargetFrameworks>
+    <LangVersion>latest</LangVersion>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <RootNamespace>Atlas.Mvp.Client</RootNamespace>
+    <AssemblyName>Atlas.Mvp.Client</AssemblyName>
+    <DefineConstants>ATLAS_CLIENT</DefineConstants>
+    <EmitCompilerGeneratedFiles>true</EmitCompilerGeneratedFiles>
+    <CompilerGeneratedFilesOutputPath>$(BaseIntermediateOutputPath)generated</CompilerGeneratedFilesOutputPath>
+  </PropertyGroup>
+
+  <PropertyGroup Condition="'$(TargetFramework)' == 'net10.0'">
+    <GenerateRuntimeConfigurationFiles>true</GenerateRuntimeConfigurationFiles>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\..\src\csharp\Atlas.Client\Atlas.Client.csproj" />
+    <ProjectReference Include="..\..\..\src\csharp\Atlas.Generators.Def\Atlas.Generators.Def.csproj"
+                      OutputItemType="Analyzer"
+                      ReferenceOutputAssembly="false" />
+  </ItemGroup>
+
+  <ItemGroup Condition="'$(TargetFramework)' == 'net10.0'">
+    <ProjectReference Include="..\..\..\src\csharp\Atlas.Client.Desktop\Atlas.Client.Desktop.csproj" />
+    <ProjectReference Include="..\..\..\src\csharp\Atlas.ClrHost\Atlas.ClrHost.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <AdditionalFiles Include="..\..\..\entity_defs\entity_ids.xml" />
+    <AdditionalFiles Include="..\..\..\entity_defs\Account.def" />
+    <AdditionalFiles Include="..\..\..\entity_defs\Avatar.def" />
+    <AdditionalFiles Include="..\..\..\entity_defs\Npc.def" />
+  </ItemGroup>
+
+</Project>

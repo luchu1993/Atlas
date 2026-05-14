@@ -7,7 +7,6 @@
   </properties>
 
   <base_methods>
-    <method name="RequestAvatarList" exposed="own_client" />
     <method name="SelectAvatar" exposed="own_client">
       <arg name="avatarIndex" type="int32" />
     </method>

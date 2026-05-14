@@ -14,4 +14,6 @@
   <entity name="Account"      id="1"/>
   <entity name="Avatar"       id="2"/>
   <entity name="StressAvatar" id="3"/>
+  <entity name="Npc" id="4"/>
+  <entity name="Projectile" id="5" deprecated="true"/>
 </entity_ids>

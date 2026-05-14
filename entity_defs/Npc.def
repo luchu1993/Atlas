@@ -1,0 +1,25 @@
+<entity name="Npc" has_base="false">
+
+  <properties>
+    <property name="hp"      type="int32" scope="all_clients" reliable="true" />
+    <property name="npcType" type="int32" scope="all_clients" />
+  </properties>
+
+  <client_methods>
+    <method name="ShowDamage">
+      <arg name="amount"     type="int32" />
+      <arg name="attackerId" type="uint32" />
+    </method>
+    <method name="OnProjectileFired">
+      <arg name="shotId"   type="uint32" />
+      <arg name="origin"   type="vector3" />
+      <arg name="velocity" type="vector3" />
+    </method>
+    <method name="OnProjectileEnded">
+      <arg name="shotId"      type="uint32" />
+      <arg name="endPos"      type="vector3" />
+      <arg name="hitTargetId" type="uint32" />
+    </method>
+  </client_methods>
+
+</entity>
