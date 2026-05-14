@@ -34,9 +34,4 @@ public partial class Account : ClientEntity
     {
         Log.Info($"[Account:{EntityId}] OnDestroy");
     }
-
-    // RequestAvatarList is declared in Account.def but the stress harness
-    // doesn't use it. Generator still requires a partial-method body on
-    // the client side (base method exposed=own_client → Send stub on
-    // client). No-op.
 }

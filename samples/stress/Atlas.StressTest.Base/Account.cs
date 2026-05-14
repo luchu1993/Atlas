@@ -11,11 +11,6 @@ namespace Atlas.StressTest.Base;
 [Entity("Account")]
 public partial class Account : BaseServerEntity
 {
-    public partial void RequestAvatarList()
-    {
-        Log.Info($"[StressTest.Base] Account.RequestAvatarList entity={EntityId}");
-    }
-
     public partial void SelectAvatar(int avatarIndex)
     {
         // world_stress encodes the desired space_id into avatarIndex so
