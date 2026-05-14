@@ -137,15 +137,21 @@ public sealed class DefGenerator : IIncrementalGenerator
         var manifest = DefGeneratorHelpers.ResolveManifest(manifestSources, spc);
         var typeIndexMap = DefGeneratorHelpers.BuildTypeIndexMap(defs, manifest, spc);
 
-        // Determine base class name based on context
+        // Pick the partial-class base by process: cell scripts see Position /
+        // DestroySelf, base scripts see GiveClientTo / SetAoIRadius, neither
+        // sees both. Server / unknown context falls back to ServerEntity.
         var baseClass = ctx switch
         {
             ProcessContext.Client => "Atlas.Client.ClientEntity",
+            ProcessContext.Base => "Atlas.Entity.BaseServerEntity",
+            ProcessContext.Cell => "Atlas.Entity.CellServerEntity",
             _ => "Atlas.Entity.ServerEntity",
         };
         var baseClassShort = ctx switch
         {
             ProcessContext.Client => "ClientEntity",
+            ProcessContext.Base => "BaseServerEntity",
+            ProcessContext.Cell => "CellServerEntity",
             _ => "ServerEntity",
         };
 

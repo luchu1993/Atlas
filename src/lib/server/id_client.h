@@ -1,5 +1,5 @@
-#ifndef ATLAS_SERVER_BASEAPP_ID_CLIENT_H_
-#define ATLAS_SERVER_BASEAPP_ID_CLIENT_H_
+#ifndef ATLAS_LIB_SERVER_ID_CLIENT_H_
+#define ATLAS_LIB_SERVER_ID_CLIENT_H_
 
 #include <cstdint>
 #include <deque>
@@ -46,4 +46,4 @@ class IDClient {
 
 }  // namespace atlas
 
-#endif  // ATLAS_SERVER_BASEAPP_ID_CLIENT_H_
+#endif  // ATLAS_LIB_SERVER_ID_CLIENT_H_

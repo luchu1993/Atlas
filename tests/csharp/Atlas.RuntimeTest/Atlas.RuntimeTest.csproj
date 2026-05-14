@@ -2,7 +2,6 @@
 
   <PropertyGroup>
     <TargetFramework>$(AtlasTargetFramework)</TargetFramework>
-    <Nullable>enable</Nullable>
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
     <AssemblyName>Atlas.RuntimeTest</AssemblyName>
     <RootNamespace>Atlas.RuntimeTest</RootNamespace>

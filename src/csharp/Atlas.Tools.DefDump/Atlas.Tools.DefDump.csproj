@@ -3,7 +3,6 @@
   <PropertyGroup>
     <TargetFramework>$(AtlasTargetFramework)</TargetFramework>
     <OutputType>Exe</OutputType>
-    <Nullable>enable</Nullable>
     <RootNamespace>Atlas.Tools.DefDump</RootNamespace>
     <AssemblyName>Atlas.Tools.DefDump</AssemblyName>
   </PropertyGroup>

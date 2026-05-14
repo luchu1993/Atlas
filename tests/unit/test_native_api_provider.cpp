@@ -60,12 +60,24 @@ struct MockProvider final : public INativeApiProvider {
   void WriteToDb(uint32_t, const std::byte*, int32_t) override {}
   void GiveClientTo(uint32_t, uint32_t) override {}
   auto CreateBaseEntity(uint16_t, uint32_t) -> uint32_t override { return 0; }
+  auto CreateLocalCellEntity(uint16_t, uint32_t, float, float, float, float, float, float, bool)
+      -> uint32_t override {
+    return 0;
+  }
+  void DestroyCellEntity(uint32_t) override {}
+  auto RequestSpawnCellOnly(uint16_t, uint32_t, float, float, float, float, float, float, bool)
+      -> bool override {
+    return false;
+  }
   void SetAoIRadius(uint32_t, float, float) override {}
   void SetNativeCallbacks(const void*, int32_t) override {}
 
   // CellApp-specific no-op overrides — mock doesn't exercise these, it
   // just needs to stay concrete as INativeApiProvider evolves.
   void SetEntityPosition(uint32_t, float, float, float) override {}
+  void SetEntityDirection(uint32_t, float, float, float) override {}
+  void GetEntityPosition(uint32_t, float& x, float& y, float& z) override { x=y=z=0; }
+  void GetEntityDirection(uint32_t, float& x, float& y, float& z) override { x=y=z=0; }
   void PublishReplicationFrame(uint32_t, uint64_t, uint64_t, const std::byte*, int32_t,
                                const std::byte*, int32_t, const std::byte*, int32_t,
                                const std::byte*, int32_t) override {}
@@ -206,9 +218,14 @@ TEST(BaseNativeProvider, LogMessageRoutesToAtlasLog) {
   }
 }
 
-TEST(BaseNativeProvider, DefaultTimeStubs) {
+TEST(BaseNativeProvider, ServerTimeAdvances) {
   ConcreteProvider p;
-  EXPECT_DOUBLE_EQ(p.ServerTime(), 0.0);
+  double t0 = p.ServerTime();
+  // Scripts time death/respawn etc against Atlas.Time.ServerTime, so the
+  // base impl must NOT return a stub zero. Two reads must be monotonic.
+  EXPECT_GT(t0, 0.0);
+  EXPECT_GE(p.ServerTime(), t0);
+  // DeltaTime has no per-frame source at the base level; stays 0.
   EXPECT_FLOAT_EQ(p.DeltaTime(), 0.0f);
 }
 

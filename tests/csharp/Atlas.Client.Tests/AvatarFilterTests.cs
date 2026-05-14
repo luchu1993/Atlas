@@ -6,9 +6,15 @@ namespace Atlas.Client.Tests
 {
     public class AvatarFilterTests
     {
-        private static AvatarFilter Make(double interval = 0.1)
+        // Injectable clock so TryEvaluate is deterministic without sleeping.
+        private sealed class Clock
         {
-            return new AvatarFilter
+            public double Now;
+        }
+
+        private static AvatarFilter Make(Clock clock, double interval = 0.1)
+        {
+            return new AvatarFilter(() => clock.Now)
             {
                 LatencyFrames = 3.0,
                 ServerInterval = interval,
@@ -20,16 +26,19 @@ namespace Atlas.Client.Tests
         [Fact]
         public void EmptyBufferEvaluatesFalse()
         {
-            var f = Make();
-            Assert.False(f.TryEvaluate(0, out _, out _, out _));
+            var clock = new Clock();
+            var f = Make(clock);
+            Assert.False(f.TryEvaluate(out _, out _, out _));
         }
 
         [Fact]
         public void SingleSampleClampsToInput()
         {
-            var f = Make();
+            var clock = new Clock { Now = 0.0 };
+            var f = Make(clock);
             f.Input(0.0, new Vector3(1, 2, 3), Vector3.Forward, onGround: true);
-            Assert.True(f.TryEvaluate(0.05, out var pos, out _, out var onGround));
+            clock.Now = 0.05;
+            Assert.True(f.TryEvaluate(out var pos, out _, out var onGround));
             Assert.Equal(1f, pos.X);
             Assert.True(onGround);
         }
@@ -37,7 +46,8 @@ namespace Atlas.Client.Tests
         [Fact]
         public void OutOfOrderInputDropped()
         {
-            var f = Make();
+            var clock = new Clock();
+            var f = Make(clock);
             f.Input(1.0, new Vector3(10, 0, 0), Vector3.Right, false);
             f.Input(0.5, new Vector3(99, 99, 99), Vector3.Right, false);
             Assert.Equal(1, f.SampleCount);
@@ -46,7 +56,8 @@ namespace Atlas.Client.Tests
         [Fact]
         public void RingOverwritesOldestPastCapacity()
         {
-            var f = Make();
+            var clock = new Clock();
+            var f = Make(clock);
             for (int i = 0; i < AvatarFilter.RingCapacity + 4; ++i)
                 f.Input(i * 0.1, new Vector3(i, 0, 0), Vector3.Right, false);
             Assert.Equal(AvatarFilter.RingCapacity, f.SampleCount);
@@ -55,19 +66,23 @@ namespace Atlas.Client.Tests
         [Fact]
         public void InterpolatesBetweenBracketingSamples()
         {
-            var f = Make();
+            var clock = new Clock { Now = 0.0 };
+            var f = Make(clock);
             f.Input(0.0, new Vector3(0, 0, 0), Vector3.Forward, false);
             f.Input(0.1, new Vector3(10, 0, 0), Vector3.Forward, false);
 
-            double clientTime = 0.05 + f.CurrentLatency;
-            Assert.True(f.TryEvaluate(clientTime, out var pos, out _, out _));
+            // targetTime = wallNow - offset - latency; first Input seeds offset
+            // to wallNow-serverTime so targetTime = serverTime - latency.
+            clock.Now = 0.05 + f.CurrentLatency;
+            Assert.True(f.TryEvaluate(out var pos, out _, out _));
             Assert.InRange(pos.X, 4.99f, 5.01f);
         }
 
         [Fact]
         public void LatencyConvergesTowardsTarget()
         {
-            var f = Make(interval: 0.1);
+            var clock = new Clock();
+            var f = Make(clock, interval: 0.1);
             f.Input(0.0, Vector3.Zero, Vector3.Forward, false);
             double startLatency = f.CurrentLatency;
             f.LatencyFrames = 6.0;
@@ -79,25 +94,28 @@ namespace Atlas.Client.Tests
         [Fact]
         public void ExtrapolationRespectsCap()
         {
-            var f = Make();
+            var clock = new Clock { Now = 0.0 };
+            var f = Make(clock);
             f.Input(0.0, Vector3.Zero, Vector3.Forward, false);
             f.Input(0.1, new Vector3(100, 0, 0), Vector3.Forward, false);
 
             // Past MaxExtrapolation cap: vel × cap = 1000 × 0.05 = 50 → max X ≈ 150.
-            double futureClient = 1.0 + f.CurrentLatency;
-            Assert.True(f.TryEvaluate(futureClient, out var pos, out _, out _));
+            clock.Now = 1.0 + f.CurrentLatency;
+            Assert.True(f.TryEvaluate(out var pos, out _, out _));
             Assert.InRange(pos.X, 100f, 151f);
         }
 
         [Fact]
         public void ResetClearsState()
         {
-            var f = Make();
+            var clock = new Clock { Now = 0.0 };
+            var f = Make(clock);
             f.Input(0.0, Vector3.One, Vector3.Forward, false);
             f.Input(0.1, Vector3.One * 2, Vector3.Forward, false);
             f.Reset();
             Assert.Equal(0, f.SampleCount);
-            Assert.False(f.TryEvaluate(0.05, out _, out _, out _));
+            clock.Now = 0.05;
+            Assert.False(f.TryEvaluate(out _, out _, out _));
         }
     }
 }

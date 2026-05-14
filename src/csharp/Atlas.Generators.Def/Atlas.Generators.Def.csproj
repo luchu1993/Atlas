@@ -3,7 +3,6 @@
     <TargetFramework>netstandard2.0</TargetFramework>
     <AppendPlatformToOutputPath>false</AppendPlatformToOutputPath>
     <LangVersion>latest</LangVersion>
-    <Nullable>enable</Nullable>
     <EnforceExtendedAnalyzerRules>true</EnforceExtendedAnalyzerRules>
     <IsRoslynComponent>true</IsRoslynComponent>
     <RootNamespace>Atlas.Generators.Def</RootNamespace>

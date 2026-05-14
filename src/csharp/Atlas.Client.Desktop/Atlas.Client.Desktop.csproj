@@ -4,7 +4,6 @@
          layer instead of consuming this assembly. -->
     <TargetFramework>$(AtlasTargetFramework)</TargetFramework>
     <LangVersion>latest</LangVersion>
-    <Nullable>enable</Nullable>
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
     <RootNamespace>Atlas.Client</RootNamespace>
     <AssemblyName>Atlas.Client.Desktop</AssemblyName>

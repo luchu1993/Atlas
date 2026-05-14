@@ -10,6 +10,12 @@ namespace Atlas.Client.Unity
         [SerializeField] private string loginappHost = "127.0.0.1";
         [SerializeField] private ushort loginappPort = 20018;
 
+        public void Configure(string host, ushort port)
+        {
+            loginappHost = host;
+            loginappPort = port;
+        }
+
         public event Action<AtlasLoginStatus, string?>? LoginFinished;
         public event Action<bool, uint, ushort, string?>? AuthFinished;
         public event Action<int>? Disconnected;
@@ -25,6 +31,44 @@ namespace Atlas.Client.Unity
         {
             _ctx = AtlasNetNative.Create();
             AtlasNetCallbackBridge.Register(_ctx, this);
+            WireClientHostBridges();
+        }
+
+        // Unity has no DesktopBootstrap; install the ClientHost handler slots
+        // here so generator-emitted Send*Rpc / SetEntityDefDigest reach native.
+        private unsafe void WireClientHostBridges()
+        {
+            var cached = ClientHost.EntityDefDigest;
+            if (cached != null && cached.Length > 0)
+                fixed (byte* p = cached)
+                    AtlasNetNative.AtlasNetSetEntityDefDigest(_ctx, p, cached.Length);
+
+            ClientHost.SetEntityDefDigestHandler = data =>
+            {
+                if (_ctx == IntPtr.Zero || data.IsEmpty) return;
+                fixed (byte* p = data)
+                    AtlasNetNative.AtlasNetSetEntityDefDigest(_ctx, p, data.Length);
+            };
+
+            ClientHost.SendBaseRpcHandler = (entityId, rpcId, payload, _) =>
+            {
+                if (_ctx == IntPtr.Zero) return;
+                fixed (byte* p = payload)
+                    AtlasNetNative.AtlasNetSendBaseRpc(_ctx, entityId, rpcId, p, payload.Length);
+            };
+
+            ClientHost.SendCellRpcHandler = (entityId, rpcId, payload, _) =>
+            {
+                if (_ctx == IntPtr.Zero) return;
+                fixed (byte* p = payload)
+                    AtlasNetNative.AtlasNetSendCellRpc(_ctx, entityId, rpcId, p, payload.Length);
+            };
+
+            // net_client carries no entity-def registry; the no-ops just keep
+            // ClientHost.Required from throwing on the script-DLL boot sweep.
+            ClientHost.RegisterEntityTypeHandler = _ => { };
+            ClientHost.RegisterStructHandler = _ => { };
+            ClientHost.ReportEventSeqGapHandler = (_, _) => { };
         }
 
         private void Update()
@@ -34,12 +78,19 @@ namespace Atlas.Client.Unity
             ClientCallbacks.EntityManager.TickInterpolation(Time.deltaTime);
         }
 
+        public bool TryGetStats(out AtlasNetStats stats)
+        {
+            stats = default;
+            if (_ctx == IntPtr.Zero) return false;
+            return AtlasNetNative.AtlasNetGetStats(_ctx, out stats) == AtlasNetReturnCode.Ok;
+        }
+
         public bool TryGetInterpolatedTransform(uint entityId,
                                                 out Vector3 pos, out Vector3 dir, out bool onGround)
         {
             var entity = ClientCallbacks.EntityManager.Get(entityId);
             if (entity != null &&
-                entity.TryGetInterpolated(Time.timeAsDouble,
+                entity.TryGetInterpolated(
                     out Atlas.DataTypes.Vector3 atlasPos,
                     out Atlas.DataTypes.Vector3 atlasDir,
                     out onGround))
@@ -112,9 +163,7 @@ namespace Atlas.Client.Unity
         {
             string? err = errorUtf8 == IntPtr.Zero
                 ? null : System.Runtime.InteropServices.Marshal.PtrToStringUTF8(errorUtf8);
-            // BaseApp's AuthenticateResult is the only signal that owner exists; net_client
-            // never emits a typed "player base/cell create" message, so the manager spawns
-            // the local entity on auth-success and lets AoI envelopes drive the rest.
+            // AuthenticateResult is the only owner-create signal on the wire.
             if (success != 0)
                 ClientCallbacks.CreateEntity(entityId, typeId);
             AuthFinished?.Invoke(success != 0, entityId, typeId, err);

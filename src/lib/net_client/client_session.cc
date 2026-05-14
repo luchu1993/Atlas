@@ -1,5 +1,6 @@
 #include "net_client/client_session.h"
 
+#include <chrono>
 #include <cstring>
 #include <format>
 #include <utility>
@@ -256,6 +257,28 @@ void ClientSession::CancelAuthTimeout() {
 }
 
 void ClientSession::InstallDefaultHandler() {
+  // Register typed handlers for fixed-length BaseApp->Client messages so the
+  // framing layer reads them by descriptor length; the default handler's
+  // packed-int fallback would misparse the first body byte as a length prefix.
+  (void)network_.InterfaceTable().RegisterTypedHandler<::atlas::baseapp::EntityTransferred>(
+      [this](const Address&, Channel*, const ::atlas::baseapp::EntityTransferred& msg) {
+        uint8_t body[sizeof(uint32_t) + sizeof(uint16_t)];
+        std::memcpy(body, &msg.new_entity_id, sizeof(uint32_t));
+        std::memcpy(body + sizeof(uint32_t), &msg.new_type_id, sizeof(uint16_t));
+        callbacks_.on_deliver(reinterpret_cast<AtlasNetContext*>(this),
+                              static_cast<uint16_t>(
+                                  msg_id::Id(msg_id::BaseApp::kEntityTransferred)),
+                              body, static_cast<int32_t>(sizeof(body)));
+      });
+  (void)network_.InterfaceTable().RegisterTypedHandler<::atlas::baseapp::CellReady>(
+      [this](const Address&, Channel*, const ::atlas::baseapp::CellReady& msg) {
+        uint8_t body[sizeof(uint32_t)];
+        std::memcpy(body, &msg.entity_id, sizeof(uint32_t));
+        callbacks_.on_deliver(reinterpret_cast<AtlasNetContext*>(this),
+                              static_cast<uint16_t>(msg_id::Id(msg_id::BaseApp::kCellReady)),
+                              body, static_cast<int32_t>(sizeof(body)));
+      });
+
   network_.InterfaceTable().SetDefaultHandler(
       [this](const Address&, Channel*, MessageID id, BinaryReader& reader) {
         const uint8_t* payload = nullptr;
@@ -340,6 +363,20 @@ auto ClientSession::SetCallbacks(const AtlasNetCallbacks& cb) -> int32_t {
 auto ClientSession::FillStats(AtlasNetStats* out) const -> int32_t {
   if (!out) return ATLAS_NET_ERR_INVAL;
   std::memset(out, 0, sizeof(*out));
+  // Only read channel state when the session is live. A long Editor pause
+  // can leave the channel pointer dangling after the dispatcher's resume-pump
+  // reaps the timed-out RUDP — accessing it crashes inside dynamic_cast.
+  if (state_ != ATLAS_NET_STATE_CONNECTED && state_ != ATLAS_NET_STATE_AUTHENTICATING &&
+      state_ != ATLAS_NET_STATE_LOGGING_IN && state_ != ATLAS_NET_STATE_LOGIN_SUCCEEDED) {
+    return ATLAS_NET_OK;
+  }
+  Channel* ch = baseapp_channel_ ? baseapp_channel_ : loginapp_channel_;
+  if (ch && !ch->IsCondemned()) {
+    if (auto* rudp = dynamic_cast<ReliableUdpChannel*>(ch)) {
+      out->rtt_ms = static_cast<uint32_t>(
+          std::chrono::duration_cast<std::chrono::milliseconds>(rudp->Rtt()).count());
+    }
+  }
   return ATLAS_NET_OK;
 }
 

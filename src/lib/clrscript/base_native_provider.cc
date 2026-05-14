@@ -1,5 +1,6 @@
 #include "clrscript/base_native_provider.h"
 
+#include <chrono>
 #include <cstddef>
 #include <span>
 #include <string_view>
@@ -22,7 +23,8 @@ void BaseNativeProvider::LogMessage(int32_t level, const char* msg, int32_t len)
 }
 
 double BaseNativeProvider::ServerTime() {
-  return 0.0;
+  using namespace std::chrono;
+  return duration_cast<duration<double>>(steady_clock::now().time_since_epoch()).count();
 }
 
 float BaseNativeProvider::DeltaTime() {
@@ -88,6 +90,26 @@ auto BaseNativeProvider::CreateBaseEntity(uint16_t type_id, uint32_t /*space_id*
   return 0;
 }
 
+auto BaseNativeProvider::CreateLocalCellEntity(uint16_t type_id, uint32_t /*space_id*/,
+                                               float /*pos_x*/, float /*pos_y*/, float /*pos_z*/,
+                                               float /*dir_x*/, float /*dir_y*/, float /*dir_z*/,
+                                               bool /*on_ground*/) -> uint32_t {
+  ATLAS_LOG_ERROR("create_local_cell_entity() only supported on CellApp (type_id={})", type_id);
+  return 0;
+}
+
+void BaseNativeProvider::DestroyCellEntity(uint32_t entity_id) {
+  ATLAS_LOG_ERROR("destroy_cell_entity() only supported on CellApp (entity_id={})", entity_id);
+}
+
+auto BaseNativeProvider::RequestSpawnCellOnly(uint16_t type_id, uint32_t /*space_id*/,
+                                              float /*pos_x*/, float /*pos_y*/, float /*pos_z*/,
+                                              float /*dir_x*/, float /*dir_y*/, float /*dir_z*/,
+                                              bool /*on_ground*/) -> bool {
+  ATLAS_LOG_ERROR("request_spawn_cell_only() only supported on BaseApp (type_id={})", type_id);
+  return false;
+}
+
 void BaseNativeProvider::SetAoIRadius(uint32_t entity_id, float /*radius*/, float /*hysteresis*/) {
   ATLAS_LOG_ERROR("set_aoi_radius() not supported on this process type (entity_id={})", entity_id);
 }
@@ -98,6 +120,24 @@ void BaseNativeProvider::SetEntityPosition(uint32_t entity_id, float /*x*/, floa
                                            float /*z*/) {
   ATLAS_LOG_ERROR("atlas_set_position() not supported on this process type (entity_id={})",
                   entity_id);
+}
+
+void BaseNativeProvider::SetEntityDirection(uint32_t entity_id, float /*x*/, float /*y*/,
+                                            float /*z*/) {
+  ATLAS_LOG_ERROR("atlas_set_direction() not supported on this process type (entity_id={})",
+                  entity_id);
+}
+
+void BaseNativeProvider::GetEntityPosition(uint32_t entity_id, float& x, float& y, float& z) {
+  ATLAS_LOG_ERROR("atlas_get_position() not supported on this process type (entity_id={})",
+                  entity_id);
+  x = 0; y = 0; z = 0;
+}
+
+void BaseNativeProvider::GetEntityDirection(uint32_t entity_id, float& x, float& y, float& z) {
+  ATLAS_LOG_ERROR("atlas_get_direction() not supported on this process type (entity_id={})",
+                  entity_id);
+  x = 0; y = 0; z = 0;
 }
 
 void BaseNativeProvider::PublishReplicationFrame(

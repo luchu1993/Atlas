@@ -20,10 +20,19 @@ class CellAppNativeProvider : public BaseNativeProvider {
  public:
   // Returns nullptr for unknown ids; methods log+skip rather than crash.
   using EntityLookupFn = std::function<CellEntity*(uint32_t entity_id)>;
+  using CreateLocalEntityFn = std::function<uint32_t(uint16_t type_id, uint32_t space_id,
+                                                     float pos_x, float pos_y, float pos_z,
+                                                     float dir_x, float dir_y, float dir_z,
+                                                     bool on_ground)>;
+  using DestroyLocalEntityFn = std::function<void(uint32_t entity_id)>;
 
   // `network` only needed for SendClientRpc (handler tests can omit it).
   explicit CellAppNativeProvider(EntityLookupFn lookup);
   CellAppNativeProvider(EntityLookupFn lookup, NetworkInterface& network);
+
+  // CellApp wires these at startup; tests may inject mocks.
+  void SetCreateLocalEntityFn(CreateLocalEntityFn fn) { create_local_entity_fn_ = std::move(fn); }
+  void SetDestroyLocalEntityFn(DestroyLocalEntityFn fn) { destroy_local_entity_fn_ = std::move(fn); }
 
   uint8_t GetProcessPrefix() override;
 
@@ -32,8 +41,16 @@ class CellAppNativeProvider : public BaseNativeProvider {
   void SendClientRpc(uint32_t entity_id, uint32_t rpc_id, RpcTarget target,
                      const std::byte* payload, int32_t len, uint64_t trace_id) override;
 
+  auto CreateLocalCellEntity(uint16_t type_id, uint32_t space_id, float pos_x, float pos_y,
+                             float pos_z, float dir_x, float dir_y, float dir_z,
+                             bool on_ground) -> uint32_t override;
+  void DestroyCellEntity(uint32_t entity_id) override;
+
   // CellApp-specific surfaces.
   void SetEntityPosition(uint32_t entity_id, float x, float y, float z) override;
+  void SetEntityDirection(uint32_t entity_id, float x, float y, float z) override;
+  void GetEntityPosition(uint32_t entity_id, float& x, float& y, float& z) override;
+  void GetEntityDirection(uint32_t entity_id, float& x, float& y, float& z) override;
   void PublishReplicationFrame(uint32_t entity_id, uint64_t event_seq, uint64_t volatile_seq,
                                const std::byte* owner_snap, int32_t owner_snap_len,
                                const std::byte* other_snap, int32_t other_snap_len,
@@ -70,6 +87,8 @@ class CellAppNativeProvider : public BaseNativeProvider {
 
  private:
   EntityLookupFn lookup_;
+  CreateLocalEntityFn create_local_entity_fn_;
+  DestroyLocalEntityFn destroy_local_entity_fn_;
   NetworkInterface* network_{nullptr};  // null in handler-level tests
   RestoreEntityFn restore_entity_fn_{nullptr};
   DispatchRpcFn dispatch_rpc_fn_{nullptr};

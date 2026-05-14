@@ -1,4 +1,5 @@
 using System;
+using System.Diagnostics;
 using Atlas.DataTypes;
 
 namespace Atlas.Client;
@@ -23,7 +24,11 @@ public sealed class AvatarFilter
 
     public const int RingCapacity = 8;
 
+    private static readonly Stopwatch s_wallClock = Stopwatch.StartNew();
+    private static double DefaultWallNow() => s_wallClock.Elapsed.TotalSeconds;
+
     private readonly Sample[] _ring = new Sample[RingCapacity];
+    private readonly Func<double> _wallNow;
     private int _writeIndex;
     private int _count;
 
@@ -33,12 +38,22 @@ public sealed class AvatarFilter
     public double MaxExtrapolation { get; set; } = 0.05;
 
     private double _latencyCurrent;
-    private double _lastInputServerTime;
+    private double _wallFromServerOffset;
     private bool _initialised;
+
+    // wallNow override is for unit tests; prod path uses the process Stopwatch.
+    public AvatarFilter(Func<double>? wallNow = null)
+    {
+        _wallNow = wallNow ?? DefaultWallNow;
+    }
 
     public int SampleCount => _count;
     public double CurrentLatency => _latencyCurrent;
     public double TargetLatency => LatencyFrames * ServerInterval;
+
+    // Skip the ~1s UpdateLatency ramp — short-lived entities (projectiles)
+    // land before convergence finishes.
+    public void SnapLatencyToTarget() => _latencyCurrent = TargetLatency;
 
     public void Reset()
     {
@@ -56,11 +71,19 @@ public sealed class AvatarFilter
         _writeIndex = (_writeIndex + 1) % RingCapacity;
         if (_count < RingCapacity) _count++;
 
-        _lastInputServerTime = serverTime;
+        // Track wall-clock vs server-clock offset so TryEvaluate can map "now"
+        // back into server-time domain. EMA absorbs network jitter; first sample
+        // seeds the offset directly.
+        double offset = _wallNow() - serverTime;
         if (!_initialised)
         {
+            _wallFromServerOffset = offset;
             _latencyCurrent = TargetLatency;
             _initialised = true;
+        }
+        else
+        {
+            _wallFromServerOffset = 0.95 * _wallFromServerOffset + 0.05 * offset;
         }
     }
 
@@ -78,14 +101,14 @@ public sealed class AvatarFilter
         _latencyCurrent += step;
     }
 
-    public bool TryEvaluate(double clientTime, out Vector3 pos, out Vector3 dir, out bool onGround)
+    public bool TryEvaluate(out Vector3 pos, out Vector3 dir, out bool onGround)
     {
         pos = default;
         dir = default;
         onGround = false;
         if (_count == 0) return false;
 
-        double targetTime = clientTime - _latencyCurrent;
+        double targetTime = _wallNow() - _wallFromServerOffset - _latencyCurrent;
         int newest = NewestIndex();
 
         if (_count == 1 || targetTime >= _ring[newest].ServerTime)

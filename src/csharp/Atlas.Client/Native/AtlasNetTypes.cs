@@ -20,6 +20,7 @@ public enum AtlasLoginStatus : byte
     ServerFull          = 3,
     Timeout             = 4,
     NetworkError        = 5,
+    DefMismatch         = 6,
     InternalError       = 255,
 }
 

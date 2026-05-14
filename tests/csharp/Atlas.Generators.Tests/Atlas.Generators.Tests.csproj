@@ -2,7 +2,6 @@
 
   <PropertyGroup>
     <TargetFramework>$(AtlasTargetFramework)</TargetFramework>
-    <Nullable>enable</Nullable>
     <IsPackable>false</IsPackable>
     <IsTestProject>true</IsTestProject>
     <RootNamespace>Atlas.Generators.Tests</RootNamespace>

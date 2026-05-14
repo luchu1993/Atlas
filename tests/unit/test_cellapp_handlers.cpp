@@ -139,6 +139,47 @@ TEST_F(CellAppHandlersTest, DestroyCellEntityRemovesEntity) {
   EXPECT_EQ(app_.FindSpace(1)->EntityCount(), 0u);
 }
 
+TEST_F(CellAppHandlersTest, CreateLocalEntityMintsIdFromIDClient) {
+  auto& id_client = const_cast<IDClient&>(app_.GetIdClientForTest());
+  id_client.AddIds(500, 600);
+
+  EntityID id = app_.CreateLocalEntity(/*type_id=*/1, /*space_id=*/1, {1, 0, 2},
+                                       {1, 0, 0}, /*on_ground=*/false);
+  ASSERT_NE(id, kInvalidEntityID);
+  auto* real = app_.FindRealEntity(id);
+  ASSERT_NE(real, nullptr);
+  EXPECT_TRUE(real->IsLocal());
+  EXPECT_FLOAT_EQ(real->Position().x, 1.f);
+  EXPECT_FLOAT_EQ(real->Position().z, 2.f);
+}
+
+TEST_F(CellAppHandlersTest, CreateLocalEntityFailsWhenIDClientEmpty) {
+  EntityID id = app_.CreateLocalEntity(1, 1, {0, 0, 0}, {1, 0, 0}, false);
+  EXPECT_EQ(id, kInvalidEntityID);
+}
+
+TEST_F(CellAppHandlersTest, DestroyLocalEntityClearsLocalEntity) {
+  auto& id_client = const_cast<IDClient&>(app_.GetIdClientForTest());
+  id_client.AddIds(500, 600);
+
+  EntityID id = app_.CreateLocalEntity(1, 1, {0, 0, 0}, {1, 0, 0}, false);
+  ASSERT_NE(id, kInvalidEntityID);
+
+  app_.DestroyLocalEntity(id);
+  EXPECT_EQ(app_.FindRealEntity(id), nullptr);
+  EXPECT_EQ(app_.FindSpace(1)->EntityCount(), 0u);
+}
+
+TEST_F(CellAppHandlersTest, DestroyLocalEntityRefusesBaseOwnedEntity) {
+  app_.OnCreateCellEntity({}, nullptr, MakeCreate(200, 1));
+  auto* real = app_.FindRealEntity(200);
+  ASSERT_NE(real, nullptr);
+  ASSERT_FALSE(real->IsLocal());
+
+  app_.DestroyLocalEntity(200);
+  EXPECT_NE(app_.FindRealEntity(200), nullptr);
+}
+
 TEST_F(CellAppHandlersTest, DestroySpaceEvictsEntities) {
   app_.OnCreateCellEntity({}, nullptr, MakeCreate(100, 1));
   app_.OnCreateCellEntity({}, nullptr, MakeCreate(101, 1));

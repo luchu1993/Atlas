@@ -120,77 +120,6 @@ public abstract class ServerEntity
         return false;
     }
 
-    // Transform state — lives on the volatile channel (kEntityPositionUpdate
-    // envelope), not the replicated-property channel. The Position setter
-    // both syncs C++ CellEntity::position_ via AtlasSetEntityPosition (so
-    // AoI triggers see the move in the same tick) and flips
-    // VolatileDirtyCore (so the next BuildAndConsumeReplicationFrame
-    // advances VolatileSeq). Direction / OnGround piggyback on the volatile
-    // seq — Witness reads them directly when volatile_seq advances.
-    public Vector3 Position
-    {
-        get => _position;
-        set
-        {
-            if (_position != value)
-            {
-                _position = value;
-                NativeApi.SetEntityPosition(EntityId, value);
-                _volatileDirty = true;
-            }
-        }
-    }
-
-    public Vector3 Direction
-    {
-        get => _direction;
-        set
-        {
-            if (_direction != value)
-            {
-                _direction = value;
-                _volatileDirty = true;
-            }
-        }
-    }
-
-    public bool OnGround
-    {
-        get => _onGround;
-        set
-        {
-            if (_onGround != value)
-            {
-                _onGround = value;
-                _volatileDirty = true;
-            }
-        }
-    }
-
-    private Vector3 _position;
-    private Vector3 _direction;
-    private bool _onGround;
-
-    /// <summary>
-    /// Mark this entity's position/orientation as dirty for the current tick.
-    /// The next <see cref="BuildAndConsumeReplicationFrame"/> will advance
-    /// <see cref="ReplicationFrame.VolatileSeq"/> and clear this flag.
-    /// <para/>
-    /// Typically called transitively via <see cref="Position"/>/<see cref="Direction"/>/
-    /// <see cref="OnGround"/> setters; scripts rarely need to invoke it
-    /// directly.
-    /// </summary>
-    public void MarkVolatileDirty() => _volatileDirty = true;
-
-    /// <summary>Current volatile-dirty state (exposed for generated code).</summary>
-    protected bool VolatileDirtyCore
-    {
-        get => _volatileDirty;
-        set => _volatileDirty = value;
-    }
-
-    private bool _volatileDirty;
-
     /// <summary>
     /// Slot-bitmap reserved for the future Component pump. Bit N is set
     /// when the Component at slot N has staged a frame's worth of changes.
@@ -357,33 +286,5 @@ public abstract class ServerEntity
     {
         NativeApi.SendBaseRpc(EntityId, (uint)rpcId, payload,
                               (ulong)Atlas.Diagnostics.TraceContext.Current);
-    }
-
-    /// <summary>
-    /// Transfer this entity's client connection to another base entity.
-    /// Typical use: <c>Account.SelectAvatar</c> creates the Avatar then
-    /// calls <c>GiveClientTo(avatar.EntityId)</c> so subsequent client
-    /// RPCs target the avatar. After the call <c>this</c> no longer owns
-    /// the proxy.
-    /// </summary>
-    protected internal void GiveClientTo(uint destEntityId)
-    {
-        NativeApi.GiveClientTo(EntityId, destEntityId);
-    }
-
-    /// <summary>
-    /// Adjust this entity's AoI radius + hysteresis on the cell. Only
-    /// valid for <c>has_cell</c> entity types after a witness has been
-    /// attached (typically after <see cref="GiveClientTo"/> has landed
-    /// and the cell has received the EnableWitness); the call is a
-    /// logged no-op otherwise. The cell side clamps radius to
-    /// <c>[0.1, cellApp/max_aoi_radius]</c> and uses hysteresis as the
-    /// leave-band width (enters fire at <paramref name="radius"/>;
-    /// leaves fire at <c>radius + hysteresis</c>), suppressing boundary
-    /// thrash.
-    /// </summary>
-    public void SetAoIRadius(float radius, float hysteresis = 5f)
-    {
-        NativeApi.SetAoIRadius(EntityId, radius, hysteresis);
     }
 }

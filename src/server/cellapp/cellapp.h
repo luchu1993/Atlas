@@ -7,11 +7,13 @@
 
 #include "cellappmgr/cellappmgr_messages.h"  // cellappmgr::CellID
 #include "coro/pending_rpc_registry.h"
+#include "math/vector3.h"
 #include "network/address.h"
 #include "network/reliable_udp.h"
 #include "server/cellapp_peer_registry.h"
 #include "server/entity_app.h"
 #include "server/entity_types.h"
+#include "server/id_client.h"
 
 namespace atlas {
 
@@ -41,7 +43,12 @@ struct GhostSetReal;
 struct GhostSetNextReal;
 struct OffloadEntity;
 struct OffloadEntityAck;
+struct SpawnLocalEntity;
 }  // namespace cellapp
+
+namespace dbapp {
+struct GetEntityIdsAck;
+}
 
 // Spatial-simulation server process. Inherits from EntityApp (peer of
 // BaseApp) and owns the local Space map plus a single entity index
@@ -95,6 +102,16 @@ class CellApp : public EntityApp {
   void OnGhostSetNextReal(const Address& src, Channel* ch, const cellapp::GhostSetNextReal& msg);
   void OnOffloadEntity(const Address& src, Channel* ch, const cellapp::OffloadEntity& msg);
   void OnOffloadEntityAck(const Address& src, Channel* ch, const cellapp::OffloadEntityAck& msg);
+
+  void OnGetEntityIdsAck(Channel& ch, const dbapp::GetEntityIdsAck& msg);
+
+  // Mints an id from id_client_, places a cell-only CellEntity, restores C#.
+  // Returns kInvalidEntityID when the id pool is empty or space_id is invalid.
+  auto CreateLocalEntity(uint16_t type_id, SpaceID space_id, math::Vector3 pos,
+                         math::Vector3 dir, bool on_ground) -> EntityID;
+
+  // Refuses base-owned entities so base-side bookkeeping can't drift.
+  void DestroyLocalEntity(EntityID entity_id);
 
   void OnAddCellToSpace(const Address& src, Channel* ch, const cellappmgr::AddCellToSpace& msg);
   void OnUpdateGeometry(const Address& src, Channel* ch, const cellappmgr::UpdateGeometry& msg);
@@ -215,9 +232,20 @@ class CellApp : public EntityApp {
   // witness came up via BindClient, Offload arrival, or Offload revert.
   void AttachWitness(CellEntity& entity, float aoi_radius, float hysteresis);
 
+  // Shared spatial-insertion body for OnCreateCellEntity and CreateLocalEntity:
+  // allocates the CellEntity, drops it into the space + owning local Cell.
+  auto PlaceEntityInSpace(EntityID cell_id, uint16_t type_id, Space& space,
+                          math::Vector3 pos, math::Vector3 dir, bool on_ground) -> CellEntity*;
+
+  // Shared teardown body for OnDestroyCellEntity and DestroyLocalEntity.
+  void RemoveEntityFromSpace(CellEntity* entity);
+
   // EWMA update from LastTickWorkDuration() / ExpectedTickPeriod();
   // called every tick from OnTickComplete.
   void UpdatePersistentLoad();
+
+  // Refill water-level pool from DBApp when running low; called per tick.
+  void MaybeRequestMoreIds();
 
   // Sends cellappmgr::InformCellLoad. No-op if not yet registered
   // (cellappmgr_channel_ null or app_id_ == 0).
@@ -245,6 +273,8 @@ class CellApp : public EntityApp {
   // registered; SendInformCellLoad short-circuits while 0.
   uint32_t app_id_{0};
   Channel* cellappmgr_channel_{nullptr};
+  Channel* dbapp_channel_{nullptr};
+  IDClient id_client_;
 
   // EWMA-smoothed load factor in [0, 1+] - the number CellAppMgr's
   // BSP balancer consumes.
@@ -281,6 +311,9 @@ class CellApp : public EntityApp {
   // Test-only - production callers don't touch this; the machined
   // Subscribe callback in Init is the only writer.
   void InsertTrustedBaseAppForTest(const Address& addr) { trusted_baseapps_.insert(addr); }
+
+  // Test-only — production code receives IDs via DBApp's GetEntityIdsAck.
+  [[nodiscard]] auto GetIdClientForTest() const -> const IDClient& { return id_client_; }
 
  private:
   std::unordered_map<EntityID, PendingOffload> pending_offloads_;

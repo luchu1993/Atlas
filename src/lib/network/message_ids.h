@@ -91,6 +91,7 @@ enum class BaseApp : uint16_t {
 
 enum class CellApp : uint16_t {
   kCreateCellEntity = 3000,
+  kSpawnLocalEntity = 3001,
   kDestroyCellEntity = 3002,
   // Client -> BaseApp -> CellApp (client-initiated cell RPC, REAL_ONLY,
   // requires Exposed + sourceEntityID validation on arrival).
@@ -216,6 +217,7 @@ ATLAS_ASSERT_ID_RANGE(BaseApp::kForceLogoff, 2000, 2999);
 ATLAS_ASSERT_ID_RANGE(BaseApp::kForceLogoffAck, 2000, 2999);
 
 ATLAS_ASSERT_ID_RANGE(CellApp::kCreateCellEntity, 3000, 3999);
+ATLAS_ASSERT_ID_RANGE(CellApp::kSpawnLocalEntity, 3000, 3999);
 ATLAS_ASSERT_ID_RANGE(CellApp::kDestroyCellEntity, 3000, 3999);
 ATLAS_ASSERT_ID_RANGE(CellApp::kClientCellRpcForward, 3000, 3999);
 ATLAS_ASSERT_ID_RANGE(CellApp::kInternalCellRpc, 3000, 3999);

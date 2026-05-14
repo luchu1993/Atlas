@@ -16,6 +16,13 @@ public static class ClientCallbacks
     public const ushort kClientBaselineMessageId = 0xF002;
     public const ushort kClientReliableDeltaMessageId = 0xF003;
 
+    // BaseApp -> Client owner handoff (msg_id::BaseApp::kEntityTransferred = 2024).
+    public const ushort kEntityTransferredMessageId = 2024;
+    // BaseApp -> Client cell-ready gate (kCellReady = 2025); no payload.
+    public const ushort kCellReadyMessageId = 2025;
+    // BaseApp -> Client RPC envelope (kClientRpcMessageId): [u32 rpc_id][u64 trace_id][args].
+    public const ushort kClientRpcMessageId = 0xF004;
+
     // Must match src/server/cellapp/cell_aoi_envelope.h::CellAoIEnvelopeKind.
     private const byte kEntityEnter = 1;
     private const byte kEntityLeave = 2;
@@ -93,6 +100,14 @@ public static class ClientCallbacks
                     break;
                 case kClientBaselineMessageId:
                     DispatchBaseline(body);
+                    break;
+                case kEntityTransferredMessageId:
+                    DispatchEntityTransferred(body);
+                    break;
+                case kCellReadyMessageId:
+                    break;
+                case kClientRpcMessageId:
+                    DispatchClientRpc(body);
                     break;
                 default:
                     Log.Error(
@@ -196,6 +211,38 @@ public static class ClientCallbacks
         bool onGround = reader.ReadByte() != 0;
         double serverTime = reader.ReadDouble();
         s_entityMgr.ApplyPosition(entityId, serverTime, pos, dir, onGround);
+    }
+
+    // baseapp_messages.h::ClientRpcEnvelope: [u32 entity_id][u32 rpc_id][u64 trace_id][args].
+    private const int kClientRpcPrefixBytes = 4 + 4 + 8;
+    private static void DispatchClientRpc(ReadOnlySpan<byte> body)
+    {
+        if (body.Length < kClientRpcPrefixBytes)
+        {
+            Log.Error($"DispatchClientRpc: truncated ({body.Length} bytes, need >= 16)");
+            return;
+        }
+        var reader = new SpanReader(body);
+        uint entityId = reader.ReadUInt32();
+        uint rpcId = reader.ReadUInt32();
+        ulong traceId = reader.ReadUInt64();
+        var args = body.Slice(kClientRpcPrefixBytes);
+        DispatchRpc(entityId, rpcId, traceId, args);
+    }
+
+    // baseapp_messages.h::EntityTransferred: [u32 new_entity_id][u16 new_type_id].
+    private const int kEntityTransferredBytes = 4 + 2;
+    private static void DispatchEntityTransferred(ReadOnlySpan<byte> body)
+    {
+        if (body.Length < kEntityTransferredBytes)
+        {
+            Log.Error($"DispatchEntityTransferred: truncated ({body.Length} bytes, need 6)");
+            return;
+        }
+        var reader = new SpanReader(body);
+        uint newEntityId = reader.ReadUInt32();
+        ushort newTypeId = reader.ReadUInt16();
+        CreateEntity(newEntityId, newTypeId);
     }
 
     // Wire layout for 0xF002 (baseapp_messages.h::ReplicatedBaselineToClient):

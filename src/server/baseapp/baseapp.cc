@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <chrono>
+#include <cstring>
 #include <format>
 #include <limits>
 #include <span>
@@ -723,6 +724,10 @@ void BaseApp::OnAcceptClient(Channel& /*ch*/, const baseapp::AcceptClient& msg) 
   ATLAS_LOG_DEBUG("BaseApp: entity {} ready for client", msg.dest_entity_id);
 }
 
+void BaseApp::QueuePendingAoIRadius(EntityID entity_id, float radius, float hysteresis) {
+  pending_aoi_radius_[entity_id] = {radius, hysteresis};
+}
+
 void BaseApp::OnCellEntityCreated(Channel& ch, const baseapp::CellEntityCreated& msg) {
   auto* ent = entity_mgr_.Find(msg.entity_id);
   if (!ent) return;
@@ -753,6 +758,16 @@ void BaseApp::OnCellEntityCreated(Channel& ch, const baseapp::CellEntityCreated&
       ready.entity_id = msg.entity_id;
       (void)client_ch->SendMessage(ready);
     }
+  }
+  if (auto it = pending_aoi_radius_.find(msg.entity_id); it != pending_aoi_radius_.end()) {
+    if (auto* cell_ch = ResolveCellChannelForEntity(msg.entity_id)) {
+      cellapp::SetAoIRadius aoi;
+      aoi.entity_id = msg.entity_id;
+      aoi.radius = it->second.first;
+      aoi.hysteresis = it->second.second;
+      (void)cell_ch->SendMessage(aoi);
+    }
+    pending_aoi_radius_.erase(it);
   }
 }
 
@@ -873,16 +888,16 @@ void BaseApp::OnBroadcastRpcFromCell(Channel& /*ch*/, const baseapp::BroadcastRp
     auto* proxy = entity_mgr_.FindProxy(entity_id);
     if (!proxy || !proxy->HasClient()) continue;
     if (auto* client_ch = ResolveClientChannel(proxy->EntityId())) {
-      RelayRpcToClient(*client_ch, msg.rpc_id, msg.payload, msg.trace_id);
+      RelayRpcToClient(*client_ch, msg.source_entity_id, msg.rpc_id, msg.payload, msg.trace_id);
     }
   }
 }
 
-void BaseApp::RelayRpcToClient(Channel& client_ch, uint32_t rpc_id,
+void BaseApp::RelayRpcToClient(Channel& client_ch, EntityID target_entity_id, uint32_t rpc_id,
                                const std::vector<std::byte>& payload, uint64_t trace_id) {
   auto args = payload.empty() ? std::span<const std::byte>{}
                               : std::span<const std::byte>(payload.data(), payload.size());
-  baseapp::ClientRpcEnvelope env{rpc_id, trace_id, args};
+  baseapp::ClientRpcEnvelope env{target_entity_id, rpc_id, trace_id, args};
   if (auto r = client_ch.SendMessage(env); !r) {
     ATLAS_LOG_DEBUG("BaseApp: RelayRpcToClient send failed (rpc_id=0x{:08X}): {}", rpc_id,
                     r.Error().Message());
@@ -900,8 +915,19 @@ void BaseApp::OnReplicatedDeltaFromCell(Channel& /*ch*/,
   auto it = entity_client_index_.find(proxy->EntityId());
   if (it == entity_client_index_.end()) return;
 
+  // Envelope header: [u8 kind][u32 LE peer_eid][payload]. Coalesce by peer,
+  // not observer — otherwise all peers in AoI collapse into one queue entry.
+  constexpr std::size_t kEnvelopeHeaderBytes = 1 + sizeof(EntityID);
+  if (msg.delta.size() < kEnvelopeHeaderBytes) {
+    ATLAS_LOG_WARNING("BaseApp: ReplicatedDeltaFromCell envelope truncated ({} bytes)",
+                      msg.delta.size());
+    return;
+  }
+  EntityID peer_id = 0;
+  std::memcpy(&peer_id, msg.delta.data() + 1, sizeof(EntityID));
+
   client_delta_forwarders_[it->second].Enqueue(
-      msg.entity_id, std::span<const std::byte>(msg.delta.data(), msg.delta.size()));
+      peer_id, std::span<const std::byte>(msg.delta.data(), msg.delta.size()));
 }
 
 // Path #2 (Reliable) - bypasses DeltaForwarder so byte budget / same-entity
@@ -914,8 +940,15 @@ void BaseApp::OnReplicatedReliableDeltaFromCell(
   auto* client_ch = ResolveClientChannel(proxy->EntityId());
   if (!client_ch) return;
 
-  (void)client_ch->SendMessage(baseapp::ClientReliableDeltaEnvelope{
-      std::span<const std::byte>(msg.delta.data(), msg.delta.size())});
+  if (auto r = client_ch->SendMessage(baseapp::ClientReliableDeltaEnvelope{
+          std::span<const std::byte>(msg.delta.data(), msg.delta.size())});
+      !r) {
+    ATLAS_LOG_WARNING("BaseApp: ClientReliableDeltaEnvelope send failed observer={} err={}",
+                      msg.entity_id, r.Error().Message());
+  }
+
+  reliable_delta_bytes_sent_total_ += msg.delta.size();
+  ++reliable_delta_messages_sent_total_;
 
   reliable_delta_bytes_sent_total_ += msg.delta.size();
   ++reliable_delta_messages_sent_total_;
@@ -1707,6 +1740,41 @@ void BaseApp::DoGiveClientToLocal(EntityID src_id, EntityID dest_id) {
                         dest_id, client_ch->RemoteAddress().ToString(), r.Error().Message());
     }
   }
+}
+
+auto BaseApp::RequestSpawnCellOnly(uint16_t type_id, SpaceID space_id, math::Vector3 position,
+                                   math::Vector3 direction, bool on_ground) -> bool {
+  const auto& peers = cellapp_peers_.Channels();
+  if (peers.empty()) {
+    ATLAS_LOG_WARNING(
+        "BaseApp: RequestSpawnCellOnly: type {} requested but no CellApp peer available",
+        type_id);
+    return false;
+  }
+  // Mirror CreateBaseEntityFromScript's deterministic pick so a given
+  // space lands on the same CellApp every time.
+  std::vector<std::pair<Address, Channel*>> sorted_peers(peers.begin(), peers.end());
+  std::sort(sorted_peers.begin(), sorted_peers.end(), [](const auto& a, const auto& b) {
+    if (a.first.Ip() != b.first.Ip()) return a.first.Ip() < b.first.Ip();
+    return a.first.Port() < b.first.Port();
+  });
+  const SpaceID effective_space_id = space_id == kInvalidSpaceID ? SpaceID{1} : space_id;
+  const std::size_t cell_index =
+      static_cast<std::size_t>(effective_space_id - 1) % sorted_peers.size();
+  auto* cell_ch = sorted_peers[cell_index].second;
+
+  cellapp::SpawnLocalEntity msg;
+  msg.type_id = type_id;
+  msg.space_id = effective_space_id;
+  msg.position = position;
+  msg.direction = direction;
+  msg.on_ground = on_ground;
+  if (auto r = cell_ch->SendMessage(msg); !r) {
+    ATLAS_LOG_WARNING("BaseApp: SpawnLocalEntity send failed (type_id={}): {}", type_id,
+                      r.Error().Message());
+    return false;
+  }
+  return true;
 }
 
 auto BaseApp::CreateBaseEntityFromScript(uint16_t type_id, SpaceID space_id) -> EntityID {

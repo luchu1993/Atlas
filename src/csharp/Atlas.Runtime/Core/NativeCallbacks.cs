@@ -107,6 +107,13 @@ internal static unsafe class NativeCallbacks
                 entity.Deserialize(ref reader);
             }
 
+            // Cell entities were constructed with the spawn pos/dir on the C++
+            // side; without this readback the C# _position/_direction fields
+            // stay (0,0,0) until something writes them, and the first volatile
+            // send teleports the entity back to origin.
+            if (created && entity is Atlas.Entity.CellServerEntity ce)
+                ce.PullSpawnTransformFromNative();
+
             if (created && !entity.IsDestroyed)
             {
                 entity.OnInit(isReload: false);

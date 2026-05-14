@@ -17,10 +17,11 @@
 #include "entity_manager.h"
 #include "foundation/clock.h"
 #include "foundation/latency_histogram.h"
-#include "id_client.h"
+#include "math/vector3.h"
 #include "server/cellapp_peer_registry.h"
 #include "server/entity_app.h"
 #include "server/entity_types.h"
+#include "server/id_client.h"
 
 namespace atlas {
 
@@ -115,6 +116,7 @@ class BaseApp : public EntityApp {
   struct LoadSnapshot;
   struct LoadTracker;
 
+  void QueuePendingAoIRadius(EntityID entity_id, float radius, float hysteresis);
   void OnCreateBase(Channel& ch, const baseapp::CreateBase& msg);
   void OnCreateBaseFromDb(Channel& ch, const baseapp::CreateBaseFromDB& msg);
   void OnAcceptClient(Channel& ch, const baseapp::AcceptClient& msg);
@@ -126,9 +128,9 @@ class BaseApp : public EntityApp {
   void OnCellAppDeath(const baseapp::CellAppDeath& msg);
   void OnCellRpcForward(Channel& ch, const baseapp::CellRpcForward& msg);
   void OnBroadcastRpcFromCell(Channel& ch, const baseapp::BroadcastRpcFromCell& msg);
-  // Wraps rpc_id + trace_id + payload in kClientRpcMessageId envelope.
-  void RelayRpcToClient(Channel& client_ch, uint32_t rpc_id, const std::vector<std::byte>& payload,
-                        uint64_t trace_id);
+  // Wraps target_entity_id + rpc_id + trace_id + payload in kClientRpcMessageId envelope.
+  void RelayRpcToClient(Channel& client_ch, EntityID target_entity_id, uint32_t rpc_id,
+                        const std::vector<std::byte>& payload, uint64_t trace_id);
   void OnReplicatedDeltaFromCell(Channel& ch, const baseapp::ReplicatedDeltaFromCell& msg);
   void OnReplicatedReliableDeltaFromCell(Channel& ch,
                                          const baseapp::ReplicatedReliableDeltaFromCell& msg);
@@ -158,6 +160,11 @@ class BaseApp : public EntityApp {
   // via the client-bind path; scripts call SetAoIRadius post-ack. Returns
   // the new EntityID, or 0 on failure.
   auto CreateBaseEntityFromScript(uint16_t type_id, SpaceID space_id) -> EntityID;
+
+  // Routes SpawnLocalEntity to a deterministically-picked CellApp; the cell
+  // assigns the id, so this returns only whether the message went out.
+  auto RequestSpawnCellOnly(uint16_t type_id, SpaceID space_id, math::Vector3 position,
+                            math::Vector3 direction, bool on_ground) -> bool;
 
   void FlushClientDeltas();
 
@@ -277,6 +284,8 @@ class BaseApp : public EntityApp {
   std::unordered_map<EntityID, Address> entity_client_index_;
   std::unordered_map<Address, EntityID> client_entity_index_;
   std::unordered_map<Address, DeltaForwarder> client_delta_forwarders_;
+  // SetAoIRadius issued before the cell ack lands is replayed in OnCellEntityCreated.
+  std::unordered_map<EntityID, std::pair<float, float>> pending_aoi_radius_;
 
   struct RpcRateBucket {
     double tokens{0.0};

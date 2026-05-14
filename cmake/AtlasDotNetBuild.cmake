@@ -109,10 +109,14 @@ function(atlas_dotnet_project)
     list(FILTER _cs_sources EXCLUDE REGEX ".*/obj/.*")
     list(FILTER _cs_sources EXCLUDE REGEX ".*/bin/.*")
 
+    # --framework pins to a single TFM. Multi-target projects (e.g. those
+    # also targeting netstandard2.1 for Unity export) otherwise build every
+    # TFM into the same --output dir and clobber each other's references.
     add_custom_command(
       OUTPUT "${_output_dll}"
       COMMAND "${DOTNET_EXECUTABLE}" build "${_proj_path}"
               --configuration "${ARG_CONFIGURATION}"
+              --framework "${ARG_TARGET_FRAMEWORK}"
               --output "${_output_dir}"
               --nologo -v quiet
       DEPENDS ${_cs_sources} "${_proj_path}"

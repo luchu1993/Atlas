@@ -1,13 +1,9 @@
 #include <gtest/gtest.h>
 
 #include "entity_manager.h"
-#include "id_client.h"
+#include "server/id_client.h"
 
 using namespace atlas;
-
-// ============================================================================
-// Helper: create an EntityManager with an IDClient pre-loaded with IDs
-// ============================================================================
 
 namespace {
 

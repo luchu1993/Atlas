@@ -12,18 +12,23 @@ namespace Atlas.Client.Tests
             public override string TypeName => "Test";
         }
 
+        private sealed class Clock
+        {
+            public double Now;
+        }
+
         [Fact]
         public void PeerEntityFeedsFilterAndInterpolates()
         {
-            var e = new TestEntity { EntityId = 100 };
+            var clock = new Clock();
+            // Pre-attach so ApplyPositionUpdate doesn't lazy-create with default wall.
+            var e = new TestEntity { EntityId = 100, Filter = new AvatarFilter(() => clock.Now) };
             Assert.False(e.IsOwner);
-            Assert.Null(e.Filter);
 
             e.ApplyPositionUpdate(serverTime: 1.00,
                                   pos: new Vector3(0, 0, 0),
                                   dir: Vector3.Forward,
                                   onGround: true);
-            Assert.NotNull(e.Filter);
             Assert.Equal(1, e.Filter!.SampleCount);
 
             e.ApplyPositionUpdate(serverTime: 1.10,
@@ -32,8 +37,10 @@ namespace Atlas.Client.Tests
                                   onGround: true);
             Assert.Equal(2, e.Filter!.SampleCount);
 
-            // clientTime - LatencyFrames * ServerInterval = 1.05 (midway) by default config (3, 0.1).
-            Assert.True(e.TryGetInterpolated(1.35, out var pos, out _, out _));
+            // wall=1.35, offset seeded to -1.0 at first Input, latency=0.3
+            // → targetTime=1.05, midway between the two samples.
+            clock.Now = 1.35;
+            Assert.True(e.TryGetInterpolated(out var pos, out _, out _));
             Assert.InRange(pos.X, 4.5f, 5.5f);
         }
 
@@ -46,7 +53,7 @@ namespace Atlas.Client.Tests
             Assert.Null(e.Filter);
 
             // No filter -> TryGetInterpolated returns false but still surfaces last snapshot.
-            Assert.False(e.TryGetInterpolated(2.15, out var pos, out _, out _));
+            Assert.False(e.TryGetInterpolated(out var pos, out _, out _));
             Assert.Equal(8f, pos.X);
         }
 

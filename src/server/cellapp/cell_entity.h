@@ -102,6 +102,11 @@ class CellEntity : public IEntityMotion {
   [[nodiscard]] auto BaseAddr() const -> const Address& { return base_addr_; }
   void SetBaseAddr(const Address& addr) { base_addr_ = addr; }
 
+  // Cell-only entity: has no Base counterpart, no DB checkout, lives only
+  // on this CellApp. Destruction is initiated by the cell script itself.
+  [[nodiscard]] auto IsLocal() const -> bool { return is_local_; }
+  void MarkLocal() { is_local_ = true; }
+
   // Client-bound entities attach a Witness via EnableWitness; server-only
   // NPCs leave it unset. Dtor tears it down before range_node_ unlinks.
   [[nodiscard]] auto HasWitness() const -> bool { return witness_ != nullptr; }
@@ -186,6 +191,7 @@ class CellEntity : public IEntityMotion {
   uint64_t script_handle_{0};
 
   Address base_addr_{};
+  bool is_local_{false};
 
   // Order matters: dtor runs reverse-declaration. range_node_ MUST unlink
   // last, after witness_/controllers_ remove their own trigger bounds.

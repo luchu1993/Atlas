@@ -31,8 +31,15 @@ public abstract class ClientEntity
     public Vector3 Direction { get; private set; }
     public bool OnGround { get; private set; }
     public double LastPositionServerTime { get; private set; }
+    // Wall-clock seconds at last ApplyPositionUpdate (same domain as WallNowSeconds).
+    public double LastPositionWallTime { get; private set; }
 
-    public AvatarFilter? Filter { get; private set; }
+    private static readonly System.Diagnostics.Stopwatch s_wallClock =
+        System.Diagnostics.Stopwatch.StartNew();
+
+    public static double WallNowSeconds() => s_wallClock.Elapsed.TotalSeconds;
+
+    public AvatarFilter? Filter { get; internal set; }
 
     public virtual void Deserialize(ref SpanReader reader) { }
 
@@ -50,6 +57,7 @@ public abstract class ClientEntity
         Direction = dir;
         OnGround = onGround;
         LastPositionServerTime = serverTime;
+        LastPositionWallTime = s_wallClock.Elapsed.TotalSeconds;
 
         if (!IsOwner)
         {
@@ -60,11 +68,10 @@ public abstract class ClientEntity
         OnPositionUpdated(pos);
     }
 
-    public bool TryGetInterpolated(double clientTime,
-                                   out Vector3 pos, out Vector3 dir, out bool onGround)
+    public bool TryGetInterpolated(out Vector3 pos, out Vector3 dir, out bool onGround)
     {
         if (Filter is { SampleCount: > 0 })
-            return Filter.TryEvaluate(clientTime, out pos, out dir, out onGround);
+            return Filter.TryEvaluate(out pos, out dir, out onGround);
         pos = Position;
         dir = Direction;
         onGround = OnGround;

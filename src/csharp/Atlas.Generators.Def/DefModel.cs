@@ -277,6 +277,16 @@ internal sealed class EntityDefModel
     // SlotIdx = -1 (they don't participate in the slot table).
     public List<ComponentDefModel> Components { get; } = new();
 
+    // null = derive from def surface; true/false = explicit override from the
+    // <entity has_base="..."> attribute. Cell-only entities (no base methods,
+    // no base-scope properties) default to false; otherwise default true so
+    // legacy defs keep their base side.
+    public bool? HasBaseExplicit { get; set; }
+
+    public bool HasBase =>
+        HasBaseExplicit ?? (BaseMethods.Count > 0 ||
+                            Properties.Exists(p => p.Scope.IsBase()));
+
     // An entity is cell-resident if it exposes cell methods or any cell-side
     // property (IsCell covers everything except Base / BaseAndClient).
     public bool HasCell =>

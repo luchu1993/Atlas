@@ -3,7 +3,6 @@
   <PropertyGroup>
     <AssemblyName>Atlas.Tests</AssemblyName>
     <TargetFramework>$(AtlasTargetFramework)</TargetFramework>
-    <Nullable>enable</Nullable>
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
     <IsPackable>false</IsPackable>
     <IsTestProject>true</IsTestProject>

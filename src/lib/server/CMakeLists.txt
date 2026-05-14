@@ -9,6 +9,7 @@ target_link_libraries(atlas_server_types
 add_library(atlas_server STATIC
   cellapp_peer_registry.cc
   entity_app.cc
+  id_client.cc
   ipv4_networks.cc
   machined_client.cc
   manager_app.cc

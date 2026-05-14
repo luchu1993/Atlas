@@ -69,6 +69,22 @@
         (uint16_t type_id, uint32_t space_id),                                                     \
         return atlas::GetNativeApiProvider().CreateBaseEntity(type_id, space_id))                  \
                                                                                                    \
+    X(uint32_t, CreateLocalCellEntity,                                                             \
+        (uint16_t type_id, uint32_t space_id, float pos_x, float pos_y, float pos_z,               \
+         float dir_x, float dir_y, float dir_z, uint8_t on_ground),                                \
+        return atlas::GetNativeApiProvider().CreateLocalCellEntity(                                \
+            type_id, space_id, pos_x, pos_y, pos_z, dir_x, dir_y, dir_z, on_ground != 0))          \
+    X(void, DestroyCellEntity,                                                                     \
+        (uint32_t entity_id),                                                                      \
+        atlas::GetNativeApiProvider().DestroyCellEntity(entity_id))                                \
+    X(uint8_t, RequestSpawnCellOnly,                                                               \
+        (uint16_t type_id, uint32_t space_id, float pos_x, float pos_y, float pos_z,               \
+         float dir_x, float dir_y, float dir_z, uint8_t on_ground),                                \
+        return atlas::GetNativeApiProvider().RequestSpawnCellOnly(                                 \
+            type_id, space_id, pos_x, pos_y, pos_z, dir_x, dir_y, dir_z, on_ground != 0)           \
+            ? 1                                                                                    \
+            : 0)                                                                                   \
+                                                                                                   \
     X(void, SetAoIRadius,                                                                          \
         (uint32_t entity_id, float radius, float hysteresis),                                      \
         atlas::GetNativeApiProvider().SetAoIRadius(entity_id, radius, hysteresis))                 \
@@ -80,6 +96,15 @@
     X(void, SetEntityPosition,                                                                     \
         (uint32_t entity_id, float x, float y, float z),                                          \
         atlas::GetNativeApiProvider().SetEntityPosition(entity_id, x, y, z))                       \
+    X(void, SetEntityDirection,                                                                    \
+        (uint32_t entity_id, float x, float y, float z),                                          \
+        atlas::GetNativeApiProvider().SetEntityDirection(entity_id, x, y, z))                      \
+    X(void, GetEntityPosition,                                                                     \
+        (uint32_t entity_id, float* out_x, float* out_y, float* out_z),                            \
+        atlas::GetNativeApiProvider().GetEntityPosition(entity_id, *out_x, *out_y, *out_z))        \
+    X(void, GetEntityDirection,                                                                    \
+        (uint32_t entity_id, float* out_x, float* out_y, float* out_z),                            \
+        atlas::GetNativeApiProvider().GetEntityDirection(entity_id, *out_x, *out_y, *out_z))       \
                                                                                                    \
     X(void, PublishReplicationFrame,                                                               \
         (uint32_t entity_id, uint64_t event_seq, uint64_t volatile_seq,                          \

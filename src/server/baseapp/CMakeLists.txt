@@ -6,7 +6,6 @@ add_library(atlas_baseapp_lib STATIC
   baseapp_native_provider.cc
   delta_forwarder.cc
   entity_manager.cc
-  id_client.cc
 )
 
 target_include_directories(atlas_baseapp_lib PUBLIC

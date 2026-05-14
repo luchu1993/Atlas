@@ -1,16 +1,8 @@
 #include <gtest/gtest.h>
 
-#include "id_client.h"
+#include "server/id_client.h"
 
 using namespace atlas;
-
-// ============================================================================
-// IDClient tests
-//
-// Tests reference IDClient::kCriticallyLow / kLow / kDesired / kHigh by
-// name so the watermark thresholds can be retuned without rewriting the
-// fixtures.
-// ============================================================================
 
 TEST(IDClient, AllocateFromSingleRange) {
   IDClient client;

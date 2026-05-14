@@ -114,11 +114,32 @@ void CellAppNativeProvider::SendClientRpc(uint32_t entity_id, uint32_t rpc_id, R
     }
     baseapp::BroadcastRpcFromCell msg;
     msg.rpc_id = rpc_id;
+    msg.source_entity_id = source_entity_id;
     msg.dest_entity_ids = std::move(ids);
     msg.trace_id = trace_id;
     if (len > 0) msg.payload.assign(payload, payload + static_cast<std::size_t>(len));
     (void)(*base_ch)->SendMessage(msg);
   }
+}
+
+auto CellAppNativeProvider::CreateLocalCellEntity(uint16_t type_id, uint32_t space_id,
+                                                  float pos_x, float pos_y, float pos_z,
+                                                  float dir_x, float dir_y, float dir_z,
+                                                  bool on_ground) -> uint32_t {
+  if (!create_local_entity_fn_) {
+    ATLAS_LOG_ERROR("CellApp: CreateLocalCellEntity: not wired to CellApp (type_id={})", type_id);
+    return 0;
+  }
+  return create_local_entity_fn_(type_id, space_id, pos_x, pos_y, pos_z, dir_x, dir_y, dir_z,
+                                 on_ground);
+}
+
+void CellAppNativeProvider::DestroyCellEntity(uint32_t entity_id) {
+  if (!destroy_local_entity_fn_) {
+    ATLAS_LOG_ERROR("CellApp: DestroyCellEntity: not wired to CellApp (entity_id={})", entity_id);
+    return;
+  }
+  destroy_local_entity_fn_(entity_id);
 }
 
 void CellAppNativeProvider::SetEntityPosition(uint32_t entity_id, float x, float y, float z) {
@@ -133,6 +154,33 @@ void CellAppNativeProvider::SetEntityPosition(uint32_t entity_id, float x, float
     return;
   }
   entity->SetPosition(math::Vector3{x, y, z});
+}
+
+void CellAppNativeProvider::SetEntityDirection(uint32_t entity_id, float x, float y, float z) {
+  auto* entity = lookup_ ? lookup_(entity_id) : nullptr;
+  if (!entity) {
+    ATLAS_LOG_WARNING("atlas_set_direction: unknown entity_id={}", entity_id);
+    return;
+  }
+  if (!entity->IsReal()) {
+    ATLAS_LOG_WARNING("atlas_set_direction on Ghost entity_id={} — rejected", entity_id);
+    return;
+  }
+  entity->SetDirection(math::Vector3{x, y, z});
+}
+
+void CellAppNativeProvider::GetEntityPosition(uint32_t entity_id, float& x, float& y, float& z) {
+  auto* entity = lookup_ ? lookup_(entity_id) : nullptr;
+  if (!entity) { x = 0; y = 0; z = 0; return; }
+  const auto& p = entity->Position();
+  x = p.x; y = p.y; z = p.z;
+}
+
+void CellAppNativeProvider::GetEntityDirection(uint32_t entity_id, float& x, float& y, float& z) {
+  auto* entity = lookup_ ? lookup_(entity_id) : nullptr;
+  if (!entity) { x = 0; y = 0; z = 0; return; }
+  const auto& d = entity->Direction();
+  x = d.x; y = d.y; z = d.z;
 }
 
 void CellAppNativeProvider::PublishReplicationFrame(

@@ -84,6 +84,7 @@ internal static class DigestEmitter
         {
             ushort typeId = typeIndexMap[def.Name];
             sb.Append("E|").Append(def.Name).Append('|').Append(typeId).Append('|')
+              .Append(def.HasBase ? '1' : '0').Append('|')
               .Append(def.HasCell ? '1' : '0').Append('|')
               .Append(def.HasClient ? '1' : '0').Append('\n');
             AppendProperties(sb, def.Properties);

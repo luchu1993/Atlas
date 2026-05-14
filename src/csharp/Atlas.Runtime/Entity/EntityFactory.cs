@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using Atlas.Core;
+using Atlas.DataTypes;
 
 namespace Atlas.Entity;
 
@@ -31,6 +32,14 @@ public static class EntityFactory
         _typeIdByName[typeName] = typeId;
     }
 
+    // Name → typeId mapping without a creator. Used for types this process
+    // can spawn (cell-only) but does not instantiate locally (e.g. base
+    // calling SpawnCellOnly for a has_base="false" type).
+    public static void RegisterTypeId(string typeName, ushort typeId)
+    {
+        _typeIdByName[typeName] = typeId;
+    }
+
     public static ServerEntity? Create(string typeName) =>
         _byName.TryGetValue(typeName, out var creator) ? creator() : null;
 
@@ -50,7 +59,7 @@ public static class EntityFactory
     /// <see cref="ServerEntity.GiveClientTo"/> to override the default
     /// AoI radius.
     /// </summary>
-    public static ServerEntity? CreateBase(string typeName, uint spaceId = 1)
+    public static BaseServerEntity? CreateBase(string typeName, uint spaceId = 1)
     {
         var typeId = GetTypeId(typeName);
         if (typeId == 0) return null;
@@ -64,10 +73,36 @@ public static class EntityFactory
     /// EntityManager before this method returns. <paramref name="spaceId"/>
     /// is forwarded to the cell side for has_cell types.
     /// </summary>
-    public static ServerEntity? CreateBaseByTypeId(ushort typeId, uint spaceId = 1)
+    public static BaseServerEntity? CreateBaseByTypeId(ushort typeId, uint spaceId = 1)
     {
         var entityId = NativeApi.CreateBaseEntity(typeId, spaceId);
         if (entityId == 0) return null;
-        return EntityManager.Instance.Get(entityId);
+        return EntityManager.Instance.Get(entityId) as BaseServerEntity;
+    }
+
+    // Cell-script entry: instantiates a cell-only entity locally. No Base
+    // counterpart, no DB persistence; call CellServerEntity.DestroySelf to
+    // tear it down.
+    public static CellServerEntity? CreateLocalCell(string typeName, uint spaceId,
+                                                    Vector3 position, Vector3 direction,
+                                                    bool onGround = false)
+    {
+        var typeId = GetTypeId(typeName);
+        if (typeId == 0) return null;
+        var entityId = NativeApi.CreateLocalCellEntity(typeId, spaceId, position, direction,
+                                                       onGround);
+        if (entityId == 0) return null;
+        return EntityManager.Instance.Get(entityId) as CellServerEntity;
+    }
+
+    // Base-script entry: asks a CellApp to spawn a cell-only entity. Returns
+    // true if the routing message left the BaseApp; the cell allocates the
+    // id asynchronously, so this does not return the new ServerEntity.
+    public static bool SpawnCellOnly(string typeName, uint spaceId, Vector3 position,
+                                     Vector3 direction, bool onGround = false)
+    {
+        var typeId = GetTypeId(typeName);
+        if (typeId == 0) return false;
+        return NativeApi.RequestSpawnCellOnly(typeId, spaceId, position, direction, onGround);
     }
 }

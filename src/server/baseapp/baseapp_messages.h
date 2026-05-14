@@ -261,6 +261,7 @@ static_assert(NetworkMessage<CellRpcForward>);
 // destination's bound client via the unified RPC envelope.
 struct BroadcastRpcFromCell {
   uint32_t rpc_id{0};
+  EntityID source_entity_id{kInvalidEntityID};
   std::vector<EntityID> dest_entity_ids;
   std::vector<std::byte> payload;
   uint64_t trace_id{0};
@@ -277,6 +278,7 @@ struct BroadcastRpcFromCell {
 
   void Serialize(BinaryWriter& w) const {
     w.WritePackedInt(rpc_id);
+    w.WritePackedInt(source_entity_id);
     w.WritePackedInt(static_cast<uint32_t>(dest_entity_ids.size()));
     for (auto id : dest_entity_ids) w.WritePackedInt(id);
     w.WritePackedInt(static_cast<uint32_t>(payload.size()));
@@ -286,14 +288,20 @@ struct BroadcastRpcFromCell {
 
   static auto Deserialize(BinaryReader& r) -> Result<BroadcastRpcFromCell> {
     auto rid = r.ReadPackedInt();
+    if (!rid)
+      return Error{ErrorCode::kInvalidArgument, "BroadcastRpcFromCell: truncated rpc_id"};
+    auto src = r.ReadPackedInt();
+    if (!src)
+      return Error{ErrorCode::kInvalidArgument, "BroadcastRpcFromCell: truncated source_entity_id"};
     auto count = r.ReadPackedInt();
-    if (!rid || !count)
-      return Error{ErrorCode::kInvalidArgument, "BroadcastRpcFromCell: truncated header"};
+    if (!count)
+      return Error{ErrorCode::kInvalidArgument, "BroadcastRpcFromCell: truncated dest count"};
     if (*count > kMaxBroadcastRpcDestinations) {
       return Error{ErrorCode::kInvalidArgument, "BroadcastRpcFromCell: too many destinations"};
     }
     BroadcastRpcFromCell msg;
     msg.rpc_id = *rid;
+    msg.source_entity_id = *src;
     msg.dest_entity_ids.reserve(*count);
     for (uint32_t i = 0; i < *count; ++i) {
       auto id = r.ReadPackedInt();
@@ -950,8 +958,10 @@ struct ClientReliableDeltaEnvelope {
 };
 static_assert(NetworkMessage<ClientReliableDeltaEnvelope>);
 
-// Body: [u32 rpc_id][u64 trace_id][args].  rpc_id = slot:8 | method:24.
+// Body: [u32 entity_id][u32 rpc_id][u64 trace_id][args]. rpc_id = slot:8 | method:24.
+// entity_id targets the script entity, not the receiver — broadcast scopes route to the source.
 struct ClientRpcEnvelope {
+  EntityID entity_id{kInvalidEntityID};
   uint32_t rpc_id{0};
   uint64_t trace_id{0};
   std::span<const std::byte> args;
@@ -963,6 +973,7 @@ struct ClientRpcEnvelope {
     return kDesc;
   }
   void Serialize(BinaryWriter& w) const {
+    w.Write(entity_id);
     w.Write(rpc_id);
     w.Write(trace_id);
     w.WriteBytes(args);

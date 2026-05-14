@@ -100,6 +100,61 @@ struct CreateCellEntity {
 };
 static_assert(NetworkMessage<CreateCellEntity>);
 
+// Base script requests a cell-only entity. CellApp allocates the id from
+// its own IDClient, no base-side counterpart is ever created.
+struct SpawnLocalEntity {
+  uint16_t type_id{0};
+  SpaceID space_id{kInvalidSpaceID};
+  math::Vector3 position{0.f, 0.f, 0.f};
+  math::Vector3 direction{1.f, 0.f, 0.f};
+  bool on_ground{false};
+
+  static auto Descriptor() -> const MessageDesc& {
+    static const MessageDesc kDesc{msg_id::Id(msg_id::CellApp::kSpawnLocalEntity),
+                                   "cellapp::SpawnLocalEntity",
+                                   MessageLengthStyle::kFixed,
+                                   static_cast<int>(sizeof(uint16_t) + sizeof(SpaceID) +
+                                                    6 * sizeof(float) + sizeof(uint8_t)),
+                                   MessageReliability::kReliable,
+                                   MessageUrgency::kBatched};
+    return kDesc;
+  }
+
+  void Serialize(BinaryWriter& w) const {
+    w.Write(type_id);
+    w.Write(space_id);
+    w.Write(position.x);
+    w.Write(position.y);
+    w.Write(position.z);
+    w.Write(direction.x);
+    w.Write(direction.y);
+    w.Write(direction.z);
+    w.Write(static_cast<uint8_t>(on_ground ? 1 : 0));
+  }
+
+  static auto Deserialize(BinaryReader& r) -> Result<SpawnLocalEntity> {
+    auto ti = r.Read<uint16_t>();
+    auto sid = r.Read<uint32_t>();
+    auto px = r.Read<float>();
+    auto py = r.Read<float>();
+    auto pz = r.Read<float>();
+    auto dx = r.Read<float>();
+    auto dy = r.Read<float>();
+    auto dz = r.Read<float>();
+    auto og = r.Read<uint8_t>();
+    if (!ti || !sid || !px || !py || !pz || !dx || !dy || !dz || !og)
+      return Error{ErrorCode::kInvalidArgument, "SpawnLocalEntity: truncated"};
+    SpawnLocalEntity msg;
+    msg.type_id = *ti;
+    msg.space_id = *sid;
+    msg.position = {*px, *py, *pz};
+    msg.direction = {*dx, *dy, *dz};
+    msg.on_ground = (*og != 0);
+    return msg;
+  }
+};
+static_assert(NetworkMessage<SpawnLocalEntity>);
+
 // Targeted by the unified entity_id (cluster-stable, allocated by
 // DBApp's IDClient).
 

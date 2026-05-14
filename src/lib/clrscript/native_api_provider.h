@@ -58,6 +58,21 @@ class INativeApiProvider {
 
   virtual auto CreateBaseEntity(uint16_t type_id, uint32_t space_id) -> uint32_t = 0;
 
+  // Cell-only entity: lives on this CellApp, no Base counterpart, no DB row.
+  // Returns 0 on failure. Non-trivial only on CellAppNativeProvider.
+  virtual auto CreateLocalCellEntity(uint16_t type_id, uint32_t space_id, float pos_x, float pos_y,
+                                     float pos_z, float dir_x, float dir_y, float dir_z,
+                                     bool on_ground) -> uint32_t = 0;
+
+  // Refuses base-owned entities.
+  virtual void DestroyCellEntity(uint32_t entity_id) = 0;
+
+  // Base-side router; cell assigns the id, so the call is async and returns
+  // only whether the routing message was dispatched.
+  virtual auto RequestSpawnCellOnly(uint16_t type_id, uint32_t space_id, float pos_x, float pos_y,
+                                    float pos_z, float dir_x, float dir_y, float dir_z,
+                                    bool on_ground) -> bool = 0;
+
   virtual void SetAoIRadius(uint32_t entity_id, float radius, float hysteresis) = 0;
 
   // Packed function pointer table for C++ -> C# calls.
@@ -69,6 +84,16 @@ class INativeApiProvider {
   // client" case but for now only CellApp owns position authority.
 
   virtual void SetEntityPosition(uint32_t entity_id, float x, float y, float z) = 0;
+
+  // Same role as SetEntityPosition for the orientation component — Witness
+  // reads dir directly off the C++ CellEntity when building the volatile
+  // envelope, so C# changes are invisible to peers without this hook.
+  virtual void SetEntityDirection(uint32_t entity_id, float x, float y, float z) = 0;
+
+  // Spawn-time readback so C# can adopt the position/direction the C++
+  // CellEntity was constructed with (CreateLocalEntity / OnCreateCellEntity).
+  virtual void GetEntityPosition(uint32_t entity_id, float& x, float& y, float& z) = 0;
+  virtual void GetEntityDirection(uint32_t entity_id, float& x, float& y, float& z) = 0;
 
   // C# hands the cell layer a per-tick replication frame. Owner/other
   // snapshot pointers are only consumed when event_seq > 0 (see

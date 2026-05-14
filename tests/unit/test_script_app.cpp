@@ -76,12 +76,24 @@ class MockNativeProvider : public INativeApiProvider {
   void WriteToDb(uint32_t, const std::byte*, int32_t) override {}
   void GiveClientTo(uint32_t, uint32_t) override {}
   auto CreateBaseEntity(uint16_t, uint32_t) -> uint32_t override { return 0; }
+  auto CreateLocalCellEntity(uint16_t, uint32_t, float, float, float, float, float, float, bool)
+      -> uint32_t override {
+    return 0;
+  }
+  void DestroyCellEntity(uint32_t) override {}
+  auto RequestSpawnCellOnly(uint16_t, uint32_t, float, float, float, float, float, float, bool)
+      -> bool override {
+    return false;
+  }
   void SetAoIRadius(uint32_t, float, float) override {}
   void SetNativeCallbacks(const void*, int32_t) override {}
 
   // CellApp-specific stubs — non-CellApp test mocks just need to stay
   // concrete as INativeApiProvider's surface grows.
   void SetEntityPosition(uint32_t, float, float, float) override {}
+  void SetEntityDirection(uint32_t, float, float, float) override {}
+  void GetEntityPosition(uint32_t, float& x, float& y, float& z) override { x=y=z=0; }
+  void GetEntityDirection(uint32_t, float& x, float& y, float& z) override { x=y=z=0; }
   void PublishReplicationFrame(uint32_t, uint64_t, uint64_t, const std::byte*, int32_t,
                                const std::byte*, int32_t, const std::byte*, int32_t,
                                const std::byte*, int32_t) override {}

@@ -2,7 +2,6 @@
 
   <PropertyGroup>
     <TargetFramework>$(AtlasTargetFramework)</TargetFramework>
-    <Nullable>enable</Nullable>
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
     <Optimize>true</Optimize>
     <!-- Suppress IL2026/IL3050 for intentional unsafe patterns -->

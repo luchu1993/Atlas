@@ -74,7 +74,8 @@ internal static class DefParser
 
         var model = new EntityDefModel
         {
-            Name = root.Attribute("name")?.Value ?? ""
+            Name = root.Attribute("name")?.Value ?? "",
+            HasBaseExplicit = ParseBoolAttribute(root, "has_base"),
         };
 
         // <types> must be parsed before <properties> so property type-exprs
@@ -653,5 +654,13 @@ internal static class DefParser
             "base_and_client" => PropertyScope.BaseAndClient,
             _ => PropertyScope.CellPrivate,
         };
+    }
+
+    private static bool? ParseBoolAttribute(XElement el, string name)
+    {
+        var raw = el.Attribute(name)?.Value;
+        if (string.IsNullOrEmpty(raw)) return null;
+        return raw.Equals("true", StringComparison.OrdinalIgnoreCase) ||
+               raw == "1";
     }
 }

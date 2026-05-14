@@ -7,8 +7,8 @@
 
 #include "base_entity.h"
 #include "foundation/clock.h"
-#include "id_client.h"
 #include "server/entity_types.h"
+#include "server/id_client.h"
 
 namespace atlas {
 

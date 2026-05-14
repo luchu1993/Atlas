@@ -13,8 +13,8 @@ namespace Atlas.Client.Unity
     {
         private readonly IntPtr _ctx;
         private GCHandle _selfHandle;
-        private LoginSource _loginInflight;
-        private AuthSource _authInflight;
+        private LoginSource? _loginInflight;
+        private AuthSource? _authInflight;
         private bool _disposed;
 
         public LoginClient()

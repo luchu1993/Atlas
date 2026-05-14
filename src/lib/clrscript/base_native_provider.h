@@ -37,6 +37,14 @@ class BaseNativeProvider : public INativeApiProvider {
 
   auto CreateBaseEntity(uint16_t type_id, uint32_t space_id) -> uint32_t override;
 
+  auto CreateLocalCellEntity(uint16_t type_id, uint32_t space_id, float pos_x, float pos_y,
+                             float pos_z, float dir_x, float dir_y, float dir_z,
+                             bool on_ground) -> uint32_t override;
+  void DestroyCellEntity(uint32_t entity_id) override;
+  auto RequestSpawnCellOnly(uint16_t type_id, uint32_t space_id, float pos_x, float pos_y,
+                            float pos_z, float dir_x, float dir_y, float dir_z, bool on_ground)
+      -> bool override;
+
   void SetAoIRadius(uint32_t entity_id, float radius, float hysteresis) override;
 
   void SetNativeCallbacks(const void* native_callbacks, int32_t len) override;
@@ -44,6 +52,9 @@ class BaseNativeProvider : public INativeApiProvider {
   // Processes that are not CellApp inherit these no-op bodies.
   // CellAppNativeProvider overrides each to wire into Space / CellEntity.
   void SetEntityPosition(uint32_t entity_id, float x, float y, float z) override;
+  void SetEntityDirection(uint32_t entity_id, float x, float y, float z) override;
+  void GetEntityPosition(uint32_t entity_id, float& x, float& y, float& z) override;
+  void GetEntityDirection(uint32_t entity_id, float& x, float& y, float& z) override;
   void PublishReplicationFrame(uint32_t entity_id, uint64_t event_seq, uint64_t volatile_seq,
                                const std::byte* owner_snap, int32_t owner_snap_len,
                                const std::byte* other_snap, int32_t other_snap_len,

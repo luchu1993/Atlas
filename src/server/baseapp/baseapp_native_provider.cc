@@ -8,6 +8,7 @@
 #include "baseapp.h"
 #include "cellapp/cellapp_messages.h"
 #include "foundation/log.h"
+#include "math/vector3.h"
 #include "network/channel.h"
 #include "network/machined_types.h"
 #include "network/reliable_udp.h"
@@ -80,7 +81,7 @@ void BaseAppNativeProvider::SendClientRpc(uint32_t entity_id, uint32_t rpc_id, R
   }
   std::vector<std::byte> tmp;
   if (len > 0) tmp.assign(payload, payload + static_cast<std::size_t>(len));
-  app_.RelayRpcToClient(*client_ch, rpc_id, tmp, trace_id);
+  app_.RelayRpcToClient(*client_ch, entity_id, rpc_id, tmp, trace_id);
 }
 
 void BaseAppNativeProvider::SendCellRpc(uint32_t entity_id, uint32_t rpc_id,
@@ -144,6 +145,13 @@ auto BaseAppNativeProvider::CreateBaseEntity(uint16_t type_id, uint32_t space_id
   return app_.CreateBaseEntityFromScript(type_id, space_id);
 }
 
+auto BaseAppNativeProvider::RequestSpawnCellOnly(uint16_t type_id, uint32_t space_id, float px,
+                                                 float py, float pz, float dx, float dy, float dz,
+                                                 bool on_ground) -> bool {
+  return app_.RequestSpawnCellOnly(type_id, space_id, math::Vector3{px, py, pz},
+                                   math::Vector3{dx, dy, dz}, on_ground);
+}
+
 void BaseAppNativeProvider::SetAoIRadius(uint32_t entity_id, float radius, float hysteresis) {
   auto* ent = app_.GetEntityManager().Find(entity_id);
   if (!ent) {
@@ -151,7 +159,8 @@ void BaseAppNativeProvider::SetAoIRadius(uint32_t entity_id, float radius, float
     return;
   }
   if (!ent->HasCell()) {
-    ATLAS_LOG_WARNING("BaseApp: SetAoIRadius on entity_id={} with no cell counterpart", entity_id);
+    // Cell ack hasn't landed; replay in OnCellEntityCreated.
+    app_.QueuePendingAoIRadius(entity_id, radius, hysteresis);
     return;
   }
   auto* cell_ch = app_.ResolveCellChannelForEntity(entity_id);

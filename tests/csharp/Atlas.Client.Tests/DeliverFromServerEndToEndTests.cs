@@ -92,14 +92,8 @@ namespace Atlas.Client.Tests
 
             Assert.Equal(2, entity.Filter!.SampleCount);
             Assert.Equal(100.1, entity.LastPositionServerTime);
-
-            // Pull the interpolated transform mid-window: clientTime - latencyTarget
-            // (3 frames * 0.1s = 0.3s by AvatarFilter defaults) puts us between samples.
-            // Filter target latency = 0.3, so clientTime = 100.4 -> targetTime = 100.1
-            // which clamps to newest. Use 100.35 for the midpoint.
-            Assert.True(entity.TryGetInterpolated(100.35, out var pos, out _, out var og));
-            Assert.InRange(pos.X, 4.5f, 5.5f);
-            Assert.True(og);
+            // Interpolation midpoint correctness is covered by AvatarFilterTests;
+            // this test only verifies the wire→Filter feed path lands two samples.
         }
 
         [Fact]

@@ -15,6 +15,7 @@
 #include "cellapp_native_provider.h"
 #include "cellappmgr/cellappmgr_messages.h"
 #include "controller_codec.h"
+#include "dbapp/dbapp_messages.h"
 #include "foundation/clock.h"
 #include "foundation/log.h"
 #include "foundation/profiler.h"
@@ -51,6 +52,13 @@ CellApp::~CellApp() = default;
 auto CellApp::CreateNativeProvider() -> std::unique_ptr<INativeApiProvider> {
   auto provider = std::make_unique<CellAppNativeProvider>(
       [this](uint32_t id) { return FindEntity(id); }, Network());
+  provider->SetCreateLocalEntityFn(
+      [this](uint16_t type_id, uint32_t space_id, float px, float py, float pz, float dx, float dy,
+             float dz, bool on_ground) {
+        return CreateLocalEntity(type_id, space_id, math::Vector3{px, py, pz},
+                                 math::Vector3{dx, dy, dz}, on_ground);
+      });
+  provider->SetDestroyLocalEntityFn([this](uint32_t eid) { DestroyLocalEntity(eid); });
   // Typed alias so callers reach CellApp-specific API without a
   // downcast; ScriptApp owns the unique_ptr.
   native_provider_ = provider.get();
@@ -70,6 +78,11 @@ auto CellApp::Init(int argc, char* argv[]) -> bool {
   (void)table.RegisterTypedHandler<cellapp::CreateCellEntity>(
       [this](const Address& src, Channel* ch, const cellapp::CreateCellEntity& msg) {
         OnCreateCellEntity(src, ch, msg);
+      });
+  (void)table.RegisterTypedHandler<cellapp::SpawnLocalEntity>(
+      [this](const Address& /*src*/, Channel* /*ch*/, const cellapp::SpawnLocalEntity& msg) {
+        (void)CreateLocalEntity(msg.type_id, msg.space_id, msg.position, msg.direction,
+                                msg.on_ground);
       });
   (void)table.RegisterTypedHandler<cellapp::DestroyCellEntity>(
       [this](const Address& src, Channel* ch, const cellapp::DestroyCellEntity& msg) {
@@ -160,6 +173,10 @@ auto CellApp::Init(int argc, char* argv[]) -> bool {
       [this](const Address& src, Channel* ch, const cellappmgr::RegisterCellAppAck& msg) {
         OnRegisterCellAppAck(src, ch, msg);
       });
+  (void)table.RegisterTypedHandler<dbapp::GetEntityIdsAck>(
+      [this](const Address& /*src*/, Channel* ch, const dbapp::GetEntityIdsAck& msg) {
+        OnGetEntityIdsAck(*ch, msg);
+      });
 
   // Connect to CellAppMgr on birth and send RegisterCellApp; the
   // manager replies with RegisterCellAppAck carrying our app_id.
@@ -195,6 +212,20 @@ auto CellApp::Init(int argc, char* argv[]) -> bool {
 
   // Witness send callbacks cache Channel*, so clear them on disconnect.
   Network().SetDisconnectCallback([this](Channel& ch) { OnOutboundChannelDeath(ch); });
+
+  GetMachinedClient().Subscribe(
+      machined::ListenerType::kBoth, ProcessType::kDbApp,
+      [this](const machined::BirthNotification& n) {
+        if (dbapp_channel_ != nullptr) return;
+        auto ch = Network().ConnectRudpNocwnd(n.internal_addr);
+        if (ch) dbapp_channel_ = static_cast<Channel*>(*ch);
+        ATLAS_LOG_INFO("CellApp: DBApp at {}:{}, channel={}", n.internal_addr.Ip(),
+                       n.internal_addr.Port(), dbapp_channel_ ? "ok" : "fail");
+      },
+      [this](const machined::DeathNotification& /*n*/) {
+        ATLAS_LOG_WARNING("CellApp: DBApp died, clearing dbapp channel");
+        dbapp_channel_ = nullptr;
+      });
 
   // Track BaseApp peers so OnClientCellRpcForward can reject spoofed
   // senders. Addresses only - responses ride the same Channel* the
@@ -253,6 +284,7 @@ void CellApp::OnTickComplete() {
   // reports 0, which CellAppMgr already tolerates.
   UpdatePersistentLoad();
   SendInformCellLoad();
+  MaybeRequestMoreIds();
 }
 
 void CellApp::RegisterWatchers() {
@@ -428,6 +460,40 @@ auto CellApp::FindSpace(SpaceID id) -> Space* {
   return it == spaces_.end() ? nullptr : it->second.get();
 }
 
+auto CellApp::PlaceEntityInSpace(EntityID cell_id, uint16_t type_id, Space& space,
+                                 math::Vector3 pos, math::Vector3 dir, bool on_ground)
+    -> CellEntity* {
+  auto entity_ptr = std::make_unique<CellEntity>(cell_id, type_id, space, pos, dir);
+  entity_ptr->SetOnGround(on_ground);
+  auto* entity = space.AddEntity(std::move(entity_ptr));
+  entity_population_[cell_id] = entity;
+
+  // BSP tree (if present) picks the owning local Cell; otherwise fall back
+  // to the only local Cell. No local Cell => no OffloadChecker / GhostMaintainer
+  // entry, acceptable in single-CellApp mode.
+  if (auto* tree = space.GetBspTree(); tree != nullptr) {
+    if (const auto* info = tree->FindCell(pos.x, pos.z)) {
+      if (auto* cell = space.FindLocalCell(info->cell_id)) cell->AddRealEntity(entity);
+    }
+  } else if (!space.LocalCells().empty()) {
+    space.LocalCells().begin()->second->AddRealEntity(entity);
+  }
+  return entity;
+}
+
+void CellApp::RemoveEntityFromSpace(CellEntity* entity) {
+  const EntityID cell_id = entity->Id();
+  if (native_provider_ && native_provider_->entity_destroyed_fn()) {
+    native_provider_->entity_destroyed_fn()(cell_id);
+  }
+  // Drop local Cell membership before Space erases the owning unique_ptr.
+  for (auto& [_, cell] : entity->GetSpace().LocalCells()) {
+    cell->RemoveRealEntity(entity);
+  }
+  entity_population_.erase(cell_id);
+  entity->GetSpace().RemoveEntity(cell_id);
+}
+
 void CellApp::OnCreateCellEntity(const Address& src, Channel* ch,
                                  const cellapp::CreateCellEntity& msg) {
   if (msg.space_id == kInvalidSpaceID) {
@@ -469,29 +535,15 @@ void CellApp::OnCreateCellEntity(const Address& src, Channel* ch,
     ATLAS_LOG_INFO("CellApp: auto-created Space {} for CreateCellEntity", msg.space_id);
   }
 
-  auto entity_ptr =
-      std::make_unique<CellEntity>(cell_id, msg.type_id, *space, msg.position, msg.direction);
-  entity_ptr->SetOnGround(msg.on_ground);
+  auto* entity =
+      PlaceEntityInSpace(cell_id, msg.type_id, *space, msg.position, msg.direction, msg.on_ground);
   // INADDR_ANY fixup: fall back to the channel's RemoteAddress when the
   // sender reported 0.0.0.0:port. Symmetric to BaseApp's other leg.
   Address base_addr = msg.base_addr;
   if (base_addr.Ip() == 0 && ch != nullptr) {
     base_addr = ch->RemoteAddress();
   }
-  entity_ptr->SetBaseAddr(base_addr);
-  auto* entity = space->AddEntity(std::move(entity_ptr));
-  entity_population_[cell_id] = entity;
-
-  // BSP tree (if present) picks the owning local Cell; otherwise fall
-  // back to the only local Cell. No local Cell => no OffloadChecker /
-  // GhostMaintainer entry, acceptable in single-CellApp mode.
-  if (auto* tree = space->GetBspTree(); tree != nullptr) {
-    if (const auto* info = tree->FindCell(msg.position.x, msg.position.z)) {
-      if (auto* cell = space->FindLocalCell(info->cell_id)) cell->AddRealEntity(entity);
-    }
-  } else if (!space->LocalCells().empty()) {
-    space->LocalCells().begin()->second->AddRealEntity(entity);
-  }
+  entity->SetBaseAddr(base_addr);
 
   send_ack();
 
@@ -519,19 +571,58 @@ void CellApp::OnDestroyCellEntity(const Address& /*src*/, Channel* /*ch*/,
     ATLAS_LOG_WARNING("CellApp: DestroyCellEntity for unknown entity_id={}", msg.entity_id);
     return;
   }
-  const EntityID cell_id = entity->Id();
+  RemoveEntityFromSpace(entity);
+}
 
-  if (native_provider_ && native_provider_->entity_destroyed_fn()) {
-    native_provider_->entity_destroyed_fn()(cell_id);
+auto CellApp::CreateLocalEntity(uint16_t type_id, SpaceID space_id, math::Vector3 pos,
+                                math::Vector3 dir, bool on_ground) -> EntityID {
+  if (space_id == kInvalidSpaceID) {
+    ATLAS_LOG_WARNING("CellApp::CreateLocalEntity: invalid space_id");
+    return kInvalidEntityID;
+  }
+  EntityID cell_id = id_client_.AllocateId();
+  if (cell_id == kInvalidEntityID) {
+    ATLAS_LOG_WARNING("CellApp::CreateLocalEntity: id_client exhausted (available={})",
+                      id_client_.Available());
+    return kInvalidEntityID;
   }
 
-  // Drop local Cell membership before Space erases the owning unique_ptr.
-  for (auto& [_, cell] : entity->GetSpace().LocalCells()) {
-    cell->RemoveRealEntity(entity);
+  auto* space = FindSpace(space_id);
+  if (!space) {
+    auto inserted = spaces_.emplace(space_id, std::make_unique<Space>(space_id));
+    space = inserted.first->second.get();
+    ATLAS_LOG_INFO("CellApp: auto-created Space {} for CreateLocalEntity", space_id);
   }
 
-  entity_population_.erase(cell_id);
-  entity->GetSpace().RemoveEntity(cell_id);
+  auto* entity = PlaceEntityInSpace(cell_id, type_id, *space, pos, dir, on_ground);
+  entity->MarkLocal();
+
+  if (native_provider_ && native_provider_->restore_entity_fn()) {
+    ClearNativeApiError();
+    native_provider_->restore_entity_fn()(cell_id, type_id, /*dbid=*/0,
+                                          /*data=*/nullptr, /*len=*/0);
+    if (auto error = ConsumeNativeApiError()) {
+      ATLAS_LOG_ERROR("CellApp::CreateLocalEntity: RestoreEntity failed cell_id={} type={}: {}",
+                      cell_id, type_id, *error);
+    }
+  }
+  return cell_id;
+}
+
+void CellApp::DestroyLocalEntity(EntityID entity_id) {
+  auto* entity = FindRealEntity(entity_id);
+  if (!entity) {
+    ATLAS_LOG_WARNING("CellApp::DestroyLocalEntity: unknown entity_id={}", entity_id);
+    return;
+  }
+  // Base-owned entities must go through cellapp::DestroyCellEntity to keep
+  // base-side bookkeeping in sync; refuse to short-circuit that.
+  if (!entity->IsLocal()) {
+    ATLAS_LOG_ERROR(
+        "CellApp::DestroyLocalEntity: entity_id={} is base-owned; refused", entity_id);
+    return;
+  }
+  RemoveEntityFromSpace(entity);
 }
 
 void CellApp::OnClientCellRpcForward(const Address& src, Channel* ch,
@@ -1298,6 +1389,22 @@ void CellApp::SendInformCellLoad() {
   last_sent_load_ = persistent_load_;
   last_sent_entity_count_ = count;
   last_sent_load_time_ = now;
+}
+
+void CellApp::OnGetEntityIdsAck(Channel& /*ch*/, const dbapp::GetEntityIdsAck& msg) {
+  id_client_.AddIds(msg.start, msg.end);
+  ATLAS_LOG_INFO("CellApp: received {} EntityIDs [{},{}] from DBApp, available={}", msg.count,
+                 msg.start, msg.end, id_client_.Available());
+}
+
+void CellApp::MaybeRequestMoreIds() {
+  if (!dbapp_channel_ || !id_client_.NeedsRefill()) return;
+  auto count = id_client_.IdsToRequest();
+  if (count == 0) return;
+  dbapp::GetEntityIds req;
+  req.count = count;
+  (void)dbapp_channel_->SendMessage(req);
+  ATLAS_LOG_DEBUG("CellApp: requested {} EntityIDs from DBApp", count);
 }
 
 void CellApp::OnRegisterCellAppAck(const Address& /*src*/, Channel* /*ch*/,

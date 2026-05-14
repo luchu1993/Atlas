@@ -72,6 +72,10 @@ class BaseAppNativeProvider : public BaseNativeProvider {
 
   auto CreateBaseEntity(uint16_t type_id, uint32_t space_id) -> uint32_t override;
 
+  auto RequestSpawnCellOnly(uint16_t type_id, uint32_t space_id, float pos_x, float pos_y,
+                            float pos_z, float dir_x, float dir_y, float dir_z, bool on_ground)
+      -> bool override;
+
   void SetAoIRadius(uint32_t entity_id, float radius, float hysteresis) override;
 
   void SetNativeCallbacks(const void* native_callbacks, int32_t len) override;
