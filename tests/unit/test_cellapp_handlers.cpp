@@ -143,8 +143,8 @@ TEST_F(CellAppHandlersTest, CreateLocalEntityMintsIdFromIDClient) {
   auto& id_client = const_cast<IDClient&>(app_.GetIdClientForTest());
   id_client.AddIds(500, 600);
 
-  EntityID id = app_.CreateLocalEntity(/*type_id=*/1, /*space_id=*/1, {1, 0, 2},
-                                       {1, 0, 0}, /*on_ground=*/false);
+  EntityID id = app_.CreateLocalEntity(/*type_id=*/1, /*space_id=*/1, {1, 0, 2}, {1, 0, 0},
+                                       /*on_ground=*/false);
   ASSERT_NE(id, kInvalidEntityID);
   auto* real = app_.FindRealEntity(id);
   ASSERT_NE(real, nullptr);

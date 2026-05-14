@@ -265,18 +265,18 @@ void ClientSession::InstallDefaultHandler() {
         uint8_t body[sizeof(uint32_t) + sizeof(uint16_t)];
         std::memcpy(body, &msg.new_entity_id, sizeof(uint32_t));
         std::memcpy(body + sizeof(uint32_t), &msg.new_type_id, sizeof(uint16_t));
-        callbacks_.on_deliver(reinterpret_cast<AtlasNetContext*>(this),
-                              static_cast<uint16_t>(
-                                  msg_id::Id(msg_id::BaseApp::kEntityTransferred)),
-                              body, static_cast<int32_t>(sizeof(body)));
+        callbacks_.on_deliver(
+            reinterpret_cast<AtlasNetContext*>(this),
+            static_cast<uint16_t>(msg_id::Id(msg_id::BaseApp::kEntityTransferred)), body,
+            static_cast<int32_t>(sizeof(body)));
       });
   (void)network_.InterfaceTable().RegisterTypedHandler<::atlas::baseapp::CellReady>(
       [this](const Address&, Channel*, const ::atlas::baseapp::CellReady& msg) {
         uint8_t body[sizeof(uint32_t)];
         std::memcpy(body, &msg.entity_id, sizeof(uint32_t));
         callbacks_.on_deliver(reinterpret_cast<AtlasNetContext*>(this),
-                              static_cast<uint16_t>(msg_id::Id(msg_id::BaseApp::kCellReady)),
-                              body, static_cast<int32_t>(sizeof(body)));
+                              static_cast<uint16_t>(msg_id::Id(msg_id::BaseApp::kCellReady)), body,
+                              static_cast<int32_t>(sizeof(body)));
       });
 
   network_.InterfaceTable().SetDefaultHandler(

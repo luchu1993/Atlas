@@ -92,8 +92,8 @@ class MockNativeProvider : public INativeApiProvider {
   // concrete as INativeApiProvider's surface grows.
   void SetEntityPosition(uint32_t, float, float, float) override {}
   void SetEntityDirection(uint32_t, float, float, float) override {}
-  void GetEntityPosition(uint32_t, float& x, float& y, float& z) override { x=y=z=0; }
-  void GetEntityDirection(uint32_t, float& x, float& y, float& z) override { x=y=z=0; }
+  void GetEntityPosition(uint32_t, float& x, float& y, float& z) override { x = y = z = 0; }
+  void GetEntityDirection(uint32_t, float& x, float& y, float& z) override { x = y = z = 0; }
   void PublishReplicationFrame(uint32_t, uint64_t, uint64_t, const std::byte*, int32_t,
                                const std::byte*, int32_t, const std::byte*, int32_t,
                                const std::byte*, int32_t) override {}

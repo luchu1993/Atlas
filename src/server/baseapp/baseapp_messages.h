@@ -288,8 +288,7 @@ struct BroadcastRpcFromCell {
 
   static auto Deserialize(BinaryReader& r) -> Result<BroadcastRpcFromCell> {
     auto rid = r.ReadPackedInt();
-    if (!rid)
-      return Error{ErrorCode::kInvalidArgument, "BroadcastRpcFromCell: truncated rpc_id"};
+    if (!rid) return Error{ErrorCode::kInvalidArgument, "BroadcastRpcFromCell: truncated rpc_id"};
     auto src = r.ReadPackedInt();
     if (!src)
       return Error{ErrorCode::kInvalidArgument, "BroadcastRpcFromCell: truncated source_entity_id"};

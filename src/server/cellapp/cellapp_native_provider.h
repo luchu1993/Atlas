@@ -20,10 +20,9 @@ class CellAppNativeProvider : public BaseNativeProvider {
  public:
   // Returns nullptr for unknown ids; methods log+skip rather than crash.
   using EntityLookupFn = std::function<CellEntity*(uint32_t entity_id)>;
-  using CreateLocalEntityFn = std::function<uint32_t(uint16_t type_id, uint32_t space_id,
-                                                     float pos_x, float pos_y, float pos_z,
-                                                     float dir_x, float dir_y, float dir_z,
-                                                     bool on_ground)>;
+  using CreateLocalEntityFn =
+      std::function<uint32_t(uint16_t type_id, uint32_t space_id, float pos_x, float pos_y,
+                             float pos_z, float dir_x, float dir_y, float dir_z, bool on_ground)>;
   using DestroyLocalEntityFn = std::function<void(uint32_t entity_id)>;
 
   // `network` only needed for SendClientRpc (handler tests can omit it).
@@ -32,7 +31,9 @@ class CellAppNativeProvider : public BaseNativeProvider {
 
   // CellApp wires these at startup; tests may inject mocks.
   void SetCreateLocalEntityFn(CreateLocalEntityFn fn) { create_local_entity_fn_ = std::move(fn); }
-  void SetDestroyLocalEntityFn(DestroyLocalEntityFn fn) { destroy_local_entity_fn_ = std::move(fn); }
+  void SetDestroyLocalEntityFn(DestroyLocalEntityFn fn) {
+    destroy_local_entity_fn_ = std::move(fn);
+  }
 
   uint8_t GetProcessPrefix() override;
 
@@ -42,8 +43,8 @@ class CellAppNativeProvider : public BaseNativeProvider {
                      const std::byte* payload, int32_t len, uint64_t trace_id) override;
 
   auto CreateLocalCellEntity(uint16_t type_id, uint32_t space_id, float pos_x, float pos_y,
-                             float pos_z, float dir_x, float dir_y, float dir_z,
-                             bool on_ground) -> uint32_t override;
+                             float pos_z, float dir_x, float dir_y, float dir_z, bool on_ground)
+      -> uint32_t override;
   void DestroyCellEntity(uint32_t entity_id) override;
 
   // CellApp-specific surfaces.

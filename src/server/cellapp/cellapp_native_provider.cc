@@ -122,10 +122,10 @@ void CellAppNativeProvider::SendClientRpc(uint32_t entity_id, uint32_t rpc_id, R
   }
 }
 
-auto CellAppNativeProvider::CreateLocalCellEntity(uint16_t type_id, uint32_t space_id,
-                                                  float pos_x, float pos_y, float pos_z,
-                                                  float dir_x, float dir_y, float dir_z,
-                                                  bool on_ground) -> uint32_t {
+auto CellAppNativeProvider::CreateLocalCellEntity(uint16_t type_id, uint32_t space_id, float pos_x,
+                                                  float pos_y, float pos_z, float dir_x,
+                                                  float dir_y, float dir_z, bool on_ground)
+    -> uint32_t {
   if (!create_local_entity_fn_) {
     ATLAS_LOG_ERROR("CellApp: CreateLocalCellEntity: not wired to CellApp (type_id={})", type_id);
     return 0;
@@ -171,16 +171,30 @@ void CellAppNativeProvider::SetEntityDirection(uint32_t entity_id, float x, floa
 
 void CellAppNativeProvider::GetEntityPosition(uint32_t entity_id, float& x, float& y, float& z) {
   auto* entity = lookup_ ? lookup_(entity_id) : nullptr;
-  if (!entity) { x = 0; y = 0; z = 0; return; }
+  if (!entity) {
+    x = 0;
+    y = 0;
+    z = 0;
+    return;
+  }
   const auto& p = entity->Position();
-  x = p.x; y = p.y; z = p.z;
+  x = p.x;
+  y = p.y;
+  z = p.z;
 }
 
 void CellAppNativeProvider::GetEntityDirection(uint32_t entity_id, float& x, float& y, float& z) {
   auto* entity = lookup_ ? lookup_(entity_id) : nullptr;
-  if (!entity) { x = 0; y = 0; z = 0; return; }
+  if (!entity) {
+    x = 0;
+    y = 0;
+    z = 0;
+    return;
+  }
   const auto& d = entity->Direction();
-  x = d.x; y = d.y; z = d.z;
+  x = d.x;
+  y = d.y;
+  z = d.z;
 }
 
 void CellAppNativeProvider::PublishReplicationFrame(

@@ -1747,8 +1747,7 @@ auto BaseApp::RequestSpawnCellOnly(uint16_t type_id, SpaceID space_id, math::Vec
   const auto& peers = cellapp_peers_.Channels();
   if (peers.empty()) {
     ATLAS_LOG_WARNING(
-        "BaseApp: RequestSpawnCellOnly: type {} requested but no CellApp peer available",
-        type_id);
+        "BaseApp: RequestSpawnCellOnly: type {} requested but no CellApp peer available", type_id);
     return false;
   }
   // Mirror CreateBaseEntityFromScript's deterministic pick so a given

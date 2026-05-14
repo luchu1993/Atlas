@@ -131,13 +131,17 @@ void BaseNativeProvider::SetEntityDirection(uint32_t entity_id, float /*x*/, flo
 void BaseNativeProvider::GetEntityPosition(uint32_t entity_id, float& x, float& y, float& z) {
   ATLAS_LOG_ERROR("atlas_get_position() not supported on this process type (entity_id={})",
                   entity_id);
-  x = 0; y = 0; z = 0;
+  x = 0;
+  y = 0;
+  z = 0;
 }
 
 void BaseNativeProvider::GetEntityDirection(uint32_t entity_id, float& x, float& y, float& z) {
   ATLAS_LOG_ERROR("atlas_get_direction() not supported on this process type (entity_id={})",
                   entity_id);
-  x = 0; y = 0; z = 0;
+  x = 0;
+  y = 0;
+  z = 0;
 }
 
 void BaseNativeProvider::PublishReplicationFrame(

@@ -110,13 +110,13 @@ struct SpawnLocalEntity {
   bool on_ground{false};
 
   static auto Descriptor() -> const MessageDesc& {
-    static const MessageDesc kDesc{msg_id::Id(msg_id::CellApp::kSpawnLocalEntity),
-                                   "cellapp::SpawnLocalEntity",
-                                   MessageLengthStyle::kFixed,
-                                   static_cast<int>(sizeof(uint16_t) + sizeof(SpaceID) +
-                                                    6 * sizeof(float) + sizeof(uint8_t)),
-                                   MessageReliability::kReliable,
-                                   MessageUrgency::kBatched};
+    static const MessageDesc kDesc{
+        msg_id::Id(msg_id::CellApp::kSpawnLocalEntity),
+        "cellapp::SpawnLocalEntity",
+        MessageLengthStyle::kFixed,
+        static_cast<int>(sizeof(uint16_t) + sizeof(SpaceID) + 6 * sizeof(float) + sizeof(uint8_t)),
+        MessageReliability::kReliable,
+        MessageUrgency::kBatched};
     return kDesc;
   }
 

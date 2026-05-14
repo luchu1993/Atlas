@@ -52,12 +52,11 @@ CellApp::~CellApp() = default;
 auto CellApp::CreateNativeProvider() -> std::unique_ptr<INativeApiProvider> {
   auto provider = std::make_unique<CellAppNativeProvider>(
       [this](uint32_t id) { return FindEntity(id); }, Network());
-  provider->SetCreateLocalEntityFn(
-      [this](uint16_t type_id, uint32_t space_id, float px, float py, float pz, float dx, float dy,
-             float dz, bool on_ground) {
-        return CreateLocalEntity(type_id, space_id, math::Vector3{px, py, pz},
-                                 math::Vector3{dx, dy, dz}, on_ground);
-      });
+  provider->SetCreateLocalEntityFn([this](uint16_t type_id, uint32_t space_id, float px, float py,
+                                          float pz, float dx, float dy, float dz, bool on_ground) {
+    return CreateLocalEntity(type_id, space_id, math::Vector3{px, py, pz},
+                             math::Vector3{dx, dy, dz}, on_ground);
+  });
   provider->SetDestroyLocalEntityFn([this](uint32_t eid) { DestroyLocalEntity(eid); });
   // Typed alias so callers reach CellApp-specific API without a
   // downcast; ScriptApp owns the unique_ptr.
@@ -618,8 +617,7 @@ void CellApp::DestroyLocalEntity(EntityID entity_id) {
   // Base-owned entities must go through cellapp::DestroyCellEntity to keep
   // base-side bookkeeping in sync; refuse to short-circuit that.
   if (!entity->IsLocal()) {
-    ATLAS_LOG_ERROR(
-        "CellApp::DestroyLocalEntity: entity_id={} is base-owned; refused", entity_id);
+    ATLAS_LOG_ERROR("CellApp::DestroyLocalEntity: entity_id={} is base-owned; refused", entity_id);
     return;
   }
   RemoveEntityFromSpace(entity);

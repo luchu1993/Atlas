@@ -107,8 +107,8 @@ class CellApp : public EntityApp {
 
   // Mints an id from id_client_, places a cell-only CellEntity, restores C#.
   // Returns kInvalidEntityID when the id pool is empty or space_id is invalid.
-  auto CreateLocalEntity(uint16_t type_id, SpaceID space_id, math::Vector3 pos,
-                         math::Vector3 dir, bool on_ground) -> EntityID;
+  auto CreateLocalEntity(uint16_t type_id, SpaceID space_id, math::Vector3 pos, math::Vector3 dir,
+                         bool on_ground) -> EntityID;
 
   // Refuses base-owned entities so base-side bookkeeping can't drift.
   void DestroyLocalEntity(EntityID entity_id);
@@ -234,8 +234,8 @@ class CellApp : public EntityApp {
 
   // Shared spatial-insertion body for OnCreateCellEntity and CreateLocalEntity:
   // allocates the CellEntity, drops it into the space + owning local Cell.
-  auto PlaceEntityInSpace(EntityID cell_id, uint16_t type_id, Space& space,
-                          math::Vector3 pos, math::Vector3 dir, bool on_ground) -> CellEntity*;
+  auto PlaceEntityInSpace(EntityID cell_id, uint16_t type_id, Space& space, math::Vector3 pos,
+                          math::Vector3 dir, bool on_ground) -> CellEntity*;
 
   // Shared teardown body for OnDestroyCellEntity and DestroyLocalEntity.
   void RemoveEntityFromSpace(CellEntity* entity);
