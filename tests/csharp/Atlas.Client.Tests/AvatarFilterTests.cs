@@ -69,10 +69,9 @@ namespace Atlas.Client.Tests
             var clock = new Clock { Now = 0.0 };
             var f = Make(clock);
             f.Input(0.0, new Vector3(0, 0, 0), Vector3.Forward, false);
+            clock.Now = 0.1;
             f.Input(0.1, new Vector3(10, 0, 0), Vector3.Forward, false);
 
-            // targetTime = wallNow - offset - latency; first Input seeds offset
-            // to wallNow-serverTime so targetTime = serverTime - latency.
             clock.Now = 0.05 + f.CurrentLatency;
             Assert.True(f.TryEvaluate(out var pos, out _, out _));
             Assert.InRange(pos.X, 4.99f, 5.01f);

@@ -5,7 +5,7 @@ using Xunit;
 namespace Atlas.Tests;
 
 [Entity("FieldStructTestEntity")]
-public partial class FieldStructTestEntity : ServerEntity
+public partial class FieldStructTestEntity : CellServerEntity
 {
 }
 

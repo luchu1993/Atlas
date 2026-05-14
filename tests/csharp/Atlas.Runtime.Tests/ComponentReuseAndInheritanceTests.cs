@@ -5,12 +5,12 @@ using Xunit;
 namespace Atlas.Tests;
 
 [Entity("AvatarWithAbility")]
-public partial class AvatarWithAbility : ServerEntity
+public partial class AvatarWithAbility : CellServerEntity
 {
 }
 
 [Entity("MonsterWithAbility")]
-public partial class MonsterWithAbility : ServerEntity
+public partial class MonsterWithAbility : CellServerEntity
 {
 }
 

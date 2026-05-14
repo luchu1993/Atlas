@@ -20,7 +20,7 @@ namespace Atlas.Client.Tests
         [Fact]
         public void PeerEntityFeedsFilterAndInterpolates()
         {
-            var clock = new Clock();
+            var clock = new Clock { Now = 1.00 };
             // Pre-attach so ApplyPositionUpdate doesn't lazy-create with default wall.
             var e = new TestEntity { EntityId = 100, Filter = new AvatarFilter(() => clock.Now) };
             Assert.False(e.IsOwner);
@@ -31,13 +31,14 @@ namespace Atlas.Client.Tests
                                   onGround: true);
             Assert.Equal(1, e.Filter!.SampleCount);
 
+            clock.Now = 1.10;
             e.ApplyPositionUpdate(serverTime: 1.10,
                                   pos: new Vector3(10, 0, 0),
                                   dir: Vector3.Forward,
                                   onGround: true);
             Assert.Equal(2, e.Filter!.SampleCount);
 
-            // wall=1.35, offset seeded to -1.0 at first Input, latency=0.3
+            // wall=1.35, offset stays 0 (clock tracks server), latency=0.3
             // → targetTime=1.05, midway between the two samples.
             clock.Now = 1.35;
             Assert.True(e.TryGetInterpolated(out var pos, out _, out _));

@@ -5,7 +5,7 @@ using Xunit;
 namespace Atlas.Tests;
 
 [Entity("DictSyncTestEntity")]
-public partial class DictSyncTestEntity : ServerEntity
+public partial class DictSyncTestEntity : CellServerEntity
 {
 }
 

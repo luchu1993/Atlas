@@ -11,7 +11,7 @@ namespace Atlas.Tests;
 // the ReplicatedDirtyFlags enum, and the MutRef accessor; the test
 // class body is otherwise empty.
 [Entity("StructSyncTestEntity")]
-public partial class StructSyncTestEntity : ServerEntity
+public partial class StructSyncTestEntity : CellServerEntity
 {
 }
 

@@ -8,7 +8,7 @@ namespace Atlas.Tests;
 // produces the ObservableList<int> accessor, ReplicatedDirtyFlags bit,
 // and the delta serializer that encodes the list tail.
 [Entity("ListSyncTestEntity")]
-public partial class ListSyncTestEntity : ServerEntity
+public partial class ListSyncTestEntity : CellServerEntity
 {
 }
 

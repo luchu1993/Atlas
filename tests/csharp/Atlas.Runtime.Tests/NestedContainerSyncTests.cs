@@ -6,12 +6,12 @@ using Xunit;
 namespace Atlas.Tests;
 
 [Entity("NestedListTestEntity")]
-public partial class NestedListTestEntity : ServerEntity
+public partial class NestedListTestEntity : CellServerEntity
 {
 }
 
 [Entity("StructWithContainerTestEntity")]
-public partial class StructWithContainerTestEntity : ServerEntity
+public partial class StructWithContainerTestEntity : CellServerEntity
 {
 }
 
