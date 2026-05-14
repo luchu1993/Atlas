@@ -113,16 +113,18 @@ internal static class DeltaSyncEmitter
         }
 
         // Frame counters live in this generated partial so non-replicable
-        // entities don't carry them.
+        // entities don't carry them. Base entities skip _volatileSeq: no
+        // Position/Direction state on this side, no volatile frames to seq.
         sb.AppendLine("    private ulong _eventSeq;");
-        sb.AppendLine("    private ulong _volatileSeq;");
+        if (ctx != ProcessContext.Base)
+            sb.AppendLine("    private ulong _volatileSeq;");
         sb.AppendLine();
 
         // BuildAndConsumeReplicationFrame — per-tick entry point for the
         // CellApp replication pump. Returns false when no dirty state, so
         // the caller skips both the allocation and the NativeApi hop.
         EmitBuildAndConsume(sb, ownerFields.Count > 0, otherFields.Count > 0,
-                            hasComponents, replicableProps.Count > 0);
+                            hasComponents, replicableProps.Count > 0, ctx);
 
         sb.AppendLine("}");
         return sb.ToString();
@@ -367,8 +369,11 @@ internal static class DeltaSyncEmitter
 
     private static void EmitBuildAndConsume(StringBuilder sb, bool hasOwnerSnapshot,
                                             bool hasOtherSnapshot, bool hasComponents,
-                                            bool hasOwnProps)
+                                            bool hasOwnProps, ProcessContext ctx)
     {
+        // VolatileDirtyCore lives on CellServerEntity; base-side entities have
+        // no Position/Direction/OnGround surface to dirty-flag.
+        bool emitVolatile = ctx != ProcessContext.Base;
         // Zero-alloc API: caller owns the four SpanWriters (pool-rented,
         // Reset() between entities). Returns (eventSeq, volatileSeq) via
         // out params; avoids per-tick byte[] churn on high-fanout pumps.
@@ -390,7 +395,9 @@ internal static class DeltaSyncEmitter
             sb.AppendLine("        bool hasEvent = (_dirtyFlags & (OwnerVisibleMask | OtherVisibleMask)) != ReplicatedDirtyFlags.None;");
         else  // components-only
             sb.AppendLine("        bool hasEvent = HasOwnerDirtyComponent() || HasOtherDirtyComponent();");
-        sb.AppendLine("        bool hasVolatile = VolatileDirtyCore;");
+        sb.AppendLine(emitVolatile
+            ? "        bool hasVolatile = VolatileDirtyCore;"
+            : "        bool hasVolatile = false;");
         sb.AppendLine("        if (!hasEvent && !hasVolatile)");
         sb.AppendLine("        {");
         sb.AppendLine("            eventSeq = 0; volatileSeq = 0;");
@@ -412,14 +419,19 @@ internal static class DeltaSyncEmitter
             sb.AppendLine("            ClearDirtyComponents();");
         sb.AppendLine("        }");
         sb.AppendLine();
-        sb.AppendLine("        if (hasVolatile)");
-        sb.AppendLine("        {");
-        sb.AppendLine("            _volatileSeq++;");
-        sb.AppendLine("            VolatileDirtyCore = false;");
-        sb.AppendLine("        }");
+        if (emitVolatile)
+        {
+            sb.AppendLine("        if (hasVolatile)");
+            sb.AppendLine("        {");
+            sb.AppendLine("            _volatileSeq++;");
+            sb.AppendLine("            VolatileDirtyCore = false;");
+            sb.AppendLine("        }");
+        }
         sb.AppendLine();
         sb.AppendLine("        eventSeq = hasEvent ? _eventSeq : 0UL;");
-        sb.AppendLine("        volatileSeq = hasVolatile ? _volatileSeq : 0UL;");
+        sb.AppendLine(emitVolatile
+            ? "        volatileSeq = hasVolatile ? _volatileSeq : 0UL;"
+            : "        volatileSeq = 0UL;");
         sb.AppendLine("        return true;");
         sb.AppendLine("    }");
     }
