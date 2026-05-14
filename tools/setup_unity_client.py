@@ -89,17 +89,48 @@ def build_managed(config: str) -> tuple[Path, Path]:
     return shared_dll, client_dll
 
 
-def stage_plugins(native_dll: Path, shared_dll: Path, client_dll: Path) -> None:
+def stage_plugins(native_dll: Path, shared_dll: Path, client_dll: Path,
+                  config: str) -> None:
     native_dir = PLUGINS_ROOT / native_plugin_subdir()
     native_dir.mkdir(parents=True, exist_ok=True)
     shutil.copy2(native_dll, native_dir / native_dll.name)
     info(f"staged {native_dll.name} -> {native_dir.relative_to(REPO_ROOT)}")
+
+    stage_native_runtime_deps(native_dir, config)
 
     PLUGINS_ROOT.mkdir(parents=True, exist_ok=True)
     shutil.copy2(shared_dll, PLUGINS_ROOT / shared_dll.name)
     shutil.copy2(client_dll, PLUGINS_ROOT / client_dll.name)
     info(f"staged {shared_dll.name} + {client_dll.name} -> "
          f"{PLUGINS_ROOT.relative_to(REPO_ROOT)}")
+
+
+def stage_native_runtime_deps(native_dir: Path, config: str) -> None:
+    """Copy DLLs atlas_net_client imports (mimalloc); else Unity surfaces a
+    misleading DllNotFoundException pointing at atlas_net_client itself."""
+    preset = config.lower()
+    if HOST == "Windows":
+        mimalloc_name = "mimalloc-debug.dll" if config == "Debug" else "mimalloc.dll"
+        candidates = [
+            REPO_ROOT / "bin" / preset / mimalloc_name,
+            REPO_ROOT / "build" / preset / "_deps" / "mimalloc-build" / config / mimalloc_name,
+        ]
+    elif HOST == "Linux":
+        lib = "libmimalloc-debug.so" if config == "Debug" else "libmimalloc.so"
+        candidates = [
+            REPO_ROOT / "bin" / preset / lib,
+            REPO_ROOT / "build" / preset / "_deps" / "mimalloc-build" / lib,
+        ]
+    else:
+        return
+
+    src = next((p for p in candidates if p.exists()), None)
+    if src is None:
+        info(f"warning: mimalloc not found in {[str(c) for c in candidates]}; "
+             f"native plugin may DllNotFoundException at runtime")
+        return
+    shutil.copy2(src, native_dir / src.name)
+    info(f"staged {src.name} -> {native_dir.relative_to(REPO_ROOT)}")
 
 
 def resolve_unity_project(arg: str | None) -> Path:
@@ -170,7 +201,7 @@ def main() -> int:
         native_dll = build_native(args.config)
         shared_dll, client_dll = build_managed(args.config)
 
-    stage_plugins(native_dll, shared_dll, client_dll)
+    stage_plugins(native_dll, shared_dll, client_dll, args.config)
     copy_to_unity_project(unity_project)
 
     info("done.")

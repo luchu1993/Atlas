@@ -71,6 +71,12 @@ def parse_args() -> argparse.Namespace:
         default="aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
     )
     parser.add_argument("--keep-cluster", action="store_true")
+    parser.add_argument("--base-assembly", default=None,
+                        help="Override BaseApp script DLL (default: "
+                             "bin/<build>/Atlas.StressTest.Base.dll)")
+    parser.add_argument("--cell-assembly", default=None,
+                        help="Override CellApp script DLL (default: "
+                             "bin/<build>/Atlas.StressTest.Cell.dll)")
     parser.add_argument("--verbose-failures", action="store_true")
     parser.add_argument(
         "--allow-audit-violations",
@@ -719,8 +725,10 @@ def main() -> int:
     bin_base = repo_root / "bin" / bin_name
 
     # C# assemblies deployed by CMake into bin/<bin_name>/ (flat layout).
-    base_assembly = bin_base / "Atlas.StressTest.Base.dll"
-    cell_assembly = bin_base / "Atlas.StressTest.Cell.dll"
+    base_assembly = Path(args.base_assembly) if args.base_assembly \
+                    else bin_base / "Atlas.StressTest.Base.dll"
+    cell_assembly = Path(args.cell_assembly) if args.cell_assembly \
+                    else bin_base / "Atlas.StressTest.Cell.dll"
 
     # Legacy subdirectory hints kept for transitional builds; resolve_program
     # also falls back to the flat bin/<bin_name>/ root.
@@ -1073,11 +1081,22 @@ def main() -> int:
 
         try:
             if not worker_plan:
-                log(
-                    f"No stress workers scheduled (clients={args.clients}); "
-                    f"holding cluster for {args.duration_sec}s to verify stability..."
-                )
-                time.sleep(max(1, args.duration_sec))
+                if args.keep_cluster:
+                    log("No stress workers scheduled; cluster running. Ctrl+C to stop.")
+                    try:
+                        while True:
+                            time.sleep(60)
+                    except KeyboardInterrupt:
+                        log("Interrupted; shutting cluster down...")
+                        # Force the post-block cleanup path: skip the keep_cluster
+                        # gate below so the outer finally tears down processes.
+                        args.keep_cluster = False
+                else:
+                    log(
+                        f"No stress workers scheduled (clients={args.clients}); "
+                        f"holding cluster for {args.duration_sec}s to verify stability..."
+                    )
+                    time.sleep(max(1, args.duration_sec))
             elif args.local_workers == 1:
                 assert world_stress is not None
                 worker = worker_plan[0]
