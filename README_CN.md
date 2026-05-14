@@ -20,6 +20,12 @@ Atlas 面向大型、长线在线世界：服务器需要跨进程扩展，模�
 
 MySQL、DBAppMgr 与 Reviver 已在代码树中占位，但还不是完整的生产功能。
 
+## MVP Unity 示例
+
+`samples/mvp/` 下的 MVP 示例展示了从登录到 Base/Cell 交接、基于 AoI 的实体流式同步、Unity 客户端渲染、服务端权威投射物伤害、NPC AI、HP 属性复制和本地集群工具的完整闭环。
+
+![Atlas MVP Unity 示例](docs/mvp/atlas_mvp.gif)
+
 ## 架构
 
 ```text

@@ -20,6 +20,12 @@ Atlas is aimed at large, long-running online worlds where the server must scale 
 
 MySQL, DBAppMgr, and Reviver are represented in the tree, but they are not complete production features yet.
 
+## MVP Unity Demo
+
+The MVP sample under `samples/mvp/` demonstrates the full loop from login to Base/Cell handoff, AoI-driven entity streaming, Unity client rendering, server-authoritative projectile damage, NPC AI, HP replication, and local cluster tooling.
+
+![Atlas MVP Unity demo](docs/mvp/atlas_mvp.gif)
+
 ## Architecture
 
 ```text
