@@ -98,6 +98,14 @@ class NetworkInterface : public FrequentTask {
 
   void PrepareForShutdown();
 
+  // Channel::Condemn() alone leaves the channels_ map intact, so the next
+  // ConnectRudp(addr) would reuse the dead channel; this evicts the entry.
+  void DisconnectChannel(Address addr) { CondemnChannel(addr); }
+
+  // Closes the shared RUDP socket so the next ConnectRudp binds a fresh
+  // source port; client-mode only — no callers should hold live channels.
+  void CloseRudpSocket();
+
  private:
   void DoTask() override;
 

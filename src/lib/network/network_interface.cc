@@ -275,6 +275,17 @@ auto NetworkInterface::ConnectRudp(const Address& addr) -> Result<ReliableUdpCha
   return ConnectRudp(addr, RudpProfile{});
 }
 
+void NetworkInterface::CloseRudpSocket() {
+  // Drop condemned channels first; their channels still reference the socket.
+  condemned_rudp_by_addr_.clear();
+  condemned_.clear();
+  if (rudp_socket_) {
+    (void)dispatcher_.Deregister(rudp_socket_->Fd());
+    rudp_socket_->Close();
+    rudp_socket_.reset();
+  }
+}
+
 auto NetworkInterface::ConnectRudp(const Address& addr, const RudpProfile& profile)
     -> Result<ReliableUdpChannel*> {
   if (shutting_down_) return Error(ErrorCode::kChannelCondemned, "Shutting down");

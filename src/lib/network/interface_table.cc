@@ -15,6 +15,10 @@ auto InterfaceTable::RegisterHandler(MessageID id, const MessageDesc& desc,
   return {};
 }
 
+void InterfaceTable::UnregisterAllHandlers() {
+  entries_.Clear();
+}
+
 auto InterfaceTable::Dispatch(const Address& source, Channel* channel, MessageID id,
                               BinaryReader& data) -> Result<void> {
   if (pre_dispatch_hook_) {

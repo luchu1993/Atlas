@@ -32,6 +32,10 @@ class InterfaceTable {
   [[nodiscard]] auto Dispatch(const Address& source, Channel* channel, MessageID id,
                               BinaryReader& data) -> Result<void>;
 
+  // Drops every typed handler. Used by ClientSession on Disconnect so a
+  // subsequent Login can re-register without hitting kAlreadyExists.
+  void UnregisterAllHandlers();
+
   [[nodiscard]] auto Find(MessageID id) const -> const MessageDesc*;
   [[nodiscard]] auto FindEntry(MessageID id) const -> const Entry*;
   [[nodiscard]] auto Handler(MessageID id) const -> MessageHandler*;

@@ -304,7 +304,14 @@ auto ClientSession::Disconnect(AtlasDisconnectReason reason) -> int32_t {
   CloseLoginAppChannel();
   CloseBaseAppChannel();
   ClearSessionKey();
+  // Same-id re-registration returns kAlreadyExists; clear so the next
+  // StartLogin / OnAuthResult can re-install its typed handlers.
+  network_.InterfaceTable().UnregisterAllHandlers();
   network_.InterfaceTable().SetDefaultHandler(nullptr);
+
+  // Reuse-source-port reconnects hit a stale server-side channel before its
+  // inactivity timeout kicks in; close the socket so we bind a fresh port.
+  network_.CloseRudpSocket();
 
   state_ = ATLAS_NET_STATE_DISCONNECTED;
   player_entity_id_ = kInvalidEntityID;
@@ -387,14 +394,16 @@ void ClientSession::SetEntityDefDigest(const uint8_t* data, int32_t len) {
 
 void ClientSession::CloseLoginAppChannel() {
   if (loginapp_channel_) {
-    loginapp_channel_->Condemn();
+    // CondemnChannel removes the entry from NetworkInterface.channels_; without
+    // it a subsequent ConnectRudp(login_addr) would reuse this dead channel.
+    network_.DisconnectChannel(loginapp_channel_->RemoteAddress());
     loginapp_channel_ = nullptr;
   }
 }
 
 void ClientSession::CloseBaseAppChannel() {
   if (baseapp_channel_) {
-    baseapp_channel_->Condemn();
+    network_.DisconnectChannel(baseapp_channel_->RemoteAddress());
     baseapp_channel_ = nullptr;
   }
 }
