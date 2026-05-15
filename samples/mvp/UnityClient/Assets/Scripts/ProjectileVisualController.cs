@@ -33,6 +33,12 @@ namespace Atlas.Mvp.Unity
         readonly Queue<GameObject> _projectilePool = new();
         readonly Queue<GameObject> _hitFxPool = new();
         readonly List<PendingHitFx> _pendingHitFx = new();
+        GameObject _root = null!;
+
+        void Awake()
+        {
+            _root = new GameObject("ProjectileRoot");
+        }
 
         void OnEnable()
         {
@@ -44,6 +50,11 @@ namespace Atlas.Mvp.Unity
         {
             ProjectileBus.Fired -= OnFired;
             ProjectileBus.Ended -= OnEnded;
+        }
+
+        void OnDestroy()
+        {
+            if (_root != null) Destroy(_root);
         }
 
         void OnFired(uint shotId, uint ownerId, AtlasVec origin, AtlasVec velocity)
@@ -119,6 +130,7 @@ namespace Atlas.Mvp.Unity
         GameObject CreateProjectile()
         {
             var go = GameObject.CreatePrimitive(PrimitiveType.Sphere);
+            go.transform.SetParent(_root.transform, false);
             go.transform.localScale = Vector3.one * 0.3f;
             if (go.TryGetComponent<Collider>(out var col)) Destroy(col);
             go.GetComponent<Renderer>().material.color = new Color(0.2f, 0.4f, 1f);
@@ -153,6 +165,7 @@ namespace Atlas.Mvp.Unity
         GameObject CreateHitFx()
         {
             var go = GameObject.CreatePrimitive(PrimitiveType.Sphere);
+            go.transform.SetParent(_root.transform, false);
             go.name = "HitFx";
             go.transform.localScale = Vector3.one * 0.8f;
             if (go.TryGetComponent<Collider>(out var col)) Destroy(col);

@@ -13,16 +13,12 @@ namespace Atlas.Mvp.Unity
     {
         [SerializeField] string loginappHost = "127.0.0.1";
         [SerializeField] ushort loginappPort = 20018;
-        // Empty → auto-generate a unique username at Awake so two Editors / Standalone
-        // builds can co-login. Set explicitly in Inspector to pin a name for repro.
         [SerializeField] string username = "";
         [SerializeField] string passwordHash = "mvp_hash";
-        [SerializeField] bool autoConnect = true;
-        // Orbit camera: .y = height above avatar; |.z| = orbit radius.
+        [SerializeField] bool autoConnect = false;
         [SerializeField] Vector3 followOffset = new Vector3(0f, 2.5f, -4f);
         [SerializeField] float cameraLookHeight = 1.2f;
         [SerializeField] float positionSmoothTime = 0.12f;
-        // Yaw catches up to avatar facing while the player is moving.
         [SerializeField] float yawFollowSmoothTime = 0.25f;
         [SerializeField] float mouseSensitivity = 3f;
         [SerializeField] float pitchMin = -25f;
@@ -31,16 +27,20 @@ namespace Atlas.Mvp.Unity
         [SerializeField] float zoomMin = 0.5f;
         [SerializeField] float zoomMax = 12f;
         [SerializeField] float zoomStep = 0.1f;
-        // Inspector slot for the grid material; null falls back to plain gray.
         [SerializeField] Material groundMaterial = null!;
 
         public static Bootstrap? Instance { get; private set; }
         public float CameraYaw => _yaw;
-        public Camera MainCamera => _camera;
+        public Camera? MainCamera => _camera;
 
         AtlasNetworkManager _net = null!;
-        readonly Dictionary<uint, AvatarView> _views = new();
-        Camera _camera = null!;
+        LoginScreen _loginScreen = null!;
+        LoginFlow _flow = null!;
+        readonly Dictionary<uint, EntityView> _views = new();
+        readonly List<uint> _stale = new();
+        GameObject? _worldRoot;
+        Camera? _camera;
+        GameHud? _hud;
         uint _ownerEntityId;
         float _zoom = 1.0f;
         Vector3 _camVelocity;
@@ -48,11 +48,11 @@ namespace Atlas.Mvp.Unity
         float _pitch;
         float _yawVelocity;
         bool _cameraInitialized;
+        bool _userInitiatedLogout;
 
         void Awake()
         {
             Instance = this;
-            // Without this, Editor loses focus → Update halts → RUDP inbound stalls.
             Application.runInBackground = true;
             Log.SetBackend(new UnityLogBackend());
 
@@ -61,26 +61,38 @@ namespace Atlas.Mvp.Unity
 
             if (string.IsNullOrEmpty(username))
                 username = $"mvp_{System.Guid.NewGuid():N}".Substring(0, 12);
-            Debug.Log($"[Mvp.Bootstrap] login username={username}");
 
-            BuildScene();
             _net = gameObject.AddComponent<AtlasNetworkManager>();
             _net.Configure(loginappHost, loginappPort);
-            _net.LoginFinished += OnLoginFinished;
-            _net.AuthFinished += OnAuthFinished;
-            _net.Disconnected += OnDisconnected;
-            gameObject.AddComponent<HudOverlay>().Bind(_net);
-            gameObject.AddComponent<ProjectileVisualController>();
-            gameObject.AddComponent<LabelOverlay>();
+            _net.Disconnected += OnNetDisconnected;
+
+            CreateCamera();
+            _loginScreen = gameObject.AddComponent<LoginScreen>();
+            _loginScreen.Configure(loginappHost, loginappPort, username, passwordHash);
+            _loginScreen.LoginRequested += OnLoginRequested;
+            _loginScreen.SetStatus("Enter credentials and press LOGIN", isError: false);
+
+            _flow = new LoginFlow(_net);
+            _flow.StateChanged += OnFlowStateChanged;
         }
 
         void Start()
         {
-            if (autoConnect) _net.Login(username, passwordHash);
+            if (autoConnect)
+                BeginLogin(loginappHost, loginappPort, username, passwordHash);
+        }
+
+        void OnDestroy()
+        {
+            if (Instance == this) Instance = null;
+            _flow?.Dispose();
+            Cursor.lockState = CursorLockMode.None;
+            TeardownWorld();
         }
 
         void Update()
         {
+            if (_worldRoot == null) return;
             float scroll = Input.mouseScrollDelta.y;
             if (Mathf.Abs(scroll) > 0.01f)
                 _zoom = Mathf.Clamp(_zoom * Mathf.Pow(1f - zoomStep, scroll), zoomMin, zoomMax);
@@ -91,46 +103,163 @@ namespace Atlas.Mvp.Unity
         // Update; reading it earlier costs a 1-frame lag.
         void LateUpdate()
         {
+            if (_worldRoot == null || _camera == null) return;
             FollowOwner();
         }
 
-        void OnLoginFinished(AtlasLoginStatus status, string? err)
+        void OnLoginRequested(string host, ushort port, string user, string pwd)
         {
-            if (status != AtlasLoginStatus.Success)
-            {
-                Debug.LogError($"[Mvp.Bootstrap] Login failed: {status} {err}");
-                return;
-            }
-            _net.Authenticate();
+            BeginLogin(host, port, user, pwd);
         }
 
-        void OnAuthFinished(bool success, uint entityId, ushort typeId, string? err)
+        void BeginLogin(string host, ushort port, string user, string pwd)
         {
-            if (!success)
-            {
-                Debug.LogError($"[Mvp.Bootstrap] Auth failed: {err}");
-                return;
-            }
-            _ownerEntityId = entityId;
-            Debug.Log($"[Mvp.Bootstrap] Authenticated owner={entityId} typeId={typeId}");
-            SendSelectAvatar(entityId);
+            _net.Configure(host, port);
+            _loginScreen.SetInteractable(false);
+            _loginScreen.SetStatus("Connecting…", isError: false);
+            if (!_flow.Begin(user, pwd))
+                _loginScreen.SetInteractable(true);
         }
 
-        void OnDisconnected(int reason)
+        void OnFlowStateChanged(LoginFlowState state)
+        {
+            switch (state)
+            {
+                case LoginFlowState.Connecting:
+                    _loginScreen.SetStatus("Connecting to login server…", isError: false);
+                    break;
+                case LoginFlowState.Authenticating:
+                    _loginScreen.SetStatus("Authenticating with base app…", isError: false);
+                    break;
+                case LoginFlowState.EnteringWorld:
+                    _loginScreen.SetStatus("Loading world…", isError: false);
+                    BuildWorld();
+                    break;
+                case LoginFlowState.InGame:
+                    _loginScreen.Hide();
+                    break;
+                case LoginFlowState.Failed:
+                    _loginScreen.Show();
+                    _loginScreen.SetInteractable(true);
+                    _loginScreen.SetStatus($"Login failed — {_flow.LastError}", isError: true);
+                    TeardownWorld();
+                    break;
+            }
+        }
+
+        void OnNetDisconnected(int reason)
         {
             Debug.LogWarning($"[Mvp.Bootstrap] Disconnected reason={reason}");
+            TeardownWorld();
+            _flow.Reset();
+            _loginScreen.Show();
+            _loginScreen.SetInteractable(true);
+            if (_userInitiatedLogout)
+            {
+                _userInitiatedLogout = false;
+                _loginScreen.SetStatus("Logged out. Re-enter to play again.", isError: false);
+            }
+            else
+            {
+                _loginScreen.SetStatus($"Disconnected (reason={reason}). Re-enter to retry.",
+                                       isError: true);
+            }
         }
 
-        void SendSelectAvatar(uint accountEntityId)
+        void OnHudLogoutRequested()
         {
-            var account = ClientCallbacks.EntityManager.Get(accountEntityId)
-                          as Atlas.Mvp.Client.Account;
-            if (account == null)
+            if (_userInitiatedLogout) return;
+            _userInitiatedLogout = true;
+            // Logout fires on_disconnect synchronously; defer so TeardownWorld
+            // doesn't run inside the click handler that owns GameHud.
+            Invoke(nameof(ExecuteUserLogout), 0f);
+        }
+
+        void ExecuteUserLogout() => _net.Logout();
+
+        void BuildWorld()
+        {
+            if (_worldRoot != null) return;
+            _worldRoot = new GameObject("World");
+
+            var ground = GameObject.CreatePrimitive(PrimitiveType.Plane);
+            ground.name = "Ground";
+            ground.transform.SetParent(_worldRoot.transform, false);
+            // Primitive plane is 10m; scale 20× → 200m world.
+            ground.transform.localScale = new Vector3(20f, 1f, 20f);
+            var renderer = ground.GetComponent<Renderer>();
+            if (groundMaterial != null)
             {
-                Debug.LogError($"[Mvp.Bootstrap] Account entity {accountEntityId} not found");
-                return;
+                renderer.material = groundMaterial;
+                renderer.material.mainTextureScale = new Vector2(100f, 100f);
             }
-            account.Base.SelectAvatar(1);
+            else
+            {
+                renderer.material.color = new Color(0.55f, 0.55f, 0.55f);
+            }
+
+            var lightGo = new GameObject("DirectionalLight");
+            lightGo.transform.SetParent(_worldRoot.transform, false);
+            var light = lightGo.AddComponent<Light>();
+            light.type = LightType.Directional;
+            light.intensity = 1.0f;
+            lightGo.transform.rotation = Quaternion.Euler(50f, -30f, 0f);
+
+            // Camera is persistent (created in Awake); switch its clear color
+            // to the in-world sky so the world reads correctly.
+            if (_camera != null)
+            {
+                _camera.backgroundColor = new Color(0.5f, 0.6f, 0.7f);
+                _camera.transform.position = new Vector3(0f, 5f, -8f);
+                _camera.transform.LookAt(Vector3.zero);
+            }
+
+            var hudGo = new GameObject("HudRoot");
+            hudGo.transform.SetParent(_worldRoot.transform, false);
+            _hud = hudGo.AddComponent<GameHud>();
+            _hud.Bind(_net);
+            _hud.LogoutRequested += OnHudLogoutRequested;
+            gameObject.AddComponent<ProjectileVisualController>();
+            gameObject.AddComponent<LabelOverlay>();
+
+            _cameraInitialized = false;
+            _zoom = 1.0f;
+            _camVelocity = Vector3.zero;
+            _yawVelocity = 0f;
+        }
+
+        void TeardownWorld()
+        {
+            _ownerEntityId = 0;
+            Cursor.lockState = CursorLockMode.None;
+            foreach (var v in _views.Values)
+                if (v != null) Destroy(v.gameObject);
+            _views.Clear();
+            _hud = null;
+            foreach (var c in GetComponents<ProjectileVisualController>()) Destroy(c);
+            foreach (var c in GetComponents<LabelOverlay>()) Destroy(c);
+            if (_worldRoot != null) { Destroy(_worldRoot); _worldRoot = null; }
+            ResetCameraToBootPose();
+        }
+
+        void CreateCamera()
+        {
+            var camGo = new GameObject("MainCamera");
+            camGo.transform.SetParent(transform, false);
+            camGo.tag = "MainCamera";
+            _camera = camGo.AddComponent<Camera>();
+            _camera.farClipPlane = 1500f;
+            ResetCameraToBootPose();
+        }
+
+        void ResetCameraToBootPose()
+        {
+            if (_camera == null) return;
+            _camera.backgroundColor = new Color(0.05f, 0.05f, 0.07f);
+            _camera.clearFlags = CameraClearFlags.SolidColor;
+            _camera.transform.position = new Vector3(0f, 5f, -8f);
+            _camera.transform.LookAt(Vector3.zero);
+            _cameraInitialized = false;
         }
 
         void ReconcileViews()
@@ -154,30 +283,40 @@ namespace Atlas.Mvp.Unity
             }
         }
 
-        readonly List<uint> _stale = new();
-
-        AvatarView SpawnView(ClientEntity entity)
+        EntityView SpawnView(ClientEntity entity)
         {
             var go = new GameObject($"View_{entity.TypeName}_{entity.EntityId}");
-            var view = go.AddComponent<AvatarView>();
+            if (_worldRoot != null) go.transform.SetParent(_worldRoot.transform, false);
+
+            // ReconcileViews already filters to Avatar / Npc; the default arm
+            // exists only because switch expressions must be exhaustive.
+            EntityView view = entity switch
+            {
+                MvpAvatar => go.AddComponent<AvatarView>(),
+                MvpNpc => go.AddComponent<NpcView>(),
+                _ => throw new System.InvalidOperationException(
+                         $"SpawnView: unsupported entity type {entity.TypeName}"),
+            };
             view.Bind(entity, _net);
+
             if (entity.IsOwner && entity is MvpAvatar avatar)
             {
                 // Owner may switch via EntityTransferred (Account → Avatar handoff).
                 _ownerEntityId = entity.EntityId;
                 go.AddComponent<PlayerInputController>().Bind(avatar, _net);
-                // Inner = enter boundary, outer = enter + hysteresis (leave boundary).
                 go.AddComponent<AoIDebugRing>().Configure(
                     50f, 55f,
                     new Color(0f, 1f, 0.4f, 0.7f),
                     new Color(1f, 0.7f, 0.2f, 0.5f));
+                _hud?.SetOwner(avatar);
+                _flow.NotifyEnteredWorld();
             }
             return view;
         }
 
         void FollowOwner()
         {
-            if (_ownerEntityId == 0) return;
+            if (_ownerEntityId == 0 || _camera == null) return;
             if (!_views.TryGetValue(_ownerEntityId, out var owner) || owner == null) return;
             var targetPos = owner.transform.position;
             var ownerYaw = owner.transform.rotation.eulerAngles.y;
@@ -189,8 +328,6 @@ namespace Atlas.Mvp.Unity
                 _cameraInitialized = true;
             }
 
-            // Right-button drag drives free orbit; locking the cursor avoids
-            // mouse-edge clamping mid-spin and matches PUBG/MMO convention.
             if (Input.GetMouseButton(1))
             {
                 Cursor.lockState = CursorLockMode.Locked;
@@ -217,49 +354,5 @@ namespace Atlas.Mvp.Unity
         static bool IsMoveInputActive() =>
             Mathf.Abs(Input.GetAxisRaw("Horizontal")) > 0.01f ||
             Mathf.Abs(Input.GetAxisRaw("Vertical")) > 0.01f;
-
-        void BuildScene()
-        {
-            var ground = GameObject.CreatePrimitive(PrimitiveType.Plane);
-            ground.name = "Ground";
-            // Primitive plane is 10m; scale 20× → 200m world.
-            ground.transform.localScale = new Vector3(20f, 1f, 20f);
-            var renderer = ground.GetComponent<Renderer>();
-            if (groundMaterial != null)
-            {
-                renderer.material = groundMaterial;
-                // 200m / 2-cells-per-tile texture → 100 tiles = 1m per cell.
-                renderer.material.mainTextureScale = new Vector2(100f, 100f);
-            }
-            else
-            {
-                renderer.material.color = new Color(0.55f, 0.55f, 0.55f);
-            }
-
-            var lightGo = new GameObject("DirectionalLight");
-            var light = lightGo.AddComponent<Light>();
-            light.type = LightType.Directional;
-            light.intensity = 1.0f;
-            lightGo.transform.rotation = Quaternion.Euler(50f, -30f, 0f);
-
-            var camGo = new GameObject("MainCamera");
-            camGo.tag = "MainCamera";
-            _camera = camGo.AddComponent<Camera>();
-            _camera.farClipPlane = 1500f;
-            _camera.backgroundColor = new Color(0.5f, 0.6f, 0.7f);
-            // Initial pose before owner spawns; FollowOwner takes over once
-            // the owner avatar enters the scene.
-            camGo.transform.position = new Vector3(0f, 5f, -8f);
-            camGo.transform.LookAt(Vector3.zero);
-        }
-
-        void OnDestroy()
-        {
-            if (Instance == this) Instance = null;
-            Cursor.lockState = CursorLockMode.None;
-            foreach (var v in _views.Values)
-                if (v != null) Destroy(v.gameObject);
-            _views.Clear();
-        }
     }
 }

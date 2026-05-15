@@ -1,0 +1,138 @@
+.hud-root {
+    position: absolute;
+    left: 0;
+    right: 0;
+    top: 0;
+    bottom: 0;
+}
+
+.card {
+    position: absolute;
+    background-color: rgba(15, 15, 18, 0.72);
+    border-width: 1px;
+    border-color: rgba(255, 255, 255, 0.08);
+    border-radius: 6px;
+    padding: 10px 14px;
+}
+
+.hp-card {
+    left: 18px;
+    top: 18px;
+    width: 280px;
+}
+
+.hp-name {
+    color: rgb(245, 245, 245);
+    font-size: 13px;
+    -unity-font-style: bold;
+    margin-bottom: 6px;
+}
+
+.hp-bar-track {
+    height: 14px;
+    background-color: rgba(255, 255, 255, 0.08);
+    border-radius: 3px;
+    border-width: 1px;
+    border-color: rgba(255, 255, 255, 0.12);
+    overflow: hidden;
+}
+
+.hp-bar-fill {
+    height: 100%;
+    width: 100%;
+    background-color: rgb(80, 200, 120);
+    border-radius: 2px;
+}
+
+.hp-bar-fill.warn {
+    background-color: rgb(230, 180, 60);
+}
+
+.hp-bar-fill.danger {
+    background-color: rgb(220, 70, 70);
+}
+
+.hp-bar-fill.dead {
+    background-color: rgb(90, 90, 90);
+}
+
+.hp-text {
+    margin-top: 4px;
+    color: rgb(225, 225, 225);
+    font-size: 11px;
+    -unity-text-align: middle-right;
+}
+
+.stats-card {
+    right: 18px;
+    top: 18px;
+    width: 180px;
+}
+
+.stat-row {
+    flex-direction: row;
+    justify-content: space-between;
+    margin-bottom: 4px;
+}
+
+.stat-key {
+    color: rgb(180, 180, 180);
+    font-size: 12px;
+}
+
+.stat-value {
+    color: rgb(240, 240, 240);
+    font-size: 12px;
+    -unity-font-style: bold;
+}
+
+.aoi-toggle {
+    margin-top: 8px;
+    flex-direction: row;
+    align-items: center;
+}
+
+.aoi-toggle > .unity-toggle__input {
+    flex-direction: row;
+    align-items: center;
+}
+
+.aoi-toggle .unity-toggle__checkmark {
+    width: 14px;
+    height: 14px;
+    background-color: rgba(255, 255, 255, 0.08);
+    border-width: 1px;
+    border-color: rgba(255, 255, 255, 0.35);
+    border-radius: 3px;
+    margin-right: 6px;
+    -unity-background-image-tint-color: rgba(0, 0, 0, 0);
+}
+
+.aoi-toggle:checked .unity-toggle__checkmark {
+    background-color: rgb(80, 140, 220);
+    border-color: rgb(120, 170, 230);
+}
+
+.aoi-toggle Label {
+    color: rgb(220, 220, 220);
+    font-size: 12px;
+}
+
+.logout-btn {
+    margin-top: 10px;
+    height: 28px;
+    background-color: rgba(220, 70, 70, 0.85);
+    color: white;
+    font-size: 12px;
+    -unity-font-style: bold;
+    border-width: 0;
+    border-radius: 4px;
+}
+
+.logout-btn:hover {
+    background-color: rgb(230, 90, 90);
+}
+
+.logout-btn:active {
+    background-color: rgb(180, 50, 50);
+}

@@ -167,7 +167,7 @@ MonoBehaviour:
   loginappPort: 20018
   username: 
   passwordHash: mvp_hash
-  autoConnect: 1
+  autoConnect: 0
   followOffset: {x: 0, y: 2.5, z: -4}
   cameraLookHeight: 1.5
   positionSmoothTime: 0.12

@@ -41,3 +41,6 @@ crashlytics-build.properties
 # DLL drops from setup_mvp_unity — rebuild artefacts, not source.
 [Aa]ssets/[Aa]tlas.[Cc]lient.[Uu]nity/
 [Aa]ssets/[Pp]lugins/[Aa]tlas/
+
+# Unity editor version: per-developer, not pinned in repo.
+ProjectSettings/ProjectVersion.txt

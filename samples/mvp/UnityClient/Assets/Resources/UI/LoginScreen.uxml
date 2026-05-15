@@ -1,0 +1,26 @@
+<?xml version="1.0" encoding="utf-8"?>
+<ui:UXML xmlns:ui="UnityEngine.UIElements"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         editor-extension-mode="False">
+    <Style src="project://database/Assets/Resources/UI/LoginScreen.uss" />
+    <ui:VisualElement name="overlay" class="overlay">
+        <ui:VisualElement name="panel" class="panel">
+            <ui:Label text="Atlas MVP — Login" class="title" />
+
+            <ui:Label text="Host : Port" class="label" />
+            <ui:VisualElement class="row">
+                <ui:TextField name="host-field" class="input host" />
+                <ui:TextField name="port-field" class="input port" />
+            </ui:VisualElement>
+
+            <ui:Label text="Username" class="label" />
+            <ui:TextField name="username-field" class="input" />
+
+            <ui:Label text="Password hash" class="label" />
+            <ui:TextField name="password-field" password="true" class="input" />
+
+            <ui:Button name="login-button" text="LOGIN" class="login-btn" />
+            <ui:Label name="status-label" text="" class="status" />
+        </ui:VisualElement>
+    </ui:VisualElement>
+</ui:UXML>

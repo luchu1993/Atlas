@@ -1,0 +1,111 @@
+.overlay {
+    position: absolute;
+    left: 0;
+    right: 0;
+    top: 0;
+    bottom: 0;
+    background-color: rgba(0, 0, 0, 0.45);
+    justify-content: center;
+    align-items: center;
+}
+
+.panel {
+    width: 480px;
+    background-color: rgba(15, 15, 15, 0.92);
+    padding: 28px;
+    border-radius: 6px;
+    border-width: 1px;
+    border-color: rgba(255, 255, 255, 0.08);
+}
+
+.title {
+    font-size: 22px;
+    color: rgb(245, 245, 245);
+    -unity-font-style: bold;
+    -unity-text-align: middle-center;
+    margin-bottom: 16px;
+}
+
+.label {
+    color: rgb(200, 200, 200);
+    font-size: 12px;
+    margin-top: 8px;
+    margin-bottom: 4px;
+}
+
+.row {
+    flex-direction: row;
+}
+
+.input {
+    height: 28px;
+    margin-bottom: 4px;
+    color: rgb(240, 240, 240);
+    --unity-cursor-color: rgb(240, 240, 240);
+    --unity-selection-color: rgba(80, 140, 220, 0.6);
+}
+
+.input > TextInput,
+.input > .unity-base-text-field__input {
+    background-color: rgba(255, 255, 255, 0.08);
+    border-color: rgba(255, 255, 255, 0.2);
+    border-width: 1px;
+    color: rgb(240, 240, 240);
+    padding-left: 6px;
+    padding-right: 6px;
+}
+
+.input TextElement,
+.input .unity-text-element {
+    color: rgb(240, 240, 240);
+}
+
+.host {
+    flex-grow: 1;
+    flex-shrink: 1;
+    flex-basis: 0px;
+    min-width: 0;
+    margin-right: 8px;
+    width: auto;
+}
+
+.port {
+    flex-grow: 0;
+    flex-shrink: 0;
+    width: 110px;
+    min-width: 110px;
+    max-width: 110px;
+}
+
+.login-btn {
+    height: 36px;
+    margin-top: 16px;
+    background-color: rgb(51, 115, 217);
+    color: white;
+    -unity-font-style: bold;
+    font-size: 14px;
+    border-width: 0;
+    border-radius: 4px;
+}
+
+.login-btn:hover {
+    background-color: rgb(77, 140, 242);
+}
+
+.login-btn:disabled {
+    background-color: rgb(70, 70, 70);
+    color: rgb(140, 140, 140);
+}
+
+.status {
+    -unity-text-align: middle-center;
+    margin-top: 12px;
+    white-space: normal;
+    color: rgb(220, 220, 220);
+    font-size: 12px;
+    min-height: 20px;
+}
+
+.status.error {
+    color: rgb(255, 102, 102);
+}
