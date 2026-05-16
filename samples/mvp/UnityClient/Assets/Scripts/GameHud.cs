@@ -73,10 +73,10 @@ namespace Atlas.Mvp.Unity
             _aoiToggle.focusable = false;
             _aoiToggle.RegisterCallback<ClickEvent>(_ =>
             {
-                AoIDebugRing.SetVisible(!AoIDebugRing.Visible);
-                ApplyAoiToggleCheckedStyle(AoIDebugRing.Visible);
+                AoiBoxes.SetVisible(!AoiBoxes.Visible);
+                ApplyAoiToggleCheckedStyle(AoiBoxes.Visible);
             });
-            ApplyAoiToggleCheckedStyle(AoIDebugRing.Visible);
+            ApplyAoiToggleCheckedStyle(AoiBoxes.Visible);
 
             _logoutButton.focusable = false;
             _logoutButton.clicked += () => LogoutRequested?.Invoke();

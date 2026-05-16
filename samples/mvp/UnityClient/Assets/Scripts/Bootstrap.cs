@@ -240,6 +240,7 @@ namespace Atlas.Mvp.Unity
             _hud = null;
             _projectiles?.Dispose();
             _projectiles = null;
+            AoiBoxes.Clear();
             LabelOverlay.Shutdown();
             if (_worldRoot != null) { Destroy(_worldRoot); _worldRoot = null; }
             Tick.Clear();
@@ -308,8 +309,7 @@ namespace Atlas.Mvp.Unity
                 // Owner may switch via EntityTransferred (Account → Avatar handoff).
                 _ownerEntityId = entity.EntityId;
                 go.AddComponent<PlayerInputController>().Bind(avatar, _net);
-                go.AddComponent<AoIDebugRing>().Configure(
-                    50f, 55f,
+                AoiBoxes.Attach(go.transform, 50f, 55f,
                     new Color(0f, 1f, 0.4f, 0.7f),
                     new Color(1f, 0.7f, 0.2f, 0.5f));
                 _hud?.SetOwner(avatar);
