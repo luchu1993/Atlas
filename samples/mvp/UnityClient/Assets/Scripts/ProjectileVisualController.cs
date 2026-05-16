@@ -41,12 +41,12 @@ namespace Atlas.Mvp.Unity
             _root = new GameObject("ProjectileRoot");
             ProjectileBus.Fired += OnFired;
             ProjectileBus.Ended += OnEnded;
-            Tick.Add(this);
+            Ticker.Add(this);
         }
 
         public void Dispose()
         {
-            Tick.Remove(this);
+            Ticker.Remove(this);
             ProjectileBus.Fired -= OnFired;
             ProjectileBus.Ended -= OnEnded;
             if (_root != null) UnityEngine.Object.Destroy(_root);

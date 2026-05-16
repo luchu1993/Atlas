@@ -98,7 +98,7 @@ namespace Atlas.Mvp.Unity
             if (Mathf.Abs(scroll) > 0.01f)
                 _zoom = Mathf.Clamp(_zoom * Mathf.Pow(1f - zoomStep, scroll), zoomMin, zoomMax);
             ReconcileViews();
-            Tick.RunTick(Time.deltaTime);
+            Ticker.RunTick(Time.deltaTime);
         }
 
         // FollowOwner updates the camera; LateTick must run after it so
@@ -107,7 +107,7 @@ namespace Atlas.Mvp.Unity
         {
             if (_worldRoot == null || _camera == null) return;
             FollowOwner();
-            Tick.RunLateTick();
+            Ticker.RunLateTick();
         }
 
         void OnLoginRequested(string host, ushort port, string user, string pwd)
@@ -242,7 +242,7 @@ namespace Atlas.Mvp.Unity
             AoiBoxes.Clear();
             LabelOverlay.Shutdown();
             if (_worldRoot != null) { Destroy(_worldRoot); _worldRoot = null; }
-            Tick.Clear();
+            Ticker.Clear();
             ResetCameraToBootPose();
         }
 

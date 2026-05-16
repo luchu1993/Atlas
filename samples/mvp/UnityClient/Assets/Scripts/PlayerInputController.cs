@@ -30,12 +30,12 @@ namespace Atlas.Mvp.Unity
             _respawnHandler = pos =>
                 _localPos = new Vector3(pos.X, pos.Y, pos.Z);
             _avatar.Respawned += _respawnHandler;
-            Tick.Add(this);
+            Ticker.Add(this);
         }
 
         public void Dispose()
         {
-            Tick.Remove(this);
+            Ticker.Remove(this);
             _avatar.Respawned -= _respawnHandler;
         }
 

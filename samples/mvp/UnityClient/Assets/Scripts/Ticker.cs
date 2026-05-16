@@ -8,7 +8,7 @@ namespace Atlas.Mvp.Unity
     // Central per-frame dispatcher. Bootstrap.Update/LateUpdate is the only
     // MonoBehaviour pump; everything else registers here so we pay one
     // native->managed call per frame instead of one per component.
-    public static class Tick
+    public static class Ticker
     {
         static readonly List<ITickable> _tick = new();
         static readonly List<ILateTickable> _late = new();

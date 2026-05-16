@@ -28,12 +28,12 @@ namespace Atlas.Mvp.Unity
             BuildVisual();
             _label = LabelOverlay.Instance!.CreateLabel();
             HookEvents();
-            Tick.Add(this);
+            Ticker.Add(this);
         }
 
         public virtual void Dispose()
         {
-            Tick.Remove(this);
+            Ticker.Remove(this);
             UnhookEvents();
             if (_label != null) UnityEngine.Object.Destroy(_label.gameObject);
             if (Root != null) UnityEngine.Object.Destroy(Root);

@@ -33,13 +33,13 @@ namespace Atlas.Mvp.Unity
         {
             if (Instance != null) return;
             Instance = new LabelOverlay();
-            Tick.Add(Instance);
+            Ticker.Add(Instance);
         }
 
         public static void Shutdown()
         {
             if (Instance == null) return;
-            Tick.Remove(Instance);
+            Ticker.Remove(Instance);
             foreach (var f in Instance._floaters) f.DestroyText();
             Instance._floaters.Clear();
             if (Instance._canvas != null) Object.Destroy(Instance._canvas.gameObject);
