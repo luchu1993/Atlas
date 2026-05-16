@@ -47,12 +47,12 @@
 
 .input > TextInput,
 .input > .unity-base-text-field__input {
+    flex-grow: 1;
     background-color: rgba(255, 255, 255, 0.08);
     border-color: rgba(255, 255, 255, 0.2);
     border-width: 1px;
     color: rgb(240, 240, 240);
-    padding-left: 6px;
-    padding-right: 6px;
+    padding: 0 6px;
 }
 
 .input TextElement,
