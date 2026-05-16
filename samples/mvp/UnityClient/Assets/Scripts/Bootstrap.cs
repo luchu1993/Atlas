@@ -97,13 +97,15 @@ namespace Atlas.Mvp.Unity
             if (Mathf.Abs(scroll) > 0.01f)
                 _zoom = Mathf.Clamp(_zoom * Mathf.Pow(1f - zoomStep, scroll), zoomMin, zoomMax);
             ReconcileViews();
+            Tick.RunTick(Time.deltaTime);
         }
 
-        // LateUpdate: PlayerInputController writes the owner transform in
-        // Update; reading it earlier costs a 1-frame lag.
+        // LateUpdate: input controller writes the owner transform in Tick;
+        // reading it earlier costs a 1-frame lag.
         void LateUpdate()
         {
             if (_worldRoot == null || _camera == null) return;
+            Tick.RunLateTick();
             FollowOwner();
         }
 
@@ -238,6 +240,7 @@ namespace Atlas.Mvp.Unity
             foreach (var c in GetComponents<ProjectileVisualController>()) Destroy(c);
             foreach (var c in GetComponents<LabelOverlay>()) Destroy(c);
             if (_worldRoot != null) { Destroy(_worldRoot); _worldRoot = null; }
+            Tick.Clear();
             ResetCameraToBootPose();
         }
 
