@@ -22,7 +22,10 @@
                 <ui:Label text="Ping" class="stat-key" />
                 <ui:Label name="ping-value" text="-- ms" class="stat-value" />
             </ui:VisualElement>
-            <ui:Toggle name="aoi-toggle" label="Show AoI" class="aoi-toggle" />
+            <ui:VisualElement name="aoi-toggle" class="aoi-toggle">
+                <ui:VisualElement name="aoi-checkbox" class="aoi-checkbox" />
+                <ui:Label text="Show AoI" class="aoi-label" />
+            </ui:VisualElement>
             <ui:Button name="logout-button" text="Return to Login" class="logout-btn" />
         </ui:VisualElement>
 

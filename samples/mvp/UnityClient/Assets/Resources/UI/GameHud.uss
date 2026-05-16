@@ -92,28 +92,24 @@
     align-items: center;
 }
 
-.aoi-toggle > .unity-toggle__input {
-    flex-direction: row;
-    align-items: center;
-}
-
-.aoi-toggle .unity-toggle__checkmark {
-    width: 14px;
-    height: 14px;
-    background-color: rgba(255, 255, 255, 0.08);
-    border-width: 1px;
-    border-color: rgba(255, 255, 255, 0.35);
-    border-radius: 3px;
+.aoi-checkbox {
+    width: 16px;
+    height: 16px;
+    min-width: 16px;
+    min-height: 16px;
     margin-right: 6px;
-    -unity-background-image-tint-color: rgba(0, 0, 0, 0);
+    background-color: rgba(255, 255, 255, 0.18);
+    border-width: 1.5px;
+    border-color: rgba(255, 255, 255, 0.85);
+    border-radius: 3px;
 }
 
-.aoi-toggle:checked .unity-toggle__checkmark {
+.aoi-checkbox.checked {
     background-color: rgb(80, 140, 220);
     border-color: rgb(120, 170, 230);
 }
 
-.aoi-toggle Label {
+.aoi-label {
     color: rgb(220, 220, 220);
     font-size: 12px;
 }

@@ -21,7 +21,8 @@ namespace Atlas.Mvp.Unity
         Label _hpText = null!;
         Label _fpsValue = null!;
         Label _pingValue = null!;
-        Toggle _aoiToggle = null!;
+        VisualElement _aoiToggle = null!;
+        VisualElement _aoiCheckbox = null!;
         Button _logoutButton = null!;
 
         float _fps;
@@ -57,23 +58,25 @@ namespace Atlas.Mvp.Unity
             _hpText = root.Q<Label>("hp-text");
             _fpsValue = root.Q<Label>("fps-value");
             _pingValue = root.Q<Label>("ping-value");
-            _aoiToggle = root.Q<Toggle>("aoi-toggle");
+            _aoiToggle = root.Q<VisualElement>("aoi-toggle");
+            _aoiCheckbox = root.Q<VisualElement>("aoi-checkbox");
             _logoutButton = root.Q<Button>("logout-button");
 
             if (_hpFill == null || _hpName == null || _hpText == null
                 || _fpsValue == null || _pingValue == null
-                || _aoiToggle == null || _logoutButton == null)
+                || _aoiToggle == null || _aoiCheckbox == null || _logoutButton == null)
             {
                 Debug.LogError("[GameHud] UXML missing expected names — check GameHud.uxml");
                 return;
             }
 
-            _aoiToggle.value = AoIDebugRing.Visible;
-            _aoiToggle.RegisterValueChangedCallback(evt => AoIDebugRing.SetVisible(evt.newValue));
-            // Keep the player's movement keys (Space jump etc.) from being
-            // swallowed by the toggle once it gains focus on a mouse click.
             _aoiToggle.focusable = false;
-            _aoiToggle.Q<VisualElement>(className: "unity-toggle__input").focusable = false;
+            _aoiToggle.RegisterCallback<ClickEvent>(_ =>
+            {
+                AoIDebugRing.SetVisible(!AoIDebugRing.Visible);
+                ApplyAoiToggleCheckedStyle(AoIDebugRing.Visible);
+            });
+            ApplyAoiToggleCheckedStyle(AoIDebugRing.Visible);
 
             _logoutButton.focusable = false;
             _logoutButton.clicked += () => LogoutRequested?.Invoke();
@@ -121,6 +124,11 @@ namespace Atlas.Mvp.Unity
             _hpText.text = $"HP {hp}/{_observedMaxHp}";
             _hpFill.style.width = new Length(pct * 100f, LengthUnit.Percent);
             ApplyHpClass(pct, dead: _owner.IsDead);
+        }
+
+        void ApplyAoiToggleCheckedStyle(bool isChecked)
+        {
+            _aoiCheckbox.EnableInClassList("checked", isChecked);
         }
 
         void ApplyHpClass(float pct, bool dead)
