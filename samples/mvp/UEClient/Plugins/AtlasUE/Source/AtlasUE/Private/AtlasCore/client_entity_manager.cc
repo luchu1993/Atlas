@@ -1,6 +1,12 @@
 #include "AtlasCore/client_entity_manager.h"
 
+#include <utility>
+
 namespace atlas {
+
+void ClientEntityManager::RegisterFactory(EntityTypeId type_id, Factory factory) {
+  factories_[type_id] = std::move(factory);
+}
 
 bool ClientEntityManager::Register(std::unique_ptr<ClientEntity> entity) {
   if (!entity || entity->Id() == kInvalidEntityId) {
@@ -21,6 +27,20 @@ ClientEntity* ClientEntityManager::Find(EntityId id) const {
 
 void ClientEntityManager::Clear() {
   entities_.clear();
+}
+
+bool ClientEntityManager::HandleEnter(EntityId id, EntityTypeId type_id, double server_time,
+                                      const Vec3& pos, const Vec3& dir, bool on_ground) {
+  if (id == kInvalidEntityId || entities_.contains(id)) return false;
+  const auto it = factories_.find(type_id);
+  if (it == factories_.end()) return false;
+
+  auto entity = it->second(id, type_id);
+  if (!entity) return false;
+  ClientEntity* raw = entity.get();
+  entities_.emplace(id, std::move(entity));
+  raw->OnPositionReceived(server_time, pos, dir, on_ground);
+  return true;
 }
 
 void ClientEntityManager::HandlePositionUpdate(EntityId id, double server_time, const Vec3& pos,
