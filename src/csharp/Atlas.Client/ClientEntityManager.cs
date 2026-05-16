@@ -41,6 +41,18 @@ public sealed class ClientEntityManager
         }
     }
 
+    // net_client fires no per-entity destroy callbacks during disconnect, so
+    // hosts must drain the manager themselves on session teardown.
+    public void Clear()
+    {
+        foreach (var entity in _entities.Values)
+        {
+            entity.IsDestroyed = true;
+            entity.OnDestroy();
+        }
+        _entities.Clear();
+    }
+
     public int Count => _entities.Count;
 
     public IEnumerable<ClientEntity> Entities => _entities.Values;
