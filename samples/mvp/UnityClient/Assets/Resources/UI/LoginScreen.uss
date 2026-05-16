@@ -6,15 +6,15 @@
     bottom: 0;
     background-color: rgb(8, 9, 11);
     flex-direction: column;
-    padding-top: 70px;
-    padding-left: 80px;
-    padding-right: 80px;
-    padding-bottom: 60px;
+    justify-content: center;
+    align-items: center;
+    padding: 40px;
 }
 
 .brand {
     flex-direction: column;
-    margin-bottom: 56px;
+    align-items: center;
+    margin-bottom: 48px;
 }
 
 .brand-mark {
@@ -22,6 +22,7 @@
     font-size: 64px;
     -unity-font-style: bold;
     letter-spacing: 12px;
+    -unity-text-align: middle-center;
 }
 
 .brand-sub {
@@ -29,12 +30,13 @@
     font-size: 11px;
     letter-spacing: 6px;
     margin-top: 2px;
-    margin-left: 4px;
+    -unity-text-align: middle-center;
 }
 
 .panel {
     width: 420px;
     flex-direction: column;
+    align-items: stretch;
 }
 
 .title {
@@ -42,14 +44,16 @@
     color: rgb(245, 245, 245);
     -unity-font-style: bold;
     letter-spacing: 4px;
-    margin-bottom: 6px;
+    margin-bottom: 8px;
+    -unity-text-align: middle-center;
 }
 
 .title-rule {
     width: 48px;
     height: 3px;
     background-color: rgb(245, 167, 35);
-    margin-bottom: 10px;
+    margin-bottom: 12px;
+    align-self: center;
 }
 
 .subtitle {
@@ -57,6 +61,7 @@
     font-size: 10px;
     letter-spacing: 3px;
     margin-bottom: 32px;
+    -unity-text-align: middle-center;
 }
 
 .field-group {
@@ -150,7 +155,7 @@
 }
 
 .status {
-    -unity-text-align: middle-left;
+    -unity-text-align: middle-center;
     margin-top: 18px;
     white-space: normal;
     color: rgb(170, 170, 170);
@@ -165,12 +170,15 @@
 
 .footer {
     position: absolute;
-    left: 80px;
+    left: 0;
+    right: 0;
     bottom: 30px;
+    align-items: center;
 }
 
 .footer-text {
     color: rgb(70, 70, 70);
     font-size: 10px;
     letter-spacing: 4px;
+    -unity-text-align: middle-center;
 }
