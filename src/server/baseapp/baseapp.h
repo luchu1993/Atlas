@@ -301,6 +301,17 @@ class BaseApp : public EntityApp {
   // the outgoing DestroyCellEntity. Callback receives success flag.
   std::unordered_map<uint32_t, std::function<void(bool)>> destroy_ack_waiters_;
   uint32_t next_destroy_request_id_{1};
+  // Username -> in-flight cell-destroy state; logins arriving while a
+  // prior session for the same identity is being torn down park here
+  // until the cellapp ack lands, ensuring the new client never sees the
+  // prior Avatar in its initial AoI.
+  struct DestroyInFlight {
+    EntityID entity_id{kInvalidEntityID};
+    TimePoint started_at{};
+    std::vector<PendingLogin> queued;
+  };
+  std::unordered_map<std::string, DestroyInFlight> destroys_in_flight_;
+  static constexpr std::chrono::milliseconds kDestroyAckTimeout{1000};
   std::unordered_map<Address, DeltaForwarder> client_delta_forwarders_;
   // SetAoIRadius issued before the cell ack lands is replayed in OnCellEntityCreated.
   std::unordered_map<EntityID, std::pair<float, float>> pending_aoi_radius_;
@@ -398,7 +409,8 @@ class BaseApp : public EntityApp {
                           uint32_t continuation_request_id);
   void BeginForceLogoffPersist(uint32_t force_request_id, EntityID entity_id);
   void ContinueLoginAfterForceLogoff(uint32_t force_request_id);
-  [[nodiscard]] auto FinalizeForceLogoff(EntityID entity_id) -> bool;
+  [[nodiscard]] auto FinalizeForceLogoff(EntityID entity_id,
+                                          uint32_t cell_ack_request_id = 0) -> bool;
   void ProcessForceLogoffRequest(const baseapp::ForceLogoff& msg);
   auto ResolveInternalChannel(const Address& addr) -> Channel*;
   auto ResolveClientChannel(EntityID entity_id) -> Channel*;
@@ -414,6 +426,15 @@ class BaseApp : public EntityApp {
   // the entity is gone. Returns 0 if no callback is needed.
   auto AllocateDestroyAckId(std::function<void(bool)> on_ack) -> uint32_t;
   void OnDestroyCellEntityAck(const cellapp::DestroyCellEntityAck& msg);
+  // Trigger a force-logoff for the currently-bound entity of `username`,
+  // tracking cell-side cleanup so future logins for the same identity
+  // can wait it out instead of seeing the prior Avatar.
+  void ForceLogoffUsernameOwner(const std::string& username);
+  // Called by DispatchPrepareLogin when a destroy is in flight for this
+  // username; the pending login parks until OnDestroyComplete drains it.
+  void QueuePendingLoginAwaitingDestroy(const std::string& username, PendingLogin pending);
+  void OnUsernameDestroyComplete(const std::string& username);
+  void SweepStaleDestroysInFlight();
   // Returns true when one token is consumed; false when the bucket is empty
   // and the call should be dropped at the message boundary.
   bool ConsumeRpcRateToken(const Address& client_addr);

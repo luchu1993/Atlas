@@ -329,6 +329,7 @@ void BaseApp::OnTickComplete() {
   UpdateLoadEstimate();
   ReportLoadToBaseAppMgr();
   CleanupExpiredPendingRequests();
+  SweepStaleDestroysInFlight();
   MaybeRequestMoreIds();
 
   EntityApp::OnTickComplete();
@@ -1372,6 +1373,23 @@ void BaseApp::DispatchPrepareLogin(PendingLogin pending) {
     return;
   }
 
+  // Account-name serialization gate: if the prior session for this
+  // identity is still being torn down on cellapp, park here until the
+  // ack lands so the new client never sees the dying Avatar in its AoI.
+  if (!pending.username.empty()) {
+    if (destroys_in_flight_.contains(pending.username)) {
+      const std::string kName = pending.username;
+      QueuePendingLoginAwaitingDestroy(kName, std::move(pending));
+      return;
+    }
+    if (account_entity_index_.contains(pending.username)) {
+      const std::string kName = pending.username;
+      ForceLogoffUsernameOwner(kName);
+      QueuePendingLoginAwaitingDestroy(kName, std::move(pending));
+      return;
+    }
+  }
+
   const bool kAlreadyOnline = entity_mgr_.FindByDbid(pending.dbid) != nullptr;
   if (kAlreadyOnline) {
     const uint32_t kRid = next_prepare_request_id_++;
@@ -1651,7 +1669,7 @@ void BaseApp::ContinueLoginAfterForceLogoff(uint32_t force_request_id) {
   }
 }
 
-auto BaseApp::FinalizeForceLogoff(EntityID entity_id) -> bool {
+auto BaseApp::FinalizeForceLogoff(EntityID entity_id, uint32_t cell_ack_request_id) -> bool {
   auto* ent = entity_mgr_.Find(entity_id);
   if (!ent) {
     return true;
@@ -1662,8 +1680,10 @@ auto BaseApp::FinalizeForceLogoff(EntityID entity_id) -> bool {
     if (auto* cell_ch = ResolveCellChannelForEntity(entity_id)) {
       cellapp::DestroyCellEntity msg;
       msg.entity_id = entity_id;
+      msg.request_id = cell_ack_request_id;
       (void)cell_ch->SendMessage(msg);
-      ATLAS_LOG_DEBUG("BaseApp: sent DestroyCellEntity for entity={}", entity_id);
+      ATLAS_LOG_DEBUG("BaseApp: sent DestroyCellEntity for entity={} ack={}", entity_id,
+                      cell_ack_request_id);
     }
     ent->ClearCell();
   }
@@ -1699,6 +1719,53 @@ void BaseApp::OnDestroyCellEntityAck(const cellapp::DestroyCellEntityAck& msg) {
   auto cb = std::move(it->second);
   destroy_ack_waiters_.erase(it);
   cb(msg.success);
+}
+
+void BaseApp::ForceLogoffUsernameOwner(const std::string& username) {
+  auto it = account_entity_index_.find(username);
+  if (it == account_entity_index_.end()) return;
+  const EntityID kEntityId = it->second;
+
+  // Register the in-flight record BEFORE FinalizeForceLogoff clears the
+  // account index; the queued pending logins look up by username and
+  // need a slot to land in.
+  auto [in_flight_it, inserted] =
+      destroys_in_flight_.try_emplace(username, DestroyInFlight{kEntityId, Clock::now(), {}});
+  if (inserted) {
+    uint32_t ack_id =
+        AllocateDestroyAckId([this, username](bool /*ok*/) { OnUsernameDestroyComplete(username); });
+    (void)FinalizeForceLogoff(kEntityId, ack_id);
+  }
+}
+
+void BaseApp::QueuePendingLoginAwaitingDestroy(const std::string& username, PendingLogin pending) {
+  destroys_in_flight_[username].queued.push_back(std::move(pending));
+}
+
+void BaseApp::OnUsernameDestroyComplete(const std::string& username) {
+  auto it = destroys_in_flight_.find(username);
+  if (it == destroys_in_flight_.end()) return;
+  std::vector<PendingLogin> queued = std::move(it->second.queued);
+  destroys_in_flight_.erase(it);
+  for (auto& pending : queued) {
+    DispatchPrepareLogin(std::move(pending));
+  }
+}
+
+void BaseApp::SweepStaleDestroysInFlight() {
+  if (destroys_in_flight_.empty()) return;
+  const auto now = Clock::now();
+  std::vector<std::string> timed_out;
+  for (const auto& [username, info] : destroys_in_flight_) {
+    if (now - info.started_at >= kDestroyAckTimeout) {
+      timed_out.push_back(username);
+    }
+  }
+  for (const auto& username : timed_out) {
+    ATLAS_LOG_WARNING("BaseApp: DestroyCellEntityAck timeout for username='{}', draining queue",
+                      username);
+    OnUsernameDestroyComplete(username);
+  }
 }
 
 void BaseApp::ProcessForceLogoffRequest(const baseapp::ForceLogoff& msg) {
