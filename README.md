@@ -79,7 +79,7 @@ ServerApp
 
 Windows:
 
-- Visual Studio 2022 with the Desktop development with C++ workload
+- Visual Studio 2026 (recommended) or Visual Studio 2022 17.14+, with the Desktop development with C++ workload (required: MSBuild that recognizes the `net10.0` TFM)
 - CMake 3.28+
 - .NET 10 SDK
 - Python 3.9+

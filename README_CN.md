@@ -79,7 +79,7 @@ ServerApp
 
 Windows：
 
-- Visual Studio 2022，安装 Desktop development with C++ 工作负载
+- Visual Studio 2026（推荐）或 Visual Studio 2022 17.14+,安装 Desktop development with C++ 工作负载（要求 MSBuild 能识别 `net10.0` TFM）
 - CMake 3.28+
 - .NET 10 SDK
 - Python 3.9+
