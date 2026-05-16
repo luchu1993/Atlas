@@ -13,7 +13,5 @@ Saved/
 *.xcodeproj/
 *.xcworkspace/
 
-Plugins/AtlasUE/ThirdParty/AtlasNetClient/lib/
-Plugins/AtlasUE/ThirdParty/AtlasNetClient/bin/
 Plugins/AtlasUE/Binaries/
 Plugins/AtlasUE/Intermediate/
