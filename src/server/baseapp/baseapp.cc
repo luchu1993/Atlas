@@ -1369,12 +1369,10 @@ void BaseApp::SubmitPrepareLogin(PendingLogin pending) {
 }
 
 void BaseApp::DispatchPrepareLogin(PendingLogin pending) {
-  if (TryCompleteLocalRelogin(pending)) {
-    return;
-  }
-
-  // Park same-name logins on destroys_in_flight_ so the new client never
-  // sees the prior Avatar in its initial AoI snapshot.
+  // Run before TryCompleteLocalRelogin: the DBID-reuse path only knows
+  // about the Account proxy, but after GiveClientTo the index points to
+  // an Avatar that DBID lookup never sees. Without this gate the prior
+  // Avatar stays alive in cellapp and ghosts in the new client's AoI.
   if (!pending.username.empty()) {
     if (destroys_in_flight_.contains(pending.username)) {
       const std::string kName = pending.username;
@@ -1382,14 +1380,32 @@ void BaseApp::DispatchPrepareLogin(PendingLogin pending) {
       QueuePendingLoginAwaitingDestroy(kName, std::move(pending));
       return;
     }
-    if (account_entity_index_.contains(pending.username)) {
-      const std::string kName = pending.username;
-      ATLAS_LOG_INFO("BaseApp: username '{}' collision, force-logoff entity={}", kName,
-                     account_entity_index_[kName]);
-      ForceLogoffUsernameOwner(kName);
-      QueuePendingLoginAwaitingDestroy(kName, std::move(pending));
-      return;
+    if (auto it = account_entity_index_.find(pending.username);
+        it != account_entity_index_.end()) {
+      const EntityID kIndexed = it->second;
+      EntityID dbid_owner = kInvalidEntityID;
+      if (pending.dbid != kInvalidDBID) {
+        if (auto* ent = entity_mgr_.FindByDbid(pending.dbid)) {
+          dbid_owner = ent->EntityId();
+        }
+      }
+      // Skip when the indexed entity is the same row TryCompleteLocalRelogin
+      // would resume; otherwise it's an orphan owner (Avatar handed off via
+      // GiveClientTo) that must die before the new session enters world.
+      if (kIndexed != dbid_owner) {
+        const std::string kName = pending.username;
+        ATLAS_LOG_INFO(
+            "BaseApp: username '{}' orphan owner entity={} dbid_owner={}, force-logoff",
+            kName, kIndexed, dbid_owner);
+        ForceLogoffUsernameOwner(kName);
+        QueuePendingLoginAwaitingDestroy(kName, std::move(pending));
+        return;
+      }
     }
+  }
+
+  if (TryCompleteLocalRelogin(pending)) {
+    return;
   }
 
   const bool kAlreadyOnline = entity_mgr_.FindByDbid(pending.dbid) != nullptr;
