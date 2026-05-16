@@ -53,3 +53,14 @@ Entity 拥有 View,View 持有 Actor 弱引用。Actor 是 Entity 的渲染句�
 ## D10 — 战斗代码共享
 
 **本期不实现**(UE 端只插值不预测)。M3 完成后视实测决策路径 A 或 B+下沉。详见 [open_questions.md](open_questions.md)。
+
+## D11 — Port parity 约束
+
+从 `Atlas.Client` C# 移植到 UE C++ 的逻辑(AvatarFilter、envelope decoder、ClientEntityManager 等)**不得修改 C# 端源码**,且必须在每次 port 完成时验证:
+
+- `dotnet test tests/csharp` 全部通过
+- Unity 客户端登录 + 基本同步行为不退化
+
+C# 端是单一来源,C++ port 是"只读对照实现",任何行为差异(浮点、wire 字段顺序、状态机)以 C# 为准修改 C++。
+
+阻塞情况(C# 端真有 bug 或语义模糊):停下来讨论,不在 UE 侧打补丁绕过。
