@@ -573,8 +573,7 @@ void CellApp::OnDestroyCellEntity(const Address& /*src*/, Channel* ch,
     RemoveEntityFromSpace(entity);
   }
   // BaseApp gates a follow-up login on the post-condition "cell entry
-  // gone"; the ack carries success=true for both newly-removed and
-  // already-absent since the post-condition holds either way.
+  // gone"; success=true covers both newly-removed and already-absent.
   if (ch != nullptr && msg.request_id != 0) {
     cellapp::DestroyCellEntityAck ack;
     ack.entity_id = msg.entity_id;

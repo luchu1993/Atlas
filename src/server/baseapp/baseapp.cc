@@ -1373,9 +1373,8 @@ void BaseApp::DispatchPrepareLogin(PendingLogin pending) {
     return;
   }
 
-  // Account-name serialization gate: if the prior session for this
-  // identity is still being torn down on cellapp, park here until the
-  // ack lands so the new client never sees the dying Avatar in its AoI.
+  // Park same-name logins on destroys_in_flight_ so the new client never
+  // sees the prior Avatar in its initial AoI snapshot.
   if (!pending.username.empty()) {
     if (destroys_in_flight_.contains(pending.username)) {
       const std::string kName = pending.username;
@@ -1675,27 +1674,23 @@ auto BaseApp::FinalizeForceLogoff(EntityID entity_id, uint32_t cell_ack_request_
     return true;
   }
 
-  // Caller-supplied ack id wins; otherwise auto-allocate one whenever the
-  // entity is tied to a tracked username so a follow-up login can park on
-  // destroys_in_flight_ instead of racing the cellapp teardown. Covers
-  // disconnect → relogin which doesn't route through DispatchPrepareLogin.
-  if (cell_ack_request_id == 0) {
-    if (auto uit = account_index_reverse_.find(entity_id);
-        uit != account_index_reverse_.end()) {
-      const std::string& username = uit->second;
-      auto [in_flight_it, inserted] = destroys_in_flight_.try_emplace(
-          username, DestroyInFlight{entity_id, Clock::now(), {}});
-      if (inserted) {
-        const std::string captured = username;
-        cell_ack_request_id = AllocateDestroyAckId(
-            [this, captured](bool /*ok*/) { OnUsernameDestroyComplete(captured); });
-      }
-    }
-  }
-
   // Cell entity has no independent destroy trigger; without this it leaks.
   if (ent->HasCell()) {
     if (auto* cell_ch = ResolveCellChannelForEntity(entity_id)) {
+      // Auto-allocate ack id only when we can actually send the destroy
+      // and the entity carries a tracked username.
+      if (cell_ack_request_id == 0) {
+        if (auto uit = account_index_reverse_.find(entity_id);
+            uit != account_index_reverse_.end()) {
+          if (auto [it, inserted] = destroys_in_flight_.try_emplace(
+                  uit->second, DestroyInFlight{entity_id, Clock::now(), {}});
+              inserted) {
+            const std::string captured = uit->second;
+            cell_ack_request_id = AllocateDestroyAckId(
+                [this, captured](bool /*ok*/) { OnUsernameDestroyComplete(captured); });
+          }
+        }
+      }
       cellapp::DestroyCellEntity msg;
       msg.entity_id = entity_id;
       msg.request_id = cell_ack_request_id;
@@ -1748,7 +1743,16 @@ void BaseApp::ForceLogoffUsernameOwner(const std::string& username) {
 }
 
 void BaseApp::QueuePendingLoginAwaitingDestroy(const std::string& username, PendingLogin pending) {
-  destroys_in_flight_[username].queued.push_back(std::move(pending));
+  auto& slot = destroys_in_flight_[username];
+  if (slot.queued.size() >= kMaxQueuedPerUsername) {
+    ATLAS_LOG_WARNING("BaseApp: queue full for username='{}', dropping pending login dbid={}",
+                      username, pending.dbid);
+    DatabaseID dbid = pending.dbid;
+    FailPendingPrepareLogin(pending, "queue_full");
+    FinishLoginFlow(dbid);
+    return;
+  }
+  slot.queued.push_back(std::move(pending));
 }
 
 void BaseApp::OnUsernameDestroyComplete(const std::string& username) {
@@ -2104,8 +2108,6 @@ void BaseApp::UnbindClient(EntityID entity_id) {
 
 void BaseApp::RegisterAccountOwner(const std::string& username, EntityID entity_id) {
   if (username.empty() || entity_id == kInvalidEntityID) return;
-  // Drop any prior mapping for this entity (shouldn't normally happen) so
-  // the reverse map stays consistent.
   UnregisterAccountOwner(entity_id);
   account_entity_index_[username] = entity_id;
   account_index_reverse_[entity_id] = username;
@@ -2116,6 +2118,9 @@ void BaseApp::TransferAccountOwner(EntityID old_entity_id, EntityID new_entity_i
   if (it == account_index_reverse_.end()) return;
   std::string username = std::move(it->second);
   account_index_reverse_.erase(it);
+  // Defensive: strip any prior mapping for new_entity_id so the
+  // assignments below can't orphan a stale username -> entity row.
+  UnregisterAccountOwner(new_entity_id);
   account_entity_index_[username] = new_entity_id;
   account_index_reverse_[new_entity_id] = std::move(username);
 }

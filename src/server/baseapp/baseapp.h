@@ -292,26 +292,24 @@ class BaseApp : public EntityApp {
   std::unordered_map<DatabaseID, PendingLogin> queued_logins_;
   std::unordered_map<EntityID, Address> entity_client_index_;
   std::unordered_map<Address, EntityID> client_entity_index_;
-  // Single-session-per-account: maps a client-supplied identity to the
-  // currently live owner entity so a follow-up login with the same name
-  // can force the previous session offline before binding.
+  // Single-session-per-account: identity -> live owner entity, kept so a
+  // same-name relogin can serialize against the prior session's teardown.
   std::unordered_map<std::string, EntityID> account_entity_index_;
   std::unordered_map<EntityID, std::string> account_index_reverse_;
-  // Pending DestroyCellEntityAck waiters; keyed by request_id stamped into
-  // the outgoing DestroyCellEntity. Callback receives success flag.
+  // Pending DestroyCellEntityAck waiters keyed by the request_id stamped
+  // into the outgoing DestroyCellEntity; callback receives success.
   std::unordered_map<uint32_t, std::function<void(bool)>> destroy_ack_waiters_;
   uint32_t next_destroy_request_id_{1};
-  // Username -> in-flight cell-destroy state; logins arriving while a
-  // prior session for the same identity is being torn down park here
-  // until the cellapp ack lands, ensuring the new client never sees the
-  // prior Avatar in its initial AoI.
   struct DestroyInFlight {
     EntityID entity_id{kInvalidEntityID};
     TimePoint started_at{};
     std::vector<PendingLogin> queued;
   };
+  // Same-name logins park here while the prior session's cellapp Avatar
+  // is being torn down; drained on DestroyCellEntityAck or timeout.
   std::unordered_map<std::string, DestroyInFlight> destroys_in_flight_;
   static constexpr std::chrono::milliseconds kDestroyAckTimeout{1000};
+  static constexpr std::size_t kMaxQueuedPerUsername = 4;
   std::unordered_map<Address, DeltaForwarder> client_delta_forwarders_;
   // SetAoIRadius issued before the cell ack lands is replayed in OnCellEntityCreated.
   std::unordered_map<EntityID, std::pair<float, float>> pending_aoi_radius_;
@@ -421,17 +419,11 @@ class BaseApp : public EntityApp {
   void RegisterAccountOwner(const std::string& username, EntityID entity_id);
   void TransferAccountOwner(EntityID old_entity_id, EntityID new_entity_id);
   void UnregisterAccountOwner(EntityID entity_id);
-  // DestroyCellEntityAck plumbing: allocate a request_id paired with a
-  // callback so a caller can be notified when the cell side has confirmed
-  // the entity is gone. Returns 0 if no callback is needed.
+  // Pairs a callback with a fresh request_id for DestroyCellEntity; returns
+  // 0 when no callback is supplied so the message can fire and forget.
   auto AllocateDestroyAckId(std::function<void(bool)> on_ack) -> uint32_t;
   void OnDestroyCellEntityAck(const cellapp::DestroyCellEntityAck& msg);
-  // Trigger a force-logoff for the currently-bound entity of `username`,
-  // tracking cell-side cleanup so future logins for the same identity
-  // can wait it out instead of seeing the prior Avatar.
   void ForceLogoffUsernameOwner(const std::string& username);
-  // Called by DispatchPrepareLogin when a destroy is in flight for this
-  // username; the pending login parks until OnDestroyComplete drains it.
   void QueuePendingLoginAwaitingDestroy(const std::string& username, PendingLogin pending);
   void OnUsernameDestroyComplete(const std::string& username);
   void SweepStaleDestroysInFlight();
