@@ -32,6 +32,7 @@ namespace Atlas.Mvp.Unity
         public static Bootstrap? Instance { get; private set; }
         public float CameraYaw => _yaw;
         public Camera? MainCamera => _camera;
+        public uint OwnerEntityId => _ownerEntityId;
 
         AtlasNetworkManager _net = null!;
         LoginScreen _loginScreen = null!;

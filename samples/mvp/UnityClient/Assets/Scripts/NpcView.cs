@@ -20,6 +20,10 @@ namespace Atlas.Mvp.Unity
             if (Entity is MvpNpc n) n.DamageReceived -= OnDamage;
         }
 
-        void OnDamage(int amount, uint attackerId) => SpawnDamageFloater(amount);
+        void OnDamage(int amount, uint attackerId)
+        {
+            if (attackerId == Bootstrap.Instance?.OwnerEntityId)
+                SpawnDamageFloater(amount);
+        }
     }
 }

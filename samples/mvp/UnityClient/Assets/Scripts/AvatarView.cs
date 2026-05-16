@@ -43,7 +43,11 @@ namespace Atlas.Mvp.Unity
             return $"{Entity!.TypeName}:{Entity.EntityId}{suffix}";
         }
 
-        void OnDamage(int amount, uint attackerId) => SpawnDamageFloater(amount);
+        void OnDamage(int amount, uint attackerId)
+        {
+            if (attackerId == Bootstrap.Instance?.OwnerEntityId)
+                SpawnDamageFloater(amount);
+        }
 
         void ApplyDeadVisual(bool dead)
         {
