@@ -6,13 +6,11 @@
     <ui:VisualElement name="overlay" class="overlay">
         <ui:VisualElement class="brand">
             <ui:Label text="ATLAS" class="brand-mark" />
-            <ui:Label text="MVP // OPERATIONS" class="brand-sub" />
         </ui:VisualElement>
 
         <ui:VisualElement class="panel">
             <ui:Label text="OPERATOR LOGIN" class="title" />
             <ui:VisualElement class="title-rule" />
-            <ui:Label text="ESTABLISH CONNECTION TO ENTER BATTLE" class="subtitle" />
 
             <ui:VisualElement class="field-group">
                 <ui:Label text="SERVER" class="field-label" />
@@ -34,10 +32,6 @@
 
             <ui:Button name="login-button" text="DEPLOY" class="login-btn" />
             <ui:Label name="status-label" text="" class="status" />
-        </ui:VisualElement>
-
-        <ui:VisualElement class="footer">
-            <ui:Label text="// ATLAS ENGINE — MVP CLIENT" class="footer-text" />
         </ui:VisualElement>
     </ui:VisualElement>
 </ui:UXML>
