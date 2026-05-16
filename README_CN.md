@@ -38,7 +38,7 @@ tools\bin\run_mvp_cluster.bat
 
 在 Unity Hub 中打开 `samples/mvp/UnityClient` 后点击 Play。需要打包 standalone player 时运行 `tools\bin\build_mvp_unity.bat`；如果 Unity 工程缺少版本文件，脚本会自动扫描本机已安装的 Unity Editor。
 
-![Atlas MVP Unity 示例](docs/mvp/atlas_mvp.gif)
+![Atlas MVP Unity 示例](docs/mvp/mvp_unity.gif)
 
 ## 架构
 
