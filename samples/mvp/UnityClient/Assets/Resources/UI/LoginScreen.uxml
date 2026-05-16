@@ -4,13 +4,8 @@
          editor-extension-mode="False">
     <Style src="project://database/Assets/Resources/UI/LoginScreen.uss" />
     <ui:VisualElement name="overlay" class="overlay">
-        <ui:VisualElement class="brand">
-            <ui:Label text="ATLAS" class="brand-mark" />
-        </ui:VisualElement>
-
         <ui:VisualElement class="panel">
-            <ui:Label text="OPERATOR LOGIN" class="title" />
-            <ui:VisualElement class="title-rule" />
+            <ui:Label text="ATLAS" class="brand-mark" />
 
             <ui:VisualElement class="field-group">
                 <ui:Label text="SERVER" class="field-label" />
@@ -30,7 +25,7 @@
                 <ui:TextField name="password-field" password="true" class="input" />
             </ui:VisualElement>
 
-            <ui:Button name="login-button" text="DEPLOY" class="login-btn" />
+            <ui:Button name="login-button" text="LOGIN" class="login-btn" />
             <ui:Label name="status-label" text="" class="status" />
         </ui:VisualElement>
     </ui:VisualElement>

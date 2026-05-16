@@ -24,6 +24,7 @@ namespace Atlas.Mvp.Unity
         VisualElement _aoiToggle = null!;
         VisualElement _aoiCheckbox = null!;
         Button _logoutButton = null!;
+        VisualElement _debugPanel = null!;
 
         float _fps;
         uint _rttMs;
@@ -61,10 +62,12 @@ namespace Atlas.Mvp.Unity
             _aoiToggle = root.Q<VisualElement>("aoi-toggle");
             _aoiCheckbox = root.Q<VisualElement>("aoi-checkbox");
             _logoutButton = root.Q<Button>("logout-button");
+            _debugPanel = root.Q<VisualElement>("debug-panel");
 
             if (_hpFill == null || _hpName == null || _hpText == null
                 || _fpsValue == null || _pingValue == null
-                || _aoiToggle == null || _aoiCheckbox == null || _logoutButton == null)
+                || _aoiToggle == null || _aoiCheckbox == null
+                || _logoutButton == null || _debugPanel == null)
             {
                 Debug.LogError("[GameHud] UXML missing expected names — check GameHud.uxml");
                 return;
@@ -85,6 +88,12 @@ namespace Atlas.Mvp.Unity
 
         void Update()
         {
+            if (Input.GetKeyDown(KeyCode.F1))
+            {
+                bool open = _debugPanel.style.display == DisplayStyle.Flex;
+                _debugPanel.style.display = open ? DisplayStyle.None : DisplayStyle.Flex;
+            }
+
             float dt = Time.unscaledDeltaTime;
             if (dt > 0f)
             {
@@ -112,7 +121,7 @@ namespace Atlas.Mvp.Unity
         {
             if (_owner == null || _owner.IsDestroyed)
             {
-                _hpText.text = "HP --/--";
+                _hpText.text = "--/--";
                 _hpFill.style.width = new Length(0f, LengthUnit.Percent);
                 ApplyHpClass(0f, dead: true);
                 return;
@@ -121,7 +130,7 @@ namespace Atlas.Mvp.Unity
             if (hp > _observedMaxHp) _observedMaxHp = hp;
             float pct = _observedMaxHp > 0 ? (float)hp / _observedMaxHp : 0f;
             pct = Mathf.Clamp01(pct);
-            _hpText.text = $"HP {hp}/{_observedMaxHp}";
+            _hpText.text = $"{hp} / {_observedMaxHp}";
             _hpFill.style.width = new Length(pct * 100f, LengthUnit.Percent);
             ApplyHpClass(pct, dead: _owner.IsDead);
         }

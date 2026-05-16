@@ -5,14 +5,6 @@
     <Style src="project://database/Assets/Resources/UI/GameHud.uss" />
     <ui:VisualElement name="hud-root" picking-mode="Ignore" class="hud-root">
 
-        <ui:VisualElement name="hp-card" class="hp-card">
-            <ui:Label name="hp-name" text="AVATAR" class="hp-name" />
-            <ui:VisualElement class="hp-bar-track">
-                <ui:VisualElement name="hp-bar-fill" class="hp-bar-fill" />
-            </ui:VisualElement>
-            <ui:Label name="hp-text" text="HP --/--" class="hp-text" />
-        </ui:VisualElement>
-
         <ui:VisualElement name="stats-card" class="stats-card">
             <ui:VisualElement class="stat-row">
                 <ui:Label text="FPS" class="stat-key" />
@@ -22,11 +14,26 @@
                 <ui:Label text="PING" class="stat-key" />
                 <ui:Label name="ping-value" text="-- MS" class="stat-value" />
             </ui:VisualElement>
+        </ui:VisualElement>
+
+        <ui:Button name="logout-button" text="RETURN" class="logout-btn" />
+
+        <ui:VisualElement class="hp-anchor">
+            <ui:VisualElement name="hp-card" class="hp-card">
+                <ui:Label name="hp-name" text="AVATAR" class="hp-name" />
+                <ui:VisualElement class="hp-bar-track">
+                    <ui:VisualElement name="hp-bar-fill" class="hp-bar-fill" />
+                </ui:VisualElement>
+                <ui:Label name="hp-text" text="--/--" class="hp-text" />
+            </ui:VisualElement>
+        </ui:VisualElement>
+
+        <ui:VisualElement name="debug-panel" class="debug-panel">
+            <ui:Label text="DEBUG  F1" class="debug-title" />
             <ui:VisualElement name="aoi-toggle" class="aoi-toggle">
                 <ui:VisualElement name="aoi-checkbox" class="aoi-checkbox" />
                 <ui:Label text="SHOW AOI" class="aoi-label" />
             </ui:VisualElement>
-            <ui:Button name="logout-button" text="RETURN" class="logout-btn" />
         </ui:VisualElement>
 
     </ui:VisualElement>
