@@ -1,3 +1,4 @@
+using System;
 using System.Collections.Generic;
 using Atlas.Mvp.Client;
 using UnityEngine;
@@ -5,7 +6,7 @@ using AtlasVec = Atlas.DataTypes.Vector3;
 
 namespace Atlas.Mvp.Unity
 {
-    public sealed class ProjectileVisualController : MonoBehaviour
+    public sealed class ProjectileVisualController : ITickable, IDisposable
     {
         // Mirrors the cell-side gravity so client + server arcs agree; the
         // lifetime cap is a safety net for missed OnProjectileEnded RPCs.
@@ -33,28 +34,22 @@ namespace Atlas.Mvp.Unity
         readonly Queue<GameObject> _projectilePool = new();
         readonly Queue<GameObject> _hitFxPool = new();
         readonly List<PendingHitFx> _pendingHitFx = new();
-        GameObject _root = null!;
+        readonly GameObject _root;
 
-        void Awake()
+        public ProjectileVisualController()
         {
             _root = new GameObject("ProjectileRoot");
-        }
-
-        void OnEnable()
-        {
             ProjectileBus.Fired += OnFired;
             ProjectileBus.Ended += OnEnded;
+            Tick.Add(this);
         }
 
-        void OnDisable()
+        public void Dispose()
         {
+            Tick.Remove(this);
             ProjectileBus.Fired -= OnFired;
             ProjectileBus.Ended -= OnEnded;
-        }
-
-        void OnDestroy()
-        {
-            if (_root != null) Destroy(_root);
+            if (_root != null) UnityEngine.Object.Destroy(_root);
         }
 
         void OnFired(uint shotId, uint ownerId, AtlasVec origin, AtlasVec velocity)
@@ -82,9 +77,8 @@ namespace Atlas.Mvp.Unity
             if (hitTargetId != 0) SpawnHitFx(new Vector3(endPos.X, endPos.Y, endPos.Z));
         }
 
-        void Update()
+        public void Tick(float dt)
         {
-            float dt = Time.deltaTime;
             _stale.Clear();
             foreach (var v in _active.Values)
             {
@@ -132,7 +126,7 @@ namespace Atlas.Mvp.Unity
             var go = GameObject.CreatePrimitive(PrimitiveType.Sphere);
             go.transform.SetParent(_root.transform, false);
             go.transform.localScale = Vector3.one * 0.3f;
-            if (go.TryGetComponent<Collider>(out var col)) Destroy(col);
+            if (go.TryGetComponent<Collider>(out var col)) UnityEngine.Object.Destroy(col);
             go.GetComponent<Renderer>().material.color = new Color(0.2f, 0.4f, 1f);
             return go;
         }
@@ -168,7 +162,7 @@ namespace Atlas.Mvp.Unity
             go.transform.SetParent(_root.transform, false);
             go.name = "HitFx";
             go.transform.localScale = Vector3.one * 0.8f;
-            if (go.TryGetComponent<Collider>(out var col)) Destroy(col);
+            if (go.TryGetComponent<Collider>(out var col)) UnityEngine.Object.Destroy(col);
             go.GetComponent<Renderer>().material.color = new Color(1f, 0.6f, 0.1f);
             return go;
         }

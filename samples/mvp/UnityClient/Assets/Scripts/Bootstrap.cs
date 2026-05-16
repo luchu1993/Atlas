@@ -41,6 +41,7 @@ namespace Atlas.Mvp.Unity
         GameObject? _worldRoot;
         Camera? _camera;
         GameHud? _hud;
+        ProjectileVisualController? _projectiles;
         uint _ownerEntityId;
         float _zoom = 1.0f;
         Vector3 _camVelocity;
@@ -221,7 +222,7 @@ namespace Atlas.Mvp.Unity
             _hud.Bind(_net);
             _hud.LogoutRequested += OnHudLogoutRequested;
             LabelOverlay.Init();
-            gameObject.AddComponent<ProjectileVisualController>();
+            _projectiles = new ProjectileVisualController();
 
             _cameraInitialized = false;
             _zoom = 1.0f;
@@ -237,7 +238,8 @@ namespace Atlas.Mvp.Unity
                 if (v != null) Destroy(v.gameObject);
             _views.Clear();
             _hud = null;
-            foreach (var c in GetComponents<ProjectileVisualController>()) Destroy(c);
+            _projectiles?.Dispose();
+            _projectiles = null;
             LabelOverlay.Shutdown();
             if (_worldRoot != null) { Destroy(_worldRoot); _worldRoot = null; }
             Tick.Clear();
