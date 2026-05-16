@@ -149,7 +149,6 @@ namespace Atlas.Mvp.Unity
 
         void OnNetDisconnected(int reason)
         {
-            Debug.LogWarning($"[Mvp.Bootstrap] Disconnected reason={reason}");
             TeardownWorld();
             _flow.Reset();
             _loginScreen.Show();

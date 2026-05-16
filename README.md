@@ -22,7 +22,21 @@ MySQL, DBAppMgr, and Reviver are represented in the tree, but they are not compl
 
 ## MVP Unity Demo
 
-The MVP sample under `samples/mvp/` demonstrates the full loop from login to Base/Cell handoff, AoI-driven entity streaming, Unity client rendering, server-authoritative projectile damage, NPC AI, HP replication, and local cluster tooling.
+The MVP sample under `samples/mvp/` demonstrates the full loop from login to Base/Cell handoff, AoI-driven entity streaming, Unity client rendering, server-authoritative projectile damage, NPC AI, HP replication, UI Toolkit login/HUD, and local cluster tooling.
+
+```bash
+# Linux / macOS / Git Bash
+tools/bin/build.sh debug
+tools/bin/setup_mvp_unity.sh
+tools/bin/run_mvp_cluster.sh
+
+# Windows
+tools\bin\build.bat debug
+tools\bin\setup_mvp_unity.bat
+tools\bin\run_mvp_cluster.bat
+```
+
+Open `samples/mvp/UnityClient` in Unity Hub and hit Play. To build a standalone player, run `tools\bin\build_mvp_unity.bat`; it can auto-discover an installed Unity editor if the Unity project version file is absent.
 
 ![Atlas MVP Unity demo](docs/mvp/atlas_mvp.gif)
 
@@ -209,14 +223,18 @@ Example DBApp configuration:
 
 Managed code lives under the C# project tree and is built with the native server when `ATLAS_BUILD_CSHARP=ON`. `Atlas.Shared` carries shared contracts, `Atlas.Runtime` binds server gameplay to the engine, `Atlas.Client` powers client-side entity state, and `Atlas.Generators.Def` turns entity definitions into typed code.
 
-Sample gameplay projects cover base, client, and stress scenarios.
+Sample gameplay projects cover base, client, stress, and the Unity MVP scenario.
 
-Unity integration stages the Atlas managed client assemblies and the native `atlas_net_client` plugin for a Unity project.
+Unity integration stages the Atlas managed client assemblies and the native `atlas_net_client` plugin for a Unity project. The MVP wrapper also stages `Atlas.Mvp.Client.dll`; its build wrapper runs the same staging step before invoking Unity batchmode.
 
 ```bash
 tools/bin/setup_unity_client.sh --unity-project <path>
+tools/bin/setup_mvp_unity.sh
+tools/bin/build_mvp_unity.sh
 # Windows
 tools\bin\setup_unity_client.bat --unity-project <path>
+tools\bin\setup_mvp_unity.bat
+tools\bin\build_mvp_unity.bat
 ```
 
 ## Properties and RPC

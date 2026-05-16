@@ -62,7 +62,9 @@ tools\bin\build_mvp_unity.bat --skip-setup --clean-output
 
 The script discovers the Unity executable from `--unity`, `UNITY_EXE`,
 `UNITY_PATH`, then the Unity Hub install path for the pinned project version.
-Default Windows output is `out/mvp-unity/windows/AtlasMvp.exe`; logs land at
+If `ProjectSettings/ProjectVersion.txt` is absent, it scans installed Unity Hub
+editors and prints the selected executable. Default Windows output is
+`out/mvp-unity/windows/AtlasMvp.exe`; logs land at
 `out/mvp-unity/unity-build.log`. Pass `--target StandaloneLinux64` or
 `--target StandaloneOSX` for non-Windows players. Standalone builds launch in a
 resizable window.
@@ -130,7 +132,7 @@ replication (HP, NpcType, etc.) rides the normal delta pump.
 - **Unity compile errors about missing `Atlas.Mvp.Client`** — you forgot
   to run `setup_mvp_unity`, or run `build_mvp_unity` without `--skip-setup`.
 - **`build_mvp_unity` cannot find Unity** — pass `--unity <Unity.exe>` or set
-  `UNITY_EXE` to the editor version pinned in `ProjectSettings/ProjectVersion.txt`.
+  `UNITY_EXE`; without `ProjectVersion.txt`, the script scans Unity Hub installs first.
 - **`Login failed: BadCredentials`** — LoginApp's `accept_any_user` is off
   in your loginapp config. Either enable it for dev or pre-create the user.
 - **No NPCs visible** — check the server log for

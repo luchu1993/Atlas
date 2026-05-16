@@ -53,7 +53,7 @@ tools/bin/build_mvp_unity.sh --skip-setup --clean-output
 tools\bin\build_mvp_unity.bat --skip-setup --clean-output
 ```
 
-脚本会按顺序从 `--unity`、`UNITY_EXE`、`UNITY_PATH`、固定工程版本对应的 Unity Hub 安装路径查找 Unity 可执行文件。Windows 默认输出为 `out/mvp-unity/windows/AtlasMvp.exe`，日志写到 `out/mvp-unity/unity-build.log`。非 Windows player 可传 `--target StandaloneLinux64` 或 `--target StandaloneOSX`。Standalone 构建默认以可调整大小的窗口启动。
+脚本会按顺序从 `--unity`、`UNITY_EXE`、`UNITY_PATH`、固定工程版本对应的 Unity Hub 安装路径查找 Unity 可执行文件。如果缺少 `ProjectSettings/ProjectVersion.txt`，脚本会扫描本机 Unity Hub 已安装的 Editor 并打印最终选中的可执行文件。Windows 默认输出为 `out/mvp-unity/windows/AtlasMvp.exe`，日志写到 `out/mvp-unity/unity-build.log`。非 Windows player 可传 `--target StandaloneLinux64` 或 `--target StandaloneOSX`。Standalone 构建默认以可调整大小的窗口启动。
 
 ## 操作
 
@@ -88,7 +88,7 @@ tools\bin\build_mvp_unity.bat --skip-setup --clean-output
 ## 排障
 
 - **Unity 编译报缺少 `Atlas.Mvp.Client`** — 你忘了运行 `setup_mvp_unity`，或者打包时用了带 `--skip-setup` 的 `build_mvp_unity`。
-- **`build_mvp_unity` 找不到 Unity** — 传 `--unity <Unity.exe>`，或者把 `UNITY_EXE` 设置为 `ProjectSettings/ProjectVersion.txt` 中固定版本的 Unity Editor。
+- **`build_mvp_unity` 找不到 Unity** — 传 `--unity <Unity.exe>` 或设置 `UNITY_EXE`；没有 `ProjectVersion.txt` 时脚本会先扫描 Unity Hub 安装目录。
 - **`Login failed: BadCredentials`** — loginapp 配置里的 `accept_any_user` 关闭了。开发环境可以打开它，或者预先创建用户。
 - **看不到 NPC** — 检查服务端日志是否有 `WorldBootstrap: queued 50/50 NPC spawns`；如果显示 0，说明 BaseApp 缺少 Mvp.Base DLL（重新运行 `build.bat debug`，让 CMake 重新部署）。
 - **标签卡在屏幕边缘 / 位置不对** — Unity 场景模板自带的 `Main Camera` GameObject 与 Bootstrap 运行时相机冲突。删除层级面板中的默认 Main Camera。

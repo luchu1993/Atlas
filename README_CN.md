@@ -22,7 +22,21 @@ MySQL、DBAppMgr 与 Reviver 已在代码树中占位，但还不是完整的生
 
 ## MVP Unity 示例
 
-`samples/mvp/` 下的 MVP 示例展示了从登录到 Base/Cell 交接、基于 AoI 的实体流式同步、Unity 客户端渲染、服务端权威投射物伤害、NPC AI、HP 属性复制和本地集群工具的完整闭环。
+`samples/mvp/` 下的 MVP 示例展示了从登录到 Base/Cell 交接、基于 AoI 的实体流式同步、Unity 客户端渲染、服务端权威投射物伤害、NPC AI、HP 属性复制、UI Toolkit 登录/HUD 和本地集群工具的完整闭环。
+
+```bash
+# Linux / macOS / Git Bash
+tools/bin/build.sh debug
+tools/bin/setup_mvp_unity.sh
+tools/bin/run_mvp_cluster.sh
+
+# Windows
+tools\bin\build.bat debug
+tools\bin\setup_mvp_unity.bat
+tools\bin\run_mvp_cluster.bat
+```
+
+在 Unity Hub 中打开 `samples/mvp/UnityClient` 后点击 Play。需要打包 standalone player 时运行 `tools\bin\build_mvp_unity.bat`；如果 Unity 工程缺少版本文件，脚本会自动扫描本机已安装的 Unity Editor。
 
 ![Atlas MVP Unity 示例](docs/mvp/atlas_mvp.gif)
 
@@ -209,14 +223,18 @@ DBApp 配置示例：
 
 托管代码位于 C# 项目树中，并在 `ATLAS_BUILD_CSHARP=ON` 时随 native server 一起构建。`Atlas.Shared` 承载共享契约，`Atlas.Runtime` 将服务端玩法绑定到引擎，`Atlas.Client` 驱动客户端实体状态，`Atlas.Generators.Def` 将实体定义转成强类型代码。
 
-示例玩法项目覆盖 base、client 与 stress 场景。
+示例玩法项目覆盖 base、client、stress 与 Unity MVP 场景。
 
-Unity 接入会为 Unity 工程准备 Atlas 托管客户端程序集和 native `atlas_net_client` 插件。
+Unity 接入会为 Unity 工程准备 Atlas 托管客户端程序集和 native `atlas_net_client` 插件。MVP 包装脚本还会部署 `Atlas.Mvp.Client.dll`；打包脚本会先执行同一套 staging，再调用 Unity batchmode。
 
 ```bash
 tools/bin/setup_unity_client.sh --unity-project <path>
+tools/bin/setup_mvp_unity.sh
+tools/bin/build_mvp_unity.sh
 # Windows
 tools\bin\setup_unity_client.bat --unity-project <path>
+tools\bin\setup_mvp_unity.bat
+tools\bin\build_mvp_unity.bat
 ```
 
 ## 属性同步与 RPC
