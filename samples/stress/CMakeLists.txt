@@ -10,7 +10,7 @@ atlas_dotnet_project(
   NAME atlas_stress_test_base_dll
   PROJECT_FILE Atlas.StressTest.Base/Atlas.StressTest.Base.csproj
   ASSEMBLY_NAME Atlas.StressTest.Base.dll
-  DEPENDS atlas_runtime_dll
+  DEPENDS atlas_runtime_dll atlas_generators_def_dll
   DEPLOY
 )
 
@@ -18,6 +18,6 @@ atlas_dotnet_project(
   NAME atlas_stress_test_cell_dll
   PROJECT_FILE Atlas.StressTest.Cell/Atlas.StressTest.Cell.csproj
   ASSEMBLY_NAME Atlas.StressTest.Cell.dll
-  DEPENDS atlas_runtime_dll
+  DEPENDS atlas_runtime_dll atlas_generators_def_dll
   DEPLOY
 )

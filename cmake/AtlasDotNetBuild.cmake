@@ -99,7 +99,9 @@ function(atlas_dotnet_project)
     endif()
   else()
     # ── Non-VS (Ninja, Make, etc.): build via dotnet CLI ─────────────────
-    set(_output_dir "${CMAKE_BINARY_DIR}/csharp/${ARG_NAME}")
+    # Shared output dir: dotnet --output propagates OutputPath to every ProjectReference,
+    # so per-target dirs would break cross-project lookup (Atlas.Client → Atlas.Shared.dll).
+    set(_output_dir "${CMAKE_BINARY_DIR}/csharp")
     set(_output_dll "${_output_dir}/${ARG_ASSEMBLY_NAME}")
 
     # Glob C# sources for change detection
@@ -109,15 +111,16 @@ function(atlas_dotnet_project)
     list(FILTER _cs_sources EXCLUDE REGEX ".*/obj/.*")
     list(FILTER _cs_sources EXCLUDE REGEX ".*/bin/.*")
 
-    # --framework pins to a single TFM. Multi-target projects (e.g. those
-    # also targeting netstandard2.1 for Unity export) otherwise build every
-    # TFM into the same --output dir and clobber each other's references.
+    # --framework pins one TFM so multi-TFM projects don't clobber --output.
+    # --no-dependencies + -p:Platform=AnyCPU: CMake DEPENDS orders builds; parallel recursive ProjectReference builds race on obj/, and vcvars64 leaks Platform=x64 into env which MSBuild adopts.
     add_custom_command(
       OUTPUT "${_output_dll}"
       COMMAND "${DOTNET_EXECUTABLE}" build "${_proj_path}"
               --configuration "${ARG_CONFIGURATION}"
               --framework "${ARG_TARGET_FRAMEWORK}"
               --output "${_output_dir}"
+              --no-dependencies
+              -p:Platform=AnyCPU
               --nologo -v quiet
       DEPENDS ${_cs_sources} "${_proj_path}"
       WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
