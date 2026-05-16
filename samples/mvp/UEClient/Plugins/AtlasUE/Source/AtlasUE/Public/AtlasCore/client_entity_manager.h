@@ -38,6 +38,11 @@ class ClientEntityManager {
 
   [[nodiscard]] std::size_t Size() const { return entities_.size(); }
 
+  // Creates and registers a fresh entity via the type's factory without seeding
+  // a position. Used for the BaseApp -> Client owner handoff (kEntityTransferred)
+  // where the server has not assigned spatial state yet.
+  bool HandleCreate(EntityId id, EntityTypeId type_id);
+
   // Spawns and registers a fresh entity via the type's factory, then seeds the
   // initial position into it. Returns false if id is invalid, already exists,
   // or no factory was registered for type_id.

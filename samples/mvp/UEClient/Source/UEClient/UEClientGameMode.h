@@ -40,4 +40,5 @@ protected:
 
 private:
 	bool bAuthenticateRequested = false;
+	bool bSelectAvatarSent = false;
 };

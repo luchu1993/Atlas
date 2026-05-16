@@ -149,8 +149,16 @@ void FAtlasNetClient::TickGameThread(atlas::ClientEntityManager& Manager)
 		{
 			atlas::DecodeAoIEnvelope(Msg.Payload.GetData(), Msg.Payload.Num(), Manager);
 		}
-		// 0xF002 baseline, 0xF004 RPC, 2024 entity-transferred, 2025 cell-ready
-		// land here in future milestones.
+		else if (Msg.MsgId == 2024 && Msg.Payload.Num() >= 6)
+		{
+			// kEntityTransferred (baseapp_messages.h): [u32 entity_id][u16 type_id].
+			uint32 NewEntityId = 0;
+			uint16 NewTypeId = 0;
+			FMemory::Memcpy(&NewEntityId, Msg.Payload.GetData(), 4);
+			FMemory::Memcpy(&NewTypeId, Msg.Payload.GetData() + 4, 2);
+			Manager.HandleCreate(NewEntityId, NewTypeId);
+		}
+		// 0xF002 baseline, 0xF004 RPC, 2025 cell-ready handled by later milestones.
 	}
 
 	const int32 Reason = PendingDisconnect.exchange(-1);

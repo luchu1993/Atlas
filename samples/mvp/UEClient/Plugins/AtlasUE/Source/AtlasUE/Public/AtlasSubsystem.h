@@ -30,6 +30,18 @@ public:
 	                const FString& PasswordHash);
 	bool BeginAuthenticate();
 
+	// 32-byte SHA-256 of the entity_defs surface; BaseApp rejects mismatched
+	// client builds (def_mismatch status). Must be called before BeginLogin.
+	// M2 codegen will emit this constant; M0 callers paste the bytes manually.
+	bool SetEntityDefDigest(TArrayView<const uint8> Digest);
+
+	// Thin pass-through to AtlasNetSendBaseRpc / AtlasNetSendCellRpc. Returns
+	// true on ATLAS_NET_OK. Until M2 codegen lands the caller is responsible for
+	// the rpc_id (sourced from samples/mvp/Atlas.Mvp.*/RpcIds.g.cs) and payload
+	// layout (manual little-endian byte packing).
+	bool SendBaseRpc(uint32 EntityId, uint32 RpcId, const TArray<uint8>& Payload);
+	bool SendCellRpc(uint32 EntityId, uint32 RpcId, const TArray<uint8>& Payload);
+
 	// Registered before BeginLogin (typically GameMode::BeginPlay). On HandleEnter
 	// the subsystem spawns the bound Actor on the GameThread, runs the optional
 	// custom EntityFactory (else atlas::ClientEntity base), and attaches a fresh

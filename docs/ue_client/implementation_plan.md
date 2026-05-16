@@ -8,35 +8,14 @@
 
 ## 总览
 
-| 阶段 | 工时 | 累计 |
-|------|------|------|
-| 启动前 | 0.5 周 | 0.5 |
-| M0 — 端到端贯通 | 1 周 | 1.5 |
-| M1 — Codegen 上线 + 属性同步 | 1.5 周 | 3 |
-| M2 — 双向 RPC + Logic Component | 1 周 | 4 |
-| M3 — MVP 功能对齐 | 1 周 | 5 |
+| 阶段 | 工时 | 累计 | 状态 |
+|------|------|------|------|
+| ~~M0 — 端到端贯通~~ | ~~1 周~~ | — | **已完成**(详见 `samples/mvp/README.md` 的 UE client 章节) |
+| M1 — Codegen 上线 + 属性同步 | 1.5 周 | 1.5 | 待启动 |
+| M2 — 双向 RPC + Logic Component | 1 周 | 2.5 | 待启动 |
+| M3 — MVP 功能对齐 | 1 周 | 3.5 | 待启动 |
 
-单人投入。M1 的 CppEmitter 和 C++ `FClientEntityBase` 可拆开并行,可压到约 3.5 周。
-
-## M0 — 端到端贯通
-
-**目标**:UE 客户端登录,自己和另一个玩家的 cube 在屏幕上移动。**手写 Avatar 类,不上 codegen**。
-
-**交付**
-- UE Plugin 脚手架(`AtlasUE.uplugin` + `AtlasUE.Build.cs` + Module 启停)
-- `atlas_net_client.dll` 寄宿,net poll 走 `FRunnable` + GT 派发队列
-- `UAtlasSubsystem : UGameInstanceSubsystem`(per-`UWorld`,天然 PIE 隔离)
-- `FClientEntityBase` 基类 + 手写 `FAvatarEntity_Stub`(仅 position)
-- `AvatarFilter` C++ 复刻(参考 `Atlas.Client/AvatarFilter.cs`)
-- `FAtlasUEActorView` 实现 `IEntityView::OnTransformReplicated` → `SetActorLocation`
-- LoginFlow 最小集
-
-**验收**
-- 同 server 上 Unity + UE 客户端同时登录,互看见对方 cube 移动
-- AvatarFilter 在 GT 抖动下平滑,与 Unity 端肉眼对照一致
-- PIE 启停 + 退出时 entity 队列 drain 干净
-
-**化解风险**:`atlas_net_client.dll` ABI 兼容 / 线程模型 / view 绑定模式 / 坐标-单位-手系转换
+单人投入。M1 的 CppEmitter 和 C++ `FClientEntityBase` 可拆开并行,可压到约 3 周。
 
 ## M1 — Codegen 上线 + 属性同步
 

@@ -54,6 +54,27 @@ bool UAtlasSubsystem::BeginAuthenticate()
 	return NetClient && NetClient->BeginAuthenticate();
 }
 
+bool UAtlasSubsystem::SetEntityDefDigest(TArrayView<const uint8> Digest)
+{
+	if (!NetClient || NetClient->GetContext() == nullptr) return false;
+	return AtlasNetSetEntityDefDigest(NetClient->GetContext(), Digest.GetData(),
+		Digest.Num()) == ATLAS_NET_OK;
+}
+
+bool UAtlasSubsystem::SendBaseRpc(uint32 EntityId, uint32 RpcId, const TArray<uint8>& Payload)
+{
+	if (!NetClient || NetClient->GetContext() == nullptr) return false;
+	return AtlasNetSendBaseRpc(NetClient->GetContext(), EntityId, RpcId,
+		Payload.GetData(), Payload.Num()) == ATLAS_NET_OK;
+}
+
+bool UAtlasSubsystem::SendCellRpc(uint32 EntityId, uint32 RpcId, const TArray<uint8>& Payload)
+{
+	if (!NetClient || NetClient->GetContext() == nullptr) return false;
+	return AtlasNetSendCellRpc(NetClient->GetContext(), EntityId, RpcId,
+		Payload.GetData(), Payload.Num()) == ATLAS_NET_OK;
+}
+
 void UAtlasSubsystem::RegisterEntityClass(uint16 TypeId, TSubclassOf<AActor> ActorClass,
                                           EntityFactory Factory)
 {

@@ -69,6 +69,88 @@ editors and prints the selected executable. Default Windows output is
 `--target StandaloneOSX` for non-Windows players. Standalone builds launch in a
 resizable window.
 
+## UE client (M0 read-only preview)
+
+Unreal Engine 5.7 client connecting to the same MVP cluster over the
+Atlas wire protocol. The plugin links `atlas_net_client.dll` directly
+and does **not** use UE replication / RPC. M0 covers login, auth,
+entity-transferred handoff, AoI envelope decode + AvatarFilter
+interpolation. Outbound input / movement RPC arrive in M2.
+
+### Prerequisites
+
+- Unreal Engine 5.7 source build at `UE_ROOT` (e.g.
+  `set UE_ROOT=E:\UE\UnrealEngine`)
+- Same MSVC 2022 + .NET 10 SDK + CMake toolchain as the server build
+
+### Build + stage
+
+```bash
+tools/bin/build_mvp_ue.sh
+tools\bin\build_mvp_ue.bat
+```
+
+Three-stage pipeline: CMake-builds `atlas_net_client.dll` (Release),
+stages it + `mimalloc.dll` + import lib into
+`samples/mvp/UEClient/Plugins/AtlasUE/ThirdParty/AtlasNetClient/Win64/`,
+then UBT-builds `UEClientEditor`. `--config Debug` mirrors a Debug
+SDK; `--skip-native` / `--skip-stage` / `--skip-ue` allow partial
+re-runs.
+
+### Run
+
+```bash
+# 1. Start the MVP cluster (see "Run it" above).
+
+# 2. Open the project in UE 5.7:
+"%UE_ROOT%\Engine\Binaries\Win64\UnrealEditor.exe" samples\mvp\UEClient\UEClient.uproject
+
+# 3. In the editor, hit Play (PIE). UEClientGameMode kicks off Login +
+#    Authenticate against 127.0.0.1:20018 with a mvp_<guid> username and
+#    the shared mvp_hash password. After auth it sends
+#    Account.SelectAvatar(1) so the server creates an Avatar entity.
+```
+
+`UEClientGameMode` exposes host / port / credentials as `UPROPERTY`
+defaults — tweak in World Settings if the cluster is on a non-default
+port.
+
+### M0 acceptance signals
+
+The UEClient Output Log should show, in order:
+
+```
+LogAtlasUE: AtlasUE module started; atlas_net_client ABI=0x02000000
+LogUEClient: Atlas login host=127.0.0.1 port=20018 user=mvp_<guid>
+LogUEClient: Atlas login succeeded, authenticating
+LogUEClient: Sent Account.SelectAvatar(1) entity_id=<n> ok=1
+```
+
+With both Unity and UE clients connected to the same cluster, the UE
+view streams in the Unity player's `AAvatarCapsule` (currently
+`/Engine/BasicShapes/Cylinder.Cylinder` placeholder mesh) and applies
+AvatarFilter-interpolated transforms each frame.
+
+If `Login failed status=6: def_mismatch` appears, the
+`EntityDefDigest` bytes hardcoded in
+`samples/mvp/UEClient/Source/UEClient/UEClientGameMode.cpp` are out of
+sync with the current build — copy the bytes from
+`samples/mvp/Atlas.Mvp.Client/obj/.../EntityDefDigest.g.cs`. M2 codegen
+eliminates this manual step.
+
+### Known M0 gaps
+
+- **No movement input** — the UE-side Avatar sits where the server
+  places it; only inbound transforms are exercised
+- **No reconnect on disconnect** — `on_disconnect` only logs
+- **`AAvatarCapsule` is a Cylinder placeholder** — swap for a project
+  mesh post-M0
+- **`Account.SelectAvatar` rpc_id and `EntityDefDigest` are
+  hand-pasted** from the C# generator output; refresh both whenever
+  `.def` files change until M2 codegen lands
+- **`Account` is registered against `AActor::StaticClass()`** — an
+  invisible placeholder; no Account-specific UE actor
+
 ## Controls
 
 | Input | Action |

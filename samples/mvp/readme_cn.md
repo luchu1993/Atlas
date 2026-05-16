@@ -55,6 +55,62 @@ tools\bin\build_mvp_unity.bat --skip-setup --clean-output
 
 脚本会按顺序从 `--unity`、`UNITY_EXE`、`UNITY_PATH`、固定工程版本对应的 Unity Hub 安装路径查找 Unity 可执行文件。如果缺少 `ProjectSettings/ProjectVersion.txt`，脚本会扫描本机 Unity Hub 已安装的 Editor 并打印最终选中的可执行文件。Windows 默认输出为 `out/mvp-unity/windows/AtlasMvp.exe`，日志写到 `out/mvp-unity/unity-build.log`。非 Windows player 可传 `--target StandaloneLinux64` 或 `--target StandaloneOSX`。Standalone 构建默认以可调整大小的窗口启动。
 
+## UE 客户端（M0 只读预览）
+
+Unreal Engine 5.7 客户端，通过 Atlas wire 协议连接同一个 MVP 集群。Plugin 直接链接 `atlas_net_client.dll`，**不**使用 UE 的 replication / RPC。M0 覆盖：登录、认证、entity-transferred 交接、AoI envelope 解码 + AvatarFilter 插值。出向输入 / 移动 RPC 留给 M2。
+
+### 前置条件
+
+- 源码构建的 Unreal Engine 5.7，设置 `UE_ROOT` 指向引擎根目录（例：`set UE_ROOT=E:\UE\UnrealEngine`）
+- 与服务端构建同样的 MSVC 2022 + .NET 10 SDK + CMake 工具链
+
+### 构建 + staging
+
+```bash
+tools/bin/build_mvp_ue.sh
+tools\bin\build_mvp_ue.bat
+```
+
+三段式流水线：CMake 构建 `atlas_net_client.dll`（Release），把它 + `mimalloc.dll` + 导入库 stage 到 `samples/mvp/UEClient/Plugins/AtlasUE/ThirdParty/AtlasNetClient/Win64/`，最后调用 UBT 编 `UEClientEditor`。`--config Debug` 对应 Debug SDK；`--skip-native` / `--skip-stage` / `--skip-ue` 用于局部重跑。
+
+### 运行
+
+```bash
+# 1. 先启动 MVP 集群（见上面的"运行"小节）。
+
+# 2. 用 UE 5.7 打开工程：
+"%UE_ROOT%\Engine\Binaries\Win64\UnrealEditor.exe" samples\mvp\UEClient\UEClient.uproject
+
+# 3. 编辑器中点 Play（PIE）。UEClientGameMode 会向 127.0.0.1:20018 发起 Login
+#    + Authenticate（账号 mvp_<guid>，密码 hash mvp_hash），认证成功后发送
+#    Account.SelectAvatar(1)，服务端据此创建 Avatar 实体。
+```
+
+`UEClientGameMode` 的 host / port / 凭据是 `UPROPERTY` 默认值——如果集群跑在非默认端口，在 World Settings 中调整。
+
+### M0 验收信号
+
+UEClient Output Log 按顺序应该出现：
+
+```
+LogAtlasUE: AtlasUE module started; atlas_net_client ABI=0x02000000
+LogUEClient: Atlas login host=127.0.0.1 port=20018 user=mvp_<guid>
+LogUEClient: Atlas login succeeded, authenticating
+LogUEClient: Sent Account.SelectAvatar(1) entity_id=<n> ok=1
+```
+
+同时 Unity 和 UE 两个客户端连到同一集群时，UE 视图会流式接入 Unity 玩家的 `AAvatarCapsule`（目前是 `/Engine/BasicShapes/Cylinder.Cylinder` 占位 mesh），并每帧应用 AvatarFilter 插值后的 transform。
+
+如果出现 `Login failed status=6: def_mismatch`，说明 `samples/mvp/UEClient/Source/UEClient/UEClientGameMode.cpp` 中硬编码的 `EntityDefDigest` 字节与当前构建对不上——从 `samples/mvp/Atlas.Mvp.Client/obj/.../EntityDefDigest.g.cs` 复制新字节即可。M2 codegen 会消除这一手工步骤。
+
+### M0 已知缺口
+
+- **没有移动输入**——UE 端 Avatar 待在服务器分配的位置；只跑入站 transform
+- **断线不重连**——`on_disconnect` 只打日志
+- **`AAvatarCapsule` 是 Cylinder 占位** mesh，post-M0 替换为项目实际素材
+- **`Account.SelectAvatar` 的 rpc_id 与 `EntityDefDigest` 是手贴的**——`.def` 一变就要同步刷新两处，直到 M2 codegen 接管
+- **`Account` 注册到 `AActor::StaticClass()`** 这个不可见占位类；没有 Account 专属 Actor
+
 ## 操作
 
 | 输入 | 动作 |

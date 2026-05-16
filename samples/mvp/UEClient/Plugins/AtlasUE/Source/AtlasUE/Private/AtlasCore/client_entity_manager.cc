@@ -29,6 +29,16 @@ void ClientEntityManager::Clear() {
   entities_.clear();
 }
 
+bool ClientEntityManager::HandleCreate(EntityId id, EntityTypeId type_id) {
+  if (id == kInvalidEntityId || entities_.contains(id)) return false;
+  const auto it = factories_.find(type_id);
+  if (it == factories_.end()) return false;
+  auto entity = it->second(id, type_id);
+  if (!entity) return false;
+  entities_.emplace(id, std::move(entity));
+  return true;
+}
+
 bool ClientEntityManager::HandleEnter(EntityId id, EntityTypeId type_id, double server_time,
                                       const Vec3& pos, const Vec3& dir, bool on_ground) {
   if (id == kInvalidEntityId || entities_.contains(id)) return false;
