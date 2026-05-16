@@ -292,6 +292,9 @@ struct PrepareLogin {
   // Stamped from LoginRequest; BaseApp matches it against its own digest
   // so a mismatched .def build is rejected before any RPC dispatch.
   std::array<uint8_t, 32> entity_def_digest{};
+  // Carried through so BaseApp can key its account_entity_index_ on the
+  // user-supplied identity and serialize same-name re-logins.
+  std::string username;
 
   static auto Descriptor() -> const MessageDesc& {
     static const MessageDesc kDesc{msg_id::Id(msg_id::Login::kPrepareLogin),
@@ -316,6 +319,7 @@ struct PrepareLogin {
     if (!entity_blob.empty()) w.WriteBytes(entity_blob);
     w.WriteBytes(std::span<const std::byte>(
         reinterpret_cast<const std::byte*>(entity_def_digest.data()), entity_def_digest.size()));
+    w.WriteString(username);
   }
 
   static auto Deserialize(BinaryReader& r) -> Result<PrepareLogin> {
@@ -347,6 +351,9 @@ struct PrepareLogin {
     auto digest_span = r.ReadBytes(32);
     if (!digest_span) return Error{ErrorCode::kInvalidArgument, "PrepareLogin: digest truncated"};
     std::memcpy(msg.entity_def_digest.data(), digest_span->data(), 32);
+    auto name = r.ReadString();
+    if (!name) return Error{ErrorCode::kInvalidArgument, "PrepareLogin: username truncated"};
+    msg.username = std::move(*name);
     return msg;
   }
 };

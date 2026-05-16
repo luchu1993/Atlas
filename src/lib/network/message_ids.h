@@ -115,6 +115,9 @@ enum class CellApp : uint16_t {
   kGhostSnapshotRefresh = 3106,
   kOffloadEntity = 3110,
   kOffloadEntityAck = 3111,
+  // CellApp -> BaseApp ack for kDestroyCellEntity; lets BaseApp gate a
+  // follow-up login on cell-side cleanup completion.
+  kDestroyCellEntityAck = 3120,
 };
 
 // CellAppMgr owns both registration/load and control-plane IDs.
@@ -236,6 +239,7 @@ ATLAS_ASSERT_ID_RANGE(CellApp::kGhostSetNextReal, 3000, 3999);
 ATLAS_ASSERT_ID_RANGE(CellApp::kGhostSnapshotRefresh, 3000, 3999);
 ATLAS_ASSERT_ID_RANGE(CellApp::kOffloadEntity, 3000, 3999);
 ATLAS_ASSERT_ID_RANGE(CellApp::kOffloadEntityAck, 3000, 3999);
+ATLAS_ASSERT_ID_RANGE(CellApp::kDestroyCellEntityAck, 3000, 3999);
 
 ATLAS_ASSERT_ID_RANGE(CellAppMgr::kRegisterCellApp, 7000, 7099);
 ATLAS_ASSERT_ID_RANGE(CellAppMgr::kRegisterCellAppAck, 7000, 7099);

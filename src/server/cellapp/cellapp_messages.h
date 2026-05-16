@@ -160,28 +160,75 @@ static_assert(NetworkMessage<SpawnLocalEntity>);
 
 struct DestroyCellEntity {
   EntityID entity_id{kInvalidEntityID};
+  // Echoed back in DestroyCellEntityAck so BaseApp can correlate the
+  // completion with a waiting login flow. Zero means no ack needed.
+  uint32_t request_id{0};
 
   static auto Descriptor() -> const MessageDesc& {
     static const MessageDesc kDesc{msg_id::Id(msg_id::CellApp::kDestroyCellEntity),
                                    "cellapp::DestroyCellEntity",
                                    MessageLengthStyle::kFixed,
-                                   static_cast<int>(sizeof(EntityID)),
+                                   static_cast<int>(sizeof(EntityID) + sizeof(uint32_t)),
                                    MessageReliability::kReliable,
                                    MessageUrgency::kBatched};
     return kDesc;
   }
 
-  void Serialize(BinaryWriter& w) const { w.Write(entity_id); }
+  void Serialize(BinaryWriter& w) const {
+    w.Write(entity_id);
+    w.Write(request_id);
+  }
 
   static auto Deserialize(BinaryReader& r) -> Result<DestroyCellEntity> {
     auto eid = r.Read<uint32_t>();
-    if (!eid) return Error{ErrorCode::kInvalidArgument, "DestroyCellEntity: truncated"};
+    auto rid = r.Read<uint32_t>();
+    if (!eid || !rid) return Error{ErrorCode::kInvalidArgument, "DestroyCellEntity: truncated"};
     DestroyCellEntity msg;
     msg.entity_id = *eid;
+    msg.request_id = *rid;
     return msg;
   }
 };
 static_assert(NetworkMessage<DestroyCellEntity>);
+
+struct DestroyCellEntityAck {
+  EntityID entity_id{kInvalidEntityID};
+  uint32_t request_id{0};
+  // False when entity was already gone on cell side; BaseApp may treat as
+  // "destroy completed" all the same since the post-condition holds.
+  bool success{true};
+
+  static auto Descriptor() -> const MessageDesc& {
+    static const MessageDesc kDesc{
+        msg_id::Id(msg_id::CellApp::kDestroyCellEntityAck),
+        "cellapp::DestroyCellEntityAck",
+        MessageLengthStyle::kFixed,
+        static_cast<int>(sizeof(EntityID) + sizeof(uint32_t) + sizeof(uint8_t)),
+        MessageReliability::kReliable,
+        MessageUrgency::kImmediate};
+    return kDesc;
+  }
+
+  void Serialize(BinaryWriter& w) const {
+    w.Write(entity_id);
+    w.Write(request_id);
+    w.Write(static_cast<uint8_t>(success ? 1 : 0));
+  }
+
+  static auto Deserialize(BinaryReader& r) -> Result<DestroyCellEntityAck> {
+    auto eid = r.Read<uint32_t>();
+    auto rid = r.Read<uint32_t>();
+    auto ok = r.Read<uint8_t>();
+    if (!eid || !rid || !ok)
+      return Error{ErrorCode::kInvalidArgument, "DestroyCellEntityAck: truncated"};
+    DestroyCellEntityAck msg;
+    msg.entity_id = *eid;
+    msg.request_id = *rid;
+    msg.success = (*ok != 0);
+    return msg;
+  }
+};
+static_assert(NetworkMessage<DestroyCellEntityAck>);
 
 // Exposed (client-facing) RPC forwarded from BaseApp. `source_entity_id`
 // is stamped by BaseApp from the client's proxy binding and cannot be
