@@ -12,7 +12,7 @@ namespace Atlas.Mvp.Unity
         // lifetime cap is a safety net for missed OnProjectileEnded RPCs.
         const float kGravity = 12f;
         const float kMaxLifetime = 2.5f;
-        const float kHitFxLifetime = 0.25f;
+        const float kHitFxLifetime = 0.6f;
 
         sealed class Visual
         {
@@ -140,13 +140,12 @@ namespace Atlas.Mvp.Unity
 
         GameObject AcquireHitFx()
         {
-            if (_hitFxPool.Count > 0)
-            {
-                var go = _hitFxPool.Dequeue();
-                go.SetActive(true);
-                return go;
-            }
-            return CreateHitFx();
+            GameObject go = _hitFxPool.Count > 0 ? _hitFxPool.Dequeue() : CreateHitFx();
+            go.SetActive(true);
+            var ps = go.GetComponent<ParticleSystem>();
+            ps.Clear();
+            ps.Play();
+            return go;
         }
 
         void ReleaseHitFx(GameObject go)
@@ -158,12 +157,56 @@ namespace Atlas.Mvp.Unity
 
         GameObject CreateHitFx()
         {
-            var go = GameObject.CreatePrimitive(PrimitiveType.Sphere);
+            var go = new GameObject("HitFx");
             go.transform.SetParent(_root.transform, false);
-            go.name = "HitFx";
-            go.transform.localScale = Vector3.one * 0.8f;
-            if (go.TryGetComponent<Collider>(out var col)) UnityEngine.Object.Destroy(col);
-            go.GetComponent<Renderer>().material.color = new Color(1f, 0.6f, 0.1f);
+            var ps = go.AddComponent<ParticleSystem>();
+            ps.Stop(true, ParticleSystemStopBehavior.StopEmittingAndClear);
+
+            var main = ps.main;
+            main.duration = 0.05f;
+            main.loop = false;
+            main.startLifetime = 0.4f;
+            main.startSpeed = 4f;
+            main.startSize = 0.12f;
+            main.startColor = new ParticleSystem.MinMaxGradient(
+                new Color(1f, 0.85f, 0.25f), new Color(1f, 0.5f, 0.1f));
+            main.gravityModifier = 2f;
+            main.maxParticles = 40;
+            main.simulationSpace = ParticleSystemSimulationSpace.World;
+            main.playOnAwake = false;
+
+            var emission = ps.emission;
+            emission.rateOverTime = 0f;
+            emission.SetBursts(new[] { new ParticleSystem.Burst(0f, 22) });
+
+            var shape = ps.shape;
+            shape.shapeType = ParticleSystemShapeType.Sphere;
+            shape.radius = 0.05f;
+
+            var sizeOverLifetime = ps.sizeOverLifetime;
+            sizeOverLifetime.enabled = true;
+            var sizeCurve = new AnimationCurve(
+                new Keyframe(0f, 1f), new Keyframe(1f, 0f));
+            sizeOverLifetime.size = new ParticleSystem.MinMaxCurve(1f, sizeCurve);
+
+            var colorOverLifetime = ps.colorOverLifetime;
+            colorOverLifetime.enabled = true;
+            var grad = new Gradient();
+            grad.SetKeys(
+                new[]
+                {
+                    new GradientColorKey(new Color(1f, 0.95f, 0.5f), 0f),
+                    new GradientColorKey(new Color(1f, 0.3f, 0.05f), 1f),
+                },
+                new[]
+                {
+                    new GradientAlphaKey(1f, 0f),
+                    new GradientAlphaKey(0f, 1f),
+                });
+            colorOverLifetime.color = grad;
+
+            var renderer = go.GetComponent<ParticleSystemRenderer>();
+            renderer.material = new Material(Shader.Find("Sprites/Default"));
             return go;
         }
     }
