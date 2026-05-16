@@ -1,3 +1,4 @@
+using Atlas.Client.Unity;
 using UnityEngine;
 using MvpAvatar = Atlas.Mvp.Client.Avatar;
 
@@ -6,6 +7,19 @@ namespace Atlas.Mvp.Unity
     public sealed class AvatarView : EntityView
     {
         MvpAvatar Avatar => (MvpAvatar)Entity!;
+        PlayerInputController? _input;
+
+        public AvatarView(MvpAvatar avatar, AtlasNetworkManager net, Transform worldRoot)
+            : base(avatar, net, worldRoot) { }
+
+        public void AttachInput(PlayerInputController input) => _input = input;
+
+        public override void Dispose()
+        {
+            _input?.Dispose();
+            _input = null;
+            base.Dispose();
+        }
 
         protected override Color PickAliveColor() =>
             Entity!.IsOwner ? Color.cyan : new Color(0.9f, 0.3f, 0.3f);

@@ -101,13 +101,13 @@ namespace Atlas.Mvp.Unity
             Tick.RunTick(Time.deltaTime);
         }
 
-        // LateUpdate: input controller writes the owner transform in Tick;
-        // reading it earlier costs a 1-frame lag.
+        // FollowOwner updates the camera; LateTick must run after it so
+        // label projection samples the post-follow camera pose.
         void LateUpdate()
         {
             if (_worldRoot == null || _camera == null) return;
-            Tick.RunLateTick();
             FollowOwner();
+            Tick.RunLateTick();
         }
 
         void OnLoginRequested(string host, ushort port, string user, string pwd)
@@ -234,8 +234,7 @@ namespace Atlas.Mvp.Unity
         {
             _ownerEntityId = 0;
             Cursor.lockState = CursorLockMode.None;
-            foreach (var v in _views.Values)
-                if (v != null) Destroy(v.gameObject);
+            foreach (var v in _views.Values) v?.Dispose();
             _views.Clear();
             _hud = null;
             _projectiles?.Dispose();
@@ -283,33 +282,30 @@ namespace Atlas.Mvp.Unity
             }
             foreach (var id in _stale)
             {
-                if (_views[id] != null) Destroy(_views[id].gameObject);
+                _views[id]?.Dispose();
                 _views.Remove(id);
             }
         }
 
         EntityView SpawnView(ClientEntity entity)
         {
-            var go = new GameObject($"View_{entity.TypeName}_{entity.EntityId}");
-            if (_worldRoot != null) go.transform.SetParent(_worldRoot.transform, false);
-
             // ReconcileViews already filters to Avatar / Npc; the default arm
             // exists only because switch expressions must be exhaustive.
             EntityView view = entity switch
             {
-                MvpAvatar => go.AddComponent<AvatarView>(),
-                MvpNpc => go.AddComponent<NpcView>(),
+                MvpAvatar a => new AvatarView(a, _net, _worldRoot!.transform),
+                MvpNpc n => new NpcView(n, _net, _worldRoot!.transform),
                 _ => throw new System.InvalidOperationException(
                          $"SpawnView: unsupported entity type {entity.TypeName}"),
             };
-            view.Bind(entity, _net);
 
             if (entity.IsOwner && entity is MvpAvatar avatar)
             {
                 // Owner may switch via EntityTransferred (Account → Avatar handoff).
                 _ownerEntityId = entity.EntityId;
-                go.AddComponent<PlayerInputController>().Bind(avatar, _net);
-                AoiBoxes.Attach(go.transform, 50f, 55f,
+                ((AvatarView)view).AttachInput(
+                    new PlayerInputController(avatar, _net, view.Root.transform));
+                AoiBoxes.Attach(view.Root.transform, 50f, 55f,
                     new Color(0f, 1f, 0.4f, 0.7f),
                     new Color(1f, 0.7f, 0.2f, 0.5f));
                 _hud?.SetOwner(avatar);
@@ -322,8 +318,9 @@ namespace Atlas.Mvp.Unity
         {
             if (_ownerEntityId == 0 || _camera == null) return;
             if (!_views.TryGetValue(_ownerEntityId, out var owner) || owner == null) return;
-            var targetPos = owner.transform.position;
-            var ownerYaw = owner.transform.rotation.eulerAngles.y;
+            var ownerTransform = owner.Root.transform;
+            var targetPos = ownerTransform.position;
+            var ownerYaw = ownerTransform.rotation.eulerAngles.y;
 
             if (!_cameraInitialized)
             {

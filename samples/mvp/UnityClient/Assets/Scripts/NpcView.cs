@@ -1,3 +1,4 @@
+using Atlas.Client.Unity;
 using UnityEngine;
 using MvpNpc = Atlas.Mvp.Client.Npc;
 
@@ -6,6 +7,9 @@ namespace Atlas.Mvp.Unity
     public sealed class NpcView : EntityView
     {
         MvpNpc Npc => (MvpNpc)Entity!;
+
+        public NpcView(MvpNpc npc, AtlasNetworkManager net, Transform worldRoot)
+            : base(npc, net, worldRoot) { }
 
         protected override Color PickAliveColor() => new(0.6f, 0.6f, 0.6f);
 
