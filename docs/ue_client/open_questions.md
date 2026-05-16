@@ -21,22 +21,6 @@
 
 本期 UE 接入按**不做战斗预测**实现,M3 完成后视实测决策。
 
-## 待决(M1 之前需拍板)
-
-### CppEmitter — 属性 BP 暴露粒度
-
-- 选项 1:全字段 UPROPERTY 缓存 — 冗余拷贝,BP 易用
-- 选项 2:hot/cold 区分,`.def` 加 `@bp_cache` — 精细但要扩 `.def` 语法
-- 选项 3:全 getter+registry 查表 — 简洁,BP 频繁调用有 ns 级开销
-
-**默认选项 3**,M1 验证 BP 频繁访问的性能。若不达标,M2 之前扩 `@bp_cache`。
-
-### Logic component 的"独立 BP 视图"需求
-
-主架构是 logic component 平铺到 `UAtlasAvatarView`。但 `InventoryComponent` 这类可能有独立 UI BP 直接绑。
-
-**当前方案**:游戏侧手写 `UInventoryUIData : UObject`,由 view 在 OnInventoryChanged 时刷新。**不**自动为 logic component 生成 UActorComponent。M2 验证这个 pattern 可用。
-
 ## 待决(M3 之后)
 
 ### 无缝大世界 UWorld 转移时 entity 处理
