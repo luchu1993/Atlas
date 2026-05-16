@@ -54,8 +54,10 @@ def default_output(target: str) -> Path:
     fail(f"unsupported target: {target}")
 
 
-def project_version(unity_project: Path) -> str:
+def project_version(unity_project: Path) -> str | None:
     version_file = unity_project / "ProjectSettings" / "ProjectVersion.txt"
+    if not version_file.is_file():
+        return None
     for line in version_file.read_text(encoding="utf-8").splitlines():
         prefix = "m_EditorVersion:"
         if line.startswith(prefix):
@@ -63,8 +65,42 @@ def project_version(unity_project: Path) -> str:
     fail(f"{version_file} does not contain m_EditorVersion")
 
 
-def unity_candidates(version: str) -> list[Path]:
+def installed_unity_candidates() -> list[Path]:
     home = Path.home()
+    if HOST == "Windows":
+        roots = [Path("C:/Program Files/Unity/Hub/Editor")]
+        candidates = [
+            p / "Editor" / "Unity.exe"
+            for root in roots
+            for p in root.glob("*")
+            if p.is_dir()
+        ]
+        return sorted(candidates, reverse=True)
+    if HOST == "Darwin":
+        roots = [Path("/Applications/Unity/Hub/Editor")]
+        candidates = [
+            p / "Unity.app" / "Contents" / "MacOS" / "Unity"
+            for root in roots
+            for p in root.glob("*")
+            if p.is_dir()
+        ]
+        candidates.append(Path("/Applications/Unity/Unity.app/Contents/MacOS/Unity"))
+        return sorted(candidates, reverse=True)
+    roots = [home / "Unity" / "Hub" / "Editor", Path("/opt/unity/hub/editor")]
+    candidates = [
+        p / "Editor" / "Unity"
+        for root in roots
+        for p in root.glob("*")
+        if p.is_dir()
+    ]
+    candidates.append(Path("/opt/unity/editor/Unity"))
+    return sorted(candidates, reverse=True)
+
+
+def unity_candidates(version: str | None) -> list[Path]:
+    home = Path.home()
+    if version is None:
+        return installed_unity_candidates()
     if HOST == "Windows":
         return [
             Path(f"C:/Program Files/Unity/Hub/Editor/{version}/Editor/Unity.exe"),
@@ -97,10 +133,16 @@ def resolve_unity(arg: str | None, unity_project: Path) -> Path:
             return unity
 
     version = project_version(unity_project)
+    if version is None:
+        info("ProjectSettings/ProjectVersion.txt is missing; scanning installed Unity editors.")
     for candidate in unity_candidates(version):
         if candidate.is_file():
+            if version is None:
+                info(f"using installed Unity editor: {candidate}")
             return candidate
 
+    if version is None:
+        fail("No installed Unity editor found. Pass --unity or set UNITY_EXE.")
     fail(f"Unity {version} not found. Pass --unity or set UNITY_EXE.")
 
 
