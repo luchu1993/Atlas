@@ -1683,11 +1683,12 @@ auto BaseApp::FinalizeForceLogoff(EntityID entity_id, uint32_t cell_ack_request_
         if (auto uit = account_index_reverse_.find(entity_id);
             uit != account_index_reverse_.end()) {
           if (auto [it, inserted] = destroys_in_flight_.try_emplace(
-                  uit->second, DestroyInFlight{entity_id, Clock::now(), {}});
+                  uit->second, DestroyInFlight{entity_id, Clock::now(), {}, 0});
               inserted) {
             const std::string captured = uit->second;
             cell_ack_request_id = AllocateDestroyAckId(
                 [this, captured](bool /*ok*/) { OnUsernameDestroyComplete(captured); });
+            it->second.ack_request_id = cell_ack_request_id;
           }
         }
       }
@@ -1759,10 +1760,22 @@ void BaseApp::OnUsernameDestroyComplete(const std::string& username) {
   auto it = destroys_in_flight_.find(username);
   if (it == destroys_in_flight_.end()) return;
   std::vector<PendingLogin> queued = std::move(it->second.queued);
+  const uint32_t stale_ack_id = it->second.ack_request_id;
   destroys_in_flight_.erase(it);
-  for (auto& pending : queued) {
-    DispatchPrepareLogin(std::move(pending));
+  // Idempotent: a normal Ack already erased the waiter; the sweep path
+  // clears it here so a late-arriving Ack can't fire into a dead slot.
+  if (stale_ack_id != 0) destroy_ack_waiters_.erase(stale_ack_id);
+  if (queued.empty()) return;
+  // Last-writer-wins: dispatching every queued pending would race and
+  // leak multiple same-name entities into entity_mgr_ before any of them
+  // authenticated. Fail older entries with the same superseded code
+  // TryCompleteLocalRelogin uses for the DBID side.
+  for (std::size_t i = 0; i + 1 < queued.size(); ++i) {
+    const DatabaseID kDbid = queued[i].dbid;
+    FailPendingPrepareLogin(queued[i], "superseded_by_newer_login");
+    FinishLoginFlow(kDbid);
   }
+  DispatchPrepareLogin(std::move(queued.back()));
 }
 
 void BaseApp::SweepStaleDestroysInFlight() {
@@ -1833,9 +1846,8 @@ void BaseApp::DoGiveClientToLocal(EntityID src_id, EntityID dest_id) {
     ATLAS_LOG_ERROR("BaseApp: give_client_to: failed to move client binding to dest={}", dest_id);
     return;
   }
-  // The account stays tied to the same identity; track the new owner so a
-  // re-login can still locate the active entity after Account → Avatar
-  // handoff.
+  // Identity stays with the client through Account -> Avatar; keep the
+  // account index aligned with the now-bound entity.
   TransferAccountOwner(src_id, dest_id);
 
   // Without EntityTransferred, the client still targets src_id (per
@@ -2108,12 +2120,18 @@ void BaseApp::UnbindClient(EntityID entity_id) {
 
 void BaseApp::RegisterAccountOwner(const std::string& username, EntityID entity_id) {
   if (username.empty() || entity_id == kInvalidEntityID) return;
+  // Strip stale rows on both sides so neither map can dangle into a
+  // no-longer-tracked username or entity.
   UnregisterAccountOwner(entity_id);
+  if (auto it = account_entity_index_.find(username); it != account_entity_index_.end()) {
+    UnregisterAccountOwner(it->second);
+  }
   account_entity_index_[username] = entity_id;
   account_index_reverse_[entity_id] = username;
 }
 
 void BaseApp::TransferAccountOwner(EntityID old_entity_id, EntityID new_entity_id) {
+  if (new_entity_id == kInvalidEntityID) return;
   auto it = account_index_reverse_.find(old_entity_id);
   if (it == account_index_reverse_.end()) return;
   std::string username = std::move(it->second);

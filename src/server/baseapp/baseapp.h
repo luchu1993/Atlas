@@ -304,6 +304,8 @@ class BaseApp : public EntityApp {
     EntityID entity_id{kInvalidEntityID};
     TimePoint started_at{};
     std::vector<PendingLogin> queued;
+    // 0 when no ack waiter was allocated (no cell or no channel).
+    uint32_t ack_request_id{0};
   };
   // Same-name logins park here while the prior session's cellapp Avatar
   // is being torn down; drained on DestroyCellEntityAck or timeout.
