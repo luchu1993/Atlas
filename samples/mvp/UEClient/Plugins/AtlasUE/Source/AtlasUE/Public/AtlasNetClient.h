@@ -32,10 +32,8 @@ struct FAtlasInboundMessage
 
 class FAtlasNetRunnable;
 
-// Owns one AtlasNetContext. Login + authentication are GameThread-driven via
-// PollOnGameThread; after a successful auth the caller invokes StartRunningThread
-// and ongoing AtlasNetPoll moves to a dedicated worker, delivering inbound
-// messages via an SPSC queue that the GameThread drains in TickGameThread.
+// Owns one AtlasNetContext. Login + auth pump on the GameThread; after auth a
+// worker thread takes over polling and delivers messages via the SPSC queue.
 class FAtlasNetClient
 {
 public:
@@ -63,9 +61,8 @@ public:
 	AtlasNetContext* GetContext() const { return Ctx; }
 
 private:
-	// C ABI shims. on_deliver / on_disconnect have ctx only — look up `this` via
-	// a static registry; on_login / on_auth carry user_data so we pass `this`
-	// directly and skip the registry.
+	// on_deliver / on_disconnect have ctx only — recover `this` via the static
+	// registry; on_login / on_auth carry user_data so the cast is direct.
 	static void OnLoginResultStatic(void* UserData, uint8 Status, const char* Host,
 	                                uint16 Port, const char* ErrorMessage);
 	static void OnAuthResultStatic(void* UserData, uint8 Success, uint32 EntityId,

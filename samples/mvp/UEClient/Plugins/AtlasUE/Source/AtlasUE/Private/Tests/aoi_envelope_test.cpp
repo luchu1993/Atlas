@@ -124,7 +124,7 @@ bool FAtlasAoIEnvelopeTest::RunTest(const FString&)
 		TestNull(TEXT("entity removed"), Manager.Find(42));
 	}
 
-	// kEntityPropertyUpdate: M0 silently skipped, manager unaffected.
+	// kEntityPropertyUpdate is silently skipped, manager unaffected.
 	{
 		std::vector<uint8_t> buf;
 		Append<uint8_t>(buf, static_cast<uint8_t>(EnvelopeKind::kEntityPropertyUpdate));

@@ -8,9 +8,8 @@ namespace atlas {
 
 class ClientEntityManager;
 
-// Mirrors src/server/cellapp/cell_aoi_envelope.h. M0 routes kEntityEnter,
-// kEntityLeave, kEntityPositionUpdate; kEntityPropertyUpdate is recognised
-// and silently dropped (delta sync arrives with codegen in M1).
+// Mirrors src/server/cellapp/cell_aoi_envelope.h. kEntityPropertyUpdate is
+// recognised but skipped here — delta sync requires codegen.
 enum class EnvelopeKind : uint8_t {
   kEntityEnter = 1,
   kEntityLeave = 2,
@@ -25,9 +24,7 @@ enum class EnvelopeDecodeResult {
   kPropertyUpdateSkipped,
 };
 
-// Decodes one envelope body — the bytes that follow the 0xF001 / 0xF003
-// wire id. Returns kOk on success; truncated input or unknown kind returns
-// the matching error and the manager is left untouched.
+// On error the manager is left untouched.
 EnvelopeDecodeResult DecodeAoIEnvelope(const uint8_t* body, std::size_t len,
                                        ClientEntityManager& mgr);
 

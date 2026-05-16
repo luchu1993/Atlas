@@ -23,8 +23,7 @@ class ClientEntityManager {
   ClientEntityManager(const ClientEntityManager&) = delete;
   ClientEntityManager& operator=(const ClientEntityManager&) = delete;
 
-  // Registered before any HandleEnter for that type — Subsystem hooks this up
-  // before authentication completes (Task #9 in M0).
+  // Must be registered before any HandleEnter for that type.
   void RegisterFactory(EntityTypeId type_id, Factory factory);
 
   // Takes ownership; rejects null, kInvalidEntityId, or duplicate id.
@@ -38,22 +37,18 @@ class ClientEntityManager {
 
   [[nodiscard]] std::size_t Size() const { return entities_.size(); }
 
-  // Creates and registers a fresh entity via the type's factory without seeding
-  // a position. Used for the BaseApp -> Client owner handoff (kEntityTransferred)
-  // where the server has not assigned spatial state yet.
+  // Like HandleEnter but skips position seeding — for entities (e.g. Account)
+  // that arrive via owner handoff without spatial state.
   bool HandleCreate(EntityId id, EntityTypeId type_id);
 
-  // Spawns and registers a fresh entity via the type's factory, then seeds the
-  // initial position into it. Returns false if id is invalid, already exists,
-  // or no factory was registered for type_id.
+  // Returns false on invalid id, duplicate id, or no registered factory.
   bool HandleEnter(EntityId id, EntityTypeId type_id, double server_time,
                    const Vec3& pos, const Vec3& dir, bool on_ground);
 
-  // Equivalent to Remove(id) — present so envelope dispatch reads symmetrically.
   void HandleLeave(EntityId id) { Remove(id); }
 
-  // Routes a position envelope to the addressed entity; unknown id is silently
-  // dropped (server may target an entity that just left the client's AoI).
+  // Unknown id is silently dropped — server may target an entity that just
+  // left the client's AoI.
   void HandlePositionUpdate(EntityId id, double server_time, const Vec3& pos,
                             const Vec3& dir, bool on_ground);
 

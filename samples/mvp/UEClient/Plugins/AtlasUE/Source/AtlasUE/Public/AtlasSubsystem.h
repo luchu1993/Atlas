@@ -30,23 +30,17 @@ public:
 	                const FString& PasswordHash);
 	bool BeginAuthenticate();
 
-	// 32-byte SHA-256 of the entity_defs surface; BaseApp rejects mismatched
-	// client builds (def_mismatch status). Must be called before BeginLogin.
-	// M2 codegen will emit this constant; M0 callers paste the bytes manually.
+	// 32-byte SHA-256 of the entity_defs surface; must be called before
+	// BeginLogin or the server rejects with def_mismatch.
 	bool SetEntityDefDigest(TArrayView<const uint8> Digest);
 
-	// Thin pass-through to AtlasNetSendBaseRpc / AtlasNetSendCellRpc. Returns
-	// true on ATLAS_NET_OK. Until M2 codegen lands the caller is responsible for
-	// the rpc_id (sourced from samples/mvp/Atlas.Mvp.*/RpcIds.g.cs) and payload
-	// layout (manual little-endian byte packing).
+	// Pass-through to AtlasNetSend{Base,Cell}Rpc. Caller owns the rpc_id and
+	// payload byte layout until typed stubs are generated.
 	bool SendBaseRpc(uint32 EntityId, uint32 RpcId, const TArray<uint8>& Payload);
 	bool SendCellRpc(uint32 EntityId, uint32 RpcId, const TArray<uint8>& Payload);
 
-	// Registered before BeginLogin (typically GameMode::BeginPlay). On HandleEnter
-	// the subsystem spawns the bound Actor on the GameThread, runs the optional
-	// custom EntityFactory (else atlas::ClientEntity base), and attaches a fresh
-	// FAtlasUEActorView. A null Factory works for entities that do not need
-	// AvatarFilter / typed state.
+	// On HandleEnter the subsystem spawns the bound Actor, runs Factory (or the
+	// base ClientEntity if null), and attaches an FAtlasUEActorView.
 	void RegisterEntityClass(uint16 TypeId, TSubclassOf<AActor> ActorClass,
 	                         EntityFactory Factory = nullptr);
 

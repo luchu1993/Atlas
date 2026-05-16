@@ -4,9 +4,8 @@
 #include "AtlasCore/client_entity.h"
 #include "AtlasCore/entity_view.h"
 
-// Hand-written placeholder until M1 codegen lands. Wires Atlas position updates
-// through AvatarFilter and forwards interpolated transforms to whatever view
-// the subsystem attaches (FAtlasUEActorView in production).
+// Hand-written placeholder; replaced by codegen output. Feeds AvatarFilter
+// from position updates and emits interpolated transforms via the attached view.
 class FAvatarEntityStub : public atlas::ClientEntity
 {
 public:

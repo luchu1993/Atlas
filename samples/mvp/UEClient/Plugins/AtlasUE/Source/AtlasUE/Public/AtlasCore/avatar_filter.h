@@ -10,8 +10,8 @@
 
 namespace atlas {
 
-// Port of Atlas.Client.AvatarFilter. Same algorithm, same constants — see D11
-// in docs/ue_client/decisions.md (no behavioural drift permitted).
+// Port of Atlas.Client.AvatarFilter. No behavioural drift permitted from the
+// C# source.
 class ATLAS_CORE_API AvatarFilter {
  public:
   static constexpr std::size_t kRingCapacity = 8;

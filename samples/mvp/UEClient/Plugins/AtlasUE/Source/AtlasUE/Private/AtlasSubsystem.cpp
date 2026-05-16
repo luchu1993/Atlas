@@ -164,8 +164,7 @@ bool UAtlasSubsystem::OnTick(float DeltaTime)
 			EntityManager.TickAll(DeltaTime);
 			break;
 		default:
-			// Idle / LoginSucceeded / LoginFailed / AuthFailed / Disconnected are
-			// game-side waypoints; the subsystem doesn't auto-advance them.
+			// Terminal and waiting states are advanced from game code, not here.
 			break;
 	}
 	return true;

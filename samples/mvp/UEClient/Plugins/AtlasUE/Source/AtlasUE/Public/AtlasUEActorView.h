@@ -6,9 +6,8 @@
 
 #include "AtlasCore/entity_view.h"
 
-// Bridges Atlas entity transform updates to a UE Actor. Holds a weak reference
-// so an Actor destroyed mid-frame (PIE stop, streaming unload) is silently
-// dropped — the underlying atlas::ClientEntity outlives every view binding.
+// Bridges Atlas transform updates to a UE Actor via a weak ref so the Actor
+// can vanish mid-frame without dangling the underlying ClientEntity.
 class FAtlasUEActorView : public atlas::EntityView
 {
 public:

@@ -47,7 +47,7 @@ EnvelopeDecodeResult DecodeEnter(uint32_t id, SpanReader& r, ClientEntityManager
       !r.Read(server_time)) {
     return EnvelopeDecodeResult::kTruncated;
   }
-  // peerSnapshot bytes follow; M0 ignores them (property sync arrives in M1).
+  // peerSnapshot bytes follow; ignored until codegen lands.
   mgr.HandleEnter(id, type_id, server_time, pos, dir, on_ground != 0);
   return EnvelopeDecodeResult::kOk;
 }
