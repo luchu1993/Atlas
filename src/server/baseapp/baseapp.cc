@@ -1184,6 +1184,14 @@ auto BaseApp::TryCompleteLocalRelogin(PendingLogin pending) -> bool {
     return true;
   }
 
+  // Mirror CompletePrepareLoginFromCheckout so OnClientAuthenticate can
+  // re-register the account index on fast relogin; without this the
+  // username -> entity mapping stays empty after a same-name reconnect.
+  prepared_login_entities_[pending.login_request_id] =
+      PreparedLoginEntity{proxy->EntityId(), pending.dbid, proxy->TypeId(), Clock::now(),
+                          pending.username};
+  prepared_login_requests_by_entity_[proxy->EntityId()] = pending.login_request_id;
+
   login::PrepareLoginResult reply;
   reply.request_id = pending.login_request_id;
   reply.success = true;
