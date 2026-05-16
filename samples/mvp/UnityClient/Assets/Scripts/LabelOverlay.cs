@@ -1,14 +1,17 @@
+using System.Collections.Generic;
 using UnityEngine;
 using UnityEngine.UI;
 
 namespace Atlas.Mvp.Unity
 {
-    public sealed class LabelOverlay
+    public sealed class LabelOverlay : ITickable
     {
         public static LabelOverlay? Instance { get; private set; }
 
         readonly Canvas _canvas;
         readonly Font _font;
+        readonly List<DamageFloater> _floaters = new();
+        readonly List<DamageFloater> _expired = new();
         Camera? _camera;
 
         LabelOverlay()
@@ -30,11 +33,15 @@ namespace Atlas.Mvp.Unity
         {
             if (Instance != null) return;
             Instance = new LabelOverlay();
+            Tick.Add(Instance);
         }
 
         public static void Shutdown()
         {
             if (Instance == null) return;
+            Tick.Remove(Instance);
+            foreach (var f in Instance._floaters) f.DestroyText();
+            Instance._floaters.Clear();
             if (Instance._canvas != null) Object.Destroy(Instance._canvas.gameObject);
             Instance = null;
         }
@@ -68,6 +75,22 @@ namespace Atlas.Mvp.Unity
             if (_camera == null) { screenPos = default; return false; }
             screenPos = _camera.WorldToScreenPoint(worldPos);
             return screenPos.z > 0f;
+        }
+
+        public void RegisterFloater(DamageFloater f) => _floaters.Add(f);
+
+        public void Tick(float dt)
+        {
+            _expired.Clear();
+            for (int i = 0; i < _floaters.Count; ++i)
+            {
+                if (!_floaters[i].Advance(dt)) _expired.Add(_floaters[i]);
+            }
+            foreach (var f in _expired)
+            {
+                f.DestroyText();
+                _floaters.Remove(f);
+            }
         }
     }
 }

@@ -3,14 +3,20 @@ using UnityEngine.UI;
 
 namespace Atlas.Mvp.Unity
 {
-    public sealed class DamageFloater : MonoBehaviour
+    public sealed class DamageFloater
     {
         const float kLifetimeSec = 1.0f;
         const float kRisePixelsPerSec = 90f;
 
         float _age;
         Vector2 _anchored;
-        Text _text = null!;
+        readonly Text _text;
+
+        DamageFloater(Text text, Vector2 anchored)
+        {
+            _text = text;
+            _anchored = anchored;
+        }
 
         public static void Spawn(Vector3 worldPos, int amount)
         {
@@ -27,19 +33,22 @@ namespace Atlas.Mvp.Unity
             var anchored = new Vector2(screen.x, screen.y);
             text.rectTransform.anchoredPosition = anchored;
 
-            var floater = text.gameObject.AddComponent<DamageFloater>();
-            floater._text = text;
-            floater._anchored = anchored;
+            overlay.RegisterFloater(new DamageFloater(text, anchored));
         }
 
-        void Update()
+        public bool Advance(float dt)
         {
-            _age += Time.deltaTime;
-            _anchored.y += kRisePixelsPerSec * Time.deltaTime;
+            _age += dt;
+            _anchored.y += kRisePixelsPerSec * dt;
             _text.rectTransform.anchoredPosition = _anchored;
             var alpha = Mathf.Clamp01(1f - _age / kLifetimeSec);
             var c = _text.color; c.a = alpha; _text.color = c;
-            if (_age >= kLifetimeSec) Destroy(gameObject);
+            return _age < kLifetimeSec;
+        }
+
+        public void DestroyText()
+        {
+            if (_text != null) Object.Destroy(_text.gameObject);
         }
     }
 }
