@@ -1384,7 +1384,7 @@ void BaseApp::DispatchPrepareLogin(PendingLogin pending) {
   if (!pending.username.empty()) {
     if (destroys_in_flight_.contains(pending.username)) {
       const std::string kName = pending.username;
-      ATLAS_LOG_INFO("BaseApp: username '{}' queued, destroy in flight", kName);
+      ATLAS_LOG_DEBUG("BaseApp: username '{}' queued, destroy in flight", kName);
       QueuePendingLoginAwaitingDestroy(kName, std::move(pending));
       return;
     }
@@ -1402,7 +1402,7 @@ void BaseApp::DispatchPrepareLogin(PendingLogin pending) {
       // GiveClientTo) that must die before the new session enters world.
       if (kIndexed != dbid_owner) {
         const std::string kName = pending.username;
-        ATLAS_LOG_INFO(
+        ATLAS_LOG_DEBUG(
             "BaseApp: username '{}' orphan owner entity={} dbid_owner={}, force-logoff",
             kName, kIndexed, dbid_owner);
         ForceLogoffUsernameOwner(kName);
@@ -1723,8 +1723,8 @@ auto BaseApp::FinalizeForceLogoff(EntityID entity_id, uint32_t cell_ack_request_
       msg.entity_id = entity_id;
       msg.request_id = cell_ack_request_id;
       (void)cell_ch->SendMessage(msg);
-      ATLAS_LOG_INFO("BaseApp: sent DestroyCellEntity for entity={} ack={}", entity_id,
-                     cell_ack_request_id);
+      ATLAS_LOG_DEBUG("BaseApp: sent DestroyCellEntity for entity={} ack={}", entity_id,
+                      cell_ack_request_id);
     }
     ent->ClearCell();
   }
@@ -1753,12 +1753,12 @@ auto BaseApp::AllocateDestroyAckId(std::function<void(bool)> on_ack) -> uint32_t
 void BaseApp::OnDestroyCellEntityAck(const cellapp::DestroyCellEntityAck& msg) {
   auto it = destroy_ack_waiters_.find(msg.request_id);
   if (it == destroy_ack_waiters_.end()) {
-    ATLAS_LOG_INFO("BaseApp: DestroyCellEntityAck for unknown request_id={} entity={}",
-                   msg.request_id, msg.entity_id);
+    ATLAS_LOG_DEBUG("BaseApp: DestroyCellEntityAck for unknown request_id={} entity={}",
+                    msg.request_id, msg.entity_id);
     return;
   }
-  ATLAS_LOG_INFO("BaseApp: DestroyCellEntityAck request_id={} entity={} success={}",
-                 msg.request_id, msg.entity_id, msg.success);
+  ATLAS_LOG_DEBUG("BaseApp: DestroyCellEntityAck request_id={} entity={} success={}",
+                  msg.request_id, msg.entity_id, msg.success);
   auto cb = std::move(it->second);
   destroy_ack_waiters_.erase(it);
   cb(msg.success);
@@ -1790,8 +1790,8 @@ void BaseApp::OnUsernameDestroyComplete(const std::string& username) {
   if (it == destroys_in_flight_.end()) return;
   std::vector<PendingLogin> queued = std::move(it->second.queued);
   const uint32_t stale_ack_id = it->second.ack_request_id;
-  ATLAS_LOG_INFO("BaseApp: drain username='{}' queued={} ack={}", username, queued.size(),
-                 stale_ack_id);
+  ATLAS_LOG_DEBUG("BaseApp: drain username='{}' queued={} ack={}", username, queued.size(),
+                  stale_ack_id);
   destroys_in_flight_.erase(it);
   // Idempotent: a normal Ack already erased the waiter; the sweep path
   // clears it here so a late-arriving Ack can't fire into a dead slot.
@@ -2159,7 +2159,7 @@ void BaseApp::RegisterAccountOwner(const std::string& username, EntityID entity_
   }
   account_entity_index_[username] = entity_id;
   account_index_reverse_[entity_id] = username;
-  ATLAS_LOG_INFO("BaseApp: account index '{}' -> entity={}", username, entity_id);
+  ATLAS_LOG_DEBUG("BaseApp: account index '{}' -> entity={}", username, entity_id);
 }
 
 void BaseApp::TransferAccountOwner(EntityID old_entity_id, EntityID new_entity_id) {
@@ -2173,8 +2173,8 @@ void BaseApp::TransferAccountOwner(EntityID old_entity_id, EntityID new_entity_i
   UnregisterAccountOwner(new_entity_id);
   account_entity_index_[username] = new_entity_id;
   account_index_reverse_[new_entity_id] = std::move(username);
-  ATLAS_LOG_INFO("BaseApp: account index '{}' transferred {} -> {}",
-                 account_index_reverse_[new_entity_id], old_entity_id, new_entity_id);
+  ATLAS_LOG_DEBUG("BaseApp: account index '{}' transferred {} -> {}",
+                  account_index_reverse_[new_entity_id], old_entity_id, new_entity_id);
 }
 
 void BaseApp::UnregisterAccountOwner(EntityID entity_id) {
