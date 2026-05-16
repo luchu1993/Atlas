@@ -1,11 +1,7 @@
-using System.Collections.Generic;
-using Atlas.Client;
-using Atlas.Client.Native;
 using Atlas.Client.Unity;
 using Atlas.Diagnostics;
 using UnityEngine;
 using MvpAvatar = Atlas.Mvp.Client.Avatar;
-using MvpNpc = Atlas.Mvp.Client.Npc;
 
 namespace Atlas.Mvp.Unity
 {
@@ -21,6 +17,7 @@ namespace Atlas.Mvp.Unity
         [SerializeField] float positionSmoothTime = 0.12f;
         [SerializeField] float yawFollowSmoothTime = 0.25f;
         [SerializeField] float mouseSensitivity = 3f;
+        [SerializeField] float hudLookSensitivity = 0.15f;
         [SerializeField] float pitchMin = -25f;
         [SerializeField] float pitchMax = 60f;
         [SerializeField] float initialPitch = 15f;
@@ -30,26 +27,15 @@ namespace Atlas.Mvp.Unity
         [SerializeField] Material groundMaterial = null!;
 
         public static Bootstrap? Instance { get; private set; }
-        public float CameraYaw => _yaw;
-        public Camera? MainCamera => _camera;
-        public uint OwnerEntityId => _ownerEntityId;
+        public Camera? MainCamera => _camera?.Camera;
+        public uint OwnerEntityId => _views?.OwnerEntityId ?? 0;
 
         AtlasNetworkManager _net = null!;
         LoginScreen _loginScreen = null!;
         LoginFlow _flow = null!;
-        readonly Dictionary<uint, EntityView> _views = new();
-        readonly List<uint> _stale = new();
-        GameObject? _worldRoot;
-        Camera? _camera;
-        GameHud? _hud;
-        ProjectileVisualController? _projectiles;
-        uint _ownerEntityId;
-        float _zoom = 1.0f;
-        Vector3 _camVelocity;
-        float _yaw;
-        float _pitch;
-        float _yawVelocity;
-        bool _cameraInitialized;
+        CameraController _camera = null!;
+        WorldLifecycle? _world;
+        ViewRegistry? _views;
         bool _userInitiatedLogout;
 
         void Awake()
@@ -68,7 +54,10 @@ namespace Atlas.Mvp.Unity
             _net.Configure(loginappHost, loginappPort);
             _net.Disconnected += OnNetDisconnected;
 
-            CreateCamera();
+            _camera = new CameraController(CreateCamera(), BuildCameraConfig(),
+                hudLookDelta: () => _world?.Hud?.ConsumeLookDelta() ?? Vector2.zero,
+                moveInputActive: IsMoveInputActive);
+
             _loginScreen = gameObject.AddComponent<LoginScreen>();
             _loginScreen.Configure(loginappHost, loginappPort, username, passwordHash);
             _loginScreen.LoginRequested += OnLoginRequested;
@@ -90,31 +79,17 @@ namespace Atlas.Mvp.Unity
             _flow?.Dispose();
             Cursor.lockState = CursorLockMode.None;
             TeardownWorld();
+            _camera?.Dispose();
         }
 
-        void Update()
-        {
-            if (_worldRoot == null) return;
-            float scroll = Input.mouseScrollDelta.y;
-            if (Mathf.Abs(scroll) > 0.01f)
-                _zoom = Mathf.Clamp(_zoom * Mathf.Pow(1f - zoomStep, scroll), zoomMin, zoomMax);
-            ReconcileViews();
-            Ticker.RunTick(Time.deltaTime);
-        }
+        void Update() => Ticker.RunTick(Time.deltaTime);
 
-        // FollowOwner updates the camera; LateTick must run after it so
-        // label projection samples the post-follow camera pose.
-        void LateUpdate()
-        {
-            if (_worldRoot == null || _camera == null) return;
-            FollowOwner();
-            Ticker.RunLateTick();
-        }
+        // CameraController must register on Ticker before LabelOverlay so
+        // labels project against the post-follow camera pose.
+        void LateUpdate() => Ticker.RunLateTick();
 
-        void OnLoginRequested(string host, ushort port, string user, string pwd)
-        {
+        void OnLoginRequested(string host, ushort port, string user, string pwd) =>
             BeginLogin(host, port, user, pwd);
-        }
 
         void BeginLogin(string host, ushort port, string user, string pwd)
         {
@@ -153,9 +128,8 @@ namespace Atlas.Mvp.Unity
 
         void OnNetDisconnected(int reason)
         {
-            // LoginFlow.Fail triggers a logout to reset the native ctx; its
-            // error string is already on the status line and is more useful
-            // than the generic reason code, so keep it.
+            // Prefer LoginFlow.LastError over the generic disconnect reason —
+            // Fail() already routed the useful message to the status line.
             string? carriedFailure = _flow.LastError;
             TeardownWorld();
             _flow.Reset();
@@ -169,7 +143,7 @@ namespace Atlas.Mvp.Unity
             else if (carriedFailure == null)
             {
                 _loginScreen.SetStatus($"Disconnected (reason={reason}). Re-enter to retry.",
-                                       isError: true);
+                    isError: true);
             }
         }
 
@@ -186,183 +160,62 @@ namespace Atlas.Mvp.Unity
 
         void BuildWorld()
         {
-            if (_worldRoot != null) return;
-            _worldRoot = new GameObject("World");
-
-            var ground = GameObject.CreatePrimitive(PrimitiveType.Plane);
-            ground.name = "Ground";
-            ground.transform.SetParent(_worldRoot.transform, false);
-            // Primitive plane is 10m; scale 20× → 200m world.
-            ground.transform.localScale = new Vector3(20f, 1f, 20f);
-            var renderer = ground.GetComponent<Renderer>();
-            if (groundMaterial != null)
-            {
-                renderer.material = groundMaterial;
-                renderer.material.mainTextureScale = new Vector2(100f, 100f);
-            }
-            else
-            {
-                renderer.material.color = new Color(0.55f, 0.55f, 0.55f);
-            }
-
-            var lightGo = new GameObject("DirectionalLight");
-            lightGo.transform.SetParent(_worldRoot.transform, false);
-            var light = lightGo.AddComponent<Light>();
-            light.type = LightType.Directional;
-            light.intensity = 1.0f;
-            lightGo.transform.rotation = Quaternion.Euler(50f, -30f, 0f);
-
-            // Camera is persistent (created in Awake); switch its clear color
-            // to the in-world sky so the world reads correctly.
-            if (_camera != null)
-            {
-                _camera.backgroundColor = new Color(0.5f, 0.6f, 0.7f);
-                _camera.transform.position = new Vector3(0f, 5f, -8f);
-                _camera.transform.LookAt(Vector3.zero);
-            }
-
-            var hudGo = new GameObject("HudRoot");
-            hudGo.transform.SetParent(_worldRoot.transform, false);
-            _hud = hudGo.AddComponent<GameHud>();
-            _hud.Bind(_net);
-            _hud.LogoutRequested += OnHudLogoutRequested;
-            LabelOverlay.Init();
-            _projectiles = new ProjectileVisualController();
-
-            _cameraInitialized = false;
-            _zoom = 1.0f;
-            _camVelocity = Vector3.zero;
-            _yawVelocity = 0f;
+            if (_world != null) return;
+            _world = new WorldLifecycle(_net, groundMaterial);
+            _world.Build();
+            _world.Hud!.LogoutRequested += OnHudLogoutRequested;
+            _views = new ViewRegistry(_net, _world.WorldRoot!, OnOwnerAttached);
         }
 
         void TeardownWorld()
         {
-            _ownerEntityId = 0;
+            _views?.Dispose();
+            _views = null;
             Cursor.lockState = CursorLockMode.None;
-            foreach (var v in _views.Values) v?.Dispose();
-            _views.Clear();
-            _hud = null;
-            _projectiles?.Dispose();
-            _projectiles = null;
-            AoiBoxes.Clear();
-            LabelOverlay.Shutdown();
-            // net_client fires no entity-destroyed callbacks on disconnect;
-            // wipe the SDK manager so a fast re-login doesn't see ghosts
-            // from the previous session.
-            ClientCallbacks.EntityManager.Clear();
-            if (_worldRoot != null) { Destroy(_worldRoot); _worldRoot = null; }
-            Ticker.Clear();
-            ResetCameraToBootPose();
+            _world?.Dispose();
+            _world = null;
+            _camera?.SetFollowTarget(null);
         }
 
-        void CreateCamera()
+        void OnOwnerAttached(AvatarView view, MvpAvatar avatar)
+        {
+            view.AttachInput(new PlayerInputController(avatar, _net, view.Root.transform,
+                () => _world?.Hud?.JoystickInput ?? Vector2.zero,
+                () => _world?.Hud?.ConsumeFireRequest() ?? false,
+                () => _camera.Yaw));
+            AoiBoxes.Attach(view.Root.transform, 50f, 55f,
+                new Color(0f, 1f, 0.4f, 0.7f),
+                new Color(1f, 0.7f, 0.2f, 0.5f));
+            _world?.Hud?.SetOwner(avatar);
+            _camera.SetFollowTarget(view.Root.transform);
+            _flow.NotifyEnteredWorld();
+        }
+
+        Camera CreateCamera()
         {
             var camGo = new GameObject("MainCamera");
             camGo.transform.SetParent(transform, false);
             camGo.tag = "MainCamera";
-            _camera = camGo.AddComponent<Camera>();
-            _camera.farClipPlane = 1500f;
-            ResetCameraToBootPose();
+            var cam = camGo.AddComponent<Camera>();
+            cam.farClipPlane = 1500f;
+            return cam;
         }
 
-        void ResetCameraToBootPose()
+        CameraController.Config BuildCameraConfig() => new()
         {
-            if (_camera == null) return;
-            _camera.backgroundColor = new Color(0.05f, 0.05f, 0.07f);
-            _camera.clearFlags = CameraClearFlags.SolidColor;
-            _camera.transform.position = new Vector3(0f, 5f, -8f);
-            _camera.transform.LookAt(Vector3.zero);
-            _cameraInitialized = false;
-        }
+            FollowOffset = followOffset,
+            LookHeight = cameraLookHeight,
+            PositionSmoothTime = positionSmoothTime,
+            YawFollowSmoothTime = yawFollowSmoothTime,
+            MouseSensitivity = mouseSensitivity,
+            HudLookSensitivity = hudLookSensitivity,
+            PitchMin = pitchMin, PitchMax = pitchMax, InitialPitch = initialPitch,
+            ZoomMin = zoomMin, ZoomMax = zoomMax, ZoomStep = zoomStep,
+        };
 
-        void ReconcileViews()
-        {
-            foreach (var entity in ClientCallbacks.EntityManager.Entities)
-            {
-                if (_views.ContainsKey(entity.EntityId)) continue;
-                if (entity is MvpAvatar || entity is MvpNpc)
-                    _views[entity.EntityId] = SpawnView(entity);
-            }
-            _stale.Clear();
-            foreach (var kv in _views)
-            {
-                if (kv.Value == null || kv.Value.Entity == null || kv.Value.Entity.IsDestroyed)
-                    _stale.Add(kv.Key);
-            }
-            foreach (var id in _stale)
-            {
-                _views[id]?.Dispose();
-                _views.Remove(id);
-            }
-        }
-
-        EntityView SpawnView(ClientEntity entity)
-        {
-            // ReconcileViews already filters to Avatar / Npc; the default arm
-            // exists only because switch expressions must be exhaustive.
-            EntityView view = entity switch
-            {
-                MvpAvatar a => new AvatarView(a, _net, _worldRoot!.transform),
-                MvpNpc n => new NpcView(n, _net, _worldRoot!.transform),
-                _ => throw new System.InvalidOperationException(
-                         $"SpawnView: unsupported entity type {entity.TypeName}"),
-            };
-
-            if (entity.IsOwner && entity is MvpAvatar avatar)
-            {
-                // Owner may switch via EntityTransferred (Account → Avatar handoff).
-                _ownerEntityId = entity.EntityId;
-                ((AvatarView)view).AttachInput(
-                    new PlayerInputController(avatar, _net, view.Root.transform));
-                AoiBoxes.Attach(view.Root.transform, 50f, 55f,
-                    new Color(0f, 1f, 0.4f, 0.7f),
-                    new Color(1f, 0.7f, 0.2f, 0.5f));
-                _hud?.SetOwner(avatar);
-                _flow.NotifyEnteredWorld();
-            }
-            return view;
-        }
-
-        void FollowOwner()
-        {
-            if (_ownerEntityId == 0 || _camera == null) return;
-            if (!_views.TryGetValue(_ownerEntityId, out var owner) || owner == null) return;
-            var ownerTransform = owner.Root.transform;
-            var targetPos = ownerTransform.position;
-            var ownerYaw = ownerTransform.rotation.eulerAngles.y;
-
-            if (!_cameraInitialized)
-            {
-                _yaw = ownerYaw;
-                _pitch = initialPitch;
-                _cameraInitialized = true;
-            }
-
-            if (Input.GetMouseButton(1))
-            {
-                Cursor.lockState = CursorLockMode.Locked;
-                _yaw += Input.GetAxis("Mouse X") * mouseSensitivity;
-                _pitch -= Input.GetAxis("Mouse Y") * mouseSensitivity;
-                _pitch = Mathf.Clamp(_pitch, pitchMin, pitchMax);
-            }
-            else
-            {
-                Cursor.lockState = CursorLockMode.None;
-                if (IsMoveInputActive())
-                    _yaw = Mathf.SmoothDampAngle(_yaw, ownerYaw, ref _yawVelocity, yawFollowSmoothTime);
-            }
-
-            var orbitRot = Quaternion.Euler(_pitch, _yaw, 0f);
-            var desiredPos = targetPos
-                + Vector3.up * (followOffset.y * _zoom)
-                + orbitRot * Vector3.back * (Mathf.Abs(followOffset.z) * _zoom);
-            _camera.transform.position = Vector3.SmoothDamp(
-                _camera.transform.position, desiredPos, ref _camVelocity, positionSmoothTime);
-            _camera.transform.LookAt(targetPos + Vector3.up * cameraLookHeight);
-        }
-
-        static bool IsMoveInputActive() =>
+        bool IsMoveInputActive() =>
             Mathf.Abs(Input.GetAxisRaw("Horizontal")) > 0.01f ||
-            Mathf.Abs(Input.GetAxisRaw("Vertical")) > 0.01f;
+            Mathf.Abs(Input.GetAxisRaw("Vertical")) > 0.01f ||
+            (_world?.Hud?.JoystickInput.sqrMagnitude ?? 0f) > 0.01f;
     }
 }

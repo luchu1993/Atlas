@@ -5,6 +5,8 @@
     <Style src="project://database/Assets/Resources/UI/GameHud.uss" />
     <ui:VisualElement name="hud-root" picking-mode="Ignore" class="hud-root">
 
+        <ui:VisualElement name="look-zone" class="look-zone" picking-mode="Position" />
+
         <ui:VisualElement name="stats-card" class="stats-card">
             <ui:VisualElement class="stat-row">
                 <ui:Label text="FPS" class="stat-key" />
@@ -18,13 +20,29 @@
 
         <ui:Button name="logout-button" text="RETURN" class="logout-btn" />
 
-        <ui:VisualElement class="hp-anchor">
+        <ui:VisualElement class="hp-anchor" picking-mode="Ignore">
             <ui:VisualElement name="hp-card" class="hp-card">
                 <ui:Label name="hp-name" text="AVATAR" class="hp-name" />
                 <ui:VisualElement class="hp-bar-track">
                     <ui:VisualElement name="hp-bar-fill" class="hp-bar-fill" />
                 </ui:VisualElement>
                 <ui:Label name="hp-text" text="--/--" class="hp-text" />
+            </ui:VisualElement>
+        </ui:VisualElement>
+
+        <ui:VisualElement name="joystick" class="joystick" picking-mode="Position">
+            <ui:VisualElement name="joystick-base" class="joystick-base" picking-mode="Ignore">
+                <ui:Label text="▲" class="joystick-arrow joystick-arrow-n" picking-mode="Ignore" />
+                <ui:Label text="▶" class="joystick-arrow joystick-arrow-e" picking-mode="Ignore" />
+                <ui:Label text="▼" class="joystick-arrow joystick-arrow-s" picking-mode="Ignore" />
+                <ui:Label text="◀" class="joystick-arrow joystick-arrow-w" picking-mode="Ignore" />
+            </ui:VisualElement>
+            <ui:VisualElement name="joystick-knob" class="joystick-knob" picking-mode="Ignore" />
+        </ui:VisualElement>
+
+        <ui:VisualElement name="skill-button" class="skill-btn" picking-mode="Position">
+            <ui:VisualElement class="skill-btn-inner" picking-mode="Ignore">
+                <ui:VisualElement class="skill-btn-icon" picking-mode="Ignore" />
             </ui:VisualElement>
         </ui:VisualElement>
 

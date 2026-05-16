@@ -6,6 +6,15 @@
     bottom: 0;
 }
 
+.look-zone {
+    position: absolute;
+    right: 0;
+    top: 0;
+    width: 50%;
+    bottom: 0;
+    background-color: rgba(0, 0, 0, 0);
+}
+
 .stats-card {
     position: absolute;
     left: 24px;
@@ -126,6 +135,116 @@
     -unity-text-align: middle-center;
     -unity-text-outline-color: rgba(0, 0, 0, 0.85);
     -unity-text-outline-width: 1px;
+}
+
+.joystick {
+    position: absolute;
+    left: 48px;
+    bottom: 48px;
+    width: 200px;
+    height: 200px;
+}
+
+.joystick-base {
+    position: absolute;
+    left: 40px;
+    top: 40px;
+    width: 120px;
+    height: 120px;
+    background-color: rgba(0, 0, 0, 0);
+    border-width: 2px;
+    border-color: rgba(230, 230, 230, 0.55);
+    border-radius: 60px;
+}
+
+.joystick-base.active {
+    border-color: rgba(255, 255, 255, 0.85);
+}
+
+.joystick-knob {
+    position: absolute;
+    left: 72px;
+    top: 72px;
+    width: 56px;
+    height: 56px;
+    background-color: rgba(40, 40, 40, 0.65);
+    border-width: 1px;
+    border-color: rgba(230, 230, 230, 0.7);
+    border-radius: 28px;
+}
+
+.joystick-knob.active {
+    background-color: rgba(60, 60, 60, 0.85);
+    border-color: rgb(255, 255, 255);
+}
+
+.joystick-arrow {
+    position: absolute;
+    color: rgba(230, 230, 230, 0.75);
+    font-size: 14px;
+    -unity-text-outline-color: rgba(0, 0, 0, 0.85);
+    -unity-text-outline-width: 1px;
+}
+
+.joystick-arrow-n {
+    top: -20px;
+    left: 50%;
+    translate: -50% 0;
+}
+
+.joystick-arrow-s {
+    bottom: -20px;
+    left: 50%;
+    translate: -50% 0;
+}
+
+.joystick-arrow-e {
+    right: -18px;
+    top: 50%;
+    translate: 0 -50%;
+}
+
+.joystick-arrow-w {
+    left: -18px;
+    top: 50%;
+    translate: 0 -50%;
+}
+
+.skill-btn {
+    position: absolute;
+    right: 56px;
+    bottom: 56px;
+    width: 130px;
+    height: 130px;
+    background-color: rgba(0, 0, 0, 0);
+    border-width: 2px;
+    border-color: rgba(230, 230, 230, 0.55);
+    border-radius: 65px;
+    align-items: center;
+    justify-content: center;
+}
+
+.skill-btn-inner {
+    width: 96px;
+    height: 96px;
+    background-color: rgba(30, 30, 30, 0.8);
+    border-width: 1px;
+    border-color: rgba(230, 230, 230, 0.45);
+    border-radius: 48px;
+    align-items: center;
+    justify-content: center;
+}
+
+.skill-btn.active .skill-btn-inner {
+    background-color: rgba(70, 70, 70, 0.9);
+    border-color: rgb(255, 255, 255);
+}
+
+.skill-btn-icon {
+    width: 10px;
+    height: 26px;
+    background-color: rgb(230, 210, 160);
+    border-radius: 5px;
 }
 
 .debug-panel {
