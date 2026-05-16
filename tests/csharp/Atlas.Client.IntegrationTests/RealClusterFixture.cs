@@ -94,9 +94,11 @@ public sealed class RealClusterFixture : IDisposable
 
     private static string ResolveRepoRoot()
     {
-        // tests/csharp/Atlas.Client.IntegrationTests/bin/Debug/<tfm>/ → repo root.
+        // tests/csharp/Atlas.Client.IntegrationTests/bin/Release/<tfm>/ → repo root.
+        // BaseDirectory carries a trailing slash so the first GetDirectoryName
+        // is a no-op; bump the hop budget to 8 so the loop still reaches Atlas/.
         var dir = AppContext.BaseDirectory;
-        for (int i = 0; i < 6 && dir is not null; i++)
+        for (int i = 0; i < 8 && dir is not null; i++)
         {
             if (Directory.Exists(Path.Combine(dir, "tools", "cluster_control")))
                 return dir;

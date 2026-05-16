@@ -105,6 +105,69 @@ public sealed class AtlasClientRealTests
     }
 
     [Fact]
+    public void Relogin_SameUsername_ForcesFreshEntityAndDisplacesPrior()
+    {
+        // Two clients sharing one coro loop so we can exercise BaseApp's
+        // account-name serialization gate without LoginApp's pending-by-
+        // username dedup rejecting the second request.
+        var loop = new ManagedAtlasLoop();
+        AtlasLoop.Install(loop);
+        var registry = new ManagedRpcRegistry(loop);
+        AtlasRpcRegistryHost.Install(registry);
+        try
+        {
+            using var a = new AtlasClient(installCoroLoop: false);
+            var user = FreshUser("relogin");
+
+            var ta = a.ConnectAsync("127.0.0.1", _cluster.LoginAppPort, user, "pwd-hash");
+            var deadline = DateTime.UtcNow.AddSeconds(15);
+            while (DateTime.UtcNow < deadline && ta.Status == AtlasTaskStatus.Pending)
+            {
+                a.Update();
+                loop.Drain();
+                Thread.Sleep(10);
+            }
+            Assert.Equal(AtlasTaskStatus.Succeeded, ta.Status);
+            uint firstEntityId = a.LastAuth!.Value.EntityId;
+            Assert.NotEqual(0u, firstEntityId);
+
+            // Drop the first session and immediately re-login as the same user.
+            // BaseApp's destroys_in_flight_ must serialize so the second client
+            // never sees the prior entity in its enter-world snapshot.
+            a.Disconnect();
+            deadline = DateTime.UtcNow.AddSeconds(5);
+            while (DateTime.UtcNow < deadline && a.State != AtlasNetState.Disconnected)
+            {
+                a.Update();
+                loop.Drain();
+                Thread.Sleep(5);
+            }
+            Assert.Equal(AtlasNetState.Disconnected, a.State);
+
+            using var b = new AtlasClient(installCoroLoop: false);
+            var tb = b.ConnectAsync("127.0.0.1", _cluster.LoginAppPort, user, "pwd-hash");
+            deadline = DateTime.UtcNow.AddSeconds(15);
+            while (DateTime.UtcNow < deadline && tb.Status == AtlasTaskStatus.Pending)
+            {
+                b.Update();
+                loop.Drain();
+                Thread.Sleep(10);
+            }
+            Assert.Equal(AtlasTaskStatus.Succeeded, tb.Status);
+            uint secondEntityId = b.LastAuth!.Value.EntityId;
+            Assert.NotEqual(0u, secondEntityId);
+            Assert.NotEqual(firstEntityId, secondEntityId);
+        }
+        finally
+        {
+            AtlasRpcRegistryHost.Reset();
+            registry.Dispose();
+            loop.Dispose();
+            AtlasLoop.Reset();
+        }
+    }
+
+    [Fact]
     public void ConcurrentClients_DifferentUsers_AllReachConnected()
     {
         // Two clients share one coro loop (AtlasLoop.Install is global).
