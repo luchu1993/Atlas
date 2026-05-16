@@ -563,14 +563,28 @@ void CellApp::OnCreateCellEntity(const Address& src, Channel* ch,
   // than entity creation.
 }
 
-void CellApp::OnDestroyCellEntity(const Address& /*src*/, Channel* /*ch*/,
+void CellApp::OnDestroyCellEntity(const Address& /*src*/, Channel* ch,
                                   const cellapp::DestroyCellEntity& msg) {
   auto* entity = FindRealEntity(msg.entity_id);
-  if (!entity) {
+  const bool kFound = entity != nullptr;
+  if (!kFound) {
     ATLAS_LOG_WARNING("CellApp: DestroyCellEntity for unknown entity_id={}", msg.entity_id);
-    return;
+  } else {
+    RemoveEntityFromSpace(entity);
   }
-  RemoveEntityFromSpace(entity);
+  // BaseApp gates a follow-up login on the post-condition "cell entry
+  // gone"; the ack carries success=true for both newly-removed and
+  // already-absent since the post-condition holds either way.
+  if (ch != nullptr && msg.request_id != 0) {
+    cellapp::DestroyCellEntityAck ack;
+    ack.entity_id = msg.entity_id;
+    ack.request_id = msg.request_id;
+    ack.success = true;
+    if (auto r = ch->SendMessage(ack); !r) {
+      ATLAS_LOG_WARNING("CellApp: DestroyCellEntityAck send failed entity={} req={}: {}",
+                        msg.entity_id, msg.request_id, r.Error().Message());
+    }
+  }
 }
 
 auto CellApp::CreateLocalEntity(uint16_t type_id, SpaceID space_id, math::Vector3 pos,
