@@ -276,6 +276,10 @@ auto BaseApp::Init(int argc, char* argv[]) -> bool {
       [this](const Address& /*src*/, Channel* ch, const baseapp::ForceLogoffAck& msg) {
         OnForceLogoffAck(*ch, msg);
       });
+  (void)table.RegisterTypedHandler<cellapp::DestroyCellEntityAck>(
+      [this](const Address& /*src*/, Channel* /*ch*/, const cellapp::DestroyCellEntityAck& msg) {
+        OnDestroyCellEntityAck(msg);
+      });
   (void)table.RegisterTypedHandler<baseappmgr::RegisterBaseAppAck>(
       [this](const Address& /*src*/, Channel* ch, const baseappmgr::RegisterBaseAppAck& msg) {
         OnRegisterBaseappAck(*ch, msg);
@@ -1290,7 +1294,7 @@ void BaseApp::CompletePrepareLoginFromCheckout(PendingLogin pending, DatabaseID 
   }
 
   prepared_login_entities_[pending.login_request_id] =
-      PreparedLoginEntity{ent->EntityId(), dbid, type_id, Clock::now()};
+      PreparedLoginEntity{ent->EntityId(), dbid, type_id, Clock::now(), pending.username};
   prepared_login_requests_by_entity_[ent->EntityId()] = pending.login_request_id;
 
   reply.success = true;
@@ -1670,10 +1674,31 @@ auto BaseApp::FinalizeForceLogoff(EntityID entity_id) -> bool {
 
   ClearDetachedGrace(entity_id);
   UnbindClient(entity_id);
+  UnregisterAccountOwner(entity_id);
   (void)entity_mgr_.ClearSessionKey(entity_id);
   (void)entity_mgr_.AssignDbid(entity_id, kInvalidDBID);
   ent->MarkForDestroy();
   return true;
+}
+
+auto BaseApp::AllocateDestroyAckId(std::function<void(bool)> on_ack) -> uint32_t {
+  if (!on_ack) return 0;
+  uint32_t rid = next_destroy_request_id_++;
+  if (rid == 0) rid = next_destroy_request_id_++;  // wrap past sentinel
+  destroy_ack_waiters_[rid] = std::move(on_ack);
+  return rid;
+}
+
+void BaseApp::OnDestroyCellEntityAck(const cellapp::DestroyCellEntityAck& msg) {
+  auto it = destroy_ack_waiters_.find(msg.request_id);
+  if (it == destroy_ack_waiters_.end()) {
+    ATLAS_LOG_DEBUG("BaseApp: DestroyCellEntityAck for unknown request_id={} entity={}",
+                    msg.request_id, msg.entity_id);
+    return;
+  }
+  auto cb = std::move(it->second);
+  destroy_ack_waiters_.erase(it);
+  cb(msg.success);
 }
 
 void BaseApp::ProcessForceLogoffRequest(const baseapp::ForceLogoff& msg) {
@@ -1728,6 +1753,10 @@ void BaseApp::DoGiveClientToLocal(EntityID src_id, EntityID dest_id) {
     ATLAS_LOG_ERROR("BaseApp: give_client_to: failed to move client binding to dest={}", dest_id);
     return;
   }
+  // The account stays tied to the same identity; track the new owner so a
+  // re-login can still locate the active entity after Account → Avatar
+  // handoff.
+  TransferAccountOwner(src_id, dest_id);
 
   // Without EntityTransferred, the client still targets src_id (per
   // AuthenticateResult) so every ClientCellRpc lands on a detached Proxy.
@@ -1995,6 +2024,34 @@ void BaseApp::UnbindClient(EntityID entity_id) {
     }
     proxy->UnbindClient();
   }
+}
+
+void BaseApp::RegisterAccountOwner(const std::string& username, EntityID entity_id) {
+  if (username.empty() || entity_id == kInvalidEntityID) return;
+  // Drop any prior mapping for this entity (shouldn't normally happen) so
+  // the reverse map stays consistent.
+  UnregisterAccountOwner(entity_id);
+  account_entity_index_[username] = entity_id;
+  account_index_reverse_[entity_id] = username;
+}
+
+void BaseApp::TransferAccountOwner(EntityID old_entity_id, EntityID new_entity_id) {
+  auto it = account_index_reverse_.find(old_entity_id);
+  if (it == account_index_reverse_.end()) return;
+  std::string username = std::move(it->second);
+  account_index_reverse_.erase(it);
+  account_entity_index_[username] = new_entity_id;
+  account_index_reverse_[new_entity_id] = std::move(username);
+}
+
+void BaseApp::UnregisterAccountOwner(EntityID entity_id) {
+  auto it = account_index_reverse_.find(entity_id);
+  if (it == account_index_reverse_.end()) return;
+  auto idx_it = account_entity_index_.find(it->second);
+  if (idx_it != account_entity_index_.end() && idx_it->second == entity_id) {
+    account_entity_index_.erase(idx_it);
+  }
+  account_index_reverse_.erase(it);
 }
 
 void BaseApp::OnExternalClientDisconnect(Channel& ch) {
@@ -2584,6 +2641,7 @@ void BaseApp::OnPrepareLogin(Channel& ch, const login::PrepareLogin& msg) {
   pending.created_at = Clock::now();
   pending.blob_prefetched = msg.blob_prefetched;
   pending.entity_blob = msg.entity_blob;
+  pending.username = msg.username;
   SubmitPrepareLogin(std::move(pending));
   (void)msg.client_addr;
 }
@@ -2689,6 +2747,16 @@ void BaseApp::OnClientAuthenticate(Channel& ch, const baseapp::Authenticate& msg
   (void)ch.SendMessage(res);
   authenticate_latency_.Record(Clock::now() - t0);
   ++auth_success_total_;
+
+  // Capture the username from the prepared entry before it's cleared so
+  // the account index can be keyed on stable identity.
+  if (auto rit = prepared_login_requests_by_entity_.find(proxy->EntityId());
+      rit != prepared_login_requests_by_entity_.end()) {
+    if (auto pit = prepared_login_entities_.find(rit->second);
+        pit != prepared_login_entities_.end() && !pit->second.username.empty()) {
+      RegisterAccountOwner(pit->second.username, proxy->EntityId());
+    }
+  }
   ClearPreparedLoginEntity(proxy->EntityId());
 
   ATLAS_LOG_DEBUG("BaseApp: client authenticated as entity={}", proxy->EntityId());

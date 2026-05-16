@@ -62,6 +62,10 @@ namespace cellappmgr {
 struct SpaceCreatedResult;
 }  // namespace cellappmgr
 
+namespace cellapp {
+struct DestroyCellEntityAck;
+}  // namespace cellapp
+
 class Channel;
 
 // Entity-bearing server process: hosts BaseEntity/Proxy, dual networks
@@ -212,6 +216,9 @@ class BaseApp : public EntityApp {
     bool reply_sent{false};
     bool blob_prefetched{false};
     std::vector<std::byte> entity_blob;
+    // Plumbed through so account_entity_index_ can be populated when the
+    // entity finally binds to a client in OnClientAuthenticate.
+    std::string username;
   };
   std::unordered_map<uint32_t, PendingLogin> pending_logins_;
   uint32_t next_prepare_request_id_{1};
@@ -243,6 +250,8 @@ class BaseApp : public EntityApp {
     DatabaseID dbid{kInvalidDBID};
     uint16_t type_id{0};
     TimePoint prepared_at{};
+    // Bound into account_entity_index_ when OnClientAuthenticate succeeds.
+    std::string username;
   };
   struct CanceledCheckout {
     DatabaseID dbid{kInvalidDBID};
@@ -283,6 +292,15 @@ class BaseApp : public EntityApp {
   std::unordered_map<DatabaseID, PendingLogin> queued_logins_;
   std::unordered_map<EntityID, Address> entity_client_index_;
   std::unordered_map<Address, EntityID> client_entity_index_;
+  // Single-session-per-account: maps a client-supplied identity to the
+  // currently live owner entity so a follow-up login with the same name
+  // can force the previous session offline before binding.
+  std::unordered_map<std::string, EntityID> account_entity_index_;
+  std::unordered_map<EntityID, std::string> account_index_reverse_;
+  // Pending DestroyCellEntityAck waiters; keyed by request_id stamped into
+  // the outgoing DestroyCellEntity. Callback receives success flag.
+  std::unordered_map<uint32_t, std::function<void(bool)>> destroy_ack_waiters_;
+  uint32_t next_destroy_request_id_{1};
   std::unordered_map<Address, DeltaForwarder> client_delta_forwarders_;
   // SetAoIRadius issued before the cell ack lands is replayed in OnCellEntityCreated.
   std::unordered_map<EntityID, std::pair<float, float>> pending_aoi_radius_;
@@ -387,6 +405,15 @@ class BaseApp : public EntityApp {
   auto BindClient(EntityID entity_id, const Address& client_addr) -> bool;
   void UnbindClient(EntityID entity_id);
   void OnExternalClientDisconnect(Channel& ch);
+  // Single-session-per-account index helpers.
+  void RegisterAccountOwner(const std::string& username, EntityID entity_id);
+  void TransferAccountOwner(EntityID old_entity_id, EntityID new_entity_id);
+  void UnregisterAccountOwner(EntityID entity_id);
+  // DestroyCellEntityAck plumbing: allocate a request_id paired with a
+  // callback so a caller can be notified when the cell side has confirmed
+  // the entity is gone. Returns 0 if no callback is needed.
+  auto AllocateDestroyAckId(std::function<void(bool)> on_ack) -> uint32_t;
+  void OnDestroyCellEntityAck(const cellapp::DestroyCellEntityAck& msg);
   // Returns true when one token is consumed; false when the bucket is empty
   // and the call should be dropped at the message boundary.
   bool ConsumeRpcRateToken(const Address& client_addr);
