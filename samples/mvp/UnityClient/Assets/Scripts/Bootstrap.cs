@@ -220,8 +220,8 @@ namespace Atlas.Mvp.Unity
             _hud = hudGo.AddComponent<GameHud>();
             _hud.Bind(_net);
             _hud.LogoutRequested += OnHudLogoutRequested;
+            LabelOverlay.Init();
             gameObject.AddComponent<ProjectileVisualController>();
-            gameObject.AddComponent<LabelOverlay>();
 
             _cameraInitialized = false;
             _zoom = 1.0f;
@@ -238,7 +238,7 @@ namespace Atlas.Mvp.Unity
             _views.Clear();
             _hud = null;
             foreach (var c in GetComponents<ProjectileVisualController>()) Destroy(c);
-            foreach (var c in GetComponents<LabelOverlay>()) Destroy(c);
+            LabelOverlay.Shutdown();
             if (_worldRoot != null) { Destroy(_worldRoot); _worldRoot = null; }
             Tick.Clear();
             ResetCameraToBootPose();

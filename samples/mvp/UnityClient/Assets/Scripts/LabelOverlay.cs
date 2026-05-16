@@ -3,17 +3,16 @@ using UnityEngine.UI;
 
 namespace Atlas.Mvp.Unity
 {
-    public sealed class LabelOverlay : MonoBehaviour
+    public sealed class LabelOverlay
     {
         public static LabelOverlay? Instance { get; private set; }
 
-        Camera _camera = null!;
-        Canvas _canvas = null!;
-        Font _font = null!;
+        readonly Canvas _canvas;
+        readonly Font _font;
+        Camera? _camera;
 
-        void Awake()
+        LabelOverlay()
         {
-            Instance = this;
             _font = Resources.GetBuiltinResource<Font>("LegacyRuntime.ttf");
 
             // Root-level canvas: ScreenSpaceOverlay auto-sizes to screen pixels,
@@ -27,10 +26,17 @@ namespace Atlas.Mvp.Unity
             scaler.scaleFactor = 1f;
         }
 
-        void OnDestroy()
+        public static void Init()
         {
-            if (Instance == this) Instance = null;
-            if (_canvas != null) Destroy(_canvas.gameObject);
+            if (Instance != null) return;
+            Instance = new LabelOverlay();
+        }
+
+        public static void Shutdown()
+        {
+            if (Instance == null) return;
+            if (Instance._canvas != null) Object.Destroy(Instance._canvas.gameObject);
+            Instance = null;
         }
 
         public Text CreateLabel()
