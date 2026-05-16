@@ -1,0 +1,19 @@
+{
+	"FileVersion": 3,
+	"EngineAssociation": "",
+	"Category": "Atlas",
+	"Description": "Atlas MVP UE client. Pure rendering frontend over Atlas wire protocol.",
+	"Modules": [
+		{
+			"Name": "UEClient",
+			"Type": "Runtime",
+			"LoadingPhase": "Default"
+		}
+	],
+	"Plugins": [
+		{
+			"Name": "AtlasUE",
+			"Enabled": true
+		}
+	]
+}
