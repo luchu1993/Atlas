@@ -246,9 +246,22 @@ namespace Atlas.Mvp.Unity
             _projectiles = null;
             AoiBoxes.Clear();
             LabelOverlay.Shutdown();
+            DrainStaleEntities();
             if (_worldRoot != null) { Destroy(_worldRoot); _worldRoot = null; }
             Ticker.Clear();
             ResetCameraToBootPose();
+        }
+
+        // net_client fires no entity-destroyed callbacks on disconnect, so
+        // ClientCallbacks.EntityManager keeps the previous session's entities.
+        // A fast re-login would otherwise have ReconcileViews spawn a ghost
+        // copy of the prior owner Avatar.
+        static void DrainStaleEntities()
+        {
+            var em = ClientCallbacks.EntityManager;
+            var stale = new List<uint>();
+            foreach (var e in em.Entities) stale.Add(e.EntityId);
+            foreach (var id in stale) em.Destroy(id);
         }
 
         void CreateCamera()
