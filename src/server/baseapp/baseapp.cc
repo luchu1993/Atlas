@@ -1675,6 +1675,24 @@ auto BaseApp::FinalizeForceLogoff(EntityID entity_id, uint32_t cell_ack_request_
     return true;
   }
 
+  // Caller-supplied ack id wins; otherwise auto-allocate one whenever the
+  // entity is tied to a tracked username so a follow-up login can park on
+  // destroys_in_flight_ instead of racing the cellapp teardown. Covers
+  // disconnect → relogin which doesn't route through DispatchPrepareLogin.
+  if (cell_ack_request_id == 0) {
+    if (auto uit = account_index_reverse_.find(entity_id);
+        uit != account_index_reverse_.end()) {
+      const std::string& username = uit->second;
+      auto [in_flight_it, inserted] = destroys_in_flight_.try_emplace(
+          username, DestroyInFlight{entity_id, Clock::now(), {}});
+      if (inserted) {
+        const std::string captured = username;
+        cell_ack_request_id = AllocateDestroyAckId(
+            [this, captured](bool /*ok*/) { OnUsernameDestroyComplete(captured); });
+      }
+    }
+  }
+
   // Cell entity has no independent destroy trigger; without this it leaks.
   if (ent->HasCell()) {
     if (auto* cell_ch = ResolveCellChannelForEntity(entity_id)) {
@@ -1724,18 +1742,9 @@ void BaseApp::OnDestroyCellEntityAck(const cellapp::DestroyCellEntityAck& msg) {
 void BaseApp::ForceLogoffUsernameOwner(const std::string& username) {
   auto it = account_entity_index_.find(username);
   if (it == account_entity_index_.end()) return;
-  const EntityID kEntityId = it->second;
-
-  // Register the in-flight record BEFORE FinalizeForceLogoff clears the
-  // account index; the queued pending logins look up by username and
-  // need a slot to land in.
-  auto [in_flight_it, inserted] =
-      destroys_in_flight_.try_emplace(username, DestroyInFlight{kEntityId, Clock::now(), {}});
-  if (inserted) {
-    uint32_t ack_id =
-        AllocateDestroyAckId([this, username](bool /*ok*/) { OnUsernameDestroyComplete(username); });
-    (void)FinalizeForceLogoff(kEntityId, ack_id);
-  }
+  // FinalizeForceLogoff auto-allocates the ack id and registers
+  // destroys_in_flight_ when the entity carries a tracked username.
+  (void)FinalizeForceLogoff(it->second);
 }
 
 void BaseApp::QueuePendingLoginAwaitingDestroy(const std::string& username, PendingLogin pending) {
