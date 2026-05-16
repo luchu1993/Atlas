@@ -582,6 +582,9 @@ void CellApp::OnDestroyCellEntity(const Address& /*src*/, Channel* ch,
     if (auto r = ch->SendMessage(ack); !r) {
       ATLAS_LOG_WARNING("CellApp: DestroyCellEntityAck send failed entity={} req={}: {}",
                         msg.entity_id, msg.request_id, r.Error().Message());
+    } else {
+      ATLAS_LOG_INFO("CellApp: DestroyCellEntityAck sent entity={} req={} found={}",
+                     msg.entity_id, msg.request_id, kFound);
     }
   }
 }
