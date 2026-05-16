@@ -330,6 +330,7 @@ auto LoginApp::HandleLoginCoro(uint64_t client_channel_id, Address client_addr,
   prep.session_key = session_key;
   prep.client_addr = client_addr;
   prep.entity_def_digest = request.entity_def_digest;
+  prep.username = username;
 
   ScopeGuard prepare_guard(
       [this, rid, dbid = auth_reply.dbid, baseapp_addr = alloc_reply.internal_addr] {
