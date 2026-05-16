@@ -7,38 +7,74 @@ namespace Atlas.Mvp.Unity
     {
         const float kLineWidth = 0.15f;
 
-        static readonly List<GameObject> _roots = new();
+        // Box root lives at world-space so the lines stay axis-aligned while the
+        // tracked transform (avatar) yaws under WASD/camera follow.
+        readonly struct Entry
+        {
+            public readonly Transform Target;
+            public readonly GameObject Root;
+            public Entry(Transform target, GameObject root) { Target = target; Root = root; }
+        }
+
+        sealed class Follower : ITickable
+        {
+            public void Tick(float dt)
+            {
+                for (int i = _entries.Count - 1; i >= 0; --i)
+                {
+                    var e = _entries[i];
+                    if (e.Target == null)
+                    {
+                        if (e.Root != null) Object.Destroy(e.Root);
+                        _entries.RemoveAt(i);
+                        continue;
+                    }
+                    if (e.Root == null) { _entries.RemoveAt(i); continue; }
+                    e.Root.transform.position = e.Target.position;
+                }
+            }
+        }
+
+        static readonly List<Entry> _entries = new();
+        static Follower? _follower;
         public static bool Visible { get; private set; }
 
-        // Boxes parent under the owner view's transform, so they follow the
-        // capsule without needing a per-frame position copy.
-        public static void Attach(Transform parent, float inner, float outer,
+        public static void Attach(Transform target, float inner, float outer,
                                   Color innerColor, Color outerColor)
         {
+            EnsureFollower();
             var root = new GameObject("AoIBoxes");
-            root.transform.SetParent(parent, false);
+            root.transform.position = target.position;
             BuildBox(root.transform, "Inner", inner, innerColor);
             BuildBox(root.transform, "Outer", outer, outerColor);
             root.SetActive(Visible);
-            _roots.Add(root);
+            _entries.Add(new Entry(target, root));
         }
 
         public static void SetVisible(bool visible)
         {
             Visible = visible;
-            for (int i = _roots.Count - 1; i >= 0; --i)
+            for (int i = _entries.Count - 1; i >= 0; --i)
             {
-                var go = _roots[i];
-                if (go == null) { _roots.RemoveAt(i); continue; }
-                go.SetActive(visible);
+                var root = _entries[i].Root;
+                if (root == null) { _entries.RemoveAt(i); continue; }
+                root.SetActive(visible);
             }
         }
 
         public static void Clear()
         {
-            foreach (var go in _roots)
-                if (go != null) Object.Destroy(go);
-            _roots.Clear();
+            foreach (var e in _entries)
+                if (e.Root != null) Object.Destroy(e.Root);
+            _entries.Clear();
+            if (_follower != null) { Ticker.Remove(_follower); _follower = null; }
+        }
+
+        static void EnsureFollower()
+        {
+            if (_follower != null) return;
+            _follower = new Follower();
+            Ticker.Add(_follower);
         }
 
         static void BuildBox(Transform parent, string label, float halfExtent, Color color)
