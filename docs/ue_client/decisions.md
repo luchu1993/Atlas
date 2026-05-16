@@ -64,3 +64,21 @@ Entity 拥有 View,View 持有 Actor 弱引用。Actor 是 Entity 的渲染句�
 C# 端是单一来源,C++ port 是"只读对照实现",任何行为差异(浮点、wire 字段顺序、状态机)以 C# 为准修改 C++。
 
 阻塞情况(C# 端真有 bug 或语义模糊):停下来讨论,不在 UE 侧打补丁绕过。
+
+## D12 — Layer 1 严格项目风格,Layer 2/3 走 UE 惯例
+
+`AtlasCore/`(Layer 1,引擎无关 C++)严格遵循 `CLAUDE.md` 项目风格:
+
+- 2-space 缩进、attached braces、`namespace atlas::`
+- PascalCase 函数、snake_case 变量、trailing `_` 成员
+- 多类别可恢复错误用 `Result<T,E>` 或具名 `enum class`(参照 `EnvelopeDecodeResult`)
+
+`AtlasUE` plugin + UEClient 游戏模块(Layer 2/3)走 UE 惯例:
+
+- tab 缩进、Allman braces、PascalCase 标识符、`F/U/A/E` 类型前缀
+- `UPROPERTY/UFUNCTION` 反射宏
+- 简单失败用 `bool` 返回 + `UE_LOG` 记诊断;`Result<T,E>` 只在错误模式真有多分支需要分别处理时引入
+
+**理由**:Layer 1 要保持可移植(未来 Unity-C++ port、独立 CLI 测试),严格项目风格;Layer 2/3 与 UE 生成代码、社区示例共存,偏离 UE 惯例只换来摩擦,不换回可移植性。
+
+边界以目录划分:`Source/AtlasUE/Public/AtlasCore/` 和 `Private/AtlasCore/` 是 Layer 1,其余 UE 风格。

@@ -1,6 +1,7 @@
 #include "AtlasNetClient.h"
 
 #include "HAL/PlatformProcess.h"
+#include "HAL/Runnable.h"
 #include "HAL/RunnableThread.h"
 #include "Logging/LogMacros.h"
 
@@ -9,18 +10,33 @@
 
 DEFINE_LOG_CATEGORY_STATIC(LogAtlasNet, Log, All);
 
+// Internal helper — never exposed beyond this translation unit. FAtlasNetClient
+// holds a pointer via the forward declaration in the header.
+class FAtlasNetRunnable : public FRunnable
+{
+public:
+	explicit FAtlasNetRunnable(AtlasNetContext* InCtx) : Ctx(InCtx) {}
+
+	bool Init() override { return true; }
+	uint32 Run() override
+	{
+		while (!bStop.load(std::memory_order_acquire))
+		{
+			AtlasNetPoll(Ctx);
+			FPlatformProcess::Sleep(0.005f);
+		}
+		return 0;
+	}
+	void Stop() override { bStop.store(true, std::memory_order_release); }
+	void Exit() override {}
+
+private:
+	AtlasNetContext* Ctx = nullptr;
+	std::atomic<bool> bStop{false};
+};
+
 FCriticalSection FAtlasNetClient::ContextRegistryMutex;
 TMap<AtlasNetContext*, FAtlasNetClient*> FAtlasNetClient::ContextRegistry;
-
-uint32 FAtlasNetRunnable::Run()
-{
-	while (!bStop.load(std::memory_order_acquire))
-	{
-		AtlasNetPoll(Ctx);
-		FPlatformProcess::Sleep(0.005f);
-	}
-	return 0;
-}
 
 FAtlasNetClient::FAtlasNetClient() = default;
 

@@ -91,7 +91,8 @@ namespace
 class CapturingEntity : public atlas::ClientEntity
 {
 public:
-	CapturingEntity(atlas::EntityId id) : atlas::ClientEntity(id, 100) {}
+	CapturingEntity(atlas::EntityId id, atlas::EntityTypeId t = 100)
+		: atlas::ClientEntity(id, t) {}
 
 	double LastServerTime = -1.0;
 	atlas::Vec3 LastPos{};
@@ -145,6 +146,36 @@ bool FAtlasClientEntityHooksTest::RunTest(const FString&)
 	atlas::ClientEntity Plain(7, 0);
 	Plain.OnPositionReceived(0.0, {}, {}, false);
 	Plain.TickInterpolation(1.0);
+
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FAtlasClientEntityManagerHandleCreateTest,
+	"Atlas.ClientEntityManager.HandleCreate",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FAtlasClientEntityManagerHandleCreateTest::RunTest(const FString&)
+{
+	atlas::ClientEntityManager Mgr;
+	Mgr.RegisterFactory(7, [](atlas::EntityId id, atlas::EntityTypeId t) {
+		return std::make_unique<CapturingEntity>(id, t);
+	});
+
+	TestTrue(TEXT("create"), Mgr.HandleCreate(42, 7));
+	auto* E = static_cast<CapturingEntity*>(Mgr.Find(42));
+	TestNotNull(TEXT("entity registered"), E);
+	if (E)
+	{
+		TestEqual(TEXT("type id"), E->TypeId(), static_cast<atlas::EntityTypeId>(7));
+		TestEqual(TEXT("position hook NOT fired"), E->PositionCalls, 0);
+	}
+
+	TestFalse(TEXT("duplicate id rejected"), Mgr.HandleCreate(42, 7));
+	TestFalse(TEXT("invalid id rejected"), Mgr.HandleCreate(atlas::kInvalidEntityId, 7));
+
+	TestFalse(TEXT("unknown type rejected"), Mgr.HandleCreate(43, 999));
+	TestNull(TEXT("no entity for unknown type"), Mgr.Find(43));
 
 	return true;
 }

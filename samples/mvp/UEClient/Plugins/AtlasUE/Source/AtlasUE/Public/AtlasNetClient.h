@@ -3,7 +3,6 @@
 #include "CoreMinimal.h"
 #include "Containers/Queue.h"
 #include "HAL/CriticalSection.h"
-#include "HAL/Runnable.h"
 
 #include <atomic>
 
@@ -87,19 +86,4 @@ private:
 
 	FAtlasNetRunnable* Runnable = nullptr;
 	FRunnableThread* Thread = nullptr;
-};
-
-class FAtlasNetRunnable : public FRunnable
-{
-public:
-	explicit FAtlasNetRunnable(AtlasNetContext* InCtx) : Ctx(InCtx) {}
-
-	bool Init() override { return true; }
-	uint32 Run() override;
-	void Stop() override { bStop.store(true, std::memory_order_release); }
-	void Exit() override {}
-
-private:
-	AtlasNetContext* Ctx = nullptr;
-	std::atomic<bool> bStop{false};
 };
