@@ -37,7 +37,7 @@ namespace Atlas.Mvp.Unity
             if (_owner != null)
             {
                 _observedMaxHp = Mathf.Max(_observedMaxHp, _owner.Hp);
-                _hpName.text = $"Avatar #{_owner.EntityId}";
+                _hpName.text = $"AVATAR #{_owner.EntityId}";
             }
             else
             {
@@ -100,7 +100,7 @@ namespace Atlas.Mvp.Unity
                 if (_net != null && _net.TryGetStats(out var s))
                 {
                     _rttMs = s.RttMs;
-                    _pingValue.text = $"{_rttMs} ms";
+                    _pingValue.text = $"{_rttMs} MS";
                 }
             }
 

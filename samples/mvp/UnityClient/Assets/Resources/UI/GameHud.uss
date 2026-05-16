@@ -6,129 +6,133 @@
     bottom: 0;
 }
 
-.card {
-    position: absolute;
-    background-color: rgba(15, 15, 18, 0.72);
-    border-width: 1px;
-    border-color: rgba(255, 255, 255, 0.08);
-    border-radius: 6px;
-    padding: 10px 14px;
-}
-
 .hp-card {
-    left: 18px;
-    top: 18px;
+    position: absolute;
+    left: 28px;
+    top: 28px;
     width: 280px;
 }
 
 .hp-name {
     color: rgb(245, 245, 245);
-    font-size: 13px;
+    font-size: 12px;
     -unity-font-style: bold;
-    margin-bottom: 6px;
+    letter-spacing: 4px;
+    margin-bottom: 10px;
 }
 
 .hp-bar-track {
-    height: 14px;
-    background-color: rgba(255, 255, 255, 0.08);
-    border-radius: 3px;
-    border-width: 1px;
-    border-color: rgba(255, 255, 255, 0.12);
+    height: 5px;
+    background-color: rgba(255, 255, 255, 0.12);
+    border-width: 0;
+    border-radius: 0;
     overflow: hidden;
 }
 
 .hp-bar-fill {
     height: 100%;
     width: 100%;
-    background-color: rgb(80, 200, 120);
-    border-radius: 2px;
+    background-color: rgb(245, 245, 245);
+    border-radius: 0;
 }
 
 .hp-bar-fill.warn {
-    background-color: rgb(230, 180, 60);
+    background-color: rgb(245, 167, 35);
 }
 
 .hp-bar-fill.danger {
-    background-color: rgb(220, 70, 70);
+    background-color: rgb(230, 70, 70);
 }
 
 .hp-bar-fill.dead {
-    background-color: rgb(90, 90, 90);
+    background-color: rgb(80, 80, 80);
 }
 
 .hp-text {
-    margin-top: 4px;
-    color: rgb(225, 225, 225);
-    font-size: 11px;
-    -unity-text-align: middle-right;
+    margin-top: 8px;
+    color: rgb(180, 180, 180);
+    font-size: 10px;
+    letter-spacing: 2px;
+    -unity-text-align: middle-left;
 }
 
 .stats-card {
-    right: 18px;
-    top: 18px;
-    width: 180px;
+    position: absolute;
+    right: 28px;
+    top: 28px;
+    width: 200px;
+    align-items: stretch;
 }
 
 .stat-row {
     flex-direction: row;
     justify-content: space-between;
-    margin-bottom: 4px;
+    align-items: center;
+    margin-bottom: 6px;
 }
 
 .stat-key {
-    color: rgb(180, 180, 180);
-    font-size: 12px;
+    color: rgb(150, 150, 150);
+    font-size: 10px;
+    letter-spacing: 3px;
 }
 
 .stat-value {
-    color: rgb(240, 240, 240);
-    font-size: 12px;
+    color: rgb(245, 245, 245);
+    font-size: 13px;
     -unity-font-style: bold;
+    letter-spacing: 1px;
 }
 
 .aoi-toggle {
-    margin-top: 8px;
+    margin-top: 14px;
     flex-direction: row;
     align-items: center;
 }
 
 .aoi-checkbox {
-    width: 16px;
-    height: 16px;
-    min-width: 16px;
-    min-height: 16px;
-    margin-right: 6px;
-    background-color: rgba(255, 255, 255, 0.18);
-    border-width: 1.5px;
-    border-color: rgba(255, 255, 255, 0.85);
-    border-radius: 3px;
+    width: 12px;
+    height: 12px;
+    min-width: 12px;
+    min-height: 12px;
+    margin-right: 10px;
+    background-color: rgba(0, 0, 0, 0);
+    border-width: 1px;
+    border-color: rgba(255, 255, 255, 0.55);
+    border-radius: 0;
 }
 
 .aoi-checkbox.checked {
-    background-color: rgb(80, 140, 220);
-    border-color: rgb(120, 170, 230);
+    background-color: rgb(245, 167, 35);
+    border-color: rgb(245, 167, 35);
 }
 
 .aoi-label {
-    color: rgb(220, 220, 220);
-    font-size: 12px;
+    color: rgb(200, 200, 200);
+    font-size: 10px;
+    letter-spacing: 3px;
 }
 
 .logout-btn {
-    margin-top: 10px;
-    height: 28px;
-    background-color: rgba(220, 70, 70, 0.85);
-    color: white;
-    font-size: 12px;
+    margin-top: 18px;
+    height: 30px;
+    background-color: rgba(0, 0, 0, 0);
+    color: rgb(245, 167, 35);
+    font-size: 11px;
     -unity-font-style: bold;
-    border-width: 0;
-    border-radius: 4px;
+    letter-spacing: 6px;
+    border-width: 1px;
+    border-color: rgb(245, 167, 35);
+    border-radius: 0;
 }
 
 .logout-btn:hover {
-    background-color: rgb(230, 90, 90);
+    background-color: rgb(245, 167, 35);
+    color: rgb(8, 9, 11);
 }
 
 .logout-btn:active {
-    background-color: rgb(180, 50, 50);
+    background-color: rgb(220, 145, 20);
+    border-color: rgb(220, 145, 20);
+    color: rgb(8, 9, 11);
 }
