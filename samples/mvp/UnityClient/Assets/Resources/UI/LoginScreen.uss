@@ -6,16 +6,15 @@
     bottom: 0;
     background-color: rgb(8, 9, 11);
     flex-direction: column;
-    justify-content: center;
-    align-items: flex-start;
+    padding-top: 70px;
     padding-left: 80px;
+    padding-right: 80px;
+    padding-bottom: 60px;
 }
 
 .brand {
-    position: absolute;
-    left: 80px;
-    top: 60px;
     flex-direction: column;
+    margin-bottom: 56px;
 }
 
 .brand-mark {
