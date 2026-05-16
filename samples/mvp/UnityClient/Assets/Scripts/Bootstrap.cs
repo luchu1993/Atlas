@@ -153,6 +153,10 @@ namespace Atlas.Mvp.Unity
 
         void OnNetDisconnected(int reason)
         {
+            // LoginFlow.Fail triggers a logout to reset the native ctx; its
+            // error string is already on the status line and is more useful
+            // than the generic reason code, so keep it.
+            string? carriedFailure = _flow.LastError;
             TeardownWorld();
             _flow.Reset();
             _loginScreen.Show();
@@ -162,7 +166,7 @@ namespace Atlas.Mvp.Unity
                 _userInitiatedLogout = false;
                 _loginScreen.SetStatus("Logged out. Re-enter to play again.", isError: false);
             }
-            else
+            else if (carriedFailure == null)
             {
                 _loginScreen.SetStatus($"Disconnected (reason={reason}). Re-enter to retry.",
                                        isError: true);

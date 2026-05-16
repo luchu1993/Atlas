@@ -111,6 +111,9 @@ namespace Atlas.Mvp.Unity
             _lastError = reason;
             Debug.LogError($"[LoginFlow] Fail @ {_state}: {reason}");
             Transition(LoginFlowState.Failed);
+            // Drop the native ctx back to Disconnected so the next Begin can
+            // open a fresh connection; otherwise AtlasNetLogin returns EINVAL.
+            _net.Logout();
         }
 
         void Transition(LoginFlowState next)
