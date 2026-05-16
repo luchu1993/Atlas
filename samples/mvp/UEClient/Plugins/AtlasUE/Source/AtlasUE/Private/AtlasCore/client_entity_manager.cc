@@ -41,14 +41,16 @@ bool ClientEntityManager::HandleCreate(EntityId id, EntityTypeId type_id) {
 
 bool ClientEntityManager::HandleEnter(EntityId id, EntityTypeId type_id, double server_time,
                                       const Vec3& pos, const Vec3& dir, bool on_ground) {
-  if (id == kInvalidEntityId || entities_.contains(id)) return false;
-  const auto it = factories_.find(type_id);
-  if (it == factories_.end()) return false;
-
-  auto entity = it->second(id, type_id);
-  if (!entity) return false;
-  ClientEntity* raw = entity.get();
-  entities_.emplace(id, std::move(entity));
+  if (id == kInvalidEntityId) return false;
+  ClientEntity* raw = Find(id);
+  if (raw == nullptr) {
+    const auto it = factories_.find(type_id);
+    if (it == factories_.end()) return false;
+    auto entity = it->second(id, type_id);
+    if (!entity) return false;
+    raw = entity.get();
+    entities_.emplace(id, std::move(entity));
+  }
   raw->OnPositionReceived(server_time, pos, dir, on_ground);
   return true;
 }

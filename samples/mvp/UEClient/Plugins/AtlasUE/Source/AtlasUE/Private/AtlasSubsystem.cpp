@@ -107,6 +107,10 @@ std::unique_ptr<atlas::ClientEntity> UAtlasSubsystem::InstantiateEntity(uint16 T
 			TEXT("InstantiateEntity %u type=%u: SpawnActor failed"), Id, TypeId);
 		return nullptr;
 	}
+	UE_LOG(LogAtlasSubsystem, Log,
+		TEXT("Spawned %s for eid=%u type=%u at UE pos=(%.1f, %.1f, %.1f)"),
+		*Actor->GetClass()->GetName(), Id, TypeId,
+		Actor->GetActorLocation().X, Actor->GetActorLocation().Y, Actor->GetActorLocation().Z);
 
 	std::unique_ptr<atlas::ClientEntity> Entity;
 	if (Reg->Factory)

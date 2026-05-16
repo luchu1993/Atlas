@@ -13,6 +13,8 @@ class FAtlasUEActorView : public atlas::EntityView
 public:
 	explicit FAtlasUEActorView(TWeakObjectPtr<AActor> InActor) : Actor(InActor) {}
 
+	~FAtlasUEActorView() override;
+
 	void OnTransformReplicated(const atlas::Vec3& Position,
 	                           const atlas::Quat& Rotation) override;
 	void OnPropertyChanged(uint16_t /*FieldId*/) override {}

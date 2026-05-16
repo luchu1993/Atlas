@@ -163,7 +163,37 @@ void FAtlasNetClient::TickGameThread(atlas::ClientEntityManager& Manager)
 	{
 		if (Msg.MsgId == 0xF001 || Msg.MsgId == 0xF003)
 		{
-			atlas::DecodeAoIEnvelope(Msg.Payload.GetData(), Msg.Payload.Num(), Manager);
+			if (Msg.Payload.Num() >= 5)
+			{
+				const uint8 Kind = Msg.Payload[0];
+				uint32 EntityId = 0;
+				FMemory::Memcpy(&EntityId, Msg.Payload.GetData() + 1, 4);
+				if (Kind == 1 && Msg.Payload.Num() >= 5 + 35)
+				{
+					uint16 TypeId = 0;
+					float Px = 0.f, Py = 0.f, Pz = 0.f;
+					FMemory::Memcpy(&TypeId, Msg.Payload.GetData() + 5, 2);
+					FMemory::Memcpy(&Px, Msg.Payload.GetData() + 7, 4);
+					FMemory::Memcpy(&Py, Msg.Payload.GetData() + 11, 4);
+					FMemory::Memcpy(&Pz, Msg.Payload.GetData() + 15, 4);
+					UE_LOG(LogAtlasNet, Log,
+						TEXT("AoI Enter eid=%u type=%u pos=(%.2f, %.2f, %.2f)"),
+						EntityId, TypeId, Px, Py, Pz);
+				}
+				else
+				{
+					UE_LOG(LogAtlasNet, Log,
+						TEXT("AoI msg_id=0x%04X kind=%u eid=%u len=%d"),
+						Msg.MsgId, Kind, EntityId, Msg.Payload.Num());
+				}
+			}
+			const auto Result = atlas::DecodeAoIEnvelope(
+				Msg.Payload.GetData(), Msg.Payload.Num(), Manager);
+			if (Result != atlas::EnvelopeDecodeResult::kOk)
+			{
+				UE_LOG(LogAtlasNet, Warning,
+					TEXT("AoI decode result=%d msg_id=0x%04X"), (int32)Result, Msg.MsgId);
+			}
 		}
 		else if (Msg.MsgId == 2024 && Msg.Payload.Num() >= 6)
 		{
@@ -172,9 +202,16 @@ void FAtlasNetClient::TickGameThread(atlas::ClientEntityManager& Manager)
 			uint16 NewTypeId = 0;
 			FMemory::Memcpy(&NewEntityId, Msg.Payload.GetData(), 4);
 			FMemory::Memcpy(&NewTypeId, Msg.Payload.GetData() + 4, 2);
-			Manager.HandleCreate(NewEntityId, NewTypeId);
+			const bool Created = Manager.HandleCreate(NewEntityId, NewTypeId);
+			UE_LOG(LogAtlasNet, Log,
+				TEXT("EntityTransferred eid=%u type=%u created=%d"),
+				NewEntityId, NewTypeId, Created ? 1 : 0);
 		}
-		// 0xF002 baseline, 0xF004 RPC, 2025 cell-ready handled by later milestones.
+		else
+		{
+			UE_LOG(LogAtlasNet, Verbose,
+				TEXT("unhandled msg_id=0x%04X len=%d"), Msg.MsgId, Msg.Payload.Num());
+		}
 	}
 
 	const int32 Reason = PendingDisconnect.exchange(-1);

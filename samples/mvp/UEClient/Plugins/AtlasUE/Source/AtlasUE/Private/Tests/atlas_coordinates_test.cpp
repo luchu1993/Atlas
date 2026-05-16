@@ -7,16 +7,17 @@
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	FAtlasCoordinatesTest,
-	"Atlas.Coordinates.MetersToCm",
+	"Atlas.Coordinates.AxisAndScale",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
 
 bool FAtlasCoordinatesTest::RunTest(const FString&)
 {
+	// Atlas (X=right, Y=up, Z=forward) -> UE (X=forward, Y=right, Z=up).
 	const atlas::Vec3 In{1.5f, -2.0f, 3.25f};
 	const FVector UE = AtlasToUE(In);
-	TestEqual(TEXT("m -> cm X"), UE.X, 150.0);
-	TestEqual(TEXT("m -> cm Y"), UE.Y, -200.0);
-	TestEqual(TEXT("m -> cm Z"), UE.Z, 325.0);
+	TestEqual(TEXT("UE.X = Atlas.Z * 100"), UE.X, 325.0);
+	TestEqual(TEXT("UE.Y = Atlas.X * 100"), UE.Y, 150.0);
+	TestEqual(TEXT("UE.Z = Atlas.Y * 100"), UE.Z, -200.0);
 
 	const atlas::Vec3 RoundTrip = UEToAtlas(UE);
 	TestEqual(TEXT("round-trip X"), RoundTrip.x, In.x);

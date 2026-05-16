@@ -31,12 +31,15 @@ void AUEClientGameMode::BeginPlay()
 	// Spawn-then-attach flow without rendering anything.
 	Sub->RegisterEntityClass(1, AActor::StaticClass());
 
-	Sub->RegisterEntityClass(
-		static_cast<uint16>(AvatarTypeId),
-		AvatarActorClass,
-		[](atlas::EntityId Id, atlas::EntityTypeId Type) -> std::unique_ptr<atlas::ClientEntity> {
-			return std::make_unique<FAvatarEntityStub>(Id, Type);
-		});
+	const auto AvatarFactory = [](atlas::EntityId Id, atlas::EntityTypeId Type)
+		-> std::unique_ptr<atlas::ClientEntity> {
+		return std::make_unique<FAvatarEntityStub>(Id, Type);
+	};
+
+	Sub->RegisterEntityClass(static_cast<uint16>(AvatarTypeId), AvatarActorClass, AvatarFactory);
+
+	// NPCs share Avatar's filter pipeline for M0; entity_ids.xml: Npc=4.
+	Sub->RegisterEntityClass(4, AvatarActorClass, AvatarFactory);
 
 	if (Username.IsEmpty())
 	{

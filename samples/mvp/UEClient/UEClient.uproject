@@ -1,6 +1,6 @@
 {
 	"FileVersion": 3,
-	"EngineAssociation": "",
+	"EngineAssociation": "{8E7A046A-464A-A33A-9750-2C936710FCAB}",
 	"Category": "Atlas",
 	"Description": "Atlas MVP UE client. Pure rendering frontend over Atlas wire protocol.",
 	"Modules": [
