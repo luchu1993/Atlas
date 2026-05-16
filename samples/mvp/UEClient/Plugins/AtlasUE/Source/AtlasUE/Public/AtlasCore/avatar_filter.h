@@ -6,12 +6,13 @@
 #include <functional>
 
 #include "AtlasCore/entity_view.h"
+#include "AtlasCore/layer1_export.h"
 
 namespace atlas {
 
 // Port of Atlas.Client.AvatarFilter. Same algorithm, same constants — see D11
 // in docs/ue_client/decisions.md (no behavioural drift permitted).
-class AvatarFilter {
+class ATLAS_LAYER1_API AvatarFilter {
  public:
   static constexpr std::size_t kRingCapacity = 8;
 

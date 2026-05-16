@@ -1,0 +1,43 @@
+#pragma once
+
+#include "CoreMinimal.h"
+#include "GameFramework/GameModeBase.h"
+#include "Templates/SubclassOf.h"
+
+#include "UEClientGameMode.generated.h"
+
+UCLASS()
+class AUEClientGameMode : public AGameModeBase
+{
+	GENERATED_BODY()
+
+public:
+	AUEClientGameMode();
+
+	UPROPERTY(EditAnywhere, Category = "Atlas|Login")
+	FString LoginHost = TEXT("127.0.0.1");
+
+	UPROPERTY(EditAnywhere, Category = "Atlas|Login")
+	int32 LoginPort = 20018;
+
+	// Empty username triggers FGuid-derived `mvp_xxxxxxxx`.
+	UPROPERTY(EditAnywhere, Category = "Atlas|Login")
+	FString Username;
+
+	UPROPERTY(EditAnywhere, Category = "Atlas|Login")
+	FString PasswordHash = TEXT("mvp_hash");
+
+	UPROPERTY(EditAnywhere, Category = "Atlas|Avatar")
+	TSubclassOf<AActor> AvatarActorClass;
+
+	// Avatar type id from entity_defs/entity_ids.xml (Avatar=2).
+	UPROPERTY(EditAnywhere, Category = "Atlas|Avatar")
+	int32 AvatarTypeId = 2;
+
+protected:
+	virtual void BeginPlay() override;
+	virtual void Tick(float DeltaSeconds) override;
+
+private:
+	bool bAuthenticateRequested = false;
+};
