@@ -86,4 +86,67 @@ bool FAtlasClientEntityManagerTest::RunTest(const FString&)
 	return true;
 }
 
+namespace
+{
+class CapturingEntity : public atlas::ClientEntity
+{
+public:
+	CapturingEntity(atlas::EntityId id) : atlas::ClientEntity(id, 100) {}
+
+	double LastServerTime = -1.0;
+	atlas::Vec3 LastPos{};
+	bool LastOnGround = false;
+	int PositionCalls = 0;
+	double TickDtSum = 0.0;
+	int TickCalls = 0;
+
+	void OnPositionReceived(double t, const atlas::Vec3& p, const atlas::Vec3&, bool g) override
+	{
+		LastServerTime = t;
+		LastPos = p;
+		LastOnGround = g;
+		++PositionCalls;
+	}
+	void TickInterpolation(double dt) override
+	{
+		TickDtSum += dt;
+		++TickCalls;
+	}
+};
+}  // namespace
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FAtlasClientEntityHooksTest,
+	"Atlas.ClientEntity.PositionHookAndTick",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FAtlasClientEntityHooksTest::RunTest(const FString&)
+{
+	atlas::ClientEntityManager Manager;
+	auto Entity = std::make_unique<CapturingEntity>(42);
+	CapturingEntity* Raw = Entity.get();
+	Manager.Register(std::move(Entity));
+
+	Manager.HandlePositionUpdate(42, 5.0, {1.0f, 2.0f, 3.0f}, {0.0f, 0.0f, 0.0f}, true);
+	TestEqual(TEXT("hook calls"), Raw->PositionCalls, 1);
+	TestEqual(TEXT("server_time forwarded"), Raw->LastServerTime, 5.0);
+	TestEqual(TEXT("pos.x forwarded"), Raw->LastPos.x, 1.0f);
+	TestEqual(TEXT("on_ground forwarded"), Raw->LastOnGround, true);
+
+	Manager.HandlePositionUpdate(999, 6.0, {}, {}, false);
+	TestEqual(TEXT("unknown id is silent"), Raw->PositionCalls, 1);
+
+	Manager.TickAll(0.016);
+	Manager.TickAll(0.016);
+	TestEqual(TEXT("tick called"), Raw->TickCalls, 2);
+	TestEqual(TEXT("tick dt sum"), Raw->TickDtSum, 0.032);
+
+	// Default base class hooks are no-op.
+	atlas::ClientEntity Plain(7, 0);
+	Plain.OnPositionReceived(0.0, {}, {}, false);
+	Plain.TickInterpolation(1.0);
+
+	return true;
+}
+
 #endif  // WITH_DEV_AUTOMATION_TESTS

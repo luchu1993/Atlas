@@ -23,4 +23,17 @@ void ClientEntityManager::Clear() {
   entities_.clear();
 }
 
+void ClientEntityManager::HandlePositionUpdate(EntityId id, double server_time, const Vec3& pos,
+                                               const Vec3& dir, bool on_ground) {
+  if (auto* entity = Find(id)) {
+    entity->OnPositionReceived(server_time, pos, dir, on_ground);
+  }
+}
+
+void ClientEntityManager::TickAll(double dt) {
+  for (const auto& [id, entity] : entities_) {
+    entity->TickInterpolation(dt);
+  }
+}
+
 }  // namespace atlas

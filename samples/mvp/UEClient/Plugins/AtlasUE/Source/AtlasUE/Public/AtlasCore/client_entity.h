@@ -23,6 +23,13 @@ class ClientEntity {
   void DetachView() { view_.reset(); }
   [[nodiscard]] EntityView* View() const { return view_.get(); }
 
+  // Hooks for derived typed entities. Default no-op so entities that do not
+  // observe transforms (e.g. inventory-only ghosts) carry no AvatarFilter cost.
+  virtual void OnPositionReceived(double /*server_time*/, const Vec3& /*pos*/,
+                                  const Vec3& /*dir*/, bool /*on_ground*/) {}
+
+  virtual void TickInterpolation(double /*dt*/) {}
+
  private:
   EntityId id_;
   EntityTypeId type_id_;

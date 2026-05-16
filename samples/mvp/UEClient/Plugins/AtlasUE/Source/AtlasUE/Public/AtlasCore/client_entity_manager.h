@@ -8,6 +8,7 @@
 
 #include "AtlasCore/client_entity.h"
 #include "AtlasCore/entity_id.h"
+#include "AtlasCore/entity_view.h"
 
 namespace atlas {
 
@@ -29,6 +30,13 @@ class ClientEntityManager {
   void Clear();
 
   [[nodiscard]] std::size_t Size() const { return entities_.size(); }
+
+  // Routes a position envelope to the addressed entity; unknown id is silently
+  // dropped (server may target an entity that just left the client's AoI).
+  void HandlePositionUpdate(EntityId id, double server_time, const Vec3& pos,
+                            const Vec3& dir, bool on_ground);
+
+  void TickAll(double dt);
 
   template <typename F>
   void ForEach(F&& fn) const {
