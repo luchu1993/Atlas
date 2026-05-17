@@ -3,7 +3,10 @@
 #include "Engine/World.h"
 #include "Logging/LogMacros.h"
 
+#include "entitydef/entitydef_api.h"
+
 #include "AtlasCoordinates.h"
+#include "AtlasUE.h"
 #include "AtlasUEActorView.h"
 
 DEFINE_LOG_CATEGORY_STATIC(LogAtlasSubsystem, Log, All);
@@ -18,6 +21,16 @@ void UAtlasSubsystem::Initialize(FSubsystemCollectionBase& Collection)
 		UE_LOG(LogAtlasSubsystem, Error, TEXT("FAtlasNetClient::Create failed"));
 		NetClient.Reset();
 		return;
+	}
+
+	if (AtlasEdrContext* Edr = FAtlasUEModule::GetEdrContext())
+	{
+		const uint8* Digest = AtlasEdrGetDigest(Edr);
+		const int32 Size = AtlasEdrGetDigestSize(Edr);
+		if (Digest != nullptr && Size > 0)
+		{
+			SetEntityDefDigest(TArrayView<const uint8>(Digest, Size));
+		}
 	}
 
 	TickHandle = FTSTicker::GetCoreTicker().AddTicker(

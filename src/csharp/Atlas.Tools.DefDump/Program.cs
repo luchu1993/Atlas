@@ -21,7 +21,7 @@ namespace Atlas.Tools.DefDump;
 public static class Program
 {
     private const uint FileMagic = 0x46445441u;  // 'A''T''D''F' little-endian
-    private const ushort FileVersion = 1;
+    private const ushort FileVersion = 2;
 
     public static int Main(string[] args)
     {

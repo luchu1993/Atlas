@@ -11,6 +11,8 @@ DEFINE_LOG_CATEGORY(LogAtlasUE);
 
 namespace
 {
+AtlasEdrContext* g_edr_ctx = nullptr;
+
 // Loads a DLL from the plugin's ThirdParty dir with the surrounding directory
 // pushed onto the search path so transitive deps resolve from the same folder.
 void* LoadThirdPartyDll(const FString& BaseDir, const TCHAR* SubDir, const TCHAR* DllName)
@@ -27,7 +29,34 @@ void* LoadThirdPartyDll(const FString& BaseDir, const TCHAR* SubDir, const TCHAR
 	}
 	return Handle;
 }
+
+void LoadEntityDefRegistry(const FString& BaseDir)
+{
+	g_edr_ctx = AtlasEdrCreate(ATLAS_EDR_ABI_VERSION);
+	if (g_edr_ctx == nullptr)
+	{
+		UE_LOG(LogAtlasUE, Error, TEXT("AtlasEdrCreate failed: %s"),
+			UTF8_TO_TCHAR(AtlasEdrGlobalLastError()));
+		return;
+	}
+	const FString AtdfPath = FPaths::ConvertRelativePathToFull(
+		FPaths::Combine(BaseDir, TEXT("ThirdParty"), TEXT("AtlasEntityDef"), TEXT("entity_defs.bin")));
+	const auto AtdfBytes = StringCast<ANSICHAR>(*AtdfPath);
+	const int32 LoadResult = AtlasEdrLoadFromFile(g_edr_ctx, AtdfBytes.Get());
+	if (LoadResult != ATLAS_EDR_OK)
+	{
+		UE_LOG(LogAtlasUE, Error, TEXT("AtlasEdrLoadFromFile %s failed (%d): %s"),
+			*AtdfPath, LoadResult, UTF8_TO_TCHAR(AtlasEdrLastError(g_edr_ctx)));
+		AtlasEdrDestroy(g_edr_ctx);
+		g_edr_ctx = nullptr;
+		return;
+	}
+	UE_LOG(LogAtlasUE, Log, TEXT("Loaded ATDF from %s; digest_size=%d"),
+		*AtdfPath, AtlasEdrGetDigestSize(g_edr_ctx));
+}
 }  // namespace
+
+AtlasEdrContext* FAtlasUEModule::GetEdrContext() { return g_edr_ctx; }
 
 void FAtlasUEModule::StartupModule()
 {
@@ -44,10 +73,17 @@ void FAtlasUEModule::StartupModule()
 	UE_LOG(LogAtlasUE, Log,
 		TEXT("AtlasUE module started; atlas_net_client ABI=0x%08X, atlas_entitydef_client ABI=0x%08X"),
 		NetAbi, EdrAbi);
+
+	LoadEntityDefRegistry(BaseDir);
 }
 
 void FAtlasUEModule::ShutdownModule()
 {
+	if (g_edr_ctx != nullptr)
+	{
+		AtlasEdrDestroy(g_edr_ctx);
+		g_edr_ctx = nullptr;
+	}
 	if (EntityDefDllHandle != nullptr)
 	{
 		FPlatformProcess::FreeDllHandle(EntityDefDllHandle);

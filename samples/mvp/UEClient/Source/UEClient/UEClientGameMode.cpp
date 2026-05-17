@@ -47,15 +47,8 @@ void AUEClientGameMode::BeginPlay()
 			*FGuid::NewGuid().ToString(EGuidFormats::Short).Left(8));
 	}
 
-	// Hand-pasted entity_defs SHA-256; copy from
-	// samples/mvp/Atlas.Mvp.Client/obj/.../EntityDefDigest.g.cs after any .def change.
-	static constexpr uint8 EntityDefDigest[32] = {
-		0x5B, 0x9E, 0x06, 0xC5, 0x85, 0xF4, 0x6A, 0xDE,
-		0x82, 0xD7, 0x56, 0xD5, 0x1C, 0x8F, 0xB2, 0x72,
-		0xD2, 0xF8, 0xAB, 0xCE, 0x3E, 0x9F, 0x9F, 0xF6,
-		0xD2, 0x61, 0x0A, 0x89, 0x20, 0x94, 0x13, 0x99,
-	};
-	Sub->SetEntityDefDigest(TArrayView<const uint8>(EntityDefDigest, 32));
+	// Digest now installed by UAtlasSubsystem::Initialize from the ATDF that
+	// AtlasUE module loaded at startup. GameMode just kicks off login.
 
 	UE_LOG(LogUEClient, Log, TEXT("Atlas login host=%s port=%d user=%s"),
 		*LoginHost, LoginPort, *Username);

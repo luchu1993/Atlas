@@ -36,6 +36,8 @@ public class AtlasUE : ModuleRules
 			PublicAdditionalLibraries.Add(Path.Combine(EdrThirdParty, "atlas_entitydef_client.lib"));
 			PublicDelayLoadDLLs.Add("atlas_entitydef_client.dll");
 			RuntimeDependencies.Add(Path.Combine(EdrThirdParty, "atlas_entitydef_client.dll"));
+			RuntimeDependencies.Add(Path.Combine(PluginDirectory,
+				"ThirdParty", "AtlasEntityDef", "entity_defs.bin"));
 		}
 	}
 }
