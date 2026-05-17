@@ -69,13 +69,16 @@ editors and prints the selected executable. Default Windows output is
 `--target StandaloneOSX` for non-Windows players. Standalone builds launch in a
 resizable window.
 
-## UE client (M0 read-only preview)
+## UE client (M1 — codegen-driven attribute sync)
 
 Unreal Engine 5.7 client connecting to the same MVP cluster over the
-Atlas wire protocol. The plugin links `atlas_net_client.dll` directly
-and does **not** use UE replication / RPC. M0 covers login, auth,
-entity-transferred handoff, AoI envelope decode + AvatarFilter
-interpolation. Outbound input / movement RPC arrive in M2.
+Atlas wire protocol. The plugin links `atlas_net_client.dll` +
+`atlas_entitydef_client.dll` directly and does **not** use UE
+replication / RPC. After M1: registry-driven generic `ApplyDelta`
+decodes scalar / struct / list / dict deltas; `Atlas.Tools.CppEmitter`
+emits typed entity classes (`atlas::mvp::Account`, `Avatar`, `Npc`)
+with property getters and upstream RPC stubs. Downstream RPC dispatch
++ BP exposure arrive in M2.
 
 ### Prerequisites
 
@@ -90,12 +93,14 @@ tools/bin/build_mvp_ue.sh
 tools\bin\build_mvp_ue.bat
 ```
 
-Three-stage pipeline: CMake-builds `atlas_net_client.dll` (Release),
-stages it + `mimalloc.dll` + import lib into
-`samples/mvp/UEClient/Plugins/AtlasUE/ThirdParty/AtlasNetClient/Win64/`,
-then UBT-builds `UEClientEditor`. `--config Debug` mirrors a Debug
-SDK; `--skip-native` / `--skip-stage` / `--skip-ue` allow partial
-re-runs.
+End-to-end pipeline: CMake builds `atlas_net_client.dll` +
+`atlas_entitydef_client.dll`, runs `Atlas.Tools.DefDump` to extract
+`entity_defs.bin` (production + test ATDFs) and `Atlas.Tools.CppEmitter`
+to generate `samples/mvp/UEClient/Source/UEClient/gen/<Entity>.gen.h`,
+stages everything into the plugin's `ThirdParty/`, then UBT builds
+`UEClientEditor`. `--config Debug` mirrors a Debug SDK; per-stage skip
+flags (`--skip-native` / `--skip-defs` / `--skip-codegen` /
+`--skip-stage` / `--skip-ue`) allow partial re-runs.
 
 ### Run
 
@@ -107,49 +112,47 @@ re-runs.
 
 # 3. In the editor, hit Play (PIE). UEClientGameMode kicks off Login +
 #    Authenticate against 127.0.0.1:20018 with a mvp_<guid> username and
-#    the shared mvp_hash password. After auth it sends
-#    Account.SelectAvatar(1) so the server creates an Avatar entity.
+#    the shared mvp_hash password. After auth, it casts the player
+#    entity to atlas::mvp::Account and calls SelectAvatar(1) via the
+#    codegen-emitted typed stub.
 ```
 
 `UEClientGameMode` exposes host / port / credentials as `UPROPERTY`
 defaults — tweak in World Settings if the cluster is on a non-default
 port.
 
-### M0 acceptance signals
+### Acceptance signals
 
 The UEClient Output Log should show, in order:
 
 ```
+LogAtlasUE: Loaded ATDF from ...entity_defs.bin; digest_size=32
 LogAtlasUE: AtlasUE module started; atlas_net_client ABI=0x02000000
 LogUEClient: Atlas login host=127.0.0.1 port=20018 user=mvp_<guid>
 LogUEClient: Atlas login succeeded, authenticating
-LogUEClient: Sent Account.SelectAvatar(1) entity_id=<n> ok=1
+LogUEClient: Sent Account.SelectAvatar(1) entity_id=<n>
 ```
 
-With both Unity and UE clients connected to the same cluster, the UE
-view streams in the Unity player's `AAvatarCapsule` (currently
+With both Unity and UE clients connected, the UE view streams in the
+Unity player's `AAvatarCapsule` (currently
 `/Engine/BasicShapes/Cylinder.Cylinder` placeholder mesh) and applies
-AvatarFilter-interpolated transforms each frame.
+`AvatarFilter`-interpolated transforms each frame. Property deltas
+(HP, level, …) decode through the generic registry path and land on
+`atlas::mvp::Avatar` slots, ready for game-side `avatar->Hp()` reads
+once the view layer subscribes.
 
-If `Login failed status=6: def_mismatch` appears, the
-`EntityDefDigest` bytes hardcoded in
-`samples/mvp/UEClient/Source/UEClient/UEClientGameMode.cpp` are out of
-sync with the current build — copy the bytes from
-`samples/mvp/Atlas.Mvp.Client/obj/.../EntityDefDigest.g.cs`. M2 codegen
-eliminates this manual step.
-
-### Known M0 gaps
+### Known gaps after M1
 
 - **No movement input** — the UE-side Avatar sits where the server
-  places it; only inbound transforms are exercised
+  places it; outbound `Avatar.ReportPos` stub is generated but not
+  yet wired to a controller (M3)
 - **No reconnect on disconnect** — `on_disconnect` only logs
 - **`AAvatarCapsule` is a Cylinder placeholder** — swap for a project
-  mesh post-M0
-- **`Account.SelectAvatar` rpc_id and `EntityDefDigest` are
-  hand-pasted** from the C# generator output; refresh both whenever
-  `.def` files change until M2 codegen lands
-- **`Account` is registered against `AActor::StaticClass()`** — an
-  invisible placeholder; no Account-specific UE actor
+  mesh as a polish pass
+- **Downstream RPC (`Avatar.ShowDamage`, `OnDied`, …) not yet dispatched**
+  — `0xF004` envelope routing + per-entity `DispatchRpc` land in M2
+- **No BP exposure** — codegen output is pure C++ today; M2 adds a
+  `UAtlasAvatarView` UCLASS bridge for `GetHp` / `OnHpChanged`
 
 ## Controls
 

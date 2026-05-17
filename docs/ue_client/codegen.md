@@ -24,12 +24,12 @@ UE 引擎层(UCLASS / UPROPERTY / USTRUCT / BlueprintCallable / 任何 BP 暴露
 
 ## CppEmitter 工具
 
-新工具 `src/csharp/Atlas.Tools.CppEmitter/`,与 `Atlas.Tools.DefDump` 同级:
+`src/csharp/Atlas.Tools.CppEmitter/`,与 `Atlas.Tools.DefDump` 同级:
 
 - C# 写,`dotnet run` 调用
 - 直接读 `.def` XML,复用从 `Atlas.Generators.Def` 抽出的 `Atlas.Defs.Parser` lib
-- 输出到 `samples/mvp/UEClient/Source/UEClient/gen/`(游戏模块本地,跟 `Atlas.Mvp.Client` 在 C# 那侧对称)
-- `tools/bin/cpp_emit.bat` / `.sh` 提供薄包装
+- 输出到 `samples/mvp/UEClient/Source/UEClient/gen/`(游戏模块本地,gitignored;跟 `Atlas.Mvp.Client` 在 C# 那侧对称)
+- 由 `tools/bin/build_mvp_ue.bat` 在 UBT 之前自动调用;手工运行用 `tools/bin/cpp_emit.bat`
 
 为什么用 C#:`DefParser` / `DefTypeExprParser` / `DefLinker` 已在 C# 侧成熟(2000+ 行),Python 重写=双份维护。
 
@@ -37,25 +37,33 @@ UE 引擎层(UCLASS / UPROPERTY / USTRUCT / BlueprintCallable / 任何 BP 暴露
 
 ## 输出物
 
-每个 entity 一对 `<EntityName>.gen.h/cc`,纯 C++,继承 `atlas::ClientEntity`:
+每个 entity 一份 `<EntityName>.gen.h`(header-only),纯 C++,继承 `atlas::ClientEntity`:
 
-| 内容 | 来源于 .def |
-|------|-------------|
-| 类型化属性 getter(`e->Hp() -> int32_t`) | `<properties>` |
-| `ApplyDelta(section_mask, reader)` override(走 `EntityDefRegistry` 逐字段反射) | `<properties>` + `EntityDefRegistry` |
-| 属性变化虚 hook(`virtual void OnHpChanged(int old, int neu) {}`,游戏侧 override) | `<properties>` |
-| 上行 RPC stub(`e->ReportPos(pos, dir)`,内部 SpanWriter 打包后 `SendCellRpc`) | `<cell_methods>` / `<base_methods>`(本 entity 可调方向) |
-| 下行 RPC 虚处理(`virtual void ShowDamage(int amount, uint32 attacker) {}`,游戏侧 override) | `<client_methods>` |
-| `DispatchRpc(rpc_id, trace_id, reader)` override(从 wire 解 args 后派发到上面的虚方法) | `<client_methods>` |
-| `<types>` struct → 纯 C++ struct + `Serialize` / `Deserialize` | `<types>` |
-| `<components>` → 纯 C++ logic component 类(同上范式) | `<components>` |
+| 内容 | 状态 | 来源于 .def |
+|------|------|-------------|
+| 类型化标量 getter(`e->Hp() -> int32_t`) | M1 已落地 | `<properties>` |
+| `ClientEntity::ApplyDelta`(通用,基类) | M1 已落地(registry-driven,scalar+container+struct) | base 类 + `EntityDefRegistry` |
+| 上行 RPC stub(`e->ReportPos(pos, dir)`,SpanWriter 打包 + `SendCellRpc`) | M1 已落地 | `<cell_methods>` / `<base_methods>`(本 entity 可调方向) |
+| 属性变化虚 hook(`virtual void OnHpChanged(int old, int neu)`) | M2 | `<properties>` |
+| 下行 RPC 虚处理(`virtual void ShowDamage(int amount, uint32 attacker)`) | M2 | `<client_methods>` |
+| `DispatchRpc(rpc_id, trace_id, reader)` override(派发到虚方法) | M2 | `<client_methods>` |
+| `<types>` struct getter / container getter | M2(解码已在 base,getter 待 codegen 跟进) | `<types>` |
+| `<components>` → 纯 C++ logic component 类 | M2 | `<components>` |
 
-游戏侧使用方式(M1 替换 `FAvatarEntityStub` 后):
+游戏侧使用方式:
 
 ```cpp
+// 上行 RPC 已可用(M1)
+account->SelectAvatar(1);                   // 走 SendBaseRpc
+avatar->ReportPos(pos, dir);                // 走 SendCellRpc
+
+// 属性 getter 已可用(M1)
+int32_t hp = avatar->Hp();                  // registry-driven decode 之后读
+
+// M2 之后:
 class GameAvatar : public atlas::mvp::Avatar {
-  void OnHpChanged(int /*old*/, int neu) override { /* play hit flash, update HUD */ }
-  void ShowDamage(int amount, uint32_t attacker) override { /* spawn damage number */ }
+  void OnHpChanged(int /*old*/, int neu) override { /* hit flash, HUD update */ }
+  void ShowDamage(int amount, uint32_t attacker) override { /* damage number */ }
 };
 ```
 
@@ -74,13 +82,15 @@ class GameAvatar : public atlas::mvp::Avatar {
 .def + entity_ids.xml
      │
      ▼
-[CppEmitter]  (dotnet run, offline; Atlas.Defs.Parser 解析)
+[CppEmitter]  (dotnet run; Atlas.Defs.Parser 解析)
      │
      ▼
-samples/mvp/UEClient/Source/UEClient/gen/*.{h,cc}
+samples/mvp/UEClient/Source/UEClient/gen/*.gen.h
      │
      ▼
-[UBT]  ←— 链接 atlas_net_client.dll (CMake 产出)
+[UBT]  ←— 链接 atlas_net_client.dll + atlas_entitydef_client.dll (CMake 产出)
+                ↑
+                └─ entity_defs.bin (DefDump 从 Atlas.Mvp.Client.dll 提取)
 ```
 
-入口脚本:`tools/bin/build_mvp_ue.bat`(M1 升级为先跑 CppEmitter 再跑 UBT)。
+入口脚本 `tools/bin/build_mvp_ue.bat` 一条命令跑完:CMake → DefDump → CppEmitter → stage → UBT。每段都有 `--skip-*` 跳过。

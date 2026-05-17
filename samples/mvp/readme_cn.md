@@ -55,9 +55,9 @@ tools\bin\build_mvp_unity.bat --skip-setup --clean-output
 
 脚本会按顺序从 `--unity`、`UNITY_EXE`、`UNITY_PATH`、固定工程版本对应的 Unity Hub 安装路径查找 Unity 可执行文件。如果缺少 `ProjectSettings/ProjectVersion.txt`，脚本会扫描本机 Unity Hub 已安装的 Editor 并打印最终选中的可执行文件。Windows 默认输出为 `out/mvp-unity/windows/AtlasMvp.exe`，日志写到 `out/mvp-unity/unity-build.log`。非 Windows player 可传 `--target StandaloneLinux64` 或 `--target StandaloneOSX`。Standalone 构建默认以可调整大小的窗口启动。
 
-## UE 客户端（M0 只读预览）
+## UE 客户端（M1 — codegen 驱动的属性同步）
 
-Unreal Engine 5.7 客户端，通过 Atlas wire 协议连接同一个 MVP 集群。Plugin 直接链接 `atlas_net_client.dll`，**不**使用 UE 的 replication / RPC。M0 覆盖：登录、认证、entity-transferred 交接、AoI envelope 解码 + AvatarFilter 插值。出向输入 / 移动 RPC 留给 M2。
+Unreal Engine 5.7 客户端，通过 Atlas wire 协议连接同一个 MVP 集群。Plugin 直接链接 `atlas_net_client.dll` + `atlas_entitydef_client.dll`，**不**使用 UE 的 replication / RPC。M1 之后：registry-driven 通用 `ApplyDelta` 解码 scalar / struct / list / dict delta；`Atlas.Tools.CppEmitter` 输出 typed entity 类（`atlas::mvp::Account`、`Avatar`、`Npc`），带属性 getter + 上行 RPC stub。下行 RPC dispatch + BP 暴露在 M2。
 
 ### 前置条件
 
@@ -71,7 +71,7 @@ tools/bin/build_mvp_ue.sh
 tools\bin\build_mvp_ue.bat
 ```
 
-三段式流水线：CMake 构建 `atlas_net_client.dll`（Release），把它 + `mimalloc.dll` + 导入库 stage 到 `samples/mvp/UEClient/Plugins/AtlasUE/ThirdParty/AtlasNetClient/Win64/`，最后调用 UBT 编 `UEClientEditor`。`--config Debug` 对应 Debug SDK；`--skip-native` / `--skip-stage` / `--skip-ue` 用于局部重跑。
+端到端流水线：CMake 构建 `atlas_net_client.dll` + `atlas_entitydef_client.dll`，运行 `Atlas.Tools.DefDump` 抽出 `entity_defs.bin`（生产 + 测试两份 ATDF），`Atlas.Tools.CppEmitter` 生成 `samples/mvp/UEClient/Source/UEClient/gen/<Entity>.gen.h`，全部 stage 到 plugin 的 `ThirdParty/`，最后 UBT 编 `UEClientEditor`。`--config Debug` 对应 Debug SDK；分段 skip flag（`--skip-native` / `--skip-defs` / `--skip-codegen` / `--skip-stage` / `--skip-ue`）支持局部重跑。
 
 ### 运行
 
@@ -82,34 +82,34 @@ tools\bin\build_mvp_ue.bat
 "%UE_ROOT%\Engine\Binaries\Win64\UnrealEditor.exe" samples\mvp\UEClient\UEClient.uproject
 
 # 3. 编辑器中点 Play（PIE）。UEClientGameMode 会向 127.0.0.1:20018 发起 Login
-#    + Authenticate（账号 mvp_<guid>，密码 hash mvp_hash），认证成功后发送
-#    Account.SelectAvatar(1)，服务端据此创建 Avatar 实体。
+#    + Authenticate（账号 mvp_<guid>，密码 hash mvp_hash），认证成功后把玩家
+#    entity 转为 atlas::mvp::Account，通过 codegen 生成的 typed stub
+#    调用 SelectAvatar(1)。
 ```
 
 `UEClientGameMode` 的 host / port / 凭据是 `UPROPERTY` 默认值——如果集群跑在非默认端口，在 World Settings 中调整。
 
-### M0 验收信号
+### 验收信号
 
 UEClient Output Log 按顺序应该出现：
 
 ```
+LogAtlasUE: Loaded ATDF from ...entity_defs.bin; digest_size=32
 LogAtlasUE: AtlasUE module started; atlas_net_client ABI=0x02000000
 LogUEClient: Atlas login host=127.0.0.1 port=20018 user=mvp_<guid>
 LogUEClient: Atlas login succeeded, authenticating
-LogUEClient: Sent Account.SelectAvatar(1) entity_id=<n> ok=1
+LogUEClient: Sent Account.SelectAvatar(1) entity_id=<n>
 ```
 
-同时 Unity 和 UE 两个客户端连到同一集群时，UE 视图会流式接入 Unity 玩家的 `AAvatarCapsule`（目前是 `/Engine/BasicShapes/Cylinder.Cylinder` 占位 mesh），并每帧应用 AvatarFilter 插值后的 transform。
+同时 Unity 和 UE 两个客户端连到同一集群时，UE 视图会流式接入 Unity 玩家的 `AAvatarCapsule`（目前是 `/Engine/BasicShapes/Cylinder.Cylinder` 占位 mesh），并每帧应用 AvatarFilter 插值后的 transform。属性 delta（HP、level…）通过 registry-driven 路径解码到 `atlas::mvp::Avatar` 槽位上，view 层接入后即可通过 `avatar->Hp()` 等 getter 读取。
 
-如果出现 `Login failed status=6: def_mismatch`，说明 `samples/mvp/UEClient/Source/UEClient/UEClientGameMode.cpp` 中硬编码的 `EntityDefDigest` 字节与当前构建对不上——从 `samples/mvp/Atlas.Mvp.Client/obj/.../EntityDefDigest.g.cs` 复制新字节即可。M2 codegen 会消除这一手工步骤。
+### M1 之后的已知缺口
 
-### M0 已知缺口
-
-- **没有移动输入**——UE 端 Avatar 待在服务器分配的位置；只跑入站 transform
-- **断线不重连**——`on_disconnect` 只打日志
-- **`AAvatarCapsule` 是 Cylinder 占位** mesh，post-M0 替换为项目实际素材
-- **`Account.SelectAvatar` 的 rpc_id 与 `EntityDefDigest` 是手贴的**——`.def` 一变就要同步刷新两处，直到 M2 codegen 接管
-- **`Account` 注册到 `AActor::StaticClass()`** 这个不可见占位类；没有 Account 专属 Actor
+- **没有移动输入** —— UE 端 Avatar 待在服务器分配的位置；codegen 已生成 `Avatar.ReportPos` 上行 stub，但还没接到 controller（M3）
+- **断线不重连** —— `on_disconnect` 只打日志
+- **`AAvatarCapsule` 是 Cylinder 占位** mesh，作为美术 polish 项替换
+- **下行 RPC（`Avatar.ShowDamage` / `OnDied` 等）尚未派发** —— `0xF004` envelope 路由 + 每 entity 的 `DispatchRpc` 留给 M2
+- **没有 BP 暴露** —— codegen 输出当前是纯 C++；M2 加 `UAtlasAvatarView` UCLASS bridge 提供 `GetHp` / `OnHpChanged`
 
 ## 操作
 
