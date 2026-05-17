@@ -22,16 +22,20 @@ public class AtlasUE : ModuleRules
 		PublicSystemIncludePaths.Add(Path.Combine(RepoRoot, "src", "lib"));
 
 		PublicDefinitions.Add("ATLAS_NET_CLIENT_DLL=1");
+		PublicDefinitions.Add("ATLAS_EDR_DLL=1");
 
 		if (Target.Platform == UnrealTargetPlatform.Win64)
 		{
-			string ThirdPartyWin64 = Path.Combine(PluginDirectory, "ThirdParty", "AtlasNetClient", "Win64");
-
-			PublicAdditionalLibraries.Add(Path.Combine(ThirdPartyWin64, "atlas_net_client.lib"));
+			string NetThirdParty = Path.Combine(PluginDirectory, "ThirdParty", "AtlasNetClient", "Win64");
+			PublicAdditionalLibraries.Add(Path.Combine(NetThirdParty, "atlas_net_client.lib"));
 			PublicDelayLoadDLLs.Add("atlas_net_client.dll");
+			RuntimeDependencies.Add(Path.Combine(NetThirdParty, "atlas_net_client.dll"));
+			RuntimeDependencies.Add(Path.Combine(NetThirdParty, "mimalloc.dll"));
 
-			RuntimeDependencies.Add(Path.Combine(ThirdPartyWin64, "atlas_net_client.dll"));
-			RuntimeDependencies.Add(Path.Combine(ThirdPartyWin64, "mimalloc.dll"));
+			string EdrThirdParty = Path.Combine(PluginDirectory, "ThirdParty", "AtlasEntityDef", "Win64");
+			PublicAdditionalLibraries.Add(Path.Combine(EdrThirdParty, "atlas_entitydef_client.lib"));
+			PublicDelayLoadDLLs.Add("atlas_entitydef_client.dll");
+			RuntimeDependencies.Add(Path.Combine(EdrThirdParty, "atlas_entitydef_client.dll"));
 		}
 	}
 }

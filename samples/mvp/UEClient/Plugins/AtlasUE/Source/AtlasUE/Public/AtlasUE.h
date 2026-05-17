@@ -12,4 +12,5 @@ public:
 
 private:
 	void* NetClientDllHandle = nullptr;
+	void* EntityDefDllHandle = nullptr;
 };
