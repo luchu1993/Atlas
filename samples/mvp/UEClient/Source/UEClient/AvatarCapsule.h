@@ -6,6 +6,7 @@
 #include "AvatarCapsule.generated.h"
 
 class UStaticMeshComponent;
+class UAtlasAvatarView;
 
 UCLASS()
 class AAvatarCapsule : public AActor
@@ -14,6 +15,9 @@ class AAvatarCapsule : public AActor
 
 public:
 	AAvatarCapsule();
+
+	UPROPERTY(VisibleAnywhere, Category = "Atlas")
+	TObjectPtr<UAtlasAvatarView> AvatarView;
 
 private:
 	UPROPERTY(VisibleAnywhere, Category = "Atlas")

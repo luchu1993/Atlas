@@ -14,6 +14,7 @@ public class UEClient : ModuleRules
 			"CoreUObject",
 			"Engine",
 			"InputCore",
+			"Projects",
 			"AtlasUE",
 		});
 	}

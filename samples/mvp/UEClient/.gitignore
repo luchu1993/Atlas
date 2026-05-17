@@ -16,3 +16,5 @@ Saved/
 Plugins/AtlasUE/Binaries/
 Plugins/AtlasUE/Intermediate/
 Plugins/AtlasUE/ThirdParty/AtlasEntityDef/entity_defs.bin
+Plugins/AtlasUE/ThirdParty/AtlasEntityDef/entity_defs_test.bin
+Source/UEClient/gen/

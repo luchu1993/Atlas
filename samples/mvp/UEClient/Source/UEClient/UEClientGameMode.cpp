@@ -4,9 +4,17 @@
 #include "Logging/LogMacros.h"
 #include "Misc/Guid.h"
 
+#include "AtlasAvatarView.h"
+#include "AtlasCore/moving_client_entity.h"
 #include "AtlasSubsystem.h"
+#include "AtlasUE.h"
 #include "AvatarCapsule.h"
-#include "AvatarEntityStub.h"
+#include "BpAvatarEntity.h"
+#include "entitydef/entitydef_api.h"
+
+#include "gen/Account.gen.h"
+#include "gen/Avatar.gen.h"
+#include "gen/Npc.gen.h"
 
 DEFINE_LOG_CATEGORY_STATIC(LogUEClient, Log, All);
 
@@ -15,6 +23,20 @@ AUEClientGameMode::AUEClientGameMode()
 	PrimaryActorTick.bCanEverTick = true;
 	AvatarActorClass = AAvatarCapsule::StaticClass();
 }
+
+namespace
+{
+uint16 ResolveTypeId(AtlasEdrContext* Ctx, const char* Name)
+{
+	const uint16 TypeId = AtlasEdrEntityTypeId(AtlasEdrFindEntityByName(Ctx, Name));
+	if (TypeId == 0)
+	{
+		UE_LOG(LogUEClient, Warning, TEXT("entity '%hs' missing from registry; factory will idle"),
+			Name);
+	}
+	return TypeId;
+}
+}  // namespace
 
 void AUEClientGameMode::BeginPlay()
 {
@@ -27,28 +49,50 @@ void AUEClientGameMode::BeginPlay()
 		return;
 	}
 
-	// Account has no spatial state — a bare AActor satisfies the subsystem's
-	// Spawn-then-attach flow without rendering anything.
-	Sub->RegisterEntityClass(1, AActor::StaticClass());
+	AtlasEdrContext* Edr = FAtlasUEModule::GetEdrContext();
+	if (Edr == nullptr)
+	{
+		UE_LOG(LogUEClient, Error, TEXT("AtlasEdr context unavailable; aborting login"));
+		return;
+	}
 
-	const auto AvatarFactory = [](atlas::EntityId Id, atlas::EntityTypeId Type)
+	// Account has no spatial state — bare AActor + typed Account so the
+	// game-side login flow can call account->SelectAvatar() directly.
+	Sub->RegisterEntityClass(ResolveTypeId(Edr, "Account"), AActor::StaticClass(),
+		[](atlas::EntityId Id, atlas::EntityTypeId Type) -> std::unique_ptr<atlas::ClientEntity> {
+			return std::make_unique<atlas::mvp::Account>(Id, Type);
+		});
+
+	// Avatar uses the BP-bridge subclass so HP/level/mana changes surface to
+	// UAtlasAvatarView delegates. Position interpolation lives on the actor
+	// view path (FAtlasUEActorView) so the BP entity doesn't replicate the
+	// MovingClientEntity filter.
+	auto AvatarFactory = [](atlas::EntityId Id, atlas::EntityTypeId Type)
 		-> std::unique_ptr<atlas::ClientEntity> {
-		return std::make_unique<FAvatarEntityStub>(Id, Type);
+		return std::make_unique<FBpAvatarEntity>(Id, Type);
 	};
+	auto AvatarPostBind = [](atlas::ClientEntity* E, AActor* Actor) {
+		auto* Bp = static_cast<FBpAvatarEntity*>(E);
+		if (auto* View = Actor->FindComponentByClass<UAtlasAvatarView>())
+		{
+			Bp->BindView(View);
+		}
+	};
+	Sub->RegisterEntityClass(ResolveTypeId(Edr, "Avatar"), AvatarActorClass,
+		AvatarFactory, AvatarPostBind);
 
-	Sub->RegisterEntityClass(static_cast<uint16>(AvatarTypeId), AvatarActorClass, AvatarFactory);
-
-	// NPCs reuse the Avatar filter + capsule (same transform shape).
-	Sub->RegisterEntityClass(4, AvatarActorClass, AvatarFactory);
+	// NPCs reuse the capsule mesh + movement interpolation; no BP bridge yet.
+	const auto MovingFactory = [](atlas::EntityId Id, atlas::EntityTypeId Type)
+		-> std::unique_ptr<atlas::ClientEntity> {
+		return std::make_unique<atlas::MovingClientEntity>(Id, Type);
+	};
+	Sub->RegisterEntityClass(ResolveTypeId(Edr, "Npc"), AvatarActorClass, MovingFactory);
 
 	if (Username.IsEmpty())
 	{
 		Username = FString::Printf(TEXT("mvp_%s"),
 			*FGuid::NewGuid().ToString(EGuidFormats::Short).Left(8));
 	}
-
-	// Digest now installed by UAtlasSubsystem::Initialize from the ATDF that
-	// AtlasUE module loaded at startup. GameMode just kicks off login.
 
 	UE_LOG(LogUEClient, Log, TEXT("Atlas login host=%s port=%d user=%s"),
 		*LoginHost, LoginPort, *Username);
@@ -72,17 +116,13 @@ void AUEClientGameMode::Tick(float DeltaSeconds)
 	if (!bSelectAvatarSent && Sub->GetNetState() == EAtlasNetClientState::Running
 		&& Sub->GetPlayerEntityId() != 0)
 	{
-		// Hand-rolled Account.Base.SelectAvatar(1); rpc_id from
-		// samples/mvp/Atlas.Mvp.Base/obj/.../RpcIds.g.cs#Account_SelectAvatar.
-		const uint32 SelectAvatarRpcId = 0xC00101;
-		const int32 AvatarIndex = 1;
-		TArray<uint8> Payload;
-		Payload.SetNumUninitialized(sizeof(int32));
-		FMemory::Memcpy(Payload.GetData(), &AvatarIndex, sizeof(int32));
-
-		const bool ok = Sub->SendBaseRpc(Sub->GetPlayerEntityId(), SelectAvatarRpcId, Payload);
-		UE_LOG(LogUEClient, Log, TEXT("Sent Account.SelectAvatar(%d) entity_id=%u ok=%d"),
-			AvatarIndex, Sub->GetPlayerEntityId(), ok);
-		bSelectAvatarSent = ok;
+		atlas::ClientEntity* E = Sub->GetEntityManager().Find(Sub->GetPlayerEntityId());
+		auto* Account = (E != nullptr && E->TypeId() == atlas::mvp::Account::kTypeId)
+			? static_cast<atlas::mvp::Account*>(E) : nullptr;
+		if (Account == nullptr) return;
+		Account->SelectAvatar(1);
+		UE_LOG(LogUEClient, Log, TEXT("Sent Account.SelectAvatar(1) entity_id=%u"),
+			Sub->GetPlayerEntityId());
+		bSelectAvatarSent = true;
 	}
 }

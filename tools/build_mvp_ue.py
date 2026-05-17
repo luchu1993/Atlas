@@ -2,9 +2,11 @@
 """Build the MVP UE client from the command line.
 
 Pipeline:
-  1. CMake-build atlas_net_client.dll (and mimalloc.dll dependency)
-  2. Stage dll + import lib + mimalloc to AtlasUE plugin's ThirdParty/Win64/
-  3. Invoke UE's UBT to build UEClientEditor (or another target)
+  1. CMake-build atlas_net_client + atlas_entitydef_client (+ mimalloc)
+  2. CMake-build Atlas.Tools.DefDump + Atlas.Mvp.Client, then run DefDump to
+     regenerate entity_defs.bin
+  3. Stage each artefact to its plugin ThirdParty subdir
+  4. Invoke UE's UBT to build UEClientEditor (or another target)
 
 Defaults match the Unity counterpart (Release config); pass --config Debug to
 mirror a Debug Unity / SDK build.
@@ -57,16 +59,16 @@ def stage_subdir(plat: str) -> str:
     return {"Win64": "Win64", "Linux": "Linux", "Mac": "Mac"}.get(plat, plat)
 
 
-def native_artefact_name() -> str:
+def shared_artefact_name(stem: str) -> str:
     if HOST == "Windows":
-        return "atlas_net_client.dll"
+        return f"{stem}.dll"
     if HOST == "Darwin":
-        return "atlas_net_client.bundle"
-    return "libatlas_net_client.so"
+        return f"{stem}.bundle"
+    return f"lib{stem}.so"
 
 
-def native_import_lib_name() -> str | None:
-    return "atlas_net_client.lib" if HOST == "Windows" else None
+def import_lib_name(stem: str) -> str | None:
+    return f"{stem}.lib" if HOST == "Windows" else None
 
 
 def mimalloc_name(config: str) -> str:
@@ -77,7 +79,15 @@ def mimalloc_name(config: str) -> str:
     return "libmimalloc-debug.so" if config == "Debug" else "libmimalloc.so"
 
 
-def build_native(config: str) -> Path:
+# Each entry maps a CMake target to its plugin ThirdParty subdir. Both DLLs
+# ship together as the client SDK and are gated on ATLAS_BUILD_NET_CLIENT.
+NATIVE_TARGETS = (
+    ("atlas_net_client", "AtlasNetClient"),
+    ("atlas_entitydef_client", "AtlasEntityDef"),
+)
+
+
+def build_native(config: str) -> dict[str, Path]:
     preset_map = {"Debug": "debug", "Release": "release"}
     preset = preset_map.get(config)
     if not preset:
@@ -88,23 +98,26 @@ def build_native(config: str) -> Path:
     run([str(wrapper), preset, "--config-only"])
     run(["cmake", "-S", str(REPO_ROOT), "-B", str(build_dir),
          "-DATLAS_BUILD_NET_CLIENT=ON"])
-    run(["cmake", "--build", str(build_dir),
-         "--target", "atlas_net_client", "--config", config])
 
-    artefact = REPO_ROOT / "bin" / preset / native_artefact_name()
-    if not artefact.exists():
-        fail(f"CMake build succeeded but {artefact} is missing")
-    return artefact
+    artefacts: dict[str, Path] = {}
+    for target, _subdir in NATIVE_TARGETS:
+        run(["cmake", "--build", str(build_dir),
+             "--target", target, "--config", config])
+        artefact = REPO_ROOT / "bin" / preset / shared_artefact_name(target)
+        if not artefact.exists():
+            fail(f"CMake build succeeded but {artefact} is missing")
+        artefacts[target] = artefact
+    return artefacts
 
 
-def stage_native(native: Path, config: str, plat: str) -> None:
-    target_dir = PLUGIN_ROOT / "ThirdParty" / "AtlasNetClient" / stage_subdir(plat)
+def stage_one(native: Path, subdir: str, plat: str, *, stage_mimalloc: bool, config: str) -> None:
+    target_dir = PLUGIN_ROOT / "ThirdParty" / subdir / stage_subdir(plat)
     target_dir.mkdir(parents=True, exist_ok=True)
 
     shutil.copy2(native, target_dir / native.name)
     info(f"staged {native.name} -> {target_dir.relative_to(REPO_ROOT)}")
 
-    lib_name = native_import_lib_name()
+    lib_name = import_lib_name(native.stem)
     if lib_name:
         lib_path = native.parent / lib_name
         if lib_path.exists():
@@ -113,12 +126,108 @@ def stage_native(native: Path, config: str, plat: str) -> None:
         else:
             info(f"warning: import lib {lib_path} missing; linker will fail")
 
-    mimalloc = native.parent / mimalloc_name(config)
-    if mimalloc.exists():
-        shutil.copy2(mimalloc, target_dir / mimalloc.name)
-        info(f"staged {mimalloc.name} -> {target_dir.relative_to(REPO_ROOT)}")
-    else:
-        info(f"warning: {mimalloc} missing; atlas_net_client will fail to load")
+    if stage_mimalloc:
+        mimalloc = native.parent / mimalloc_name(config)
+        if mimalloc.exists():
+            shutil.copy2(mimalloc, target_dir / mimalloc.name)
+            info(f"staged {mimalloc.name} -> {target_dir.relative_to(REPO_ROOT)}")
+        else:
+            info(f"warning: {mimalloc} missing; {native.stem} will fail to load")
+
+
+def stage_native(artefacts: dict[str, Path], config: str, plat: str) -> None:
+    for target, subdir in NATIVE_TARGETS:
+        if target not in artefacts:
+            fail(f"missing native artefact for {target}")
+        stage_one(artefacts[target], subdir, plat,
+                  stage_mimalloc=(target == "atlas_net_client"),
+                  config=config)
+
+
+# DefDump dumps `DefEntityTypeRegistry.BuildAll` from one C# assembly. The
+# client-side assembly bundles every entity type the UE plugin needs to
+# decode; using cell- or base-only would miss the cross-side ones (and
+# both crash on load: their ModuleInitializer hits the missing native API
+# provider).
+DEFS_TOOL_PROJECT = REPO_ROOT / "src" / "csharp" / "Atlas.Tools.DefDump" / "Atlas.Tools.DefDump.csproj"
+DEFS_TOOL_ASSEMBLY = "Atlas.Tools.DefDump.exe"
+DEFS_SOURCE_PROJECT = REPO_ROOT / "samples" / "mvp" / "Atlas.Mvp.Client" / "Atlas.Mvp.Client.csproj"
+DEFS_SOURCE_ASSEMBLY = "Atlas.Mvp.Client.dll"
+DEFS_OUTPUT_NAME = "entity_defs.bin"
+
+# Atlas.ClientSample covers list / dict / struct / nested-container delta
+# paths via StressAvatar. Tests load this through a separate
+# AtlasEdrContext so production stays on the lean MVP descriptor set.
+TEST_DEFS_SOURCE_PROJECT = REPO_ROOT / "samples" / "client" / "Atlas.ClientSample.csproj"
+TEST_DEFS_SOURCE_ASSEMBLY = "Atlas.ClientSample.dll"
+TEST_DEFS_OUTPUT_NAME = "entity_defs_test.bin"
+
+# Atlas.Tools.CppEmitter — offline `.def` → `<Entity>.gen.h` for the UE
+# game module. Output lives in samples/mvp/UEClient/Source/UEClient/gen/.
+CPP_EMITTER_PROJECT = REPO_ROOT / "src" / "csharp" / "Atlas.Tools.CppEmitter" / "Atlas.Tools.CppEmitter.csproj"
+CPP_EMITTER_ASSEMBLY = "Atlas.Tools.CppEmitter.exe"
+CPP_EMITTER_NAMESPACE = "atlas::mvp"
+ENTITY_DEFS_DIR = REPO_ROOT / "entity_defs"
+GEN_OUTPUT_DIR = REPO_ROOT / "samples" / "mvp" / "UEClient" / "Source" / "UEClient" / "gen"
+
+
+def per_project_bin(csproj: Path, config: str, tfm: str, leaf: str) -> Path:
+    # MSVC-style per-csproj layout: <csproj_dir>/bin/x64/<Config>/<tfm>/<leaf>.
+    # Sibling assemblies land here too, so DefDump's AssemblyResolve fallback
+    # picks them up without needing the flat bin/<config>/ deploy dir.
+    return csproj.parent / "bin" / "x64" / config / tfm / leaf
+
+
+def build_defs(config: str) -> tuple[Path, Path]:
+    preset_map = {"Debug": "debug", "Release": "release"}
+    preset = preset_map.get(config)
+    if not preset:
+        fail(f"unsupported config: {config}")
+
+    run(["dotnet", "build", str(DEFS_TOOL_PROJECT),
+         "-c", config, "-p:Platform=x64"])
+    run(["dotnet", "build", str(DEFS_SOURCE_PROJECT),
+         "-c", config, "-p:Platform=x64"])
+    run(["dotnet", "build", str(TEST_DEFS_SOURCE_PROJECT),
+         "-c", config, "-p:Platform=x64"])
+
+    exe = per_project_bin(DEFS_TOOL_PROJECT, config, "net10.0", DEFS_TOOL_ASSEMBLY)
+    if not exe.exists():
+        fail(f"DefDump build succeeded but {exe} is missing")
+
+    def dump(source_proj: Path, source_assembly: str, output_name: str) -> Path:
+        assembly = per_project_bin(source_proj, config, "net10.0", source_assembly)
+        if not assembly.exists():
+            fail(f"{assembly} not found — {source_proj.name} build silently produced nothing")
+        out_bin = REPO_ROOT / "build" / preset / output_name
+        out_bin.parent.mkdir(parents=True, exist_ok=True)
+        run([str(exe), "--assembly", str(assembly), "--out", str(out_bin)])
+        if not out_bin.exists():
+            fail(f"DefDump returned 0 but {out_bin} is missing")
+        return out_bin
+
+    prod = dump(DEFS_SOURCE_PROJECT, DEFS_SOURCE_ASSEMBLY, DEFS_OUTPUT_NAME)
+    test = dump(TEST_DEFS_SOURCE_PROJECT, TEST_DEFS_SOURCE_ASSEMBLY, TEST_DEFS_OUTPUT_NAME)
+    return prod, test
+
+
+def run_cpp_emitter(config: str) -> None:
+    run(["dotnet", "build", str(CPP_EMITTER_PROJECT),
+         "-c", config, "-p:Platform=x64"])
+    exe = per_project_bin(CPP_EMITTER_PROJECT, config, "net10.0", CPP_EMITTER_ASSEMBLY)
+    if not exe.exists():
+        fail(f"CppEmitter build succeeded but {exe} is missing")
+    GEN_OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+    run([str(exe), "--entity-defs", str(ENTITY_DEFS_DIR),
+         "--output", str(GEN_OUTPUT_DIR), "--namespace", CPP_EMITTER_NAMESPACE])
+
+
+def stage_defs(defs_bin: Path, output_name: str) -> None:
+    target_dir = PLUGIN_ROOT / "ThirdParty" / "AtlasEntityDef"
+    target_dir.mkdir(parents=True, exist_ok=True)
+    dest = target_dir / output_name
+    shutil.copy2(defs_bin, dest)
+    info(f"staged {output_name} -> {dest.relative_to(REPO_ROOT)}")
 
 
 def resolve_ue_root(arg: str | None) -> Path:
@@ -158,6 +267,10 @@ def parse_args() -> argparse.Namespace:
                    help=f"UE target platform (default: {plat})")
     p.add_argument("--skip-native", action="store_true",
                    help="Skip atlas_net_client CMake build (assume bin/<config>/ exists)")
+    p.add_argument("--skip-defs", action="store_true",
+                   help="Skip DefDump regenerating entity_defs.bin (use already-staged file)")
+    p.add_argument("--skip-codegen", action="store_true",
+                   help="Skip CppEmitter regen (use existing gen/*.gen.h)")
     p.add_argument("--skip-stage", action="store_true",
                    help="Skip staging into Plugin/ThirdParty (use already-staged binaries)")
     p.add_argument("--skip-ue", action="store_true",
@@ -169,15 +282,36 @@ def main() -> int:
     args = parse_args()
 
     if not args.skip_native:
-        native = build_native(args.config)
+        artefacts = build_native(args.config)
     else:
-        native = REPO_ROOT / "bin" / args.config.lower() / native_artefact_name()
-        if not native.exists():
-            fail(f"--skip-native but {native} not found; run without --skip-native first")
-        info(f"reusing existing {native}")
+        artefacts = {}
+        for target, _subdir in NATIVE_TARGETS:
+            path = REPO_ROOT / "bin" / args.config.lower() / shared_artefact_name(target)
+            if not path.exists():
+                fail(f"--skip-native but {path} not found; run without --skip-native first")
+            info(f"reusing existing {path}")
+            artefacts[target] = path
+
+    if not args.skip_defs:
+        prod_defs, test_defs = build_defs(args.config)
+    else:
+        preset = args.config.lower()
+        prod_defs = REPO_ROOT / "build" / preset / DEFS_OUTPUT_NAME
+        test_defs = REPO_ROOT / "build" / preset / TEST_DEFS_OUTPUT_NAME
+        if not prod_defs.exists(): prod_defs = None
+        if not test_defs.exists(): test_defs = None
+        info("entity_defs regen skipped per --skip-defs; "
+             "leaving any staged copy in place")
+
+    if not args.skip_codegen:
+        run_cpp_emitter(args.config)
+    else:
+        info("CppEmitter skipped per --skip-codegen")
 
     if not args.skip_stage:
-        stage_native(native, args.config, args.platform)
+        stage_native(artefacts, args.config, args.platform)
+        if prod_defs is not None: stage_defs(prod_defs, DEFS_OUTPUT_NAME)
+        if test_defs is not None: stage_defs(test_defs, TEST_DEFS_OUTPUT_NAME)
     else:
         info("staging skipped per --skip-stage")
 

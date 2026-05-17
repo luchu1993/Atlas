@@ -30,10 +30,6 @@ public:
 	UPROPERTY(EditAnywhere, Category = "Atlas|Avatar")
 	TSubclassOf<AActor> AvatarActorClass;
 
-	// Avatar type id from entity_defs/entity_ids.xml (Avatar=2).
-	UPROPERTY(EditAnywhere, Category = "Atlas|Avatar")
-	int32 AvatarTypeId = 2;
-
 protected:
 	virtual void BeginPlay() override;
 	virtual void Tick(float DeltaSeconds) override;

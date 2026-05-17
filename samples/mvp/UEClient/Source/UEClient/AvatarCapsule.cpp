@@ -4,12 +4,15 @@
 #include "Engine/StaticMesh.h"
 #include "UObject/ConstructorHelpers.h"
 
+#include "AtlasAvatarView.h"
+
 AAvatarCapsule::AAvatarCapsule()
 {
 	PrimaryActorTick.bCanEverTick = false;
 
 	Mesh = CreateDefaultSubobject<UStaticMeshComponent>(TEXT("Mesh"));
 	SetRootComponent(Mesh);
+	AvatarView = CreateDefaultSubobject<UAtlasAvatarView>(TEXT("AvatarView"));
 
 	// Engine cylinder is the closest no-asset placeholder until the project
 	// supplies a real character mesh.
