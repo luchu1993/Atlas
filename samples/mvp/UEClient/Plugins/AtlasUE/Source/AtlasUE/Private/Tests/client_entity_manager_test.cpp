@@ -180,4 +180,35 @@ bool FAtlasClientEntityManagerHandleCreateTest::RunTest(const FString&)
 	return true;
 }
 
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FAtlasClientEntityManagerHandleEnterReusesTest,
+	"Atlas.ClientEntityManager.HandleEnterReusesExisting",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FAtlasClientEntityManagerHandleEnterReusesTest::RunTest(const FString&)
+{
+	atlas::ClientEntityManager Mgr;
+	Mgr.RegisterFactory(7, [](atlas::EntityId id, atlas::EntityTypeId t) {
+		return std::make_unique<CapturingEntity>(id, t);
+	});
+
+	// Pre-create via HandleCreate — simulates the EntityTransferred path that
+	// produces an entity before its first AoI envelope arrives.
+	TestTrue(TEXT("HandleCreate"), Mgr.HandleCreate(42, 7));
+	auto* E = static_cast<CapturingEntity*>(Mgr.Find(42));
+	TestNotNull(TEXT("entity registered"), E);
+	TestEqual(TEXT("no position seeded by HandleCreate"), E->PositionCalls, 0);
+
+	// HandleEnter on the same id must reuse + seed, not double-create.
+	TestTrue(TEXT("HandleEnter reuses"),
+		Mgr.HandleEnter(42, 7, 12.0, {1.0f, 2.0f, 3.0f}, {0.0f, 0.0f, 0.0f}, true));
+	TestEqual(TEXT("position hook fired"), E->PositionCalls, 1);
+	TestEqual(TEXT("server_time forwarded"), E->LastServerTime, 12.0);
+	TestEqual(TEXT("pos.x forwarded"), E->LastPos.x, 1.0f);
+	TestEqual(TEXT("on_ground forwarded"), E->LastOnGround, true);
+	TestEqual(TEXT("entity not duplicated"), Mgr.Size(), static_cast<std::size_t>(1));
+
+	return true;
+}
+
 #endif  // WITH_DEV_AUTOMATION_TESTS

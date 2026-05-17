@@ -38,7 +38,7 @@ void AUEClientGameMode::BeginPlay()
 
 	Sub->RegisterEntityClass(static_cast<uint16>(AvatarTypeId), AvatarActorClass, AvatarFactory);
 
-	// NPCs share Avatar's filter pipeline for M0; entity_ids.xml: Npc=4.
+	// NPCs reuse the Avatar filter + capsule (same transform shape).
 	Sub->RegisterEntityClass(4, AvatarActorClass, AvatarFactory);
 
 	if (Username.IsEmpty())

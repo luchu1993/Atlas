@@ -41,7 +41,8 @@ class ClientEntityManager {
   // that arrive via owner handoff without spatial state.
   bool HandleCreate(EntityId id, EntityTypeId type_id);
 
-  // Returns false on invalid id, duplicate id, or no registered factory.
+  // Seeds position on an existing entity, or creates one via factory if absent.
+  // Returns false on invalid id or unknown type (when the entity is absent).
   bool HandleEnter(EntityId id, EntityTypeId type_id, double server_time,
                    const Vec3& pos, const Vec3& dir, bool on_ground);
 

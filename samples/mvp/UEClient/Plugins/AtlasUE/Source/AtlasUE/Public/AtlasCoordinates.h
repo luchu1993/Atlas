@@ -4,9 +4,8 @@
 
 #include "AtlasCore/entity_view.h"
 
-// Atlas wire follows Unity (Y-up, left-handed: X=right, Y=up, Z=forward).
-// UE is left-handed too but Z-up (X=forward, Y=right, Z=up). Convert by
-// permuting axes and scaling meters to centimeters.
+// Atlas wire follows Unity (Y-up, X=right, Z=forward); UE is Z-up, X=forward,
+// Y=right. Permute axes + scale meters to centimeters.
 inline FVector AtlasToUE(const atlas::Vec3& AtlasPos)
 {
 	return FVector(AtlasPos.z * 100.0f, AtlasPos.x * 100.0f, AtlasPos.y * 100.0f);

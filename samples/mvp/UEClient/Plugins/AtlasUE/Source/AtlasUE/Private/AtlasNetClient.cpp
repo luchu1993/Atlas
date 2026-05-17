@@ -180,16 +180,16 @@ void FAtlasNetClient::TickGameThread(atlas::ClientEntityManager& Manager)
 						TEXT("AoI Enter eid=%u type=%u pos=(%.2f, %.2f, %.2f)"),
 						EntityId, TypeId, Px, Py, Pz);
 				}
-				else
+				else if (Kind == 2)
 				{
-					UE_LOG(LogAtlasNet, Log,
-						TEXT("AoI msg_id=0x%04X kind=%u eid=%u len=%d"),
-						Msg.MsgId, Kind, EntityId, Msg.Payload.Num());
+					UE_LOG(LogAtlasNet, Log, TEXT("AoI Leave eid=%u"), EntityId);
 				}
+				// kind=3 / kind=4 are per-tick high frequency — silent dispatch.
 			}
 			const auto Result = atlas::DecodeAoIEnvelope(
 				Msg.Payload.GetData(), Msg.Payload.Num(), Manager);
-			if (Result != atlas::EnvelopeDecodeResult::kOk)
+			if (Result != atlas::EnvelopeDecodeResult::kOk
+				&& Result != atlas::EnvelopeDecodeResult::kPropertyUpdateSkipped)
 			{
 				UE_LOG(LogAtlasNet, Warning,
 					TEXT("AoI decode result=%d msg_id=0x%04X"), (int32)Result, Msg.MsgId);

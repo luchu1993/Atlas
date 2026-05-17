@@ -7,10 +7,6 @@ using Microsoft.CodeAnalysis.Text;
 
 namespace Atlas.Tools.CppEmitter;
 
-// Offline emitter: parses entity_defs/ via Atlas.Defs.Parser and writes one
-// pair of placeholder .gen.h / .gen.cc per entity. Real per-field codegen
-// arrives in a follow-up commit; the skeleton's job is just to prove the
-// parser -> emitter -> file chain end-to-end.
 public static class Program
 {
     public static int Main(string[] args)
@@ -21,19 +17,29 @@ public static class Program
 
         for (int i = 0; i < args.Length; ++i)
         {
-            switch (args[i])
+            var arg = args[i];
+            switch (arg)
             {
-                case "--entity-defs" when i + 1 < args.Length:
-                    entityDefsDir = args[++i]; break;
-                case "--output" when i + 1 < args.Length:
-                    outputDir = args[++i]; break;
-                case "--namespace" when i + 1 < args.Length:
-                    @namespace = args[++i]; break;
+                case "--entity-defs":
+                {
+                    if (!TryReadValue(args, ref i, arg, out var v)) return 1;
+                    entityDefsDir = v; break;
+                }
+                case "--output":
+                {
+                    if (!TryReadValue(args, ref i, arg, out var v)) return 1;
+                    outputDir = v; break;
+                }
+                case "--namespace":
+                {
+                    if (!TryReadValue(args, ref i, arg, out var v)) return 1;
+                    @namespace = v; break;
+                }
                 case "-h":
                 case "--help":
                     PrintUsage(); return 0;
                 default:
-                    Console.Error.WriteLine($"CppEmitter: unknown argument '{args[i]}'");
+                    Console.Error.WriteLine($"CppEmitter: unknown argument '{arg}'");
                     PrintUsage();
                     return 1;
             }
@@ -142,6 +148,18 @@ class {className} : public atlas::ClientEntity {{
             Console.Error.WriteLine(d.ToString());
         }
         ds.Clear();
+    }
+
+    private static bool TryReadValue(string[] args, ref int i, string flag, out string value)
+    {
+        if (i + 1 >= args.Length)
+        {
+            Console.Error.WriteLine($"CppEmitter: {flag} requires a value");
+            value = string.Empty;
+            return false;
+        }
+        value = args[++i];
+        return true;
     }
 
     private static void PrintUsage()
