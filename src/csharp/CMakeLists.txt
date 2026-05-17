@@ -9,10 +9,19 @@ atlas_dotnet_project(
 )
 
 atlas_dotnet_project(
+  NAME atlas_defs_parser_dll
+  PROJECT_FILE Atlas.Defs.Parser/Atlas.Defs.Parser.csproj
+  ASSEMBLY_NAME Atlas.Defs.Parser.dll
+  TARGET_FRAMEWORK netstandard2.0
+  # Shared .def parser used by both the Roslyn generator and CppEmitter.
+)
+
+atlas_dotnet_project(
   NAME atlas_generators_def_dll
   PROJECT_FILE Atlas.Generators.Def/Atlas.Generators.Def.csproj
   ASSEMBLY_NAME Atlas.Generators.Def.dll
   TARGET_FRAMEWORK netstandard2.0
+  DEPENDS atlas_defs_parser_dll
   # Roslyn analyzer — build-time only, no runtime deployment.
 )
 
