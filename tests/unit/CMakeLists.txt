@@ -319,6 +319,11 @@ atlas_add_test(NAME test_witness_replication
   DEPS atlas_cellapp_lib atlas_space
 )
 
+atlas_add_test(NAME test_witness_space_data
+  SOURCES test_witness_space_data.cpp
+  DEPS atlas_cellapp_lib atlas_space
+)
+
 atlas_add_test(NAME test_witness_peer_lifetime
   SOURCES test_witness_peer_lifetime.cpp
   DEPS atlas_cellapp_lib atlas_space

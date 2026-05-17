@@ -11,6 +11,7 @@
 #include <vector>
 
 #include "server/entity_types.h"
+#include "space_data.h"
 
 namespace atlas {
 
@@ -116,6 +117,13 @@ class Witness {
     return aoi_map_;
   }
   void TestOnlySendEntityUpdate(EntityCache& cache) { (void)SendEntityUpdate(cache); }
+
+  // Space-scoped envelope pushes. Routed through send_reliable_ — same
+  // channel as kEntityEnter so client ordering with peer arrival is intact.
+  void SendSpaceDataInit(SpaceID space_id, const SpaceData& data);
+  void SendSpaceDataUpdate(SpaceID space_id, uint16_t key_id,
+                           std::span<const uint8_t> value);
+  void SendSpaceDataDelete(SpaceID space_id, uint16_t key_id);
 
   [[nodiscard]] auto OutboundChannel() const -> Channel* { return outbound_channel_; }
   void SetOutboundChannel(Channel* ch) { outbound_channel_ = ch; }

@@ -46,6 +46,7 @@ atlas_dotnet_project(
   PROJECT_FILE Atlas.Client/Atlas.Client.csproj
   ASSEMBLY_NAME Atlas.Client.dll
   TARGET_FRAMEWORK netstandard2.1
+  BUILD_ALL_TFMS
   DEPENDS atlas_shared_dll
   DEPLOY
 )

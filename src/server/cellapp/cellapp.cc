@@ -58,6 +58,14 @@ auto CellApp::CreateNativeProvider() -> std::unique_ptr<INativeApiProvider> {
                              math::Vector3{dx, dy, dz}, on_ground);
   });
   provider->SetDestroyLocalEntityFn([this](uint32_t eid) { DestroyLocalEntity(eid); });
+  provider->SetSetSpaceDataFn(
+      [this](uint32_t sid, uint16_t kid, const std::byte* v, int32_t len) {
+        SetSpaceData(sid, kid,
+                     std::span<const uint8_t>(reinterpret_cast<const uint8_t*>(v),
+                                              static_cast<std::size_t>(len)));
+      });
+  provider->SetRemoveSpaceDataFn(
+      [this](uint32_t sid, uint16_t kid) { RemoveSpaceData(sid, kid); });
   // Typed alias so callers reach CellApp-specific API without a
   // downcast; ScriptApp owns the unique_ptr.
   native_provider_ = provider.get();
@@ -155,6 +163,22 @@ auto CellApp::Init(int argc, char* argv[]) -> bool {
   (void)table.RegisterTypedHandler<cellapp::OffloadEntityAck>(
       [this](const Address& src, Channel* ch, const cellapp::OffloadEntityAck& msg) {
         OnOffloadEntityAck(src, ch, msg);
+      });
+  (void)table.RegisterTypedHandler<cellapp::SpaceDataUpdate>(
+      [this](const Address& src, Channel* ch, const cellapp::SpaceDataUpdate& msg) {
+        OnSpaceDataUpdate(src, ch, msg);
+      });
+  (void)table.RegisterTypedHandler<cellapp::SpaceDataDelete>(
+      [this](const Address& src, Channel* ch, const cellapp::SpaceDataDelete& msg) {
+        OnSpaceDataDelete(src, ch, msg);
+      });
+  (void)table.RegisterTypedHandler<cellapp::SpaceDataSnapshotRequest>(
+      [this](const Address& src, Channel* ch, const cellapp::SpaceDataSnapshotRequest& msg) {
+        OnSpaceDataSnapshotRequest(src, ch, msg);
+      });
+  (void)table.RegisterTypedHandler<cellapp::SpaceDataSnapshot>(
+      [this](const Address& src, Channel* ch, const cellapp::SpaceDataSnapshot& msg) {
+        OnSpaceDataSnapshot(src, ch, msg);
       });
   (void)table.RegisterTypedHandler<cellappmgr::AddCellToSpace>(
       [this](const Address& src, Channel* ch, const cellappmgr::AddCellToSpace& msg) {
@@ -828,7 +852,11 @@ void CellApp::AttachWitness(CellEntity& entity, float aoi_radius, float hysteres
       },
       hysteresis);
 
-  if (auto* w = entity.GetWitness()) w->SetOutboundChannel(ch);
+  if (auto* w = entity.GetWitness()) {
+    w->SetOutboundChannel(ch);
+    auto& space = entity.GetSpace();
+    if (!space.Data().Empty()) w->SendSpaceDataInit(space.Id(), space.Data());
+  }
 }
 
 void CellApp::OnEnableWitness(const Address& /*src*/, Channel* /*ch*/,
@@ -904,6 +932,168 @@ void CellApp::OnPeerCellAppDeath(const Address& addr, Channel* dying) {
         "CellApp: peer CellApp {}:{} died — dropped {} orphan Ghost(s), cleared {} Haunt(s)",
         addr.Ip(), addr.Port(), orphan_ghosts.size(), haunts_cleared);
   }
+}
+
+namespace {
+
+template <typename Fn>
+void ForEachRemotePeerInSpace(const Space& space, const Address& self_addr, Fn&& fn) {
+  const auto* tree = space.GetBspTree();
+  if (!tree) return;
+  std::vector<Address> seen;
+  for (const auto* leaf : tree->Leaves()) {
+    if (leaf->cellapp_addr == self_addr) continue;
+    if (std::find(seen.begin(), seen.end(), leaf->cellapp_addr) != seen.end()) continue;
+    seen.push_back(leaf->cellapp_addr);
+    fn(leaf->cellapp_addr);
+  }
+}
+
+}  // namespace
+
+auto CellApp::FindSpaceOwnerChannel(const Space& space) -> Channel* {
+  const auto* tree = space.GetBspTree();
+  if (!tree) return nullptr;
+  const auto primary_id = tree->PrimaryCellId();
+  if (primary_id == 0) return nullptr;
+  const auto* info = tree->FindCellById(primary_id);
+  if (!info) return nullptr;
+  if (info->cellapp_addr == Network().RudpAddress()) return nullptr;
+  return FindPeerChannel(info->cellapp_addr);
+}
+
+void CellApp::BroadcastSpaceDataUpdate(const Space& space, uint16_t key_id,
+                                       std::span<const uint8_t> value, const Address* exclude) {
+  cellapp::SpaceDataUpdate out;
+  out.space_id = space.Id();
+  out.key_id = key_id;
+  out.value.assign(value.begin(), value.end());
+  ForEachRemotePeerInSpace(space, Network().RudpAddress(), [&](const Address& peer_addr) {
+    if (exclude && peer_addr == *exclude) return;
+    if (auto* peer = FindPeerChannel(peer_addr)) (void)peer->SendMessage(out);
+  });
+}
+
+void CellApp::BroadcastSpaceDataDelete(const Space& space, uint16_t key_id,
+                                       const Address* exclude) {
+  cellapp::SpaceDataDelete out;
+  out.space_id = space.Id();
+  out.key_id = key_id;
+  ForEachRemotePeerInSpace(space, Network().RudpAddress(), [&](const Address& peer_addr) {
+    if (exclude && peer_addr == *exclude) return;
+    if (auto* peer = FindPeerChannel(peer_addr)) (void)peer->SendMessage(out);
+  });
+}
+
+void CellApp::PushSpaceDataUpdateToWitnesses(Space& space, uint16_t key_id,
+                                             std::span<const uint8_t> value) {
+  ATLAS_PROFILE_ZONE_N("CellApp::PushSpaceDataUpdate");
+  space.ForEachEntity([&](CellEntity& entity) {
+    if (auto* w = entity.GetWitness()) w->SendSpaceDataUpdate(space.Id(), key_id, value);
+  });
+}
+
+void CellApp::PushSpaceDataDeleteToWitnesses(Space& space, uint16_t key_id) {
+  ATLAS_PROFILE_ZONE_N("CellApp::PushSpaceDataDelete");
+  space.ForEachEntity([&](CellEntity& entity) {
+    if (auto* w = entity.GetWitness()) w->SendSpaceDataDelete(space.Id(), key_id);
+  });
+}
+
+void CellApp::PushSpaceDataInitToWitnesses(Space& space) {
+  ATLAS_PROFILE_ZONE_N("CellApp::PushSpaceDataInit");
+  space.ForEachEntity([&](CellEntity& entity) {
+    if (auto* w = entity.GetWitness()) w->SendSpaceDataInit(space.Id(), space.Data());
+  });
+}
+
+void CellApp::SetSpaceData(SpaceID space_id, uint16_t key_id, std::span<const uint8_t> value) {
+  auto* space = FindSpace(space_id);
+  if (!space) return;
+  if (space->IsOwner()) {
+    if (space->Data().Set(key_id, value)) {
+      BroadcastSpaceDataUpdate(*space, key_id, value, /*exclude=*/nullptr);
+      PushSpaceDataUpdateToWitnesses(*space, key_id, value);
+    }
+    return;
+  }
+  auto* owner_ch = FindSpaceOwnerChannel(*space);
+  if (!owner_ch) return;
+  cellapp::SpaceDataUpdate out;
+  out.space_id = space_id;
+  out.key_id = key_id;
+  out.value.assign(value.begin(), value.end());
+  (void)owner_ch->SendMessage(out);
+}
+
+void CellApp::RemoveSpaceData(SpaceID space_id, uint16_t key_id) {
+  auto* space = FindSpace(space_id);
+  if (!space) return;
+  if (space->IsOwner()) {
+    if (space->Data().Remove(key_id)) {
+      BroadcastSpaceDataDelete(*space, key_id, /*exclude=*/nullptr);
+      PushSpaceDataDeleteToWitnesses(*space, key_id);
+    }
+    return;
+  }
+  auto* owner_ch = FindSpaceOwnerChannel(*space);
+  if (!owner_ch) return;
+  cellapp::SpaceDataDelete out;
+  out.space_id = space_id;
+  out.key_id = key_id;
+  (void)owner_ch->SendMessage(out);
+}
+
+void CellApp::OnSpaceDataUpdate(const Address& src, Channel* /*ch*/,
+                                const cellapp::SpaceDataUpdate& msg) {
+  auto* space = FindSpace(msg.space_id);
+  if (!space) {
+    ATLAS_LOG_WARNING("CellApp: SpaceDataUpdate for unknown space {} — dropping", msg.space_id);
+    return;
+  }
+  if (!space->Data().Set(msg.key_id, msg.value)) return;
+  PushSpaceDataUpdateToWitnesses(*space, msg.key_id, msg.value);
+  if (space->IsOwner()) {
+    BroadcastSpaceDataUpdate(*space, msg.key_id, msg.value, &src);
+  }
+}
+
+void CellApp::OnSpaceDataDelete(const Address& src, Channel* /*ch*/,
+                                const cellapp::SpaceDataDelete& msg) {
+  auto* space = FindSpace(msg.space_id);
+  if (!space) {
+    ATLAS_LOG_WARNING("CellApp: SpaceDataDelete for unknown space {} — dropping", msg.space_id);
+    return;
+  }
+  if (!space->Data().Remove(msg.key_id)) return;
+  PushSpaceDataDeleteToWitnesses(*space, msg.key_id);
+  if (space->IsOwner()) {
+    BroadcastSpaceDataDelete(*space, msg.key_id, &src);
+  }
+}
+
+void CellApp::OnSpaceDataSnapshotRequest(const Address& src, Channel* /*ch*/,
+                                         const cellapp::SpaceDataSnapshotRequest& msg) {
+  auto* space = FindSpace(msg.space_id);
+  if (!space || !space->IsOwner()) return;
+  cellapp::SpaceDataSnapshot out;
+  out.space_id = msg.space_id;
+  for (const auto& [k, v] : space->Data().Snapshot()) {
+    out.entries.push_back({k, v});
+  }
+  if (auto* peer = FindPeerChannel(src)) (void)peer->SendMessage(out);
+}
+
+void CellApp::OnSpaceDataSnapshot(const Address& /*src*/, Channel* /*ch*/,
+                                  const cellapp::SpaceDataSnapshot& msg) {
+  auto* space = FindSpace(msg.space_id);
+  if (!space) return;
+  space->Data().Clear();
+  for (const auto& e : msg.entries) {
+    space->Data().Set(e.key_id, e.value);
+  }
+  space->MarkDataInitialized();
+  PushSpaceDataInitToWitnesses(*space);
 }
 
 void CellApp::OnOutboundChannelDeath(Channel& dying) {
@@ -1346,6 +1536,15 @@ void CellApp::OnUpdateGeometry(const Address& /*src*/, Channel* /*ch*/,
   for (auto& [cell_id, cell] : space->LocalCells()) {
     if (const auto* info = space->GetBspTree()->FindCellById(cell_id)) {
       cell->SetBounds(info->bounds);
+    }
+  }
+  // Non-owner replica without SpaceData yet: request a snapshot. Idempotent —
+  // retried on the next geometry update if the owner channel was not wired.
+  if (!space->IsDataInitialized()) {
+    if (auto* owner_ch = FindSpaceOwnerChannel(*space)) {
+      cellapp::SpaceDataSnapshotRequest req;
+      req.space_id = msg.space_id;
+      (void)owner_ch->SendMessage(req);
     }
   }
 }

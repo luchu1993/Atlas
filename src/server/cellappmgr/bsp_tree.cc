@@ -171,6 +171,7 @@ auto DeserializeNode(BinaryReader& r) -> Result<std::unique_ptr<BSPNode>> {
 
 void BSPTree::InitSingleCell(CellInfo info) {
   root_bounds_ = info.bounds.Area() > 0.f ? info.bounds : CellBounds{};
+  primary_cell_id_ = info.cell_id;
   root_ = std::make_unique<BSPLeaf>(std::move(info));
   root_->PropagateBounds(root_bounds_);
 }
@@ -264,6 +265,13 @@ auto BSPTree::FindCellByIdMutable(cellappmgr::CellID id) -> CellInfo* {
   return nullptr;
 }
 
+void BSPTree::RecomputePrimaryCellId() {
+  if (!root_) { primary_cell_id_ = 0; return; }
+  std::vector<const CellInfo*> leaves;
+  root_->CollectLeaves(leaves);
+  primary_cell_id_ = leaves.empty() ? cellappmgr::CellID{0} : leaves.front()->cell_id;
+}
+
 void BSPTree::VisitRect(const CellBounds& rect,
                         const std::function<void(const CellInfo&)>& visitor) const {
   if (root_) root_->VisitRect(rect, visitor);
@@ -311,6 +319,7 @@ auto BSPTree::Deserialize(BinaryReader& r) -> Result<BSPTree> {
     t.root_ = std::move(*node);
     t.root_->PropagateBounds(t.root_bounds_);
   }
+  t.RecomputePrimaryCellId();
   return t;
 }
 

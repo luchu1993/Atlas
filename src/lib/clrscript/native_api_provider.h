@@ -75,6 +75,16 @@ class INativeApiProvider {
 
   virtual void SetAoIRadius(uint32_t entity_id, float radius, float hysteresis) = 0;
 
+  // Owner-authoritative SpaceData write — fans out to peer cellapps and
+  // local witnesses. Only CellAppNativeProvider implements non-trivially.
+  virtual void SetSpaceData(uint32_t space_id, uint16_t key_id, const std::byte* value,
+                            int32_t len) = 0;
+  virtual void RemoveSpaceData(uint32_t space_id, uint16_t key_id) = 0;
+
+  // Returns the entity's owning space id, or 0 if unknown. Cellapp-only;
+  // base/login processes inherit the 0 default.
+  virtual auto GetEntitySpaceId(uint32_t entity_id) -> uint32_t = 0;
+
   // Packed function pointer table for C++ -> C# calls.
   virtual void SetNativeCallbacks(const void* native_callbacks, int32_t len) = 0;
 

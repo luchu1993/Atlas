@@ -264,6 +264,40 @@ public abstract class ServerEntity
     /// <summary>Called when the entity is destroyed or during server shutdown.</summary>
     protected internal virtual void OnDestroy() { }
 
+    // C++ controller state migrates on offload, but Action delegates are
+    // managed — scripts must re-StartTimer in OnInit(isReload=true).
+    private Dictionary<int, (bool Repeat, Action Callback)>? _timers;
+    private int _nextTimerArg;
+
+    /// <summary>Schedules a per-entity timer. Returns a handle for CancelTimer; 0 on failure.</summary>
+    public long StartTimer(float intervalSeconds, bool repeat, Action callback)
+    {
+        if (callback is null) throw new ArgumentNullException(nameof(callback));
+        var userArg = ++_nextTimerArg;
+        var controllerId = NativeApi.AddTimerController(EntityId, intervalSeconds, repeat, userArg);
+        if (controllerId == 0) return 0;
+        _timers ??= new();
+        _timers[userArg] = (repeat, callback);
+        return ((long)controllerId << 32) | (uint)userArg;
+    }
+
+    public void CancelTimer(long handle)
+    {
+        if (handle == 0) return;
+        var controllerId = (int)(handle >> 32);
+        var userArg = (int)(handle & 0xFFFFFFFF);
+        NativeApi.CancelController(EntityId, controllerId);
+        _timers?.Remove(userArg);
+    }
+
+    internal void DispatchTimerFired(int userArg)
+    {
+        if (_timers == null) return;
+        if (!_timers.TryGetValue(userArg, out var entry)) return;
+        if (!entry.Repeat) _timers.Remove(userArg);
+        entry.Callback();
+    }
+
     // =========================================================================
     // RPC send infrastructure — called by generated Mailbox proxies and stubs.
     // Each method forwards to the C++ engine via NativeApi.

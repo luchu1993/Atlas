@@ -86,6 +86,9 @@ class MockNativeProvider : public INativeApiProvider {
     return false;
   }
   void SetAoIRadius(uint32_t, float, float) override {}
+  void SetSpaceData(uint32_t, uint16_t, const std::byte*, int32_t) override {}
+  void RemoveSpaceData(uint32_t, uint16_t) override {}
+  auto GetEntitySpaceId(uint32_t) -> uint32_t override { return 0; }
   void SetNativeCallbacks(const void*, int32_t) override {}
 
   // CellApp-specific stubs — non-CellApp test mocks just need to stay

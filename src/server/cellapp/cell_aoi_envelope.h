@@ -14,6 +14,10 @@ enum class CellAoIEnvelopeKind : uint8_t {
   kEntityLeave = 2,           // empty
   kEntityPositionUpdate = 3,  // pos/dir/on_ground + server_time
   kEntityPropertyUpdate = 4,  // event_seq + audience-filtered delta bytes
+  // Space-scoped (the u32 id-field is the space_id, not an entity id).
+  kSpaceDataInit = 5,    // u32 count + [(u16 key, u32 vlen, vbytes)*]
+  kSpaceDataUpdate = 6,  // u16 key + u32 vlen + vbytes
+  kSpaceDataDelete = 7,  // u16 key
 };
 
 }  // namespace atlas

@@ -39,6 +39,14 @@ auto Space::FindLocalCell(cellappmgr::CellID id) const -> const Cell* {
 
 void Space::SetBspTree(BSPTree tree) {
   bsp_tree_ = std::move(tree);
+  if (IsOwner()) data_initialized_ = true;
+}
+
+auto Space::IsOwner() const -> bool {
+  if (!bsp_tree_.has_value()) return false;
+  const auto primary = bsp_tree_->PrimaryCellId();
+  if (primary == 0) return false;
+  return local_cells_.count(primary) > 0;
 }
 
 auto Space::AddEntity(std::unique_ptr<CellEntity> entity) -> CellEntity* {

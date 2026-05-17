@@ -317,7 +317,10 @@ void CellAppMgr::OnCellAppDeath(const Address& internal_addr) {
     for (auto* leaf : partition.bsp.LeavesMutable()) {
       if (leaf->cellapp_addr != internal_addr) continue;
 
-      const auto* alt = PickAlternateHost(internal_addr);
+      // Owner handoff: prefer an in-space survivor so its ghost
+      // SpaceData replica becomes the new authoritative source.
+      const auto* alt = PickAlternateHostInSpace(internal_addr, partition);
+      if (alt == nullptr) alt = PickAlternateHost(internal_addr);
       if (alt == nullptr) {
         // PickAlternateHost only returns nullptr when cellapps_ is
         // empty, which we already guarded above. Defensive log for a
@@ -409,6 +412,22 @@ auto CellAppMgr::PickAlternateHost(const Address& exclude_addr) const -> const C
     if (diff_ip && is_better(best_diff_ip, &info)) best_diff_ip = &info;
   }
   return best_diff_ip != nullptr ? best_diff_ip : best_any;
+}
+
+auto CellAppMgr::PickAlternateHostInSpace(const Address& exclude_addr,
+                                          const SpacePartition& partition) const
+    -> const CellAppInfo* {
+  const CellAppInfo* best = nullptr;
+  for (const auto* leaf : partition.bsp.Leaves()) {
+    if (leaf->cellapp_addr == exclude_addr) continue;
+    auto it = cellapps_.find(leaf->cellapp_addr);
+    if (it == cellapps_.end()) continue;
+    if (best == nullptr || it->second.load < best->load ||
+        (it->second.load == best->load && it->second.app_id < best->app_id)) {
+      best = &it->second;
+    }
+  }
+  return best;
 }
 
 void CellAppMgr::SendAddCell(const CellAppInfo& target, SpaceID space_id,

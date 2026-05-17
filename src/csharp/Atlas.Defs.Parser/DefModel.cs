@@ -257,6 +257,23 @@ internal enum ComponentLocality
     ClientLocal,
 }
 
+// One <space_data><key> entry. Id is a permanent contract — never reused
+// after a key is dropped (mirrors entity_ids.xml stability).
+internal sealed class SpaceDataKeyDefModel
+{
+    public string Name { get; set; } = "";
+    public ushort KeyId { get; set; }
+    public DataTypeRefModel Type { get; set; } = new();
+    public string TypeText { get; set; } = "";
+    public bool Deprecated { get; set; }
+}
+
+internal sealed class SpaceDataDefModel
+{
+    public string SourcePath { get; set; } = "";
+    public List<SpaceDataKeyDefModel> Keys { get; } = new();
+}
+
 internal sealed class EntityDefModel
 {
     public string Name { get; set; } = "";

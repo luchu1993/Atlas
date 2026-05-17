@@ -47,6 +47,12 @@ class BaseNativeProvider : public INativeApiProvider {
 
   void SetAoIRadius(uint32_t entity_id, float radius, float hysteresis) override;
 
+  void SetSpaceData(uint32_t space_id, uint16_t key_id, const std::byte* value,
+                    int32_t len) override;
+  void RemoveSpaceData(uint32_t space_id, uint16_t key_id) override;
+
+  auto GetEntitySpaceId(uint32_t entity_id) -> uint32_t override;
+
   void SetNativeCallbacks(const void* native_callbacks, int32_t len) override;
 
   // Processes that are not CellApp inherit these no-op bodies.

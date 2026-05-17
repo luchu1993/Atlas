@@ -14,6 +14,7 @@ add_library(atlas_cellapp_lib STATIC
   offload_checker.cc
   real_entity_data.cc
   space.cc
+  space_data.cc
   witness.cc
 )
 

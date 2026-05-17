@@ -4,9 +4,11 @@
 
 #include <gtest/gtest.h>
 
+#include "cell.h"
 #include "cell_entity.h"
 #include "cellapp.h"
 #include "cellapp_messages.h"
+#include "cellappmgr/bsp_tree.h"
 #include "entitydef/entity_def_registry.h"
 #include "intercell_messages.h"
 #include "math/vector3.h"
@@ -552,6 +554,127 @@ TEST_F(CellAppHandlersTest, PeerDeathDropsOrphanGhostsAndClearsHaunts) {
   EXPECT_NE(app_.FindEntity(701), nullptr) << "unrelated Ghost must survive";
   EXPECT_EQ(rd->HauntCount(), 1u) << "dying peer's Haunt should be gone";
   EXPECT_TRUE(rd->HasHaunt(other_ch)) << "surviving peer's Haunt untouched";
+}
+
+// ─── SpaceData routing (local handler behaviour) ────────────────────────────
+
+namespace {
+
+auto MakeOwnerSpace(CellApp& app, SpaceID space_id, cellappmgr::CellID primary_cell_id,
+                    uint16_t self_port) -> Space* {
+  cellapp::CreateSpace cs;
+  cs.space_id = space_id;
+  app.OnCreateSpace({}, nullptr, cs);
+  auto* space = app.FindSpace(space_id);
+  space->AddLocalCell(std::make_unique<Cell>(*space, primary_cell_id, CellBounds{}));
+  CellInfo info;
+  info.cell_id = primary_cell_id;
+  info.cellapp_addr = Address(0x7F000001u, self_port);
+  BSPTree tree;
+  tree.InitSingleCell(info);
+  space->SetBspTree(std::move(tree));
+  return space;
+}
+
+auto MakeGhostSpace(CellApp& app, SpaceID space_id, cellappmgr::CellID primary_cell_id,
+                    cellappmgr::CellID local_cell_id, uint16_t owner_port,
+                    uint16_t self_port) -> Space* {
+  cellapp::CreateSpace cs;
+  cs.space_id = space_id;
+  app.OnCreateSpace({}, nullptr, cs);
+  auto* space = app.FindSpace(space_id);
+  space->AddLocalCell(std::make_unique<Cell>(*space, local_cell_id, CellBounds{}));
+  CellInfo primary;
+  primary.cell_id = primary_cell_id;
+  primary.cellapp_addr = Address(0x7F000001u, owner_port);
+  BSPTree tree;
+  tree.InitSingleCell(primary);
+  CellInfo right;
+  right.cell_id = local_cell_id;
+  right.cellapp_addr = Address(0x7F000001u, self_port);
+  (void)tree.Split(primary_cell_id, BSPAxis::kX, 0.f, right);
+  space->SetBspTree(std::move(tree));
+  return space;
+}
+
+}  // namespace
+
+TEST_F(CellAppHandlersTest, OnSpaceDataUpdate_AppliesValueLocally) {
+  auto* space = MakeGhostSpace(app_, /*space_id=*/7, /*primary=*/1, /*local=*/2,
+                               /*owner_port=*/30001, /*self_port=*/30002);
+  cellapp::SpaceDataUpdate msg;
+  msg.space_id = 7;
+  msg.key_id = 42;
+  msg.value = {0xAA, 0xBB};
+  app_.OnSpaceDataUpdate(Address(0x7F000001u, 30001), nullptr, msg);
+
+  const auto* v = space->Data().Get(42);
+  ASSERT_NE(v, nullptr);
+  EXPECT_EQ(*v, (std::vector<uint8_t>{0xAA, 0xBB}));
+}
+
+TEST_F(CellAppHandlersTest, OnSpaceDataDelete_RemovesKeyLocally) {
+  auto* space = MakeGhostSpace(app_, 7, 1, 2, 30001, 30002);
+  space->Data().Set(42, std::vector<uint8_t>{0xAA});
+
+  cellapp::SpaceDataDelete msg;
+  msg.space_id = 7;
+  msg.key_id = 42;
+  app_.OnSpaceDataDelete(Address(0x7F000001u, 30001), nullptr, msg);
+
+  EXPECT_FALSE(space->Data().Contains(42));
+}
+
+TEST_F(CellAppHandlersTest, OnSpaceDataSnapshot_OverwritesAndMarksInitialized) {
+  auto* space = MakeGhostSpace(app_, 7, 1, 2, 30001, 30002);
+  space->Data().Set(99, std::vector<uint8_t>{0xFF});  // stale local entry
+  EXPECT_FALSE(space->IsDataInitialized());
+
+  cellapp::SpaceDataSnapshot snap;
+  snap.space_id = 7;
+  snap.entries.push_back({1, {0x01}});
+  snap.entries.push_back({2, {0x02, 0x03}});
+  app_.OnSpaceDataSnapshot(Address(0x7F000001u, 30001), nullptr, snap);
+
+  EXPECT_TRUE(space->IsDataInitialized());
+  EXPECT_FALSE(space->Data().Contains(99));
+  ASSERT_NE(space->Data().Get(1), nullptr);
+  EXPECT_EQ(*space->Data().Get(1), (std::vector<uint8_t>{0x01}));
+}
+
+TEST_F(CellAppHandlersTest, OnSpaceDataSnapshotRequest_NonOwnerIsNoop) {
+  auto* space = MakeGhostSpace(app_, 7, 1, 2, 30001, 30002);
+  ASSERT_FALSE(space->IsOwner());
+
+  cellapp::SpaceDataSnapshotRequest req;
+  req.space_id = 7;
+  // Non-owner should silently drop — no reply path attempted (would crash
+  // on the fake peer channel below otherwise).
+  app_.OnSpaceDataSnapshotRequest(Address(0x7F000001u, 30001), nullptr, req);
+}
+
+TEST_F(CellAppHandlersTest, SetSpaceData_OwnerWritesLocally) {
+  auto* space = MakeOwnerSpace(app_, 7, 1, 30001);
+  ASSERT_TRUE(space->IsOwner());
+
+  const uint8_t value[] = {0xDE, 0xAD};
+  app_.SetSpaceData(7, 42, std::span<const uint8_t>(value, 2));
+
+  ASSERT_NE(space->Data().Get(42), nullptr);
+  EXPECT_EQ(*space->Data().Get(42), (std::vector<uint8_t>{0xDE, 0xAD}));
+}
+
+TEST_F(CellAppHandlersTest, RemoveSpaceData_OwnerRemovesLocally) {
+  auto* space = MakeOwnerSpace(app_, 7, 1, 30001);
+  space->Data().Set(42, std::vector<uint8_t>{0xAA});
+
+  app_.RemoveSpaceData(7, 42);
+  EXPECT_FALSE(space->Data().Contains(42));
+}
+
+TEST_F(CellAppHandlersTest, OwnerMarksDataInitializedOnSetBspTree) {
+  auto* space = MakeOwnerSpace(app_, 7, 1, 30001);
+  EXPECT_TRUE(space->IsDataInitialized());
 }
 
 }  // namespace

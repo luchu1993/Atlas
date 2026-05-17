@@ -16,7 +16,7 @@
 #                                      assemblies like Roslyn analyzers)
 # )
 function(atlas_dotnet_project)
-  cmake_parse_arguments(ARG "DEPLOY" "NAME;PROJECT_FILE;ASSEMBLY_NAME;CONFIGURATION;TARGET_FRAMEWORK" "DEPENDS" ${ARGN})
+  cmake_parse_arguments(ARG "DEPLOY;BUILD_ALL_TFMS" "NAME;PROJECT_FILE;ASSEMBLY_NAME;CONFIGURATION;TARGET_FRAMEWORK" "DEPENDS" ${ARGN})
 
   if(NOT ARG_CONFIGURATION)
     set(ARG_CONFIGURATION "Release")
@@ -112,21 +112,47 @@ function(atlas_dotnet_project)
     list(FILTER _cs_sources EXCLUDE REGEX ".*/bin/.*")
 
     # --framework pins one TFM so multi-TFM projects don't clobber --output.
-    # --no-dependencies + -p:Platform=AnyCPU: CMake DEPENDS orders builds; parallel recursive ProjectReference builds race on obj/, and vcvars64 leaks Platform=x64 into env which MSBuild adopts.
-    add_custom_command(
-      OUTPUT "${_output_dll}"
-      COMMAND "${DOTNET_EXECUTABLE}" build "${_proj_path}"
-              --configuration "${ARG_CONFIGURATION}"
-              --framework "${ARG_TARGET_FRAMEWORK}"
-              --output "${_output_dir}"
-              --no-dependencies
-              -p:Platform=AnyCPU
-              --nologo -v quiet
-      DEPENDS ${_cs_sources} "${_proj_path}"
-      WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
-      COMMENT "Building C# project: ${ARG_NAME}"
-      VERBATIM
-    )
+    # BUILD_ALL_TFMS: multi-TFM projects also build the non-deployed TFM
+    # into the per-project obj cache so downstream tests resolving via
+    # ProjectReference (which picks the consumer's TFM) get fresh ref dlls.
+    # The deploy step still copies only the TARGET_FRAMEWORK output.
+    if(ARG_BUILD_ALL_TFMS)
+      add_custom_command(
+        OUTPUT "${_output_dll}"
+        COMMAND "${DOTNET_EXECUTABLE}" build "${_proj_path}"
+                --configuration "${ARG_CONFIGURATION}"
+                --no-dependencies
+                -p:Platform=AnyCPU
+                --nologo -v quiet
+        COMMAND "${DOTNET_EXECUTABLE}" build "${_proj_path}"
+                --configuration "${ARG_CONFIGURATION}"
+                --framework "${ARG_TARGET_FRAMEWORK}"
+                --output "${_output_dir}"
+                --no-dependencies
+                -p:Platform=AnyCPU
+                --nologo -v quiet
+        DEPENDS ${_cs_sources} "${_proj_path}"
+        WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+        COMMENT "Building C# project (all TFMs): ${ARG_NAME}"
+        VERBATIM
+      )
+    else()
+      # --no-dependencies + -p:Platform=AnyCPU: CMake DEPENDS orders builds; parallel recursive ProjectReference builds race on obj/, and vcvars64 leaks Platform=x64 into env which MSBuild adopts.
+      add_custom_command(
+        OUTPUT "${_output_dll}"
+        COMMAND "${DOTNET_EXECUTABLE}" build "${_proj_path}"
+                --configuration "${ARG_CONFIGURATION}"
+                --framework "${ARG_TARGET_FRAMEWORK}"
+                --output "${_output_dir}"
+                --no-dependencies
+                -p:Platform=AnyCPU
+                --nologo -v quiet
+        DEPENDS ${_cs_sources} "${_proj_path}"
+        WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+        COMMENT "Building C# project: ${ARG_NAME}"
+        VERBATIM
+      )
+    endif()
 
     add_custom_target(${ARG_NAME} ALL DEPENDS "${_output_dll}")
 

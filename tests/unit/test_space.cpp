@@ -7,7 +7,9 @@
 
 #include <gtest/gtest.h>
 
+#include "cell.h"
 #include "cell_entity.h"
+#include "cellappmgr/bsp_tree.h"
 #include "math/vector3.h"
 #include "space.h"
 #include "space/controllers.h"
@@ -124,6 +126,146 @@ TEST(Space, ForEachEntityIteratesAll) {
   int count = 0;
   space.ForEachEntity([&count](CellEntity&) { ++count; });
   EXPECT_EQ(count, 3);
+}
+
+namespace {
+auto Bytes(std::initializer_list<uint8_t> bs) -> std::vector<uint8_t> { return {bs}; }
+}  // namespace
+
+TEST(SpaceData, EmptyByDefault) {
+  Space space(1);
+  EXPECT_TRUE(space.Data().Empty());
+  EXPECT_EQ(space.Data().Size(), 0u);
+  EXPECT_EQ(space.Data().Get(42), nullptr);
+  EXPECT_FALSE(space.Data().Contains(42));
+}
+
+TEST(SpaceData, SetInsertsAndReturnsTrue) {
+  Space space(1);
+  auto v = Bytes({1, 2, 3});
+  EXPECT_TRUE(space.Data().Set(10, v));
+  ASSERT_NE(space.Data().Get(10), nullptr);
+  EXPECT_EQ(*space.Data().Get(10), v);
+  EXPECT_TRUE(space.Data().Contains(10));
+  EXPECT_EQ(space.Data().Size(), 1u);
+}
+
+TEST(SpaceData, SetSameValueReturnsFalse) {
+  Space space(1);
+  auto v = Bytes({7, 7, 7});
+  EXPECT_TRUE(space.Data().Set(5, v));
+  EXPECT_FALSE(space.Data().Set(5, v));
+  EXPECT_EQ(space.Data().Size(), 1u);
+}
+
+TEST(SpaceData, SetDifferentValueOverwrites) {
+  Space space(1);
+  EXPECT_TRUE(space.Data().Set(1, Bytes({1})));
+  EXPECT_TRUE(space.Data().Set(1, Bytes({2, 3})));
+  EXPECT_EQ(*space.Data().Get(1), Bytes({2, 3}));
+}
+
+TEST(SpaceData, RemoveErasesExistingKey) {
+  Space space(1);
+  space.Data().Set(1, Bytes({1}));
+  space.Data().Set(2, Bytes({2}));
+  EXPECT_TRUE(space.Data().Remove(1));
+  EXPECT_FALSE(space.Data().Contains(1));
+  EXPECT_TRUE(space.Data().Contains(2));
+  EXPECT_EQ(space.Data().Size(), 1u);
+}
+
+TEST(SpaceData, RemoveMissingReturnsFalse) {
+  Space space(1);
+  EXPECT_FALSE(space.Data().Remove(999));
+}
+
+TEST(SpaceData, SnapshotIsOrderedByKeyId) {
+  Space space(1);
+  space.Data().Set(30, Bytes({0xC}));
+  space.Data().Set(10, Bytes({0xA}));
+  space.Data().Set(20, Bytes({0xB}));
+
+  auto snap = space.Data().Snapshot();
+  ASSERT_EQ(snap.size(), 3u);
+  EXPECT_EQ(snap[0].first, 10u);
+  EXPECT_EQ(snap[1].first, 20u);
+  EXPECT_EQ(snap[2].first, 30u);
+  EXPECT_EQ(snap[0].second, Bytes({0xA}));
+}
+
+TEST(SpaceData, ClearWipesAll) {
+  Space space(1);
+  space.Data().Set(1, Bytes({1}));
+  space.Data().Set(2, Bytes({2}));
+  space.Data().Clear();
+  EXPECT_TRUE(space.Data().Empty());
+}
+
+namespace {
+
+auto MakeLeafInfo(cellappmgr::CellID id, uint16_t port) -> CellInfo {
+  CellInfo info;
+  info.cell_id = id;
+  info.cellapp_addr = Address(0x7F000001u, port);
+  return info;
+}
+
+auto MakeSingleCellTree(cellappmgr::CellID id, uint16_t port) -> BSPTree {
+  BSPTree t;
+  t.InitSingleCell(MakeLeafInfo(id, port));
+  return t;
+}
+
+}  // namespace
+
+TEST(SpaceOwner, NoBspTreeReturnsFalse) {
+  Space space(1);
+  EXPECT_FALSE(space.IsOwner());
+}
+
+TEST(SpaceOwner, BspTreeButNoLocalCellReturnsFalse) {
+  Space space(1);
+  space.SetBspTree(MakeSingleCellTree(7, 30001));
+  EXPECT_FALSE(space.IsOwner());
+}
+
+TEST(SpaceOwner, HoldsPrimaryCellReturnsTrue) {
+  Space space(1);
+  space.SetBspTree(MakeSingleCellTree(7, 30001));
+  space.AddLocalCell(std::make_unique<Cell>(space, 7, CellBounds{}));
+  EXPECT_TRUE(space.IsOwner());
+}
+
+TEST(SpaceOwner, HoldsOnlyNonPrimaryCellReturnsFalse) {
+  Space space(1);
+  BSPTree t = MakeSingleCellTree(7, 30001);
+  ASSERT_TRUE(t.Split(7, BSPAxis::kX, 0.f, MakeLeafInfo(99, 30002)).HasValue());
+  space.SetBspTree(std::move(t));
+  space.AddLocalCell(std::make_unique<Cell>(space, 99, CellBounds{}));
+  EXPECT_FALSE(space.IsOwner());
+}
+
+TEST(SpaceOwner, HoldsPrimaryAndNonPrimaryReturnsTrue) {
+  Space space(1);
+  BSPTree t = MakeSingleCellTree(7, 30001);
+  ASSERT_TRUE(t.Split(7, BSPAxis::kX, 0.f, MakeLeafInfo(99, 30002)).HasValue());
+  space.SetBspTree(std::move(t));
+  space.AddLocalCell(std::make_unique<Cell>(space, 7, CellBounds{}));
+  space.AddLocalCell(std::make_unique<Cell>(space, 99, CellBounds{}));
+  EXPECT_TRUE(space.IsOwner());
+}
+
+TEST(SpaceData, ForEachVisitsAllInOrder) {
+  Space space(1);
+  space.Data().Set(2, Bytes({0xB}));
+  space.Data().Set(1, Bytes({0xA}));
+  space.Data().Set(3, Bytes({0xC}));
+
+  std::vector<uint16_t> seen;
+  space.Data().ForEach(
+      [&seen](SpaceData::KeyId k, const SpaceData::ValueBytes&) { seen.push_back(k); });
+  EXPECT_EQ(seen, (std::vector<uint16_t>{1, 2, 3}));
 }
 
 }  // namespace

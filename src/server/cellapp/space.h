@@ -11,6 +11,7 @@
 #include "cellappmgr/cellappmgr_messages.h"  // CellID
 #include "server/entity_types.h"
 #include "space/range_list.h"
+#include "space_data.h"
 
 namespace atlas {
 
@@ -63,6 +64,18 @@ class Space {
     return bsp_tree_.has_value() ? &*bsp_tree_ : nullptr;
   }
 
+  // True iff this cellapp holds the BSP primary (left-most) cell — the
+  // SpaceData authority. False before SetBspTree has been called.
+  [[nodiscard]] auto IsOwner() const -> bool;
+
+  [[nodiscard]] auto Data() -> SpaceData& { return data_; }
+  [[nodiscard]] auto Data() const -> const SpaceData& { return data_; }
+
+  // True once SpaceData has been seeded — by becoming owner on SetBspTree,
+  // or by receiving a SpaceDataSnapshot from the owner.
+  [[nodiscard]] auto IsDataInitialized() const -> bool { return data_initialized_; }
+  void MarkDataInitialized() { data_initialized_ = true; }
+
   // Controllers (may alter position) then dead-entity compaction.
   // Witness updates run later in the CellApp tick.
   void Tick(float dt);
@@ -90,6 +103,8 @@ class Space {
   // default even though Cell doesn't touch entity state at teardown).
   LocalCellMap local_cells_;
   std::optional<BSPTree> bsp_tree_;
+  SpaceData data_;
+  bool data_initialized_{false};
 
   bool tearing_down_{false};
 };

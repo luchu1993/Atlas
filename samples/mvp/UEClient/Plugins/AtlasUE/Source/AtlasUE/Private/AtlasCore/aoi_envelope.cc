@@ -1,36 +1,13 @@
 #include "AtlasCore/aoi_envelope.h"
 
-#include <cstring>
-
+#include "AtlasCore/client_entity.h"
 #include "AtlasCore/client_entity_manager.h"
 #include "AtlasCore/entity_view.h"
+#include "AtlasCore/span_reader.h"
 
 namespace atlas {
 
 namespace {
-
-// Little-endian readers; Atlas wire is fixed LE and all current targets are LE.
-class SpanReader {
- public:
-  SpanReader(const uint8_t* data, std::size_t len) : data_(data), len_(len) {}
-
-  [[nodiscard]] bool Has(std::size_t n) const { return pos_ + n <= len_; }
-
-  template <typename T>
-  bool Read(T& out) {
-    if (!Has(sizeof(T))) return false;
-    std::memcpy(&out, data_ + pos_, sizeof(T));
-    pos_ += sizeof(T);
-    return true;
-  }
-
-  bool ReadVec3(Vec3& v) { return Read(v.x) && Read(v.y) && Read(v.z); }
-
- private:
-  const uint8_t* data_;
-  std::size_t len_;
-  std::size_t pos_{0};
-};
 
 // witness.cc::BuildEnterEnvelope: [u16 typeId][3f pos][3f dir][u8 onGround][f64 serverTime][peerSnapshot].
 constexpr std::size_t kEnterFixedBytes = 2 + 6 * 4 + 1 + 8;
@@ -65,6 +42,17 @@ EnvelopeDecodeResult DecodePositionUpdate(uint32_t id, SpanReader& r,
   return EnvelopeDecodeResult::kOk;
 }
 
+// witness.cc::BuildPropertyUpdateEnvelope: [u64 event_seq][sectionMask + delta].
+EnvelopeDecodeResult DecodePropertyUpdate(uint32_t id, SpanReader& r,
+                                          ClientEntityManager& mgr) {
+  uint64_t event_seq;
+  if (!r.Read(event_seq)) return EnvelopeDecodeResult::kTruncated;
+  ClientEntity* entity = mgr.Find(id);
+  if (entity == nullptr) return EnvelopeDecodeResult::kOk;  // left AoI
+  return entity->ApplyDelta(r) ? EnvelopeDecodeResult::kOk
+                               : EnvelopeDecodeResult::kTruncated;
+}
+
 }  // namespace
 
 EnvelopeDecodeResult DecodeAoIEnvelope(const uint8_t* body, std::size_t len,
@@ -84,7 +72,11 @@ EnvelopeDecodeResult DecodeAoIEnvelope(const uint8_t* body, std::size_t len,
     case EnvelopeKind::kEntityPositionUpdate:
       return DecodePositionUpdate(entity_id, r, mgr);
     case EnvelopeKind::kEntityPropertyUpdate:
-      return EnvelopeDecodeResult::kPropertyUpdateSkipped;
+      return DecodePropertyUpdate(entity_id, r, mgr);
+    case EnvelopeKind::kSpaceDataInit:
+    case EnvelopeKind::kSpaceDataUpdate:
+    case EnvelopeKind::kSpaceDataDelete:
+      return EnvelopeDecodeResult::kSpaceDataSkipped;
     default:
       return EnvelopeDecodeResult::kUnknownKind;
   }

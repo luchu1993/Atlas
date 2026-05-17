@@ -71,6 +71,12 @@ class CellAppMgr : public ManagerApp {
 
   [[nodiscard]] auto PickAlternateHost(const Address& exclude_addr) const -> const CellAppInfo*;
 
+  // Prefers a survivor that already holds a leaf of this space — its
+  // ghost SpaceData replica is up to date, ideal for owner handoff.
+  [[nodiscard]] auto PickAlternateHostInSpace(const Address& exclude_addr,
+                                              const SpacePartition& partition) const
+      -> const CellAppInfo*;
+
   void SendAddCell(const CellAppInfo& target, SpaceID space_id, cellappmgr::CellID cell_id,
                    const CellBounds& bounds);
   void BroadcastGeometry(SpacePartition& partition);

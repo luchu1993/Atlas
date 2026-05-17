@@ -6,13 +6,13 @@ using Microsoft.CodeAnalysis.Text;
 
 namespace Atlas.Generators.Def;
 
-// Either an entity model (root <entity>) or a standalone component
-// type model (root <component>). DefParser.Parse dispatches on the
-// root element so a single .def file pipeline handles both kinds.
+// Root-element-dispatched parse result: entity / standalone component /
+// space-data manifest. ParseAny picks the variant.
 internal sealed class ParsedDef
 {
     public EntityDefModel? Entity { get; set; }
     public ComponentDefModel? StandaloneComponent { get; set; }
+    public SpaceDataDefModel? SpaceData { get; set; }
 }
 
 internal static class DefParser
@@ -56,11 +56,17 @@ internal static class DefParser
             return comp == null ? null : new ParsedDef { StandaloneComponent = comp };
         }
 
+        if (root.Name.LocalName == "space_data")
+        {
+            var sd = ParseSpaceData(root, filePath, reportDiagnostic);
+            return sd == null ? null : new ParsedDef { SpaceData = sd };
+        }
+
         if (root.Name.LocalName != "entity")
         {
             reportDiagnostic?.Invoke(Diagnostic.Create(
                 DefDiagnosticDescriptors.DEF006, Location.None, filePath,
-                "Root element must be <entity> or <component>"));
+                "Root element must be <entity>, <component>, or <space_data>"));
             return null;
         }
 
@@ -405,6 +411,60 @@ internal static class DefParser
         // linker; ComponentDefModel.SlotIdx stays -1 here.
         ParseComponentMethodSections(root, comp, typeName, reportDiagnostic);
         return comp;
+    }
+
+    private static SpaceDataDefModel? ParseSpaceData(XElement root, string filePath,
+                                                     Action<Diagnostic>? reportDiagnostic)
+    {
+        var model = new SpaceDataDefModel { SourcePath = filePath };
+        var seenNames = new HashSet<string>(StringComparer.Ordinal);
+        var seenIds = new HashSet<ushort>();
+
+        foreach (var el in root.Elements("key"))
+        {
+            var name = el.Attribute("name")?.Value ?? "";
+            var typeText = el.Attribute("type")?.Value ?? "";
+            var idStr = el.Attribute("id")?.Value;
+            var deprecated = string.Equals(el.Attribute("deprecated")?.Value, "true",
+                                           StringComparison.OrdinalIgnoreCase);
+
+            if (string.IsNullOrWhiteSpace(name) || string.IsNullOrWhiteSpace(typeText))
+            {
+                reportDiagnostic?.Invoke(Diagnostic.Create(
+                    DefDiagnosticDescriptors.DEF006, Location.None, filePath,
+                    "<key> requires non-empty name and type"));
+                return null;
+            }
+            if (idStr == null || !int.TryParse(idStr, out var idValue) ||
+                idValue < 1 || idValue > ushort.MaxValue)
+            {
+                reportDiagnostic?.Invoke(Diagnostic.Create(
+                    DefDiagnosticDescriptors.DEF006, Location.None, filePath,
+                    $"<key name='{name}'> requires id attribute in [1, 65535]"));
+                return null;
+            }
+            var id = (ushort)idValue;
+            if (!seenNames.Add(name) || !seenIds.Add(id))
+            {
+                reportDiagnostic?.Invoke(Diagnostic.Create(
+                    DefDiagnosticDescriptors.DEF006, Location.None, filePath,
+                    $"duplicate <key> name='{name}' or id={id}"));
+                return null;
+            }
+
+            var typeRef = DefTypeExprParser.Parse(typeText, reportDiagnostic);
+            if (typeRef == null) return null;
+
+            model.Keys.Add(new SpaceDataKeyDefModel
+            {
+                Name = name,
+                KeyId = id,
+                Type = typeRef,
+                TypeText = typeText,
+                Deprecated = deprecated,
+            });
+        }
+        return model;
     }
 
     private static PropertyDefModel? ParseProperty(XElement el,

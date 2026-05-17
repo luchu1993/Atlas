@@ -2,6 +2,7 @@
 #define ATLAS_SERVER_CELLAPP_CELLAPP_H_
 
 #include <memory>
+#include <span>
 #include <unordered_map>
 #include <unordered_set>
 
@@ -44,6 +45,10 @@ struct GhostSetNextReal;
 struct OffloadEntity;
 struct OffloadEntityAck;
 struct SpawnLocalEntity;
+struct SpaceDataUpdate;
+struct SpaceDataDelete;
+struct SpaceDataSnapshotRequest;
+struct SpaceDataSnapshot;
 }  // namespace cellapp
 
 namespace dbapp {
@@ -102,6 +107,17 @@ class CellApp : public EntityApp {
   void OnGhostSetNextReal(const Address& src, Channel* ch, const cellapp::GhostSetNextReal& msg);
   void OnOffloadEntity(const Address& src, Channel* ch, const cellapp::OffloadEntity& msg);
   void OnOffloadEntityAck(const Address& src, Channel* ch, const cellapp::OffloadEntityAck& msg);
+
+  void OnSpaceDataUpdate(const Address& src, Channel* ch, const cellapp::SpaceDataUpdate& msg);
+  void OnSpaceDataDelete(const Address& src, Channel* ch, const cellapp::SpaceDataDelete& msg);
+  void OnSpaceDataSnapshotRequest(const Address& src, Channel* ch,
+                                  const cellapp::SpaceDataSnapshotRequest& msg);
+  void OnSpaceDataSnapshot(const Address& src, Channel* ch, const cellapp::SpaceDataSnapshot& msg);
+
+  // Owner-authoritative writes. The owner cellapp applies + fans out to
+  // every peer holding the space; non-owners forward to the owner.
+  void SetSpaceData(SpaceID space_id, uint16_t key_id, std::span<const uint8_t> value);
+  void RemoveSpaceData(SpaceID space_id, uint16_t key_id);
 
   void OnGetEntityIdsAck(Channel& ch, const dbapp::GetEntityIdsAck& msg);
 
@@ -250,6 +266,20 @@ class CellApp : public EntityApp {
   // Sends cellappmgr::InformCellLoad. No-op if not yet registered
   // (cellappmgr_channel_ null or app_id_ == 0).
   void SendInformCellLoad();
+
+  // SpaceData routing helpers. `exclude` lets a forwarded write skip
+  // bouncing back to its sender; owner = cellapp holding the BSP primary cell.
+  [[nodiscard]] auto FindSpaceOwnerChannel(const Space& space) -> Channel*;
+  void BroadcastSpaceDataUpdate(const Space& space, uint16_t key_id,
+                                std::span<const uint8_t> value, const Address* exclude);
+  void BroadcastSpaceDataDelete(const Space& space, uint16_t key_id, const Address* exclude);
+
+  // Fan-out to every witness in the space — called after each SpaceData
+  // mutation so client observers receive the change outside the entity AoI path.
+  void PushSpaceDataUpdateToWitnesses(Space& space, uint16_t key_id,
+                                      std::span<const uint8_t> value);
+  void PushSpaceDataDeleteToWitnesses(Space& space, uint16_t key_id);
+  void PushSpaceDataInitToWitnesses(Space& space);
 
   std::unordered_map<SpaceID, std::unique_ptr<Space>> spaces_;
 

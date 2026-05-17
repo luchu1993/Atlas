@@ -29,6 +29,9 @@ internal unsafe struct NativeCallbackTable
     public nint OnRpcComplete;
     // Triggers the entity's LifecycleCancellation source.
     public nint EntityLifecycleCancel;
+    // Raised by TimerController on every fire; user_arg threads back the
+    // script-supplied id so scripts disambiguate multiple timers per entity.
+    public nint OnTimerFired;
 }
 
 internal static unsafe class NativeCallbacks
@@ -59,6 +62,7 @@ internal static unsafe class NativeCallbacks
             (nint)(delegate* unmanaged<IntPtr, int, byte*, int, void>)&OnRpcComplete;
         table.EntityLifecycleCancel =
             (nint)(delegate* unmanaged<uint, void>)&EntityLifecycleCancel;
+        table.OnTimerFired = (nint)(delegate* unmanaged<uint, int, void>)&OnTimerFired;
 
         NativeApi.SetNativeCallbacks(&table, sizeof(NativeCallbackTable));
     }
@@ -408,6 +412,20 @@ internal static unsafe class NativeCallbacks
         {
             ThreadGuard.EnsureMainThread();
             EntityManager.Instance.Get(entityId)?.TriggerLifecycleCancellation();
+        }
+        catch (Exception ex)
+        {
+            ErrorBridge.SetError(ex);
+        }
+    }
+
+    [UnmanagedCallersOnly]
+    public static void OnTimerFired(uint entityId, int userArg)
+    {
+        try
+        {
+            ThreadGuard.EnsureMainThread();
+            EntityManager.Instance.Get(entityId)?.DispatchTimerFired(userArg);
         }
         catch (Exception ex)
         {

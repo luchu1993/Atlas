@@ -118,6 +118,12 @@ enum class CellApp : uint16_t {
   // CellApp -> BaseApp ack for kDestroyCellEntity; lets BaseApp gate a
   // follow-up login on cell-side cleanup completion.
   kDestroyCellEntityAck = 3120,
+  // Inter-CellApp SpaceData broadcast (owner-authoritative; non-owners
+  // forward writes via kSpaceDataUpdate to owner, which fans out).
+  kSpaceDataUpdate = 3130,
+  kSpaceDataDelete = 3131,
+  kSpaceDataSnapshotRequest = 3132,
+  kSpaceDataSnapshot = 3133,
 };
 
 // CellAppMgr owns both registration/load and control-plane IDs.
@@ -240,6 +246,10 @@ ATLAS_ASSERT_ID_RANGE(CellApp::kGhostSnapshotRefresh, 3000, 3999);
 ATLAS_ASSERT_ID_RANGE(CellApp::kOffloadEntity, 3000, 3999);
 ATLAS_ASSERT_ID_RANGE(CellApp::kOffloadEntityAck, 3000, 3999);
 ATLAS_ASSERT_ID_RANGE(CellApp::kDestroyCellEntityAck, 3000, 3999);
+ATLAS_ASSERT_ID_RANGE(CellApp::kSpaceDataUpdate, 3000, 3999);
+ATLAS_ASSERT_ID_RANGE(CellApp::kSpaceDataDelete, 3000, 3999);
+ATLAS_ASSERT_ID_RANGE(CellApp::kSpaceDataSnapshotRequest, 3000, 3999);
+ATLAS_ASSERT_ID_RANGE(CellApp::kSpaceDataSnapshot, 3000, 3999);
 
 ATLAS_ASSERT_ID_RANGE(CellAppMgr::kRegisterCellApp, 7000, 7099);
 ATLAS_ASSERT_ID_RANGE(CellAppMgr::kRegisterCellAppAck, 7000, 7099);

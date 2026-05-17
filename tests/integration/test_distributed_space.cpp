@@ -30,10 +30,12 @@
 
 #include <gtest/gtest.h>
 
+#include "cell.h"
 #include "cell_entity.h"
 #include "cellapp.h"
 #include "cellapp/intercell_messages.h"
 #include "cellapp_messages.h"
+#include "cellappmgr/bsp_tree.h"
 #include "entitydef/entity_def_registry.h"
 #include "math/vector3.h"
 #include "network/channel.h"
@@ -91,6 +93,23 @@ struct CellAppHost {
     (void)t.RegisterTypedHandler<cellapp::OffloadEntityAck>(
         [this](const Address& src, Channel* ch, const cellapp::OffloadEntityAck& m) {
           app.OnOffloadEntityAck(src, ch, m);
+        });
+    (void)t.RegisterTypedHandler<cellapp::SpaceDataUpdate>(
+        [this](const Address& src, Channel* ch, const cellapp::SpaceDataUpdate& m) {
+          app.OnSpaceDataUpdate(src, ch, m);
+        });
+    (void)t.RegisterTypedHandler<cellapp::SpaceDataDelete>(
+        [this](const Address& src, Channel* ch, const cellapp::SpaceDataDelete& m) {
+          app.OnSpaceDataDelete(src, ch, m);
+        });
+    (void)t.RegisterTypedHandler<cellapp::SpaceDataSnapshotRequest>(
+        [this](const Address& src, Channel* ch,
+               const cellapp::SpaceDataSnapshotRequest& m) {
+          app.OnSpaceDataSnapshotRequest(src, ch, m);
+        });
+    (void)t.RegisterTypedHandler<cellapp::SpaceDataSnapshot>(
+        [this](const Address& src, Channel* ch, const cellapp::SpaceDataSnapshot& m) {
+          app.OnSpaceDataSnapshot(src, ch, m);
         });
   }
 
@@ -181,10 +200,6 @@ struct RealGhostFixture {
 
 }  // namespace
 
-// =============================================================================
-// 1. CreateGhost over real RUDP materialises a Ghost on the peer.
-// =============================================================================
-
 TEST(DistributedSpaceOverRudp, CreateGhost_InstantiatesGhostOnPeer) {
   RealGhostFixture fx;
   ASSERT_NE(fx.addr_a.Port(), 0u);
@@ -205,10 +220,6 @@ TEST(DistributedSpaceOverRudp, CreateGhost_InstantiatesGhostOnPeer) {
   EXPECT_FLOAT_EQ(ghost->Position().z, cg.position.z);
   EXPECT_EQ(ghost->Id(), cg.entity_id);
 }
-
-// =============================================================================
-// 2. GhostPositionUpdate advances the peer Ghost's volatile state.
-// =============================================================================
 
 TEST(DistributedSpaceOverRudp, GhostPositionUpdate_AdvancesPeerGhost) {
   RealGhostFixture fx;
@@ -237,13 +248,8 @@ TEST(DistributedSpaceOverRudp, GhostPositionUpdate_AdvancesPeerGhost) {
   EXPECT_FLOAT_EQ(g->Direction().z, 1.f);
 }
 
-// =============================================================================
-// 3. GhostDelta advances the peer Ghost's replication seq.
-//
-// Seed the Ghost with event_seq=5 so the first delta at seq=6 is a valid
-// in-order advance (GhostApplyDelta drops stale / non-advancing seqs).
-// =============================================================================
-
+// Seeds the Ghost with event_seq=5 so the first delta at seq=6 is a
+// valid in-order advance (GhostApplyDelta drops non-advancing seqs).
 TEST(DistributedSpaceOverRudp, GhostDelta_AdvancesPeerReplicationSeq) {
   RealGhostFixture fx;
   ASSERT_NE(fx.ch_a_to_b, nullptr);
@@ -271,16 +277,8 @@ TEST(DistributedSpaceOverRudp, GhostDelta_AdvancesPeerReplicationSeq) {
   })) << "GhostDelta did not advance Ghost replication seq on peer";
 }
 
-// =============================================================================
-// 4. OffloadEntity over RUDP rehydrates a Real on the peer AND the
-//    receiver's OffloadEntityAck round-trips.
-//
-// We seed A's pending_offloads_ manually (bypassing TickOffloadChecker,
-// which would also drive ConvertRealToGhost + send — both tested in
-// unit-level tests). The ack-observable assertion is that A's
-// pending_offloads_ drains once the ack arrives.
-// =============================================================================
-
+// Seeds A's pending_offloads_ manually (bypassing TickOffloadChecker,
+// covered by unit tests). Ack drains the pending entry on success.
 TEST(DistributedSpaceOverRudp, OffloadEntity_RehydratesPeerRealAndAcks) {
   RealGhostFixture fx;
   ASSERT_NE(fx.ch_a_to_b, nullptr);
@@ -320,6 +318,135 @@ TEST(DistributedSpaceOverRudp, OffloadEntity_RehydratesPeerRealAndAcks) {
   // arrives on the bidirectional RUDP channel.
   ASSERT_TRUE(PumpUntil(fx.A, fx.B, [&] { return fx.A.app.PendingOffloadsForTest().empty(); }))
       << "OffloadEntityAck did not round-trip to sender (pending_offloads not drained)";
+}
+
+namespace {
+
+// Two-cellapp BSP where A holds the primary leaf (= owner), B holds the
+// split-right leaf (= ghost). Cross-RUDP peer channels pre-registered.
+struct SpaceDataFixture {
+  CellAppHost A{"sd_a"};
+  CellAppHost B{"sd_b"};
+  Address addr_a;
+  Address addr_b;
+  ReliableUdpChannel* ch_a_to_b{nullptr};
+  ReliableUdpChannel* ch_b_to_a{nullptr};
+  static constexpr SpaceID kSpaceId = 7;
+  static constexpr cellappmgr::CellID kCellPrimary = 1;
+  static constexpr cellappmgr::CellID kCellRight = 2;
+
+  SpaceDataFixture() {
+    EntityDefRegistry::Instance().clear();
+    addr_a = A.StartServer();
+    addr_b = B.StartServer();
+    auto r_ab = A.network.ConnectRudp(addr_b);
+    auto r_ba = B.network.ConnectRudp(addr_a);
+    EXPECT_TRUE(r_ab.HasValue()) << (r_ab.HasValue() ? "" : r_ab.Error().Message());
+    EXPECT_TRUE(r_ba.HasValue()) << (r_ba.HasValue() ? "" : r_ba.Error().Message());
+    ch_a_to_b = r_ab.HasValue() ? *r_ab : nullptr;
+    ch_b_to_a = r_ba.HasValue() ? *r_ba : nullptr;
+
+    cellapp::CreateSpace cs;
+    cs.space_id = kSpaceId;
+    A.app.OnCreateSpace({}, nullptr, cs);
+    B.app.OnCreateSpace({}, nullptr, cs);
+
+    // Both sides receive the same split BSP — owner A also needs to know
+    // B holds the right leaf so BroadcastSpaceDataUpdate finds B as a peer.
+    Plant(A.app, kCellPrimary, addr_a, /*split_right=*/std::make_optional(addr_b));
+    Plant(B.app, kCellRight, addr_a, /*split_right=*/std::make_optional(addr_b));
+
+    A.app.PeerRegistryForTest().InsertForTest(addr_b, ch_a_to_b);
+    B.app.PeerRegistryForTest().InsertForTest(addr_a, ch_b_to_a);
+  }
+
+  ~SpaceDataFixture() { EntityDefRegistry::Instance().clear(); }
+
+  // Builds a single-leaf or split BSP tree and registers the local cell
+  // that this cellapp authoritatively holds.
+  static void Plant(CellApp& app, cellappmgr::CellID local_cell_id, const Address& primary_addr,
+                    std::optional<Address> split_right_addr) {
+    auto* space = app.FindSpace(kSpaceId);
+    BSPTree tree;
+    CellInfo primary;
+    primary.cell_id = kCellPrimary;
+    primary.cellapp_addr = primary_addr;
+    tree.InitSingleCell(primary);
+    if (split_right_addr.has_value()) {
+      CellInfo right;
+      right.cell_id = kCellRight;
+      right.cellapp_addr = *split_right_addr;
+      ASSERT_TRUE(tree.Split(kCellPrimary, BSPAxis::kX, 0.f, right).HasValue());
+    }
+    space->AddLocalCell(std::make_unique<Cell>(*space, local_cell_id, CellBounds{}));
+    space->SetBspTree(std::move(tree));
+  }
+};
+
+}  // namespace
+
+TEST(SpaceDataOverRudp, OwnerWriteMirrorsToGhost) {
+  SpaceDataFixture fx;
+  ASSERT_TRUE(fx.A.app.FindSpace(fx.kSpaceId)->IsOwner());
+  ASSERT_FALSE(fx.B.app.FindSpace(fx.kSpaceId)->IsOwner());
+
+  const uint8_t value[] = {0x01, 0x02, 0x03, 0x04};
+  fx.A.app.SetSpaceData(fx.kSpaceId, /*key_id=*/10,
+                        std::span<const uint8_t>(value, 4));
+
+  ASSERT_TRUE(PumpUntil(fx.A, fx.B, [&] {
+    auto* v = fx.B.app.FindSpace(fx.kSpaceId)->Data().Get(10);
+    return v != nullptr && v->size() == 4;
+  })) << "Ghost B never observed SpaceData update from owner A";
+
+  EXPECT_EQ(*fx.B.app.FindSpace(fx.kSpaceId)->Data().Get(10),
+            (std::vector<uint8_t>{0x01, 0x02, 0x03, 0x04}));
+}
+
+TEST(SpaceDataOverRudp, NonOwnerWriteForwardsToOwner) {
+  SpaceDataFixture fx;
+  const uint8_t value[] = {0xAA, 0xBB};
+  fx.B.app.SetSpaceData(fx.kSpaceId, /*key_id=*/20,
+                        std::span<const uint8_t>(value, 2));
+
+  ASSERT_TRUE(PumpUntil(fx.A, fx.B, [&] {
+    auto* v = fx.A.app.FindSpace(fx.kSpaceId)->Data().Get(20);
+    return v != nullptr && v->size() == 2;
+  })) << "Owner A never received forwarded SpaceData write from ghost B";
+}
+
+TEST(SpaceDataOverRudp, OwnerDeleteMirrorsToGhost) {
+  SpaceDataFixture fx;
+  const uint8_t value[] = {0x42};
+  fx.A.app.SetSpaceData(fx.kSpaceId, 30, std::span<const uint8_t>(value, 1));
+  ASSERT_TRUE(PumpUntil(fx.A, fx.B, [&] {
+    return fx.B.app.FindSpace(fx.kSpaceId)->Data().Contains(30);
+  }));
+
+  fx.A.app.RemoveSpaceData(fx.kSpaceId, 30);
+  ASSERT_TRUE(PumpUntil(fx.A, fx.B, [&] {
+    return !fx.B.app.FindSpace(fx.kSpaceId)->Data().Contains(30);
+  })) << "Ghost B did not observe SpaceData delete from owner A";
+}
+
+TEST(SpaceDataOverRudp, SnapshotRequestSeedsLateJoiner) {
+  SpaceDataFixture fx;
+  const uint8_t a[] = {0x01};
+  const uint8_t b[] = {0x02, 0x03};
+  fx.A.app.SetSpaceData(fx.kSpaceId, 1, std::span<const uint8_t>(a, 1));
+  fx.A.app.SetSpaceData(fx.kSpaceId, 2, std::span<const uint8_t>(b, 2));
+  fx.B.app.FindSpace(fx.kSpaceId)->Data().Clear();
+
+  cellapp::SpaceDataSnapshotRequest req;
+  req.space_id = fx.kSpaceId;
+  ASSERT_TRUE(fx.ch_b_to_a->SendMessage(req).HasValue());
+
+  ASSERT_TRUE(PumpUntil(fx.A, fx.B, [&] {
+    auto& d = fx.B.app.FindSpace(fx.kSpaceId)->Data();
+    return d.Size() == 2 && d.Contains(1) && d.Contains(2);
+  })) << "Late joiner B did not receive SpaceData snapshot from owner A";
+
+  EXPECT_TRUE(fx.B.app.FindSpace(fx.kSpaceId)->IsDataInitialized());
 }
 
 }  // namespace atlas

@@ -114,7 +114,78 @@ auto BuildEnterEnvelope(EntityID public_entity_id, uint16_t type_id, const math:
   return out;
 }
 
+auto BuildSpaceDataInitEnvelope(SpaceID space_id, const SpaceData& data) -> std::vector<std::byte> {
+  std::vector<std::byte> out;
+  // Two-pass: tally size for one reservation.
+  std::size_t payload_bytes = sizeof(uint32_t);
+  data.ForEach([&](SpaceData::KeyId, const SpaceData::ValueBytes& v) {
+    payload_bytes += sizeof(uint16_t) + sizeof(uint32_t) + v.size();
+  });
+  out.reserve(1 + sizeof(uint32_t) + payload_bytes);
+  out.push_back(static_cast<std::byte>(CellAoIEnvelopeKind::kSpaceDataInit));
+  for (int i = 0; i < 4; ++i)
+    out.push_back(static_cast<std::byte>((space_id >> (i * 8)) & 0xFF));
+  const auto count = static_cast<uint32_t>(data.Size());
+  for (int i = 0; i < 4; ++i)
+    out.push_back(static_cast<std::byte>((count >> (i * 8)) & 0xFF));
+  data.ForEach([&](SpaceData::KeyId key, const SpaceData::ValueBytes& v) {
+    for (int i = 0; i < 2; ++i)
+      out.push_back(static_cast<std::byte>((key >> (i * 8)) & 0xFF));
+    const auto vlen = static_cast<uint32_t>(v.size());
+    for (int i = 0; i < 4; ++i)
+      out.push_back(static_cast<std::byte>((vlen >> (i * 8)) & 0xFF));
+    for (uint8_t b : v) out.push_back(static_cast<std::byte>(b));
+  });
+  return out;
+}
+
+auto BuildSpaceDataUpdateEnvelope(SpaceID space_id, uint16_t key_id,
+                                  std::span<const uint8_t> value) -> std::vector<std::byte> {
+  std::vector<std::byte> out;
+  out.reserve(1 + sizeof(uint32_t) + sizeof(uint16_t) + sizeof(uint32_t) + value.size());
+  out.push_back(static_cast<std::byte>(CellAoIEnvelopeKind::kSpaceDataUpdate));
+  for (int i = 0; i < 4; ++i)
+    out.push_back(static_cast<std::byte>((space_id >> (i * 8)) & 0xFF));
+  for (int i = 0; i < 2; ++i)
+    out.push_back(static_cast<std::byte>((key_id >> (i * 8)) & 0xFF));
+  const auto vlen = static_cast<uint32_t>(value.size());
+  for (int i = 0; i < 4; ++i)
+    out.push_back(static_cast<std::byte>((vlen >> (i * 8)) & 0xFF));
+  for (uint8_t b : value) out.push_back(static_cast<std::byte>(b));
+  return out;
+}
+
+auto BuildSpaceDataDeleteEnvelope(SpaceID space_id, uint16_t key_id) -> std::vector<std::byte> {
+  std::vector<std::byte> out;
+  out.reserve(1 + sizeof(uint32_t) + sizeof(uint16_t));
+  out.push_back(static_cast<std::byte>(CellAoIEnvelopeKind::kSpaceDataDelete));
+  for (int i = 0; i < 4; ++i)
+    out.push_back(static_cast<std::byte>((space_id >> (i * 8)) & 0xFF));
+  for (int i = 0; i < 2; ++i)
+    out.push_back(static_cast<std::byte>((key_id >> (i * 8)) & 0xFF));
+  return out;
+}
+
 }  // namespace
+
+void Witness::SendSpaceDataInit(SpaceID space_id, const SpaceData& data) {
+  if (!send_reliable_) return;
+  auto env = BuildSpaceDataInitEnvelope(space_id, data);
+  send_reliable_(env);
+}
+
+void Witness::SendSpaceDataUpdate(SpaceID space_id, uint16_t key_id,
+                                  std::span<const uint8_t> value) {
+  if (!send_reliable_) return;
+  auto env = BuildSpaceDataUpdateEnvelope(space_id, key_id, value);
+  send_reliable_(env);
+}
+
+void Witness::SendSpaceDataDelete(SpaceID space_id, uint16_t key_id) {
+  if (!send_reliable_) return;
+  auto env = BuildSpaceDataDeleteEnvelope(space_id, key_id);
+  send_reliable_(env);
+}
 
 Witness::Witness(CellEntity& owner, float aoi_radius, float hysteresis, SendFn send_reliable,
                  SendFn send_unreliable)

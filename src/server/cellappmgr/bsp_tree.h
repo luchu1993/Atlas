@@ -180,6 +180,10 @@ class BSPTree {
   [[nodiscard]] auto FindCell(float x, float z) const -> const CellInfo*;
   [[nodiscard]] auto FindCellById(cellappmgr::CellID id) const -> const CellInfo*;
   [[nodiscard]] auto FindCellByIdMutable(cellappmgr::CellID id) -> CellInfo*;
+
+  // O(1) cached id of the originally-allocated leaf. Invariant: Split
+  // preserves the original leaf on the left, so primary never changes.
+  [[nodiscard]] auto PrimaryCellId() const -> cellappmgr::CellID { return primary_cell_id_; }
   void VisitRect(const CellBounds& rect, const std::function<void(const CellInfo&)>& visitor) const;
 
   void UpdateLoad();
@@ -206,8 +210,13 @@ class BSPTree {
   [[nodiscard]] auto Root() const -> const BSPNode* { return root_.get(); }
 
  private:
+  // Refreshed only on InitSingleCell / Deserialize; Split / Balance leave it
+  // alone because the original leaf stays on the left side.
+  void RecomputePrimaryCellId();
+
   std::unique_ptr<BSPNode> root_;
   CellBounds root_bounds_{};  // +/-inf by default
+  cellappmgr::CellID primary_cell_id_{0};
 };
 
 }  // namespace atlas

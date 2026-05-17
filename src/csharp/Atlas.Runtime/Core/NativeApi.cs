@@ -200,6 +200,58 @@ internal static unsafe partial class NativeApi
         SetAoIRadiusNative(entityId, radius, hysteresis);
     }
 
+    [LibraryImport(LibName, EntryPoint = "AtlasSetSpaceData")]
+    private static partial void SetSpaceDataNative(uint spaceId, ushort keyId, byte* value, int len);
+
+    [LibraryImport(LibName, EntryPoint = "AtlasRemoveSpaceData")]
+    private static partial void RemoveSpaceDataNative(uint spaceId, ushort keyId);
+
+    [LibraryImport(LibName, EntryPoint = "AtlasGetEntitySpaceId")]
+    private static partial uint GetEntitySpaceIdNative(uint entityId);
+
+    [LibraryImport(LibName, EntryPoint = "AtlasAddTimerController")]
+    private static partial int AddTimerControllerNative(uint entityId, float interval,
+                                                        [MarshalAs(UnmanagedType.U1)] bool repeat,
+                                                        int userArg);
+
+    [LibraryImport(LibName, EntryPoint = "AtlasCancelController")]
+    private static partial void CancelControllerNative(uint entityId, int controllerId);
+
+    /// <summary>Per-entity timer; state migrates with the entity on offload. Returns 0 on failure.</summary>
+    public static int AddTimerController(uint entityId, float intervalSeconds, bool repeat,
+                                         int userArg)
+    {
+        ThreadGuard.EnsureMainThread();
+        return AddTimerControllerNative(entityId, intervalSeconds, repeat, userArg);
+    }
+
+    public static void CancelController(uint entityId, int controllerId)
+    {
+        ThreadGuard.EnsureMainThread();
+        CancelControllerNative(entityId, controllerId);
+    }
+
+    /// <summary>Returns the entity's owning space id, or 0 if unknown.</summary>
+    public static uint GetEntitySpaceId(uint entityId)
+    {
+        ThreadGuard.EnsureMainThread();
+        return GetEntitySpaceIdNative(entityId);
+    }
+
+    /// <summary>Owner-authoritative SpaceData write — fans out to peer cellapps and local witnesses.</summary>
+    public static void SetSpaceData(uint spaceId, ushort keyId, ReadOnlySpan<byte> value)
+    {
+        ThreadGuard.EnsureMainThread();
+        fixed (byte* p = value)
+            SetSpaceDataNative(spaceId, keyId, p, value.Length);
+    }
+
+    public static void RemoveSpaceData(uint spaceId, ushort keyId)
+    {
+        ThreadGuard.EnsureMainThread();
+        RemoveSpaceDataNative(spaceId, keyId);
+    }
+
     [LibraryImport(LibName, EntryPoint = "AtlasSetNativeCallbacks")]
     private static partial void SetNativeCallbacksNative(void* nativeCallbacks, int len);
 

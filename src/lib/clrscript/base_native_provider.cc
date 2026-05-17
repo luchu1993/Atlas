@@ -114,6 +114,17 @@ void BaseNativeProvider::SetAoIRadius(uint32_t entity_id, float /*radius*/, floa
   ATLAS_LOG_ERROR("set_aoi_radius() not supported on this process type (entity_id={})", entity_id);
 }
 
+void BaseNativeProvider::SetSpaceData(uint32_t space_id, uint16_t /*key_id*/,
+                                      const std::byte* /*value*/, int32_t /*len*/) {
+  ATLAS_LOG_ERROR("set_space_data() not supported on this process type (space_id={})", space_id);
+}
+
+void BaseNativeProvider::RemoveSpaceData(uint32_t space_id, uint16_t /*key_id*/) {
+  ATLAS_LOG_ERROR("remove_space_data() not supported on this process type (space_id={})", space_id);
+}
+
+auto BaseNativeProvider::GetEntitySpaceId(uint32_t /*entity_id*/) -> uint32_t { return 0; }
+
 void BaseNativeProvider::SetNativeCallbacks(const void* /*native_callbacks*/, int32_t /*len*/) {}
 
 void BaseNativeProvider::SetEntityPosition(uint32_t entity_id, float /*x*/, float /*y*/,

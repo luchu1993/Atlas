@@ -312,6 +312,73 @@ TEST(IntercellMessages, OffloadEntityAck_RoundTripFailure) {
   EXPECT_FALSE(rt->success);
 }
 
+// ─── SpaceData ──────────────────────────────────────────────────────────────
+
+TEST(IntercellMessages, SpaceDataUpdateRoundTrip) {
+  SpaceDataUpdate msg;
+  msg.space_id = 7;
+  msg.key_id = 42;
+  msg.value = {0xDE, 0xAD, 0xBE, 0xEF};
+  auto rt = RoundTrip(msg);
+  ASSERT_TRUE(rt.has_value());
+  EXPECT_EQ(rt->space_id, 7u);
+  EXPECT_EQ(rt->key_id, 42u);
+  EXPECT_EQ(rt->value, (std::vector<uint8_t>{0xDE, 0xAD, 0xBE, 0xEF}));
+}
+
+TEST(IntercellMessages, SpaceDataUpdateRoundTripEmptyValue) {
+  SpaceDataUpdate msg;
+  msg.space_id = 1;
+  msg.key_id = 1;
+  auto rt = RoundTrip(msg);
+  ASSERT_TRUE(rt.has_value());
+  EXPECT_TRUE(rt->value.empty());
+}
+
+TEST(IntercellMessages, SpaceDataDeleteRoundTrip) {
+  SpaceDataDelete msg;
+  msg.space_id = 9;
+  msg.key_id = 17;
+  auto rt = RoundTrip(msg);
+  ASSERT_TRUE(rt.has_value());
+  EXPECT_EQ(rt->space_id, 9u);
+  EXPECT_EQ(rt->key_id, 17u);
+}
+
+TEST(IntercellMessages, SpaceDataSnapshotRequestRoundTrip) {
+  SpaceDataSnapshotRequest msg;
+  msg.space_id = 123;
+  auto rt = RoundTrip(msg);
+  ASSERT_TRUE(rt.has_value());
+  EXPECT_EQ(rt->space_id, 123u);
+}
+
+TEST(IntercellMessages, SpaceDataSnapshotRoundTripEmpty) {
+  SpaceDataSnapshot msg;
+  msg.space_id = 5;
+  auto rt = RoundTrip(msg);
+  ASSERT_TRUE(rt.has_value());
+  EXPECT_EQ(rt->space_id, 5u);
+  EXPECT_TRUE(rt->entries.empty());
+}
+
+TEST(IntercellMessages, SpaceDataSnapshotRoundTripMany) {
+  SpaceDataSnapshot msg;
+  msg.space_id = 5;
+  msg.entries.push_back({10, {0xAA}});
+  msg.entries.push_back({20, {0xBB, 0xCC}});
+  msg.entries.push_back({30, {}});
+  auto rt = RoundTrip(msg);
+  ASSERT_TRUE(rt.has_value());
+  ASSERT_EQ(rt->entries.size(), 3u);
+  EXPECT_EQ(rt->entries[0].key_id, 10u);
+  EXPECT_EQ(rt->entries[0].value, (std::vector<uint8_t>{0xAA}));
+  EXPECT_EQ(rt->entries[1].key_id, 20u);
+  EXPECT_EQ(rt->entries[1].value, (std::vector<uint8_t>{0xBB, 0xCC}));
+  EXPECT_EQ(rt->entries[2].key_id, 30u);
+  EXPECT_TRUE(rt->entries[2].value.empty());
+}
+
 // ─── Message ID stability ────────────────────────────────────────────────────
 //
 // If anyone renumbers these in message_ids.h the wire protocol breaks for
@@ -410,4 +477,8 @@ TEST(IntercellMessages, MessageIdsAreStable) {
   EXPECT_EQ(msg_id::Id(msg_id::CellApp::kGhostSnapshotRefresh), 3106u);
   EXPECT_EQ(msg_id::Id(msg_id::CellApp::kOffloadEntity), 3110u);
   EXPECT_EQ(msg_id::Id(msg_id::CellApp::kOffloadEntityAck), 3111u);
+  EXPECT_EQ(msg_id::Id(msg_id::CellApp::kSpaceDataUpdate), 3130u);
+  EXPECT_EQ(msg_id::Id(msg_id::CellApp::kSpaceDataDelete), 3131u);
+  EXPECT_EQ(msg_id::Id(msg_id::CellApp::kSpaceDataSnapshotRequest), 3132u);
+  EXPECT_EQ(msg_id::Id(msg_id::CellApp::kSpaceDataSnapshot), 3133u);
 }

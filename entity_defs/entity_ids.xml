@@ -16,4 +16,6 @@
   <entity name="StressAvatar" id="3"/>
   <entity name="Npc" id="4"/>
   <entity name="Projectile" id="5" deprecated="true"/>
+  <entity name="Space" id="6"/>
+  <entity name="MvpSpace" id="7"/>
 </entity_ids>

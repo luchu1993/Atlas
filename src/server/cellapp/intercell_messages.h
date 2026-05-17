@@ -569,6 +569,165 @@ struct OffloadEntityAck {
 };
 static_assert(NetworkMessage<OffloadEntityAck>);
 
+// Owner-authoritative SpaceData wire: writes fan out from the BSP
+// primary-cell cellapp; snapshot seeds a newly-joining cellapp.
+
+struct SpaceDataUpdate {
+  SpaceID space_id{kInvalidSpaceID};
+  uint16_t key_id{0};
+  std::vector<uint8_t> value;
+
+  static auto Descriptor() -> const MessageDesc& {
+    static const MessageDesc kDesc{msg_id::Id(msg_id::CellApp::kSpaceDataUpdate),
+                                   "cellapp::SpaceDataUpdate",
+                                   MessageLengthStyle::kVariable,
+                                   -1,
+                                   MessageReliability::kReliable,
+                                   MessageUrgency::kBatched};
+    return kDesc;
+  }
+
+  void Serialize(BinaryWriter& w) const {
+    w.Write(space_id);
+    w.Write(key_id);
+    w.WritePackedInt(static_cast<uint32_t>(value.size()));
+    if (!value.empty())
+      w.WriteBytes(std::as_bytes(std::span<const uint8_t>(value.data(), value.size())));
+  }
+
+  static auto Deserialize(BinaryReader& r) -> Result<SpaceDataUpdate> {
+    auto sid = r.Read<uint32_t>();
+    auto kid = r.Read<uint16_t>();
+    auto vlen = r.ReadPackedInt();
+    if (!sid || !kid || !vlen)
+      return Error{ErrorCode::kInvalidArgument, "SpaceDataUpdate: truncated"};
+    SpaceDataUpdate msg;
+    msg.space_id = *sid;
+    msg.key_id = *kid;
+    if (*vlen > 0) {
+      auto bytes = r.ReadBytes(*vlen);
+      if (!bytes) return Error{ErrorCode::kInvalidArgument, "SpaceDataUpdate: value truncated"};
+      msg.value.assign(reinterpret_cast<const uint8_t*>(bytes->data()),
+                       reinterpret_cast<const uint8_t*>(bytes->data()) + bytes->size());
+    }
+    return msg;
+  }
+};
+static_assert(NetworkMessage<SpaceDataUpdate>);
+
+struct SpaceDataDelete {
+  SpaceID space_id{kInvalidSpaceID};
+  uint16_t key_id{0};
+
+  static auto Descriptor() -> const MessageDesc& {
+    static const MessageDesc kDesc{msg_id::Id(msg_id::CellApp::kSpaceDataDelete),
+                                   "cellapp::SpaceDataDelete",
+                                   MessageLengthStyle::kFixed,
+                                   static_cast<int>(sizeof(uint32_t) + sizeof(uint16_t)),
+                                   MessageReliability::kReliable,
+                                   MessageUrgency::kBatched};
+    return kDesc;
+  }
+
+  void Serialize(BinaryWriter& w) const {
+    w.Write(space_id);
+    w.Write(key_id);
+  }
+
+  static auto Deserialize(BinaryReader& r) -> Result<SpaceDataDelete> {
+    auto sid = r.Read<uint32_t>();
+    auto kid = r.Read<uint16_t>();
+    if (!sid || !kid) return Error{ErrorCode::kInvalidArgument, "SpaceDataDelete: truncated"};
+    SpaceDataDelete msg;
+    msg.space_id = *sid;
+    msg.key_id = *kid;
+    return msg;
+  }
+};
+static_assert(NetworkMessage<SpaceDataDelete>);
+
+struct SpaceDataSnapshotRequest {
+  SpaceID space_id{kInvalidSpaceID};
+
+  static auto Descriptor() -> const MessageDesc& {
+    static const MessageDesc kDesc{msg_id::Id(msg_id::CellApp::kSpaceDataSnapshotRequest),
+                                   "cellapp::SpaceDataSnapshotRequest",
+                                   MessageLengthStyle::kFixed,
+                                   static_cast<int>(sizeof(uint32_t)),
+                                   MessageReliability::kReliable,
+                                   MessageUrgency::kImmediate};
+    return kDesc;
+  }
+
+  void Serialize(BinaryWriter& w) const { w.Write(space_id); }
+
+  static auto Deserialize(BinaryReader& r) -> Result<SpaceDataSnapshotRequest> {
+    auto sid = r.Read<uint32_t>();
+    if (!sid) return Error{ErrorCode::kInvalidArgument, "SpaceDataSnapshotRequest: truncated"};
+    SpaceDataSnapshotRequest msg;
+    msg.space_id = *sid;
+    return msg;
+  }
+};
+static_assert(NetworkMessage<SpaceDataSnapshotRequest>);
+
+struct SpaceDataSnapshot {
+  SpaceID space_id{kInvalidSpaceID};
+  struct Entry {
+    uint16_t key_id{0};
+    std::vector<uint8_t> value;
+  };
+  std::vector<Entry> entries;
+
+  static auto Descriptor() -> const MessageDesc& {
+    static const MessageDesc kDesc{msg_id::Id(msg_id::CellApp::kSpaceDataSnapshot),
+                                   "cellapp::SpaceDataSnapshot",
+                                   MessageLengthStyle::kVariable,
+                                   -1,
+                                   MessageReliability::kReliable,
+                                   MessageUrgency::kImmediate};
+    return kDesc;
+  }
+
+  void Serialize(BinaryWriter& w) const {
+    w.Write(space_id);
+    w.WritePackedInt(static_cast<uint32_t>(entries.size()));
+    for (const auto& e : entries) {
+      w.Write(e.key_id);
+      w.WritePackedInt(static_cast<uint32_t>(e.value.size()));
+      if (!e.value.empty())
+        w.WriteBytes(std::as_bytes(std::span<const uint8_t>(e.value.data(), e.value.size())));
+    }
+  }
+
+  static auto Deserialize(BinaryReader& r) -> Result<SpaceDataSnapshot> {
+    auto sid = r.Read<uint32_t>();
+    auto count = r.ReadPackedInt();
+    if (!sid || !count) return Error{ErrorCode::kInvalidArgument, "SpaceDataSnapshot: truncated"};
+    SpaceDataSnapshot msg;
+    msg.space_id = *sid;
+    msg.entries.reserve(*count);
+    for (uint32_t i = 0; i < *count; ++i) {
+      auto kid = r.Read<uint16_t>();
+      auto vlen = r.ReadPackedInt();
+      if (!kid || !vlen)
+        return Error{ErrorCode::kInvalidArgument, "SpaceDataSnapshot: entry truncated"};
+      Entry e;
+      e.key_id = *kid;
+      if (*vlen > 0) {
+        auto bytes = r.ReadBytes(*vlen);
+        if (!bytes)
+          return Error{ErrorCode::kInvalidArgument, "SpaceDataSnapshot: value truncated"};
+        e.value.assign(reinterpret_cast<const uint8_t*>(bytes->data()),
+                       reinterpret_cast<const uint8_t*>(bytes->data()) + bytes->size());
+      }
+      msg.entries.push_back(std::move(e));
+    }
+    return msg;
+  }
+};
+static_assert(NetworkMessage<SpaceDataSnapshot>);
+
 }  // namespace atlas::cellapp
 
 #endif  // ATLAS_SERVER_CELLAPP_INTERCELL_MESSAGES_H_

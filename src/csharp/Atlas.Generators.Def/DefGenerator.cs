@@ -98,14 +98,46 @@ public sealed class DefGenerator : IIncrementalGenerator
         var ((defsAndUsers, ctx), manifestSources) = input;
         var (parsed, users) = defsAndUsers;
 
-        if (parsed.IsDefaultOrEmpty || users.IsDefaultOrEmpty)
+        if (parsed.IsDefaultOrEmpty)
             return;
 
-        // Split entities and standalone components — both come down the
-        // same .def pipeline; the parser flagged which is which by root.
+        // Split entities, standalone components, and space-data manifests
+        // — parser flagged each by root element.
         var defs = parsed.Where(p => p.Entity != null).Select(p => p.Entity!).ToImmutableArray();
         var standaloneComponents = parsed.Where(p => p.StandaloneComponent != null)
                                           .Select(p => p.StandaloneComponent!).ToList();
+        var spaceDataDefs = parsed.Where(p => p.SpaceData != null)
+                                   .Select(p => p.SpaceData!).ToList();
+
+        // SpaceData keys: merge across all .def files, dedup by id+name,
+        // emit a single global registry independent of user [Entity] classes.
+        if (spaceDataDefs.Count > 0)
+        {
+            var seenIds = new HashSet<ushort>();
+            var seenNames = new HashSet<string>(StringComparer.Ordinal);
+            var merged = new List<SpaceDataKeyDefModel>();
+            foreach (var def in spaceDataDefs)
+            {
+                foreach (var key in def.Keys)
+                {
+                    if (!seenIds.Add(key.KeyId) || !seenNames.Add(key.Name))
+                    {
+                        spc.ReportDiagnostic(Diagnostic.Create(
+                            DefDiagnosticDescriptors.DEF006, Location.None,
+                            def.SourcePath,
+                            $"duplicate SpaceData key '{key.Name}' / id={key.KeyId}"));
+                        continue;
+                    }
+                    merged.Add(key);
+                }
+            }
+            var spaceDataSrc = Emitters.SpaceDataEmitter.Emit(merged);
+            spc.AddSource("SpaceDataKeys.g.cs",
+                          SourceText.From(spaceDataSrc, System.Text.Encoding.UTF8));
+        }
+
+        if (users.IsDefaultOrEmpty)
+            return;
 
         // Build def lookup.
         //

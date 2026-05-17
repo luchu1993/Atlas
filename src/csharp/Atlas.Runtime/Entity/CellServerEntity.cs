@@ -68,6 +68,10 @@ public abstract class CellServerEntity : ServerEntity
     // Native side fires AoI exit + invokes OnDestroy; refuses base-owned entities.
     public void DestroySelf() => NativeApi.DestroyCellEntity(EntityId);
 
+    // Owning space — looked up through the cellapp every read so the
+    // value tracks Offload / cross-space migration without extra hooks.
+    public uint SpaceId => NativeApi.GetEntitySpaceId(EntityId);
+
     // Pull spawn pos/dir from C++ CellEntity into our backing fields without
     // pushing back through the setters (which would round-trip to the same
     // C++ instance we just read from). Called once at RestoreEntity time.

@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using Atlas.DataTypes;
 using Atlas.Diagnostics;
 using Atlas.Serialization;
@@ -28,10 +29,16 @@ public static class ClientCallbacks
     private const byte kEntityLeave = 2;
     private const byte kEntityPositionUpdate = 3;
     private const byte kEntityPropertyUpdate = 4;
+    // The u32 id-field on these is space_id, not entity_id.
+    private const byte kSpaceDataInit = 5;
+    private const byte kSpaceDataUpdate = 6;
+    private const byte kSpaceDataDelete = 7;
 
     private static readonly ClientEntityManager s_entityMgr = new();
+    private static readonly SpaceDataManager s_spaceDataMgr = new();
 
     public static ClientEntityManager EntityManager => s_entityMgr;
+    public static SpaceDataManager SpaceDataManager => s_spaceDataMgr;
 
     public static void DispatchRpc(uint entityId, uint rpcId, ulong traceId,
                                    ReadOnlySpan<byte> payload)
@@ -149,11 +156,85 @@ public static class ClientCallbacks
             case kEntityPropertyUpdate:
                 DispatchPropertyUpdate(entityId, inner);
                 break;
+            case kSpaceDataInit:
+                DispatchSpaceDataInit(entityId, inner);
+                break;
+            case kSpaceDataUpdate:
+                DispatchSpaceDataUpdate(entityId, inner);
+                break;
+            case kSpaceDataDelete:
+                DispatchSpaceDataDelete(entityId, inner);
+                break;
             default:
                 Log.Error(
                     $"DispatchAoIEnvelope: unknown kind={kind} entityId={entityId}");
                 break;
         }
+    }
+
+    // kSpaceDataInit (witness.cc::BuildSpaceDataInitEnvelope): [u32 count][(u16 key, u32 vlen, vbytes)*].
+    private static void DispatchSpaceDataInit(uint spaceId, ReadOnlySpan<byte> inner)
+    {
+        if (inner.Length < 4)
+        {
+            Log.Error($"DispatchSpaceDataInit: truncated ({inner.Length} bytes)");
+            return;
+        }
+        var reader = new SpanReader(inner);
+        uint count = reader.ReadUInt32();
+        var entries = new List<(ushort, byte[])>((int)count);
+        for (uint i = 0; i < count; ++i)
+        {
+            if (reader.Remaining < 2 + 4)
+            {
+                Log.Error($"DispatchSpaceDataInit: truncated entry header at i={i}");
+                return;
+            }
+            ushort keyId = reader.ReadUInt16();
+            uint vlen = reader.ReadUInt32();
+            if ((uint)reader.Remaining < vlen)
+            {
+                Log.Error($"DispatchSpaceDataInit: truncated value (want={vlen} have={reader.Remaining})");
+                return;
+            }
+            var bytes = inner.Slice(reader.Position, (int)vlen).ToArray();
+            reader.Advance((int)vlen);
+            entries.Add((keyId, bytes));
+        }
+        s_spaceDataMgr.InitSpace(spaceId, entries);
+    }
+
+    // kSpaceDataUpdate (witness.cc::BuildSpaceDataUpdateEnvelope): [u16 key][u32 vlen][vbytes].
+    private static void DispatchSpaceDataUpdate(uint spaceId, ReadOnlySpan<byte> inner)
+    {
+        if (inner.Length < 2 + 4)
+        {
+            Log.Error($"DispatchSpaceDataUpdate: truncated ({inner.Length} bytes)");
+            return;
+        }
+        var reader = new SpanReader(inner);
+        ushort keyId = reader.ReadUInt16();
+        uint vlen = reader.ReadUInt32();
+        if ((uint)reader.Remaining < vlen)
+        {
+            Log.Error($"DispatchSpaceDataUpdate: truncated value");
+            return;
+        }
+        var bytes = inner.Slice(reader.Position, (int)vlen).ToArray();
+        s_spaceDataMgr.SetKey(spaceId, keyId, bytes);
+    }
+
+    // kSpaceDataDelete: [u16 key].
+    private static void DispatchSpaceDataDelete(uint spaceId, ReadOnlySpan<byte> inner)
+    {
+        if (inner.Length < 2)
+        {
+            Log.Error($"DispatchSpaceDataDelete: truncated ({inner.Length} bytes)");
+            return;
+        }
+        var reader = new SpanReader(inner);
+        ushort keyId = reader.ReadUInt16();
+        s_spaceDataMgr.RemoveKey(spaceId, keyId);
     }
 
     // kEntityEnter (witness.cc::BuildEnterEnvelope): [u16 typeId][3f pos][3f dir][u8 onGround][f64 serverTime][peerSnapshot].

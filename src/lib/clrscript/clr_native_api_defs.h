@@ -89,6 +89,17 @@
         (uint32_t entity_id, float radius, float hysteresis),                                      \
         atlas::GetNativeApiProvider().SetAoIRadius(entity_id, radius, hysteresis))                 \
                                                                                                    \
+    X(void, SetSpaceData,                                                                          \
+        (uint32_t space_id, uint16_t key_id, const uint8_t* value, int32_t len),                   \
+        atlas::GetNativeApiProvider().SetSpaceData(                                                 \
+            space_id, key_id, reinterpret_cast<const std::byte*>(value), len))                     \
+    X(void, RemoveSpaceData,                                                                       \
+        (uint32_t space_id, uint16_t key_id),                                                      \
+        atlas::GetNativeApiProvider().RemoveSpaceData(space_id, key_id))                            \
+    X(uint32_t, GetEntitySpaceId,                                                                  \
+        (uint32_t entity_id),                                                                      \
+        return atlas::GetNativeApiProvider().GetEntitySpaceId(entity_id))                          \
+                                                                                                   \
     X(void, SetNativeCallbacks,                                                                    \
         (const void* native_callbacks, int32_t len),                                               \
         atlas::GetNativeApiProvider().SetNativeCallbacks(native_callbacks, len))                    \

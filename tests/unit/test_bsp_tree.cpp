@@ -66,6 +66,42 @@ TEST(BSPTree, SplitX_RoutesByCoordinate) {
   EXPECT_EQ(t.FindCell(0.f, 0.f)->cell_id, 2u);
 }
 
+TEST(BSPTree, PrimaryCellId_EmptyTreeReturnsZero) {
+  BSPTree t;
+  EXPECT_EQ(t.PrimaryCellId(), 0u);
+}
+
+TEST(BSPTree, PrimaryCellId_SingleLeafReturnsThatLeaf) {
+  auto t = MakeSingleCellTree(7, 30001);
+  EXPECT_EQ(t.PrimaryCellId(), 7u);
+}
+
+TEST(BSPTree, PrimaryCellId_SplitKeepsOriginalOnLeft) {
+  auto t = MakeSingleCellTree(7, 30001);
+  ASSERT_TRUE(t.Split(7, BSPAxis::kX, 0.f, MakeLeafInfo(99, 30002)).HasValue());
+  EXPECT_EQ(t.PrimaryCellId(), 7u);
+}
+
+TEST(BSPTree, PrimaryCellId_StableThroughCascadingSplits) {
+  auto t = MakeSingleCellTree(1, 30001);
+  ASSERT_TRUE(t.Split(1, BSPAxis::kX, 0.f, MakeLeafInfo(2, 30002)).HasValue());
+  ASSERT_TRUE(t.Split(2, BSPAxis::kZ, 0.f, MakeLeafInfo(3, 30003)).HasValue());
+  ASSERT_TRUE(t.Split(1, BSPAxis::kZ, 0.f, MakeLeafInfo(4, 30004)).HasValue());
+  EXPECT_EQ(t.PrimaryCellId(), 1u);
+}
+
+TEST(BSPTree, PrimaryCellId_PreservedAcrossSerializeDeserialize) {
+  auto t = MakeSingleCellTree(7, 30001);
+  ASSERT_TRUE(t.Split(7, BSPAxis::kX, 0.f, MakeLeafInfo(8, 30002)).HasValue());
+  BinaryWriter w;
+  t.Serialize(w);
+  auto buf = w.Detach();
+  BinaryReader r(buf);
+  auto rt = BSPTree::Deserialize(r);
+  ASSERT_TRUE(rt.HasValue());
+  EXPECT_EQ(rt->PrimaryCellId(), 7u);
+}
+
 TEST(BSPTree, SplitX_LeafBoundsReflectSplit) {
   auto t = MakeSingleCellTree(1, 30001);
   auto r = t.Split(1, BSPAxis::kX, 50.f, MakeLeafInfo(2, 30002));

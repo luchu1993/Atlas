@@ -49,6 +49,7 @@ struct CellAppCallbackTable {
   ProximityEventFn proximity_event;
   CoroOnRpcCompleteFn coro_on_rpc_complete;
   EntityLifecycleCancelFn entity_lifecycle_cancel;
+  TimerEventFn timer_event;
 };
 #pragma pack(pop)
 
@@ -140,6 +141,29 @@ void CellAppNativeProvider::DestroyCellEntity(uint32_t entity_id) {
     return;
   }
   destroy_local_entity_fn_(entity_id);
+}
+
+void CellAppNativeProvider::SetSpaceData(uint32_t space_id, uint16_t key_id,
+                                         const std::byte* value, int32_t len) {
+  if (!set_space_data_fn_) {
+    ATLAS_LOG_ERROR("CellApp: SetSpaceData: not wired to CellApp (space_id={})", space_id);
+    return;
+  }
+  set_space_data_fn_(space_id, key_id, value, len);
+}
+
+void CellAppNativeProvider::RemoveSpaceData(uint32_t space_id, uint16_t key_id) {
+  if (!remove_space_data_fn_) {
+    ATLAS_LOG_ERROR("CellApp: RemoveSpaceData: not wired to CellApp (space_id={})", space_id);
+    return;
+  }
+  remove_space_data_fn_(space_id, key_id);
+}
+
+auto CellAppNativeProvider::GetEntitySpaceId(uint32_t entity_id) -> uint32_t {
+  auto* entity = lookup_ ? lookup_(entity_id) : nullptr;
+  if (!entity) return 0;
+  return entity->GetSpace().Id();
 }
 
 void CellAppNativeProvider::SetEntityPosition(uint32_t entity_id, float x, float y, float z) {
@@ -292,9 +316,13 @@ auto CellAppNativeProvider::AddTimerController(uint32_t entity_id, float interva
     ATLAS_LOG_WARNING("atlas_add_timer_controller on Ghost entity_id={} — rejected", entity_id);
     return 0;
   }
-  return static_cast<int32_t>(
-      entity->GetControllers().Add(std::make_unique<TimerController>(interval, repeat),
-                                   /*motion=*/nullptr, user_arg));
+  auto on_fire = [this, entity_id, user_arg](TimerController& /*self*/) {
+    if (timer_event_fn_ == nullptr) return;
+    timer_event_fn_(entity_id, user_arg);
+  };
+  return static_cast<int32_t>(entity->GetControllers().Add(
+      std::make_unique<TimerController>(interval, repeat, std::move(on_fire)),
+      /*motion=*/nullptr, user_arg));
 }
 
 auto CellAppNativeProvider::AddProximityController(uint32_t entity_id, float range,
@@ -365,6 +393,7 @@ void CellAppNativeProvider::SetNativeCallbacks(const void* native_callbacks, int
   // onProximityEnter/Leave never run.
   proximity_event_fn_ = table.proximity_event;
   entity_lifecycle_cancel_fn_ = table.entity_lifecycle_cancel;  // nullptr on older runtimes
+  timer_event_fn_ = table.timer_event;  // nullptr on older runtimes; TimerController fire becomes no-op
   ATLAS_LOG_INFO("CellApp: native callback table registered (len={})", len);
 }
 
