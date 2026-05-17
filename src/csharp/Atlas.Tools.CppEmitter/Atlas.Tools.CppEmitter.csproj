@@ -1,0 +1,15 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>$(AtlasTargetFramework)</TargetFramework>
+    <OutputType>Exe</OutputType>
+    <RootNamespace>Atlas.Tools.CppEmitter</RootNamespace>
+    <AssemblyName>Atlas.Tools.CppEmitter</AssemblyName>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.CodeAnalysis.CSharp" Version="4.3.0" />
+    <ProjectReference Include="..\Atlas.Defs.Parser\Atlas.Defs.Parser.csproj" />
+  </ItemGroup>
+
+</Project>

@@ -81,6 +81,15 @@ atlas_dotnet_project(
   DEPENDS atlas_shared_dll
 )
 
+# Atlas.Tools.CppEmitter — offline `.def` → .gen.h/.cc tool consumed by the
+# UE client build pipeline.
+atlas_dotnet_project(
+  NAME atlas_tools_cpp_emitter
+  PROJECT_FILE Atlas.Tools.CppEmitter/Atlas.Tools.CppEmitter.csproj
+  ASSEMBLY_NAME Atlas.Tools.CppEmitter.dll
+  DEPENDS atlas_defs_parser_dll
+)
+
 # Atlas.Tools.NetClientDemo — Phase 4 FFI verification harness for
 # atlas_net_client.dll. Only built when ATLAS_BUILD_NET_CLIENT is ON.
 # Run from its bin output, expects atlas_net_client.dll on PATH.
