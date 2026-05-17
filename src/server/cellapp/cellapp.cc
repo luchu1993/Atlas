@@ -1010,15 +1010,16 @@ void CellApp::PushSpaceDataInitToWitnesses(Space& space) {
 void CellApp::SetSpaceData(SpaceID space_id, uint16_t key_id, std::span<const uint8_t> value) {
   auto* space = FindSpace(space_id);
   if (!space) return;
-  if (space->IsOwner()) {
+  auto* owner_ch = FindSpaceOwnerChannel(*space);
+  // Owner = BSP says so, or single-cellapp deployment where cellappmgr
+  // never published a BSP (owner_ch unresolvable). Latter is local-authoritative.
+  if (space->IsOwner() || owner_ch == nullptr) {
     if (space->Data().Set(key_id, value)) {
       BroadcastSpaceDataUpdate(*space, key_id, value, /*exclude=*/nullptr);
       PushSpaceDataUpdateToWitnesses(*space, key_id, value);
     }
     return;
   }
-  auto* owner_ch = FindSpaceOwnerChannel(*space);
-  if (!owner_ch) return;
   cellapp::SpaceDataUpdate out;
   out.space_id = space_id;
   out.key_id = key_id;
@@ -1029,15 +1030,14 @@ void CellApp::SetSpaceData(SpaceID space_id, uint16_t key_id, std::span<const ui
 void CellApp::RemoveSpaceData(SpaceID space_id, uint16_t key_id) {
   auto* space = FindSpace(space_id);
   if (!space) return;
-  if (space->IsOwner()) {
+  auto* owner_ch = FindSpaceOwnerChannel(*space);
+  if (space->IsOwner() || owner_ch == nullptr) {
     if (space->Data().Remove(key_id)) {
       BroadcastSpaceDataDelete(*space, key_id, /*exclude=*/nullptr);
       PushSpaceDataDeleteToWitnesses(*space, key_id);
     }
     return;
   }
-  auto* owner_ch = FindSpaceOwnerChannel(*space);
-  if (!owner_ch) return;
   cellapp::SpaceDataDelete out;
   out.space_id = space_id;
   out.key_id = key_id;
