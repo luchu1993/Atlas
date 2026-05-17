@@ -91,4 +91,132 @@ int32_t AtlasEdrGetDigestSize(AtlasEdrContext* ctx) {
   return static_cast<int32_t>(ctx->registry.Digest().size());
 }
 
+const AtlasEdrEntity* AtlasEdrFindEntityById(AtlasEdrContext* ctx, uint16_t type_id) {
+  if (!ctx) return nullptr;
+  return reinterpret_cast<const AtlasEdrEntity*>(ctx->registry.FindById(type_id));
+}
+
+const AtlasEdrEntity* AtlasEdrFindEntityByName(AtlasEdrContext* ctx, const char* name) {
+  if (!ctx || !name) return nullptr;
+  return reinterpret_cast<const AtlasEdrEntity*>(ctx->registry.FindByName(name));
+}
+
+uint16_t AtlasEdrEntityTypeId(const AtlasEdrEntity* entity) {
+  if (!entity) return 0;
+  return reinterpret_cast<const atlas::EntityTypeDescriptor*>(entity)->type_id;
+}
+
+const char* AtlasEdrEntityName(const AtlasEdrEntity* entity) {
+  if (!entity) return "";
+  return reinterpret_cast<const atlas::EntityTypeDescriptor*>(entity)->name.c_str();
+}
+
+uint32_t AtlasEdrFindRpcId(AtlasEdrContext* ctx, const char* entity_name,
+                            const char* method_name) {
+  if (!ctx || !entity_name || !method_name) return 0;
+  const auto* desc = ctx->registry.FindByName(entity_name);
+  if (desc == nullptr) return 0;
+  for (const auto& rpc : desc->rpcs) {
+    if (rpc.name == method_name) return rpc.rpc_id;
+  }
+  return 0;
+}
+
+int32_t AtlasEdrEntityPropertyCount(const AtlasEdrEntity* entity) {
+  if (!entity) return 0;
+  const auto* desc = reinterpret_cast<const atlas::EntityTypeDescriptor*>(entity);
+  return static_cast<int32_t>(desc->properties.size());
+}
+
+const AtlasEdrProperty* AtlasEdrEntityPropertyAt(const AtlasEdrEntity* entity, int32_t index) {
+  if (!entity || index < 0) return nullptr;
+  const auto* desc = reinterpret_cast<const atlas::EntityTypeDescriptor*>(entity);
+  if (static_cast<size_t>(index) >= desc->properties.size()) return nullptr;
+  return reinterpret_cast<const AtlasEdrProperty*>(&desc->properties[index]);
+}
+
+uint8_t AtlasEdrPropertyDataType(const AtlasEdrProperty* prop) {
+  if (!prop) return ATLAS_EDR_TYPE_INVALID;
+  const auto* p = reinterpret_cast<const atlas::PropertyDescriptor*>(prop);
+  return static_cast<uint8_t>(p->data_type);
+}
+
+uint8_t AtlasEdrPropertyScope(const AtlasEdrProperty* prop) {
+  if (!prop) return 0;
+  const auto* p = reinterpret_cast<const atlas::PropertyDescriptor*>(prop);
+  return static_cast<uint8_t>(p->scope);
+}
+
+uint16_t AtlasEdrPropertyIndex(const AtlasEdrProperty* prop) {
+  if (!prop) return 0;
+  const auto* p = reinterpret_cast<const atlas::PropertyDescriptor*>(prop);
+  return p->index;
+}
+
+const AtlasEdrDataTypeRef* AtlasEdrPropertyTypeRef(const AtlasEdrProperty* prop) {
+  if (!prop) return nullptr;
+  const auto* p = reinterpret_cast<const atlas::PropertyDescriptor*>(prop);
+  if (!p->type_ref.has_value()) return nullptr;
+  return reinterpret_cast<const AtlasEdrDataTypeRef*>(&*p->type_ref);
+}
+
+uint8_t AtlasEdrDataTypeRefKind(const AtlasEdrDataTypeRef* ref) {
+  if (!ref) return ATLAS_EDR_TYPE_INVALID;
+  const auto* r = reinterpret_cast<const atlas::DataTypeRef*>(ref);
+  return static_cast<uint8_t>(r->kind);
+}
+
+const AtlasEdrDataTypeRef* AtlasEdrDataTypeRefElem(const AtlasEdrDataTypeRef* ref) {
+  if (!ref) return nullptr;
+  const auto* r = reinterpret_cast<const atlas::DataTypeRef*>(ref);
+  return reinterpret_cast<const AtlasEdrDataTypeRef*>(r->elem.get());
+}
+
+const AtlasEdrDataTypeRef* AtlasEdrDataTypeRefKey(const AtlasEdrDataTypeRef* ref) {
+  if (!ref) return nullptr;
+  const auto* r = reinterpret_cast<const atlas::DataTypeRef*>(ref);
+  return reinterpret_cast<const AtlasEdrDataTypeRef*>(r->key.get());
+}
+
+uint16_t AtlasEdrDataTypeRefStructId(const AtlasEdrDataTypeRef* ref) {
+  if (!ref) return 0;
+  const auto* r = reinterpret_cast<const atlas::DataTypeRef*>(ref);
+  return r->struct_id;
+}
+
+const AtlasEdrStruct* AtlasEdrFindStructById(AtlasEdrContext* ctx, uint16_t struct_id) {
+  if (!ctx) return nullptr;
+  return reinterpret_cast<const AtlasEdrStruct*>(ctx->registry.FindStructById(struct_id));
+}
+
+const AtlasEdrStruct* AtlasEdrFindStructByName(AtlasEdrContext* ctx, const char* name) {
+  if (!ctx || !name) return nullptr;
+  return reinterpret_cast<const AtlasEdrStruct*>(ctx->registry.FindStructByName(name));
+}
+
+int32_t AtlasEdrStructFieldCount(const AtlasEdrStruct* s) {
+  if (!s) return 0;
+  const auto* desc = reinterpret_cast<const atlas::StructDescriptor*>(s);
+  return static_cast<int32_t>(desc->fields.size());
+}
+
+const AtlasEdrStructField* AtlasEdrStructFieldAt(const AtlasEdrStruct* s, int32_t index) {
+  if (!s || index < 0) return nullptr;
+  const auto* desc = reinterpret_cast<const atlas::StructDescriptor*>(s);
+  if (static_cast<size_t>(index) >= desc->fields.size()) return nullptr;
+  return reinterpret_cast<const AtlasEdrStructField*>(&desc->fields[index]);
+}
+
+uint8_t AtlasEdrStructFieldDataType(const AtlasEdrStructField* field) {
+  if (!field) return ATLAS_EDR_TYPE_INVALID;
+  const auto* f = reinterpret_cast<const atlas::FieldDescriptor*>(field);
+  return static_cast<uint8_t>(f->type.kind);
+}
+
+const AtlasEdrDataTypeRef* AtlasEdrStructFieldTypeRef(const AtlasEdrStructField* field) {
+  if (!field) return nullptr;
+  const auto* f = reinterpret_cast<const atlas::FieldDescriptor*>(field);
+  return reinterpret_cast<const AtlasEdrDataTypeRef*>(&f->type);
+}
+
 }  // extern "C"
