@@ -25,6 +25,7 @@ void UAtlasSubsystem::Initialize(FSubsystemCollectionBase& Collection)
 
 	if (AtlasEdrContext* Edr = FAtlasUEModule::GetEdrContext())
 	{
+		EntityManager.SetDescriptorContext(Edr);
 		const uint8* Digest = AtlasEdrGetDigest(Edr);
 		const int32 Size = AtlasEdrGetDigestSize(Edr);
 		if (Digest != nullptr && Size > 0)
@@ -32,6 +33,7 @@ void UAtlasSubsystem::Initialize(FSubsystemCollectionBase& Collection)
 			SetEntityDefDigest(TArrayView<const uint8>(Digest, Size));
 		}
 	}
+	EntityManager.SetRpcSender(this);
 
 	TickHandle = FTSTicker::GetCoreTicker().AddTicker(
 		FTickerDelegate::CreateUObject(this, &UAtlasSubsystem::OnTick));
@@ -74,24 +76,24 @@ bool UAtlasSubsystem::SetEntityDefDigest(TArrayView<const uint8> Digest)
 		Digest.Num()) == ATLAS_NET_OK;
 }
 
-bool UAtlasSubsystem::SendBaseRpc(uint32 EntityId, uint32 RpcId, const TArray<uint8>& Payload)
+void UAtlasSubsystem::SendBaseRpc(atlas::EntityId Id, uint32 RpcId, const uint8* Args,
+	int32 ArgsLen)
 {
-	if (!NetClient || NetClient->GetContext() == nullptr) return false;
-	return AtlasNetSendBaseRpc(NetClient->GetContext(), EntityId, RpcId,
-		Payload.GetData(), Payload.Num()) == ATLAS_NET_OK;
+	if (!NetClient || NetClient->GetContext() == nullptr) return;
+	AtlasNetSendBaseRpc(NetClient->GetContext(), Id, RpcId, Args, ArgsLen);
 }
 
-bool UAtlasSubsystem::SendCellRpc(uint32 EntityId, uint32 RpcId, const TArray<uint8>& Payload)
+void UAtlasSubsystem::SendCellRpc(atlas::EntityId Id, uint32 RpcId, const uint8* Args,
+	int32 ArgsLen)
 {
-	if (!NetClient || NetClient->GetContext() == nullptr) return false;
-	return AtlasNetSendCellRpc(NetClient->GetContext(), EntityId, RpcId,
-		Payload.GetData(), Payload.Num()) == ATLAS_NET_OK;
+	if (!NetClient || NetClient->GetContext() == nullptr) return;
+	AtlasNetSendCellRpc(NetClient->GetContext(), Id, RpcId, Args, ArgsLen);
 }
 
 void UAtlasSubsystem::RegisterEntityClass(uint16 TypeId, TSubclassOf<AActor> ActorClass,
-                                          EntityFactory Factory)
+                                          EntityFactory Factory, EntityPostBind PostBind)
 {
-	TypeRegistry.Add(TypeId, FTypeReg{ActorClass, MoveTemp(Factory)});
+	TypeRegistry.Add(TypeId, FTypeReg{ActorClass, MoveTemp(Factory), MoveTemp(PostBind)});
 
 	EntityManager.RegisterFactory(TypeId, [this, TypeId](atlas::EntityId Id,
 	                                                    atlas::EntityTypeId /*Type*/) {
@@ -141,6 +143,7 @@ std::unique_ptr<atlas::ClientEntity> UAtlasSubsystem::InstantiateEntity(uint16 T
 	}
 
 	Entity->AttachView(std::make_unique<FAtlasUEActorView>(Actor));
+	if (Reg->PostBind) Reg->PostBind(Entity.get(), Actor);
 	return Entity;
 }
 

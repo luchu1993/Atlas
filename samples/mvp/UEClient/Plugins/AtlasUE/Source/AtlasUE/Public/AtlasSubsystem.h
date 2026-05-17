@@ -10,18 +10,24 @@
 #include <memory>
 
 #include "AtlasCore/client_entity_manager.h"
+#include "AtlasCore/rpc_sender.h"
 #include "AtlasNetClient.h"
 
 #include "AtlasSubsystem.generated.h"
 
 UCLASS()
-class ATLASUE_API UAtlasSubsystem : public UGameInstanceSubsystem
+class ATLASUE_API UAtlasSubsystem : public UGameInstanceSubsystem, public atlas::RpcSender
 {
 	GENERATED_BODY()
 
 public:
 	using EntityFactory = std::function<std::unique_ptr<atlas::ClientEntity>(
 		atlas::EntityId, atlas::EntityTypeId)>;
+
+	// Runs after the entity is created and the FAtlasUEActorView is attached;
+	// game code uses this to wire engine-side bridges (e.g., UAtlasAvatarView)
+	// to the typed entity instance the factory produced.
+	using EntityPostBind = std::function<void(atlas::ClientEntity*, AActor*)>;
 
 	virtual void Initialize(FSubsystemCollectionBase& Collection) override;
 	virtual void Deinitialize() override;
@@ -34,15 +40,20 @@ public:
 	// BeginLogin or the server rejects with def_mismatch.
 	bool SetEntityDefDigest(TArrayView<const uint8> Digest);
 
-	// Pass-through to AtlasNetSend{Base,Cell}Rpc. Caller owns the rpc_id and
-	// payload byte layout until typed stubs are generated.
-	bool SendBaseRpc(uint32 EntityId, uint32 RpcId, const TArray<uint8>& Payload);
-	bool SendCellRpc(uint32 EntityId, uint32 RpcId, const TArray<uint8>& Payload);
+	// atlas::RpcSender — codegen-emitted entity stubs route here. Both deliver
+	// straight through to AtlasNetSend{Base,Cell}Rpc once the net client is up.
+	virtual void SendBaseRpc(atlas::EntityId Id, uint32 RpcId, const uint8* Args,
+		int32 ArgsLen) override;
+	virtual void SendCellRpc(atlas::EntityId Id, uint32 RpcId, const uint8* Args,
+		int32 ArgsLen) override;
 
 	// On HandleEnter the subsystem spawns the bound Actor, runs Factory (or the
-	// base ClientEntity if null), and attaches an FAtlasUEActorView.
+	// base ClientEntity if null), attaches an FAtlasUEActorView, then invokes
+	// PostBind so game code can link engine-side bridge components to the
+	// freshly-created entity.
 	void RegisterEntityClass(uint16 TypeId, TSubclassOf<AActor> ActorClass,
-	                         EntityFactory Factory = nullptr);
+	                         EntityFactory Factory = nullptr,
+	                         EntityPostBind PostBind = nullptr);
 
 	[[nodiscard]] EAtlasNetClientState GetNetState() const;
 	[[nodiscard]] uint32 GetPlayerEntityId() const;
@@ -63,6 +74,7 @@ private:
 	{
 		TSubclassOf<AActor> ActorClass;
 		EntityFactory Factory;
+		EntityPostBind PostBind;
 	};
 	TMap<uint16, FTypeReg> TypeRegistry;
 

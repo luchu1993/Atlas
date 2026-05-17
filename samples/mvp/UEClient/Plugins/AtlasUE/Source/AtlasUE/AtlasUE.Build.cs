@@ -38,6 +38,12 @@ public class AtlasUE : ModuleRules
 			RuntimeDependencies.Add(Path.Combine(EdrThirdParty, "atlas_entitydef_client.dll"));
 			RuntimeDependencies.Add(Path.Combine(PluginDirectory,
 				"ThirdParty", "AtlasEntityDef", "entity_defs.bin"));
+			// Test-only ATDF (StressAvatar et al.); skipped by Shipping.
+			if (Target.Configuration != UnrealTargetConfiguration.Shipping)
+			{
+				RuntimeDependencies.Add(Path.Combine(PluginDirectory,
+					"ThirdParty", "AtlasEntityDef", "entity_defs_test.bin"));
+			}
 		}
 	}
 }

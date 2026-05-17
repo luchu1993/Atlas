@@ -6,7 +6,7 @@ struct AtlasEdrContext;
 
 DECLARE_LOG_CATEGORY_EXTERN(LogAtlasUE, Log, All);
 
-class FAtlasUEModule : public IModuleInterface
+class ATLASUE_API FAtlasUEModule : public IModuleInterface
 {
 public:
 	virtual void StartupModule() override;

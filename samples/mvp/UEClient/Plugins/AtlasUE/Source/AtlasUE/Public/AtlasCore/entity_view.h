@@ -9,6 +9,7 @@ struct Vec3 {
   float x{};
   float y{};
   float z{};
+  bool operator==(const Vec3&) const = default;
 };
 
 struct Quat {
@@ -16,6 +17,7 @@ struct Quat {
   float y{};
   float z{};
   float w{1.0f};
+  bool operator==(const Quat&) const = default;
 };
 
 // Renderer / UI binding for one entity. Owned by the entity, notified on each

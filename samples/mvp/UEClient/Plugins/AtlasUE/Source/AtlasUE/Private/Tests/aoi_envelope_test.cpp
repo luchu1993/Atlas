@@ -124,7 +124,8 @@ bool FAtlasAoIEnvelopeTest::RunTest(const FString&)
 		TestNull(TEXT("entity removed"), Manager.Find(42));
 	}
 
-	// kEntityPropertyUpdate is silently skipped, manager unaffected.
+	// kEntityPropertyUpdate for an unknown entity (left AoI) drops cleanly.
+	// Apply-against-bound-descriptor coverage lives in client_entity_apply_delta_test.
 	{
 		std::vector<uint8_t> buf;
 		Append<uint8_t>(buf, static_cast<uint8_t>(EnvelopeKind::kEntityPropertyUpdate));
@@ -133,7 +134,17 @@ bool FAtlasAoIEnvelopeTest::RunTest(const FString&)
 		Append<uint8_t>(buf, 0xCD);
 
 		const auto Result = atlas::DecodeAoIEnvelope(buf.data(), buf.size(), Manager);
-		TestEqual(TEXT("property skipped"), Result, EnvelopeDecodeResult::kPropertyUpdateSkipped);
+		TestEqual(TEXT("property update for unknown entity drops"), Result,
+			EnvelopeDecodeResult::kOk);
+	}
+
+	// Truncated property update header (event_seq missing).
+	{
+		std::vector<uint8_t> buf;
+		Append<uint8_t>(buf, static_cast<uint8_t>(EnvelopeKind::kEntityPropertyUpdate));
+		Append<uint32_t>(buf, 42);
+		const auto Result = atlas::DecodeAoIEnvelope(buf.data(), buf.size(), Manager);
+		TestEqual(TEXT("truncated property header"), Result, EnvelopeDecodeResult::kTruncated);
 	}
 
 	// Truncated header.

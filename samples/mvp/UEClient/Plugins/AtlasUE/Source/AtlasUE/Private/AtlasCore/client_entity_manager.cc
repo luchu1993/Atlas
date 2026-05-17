@@ -2,7 +2,22 @@
 
 #include <utility>
 
+#include "entitydef/entitydef_api.h"
+
 namespace atlas {
+
+namespace {
+
+void MaybeBindDescriptor(AtlasEdrContext* ctx, ClientEntity& entity) {
+  if (ctx == nullptr) return;
+  entity.BindDescriptor(AtlasEdrFindEntityById(ctx, entity.TypeId()), ctx);
+}
+
+void MaybeBindSender(RpcSender* sender, ClientEntity& entity) {
+  if (sender != nullptr) entity.SetRpcSender(sender);
+}
+
+}  // namespace
 
 void ClientEntityManager::RegisterFactory(EntityTypeId type_id, Factory factory) {
   factories_[type_id] = std::move(factory);
@@ -12,6 +27,8 @@ bool ClientEntityManager::Register(std::unique_ptr<ClientEntity> entity) {
   if (!entity || entity->Id() == kInvalidEntityId) {
     return false;
   }
+  MaybeBindDescriptor(edr_ctx_, *entity);
+  MaybeBindSender(sender_, *entity);
   const EntityId id = entity->Id();
   return entities_.emplace(id, std::move(entity)).second;
 }
@@ -35,6 +52,8 @@ bool ClientEntityManager::HandleCreate(EntityId id, EntityTypeId type_id) {
   if (it == factories_.end()) return false;
   auto entity = it->second(id, type_id);
   if (!entity) return false;
+  MaybeBindDescriptor(edr_ctx_, *entity);
+  MaybeBindSender(sender_, *entity);
   entities_.emplace(id, std::move(entity));
   return true;
 }
@@ -49,6 +68,8 @@ bool ClientEntityManager::HandleEnter(EntityId id, EntityTypeId type_id, double 
     auto entity = it->second(id, type_id);
     if (!entity) return false;
     raw = entity.get();
+    MaybeBindDescriptor(edr_ctx_, *raw);
+    MaybeBindSender(sender_, *raw);
     entities_.emplace(id, std::move(entity));
   }
   raw->OnPositionReceived(server_time, pos, dir, on_ground);

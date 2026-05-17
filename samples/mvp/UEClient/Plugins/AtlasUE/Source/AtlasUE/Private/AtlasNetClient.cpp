@@ -6,7 +6,9 @@
 #include "Logging/LogMacros.h"
 
 #include "AtlasCore/aoi_envelope.h"
+#include "AtlasCore/client_entity.h"
 #include "AtlasCore/client_entity_manager.h"
+#include "AtlasCore/span_reader.h"
 
 DEFINE_LOG_CATEGORY_STATIC(LogAtlasNet, Log, All);
 
@@ -188,12 +190,38 @@ void FAtlasNetClient::TickGameThread(atlas::ClientEntityManager& Manager)
 			}
 			const auto Result = atlas::DecodeAoIEnvelope(
 				Msg.Payload.GetData(), Msg.Payload.Num(), Manager);
-			if (Result != atlas::EnvelopeDecodeResult::kOk
-				&& Result != atlas::EnvelopeDecodeResult::kPropertyUpdateSkipped)
+			if (Result != atlas::EnvelopeDecodeResult::kOk)
 			{
 				UE_LOG(LogAtlasNet, Warning,
 					TEXT("AoI decode result=%d msg_id=0x%04X"), (int32)Result, Msg.MsgId);
 			}
+		}
+		else if (Msg.MsgId == 0xF004)
+		{
+			// ClientRpcEnvelope: [u32 entity_id][u32 rpc_id][u64 trace_id][args]
+			if (Msg.Payload.Num() < 16)
+			{
+				UE_LOG(LogAtlasNet, Warning,
+					TEXT("Client RPC truncated header len=%d"), Msg.Payload.Num());
+				continue;
+			}
+			uint32 EntityId = 0;
+			uint32 RpcId = 0;
+			uint64 TraceId = 0;
+			FMemory::Memcpy(&EntityId, Msg.Payload.GetData(), 4);
+			FMemory::Memcpy(&RpcId, Msg.Payload.GetData() + 4, 4);
+			FMemory::Memcpy(&TraceId, Msg.Payload.GetData() + 8, 8);
+			if (atlas::ClientEntity* Entity = Manager.Find(EntityId))
+			{
+				atlas::SpanReader R(Msg.Payload.GetData() + 16,
+					static_cast<std::size_t>(Msg.Payload.Num() - 16));
+				if (!Entity->DispatchRpc(RpcId, TraceId, R))
+				{
+					UE_LOG(LogAtlasNet, Warning,
+						TEXT("Client RPC unhandled rpc_id=0x%08X eid=%u"), RpcId, EntityId);
+				}
+			}
+			// Unknown entity_id: drop (server may target an entity we just lost).
 		}
 		else if (Msg.MsgId == 2024 && Msg.Payload.Num() >= 6)
 		{

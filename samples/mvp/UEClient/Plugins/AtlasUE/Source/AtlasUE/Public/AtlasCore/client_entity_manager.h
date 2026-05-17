@@ -8,12 +8,17 @@
 #include <utility>
 
 #include "AtlasCore/client_entity.h"
+#include "AtlasCore/core_export.h"
 #include "AtlasCore/entity_id.h"
 #include "AtlasCore/entity_view.h"
 
+struct AtlasEdrContext;
+
 namespace atlas {
 
-class ClientEntityManager {
+class RpcSender;
+
+class ATLAS_CORE_API ClientEntityManager {
  public:
   using Factory = std::function<std::unique_ptr<ClientEntity>(EntityId, EntityTypeId)>;
 
@@ -22,6 +27,17 @@ class ClientEntityManager {
 
   ClientEntityManager(const ClientEntityManager&) = delete;
   ClientEntityManager& operator=(const ClientEntityManager&) = delete;
+
+  // When set, every entity the manager creates or accepts is auto-bound to
+  // its descriptor so ApplyDelta has somewhere to write. Safe to leave null
+  // (entities then keep ApplyDelta as a no-op).
+  void SetDescriptorContext(AtlasEdrContext* ctx) { edr_ctx_ = ctx; }
+  [[nodiscard]] AtlasEdrContext* DescriptorContext() const { return edr_ctx_; }
+
+  // Outbound RPC bridge propagated to every newly bound entity so codegen
+  // stubs can send through the engine-side transport.
+  void SetRpcSender(RpcSender* sender) { sender_ = sender; }
+  [[nodiscard]] RpcSender* RpcSenderRef() const { return sender_; }
 
   // Must be registered before any HandleEnter for that type.
   void RegisterFactory(EntityTypeId type_id, Factory factory);
@@ -65,6 +81,8 @@ class ClientEntityManager {
  private:
   std::unordered_map<EntityId, std::unique_ptr<ClientEntity>> entities_;
   std::unordered_map<EntityTypeId, Factory> factories_;
+  AtlasEdrContext* edr_ctx_{nullptr};
+  RpcSender* sender_{nullptr};
 };
 
 }  // namespace atlas
