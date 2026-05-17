@@ -131,13 +131,13 @@ LogUEClient: Sent Account.SelectAvatar(1) entity_id=<n> ok=1
 
 ## 架构概览
 
-`Bootstrap` 构建运行时场景（地面、光照、相机、根 overlay），调用 `AtlasNetworkManager.Login` → `Authenticate` → 执行 `Account.Base.SelectAvatar(1)` RPC。服务端 `Account.SelectAvatar` 创建玩家 `Avatar`（base + cell 对应体），通过 `GiveClientTo` 绑定客户端，然后执行一次 `WorldBootstrap.EnsureSpawned` 散布 50 个 NPC。base 侧 `Avatar.OnInit` 设置 50 m AoI 半径，因此客户端会流式接收范围内实体。移动是客户端权威：`PlayerInputController` 每帧写入 `transform.position`，并以 20 Hz 通过 `Avatar.Cell.ReportPos` 上报到 cell。投射物伤害是服务端权威：`LaunchProjectile` 把一次射击注册到每个 space 的 `ProjectileSimulator`，由它在每个 cellapp tick 积分，并广播 `OnProjectileFired` / `OnProjectileEnded` RPC，让 AoI 内所有客户端渲染同步弧线。属性复制（HP、NpcType 等）走常规 delta pump。
+`Bootstrap` 构建运行时场景（地面、光照、相机、根 overlay），调用 `AtlasNetworkManager.Login` → `Authenticate` → 执行 `Account.Base.SelectAvatar(1)` RPC。服务端 `Account.SelectAvatar` 创建玩家 `Avatar`（base + cell 对应体），通过 `GiveClientTo` 绑定客户端。cell 侧 `Avatar.OnInit` 通过 `SpaceOwnerRegistry` 检查后按需 `EntityFactory.CreateLocalCell("MvpSpace", ...)` 创建 space-owner entity；`MvpSpace : CellSpaceEntity` 在 `OnSpaceInit` 散布 50 个 NPC，并用 AtlasLoop timer 维护补充循环：存活数 ≤ 50 时启动补充，每 3 秒生成 1 个，到达 80 后停止。每次计数变化时通过 `SpaceData.SetInt32(SpaceId, SpaceDataKeys.NpcCount, n)` 发布到 cellapp 的 SpaceData，cell→client envelope 广播给该 space 内所有客户端的 `SpaceDataManager`。base 侧 `Avatar.OnInit` 设置 50 m AoI 半径，因此客户端会流式接收范围内实体。移动是客户端权威：`PlayerInputController` 每帧写入 `transform.position`，并以 20 Hz 通过 `Avatar.Cell.ReportPos` 上报到 cell。投射物伤害是服务端权威：`LaunchProjectile` 把一次射击注册到每个 space 的 `ProjectileSimulator`，由它在每个 cellapp tick 积分，并广播 `OnProjectileFired` / `OnProjectileEnded` RPC，让 AoI 内所有客户端渲染同步弧线。属性复制（HP、NpcType 等）走常规 delta pump。
 
 ## 已知 MVP 简化点
 
 - 移动是客户端权威（没有反作弊）。生产环境需要服务端校验器 + 最大速度检查。
 - NPC AI 是随机游走 + 周期性开火；没有仇恨 / 目标选择。
-- NPC 不复活，死亡后保持死亡直到集群重启。
+- NPC 死亡后按数量补充（≤ 50 触发，每 3 秒 1 个，封顶 80），但死亡实例本身不复活。
 - 登录使用硬编码 username + password hash；LoginApp 的 dev 模式会接受任何符合配置的输入。
 - `ProjectileSimulator` 状态是 per-space 但仍在进程内；没有实现跨 cell 投射物 handoff。
 
@@ -146,5 +146,5 @@ LogUEClient: Sent Account.SelectAvatar(1) entity_id=<n> ok=1
 - **Unity 编译报缺少 `Atlas.Mvp.Client`** — 你忘了运行 `setup_mvp_unity`，或者打包时用了带 `--skip-setup` 的 `build_mvp_unity`。
 - **`build_mvp_unity` 找不到 Unity** — 传 `--unity <Unity.exe>` 或设置 `UNITY_EXE`；没有 `ProjectVersion.txt` 时脚本会先扫描 Unity Hub 安装目录。
 - **`Login failed: BadCredentials`** — loginapp 配置里的 `accept_any_user` 关闭了。开发环境可以打开它，或者预先创建用户。
-- **看不到 NPC** — 检查服务端日志是否有 `WorldBootstrap: queued 50/50 NPC spawns`；如果显示 0，说明 BaseApp 缺少 Mvp.Base DLL（重新运行 `build.bat debug`，让 CMake 重新部署）。
+- **看不到 NPC** — 检查 cellapp 日志是否有 `MvpSpace: seeded 50/50 NPCs`；如果显示 0，说明 CellApp 缺少 Mvp.Cell DLL（重新运行 `build.bat debug`，让 CMake 重新部署）。
 - **标签卡在屏幕边缘 / 位置不对** — Unity 场景模板自带的 `Main Camera` GameObject 与 Bootstrap 运行时相机冲突。删除层级面板中的默认 Main Camera。

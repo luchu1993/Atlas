@@ -16,6 +16,14 @@
                 <ui:Label text="PING" class="stat-key" />
                 <ui:Label name="ping-value" text="-- MS" class="stat-value" />
             </ui:VisualElement>
+            <ui:VisualElement class="stat-row">
+                <ui:Label text="NPC AOI" class="stat-key" />
+                <ui:Label name="npc-aoi-value" text="--" class="stat-value" />
+            </ui:VisualElement>
+            <ui:VisualElement class="stat-row">
+                <ui:Label text="NPC ALL" class="stat-key" />
+                <ui:Label name="npc-all-value" text="--" class="stat-value" />
+            </ui:VisualElement>
         </ui:VisualElement>
 
         <ui:Button name="logout-button" text="RETURN" class="logout-btn" />

@@ -186,10 +186,17 @@ oriented forward so the camera-follow loop stays stable.
 `Bootstrap` builds the runtime scene (ground, light, camera, root
 overlays), calls `AtlasNetworkManager.Login` → `Authenticate` → invokes
 `Account.Base.SelectAvatar(1)` RPC. Server-side `Account.SelectAvatar`
-creates the player `Avatar` (base + cell counterpart), binds the client
-via `GiveClientTo`, then runs `WorldBootstrap.EnsureSpawned` once to
-scatter 50 NPCs. `Avatar.OnInit` on the base side sets a 50 m AoI radius,
-so the client streams in everything within reach. Movement is client-
+creates the player `Avatar` (base + cell counterpart) and binds the
+client via `GiveClientTo`. The cell-side `Avatar.OnInit` consults
+`SpaceOwnerRegistry` and, if absent, spawns the per-space owner entity
+`MvpSpace : CellSpaceEntity` once. `MvpSpace.OnSpaceInit` scatters 50
+NPCs and arms an AtlasLoop refill timer: when live count drops to ≤ 50
+the refill engages, spawning 1 NPC every 3 s until the cap of 80, then
+disengages. Each count change publishes via `SpaceData.SetInt32(SpaceId,
+SpaceDataKeys.NpcCount, n)` — the cellapp fans that out as a
+`kSpaceDataUpdate` envelope to every client's `SpaceDataManager`.
+`Avatar.OnInit` on the base side sets a 50 m AoI radius, so the client
+streams in everything within reach. Movement is client-
 authoritative: `PlayerInputController` writes `transform.position` from
 WASD each frame and reports to the cell at 20 Hz via
 `Avatar.Cell.ReportPos`. Projectile damage is server-authoritative: `LaunchProjectile`
@@ -203,7 +210,8 @@ replication (HP, NpcType, etc.) rides the normal delta pump.
 - Movement is client-authoritative (no anti-cheat). Production needs a
   server-side validator + max-speed check.
 - NPC AI is random walk + periodic fire; no aggro / target.
-- NPCs don't respawn — they stay dead until cluster restart.
+- NPCs are refilled by count (engage at ≤ 50, 1 per 3 s, cap 80); the
+  dead instance itself doesn't respawn.
 - Login uses a hardcoded username + password hash; LoginApp's dev mode
   accepts anything matching its config.
 - ProjectileSimulator state is per-space but in-process; cross-cell
@@ -217,10 +225,9 @@ replication (HP, NpcType, etc.) rides the normal delta pump.
   `UNITY_EXE`; without `ProjectVersion.txt`, the script scans Unity Hub installs first.
 - **`Login failed: BadCredentials`** — LoginApp's `accept_any_user` is off
   in your loginapp config. Either enable it for dev or pre-create the user.
-- **No NPCs visible** — check the server log for
-  `WorldBootstrap: queued 50/50 NPC spawns`; if it shows 0, BaseApp is
-  missing the Mvp.Base DLL (re-run `build.bat debug` to redeploy via
-  CMake).
+- **No NPCs visible** — check the cellapp log for
+  `MvpSpace: seeded 50/50 NPCs`; if it shows 0, CellApp is missing
+  the Mvp.Cell DLL (re-run `build.bat debug` to redeploy via CMake).
 - **Labels stuck on screen edges / wrong positions** — Unity scene
   template's stray `Main Camera` GameObject collides with Bootstrap's
   runtime camera. Delete the default Main Camera from the hierarchy.

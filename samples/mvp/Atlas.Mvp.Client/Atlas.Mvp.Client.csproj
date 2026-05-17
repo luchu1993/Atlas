@@ -32,6 +32,7 @@
     <AdditionalFiles Include="..\..\..\entity_defs\Account.def" />
     <AdditionalFiles Include="..\..\..\entity_defs\Avatar.def" />
     <AdditionalFiles Include="..\..\..\entity_defs\Npc.def" />
+    <AdditionalFiles Include="..\..\..\entity_defs\space_data.def" />
   </ItemGroup>
 
 </Project>

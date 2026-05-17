@@ -1,6 +1,7 @@
 using Atlas.DataTypes;
 using Atlas.Diagnostics;
 using Atlas.Entity;
+using Atlas.Space;
 
 namespace Atlas.Mvp.Cell;
 
@@ -28,6 +29,13 @@ public partial class Avatar : CellServerEntity, IDamageable
         TickInterval = 1;
         _sim = ProjectileSimulator.ForSpace(kSpaceId);
         _sim.RegisterTarget(this);
+        // Spawn the per-space owner entity once. SpaceOwnerRegistry enforces
+        // the single-owner invariant; later Avatar arrivals are no-ops.
+        if (SpaceOwnerRegistry.Find(kSpaceId) is null)
+        {
+            EntityFactory.CreateLocalCell("MvpSpace", kSpaceId, Vector3.Zero,
+                                          Vector3.Forward, onGround: false);
+        }
     }
 
     protected override void OnDestroy()

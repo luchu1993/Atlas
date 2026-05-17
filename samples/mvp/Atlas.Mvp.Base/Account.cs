@@ -17,8 +17,6 @@ public partial class Account : BaseServerEntity
             return;
         }
 
-        // Bind client before NPCs spawn so witness is up when peers stream in.
         GiveClientTo(avatar.EntityId);
-        WorldBootstrap.EnsureSpawned(kSpaceId);
     }
 }

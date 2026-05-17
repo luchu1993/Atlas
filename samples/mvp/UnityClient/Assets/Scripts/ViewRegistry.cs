@@ -19,6 +19,19 @@ namespace Atlas.Mvp.Unity
 
         public uint OwnerEntityId => _ownerEntityId;
 
+        // NPCs currently inside the owner's AoI envelope (= materialised
+        // local views). Cheap O(N) scan; views count is bounded by AoI.
+        public int NpcViewCount
+        {
+            get
+            {
+                int n = 0;
+                foreach (var v in _views.Values)
+                    if (v?.Entity is MvpNpc) ++n;
+                return n;
+            }
+        }
+
         public ViewRegistry(AtlasNetworkManager net, Transform worldRoot,
             Action<AvatarView, MvpAvatar> onOwnerAttached)
         {

@@ -1,5 +1,7 @@
 using System;
+using Atlas.Client;
 using Atlas.Client.Unity;
+using Atlas.Space;
 using UnityEngine;
 using UnityEngine.UIElements;
 using MvpAvatar = Atlas.Mvp.Client.Avatar;
@@ -18,14 +20,19 @@ namespace Atlas.Mvp.Unity
 
         UIDocument _doc = null!;
         AtlasNetworkManager? _net;
+        ViewRegistry? _views;
         MvpAvatar? _owner;
         int _observedMaxHp = 100;
+        // MVP is a single space; world bootstrap pins kSpaceId = 1.
+        const uint kSpaceId = 1;
 
         VisualElement _hpFill = null!;
         Label _hpName = null!;
         Label _hpText = null!;
         Label _fpsValue = null!;
         Label _pingValue = null!;
+        Label _npcAoiValue = null!;
+        Label _npcAllValue = null!;
         VisualElement _aoiToggle = null!;
         VisualElement _aoiCheckbox = null!;
         Button _logoutButton = null!;
@@ -64,6 +71,8 @@ namespace Atlas.Mvp.Unity
 
         public void Bind(AtlasNetworkManager net) => _net = net;
 
+        public void BindViewRegistry(ViewRegistry views) => _views = views;
+
         public void SetOwner(MvpAvatar? avatar)
         {
             _owner = avatar;
@@ -91,6 +100,8 @@ namespace Atlas.Mvp.Unity
             _hpText = root.Q<Label>("hp-text");
             _fpsValue = root.Q<Label>("fps-value");
             _pingValue = root.Q<Label>("ping-value");
+            _npcAoiValue = root.Q<Label>("npc-aoi-value");
+            _npcAllValue = root.Q<Label>("npc-all-value");
             _aoiToggle = root.Q<VisualElement>("aoi-toggle");
             _aoiCheckbox = root.Q<VisualElement>("aoi-checkbox");
             _logoutButton = root.Q<Button>("logout-button");
@@ -103,6 +114,7 @@ namespace Atlas.Mvp.Unity
 
             if (_hpFill == null || _hpName == null || _hpText == null
                 || _fpsValue == null || _pingValue == null
+                || _npcAoiValue == null || _npcAllValue == null
                 || _aoiToggle == null || _aoiCheckbox == null
                 || _logoutButton == null || _debugPanel == null
                 || _joystick == null || _joystickBase == null || _joystickKnob == null
@@ -259,6 +271,9 @@ namespace Atlas.Mvp.Unity
                     _rttMs = s.RttMs;
                     _pingValue.text = $"{_rttMs} MS";
                 }
+                _npcAoiValue.text = (_views?.NpcViewCount ?? 0).ToString();
+                _npcAllValue.text = ClientCallbacks.SpaceDataManager
+                    .GetInt32(kSpaceId, SpaceDataKeys.NpcCount).ToString();
             }
 
             if (_owner != null && !_owner.IsDestroyed)

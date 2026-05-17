@@ -165,6 +165,7 @@ namespace Atlas.Mvp.Unity
             _world.Build();
             _world.Hud!.LogoutRequested += OnHudLogoutRequested;
             _views = new ViewRegistry(_net, _world.WorldRoot!, OnOwnerAttached);
+            _world.Hud!.BindViewRegistry(_views);
         }
 
         void TeardownWorld()

@@ -1,5 +1,6 @@
 using Atlas.Components;
 using Atlas.Entity;
+using Atlas.Space;
 
 namespace Atlas.Mvp.Cell;
 
@@ -16,18 +17,20 @@ public partial class Npc : CellServerEntity, IDamageable
     protected override void OnInit(bool isReload)
     {
         if (isReload) return;
-        // Position is supplied by SpawnCellOnly so the AoI Enter envelope
-        // already carries the scattered coord.
+        // Position is supplied at spawn so the AoI Enter envelope already
+        // carries the scattered coord.
         Hp = kInitialHp;
         NpcType = 1;
         _sim = ProjectileSimulator.ForSpace(kSpaceId);
         _sim.RegisterTarget(this);
         AddLocalComponent<NpcAiComponent>();
+        if (SpaceOwnerRegistry.Find(SpaceId) is MvpSpace space) space.NotifyNpcAlive();
     }
 
     protected override void OnDestroy()
     {
         _sim?.UnregisterTarget(EntityId);
+        if (SpaceOwnerRegistry.Find(SpaceId) is MvpSpace space) space.NotifyNpcDead();
     }
 
     public void BroadcastDamage(int amount, uint attackerId)
