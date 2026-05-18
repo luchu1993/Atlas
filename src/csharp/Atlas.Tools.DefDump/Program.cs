@@ -10,7 +10,9 @@ namespace Atlas.Tools.DefDump;
 public static class Program
 {
     private const uint FileMagic = 0x46445441u;  // 'A''T''D''F' little-endian
-    private const ushort FileVersion = 2;
+    // v3 adds the 32-byte SHA-256 digest right after the flags word so UE
+    // / DBApp loaders pick it up without round-tripping through C# bootstrap.
+    private const ushort FileVersion = 3;
 
     public static int Main(string[] args)
     {
@@ -61,6 +63,7 @@ public static class Program
         var structBlobs = TryCollectBlobs(target, "Atlas.Def.DefStructRegistry");
         var componentBlobs = TryCollectBlobs(target, "Atlas.Def.DefComponentRegistry");
         var typeBlobs = TryCollectBlobs(target, "Atlas.Def.DefEntityTypeRegistry");
+        var digest = TryGetDigest(target);
 
         try
         {
@@ -70,6 +73,7 @@ public static class Program
                 w.WriteUInt32(FileMagic);
                 w.WriteUInt16(FileVersion);
                 w.WriteUInt16(0);  // flags
+                w.WriteRawBytes(digest);  // 32-byte SHA-256 (zeros if unavailable)
 
                 w.WritePackedUInt32((uint)structBlobs.Count);
                 foreach (var blob in structBlobs)
@@ -106,6 +110,17 @@ public static class Program
         Console.WriteLine(
             $"DefDump: wrote {outPath} (structs={structBlobs.Count}, components={componentBlobs.Count}, types={typeBlobs.Count})");
         return 0;
+    }
+
+    // Bytes is ReadOnlySpan<byte> — can't box across reflection — so reach the
+    // s_bytes backing field DigestEmitter generates. 32 zeros if not present.
+    private static byte[] TryGetDigest(Assembly asm)
+    {
+        var t = asm.GetType("Atlas.Rpc.EntityDefDigest", throwOnError: false);
+        var fld = t?.GetField("s_bytes", BindingFlags.NonPublic | BindingFlags.Static);
+        if (fld?.GetValue(null) is byte[] bytes && bytes.Length == 32) return bytes;
+        Console.Error.WriteLine("DefDump: EntityDefDigest.s_bytes unreadable (writing zero digest)");
+        return new byte[32];
     }
 
     private static System.Collections.Generic.List<byte[]> TryCollectBlobs(Assembly asm, string typeName)

@@ -698,6 +698,13 @@ auto EntityDefRegistry::RegisterFromBinaryBuffer(std::span<const std::byte> buf)
   }
   (void)*flags_result;
 
+  auto digest_result = reader.ReadBytes(kDigestSize);
+  if (!digest_result) {
+    return Error{ErrorCode::kInvalidArgument,
+                 "RegisterFromBinaryBuffer: failed to read 32-byte digest"};
+  }
+  SetDigest(digest_result->data(), static_cast<int32_t>(kDigestSize));
+
   LoadedCounts out;
 
   // Section order: structs -> components -> types. References resolve in

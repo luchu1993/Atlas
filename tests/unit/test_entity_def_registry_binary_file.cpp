@@ -78,6 +78,9 @@ auto BuildContainer(std::span<const std::vector<std::byte>> structs,
   w.Write<uint32_t>(magic);
   w.Write<uint16_t>(version);
   w.Write<uint16_t>(0);  // flags
+  // 32-byte digest placeholder; tests don't assert digest contents.
+  std::array<std::byte, 32> kZeroDigest{};
+  w.WriteBytes(kZeroDigest);
 
   w.WritePackedInt(static_cast<uint32_t>(structs.size()));
   for (const auto& s : structs) AppendRecord(w, s);
