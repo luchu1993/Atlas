@@ -28,8 +28,10 @@
 
   <Target Name="_IncludeParserInTargetPath" Returns="@(TargetPathWithTargetPlatformMoniker)">
     <ItemGroup>
+      <!-- Path.Combine returns the 2nd arg unchanged if absolute (CMake csharp
+           build), or roots it to the project dir if relative (dotnet build). -->
       <TargetPathWithTargetPlatformMoniker
-          Include="$(MSBuildThisFileDirectory)$(OutputPath)Atlas.Defs.Parser.dll"
+          Include="$([System.IO.Path]::Combine('$(MSBuildThisFileDirectory)', '$([MSBuild]::EnsureTrailingSlash($(OutputPath)))Atlas.Defs.Parser.dll'))"
           IncludeRuntimeDependency="false" />
     </ItemGroup>
   </Target>
