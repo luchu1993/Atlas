@@ -96,4 +96,7 @@ private:
 	// Latches once we've surfaced the def_mismatch warning so the log isn't
 	// repeated each tick while auto-reconnect is suppressed.
 	bool bDefMismatchLogged = false;
+	// True once ReconnectAttempts has hit kMaxReconnectAttempts; cleared only
+	// by a fresh BeginLogin() so game code can drive a manual retry.
+	bool bReconnectExhausted = false;
 };

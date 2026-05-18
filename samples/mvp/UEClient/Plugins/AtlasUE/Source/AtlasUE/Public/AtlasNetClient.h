@@ -86,6 +86,11 @@ private:
 	AtlasNetContext* Ctx = nullptr;
 
 	TQueue<FAtlasInboundMessage, EQueueMode::Spsc> Inbound;
+	// SPSC TQueue has no size() — track depth via a side counter so the
+	// producer (net thread) can shed load before the queue grows unbounded
+	// when the game thread stalls (e.g. paused in the debugger).
+	std::atomic<int32> InboundDepth{0};
+	std::atomic<bool> bInboundOverflowLogged{false};
 
 	std::atomic<EAtlasNetClientState> State{EAtlasNetClientState::Idle};
 	std::atomic<uint32> PlayerEntityId{0};

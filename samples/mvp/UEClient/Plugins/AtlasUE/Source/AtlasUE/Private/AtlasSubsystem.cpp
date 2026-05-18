@@ -70,6 +70,10 @@ bool UAtlasSubsystem::BeginLogin(const FString& Host, uint16 Port, const FString
 	CachedUsername = Username;
 	CachedPasswordHash = PasswordHash;
 	bHasCachedCredentials = true;
+	// A manual BeginLogin re-arms auto-retry: game code is explicitly asking
+	// to try again after we previously exhausted the backoff ladder.
+	ReconnectAttempts = 0;
+	bReconnectExhausted = false;
 	return NetClient->BeginLogin(Host, Port, Username, PasswordHash);
 }
 
@@ -182,6 +186,15 @@ bool UAtlasSubsystem::OnTick(float DeltaTime)
 	// alive so the subsystem isn't stuck on a single bad attempt.
 	if (!NetClient)
 	{
+		if (!bReconnectExhausted && ReconnectAttempts >= AtlasReconnect::kMaxReconnectAttempts)
+		{
+			UE_LOG(LogAtlasSubsystem, Error,
+				TEXT("AtlasNet reconnect exhausted after %d attempts (Create kept failing) — "
+				     "auto-retry stopped"),
+				ReconnectAttempts);
+			bReconnectExhausted = true;
+		}
+		if (bReconnectExhausted) return true;
 		if (bAutoReconnectEnabled && bHasCachedCredentials)
 		{
 			const double Now = FPlatformTime::Seconds();
@@ -234,6 +247,16 @@ bool UAtlasSubsystem::OnTick(float DeltaTime)
 						     "auto-reconnect halted (client likely needs upgrade)"));
 					bDefMismatchLogged = true;
 				}
+				break;
+			}
+			if (bReconnectExhausted) break;
+			if (ReconnectAttempts >= AtlasReconnect::kMaxReconnectAttempts)
+			{
+				UE_LOG(LogAtlasSubsystem, Error,
+					TEXT("AtlasNet reconnect exhausted after %d attempts — auto-retry stopped; "
+					     "game code can call BeginLogin to retry manually"),
+					ReconnectAttempts);
+				bReconnectExhausted = true;
 				break;
 			}
 			if (bAutoReconnectEnabled && bHasCachedCredentials)

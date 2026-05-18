@@ -40,6 +40,19 @@ private:
 FCriticalSection FAtlasNetClient::ContextRegistryMutex;
 TMap<AtlasNetContext*, FAtlasNetClient*> FAtlasNetClient::ContextRegistry;
 
+namespace
+{
+// At a 20 Hz cell tick a frozen game thread accumulates ~20 baselines/RPCs per
+// second per visible entity; 8192 is roughly 30s of 50-entity AoI on the floor,
+// past which dropping is cheaper than letting the heap explode.
+constexpr int32 kInboundQueueCap = 8192;
+constexpr int32 kInboundQueueWarnThreshold = 1024;
+
+// 1 MiB covers any legitimate baseline / RPC payload (server caps RPC at 64 KiB)
+// while still bounding the cost of a forged or corrupted length prefix.
+constexpr int32 kMaxInboundPayloadBytes = 1 * 1024 * 1024;
+}  // namespace
+
 FAtlasNetClient::FAtlasNetClient() = default;
 
 FAtlasNetClient::~FAtlasNetClient()
@@ -103,6 +116,8 @@ void FAtlasNetClient::Destroy()
 
 	FAtlasInboundMessage Drain;
 	while (Inbound.Dequeue(Drain)) {}
+	InboundDepth.store(0, std::memory_order_relaxed);
+	bInboundOverflowLogged.store(false, std::memory_order_relaxed);
 	PlayerEntityId.store(0);
 	PlayerTypeId.store(0);
 	LastLoginStatus.store(0xFF, std::memory_order_release);
@@ -163,6 +178,7 @@ void FAtlasNetClient::TickGameThread(atlas::ClientEntityManager& Manager)
 	FAtlasInboundMessage Msg;
 	while (Inbound.Dequeue(Msg))
 	{
+		InboundDepth.fetch_sub(1, std::memory_order_relaxed);
 		if (Msg.MsgId == kAtlasInboundDisconnectSentinel)
 		{
 			int32 Reason = 0;
@@ -174,7 +190,10 @@ void FAtlasNetClient::TickGameThread(atlas::ClientEntityManager& Manager)
 			State.store(EAtlasNetClientState::Disconnected);
 			// Everything still queued is from the dead session — drop it so the
 			// next session starts clean.
-			while (Inbound.Dequeue(Msg)) {}
+			while (Inbound.Dequeue(Msg))
+			{
+				InboundDepth.fetch_sub(1, std::memory_order_relaxed);
+			}
 			return;
 		}
 		if (Msg.MsgId == 0xF001 || Msg.MsgId == 0xF003)
@@ -311,6 +330,32 @@ void FAtlasNetClient::OnDeliverStatic(AtlasNetContext* Ctx, uint16 MsgId, const 
 {
 	FAtlasNetClient* Self = FindByCtx(Ctx);
 	if (!Self) return;
+	if (Len > kMaxInboundPayloadBytes)
+	{
+		UE_LOG(LogAtlasNet, Warning,
+			TEXT("Dropping oversize inbound payload msg_id=0x%04X len=%d (cap=%d)"),
+			MsgId, Len, kMaxInboundPayloadBytes);
+		return;
+	}
+	const int32 Depth = Self->InboundDepth.load(std::memory_order_relaxed);
+	if (Depth >= kInboundQueueCap)
+	{
+		// Latch the first overflow report so a frozen game thread doesn't generate
+		// a log line per net-thread poll.
+		bool Expected = false;
+		if (Self->bInboundOverflowLogged.compare_exchange_strong(Expected, true))
+		{
+			UE_LOG(LogAtlasNet, Warning,
+				TEXT("Inbound queue overflow (cap=%d) — dropping msg_id=0x%04X; "
+				     "game thread likely stalled"), kInboundQueueCap, MsgId);
+		}
+		return;
+	}
+	if (Depth == kInboundQueueWarnThreshold)
+	{
+		UE_LOG(LogAtlasNet, Warning,
+			TEXT("Inbound queue depth reached %d — game thread falling behind"), Depth);
+	}
 	FAtlasInboundMessage Msg;
 	Msg.MsgId = MsgId;
 	if (Len > 0 && Payload != nullptr)
@@ -318,6 +363,7 @@ void FAtlasNetClient::OnDeliverStatic(AtlasNetContext* Ctx, uint16 MsgId, const 
 		Msg.Payload.Append(Payload, Len);
 	}
 	Self->Inbound.Enqueue(MoveTemp(Msg));
+	Self->InboundDepth.fetch_add(1, std::memory_order_relaxed);
 }
 
 void FAtlasNetClient::OnDisconnectStatic(AtlasNetContext* Ctx, int32 Reason)
@@ -325,10 +371,13 @@ void FAtlasNetClient::OnDisconnectStatic(AtlasNetContext* Ctx, int32 Reason)
 	FAtlasNetClient* Self = FindByCtx(Ctx);
 	if (!Self) return;
 	// Funnel through the inbound queue so the game thread sees disconnect AFTER
-	// every message already in flight, not interleaved with them.
+	// every message already in flight, not interleaved with them. Bypasses the
+	// depth cap on purpose — losing the disconnect would leave the game in a
+	// permanent "still connected" state.
 	FAtlasInboundMessage Msg;
 	Msg.MsgId = kAtlasInboundDisconnectSentinel;
 	Msg.Payload.SetNumUninitialized(sizeof(int32));
 	FMemory::Memcpy(Msg.Payload.GetData(), &Reason, sizeof(int32));
 	Self->Inbound.Enqueue(MoveTemp(Msg));
+	Self->InboundDepth.fetch_add(1, std::memory_order_relaxed);
 }
