@@ -15,11 +15,6 @@ namespace atlas {
 class ClientEntity;
 class SpanReader;
 
-// One slot on a ClientEntity. Property storage shape matches the entity body
-// (flat std::vector<PropertyValue> keyed by descriptor index); codegen-
-// emitted typed views read off this. Component instance also routes
-// downstream RPCs for the slot — DispatchRpc is virtual so per-component
-// codegen overrides for the method switch.
 class ATLAS_CORE_API ComponentInstance {
  public:
   ComponentInstance(const AtlasEdrComponent* descriptor, ClientEntity* owner, uint8_t slot_idx);
@@ -33,13 +28,10 @@ class ATLAS_CORE_API ComponentInstance {
   [[nodiscard]] uint8_t SlotIdx() const { return slot_idx_; }
   [[nodiscard]] const std::vector<PropertyValue>& Properties() const { return properties_; }
 
-  // Decodes one sectionMask-framed delta on this slot. Mirrors
-  // ClientEntity::ApplyDelta minus the component section (components don't
-  // nest). Caller (entity's ApplyComponentSection) feeds the per-slot bytes.
+  // No sub-component nesting; entity's ApplyComponentSection feeds per-slot bytes.
   bool ApplyDelta(SpanReader& reader, AtlasEdrContext* ctx);
 
-  // Default returns false ("no handler"); codegen-emitted typed component
-  // subclasses override with a method-idx switch.
+  // Codegen overrides with a method-idx switch.
   virtual bool DispatchRpc(uint32_t /*rpc_id*/, uint64_t /*trace_id*/,
                             SpanReader& /*reader*/) {
     return false;

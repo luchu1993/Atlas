@@ -99,9 +99,7 @@ bool FAtlasGenComponentTest::RunTest(const FString&)
 		return false;
 	}
 
-	// Swap the default StressLoadComponent factory for a capturing subclass
-	// at slot 1 (the `load` slot). Must happen BEFORE the first delta to
-	// that slot triggers lazy instantiation.
+	// Factory swap must precede the first delta that lazily instantiates the slot.
 	atlas::mvp::StressAvatar Entity(101, atlas::mvp::StressAvatar::kTypeId);
 	Entity.RegisterComponentFactory(1,
 		[](const AtlasEdrComponent* D, atlas::ClientEntity* O, uint8_t S) {
@@ -112,9 +110,8 @@ bool FAtlasGenComponentTest::RunTest(const FString&)
 	FCaptureSenderForComp Sender;
 	Entity.SetRpcSender(&Sender);
 
-	// Component delta: ExtraHp = 7 (scalar prop 0 of StressLoadComponent).
-	// Outer wire = [u8 sectionMask=0x04][PackedUInt32 slot_count=1]
-	//              [u8 slot=1] [component delta = sectionMask=0x01, flags=1<<0, int32 7]
+	// Wire: [u8 mask=0x04][PackedU32 slots=1][u8 slot=1]
+	//       [u8 comp_mask=0x01][u8 flags=1<<0][i32 7]  // ExtraHp = 7
 	{
 		std::vector<uint8_t> Buf;
 		AppendComp<uint8_t>(Buf, 0x04);  // entity sectionMask = component section only
@@ -157,9 +154,8 @@ bool FAtlasGenComponentTest::RunTest(const FString&)
 		TestEqual(TEXT("amount=10"), amt, 10);
 	}
 
-	// Downstream RPC: OnAffixesUpdated([3, 9]) routed to the component
-	// via entity DispatchRpc (slot=1 in rpc_id) → component DispatchRpc
-	// (method_idx=1 = kMethodIdx_OnAffixesUpdated within client_methods).
+	// Entity DispatchRpc strips slot=1 from rpc_id → routes to component's
+	// DispatchRpc → kMethodIdx_OnAffixesUpdated = 1.
 	{
 		// rpc_id = (slot=1 << 24) | (dir=0 << 22) | (entity_type=3 << 8) | method=1
 		const uint32_t RpcId = (1u << 24) | (0u << 22)

@@ -3,29 +3,15 @@
 #include "Engine/World.h"
 #include "HAL/PlatformTime.h"
 #include "Logging/LogMacros.h"
-#include "Math/UnrealMathUtility.h"
 
 #include "entitydef/entitydef_api.h"
 
 #include "AtlasCoordinates.h"
+#include "AtlasReconnectBackoff.h"
 #include "AtlasUE.h"
 #include "AtlasUEActorView.h"
 
 DEFINE_LOG_CATEGORY_STATIC(LogAtlasSubsystem, Log, All);
-
-namespace
-{
-// 1s, 2s, 4s, ..., capped at 30s. First attempt fires after kBaseBackoffSec
-// from disconnect (no immediate hammer on the server).
-constexpr double kBaseBackoffSec = 1.0;
-constexpr double kMaxBackoffSec = 30.0;
-
-double ComputeBackoffSec(int32 Attempts)
-{
-	const double Scaled = kBaseBackoffSec * FMath::Pow(2.0, static_cast<double>(Attempts));
-	return FMath::Min(Scaled, kMaxBackoffSec);
-}
-}  // namespace
 
 void UAtlasSubsystem::Initialize(FSubsystemCollectionBase& Collection)
 {
@@ -78,8 +64,7 @@ bool UAtlasSubsystem::BeginLogin(const FString& Host, uint16 Port, const FString
                                  const FString& PasswordHash)
 {
 	if (!NetClient) return false;
-	// Cache for auto-reconnect. Game code only has to supply creds once;
-	// the subsystem replays them on disconnect.
+	// Cached so auto-reconnect can replay without re-prompting game code.
 	CachedHost = Host;
 	CachedPort = Port;
 	CachedUsername = Username;
@@ -188,10 +173,8 @@ uint16 UAtlasSubsystem::GetPlayerTypeId() const
 
 bool UAtlasSubsystem::OnTick(float DeltaTime)
 {
-	// AttemptReconnect leaves NetClient null if the previous Create() failed
-	// (rare — ABI mismatch / OOM). Keep the backoff loop alive so the
-	// subsystem isn't stuck forever; without this we'd silently stop
-	// retrying after a single bad Create.
+	// Null after a failed AttemptReconnect Create(); keep the backoff loop
+	// alive so the subsystem isn't stuck on a single bad attempt.
 	if (!NetClient)
 	{
 		if (bAutoReconnectEnabled && bHasCachedCredentials)
@@ -199,7 +182,7 @@ bool UAtlasSubsystem::OnTick(float DeltaTime)
 			const double Now = FPlatformTime::Seconds();
 			if (NextReconnectAtSec == 0.0)
 			{
-				NextReconnectAtSec = Now + ComputeBackoffSec(ReconnectAttempts);
+				NextReconnectAtSec = Now + AtlasReconnect::ComputeBackoffSec(ReconnectAttempts);
 			}
 			else if (Now >= NextReconnectAtSec)
 			{
@@ -220,9 +203,7 @@ bool UAtlasSubsystem::OnTick(float DeltaTime)
 			{
 				NetClient->StartRunningThread();
 				bRunningStarted = true;
-				// First Running-bound transition; reset backoff so the next
-				// disconnect starts from 1 s again.
-				ReconnectAttempts = 0;
+				ReconnectAttempts = 0;  // healthy session — restart backoff from 1s
 			}
 			break;
 		case EAtlasNetClientState::Running:
@@ -237,7 +218,7 @@ bool UAtlasSubsystem::OnTick(float DeltaTime)
 				const double Now = FPlatformTime::Seconds();
 				if (NextReconnectAtSec == 0.0)
 				{
-					NextReconnectAtSec = Now + ComputeBackoffSec(ReconnectAttempts);
+					NextReconnectAtSec = Now + AtlasReconnect::ComputeBackoffSec(ReconnectAttempts);
 					UE_LOG(LogAtlasSubsystem, Log,
 						TEXT("AtlasNet disconnected; next reconnect attempt in %.1f s (attempt #%d)"),
 						NextReconnectAtSec - Now, ReconnectAttempts + 1);
@@ -260,9 +241,8 @@ void UAtlasSubsystem::AttemptReconnect()
 	NextReconnectAtSec = 0.0;
 	UE_LOG(LogAtlasSubsystem, Log, TEXT("AtlasNet reconnect attempt #%d"), ReconnectAttempts);
 
-	// Stale entities (Account, peers from old session) carry the dead
-	// net ctx as their RpcSender route — drop them so codegen stubs don't
-	// fire into the void. Actor destruction cascades via FAtlasUEActorView.
+	// Stale entities still route through the dead net ctx; their actors
+	// cascade-destroy via ~FAtlasUEActorView.
 	EntityManager.Clear();
 	bRunningStarted = false;
 
@@ -279,7 +259,6 @@ void UAtlasSubsystem::AttemptReconnect()
 		return;
 	}
 
-	// Restore the descriptor context + digest + sender on the fresh ctx.
 	if (AtlasEdrContext* Edr = FAtlasUEModule::GetEdrContext())
 	{
 		EntityManager.SetDescriptorContext(Edr);

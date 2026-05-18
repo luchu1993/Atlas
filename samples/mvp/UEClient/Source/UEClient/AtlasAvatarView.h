@@ -12,10 +12,8 @@ DECLARE_DYNAMIC_MULTICAST_DELEGATE_TwoParams(
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_TwoParams(
 	FAtlasAvatarStringChanged, const FString&, OldValue, const FString&, NewValue);
 
-// Avatar.def client_methods → BP. uint32 args go through int32 because
-// dynamic multicast delegate reflection rejects unsigned types; the
-// engine entity_id space is < 2^31 so the cast is lossless. atlas::Vec3
-// converts to FVector via AtlasToUE so BP sees UE-native coords.
+// uint32 args go through int32 — dynamic multicast reflection rejects
+// unsigned; engine entity_id < 2^31 keeps the cast lossless.
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_TwoParams(
 	FAtlasAvatarShowDamage, int32, Amount, int32, AttackerId);
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(
@@ -27,11 +25,6 @@ DECLARE_DYNAMIC_MULTICAST_DELEGATE_ThreeParams(
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_ThreeParams(
 	FAtlasAvatarOnProjectileEnded, int32, ShotId, FVector, EndPos, int32, HitTargetId);
 
-// Blueprint-facing facade around the pure-C++ codegen-emitted Avatar entity.
-// Lives as a UActorComponent on AAvatarCapsule (or any actor that wants the
-// BP API); the game-mode's factory links this view to the matching entity at
-// spawn time. Getters read directly off the bound entity so BP always sees
-// the same state as C++ — no shadow caching to keep coherent.
 UCLASS(ClassGroup=(Atlas), meta=(BlueprintSpawnableComponent))
 class UAtlasAvatarView : public UActorComponent
 {
@@ -76,12 +69,9 @@ public:
 	UFUNCTION(BlueprintCallable, Category="Atlas|Avatar")
 	FString GetSecret() const;
 
-	// Linkage helpers — called from the game-mode factory once both
-	// sides exist. Bind(null) safely detaches.
 	void Bind(atlas::mvp::Avatar* InEntity) { Entity = InEntity; }
 	[[nodiscard]] atlas::mvp::Avatar* GetEntity() const { return Entity; }
 
-	// Bridge callbacks from FBpAvatarEntity's virtual overrides.
 	void NotifyHpChanged(int32 Old, int32 New) { OnHpChanged.Broadcast(Old, New); }
 	void NotifyLevelChanged(int32 Old, int32 New) { OnLevelChanged.Broadcast(Old, New); }
 	void NotifyManaChanged(int32 Old, int32 New) { OnManaChanged.Broadcast(Old, New); }

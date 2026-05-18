@@ -5,19 +5,8 @@ using Atlas.Serialization;
 
 namespace Atlas.Tools.DefDump;
 
-// Atlas.Tools.DefDump — extracts struct + entity-type descriptor blobs
-// from a built C#-server assembly and writes a binary container file
-// consumable by EntityDefRegistry::RegisterFromBinaryFile.
-//
-// Why a separate offline tool: DBApp doesn't host CoreCLR, so it can't
-// run the same source-generator-emitted [ModuleInitializer] PInvoke
-// path the in-process server apps use. Instead, the build pipeline
-// runs this tool against a server-side .dll once per release, and
-// DBApp loads the resulting `entity_defs.bin` at startup. Wire format
-// for the container file lives in src/lib/entitydef/entity_def_registry.h.
-//
-// Usage:
-//   Atlas.Tools.DefDump --assembly <path-to-Atlas.X.dll> --out <path>
+// DBApp has no CoreCLR; this offline tool extracts the ModuleInitializer's
+// PInvoke payload to a binary file. Usage: --assembly <path> --out <path>.
 public static class Program
 {
     private const uint FileMagic = 0x46445441u;  // 'A''T''D''F' little-endian
@@ -46,10 +35,7 @@ public static class Program
             return 1;
         }
 
-        // Resolve sibling assemblies the loaded one references (e.g.,
-        // Atlas.Runtime, Atlas.Shared) from the same directory the input
-        // .dll lives in. Without this hook, AssemblyResolveError fires
-        // the moment we touch a generated type that uses Atlas.Core etc.
+        // Without this, the first generated-type touch hits AssemblyResolveError.
         var assemblyDir = Path.GetDirectoryName(Path.GetFullPath(assemblyPath));
         AppDomain.CurrentDomain.AssemblyResolve += (_, e) =>
         {
@@ -71,11 +57,7 @@ public static class Program
             return 2;
         }
 
-        // Capture struct + component + type blobs via the codegen-emitted
-        // BuildAll enumerators. Loading order matches the runtime
-        // ModuleInitializer: structs first (entity property type_refs
-        // resolve them), then components (entity slot tables reference
-        // component_type_id), then entity types.
+        // Order mirrors the runtime ModuleInitializer: structs → components → types.
         var structBlobs = TryCollectBlobs(target, "Atlas.Def.DefStructRegistry");
         var componentBlobs = TryCollectBlobs(target, "Atlas.Def.DefComponentRegistry");
         var typeBlobs = TryCollectBlobs(target, "Atlas.Def.DefEntityTypeRegistry");
@@ -132,9 +114,7 @@ public static class Program
         var t = asm.GetType(typeName, throwOnError: false);
         if (t is null)
         {
-            // Not all assemblies host both registries — Atlas.ClientSample
-            // ships entities + structs but no DefStructRegistry if the .def
-            // collection has no <types>. Empty section is a valid result.
+            // An empty section is a valid result (assembly may not host this registry).
             Console.Error.WriteLine($"DefDump: {typeName} not found in assembly (treating as empty)");
             return result;
         }

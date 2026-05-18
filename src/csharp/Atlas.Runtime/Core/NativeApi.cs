@@ -21,10 +21,7 @@ internal static unsafe partial class NativeApi
     [LibraryImport(LibName, EntryPoint = "AtlasLogMessage")]
     private static partial void LogMessageNative(int level, byte* msg, int len);
 
-    /// <summary>
-    /// Log a UTF-8 message at the given level (0=Trace 1=Debug 2=Info 3=Warn 4=Error 5=Critical).
-    /// Thread-safe — no ThreadGuard required.
-    /// </summary>
+    // Thread-safe; level 0=Trace 1=Debug 2=Info 3=Warn 4=Error 5=Critical.
     public static void LogMessage(int level, ReadOnlySpan<byte> message)
     {
         fixed (byte* ptr = message)
@@ -45,10 +42,7 @@ internal static unsafe partial class NativeApi
         uint entityId, uint packedRpcId, byte target,
         byte* payload, int payloadLen, ulong traceId);
 
-    /// <summary>
-    /// Send a client RPC. Direction is encoded in the top 2 bits of packedRpcId
-    /// using the format: [direction:2 | typeIndex:14 | method:8].
-    /// </summary>
+    // packedRpcId layout: [direction:2 | typeIndex:14 | method:8].
     public static void SendClientRpc(uint entityId, uint packedRpcId, RpcTarget target,
         ReadOnlySpan<byte> payload, ulong traceId)
     {
@@ -94,9 +88,7 @@ internal static unsafe partial class NativeApi
     [LibraryImport(LibName, EntryPoint = "AtlasRegisterStruct")]
     private static partial void RegisterStructNative(byte* data, int len);
 
-    // Must be invoked before any RegisterEntityType whose descriptor
-    // references this struct by id — RegisterType's decoder resolves
-    // struct_id references against the registry's current state.
+    // Must run before any RegisterEntityType whose descriptor references this struct id.
     public static void RegisterStruct(ReadOnlySpan<byte> data)
     {
         ThreadGuard.EnsureMainThread();
@@ -107,9 +99,8 @@ internal static unsafe partial class NativeApi
     [LibraryImport(LibName, EntryPoint = "AtlasRegisterComponent")]
     private static partial void RegisterComponentNative(byte* data, int len);
 
-    // Must be invoked after RegisterStruct (component properties may
-    // reference struct_id) and before any RegisterEntityType whose slot
-    // table references this component_type_id.
+    // Must run after RegisterStruct and before any RegisterEntityType whose
+    // slot table references this component_type_id.
     public static void RegisterComponent(ReadOnlySpan<byte> data)
     {
         ThreadGuard.EnsureMainThread();
@@ -136,20 +127,8 @@ internal static unsafe partial class NativeApi
     [LibraryImport(LibName, EntryPoint = "AtlasCreateBaseEntity")]
     private static partial uint CreateBaseEntityNative(ushort typeId, uint spaceId);
 
-    /// <summary>
-    /// Script-initiated entity creation on the caller's BaseApp. Returns
-    /// the newly-allocated entity id, or 0 on failure. The C# instance is
-    /// available from EntityManager.Instance.Get(...) after the call — the
-    /// native side invokes RestoreEntity synchronously before returning.
-    /// For has_cell types the call also fires CreateCellEntity to a CellApp
-    /// targeting <paramref name="spaceId"/> (CellApp auto-creates the Space
-    /// if missing). space_id is ignored for base-only types.
-    /// <para/>
-    /// Witness attachment happens via the client-bind path
-    /// (<see cref="ServerEntity.GiveClientTo"/> → BaseApp BindClient → cell
-    /// EnableWitness). Scripts wanting a non-default AoI radius call
-    /// <see cref="ServerEntity.SetAoIRadius"/> after GiveClientTo.
-    /// </summary>
+    // Returns 0 on failure; instance available via EntityManager.Get after return.
+    // For has_cell types also fires CreateCellEntity to spaceId's CellApp.
     public static uint CreateBaseEntity(ushort typeId, uint spaceId = 1)
     {
         ThreadGuard.EnsureMainThread();
@@ -161,8 +140,7 @@ internal static unsafe partial class NativeApi
         float posX, float posY, float posZ, float dirX, float dirY, float dirZ,
         [MarshalAs(UnmanagedType.U1)] bool onGround);
 
-    // Cell-script entry: creates a cell-only entity here on this CellApp.
-    // No Base counterpart, no DB persistence. Returns 0 on failure.
+    // Cell-only entity (no Base counterpart, no DB row). 0 on failure.
     public static uint CreateLocalCellEntity(ushort typeId, uint spaceId,
         Vector3 position, Vector3 direction, bool onGround)
     {
@@ -187,9 +165,7 @@ internal static unsafe partial class NativeApi
         float posX, float posY, float posZ, float dirX, float dirY, float dirZ,
         [MarshalAs(UnmanagedType.U1)] bool onGround);
 
-    // Base-script entry: asks the CellApp owning spaceId to spawn a
-    // cell-only entity. Returns true if the routing message went out (cell
-    // assigns the id asynchronously; not returned synchronously).
+    // Base → CellApp route; true means message dispatched (id is async).
     public static bool RequestSpawnCellOnly(ushort typeId, uint spaceId,
         Vector3 position, Vector3 direction, bool onGround)
     {
@@ -201,12 +177,7 @@ internal static unsafe partial class NativeApi
     [LibraryImport(LibName, EntryPoint = "AtlasSetAoIRadius")]
     private static partial void SetAoIRadiusNative(uint entityId, float radius, float hysteresis);
 
-    /// <summary>
-    /// Forward a SetAoIRadius to the cell hosting this entity's
-    /// counterpart. Radius is clamped on the cell side to [0.1, max];
-    /// hysteresis widens the leave boundary so peers inside
-    /// (radius, radius+hysteresis) stay in AoI.
-    /// </summary>
+    // Cell-side clamps radius to [0.1, max]; hysteresis widens leave boundary.
     public static void SetAoIRadius(uint entityId, float radius, float hysteresis)
     {
         ThreadGuard.EnsureMainThread();
@@ -273,12 +244,8 @@ internal static unsafe partial class NativeApi
         SetNativeCallbacksNative(nativeCallbacks, len);
     }
 
-    // AtlasSetEntityPosition forwards to the active INativeApiProvider. On
-    // CellApp that updates the CellEntity's C++ position_ + range_node_ so
-    // AoI triggers see the move. On any other process type the provider
-    // logs a warning and no-ops — harmless if a shared script accidentally
-    // runs there. See src/lib/clrscript/clr_native_api_defs.h.
-
+    // CellApp updates CellEntity::position_ + range_node_; other process
+    // types log + no-op so shared scripts on the wrong host don't crash.
     [LibraryImport(LibName, EntryPoint = "AtlasSetEntityPosition")]
     private static partial void SetEntityPositionNative(uint entityId, float x, float y, float z);
 
@@ -319,17 +286,8 @@ internal static unsafe partial class NativeApi
         return new Vector3(x, y, z);
     }
 
-    // Hand one tick of replication output for a single entity to the cell
-    // layer. BuildAndConsumeReplicationFrame on the C# side produces the four
-    // audience-filtered buffers (+ event_seq / volatile_seq); this routes
-    // them to CellEntity::PublishReplicationFrame on the native side, which
-    // updates ReplicationState.history for downstream Witness consumption.
-    //
-    // The four byte* parameters accept nullptr with the corresponding length
-    // == 0 — callers passing empty SpanWriter output skip the `fixed` block.
-    // On non-CellApp processes (BaseApp, Client) the provider logs a warning
-    // and no-ops, so C# can blind-forward any entity whose frame advanced.
-
+    // Four buffers accept nullptr with corresponding len == 0; non-CellApp
+    // hosts log + no-op so C# can blind-forward any advanced entity.
     [LibraryImport(LibName, EntryPoint = "AtlasPublishReplicationFrame")]
     private static partial void PublishReplicationFrameNative(
         uint entityId, ulong eventSeq, ulong volatileSeq,

@@ -38,9 +38,7 @@ ATLAS_EDR_API void AtlasEdrDestroy(AtlasEdrContext* ctx);
 ATLAS_EDR_API int32_t AtlasEdrLoadFromFile(AtlasEdrContext* ctx, const char* path);
 ATLAS_EDR_API int32_t AtlasEdrLoadFromBuffer(AtlasEdrContext* ctx, const uint8_t* data, int32_t len);
 
-// 32-byte SHA-256 of the entity_defs surface; valid only after a successful
-// Load. Returns NULL before Load; buffer is owned by ctx and valid until
-// Destroy.
+// 32-byte SHA-256; NULL before Load. Buffer is ctx-owned, valid until Destroy.
 ATLAS_EDR_API const uint8_t* AtlasEdrGetDigest(AtlasEdrContext* ctx);
 ATLAS_EDR_API int32_t AtlasEdrGetDigestSize(AtlasEdrContext* ctx);
 
@@ -99,15 +97,11 @@ ATLAS_EDR_API int32_t AtlasEdrEntityPropertyCount(const AtlasEdrEntity* entity);
 ATLAS_EDR_API const AtlasEdrProperty* AtlasEdrEntityPropertyAt(const AtlasEdrEntity* entity,
                                                                int32_t index);
 
-// Resolves a method to its packed rpc_id by walking the entity's rpcs by
-// name. Returns 0 if entity / method not found — callers should treat 0 as
-// "missing" (no valid rpc_id has a zero method index).
+// 0 means missing — no valid rpc_id has a zero method index.
 ATLAS_EDR_API uint32_t AtlasEdrFindRpcId(AtlasEdrContext* ctx, const char* entity_name,
                                           const char* method_name);
 
-// Component descriptor access. Components carry the same property surface
-// shape as entity bodies (AtlasEdrProperty), so the generic decoder reuses
-// AtlasEdrPropertyDataType / TypeRef / etc. on slot properties too.
+// Components share AtlasEdrProperty shape with entity bodies.
 ATLAS_EDR_API const AtlasEdrComponent* AtlasEdrFindComponentById(AtlasEdrContext* ctx,
                                                                   uint16_t component_type_id);
 ATLAS_EDR_API const AtlasEdrComponent* AtlasEdrFindComponentByName(AtlasEdrContext* ctx,
@@ -118,8 +112,7 @@ ATLAS_EDR_API int32_t AtlasEdrComponentPropertyCount(const AtlasEdrComponent* co
 ATLAS_EDR_API const AtlasEdrProperty* AtlasEdrComponentPropertyAt(const AtlasEdrComponent* comp,
                                                                    int32_t index);
 
-// Per-entity slot resolution: returns the component descriptor mounted at
-// slot_idx on the entity, or null when the slot is unallocated.
+// Null when the slot is unallocated.
 ATLAS_EDR_API const AtlasEdrComponent* AtlasEdrEntityComponentAtSlot(
     AtlasEdrContext* ctx, const AtlasEdrEntity* entity, uint8_t slot_idx);
 
@@ -130,8 +123,7 @@ ATLAS_EDR_API uint16_t AtlasEdrPropertyIndex(const AtlasEdrProperty* prop);
 // Returns null for pure scalars (their data_type alone pins the decode).
 ATLAS_EDR_API const AtlasEdrDataTypeRef* AtlasEdrPropertyTypeRef(const AtlasEdrProperty* prop);
 
-// DataTypeRef navigation. kind matches AtlasEdrDataType; Elem/Key return
-// null for scalars and pure-struct refs. StructId is meaningful only when
+// Elem/Key return null for scalars + pure-struct refs; StructId only valid for
 // kind == ATLAS_EDR_TYPE_STRUCT.
 ATLAS_EDR_API uint8_t AtlasEdrDataTypeRefKind(const AtlasEdrDataTypeRef* ref);
 ATLAS_EDR_API const AtlasEdrDataTypeRef* AtlasEdrDataTypeRefElem(const AtlasEdrDataTypeRef* ref);

@@ -9,11 +9,6 @@ using Xunit;
 
 namespace Atlas.Generators.Tests;
 
-// End-to-end generator tests for the container-property emitter wiring:
-// DefStructRegistry.RegisterAllStructs + DefEntityTypeRegistry container
-// tails. Exercises the full pipeline (DefParser → DefLinker → emitters)
-// driven from XML, so a regression anywhere in the chain surfaces as a
-// missing / wrong generated code fragment.
 public class DefGeneratorContainerEmitTests
 {
     // Stubs let the generated code compile against a fake Atlas.Core /
@@ -162,10 +157,6 @@ public partial class Avatar : ServerEntity
 }
 ";
 
-    // =========================================================================
-    // Struct registry — emitted when <types> section is present
-    // =========================================================================
-
     [Fact]
     public void StructRegistry_EmittedForEachDeclaredStruct()
     {
@@ -194,14 +185,10 @@ public partial class Avatar : ServerEntity
         Assert.Contains("Register_SkillEntry", code);
         Assert.Contains("RegisterAllStructs", code);
 
-        // Both register methods must feed the bridge; missing this means
-        // the struct table on the native side stays empty and any
-        // RegisterEntityType that references a struct_id will reject.
+        // Missing this leaves the native struct table empty.
         Assert.Contains("EntityRegistryBridge.RegisterStruct", code);
 
-        // The single ModuleInitializer lives on DefBootstrap and chains all
-        // register steps in fixed struct → entity → factory → dispatcher
-        // order; the per-emitter ModuleInitializers are intentionally gone.
+        // DefBootstrap is the single ModuleInitializer; per-emitter ones are gone.
         var bootstrap = FindGenerated(result, "DefBootstrap");
         Assert.NotNull(bootstrap);
         Assert.Contains("ModuleInitializer", bootstrap);
@@ -236,10 +223,7 @@ public partial class Avatar : ServerEntity
         var result = Run(MinimalUserSource, xml);
         var code = FindGenerated(result, "DefStructRegistry")!;
 
-        // Alphabetical: Alpha=1, Beta=2, Zeta=3. Deterministic ordering is
-        // what lets the emitter and DefLinker agree without shared state.
-        // Look for the method definition (`void Register_<Name>`) rather
-        // than the call site, which also contains `Register_<Name>(`.
+        // Alpha=1, Beta=2, Zeta=3 (ordinal). Match `void Register_<N>` not the call site.
         var alphaRegion = code.Substring(code.IndexOf("void Register_Alpha", System.StringComparison.Ordinal));
         Assert.Contains("WriteUInt16((ushort)1)", alphaRegion.Substring(0, 400));
         var betaRegion = code.Substring(code.IndexOf("void Register_Beta", System.StringComparison.Ordinal));
@@ -247,10 +231,6 @@ public partial class Avatar : ServerEntity
         var zetaRegion = code.Substring(code.IndexOf("void Register_Zeta", System.StringComparison.Ordinal));
         Assert.Contains("WriteUInt16((ushort)3)", zetaRegion.Substring(0, 400));
     }
-
-    // =========================================================================
-    // Entity type registry — container property tail
-    // =========================================================================
 
     [Fact]
     public void EntityTypeRegistry_EmitsListPropertyTail()
@@ -263,9 +243,7 @@ public partial class Avatar : ServerEntity
         var result = Run(MinimalUserSource, xml);
         var code = FindGenerated(result, "DefEntityTypeRegistry")!;
 
-        // Top-level kind byte for the property: kList = 16. No leading
-        // redundant kind byte on the body; the elem DataTypeRef starts
-        // with its own kind byte (kInt32 = 5).
+        // Body has no redundant kind byte; elem ref leads with its own kind.
         Assert.Contains("WriteByte(16)", code);   // prop.data_type = List
         Assert.Contains("WriteByte(5)", code);    // list.elem.kind = Int32
         Assert.Contains("WritePackedUInt32(128)", code);  // max_size
@@ -323,9 +301,7 @@ public partial class Avatar : ServerEntity
         var result = Run(MinimalUserSource, xml);
         var code = FindGenerated(result, "DefEntityTypeRegistry")!;
 
-        // The only WritePackedUInt32 emissions in the generated method
-        // should be property count + rpc count + slot count (each emitted
-        // once); there should NOT be a max_size emission.
+        // 3 emissions = property count + rpc count + slot count; no max_size.
         var count = System.Text.RegularExpressions.Regex.Matches(
             code, @"WritePackedUInt32\(").Count;
         Assert.Equal(3, count);
@@ -343,22 +319,12 @@ public partial class Avatar : ServerEntity
         var result = Run(userSource, xml);
         var code = FindGenerated(result, "DefEntityTypeRegistry")!;
 
-        // Top-level prop.data_type = kList (emitted once in prop header).
-        // Body: outer list omits its own kind byte; nested elem IS a full
-        // DataTypeRef so it emits `WriteByte(16)` (kList) then elem's
-        // kind `WriteByte(5)` (kInt32). Overall:
-        //   prop top-level WriteByte(16)   → 1
-        //   nested elem WriteByte(16)      → 2 (same byte value; count duplicates)
-        //   nested elem's elem WriteByte(5) → at least one
+        // Two `WriteByte(16)` (prop header + nested elem) + one `WriteByte(5)`.
         var listBytes = System.Text.RegularExpressions.Regex.Matches(
             code, @"WriteByte\(16\)").Count;
         Assert.True(listBytes >= 2, $"expected ≥ 2 WriteByte(16) calls, got {listBytes}");
         Assert.Contains("WriteByte(5)", code);
     }
-
-    // =========================================================================
-    // End-to-end pipeline — cycle / link diagnostics
-    // =========================================================================
 
     [Fact]
     public void Generator_CyclicStructsProduceNoOutput()
@@ -371,10 +337,8 @@ public partial class Avatar : ServerEntity
 </entity>";
         var result = Run(MinimalUserSource, xml);
 
-        // Parser rejects the cycle and returns null → generator drops the
-        // def before emitting anything entity-specific. The struct registry
-        // must not be emitted either (nothing to register). The single
-        // generator failure path: empty entity list, no RegisterAllStructs.
+        // Cycle → parser rejects → generator emits nothing for the def, and
+        // no struct registry since there's nothing to register.
         Assert.Null(FindGenerated(result, "DefStructRegistry"));
         Assert.Null(FindGenerated(result, "DefEntityTypeRegistry"));
     }

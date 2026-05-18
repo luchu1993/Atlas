@@ -23,25 +23,18 @@ using GetEntityDataFn = void (*)(uint32_t entity_id, uint8_t** out_data, int32_t
 // Notifies C# that an entity has been removed natively.
 using EntityDestroyedFn = void (*)(uint32_t entity_id);
 
-// Dispatches a validated incoming RPC to the C# entity. reply_channel is
-// the source Channel* recast to intptr_t — C# hands it back to
-// SendEntityRpcReply when the user method completes.
+// reply_channel is Channel* recast — C# hands it back via SendEntityRpcReply.
 using DispatchRpcFn = void (*)(uint32_t entity_id, uint32_t rpc_id, intptr_t reply_channel,
                                const uint8_t* payload, int32_t len, uint64_t trace_id);
 
-// Owner-scope baseline snapshot via SerializeForOwnerClient (filtered to
-// client-visible fields). Distinct from GetEntityData (scope-agnostic DB
-// state). out_len is -1 on error.
+// Owner-scope baseline (SerializeForOwnerClient); out_len is -1 on error.
 using GetOwnerSnapshotFn = void (*)(uint32_t entity_id, uint8_t** out_data, int32_t* out_len);
 
-// Offload serialization. Returns 0 on success, required size if out_buf
-// too small, -1 on error (out_len also set to -1).
+// 0 on success, required size if out_buf too small, -1 on error.
 using SerializeEntityFn = int32_t (*)(uint32_t entity_id, uint8_t* out_buf, int32_t out_buf_cap,
                                       int32_t* out_len);
 
-// Proximity sensor enter/leave callback. user_arg is the script-supplied
-// handle from AddProximityController (lets one entity own multiple sensors);
-// native side does not interpret it.
+// user_arg is script-supplied (lets one entity own multiple sensors).
 using ProximityEventFn = void (*)(uint32_t entity_id, int32_t user_arg, uint32_t peer_entity_id,
                                   uint8_t is_enter);
 

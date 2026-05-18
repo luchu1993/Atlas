@@ -20,11 +20,8 @@
                       ReferenceOutputAssembly="true" />
   </ItemGroup>
 
-  <!-- Propagate Atlas.Defs.Parser.dll as an analyzer payload to downstream
-       projects that reference Atlas.Generators.Def with OutputItemType=Analyzer.
-       Without this, csc can load DefGenerator but FileNotFoundException fires
-       at IIncrementalGenerator.Initialize time when the generator hits any
-       Atlas.Defs.Parser type. -->
+  <!-- Without this, csc loads DefGenerator but FileNotFoundException fires at
+       IIncrementalGenerator.Initialize when it touches Atlas.Defs.Parser. -->
   <PropertyGroup>
     <GetTargetPathDependsOn>$(GetTargetPathDependsOn);_IncludeParserInTargetPath</GetTargetPathDependsOn>
   </PropertyGroup>

@@ -5,10 +5,7 @@
 
 #include "bp_avatar_view_test.generated.h"
 
-// Test-only listener: a UFUNCTION shaped like FAtlasAvatarIntChanged so the
-// dynamic multicast delegate can bind it via AddDynamic in
-// bp_avatar_view_test.cpp. Lives in a header so UHT generates the reflection
-// glue.
+// Lives in a header so UHT generates the reflection glue for AddDynamic.
 UCLASS()
 class UAtlasBpAvatarListener : public UObject
 {
@@ -38,10 +35,8 @@ public:
 		LastLevelNew = NewValue;
 	}
 
-	// Counters + last-args capture for the 5 Avatar.def client_methods. BP
-	// game code is expected to bind these to its own UFUNCTION; the test
-	// fixture just records what came through so we can assert routing +
-	// type conversion (uint32→int32, atlas::Vec3→FVector via AtlasToUE).
+	// Captures the 5 Avatar client_methods to assert routing + uint32→int32 /
+	// Vec3→FVector type conversion.
 	int32 ShowDamageCalls = 0;
 	int32 LastDamageAmount = 0;
 	int32 LastDamageAttackerId = 0;

@@ -107,10 +107,8 @@ public static class Program
             return 5;
         }
 
-        // Shared struct file (entity-local <types> all linker-merged here).
-        // Entity + component gen headers #include it, so cross-entity struct
-        // refs (e.g., StressLoadComponent.def references StressWeapon defined
-        // in StressAvatar.def) resolve without circular includes.
+        // Single shared file so cross-file struct refs (e.g. component def
+        // references a struct from another entity) avoid circular includes.
         EmitSharedStructs(outputPath, @namespace, linked.Structs);
 
         // Components first so entity gen files can #include them.
@@ -260,10 +258,8 @@ public static class Program
 
     private static IEnumerable<ScalarPropEntry> EnumerateClientVisibleScalars(EntityDefModel entity)
     {
-        // Descriptor index follows .def declaration order with reserved-position
-        // properties excluded (matches TypeRegistryEmitter's effectiveProps).
-        // Containers / structs land in the second pass once codegen tracks
-        // recursive value access; for now plain scalars cover MVP entities.
+        // Indexed to match TypeRegistryEmitter's effectiveProps (skips
+        // ATLAS_DEF008 reserved-position).
         var effective = entity.Properties.Where(p => !p.IsReservedPosition).ToList();
         for (int i = 0; i < effective.Count; ++i)
         {
@@ -305,9 +301,8 @@ public static class Program
         if (any) sb.AppendLine();
     }
 
-    // Per scalar prop: a virtual that game code overrides to react to a value
-    // change. Fires only when the new wire value differs from the prior local
-    // state (avoids spurious calls if a sender re-sends the same value).
+    // Fires only on wire-value change so a re-send with the same value
+    // doesn't spuriously trigger the game-side override.
     private static void EmitPropertyChangeHooks(StringBuilder sb, EntityDefModel entity)
     {
         bool any = false;
@@ -320,9 +315,8 @@ public static class Program
         if (any) sb.AppendLine();
     }
 
-    // Snapshot → base ApplyDelta → diff → fire. Captures old values up-front
-    // so the base call can overwrite the variant in-place. Skipped if the
-    // entity has no scalar hooks (no work to do beyond base).
+    // Snapshots old scalars before base ApplyDelta so the variant can be
+    // overwritten in place, then diffs and fires per-prop hooks.
     private static void EmitApplyDeltaOverride(StringBuilder sb, EntityDefModel entity)
     {
         var scalars = EnumerateClientVisibleScalars(entity).ToList();
@@ -355,9 +349,8 @@ public static class Program
     private static void EmitRpcConstantSection(StringBuilder sb, List<MethodDefModel> methods,
                                                 ushort typeId, RpcDirection dir, ref bool any)
     {
-        // RPC ID index uses .def declaration position regardless of whether
-        // codegen can map the args — kRpcId_<Name> stays stable so server
-        // and client agree on the wire even when codegen skips the stub.
+        // Index is .def declaration position regardless of codegen support,
+        // so the rpc_id stays stable when a stub is skipped.
         for (int idx = 0; idx < methods.Count; ++idx)
         {
             var m = methods[idx];
@@ -397,11 +390,7 @@ public static class Program
         };
     }
 
-    // rpc_id wire layout (mirrors Atlas.Generators.Def.Emitters.RpcIdEncoder):
-    //   bits 24-30  slot_idx (0 = entity body)
-    //   bits 22-23  direction (0=Client, 2=Cell, 3=Base)
-    //   bits  8-21  typeIndex
-    //   bits  0-7   methodIdx (1-based per direction)
+    // Layout (mirrors RpcIdEncoder): slot[31:24] | dir[23:22] | type[21:8] | method[7:0].
     private static uint EncodeRpcId(int slot, byte direction, ushort typeIndex, int methodIdx)
     {
         return ((uint)slot << 24) | ((uint)direction << 22) | ((uint)typeIndex << 8) | (uint)methodIdx;
@@ -439,9 +428,8 @@ public static class Program
         }
     }
 
-    // Promotes a scalar arg's string type to a synthetic DataTypeRefModel so
-    // EmitWriteValue / EmitReadValue can drive both scalar and container args
-    // through one recursive path.
+    // Synthesises a DataTypeRefModel for scalar args so EmitRead/WriteValue
+    // can drive scalar + container args through the same recursive path.
     private static DataTypeRefModel TypeRefForArg(ArgDefModel arg)
     {
         if (arg.TypeRef is not null) return arg.TypeRef;
@@ -468,9 +456,8 @@ public static class Program
         _ => PropertyDataKind.Custom,
     };
 
-    // Each client_method gets a virtual stub (empty body so game code is free
-    // to override only what it cares about) plus a switch arm in DispatchRpc.
-    // Param names commented out in the base sig to avoid -Wunused-parameter.
+    // Empty base body so game code can override piecemeal; param names are
+    // commented out to silence -Wunused-parameter on the default stub.
     private static void EmitDownstreamRpcHandlers(StringBuilder sb, EntityDefModel entity,
                                                    string @namespace)
     {
@@ -541,11 +528,8 @@ public static class Program
 
     // ── Component class emit ──────────────────────────────────────────────
 
-    // Emits one <ComponentName>.gen.h per synced standalone component.
-    // Layout mirrors the entity body: kMethodIdx_* constants, typed scalar
-    // getters, container/struct getters, OnXxxChanged hooks, upstream RPC
-    // stubs (Owner-routed), downstream virtuals + DispatchRpc switch on
-    // method_idx only (RPC direction always 0 = Client at receive time).
+    // Component DispatchRpc switches on method_idx only — direction is
+    // always 0 (Client) at receive time, no need to thread it through.
     private static void EmitComponent(string outputDir, string @namespace, ComponentDefModel comp)
     {
         var headerName = $"{comp.TypeName}.gen.h";
@@ -729,16 +713,8 @@ public static class Program
         sb.AppendLine();
     }
 
-    // ── Struct + container property getters ───────────────────────────────
-
-    // Emits one POD C++ struct per `<types><struct>` declaration, with a
-    // `FromStructValue` factory that pulls each field out of the variant
-    // store. Recursive: struct fields can themselves be containers / nested
-    // structs, all handled by EmitExtract.
-    // Emits one shared `_Structs.gen.h` covering every linker-collected
-    // struct so any entity / component can include it without circular deps.
-    // No-op when there are no structs (entity headers still include the
-    // empty file via fixed includes; that's a single line guard cost).
+    // Single header for every linker-collected struct so entity / component
+    // gens can include without circular deps. No-op if zero structs.
     private static void EmitSharedStructs(string outputDir, string @namespace,
                                            IEnumerable<StructDefModel> structs)
     {
@@ -814,9 +790,8 @@ public static class Program
         sb.AppendLine();
     }
 
-    // Emits typed getters for client-visible non-scalar properties (struct,
-    // list, dict). Each returns by value, materialising a POD/vector tree
-    // from the runtime variant store via EmitExtract.
+    // Typed by-value getters for struct / list / dict properties; the
+    // returned tree is materialised from the variant store via EmitExtract.
     private static void EmitContainerAndStructGetters(StringBuilder sb, EntityDefModel entity,
                                                       string @namespace)
     {
@@ -849,10 +824,8 @@ public static class Program
         public string Next(string prefix) => $"{prefix}{_n++}";
     }
 
-    // Recursive: emit code that, given a PropertyValue expression `pvExpr`,
-    // unpacks its content into typed local/field `destExpr`. Scalars use
-    // std::get_if; struct delegates to the codegen-emitted FromStructValue;
-    // list/dict iterate the runtime container and recurse element-by-element.
+    // Recursively unpacks `pvExpr` (PropertyValue) into `destExpr`. Struct
+    // delegates to FromStructValue; container kinds iterate + recurse.
     private static void EmitExtract(StringBuilder sb, string indent, DataTypeRefModel typeRef,
                                      string pvExpr, string destExpr, string @namespace,
                                      FreshNames names)

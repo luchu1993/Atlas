@@ -24,9 +24,8 @@ public:
 	using EntityFactory = std::function<std::unique_ptr<atlas::ClientEntity>(
 		atlas::EntityId, atlas::EntityTypeId)>;
 
-	// Runs after the entity is created and the FAtlasUEActorView is attached;
-	// game code uses this to wire engine-side bridges (e.g., UAtlasAvatarView)
-	// to the typed entity instance the factory produced.
+	// Fires after entity + FAtlasUEActorView are wired so game code can link
+	// engine-side bridges (e.g., UAtlasAvatarView) to the new entity.
 	using EntityPostBind = std::function<void(atlas::ClientEntity*, AActor*)>;
 
 	virtual void Initialize(FSubsystemCollectionBase& Collection) override;
@@ -36,9 +35,7 @@ public:
 	                const FString& PasswordHash);
 	bool BeginAuthenticate();
 
-	// Disable to drop reconnect attempts (e.g. user-initiated logout flow,
-	// or a future LoginScreen that wants to drive retry manually). Defaults
-	// to true so the headless MVP recovers from cluster restarts.
+	// False to suppress auto-retry (user-driven logout / future LoginScreen).
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Atlas|Reconnect")
 	bool bAutoReconnectEnabled = true;
 
@@ -53,10 +50,7 @@ public:
 	virtual void SendCellRpc(atlas::EntityId Id, uint32 RpcId, const uint8* Args,
 		int32 ArgsLen) override;
 
-	// On HandleEnter the subsystem spawns the bound Actor, runs Factory (or the
-	// base ClientEntity if null), attaches an FAtlasUEActorView, then invokes
-	// PostBind so game code can link engine-side bridge components to the
-	// freshly-created entity.
+	// Factory null → base ClientEntity. PostBind runs after AttachView.
 	void RegisterEntityClass(uint16 TypeId, TSubclassOf<AActor> ActorClass,
 	                         EntityFactory Factory = nullptr,
 	                         EntityPostBind PostBind = nullptr);
@@ -69,10 +63,6 @@ public:
 
 private:
 	bool OnTick(float DeltaTime);
-
-	// Tears down stale entities + net ctx and BeginLogin's the cached
-	// credentials. Called by OnTick when state is Disconnected and the
-	// backoff timer elapses.
 	void AttemptReconnect();
 
 	std::unique_ptr<atlas::ClientEntity> InstantiateEntity(uint16 TypeId,
@@ -92,18 +82,13 @@ private:
 	FTSTicker::FDelegateHandle TickHandle;
 	bool bRunningStarted = false;
 
-	// Captured on the first successful BeginLogin call. Reused by the
-	// auto-reconnect path on subsequent disconnects so game code only has
-	// to push credentials once.
+	// Captured on first BeginLogin; replayed by auto-reconnect.
 	FString CachedHost;
 	uint16 CachedPort = 0;
 	FString CachedUsername;
 	FString CachedPasswordHash;
 	bool bHasCachedCredentials = false;
 
-	// Backoff state. Reset to 0 on every successful Running transition;
-	// otherwise doubles each disconnect, capped to kMaxBackoffSec. The
-	// "next attempt at" time is seconds since module-load (FPlatformTime).
 	int32 ReconnectAttempts = 0;
 	double NextReconnectAtSec = 0.0;
 };

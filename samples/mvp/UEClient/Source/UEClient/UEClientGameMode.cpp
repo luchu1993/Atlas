@@ -63,10 +63,7 @@ void AUEClientGameMode::BeginPlay()
 			return std::make_unique<atlas::mvp::Account>(Id, Type);
 		});
 
-	// Avatar uses the BP-bridge subclass so HP/level/mana changes surface to
-	// UAtlasAvatarView delegates. Position interpolation lives on the actor
-	// view path (FAtlasUEActorView) so the BP entity doesn't replicate the
-	// MovingClientEntity filter.
+	// FBpAvatarEntity bridges scalar change hooks → UAtlasAvatarView delegates.
 	auto AvatarFactory = [](atlas::EntityId Id, atlas::EntityTypeId Type)
 		-> std::unique_ptr<atlas::ClientEntity> {
 		return std::make_unique<FBpAvatarEntity>(Id, Type);
@@ -107,17 +104,12 @@ void AUEClientGameMode::Tick(float DeltaSeconds)
 	if (!Sub) return;
 
 	const EAtlasNetClientState NetState = Sub->GetNetState();
-	const uint8 NetStateU = static_cast<uint8>(NetState);
-
-	// Subsystem-driven reconnect: any transition back into LoggingIn means
-	// the previous session was torn down. Reset per-session flags so the
-	// post-login Authenticate + SelectAvatar fire again.
-	if (NetState == EAtlasNetClientState::LoggingIn && LastNetState != NetStateU)
+	if (NetState == EAtlasNetClientState::LoggingIn && LastNetState != NetState)
 	{
 		bAuthenticateRequested = false;
 		bSelectAvatarSent = false;
 	}
-	LastNetState = NetStateU;
+	LastNetState = NetState;
 
 	if (!bAuthenticateRequested && NetState == EAtlasNetClientState::LoginSucceeded)
 	{

@@ -19,9 +19,8 @@ public static class ClientHost
     public static RegisterEntityTypeFn? RegisterEntityTypeHandler;
     public static RegisterStructFn? RegisterStructHandler;
     public static RegisterComponentFn? RegisterComponentHandler;
-    // Pushes the digest into the C++ EntityDefRegistry on hosts that need it
-    // (atlas_client.exe stamps it into LoginRequest from C++). Unity / editor
-    // previews leave it null and rely on the managed EntityDefDigest only.
+    // atlas_client.exe wires this so LoginRequest carries the digest; Unity /
+    // editor previews leave null and use the managed EntityDefDigest only.
     public static SetEntityDefDigestFn? SetEntityDefDigestHandler;
     // Optional: hosts without a BaseApp route (editor previews, tests) leave null; report is dropped.
     public static ReportEventSeqGapFn? ReportEventSeqGapHandler;
@@ -48,9 +47,8 @@ public static class ClientHost
     internal static void RegisterStruct(ReadOnlySpan<byte> data)
         => Required(RegisterStructHandler, nameof(RegisterStructHandler))(data);
 
-    // Component handler is optional: a host without a native EntityDefRegistry
-    // (Unity editor preview, DefDump offline) drops the payload — the offline
-    // ATDF pipeline carries the same blob through DefComponentRegistry.BuildAll.
+    // Optional: hosts without a native EntityDefRegistry drop silently — the
+    // offline ATDF carries the same blob via DefComponentRegistry.BuildAll.
     internal static void RegisterComponent(ReadOnlySpan<byte> data)
         => RegisterComponentHandler?.Invoke(data);
 

@@ -12,15 +12,12 @@ enum class RpcTarget : uint8_t {
   kAll = 2,     // every witness in AoI (owner + others)
 };
 
-// The Atlas* C-linkage functions exported by atlas_engine.dll/.so delegate
-// to the provider registered for the current process type.
-// The provider pointer must remain valid for the lifetime of the process.
+// Provider pointer must outlive the process; AtlasNative* exports delegate here.
 class INativeApiProvider {
  public:
   virtual ~INativeApiProvider() = default;
 
-  // level values match atlas::LogLevel: Debug=1, Info=2, Warning=3,
-  // Error=4, Critical=5.  msg is a UTF-8 string of byte-length len.
+  // level == atlas::LogLevel; msg is UTF-8 with byte length len.
   virtual void LogMessage(int32_t level, const char* msg, int32_t len) = 0;
 
   virtual double ServerTime() = 0;  // seconds since epoch
@@ -28,10 +25,8 @@ class INativeApiProvider {
 
   virtual uint8_t GetProcessPrefix() = 0;
 
-  // payload points to a length-prefixed serialised argument buffer.
-  // target selects which subset of clients receives the call (BigWorld-
-  // style scopes; only CellAppNativeProvider supports
-  // kOthers/kAll; other process types log + no-op when target != kOwner.
+  // Only CellAppNativeProvider supports kOthers / kAll; other hosts
+  // log + no-op when target != kOwner.
   virtual void SendClientRpc(uint32_t entity_id, uint32_t rpc_id, RpcTarget target,
                              const std::byte* payload, int32_t len, uint64_t trace_id) = 0;
 
@@ -47,16 +42,12 @@ class INativeApiProvider {
   // Struct descriptors must be registered before entity types that reference them.
   virtual void RegisterStruct(const std::byte* data, int32_t len) = 0;
 
-  // Component descriptors must be registered after structs (component
-  // properties may reference struct_id) and before entity types whose
-  // slot table references component_type_id. Default no-op so providers
-  // that don't bridge to EntityDefRegistry (tests, headless runs) compile
-  // without churn.
+  // Register after structs, before any entity slot table referencing this id.
+  // Default no-op so headless / test providers don't have to override.
   virtual void RegisterComponent(const std::byte* /*data*/, int32_t /*len*/) {}
 
-  // 32-byte SHA-256 of the entity-def surface, computed at C# codegen time.
-  // BaseApp compares this to LoginRequest.entity_def_digest to reject
-  // mismatched client/server builds before any RPC dispatch.
+  // 32-byte SHA-256 of the entity-def surface; BaseApp compares to
+  // LoginRequest.entity_def_digest to bounce mismatched builds.
   virtual void SetEntityDefDigest(const std::byte* data, int32_t len) = 0;
 
   virtual void WriteToDb(uint32_t entity_id, const std::byte* entity_data, int32_t len) = 0;
@@ -95,27 +86,18 @@ class INativeApiProvider {
   // Packed function pointer table for C++ -> C# calls.
   virtual void SetNativeCallbacks(const void* native_callbacks, int32_t len) = 0;
 
-  // Only CellApp implements these non-trivially; other processes inherit
-  // BaseNativeProvider's default no-op + error log. BaseApp might
-  // implement SetEntityPosition in the future for the "predict own
-  // client" case but for now only CellApp owns position authority.
-
+  // CellApp owns position authority; other hosts inherit no-op + error log.
   virtual void SetEntityPosition(uint32_t entity_id, float x, float y, float z) = 0;
 
-  // Same role as SetEntityPosition for the orientation component — Witness
-  // reads dir directly off the C++ CellEntity when building the volatile
-  // envelope, so C# changes are invisible to peers without this hook.
+  // Witness reads dir off CellEntity for the volatile envelope.
   virtual void SetEntityDirection(uint32_t entity_id, float x, float y, float z) = 0;
 
-  // Spawn-time readback so C# can adopt the position/direction the C++
-  // CellEntity was constructed with (CreateLocalEntity / OnCreateCellEntity).
+  // Spawn-time readback so C# can adopt the CellEntity's constructed state.
   virtual void GetEntityPosition(uint32_t entity_id, float& x, float& y, float& z) = 0;
   virtual void GetEntityDirection(uint32_t entity_id, float& x, float& y, float& z) = 0;
 
-  // C# hands the cell layer a per-tick replication frame. Owner/other
-  // snapshot pointers are only consumed when event_seq > 0 (see
-  // CellEntity::PublishReplicationFrame); callers pass nullptr/0 when
-  // the event stream has nothing this tick.
+  // Owner/other snapshot pointers consumed only when event_seq > 0;
+  // pass nullptr/0 when the event stream is empty this tick.
   virtual void PublishReplicationFrame(uint32_t entity_id, uint64_t event_seq,
                                        uint64_t volatile_seq, const std::byte* owner_snap,
                                        int32_t owner_snap_len, const std::byte* other_snap,
@@ -123,10 +105,7 @@ class INativeApiProvider {
                                        int32_t owner_delta_len, const std::byte* other_delta,
                                        int32_t other_delta_len) = 0;
 
-  // Controller registration; C# scripts create movement / timer /
-  // proximity controllers via these calls. The returned controller_id
-  // is opaque to the caller; it's passed back to CancelController to
-  // tear the controller down early.
+  // Returned controller_id is opaque; pass back to CancelController.
   virtual auto AddMoveController(uint32_t entity_id, float dest_x, float dest_y, float dest_z,
                                  float speed, int32_t user_arg) -> int32_t = 0;
   virtual auto AddTimerController(uint32_t entity_id, float interval, bool repeat, int32_t user_arg)
@@ -137,8 +116,7 @@ class INativeApiProvider {
 
   virtual void ReportClientEventSeqGap(uint32_t entity_id, uint32_t gap_delta) = 0;
 
-  // Default no-op so processes without a PendingRpcRegistry don't have to
-  // implement them. Returns 0 on failure.
+  // 0 on failure; default no-op for hosts without PendingRpcRegistry.
   virtual auto CoroRegisterPending(uint16_t /*reply_id*/, uint32_t /*request_id*/,
                                    int32_t /*timeout_ms*/, intptr_t /*managed_handle*/)
       -> uint64_t {
@@ -146,8 +124,7 @@ class INativeApiProvider {
   }
   virtual void CoroCancelPending(uint64_t /*handle*/) {}
 
-  // EntityRpcReply send hooks. reply_channel == 0 means in-process — drop
-  // silently and let the caller's await time out.
+  // reply_channel == 0 means in-process — drop and let the await time out.
   virtual void SendEntityRpcSuccess(intptr_t /*reply_channel*/, uint32_t /*request_id*/,
                                     const std::byte* /*body*/, int32_t /*len*/) {}
   virtual void SendEntityRpcFailure(intptr_t /*reply_channel*/, uint32_t /*request_id*/,

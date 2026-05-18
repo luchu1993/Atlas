@@ -4,6 +4,8 @@
 #include "GameFramework/GameModeBase.h"
 #include "Templates/SubclassOf.h"
 
+#include "AtlasNetClient.h"
+
 #include "UEClientGameMode.generated.h"
 
 UCLASS()
@@ -37,9 +39,7 @@ protected:
 private:
 	bool bAuthenticateRequested = false;
 	bool bSelectAvatarSent = false;
-	// Tracks last observed subsystem state so an automatic reconnect (which
-	// drops back into LoggingIn) resets the per-session flags above. Without
-	// this, the post-login Authenticate + SelectAvatar would only fire once
-	// per process lifetime.
-	uint8 LastNetState = 0;
+	// Any → LoggingIn transition resets the per-session flags above so the
+	// post-reconnect Authenticate + SelectAvatar fires again.
+	EAtlasNetClientState LastNetState = EAtlasNetClientState::Idle;
 };

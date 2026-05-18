@@ -28,10 +28,7 @@ public sealed class DefGenerator : IIncrementalGenerator
             .Where(static m => m is not null)
             .Select(static (m, _) => m!);
 
-        // 1b. Read entity_ids.xml manifest(s). At most one is expected per
-        // compilation; the manifest is the source of truth for type_id when
-        // it is provided. .def files in the same compilation must drop their
-        // inline `id` attribute.
+        // Manifest owns type_id when present; .def must drop inline `id`.
         var manifestSources = context.AdditionalTextsProvider
             .Where(static f => string.Equals(
                 System.IO.Path.GetFileName(f.Path),
@@ -45,9 +42,7 @@ public sealed class DefGenerator : IIncrementalGenerator
             .Where(static m => m is not null)
             .Select(static (m, _) => m!);
 
-        // 1c. Read component_ids.xml manifest(s) — analogous to entity_ids
-        // but assigns the wire-stable component_type_id used by ATDF
-        // consumers (UE client, DBApp).
+        // Same shape as entity_ids.xml; assigns wire-stable component_type_id.
         var componentManifestSources = context.AdditionalTextsProvider
             .Where(static f => string.Equals(
                 System.IO.Path.GetFileName(f.Path),
@@ -157,13 +152,8 @@ public sealed class DefGenerator : IIncrementalGenerator
         if (users.IsDefaultOrEmpty)
             return;
 
-        // Build def lookup.
-        //
-        // Surface parser-stage diagnostics flagged on the model. DefParser
-        // currently detects ATLAS_DEF008 (reserved `position`) during parse
-        // and records the decision on the PropertyDefModel; we report it
-        // here because the parser runs inside the incremental pipeline's
-        // Select transform where no SourceProductionContext is available.
+        // Parser-stage diagnostics surface here because DefParser ran in a
+        // Select transform without SourceProductionContext access.
         var defMap = new Dictionary<string, EntityDefModel>();
         foreach (var def in defs)
         {
@@ -180,16 +170,11 @@ public sealed class DefGenerator : IIncrementalGenerator
             }
         }
 
-        // Resolve type_id from entity_ids.xml manifest when present.
-        // Inline `id` on .def is reserved as a fallback for unit-test
-        // pipelines that feed XML through DefParser without an AdditionalFile
-        // for the manifest.
+        // Inline `id` on .def is a unit-test fallback when no manifest is wired.
         var manifest = DefGeneratorHelpers.ResolveManifest(manifestSources, spc);
         var typeIndexMap = DefGeneratorHelpers.BuildTypeIndexMap(defs, manifest, spc);
 
-        // Pick the partial-class base by process: cell scripts see Position /
-        // DestroySelf, base scripts see GiveClientTo / SetAoIRadius, neither
-        // sees both. Server / unknown context falls back to ServerEntity.
+        // Per-process base class — cell vs base see disjoint API surfaces.
         var baseClass = ctx switch
         {
             ProcessContext.Client => "Atlas.Client.ClientEntity",
@@ -207,12 +192,8 @@ public sealed class DefGenerator : IIncrementalGenerator
 
         var entityList = new List<(EntityDefModel Def, string ClassName, string Namespace)>();
 
-        // Link pass: dedup structs, assign stable ids, resolve aliases,
-        // resolve component inheritance + cross-entity references. The
-        // emitters below consume linked.StructsByName instead of
-        // reassembling the map from defs[] — keeps DefLinker the
-        // single source of truth for which struct / component names
-        // are addressable.
+        // DefLinker is the single source of truth for addressable struct /
+        // component names; emitters consume linked.StructsByName below.
         var componentManifest =
             DefGeneratorHelpers.ResolveComponentManifest(componentManifestSources, spc);
         var linked = DefLinker.Link(defs.ToList(), standaloneComponents, componentManifest,
@@ -256,22 +237,16 @@ public sealed class DefGenerator : IIncrementalGenerator
             if (!string.IsNullOrEmpty(mailboxes))
                 spc.AddSource($"{user.ClassName}.Mailboxes.g.cs", SourceText.From(mailboxes, System.Text.Encoding.UTF8));
 
-            // Component slot accessors. Server emits write-side helpers
-            // (HasOwnerDirtyComponent / WriteOwnerComponentSection /
-            // ClearDirtyComponents); client emits the read-side
-            // ApplyComponentSection. Both sides emit ResolveSyncedSlot
-            // and the typed accessor properties.
+            // Server: dirty-tracking + WriteOwnerComponentSection; client:
+            // ApplyComponentSection. Both sides get typed slot accessors.
             var accessors = EntityComponentAccessorEmitter.Emit(def, user.ClassName, user.Namespace, ctx);
             if (accessors != null)
                 spc.AddSource($"{user.ClassName}.Components.g.cs",
                               SourceText.From(accessors, System.Text.Encoding.UTF8));
         }
 
-        // Component class emission. Each distinct TypeName is emitted
-        // exactly once — standalone defs win over inline (since they're
-        // the canonical type) and inline-only types still emit as one-
-        // off classes. A type is "leaf" (sealed) iff no other component
-        // extends it.
+        // One class per distinct TypeName; standalone wins over inline.
+        // A type is "leaf" (sealed) iff no other component extends it.
         var emittedComponentTypes = new HashSet<string>(StringComparer.Ordinal);
         var allComponents = new List<ComponentDefModel>();
         // Standalone first — canonical type definitions.
@@ -294,11 +269,7 @@ public sealed class DefGenerator : IIncrementalGenerator
             if (!string.IsNullOrEmpty(c.BaseTypeName)) nonLeafTypes.Add(c.BaseTypeName!);
         }
 
-        // Server inherits Atlas.Entity.Components.ReplicatedComponent;
-        // Client inherits Atlas.Components.ClientReplicatedComponent.
-        // ComponentEmitter switches on ctx so each side emits the right
-        // base reference + only the methods it needs (server: WriteOwnerDelta;
-        // client: ApplyDelta).
+        // Per-ctx base class + method set (server: WriteOwnerDelta; client: ApplyDelta).
         foreach (var c in allComponents)
         {
             if (c.Locality != ComponentLocality.Synced) continue;
@@ -328,10 +299,7 @@ public sealed class DefGenerator : IIncrementalGenerator
             spc.AddSource("DefRpcDispatcher.g.cs", SourceText.From(dispatcher, System.Text.Encoding.UTF8));
         }
 
-        // Per-struct code: partial struct body with field members and the
-        // whole-struct Serialize/Deserialize pair. Emitted into the
-        // Atlas.Def namespace so different entity defs can share a struct
-        // identity without namespace shopping.
+        // Emitted under Atlas.Def so different entity defs share struct identity.
         foreach (var s in linked.Structs)
         {
             var structCode = Emitters.StructEmitter.Emit(s, spc.ReportDiagnostic);
@@ -339,9 +307,7 @@ public sealed class DefGenerator : IIncrementalGenerator
                           SourceText.From(structCode, System.Text.Encoding.UTF8));
         }
 
-        // Global: StructRegistry — registers every <struct> before any
-        // entity type, so RegisterType's type_ref resolver sees a populated
-        // struct table.
+        // Must run before entity types — RegisterType resolves type_refs eagerly.
         if (linked.Structs.Count > 0)
         {
             var structRegistry = Emitters.StructRegistryEmitter.Emit(linked.Structs, ctx);
@@ -349,11 +315,8 @@ public sealed class DefGenerator : IIncrementalGenerator
                           SourceText.From(structRegistry, System.Text.Encoding.UTF8));
         }
 
-        // Global: ComponentRegistry — registers standalone synced components
-        // by their manifest-assigned component_type_id. Must run AFTER
-        // StructRegistry (component property types may reference struct ids)
-        // and BEFORE TypeRegistry (entity slot tables reference
-        // component_type_id).
+        // Order: StructRegistry → ComponentRegistry → TypeRegistry
+        // (slot tables reference component_type_id; component props reference struct ids).
         var hasSyncedStandaloneComponents = standaloneComponents.Any(
             c => c.Locality == ComponentLocality.Synced && c.ComponentTypeId > 0);
         if (hasSyncedStandaloneComponents)
@@ -370,9 +333,7 @@ public sealed class DefGenerator : IIncrementalGenerator
             spc.AddSource("DefEntityTypeRegistry.g.cs", SourceText.From(typeRegistry, System.Text.Encoding.UTF8));
         }
 
-        // EntityDef digest: SHA-256 of normalized entity/struct/component
-        // surface so client and server reject mismatched .def builds at the
-        // login handshake.
+        // SHA-256 of the surface; BaseApp bounces mismatched builds at login.
         if (entityList.Count > 0 || linked.Structs.Count > 0 || standaloneComponents.Count > 0)
         {
             var digest = Emitters.DigestEmitter.Emit(defs, linked.Structs, standaloneComponents,

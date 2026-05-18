@@ -5,27 +5,13 @@ using Microsoft.CodeAnalysis;
 
 namespace Atlas.Generators.Def;
 
-// Second-pass resolution across all EntityDefModel instances produced by
-// DefParser. The parser only captures struct names; DefLinker assigns a
-// deterministic uint16 id to each distinct struct and walks every
-// DataTypeRefModel tree so kind==Struct nodes carry a concrete id by the
-// time the emitter needs to serialise them.
-//
-// Struct ids are globally unique for now — entity-local naming would
-// collide on the wire (the C++ registry is a flat map). Duplicate struct
-// names across entities are rejected; aliases are resolved into their
-// target DataTypeRef so no later stage needs to chase them.
-//
-// Deterministic ordering: structs are sorted by name (ordinal) and
-// assigned ids starting at 1. 0 is reserved as "unassigned / invalid" to
-// match the -1 sentinel the parser leaves in StructId.
+// Assigns globally-unique ids (1+, 0 reserved) to structs in ordinal-name
+// order; rejects cross-entity name collisions and resolves alias trees.
 internal static class DefLinker
 {
     public const ushort FirstStructId = 1;
 
-    // Depth cap for alias-of-alias chains. A legitimate graph reaches at
-    // most a handful of hops; 16 is a comfortable ceiling that still
-    // surfaces pathological/cyclic graphs quickly.
+    // Stops pathological alias-of-alias cycles fast.
     public const int MaxAliasDepth = 16;
 
     public static LinkedDefs? Link(List<EntityDefModel> entities,
@@ -55,9 +41,7 @@ internal static class DefLinker
                         DefDiagnosticDescriptors.DEF012, Location.None, s.Name, e.Name));
                     return null;
                 }
-                // A struct must not shadow an alias declared earlier — the
-                // downstream TypeRef resolver prefers structs over aliases
-                // and would silently drop the alias entry.
+                // TypeRef resolver prefers structs; an alias here would be dropped silently.
                 if (aliases.ContainsKey(s.Name))
                 {
                     reportDiagnostic?.Invoke(Diagnostic.Create(
@@ -111,11 +95,8 @@ internal static class DefLinker
                     return null;
             }
 
-            // Component slot indices are 1-based; slot 0 stays reserved
-            // for the entity body. Synced components occupy contiguous
-            // 1..N in declaration order; local components don't take
-            // slots (SlotIdx = -1). Stable indices come for free since
-            // the .def declaration order is deterministic.
+            // Slot 0 reserved for entity body; synced get 1..N in declaration
+            // order. Local components stay SlotIdx = -1.
             int nextSlot = 1;
             foreach (var c in e.Components)
             {
@@ -126,9 +107,7 @@ internal static class DefLinker
             }
         }
 
-        // Standalone component registry. Inheritance resolution + propIdx
-        // numbering happen here so emitters can rely on Base + PropIdxBase
-        // being populated.
+        // Inheritance + propIdx resolution; emitters rely on Base / PropIdxBase.
         var standaloneByName = new Dictionary<string, ComponentDefModel>(StringComparer.Ordinal);
         foreach (var sc in standaloneComponents)
         {
@@ -141,19 +120,15 @@ internal static class DefLinker
             standaloneByName[sc.TypeName] = sc;
         }
 
-        // Resolve `extends` and assign hierarchy-flat propIdx bases.
-        // Process in topological order: a derived component is computed
-        // after its base. A simple memoized recursion does the trick;
-        // cycles surface via depth cap.
+        // Memoized recursion handles topological order; depth cap catches cycles.
         foreach (var sc in standaloneComponents)
         {
             if (!ResolveComponentHierarchy(sc, standaloneByName, depth: 0, reportDiagnostic))
                 return null;
         }
 
-        // Resolve component_type_id from manifest. Standalone components
-        // must have an entry; the id is the wire-stable handle that ATDF
-        // consumers (UE client, DBApp) use to look up the descriptor.
+        // Standalone components must have a component_ids.xml entry; ATDF
+        // consumers (UE client, DBApp) key on the assigned id.
         if (componentManifest != null)
         {
             foreach (var sc in standaloneComponents)
@@ -170,9 +145,7 @@ internal static class DefLinker
             }
         }
 
-        // Resolve each entity-side component reference: copy-by-share
-        // properties from the standalone definition when no inline body
-        // was given, and validate scope subset rules.
+        // Copy-by-share from standalone for empty inline; validate scope subset.
         foreach (var e in entities)
         {
             foreach (var c in e.Components)
@@ -180,13 +153,8 @@ internal static class DefLinker
                 if (c.Locality != ComponentLocality.Synced) continue;
                 if (c.Properties.Count == 0 && standaloneByName.TryGetValue(c.TypeName, out var sc))
                 {
-                    // Pull the type definition from the standalone def.
-                    // Properties + RPC lists are duplicated here because
-                    // entity-level emitters (DispatcherEmitter,
-                    // TypeRegistryEmitter) iterate `def.Components` to wire
-                    // dispatch / register the entity's blob; the
-                    // canonical class-level emit (ComponentEmitter) keeps
-                    // reading from the standalone via the dedup pass.
+                    // Duplicated so entity-level emitters can iterate
+                    // def.Components; class-level emit dedupes via standaloneByName.
                     c.Base = sc.Base;
                     c.BaseTypeName = sc.BaseTypeName;
                     foreach (var p in sc.Properties) c.Properties.Add(p);
@@ -199,9 +167,7 @@ internal static class DefLinker
                 // Validate P.scope ⊆ slot scope after resolution.
                 foreach (var p in c.Properties)
                 {
-                    // Scope check: property must be visible to a subset
-                    // of observers compared to the slot. (Same rule as
-                    // inline-checked in DefParser.)
+                    // Same scope-subset rule DefParser enforces inline.
                     if (!IsScopeSubsetForLinker(p.Scope, c.Scope))
                     {
                         reportDiagnostic?.Invoke(Diagnostic.Create(
@@ -221,8 +187,7 @@ internal static class DefLinker
         return new LinkedDefs(entities, ordered, nameToId, standaloneComponents);
     }
 
-    // Walks the `extends` chain bottom-up to assign PropIdxBase. Caps
-    // depth to surface accidental cycles and pathological hierarchies.
+    // Depth cap surfaces cycles in the `extends` chain quickly.
     private const int MaxComponentDepth = 16;
 
     private static bool ResolveComponentHierarchy(
@@ -264,17 +229,8 @@ internal static class DefLinker
         return true;
     }
 
-    // Walks a DataTypeRef tree in-place:
-    //   kind == Struct with StructName set but StructId unresolved:
-    //     * if name matches a declared struct → assign its id.
-    //     * if name matches an alias → replace this node with the alias target
-    //       (mutates parent). Returns true to continue the parent's walk.
-    //     * otherwise → DEF009 + return false.
-    //   kind == List / Dict → recurse into children.
-    //
-    // `aliasDepth` bounds alias-of-alias chains so a pathological cycle
-    // (A → B → A, built either by mistake or by a malformed .def) can't
-    // blow the stack.
+    // In-place: Struct → assign id or expand alias; List/Dict → recurse;
+    // unknown name → DEF009 + return false. aliasDepth bounds cycles.
     private static bool ResolveTypeRef(DataTypeRefModel t,
                                        Dictionary<string, ushort> nameToId,
                                        Dictionary<string, DataTypeRefModel> aliases,
@@ -331,13 +287,6 @@ internal static class DefLinker
     }
 }
 
-// Result of the link pass. `Structs` is the de-duplicated, id-assigned set
-// (sorted by name for deterministic output); `Entities` share the same
-// instances the parser produced with DataTypeRef nodes now carrying valid
-// StructIds. `StructsByName` is the matching name → descriptor lookup the
-// emitters need; building it here (rather than letting callers re-collect
-// from Entities) keeps DefLinker the single source of truth for which
-// structs are declared and addressable.
 internal sealed class LinkedDefs
 {
     public List<EntityDefModel> Entities { get; }

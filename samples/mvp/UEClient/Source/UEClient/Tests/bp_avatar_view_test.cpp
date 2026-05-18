@@ -194,8 +194,7 @@ bool FAtlasBpAvatarRpcViewTest::RunTest(const FString&)
 	}
 
 	// Detach safety: BindView(nullptr) means subsequent dispatch is a no-op
-	// for the BP layer (entity virtual default is empty body, so DispatchRpc
-	// still returns true — we just check no delegate fires).
+	// for the BP layer.
 	Avatar.BindView(nullptr);
 	{
 		std::vector<uint8_t> Buf;
@@ -205,6 +204,28 @@ bool FAtlasBpAvatarRpcViewTest::RunTest(const FString&)
 			Avatar.DispatchRpc(atlas::mvp::Avatar::kRpcId_OnDied, 0, R));
 		TestEqual(TEXT("OnDied silent after detach"), Listener->OnDiedCalls, 1);
 	}
+
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FAtlasBpAvatarHasInitialTransformTest,
+	"Atlas.BpView.HasInitialTransformFlipsOnFirstPos",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FAtlasBpAvatarHasInitialTransformTest::RunTest(const FString&)
+{
+	FBpAvatarEntity Avatar(99, atlas::mvp::Avatar::kTypeId);
+	TestFalse(TEXT("default false"), Avatar.HasInitialTransform());
+
+	const atlas::Vec3 Pos{1.0f, 2.0f, 3.0f};
+	const atlas::Vec3 Dir{0.0f, 0.0f, 1.0f};
+	Avatar.OnPositionReceived(0.0, Pos, Dir, false);
+	TestTrue(TEXT("flips after first OnPositionReceived"), Avatar.HasInitialTransform());
+	TestEqual(TEXT("captured pos.x"), Avatar.InitialServerPos().x, 1.0f);
+	TestEqual(TEXT("captured pos.y"), Avatar.InitialServerPos().y, 2.0f);
+	TestEqual(TEXT("captured pos.z"), Avatar.InitialServerPos().z, 3.0f);
+	TestEqual(TEXT("captured dir.z"), Avatar.InitialServerDir().z, 1.0f);
 
 	return true;
 }

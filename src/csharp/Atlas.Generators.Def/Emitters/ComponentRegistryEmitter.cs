@@ -4,12 +4,6 @@ using System.Text;
 
 namespace Atlas.Generators.Def.Emitters;
 
-// Generates DefComponentRegistry.RegisterAllComponents() + BuildAll(visit)
-// that walks each standalone synced ComponentDefModel and feeds its wire
-// layout to the C++ EntityDefRegistry::RegisterComponent reader. Pairs
-// with StructRegistryEmitter so the offline DefDump tool can extract
-// every descriptor surface into entity_defs.bin without needing a live
-// C# runtime.
 internal static class ComponentRegistryEmitter
 {
     public static string Emit(List<ComponentDefModel> components, ProcessContext ctx)
@@ -83,10 +77,8 @@ internal static class ComponentRegistryEmitter
         sb.AppendLine($"        writer.WriteString(\"{c.BaseTypeName ?? ""}\");");
         sb.AppendLine($"        writer.WriteByte({(byte)c.Locality});");
 
-        // Component property records share the entity property wire shape,
-        // so RegisterComponent + RegisterType both dispatch through C++
-        // ReadPropertyRecord. Property index is the component-local
-        // hierarchy-flat position (PropIdxBase + i).
+        // Shares the entity property wire shape (ReadPropertyRecord); index
+        // is hierarchy-flat (PropIdxBase + i) for derived components.
         var props = c.Properties;
         sb.AppendLine($"        writer.WritePackedUInt32({(uint)props.Count});");
         for (int i = 0; i < props.Count; i++)

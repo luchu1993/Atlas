@@ -31,9 +31,8 @@ bool IsContainerType(uint8_t data_type) {
   return data_type == ATLAS_EDR_TYPE_LIST || data_type == ATLAS_EDR_TYPE_DICT;
 }
 
-// Flag-byte width follows the C# PropertiesEmitter table: ≤8 props → u8,
-// ≤16 → u16, ≤32 → u32, else u64. Determined by the count of client-visible
-// properties (scalars + containers) on the surface (entity or component).
+// Flag width mirrors PropertiesEmitter: ≤8 → u8, ≤16 → u16, ≤32 → u32, else u64.
+// `visible_count` counts client-visible props (scalars + containers).
 bool ReadFlagsByCount(SpanReader& r, int32_t visible_count, uint64_t& flags) {
   if (visible_count <= 8) {
     uint8_t v; if (!r.Read(v)) return false; flags = v; return true;

@@ -43,22 +43,24 @@ bool UAtlasPlayerInputController::ResolveOwnerView()
 	if (Avatar == nullptr) return false;
 	if (Avatar->Id() != Sub->GetPlayerEntityId()) return false;
 
-	// Codegen factory hands us FBpAvatarEntity instances; cast keeps us
-	// honest about the type so SetOwnerInputActive isn't reached through
-	// a stale dynamic_cast hop on the hot path.
+	// AvatarFactory in UEClientGameMode always creates FBpAvatarEntity;
+	// static_cast spares RTTI on the tick hot path.
 	OwnerEntity = static_cast<FBpAvatarEntity*>(Avatar);
 	return true;
 }
 
 void UAtlasPlayerInputController::InitializeLocalSim()
 {
+	if (OwnerEntity == nullptr) return;
+	LocalPos = AtlasToUE(OwnerEntity->InitialServerPos());
+	const FVector ServerDirUE = AtlasToUE(OwnerEntity->InitialServerDir());
+	LocalDir = ServerDirUE.IsNearlyZero() ? FVector::ForwardVector : ServerDirUE.GetSafeNormal();
 	if (AActor* Owner = GetOwner())
 	{
-		LocalPos = Owner->GetActorLocation();
-		const FRotator Rot = Owner->GetActorRotation();
-		LocalDir = Rot.Vector();
+		Owner->SetActorLocation(LocalPos);
+		Owner->SetActorRotation(LocalDir.Rotation());
 	}
-	if (OwnerEntity != nullptr) OwnerEntity->SetOwnerInputActive(true);
+	OwnerEntity->SetOwnerInputActive(true);
 	bInitialized = true;
 }
 
@@ -70,15 +72,19 @@ void UAtlasPlayerInputController::TickComponent(float DeltaTime, ELevelTick Tick
 	const bool Owned = ResolveOwnerView();
 	if (!Owned)
 	{
-		// Lost ownership (e.g. handed back to Account or entity destroyed) —
-		// reset so a future bind re-snaps to the new spawn.
 		if (bInitialized && OwnerEntity != nullptr) OwnerEntity->SetOwnerInputActive(false);
 		OwnerEntity = nullptr;
 		bInitialized = false;
 		return;
 	}
 
-	if (!bInitialized) InitializeLocalSim();
+	if (!bInitialized)
+	{
+		// Defer until AvatarFilter has the server pos; otherwise we'd snap
+		// to spawn-default and lock the filter out before the real arrives.
+		if (!OwnerEntity->HasInitialTransform()) return;
+		InitializeLocalSim();
+	}
 
 	APlayerController* PC = UGameplayStatics::GetPlayerController(this, 0);
 	if (PC == nullptr) return;
@@ -92,9 +98,6 @@ void UAtlasPlayerInputController::TickComponent(float DeltaTime, ELevelTick Tick
 	const bool Moving = !Input.IsNearlyZero();
 	if (Moving) Input.Normalize();
 
-	// Camera-relative move via control rotation yaw. Default PlayerController
-	// uses mouse to spin ControlRotation; the avatar follows that yaw so
-	// W = into-screen regardless of how the camera is pointed.
 	const float CamYaw = PC->GetControlRotation().Yaw;
 	const FRotator YawRot(0.0f, CamYaw, 0.0f);
 	const FVector WorldInput = YawRot.RotateVector(Input);

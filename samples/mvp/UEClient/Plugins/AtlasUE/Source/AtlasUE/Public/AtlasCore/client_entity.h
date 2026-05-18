@@ -34,32 +34,23 @@ class ATLAS_CORE_API ClientEntity {
   void DetachView() { view_.reset(); }
   [[nodiscard]] EntityView* View() const { return view_.get(); }
 
-  // Hooks for derived typed entities. Default no-op so entities that do not
-  // observe transforms (e.g. inventory-only ghosts) carry no AvatarFilter cost.
+  // Default no-op so non-spatial entities don't pay AvatarFilter cost.
   virtual void OnPositionReceived(double /*server_time*/, const Vec3& /*pos*/,
                                   const Vec3& /*dir*/, bool /*on_ground*/) {}
 
   virtual void TickInterpolation(double /*dt*/) {}
 
-  // Binds the per-type descriptor used by ApplyDelta + the owning registry
-  // context (needed to resolve nested struct ids inside container values).
-  // Entities created before bind carry no property storage; ApplyDelta
-  // returns false until a descriptor is bound.
+  // ApplyDelta returns false until a descriptor is bound.
   void BindDescriptor(const AtlasEdrEntity* descriptor, AtlasEdrContext* ctx);
 
   [[nodiscard]] const AtlasEdrEntity* Descriptor() const { return descriptor_; }
 
   [[nodiscard]] const std::vector<PropertyValue>& Properties() const { return properties_; }
 
-  // Outbound RPC bridge. Codegen-emitted upstream stubs (entity->ReportPos
-  // etc.) read this to deliver wire bytes; null means RPC sends drop on
-  // the floor (legitimate in unit tests that only exercise decode).
+  // Null sender means RPC sends drop silently (tests that only exercise decode).
   void SetRpcSender(RpcSender* sender) { sender_ = sender; }
   [[nodiscard]] RpcSender* Sender() const { return sender_; }
 
-  // Typed scalar accessor used by codegen-emitted getters. Returns nullptr
-  // for missing / wrong-type slots; codegen wraps with a fallback default
-  // for ergonomic property access.
   template <typename T>
   [[nodiscard]] const T* GetScalar(std::size_t descriptor_index) const {
     if (descriptor_index >= properties_.size()) return nullptr;
@@ -84,34 +75,22 @@ class ATLAS_CORE_API ClientEntity {
     return slot != nullptr ? slot->get() : nullptr;
   }
 
-  // Slot table for synced components. Indexed by slot_idx; slot 0 reserved
-  // for the entity body. Lazily allocated on first delta to a slot.
+  // Slot 0 is the entity body; component slots lazily allocate on first delta.
   [[nodiscard]] ComponentInstance* GetComponent(uint8_t slot_idx) const {
     if (slot_idx >= components_.size()) return nullptr;
     return components_[slot_idx].get();
   }
 
-  // Codegen-emitted entity classes call this from their constructor to
-  // pre-register the typed ComponentInstance subclass factories keyed by
-  // slot. The decoder uses them to create the right derived type on the
-  // first delta to a slot; without a registered factory the slot uses a
-  // base ComponentInstance (decode still works, typed views unavailable).
+  // Without a registered factory the slot decodes into a base ComponentInstance.
   using ComponentFactory = std::function<std::unique_ptr<ComponentInstance>(
       const AtlasEdrComponent*, ClientEntity*, uint8_t)>;
   void RegisterComponentFactory(uint8_t slot_idx, ComponentFactory factory);
 
-  // Decodes one sectionMask-framed delta — scalars, containers, and structs.
-  // Returns false on truncation or malformed wire (out-of-range slot, missing
-  // descriptor, unknown op kind); storage is left in whatever partial state
-  // the decode reached so the caller can drop the entity.
-  // Virtual so codegen subclasses can snapshot prior scalar values, run the
-  // base decode, then diff + fire On<Prop>Changed hooks.
+  // Virtual so codegen subclasses can snapshot scalars and diff + fire
+  // On<Prop>Changed after the base decode.
   virtual bool ApplyDelta(SpanReader& reader);
 
-  // Inbound 0xF004 RPC entry point. Extracts slot_idx from rpc_id: slot 0
-  // routes to DispatchEntityRpc (codegen-overridden entity-body switch);
-  // non-zero forwards to the matching component instance. Net client and
-  // tests call this; codegen overrides DispatchEntityRpc, not this method.
+  // Codegen overrides DispatchEntityRpc, not this dispatch entry.
   bool DispatchRpc(uint32_t rpc_id, uint64_t trace_id, SpanReader& reader) {
     const uint8_t slot = (rpc_id >> 24) & 0x7F;
     if (slot == 0) return DispatchEntityRpc(rpc_id, trace_id, reader);

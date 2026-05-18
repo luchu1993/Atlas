@@ -2,9 +2,7 @@ using System.Text;
 
 namespace Atlas.Generators.Def.Emitters;
 
-// Single [ModuleInitializer] entry that fires the four registration steps
-// (struct → entity → factory → dispatcher) in fixed order, replacing the
-// per-emitter ModuleInitializers that had no ordering guarantee.
+// Single ModuleInitializer enforces registration order across emitters.
 internal static class BootstrapEmitter
 {
     public static string Emit(bool hasStructs, bool hasComponents, bool hasEntities,
@@ -32,10 +30,8 @@ internal static class BootstrapEmitter
         }
         if (hasDispatcher)
             sb.AppendLine("        Atlas.Rpc.DefRpcDispatcher.RegisterDefDispatchers();");
-        // Server: atlas_engine stores the digest for BaseApp PrepareLogin
-        // compare. Client: atlas_net_client stamps it into LoginRequest.
-        // Tolerates the same out-of-process test environment as the per-
-        // emitter RegisterAll bodies (no native lib, off-main-thread call).
+        // Server stores for PrepareLogin compare; client stamps into LoginRequest.
+        // Try/catch tolerates the out-of-process test environment.
         if (hasStructs || hasEntities)
         {
             var bridge = ctx == ProcessContext.Client

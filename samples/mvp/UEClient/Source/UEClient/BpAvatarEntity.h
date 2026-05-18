@@ -8,11 +8,6 @@
 #include "AtlasCoordinates.h"
 #include "gen/Avatar.gen.h"
 
-// Game-side subclass that ties three concerns into the one entity that
-// represents the player / NPC avatars on the wire:
-//  - codegen Avatar's typed getters + RPC stubs (from gen/Avatar.gen.h)
-//  - AvatarFilter-based position interpolation (mirrors MovingClientEntity)
-//  - Bridge from codegen scalar change hooks to UAtlasAvatarView delegates
 class FBpAvatarEntity : public atlas::mvp::Avatar
 {
 public:
@@ -25,19 +20,23 @@ public:
 		if (InView != nullptr) InView->Bind(this);
 	}
 
-	// Owner-input mode: while set, TickInterpolation skips the AvatarFilter
-	// step so the input controller's client-authoritative SetActorLocation
-	// isn't overwritten each frame by server-replicated transforms.
 	void SetOwnerInputActive(bool Active) { bOwnerInputActive = Active; }
+
+	// Owner input gates on this so it never snaps the actor to spawn-default
+	// before the server pos has arrived.
+	bool HasInitialTransform() const { return bHasInitialTransform; }
 
 	void OnPositionReceived(double ServerTime, const atlas::Vec3& Pos,
 	                        const atlas::Vec3& Dir, bool OnGround) override
 	{
-		// Owner ignores server-sent transforms; its position is the local
-		// simulation. Keep feeding the filter anyway so a future switch to
-		// non-owner has a warm baseline.
 		Filter.Input(ServerTime, Pos, Dir, OnGround);
+		LastServerPos = Pos;
+		LastServerDir = Dir;
+		bHasInitialTransform = true;
 	}
+
+	const atlas::Vec3& InitialServerPos() const { return LastServerPos; }
+	const atlas::Vec3& InitialServerDir() const { return LastServerDir; }
 
 	void TickInterpolation(double Dt) override
 	{
@@ -104,5 +103,8 @@ public:
 private:
 	atlas::AvatarFilter Filter;
 	TWeakObjectPtr<UAtlasAvatarView> ViewPtr;
+	atlas::Vec3 LastServerPos{};
+	atlas::Vec3 LastServerDir{};
 	bool bOwnerInputActive = false;
+	bool bHasInitialTransform = false;
 };

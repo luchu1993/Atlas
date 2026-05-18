@@ -4,11 +4,6 @@ using System.Text;
 
 namespace Atlas.Generators.Def.Emitters;
 
-/// <summary>
-/// Generates DefEntityTypeRegistry.RegisterAll() that serializes entity type descriptors
-/// (including RPC descriptors with ExposedScope) and calls NativeApi.RegisterEntityType()
-/// to populate the C++ EntityDefRegistry at startup.
-/// </summary>
 internal static class TypeRegistryEmitter
 {
     public static string Emit(
@@ -29,10 +24,7 @@ internal static class TypeRegistryEmitter
         sb.AppendLine();
         sb.AppendLine("namespace Atlas.Def;");
         sb.AppendLine();
-        // public so the offline Atlas.Tools.DefDump tool can reflect on
-        // BuildAll without IVT plumbing. RegisterAll itself stays an
-        // internal ModuleInitializer because it carries PInvoke side
-        // effects callers shouldn't trigger ad-hoc.
+        // Public so DefDump can reflect; RegisterAll stays internal (PInvoke effects).
         sb.AppendLine("public static class DefEntityTypeRegistry");
         sb.AppendLine("{");
         sb.AppendLine("    internal static void RegisterAll()");
@@ -50,10 +42,7 @@ internal static class TypeRegistryEmitter
         sb.AppendLine("        catch (System.InvalidOperationException) { }");
         sb.AppendLine("    }");
 
-        // BuildAll — visits each entity blob without the PInvoke side
-        // effect. Used by Atlas.Tools.DefDump to materialise a binary
-        // descriptor file from a built assembly. Allocates a byte[] per
-        // entity (cheap — descriptor count is small at compile time).
+        // BuildAll visits the same blobs without PInvoke — DefDump uses it.
         sb.AppendLine();
         sb.AppendLine("    public static void BuildAll(System.Action<byte[]> visit)");
         sb.AppendLine("    {");
@@ -84,10 +73,7 @@ internal static class TypeRegistryEmitter
     private static void EmitRegisterMethod(StringBuilder sb, EntityDefModel def, ushort typeId,
         Dictionary<string, ushort> typeIndexMap, ProcessContext ctx)
     {
-        // Build_<Foo> contains the whole blob-build sequence; Register_<Foo>
-        // is a thin shim that adds the PInvoke side effect. Splitting keeps
-        // BuildAll (offline DefDump path) and RegisterAll (runtime PInvoke
-        // path) on a single source of truth for the wire layout.
+        // Split: Build_<Foo> writes the blob; Register_<Foo> wraps PInvoke.
         sb.AppendLine($"    private static void Register_{def.Name}(ushort typeId)");
         sb.AppendLine("    {");
         sb.AppendLine("        var writer = new SpanWriter(1024);");
@@ -112,9 +98,7 @@ internal static class TypeRegistryEmitter
         sb.AppendLine($"            writer.WriteBool({(def.HasCell ? "true" : "false")});");
         sb.AppendLine($"            writer.WriteBool({(def.HasClient ? "true" : "false")});");
 
-        // Properties. ATLAS_DEF008 reserved-position properties are skipped
-        // so the C++ registry's property index matches the generated C#
-        // field layout — both sides iterate the filtered list.
+        // ATLAS_DEF008 reserved `position` skipped so C# and C++ indices align.
         var effectiveProps = def.Properties.Where(p => !p.IsReservedPosition).ToList();
         sb.AppendLine($"            writer.WritePackedUInt32({(uint)effectiveProps.Count});");
         for (int i = 0; i < effectiveProps.Count; i++)
@@ -130,9 +114,7 @@ internal static class TypeRegistryEmitter
             sb.AppendLine($"            writer.WriteBool(false);");  // identifier (not parsed from .def yet)
             sb.AppendLine($"            writer.WriteBool({(prop.Reliable ? "true" : "false")});");
 
-            // Container tail — matches the wire format consumed by
-            // RegisterType in entity_def_registry.cc. Scalars emit nothing
-            // here; prop.data_type alone pins them down.
+            // Wire format consumed by RegisterType in entity_def_registry.cc.
             if (prop.TypeRef is not null && IsContainer(topKind))
             {
                 EmitDataTypeRefBody(sb, prop.TypeRef);
@@ -140,10 +122,7 @@ internal static class TypeRegistryEmitter
             }
         }
 
-        // RPCs — collect ALL methods from all sections, including those
-        // declared on Synced components. Each component method gets a
-        // slot-encoded rpc_id; the C++ registry stays oblivious to the
-        // entity-vs-component distinction (slot is just bits in the id).
+        // Slot encoded into rpc_id so C++ registry treats body + components alike.
         var allRpcs = new List<(MethodDefModel Method, byte Direction, int Slot, int MethodIdx)>();
 
         void AddSection(List<MethodDefModel> methods, byte direction, int slot)
@@ -176,10 +155,7 @@ internal static class TypeRegistryEmitter
             sb.AppendLine($"            writer.WritePackedUInt32(0x{rpcId:X8});");
             // param_count (packed uint32)
             sb.AppendLine($"            writer.WritePackedUInt32({(uint)method.Args.Count});");
-            // param types (uint8 each). Container / struct args surface
-            // as kList(16) / kDict(17) / kStruct(18); C++ stores the
-            // kind for descriptor logging but never decodes the payload
-            // body — actual arg parsing happens C#-side per codegen.
+            // C++ stores kind for logging; arg payload is decoded C#-side.
             foreach (var arg in method.Args)
             {
                 sb.AppendLine($"            writer.WriteByte({RpcArgCodec.WireKind(arg)});");
@@ -188,10 +164,8 @@ internal static class TypeRegistryEmitter
             sb.AppendLine($"            writer.WriteByte({(byte)method.Exposed});");
         }
 
-        // Slot table (optional tail): consumed by ATDF readers so the UE
-        // client can map slot_idx → component_type_id without inspecting
-        // the C# runtime. Only Synced components get a slot; local
-        // components have SlotIdx == -1 and are skipped.
+        // Slot table tail — lets ATDF readers map slot_idx → component_type_id
+        // without the C# runtime. Local components (SlotIdx == -1) are skipped.
         var syncedSlots = def.Components
             .Where(c => c.Locality == ComponentLocality.Synced && c.SlotIdx >= 0
                         && c.ComponentTypeId > 0)
@@ -211,20 +185,13 @@ internal static class TypeRegistryEmitter
 
     internal static PropertyDataKind ResolveTopLevelKind(PropertyDefModel prop)
     {
-        // Container properties are driven by TypeRef.Kind; scalars fall back
-        // to the flat DefTypeHelper mapping so the legacy code path
-        // (RegisterType reading [u8 kind] for scalar) stays wire-compatible.
+        // Containers: TypeRef.Kind; scalars: legacy DefTypeHelper mapping
+        // so RegisterType reading [u8 kind] for scalars stays wire-compatible.
         if (prop.TypeRef is not null) return prop.TypeRef.Kind;
 
-        var scalar = (PropertyDataKind)DefTypeHelper.DataTypeId(prop.Type);
-        // DataTypeId returns kCustom (=15) as its "unknown name" fallback.
-        // By the time we reach the emitter, DefTypeExprParser has already
-        // classified every type string — an unrecognised name would have
-        // been mapped to a kStruct with prop.TypeRef set. So hitting
-        // kCustom here means a genuine scalar-typed "custom" property,
-        // not a parser miss. Treat that as fine; any future path that
-        // skips DefTypeExprParser is the one that needs to be fixed.
-        return scalar;
+        // kCustom here = legitimate scalar "custom" — DefTypeExprParser would
+        // have promoted any unknown name to kStruct with TypeRef set.
+        return (PropertyDataKind)DefTypeHelper.DataTypeId(prop.Type);
     }
 
     internal static bool IsContainer(PropertyDataKind kind) =>
@@ -232,9 +199,8 @@ internal static class TypeRegistryEmitter
         kind == PropertyDataKind.Dict ||
         kind == PropertyDataKind.Struct;
 
-    // Emits bytes for a DataTypeRef body — kind-specific tail only, no
-    // leading kind byte. Callers that need a full self-describing
-    // DataTypeRef (list elem, dict key/value) wrap this with EmitDataTypeRef.
+    // Kind-specific tail only; callers needing a self-describing ref wrap
+    // with EmitDataTypeRef.
     internal static void EmitDataTypeRefBody(StringBuilder sb, DataTypeRefModel t)
     {
         switch (t.Kind)
@@ -250,8 +216,7 @@ internal static class TypeRegistryEmitter
                 sb.AppendLine($"            writer.WriteUInt16((ushort){t.StructId});");
                 break;
             default:
-                // Scalar kinds have no tail — body writer is only invoked on
-                // container properties, so hitting this branch is a bug.
+                // Scalars have no tail; reaching here means a caller bug.
                 break;
         }
     }
