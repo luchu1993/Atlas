@@ -71,12 +71,13 @@ public static class Program
             return 2;
         }
 
-        // Capture struct + type blobs via the codegen-emitted BuildAll
-        // enumerators. Components are not currently emitted on the C#
-        // side, so we always write 0 in the container's component
-        // section. Loading order matches the runtime ModuleInitializer:
-        // structs first because entity descriptors reference struct ids.
+        // Capture struct + component + type blobs via the codegen-emitted
+        // BuildAll enumerators. Loading order matches the runtime
+        // ModuleInitializer: structs first (entity property type_refs
+        // resolve them), then components (entity slot tables reference
+        // component_type_id), then entity types.
         var structBlobs = TryCollectBlobs(target, "Atlas.Def.DefStructRegistry");
+        var componentBlobs = TryCollectBlobs(target, "Atlas.Def.DefComponentRegistry");
         var typeBlobs = TryCollectBlobs(target, "Atlas.Def.DefEntityTypeRegistry");
 
         try
@@ -95,7 +96,12 @@ public static class Program
                     w.WriteRawBytes(blob);
                 }
 
-                w.WritePackedUInt32(0);  // component_count: not emitted yet
+                w.WritePackedUInt32((uint)componentBlobs.Count);
+                foreach (var blob in componentBlobs)
+                {
+                    w.WritePackedUInt32((uint)blob.Length);
+                    w.WriteRawBytes(blob);
+                }
 
                 w.WritePackedUInt32((uint)typeBlobs.Count);
                 foreach (var blob in typeBlobs)
@@ -116,7 +122,7 @@ public static class Program
         }
 
         Console.WriteLine(
-            $"DefDump: wrote {outPath} (structs={structBlobs.Count}, components=0, types={typeBlobs.Count})");
+            $"DefDump: wrote {outPath} (structs={structBlobs.Count}, components={componentBlobs.Count}, types={typeBlobs.Count})");
         return 0;
     }
 

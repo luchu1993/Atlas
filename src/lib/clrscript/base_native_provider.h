@@ -29,6 +29,7 @@ class BaseNativeProvider : public INativeApiProvider {
   void RegisterEntityType(const std::byte* data, int32_t len) override;
   void UnregisterAllEntityTypes() override;
   void RegisterStruct(const std::byte* data, int32_t len) override;
+  void RegisterComponent(const std::byte* data, int32_t len) override;
   void SetEntityDefDigest(const std::byte* data, int32_t len) override;
 
   void WriteToDb(uint32_t entity_id, const std::byte* entity_data, int32_t len) override;

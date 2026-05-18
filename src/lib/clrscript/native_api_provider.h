@@ -47,6 +47,13 @@ class INativeApiProvider {
   // Struct descriptors must be registered before entity types that reference them.
   virtual void RegisterStruct(const std::byte* data, int32_t len) = 0;
 
+  // Component descriptors must be registered after structs (component
+  // properties may reference struct_id) and before entity types whose
+  // slot table references component_type_id. Default no-op so providers
+  // that don't bridge to EntityDefRegistry (tests, headless runs) compile
+  // without churn.
+  virtual void RegisterComponent(const std::byte* /*data*/, int32_t /*len*/) {}
+
   // 32-byte SHA-256 of the entity-def surface, computed at C# codegen time.
   // BaseApp compares this to LoginRequest.entity_def_digest to reject
   // mismatched client/server builds before any RPC dispatch.

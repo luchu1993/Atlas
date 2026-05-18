@@ -1,7 +1,9 @@
 #include "AtlasCore/client_entity.h"
 
 #include <cstdint>
+#include <utility>
 
+#include "AtlasCore/component_instance.h"
 #include "AtlasCore/property_decoder.h"
 #include "AtlasCore/span_reader.h"
 #include "entitydef/entitydef_api.h"
@@ -10,37 +12,8 @@ namespace atlas {
 
 namespace {
 
-bool IsClientVisibleScope(uint8_t scope) {
-  switch (scope) {
-    case ATLAS_EDR_SCOPE_OWN_CLIENT:
-    case ATLAS_EDR_SCOPE_OTHER_CLIENTS:
-    case ATLAS_EDR_SCOPE_ALL_CLIENTS:
-    case ATLAS_EDR_SCOPE_CELL_PUBLIC_AND_OWN:
-    case ATLAS_EDR_SCOPE_BASE_AND_CLIENT:
-      return true;
-    default:
-      return false;
-  }
-}
-
-bool IsContainerType(uint8_t data_type) {
-  return data_type == ATLAS_EDR_TYPE_LIST || data_type == ATLAS_EDR_TYPE_DICT;
-}
-
-// Flag-byte width follows the C# PropertiesEmitter table: ≤8 props → u8,
-// ≤16 → u16, ≤32 → u32, else u64. Determined by the count of client-visible
-// properties (scalars + containers), matching the server-side enum layout.
-bool ReadFlagsByCount(SpanReader& r, int32_t visible_count, uint64_t& flags) {
-  if (visible_count <= 8) {
-    uint8_t v; if (!r.Read(v)) return false; flags = v; return true;
-  }
-  if (visible_count <= 16) {
-    uint16_t v; if (!r.Read(v)) return false; flags = v; return true;
-  }
-  if (visible_count <= 32) {
-    uint32_t v; if (!r.Read(v)) return false; flags = v; return true;
-  }
-  uint64_t v; if (!r.Read(v)) return false; flags = v; return true;
+const AtlasEdrProperty* EntityPropAt(const void* desc, int32_t idx) {
+  return AtlasEdrEntityPropertyAt(static_cast<const AtlasEdrEntity*>(desc), idx);
 }
 
 }  // namespace
@@ -48,76 +21,55 @@ bool ReadFlagsByCount(SpanReader& r, int32_t visible_count, uint64_t& flags) {
 void ClientEntity::BindDescriptor(const AtlasEdrEntity* descriptor, AtlasEdrContext* ctx) {
   descriptor_ = descriptor;
   edr_ctx_ = ctx;
+  components_.clear();
   if (descriptor_ == nullptr) {
     properties_.clear();
     return;
   }
   const int32_t count = AtlasEdrEntityPropertyCount(descriptor_);
-  // PropertyValue is move-only (unique_ptr alternatives) so assign(n, v)
-  // is unavailable; resize() default-constructs each slot to monostate.
+  // PropertyValue is move-only (unique_ptr alternatives) so assign(n, v) is
+  // unavailable; resize() default-constructs each slot to monostate.
   properties_.clear();
   properties_.resize(count > 0 ? static_cast<size_t>(count) : 0u);
 }
 
+void ClientEntity::RegisterComponentFactory(uint8_t slot_idx, ComponentFactory factory) {
+  if (slot_idx >= component_factories_.size()) {
+    component_factories_.resize(static_cast<size_t>(slot_idx) + 1);
+  }
+  component_factories_[slot_idx] = std::move(factory);
+}
+
 bool ClientEntity::ApplyDelta(SpanReader& reader) {
   if (descriptor_ == nullptr) return false;
-  AtlasEdrContext* ctx = edr_ctx_;
-
-  uint8_t section_mask;
-  if (!reader.Read(section_mask)) return false;
-
+  uint8_t section_mask = 0;
   const int32_t prop_count = AtlasEdrEntityPropertyCount(descriptor_);
-  int32_t visible_count = 0;
-  for (int32_t i = 0; i < prop_count; ++i) {
-    const AtlasEdrProperty* prop = AtlasEdrEntityPropertyAt(descriptor_, i);
-    if (prop != nullptr && IsClientVisibleScope(AtlasEdrPropertyScope(prop))) ++visible_count;
+  if (!ApplyPropertyDelta(reader, edr_ctx_, prop_count, descriptor_, &EntityPropAt, properties_,
+                          view_.get(), &section_mask)) {
+    return false;
   }
+  if ((section_mask & 0x04) == 0) return true;
 
-  if ((section_mask & 0x01) != 0) {
-    uint64_t scalar_flags;
-    if (!ReadFlagsByCount(reader, visible_count, scalar_flags)) return false;
-    uint64_t bit = 0;
-    for (int32_t i = 0; i < prop_count; ++i) {
-      const AtlasEdrProperty* prop = AtlasEdrEntityPropertyAt(descriptor_, i);
-      if (prop == nullptr) return false;
-      if (!IsClientVisibleScope(AtlasEdrPropertyScope(prop))) continue;
-      const uint8_t data_type = AtlasEdrPropertyDataType(prop);
-      if (IsContainerType(data_type)) {
-        ++bit;
-        continue;
+  // Component section: [PackedUInt32 count] then per dirty slot
+  //   [u8 slot_idx] [section-mask-framed component delta]
+  uint32_t comp_count;
+  if (!reader.ReadPackedUInt32(comp_count)) return false;
+  for (uint32_t i = 0; i < comp_count; ++i) {
+    uint8_t slot;
+    if (!reader.Read(slot)) return false;
+    const AtlasEdrComponent* comp_desc =
+        AtlasEdrEntityComponentAtSlot(edr_ctx_, descriptor_, slot);
+    if (comp_desc == nullptr) return false;
+    if (slot >= components_.size()) components_.resize(static_cast<size_t>(slot) + 1);
+    if (components_[slot] == nullptr) {
+      auto factory = slot < component_factories_.size() ? component_factories_[slot] : nullptr;
+      if (factory) {
+        components_[slot] = factory(comp_desc, this, slot);
+      } else {
+        components_[slot] = std::make_unique<ComponentInstance>(comp_desc, this, slot);
       }
-      if ((scalar_flags & (uint64_t{1} << bit)) != 0) {
-        const AtlasEdrDataTypeRef* ref = AtlasEdrPropertyTypeRef(prop);
-        if (!DecodeValue(reader, data_type, ref, ctx, properties_[i])) return false;
-        if (view_ != nullptr) view_->OnPropertyChanged(AtlasEdrPropertyIndex(prop));
-      }
-      ++bit;
     }
-  }
-  if ((section_mask & 0x02) != 0) {
-    uint64_t container_flags;
-    if (!ReadFlagsByCount(reader, visible_count, container_flags)) return false;
-    uint64_t bit = 0;
-    for (int32_t i = 0; i < prop_count; ++i) {
-      const AtlasEdrProperty* prop = AtlasEdrEntityPropertyAt(descriptor_, i);
-      if (prop == nullptr) return false;
-      if (!IsClientVisibleScope(AtlasEdrPropertyScope(prop))) continue;
-      const uint8_t data_type = AtlasEdrPropertyDataType(prop);
-      if (!IsContainerType(data_type)) {
-        ++bit;
-        continue;
-      }
-      if ((container_flags & (uint64_t{1} << bit)) != 0) {
-        const AtlasEdrDataTypeRef* ref = AtlasEdrPropertyTypeRef(prop);
-        if (!DecodeContainerOps(reader, ref, ctx, properties_[i])) return false;
-        if (view_ != nullptr) view_->OnPropertyChanged(AtlasEdrPropertyIndex(prop));
-      }
-      ++bit;
-    }
-  }
-  if ((section_mask & 0x04) != 0) {
-    // Component section per-slot dispatch lands when components ship to UE.
-    return reader.Skip(reader.Remaining());
+    if (!components_[slot]->ApplyDelta(reader, edr_ctx_)) return false;
   }
   return true;
 }

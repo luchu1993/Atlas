@@ -45,6 +45,22 @@ public sealed class DefGenerator : IIncrementalGenerator
             .Where(static m => m is not null)
             .Select(static (m, _) => m!);
 
+        // 1c. Read component_ids.xml manifest(s) — analogous to entity_ids
+        // but assigns the wire-stable component_type_id used by ATDF
+        // consumers (UE client, DBApp).
+        var componentManifestSources = context.AdditionalTextsProvider
+            .Where(static f => string.Equals(
+                System.IO.Path.GetFileName(f.Path),
+                ComponentIdManifestParser.FileName,
+                StringComparison.OrdinalIgnoreCase))
+            .Select(static (f, ct) =>
+            {
+                var text = f.GetText(ct);
+                return text == null ? null : new ManifestSource(f.Path, text.ToString());
+            })
+            .Where(static m => m is not null)
+            .Select(static (m, _) => m!);
+
         // 2. Read process context from preprocessor symbols
         var processCtx = context.CompilationProvider
             .Select(static (c, _) =>
@@ -85,17 +101,19 @@ public sealed class DefGenerator : IIncrementalGenerator
         var combined = defs.Collect()
             .Combine(userEntities.Collect())
             .Combine(processCtx)
-            .Combine(manifestSources.Collect());
+            .Combine(manifestSources.Collect())
+            .Combine(componentManifestSources.Collect());
 
         context.RegisterSourceOutput(combined, Execute);
     }
 
     private static void Execute(SourceProductionContext spc,
-        (((ImmutableArray<ParsedDef> Defs, ImmutableArray<UserEntityInfo> Users) DefsAndUsers,
-          ProcessContext Ctx),
-         ImmutableArray<ManifestSource> Manifests) input)
+        ((((ImmutableArray<ParsedDef> Defs, ImmutableArray<UserEntityInfo> Users) DefsAndUsers,
+           ProcessContext Ctx),
+          ImmutableArray<ManifestSource> Manifests),
+         ImmutableArray<ManifestSource> ComponentManifests) input)
     {
-        var ((defsAndUsers, ctx), manifestSources) = input;
+        var (((defsAndUsers, ctx), manifestSources), componentManifestSources) = input;
         var (parsed, users) = defsAndUsers;
 
         if (parsed.IsDefaultOrEmpty)
@@ -195,7 +213,10 @@ public sealed class DefGenerator : IIncrementalGenerator
         // reassembling the map from defs[] — keeps DefLinker the
         // single source of truth for which struct / component names
         // are addressable.
-        var linked = DefLinker.Link(defs.ToList(), standaloneComponents, spc.ReportDiagnostic);
+        var componentManifest =
+            DefGeneratorHelpers.ResolveComponentManifest(componentManifestSources, spc);
+        var linked = DefLinker.Link(defs.ToList(), standaloneComponents, componentManifest,
+                                     spc.ReportDiagnostic);
         if (linked is null) return;
         var structsByName = linked.StructsByName;
 
@@ -328,6 +349,20 @@ public sealed class DefGenerator : IIncrementalGenerator
                           SourceText.From(structRegistry, System.Text.Encoding.UTF8));
         }
 
+        // Global: ComponentRegistry — registers standalone synced components
+        // by their manifest-assigned component_type_id. Must run AFTER
+        // StructRegistry (component property types may reference struct ids)
+        // and BEFORE TypeRegistry (entity slot tables reference
+        // component_type_id).
+        var hasSyncedStandaloneComponents = standaloneComponents.Any(
+            c => c.Locality == ComponentLocality.Synced && c.ComponentTypeId > 0);
+        if (hasSyncedStandaloneComponents)
+        {
+            var componentRegistry = Emitters.ComponentRegistryEmitter.Emit(standaloneComponents, ctx);
+            spc.AddSource("DefComponentRegistry.g.cs",
+                          SourceText.From(componentRegistry, System.Text.Encoding.UTF8));
+        }
+
         // Global: TypeRegistry — serializes entity descriptors (with RPC + ExposedScope) to C++
         if (entityList.Count > 0)
         {
@@ -349,11 +384,13 @@ public sealed class DefGenerator : IIncrementalGenerator
         // Single ModuleInitializer entry: replaces per-emitter ones so the
         // four registration steps run in a fixed order within the assembly.
         bool hasStructs = linked.Structs.Count > 0;
+        bool hasComponents = hasSyncedStandaloneComponents;
         bool hasEntities = entityList.Count > 0;
         bool hasDispatcher = entityList.Count > 0;
-        if (hasStructs || hasEntities || hasDispatcher)
+        if (hasStructs || hasComponents || hasEntities || hasDispatcher)
         {
-            var bootstrap = Emitters.BootstrapEmitter.Emit(hasStructs, hasEntities, hasDispatcher, ctx);
+            var bootstrap = Emitters.BootstrapEmitter.Emit(hasStructs, hasComponents, hasEntities,
+                                                          hasDispatcher, ctx);
             spc.AddSource("DefBootstrap.g.cs",
                           SourceText.From(bootstrap, System.Text.Encoding.UTF8));
         }
@@ -375,6 +412,21 @@ internal static class DefGeneratorHelpers
         }
         var primary = sources[0];
         return EntityIdManifestParser.Parse(primary.Xml, primary.Path, spc.ReportDiagnostic);
+    }
+
+    public static ComponentIdManifest? ResolveComponentManifest(
+        ImmutableArray<ManifestSource> sources, SourceProductionContext spc)
+    {
+        if (sources.IsDefaultOrEmpty) return null;
+        if (sources.Length > 1)
+        {
+            var paths = string.Join(", ", sources.Select(s => s.Path));
+            spc.ReportDiagnostic(Diagnostic.Create(
+                DefDiagnosticDescriptors.DEF025, Location.None, paths,
+                "multiple component_ids.xml manifests in compilation; expected exactly one"));
+        }
+        var primary = sources[0];
+        return ComponentIdManifestParser.Parse(primary.Xml, primary.Path, spc.ReportDiagnostic);
     }
 
     public static Dictionary<string, ushort> BuildTypeIndexMap(IEnumerable<EntityDefModel> defs,

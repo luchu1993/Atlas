@@ -10,6 +10,7 @@ public static class ClientHost
                                    ulong traceId);
     public delegate void RegisterEntityTypeFn(ReadOnlySpan<byte> data);
     public delegate void RegisterStructFn(ReadOnlySpan<byte> data);
+    public delegate void RegisterComponentFn(ReadOnlySpan<byte> data);
     public delegate void SetEntityDefDigestFn(ReadOnlySpan<byte> data);
     public delegate void ReportEventSeqGapFn(uint entityId, uint gapDelta);
 
@@ -17,6 +18,7 @@ public static class ClientHost
     public static SendRpcFn? SendCellRpcHandler;
     public static RegisterEntityTypeFn? RegisterEntityTypeHandler;
     public static RegisterStructFn? RegisterStructHandler;
+    public static RegisterComponentFn? RegisterComponentHandler;
     // Pushes the digest into the C++ EntityDefRegistry on hosts that need it
     // (atlas_client.exe stamps it into LoginRequest from C++). Unity / editor
     // previews leave it null and rely on the managed EntityDefDigest only.
@@ -45,6 +47,12 @@ public static class ClientHost
 
     internal static void RegisterStruct(ReadOnlySpan<byte> data)
         => Required(RegisterStructHandler, nameof(RegisterStructHandler))(data);
+
+    // Component handler is optional: a host without a native EntityDefRegistry
+    // (Unity editor preview, DefDump offline) drops the payload — the offline
+    // ATDF pipeline carries the same blob through DefComponentRegistry.BuildAll.
+    internal static void RegisterComponent(ReadOnlySpan<byte> data)
+        => RegisterComponentHandler?.Invoke(data);
 
     internal static void SetEntityDefDigest(ReadOnlySpan<byte> data)
     {

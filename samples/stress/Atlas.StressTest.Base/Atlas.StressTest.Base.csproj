@@ -24,6 +24,7 @@
        base-only; StressAvatar lives on both sides. -->
   <ItemGroup>
     <AdditionalFiles Include="..\..\..\entity_defs\entity_ids.xml" />
+    <AdditionalFiles Include="..\..\..\entity_defs\component_ids.xml" />
     <AdditionalFiles Include="..\..\..\entity_defs\Account.def" />
     <AdditionalFiles Include="..\..\..\entity_defs\StressAvatar.def" />
     <AdditionalFiles Include="..\..\..\entity_defs\StressLoadComponent.def" />

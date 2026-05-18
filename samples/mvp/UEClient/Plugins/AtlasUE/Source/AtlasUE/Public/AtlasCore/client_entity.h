@@ -1,9 +1,11 @@
 #ifndef ATLAS_UE_CLIENT_CORE_CLIENT_ENTITY_H_
 #define ATLAS_UE_CLIENT_CORE_CLIENT_ENTITY_H_
 
+#include <functional>
 #include <memory>
 #include <vector>
 
+#include "AtlasCore/component_instance.h"
 #include "AtlasCore/core_export.h"
 #include "AtlasCore/entity_id.h"
 #include "AtlasCore/entity_view.h"
@@ -82,6 +84,22 @@ class ATLAS_CORE_API ClientEntity {
     return slot != nullptr ? slot->get() : nullptr;
   }
 
+  // Slot table for synced components. Indexed by slot_idx; slot 0 reserved
+  // for the entity body. Lazily allocated on first delta to a slot.
+  [[nodiscard]] ComponentInstance* GetComponent(uint8_t slot_idx) const {
+    if (slot_idx >= components_.size()) return nullptr;
+    return components_[slot_idx].get();
+  }
+
+  // Codegen-emitted entity classes call this from their constructor to
+  // pre-register the typed ComponentInstance subclass factories keyed by
+  // slot. The decoder uses them to create the right derived type on the
+  // first delta to a slot; without a registered factory the slot uses a
+  // base ComponentInstance (decode still works, typed views unavailable).
+  using ComponentFactory = std::function<std::unique_ptr<ComponentInstance>(
+      const AtlasEdrComponent*, ClientEntity*, uint8_t)>;
+  void RegisterComponentFactory(uint8_t slot_idx, ComponentFactory factory);
+
   // Decodes one sectionMask-framed delta — scalars, containers, and structs.
   // Returns false on truncation or malformed wire (out-of-range slot, missing
   // descriptor, unknown op kind); storage is left in whatever partial state
@@ -90,13 +108,24 @@ class ATLAS_CORE_API ClientEntity {
   // base decode, then diff + fire On<Prop>Changed hooks.
   virtual bool ApplyDelta(SpanReader& reader);
 
-  // Inbound 0xF004 RPC entry point. Default returns false ("no handler");
-  // codegen-emitted typed entities override and switch on rpc_id to decode
-  // args + invoke the per-method virtual.
-  virtual bool DispatchRpc(uint32_t /*rpc_id*/, uint64_t /*trace_id*/,
-                            SpanReader& /*reader*/) {
+  // Inbound 0xF004 RPC entry point. Extracts slot_idx from rpc_id: slot 0
+  // routes to DispatchEntityRpc (codegen-overridden entity-body switch);
+  // non-zero forwards to the matching component instance. Net client and
+  // tests call this; codegen overrides DispatchEntityRpc, not this method.
+  bool DispatchRpc(uint32_t rpc_id, uint64_t trace_id, SpanReader& reader) {
+    const uint8_t slot = (rpc_id >> 24) & 0x7F;
+    if (slot == 0) return DispatchEntityRpc(rpc_id, trace_id, reader);
+    ComponentInstance* c = GetComponent(slot);
+    return c != nullptr && c->DispatchRpc(rpc_id, trace_id, reader);
+  }
+
+ protected:
+  virtual bool DispatchEntityRpc(uint32_t /*rpc_id*/, uint64_t /*trace_id*/,
+                                  SpanReader& /*reader*/) {
     return false;
   }
+
+ public:
 
  private:
   EntityId id_;
@@ -106,6 +135,8 @@ class ATLAS_CORE_API ClientEntity {
   AtlasEdrContext* edr_ctx_{nullptr};
   RpcSender* sender_{nullptr};
   std::vector<PropertyValue> properties_;
+  std::vector<std::unique_ptr<ComponentInstance>> components_;
+  std::vector<ComponentFactory> component_factories_;
 };
 
 }  // namespace atlas

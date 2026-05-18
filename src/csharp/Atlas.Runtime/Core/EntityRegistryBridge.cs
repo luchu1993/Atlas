@@ -19,6 +19,11 @@ public static class EntityRegistryBridge
         NativeApi.RegisterStruct(data);
     }
 
+    public static void RegisterComponent(ReadOnlySpan<byte> data)
+    {
+        NativeApi.RegisterComponent(data);
+    }
+
     public static void SetEntityDefDigest(ReadOnlySpan<byte> data)
     {
         NativeApi.SetEntityDefDigest(data);

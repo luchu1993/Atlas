@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Source of truth for component_type_id assignment. Read by
+  Atlas.Generators.Def.
+
+  Rules:
+  - Every standalone <component> (root-level) in this directory's .def
+    files must have a matching <component name="..." id="..."/> entry
+    below.
+  - id values are permanent contracts: never change a value, never reuse
+    an id even after deletion. To remove a component, set
+    deprecated="true" and keep the entry forever.
+  - Allocate the next free id with `tools/bin/def_id.{bat,sh}
+    alloc-component <Name>` (TODO: add wrapper).
+-->
+<component_ids>
+  <component name="StressLoadComponent" id="1"/>
+</component_ids>

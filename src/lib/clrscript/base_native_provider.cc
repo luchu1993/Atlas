@@ -72,6 +72,10 @@ void BaseNativeProvider::RegisterStruct(const std::byte* data, int32_t len) {
   EntityDefRegistry::Instance().RegisterStruct(data, len);
 }
 
+void BaseNativeProvider::RegisterComponent(const std::byte* data, int32_t len) {
+  EntityDefRegistry::Instance().RegisterComponent(data, len);
+}
+
 void BaseNativeProvider::SetEntityDefDigest(const std::byte* data, int32_t len) {
   EntityDefRegistry::Instance().SetDigest(data, len);
 }

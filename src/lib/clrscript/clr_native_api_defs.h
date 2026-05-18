@@ -51,6 +51,10 @@
         (const uint8_t* data, int32_t len),                                                        \
         atlas::GetNativeApiProvider().RegisterStruct(                                               \
             reinterpret_cast<const std::byte*>(data), len))                                        \
+    X(void, RegisterComponent,                                                                     \
+        (const uint8_t* data, int32_t len),                                                        \
+        atlas::GetNativeApiProvider().RegisterComponent(                                            \
+            reinterpret_cast<const std::byte*>(data), len))                                        \
     X(void, SetEntityDefDigest,                                                                    \
         (const uint8_t* data, int32_t len),                                                        \
         atlas::GetNativeApiProvider().SetEntityDefDigest(                                           \

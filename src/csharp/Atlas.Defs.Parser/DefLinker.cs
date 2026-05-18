@@ -30,10 +30,16 @@ internal static class DefLinker
 
     public static LinkedDefs? Link(List<EntityDefModel> entities,
                                    Action<Diagnostic>? reportDiagnostic) =>
-        Link(entities, new List<ComponentDefModel>(), reportDiagnostic);
+        Link(entities, new List<ComponentDefModel>(), null, reportDiagnostic);
 
     public static LinkedDefs? Link(List<EntityDefModel> entities,
                                    List<ComponentDefModel> standaloneComponents,
+                                   Action<Diagnostic>? reportDiagnostic) =>
+        Link(entities, standaloneComponents, null, reportDiagnostic);
+
+    public static LinkedDefs? Link(List<EntityDefModel> entities,
+                                   List<ComponentDefModel> standaloneComponents,
+                                   ComponentIdManifest? componentManifest,
                                    Action<Diagnostic>? reportDiagnostic)
     {
         var allStructs = new Dictionary<string, StructDefModel>(StringComparer.Ordinal);
@@ -145,6 +151,25 @@ internal static class DefLinker
                 return null;
         }
 
+        // Resolve component_type_id from manifest. Standalone components
+        // must have an entry; the id is the wire-stable handle that ATDF
+        // consumers (UE client, DBApp) use to look up the descriptor.
+        if (componentManifest != null)
+        {
+            foreach (var sc in standaloneComponents)
+            {
+                if (componentManifest.ActiveByName.TryGetValue(sc.TypeName, out var id))
+                {
+                    sc.ComponentTypeId = id;
+                }
+                else if (!componentManifest.DeprecatedNames.Contains(sc.TypeName))
+                {
+                    reportDiagnostic?.Invoke(Diagnostic.Create(
+                        DefDiagnosticDescriptors.DEF019, Location.None, sc.TypeName));
+                }
+            }
+        }
+
         // Resolve each entity-side component reference: copy-by-share
         // properties from the standalone definition when no inline body
         // was given, and validate scope subset rules.
@@ -169,6 +194,7 @@ internal static class DefLinker
                     foreach (var m in sc.CellMethods) c.CellMethods.Add(m);
                     foreach (var m in sc.BaseMethods) c.BaseMethods.Add(m);
                     c.PropIdxBase = sc.PropIdxBase;
+                    c.ComponentTypeId = sc.ComponentTypeId;
                 }
                 // Validate P.scope ⊆ slot scope after resolution.
                 foreach (var p in c.Properties)

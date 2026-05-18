@@ -85,6 +85,7 @@ typedef struct AtlasEdrProperty AtlasEdrProperty;
 typedef struct AtlasEdrDataTypeRef AtlasEdrDataTypeRef;
 typedef struct AtlasEdrStruct AtlasEdrStruct;
 typedef struct AtlasEdrStructField AtlasEdrStructField;
+typedef struct AtlasEdrComponent AtlasEdrComponent;
 
 // Pointers returned remain valid until AtlasEdrDestroy(ctx).
 ATLAS_EDR_API const AtlasEdrEntity* AtlasEdrFindEntityById(AtlasEdrContext* ctx, uint16_t type_id);
@@ -103,6 +104,24 @@ ATLAS_EDR_API const AtlasEdrProperty* AtlasEdrEntityPropertyAt(const AtlasEdrEnt
 // "missing" (no valid rpc_id has a zero method index).
 ATLAS_EDR_API uint32_t AtlasEdrFindRpcId(AtlasEdrContext* ctx, const char* entity_name,
                                           const char* method_name);
+
+// Component descriptor access. Components carry the same property surface
+// shape as entity bodies (AtlasEdrProperty), so the generic decoder reuses
+// AtlasEdrPropertyDataType / TypeRef / etc. on slot properties too.
+ATLAS_EDR_API const AtlasEdrComponent* AtlasEdrFindComponentById(AtlasEdrContext* ctx,
+                                                                  uint16_t component_type_id);
+ATLAS_EDR_API const AtlasEdrComponent* AtlasEdrFindComponentByName(AtlasEdrContext* ctx,
+                                                                    const char* name);
+ATLAS_EDR_API const char* AtlasEdrComponentName(const AtlasEdrComponent* comp);
+ATLAS_EDR_API uint16_t AtlasEdrComponentTypeId(const AtlasEdrComponent* comp);
+ATLAS_EDR_API int32_t AtlasEdrComponentPropertyCount(const AtlasEdrComponent* comp);
+ATLAS_EDR_API const AtlasEdrProperty* AtlasEdrComponentPropertyAt(const AtlasEdrComponent* comp,
+                                                                   int32_t index);
+
+// Per-entity slot resolution: returns the component descriptor mounted at
+// slot_idx on the entity, or null when the slot is unallocated.
+ATLAS_EDR_API const AtlasEdrComponent* AtlasEdrEntityComponentAtSlot(
+    AtlasEdrContext* ctx, const AtlasEdrEntity* entity, uint8_t slot_idx);
 
 ATLAS_EDR_API uint8_t AtlasEdrPropertyDataType(const AtlasEdrProperty* prop);
 ATLAS_EDR_API uint8_t AtlasEdrPropertyScope(const AtlasEdrProperty* prop);

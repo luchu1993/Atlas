@@ -45,6 +45,10 @@ using SerializeEntityFn = int32_t (*)(uint32_t entity_id, uint8_t* out_buf, int3
 using ProximityEventFn = void (*)(uint32_t entity_id, int32_t user_arg, uint32_t peer_entity_id,
                                   uint8_t is_enter);
 
+// Per-entity timer fire callback. user_arg threads the script-supplied id
+// back so multiple timers on one entity can disambiguate.
+using TimerEventFn = void (*)(uint32_t entity_id, int32_t user_arg);
+
 // Triggers the C# entity's LifecycleCancellation. Fired by CellApp before
 // offload and by any process that needs to drain in-flight RPCs early.
 using EntityLifecycleCancelFn = void (*)(uint32_t entity_id);

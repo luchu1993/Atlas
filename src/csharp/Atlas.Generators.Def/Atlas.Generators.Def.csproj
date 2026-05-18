@@ -19,4 +19,21 @@
                       OutputItemType="Analyzer"
                       ReferenceOutputAssembly="true" />
   </ItemGroup>
+
+  <!-- Propagate Atlas.Defs.Parser.dll as an analyzer payload to downstream
+       projects that reference Atlas.Generators.Def with OutputItemType=Analyzer.
+       Without this, csc can load DefGenerator but FileNotFoundException fires
+       at IIncrementalGenerator.Initialize time when the generator hits any
+       Atlas.Defs.Parser type. -->
+  <PropertyGroup>
+    <GetTargetPathDependsOn>$(GetTargetPathDependsOn);_IncludeParserInTargetPath</GetTargetPathDependsOn>
+  </PropertyGroup>
+
+  <Target Name="_IncludeParserInTargetPath" Returns="@(TargetPathWithTargetPlatformMoniker)">
+    <ItemGroup>
+      <TargetPathWithTargetPlatformMoniker
+          Include="$(MSBuildThisFileDirectory)$(OutputPath)Atlas.Defs.Parser.dll"
+          IncludeRuntimeDependency="false" />
+    </ItemGroup>
+  </Target>
 </Project>

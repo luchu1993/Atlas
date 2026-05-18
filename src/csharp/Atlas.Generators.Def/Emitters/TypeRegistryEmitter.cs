@@ -188,10 +188,28 @@ internal static class TypeRegistryEmitter
             sb.AppendLine($"            writer.WriteByte({(byte)method.Exposed});");
         }
 
+        // Slot table (optional tail): consumed by ATDF readers so the UE
+        // client can map slot_idx → component_type_id without inspecting
+        // the C# runtime. Only Synced components get a slot; local
+        // components have SlotIdx == -1 and are skipped.
+        var syncedSlots = def.Components
+            .Where(c => c.Locality == ComponentLocality.Synced && c.SlotIdx >= 0
+                        && c.ComponentTypeId > 0)
+            .ToList();
+        sb.AppendLine($"            writer.WritePackedUInt32({(uint)syncedSlots.Count});");
+        foreach (var c in syncedSlots)
+        {
+            sb.AppendLine($"            writer.WriteUInt16({(ushort)c.SlotIdx});");
+            sb.AppendLine($"            writer.WriteString(\"{c.SlotName}\");");
+            sb.AppendLine($"            writer.WriteUInt16({(ushort)c.ComponentTypeId});");
+            sb.AppendLine($"            writer.WriteByte({(byte)c.Scope});");
+            sb.AppendLine($"            writer.WriteBool({(c.Lazy ? "true" : "false")});");
+        }
+
         sb.AppendLine("    }");
     }
 
-    private static PropertyDataKind ResolveTopLevelKind(PropertyDefModel prop)
+    internal static PropertyDataKind ResolveTopLevelKind(PropertyDefModel prop)
     {
         // Container properties are driven by TypeRef.Kind; scalars fall back
         // to the flat DefTypeHelper mapping so the legacy code path
@@ -209,7 +227,7 @@ internal static class TypeRegistryEmitter
         return scalar;
     }
 
-    private static bool IsContainer(PropertyDataKind kind) =>
+    internal static bool IsContainer(PropertyDataKind kind) =>
         kind == PropertyDataKind.List ||
         kind == PropertyDataKind.Dict ||
         kind == PropertyDataKind.Struct;

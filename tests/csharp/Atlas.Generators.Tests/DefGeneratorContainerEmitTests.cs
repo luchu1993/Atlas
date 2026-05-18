@@ -323,12 +323,12 @@ public partial class Avatar : ServerEntity
         var result = Run(MinimalUserSource, xml);
         var code = FindGenerated(result, "DefEntityTypeRegistry")!;
 
-        // The only WritePackedUInt32 in the generated method should be the
-        // property count + rpc count (each emitted once); there should NOT
-        // be a max_size emission. We check by counting: exactly 2 matches.
+        // The only WritePackedUInt32 emissions in the generated method
+        // should be property count + rpc count + slot count (each emitted
+        // once); there should NOT be a max_size emission.
         var count = System.Text.RegularExpressions.Regex.Matches(
             code, @"WritePackedUInt32\(").Count;
-        Assert.Equal(2, count);
+        Assert.Equal(3, count);
     }
 
     [Fact]

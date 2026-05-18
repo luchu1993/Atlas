@@ -220,6 +220,14 @@ internal sealed class ComponentDefModel
     public bool Lazy { get; set; }
     public ComponentLocality Locality { get; set; } = ComponentLocality.Synced;
     public int SlotIdx { get; set; } = -1;
+
+    // Stable 16-bit handle assigned from component_ids.xml; threaded into
+    // entity slot tables + the ATDF component blob so the offline registry
+    // (UE client, DBApp) can resolve `<component name>` to a descriptor.
+    // -1 until DefLinker resolves the manifest; standalone components must
+    // end with a valid id, inline-only declarations can stay -1.
+    public int ComponentTypeId { get; set; } = -1;
+
     public List<PropertyDefModel> Properties { get; } = new();
 
     // RPC sections — same shape as EntityDefModel. Component RPCs are

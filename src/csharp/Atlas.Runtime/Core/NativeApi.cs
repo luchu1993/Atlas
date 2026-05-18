@@ -104,6 +104,19 @@ internal static unsafe partial class NativeApi
             RegisterStructNative(ptr, data.Length);
     }
 
+    [LibraryImport(LibName, EntryPoint = "AtlasRegisterComponent")]
+    private static partial void RegisterComponentNative(byte* data, int len);
+
+    // Must be invoked after RegisterStruct (component properties may
+    // reference struct_id) and before any RegisterEntityType whose slot
+    // table references this component_type_id.
+    public static void RegisterComponent(ReadOnlySpan<byte> data)
+    {
+        ThreadGuard.EnsureMainThread();
+        fixed (byte* ptr = data)
+            RegisterComponentNative(ptr, data.Length);
+    }
+
     [LibraryImport(LibName, EntryPoint = "AtlasSetEntityDefDigest")]
     private static partial void SetEntityDefDigestNative(byte* data, int len);
 

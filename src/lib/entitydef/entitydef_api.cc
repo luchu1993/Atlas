@@ -122,6 +122,55 @@ uint32_t AtlasEdrFindRpcId(AtlasEdrContext* ctx, const char* entity_name,
   return 0;
 }
 
+const AtlasEdrComponent* AtlasEdrFindComponentById(AtlasEdrContext* ctx,
+                                                    uint16_t component_type_id) {
+  if (!ctx) return nullptr;
+  return reinterpret_cast<const AtlasEdrComponent*>(
+      ctx->registry.FindComponentById(component_type_id));
+}
+
+const AtlasEdrComponent* AtlasEdrFindComponentByName(AtlasEdrContext* ctx, const char* name) {
+  if (!ctx || !name) return nullptr;
+  return reinterpret_cast<const AtlasEdrComponent*>(ctx->registry.FindComponentByName(name));
+}
+
+const char* AtlasEdrComponentName(const AtlasEdrComponent* comp) {
+  if (!comp) return "";
+  return reinterpret_cast<const atlas::ComponentDescriptor*>(comp)->name.c_str();
+}
+
+uint16_t AtlasEdrComponentTypeId(const AtlasEdrComponent* comp) {
+  if (!comp) return 0;
+  return reinterpret_cast<const atlas::ComponentDescriptor*>(comp)->component_type_id;
+}
+
+int32_t AtlasEdrComponentPropertyCount(const AtlasEdrComponent* comp) {
+  if (!comp) return 0;
+  return static_cast<int32_t>(
+      reinterpret_cast<const atlas::ComponentDescriptor*>(comp)->properties.size());
+}
+
+const AtlasEdrProperty* AtlasEdrComponentPropertyAt(const AtlasEdrComponent* comp, int32_t index) {
+  if (!comp || index < 0) return nullptr;
+  const auto* desc = reinterpret_cast<const atlas::ComponentDescriptor*>(comp);
+  if (static_cast<size_t>(index) >= desc->properties.size()) return nullptr;
+  return reinterpret_cast<const AtlasEdrProperty*>(&desc->properties[index]);
+}
+
+const AtlasEdrComponent* AtlasEdrEntityComponentAtSlot(AtlasEdrContext* ctx,
+                                                        const AtlasEdrEntity* entity,
+                                                        uint8_t slot_idx) {
+  if (!ctx || !entity) return nullptr;
+  const auto* desc = reinterpret_cast<const atlas::EntityTypeDescriptor*>(entity);
+  for (const auto& slot : desc->slots) {
+    if (slot.slot_idx == slot_idx) {
+      return reinterpret_cast<const AtlasEdrComponent*>(
+          ctx->registry.FindComponentById(slot.component_type_id));
+    }
+  }
+  return nullptr;
+}
+
 int32_t AtlasEdrEntityPropertyCount(const AtlasEdrEntity* entity) {
   if (!entity) return 0;
   const auto* desc = reinterpret_cast<const atlas::EntityTypeDescriptor*>(entity);
