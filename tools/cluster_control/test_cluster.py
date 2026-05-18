@@ -200,6 +200,11 @@ def _spawn_cluster(args: argparse.Namespace, port_base: int) -> int:
                        "--machined", machined_address,
                        "--external-port", str(loginapp_port),
                        "--auto-create-accounts", "true",
+                       # Per-test fixture: tests run multiple logins in seconds
+                       # from 127.0.0.1; the production 5/min default would
+                       # rate-limit them. Effectively disable here.
+                       "--login-rate-limit-per-ip", "10000",
+                       "--login-rate-limit-global", "100000",
                        "--update-hertz", "50", "--log-level", "info"]))
         processes[-1].start_order = 5
 
