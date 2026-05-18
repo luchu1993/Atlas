@@ -94,6 +94,8 @@ internal static class Lifecycle
     internal static void DoOnTick(float deltaTime)
     {
         using var _ = Profiler.ZoneN(ProfilerNames.ScriptOnTick);
+        // First-tick fan-out — entity-ID pool and network are ready by here.
+        AppEvents.TryFireAppInit();
         using (Profiler.ZoneN(ProfilerNames.ScriptSyncContextFlush))
             EngineContext.SyncContext?.ProcessQueue();
         EngineContext.CoroLoop?.Drain();
