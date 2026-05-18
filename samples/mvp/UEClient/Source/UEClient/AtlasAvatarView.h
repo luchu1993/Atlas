@@ -12,6 +12,21 @@ DECLARE_DYNAMIC_MULTICAST_DELEGATE_TwoParams(
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_TwoParams(
 	FAtlasAvatarStringChanged, const FString&, OldValue, const FString&, NewValue);
 
+// Avatar.def client_methods → BP. uint32 args go through int32 because
+// dynamic multicast delegate reflection rejects unsigned types; the
+// engine entity_id space is < 2^31 so the cast is lossless. atlas::Vec3
+// converts to FVector via AtlasToUE so BP sees UE-native coords.
+DECLARE_DYNAMIC_MULTICAST_DELEGATE_TwoParams(
+	FAtlasAvatarShowDamage, int32, Amount, int32, AttackerId);
+DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(
+	FAtlasAvatarOnDied, int32, AttackerId);
+DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(
+	FAtlasAvatarOnRespawned, FVector, Pos);
+DECLARE_DYNAMIC_MULTICAST_DELEGATE_ThreeParams(
+	FAtlasAvatarOnProjectileFired, int32, ShotId, FVector, Origin, FVector, Velocity);
+DECLARE_DYNAMIC_MULTICAST_DELEGATE_ThreeParams(
+	FAtlasAvatarOnProjectileEnded, int32, ShotId, FVector, EndPos, int32, HitTargetId);
+
 // Blueprint-facing facade around the pure-C++ codegen-emitted Avatar entity.
 // Lives as a UActorComponent on AAvatarCapsule (or any actor that wants the
 // BP API); the game-mode's factory links this view to the matching entity at
@@ -35,6 +50,21 @@ public:
 	UPROPERTY(BlueprintAssignable, Category="Atlas|Avatar")
 	FAtlasAvatarStringChanged OnSecretChanged;
 
+	UPROPERTY(BlueprintAssignable, Category="Atlas|Avatar|Rpc")
+	FAtlasAvatarShowDamage OnShowDamage;
+
+	UPROPERTY(BlueprintAssignable, Category="Atlas|Avatar|Rpc")
+	FAtlasAvatarOnDied OnDied;
+
+	UPROPERTY(BlueprintAssignable, Category="Atlas|Avatar|Rpc")
+	FAtlasAvatarOnRespawned OnRespawned;
+
+	UPROPERTY(BlueprintAssignable, Category="Atlas|Avatar|Rpc")
+	FAtlasAvatarOnProjectileFired OnProjectileFired;
+
+	UPROPERTY(BlueprintAssignable, Category="Atlas|Avatar|Rpc")
+	FAtlasAvatarOnProjectileEnded OnProjectileEnded;
+
 	UFUNCTION(BlueprintCallable, Category="Atlas|Avatar")
 	int32 GetHp() const;
 	UFUNCTION(BlueprintCallable, Category="Atlas|Avatar")
@@ -57,6 +87,17 @@ public:
 	void NotifyManaChanged(int32 Old, int32 New) { OnManaChanged.Broadcast(Old, New); }
 	void NotifySecretChanged(const FString& Old, const FString& New) {
 		OnSecretChanged.Broadcast(Old, New);
+	}
+	void NotifyShowDamage(int32 Amount, int32 AttackerId) {
+		OnShowDamage.Broadcast(Amount, AttackerId);
+	}
+	void NotifyOnDied(int32 AttackerId) { OnDied.Broadcast(AttackerId); }
+	void NotifyOnRespawned(const FVector& Pos) { OnRespawned.Broadcast(Pos); }
+	void NotifyOnProjectileFired(int32 ShotId, const FVector& Origin, const FVector& Velocity) {
+		OnProjectileFired.Broadcast(ShotId, Origin, Velocity);
+	}
+	void NotifyOnProjectileEnded(int32 ShotId, const FVector& EndPos, int32 HitTargetId) {
+		OnProjectileEnded.Broadcast(ShotId, EndPos, HitTargetId);
 	}
 
 private:

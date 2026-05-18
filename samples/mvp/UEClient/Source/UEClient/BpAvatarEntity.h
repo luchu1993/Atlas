@@ -5,6 +5,7 @@
 #include "AtlasAvatarView.h"
 #include "AtlasCore/avatar_filter.h"
 #include "AtlasCore/entity_view.h"
+#include "AtlasCoordinates.h"
 #include "gen/Avatar.gen.h"
 
 // Game-side subclass that ties three concerns into the one entity that
@@ -60,6 +61,35 @@ public:
 	{
 		if (auto* v = ViewPtr.Get())
 			v->NotifySecretChanged(FString(Old.c_str()), FString(New.c_str()));
+	}
+
+	void ShowDamage(int32_t Amount, uint32_t AttackerId) override
+	{
+		if (auto* v = ViewPtr.Get())
+			v->NotifyShowDamage(Amount, static_cast<int32>(AttackerId));
+	}
+	void OnDied(uint32_t AttackerId) override
+	{
+		if (auto* v = ViewPtr.Get())
+			v->NotifyOnDied(static_cast<int32>(AttackerId));
+	}
+	void OnRespawned(const atlas::Vec3& Pos) override
+	{
+		if (auto* v = ViewPtr.Get()) v->NotifyOnRespawned(AtlasToUE(Pos));
+	}
+	void OnProjectileFired(uint32_t ShotId, const atlas::Vec3& Origin,
+	                       const atlas::Vec3& Velocity) override
+	{
+		if (auto* v = ViewPtr.Get())
+			v->NotifyOnProjectileFired(static_cast<int32>(ShotId), AtlasToUE(Origin),
+			                            AtlasToUE(Velocity));
+	}
+	void OnProjectileEnded(uint32_t ShotId, const atlas::Vec3& EndPos,
+	                       uint32_t HitTargetId) override
+	{
+		if (auto* v = ViewPtr.Get())
+			v->NotifyOnProjectileEnded(static_cast<int32>(ShotId), AtlasToUE(EndPos),
+			                            static_cast<int32>(HitTargetId));
 	}
 
 private:
