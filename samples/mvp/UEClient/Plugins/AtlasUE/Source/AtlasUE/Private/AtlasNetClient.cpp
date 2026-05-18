@@ -101,8 +101,9 @@ void FAtlasNetClient::Destroy()
 		Ctx = nullptr;
 	}
 
-	// Net thread is joined above (WaitForCompletion + delete Thread); these
-	// stores are race-free, so relaxed is enough — no observer is in flight.
+	// Net thread is joined above (Stop sets the flag, WaitForCompletion blocks
+	// until Run() returns — assumes AtlasNetPoll never blocks); these stores
+	// are race-free, so relaxed is enough.
 	FAtlasInboundMessage Drain;
 	while (Inbound.Dequeue(Drain)) {}
 	InboundDepth.store(0, std::memory_order_relaxed);

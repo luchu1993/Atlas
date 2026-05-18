@@ -70,9 +70,9 @@ bool UAtlasSubsystem::BeginLogin(const FString& Host, uint16 Port, const FString
 	CachedUsername = Username;
 	CachedPasswordHash = PasswordHash;
 	bHasCachedCredentials = true;
-	// A manual BeginLogin re-arms every fatal-latch so a fresh attempt sees the
-	// same diagnostics as a cold start; without resetting bDefMismatchLogged a
-	// second def_mismatch on the retry would be swallowed silently.
+	// Manual BeginLogin is the only way to retry after def_mismatch or
+	// reconnect exhaustion — clear every fatal-latch so the next attempt
+	// sees the same diagnostics as a cold start.
 	ReconnectAttempts = 0;
 	bReconnectExhausted = false;
 	bDefMismatchLogged = false;
