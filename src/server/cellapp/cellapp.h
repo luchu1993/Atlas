@@ -243,6 +243,10 @@ class CellApp : public EntityApp {
   // client. Gives reliable="false" properties a recovery channel.
   void TickClientBaselinePump();
 
+  // Synchronous one-shot used by the pump and at AttachWitness time so
+  // a fresh client sees owner-scope properties immediately.
+  void SendOwnerBaselineFor(CellEntity& entity);
+
   // Wires the same Reliable / Unreliable send callbacks that
   // OnEnableWitness uses, so the pipeline is identical whether the
   // witness came up via BindClient, Offload arrival, or Offload revert.

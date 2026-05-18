@@ -434,38 +434,30 @@ void CellApp::TickClientBaselinePump() {
   ATLAS_PROFILE_ZONE_N("CellApp::TickClientBaselinePump");
   ++client_baseline_tick_counter_;
   if (client_baseline_tick_counter_ % kClientBaselineIntervalTicks != 0) return;
-
-  // No-op when GetOwnerSnapshot isn't registered (tests / unconfigured
-  // runtimes); no baseline means no safety net but no corruption.
-  if (native_provider_ == nullptr || native_provider_->get_owner_snapshot_fn() == nullptr) {
-    return;
+  for (const auto& [_, entity] : entity_population_) {
+    if (entity != nullptr && entity->IsReal()) SendOwnerBaselineFor(*entity);
   }
-  auto fn = native_provider_->get_owner_snapshot_fn();
+}
 
-  for (const auto& [entity_id, entity] : entity_population_) {
-    if (entity == nullptr || !entity->IsReal()) continue;
-    // Only client-bound (has Witness) entities receive baselines - keeps
-    // broadcast traffic proportional to client count, not entity count.
-    if (!entity->HasWitness()) continue;
-    const Address& base_addr = entity->BaseAddr();
-    if (base_addr.Ip() == 0) continue;  // base binding not yet populated
+void CellApp::SendOwnerBaselineFor(CellEntity& entity) {
+  // No-op when GetOwnerSnapshot isn't registered (tests / unconfigured runtimes).
+  if (native_provider_ == nullptr || native_provider_->get_owner_snapshot_fn() == nullptr) return;
+  if (!entity.HasWitness()) return;
+  const Address& base_addr = entity.BaseAddr();
+  if (base_addr.Ip() == 0) return;
 
-    // GetOwnerSnapshot writes via a pinned managed buffer overwritten on
-    // every call; raw==null means no owner-visible properties this tick.
-    uint8_t* raw = nullptr;
-    int32_t len = 0;
-    fn(entity->Id(), &raw, &len);
-    if (len <= 0 || raw == nullptr) continue;
+  uint8_t* raw = nullptr;
+  int32_t len = 0;
+  native_provider_->get_owner_snapshot_fn()(entity.Id(), &raw, &len);
+  if (len <= 0 || raw == nullptr) return;
 
-    auto base_ch = Network().ConnectRudpNocwnd(base_addr);
-    if (!base_ch) continue;  // base transiently unreachable - retry next pump
-
-    baseapp::ReplicatedBaselineFromCell msg;
-    msg.entity_id = entity_id;
-    msg.snapshot.assign(reinterpret_cast<const std::byte*>(raw),
-                        reinterpret_cast<const std::byte*>(raw) + len);
-    (void)(*base_ch)->SendMessage(msg);
-  }
+  auto base_ch = Network().ConnectRudpNocwnd(base_addr);
+  if (!base_ch) return;
+  baseapp::ReplicatedBaselineFromCell msg;
+  msg.entity_id = entity.Id();
+  msg.snapshot.assign(reinterpret_cast<const std::byte*>(raw),
+                      reinterpret_cast<const std::byte*>(raw) + len);
+  (void)(*base_ch)->SendMessage(msg);
 }
 
 auto CellApp::FindEntity(EntityID cell_id) -> CellEntity* {
@@ -857,6 +849,9 @@ void CellApp::AttachWitness(CellEntity& entity, float aoi_radius, float hysteres
     auto& space = entity.GetSpace();
     if (!space.Data().Empty()) w->SendSpaceDataInit(space.Id(), space.Data());
   }
+  // Ship the owner-scope snapshot now so the client sees HP / level /
+  // etc. without waiting for the next baseline pump (kClientBaselineIntervalTicks).
+  SendOwnerBaselineFor(entity);
 }
 
 void CellApp::OnEnableWitness(const Address& /*src*/, Channel* /*ch*/,
