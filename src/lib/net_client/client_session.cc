@@ -261,8 +261,7 @@ void ClientSession::CancelAuthTimeout() {
 }
 
 void ClientSession::InstallDefaultHandler() {
-  // Register typed handlers for fixed-length BaseApp->Client messages so the
-  // framing layer reads them by descriptor length; the default handler's
+  // Typed handlers for fixed-length BaseApp→Client msgs; the default handler's
   // packed-int fallback would misparse the first body byte as a length prefix.
   (void)network_.InterfaceTable().RegisterTypedHandler<::atlas::baseapp::EntityTransferred>(
       [this](const Address&, Channel*, const ::atlas::baseapp::EntityTransferred& msg) {

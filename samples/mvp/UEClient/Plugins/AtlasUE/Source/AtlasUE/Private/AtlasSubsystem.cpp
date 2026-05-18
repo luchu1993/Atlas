@@ -70,9 +70,8 @@ bool UAtlasSubsystem::BeginLogin(const FString& Host, uint16 Port, const FString
 	CachedUsername = Username;
 	CachedPasswordHash = PasswordHash;
 	bHasCachedCredentials = true;
-	// Manual BeginLogin is the only way to retry after def_mismatch or
-	// reconnect exhaustion — clear every fatal-latch so the next attempt
-	// sees the same diagnostics as a cold start.
+	// Manual BeginLogin is the only retry path after def_mismatch / reconnect
+	// exhaust; clear every fatal-latch so the next attempt logs from a cold start.
 	ReconnectAttempts = 0;
 	bReconnectExhausted = false;
 	bDefMismatchLogged = false;
@@ -222,8 +221,7 @@ bool UAtlasSubsystem::OnTick(float DeltaTime)
 			if (!bRunningStarted)
 			{
 				// AuthenticateResult is the only owner-create signal on the wire;
-				// without this the EntityManager has no entry for the player and
-				// game-side SelectAvatar/etc never fire.
+				// without this the EntityManager misses the player and game RPCs idle.
 				EntityManager.HandleCreate(NetClient->GetPlayerEntityId(),
 				                           NetClient->GetPlayerTypeId());
 				NetClient->StartRunningThread();

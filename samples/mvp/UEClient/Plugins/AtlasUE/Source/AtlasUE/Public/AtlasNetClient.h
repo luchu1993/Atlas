@@ -29,13 +29,8 @@ struct FAtlasInboundMessage
 	TArray<uint8> Payload;
 };
 
-// Synthetic msg_id used to put disconnect notifications through the same
-// SPSC queue as AoI / RPC traffic; otherwise an out-of-band PendingDisconnect
-// atomic could fire while the game thread is still draining earlier messages,
-// causing one frame of post-disconnect stale dispatch. The value lives in the
-// top of the msg_id range that no server-side category claims (kReserved /
-// kLogin / kBaseApp etc. all stay well under 0x8000), so it can't collide
-// with a real OnDeliver dispatch.
+// Disconnect notification rides the inbound SPSC queue so the game thread
+// observes it after every in-flight message; 0xFFFE is above every server msg_id.
 inline constexpr uint16 kAtlasInboundDisconnectSentinel = 0xFFFE;
 
 // Drop new inbound messages past this depth so a stalled game thread can't
@@ -78,9 +73,7 @@ public:
 	[[nodiscard]] uint8 GetLastLoginStatus() const { return LastLoginStatus.load(std::memory_order_acquire); }
 	[[nodiscard]] AtlasNetContext* GetContext() const { return Ctx; }
 
-	// Test-only hooks: drive the same code paths the SDK callbacks would,
-	// without standing up a real server. Production code uses the static
-	// callbacks registered in Create().
+	// Test-only hooks driving the same paths as the SDK callbacks without a real server.
 	void DeliverForTest(uint16 MsgId, const uint8* Payload, int32 Len);
 	void TriggerDisconnectForTest(int32 Reason);
 	[[nodiscard]] int32 GetInboundDepthForTest() const { return InboundDepth.load(std::memory_order_relaxed); }
@@ -105,12 +98,8 @@ private:
 	AtlasNetContext* Ctx = nullptr;
 
 	TQueue<FAtlasInboundMessage, EQueueMode::Spsc> Inbound;
-	// SPSC TQueue has no size() — track depth via a side counter so the
-	// producer (net thread) can shed load before the queue grows unbounded
-	// when the game thread stalls (e.g. paused in the debugger). Best-effort
-	// only: relaxed ordering means the cap check can race the producer's own
-	// fetch_add and let one or two extra messages through, which is fine —
-	// the goal is stall-shedding, not a hard bound.
+	// Side counter so the producer can shed load when the game thread stalls.
+	// Best-effort: relaxed RMW can race past the cap by one or two messages.
 	std::atomic<int32> InboundDepth{0};
 	std::atomic<bool> bInboundOverflowLogged{false};
 

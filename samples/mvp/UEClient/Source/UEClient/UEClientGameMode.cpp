@@ -26,10 +26,8 @@ AUEClientGameMode::AUEClientGameMode()
 
 namespace
 {
-// Returns 0 when the entity isn't in the loaded ATDF — caller MUST skip
-// registration in that case; previously we silently registered with id 0
-// and the server-side spawn message would later land on no factory and
-// the entity would be lost.
+// Returns 0 if the entity isn't in the loaded ATDF; caller MUST skip
+// registration or server spawns of that type land on no factory and are lost.
 uint16 ResolveTypeId(AtlasEdrContext* Ctx, const char* Name)
 {
 	const uint16 TypeId = AtlasEdrEntityTypeId(AtlasEdrFindEntityByName(Ctx, Name));

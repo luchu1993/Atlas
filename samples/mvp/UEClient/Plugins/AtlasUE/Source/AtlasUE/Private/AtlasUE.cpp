@@ -81,9 +81,8 @@ void FAtlasUEModule::StartupModule()
 	NetClientDllHandle = LoadThirdPartyDll(BaseDir, TEXT("AtlasNetClient"), TEXT("atlas_net_client.dll"));
 	EntityDefDllHandle = LoadThirdPartyDll(BaseDir, TEXT("AtlasEntityDef"), TEXT("atlas_entitydef_client.dll"));
 
-	// Either DLL missing means subsequent symbol lookups would dangle; release
-	// whichever one did load so the plugin isn't stuck in a half-initialized
-	// state where ShutdownModule is the only thing that cleans up.
+	// Either DLL missing dangles later symbol lookups; release the surviving
+	// one so the plugin isn't half-loaded until ShutdownModule.
 	if (NetClientDllHandle == nullptr || EntityDefDllHandle == nullptr)
 	{
 		if (NetClientDllHandle != nullptr)
@@ -107,10 +106,8 @@ void FAtlasUEModule::StartupModule()
 		TEXT("AtlasUE module started; atlas_net_client ABI=0x%08X, atlas_entitydef_client ABI=0x%08X"),
 		NetAbi, EdrAbi);
 
-	// Plugin headers and the loaded DLL must agree on the major byte; the
-	// runtime AtlasNetCreate/AtlasEdrCreate calls also enforce this, but
-	// surfacing the mismatch up front gives a clearer diagnostic when the
-	// ThirdParty/ DLLs got out of sync with the staged plugin.
+	// AtlasNetCreate / AtlasEdrCreate will also reject a major mismatch, but
+	// surfacing it here gives a cleaner "restage ThirdParty" diagnostic.
 	auto AbiMajor = [](uint32 v) { return (v >> 24) & 0xFFu; };
 	auto AbiMinor = [](uint32 v) { return (v >> 16) & 0xFFu; };
 	if (AbiMajor(NetAbi) != AbiMajor(ATLAS_NET_ABI_VERSION))
