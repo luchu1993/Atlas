@@ -37,4 +37,9 @@ protected:
 private:
 	bool bAuthenticateRequested = false;
 	bool bSelectAvatarSent = false;
+	// Tracks last observed subsystem state so an automatic reconnect (which
+	// drops back into LoggingIn) resets the per-session flags above. Without
+	// this, the post-login Authenticate + SelectAvatar would only fire once
+	// per process lifetime.
+	uint8 LastNetState = 0;
 };

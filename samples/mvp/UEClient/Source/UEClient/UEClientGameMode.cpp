@@ -106,14 +106,27 @@ void AUEClientGameMode::Tick(float DeltaSeconds)
 	UAtlasSubsystem* Sub = GetGameInstance()->GetSubsystem<UAtlasSubsystem>();
 	if (!Sub) return;
 
-	if (!bAuthenticateRequested && Sub->GetNetState() == EAtlasNetClientState::LoginSucceeded)
+	const EAtlasNetClientState NetState = Sub->GetNetState();
+	const uint8 NetStateU = static_cast<uint8>(NetState);
+
+	// Subsystem-driven reconnect: any transition back into LoggingIn means
+	// the previous session was torn down. Reset per-session flags so the
+	// post-login Authenticate + SelectAvatar fire again.
+	if (NetState == EAtlasNetClientState::LoggingIn && LastNetState != NetStateU)
+	{
+		bAuthenticateRequested = false;
+		bSelectAvatarSent = false;
+	}
+	LastNetState = NetStateU;
+
+	if (!bAuthenticateRequested && NetState == EAtlasNetClientState::LoginSucceeded)
 	{
 		UE_LOG(LogUEClient, Log, TEXT("Atlas login succeeded, authenticating"));
 		Sub->BeginAuthenticate();
 		bAuthenticateRequested = true;
 	}
 
-	if (!bSelectAvatarSent && Sub->GetNetState() == EAtlasNetClientState::Running
+	if (!bSelectAvatarSent && NetState == EAtlasNetClientState::Running
 		&& Sub->GetPlayerEntityId() != 0)
 	{
 		atlas::ClientEntity* E = Sub->GetEntityManager().Find(Sub->GetPlayerEntityId());

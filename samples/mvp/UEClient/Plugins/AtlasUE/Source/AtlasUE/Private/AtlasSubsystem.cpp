@@ -1,7 +1,9 @@
 #include "AtlasSubsystem.h"
 
 #include "Engine/World.h"
+#include "HAL/PlatformTime.h"
 #include "Logging/LogMacros.h"
+#include "Math/UnrealMathUtility.h"
 
 #include "entitydef/entitydef_api.h"
 
@@ -10,6 +12,20 @@
 #include "AtlasUEActorView.h"
 
 DEFINE_LOG_CATEGORY_STATIC(LogAtlasSubsystem, Log, All);
+
+namespace
+{
+// 1s, 2s, 4s, ..., capped at 30s. First attempt fires after kBaseBackoffSec
+// from disconnect (no immediate hammer on the server).
+constexpr double kBaseBackoffSec = 1.0;
+constexpr double kMaxBackoffSec = 30.0;
+
+double ComputeBackoffSec(int32 Attempts)
+{
+	const double Scaled = kBaseBackoffSec * FMath::Pow(2.0, static_cast<double>(Attempts));
+	return FMath::Min(Scaled, kMaxBackoffSec);
+}
+}  // namespace
 
 void UAtlasSubsystem::Initialize(FSubsystemCollectionBase& Collection)
 {
@@ -61,7 +77,15 @@ void UAtlasSubsystem::Deinitialize()
 bool UAtlasSubsystem::BeginLogin(const FString& Host, uint16 Port, const FString& Username,
                                  const FString& PasswordHash)
 {
-	return NetClient && NetClient->BeginLogin(Host, Port, Username, PasswordHash);
+	if (!NetClient) return false;
+	// Cache for auto-reconnect. Game code only has to supply creds once;
+	// the subsystem replays them on disconnect.
+	CachedHost = Host;
+	CachedPort = Port;
+	CachedUsername = Username;
+	CachedPasswordHash = PasswordHash;
+	bHasCachedCredentials = true;
+	return NetClient->BeginLogin(Host, Port, Username, PasswordHash);
 }
 
 bool UAtlasSubsystem::BeginAuthenticate()
@@ -177,15 +201,81 @@ bool UAtlasSubsystem::OnTick(float DeltaTime)
 			{
 				NetClient->StartRunningThread();
 				bRunningStarted = true;
+				// First Running-bound transition; reset backoff so the next
+				// disconnect starts from 1 s again.
+				ReconnectAttempts = 0;
 			}
 			break;
 		case EAtlasNetClientState::Running:
 			NetClient->TickGameThread(EntityManager);
 			EntityManager.TickAll(DeltaTime);
 			break;
+		case EAtlasNetClientState::Disconnected:
+		case EAtlasNetClientState::LoginFailed:
+		case EAtlasNetClientState::AuthFailed:
+			if (bAutoReconnectEnabled && bHasCachedCredentials)
+			{
+				const double Now = FPlatformTime::Seconds();
+				if (NextReconnectAtSec == 0.0)
+				{
+					NextReconnectAtSec = Now + ComputeBackoffSec(ReconnectAttempts);
+					UE_LOG(LogAtlasSubsystem, Log,
+						TEXT("AtlasNet disconnected; next reconnect attempt in %.1f s (attempt #%d)"),
+						NextReconnectAtSec - Now, ReconnectAttempts + 1);
+				}
+				else if (Now >= NextReconnectAtSec)
+				{
+					AttemptReconnect();
+				}
+			}
+			break;
 		default:
-			// Terminal and waiting states are advanced from game code, not here.
 			break;
 	}
 	return true;
+}
+
+void UAtlasSubsystem::AttemptReconnect()
+{
+	++ReconnectAttempts;
+	NextReconnectAtSec = 0.0;
+	UE_LOG(LogAtlasSubsystem, Log, TEXT("AtlasNet reconnect attempt #%d"), ReconnectAttempts);
+
+	// Stale entities (Account, peers from old session) carry the dead
+	// net ctx as their RpcSender route — drop them so codegen stubs don't
+	// fire into the void. Actor destruction cascades via FAtlasUEActorView.
+	EntityManager.Clear();
+	bRunningStarted = false;
+
+	if (NetClient)
+	{
+		NetClient->Destroy();
+	}
+	NetClient = MakeUnique<FAtlasNetClient>();
+	if (!NetClient->Create())
+	{
+		UE_LOG(LogAtlasSubsystem, Error,
+			TEXT("FAtlasNetClient::Create failed during reconnect; will retry on next tick"));
+		NetClient.Reset();
+		return;
+	}
+
+	// Restore the descriptor context + digest + sender on the fresh ctx.
+	if (AtlasEdrContext* Edr = FAtlasUEModule::GetEdrContext())
+	{
+		EntityManager.SetDescriptorContext(Edr);
+		const uint8* Digest = AtlasEdrGetDigest(Edr);
+		const int32 Size = AtlasEdrGetDigestSize(Edr);
+		if (Digest != nullptr && Size > 0)
+		{
+			SetEntityDefDigest(TArrayView<const uint8>(Digest, Size));
+		}
+	}
+	EntityManager.SetRpcSender(this);
+
+	if (!NetClient->BeginLogin(CachedHost, CachedPort, CachedUsername, CachedPasswordHash))
+	{
+		UE_LOG(LogAtlasSubsystem, Warning,
+			TEXT("BeginLogin failed during reconnect; net stack will surface Disconnected"));
+	}
 }

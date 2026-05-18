@@ -36,6 +36,12 @@ public:
 	                const FString& PasswordHash);
 	bool BeginAuthenticate();
 
+	// Disable to drop reconnect attempts (e.g. user-initiated logout flow,
+	// or a future LoginScreen that wants to drive retry manually). Defaults
+	// to true so the headless MVP recovers from cluster restarts.
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Atlas|Reconnect")
+	bool bAutoReconnectEnabled = true;
+
 	// 32-byte SHA-256 of the entity_defs surface; must be called before
 	// BeginLogin or the server rejects with def_mismatch.
 	bool SetEntityDefDigest(TArrayView<const uint8> Digest);
@@ -64,6 +70,11 @@ public:
 private:
 	bool OnTick(float DeltaTime);
 
+	// Tears down stale entities + net ctx and BeginLogin's the cached
+	// credentials. Called by OnTick when state is Disconnected and the
+	// backoff timer elapses.
+	void AttemptReconnect();
+
 	std::unique_ptr<atlas::ClientEntity> InstantiateEntity(uint16 TypeId,
 	                                                      atlas::EntityId Id);
 
@@ -80,4 +91,19 @@ private:
 
 	FTSTicker::FDelegateHandle TickHandle;
 	bool bRunningStarted = false;
+
+	// Captured on the first successful BeginLogin call. Reused by the
+	// auto-reconnect path on subsequent disconnects so game code only has
+	// to push credentials once.
+	FString CachedHost;
+	uint16 CachedPort = 0;
+	FString CachedUsername;
+	FString CachedPasswordHash;
+	bool bHasCachedCredentials = false;
+
+	// Backoff state. Reset to 0 on every successful Running transition;
+	// otherwise doubles each disconnect, capped to kMaxBackoffSec. The
+	// "next attempt at" time is seconds since module-load (FPlatformTime).
+	int32 ReconnectAttempts = 0;
+	double NextReconnectAtSec = 0.0;
 };
