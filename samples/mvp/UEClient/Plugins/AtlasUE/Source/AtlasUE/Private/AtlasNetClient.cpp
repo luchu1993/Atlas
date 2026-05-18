@@ -103,9 +103,9 @@ void FAtlasNetClient::Destroy()
 
 	FAtlasInboundMessage Drain;
 	while (Inbound.Dequeue(Drain)) {}
-	PendingDisconnect.store(-1);
 	PlayerEntityId.store(0);
 	PlayerTypeId.store(0);
+	LastLoginStatus.store(0xFF, std::memory_order_release);
 	State.store(EAtlasNetClientState::Idle);
 }
 
@@ -163,6 +163,20 @@ void FAtlasNetClient::TickGameThread(atlas::ClientEntityManager& Manager)
 	FAtlasInboundMessage Msg;
 	while (Inbound.Dequeue(Msg))
 	{
+		if (Msg.MsgId == kAtlasInboundDisconnectSentinel)
+		{
+			int32 Reason = 0;
+			if (Msg.Payload.Num() >= static_cast<int32>(sizeof(int32)))
+			{
+				FMemory::Memcpy(&Reason, Msg.Payload.GetData(), sizeof(int32));
+			}
+			UE_LOG(LogAtlasNet, Log, TEXT("AtlasNet disconnect reason=%d"), Reason);
+			State.store(EAtlasNetClientState::Disconnected);
+			// Everything still queued is from the dead session — drop it so the
+			// next session starts clean.
+			while (Inbound.Dequeue(Msg)) {}
+			return;
+		}
 		if (Msg.MsgId == 0xF001 || Msg.MsgId == 0xF003)
 		{
 			if (Msg.Payload.Num() >= 5)
@@ -244,13 +258,6 @@ void FAtlasNetClient::TickGameThread(atlas::ClientEntityManager& Manager)
 				TEXT("unhandled msg_id=0x%04X len=%d"), Msg.MsgId, Msg.Payload.Num());
 		}
 	}
-
-	const int32 Reason = PendingDisconnect.exchange(-1);
-	if (Reason != -1)
-	{
-		UE_LOG(LogAtlasNet, Log, TEXT("AtlasNet disconnect reason=%d"), Reason);
-		State.store(EAtlasNetClientState::Disconnected);
-	}
 }
 
 FAtlasNetClient* FAtlasNetClient::FindByCtx(AtlasNetContext* Ctx)
@@ -265,6 +272,9 @@ void FAtlasNetClient::OnLoginResultStatic(void* UserData, uint8 Status, const ch
 {
 	if (UserData == nullptr) return;
 	FAtlasNetClient* Self = static_cast<FAtlasNetClient*>(UserData);
+	// Status MUST land before State so a GetState()=LoginFailed observer
+	// reading LastLoginStatus sees the matching enum, not the previous attempt.
+	Self->LastLoginStatus.store(Status, std::memory_order_release);
 	if (Status == ATLAS_LOGIN_SUCCESS)
 	{
 		Self->State.store(EAtlasNetClientState::LoginSucceeded);
@@ -314,5 +324,11 @@ void FAtlasNetClient::OnDisconnectStatic(AtlasNetContext* Ctx, int32 Reason)
 {
 	FAtlasNetClient* Self = FindByCtx(Ctx);
 	if (!Self) return;
-	Self->PendingDisconnect.store(Reason);
+	// Funnel through the inbound queue so the game thread sees disconnect AFTER
+	// every message already in flight, not interleaved with them.
+	FAtlasInboundMessage Msg;
+	Msg.MsgId = kAtlasInboundDisconnectSentinel;
+	Msg.Payload.SetNumUninitialized(sizeof(int32));
+	FMemory::Memcpy(Msg.Payload.GetData(), &Reason, sizeof(int32));
+	Self->Inbound.Enqueue(MoveTemp(Msg));
 }

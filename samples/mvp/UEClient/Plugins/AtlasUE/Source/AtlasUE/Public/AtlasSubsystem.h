@@ -58,6 +58,8 @@ public:
 	[[nodiscard]] EAtlasNetClientState GetNetState() const;
 	[[nodiscard]] uint32 GetPlayerEntityId() const;
 	[[nodiscard]] uint16 GetPlayerTypeId() const;
+	// AtlasLoginStatus from the last LoginResult; 0xFF before any attempt.
+	[[nodiscard]] uint8 GetLastLoginStatus() const;
 
 	[[nodiscard]] atlas::ClientEntityManager& GetEntityManager() { return EntityManager; }
 
@@ -91,4 +93,7 @@ private:
 
 	int32 ReconnectAttempts = 0;
 	double NextReconnectAtSec = 0.0;
+	// Latches once we've surfaced the def_mismatch warning so the log isn't
+	// repeated each tick while auto-reconnect is suppressed.
+	bool bDefMismatchLogged = false;
 };

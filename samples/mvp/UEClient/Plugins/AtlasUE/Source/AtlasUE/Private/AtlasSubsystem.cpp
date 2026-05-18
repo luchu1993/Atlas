@@ -171,6 +171,11 @@ uint16 UAtlasSubsystem::GetPlayerTypeId() const
 	return NetClient ? NetClient->GetPlayerTypeId() : 0;
 }
 
+uint8 UAtlasSubsystem::GetLastLoginStatus() const
+{
+	return NetClient ? NetClient->GetLastLoginStatus() : 0xFF;
+}
+
 bool UAtlasSubsystem::OnTick(float DeltaTime)
 {
 	// Null after a failed AttemptReconnect Create(); keep the backoff loop
@@ -218,6 +223,19 @@ bool UAtlasSubsystem::OnTick(float DeltaTime)
 		case EAtlasNetClientState::Disconnected:
 		case EAtlasNetClientState::LoginFailed:
 		case EAtlasNetClientState::AuthFailed:
+			// def_mismatch is fatal: client/server entity-def schemas disagree,
+			// retrying will keep failing and the backoff loop just burns cycles.
+			if (NetClient && NetClient->GetLastLoginStatus() == ATLAS_LOGIN_DEF_MISMATCH)
+			{
+				if (!bDefMismatchLogged)
+				{
+					UE_LOG(LogAtlasSubsystem, Error,
+						TEXT("AtlasNet def_mismatch — client/server entity-def out of sync; "
+						     "auto-reconnect halted (client likely needs upgrade)"));
+					bDefMismatchLogged = true;
+				}
+				break;
+			}
 			if (bAutoReconnectEnabled && bHasCachedCredentials)
 			{
 				const double Now = FPlatformTime::Seconds();

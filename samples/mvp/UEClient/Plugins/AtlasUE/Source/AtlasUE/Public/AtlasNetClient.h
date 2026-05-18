@@ -29,6 +29,12 @@ struct FAtlasInboundMessage
 	TArray<uint8> Payload;
 };
 
+// Synthetic msg_id used to put disconnect notifications through the same
+// SPSC queue as AoI / RPC traffic; otherwise an out-of-band PendingDisconnect
+// atomic could fire while the game thread is still draining earlier messages,
+// causing one frame of post-disconnect stale dispatch.
+inline constexpr uint16 kAtlasInboundDisconnectSentinel = 0xFFFE;
+
 class FAtlasNetRunnable;
 
 // Owns one AtlasNetContext. Login + auth pump on the GameThread; after auth a
@@ -57,6 +63,8 @@ public:
 	EAtlasNetClientState GetState() const { return State.load(std::memory_order_acquire); }
 	uint32 GetPlayerEntityId() const { return PlayerEntityId.load(); }
 	uint16 GetPlayerTypeId() const { return PlayerTypeId.load(); }
+	// AtlasLoginStatus from the most recent LoginResult; 0xFF when no result yet.
+	uint8 GetLastLoginStatus() const { return LastLoginStatus.load(std::memory_order_acquire); }
 	AtlasNetContext* GetContext() const { return Ctx; }
 
 private:
@@ -78,11 +86,12 @@ private:
 	AtlasNetContext* Ctx = nullptr;
 
 	TQueue<FAtlasInboundMessage, EQueueMode::Spsc> Inbound;
-	std::atomic<int32> PendingDisconnect{-1};
 
 	std::atomic<EAtlasNetClientState> State{EAtlasNetClientState::Idle};
 	std::atomic<uint32> PlayerEntityId{0};
 	std::atomic<uint16> PlayerTypeId{0};
+	// 0xFF = no LoginResult observed yet; otherwise AtlasLoginStatus enum.
+	std::atomic<uint8> LastLoginStatus{0xFF};
 
 	FAtlasNetRunnable* Runnable = nullptr;
 	FRunnableThread* Thread = nullptr;

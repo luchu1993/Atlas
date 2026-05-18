@@ -81,7 +81,23 @@ void FAtlasUEModule::StartupModule()
 	NetClientDllHandle = LoadThirdPartyDll(BaseDir, TEXT("AtlasNetClient"), TEXT("atlas_net_client.dll"));
 	EntityDefDllHandle = LoadThirdPartyDll(BaseDir, TEXT("AtlasEntityDef"), TEXT("atlas_entitydef_client.dll"));
 
-	if (NetClientDllHandle == nullptr || EntityDefDllHandle == nullptr) return;
+	// Either DLL missing means subsequent symbol lookups would dangle; release
+	// whichever one did load so the plugin isn't stuck in a half-initialized
+	// state where ShutdownModule is the only thing that cleans up.
+	if (NetClientDllHandle == nullptr || EntityDefDllHandle == nullptr)
+	{
+		if (NetClientDllHandle != nullptr)
+		{
+			FPlatformProcess::FreeDllHandle(NetClientDllHandle);
+			NetClientDllHandle = nullptr;
+		}
+		if (EntityDefDllHandle != nullptr)
+		{
+			FPlatformProcess::FreeDllHandle(EntityDefDllHandle);
+			EntityDefDllHandle = nullptr;
+		}
+		return;
+	}
 
 	AtlasNetSetLogHandler(&AtlasNetLogForward);
 
