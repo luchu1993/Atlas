@@ -32,7 +32,9 @@ def parse_args() -> argparse.Namespace:
                         help="Subdirectory of bin/ where binaries live (default: debug).")
     parser.add_argument("--port-base", type=int, default=0,
                         help="Lowest port to use; 0 = auto-pick a free range.")
-    parser.add_argument("--registration-timeout-sec", type=int, default=20)
+    # 60s headroom for cold-start where dbapp's first SQLite init + .NET JIT
+    # can blow past the 20s that the warm path normally hits in well under 1s.
+    parser.add_argument("--registration-timeout-sec", type=int, default=60)
     return parser.parse_args()
 
 
@@ -42,13 +44,33 @@ _PORT_BLOCK_SIZE = 16
 
 
 def _pick_free_port_base() -> int:
-    # Bind a UDP socket to port 0; OS hands back an unused port; release it.
-    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-    try:
-        s.bind(("127.0.0.1", 0))
-        return s.getsockname()[1]
-    finally:
-        s.close()
+    # bind(0) hands back a port from the dynamic range — which on Windows
+    # overlaps Hyper-V / WSL excluded ranges that fail with WSAEACCES(10013)
+    # on actual bind. Probe each port in the block against TCP + UDP so the
+    # cluster never starts with a poisoned slot.
+    for _ in range(64):
+        probe = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        try:
+            probe.bind(("127.0.0.1", 0))
+            candidate = probe.getsockname()[1]
+        finally:
+            probe.close()
+        if all(_port_bindable(candidate + offset)
+               for offset in range(_PORT_BLOCK_SIZE)):
+            return candidate
+    raise RuntimeError("could not find a usable port block after 64 attempts")
+
+
+def _port_bindable(port: int) -> bool:
+    for sock_type in (socket.SOCK_STREAM, socket.SOCK_DGRAM):
+        s = socket.socket(socket.AF_INET, sock_type)
+        try:
+            s.bind(("127.0.0.1", port))
+        except OSError:
+            return False
+        finally:
+            s.close()
+    return True
 
 
 def main() -> int:

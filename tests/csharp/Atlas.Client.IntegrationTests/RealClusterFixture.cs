@@ -1,6 +1,7 @@
 using System;
 using System.Diagnostics;
 using System.IO;
+using System.Text;
 using System.Threading;
 
 namespace Atlas.Client.IntegrationTests;
@@ -10,6 +11,8 @@ namespace Atlas.Client.IntegrationTests;
 public sealed class RealClusterFixture : IDisposable
 {
     private Process? _launcher;
+    private readonly StringBuilder _stderrBuf = new();
+    private readonly StringBuilder _stdoutBuf = new();
     public ushort LoginAppPort { get; private set; }
     public ushort BaseAppExternalPort { get; private set; }
 
@@ -34,22 +37,45 @@ public sealed class RealClusterFixture : IDisposable
                 WorkingDirectory = repoRoot,
             },
         };
-        _launcher.Start();
 
-        // Block on stdout READY line; if launcher dies first the read returns null.
-        var deadline = DateTime.UtcNow.AddSeconds(60);
+        // Async stderr drain so a chatty launcher can't deadlock on a full
+        // OS pipe; the buffer feeds diagnostics on the timeout path below.
+        _launcher.ErrorDataReceived += (_, e) =>
+        {
+            if (e.Data == null) return;
+            lock (_stderrBuf) _stderrBuf.AppendLine(e.Data);
+        };
+        _launcher.Start();
+        _launcher.BeginErrorReadLine();
+
+        // Outer deadline ≥ launcher's per-process registration timeout × N
+        // so a slow cold-start cluster (dbapp first-init dominates) still fits.
+        var deadline = DateTime.UtcNow.AddSeconds(180);
         string? line = null;
         while (DateTime.UtcNow < deadline)
         {
             line = _launcher.StandardOutput.ReadLine();
             if (line is null) break;
+            _stdoutBuf.AppendLine(line);
             if (line.StartsWith("READY ", StringComparison.Ordinal))
             {
                 ParseReady(line);
                 return;
             }
         }
-        TeardownAndThrow($"test_cluster.py never reported READY; last line: {line ?? "<EOF>"}");
+
+        // Failure path: collect everything we know. Wait briefly for the
+        // launcher to actually exit so ExitCode is meaningful + stderr has
+        // settled (BeginErrorReadLine flushes on process exit).
+        _launcher.WaitForExit(2_000);
+        string stderr;
+        lock (_stderrBuf) stderr = _stderrBuf.ToString();
+        int exitCode = _launcher.HasExited ? _launcher.ExitCode : -1;
+        TeardownAndThrow(
+            $"test_cluster.py never reported READY; exit_code={exitCode}; " +
+            $"last stdout line: {line ?? "<EOF>"}\n" +
+            $"--- stdout transcript ---\n{_stdoutBuf}" +
+            $"--- stderr transcript ---\n{stderr}");
     }
 
     private void ParseReady(string line)
