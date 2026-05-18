@@ -7,6 +7,7 @@
 
 class UStaticMeshComponent;
 class UAtlasAvatarView;
+class UAtlasPlayerInputController;
 
 UCLASS()
 class AAvatarCapsule : public AActor
@@ -18,6 +19,9 @@ public:
 
 	UPROPERTY(VisibleAnywhere, Category = "Atlas")
 	TObjectPtr<UAtlasAvatarView> AvatarView;
+
+	UPROPERTY(VisibleAnywhere, Category = "Atlas")
+	TObjectPtr<UAtlasPlayerInputController> InputController;
 
 private:
 	UPROPERTY(VisibleAnywhere, Category = "Atlas")

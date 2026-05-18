@@ -25,14 +25,23 @@ public:
 		if (InView != nullptr) InView->Bind(this);
 	}
 
+	// Owner-input mode: while set, TickInterpolation skips the AvatarFilter
+	// step so the input controller's client-authoritative SetActorLocation
+	// isn't overwritten each frame by server-replicated transforms.
+	void SetOwnerInputActive(bool Active) { bOwnerInputActive = Active; }
+
 	void OnPositionReceived(double ServerTime, const atlas::Vec3& Pos,
 	                        const atlas::Vec3& Dir, bool OnGround) override
 	{
+		// Owner ignores server-sent transforms; its position is the local
+		// simulation. Keep feeding the filter anyway so a future switch to
+		// non-owner has a warm baseline.
 		Filter.Input(ServerTime, Pos, Dir, OnGround);
 	}
 
 	void TickInterpolation(double Dt) override
 	{
+		if (bOwnerInputActive) return;
 		atlas::EntityView* V = View();
 		if (V == nullptr) return;
 		Filter.UpdateLatency(Dt);
@@ -95,4 +104,5 @@ public:
 private:
 	atlas::AvatarFilter Filter;
 	TWeakObjectPtr<UAtlasAvatarView> ViewPtr;
+	bool bOwnerInputActive = false;
 };

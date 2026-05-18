@@ -226,13 +226,19 @@ void FAtlasNetClient::TickGameThread(atlas::ClientEntityManager& Manager)
 		else if (Msg.MsgId == 2024 && Msg.Payload.Num() >= 6)
 		{
 			// kEntityTransferred (baseapp_messages.h): [u32 entity_id][u16 type_id].
+			// Server hands the client off from Account to a new entity (typically
+			// Avatar after SelectAvatar). Bump PlayerEntityId so game code that
+			// keys on "my current entity" picks up the new one. Mirrors C#
+			// ClientCallbacks.CreateEntity setting entity.IsOwner = true.
 			uint32 NewEntityId = 0;
 			uint16 NewTypeId = 0;
 			FMemory::Memcpy(&NewEntityId, Msg.Payload.GetData(), 4);
 			FMemory::Memcpy(&NewTypeId, Msg.Payload.GetData() + 4, 2);
 			const bool Created = Manager.HandleCreate(NewEntityId, NewTypeId);
+			PlayerEntityId.store(NewEntityId);
+			PlayerTypeId.store(NewTypeId);
 			UE_LOG(LogAtlasNet, Log,
-				TEXT("EntityTransferred eid=%u type=%u created=%d"),
+				TEXT("EntityTransferred eid=%u type=%u created=%d (now owner)"),
 				NewEntityId, NewTypeId, Created ? 1 : 0);
 		}
 		else

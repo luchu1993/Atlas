@@ -5,6 +5,7 @@
 #include "UObject/ConstructorHelpers.h"
 
 #include "AtlasAvatarView.h"
+#include "AtlasPlayerInputController.h"
 
 AAvatarCapsule::AAvatarCapsule()
 {
@@ -13,6 +14,10 @@ AAvatarCapsule::AAvatarCapsule()
 	Mesh = CreateDefaultSubobject<UStaticMeshComponent>(TEXT("Mesh"));
 	SetRootComponent(Mesh);
 	AvatarView = CreateDefaultSubobject<UAtlasAvatarView>(TEXT("AvatarView"));
+	// Idle on peer avatars (ticks but ResolveOwnerView returns false unless
+	// this entity is the owner's). Cheap branch — no per-tick allocation.
+	InputController = CreateDefaultSubobject<UAtlasPlayerInputController>(
+		TEXT("InputController"));
 
 	// Engine cylinder is the closest no-asset placeholder until the project
 	// supplies a real character mesh.
