@@ -55,9 +55,9 @@ tools\bin\build_mvp_unity.bat --skip-setup --clean-output
 
 脚本会按顺序从 `--unity`、`UNITY_EXE`、`UNITY_PATH`、固定工程版本对应的 Unity Hub 安装路径查找 Unity 可执行文件。如果缺少 `ProjectSettings/ProjectVersion.txt`，脚本会扫描本机 Unity Hub 已安装的 Editor 并打印最终选中的可执行文件。Windows 默认输出为 `out/mvp-unity/windows/AtlasMvp.exe`，日志写到 `out/mvp-unity/unity-build.log`。非 Windows player 可传 `--target StandaloneLinux64` 或 `--target StandaloneOSX`。Standalone 构建默认以可调整大小的窗口启动。
 
-## UE 客户端（M1 — codegen 驱动的属性同步）
+## UE 客户端（M2 — 双向 codegen + BP 暴露）
 
-Unreal Engine 5.7 客户端，通过 Atlas wire 协议连接同一个 MVP 集群。Plugin 直接链接 `atlas_net_client.dll` + `atlas_entitydef_client.dll`，**不**使用 UE 的 replication / RPC。M1 之后：registry-driven 通用 `ApplyDelta` 解码 scalar / struct / list / dict delta；`Atlas.Tools.CppEmitter` 输出 typed entity 类（`atlas::mvp::Account`、`Avatar`、`Npc`），带属性 getter + 上行 RPC stub。下行 RPC dispatch + BP 暴露在 M2。
+Unreal Engine 5.7 客户端，通过 Atlas wire 协议连接同一个 MVP 集群。Plugin 直接链接 `atlas_net_client.dll` + `atlas_entitydef_client.dll`，**不**使用 UE 的 replication / RPC。M2 之后：`Atlas.Tools.CppEmitter` 输出 typed entity 类（`atlas::mvp::Account`、`Avatar`、`Npc`、`StressAvatar`）和每个 synced logic component 的独立类（`StressLoadComponent`），覆盖属性 getter、scalar 变化虚 hook、上行 RPC stub、下行 `client_methods` 虚处理、slot-routed component 分发、共享 struct 的 `Serialize/Deserialize`。`UAtlasAvatarView` UCLASS 把属性变化以及 Avatar 全部 5 个 `client_methods`（`ShowDamage`、`OnDied`、`OnRespawned`、`OnProjectileFired`、`OnProjectileEnded`）publish 成 BP delegate，bridge 内置 `atlas::Vec3 → FVector` 坐标转换。
 
 ### 前置条件
 
@@ -101,15 +101,14 @@ LogUEClient: Atlas login succeeded, authenticating
 LogUEClient: Sent Account.SelectAvatar(1) entity_id=<n>
 ```
 
-同时 Unity 和 UE 两个客户端连到同一集群时，UE 视图会流式接入 Unity 玩家的 `AAvatarCapsule`（目前是 `/Engine/BasicShapes/Cylinder.Cylinder` 占位 mesh），并每帧应用 AvatarFilter 插值后的 transform。属性 delta（HP、level…）通过 registry-driven 路径解码到 `atlas::mvp::Avatar` 槽位上，view 层接入后即可通过 `avatar->Hp()` 等 getter 读取。
+同时 Unity 和 UE 两个客户端连到同一集群时，UE 视图会流式接入 Unity 玩家的 `AAvatarCapsule`（目前是 `/Engine/BasicShapes/Cylinder.Cylinder` 占位 mesh），并每帧应用 AvatarFilter 插值后的 transform。属性 delta（HP、level…）经 codegen 的 `OnHpChanged` 虚函数桥到 `UAtlasAvatarView`，BP 中直接 `Bind Event to On Hp Changed` 即可；同一条路径覆盖 `client_methods`（伤害浮字、投射物 spawn / end、复活等）。任何想暴露 Atlas BP 表面的 Actor 添加一个 `UAtlasAvatarView` component，gamemode 工厂会在 entity 入场时把 view 和 entity 绑定起来。
 
-### M1 之后的已知缺口
+### M2 之后的已知缺口
 
 - **没有移动输入** —— UE 端 Avatar 待在服务器分配的位置；codegen 已生成 `Avatar.ReportPos` 上行 stub，但还没接到 controller（M3）
 - **断线不重连** —— `on_disconnect` 只打日志
 - **`AAvatarCapsule` 是 Cylinder 占位** mesh，作为美术 polish 项替换
-- **下行 RPC（`Avatar.ShowDamage` / `OnDied` 等）尚未派发** —— `0xF004` envelope 路由 + 每 entity 的 `DispatchRpc` 留给 M2
-- **没有 BP 暴露** —— codegen 输出当前是纯 C++；M2 加 `UAtlasAvatarView` UCLASS bridge 提供 `GetHp` / `OnHpChanged`
+- **HUD / 伤害浮字 / 投射物特效未在 BP 里搭起** —— delegate 已就绪，actor 侧绑定是 M3 demo 工作
 
 ## 操作
 

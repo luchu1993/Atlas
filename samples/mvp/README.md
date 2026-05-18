@@ -69,16 +69,21 @@ editors and prints the selected executable. Default Windows output is
 `--target StandaloneOSX` for non-Windows players. Standalone builds launch in a
 resizable window.
 
-## UE client (M1 — codegen-driven attribute sync)
+## UE client (M2 — bidirectional codegen + BP exposure)
 
 Unreal Engine 5.7 client connecting to the same MVP cluster over the
 Atlas wire protocol. The plugin links `atlas_net_client.dll` +
 `atlas_entitydef_client.dll` directly and does **not** use UE
-replication / RPC. After M1: registry-driven generic `ApplyDelta`
-decodes scalar / struct / list / dict deltas; `Atlas.Tools.CppEmitter`
-emits typed entity classes (`atlas::mvp::Account`, `Avatar`, `Npc`)
-with property getters and upstream RPC stubs. Downstream RPC dispatch
-+ BP exposure arrive in M2.
+replication / RPC. After M2: `Atlas.Tools.CppEmitter` emits typed
+entity classes (`atlas::mvp::Account`, `Avatar`, `Npc`,
+`StressAvatar`) and per-component classes (`StressLoadComponent`)
+covering property getters, scalar-change virtual hooks, upstream RPC
+stubs, downstream `client_methods` virtuals, slot-routed component
+dispatch, and `Serialize/Deserialize` for shared structs. The
+`UAtlasAvatarView` UCLASS publishes BP delegates for property changes
+plus all five Avatar `client_methods` (`ShowDamage`, `OnDied`,
+`OnRespawned`, `OnProjectileFired`, `OnProjectileEnded`) with
+`atlas::Vec3 → FVector` coord conversion baked into the bridge.
 
 ### Prerequisites
 
@@ -137,11 +142,14 @@ With both Unity and UE clients connected, the UE view streams in the
 Unity player's `AAvatarCapsule` (currently
 `/Engine/BasicShapes/Cylinder.Cylinder` placeholder mesh) and applies
 `AvatarFilter`-interpolated transforms each frame. Property deltas
-(HP, level, …) decode through the generic registry path and land on
-`atlas::mvp::Avatar` slots, ready for game-side `avatar->Hp()` reads
-once the view layer subscribes.
+(HP, level, …) flow through the codegen `OnHpChanged` virtual into
+`UAtlasAvatarView` so BP can `Bind Event to On Hp Changed` directly;
+the same path covers `client_methods` (damage popups, projectile
+spawn / end, respawn). Add a `UAtlasAvatarView` component to any
+Actor that wants the Atlas BP surface — the game-mode factory wires
+it to the matching entity on enter.
 
-### Known gaps after M1
+### Known gaps after M2
 
 - **No movement input** — the UE-side Avatar sits where the server
   places it; outbound `Avatar.ReportPos` stub is generated but not
@@ -149,10 +157,8 @@ once the view layer subscribes.
 - **No reconnect on disconnect** — `on_disconnect` only logs
 - **`AAvatarCapsule` is a Cylinder placeholder** — swap for a project
   mesh as a polish pass
-- **Downstream RPC (`Avatar.ShowDamage`, `OnDied`, …) not yet dispatched**
-  — `0xF004` envelope routing + per-entity `DispatchRpc` land in M2
-- **No BP exposure** — codegen output is pure C++ today; M2 adds a
-  `UAtlasAvatarView` UCLASS bridge for `GetHp` / `OnHpChanged`
+- **HUD / damage popups / projectile FX not yet built in BP** — the
+  delegates exist; the actor-side bindings are M3 demo work
 
 ## Controls
 

@@ -11,28 +11,11 @@
 | 阶段 | 工时 | 累计 | 状态 |
 |------|------|------|------|
 | ~~M0 — 端到端贯通~~ | ~~1 周~~ | — | **已完成**(详见 `samples/mvp/README.md` 的 UE client 章节) |
-| ~~M1 — Codegen 上线 + 属性同步~~ | ~~1.5 周~~ | — | **已完成**(`Atlas.Defs.Parser` lib + `Atlas.Tools.CppEmitter` + 通用 `ClientEntity::ApplyDelta` + 端到端 build pipeline,详见 README) |
-| M2 — 下行 RPC + BP 暴露 + Logic Component | 1 周 | 1 | 待启动 |
-| M3 — MVP 功能对齐 | 1 周 | 2 | 待启动 |
+| ~~M1 — Codegen 上线 + 属性同步~~ | ~~1.5 周~~ | — | **已完成**(`Atlas.Defs.Parser` lib + `Atlas.Tools.CppEmitter` + 通用 `ClientEntity::ApplyDelta` + 端到端 build pipeline) |
+| ~~M2 — 下行 RPC + BP 暴露 + Logic Component~~ | ~~1 周~~ | — | **已完成**(codegen 下行 dispatch + 属性变化虚 hook、`UAtlasAvatarView` BP delegate、Logic Component server+client 全链路) |
+| M3 — MVP 功能对齐 | 1 周 | 1 | 待启动 |
 
-单人投入。M1 上行 RPC stub 与属性 getter 已落地;M2 焦点在下行 client_methods dispatch + BP view 层。
-
-## M2 — 下行 RPC + BP 暴露 + Logic Component
-
-**目标**:补齐双向 RPC 与 BP 表面,logic component 字段/RPC 平铺暴露。
-
-**交付**
-- AtlasNetClient 路由 `0xF004` (ClientRpcEnvelope) 到 `ClientEntity::DispatchRpc`
-- CppEmitter:`client_methods` → typed 虚方法 + `DispatchRpc` override(switch on rpc_id 解 args 派发)
-- CppEmitter:scalar 属性变化虚 hook(`virtual void OnHpChanged(int old, int neu)`),`ApplyDelta` override 做 old/new diff
-- `UAtlasAvatarView` UCLASS + view bridge,把 typed entity 字段透到 BP
-- Logic component 字段/RPC 平铺暴露
-- 容器/struct codegen(StressAvatar 全矩阵作为 reference)
-
-**验收**
-- 闭环:UE 输入 → `CastSkill` cell RPC → server tick → `OnSkillHit` client RPC → UE BP 特效
-- BP 中 `GetHp` / 绑 `OnHpChanged` 工作
-- 越权 RPC(跨 entity / 非 exposed)被 server 拒绝
+单人投入。M2 全部交付已落地;M3 焦点在 UE 客户端追平 Unity 端 demo(输入接 RPC、HUD、子弹/技能演示)。
 
 ## M3 — MVP 功能对齐 + 工具链
 

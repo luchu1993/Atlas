@@ -37,35 +37,44 @@ UE 引擎层(UCLASS / UPROPERTY / USTRUCT / BlueprintCallable / 任何 BP 暴露
 
 ## 输出物
 
-每个 entity 一份 `<EntityName>.gen.h`(header-only),纯 C++,继承 `atlas::ClientEntity`:
+每个 entity 一份 `<EntityName>.gen.h`(header-only),纯 C++,继承 `atlas::ClientEntity`。每个 synced 标准 logic component 同步产出 `<ComponentName>.gen.h`,继承 `atlas::ComponentInstance`;entity 头自动 `#include` 自己挂载的 component 头并在构造里注册 slot factory。所有 entity / component 共享一份 `_Structs.gen.h`(linker 收集到的全部 `<types><struct>` 声明 + `Serialize/Deserialize/FromStructValue`)避免跨文件循环 include。
 
-| 内容 | 状态 | 来源于 .def |
-|------|------|-------------|
-| 类型化标量 getter(`e->Hp() -> int32_t`) | M1 已落地 | `<properties>` |
-| `ClientEntity::ApplyDelta`(通用,基类) | M1 已落地(registry-driven,scalar+container+struct) | base 类 + `EntityDefRegistry` |
-| 上行 RPC stub(`e->ReportPos(pos, dir)`,SpanWriter 打包 + `SendCellRpc`) | M1 已落地 | `<cell_methods>` / `<base_methods>`(本 entity 可调方向) |
-| 属性变化虚 hook(`virtual void OnHpChanged(int old, int neu)`) | M2 | `<properties>` |
-| 下行 RPC 虚处理(`virtual void ShowDamage(int amount, uint32 attacker)`) | M2 | `<client_methods>` |
-| `DispatchRpc(rpc_id, trace_id, reader)` override(派发到虚方法) | M2 | `<client_methods>` |
-| `<types>` struct getter / container getter | M2(解码已在 base,getter 待 codegen 跟进) | `<types>` |
-| `<components>` → 纯 C++ logic component 类 | M2 | `<components>` |
+| 内容 | 来源于 .def |
+|------|-------------|
+| 类型化标量 getter(`e->Hp() -> int32_t`) | `<properties>` |
+| 容器 / struct getter(运行时 variant → 类型化 vector / POD) | `<properties>` 中容器或 struct 类型 |
+| `ClientEntity::ApplyDelta`(registry-driven 通用基类,scalar+container+struct+component section) | `EntityDefRegistry` |
+| 属性变化虚 hook(`virtual void OnHpChanged(int old, int neu)`)+ `ApplyDelta` override snapshot + diff fire | `<properties>` |
+| 上行 RPC stub(`e->ReportPos(pos, dir)`,SpanWriter 打包 + `SendCellRpc` / `SendBaseRpc`) | `<cell_methods>` / `<base_methods>` |
+| 下行 RPC 虚处理(`virtual void ShowDamage(int amount, uint32 attacker)`) | `<client_methods>` |
+| `DispatchEntityRpc(rpc_id, trace_id, reader)` override(派发到虚方法) | `<client_methods>` |
+| Component slot accessor(`avatar->load() -> StressLoadComponent*`)+ `RegisterComponentFactory(slot, ...)` 在 entity 构造体里自动调用 | `<components>` 中 synced 项 |
+| Component 端的属性 getter、change hook、上行 RPC stub(routes via owner→Sender,rpc_id 自动塞入 slot_idx)、下行 `DispatchRpc(method_idx)` switch | `<component>` 文件 |
 
 游戏侧使用方式:
 
 ```cpp
-// 上行 RPC 已可用(M1)
+// 上行 RPC
 account->SelectAvatar(1);                   // 走 SendBaseRpc
 avatar->ReportPos(pos, dir);                // 走 SendCellRpc
 
-// 属性 getter 已可用(M1)
+// 属性 getter
 int32_t hp = avatar->Hp();                  // registry-driven decode 之后读
 
-// M2 之后:
+// 下行 hook(scalar 属性 + client_methods)
 class GameAvatar : public atlas::mvp::Avatar {
   void OnHpChanged(int /*old*/, int neu) override { /* hit flash, HUD update */ }
   void ShowDamage(int amount, uint32_t attacker) override { /* damage number */ }
 };
+
+// Logic component:slot accessor + override 同样的 hook 模式
+auto* load = avatar->load();                // slot 1 → StressLoadComponent
+int32_t extra = load->ExtraHp();
+load->Charge(seq, amount);                  // 上行 cell RPC,rpc_id 自动带 slot
 ```
+
+BP 暴露走游戏侧手写 view(参考 `samples/mvp/UEClient/Source/UEClient/AtlasAvatarView.h`):
+游戏侧的 `FBpAvatarEntity : atlas::mvp::Avatar` override 上述 hook,把参数转 UE 类型(`atlas::Vec3` → `FVector` via `AtlasToUE`、`uint32` → `int32` 满足 dynamic delegate 反射约束)后 `Broadcast` 到 `UAtlasAvatarView` 的 `BlueprintAssignable` delegate。**Logic component 自己不感知 view**,需要广播到 BP 的事件统一在 entity view 上聚合。
 
 ## 几个 codegen 决策
 
