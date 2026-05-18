@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import random
 import socket
 import sys
 import time
@@ -44,17 +45,17 @@ _PORT_BLOCK_SIZE = 16
 
 
 def _pick_free_port_base() -> int:
-    # bind(0) hands back a port from the dynamic range — which on Windows
-    # overlaps Hyper-V / WSL excluded ranges that fail with WSAEACCES(10013)
-    # on actual bind. Probe each port in the block against TCP + UDP so the
-    # cluster never starts with a poisoned slot.
+    # bind(0) picks from the OS dynamic range (Windows: 49152-65535) which
+    # overlaps Hyper-V / WSL / TIME_WAIT reservations — bind(0) succeeds but
+    # the SAME port may WSAEACCES(10013) seconds later when a child process
+    # tries to bind it. Sample from the lower mid-range instead (manually,
+    # not via bind(0)) and probe TCP + UDP on every port in the block.
+    rng = random.Random()
     for _ in range(64):
-        probe = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        try:
-            probe.bind(("127.0.0.1", 0))
-            candidate = probe.getsockname()[1]
-        finally:
-            probe.close()
+        candidate = rng.randrange(20000, 40000)
+        # Align to 16 so consecutive runs don't keep colliding on the
+        # same poisoned offset within a block.
+        candidate &= ~(_PORT_BLOCK_SIZE - 1)
         if all(_port_bindable(candidate + offset)
                for offset in range(_PORT_BLOCK_SIZE)):
             return candidate
@@ -98,12 +99,15 @@ _EARLY_EXIT_GRACE_SEC = 2.0
 
 
 def _spawn_cluster(args: argparse.Namespace, port_base: int) -> int:
+    # machined hard-codes its UDP heartbeat socket to (internal_port + 1)
+    # (see machined_app.cc), so port_base+1 is reserved — assign other
+    # processes from port_base+2 onwards.
     machined_port = port_base
-    dbapp_port = port_base + 1
-    baseappmgr_port = port_base + 2
-    baseapp_internal_port = port_base + 3
-    baseapp_external_port = port_base + 4
-    loginapp_port = port_base + 5
+    dbapp_port = port_base + 2
+    baseappmgr_port = port_base + 3
+    baseapp_internal_port = port_base + 4
+    baseapp_external_port = port_base + 5
+    loginapp_port = port_base + 6
 
     repo_root = resolve_repo_root()
     bin_name = args.build_dir
