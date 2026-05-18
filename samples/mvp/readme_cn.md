@@ -101,14 +101,17 @@ LogUEClient: Atlas login succeeded, authenticating
 LogUEClient: Sent Account.SelectAvatar(1) entity_id=<n>
 ```
 
-同时 Unity 和 UE 两个客户端连到同一集群时，UE 视图会流式接入 Unity 玩家的 `AAvatarCapsule`（目前是 `/Engine/BasicShapes/Cylinder.Cylinder` 占位 mesh），并每帧应用 AvatarFilter 插值后的 transform。属性 delta（HP、level…）经 codegen 的 `OnHpChanged` 虚函数桥到 `UAtlasAvatarView`，BP 中直接 `Bind Event to On Hp Changed` 即可；同一条路径覆盖 `client_methods`（伤害浮字、投射物 spawn / end、复活等）。任何想暴露 Atlas BP 表面的 Actor 添加一个 `UAtlasAvatarView` component，gamemode 工厂会在 entity 入场时把 view 和 entity 绑定起来。
+同时 Unity 和 UE 两个客户端连到同一集群时，UE 视图会流式接入 Unity 玩家的 `AAvatarCapsule`（目前是 `/Engine/BasicShapes/Cylinder.Cylinder` 占位 mesh）。属性 delta（HP、level…）经 codegen 的 `OnHpChanged` 虚函数桥到 `UAtlasAvatarView`，BP 中直接 `Bind Event to On Hp Changed` 即可；同一条路径覆盖 `client_methods`（伤害浮字、投射物 spawn / end、复活等）。任何想暴露 Atlas BP 表面的 Actor 添加一个 `UAtlasAvatarView` component，gamemode 工厂会在 entity 入场时把 view 和 entity 绑定起来。
 
-### M2 之后的已知缺口
+Owner avatar 走客户端权威：`AAvatarCapsule` 上挂的 `UAtlasPlayerInputController` 以 5 m/s 处理 camera-relative WASD，20 Hz 通过 `Avatar.ReportPos` 上报新位置，**Space** 触发 `LaunchProjectile`。Peer capsule 上也有同一个 component，但 bound entity id 不匹配 `UAtlasSubsystem::GetPlayerEntityId()` 时空跑；peer avatar 仍走 `AvatarFilter` 插值轨迹。
 
-- **没有移动输入** —— UE 端 Avatar 待在服务器分配的位置；codegen 已生成 `Avatar.ReportPos` 上行 stub，但还没接到 controller（M3）
-- **断线不重连** —— `on_disconnect` 只打日志
+`UAtlasSubsystem` 断线时按指数退避自动重连（1 s → 2 → 4 → … 上限 30 s）。首次成功 `BeginLogin` 时缓存凭据供 subsystem 回放；重试前清掉 EntityManager，stale actor 不会残留在死掉的 net ctx 上。需要把重试交给游戏层（例如未来有 LoginScreen UMG），关掉 `bAutoReconnectEnabled` 即可。
+
+### M3a / M3c 之后的已知缺口
+
 - **`AAvatarCapsule` 是 Cylinder 占位** mesh，作为美术 polish 项替换
 - **HUD / 伤害浮字 / 投射物特效未在 BP 里搭起** —— delegate 已就绪，actor 侧绑定是 M3 demo 工作
+- **没有相机控制 / 跟随** —— 默认 `APlayerController` 的 ControlRotation 驱动 WASD 移动方向，但没有 spring-arm 跟随相机；编辑器相机就是 PIE 启动给的默认视角
 
 ## 操作
 

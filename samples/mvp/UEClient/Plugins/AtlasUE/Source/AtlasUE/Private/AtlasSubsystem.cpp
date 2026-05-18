@@ -188,7 +188,26 @@ uint16 UAtlasSubsystem::GetPlayerTypeId() const
 
 bool UAtlasSubsystem::OnTick(float DeltaTime)
 {
-	if (!NetClient) return true;
+	// AttemptReconnect leaves NetClient null if the previous Create() failed
+	// (rare — ABI mismatch / OOM). Keep the backoff loop alive so the
+	// subsystem isn't stuck forever; without this we'd silently stop
+	// retrying after a single bad Create.
+	if (!NetClient)
+	{
+		if (bAutoReconnectEnabled && bHasCachedCredentials)
+		{
+			const double Now = FPlatformTime::Seconds();
+			if (NextReconnectAtSec == 0.0)
+			{
+				NextReconnectAtSec = Now + ComputeBackoffSec(ReconnectAttempts);
+			}
+			else if (Now >= NextReconnectAtSec)
+			{
+				AttemptReconnect();
+			}
+		}
+		return true;
+	}
 
 	switch (NetClient->GetState())
 	{

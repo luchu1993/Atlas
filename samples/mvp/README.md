@@ -140,25 +140,40 @@ LogUEClient: Sent Account.SelectAvatar(1) entity_id=<n>
 
 With both Unity and UE clients connected, the UE view streams in the
 Unity player's `AAvatarCapsule` (currently
-`/Engine/BasicShapes/Cylinder.Cylinder` placeholder mesh) and applies
-`AvatarFilter`-interpolated transforms each frame. Property deltas
-(HP, level, …) flow through the codegen `OnHpChanged` virtual into
-`UAtlasAvatarView` so BP can `Bind Event to On Hp Changed` directly;
-the same path covers `client_methods` (damage popups, projectile
-spawn / end, respawn). Add a `UAtlasAvatarView` component to any
-Actor that wants the Atlas BP surface — the game-mode factory wires
-it to the matching entity on enter.
+`/Engine/BasicShapes/Cylinder.Cylinder` placeholder mesh). Property
+deltas (HP, level, …) flow through the codegen `OnHpChanged` virtual
+into `UAtlasAvatarView` so BP can `Bind Event to On Hp Changed`
+directly; the same path covers `client_methods` (damage popups,
+projectile spawn / end, respawn). Add a `UAtlasAvatarView` component
+to any Actor that wants the Atlas BP surface — the game-mode factory
+wires it to the matching entity on enter.
 
-### Known gaps after M2
+The owner avatar is client-authoritative: `UAtlasPlayerInputController`
+on `AAvatarCapsule` runs at 5 m/s camera-relative WASD, reports the
+new position to the cell at 20 Hz via `Avatar.ReportPos`, and routes
+**Space** to `LaunchProjectile`. Peer capsules carry the same
+component but it idles unless the bound entity id matches
+`UAtlasSubsystem::GetPlayerEntityId()`. Peer avatars keep flowing
+through `AvatarFilter`-interpolated transforms each frame.
 
-- **No movement input** — the UE-side Avatar sits where the server
-  places it; outbound `Avatar.ReportPos` stub is generated but not
-  yet wired to a controller (M3)
-- **No reconnect on disconnect** — `on_disconnect` only logs
+`UAtlasSubsystem` auto-reconnects on disconnect with exponential
+backoff (1 s → 2 → 4 → … capped at 30 s). The first successful
+`BeginLogin` call caches credentials so the subsystem can replay
+them; the entity manager is cleared before each retry so stale
+actors don't outlive the dead net ctx. Toggle
+`bAutoReconnectEnabled` off to drive retries from game code instead
+(e.g. once a LoginScreen UMG exists).
+
+### Known gaps after M3a/M3c
+
 - **`AAvatarCapsule` is a Cylinder placeholder** — swap for a project
   mesh as a polish pass
 - **HUD / damage popups / projectile FX not yet built in BP** — the
   delegates exist; the actor-side bindings are M3 demo work
+- **No camera control / follow** — default `APlayerController`
+  ControlRotation drives the WASD direction frame, but no spring-arm
+  follow camera is wired up; the editor camera is whatever PIE starts
+  with
 
 ## Controls
 
