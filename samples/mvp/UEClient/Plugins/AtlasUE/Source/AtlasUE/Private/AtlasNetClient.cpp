@@ -40,19 +40,6 @@ private:
 FCriticalSection FAtlasNetClient::ContextRegistryMutex;
 TMap<AtlasNetContext*, FAtlasNetClient*> FAtlasNetClient::ContextRegistry;
 
-namespace
-{
-// At a 20 Hz cell tick a frozen game thread accumulates ~20 baselines/RPCs per
-// second per visible entity; 8192 is roughly 30s of 50-entity AoI on the floor,
-// past which dropping is cheaper than letting the heap explode.
-constexpr int32 kInboundQueueCap = 8192;
-constexpr int32 kInboundQueueWarnThreshold = 1024;
-
-// 1 MiB covers any legitimate baseline / RPC payload (server caps RPC at 64 KiB)
-// while still bounding the cost of a forged or corrupted length prefix.
-constexpr int32 kMaxInboundPayloadBytes = 1 * 1024 * 1024;
-}  // namespace
-
 FAtlasNetClient::FAtlasNetClient() = default;
 
 FAtlasNetClient::~FAtlasNetClient()
@@ -336,15 +323,15 @@ void FAtlasNetClient::OnDeliverStatic(AtlasNetContext* Ctx, uint16 MsgId, const 
 {
 	FAtlasNetClient* Self = FindByCtx(Ctx);
 	if (!Self) return;
-	if (Len > kMaxInboundPayloadBytes)
+	if (Len > kAtlasMaxInboundPayloadBytes)
 	{
 		UE_LOG(LogAtlasNet, Warning,
 			TEXT("Dropping oversize inbound payload msg_id=0x%04X len=%d (cap=%d)"),
-			MsgId, Len, kMaxInboundPayloadBytes);
+			MsgId, Len, kAtlasMaxInboundPayloadBytes);
 		return;
 	}
 	const int32 Depth = Self->InboundDepth.load(std::memory_order_relaxed);
-	if (Depth >= kInboundQueueCap)
+	if (Depth >= kAtlasInboundQueueCap)
 	{
 		// Latch the first overflow report so a frozen game thread doesn't generate
 		// a log line per net-thread poll.
@@ -353,11 +340,11 @@ void FAtlasNetClient::OnDeliverStatic(AtlasNetContext* Ctx, uint16 MsgId, const 
 		{
 			UE_LOG(LogAtlasNet, Warning,
 				TEXT("Inbound queue overflow (cap=%d) — dropping msg_id=0x%04X; "
-				     "game thread likely stalled"), kInboundQueueCap, MsgId);
+				     "game thread likely stalled"), kAtlasInboundQueueCap, MsgId);
 		}
 		return;
 	}
-	if (Depth == kInboundQueueWarnThreshold)
+	if (Depth == kAtlasInboundQueueWarnThreshold)
 	{
 		UE_LOG(LogAtlasNet, Warning,
 			TEXT("Inbound queue depth reached %d — game thread falling behind"), Depth);
@@ -386,4 +373,14 @@ void FAtlasNetClient::OnDisconnectStatic(AtlasNetContext* Ctx, int32 Reason)
 	FMemory::Memcpy(Msg.Payload.GetData(), &Reason, sizeof(int32));
 	Self->Inbound.Enqueue(MoveTemp(Msg));
 	Self->InboundDepth.fetch_add(1, std::memory_order_relaxed);
+}
+
+void FAtlasNetClient::DeliverForTest(uint16 MsgId, const uint8* Payload, int32 Len)
+{
+	OnDeliverStatic(Ctx, MsgId, Payload, Len);
+}
+
+void FAtlasNetClient::TriggerDisconnectForTest(int32 Reason)
+{
+	OnDisconnectStatic(Ctx, Reason);
 }

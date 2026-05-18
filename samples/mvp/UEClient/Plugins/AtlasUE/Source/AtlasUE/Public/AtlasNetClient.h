@@ -38,6 +38,14 @@ struct FAtlasInboundMessage
 // with a real OnDeliver dispatch.
 inline constexpr uint16 kAtlasInboundDisconnectSentinel = 0xFFFE;
 
+// Drop new inbound messages past this depth so a stalled game thread can't
+// grow the queue without bound; warn once when crossing the threshold.
+inline constexpr int32 kAtlasInboundQueueCap = 8192;
+inline constexpr int32 kAtlasInboundQueueWarnThreshold = 1024;
+// Hard cap on a single inbound payload; legitimate baselines / RPCs stay
+// well under this (server RPC cap is 64 KiB).
+inline constexpr int32 kAtlasMaxInboundPayloadBytes = 1 * 1024 * 1024;
+
 class FAtlasNetRunnable;
 
 // Owns one AtlasNetContext. Login + auth pump on the GameThread; after auth a
@@ -69,6 +77,14 @@ public:
 	// AtlasLoginStatus from the most recent LoginResult; 0xFF when no result yet.
 	[[nodiscard]] uint8 GetLastLoginStatus() const { return LastLoginStatus.load(std::memory_order_acquire); }
 	[[nodiscard]] AtlasNetContext* GetContext() const { return Ctx; }
+
+	// Test-only hooks: drive the same code paths the SDK callbacks would,
+	// without standing up a real server. Production code uses the static
+	// callbacks registered in Create().
+	void DeliverForTest(uint16 MsgId, const uint8* Payload, int32 Len);
+	void TriggerDisconnectForTest(int32 Reason);
+	[[nodiscard]] int32 GetInboundDepthForTest() const { return InboundDepth.load(std::memory_order_relaxed); }
+	[[nodiscard]] bool GetInboundOverflowLoggedForTest() const { return bInboundOverflowLogged.load(std::memory_order_relaxed); }
 
 private:
 	// on_deliver / on_disconnect have ctx only — recover `this` via the static
