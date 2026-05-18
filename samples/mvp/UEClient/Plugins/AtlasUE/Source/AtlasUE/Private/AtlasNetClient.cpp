@@ -198,6 +198,10 @@ void FAtlasNetClient::TickGameThread(atlas::ClientEntityManager& Manager)
 		}
 		if (Msg.MsgId == 0xF001 || Msg.MsgId == 0xF003)
 		{
+			// Lightweight Enter/Leave trace before delegating to the real decoder
+			// below. Hard offsets only feed UE_LOG — if the wire schema changes
+			// these print stale values but actual entity state still goes through
+			// DecodeAoIEnvelope, so this block can't corrupt game state.
 			if (Msg.Payload.Num() >= 5)
 			{
 				const uint8 Kind = Msg.Payload[0];

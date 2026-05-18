@@ -26,13 +26,18 @@ AUEClientGameMode::AUEClientGameMode()
 
 namespace
 {
+// Returns 0 when the entity isn't in the loaded ATDF — caller MUST skip
+// registration in that case; previously we silently registered with id 0
+// and the server-side spawn message would later land on no factory and
+// the entity would be lost.
 uint16 ResolveTypeId(AtlasEdrContext* Ctx, const char* Name)
 {
 	const uint16 TypeId = AtlasEdrEntityTypeId(AtlasEdrFindEntityByName(Ctx, Name));
 	if (TypeId == 0)
 	{
-		UE_LOG(LogUEClient, Warning, TEXT("entity '%hs' missing from registry; factory will idle"),
-			Name);
+		UE_LOG(LogUEClient, Error,
+			TEXT("entity '%hs' missing from ATDF; will not register factory — server "
+			     "spawns of this type will be dropped"), Name);
 	}
 	return TypeId;
 }
@@ -58,32 +63,40 @@ void AUEClientGameMode::BeginPlay()
 
 	// Account has no spatial state — bare AActor + typed Account so the
 	// game-side login flow can call account->SelectAvatar() directly.
-	Sub->RegisterEntityClass(ResolveTypeId(Edr, "Account"), AActor::StaticClass(),
-		[](atlas::EntityId Id, atlas::EntityTypeId Type) -> std::unique_ptr<atlas::ClientEntity> {
-			return std::make_unique<atlas::mvp::Account>(Id, Type);
-		});
+	if (const uint16 AccountType = ResolveTypeId(Edr, "Account"))
+	{
+		Sub->RegisterEntityClass(AccountType, AActor::StaticClass(),
+			[](atlas::EntityId Id, atlas::EntityTypeId Type) -> std::unique_ptr<atlas::ClientEntity> {
+				return std::make_unique<atlas::mvp::Account>(Id, Type);
+			});
+	}
 
 	// FBpAvatarEntity bridges scalar change hooks → UAtlasAvatarView delegates.
-	auto AvatarFactory = [](atlas::EntityId Id, atlas::EntityTypeId Type)
-		-> std::unique_ptr<atlas::ClientEntity> {
-		return std::make_unique<FBpAvatarEntity>(Id, Type);
-	};
-	auto AvatarPostBind = [](atlas::ClientEntity* E, AActor* Actor) {
-		auto* Bp = static_cast<FBpAvatarEntity*>(E);
-		if (auto* View = Actor->FindComponentByClass<UAtlasAvatarView>())
-		{
-			Bp->BindView(View);
-		}
-	};
-	Sub->RegisterEntityClass(ResolveTypeId(Edr, "Avatar"), AvatarActorClass,
-		AvatarFactory, AvatarPostBind);
+	if (const uint16 AvatarType = ResolveTypeId(Edr, "Avatar"))
+	{
+		auto AvatarFactory = [](atlas::EntityId Id, atlas::EntityTypeId Type)
+			-> std::unique_ptr<atlas::ClientEntity> {
+			return std::make_unique<FBpAvatarEntity>(Id, Type);
+		};
+		auto AvatarPostBind = [](atlas::ClientEntity* E, AActor* Actor) {
+			auto* Bp = static_cast<FBpAvatarEntity*>(E);
+			if (auto* View = Actor->FindComponentByClass<UAtlasAvatarView>())
+			{
+				Bp->BindView(View);
+			}
+		};
+		Sub->RegisterEntityClass(AvatarType, AvatarActorClass, AvatarFactory, AvatarPostBind);
+	}
 
 	// NPCs reuse the capsule mesh + movement interpolation; no BP bridge yet.
-	const auto MovingFactory = [](atlas::EntityId Id, atlas::EntityTypeId Type)
-		-> std::unique_ptr<atlas::ClientEntity> {
-		return std::make_unique<atlas::MovingClientEntity>(Id, Type);
-	};
-	Sub->RegisterEntityClass(ResolveTypeId(Edr, "Npc"), AvatarActorClass, MovingFactory);
+	if (const uint16 NpcType = ResolveTypeId(Edr, "Npc"))
+	{
+		const auto MovingFactory = [](atlas::EntityId Id, atlas::EntityTypeId Type)
+			-> std::unique_ptr<atlas::ClientEntity> {
+			return std::make_unique<atlas::MovingClientEntity>(Id, Type);
+		};
+		Sub->RegisterEntityClass(NpcType, AvatarActorClass, MovingFactory);
+	}
 
 	if (Username.IsEmpty())
 	{

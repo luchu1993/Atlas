@@ -60,12 +60,12 @@ public:
 
 	void TickGameThread(atlas::ClientEntityManager& Manager);
 
-	EAtlasNetClientState GetState() const { return State.load(std::memory_order_acquire); }
-	uint32 GetPlayerEntityId() const { return PlayerEntityId.load(); }
-	uint16 GetPlayerTypeId() const { return PlayerTypeId.load(); }
+	[[nodiscard]] EAtlasNetClientState GetState() const { return State.load(std::memory_order_acquire); }
+	[[nodiscard]] uint32 GetPlayerEntityId() const { return PlayerEntityId.load(); }
+	[[nodiscard]] uint16 GetPlayerTypeId() const { return PlayerTypeId.load(); }
 	// AtlasLoginStatus from the most recent LoginResult; 0xFF when no result yet.
-	uint8 GetLastLoginStatus() const { return LastLoginStatus.load(std::memory_order_acquire); }
-	AtlasNetContext* GetContext() const { return Ctx; }
+	[[nodiscard]] uint8 GetLastLoginStatus() const { return LastLoginStatus.load(std::memory_order_acquire); }
+	[[nodiscard]] AtlasNetContext* GetContext() const { return Ctx; }
 
 private:
 	// on_deliver / on_disconnect have ctx only — recover `this` via the static

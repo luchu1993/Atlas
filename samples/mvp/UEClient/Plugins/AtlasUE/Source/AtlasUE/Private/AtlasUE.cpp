@@ -107,6 +107,37 @@ void FAtlasUEModule::StartupModule()
 		TEXT("AtlasUE module started; atlas_net_client ABI=0x%08X, atlas_entitydef_client ABI=0x%08X"),
 		NetAbi, EdrAbi);
 
+	// Plugin headers and the loaded DLL must agree on the major byte; the
+	// runtime AtlasNetCreate/AtlasEdrCreate calls also enforce this, but
+	// surfacing the mismatch up front gives a clearer diagnostic when the
+	// ThirdParty/ DLLs got out of sync with the staged plugin.
+	auto AbiMajor = [](uint32 v) { return (v >> 24) & 0xFFu; };
+	auto AbiMinor = [](uint32 v) { return (v >> 16) & 0xFFu; };
+	if (AbiMajor(NetAbi) != AbiMajor(ATLAS_NET_ABI_VERSION))
+	{
+		UE_LOG(LogAtlasUE, Error,
+			TEXT("atlas_net_client major ABI mismatch: plugin=0x%08X dll=0x%08X — restage ThirdParty"),
+			ATLAS_NET_ABI_VERSION, NetAbi);
+	}
+	else if (AbiMinor(NetAbi) != AbiMinor(ATLAS_NET_ABI_VERSION))
+	{
+		UE_LOG(LogAtlasUE, Warning,
+			TEXT("atlas_net_client minor ABI mismatch: plugin=0x%08X dll=0x%08X (backward-compatible)"),
+			ATLAS_NET_ABI_VERSION, NetAbi);
+	}
+	if (AbiMajor(EdrAbi) != AbiMajor(ATLAS_EDR_ABI_VERSION))
+	{
+		UE_LOG(LogAtlasUE, Error,
+			TEXT("atlas_entitydef_client major ABI mismatch: plugin=0x%08X dll=0x%08X — restage ThirdParty"),
+			ATLAS_EDR_ABI_VERSION, EdrAbi);
+	}
+	else if (AbiMinor(EdrAbi) != AbiMinor(ATLAS_EDR_ABI_VERSION))
+	{
+		UE_LOG(LogAtlasUE, Warning,
+			TEXT("atlas_entitydef_client minor ABI mismatch: plugin=0x%08X dll=0x%08X (backward-compatible)"),
+			ATLAS_EDR_ABI_VERSION, EdrAbi);
+	}
+
 	LoadEntityDefRegistry(BaseDir);
 }
 
