@@ -8,10 +8,25 @@
 #include "net_client/client_api.h"
 
 DEFINE_LOG_CATEGORY(LogAtlasUE);
+DEFINE_LOG_CATEGORY_STATIC(LogAtlasNetSdk, Log, All);
 
 namespace
 {
 AtlasEdrContext* g_edr_ctx = nullptr;
+
+void AtlasNetLogForward(int32_t Level, const char* Message, int32_t Len)
+{
+	if (Message == nullptr || Len <= 0) return;
+	const FString Msg = FString::ConstructFromPtrSize(UTF8_TO_TCHAR(Message), Len);
+	switch (Level)
+	{
+		case 0: UE_LOG(LogAtlasNetSdk, VeryVerbose, TEXT("%s"), *Msg); break;
+		case 1: UE_LOG(LogAtlasNetSdk, Verbose,     TEXT("%s"), *Msg); break;
+		case 2: UE_LOG(LogAtlasNetSdk, Log,         TEXT("%s"), *Msg); break;
+		case 3: UE_LOG(LogAtlasNetSdk, Warning,     TEXT("%s"), *Msg); break;
+		default: UE_LOG(LogAtlasNetSdk, Error,      TEXT("%s"), *Msg); break;
+	}
+}
 
 // Loads a DLL from the plugin's ThirdParty dir with the surrounding directory
 // pushed onto the search path so transitive deps resolve from the same folder.
@@ -67,6 +82,8 @@ void FAtlasUEModule::StartupModule()
 	EntityDefDllHandle = LoadThirdPartyDll(BaseDir, TEXT("AtlasEntityDef"), TEXT("atlas_entitydef_client.dll"));
 
 	if (NetClientDllHandle == nullptr || EntityDefDllHandle == nullptr) return;
+
+	AtlasNetSetLogHandler(&AtlasNetLogForward);
 
 	const uint32 NetAbi = AtlasNetGetAbiVersion();
 	const uint32 EdrAbi = AtlasEdrGetAbiVersion();

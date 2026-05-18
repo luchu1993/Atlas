@@ -8,6 +8,7 @@
 #include "cell_entity.h"
 #include "cellapp.h"
 #include "cellapp_messages.h"
+#include "cellapp_native_provider.h"
 #include "cellappmgr/bsp_tree.h"
 #include "entitydef/entity_def_registry.h"
 #include "intercell_messages.h"
@@ -158,6 +159,34 @@ TEST_F(CellAppHandlersTest, CreateLocalEntityMintsIdFromIDClient) {
 TEST_F(CellAppHandlersTest, CreateLocalEntityFailsWhenIDClientEmpty) {
   EntityID id = app_.CreateLocalEntity(1, 1, {0, 0, 0}, {1, 0, 0}, false);
   EXPECT_EQ(id, kInvalidEntityID);
+}
+
+// Reproducer for the cluster-mode "atlas_set_position: unknown entity_id"
+// warning seen on every NPC tick: the NPC OnTick path goes
+// `Owner.Position = ...` -> NativeApi.SetEntityPosition(entityId) which
+// reaches CellAppNativeProvider::SetEntityPosition; that calls the
+// lookup_ closure (bound to CellApp::FindEntity). If the closure cannot
+// see the entity_population_ entry the production path will warn and
+// drop the write. This test exercises that exact codepath in-process.
+TEST_F(CellAppHandlersTest, NativeProviderSetPositionResolvesLocalEntity) {
+  auto& id_client = const_cast<IDClient&>(app_.GetIdClientForTest());
+  id_client.AddIds(500, 600);
+
+  CellAppNativeProvider provider(
+      [this](uint32_t id) { return app_.FindEntity(id); }, network_);
+
+  EntityID id = app_.CreateLocalEntity(/*type_id=*/1, /*space_id=*/1, {0, 0, 0}, {1, 0, 0},
+                                       /*on_ground=*/false);
+  ASSERT_NE(id, kInvalidEntityID);
+
+  provider.SetEntityPosition(id, 7.f, 0.f, 9.f);
+  provider.SetEntityDirection(id, 0.f, 0.f, 1.f);
+
+  auto* real = app_.FindRealEntity(id);
+  ASSERT_NE(real, nullptr);
+  EXPECT_FLOAT_EQ(real->Position().x, 7.f);
+  EXPECT_FLOAT_EQ(real->Position().z, 9.f);
+  EXPECT_FLOAT_EQ(real->Direction().z, 1.f);
 }
 
 TEST_F(CellAppHandlersTest, DestroyLocalEntityClearsLocalEntity) {

@@ -199,7 +199,9 @@ auto ClientSession::StartAuthenticate(AtlasAuthResultFn callback, void* user_dat
 
   ::atlas::baseapp::Authenticate auth_msg;
   std::memcpy(auth_msg.session_key.bytes, session_key_.data(), session_key_.size());
-  (void)baseapp_channel_->SendMessage(auth_msg);
+  auto send_result = baseapp_channel_->SendMessage(auth_msg);
+  ATLAS_LOG_INFO("ClientSession: sent Authenticate to {} (send_ok={})",
+                 baseapp_addr_.ToString(), static_cast<bool>(send_result));
 
   auth_callback_ = callback;
   auth_user_data_ = user_data;
@@ -219,6 +221,8 @@ auto ClientSession::StartAuthenticate(AtlasAuthResultFn callback, void* user_dat
 }
 
 void ClientSession::OnAuthResult(const ::atlas::baseapp::AuthenticateResult& msg) {
+  ATLAS_LOG_INFO("ClientSession: received AuthenticateResult success={} entity_id={} type_id={}",
+                 msg.success, msg.entity_id, msg.type_id);
   if (state_ != ATLAS_NET_STATE_AUTHENTICATING) return;
   CancelAuthTimeout();
 

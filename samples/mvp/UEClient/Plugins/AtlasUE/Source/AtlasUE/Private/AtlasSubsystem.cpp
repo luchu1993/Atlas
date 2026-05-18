@@ -201,6 +201,11 @@ bool UAtlasSubsystem::OnTick(float DeltaTime)
 		case EAtlasNetClientState::Authenticated:
 			if (!bRunningStarted)
 			{
+				// AuthenticateResult is the only owner-create signal on the wire;
+				// without this the EntityManager has no entry for the player and
+				// game-side SelectAvatar/etc never fire.
+				EntityManager.HandleCreate(NetClient->GetPlayerEntityId(),
+				                           NetClient->GetPlayerTypeId());
 				NetClient->StartRunningThread();
 				bRunningStarted = true;
 				ReconnectAttempts = 0;  // healthy session — restart backoff from 1s
