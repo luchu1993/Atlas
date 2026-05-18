@@ -107,9 +107,8 @@ public sealed class AtlasClientRealTests
     [Fact]
     public void Relogin_SameUsername_FastRejoinsExistingEntity()
     {
-        // Two clients sharing one coro loop so we can exercise BaseApp's
-        // account-name serialization gate without LoginApp's pending-by-
-        // username dedup rejecting the second request.
+        // Shared coro loop so LoginApp's per-username dedup sees both as
+        // intentional re-login (not parallel-spam) and lets b through.
         var loop = new ManagedAtlasLoop();
         AtlasLoop.Install(loop);
         var registry = new ManagedRpcRegistry(loop);
@@ -131,13 +130,8 @@ public sealed class AtlasClientRealTests
             uint firstEntityId = a.LastAuth!.Value.EntityId;
             Assert.NotEqual(0u, firstEntityId);
 
-            // Drop the first session and immediately reconnect as the same
-            // user. Same user + same dbid hits BaseApp's fast-relogin path
-            // (TryCompleteLocalRelogin): a's server-side channel is condemned,
-            // the existing Account proxy is rebound to b, and b inherits
-            // a's EntityId. The point of this test is that the second connect
-            // SUCCEEDS — LoginApp's pending-by-username dedup and BaseApp's
-            // account_entity_index_ both must let it through.
+            // Same user + same dbid hits TryCompleteLocalRelogin: a's
+            // server-side channel is condemned and b inherits the EntityID.
             a.Disconnect();
             deadline = DateTime.UtcNow.AddSeconds(5);
             while (DateTime.UtcNow < deadline && a.State != AtlasNetState.Disconnected)

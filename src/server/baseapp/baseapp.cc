@@ -184,9 +184,8 @@ auto BaseApp::Init(int argc, char* argv[]) -> bool {
 
   Network().SetDisconnectCallback([this](Channel& ch) {
     rpc_registry_.CancelByChannel(&ch);
-    // RUDP dead link queues the channel for delete before machined fires
-    // DeathNotification; clear cached pointers now to avoid use-after-free.
-    // The Death handlers below run the same cleanup; both are idempotent.
+    // RUDP dead link condemns + queues the channel for delete before
+    // machined's DeathNotification fires; clear cached pointers to avoid UAF.
     if (&ch == dbapp_channel_) {
       ATLAS_LOG_WARNING("BaseApp: dbapp channel down (RUDP dead link), clearing");
       dbapp_channel_ = nullptr;

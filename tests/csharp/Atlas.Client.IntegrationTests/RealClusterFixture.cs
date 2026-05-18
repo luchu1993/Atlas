@@ -60,19 +60,14 @@ public sealed class RealClusterFixture : IDisposable
             if (line.StartsWith("READY ", StringComparison.Ordinal))
             {
                 ParseReady(line);
-                // test_cluster.py emits READY as soon as machined acknowledges
-                // every process's registration, but peer-to-peer RUDP channels
-                // (loginapp ↔ dbapp etc.) are set up via async Birth events
-                // that fire after registration. Give them a moment to settle
-                // so the first login request doesn't hit "no DBApp connection".
+                // READY fires on machined registration; peer-to-peer RUDP
+                // channels (loginapp ↔ dbapp) still need an async Birth tick.
                 Thread.Sleep(1500);
                 return;
             }
         }
 
-        // Failure path: collect everything we know. Wait briefly for the
-        // launcher to actually exit so ExitCode is meaningful + stderr has
-        // settled (BeginErrorReadLine flushes on process exit).
+        // Brief wait so ExitCode is settled and BeginErrorReadLine has flushed.
         _launcher.WaitForExit(2_000);
         string stderr;
         lock (_stderrBuf) stderr = _stderrBuf.ToString();
@@ -126,9 +121,8 @@ public sealed class RealClusterFixture : IDisposable
 
     private static string ResolveRepoRoot()
     {
-        // tests/csharp/Atlas.Client.IntegrationTests/bin/Release/<tfm>/ → repo root.
-        // BaseDirectory carries a trailing slash so the first GetDirectoryName
-        // is a no-op; bump the hop budget to 8 so the loop still reaches Atlas/.
+        // BaseDirectory has trailing slash → first GetDirectoryName is no-op,
+        // so the 8-hop budget walks bin/<config>/<tfm>/ back to the repo root.
         var dir = AppContext.BaseDirectory;
         for (int i = 0; i < 8 && dir is not null; i++)
         {

@@ -45,16 +45,11 @@ _PORT_BLOCK_SIZE = 16
 
 
 def _pick_free_port_base() -> int:
-    # bind(0) picks from the OS dynamic range (Windows: 49152-65535) which
-    # overlaps Hyper-V / WSL / TIME_WAIT reservations — bind(0) succeeds but
-    # the SAME port may WSAEACCES(10013) seconds later when a child process
-    # tries to bind it. Sample from the lower mid-range instead (manually,
-    # not via bind(0)) and probe TCP + UDP on every port in the block.
+    # Avoids the OS dynamic range (Windows 49152-65535) where Hyper-V / WSL
+    # / TIME_WAIT can WSAEACCES(10013) seconds after bind(0) succeeds.
     rng = random.Random()
     for _ in range(64):
         candidate = rng.randrange(20000, 40000)
-        # Align to 16 so consecutive runs don't keep colliding on the
-        # same poisoned offset within a block.
         candidate &= ~(_PORT_BLOCK_SIZE - 1)
         if all(_port_bindable(candidate + offset)
                for offset in range(_PORT_BLOCK_SIZE)):
@@ -76,10 +71,8 @@ def _port_bindable(port: int) -> bool:
 
 def main() -> int:
     args = parse_args()
-    # Cluster spawn is retried up to N times on bind failure — Windows
-    # transient port reservations (Hyper-V / WSL / TIME_WAIT) can grab a
-    # port between probe and child bind even with the probe filter in
-    # _pick_free_port_base. With a fixed port_base passed in, no retry.
+    # Retry on bind failure — even with the probe filter, a port can be
+    # transiently reserved between probe and child bind. Fixed port_base skips.
     if args.port_base > 0:
         return _spawn_cluster(args, args.port_base)
     for attempt in range(_MAX_SPAWN_RETRIES):
@@ -99,9 +92,8 @@ _EARLY_EXIT_GRACE_SEC = 2.0
 
 
 def _spawn_cluster(args: argparse.Namespace, port_base: int) -> int:
-    # machined hard-codes its UDP heartbeat socket to (internal_port + 1)
-    # (see machined_app.cc), so port_base+1 is reserved — assign other
-    # processes from port_base+2 onwards.
+    # machined_app.cc binds its UDP heartbeat to internal_port + 1, so
+    # port_base+1 is reserved — peers start at port_base+2.
     machined_port = port_base
     dbapp_port = port_base + 2
     baseappmgr_port = port_base + 3
@@ -200,17 +192,15 @@ def _spawn_cluster(args: argparse.Namespace, port_base: int) -> int:
                        "--machined", machined_address,
                        "--external-port", str(loginapp_port),
                        "--auto-create-accounts", "true",
-                       # Per-test fixture: tests run multiple logins in seconds
-                       # from 127.0.0.1; the production 5/min default would
-                       # rate-limit them. Effectively disable here.
+                       # Effectively-off; the prod 5/min would rate-limit
+                       # sequential RealCluster tests sharing 127.0.0.1.
                        "--login-rate-limit-per-ip", "10000",
                        "--login-rate-limit-global", "100000",
                        "--update-hertz", "50", "--log-level", "info"]))
         processes[-1].start_order = 5
 
-        # Short grace lets bind failures surface (WSAEACCES + ServerApp::init
-        # failed → exits immediately). If any process died, signal retry so
-        # the outer loop picks a fresh port_base.
+        # Grace window for bind failures (WSAEACCES → immediate exit).
+        # Any early-exit signals the outer loop to pick a fresh port_base.
         time.sleep(_EARLY_EXIT_GRACE_SEC)
         for p in processes:
             if p.process.poll() is not None:

@@ -69,9 +69,8 @@ auto LoginApp::Init(int argc, char* argv[]) -> bool {
 
   Network().SetDisconnectCallback([this](Channel& ch) {
     rpc_registry_.CancelByChannel(&ch);
-    // Mirrors baseapp.cc — RUDP dead link queues the channel for delete
-    // before machined fires DeathNotification; clear the pointer now to
-    // avoid use-after-free in the next SendMessage.
+    // Mirrors baseapp.cc — clear cached pointers before condemned channel
+    // gets recycled (RUDP dead link beats machined DeathNotification).
     if (&ch == dbapp_channel_) {
       ATLAS_LOG_WARNING("LoginApp: dbapp channel down (RUDP dead link), clearing");
       dbapp_channel_ = nullptr;
