@@ -75,8 +75,29 @@ def _port_bindable(port: int) -> bool:
 
 def main() -> int:
     args = parse_args()
-    port_base = args.port_base if args.port_base > 0 else _pick_free_port_base()
+    # Cluster spawn is retried up to N times on bind failure — Windows
+    # transient port reservations (Hyper-V / WSL / TIME_WAIT) can grab a
+    # port between probe and child bind even with the probe filter in
+    # _pick_free_port_base. With a fixed port_base passed in, no retry.
+    if args.port_base > 0:
+        return _spawn_cluster(args, args.port_base)
+    for attempt in range(_MAX_SPAWN_RETRIES):
+        rc = _spawn_cluster(args, _pick_free_port_base())
+        if rc != _RC_RETRY:
+            return rc
+        print(f"cluster spawn attempt {attempt + 1} hit port bind failure, retrying",
+              file=sys.stderr, flush=True)
+    print(f"giving up after {_MAX_SPAWN_RETRIES} cluster spawn attempts",
+          file=sys.stderr, flush=True)
+    return 3
 
+
+_MAX_SPAWN_RETRIES = 4
+_RC_RETRY = -42
+_EARLY_EXIT_GRACE_SEC = 2.0
+
+
+def _spawn_cluster(args: argparse.Namespace, port_base: int) -> int:
     machined_port = port_base
     dbapp_port = port_base + 1
     baseappmgr_port = port_base + 2
@@ -177,6 +198,16 @@ def main() -> int:
                        "--auto-create-accounts", "true",
                        "--update-hertz", "50", "--log-level", "info"]))
         processes[-1].start_order = 5
+
+        # Short grace lets bind failures surface (WSAEACCES + ServerApp::init
+        # failed → exits immediately). If any process died, signal retry so
+        # the outer loop picks a fresh port_base.
+        time.sleep(_EARLY_EXIT_GRACE_SEC)
+        for p in processes:
+            if p.process.poll() is not None:
+                print(f"{p.name} exited early (rc={p.process.returncode}); will retry",
+                      file=sys.stderr, flush=True)
+                return _RC_RETRY
 
         ready_targets = [
             ("dbapp", "dbapp"),

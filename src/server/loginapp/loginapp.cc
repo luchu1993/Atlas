@@ -67,7 +67,20 @@ auto LoginApp::Init(int argc, char* argv[]) -> bool {
     return rpc_registry_.TryDispatch(id, payload);
   });
 
-  Network().SetDisconnectCallback([this](Channel& ch) { rpc_registry_.CancelByChannel(&ch); });
+  Network().SetDisconnectCallback([this](Channel& ch) {
+    rpc_registry_.CancelByChannel(&ch);
+    // Mirrors baseapp.cc — RUDP dead link queues the channel for delete
+    // before machined fires DeathNotification; clear the pointer now to
+    // avoid use-after-free in the next SendMessage.
+    if (&ch == dbapp_channel_) {
+      ATLAS_LOG_WARNING("LoginApp: dbapp channel down (RUDP dead link), clearing");
+      dbapp_channel_ = nullptr;
+    }
+    if (&ch == baseappmgr_channel_) {
+      ATLAS_LOG_WARNING("LoginApp: baseappmgr channel down (RUDP dead link), clearing");
+      baseappmgr_channel_ = nullptr;
+    }
+  });
 
   GetMachinedClient().Subscribe(
       machined::ListenerType::kBoth, ProcessType::kDbApp,

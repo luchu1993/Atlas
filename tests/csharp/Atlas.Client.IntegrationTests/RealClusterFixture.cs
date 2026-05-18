@@ -60,6 +60,12 @@ public sealed class RealClusterFixture : IDisposable
             if (line.StartsWith("READY ", StringComparison.Ordinal))
             {
                 ParseReady(line);
+                // test_cluster.py emits READY as soon as machined acknowledges
+                // every process's registration, but peer-to-peer RUDP channels
+                // (loginapp ↔ dbapp etc.) are set up via async Birth events
+                // that fire after registration. Give them a moment to settle
+                // so the first login request doesn't hit "no DBApp connection".
+                Thread.Sleep(1500);
                 return;
             }
         }

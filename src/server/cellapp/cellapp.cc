@@ -1094,6 +1094,17 @@ void CellApp::OnSpaceDataSnapshot(const Address& /*src*/, Channel* /*ch*/,
 void CellApp::OnOutboundChannelDeath(Channel& dying) {
   rpc_registry_.CancelByChannel(&dying);
 
+  // RUDP dead link condemns + schedules delete before machined DeathNotification
+  // catches up; clear cached pointers now to avoid use-after-free.
+  if (&dying == dbapp_channel_) {
+    ATLAS_LOG_WARNING("CellApp: dbapp channel down (RUDP dead link), clearing");
+    dbapp_channel_ = nullptr;
+  }
+  if (&dying == cellappmgr_channel_) {
+    ATLAS_LOG_WARNING("CellApp: cellappmgr channel down (RUDP dead link), clearing");
+    cellappmgr_channel_ = nullptr;
+  }
+
   std::vector<EntityID> orphans;
   for (auto& [id, entity] : entity_population_) {
     auto* w = entity->GetWitness();

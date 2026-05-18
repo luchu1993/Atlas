@@ -182,7 +182,29 @@ auto BaseApp::Init(int argc, char* argv[]) -> bool {
       [](Channel& ch) { ch.SetInactivityTimeout(std::chrono::seconds(10)); });
   external_network_.SetDisconnectCallback([this](Channel& ch) { OnExternalClientDisconnect(ch); });
 
-  Network().SetDisconnectCallback([this](Channel& ch) { rpc_registry_.CancelByChannel(&ch); });
+  Network().SetDisconnectCallback([this](Channel& ch) {
+    rpc_registry_.CancelByChannel(&ch);
+    // RUDP dead link queues the channel for delete before machined fires
+    // DeathNotification; clear cached pointers now to avoid use-after-free.
+    // The Death handlers below run the same cleanup; both are idempotent.
+    if (&ch == dbapp_channel_) {
+      ATLAS_LOG_WARNING("BaseApp: dbapp channel down (RUDP dead link), clearing");
+      dbapp_channel_ = nullptr;
+      FailAllDbappPendingRequests("dbapp_channel_down");
+    }
+    if (&ch == baseappmgr_channel_) {
+      ATLAS_LOG_WARNING("BaseApp: baseappmgr channel down (RUDP dead link), clearing");
+      baseappmgr_channel_ = nullptr;
+    }
+    if (&ch == cellappmgr_channel_) {
+      ATLAS_LOG_WARNING("BaseApp: cellappmgr channel down (RUDP dead link), clearing");
+      cellappmgr_channel_ = nullptr;
+      for (auto& [rid, cb] : pending_space_creates_) {
+        if (cb) cb(/*success=*/false, /*space_id=*/0, Address{});
+      }
+      pending_space_creates_.clear();
+    }
+  });
 
   GetMachinedClient().Subscribe(
       machined::ListenerType::kBoth, ProcessType::kDbApp,
