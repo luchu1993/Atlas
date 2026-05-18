@@ -32,7 +32,10 @@ struct FAtlasInboundMessage
 // Synthetic msg_id used to put disconnect notifications through the same
 // SPSC queue as AoI / RPC traffic; otherwise an out-of-band PendingDisconnect
 // atomic could fire while the game thread is still draining earlier messages,
-// causing one frame of post-disconnect stale dispatch.
+// causing one frame of post-disconnect stale dispatch. The value lives in the
+// top of the msg_id range that no server-side category claims (kReserved /
+// kLogin / kBaseApp etc. all stay well under 0x8000), so it can't collide
+// with a real OnDeliver dispatch.
 inline constexpr uint16 kAtlasInboundDisconnectSentinel = 0xFFFE;
 
 class FAtlasNetRunnable;
@@ -88,7 +91,10 @@ private:
 	TQueue<FAtlasInboundMessage, EQueueMode::Spsc> Inbound;
 	// SPSC TQueue has no size() — track depth via a side counter so the
 	// producer (net thread) can shed load before the queue grows unbounded
-	// when the game thread stalls (e.g. paused in the debugger).
+	// when the game thread stalls (e.g. paused in the debugger). Best-effort
+	// only: relaxed ordering means the cap check can race the producer's own
+	// fetch_add and let one or two extra messages through, which is fine —
+	// the goal is stall-shedding, not a hard bound.
 	std::atomic<int32> InboundDepth{0};
 	std::atomic<bool> bInboundOverflowLogged{false};
 

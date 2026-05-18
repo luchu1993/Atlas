@@ -70,10 +70,12 @@ bool UAtlasSubsystem::BeginLogin(const FString& Host, uint16 Port, const FString
 	CachedUsername = Username;
 	CachedPasswordHash = PasswordHash;
 	bHasCachedCredentials = true;
-	// A manual BeginLogin re-arms auto-retry: game code is explicitly asking
-	// to try again after we previously exhausted the backoff ladder.
+	// A manual BeginLogin re-arms every fatal-latch so a fresh attempt sees the
+	// same diagnostics as a cold start; without resetting bDefMismatchLogged a
+	// second def_mismatch on the retry would be swallowed silently.
 	ReconnectAttempts = 0;
 	bReconnectExhausted = false;
+	bDefMismatchLogged = false;
 	return NetClient->BeginLogin(Host, Port, Username, PasswordHash);
 }
 

@@ -114,14 +114,16 @@ void FAtlasNetClient::Destroy()
 		Ctx = nullptr;
 	}
 
+	// Net thread is joined above (WaitForCompletion + delete Thread); these
+	// stores are race-free, so relaxed is enough — no observer is in flight.
 	FAtlasInboundMessage Drain;
 	while (Inbound.Dequeue(Drain)) {}
 	InboundDepth.store(0, std::memory_order_relaxed);
 	bInboundOverflowLogged.store(false, std::memory_order_relaxed);
-	PlayerEntityId.store(0);
-	PlayerTypeId.store(0);
-	LastLoginStatus.store(0xFF, std::memory_order_release);
-	State.store(EAtlasNetClientState::Idle);
+	PlayerEntityId.store(0, std::memory_order_relaxed);
+	PlayerTypeId.store(0, std::memory_order_relaxed);
+	LastLoginStatus.store(0xFF, std::memory_order_relaxed);
+	State.store(EAtlasNetClientState::Idle, std::memory_order_relaxed);
 }
 
 bool FAtlasNetClient::BeginLogin(const FString& Host, uint16 Port, const FString& Username,
