@@ -154,3 +154,120 @@ CellApp `3000–3099` 段已被 Phase 10 占用；Phase 11 从 `3100` 起。
       `IRangeListOwner*` 强类型接口
 - [ ] CellApp ↔ CellApp 通道（GhostDelta / OffloadEntity）尚未基于
       machined CellApp 注册做白名单；当前依赖 RUDP 内网假设
+- [ ] **Real→Ghost 时未清理 C# 实例**（详见下节"已知缺口"）
+
+## 已知缺口: Real→Ghost 时未清理 C# 实例
+
+### 现象
+
+`tools/bin/run_mvp_cluster.bat`（默认 4 cellapp + 600 NPC）跑 4 分钟时
+每 cellapp 的 stdout 累计 20 MB 日志，~280K 条以下三类 WARNING：
+
+- `atlas_publish_replication_frame on Ghost entity_id=N — rejected`
+- `atlas_set_position on Ghost entity_id=N — rejected`
+- `atlas_set_direction on Ghost entity_id=N — rejected`
+
+伴随 `Slow tick: 1230ms (expected 50.0ms)` — 单 tick 拖到 25x，client
+端表现为 sync 卡顿、AoI 内 NPC 间歇可见。
+
+### 根因
+
+`### Ghost 无 C# 实例` 这条设计决策在协议 / C++ 数据层已落实
+（`CellEntity` Ghost 不分配 `RealEntityData`、`real_channel_` 持非拥有
+指针、AoI 复制仅走 other 受众），但 **C# 侧没有对应的清理路径**：
+
+1. NPC 跨 BSP 边界 → `OffloadChecker::Compute` 把它放进 ops
+2. `TickOffloadChecker` 调 `op.entity->ConvertRealToGhost(peer)` —
+   **只翻 C++ 状态**：清 witness、清 controllers、清 real_data_
+3. C++ 侧没有 `destroy_script_entity_fn` callback（client provider 有
+   `ClientDestroyEntityFn`，cellapp provider 没有对应物，见
+   `cellapp_native_provider.h`）
+4. C# `EntityManager._entities` 仍持有该实体的 GCHandle
+5. 下一个 cellapp tick，`EntityManager.OnTickAll` 遍历 `_entities`，
+   只判断 `entity.IsDestroyed`，**不识别 Ghost 状态** →
+   `NpcAiComponent.OnTick` 继续运行，调 `Owner.SetPosition` /
+   `Owner.SetDirection` / 末尾 generator-emitted `PublishReplicationFrame`
+6. 三个 native callback 在 C++ 端的 `IsReal()` 守门处全部被拒，每个
+   都打一条 WARNING
+
+600 NPC × 20Hz × 一段时间内有相当比例处于 Real-在-别处 / Ghost-在-本地
+= 几万条/秒，cellapp 的事件循环大部分 CPU 时间花在写日志和 native
+callback 拒绝上 → 复制管线被拖慢 → 客户端 sync 间歇丢帧。
+
+Avatar 不受这条影响因为它不会自走（owner-authoritative 在
+client，cell 侧只接 ReportPos）。同时 Avatar 在 25eeb7e 已修了"Ghost
+姿态过期"的 pingpong，留下的 NPC 部分只能靠这条独立任务收尾。
+
+### 设计选项
+
+**选项 A：Real→Ghost 时销毁 C# 实例，Ghost→Real 时重建**
+
+跟 BigWorld 模型对齐（Ghost 没有 Python 对象），也跟现有"Ghost 是纯数据
+镜像"的设计宣言一致。
+
+C++ 改动：
+- `cellapp_native_provider` 加 `destroy_script_entity_fn`（签名同
+  `ClientDestroyEntityFn`），注册到 callback table
+- `ConvertRealToGhost` 在翻状态**之前**调一次，把 C# 实例销毁
+- `OnOffloadEntity` 走 promote-Ghost 分支时（已有 Ghost），不能依赖
+  `_entities` 还有那个实体；统一走 `restore_entity_fn` +
+  `msg.persistent_blob` 重建（fresh-create 分支已经这么做）
+
+C# 改动：
+- `EntityManager` 增加 `Destroy(uint entityId)` 入口，从 `_entities`
+  摘除并触发 `OnDestroy`
+- `restore_entity_fn` 入口确保即使该 id 已存在也走 destroy → recreate
+  路径（否则 promote-Ghost 时残留旧实例）
+
+代价：每次 NPC 跨界都跑一次 OnDestroy / RestoreEntity，比 B 方案重；
+Controller 状态、event 订阅会跟 C# 实例一起没掉，但 Phase 11 的 Offload
+设计本来就把 Controller 状态打进 OffloadEntity blob（`SerializeControllersForMigration`），
+target 端 RestoreEntity 后从 blob 重建——这条契约已经在 Avatar 那里跑通。
+
+**选项 B：C# 加 IsGhost 标志，OnTickAll 跳过 Ghost**
+
+最轻：C++ 在 Real↔Ghost 转换时通过 callback 翻 C# 端的
+`ServerEntity._isGhost`，`EntityManager.OnTickAll` 多一道
+`if (entity.IsGhost) continue;` 守门，`PublishReplicationFrame` / Cell
+RPC dispatch 在 C# 端也加守门（避免到 C++ 才被拒）。
+
+代价：违背"Ghost 没有 C# 实例"的宣言，C# 实例和 GCHandle 一直挂着，
+内存/GC 压力跨界后不释放；NpcAiComponent 的本地 `_target` / `_rng`
+状态在 Ghost 期间停滞，等迁回来再用，可能跟 Real 端实际状态不一致。
+
+**选项 C：纯 C++ 抑制（不动 C# 协议）**
+
+直接在 `cellapp_native_provider` 的 `SetEntityPosition` /
+`SetEntityDirection` / `PublishReplicationFrame` 里把 Ghost 拒绝路径从
+WARNING 降到 DEBUG（或限频）。**不修问题、只压日志**，cellapp 仍然在
+做大量无效 native trap。仅作为"修不了主因时的减噪 patch"，不推荐
+作为主线解。
+
+### 推荐方案 + 落地步骤
+
+走选项 A，分两个 PR：
+
+**PR 1：C++ → C# 销毁 callback**
+1. `clrscript`：callback table 加 `destroy_script_entity_fn` 字段，
+   注册同 `restore_entity_fn` 的 marshalling 风格
+2. `cellapp_native_provider`：透出
+   `destroy_script_entity_fn()` getter；`Cell::Init` 沿用既有 wiring
+3. `Atlas.Runtime`：导出 `EntityManager.DestroyById(uint)` 给 native
+   表绑定
+4. 单测：`tests/integration/test_cellapp_handlers.cpp` 加一个
+   "ConvertRealToGhost calls destroy_script_entity_fn" 用例
+
+**PR 2：Offload 路径接线**
+1. `CellApp::TickOffloadChecker` 在 `ConvertRealToGhost(peer)` **之前**
+   触发 destroy_script_entity_fn（既有 `entity_lifecycle_cancel_fn`
+   保持，二者顺序：cancel → destroy → C++ 翻 Ghost）
+2. `CellApp::OnOffloadEntity` 的 promote-Ghost 分支统一走
+   `restore_entity_fn`（之前只 fresh-create 分支用），保证目的端必有
+   一个新建的 C# 实例
+3. 验证：`tools/bin/run_mvp_cluster.bat` + 6 个 pingpong bot 跑
+   60s，每 cellapp stdout 应回落到几百 KB 量级、零
+   `atlas_publish_replication_frame on Ghost — rejected`、`Slow tick:`
+   不再出现
+
+完成后 README 的 Phase 11 状态可保持 ✅，Ghost-无-C#-实例的设计承诺第一次
+在 MVP-scale 负载下成立。
