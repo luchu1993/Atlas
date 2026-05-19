@@ -945,7 +945,7 @@ TEST_F(ReliableUdpTest, UnreliableBypassesOrdering) {
   EXPECT_EQ(channel_b.RecvNextSeq(), 1u);  // rcv_nxt unchanged (no seq tracking)
 }
 
-TEST_F(ReliableUdpTest, CwndStartsAtOne) {
+TEST_F(ReliableUdpTest, CwndStartsAtConfiguredDefault) {
   auto sock = Socket::CreateUdp();
   ASSERT_TRUE(sock.HasValue());
   ASSERT_TRUE(sock->Bind(Address("127.0.0.1", 0)).HasValue());
@@ -953,9 +953,11 @@ TEST_F(ReliableUdpTest, CwndStartsAtOne) {
   ReliableUdpChannel channel(dispatcher_, table_, *sock, Address("127.0.0.1", 9999));
   channel.Activate();
 
-  EXPECT_EQ(channel.Cwnd(), 1u);
-  EXPECT_EQ(channel.Ssthresh(), 16u);
-  EXPECT_EQ(channel.EffectiveWindow(), 1u);  // min(send_window=256, cwnd=1)
+  // Initial cwnd 32 (raised from TCP-Reno 1) so AoI Enter bursts don't
+  // stall on cold-start; ssthresh tracks 2x cwnd to stay in slow-start.
+  EXPECT_EQ(channel.Cwnd(), 32u);
+  EXPECT_EQ(channel.Ssthresh(), 64u);
+  EXPECT_EQ(channel.EffectiveWindow(), 32u);  // min(send_window=256, cwnd=32)
 }
 
 TEST_F(ReliableUdpTest, CwndGrowsOnAck) {
@@ -977,7 +979,7 @@ TEST_F(ReliableUdpTest, CwndGrowsOnAck) {
   channel_b.Activate();
 
   auto initial_cwnd = channel_a.Cwnd();
-  EXPECT_EQ(initial_cwnd, 1u);
+  EXPECT_EQ(initial_cwnd, 32u);
 
   // Exchange messages: A sends, B receives and sends back (piggybacking ACK)
   for (int i = 0; i < 5; ++i) {
@@ -1006,8 +1008,8 @@ TEST_F(ReliableUdpTest, NocwndDisablesCongestionControl) {
   channel.SetNocwnd(true);
   channel.Activate();
 
-  // With nocwnd, effective window = send_window (ignores cwnd=1)
-  EXPECT_EQ(channel.Cwnd(), 1u);
+  // With nocwnd, effective window = send_window (ignores cwnd cap)
+  EXPECT_EQ(channel.Cwnd(), 32u);
   EXPECT_EQ(channel.EffectiveWindow(), 256u);  // send_window_
   EXPECT_TRUE(channel.Nocwnd());
 }
@@ -1020,19 +1022,20 @@ TEST_F(ReliableUdpTest, EffectiveWindowRespectsCwnd) {
   ReliableUdpChannel channel(dispatcher_, table_, *sock, Address("127.0.0.1", 9999));
   channel.Activate();
 
-  // cwnd=1, send_window=256 → effective=1
-  EXPECT_EQ(channel.EffectiveWindow(), 1u);
+  // cwnd=32, send_window=256 → effective=32
+  EXPECT_EQ(channel.EffectiveWindow(), 32u);
 
-  // First send should work (cwnd=1 allows 1 in flight)
-  channel.Bundle().AddMessage(RudpTestMsg{1});
-  auto r1 = channel.SendReliable();
-  ASSERT_TRUE(r1.HasValue());
+  // Saturate the window with 32 non-fragmented sends.
+  for (uint32_t i = 0; i < 32; ++i) {
+    channel.Bundle().AddMessage(RudpTestMsg{i});
+    ASSERT_TRUE(channel.SendReliable().HasValue()) << "send " << i;
+  }
 
-  // Second send should fail (cwnd=1, already 1 in flight)
-  channel.Bundle().AddMessage(RudpTestMsg{2});
-  auto r2 = channel.SendReliable();
-  EXPECT_FALSE(r2.HasValue());
-  EXPECT_EQ(r2.Error().Code(), ErrorCode::kWouldBlock);
+  // 33rd send blocks: cwnd=32, 32 in flight, no acks yet.
+  channel.Bundle().AddMessage(RudpTestMsg{99});
+  auto r_block = channel.SendReliable();
+  EXPECT_FALSE(r_block.HasValue());
+  EXPECT_EQ(r_block.Error().Code(), ErrorCode::kWouldBlock);
 }
 
 TEST_F(ReliableUdpTest, SmallMessageNotFragmented) {
@@ -1091,21 +1094,20 @@ TEST_F(ReliableUdpTest, CwndGrowsAfterFirstAckAllowsSecondSend) {
   ReliableUdpChannel channel_b(dispatcher_, table_, *sock_b, addr_a);
   channel_b.Activate();
 
-  // Verify initial cwnd is 1
-  EXPECT_EQ(channel_a.Cwnd(), 1u);
+  // Verify initial cwnd is 32 (raised default).
+  EXPECT_EQ(channel_a.Cwnd(), 32u);
 
-  // First send succeeds (cwnd=1, 0 in flight)
-  channel_a.Bundle().AddMessage(RudpTestMsg{1});
-  auto r1 = channel_a.SendReliable();
-  ASSERT_TRUE(r1.HasValue());
+  // Fill cwnd to saturation, then verify the next send blocks.
+  for (uint32_t i = 0; i < 32; ++i) {
+    channel_a.Bundle().AddMessage(RudpTestMsg{i});
+    ASSERT_TRUE(channel_a.SendReliable().HasValue()) << "fill " << i;
+  }
+  channel_a.Bundle().AddMessage(RudpTestMsg{32});
+  auto r_block = channel_a.SendReliable();
+  EXPECT_FALSE(r_block.HasValue());
+  EXPECT_EQ(r_block.Error().Code(), ErrorCode::kWouldBlock);
 
-  // Second send blocked (cwnd=1, 1 in flight)
-  channel_a.Bundle().AddMessage(RudpTestMsg{2});
-  auto r2 = channel_a.SendReliable();
-  EXPECT_FALSE(r2.HasValue());
-  EXPECT_EQ(r2.Error().Code(), ErrorCode::kWouldBlock);
-
-  // B receives and sends ACK back via reply
+  // B receives + acks via piggyback.
   std::this_thread::sleep_for(std::chrono::milliseconds(50));
   pump_datagrams(*sock_b, channel_b);
 
@@ -1115,18 +1117,13 @@ TEST_F(ReliableUdpTest, CwndGrowsAfterFirstAckAllowsSecondSend) {
   std::this_thread::sleep_for(std::chrono::milliseconds(50));
   pump_datagrams(*sock_a, channel_a);
 
-  // After ACK, cwnd should have grown (slow start: +1 per ACK)
-  EXPECT_GE(channel_a.Cwnd(), 2u);
+  // After acks, cwnd has grown past 32 and in-flight drained.
+  EXPECT_GT(channel_a.Cwnd(), 32u);
   EXPECT_EQ(channel_a.UnackedCount(), 0u);
 
-  // Now we should be able to send two messages before blocking
-  channel_a.Bundle().AddMessage(RudpTestMsg{3});
-  auto r3 = channel_a.SendReliable();
-  ASSERT_TRUE(r3.HasValue()) << "First send after cwnd growth should succeed";
-
-  channel_a.Bundle().AddMessage(RudpTestMsg{4});
-  auto r4 = channel_a.SendReliable();
-  ASSERT_TRUE(r4.HasValue()) << "Second send should succeed with cwnd>=2";
+  // Subsequent sends succeed within the (now-larger) window.
+  channel_a.Bundle().AddMessage(RudpTestMsg{200});
+  ASSERT_TRUE(channel_a.SendReliable().HasValue()) << "post-ack send should succeed";
 }
 
 TEST_F(ReliableUdpTest, UnaClearsPacketsBeyondSackWindow) {

@@ -40,20 +40,29 @@ void ResetCellAppConfigToDefaults() {
   ServerAppOptionBase::ApplyAll(*(*empty)->Root());
 }
 
-void SetMaxAoIPeers(uint32_t cap) {
-  const auto json = std::string("{\"witness_max_aoi_peers\":") + std::to_string(cap) + "}";
-  auto cfg = DataSection::FromJsonString(json);
+// ApplyAll resets every option not in the JSON to its compiled default, so
+// composite tunings must be applied via a single call.
+void ApplyConfigJson(const std::string& body) {
+  auto cfg = DataSection::FromJsonString("{" + body + "}");
   ASSERT_TRUE(cfg.HasValue());
   ServerAppOptionBase::ApplyAll(*(*cfg)->Root());
 }
 
-void SetCapAndStarvation(uint32_t cap, uint32_t threshold) {
-  const auto json = std::string("{\"witness_max_aoi_peers\":") + std::to_string(cap) +
-                    ",\"witness_starvation_threshold_ticks\":" + std::to_string(threshold) + "}";
-  auto cfg = DataSection::FromJsonString(json);
-  ASSERT_TRUE(cfg.HasValue());
-  ServerAppOptionBase::ApplyAll(*(*cfg)->Root());
+void SetMaxAoIPeers(uint32_t cap) {
+  ApplyConfigJson("\"witness_max_aoi_peers\":" + std::to_string(cap));
 }
+
+// Opt-out of Enter pacing for tests that assert "all pending Enters flushed
+// in a single Update" — production paces Enters via witness_enter_bytes_per_tick.
+constexpr const char* kNoEnterPacing =
+    "\"witness_enter_bytes_per_tick\":67108864,\"witness_max_enters_per_tick\":65535";
+
+void SetCapAndStarvation(uint32_t cap, uint32_t threshold) {
+  ApplyConfigJson("\"witness_max_aoi_peers\":" + std::to_string(cap) +
+                  ",\"witness_starvation_threshold_ticks\":" + std::to_string(threshold));
+}
+
+void DisableEnterPacing() { ApplyConfigJson(kNoEnterPacing); }
 
 class WitnessAoICapTest : public ::testing::Test {
  protected:
@@ -85,6 +94,7 @@ class WitnessAoICapTest : public ::testing::Test {
 };
 
 TEST_F(WitnessAoICapTest, DefaultCapNoTruncationUnderForty) {
+  DisableEnterPacing();
   Space space(1);
   auto* observer = MakeEntity(space, 1, {0, 0, 0});
   observer->EnableWitness(/*radius=*/500.f, MakeSendFn(), /*hysteresis=*/0.f);
@@ -99,7 +109,7 @@ TEST_F(WitnessAoICapTest, DefaultCapNoTruncationUnderForty) {
 }
 
 TEST_F(WitnessAoICapTest, TightCapLimitsPumpToClosestN) {
-  SetMaxAoIPeers(5);
+  ApplyConfigJson(std::string(kNoEnterPacing) + ",\"witness_max_aoi_peers\":5");
 
   Space space(1);
   auto* observer = MakeEntity(space, 1, {0, 0, 0});

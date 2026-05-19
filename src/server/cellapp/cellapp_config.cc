@@ -52,6 +52,14 @@ ServerAppOption<uint32_t> s_witness_starvation_threshold_ticks{
     30u, "witness_starvation_threshold_ticks", "cellapp/witness_starvation_threshold_ticks",
     WatcherMode::kReadWrite};
 
+ServerAppOption<uint32_t> s_witness_enter_bytes_per_tick{
+    8192u, "witness_enter_bytes_per_tick", "cellapp/witness_enter_bytes_per_tick",
+    WatcherMode::kReadWrite};
+
+ServerAppOption<uint32_t> s_witness_max_enters_per_tick{
+    8u, "witness_max_enters_per_tick", "cellapp/witness_max_enters_per_tick",
+    WatcherMode::kReadWrite};
+
 }  // namespace
 
 auto CellAppConfig::DefaultAoIRadius() -> float {
@@ -100,6 +108,14 @@ auto CellAppConfig::WitnessMaxAoIPeers() -> uint32_t {
 
 auto CellAppConfig::WitnessStarvationThresholdTicks() -> uint32_t {
   return s_witness_starvation_threshold_ticks.Value();
+}
+
+auto CellAppConfig::WitnessEnterBytesPerTick() -> uint32_t {
+  return s_witness_enter_bytes_per_tick.Value();
+}
+
+auto CellAppConfig::WitnessMaxEntersPerTick() -> uint32_t {
+  return s_witness_max_enters_per_tick.Value();
 }
 
 }  // namespace atlas

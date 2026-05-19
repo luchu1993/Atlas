@@ -84,6 +84,17 @@ class CellAppConfig {
   // Skipped peers are promoted above all real distances after this many ticks; 0 disables.
   // JSON key: `witness_starvation_threshold_ticks`. Default 30.
   [[nodiscard]] static auto WitnessStarvationThresholdTicks() -> uint32_t;
+
+  // Per-tick byte budget for AoI Enter envelopes on a single Witness; excess
+  // peers are deferred to the next tick. Caps the initial-burst load on the
+  // reliable-UDP send window when a fresh observer joins a dense scene.
+  // JSON key: `witness_enter_bytes_per_tick`. Default 8192 (8 KB).
+  [[nodiscard]] static auto WitnessEnterBytesPerTick() -> uint32_t;
+
+  // Hard cap on per-Witness Enter envelopes per tick. Backstop in case
+  // average Enter size is small but count would still flood the channel.
+  // JSON key: `witness_max_enters_per_tick`. Default 8.
+  [[nodiscard]] static auto WitnessMaxEntersPerTick() -> uint32_t;
 };
 
 }  // namespace atlas

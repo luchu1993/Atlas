@@ -5,8 +5,10 @@
 #include <chrono>
 #include <cstddef>
 #include <cstring>
+#include <limits>
 #include <span>
 #include <utility>
+#include <vector>
 
 #include "aoi_trigger.h"
 #include "cell_aoi_envelope.h"
@@ -326,10 +328,31 @@ void Witness::Update(uint32_t max_packet_bytes) {
   int bytes_sent = 0;
   {
     ATLAS_PROFILE_ZONE_N("Witness::Update::Transitions");
-
-    // Enters/Leaves bypass the byte budget - dropping them would
-    // deadlock the aoi_map_ state machine.
     (void)bandwidth_deficit_;
+
+    // Cap Enter bytes/count so a fresh observer joining a dense scene doesn't
+    // burst past the cold-start reliable-UDP cwnd and condemn the channel.
+    const uint32_t enter_byte_budget = CellAppConfig::WitnessEnterBytesPerTick();
+    const uint32_t enter_count_budget = CellAppConfig::WitnessMaxEntersPerTick();
+
+    // Closest-first: the entities the player can actually see arrive earliest.
+    const math::Vector3 obs_pos = owner_.Position();
+    std::sort(pending_enter_ids_.begin(), pending_enter_ids_.end(),
+              [&](EntityID a, EntityID b) {
+                auto dist_sq = [&](EntityID id) -> double {
+                  auto* e = owner_.GetSpace().FindEntity(id);
+                  if (e == nullptr) return std::numeric_limits<double>::max();
+                  const double dx = static_cast<double>(e->Position().x) - obs_pos.x;
+                  const double dz = static_cast<double>(e->Position().z) - obs_pos.z;
+                  return dx * dx + dz * dz;
+                };
+                return dist_sq(a) < dist_sq(b);
+              });
+
+    uint32_t enter_bytes = 0;
+    uint32_t enter_count = 0;
+    std::vector<EntityID> deferred;
+    deferred.reserve(pending_enter_ids_.size());
 
     for (std::size_t enter_idx = 0; enter_idx < pending_enter_ids_.size(); ++enter_idx) {
       const EntityID peer_id = pending_enter_ids_[enter_idx];
@@ -356,7 +379,17 @@ void Witness::Update(uint32_t max_packet_bytes) {
         aoi_map_.erase(it);
         continue;
       }
-      bytes_sent += static_cast<int>(SendEntityEnter(cache));
+      // Always allow the first Enter through so a single oversized envelope
+      // never deadlocks; cap subsequent ones by budget and count.
+      if (enter_count > 0 &&
+          (enter_bytes >= enter_byte_budget || enter_count >= enter_count_budget)) {
+        deferred.push_back(peer_id);
+        continue;
+      }
+      const std::size_t sent = SendEntityEnter(cache);
+      bytes_sent += static_cast<int>(sent);
+      enter_bytes += static_cast<uint32_t>(sent);
+      ++enter_count;
       cache.flags &= ~EntityCache::kEnterPending;
       cache.lod_enter_phase = enter_idx % kLodFarInterval;
     }
@@ -371,7 +404,7 @@ void Witness::Update(uint32_t max_packet_bytes) {
       aoi_map_.erase(it);
     }
 
-    pending_enter_ids_.clear();
+    pending_enter_ids_ = std::move(deferred);
     pending_gone_ids_.clear();
   }
 

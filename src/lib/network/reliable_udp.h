@@ -214,8 +214,10 @@ class ReliableUdpChannel : public Channel {
   bool remote_failed_{false};
 
   bool nocwnd_{false};
-  uint32_t cwnd_{1};
-  uint32_t ssthresh_{16};
+  // Initial cwnd raised above the TCP-Reno-style 1 so a fresh observer's
+  // AoI Enter burst doesn't stall on cold-start; Witness still paces Enters.
+  uint32_t cwnd_{32};
+  uint32_t ssthresh_{64};
   uint32_t cwnd_incr_{0};
 
   uint16_t next_fragment_id_{1};
