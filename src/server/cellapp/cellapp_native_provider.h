@@ -96,6 +96,11 @@ class CellAppNativeProvider : public BaseNativeProvider {
   [[nodiscard]] auto entity_lifecycle_cancel_fn() const -> EntityLifecycleCancelFn {
     return entity_lifecycle_cancel_fn_;
   }
+  // Silent removal for cross-cellapp migration — drops the C# instance without
+  // firing OnDestroy so script-side counters survive the offload.
+  [[nodiscard]] auto entity_migrating_out_fn() const -> EntityDestroyedFn {
+    return entity_migrating_out_fn_;
+  }
 
  private:
   EntityLookupFn lookup_;
@@ -120,6 +125,9 @@ class CellAppNativeProvider : public BaseNativeProvider {
   // nullptr on older runtimes — offload still proceeds, in-flight RPCs
   // fall back to their timeouts.
   EntityLifecycleCancelFn entity_lifecycle_cancel_fn_{nullptr};
+  // nullptr on older runtimes — offload falls back to entity_destroyed_fn,
+  // which is wrong (OnDestroy fires on migration) but keeps things alive.
+  EntityDestroyedFn entity_migrating_out_fn_{nullptr};
 };
 
 }  // namespace atlas

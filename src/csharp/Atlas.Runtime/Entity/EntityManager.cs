@@ -24,6 +24,7 @@ public sealed class EntityManager
 
     private readonly List<ServerEntity> _pendingCreates = new();
     private readonly List<uint> _pendingDestroys = new();
+    private readonly List<uint> _pendingMigratingOut = new();
     private bool _iterating;
     private uint _tickCount;
 
@@ -43,6 +44,21 @@ public sealed class EntityManager
         else
             _entities[entity.EntityId] = entity;
         return entity;
+    }
+
+    /// <summary>Remove the entity for cross-cellapp migration: drops the C# instance
+    /// without firing OnDestroy so script-side counters (e.g. MvpSpace's NPC tally)
+    /// don't decrement just because the Real moved to another cellapp.</summary>
+    public void RemoveSilently(uint entityId)
+    {
+        if (_entities.TryGetValue(entityId, out var entity))
+            entity.IsDestroyed = true;
+        if (_iterating)
+        {
+            _pendingMigratingOut.Add(entityId);
+            return;
+        }
+        _entities.Remove(entityId);
     }
 
     /// <summary>Destroy an entity. If called during iteration, destruction is deferred.</summary>
@@ -173,6 +189,7 @@ public sealed class EntityManager
         _iterating = false;
         _pendingCreates.Clear();
         _pendingDestroys.Clear();
+        _pendingMigratingOut.Clear();
         _entities.Clear();
     }
 
@@ -186,6 +203,7 @@ public sealed class EntityManager
         _entities.Clear();
         _pendingCreates.Clear();
         _pendingDestroys.Clear();
+        _pendingMigratingOut.Clear();
         _localSeq = 1;
         _processPrefix = 0;
         _iterating = false;
@@ -229,5 +247,9 @@ public sealed class EntityManager
         foreach (var id in _pendingDestroys)
             DestroyImmediate(id);
         _pendingDestroys.Clear();
+        // Silent removals — IsDestroyed was already flipped in RemoveSilently.
+        foreach (var id in _pendingMigratingOut)
+            _entities.Remove(id);
+        _pendingMigratingOut.Clear();
     }
 }

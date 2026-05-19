@@ -32,6 +32,10 @@ internal unsafe struct NativeCallbackTable
     // Raised by TimerController on every fire; user_arg threads back the
     // script-supplied id so scripts disambiguate multiple timers per entity.
     public nint OnTimerFired;
+    // Cellapp-only: invoked from TickOffloadChecker before ConvertRealToGhost
+    // so the C# instance is dropped silently (no OnDestroy). Distinct from
+    // EntityDestroyed which signals real death and DOES fire OnDestroy.
+    public nint EntityMigratingOut;
 }
 
 internal static unsafe class NativeCallbacks
@@ -63,6 +67,7 @@ internal static unsafe class NativeCallbacks
         table.EntityLifecycleCancel =
             (nint)(delegate* unmanaged<uint, void>)&EntityLifecycleCancel;
         table.OnTimerFired = (nint)(delegate* unmanaged<uint, int, void>)&OnTimerFired;
+        table.EntityMigratingOut = (nint)(delegate* unmanaged<uint, void>)&EntityMigratingOut;
 
         NativeApi.SetNativeCallbacks(&table, sizeof(NativeCallbackTable));
     }
@@ -120,7 +125,9 @@ internal static unsafe class NativeCallbacks
 
             if (created && !entity.IsDestroyed)
             {
-                entity.OnInit(isReload: false);
+                // len>0 = we hydrated state from a blob (DB restore / offload
+                // arrival); pass isReload=true so OnInit skips first-time init.
+                entity.OnInit(isReload: len > 0);
             }
 
             _ = dbid;
@@ -314,6 +321,20 @@ internal static unsafe class NativeCallbacks
         {
             ThreadGuard.EnsureMainThread();
             EntityManager.Instance.Destroy(entityId);
+        }
+        catch (Exception ex)
+        {
+            ErrorBridge.SetError(ex);
+        }
+    }
+
+    [UnmanagedCallersOnly]
+    public static void EntityMigratingOut(uint entityId)
+    {
+        try
+        {
+            ThreadGuard.EnsureMainThread();
+            EntityManager.Instance.RemoveSilently(entityId);
         }
         catch (Exception ex)
         {

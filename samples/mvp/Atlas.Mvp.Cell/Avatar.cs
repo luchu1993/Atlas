@@ -1,6 +1,8 @@
+using Atlas.Components;
 using Atlas.DataTypes;
 using Atlas.Diagnostics;
 using Atlas.Entity;
+using Atlas.Space;
 
 namespace Atlas.Mvp.Cell;
 
@@ -8,6 +10,8 @@ namespace Atlas.Mvp.Cell;
 public partial class Avatar : CellServerEntity, IDamageable
 {
     private const int kInitialHp = 100;
+    private const int kGoldPerKill = 10;
+    private const int kGoldPerLevel = 50;
     private const float kRespawnSeconds = 3.0f;
     private const float kProjectileHorizSpeed = 12f;
     private const float kProjectileUpSpeed = 4f;
@@ -21,11 +25,25 @@ public partial class Avatar : CellServerEntity, IDamageable
 
     protected override void OnInit(bool isReload)
     {
-        if (isReload) return;
-        Hp = kInitialHp;
-        TickInterval = 1;
+        // ProjectileSimulator is per-cellapp local state, not in the offload
+        // blob; rewire on every arrival (fresh login + offload reload).
         _sim = ProjectileSimulator.ForSpace(kSpaceId);
         _sim.RegisterTarget(this);
+        if (isReload) return;
+        Hp = kInitialHp;
+        Level = 1;
+        TickInterval = 1;
+        AddComponent<EquipmentComponent>();
+        // SerializeForOwnerClient (full snapshot) does not carry component
+        // sections; force a dirty WeaponId so the first delta ships the slot.
+        if (Equipment != null) Equipment.WeaponId = 1;
+
+        // Lazy single-instance MvpSpace: fresh-login Avatar on the primary
+        // cellapp seeds it; offload-arrival Avatars skip via isReload above.
+        if (SpaceOwnerRegistry.Find(kSpaceId) is null) {
+            EntityFactory.CreateLocalCell("MvpSpace", kSpaceId, Vector3.Zero,
+                                          Vector3.Forward, onGround: false);
+        }
     }
 
     protected override void OnDestroy()
@@ -61,6 +79,14 @@ public partial class Avatar : CellServerEntity, IDamageable
         AllClients.OnProjectileFired(shotId, origin, velocity);
     }
 
+    public partial void Say(string text)
+    {
+        if (_isDead || string.IsNullOrWhiteSpace(text)) return;
+        const int kMaxChars = 200;
+        if (text.Length > kMaxChars) text = text.Substring(0, kMaxChars);
+        AllClients.OnChat(EntityId, text);
+    }
+
     public void BroadcastDamage(int amount, uint attackerId)
     {
         AllClients.ShowDamage(amount, attackerId);
@@ -78,5 +104,12 @@ public partial class Avatar : CellServerEntity, IDamageable
         Hp = kInitialHp;
         Position = kSpawnPosition;
         AllClients.OnRespawned(kSpawnPosition);
+    }
+
+    public void OnNpcKilled()
+    {
+        Gold += kGoldPerKill;
+        int targetLevel = 1 + Gold / kGoldPerLevel;
+        if (targetLevel > Level) Level = targetLevel;
     }
 }

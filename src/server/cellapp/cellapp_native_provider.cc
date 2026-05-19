@@ -50,6 +50,7 @@ struct CellAppCallbackTable {
   CoroOnRpcCompleteFn coro_on_rpc_complete;
   EntityLifecycleCancelFn entity_lifecycle_cancel;
   TimerEventFn timer_event;
+  EntityDestroyedFn entity_migrating_out;
 };
 #pragma pack(pop)
 
@@ -394,6 +395,7 @@ void CellAppNativeProvider::SetNativeCallbacks(const void* native_callbacks, int
   proximity_event_fn_ = table.proximity_event;
   entity_lifecycle_cancel_fn_ = table.entity_lifecycle_cancel;  // nullptr on older runtimes
   timer_event_fn_ = table.timer_event;  // nullptr on older runtimes; TimerController fire becomes no-op
+  entity_migrating_out_fn_ = table.entity_migrating_out;  // nullptr on older runtimes
   ATLAS_LOG_INFO("CellApp: native callback table registered (len={})", len);
 }
 

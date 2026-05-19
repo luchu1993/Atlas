@@ -1919,10 +1919,14 @@ void CellApp::TickOffloadChecker() {
       po.type_id = op.entity->TypeId();
       pending_offloads_[op.entity->Id()] = std::move(po);
 
-      // Destroy C# instance before flipping to Ghost so OnTickAll on the
-      // next iteration stops running NpcAiComponent against a Ghost.
-      if (native_provider_ && native_provider_->entity_destroyed_fn()) {
-        native_provider_->entity_destroyed_fn()(op.entity->Id());
+      // Silent C# teardown for migration: OnDestroy stays reserved for real
+      // death (counters survive the offload). Older runtimes fall back.
+      if (native_provider_) {
+        if (auto fn = native_provider_->entity_migrating_out_fn()) {
+          fn(op.entity->Id());
+        } else if (auto df = native_provider_->entity_destroyed_fn()) {
+          df(op.entity->Id());
+        }
       }
 
       // Local Real -> Ghost; drops witness + controllers and uses the
