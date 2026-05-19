@@ -260,8 +260,7 @@ namespace Atlas.Mvp.Unity
                 _chatUserInteracted = false;
             });
             // FocusOut only fires when focus moves to another focusable; clicks
-            // on look-zone/joystick (non-focusable) would otherwise leave the
-            // TextField focused and keep WASD blocked.
+            // on look-zone/joystick leave the TextField focused and WASD blocked.
             root.RegisterCallback<PointerDownEvent>(OnRootPointerDown, TrickleDown.TrickleDown);
             // TrickleDown so Return/Esc are caught before the TextField's
             // internal handlers consume them (multi-line submit + clear).
@@ -451,9 +450,8 @@ namespace Atlas.Mvp.Unity
             RefreshCellIndicator();
         }
 
-        // CellAppMgr.BootstrapMultiCellPartition splits at x=0 / z=0 (alternating
-        // X / Z axes, position 0); each sign flip on the local avatar should
-        // line up with one Offload entry in cellapp.stdout.
+        // BSP splits at x=0 / z=0 (BootstrapMultiCellPartition); each sign flip
+        // should line up with one Offload entry in cellapp.stdout.
         int ComputeQuadrant(Vector3 pos)
         {
             bool east = pos.x >= 0f;

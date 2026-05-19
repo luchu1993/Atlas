@@ -2,9 +2,8 @@ using UnityEngine;
 
 namespace Atlas.Mvp.Unity
 {
-    // Draws a cross at x=0 / z=0 on the ground plane to show the BSP cell
-    // split positions hard-coded by CellAppMgr::BootstrapMultiCellPartition.
-    // Half-extent matches MvpSpace.kWorldHalf (100m).
+    // Cross at x=0 / z=0 on the ground; matches BootstrapMultiCellPartition's
+    // hard-coded split positions and MvpSpace.kWorldHalf (100m).
     public static class BspGizmo
     {
         const float kHalfExtent = 100f;

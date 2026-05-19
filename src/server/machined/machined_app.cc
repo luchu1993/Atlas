@@ -360,9 +360,8 @@ void MachinedApp::OnDisconnect(Channel& ch) {
 void MachinedApp::CheckHeartbeatTimeouts() {
   auto now = Clock::now();
 
-  // Side effects (UnregisterByChannel / RemoveAll) can drop the channel and
-  // re-enter OnDisconnect, which mutates heartbeat_entries_; collect expired
-  // channels first, then act outside the erase_if loop.
+  // OnDisconnect re-enters via UnregisterByChannel / RemoveAll and mutates
+  // heartbeat_entries_; collect first, side-effect outside the erase_if.
   std::vector<Channel*> expired;
   std::erase_if(heartbeat_entries_, [&](const HeartbeatEntry& e) {
     if (now - e.last_heartbeat < kHeartbeatTimeout) return false;
