@@ -8,10 +8,10 @@ namespace Atlas.Mvp.Cell;
 [Entity("MvpSpace")]
 public partial class MvpSpace : CellSpaceEntity
 {
-    private const int kInitialCount = 50;
-    private const int kMaxCount = 80;
-    private const int kLowWaterMark = 50;
-    private const float kRespawnIntervalSeconds = 3.0f;
+    private const int kInitialCount = 150;
+    private const int kMaxCount = 250;
+    private const int kLowWaterMark = 150;
+    private const float kRespawnIntervalSeconds = 2.0f;
     private const float kWorldHalf = 100f;
 
     private int _scatterIndex;

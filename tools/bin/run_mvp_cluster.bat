@@ -3,6 +3,7 @@ setlocal
 set BUILD=build\debug
 set CONFIG=Debug
 set LOGIN_PORT=20018
+set CELLAPP_COUNT=4
 set EXTRA=
 
 :parse
@@ -10,6 +11,7 @@ if "%~1"=="" goto run
 if /i "%~1"=="--build" (set BUILD=%~2 & shift & shift & goto parse)
 if /i "%~1"=="--config" (set CONFIG=%~2 & shift & shift & goto parse)
 if /i "%~1"=="--login-port" (set LOGIN_PORT=%~2 & shift & shift & goto parse)
+if /i "%~1"=="--cellapp-count" (set CELLAPP_COUNT=%~2 & shift & shift & goto parse)
 if /i "%~1"=="-h" goto usage
 if /i "%~1"=="--help" goto usage
 set EXTRA=%EXTRA% %~1
@@ -17,10 +19,11 @@ shift
 goto parse
 
 :usage
-echo Usage: %~nx0 [--build DIR] [--config CFG] [--login-port N] [extra args...]
-echo   --build       build directory (default: build\debug)
-echo   --config      CMake configuration (default: Debug)
-echo   --login-port  external LoginApp port (default: 20018)
+echo Usage: %~nx0 [--build DIR] [--config CFG] [--login-port N] [--cellapp-count N] [extra args...]
+echo   --build           build directory (default: build\debug)
+echo   --config          CMake configuration (default: Debug)
+echo   --login-port      external LoginApp port (default: 20018)
+echo   --cellapp-count   number of cellapps to launch (default: 4; lower to test single-cell mode)
 exit /b 0
 
 :run
@@ -33,7 +36,7 @@ python "%~dp0..\cluster_control\run_world_stress.py" ^
     --build-dir       "%BUILD%" ^
     --config          "%CONFIG%" ^
     --baseapp-count   1 ^
-    --cellapp-count   1 ^
+    --cellapp-count   %CELLAPP_COUNT% ^
     --login-port      "%LOGIN_PORT%" ^
     --base-assembly   "%BASE_DLL%" ^
     --cell-assembly   "%CELL_DLL%" ^

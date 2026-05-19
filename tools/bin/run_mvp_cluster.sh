@@ -5,11 +5,12 @@ set -euo pipefail
 
 usage() {
     cat <<USAGE >&2
-Usage: $0 [--build DIR] [--config CFG] [--login-port N] [extra args...]
+Usage: $0 [--build DIR] [--config CFG] [--login-port N] [--cellapp-count N] [extra args...]
 
-  --build       build directory (default: build/debug)
-  --config      CMake configuration (default: Debug)
-  --login-port  external LoginApp port (default: 20018, matches UnityClient default)
+  --build           build directory (default: build/debug)
+  --config          CMake configuration (default: Debug)
+  --login-port      external LoginApp port (default: 20018, matches UnityClient default)
+  --cellapp-count   number of cellapps to launch (default: 4; lower to test single-cell mode)
 
 Stop with Ctrl+C; orphaned server processes need pkill -f atlas_.
 USAGE
@@ -18,15 +19,17 @@ USAGE
 BUILD="build/debug"
 CONFIG="Debug"
 LOGIN_PORT=20018
+CELLAPP_COUNT=4
 EXTRA=()
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
-        --build)         BUILD="$2";          shift 2 ;;
-        --config)        CONFIG="$2";         shift 2 ;;
-        --login-port)    LOGIN_PORT="$2";     shift 2 ;;
-        -h|--help)       usage; exit 0 ;;
-        *)               EXTRA+=("$1");       shift ;;
+        --build)          BUILD="$2";          shift 2 ;;
+        --config)         CONFIG="$2";         shift 2 ;;
+        --login-port)     LOGIN_PORT="$2";     shift 2 ;;
+        --cellapp-count)  CELLAPP_COUNT="$2";  shift 2 ;;
+        -h|--help)        usage; exit 0 ;;
+        *)                EXTRA+=("$1");       shift ;;
     esac
 done
 
@@ -42,7 +45,7 @@ exec "${PYTHON}" "${SCRIPT_DIR}/../cluster_control/run_world_stress.py" \
     --build-dir       "${BUILD}" \
     --config          "${CONFIG}" \
     --baseapp-count   1 \
-    --cellapp-count   1 \
+    --cellapp-count   "${CELLAPP_COUNT}" \
     --login-port      "${LOGIN_PORT}" \
     --base-assembly   "${BASE_DLL}" \
     --cell-assembly   "${CELL_DLL}" \
