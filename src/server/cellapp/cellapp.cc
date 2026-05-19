@@ -613,8 +613,12 @@ auto CellApp::CreateLocalEntity(uint16_t type_id, SpaceID space_id, math::Vector
   }
   EntityID cell_id = id_client_.AllocateId();
   if (cell_id == kInvalidEntityID) {
-    ATLAS_LOG_WARNING("CellApp::CreateLocalEntity: id_client exhausted (available={})",
-                      id_client_.Available());
+    // Pre-init race (no IDs received yet) is the script's cue to DeferAppInit;
+    // warn only when we should already have a pool to draw from.
+    if (id_client_.HasReceivedAny()) {
+      ATLAS_LOG_WARNING("CellApp::CreateLocalEntity: id_client exhausted (available={})",
+                        id_client_.Available());
+    }
     return kInvalidEntityID;
   }
 

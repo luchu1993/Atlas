@@ -6,7 +6,11 @@ namespace atlas {
 
 auto IDClient::AllocateId() -> EntityID {
   if (total_available_ < kCriticallyLow) {
-    ATLAS_LOG_WARNING("IDClient: critically low ({} IDs remaining)", total_available_);
+    // Silent before the first DBApp batch lands: AppInit retries via
+    // DeferAppInit, no need to warn on the expected pre-init race.
+    if (ever_received_) {
+      ATLAS_LOG_WARNING("IDClient: critically low ({} IDs remaining)", total_available_);
+    }
     return kInvalidEntityID;
   }
 
@@ -33,6 +37,7 @@ void IDClient::AddIds(EntityID start, EntityID end) {
   uint64_t count = static_cast<uint64_t>(end) - start + 1;
   ranges_.push_back({start, end});
   total_available_ += count;
+  ever_received_ = true;
   ATLAS_LOG_DEBUG("IDClient: added range [{}, {}] ({} IDs), total_available={}", start, end, count,
                   total_available_);
 }

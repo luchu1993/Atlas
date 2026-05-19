@@ -33,6 +33,9 @@ class IDClient {
 
   [[nodiscard]] auto Available() const -> uint64_t { return total_available_; }
   [[nodiscard]] auto IsCriticallyLow() const -> bool { return total_available_ < kCriticallyLow; }
+  // False until the first AddIds; lets callers distinguish startup wait from
+  // true exhaustion and suppress noisy logs during the pre-DBApp-roundtrip window.
+  [[nodiscard]] auto HasReceivedAny() const -> bool { return ever_received_; }
 
  private:
   struct Range {
@@ -42,6 +45,7 @@ class IDClient {
 
   std::deque<Range> ranges_;
   uint64_t total_available_{0};
+  bool ever_received_{false};
 };
 
 }  // namespace atlas
