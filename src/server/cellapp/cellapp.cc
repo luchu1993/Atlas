@@ -953,7 +953,7 @@ auto CellApp::FindSpaceOwnerChannel(const Space& space) -> Channel* {
   if (primary_id == 0) return nullptr;
   const auto* info = tree->FindCellById(primary_id);
   if (!info) return nullptr;
-  if (info->cellapp_addr == Network().RudpAddress()) return nullptr;
+  if (info->cellapp_addr == ResolveSelfAddr()) return nullptr;
   return FindPeerChannel(info->cellapp_addr);
 }
 
@@ -963,7 +963,7 @@ void CellApp::BroadcastSpaceDataUpdate(const Space& space, uint16_t key_id,
   out.space_id = space.Id();
   out.key_id = key_id;
   out.value.assign(value.begin(), value.end());
-  ForEachRemotePeerInSpace(space, Network().RudpAddress(), [&](const Address& peer_addr) {
+  ForEachRemotePeerInSpace(space, ResolveSelfAddr(), [&](const Address& peer_addr) {
     if (exclude && peer_addr == *exclude) return;
     if (auto* peer = FindPeerChannel(peer_addr)) (void)peer->SendMessage(out);
   });
@@ -974,7 +974,7 @@ void CellApp::BroadcastSpaceDataDelete(const Space& space, uint16_t key_id,
   cellapp::SpaceDataDelete out;
   out.space_id = space.Id();
   out.key_id = key_id;
-  ForEachRemotePeerInSpace(space, Network().RudpAddress(), [&](const Address& peer_addr) {
+  ForEachRemotePeerInSpace(space, ResolveSelfAddr(), [&](const Address& peer_addr) {
     if (exclude && peer_addr == *exclude) return;
     if (auto* peer = FindPeerChannel(peer_addr)) (void)peer->SendMessage(out);
   });
@@ -1307,7 +1307,7 @@ void CellApp::OnOffloadEntity(const Address& src, Channel* ch, const cellapp::Of
   // don't create duplicates on the same peer.
   if (auto* rd = entity->GetRealData()) {
     for (const auto& haunt_addr : msg.existing_haunts) {
-      if (haunt_addr == Network().RudpAddress()) continue;  // don't haunt ourselves
+      if (haunt_addr == ResolveSelfAddr()) continue;  // don't haunt ourselves
       if (auto* peer = FindPeerChannel(haunt_addr)) {
         rd->AddHaunt(peer, haunt_addr);
       }
@@ -1345,22 +1345,23 @@ void CellApp::OnOffloadEntity(const Address& src, Channel* ch, const cellapp::Of
     }
   }
 
-  // CurrentCell.epoch lets BaseApp reject stale updates from an old
-  // CellApp path during rapid re-offload.
-  baseapp::CurrentCell cc;
-  cc.entity_id = msg.entity_id;
-  cc.cell_addr = Network().RudpAddress();
-  cc.epoch = next_offload_epoch_++;
-  auto base_ch = Network().ConnectRudpNocwnd(msg.base_addr);
-  if (base_ch) {
-    if (auto r = (*base_ch)->SendMessage(cc); !r) {
-      // BaseApp keeps the OLD cell_addr until the next offload, routing
-      // ClientCellRpc to a Ghost or dead host. Epoch alone can't
-      // reconcile this if CurrentCell never arrives.
-      ATLAS_LOG_ERROR(
-          "CellApp: failed to send CurrentCell entity_id={} epoch={} to base {}: {} "
-          "— BaseApp split-brain risk",
-          msg.entity_id, cc.epoch, msg.base_addr.ToString(), r.Error().Message());
+  // NPCs (cell-local, no base_addr) must skip the BaseApp notify, else
+  // every cross-cell offload spams WSAEADDRNOTAVAIL and stalls heartbeat.
+  if (msg.base_addr.Ip() != 0) {
+    baseapp::CurrentCell cc;
+    cc.entity_id = msg.entity_id;
+    cc.cell_addr = Network().RudpAddress();
+    cc.epoch = next_offload_epoch_++;
+    auto base_ch = Network().ConnectRudpNocwnd(msg.base_addr);
+    if (base_ch) {
+      if (auto r = (*base_ch)->SendMessage(cc); !r) {
+        // Without CurrentCell, BaseApp keeps the OLD cell_addr and routes
+        // ClientCellRpc to a Ghost or dead host until the next offload.
+        ATLAS_LOG_ERROR(
+            "CellApp: failed to send CurrentCell entity_id={} epoch={} to base {}: {} "
+            "— BaseApp split-brain risk",
+            msg.entity_id, cc.epoch, msg.base_addr.ToString(), r.Error().Message());
+      }
     }
   }
 
@@ -1368,9 +1369,9 @@ void CellApp::OnOffloadEntity(const Address& src, Channel* ch, const cellapp::Of
   // already in Ghost state by the time Offload arrives here.
   cellapp::GhostSetReal ghost_set_real;
   ghost_set_real.entity_id = msg.entity_id;
-  ghost_set_real.new_real_addr = Network().RudpAddress();
+  ghost_set_real.new_real_addr = ResolveSelfAddr();
   for (const auto& haunt_addr : msg.existing_haunts) {
-    if (haunt_addr == Network().RudpAddress()) continue;
+    if (haunt_addr == ResolveSelfAddr()) continue;
     if (haunt_addr == src) continue;
     if (auto* peer = FindPeerChannel(haunt_addr)) {
       if (auto r = peer->SendMessage(ghost_set_real); !r) {
@@ -1714,7 +1715,7 @@ void CellApp::TickGhostPump() {
   ATLAS_PROFILE_ZONE_N("CellApp::TickGhostPump");
   GhostMaintainer::Config config{};
   const auto resolver = [this](const Address& a) -> Channel* { return FindPeerChannel(a); };
-  GhostMaintainer maintainer(config, Network().RudpAddress(), resolver);
+  GhostMaintainer maintainer(config, ResolveSelfAddr(), resolver);
 
   for (auto& [_, space] : spaces_) {
     auto work = maintainer.Run(*space, Clock::now());
@@ -1808,9 +1809,15 @@ void CellApp::TickGhostPump() {
   }
 }
 
+auto CellApp::ResolveSelfAddr() -> Address {
+  Address self = Network().RudpAddress();
+  if (self.Ip() == 0) self = Address("127.0.0.1", self.Port());
+  return self;
+}
+
 void CellApp::TickOffloadChecker() {
   ATLAS_PROFILE_ZONE_N("CellApp::TickOffloadChecker");
-  OffloadChecker checker(Network().RudpAddress());
+  OffloadChecker checker(ResolveSelfAddr());
   for (auto& [_, space] : spaces_) {
     auto ops = checker.Compute(*space);
     for (auto& op : ops) {

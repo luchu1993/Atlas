@@ -7,6 +7,7 @@ Rules for Claude Code when working in the Atlas Engine repository.
 - Prefer repository wrappers over raw tool invocations when building or running local workflows; the wrappers carry platform-specific environment setup.
 - Treat Windows as a first-class environment: use `.bat` wrappers for Windows-facing instructions and keep matching `.sh` wrappers for Linux / macOS when adding tools.
 - Before reporting a build, test, Unity, or tooling workflow as working, run the smallest command that validates the changed surface.
+- After every edit to code, docs, configs, or tool scripts, re-read the touched files against the rules below and fix any violation (stray comments, missing sibling-doc updates, fat wrappers, etc.) before reporting the task done or committing.
 - Do not commit generated build outputs, Unity staged DLLs, profiling captures, logs, local databases, or temporary cluster state.
 - Do not skip hooks, tests, formatting, or signing checks unless the user explicitly asks for that bypass.
 
