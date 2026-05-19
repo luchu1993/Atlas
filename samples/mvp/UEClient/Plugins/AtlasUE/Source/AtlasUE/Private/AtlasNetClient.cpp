@@ -213,7 +213,7 @@ void FAtlasNetClient::TickGameThread(atlas::ClientEntityManager& Manager)
 				// kind=3 / kind=4 are per-tick high frequency — silent dispatch.
 			}
 			const auto Result = atlas::DecodeAoIEnvelope(
-				Msg.Payload.GetData(), Msg.Payload.Num(), Manager);
+				Msg.Payload.GetData(), Msg.Payload.Num(), Manager, SpaceDataSinkPtr);
 			if (Result != atlas::EnvelopeDecodeResult::kOk)
 			{
 				UE_LOG(LogAtlasNet, Warning,

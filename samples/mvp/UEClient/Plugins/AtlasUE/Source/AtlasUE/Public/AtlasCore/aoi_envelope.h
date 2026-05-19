@@ -7,6 +7,7 @@
 namespace atlas {
 
 class ClientEntityManager;
+class SpaceDataSink;
 
 // Mirrors src/server/cellapp/cell_aoi_envelope.h. SpaceData kinds are
 // recognised but skipped — UE MVP doesn't consume them yet. The u32
@@ -28,9 +29,12 @@ enum class EnvelopeDecodeResult {
   kSpaceDataSkipped,
 };
 
-// On error the manager is left untouched.
+// On error the manager / sink are left untouched. `space_data_sink` is
+// optional — pass nullptr to drop SpaceData envelopes (decoder returns
+// kSpaceDataSkipped instead of dispatching).
 EnvelopeDecodeResult DecodeAoIEnvelope(const uint8_t* body, std::size_t len,
-                                       ClientEntityManager& mgr);
+                                       ClientEntityManager& mgr,
+                                       SpaceDataSink* space_data_sink = nullptr);
 
 }  // namespace atlas
 

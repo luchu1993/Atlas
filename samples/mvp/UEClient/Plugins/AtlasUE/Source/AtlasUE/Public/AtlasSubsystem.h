@@ -12,6 +12,7 @@
 #include "AtlasCore/client_entity_manager.h"
 #include "AtlasCore/rpc_sender.h"
 #include "AtlasNetClient.h"
+#include "AtlasSpaceData.h"
 
 #include "AtlasSubsystem.generated.h"
 
@@ -74,6 +75,12 @@ public:
 	UFUNCTION(BlueprintCallable, Category="Atlas|Net")
 	bool BeginAuthenticate();
 
+	// Clean shutdown: hands ATLAS_DISCONNECT_LOGOUT to the SDK (so the server
+	// releases the Account proxy) and clears auto-reconnect — the on-disconnect
+	// tick would otherwise immediately reconnect from cached credentials.
+	UFUNCTION(BlueprintCallable, Category="Atlas|Net")
+	bool Logout();
+
 	// False to suppress auto-retry (user-driven logout / future LoginScreen).
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Atlas|Reconnect")
 	bool bAutoReconnectEnabled = true;
@@ -119,6 +126,9 @@ public:
 
 	[[nodiscard]] atlas::ClientEntityManager& GetEntityManager() { return EntityManager; }
 
+	UFUNCTION(BlueprintPure, Category="Atlas|SpaceData")
+	UAtlasSpaceData* GetSpaceData() const { return SpaceData; }
+
 	UPROPERTY(BlueprintAssignable, Category="Atlas|Net")
 	FAtlasOnNetStateChanged OnNetStateChanged;
 
@@ -140,6 +150,9 @@ private:
 
 	TUniquePtr<FAtlasNetClient> NetClient;
 	atlas::ClientEntityManager EntityManager;
+
+	UPROPERTY(Transient)
+	UAtlasSpaceData* SpaceData = nullptr;
 
 	struct FTypeReg
 	{

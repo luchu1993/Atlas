@@ -37,6 +37,9 @@ void UAtlasSubsystem::Initialize(FSubsystemCollectionBase& Collection)
 	}
 	EntityManager.SetRpcSender(this);
 
+	SpaceData = NewObject<UAtlasSpaceData>(this);
+	NetClient->SetSpaceDataSink(SpaceData);
+
 	TickHandle = FTSTicker::GetCoreTicker().AddTicker(
 		FTickerDelegate::CreateUObject(this, &UAtlasSubsystem::OnTick));
 }
@@ -82,6 +85,14 @@ bool UAtlasSubsystem::BeginLogin(const FString& Host, int32 Port, const FString&
 bool UAtlasSubsystem::BeginAuthenticate()
 {
 	return NetClient && NetClient->BeginAuthenticate();
+}
+
+bool UAtlasSubsystem::Logout()
+{
+	if (!NetClient || NetClient->GetContext() == nullptr) return false;
+	bAutoReconnectEnabled = false;
+	const int32 Result = AtlasNetDisconnect(NetClient->GetContext(), ATLAS_DISCONNECT_LOGOUT);
+	return Result == ATLAS_NET_OK;
 }
 
 bool UAtlasSubsystem::SetEntityDefDigest(TArrayView<const uint8> Digest)
@@ -336,6 +347,7 @@ void UAtlasSubsystem::AttemptReconnect()
 	// Stale entities still route through the dead net ctx; their actors
 	// cascade-destroy via ~FAtlasUEActorView.
 	EntityManager.Clear();
+	if (SpaceData != nullptr) SpaceData->Clear();
 	bRunningStarted = false;
 
 	if (NetClient)
@@ -362,6 +374,7 @@ void UAtlasSubsystem::AttemptReconnect()
 		}
 	}
 	EntityManager.SetRpcSender(this);
+	if (SpaceData != nullptr) NetClient->SetSpaceDataSink(SpaceData);
 
 	if (!NetClient->BeginLogin(CachedHost, CachedPort, CachedUsername, CachedPasswordHash))
 	{

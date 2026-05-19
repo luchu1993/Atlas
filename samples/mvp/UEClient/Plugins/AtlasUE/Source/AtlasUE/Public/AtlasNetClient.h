@@ -10,7 +10,7 @@
 
 #include "AtlasNetClient.generated.h"
 
-namespace atlas { class ClientEntityManager; }
+namespace atlas { class ClientEntityManager; class SpaceDataSink; }
 
 UENUM(BlueprintType)
 enum class EAtlasNetClientState : uint8
@@ -67,6 +67,10 @@ public:
 	void PollOnGameThread();
 	void StartRunningThread();
 
+	// Optional SpaceData hook — when set, inbound AoI envelopes of kind 5/6/7
+	// dispatch into the sink (game thread). nullptr drops SpaceData silently.
+	void SetSpaceDataSink(atlas::SpaceDataSink* Sink) { SpaceDataSinkPtr = Sink; }
+
 	void TickGameThread(atlas::ClientEntityManager& Manager);
 
 	[[nodiscard]] EAtlasNetClientState GetState() const { return State.load(std::memory_order_acquire); }
@@ -114,4 +118,7 @@ private:
 
 	FAtlasNetRunnable* Runnable = nullptr;
 	FRunnableThread* Thread = nullptr;
+
+	// Borrowed; owner (UAtlasSubsystem) outlives the client.
+	atlas::SpaceDataSink* SpaceDataSinkPtr = nullptr;
 };

@@ -29,6 +29,12 @@ void UAtlasHudWidget::NativeTick(const FGeometry& Geometry, float DeltaTime)
 			Sub->GetNetStats(Stats.Net);
 			Stats.NetState = Sub->GetNetState();
 			Stats.PlayerEntityId = Sub->GetPlayerEntityId();
+			if (UAtlasSpaceData* SD = Sub->GetSpaceData())
+			{
+				// space_data.def: npcCount id=1 type=int32 (space id 1).
+				int32 Value = -1;
+				if (SD->GetInt32(1, 1, Value)) Stats.NpcCount = Value;
+			}
 		}
 	}
 	OnHudRefresh(Stats);

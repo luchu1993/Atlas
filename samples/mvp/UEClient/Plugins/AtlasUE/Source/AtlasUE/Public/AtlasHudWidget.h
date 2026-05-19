@@ -25,6 +25,11 @@ struct FAtlasHudFrameStats
 	// Player avatar entity id; 0 before SelectAvatar completes.
 	UPROPERTY(BlueprintReadOnly, Category="Atlas|Hud")
 	int32 PlayerEntityId = 0;
+
+	// SpaceData NpcCount (space_data.def key id 1) for space 1; -1 when the
+	// server hasn't broadcast it yet.
+	UPROPERTY(BlueprintReadOnly, Category="Atlas|Hud")
+	int32 NpcCount = -1;
 };
 
 // C++ base for the in-game HUD UMG widget. Subclass in BP, override

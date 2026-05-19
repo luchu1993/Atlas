@@ -3,6 +3,7 @@
 #include "AtlasCore/client_entity.h"
 #include "AtlasCore/client_entity_manager.h"
 #include "AtlasCore/entity_view.h"
+#include "AtlasCore/space_data_sink.h"
 #include "AtlasCore/span_reader.h"
 
 namespace atlas {
@@ -53,10 +54,47 @@ EnvelopeDecodeResult DecodePropertyUpdate(uint32_t id, SpanReader& r,
                                : EnvelopeDecodeResult::kTruncated;
 }
 
+EnvelopeDecodeResult DecodeSpaceDataInit(uint32_t space_id, SpanReader& r,
+                                         SpaceDataSink& sink) {
+  uint32_t count;
+  if (!r.Read(count)) return EnvelopeDecodeResult::kTruncated;
+  for (uint32_t i = 0; i < count; ++i) {
+    uint16_t key;
+    uint32_t vlen;
+    if (!r.Read(key) || !r.Read(vlen)) return EnvelopeDecodeResult::kTruncated;
+    if (!r.Has(vlen)) return EnvelopeDecodeResult::kTruncated;
+    const uint8_t* bytes = vlen > 0 ? r.Data() + r.Pos() : nullptr;
+    r.Skip(vlen);
+    sink.OnSpaceDataInit(space_id, key, bytes, vlen);
+  }
+  return EnvelopeDecodeResult::kOk;
+}
+
+EnvelopeDecodeResult DecodeSpaceDataUpdate(uint32_t space_id, SpanReader& r,
+                                           SpaceDataSink& sink) {
+  uint16_t key;
+  uint32_t vlen;
+  if (!r.Read(key) || !r.Read(vlen)) return EnvelopeDecodeResult::kTruncated;
+  if (!r.Has(vlen)) return EnvelopeDecodeResult::kTruncated;
+  const uint8_t* bytes = vlen > 0 ? r.Data() + r.Pos() : nullptr;
+  r.Skip(vlen);
+  sink.OnSpaceDataUpdate(space_id, key, bytes, vlen);
+  return EnvelopeDecodeResult::kOk;
+}
+
+EnvelopeDecodeResult DecodeSpaceDataDelete(uint32_t space_id, SpanReader& r,
+                                           SpaceDataSink& sink) {
+  uint16_t key;
+  if (!r.Read(key)) return EnvelopeDecodeResult::kTruncated;
+  sink.OnSpaceDataDelete(space_id, key);
+  return EnvelopeDecodeResult::kOk;
+}
+
 }  // namespace
 
 EnvelopeDecodeResult DecodeAoIEnvelope(const uint8_t* body, std::size_t len,
-                                       ClientEntityManager& mgr) {
+                                       ClientEntityManager& mgr,
+                                       SpaceDataSink* space_data_sink) {
   if (body == nullptr) return EnvelopeDecodeResult::kTruncated;
   SpanReader r(body, len);
   uint8_t kind;
@@ -74,9 +112,14 @@ EnvelopeDecodeResult DecodeAoIEnvelope(const uint8_t* body, std::size_t len,
     case EnvelopeKind::kEntityPropertyUpdate:
       return DecodePropertyUpdate(entity_id, r, mgr);
     case EnvelopeKind::kSpaceDataInit:
+      if (space_data_sink == nullptr) return EnvelopeDecodeResult::kSpaceDataSkipped;
+      return DecodeSpaceDataInit(entity_id, r, *space_data_sink);
     case EnvelopeKind::kSpaceDataUpdate:
+      if (space_data_sink == nullptr) return EnvelopeDecodeResult::kSpaceDataSkipped;
+      return DecodeSpaceDataUpdate(entity_id, r, *space_data_sink);
     case EnvelopeKind::kSpaceDataDelete:
-      return EnvelopeDecodeResult::kSpaceDataSkipped;
+      if (space_data_sink == nullptr) return EnvelopeDecodeResult::kSpaceDataSkipped;
+      return DecodeSpaceDataDelete(entity_id, r, *space_data_sink);
     default:
       return EnvelopeDecodeResult::kUnknownKind;
   }
