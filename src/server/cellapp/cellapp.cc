@@ -1422,6 +1422,11 @@ void CellApp::OnOffloadEntityAck(const Address& /*src*/, Channel* /*ch*/,
 
   if (msg.success) {
     pending_offloads_.erase(pending_it);
+    // Drop local C# instance; OnTickAll would otherwise keep invoking
+    // it against a Ghost. Re-arrival rebuilds via restore_entity_fn.
+    if (native_provider_ && native_provider_->entity_destroyed_fn()) {
+      native_provider_->entity_destroyed_fn()(msg.entity_id);
+    }
     ATLAS_LOG_INFO("CellApp: Offload of entity_id={} to {}:{} succeeded (rtt={} ms)", msg.entity_id,
                    target.Ip(), target.Port(),
                    std::chrono::duration_cast<std::chrono::milliseconds>(age).count());
