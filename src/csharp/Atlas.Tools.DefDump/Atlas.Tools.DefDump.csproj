@@ -12,6 +12,9 @@
          encoding the runtime emitters use, so the container format
          stays byte-compatible with the C++ reader). -->
     <ProjectReference Include="..\Atlas.Shared\Atlas.Shared.csproj" />
+    <!-- MetadataLoadContext lets the digest-only mode inspect server-side
+         assemblies without triggering their ModuleInitializer. -->
+    <PackageReference Include="System.Reflection.MetadataLoadContext" Version="9.0.0" />
   </ItemGroup>
 
 </Project>

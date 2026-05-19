@@ -47,6 +47,11 @@ def run(cmd: list[str]) -> None:
     subprocess.run(cmd, check=True)
 
 
+def run_capture(cmd: list[str]) -> str:
+    info(" ".join(cmd))
+    return subprocess.run(cmd, check=True, capture_output=True, text=True).stdout
+
+
 def default_platform() -> str:
     if HOST == "Windows":
         return "Win64"
@@ -135,13 +140,19 @@ def stage_one(native: Path, subdir: str, plat: str, *, stage_mimalloc: bool, con
             info(f"warning: {mimalloc} missing; {native.stem} will fail to load")
 
 
-def stage_native(artefacts: dict[str, Path], config: str, plat: str) -> None:
+def stage_native(artefacts: dict[str, Path], config: str, plat: str,
+                 ue_build_config: str) -> None:
     for target, subdir in NATIVE_TARGETS:
         if target not in artefacts:
             fail(f"missing native artefact for {target}")
         stage_one(artefacts[target], subdir, plat,
                   stage_mimalloc=(target == "atlas_net_client"),
                   config=config)
+    if config == "Debug" and ue_build_config not in {"Debug", "DebugGame"}:
+        fail(f"--config Debug stages mimalloc-debug.dll + Debug CRT-linked "
+             f"atlas_net_client.dll, which UE's {ue_build_config} editor cannot "
+             f"load (vcruntime140d.dll resolution fails). Use --config Release "
+             f"or pass --build-config DebugGame.")
 
 
 # DefDump dumps `DefEntityTypeRegistry.BuildAll` from one C# assembly. The
@@ -208,6 +219,7 @@ def build_defs(config: str) -> tuple[Path, Path]:
 
     prod = dump(DEFS_SOURCE_PROJECT, DEFS_SOURCE_ASSEMBLY, DEFS_OUTPUT_NAME)
     test = dump(TEST_DEFS_SOURCE_PROJECT, TEST_DEFS_SOURCE_ASSEMBLY, TEST_DEFS_OUTPUT_NAME)
+    verify_atdf_matches_cluster(prod, config, exe)
     return prod, test
 
 
@@ -228,6 +240,49 @@ def stage_defs(defs_bin: Path, output_name: str) -> None:
     dest = target_dir / output_name
     shutil.copy2(defs_bin, dest)
     info(f"staged {output_name} -> {dest.relative_to(REPO_ROOT)}")
+
+
+# ATDF v3 layout: magic(4) + version(2) + flags(2) + digest(32) + ...
+_ATDF_DIGEST_OFFSET = 8
+_ATDF_DIGEST_LEN = 32
+
+
+def read_atdf_digest(defs_bin: Path) -> str:
+    with defs_bin.open("rb") as f:
+        f.seek(_ATDF_DIGEST_OFFSET)
+        raw = f.read(_ATDF_DIGEST_LEN)
+    if len(raw) != _ATDF_DIGEST_LEN:
+        fail(f"{defs_bin} too short for ATDF v3 digest section")
+    return raw.hex()
+
+
+def verify_atdf_matches_cluster(defs_bin: Path, config: str, exe: Path) -> None:
+    """Cross-check the staged ATDF digest against bin/<config>/Atlas.Mvp.Cell.dll
+    — the assembly the cluster actually loads. Stale build cache between the
+    DefDump source assembly and the server-side deploy DLL is the most common
+    source of def_mismatch at login."""
+    cluster_dll = REPO_ROOT / "bin" / config.lower() / "Atlas.Mvp.Cell.dll"
+    if not cluster_dll.exists():
+        info(f"cluster dll {cluster_dll} missing — skipping digest verify "
+             f"(run build.py {config.lower()} first to enable this check)")
+        return
+    out = run_capture([str(exe), "--digest-only", str(cluster_dll)])
+    cluster_digest = ""
+    for line in out.splitlines():
+        if line.startswith("DefDump: digest="):
+            cluster_digest = line.split("=", 1)[1].strip()
+            break
+    if not cluster_digest:
+        fail(f"DefDump --digest-only produced no digest for {cluster_dll}")
+    staged_digest = read_atdf_digest(defs_bin)
+    if cluster_digest != staged_digest:
+        fail(f"ATDF digest mismatch:\n"
+             f"  staged   {staged_digest}\n"
+             f"  cluster  {cluster_digest}\n"
+             f"  source   {cluster_dll}\n"
+             f"Rebuild the cluster (python tools/build.py {config.lower()}) AND "
+             f"re-run build_mvp_ue.py without --skip-defs so both sides regenerate.")
+    info(f"ATDF digest verified against cluster ({cluster_digest[:16]}…)")
 
 
 def resolve_ue_root(arg: str | None) -> Path:
@@ -309,7 +364,7 @@ def main() -> int:
         info("CppEmitter skipped per --skip-codegen")
 
     if not args.skip_stage:
-        stage_native(artefacts, args.config, args.platform)
+        stage_native(artefacts, args.config, args.platform, args.build_config)
         if prod_defs is not None: stage_defs(prod_defs, DEFS_OUTPUT_NAME)
         if test_defs is not None: stage_defs(test_defs, TEST_DEFS_OUTPUT_NAME)
     else:

@@ -66,8 +66,17 @@ void LoadEntityDefRegistry(const FString& BaseDir)
 		g_edr_ctx = nullptr;
 		return;
 	}
-	UE_LOG(LogAtlasUE, Log, TEXT("Loaded ATDF from %s; digest_size=%d"),
-		*AtdfPath, AtlasEdrGetDigestSize(g_edr_ctx));
+	// Surface first 8 bytes of the digest so a def_mismatch at login can be
+	// triaged by comparing this line against build_mvp_ue.py's stage log.
+	const uint8* Digest = AtlasEdrGetDigest(g_edr_ctx);
+	const int32 DigestSize = AtlasEdrGetDigestSize(g_edr_ctx);
+	FString Prefix;
+	for (int32 i = 0; i < FMath::Min(DigestSize, 8); ++i)
+	{
+		Prefix.Append(FString::Printf(TEXT("%02x"), Digest[i]));
+	}
+	UE_LOG(LogAtlasUE, Log, TEXT("Loaded ATDF from %s; digest_size=%d prefix=%s…"),
+		*AtdfPath, DigestSize, *Prefix);
 }
 }  // namespace
 

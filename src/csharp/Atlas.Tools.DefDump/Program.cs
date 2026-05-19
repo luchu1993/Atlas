@@ -18,6 +18,7 @@ public static class Program
     {
         string? assemblyPath = null;
         string? outPath = null;
+        string? digestOnly = null;
         for (int i = 0; i < args.Length; ++i)
         {
             switch (args[i])
@@ -26,11 +27,14 @@ public static class Program
                     assemblyPath = args[++i]; break;
                 case "--out" when i + 1 < args.Length:
                     outPath = args[++i]; break;
+                case "--digest-only" when i + 1 < args.Length:
+                    digestOnly = args[++i]; break;
                 case "-h":
                 case "--help":
                     PrintUsage(); return 0;
             }
         }
+        if (digestOnly is not null) return PrintDigestOnly(digestOnly);
         if (assemblyPath is null || outPath is null)
         {
             PrintUsage();
@@ -109,6 +113,11 @@ public static class Program
 
         Console.WriteLine(
             $"DefDump: wrote {outPath} (structs={structBlobs.Count}, components={componentBlobs.Count}, types={typeBlobs.Count})");
+        // Surface the digest so stage scripts can cross-check it against the
+        // server-side EntityDefDigest before declaring the build healthy.
+        var hex = new System.Text.StringBuilder(digest.Length * 2);
+        foreach (var b in digest) hex.Append(b.ToString("x2"));
+        Console.WriteLine($"DefDump: digest={hex}");
         return 0;
     }
 
@@ -149,5 +158,38 @@ public static class Program
     {
         Console.WriteLine(
             "Atlas.Tools.DefDump --assembly <path-to-server-assembly.dll> --out <path-to-entity_defs.bin>");
+        Console.WriteLine(
+            "Atlas.Tools.DefDump --digest-only <path-to-assembly.dll>");
+    }
+
+    // MetadataLoadContext path: reads EntityDefDigest.Sha256Hex without ever
+    // running the assembly's ModuleInitializer, so server-side assemblies that
+    // would otherwise PInvoke into uninitialised native providers stay quiet.
+    private static int PrintDigestOnly(string assemblyPath)
+    {
+        var dir = Path.GetDirectoryName(Path.GetFullPath(assemblyPath));
+        if (dir is null)
+        {
+            Console.Error.WriteLine($"DefDump: cannot resolve directory of {assemblyPath}");
+            return 2;
+        }
+        var runtimeDir = Path.GetDirectoryName(typeof(object).Assembly.Location);
+        var resolverPaths = new System.Collections.Generic.List<string>();
+        resolverPaths.AddRange(Directory.GetFiles(dir, "*.dll"));
+        if (runtimeDir is not null)
+            resolverPaths.AddRange(Directory.GetFiles(runtimeDir, "*.dll"));
+        using var mlc = new System.Reflection.MetadataLoadContext(
+            new System.Reflection.PathAssemblyResolver(resolverPaths));
+        var asm = mlc.LoadFromAssemblyPath(Path.GetFullPath(assemblyPath));
+        var t = asm.GetType("Atlas.Rpc.EntityDefDigest");
+        var fld = t?.GetField("Sha256Hex", BindingFlags.Public | BindingFlags.Static);
+        var hex = fld?.GetRawConstantValue() as string;
+        if (string.IsNullOrEmpty(hex))
+        {
+            Console.Error.WriteLine($"DefDump: EntityDefDigest.Sha256Hex missing in {assemblyPath}");
+            return 3;
+        }
+        Console.WriteLine($"DefDump: digest={hex.ToLowerInvariant()}");
+        return 0;
     }
 }
