@@ -2,6 +2,10 @@
 
 #include <cstring>
 
+#include "Logging/LogMacros.h"
+
+DEFINE_LOG_CATEGORY_STATIC(LogAtlasSpaceData, Log, All);
+
 void UAtlasSpaceData::OnSpaceDataInit(uint32_t SpaceId, uint16_t KeyId,
                                       const uint8_t* Data, std::size_t Len)
 {
@@ -30,6 +34,15 @@ void UAtlasSpaceData::Store(uint32_t SpaceId, uint16_t KeyId,
 	TArray<uint8>& Buf = Values.FindOrAdd(MakeKey(SpaceId, KeyId));
 	Buf.SetNumUninitialized(static_cast<int32>(Len));
 	if (Len > 0 && Data != nullptr) FMemory::Memcpy(Buf.GetData(), Data, Len);
+
+	// Verbose so callers can trace SpaceData broadcasts without BP wiring;
+	// MVP only uses int32 keys so decode that case inline for readability.
+	int32 AsInt32 = 0;
+	if (Len == sizeof(int32)) FMemory::Memcpy(&AsInt32, Buf.GetData(), sizeof(int32));
+	UE_LOG(LogAtlasSpaceData, Log,
+		TEXT("SpaceData store space=%u key=%u len=%d%s"),
+		SpaceId, KeyId, static_cast<int32>(Len),
+		Len == sizeof(int32) ? *FString::Printf(TEXT(" int32=%d"), AsInt32) : TEXT(""));
 }
 
 const TArray<uint8>* UAtlasSpaceData::Find(int32 SpaceId, int32 KeyId) const
