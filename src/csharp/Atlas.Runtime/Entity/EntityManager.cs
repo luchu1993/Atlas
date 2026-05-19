@@ -50,6 +50,10 @@ public sealed class EntityManager
     {
         if (_iterating)
         {
+            // Flip IsDestroyed now so a later OnTickAll visit short-circuits
+            // before any native API call (C++ entity_population_ already erased).
+            if (_entities.TryGetValue(entityId, out var entity))
+                entity.IsDestroyed = true;
             _pendingDestroys.Add(entityId);
             return;
         }
