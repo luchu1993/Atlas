@@ -14,6 +14,7 @@ public class AtlasUE : ModuleRules
 			"CoreUObject",
 			"Engine",
 			"Projects",
+			"UMG",
 		});
 
 		// atlas_net_client headers live in the Atlas repo. PluginDirectory is

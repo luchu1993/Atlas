@@ -1,11 +1,13 @@
 #include "UEClientGameMode.h"
 
+#include "Blueprint/UserWidget.h"
 #include "Engine/GameInstance.h"
 #include "Logging/LogMacros.h"
 #include "Misc/Guid.h"
 
 #include "AtlasAvatarView.h"
 #include "AtlasCore/moving_client_entity.h"
+#include "AtlasLoginWidget.h"
 #include "AtlasSubsystem.h"
 #include "AtlasUE.h"
 #include "AvatarCapsule.h"
@@ -102,9 +104,29 @@ void AUEClientGameMode::BeginPlay()
 			*FGuid::NewGuid().ToString(EGuidFormats::Short).Left(8));
 	}
 
+	// LoginWidgetClass takes over the submit flow when set; the BP widget calls
+	// BeginLoginFromFields from its own Login button. Falls back to the cached
+	// auto-login below so test/headless setups don't need a widget asset.
+	if (LoginWidgetClass != nullptr)
+	{
+		APlayerController* PC = GetWorld() ? GetWorld()->GetFirstPlayerController() : nullptr;
+		LoginWidget = PC != nullptr
+			? CreateWidget<UAtlasLoginWidget>(PC, LoginWidgetClass)
+			: CreateWidget<UAtlasLoginWidget>(GetGameInstance(), LoginWidgetClass);
+		if (LoginWidget != nullptr)
+		{
+			LoginWidget->AddToViewport();
+			if (PC) PC->SetInputMode(FInputModeUIOnly().SetWidgetToFocus(LoginWidget->TakeWidget()));
+			UE_LOG(LogUEClient, Log, TEXT("Atlas login widget shown — waiting for user submit"));
+			return;
+		}
+		UE_LOG(LogUEClient, Warning,
+			TEXT("LoginWidgetClass set but CreateWidget failed; falling back to auto-login"));
+	}
+
 	UE_LOG(LogUEClient, Log, TEXT("Atlas login host=%s port=%d user=%s"),
 		*LoginHost, LoginPort, *Username);
-	Sub->BeginLogin(LoginHost, static_cast<uint16>(LoginPort), Username, PasswordHash);
+	Sub->BeginLogin(LoginHost, LoginPort, Username, PasswordHash);
 }
 
 void AUEClientGameMode::Tick(float DeltaSeconds)
@@ -127,6 +149,15 @@ void AUEClientGameMode::Tick(float DeltaSeconds)
 		UE_LOG(LogUEClient, Log, TEXT("Atlas login succeeded, authenticating"));
 		Sub->BeginAuthenticate();
 		bAuthenticateRequested = true;
+		if (LoginWidget != nullptr)
+		{
+			LoginWidget->RemoveFromParent();
+			LoginWidget = nullptr;
+			if (APlayerController* PC = GetWorld()->GetFirstPlayerController())
+			{
+				PC->SetInputMode(FInputModeGameOnly());
+			}
+		}
 	}
 
 	if (!bSelectAvatarSent && NetState == EAtlasNetClientState::Running

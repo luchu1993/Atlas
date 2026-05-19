@@ -15,6 +15,7 @@ public class UEClient : ModuleRules
 			"Engine",
 			"InputCore",
 			"Projects",
+			"UMG",
 			"AtlasUE",
 		});
 	}

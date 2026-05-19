@@ -60,13 +60,14 @@ void UAtlasSubsystem::Deinitialize()
 	Super::Deinitialize();
 }
 
-bool UAtlasSubsystem::BeginLogin(const FString& Host, uint16 Port, const FString& Username,
+bool UAtlasSubsystem::BeginLogin(const FString& Host, int32 Port, const FString& Username,
                                  const FString& PasswordHash)
 {
-	if (!NetClient) return false;
+	if (!NetClient || Port <= 0 || Port > 0xFFFF) return false;
+	const uint16 PortU16 = static_cast<uint16>(Port);
 	// Cached so auto-reconnect can replay without re-prompting game code.
 	CachedHost = Host;
-	CachedPort = Port;
+	CachedPort = PortU16;
 	CachedUsername = Username;
 	CachedPasswordHash = PasswordHash;
 	bHasCachedCredentials = true;
@@ -75,7 +76,7 @@ bool UAtlasSubsystem::BeginLogin(const FString& Host, uint16 Port, const FString
 	ReconnectAttempts = 0;
 	bReconnectExhausted = false;
 	bDefMismatchLogged = false;
-	return NetClient->BeginLogin(Host, Port, Username, PasswordHash);
+	return NetClient->BeginLogin(Host, PortU16, Username, PasswordHash);
 }
 
 bool UAtlasSubsystem::BeginAuthenticate()
@@ -166,23 +167,47 @@ EAtlasNetClientState UAtlasSubsystem::GetNetState() const
 	return NetClient ? NetClient->GetState() : EAtlasNetClientState::Idle;
 }
 
-uint32 UAtlasSubsystem::GetPlayerEntityId() const
+int32 UAtlasSubsystem::GetPlayerEntityId() const
 {
-	return NetClient ? NetClient->GetPlayerEntityId() : 0;
+	return NetClient ? static_cast<int32>(NetClient->GetPlayerEntityId()) : 0;
 }
 
-uint16 UAtlasSubsystem::GetPlayerTypeId() const
+int32 UAtlasSubsystem::GetPlayerTypeId() const
 {
-	return NetClient ? NetClient->GetPlayerTypeId() : 0;
+	return NetClient ? static_cast<int32>(NetClient->GetPlayerTypeId()) : 0;
 }
 
-uint8 UAtlasSubsystem::GetLastLoginStatus() const
+int32 UAtlasSubsystem::GetLastLoginStatus() const
 {
-	return NetClient ? NetClient->GetLastLoginStatus() : 0xFF;
+	return NetClient ? static_cast<int32>(NetClient->GetLastLoginStatus()) : 0xFF;
+}
+
+FString UAtlasSubsystem::GetLastNetErrorMessage() const
+{
+	if (!NetClient || NetClient->GetContext() == nullptr) return FString();
+	const char* Msg = AtlasNetLastError(NetClient->GetContext());
+	return Msg ? FString(UTF8_TO_TCHAR(Msg)) : FString();
 }
 
 bool UAtlasSubsystem::OnTick(float DeltaTime)
 {
+	// Net state observed each tick so BP listeners only see real transitions.
+	const EAtlasNetClientState ObservedState =
+		NetClient ? NetClient->GetState() : EAtlasNetClientState::Idle;
+	if (ObservedState != LastBroadcastNetState)
+	{
+		const EAtlasNetClientState PrevState = LastBroadcastNetState;
+		LastBroadcastNetState = ObservedState;
+		OnNetStateChanged.Broadcast(ObservedState);
+		if (PrevState == EAtlasNetClientState::LoggingIn &&
+			(ObservedState == EAtlasNetClientState::LoginSucceeded ||
+			 ObservedState == EAtlasNetClientState::LoginFailed))
+		{
+			OnLoginFinished.Broadcast(NetClient
+				? static_cast<int32>(NetClient->GetLastLoginStatus()) : 0xFF);
+		}
+	}
+
 	// Null after a failed AttemptReconnect Create(); keep the backoff loop
 	// alive so the subsystem isn't stuck on a single bad attempt.
 	if (!NetClient)
@@ -194,6 +219,7 @@ bool UAtlasSubsystem::OnTick(float DeltaTime)
 				     "auto-retry stopped"),
 				ReconnectAttempts);
 			bReconnectExhausted = true;
+			OnReconnectExhausted.Broadcast();
 		}
 		if (bReconnectExhausted) return true;
 		if (bAutoReconnectEnabled && bHasCachedCredentials)
@@ -201,7 +227,9 @@ bool UAtlasSubsystem::OnTick(float DeltaTime)
 			const double Now = FPlatformTime::Seconds();
 			if (NextReconnectAtSec == 0.0)
 			{
-				NextReconnectAtSec = Now + AtlasReconnect::ComputeBackoffSec(ReconnectAttempts);
+				const double Wait = AtlasReconnect::ComputeBackoffSec(ReconnectAttempts);
+				NextReconnectAtSec = Now + Wait;
+				OnReconnectScheduled.Broadcast(ReconnectAttempts + 1, static_cast<float>(Wait));
 			}
 			else if (Now >= NextReconnectAtSec)
 			{
@@ -257,6 +285,7 @@ bool UAtlasSubsystem::OnTick(float DeltaTime)
 					     "game code can call BeginLogin to retry manually"),
 					ReconnectAttempts);
 				bReconnectExhausted = true;
+				OnReconnectExhausted.Broadcast();
 				break;
 			}
 			if (bAutoReconnectEnabled && bHasCachedCredentials)
@@ -264,10 +293,12 @@ bool UAtlasSubsystem::OnTick(float DeltaTime)
 				const double Now = FPlatformTime::Seconds();
 				if (NextReconnectAtSec == 0.0)
 				{
-					NextReconnectAtSec = Now + AtlasReconnect::ComputeBackoffSec(ReconnectAttempts);
+					const double Wait = AtlasReconnect::ComputeBackoffSec(ReconnectAttempts);
+					NextReconnectAtSec = Now + Wait;
 					UE_LOG(LogAtlasSubsystem, Log,
 						TEXT("AtlasNet disconnected; next reconnect attempt in %.1f s (attempt #%d)"),
-						NextReconnectAtSec - Now, ReconnectAttempts + 1);
+						Wait, ReconnectAttempts + 1);
+					OnReconnectScheduled.Broadcast(ReconnectAttempts + 1, static_cast<float>(Wait));
 				}
 				else if (Now >= NextReconnectAtSec)
 				{

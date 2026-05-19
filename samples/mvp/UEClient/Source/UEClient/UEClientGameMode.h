@@ -8,6 +8,8 @@
 
 #include "UEClientGameMode.generated.h"
 
+class UAtlasLoginWidget;
+
 UCLASS()
 class AUEClientGameMode : public AGameModeBase
 {
@@ -32,6 +34,11 @@ public:
 	UPROPERTY(EditAnywhere, Category = "Atlas|Avatar")
 	TSubclassOf<AActor> AvatarActorClass;
 
+	// When set, BeginPlay shows this widget instead of auto-calling BeginLogin.
+	// The widget's BeginLoginFromFields() drives the actual login submit.
+	UPROPERTY(EditAnywhere, Category = "Atlas|Login")
+	TSubclassOf<UAtlasLoginWidget> LoginWidgetClass;
+
 protected:
 	virtual void BeginPlay() override;
 	virtual void Tick(float DeltaSeconds) override;
@@ -42,4 +49,7 @@ private:
 	// Any → LoggingIn transition resets the per-session flags above so the
 	// post-reconnect Authenticate + SelectAvatar fires again.
 	EAtlasNetClientState LastNetState = EAtlasNetClientState::Idle;
+
+	UPROPERTY(Transient)
+	UAtlasLoginWidget* LoginWidget = nullptr;
 };

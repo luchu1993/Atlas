@@ -8,8 +8,11 @@
 
 #include "net_client/client_api.h"
 
+#include "AtlasNetClient.generated.h"
+
 namespace atlas { class ClientEntityManager; }
 
+UENUM(BlueprintType)
 enum class EAtlasNetClientState : uint8
 {
 	Idle,

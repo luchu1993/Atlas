@@ -15,6 +15,16 @@
 
 #include "AtlasSubsystem.generated.h"
 
+// BP-facing events; net thread → game thread happens inside FAtlasNetClient,
+// so handlers always fire on the GameThread tick.
+DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FAtlasOnNetStateChanged,
+	EAtlasNetClientState, NewState);
+DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FAtlasOnLoginFinished,
+	int32, Status);
+DECLARE_DYNAMIC_MULTICAST_DELEGATE_TwoParams(FAtlasOnReconnectScheduled,
+	int32, AttemptNumber, float, NextRetrySec);
+DECLARE_DYNAMIC_MULTICAST_DELEGATE(FAtlasOnReconnectExhausted);
+
 UCLASS()
 class ATLASUE_API UAtlasSubsystem : public UGameInstanceSubsystem, public atlas::RpcSender
 {
@@ -31,8 +41,11 @@ public:
 	virtual void Initialize(FSubsystemCollectionBase& Collection) override;
 	virtual void Deinitialize() override;
 
-	bool BeginLogin(const FString& Host, uint16 Port, const FString& Username,
+	UFUNCTION(BlueprintCallable, Category="Atlas|Net")
+	bool BeginLogin(const FString& Host, int32 Port, const FString& Username,
 	                const FString& PasswordHash);
+
+	UFUNCTION(BlueprintCallable, Category="Atlas|Net")
 	bool BeginAuthenticate();
 
 	// False to suppress auto-retry (user-driven logout / future LoginScreen).
@@ -55,13 +68,37 @@ public:
 	                         EntityFactory Factory = nullptr,
 	                         EntityPostBind PostBind = nullptr);
 
-	[[nodiscard]] EAtlasNetClientState GetNetState() const;
-	[[nodiscard]] uint32 GetPlayerEntityId() const;
-	[[nodiscard]] uint16 GetPlayerTypeId() const;
-	// AtlasLoginStatus from the last LoginResult; 0xFF before any attempt.
-	[[nodiscard]] uint8 GetLastLoginStatus() const;
+	UFUNCTION(BlueprintPure, Category="Atlas|Net")
+	EAtlasNetClientState GetNetState() const;
+
+	UFUNCTION(BlueprintPure, Category="Atlas|Net")
+	int32 GetPlayerEntityId() const;
+
+	UFUNCTION(BlueprintPure, Category="Atlas|Net")
+	int32 GetPlayerTypeId() const;
+
+	// AtlasLoginStatus enum from the last LoginResult; 0xFF before any attempt.
+	UFUNCTION(BlueprintPure, Category="Atlas|Net")
+	int32 GetLastLoginStatus() const;
+
+	// AtlasNetLastError text — populated whenever a Login / Authenticate or
+	// internal step fails; empty when the session is healthy.
+	UFUNCTION(BlueprintPure, Category="Atlas|Net")
+	FString GetLastNetErrorMessage() const;
 
 	[[nodiscard]] atlas::ClientEntityManager& GetEntityManager() { return EntityManager; }
+
+	UPROPERTY(BlueprintAssignable, Category="Atlas|Net")
+	FAtlasOnNetStateChanged OnNetStateChanged;
+
+	UPROPERTY(BlueprintAssignable, Category="Atlas|Net")
+	FAtlasOnLoginFinished OnLoginFinished;
+
+	UPROPERTY(BlueprintAssignable, Category="Atlas|Reconnect")
+	FAtlasOnReconnectScheduled OnReconnectScheduled;
+
+	UPROPERTY(BlueprintAssignable, Category="Atlas|Reconnect")
+	FAtlasOnReconnectExhausted OnReconnectExhausted;
 
 private:
 	bool OnTick(float DeltaTime);
@@ -99,4 +136,6 @@ private:
 	// True once ReconnectAttempts has hit kMaxReconnectAttempts; cleared only
 	// by a fresh BeginLogin() so game code can drive a manual retry.
 	bool bReconnectExhausted = false;
+	// Tick-local cache so OnNetStateChanged only fires on actual transitions.
+	EAtlasNetClientState LastBroadcastNetState = EAtlasNetClientState::Idle;
 };
