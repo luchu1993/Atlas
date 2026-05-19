@@ -360,13 +360,21 @@ void MachinedApp::OnDisconnect(Channel& ch) {
 void MachinedApp::CheckHeartbeatTimeouts() {
   auto now = Clock::now();
 
+  // Side effects (UnregisterByChannel / RemoveAll) can drop the channel and
+  // re-enter OnDisconnect, which mutates heartbeat_entries_; collect expired
+  // channels first, then act outside the erase_if loop.
+  std::vector<Channel*> expired;
   std::erase_if(heartbeat_entries_, [&](const HeartbeatEntry& e) {
     if (now - e.last_heartbeat < kHeartbeatTimeout) return false;
+    expired.push_back(e.channel);
+    return true;
+  });
 
+  for (Channel* ch : expired) {
     ATLAS_LOG_WARNING("MachinedApp: heartbeat timeout for channel {}",
-                      e.channel != nullptr ? e.channel->RemoteAddress().ToString() : "?");
+                      ch != nullptr ? ch->RemoteAddress().ToString() : "?");
 
-    auto removed = process_registry_.UnregisterByChannel(e.channel);
+    auto removed = process_registry_.UnregisterByChannel(ch);
     if (removed) {
       DeathNotification notif;
       notif.process_type = removed->process_type;
@@ -376,9 +384,8 @@ void MachinedApp::CheckHeartbeatTimeouts() {
       listener_manager_.NotifyDeath(notif);
     }
 
-    listener_manager_.RemoveAll(e.channel);
-    return true;
-  });
+    listener_manager_.RemoveAll(ch);
+  }
 }
 
 }  // namespace atlas::machined
