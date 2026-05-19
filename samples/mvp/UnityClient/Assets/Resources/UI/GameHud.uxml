@@ -8,21 +8,48 @@
         <ui:VisualElement name="look-zone" class="look-zone" picking-mode="Position" />
 
         <ui:VisualElement name="stats-card" class="stats-card">
-            <ui:VisualElement class="stat-row">
-                <ui:Label text="FPS" class="stat-key" />
-                <ui:Label name="fps-value" text="--" class="stat-value" />
+            <ui:Label text="NET" class="group-header" />
+            <ui:VisualElement class="stat-line">
+                <ui:VisualElement class="stat-item">
+                    <ui:Label text="FPS" class="stat-key" />
+                    <ui:Label name="fps-value" text="--" class="stat-value" />
+                </ui:VisualElement>
+                <ui:VisualElement class="stat-item">
+                    <ui:Label text="PING" class="stat-key" />
+                    <ui:Label name="ping-value" text="-- MS" class="stat-value" />
+                </ui:VisualElement>
             </ui:VisualElement>
-            <ui:VisualElement class="stat-row">
-                <ui:Label text="PING" class="stat-key" />
-                <ui:Label name="ping-value" text="-- MS" class="stat-value" />
+
+            <ui:Label text="PLAYER" class="group-header" />
+            <ui:VisualElement class="stat-line">
+                <ui:VisualElement class="stat-item">
+                    <ui:Label text="LV" class="stat-key" />
+                    <ui:Label name="level-value" text="--" class="stat-value" />
+                </ui:VisualElement>
+                <ui:VisualElement class="stat-item">
+                    <ui:Label text="GOLD" class="stat-key" />
+                    <ui:Label name="gold-value" text="--" class="stat-value" />
+                </ui:VisualElement>
+                <ui:VisualElement class="stat-item">
+                    <ui:Label text="WPN" class="stat-key" />
+                    <ui:Label name="weapon-value" text="--" class="stat-value" />
+                </ui:VisualElement>
+                <ui:VisualElement class="stat-item">
+                    <ui:Label text="SESS" class="stat-key" />
+                    <ui:Label name="session-value" text="--" class="stat-value" />
+                </ui:VisualElement>
             </ui:VisualElement>
-            <ui:VisualElement class="stat-row">
-                <ui:Label text="NPC AOI" class="stat-key" />
-                <ui:Label name="npc-aoi-value" text="--" class="stat-value" />
-            </ui:VisualElement>
-            <ui:VisualElement class="stat-row">
-                <ui:Label text="NPC ALL" class="stat-key" />
-                <ui:Label name="npc-all-value" text="--" class="stat-value" />
+
+            <ui:Label text="WORLD" class="group-header" />
+            <ui:VisualElement class="stat-line">
+                <ui:VisualElement class="stat-item">
+                    <ui:Label text="NPCALL" class="stat-key" />
+                    <ui:Label name="npc-all-value" text="--" class="stat-value" />
+                </ui:VisualElement>
+                <ui:VisualElement class="stat-item">
+                    <ui:Label text="NPC IN AOI" class="stat-key" />
+                    <ui:Label name="npc-aoi-value" text="--" class="stat-value" />
+                </ui:VisualElement>
             </ui:VisualElement>
         </ui:VisualElement>
 
@@ -36,6 +63,11 @@
                 </ui:VisualElement>
                 <ui:Label name="hp-text" text="--/--" class="hp-text" />
             </ui:VisualElement>
+        </ui:VisualElement>
+
+        <ui:VisualElement name="chat-panel" class="chat-panel" picking-mode="Position">
+            <ui:ScrollView name="chat-scroll" class="chat-scroll" />
+            <ui:TextField name="chat-input" class="chat-input" />
         </ui:VisualElement>
 
         <ui:VisualElement name="joystick" class="joystick" picking-mode="Position">
@@ -56,9 +88,45 @@
 
         <ui:VisualElement name="debug-panel" class="debug-panel">
             <ui:Label text="DEBUG  F1" class="debug-title" />
+            <ui:VisualElement class="stat-row">
+                <ui:Label text="SEND" class="stat-key" />
+                <ui:Label name="bw-up-value" text="-- KB/S" class="stat-value" />
+            </ui:VisualElement>
+            <ui:VisualElement class="stat-row">
+                <ui:Label text="RECV" class="stat-key" />
+                <ui:Label name="bw-down-value" text="-- KB/S" class="stat-value" />
+            </ui:VisualElement>
+            <ui:VisualElement class="stat-row">
+                <ui:Label text="QUEUE" class="stat-key" />
+                <ui:Label name="queue-value" text="--" class="stat-value" />
+            </ui:VisualElement>
+            <ui:VisualElement class="stat-row">
+                <ui:Label text="RPC OUT" class="stat-key" />
+                <ui:Label name="rpc-out-value" text="-- /S" class="stat-value" />
+            </ui:VisualElement>
+            <ui:VisualElement class="stat-row">
+                <ui:Label text="AOI ENT" class="stat-key" />
+                <ui:Label name="aoi-enter-value" text="-- /S" class="stat-value" />
+            </ui:VisualElement>
+            <ui:VisualElement class="stat-row">
+                <ui:Label text="AOI LVE" class="stat-key" />
+                <ui:Label name="aoi-leave-value" text="-- /S" class="stat-value" />
+            </ui:VisualElement>
+            <ui:VisualElement class="stat-row">
+                <ui:Label text="CELL" class="stat-key" />
+                <ui:Label name="cell-value" text="--" class="stat-value" />
+            </ui:VisualElement>
+            <ui:VisualElement class="stat-row">
+                <ui:Label text="CROSS" class="stat-key" />
+                <ui:Label name="cross-value" text="0" class="stat-value" />
+            </ui:VisualElement>
             <ui:VisualElement name="aoi-toggle" class="aoi-toggle">
                 <ui:VisualElement name="aoi-checkbox" class="aoi-checkbox" />
                 <ui:Label text="SHOW AOI" class="aoi-label" />
+            </ui:VisualElement>
+            <ui:VisualElement name="bsp-toggle" class="aoi-toggle">
+                <ui:VisualElement name="bsp-checkbox" class="aoi-checkbox" />
+                <ui:Label text="SHOW BSP" class="aoi-label" />
             </ui:VisualElement>
         </ui:VisualElement>
 

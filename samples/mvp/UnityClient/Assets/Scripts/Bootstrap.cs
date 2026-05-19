@@ -37,6 +37,7 @@ namespace Atlas.Mvp.Unity
         WorldLifecycle? _world;
         ViewRegistry? _views;
         bool _userInitiatedLogout;
+        BotPilot? _botPilot;
 
         void Awake()
         {
@@ -47,7 +48,15 @@ namespace Atlas.Mvp.Unity
             // Force script-DLL [ModuleInitializer] before Login or the digest goes zero.
             _ = Atlas.Rpc.EntityDefDigest.Bytes.Length;
 
-            if (string.IsNullOrEmpty(username))
+            if (TryParseBotArgs(out string botUser, out float botDuration, out BotPattern botPattern))
+            {
+                username = botUser;
+                autoConnect = true;
+                _botPilot = gameObject.AddComponent<BotPilot>();
+                _botPilot.DurationSec = botDuration;
+                _botPilot.Pattern = botPattern;
+            }
+            else if (string.IsNullOrEmpty(username))
                 username = $"mvp_{System.Guid.NewGuid():N}".Substring(0, 12);
 
             _net = gameObject.AddComponent<AtlasNetworkManager>();
@@ -82,7 +91,21 @@ namespace Atlas.Mvp.Unity
             _camera?.Dispose();
         }
 
-        void Update() => Ticker.RunTick(Time.deltaTime);
+        void Update()
+        {
+            Ticker.RunTick(Time.deltaTime);
+            _flow.TickReconnect(Time.deltaTime);
+            RefreshReconnectStatus();
+        }
+
+        void RefreshReconnectStatus()
+        {
+            if (!_flow.IsReconnectPending) return;
+            float remaining = _flow.ReconnectDelayRemaining;
+            _loginScreen.SetStatus(
+                $"Reconnecting in {remaining:0.0}s… (attempt #{_flow.ReconnectAttempts + 1})",
+                isError: false);
+        }
 
         // CameraController must register on Ticker before LabelOverlay so
         // labels project against the post-follow camera pose.
@@ -132,19 +155,27 @@ namespace Atlas.Mvp.Unity
             // Fail() already routed the useful message to the status line.
             string? carriedFailure = _flow.LastError;
             TeardownWorld();
-            _flow.Reset();
             _loginScreen.Show();
-            _loginScreen.SetInteractable(true);
             if (_userInitiatedLogout)
             {
                 _userInitiatedLogout = false;
+                _flow.Reset();
+                _loginScreen.SetInteractable(true);
                 _loginScreen.SetStatus("Logged out. Re-enter to play again.", isError: false);
+                return;
             }
-            else if (carriedFailure == null)
+            _flow.HandleDroppedConnection();
+            if (_flow.IsReconnectPending)
             {
+                _loginScreen.SetInteractable(true);
+                _loginScreen.SetStatus(
+                    $"Disconnected (reason={reason}). Reconnecting…", isError: false);
+                return;
+            }
+            _loginScreen.SetInteractable(true);
+            if (carriedFailure == null)
                 _loginScreen.SetStatus($"Disconnected (reason={reason}). Re-enter to retry.",
                     isError: true);
-            }
         }
 
         void OnHudLogoutRequested()
@@ -180,14 +211,23 @@ namespace Atlas.Mvp.Unity
 
         void OnOwnerAttached(AvatarView view, MvpAvatar avatar)
         {
+            // Bot mode injects synthetic joystick + fire so PlayerInputController
+            // works unchanged; chat-focus gate is forced off.
+            var joystickFn = _botPilot != null
+                ? (System.Func<Vector2>)(() => _botPilot.Joystick)
+                : () => _world?.Hud?.JoystickInput ?? Vector2.zero;
+            var fireFn = _botPilot != null
+                ? (System.Func<bool>)(() => _botPilot.ConsumeFire())
+                : () => _world?.Hud?.ConsumeFireRequest() ?? false;
+            var chatBlockedFn = _botPilot != null
+                ? (System.Func<bool>)(() => false)
+                : () => _world?.Hud?.IsChatFocused ?? false;
             view.AttachInput(new PlayerInputController(avatar, _net, view.Root.transform,
-                () => _world?.Hud?.JoystickInput ?? Vector2.zero,
-                () => _world?.Hud?.ConsumeFireRequest() ?? false,
-                () => _camera.Yaw));
+                joystickFn, fireFn, () => _camera.Yaw, chatBlockedFn));
             AoiBoxes.Attach(view.Root.transform, 50f, 55f,
                 new Color(0f, 1f, 0.4f, 0.7f),
                 new Color(1f, 0.7f, 0.2f, 0.5f));
-            _world?.Hud?.SetOwner(avatar);
+            _world?.Hud?.SetOwner(avatar, view.Root.transform);
             _camera.SetFollowTarget(view.Root.transform);
             _flow.NotifyEnteredWorld();
         }
@@ -217,6 +257,30 @@ namespace Atlas.Mvp.Unity
         bool IsMoveInputActive() =>
             Mathf.Abs(Input.GetAxisRaw("Horizontal")) > 0.01f ||
             Mathf.Abs(Input.GetAxisRaw("Vertical")) > 0.01f ||
-            (_world?.Hud?.JoystickInput.sqrMagnitude ?? 0f) > 0.01f;
+            (_world?.Hud?.JoystickInput.sqrMagnitude ?? 0f) > 0.01f ||
+            (_botPilot != null && _botPilot.Joystick.sqrMagnitude > 0.01f);
+
+        static bool TryParseBotArgs(out string username, out float duration, out BotPattern pattern)
+        {
+            username = string.Empty;
+            duration = 60f;
+            pattern = BotPattern.Random;
+            string[] args = System.Environment.GetCommandLineArgs();
+            string? idx = null;
+            for (int i = 0; i < args.Length; ++i)
+            {
+                if (args[i] == "-atlas-bot" && i + 1 < args.Length) idx = args[++i];
+                else if (args[i] == "-atlas-bot-duration" && i + 1 < args.Length)
+                    float.TryParse(args[++i], out duration);
+                else if (args[i] == "-atlas-bot-pattern" && i + 1 < args.Length)
+                {
+                    string val = args[++i].ToLowerInvariant();
+                    if (val == "pingpong") pattern = BotPattern.Pingpong;
+                }
+            }
+            if (idx == null) return false;
+            username = $"mvp_bot_{idx}";
+            return true;
+        }
     }
 }

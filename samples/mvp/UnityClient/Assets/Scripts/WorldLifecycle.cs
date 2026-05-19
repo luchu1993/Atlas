@@ -67,6 +67,7 @@ namespace Atlas.Mvp.Unity
             _projectiles?.Dispose();
             _projectiles = null;
             AoiBoxes.Clear();
+            BspGizmo.Clear();
             LabelOverlay.Shutdown();
             // net_client fires no entity-destroyed callbacks on disconnect;
             // clear the SDK manager to avoid ghosts on a fast re-login.
