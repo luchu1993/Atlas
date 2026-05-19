@@ -192,6 +192,10 @@ class CellApp : public EntityApp {
     cellappmgr::CellID cell_id{0};  // 0 => no local Cell membership to restore
     std::vector<Address> haunt_addrs;
     std::vector<std::byte> controller_blob;
+    // Persistent state captured pre-ConvertRealToGhost so revert can
+    // recreate the C# instance via restore_entity_fn after script teardown.
+    std::vector<std::byte> persistent_blob;
+    uint16_t type_id{0};
     // Captured pre-ConvertRealToGhost so revert reattaches with the
     // script-authored radius / hysteresis intact.
     bool had_witness{false};
@@ -229,6 +233,10 @@ class CellApp : public EntityApp {
   [[nodiscard]] auto CreateNativeProvider() -> std::unique_ptr<INativeApiProvider> override;
 
  private:
+  // RudpAddress() returns 0.0.0.0 when bound to any-interface; CellAppMgr
+  // resolves it to 127.0.0.1 from inbound packet src, so use loopback here.
+  [[nodiscard]] auto ResolveSelfAddr() -> Address;
+
   void TickControllers(float dt);
   void TickWitnesses();
 

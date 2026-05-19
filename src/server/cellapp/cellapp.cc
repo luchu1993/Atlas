@@ -1126,9 +1126,13 @@ void CellApp::OnCreateGhost(const Address& /*src*/, Channel* ch, const cellapp::
     space = inserted.first->second.get();
     ATLAS_LOG_INFO("CellApp: auto-created Space {} for incoming Ghost", msg.space_id);
   }
-  if (entity_population_.contains(msg.entity_id)) {
-    ATLAS_LOG_WARNING("CellApp: CreateGhost for already-present entity_id={} — ignoring",
+  if (auto it = entity_population_.find(msg.entity_id); it != entity_population_.end()) {
+    // Ghost collision is expected post-offload (new Real broadcasts to peers
+    // that already mirror under the old Real); Real collision = id reuse bug.
+    if (it->second->IsReal()) {
+      ATLAS_LOG_ERROR("CellApp: CreateGhost for entity_id={} which is Real here — id collision",
                       msg.entity_id);
+    }
     return;
   }
   if (ch == nullptr) {
@@ -1422,11 +1426,6 @@ void CellApp::OnOffloadEntityAck(const Address& /*src*/, Channel* /*ch*/,
 
   if (msg.success) {
     pending_offloads_.erase(pending_it);
-    // Drop local C# instance; OnTickAll would otherwise keep invoking
-    // it against a Ghost. Re-arrival rebuilds via restore_entity_fn.
-    if (native_provider_ && native_provider_->entity_destroyed_fn()) {
-      native_provider_->entity_destroyed_fn()(msg.entity_id);
-    }
     ATLAS_LOG_INFO("CellApp: Offload of entity_id={} to {}:{} succeeded (rtt={} ms)", msg.entity_id,
                    target.Ip(), target.Port(),
                    std::chrono::duration_cast<std::chrono::milliseconds>(age).count());
@@ -1494,6 +1493,21 @@ void CellApp::RevertPendingOffload(EntityID entity_id, const char* reason) {
   if (auto* rd = entity->GetRealData()) {
     for (const auto& ha : po.haunt_addrs) {
       if (auto* peer = FindPeerChannel(ha)) rd->AddHaunt(peer, ha);
+    }
+  }
+
+  // TickOffloadChecker destroyed the C# instance pre-ConvertRealToGhost;
+  // recreate from saved blob so script tick resumes on the local Real.
+  if (!po.persistent_blob.empty() && native_provider_ != nullptr &&
+      native_provider_->restore_entity_fn() != nullptr) {
+    ClearNativeApiError();
+    native_provider_->restore_entity_fn()(
+        entity_id, po.type_id, /*dbid=*/0,
+        reinterpret_cast<const uint8_t*>(po.persistent_blob.data()),
+        static_cast<int32_t>(po.persistent_blob.size()));
+    if (auto err = ConsumeNativeApiError()) {
+      ATLAS_LOG_ERROR("CellApp: Offload revert RestoreEntity failed for entity_id={}: {}", entity_id,
+                      *err);
     }
   }
 
@@ -1895,7 +1909,17 @@ void CellApp::TickOffloadChecker() {
         po.aoi_radius = witness->AoIRadius();
         po.aoi_hysteresis = witness->Hysteresis();
       }
+      // Re-borrow the just-built msg.persistent_blob so RevertPendingOffload
+      // can hand it back to restore_entity_fn after Ghost->Real flip-back.
+      po.persistent_blob = msg.persistent_blob;
+      po.type_id = op.entity->TypeId();
       pending_offloads_[op.entity->Id()] = std::move(po);
+
+      // Destroy C# instance before flipping to Ghost so OnTickAll on the
+      // next iteration stops running NpcAiComponent against a Ghost.
+      if (native_provider_ && native_provider_->entity_destroyed_fn()) {
+        native_provider_->entity_destroyed_fn()(op.entity->Id());
+      }
 
       // Local Real -> Ghost; drops witness + controllers and uses the
       // peer channel as the new back-channel.

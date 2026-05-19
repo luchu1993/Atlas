@@ -28,6 +28,12 @@ Rules for Claude Code when working in the Atlas Engine repository.
 - Do not add section banners, historical notes, task IDs, phase labels, file-level narratives, XML-doc paragraphs, or comments that restate code.
 - Clean up nearby stale or rule-breaking comments when editing a file.
 
+## Test rules
+
+- Do not skip, disable, mark `DISABLED_`, or comment out tests to make a red build green; first investigate whether your change broke a real contract.
+- If careful review concludes a test itself is wrong (stale assertion, drifted expectation, racy setup), fix the test in the same change and explain why in the commit message — never silently weaken it.
+- Treat new flakiness as a failure: stabilize the test or the code, do not retry-loop or quarantine without an owner.
+
 ## Refactoring rules
 
 - Refactor touched code when the existing shape blocks a clean change; do not layer a workaround over a broken design.
