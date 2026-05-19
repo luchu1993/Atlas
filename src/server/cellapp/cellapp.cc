@@ -1262,6 +1262,11 @@ void CellApp::OnOffloadEntity(const Address& src, Channel* ch, const cellapp::Of
       return;
     }
     entity->ConvertGhostToReal();
+    // Ghost's pose may lag the sender by one GhostPositionUpdate; without
+    // syncing here OffloadChecker re-offloads off a stale pose -> pingpong.
+    entity->SetPositionAndDirection(msg.position, msg.direction);
+    entity->SetOnGround(msg.on_ground);
+    entity->SetBaseAddr(msg.base_addr);
   } else {
     auto entity_ptr = std::make_unique<CellEntity>(msg.entity_id, msg.type_id, *space, msg.position,
                                                    msg.direction);
