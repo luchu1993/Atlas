@@ -8,6 +8,8 @@
 
 #include "UEClientGameMode.generated.h"
 
+class UAtlasAvatarView;
+class UAtlasHudWidget;
 class UAtlasLoginWidget;
 
 UCLASS()
@@ -39,6 +41,17 @@ public:
 	UPROPERTY(EditAnywhere, Category = "Atlas|Login")
 	TSubclassOf<UAtlasLoginWidget> LoginWidgetClass;
 
+	// Shown after Authenticated (when the login widget gets removed); leave
+	// unset for headless / test runs to skip HUD construction entirely.
+	UPROPERTY(EditAnywhere, Category = "Atlas|Hud")
+	TSubclassOf<UAtlasHudWidget> HudWidgetClass;
+
+	// HP / level / RPC delegates of the avatar currently bound to the player;
+	// nullptr until SelectAvatar resolves on the wire and the spawned actor's
+	// UAtlasAvatarView component finishes its Bind() callback.
+	UFUNCTION(BlueprintPure, Category = "Atlas|Player")
+	UAtlasAvatarView* GetPlayerAvatarView() const { return PlayerAvatarView; }
+
 protected:
 	virtual void BeginPlay() override;
 	virtual void Tick(float DeltaSeconds) override;
@@ -52,4 +65,10 @@ private:
 
 	UPROPERTY(Transient)
 	UAtlasLoginWidget* LoginWidget = nullptr;
+
+	UPROPERTY(Transient)
+	UAtlasHudWidget* HudWidget = nullptr;
+
+	UPROPERTY(Transient)
+	UAtlasAvatarView* PlayerAvatarView = nullptr;
 };

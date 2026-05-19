@@ -25,6 +25,32 @@ DECLARE_DYNAMIC_MULTICAST_DELEGATE_TwoParams(FAtlasOnReconnectScheduled,
 	int32, AttemptNumber, float, NextRetrySec);
 DECLARE_DYNAMIC_MULTICAST_DELEGATE(FAtlasOnReconnectExhausted);
 
+// BP-facing mirror of AtlasNetStats with int32 fields. Filled by
+// UAtlasSubsystem::GetNetStats; zeroed when the net client isn't live yet.
+USTRUCT(BlueprintType)
+struct FAtlasNetStatsBp
+{
+	GENERATED_BODY()
+
+	UPROPERTY(BlueprintReadOnly, Category="Atlas|Net")
+	int32 RttMs = 0;
+
+	UPROPERTY(BlueprintReadOnly, Category="Atlas|Net")
+	int32 BytesSent = 0;
+
+	UPROPERTY(BlueprintReadOnly, Category="Atlas|Net")
+	int32 BytesReceived = 0;
+
+	UPROPERTY(BlueprintReadOnly, Category="Atlas|Net")
+	int32 PacketsLost = 0;
+
+	UPROPERTY(BlueprintReadOnly, Category="Atlas|Net")
+	int32 SendQueueSize = 0;
+
+	UPROPERTY(BlueprintReadOnly, Category="Atlas|Net")
+	float LossRate = 0.f;
+};
+
 UCLASS()
 class ATLASUE_API UAtlasSubsystem : public UGameInstanceSubsystem, public atlas::RpcSender
 {
@@ -85,6 +111,11 @@ public:
 	// internal step fails; empty when the session is healthy.
 	UFUNCTION(BlueprintPure, Category="Atlas|Net")
 	FString GetLastNetErrorMessage() const;
+
+	// AtlasNetGetStats snapshot; returns true when the net ctx is live and
+	// the SDK populated stats this call.
+	UFUNCTION(BlueprintPure, Category="Atlas|Net")
+	bool GetNetStats(FAtlasNetStatsBp& OutStats) const;
 
 	[[nodiscard]] atlas::ClientEntityManager& GetEntityManager() { return EntityManager; }
 

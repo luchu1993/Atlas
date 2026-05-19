@@ -189,6 +189,21 @@ FString UAtlasSubsystem::GetLastNetErrorMessage() const
 	return Msg ? FString(UTF8_TO_TCHAR(Msg)) : FString();
 }
 
+bool UAtlasSubsystem::GetNetStats(FAtlasNetStatsBp& OutStats) const
+{
+	OutStats = FAtlasNetStatsBp{};
+	if (!NetClient || NetClient->GetContext() == nullptr) return false;
+	AtlasNetStats Raw{};
+	if (AtlasNetGetStats(NetClient->GetContext(), &Raw) != ATLAS_NET_OK) return false;
+	OutStats.RttMs = static_cast<int32>(Raw.rtt_ms);
+	OutStats.BytesSent = static_cast<int32>(Raw.bytes_sent);
+	OutStats.BytesReceived = static_cast<int32>(Raw.bytes_recv);
+	OutStats.PacketsLost = static_cast<int32>(Raw.packets_lost);
+	OutStats.SendQueueSize = static_cast<int32>(Raw.send_queue_size);
+	OutStats.LossRate = Raw.loss_rate;
+	return true;
+}
+
 bool UAtlasSubsystem::OnTick(float DeltaTime)
 {
 	// Net state observed each tick so BP listeners only see real transitions.

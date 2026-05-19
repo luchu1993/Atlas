@@ -7,6 +7,7 @@
 
 #include "AtlasAvatarView.h"
 #include "AtlasCore/moving_client_entity.h"
+#include "AtlasHudWidget.h"
 #include "AtlasLoginWidget.h"
 #include "AtlasSubsystem.h"
 #include "AtlasUE.h"
@@ -78,11 +79,20 @@ void AUEClientGameMode::BeginPlay()
 			-> std::unique_ptr<atlas::ClientEntity> {
 			return std::make_unique<FBpAvatarEntity>(Id, Type);
 		};
-		auto AvatarPostBind = [](atlas::ClientEntity* E, AActor* Actor) {
+		// PostBind captures the GameMode so the player avatar's view can be
+		// cached for BP-side HUD lookups (HP / level / RPC delegates).
+		TWeakObjectPtr<AUEClientGameMode> WeakSelf(this);
+		auto AvatarPostBind = [WeakSelf](atlas::ClientEntity* E, AActor* Actor) {
 			auto* Bp = static_cast<FBpAvatarEntity*>(E);
-			if (auto* View = Actor->FindComponentByClass<UAtlasAvatarView>())
+			auto* View = Actor->FindComponentByClass<UAtlasAvatarView>();
+			if (View != nullptr) Bp->BindView(View);
+			if (auto* Self = WeakSelf.Get())
 			{
-				Bp->BindView(View);
+				UAtlasSubsystem* Sub2 = Self->GetGameInstance()->GetSubsystem<UAtlasSubsystem>();
+				if (Sub2 && static_cast<atlas::EntityId>(Sub2->GetPlayerEntityId()) == E->Id())
+				{
+					Self->PlayerAvatarView = View;
+				}
 			}
 		};
 		Sub->RegisterEntityClass(AvatarType, AvatarActorClass, AvatarFactory, AvatarPostBind);
@@ -157,6 +167,14 @@ void AUEClientGameMode::Tick(float DeltaSeconds)
 			{
 				PC->SetInputMode(FInputModeGameOnly());
 			}
+		}
+		if (HudWidgetClass != nullptr && HudWidget == nullptr)
+		{
+			APlayerController* PC = GetWorld() ? GetWorld()->GetFirstPlayerController() : nullptr;
+			HudWidget = PC != nullptr
+				? CreateWidget<UAtlasHudWidget>(PC, HudWidgetClass)
+				: CreateWidget<UAtlasHudWidget>(GetGameInstance(), HudWidgetClass);
+			if (HudWidget != nullptr) HudWidget->AddToViewport();
 		}
 	}
 
