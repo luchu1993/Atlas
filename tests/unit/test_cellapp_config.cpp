@@ -41,6 +41,7 @@ TEST_F(CellAppConfigTest, DefaultsMatchExpectedValues) {
   EXPECT_EQ(CellAppConfig::WitnessLodCloseMaxPeersPerTick(), 64u);
   EXPECT_EQ(CellAppConfig::WitnessLodMediumMaxPeersPerTick(), 64u);
   EXPECT_EQ(CellAppConfig::WitnessLodFarMaxPeersPerTick(), 64u);
+  EXPECT_EQ(CellAppConfig::WitnessLodStarvationThresholdTicks(), 30u);
 }
 
 TEST_F(CellAppConfigTest, WitnessBudgetOverride) {

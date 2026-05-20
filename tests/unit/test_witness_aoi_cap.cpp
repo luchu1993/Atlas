@@ -64,6 +64,14 @@ void SetLodCaps(uint32_t close, uint32_t medium, uint32_t far) {
                   ",\"witness_lod_far_max_peers_per_tick\":" + std::to_string(far));
 }
 
+void SetLodCapsAndStarvation(uint32_t close, uint32_t medium, uint32_t far, uint32_t threshold) {
+  ApplyConfigJson(std::string(kNoEnterPacing) +
+                  ",\"witness_lod_close_max_peers_per_tick\":" + std::to_string(close) +
+                  ",\"witness_lod_medium_max_peers_per_tick\":" + std::to_string(medium) +
+                  ",\"witness_lod_far_max_peers_per_tick\":" + std::to_string(far) +
+                  ",\"witness_lod_starvation_threshold_ticks\":" + std::to_string(threshold));
+}
+
 class WitnessAoICapTest : public ::testing::Test {
  protected:
   std::vector<CapturedEnvelope> sent_;
@@ -306,6 +314,43 @@ TEST_F(WitnessAoICapTest, ZeroFarBandCapSilencesFarOnly) {
   }
   EXPECT_GT(close_updates, 0u) << "close peer must pump on every tick";
   EXPECT_EQ(far_updates, 0u) << "far_max=0 must silence the far band entirely";
+}
+
+// Same-band over-cap: 5 close-band peers but close_cap=2. Without
+// anti-starvation the 3 furthest never pump. With it, every peer drains.
+TEST_F(WitnessAoICapTest, AntiStarvationDrainsEverySameBandPeer) {
+  SetLodCapsAndStarvation(/*close=*/2, /*medium=*/64, /*far=*/64, /*threshold=*/5);
+
+  Space space(1);
+  auto* observer = MakeEntity(space, 1, {0, 0, 0});
+  observer->EnableWitness(/*radius=*/500.f, MakeSendFn(), /*hysteresis=*/0.f);
+
+  std::vector<EntityID> ids;
+  for (int i = 0; i < 5; ++i) {
+    auto* p = MakeEntity(space, 100 + i, {1.f + static_cast<float>(i), 0, 0});
+    ids.push_back(p->Id());
+    CellEntity::ReplicationFrame v;
+    v.position = p->Position();
+    p->PublishReplicationFrame(v, /*has_event=*/false, /*has_volatile=*/true, {}, {});
+  }
+
+  std::set<EntityID> serviced;
+  for (uint64_t tick = 1; tick <= 30; ++tick) {
+    for (auto id : ids) {
+      auto* p = space.FindEntity(id);
+      CellEntity::ReplicationFrame v;
+      v.position = p->Position();
+      p->PublishReplicationFrame(v, /*has_event=*/false, /*has_volatile=*/true, {}, {});
+    }
+    ClearSent();
+    observer->GetWitness()->Update(64 * 1024);
+    for (const auto& env : sent_) {
+      if (KindOf(env) == CellAoIEnvelopeKind::kEntityPositionUpdate) {
+        serviced.insert(PublicIdOf(env));
+      }
+    }
+  }
+  EXPECT_EQ(serviced.size(), 5u) << "anti-starvation must drain every same-band peer";
 }
 
 }  // namespace

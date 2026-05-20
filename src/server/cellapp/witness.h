@@ -99,6 +99,11 @@ class Witness {
     // first SendEntityUpdate.
     uint64_t lod_enter_phase{0};
 
+    // Wall tick of the last SendEntityUpdate; rank-cut promotes peers
+    // past witness_lod_starvation_threshold_ticks so a band that's
+    // permanently over-cap still services everyone.
+    uint64_t last_serviced_tick{0};
+
     static constexpr uint8_t kEnterPending = 0x01;
     static constexpr uint8_t kGone = 0x08;
 

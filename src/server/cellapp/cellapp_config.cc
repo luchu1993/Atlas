@@ -73,6 +73,10 @@ ServerAppOption<uint32_t> s_witness_lod_far_max_peers_per_tick{
     64u, "witness_lod_far_max_peers_per_tick", "cellapp/witness_lod_far_max_peers_per_tick",
     WatcherMode::kReadWrite};
 
+ServerAppOption<uint32_t> s_witness_lod_starvation_threshold_ticks{
+    30u, "witness_lod_starvation_threshold_ticks",
+    "cellapp/witness_lod_starvation_threshold_ticks", WatcherMode::kReadWrite};
+
 ServerAppOption<uint32_t> s_witness_enter_bytes_per_tick{
     4096u, "witness_enter_bytes_per_tick", "cellapp/witness_enter_bytes_per_tick",
     WatcherMode::kReadWrite};
@@ -152,6 +156,10 @@ auto CellAppConfig::WitnessLodMediumMaxPeersPerTick() -> uint32_t {
 
 auto CellAppConfig::WitnessLodFarMaxPeersPerTick() -> uint32_t {
   return s_witness_lod_far_max_peers_per_tick.Value();
+}
+
+auto CellAppConfig::WitnessLodStarvationThresholdTicks() -> uint32_t {
+  return s_witness_lod_starvation_threshold_ticks.Value();
 }
 
 auto CellAppConfig::WitnessEnterBytesPerTick() -> uint32_t {

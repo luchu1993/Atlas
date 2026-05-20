@@ -90,6 +90,11 @@ class CellAppConfig {
   [[nodiscard]] static auto WitnessLodMediumMaxPeersPerTick() -> uint32_t;
   [[nodiscard]] static auto WitnessLodFarMaxPeersPerTick() -> uint32_t;
 
+  // Within a band, peers past this many ticks since the last service are
+  // promoted above the closest-N rank cut so the band always drains. 0
+  // disables. JSON key: `witness_lod_starvation_threshold_ticks`. Default 30.
+  [[nodiscard]] static auto WitnessLodStarvationThresholdTicks() -> uint32_t;
+
   // Per-tick byte budget for AoI Enter envelopes on a single Witness; excess
   // peers are deferred to the next tick. Caps the initial-burst load on the
   // reliable-UDP send window when a fresh observer joins a dense scene.

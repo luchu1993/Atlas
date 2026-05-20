@@ -32,6 +32,7 @@ struct LodConfig {
   double dist_sq[2];           // [close, medium]; far implied as "beyond"
   uint64_t interval[3];        // [close, medium, far]
   uint32_t max_peers[3];
+  uint64_t starvation_threshold_ticks{0};
 
   static auto Snapshot() -> LodConfig {
     const float close_m = CellAppConfig::WitnessLodCloseDistanceM();
@@ -43,7 +44,8 @@ struct LodConfig {
          CellAppConfig::WitnessLodFarIntervalTicks()},
         {CellAppConfig::WitnessLodCloseMaxPeersPerTick(),
          CellAppConfig::WitnessLodMediumMaxPeersPerTick(),
-         CellAppConfig::WitnessLodFarMaxPeersPerTick()}};
+         CellAppConfig::WitnessLodFarMaxPeersPerTick()},
+        CellAppConfig::WitnessLodStarvationThresholdTicks()};
   }
 
   // Returns 0=close, 1=medium, 2=far.
@@ -268,6 +270,7 @@ void Witness::HandleAoIEnter(CellEntity& peer) {
 
   cache.entity = &peer;
   cache.flags = EntityCache::kEnterPending;
+  cache.last_serviced_tick = tick_count_;
   pending_enter_ids_.push_back(peer.Id());
   peer.AddObserver(this);
   UpdatePriority(cache);
@@ -433,6 +436,7 @@ void Witness::Update(uint32_t max_packet_bytes) {
     ATLAS_PROFILE_ZONE_N("Witness::Update::PerBandPump");
     const int tick_budget = static_cast<int>(max_packet_bytes) - bandwidth_deficit_;
 
+    const bool starvation_enabled = lod.starvation_threshold_ticks > 0;
     for (std::size_t band = 0; band < 3; ++band) {
       if (lod.max_peers[band] == 0) continue;
 
@@ -442,10 +446,18 @@ void Witness::Update(uint32_t max_packet_bytes) {
         if (tick_count_ < cache.lod_next_update_tick) continue;
         UpdatePriority(cache);
         if (lod.BandIndex(cache.priority) != band) continue;
-        band_scratch_.emplace_back(cache.priority, id);
+        // Promote starved peers above the rank cut so a band that's
+        // permanently over-cap still drains every observer eventually.
+        const double effective =
+            starvation_enabled &&
+                    tick_count_ - cache.last_serviced_tick > lod.starvation_threshold_ticks
+                ? -1.0
+                : cache.priority;
+        band_scratch_.emplace_back(effective, id);
       }
 
-      // Rank cut: keep the closest max_peers within this band.
+      // Rank cut: keep the closest max_peers within this band (starved
+      // peers carry priority=-1.0 so they survive the cut).
       const std::size_t cap = lod.max_peers[band];
       if (band_scratch_.size() > cap) {
         std::nth_element(band_scratch_.begin(), band_scratch_.begin() + cap, band_scratch_.end(),
@@ -464,6 +476,7 @@ void Witness::Update(uint32_t max_packet_bytes) {
         if (!cache.IsUpdatable()) continue;
 
         bytes_sent += static_cast<int>(SendEntityUpdate(cache));
+        cache.last_serviced_tick = tick_count_;
         // lod_enter_phase offsets the first window only (set at AoI-enter,
         // cleared here) to stagger simultaneous entries.
         cache.lod_next_update_tick = tick_count_ + interval + (cache.lod_enter_phase % interval);
