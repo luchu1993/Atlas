@@ -1294,6 +1294,10 @@ void CellApp::OnOffloadEntity(const Address& src, Channel* ch, const cellapp::Of
   // a fresh Real with the same id).
   assert(entity->Id() == msg.entity_id);
 
+  // Cell-local entities (CreateLocalCell from script, no base counterpart)
+  // must keep the flag across Offload so DestroySelf takes the local path.
+  if (msg.is_local) entity->MarkLocal();
+
   // Empty blob is valid (tests / C#-less setups): the Real has no
   // script state and AoI runs off the replication baseline below until
   // the first successful C# publish.
@@ -1816,6 +1820,7 @@ auto CellApp::BuildOffloadMessage(const CellEntity& entity) const -> cellapp::Of
     msg.aoi_hysteresis = witness->Hysteresis();
   }
   msg.cell_epoch = entity.CellEpoch();
+  msg.is_local = entity.IsLocal();
   return msg;
 }
 

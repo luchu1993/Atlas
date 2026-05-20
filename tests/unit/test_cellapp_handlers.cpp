@@ -225,6 +225,27 @@ TEST_F(CellAppHandlersTest, DestroyLocalEntityClearsLocalEntity) {
   EXPECT_EQ(app_.FindSpace(1)->EntityCount(), 0u);
 }
 
+TEST_F(CellAppHandlersTest, OffloadPreservesIsLocalFlag) {
+  // is_local must survive Offload: an NPC created via CreateLocalCell on the
+  // source cellapp would otherwise be refused on DestroySelf after migration.
+  cellapp::OffloadEntity msg;
+  msg.entity_id = 7777;
+  msg.type_id = 1;
+  msg.space_id = 1;
+  msg.position = {1, 0, 1};
+  msg.direction = {1, 0, 0};
+  msg.is_local = true;
+
+  app_.OnOffloadEntity({}, nullptr, msg);
+
+  auto* real = app_.FindRealEntity(7777);
+  ASSERT_NE(real, nullptr);
+  EXPECT_TRUE(real->IsLocal());
+
+  app_.DestroyLocalEntity(7777);
+  EXPECT_EQ(app_.FindRealEntity(7777), nullptr);
+}
+
 TEST_F(CellAppHandlersTest, DestroyLocalEntityRefusesBaseOwnedEntity) {
   app_.OnCreateCellEntity({}, nullptr, MakeCreate(200, 1));
   auto* real = app_.FindRealEntity(200);

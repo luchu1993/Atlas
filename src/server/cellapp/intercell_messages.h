@@ -401,6 +401,9 @@ struct OffloadEntity {
   // CurrentCell it pushes to BaseApp so routing order is monotonic
   // regardless of which cellapp emits.
   uint32_t cell_epoch{0};
+  // Cell-local-only entity (no BaseApp counterpart); preserved across Offload
+  // so DestroySelf() takes the local-destroy path on the new owner.
+  bool is_local{false};
 
   static auto Descriptor() -> const MessageDesc& {
     static const MessageDesc kDesc{msg_id::Id(msg_id::CellApp::kOffloadEntity),
@@ -447,6 +450,7 @@ struct OffloadEntity {
     w.Write(aoi_radius);
     w.Write(aoi_hysteresis);
     w.Write(cell_epoch);
+    w.Write(static_cast<uint8_t>(is_local ? 1 : 0));
   }
 
   static auto Deserialize(BinaryReader& r) -> Result<OffloadEntity> {
@@ -538,6 +542,11 @@ struct OffloadEntity {
       auto ce = r.Read<uint32_t>();
       if (!ce) return Error{ErrorCode::kInvalidArgument, "OffloadEntity: cell_epoch truncated"};
       msg.cell_epoch = *ce;
+    }
+    if (r.Remaining() >= sizeof(uint8_t)) {
+      auto il = r.Read<uint8_t>();
+      if (!il) return Error{ErrorCode::kInvalidArgument, "OffloadEntity: is_local truncated"};
+      msg.is_local = (*il != 0);
     }
     return msg;
   }
