@@ -59,6 +59,10 @@ auto CellAppMgr::Init(int argc, char* argv[]) -> bool {
       [this](const Address& src, Channel* ch, const cellappmgr::CreateSpaceRequest& msg) {
         OnCreateSpaceRequest(src, ch, msg);
       });
+  (void)table.RegisterTypedHandler<cellappmgr::AddCellToSpaceAck>(
+      [this](const Address& src, Channel* ch, const cellappmgr::AddCellToSpaceAck& msg) {
+        OnAddCellToSpaceAck(src, ch, msg);
+      });
 
   // Subscribe to CellApp death notifications so we can rehome BSP
   // leaves onto surviving CellApps and announce the death to BaseApps
@@ -108,6 +112,7 @@ void CellAppMgr::RegisterWatchers() {
 
 void CellAppMgr::OnTickComplete() {
   ManagerApp::OnTickComplete();
+  DrainPendingGeometryBroadcasts();
   const auto tick = GameTime();
   if (tick - last_balance_tick_ >= kBalanceTickInterval) {
     last_balance_tick_ = tick;
@@ -177,12 +182,20 @@ void CellAppMgr::OnRegisterCellApp(const Address& src, Channel* ch,
                  kInternalAddr.Ip(), kInternalAddr.Port());
 
   // Drain any CreateSpaceRequests parked by an earlier "no CellApps" race.
-  if (pending_space_creates_awaiting_cellapps_.empty()) return;
-  auto queued = std::move(pending_space_creates_awaiting_cellapps_);
-  pending_space_creates_awaiting_cellapps_.clear();
-  for (auto& entry : queued) {
-    OnCreateSpaceRequest(entry.src, entry.ch, entry.msg);
+  if (!pending_space_creates_awaiting_cellapps_.empty()) {
+    auto queued = std::move(pending_space_creates_awaiting_cellapps_);
+    pending_space_creates_awaiting_cellapps_.clear();
+    for (auto& entry : queued) {
+      OnCreateSpaceRequest(entry.src, entry.ch, entry.msg);
+    }
   }
+
+  // Elastic grow: a Space bootstrapped with N cellapps can absorb the
+  // (N+1)-th cellapp here by splitting its heaviest leaf onto the new
+  // host. Also closes the boot-time race where queued CreateSpace drained
+  // before all sibling cellapps registered.
+  auto self_it = cellapps_.find(kInternalAddr);
+  if (self_it != cellapps_.end()) GrowSpacesForNewCellApp(self_it->second);
 }
 
 void CellAppMgr::OnInformCellLoad(const Address& /*src*/, Channel* /*ch*/,
@@ -353,6 +366,111 @@ void CellAppMgr::BootstrapMultiCellPartition(SpacePartition& partition,
   }
 }
 
+void CellAppMgr::GrowSpacesForNewCellApp(const CellAppInfo& new_app) {
+  for (auto& [space_id, partition] : spaces_) {
+    const auto leaves = partition.bsp.Leaves();
+    if (leaves.size() >= cellapps_.size()) continue;
+
+    // Pick the heaviest leaf; ties broken by lowest cell_id for determinism.
+    const CellInfo* target = leaves.front();
+    for (const auto* leaf : leaves) {
+      if (leaf->load > target->load ||
+          (leaf->load == target->load && leaf->cell_id < target->cell_id)) {
+        target = leaf;
+      }
+    }
+
+    // Split the longer finite dimension at its midpoint to keep aspect
+    // ratio reasonable. Unbounded dimensions fall back to position=0.
+    const float dx = target->bounds.max_x - target->bounds.min_x;
+    const float dz = target->bounds.max_z - target->bounds.min_z;
+    const bool dx_finite = std::isfinite(dx);
+    const bool dz_finite = std::isfinite(dz);
+    BSPAxis axis = BSPAxis::kX;
+    float position = 0.f;
+    if (dx_finite && dz_finite) {
+      axis = (dx >= dz) ? BSPAxis::kX : BSPAxis::kZ;
+      position = (axis == BSPAxis::kX) ? (target->bounds.min_x + target->bounds.max_x) * 0.5f
+                                       : (target->bounds.min_z + target->bounds.max_z) * 0.5f;
+    } else if (dx_finite) {
+      axis = BSPAxis::kX;
+      position = (target->bounds.min_x + target->bounds.max_x) * 0.5f;
+    } else if (dz_finite) {
+      axis = BSPAxis::kZ;
+      position = (target->bounds.min_z + target->bounds.max_z) * 0.5f;
+    }
+
+    CellInfo new_leaf;
+    new_leaf.cell_id = next_cell_id_++;
+    new_leaf.cellapp_addr = new_app.internal_addr;
+    new_leaf.load = 0.f;
+    new_leaf.entity_count = 0;
+
+    auto r = partition.bsp.Split(target->cell_id, axis, position, new_leaf);
+    if (!r) {
+      ATLAS_LOG_WARNING("CellAppMgr: elastic-grow Split failed space={} cell={}: {}", space_id,
+                        target->cell_id, r.Error().Message());
+      --next_cell_id_;
+      continue;
+    }
+
+    const auto* new_leaf_in_tree = partition.bsp.FindCellById(new_leaf.cell_id);
+    if (new_leaf_in_tree != nullptr) {
+      SendAddCell(new_app, space_id, new_leaf.cell_id, new_leaf_in_tree->bounds,
+                  /*is_primary=*/false, /*space_master_type=*/"");
+    }
+    // Defer geometry broadcast until the new cellapp acks AddCellToSpace;
+    // OnAddCellToSpaceAck (or DrainPendingGeometryBroadcasts on timeout)
+    // drives the actual fan-out.
+    pending_geometry_broadcasts_.push_back({space_id, new_leaf.cell_id, new_app.internal_addr,
+                                            Clock::now()});
+
+    ATLAS_LOG_INFO(
+        "CellAppMgr: elastic-grow space={} split cell={} on axis={} pos={} "
+        "-> new cell={} on app_id={} (geometry deferred until ack)",
+        space_id, target->cell_id, static_cast<int>(axis), position, new_leaf.cell_id,
+        new_app.app_id);
+  }
+}
+
+void CellAppMgr::OnAddCellToSpaceAck(const Address& /*src*/, Channel* /*ch*/,
+                                     const cellappmgr::AddCellToSpaceAck& msg) {
+  auto it = std::find_if(pending_geometry_broadcasts_.begin(), pending_geometry_broadcasts_.end(),
+                         [&](const PendingGeometryBroadcast& p) {
+                           return p.space_id == msg.space_id && p.awaiting_cell_id == msg.cell_id;
+                         });
+  if (it == pending_geometry_broadcasts_.end()) {
+    // Stray ack — bootstrap path doesn't defer, and a timed-out elastic-grow
+    // already broadcast. Logging this is too noisy in steady state.
+    return;
+  }
+  const SpaceID space_id = it->space_id;
+  pending_geometry_broadcasts_.erase(it);
+
+  auto sp_it = spaces_.find(space_id);
+  if (sp_it == spaces_.end()) return;
+  BroadcastGeometry(sp_it->second);
+}
+
+void CellAppMgr::DrainPendingGeometryBroadcasts() {
+  if (pending_geometry_broadcasts_.empty()) return;
+  const auto now = Clock::now();
+  for (auto it = pending_geometry_broadcasts_.begin();
+       it != pending_geometry_broadcasts_.end();) {
+    if (now - it->sent_at < kPendingGeometryTimeout) {
+      ++it;
+      continue;
+    }
+    ATLAS_LOG_WARNING(
+        "CellAppMgr: AddCellToSpaceAck timeout space={} cell={} addr={}:{} — broadcasting "
+        "geometry anyway; receiver may have a brief offload-into-missing-cell window",
+        it->space_id, it->awaiting_cell_id, it->awaiting_addr.Ip(), it->awaiting_addr.Port());
+    auto sp_it = spaces_.find(it->space_id);
+    if (sp_it != spaces_.end()) BroadcastGeometry(sp_it->second);
+    it = pending_geometry_broadcasts_.erase(it);
+  }
+}
+
 void CellAppMgr::OnCellAppDeath(const Address& internal_addr) {
   auto it = cellapps_.find(internal_addr);
   if (it == cellapps_.end()) return;
@@ -450,8 +568,14 @@ void CellAppMgr::TickLoadBalance() {
   if (spaces_.empty()) return;
   for (auto& [space_id, partition] : spaces_) {
     partition.bsp.Balance(kBalanceSafetyBound);
+    // Don't leak the post-Split tree to peers before the new cellapp has
+    // acked AddCellToSpace; the pending-ack handler (or its timeout) will
+    // pick up any Balance-induced changes when it eventually fires.
+    const bool pending = std::any_of(
+        pending_geometry_broadcasts_.begin(), pending_geometry_broadcasts_.end(),
+        [space_id = space_id](const PendingGeometryBroadcast& p) { return p.space_id == space_id; });
+    if (pending) continue;
     BroadcastGeometry(partition);
-    (void)space_id;
   }
 }
 

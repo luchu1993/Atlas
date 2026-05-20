@@ -1542,25 +1542,40 @@ void CellApp::RevertPendingOffload(EntityID entity_id, const char* reason) {
       entity_id, reason);
 }
 
-void CellApp::OnAddCellToSpace(const Address& /*src*/, Channel* /*ch*/,
+void CellApp::OnAddCellToSpace(const Address& /*src*/, Channel* ch,
                                const cellappmgr::AddCellToSpace& msg) {
   auto* space = FindSpace(msg.space_id);
   if (!space) {
     auto inserted = spaces_.emplace(msg.space_id, std::make_unique<Space>(msg.space_id));
     space = inserted.first->second.get();
   }
-  if (space->FindLocalCell(msg.cell_id) != nullptr) {
+  bool already_present = space->FindLocalCell(msg.cell_id) != nullptr;
+  if (already_present) {
     ATLAS_LOG_WARNING("CellApp: AddCellToSpace for already-present cell_id={}", msg.cell_id);
-    return;
-  }
-  space->AddLocalCell(std::make_unique<Cell>(*space, msg.cell_id, msg.bounds));
-  ATLAS_LOG_INFO("CellApp: added Cell {} to Space {}", msg.cell_id, msg.space_id);
+  } else {
+    space->AddLocalCell(std::make_unique<Cell>(*space, msg.cell_id, msg.bounds));
+    ATLAS_LOG_INFO("CellApp: added Cell {} to Space {}", msg.cell_id, msg.space_id);
 
-  // Primary host auto-spawns the space-owner entity so NPCs / world state are
-  // alive before any Avatar logs in. Idempotent: CellAppMgr ensures only one
-  // AddCellToSpace per (cellapp, primary cell) per space lifetime.
-  if (msg.is_primary && !msg.space_master_type.empty()) {
-    SpawnSpaceMaster(msg.space_id, msg.space_master_type);
+    // Primary host auto-spawns the space-owner entity so NPCs / world state are
+    // alive before any Avatar logs in. Idempotent: CellAppMgr ensures only one
+    // AddCellToSpace per (cellapp, primary cell) per space lifetime.
+    if (msg.is_primary && !msg.space_master_type.empty()) {
+      SpawnSpaceMaster(msg.space_id, msg.space_master_type);
+    }
+  }
+
+  // Ack the mgr so it can release any deferred UpdateGeometry broadcast.
+  // success=true even for the duplicate case — local Cell is in place either
+  // way, mgr has no rollback to do.
+  if (ch != nullptr) {
+    cellappmgr::AddCellToSpaceAck ack;
+    ack.space_id = msg.space_id;
+    ack.cell_id = msg.cell_id;
+    ack.success = true;
+    if (auto r = ch->SendMessage(ack); !r) {
+      ATLAS_LOG_WARNING("CellApp: AddCellToSpaceAck send failed (space={} cell={}): {}",
+                        msg.space_id, msg.cell_id, r.Error().Message());
+    }
   }
 }
 

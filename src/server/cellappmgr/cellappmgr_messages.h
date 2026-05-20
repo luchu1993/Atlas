@@ -223,6 +223,45 @@ struct AddCellToSpace {
 };
 static_assert(NetworkMessage<AddCellToSpace>);
 
+// Sent from CellApp -> CellAppMgr after a fresh AddCellToSpace local Cell is
+// in place. CellAppMgr holds the matching UpdateGeometry broadcast until this
+// ack lands so old cellapps don't start offloading entities into a cell the
+// receiver hasn't materialised yet.
+struct AddCellToSpaceAck {
+  SpaceID space_id{kInvalidSpaceID};
+  CellID cell_id{0};
+  bool success{true};
+
+  static auto Descriptor() -> const MessageDesc& {
+    static const MessageDesc kDesc{msg_id::Id(msg_id::CellAppMgr::kAddCellToSpaceAck),
+                                   "cellappmgr::AddCellToSpaceAck",
+                                   MessageLengthStyle::kFixed,
+                                   sizeof(uint32_t) + sizeof(uint32_t) + sizeof(uint8_t),
+                                   MessageReliability::kReliable,
+                                   MessageUrgency::kImmediate};
+    return kDesc;
+  }
+
+  void Serialize(BinaryWriter& w) const {
+    w.Write(space_id);
+    w.Write(cell_id);
+    w.Write<uint8_t>(success ? 1u : 0u);
+  }
+
+  static auto Deserialize(BinaryReader& r) -> Result<AddCellToSpaceAck> {
+    auto sid = r.Read<uint32_t>();
+    auto cid = r.Read<uint32_t>();
+    auto s = r.Read<uint8_t>();
+    if (!sid || !cid || !s) return Error{ErrorCode::kInvalidArgument, "AddCellToSpaceAck: truncated"};
+    AddCellToSpaceAck msg;
+    msg.space_id = *sid;
+    msg.cell_id = *cid;
+    msg.success = *s != 0;
+    return msg;
+  }
+};
+static_assert(NetworkMessage<AddCellToSpaceAck>);
+
 // `bsp_blob` is the BSPTree serialization; the structure itself is
 // defined in src/server/cellappmgr/bsp_tree.h and opaque to the
 // message layer - CellAppMgr owns the tree, CellApp replays it.

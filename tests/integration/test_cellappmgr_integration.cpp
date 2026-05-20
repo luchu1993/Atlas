@@ -106,8 +106,17 @@ struct CellAppClient {
           register_ack_received.store(true, std::memory_order_release);
         });
     network.InterfaceTable().RegisterTypedHandler<AddCellToSpace>(
-        [this](const Address&, Channel*, const AddCellToSpace& msg) {
+        [this](const Address&, Channel* ch, const AddCellToSpace& msg) {
           add_cell_msgs.push_back(msg);
+          // Mirror real cellapp: ack mgr so deferred UpdateGeometry can release.
+          // Tests that exercise the timeout fallback set ack_add_cell=false.
+          if (ack_add_cell && ch != nullptr) {
+            AddCellToSpaceAck ack;
+            ack.space_id = msg.space_id;
+            ack.cell_id = msg.cell_id;
+            ack.success = true;
+            (void)ch->SendMessage(ack);
+          }
         });
     network.InterfaceTable().RegisterTypedHandler<UpdateGeometry>(
         [this](const Address&, Channel*, const UpdateGeometry& msg) {
@@ -126,6 +135,9 @@ struct CellAppClient {
   std::vector<AddCellToSpace> add_cell_msgs;
   std::vector<UpdateGeometry> update_geometry_msgs;
   std::vector<SpaceCreatedResult> space_created_results;
+  // Real cellapp acks AddCellToSpace; some tests opt out to exercise the
+  // mgr-side timeout-fallback broadcast.
+  bool ack_add_cell{true};
 };
 
 struct MgrFixture {
@@ -394,6 +406,145 @@ TEST(CellAppMgrIntegration, InformCellLoad_InfluencesLeastLoadedHostPick) {
 
 // CreateSpaceRequest with initial_cell_count=N fans N cells across the N
 // least-loaded CellApps; UpdateGeometry blob holds N distinct leaves.
+// A CellApp registering AFTER Space creation triggers an elastic split:
+// the heaviest leaf halves, the new half lands on the late-joining app,
+// and all existing cellapps see the new geometry. Covers the boot-time
+// race where the queued CreateSpace drained on the first cellapp but
+// sibling cellapps registered moments later.
+TEST(CellAppMgrIntegration, LateCellAppRegistration_TriggersElasticSplit) {
+  MgrFixture fx;
+  ASSERT_NE(fx.port, 0u);
+
+  // Phase 1: one cellapp + a Space create → single-cell Space.
+  CellAppClient first{"cellapp_first"};
+  auto ch_first = first.network.ConnectRudp(fx.server_addr);
+  ASSERT_TRUE(ch_first.HasValue());
+  RegisterCellApp reg_first;
+  reg_first.internal_addr = Address(0, 30601);
+  ASSERT_TRUE((*ch_first)->SendMessage(reg_first).HasValue());
+  ASSERT_TRUE(PollUntil(first.dispatcher, [&] {
+    return first.register_ack_received.load(std::memory_order_acquire);
+  }));
+
+  CreateSpaceRequest csr;
+  csr.space_id = 77;
+  csr.request_id = 1;
+  csr.reply_addr = first.network.RudpAddress();
+  ASSERT_TRUE((*ch_first)->SendMessage(csr).HasValue());
+
+  ASSERT_TRUE(PollUntil(first.dispatcher, [&] {
+    return !first.add_cell_msgs.empty() && !first.update_geometry_msgs.empty();
+  }));
+  EXPECT_EQ(first.add_cell_msgs.size(), 1u);
+  BinaryReader r1(std::span<const std::byte>(first.update_geometry_msgs.back().bsp_blob));
+  auto tree1 = BSPTree::Deserialize(r1);
+  ASSERT_TRUE(tree1.HasValue());
+  EXPECT_EQ(tree1->Leaves().size(), 1u);
+
+  // Phase 2: a late cellapp registers; the mgr must split the existing cell
+  // onto it and broadcast the 2-leaf geometry to everyone in the Space.
+  CellAppClient late{"cellapp_late"};
+  auto ch_late = late.network.ConnectRudp(fx.server_addr);
+  ASSERT_TRUE(ch_late.HasValue());
+  RegisterCellApp reg_late;
+  reg_late.internal_addr = Address(0, 30602);
+  ASSERT_TRUE((*ch_late)->SendMessage(reg_late).HasValue());
+  ASSERT_TRUE(PollUntil(late.dispatcher, [&] {
+    return late.register_ack_received.load(std::memory_order_acquire);
+  }));
+
+  // Late app receives an AddCellToSpace for the freshly-split leaf.
+  ASSERT_TRUE(PollUntil(late.dispatcher, [&] {
+    return !late.add_cell_msgs.empty() && !late.update_geometry_msgs.empty();
+  })) << "Late cellapp never received the elastic-split AddCell+UpdateGeometry";
+  EXPECT_EQ(late.add_cell_msgs[0].space_id, 77u);
+  EXPECT_FALSE(late.add_cell_msgs[0].is_primary)
+      << "Late-joining cellapp must NOT be the primary host";
+
+  // First app sees the geometry refresh — its cell now covers only half.
+  ASSERT_TRUE(PollUntil(first.dispatcher, [&] {
+    return first.update_geometry_msgs.size() >= 2u;
+  })) << "Primary cellapp never received the updated 2-leaf geometry";
+  BinaryReader r2(
+      std::span<const std::byte>(first.update_geometry_msgs.back().bsp_blob));
+  auto tree2 = BSPTree::Deserialize(r2);
+  ASSERT_TRUE(tree2.HasValue());
+  ASSERT_EQ(tree2->Leaves().size(), 2u);
+
+  // Two distinct cellapp_addr entries — the split actually fanned out.
+  std::set<uint16_t> ports;
+  for (auto* leaf : tree2->Leaves()) ports.insert(leaf->cellapp_addr.Port());
+  EXPECT_EQ(ports.size(), 2u);
+}
+
+// AddCellToSpaceAck lost (or receiver slow): the mgr eventually broadcasts
+// UpdateGeometry anyway so the cluster doesn't deadlock waiting on a dead
+// peer. The receiver still gets the AddCellToSpace itself; only the
+// deferred geometry broadcast hits the timeout fallback.
+TEST(CellAppMgrIntegration, LateCellAppNotAcking_TimeoutFallbackBroadcasts) {
+  MgrFixture fx;
+  ASSERT_NE(fx.port, 0u);
+
+  CellAppClient first{"cellapp_first_to_grow"};
+  auto ch_first = first.network.ConnectRudp(fx.server_addr);
+  ASSERT_TRUE(ch_first.HasValue());
+  RegisterCellApp reg_first;
+  reg_first.internal_addr = Address(0, 30701);
+  ASSERT_TRUE((*ch_first)->SendMessage(reg_first).HasValue());
+  ASSERT_TRUE(PollUntil(first.dispatcher, [&] {
+    return first.register_ack_received.load(std::memory_order_acquire);
+  }));
+
+  CreateSpaceRequest csr;
+  csr.space_id = 88;
+  csr.request_id = 1;
+  csr.reply_addr = first.network.RudpAddress();
+  ASSERT_TRUE((*ch_first)->SendMessage(csr).HasValue());
+  ASSERT_TRUE(PollUntil(first.dispatcher, [&] {
+    return !first.update_geometry_msgs.empty();
+  }));
+
+  // Silent client: receives AddCellToSpace but never sends the ack.
+  CellAppClient silent{"cellapp_silent"};
+  silent.ack_add_cell = false;
+  auto ch_silent = silent.network.ConnectRudp(fx.server_addr);
+  ASSERT_TRUE(ch_silent.HasValue());
+  RegisterCellApp reg_silent;
+  reg_silent.internal_addr = Address(0, 30702);
+  ASSERT_TRUE((*ch_silent)->SendMessage(reg_silent).HasValue());
+
+  // Silent client receives AddCellToSpace immediately — the mgr sends it
+  // before deferring the geometry broadcast.
+  ASSERT_TRUE(PollUntil(silent.dispatcher, [&] {
+    return !silent.add_cell_msgs.empty();
+  })) << "Silent receiver missed AddCellToSpace";
+
+  // Immediately after silent received AddCellToSpace, the mgr should NOT
+  // have broadcast the post-Split geometry to first yet — the ack
+  // deferral keeps it parked. Windows sleep granularity (~15ms) makes
+  // bounded-wait checks brittle, so we rely on the message-arrival
+  // ordering: silent.add_cell_msgs is populated before any deferred
+  // broadcast could fire.
+  const auto baseline_count = first.update_geometry_msgs.size();
+  EXPECT_EQ(baseline_count, 1u)
+      << "first should have seen exactly 1 UpdateGeometry (from initial CreateSpace) "
+         "at the moment silent gets AddCellToSpace";
+
+  // After ~500ms timeout fires, mgr falls back to broadcasting anyway.
+  // Allow generous wall-clock budget for the fallback to land.
+  ASSERT_TRUE(PollUntil(
+      first.dispatcher,
+      [&] { return first.update_geometry_msgs.size() > baseline_count; },
+      std::chrono::milliseconds(3000)))
+      << "timeout fallback never broadcast geometry after the ack window";
+
+  // The fallback-broadcast BSP must reflect the new 2-leaf state.
+  BinaryReader r(std::span<const std::byte>(first.update_geometry_msgs.back().bsp_blob));
+  auto tree = BSPTree::Deserialize(r);
+  ASSERT_TRUE(tree.HasValue());
+  EXPECT_EQ(tree->Leaves().size(), 2u);
+}
+
 TEST(CellAppMgrIntegration, CreateSpace_MultiCellBootstrap_DistributesAcrossHosts) {
   MgrFixture fx;
   ASSERT_NE(fx.port, 0u);

@@ -137,6 +137,7 @@ enum class CellAppMgr : uint16_t {
   kUpdateGeometry = 7005,
   kShouldOffload = 7006,
   kSpaceCreatedResult = 7007,
+  kAddCellToSpaceAck = 7008,
 };
 
 enum class DBApp : uint16_t {
@@ -259,6 +260,7 @@ ATLAS_ASSERT_ID_RANGE(CellAppMgr::kAddCellToSpace, 7000, 7099);
 ATLAS_ASSERT_ID_RANGE(CellAppMgr::kUpdateGeometry, 7000, 7099);
 ATLAS_ASSERT_ID_RANGE(CellAppMgr::kShouldOffload, 7000, 7099);
 ATLAS_ASSERT_ID_RANGE(CellAppMgr::kSpaceCreatedResult, 7000, 7099);
+ATLAS_ASSERT_ID_RANGE(CellAppMgr::kAddCellToSpaceAck, 7000, 7099);
 
 ATLAS_ASSERT_ID_RANGE(DBApp::kWriteEntity, 4000, 4999);
 ATLAS_ASSERT_ID_RANGE(DBApp::kWriteEntityAck, 4000, 4999);
