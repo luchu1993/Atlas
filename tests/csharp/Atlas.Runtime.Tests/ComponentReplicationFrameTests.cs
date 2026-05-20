@@ -29,11 +29,11 @@ public class ComponentReplicationFrameTests
             bool any = avatar.BuildAndConsumeReplicationFrame(
                 ref buf.OwnerSnapshot, ref buf.OtherSnapshot,
                 ref buf.OwnerDelta, ref buf.OtherDelta,
-                out var eventSeq, out var volatileSeq);
+                out var hasEvent, out var hasVolatile);
 
             Assert.False(any);
-            Assert.Equal(0UL, eventSeq);
-            Assert.Equal(0UL, volatileSeq);
+            Assert.False(hasEvent);
+            Assert.False(hasVolatile);
         }
         finally { buf.Dispose(); }
     }
@@ -50,9 +50,9 @@ public class ComponentReplicationFrameTests
             bool any = avatar.BuildAndConsumeReplicationFrame(
                 ref buf.OwnerSnapshot, ref buf.OtherSnapshot,
                 ref buf.OwnerDelta, ref buf.OtherDelta,
-                out var eventSeq, out _);
+                out var hasEvent, out _);
             Assert.True(any);
-            Assert.Equal(1UL, eventSeq);
+            Assert.True(hasEvent);
 
             // Owner delta wire shape:
             //   [u8 sectionMask=0x04 — components only]

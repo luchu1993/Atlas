@@ -63,6 +63,22 @@ internal static unsafe partial class NativeApi
             SendCellRpcNative(entityId, rpcId, ptr, payload.Length, traceId);
     }
 
+    [LibraryImport(LibName, EntryPoint = "AtlasSetSpaceMasterType")]
+    private static partial void SetSpaceMasterTypeNative(uint spaceId, byte* name, int len);
+
+    // Empty / null unregisters. BaseApp-only; other process types treat as no-op.
+    public static void SetSpaceMasterType(uint spaceId, string? typeName)
+    {
+        ThreadGuard.EnsureMainThread();
+        if (string.IsNullOrEmpty(typeName))
+        {
+            SetSpaceMasterTypeNative(spaceId, null, 0);
+            return;
+        }
+        var bytes = System.Text.Encoding.UTF8.GetBytes(typeName);
+        fixed (byte* p = bytes) SetSpaceMasterTypeNative(spaceId, p, bytes.Length);
+    }
+
     [LibraryImport(LibName, EntryPoint = "AtlasSendBaseRpc")]
     private static partial void SendBaseRpcNative(
         uint entityId, uint rpcId, byte* payload, int payloadLen, ulong traceId);
@@ -286,17 +302,17 @@ internal static unsafe partial class NativeApi
         return new Vector3(x, y, z);
     }
 
-    // Four buffers accept nullptr with corresponding len == 0; non-CellApp
-    // hosts log + no-op so C# can blind-forward any advanced entity.
+    // C++ runtime owns the seq counters (CellEntity::replication_state_) so
+    // they survive Offload. Script only signals which streams advanced.
     [LibraryImport(LibName, EntryPoint = "AtlasPublishReplicationFrame")]
     private static partial void PublishReplicationFrameNative(
-        uint entityId, ulong eventSeq, ulong volatileSeq,
+        uint entityId, byte hasEvent, byte hasVolatile,
         byte* ownerSnap, int ownerSnapLen,
         byte* otherSnap, int otherSnapLen,
         byte* ownerDelta, int ownerDeltaLen,
         byte* otherDelta, int otherDeltaLen);
 
-    public static void PublishReplicationFrame(uint entityId, ulong eventSeq, ulong volatileSeq,
+    public static void PublishReplicationFrame(uint entityId, bool hasEvent, bool hasVolatile,
         ReadOnlySpan<byte> ownerSnap, ReadOnlySpan<byte> otherSnap,
         ReadOnlySpan<byte> ownerDelta, ReadOnlySpan<byte> otherDelta)
     {
@@ -307,12 +323,25 @@ internal static unsafe partial class NativeApi
         fixed (byte* otherDeltaPtr = otherDelta)
         {
             PublishReplicationFrameNative(
-                entityId, eventSeq, volatileSeq,
+                entityId, (byte)(hasEvent ? 1 : 0), (byte)(hasVolatile ? 1 : 0),
                 ownerSnapPtr, ownerSnap.Length,
                 otherSnapPtr, otherSnap.Length,
                 ownerDeltaPtr, ownerDelta.Length,
                 otherDeltaPtr, otherDelta.Length);
         }
+    }
+
+    // Synchronous write of the entity's full state to DBApp. Only meaningful on
+    // BaseApp (no-op on other process types). Use for properties that must
+    // persist outside the normal logoff-snapshot path (e.g. detached Account).
+    [LibraryImport(LibName, EntryPoint = "AtlasWriteToDb")]
+    private static partial void WriteToDbNative(uint entityId, byte* entityData, int len);
+
+    public static void WriteEntityToDb(uint entityId, ReadOnlySpan<byte> entityData)
+    {
+        ThreadGuard.EnsureMainThread();
+        fixed (byte* p = entityData)
+            WriteToDbNative(entityId, p, entityData.Length);
     }
 
     [LibraryImport(LibName, EntryPoint = "AtlasGetAbiVersion")]

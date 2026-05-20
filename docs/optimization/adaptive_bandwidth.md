@@ -42,7 +42,7 @@ trade-off is one tick of allocation lag for unmodelled enter bursts.
 |---|---|
 | `bandwidth deficit` warnings on the *same* observers tick after tick | bump `witness_per_peer_bytes` — steady estimate undersized for the scene |
 | `bandwidth deficit` only during enter bursts | leave it; carryover absorbs bursts within one-tick lag |
-| `Witness::Update::Pump` zone wide and blank | `witness_max_peers_per_tick` is the bottleneck, not bandwidth — peer queue can't fill |
+| `Witness::Update::PerBandPump` zone wide and blank | the relevant band's `witness_lod_*_max_peers_per_tick` is the bottleneck, not bandwidth — band queue can't fill |
 | Cellapp egress saturates NIC | lower `witness_total_outbound_cap_bytes`; observers degrade proportionally instead of a few starving |
 | Sparse PvE deployment wastes bandwidth | values fine as-is; demand-based naturally drops to actual need |
 

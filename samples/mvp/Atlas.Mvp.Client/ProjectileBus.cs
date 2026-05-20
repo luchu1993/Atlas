@@ -16,3 +16,11 @@ public static class ProjectileBus
     internal static void RaiseEnded(uint shotId, Vector3 endPos, uint hitTargetId) =>
         Ended?.Invoke(shotId, endPos, hitTargetId);
 }
+
+public static class ChatBus
+{
+    public static event Action<uint, string>? Received;
+
+    internal static void Raise(uint senderId, string text) =>
+        Received?.Invoke(senderId, text);
+}

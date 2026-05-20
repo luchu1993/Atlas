@@ -34,9 +34,9 @@ public class ListSyncTests
             bool has = src.BuildAndConsumeReplicationFrame(
                 ref buf.OwnerSnapshot, ref buf.OtherSnapshot,
                 ref buf.OwnerDelta, ref buf.OtherDelta,
-                out ulong eventSeq, out _);
+                out bool hasEvent, out _);
             Assert.True(has);
-            Assert.Equal(1UL, eventSeq);
+            Assert.True(hasEvent);
 
             // CompactOpLog merges three adjacent appends into a single
             // Splice(0,0,[3 items]). Wire: [sectionMask u8][container

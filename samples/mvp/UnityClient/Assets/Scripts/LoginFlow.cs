@@ -18,14 +18,29 @@ namespace Atlas.Mvp.Unity
 
     public sealed class LoginFlow
     {
+        const float kBackoffBaseSec = 1f;
+        const float kBackoffCapSec = 30f;
+
         readonly AtlasNetworkManager _net;
         LoginFlowState _state = LoginFlowState.Idle;
         string? _lastError;
         uint _accountEntityId;
+        string? _cachedUser;
+        string? _cachedHash;
+        bool _hasCached;
+        int _reconnectAttempts;
+        float _reconnectClock;
+        float _reconnectDueSec;
+        bool _autoReconnect = true;
 
         public LoginFlowState State => _state;
         public string? LastError => _lastError;
         public uint AccountEntityId => _accountEntityId;
+        public bool AutoReconnect { get => _autoReconnect; set => _autoReconnect = value; }
+        public int ReconnectAttempts => _reconnectAttempts;
+        public bool IsReconnectPending => _reconnectDueSec > 0f;
+        public float ReconnectDelayRemaining
+            => _reconnectDueSec > 0f ? Mathf.Max(0f, _reconnectDueSec - _reconnectClock) : 0f;
 
         public event Action<LoginFlowState>? StateChanged;
 
@@ -46,6 +61,10 @@ namespace Atlas.Mvp.Unity
         {
             if (_state != LoginFlowState.Idle && _state != LoginFlowState.Failed)
                 return false;
+            _cachedUser = username;
+            _cachedHash = passwordHash;
+            _hasCached = true;
+            _reconnectDueSec = 0f;
             _lastError = null;
             Transition(LoginFlowState.Connecting);
             int rc = _net.Login(username, passwordHash);
@@ -57,18 +76,55 @@ namespace Atlas.Mvp.Unity
             return true;
         }
 
+        // Bootstrap calls this on non-user-initiated disconnect; schedules
+        // the next retry if auto-reconnect + cached credentials are both set.
+        public void HandleDroppedConnection()
+        {
+            if (!_autoReconnect || !_hasCached)
+            {
+                Reset();
+                return;
+            }
+            if (_state != LoginFlowState.Failed)
+                Transition(LoginFlowState.Failed);
+            if (_reconnectDueSec > 0f) return;
+            _reconnectDueSec = _reconnectClock + ComputeBackoffSec(_reconnectAttempts);
+        }
+
+        public void TickReconnect(float dt)
+        {
+            _reconnectClock += dt;
+            if (_reconnectDueSec <= 0f) return;
+            if (_state != LoginFlowState.Failed) return;
+            if (_reconnectClock < _reconnectDueSec) return;
+            _reconnectDueSec = 0f;
+            ++_reconnectAttempts;
+            Begin(_cachedUser!, _cachedHash!);
+        }
+
+        static float ComputeBackoffSec(int attempts)
+        {
+            float scaled = kBackoffBaseSec * Mathf.Pow(2f, attempts);
+            return Mathf.Min(scaled, kBackoffCapSec);
+        }
+
         // Called by Bootstrap once the owner Avatar entity is bound; transitions
         // EnteringWorld → InGame so the UI can dismiss its loading state.
         public void NotifyEnteredWorld()
         {
             if (_state == LoginFlowState.EnteringWorld)
+            {
                 Transition(LoginFlowState.InGame);
+                _reconnectAttempts = 0;
+            }
         }
 
         public void Reset()
         {
             _accountEntityId = 0;
             _lastError = null;
+            _reconnectDueSec = 0f;
+            _reconnectAttempts = 0;
             Transition(LoginFlowState.Idle);
         }
 
@@ -114,6 +170,10 @@ namespace Atlas.Mvp.Unity
             // Drop the native ctx back to Disconnected so the next Begin can
             // open a fresh connection; otherwise AtlasNetLogin returns EINVAL.
             _net.Logout();
+            // Logout is a no-op when already disconnected — schedule directly
+            // so a sync Login submit failure still drives the retry loop.
+            if (_autoReconnect && _hasCached && _reconnectDueSec <= 0f)
+                _reconnectDueSec = _reconnectClock + ComputeBackoffSec(_reconnectAttempts);
         }
 
         void Transition(LoginFlowState next)

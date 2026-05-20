@@ -116,9 +116,7 @@ void CellEntity::ConvertRealToGhost(Channel* new_real_channel) {
     ATLAS_LOG_WARNING("CellEntity::ConvertRealToGhost on non-Real entity id={} — ignored", id_);
     return;
   }
-  // Tear down script-facing surfaces first so nothing fires during the
-  // handover. Deactivate before reset to give AoITriggers a chance to
-  // unhook.
+  // Deactivate before reset so AoITriggers unhook before witness_ vanishes.
   if (witness_) {
     witness_->Deactivate();
     witness_.reset();
@@ -127,8 +125,6 @@ void CellEntity::ConvertRealToGhost(Channel* new_real_channel) {
   // Drop the haunt list and velocity sample - we're no longer authoritative.
   real_data_.reset();
   real_channel_ = new_real_channel;
-  // range_node_ stays in place; as a Ghost we're still spatially present
-  // for peer witnesses observing this Cell.
 }
 
 void CellEntity::ConvertGhostToReal() {
@@ -139,8 +135,6 @@ void CellEntity::ConvertGhostToReal() {
   real_channel_ = nullptr;
   next_real_addr_ = {};
   real_data_ = std::make_unique<RealEntityData>(*this);
-  // replication_state_ carries over - the freshly-minted Real inherits
-  // the baseline the Ghost was already serving until the next C# publish.
 }
 
 void CellEntity::GhostUpdatePosition(const math::Vector3& pos, const math::Vector3& direction,
@@ -247,29 +241,24 @@ void CellEntity::SetPositionAndDirection(const math::Vector3& pos, const math::V
   if (witness_) witness_->OnOwnerMoved(old.x, old.z);
 }
 
-void CellEntity::PublishReplicationFrame(ReplicationFrame frame,
+void CellEntity::PublishReplicationFrame(ReplicationFrame frame, bool has_event, bool has_volatile,
                                          std::span<const std::byte> owner_snapshot,
                                          std::span<const std::byte> other_snapshot) {
   ATLAS_PROFILE_ZONE_N("CellEntity::PublishReplicationFrame");
+  if (!has_event && !has_volatile) return;
   if (!replication_state_.has_value()) replication_state_.emplace();
   auto& state = *replication_state_;
 
-  // Event stream: ordered, cumulative. Advance + snapshot + history.
-  if (frame.event_seq > state.latest_event_seq) {
-    state.latest_event_seq = frame.event_seq;
+  if (has_event) {
+    frame.event_seq = ++state.latest_event_seq;
     state.owner_snapshot.assign(owner_snapshot.begin(), owner_snapshot.end());
     state.other_snapshot.assign(other_snapshot.begin(), other_snapshot.end());
     state.history.push_back(frame);
     while (state.history.size() > kReplicationHistoryWindow) state.history.pop_front();
   }
 
-  // Volatile stream: latest-wins. No history; just bump the counter and
-  // adopt the new position/direction as C++'s authoritative mirror.
-  if (frame.volatile_seq > state.latest_volatile_seq) {
-    state.latest_volatile_seq = frame.volatile_seq;
-    // The C# layer will have called atlas_set_position earlier in the
-    // tick, so these fields may already agree; adopt unconditionally so
-    // callers can publish without a prior SetPosition.
+  if (has_volatile) {
+    frame.volatile_seq = ++state.latest_volatile_seq;
     if (frame.position.x != position_.x || frame.position.y != position_.y ||
         frame.position.z != position_.z) {
       SetPosition(frame.position);
@@ -277,6 +266,18 @@ void CellEntity::PublishReplicationFrame(ReplicationFrame frame,
     direction_ = frame.direction;
     on_ground_ = frame.on_ground;
   }
+}
+
+void CellEntity::SeedReplicationState(uint64_t latest_event_seq, uint64_t latest_volatile_seq,
+                                      std::span<const std::byte> owner_snapshot,
+                                      std::span<const std::byte> other_snapshot) {
+  if (!replication_state_.has_value()) replication_state_.emplace();
+  auto& state = *replication_state_;
+  state.latest_event_seq = latest_event_seq;
+  state.latest_volatile_seq = latest_volatile_seq;
+  state.owner_snapshot.assign(owner_snapshot.begin(), owner_snapshot.end());
+  state.other_snapshot.assign(other_snapshot.begin(), other_snapshot.end());
+  state.history.clear();
 }
 
 auto CellEntity::GetReplicationState() const -> const ReplicationState* {

@@ -1,5 +1,6 @@
 #pragma once
 
+#include <array>
 #include <cstdint>
 #include <filesystem>
 #include <fstream>
@@ -10,16 +11,8 @@
 #include "entitydef/entity_type_descriptor.h"
 #include "serialization/binary_stream.h"
 
-// Binary-descriptor fixture for the canonical "Account" entity used across
-// DBApp integration tests (type_id=1, identifier="accountName" string,
-// "level" int32, both persistent base-only). The blob format mirrors what
-// EntityDefRegistry::RegisterType reads on the wire — keeping it in lockstep
-// with the codegen-emitted Build_<Foo> output is the whole point of the
-// dual-emit pipeline.
-//
-// Lives in a header so tests don't need a separate translation unit; helpers
-// are inline. Each test should call WriteAccountAtdfFile once at startup and
-// pass the returned path to DBApp via --entitydef-bin-path.
+// Account fixture (type_id=1, accountName/level); blob layout must track
+// EntityDefRegistry::RegisterFromBinaryBuffer so DBApp tests load cleanly.
 
 namespace atlas::test_fixtures {
 
@@ -62,6 +55,9 @@ inline auto WriteAccountAtdfFile(const std::filesystem::path& path) -> std::file
   w.Write<uint32_t>(EntityDefRegistry::kBinaryFileMagic);
   w.Write<uint16_t>(EntityDefRegistry::kBinaryFileVersion);
   w.Write<uint16_t>(0);  // flags
+  // ATDF v3: 32-byte digest follows flags; tests use a zero digest.
+  std::array<std::byte, EntityDefRegistry::kDigestSize> digest{};
+  w.WriteBytes(std::span<const std::byte>(digest.data(), digest.size()));
   w.WritePackedInt(0);   // 0 structs
   w.WritePackedInt(0);   // 0 components
   w.WritePackedInt(1);   // 1 type

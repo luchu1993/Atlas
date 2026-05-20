@@ -10,7 +10,22 @@ public partial class Avatar : ClientEntity
     public event Action<int, uint>? DamageReceived;
     public event Action<uint>? Died;
     public event Action<Vector3>? Respawned;
+    public event Action<int>? GoldChanged;
+    public event Action<int>? LevelChanged;
+    public event Action<string>? SessionInfoReceived;
+    public string LastSessionLabel { get; private set; } = string.Empty;
     public bool IsDead { get; private set; }
+
+    partial void OnGoldChanged(int oldValue, int newValue) => GoldChanged?.Invoke(newValue);
+    partial void OnLevelChanged(int oldValue, int newValue) => LevelChanged?.Invoke(newValue);
+
+    public partial void OnSessionInfo(string label)
+    {
+        // RPC may arrive before AvatarView subscribes in Bootstrap; cache so
+        // SetOwner can replay on subscribe.
+        LastSessionLabel = label;
+        SessionInfoReceived?.Invoke(label);
+    }
 
     public partial void ShowDamage(int amount, uint attackerId) =>
         DamageReceived?.Invoke(amount, attackerId);
@@ -35,4 +50,7 @@ public partial class Avatar : ClientEntity
 
     public partial void OnProjectileEnded(uint shotId, Vector3 endPos, uint hitTargetId) =>
         ProjectileBus.RaiseEnded(shotId, endPos, hitTargetId);
+
+    public partial void OnChat(uint senderId, string text) =>
+        ChatBus.Raise(senderId, text);
 }

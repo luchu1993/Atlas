@@ -382,9 +382,14 @@ auto ClientSession::FillStats(AtlasNetStats* out) const -> int32_t {
   }
   Channel* ch = baseapp_channel_ ? baseapp_channel_ : loginapp_channel_;
   if (ch && !ch->IsCondemned()) {
+    // uint32 truncation is intentional: ABI pins these fields and MVP sessions
+    // stay well under 4 GiB per direction.
+    out->bytes_sent = static_cast<uint32_t>(ch->BytesSent());
+    out->bytes_recv = static_cast<uint32_t>(ch->BytesReceived());
     if (auto* rudp = dynamic_cast<ReliableUdpChannel*>(ch)) {
       out->rtt_ms = static_cast<uint32_t>(
           std::chrono::duration_cast<std::chrono::milliseconds>(rudp->Rtt()).count());
+      out->send_queue_size = rudp->UnackedCount();
     }
   }
   return ATLAS_NET_OK;

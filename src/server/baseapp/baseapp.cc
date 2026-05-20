@@ -92,6 +92,19 @@ auto DecodeDbBlob(std::span<const std::byte> blob, std::span<const std::byte>& b
   return true;
 }
 
+// Deterministic peer fallback when no mgr is connected: pick by
+// (space_id-1) % sorted_peers — mirrors the pre-Phase 11 routing.
+auto LegacyPickPeer(const std::unordered_map<Address, Channel*>& peers, SpaceID space_id)
+    -> std::pair<Address, Channel*> {
+  std::vector<std::pair<Address, Channel*>> sorted(peers.begin(), peers.end());
+  std::sort(sorted.begin(), sorted.end(), [](const auto& a, const auto& b) {
+    if (a.first.Ip() != b.first.Ip()) return a.first.Ip() < b.first.Ip();
+    return a.first.Port() < b.first.Port();
+  });
+  const std::size_t idx = static_cast<std::size_t>(space_id - 1) % sorted.size();
+  return sorted[idx];
+}
+
 }  // namespace
 
 void BaseApp::LoadTracker::MarkTickStarted() {
@@ -239,6 +252,10 @@ auto BaseApp::Init(int argc, char* argv[]) -> bool {
           cellappmgr_channel_ = static_cast<Channel*>(*ch);
           ATLAS_LOG_INFO("BaseApp: CellAppMgr connected at {}:{}", n.internal_addr.Ip(),
                          n.internal_addr.Port());
+          // Bootstrap any space whose master was registered before mgr came up.
+          for (const auto& [space_id, _] : space_master_types_) {
+            EnsureSpaceBootstrap(space_id);
+          }
         }
       },
       [this](const machined::DeathNotification& /*n*/) {
@@ -248,6 +265,12 @@ auto BaseApp::Init(int argc, char* argv[]) -> bool {
           if (cb) cb(/*success=*/false, /*space_id=*/0, Address{});
         }
         pending_space_creates_.clear();
+        // Callbacks above fire with space_id=0 so per-space caches can't
+        // self-clean — wipe them here so a resurrected mgr re-bootstraps.
+        known_space_hosts_.clear();
+        pending_cell_entity_creates_.clear();
+        pending_spawn_local_entities_.clear();
+        in_flight_space_requests_.clear();
       });
 
   GetMachinedClient().Subscribe(
@@ -803,10 +826,32 @@ void BaseApp::OnCellEntityDestroyed(Channel& /*ch*/, const baseapp::CellEntityDe
   ent->ClearCell();
 }
 
-void BaseApp::OnCurrentCell(Channel& /*ch*/, const baseapp::CurrentCell& msg) {
+void BaseApp::OnCurrentCell(Channel& ch, const baseapp::CurrentCell& msg) {
   auto* ent = entity_mgr_.Find(msg.entity_id);
   if (!ent) return;
-  ent->SetCell(msg.cell_addr, msg.epoch);
+  // INADDR_ANY binds make Network().RudpAddress() report 0.0.0.0:P; machined
+  // keys peers by the source IP it observes, so fall back to ch.RemoteAddress().
+  Address cell_addr = msg.cell_addr;
+  if (cell_addr.Ip() == 0) cell_addr = Address(ch.RemoteAddress().Ip(), cell_addr.Port());
+  ent->SetCell(cell_addr, msg.epoch);
+
+  // Drain any ClientCellRpc that arrived before this CurrentCell ack.
+  auto pending_it = pending_client_rpcs_.find(msg.entity_id);
+  if (pending_it == pending_client_rpcs_.end()) return;
+  auto* ch_out = ResolveCellChannelByAddr(cellapp_peers_.Channels(), cell_addr);
+  if (ch_out != nullptr) {
+    for (auto& p : pending_it->second) {
+      cellapp::ClientCellRpcForward fwd;
+      fwd.target_entity_id = msg.entity_id;
+      fwd.source_entity_id = p.source_entity_id;
+      fwd.rpc_id = p.rpc_id;
+      fwd.payload = std::move(p.payload);
+      fwd.trace_id = p.trace_id;
+      ++client_cell_rpc_received_total_;
+      (void)ch_out->SendMessage(fwd);
+    }
+  }
+  pending_client_rpcs_.erase(pending_it);
 }
 
 // Re-creates each Real on the rehome target using the cached
@@ -1917,35 +1962,19 @@ void BaseApp::DoGiveClientToLocal(EntityID src_id, EntityID dest_id) {
 
 auto BaseApp::RequestSpawnCellOnly(uint16_t type_id, SpaceID space_id, math::Vector3 position,
                                    math::Vector3 direction, bool on_ground) -> bool {
-  const auto& peers = cellapp_peers_.Channels();
-  if (peers.empty()) {
+  if (cellapp_peers_.Size() == 0) {
     ATLAS_LOG_WARNING(
         "BaseApp: RequestSpawnCellOnly: type {} requested but no CellApp peer available", type_id);
     return false;
   }
-  // Mirror CreateBaseEntityFromScript's deterministic pick so a given
-  // space lands on the same CellApp every time.
-  std::vector<std::pair<Address, Channel*>> sorted_peers(peers.begin(), peers.end());
-  std::sort(sorted_peers.begin(), sorted_peers.end(), [](const auto& a, const auto& b) {
-    if (a.first.Ip() != b.first.Ip()) return a.first.Ip() < b.first.Ip();
-    return a.first.Port() < b.first.Port();
-  });
   const SpaceID effective_space_id = space_id == kInvalidSpaceID ? SpaceID{1} : space_id;
-  const std::size_t cell_index =
-      static_cast<std::size_t>(effective_space_id - 1) % sorted_peers.size();
-  auto* cell_ch = sorted_peers[cell_index].second;
-
   cellapp::SpawnLocalEntity msg;
   msg.type_id = type_id;
   msg.space_id = effective_space_id;
   msg.position = position;
   msg.direction = direction;
   msg.on_ground = on_ground;
-  if (auto r = cell_ch->SendMessage(msg); !r) {
-    ATLAS_LOG_WARNING("BaseApp: SpawnLocalEntity send failed (type_id={}): {}", type_id,
-                      r.Error().Message());
-    return false;
-  }
+  DispatchSpawnLocalEntity(std::move(msg));
   return true;
 }
 
@@ -1973,9 +2002,6 @@ auto BaseApp::CreateBaseEntityFromScript(uint16_t type_id, SpaceID space_id) -> 
     return 0;
   }
 
-  // Pick CellApp deterministically by (sorted peer addr, space_id) so all
-  // entities in a space land on the same CellApp; otherwise a duplicate
-  // space is auto-created on each peer.
   if (type->has_cell) {
     const auto& peers = cellapp_peers_.Channels();
     if (peers.empty()) {
@@ -1983,17 +2009,9 @@ auto BaseApp::CreateBaseEntityFromScript(uint16_t type_id, SpaceID space_id) -> 
           "BaseApp: CreateBaseEntityFromScript: type {} has_cell but no CellApp peer available",
           type_id);
     } else {
-      std::vector<std::pair<Address, Channel*>> sorted_peers(peers.begin(), peers.end());
-      std::sort(sorted_peers.begin(), sorted_peers.end(), [](const auto& a, const auto& b) {
-        if (a.first.Ip() != b.first.Ip()) return a.first.Ip() < b.first.Ip();
-        return a.first.Port() < b.first.Port();
-      });
       const SpaceID effective_space_id = space_id == kInvalidSpaceID ? SpaceID{1} : space_id;
       // Required for CellApp-death restore lookup keyed by {dead_addr, space_id}.
       ent->SetSpaceId(effective_space_id);
-      const std::size_t cell_index =
-          static_cast<std::size_t>(effective_space_id - 1) % sorted_peers.size();
-      auto* cell_ch = sorted_peers[cell_index].second;
       cellapp::CreateCellEntity msg;
       msg.entity_id = kEid;
       msg.type_id = type_id;
@@ -2003,25 +2021,172 @@ auto BaseApp::CreateBaseEntityFromScript(uint16_t type_id, SpaceID space_id) -> 
       msg.on_ground = false;
       msg.base_addr = Network().RudpAddress();
       msg.request_id = kEid;
-      // If the Proxy holds cell_backup_data_ from a prior DB checkout
-      // or cell-side backup push, hand it to the cell via script_init_data
-      // so Cell.Deserialize can hydrate cell-scope properties. Empty on
-      // first-time CreateBaseEntityFromScript - cell uses type defaults.
+      // CellBackupData is the cell-scope blob from a prior DB checkout (empty
+      // on a brand-new entity); cell side uses type defaults if empty.
       if (auto* ent_new = entity_mgr_.Find(kEid); ent_new) {
         msg.script_init_data = ent_new->CellBackupData();
       }
-      if (auto r = cell_ch->SendMessage(msg); !r) {
-        // No retry: surface so script-driven create regressions are visible.
-        ATLAS_LOG_WARNING(
-            "BaseApp: script-driven CreateCellEntity send failed (entity_id={}, type_id={}): {}",
-            kEid, type_id, r.Error().Message());
-      }
-      ATLAS_LOG_INFO("BaseApp: sent CreateCellEntity for entity={} type={} space={} to {}", kEid,
-                     type_id, effective_space_id, sorted_peers[cell_index].first.ToString());
+      DispatchCreateCellEntity(std::move(msg));
     }
   }
 
   return kEid;
+}
+
+void BaseApp::DispatchCreateCellEntity(cellapp::CreateCellEntity msg) {
+  const SpaceID space_id = msg.space_id;
+  const EntityID kEid = msg.entity_id;
+  const uint16_t type_id = msg.type_id;
+
+  if (auto it = known_space_hosts_.find(space_id); it != known_space_hosts_.end()) {
+    if (auto* ch = ResolveCellChannelByAddr(cellapp_peers_.Channels(), it->second)) {
+      if (auto r = ch->SendMessage(msg); !r) {
+        ATLAS_LOG_WARNING("BaseApp: CreateCellEntity send failed (entity={}, type={}): {}", kEid,
+                          type_id, r.Error().Message());
+      }
+      ATLAS_LOG_INFO("BaseApp: sent CreateCellEntity entity={} type={} space={} to {}", kEid,
+                     type_id, space_id, it->second.ToString());
+      return;
+    }
+    // Cached host vanished (cellapp death). Fall through to re-bootstrap.
+    known_space_hosts_.erase(it);
+  }
+
+  if (cellappmgr_channel_ != nullptr) {
+    pending_cell_entity_creates_[space_id].push_back(std::move(msg));
+    EnsureSpaceBootstrap(space_id);
+    return;
+  }
+
+  const auto& peers = cellapp_peers_.Channels();
+  auto [addr, cell_ch] = LegacyPickPeer(peers, space_id);
+  if (auto r = cell_ch->SendMessage(msg); !r) {
+    ATLAS_LOG_WARNING("BaseApp: CreateCellEntity send failed (entity={}, type={}): {}", kEid,
+                      type_id, r.Error().Message());
+  }
+  ATLAS_LOG_INFO("BaseApp: sent CreateCellEntity entity={} type={} space={} to {} (no mgr)",
+                 kEid, type_id, space_id, addr.ToString());
+}
+
+void BaseApp::DispatchSpawnLocalEntity(cellapp::SpawnLocalEntity msg) {
+  const SpaceID space_id = msg.space_id;
+  const uint16_t type_id = msg.type_id;
+
+  if (auto it = known_space_hosts_.find(space_id); it != known_space_hosts_.end()) {
+    if (auto* ch = ResolveCellChannelByAddr(cellapp_peers_.Channels(), it->second)) {
+      if (auto r = ch->SendMessage(msg); !r) {
+        ATLAS_LOG_WARNING("BaseApp: SpawnLocalEntity send failed (type={}): {}", type_id,
+                          r.Error().Message());
+      }
+      return;
+    }
+    known_space_hosts_.erase(it);
+  }
+
+  if (cellappmgr_channel_ != nullptr) {
+    pending_spawn_local_entities_[space_id].push_back(std::move(msg));
+    EnsureSpaceBootstrap(space_id);
+    return;
+  }
+
+  const auto& peers = cellapp_peers_.Channels();
+  auto [addr, cell_ch] = LegacyPickPeer(peers, space_id);
+  if (auto r = cell_ch->SendMessage(msg); !r) {
+    ATLAS_LOG_WARNING("BaseApp: SpawnLocalEntity send failed (type={}) to {}: {}", type_id,
+                      addr.ToString(), r.Error().Message());
+  }
+}
+
+void BaseApp::EnsureSpaceBootstrap(SpaceID space_id) {
+  if (!in_flight_space_requests_.insert(space_id).second) return;
+  const uint16_t cell_count =
+      static_cast<uint16_t>(std::clamp<std::size_t>(cellapp_peers_.Size(), 1, 16));
+  RequestCreateSpace(
+      space_id,
+      [this](bool ok, SpaceID s, const Address& host) {
+        in_flight_space_requests_.erase(s);
+        if (!ok) {
+          OnSpaceBootstrapFailed(s);
+          return;
+        }
+        OnSpaceHostKnown(s, host);
+      },
+      cell_count);
+}
+
+void BaseApp::SetSpaceMasterType(SpaceID space_id, std::string type_name) {
+  if (type_name.empty()) {
+    space_master_types_.erase(space_id);
+    return;
+  }
+  space_master_types_[space_id] = std::move(type_name);
+  // Bootstrap immediately when CellAppMgr is ready; otherwise the birth
+  // callback below replays the request the moment the channel connects.
+  if (cellappmgr_channel_ != nullptr) EnsureSpaceBootstrap(space_id);
+}
+
+void BaseApp::OnSpaceHostKnown(SpaceID space_id, const Address& host) {
+  known_space_hosts_[space_id] = host;
+  FlushPendingCellEntities(space_id, host);
+  FlushPendingSpawnLocalEntities(space_id, host);
+}
+
+void BaseApp::OnSpaceBootstrapFailed(SpaceID space_id) {
+  auto cit = pending_cell_entity_creates_.find(space_id);
+  const std::size_t dropped_cell = cit == pending_cell_entity_creates_.end()
+                                       ? 0 : cit->second.size();
+  auto sit = pending_spawn_local_entities_.find(space_id);
+  const std::size_t dropped_spawn = sit == pending_spawn_local_entities_.end()
+                                        ? 0 : sit->second.size();
+  if (dropped_cell + dropped_spawn > 0) {
+    ATLAS_LOG_WARNING("BaseApp: SpaceCreatedResult failed for space_id={}; dropping {} cell + {} "
+                      "spawn queued",
+                      space_id, dropped_cell, dropped_spawn);
+  }
+  if (cit != pending_cell_entity_creates_.end()) pending_cell_entity_creates_.erase(cit);
+  if (sit != pending_spawn_local_entities_.end()) pending_spawn_local_entities_.erase(sit);
+}
+
+void BaseApp::FlushPendingCellEntities(SpaceID space_id, const Address& host) {
+  auto qit = pending_cell_entity_creates_.find(space_id);
+  if (qit == pending_cell_entity_creates_.end()) return;
+  auto* ch = ResolveCellChannelByAddr(cellapp_peers_.Channels(), host);
+  if (ch == nullptr) {
+    ATLAS_LOG_WARNING("BaseApp: cannot flush {} pending CreateCellEntity — host {} unreachable",
+                      qit->second.size(), host.ToString());
+    pending_cell_entity_creates_.erase(qit);
+    return;
+  }
+  for (auto& msg : qit->second) {
+    if (auto r = ch->SendMessage(msg); !r) {
+      ATLAS_LOG_WARNING("BaseApp: flushed CreateCellEntity send failed (entity={}): {}",
+                        msg.entity_id, r.Error().Message());
+    }
+  }
+  ATLAS_LOG_INFO("BaseApp: flushed {} CreateCellEntity for space_id={} to {}",
+                 qit->second.size(), space_id, host.ToString());
+  pending_cell_entity_creates_.erase(qit);
+}
+
+void BaseApp::FlushPendingSpawnLocalEntities(SpaceID space_id, const Address& host) {
+  auto qit = pending_spawn_local_entities_.find(space_id);
+  if (qit == pending_spawn_local_entities_.end()) return;
+  auto* ch = ResolveCellChannelByAddr(cellapp_peers_.Channels(), host);
+  if (ch == nullptr) {
+    ATLAS_LOG_WARNING("BaseApp: cannot flush {} pending SpawnLocalEntity — host {} unreachable",
+                      qit->second.size(), host.ToString());
+    pending_spawn_local_entities_.erase(qit);
+    return;
+  }
+  for (auto& msg : qit->second) {
+    if (auto r = ch->SendMessage(msg); !r) {
+      ATLAS_LOG_WARNING("BaseApp: flushed SpawnLocalEntity send failed (type={}): {}",
+                        msg.type_id, r.Error().Message());
+    }
+  }
+  ATLAS_LOG_INFO("BaseApp: flushed {} SpawnLocalEntity for space_id={} to {}",
+                 qit->second.size(), space_id, host.ToString());
+  pending_spawn_local_entities_.erase(qit);
 }
 
 void BaseApp::DoGiveClientToRemote(EntityID src_id, EntityID /*dest_id*/,
@@ -3050,17 +3215,36 @@ void BaseApp::OnClientCellRpc(Channel& ch, const baseapp::ClientCellRpc& msg) {
   // source_entity_id is stamped here from the authenticated binding;
   // client cannot forge it. Stale routing during Offload either drops
   // here (unknown peer) or is caught by the cell's Ghost soft guard.
-  auto* ch_out = ResolveCellChannelForEntity(msg.target_entity_id);
+  auto* target = entity_mgr_.Find(msg.target_entity_id);
+  if (target == nullptr) {
+    // Entity destroyed mid-flight (logout race) — silent drop.
+    return;
+  }
+  auto* ch_out =
+      ResolveCellChannelByAddr(cellapp_peers_.Channels(), target->CellAddr());
   if (ch_out == nullptr) {
-    // Rate-limit: a slow/partitioned CellApp would otherwise flood the
-    // tick loop with format+flush. Single dispatcher thread -> statics OK.
+    if (target->CellAddr().Port() == 0) {
+      // Cellapp hasn't acked CurrentCell yet; buffer and replay there.
+      auto& q = pending_client_rpcs_[msg.target_entity_id];
+      if (q.size() >= kMaxPendingClientRpcsPerEntity) {
+        q.erase(q.begin());  // drop oldest; client retries idempotent RPCs
+      }
+      PendingClientRpc p;
+      p.source_entity_id = source_entity_id;
+      p.rpc_id = msg.rpc_id;
+      p.payload.assign(msg.payload.begin(), msg.payload.end());
+      p.trace_id = msg.trace_id;
+      q.push_back(std::move(p));
+      return;
+    }
+    // CellAddr known but channel gone — partitioned/dead cellapp, real issue.
     using SteadyClock = std::chrono::steady_clock;
     static SteadyClock::time_point last_log{};
     static uint64_t suppressed = 0;
     const auto now = SteadyClock::now();
     if (now - last_log >= std::chrono::seconds(1)) {
       ATLAS_LOG_WARNING(
-          "BaseApp: ClientCellRpc dropped — no cell channel for target entity {} "
+          "BaseApp: ClientCellRpc dropped — cell channel gone for target entity {} "
           "(rpc_id=0x{:06X}){}",
           msg.target_entity_id, msg.rpc_id,
           suppressed > 0 ? std::format(" [+{} similar in last 1s]", suppressed) : std::string{});
@@ -3096,7 +3280,8 @@ auto BaseApp::ResolveCellChannelForEntity(EntityID target_entity_id) const -> Ch
   return ResolveCellChannelByAddr(cellapp_peers_.Channels(), target->CellAddr());
 }
 
-auto BaseApp::RequestCreateSpace(SpaceID space_id, SpaceCreatedCallback callback) -> uint32_t {
+auto BaseApp::RequestCreateSpace(SpaceID space_id, SpaceCreatedCallback callback,
+                                 uint16_t initial_cell_count) -> uint32_t {
   if (cellappmgr_channel_ == nullptr) {
     ATLAS_LOG_WARNING("BaseApp: RequestCreateSpace({}) — no CellAppMgr channel yet", space_id);
     if (callback) callback(/*success=*/false, space_id, Address{});
@@ -3113,7 +3298,12 @@ auto BaseApp::RequestCreateSpace(SpaceID space_id, SpaceCreatedCallback callback
   cellappmgr::CreateSpaceRequest msg;
   msg.space_id = space_id;
   msg.request_id = request_id;
-  msg.reply_addr = Network().RudpAddress();
+  // Leave reply_addr default (port=0) so CellAppMgr replies on the inbound
+  // RUDP channel; Network().RudpAddress() can be 0.0.0.0:P which is unroutable.
+  msg.initial_cell_count = std::max<uint16_t>(1, initial_cell_count);
+  if (auto it = space_master_types_.find(space_id); it != space_master_types_.end()) {
+    msg.space_master_type = it->second;
+  }
   if (auto r = cellappmgr_channel_->SendMessage(msg); !r) {
     // pending_space_creates_ entry expires on timeout.
     ATLAS_LOG_WARNING("BaseApp: CreateSpaceRequest send failed (space_id={}, request_id={}): {}",

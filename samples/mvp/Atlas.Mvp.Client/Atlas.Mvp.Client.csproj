@@ -35,6 +35,7 @@
     <AdditionalFiles Include="..\..\..\entity_defs\Npc.def" />
     <AdditionalFiles Include="..\..\..\entity_defs\MvpSpace.def" />
     <AdditionalFiles Include="..\..\..\entity_defs\space_data.def" />
+    <AdditionalFiles Include="..\..\..\entity_defs\EquipmentComponent.def" />
   </ItemGroup>
 
 </Project>

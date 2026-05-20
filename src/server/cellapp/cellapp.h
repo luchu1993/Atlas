@@ -178,6 +178,10 @@ class CellApp : public EntityApp {
   void TickGhostPump();
   void TickOffloadChecker();
 
+  // Auto-spawn the space-owner entity. Queues if EntityIDs aren't available
+  // yet; OnGetEntityIdsAck drains the queue.
+  void SpawnSpaceMaster(SpaceID space_id, const std::string& type_name);
+
   // Captures everything needed to re-install a Real locally if the
   // Offload receiver rejects (or never acks). Inserted by
   // TickOffloadChecker right before ConvertRealToGhost; removed by
@@ -366,6 +370,10 @@ class CellApp : public EntityApp {
   // CellApp sends a CurrentCell after an Offload arrival so BaseApp
   // can reject stale updates from a slower old-CellApp path.
   uint32_t next_offload_epoch_{1};
+
+  // Space masters whose primary-cell add arrived before this CellApp had any
+  // EntityIDs allocated; drained on the next GetEntityIdsAck. (space_id, type).
+  std::vector<std::pair<SpaceID, std::string>> pending_space_master_spawns_;
 
   // Per-tick scratch for demand-based witness budget allocation.
   // Cleared (not deallocated) at the start of every TickWitnesses

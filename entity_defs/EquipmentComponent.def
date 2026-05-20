@@ -1,0 +1,11 @@
+<component name="EquipmentComponent">
+  <properties>
+    <property name="weaponId" type="int32" scope="all_clients" reliable="true" />
+  </properties>
+
+  <cell_methods>
+    <method name="EquipWeapon" exposed="own_client">
+      <arg name="weaponId" type="int32" />
+    </method>
+  </cell_methods>
+</component>

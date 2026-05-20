@@ -1,9 +1,10 @@
 <entity name="Account">
 
   <properties>
-    <property name="username"  type="string" scope="base"            persistent="true" />
-    <property name="lastLogin" type="string" scope="base"            persistent="true" />
-    <property name="loginKey"  type="string" scope="base_and_client" persistent="true" />
+    <property name="username"   type="string" scope="base_and_client" persistent="true" />
+    <property name="lastLogin"  type="string" scope="base_and_client" persistent="true" />
+    <property name="loginKey"   type="string" scope="base_and_client" persistent="true" />
+    <property name="loginCount" type="int32"  scope="base_and_client" persistent="true" />
   </properties>
 
   <base_methods>

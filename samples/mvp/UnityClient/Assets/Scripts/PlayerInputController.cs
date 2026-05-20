@@ -20,6 +20,7 @@ namespace Atlas.Mvp.Unity
         readonly Func<Vector2>? _joystickSource;
         readonly Func<bool>? _fireRequestSource;
         readonly Func<float>? _cameraYawSource;
+        readonly Func<bool>? _inputBlocked;
         readonly Action<AtlasVec> _respawnHandler;
         Vector3 _localPos;
         Vector3 _localDir = Vector3.forward;
@@ -27,7 +28,7 @@ namespace Atlas.Mvp.Unity
 
         public PlayerInputController(MvpAvatar avatar, AtlasNetworkManager net, Transform target,
             Func<Vector2>? joystickSource = null, Func<bool>? fireRequestSource = null,
-            Func<float>? cameraYawSource = null)
+            Func<float>? cameraYawSource = null, Func<bool>? inputBlocked = null)
         {
             _avatar = avatar;
             _net = net;
@@ -35,6 +36,7 @@ namespace Atlas.Mvp.Unity
             _joystickSource = joystickSource;
             _fireRequestSource = fireRequestSource;
             _cameraYawSource = cameraYawSource;
+            _inputBlocked = inputBlocked;
             _localPos = new Vector3(_avatar.Position.X, _avatar.Position.Y, _avatar.Position.Z);
             // Snap local sim to the server's spawn pos so the dead capsule
             // doesn't keep walking under WASD between death and respawn.
@@ -55,8 +57,11 @@ namespace Atlas.Mvp.Unity
             if (_avatar == null || _avatar.IsDestroyed) return;
             if (_avatar.IsDead) return;
 
-            float h = Input.GetAxisRaw("Horizontal");
-            float v = Input.GetAxisRaw("Vertical");
+            // Suppress raw kbd polling while chat input has focus, otherwise
+            // typing W/A/S/D/Space keeps moving + firing the Avatar.
+            bool blocked = _inputBlocked?.Invoke() ?? false;
+            float h = blocked ? 0f : Input.GetAxisRaw("Horizontal");
+            float v = blocked ? 0f : Input.GetAxisRaw("Vertical");
             // Joystick takes priority when active so finger drag doesn't
             // fight a sticky keyboard axis from a held WASD key.
             var joy = _joystickSource?.Invoke() ?? Vector2.zero;
@@ -94,10 +99,17 @@ namespace Atlas.Mvp.Unity
                 _avatar.Cell.ReportPos(_localPos.ToAtlas(), _localDir.ToAtlas());
             }
 
-            bool fire = Input.GetKeyDown(KeyCode.Space)
+            bool fire = (!blocked && Input.GetKeyDown(KeyCode.Space))
                 || (_fireRequestSource?.Invoke() ?? false);
             if (fire)
                 _avatar.Cell.LaunchProjectile(_localDir.ToAtlas());
+
+            if (!blocked)
+            {
+                if (Input.GetKeyDown(KeyCode.Alpha1)) _avatar.Equipment?.EquipWeapon(1);
+                else if (Input.GetKeyDown(KeyCode.Alpha2)) _avatar.Equipment?.EquipWeapon(2);
+                else if (Input.GetKeyDown(KeyCode.Alpha3)) _avatar.Equipment?.EquipWeapon(3);
+            }
         }
     }
 }

@@ -63,11 +63,10 @@ auto MakeBlob(std::initializer_list<uint8_t> bytes) -> std::vector<std::byte> {
 }
 
 // Build a minimal replication frame carrying distinct owner/other deltas
-// so audience selection is trivially checkable on receipt.
-auto MakeFrame(uint64_t event_seq, std::vector<std::byte> owner_delta = {},
-               std::vector<std::byte> other_delta = {}) {
+// so audience selection is trivially checkable on receipt. Engine assigns
+// event_seq when the caller passes has_event=true to PublishReplicationFrame.
+auto MakeFrame(std::vector<std::byte> owner_delta = {}, std::vector<std::byte> other_delta = {}) {
   CellEntity::ReplicationFrame f;
-  f.event_seq = event_seq;
   f.owner_delta = std::move(owner_delta);
   f.other_delta = std::move(other_delta);
   return f;
@@ -105,11 +104,10 @@ TEST_F(WitnessReplicationTest, VolatileJumpsToLatestSeq) {
 
   // Publish a volatile update on the peer.
   CellEntity::ReplicationFrame v1;
-  v1.volatile_seq = 1;
   v1.position = {5, 0, 5};
   v1.direction = {0, 0, 1};
   v1.on_ground = true;
-  peer->PublishReplicationFrame(v1, {}, {});
+  peer->PublishReplicationFrame(v1, /*has_event=*/false, /*has_volatile=*/true, {}, {});
 
   // Fetch the cache entry that AoI tracking inserted for the peer and
   // drive the pump directly.
@@ -132,10 +130,12 @@ TEST_F(WitnessReplicationTest, VolatileNoOpWhenUpToDate) {
   auto* peer = MakeEntity(space, 2, {3, 0, 3});
   observer->EnableWitness(10.f, MakeReliable(), MakeUnreliable());
 
-  CellEntity::ReplicationFrame v1;
-  v1.volatile_seq = 5;
-  v1.position = {1, 0, 1};
-  peer->PublishReplicationFrame(v1, {}, {});
+  // Bump latest_volatile_seq to 5 via 5 publishes so cache can pre-cache it.
+  for (int i = 0; i < 5; ++i) {
+    CellEntity::ReplicationFrame v;
+    v.position = {1, 0, 1};
+    peer->PublishReplicationFrame(v, /*has_event=*/false, /*has_volatile=*/true, {}, {});
+  }
   auto& cache = observer->GetWitness()->AoIMapMutable().at(peer->Id());
   cache.flags = 0;
   cache.last_volatile_seq = 5;  // already current
@@ -165,9 +165,8 @@ TEST_F(WitnessReplicationTest, VolatileEnvelopeCarriesMonotonicServerTime) {
   };
 
   CellEntity::ReplicationFrame v1;
-  v1.volatile_seq = 1;
   v1.position = {5, 0, 5};
-  peer->PublishReplicationFrame(v1, {}, {});
+  peer->PublishReplicationFrame(v1, /*has_event=*/false, /*has_volatile=*/true, {}, {});
   auto& cache = observer->GetWitness()->AoIMapMutable().at(peer->Id());
   cache.flags = 0;
 
@@ -177,9 +176,8 @@ TEST_F(WitnessReplicationTest, VolatileEnvelopeCarriesMonotonicServerTime) {
   const double t1 = extract_server_time(sent_[0]);
 
   CellEntity::ReplicationFrame v2;
-  v2.volatile_seq = 2;
   v2.position = {6, 0, 6};
-  peer->PublishReplicationFrame(v2, {}, {});
+  peer->PublishReplicationFrame(v2, /*has_event=*/false, /*has_volatile=*/true, {}, {});
 
   sent_.clear();
   observer->GetWitness()->TestOnlySendEntityUpdate(cache);
@@ -199,12 +197,14 @@ TEST_F(WitnessReplicationTest, PropertyDeltasReplayInOrder) {
   // Publish 3 frames (1..3). Each frame's other_delta carries the
   // per-frame marker byte; the observer is not the peer's owning
   // client, so the witness replays frame.other_delta.
-  peer->PublishReplicationFrame(MakeFrame(1, /*owner=*/MakeBlob({0xA1}),
-                                          /*other=*/MakeBlob({0xB1})),
-                                MakeBlob({0xA1}), MakeBlob({0xB1}));
-  peer->PublishReplicationFrame(MakeFrame(2, MakeBlob({0xA2}), MakeBlob({0xB2})), MakeBlob({0xA2}),
+  peer->PublishReplicationFrame(MakeFrame(MakeBlob({0xA1}), MakeBlob({0xB1})),
+                                /*has_event=*/true, /*has_volatile=*/false, MakeBlob({0xA1}),
+                                MakeBlob({0xB1}));
+  peer->PublishReplicationFrame(MakeFrame(MakeBlob({0xA2}), MakeBlob({0xB2})),
+                                /*has_event=*/true, /*has_volatile=*/false, MakeBlob({0xA2}),
                                 MakeBlob({0xB2}));
-  peer->PublishReplicationFrame(MakeFrame(3, MakeBlob({0xA3}), MakeBlob({0xB3})), MakeBlob({0xA3}),
+  peer->PublishReplicationFrame(MakeFrame(MakeBlob({0xA3}), MakeBlob({0xB3})),
+                                /*has_event=*/true, /*has_volatile=*/false, MakeBlob({0xA3}),
                                 MakeBlob({0xB3}));
 
   auto& cache = observer->GetWitness()->AoIMapMutable().at(peer->Id());
@@ -247,7 +247,8 @@ TEST_F(WitnessReplicationTest, AllZeroDeltaIsSkippedButSeqAdvances) {
 
   // Frame with a non-empty owner_delta but an all-zero other_delta
   // (the flag prefix said "no other-audience fields dirty").
-  peer->PublishReplicationFrame(MakeFrame(1, MakeBlob({0xA1}), MakeBlob({0x00})), MakeBlob({0xA1}),
+  peer->PublishReplicationFrame(MakeFrame(MakeBlob({0xA1}), MakeBlob({0x00})),
+                                /*has_event=*/true, /*has_volatile=*/false, MakeBlob({0xA1}),
                                 MakeBlob({0x00}));
 
   auto& cache = observer->GetWitness()->AoIMapMutable().at(peer->Id());
@@ -276,8 +277,9 @@ TEST_F(WitnessReplicationTest, SnapshotFallbackWhenBeyondHistoryWindow) {
   // the test didn't accidentally fall through to a delta pathway.
   const auto window = CellEntity::kReplicationHistoryWindow;
   for (uint64_t i = 1; i <= window + 4; ++i) {
-    peer->PublishReplicationFrame(MakeFrame(i, {}, MakeBlob({static_cast<uint8_t>(i)})),
-                                  MakeBlob({0x11}), MakeBlob({0x22, 0x33}));  // snapshots
+    peer->PublishReplicationFrame(MakeFrame({}, MakeBlob({static_cast<uint8_t>(i)})),
+                                  /*has_event=*/true, /*has_volatile=*/false, MakeBlob({0x11}),
+                                  MakeBlob({0x22, 0x33}));
   }
 
   auto& cache = observer->GetWitness()->AoIMapMutable().at(peer->Id());
@@ -313,8 +315,8 @@ TEST_F(WitnessReplicationTest, SnapshotFallbackFollowedByIncrementalCatchup) {
   const auto window = CellEntity::kReplicationHistoryWindow;
   // Overflow history → snapshot fallback pulls us up to event_seq=window+4.
   for (uint64_t i = 1; i <= window + 4; ++i) {
-    peer->PublishReplicationFrame(MakeFrame(i, {}, MakeBlob({0xAA})), MakeBlob({0xBB}),
-                                  MakeBlob({0xCC}));
+    peer->PublishReplicationFrame(MakeFrame({}, MakeBlob({0xAA})), /*has_event=*/true,
+                                  /*has_volatile=*/false, MakeBlob({0xBB}), MakeBlob({0xCC}));
   }
   auto& cache = observer->GetWitness()->AoIMapMutable().at(peer->Id());
   cache.flags = 0;
@@ -324,8 +326,9 @@ TEST_F(WitnessReplicationTest, SnapshotFallbackFollowedByIncrementalCatchup) {
 
   // New frame; observer is inside window now, so catch-up should be
   // incremental (history replay of frame.other_delta, not the other_snapshot).
-  peer->PublishReplicationFrame(MakeFrame(window + 5, MakeBlob({0xBB}), MakeBlob({0xEF})),
-                                MakeBlob({0xBB}), MakeBlob({0xCC}));
+  peer->PublishReplicationFrame(MakeFrame(MakeBlob({0xBB}), MakeBlob({0xEF})),
+                                /*has_event=*/true, /*has_volatile=*/false, MakeBlob({0xBB}),
+                                MakeBlob({0xCC}));
   sent_.clear();
   observer->GetWitness()->TestOnlySendEntityUpdate(cache);
 
@@ -347,8 +350,8 @@ TEST_F(WitnessReplicationTest, UpdateEmitsNothingWhenFullyCaughtUp) {
   auto* peer = MakeEntity(space, 2, {3, 0, 3});
   observer->EnableWitness(10.f, MakeReliable(), MakeUnreliable());
 
-  peer->PublishReplicationFrame(MakeFrame(1, {}, MakeBlob({0xAA})), MakeBlob({0x01}),
-                                MakeBlob({0x02}));
+  peer->PublishReplicationFrame(MakeFrame({}, MakeBlob({0xAA})), /*has_event=*/true,
+                                /*has_volatile=*/false, MakeBlob({0x01}), MakeBlob({0x02}));
   auto& cache = observer->GetWitness()->AoIMapMutable().at(peer->Id());
   cache.flags = 0;
   cache.last_event_seq = 1;
@@ -380,9 +383,8 @@ TEST_F(WitnessReplicationTest, LodCloseUpdatesEveryTick) {
   int pos_updates = 0;
   for (int t = 0; t < kTicks; ++t) {
     CellEntity::ReplicationFrame f;
-    f.volatile_seq = static_cast<uint64_t>(t + 1);
     f.position = kPeerPos;  // keep peer at its initial position
-    peer->PublishReplicationFrame(f, {}, {});
+    peer->PublishReplicationFrame(f, /*has_event=*/false, /*has_volatile=*/true, {}, {});
     sent_.clear();
     observer->GetWitness()->Update(65536);
     pos_updates += CountPositionUpdates(sent_);
@@ -405,9 +407,8 @@ TEST_F(WitnessReplicationTest, LodMediumUpdatesEvery3Ticks) {
   int pos_updates = 0;
   for (int t = 0; t < kTicks; ++t) {
     CellEntity::ReplicationFrame f;
-    f.volatile_seq = static_cast<uint64_t>(t + 1);
     f.position = kPeerPos;
-    peer->PublishReplicationFrame(f, {}, {});
+    peer->PublishReplicationFrame(f, /*has_event=*/false, /*has_volatile=*/true, {}, {});
     sent_.clear();
     observer->GetWitness()->Update(65536);
     pos_updates += CountPositionUpdates(sent_);
@@ -432,9 +433,8 @@ TEST_F(WitnessReplicationTest, LodFarUpdatesEvery6Ticks) {
   int pos_updates = 0;
   for (int t = 0; t < kTicks; ++t) {
     CellEntity::ReplicationFrame f;
-    f.volatile_seq = static_cast<uint64_t>(t + 1);
     f.position = kPeerPos;
-    peer->PublishReplicationFrame(f, {}, {});
+    peer->PublishReplicationFrame(f, /*has_event=*/false, /*has_volatile=*/true, {}, {});
     sent_.clear();
     observer->GetWitness()->Update(65536);
     pos_updates += CountPositionUpdates(sent_);
@@ -461,8 +461,8 @@ TEST_F(WitnessReplicationTest, LodFarEventDeliveredOnNextWindow) {
 
   // Publish a property event on tick 2; peer won't be polled again until
   // tick 7 (far interval = 6).
-  peer->PublishReplicationFrame(MakeFrame(1, {}, MakeBlob({0x01, 0xAB})), MakeBlob({0xFF}),
-                                MakeBlob({0xFE}));
+  peer->PublishReplicationFrame(MakeFrame({}, MakeBlob({0x01, 0xAB})), /*has_event=*/true,
+                                /*has_volatile=*/false, MakeBlob({0xFF}), MakeBlob({0xFE}));
 
   // Ticks 2-6: property delta accumulates in history, peer is LOD-skipped.
   for (int t = 0; t < 5; ++t) {

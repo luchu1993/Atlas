@@ -66,7 +66,9 @@ public partial class MvpSpace : CellSpaceEntity
     private bool TrySpawnOne()
     {
         var pos = ScatterFor(_scatterIndex++);
-        return EntityFactory.CreateLocalCell("Npc", SpaceId, pos, Vector3.Forward,
+        // Vector3.Zero so NpcAi.OnAttached picks a random first target; a non-zero
+        // default would make every fresh NPC walk the same axis until first retarget.
+        return EntityFactory.CreateLocalCell("Npc", SpaceId, pos, Vector3.Zero,
                                              onGround: false) != null;
     }
 

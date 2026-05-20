@@ -99,9 +99,6 @@ class Witness {
     // first SendEntityUpdate.
     uint64_t lod_enter_phase{0};
 
-    // Seeded at AoI enter so new peers do not start as starving.
-    uint64_t last_serviced_tick{0};
-
     static constexpr uint8_t kEnterPending = 0x01;
     static constexpr uint8_t kGone = 0x08;
 
@@ -131,10 +128,6 @@ class Witness {
  private:
   void UpdatePriority(EntityCache& cache) const;
 
-  // Close (< 25 m) -> every tick; Medium (< 100 m) -> every 3rd tick;
-  // Far (>= 100 m) -> every 6th tick.
-  [[nodiscard]] static auto LodIntervalForDistSq(double dist_sq) -> uint64_t;
-
   // Each Send* returns bytes actually dispatched so the tick-loop's
   // bandwidth accountant can bill precisely.
   auto SendEntityEnter(EntityCache& cache) -> std::size_t;
@@ -156,9 +149,9 @@ class Witness {
   // mid-tick can't dangle the cache; every Update re-looks-up.
   std::unordered_map<EntityID, EntityCache> aoi_map_;
 
-  // Min-heap of (priority, id). IDs (not iterators) so a rehash of
-  // aoi_map_ can't dangle. std::greater gives ascending priority order.
-  std::vector<std::pair<double, EntityID>> priority_queue_;
+  // Scratch storage for the per-band rank cut + sort during Update;
+  // each band reuses the same vector to avoid per-tick allocations.
+  std::vector<std::pair<double, EntityID>> band_scratch_;
 
   uint64_t tick_count_{0};
 

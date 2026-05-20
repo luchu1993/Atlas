@@ -12,6 +12,9 @@
 #include <atomic>
 #include <chrono>
 #include <future>
+#include <memory>
+#include <set>
+#include <string>
 #include <thread>
 #include <vector>
 
@@ -237,7 +240,11 @@ TEST(CellAppMgrIntegration, CreateSpace_RepliesWithSpaceCreatedResult) {
   EXPECT_EQ(reply.host_addr.Port(), 31001u);  // advertised port of `host`
 }
 
-TEST(CellAppMgrIntegration, CreateSpace_NoHosts_RepliesWithFailure) {
+TEST(CellAppMgrIntegration, CreateSpace_NoHosts_QueuesUntilCellAppRegisters) {
+  // Engine-spawned space master semantics (BigWorld-style): a request that
+  // beats the first cellapp registration is parked, not failed. The reply
+  // lands after the late cellapp comes online — letting BaseApp pre-register
+  // a space master at startup without racing the cellapp boot order.
   MgrFixture fx;
   ASSERT_NE(fx.port, 0u);
 
@@ -252,12 +259,28 @@ TEST(CellAppMgrIntegration, CreateSpace_NoHosts_RepliesWithFailure) {
   csr.reply_addr = requester.network.RudpAddress();
   ASSERT_TRUE((*ch_req)->SendMessage(csr).HasValue());
 
+  // Drain a couple of ticks; nothing should arrive yet because no cellapp is up.
+  for (int i = 0; i < 20; ++i) {
+    requester.dispatcher.ProcessOnce();
+    std::this_thread::sleep_for(std::chrono::milliseconds(5));
+  }
+  EXPECT_TRUE(requester.space_created_results.empty())
+      << "CreateSpaceRequest must not resolve before a CellApp registers";
+
+  // Late host registration drains the queued request → reply now flows.
+  CellAppClient host{"cellapp_late_host"};
+  auto ch_h = host.network.ConnectRudp(fx.server_addr);
+  ASSERT_TRUE(ch_h.HasValue());
+  RegisterCellApp reg;
+  reg.internal_addr = Address(0, 30501);
+  ASSERT_TRUE((*ch_h)->SendMessage(reg).HasValue());
+
   ASSERT_TRUE(PollUntil(requester.dispatcher, [&] {
     return !requester.space_created_results.empty();
-  })) << "Expected failure reply when no CellApps are registered";
+  })) << "Queued CreateSpaceRequest never drained after cellapp registered";
   const auto& reply = requester.space_created_results[0];
   EXPECT_EQ(reply.request_id, 88u);
-  EXPECT_FALSE(reply.success);
+  EXPECT_TRUE(reply.success);
 }
 
 // ============================================================================
@@ -367,4 +390,61 @@ TEST(CellAppMgrIntegration, InformCellLoad_InfluencesLeastLoadedHostPick) {
   // actually routed based on load rather than insertion order.
   a.dispatcher.ProcessOnce();
   EXPECT_TRUE(a.add_cell_msgs.empty());
+}
+
+// CreateSpaceRequest with initial_cell_count=N fans N cells across the N
+// least-loaded CellApps; UpdateGeometry blob holds N distinct leaves.
+TEST(CellAppMgrIntegration, CreateSpace_MultiCellBootstrap_DistributesAcrossHosts) {
+  MgrFixture fx;
+  ASSERT_NE(fx.port, 0u);
+
+  constexpr int kN = 4;
+  std::vector<std::unique_ptr<CellAppClient>> clients;
+  std::vector<ReliableUdpChannel*> channels;
+  for (int i = 0; i < kN; ++i) {
+    clients.emplace_back(std::make_unique<CellAppClient>("cellapp_multi_" + std::to_string(i)));
+    auto ch = clients.back()->network.ConnectRudp(fx.server_addr);
+    ASSERT_TRUE(ch.HasValue());
+    channels.push_back(*ch);
+    RegisterCellApp reg;
+    reg.internal_addr = Address(0, static_cast<uint16_t>(30401 + i));
+    ASSERT_TRUE((*ch)->SendMessage(reg).HasValue());
+  }
+  for (auto& c : clients) {
+    ASSERT_TRUE(PollUntil(c->dispatcher,
+                          [&] { return c->register_ack_received.load(std::memory_order_acquire); }))
+        << "register ack stuck";
+  }
+
+  CreateSpaceRequest csr;
+  csr.space_id = 99;
+  csr.request_id = 1;
+  csr.reply_addr = clients[0]->network.RudpAddress();
+  csr.initial_cell_count = kN;
+  ASSERT_TRUE(channels[0]->SendMessage(csr).HasValue());
+
+  // Every host should receive AddCellToSpace + the same UpdateGeometry.
+  for (auto& c : clients) {
+    ASSERT_TRUE(PollUntil(c->dispatcher, [&] {
+      return !c->add_cell_msgs.empty() && !c->update_geometry_msgs.empty();
+    })) << "a host missed AddCell or UpdateGeometry";
+    EXPECT_EQ(c->add_cell_msgs.size(), 1u);
+    EXPECT_EQ(c->add_cell_msgs[0].space_id, 99u);
+  }
+
+  // Collect the cell_ids reported across hosts; they must be distinct.
+  std::set<cellappmgr::CellID> reported_cells;
+  for (auto& c : clients) reported_cells.insert(c->add_cell_msgs[0].cell_id);
+  EXPECT_EQ(reported_cells.size(), static_cast<std::size_t>(kN));
+
+  // Deserialised BSP must hold exactly N leaves with N distinct cellapp
+  // addresses — the bootstrap really fanned out.
+  BinaryReader r(std::span<const std::byte>(clients[0]->update_geometry_msgs.back().bsp_blob));
+  auto tree = BSPTree::Deserialize(r);
+  ASSERT_TRUE(tree.HasValue());
+  auto leaves = tree->Leaves();
+  ASSERT_EQ(leaves.size(), static_cast<std::size_t>(kN));
+  std::set<uint16_t> ports;
+  for (auto* leaf : leaves) ports.insert(leaf->cellapp_addr.Port());
+  EXPECT_EQ(ports.size(), static_cast<std::size_t>(kN));
 }

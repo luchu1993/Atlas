@@ -25,16 +25,36 @@ namespace atlas {
 
 namespace {
 
-// LOD bands: close < 25 m every tick, medium < 100 m every 3, far
-// >= 100 m every 6 - fits the 8-frame history window at 10 Hz.
-static constexpr double kLodCloseSq = 25.0 * 25.0;
-static constexpr double kLodMediumSq = 100.0 * 100.0;
-static constexpr uint64_t kLodCloseInterval = 1;
-static constexpr uint64_t kLodMediumInterval = 3;
-static constexpr uint64_t kLodFarInterval = 6;
+// Three-band LOD config snapshot, captured once per Update so config
+// reloads can't mutate thresholds mid-tick. Close peers pump every
+// interval[0] ticks bounded by max_peers[0]; same for medium/far.
+struct LodConfig {
+  double dist_sq[2];           // [close, medium]; far implied as "beyond"
+  uint64_t interval[3];        // [close, medium, far]
+  uint32_t max_peers[3];
 
-// Squared distance: make_heap only cares about ordering and a^2 < b^2
-// iff a < b for non-negative magnitudes, so we skip the sqrt.
+  static auto Snapshot() -> LodConfig {
+    const float close_m = CellAppConfig::WitnessLodCloseDistanceM();
+    const float medium_m = CellAppConfig::WitnessLodMediumDistanceM();
+    return LodConfig{
+        {static_cast<double>(close_m) * close_m, static_cast<double>(medium_m) * medium_m},
+        {CellAppConfig::WitnessLodCloseIntervalTicks(),
+         CellAppConfig::WitnessLodMediumIntervalTicks(),
+         CellAppConfig::WitnessLodFarIntervalTicks()},
+        {CellAppConfig::WitnessLodCloseMaxPeersPerTick(),
+         CellAppConfig::WitnessLodMediumMaxPeersPerTick(),
+         CellAppConfig::WitnessLodFarMaxPeersPerTick()}};
+  }
+
+  // Returns 0=close, 1=medium, 2=far.
+  [[nodiscard]] auto BandIndex(double priority) const -> std::size_t {
+    if (priority < dist_sq[0]) return 0;
+    if (priority < dist_sq[1]) return 1;
+    return 2;
+  }
+};
+
+// Squared distance: ordering preserved without sqrt.
 auto ComputePriority(const math::Vector3& observer, const math::Vector3& target) -> double {
   const double dx = observer.x - target.x;
   const double dy = observer.y - target.y;
@@ -214,7 +234,7 @@ void Witness::Deactivate() {
     if (cache.entity) cache.entity->RemoveObserver(this);
   }
   aoi_map_.clear();
-  priority_queue_.clear();
+  band_scratch_.clear();
   pending_enter_ids_.clear();
   pending_gone_ids_.clear();
 }
@@ -248,7 +268,6 @@ void Witness::HandleAoIEnter(CellEntity& peer) {
 
   cache.entity = &peer;
   cache.flags = EntityCache::kEnterPending;
-  cache.last_serviced_tick = tick_count_;
   pending_enter_ids_.push_back(peer.Id());
   peer.AddObserver(this);
   UpdatePriority(cache);
@@ -313,17 +332,13 @@ auto Witness::SendEntityLeave(EntityID peer_id) -> std::size_t {
   return envelope.size();
 }
 
-auto Witness::LodIntervalForDistSq(double dist_sq) -> uint64_t {
-  if (dist_sq < kLodCloseSq) return kLodCloseInterval;
-  if (dist_sq < kLodMediumSq) return kLodMediumInterval;
-  return kLodFarInterval;
-}
-
 void Witness::Update(uint32_t max_packet_bytes) {
   ATLAS_PROFILE_ZONE_N("Witness::Update");
   if (!trigger_) return;
 
   ++tick_count_;
+
+  const LodConfig lod = LodConfig::Snapshot();
 
   int bytes_sent = 0;
   {
@@ -391,7 +406,9 @@ void Witness::Update(uint32_t max_packet_bytes) {
       enter_bytes += static_cast<uint32_t>(sent);
       ++enter_count;
       cache.flags &= ~EntityCache::kEnterPending;
-      cache.lod_enter_phase = enter_idx % kLodFarInterval;
+      // Far interval is the longest band; phase mod it covers every band.
+      const uint64_t far_interval = std::max<uint64_t>(1, lod.interval[2]);
+      cache.lod_enter_phase = enter_idx % far_interval;
     }
 
     for (auto id : pending_gone_ids_) {
@@ -408,63 +425,50 @@ void Witness::Update(uint32_t max_packet_bytes) {
     pending_gone_ids_.clear();
   }
 
-  // Rebuild the priority heap each tick - observer position changes
-  // make priorities stale anyway. LOD gate filters scheduled peers.
+  // Per-band pump: collect eligible peers into a band-scoped scratch,
+  // rank-cut to that band's cap, sort by distance, send updates. Each
+  // band gets its own quota so a flood of far peers can't starve close
+  // ones (BigWorld semantics).
   {
-    ATLAS_PROFILE_ZONE_N("Witness::Update::PriorityHeap");
-    priority_queue_.clear();
-    priority_queue_.reserve(aoi_map_.size());
-    const uint64_t starvation_threshold = CellAppConfig::WitnessStarvationThresholdTicks();
-    const bool starvation_enabled = starvation_threshold > 0;
-    for (auto& [id, cache] : aoi_map_) {
-      if (!cache.IsUpdatable()) continue;
-      if (tick_count_ < cache.lod_next_update_tick) continue;
-      UpdatePriority(cache);
-      const double effective =
-          (starvation_enabled && tick_count_ - cache.last_serviced_tick > starvation_threshold)
-              ? -1.0
-              : cache.priority;
-      priority_queue_.emplace_back(effective, id);
-    }
-    // Pre-cap count shows whether the rank cut is active in production.
-    ATLAS_PROFILE_PLOT("Witness::AoICap::Eligible", static_cast<int64_t>(priority_queue_.size()));
-    const std::size_t cap = CellAppConfig::WitnessMaxAoIPeers();
-    if (priority_queue_.size() > cap) {
-      std::nth_element(priority_queue_.begin(), priority_queue_.begin() + cap,
-                       priority_queue_.end(),
-                       [](const auto& a, const auto& b) { return a.first < b.first; });
-      priority_queue_.resize(cap);
-    }
-    std::make_heap(priority_queue_.begin(), priority_queue_.end(),
-                   [](const auto& a, const auto& b) { return a.first > b.first; });
-  }
-
-  {
-    ATLAS_PROFILE_ZONE_N("Witness::Update::Pump");
+    ATLAS_PROFILE_ZONE_N("Witness::Update::PerBandPump");
     const int tick_budget = static_cast<int>(max_packet_bytes) - bandwidth_deficit_;
-    // Cap peers/tick to bound serialisation CPU; RW config so ops can
-    // retune live without rebuild.
-    const std::size_t max_peers = CellAppConfig::WitnessMaxPeersPerTick();
-    std::size_t peers_updated = 0;
-    while (!priority_queue_.empty() && bytes_sent < tick_budget && peers_updated < max_peers) {
-      std::pop_heap(priority_queue_.begin(), priority_queue_.end(),
-                    [](const auto& a, const auto& b) { return a.first > b.first; });
-      const auto [prio, id] = priority_queue_.back();
-      priority_queue_.pop_back();
 
-      auto it = aoi_map_.find(id);
-      if (it == aoi_map_.end()) continue;
-      auto& cache = it->second;
-      if (!cache.IsUpdatable()) continue;
+    for (std::size_t band = 0; band < 3; ++band) {
+      if (lod.max_peers[band] == 0) continue;
 
-      bytes_sent += static_cast<int>(SendEntityUpdate(cache));
-      ++peers_updated;
-      cache.last_serviced_tick = tick_count_;
-      // lod_enter_phase offsets the first window only (set at AoI-enter,
-      // cleared here) to stagger simultaneous entries.
-      const uint64_t interval = LodIntervalForDistSq(cache.priority);
-      cache.lod_next_update_tick = tick_count_ + interval + (cache.lod_enter_phase % interval);
-      cache.lod_enter_phase = 0;
+      band_scratch_.clear();
+      for (auto& [id, cache] : aoi_map_) {
+        if (!cache.IsUpdatable()) continue;
+        if (tick_count_ < cache.lod_next_update_tick) continue;
+        UpdatePriority(cache);
+        if (lod.BandIndex(cache.priority) != band) continue;
+        band_scratch_.emplace_back(cache.priority, id);
+      }
+
+      // Rank cut: keep the closest max_peers within this band.
+      const std::size_t cap = lod.max_peers[band];
+      if (band_scratch_.size() > cap) {
+        std::nth_element(band_scratch_.begin(), band_scratch_.begin() + cap, band_scratch_.end(),
+                         [](const auto& a, const auto& b) { return a.first < b.first; });
+        band_scratch_.resize(cap);
+      }
+      std::sort(band_scratch_.begin(), band_scratch_.end(),
+                [](const auto& a, const auto& b) { return a.first < b.first; });
+
+      const uint64_t interval = std::max<uint64_t>(1, lod.interval[band]);
+      for (const auto& [prio, id] : band_scratch_) {
+        if (bytes_sent >= tick_budget) break;
+        auto it = aoi_map_.find(id);
+        if (it == aoi_map_.end()) continue;
+        auto& cache = it->second;
+        if (!cache.IsUpdatable()) continue;
+
+        bytes_sent += static_cast<int>(SendEntityUpdate(cache));
+        // lod_enter_phase offsets the first window only (set at AoI-enter,
+        // cleared here) to stagger simultaneous entries.
+        cache.lod_next_update_tick = tick_count_ + interval + (cache.lod_enter_phase % interval);
+        cache.lod_enter_phase = 0;
+      }
     }
   }
 

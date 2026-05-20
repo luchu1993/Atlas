@@ -26,6 +26,9 @@ namespace Atlas.Client.Unity
         private IntPtr _ctx;
         private AtlasNetNative.LoginResultDelegate? _loginCallback;
         private AtlasNetNative.AuthResultDelegate? _authCallback;
+        private uint _rpcOutCount;
+
+        public uint RpcOutCount => _rpcOutCount;
 
         private void Awake()
         {
@@ -55,6 +58,7 @@ namespace Atlas.Client.Unity
                 if (_ctx == IntPtr.Zero) return;
                 fixed (byte* p = payload)
                     AtlasNetNative.AtlasNetSendBaseRpc(_ctx, entityId, rpcId, p, payload.Length);
+                ++_rpcOutCount;
             };
 
             ClientHost.SendCellRpcHandler = (entityId, rpcId, payload, _) =>
@@ -62,6 +66,7 @@ namespace Atlas.Client.Unity
                 if (_ctx == IntPtr.Zero) return;
                 fixed (byte* p = payload)
                     AtlasNetNative.AtlasNetSendCellRpc(_ctx, entityId, rpcId, p, payload.Length);
+                ++_rpcOutCount;
             };
 
             // net_client carries no entity-def registry; the no-ops just keep
@@ -139,14 +144,22 @@ namespace Atlas.Client.Unity
         {
             if (_ctx == IntPtr.Zero) return AtlasNetReturnCode.ErrInval;
             fixed (byte* p = payload)
-                return AtlasNetNative.AtlasNetSendBaseRpc(_ctx, entityId, rpcId, p, payload.Length);
+            {
+                int rc = AtlasNetNative.AtlasNetSendBaseRpc(_ctx, entityId, rpcId, p, payload.Length);
+                if (rc == AtlasNetReturnCode.Ok) ++_rpcOutCount;
+                return rc;
+            }
         }
 
         public unsafe int SendCellRpc(uint entityId, uint rpcId, ReadOnlySpan<byte> payload)
         {
             if (_ctx == IntPtr.Zero) return AtlasNetReturnCode.ErrInval;
             fixed (byte* p = payload)
-                return AtlasNetNative.AtlasNetSendCellRpc(_ctx, entityId, rpcId, p, payload.Length);
+            {
+                int rc = AtlasNetNative.AtlasNetSendCellRpc(_ctx, entityId, rpcId, p, payload.Length);
+                if (rc == AtlasNetReturnCode.Ok) ++_rpcOutCount;
+                return rc;
+            }
         }
 
         private void OnLoginNative(IntPtr userData, byte status,

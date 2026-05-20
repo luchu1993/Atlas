@@ -10,6 +10,7 @@
 #include <vector>
 
 #include "baseapp_native_provider.h"
+#include "cellapp/cellapp_messages.h"
 #include "coro/pending_rpc_registry.h"
 #include "db/idatabase.h"
 #include "dbapp/dbapp_messages.h"
@@ -101,7 +102,14 @@ class BaseApp : public EntityApp {
       std::function<void(bool success, SpaceID space_id, const Address& cell_addr)>;
 
   // Returns 0 if no CellAppMgr connected (caller may retry); else request_id.
-  auto RequestCreateSpace(SpaceID space_id, SpaceCreatedCallback callback) -> uint32_t;
+  // initial_cell_count=1 keeps the legacy single-cell shape; >1 asks CellAppMgr
+  // to bootstrap N cells distributed across the N least-loaded CellApps.
+  auto RequestCreateSpace(SpaceID space_id, SpaceCreatedCallback callback,
+                          uint16_t initial_cell_count = 1) -> uint32_t;
+
+  // Empty type_name unregisters. Registration also eagerly fires the
+  // CreateSpaceRequest so the space master is alive before any client login.
+  void SetSpaceMasterType(SpaceID space_id, std::string type_name);
 
  protected:
   [[nodiscard]] auto Init(int argc, char* argv[]) -> bool override;
@@ -121,6 +129,17 @@ class BaseApp : public EntityApp {
   struct LoadTracker;
 
   void QueuePendingAoIRadius(EntityID entity_id, float radius, float hysteresis);
+
+  // Dispatch via mgr-bootstrapped Space when CellAppMgr is connected, with a
+  // legacy direct-peer fallback for unit-test setups that have no mgr.
+  void DispatchCreateCellEntity(cellapp::CreateCellEntity msg);
+  void DispatchSpawnLocalEntity(cellapp::SpawnLocalEntity msg);
+  void EnsureSpaceBootstrap(SpaceID space_id);
+  void FlushPendingCellEntities(SpaceID space_id, const Address& host);
+  void FlushPendingSpawnLocalEntities(SpaceID space_id, const Address& host);
+  void OnSpaceHostKnown(SpaceID space_id, const Address& host);
+  void OnSpaceBootstrapFailed(SpaceID space_id);
+
   void OnCreateBase(Channel& ch, const baseapp::CreateBase& msg);
   void OnCreateBaseFromDb(Channel& ch, const baseapp::CreateBaseFromDB& msg);
   void OnAcceptClient(Channel& ch, const baseapp::AcceptClient& msg);
@@ -198,6 +217,17 @@ class BaseApp : public EntityApp {
   Channel* cellappmgr_channel_{nullptr};
   uint32_t next_space_request_id_{1};
   std::unordered_map<uint32_t, SpaceCreatedCallback> pending_space_creates_;
+  // space_id → space master type name. Lookup populates CreateSpaceRequest.
+  std::unordered_map<SpaceID, std::string> space_master_types_;
+
+  // Cache of {space_id → primary cell host} from SpaceCreatedResult; lets
+  // CreateBaseEntityFromScript skip re-asking the mgr on subsequent entities.
+  std::unordered_map<SpaceID, Address> known_space_hosts_;
+  std::unordered_map<SpaceID, std::vector<cellapp::CreateCellEntity>>
+      pending_cell_entity_creates_;
+  std::unordered_map<SpaceID, std::vector<cellapp::SpawnLocalEntity>>
+      pending_spawn_local_entities_;
+  std::unordered_set<SpaceID> in_flight_space_requests_;
 
   uint32_t app_id_{0};
 
@@ -315,6 +345,17 @@ class BaseApp : public EntityApp {
   std::unordered_map<Address, DeltaForwarder> client_delta_forwarders_;
   // SetAoIRadius issued before the cell ack lands is replayed in OnCellEntityCreated.
   std::unordered_map<EntityID, std::pair<float, float>> pending_aoi_radius_;
+
+  // Client ClientCellRpc that arrived before CurrentCell; replayed there.
+  // Capped per entity so a partitioned cellapp can't grow this unboundedly.
+  struct PendingClientRpc {
+    EntityID source_entity_id;
+    uint32_t rpc_id;
+    std::vector<std::byte> payload;
+    uint64_t trace_id;
+  };
+  std::unordered_map<EntityID, std::vector<PendingClientRpc>> pending_client_rpcs_;
+  static constexpr std::size_t kMaxPendingClientRpcsPerEntity = 64;
 
   struct RpcRateBucket {
     double tokens{0.0};

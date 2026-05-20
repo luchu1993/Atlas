@@ -2,7 +2,7 @@
 
   <properties>
     <property name="hp"       type="int32"   scope="all_clients"           persistent="true"  reliable="true" />
-    <property name="gold"     type="int32"   scope="base"                  persistent="true" />
+    <property name="gold"     type="int32"   scope="own_client"            persistent="true"  reliable="true" />
     <property name="aiState"  type="int32"   scope="cell_public"                              reliable="true" />
     <property name="modelId"  type="int32"   scope="other_clients"                            reliable="true" />
     <property name="mana"     type="int32"   scope="cell_public_and_own" />
@@ -31,6 +31,13 @@
       <arg name="endPos"      type="vector3" />
       <arg name="hitTargetId" type="uint32" />
     </method>
+    <method name="OnChat">
+      <arg name="senderId" type="uint32" />
+      <arg name="text"     type="string" />
+    </method>
+    <method name="OnSessionInfo">
+      <arg name="label" type="string" />
+    </method>
   </client_methods>
 
   <cell_methods>
@@ -41,6 +48,13 @@
     <method name="LaunchProjectile" exposed="own_client">
       <arg name="forward" type="vector3" />
     </method>
+    <method name="Say" exposed="own_client">
+      <arg name="text" type="string" />
+    </method>
   </cell_methods>
+
+  <components>
+    <component name="equipment" type="EquipmentComponent" scope="all_clients" />
+  </components>
 
 </entity>

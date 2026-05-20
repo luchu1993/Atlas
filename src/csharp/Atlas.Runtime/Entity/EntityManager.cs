@@ -158,12 +158,12 @@ public sealed class EntityManager
                 if (!entity.BuildAndConsumeReplicationFrame(
                         ref ownerSnap, ref otherSnap,
                         ref ownerDelta, ref otherDelta,
-                        out var eventSeq, out var volatileSeq))
+                        out var hasEvent, out var hasVolatile))
                 {
                     continue;  // fast path — nothing changed this tick
                 }
 
-                NativeApi.PublishReplicationFrame(entity.EntityId, eventSeq, volatileSeq,
+                NativeApi.PublishReplicationFrame(entity.EntityId, hasEvent, hasVolatile,
                     ownerSnap.WrittenSpan, otherSnap.WrittenSpan,
                     ownerDelta.WrittenSpan, otherDelta.WrittenSpan);
             }

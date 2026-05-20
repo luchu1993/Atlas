@@ -155,6 +155,68 @@ TEST(BSPTree, MultiLevelSplit_FindRoutesThroughNestedInternals) {
   EXPECT_EQ(t.FindCell(10.f, 5.f)->cell_id, 3u);
 }
 
+// ─── FindPrimaryCell (ghost region) ─────────────────────────────────────────
+
+TEST(BSPTree, FindPrimaryCell_SingleLeafIgnoresGhostRegion) {
+  // No splits => no ghost band; any point inside root bounds maps to
+  // the single leaf regardless of ghost_region.
+  auto t = MakeSingleCellTree(1, 30001);
+  const auto* a = t.FindPrimaryCell(0.f, 0.f, /*ghost_region=*/5.f);
+  ASSERT_NE(a, nullptr);
+  EXPECT_EQ(a->cell_id, 1u);
+}
+
+TEST(BSPTree, FindPrimaryCell_PointInGhostBandReturnsNull) {
+  // Split at x=0. ghost_region=1 => |x| <= 1 falls in the ghost band.
+  auto t = MakeSingleCellTree(1, 30001);
+  ASSERT_TRUE(t.Split(1, BSPAxis::kX, 0.f, MakeLeafInfo(2, 30002)).HasValue());
+
+  EXPECT_EQ(t.FindPrimaryCell(0.5f, 0.f, 1.f), nullptr);
+  EXPECT_EQ(t.FindPrimaryCell(-0.5f, 0.f, 1.f), nullptr);
+}
+
+TEST(BSPTree, FindPrimaryCell_PointClearlyInsidePrimaryRegionResolves) {
+  auto t = MakeSingleCellTree(1, 30001);
+  ASSERT_TRUE(t.Split(1, BSPAxis::kX, 0.f, MakeLeafInfo(2, 30002)).HasValue());
+
+  // x=-5 well past the -1 ghost edge => left primary.
+  const auto* left = t.FindPrimaryCell(-5.f, 0.f, 1.f);
+  ASSERT_NE(left, nullptr);
+  EXPECT_EQ(left->cell_id, 1u);
+
+  // x=+5 well past the +1 ghost edge => right primary.
+  const auto* right = t.FindPrimaryCell(5.f, 0.f, 1.f);
+  ASSERT_NE(right, nullptr);
+  EXPECT_EQ(right->cell_id, 2u);
+}
+
+TEST(BSPTree, FindPrimaryCell_ZeroGhostRegionMatchesFindCell) {
+  // ghost_region=0 collapses the band to the split line itself, so
+  // every non-boundary point agrees with FindCell.
+  auto t = MakeSingleCellTree(1, 30001);
+  ASSERT_TRUE(t.Split(1, BSPAxis::kX, 0.f, MakeLeafInfo(2, 30002)).HasValue());
+
+  EXPECT_EQ(t.FindPrimaryCell(-5.f, 0.f, 0.f)->cell_id, t.FindCell(-5.f, 0.f)->cell_id);
+  EXPECT_EQ(t.FindPrimaryCell(5.f, 0.f, 0.f)->cell_id, t.FindCell(5.f, 0.f)->cell_id);
+}
+
+TEST(BSPTree, FindPrimaryCell_NestedSplitGhostBandsCompose) {
+  // Three-cell topology: outer split at x=0 (cells 1,2), inner split on
+  // right at z=10 (cells 2,3). A point near the *inner* split must
+  // return nullptr even though it's clearly on the right of the outer.
+  auto t = MakeSingleCellTree(1, 30001);
+  ASSERT_TRUE(t.Split(1, BSPAxis::kX, 0.f, MakeLeafInfo(2, 30002)).HasValue());
+  ASSERT_TRUE(t.Split(2, BSPAxis::kZ, 10.f, MakeLeafInfo(3, 30003)).HasValue());
+
+  // (x=5, z=10): right of outer split, smack on the inner z split.
+  EXPECT_EQ(t.FindPrimaryCell(5.f, 10.f, 1.f), nullptr);
+
+  // (x=5, z=20): right of outer, well past inner ghost band => cell 3.
+  const auto* deep = t.FindPrimaryCell(5.f, 20.f, 1.f);
+  ASSERT_NE(deep, nullptr);
+  EXPECT_EQ(deep->cell_id, 3u);
+}
+
 // ─── VisitRect ───────────────────────────────────────────────────────────────
 
 TEST(BSPTree, VisitRect_RectInsideOneCellVisitsOnlyThat) {

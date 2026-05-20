@@ -69,6 +69,10 @@
         (uint32_t src_entity_id, uint32_t dest_entity_id),                                        \
         atlas::GetNativeApiProvider().GiveClientTo(src_entity_id, dest_entity_id))                  \
                                                                                                    \
+    X(void, SetSpaceMasterType,                                                                    \
+        (uint32_t space_id, const char* name, int32_t len),                                        \
+        atlas::GetNativeApiProvider().SetSpaceMasterType(space_id, name, len))                      \
+                                                                                                   \
     X(uint32_t, CreateBaseEntity,                                                                  \
         (uint16_t type_id, uint32_t space_id),                                                     \
         return atlas::GetNativeApiProvider().CreateBaseEntity(type_id, space_id))                  \
@@ -122,13 +126,13 @@
         atlas::GetNativeApiProvider().GetEntityDirection(entity_id, *out_x, *out_y, *out_z))       \
                                                                                                    \
     X(void, PublishReplicationFrame,                                                               \
-        (uint32_t entity_id, uint64_t event_seq, uint64_t volatile_seq,                          \
+        (uint32_t entity_id, uint8_t has_event, uint8_t has_volatile,                              \
          const uint8_t* owner_snap, int32_t owner_snap_len,                                        \
          const uint8_t* other_snap, int32_t other_snap_len,                                        \
          const uint8_t* owner_delta, int32_t owner_delta_len,                                      \
          const uint8_t* other_delta, int32_t other_delta_len),                                     \
         atlas::GetNativeApiProvider().PublishReplicationFrame(                                    \
-            entity_id, event_seq, volatile_seq,                                                    \
+            entity_id, has_event != 0, has_volatile != 0,                                         \
             reinterpret_cast<const std::byte*>(owner_snap), owner_snap_len,                        \
             reinterpret_cast<const std::byte*>(other_snap), other_snap_len,                        \
             reinterpret_cast<const std::byte*>(owner_delta), owner_delta_len,                      \

@@ -3,6 +3,12 @@
   <properties>
     <property name="hp"      type="int32" scope="all_clients" reliable="true" />
     <property name="npcType" type="int32" scope="all_clients" />
+    <!-- AI state lives on the cell only; carried in Serialize/Deserialize so
+         the script-side AI loop resumes mid-wander after a cross-cellapp
+         offload instead of reseeding to defaults. -->
+    <property name="aiTarget"        type="vector3" scope="cell_private" />
+    <property name="aiRetargetAccum" type="float"   scope="cell_private" />
+    <property name="aiFireInterval"  type="float"   scope="cell_private" />
   </properties>
 
   <client_methods>

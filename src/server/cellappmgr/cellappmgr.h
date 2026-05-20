@@ -3,6 +3,7 @@
 
 #include <cstdint>
 #include <unordered_map>
+#include <vector>
 
 #include "bsp_tree.h"
 #include "cellappmgr_messages.h"
@@ -42,6 +43,8 @@ class CellAppMgr : public ManagerApp {
     BSPTree bsp;
     // Last fan-out bytes; stable trees skip redundant broadcasts.
     std::vector<std::byte> last_broadcast_blob;
+    // Entity type name the primary host auto-spawns on AddCellToSpace.
+    std::string space_master_type;
   };
 
   [[nodiscard]] auto CellApps() const -> const std::unordered_map<Address, CellAppInfo>& {
@@ -69,6 +72,16 @@ class CellAppMgr : public ManagerApp {
  private:
   [[nodiscard]] auto PickHostForNewSpace() const -> const CellAppInfo*;
 
+  // Sorted ascending by (load, app_id) for deterministic multi-cell
+  // bootstrap; size capped at cellapps_.size().
+  [[nodiscard]] auto SortedHostsForBootstrap(std::size_t max) const
+      -> std::vector<const CellAppInfo*>;
+
+  // BFS N-1 splits with alternating X/Z axes; N=4 lands as a 2x2 grid.
+  // Each new leaf takes hosts[i] in order; partial bootstrap on Split error.
+  void BootstrapMultiCellPartition(SpacePartition& partition,
+                                   const std::vector<const CellAppInfo*>& hosts);
+
   [[nodiscard]] auto PickAlternateHost(const Address& exclude_addr) const -> const CellAppInfo*;
 
   // Prefers a survivor that already holds a leaf of this space — its
@@ -78,11 +91,20 @@ class CellAppMgr : public ManagerApp {
       -> const CellAppInfo*;
 
   void SendAddCell(const CellAppInfo& target, SpaceID space_id, cellappmgr::CellID cell_id,
-                   const CellBounds& bounds);
+                   const CellBounds& bounds, bool is_primary,
+                   const std::string& space_master_type);
   void BroadcastGeometry(SpacePartition& partition);
 
   std::unordered_map<Address, CellAppInfo> cellapps_;
   std::unordered_map<SpaceID, SpacePartition> spaces_;
+  // CreateSpaceRequests received before any CellApp registered; drained the
+  // moment the first CellApp registers. Each entry is (msg, src, channel).
+  struct PendingSpaceCreate {
+    cellappmgr::CreateSpaceRequest msg;
+    Address src;
+    Channel* ch;
+  };
+  std::vector<PendingSpaceCreate> pending_space_creates_awaiting_cellapps_;
 
   std::unordered_map<Address, Channel*> baseapps_;
 

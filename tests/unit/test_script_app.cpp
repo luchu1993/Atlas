@@ -75,6 +75,7 @@ class MockNativeProvider : public INativeApiProvider {
   void SetEntityDefDigest(const std::byte*, int32_t) override {}
   void WriteToDb(uint32_t, const std::byte*, int32_t) override {}
   void GiveClientTo(uint32_t, uint32_t) override {}
+  void SetSpaceMasterType(uint32_t, const char*, int32_t) override {}
   auto CreateBaseEntity(uint16_t, uint32_t) -> uint32_t override { return 0; }
   auto CreateLocalCellEntity(uint16_t, uint32_t, float, float, float, float, float, float, bool)
       -> uint32_t override {
@@ -97,9 +98,9 @@ class MockNativeProvider : public INativeApiProvider {
   void SetEntityDirection(uint32_t, float, float, float) override {}
   void GetEntityPosition(uint32_t, float& x, float& y, float& z) override { x = y = z = 0; }
   void GetEntityDirection(uint32_t, float& x, float& y, float& z) override { x = y = z = 0; }
-  void PublishReplicationFrame(uint32_t, uint64_t, uint64_t, const std::byte*, int32_t,
-                               const std::byte*, int32_t, const std::byte*, int32_t,
-                               const std::byte*, int32_t) override {}
+  void PublishReplicationFrame(uint32_t, bool, bool, const std::byte*, int32_t, const std::byte*,
+                               int32_t, const std::byte*, int32_t, const std::byte*,
+                               int32_t) override {}
   auto AddMoveController(uint32_t, float, float, float, float, int32_t) -> int32_t override {
     return 0;
   }

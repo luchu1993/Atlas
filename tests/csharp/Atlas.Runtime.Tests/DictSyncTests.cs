@@ -26,9 +26,9 @@ public class DictSyncTests
             bool has = src.BuildAndConsumeReplicationFrame(
                 ref buf.OwnerSnapshot, ref buf.OtherSnapshot,
                 ref buf.OwnerDelta, ref buf.OtherDelta,
-                out ulong eventSeq, out _);
+                out bool hasEvent, out _);
             Assert.True(has);
-            Assert.Equal(1UL, eventSeq);
+            Assert.True(hasEvent);
 
             // Op-log wire per DictSet: [opKind u8][string k][i32 v].
             //   "alice" (1+5 packed-len) + 4 + kind 1 = 11

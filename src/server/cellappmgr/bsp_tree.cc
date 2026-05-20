@@ -10,6 +10,11 @@ auto BSPLeaf::FindCell(float x, float z) const -> const CellInfo* {
   return info_.bounds.Contains(x, z) ? &info_ : nullptr;
 }
 
+auto BSPLeaf::FindPrimaryCell(float x, float z, float /*ghost_region*/) const -> const CellInfo* {
+  // Reaching a leaf means every ancestor split's ghost band was cleared.
+  return info_.bounds.Contains(x, z) ? &info_ : nullptr;
+}
+
 void BSPLeaf::VisitRect(const CellBounds& rect,
                         const std::function<void(const CellInfo&)>& visitor) const {
   if (info_.bounds.Overlaps(rect)) visitor(info_);
@@ -32,6 +37,13 @@ auto BSPInternal::FindCell(float x, float z) const -> const CellInfo* {
   // Half-open on position_ to match CellBounds::Contains.
   const float coord = (axis_ == BSPAxis::kX) ? x : z;
   return coord < position_ ? left_->FindCell(x, z) : right_->FindCell(x, z);
+}
+
+auto BSPInternal::FindPrimaryCell(float x, float z, float ghost_region) const -> const CellInfo* {
+  const float coord = (axis_ == BSPAxis::kX) ? x : z;
+  if (coord < position_ - ghost_region) return left_->FindPrimaryCell(x, z, ghost_region);
+  if (coord > position_ + ghost_region) return right_->FindPrimaryCell(x, z, ghost_region);
+  return nullptr;  // inside this split's ghost band — defer migration
 }
 
 void BSPInternal::VisitRect(const CellBounds& rect,
@@ -243,6 +255,10 @@ auto BSPTree::Split(cellappmgr::CellID existing_cell_id, BSPAxis axis, float pos
 
 auto BSPTree::FindCell(float x, float z) const -> const CellInfo* {
   return root_ ? root_->FindCell(x, z) : nullptr;
+}
+
+auto BSPTree::FindPrimaryCell(float x, float z, float ghost_region) const -> const CellInfo* {
+  return root_ ? root_->FindPrimaryCell(x, z, ghost_region) : nullptr;
 }
 
 auto BSPTree::FindCellById(cellappmgr::CellID id) const -> const CellInfo* {

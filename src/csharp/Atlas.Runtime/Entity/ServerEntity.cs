@@ -99,24 +99,16 @@ public abstract class ServerEntity
     /// MUST be Reset before the call; the caller consumes
     /// <c>.WrittenSpan</c> before the next Reset/Dispose.
     /// </summary>
-    /// <param name="ownerSnapshot">Full-state snapshot for the owner audience. Written only when event_seq advances.</param>
-    /// <param name="otherSnapshot">Full-state snapshot for observer audience.</param>
-    /// <param name="ownerDelta">Audience-filtered delta for owner — <see cref="PropertyScope.OwnClient"/>, <see cref="PropertyScope.AllClients"/>, <see cref="PropertyScope.CellPublicAndOwn"/>, <see cref="PropertyScope.BaseAndClient"/>.</param>
-    /// <param name="otherDelta">Audience-filtered delta for observers — <see cref="PropertyScope.AllClients"/>, <see cref="PropertyScope.OtherClients"/> only.</param>
-    /// <param name="eventSeq">Property-event sequence; 0 if no property changed this tick.</param>
-    /// <param name="volatileSeq">Volatile (pos/orient) sequence; 0 if no volatile change.</param>
-    /// <returns>
-    /// <c>true</c> when at least one stream advanced (event_seq and/or
-    /// volatile_seq > 0 in the outputs). <c>false</c> is the fast path — the
-    /// pump should NOT hand zero-length spans to NativeApi in that case.
-    /// </returns>
+    /// hasEvent/hasVolatile drive the C++ runtime's monotonic seq counters
+    /// (replication_state_.latest_event_seq / latest_volatile_seq). Keeping
+    /// the seqs in the runtime is what makes Offload work without resets.
     public virtual bool BuildAndConsumeReplicationFrame(
         ref SpanWriter ownerSnapshot, ref SpanWriter otherSnapshot,
         ref SpanWriter ownerDelta, ref SpanWriter otherDelta,
-        out ulong eventSeq, out ulong volatileSeq)
+        out bool hasEvent, out bool hasVolatile)
     {
-        eventSeq = 0;
-        volatileSeq = 0;
+        hasEvent = false;
+        hasVolatile = false;
         return false;
     }
 

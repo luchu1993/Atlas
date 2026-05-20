@@ -59,7 +59,7 @@ TEST_F(CellAppNativeProviderTest, PublishReplicationFrameAdvancesSeqsAndCopiesBu
   const std::byte owner_delta[] = {std::byte{0xA1}};
   const std::byte other_delta[] = {std::byte{0xB1}, std::byte{0xB2}};
 
-  provider_.PublishReplicationFrame(10, /*event_seq=*/1, /*volatile_seq=*/1, owner_snap,
+  provider_.PublishReplicationFrame(10, /*has_event=*/true, /*has_volatile=*/true, owner_snap,
                                     static_cast<int32_t>(sizeof(owner_snap)), other_snap,
                                     static_cast<int32_t>(sizeof(other_snap)), owner_delta,
                                     static_cast<int32_t>(sizeof(owner_delta)), other_delta,
@@ -79,8 +79,8 @@ TEST_F(CellAppNativeProviderTest, PublishReplicationFrameAdvancesSeqsAndCopiesBu
 TEST_F(CellAppNativeProviderTest, PublishReplicationFrameWithEmptyBuffersIsSafe) {
   auto* e = AddEntity(10);
   // volatile-only frame — no snapshots or deltas needed.
-  provider_.PublishReplicationFrame(10, /*event=*/0, /*volatile=*/1, nullptr, 0, nullptr, 0,
-                                    nullptr, 0, nullptr, 0);
+  provider_.PublishReplicationFrame(10, /*has_event=*/false, /*has_volatile=*/true, nullptr, 0,
+                                    nullptr, 0, nullptr, 0, nullptr, 0);
   const auto* state = e->GetReplicationState();
   ASSERT_NE(state, nullptr);
   EXPECT_EQ(state->latest_event_seq, 0u);
@@ -358,8 +358,8 @@ TEST_F(CellAppNativeProviderTest, PublishReplicationFrameRejectedOnGhost) {
   auto* e = space_.AddEntity(std::make_unique<CellEntity>(
       CellEntity::GhostTag{}, 501, uint16_t{1}, space_, math::Vector3{0, 0, 0},
       math::Vector3{1, 0, 0}, reinterpret_cast<Channel*>(0xBEEF)));
-  provider_.PublishReplicationFrame(501, /*event_seq=*/1, /*volatile_seq=*/1, nullptr, 0, nullptr,
-                                    0, nullptr, 0, nullptr, 0);
+  provider_.PublishReplicationFrame(501, /*has_event=*/true, /*has_volatile=*/true, nullptr, 0,
+                                    nullptr, 0, nullptr, 0, nullptr, 0);
   // Ghost's replication_state_ was never allocated by the provider.
   EXPECT_EQ(e->GetReplicationState(), nullptr);
 }

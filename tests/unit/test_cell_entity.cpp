@@ -82,13 +82,13 @@ TEST(CellEntity, FirstEventFrameSeedsReplicationState) {
       1, uint16_t{1}, space, math::Vector3{0, 0, 0}, math::Vector3{1, 0, 0}));
 
   CellEntity::ReplicationFrame frame;
-  frame.event_seq = 1;
   frame.owner_delta = MakeBlob({0xAA, 0xBB});
   frame.other_delta = MakeBlob({0xCC});
   auto owner_snap = MakeBlob({0x11, 0x22, 0x33});
   auto other_snap = MakeBlob({0x44});
 
-  e->PublishReplicationFrame(frame, owner_snap, other_snap);
+  e->PublishReplicationFrame(frame, /*has_event=*/true, /*has_volatile=*/false, owner_snap,
+                             other_snap);
 
   const auto* state = e->GetReplicationState();
   ASSERT_NE(state, nullptr);
@@ -106,12 +106,11 @@ TEST(CellEntity, HistoryWindowBounded) {
       1, uint16_t{1}, space, math::Vector3{0, 0, 0}, math::Vector3{1, 0, 0}));
 
   // Publish more frames than the window size; old ones must be evicted
-  // so the deque stays bounded.
+  // so the deque stays bounded. Engine auto-increments seq.
   const auto window = CellEntity::kReplicationHistoryWindow;
-  for (uint64_t i = 1; i <= window + 4; ++i) {
+  for (std::size_t i = 0; i < window + 4; ++i) {
     CellEntity::ReplicationFrame frame;
-    frame.event_seq = i;
-    e->PublishReplicationFrame(frame, {}, {});
+    e->PublishReplicationFrame(frame, /*has_event=*/true, /*has_volatile=*/false, {}, {});
   }
   const auto* state = e->GetReplicationState();
   ASSERT_NE(state, nullptr);
@@ -122,38 +121,17 @@ TEST(CellEntity, HistoryWindowBounded) {
   EXPECT_EQ(state->history.back().event_seq, static_cast<uint64_t>(window + 4));
 }
 
-TEST(CellEntity, StaleEventSeqIsIgnored) {
-  Space space(1);
-  auto* e = space.AddEntity(std::make_unique<CellEntity>(
-      1, uint16_t{1}, space, math::Vector3{0, 0, 0}, math::Vector3{1, 0, 0}));
-  CellEntity::ReplicationFrame f1;
-  f1.event_seq = 5;
-  e->PublishReplicationFrame(f1, MakeBlob({0x01}), {});
-
-  CellEntity::ReplicationFrame f_stale;
-  f_stale.event_seq = 3;
-  f_stale.owner_delta = MakeBlob({0x99});
-  e->PublishReplicationFrame(f_stale, MakeBlob({0xFF}), {});
-
-  const auto* state = e->GetReplicationState();
-  EXPECT_EQ(state->latest_event_seq, 5u);
-  // Snapshot untouched — stale frame didn't overwrite.
-  ASSERT_EQ(state->owner_snapshot.size(), 1u);
-  EXPECT_EQ(state->owner_snapshot[0], std::byte{0x01});
-}
-
 TEST(CellEntity, VolatileFrameUpdatesPosition) {
   Space space(1);
   auto* e = space.AddEntity(std::make_unique<CellEntity>(
       1, uint16_t{1}, space, math::Vector3{0, 0, 0}, math::Vector3{1, 0, 0}));
 
   CellEntity::ReplicationFrame frame;
-  frame.volatile_seq = 1;
   frame.position = {10.f, 0.f, 20.f};
   frame.direction = {0.f, 0.f, 1.f};
   frame.on_ground = true;
 
-  e->PublishReplicationFrame(frame, {}, {});
+  e->PublishReplicationFrame(frame, /*has_event=*/false, /*has_volatile=*/true, {}, {});
 
   EXPECT_FLOAT_EQ(e->Position().x, 10.f);
   EXPECT_FLOAT_EQ(e->Position().z, 20.f);
@@ -170,29 +148,43 @@ TEST(CellEntity, CombinedFrameAdvancesBothSeqs) {
       1, uint16_t{1}, space, math::Vector3{0, 0, 0}, math::Vector3{1, 0, 0}));
 
   CellEntity::ReplicationFrame frame;
-  frame.event_seq = 1;
-  frame.volatile_seq = 1;
   frame.position = {1, 0, 1};
-  e->PublishReplicationFrame(frame, MakeBlob({0x01}), {});
+  e->PublishReplicationFrame(frame, /*has_event=*/true, /*has_volatile=*/true, MakeBlob({0x01}),
+                             {});
 
   const auto* state = e->GetReplicationState();
   EXPECT_EQ(state->latest_event_seq, 1u);
   EXPECT_EQ(state->latest_volatile_seq, 1u);
 }
 
-TEST(CellEntity, ZeroZeroFrameIsNoop) {
+TEST(CellEntity, BothFlagsFalseIsNoop) {
   Space space(1);
   auto* e = space.AddEntity(std::make_unique<CellEntity>(
       1, uint16_t{1}, space, math::Vector3{0, 0, 0}, math::Vector3{1, 0, 0}));
-  CellEntity::ReplicationFrame frame;  // both seqs default zero
-  e->PublishReplicationFrame(frame, {}, {});
-  // State is still initialised (emplace happens regardless) but no
-  // event or volatile progress.
+  CellEntity::ReplicationFrame frame;
+  e->PublishReplicationFrame(frame, /*has_event=*/false, /*has_volatile=*/false, {}, {});
+  // Early return — state never even allocated.
+  EXPECT_EQ(e->GetReplicationState(), nullptr);
+}
+
+TEST(CellEntity, SeedReplicationStateAdoptsSeqs) {
+  Space space(1);
+  auto* e = space.AddEntity(std::make_unique<CellEntity>(
+      1, uint16_t{1}, space, math::Vector3{0, 0, 0}, math::Vector3{1, 0, 0}));
+  auto owner_snap = MakeBlob({0xAA});
+  auto other_snap = MakeBlob({0xBB});
+  e->SeedReplicationState(42, 99, owner_snap, other_snap);
+
   const auto* state = e->GetReplicationState();
   ASSERT_NE(state, nullptr);
-  EXPECT_EQ(state->latest_event_seq, 0u);
-  EXPECT_EQ(state->latest_volatile_seq, 0u);
-  EXPECT_TRUE(state->history.empty());
+  EXPECT_EQ(state->latest_event_seq, 42u);
+  EXPECT_EQ(state->latest_volatile_seq, 99u);
+
+  // Subsequent publish continues monotonically from seeded values.
+  CellEntity::ReplicationFrame f;
+  e->PublishReplicationFrame(f, /*has_event=*/true, /*has_volatile=*/true, {}, {});
+  EXPECT_EQ(state->latest_event_seq, 43u);
+  EXPECT_EQ(state->latest_volatile_seq, 100u);
 }
 
 }  // namespace

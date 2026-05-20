@@ -32,8 +32,15 @@ TEST_F(CellAppConfigTest, DefaultsMatchExpectedValues) {
   EXPECT_EQ(CellAppConfig::WitnessTotalOutboundCapBytes(), 4194304u);
   EXPECT_EQ(CellAppConfig::WitnessPerPeerBytes(), 200u);
   EXPECT_EQ(CellAppConfig::WitnessMinPerObserverBudgetBytes(), 1024u);
-  EXPECT_EQ(CellAppConfig::WitnessMaxPerObserverBudgetBytes(), 16384u);
-  EXPECT_EQ(CellAppConfig::WitnessMaxPeersPerTick(), 64u);
+  EXPECT_EQ(CellAppConfig::WitnessMaxPerObserverBudgetBytes(), 65536u);
+  EXPECT_FLOAT_EQ(CellAppConfig::WitnessLodCloseDistanceM(), 25.f);
+  EXPECT_FLOAT_EQ(CellAppConfig::WitnessLodMediumDistanceM(), 100.f);
+  EXPECT_EQ(CellAppConfig::WitnessLodCloseIntervalTicks(), 1u);
+  EXPECT_EQ(CellAppConfig::WitnessLodMediumIntervalTicks(), 3u);
+  EXPECT_EQ(CellAppConfig::WitnessLodFarIntervalTicks(), 6u);
+  EXPECT_EQ(CellAppConfig::WitnessLodCloseMaxPeersPerTick(), 64u);
+  EXPECT_EQ(CellAppConfig::WitnessLodMediumMaxPeersPerTick(), 64u);
+  EXPECT_EQ(CellAppConfig::WitnessLodFarMaxPeersPerTick(), 64u);
 }
 
 TEST_F(CellAppConfigTest, WitnessBudgetOverride) {
@@ -85,7 +92,8 @@ TEST_F(CellAppConfigTest, ReadWriteWatcherPathsAreRegistered) {
   EXPECT_TRUE(reg.Get("cellapp/witness_per_peer_bytes").has_value());
   EXPECT_TRUE(reg.Get("cellapp/witness_min_per_observer_budget_bytes").has_value());
   EXPECT_TRUE(reg.Get("cellapp/witness_max_per_observer_budget_bytes").has_value());
-  EXPECT_TRUE(reg.Get("cellapp/witness_max_peers_per_tick").has_value());
+  EXPECT_TRUE(reg.Get("cellapp/witness_lod_close_max_peers_per_tick").has_value());
+  EXPECT_TRUE(reg.Get("cellapp/witness_lod_medium_interval_ticks").has_value());
 
   // Watchers are RW — ops can retune at runtime.
   EXPECT_TRUE(reg.Set("cellapp/default_aoi_radius", "250"));

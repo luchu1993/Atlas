@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <functional>
 #include <limits>
+#include <queue>
 #include <utility>
 
 #include "baseapp/baseapp_messages.h"
@@ -174,6 +175,14 @@ void CellAppMgr::OnRegisterCellApp(const Address& src, Channel* ch,
 
   ATLAS_LOG_INFO("CellAppMgr: CellApp registered app_id={} internal={}:{}", app_id,
                  kInternalAddr.Ip(), kInternalAddr.Port());
+
+  // Drain any CreateSpaceRequests parked by an earlier "no CellApps" race.
+  if (pending_space_creates_awaiting_cellapps_.empty()) return;
+  auto queued = std::move(pending_space_creates_awaiting_cellapps_);
+  pending_space_creates_awaiting_cellapps_.clear();
+  for (auto& entry : queued) {
+    OnCreateSpaceRequest(entry.src, entry.ch, entry.msg);
+  }
 }
 
 void CellAppMgr::OnInformCellLoad(const Address& /*src*/, Channel* /*ch*/,
@@ -248,38 +257,100 @@ void CellAppMgr::OnCreateSpaceRequest(const Address& src, Channel* ch,
     return;
   }
 
-  const auto* host = PickHostForNewSpace();
-  if (host == nullptr) {
-    ATLAS_LOG_ERROR("CellAppMgr: CreateSpaceRequest space_id={} — no CellApps available to host",
-                    msg.space_id);
-    send_reply(/*ok=*/false, 0, Address{});
+  const std::size_t requested = std::max<std::size_t>(1, msg.initial_cell_count);
+  auto hosts = SortedHostsForBootstrap(requested);
+  if (hosts.empty()) {
+    // Race: BaseApp's CreateSpaceRequest can land before any CellApp has
+    // registered. Hold the request rather than failing — OnRegisterCellApp
+    // drains the queue once a host is available.
+    ATLAS_LOG_INFO("CellAppMgr: queueing CreateSpaceRequest space_id={} until a CellApp registers",
+                   msg.space_id);
+    pending_space_creates_awaiting_cellapps_.push_back({msg, src, ch});
     return;
   }
 
-  // Seed a single-cell BSP (whole-space leaf) hosted entirely on the
-  // chosen CellApp. Later splits happen when more CellApps join and
-  // rebalance decisions start making sense.
-  const cellappmgr::CellID cell_id = next_cell_id_++;
+  // Seed cell 1 on hosts[0], then bootstrap to N cells across hosts[1..N-1]
+  // when the request asks for it and enough CellApps are registered.
+  const cellappmgr::CellID first_cell_id = next_cell_id_++;
   CellInfo leaf;
-  leaf.cell_id = cell_id;
-  leaf.cellapp_addr = host->internal_addr;
-  leaf.load = host->load;
+  leaf.cell_id = first_cell_id;
+  leaf.cellapp_addr = hosts[0]->internal_addr;
+  leaf.load = hosts[0]->load;
   leaf.entity_count = 0;
 
   SpacePartition partition;
   partition.space_id = msg.space_id;
+  partition.space_master_type = msg.space_master_type;
   partition.bsp.InitSingleCell(leaf);
+
+  if (hosts.size() >= 2) BootstrapMultiCellPartition(partition, hosts);
+
   spaces_.emplace(msg.space_id, std::move(partition));
+  auto& seeded = spaces_[msg.space_id];
 
-  // Tell the host CellApp about its new Cell and push the geometry so
-  // its OffloadChecker + GhostMaintainer have the data they need.
-  SendAddCell(*host, msg.space_id, cell_id, CellBounds{});
-  BroadcastGeometry(spaces_[msg.space_id]);
+  // Tell every host about its leaf and push the final geometry once.
+  const auto primary_cell_id = seeded.bsp.PrimaryCellId();
+  for (const auto* ci : seeded.bsp.Leaves()) {
+    auto it = cellapps_.find(ci->cellapp_addr);
+    if (it == cellapps_.end()) continue;
+    const bool is_primary = ci->cell_id == primary_cell_id;
+    SendAddCell(it->second, msg.space_id, ci->cell_id, ci->bounds, is_primary,
+                seeded.space_master_type);
+  }
+  BroadcastGeometry(seeded);
 
-  ATLAS_LOG_INFO("CellAppMgr: created Space {} on CellApp app_id={} ({}:{}), cell_id={}",
-                 msg.space_id, host->app_id, host->internal_addr.Ip(), host->internal_addr.Port(),
-                 cell_id);
-  send_reply(/*ok=*/true, cell_id, host->internal_addr);
+  ATLAS_LOG_INFO("CellAppMgr: created Space {} with {} cell(s); primary host app_id={} ({}:{})",
+                 msg.space_id, seeded.bsp.Leaves().size(), hosts[0]->app_id,
+                 hosts[0]->internal_addr.Ip(), hosts[0]->internal_addr.Port());
+  send_reply(/*ok=*/true, first_cell_id, hosts[0]->internal_addr);
+}
+
+auto CellAppMgr::SortedHostsForBootstrap(std::size_t max) const
+    -> std::vector<const CellAppInfo*> {
+  std::vector<const CellAppInfo*> out;
+  out.reserve(cellapps_.size());
+  for (const auto& [_, info] : cellapps_) out.push_back(&info);
+  std::sort(out.begin(), out.end(), [](const CellAppInfo* a, const CellAppInfo* b) {
+    if (a->load != b->load) return a->load < b->load;
+    return a->app_id < b->app_id;
+  });
+  if (out.size() > max) out.resize(max);
+  return out;
+}
+
+void CellAppMgr::BootstrapMultiCellPartition(SpacePartition& partition,
+                                             const std::vector<const CellAppInfo*>& hosts) {
+  // Breadth-first split queue: alternate axis per tree level so an N=4
+  // bootstrap lands as a 2x2 grid (matches tests/unit/test_bsp_tree).
+  struct Pending {
+    cellappmgr::CellID cell_id;
+    int level;
+  };
+  std::queue<Pending> q;
+  q.push({partition.bsp.Leaves().front()->cell_id, 0});
+
+  std::size_t host_idx = 1;
+  while (host_idx < hosts.size() && !q.empty()) {
+    auto pend = q.front();
+    q.pop();
+    const BSPAxis axis = (pend.level % 2 == 0) ? BSPAxis::kX : BSPAxis::kZ;
+    CellInfo new_leaf;
+    new_leaf.cell_id = next_cell_id_++;
+    new_leaf.cellapp_addr = hosts[host_idx]->internal_addr;
+    new_leaf.load = hosts[host_idx]->load;
+    new_leaf.entity_count = 0;
+    auto r = partition.bsp.Split(pend.cell_id, axis, /*position=*/0.f, new_leaf);
+    if (!r) {
+      ATLAS_LOG_ERROR("CellAppMgr: BSP split failed at level={} cell_id={}: {}", pend.level,
+                      pend.cell_id, r.Error().Message());
+      // Roll back the consumed cell_id so we don't leave a gap.
+      --next_cell_id_;
+      break;
+    }
+    ++host_idx;
+    q.push({pend.cell_id, pend.level + 1});
+    q.push({new_leaf.cell_id, pend.level + 1});
+  }
 }
 
 void CellAppMgr::OnCellAppDeath(const Address& internal_addr) {
@@ -344,8 +415,10 @@ void CellAppMgr::OnCellAppDeath(const Address& internal_addr) {
 
       // Tell the new host to materialise the local Cell. UpdateGeometry
       // alone wouldn't - OnUpdateGeometry only resizes existing Cells,
-      // never creates them (cellapp.cc:1141).
-      SendAddCell(*alt, space_id, leaf->cell_id, leaf->bounds);
+      // never creates them (cellapp.cc:1141). is_primary=false here: the
+      // rehomed cell is never the primary leaf (BSP keeps that on hosts[0]).
+      SendAddCell(*alt, space_id, leaf->cell_id, leaf->bounds, /*is_primary=*/false,
+                  partition.space_master_type);
       reassigned_any = true;
       if (first_new_host.Ip() == 0) first_new_host = alt->internal_addr;
     }
@@ -431,7 +504,8 @@ auto CellAppMgr::PickAlternateHostInSpace(const Address& exclude_addr,
 }
 
 void CellAppMgr::SendAddCell(const CellAppInfo& target, SpaceID space_id,
-                             cellappmgr::CellID cell_id, const CellBounds& bounds) {
+                             cellappmgr::CellID cell_id, const CellBounds& bounds,
+                             bool is_primary, const std::string& space_master_type) {
   if (target.channel == nullptr) {
     ATLAS_LOG_WARNING("CellAppMgr: AddCellToSpace skipped — no channel to app_id={}",
                       target.app_id);
@@ -441,6 +515,8 @@ void CellAppMgr::SendAddCell(const CellAppInfo& target, SpaceID space_id,
   msg.space_id = space_id;
   msg.cell_id = cell_id;
   msg.bounds = bounds;
+  msg.is_primary = is_primary;
+  msg.space_master_type = space_master_type;
   (void)target.channel->SendMessage(msg);
 }
 

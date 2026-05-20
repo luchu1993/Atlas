@@ -2,7 +2,6 @@ using Atlas.Components;
 using Atlas.DataTypes;
 using Atlas.Diagnostics;
 using Atlas.Entity;
-using Atlas.Space;
 
 namespace Atlas.Mvp.Cell;
 
@@ -37,13 +36,6 @@ public partial class Avatar : CellServerEntity, IDamageable
         // SerializeForOwnerClient (full snapshot) does not carry component
         // sections; force a dirty WeaponId so the first delta ships the slot.
         if (Equipment != null) Equipment.WeaponId = 1;
-
-        // Lazy single-instance MvpSpace: fresh-login Avatar on the primary
-        // cellapp seeds it; offload-arrival Avatars skip via isReload above.
-        if (SpaceOwnerRegistry.Find(kSpaceId) is null) {
-            EntityFactory.CreateLocalCell("MvpSpace", kSpaceId, Vector3.Zero,
-                                          Vector3.Forward, onGround: false);
-        }
     }
 
     protected override void OnDestroy()

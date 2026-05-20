@@ -214,5 +214,24 @@ TEST(OffloadChecker, EntityReturningToOwnCellNotOffloaded) {
   EXPECT_TRUE(checker.Compute(space).empty());
 }
 
+TEST(OffloadChecker, EntityWithinHysteresisOfBoundary_NotOffloaded) {
+  Space space(1);
+  Address self{0x7F000001u, 30001};
+  Address peer{0x7F000002u, 30002};
+  BuildTopology(space, self, peer, /*self_cell_id=*/1);
+
+  // Default hysteresis is 1.0 m; entity at x=+0.5 maps to peer but ±1 m
+  // straddles the x=0 split, so OffloadChecker must defer migration.
+  auto* e = MakeReal(space, 10, {0.5f, 0.f, 0.f});
+  space.FindLocalCell(1)->AddRealEntity(e);
+
+  OffloadChecker checker(self);
+  EXPECT_TRUE(checker.Compute(space).empty());
+
+  // Moving solidly past the hysteresis band (x > +1) does trigger offload.
+  e->SetPosition({1.5f, 0.f, 0.f});
+  EXPECT_EQ(checker.Compute(space).size(), 1u);
+}
+
 }  // namespace
 }  // namespace atlas

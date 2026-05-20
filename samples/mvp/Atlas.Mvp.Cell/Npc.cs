@@ -16,14 +16,17 @@ public partial class Npc : CellServerEntity, IDamageable
 
     protected override void OnInit(bool isReload)
     {
-        if (isReload) return;
-        // Position is supplied at spawn so the AoI Enter envelope already
-        // carries the scattered coord.
-        Hp = kInitialHp;
-        NpcType = 1;
+        // ProjectileSimulator + ServerLocal component are per-cellapp; not
+        // carried by Offload, so rewire on every arrival incl. isReload=true.
         _sim = ProjectileSimulator.ForSpace(kSpaceId);
         _sim.RegisterTarget(this);
-        AddLocalComponent<NpcAiComponent>();
+        var ai = AddLocalComponent<NpcAiComponent>();
+        if (isReload) return;
+        // Fresh spawn: seed initial AiTarget / AiFireInterval. Offload-arrived
+        // NPCs (isReload=true) inherit these from persistent_blob.
+        ai.InitFreshState();
+        Hp = kInitialHp;
+        NpcType = 1;
         if (SpaceOwnerRegistry.Find(SpaceId) is MvpSpace space) space.NotifyNpcAlive();
     }
 
@@ -36,6 +39,9 @@ public partial class Npc : CellServerEntity, IDamageable
     public void BroadcastDamage(int amount, uint attackerId)
     {
         AllClients.ShowDamage(amount, attackerId);
-        if (Hp <= 0) DestroySelf();
+        if (Hp > 0) return;
+        if (EntityManager.Instance.Get(attackerId) is Avatar killer)
+            killer.OnNpcKilled();
+        DestroySelf();
     }
 }

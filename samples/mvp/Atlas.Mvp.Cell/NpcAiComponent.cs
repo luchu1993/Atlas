@@ -20,35 +20,63 @@ public sealed class NpcAiComponent : ServerLocalComponent
     private const float kProjectileHorizSpeed = 12f;
     private const float kProjectileUpSpeed = 4f;
 
-    private Vector3 _target;
-    private float _retargetAccum;
+    // Target / retarget timer / fire interval live on Npc as cell_private
+    // properties so cross-cellapp offload preserves them via persistent_blob.
+    // _fireAccum stays local — drift on offload is at most one fire cycle.
     private float _fireAccum;
-    private float _fireInterval;
     private Random _rng = null!;
 
     public override void OnAttached()
     {
-        _rng = new Random(unchecked((int)(Entity.EntityId * 0x9E3779B1u)));
-        PickTarget();
+        // RNG state is intentionally not carried across offload; reseed
+        // each attach. Initial AiTarget / AiFireInterval are seeded by
+        // Npc.OnInit on fresh spawn; offload-arrived NPCs already have
+        // both values restored from persistent_blob.
+        _rng = new Random();
+    }
+
+    // Invoked by Npc.OnInit on fresh spawn only. Direction-biased target
+    // keeps boundary-spawned NPCs walking forward instead of bouncing
+    // back across the BSP split.
+    internal void InitFreshState()
+    {
+        var dir = Owner.Direction;
+        if (dir.X * dir.X + dir.Z * dir.Z > 0.25f)
+        {
+            var p = Owner.Position;
+            float tx = Math.Clamp(p.X + dir.X * kWanderRadius, -kWorldHalf, kWorldHalf);
+            float tz = Math.Clamp(p.Z + dir.Z * kWanderRadius, -kWorldHalf, kWorldHalf);
+            Owner.AiTarget = new Vector3(tx, p.Y, tz);
+        }
+        else
+        {
+            PickTarget();
+        }
         RollFireInterval();
     }
 
     public override void OnTick(float dt)
     {
+        // Two re-checks: BroadcastDamage may DestroySelf inside Simulator.Tick
+        // (peer projectile hit), and the AI tick may run one frame past detach.
+        if (Owner.IsDestroyed) return;
         Owner.Simulator.Tick();
+        if (Owner.IsDestroyed) return;
 
-        _retargetAccum += dt;
+        Owner.AiRetargetAccum += dt;
         _fireAccum += dt;
         var pos = Owner.Position;
-        var dx = _target.X - pos.X;
-        var dz = _target.Z - pos.Z;
+        var target = Owner.AiTarget;
+        var dx = target.X - pos.X;
+        var dz = target.Z - pos.Z;
         var distSq = dx * dx + dz * dz;
-        if (_retargetAccum >= kRetargetInterval || distSq <= kReach * kReach)
+        if (Owner.AiRetargetAccum >= kRetargetInterval || distSq <= kReach * kReach)
         {
-            _retargetAccum = 0f;
+            Owner.AiRetargetAccum = 0f;
             PickTarget(pos);
-            dx = _target.X - pos.X;
-            dz = _target.Z - pos.Z;
+            target = Owner.AiTarget;
+            dx = target.X - pos.X;
+            dz = target.Z - pos.Z;
             distSq = dx * dx + dz * dz;
             if (distSq <= kReach * kReach) return;
         }
@@ -59,7 +87,7 @@ public sealed class NpcAiComponent : ServerLocalComponent
         Owner.Position = new Vector3(pos.X + dx * inv * step, pos.Y, pos.Z + dz * inv * step);
         Owner.Direction = new Vector3(dx * inv, 0f, dz * inv);
 
-        if (_fireAccum >= _fireInterval)
+        if (_fireAccum >= Owner.AiFireInterval)
         {
             _fireAccum = 0f;
             RollFireInterval();
@@ -68,8 +96,8 @@ public sealed class NpcAiComponent : ServerLocalComponent
     }
 
     private void RollFireInterval() =>
-        _fireInterval = kFireIntervalMin +
-                        (float)_rng.NextDouble() * (kFireIntervalMax - kFireIntervalMin);
+        Owner.AiFireInterval = kFireIntervalMin +
+                               (float)_rng.NextDouble() * (kFireIntervalMax - kFireIntervalMin);
 
     private void FireProjectile()
     {
@@ -98,10 +126,10 @@ public sealed class NpcAiComponent : ServerLocalComponent
             var dzc = tz - p.Z;
             if (dxc * dxc + dzc * dzc >= 1f)
             {
-                _target = new Vector3(tx, p.Y, tz);
+                Owner.AiTarget = new Vector3(tx, p.Y, tz);
                 return;
             }
         }
-        _target = new Vector3(-p.X * 0.5f, p.Y, -p.Z * 0.5f);
+        Owner.AiTarget = new Vector3(-p.X * 0.5f, p.Y, -p.Z * 0.5f);
     }
 }

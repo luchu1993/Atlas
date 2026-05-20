@@ -16,8 +16,12 @@ namespace Atlas.Mvp.Unity
         readonly Dictionary<uint, EntityView> _views = new();
         readonly List<uint> _stale = new();
         uint _ownerEntityId;
+        uint _aoiEnterCount;
+        uint _aoiLeaveCount;
 
         public uint OwnerEntityId => _ownerEntityId;
+        public uint AoiEnterCount => _aoiEnterCount;
+        public uint AoiLeaveCount => _aoiLeaveCount;
 
         // NPCs currently inside the owner's AoI envelope (= materialised
         // local views). Cheap O(N) scan; views count is bounded by AoI.
@@ -55,7 +59,10 @@ namespace Atlas.Mvp.Unity
             {
                 if (_views.ContainsKey(entity.EntityId)) continue;
                 if (entity is MvpAvatar || entity is MvpNpc)
+                {
                     _views[entity.EntityId] = Spawn(entity);
+                    ++_aoiEnterCount;
+                }
             }
             _stale.Clear();
             foreach (var kv in _views)
@@ -67,6 +74,7 @@ namespace Atlas.Mvp.Unity
             {
                 _views[id]?.Dispose();
                 _views.Remove(id);
+                ++_aoiLeaveCount;
             }
         }
 

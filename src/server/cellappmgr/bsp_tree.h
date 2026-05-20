@@ -48,6 +48,14 @@ class BSPNode {
   // at +/-inf bounds).
   [[nodiscard]] virtual auto FindCell(float x, float z) const -> const CellInfo* = 0;
 
+  // Hysteresis-aware variant: returns the leaf whose primary region
+  // (bounds shrunk by `ghost_region` on every split) covers (x, z).
+  // Returns nullptr if the point lies inside any ancestor split's ghost
+  // band, signalling the caller to defer migration until the entity
+  // moves clearly past the boundary.
+  [[nodiscard]] virtual auto FindPrimaryCell(float x, float z, float ghost_region) const
+      -> const CellInfo* = 0;
+
   // Enumerate every leaf whose bounds overlap `rect`. Leaves are visited
   // in tree order (left-first, depth-first) - callers relying on
   // determinism can count on that.
@@ -91,6 +99,8 @@ class BSPLeaf : public BSPNode {
   [[nodiscard]] auto Info() const -> const CellInfo& { return info_; }
 
   [[nodiscard]] auto FindCell(float x, float z) const -> const CellInfo* override;
+  [[nodiscard]] auto FindPrimaryCell(float x, float z, float ghost_region) const
+      -> const CellInfo* override;
   void VisitRect(const CellBounds& rect,
                  const std::function<void(const CellInfo&)>& visitor) const override;
   void PropagateBounds(const CellBounds& sub_bounds) override;
@@ -127,6 +137,8 @@ class BSPInternal : public BSPNode {
   [[nodiscard]] auto RightLoadForTest() const -> float { return right_load_; }
 
   [[nodiscard]] auto FindCell(float x, float z) const -> const CellInfo* override;
+  [[nodiscard]] auto FindPrimaryCell(float x, float z, float ghost_region) const
+      -> const CellInfo* override;
   void VisitRect(const CellBounds& rect,
                  const std::function<void(const CellInfo&)>& visitor) const override;
   void PropagateBounds(const CellBounds& sub_bounds) override;
@@ -178,6 +190,11 @@ class BSPTree {
       -> Result<void>;
 
   [[nodiscard]] auto FindCell(float x, float z) const -> const CellInfo*;
+  // Returns nullptr when the point sits within `ghost_region` metres of
+  // any split — OffloadChecker uses this to defer migration across the
+  // border buffer instead of probing ±h on every axis.
+  [[nodiscard]] auto FindPrimaryCell(float x, float z, float ghost_region) const
+      -> const CellInfo*;
   [[nodiscard]] auto FindCellById(cellappmgr::CellID id) const -> const CellInfo*;
   [[nodiscard]] auto FindCellByIdMutable(cellappmgr::CellID id) -> CellInfo*;
 

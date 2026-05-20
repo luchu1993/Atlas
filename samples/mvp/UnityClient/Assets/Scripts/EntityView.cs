@@ -85,13 +85,13 @@ namespace Atlas.Mvp.Unity
             nose.GetComponent<Renderer>().material.color = Color.yellow;
         }
 
-        // Tuned for close-LOD (50 ms cellapp tick); far entities are too small
-        // to expose the stutter from the short extrapolation window.
+        // MaxExtrapolation must cover the LOD sample gap (≤300 ms for the
+        // farthest tier) or the peer freezes and reads as "stuck" on the client.
         void TuneFilterOnce()
         {
             if (_filterTuned || Entity!.Filter is not { } f) return;
             f.ServerInterval = 0.05;
-            f.MaxExtrapolation = 0.02;
+            f.MaxExtrapolation = 0.5;
             _filterTuned = true;
         }
 

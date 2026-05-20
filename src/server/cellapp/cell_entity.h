@@ -133,9 +133,9 @@ class CellEntity : public IEntityMotion {
 
   [[nodiscard]] auto RangeNode() -> EntityRangeListNode& { return range_node_; }
 
-  // event_seq: ordered/cumulative property changes (Witness replays
-  // history or falls back to snapshot). volatile_seq: latest-wins
-  // pos/dir. event_seq == volatile_seq == 0 => no-op frame.
+  // event_seq / volatile_seq are engine-owned monotonic counters; callers
+  // pass has_event / has_volatile flags and the engine stamps the assigned
+  // seq into the frame before storing it in history.
   struct ReplicationFrame {
     uint64_t event_seq{0};
     uint64_t volatile_seq{0};
@@ -161,11 +161,19 @@ class CellEntity : public IEntityMotion {
   // ~800 ms at 10 Hz; larger values cost memory per entity.
   static constexpr std::size_t kReplicationHistoryWindow = 8;
 
-  // event_seq advance: replace snapshots, push frame, pop oldest if full.
-  // volatile_seq advance: adopt frame pos/dir/on_ground.
-  // both zero: no-op. Snapshots only consumed on event_seq advance.
-  void PublishReplicationFrame(ReplicationFrame frame, std::span<const std::byte> owner_snapshot,
+  // has_event: bump latest_event_seq, replace snapshots, push frame, pop
+  // oldest if full. has_volatile: bump latest_volatile_seq, adopt
+  // pos/dir/on_ground. Caller must set at least one flag.
+  void PublishReplicationFrame(ReplicationFrame frame, bool has_event, bool has_volatile,
+                               std::span<const std::byte> owner_snapshot,
                                std::span<const std::byte> other_snapshot);
+
+  // Offload-receive seeding: adopts the source cellapp's final seqs +
+  // snapshots so subsequent PublishReplicationFrame increments continue
+  // monotonically across the migration boundary.
+  void SeedReplicationState(uint64_t latest_event_seq, uint64_t latest_volatile_seq,
+                            std::span<const std::byte> owner_snapshot,
+                            std::span<const std::byte> other_snapshot);
 
   [[nodiscard]] auto GetReplicationState() const -> const ReplicationState*;
 

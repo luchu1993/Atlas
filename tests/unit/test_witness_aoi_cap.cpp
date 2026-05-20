@@ -2,6 +2,7 @@
 #include <cstddef>
 #include <memory>
 #include <set>
+#include <string>
 #include <vector>
 
 #include <gtest/gtest.h>
@@ -48,21 +49,20 @@ void ApplyConfigJson(const std::string& body) {
   ServerAppOptionBase::ApplyAll(*(*cfg)->Root());
 }
 
-void SetMaxAoIPeers(uint32_t cap) {
-  ApplyConfigJson("\"witness_max_aoi_peers\":" + std::to_string(cap));
-}
-
 // Opt-out of Enter pacing for tests that assert "all pending Enters flushed
 // in a single Update" — production paces Enters via witness_enter_bytes_per_tick.
 constexpr const char* kNoEnterPacing =
     "\"witness_enter_bytes_per_tick\":67108864,\"witness_max_enters_per_tick\":65535";
 
-void SetCapAndStarvation(uint32_t cap, uint32_t threshold) {
-  ApplyConfigJson("\"witness_max_aoi_peers\":" + std::to_string(cap) +
-                  ",\"witness_starvation_threshold_ticks\":" + std::to_string(threshold));
-}
-
 void DisableEnterPacing() { ApplyConfigJson(kNoEnterPacing); }
+
+// Per-band caps (close/medium/far). Pass 0 to disable a band entirely.
+void SetLodCaps(uint32_t close, uint32_t medium, uint32_t far) {
+  ApplyConfigJson(std::string(kNoEnterPacing) +
+                  ",\"witness_lod_close_max_peers_per_tick\":" + std::to_string(close) +
+                  ",\"witness_lod_medium_max_peers_per_tick\":" + std::to_string(medium) +
+                  ",\"witness_lod_far_max_peers_per_tick\":" + std::to_string(far));
+}
 
 class WitnessAoICapTest : public ::testing::Test {
  protected:
@@ -93,7 +93,7 @@ class WitnessAoICapTest : public ::testing::Test {
   void ClearSent() { sent_.clear(); }
 };
 
-TEST_F(WitnessAoICapTest, DefaultCapNoTruncationUnderForty) {
+TEST_F(WitnessAoICapTest, DefaultCapAdmitsEveryEnterUnderForty) {
   DisableEnterPacing();
   Space space(1);
   auto* observer = MakeEntity(space, 1, {0, 0, 0});
@@ -108,8 +108,11 @@ TEST_F(WitnessAoICapTest, DefaultCapNoTruncationUnderForty) {
   EXPECT_EQ(CountKind(CellAoIEnvelopeKind::kEntityEnter), 40u);
 }
 
-TEST_F(WitnessAoICapTest, TightCapLimitsPumpToClosestN) {
-  ApplyConfigJson(std::string(kNoEnterPacing) + ",\"witness_max_aoi_peers\":5");
+// 20 peers spaced 1m apart all sit in the close band (<25m). With
+// close_cap=5 only the 5 closest receive position updates; far/medium
+// caps are irrelevant since no peer crosses the 25m threshold.
+TEST_F(WitnessAoICapTest, CloseBandCapLimitsPumpToClosestN) {
+  SetLodCaps(/*close=*/5, /*medium=*/64, /*far=*/64);
 
   Space space(1);
   auto* observer = MakeEntity(space, 1, {0, 0, 0});
@@ -120,27 +123,23 @@ TEST_F(WitnessAoICapTest, TightCapLimitsPumpToClosestN) {
     auto* p = MakeEntity(space, 100 + i, {1.f + static_cast<float>(i), 0, 0});
     ids.push_back(p->Id());
     CellEntity::ReplicationFrame v1;
-    v1.volatile_seq = 1;
     v1.position = p->Position();
     v1.direction = p->Direction();
-    p->PublishReplicationFrame(v1, {}, {});
+    p->PublishReplicationFrame(v1, /*has_event=*/false, /*has_volatile=*/true, {}, {});
   }
   ASSERT_EQ(observer->GetWitness()->AoIMap().size(), 20u);
 
   observer->GetWitness()->Update(64 * 1024);
   EXPECT_EQ(CountKind(CellAoIEnvelopeKind::kEntityEnter), 20u);
 
-  for (int i = 0; i < 20; ++i) {
-    auto* p = space.FindEntity(ids[i]);
-    ASSERT_NE(p, nullptr);
+  for (auto id : ids) {
+    auto* p = space.FindEntity(id);
     CellEntity::ReplicationFrame v2;
-    v2.volatile_seq = 2;
     v2.position = p->Position();
     v2.direction = p->Direction();
-    p->PublishReplicationFrame(v2, {}, {});
+    p->PublishReplicationFrame(v2, /*has_event=*/false, /*has_volatile=*/true, {}, {});
   }
   ClearSent();
-
   observer->GetWitness()->Update(64 * 1024);
 
   std::set<EntityID> updated;
@@ -154,12 +153,11 @@ TEST_F(WitnessAoICapTest, TightCapLimitsPumpToClosestN) {
     EXPECT_EQ(updated.count(expected), 1u)
         << "peer " << expected << " (closest tier) should have been pumped";
   }
-
   EXPECT_EQ(observer->GetWitness()->AoIMap().size(), 20u);
 }
 
-TEST_F(WitnessAoICapTest, ZeroCapDisablesPumpButPreservesEnterLeave) {
-  SetMaxAoIPeers(0);
+TEST_F(WitnessAoICapTest, AllBandsZeroDisablesPumpButPreservesEnterLeave) {
+  SetLodCaps(/*close=*/0, /*medium=*/0, /*far=*/0);
 
   Space space(1);
   auto* observer = MakeEntity(space, 1, {0, 0, 0});
@@ -167,14 +165,13 @@ TEST_F(WitnessAoICapTest, ZeroCapDisablesPumpButPreservesEnterLeave) {
 
   auto* peer = MakeEntity(space, 100, {3, 0, 3});
   CellEntity::ReplicationFrame v1;
-  v1.volatile_seq = 1;
   v1.position = peer->Position();
-  peer->PublishReplicationFrame(v1, {}, {});
+  peer->PublishReplicationFrame(v1, /*has_event=*/false, /*has_volatile=*/true, {}, {});
 
   observer->GetWitness()->Update(4096);
   EXPECT_EQ(CountKind(CellAoIEnvelopeKind::kEntityEnter), 1u);
   EXPECT_EQ(CountKind(CellAoIEnvelopeKind::kEntityPositionUpdate), 0u)
-      << "cap=0 should suppress all pump output";
+      << "zero per-band caps should suppress all pump output";
 
   ClearSent();
   peer->SetPosition({500.f, 0, 0});
@@ -182,30 +179,29 @@ TEST_F(WitnessAoICapTest, ZeroCapDisablesPumpButPreservesEnterLeave) {
   EXPECT_EQ(CountKind(CellAoIEnvelopeKind::kEntityLeave), 1u);
 }
 
-TEST_F(WitnessAoICapTest, ObserverMovementRotatesCappedSet) {
-  SetMaxAoIPeers(2);
+// Three close-band peers (5/15/24m) with close_cap=2: the two closest
+// pump first. After the observer walks to x=24, distances rotate and the
+// previously-skipped peer becomes one of the two closest.
+TEST_F(WitnessAoICapTest, ObserverMovementRotatesCloseBandCappedSet) {
+  SetLodCaps(/*close=*/2, /*medium=*/64, /*far=*/64);
 
   Space space(1);
   auto* observer = MakeEntity(space, 1, {0, 0, 0});
-  SetCapAndStarvation(/*cap=*/2, /*threshold=*/0);
-
   observer->EnableWitness(/*radius=*/500.f, MakeSendFn(), /*hysteresis=*/0.f);
 
   auto* close = MakeEntity(space, 100, {5.f, 0, 0});
   auto* mid = MakeEntity(space, 101, {15.f, 0, 0});
   auto* far = MakeEntity(space, 102, {24.f, 0, 0});
-  auto bump = [&](uint64_t seq) {
+  auto bump = [&]() {
     for (auto* p : {close, mid, far}) {
       CellEntity::ReplicationFrame v;
-      v.volatile_seq = seq;
       v.position = p->Position();
-      p->PublishReplicationFrame(v, {}, {});
+      p->PublishReplicationFrame(v, /*has_event=*/false, /*has_volatile=*/true, {}, {});
     }
   };
-  bump(1);
-
+  bump();
   observer->GetWitness()->Update(64 * 1024);
-  bump(2);
+  bump();
   ClearSent();
   observer->GetWitness()->Update(64 * 1024);
 
@@ -220,7 +216,7 @@ TEST_F(WitnessAoICapTest, ObserverMovementRotatesCappedSet) {
   EXPECT_EQ(phase1_updated.count(far->Id()), 0u) << "far is rank-cut while observer is at origin";
 
   observer->SetPosition({24.f, 0, 0});
-  bump(3);
+  bump();
   ClearSent();
   observer->GetWitness()->Update(64 * 1024);
 
@@ -237,8 +233,12 @@ TEST_F(WitnessAoICapTest, ObserverMovementRotatesCappedSet) {
       << "close drops out of the cap once observer moves away";
 }
 
-TEST_F(WitnessAoICapTest, FarPeerForceServicedAfterStarvationThreshold) {
-  SetCapAndStarvation(/*cap=*/1, /*threshold=*/5);
+// Per-band caps mean far peers never compete with close peers. A peer at
+// 200m (far band) and a peer at 50m (medium band) both get serviced on
+// their own LOD intervals (every 6 / every 3 ticks) regardless of the
+// close-band population.
+TEST_F(WitnessAoICapTest, FarAndMediumBandsServiceIndependentOfClose) {
+  SetLodCaps(/*close=*/1, /*medium=*/1, /*far=*/1);
 
   Space space(1);
   auto* observer = MakeEntity(space, 1, {0, 0, 0});
@@ -248,19 +248,18 @@ TEST_F(WitnessAoICapTest, FarPeerForceServicedAfterStarvationThreshold) {
   auto* mid = MakeEntity(space, 101, {50.f, 0, 0});
   auto* far = MakeEntity(space, 102, {200.f, 0, 0});
 
-  auto bump_volatile = [&](uint64_t seq) {
+  auto bump_volatile = [&]() {
     for (auto* p : {close, mid, far}) {
       CellEntity::ReplicationFrame v;
-      v.volatile_seq = seq;
       v.position = p->Position();
-      p->PublishReplicationFrame(v, {}, {});
+      p->PublishReplicationFrame(v, /*has_event=*/false, /*has_volatile=*/true, {}, {});
     }
   };
 
   std::set<uint64_t> mid_serviced_at;
   std::set<uint64_t> far_serviced_at;
   for (uint64_t tick = 1; tick <= 30; ++tick) {
-    bump_volatile(tick);
+    bump_volatile();
     ClearSent();
     observer->GetWitness()->Update(64 * 1024);
     for (const auto& env : sent_) {
@@ -271,14 +270,15 @@ TEST_F(WitnessAoICapTest, FarPeerForceServicedAfterStarvationThreshold) {
     }
   }
 
-  EXPECT_FALSE(mid_serviced_at.empty()) << "mid peer should have been force-serviced "
-                                           "at least once within 30 ticks";
-  EXPECT_FALSE(far_serviced_at.empty()) << "far peer should have been force-serviced "
-                                           "at least once within 30 ticks";
+  EXPECT_FALSE(mid_serviced_at.empty())
+      << "medium-band peer must be serviced on its own LOD interval";
+  EXPECT_FALSE(far_serviced_at.empty()) << "far-band peer must be serviced on its own LOD interval";
 }
 
-TEST_F(WitnessAoICapTest, ZeroThresholdDisablesAntiStarvation) {
-  SetCapAndStarvation(/*cap=*/1, /*threshold=*/0);
+// Zeroing a single band shuts off updates for that band only — close
+// peers keep pumping while far peers stay silent.
+TEST_F(WitnessAoICapTest, ZeroFarBandCapSilencesFarOnly) {
+  SetLodCaps(/*close=*/64, /*medium=*/64, /*far=*/0);
 
   Space space(1);
   auto* observer = MakeEntity(space, 1, {0, 0, 0});
@@ -290,21 +290,22 @@ TEST_F(WitnessAoICapTest, ZeroThresholdDisablesAntiStarvation) {
   for (uint64_t tick = 1; tick <= 30; ++tick) {
     for (auto* p : {close, far}) {
       CellEntity::ReplicationFrame v;
-      v.volatile_seq = tick;
       v.position = p->Position();
-      p->PublishReplicationFrame(v, {}, {});
+      p->PublishReplicationFrame(v, /*has_event=*/false, /*has_volatile=*/true, {}, {});
     }
     observer->GetWitness()->Update(64 * 1024);
   }
 
-  std::size_t far_count = 0;
+  std::size_t close_updates = 0;
+  std::size_t far_updates = 0;
   for (const auto& env : sent_) {
-    if (KindOf(env) == CellAoIEnvelopeKind::kEntityPositionUpdate && PublicIdOf(env) == far->Id()) {
-      ++far_count;
-    }
+    if (KindOf(env) != CellAoIEnvelopeKind::kEntityPositionUpdate) continue;
+    const auto id = PublicIdOf(env);
+    if (id == close->Id()) ++close_updates;
+    if (id == far->Id()) ++far_updates;
   }
-  EXPECT_EQ(far_count, 0u)
-      << "with threshold=0 the far peer should remain skipped behind the closer one";
+  EXPECT_GT(close_updates, 0u) << "close peer must pump on every tick";
+  EXPECT_EQ(far_updates, 0u) << "far_max=0 must silence the far band entirely";
 }
 
 }  // namespace

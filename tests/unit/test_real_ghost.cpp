@@ -333,14 +333,9 @@ TEST(RealEntityData, BuildPositionUpdate_ReflectsOwnerState) {
   auto* e = space.AddEntity(std::make_unique<CellEntity>(
       30, uint16_t{1}, space, math::Vector3{3, 4, 5}, math::Vector3{0, 0, 1}));
   e->SetOnGround(true);
-  // Seed a volatile_seq via PublishReplicationFrame so BuildPositionUpdate
-  // has a non-zero seq to copy.
-  CellEntity::ReplicationFrame frame;
-  frame.volatile_seq = 42;
-  frame.position = e->Position();
-  frame.direction = e->Direction();
-  frame.on_ground = e->OnGround();
-  e->PublishReplicationFrame(std::move(frame), {}, {});
+  // Seed latest_volatile_seq directly so BuildPositionUpdate has a
+  // non-zero seq to copy without 42 sequential publishes.
+  e->SeedReplicationState(/*latest_event_seq=*/0, /*latest_volatile_seq=*/42, {}, {});
 
   auto msg = e->GetRealData()->BuildPositionUpdate();
   EXPECT_EQ(msg.entity_id, 30u);
@@ -359,13 +354,11 @@ TEST(RealEntityData, BuildDelta_ForwardsLatestHistoryFrame) {
   auto d1 = MakeBlob({0x01});
   auto d2 = MakeBlob({0x02, 0x02});
   CellEntity::ReplicationFrame f1;
-  f1.event_seq = 1;
   f1.other_delta = d1;
-  e->PublishReplicationFrame(std::move(f1), {}, {});
+  e->PublishReplicationFrame(std::move(f1), /*has_event=*/true, /*has_volatile=*/false, {}, {});
   CellEntity::ReplicationFrame f2;
-  f2.event_seq = 2;
   f2.other_delta = d2;
-  e->PublishReplicationFrame(std::move(f2), {}, {});
+  e->PublishReplicationFrame(std::move(f2), /*has_event=*/true, /*has_volatile=*/false, {}, {});
 
   auto msg = e->GetRealData()->BuildDelta();
   EXPECT_EQ(msg.entity_id, 31u);
@@ -393,12 +386,12 @@ TEST(RealEntityData, BuildDelta_EmptyWhenHistoryBackSeqMismatchesLatest) {
   auto* e = space.AddEntity(std::make_unique<CellEntity>(
       200, uint16_t{1}, space, math::Vector3{0, 0, 0}, math::Vector3{1, 0, 0}));
 
-  // Publish a real frame so history has content + state->latest_event_seq == 5.
-  auto real_delta = MakeBlob({0x01, 0xAB, 0xCD});
-  CellEntity::ReplicationFrame f;
-  f.event_seq = 5;
-  f.other_delta = real_delta;
-  e->PublishReplicationFrame(std::move(f), {}, {});
+  // Publish 5 real frames so history.back().event_seq == latest == 5.
+  for (int i = 0; i < 5; ++i) {
+    CellEntity::ReplicationFrame f;
+    f.other_delta = MakeBlob({0x01, 0xAB, 0xCD});
+    e->PublishReplicationFrame(std::move(f), /*has_event=*/true, /*has_volatile=*/false, {}, {});
+  }
 
   // Manually desynchronise — simulate a pathological state where the
   // back frame's seq no longer matches latest. The Ghost pump must
@@ -418,9 +411,11 @@ TEST(RealEntityData, BuildSnapshotRefresh_ReflectsOwnerSnapshot) {
   auto* e = space.AddEntity(std::make_unique<CellEntity>(
       33, uint16_t{1}, space, math::Vector3{0, 0, 0}, math::Vector3{1, 0, 0}));
   auto snap = MakeBlob({0xCA, 0xFE});
+  // Seed seq=6 so the next publish lands at 7.
+  e->SeedReplicationState(/*latest_event_seq=*/6, /*latest_volatile_seq=*/0, {}, {});
   CellEntity::ReplicationFrame f;
-  f.event_seq = 7;
-  e->PublishReplicationFrame(std::move(f), {}, std::span<const std::byte>(snap));
+  e->PublishReplicationFrame(std::move(f), /*has_event=*/true, /*has_volatile=*/false, {},
+                             std::span<const std::byte>(snap));
 
   auto msg = e->GetRealData()->BuildSnapshotRefresh();
   EXPECT_EQ(msg.entity_id, 33u);

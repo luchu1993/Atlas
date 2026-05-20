@@ -130,15 +130,20 @@ struct CreateSpaceRequest {
   SpaceID space_id{kInvalidSpaceID};
   uint32_t request_id{0};
   Address reply_addr;
+  // 1 = legacy single-cell. >1 = bootstrap N cells distributed across the
+  // N least-loaded registered CellApps; ignored when fewer cellapps exist.
+  uint16_t initial_cell_count{1};
+  // Empty = no space-owner entity; non-empty resolves via CellApp's EntityDef
+  // registry on the primary host and is auto-spawned at AddCellToSpace time.
+  std::string space_master_type;
 
   static auto Descriptor() -> const MessageDesc& {
-    static const MessageDesc kDesc{
-        msg_id::Id(msg_id::CellAppMgr::kCreateSpaceRequest),
-        "cellappmgr::CreateSpaceRequest",
-        MessageLengthStyle::kFixed,
-        static_cast<int>(sizeof(uint32_t) * 2 + sizeof(uint32_t) + sizeof(uint16_t)),
-        MessageReliability::kReliable,
-        MessageUrgency::kImmediate};
+    static const MessageDesc kDesc{msg_id::Id(msg_id::CellAppMgr::kCreateSpaceRequest),
+                                   "cellappmgr::CreateSpaceRequest",
+                                   MessageLengthStyle::kVariable,
+                                   -1,
+                                   MessageReliability::kReliable,
+                                   MessageUrgency::kImmediate};
     return kDesc;
   }
 
@@ -147,6 +152,8 @@ struct CreateSpaceRequest {
     w.Write(request_id);
     w.Write(reply_addr.Ip());
     w.Write(reply_addr.Port());
+    w.Write(initial_cell_count);
+    w.WriteString(space_master_type);
   }
 
   static auto Deserialize(BinaryReader& r) -> Result<CreateSpaceRequest> {
@@ -154,12 +161,16 @@ struct CreateSpaceRequest {
     auto rid = r.Read<uint32_t>();
     auto ip = r.Read<uint32_t>();
     auto port = r.Read<uint16_t>();
-    if (!sid || !rid || !ip || !port)
+    auto cc = r.Read<uint16_t>();
+    auto mt = r.ReadString();
+    if (!sid || !rid || !ip || !port || !cc || !mt)
       return Error{ErrorCode::kInvalidArgument, "CreateSpaceRequest: truncated"};
     CreateSpaceRequest msg;
     msg.space_id = *sid;
     msg.request_id = *rid;
     msg.reply_addr = Address(*ip, *port);
+    msg.initial_cell_count = *cc;
+    msg.space_master_type = std::move(*mt);
     return msg;
   }
 };
@@ -169,12 +180,16 @@ struct AddCellToSpace {
   SpaceID space_id{kInvalidSpaceID};
   CellID cell_id{0};
   CellBounds bounds;
+  // True on the cell hosting the BSP's primary leaf; the cellapp spawns the
+  // space-owner entity at this moment when space_master_type is non-empty.
+  bool is_primary{false};
+  std::string space_master_type;
 
   static auto Descriptor() -> const MessageDesc& {
     static const MessageDesc kDesc{msg_id::Id(msg_id::CellAppMgr::kAddCellToSpace),
                                    "cellappmgr::AddCellToSpace",
-                                   MessageLengthStyle::kFixed,
-                                   static_cast<int>(sizeof(uint32_t) * 2 + 4 * sizeof(float)),
+                                   MessageLengthStyle::kVariable,
+                                   -1,
                                    MessageReliability::kReliable,
                                    MessageUrgency::kImmediate};
     return kDesc;
@@ -184,6 +199,8 @@ struct AddCellToSpace {
     w.Write(space_id);
     w.Write(cell_id);
     bounds.Serialize(w);
+    w.Write<uint8_t>(is_primary ? 1u : 0u);
+    w.WriteString(space_master_type);
   }
 
   static auto Deserialize(BinaryReader& r) -> Result<AddCellToSpace> {
@@ -192,10 +209,15 @@ struct AddCellToSpace {
     if (!sid || !cid) return Error{ErrorCode::kInvalidArgument, "AddCellToSpace: truncated"};
     auto b = CellBounds::Deserialize(r);
     if (!b) return b.Error();
+    auto p = r.Read<uint8_t>();
+    auto mt = r.ReadString();
+    if (!p || !mt) return Error{ErrorCode::kInvalidArgument, "AddCellToSpace: truncated"};
     AddCellToSpace msg;
     msg.space_id = *sid;
     msg.cell_id = *cid;
     msg.bounds = *b;
+    msg.is_primary = *p != 0;
+    msg.space_master_type = std::move(*mt);
     return msg;
   }
 };

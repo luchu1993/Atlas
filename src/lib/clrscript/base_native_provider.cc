@@ -89,6 +89,11 @@ void BaseNativeProvider::GiveClientTo(uint32_t src_entity_id, uint32_t /*dest_en
   ATLAS_LOG_ERROR("give_client_to() not supported on this process type (src={})", src_entity_id);
 }
 
+void BaseNativeProvider::SetSpaceMasterType(uint32_t /*space_id*/, const char* /*name*/,
+                                            int32_t /*len*/) {
+  // Default no-op; only BaseAppNativeProvider routes to BaseApp::SetSpaceMasterType.
+}
+
 auto BaseNativeProvider::CreateBaseEntity(uint16_t type_id, uint32_t /*space_id*/) -> uint32_t {
   ATLAS_LOG_ERROR("create_base_entity() not supported on this process type (type_id={})", type_id);
   return 0;
@@ -160,7 +165,7 @@ void BaseNativeProvider::GetEntityDirection(uint32_t entity_id, float& x, float&
 }
 
 void BaseNativeProvider::PublishReplicationFrame(
-    uint32_t entity_id, uint64_t /*event_seq*/, uint64_t /*volatile_seq*/,
+    uint32_t entity_id, bool /*has_event*/, bool /*has_volatile*/,
     const std::byte* /*owner_snap*/, int32_t /*owner_snap_len*/, const std::byte* /*other_snap*/,
     int32_t /*other_snap_len*/, const std::byte* /*owner_delta*/, int32_t /*owner_delta_len*/,
     const std::byte* /*other_delta*/, int32_t /*other_delta_len*/) {

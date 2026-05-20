@@ -223,7 +223,7 @@ void CellAppNativeProvider::GetEntityDirection(uint32_t entity_id, float& x, flo
 }
 
 void CellAppNativeProvider::PublishReplicationFrame(
-    uint32_t entity_id, uint64_t event_seq, uint64_t volatile_seq, const std::byte* owner_snap,
+    uint32_t entity_id, bool has_event, bool has_volatile, const std::byte* owner_snap,
     int32_t owner_snap_len, const std::byte* other_snap, int32_t other_snap_len,
     const std::byte* owner_delta, int32_t owner_delta_len, const std::byte* other_delta,
     int32_t other_delta_len) {
@@ -239,8 +239,6 @@ void CellAppNativeProvider::PublishReplicationFrame(
   }
 
   CellEntity::ReplicationFrame frame;
-  frame.event_seq = event_seq;
-  frame.volatile_seq = volatile_seq;
   if (owner_delta_len > 0 && owner_delta != nullptr) {
     frame.owner_delta.assign(owner_delta, owner_delta + owner_delta_len);
   }
@@ -262,12 +260,17 @@ void CellAppNativeProvider::PublishReplicationFrame(
     other_snap_span = std::span<const std::byte>(other_snap, other_snap_len);
   }
 
-  entity->PublishReplicationFrame(std::move(frame), owner_snap_span, other_snap_span);
+  entity->PublishReplicationFrame(std::move(frame), has_event, has_volatile, owner_snap_span,
+                                  other_snap_span);
 
   // Owner-scope direct path: Witness skips `&peer == &owner_`, so its
   // AoI pump never carries owner-visible property changes. Envelope
   // is byte-identical to Witness output; client uses the same decoder.
-  if (owner_delta_len > 0 && event_seq > 0 && entity->HasWitness() && network_) {
+  // Seq comes from the freshly allocated state.latest_event_seq.
+  if (has_event && owner_delta_len > 0 && entity->HasWitness() && network_) {
+    const auto* state = entity->GetReplicationState();
+    if (state == nullptr) return;
+    const uint64_t event_seq = state->latest_event_seq;
     auto base_ch = network_->ConnectRudpNocwnd(entity->BaseAddr());
     if (base_ch) {
       const EntityID owner_entity_id = entity->Id();

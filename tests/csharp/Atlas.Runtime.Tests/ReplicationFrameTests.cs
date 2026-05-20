@@ -63,10 +63,10 @@ public class ReplicationFrameTests
             bool has = entity.BuildAndConsumeReplicationFrame(
                 ref buf.OwnerSnapshot, ref buf.OtherSnapshot,
                 ref buf.OwnerDelta, ref buf.OtherDelta,
-                out ulong e, out ulong v);
+                out bool hasEvent, out bool hasVolatile);
             Assert.False(has);
-            Assert.Equal(0UL, e);
-            Assert.Equal(0UL, v);
+            Assert.False(hasEvent);
+            Assert.False(hasVolatile);
         }
         finally { buf.Dispose(); }
     }
@@ -83,10 +83,10 @@ public class ReplicationFrameTests
             bool has = entity.BuildAndConsumeReplicationFrame(
                 ref buf.OwnerSnapshot, ref buf.OtherSnapshot,
                 ref buf.OwnerDelta, ref buf.OtherDelta,
-                out ulong e, out ulong v);
+                out bool hasEvent, out bool hasVolatile);
             Assert.True(has);
-            Assert.Equal(1UL, e);
-            Assert.Equal(0UL, v);
+            Assert.True(hasEvent);
+            Assert.False(hasVolatile);
             Assert.True(buf.OwnerDelta.WrittenSpan.Length > 1);
             AssertEmptyDelta(buf.OtherDelta.WrittenSpan);
         }
@@ -105,7 +105,7 @@ public class ReplicationFrameTests
             bool has = entity.BuildAndConsumeReplicationFrame(
                 ref buf.OwnerSnapshot, ref buf.OtherSnapshot,
                 ref buf.OwnerDelta, ref buf.OtherDelta,
-                out ulong _, out ulong _);
+                out bool _, out bool _);
             Assert.True(has);
             Assert.True(buf.OtherDelta.WrittenSpan.Length > 1);
             AssertEmptyDelta(buf.OwnerDelta.WrittenSpan);
@@ -125,7 +125,7 @@ public class ReplicationFrameTests
             bool has = entity.BuildAndConsumeReplicationFrame(
                 ref buf.OwnerSnapshot, ref buf.OtherSnapshot,
                 ref buf.OwnerDelta, ref buf.OtherDelta,
-                out ulong _, out ulong _);
+                out bool _, out bool _);
             Assert.True(has);
             Assert.True(buf.OwnerDelta.WrittenSpan.Length > 1);
             Assert.True(buf.OtherDelta.WrittenSpan.Length > 1);
@@ -146,7 +146,7 @@ public class ReplicationFrameTests
             bool has = entity.BuildAndConsumeReplicationFrame(
                 ref buf.OwnerSnapshot, ref buf.OtherSnapshot,
                 ref buf.OwnerDelta, ref buf.OtherDelta,
-                out ulong _, out ulong _);
+                out bool _, out bool _);
             Assert.True(has);
             Assert.True(buf.OwnerDelta.WrittenSpan.Length > 1);
             AssertEmptyDelta(buf.OtherDelta.WrittenSpan);
@@ -155,29 +155,32 @@ public class ReplicationFrameTests
     }
 
     [Fact]
-    public void ConsecutivePropertyChanges_EventSeqIsMonotonic()
+    public void ConsecutivePropertyChanges_HasEventFlagsSet()
     {
+        // Seq allocation moved to the C++ runtime; codegen only emits
+        // dirty-bit flags now. Every property mutation must surface
+        // hasEvent==true on the next publish.
         var entity = new ReplicationFrameEntity();
         var buf = FrameBufferSet.Rent();
         try
         {
-            for (ulong expected = 1; expected <= 10; expected++)
+            for (int i = 0; i < 10; i++)
             {
-                entity.Hp = (int)expected;
+                entity.Hp = i + 1;
                 buf.ResetAll();
                 bool has = entity.BuildAndConsumeReplicationFrame(
                     ref buf.OwnerSnapshot, ref buf.OtherSnapshot,
                     ref buf.OwnerDelta, ref buf.OtherDelta,
-                    out ulong e, out ulong _);
+                    out bool hasEvent, out bool _);
                 Assert.True(has);
-                Assert.Equal(expected, e);
+                Assert.True(hasEvent);
             }
         }
         finally { buf.Dispose(); }
     }
 
     [Fact]
-    public void VolatileDirty_AdvancesVolatileSeq_NotEventSeq()
+    public void VolatileDirty_SetsHasVolatileFlag_NotHasEvent()
     {
         var entity = new ReplicationFrameEntity();
         entity.MarkVolatileDirty();
@@ -188,10 +191,10 @@ public class ReplicationFrameTests
             bool has = entity.BuildAndConsumeReplicationFrame(
                 ref buf.OwnerSnapshot, ref buf.OtherSnapshot,
                 ref buf.OwnerDelta, ref buf.OtherDelta,
-                out ulong e, out ulong v);
+                out bool hasEvent, out bool hasVolatile);
             Assert.True(has);
-            Assert.Equal(0UL, e);
-            Assert.Equal(1UL, v);
+            Assert.False(hasEvent);
+            Assert.True(hasVolatile);
             // Event-stream buffers untouched (writer position stays 0).
             Assert.Equal(0, buf.OwnerSnapshot.WrittenSpan.Length);
             Assert.Equal(0, buf.OtherSnapshot.WrittenSpan.Length);
@@ -202,7 +205,7 @@ public class ReplicationFrameTests
     }
 
     [Fact]
-    public void PropertyAndVolatileTogether_BothSeqsAdvance()
+    public void PropertyAndVolatileTogether_BothFlagsSet()
     {
         var entity = new ReplicationFrameEntity();
         entity.Hp = 50;
@@ -214,10 +217,10 @@ public class ReplicationFrameTests
             bool has = entity.BuildAndConsumeReplicationFrame(
                 ref buf.OwnerSnapshot, ref buf.OtherSnapshot,
                 ref buf.OwnerDelta, ref buf.OtherDelta,
-                out ulong e, out ulong v);
+                out bool hasEvent, out bool hasVolatile);
             Assert.True(has);
-            Assert.Equal(1UL, e);
-            Assert.Equal(1UL, v);
+            Assert.True(hasEvent);
+            Assert.True(hasVolatile);
         }
         finally { buf.Dispose(); }
     }
@@ -234,12 +237,12 @@ public class ReplicationFrameTests
             Assert.True(entity.BuildAndConsumeReplicationFrame(
                 ref buf.OwnerSnapshot, ref buf.OtherSnapshot,
                 ref buf.OwnerDelta, ref buf.OtherDelta,
-                out ulong _, out ulong _));
+                out bool _, out bool _));
             buf.ResetAll();
             Assert.False(entity.BuildAndConsumeReplicationFrame(
                 ref buf.OwnerSnapshot, ref buf.OtherSnapshot,
                 ref buf.OwnerDelta, ref buf.OtherDelta,
-                out ulong _, out ulong _));
+                out bool _, out bool _));
         }
         finally { buf.Dispose(); }
     }
@@ -258,7 +261,7 @@ public class ReplicationFrameTests
             bool has = entity.BuildAndConsumeReplicationFrame(
                 ref buf.OwnerSnapshot, ref buf.OtherSnapshot,
                 ref buf.OwnerDelta, ref buf.OtherDelta,
-                out ulong _, out ulong _);
+                out bool _, out bool _);
             Assert.True(has);
             // Owner snapshot carries hp + buffCount + privateFlag + baseLinked
             // (4 int32 = 16 bytes; animState is other_clients only so excluded).
@@ -287,7 +290,7 @@ public class ReplicationFrameTests
             Assert.True(a.BuildAndConsumeReplicationFrame(
                 ref buf.OwnerSnapshot, ref buf.OtherSnapshot,
                 ref buf.OwnerDelta, ref buf.OtherDelta,
-                out ulong _, out ulong _));
+                out bool _, out bool _));
             int a_owner_len = buf.OwnerDelta.WrittenSpan.Length;
 
             buf.ResetAll();
@@ -297,7 +300,7 @@ public class ReplicationFrameTests
             Assert.True(b.BuildAndConsumeReplicationFrame(
                 ref buf.OwnerSnapshot, ref buf.OtherSnapshot,
                 ref buf.OwnerDelta, ref buf.OtherDelta,
-                out ulong _, out ulong _));
+                out bool _, out bool _));
             int b_owner_len = buf.OwnerDelta.WrittenSpan.Length;
 
             // Both produce valid deltas; sizes may differ but both non-zero.

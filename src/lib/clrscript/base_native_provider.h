@@ -36,6 +36,8 @@ class BaseNativeProvider : public INativeApiProvider {
 
   void GiveClientTo(uint32_t src_entity_id, uint32_t dest_entity_id) override;
 
+  void SetSpaceMasterType(uint32_t space_id, const char* name, int32_t len) override;
+
   auto CreateBaseEntity(uint16_t type_id, uint32_t space_id) -> uint32_t override;
 
   auto CreateLocalCellEntity(uint16_t type_id, uint32_t space_id, float pos_x, float pos_y,
@@ -62,7 +64,7 @@ class BaseNativeProvider : public INativeApiProvider {
   void SetEntityDirection(uint32_t entity_id, float x, float y, float z) override;
   void GetEntityPosition(uint32_t entity_id, float& x, float& y, float& z) override;
   void GetEntityDirection(uint32_t entity_id, float& x, float& y, float& z) override;
-  void PublishReplicationFrame(uint32_t entity_id, uint64_t event_seq, uint64_t volatile_seq,
+  void PublishReplicationFrame(uint32_t entity_id, bool has_event, bool has_volatile,
                                const std::byte* owner_snap, int32_t owner_snap_len,
                                const std::byte* other_snap, int32_t other_snap_len,
                                const std::byte* owner_delta, int32_t owner_delta_len,

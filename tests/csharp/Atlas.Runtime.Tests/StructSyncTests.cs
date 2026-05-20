@@ -55,9 +55,9 @@ public class StructSyncTests
             bool has = src.BuildAndConsumeReplicationFrame(
                 ref buf.OwnerSnapshot, ref buf.OtherSnapshot,
                 ref buf.OwnerDelta, ref buf.OtherDelta,
-                out ulong eventSeq, out _);
+                out bool hasEvent, out _);
             Assert.True(has);
-            Assert.Equal(1UL, eventSeq);
+            Assert.True(hasEvent);
 
             // Owner delta wire layout (sectionMask + scalar section):
             //   [u8 sectionMask][u8 scalarFlags][TestWeapon body: i32 id,

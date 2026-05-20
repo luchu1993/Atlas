@@ -112,13 +112,9 @@ internal static class DeltaSyncEmitter
             sb.AppendLine();
         }
 
-        // Frame counters live in this generated partial so non-replicable
-        // entities don't carry them. Base entities skip _volatileSeq: no
-        // Position/Direction state on this side, no volatile frames to seq.
-        sb.AppendLine("    private ulong _eventSeq;");
-        if (ctx != ProcessContext.Base)
-            sb.AppendLine("    private ulong _volatileSeq;");
-        sb.AppendLine();
+        // Seq counters live on the C++ side (CellEntity::replication_state_)
+        // so they survive Offload without a script-side reset; codegen only
+        // surfaces dirty bits.
 
         // BuildAndConsumeReplicationFrame — per-tick entry point for the
         // CellApp replication pump. Returns false when no dirty state, so
@@ -374,13 +370,13 @@ internal static class DeltaSyncEmitter
         // VolatileDirtyCore lives on CellServerEntity; base-side entities have
         // no Position/Direction/OnGround surface to dirty-flag.
         bool emitVolatile = ctx != ProcessContext.Base;
-        // Zero-alloc API: caller owns the four SpanWriters (pool-rented,
-        // Reset() between entities). Returns (eventSeq, volatileSeq) via
-        // out params; avoids per-tick byte[] churn on high-fanout pumps.
+        // Zero-alloc: caller owns the four SpanWriters (pool-rented, Reset()
+        // between entities). Outputs dirty flags only; C++ runtime assigns
+        // monotonic seqs so Offload doesn't desync a script-side counter.
         sb.AppendLine("    public override bool BuildAndConsumeReplicationFrame(");
         sb.AppendLine("        ref SpanWriter ownerSnapshot, ref SpanWriter otherSnapshot,");
         sb.AppendLine("        ref SpanWriter ownerDelta, ref SpanWriter otherDelta,");
-        sb.AppendLine("        out ulong eventSeq, out ulong volatileSeq)");
+        sb.AppendLine("        out bool hasEvent, out bool hasVolatile)");
         sb.AppendLine("    {");
         // hasEvent gate folds in components when present; for components-
         // only entities, _dirtyFlags / OwnerVisibleMask don't exist so we
@@ -390,23 +386,18 @@ internal static class DeltaSyncEmitter
         // mark any property dirty) don't emit phantom empty frames.
         // ClearDirtyComponents resets the bitmap after the dual write.
         if (hasOwnProps && hasComponents)
-            sb.AppendLine("        bool hasEvent = (_dirtyFlags & (OwnerVisibleMask | OtherVisibleMask)) != ReplicatedDirtyFlags.None || HasOwnerDirtyComponent() || HasOtherDirtyComponent();");
+            sb.AppendLine("        hasEvent = (_dirtyFlags & (OwnerVisibleMask | OtherVisibleMask)) != ReplicatedDirtyFlags.None || HasOwnerDirtyComponent() || HasOtherDirtyComponent();");
         else if (hasOwnProps)
-            sb.AppendLine("        bool hasEvent = (_dirtyFlags & (OwnerVisibleMask | OtherVisibleMask)) != ReplicatedDirtyFlags.None;");
+            sb.AppendLine("        hasEvent = (_dirtyFlags & (OwnerVisibleMask | OtherVisibleMask)) != ReplicatedDirtyFlags.None;");
         else  // components-only
-            sb.AppendLine("        bool hasEvent = HasOwnerDirtyComponent() || HasOtherDirtyComponent();");
+            sb.AppendLine("        hasEvent = HasOwnerDirtyComponent() || HasOtherDirtyComponent();");
         sb.AppendLine(emitVolatile
-            ? "        bool hasVolatile = VolatileDirtyCore;"
-            : "        bool hasVolatile = false;");
-        sb.AppendLine("        if (!hasEvent && !hasVolatile)");
-        sb.AppendLine("        {");
-        sb.AppendLine("            eventSeq = 0; volatileSeq = 0;");
-        sb.AppendLine("            return false;");
-        sb.AppendLine("        }");
+            ? "        hasVolatile = VolatileDirtyCore;"
+            : "        hasVolatile = false;");
+        sb.AppendLine("        if (!hasEvent && !hasVolatile) return false;");
         sb.AppendLine();
         sb.AppendLine("        if (hasEvent)");
         sb.AppendLine("        {");
-        sb.AppendLine("            _eventSeq++;");
         if (hasOwnerSnapshot)
             sb.AppendLine("            SerializeForOwnerClient(ref ownerSnapshot);");
         if (hasOtherSnapshot)
@@ -421,17 +412,8 @@ internal static class DeltaSyncEmitter
         sb.AppendLine();
         if (emitVolatile)
         {
-            sb.AppendLine("        if (hasVolatile)");
-            sb.AppendLine("        {");
-            sb.AppendLine("            _volatileSeq++;");
-            sb.AppendLine("            VolatileDirtyCore = false;");
-            sb.AppendLine("        }");
+            sb.AppendLine("        if (hasVolatile) VolatileDirtyCore = false;");
         }
-        sb.AppendLine();
-        sb.AppendLine("        eventSeq = hasEvent ? _eventSeq : 0UL;");
-        sb.AppendLine(emitVolatile
-            ? "        volatileSeq = hasVolatile ? _volatileSeq : 0UL;"
-            : "        volatileSeq = 0UL;");
         sb.AppendLine("        return true;");
         sb.AppendLine("    }");
     }

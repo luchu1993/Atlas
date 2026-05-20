@@ -309,11 +309,10 @@ TEST_F(WitnessIntegrationFixture, AvatarUpdatePropagatesToObservers) {
 
   peer->SetPosition({5, 0, 5});
   CellEntity::ReplicationFrame v;
-  v.volatile_seq = 1;
   v.position = {5, 0, 5};
   v.direction = {0, 0, 1};
   v.on_ground = true;
-  peer->PublishReplicationFrame(v, {}, {});
+  peer->PublishReplicationFrame(v, /*has_event=*/false, /*has_volatile=*/true, {}, {});
 
   auto& cache = observer->GetWitness()->AoIMapMutable().at(peer->Id());
   cache.flags = 0;
@@ -380,10 +379,10 @@ TEST_F(PropertyDeltaFixture, OtherObserverReceivesOtherDelta) {
   observer->EnableWitness(10.f, MakeReliable(), MakeUnreliable());
 
   CellEntity::ReplicationFrame f;
-  f.event_seq = 1;
   f.owner_delta = MakeBlob({0xAA});
   f.other_delta = MakeBlob({0xBB});
-  peer->PublishReplicationFrame(f, MakeBlob({0xAA}), MakeBlob({0xBB}));
+  peer->PublishReplicationFrame(f, /*has_event=*/true, /*has_volatile=*/false, MakeBlob({0xAA}),
+                                MakeBlob({0xBB}));
 
   auto& cache = observer->GetWitness()->AoIMapMutable().at(peer->Id());
   cache.flags = 0;

@@ -38,27 +38,51 @@ ServerAppOption<uint32_t> s_witness_min_per_observer_budget_bytes{
     WatcherMode::kReadWrite};
 
 ServerAppOption<uint32_t> s_witness_max_per_observer_budget_bytes{
-    16384u, "witness_max_per_observer_budget_bytes",
+    65536u, "witness_max_per_observer_budget_bytes",
     "cellapp/witness_max_per_observer_budget_bytes", WatcherMode::kReadWrite};
 
-ServerAppOption<uint32_t> s_witness_max_peers_per_tick{64u, "witness_max_peers_per_tick",
-                                                       "cellapp/witness_max_peers_per_tick",
-                                                       WatcherMode::kReadWrite};
+ServerAppOption<float> s_witness_lod_close_distance_m{
+    25.f, "witness_lod_close_distance_m", "cellapp/witness_lod_close_distance_m",
+    WatcherMode::kReadWrite};
 
-ServerAppOption<uint32_t> s_witness_max_aoi_peers{
-    50u, "witness_max_aoi_peers", "cellapp/witness_max_aoi_peers", WatcherMode::kReadWrite};
+ServerAppOption<float> s_witness_lod_medium_distance_m{
+    100.f, "witness_lod_medium_distance_m", "cellapp/witness_lod_medium_distance_m",
+    WatcherMode::kReadWrite};
 
-ServerAppOption<uint32_t> s_witness_starvation_threshold_ticks{
-    30u, "witness_starvation_threshold_ticks", "cellapp/witness_starvation_threshold_ticks",
+ServerAppOption<uint32_t> s_witness_lod_close_interval_ticks{
+    1u, "witness_lod_close_interval_ticks", "cellapp/witness_lod_close_interval_ticks",
+    WatcherMode::kReadWrite};
+
+ServerAppOption<uint32_t> s_witness_lod_medium_interval_ticks{
+    3u, "witness_lod_medium_interval_ticks", "cellapp/witness_lod_medium_interval_ticks",
+    WatcherMode::kReadWrite};
+
+ServerAppOption<uint32_t> s_witness_lod_far_interval_ticks{
+    6u, "witness_lod_far_interval_ticks", "cellapp/witness_lod_far_interval_ticks",
+    WatcherMode::kReadWrite};
+
+ServerAppOption<uint32_t> s_witness_lod_close_max_peers_per_tick{
+    64u, "witness_lod_close_max_peers_per_tick", "cellapp/witness_lod_close_max_peers_per_tick",
+    WatcherMode::kReadWrite};
+
+ServerAppOption<uint32_t> s_witness_lod_medium_max_peers_per_tick{
+    64u, "witness_lod_medium_max_peers_per_tick", "cellapp/witness_lod_medium_max_peers_per_tick",
+    WatcherMode::kReadWrite};
+
+ServerAppOption<uint32_t> s_witness_lod_far_max_peers_per_tick{
+    64u, "witness_lod_far_max_peers_per_tick", "cellapp/witness_lod_far_max_peers_per_tick",
     WatcherMode::kReadWrite};
 
 ServerAppOption<uint32_t> s_witness_enter_bytes_per_tick{
-    8192u, "witness_enter_bytes_per_tick", "cellapp/witness_enter_bytes_per_tick",
+    4096u, "witness_enter_bytes_per_tick", "cellapp/witness_enter_bytes_per_tick",
     WatcherMode::kReadWrite};
 
 ServerAppOption<uint32_t> s_witness_max_enters_per_tick{
-    8u, "witness_max_enters_per_tick", "cellapp/witness_max_enters_per_tick",
+    4u, "witness_max_enters_per_tick", "cellapp/witness_max_enters_per_tick",
     WatcherMode::kReadWrite};
+
+ServerAppOption<float> s_bsp_ghost_region_metres{
+    1.0f, "bsp_ghost_region_metres", "cellapp/bsp_ghost_region_metres", WatcherMode::kReadWrite};
 
 }  // namespace
 
@@ -98,16 +122,36 @@ auto CellAppConfig::WitnessMaxPerObserverBudgetBytes() -> uint32_t {
   return s_witness_max_per_observer_budget_bytes.Value();
 }
 
-auto CellAppConfig::WitnessMaxPeersPerTick() -> uint32_t {
-  return s_witness_max_peers_per_tick.Value();
+auto CellAppConfig::WitnessLodCloseDistanceM() -> float {
+  return s_witness_lod_close_distance_m.Value();
 }
 
-auto CellAppConfig::WitnessMaxAoIPeers() -> uint32_t {
-  return s_witness_max_aoi_peers.Value();
+auto CellAppConfig::WitnessLodMediumDistanceM() -> float {
+  return s_witness_lod_medium_distance_m.Value();
 }
 
-auto CellAppConfig::WitnessStarvationThresholdTicks() -> uint32_t {
-  return s_witness_starvation_threshold_ticks.Value();
+auto CellAppConfig::WitnessLodCloseIntervalTicks() -> uint32_t {
+  return s_witness_lod_close_interval_ticks.Value();
+}
+
+auto CellAppConfig::WitnessLodMediumIntervalTicks() -> uint32_t {
+  return s_witness_lod_medium_interval_ticks.Value();
+}
+
+auto CellAppConfig::WitnessLodFarIntervalTicks() -> uint32_t {
+  return s_witness_lod_far_interval_ticks.Value();
+}
+
+auto CellAppConfig::WitnessLodCloseMaxPeersPerTick() -> uint32_t {
+  return s_witness_lod_close_max_peers_per_tick.Value();
+}
+
+auto CellAppConfig::WitnessLodMediumMaxPeersPerTick() -> uint32_t {
+  return s_witness_lod_medium_max_peers_per_tick.Value();
+}
+
+auto CellAppConfig::WitnessLodFarMaxPeersPerTick() -> uint32_t {
+  return s_witness_lod_far_max_peers_per_tick.Value();
 }
 
 auto CellAppConfig::WitnessEnterBytesPerTick() -> uint32_t {
@@ -116,6 +160,10 @@ auto CellAppConfig::WitnessEnterBytesPerTick() -> uint32_t {
 
 auto CellAppConfig::WitnessMaxEntersPerTick() -> uint32_t {
   return s_witness_max_enters_per_tick.Value();
+}
+
+auto CellAppConfig::BspGhostRegionMetres() -> float {
+  return s_bsp_ghost_region_metres.Value();
 }
 
 }  // namespace atlas

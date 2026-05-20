@@ -67,6 +67,8 @@ class BaseAppNativeProvider : public BaseNativeProvider {
 
   void GiveClientTo(uint32_t src_entity_id, uint32_t dest_entity_id) override;
 
+  void SetSpaceMasterType(uint32_t space_id, const char* name, int32_t len) override;
+
   auto CreateBaseEntity(uint16_t type_id, uint32_t space_id) -> uint32_t override;
 
   auto RequestSpawnCellOnly(uint16_t type_id, uint32_t space_id, float pos_x, float pos_y,

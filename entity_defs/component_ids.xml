@@ -15,4 +15,5 @@
 -->
 <component_ids>
   <component name="StressLoadComponent" id="1"/>
+  <component name="EquipmentComponent" id="2"/>
 </component_ids>

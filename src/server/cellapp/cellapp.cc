@@ -498,6 +498,15 @@ auto CellApp::PlaceEntityInSpace(EntityID cell_id, uint16_t type_id, Space& spac
 
 void CellApp::RemoveEntityFromSpace(CellEntity* entity) {
   const EntityID cell_id = entity->Id();
+  // Broadcast DeleteGhost to every Haunt before the Real disappears; without
+  // this the Ghosts persist on peer CellApps and Witnesses keep showing them.
+  if (auto* rd = entity->GetRealData()) {
+    cellapp::DeleteGhost del;
+    del.entity_id = cell_id;
+    for (const auto& h : rd->Haunts()) {
+      if (h.channel) (void)h.channel->SendMessage(del);
+    }
+  }
   if (native_provider_ && native_provider_->entity_destroyed_fn()) {
     native_provider_->entity_destroyed_fn()(cell_id);
   }
@@ -1305,16 +1314,11 @@ void CellApp::OnOffloadEntity(const Address& src, Channel* ch, const cellapp::Of
     }
   }
 
-  // Seed replication snapshots - neither call uses the Ghost path
-  // (we're Real here).
-  CellEntity::ReplicationFrame frame;
-  frame.event_seq = msg.latest_event_seq;
-  frame.volatile_seq = msg.latest_volatile_seq;
-  frame.position = msg.position;
-  frame.direction = msg.direction;
-  frame.on_ground = msg.on_ground;
-  entity->PublishReplicationFrame(std::move(frame), std::span<const std::byte>(msg.owner_snapshot),
-                                  std::span<const std::byte>(msg.other_snapshot));
+  // Seqs are C++-owned and migrate with the entity; subsequent
+  // PublishReplicationFrame increments continue monotonically from here.
+  entity->SeedReplicationState(msg.latest_event_seq, msg.latest_volatile_seq,
+                               std::span<const std::byte>(msg.owner_snapshot),
+                               std::span<const std::byte>(msg.other_snapshot));
 
   // Seed existing haunts so subsequent Ghost messages from this Real
   // don't create duplicates on the same peer.
@@ -1551,6 +1555,29 @@ void CellApp::OnAddCellToSpace(const Address& /*src*/, Channel* /*ch*/,
   }
   space->AddLocalCell(std::make_unique<Cell>(*space, msg.cell_id, msg.bounds));
   ATLAS_LOG_INFO("CellApp: added Cell {} to Space {}", msg.cell_id, msg.space_id);
+
+  // Primary host auto-spawns the space-owner entity so NPCs / world state are
+  // alive before any Avatar logs in. Idempotent: CellAppMgr ensures only one
+  // AddCellToSpace per (cellapp, primary cell) per space lifetime.
+  if (msg.is_primary && !msg.space_master_type.empty()) {
+    SpawnSpaceMaster(msg.space_id, msg.space_master_type);
+  }
+}
+
+void CellApp::SpawnSpaceMaster(SpaceID space_id, const std::string& type_name) {
+  const auto* desc = EntityDefRegistry::Instance().FindByName(type_name);
+  if (desc == nullptr) {
+    ATLAS_LOG_ERROR("CellApp: space_master_type '{}' not in EntityDefRegistry — space {} owner not spawned",
+                    type_name, space_id);
+    return;
+  }
+  const auto owner_id = CreateLocalEntity(desc->type_id, space_id, math::Vector3{0, 0, 0},
+                                          math::Vector3{0, 0, 0}, /*on_ground=*/false);
+  if (owner_id == kInvalidEntityID) {
+    // Most common cause: no EntityIDs from DBApp yet. Park and retry from
+    // OnGetEntityIdsAck instead of losing the spawn.
+    pending_space_master_spawns_.emplace_back(space_id, type_name);
+  }
 }
 
 void CellApp::OnUpdateGeometry(const Address& /*src*/, Channel* /*ch*/,
@@ -1643,6 +1670,10 @@ void CellApp::OnGetEntityIdsAck(Channel& /*ch*/, const dbapp::GetEntityIdsAck& m
   id_client_.AddIds(msg.start, msg.end);
   ATLAS_LOG_INFO("CellApp: received {} EntityIDs [{},{}] from DBApp, available={}", msg.count,
                  msg.start, msg.end, id_client_.Available());
+  if (pending_space_master_spawns_.empty()) return;
+  auto queued = std::move(pending_space_master_spawns_);
+  pending_space_master_spawns_.clear();
+  for (auto& [space_id, type_name] : queued) SpawnSpaceMaster(space_id, type_name);
 }
 
 void CellApp::MaybeRequestMoreIds() {

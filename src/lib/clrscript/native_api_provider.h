@@ -54,6 +54,11 @@ class INativeApiProvider {
 
   virtual void GiveClientTo(uint32_t src_entity_id, uint32_t dest_entity_id) = 0;
 
+  // Empty name unregisters. Registration also fires a CreateSpaceRequest so
+  // CellAppMgr stamps the type onto AddCellToSpace for the primary host, which
+  // auto-spawns the entity via its EntityDefRegistry. BaseApp-only.
+  virtual void SetSpaceMasterType(uint32_t space_id, const char* name, int32_t len) = 0;
+
   virtual auto CreateBaseEntity(uint16_t type_id, uint32_t space_id) -> uint32_t = 0;
 
   // Cell-only entity: lives on this CellApp, no Base counterpart, no DB row.
@@ -96,14 +101,14 @@ class INativeApiProvider {
   virtual void GetEntityPosition(uint32_t entity_id, float& x, float& y, float& z) = 0;
   virtual void GetEntityDirection(uint32_t entity_id, float& x, float& y, float& z) = 0;
 
-  // Owner/other snapshot pointers consumed only when event_seq > 0;
-  // pass nullptr/0 when the event stream is empty this tick.
-  virtual void PublishReplicationFrame(uint32_t entity_id, uint64_t event_seq,
-                                       uint64_t volatile_seq, const std::byte* owner_snap,
-                                       int32_t owner_snap_len, const std::byte* other_snap,
-                                       int32_t other_snap_len, const std::byte* owner_delta,
-                                       int32_t owner_delta_len, const std::byte* other_delta,
-                                       int32_t other_delta_len) = 0;
+  // Owner/other snapshot pointers consumed only when has_event is true; pass
+  // nullptr/0 when the event stream is empty. Runtime allocates seqs from
+  // CellEntity::replication_state_, so script never owns the counter.
+  virtual void PublishReplicationFrame(uint32_t entity_id, bool has_event, bool has_volatile,
+                                       const std::byte* owner_snap, int32_t owner_snap_len,
+                                       const std::byte* other_snap, int32_t other_snap_len,
+                                       const std::byte* owner_delta, int32_t owner_delta_len,
+                                       const std::byte* other_delta, int32_t other_delta_len) = 0;
 
   // Returned controller_id is opaque; pass back to CancelController.
   virtual auto AddMoveController(uint32_t entity_id, float dest_x, float dest_y, float dest_z,

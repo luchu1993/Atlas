@@ -63,7 +63,7 @@ class CellAppNativeProvider : public BaseNativeProvider {
   void SetEntityDirection(uint32_t entity_id, float x, float y, float z) override;
   void GetEntityPosition(uint32_t entity_id, float& x, float& y, float& z) override;
   void GetEntityDirection(uint32_t entity_id, float& x, float& y, float& z) override;
-  void PublishReplicationFrame(uint32_t entity_id, uint64_t event_seq, uint64_t volatile_seq,
+  void PublishReplicationFrame(uint32_t entity_id, bool has_event, bool has_volatile,
                                const std::byte* owner_snap, int32_t owner_snap_len,
                                const std::byte* other_snap, int32_t other_snap_len,
                                const std::byte* owner_delta, int32_t owner_delta_len,
