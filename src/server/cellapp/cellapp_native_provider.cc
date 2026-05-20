@@ -51,6 +51,8 @@ struct CellAppCallbackTable {
   EntityLifecycleCancelFn entity_lifecycle_cancel;
   TimerEventFn timer_event;
   EntityDestroyedFn entity_migrating_out;
+  RestoreGhostFn restore_ghost;
+  EntityDestroyedFn destroy_ghost;
 };
 #pragma pack(pop)
 
@@ -399,6 +401,9 @@ void CellAppNativeProvider::SetNativeCallbacks(const void* native_callbacks, int
   entity_lifecycle_cancel_fn_ = table.entity_lifecycle_cancel;  // nullptr on older runtimes
   timer_event_fn_ = table.timer_event;  // nullptr on older runtimes; TimerController fire becomes no-op
   entity_migrating_out_fn_ = table.entity_migrating_out;  // nullptr on older runtimes
+  // nullptr on older runtimes — Ghost stays a C++-only mirror (legacy).
+  restore_ghost_fn_ = table.restore_ghost;
+  destroy_ghost_fn_ = table.destroy_ghost;
   ATLAS_LOG_INFO("CellApp: native callback table registered (len={})", len);
 }
 

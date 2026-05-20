@@ -931,6 +931,9 @@ void CellApp::OnPeerCellAppDeath(const Address& addr, Channel* dying) {
     auto it = entity_population_.find(id);
     if (it == entity_population_.end()) continue;
     auto* entity = it->second;
+    if (native_provider_ && native_provider_->destroy_ghost_fn() != nullptr) {
+      native_provider_->destroy_ghost_fn()(id);
+    }
     entity_population_.erase(it);
     entity->GetSpace().RemoveEntity(id);
   }
@@ -1171,6 +1174,17 @@ void CellApp::OnCreateGhost(const Address& /*src*/, Channel* ch, const cellapp::
   // gates on IsReal() so client RPCs still route only to the owning
   // Real (via BaseApp's CurrentCell table).
   entity_population_[msg.entity_id] = entity_ptr_raw;
+
+  // C# Ghost mirror — BigWorld-canonical: same entity class as the Real, but
+  // marked IsGhost so scripts gate Real-only work (movement, witness mods)
+  // and cross-cell exposed methods route to the Real owner.
+  if (native_provider_ && native_provider_->restore_ghost_fn() != nullptr) {
+    const auto* data = msg.other_snapshot.empty()
+                           ? nullptr
+                           : reinterpret_cast<const uint8_t*>(msg.other_snapshot.data());
+    native_provider_->restore_ghost_fn()(msg.entity_id, msg.type_id, data,
+                                         static_cast<int32_t>(msg.other_snapshot.size()));
+  }
 }
 
 void CellApp::OnDeleteGhost(const Address& /*src*/, Channel* /*ch*/,
@@ -1184,6 +1198,9 @@ void CellApp::OnDeleteGhost(const Address& /*src*/, Channel* /*ch*/,
   if (!entity->IsGhost()) {
     ATLAS_LOG_WARNING("CellApp: DeleteGhost for non-Ghost entity_id={} — rejected", msg.entity_id);
     return;
+  }
+  if (native_provider_ && native_provider_->destroy_ghost_fn() != nullptr) {
+    native_provider_->destroy_ghost_fn()(msg.entity_id);
   }
   entity_population_.erase(it);
   entity->GetSpace().RemoveEntity(entity->Id());
@@ -1273,6 +1290,11 @@ void CellApp::OnOffloadEntity(const Address& src, Channel* ch, const cellapp::Of
         }
       }
       return;
+    }
+    // Drop the C# Ghost mirror so restore_entity_fn below creates a fresh
+    // Real instance with OnInit(isReload=true) firing on the new owner.
+    if (native_provider_ && native_provider_->destroy_ghost_fn() != nullptr) {
+      native_provider_->destroy_ghost_fn()(msg.entity_id);
     }
     entity->ConvertGhostToReal();
     // Ghost's pose may lag the sender by one GhostPositionUpdate; without
@@ -1490,6 +1512,11 @@ void CellApp::RevertPendingOffload(EntityID entity_id, const char* reason) {
     return;
   }
 
+  // Drop the C# Ghost mirror that ProcessOffload created post-ConvertRealToGhost;
+  // restore_entity_fn below re-creates the Real C# instance from persistent_blob.
+  if (native_provider_ && native_provider_->destroy_ghost_fn() != nullptr) {
+    native_provider_->destroy_ghost_fn()(entity_id);
+  }
   // Both Convert methods preserve replication_state_, so AoI continues
   // serving from the baseline the Ghost was already replicating.
   entity->ConvertGhostToReal();
@@ -2020,6 +2047,17 @@ void CellApp::TickOffloadChecker() {
 
       for (auto& [_cell_id, cell] : space->LocalCells()) {
         cell->RemoveRealEntity(op.entity);
+      }
+
+      // Re-create the C# instance as a Ghost mirror — the migrating-out path
+      // above dropped the Real, but the C++ CellEntity now persists as Ghost
+      // and BigWorld-style scripts expect a C# Ghost alongside it.
+      if (native_provider_ && native_provider_->restore_ghost_fn() != nullptr) {
+        const auto* data = msg.other_snapshot.empty()
+                               ? nullptr
+                               : reinterpret_cast<const uint8_t*>(msg.other_snapshot.data());
+        native_provider_->restore_ghost_fn()(op.entity->Id(), op.entity->TypeId(), data,
+                                             static_cast<int32_t>(msg.other_snapshot.size()));
       }
     }
   }

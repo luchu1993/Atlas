@@ -252,6 +252,24 @@ void FakeLifecycleCancel(uint32_t eid) {
   g_lifecycle_cancel_entity_id = eid;
 }
 
+bool g_restore_ghost_called = false;
+uint32_t g_restore_ghost_entity_id = 0;
+uint16_t g_restore_ghost_type_id = 0;
+int32_t g_restore_ghost_snapshot_len = -1;
+void FakeRestoreGhost(uint32_t eid, uint16_t tid, const uint8_t* /*snap*/, int32_t len) {
+  g_restore_ghost_called = true;
+  g_restore_ghost_entity_id = eid;
+  g_restore_ghost_type_id = tid;
+  g_restore_ghost_snapshot_len = len;
+}
+
+bool g_destroy_ghost_called = false;
+uint32_t g_destroy_ghost_entity_id = 0;
+void FakeDestroyGhost(uint32_t eid) {
+  g_destroy_ghost_called = true;
+  g_destroy_ghost_entity_id = eid;
+}
+
 // Matches the packed table C# would send (see CellAppCallbackTable in
 // cellapp_native_provider.cc — slots beyond `dispatch_rpc` may be null on
 // older runtimes, hence the trailing optionals).
@@ -266,6 +284,10 @@ struct TestCallbackTable {
   void* proximity_event;
   void* coro_on_rpc_complete;
   void* entity_lifecycle_cancel;
+  void* timer_event;
+  void* entity_migrating_out;
+  void* restore_ghost;
+  void* destroy_ghost;
 };
 #pragma pack(pop)
 
@@ -303,6 +325,31 @@ TEST_F(CellAppNativeProviderTest, SetNativeCallbacksRestoreRoundtrips) {
   EXPECT_TRUE(g_restore_called);
   EXPECT_EQ(g_restore_entity_id, 42u);
   EXPECT_EQ(g_restore_type_id, 7u);
+}
+
+TEST_F(CellAppNativeProviderTest, SetNativeCallbacksGhostLifecycleRoundtrips) {
+  g_restore_ghost_called = false;
+  g_destroy_ghost_called = false;
+  TestCallbackTable table{};
+  table.restore = reinterpret_cast<void*>(&FakeRestore);
+  table.dispatch_rpc = reinterpret_cast<void*>(&FakeDispatch);
+  table.entity_destroyed = reinterpret_cast<void*>(&FakeDestroyed);
+  table.restore_ghost = reinterpret_cast<void*>(&FakeRestoreGhost);
+  table.destroy_ghost = reinterpret_cast<void*>(&FakeDestroyGhost);
+  provider_.SetNativeCallbacks(&table, sizeof(table));
+
+  ASSERT_NE(provider_.restore_ghost_fn(), nullptr);
+  ASSERT_NE(provider_.destroy_ghost_fn(), nullptr);
+
+  provider_.restore_ghost_fn()(123, 9, nullptr, 0);
+  EXPECT_TRUE(g_restore_ghost_called);
+  EXPECT_EQ(g_restore_ghost_entity_id, 123u);
+  EXPECT_EQ(g_restore_ghost_type_id, 9u);
+  EXPECT_EQ(g_restore_ghost_snapshot_len, 0);
+
+  provider_.destroy_ghost_fn()(123);
+  EXPECT_TRUE(g_destroy_ghost_called);
+  EXPECT_EQ(g_destroy_ghost_entity_id, 123u);
 }
 
 TEST_F(CellAppNativeProviderTest, SetNativeCallbacksLifecycleCancelRoundtrips) {

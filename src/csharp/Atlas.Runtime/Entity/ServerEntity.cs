@@ -19,6 +19,12 @@ public abstract class ServerEntity
     public uint EntityId { get; internal set; }
     public bool IsDestroyed { get; internal set; }
 
+    // BigWorld-style: true on every cellapp that holds a C++ Ghost mirror.
+    // Real-only side effects (movement, witness mods, controllers) must gate on
+    // IsReal; cross-cell exposed methods route to the Real owner transparently.
+    public bool IsGhost { get; internal set; }
+    public bool IsReal => !IsGhost;
+
     // Cancelled on destroy / offload / hot-reload. RPCs that pass this
     // token complete with RpcErrorCodes.Cancelled instead of stranding.
     private readonly AtlasCancellationSource _lifecycle = new();
@@ -255,6 +261,14 @@ public abstract class ServerEntity
 
     /// <summary>Called when the entity is destroyed or during server shutdown.</summary>
     protected internal virtual void OnDestroy() { }
+
+    /// <summary>Called when this cellapp gains a Ghost mirror of the entity.
+    /// OnInit does NOT fire on Ghosts — Real-only setup (movement controllers,
+    /// witness, projectile-target registration on the Real path) stays out of
+    /// Ghost paths. Override for Ghost-side scripting (e.g. registering the
+    /// Ghost as a projectile target so a cross-cell hit routes via exposed
+    /// cell method).</summary>
+    protected internal virtual void OnGhostInit() { }
 
     // C++ controller state migrates on offload, but Action delegates are
     // managed — scripts must re-StartTimer in OnInit(isReload=true).

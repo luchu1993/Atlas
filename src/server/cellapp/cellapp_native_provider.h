@@ -101,6 +101,10 @@ class CellAppNativeProvider : public BaseNativeProvider {
   [[nodiscard]] auto entity_migrating_out_fn() const -> EntityDestroyedFn {
     return entity_migrating_out_fn_;
   }
+  // C# Ghost instantiation on CreateGhost / Real→Ghost transitions.
+  [[nodiscard]] auto restore_ghost_fn() const -> RestoreGhostFn { return restore_ghost_fn_; }
+  // Silent C# Ghost removal on DeleteGhost / Ghost→Real promotion.
+  [[nodiscard]] auto destroy_ghost_fn() const -> EntityDestroyedFn { return destroy_ghost_fn_; }
 
  private:
   EntityLookupFn lookup_;
@@ -128,6 +132,9 @@ class CellAppNativeProvider : public BaseNativeProvider {
   // nullptr on older runtimes — offload falls back to entity_destroyed_fn,
   // which is wrong (OnDestroy fires on migration) but keeps things alive.
   EntityDestroyedFn entity_migrating_out_fn_{nullptr};
+  // nullptr on older runtimes — Ghost stays C++-only (legacy behaviour).
+  RestoreGhostFn restore_ghost_fn_{nullptr};
+  EntityDestroyedFn destroy_ghost_fn_{nullptr};
 };
 
 }  // namespace atlas

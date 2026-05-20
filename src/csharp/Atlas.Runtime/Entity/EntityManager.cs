@@ -99,6 +99,8 @@ public sealed class EntityManager
         foreach (var entity in _entities.Values)
         {
             if (entity.IsDestroyed) continue;
+            // Ghosts are passive C++ mirrors; only the Real owner ticks logic.
+            if (entity.IsGhost) continue;
             if (entity.TickInterval > 1 &&
                 _tickCount % (uint)entity.TickInterval != (uint)entity.TickPhase) continue;
             // Type.Name is cached on the Type instance by the runtime, so the
@@ -149,6 +151,8 @@ public sealed class EntityManager
             foreach (var entity in _entities.Values)
             {
                 if (entity.IsDestroyed) continue;
+                // Ghost can't publish — atlas_publish_replication_frame rejects it.
+                if (entity.IsGhost) continue;
 
                 ownerSnap.Reset();
                 otherSnap.Reset();
@@ -183,6 +187,8 @@ public sealed class EntityManager
         _iterating = true;
         foreach (var entity in _entities.Values)
         {
+            // Ghosts are mirrors; OnDestroy is reserved for real death.
+            if (entity.IsGhost) continue;
             entity.TriggerLifecycleCancellation();
             entity.OnDestroy();
         }
