@@ -223,10 +223,8 @@ struct AddCellToSpace {
 };
 static_assert(NetworkMessage<AddCellToSpace>);
 
-// Sent from CellApp -> CellAppMgr after a fresh AddCellToSpace local Cell is
-// in place. CellAppMgr holds the matching UpdateGeometry broadcast until this
-// ack lands so old cellapps don't start offloading entities into a cell the
-// receiver hasn't materialised yet.
+// Signals the local Cell is in place; CellAppMgr holds UpdateGeometry until
+// this lands so old cellapps don't offload into a missing cell.
 struct AddCellToSpaceAck {
   SpaceID space_id{kInvalidSpaceID};
   CellID cell_id{0};

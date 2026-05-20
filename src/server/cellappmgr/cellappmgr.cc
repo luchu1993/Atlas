@@ -290,6 +290,10 @@ void CellAppMgr::OnCreateSpaceRequest(const Address& src, Channel* ch,
   leaf.cellapp_addr = hosts[0]->internal_addr;
   leaf.load = hosts[0]->load;
   leaf.entity_count = 0;
+  // Finite bounds; InitSingleCell adopts them so recursive Split midpoints
+  // stay strictly inside the cell.
+  leaf.bounds = CellBounds{-kDefaultWorldHalfExtent, -kDefaultWorldHalfExtent,
+                           kDefaultWorldHalfExtent, kDefaultWorldHalfExtent};
 
   SpacePartition partition;
   partition.space_id = msg.space_id;
@@ -420,8 +424,7 @@ void CellAppMgr::GrowSpacesForNewCellApp(const CellAppInfo& new_app) {
                   /*is_primary=*/false, /*space_master_type=*/"");
     }
     // Defer geometry broadcast until the new cellapp acks AddCellToSpace;
-    // OnAddCellToSpaceAck (or DrainPendingGeometryBroadcasts on timeout)
-    // drives the actual fan-out.
+    // OnAddCellToSpaceAck or the timeout drain fires the actual fan-out.
     pending_geometry_broadcasts_.push_back({space_id, new_leaf.cell_id, new_app.internal_addr,
                                             Clock::now()});
 
@@ -568,9 +571,8 @@ void CellAppMgr::TickLoadBalance() {
   if (spaces_.empty()) return;
   for (auto& [space_id, partition] : spaces_) {
     partition.bsp.Balance(kBalanceSafetyBound);
-    // Don't leak the post-Split tree to peers before the new cellapp has
-    // acked AddCellToSpace; the pending-ack handler (or its timeout) will
-    // pick up any Balance-induced changes when it eventually fires.
+    // Don't leak the post-Split tree before the new cellapp acks; the
+    // pending-ack handler picks up Balance-induced changes when it fires.
     const bool pending = std::any_of(
         pending_geometry_broadcasts_.begin(), pending_geometry_broadcasts_.end(),
         [space_id = space_id](const PendingGeometryBroadcast& p) { return p.space_id == space_id; });

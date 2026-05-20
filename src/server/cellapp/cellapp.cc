@@ -1556,17 +1556,15 @@ void CellApp::OnAddCellToSpace(const Address& /*src*/, Channel* ch,
     space->AddLocalCell(std::make_unique<Cell>(*space, msg.cell_id, msg.bounds));
     ATLAS_LOG_INFO("CellApp: added Cell {} to Space {}", msg.cell_id, msg.space_id);
 
-    // Primary host auto-spawns the space-owner entity so NPCs / world state are
-    // alive before any Avatar logs in. Idempotent: CellAppMgr ensures only one
-    // AddCellToSpace per (cellapp, primary cell) per space lifetime.
+    // Primary host auto-spawns the space-owner entity; mgr guarantees only
+    // one is_primary AddCellToSpace per space, so this is idempotent.
     if (msg.is_primary && !msg.space_master_type.empty()) {
       SpawnSpaceMaster(msg.space_id, msg.space_master_type);
     }
   }
 
-  // Ack the mgr so it can release any deferred UpdateGeometry broadcast.
-  // success=true even for the duplicate case — local Cell is in place either
-  // way, mgr has no rollback to do.
+  // Ack so the mgr releases its deferred UpdateGeometry; duplicate case
+  // still acks since the local Cell is in place either way.
   if (ch != nullptr) {
     cellappmgr::AddCellToSpaceAck ack;
     ack.space_id = msg.space_id;

@@ -404,13 +404,8 @@ TEST(CellAppMgrIntegration, InformCellLoad_InfluencesLeastLoadedHostPick) {
   EXPECT_TRUE(a.add_cell_msgs.empty());
 }
 
-// CreateSpaceRequest with initial_cell_count=N fans N cells across the N
-// least-loaded CellApps; UpdateGeometry blob holds N distinct leaves.
-// A CellApp registering AFTER Space creation triggers an elastic split:
-// the heaviest leaf halves, the new half lands on the late-joining app,
-// and all existing cellapps see the new geometry. Covers the boot-time
-// race where the queued CreateSpace drained on the first cellapp but
-// sibling cellapps registered moments later.
+// Closes the boot-time race where the queued CreateSpace drained on the first
+// cellapp and sibling cellapps registered moments later.
 TEST(CellAppMgrIntegration, LateCellAppRegistration_TriggersElasticSplit) {
   MgrFixture fx;
   ASSERT_NE(fx.port, 0u);
@@ -477,10 +472,8 @@ TEST(CellAppMgrIntegration, LateCellAppRegistration_TriggersElasticSplit) {
   EXPECT_EQ(ports.size(), 2u);
 }
 
-// AddCellToSpaceAck lost (or receiver slow): the mgr eventually broadcasts
-// UpdateGeometry anyway so the cluster doesn't deadlock waiting on a dead
-// peer. The receiver still gets the AddCellToSpace itself; only the
-// deferred geometry broadcast hits the timeout fallback.
+// Silent receiver: AddCellToSpace lands but the ack is dropped — the mgr's
+// timeout fallback broadcasts UpdateGeometry anyway so cluster keeps moving.
 TEST(CellAppMgrIntegration, LateCellAppNotAcking_TimeoutFallbackBroadcasts) {
   MgrFixture fx;
   ASSERT_NE(fx.port, 0u);
@@ -519,12 +512,8 @@ TEST(CellAppMgrIntegration, LateCellAppNotAcking_TimeoutFallbackBroadcasts) {
     return !silent.add_cell_msgs.empty();
   })) << "Silent receiver missed AddCellToSpace";
 
-  // Immediately after silent received AddCellToSpace, the mgr should NOT
-  // have broadcast the post-Split geometry to first yet — the ack
-  // deferral keeps it parked. Windows sleep granularity (~15ms) makes
-  // bounded-wait checks brittle, so we rely on the message-arrival
-  // ordering: silent.add_cell_msgs is populated before any deferred
-  // broadcast could fire.
+  // At silent.add_cell arrival, the post-Split geometry must still be
+  // parked — message ordering proves the deferral without a timed wait.
   const auto baseline_count = first.update_geometry_msgs.size();
   EXPECT_EQ(baseline_count, 1u)
       << "first should have seen exactly 1 UpdateGeometry (from initial CreateSpace) "

@@ -84,16 +84,12 @@ class CellAppMgr : public ManagerApp {
   void BootstrapMultiCellPartition(SpacePartition& partition,
                                    const std::vector<const CellAppInfo*>& hosts);
 
-  // Per-registration elastic grow: for each Space whose leaf count is
-  // below cellapps_.size(), split the heaviest leaf and assign the new
-  // half to `new_app`. Entities in the new region migrate via the source
-  // cellapp's OffloadChecker once UpdateGeometry propagates.
+  // Splits the heaviest leaf in every Space whose leaf count is below
+  // cellapps_.size(), assigning the new half to `new_app`.
   void GrowSpacesForNewCellApp(const CellAppInfo& new_app);
 
-  // Per-tick scan of pending_geometry_broadcasts_: timed-out entries trigger
-  // a fallback UpdateGeometry broadcast (degrades gracefully if the receiver
-  // ack was lost) and a warning. Acked entries broadcast immediately on ack
-  // arrival via OnAddCellToSpaceAck.
+  // Timed-out pending broadcasts fall back to broadcasting anyway so a
+  // dead/slow receiver doesn't stall the cluster.
   void DrainPendingGeometryBroadcasts();
 
   [[nodiscard]] auto PickAlternateHost(const Address& exclude_addr) const -> const CellAppInfo*;
@@ -120,11 +116,8 @@ class CellAppMgr : public ManagerApp {
   };
   std::vector<PendingSpaceCreate> pending_space_creates_awaiting_cellapps_;
 
-  // Elastic-grow handshake: split is applied to the BSP tree immediately,
-  // AddCellToSpace sent to the new host, but UpdateGeometry broadcast is
-  // deferred until the new cellapp acks. Bounds the race where an old
-  // cellapp's OffloadChecker sends an OffloadEntity into a cell the new
-  // cellapp hasn't materialised yet.
+  // Elastic-grow handshake: defers UpdateGeometry until the new cellapp
+  // acks AddCellToSpace, closing the OffloadEntity-into-missing-cell race.
   struct PendingGeometryBroadcast {
     SpaceID space_id;
     cellappmgr::CellID awaiting_cell_id;
@@ -145,11 +138,11 @@ class CellAppMgr : public ManagerApp {
   static constexpr float kBalanceSafetyBound = 0.9f;
   static constexpr uint64_t kBalanceTickInterval = 30;  // ~1 s @ 30 Hz
   static constexpr uint32_t kMaxCellAppAppId = 255;
-  // Fall back to broadcasting geometry without the ack if the receiver
-  // hasn't responded within this window. Receiver likely dead/slow;
-  // OnCellAppDeath will rehome the leaf shortly. Tuned long enough to
-  // tolerate a full RUDP retransmit cycle, short enough to limit the
-  // race window.
+  // Root world half-extent. Finite bounds keep recursive midpoint splits
+  // strictly-inside; ±inf trips BSPTree::Split's bounds check at depth 2.
+  static constexpr float kDefaultWorldHalfExtent = 1000.f;
+  // Past this window we broadcast geometry without the ack; OnCellAppDeath
+  // will rehome the leaf if the receiver is actually dead.
   static constexpr Duration kPendingGeometryTimeout = Milliseconds(500);
 };
 
