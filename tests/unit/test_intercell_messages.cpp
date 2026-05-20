@@ -198,6 +198,7 @@ TEST(IntercellMessages, OffloadEntity_RoundTrip_Full) {
   msg.latest_volatile_seq = 5678;
   msg.controller_data = MakeBlob({0xC0});
   msg.existing_haunts = {Address(0x7F000003u, 30003), Address(0x7F000004u, 30004)};
+  msg.cell_epoch = 17;
 
   auto rt = RoundTrip(msg);
   ASSERT_TRUE(rt.has_value());
@@ -217,6 +218,7 @@ TEST(IntercellMessages, OffloadEntity_RoundTrip_Full) {
   ASSERT_EQ(rt->existing_haunts.size(), 2u);
   EXPECT_EQ(rt->existing_haunts[0].Port(), 30003u);
   EXPECT_EQ(rt->existing_haunts[1].Port(), 30004u);
+  EXPECT_EQ(rt->cell_epoch, 17u);
 }
 
 TEST(IntercellMessages, OffloadEntity_RoundTrip_AllBlobsEmpty) {
