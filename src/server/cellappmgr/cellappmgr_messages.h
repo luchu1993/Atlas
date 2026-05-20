@@ -94,15 +94,23 @@ struct InformCellLoad {
   uint32_t app_id{0};
   float load{0.0f};
   uint32_t entity_count{0};
+  // Per-cell distribution; mgr uses entity_count for heaviest-leaf pick and
+  // median_x/z to position the next Split inside the actual entity cloud.
+  struct CellReport {
+    CellID cell_id{0};
+    uint32_t entity_count{0};
+    float median_x{0.f};
+    float median_z{0.f};
+  };
+  std::vector<CellReport> cells;
 
   static auto Descriptor() -> const MessageDesc& {
-    static const MessageDesc kDesc{
-        msg_id::Id(msg_id::CellAppMgr::kInformCellLoad),
-        "cellappmgr::InformCellLoad",
-        MessageLengthStyle::kFixed,
-        static_cast<int>(sizeof(uint32_t) + sizeof(float) + sizeof(uint32_t)),
-        MessageReliability::kReliable,
-        MessageUrgency::kImmediate};
+    static const MessageDesc kDesc{msg_id::Id(msg_id::CellAppMgr::kInformCellLoad),
+                                   "cellappmgr::InformCellLoad",
+                                   MessageLengthStyle::kVariable,
+                                   -1,
+                                   MessageReliability::kReliable,
+                                   MessageUrgency::kImmediate};
     return kDesc;
   }
 
@@ -110,17 +118,36 @@ struct InformCellLoad {
     w.Write(app_id);
     w.Write(load);
     w.Write(entity_count);
+    w.WritePackedInt(static_cast<uint32_t>(cells.size()));
+    for (const auto& c : cells) {
+      w.Write(c.cell_id);
+      w.Write(c.entity_count);
+      w.Write(c.median_x);
+      w.Write(c.median_z);
+    }
   }
 
   static auto Deserialize(BinaryReader& r) -> Result<InformCellLoad> {
     auto aid = r.Read<uint32_t>();
     auto ld = r.Read<float>();
     auto ec = r.Read<uint32_t>();
-    if (!aid || !ld || !ec) return Error{ErrorCode::kInvalidArgument, "InformCellLoad: truncated"};
+    auto count = r.ReadPackedInt();
+    if (!aid || !ld || !ec || !count)
+      return Error{ErrorCode::kInvalidArgument, "InformCellLoad: truncated"};
     InformCellLoad msg;
     msg.app_id = *aid;
     msg.load = *ld;
     msg.entity_count = *ec;
+    msg.cells.reserve(*count);
+    for (uint32_t i = 0; i < *count; ++i) {
+      auto cid = r.Read<uint32_t>();
+      auto ce = r.Read<uint32_t>();
+      auto mx = r.Read<float>();
+      auto mz = r.Read<float>();
+      if (!cid || !ce || !mx || !mz)
+        return Error{ErrorCode::kInvalidArgument, "InformCellLoad: cell entry truncated"};
+      msg.cells.push_back({*cid, *ce, *mx, *mz});
+    }
     return msg;
   }
 };

@@ -200,22 +200,27 @@ void CellAppMgr::OnRegisterCellApp(const Address& src, Channel* ch,
 
 void CellAppMgr::OnInformCellLoad(const Address& /*src*/, Channel* /*ch*/,
                                   const cellappmgr::InformCellLoad& msg) {
-  // Find the peer by app_id - InformCellLoad carries the CellApp's own
-  // app_id rather than re-advertising its address, so we index the
-  // lookup linearly. CellApp counts are small (<= 255) and load reports
-  // arrive at a low cadence; the O(N) lookup is well within budget.
+  // Linear lookup by app_id; CellApp count is bounded at 255.
   for (auto& [addr, info] : cellapps_) {
     if (info.app_id == msg.app_id) {
       info.load = std::clamp(msg.load, 0.f, 1.f);
       info.entity_count = msg.entity_count;
       info.last_load_report_at = Clock::now();
-      // Push the fresh load into each Space partition where this
-      // CellApp owns a Cell. Balance consumes from CellInfo.load.
+      // Push aggregate load onto every leaf this CellApp owns. Per-cell
+      // entity counts arrive via msg.cells and feed cell_distributions_.
       for (auto& [_, partition] : spaces_) {
         for (auto* ci : partition.bsp.Leaves()) {
           if (ci->cellapp_addr == addr) {
             auto* mut = partition.bsp.FindCellByIdMutable(ci->cell_id);
             if (mut != nullptr) mut->load = info.load;
+          }
+        }
+      }
+      for (const auto& rep : msg.cells) {
+        cell_distributions_[rep.cell_id] = {rep.entity_count, rep.median_x, rep.median_z};
+        for (auto& [_, partition] : spaces_) {
+          if (auto* mut = partition.bsp.FindCellByIdMutable(rep.cell_id); mut != nullptr) {
+            mut->entity_count = rep.entity_count;
           }
         }
       }
@@ -375,33 +380,61 @@ void CellAppMgr::GrowSpacesForNewCellApp(const CellAppInfo& new_app) {
     const auto leaves = partition.bsp.Leaves();
     if (leaves.size() >= cellapps_.size()) continue;
 
-    // Pick the heaviest leaf; ties broken by lowest cell_id for determinism.
+    // Heaviest leaf: prefer entity_count (boot-time signal), then load,
+    // then min cell_id for determinism.
     const CellInfo* target = leaves.front();
     for (const auto* leaf : leaves) {
-      if (leaf->load > target->load ||
-          (leaf->load == target->load && leaf->cell_id < target->cell_id)) {
+      const bool more_entities = leaf->entity_count > target->entity_count;
+      const bool same_entities = leaf->entity_count == target->entity_count;
+      const bool heavier_load = leaf->load > target->load;
+      const bool same_load = leaf->load == target->load;
+      const bool lower_id = leaf->cell_id < target->cell_id;
+      if (more_entities || (same_entities && heavier_load) ||
+          (same_entities && same_load && lower_id)) {
         target = leaf;
       }
     }
 
-    // Split the longer finite dimension at its midpoint to keep aspect
-    // ratio reasonable. Unbounded dimensions fall back to position=0.
     const float dx = target->bounds.max_x - target->bounds.min_x;
     const float dz = target->bounds.max_z - target->bounds.min_z;
     const bool dx_finite = std::isfinite(dx);
     const bool dz_finite = std::isfinite(dz);
     BSPAxis axis = BSPAxis::kX;
-    float position = 0.f;
     if (dx_finite && dz_finite) {
       axis = (dx >= dz) ? BSPAxis::kX : BSPAxis::kZ;
-      position = (axis == BSPAxis::kX) ? (target->bounds.min_x + target->bounds.max_x) * 0.5f
-                                       : (target->bounds.min_z + target->bounds.max_z) * 0.5f;
-    } else if (dx_finite) {
-      axis = BSPAxis::kX;
-      position = (target->bounds.min_x + target->bounds.max_x) * 0.5f;
     } else if (dz_finite) {
       axis = BSPAxis::kZ;
+    }
+
+    // Use the latest reported median so the new half lands inside the
+    // actual entity cluster rather than the geometric midpoint.
+    auto dist_it = cell_distributions_.find(target->cell_id);
+    const bool has_dist = dist_it != cell_distributions_.end() && dist_it->second.entity_count > 0;
+    float position;
+    if (has_dist) {
+      position = (axis == BSPAxis::kX) ? dist_it->second.median_x : dist_it->second.median_z;
+    } else if (dx_finite && dz_finite) {
+      position = (axis == BSPAxis::kX) ? (target->bounds.min_x + target->bounds.max_x) * 0.5f
+                                       : (target->bounds.min_z + target->bounds.max_z) * 0.5f;
+    } else if (axis == BSPAxis::kX && dx_finite) {
+      position = (target->bounds.min_x + target->bounds.max_x) * 0.5f;
+    } else if (axis == BSPAxis::kZ && dz_finite) {
       position = (target->bounds.min_z + target->bounds.max_z) * 0.5f;
+    } else {
+      position = 0.f;
+    }
+    // Clamp strictly inside bounds; median can sit on the edge (all
+    // entities on one side) and BSPTree::Split rejects edges.
+    if (axis == BSPAxis::kX && dx_finite) {
+      const float lo = target->bounds.min_x;
+      const float hi = target->bounds.max_x;
+      const float pad = std::max(1e-3f, (hi - lo) * 1e-4f);
+      position = std::clamp(position, lo + pad, hi - pad);
+    } else if (axis == BSPAxis::kZ && dz_finite) {
+      const float lo = target->bounds.min_z;
+      const float hi = target->bounds.max_z;
+      const float pad = std::max(1e-3f, (hi - lo) * 1e-4f);
+      position = std::clamp(position, lo + pad, hi - pad);
     }
 
     CellInfo new_leaf;

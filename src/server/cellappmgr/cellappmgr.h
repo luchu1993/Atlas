@@ -107,6 +107,14 @@ class CellAppMgr : public ManagerApp {
 
   std::unordered_map<Address, CellAppInfo> cellapps_;
   std::unordered_map<SpaceID, SpacePartition> spaces_;
+  // Per-cell entity stats from the latest InformCellLoad; drives heaviest-
+  // leaf pick and median Split position in GrowSpacesForNewCellApp.
+  struct CellDistribution {
+    uint32_t entity_count{0};
+    float median_x{0.f};
+    float median_z{0.f};
+  };
+  std::unordered_map<cellappmgr::CellID, CellDistribution> cell_distributions_;
   // CreateSpaceRequests received before any CellApp registered; drained the
   // moment the first CellApp registers. Each entry is (msg, src, channel).
   struct PendingSpaceCreate {

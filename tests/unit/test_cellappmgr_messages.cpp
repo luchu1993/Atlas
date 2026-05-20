@@ -102,11 +102,18 @@ TEST(CellAppMgrMessages, InformCellLoad_RoundTrip) {
   msg.app_id = 2;
   msg.load = 0.66f;
   msg.entity_count = 12345;
+  msg.cells.push_back({/*cell_id=*/3, /*entity_count=*/100, /*median_x=*/12.5f, /*median_z=*/-7.f});
+  msg.cells.push_back({/*cell_id=*/4, /*entity_count=*/50, /*median_x=*/-3.f, /*median_z=*/9.5f});
   auto rt = RoundTrip(msg);
   ASSERT_TRUE(rt.has_value());
   EXPECT_EQ(rt->app_id, 2u);
   EXPECT_NEAR(rt->load, 0.66f, 1e-5f);
   EXPECT_EQ(rt->entity_count, 12345u);
+  ASSERT_EQ(rt->cells.size(), 2u);
+  EXPECT_EQ(rt->cells[0].cell_id, 3u);
+  EXPECT_EQ(rt->cells[0].entity_count, 100u);
+  EXPECT_FLOAT_EQ(rt->cells[0].median_x, 12.5f);
+  EXPECT_FLOAT_EQ(rt->cells[1].median_z, 9.5f);
 }
 
 TEST(CellAppMgrMessages, CreateSpaceRequest_RoundTrip) {

@@ -472,6 +472,75 @@ TEST(CellAppMgrIntegration, LateCellAppRegistration_TriggersElasticSplit) {
   EXPECT_EQ(ports.size(), 2u);
 }
 
+// InformCellLoad carries per-cell median; GrowSpacesForNewCellApp uses that
+// median for the next Split position instead of the geometric midpoint.
+TEST(CellAppMgrIntegration, ElasticSplit_UsesReportedMedianPosition) {
+  MgrFixture fx;
+  ASSERT_NE(fx.port, 0u);
+
+  CellAppClient first{"cellapp_split_first"};
+  auto ch_first = first.network.ConnectRudp(fx.server_addr);
+  ASSERT_TRUE(ch_first.HasValue());
+  RegisterCellApp reg_first;
+  reg_first.internal_addr = Address(0, 30801);
+  ASSERT_TRUE((*ch_first)->SendMessage(reg_first).HasValue());
+  ASSERT_TRUE(PollUntil(first.dispatcher, [&] {
+    return first.register_ack_received.load(std::memory_order_acquire);
+  }));
+
+  CreateSpaceRequest csr;
+  csr.space_id = 99;
+  csr.request_id = 1;
+  csr.reply_addr = first.network.RudpAddress();
+  ASSERT_TRUE((*ch_first)->SendMessage(csr).HasValue());
+  ASSERT_TRUE(PollUntil(first.dispatcher, [&] {
+    return !first.add_cell_msgs.empty() && !first.update_geometry_msgs.empty();
+  }));
+  const auto first_cell_id = first.add_cell_msgs[0].cell_id;
+
+  // Report a skewed entity centroid at x=40 so the next Split aligns with
+  // the cluster, not the bounds midpoint at x=0.
+  InformCellLoad load;
+  load.app_id = first.register_ack.app_id;
+  load.load = 0.5f;
+  load.entity_count = 100;
+  load.cells.push_back({first_cell_id, 100u, /*median_x=*/40.f, /*median_z=*/0.f});
+  ASSERT_TRUE((*ch_first)->SendMessage(load).HasValue());
+  for (int i = 0; i < 30; ++i) {
+    first.dispatcher.ProcessOnce();
+    std::this_thread::sleep_for(std::chrono::milliseconds(2));
+  }
+
+  CellAppClient late{"cellapp_split_late"};
+  auto ch_late = late.network.ConnectRudp(fx.server_addr);
+  ASSERT_TRUE(ch_late.HasValue());
+  RegisterCellApp reg_late;
+  reg_late.internal_addr = Address(0, 30802);
+  ASSERT_TRUE((*ch_late)->SendMessage(reg_late).HasValue());
+  ASSERT_TRUE(PollUntil(late.dispatcher, [&] {
+    return !late.add_cell_msgs.empty() && !late.update_geometry_msgs.empty();
+  }));
+
+  BinaryReader r(std::span<const std::byte>(late.update_geometry_msgs.back().bsp_blob));
+  auto tree = BSPTree::Deserialize(r);
+  ASSERT_TRUE(tree.HasValue());
+  auto leaves = tree->Leaves();
+  ASSERT_EQ(leaves.size(), 2u);
+
+  // Cell holding x>40 should land on the new app; min_x of that leaf
+  // must match the reported median (within float tolerance).
+  const CellInfo* new_leaf = nullptr;
+  for (auto* l : leaves) {
+    if (l->cell_id != first_cell_id) {
+      new_leaf = l;
+      break;
+    }
+  }
+  ASSERT_NE(new_leaf, nullptr);
+  EXPECT_NEAR(new_leaf->bounds.min_x, 40.f, 0.01f)
+      << "Split should land on the reported median, not the bounds midpoint";
+}
+
 // Silent receiver: AddCellToSpace lands but the ack is dropped — the mgr's
 // timeout fallback broadcasts UpdateGeometry anyway so cluster keeps moving.
 TEST(CellAppMgrIntegration, LateCellAppNotAcking_TimeoutFallbackBroadcasts) {

@@ -1668,9 +1668,36 @@ void CellApp::SendInformCellLoad() {
   msg.app_id = app_id_;
   msg.load = persistent_load_;
   msg.entity_count = count;
+  // Per-cell stats drive elastic-grow's heaviest-leaf pick and median split
+  // position; std::nth_element gives O(N) median without a full sort.
+  std::vector<float> xs;
+  std::vector<float> zs;
+  for (auto& [_, space] : spaces_) {
+    for (auto& [cell_id, cell] : space->LocalCells()) {
+      xs.clear();
+      zs.clear();
+      const auto& reals = cell->RealEntities();
+      xs.reserve(reals.size());
+      zs.reserve(reals.size());
+      for (auto* e : reals) {
+        xs.push_back(e->Position().x);
+        zs.push_back(e->Position().z);
+      }
+      cellappmgr::InformCellLoad::CellReport rep;
+      rep.cell_id = cell_id;
+      rep.entity_count = static_cast<uint32_t>(reals.size());
+      if (!xs.empty()) {
+        const auto mid = xs.size() / 2;
+        std::nth_element(xs.begin(), xs.begin() + mid, xs.end());
+        rep.median_x = xs[mid];
+        std::nth_element(zs.begin(), zs.begin() + mid, zs.end());
+        rep.median_z = zs[mid];
+      }
+      msg.cells.push_back(rep);
+    }
+  }
   if (auto r = cellappmgr_channel_->SendMessage(msg); !r) {
-    // Consistently dropped reports skew the mgr's balancer toward
-    // this (apparently lightly loaded) host.
+    // Dropped reports skew the mgr's balancer toward this host.
     ATLAS_LOG_WARNING("CellApp: InformCellLoad send failed: {}", r.Error().Message());
   }
 
