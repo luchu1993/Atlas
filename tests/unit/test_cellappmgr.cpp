@@ -62,21 +62,22 @@ class RecordingChannel final : public Channel {
 // to outbound sends uses the standard descriptor so the decoder here
 // matches the test_watcher_forwarder helper shape.
 auto FirstCellAppDeath(const RecordingChannel& ch) -> baseapp::CellAppDeath {
-  EXPECT_FALSE(ch.Sends().empty());
-  if (ch.Sends().empty()) return {};
-  const auto& frame = ch.Sends().front();
-  BinaryReader reader(std::span<const std::byte>(frame.data(), frame.size()));
-  const auto id = reader.ReadPackedInt();
-  EXPECT_TRUE(id.HasValue());
-  EXPECT_EQ(*id, baseapp::CellAppDeath::Descriptor().id);
-  const auto len = reader.ReadPackedInt();
-  EXPECT_TRUE(len.HasValue());
-  const auto payload = reader.ReadBytes(*len);
-  EXPECT_TRUE(payload.HasValue());
-  BinaryReader msg_reader(*payload);
-  auto msg = baseapp::CellAppDeath::Deserialize(msg_reader);
-  EXPECT_TRUE(msg.HasValue());
-  return msg.ValueOr(baseapp::CellAppDeath{});
+  // OnCellAppDeath now also fans out a SpaceBspGeometry (rehome triggers
+  // BroadcastGeometry); scan by msg_id rather than taking front().
+  for (const auto& frame : ch.Sends()) {
+    BinaryReader reader(std::span<const std::byte>(frame.data(), frame.size()));
+    const auto id = reader.ReadPackedInt();
+    if (!id || *id != baseapp::CellAppDeath::Descriptor().id) continue;
+    const auto len = reader.ReadPackedInt();
+    if (!len) continue;
+    const auto payload = reader.ReadBytes(*len);
+    if (!payload) continue;
+    BinaryReader msg_reader(*payload);
+    auto msg = baseapp::CellAppDeath::Deserialize(msg_reader);
+    if (msg.HasValue()) return *msg;
+  }
+  ADD_FAILURE() << "No CellAppDeath message in the channel's sends";
+  return {};
 }
 
 // ============================================================================
@@ -562,10 +563,9 @@ TEST(CellAppMgr, CellAppDeath_FansOutNotificationToBaseAppSubscribers) {
   ASSERT_FALSE(leaves.empty());
   EXPECT_EQ(leaves[0]->cellapp_addr, reg_b.internal_addr);
 
-  // Fan-out assertion: the baseapp peer received exactly one frame and
-  // that frame decodes to a CellAppDeath naming A as dead and B as the
-  // new host for space 42.
-  ASSERT_EQ(base_ch.Sends().size(), 1u);
+  // Baseapp peer receives the death notice plus the post-rehome BSP
+  // geometry fan-out used by the client-side debug gizmo.
+  ASSERT_GE(base_ch.Sends().size(), 1u);
   const auto notify = FirstCellAppDeath(base_ch);
   EXPECT_EQ(notify.dead_addr, reg_a.internal_addr);
   ASSERT_EQ(notify.rehomes.size(), 1u);

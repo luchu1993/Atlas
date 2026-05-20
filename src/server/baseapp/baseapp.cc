@@ -518,6 +518,11 @@ void BaseApp::RegisterInternalHandlers() {
         OnCellAppDeath(msg);
       });
 
+  (void)table.RegisterTypedHandler<baseapp::SpaceBspGeometry>(
+      [this](const Address& /*src*/, Channel* /*ch*/, const baseapp::SpaceBspGeometry& msg) {
+        OnSpaceBspGeometry(msg);
+      });
+
   (void)table.RegisterTypedHandler<baseapp::CellRpcForward>(
       [this](const Address& /*src*/, Channel* ch, const baseapp::CellRpcForward& msg) {
         OnCellRpcForward(*ch, msg);
@@ -806,6 +811,11 @@ void BaseApp::OnCellEntityCreated(Channel& ch, const baseapp::CellEntityCreated&
       baseapp::CellReady ready;
       ready.entity_id = msg.entity_id;
       (void)client_ch->SendMessage(ready);
+      // Replay the last-known BSP for the client's debug gizmo. No-op
+      // if mgr hasn't pushed geometry yet (LB hasn't kicked in).
+      if (auto it = latest_space_bsp_.find(ent->SpaceId()); it != latest_space_bsp_.end()) {
+        (void)client_ch->SendMessage(it->second);
+      }
     }
   }
   if (auto it = pending_aoi_radius_.find(msg.entity_id); it != pending_aoi_radius_.end()) {
@@ -934,6 +944,16 @@ void BaseApp::OnCellAppDeath(const baseapp::CellAppDeath& msg) {
   }
 
   ATLAS_LOG_INFO("BaseApp: CellAppDeath complete — restored={} lost={}", restored, lost);
+}
+
+void BaseApp::OnSpaceBspGeometry(const baseapp::SpaceBspGeometry& msg) {
+  // Store latest so new clients get a replay at proxy-attach time.
+  latest_space_bsp_[msg.space_id] = msg;
+  // Fan out to every connected client whose Avatar lives in this Space.
+  entity_mgr_.ForEach([&](BaseEntity& ent) {
+    if (ent.SpaceId() != msg.space_id) return;
+    if (auto* ch = ResolveClientChannel(ent.EntityId())) (void)ch->SendMessage(msg);
+  });
 }
 
 void BaseApp::OnCellRpcForward(Channel& ch, const baseapp::CellRpcForward& msg) {

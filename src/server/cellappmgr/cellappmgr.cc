@@ -708,6 +708,24 @@ void CellAppMgr::BroadcastGeometry(SpacePartition& partition) {
     (void)it->second.channel->SendMessage(msg);
   }
 
+  // Fan the flattened leaf rects out to every BaseApp so it can forward to
+  // its connected clients for the LB debug gizmo.
+  if (!baseapps_.empty()) {
+    baseapp::SpaceBspGeometry notice;
+    notice.space_id = partition.space_id;
+    for (const auto* ci : partition.bsp.Leaves()) {
+      uint8_t owner_index = 0;
+      if (auto cellapp_it = cellapps_.find(ci->cellapp_addr); cellapp_it != cellapps_.end()) {
+        owner_index = static_cast<uint8_t>(std::min<uint32_t>(cellapp_it->second.app_id, 255u));
+      }
+      notice.leaves.push_back({ci->cell_id, owner_index, ci->bounds.min_x, ci->bounds.min_z,
+                               ci->bounds.max_x, ci->bounds.max_z});
+    }
+    for (const auto& [_, ch] : baseapps_) {
+      if (ch != nullptr) (void)ch->SendMessage(notice);
+    }
+  }
+
   partition.last_broadcast_blob = std::move(blob);
 }
 

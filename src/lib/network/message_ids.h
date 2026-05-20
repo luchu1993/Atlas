@@ -85,6 +85,9 @@ enum class BaseApp : uint16_t {
   kClientEventSeqReport = 2027,
   kForceLogoff = 2030,
   kForceLogoffAck = 2031,
+  // CellAppMgr -> BaseApp -> Client. Flattened BSP leaf rects for the LB
+  // debug gizmo; routed via BaseApp so each proxy sees only its own Space.
+  kSpaceBspGeometry = 2032,
 };
 
 // CellApp outbound traffic to BaseApp reuses BaseApp IDs.
@@ -225,6 +228,7 @@ ATLAS_ASSERT_ID_RANGE(BaseApp::kCellReady, 2000, 2999);
 ATLAS_ASSERT_ID_RANGE(BaseApp::kCellAppDeath, 2000, 2999);
 ATLAS_ASSERT_ID_RANGE(BaseApp::kForceLogoff, 2000, 2999);
 ATLAS_ASSERT_ID_RANGE(BaseApp::kForceLogoffAck, 2000, 2999);
+ATLAS_ASSERT_ID_RANGE(BaseApp::kSpaceBspGeometry, 2000, 2999);
 
 ATLAS_ASSERT_ID_RANGE(CellApp::kCreateCellEntity, 3000, 3999);
 ATLAS_ASSERT_ID_RANGE(CellApp::kSpawnLocalEntity, 3000, 3999);

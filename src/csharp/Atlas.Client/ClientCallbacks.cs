@@ -23,6 +23,8 @@ public static class ClientCallbacks
     public const ushort kCellReadyMessageId = 2025;
     // BaseApp -> Client RPC envelope (kClientRpcMessageId): [u32 rpc_id][u64 trace_id][args].
     public const ushort kClientRpcMessageId = 0xF004;
+    // BaseApp -> Client BSP leaf rects for the LB debug gizmo (msg_id 2032).
+    public const ushort kSpaceBspGeometryMessageId = 2032;
 
     // Must match src/server/cellapp/cell_aoi_envelope.h::CellAoIEnvelopeKind.
     private const byte kEntityEnter = 1;
@@ -115,6 +117,9 @@ public static class ClientCallbacks
                     break;
                 case kClientRpcMessageId:
                     DispatchClientRpc(body);
+                    break;
+                case kSpaceBspGeometryMessageId:
+                    DispatchSpaceBspGeometry(body);
                     break;
                 default:
                     Log.Error(
@@ -309,6 +314,49 @@ public static class ClientCallbacks
         ulong traceId = reader.ReadUInt64();
         var args = body.Slice(kClientRpcPrefixBytes);
         DispatchRpc(entityId, rpcId, traceId, args);
+    }
+
+    public readonly struct BspLeafRect
+    {
+        public BspLeafRect(uint cellId, byte ownerIndex, float minX, float minZ, float maxX,
+                           float maxZ)
+        {
+            CellId = cellId;
+            OwnerIndex = ownerIndex;
+            MinX = minX;
+            MinZ = minZ;
+            MaxX = maxX;
+            MaxZ = maxZ;
+        }
+        public uint CellId { get; }
+        public byte OwnerIndex { get; }
+        public float MinX { get; }
+        public float MinZ { get; }
+        public float MaxX { get; }
+        public float MaxZ { get; }
+    }
+
+    // Mirrors baseapp::SpaceBspGeometry. Receivers subscribe to the static
+    // SpaceBspGeometryReceived event for render updates.
+    public static event Action<uint, IReadOnlyList<BspLeafRect>>? SpaceBspGeometryReceived;
+
+    private static void DispatchSpaceBspGeometry(ReadOnlySpan<byte> body)
+    {
+        var reader = new SpanReader(body);
+        uint spaceId = reader.ReadUInt32();
+        uint count = reader.ReadPackedUInt32();
+        var leaves = new List<BspLeafRect>((int)count);
+        for (uint i = 0; i < count; i++)
+        {
+            uint cellId = reader.ReadUInt32();
+            byte ownerIndex = reader.ReadByte();
+            float minX = reader.ReadFloat();
+            float minZ = reader.ReadFloat();
+            float maxX = reader.ReadFloat();
+            float maxZ = reader.ReadFloat();
+            leaves.Add(new BspLeafRect(cellId, ownerIndex, minX, minZ, maxX, maxZ));
+        }
+        SpaceBspGeometryReceived?.Invoke(spaceId, leaves);
     }
 
     // baseapp_messages.h::EntityTransferred: [u32 new_entity_id][u16 new_type_id].

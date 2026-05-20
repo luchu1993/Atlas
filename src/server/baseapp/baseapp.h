@@ -10,6 +10,7 @@
 #include <vector>
 
 #include "baseapp_native_provider.h"
+#include "baseapp_messages.h"
 #include "cellapp/cellapp_messages.h"
 #include "coro/pending_rpc_registry.h"
 #include "db/idatabase.h"
@@ -149,6 +150,7 @@ class BaseApp : public EntityApp {
   // Re-ships every locally-tracked Real on the dead addr to its new host,
   // seeded with last cached cell_backup_data.
   void OnCellAppDeath(const baseapp::CellAppDeath& msg);
+  void OnSpaceBspGeometry(const baseapp::SpaceBspGeometry& msg);
   void OnCellRpcForward(Channel& ch, const baseapp::CellRpcForward& msg);
   void OnBroadcastRpcFromCell(Channel& ch, const baseapp::BroadcastRpcFromCell& msg);
   // Wraps target_entity_id + rpc_id + trace_id + payload in kClientRpcMessageId envelope.
@@ -223,6 +225,8 @@ class BaseApp : public EntityApp {
   // Cache of {space_id → primary cell host} from SpaceCreatedResult; lets
   // CreateBaseEntityFromScript skip re-asking the mgr on subsequent entities.
   std::unordered_map<SpaceID, Address> known_space_hosts_;
+  // Latest flattened BSP per space; replayed to a freshly-attached client.
+  std::unordered_map<SpaceID, baseapp::SpaceBspGeometry> latest_space_bsp_;
   std::unordered_map<SpaceID, std::vector<cellapp::CreateCellEntity>>
       pending_cell_entity_creates_;
   std::unordered_map<SpaceID, std::vector<cellapp::SpawnLocalEntity>>

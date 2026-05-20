@@ -983,6 +983,67 @@ struct ClientRpcEnvelope {
 };
 static_assert(NetworkMessage<ClientRpcEnvelope>);
 
+// Flattened BSP leaf rects for the LB debug visualisation. Sent on the same
+// id by CellAppMgr -> BaseApp (mgr fans out on geometry change) and by
+// BaseApp -> Client (per-proxy forward on change + login replay).
+struct SpaceBspGeometry {
+  SpaceID space_id{kInvalidSpaceID};
+  struct LeafRect {
+    uint32_t cell_id{0};
+    uint8_t owner_index{0};  // stable per-cellapp ordinal for color coding
+    float min_x{0.f};
+    float min_z{0.f};
+    float max_x{0.f};
+    float max_z{0.f};
+  };
+  std::vector<LeafRect> leaves;
+
+  static auto Descriptor() -> const MessageDesc& {
+    static const MessageDesc kDesc{msg_id::Id(msg_id::BaseApp::kSpaceBspGeometry),
+                                   "baseapp::SpaceBspGeometry",
+                                   MessageLengthStyle::kVariable,
+                                   -1,
+                                   MessageReliability::kReliable,
+                                   MessageUrgency::kBatched};
+    return kDesc;
+  }
+
+  void Serialize(BinaryWriter& w) const {
+    w.Write(space_id);
+    w.WritePackedInt(static_cast<uint32_t>(leaves.size()));
+    for (const auto& l : leaves) {
+      w.Write(l.cell_id);
+      w.Write<uint8_t>(l.owner_index);
+      w.Write(l.min_x);
+      w.Write(l.min_z);
+      w.Write(l.max_x);
+      w.Write(l.max_z);
+    }
+  }
+
+  static auto Deserialize(BinaryReader& r) -> Result<SpaceBspGeometry> {
+    auto sid = r.Read<uint32_t>();
+    auto n = r.ReadPackedInt();
+    if (!sid || !n) return Error{ErrorCode::kInvalidArgument, "SpaceBspGeometry: truncated"};
+    SpaceBspGeometry msg;
+    msg.space_id = *sid;
+    msg.leaves.reserve(*n);
+    for (uint32_t i = 0; i < *n; ++i) {
+      auto cid = r.Read<uint32_t>();
+      auto oi = r.Read<uint8_t>();
+      auto x0 = r.Read<float>();
+      auto z0 = r.Read<float>();
+      auto x1 = r.Read<float>();
+      auto z1 = r.Read<float>();
+      if (!cid || !oi || !x0 || !z0 || !x1 || !z1)
+        return Error{ErrorCode::kInvalidArgument, "SpaceBspGeometry: leaf entry truncated"};
+      msg.leaves.push_back({*cid, *oi, *x0, *z0, *x1, *z1});
+    }
+    return msg;
+  }
+};
+static_assert(NetworkMessage<SpaceBspGeometry>);
+
 }  // namespace atlas::baseapp
 
 #endif  // ATLAS_SERVER_BASEAPP_BASEAPP_MESSAGES_H_
