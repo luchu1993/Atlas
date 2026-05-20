@@ -102,6 +102,12 @@ class CellEntity : public IEntityMotion {
   [[nodiscard]] auto BaseAddr() const -> const Address& { return base_addr_; }
   void SetBaseAddr(const Address& addr) { base_addr_ = addr; }
 
+  // Per-entity migration counter; bumps on every Offload accept so the
+  // CurrentCell BaseApp sees orders monotonically regardless of which
+  // cellapp emits it. 0 is the initial-create sentinel.
+  [[nodiscard]] auto CellEpoch() const -> uint32_t { return cell_epoch_; }
+  void SetCellEpoch(uint32_t epoch) { cell_epoch_ = epoch; }
+
   // Cell-only entity: has no Base counterpart, no DB checkout, lives only
   // on this CellApp. Destruction is initiated by the cell script itself.
   [[nodiscard]] auto IsLocal() const -> bool { return is_local_; }
@@ -200,6 +206,7 @@ class CellEntity : public IEntityMotion {
 
   Address base_addr_{};
   bool is_local_{false};
+  uint32_t cell_epoch_{0};
 
   // Order matters: dtor runs reverse-declaration. range_node_ MUST unlink
   // last, after witness_/controllers_ remove their own trigger bounds.

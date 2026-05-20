@@ -178,7 +178,9 @@ static_assert(NetworkMessage<CellEntityDestroyed>);
 struct CurrentCell {
   EntityID entity_id{kInvalidEntityID};
   Address cell_addr;
-  uint32_t epoch{0};  // Monotonic; BaseApp rejects stale updates (epoch < stored).
+  // Per-entity migration counter; lives with the entity and bumps on every
+  // Offload accept so order is monotonic regardless of which cellapp emits.
+  uint32_t epoch{0};
 
   static auto Descriptor() -> const MessageDesc& {
     static const MessageDesc kDesc{

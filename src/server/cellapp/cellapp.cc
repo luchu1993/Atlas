@@ -1364,11 +1364,16 @@ void CellApp::OnOffloadEntity(const Address& src, Channel* ch, const cellapp::Of
 
   // NPCs (cell-local, no base_addr) must skip the BaseApp notify, else
   // every cross-cell offload spams WSAEADDRNOTAVAIL and stalls heartbeat.
+  // Per-entity migration counter: bump source's epoch by 1 and store on the
+  // receiver so any future Offload from here continues monotonically.
+  const uint32_t new_epoch = msg.cell_epoch + 1;
+  entity->SetCellEpoch(new_epoch);
+
   if (msg.base_addr.Ip() != 0) {
     baseapp::CurrentCell cc;
     cc.entity_id = msg.entity_id;
     cc.cell_addr = Network().RudpAddress();
-    cc.epoch = next_offload_epoch_++;
+    cc.epoch = new_epoch;
     auto base_ch = Network().ConnectRudpNocwnd(msg.base_addr);
     if (base_ch) {
       if (auto r = (*base_ch)->SendMessage(cc); !r) {
@@ -1814,6 +1819,7 @@ auto CellApp::BuildOffloadMessage(const CellEntity& entity) const -> cellapp::Of
     msg.aoi_radius = witness->AoIRadius();
     msg.aoi_hysteresis = witness->Hysteresis();
   }
+  msg.cell_epoch = entity.CellEpoch();
   return msg;
 }
 

@@ -397,6 +397,10 @@ struct OffloadEntity {
   bool has_witness{false};
   float aoi_radius{0.f};
   float aoi_hysteresis{0.f};
+  // Source cell's migration counter; receiver bumps to source+1 for the
+  // CurrentCell it pushes to BaseApp so routing order is monotonic
+  // regardless of which cellapp emits.
+  uint32_t cell_epoch{0};
 
   static auto Descriptor() -> const MessageDesc& {
     static const MessageDesc kDesc{msg_id::Id(msg_id::CellApp::kOffloadEntity),
@@ -442,6 +446,7 @@ struct OffloadEntity {
     w.Write(static_cast<uint8_t>(has_witness ? 1 : 0));
     w.Write(aoi_radius);
     w.Write(aoi_hysteresis);
+    w.Write(cell_epoch);
   }
 
   static auto Deserialize(BinaryReader& r) -> Result<OffloadEntity> {
@@ -528,6 +533,11 @@ struct OffloadEntity {
       msg.has_witness = (*hw != 0);
       msg.aoi_radius = *rad;
       msg.aoi_hysteresis = *hyst;
+    }
+    if (r.Remaining() >= sizeof(uint32_t)) {
+      auto ce = r.Read<uint32_t>();
+      if (!ce) return Error{ErrorCode::kInvalidArgument, "OffloadEntity: cell_epoch truncated"};
+      msg.cell_epoch = *ce;
     }
     return msg;
   }

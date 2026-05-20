@@ -366,11 +366,6 @@ class CellApp : public EntityApp {
 
   PendingRpcRegistry rpc_registry_;
 
-  // Monotonic epoch for CurrentCell ordering. Incremented when this
-  // CellApp sends a CurrentCell after an Offload arrival so BaseApp
-  // can reject stale updates from a slower old-CellApp path.
-  uint32_t next_offload_epoch_{1};
-
   // Space masters whose primary-cell add arrived before this CellApp had any
   // EntityIDs allocated; drained on the next GetEntityIdsAck. (space_id, type).
   std::vector<std::pair<SpaceID, std::string>> pending_space_master_spawns_;

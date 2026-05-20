@@ -11,6 +11,11 @@ Rules for Claude Code when working in the Atlas Engine repository.
 - Do not commit generated build outputs, Unity staged DLLs, profiling captures, logs, local databases, or temporary cluster state.
 - Do not skip hooks, tests, formatting, or signing checks unless the user explicitly asks for that bypass.
 
+## Design rules
+
+- When designing a new mechanism or solving a cross-process problem, prefer the BigWorld-canonical approach (per-entity migration epochs, cell ghost regions, primary cell discovery, etc.) over an ad-hoc invention.
+- Diverge from BigWorld only when the project has a documented reason (different threading model, no script-side state, etc.); call out the divergence explicitly in the change description.
+
 ## Code rules
 
 - Follow Google C++ style plus project overrides: C++20, 2-space indent, attached braces, 100-column limit, no compiler extensions, namespace `atlas::`.

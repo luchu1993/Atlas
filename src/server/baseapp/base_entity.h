@@ -49,8 +49,8 @@ class BaseEntity {
 
   void OnWriteAck(DatabaseID dbid, bool success);
 
-  // Epoch prevents stale CurrentCell from overwriting newer placement;
-  // initial create uses 0, Offload uses monotonically increasing values.
+  // Per-entity migration counter; lives with the entity, bumps on every
+  // Offload accept. 0 is the initial-create sentinel.
   void SetCell(const Address& addr, uint32_t epoch = 0);
   void ClearCell();
 
