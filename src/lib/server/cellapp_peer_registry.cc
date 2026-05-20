@@ -20,10 +20,13 @@ void CellAppPeerRegistry::Subscribe(MachinedClient& machined, Address self_addr,
         // Filter self (CellApp receives its own birth notification).
         // BaseApp passes Address{} so this condition is never true for it.
         if (self_addr_.Ip() != 0 && n.internal_addr == self_addr_) return;
+        // Idempotent: duplicate Birth (machined replay + live broadcast) would
+        // otherwise churn the outbound channel and reorder in-flight Ghost ops.
+        if (channels_.contains(n.internal_addr)) return;
         ATLAS_LOG_INFO("CellAppPeerRegistry: CellApp born at {}:{}", n.internal_addr.Ip(),
                        n.internal_addr.Port());
         auto ch = network_.ConnectRudpNocwnd(n.internal_addr);
-        if (ch) channels_.insert_or_assign(n.internal_addr, static_cast<Channel*>(*ch));
+        if (ch) channels_.emplace(n.internal_addr, static_cast<Channel*>(*ch));
       },
       [this, on_death = std::move(on_death)](const machined::DeathNotification& n) {
         auto it = channels_.find(n.internal_addr);

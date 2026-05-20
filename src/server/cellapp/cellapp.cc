@@ -1140,12 +1140,8 @@ void CellApp::OnCreateGhost(const Address& /*src*/, Channel* ch, const cellapp::
     ATLAS_LOG_INFO("CellApp: auto-created Space {} for incoming Ghost", msg.space_id);
   }
   if (auto it = entity_population_.find(msg.entity_id); it != entity_population_.end()) {
-    // Ghost collision is expected post-offload (new Real broadcasts to peers
-    // that already mirror under the old Real); Real collision = id reuse bug.
-    if (it->second->IsReal()) {
-      ATLAS_LOG_ERROR("CellApp: CreateGhost for entity_id={} which is Real here — id collision",
-                      msg.entity_id);
-    }
+    // Idempotent: stale CreateGhost (sender raced its own Offload across a
+    // channel reconnect) or a peer that still has the old Real mirroring us.
     return;
   }
   if (ch == nullptr) {

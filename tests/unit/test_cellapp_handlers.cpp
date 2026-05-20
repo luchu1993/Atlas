@@ -131,6 +131,30 @@ TEST_F(CellAppHandlersTest, DuplicateCreateCellEntityRejectsExistingGhost) {
   EXPECT_EQ(app_.FindSpace(2), nullptr);
 }
 
+TEST_F(CellAppHandlersTest, CreateGhostOnRealIsIdempotentNoOp) {
+  // Stale CreateGhost arriving after the entity got promoted to Real here
+  // (sender raced its own Offload across a channel reconnect) must be a
+  // silent no-op, not an "id collision" error.
+  app_.OnCreateCellEntity({}, nullptr, MakeCreate(300, 1, {3, 0, 3}));
+  auto* real = app_.FindRealEntity(300);
+  ASSERT_NE(real, nullptr);
+  const auto pos_before = real->Position();
+
+  cellapp::CreateGhost stale;
+  stale.entity_id = 300;
+  stale.type_id = 1;
+  stale.space_id = 1;
+  stale.position = {99, 0, 99};
+  stale.direction = {0, 0, 1};
+  app_.OnCreateGhost({}, FakeChannel(0xBEEF), stale);
+
+  EXPECT_EQ(app_.FindRealEntity(300), real);
+  EXPECT_TRUE(real->IsReal());
+  EXPECT_FLOAT_EQ(real->Position().x, pos_before.x);
+  EXPECT_FLOAT_EQ(real->Position().z, pos_before.z);
+  EXPECT_EQ(app_.FindSpace(1)->EntityCount(), 1u);
+}
+
 TEST_F(CellAppHandlersTest, DestroyCellEntityRemovesEntity) {
   app_.OnCreateCellEntity({}, nullptr, MakeCreate(100, 1));
   ASSERT_NE(app_.FindRealEntity(100), nullptr);
