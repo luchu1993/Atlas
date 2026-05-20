@@ -1575,6 +1575,13 @@ void CellApp::OnAddCellToSpace(const Address& /*src*/, Channel* ch,
                         msg.space_id, msg.cell_id, r.Error().Message());
     }
   }
+
+  // Force a fresh InformCellLoad now (bypass the tick-based throttle).
+  // SpaceMaster-driven spawn just landed N entities synchronously, and the
+  // very next sibling cellapp registration would otherwise drive elastic-
+  // grow with stale distribution data (entity_count=0, median=0).
+  last_sent_load_time_ = TimePoint{};
+  SendInformCellLoad();
 }
 
 void CellApp::SpawnSpaceMaster(SpaceID space_id, const std::string& type_name) {

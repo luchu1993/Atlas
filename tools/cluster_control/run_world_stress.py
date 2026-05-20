@@ -928,6 +928,40 @@ def main() -> int:
         processes[-1].start_order = 4
         time.sleep(1)
 
+        # Launch cellapps BEFORE baseapps so BaseApp's CreateSpaceRequest sees
+        # the full host pool and BootstrapMultiCellPartition fans out N cells
+        # in one pass instead of the elastic-grow fallback drip-feeding cells
+        # one cellapp registration at a time.
+        for cellapp_spec in cellapp_specs:
+            processes.append(
+                start_logged_process(
+                    name=str(cellapp_spec["log_name"]),
+                    file_path=cellapp,
+                    working_directory=repo_root,
+                    log_directory=log_dir,
+                    arguments=[
+                        "--type",
+                        "cellapp",
+                        "--name",
+                        str(cellapp_spec["name"]),
+                        "--machined",
+                        machined_address,
+                        "--internal-port",
+                        str(cellapp_spec["internal_port"]),
+                        "--assembly",
+                        str(cell_assembly),
+                        "--runtime-config",
+                        str(runtime_config),
+                        "--update-hertz",
+                        str(args.cellapp_update_hertz),
+                        "--log-level",
+                        "info",
+                    ],
+                )
+            )
+            processes[-1].start_order = 5
+        time.sleep(1)
+
         for baseapp_spec in baseapp_specs:
             processes.append(
                 start_logged_process(
@@ -952,36 +986,6 @@ def main() -> int:
                         str(runtime_config),
                         "--update-hertz",
                         str(args.baseapp_update_hertz),
-                        "--log-level",
-                        "info",
-                    ],
-                )
-            )
-            processes[-1].start_order = 5
-        time.sleep(1)
-
-        for cellapp_spec in cellapp_specs:
-            processes.append(
-                start_logged_process(
-                    name=str(cellapp_spec["log_name"]),
-                    file_path=cellapp,
-                    working_directory=repo_root,
-                    log_directory=log_dir,
-                    arguments=[
-                        "--type",
-                        "cellapp",
-                        "--name",
-                        str(cellapp_spec["name"]),
-                        "--machined",
-                        machined_address,
-                        "--internal-port",
-                        str(cellapp_spec["internal_port"]),
-                        "--assembly",
-                        str(cell_assembly),
-                        "--runtime-config",
-                        str(runtime_config),
-                        "--update-hertz",
-                        str(args.cellapp_update_hertz),
                         "--log-level",
                         "info",
                     ],
