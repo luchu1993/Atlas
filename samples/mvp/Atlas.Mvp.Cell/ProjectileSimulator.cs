@@ -16,6 +16,10 @@ internal sealed class ProjectileSimulator
     {
         public uint ShotId;
         public uint OwnerId;
+        // Phase 3 made Ghost-NPCs visible in _targets, so NPC wander-fire
+        // turned into mass mutual kill across cellapps. Tag the source at
+        // Register so TryHit can skip NPC-on-NPC friendly fire.
+        public bool OwnerIsNpc;
         public Vector3 Position;
         public Vector3 Velocity;
         public double SpawnTime;
@@ -47,6 +51,7 @@ internal sealed class ProjectileSimulator
         {
             ShotId = _nextShotId++,
             OwnerId = owner.EntityId,
+            OwnerIsNpc = owner is Npc,
             Position = origin,
             Velocity = velocity,
             SpawnTime = Atlas.Time.ServerTime,
@@ -97,6 +102,7 @@ internal sealed class ProjectileSimulator
             if (kv.Key == s.OwnerId) continue;
             var entity = kv.Value;
             if (entity.IsDestroyed) continue;
+            if (s.OwnerIsNpc && entity is Npc) continue;
             if (entity is not IDamageable dmg) continue;
             // Ghost Position is live (native read); Hp is not mirrored yet so
             // dead-skip only applies on the Real side.

@@ -50,6 +50,7 @@ public partial class Npc : CellServerEntity, IDamageable
     {
         if (Hp <= 0) return;
         Hp -= amount;
+        Atlas.Diagnostics.Log.Info($"[Mvp.Cell] Npc {EntityId} TakeDamage({amount}) by {attackerId} -> Hp={Hp}");
         AllClients.ShowDamage(amount, attackerId);
         if (Hp > 0) return;
         if (EntityManager.Instance.Get(attackerId) is Avatar killer)
