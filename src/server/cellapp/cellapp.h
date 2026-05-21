@@ -361,6 +361,12 @@ class CellApp : public EntityApp {
   // Test-only — production code receives IDs via DBApp's GetEntityIdsAck.
   [[nodiscard]] auto GetIdClientForTest() const -> const IDClient& { return id_client_; }
 
+  // Test-only — production callers go through ScriptApp::Init; tests need
+  // direct access to wire fake native callbacks before invoking handlers.
+  [[nodiscard]] auto CreateNativeProviderForTest() -> std::unique_ptr<INativeApiProvider> {
+    return CreateNativeProvider();
+  }
+
  private:
   std::unordered_map<EntityID, PendingOffload> pending_offloads_;
 

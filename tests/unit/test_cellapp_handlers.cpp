@@ -1,6 +1,7 @@
 #include <cmath>
 #include <cstdint>
 #include <memory>
+#include <vector>
 
 #include <gtest/gtest.h>
 
@@ -10,6 +11,7 @@
 #include "cellapp_messages.h"
 #include "cellapp_native_provider.h"
 #include "cellappmgr/bsp_tree.h"
+#include "clrscript/native_api_provider.h"
 #include "entitydef/entity_def_registry.h"
 #include "intercell_messages.h"
 #include "math/vector3.h"
@@ -22,17 +24,82 @@
 namespace atlas {
 namespace {
 
+// Ghost-lifecycle tests inject these via SetNativeCallbacks; free funcs are
+// the only way to satisfy the C-style native callback signatures.
+struct GhostCall {
+  enum Kind { kRestoreGhost, kDestroyGhost, kRestoreEntity, kEntityDestroyed, kMigratingOut };
+  Kind kind;
+  uint32_t entity_id;
+  uint16_t type_id;
+  int32_t snapshot_len;
+};
+std::vector<GhostCall>* g_ghost_calls = nullptr;
+
+extern "C" void GhostTestRestoreGhost(uint32_t eid, uint16_t tid, const uint8_t*, int32_t len) {
+  if (g_ghost_calls) g_ghost_calls->push_back({GhostCall::kRestoreGhost, eid, tid, len});
+}
+extern "C" void GhostTestDestroyGhost(uint32_t eid) {
+  if (g_ghost_calls) g_ghost_calls->push_back({GhostCall::kDestroyGhost, eid, 0, 0});
+}
+extern "C" void GhostTestRestoreEntity(uint32_t eid, uint16_t tid, int64_t,
+                                       const uint8_t*, int32_t) {
+  if (g_ghost_calls) g_ghost_calls->push_back({GhostCall::kRestoreEntity, eid, tid, 0});
+}
+extern "C" void GhostTestEntityDestroyed(uint32_t eid) {
+  if (g_ghost_calls) g_ghost_calls->push_back({GhostCall::kEntityDestroyed, eid, 0, 0});
+}
+extern "C" void GhostTestMigratingOut(uint32_t eid) {
+  if (g_ghost_calls) g_ghost_calls->push_back({GhostCall::kMigratingOut, eid, 0, 0});
+}
+
+#pragma pack(push, 1)
+struct GhostTestCallbackTable {
+  void* restore_entity;
+  void* get_entity_data;
+  void* entity_destroyed;
+  void* dispatch_rpc;
+  void* get_owner_snapshot;
+  void* serialize_entity;
+  void* proximity_event;
+  void* coro_on_rpc_complete;
+  void* entity_lifecycle_cancel;
+  void* timer_event;
+  void* entity_migrating_out;
+  void* restore_ghost;
+  void* destroy_ghost;
+};
+#pragma pack(pop)
+
 class CellAppHandlersTest : public ::testing::Test {
  protected:
   EventDispatcher dispatcher_{"test_cellapp_handlers"};
   NetworkInterface network_{dispatcher_};
   CellApp app_{dispatcher_, network_};
+  // Keeps native_provider_ alive for the test duration; CreateNativeProvider
+  // hands back ownership to the caller in production (ScriptApp owns it).
+  std::unique_ptr<INativeApiProvider> native_provider_holder_;
+  std::vector<GhostCall> ghost_calls_;
 
   void SetUp() override {
     EntityDefRegistry::Instance().clear();
     app_.InsertTrustedBaseAppForTest(Address{});
+    g_ghost_calls = &ghost_calls_;
   }
-  void TearDown() override { EntityDefRegistry::Instance().clear(); }
+  void TearDown() override {
+    g_ghost_calls = nullptr;
+    EntityDefRegistry::Instance().clear();
+  }
+
+  void EnableGhostLifecycleCallbacks() {
+    native_provider_holder_ = app_.CreateNativeProviderForTest();
+    GhostTestCallbackTable table{};
+    table.restore_entity = reinterpret_cast<void*>(&GhostTestRestoreEntity);
+    table.entity_destroyed = reinterpret_cast<void*>(&GhostTestEntityDestroyed);
+    table.entity_migrating_out = reinterpret_cast<void*>(&GhostTestMigratingOut);
+    table.restore_ghost = reinterpret_cast<void*>(&GhostTestRestoreGhost);
+    table.destroy_ghost = reinterpret_cast<void*>(&GhostTestDestroyGhost);
+    app_.NativeProvider()->SetNativeCallbacks(&table, sizeof(table));
+  }
 
   auto MakeCreate(EntityID entity_id, SpaceID sp, math::Vector3 pos = {0, 0, 0})
       -> cellapp::CreateCellEntity {
@@ -43,6 +110,18 @@ class CellAppHandlersTest : public ::testing::Test {
     msg.position = pos;
     msg.direction = {1, 0, 0};
     msg.base_addr = Address(0, 0);
+    return msg;
+  }
+
+  auto MakeGhost(EntityID entity_id, math::Vector3 pos = {0, 0, 0})
+      -> cellapp::CreateGhost {
+    cellapp::CreateGhost msg;
+    msg.entity_id = entity_id;
+    msg.type_id = 1;
+    msg.space_id = 1;
+    msg.position = pos;
+    msg.direction = {1, 0, 0};
+    msg.real_cellapp_addr = Address(0x7F000001u, 26002);
     return msg;
   }
 };
@@ -749,6 +828,99 @@ TEST_F(CellAppHandlersTest, RemoveSpaceData_OwnerRemovesLocally) {
 TEST_F(CellAppHandlersTest, OwnerMarksDataInitializedOnSetBspTree) {
   auto* space = MakeOwnerSpace(app_, 7, 1, 30001);
   EXPECT_TRUE(space->IsDataInitialized());
+}
+
+// Ghost-lifecycle wire-up tests: verify cellapp.cc invokes restore_ghost_fn /
+// destroy_ghost_fn at the five transition points, with correct ordering vs
+// the Real-side restore_entity_fn / entity_migrating_out_fn.
+
+TEST_F(CellAppHandlersTest, OnCreateGhostFiresRestoreGhostCallback) {
+  EnableGhostLifecycleCallbacks();
+  auto msg = MakeGhost(555, {1, 0, 1});
+  msg.type_id = 3;
+  msg.other_snapshot = {std::byte{0xAA}, std::byte{0xBB}, std::byte{0xCC}};
+  app_.OnCreateGhost({}, FakeChannel(0xBEEF), msg);
+
+  ASSERT_EQ(ghost_calls_.size(), 1u);
+  EXPECT_EQ(ghost_calls_[0].kind, GhostCall::kRestoreGhost);
+  EXPECT_EQ(ghost_calls_[0].entity_id, 555u);
+  EXPECT_EQ(ghost_calls_[0].type_id, 3u);
+  EXPECT_EQ(ghost_calls_[0].snapshot_len, 3);
+}
+
+TEST_F(CellAppHandlersTest, OnDeleteGhostFiresDestroyGhostCallback) {
+  EnableGhostLifecycleCallbacks();
+  app_.OnCreateGhost({}, FakeChannel(0xBEEF), MakeGhost(600));
+  ghost_calls_.clear();
+
+  cellapp::DeleteGhost dg{600};
+  app_.OnDeleteGhost({}, FakeChannel(0xBEEF), dg);
+
+  ASSERT_EQ(ghost_calls_.size(), 1u);
+  EXPECT_EQ(ghost_calls_[0].kind, GhostCall::kDestroyGhost);
+  EXPECT_EQ(ghost_calls_[0].entity_id, 600u);
+}
+
+TEST_F(CellAppHandlersTest, OffloadOnExistingGhostFiresDestroyGhostThenRestoreEntity) {
+  EnableGhostLifecycleCallbacks();
+  app_.OnCreateGhost({}, FakeChannel(0xBEEF), MakeGhost(700));
+  ghost_calls_.clear();
+
+  cellapp::OffloadEntity msg;
+  msg.entity_id = 700;
+  msg.type_id = 1;
+  msg.space_id = 1;
+  msg.position = {2, 0, 2};
+  msg.direction = {1, 0, 0};
+  // restore_entity_fn only fires when persistent_blob is non-empty.
+  msg.persistent_blob = {std::byte{0x11}};
+  app_.OnOffloadEntity({}, /*ch=*/nullptr, msg);
+
+  // destroy_ghost MUST run before restore_entity, else RestoreEntity sees an
+  // existing C# Ghost instance and skips OnInit on the promoted Real.
+  ASSERT_GE(ghost_calls_.size(), 2u);
+  EXPECT_EQ(ghost_calls_[0].kind, GhostCall::kDestroyGhost);
+  EXPECT_EQ(ghost_calls_[0].entity_id, 700u);
+  EXPECT_EQ(ghost_calls_[1].kind, GhostCall::kRestoreEntity);
+  EXPECT_EQ(ghost_calls_[1].entity_id, 700u);
+}
+
+TEST_F(CellAppHandlersTest, RevertPendingOffloadFiresDestroyGhostThenRestoreEntity) {
+  EnableGhostLifecycleCallbacks();
+  // Stage a Ghost as if ProcessOffload had already converted Real->Ghost and
+  // recreated the C# Ghost via restore_ghost_fn.
+  app_.OnCreateGhost({}, FakeChannel(0xBEEF), MakeGhost(900));
+
+  CellApp::PendingOffload po;
+  po.target_addr = Address{0x7F000001u, 26002};
+  po.sent_at = std::chrono::steady_clock::now();
+  po.space_id = 1;
+  po.type_id = 1;
+  // restore_entity_fn fires only when persistent_blob is non-empty.
+  po.persistent_blob = {std::byte{0x55}};
+  app_.PendingOffloadsForTest()[900] = std::move(po);
+  ghost_calls_.clear();
+
+  app_.RevertPendingOffload(900, "test");
+
+  ASSERT_GE(ghost_calls_.size(), 2u);
+  EXPECT_EQ(ghost_calls_[0].kind, GhostCall::kDestroyGhost);
+  EXPECT_EQ(ghost_calls_[0].entity_id, 900u);
+  EXPECT_EQ(ghost_calls_[1].kind, GhostCall::kRestoreEntity);
+  EXPECT_EQ(ghost_calls_[1].entity_id, 900u);
+}
+
+TEST_F(CellAppHandlersTest, PeerCellAppDeathFiresDestroyGhostForOrphans) {
+  EnableGhostLifecycleCallbacks();
+  Channel* dying = FakeChannel(0xDEAD);
+  app_.OnCreateGhost({}, dying, MakeGhost(800));
+  ghost_calls_.clear();
+
+  app_.OnPeerCellAppDeath(Address{0x7F000001u, 26002}, dying);
+
+  ASSERT_EQ(ghost_calls_.size(), 1u);
+  EXPECT_EQ(ghost_calls_[0].kind, GhostCall::kDestroyGhost);
+  EXPECT_EQ(ghost_calls_[0].entity_id, 800u);
 }
 
 }  // namespace
