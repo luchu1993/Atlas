@@ -18,8 +18,7 @@ public partial class Npc : CellServerEntity, IDamageable
     {
         // ProjectileSimulator + ServerLocal component are per-cellapp; not
         // carried by Offload, so rewire on every arrival incl. isReload=true.
-        _sim = ProjectileSimulator.ForSpace(kSpaceId);
-        _sim.RegisterTarget(this);
+        AttachSimulator();
         var ai = AddLocalComponent<NpcAiComponent>();
         if (isReload) return;
         // Fresh spawn: seed initial AiTarget / AiFireInterval. Offload-arrived
@@ -36,8 +35,21 @@ public partial class Npc : CellServerEntity, IDamageable
         if (SpaceOwnerRegistry.Find(SpaceId) is MvpSpace space) space.NotifyNpcDead();
     }
 
-    public void BroadcastDamage(int amount, uint attackerId)
+    // Ghost mirror on a peer cellapp: register so a projectile fired here can
+    // detect a hit; the simulator routes damage to the Real via SendCellRpc.
+    protected override void OnGhostInit() => AttachSimulator();
+    protected override void OnGhostDestroy() => _sim?.UnregisterTarget(EntityId);
+
+    private void AttachSimulator()
     {
+        _sim = ProjectileSimulator.ForSpace(kSpaceId);
+        _sim.RegisterTarget(this);
+    }
+
+    public partial void TakeDamage(int amount, uint attackerId)
+    {
+        if (Hp <= 0) return;
+        Hp -= amount;
         AllClients.ShowDamage(amount, attackerId);
         if (Hp > 0) return;
         if (EntityManager.Instance.Get(attackerId) is Avatar killer)

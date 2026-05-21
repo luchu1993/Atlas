@@ -51,6 +51,12 @@
     <method name="Say" exposed="own_client">
       <arg name="text" type="string" />
     </method>
+    <!-- Cross-cellapp damage entry: simulator on attacker's cell calls
+         NativeApi.SendCellRpc when target Avatar is Ghost on this cell. -->
+    <method name="TakeDamage">
+      <arg name="amount"     type="int32" />
+      <arg name="attackerId" type="uint32" />
+    </method>
   </cell_methods>
 
   <components>

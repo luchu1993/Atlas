@@ -68,6 +68,21 @@ public abstract class CellServerEntity : ServerEntity
     // Native side fires AoI exit + invokes OnDestroy; refuses base-owned entities.
     public void DestroySelf() => NativeApi.DestroyCellEntity(EntityId);
 
+    // Public wrapper of the cell-RPC send path for cross-cell helpers (e.g.
+    // ProjectileSimulator) that need to invoke a cell method on the Real
+    // owner when this entity is a Ghost here. No-op (with warning) if Real:
+    // scripts should invoke the method directly in that case.
+    public void InvokeCellMethodFromGhost(int rpcId, System.ReadOnlySpan<byte> payload)
+    {
+        if (IsReal)
+        {
+            Atlas.Diagnostics.Log.Warning(
+                $"InvokeCellMethodFromGhost: entity {EntityId} is Real here — call directly");
+            return;
+        }
+        SendCellRpc(rpcId, payload);
+    }
+
     // Live native read keeps the value in sync with Offload / cross-space
     // migration; cache backs OnDestroy, which runs after C++ erases the entity.
     public uint SpaceId

@@ -26,8 +26,7 @@ public partial class Avatar : CellServerEntity, IDamageable
     {
         // ProjectileSimulator is per-cellapp local state, not in the offload
         // blob; rewire on every arrival (fresh login + offload reload).
-        _sim = ProjectileSimulator.ForSpace(kSpaceId);
-        _sim.RegisterTarget(this);
+        AttachSimulator();
         if (isReload) return;
         Hp = kInitialHp;
         Level = 1;
@@ -41,6 +40,17 @@ public partial class Avatar : CellServerEntity, IDamageable
     protected override void OnDestroy()
     {
         _sim?.UnregisterTarget(EntityId);
+    }
+
+    // Ghost mirror on a peer cellapp: register so an NPC firing on this cell
+    // can hit the Avatar; the simulator routes damage to the Real via SendCellRpc.
+    protected override void OnGhostInit() => AttachSimulator();
+    protected override void OnGhostDestroy() => _sim?.UnregisterTarget(EntityId);
+
+    private void AttachSimulator()
+    {
+        _sim = ProjectileSimulator.ForSpace(kSpaceId);
+        _sim.RegisterTarget(this);
     }
 
     protected override void OnTick(float dt)
@@ -79,10 +89,12 @@ public partial class Avatar : CellServerEntity, IDamageable
         AllClients.OnChat(EntityId, text);
     }
 
-    public void BroadcastDamage(int amount, uint attackerId)
+    public partial void TakeDamage(int amount, uint attackerId)
     {
+        if (_isDead || Hp <= 0) return;
+        Hp -= amount;
         AllClients.ShowDamage(amount, attackerId);
-        if (_isDead || Hp > 0) return;
+        if (Hp > 0) return;
         Hp = 0;
         _isDead = true;
         _deathServerTime = Atlas.Time.ServerTime;

@@ -1,6 +1,7 @@
 using System.Collections.Generic;
 using Atlas.DataTypes;
 using Atlas.Entity;
+using Atlas.Serialization;
 
 namespace Atlas.Mvp.Cell;
 
@@ -97,7 +98,9 @@ internal sealed class ProjectileSimulator
             var entity = kv.Value;
             if (entity.IsDestroyed) continue;
             if (entity is not IDamageable dmg) continue;
-            if (dmg.Hp <= 0) continue;
+            // Ghost's Hp mirrors don't track the Real yet (Phase 2b); gate
+            // dead-skip on Real only. Real-side TakeDamage rejects Hp<=0 again.
+            if (entity.IsReal && dmg.Hp <= 0) continue;
             var p = entity.Position;
             var dx = p.X - s.Position.X;
             // Target center sits ~1m above ground; projectile spawns at 1.2m.
@@ -105,11 +108,38 @@ internal sealed class ProjectileSimulator
             var dz = p.Z - s.Position.Z;
             if (dx * dx + dy * dy + dz * dz > kHitRadiusSq) continue;
 
-            dmg.Hp -= kDamage;
-            dmg.BroadcastDamage(kDamage, s.OwnerId);
+            if (entity.IsReal)
+            {
+                dmg.TakeDamage(kDamage, s.OwnerId);
+            }
+            else
+            {
+                RouteDamageToReal(entity, kDamage, s.OwnerId);
+            }
             return entity.EntityId;
         }
         return 0;
+    }
+
+    // Hit on a Ghost mirror: hand off to the Real owner's cellapp via the
+    // entity-specific TakeDamage cell method; the Real applies HP / death.
+    private static void RouteDamageToReal(CellServerEntity target, int amount, uint attackerId)
+    {
+        int rpcId = target switch
+        {
+            Npc => Atlas.Rpc.RpcIds.Npc_TakeDamage,
+            Avatar => Atlas.Rpc.RpcIds.Avatar_TakeDamage,
+            _ => 0,
+        };
+        if (rpcId == 0) return;
+        var writer = new SpanWriter(64);
+        try
+        {
+            writer.WriteInt32(amount);
+            writer.WriteUInt32(attackerId);
+            target.InvokeCellMethodFromGhost(rpcId, writer.WrittenSpan);
+        }
+        finally { writer.Dispose(); }
     }
 
     private static void BroadcastEnd(Shot s, uint hitTarget)

@@ -270,6 +270,12 @@ public abstract class ServerEntity
     /// cell method).</summary>
     protected internal virtual void OnGhostInit() { }
 
+    /// <summary>Mirror of <see cref="OnGhostInit"/>: fires when the C++ Ghost
+    /// is destroyed (DeleteGhost arrival, Ghost->Real promotion, peer death).
+    /// Override to undo what OnGhostInit set up (e.g. UnregisterTarget).
+    /// OnDestroy is reserved for actual entity death on the Real owner.</summary>
+    protected internal virtual void OnGhostDestroy() { }
+
     // C++ controller state migrates on offload, but Action delegates are
     // managed — scripts must re-StartTimer in OnInit(isReload=true).
     private Dictionary<int, (bool Repeat, Action Callback)>? _timers;

@@ -396,6 +396,10 @@ internal static unsafe class NativeCallbacks
         try
         {
             ThreadGuard.EnsureMainThread();
+            if (EntityManager.Instance.Get(entityId) is ServerEntity entity && entity.IsGhost)
+            {
+                entity.OnGhostDestroy();
+            }
             EntityManager.Instance.RemoveSilently(entityId);
         }
         catch (Exception ex)

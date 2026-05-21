@@ -28,4 +28,13 @@
     </method>
   </client_methods>
 
+  <!-- Cross-cellapp damage entry: simulator on shooter's cell calls
+       NativeApi.SendCellRpc when target is Ghost, routing to the Real. -->
+  <cell_methods>
+    <method name="TakeDamage">
+      <arg name="amount"     type="int32" />
+      <arg name="attackerId" type="uint32" />
+    </method>
+  </cell_methods>
+
 </entity>
