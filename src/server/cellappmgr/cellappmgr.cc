@@ -113,6 +113,7 @@ void CellAppMgr::RegisterWatchers() {
 void CellAppMgr::OnTickComplete() {
   ManagerApp::OnTickComplete();
   DrainPendingGeometryBroadcasts();
+  DrainExpiredCreateSpaceRequests();
   const auto tick = GameTime();
   if (tick - last_balance_tick_ >= kBalanceTickInterval) {
     last_balance_tick_ = tick;
@@ -181,19 +182,19 @@ void CellAppMgr::OnRegisterCellApp(const Address& src, Channel* ch,
   ATLAS_LOG_INFO("CellAppMgr: CellApp registered app_id={} internal={}:{}", app_id,
                  kInternalAddr.Ip(), kInternalAddr.Port());
 
-  // Drain any CreateSpaceRequests parked by an earlier "no CellApps" race.
-  if (!pending_space_creates_awaiting_cellapps_.empty()) {
-    auto queued = std::move(pending_space_creates_awaiting_cellapps_);
-    pending_space_creates_awaiting_cellapps_.clear();
-    for (auto& entry : queued) {
-      OnCreateSpaceRequest(entry.src, entry.ch, entry.msg);
-    }
+  // Extend every pending CreateSpace's quiescence deadline: a fresh
+  // registration means more cellapps may still be on the way, so push the
+  // bootstrap firing further out. The next tick that finds an expired
+  // entry actually fires it.
+  const auto extended = Clock::now() + startup_quiescence_window_;
+  for (auto& entry : pending_space_creates_awaiting_cellapps_) {
+    entry.quiescence_deadline = extended;
   }
 
   // Elastic grow: a Space bootstrapped with N cellapps can absorb the
   // (N+1)-th cellapp here by splitting its heaviest leaf onto the new
-  // host. Also closes the boot-time race where queued CreateSpace drained
-  // before all sibling cellapps registered.
+  // host. Only fires for Spaces that already exist; pending ones are
+  // covered by the deadline above.
   auto self_it = cellapps_.find(kInternalAddr);
   if (self_it != cellapps_.end()) GrowSpacesForNewCellApp(self_it->second);
 }
@@ -230,65 +231,85 @@ void CellAppMgr::OnInformCellLoad(const Address& /*src*/, Channel* /*ch*/,
   ATLAS_LOG_WARNING("CellAppMgr: InformCellLoad for unknown app_id={}", msg.app_id);
 }
 
-void CellAppMgr::OnCreateSpaceRequest(const Address& src, Channel* ch,
-                                      const cellappmgr::CreateSpaceRequest& msg) {
-  // Always reply - success OR failure. The originator (BaseApp /
-  // script) tracks a per-request callback via request_id and needs a
-  // terminal signal to resolve it.
-  auto send_reply = [&](bool ok, cellappmgr::CellID cell_id, Address host_addr) {
-    cellappmgr::SpaceCreatedResult reply;
-    reply.request_id = msg.request_id;
-    reply.space_id = msg.space_id;
-    reply.success = ok;
-    reply.cell_id = cell_id;
-    reply.host_addr = host_addr;
-    // Prefer reply_addr (BaseApp's advertised RUDP) over the raw src
-    // because BaseApp may have multiple channels into CellAppMgr; the
-    // reply_addr is the one its pending-requests table is keyed on.
-    // Fall back to `ch` if reply_addr is default-constructed.
-    if (msg.reply_addr.Port() != 0) {
-      auto reply_ch = Network().ConnectRudpNocwnd(msg.reply_addr);
-      if (reply_ch) {
-        if (auto r = (*reply_ch)->SendMessage(reply); !r) {
-          ATLAS_LOG_WARNING(
-              "CellAppMgr: SpaceCreatedResult send failed (space_id={} via reply_addr {}): {}",
-              reply.space_id, msg.reply_addr.ToString(), r.Error().Message());
-        }
-      }
-    } else if (ch != nullptr) {
-      if (auto r = ch->SendMessage(reply); !r) {
-        ATLAS_LOG_WARNING("CellAppMgr: SpaceCreatedResult send failed (space_id={}, src {}): {}",
-                          reply.space_id, src.ToString(), r.Error().Message());
+void CellAppMgr::SendCreateSpaceReply(const cellappmgr::CreateSpaceRequest& msg,
+                                      const Address& src, Channel* ch, bool ok,
+                                      cellappmgr::CellID cell_id, Address host_addr) {
+  cellappmgr::SpaceCreatedResult reply;
+  reply.request_id = msg.request_id;
+  reply.space_id = msg.space_id;
+  reply.success = ok;
+  reply.cell_id = cell_id;
+  reply.host_addr = host_addr;
+  // Prefer reply_addr (BaseApp's advertised RUDP) over raw src because
+  // BaseApp may have multiple channels into CellAppMgr; the reply_addr is
+  // the one its pending-requests table is keyed on. Fall back to `ch`.
+  if (msg.reply_addr.Port() != 0) {
+    auto reply_ch = Network().ConnectRudpNocwnd(msg.reply_addr);
+    if (reply_ch) {
+      if (auto r = (*reply_ch)->SendMessage(reply); !r) {
+        ATLAS_LOG_WARNING(
+            "CellAppMgr: SpaceCreatedResult send failed (space_id={} via reply_addr {}): {}",
+            reply.space_id, msg.reply_addr.ToString(), r.Error().Message());
       }
     }
-    (void)src;
-  };
+  } else if (ch != nullptr) {
+    if (auto r = ch->SendMessage(reply); !r) {
+      ATLAS_LOG_WARNING("CellAppMgr: SpaceCreatedResult send failed (space_id={}, src {}): {}",
+                        reply.space_id, src.ToString(), r.Error().Message());
+    }
+  }
+  (void)src;
+}
 
+void CellAppMgr::OnCreateSpaceRequest(const Address& src, Channel* ch,
+                                      const cellappmgr::CreateSpaceRequest& msg) {
   if (msg.space_id == kInvalidSpaceID) {
     ATLAS_LOG_WARNING("CellAppMgr: CreateSpaceRequest with invalid space_id=0");
-    send_reply(/*ok=*/false, 0, Address{});
+    SendCreateSpaceReply(msg, src, ch, /*ok=*/false, 0, Address{});
     return;
   }
   if (spaces_.contains(msg.space_id)) {
     ATLAS_LOG_WARNING("CellAppMgr: CreateSpaceRequest for existing space_id={}", msg.space_id);
-    send_reply(/*ok=*/false, 0, Address{});
+    SendCreateSpaceReply(msg, src, ch, /*ok=*/false, 0, Address{});
     return;
   }
 
+  // Every valid request goes through the quiescence queue. Drain in
+  // OnRegisterCellApp / OnTickComplete fires the actual bootstrap once
+  // cellapp registrations stop arriving for startup_quiescence_window_.
+  ATLAS_LOG_INFO("CellAppMgr: queueing CreateSpaceRequest space_id={} (have {} cellapps, window {}ms)",
+                 msg.space_id, cellapps_.size(),
+                 std::chrono::duration_cast<std::chrono::milliseconds>(startup_quiescence_window_).count());
+  pending_space_creates_awaiting_cellapps_.push_back(
+      {msg, src, ch, Clock::now() + startup_quiescence_window_});
+  // Zero-window path (tests, single-instance bootstrap) fires immediately
+  // without waiting for the next OnTickComplete pump.
+  DrainExpiredCreateSpaceRequests();
+}
+
+void CellAppMgr::ExecuteCreateSpace(const cellappmgr::CreateSpaceRequest& msg, const Address& src,
+                                    Channel* ch) {
+  // Drain-time guard: a second request that landed during quiescence may
+  // have committed the same space_id; reject the dup rather than overwrite.
+  if (spaces_.contains(msg.space_id)) {
+    ATLAS_LOG_WARNING("CellAppMgr: deferred CreateSpace space_id={} already created — drop",
+                      msg.space_id);
+    SendCreateSpaceReply(msg, src, ch, /*ok=*/false, 0, Address{});
+    return;
+  }
+  if (cellapps_.empty()) {
+    ATLAS_LOG_WARNING("CellAppMgr: deferred CreateSpace space_id={} found 0 cellapps — fail",
+                      msg.space_id);
+    SendCreateSpaceReply(msg, src, ch, /*ok=*/false, 0, Address{});
+    return;
+  }
+
+  // initial_cell_count is a ceiling; bootstrap uses the live registered
+  // cellapp count if smaller. BaseApp sends a "use all available" ceiling
+  // (16) so a stagger-launched cluster ends with N cells == N cellapps.
   const std::size_t requested = std::max<std::size_t>(1, msg.initial_cell_count);
   auto hosts = SortedHostsForBootstrap(requested);
-  if (hosts.empty()) {
-    // Race: BaseApp's CreateSpaceRequest can land before any CellApp has
-    // registered. Hold the request rather than failing — OnRegisterCellApp
-    // drains the queue once a host is available.
-    ATLAS_LOG_INFO("CellAppMgr: queueing CreateSpaceRequest space_id={} until a CellApp registers",
-                   msg.space_id);
-    pending_space_creates_awaiting_cellapps_.push_back({msg, src, ch});
-    return;
-  }
 
-  // Seed cell 1 on hosts[0], then bootstrap to N cells across hosts[1..N-1]
-  // when the request asks for it and enough CellApps are registered.
   const cellappmgr::CellID first_cell_id = next_cell_id_++;
   CellInfo leaf;
   leaf.cell_id = first_cell_id;
@@ -324,7 +345,22 @@ void CellAppMgr::OnCreateSpaceRequest(const Address& src, Channel* ch,
   ATLAS_LOG_INFO("CellAppMgr: created Space {} with {} cell(s); primary host app_id={} ({}:{})",
                  msg.space_id, seeded.bsp.Leaves().size(), hosts[0]->app_id,
                  hosts[0]->internal_addr.Ip(), hosts[0]->internal_addr.Port());
-  send_reply(/*ok=*/true, first_cell_id, hosts[0]->internal_addr);
+  SendCreateSpaceReply(msg, src, ch, /*ok=*/true, first_cell_id, hosts[0]->internal_addr);
+}
+
+void CellAppMgr::DrainExpiredCreateSpaceRequests() {
+  if (pending_space_creates_awaiting_cellapps_.empty()) return;
+  const auto now = Clock::now();
+  auto& q = pending_space_creates_awaiting_cellapps_;
+  for (auto it = q.begin(); it != q.end();) {
+    if (now >= it->quiescence_deadline && !cellapps_.empty()) {
+      auto entry = std::move(*it);
+      it = q.erase(it);
+      ExecuteCreateSpace(entry.msg, entry.src, entry.ch);
+    } else {
+      ++it;
+    }
+  }
 }
 
 auto CellAppMgr::SortedHostsForBootstrap(std::size_t max) const

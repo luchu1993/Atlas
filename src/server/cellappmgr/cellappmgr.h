@@ -92,6 +92,15 @@ class CellAppMgr : public ManagerApp {
   // dead/slow receiver doesn't stall the cluster.
   void DrainPendingGeometryBroadcasts();
 
+  // Quiescence-driven Space creation. ExecuteCreateSpace is the actual
+  // bootstrap body, Drain fires it for entries past their deadline, and
+  // SendCreateSpaceReply unifies the success / failure reply path.
+  void SendCreateSpaceReply(const cellappmgr::CreateSpaceRequest& msg, const Address& src,
+                            Channel* ch, bool ok, cellappmgr::CellID cell_id, Address host_addr);
+  void ExecuteCreateSpace(const cellappmgr::CreateSpaceRequest& msg, const Address& src,
+                          Channel* ch);
+  void DrainExpiredCreateSpaceRequests();
+
   [[nodiscard]] auto PickAlternateHost(const Address& exclude_addr) const -> const CellAppInfo*;
 
   // Prefers a survivor that already holds a leaf of this space — its
@@ -115,12 +124,16 @@ class CellAppMgr : public ManagerApp {
     float median_z{0.f};
   };
   std::unordered_map<cellappmgr::CellID, CellDistribution> cell_distributions_;
-  // CreateSpaceRequests received before any CellApp registered; drained the
-  // moment the first CellApp registers. Each entry is (msg, src, channel).
+  // Startup-gating queue: CreateSpaceRequests are deferred until cellapp
+  // registrations quiesce. Each new cellapp registration extends the
+  // deadline so a stagger-launched cluster (e.g. 3 cellapps arrive, then
+  // the 4th 100 ms later) bootstraps all N at once instead of creating an
+  // N-1 partition and immediately elastic-growing the late arrival.
   struct PendingSpaceCreate {
     cellappmgr::CreateSpaceRequest msg;
     Address src;
     Channel* ch;
+    TimePoint quiescence_deadline;
   };
   std::vector<PendingSpaceCreate> pending_space_creates_awaiting_cellapps_;
 
@@ -152,6 +165,16 @@ class CellAppMgr : public ManagerApp {
   // Past this window we broadcast geometry without the ack; OnCellAppDeath
   // will rehome the leaf if the receiver is actually dead.
   static constexpr Duration kPendingGeometryTimeout = Milliseconds(500);
+  // Startup quiescence: a pending CreateSpace fires this long after the
+  // last cellapp registration. Each new register resets the deadline so a
+  // straggler within the window joins the initial partition. Tests pin to
+  // zero so the bootstrap fires synchronously on the next tick.
+  static constexpr Duration kStartupQuiescenceWindowDefault =
+      std::chrono::duration_cast<Duration>(std::chrono::seconds(2));
+  Duration startup_quiescence_window_{kStartupQuiescenceWindowDefault};
+
+ public:
+  void SetStartupQuiescenceWindowForTest(Duration w) { startup_quiescence_window_ = w; }
 };
 
 }  // namespace atlas

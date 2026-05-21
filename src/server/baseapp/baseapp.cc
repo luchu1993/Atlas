@@ -2119,8 +2119,11 @@ void BaseApp::DispatchSpawnLocalEntity(cellapp::SpawnLocalEntity msg) {
 
 void BaseApp::EnsureSpaceBootstrap(SpaceID space_id) {
   if (!in_flight_space_requests_.insert(space_id).second) return;
-  const uint16_t cell_count =
-      static_cast<uint16_t>(std::clamp<std::size_t>(cellapp_peers_.Size(), 1, 16));
+  // initial_cell_count is now a ceiling for CellAppMgr's quiescence-window
+  // bootstrap (BigWorld-aligned). Sending the max (16) lets CellAppMgr use
+  // all cellapps that register before quiescence drains, instead of locking
+  // in BaseApp's possibly-stale cellapp_peers_.Size() at request time.
+  const uint16_t cell_count = 16;
   RequestCreateSpace(
       space_id,
       [this](bool ok, SpaceID s, const Address& host) {

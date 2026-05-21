@@ -82,6 +82,9 @@ class TestCellAppMgr final : public CellAppMgr {
  protected:
   auto Init(int argc, char* argv[]) -> bool override {
     if (!CellAppMgr::Init(argc, argv)) return false;
+    // Bypass startup quiescence: tests pace events explicitly and don't
+    // want the 2s production stagger window inflating wall-clock time.
+    SetStartupQuiescenceWindowForTest(Duration::zero());
     Address addr = Network().RudpAddress();
     if (addr.Ip() == 0) addr = Address("127.0.0.1", addr.Port());
     addr_promise_.set_value(addr);

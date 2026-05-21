@@ -30,6 +30,9 @@ struct CellAppMgrHarness {
   EventDispatcher dispatcher{"cellappmgr-test"};
   NetworkInterface network{dispatcher};
   CellAppMgr mgr{dispatcher, network};
+  // Pin the startup quiescence window to zero so OnCreateSpaceRequest fires
+  // ExecuteCreateSpace synchronously instead of deferring 2s for stragglers.
+  CellAppMgrHarness() { mgr.SetStartupQuiescenceWindowForTest(Duration::zero()); }
 };
 
 auto MakePeerAddr(uint16_t port) -> Address {
