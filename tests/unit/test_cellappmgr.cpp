@@ -282,13 +282,17 @@ TEST(CellAppMgr, CellAppDeath_UnknownAddrSilent) {
 
 // A death with surviving peers rehomes every orphaned leaf onto a
 // survivor so BSP routing stays correct.
-TEST(CellAppMgr, CellAppDeath_PrefersInSpaceAlternate) {
+TEST(CellAppMgr, CellAppDeath_UnsplitsOrphanedLeafIntoSibling) {
+  // BigWorld-aligned: when a cellapp dies, every leaf it owned is removed
+  // from the BSP and the sibling subtree absorbs the bounds. The dying
+  // cell's id is freed; the sibling cellapp (B, also in this space) ends
+  // up owning the full area without an explicit rehome handoff. C is
+  // registered too but stays untouched — Unsplit doesn't need a heuristic
+  // host pick when a sibling already exists.
   CellAppMgrHarness h;
   cellappmgr::RegisterCellApp reg_a;
   reg_a.internal_addr = MakePeerAddr(30001);
   h.mgr.OnRegisterCellApp(reg_a.internal_addr, nullptr, reg_a);
-  // C registered before B so C wins the default app_id tiebreaker.
-  // The in-space preference is what must drag selection to B.
   cellappmgr::RegisterCellApp reg_c;
   reg_c.internal_addr = MakePeerAddr(30003);
   h.mgr.OnRegisterCellApp(reg_c.internal_addr, nullptr, reg_c);
@@ -300,22 +304,23 @@ TEST(CellAppMgr, CellAppDeath_PrefersInSpaceAlternate) {
   csr.space_id = 7;
   csr.request_id = 1;
   h.mgr.OnCreateSpaceRequest(Address{}, nullptr, csr);
-  const auto primary_id = h.mgr.Spaces().at(7).bsp.PrimaryCellId();
+  const auto primary_id_before = h.mgr.Spaces().at(7).bsp.PrimaryCellId();
   ASSERT_EQ(h.mgr.Spaces().at(7).bsp.Leaves()[0]->cellapp_addr, reg_a.internal_addr);
 
-  // Split: hand the right half to B so B is a same-space survivor.
   CellInfo right;
   right.cell_id = 999;
   right.cellapp_addr = reg_b.internal_addr;
-  ASSERT_TRUE(h.mgr.SpacesForTest().at(7).bsp.Split(primary_id, BSPAxis::kX, 0.f, right).HasValue());
+  ASSERT_TRUE(h.mgr.SpacesForTest().at(7).bsp.Split(primary_id_before, BSPAxis::kX, 0.f, right)
+                  .HasValue());
 
   h.mgr.OnCellAppDeath(reg_a.internal_addr);
 
   const auto& after = h.mgr.Spaces().at(7);
-  const auto* primary = after.bsp.FindCellById(primary_id);
-  ASSERT_NE(primary, nullptr);
-  EXPECT_EQ(primary->cellapp_addr, reg_b.internal_addr)
-      << "owner handoff should prefer in-space survivor B over default pick C";
+  // A's cell is gone; the tree shrinks to a single leaf owned by B.
+  ASSERT_EQ(after.bsp.Leaves().size(), 1u);
+  EXPECT_EQ(after.bsp.PrimaryCellId(), 999u);
+  EXPECT_EQ(after.bsp.Leaves()[0]->cellapp_addr, reg_b.internal_addr);
+  EXPECT_EQ(after.bsp.FindCellById(primary_id_before), nullptr);
 }
 
 TEST(CellAppMgr, CellAppDeath_RehomesLeavesToSurvivor) {

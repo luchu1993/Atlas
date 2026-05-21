@@ -253,6 +253,67 @@ auto BSPTree::Split(cellappmgr::CellID existing_cell_id, BSPAxis axis, float pos
   return SplitInSubtree(root_, root_bounds_, existing_cell_id, axis, position, new_cell);
 }
 
+namespace {
+
+// Recursive descent for Unsplit — walks unique_ptr slots so the dying leaf's
+// parent internal node can be replaced in-place by the sibling subtree.
+auto UnsplitInSubtree(std::unique_ptr<BSPNode>& slot, const CellBounds& sub_bounds,
+                      cellappmgr::CellID target_id) -> Result<void> {
+  auto* internal = dynamic_cast<BSPInternal*>(slot.get());
+  if (!internal) {
+    // Recursion reached a leaf without finding the target's parent.
+    return Error{ErrorCode::kNotFound, "BSPTree::Unsplit: cell_id not found"};
+  }
+  // Compute child sub-bounds for both descent + sibling promotion.
+  CellBounds left_b = sub_bounds;
+  CellBounds right_b = sub_bounds;
+  if (internal->Axis() == BSPAxis::kX) {
+    left_b.max_x = internal->Position();
+    right_b.min_x = internal->Position();
+  } else {
+    left_b.max_z = internal->Position();
+    right_b.min_z = internal->Position();
+  }
+  // Direct hit: one of our children is the dying leaf — promote the sibling.
+  if (auto* left_leaf = dynamic_cast<BSPLeaf*>(internal->Left());
+      left_leaf != nullptr && left_leaf->Info().cell_id == target_id) {
+    auto sibling = std::move(internal->RightSlot());
+    slot = std::move(sibling);
+    slot->PropagateBounds(sub_bounds);
+    return {};
+  }
+  if (auto* right_leaf = dynamic_cast<BSPLeaf*>(internal->Right());
+      right_leaf != nullptr && right_leaf->Info().cell_id == target_id) {
+    auto sibling = std::move(internal->LeftSlot());
+    slot = std::move(sibling);
+    slot->PropagateBounds(sub_bounds);
+    return {};
+  }
+  // Otherwise probe each subtree for the target. Same linear scan Split uses.
+  std::vector<const CellInfo*> left_leaves;
+  internal->Left()->CollectLeaves(left_leaves);
+  for (const auto* ci : left_leaves) {
+    if (ci->cell_id == target_id)
+      return UnsplitInSubtree(internal->LeftSlot(), left_b, target_id);
+  }
+  return UnsplitInSubtree(internal->RightSlot(), right_b, target_id);
+}
+
+}  // namespace
+
+auto BSPTree::Unsplit(cellappmgr::CellID cell_id) -> Result<void> {
+  if (!root_) return Error{ErrorCode::kInvalidArgument, "BSPTree::Unsplit: empty tree"};
+  // Single-leaf tree: no sibling to promote, caller must handle as orphan.
+  if (auto* leaf = dynamic_cast<BSPLeaf*>(root_.get());
+      leaf != nullptr && leaf->Info().cell_id == cell_id) {
+    return Error{ErrorCode::kInvalidArgument,
+                 "BSPTree::Unsplit: cannot remove the only leaf"};
+  }
+  auto r = UnsplitInSubtree(root_, root_bounds_, cell_id);
+  if (r.HasValue()) RecomputePrimaryCellId();
+  return r;
+}
+
 auto BSPTree::FindCell(float x, float z) const -> const CellInfo* {
   return root_ ? root_->FindCell(x, z) : nullptr;
 }

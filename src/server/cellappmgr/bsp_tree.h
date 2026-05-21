@@ -189,6 +189,12 @@ class BSPTree {
   auto Split(cellappmgr::CellID existing_cell_id, BSPAxis axis, float position, CellInfo new_cell)
       -> Result<void>;
 
+  // Inverse of Split for the cellapp-death path. Removes the leaf with
+  // `cell_id` and promotes its sibling subtree into the parent slot,
+  // expanding the sibling's bounds to cover the merged region. Fails on
+  // single-leaf trees (no sibling to promote).
+  auto Unsplit(cellappmgr::CellID cell_id) -> Result<void>;
+
   [[nodiscard]] auto FindCell(float x, float z) const -> const CellInfo*;
   // Returns nullptr when the point sits within `ghost_region` metres of
   // any split — OffloadChecker uses this to defer migration across the

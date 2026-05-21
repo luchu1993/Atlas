@@ -435,3 +435,55 @@ TEST(BSPTree, Leaves_ReturnsAllInOrder) {
   EXPECT_EQ(leaves[1]->cell_id, 2u);
   EXPECT_EQ(leaves[2]->cell_id, 3u);
 }
+
+// ─── Unsplit (cell merge on cellapp death) ───────────────────────────────────
+
+TEST(BSPTree, Unsplit_TwoLeafTree_PromotesSibling) {
+  auto t = MakeSingleCellTree(1, 30001);
+  ASSERT_TRUE(t.Split(1, BSPAxis::kX, 0.f, MakeLeafInfo(2, 30002)).HasValue());
+  ASSERT_EQ(t.Leaves().size(), 2u);
+  ASSERT_TRUE(t.Unsplit(2).HasValue());
+  auto leaves = t.Leaves();
+  ASSERT_EQ(leaves.size(), 1u);
+  // Surviving leaf (1) inherits the full root bounds.
+  EXPECT_EQ(leaves[0]->cell_id, 1u);
+  // FindCell must route both former halves to the surviving leaf.
+  EXPECT_EQ(t.FindCell(-50.f, 0.f)->cell_id, 1u);
+  EXPECT_EQ(t.FindCell(50.f, 0.f)->cell_id, 1u);
+}
+
+TEST(BSPTree, Unsplit_PromotesPrimaryWhenLeftDies) {
+  auto t = MakeSingleCellTree(1, 30001);
+  ASSERT_TRUE(t.Split(1, BSPAxis::kX, 0.f, MakeLeafInfo(2, 30002)).HasValue());
+  // Kill the primary (cell 1); cell 2 must become the new primary.
+  ASSERT_TRUE(t.Unsplit(1).HasValue());
+  EXPECT_EQ(t.PrimaryCellId(), 2u);
+}
+
+TEST(BSPTree, Unsplit_DeepLeaf_PromotesSiblingSubtree) {
+  auto t = MakeSingleCellTree(1, 30001);
+  ASSERT_TRUE(t.Split(1, BSPAxis::kX, 0.f, MakeLeafInfo(2, 30002)).HasValue());
+  ASSERT_TRUE(t.Split(2, BSPAxis::kZ, 0.f, MakeLeafInfo(3, 30003)).HasValue());
+  ASSERT_EQ(t.Leaves().size(), 3u);
+  // Drop cell 3 — its sibling is leaf 2, which keeps both halves of the
+  // former (cell 2 | cell 3) subtree.
+  ASSERT_TRUE(t.Unsplit(3).HasValue());
+  auto leaves = t.Leaves();
+  ASSERT_EQ(leaves.size(), 2u);
+  // Right half of the world now routed to cell 2.
+  EXPECT_EQ(t.FindCell(50.f, -50.f)->cell_id, 2u);
+  EXPECT_EQ(t.FindCell(50.f, 50.f)->cell_id, 2u);
+}
+
+TEST(BSPTree, Unsplit_RejectsSingleLeafTree) {
+  auto t = MakeSingleCellTree(1, 30001);
+  auto r = t.Unsplit(1);
+  EXPECT_FALSE(r.HasValue());
+}
+
+TEST(BSPTree, Unsplit_RejectsUnknownCellId) {
+  auto t = MakeSingleCellTree(1, 30001);
+  ASSERT_TRUE(t.Split(1, BSPAxis::kX, 0.f, MakeLeafInfo(2, 30002)).HasValue());
+  auto r = t.Unsplit(99);
+  EXPECT_FALSE(r.HasValue());
+}

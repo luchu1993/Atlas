@@ -573,52 +573,59 @@ void CellAppMgr::OnCellAppDeath(const Address& internal_addr) {
   std::vector<std::pair<SpaceID, Address>> rehomes;
 
   for (auto& [space_id, partition] : spaces_) {
-    bool reassigned_any = false;
-    Address first_new_host{};
-    for (auto* leaf : partition.bsp.LeavesMutable()) {
-      if (leaf->cellapp_addr != internal_addr) continue;
+    // Snapshot first — Unsplit mutates the tree mid-iteration.
+    std::vector<cellappmgr::CellID> orphan_ids;
+    for (const auto* leaf : partition.bsp.Leaves()) {
+      if (leaf->cellapp_addr == internal_addr) orphan_ids.push_back(leaf->cell_id);
+    }
+    if (orphan_ids.empty()) continue;
 
-      // Owner handoff: prefer an in-space survivor so its ghost
-      // SpaceData replica becomes the new authoritative source.
+    bool topology_changed = false;
+    Address first_new_host{};
+    for (auto cid : orphan_ids) {
+      // BigWorld-aligned: merge the orphan into its sibling subtree (the
+      // sibling's leaves' bounds grow via PropagateBounds, no rehome).
+      auto r = partition.bsp.Unsplit(cid);
+      if (r.HasValue()) {
+        ATLAS_LOG_INFO(
+            "CellAppMgr: unsplit cell_id={} (space {}) — sibling subtree absorbs bounds",
+            cid, space_id);
+        topology_changed = true;
+        continue;
+      }
+      // Fallback: single-leaf tree (Unsplit refuses) — rehome the only
+      // leaf onto a survivor so the Space is reachable at all.
       const auto* alt = PickAlternateHostInSpace(internal_addr, partition);
       if (alt == nullptr) alt = PickAlternateHost(internal_addr);
       if (alt == nullptr) {
-        // PickAlternateHost only returns nullptr when cellapps_ is
-        // empty, which we already guarded above. Defensive log for a
-        // would-be regression.
         ATLAS_LOG_ERROR(
-            "CellAppMgr: rehoming cell_id={} (space {}) failed — no "
-            "alternate host; leaf left pointing at dead app",
-            leaf->cell_id, space_id);
+            "CellAppMgr: rehoming cell_id={} (space {}) failed — no alternate host", cid,
+            space_id);
         break;
       }
-
+      auto* leaf = partition.bsp.FindCellByIdMutable(cid);
+      if (leaf == nullptr) continue;
       ATLAS_LOG_INFO(
-          "CellAppMgr: rehoming cell_id={} (space {}) from dead app_id={} "
-          "to survivor app_id={}",
-          leaf->cell_id, space_id, dead_app_id, alt->app_id);
-
+          "CellAppMgr: rehoming cell_id={} (space {}) from dead app_id={} to survivor app_id={}",
+          cid, space_id, dead_app_id, alt->app_id);
       leaf->cellapp_addr = alt->internal_addr;
-      // Start the leaf's load from the new host's current load. Keeping
-      // the dead app's last-known load would skew the next Balance pass.
       leaf->load = alt->load;
-
-      // Tell the new host to materialise the local Cell. UpdateGeometry
-      // alone wouldn't - OnUpdateGeometry only resizes existing Cells,
-      // never creates them (cellapp.cc:1141). is_primary=false here: the
-      // rehomed cell is never the primary leaf (BSP keeps that on hosts[0]).
       SendAddCell(*alt, space_id, leaf->cell_id, leaf->bounds, /*is_primary=*/false,
                   partition.space_master_type);
-      reassigned_any = true;
+      topology_changed = true;
       if (first_new_host.Ip() == 0) first_new_host = alt->internal_addr;
     }
 
-    if (reassigned_any) {
-      // Tell every CellApp hosting ANY leaf in this Space that the
-      // layout changed. BroadcastGeometry reads the (now-updated) leaf
-      // list, so the new host is included in the fan-out and learns
-      // about the full BSP in one pass.
+    if (topology_changed) {
+      // After Unsplit, surviving leaves' bounds grew; broadcast tells every
+      // cellapp the new geometry so OnUpdateGeometry resizes their local
+      // Cells accordingly. The post-merge primary owner is the rehome host.
       BroadcastGeometry(partition);
+      if (first_new_host.Ip() == 0) {
+        if (const auto* primary = partition.bsp.FindCellById(partition.bsp.PrimaryCellId())) {
+          first_new_host = primary->cellapp_addr;
+        }
+      }
       rehomes.emplace_back(space_id, first_new_host);
     }
   }
