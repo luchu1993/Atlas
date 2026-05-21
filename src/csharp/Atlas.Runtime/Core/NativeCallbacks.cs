@@ -36,12 +36,9 @@ internal unsafe struct NativeCallbackTable
     // so the C# instance is dropped silently (no OnDestroy). Distinct from
     // EntityDestroyed which signals real death and DOES fire OnDestroy.
     public nint EntityMigratingOut;
-    // Cellapp-only: instantiate the C# Ghost mirror. Called from
-    // OnCreateGhost and from ProcessOffload after Real->Ghost so every cellapp
-    // with a C++ Ghost has a matching C# instance (BigWorld-canonical).
+    // Cellapp-only: every C++ Ghost gets a matching C# mirror; symmetric
+    // with EntityMigratingOut on the destroy side.
     public nint RestoreGhost;
-    // Cellapp-only: drop the C# Ghost silently on DeleteGhost / Ghost->Real
-    // promotion / orphan-on-peer-death. No OnDestroy fires (mirror, not death).
     public nint DestroyGhost;
 }
 
@@ -358,10 +355,13 @@ internal static unsafe class NativeCallbacks
         try
         {
             ThreadGuard.EnsureMainThread();
-            // Promotion / re-arrival edge: destroy_ghost must have run first.
-            // If we see an existing entity here, the Ghost mirror is already
-            // installed (idempotent CreateGhost) — skip silently.
-            if (EntityManager.Instance.Get(entityId) is not null) return;
+            var existing = EntityManager.Instance.Get(entityId);
+            if (existing is not null)
+            {
+                if (!existing.IsGhost)
+                    Log.Warning($"RestoreGhost: entity {entityId} exists as Real — destroy_ghost skipped?");
+                return;
+            }
 
             var entity = EntityFactory.CreateByTypeId(typeId);
             if (entity is null)
@@ -373,13 +373,10 @@ internal static unsafe class NativeCallbacks
             entity.EntityId = entityId;
             entity.IsGhost = true;
             EntityManager.Instance.Register(entity);
-
-            // Position / direction live on the C++ Ghost; pull so scripts that
-            // read Position from the Ghost see the value the simulator advances.
             if (entity is Atlas.Entity.CellServerEntity ce) ce.PullSpawnTransformFromNative();
 
-            // Phase 1 ignores `snapshot`; Phase 2 will deserialize CellPublic
-            // baseline so Ghost-side property reads match the Real.
+            // Property snapshot ignored: Ghost reads of CellPublic fields return
+            // default(T) until a per-property mirror lands; gate readers on IsReal.
             _ = snapshot; _ = len;
 
             entity.OnGhostInit();

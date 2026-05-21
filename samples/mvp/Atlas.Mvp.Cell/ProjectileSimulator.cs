@@ -98,8 +98,8 @@ internal sealed class ProjectileSimulator
             var entity = kv.Value;
             if (entity.IsDestroyed) continue;
             if (entity is not IDamageable dmg) continue;
-            // Ghost's Hp mirrors don't track the Real yet (Phase 2b); gate
-            // dead-skip on Real only. Real-side TakeDamage rejects Hp<=0 again.
+            // Ghost Hp / Position track only the spawn-time mirror today;
+            // gate dead-skip on Real, and accept the stale-pose hit window.
             if (entity.IsReal && dmg.Hp <= 0) continue;
             var p = entity.Position;
             var dx = p.X - s.Position.X;
@@ -121,8 +121,6 @@ internal sealed class ProjectileSimulator
         return 0;
     }
 
-    // Hit on a Ghost mirror: hand off to the Real owner's cellapp via the
-    // entity-specific TakeDamage cell method; the Real applies HP / death.
     private static void RouteDamageToReal(CellServerEntity target, int amount, uint attackerId)
     {
         int rpcId = target switch

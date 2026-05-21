@@ -262,18 +262,9 @@ public abstract class ServerEntity
     /// <summary>Called when the entity is destroyed or during server shutdown.</summary>
     protected internal virtual void OnDestroy() { }
 
-    /// <summary>Called when this cellapp gains a Ghost mirror of the entity.
-    /// OnInit does NOT fire on Ghosts — Real-only setup (movement controllers,
-    /// witness, projectile-target registration on the Real path) stays out of
-    /// Ghost paths. Override for Ghost-side scripting (e.g. registering the
-    /// Ghost as a projectile target so a cross-cell hit routes via exposed
-    /// cell method).</summary>
+    // Ghost-side init / destroy hooks. OnInit / OnDestroy stay reserved for
+    // the Real owner so Ghosts skip movement, witness and controller setup.
     protected internal virtual void OnGhostInit() { }
-
-    /// <summary>Mirror of <see cref="OnGhostInit"/>: fires when the C++ Ghost
-    /// is destroyed (DeleteGhost arrival, Ghost->Real promotion, peer death).
-    /// Override to undo what OnGhostInit set up (e.g. UnregisterTarget).
-    /// OnDestroy is reserved for actual entity death on the Real owner.</summary>
     protected internal virtual void OnGhostDestroy() { }
 
     // C++ controller state migrates on offload, but Action delegates are

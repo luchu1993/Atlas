@@ -46,10 +46,8 @@ using TimerEventFn = void (*)(uint32_t entity_id, int32_t user_arg);
 // offload and by any process that needs to drain in-flight RPCs early.
 using EntityLifecycleCancelFn = void (*)(uint32_t entity_id);
 
-// Cellapp-only: instantiate the C# Ghost mirror on every cell that holds a
-// C++ Ghost (CreateGhost arrival, sender post-Offload). Same entity class as
-// the Real; OnInit is skipped, OnGhostInit fires instead. snapshot carries
-// other_snapshot bytes for Phase-2 property mirroring (Phase-1 ignores).
+// Cellapp-only: C# Ghost mirror creation. snapshot is other_snapshot bytes —
+// currently unused on the C# side (Ghost CellPublic reads return defaults).
 using RestoreGhostFn = void (*)(uint32_t entity_id, uint16_t type_id,
                                 const uint8_t* snapshot, int32_t len);
 

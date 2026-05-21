@@ -107,9 +107,7 @@ class CellAppNativeProvider : public BaseNativeProvider {
   [[nodiscard]] auto entity_migrating_out_fn() const -> EntityDestroyedFn {
     return entity_migrating_out_fn_;
   }
-  // C# Ghost instantiation on CreateGhost / Real→Ghost transitions.
   [[nodiscard]] auto restore_ghost_fn() const -> RestoreGhostFn { return restore_ghost_fn_; }
-  // Silent C# Ghost removal on DeleteGhost / Ghost→Real promotion.
   [[nodiscard]] auto destroy_ghost_fn() const -> EntityDestroyedFn { return destroy_ghost_fn_; }
 
  private:

@@ -1175,9 +1175,6 @@ void CellApp::OnCreateGhost(const Address& /*src*/, Channel* ch, const cellapp::
   // Real (via BaseApp's CurrentCell table).
   entity_population_[msg.entity_id] = entity_ptr_raw;
 
-  // C# Ghost mirror — BigWorld-canonical: same entity class as the Real, but
-  // marked IsGhost so scripts gate Real-only work (movement, witness mods)
-  // and cross-cell exposed methods route to the Real owner.
   if (native_provider_ && native_provider_->restore_ghost_fn() != nullptr) {
     const auto* data = msg.other_snapshot.empty()
                            ? nullptr
@@ -2049,9 +2046,8 @@ void CellApp::TickOffloadChecker() {
         cell->RemoveRealEntity(op.entity);
       }
 
-      // Re-create the C# instance as a Ghost mirror — the migrating-out path
-      // above dropped the Real, but the C++ CellEntity now persists as Ghost
-      // and BigWorld-style scripts expect a C# Ghost alongside it.
+      // Re-create C# as Ghost; differs from BigWorld's flag-flip — any state
+      // populated outside OnInit / OnGhostInit is dropped across the boundary.
       if (native_provider_ && native_provider_->restore_ghost_fn() != nullptr) {
         const auto* data = msg.other_snapshot.empty()
                                ? nullptr
