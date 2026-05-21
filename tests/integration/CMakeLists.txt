@@ -111,6 +111,12 @@ atlas_add_test(NAME test_offload_traversal
   LABEL integration
 )
 
+atlas_add_test(NAME test_cross_cell_rpc
+  SOURCES test_cross_cell_rpc.cpp
+  DEPS atlas_cellapp_lib atlas_server atlas_network
+  LABEL integration
+)
+
 # Hot reload: bootstraps real ClrScriptEngine + Atlas.Runtime, exercises
 # ClrHotReload state machine + failure paths. End-to-end SerializeAndUnload
 # round-trip is covered by C# ScriptHostTests.
