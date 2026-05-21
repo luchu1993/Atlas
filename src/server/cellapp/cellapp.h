@@ -336,10 +336,8 @@ class CellApp : public EntityApp {
   static constexpr float kInformCellLoadDelta = 0.01f;
   static constexpr Duration kInformCellLoadHeartbeat = std::chrono::seconds(1);
 
-  // Per-cell median smoothing — BigWorld-aligned. Without this the elastic-
-  // grow / future periodic rebalance sees the instant median (jumps to a
-  // single entity's coord when the cell is near-empty) and picks a degenerate
-  // split position. 30 samples @ ~1Hz = 30s window.
+  // 30-sample ring (~30s @ 1Hz) damps the per-cell median against single-
+  // entity jitter that would otherwise drag the split position to one coord.
   struct CellMedianWindow {
     static constexpr uint8_t kCap = 30;
     std::array<float, kCap> xs{};

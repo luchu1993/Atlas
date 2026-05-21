@@ -182,10 +182,6 @@ void CellAppMgr::OnRegisterCellApp(const Address& src, Channel* ch,
   ATLAS_LOG_INFO("CellAppMgr: CellApp registered app_id={} internal={}:{}", app_id,
                  kInternalAddr.Ip(), kInternalAddr.Port());
 
-  // Extend every pending CreateSpace's quiescence deadline: a fresh
-  // registration means more cellapps may still be on the way, so push the
-  // bootstrap firing further out. The next tick that finds an expired
-  // entry actually fires it.
   const auto extended = Clock::now() + startup_quiescence_window_;
   for (auto& entry : pending_space_creates_awaiting_cellapps_) {
     entry.quiescence_deadline = extended;
@@ -203,30 +199,42 @@ void CellAppMgr::OnInformCellLoad(const Address& /*src*/, Channel* /*ch*/,
                                   const cellappmgr::InformCellLoad& msg) {
   // Linear lookup by app_id; CellApp count is bounded at 255.
   for (auto& [addr, info] : cellapps_) {
-    if (info.app_id == msg.app_id) {
-      info.load = std::clamp(msg.load, 0.f, 1.f);
-      info.entity_count = msg.entity_count;
-      info.last_load_report_at = Clock::now();
-      // Push aggregate load onto every leaf this CellApp owns. Per-cell
-      // entity counts arrive via msg.cells and feed cell_distributions_.
+    if (info.app_id != msg.app_id) continue;
+    info.load = std::clamp(msg.load, 0.f, 1.f);
+    info.entity_count = msg.entity_count;
+    info.last_load_report_at = Clock::now();
+    if (msg.cells.empty()) {
+      // Legacy aggregate-only report (older runtime, minimal-shaped tests).
       for (auto& [_, partition] : spaces_) {
         for (auto* ci : partition.bsp.Leaves()) {
           if (ci->cellapp_addr == addr) {
-            auto* mut = partition.bsp.FindCellByIdMutable(ci->cell_id);
-            if (mut != nullptr) mut->load = info.load;
-          }
-        }
-      }
-      for (const auto& rep : msg.cells) {
-        cell_distributions_[rep.cell_id] = {rep.entity_count, rep.median_x, rep.median_z};
-        for (auto& [_, partition] : spaces_) {
-          if (auto* mut = partition.bsp.FindCellByIdMutable(rep.cell_id); mut != nullptr) {
-            mut->entity_count = rep.entity_count;
+            if (auto* mut = partition.bsp.FindCellByIdMutable(ci->cell_id); mut != nullptr) {
+              mut->load = info.load;
+            }
           }
         }
       }
       return;
     }
+    // Per-cell load = cellapp load × entity_count share. Balance reads
+    // leaf->load to pick split direction; aggregate mirror would tie hot
+    // and cold cells of the same cellapp.
+    const uint32_t total_entities = msg.entity_count;
+    for (const auto& rep : msg.cells) {
+      cell_distributions_[rep.cell_id] = {rep.entity_count, rep.median_x, rep.median_z};
+      const float share = total_entities > 0
+                              ? static_cast<float>(rep.entity_count) /
+                                    static_cast<float>(total_entities)
+                              : 1.f / std::max<float>(1.f, static_cast<float>(msg.cells.size()));
+      const float per_cell_load = share * info.load;
+      for (auto& [_, partition] : spaces_) {
+        if (auto* mut = partition.bsp.FindCellByIdMutable(rep.cell_id); mut != nullptr) {
+          mut->entity_count = rep.entity_count;
+          mut->load = per_cell_load;
+        }
+      }
+    }
+    return;
   }
   ATLAS_LOG_WARNING("CellAppMgr: InformCellLoad for unknown app_id={}", msg.app_id);
 }
@@ -240,9 +248,8 @@ void CellAppMgr::SendCreateSpaceReply(const cellappmgr::CreateSpaceRequest& msg,
   reply.success = ok;
   reply.cell_id = cell_id;
   reply.host_addr = host_addr;
-  // Prefer reply_addr (BaseApp's advertised RUDP) over raw src because
-  // BaseApp may have multiple channels into CellAppMgr; the reply_addr is
-  // the one its pending-requests table is keyed on. Fall back to `ch`.
+  // reply_addr keys BaseApp's pending-requests table; raw src is the wrong
+  // channel when BaseApp has multiple into mgr.
   if (msg.reply_addr.Port() != 0) {
     auto reply_ch = Network().ConnectRudpNocwnd(msg.reply_addr);
     if (reply_ch) {
@@ -274,23 +281,17 @@ void CellAppMgr::OnCreateSpaceRequest(const Address& src, Channel* ch,
     return;
   }
 
-  // Every valid request goes through the quiescence queue. Drain in
-  // OnRegisterCellApp / OnTickComplete fires the actual bootstrap once
-  // cellapp registrations stop arriving for startup_quiescence_window_.
   ATLAS_LOG_INFO("CellAppMgr: queueing CreateSpaceRequest space_id={} (have {} cellapps, window {}ms)",
                  msg.space_id, cellapps_.size(),
                  std::chrono::duration_cast<std::chrono::milliseconds>(startup_quiescence_window_).count());
   pending_space_creates_awaiting_cellapps_.push_back(
       {msg, src, ch, Clock::now() + startup_quiescence_window_});
-  // Zero-window path (tests, single-instance bootstrap) fires immediately
-  // without waiting for the next OnTickComplete pump.
+  // Zero-window path (tests) fires synchronously rather than next tick.
   DrainExpiredCreateSpaceRequests();
 }
 
 void CellAppMgr::ExecuteCreateSpace(const cellappmgr::CreateSpaceRequest& msg, const Address& src,
                                     Channel* ch) {
-  // Drain-time guard: a second request that landed during quiescence may
-  // have committed the same space_id; reject the dup rather than overwrite.
   if (spaces_.contains(msg.space_id)) {
     ATLAS_LOG_WARNING("CellAppMgr: deferred CreateSpace space_id={} already created — drop",
                       msg.space_id);
@@ -304,9 +305,7 @@ void CellAppMgr::ExecuteCreateSpace(const cellappmgr::CreateSpaceRequest& msg, c
     return;
   }
 
-  // initial_cell_count is a ceiling; bootstrap uses the live registered
-  // cellapp count if smaller. BaseApp sends a "use all available" ceiling
-  // (16) so a stagger-launched cluster ends with N cells == N cellapps.
+  // initial_cell_count is a ceiling clamped by SortedHostsForBootstrap.
   const std::size_t requested = std::max<std::size_t>(1, msg.initial_cell_count);
   auto hosts = SortedHostsForBootstrap(requested);
 
@@ -583,8 +582,6 @@ void CellAppMgr::OnCellAppDeath(const Address& internal_addr) {
     bool topology_changed = false;
     Address first_new_host{};
     for (auto cid : orphan_ids) {
-      // BigWorld-aligned: merge the orphan into its sibling subtree (the
-      // sibling's leaves' bounds grow via PropagateBounds, no rehome).
       auto r = partition.bsp.Unsplit(cid);
       if (r.HasValue()) {
         ATLAS_LOG_INFO(

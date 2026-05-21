@@ -1705,11 +1705,8 @@ void CellApp::SendInformCellLoad() {
   msg.app_id = app_id_;
   msg.load = persistent_load_;
   msg.entity_count = count;
-  // Per-cell stats drive elastic-grow's heaviest-leaf pick and median split
-  // position; std::nth_element gives O(N) median without a full sort. The
-  // raw median feeds a 30-sample ring (CellMedianWindow); reported value is
-  // the window mean so a single straggler entity can't snap the split
-  // position to its coord.
+  // Reported median is the ring mean (30-sample window) so a single
+  // straggler entity can't snap the split position to its coord.
   std::vector<float> xs;
   std::vector<float> zs;
   std::unordered_set<cellappmgr::CellID> live_cells;
@@ -1732,24 +1729,21 @@ void CellApp::SendInformCellLoad() {
       if (!xs.empty()) {
         const auto mid = xs.size() / 2;
         std::nth_element(xs.begin(), xs.begin() + mid, xs.end());
-        const float instant_x = xs[mid];
         std::nth_element(zs.begin(), zs.begin() + mid, zs.end());
-        const float instant_z = zs[mid];
-        hist.Push(instant_x, instant_z);
+        hist.Push(xs[mid], zs[mid]);
       }
-      // Empty-cell ticks don't push; the window decays to whatever was last
-      // observed, which is stable enough until entities reappear.
       const auto [mx, mz] = hist.Mean();
       rep.median_x = mx;
       rep.median_z = mz;
       msg.cells.push_back(rep);
     }
   }
-  // Prune history for cells that no longer exist on this cellapp (rehome,
-  // Offload, Space destroy) so the map doesn't grow without bound.
   for (auto it = cell_median_window_.begin(); it != cell_median_window_.end();) {
-    if (live_cells.contains(it->first)) ++it;
-    else it = cell_median_window_.erase(it);
+    if (live_cells.contains(it->first)) {
+      ++it;
+    } else {
+      it = cell_median_window_.erase(it);
+    }
   }
   if (auto r = cellappmgr_channel_->SendMessage(msg); !r) {
     // Dropped reports skew the mgr's balancer toward this host.

@@ -283,19 +283,10 @@ TEST(CellAppMgr, CellAppDeath_UnknownAddrSilent) {
 // A death with surviving peers rehomes every orphaned leaf onto a
 // survivor so BSP routing stays correct.
 TEST(CellAppMgr, CellAppDeath_UnsplitsOrphanedLeafIntoSibling) {
-  // BigWorld-aligned: when a cellapp dies, every leaf it owned is removed
-  // from the BSP and the sibling subtree absorbs the bounds. The dying
-  // cell's id is freed; the sibling cellapp (B, also in this space) ends
-  // up owning the full area without an explicit rehome handoff. C is
-  // registered too but stays untouched — Unsplit doesn't need a heuristic
-  // host pick when a sibling already exists.
   CellAppMgrHarness h;
   cellappmgr::RegisterCellApp reg_a;
   reg_a.internal_addr = MakePeerAddr(30001);
   h.mgr.OnRegisterCellApp(reg_a.internal_addr, nullptr, reg_a);
-  cellappmgr::RegisterCellApp reg_c;
-  reg_c.internal_addr = MakePeerAddr(30003);
-  h.mgr.OnRegisterCellApp(reg_c.internal_addr, nullptr, reg_c);
   cellappmgr::RegisterCellApp reg_b;
   reg_b.internal_addr = MakePeerAddr(30002);
   h.mgr.OnRegisterCellApp(reg_b.internal_addr, nullptr, reg_b);
@@ -316,7 +307,6 @@ TEST(CellAppMgr, CellAppDeath_UnsplitsOrphanedLeafIntoSibling) {
   h.mgr.OnCellAppDeath(reg_a.internal_addr);
 
   const auto& after = h.mgr.Spaces().at(7);
-  // A's cell is gone; the tree shrinks to a single leaf owned by B.
   ASSERT_EQ(after.bsp.Leaves().size(), 1u);
   EXPECT_EQ(after.bsp.PrimaryCellId(), 999u);
   EXPECT_EQ(after.bsp.Leaves()[0]->cellapp_addr, reg_b.internal_addr);

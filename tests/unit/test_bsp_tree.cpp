@@ -436,8 +436,6 @@ TEST(BSPTree, Leaves_ReturnsAllInOrder) {
   EXPECT_EQ(leaves[2]->cell_id, 3u);
 }
 
-// ─── Unsplit (cell merge on cellapp death) ───────────────────────────────────
-
 TEST(BSPTree, Unsplit_TwoLeafTree_PromotesSibling) {
   auto t = MakeSingleCellTree(1, 30001);
   ASSERT_TRUE(t.Split(1, BSPAxis::kX, 0.f, MakeLeafInfo(2, 30002)).HasValue());
