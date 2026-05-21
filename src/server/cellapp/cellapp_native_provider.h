@@ -47,6 +47,12 @@ class CellAppNativeProvider : public BaseNativeProvider {
   void SendClientRpc(uint32_t entity_id, uint32_t rpc_id, RpcTarget target,
                      const std::byte* payload, int32_t len, uint64_t trace_id) override;
 
+  // Ghost-side script invokes a cell method on its Real owner; serialises and
+  // forwards via the Ghost's real_channel as cellapp::InternalCellRpc.
+  // Calls on a local Real warn (in-process: scripts should invoke directly).
+  void SendCellRpc(uint32_t entity_id, uint32_t rpc_id, const std::byte* payload, int32_t len,
+                   uint64_t trace_id) override;
+
   auto CreateLocalCellEntity(uint16_t type_id, uint32_t space_id, float pos_x, float pos_y,
                              float pos_z, float dir_x, float dir_y, float dir_z, bool on_ground)
       -> uint32_t override;

@@ -8,6 +8,7 @@
 #include "baseapp/baseapp_messages.h"
 #include "cell_aoi_envelope.h"
 #include "cell_entity.h"
+#include "cellapp_messages.h"
 #include "foundation/log.h"
 #include "math/vector3.h"
 #include "network/channel.h"
@@ -123,6 +124,40 @@ void CellAppNativeProvider::SendClientRpc(uint32_t entity_id, uint32_t rpc_id, R
     msg.trace_id = trace_id;
     if (len > 0) msg.payload.assign(payload, payload + static_cast<std::size_t>(len));
     (void)(*base_ch)->SendMessage(msg);
+  }
+}
+
+void CellAppNativeProvider::SendCellRpc(uint32_t entity_id, uint32_t rpc_id,
+                                        const std::byte* payload, int32_t len, uint64_t trace_id) {
+  if (!IsValidNativePayload(payload, len)) {
+    ATLAS_LOG_WARNING("CellApp: SendCellRpc rejected invalid payload len={}", len);
+    return;
+  }
+  auto* entity = lookup_ ? lookup_(entity_id) : nullptr;
+  if (!entity) {
+    ATLAS_LOG_WARNING("CellApp: SendCellRpc: unknown entity_id={}", entity_id);
+    return;
+  }
+  // A Real here means the script could have called the method directly; this
+  // path exists only for Ghost->Real cross-cell routing.
+  if (entity->IsReal()) {
+    ATLAS_LOG_WARNING("CellApp: SendCellRpc on Real entity_id={} rpc_id=0x{:06X} — call directly",
+                      entity_id, rpc_id);
+    return;
+  }
+  auto* real_ch = entity->GetRealChannel();
+  if (!real_ch) {
+    ATLAS_LOG_WARNING("CellApp: SendCellRpc: Ghost entity_id={} has no real_channel", entity_id);
+    return;
+  }
+  cellapp::InternalCellRpc msg;
+  msg.target_entity_id = entity_id;
+  msg.rpc_id = rpc_id;
+  msg.trace_id = trace_id;
+  if (len > 0) msg.payload.assign(payload, payload + static_cast<std::size_t>(len));
+  if (auto r = real_ch->SendMessage(msg); !r) {
+    ATLAS_LOG_DEBUG("CellApp: SendCellRpc send failed (entity={}, rpc_id=0x{:06X}): {}", entity_id,
+                    rpc_id, r.Error().Message());
   }
 }
 

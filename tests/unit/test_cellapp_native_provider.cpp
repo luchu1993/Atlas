@@ -411,6 +411,20 @@ TEST_F(CellAppNativeProviderTest, PublishReplicationFrameRejectedOnGhost) {
   EXPECT_EQ(e->GetReplicationState(), nullptr);
 }
 
+TEST_F(CellAppNativeProviderTest, SendCellRpcOnRealLogsAndSkips) {
+  // In-process call path: scripts should invoke the method directly, not
+  // route through Ghost->Real wire. SendCellRpc on a Real is a no-op.
+  AddEntity(600);
+  provider_.SendCellRpc(600, /*rpc_id=*/0x800201, nullptr, 0, /*trace_id=*/0);
+  // No crash, no side effect — Real entity is untouched.
+  SUCCEED();
+}
+
+TEST_F(CellAppNativeProviderTest, SendCellRpcOnUnknownEntityLogsAndSkips) {
+  provider_.SendCellRpc(/*entity_id=*/9999, /*rpc_id=*/0x800201, nullptr, 0, /*trace_id=*/0);
+  SUCCEED();
+}
+
 TEST_F(CellAppNativeProviderTest, AddControllersRejectedOnGhost) {
   auto* e = space_.AddEntity(std::make_unique<CellEntity>(
       CellEntity::GhostTag{}, 502, uint16_t{1}, space_, math::Vector3{0, 0, 0},
