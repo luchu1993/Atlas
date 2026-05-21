@@ -85,6 +85,13 @@ public abstract class ReplicatedComponent : ComponentBase
     public virtual void WriteOwnerDelta(ref SpanWriter writer) { }
     public virtual void WriteOtherDelta(ref SpanWriter writer) { }
 
+    // Full-state offload serialization: writes every property in flat propIdx
+    // order, no dirty mask, no audience split. Receiver's DeserializeFull
+    // direct-assigns backing fields so MarkDirty doesn't fire. Generator-
+    // emitted; base no-op keeps hand-written components valid.
+    public virtual void SerializeFull(ref SpanWriter writer) { }
+    public virtual void DeserializeFull(ref SpanReader reader) { }
+
     internal void __Bind(ServerEntity entity, int slotIdx)
     {
         _entity = entity;

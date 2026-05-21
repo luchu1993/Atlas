@@ -120,11 +120,61 @@ internal static class ComponentEmitter
                 EmitAudienceDelta(sb, flat, "WriteOtherDelta",
                                   "OtherVisibleScalarMask", "OtherVisibleContainerMask",
                                   IsOtherVisible);
+                sb.AppendLine();
+                EmitFullSerialize(sb, flat);
+                sb.AppendLine();
+                EmitFullDeserialize(sb, flat);
             }
         }
 
         sb.AppendLine("}");
         return sb.ToString();
+    }
+
+    // Offload full-state writer: every scalar / struct property in flat
+    // propIdx order, then containers as op-log replays. No dirty mask
+    // (receiver direct-assigns into backing fields).
+    private static void EmitFullSerialize(StringBuilder sb,
+                                          List<(PropertyDefModel Prop, int PropIdx)> flat)
+    {
+        sb.AppendLine("    public override void SerializeFull(ref SpanWriter writer)");
+        sb.AppendLine("    {");
+        foreach (var (prop, _) in flat)
+        {
+            if (PropertyCodec.IsList(prop) || PropertyCodec.IsDict(prop)) continue;
+            var fieldName = DefTypeHelper.ToFieldName(prop.Name);
+            sb.AppendLine($"        {PropertyCodec.WriteExpr(prop, "writer", fieldName)};");
+        }
+        foreach (var (prop, _) in flat)
+        {
+            if (PropertyCodec.IsList(prop))
+                PropertyCodec.EmitListWrite(sb, prop, "writer", "        ");
+            else if (PropertyCodec.IsDict(prop))
+                PropertyCodec.EmitDictWrite(sb, prop, "writer", "        ");
+        }
+        sb.AppendLine("    }");
+    }
+
+    private static void EmitFullDeserialize(StringBuilder sb,
+                                            List<(PropertyDefModel Prop, int PropIdx)> flat)
+    {
+        sb.AppendLine("    public override void DeserializeFull(ref SpanReader reader)");
+        sb.AppendLine("    {");
+        foreach (var (prop, _) in flat)
+        {
+            if (PropertyCodec.IsList(prop) || PropertyCodec.IsDict(prop)) continue;
+            var fieldName = DefTypeHelper.ToFieldName(prop.Name);
+            var readExpr = PropertyCodec.ReadExpr(prop, "reader");
+            sb.AppendLine($"        {fieldName} = {readExpr};");
+        }
+        foreach (var (prop, _) in flat)
+        {
+            if (PropertyCodec.IsList(prop))
+                PropertyCodec.EmitListRead(sb, prop, "reader", "        ");
+            else if (PropertyCodec.IsDict(prop))
+                PropertyCodec.EmitDictRead(sb, prop, "reader", "        ");
+        }
+        sb.AppendLine("    }");
     }
 
     // Walks the base chain bottom-up (most-base first), emits each level's

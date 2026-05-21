@@ -42,7 +42,15 @@ internal static class SerializationEmitter
         // originates state so it gets no Serialize.
         if (ctx != ProcessContext.Client)
         {
-            EmitSerialize(sb, sideProps);
+            // Synced component slots ride Cell-side Serialize so Offload
+            // preserves WeaponId / Equipment state etc. Base + Server too —
+            // future cellBackup may stitch them through.
+            var components = ctx == ProcessContext.Client
+                ? new List<ComponentDefModel>()
+                : def.Components
+                    .Where(c => c.Locality == ComponentLocality.Synced && c.SlotIdx > 0)
+                    .ToList();
+            EmitSerialize(sb, sideProps, components);
             sb.AppendLine();
         }
 
@@ -50,13 +58,19 @@ internal static class SerializationEmitter
         // branch in EmitDeserialize is dead for Client ctx today (the side
         // filter already excludes non-visible props) but kept as a harmless
         // passthrough until the wire-format layer is simplified.
-        EmitDeserialize(sb, sideProps, ctx);
+        var deserComponents = ctx == ProcessContext.Client
+            ? new List<ComponentDefModel>()
+            : def.Components
+                .Where(c => c.Locality == ComponentLocality.Synced && c.SlotIdx > 0)
+                .ToList();
+        EmitDeserialize(sb, sideProps, ctx, deserComponents);
 
         sb.AppendLine("}");
         return sb.ToString();
     }
 
-    private static void EmitSerialize(StringBuilder sb, List<PropertyDefModel> props)
+    private static void EmitSerialize(StringBuilder sb, List<PropertyDefModel> props,
+                                       List<ComponentDefModel> components)
     {
         sb.AppendLine("    public override void Serialize(ref SpanWriter writer)");
         sb.AppendLine("    {");
@@ -84,10 +98,44 @@ internal static class SerializationEmitter
         sb.AppendLine("            writer.WriteRawBytes(bodyWriter.WrittenSpan);");
         sb.AppendLine("        }");
         sb.AppendLine("        finally { bodyWriter.Dispose(); }");
+
+        // Component section: per-slot (slot_idx:u8, payload_len:u16, payload)
+        // tuples after the entity body. Reader checks Remaining() before
+        // parsing so pre-component-section blobs deserialize unchanged.
+        if (components.Count > 0)
+        {
+            sb.AppendLine("        byte componentCount = 0;");
+            sb.AppendLine("        if (_replicated != null)");
+            sb.AppendLine("        {");
+            sb.AppendLine("            for (int i = 0; i < _replicated.Length; i++)");
+            sb.AppendLine("                if (_replicated[i] != null) componentCount++;");
+            sb.AppendLine("        }");
+            sb.AppendLine("        writer.WriteByte(componentCount);");
+            sb.AppendLine("        if (_replicated != null && componentCount > 0)");
+            sb.AppendLine("        {");
+            sb.AppendLine("            var compWriter = new SpanWriter(64);");
+            sb.AppendLine("            try");
+            sb.AppendLine("            {");
+            sb.AppendLine("                for (int i = 0; i < _replicated.Length; i++)");
+            sb.AppendLine("                {");
+            sb.AppendLine("                    if (_replicated[i] is { } c)");
+            sb.AppendLine("                    {");
+            sb.AppendLine("                        compWriter.Reset();");
+            sb.AppendLine("                        c.SerializeFull(ref compWriter);");
+            sb.AppendLine("                        writer.WriteByte((byte)i);");
+            sb.AppendLine("                        writer.WriteUInt16((ushort)compWriter.Length);");
+            sb.AppendLine("                        writer.WriteRawBytes(compWriter.WrittenSpan);");
+            sb.AppendLine("                    }");
+            sb.AppendLine("                }");
+            sb.AppendLine("            }");
+            sb.AppendLine("            finally { compWriter.Dispose(); }");
+            sb.AppendLine("        }");
+        }
         sb.AppendLine("    }");
     }
 
-    private static void EmitDeserialize(StringBuilder sb, List<PropertyDefModel> props, ProcessContext ctx)
+    private static void EmitDeserialize(StringBuilder sb, List<PropertyDefModel> props,
+                                         ProcessContext ctx, List<ComponentDefModel> components)
     {
         sb.AppendLine("    public override void Deserialize(ref SpanReader reader)");
         sb.AppendLine("    {");
@@ -144,6 +192,38 @@ internal static class SerializationEmitter
         sb.AppendLine("        var consumed = reader.Position - bodyStart;");
         sb.AppendLine("        if (consumed < bodyLength)");
         sb.AppendLine("            reader.Advance(bodyLength - consumed);");
+
+        // Optional component section — back-compat: blobs from before component
+        // offload preservation have no trailing bytes after the entity body.
+        if (components.Count > 0)
+        {
+            sb.AppendLine("        if (reader.Remaining > 0)");
+            sb.AppendLine("        {");
+            sb.AppendLine("            byte componentCount = reader.ReadByte();");
+            sb.AppendLine("            for (int i = 0; i < componentCount; i++)");
+            sb.AppendLine("            {");
+            sb.AppendLine("                byte slot = reader.ReadByte();");
+            sb.AppendLine("                ushort payloadLen = reader.ReadUInt16();");
+            sb.AppendLine("                var payloadStart = reader.Position;");
+            sb.AppendLine("                switch (slot)");
+            sb.AppendLine("                {");
+            foreach (var c in components)
+            {
+                sb.AppendLine($"                    case {c.SlotIdx}:");
+                sb.AppendLine("                    {");
+                sb.AppendLine($"                        var c{c.SlotIdx} = AddComponent<global::{ComponentEmitter.ComponentNamespace}.{c.TypeName}>();");
+                sb.AppendLine($"                        c{c.SlotIdx}.DeserializeFull(ref reader);");
+                sb.AppendLine($"                        c{c.SlotIdx}.ClearDirty();");
+                sb.AppendLine("                        break;");
+                sb.AppendLine("                    }");
+            }
+            sb.AppendLine("                }");
+            sb.AppendLine("                var compConsumed = reader.Position - payloadStart;");
+            sb.AppendLine("                if (compConsumed < payloadLen)");
+            sb.AppendLine("                    reader.Advance(payloadLen - compConsumed);");
+            sb.AppendLine("            }");
+            sb.AppendLine("        }");
+        }
         sb.AppendLine("    }");
     }
 
