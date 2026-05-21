@@ -336,6 +336,31 @@ class CellApp : public EntityApp {
   static constexpr float kInformCellLoadDelta = 0.01f;
   static constexpr Duration kInformCellLoadHeartbeat = std::chrono::seconds(1);
 
+  // Per-cell median smoothing — BigWorld-aligned. Without this the elastic-
+  // grow / future periodic rebalance sees the instant median (jumps to a
+  // single entity's coord when the cell is near-empty) and picks a degenerate
+  // split position. 30 samples @ ~1Hz = 30s window.
+  struct CellMedianWindow {
+    static constexpr uint8_t kCap = 30;
+    std::array<float, kCap> xs{};
+    std::array<float, kCap> zs{};
+    uint8_t count{0};
+    uint8_t head{0};
+    void Push(float x, float z) {
+      xs[head] = x;
+      zs[head] = z;
+      head = static_cast<uint8_t>((head + 1) % kCap);
+      if (count < kCap) ++count;
+    }
+    [[nodiscard]] auto Mean() const -> std::pair<float, float> {
+      if (count == 0) return {0.f, 0.f};
+      float sx = 0.f, sz = 0.f;
+      for (uint8_t i = 0; i < count; ++i) { sx += xs[i]; sz += zs[i]; }
+      return {sx / count, sz / count};
+    }
+  };
+  std::unordered_map<cellappmgr::CellID, CellMedianWindow> cell_median_window_;
+
   // Shared registry (atlas_server) so both BaseApp and CellApp route
   // through the same Birth/Death + self-filter code.
   CellAppPeerRegistry peer_registry_;

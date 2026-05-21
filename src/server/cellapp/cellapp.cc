@@ -5,6 +5,7 @@
 #include <chrono>
 #include <cmath>
 #include <memory>
+#include <unordered_set>
 #include <utility>
 
 #include "baseapp/baseapp_messages.h"
@@ -1705,11 +1706,16 @@ void CellApp::SendInformCellLoad() {
   msg.load = persistent_load_;
   msg.entity_count = count;
   // Per-cell stats drive elastic-grow's heaviest-leaf pick and median split
-  // position; std::nth_element gives O(N) median without a full sort.
+  // position; std::nth_element gives O(N) median without a full sort. The
+  // raw median feeds a 30-sample ring (CellMedianWindow); reported value is
+  // the window mean so a single straggler entity can't snap the split
+  // position to its coord.
   std::vector<float> xs;
   std::vector<float> zs;
+  std::unordered_set<cellappmgr::CellID> live_cells;
   for (auto& [_, space] : spaces_) {
     for (auto& [cell_id, cell] : space->LocalCells()) {
+      live_cells.insert(cell_id);
       xs.clear();
       zs.clear();
       const auto& reals = cell->RealEntities();
@@ -1722,15 +1728,28 @@ void CellApp::SendInformCellLoad() {
       cellappmgr::InformCellLoad::CellReport rep;
       rep.cell_id = cell_id;
       rep.entity_count = static_cast<uint32_t>(reals.size());
+      auto& hist = cell_median_window_[cell_id];
       if (!xs.empty()) {
         const auto mid = xs.size() / 2;
         std::nth_element(xs.begin(), xs.begin() + mid, xs.end());
-        rep.median_x = xs[mid];
+        const float instant_x = xs[mid];
         std::nth_element(zs.begin(), zs.begin() + mid, zs.end());
-        rep.median_z = zs[mid];
+        const float instant_z = zs[mid];
+        hist.Push(instant_x, instant_z);
       }
+      // Empty-cell ticks don't push; the window decays to whatever was last
+      // observed, which is stable enough until entities reappear.
+      const auto [mx, mz] = hist.Mean();
+      rep.median_x = mx;
+      rep.median_z = mz;
       msg.cells.push_back(rep);
     }
+  }
+  // Prune history for cells that no longer exist on this cellapp (rehome,
+  // Offload, Space destroy) so the map doesn't grow without bound.
+  for (auto it = cell_median_window_.begin(); it != cell_median_window_.end();) {
+    if (live_cells.contains(it->first)) ++it;
+    else it = cell_median_window_.erase(it);
   }
   if (auto r = cellappmgr_channel_->SendMessage(msg); !r) {
     // Dropped reports skew the mgr's balancer toward this host.
