@@ -27,14 +27,17 @@ public partial class Avatar : CellServerEntity, IDamageable
         // ProjectileSimulator is per-cellapp local state, not in the offload
         // blob; rewire on every arrival (fresh login + offload reload).
         AttachSimulator();
+        // Component slots are also missing from persistent_blob: re-add on
+        // every arrival or DispatchCellRpc silently drops EquipWeapon when
+        // _replicated[slot] is null on the post-offload Real.
+        var eq = AddComponent<EquipmentComponent>();
         if (isReload) return;
         Hp = kInitialHp;
         Level = 1;
         TickInterval = 1;
-        AddComponent<EquipmentComponent>();
         // SerializeForOwnerClient (full snapshot) does not carry component
         // sections; force a dirty WeaponId so the first delta ships the slot.
-        if (Equipment != null) Equipment.WeaponId = 1;
+        eq.WeaponId = 1;
     }
 
     protected override void OnDestroy()
