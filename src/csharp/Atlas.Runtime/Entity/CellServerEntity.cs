@@ -6,13 +6,17 @@ namespace Atlas.Entity;
 // Cell-resident entity base — owns spatial state and cell-side lifecycle.
 public abstract class CellServerEntity : ServerEntity
 {
-    // Setters mirror to C++ CellEntity so the RangeList shuffle + Witness
-    // volatile pump see the change in the same tick.
+    // Real: setter mirrors to C++ for the same-tick RangeList shuffle and
+    // Witness volatile pump; getter returns the cache to avoid per-read
+    // P/Invoke. Ghost: C++ side is the source of truth (GhostUpdatePosition
+    // wire writes it), so the getter pulls live each call; setter rejects
+    // because C++ would reject too.
     public Vector3 Position
     {
-        get => _position;
+        get => IsGhost ? NativeApi.GetEntityPosition(EntityId) : _position;
         set
         {
+            if (IsGhost) return;
             if (_position != value)
             {
                 _position = value;
@@ -24,9 +28,10 @@ public abstract class CellServerEntity : ServerEntity
 
     public Vector3 Direction
     {
-        get => _direction;
+        get => IsGhost ? NativeApi.GetEntityDirection(EntityId) : _direction;
         set
         {
+            if (IsGhost) return;
             if (_direction != value)
             {
                 _direction = value;

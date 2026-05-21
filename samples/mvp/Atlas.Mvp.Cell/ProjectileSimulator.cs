@@ -98,8 +98,8 @@ internal sealed class ProjectileSimulator
             var entity = kv.Value;
             if (entity.IsDestroyed) continue;
             if (entity is not IDamageable dmg) continue;
-            // Ghost Hp / Position track only the spawn-time mirror today;
-            // gate dead-skip on Real, and accept the stale-pose hit window.
+            // Ghost Position is live (native read); Hp is not mirrored yet so
+            // dead-skip only applies on the Real side.
             if (entity.IsReal && dmg.Hp <= 0) continue;
             var p = entity.Position;
             var dx = p.X - s.Position.X;
