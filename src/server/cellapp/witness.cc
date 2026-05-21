@@ -228,8 +228,16 @@ void Witness::Activate() {
   trigger_->Insert(owner_.GetSpace().GetRangeList());
 }
 
-void Witness::Deactivate() {
+void Witness::Deactivate(bool flush_leaves) {
   if (!trigger_) return;
+  // Snapshot ids first — SendEntityLeave's callback may re-enter (channel
+  // teardown, peer destruction in tests) and mutate aoi_map_ mid-iter.
+  if (flush_leaves && send_reliable_) {
+    std::vector<EntityID> ids;
+    ids.reserve(aoi_map_.size());
+    for (const auto& [peer_id, _] : aoi_map_) ids.push_back(peer_id);
+    for (auto id : ids) (void)SendEntityLeave(id);
+  }
   trigger_->Remove(owner_.GetSpace().GetRangeList());
   trigger_.reset();
   for (auto& [_, cache] : aoi_map_) {

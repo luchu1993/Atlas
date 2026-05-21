@@ -52,7 +52,11 @@ CellEntity::~CellEntity() {
   //      own RangeTriggers; StopAll removes those bound nodes cleanly.
   //   3. RangeList.Remove(&range_node_) - central leaves last.
   if (witness_) {
-    witness_->Deactivate();
+    // Suppress the leave flush in ~CellEntity: the entity itself is being
+    // torn down and any callback re-entry (Remove via send) can corrupt
+    // partial container state. ConvertRealToGhost / DisableWitness use
+    // the default (flush_leaves=true) so the client clears its AoI.
+    witness_->Deactivate(/*flush_leaves=*/false);
     witness_.reset();
   }
   controllers_.StopAll();
