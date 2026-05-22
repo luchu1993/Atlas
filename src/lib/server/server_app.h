@@ -58,8 +58,7 @@ class ServerApp {
   // cluster-wide phase reference shipped to cellapps.
   [[nodiscard]] auto StartTime() const -> TimePoint { return start_time_; }
 
-  // Re-phases the repeating tick timer onto the boundary
-  // epoch + ceil((now - epoch) / period) * period, so every cellapp
+  // Re-phases the repeating tick onto epoch + N*period so every cellapp
   // converges to the same tick edge regardless of register order.
   void RealignTickTo(TimePoint epoch);
 

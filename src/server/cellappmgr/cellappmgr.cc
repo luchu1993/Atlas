@@ -744,9 +744,8 @@ void CellAppMgr::BroadcastGeometry(SpacePartition& partition) {
   std::unordered_map<Address, bool> hosts;
   for (const auto* ci : partition.bsp.Leaves()) hosts[ci->cellapp_addr] = true;
 
-  // Freeze → geometry → unfreeze on the same reliable channel preserves
-  // order, so receivers see (false, new BSP, true) atomically and can't
-  // offload through a stale boundary mid-rebalance.
+  // Same-channel reliable ordering makes (false, new BSP, true) atomic
+  // at the receiver, so no offload sees a stale boundary mid-rebalance.
   auto fan_should_offload = [&](bool enable) {
     for (const auto* ci : partition.bsp.Leaves()) {
       auto it = cellapps_.find(ci->cellapp_addr);

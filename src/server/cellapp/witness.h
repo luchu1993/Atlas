@@ -54,9 +54,8 @@ class Witness {
   // so the destination resumes mid-stream).
   [[nodiscard]] auto SerializeAoI() const -> std::vector<cellapp::WitnessAoIEntry>;
 
-  // Diffs an inherited AoI against the just-activated trigger sweep:
-  // overlaps drop pending-Enter and adopt the inherited LOD/seqs;
-  // orphans ship Leave. Run once post-Activate.
+  // Post-Activate diff: overlaps drop pending-Enter and adopt the
+  // inherited LOD/seqs; orphans ship Leave.
   void InheritAoIFrom(const std::vector<cellapp::WitnessAoIEntry>& inherited);
 
   [[nodiscard]] auto Owner() -> CellEntity& { return owner_; }
