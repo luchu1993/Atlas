@@ -250,22 +250,33 @@ void Witness::Deactivate(bool flush_leaves) {
   pending_gone_ids_.clear();
 }
 
-auto Witness::AoIEntityIds() const -> std::vector<EntityID> {
-  std::vector<EntityID> ids;
-  ids.reserve(aoi_map_.size());
-  for (const auto& [peer_id, _] : aoi_map_) ids.push_back(peer_id);
-  return ids;
+auto Witness::SerializeAoI() const -> std::vector<cellapp::WitnessAoIEntry> {
+  std::vector<cellapp::WitnessAoIEntry> entries;
+  entries.reserve(aoi_map_.size());
+  for (const auto& [peer_id, cache] : aoi_map_) {
+    entries.push_back({peer_id, cache.last_event_seq, cache.last_volatile_seq,
+                       cache.lod_next_update_tick, cache.last_serviced_tick});
+  }
+  return entries;
 }
 
-void Witness::InheritAoIFrom(const std::vector<EntityID>& inherited_ids) {
-  if (inherited_ids.empty()) return;
-  std::unordered_set<EntityID> inherited(inherited_ids.begin(), inherited_ids.end());
+void Witness::InheritAoIFrom(const std::vector<cellapp::WitnessAoIEntry>& inherited) {
+  if (inherited.empty()) return;
+  std::unordered_map<EntityID, const cellapp::WitnessAoIEntry*> by_id;
+  by_id.reserve(inherited.size());
+  for (const auto& e : inherited) by_id.emplace(e.id, &e);
 
-  // Overlap: already on the client; drop the pending Enter and mark
-  // cache as active so Update never re-fires Enter.
+  // Overlap: already on the client; clear pending Enter and adopt the
+  // inherited LOD / seq state so Update resumes mid-stream.
   for (auto& [peer_id, cache] : aoi_map_) {
-    if (inherited.erase(peer_id) == 0) continue;
+    auto it = by_id.find(peer_id);
+    if (it == by_id.end()) continue;
     cache.flags &= ~EntityCache::kEnterPending;
+    cache.last_event_seq = it->second->last_event_seq;
+    cache.last_volatile_seq = it->second->last_volatile_seq;
+    cache.lod_next_update_tick = it->second->lod_next_update_tick;
+    cache.last_serviced_tick = it->second->last_serviced_tick;
+    by_id.erase(it);
   }
   std::erase_if(pending_enter_ids_, [&aoi = aoi_map_](EntityID id) {
     auto it = aoi.find(id);
@@ -275,7 +286,7 @@ void Witness::InheritAoIFrom(const std::vector<EntityID>& inherited_ids) {
   // Orphans: client still thinks these are visible but they fell outside
   // the new AoI on handoff; emit Leave so the client drops them.
   if (!send_reliable_) return;
-  for (EntityID id : inherited) (void)SendEntityLeave(id);
+  for (const auto& [orphan_id, _] : by_id) (void)SendEntityLeave(orphan_id);
 }
 
 void Witness::SetAoIRadius(float new_radius, float new_hysteresis) {

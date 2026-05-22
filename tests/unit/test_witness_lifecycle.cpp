@@ -184,8 +184,8 @@ TEST_F(WitnessLifecycleTest, PeerOutsideRadiusNeverEnters) {
   EXPECT_TRUE(observer->GetWitness()->AoIMap().empty());
 }
 
-// Avatar handoff diff: overlap suppresses Enter, orphan ships Leave,
-// new peers Enter normally.
+// Avatar handoff diff: overlap suppresses Enter and adopts inherited
+// seqs; orphan ships Leave; new peers Enter normally.
 TEST_F(WitnessLifecycleTest, InheritAoIFromDiffsEnterAndLeave) {
   Space space(1);
   auto* observer = MakeEntity(space, 1, 1, {0, 0, 0});
@@ -193,8 +193,13 @@ TEST_F(WitnessLifecycleTest, InheritAoIFromDiffsEnterAndLeave) {
   auto* peer_new = MakeEntity(space, 101, 7, {5, 0, 5});
   observer->EnableWitness(10.f, MakeSendFn());
 
-  // 100 overlaps the new AoI; 200 was on the client but is outside now.
-  observer->GetWitness()->InheritAoIFrom({100, 200});
+  // 100 overlaps the new AoI with seq state; 200 was on the client but
+  // is outside now.
+  std::vector<cellapp::WitnessAoIEntry> inherited{
+      {100, /*evt=*/42, /*vol=*/100, /*next_tick=*/7, /*last_svc=*/3},
+      {200, 0, 0, 0, 0},
+  };
+  observer->GetWitness()->InheritAoIFrom(inherited);
   observer->GetWitness()->Update(4096);
 
   EntityID leave_id = 0;
@@ -214,6 +219,13 @@ TEST_F(WitnessLifecycleTest, InheritAoIFromDiffsEnterAndLeave) {
   EXPECT_EQ(leave_id, 200u);
   EXPECT_EQ(enters, 1) << "101 (new) should Enter; 100 (overlap) suppressed";
   EXPECT_EQ(enter_id, peer_new->Id());
+
+  // Overlap cache inherited the seq baseline so Update doesn't repeat.
+  const auto& cache_100 = observer->GetWitness()->AoIMap().at(100);
+  EXPECT_EQ(cache_100.last_event_seq, 42u);
+  EXPECT_EQ(cache_100.last_volatile_seq, 100u);
+  EXPECT_EQ(cache_100.lod_next_update_tick, 7u);
+  EXPECT_EQ(cache_100.last_serviced_tick, 3u);
   EXPECT_EQ(peer_overlap->Id(), 100u);
 }
 

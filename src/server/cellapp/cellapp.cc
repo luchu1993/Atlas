@@ -1424,7 +1424,7 @@ void CellApp::OnOffloadEntity(const Address& src, Channel* ch, const cellapp::Of
   // EnableWitness on its own.
   if (msg.has_witness) {
     AttachWitness(*entity, msg.aoi_radius, msg.aoi_hysteresis);
-    if (auto* w = entity->GetWitness()) w->InheritAoIFrom(msg.aoi_entity_ids);
+    if (auto* w = entity->GetWitness()) w->InheritAoIFrom(msg.aoi_entries);
   }
 
   // Restore AFTER entity_population_ + local Cell are populated so
@@ -1908,13 +1908,13 @@ auto CellApp::BuildOffloadMessage(const CellEntity& entity) const -> cellapp::Of
     auto buf = cw.Detach();
     msg.controller_data.assign(buf.begin(), buf.end());
   }
-  // Read BEFORE ConvertRealToGhost strips the witness; aoi_entity_ids
-  // ships so the destination Witness can diff and skip Enter spam.
+  // Read BEFORE ConvertRealToGhost strips the witness; aoi_entries
+  // ships full LOD + seq state so destination resumes mid-stream.
   if (const auto* witness = entity.GetWitness()) {
     msg.has_witness = true;
     msg.aoi_radius = witness->AoIRadius();
     msg.aoi_hysteresis = witness->Hysteresis();
-    msg.aoi_entity_ids = witness->AoIEntityIds();
+    msg.aoi_entries = witness->SerializeAoI();
   }
   msg.cell_epoch = entity.CellEpoch();
   msg.is_local = entity.IsLocal();

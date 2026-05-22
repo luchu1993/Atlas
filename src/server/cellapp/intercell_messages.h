@@ -13,6 +13,16 @@
 
 namespace atlas::cellapp {
 
+// Per-peer Witness state shipped on Avatar Offload so the destination
+// resumes mid-stream (no full snapshot resend, LOD cadence preserved).
+struct WitnessAoIEntry {
+  EntityID id{kInvalidEntityID};
+  uint64_t last_event_seq{0};
+  uint64_t last_volatile_seq{0};
+  uint64_t lod_next_update_tick{0};
+  uint64_t last_serviced_tick{0};
+};
+
 // Seeds a Ghost replica with the Real entity's other-audience snapshot
 // baseline. `event_seq` / `volatile_seq` give the receiving side a
 // starting point for ordering subsequent GhostDelta /
@@ -404,9 +414,9 @@ struct OffloadEntity {
   // Cell-local-only entity (no BaseApp counterpart); preserved across Offload
   // so DestroySelf() takes the local-destroy path on the new owner.
   bool is_local{false};
-  // Witness AoI keys (peers the client already mirrors); receiver diffs
-  // against its post-Activate sweep so handoff stays transparent.
-  std::vector<EntityID> aoi_entity_ids;
+  // Per-peer Witness state (peers the client already mirrors + LOD seqs).
+  // Destination diffs vs post-Activate sweep for a transparent handoff.
+  std::vector<WitnessAoIEntry> aoi_entries;
 
   static auto Descriptor() -> const MessageDesc& {
     static const MessageDesc kDesc{msg_id::Id(msg_id::CellApp::kOffloadEntity),
@@ -454,8 +464,14 @@ struct OffloadEntity {
     w.Write(aoi_hysteresis);
     w.Write(cell_epoch);
     w.Write(static_cast<uint8_t>(is_local ? 1 : 0));
-    w.WritePackedInt(static_cast<uint32_t>(aoi_entity_ids.size()));
-    for (EntityID id : aoi_entity_ids) w.Write(id);
+    w.WritePackedInt(static_cast<uint32_t>(aoi_entries.size()));
+    for (const auto& e : aoi_entries) {
+      w.Write(e.id);
+      w.Write(e.last_event_seq);
+      w.Write(e.last_volatile_seq);
+      w.Write(e.lod_next_update_tick);
+      w.Write(e.last_serviced_tick);
+    }
   }
 
   static auto Deserialize(BinaryReader& r) -> Result<OffloadEntity> {
@@ -553,16 +569,21 @@ struct OffloadEntity {
       if (!il) return Error{ErrorCode::kInvalidArgument, "OffloadEntity: is_local truncated"};
       msg.is_local = (*il != 0);
     }
-    // Tail-optional aoi list — older payloads omit it and the receiver
+    // Tail-optional aoi entries — older payloads omit and the receiver
     // falls back to the legacy "re-Enter everything" path.
     if (r.Remaining() >= 1) {
       auto cnt = r.ReadPackedInt();
       if (!cnt) return Error{ErrorCode::kInvalidArgument, "OffloadEntity: aoi count truncated"};
-      msg.aoi_entity_ids.reserve(*cnt);
+      msg.aoi_entries.reserve(*cnt);
       for (uint32_t i = 0; i < *cnt; ++i) {
         auto id = r.Read<uint32_t>();
-        if (!id) return Error{ErrorCode::kInvalidArgument, "OffloadEntity: aoi id truncated"};
-        msg.aoi_entity_ids.push_back(*id);
+        auto evt = r.Read<uint64_t>();
+        auto vol = r.Read<uint64_t>();
+        auto next_tick = r.Read<uint64_t>();
+        auto serviced = r.Read<uint64_t>();
+        if (!id || !evt || !vol || !next_tick || !serviced)
+          return Error{ErrorCode::kInvalidArgument, "OffloadEntity: aoi entry truncated"};
+        msg.aoi_entries.push_back(WitnessAoIEntry{*id, *evt, *vol, *next_tick, *serviced});
       }
     }
     return msg;

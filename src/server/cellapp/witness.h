@@ -10,6 +10,7 @@
 #include <unordered_map>
 #include <vector>
 
+#include "intercell_messages.h"
 #include "server/entity_types.h"
 #include "space_data.h"
 
@@ -49,12 +50,14 @@ class Witness {
   // (the destination Witness diffs against the inherited AoI).
   void Deactivate(bool flush_leaves = true);
 
-  // Snapshot of current AoI keys for Offload handoff serialization.
-  [[nodiscard]] auto AoIEntityIds() const -> std::vector<EntityID>;
+  // Per-peer Witness snapshot for Offload migration (LOD + seqs included
+  // so the destination resumes mid-stream).
+  [[nodiscard]] auto SerializeAoI() const -> std::vector<cellapp::WitnessAoIEntry>;
 
   // Diffs an inherited AoI against the just-activated trigger sweep:
-  // overlaps drop pending-Enter; orphans ship Leave. Run once post-Activate.
-  void InheritAoIFrom(const std::vector<EntityID>& inherited_ids);
+  // overlaps drop pending-Enter and adopt the inherited LOD/seqs;
+  // orphans ship Leave. Run once post-Activate.
+  void InheritAoIFrom(const std::vector<cellapp::WitnessAoIEntry>& inherited);
 
   [[nodiscard]] auto Owner() -> CellEntity& { return owner_; }
   [[nodiscard]] auto AoIRadius() const -> float { return aoi_radius_; }
