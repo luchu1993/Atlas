@@ -139,10 +139,10 @@ TEST(OffloadTraversal, EntityCrossesBspSplit_PumpsOffload) {
   ASSERT_NE(real, nullptr);
   ASSERT_TRUE(real->IsReal());
 
-  // Move it across the split. TickOffloadChecker will query the BSP
-  // using the new position, see it lands on cell 2 (B), and emit the
+  // Move it solidly past the default 15 m ghost band. TickOffloadChecker
+  // queries the BSP at the new position, sees cell 2 (B), and emits the
   // offload.
-  real->SetPosition({+5.f, 0.f, 0.f});
+  real->SetPosition({+25.f, 0.f, 0.f});
 
   A.app.TickOffloadChecker();
 
@@ -166,7 +166,7 @@ TEST(OffloadTraversal, EntityCrossesBspSplit_PumpsOffload) {
   auto* on_b = B.app.FindEntity(real_cell_id);
   ASSERT_NE(on_b, nullptr);
   EXPECT_TRUE(on_b->IsReal());
-  EXPECT_FLOAT_EQ(on_b->Position().x, 5.f);
+  EXPECT_FLOAT_EQ(on_b->Position().x, 25.f);
   EXPECT_EQ(on_b->Id(), 100u);
 }
 

@@ -220,16 +220,16 @@ TEST(OffloadChecker, EntityWithinHysteresisOfBoundary_NotOffloaded) {
   Address peer{0x7F000002u, 30002};
   BuildTopology(space, self, peer, /*self_cell_id=*/1);
 
-  // Default hysteresis is 1.0 m; entity at x=+0.5 maps to peer but ±1 m
+  // Default hysteresis is 15 m; entity at x=+5 maps to peer but ±15 m
   // straddles the x=0 split, so OffloadChecker must defer migration.
-  auto* e = MakeReal(space, 10, {0.5f, 0.f, 0.f});
+  auto* e = MakeReal(space, 10, {5.f, 0.f, 0.f});
   space.FindLocalCell(1)->AddRealEntity(e);
 
   OffloadChecker checker(self);
   EXPECT_TRUE(checker.Compute(space).empty());
 
-  // Moving solidly past the hysteresis band (x > +1) does trigger offload.
-  e->SetPosition({1.5f, 0.f, 0.f});
+  // Moving solidly past the hysteresis band (x > +15) triggers offload.
+  e->SetPosition({20.f, 0.f, 0.f});
   EXPECT_EQ(checker.Compute(space).size(), 1u);
 }
 

@@ -86,7 +86,7 @@ ServerAppOption<uint32_t> s_witness_max_enters_per_tick{
     WatcherMode::kReadWrite};
 
 ServerAppOption<float> s_bsp_ghost_region_metres{
-    1.0f, "bsp_ghost_region_metres", "cellapp/bsp_ghost_region_metres", WatcherMode::kReadWrite};
+    15.0f, "bsp_ghost_region_metres", "cellapp/bsp_ghost_region_metres", WatcherMode::kReadWrite};
 
 }  // namespace
 

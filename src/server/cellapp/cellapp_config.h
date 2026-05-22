@@ -108,10 +108,9 @@ class CellAppConfig {
   // JSON key: `witness_max_enters_per_tick`. Default 4.
   [[nodiscard]] static auto WitnessMaxEntersPerTick() -> uint32_t;
 
-  // Width (metres) of the ghost band around every BSP split. Entities
-  // inside any split's ghost region map to "no primary cell" and stay
-  // put until they move clearly past the boundary. JSON key:
-  // `bsp_ghost_region_metres`. Default 1.0 m.
+  // Ghost-band half-width around every BSP split; entities inside the
+  // band stay put. JSON key `bsp_ghost_region_metres`, default 15 m
+  // (BigWorld ~0.3 × default AoI to suppress boundary-wander thrashing).
   [[nodiscard]] static auto BspGhostRegionMetres() -> float;
 };
 
