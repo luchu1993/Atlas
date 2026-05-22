@@ -196,8 +196,8 @@ TEST_F(WitnessLifecycleTest, InheritAoIFromDiffsEnterAndLeave) {
   // 100 overlaps the new AoI with seq state; 200 was on the client but
   // is outside now.
   std::vector<cellapp::WitnessAoIEntry> inherited{
-      {100, /*evt=*/42, /*vol=*/100, /*next_tick=*/7, /*last_svc=*/3},
-      {200, 0, 0, 0, 0},
+      {100, /*evt=*/42, /*vol=*/100},
+      {200, 0, 0},
   };
   observer->GetWitness()->InheritAoIFrom(inherited);
   observer->GetWitness()->Update(4096);
@@ -220,12 +220,11 @@ TEST_F(WitnessLifecycleTest, InheritAoIFromDiffsEnterAndLeave) {
   EXPECT_EQ(enters, 1) << "101 (new) should Enter; 100 (overlap) suppressed";
   EXPECT_EQ(enter_id, peer_new->Id());
 
-  // Overlap cache inherited the seq baseline so Update doesn't repeat.
+  // Adopted entity-owned seqs only; tick-relative LOD fields are reset
+  // by the dest Witness's own scheduling.
   const auto& cache_100 = observer->GetWitness()->AoIMap().at(100);
   EXPECT_EQ(cache_100.last_event_seq, 42u);
   EXPECT_EQ(cache_100.last_volatile_seq, 100u);
-  EXPECT_EQ(cache_100.lod_next_update_tick, 7u);
-  EXPECT_EQ(cache_100.last_serviced_tick, 3u);
   EXPECT_EQ(peer_overlap->Id(), 100u);
 }
 

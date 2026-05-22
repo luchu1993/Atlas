@@ -253,9 +253,11 @@ void Witness::Deactivate(bool flush_leaves) {
 auto Witness::SerializeAoI() const -> std::vector<cellapp::WitnessAoIEntry> {
   std::vector<cellapp::WitnessAoIEntry> entries;
   entries.reserve(aoi_map_.size());
+  // Only ship entity-owned seqs (absolute, replicated). lod_*_tick /
+  // last_serviced_tick are this Witness's local tick_count_ — meaningless
+  // on the destination, would freeze LOD if migrated.
   for (const auto& [peer_id, cache] : aoi_map_) {
-    entries.push_back({peer_id, cache.last_event_seq, cache.last_volatile_seq,
-                       cache.lod_next_update_tick, cache.last_serviced_tick});
+    entries.push_back({peer_id, cache.last_event_seq, cache.last_volatile_seq});
   }
   return entries;
 }
@@ -266,16 +268,14 @@ void Witness::InheritAoIFrom(const std::vector<cellapp::WitnessAoIEntry>& inheri
   by_id.reserve(inherited.size());
   for (const auto& e : inherited) by_id.emplace(e.id, &e);
 
-  // Overlap: already on the client; clear pending Enter and adopt the
-  // inherited LOD / seq state so Update resumes mid-stream.
+  // Overlap: client already mirrors the peer; clear pending Enter and
+  // adopt inherited seqs so the next Update ships only the new frames.
   for (auto& [peer_id, cache] : aoi_map_) {
     auto it = by_id.find(peer_id);
     if (it == by_id.end()) continue;
     cache.flags &= ~EntityCache::kEnterPending;
     cache.last_event_seq = it->second->last_event_seq;
     cache.last_volatile_seq = it->second->last_volatile_seq;
-    cache.lod_next_update_tick = it->second->lod_next_update_tick;
-    cache.last_serviced_tick = it->second->last_serviced_tick;
     by_id.erase(it);
   }
   std::erase_if(pending_enter_ids_, [&aoi = aoi_map_](EntityID id) {

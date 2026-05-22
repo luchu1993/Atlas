@@ -13,14 +13,13 @@
 
 namespace atlas::cellapp {
 
-// Per-peer Witness state shipped on Avatar Offload so the destination
-// resumes mid-stream (no full snapshot resend, LOD cadence preserved).
+// Per-peer Witness state for Avatar Offload: only entity-owned seqs
+// (absolute, replicated). Witness-local tick scheduling is rebuilt on
+// the destination from its own tick_count_.
 struct WitnessAoIEntry {
   EntityID id{kInvalidEntityID};
   uint64_t last_event_seq{0};
   uint64_t last_volatile_seq{0};
-  uint64_t lod_next_update_tick{0};
-  uint64_t last_serviced_tick{0};
 };
 
 // Seeds a Ghost replica with the Real entity's other-audience snapshot
@@ -469,8 +468,6 @@ struct OffloadEntity {
       w.Write(e.id);
       w.Write(e.last_event_seq);
       w.Write(e.last_volatile_seq);
-      w.Write(e.lod_next_update_tick);
-      w.Write(e.last_serviced_tick);
     }
   }
 
@@ -579,11 +576,9 @@ struct OffloadEntity {
         auto id = r.Read<uint32_t>();
         auto evt = r.Read<uint64_t>();
         auto vol = r.Read<uint64_t>();
-        auto next_tick = r.Read<uint64_t>();
-        auto serviced = r.Read<uint64_t>();
-        if (!id || !evt || !vol || !next_tick || !serviced)
+        if (!id || !evt || !vol)
           return Error{ErrorCode::kInvalidArgument, "OffloadEntity: aoi entry truncated"};
-        msg.aoi_entries.push_back(WitnessAoIEntry{*id, *evt, *vol, *next_tick, *serviced});
+        msg.aoi_entries.push_back(WitnessAoIEntry{*id, *evt, *vol});
       }
     }
     return msg;
