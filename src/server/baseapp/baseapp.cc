@@ -94,9 +94,11 @@ auto DecodeDbBlob(std::span<const std::byte> blob, std::span<const std::byte>& b
 
 // Deterministic peer fallback when no mgr is connected: pick by
 // (space_id-1) % sorted_peers — mirrors the pre-Phase 11 routing.
-auto LegacyPickPeer(const std::unordered_map<Address, Channel*>& peers, SpaceID space_id)
-    -> std::pair<Address, Channel*> {
-  std::vector<std::pair<Address, Channel*>> sorted(peers.begin(), peers.end());
+auto LegacyPickPeer(const std::unordered_map<Address, IntrusivePtr<Channel>>& peers,
+                    SpaceID space_id) -> std::pair<Address, Channel*> {
+  std::vector<std::pair<Address, Channel*>> sorted;
+  sorted.reserve(peers.size());
+  for (const auto& [a, c] : peers) sorted.emplace_back(a, c.get());
   std::sort(sorted.begin(), sorted.end(), [](const auto& a, const auto& b) {
     if (a.first.Ip() != b.first.Ip()) return a.first.Ip() < b.first.Ip();
     return a.first.Port() < b.first.Port();
@@ -3288,12 +3290,13 @@ void BaseApp::OnClientCellRpc(Channel& ch, const baseapp::ClientCellRpc& msg) {
   (void)ch_out->SendMessage(fwd);
 }
 
-auto ResolveCellChannelByAddr(const std::unordered_map<Address, Channel*>& cellapp_channels,
-                              const Address& cell_addr) -> Channel* {
+auto ResolveCellChannelByAddr(
+    const std::unordered_map<Address, IntrusivePtr<Channel>>& cellapp_channels,
+    const Address& cell_addr) -> Channel* {
   // Cell address 0:0 is the "not yet placed on any Cell" sentinel.
   if (cell_addr.Port() == 0) return nullptr;
   auto it = cellapp_channels.find(cell_addr);
-  return it == cellapp_channels.end() ? nullptr : it->second;
+  return it == cellapp_channels.end() ? nullptr : it->second.get();
 }
 
 auto BaseApp::ResolveCellChannelForEntity(EntityID target_entity_id) const -> Channel* {

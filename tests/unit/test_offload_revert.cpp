@@ -24,14 +24,13 @@
 #include "space.h"
 #include "space/move_controller.h"
 #include "space/timer_controller.h"
+#include "test_null_channel.h"
 #include "witness.h"
 
 namespace atlas {
 namespace {
 
-auto FakeChannel(uintptr_t tag) -> Channel* {
-  return reinterpret_cast<Channel*>(tag);
-}
+using test_support::FakeChannel;
 
 struct Harness {
   EventDispatcher dispatcher{"offload_revert"};

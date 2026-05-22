@@ -20,14 +20,12 @@
 #include "network/channel.h"
 #include "real_entity_data.h"
 #include "space.h"
+#include "test_null_channel.h"
 
 namespace atlas {
 namespace {
 
-// Fake Channel* used only for identity comparisons. Never dereferenced.
-auto FakeChannel(uintptr_t tag) -> Channel* {
-  return reinterpret_cast<Channel*>(tag);
-}
+using test_support::FakeChannel;
 
 auto MakeBlob(std::initializer_list<uint8_t> bytes) -> std::vector<std::byte> {
   std::vector<std::byte> v;

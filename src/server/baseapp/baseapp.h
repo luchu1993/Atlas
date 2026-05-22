@@ -12,6 +12,8 @@
 #include "baseapp_native_provider.h"
 #include "baseapp_messages.h"
 #include "cellapp/cellapp_messages.h"
+#include "foundation/intrusive_ptr.h"
+#include "network/channel.h"
 #include "coro/pending_rpc_registry.h"
 #include "db/idatabase.h"
 #include "dbapp/dbapp_messages.h"
@@ -77,8 +79,8 @@ class Channel;
 // Returns nullptr if cell_addr has port 0 or no entry exists.
 // Free function so unit tests can drive it without a BaseApp.
 [[nodiscard]] auto ResolveCellChannelByAddr(
-    const std::unordered_map<Address, Channel*>& cellapp_channels, const Address& cell_addr)
-    -> Channel*;
+    const std::unordered_map<Address, IntrusivePtr<Channel>>& cellapp_channels,
+    const Address& cell_addr) -> Channel*;
 
 class BaseApp : public EntityApp {
  public:

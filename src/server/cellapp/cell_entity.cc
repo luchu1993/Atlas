@@ -130,7 +130,7 @@ void CellEntity::ConvertRealToGhost(Channel* new_real_channel, const Address& ne
   controllers_.StopAll();
   // Drop the haunt list and velocity sample - we're no longer authoritative.
   real_data_.reset();
-  real_channel_ = new_real_channel;
+  real_channel_.reset(new_real_channel);
   real_addr_ = new_real_addr;
 }
 
@@ -139,7 +139,7 @@ void CellEntity::ConvertGhostToReal() {
     ATLAS_LOG_WARNING("CellEntity::ConvertGhostToReal on non-Ghost entity id={} — ignored", id_);
     return;
   }
-  real_channel_ = nullptr;
+  real_channel_.reset();
   real_addr_ = {};
   next_real_addr_ = {};
   real_data_ = std::make_unique<RealEntityData>(*this);
@@ -200,7 +200,7 @@ void CellEntity::RebindRealChannel(Channel* new_real_channel, const Address& new
     ATLAS_LOG_WARNING("CellEntity::RebindRealChannel on non-Ghost id={} — ignored", id_);
     return;
   }
-  real_channel_ = new_real_channel;
+  real_channel_.reset(new_real_channel);
   real_addr_ = new_real_addr;
   // Offload handoff is done - the transition-window hint no longer applies.
   next_real_addr_ = {};

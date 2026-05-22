@@ -15,6 +15,7 @@
 #include "entitydef/entity_def_registry.h"
 #include "intercell_messages.h"
 #include "math/vector3.h"
+#include "test_null_channel.h"
 #include "network/channel.h"
 #include "network/event_dispatcher.h"
 #include "network/network_interface.h"
@@ -126,9 +127,7 @@ class CellAppHandlersTest : public ::testing::Test {
   }
 };
 
-auto FakeChannel(uintptr_t tag) -> Channel* {
-  return reinterpret_cast<Channel*>(tag);
-}
+using test_support::FakeChannel;
 
 TEST_F(CellAppHandlersTest, CreateCellEntityUsesUnifiedEntityId) {
   auto msg = MakeCreate(/*entity_id=*/100, /*space=*/5, {10, 0, 10});

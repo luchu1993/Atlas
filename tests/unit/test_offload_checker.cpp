@@ -11,6 +11,7 @@
 #include "math/vector3.h"
 #include "offload_checker.h"
 #include "space.h"
+#include "test_null_channel.h"
 
 namespace atlas {
 namespace {
@@ -110,7 +111,7 @@ TEST(OffloadChecker, GhostEntitiesNotEvenInLocalCell_NoOp) {
   // in the checker.
   auto* g = space.AddEntity(std::make_unique<CellEntity>(
       CellEntity::GhostTag{}, 99, uint16_t{1}, space, math::Vector3{50, 0, 0},
-      math::Vector3{1, 0, 0}, reinterpret_cast<Channel*>(0xBEEF)));
+      math::Vector3{1, 0, 0}, test_support::FakeChannel()));
   space.FindLocalCell(1)->AddRealEntity(g);  // deliberately misroute
 
   OffloadChecker checker(self);

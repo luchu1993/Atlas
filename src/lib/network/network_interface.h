@@ -10,7 +10,9 @@
 #include <vector>
 
 #include "foundation/clock.h"
+#include "foundation/intrusive_ptr.h"
 #include "foundation/memory/stream_buffer_pool.h"
+#include "network/channel.h"
 #include "network/address.h"
 #include "network/channel.h"
 #include "network/event_dispatcher.h"
@@ -146,7 +148,7 @@ class NetworkInterface : public FrequentTask {
   std::optional<Address> rudp_client_bind_address_;
   RudpProfile rudp_accept_profile_{};
 
-  std::unordered_map<Address, std::unique_ptr<Channel>> channels_;
+  std::unordered_map<Address, IntrusivePtr<Channel>> channels_;
   std::unordered_map<ChannelId, Channel*> channels_by_id_;
   ChannelId next_channel_id_{1};
 
@@ -157,7 +159,7 @@ class NetworkInterface : public FrequentTask {
   std::unordered_set<Channel*> dirty_channels_;
 
   struct CondemnedEntry {
-    std::unique_ptr<Channel> channel;
+    IntrusivePtr<Channel> channel;
     TimePoint condemned_at;
   };
   std::list<CondemnedEntry> condemned_;

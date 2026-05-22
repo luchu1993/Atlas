@@ -5,11 +5,12 @@
 #include <functional>
 #include <unordered_map>
 
+#include "foundation/intrusive_ptr.h"
 #include "network/address.h"
+#include "network/channel.h"
 
 namespace atlas {
 
-class Channel;
 class MachinedClient;
 class NetworkInterface;
 
@@ -35,7 +36,8 @@ class CellAppPeerRegistry {
 
   [[nodiscard]] auto Find(const Address& addr) const -> Channel*;
 
-  [[nodiscard]] auto Channels() const -> const std::unordered_map<Address, Channel*>& {
+  [[nodiscard]] auto Channels() const
+      -> const std::unordered_map<Address, IntrusivePtr<Channel>>& {
     return channels_;
   }
 
@@ -51,7 +53,7 @@ class CellAppPeerRegistry {
  private:
   NetworkInterface& network_;
   Address self_addr_;
-  std::unordered_map<Address, Channel*> channels_;
+  std::unordered_map<Address, IntrusivePtr<Channel>> channels_;
 };
 
 }  // namespace atlas

@@ -115,7 +115,7 @@ auto NetworkInterface::ConnectTcp(const Address& addr) -> Result<TcpChannel*> {
   }
 
   auto channel =
-      std::make_unique<TcpChannel>(dispatcher_, interface_table_, std::move(*sock), addr);
+      make_intrusive<TcpChannel>(dispatcher_, interface_table_, std::move(*sock), addr);
   channel->SetChannelId(next_channel_id_++);
 
   auto reg = dispatcher_.RegisterReader(channel->Fd(),
@@ -189,7 +189,7 @@ auto NetworkInterface::ConnectUdp(const Address& addr) -> Result<UdpChannel*> {
     return udp;
   }
 
-  auto channel = std::make_unique<UdpChannel>(dispatcher_, interface_table_, *udp_socket_, addr);
+  auto channel = make_intrusive<UdpChannel>(dispatcher_, interface_table_, *udp_socket_, addr);
   channel->SetChannelId(next_channel_id_++);
   channel->SetDisconnectCallback([this](Channel& ch) { OnChannelDisconnect(ch); });
   channel->SetMarkDirtyCallback([this](Channel& ch) { MarkChannelDirty(ch); });
@@ -321,7 +321,7 @@ auto NetworkInterface::ConnectRudp(const Address& addr, const RudpProfile& profi
   }
 
   auto channel =
-      std::make_unique<ReliableUdpChannel>(dispatcher_, interface_table_, *rudp_socket_, addr);
+      make_intrusive<ReliableUdpChannel>(dispatcher_, interface_table_, *rudp_socket_, addr);
   channel->SetChannelId(next_channel_id_++);
   channel->SetDisconnectCallback([this](Channel& ch) { OnChannelDisconnect(ch); });
   channel->SetMarkDirtyCallback([this](Channel& ch) { MarkChannelDirty(ch); });
@@ -442,8 +442,8 @@ void NetworkInterface::OnTcpAccept() {
                         peer_addr.ToString(), nd.Error().Message());
     }
 
-    auto channel = std::make_unique<TcpChannel>(dispatcher_, interface_table_, std::move(peer_sock),
-                                                peer_addr);
+    auto channel = make_intrusive<TcpChannel>(dispatcher_, interface_table_, std::move(peer_sock),
+                                              peer_addr);
     channel->SetChannelId(next_channel_id_++);
 
     auto reg = dispatcher_.RegisterReader(channel->Fd(),
@@ -514,7 +514,7 @@ void NetworkInterface::OnUdpReadable() {
       }
 
       auto channel =
-          std::make_unique<UdpChannel>(dispatcher_, interface_table_, *udp_socket_, src_addr);
+          make_intrusive<UdpChannel>(dispatcher_, interface_table_, *udp_socket_, src_addr);
       channel->SetChannelId(next_channel_id_++);
       channel->SetDisconnectCallback([this](Channel& ch) { OnChannelDisconnect(ch); });
       channel->SetMarkDirtyCallback([this](Channel& ch) { MarkChannelDirty(ch); });
@@ -566,8 +566,8 @@ void NetworkInterface::OnRudpReadable() {
 
       if (!rudp_server_mode_ || shutting_down_ || channels_.size() >= kMaxChannels) continue;
 
-      auto channel = std::make_unique<ReliableUdpChannel>(dispatcher_, interface_table_,
-                                                          *rudp_socket_, src_addr);
+      auto channel = make_intrusive<ReliableUdpChannel>(dispatcher_, interface_table_,
+                                                        *rudp_socket_, src_addr);
       channel->SetChannelId(next_channel_id_++);
       channel->SetDisconnectCallback([this](Channel& ch) { OnChannelDisconnect(ch); });
       channel->SetMarkDirtyCallback([this](Channel& ch) { MarkChannelDirty(ch); });

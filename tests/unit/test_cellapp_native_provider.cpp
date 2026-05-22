@@ -19,6 +19,7 @@
 #include "math/vector3.h"
 #include "server/server_config.h"
 #include "space.h"
+#include "test_null_channel.h"
 
 namespace atlas {
 namespace {
@@ -393,7 +394,7 @@ TEST_F(CellAppNativeProviderTest, SetPositionRejectedOnGhost) {
   auto* e = space_.AddEntity(
       std::make_unique<CellEntity>(CellEntity::GhostTag{}, 500, uint16_t{1}, space_,
                                    math::Vector3{0, 0, 0}, math::Vector3{1, 0, 0},
-                                   /*real_channel=*/reinterpret_cast<Channel*>(0xBEEF)));
+                                   /*real_channel=*/test_support::FakeChannel()));
   ASSERT_TRUE(e->IsGhost());
   provider_.SetEntityPosition(500, 9.f, 9.f, 9.f);
   // Position unchanged — guard blocked the write.
@@ -404,7 +405,7 @@ TEST_F(CellAppNativeProviderTest, SetPositionRejectedOnGhost) {
 TEST_F(CellAppNativeProviderTest, PublishReplicationFrameRejectedOnGhost) {
   auto* e = space_.AddEntity(std::make_unique<CellEntity>(
       CellEntity::GhostTag{}, 501, uint16_t{1}, space_, math::Vector3{0, 0, 0},
-      math::Vector3{1, 0, 0}, reinterpret_cast<Channel*>(0xBEEF)));
+      math::Vector3{1, 0, 0}, test_support::FakeChannel()));
   provider_.PublishReplicationFrame(501, /*has_event=*/true, /*has_volatile=*/true, nullptr, 0,
                                     nullptr, 0, nullptr, 0, nullptr, 0);
   // Ghost's replication_state_ was never allocated by the provider.
@@ -428,7 +429,7 @@ TEST_F(CellAppNativeProviderTest, SendCellRpcOnUnknownEntityLogsAndSkips) {
 TEST_F(CellAppNativeProviderTest, AddControllersRejectedOnGhost) {
   auto* e = space_.AddEntity(std::make_unique<CellEntity>(
       CellEntity::GhostTag{}, 502, uint16_t{1}, space_, math::Vector3{0, 0, 0},
-      math::Vector3{1, 0, 0}, reinterpret_cast<Channel*>(0xBEEF)));
+      math::Vector3{1, 0, 0}, test_support::FakeChannel()));
   EXPECT_EQ(provider_.AddMoveController(502, 0, 0, 0, 1.f, 0), 0);
   EXPECT_EQ(provider_.AddTimerController(502, 1.f, false, 0), 0);
   EXPECT_EQ(provider_.AddProximityController(502, 5.f, 0), 0);

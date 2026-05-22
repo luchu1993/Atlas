@@ -9,6 +9,7 @@
 #include <vector>
 
 #include "foundation/clock.h"
+#include "foundation/ref_counted.h"
 #include "foundation/timer_queue.h"
 #include "network/address.h"
 #include "network/bundle.h"
@@ -33,11 +34,12 @@ enum class ChannelState : uint8_t {
   kCondemned,
 };
 
-// Not thread-safe; used from EventDispatcher's thread only.
-class Channel {
+// Not thread-safe; used from EventDispatcher's thread only. Refcounted
+// so entity holders survive NI's dead-link condemnation.
+class Channel : public RefCounted {
  public:
   Channel(EventDispatcher& dispatcher, InterfaceTable& table, const Address& remote);
-  virtual ~Channel();
+  ~Channel() override;
 
   Channel(const Channel&) = delete;
   Channel& operator=(const Channel&) = delete;

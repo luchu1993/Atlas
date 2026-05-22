@@ -1,98 +1,88 @@
 // BaseApp multi-CellApp routing. Exercises the pure ResolveCellChannelByAddr
-// helper that backs OnClientCellRpc's per-entity routing. The helper takes
-// just a map and an Address, so tests drive it with fake Channel* values
-// (compared for identity only, never dereferenced).
+// helper that backs OnClientCellRpc's per-entity routing.
 
 #include <cstdint>
 #include <unordered_map>
+#include <vector>
 
 #include <gtest/gtest.h>
 
 #include "baseapp/baseapp.h"
+#include "foundation/intrusive_ptr.h"
 #include "network/address.h"
 #include "network/channel.h"
+#include "test_null_channel.h"
 
 namespace atlas {
 namespace {
 
-auto FakeChannel(uintptr_t tag) -> Channel* {
-  return reinterpret_cast<Channel*>(tag);
+auto FakeChannel() -> IntrusivePtr<Channel> {
+  return IntrusivePtr<Channel>{test_support::FakeChannel()};
 }
 
 TEST(BaseAppCellRouting, EmptyMap_ReturnsNullptr) {
-  std::unordered_map<Address, Channel*> channels;
+  std::unordered_map<Address, IntrusivePtr<Channel>> channels;
   EXPECT_EQ(ResolveCellChannelByAddr(channels, Address(0x7F000001u, 30001)), nullptr);
 }
 
 TEST(BaseAppCellRouting, ZeroPortCellAddr_ReturnsNullptr) {
-  // Default-constructed Address (what BaseEntity::cell_addr_ is before
-  // OnCellEntityCreated fires) must map to "cannot route" even if the
-  // map happens to contain an Address that hashes the same way.
-  std::unordered_map<Address, Channel*> channels;
-  channels[Address(0, 0)] = FakeChannel(0xAA);
+  std::unordered_map<Address, IntrusivePtr<Channel>> channels;
+  channels[Address(0, 0)] = FakeChannel();
   EXPECT_EQ(ResolveCellChannelByAddr(channels, Address(0, 0)), nullptr);
 }
 
 TEST(BaseAppCellRouting, KnownAddr_ReturnsMatchingChannel) {
-  auto* c1 = FakeChannel(0x11);
-  std::unordered_map<Address, Channel*> channels;
-  channels[Address(0x7F000001u, 30001)] = c1;
-  EXPECT_EQ(ResolveCellChannelByAddr(channels, Address(0x7F000001u, 30001)), c1);
+  auto c1 = FakeChannel();
+  auto* c1_raw = c1.get();
+  std::unordered_map<Address, IntrusivePtr<Channel>> channels;
+  channels[Address(0x7F000001u, 30001)] = std::move(c1);
+  EXPECT_EQ(ResolveCellChannelByAddr(channels, Address(0x7F000001u, 30001)), c1_raw);
 }
 
 TEST(BaseAppCellRouting, UnknownAddr_ReturnsNullptrDespiteOtherPeers) {
-  auto* c1 = FakeChannel(0x11);
-  std::unordered_map<Address, Channel*> channels;
-  channels[Address(0x7F000001u, 30001)] = c1;
+  std::unordered_map<Address, IntrusivePtr<Channel>> channels;
+  channels[Address(0x7F000001u, 30001)] = FakeChannel();
   EXPECT_EQ(ResolveCellChannelByAddr(channels, Address(0x7F000001u, 30002)), nullptr);
 }
 
 TEST(BaseAppCellRouting, MultiPeerMap_RoutesEachEntityToItsOwnChannel) {
-  // The core multi-CellApp scenario: two entities on different Cells
-  // must route to different channels. OnClientCellRpc delegates this
-  // choice to ResolveCellChannelByAddr via the per-entity cell_addr.
-  auto* c_peer_a = FakeChannel(0x11);
-  auto* c_peer_b = FakeChannel(0x22);
-  std::unordered_map<Address, Channel*> channels;
-  channels[Address(0x7F000001u, 30001)] = c_peer_a;
-  channels[Address(0x7F000001u, 30002)] = c_peer_b;
+  auto a = FakeChannel();
+  auto b = FakeChannel();
+  auto* a_raw = a.get();
+  auto* b_raw = b.get();
+  std::unordered_map<Address, IntrusivePtr<Channel>> channels;
+  channels[Address(0x7F000001u, 30001)] = std::move(a);
+  channels[Address(0x7F000001u, 30002)] = std::move(b);
 
-  // Entity on peer A.
-  EXPECT_EQ(ResolveCellChannelByAddr(channels, Address(0x7F000001u, 30001)), c_peer_a);
-  // Entity on peer B.
-  EXPECT_EQ(ResolveCellChannelByAddr(channels, Address(0x7F000001u, 30002)), c_peer_b);
+  EXPECT_EQ(ResolveCellChannelByAddr(channels, Address(0x7F000001u, 30001)), a_raw);
+  EXPECT_EQ(ResolveCellChannelByAddr(channels, Address(0x7F000001u, 30002)), b_raw);
 }
 
 TEST(BaseAppCellRouting, PeerRemoval_StaleAddrNoLongerResolves) {
-  // Simulates the CellApp Death callback erasing its entry.
-  auto* c1 = FakeChannel(0x11);
-  std::unordered_map<Address, Channel*> channels;
-  channels[Address(0x7F000001u, 30001)] = c1;
-  EXPECT_EQ(ResolveCellChannelByAddr(channels, Address(0x7F000001u, 30001)), c1);
+  auto c1 = FakeChannel();
+  auto* c1_raw = c1.get();
+  std::unordered_map<Address, IntrusivePtr<Channel>> channels;
+  channels[Address(0x7F000001u, 30001)] = std::move(c1);
+  EXPECT_EQ(ResolveCellChannelByAddr(channels, Address(0x7F000001u, 30001)), c1_raw);
 
   channels.erase(Address(0x7F000001u, 30001));
   EXPECT_EQ(ResolveCellChannelByAddr(channels, Address(0x7F000001u, 30001)), nullptr);
 }
 
 TEST(BaseAppCellRouting, OffloadLikeHandoff_RoutesTargetsToTheirNewChannels) {
-  // Models the aftermath of an Offload: an entity previously on peer A
-  // has its cell_addr updated to peer B (via OnCurrentCell). The
-  // routing helper itself doesn't see entities — BaseApp's per-entity
-  // wrapper does — but this confirms that once the cell_addr input
-  // flips, the helper's resolution flips with it.
-  auto* c_peer_a = FakeChannel(0x11);
-  auto* c_peer_b = FakeChannel(0x22);
-  std::unordered_map<Address, Channel*> channels;
-  channels[Address(0x7F000001u, 30001)] = c_peer_a;
-  channels[Address(0x7F000001u, 30002)] = c_peer_b;
+  auto a = FakeChannel();
+  auto b = FakeChannel();
+  auto* a_raw = a.get();
+  auto* b_raw = b.get();
+  std::unordered_map<Address, IntrusivePtr<Channel>> channels;
+  channels[Address(0x7F000001u, 30001)] = std::move(a);
+  channels[Address(0x7F000001u, 30002)] = std::move(b);
 
-  // Before Offload: entity lives at peer A.
   Address entity_cell_addr(0x7F000001u, 30001);
-  EXPECT_EQ(ResolveCellChannelByAddr(channels, entity_cell_addr), c_peer_a);
+  EXPECT_EQ(ResolveCellChannelByAddr(channels, entity_cell_addr), a_raw);
 
-  // OnCurrentCell lands — entity now lives at peer B.
   entity_cell_addr = Address(0x7F000001u, 30002);
-  EXPECT_EQ(ResolveCellChannelByAddr(channels, entity_cell_addr), c_peer_b);
+  EXPECT_EQ(ResolveCellChannelByAddr(channels, entity_cell_addr), b_raw);
 }
 
 }  // namespace

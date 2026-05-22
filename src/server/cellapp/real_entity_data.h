@@ -9,21 +9,23 @@
 
 #include "cellapp/intercell_messages.h"
 #include "foundation/clock.h"
+#include "foundation/intrusive_ptr.h"
 #include "math/vector3.h"
 #include "network/address.h"
+#include "network/channel.h"
 
 namespace atlas {
 
 class CellEntity;
-class Channel;
 
 // Real-only sidecar: Haunt list (peer CellApps holding a Ghost), velocity
 // sample, broadcast bookkeeping. Dropped on Real->Ghost transition.
-// Channel* pointers are non-owning.
+// IntrusivePtr<Channel> keeps the peer's transport object alive past NI
+// condemnation until the cleanup sweep releases.
 class RealEntityData {
  public:
   struct Haunt {
-    Channel* channel{nullptr};
+    IntrusivePtr<Channel> channel{};
     Address addr{};
     TimePoint creation_time{};
   };

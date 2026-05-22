@@ -56,7 +56,7 @@ auto GhostMaintainer::Run(Space& space, TimePoint now) -> PendingWork {
       const auto age = now - h.creation_time;
       if (age < config_.min_ghost_lifespan) continue;
 
-      work.deletes.push_back(DeleteOp{&entity, h.channel, h.addr});
+      work.deletes.push_back(DeleteOp{&entity, h.channel.get(), h.addr});
     }
   });
 

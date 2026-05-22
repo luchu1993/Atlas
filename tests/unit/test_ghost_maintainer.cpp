@@ -19,13 +19,12 @@
 #include "network/channel.h"
 #include "real_entity_data.h"
 #include "space.h"
+#include "test_null_channel.h"
 
 namespace atlas {
 namespace {
 
-auto FakeChannel(uintptr_t tag) -> Channel* {
-  return reinterpret_cast<Channel*>(tag);
-}
+using test_support::FakeChannel;
 
 // A tiny two-peer topology:
 //   self CellApp owns cell 1 covering x < 0

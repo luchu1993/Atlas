@@ -10,8 +10,10 @@
 #include <unordered_set>
 #include <vector>
 
+#include "foundation/intrusive_ptr.h"
 #include "math/vector3.h"
 #include "network/address.h"
+#include "network/channel.h"
 #include "server/entity_types.h"
 #include "space/controllers.h"
 #include "space/entity_motion.h"
@@ -19,7 +21,6 @@
 
 namespace atlas {
 
-class Channel;
 class RealEntityData;
 class Space;
 class Witness;
@@ -60,7 +61,7 @@ class CellEntity : public IEntityMotion {
 
   [[nodiscard]] auto GetRealData() -> RealEntityData* { return real_data_.get(); }
   [[nodiscard]] auto GetRealData() const -> const RealEntityData* { return real_data_.get(); }
-  [[nodiscard]] auto GetRealChannel() const -> Channel* { return real_channel_; }
+  [[nodiscard]] auto GetRealChannel() const -> Channel* { return real_channel_.get(); }
   [[nodiscard]] auto GetRealAddr() const -> const Address& { return real_addr_; }
 
   [[nodiscard]] auto NextRealAddr() const -> const Address& { return next_real_addr_; }
@@ -222,9 +223,9 @@ class CellEntity : public IEntityMotion {
   std::optional<ReplicationState> replication_state_;
 
   // real_data_ XOR real_channel_. real_addr_ shadows real_channel_'s
-  // remote so peer-loss cleanup survives the channel going stale.
+  // remote and the refcount lets the Channel outlive NI condemnation.
   std::unique_ptr<RealEntityData> real_data_;
-  Channel* real_channel_{nullptr};
+  IntrusivePtr<Channel> real_channel_{};
   Address real_addr_{};
   // In-flight Offload hint between GhostSetNextReal and GhostSetReal.
   Address next_real_addr_{};

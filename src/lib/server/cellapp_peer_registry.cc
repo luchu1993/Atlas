@@ -26,12 +26,12 @@ void CellAppPeerRegistry::Subscribe(MachinedClient& machined, Address self_addr,
         ATLAS_LOG_INFO("CellAppPeerRegistry: CellApp born at {}:{}", n.internal_addr.Ip(),
                        n.internal_addr.Port());
         auto ch = network_.ConnectRudpNocwnd(n.internal_addr);
-        if (ch) channels_.emplace(n.internal_addr, static_cast<Channel*>(*ch));
+        if (ch) channels_.emplace(n.internal_addr, IntrusivePtr<Channel>{static_cast<Channel*>(*ch)});
       },
       [this, on_death = std::move(on_death)](const machined::DeathNotification& n) {
         auto it = channels_.find(n.internal_addr);
         if (it == channels_.end()) return;
-        Channel* dying = it->second;
+        Channel* dying = it->second.get();
         if (on_death) on_death(n.internal_addr, dying);
         channels_.erase(it);
         ATLAS_LOG_WARNING("CellAppPeerRegistry: CellApp died at {}:{}", n.internal_addr.Ip(),
@@ -41,14 +41,14 @@ void CellAppPeerRegistry::Subscribe(MachinedClient& machined, Address self_addr,
 
 auto CellAppPeerRegistry::Find(const Address& addr) const -> Channel* {
   auto it = channels_.find(addr);
-  return it == channels_.end() ? nullptr : it->second;
+  return it == channels_.end() ? nullptr : it->second.get();
 }
 
 void CellAppPeerRegistry::InsertForTest(const Address& addr, Channel* ch) {
   if (ch == nullptr) {
     channels_.erase(addr);
   } else {
-    channels_[addr] = ch;
+    channels_[addr] = IntrusivePtr<Channel>{ch};
   }
 }
 

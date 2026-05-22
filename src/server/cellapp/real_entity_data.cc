@@ -14,16 +14,16 @@ RealEntityData::~RealEntityData() = default;
 auto RealEntityData::AddHaunt(Channel* channel, const Address& addr) -> bool {
   if (channel == nullptr) return false;
   if (HasHaunt(channel)) return false;
-  haunts_.push_back(Haunt{channel, addr, Clock::now()});
+  haunts_.push_back(Haunt{IntrusivePtr<Channel>{channel}, addr, Clock::now()});
   return true;
 }
 
 auto RealEntityData::RemoveHaunt(Channel* channel) -> bool {
   auto it = std::find_if(haunts_.begin(), haunts_.end(),
-                         [channel](const Haunt& h) { return h.channel == channel; });
+                         [channel](const Haunt& h) { return h.channel.get() == channel; });
   if (it == haunts_.end()) return false;
   // Swap-back: O(1) at cost of order; Haunts() iterates as a fan-out set.
-  *it = haunts_.back();
+  *it = std::move(haunts_.back());
   haunts_.pop_back();
   return true;
 }
@@ -32,14 +32,14 @@ auto RealEntityData::RemoveHauntByAddr(const Address& addr) -> bool {
   auto it = std::find_if(haunts_.begin(), haunts_.end(),
                          [&addr](const Haunt& h) { return h.addr == addr; });
   if (it == haunts_.end()) return false;
-  *it = haunts_.back();
+  *it = std::move(haunts_.back());
   haunts_.pop_back();
   return true;
 }
 
 auto RealEntityData::HasHaunt(Channel* channel) const -> bool {
   return std::any_of(haunts_.begin(), haunts_.end(),
-                     [channel](const Haunt& h) { return h.channel == channel; });
+                     [channel](const Haunt& h) { return h.channel.get() == channel; });
 }
 
 auto RealEntityData::BuildPositionUpdate() const -> cellapp::GhostPositionUpdate {
