@@ -102,6 +102,23 @@ TEST(CellAppMessages, InternalCellRpcRoundTrip) {
   EXPECT_EQ(rt->payload.size(), 2u);
 }
 
+TEST(CellAppMessages, ClientRpcBroadcastRoundTrip) {
+  ClientRpcBroadcast msg;
+  msg.source_entity_id = 88;
+  msg.rpc_id = 0x00040001;
+  msg.target = 2;  // RpcTarget::kAll
+  msg.payload = {std::byte{0xBE}, std::byte{0xEF}, std::byte{0x42}};
+  msg.trace_id = 0xCAFE'BABE'DEAD'BEEFULL;
+
+  auto rt = RoundTrip(msg);
+  ASSERT_TRUE(rt.has_value());
+  EXPECT_EQ(rt->source_entity_id, 88u);
+  EXPECT_EQ(rt->rpc_id, 0x00040001u);
+  EXPECT_EQ(rt->target, 2u);
+  EXPECT_EQ(rt->payload.size(), 3u);
+  EXPECT_EQ(rt->trace_id, 0xCAFE'BABE'DEAD'BEEFULL);
+}
+
 TEST(CellAppMessages, CreateAndDestroySpaceRoundTrip) {
   CreateSpace c{555};
   auto rtc = RoundTrip(c);
@@ -189,6 +206,7 @@ TEST(CellAppMessages, AllMessagesInAllocatedIdRange) {
   check(DestroyCellEntity::Descriptor().id);
   check(ClientCellRpcForward::Descriptor().id);
   check(InternalCellRpc::Descriptor().id);
+  check(ClientRpcBroadcast::Descriptor().id);
   check(CreateSpace::Descriptor().id);
   check(DestroySpace::Descriptor().id);
   check(AvatarUpdate::Descriptor().id);

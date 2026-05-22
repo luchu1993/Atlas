@@ -29,6 +29,7 @@ struct CreateCellEntity;
 struct DestroyCellEntity;
 struct ClientCellRpcForward;
 struct InternalCellRpc;
+struct ClientRpcBroadcast;
 struct CreateSpace;
 struct DestroySpace;
 struct AvatarUpdate;
@@ -89,6 +90,8 @@ class CellApp : public EntityApp {
   void OnClientCellRpcForward(const Address& src, Channel* ch,
                               const cellapp::ClientCellRpcForward& msg);
   void OnInternalCellRpc(const Address& src, Channel* ch, const cellapp::InternalCellRpc& msg);
+  void OnClientRpcBroadcast(const Address& src, Channel* ch,
+                            const cellapp::ClientRpcBroadcast& msg);
   void OnCreateSpace(const Address& src, Channel* ch, const cellapp::CreateSpace& msg);
   void OnDestroySpace(const Address& src, Channel* ch, const cellapp::DestroySpace& msg);
   void OnAvatarUpdate(const Address& src, Channel* ch, const cellapp::AvatarUpdate& msg);

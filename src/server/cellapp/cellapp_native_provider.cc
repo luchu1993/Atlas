@@ -10,6 +10,7 @@
 #include "cell_entity.h"
 #include "cellapp_messages.h"
 #include "foundation/log.h"
+#include "real_entity_data.h"
 #include "math/vector3.h"
 #include "network/channel.h"
 #include "network/network_interface.h"
@@ -124,6 +125,22 @@ void CellAppNativeProvider::SendClientRpc(uint32_t entity_id, uint32_t rpc_id, R
     msg.trace_id = trace_id;
     if (len > 0) msg.payload.assign(payload, payload + static_cast<std::size_t>(len));
     (void)(*base_ch)->SendMessage(msg);
+  }
+
+  // Forward Others/All to each Haunt cell so Observers attached via the
+  // remote Ghost mirror also see the RPC. Owner-only stays local.
+  if (target == RpcTarget::kOwner) return;
+  auto* rd = source->GetRealData();
+  if (rd == nullptr) return;
+  for (const auto& haunt : rd->Haunts()) {
+    if (haunt.channel == nullptr) continue;
+    cellapp::ClientRpcBroadcast bmsg;
+    bmsg.source_entity_id = source_entity_id;
+    bmsg.rpc_id = rpc_id;
+    bmsg.target = static_cast<uint8_t>(target);
+    bmsg.trace_id = trace_id;
+    if (len > 0) bmsg.payload.assign(payload, payload + static_cast<std::size_t>(len));
+    (void)haunt.channel->SendMessage(bmsg);
   }
 }
 

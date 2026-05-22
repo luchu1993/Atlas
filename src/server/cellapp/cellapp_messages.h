@@ -334,6 +334,62 @@ struct InternalCellRpc {
 };
 static_assert(NetworkMessage<InternalCellRpc>);
 
+// Real cell -> each Haunt cell so AllClients / OtherClients ClientRpc
+// reaches observers watching via the remote Ghost mirror.
+struct ClientRpcBroadcast {
+  EntityID source_entity_id{kInvalidEntityID};
+  uint32_t rpc_id{0};
+  // RpcTarget encoded as uint8_t; only kOthers / kAll are valid here (the
+  // owner branch already shipped via SendClientRpc's local path).
+  uint8_t target{1};
+  std::vector<std::byte> payload;
+  uint64_t trace_id{0};
+
+  static auto Descriptor() -> const MessageDesc& {
+    static const MessageDesc kDesc{msg_id::Id(msg_id::CellApp::kClientRpcBroadcast),
+                                   "cellapp::ClientRpcBroadcast",
+                                   MessageLengthStyle::kVariable,
+                                   -1,
+                                   MessageReliability::kReliable,
+                                   MessageUrgency::kImmediate};
+    return kDesc;
+  }
+
+  void Serialize(BinaryWriter& w) const {
+    w.WritePackedInt(source_entity_id);
+    w.Write(rpc_id);
+    w.Write(target);
+    w.WritePackedInt(static_cast<uint32_t>(payload.size()));
+    if (!payload.empty()) w.WriteBytes(std::span<const std::byte>(payload));
+    w.Write(trace_id);
+  }
+
+  static auto Deserialize(BinaryReader& r) -> Result<ClientRpcBroadcast> {
+    auto sid = r.ReadPackedInt();
+    auto rid = r.Read<uint32_t>();
+    auto tgt = r.Read<uint8_t>();
+    auto plen = r.ReadPackedInt();
+    if (!sid || !rid || !tgt || !plen)
+      return Error{ErrorCode::kInvalidArgument, "ClientRpcBroadcast: truncated"};
+    ClientRpcBroadcast msg;
+    msg.source_entity_id = *sid;
+    msg.rpc_id = *rid;
+    msg.target = *tgt;
+    if (*plen > 0) {
+      auto pdata = r.ReadBytes(*plen);
+      if (!pdata)
+        return Error{ErrorCode::kInvalidArgument, "ClientRpcBroadcast: payload truncated"};
+      msg.payload.assign(pdata->begin(), pdata->end());
+    }
+    auto trace = r.Read<uint64_t>();
+    if (!trace)
+      return Error{ErrorCode::kInvalidArgument, "ClientRpcBroadcast: trace_id truncated"};
+    msg.trace_id = *trace;
+    return msg;
+  }
+};
+static_assert(NetworkMessage<ClientRpcBroadcast>);
+
 struct CreateSpace {
   SpaceID space_id{kInvalidSpaceID};
 

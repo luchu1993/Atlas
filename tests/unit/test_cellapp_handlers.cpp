@@ -709,6 +709,31 @@ TEST_F(CellAppHandlersTest, PeerDeathDropsOrphanGhostsAndClearsHaunts) {
   EXPECT_TRUE(rd->HasHaunt(other_ch)) << "surviving peer's Haunt untouched";
 }
 
+// OnClientRpcBroadcast finds the Ghost mirror and fans out via local
+// Observers; non-Ghost / unknown entity logs and drops.
+TEST_F(CellAppHandlersTest, OnClientRpcBroadcast_RejectsUnknownAndNonGhost) {
+  cellapp::CreateSpace cs;
+  cs.space_id = 1;
+  app_.OnCreateSpace({}, nullptr, cs);
+
+  app_.OnCreateCellEntity({}, nullptr, MakeCreate(900, 1, {0, 0, 0}));
+  ASSERT_NE(app_.FindRealEntity(900), nullptr);
+
+  cellapp::ClientRpcBroadcast unknown;
+  unknown.source_entity_id = 99999;
+  unknown.rpc_id = 0x000401;
+  unknown.target = 2;
+  app_.OnClientRpcBroadcast({}, nullptr, unknown);
+
+  cellapp::ClientRpcBroadcast on_real;
+  on_real.source_entity_id = 900;
+  on_real.rpc_id = 0x000401;
+  on_real.target = 2;
+  app_.OnClientRpcBroadcast({}, nullptr, on_real);
+
+  EXPECT_NE(app_.FindRealEntity(900), nullptr);
+}
+
 // Channel pointer may already be freed when HandlePeerLost runs, so the
 // sweep is address-keyed; the second death signal is a no-op.
 TEST_F(CellAppHandlersTest, HandlePeerLost_AddressKeyed_AndIdempotent) {

@@ -104,6 +104,10 @@ auto CellApp::Init(int argc, char* argv[]) -> bool {
       [this](const Address& src, Channel* ch, const cellapp::InternalCellRpc& msg) {
         OnInternalCellRpc(src, ch, msg);
       });
+  (void)table.RegisterTypedHandler<cellapp::ClientRpcBroadcast>(
+      [this](const Address& src, Channel* ch, const cellapp::ClientRpcBroadcast& msg) {
+        OnClientRpcBroadcast(src, ch, msg);
+      });
   (void)table.RegisterTypedHandler<cellapp::CreateSpace>(
       [this](const Address& src, Channel* ch, const cellapp::CreateSpace& msg) {
         OnCreateSpace(src, ch, msg);
@@ -768,6 +772,47 @@ void CellApp::OnInternalCellRpc(const Address& /*src*/, Channel* ch,
   dispatch_fn(entity->Id(), msg.rpc_id, reinterpret_cast<intptr_t>(ch),
               reinterpret_cast<const uint8_t*>(msg.payload.data()),
               static_cast<int32_t>(msg.payload.size()), msg.trace_id);
+}
+
+void CellApp::OnClientRpcBroadcast(const Address& /*src*/, Channel* /*ch*/,
+                                   const cellapp::ClientRpcBroadcast& msg) {
+  auto it = entity_population_.find(msg.source_entity_id);
+  if (it == entity_population_.end()) {
+    ATLAS_LOG_WARNING(
+        "CellApp: ClientRpcBroadcast for unknown entity_id={} rpc_id=0x{:06X}",
+        msg.source_entity_id, msg.rpc_id);
+    return;
+  }
+  auto* source = it->second;
+  if (!source->IsGhost()) {
+    ATLAS_LOG_WARNING(
+        "CellApp: ClientRpcBroadcast for non-Ghost entity_id={} rpc_id=0x{:06X} — stale routing",
+        msg.source_entity_id, msg.rpc_id);
+    return;
+  }
+
+  // Owner branch already shipped from the Real cell; Ghost cell only fans
+  // out to local Observers (which are by definition not the owner).
+  std::unordered_map<Address, std::vector<EntityID>> by_baseapp;
+  for (Witness* w : source->Observers()) {
+    CellEntity& observer = w->Owner();
+    by_baseapp[observer.BaseAddr()].push_back(observer.Id());
+  }
+  for (auto& [base_addr, ids] : by_baseapp) {
+    auto base_ch = Network().ConnectRudpNocwnd(base_addr);
+    if (!base_ch) {
+      ATLAS_LOG_WARNING("CellApp: ClientRpcBroadcast: cannot connect to base at {}",
+                        base_addr.ToString());
+      continue;
+    }
+    baseapp::BroadcastRpcFromCell out;
+    out.rpc_id = msg.rpc_id;
+    out.source_entity_id = msg.source_entity_id;
+    out.dest_entity_ids = std::move(ids);
+    out.trace_id = msg.trace_id;
+    out.payload = msg.payload;
+    (void)(*base_ch)->SendMessage(out);
+  }
 }
 
 void CellApp::OnCreateSpace(const Address& /*src*/, Channel* /*ch*/,

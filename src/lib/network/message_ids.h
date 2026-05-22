@@ -116,6 +116,9 @@ enum class CellApp : uint16_t {
   kGhostSetReal = 3104,
   kGhostSetNextReal = 3105,
   kGhostSnapshotRefresh = 3106,
+  // Real cell -> each Haunt cell so AllClients/OtherClients ClientRpc
+  // reaches observers that watch via the remote Ghost mirror.
+  kClientRpcBroadcast = 3107,
   kOffloadEntity = 3110,
   kOffloadEntityAck = 3111,
   // CellApp -> BaseApp ack for kDestroyCellEntity; lets BaseApp gate a
@@ -235,6 +238,7 @@ ATLAS_ASSERT_ID_RANGE(CellApp::kSpawnLocalEntity, 3000, 3999);
 ATLAS_ASSERT_ID_RANGE(CellApp::kDestroyCellEntity, 3000, 3999);
 ATLAS_ASSERT_ID_RANGE(CellApp::kClientCellRpcForward, 3000, 3999);
 ATLAS_ASSERT_ID_RANGE(CellApp::kInternalCellRpc, 3000, 3999);
+ATLAS_ASSERT_ID_RANGE(CellApp::kClientRpcBroadcast, 3000, 3999);
 ATLAS_ASSERT_ID_RANGE(CellApp::kCreateSpace, 3000, 3999);
 ATLAS_ASSERT_ID_RANGE(CellApp::kDestroySpace, 3000, 3999);
 ATLAS_ASSERT_ID_RANGE(CellApp::kAvatarUpdate, 3000, 3999);
