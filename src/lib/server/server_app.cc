@@ -172,16 +172,20 @@ auto ServerApp::RunLoop() -> bool {
   return true;
 }
 
+auto ServerApp::NextTickBoundary(TimePoint now, TimePoint epoch, Duration period) -> TimePoint {
+  const auto period_ns = std::chrono::duration_cast<std::chrono::nanoseconds>(period).count();
+  if (period_ns <= 0) return now;
+  const auto since_ns =
+      std::chrono::duration_cast<std::chrono::nanoseconds>(now - epoch).count();
+  // ceil() the boundary; floor would fire immediately and skip phase alignment.
+  const auto missed = (since_ns + period_ns - 1) / period_ns;
+  return epoch + std::chrono::nanoseconds{missed * period_ns};
+}
+
 void ServerApp::RealignTickTo(TimePoint epoch) {
   if (!tick_timer_.IsValid() || tick_interval_.count() <= 0) return;
   const auto now = Clock::now();
-  const auto period_ns = std::chrono::duration_cast<std::chrono::nanoseconds>(tick_interval_).count();
-  const auto since_epoch_ns =
-      std::chrono::duration_cast<std::chrono::nanoseconds>(now - epoch).count();
-  // ceil() the next aligned boundary; using floor would fire immediately.
-  const auto missed_periods = (since_epoch_ns + period_ns - 1) / period_ns;
-  const auto boundary = epoch + std::chrono::nanoseconds{missed_periods * period_ns};
-  const auto delay = boundary - now;
+  const auto delay = NextTickBoundary(now, epoch, tick_interval_) - now;
 
   dispatcher_.CancelTimer(tick_timer_);
   tick_timer_ = dispatcher_.AddTimer(delay, [this](TimerHandle) {

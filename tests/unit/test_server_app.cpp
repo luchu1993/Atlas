@@ -270,3 +270,27 @@ TEST(ServerApp, ConfigLoadedFromArgs) {
   EXPECT_EQ(app.Config().process_name, "test_proc");
   EXPECT_EQ(app.Config().update_hertz, 50);
 }
+
+// Phase-alignment math for cellapp tick sync — `now < epoch` aligns
+// forward to `epoch`, `now == epoch` keeps it, `now` past N full periods
+// rounds up to N+1.
+TEST(ServerApp, NextTickBoundary_PhaseAlignment) {
+  using namespace std::chrono_literals;
+  const auto period = 50ms;
+  const TimePoint epoch = TimePoint{} + 1000ms;
+
+  // now == epoch: already on the boundary, no shift.
+  EXPECT_EQ(ServerApp::NextTickBoundary(epoch, epoch, period), epoch);
+
+  // now mid-period: round up to the next aligned boundary.
+  EXPECT_EQ(ServerApp::NextTickBoundary(epoch + 30ms, epoch, period), epoch + 50ms);
+
+  // now exactly on a boundary: stays put.
+  EXPECT_EQ(ServerApp::NextTickBoundary(epoch + 100ms, epoch, period), epoch + 100ms);
+
+  // now before epoch: returns epoch (negative since_ns div period = 0).
+  EXPECT_EQ(ServerApp::NextTickBoundary(epoch - 20ms, epoch, period), epoch);
+
+  // Zero / negative period: caller has no aligned tick to converge to.
+  EXPECT_EQ(ServerApp::NextTickBoundary(epoch, epoch, Duration::zero()), epoch);
+}

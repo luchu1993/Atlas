@@ -62,6 +62,11 @@ class ServerApp {
   // converges to the same tick edge regardless of register order.
   void RealignTickTo(TimePoint epoch);
 
+  // ceil(now - epoch / period) * period + epoch. Pure math, exposed
+  // for unit-testing the alignment without a wall clock.
+  [[nodiscard]] static auto NextTickBoundary(TimePoint now, TimePoint epoch, Duration period)
+      -> TimePoint;
+
  protected:
   [[nodiscard]] virtual auto Init(int argc, char* argv[]) -> bool;
 
