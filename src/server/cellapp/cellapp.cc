@@ -913,17 +913,21 @@ auto CellApp::FindPeerChannel(const Address& addr) const -> Channel* {
   return peer_registry_.Find(addr);
 }
 
-void CellApp::OnPeerCellAppDeath(const Address& addr, Channel* dying) {
+void CellApp::OnPeerCellAppDeath(const Address& addr, Channel* /*dying*/) {
+  HandlePeerLost(addr);
+}
+
+void CellApp::HandlePeerLost(const Address& peer_addr) {
   // Collect orphan Ghost ids first - can't erase while iterating.
   // Reals' Haunt-list repairs are map-key-preserving so safe mid-iter.
   std::vector<EntityID> orphan_ghosts;
   uint32_t haunts_cleared = 0;
   for (auto& [id, entity] : entity_population_) {
     if (entity->IsGhost()) {
-      if (entity->GetRealChannel() == dying) orphan_ghosts.push_back(id);
+      if (entity->GetRealAddr() == peer_addr) orphan_ghosts.push_back(id);
     } else if (entity->IsReal()) {
       if (auto* rd = entity->GetRealData()) {
-        if (rd->RemoveHaunt(dying)) ++haunts_cleared;
+        if (rd->RemoveHauntByAddr(peer_addr)) ++haunts_cleared;
       }
     }
   }
@@ -941,8 +945,8 @@ void CellApp::OnPeerCellAppDeath(const Address& addr, Channel* dying) {
 
   if (!orphan_ghosts.empty() || haunts_cleared > 0) {
     ATLAS_LOG_WARNING(
-        "CellApp: peer CellApp {}:{} died — dropped {} orphan Ghost(s), cleared {} Haunt(s)",
-        addr.Ip(), addr.Port(), orphan_ghosts.size(), haunts_cleared);
+        "CellApp: peer CellApp {}:{} lost — dropped {} orphan Ghost(s), cleared {} Haunt(s)",
+        peer_addr.Ip(), peer_addr.Port(), orphan_ghosts.size(), haunts_cleared);
   }
 }
 
@@ -1134,6 +1138,14 @@ void CellApp::OnOutboundChannelDeath(Channel& dying) {
     ATLAS_LOG_INFO("CellApp: outbound channel {} died — disabled {} witness(es)",
                    dying.RemoteAddress().ToString(), orphans.size());
   }
+
+  // peer_registry_ caches Channel* keyed by Address; evict before NI
+  // deletes the Channel so FindPeerChannel can't return a stale pointer.
+  peer_registry_.Erase(dying.RemoteAddress());
+
+  // Entity-level peer cleanup must complete before NI deletes the Channel,
+  // otherwise TickGhostPump dereferences a freed Haunt::channel.
+  HandlePeerLost(dying.RemoteAddress());
 }
 
 void CellApp::OnCreateGhost(const Address& /*src*/, Channel* ch, const cellapp::CreateGhost& msg) {
@@ -1153,10 +1165,11 @@ void CellApp::OnCreateGhost(const Address& /*src*/, Channel* ch, const cellapp::
                       msg.entity_id);
     return;
   }
-  // CreateGhost arrives on the peer's connection (ch), so latch it as
-  // the Real-side back-channel.
+  // ch is the back-channel; msg.real_cellapp_addr is the address-keyed
+  // peer identity used by cleanup once ch goes stale.
   auto* entity_ptr_raw = space->AddEntity(std::make_unique<CellEntity>(
-      CellEntity::GhostTag{}, msg.entity_id, msg.type_id, *space, msg.position, msg.direction, ch));
+      CellEntity::GhostTag{}, msg.entity_id, msg.type_id, *space, msg.position, msg.direction, ch,
+      msg.real_cellapp_addr));
   entity_ptr_raw->SetOnGround(msg.on_ground);
   entity_ptr_raw->SetBaseAddr(msg.base_addr);
   // Seed snapshot baseline so subsequent GhostDelta frames have
@@ -1246,7 +1259,7 @@ void CellApp::OnGhostSetReal(const Address& /*src*/, Channel* /*ch*/,
                       msg.new_real_addr.Ip(), msg.new_real_addr.Port());
     return;
   }
-  entity->RebindRealChannel(new_ch);
+  entity->RebindRealChannel(new_ch, msg.new_real_addr);
 }
 
 void CellApp::OnGhostSetNextReal(const Address& /*src*/, Channel* /*ch*/,
@@ -2053,7 +2066,7 @@ void CellApp::TickOffloadChecker() {
 
       // Local Real -> Ghost; drops witness + controllers and uses the
       // peer channel as the new back-channel.
-      op.entity->ConvertRealToGhost(peer);
+      op.entity->ConvertRealToGhost(peer, op.target_cellapp_addr);
 
       for (auto& [_cell_id, cell] : space->LocalCells()) {
         cell->RemoveRealEntity(op.entity);

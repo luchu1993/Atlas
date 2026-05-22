@@ -37,10 +37,11 @@ class CellEntity : public IEntityMotion {
   CellEntity(EntityID id, uint16_t type_id, Space& space, const math::Vector3& position,
              const math::Vector3& direction);
 
-  // Ghost ctor; real_channel is non-owning, must outlive the ghost (or
-  // be cleared by ConvertGhostToReal).
+  // real_channel is non-owning, must outlive the ghost (or be cleared
+  // by ConvertGhostToReal); real_addr is the address-keyed cleanup key.
   CellEntity(GhostTag, EntityID id, uint16_t type_id, Space& space, const math::Vector3& position,
-             const math::Vector3& direction, Channel* real_channel);
+             const math::Vector3& direction, Channel* real_channel,
+             const Address& real_addr = {});
 
   ~CellEntity() override;
 
@@ -60,6 +61,7 @@ class CellEntity : public IEntityMotion {
   [[nodiscard]] auto GetRealData() -> RealEntityData* { return real_data_.get(); }
   [[nodiscard]] auto GetRealData() const -> const RealEntityData* { return real_data_.get(); }
   [[nodiscard]] auto GetRealChannel() const -> Channel* { return real_channel_; }
+  [[nodiscard]] auto GetRealAddr() const -> const Address& { return real_addr_; }
 
   [[nodiscard]] auto NextRealAddr() const -> const Address& { return next_real_addr_; }
   void SetNextRealAddr(const Address& addr) { next_real_addr_ = addr; }
@@ -67,7 +69,7 @@ class CellEntity : public IEntityMotion {
   // Offload-emit side: drops RealEntityData (haunts leave with it),
   // parks real_channel, tears down witness + controllers (Ghost is
   // script-less).
-  void ConvertRealToGhost(Channel* new_real_channel);
+  void ConvertRealToGhost(Channel* new_real_channel, const Address& new_real_addr = {});
 
   // Offload-receive side: allocates fresh RealEntityData, retains
   // replication_state_ so we serve the cached snapshot until the next
@@ -82,7 +84,7 @@ class CellEntity : public IEntityMotion {
 
   // Used by GhostSetReal post-Offload; clears next_real_addr_. No-op
   // on a Real (no back-channel to rebind).
-  void RebindRealChannel(Channel* new_real_channel);
+  void RebindRealChannel(Channel* new_real_channel, const Address& new_real_addr = {});
 
   // Both setters update the field AND the RangeList sort position.
   [[nodiscard]] auto Position() const -> const math::Vector3& override { return position_; }
@@ -219,11 +221,12 @@ class CellEntity : public IEntityMotion {
 
   std::optional<ReplicationState> replication_state_;
 
-  // Mutually exclusive: real_data_ XOR real_channel_.
-  // next_real_addr_ is the in-flight Offload hint between
-  // GhostSetNextReal and GhostSetReal.
+  // real_data_ XOR real_channel_. real_addr_ shadows real_channel_'s
+  // remote so peer-loss cleanup survives the channel going stale.
   std::unique_ptr<RealEntityData> real_data_;
   Channel* real_channel_{nullptr};
+  Address real_addr_{};
+  // In-flight Offload hint between GhostSetNextReal and GhostSetReal.
   Address next_real_addr_{};
 
   bool destroyed_{false};

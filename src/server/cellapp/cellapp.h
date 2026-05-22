@@ -151,13 +151,14 @@ class CellApp : public EntityApp {
   // production writer.
   [[nodiscard]] auto PeerRegistryForTest() -> CellAppPeerRegistry& { return peer_registry_; }
 
-  // Invoked from the peer-registry death handler. Drops Ghosts whose
-  // Real lived on the dying peer (their authoritative source is gone)
-  // and removes the dying Channel* from every Real's Haunt list so
-  // later broadcasts don't chase a freed pointer.
+  // Machined-driven; defers to HandlePeerLost.
   void OnPeerCellAppDeath(const Address& addr, Channel* dying);
 
   void OnOutboundChannelDeath(Channel& dying);
+
+  // Single funnel for peer-cell death: address-keyed haunt + orphan-
+  // ghost sweep, idempotent across the two death signals.
+  void HandlePeerLost(const Address& peer_addr);
 
   // Build but don't send - caller chooses transport. The C#
   // SerializeEntity callback fills persistent_blob when registered;

@@ -30,14 +30,15 @@ CellEntity::CellEntity(EntityID id, uint16_t type_id, Space& space, const math::
 
 CellEntity::CellEntity(GhostTag, EntityID id, uint16_t type_id, Space& space,
                        const math::Vector3& position, const math::Vector3& direction,
-                       Channel* real_channel)
+                       Channel* real_channel, const Address& real_addr)
     : id_(id),
       type_id_(type_id),
       position_(position),
       direction_(direction),
       space_(space),
       range_node_(position.x, position.z),
-      real_channel_(real_channel) {
+      real_channel_(real_channel),
+      real_addr_(real_addr) {
   // Same RangeList wiring as Real so peer Witness AoI works uniformly.
   range_node_.SetOwnerData(this);
   space_.GetRangeList().Insert(&range_node_);
@@ -115,7 +116,7 @@ void CellEntity::DisableWitness() {
   witness_.reset();
 }
 
-void CellEntity::ConvertRealToGhost(Channel* new_real_channel) {
+void CellEntity::ConvertRealToGhost(Channel* new_real_channel, const Address& new_real_addr) {
   if (!IsReal()) {
     ATLAS_LOG_WARNING("CellEntity::ConvertRealToGhost on non-Real entity id={} — ignored", id_);
     return;
@@ -129,6 +130,7 @@ void CellEntity::ConvertRealToGhost(Channel* new_real_channel) {
   // Drop the haunt list and velocity sample - we're no longer authoritative.
   real_data_.reset();
   real_channel_ = new_real_channel;
+  real_addr_ = new_real_addr;
 }
 
 void CellEntity::ConvertGhostToReal() {
@@ -137,6 +139,7 @@ void CellEntity::ConvertGhostToReal() {
     return;
   }
   real_channel_ = nullptr;
+  real_addr_ = {};
   next_real_addr_ = {};
   real_data_ = std::make_unique<RealEntityData>(*this);
 }
@@ -191,12 +194,13 @@ void CellEntity::GhostApplyDelta(uint64_t event_seq, std::span<const std::byte> 
   while (state.history.size() > kReplicationHistoryWindow) state.history.pop_front();
 }
 
-void CellEntity::RebindRealChannel(Channel* new_real_channel) {
+void CellEntity::RebindRealChannel(Channel* new_real_channel, const Address& new_real_addr) {
   if (!IsGhost()) {
     ATLAS_LOG_WARNING("CellEntity::RebindRealChannel on non-Ghost id={} — ignored", id_);
     return;
   }
   real_channel_ = new_real_channel;
+  real_addr_ = new_real_addr;
   // Offload handoff is done - the transition-window hint no longer applies.
   next_real_addr_ = {};
 }

@@ -40,6 +40,10 @@ class RealEntityData {
 
   auto RemoveHaunt(Channel* channel) -> bool;
 
+  // Address-keyed remove for peer-death paths: the Channel pointer may
+  // already be condemned/freed by the time machined fires DeathNotification.
+  auto RemoveHauntByAddr(const Address& addr) -> bool;
+
   [[nodiscard]] auto HasHaunt(Channel* channel) const -> bool;
   [[nodiscard]] auto HauntCount() const -> std::size_t { return haunts_.size(); }
   [[nodiscard]] auto Haunts() const -> const std::vector<Haunt>& { return haunts_; }

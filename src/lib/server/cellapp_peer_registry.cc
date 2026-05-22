@@ -52,7 +52,7 @@ void CellAppPeerRegistry::InsertForTest(const Address& addr, Channel* ch) {
   }
 }
 
-auto CellAppPeerRegistry::EraseForTest(const Address& addr) -> bool {
+auto CellAppPeerRegistry::Erase(const Address& addr) -> bool {
   return channels_.erase(addr) > 0;
 }
 

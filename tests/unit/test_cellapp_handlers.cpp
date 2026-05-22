@@ -709,7 +709,45 @@ TEST_F(CellAppHandlersTest, PeerDeathDropsOrphanGhostsAndClearsHaunts) {
   EXPECT_TRUE(rd->HasHaunt(other_ch)) << "surviving peer's Haunt untouched";
 }
 
-// ─── SpaceData routing (local handler behaviour) ────────────────────────────
+// Channel pointer may already be freed when HandlePeerLost runs, so the
+// sweep is address-keyed; the second death signal is a no-op.
+TEST_F(CellAppHandlersTest, HandlePeerLost_AddressKeyed_AndIdempotent) {
+  cellapp::CreateSpace cs;
+  cs.space_id = 1;
+  app_.OnCreateSpace({}, nullptr, cs);
+
+  auto* dying_ch = FakeChannel(0xDEAD);
+  auto* other_ch = FakeChannel(0xCAFE);
+  const Address dying_addr(0x7F000001u, 40001);
+  const Address other_addr(0x7F000001u, 40002);
+
+  cellapp::CreateGhost cg;
+  cg.entity_id = 700;
+  cg.type_id = 1;
+  cg.space_id = 1;
+  cg.position = {0, 0, 0};
+  cg.direction = {1, 0, 0};
+  cg.real_cellapp_addr = dying_addr;
+  app_.OnCreateGhost({}, dying_ch, cg);
+
+  app_.OnCreateCellEntity({}, nullptr, MakeCreate(800, 1, {20, 0, 20}));
+  auto* real = app_.FindRealEntity(800);
+  ASSERT_NE(real, nullptr);
+  auto* rd = real->GetRealData();
+  ASSERT_TRUE(rd->AddHaunt(dying_ch, dying_addr));
+  ASSERT_TRUE(rd->AddHaunt(other_ch, other_addr));
+  ASSERT_EQ(rd->HauntCount(), 2u);
+
+  app_.HandlePeerLost(dying_addr);
+
+  EXPECT_EQ(app_.FindEntity(700), nullptr);
+  EXPECT_EQ(rd->HauntCount(), 1u);
+  EXPECT_TRUE(rd->HasHaunt(other_ch));
+
+  app_.HandlePeerLost(dying_addr);
+  EXPECT_EQ(rd->HauntCount(), 1u);
+  EXPECT_TRUE(rd->HasHaunt(other_ch));
+}
 
 namespace {
 

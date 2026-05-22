@@ -41,9 +41,12 @@ class CellAppPeerRegistry {
 
   [[nodiscard]] auto Size() const -> std::size_t { return channels_.size(); }
 
-  // Test-only mutators; production writes come from Subscribe() callbacks.
+  // Evicts before machined DeathNotification so Find never hands out a
+  // RUDP-condemned Channel*. Idempotent.
+  auto Erase(const Address& addr) -> bool;
+
+  // Test-only seed; production writes come from Subscribe() callbacks.
   void InsertForTest(const Address& addr, Channel* ch);
-  auto EraseForTest(const Address& addr) -> bool;
 
  private:
   NetworkInterface& network_;

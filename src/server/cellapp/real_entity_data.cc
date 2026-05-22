@@ -28,6 +28,15 @@ auto RealEntityData::RemoveHaunt(Channel* channel) -> bool {
   return true;
 }
 
+auto RealEntityData::RemoveHauntByAddr(const Address& addr) -> bool {
+  auto it = std::find_if(haunts_.begin(), haunts_.end(),
+                         [&addr](const Haunt& h) { return h.addr == addr; });
+  if (it == haunts_.end()) return false;
+  *it = haunts_.back();
+  haunts_.pop_back();
+  return true;
+}
+
 auto RealEntityData::HasHaunt(Channel* channel) const -> bool {
   return std::any_of(haunts_.begin(), haunts_.end(),
                      [channel](const Haunt& h) { return h.channel == channel; });
