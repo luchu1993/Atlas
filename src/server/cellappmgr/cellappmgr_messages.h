@@ -57,13 +57,16 @@ struct RegisterCellAppAck {
   bool success{false};
   uint32_t app_id{0};
   uint64_t game_time{0};
+  // Cluster-wide tick reference (mgr's monotonic μs); cellapps phase
+  // their next tick boundary to it so Ghost updates land aligned.
+  uint64_t tick_alignment_epoch_us{0};
 
   static auto Descriptor() -> const MessageDesc& {
     static const MessageDesc kDesc{
         msg_id::Id(msg_id::CellAppMgr::kRegisterCellAppAck),
         "cellappmgr::RegisterCellAppAck",
         MessageLengthStyle::kFixed,
-        static_cast<int>(sizeof(uint8_t) + sizeof(uint32_t) + sizeof(uint64_t)),
+        static_cast<int>(sizeof(uint8_t) + sizeof(uint32_t) + 2 * sizeof(uint64_t)),
         MessageReliability::kReliable,
         MessageUrgency::kImmediate};
     return kDesc;
@@ -73,18 +76,21 @@ struct RegisterCellAppAck {
     w.Write(static_cast<uint8_t>(success ? 1 : 0));
     w.Write(app_id);
     w.Write(game_time);
+    w.Write(tick_alignment_epoch_us);
   }
 
   static auto Deserialize(BinaryReader& r) -> Result<RegisterCellAppAck> {
     auto ok = r.Read<uint8_t>();
     auto aid = r.Read<uint32_t>();
     auto gt = r.Read<uint64_t>();
-    if (!ok || !aid || !gt)
+    auto tep = r.Read<uint64_t>();
+    if (!ok || !aid || !gt || !tep)
       return Error{ErrorCode::kInvalidArgument, "RegisterCellAppAck: truncated"};
     RegisterCellAppAck msg;
     msg.success = (*ok != 0);
     msg.app_id = *aid;
     msg.game_time = *gt;
+    msg.tick_alignment_epoch_us = *tep;
     return msg;
   }
 };

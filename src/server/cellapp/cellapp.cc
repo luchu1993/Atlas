@@ -1846,6 +1846,13 @@ void CellApp::OnRegisterCellAppAck(const Address& /*src*/, Channel* /*ch*/,
   }
   app_id_ = msg.app_id;
   ATLAS_LOG_INFO("CellApp: registered with CellAppMgr; app_id={}", app_id_);
+
+  // Re-phase the tick onto the cluster-wide reference so cross-cell
+  // Ghost updates land on aligned tick edges instead of random phase.
+  if (msg.tick_alignment_epoch_us > 0) {
+    const auto epoch = TimePoint{} + std::chrono::microseconds{msg.tick_alignment_epoch_us};
+    RealignTickTo(epoch);
+  }
 }
 
 auto CellApp::BuildOffloadMessage(const CellEntity& entity) const -> cellapp::OffloadEntity {

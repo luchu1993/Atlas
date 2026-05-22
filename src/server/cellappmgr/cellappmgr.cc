@@ -170,6 +170,8 @@ void CellAppMgr::OnRegisterCellApp(const Address& src, Channel* ch,
   ack.success = true;
   ack.app_id = app_id;
   ack.game_time = GameTime();
+  ack.tick_alignment_epoch_us = static_cast<uint64_t>(
+      std::chrono::duration_cast<std::chrono::microseconds>(StartTime().time_since_epoch()).count());
   if (ch != nullptr) {
     if (auto r = ch->SendMessage(ack); !r) {
       // Cellapp blocks until it sees this ack - drop => orphaned cellapp

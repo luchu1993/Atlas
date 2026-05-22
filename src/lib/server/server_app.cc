@@ -122,6 +122,7 @@ auto ServerApp::Init(int argc, char* argv[]) -> bool {
       std::chrono::duration<double>(1.0 / config_.update_hertz));
   tick_timer_ =
       dispatcher_.AddRepeatingTimer(tick_interval, [this](TimerHandle) { AdvanceTime(); });
+  tick_interval_ = tick_interval;
 
   RegisterWatchers();
 
@@ -169,6 +170,25 @@ void ServerApp::Fini() {
 auto ServerApp::RunLoop() -> bool {
   dispatcher_.Run();
   return true;
+}
+
+void ServerApp::RealignTickTo(TimePoint epoch) {
+  if (!tick_timer_.IsValid() || tick_interval_.count() <= 0) return;
+  const auto now = Clock::now();
+  const auto period_ns = std::chrono::duration_cast<std::chrono::nanoseconds>(tick_interval_).count();
+  const auto since_epoch_ns =
+      std::chrono::duration_cast<std::chrono::nanoseconds>(now - epoch).count();
+  // ceil() the next aligned boundary; using floor would fire immediately.
+  const auto missed_periods = (since_epoch_ns + period_ns - 1) / period_ns;
+  const auto boundary = epoch + std::chrono::nanoseconds{missed_periods * period_ns};
+  const auto delay = boundary - now;
+
+  dispatcher_.CancelTimer(tick_timer_);
+  tick_timer_ = dispatcher_.AddTimer(delay, [this](TimerHandle) {
+    AdvanceTime();
+    tick_timer_ = dispatcher_.AddRepeatingTimer(tick_interval_,
+                                                [this](TimerHandle) { AdvanceTime(); });
+  });
 }
 
 void ServerApp::OnSignal(Signal sig) {

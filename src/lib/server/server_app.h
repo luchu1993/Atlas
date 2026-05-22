@@ -54,6 +54,15 @@ class ServerApp {
         std::chrono::duration<double>(1.0 / config_.update_hertz));
   }
 
+  // Monotonic start time, used as the tick alignment epoch for the
+  // cluster-wide phase reference shipped to cellapps.
+  [[nodiscard]] auto StartTime() const -> TimePoint { return start_time_; }
+
+  // Re-phases the repeating tick timer onto the boundary
+  // epoch + ceil((now - epoch) / period) * period, so every cellapp
+  // converges to the same tick edge regardless of register order.
+  void RealignTickTo(TimePoint epoch);
+
  protected:
   [[nodiscard]] virtual auto Init(int argc, char* argv[]) -> bool;
 
@@ -99,6 +108,7 @@ class ServerApp {
   TimePoint last_tick_time_{};
   TimePoint start_time_{};
   TimerHandle tick_timer_{};
+  Duration tick_interval_{};
 
   SignalDispatchTask signal_task_;
   FrequentTaskRegistration signal_registration_;
