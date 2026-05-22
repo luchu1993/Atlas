@@ -742,11 +742,29 @@ void CellAppMgr::BroadcastGeometry(SpacePartition& partition) {
   std::unordered_map<Address, bool> hosts;
   for (const auto* ci : partition.bsp.Leaves()) hosts[ci->cellapp_addr] = true;
 
+  // Freeze → geometry → unfreeze on the same reliable channel preserves
+  // order, so receivers see (false, new BSP, true) atomically and can't
+  // offload through a stale boundary mid-rebalance.
+  auto fan_should_offload = [&](bool enable) {
+    for (const auto* ci : partition.bsp.Leaves()) {
+      auto it = cellapps_.find(ci->cellapp_addr);
+      if (it == cellapps_.end() || it->second.channel == nullptr) continue;
+      cellappmgr::ShouldOffload so;
+      so.space_id = partition.space_id;
+      so.cell_id = ci->cell_id;
+      so.enable = enable;
+      (void)it->second.channel->SendMessage(so);
+    }
+  };
+  fan_should_offload(false);
+
   for (const auto& [addr, _] : hosts) {
     auto it = cellapps_.find(addr);
     if (it == cellapps_.end() || it->second.channel == nullptr) continue;
     (void)it->second.channel->SendMessage(msg);
   }
+
+  fan_should_offload(true);
 
   // Fan the flattened leaf rects out to every BaseApp so it can forward to
   // its connected clients for the LB debug gizmo.

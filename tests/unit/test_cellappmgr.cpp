@@ -577,6 +577,49 @@ TEST(CellAppMgr, CellAppDeath_FansOutNotificationToBaseAppSubscribers) {
 // bytes identical (we can't observe the wire directly with null
 // channels, so byte-equality is the proxy). A BSP mutation forces a
 // fresh cached blob.
+// Sequence of MessageIDs seen on a RecordingChannel — used to assert the
+// freeze → geometry → unfreeze ordering produced by BroadcastGeometry.
+auto MessageIdSequence(const RecordingChannel& ch) -> std::vector<uint16_t> {
+  std::vector<uint16_t> ids;
+  for (const auto& frame : ch.Sends()) {
+    BinaryReader reader(std::span<const std::byte>(frame.data(), frame.size()));
+    const auto id = reader.ReadPackedInt();
+    if (!id) continue;
+    ids.push_back(static_cast<uint16_t>(*id));
+    const auto len = reader.ReadPackedInt();
+    if (!len) continue;
+    (void)reader.ReadBytes(*len);
+  }
+  return ids;
+}
+
+// BroadcastGeometry must atomically freeze every cell, ship the new BSP,
+// then unfreeze. Receiver-side ordering is preserved by the reliable
+// channel, so an entity can't offload through a stale boundary.
+TEST(CellAppMgr, BroadcastGeometry_WrapsWithShouldOffloadFreeze) {
+  CellAppMgrHarness h;
+  InterfaceTable peer_table;
+  RecordingChannel peer_ch(h.dispatcher, peer_table, MakePeerAddr(30001));
+
+  cellappmgr::RegisterCellApp reg;
+  reg.internal_addr = MakePeerAddr(30001);
+  h.mgr.OnRegisterCellApp(reg.internal_addr, &peer_ch, reg);
+
+  cellappmgr::CreateSpaceRequest csr;
+  csr.space_id = 42;
+  h.mgr.OnCreateSpaceRequest(Address{}, nullptr, csr);
+
+  auto seq = MessageIdSequence(peer_ch);
+  const auto should_off = static_cast<uint16_t>(msg_id::Id(msg_id::CellAppMgr::kShouldOffload));
+  const auto update_geom = static_cast<uint16_t>(msg_id::Id(msg_id::CellAppMgr::kUpdateGeometry));
+  auto pos = std::find(seq.begin(), seq.end(), update_geom);
+  ASSERT_NE(pos, seq.end()) << "no UpdateGeometry shipped";
+  ASSERT_NE(pos, seq.begin()) << "UpdateGeometry must follow a ShouldOffload(false)";
+  EXPECT_EQ(*(pos - 1), should_off);
+  ASSERT_NE(pos + 1, seq.end()) << "UpdateGeometry must precede a ShouldOffload(true)";
+  EXPECT_EQ(*(pos + 1), should_off);
+}
+
 TEST(CellAppMgr, BroadcastGeometry_CachesBlob_SkipsUnchangedReSends) {
   CellAppMgrHarness h;
   cellappmgr::RegisterCellApp reg;
