@@ -404,6 +404,9 @@ struct OffloadEntity {
   // Cell-local-only entity (no BaseApp counterpart); preserved across Offload
   // so DestroySelf() takes the local-destroy path on the new owner.
   bool is_local{false};
+  // Witness AoI keys (peers the client already mirrors); receiver diffs
+  // against its post-Activate sweep so handoff stays transparent.
+  std::vector<EntityID> aoi_entity_ids;
 
   static auto Descriptor() -> const MessageDesc& {
     static const MessageDesc kDesc{msg_id::Id(msg_id::CellApp::kOffloadEntity),
@@ -451,6 +454,8 @@ struct OffloadEntity {
     w.Write(aoi_hysteresis);
     w.Write(cell_epoch);
     w.Write(static_cast<uint8_t>(is_local ? 1 : 0));
+    w.WritePackedInt(static_cast<uint32_t>(aoi_entity_ids.size()));
+    for (EntityID id : aoi_entity_ids) w.Write(id);
   }
 
   static auto Deserialize(BinaryReader& r) -> Result<OffloadEntity> {
@@ -547,6 +552,18 @@ struct OffloadEntity {
       auto il = r.Read<uint8_t>();
       if (!il) return Error{ErrorCode::kInvalidArgument, "OffloadEntity: is_local truncated"};
       msg.is_local = (*il != 0);
+    }
+    // Tail-optional aoi list — older payloads omit it and the receiver
+    // falls back to the legacy "re-Enter everything" path.
+    if (r.Remaining() >= 1) {
+      auto cnt = r.ReadPackedInt();
+      if (!cnt) return Error{ErrorCode::kInvalidArgument, "OffloadEntity: aoi count truncated"};
+      msg.aoi_entity_ids.reserve(*cnt);
+      for (uint32_t i = 0; i < *cnt; ++i) {
+        auto id = r.Read<uint32_t>();
+        if (!id) return Error{ErrorCode::kInvalidArgument, "OffloadEntity: aoi id truncated"};
+        msg.aoi_entity_ids.push_back(*id);
+      }
     }
     return msg;
   }

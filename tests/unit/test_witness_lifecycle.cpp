@@ -184,5 +184,38 @@ TEST_F(WitnessLifecycleTest, PeerOutsideRadiusNeverEnters) {
   EXPECT_TRUE(observer->GetWitness()->AoIMap().empty());
 }
 
+// Avatar handoff diff: overlap suppresses Enter, orphan ships Leave,
+// new peers Enter normally.
+TEST_F(WitnessLifecycleTest, InheritAoIFromDiffsEnterAndLeave) {
+  Space space(1);
+  auto* observer = MakeEntity(space, 1, 1, {0, 0, 0});
+  auto* peer_overlap = MakeEntity(space, 100, 7, {3, 0, 3});
+  auto* peer_new = MakeEntity(space, 101, 7, {5, 0, 5});
+  observer->EnableWitness(10.f, MakeSendFn());
+
+  // 100 overlaps the new AoI; 200 was on the client but is outside now.
+  observer->GetWitness()->InheritAoIFrom({100, 200});
+  observer->GetWitness()->Update(4096);
+
+  EntityID leave_id = 0;
+  EntityID enter_id = 0;
+  int enters = 0;
+  int leaves = 0;
+  for (const auto& env : sent_) {
+    if (KindOf(env) == CellAoIEnvelopeKind::kEntityEnter) {
+      ++enters;
+      enter_id = PublicIdOf(env);
+    } else if (KindOf(env) == CellAoIEnvelopeKind::kEntityLeave) {
+      ++leaves;
+      leave_id = PublicIdOf(env);
+    }
+  }
+  EXPECT_EQ(leaves, 1) << "200 (inherited but out of new AoI) should Leave";
+  EXPECT_EQ(leave_id, 200u);
+  EXPECT_EQ(enters, 1) << "101 (new) should Enter; 100 (overlap) suppressed";
+  EXPECT_EQ(enter_id, peer_new->Id());
+  EXPECT_EQ(peer_overlap->Id(), 100u);
+}
+
 }  // namespace
 }  // namespace atlas

@@ -45,14 +45,16 @@ class Witness {
 
   void Activate();
 
-  // Drops aoi_map_ entries WITHOUT firing OnLeave - the observer is
-  // going away and the client channel will be recycled by BaseApp.
-  // flush_leaves=true ships EntityLeave for every cached peer so the client
-  // drops stale views — required at ConvertRealToGhost so the new witness on
-  // the destination cellapp doesn't leak frozen entities outside its AoI.
-  // False during ~CellEntity: the entity is dying and the send callback may
-  // re-enter via destroy-on-leave hooks.
+  // flush_leaves=false during ~CellEntity (callback re-entry) and Offload
+  // (the destination Witness diffs against the inherited AoI).
   void Deactivate(bool flush_leaves = true);
+
+  // Snapshot of current AoI keys for Offload handoff serialization.
+  [[nodiscard]] auto AoIEntityIds() const -> std::vector<EntityID>;
+
+  // Diffs an inherited AoI against the just-activated trigger sweep:
+  // overlaps drop pending-Enter; orphans ship Leave. Run once post-Activate.
+  void InheritAoIFrom(const std::vector<EntityID>& inherited_ids);
 
   [[nodiscard]] auto Owner() -> CellEntity& { return owner_; }
   [[nodiscard]] auto AoIRadius() const -> float { return aoi_radius_; }

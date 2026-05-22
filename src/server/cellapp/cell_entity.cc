@@ -121,9 +121,10 @@ void CellEntity::ConvertRealToGhost(Channel* new_real_channel, const Address& ne
     ATLAS_LOG_WARNING("CellEntity::ConvertRealToGhost on non-Real entity id={} — ignored", id_);
     return;
   }
-  // Deactivate before reset so AoITriggers unhook before witness_ vanishes.
+  // Suppress flush_leaves on Offload: the destination Witness diffs
+  // against aoi_entity_ids and ships only the necessary Leaves.
   if (witness_) {
-    witness_->Deactivate();
+    witness_->Deactivate(/*flush_leaves=*/false);
     witness_.reset();
   }
   controllers_.StopAll();

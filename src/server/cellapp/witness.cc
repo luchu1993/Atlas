@@ -7,6 +7,7 @@
 #include <cstring>
 #include <limits>
 #include <span>
+#include <unordered_set>
 #include <utility>
 #include <vector>
 
@@ -247,6 +248,34 @@ void Witness::Deactivate(bool flush_leaves) {
   band_scratch_.clear();
   pending_enter_ids_.clear();
   pending_gone_ids_.clear();
+}
+
+auto Witness::AoIEntityIds() const -> std::vector<EntityID> {
+  std::vector<EntityID> ids;
+  ids.reserve(aoi_map_.size());
+  for (const auto& [peer_id, _] : aoi_map_) ids.push_back(peer_id);
+  return ids;
+}
+
+void Witness::InheritAoIFrom(const std::vector<EntityID>& inherited_ids) {
+  if (inherited_ids.empty()) return;
+  std::unordered_set<EntityID> inherited(inherited_ids.begin(), inherited_ids.end());
+
+  // Overlap: already on the client; drop the pending Enter and mark
+  // cache as active so Update never re-fires Enter.
+  for (auto& [peer_id, cache] : aoi_map_) {
+    if (inherited.erase(peer_id) == 0) continue;
+    cache.flags &= ~EntityCache::kEnterPending;
+  }
+  std::erase_if(pending_enter_ids_, [&aoi = aoi_map_](EntityID id) {
+    auto it = aoi.find(id);
+    return it != aoi.end() && (it->second.flags & EntityCache::kEnterPending) == 0;
+  });
+
+  // Orphans: client still thinks these are visible but they fell outside
+  // the new AoI on handoff; emit Leave so the client drops them.
+  if (!send_reliable_) return;
+  for (EntityID id : inherited) (void)SendEntityLeave(id);
 }
 
 void Witness::SetAoIRadius(float new_radius, float new_hysteresis) {
