@@ -1,14 +1,24 @@
 using System;
-using System.Reflection;
 using Xunit;
 
 namespace Atlas.Tests;
 
-// AppEvents holds static state; reset it between tests so order doesn't matter.
 public class AppEventsTests : IDisposable
 {
-    public AppEventsTests() => Reset();
-    public void Dispose() => Reset();
+    private sealed class TestInitializer : IAtlasAppInitializer
+    {
+        public int Calls;
+        public bool DeferFirstCall;
+
+        public void OnAppInit()
+        {
+            Calls++;
+            if (DeferFirstCall && Calls == 1) AppEvents.DeferAppInit();
+        }
+    }
+
+    public AppEventsTests() => AppEvents.Reset();
+    public void Dispose() => AppEvents.Reset();
 
     [Fact]
     public void TryFire_InvokesHandlerOnce()
@@ -42,17 +52,43 @@ public class AppEventsTests : IDisposable
         AppEvents.TryFireAppInit();
     }
 
-    // AppEvents has no public reset; clear handler list + flags via reflection
-    // so each test starts from a clean slate.
-    private static void Reset()
+    [Fact]
+    public void RegisteredScriptInitializer_FiresOnce()
     {
-        var t = typeof(AppEvents);
-        var ev = t.GetField("AppInit",
-            BindingFlags.Static | BindingFlags.NonPublic | BindingFlags.Public);
-        ev?.SetValue(null, null);
-        t.GetField("s_appInitFired", BindingFlags.Static | BindingFlags.NonPublic)
-            ?.SetValue(null, false);
-        t.GetField("s_appInitDeferred", BindingFlags.Static | BindingFlags.NonPublic)
-            ?.SetValue(null, false);
+        var initializer = new TestInitializer();
+        AppEvents.RegisterScriptInitializer(initializer);
+        AppEvents.TryFireAppInit();
+        AppEvents.TryFireAppInit();
+        Assert.Equal(1, initializer.Calls);
+    }
+
+    [Fact]
+    public void RegisteredScriptInitializer_CanDeferAppInit()
+    {
+        var initializer = new TestInitializer { DeferFirstCall = true };
+        AppEvents.RegisterScriptInitializer(initializer);
+        AppEvents.TryFireAppInit();
+        AppEvents.TryFireAppInit();
+        AppEvents.TryFireAppInit();
+        Assert.Equal(2, initializer.Calls);
+    }
+
+    [Fact]
+    public void UnregisteredScriptInitializer_DoesNotFire()
+    {
+        var initializer = new TestInitializer();
+        AppEvents.RegisterScriptInitializer(initializer);
+        AppEvents.UnregisterScriptInitializer(initializer);
+        AppEvents.TryFireAppInit();
+        Assert.Equal(0, initializer.Calls);
+    }
+
+    [Fact]
+    public void RegisterAfterFire_InvokesImmediately()
+    {
+        AppEvents.TryFireAppInit();
+        var initializer = new TestInitializer();
+        AppEvents.RegisterScriptInitializer(initializer);
+        Assert.Equal(1, initializer.Calls);
     }
 }

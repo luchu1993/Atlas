@@ -53,6 +53,7 @@ internal static class EngineContext
         if (!_initialized) return;
         NativeCallbacks.Reset();
         NativeApi.UnregisterAllEntityTypes();
+        AppEvents.Reset();
         EntityManager.Instance.Reset();
         SyncContext = null;
         CoroLoop?.Dispose();

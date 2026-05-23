@@ -1,15 +1,9 @@
-using System.Runtime.CompilerServices;
 using Atlas;
 using Atlas.Space;
 
 namespace Atlas.Mvp.Base;
 
-// Registers MvpSpace as the space-owner type so the primary cellapp auto-spawns
-// it the moment AddCellToSpace lands — NPC scene is alive before any login.
-internal static class MvpBootstrap
+internal sealed class MvpBootstrap : IAtlasAppInitializer
 {
-    [ModuleInitializer]
-    internal static void Register() => AppEvents.AppInit += OnAppInit;
-
-    private static void OnAppInit() => SpaceMaster.Register(/*spaceId=*/1, "MvpSpace");
+    public void OnAppInit() => SpaceMaster.Register(/*spaceId=*/1, "MvpSpace");
 }

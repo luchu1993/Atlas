@@ -243,12 +243,13 @@ oriented forward so the camera-follow loop stays stable.
 overlays), calls `AtlasNetworkManager.Login` → `Authenticate` → invokes
 `Account.Base.SelectAvatar(1)` RPC. Server-side `Account.SelectAvatar`
 creates the player `Avatar` (base + cell counterpart) and binds the
-client via `GiveClientTo`. The cell-side `Avatar.OnInit` consults
-`SpaceOwnerRegistry` and, if absent, spawns the per-space owner entity
-`MvpSpace : CellSpaceEntity` once. `MvpSpace.OnSpaceInit` scatters 150
-NPCs and arms an AtlasLoop refill timer: when live count drops to ≤ 150
-the refill engages, spawning 1 NPC every 2 s until the cap of 250, then
-disengages. Each count change publishes via `SpaceData.SetInt32(SpaceId,
+client via `GiveClientTo`. `MvpBootstrap : IAtlasAppInitializer`
+registers `MvpSpace` as the space master during script app init; the
+primary CellApp auto-spawns that `CellSpaceEntity` when space 1 is
+created. `MvpSpace.OnSpaceInit` scatters 150 NPCs and arms an AtlasLoop
+refill timer: when live count drops to ≤ 150 the refill engages,
+spawning 1 NPC every 2 s until the cap of 250, then disengages. Each
+count change publishes via `SpaceData.SetInt32(SpaceId,
 SpaceDataKeys.NpcCount, n)` — the cellapp fans that out as a
 `kSpaceDataUpdate` envelope to every client's `SpaceDataManager`.
 `Avatar.OnInit` on the base side sets a 50 m AoI radius, so the client

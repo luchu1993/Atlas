@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.IO;
 using System.Reflection;
 using System.Runtime.CompilerServices;
@@ -15,6 +16,7 @@ internal sealed class ScriptHost : IDisposable
     private ScriptLoadContext? _context;
     private WeakReference? _contextRef;
     private Assembly? _scriptAssembly;
+    private readonly List<IAtlasAppInitializer> _appInitializers = new();
 
     public bool IsLoaded => _context != null;
 
@@ -58,6 +60,8 @@ internal sealed class ScriptHost : IDisposable
                 throw;
             }
         }
+
+        RegisterAppInitializers();
     }
 
     /// <summary>
@@ -67,6 +71,10 @@ internal sealed class ScriptHost : IDisposable
     public bool Unload(TimeSpan timeout)
     {
         if (_context == null) return true;
+
+        foreach (var initializer in _appInitializers)
+            AppEvents.UnregisterScriptInitializer(initializer);
+        _appInitializers.Clear();
 
         _scriptAssembly = null;
         _context.Unload();
@@ -94,5 +102,22 @@ internal sealed class ScriptHost : IDisposable
     public void Dispose()
     {
         Unload(TimeSpan.FromSeconds(5));
+    }
+
+    private void RegisterAppInitializers()
+    {
+        if (_scriptAssembly == null) return;
+        foreach (var type in _scriptAssembly.GetTypes())
+        {
+            if (type.IsAbstract || type.IsInterface || type.ContainsGenericParameters)
+                continue;
+            if (!typeof(IAtlasAppInitializer).IsAssignableFrom(type))
+                continue;
+            if (Activator.CreateInstance(type, nonPublic: true) is not IAtlasAppInitializer initializer)
+                throw new InvalidOperationException(
+                    $"ScriptHost.Load: app initializer '{type.FullName}' needs a parameterless ctor");
+            AppEvents.RegisterScriptInitializer(initializer);
+            _appInitializers.Add(initializer);
+        }
     }
 }
