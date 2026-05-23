@@ -1,4 +1,5 @@
 using System;
+using Atlas.Client;
 using Atlas.Client.Unity;
 using UnityEngine;
 using MvpAvatar = Atlas.Mvp.Client.Avatar;
@@ -29,6 +30,13 @@ namespace Atlas.Mvp.Unity
 
         protected override Color PickAliveColor() =>
             Entity!.IsOwner ? Color.cyan : new Color(0.9f, 0.3f, 0.3f);
+
+        protected override void ConfigureFilter(AvatarFilter f)
+        {
+            f.ServerInterval = 0.05;
+            f.LatencyFrames = 1.0;
+            f.MaxExtrapolation = 0.12;
+        }
 
         protected override void HookEvents()
         {

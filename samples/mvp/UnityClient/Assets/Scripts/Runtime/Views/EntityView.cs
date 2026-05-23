@@ -91,16 +91,19 @@ namespace Atlas.Mvp.Unity
             nose.GetComponent<Renderer>().material.color = Color.yellow;
         }
 
-        // Keep peer avatars responsive; stale samples hold at the last
-        // authoritative position instead of drifting on old velocity.
         void TuneFilterOnce()
         {
             if (_filterTuned || Entity.Filter is not { } f) return;
-            f.ServerInterval = 0.05;
-            f.LatencyFrames = 1.0;
-            f.MaxExtrapolation = 0.12;
+            ConfigureFilter(f);
             f.SnapLatencyToTarget();
             _filterTuned = true;
+        }
+
+        protected virtual void ConfigureFilter(AvatarFilter f)
+        {
+            f.ServerInterval = 0.05;
+            f.LatencyFrames = 3.0;
+            f.MaxExtrapolation = 0.30;
         }
 
         // Owner transform is written by PlayerInputController; witness skips self.
