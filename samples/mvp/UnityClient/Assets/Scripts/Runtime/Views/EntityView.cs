@@ -49,7 +49,7 @@ namespace Atlas.Mvp.Unity
         {
             if (Entity.IsDestroyed) return;
             TuneFilterOnce();
-            SyncPeerTransform();
+            SyncPeerTransform(dt);
             _label.text = ComposeLabelText();
         }
 
@@ -102,16 +102,21 @@ namespace Atlas.Mvp.Unity
         protected virtual void ConfigureFilter(AvatarFilter f)
         {
             f.ServerInterval = 0.05;
-            f.LatencyFrames = 3.0;
-            f.MaxExtrapolation = 0.30;
+            f.LatencyFrames = 4.0;
+            f.MaxExtrapolation = 0.12;
         }
 
         // Owner transform is written by PlayerInputController; witness skips self.
-        void SyncPeerTransform()
+        void SyncPeerTransform(float dt)
         {
             if (Entity.IsOwner) return;
             if (!Net.TryGetInterpolatedTransform(Entity.EntityId, out var pos, out var dir, out _))
                 return;
+            ApplyReplicatedTransform(pos, dir, dt);
+        }
+
+        protected virtual void ApplyReplicatedTransform(Vector3 pos, Vector3 dir, float dt)
+        {
             Root.transform.position = pos;
             if (dir.sqrMagnitude > 0.01f)
                 Root.transform.rotation = Quaternion.LookRotation(dir);
