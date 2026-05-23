@@ -2,9 +2,120 @@
 
 #include <algorithm>
 #include <cmath>
+#include <limits>
+#include <optional>
 #include <utility>
+#include <vector>
 
 namespace atlas {
+
+namespace {
+
+struct WeightedInterval {
+  float lo{0.f};
+  float hi{0.f};
+  float load{0.f};
+};
+
+auto AxisMin(const CellBounds& bounds, BSPAxis axis) -> float {
+  return axis == BSPAxis::kX ? bounds.min_x : bounds.min_z;
+}
+
+auto AxisMax(const CellBounds& bounds, BSPAxis axis) -> float {
+  return axis == BSPAxis::kX ? bounds.max_x : bounds.max_z;
+}
+
+auto BucketsForAxis(const CellInfo& info, BSPAxis axis) -> const CellLoadBuckets& {
+  return axis == BSPAxis::kX ? info.x_buckets : info.z_buckets;
+}
+
+auto BucketTotal(const CellLoadBuckets& buckets) -> uint64_t {
+  uint64_t total = 0;
+  for (const uint32_t bucket : buckets) total += bucket;
+  return total;
+}
+
+auto EstimatedLeftLoad(const std::vector<WeightedInterval>& intervals, float position) -> float {
+  float load = 0.f;
+  for (const auto& interval : intervals) {
+    if (position <= interval.lo) continue;
+    if (position >= interval.hi) {
+      load += interval.load;
+      continue;
+    }
+    const float fraction = (position - interval.lo) / (interval.hi - interval.lo);
+    load += interval.load * std::clamp(fraction, 0.f, 1.f);
+  }
+  return load;
+}
+
+auto BucketBalancedPosition(const BSPNode& left, const BSPNode& right, BSPAxis axis,
+                            float current_position, const CellBounds& sub_bounds)
+    -> std::optional<float> {
+  const float lo = AxisMin(sub_bounds, axis);
+  const float hi = AxisMax(sub_bounds, axis);
+  if (!std::isfinite(lo) || !std::isfinite(hi) || hi <= lo) return std::nullopt;
+
+  std::vector<const CellInfo*> leaves;
+  left.CollectLeaves(leaves);
+  right.CollectLeaves(leaves);
+
+  std::vector<WeightedInterval> intervals;
+  std::vector<float> candidates;
+  float total_load = 0.f;
+  for (const auto* leaf : leaves) {
+    const float leaf_load = leaf != nullptr ? leaf->load : 0.f;
+    if (!std::isfinite(leaf_load) || leaf_load <= 0.f) continue;
+    const auto& buckets = BucketsForAxis(*leaf, axis);
+    const uint64_t total = BucketTotal(buckets);
+    if (total == 0) continue;
+
+    const float leaf_lo = AxisMin(leaf->bounds, axis);
+    const float leaf_hi = AxisMax(leaf->bounds, axis);
+    if (!std::isfinite(leaf_lo) || !std::isfinite(leaf_hi) || leaf_hi <= leaf_lo) continue;
+
+    const float bucket_span = (leaf_hi - leaf_lo) / static_cast<float>(buckets.size());
+    for (std::size_t i = 0; i < buckets.size(); ++i) {
+      if (buckets[i] == 0) continue;
+      const float bucket_lo = leaf_lo + bucket_span * static_cast<float>(i);
+      const float bucket_hi = bucket_lo + bucket_span;
+      const float interval_lo = std::max(bucket_lo, lo);
+      const float interval_hi = std::min(bucket_hi, hi);
+      if (interval_hi <= interval_lo) continue;
+
+      const float bucket_load =
+          leaf_load * static_cast<float>(buckets[i]) / static_cast<float>(total);
+      intervals.push_back({interval_lo, interval_hi, bucket_load});
+      total_load += bucket_load;
+      if (bucket_lo > lo && bucket_lo < hi) candidates.push_back(bucket_lo);
+      if (bucket_hi > lo && bucket_hi < hi) candidates.push_back(bucket_hi);
+    }
+  }
+  if (intervals.empty() || candidates.empty() || total_load <= 0.f) return std::nullopt;
+
+  std::sort(candidates.begin(), candidates.end());
+  candidates.erase(std::unique(candidates.begin(), candidates.end(),
+                               [](float a, float b) { return std::abs(a - b) < 1e-4f; }),
+                   candidates.end());
+
+  const float target = total_load * 0.5f;
+  float best_delta = std::numeric_limits<float>::infinity();
+  float best_distance = std::numeric_limits<float>::infinity();
+  std::optional<float> best;
+  for (const float candidate : candidates) {
+    const float left_load = EstimatedLeftLoad(intervals, candidate);
+    const float delta = std::abs(left_load - target);
+    const float distance = std::abs(candidate - current_position);
+    if (delta < best_delta || (delta == best_delta && distance < best_distance)) {
+      best_delta = delta;
+      best_distance = distance;
+      best = candidate;
+    }
+  }
+  return best;
+}
+
+}  // namespace
 
 auto BSPLeaf::FindCell(float x, float z) const -> const CellInfo* {
   return info_.bounds.Contains(x, z) ? &info_ : nullptr;
@@ -85,6 +196,7 @@ void BSPInternal::UpdateLoad() {
 void BSPInternal::Balance(float safety_bound) {
   constexpr float kLoadHysteresis = 0.01f;
   constexpr float kMinSplitSlack = 1e-3f;
+  constexpr uint8_t kBalanceCooldownTicks = 2;
   const float diff = left_load_ - right_load_;
   Direction d = Direction::kNone;
   if (diff > kLoadHysteresis)
@@ -93,34 +205,42 @@ void BSPInternal::Balance(float safety_bound) {
     d = Direction::kRight;
 
   if (d != Direction::kNone) {
-    // Don't make the already-growing side worse - if the side that WOULD
-    // grow (i.e. the opposite of the heavy side) is already over
-    // safety_bound, hold still.
+    // Hold still when the side that would grow is already near the bound.
     const float growing_side_load = (d == Direction::kLeft) ? right_load_ : left_load_;
     if (growing_side_load < safety_bound) {
       if (d != prev_direction_ && prev_direction_ != Direction::kNone) {
-        aggression_ *= 0.9f;  // direction reversed - damp
+        aggression_ *= 0.9f;
+        prev_direction_ = d;
+        balance_cooldown_ticks_ = kBalanceCooldownTicks;
+      } else if (balance_cooldown_ticks_ > 0) {
+        --balance_cooldown_ticks_;
       } else {
-        aggression_ = std::min(aggression_ * 1.1f, 2.0f);  // keep going - accelerate
+        aggression_ = std::min(aggression_ * 1.1f, 2.0f);
+        prev_direction_ = d;
+
+        const float move = diff * 0.1f * aggression_;
+        float new_position = position_ - move;
+        if (auto bucket_position =
+                BucketBalancedPosition(*left_, *right_, axis_, position_, sub_bounds_)) {
+          const bool shrinks_left = d == Direction::kLeft && *bucket_position < position_;
+          const bool shrinks_right = d == Direction::kRight && *bucket_position > position_;
+          if (shrinks_left || shrinks_right) new_position = *bucket_position;
+        }
+
+        const float lo = (axis_ == BSPAxis::kX) ? sub_bounds_.min_x : sub_bounds_.min_z;
+        const float hi = (axis_ == BSPAxis::kX) ? sub_bounds_.max_x : sub_bounds_.max_z;
+        if (std::isfinite(lo) && std::isfinite(hi) && lo < hi) {
+          const float span = hi - lo;
+          const float pad = span * 0.01f;
+          position_ = std::clamp(new_position, lo + pad, hi - pad);
+        } else {
+          position_ = new_position;
+          if (std::isfinite(lo)) position_ = std::max(position_, lo + kMinSplitSlack);
+          if (std::isfinite(hi)) position_ = std::min(position_, hi - kMinSplitSlack);
+        }
+
+        PropagateBounds(sub_bounds_);
       }
-      prev_direction_ = d;
-
-      const float move = diff * 0.1f * aggression_;
-      const float new_position = position_ - move;
-
-      const float lo = (axis_ == BSPAxis::kX) ? sub_bounds_.min_x : sub_bounds_.min_z;
-      const float hi = (axis_ == BSPAxis::kX) ? sub_bounds_.max_x : sub_bounds_.max_z;
-      if (std::isfinite(lo) && std::isfinite(hi) && lo < hi) {
-        const float span = hi - lo;
-        const float pad = span * 0.01f;
-        position_ = std::clamp(new_position, lo + pad, hi - pad);
-      } else {
-        position_ = new_position;
-        if (std::isfinite(lo)) position_ = std::max(position_, lo + kMinSplitSlack);
-        if (std::isfinite(hi)) position_ = std::min(position_, hi - kMinSplitSlack);
-      }
-
-      PropagateBounds(sub_bounds_);
     }
   }
 
@@ -281,6 +401,20 @@ auto UnsplitInSubtree(std::unique_ptr<BSPNode>& slot, const CellBounds& sub_boun
   return UnsplitInSubtree(internal->RightSlot(), right_b, target_id);
 }
 
+void CollectLeafSiblingPairs(
+    const BSPNode* node, std::vector<std::pair<cellappmgr::CellID, cellappmgr::CellID>>& out) {
+  const auto* internal = dynamic_cast<const BSPInternal*>(node);
+  if (internal == nullptr) return;
+  const auto* left = dynamic_cast<const BSPLeaf*>(internal->Left());
+  const auto* right = dynamic_cast<const BSPLeaf*>(internal->Right());
+  if (left != nullptr && right != nullptr) {
+    out.emplace_back(left->Info().cell_id, right->Info().cell_id);
+    return;
+  }
+  CollectLeafSiblingPairs(internal->Left(), out);
+  CollectLeafSiblingPairs(internal->Right(), out);
+}
+
 }  // namespace
 
 auto BSPTree::Unsplit(cellappmgr::CellID cell_id) -> Result<void> {
@@ -350,6 +484,13 @@ void BSPTree::Balance(float safety_bound) {
 auto BSPTree::Leaves() const -> std::vector<const CellInfo*> {
   std::vector<const CellInfo*> out;
   if (root_) root_->CollectLeaves(out);
+  return out;
+}
+
+auto BSPTree::LeafSiblingPairs() const
+    -> std::vector<std::pair<cellappmgr::CellID, cellappmgr::CellID>> {
+  std::vector<std::pair<cellappmgr::CellID, cellappmgr::CellID>> out;
+  CollectLeafSiblingPairs(root_.get(), out);
   return out;
 }
 

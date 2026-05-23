@@ -82,6 +82,11 @@ class CellEntity : public IEntityMotion {
                            bool on_ground, uint64_t volatile_seq);
   void GhostApplyDelta(uint64_t event_seq, std::span<const std::byte> other_delta);
   void GhostApplySnapshot(uint64_t event_seq, std::span<const std::byte> other_snapshot);
+  void SetGhostPersistentBlob(std::span<const std::byte> persistent_blob);
+  void ClearGhostPersistentBlob() { ghost_persistent_blob_.clear(); }
+  [[nodiscard]] auto GhostPersistentBlob() const -> const std::vector<std::byte>& {
+    return ghost_persistent_blob_;
+  }
 
   // Used by GhostSetReal post-Offload; clears next_real_addr_. No-op
   // on a Real (no back-channel to rebind).
@@ -221,6 +226,7 @@ class CellEntity : public IEntityMotion {
   std::unordered_set<Witness*> observers_;
 
   std::optional<ReplicationState> replication_state_;
+  std::vector<std::byte> ghost_persistent_blob_;
 
   // real_data_ XOR real_channel_. real_addr_ shadows real_channel_'s
   // remote and the refcount lets the Channel outlive NI condemnation.

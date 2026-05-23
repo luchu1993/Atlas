@@ -1,16 +1,19 @@
 #include <cmath>
+#include <cstring>
 #include <cstdint>
 #include <memory>
 #include <vector>
 
 #include <gtest/gtest.h>
 
+#include "baseapp/baseapp_messages.h"
 #include "cell.h"
 #include "cell_entity.h"
 #include "cellapp.h"
 #include "cellapp_messages.h"
 #include "cellapp_native_provider.h"
 #include "cellappmgr/bsp_tree.h"
+#include "cellappmgr/cellappmgr_messages.h"
 #include "clrscript/native_api_provider.h"
 #include "entitydef/entity_def_registry.h"
 #include "intercell_messages.h"
@@ -25,6 +28,80 @@
 namespace atlas {
 namespace {
 
+class RecordingChannel final : public Channel {
+ public:
+  RecordingChannel(EventDispatcher& dispatcher, InterfaceTable& table, const Address& remote)
+      : Channel(dispatcher, table, remote) {}
+
+  [[nodiscard]] auto Fd() const -> FdHandle override { return kInvalidFd; }
+
+  [[nodiscard]] auto DoSend(std::span<const std::byte> data) -> Result<size_t> override {
+    sends_.emplace_back(data.begin(), data.end());
+    return data.size();
+  }
+
+  [[nodiscard]] auto Sends() const -> const std::vector<std::vector<std::byte>>& { return sends_; }
+
+ private:
+  std::vector<std::vector<std::byte>> sends_;
+};
+
+auto SpaceDataSnapshotRequests(const RecordingChannel& ch)
+    -> std::vector<cellapp::SpaceDataSnapshotRequest> {
+  std::vector<cellapp::SpaceDataSnapshotRequest> out;
+  for (const auto& frame : ch.Sends()) {
+    BinaryReader reader(std::span<const std::byte>(frame.data(), frame.size()));
+    const auto id = reader.ReadPackedInt();
+    if (!id || *id != cellapp::SpaceDataSnapshotRequest::Descriptor().id) continue;
+    auto msg = cellapp::SpaceDataSnapshotRequest::Deserialize(reader);
+    if (msg.HasValue()) out.push_back(*msg);
+  }
+  return out;
+}
+
+auto AddCellToSpaceAcks(const RecordingChannel& ch)
+    -> std::vector<cellappmgr::AddCellToSpaceAck> {
+  std::vector<cellappmgr::AddCellToSpaceAck> out;
+  for (const auto& frame : ch.Sends()) {
+    BinaryReader reader(std::span<const std::byte>(frame.data(), frame.size()));
+    const auto id = reader.ReadPackedInt();
+    if (!id || *id != cellappmgr::AddCellToSpaceAck::Descriptor().id) continue;
+    auto msg = cellappmgr::AddCellToSpaceAck::Deserialize(reader);
+    if (msg.HasValue()) out.push_back(*msg);
+  }
+  return out;
+}
+
+auto InformCellLoads(const RecordingChannel& ch) -> std::vector<cellappmgr::InformCellLoad> {
+  std::vector<cellappmgr::InformCellLoad> out;
+  for (const auto& frame : ch.Sends()) {
+    BinaryReader reader(std::span<const std::byte>(frame.data(), frame.size()));
+    const auto id = reader.ReadPackedInt();
+    if (!id || *id != cellappmgr::InformCellLoad::Descriptor().id) continue;
+    const auto len = reader.ReadPackedInt();
+    if (!len) continue;
+    const auto payload = reader.ReadBytes(*len);
+    if (!payload) continue;
+    BinaryReader msg_reader(*payload);
+    auto msg = cellappmgr::InformCellLoad::Deserialize(msg_reader);
+    if (msg.HasValue()) out.push_back(std::move(*msg));
+  }
+  return out;
+}
+
+auto CellEntityCreateFailures(const RecordingChannel& ch)
+    -> std::vector<baseapp::CellEntityCreateFailed> {
+  std::vector<baseapp::CellEntityCreateFailed> out;
+  for (const auto& frame : ch.Sends()) {
+    BinaryReader reader(std::span<const std::byte>(frame.data(), frame.size()));
+    const auto id = reader.ReadPackedInt();
+    if (!id || *id != baseapp::CellEntityCreateFailed::Descriptor().id) continue;
+    auto msg = baseapp::CellEntityCreateFailed::Deserialize(reader);
+    if (msg.HasValue()) out.push_back(*msg);
+  }
+  return out;
+}
+
 // Ghost-lifecycle tests inject these via SetNativeCallbacks; free funcs are
 // the only way to satisfy the C-style native callback signatures.
 struct GhostCall {
@@ -35,6 +112,7 @@ struct GhostCall {
   int32_t snapshot_len;
 };
 std::vector<GhostCall>* g_ghost_calls = nullptr;
+std::vector<std::byte>* g_serialize_blob = nullptr;
 
 extern "C" void GhostTestRestoreGhost(uint32_t eid, uint16_t tid, const uint8_t*, int32_t len) {
   if (g_ghost_calls) g_ghost_calls->push_back({GhostCall::kRestoreGhost, eid, tid, len});
@@ -43,14 +121,23 @@ extern "C" void GhostTestDestroyGhost(uint32_t eid) {
   if (g_ghost_calls) g_ghost_calls->push_back({GhostCall::kDestroyGhost, eid, 0, 0});
 }
 extern "C" void GhostTestRestoreEntity(uint32_t eid, uint16_t tid, int64_t,
-                                       const uint8_t*, int32_t) {
-  if (g_ghost_calls) g_ghost_calls->push_back({GhostCall::kRestoreEntity, eid, tid, 0});
+                                       const uint8_t*, int32_t len) {
+  if (g_ghost_calls) g_ghost_calls->push_back({GhostCall::kRestoreEntity, eid, tid, len});
 }
 extern "C" void GhostTestEntityDestroyed(uint32_t eid) {
   if (g_ghost_calls) g_ghost_calls->push_back({GhostCall::kEntityDestroyed, eid, 0, 0});
 }
 extern "C" void GhostTestMigratingOut(uint32_t eid) {
   if (g_ghost_calls) g_ghost_calls->push_back({GhostCall::kMigratingOut, eid, 0, 0});
+}
+extern "C" int32_t GhostTestSerializeEntity(uint32_t, uint8_t* out_buf, int32_t out_buf_cap,
+                                            int32_t* out_len) {
+  if (g_serialize_blob == nullptr) return -1;
+  const int32_t len = static_cast<int32_t>(g_serialize_blob->size());
+  if (out_len != nullptr) *out_len = len;
+  if (out_buf == nullptr || out_buf_cap < len) return len;
+  if (len > 0) std::memcpy(out_buf, g_serialize_blob->data(), static_cast<std::size_t>(len));
+  return 0;
 }
 
 #pragma pack(push, 1)
@@ -84,19 +171,22 @@ class CellAppHandlersTest : public ::testing::Test {
   void SetUp() override {
     EntityDefRegistry::Instance().clear();
     app_.InsertTrustedBaseAppForTest(Address{});
+    app_.PeerRegistryForTest().InsertForTest(Address{}, test_support::FakeChannel(0xFEED));
     g_ghost_calls = &ghost_calls_;
   }
   void TearDown() override {
     g_ghost_calls = nullptr;
+    g_serialize_blob = nullptr;
     EntityDefRegistry::Instance().clear();
   }
 
-  void EnableGhostLifecycleCallbacks() {
+  void EnableGhostLifecycleCallbacks(bool with_serialize = false) {
     native_provider_holder_ = app_.CreateNativeProviderForTest();
     GhostTestCallbackTable table{};
     table.restore_entity = reinterpret_cast<void*>(&GhostTestRestoreEntity);
     table.entity_destroyed = reinterpret_cast<void*>(&GhostTestEntityDestroyed);
     table.entity_migrating_out = reinterpret_cast<void*>(&GhostTestMigratingOut);
+    if (with_serialize) table.serialize_entity = reinterpret_cast<void*>(&GhostTestSerializeEntity);
     table.restore_ghost = reinterpret_cast<void*>(&GhostTestRestoreGhost);
     table.destroy_ghost = reinterpret_cast<void*>(&GhostTestDestroyGhost);
     app_.NativeProvider()->SetNativeCallbacks(&table, sizeof(table));
@@ -128,6 +218,12 @@ class CellAppHandlersTest : public ::testing::Test {
 };
 
 using test_support::FakeChannel;
+
+class WatcherCellApp final : public CellApp {
+ public:
+  using CellApp::CellApp;
+  void RegisterWatchersForTest() { RegisterWatchers(); }
+};
 
 TEST_F(CellAppHandlersTest, CreateCellEntityUsesUnifiedEntityId) {
   auto msg = MakeCreate(/*entity_id=*/100, /*space=*/5, {10, 0, 10});
@@ -193,6 +289,7 @@ TEST_F(CellAppHandlersTest, DuplicateCreateCellEntityRejectsExistingGhost) {
   ghost.space_id = 1;
   ghost.position = {2, 0, 2};
   ghost.direction = {1, 0, 0};
+  ghost.persistent_blob = {std::byte{0xAA}};
   app_.OnCreateGhost({}, FakeChannel(0xBEEF), ghost);
 
   auto* original = app_.FindEntity(200);
@@ -209,10 +306,156 @@ TEST_F(CellAppHandlersTest, DuplicateCreateCellEntityRejectsExistingGhost) {
   EXPECT_EQ(app_.FindSpace(2), nullptr);
 }
 
+TEST_F(CellAppHandlersTest, CreateCellEntityPromotesExistingGhostForRestore) {
+  EnableGhostLifecycleCallbacks();
+  cellapp::CreateSpace cs;
+  cs.space_id = 1;
+  app_.OnCreateSpace({}, nullptr, cs);
+  auto* space = app_.FindSpace(1);
+  ASSERT_NE(space, nullptr);
+  auto* cell = space->AddLocalCell(std::make_unique<Cell>(*space, 1, CellBounds{}));
+  ASSERT_NE(cell, nullptr);
+
+  app_.OnCreateGhost({}, FakeChannel(0xBEEF), MakeGhost(201, {2, 0, 2}));
+  ghost_calls_.clear();
+
+  auto msg = MakeCreate(201, 1, {9, 0, 9});
+  msg.request_id = 201;
+  msg.script_init_data = {std::byte{0x11}};
+  app_.OnCreateCellEntity({}, nullptr, msg);
+
+  auto* promoted = app_.FindRealEntity(201);
+  ASSERT_NE(promoted, nullptr);
+  EXPECT_TRUE(cell->HasRealEntity(promoted));
+  EXPECT_FLOAT_EQ(promoted->Position().x, 2.f);
+  EXPECT_FLOAT_EQ(promoted->Position().z, 2.f);
+  ASSERT_GE(ghost_calls_.size(), 2u);
+  EXPECT_EQ(ghost_calls_[0].kind, GhostCall::kDestroyGhost);
+  EXPECT_EQ(ghost_calls_[1].kind, GhostCall::kRestoreEntity);
+}
+
+TEST_F(CellAppHandlersTest, CreateCellEntityPromotesGhostWithPersistentBlobFallback) {
+  EnableGhostLifecycleCallbacks();
+  cellapp::CreateSpace cs;
+  cs.space_id = 1;
+  app_.OnCreateSpace({}, nullptr, cs);
+
+  auto ghost = MakeGhost(202, {2, 0, 2});
+  ghost.persistent_blob = {std::byte{0x22}, std::byte{0x33}};
+  app_.OnCreateGhost({}, FakeChannel(0xBEEF), ghost);
+  ghost_calls_.clear();
+
+  auto msg = MakeCreate(202, 1, {9, 0, 9});
+  msg.request_id = 202;
+  msg.require_existing_ghost = true;
+  app_.OnCreateCellEntity({}, nullptr, msg);
+
+  auto* promoted = app_.FindRealEntity(202);
+  ASSERT_NE(promoted, nullptr);
+  ASSERT_GE(ghost_calls_.size(), 2u);
+  EXPECT_EQ(ghost_calls_[0].kind, GhostCall::kDestroyGhost);
+  EXPECT_EQ(ghost_calls_[1].kind, GhostCall::kRestoreEntity);
+  EXPECT_EQ(ghost_calls_[1].snapshot_len, 2);
+}
+
+TEST_F(CellAppHandlersTest, GhostSnapshotRefreshUpdatesPersistentBlobFallback) {
+  EnableGhostLifecycleCallbacks();
+
+  auto ghost = MakeGhost(204, {2, 0, 2});
+  ghost.persistent_blob = {std::byte{0x11}};
+  app_.OnCreateGhost({}, FakeChannel(0xBEEF), ghost);
+
+  cellapp::GhostSnapshotRefresh refresh;
+  refresh.entity_id = 204;
+  refresh.event_seq = 1;
+  refresh.persistent_blob = {std::byte{0x44}, std::byte{0x55}, std::byte{0x66}};
+  app_.OnGhostSnapshotRefresh({}, nullptr, refresh);
+  ghost_calls_.clear();
+
+  auto msg = MakeCreate(204, 1, {9, 0, 9});
+  msg.request_id = 204;
+  msg.require_existing_ghost = true;
+  app_.OnCreateCellEntity({}, nullptr, msg);
+
+  ASSERT_GE(ghost_calls_.size(), 2u);
+  EXPECT_EQ(ghost_calls_[1].kind, GhostCall::kRestoreEntity);
+  EXPECT_EQ(ghost_calls_[1].snapshot_len, 3);
+}
+
+TEST_F(CellAppHandlersTest, CreateCellEntityGhostOnlyRestoreRejectsMissingGhost) {
+  EnableGhostLifecycleCallbacks();
+  InterfaceTable table;
+  RecordingChannel base_ch(dispatcher_, table, Address(0x7F000001u, 20001));
+
+  auto msg = MakeCreate(203, 1, {9, 0, 9});
+  msg.request_id = 203;
+  msg.require_existing_ghost = true;
+  app_.OnCreateCellEntity({}, &base_ch, msg);
+
+  EXPECT_EQ(app_.FindEntity(203), nullptr);
+  EXPECT_TRUE(ghost_calls_.empty());
+  const auto failures = CellEntityCreateFailures(base_ch);
+  ASSERT_EQ(failures.size(), 1u);
+  EXPECT_EQ(failures[0].reason,
+            baseapp::CellEntityCreateFailureReason::kGhostRequiredMissing);
+}
+
+TEST_F(CellAppHandlersTest, CreateCellEntityGhostOnlyRestoreRejectsGhostWithoutBlob) {
+  EnableGhostLifecycleCallbacks();
+  InterfaceTable table;
+  RecordingChannel base_ch(dispatcher_, table, Address(0x7F000001u, 20001));
+  app_.OnCreateGhost({}, FakeChannel(0xBEEF), MakeGhost(205, {2, 0, 2}));
+  ghost_calls_.clear();
+
+  auto msg = MakeCreate(205, 1, {9, 0, 9});
+  msg.request_id = 205;
+  msg.require_existing_ghost = true;
+  app_.OnCreateCellEntity({}, &base_ch, msg);
+
+  auto* entity = app_.FindEntity(205);
+  ASSERT_NE(entity, nullptr);
+  EXPECT_TRUE(entity->IsGhost());
+  EXPECT_TRUE(ghost_calls_.empty());
+  const auto failures = CellEntityCreateFailures(base_ch);
+  ASSERT_EQ(failures.size(), 1u);
+  EXPECT_EQ(failures[0].reason, baseapp::CellEntityCreateFailureReason::kGhostBackupMissing);
+}
+
+TEST(CellAppWatchers, GhostPromoteCounterTracksCreateCellEntityRestore) {
+  EventDispatcher dispatcher{"test_cellapp_ghost_promote_watcher"};
+  NetworkInterface network{dispatcher};
+  WatcherCellApp app{dispatcher, network};
+  app.RegisterWatchersForTest();
+
+  const Address peer_addr(0x7F000001u, 26002);
+  app.PeerRegistryForTest().InsertForTest(peer_addr, FakeChannel(0xA11CE));
+
+  cellapp::CreateGhost ghost;
+  ghost.entity_id = 301;
+  ghost.type_id = 1;
+  ghost.space_id = 1;
+  ghost.position = {2, 0, 2};
+  ghost.direction = {1, 0, 0};
+  ghost.real_cellapp_addr = peer_addr;
+  app.OnCreateGhost(peer_addr, FakeChannel(0xA11CE), ghost);
+
+  cellapp::CreateCellEntity create;
+  create.entity_id = 301;
+  create.type_id = 1;
+  create.space_id = 1;
+  create.position = {9, 0, 9};
+  create.direction = {1, 0, 0};
+  create.request_id = 301;
+  app.OnCreateCellEntity({}, nullptr, create);
+
+  EXPECT_NE(app.FindRealEntity(301), nullptr);
+  EXPECT_EQ(app.GetWatcherRegistry().Get("cellapp/ghost_promoted_to_real_total").value_or(""),
+            "1");
+}
+
 TEST_F(CellAppHandlersTest, CreateGhostOnRealIsIdempotentNoOp) {
-  // Stale CreateGhost arriving after the entity got promoted to Real here
-  // (sender raced its own Offload across a channel reconnect) must be a
-  // silent no-op, not an "id collision" error.
+  // Stale CreateGhost after local promote is a no-op rather than an
+  // id-collision error.
   app_.OnCreateCellEntity({}, nullptr, MakeCreate(300, 1, {3, 0, 3}));
   auto* real = app_.FindRealEntity(300);
   ASSERT_NE(real, nullptr);
@@ -622,6 +865,13 @@ TEST_F(CellAppHandlersTest, CreateGhostWithNullChannelRejected) {
   EXPECT_EQ(app_.FindEntity(500), nullptr);
 }
 
+TEST_F(CellAppHandlersTest, CreateGhostRejectsUnregisteredCellAppSource) {
+  const Address untrusted(0x7F000001u, 49000);
+  app_.OnCreateGhost(untrusted, FakeChannel(0xBEEF), MakeGhost(501));
+
+  EXPECT_EQ(app_.FindEntity(501), nullptr);
+}
+
 TEST_F(CellAppHandlersTest, GhostPositionUpdateRejectsNaN) {
   cellapp::CreateSpace cs;
   cs.space_id = 1;
@@ -776,7 +1026,7 @@ TEST_F(CellAppHandlersTest, HandlePeerLost_AddressKeyed_AndIdempotent) {
 namespace {
 
 auto MakeOwnerSpace(CellApp& app, SpaceID space_id, cellappmgr::CellID primary_cell_id,
-                    uint16_t self_port) -> Space* {
+                    uint16_t self_port, uint64_t geometry_version = 0) -> Space* {
   cellapp::CreateSpace cs;
   cs.space_id = space_id;
   app.OnCreateSpace({}, nullptr, cs);
@@ -787,13 +1037,13 @@ auto MakeOwnerSpace(CellApp& app, SpaceID space_id, cellappmgr::CellID primary_c
   info.cellapp_addr = Address(0x7F000001u, self_port);
   BSPTree tree;
   tree.InitSingleCell(info);
-  space->SetBspTree(std::move(tree));
+  space->SetBspTree(std::move(tree), geometry_version);
   return space;
 }
 
 auto MakeGhostSpace(CellApp& app, SpaceID space_id, cellappmgr::CellID primary_cell_id,
                     cellappmgr::CellID local_cell_id, uint16_t owner_port,
-                    uint16_t self_port) -> Space* {
+                    uint16_t self_port, uint64_t geometry_version = 0) -> Space* {
   cellapp::CreateSpace cs;
   cs.space_id = space_id;
   app.OnCreateSpace({}, nullptr, cs);
@@ -808,11 +1058,37 @@ auto MakeGhostSpace(CellApp& app, SpaceID space_id, cellappmgr::CellID primary_c
   right.cell_id = local_cell_id;
   right.cellapp_addr = Address(0x7F000001u, self_port);
   (void)tree.Split(primary_cell_id, BSPAxis::kX, 0.f, right);
-  space->SetBspTree(std::move(tree));
+  space->SetBspTree(std::move(tree), geometry_version);
+  app.PeerRegistryForTest().InsertForTest(Address(0x7F000001u, owner_port),
+                                          FakeChannel(owner_port));
   return space;
 }
 
 }  // namespace
+
+TEST_F(CellAppHandlersTest, RequestCellAppStateForcesImmediateLoadReport) {
+  InterfaceTable table;
+  RecordingChannel mgr_ch(dispatcher_, table, Address(0x7F000001u, 20001));
+
+  cellappmgr::RegisterCellAppAck ack;
+  ack.success = true;
+  ack.app_id = 7;
+  app_.OnRegisterCellAppAck({}, &mgr_ch, ack);
+  MakeOwnerSpace(app_, 7, 1, 30001, /*geometry_version=*/12);
+
+  cellappmgr::RequestCellAppState req;
+  app_.OnRequestCellAppState({}, &mgr_ch, req);
+  auto loads = InformCellLoads(mgr_ch);
+  ASSERT_EQ(loads.size(), 1u);
+  EXPECT_EQ(loads.back().app_id, 7u);
+  ASSERT_EQ(loads.back().cells.size(), 1u);
+  EXPECT_EQ(loads.back().cells[0].cell_id, 1u);
+  EXPECT_EQ(loads.back().cells[0].geometry_version, 12u);
+
+  app_.OnRequestCellAppState({}, &mgr_ch, req);
+  loads = InformCellLoads(mgr_ch);
+  EXPECT_EQ(loads.size(), 2u);
+}
 
 TEST_F(CellAppHandlersTest, OnSpaceDataUpdate_AppliesValueLocally) {
   auto* space = MakeGhostSpace(app_, /*space_id=*/7, /*primary=*/1, /*local=*/2,
@@ -826,6 +1102,18 @@ TEST_F(CellAppHandlersTest, OnSpaceDataUpdate_AppliesValueLocally) {
   const auto* v = space->Data().Get(42);
   ASSERT_NE(v, nullptr);
   EXPECT_EQ(*v, (std::vector<uint8_t>{0xAA, 0xBB}));
+}
+
+TEST_F(CellAppHandlersTest, OnSpaceDataUpdateRejectsUnregisteredCellAppSource) {
+  auto* space = MakeGhostSpace(app_, 7, 1, 2, 30001, 30002);
+
+  cellapp::SpaceDataUpdate msg;
+  msg.space_id = 7;
+  msg.key_id = 42;
+  msg.value = {0xAA, 0xBB};
+  app_.OnSpaceDataUpdate(Address(0x7F000001u, 49000), nullptr, msg);
+
+  EXPECT_FALSE(space->Data().Contains(42));
 }
 
 TEST_F(CellAppHandlersTest, OnSpaceDataDelete_RemovesKeyLocally) {
@@ -855,6 +1143,42 @@ TEST_F(CellAppHandlersTest, OnSpaceDataSnapshot_OverwritesAndMarksInitialized) {
   EXPECT_FALSE(space->Data().Contains(99));
   ASSERT_NE(space->Data().Get(1), nullptr);
   EXPECT_EQ(*space->Data().Get(1), (std::vector<uint8_t>{0x01}));
+}
+
+TEST_F(CellAppHandlersTest, PrimaryHandoffAddCellAcksAfterSpaceDataSnapshot) {
+  InterfaceTable table;
+  RecordingChannel owner_ch(dispatcher_, table, Address(0x7F000001u, 30001));
+  RecordingChannel mgr_ch(dispatcher_, table, Address(0x7F000001u, 20001));
+  app_.PeerRegistryForTest().InsertForTest(Address(0x7F000001u, 30001), &owner_ch);
+
+  cellappmgr::AddCellToSpace add;
+  add.space_id = 7;
+  add.cell_id = 1;
+  add.bounds = {-100.f, -100.f, 100.f, 100.f};
+  add.is_primary = true;
+  add.space_data_source_addr = Address(0x7F000001u, 30001);
+  app_.OnAddCellToSpace({}, &mgr_ch, add);
+
+  auto* space = app_.FindSpace(7);
+  ASSERT_NE(space, nullptr);
+  EXPECT_FALSE(space->IsDataInitialized());
+  const auto requests = SpaceDataSnapshotRequests(owner_ch);
+  ASSERT_EQ(requests.size(), 1u);
+  EXPECT_EQ(requests[0].space_id, 7u);
+  EXPECT_TRUE(AddCellToSpaceAcks(mgr_ch).empty());
+
+  cellapp::SpaceDataSnapshot snap;
+  snap.space_id = 7;
+  snap.entries.push_back({42, {0xAA, 0xBB}});
+  app_.OnSpaceDataSnapshot(Address(0x7F000001u, 30001), nullptr, snap);
+
+  EXPECT_TRUE(space->IsDataInitialized());
+  ASSERT_NE(space->Data().Get(42), nullptr);
+  EXPECT_EQ(*space->Data().Get(42), (std::vector<uint8_t>{0xAA, 0xBB}));
+  const auto acks = AddCellToSpaceAcks(mgr_ch);
+  ASSERT_EQ(acks.size(), 1u);
+  EXPECT_EQ(acks[0].space_id, 7u);
+  EXPECT_EQ(acks[0].cell_id, 1u);
 }
 
 TEST_F(CellAppHandlersTest, OnSpaceDataSnapshotRequest_NonOwnerIsNoop) {
@@ -890,6 +1214,147 @@ TEST_F(CellAppHandlersTest, RemoveSpaceData_OwnerRemovesLocally) {
 TEST_F(CellAppHandlersTest, OwnerMarksDataInitializedOnSetBspTree) {
   auto* space = MakeOwnerSpace(app_, 7, 1, 30001);
   EXPECT_TRUE(space->IsDataInitialized());
+}
+
+TEST_F(CellAppHandlersTest, ShouldOffloadIgnoresStaleFreezeEpoch) {
+  auto* space = MakeOwnerSpace(app_, 7, 1, 30001);
+  auto* cell = space->FindLocalCell(1);
+  ASSERT_NE(cell, nullptr);
+
+  cellappmgr::ShouldOffload freeze;
+  freeze.space_id = 7;
+  freeze.cell_id = 1;
+  freeze.enable = false;
+  freeze.freeze_epoch = 2;
+  app_.OnShouldOffload({}, nullptr, freeze);
+  EXPECT_FALSE(cell->ShouldOffload());
+
+  cellappmgr::ShouldOffload stale_enable = freeze;
+  stale_enable.enable = true;
+  stale_enable.freeze_epoch = 1;
+  app_.OnShouldOffload({}, nullptr, stale_enable);
+  EXPECT_FALSE(cell->ShouldOffload());
+
+  cellappmgr::ShouldOffload enable = freeze;
+  enable.enable = true;
+  app_.OnShouldOffload({}, nullptr, enable);
+  EXPECT_TRUE(cell->ShouldOffload());
+}
+
+TEST_F(CellAppHandlersTest, RemoveCellFromSpaceRemovesEmptyLocalCell) {
+  auto* space = MakeGhostSpace(app_, 7, 1, 2, 30001, 30002);
+  ASSERT_NE(space->FindLocalCell(2), nullptr);
+
+  cellappmgr::RemoveCellFromSpace msg;
+  msg.space_id = 7;
+  msg.cell_id = 2;
+  app_.OnRemoveCellFromSpace({}, nullptr, msg);
+
+  EXPECT_EQ(space->FindLocalCell(2), nullptr);
+}
+
+TEST_F(CellAppHandlersTest, AddCellToSpaceBackfillsExistingRealMembership) {
+  cellapp::CreateSpace cs;
+  cs.space_id = 7;
+  app_.OnCreateSpace({}, nullptr, cs);
+  app_.OnCreateCellEntity({}, nullptr, MakeCreate(7007, 7, {3, 0, 3}));
+  auto* real = app_.FindRealEntity(7007);
+  ASSERT_NE(real, nullptr);
+
+  cellappmgr::AddCellToSpace add;
+  add.space_id = 7;
+  add.cell_id = 3;
+  app_.OnAddCellToSpace({}, nullptr, add);
+
+  auto* space = app_.FindSpace(7);
+  ASSERT_NE(space, nullptr);
+  auto* cell = space->FindLocalCell(3);
+  ASSERT_NE(cell, nullptr);
+  EXPECT_TRUE(cell->HasRealEntity(real));
+}
+
+TEST_F(CellAppHandlersTest, OffloadEntityRejectsMismatchedGeometryVersion) {
+  MakeGhostSpace(app_, 7, 1, 2, 30001, 30002, /*geometry_version=*/5);
+
+  cellapp::OffloadEntity msg;
+  msg.entity_id = 7777;
+  msg.type_id = 1;
+  msg.space_id = 7;
+  msg.position = {1, 0, 1};
+  msg.direction = {1, 0, 0};
+  msg.target_cell_id = 2;
+  msg.geometry_version = 4;
+
+  app_.OnOffloadEntity({}, nullptr, msg);
+  EXPECT_EQ(app_.FindRealEntity(7777), nullptr);
+}
+
+TEST_F(CellAppHandlersTest, OffloadEntityRejectsUnregisteredCellAppSource) {
+  MakeGhostSpace(app_, 7, 1, 2, 30001, 30002, /*geometry_version=*/5);
+
+  cellapp::OffloadEntity msg;
+  msg.entity_id = 7778;
+  msg.type_id = 1;
+  msg.space_id = 7;
+  msg.position = {1, 0, 1};
+  msg.direction = {1, 0, 0};
+  msg.target_cell_id = 2;
+  msg.geometry_version = 5;
+
+  app_.OnOffloadEntity(Address(0x7F000001u, 49000), FakeChannel(0xBEEF), msg);
+  EXPECT_EQ(app_.FindRealEntity(7778), nullptr);
+}
+
+TEST_F(CellAppHandlersTest, OffloadEntityRejectsMissingTargetCell) {
+  MakeGhostSpace(app_, 7, 1, 2, 30001, 30002, /*geometry_version=*/5);
+
+  cellapp::OffloadEntity msg;
+  msg.entity_id = 7777;
+  msg.type_id = 1;
+  msg.space_id = 7;
+  msg.position = {1, 0, 1};
+  msg.direction = {1, 0, 0};
+  msg.target_cell_id = 99;
+  msg.geometry_version = 5;
+
+  app_.OnOffloadEntity({}, nullptr, msg);
+  EXPECT_EQ(app_.FindRealEntity(7777), nullptr);
+}
+
+TEST_F(CellAppHandlersTest, OffloadEntityAcceptsMatchingGeometryTarget) {
+  auto* space = MakeGhostSpace(app_, 7, 1, 2, 30001, 30002, /*geometry_version=*/5);
+  auto* cell = space->FindLocalCell(2);
+  ASSERT_NE(cell, nullptr);
+
+  cellapp::OffloadEntity msg;
+  msg.entity_id = 7777;
+  msg.type_id = 1;
+  msg.space_id = 7;
+  msg.position = {1, 0, 1};
+  msg.direction = {1, 0, 0};
+  msg.target_cell_id = 2;
+  msg.geometry_version = 5;
+
+  app_.OnOffloadEntity({}, nullptr, msg);
+  auto* real = app_.FindRealEntity(7777);
+  ASSERT_NE(real, nullptr);
+  EXPECT_TRUE(cell->HasRealEntity(real));
+}
+
+TEST_F(CellAppHandlersTest, BuildOffloadMessageCapturesPersistentBlob) {
+  EnableGhostLifecycleCallbacks(/*with_serialize=*/true);
+  std::vector<std::byte> blob{std::byte{0x77}, std::byte{0x88}};
+  g_serialize_blob = &blob;
+
+  app_.OnCreateCellEntity({}, nullptr, MakeCreate(910, 1, {1, 0, 1}));
+  auto* real = app_.FindRealEntity(910);
+  ASSERT_NE(real, nullptr);
+
+  auto msg = app_.BuildOffloadMessage(*real);
+
+  ASSERT_EQ(msg.persistent_blob.size(), 2u);
+  EXPECT_EQ(msg.persistent_blob[0], std::byte{0x77});
+  EXPECT_EQ(msg.persistent_blob[1], std::byte{0x88});
 }
 
 // Ghost-lifecycle wire-up tests: verify cellapp.cc invokes restore_ghost_fn /

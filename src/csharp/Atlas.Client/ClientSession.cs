@@ -457,8 +457,10 @@ public sealed class ClientSession
             float minZ = reader.ReadFloat();
             float maxX = reader.ReadFloat();
             float maxZ = reader.ReadFloat();
+            float load = reader.ReadFloat();
+            uint entityCount = reader.ReadUInt32();
             leaves.Add(new ClientCallbacks.BspLeafRect(cellId, ownerIndex, minX, minZ, maxX,
-                                                       maxZ));
+                                                       maxZ, load, entityCount));
         }
         SpaceBspGeometryReceived?.Invoke(spaceId, leaves);
     }

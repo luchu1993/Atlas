@@ -5,6 +5,7 @@
 // BaseApp→CellApp traffic or break CellApp boot-up.
 
 #include <optional>
+#include <span>
 
 #include <gtest/gtest.h>
 
@@ -37,6 +38,7 @@ TEST(CellAppMessages, CreateCellEntityRoundTrip) {
   msg.base_addr = Address(0x7F000001u, 12345);
   msg.request_id = 999;
   msg.script_init_data = {std::byte{0xAA}, std::byte{0xBB}, std::byte{0xCC}};
+  msg.require_existing_ghost = true;
 
   auto rt = RoundTrip(msg);
   ASSERT_TRUE(rt.has_value());
@@ -51,6 +53,7 @@ TEST(CellAppMessages, CreateCellEntityRoundTrip) {
   EXPECT_EQ(rt->base_addr.Ip(), 0x7F000001u);
   EXPECT_EQ(rt->base_addr.Port(), 12345u);
   EXPECT_EQ(rt->request_id, 999u);
+  EXPECT_TRUE(rt->require_existing_ghost);
   ASSERT_EQ(rt->script_init_data.size(), 3u);
   EXPECT_EQ(rt->script_init_data[0], std::byte{0xAA});
 }
@@ -64,6 +67,25 @@ TEST(CellAppMessages, CreateCellEntityEmptyScriptDataRoundTrip) {
   auto rt = RoundTrip(msg);
   ASSERT_TRUE(rt.has_value());
   EXPECT_TRUE(rt->script_init_data.empty());
+  EXPECT_FALSE(rt->require_existing_ghost);
+}
+
+TEST(CellAppMessages, CreateCellEntityAcceptsLegacyFrameWithoutGhostFlag) {
+  CreateCellEntity msg;
+  msg.entity_id = 1;
+  msg.type_id = 1;
+  msg.space_id = 1;
+
+  BinaryWriter w;
+  msg.Serialize(w);
+  auto buf = w.Detach();
+  ASSERT_FALSE(buf.empty());
+  buf.pop_back();
+
+  BinaryReader r(std::span<const std::byte>(buf.data(), buf.size()));
+  auto rt = CreateCellEntity::Deserialize(r);
+  ASSERT_TRUE(rt.HasValue());
+  EXPECT_FALSE(rt->require_existing_ghost);
 }
 
 TEST(CellAppMessages, DestroyCellEntityRoundTrip) {

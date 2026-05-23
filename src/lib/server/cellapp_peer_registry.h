@@ -38,6 +38,10 @@ class CellAppPeerRegistry {
 
   [[nodiscard]] auto Find(const Address& addr) const -> Channel*;
 
+  [[nodiscard]] auto Contains(const Address& addr) const -> bool {
+    return channels_.contains(addr);
+  }
+
   [[nodiscard]] auto Channels() const
       -> const std::unordered_map<Address, IntrusivePtr<Channel>>& {
     return channels_;

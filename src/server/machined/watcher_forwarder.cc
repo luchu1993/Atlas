@@ -14,7 +14,6 @@ WatcherForwarder::WatcherForwarder(const ProcessRegistry& registry,
 void WatcherForwarder::HandleRequest(Channel* requester_channel, const WatcherRequest& req) {
   if (requester_channel == nullptr) return;
 
-  // Find target by name if specified, otherwise use first of that type
   std::optional<ProcessEntry> target;
   if (!req.target_name.empty()) {
     target = registry_.FindByName(req.target_type, req.target_name);
@@ -24,7 +23,6 @@ void WatcherForwarder::HandleRequest(Channel* requester_channel, const WatcherRe
   }
 
   if (!target || target->channel == nullptr || !target->channel->IsConnected()) {
-    // Target not found - reply immediately with not-found
     WatcherResponse resp;
     resp.request_id = req.request_id;
     resp.found = false;
@@ -41,13 +39,14 @@ void WatcherForwarder::HandleRequest(Channel* requester_channel, const WatcherRe
 
   WatcherForward fwd;
   fwd.request_id = fwd_id;
-  fwd.requester_name = "";  // machined itself is the proxy
+  fwd.requester_name = "";
   fwd.watcher_path = req.watcher_path;
+  fwd.op = req.op;
+  fwd.set_value = req.set_value;
 
   if (auto r = target->channel->SendMessage(fwd); !r) {
     ATLAS_LOG_WARNING("WatcherForwarder: failed to forward request to {}: {}", target->name,
                       r.Error().Message());
-    // Send error response
     WatcherResponse resp;
     resp.request_id = req.request_id;
     resp.found = false;
@@ -60,7 +59,7 @@ void WatcherForwarder::HandleRequest(Channel* requester_channel, const WatcherRe
 
   pending_.push_back(
       {fwd_id, req.request_id, requester_channel->RemoteAddress(), target->name, Clock::now()});
-  ATLAS_LOG_DEBUG("WatcherForwarder: forwarded request {} → {} (fwd_id={})", req.request_id,
+  ATLAS_LOG_DEBUG("WatcherForwarder: forwarded request {} -> {} (fwd_id={})", req.request_id,
                   target->name, fwd_id);
 }
 
@@ -74,7 +73,6 @@ void WatcherForwarder::HandleReply(Channel* source_channel, const WatcherReply& 
     return;
   }
 
-  // Find source name for the response
   std::string source_name = it->target_name;
   const uint32_t kRequesterRequestId = it->requester_request_id;
   const Address kRequesterAddr = it->requester_addr;

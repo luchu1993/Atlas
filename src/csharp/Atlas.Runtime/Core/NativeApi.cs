@@ -37,6 +37,15 @@ internal static unsafe partial class NativeApi
     [LibraryImport(LibName, EntryPoint = "AtlasGetProcessPrefix")]
     public static partial byte GetProcessPrefix();
 
+    [LibraryImport(LibName, EntryPoint = "AtlasReportScriptTick")]
+    private static partial void ReportScriptTickNative(uint entityId, ulong elapsedUs);
+
+    public static void ReportScriptTick(uint entityId, ulong elapsedUs)
+    {
+        ThreadGuard.EnsureMainThread();
+        ReportScriptTickNative(entityId, elapsedUs);
+    }
+
     [LibraryImport(LibName, EntryPoint = "AtlasSendClientRpc")]
     private static partial void SendClientRpcNative(
         uint entityId, uint packedRpcId, byte target,

@@ -216,6 +216,20 @@ TEST_F(CellAppNativeProviderTest, ProcessPrefixIsCellApp) {
   EXPECT_EQ(provider_.GetProcessPrefix(), static_cast<uint8_t>(ProcessType::kCellApp));
 }
 
+TEST_F(CellAppNativeProviderTest, ReportScriptTickRoutesCallback) {
+  uint32_t entity_id = 0;
+  uint64_t elapsed_us = 0;
+  provider_.SetScriptTickFn([&](uint32_t eid, uint64_t us) {
+    entity_id = eid;
+    elapsed_us = us;
+  });
+
+  provider_.ReportScriptTick(123, 4567);
+
+  EXPECT_EQ(entity_id, 123u);
+  EXPECT_EQ(elapsed_us, 4567u);
+}
+
 // ---- SetNativeCallbacks tests ----
 
 // Helper: build a minimal callback table with known sentinel function ptrs.

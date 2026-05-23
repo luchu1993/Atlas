@@ -62,7 +62,7 @@ public static class ClientCallbacks
     public readonly struct BspLeafRect
     {
         public BspLeafRect(uint cellId, byte ownerIndex, float minX, float minZ, float maxX,
-                           float maxZ)
+                           float maxZ, float load, uint entityCount)
         {
             CellId = cellId;
             OwnerIndex = ownerIndex;
@@ -70,6 +70,8 @@ public static class ClientCallbacks
             MinZ = minZ;
             MaxX = maxX;
             MaxZ = maxZ;
+            Load = load;
+            EntityCount = entityCount;
         }
 
         public uint CellId { get; }
@@ -78,5 +80,7 @@ public static class ClientCallbacks
         public float MinZ { get; }
         public float MaxX { get; }
         public float MaxZ { get; }
+        public float Load { get; }
+        public uint EntityCount { get; }
     }
 }

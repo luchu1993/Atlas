@@ -64,8 +64,9 @@ Atlas 服务端的玩法脚本运行在嵌入式 .NET CoreCLR 上;`Atlas.Generat
    隔离问题(细节见 native_api_architecture.md)。
 
 3. **Provider 进程级特化**。`atlas_*` 导出函数在 C++ 侧统一委托给当前
-   `INativeApiProvider`;BaseApp / CellApp / DBApp / Reviver 各自注册一份
-   实现,使 `SendClientRpc` 等方法在不同进程上自动路由到合理的目标。
+   `INativeApiProvider`;当前只有 BaseApp / CellApp 作为脚本宿主注册特化
+   Provider。DBApp 是原生 `ManagerApp`,Reviver / DBAppMgr 仍是占位或管理
+   进程,不是当前脚本宿主。
 
 4. **主线程语义**。安装 `AtlasSynchronizationContext` 后,所有 `await` 续体
    默认回到 Tick 主线程;每帧 `Lifecycle.DoOnTick` 先 drain 队列再驱动实体
@@ -134,7 +135,7 @@ Atlas 服务端的玩法脚本运行在嵌入式 .NET CoreCLR 上;`Atlas.Generat
 
 | 项 | 现状 / 缺什么 |
 |---|---|
-| 其余进程的 Provider | 仅 `BaseApp` / `CellApp` 已实现;`DBApp` / `Reviver` / `DBAppMgr` 当前依赖 `BaseNativeProvider` 默认实现,差异化能力(如 `WriteToDb` 真正落库)尚未接通 |
+| 其余进程的 Provider | 当前只有 `BaseApp` / `CellApp` 已实现脚本宿主 Provider;`DBApp` 直接走原生 entity-def / 数据库路径,`Reviver` / `DBAppMgr` 不是当前脚本宿主 |
 | 端到端引擎生命周期测试 | 缺 `tests/integration/test_engine_lifecycle.*`(C++ 启动 → C# 初始化 → Tick N 帧 → 关闭) |
 | Unity IL2CPP 端到端验收 | `Atlas.Client.Unity.asmdef` 已就位,但 `link.xml` + iOS/Android IL2CPP build + 序列化/RPC 往返尚未验证 |
 
@@ -151,7 +152,8 @@ Atlas 服务端的玩法脚本运行在嵌入式 .NET CoreCLR 上;`Atlas.Generat
 
 ```
 deploy/
-├── BaseApp / CellApp / DBApp / Reviver        — 薄壳可执行,动态链接 atlas_engine
+├── BaseApp / CellApp                           — 脚本宿主,动态链接 atlas_engine
+├── LoginApp / *Mgr / DBApp / Reviver           — 原生服务进程或占位管理进程
 ├── atlas_engine.dll/.so                        — 引擎核心,导出 atlas_* 符号
 ├── dotnet/                                     — .NET 运行时(随构建打包)
 ├── scripts/

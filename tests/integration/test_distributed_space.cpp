@@ -157,7 +157,13 @@ struct RealGhostFixture {
 
     auto r = A.network.ConnectRudp(addr_b);
     EXPECT_TRUE(r.HasValue()) << (r.HasValue() ? "" : r.Error().Message());
-    if (r.HasValue()) ch_a_to_b = *r;
+    if (r.HasValue()) {
+      ch_a_to_b = *r;
+      A.app.PeerRegistryForTest().InsertForTest(addr_b, *r);
+    }
+    auto back = B.network.ConnectRudp(addr_a);
+    EXPECT_TRUE(back.HasValue()) << (back.HasValue() ? "" : back.Error().Message());
+    if (back.HasValue()) B.app.PeerRegistryForTest().InsertForTest(addr_a, *back);
 
     cellapp::CreateSpace cs;
     cs.space_id = kSpaceId;

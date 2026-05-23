@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using Atlas.Core;
 using Atlas.Diagnostics;
 using Atlas.Serialization;
@@ -105,16 +106,24 @@ public sealed class EntityManager
             if (entity.IsGhost) continue;
             if (entity.TickInterval > 1 &&
                 _tickCount % (uint)entity.TickInterval != (uint)entity.TickPhase) continue;
-            // Type.Name is cached on the Type instance by the runtime, so the
-            // hot loop sees the same string reference each call — safe to use
-            // as a Profiler zone label without per-tick allocation.
-            using (Profiler.ZoneN(entity.GetType().Name))
-                entity.OnTick(deltaTime);
-            // Fire component ticks AFTER the entity body so a component
-            // that depends on entity state sees the latest values; the
-            // pump still captures any dirty bits both touch this tick.
-            using (Profiler.ZoneN(ProfilerNames.ScriptComponentTickAll))
-                entity.TickAllComponents(deltaTime);
+            var reportTick = _processPrefix == kCellAppProcessPrefix;
+            var start = reportTick ? Stopwatch.GetTimestamp() : 0L;
+            try
+            {
+                using (Profiler.ZoneN(entity.GetType().Name))
+                    entity.OnTick(deltaTime);
+                using (Profiler.ZoneN(ProfilerNames.ScriptComponentTickAll))
+                    entity.TickAllComponents(deltaTime);
+            }
+            finally
+            {
+                if (reportTick)
+                {
+                    var elapsedTicks = Math.Max(0, Stopwatch.GetTimestamp() - start);
+                    var elapsedUs = (ulong)(elapsedTicks * 1_000_000.0 / Stopwatch.Frequency);
+                    NativeApi.ReportScriptTick(entity.EntityId, elapsedUs);
+                }
+            }
         }
         FlushPending();
     }

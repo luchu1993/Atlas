@@ -5,6 +5,7 @@
 #include <cstring>
 #include <format>
 #include <limits>
+#include <optional>
 #include <span>
 #include <vector>
 
@@ -105,6 +106,20 @@ auto LegacyPickPeer(const std::unordered_map<Address, IntrusivePtr<Channel>>& pe
   });
   const std::size_t idx = static_cast<std::size_t>(space_id - 1) % sorted.size();
   return sorted[idx];
+}
+
+auto FindDeathRehomeHost(
+    const BaseEntity& entity, const baseapp::CellAppDeath& msg,
+    const std::unordered_map<SpaceID, Address>& fallback_hosts) -> std::optional<Address> {
+  if (entity.HasLastCellPose()) {
+    if (const auto* cell =
+            baseapp::FindRehomeCellForPosition(msg, entity.SpaceId(), entity.LastCellPosition())) {
+      return cell->host_addr;
+    }
+  }
+  auto it = fallback_hosts.find(entity.SpaceId());
+  if (it != fallback_hosts.end()) return it->second;
+  return std::nullopt;
 }
 
 }  // namespace
@@ -383,6 +398,7 @@ void BaseApp::OnTickComplete() {
   ReportLoadToBaseAppMgr();
   CleanupExpiredPendingRequests();
   SweepStaleDestroysInFlight();
+  SweepCellAppDeathRestoreTimeouts();
   MaybeRequestMoreIds();
 
   EntityApp::OnTickComplete();
@@ -484,6 +500,22 @@ void BaseApp::RegisterWatchers() {
                    std::function<uint64_t()>([this] { return baseline_messages_sent_total_; }));
   wr.Add<uint64_t>("baseapp/baseline_bytes_sent_total",
                    std::function<uint64_t()>([this] { return baseline_bytes_sent_total_; }));
+  wr.Add<uint64_t>("baseapp/cellapp_death_notifications_total",
+                   std::function<uint64_t()>([this] {
+                     return cellapp_death_notifications_total_;
+                   }));
+  wr.Add<uint64_t>("baseapp/cellapp_death_restored_total",
+                   std::function<uint64_t()>([this] { return cellapp_death_restored_total_; }));
+  wr.Add<uint64_t>("baseapp/cellapp_death_lost_total",
+                   std::function<uint64_t()>([this] { return cellapp_death_lost_total_; }));
+  wr.Add<uint64_t>("baseapp/cellapp_death_restore_timeouts_total",
+                   std::function<uint64_t()>([this] {
+                     return cellapp_death_restore_timeouts_total_;
+                   }));
+  wr.Add<std::size_t>("baseapp/cellapp_death_pending_restores",
+                      std::function<std::size_t()>([this] {
+                        return pending_cellapp_death_restores_.size();
+                      }));
   RegisterLatencyWatchers(wr, "baseapp/prepare_login_latency", prepare_login_latency_);
   RegisterLatencyWatchers(wr, "baseapp/authenticate_latency", authenticate_latency_);
   RegisterLatencyWatchers(wr, "baseapp/force_logoff_latency", force_logoff_latency_);
@@ -510,6 +542,12 @@ void BaseApp::RegisterInternalHandlers() {
   (void)table.RegisterTypedHandler<baseapp::CellEntityCreated>(
       [this](const Address& /*src*/, Channel* ch, const baseapp::CellEntityCreated& msg) {
         OnCellEntityCreated(*ch, msg);
+      });
+
+  (void)table.RegisterTypedHandler<baseapp::CellEntityCreateFailed>(
+      [this](const Address& /*src*/, Channel* /*ch*/,
+             const baseapp::CellEntityCreateFailed& msg) {
+        OnCellEntityCreateFailed(msg);
       });
 
   (void)table.RegisterTypedHandler<baseapp::CellEntityDestroyed>(
@@ -803,6 +841,11 @@ void BaseApp::OnCellEntityCreated(Channel& ch, const baseapp::CellEntityCreated&
   ent->SetCell(cell_addr);
   ATLAS_LOG_DEBUG("BaseApp: entity {} has cell at {}:{}", msg.entity_id, cell_addr.Ip(),
                   cell_addr.Port());
+  if (auto pending_it = pending_cellapp_death_restores_.find(msg.entity_id);
+      pending_it != pending_cellapp_death_restores_.end()) {
+    pending_cellapp_death_restores_.erase(pending_it);
+    ++cellapp_death_restored_total_;
+  }
 
   // CellReady tells the client its ClientCellRpc will now route. Note: not
   // retroactive - a client binding after this point relies on world_stress's
@@ -839,6 +882,20 @@ void BaseApp::OnCellEntityCreated(Channel& ch, const baseapp::CellEntityCreated&
   }
 }
 
+void BaseApp::OnCellEntityCreateFailed(const baseapp::CellEntityCreateFailed& msg) {
+  const EntityID entity_id =
+      msg.entity_id != kInvalidEntityID ? msg.entity_id : static_cast<EntityID>(msg.request_id);
+  auto* ent = entity_mgr_.Find(entity_id);
+  if (ent != nullptr) ent->ClearCell();
+  if (auto pending_it = pending_cellapp_death_restores_.find(entity_id);
+      pending_it != pending_cellapp_death_restores_.end()) {
+    pending_cellapp_death_restores_.erase(pending_it);
+    ++cellapp_death_lost_total_;
+  }
+  ATLAS_LOG_WARNING("BaseApp: CellEntityCreateFailed entity={} request_id={} reason={}",
+                    entity_id, msg.request_id, static_cast<uint32_t>(msg.reason));
+}
+
 void BaseApp::OnCellEntityDestroyed(Channel& /*ch*/, const baseapp::CellEntityDestroyed& msg) {
   auto* ent = entity_mgr_.Find(msg.entity_id);
   if (!ent) return;
@@ -873,10 +930,10 @@ void BaseApp::OnCurrentCell(Channel& ch, const baseapp::CurrentCell& msg) {
   pending_client_rpcs_.erase(pending_it);
 }
 
-// Re-creates each Real on the rehome target using the cached
-// cell_backup_data as script_init_data; client stays connected (AoI pauses
-// until CellEntityCreated ack lands).
+// Re-creates each Real on the rehome leaf with cached cell state; clients stay
+// connected while AoI pauses until CellEntityCreated ack lands.
 void BaseApp::OnCellAppDeath(const baseapp::CellAppDeath& msg) {
+  ++cellapp_death_notifications_total_;
   ATLAS_LOG_WARNING("BaseApp: CellAppDeath dead_addr={}:{} rehome_spaces={}", msg.dead_addr.Ip(),
                     msg.dead_addr.Port(), msg.rehomes.size());
 
@@ -884,7 +941,7 @@ void BaseApp::OnCellAppDeath(const baseapp::CellAppDeath& msg) {
   space_to_new_host.reserve(msg.rehomes.size());
   for (const auto& [sid, addr] : msg.rehomes) space_to_new_host[sid] = addr;
 
-  uint32_t restored = 0;
+  uint32_t scheduled = 0;
   uint32_t lost = 0;
 
   // Collect first; ForEach must not observe SetCell/ClearCell mid-walk.
@@ -898,8 +955,8 @@ void BaseApp::OnCellAppDeath(const baseapp::CellAppDeath& msg) {
     if (ent == nullptr) continue;
     const SpaceID sid = ent->SpaceId();
 
-    auto it = space_to_new_host.find(sid);
-    if (it == space_to_new_host.end()) {
+    auto new_addr = FindDeathRehomeHost(*ent, msg, space_to_new_host);
+    if (!new_addr.has_value()) {
       ATLAS_LOG_ERROR(
           "BaseApp: CellAppDeath: no rehome target for entity={} space={} — "
           "Real lost",
@@ -908,51 +965,62 @@ void BaseApp::OnCellAppDeath(const baseapp::CellAppDeath& msg) {
       ++lost;
       continue;
     }
-    if (ent->CellBackupData().empty()) {
-      ATLAS_LOG_ERROR(
-          "BaseApp: CellAppDeath: entity={} has no cached cell_backup_data "
-          "(CellApp died before first backup pump tick?) — Real lost",
+    const bool has_cell_backup = !ent->CellBackupData().empty();
+    if (!has_cell_backup) {
+      ATLAS_LOG_WARNING(
+          "BaseApp: CellAppDeath: entity={} has no cached cell_backup_data; "
+          "attempting Ghost-only restore",
           eid);
-      ent->ClearCell();
-      ++lost;
-      continue;
     }
 
-    const Address& new_addr = it->second;
-    auto ch_result = Network().ConnectRudpNocwnd(new_addr);
+    auto ch_result = Network().ConnectRudpNocwnd(*new_addr);
     if (!ch_result) {
       ATLAS_LOG_ERROR(
           "BaseApp: CellAppDeath: cannot reach rehome target {}:{} for "
           "entity={} — Real lost",
-          new_addr.Ip(), new_addr.Port(), eid);
+          new_addr->Ip(), new_addr->Port(), eid);
       ent->ClearCell();
       ++lost;
       continue;
     }
     auto* cell_ch = *ch_result;
 
-    // Clear the stale route so any ClientCellRpc that lands between
-    // now and OnCellEntityCreated ack gets dropped cleanly rather
-    // than shipped to the dead addr.
+    // Clear the stale route so ClientCellRpc drops cleanly until the
+    // CellEntityCreated ack installs the new address.
     ent->ClearCell();
 
     cellapp::CreateCellEntity restore;
     restore.entity_id = eid;
     restore.type_id = ent->TypeId();
     restore.space_id = sid;
-    restore.position = {0.f, 0.f, 0.f};
-    restore.direction = {1.f, 0.f, 0.f};
-    restore.on_ground = false;
+    if (ent->HasLastCellPose()) {
+      restore.position = ent->LastCellPosition();
+      restore.direction = ent->LastCellDirection();
+      restore.on_ground = ent->LastCellOnGround();
+    } else {
+      restore.position = {0.f, 0.f, 0.f};
+      restore.direction = {1.f, 0.f, 0.f};
+      restore.on_ground = false;
+    }
     restore.base_addr = Network().RudpAddress();
     restore.request_id = eid;
-    // The restore blob is what BaseApp has been archiving via
-    // BackupCellEntity; CellApp's RestoreEntity callback deserialises it.
+    restore.require_existing_ghost = !has_cell_backup;
+    // The restore blob is what BaseApp archives via BackupCellEntity;
+    // empty means the receiver must promote an existing Ghost backup.
     restore.script_init_data = ent->CellBackupData();
-    (void)cell_ch->SendMessage(restore);
-    ++restored;
+    if (auto send_result = cell_ch->SendMessage(restore); !send_result) {
+      ATLAS_LOG_ERROR("BaseApp: CellAppDeath restore send failed entity={} target={}: {}", eid,
+                      new_addr->ToString(), send_result.Error().Message());
+      ++lost;
+      continue;
+    }
+    pending_cellapp_death_restores_[eid] =
+        PendingCellAppDeathRestore{Clock::now(), *new_addr};
+    ++scheduled;
   }
 
-  ATLAS_LOG_INFO("BaseApp: CellAppDeath complete — restored={} lost={}", restored, lost);
+  cellapp_death_lost_total_ += lost;
+  ATLAS_LOG_INFO("BaseApp: CellAppDeath complete — scheduled={} lost={}", scheduled, lost);
 }
 
 void BaseApp::OnSpaceBspGeometry(const baseapp::SpaceBspGeometry& msg) {
@@ -1064,6 +1132,9 @@ void BaseApp::OnBackupCellEntity(const baseapp::BackupCellEntity& msg) {
     return;
   }
   entity->SetCellBackupData(msg.cell_backup_data);
+  if (msg.has_pose) {
+    entity->SetLastCellPose(msg.position, msg.direction, msg.on_ground);
+  }
 }
 
 // Cell-authoritative baseline relay (cell-scope fields can't be serialized
@@ -1920,6 +1991,29 @@ void BaseApp::SweepStaleDestroysInFlight() {
   }
 }
 
+void BaseApp::SweepCellAppDeathRestoreTimeouts() {
+  if (pending_cellapp_death_restores_.empty()) return;
+  const auto now = Clock::now();
+  std::vector<EntityID> timed_out;
+  timed_out.reserve(pending_cellapp_death_restores_.size());
+  for (const auto& [entity_id, pending] : pending_cellapp_death_restores_) {
+    if (now - pending.started_at >= kCellAppDeathRestoreTimeout) timed_out.push_back(entity_id);
+  }
+  for (EntityID entity_id : timed_out) {
+    auto it = pending_cellapp_death_restores_.find(entity_id);
+    if (it == pending_cellapp_death_restores_.end()) continue;
+    const auto elapsed_ms =
+        std::chrono::duration_cast<std::chrono::milliseconds>(now - it->second.started_at).count();
+    if (auto* ent = entity_mgr_.Find(entity_id)) ent->ClearCell();
+    ++cellapp_death_lost_total_;
+    ++cellapp_death_restore_timeouts_total_;
+    ATLAS_LOG_WARNING(
+        "BaseApp: CellAppDeath restore timed out entity={} target={} elapsed_ms={}",
+        entity_id, it->second.target_addr.ToString(), elapsed_ms);
+    pending_cellapp_death_restores_.erase(it);
+  }
+}
+
 void BaseApp::ProcessForceLogoffRequest(const baseapp::ForceLogoff& msg) {
   EntityID found_id = kInvalidEntityID;
   if (auto* ent = entity_mgr_.FindByDbid(msg.dbid)) {
@@ -2050,6 +2144,7 @@ auto BaseApp::CreateBaseEntityFromScript(uint16_t type_id, SpaceID space_id) -> 
       msg.on_ground = false;
       msg.base_addr = Network().RudpAddress();
       msg.request_id = kEid;
+      ent->SetLastCellPose(msg.position, msg.direction, msg.on_ground);
       // CellBackupData is the cell-scope blob from a prior DB checkout (empty
       // on a brand-new entity); cell side uses type defaults if empty.
       if (auto* ent_new = entity_mgr_.Find(kEid); ent_new) {

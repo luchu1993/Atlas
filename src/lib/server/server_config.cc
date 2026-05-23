@@ -108,6 +108,16 @@ static const CliField kCliFields[] = {
     {"hot-reload-debounce-ms",      &ServerConfig::hot_reload_debounce_ms},
     {"hot-reload-unload-timeout-ms",&ServerConfig::hot_reload_unload_timeout_ms},
     {"hot-reload-auto-compile",     &ServerConfig::hot_reload_auto_compile},
+    {"snapshot-path",               &ServerConfig::snapshot_path},
+    {"snapshot-interval-ms",        &ServerConfig::snapshot_interval_ms},
+    {"revive-cellappmgr-exe",       &ServerConfig::revive_cellappmgr_exe},
+    {"revive-cellappmgr-name",      &ServerConfig::revive_cellappmgr_name},
+    {"revive-cellappmgr-port",      &ServerConfig::revive_cellappmgr_internal_port},
+    {"revive-cellappmgr-snapshot-path", &ServerConfig::revive_cellappmgr_snapshot_path},
+    {"revive-cellappmgr-update-hertz",  &ServerConfig::revive_cellappmgr_update_hertz},
+    {"revive-restart-delay-ms",     &ServerConfig::revive_restart_delay_ms},
+    {"revive-max-restarts",         &ServerConfig::revive_max_restarts},
+    {"revive-cellappmgr-on-start",  &ServerConfig::revive_cellappmgr_on_start},
 };
 // clang-format on
 
@@ -185,6 +195,31 @@ auto ServerConfig::FromJsonFile(const std::filesystem::path& path) -> Result<Ser
     cfg.hot_reload_unload_timeout_ms =
         hr->ReadInt("unload_timeout_ms", cfg.hot_reload_unload_timeout_ms);
     cfg.hot_reload_auto_compile = hr->ReadBool("auto_compile", cfg.hot_reload_auto_compile);
+  }
+
+  if (auto* snapshot = root->Child("snapshot")) {
+    cfg.snapshot_path = snapshot->ReadString("path", cfg.snapshot_path.string());
+    cfg.snapshot_interval_ms = snapshot->ReadInt("interval_ms", cfg.snapshot_interval_ms);
+  }
+
+  if (auto* reviver = root->Child("reviver")) {
+    cfg.revive_restart_delay_ms =
+        reviver->ReadInt("restart_delay_ms", cfg.revive_restart_delay_ms);
+    cfg.revive_max_restarts = reviver->ReadInt("max_restarts", cfg.revive_max_restarts);
+    if (auto* cellappmgr = reviver->Child("cellappmgr")) {
+      cfg.revive_cellappmgr_exe =
+          cellappmgr->ReadString("exe", cfg.revive_cellappmgr_exe.string());
+      cfg.revive_cellappmgr_name =
+          cellappmgr->ReadString("name", cfg.revive_cellappmgr_name);
+      cfg.revive_cellappmgr_internal_port = static_cast<uint16_t>(
+          cellappmgr->ReadUint("internal_port", cfg.revive_cellappmgr_internal_port));
+      cfg.revive_cellappmgr_snapshot_path =
+          cellappmgr->ReadString("snapshot_path", cfg.revive_cellappmgr_snapshot_path.string());
+      cfg.revive_cellappmgr_update_hertz =
+          cellappmgr->ReadInt("update_hertz", cfg.revive_cellappmgr_update_hertz);
+      cfg.revive_cellappmgr_on_start =
+          cellappmgr->ReadBool("on_start", cfg.revive_cellappmgr_on_start);
+    }
   }
 
   if (auto* db = root->Child("database")) {

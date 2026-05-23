@@ -131,8 +131,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--script-username-prefix", default="script_user_")
     parser.add_argument("--script-verify", action="store_true",
                         help="Fail the orchestrator run if any script child didn't observe OnInit")
-    parser.add_argument("--client-drop-inbound-ms", nargs=2, type=int, metavar=("START", "DURATION"),
-                        default=None,
+    parser.add_argument("--client-drop-inbound-ms", nargs=2, type=int,
+                        metavar=("START", "DURATION"), default=None,
                         help="Forward atlas_client --drop-inbound-ms (app-level drop of "
                              "state-channel messages; script_client_smoke.md 场景 2)")
     parser.add_argument("--client-drop-transport-ms", nargs=2, type=int,
@@ -674,9 +674,44 @@ _DIGEST_FILE = (
     / "EntityDefDigest.g.cs"
 )
 _DIGEST_RE = re.compile(r'Sha256Hex\s*=\s*"([0-9A-Fa-f]{64})"')
+_DEFDUMP_RE = re.compile(r"DefDump:\s+digest=([0-9A-Fa-f]{64})")
 
 
-def load_entity_def_digest(repo_root: Path) -> str:
+def find_defdump(repo_root: Path, build_dir: str) -> Path | None:
+    build_path = repo_root / build_dir
+    build_name = Path(build_dir).name
+    candidates = [
+        build_path / "csharp" / "Atlas.Tools.DefDump.dll",
+        repo_root / "build" / build_name / "csharp" / "Atlas.Tools.DefDump.dll",
+        repo_root / "bin" / build_name / "Atlas.Tools.DefDump.dll",
+    ]
+    for candidate in candidates:
+        if candidate.is_file():
+            return candidate
+    return None
+
+
+def load_entity_def_digest(repo_root: Path, build_dir: str, assembly_path: Path) -> str:
+    defdump = find_defdump(repo_root, build_dir)
+    if defdump is not None:
+        try:
+            proc = subprocess.run(
+                ["dotnet", str(defdump), "--digest-only", str(assembly_path)],
+                capture_output=True,
+                text=True,
+                cwd=repo_root,
+                timeout=30,
+            )
+        except FileNotFoundError:
+            fail("dotnet not found; install the .NET SDK or run from a developer shell")
+        if proc.returncode != 0:
+            detail = proc.stderr.strip() or proc.stdout.strip()
+            fail(f"DefDump failed for {assembly_path}: {detail}")
+        match = _DEFDUMP_RE.search(proc.stdout)
+        if not match:
+            fail(f"DefDump output did not contain a digest for {assembly_path}")
+        return match.group(1)
+
     path = repo_root / _DIGEST_FILE
     if not path.is_file():
         fail(f"EntityDefDigest.g.cs not found at {path}; build the C# stress projects first.")
@@ -783,7 +818,7 @@ def main() -> int:
             repo_root, bin_name, search_subdirs, "world_stress"
         )
         assert_file_exists(world_stress, world_stress.name)
-        entity_def_digest = load_entity_def_digest(repo_root)
+        entity_def_digest = load_entity_def_digest(repo_root, args.build_dir, base_assembly)
 
     timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
     git_hash = _git_short(repo_root)

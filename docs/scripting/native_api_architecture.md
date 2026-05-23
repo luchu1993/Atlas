@@ -3,7 +3,7 @@
 > **状态**:✅ 已落地。`atlas_engine` 共享库、`INativeApiProvider`
 > 抽象与默认实现、X-macro 单一定义源、主线程模型、TLS / 双 Assembly
 > 解决方案均在 `main` 上工作并有测试覆盖;Provider 特化目前仅
-> `BaseApp` / `CellApp`,其余进程使用默认实现(详见
+> `BaseApp` / `CellApp`,DBApp / Reviver / DBAppMgr 不是当前脚本宿主(详见
 > [README.md §7](README.md#7-完成状态))。
 
 C# 脚本层与 C++ 引擎之间的双向调用、进程差异化与主线程语义建立在三件
@@ -13,7 +13,7 @@ C# 脚本层与 C++ 引擎之间的双向调用、进程差异化与主线程语
 ## 1. atlas_engine 共享库
 
 `src/lib/*` 各子库以 `OBJECT` 目标编译,聚合为 `atlas_engine` `SHARED`
-库;服务端可执行文件(BaseApp / CellApp / DBApp / Reviver)动态链接它。
+库;当前脚本宿主可执行文件(BaseApp / CellApp)动态链接它。
 C# 端 `[LibraryImport("atlas_engine")]` 走标准 DLL 查找,无需
 `DllImportResolver` hack。
 
@@ -30,8 +30,8 @@ C# 端 `[LibraryImport("atlas_engine")]` 走标准 DLL 查找,无需
 ## 2. INativeApiProvider 进程级适配
 
 `atlas_*` 导出函数统一通过 `src/lib/clrscript/clr_native_api_defs.h` 的
-X-macro 一次性展开:函数声明、函数实现、`INativeApiProvider` 纯虚方法、
-`BaseNativeProvider` 默认实现四处自动同步。每个服务端可执行文件在
+X-macro 一次性展开函数声明和实现，最终转发到 `INativeApiProvider`。
+每个服务端可执行文件在
 `ClrHost::Initialize` 之前注册自己的 Provider,`atlas_*` 函数体一行
 `GetNativeApiProvider().XXX(...)` 转发。
 
@@ -43,11 +43,12 @@ X-macro 一次性展开:函数声明、函数实现、`INativeApiProvider` 纯�
 
 | NativeApi | BaseApp | CellApp | DBApp | LoginApp |
 |---|---|---|---|---|
-| `SendClientRpc` | 直接通过 ClientProxy 发送 | 转发到对应 BaseApp | 不支持 | 不支持 |
-| `SendCellRpc` | 查找目标 CellApp,跨进程路由 | 本地分发给 C# | 不支持 | 不支持 |
-| `SendBaseRpc` | 本地分发给 C# | 查找目标 BaseApp,跨进程路由 | 不支持 | 不支持 |
-| `GetProcessPrefix` | Base 前缀 | Cell 前缀 | 不分配 EntityId | 不分配 EntityId |
-| `RegisterEntityType` | 注册全部信息 | 注册(含 Cell 相关) | 注册(含持久化字段) | 不需要 |
+| `SendClientRpc` | 直接通过 ClientProxy 发送 | 转发到对应 BaseApp | 非脚本宿主 | 不支持 |
+| `SendCellRpc` | 查找目标 CellApp,跨进程路由 | 本地分发给 C# | 非脚本宿主 | 不支持 |
+| `SendBaseRpc` | 本地分发给 C# | 查找目标 BaseApp,跨进程路由 | 非脚本宿主 | 不支持 |
+| `GetProcessPrefix` | Base 前缀 | Cell 前缀 | 非脚本宿主 | 不分配 EntityId |
+| `RegisterEntityType` | 注册全部信息 | 注册(含 Cell 相关) | DBApp 直接加载 `entity_defs.bin` | 不需要 |
+| `ReportScriptTick` | no-op | 归入本地 Cell 的 LB 计数 | 非脚本宿主 | 不支持 |
 
 ## 3. 主线程模型(AtlasSynchronizationContext)
 

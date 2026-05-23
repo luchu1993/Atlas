@@ -6,6 +6,7 @@
 #include <span>
 #include <unordered_map>
 #include <unordered_set>
+#include <vector>
 
 #include "cellappmgr/cellappmgr_messages.h"  // cellappmgr::CellID
 #include "coro/pending_rpc_registry.h"
@@ -134,10 +135,14 @@ class CellApp : public EntityApp {
   void DestroyLocalEntity(EntityID entity_id);
 
   void OnAddCellToSpace(const Address& src, Channel* ch, const cellappmgr::AddCellToSpace& msg);
+  void OnRemoveCellFromSpace(const Address& src, Channel* ch,
+                             const cellappmgr::RemoveCellFromSpace& msg);
   void OnUpdateGeometry(const Address& src, Channel* ch, const cellappmgr::UpdateGeometry& msg);
   void OnShouldOffload(const Address& src, Channel* ch, const cellappmgr::ShouldOffload& msg);
   void OnRegisterCellAppAck(const Address& src, Channel* ch,
                             const cellappmgr::RegisterCellAppAck& msg);
+  void OnRequestCellAppState(const Address& src, Channel* ch,
+                             const cellappmgr::RequestCellAppState& msg);
 
   // Non-zero after RegisterCellApp completes; reported back to
   // CellAppMgr in load updates so the manager can attribute traffic to
@@ -148,6 +153,7 @@ class CellApp : public EntityApp {
   // already died). Populated by the machined ProcessType::kCellApp
   // Birth/Death subscription in Init.
   [[nodiscard]] auto FindPeerChannel(const Address& addr) const -> Channel*;
+  [[nodiscard]] auto IsTrustedCellAppPeer(const Address& addr) const -> bool;
 
   [[nodiscard]] auto GetRpcRegistry() -> PendingRpcRegistry& { return rpc_registry_; }
 
@@ -166,9 +172,11 @@ class CellApp : public EntityApp {
 
   // Build but don't send - caller chooses transport. The C#
   // SerializeEntity callback fills persistent_blob when registered;
-  // the receiver rebuilds local Cell membership from the arriving
-  // position so no target_cell_id needs to travel on the wire.
-  auto BuildOffloadMessage(const CellEntity& entity) const -> cellapp::OffloadEntity;
+  // the caller passes the target Cell chosen from its current BSP so the
+  // receiver can reject stale geometry instead of guessing.
+  auto BuildOffloadMessage(const CellEntity& entity,
+                           cellappmgr::CellID target_cell_id = 0) const
+      -> cellapp::OffloadEntity;
 
   // EWMA of (work_time / expected_tick_period), refreshed every tick
   // at the start of OnTickComplete; consumed by SendInformCellLoad.
@@ -248,6 +256,7 @@ class CellApp : public EntityApp {
 
   void TickControllers(float dt);
   void TickWitnesses();
+  auto RejectUntrustedCellAppPeer(const Address& src, const char* message_name) -> bool;
 
   // Cell->base state backup. Fires every kBackupIntervalTicks for every
   // entity with a live BaseAddr, capturing the cell-side Serialize
@@ -273,6 +282,11 @@ class CellApp : public EntityApp {
   // allocates the CellEntity, drops it into the space + owning local Cell.
   auto PlaceEntityInSpace(EntityID cell_id, uint16_t type_id, Space& space, math::Vector3 pos,
                           math::Vector3 dir, bool on_ground) -> CellEntity*;
+  void AddRealToLocalCell(CellEntity& entity);
+  [[nodiscard]] auto CapturePersistentBlob(const CellEntity& entity, const char* context) const
+      -> std::vector<std::byte>;
+  void RestoreScriptEntity(CellEntity& entity, uint16_t type_id,
+                           std::span<const std::byte> script_init_data);
 
   // Shared teardown body for OnDestroyCellEntity and DestroyLocalEntity.
   void RemoveEntityFromSpace(CellEntity* entity);
@@ -287,10 +301,14 @@ class CellApp : public EntityApp {
   // Sends cellappmgr::InformCellLoad. No-op if not yet registered
   // (cellappmgr_channel_ null or app_id_ == 0).
   void SendInformCellLoad();
+  [[nodiscard]] auto FindLocalCellIdFor(const CellEntity& entity) const -> cellappmgr::CellID;
+  void RecordScriptTick(uint32_t entity_id, uint64_t elapsed_us);
 
   // SpaceData routing helpers. `exclude` lets a forwarded write skip
   // bouncing back to its sender; owner = cellapp holding the BSP primary cell.
   [[nodiscard]] auto FindSpaceOwnerChannel(const Space& space) -> Channel*;
+  void RequestSpaceDataSnapshot(Space& space, const Address& source_addr);
+  void SendAddCellToSpaceAck(Channel* ch, SpaceID space_id, cellappmgr::CellID cell_id);
   void BroadcastSpaceDataUpdate(const Space& space, uint16_t key_id,
                                 std::span<const uint8_t> value, const Address* exclude);
   void BroadcastSpaceDataDelete(const Space& space, uint16_t key_id, const Address* exclude);
@@ -303,6 +321,12 @@ class CellApp : public EntityApp {
   void PushSpaceDataInitToWitnesses(Space& space);
 
   std::unordered_map<SpaceID, std::unique_ptr<Space>> spaces_;
+  struct PendingAddCellAck {
+    SpaceID space_id{kInvalidSpaceID};
+    cellappmgr::CellID cell_id{0};
+    Channel* channel{nullptr};
+  };
+  std::vector<PendingAddCellAck> pending_primary_handoff_acks_;
 
   // Non-owning - the owning unique_ptr lives in the peer Space's
   // entities_ map. Holds both Real and Ghost entities; FindRealEntity
@@ -314,6 +338,7 @@ class CellApp : public EntityApp {
   // write path wants reasonably fresh snapshots.
   static constexpr uint32_t kBackupIntervalTicks = 50;
   uint32_t backup_tick_counter_{0};
+  uint32_t ghost_persistent_tick_counter_{0};
 
   // Baseline is a bandwidth-insensitive safety net for
   // reliable="false" attributes; tighter than backup is unnecessary.
@@ -338,6 +363,7 @@ class CellApp : public EntityApp {
   float last_sent_load_{-1.f};
   uint32_t last_sent_entity_count_{UINT32_MAX};
   TimePoint last_sent_load_time_{};
+  TimePoint cell_load_counter_window_start_{Clock::now()};
   static constexpr float kInformCellLoadDelta = 0.01f;
   static constexpr Duration kInformCellLoadHeartbeat = std::chrono::seconds(1);
 
@@ -364,6 +390,14 @@ class CellApp : public EntityApp {
   };
   std::unordered_map<cellappmgr::CellID, CellMedianWindow> cell_median_window_;
 
+  struct CellLoadCounters {
+    uint64_t script_tick_us{0};
+    uint64_t aoi_reliable_bytes{0};
+    uint64_t aoi_unreliable_bytes{0};
+    uint64_t backup_bytes{0};
+  };
+  std::unordered_map<cellappmgr::CellID, CellLoadCounters> cell_load_counters_;
+
   // Shared registry (atlas_server) so both BaseApp and CellApp route
   // through the same Birth/Death + self-filter code.
   CellAppPeerRegistry peer_registry_;
@@ -380,6 +414,8 @@ class CellApp : public EntityApp {
   // even when target jitters across nearby entities.
   std::unordered_map<EntityID, uint64_t> caller_spoof_violations_;
   uint64_t caller_spoof_violations_total_{0};
+  uint64_t untrusted_cellapp_messages_total_{0};
+  uint64_t ghost_promoted_to_real_total_{0};
 
  public:
   // Test-only - production callers don't touch this; the machined

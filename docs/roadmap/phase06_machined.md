@@ -30,9 +30,9 @@ machined 守护进程，提供进程注册、服务发现、存活检测、事�
 |---|---|---|
 | `ProcessRegistry` | `process_registry.{h,cc}` | PID / ChannelId / ProcessType 三向索引；负载更新；Manager 类型唯一性 + 同名拒绝 + 端口冲突 + PID 重复校验 |
 | `ListenerManager` | `listener_manager.{h,cc}` | Birth/Death/Both 订阅；按 `target_type` 分桶；ChannelId 反向索引清理 |
-| `WatcherForwarder` | `watcher_forwarder.{h,cc}` | `WatcherRequest → WatcherForward → WatcherReply → WatcherResponse` 路由 + pending 表超时清理 |
+| `WatcherForwarder` | `watcher_forwarder.{h,cc}` | `WatcherRequest → WatcherForward → WatcherReply → WatcherResponse` 路由 + get/set watcher 转发 + pending 表超时清理 |
 | `MachinedApp` | `machined_app.{h,cc}` | 主进程；TCP 接入、消息分发、`OnDisconnect` 触发 Death、`OnTickComplete` 心跳 / watcher 超时检查、SIGTERM/SIGINT 优雅关闭、`ShutdownTarget` 转发 |
-| `MachinedClient` | `src/lib/server/machined_client.{h,cc}` | 客户端库；连接 / 注册 / 心跳 / 查询 / 订阅 / `QueryWatcher` / `RequestShutdownTarget`；TCP 断线后指数退避重连 (1→30s) + 自动重注册（订阅在 `RegisterAck` 后回放）；UDP heartbeat 地址切换 |
+| `MachinedClient` | `src/lib/server/machined_client.{h,cc}` | 客户端库；连接 / 注册 / 心跳 / 查询 / 订阅 / `QueryWatcher` / `SetWatcher` / `RequestShutdownTarget`；TCP 断线后指数退避重连 (1→30s) + 自动重注册（订阅在 `RegisterAck` 后回放）；UDP heartbeat 地址切换 |
 
 `ServerApp` 在 `Init()` 中连接 machined 并注册，`Fini()` 中反注册。
 machined 连接失败采用降级策略（非致命，允许单机开发模式）。
@@ -70,12 +70,15 @@ WatcherResponse / WatcherForward / WatcherReply / ShutdownTarget`
 ```
 atlas_tool list [type]                  # 列出已注册进程
 atlas_tool watch <type[:name]> <path>   # 通过 machined 转发 WatcherRequest
+atlas_tool set-watch <type[:name]> <path> <value>
+                                        # 写入 read-write watcher，成功后返回当前值
 atlas_tool shutdown <type[:name]> [reason]
                                         # 通过 machined 转发 ShutdownRequest；
                                         # 省略 :name 则向 type 全部实例广播
 ```
 
-`watch` 走 `WatcherForwarder`：machined 把请求转发给目标进程的 watcher
-注册表，应答经同一通道返回。`shutdown` 在 machined 内查表后直接发
+`watch` / `set-watch` 走 `WatcherForwarder`：machined 把请求转发给目标进程的
+watcher 注册表，应答经同一通道返回。`set-watch` 只能写 read-write watcher，
+失败时返回非零退出码。`shutdown` 在 machined 内查表后直接发
 `msg::ShutdownRequest`（reason 取自 CLI），目标进程的 `ServerApp` handler
 触发 `Shutdown()`。

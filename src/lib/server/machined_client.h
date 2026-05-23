@@ -57,6 +57,9 @@ class MachinedClient {
   // empty target_name = first instance of target_type. Returns request id.
   auto QueryWatcher(ProcessType target_type, std::string_view target_name,
                     std::string_view watcher_path, WatcherCallback cb) -> uint32_t;
+  auto SetWatcher(ProcessType target_type, std::string_view target_name,
+                  std::string_view watcher_path, std::string_view value,
+                  WatcherCallback cb) -> uint32_t;
 
   // Asks machined to forward a ShutdownRequest to a registered process.
   // empty target_name = all instances of target_type.
@@ -124,7 +127,6 @@ class MachinedClient {
   uint32_t next_watcher_request_id_{1};
   std::unordered_map<uint32_t, WatcherCallback> pending_watchers_;
 
-  // Heartbeat tracking
   TimePoint last_heartbeat_{};
   bool registered_{false};
 

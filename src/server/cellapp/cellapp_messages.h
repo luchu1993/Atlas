@@ -16,13 +16,8 @@
 
 namespace atlas::cellapp {
 
-// BaseApp asks the cell to materialise a cell-side counterpart for a Base
-// entity. `script_init_data` is the opaque Cell-side initialisation blob
-// produced by the script layer (anything from defaults to persisted
-// fields). CellApp composes it with runtime-supplied fields (space, base
-// mailbox, position/direction, on_ground) into the full restore blob
-// consumed by the C# RestoreEntity callback.
-
+// BaseApp asks the cell to materialise a cell-side counterpart for a Base.
+// script_init_data is the C# RestoreEntity blob; empty may require a Ghost.
 struct CreateCellEntity {
   EntityID entity_id{kInvalidEntityID};
   uint16_t type_id{0};
@@ -33,6 +28,7 @@ struct CreateCellEntity {
   Address base_addr;  // where to send CellEntityCreated back
   uint32_t request_id{0};
   std::vector<std::byte> script_init_data;
+  bool require_existing_ghost{false};
 
   static auto Descriptor() -> const MessageDesc& {
     static const MessageDesc kDesc{msg_id::Id(msg_id::CellApp::kCreateCellEntity),
@@ -60,6 +56,7 @@ struct CreateCellEntity {
     w.Write(request_id);
     w.WritePackedInt(static_cast<uint32_t>(script_init_data.size()));
     if (!script_init_data.empty()) w.WriteBytes(std::span<const std::byte>(script_init_data));
+    w.Write(static_cast<uint8_t>(require_existing_ghost ? 1 : 0));
   }
 
   static auto Deserialize(BinaryReader& r) -> Result<CreateCellEntity> {
@@ -95,6 +92,11 @@ struct CreateCellEntity {
         return Error{ErrorCode::kInvalidArgument, "CreateCellEntity: script data truncated"};
       msg.script_init_data.assign(data->begin(), data->end());
     }
+    if (r.Remaining() == 0) return msg;
+    auto require_ghost = r.Read<uint8_t>();
+    if (!require_ghost)
+      return Error{ErrorCode::kInvalidArgument, "CreateCellEntity: ghost flag truncated"};
+    msg.require_existing_ghost = (*require_ghost != 0);
     return msg;
   }
 };

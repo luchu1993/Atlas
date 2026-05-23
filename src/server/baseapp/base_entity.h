@@ -6,6 +6,7 @@
 
 #include "db/idatabase.h"
 #include "foundation/clock.h"
+#include "math/vector3.h"
 #include "network/address.h"
 #include "server/entity_types.h"
 
@@ -46,6 +47,15 @@ class BaseEntity {
     return cell_backup_data_;
   }
   void SetCellBackupData(std::vector<std::byte> data) { cell_backup_data_ = std::move(data); }
+  [[nodiscard]] auto HasLastCellPose() const -> bool { return has_last_cell_pose_; }
+  [[nodiscard]] auto LastCellPosition() const -> const math::Vector3& {
+    return last_cell_position_;
+  }
+  [[nodiscard]] auto LastCellDirection() const -> const math::Vector3& {
+    return last_cell_direction_;
+  }
+  [[nodiscard]] auto LastCellOnGround() const -> bool { return last_cell_on_ground_; }
+  void SetLastCellPose(math::Vector3 position, math::Vector3 direction, bool on_ground);
 
   void OnWriteAck(DatabaseID dbid, bool success);
 
@@ -66,6 +76,10 @@ class BaseEntity {
   SpaceID space_id_{kInvalidSpaceID};
   std::vector<std::byte> entity_data_;
   std::vector<std::byte> cell_backup_data_;
+  bool has_last_cell_pose_{false};
+  math::Vector3 last_cell_position_{0.f, 0.f, 0.f};
+  math::Vector3 last_cell_direction_{1.f, 0.f, 0.f};
+  bool last_cell_on_ground_{false};
   bool pending_destroy_{false};
   bool writing_to_db_{false};
 };

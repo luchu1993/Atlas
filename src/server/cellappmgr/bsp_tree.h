@@ -1,10 +1,12 @@
 #ifndef ATLAS_SERVER_CELLAPPMGR_BSP_TREE_H_
 #define ATLAS_SERVER_CELLAPPMGR_BSP_TREE_H_
 
+#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <functional>
 #include <memory>
+#include <utility>
 #include <vector>
 
 #include "cellapp/cell_bounds.h"
@@ -22,12 +24,15 @@
 // Data-flow with CellApp:
 //   CellAppMgr authoritative tree -> Serialize() -> UpdateGeometry blob ->
 //     CellApp Deserialize() -> OffloadChecker / GhostMaintainer consume
-//   CellApp InformCellLoad -> CellAppMgr sets leaf.info.load -> Balance()
+//   CellApp InformCellLoad -> CellAppMgr sets leaf load/profile -> Balance()
 // Serialisation intentionally omits balance state (aggression, prev
-// direction) and runtime load; those are CellAppMgr-local. Receivers
+// direction) and runtime load/profile; those are CellAppMgr-local. Receivers
 // never re-enter the balancer.
 
 namespace atlas {
+
+using CellLoadBuckets =
+    std::array<uint32_t, cellappmgr::InformCellLoad::CellReport::kLoadBucketCount>;
 
 struct CellInfo {
   cellappmgr::CellID cell_id{0};
@@ -35,6 +40,15 @@ struct CellInfo {
   CellBounds bounds;
   float load{0.f};           // authoritative only on CellAppMgr
   uint32_t entity_count{0};  // authoritative only on CellAppMgr
+  float tick_load{0.f};
+  uint64_t script_tick_us{0};
+  uint32_t witness_count{0};
+  uint32_t aoi_peer_count{0};
+  uint64_t aoi_reliable_bytes{0};
+  uint64_t aoi_unreliable_bytes{0};
+  uint64_t backup_bytes{0};
+  CellLoadBuckets x_buckets{};
+  CellLoadBuckets z_buckets{};
 };
 
 enum class BSPAxis : uint8_t { kX = 0, kZ = 1 };
@@ -125,16 +139,19 @@ class BSPInternal : public BSPNode {
   [[nodiscard]] auto Position() const -> float { return position_; }
   [[nodiscard]] auto Left() -> BSPNode* { return left_.get(); }
   [[nodiscard]] auto Right() -> BSPNode* { return right_.get(); }
+  [[nodiscard]] auto Left() const -> const BSPNode* { return left_.get(); }
+  [[nodiscard]] auto Right() const -> const BSPNode* { return right_.get(); }
 
   // Slot accessors used by BSPTree::Split to swap a descendant leaf for a
   // newly-created internal node in place. Intentionally mutable references.
   [[nodiscard]] auto LeftSlot() -> std::unique_ptr<BSPNode>& { return left_; }
   [[nodiscard]] auto RightSlot() -> std::unique_ptr<BSPNode>& { return right_; }
 
-  // Unit-test hooks for the aggression state machine.
+  // Unit-test hooks for the balance state machine.
   [[nodiscard]] auto AggressionForTest() const -> float { return aggression_; }
   [[nodiscard]] auto LeftLoadForTest() const -> float { return left_load_; }
   [[nodiscard]] auto RightLoadForTest() const -> float { return right_load_; }
+  [[nodiscard]] auto CooldownForTest() const -> uint8_t { return balance_cooldown_ticks_; }
 
   [[nodiscard]] auto FindCell(float x, float z) const -> const CellInfo* override;
   [[nodiscard]] auto FindPrimaryCell(float x, float z, float ghost_region) const
@@ -169,6 +186,7 @@ class BSPInternal : public BSPNode {
   float right_load_{0.f};
   float aggression_{1.0f};
   Direction prev_direction_{Direction::kNone};
+  uint8_t balance_cooldown_ticks_{0};
   // Our own sub-bounds, latched by PropagateBounds so Balance() can split
   // them for children after moving position_.
   CellBounds sub_bounds_;
@@ -214,6 +232,8 @@ class BSPTree {
 
   // Snapshot every leaf (handy for UpdateGeometry preparation, watchers).
   [[nodiscard]] auto Leaves() const -> std::vector<const CellInfo*>;
+  [[nodiscard]] auto LeafSiblingPairs() const
+      -> std::vector<std::pair<cellappmgr::CellID, cellappmgr::CellID>>;
 
   // Mutable leaf snapshot, for death rehoming: lets the caller rewrite
   // `cellapp_addr` + `load` on each leaf owned by a dead CellApp

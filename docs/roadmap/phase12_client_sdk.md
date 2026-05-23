@@ -3,7 +3,7 @@
 **Status:** ✅ 已落地。`atlas_net_client.dll` 单 `on_deliver` C API
 (ABI 0x02000000)、`Atlas.Client` 实体管理 + `AvatarFilter` peer 路径接入
 生产、`Atlas.Client.Desktop`（`AtlasClient` / `LoginClient`）+ Unity
-`AtlasNetworkManager` 共用 `ClientCallbacks.DeliverFromServer` 解码、
+`AtlasNetworkManager` 共用 `ClientSession.DeliverFromServer` 解码、
 控制台 `atlas_client.exe` 登录 + AoI + RPC 全链路、跨平台 CI 矩阵均已
 就绪；FakeCluster 集成测试覆盖 enter/volatile envelope → AvatarFilter
 完整 wire path。
@@ -85,17 +85,16 @@ await client.ConnectAsync("login.example.com", 20013, user, pwHash, ct);
   `installCoroLoop: false`，由 host 自管）。
 - **桌面 vs Unity 差异**：API 形态完全一致；两端各自实现 `IAtlasNetEvents`
   并经 `AtlasNetCallbackBridge.Register` 接入 `on_deliver`，再把 payload
-  交给共享的 `Atlas.Client.ClientCallbacks.DeliverFromServer` 解码。底层
+  交给共享的 `Atlas.Client.ClientSession.DeliverFromServer` 解码。底层
   P/Invoke trampoline 装载方式不同（桌面 `[UnmanagedCallersOnly]`，
   Unity `[MonoPInvokeCallback]` + 缓存 delegate 防 GC），其余共享。
 - **`AtlasTask<T>.FromSource(IAtlasTaskSource<T>, short)`** 是 Atlas.Coro
   暴露给外部 assembly 的公共工厂：让 `LoginClient` 用自己的 source 类型
   包装 PInvoke 完成事件，无需走运行期分配路径。
 - **Update 语义差异**：桌面 `AtlasClient.Update()` 同时 Poll +
-  ManagedAtlasLoop.Drain；Unity 端 `Update()` 只 Poll，`UnityLoop` 由
-  PlayerLoop 自动 tick。两端在 `Update` 里调
-  `ClientCallbacks.EntityManager.TickInterpolation(dt)` 推动 peer 实体的
-  AvatarFilter 收敛。
+  ManagedAtlasLoop.Drain；Unity `AtlasNetworkManager.Update()` Poll 后调用
+  `Session.Tick(Time.deltaTime)`。`ClientSession.Tick` 通过
+  `EntityManager.TickInterpolation(dt)` 推动 peer 实体的 AvatarFilter 收敛。
 
 ## AvatarFilter 数据路径
 
@@ -104,11 +103,11 @@ await client.ConnectAsync("login.example.com", 20013, user, pwHash, ct);
   （`[u8 kind=3][u32 eid][3f pos][3f dir][u8 og][f64 server_time]`）；
   enter envelope 同样在 on_ground 与 peer snapshot 之间夹一个 `serverTime`。
   服务端只读 `chrono::steady_clock`，不需要把时钟参数沿调用链下传。
-- 客户端 `ClientCallbacks.DispatchPositionUpdate` / `DispatchEnter` 解
+- 客户端 `ClientSession.DispatchPositionUpdate` / `DispatchEnter` 解
   `serverTime` 后转给 `ClientEntityManager.ApplyPosition` / `OnEnter`，
   最终落到 `ClientEntity.ApplyPositionUpdate`。
 - `ClientEntity` 在第一次收到 peer 样本时 lazy-allocate `Filter`；owner
-  实体（`ClientCallbacks.CreateEntity` 路径）置 `IsOwner = true` 跳过
+  实体（`ClientSession.CreateEntity` 路径）置 `IsOwner = true` 跳过
   filter 走 snap 路径。
 - 渲染端调 `ClientEntity.TryGetInterpolated(clientTime)` 拉插值结果；
   服务端授权纠正触发 `ResetInterpolation()` 清环重启。

@@ -1,6 +1,6 @@
-# 待决策 / 已延期
+# 延期事项 / 后续决策
 
-## 已延期(TODO)
+## 已延期
 
 ### D2 — 共享 C++ 移动仿真库
 
@@ -11,7 +11,8 @@
 - Unity 客户端通过 P/Invoke 调用
 - UE 客户端直接链接
 
-**何时立项**:UE 端到端贯通(M3 完成)+ 实测插值手感不达标后。否则可能优化错方向。
+**何时立项**:当前 UE MVP 表现层缺口收敛后,再用实测插值手感决定是否需要。
+否则可能优化错方向。
 
 ### 战斗代码共享(诉求 C)
 
@@ -19,9 +20,9 @@
 - 路径 A:UE 寄宿 CoreCLR,跑共享 C# 战斗逻辑
 - 路径 B+下沉:战斗数值核 C++ 共享库,服务端 C# 调,UE/Unity 链接
 
-本期 UE 接入按**不做战斗预测**实现,M3 完成后视实测决策。
+本期 UE 接入按**不做战斗预测**实现,等 UE MVP 表现层缺口收敛后再按实测决策。
 
-## 待决(M3 之后)
+## 待决
 
 ### 无缝大世界 UWorld 转移时 entity 处理
 
@@ -36,7 +37,8 @@ PIE 单 world OK(per-world subsystem 隔离)。但发布的无缝大世界:
 
 ### Hot Reload / PIE 多客户端调试
 
-每个 PIE 实例独立 `atlas_net_client` 句柄,需要给 native DLL 加 instance ID。**何时处理**:M3 后根据开发体验需要立项。
+每个 PIE 实例独立 `atlas_net_client` 句柄,需要给 native DLL 加 instance ID。
+**何时处理**:根据 UE 多客户端调试体验需要立项。
 
 ### RPC Reply Latent UFUNCTION 暴露
 

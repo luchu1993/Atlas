@@ -2,6 +2,7 @@
 #define ATLAS_SERVER_CELLAPP_SPACE_H_
 
 #include <cstddef>
+#include <cstdint>
 #include <memory>
 #include <optional>
 #include <unordered_map>
@@ -56,7 +57,7 @@ class Space {
   [[nodiscard]] auto LocalCells() -> LocalCellMap& { return local_cells_; }
   [[nodiscard]] auto LocalCells() const -> const LocalCellMap& { return local_cells_; }
 
-  void SetBspTree(BSPTree tree);
+  void SetBspTree(BSPTree tree, uint64_t geometry_version = 0);
   [[nodiscard]] auto GetBspTree() -> BSPTree* {
     return bsp_tree_.has_value() ? &*bsp_tree_ : nullptr;
   }
@@ -67,6 +68,7 @@ class Space {
   // True iff this cellapp holds the BSP primary (left-most) cell — the
   // SpaceData authority. False before SetBspTree has been called.
   [[nodiscard]] auto IsOwner() const -> bool;
+  [[nodiscard]] auto GeometryVersion() const -> uint64_t { return geometry_version_; }
 
   [[nodiscard]] auto Data() -> SpaceData& { return data_; }
   [[nodiscard]] auto Data() const -> const SpaceData& { return data_; }
@@ -74,7 +76,11 @@ class Space {
   // True once SpaceData has been seeded — by becoming owner on SetBspTree,
   // or by receiving a SpaceDataSnapshot from the owner.
   [[nodiscard]] auto IsDataInitialized() const -> bool { return data_initialized_; }
-  void MarkDataInitialized() { data_initialized_ = true; }
+  void MarkDataInitialized();
+  void BeginPrimaryHandoffSnapshot(Address source_addr);
+  [[nodiscard]] auto PendingSpaceDataSourceAddr() const -> Address {
+    return pending_space_data_source_addr_;
+  }
 
   // Controllers (may alter position) then dead-entity compaction.
   // Witness updates run later in the CellApp tick.
@@ -103,8 +109,10 @@ class Space {
   // default even though Cell doesn't touch entity state at teardown).
   LocalCellMap local_cells_;
   std::optional<BSPTree> bsp_tree_;
+  uint64_t geometry_version_{0};
   SpaceData data_;
   bool data_initialized_{false};
+  Address pending_space_data_source_addr_;
 
   bool tearing_down_{false};
 };

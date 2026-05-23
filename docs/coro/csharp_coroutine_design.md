@@ -371,7 +371,7 @@ return -1;
 |---|---|---|---|
 | `BaseApp` entity | ❌ | 玩家下线触发 | ✅ |
 | `CellApp` entity | ✅ 频繁 | 频繁 | ✅ |
-| `LoginApp` 等 ManagerApp | ❌ | n/a | ✅ |
+| `LoginApp` 等 ManagerApp | ❌ | n/a | ❌ |
 
 **Hot reload 必须 drain 完才能卸载 assembly** —— 否则状态机引用旧
 `ScriptLoadContext` 的类型，resume 时崩。`HotReloadManager.SerializeAndUnload`
@@ -450,8 +450,8 @@ GC 验证靠 `tests/csharp` 里的 stress 用例 + `Atlas.Runtime.Diagnostics`
 
 - **CellApp 端发起 entity-rpc**：`CellAppNativeProvider::CoroRegisterPending`
   仍是基类 no-op，cellapp 内的 `await someEntity.Base.Method(...)` 注册不到
-  native registry。接收 reply 路径（cellapp 作为被叫方）已通；**主动 await
-  仅 BaseApp / LoginApp 可用**。
+  native registry。接收 reply 路径（cellapp 作为被叫方）已通；脚本宿主里
+  **主动 await 仅 BaseApp 可用**。
 - **Analyzer 规则**：仅落地 `ATLAS_RPC001`。"CellApp entity 内 await 必须显
   式传 ct"、"`FromBgWork` lambda safety" 规则未实现。
 

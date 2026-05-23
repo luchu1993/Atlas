@@ -102,8 +102,36 @@ TEST(CellAppMgrMessages, InformCellLoad_RoundTrip) {
   msg.app_id = 2;
   msg.load = 0.66f;
   msg.entity_count = 12345;
-  msg.cells.push_back({/*cell_id=*/3, /*entity_count=*/100, /*median_x=*/12.5f, /*median_z=*/-7.f});
-  msg.cells.push_back({/*cell_id=*/4, /*entity_count=*/50, /*median_x=*/-3.f, /*median_z=*/9.5f});
+  InformCellLoad::CellReport a;
+  a.cell_id = 3;
+  a.entity_count = 100;
+  a.median_x = 12.5f;
+  a.median_z = -7.f;
+  a.geometry_version = 9;
+  a.tick_load = 0.25f;
+  a.script_tick_us = 25000;
+  a.witness_count = 7;
+  a.aoi_peer_count = 70;
+  a.aoi_reliable_bytes = 1024;
+  a.aoi_unreliable_bytes = 2048;
+  a.backup_bytes = 4096;
+  a.x_buckets = {0, 3, 7, 11, 13, 17, 19, 23};
+  a.z_buckets = {23, 19, 17, 13, 11, 7, 3, 0};
+  msg.cells.push_back(a);
+  InformCellLoad::CellReport b;
+  b.cell_id = 4;
+  b.entity_count = 50;
+  b.median_x = -3.f;
+  b.median_z = 9.5f;
+  b.geometry_version = 10;
+  b.tick_load = 0.125f;
+  b.script_tick_us = 12500;
+  b.witness_count = 3;
+  b.aoi_peer_count = 30;
+  b.aoi_reliable_bytes = 8192;
+  b.aoi_unreliable_bytes = 16384;
+  b.backup_bytes = 32768;
+  msg.cells.push_back(b);
   auto rt = RoundTrip(msg);
   ASSERT_TRUE(rt.has_value());
   EXPECT_EQ(rt->app_id, 2u);
@@ -113,7 +141,31 @@ TEST(CellAppMgrMessages, InformCellLoad_RoundTrip) {
   EXPECT_EQ(rt->cells[0].cell_id, 3u);
   EXPECT_EQ(rt->cells[0].entity_count, 100u);
   EXPECT_FLOAT_EQ(rt->cells[0].median_x, 12.5f);
+  EXPECT_EQ(rt->cells[0].geometry_version, 9u);
+  EXPECT_FLOAT_EQ(rt->cells[0].tick_load, 0.25f);
+  EXPECT_EQ(rt->cells[0].script_tick_us, 25000u);
+  EXPECT_EQ(rt->cells[0].witness_count, 7u);
+  EXPECT_EQ(rt->cells[0].aoi_peer_count, 70u);
+  EXPECT_EQ(rt->cells[0].aoi_reliable_bytes, 1024u);
+  EXPECT_EQ(rt->cells[0].aoi_unreliable_bytes, 2048u);
+  EXPECT_EQ(rt->cells[0].backup_bytes, 4096u);
+  EXPECT_EQ(rt->cells[0].x_buckets[3], 11u);
+  EXPECT_EQ(rt->cells[0].z_buckets[0], 23u);
   EXPECT_FLOAT_EQ(rt->cells[1].median_z, 9.5f);
+  EXPECT_EQ(rt->cells[1].geometry_version, 10u);
+  EXPECT_FLOAT_EQ(rt->cells[1].tick_load, 0.125f);
+  EXPECT_EQ(rt->cells[1].script_tick_us, 12500u);
+  EXPECT_EQ(rt->cells[1].witness_count, 3u);
+  EXPECT_EQ(rt->cells[1].aoi_peer_count, 30u);
+  EXPECT_EQ(rt->cells[1].aoi_reliable_bytes, 8192u);
+  EXPECT_EQ(rt->cells[1].aoi_unreliable_bytes, 16384u);
+  EXPECT_EQ(rt->cells[1].backup_bytes, 32768u);
+}
+
+TEST(CellAppMgrMessages, RequestCellAppState_RoundTrip) {
+  RequestCellAppState msg;
+  auto rt = RoundTrip(msg);
+  ASSERT_TRUE(rt.has_value());
 }
 
 TEST(CellAppMgrMessages, CreateSpaceRequest_RoundTrip) {
@@ -133,21 +185,39 @@ TEST(CellAppMgrMessages, AddCellToSpace_RoundTrip) {
   msg.space_id = 1;
   msg.cell_id = 7;
   msg.bounds = {-100.f, -100.f, 100.f, 100.f};
+  msg.is_primary = true;
+  msg.space_master_type = "SpaceMaster";
+  msg.space_data_source_addr = Address(0x7F000001u, 30001);
   auto rt = RoundTrip(msg);
   ASSERT_TRUE(rt.has_value());
   EXPECT_EQ(rt->space_id, 1u);
   EXPECT_EQ(rt->cell_id, 7u);
   EXPECT_FLOAT_EQ(rt->bounds.min_x, -100.f);
   EXPECT_FLOAT_EQ(rt->bounds.max_z, 100.f);
+  EXPECT_TRUE(rt->is_primary);
+  EXPECT_EQ(rt->space_master_type, "SpaceMaster");
+  EXPECT_EQ(rt->space_data_source_addr.Port(), 30001u);
+}
+
+TEST(CellAppMgrMessages, RemoveCellFromSpace_RoundTrip) {
+  RemoveCellFromSpace msg;
+  msg.space_id = 5;
+  msg.cell_id = 9;
+  auto rt = RoundTrip(msg);
+  ASSERT_TRUE(rt.has_value());
+  EXPECT_EQ(rt->space_id, 5u);
+  EXPECT_EQ(rt->cell_id, 9u);
 }
 
 TEST(CellAppMgrMessages, UpdateGeometry_RoundTrip) {
   UpdateGeometry msg;
   msg.space_id = 77;
+  msg.geometry_version = 1234;
   msg.bsp_blob = {std::byte{0xFE}, std::byte{0xED}, std::byte{0xFA}, std::byte{0xCE}};
   auto rt = RoundTrip(msg);
   ASSERT_TRUE(rt.has_value());
   EXPECT_EQ(rt->space_id, 77u);
+  EXPECT_EQ(rt->geometry_version, 1234u);
   ASSERT_EQ(rt->bsp_blob.size(), 4u);
   EXPECT_EQ(rt->bsp_blob[0], std::byte{0xFE});
 }
@@ -165,11 +235,13 @@ TEST(CellAppMgrMessages, ShouldOffload_RoundTrip) {
   msg.space_id = 3;
   msg.cell_id = 4;
   msg.enable = false;
+  msg.freeze_epoch = 99;
   auto rt = RoundTrip(msg);
   ASSERT_TRUE(rt.has_value());
   EXPECT_EQ(rt->space_id, 3u);
   EXPECT_EQ(rt->cell_id, 4u);
   EXPECT_FALSE(rt->enable);
+  EXPECT_EQ(rt->freeze_epoch, 99u);
 }
 
 TEST(CellAppMgrMessages, MessageIdsAreStable) {
@@ -180,4 +252,8 @@ TEST(CellAppMgrMessages, MessageIdsAreStable) {
   EXPECT_EQ(msg_id::Id(msg_id::CellAppMgr::kAddCellToSpace), 7004u);
   EXPECT_EQ(msg_id::Id(msg_id::CellAppMgr::kUpdateGeometry), 7005u);
   EXPECT_EQ(msg_id::Id(msg_id::CellAppMgr::kShouldOffload), 7006u);
+  EXPECT_EQ(msg_id::Id(msg_id::CellAppMgr::kSpaceCreatedResult), 7007u);
+  EXPECT_EQ(msg_id::Id(msg_id::CellAppMgr::kAddCellToSpaceAck), 7008u);
+  EXPECT_EQ(msg_id::Id(msg_id::CellAppMgr::kRemoveCellFromSpace), 7009u);
+  EXPECT_EQ(msg_id::Id(msg_id::CellAppMgr::kRequestCellAppState), 7010u);
 }

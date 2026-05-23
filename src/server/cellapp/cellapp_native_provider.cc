@@ -67,6 +67,10 @@ uint8_t CellAppNativeProvider::GetProcessPrefix() {
   return static_cast<uint8_t>(ProcessType::kCellApp);
 }
 
+void CellAppNativeProvider::ReportScriptTick(uint32_t entity_id, uint64_t elapsed_us) {
+  if (script_tick_fn_) script_tick_fn_(entity_id, elapsed_us);
+}
+
 void CellAppNativeProvider::SendClientRpc(uint32_t entity_id, uint32_t rpc_id, RpcTarget target,
                                           const std::byte* payload, int32_t len,
                                           uint64_t trace_id) {

@@ -144,6 +144,43 @@ TEST(ServerConfig, FromArgsParsesEntitydefBinPath) {
   EXPECT_EQ(r->entitydef_bin_path, std::filesystem::path("data/entity_defs.bin"));
 }
 
+TEST(ServerConfig, FromArgsParsesHaOptions) {
+  FakeArgv args({"exe",
+                 "--snapshot-path",
+                 "snapshots/cellappmgr.bin",
+                 "--snapshot-interval-ms",
+                 "250",
+                 "--revive-cellappmgr-exe",
+                 "bin/atlas_cellappmgr.exe",
+                 "--revive-cellappmgr-name",
+                 "cellappmgr_a",
+                 "--revive-cellappmgr-port",
+                 "31000",
+                 "--revive-cellappmgr-snapshot-path",
+                 "snapshots/revived_cellappmgr.bin",
+                 "--revive-cellappmgr-update-hertz",
+                 "25",
+                 "--revive-restart-delay-ms",
+                 "75",
+                 "--revive-max-restarts",
+                 "7",
+                 "--revive-cellappmgr-on-start",
+                 "true"});
+  auto r = ServerConfig::FromArgs(args.argc(), args.argv());
+  ASSERT_TRUE(r.HasValue()) << r.Error().Message();
+  EXPECT_EQ(r->snapshot_path, std::filesystem::path("snapshots/cellappmgr.bin"));
+  EXPECT_EQ(r->snapshot_interval_ms, 250);
+  EXPECT_EQ(r->revive_cellappmgr_exe, std::filesystem::path("bin/atlas_cellappmgr.exe"));
+  EXPECT_EQ(r->revive_cellappmgr_name, "cellappmgr_a");
+  EXPECT_EQ(r->revive_cellappmgr_internal_port, 31000);
+  EXPECT_EQ(r->revive_cellappmgr_snapshot_path,
+            std::filesystem::path("snapshots/revived_cellappmgr.bin"));
+  EXPECT_EQ(r->revive_cellappmgr_update_hertz, 25);
+  EXPECT_EQ(r->revive_restart_delay_ms, 75);
+  EXPECT_EQ(r->revive_max_restarts, 7);
+  EXPECT_TRUE(r->revive_cellappmgr_on_start);
+}
+
 TEST(ServerConfig, FromJsonFileParsesEntitydefBinPath) {
   auto path = write_temp_json(R"({
         "database": {
@@ -153,6 +190,40 @@ TEST(ServerConfig, FromJsonFileParsesEntitydefBinPath) {
   auto r = ServerConfig::FromJsonFile(path);
   ASSERT_TRUE(r.HasValue()) << r.Error().Message();
   EXPECT_EQ(r->entitydef_bin_path, std::filesystem::path("data/entity_defs.bin"));
+}
+
+TEST(ServerConfig, FromJsonFileParsesHaOptions) {
+  auto path = write_temp_json(R"({
+        "snapshot": {
+            "path": "snapshots/cellappmgr.bin",
+            "interval_ms": 250
+        },
+        "reviver": {
+            "restart_delay_ms": 75,
+            "max_restarts": 7,
+            "cellappmgr": {
+                "exe": "bin/atlas_cellappmgr.exe",
+                "name": "cellappmgr_a",
+                "internal_port": 31000,
+                "snapshot_path": "snapshots/revived_cellappmgr.bin",
+                "update_hertz": 25,
+                "on_start": true
+            }
+        }
+    })");
+  auto r = ServerConfig::FromJsonFile(path);
+  ASSERT_TRUE(r.HasValue()) << r.Error().Message();
+  EXPECT_EQ(r->snapshot_path, std::filesystem::path("snapshots/cellappmgr.bin"));
+  EXPECT_EQ(r->snapshot_interval_ms, 250);
+  EXPECT_EQ(r->revive_restart_delay_ms, 75);
+  EXPECT_EQ(r->revive_max_restarts, 7);
+  EXPECT_EQ(r->revive_cellappmgr_exe, std::filesystem::path("bin/atlas_cellappmgr.exe"));
+  EXPECT_EQ(r->revive_cellappmgr_name, "cellappmgr_a");
+  EXPECT_EQ(r->revive_cellappmgr_internal_port, 31000);
+  EXPECT_EQ(r->revive_cellappmgr_snapshot_path,
+            std::filesystem::path("snapshots/revived_cellappmgr.bin"));
+  EXPECT_EQ(r->revive_cellappmgr_update_hertz, 25);
+  EXPECT_TRUE(r->revive_cellappmgr_on_start);
 }
 
 TEST(ServerConfig, FromArgsInvalidPortReturnsError) {

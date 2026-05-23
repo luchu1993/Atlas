@@ -85,3 +85,16 @@ TEST(BaseEntity, SpaceIdDefaultAndSet) {
   ent.SetSpaceId(SpaceID{42});
   EXPECT_EQ(ent.SpaceId(), SpaceID{42});
 }
+
+TEST(BaseEntity, LastCellPoseDefaultAndSet) {
+  BaseEntity ent(1, 2);
+  EXPECT_FALSE(ent.HasLastCellPose());
+
+  ent.SetLastCellPose({10.f, 2.f, -3.f}, {0.f, 0.f, 1.f}, true);
+
+  EXPECT_TRUE(ent.HasLastCellPose());
+  EXPECT_FLOAT_EQ(ent.LastCellPosition().x, 10.f);
+  EXPECT_FLOAT_EQ(ent.LastCellPosition().z, -3.f);
+  EXPECT_FLOAT_EQ(ent.LastCellDirection().z, 1.f);
+  EXPECT_TRUE(ent.LastCellOnGround());
+}

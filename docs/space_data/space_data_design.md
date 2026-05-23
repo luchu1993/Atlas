@@ -41,7 +41,7 @@ Space (per cellapp)
 
 Witness::SendSpaceDataUpdate → cell→client envelope [kind=6][space_id][key][vlen][bytes]
     ↓
-Client (Atlas.Client.ClientCallbacks):
+Client (`Atlas.Client.ClientSession`):
   DispatchSpaceDataUpdate → SpaceDataManager.SetKey + KeyChanged event
     ↓
 脚本 (client C#):
@@ -119,10 +119,12 @@ SpaceData.Remove(spaceId, keyId);
 
 **Client**（`Atlas.Client/SpaceDataManager.cs`）：
 ```csharp
-ClientCallbacks.SpaceDataManager.KeyChanged += (sp, k, v) => ...;
-var count = ClientCallbacks.SpaceDataManager.GetInt32(spaceId, SpaceDataKeys.NpcCount);
+session.SpaceDataManager.KeyChanged += (sp, k, v) => ...;
+var count = session.SpaceDataManager.GetInt32(spaceId, SpaceDataKeys.NpcCount);
 ```
 事件驱动（`KeyChanged / KeyRemoved / Initialized`）+ typed getters with fallback。
+`ClientCallbacks.SpaceDataManager` 仍指向 `DefaultSession`，供旧宿主和简单
+工具使用；Unity / Desktop host 应优先持有自己的 `ClientSession`。
 
 **Space-owner entity** (`CellSpaceEntity`)：派生类 OnInit/OnDestroy 由基类 sealed override 接管 → 自动注册 `SpaceOwnerRegistry`；脚本覆盖 `OnSpaceInit/OnSpaceDestroy`。`SpaceOwnerRegistry.Find(spaceId)` 单线程 lookup（cellapp 单线程脚本）。
 

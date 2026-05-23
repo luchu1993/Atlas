@@ -20,6 +20,9 @@
     X(uint8_t, GetProcessPrefix,                                                                   \
         (),                                                                                        \
         return atlas::GetNativeApiProvider().GetProcessPrefix())                                    \
+    X(void, ReportScriptTick,                                                                       \
+        (uint32_t entity_id, uint64_t elapsed_us),                                                  \
+        atlas::GetNativeApiProvider().ReportScriptTick(entity_id, elapsed_us))                      \
                                                                                                    \
     X(void, SendClientRpc,                                                                         \
         (uint32_t entity_id, uint32_t rpc_id, uint8_t target,                                      \

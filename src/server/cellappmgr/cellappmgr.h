@@ -1,7 +1,13 @@
 #ifndef ATLAS_SERVER_CELLAPPMGR_CELLAPPMGR_H_
 #define ATLAS_SERVER_CELLAPPMGR_CELLAPPMGR_H_
 
+#include <array>
+#include <cstddef>
 #include <cstdint>
+#include <filesystem>
+#include <optional>
+#include <span>
+#include <string>
 #include <unordered_map>
 #include <vector>
 
@@ -38,13 +44,19 @@ class CellAppMgr : public ManagerApp {
     Channel* channel{nullptr};
     TimePoint registered_at{};
     TimePoint last_load_report_at{};
+    bool is_retiring{false};
+    bool needs_reattach{false};
   };
 
   struct SpacePartition {
     SpaceID space_id{kInvalidSpaceID};
     BSPTree bsp;
+    uint64_t geometry_version{0};
+    uint64_t freeze_epoch{0};
     // Last fan-out bytes; stable trees skip redundant broadcasts.
     std::vector<std::byte> last_broadcast_blob;
+    std::vector<std::byte> last_debug_geometry_blob;
+    std::size_t last_debug_geometry_baseapp_count{0};
     // Entity type name the primary host auto-spawns on AddCellToSpace.
     std::string space_master_type;
   };
@@ -63,6 +75,11 @@ class CellAppMgr : public ManagerApp {
     return spaces_;
   }
 
+  [[nodiscard]] auto Snapshot() const -> std::vector<std::byte>;
+  [[nodiscard]] auto Restore(std::span<const std::byte> bytes) -> Result<void>;
+  [[nodiscard]] auto SaveSnapshotToFile(const std::filesystem::path& path) -> Result<void>;
+  [[nodiscard]] auto RestoreSnapshotFromFile(const std::filesystem::path& path) -> Result<void>;
+
   void TickLoadBalance();
 
  protected:
@@ -72,10 +89,24 @@ class CellAppMgr : public ManagerApp {
   void OnTickComplete() override;
 
  private:
-  [[nodiscard]] auto PickHostForNewSpace() const -> const CellAppInfo*;
+  struct RetireDrain;
+
+  [[nodiscard]] auto BuildCellAppLoadSummary() const -> std::string;
+  [[nodiscard]] auto BuildSpaceLoadSummary() const -> std::string;
+  [[nodiscard]] auto BuildSpaceLoadSummary(const SpacePartition& partition) const -> std::string;
+  [[nodiscard]] auto BuildRetireStatusSummary() const -> std::string;
+  [[nodiscard]] auto AssignableCellAppCount() const -> std::size_t;
+  [[nodiscard]] auto RetiringCellAppCount() const -> std::size_t;
+  [[nodiscard]] auto RetireDrainCount() const -> std::size_t;
+  [[nodiscard]] auto RetireStuckDrainCount() const -> std::size_t;
+  [[nodiscard]] auto RetiringAppIdForWatcher() const -> uint32_t;
+  [[nodiscard]] auto SetRetiringAppId(uint32_t app_id) -> bool;
+  [[nodiscard]] auto HandleRetireDrainReport(
+      const Address& source_addr, const cellappmgr::InformCellLoad::CellReport& rep) -> bool;
+  [[nodiscard]] auto IsRetireDrainStuck(const RetireDrain& drain, TimePoint now) const -> bool;
 
   // Sorted ascending by (load, app_id) for deterministic multi-cell
-  // bootstrap; size capped at cellapps_.size().
+  // bootstrap; retiring CellApps are excluded.
   [[nodiscard]] auto SortedHostsForBootstrap(std::size_t max) const
       -> std::vector<const CellAppInfo*>;
 
@@ -84,13 +115,41 @@ class CellAppMgr : public ManagerApp {
   void BootstrapMultiCellPartition(SpacePartition& partition,
                                    const std::vector<const CellAppInfo*>& hosts);
 
-  // Splits the heaviest leaf in every Space whose leaf count is below
-  // cellapps_.size(), assigning the new half to `new_app`.
+  // Splits the heaviest leaf in every Space whose leaf count is below the
+  // assignable CellApp count, assigning the new half to `new_app`.
   void GrowSpacesForNewCellApp(const CellAppInfo& new_app);
+  [[nodiscard]] auto TryAutoSplitHotLeaf(SpacePartition& partition) -> bool;
+  [[nodiscard]] auto TryAutoMergeIdleLeaf(SpacePartition& partition) -> bool;
+  [[nodiscard]] auto TryRetireOneLeaf(SpacePartition& partition) -> bool;
+  [[nodiscard]] auto TryRetireHandoffLeaf(SpacePartition& partition) -> bool;
+  [[nodiscard]] auto SplitLeafToHost(SpacePartition& partition, const CellInfo& target,
+                                     const CellAppInfo& new_app, const char* reason) -> bool;
+  [[nodiscard]] auto PickHeaviestLeaf(const SpacePartition& partition) const -> const CellInfo*;
+  [[nodiscard]] auto PickIdleHostForAutoSplit(const SpacePartition& partition) const
+      -> const CellAppInfo*;
+  [[nodiscard]] auto PickRetireDrainTarget(const SpacePartition& partition,
+                                           const CellInfo& source_leaf) const
+      -> const CellAppInfo*;
+  [[nodiscard]] auto HasPendingGeometryBroadcast(SpaceID space_id) const -> bool;
+  struct MergeCandidate {
+    cellappmgr::CellID remove_cell_id{0};
+    cellappmgr::CellID keep_cell_id{0};
+    Address remove_addr;
+  };
+  [[nodiscard]] auto PickMergeCandidate(const SpacePartition& partition)
+      -> std::optional<MergeCandidate>;
 
   // Timed-out pending broadcasts fall back to broadcasting anyway so a
   // dead/slow receiver doesn't stall the cluster.
   void DrainPendingGeometryBroadcasts();
+  void AuditRetireDrainWatchdog();
+  void MarkRetireDrainGeometryPublished(SpaceID space_id, cellappmgr::CellID cell_id,
+                                        const Address& target_addr);
+  void SendRegisterCellAppAck(Channel* ch, const Address& addr, uint32_t app_id, bool success,
+                              const char* context);
+  void ReplayCellAppTopology(const CellAppInfo& info);
+  void SendGeometryToCellApp(const CellAppInfo& target, const SpacePartition& partition);
+  void SendRequestCellAppState(const CellAppInfo& target);
 
   void SendCreateSpaceReply(const cellappmgr::CreateSpaceRequest& msg, const Address& src,
                             Channel* ch, bool ok, cellappmgr::CellID cell_id, Address host_addr);
@@ -108,19 +167,51 @@ class CellAppMgr : public ManagerApp {
 
   void SendAddCell(const CellAppInfo& target, SpaceID space_id, cellappmgr::CellID cell_id,
                    const CellBounds& bounds, bool is_primary,
-                   const std::string& space_master_type);
-  void BroadcastGeometry(SpacePartition& partition);
+                   const std::string& space_master_type,
+                   const Address& space_data_source_addr = {});
+  void SendRemoveCell(const CellAppInfo& target, SpaceID space_id, cellappmgr::CellID cell_id);
+  struct ExtraGeometryRecipient {
+    Address addr;
+    cellappmgr::CellID cell_id{0};
+  };
+  void BroadcastGeometry(SpacePartition& partition,
+                         std::span<const ExtraGeometryRecipient> extra_recipients = {});
 
   std::unordered_map<Address, CellAppInfo> cellapps_;
   std::unordered_map<SpaceID, SpacePartition> spaces_;
+  uint32_t last_retire_app_id_{0};
+  struct RetireDrain {
+    SpaceID space_id{kInvalidSpaceID};
+    cellappmgr::CellID cell_id{0};
+    Address source_addr;
+    Address target_addr;
+    uint32_t last_entity_count{0};
+    TimePoint started_at{};
+    TimePoint last_progress_at{};
+    TimePoint last_watchdog_log_at{};
+    bool geometry_published{false};
+  };
+  std::vector<RetireDrain> retire_drains_;
   // Per-cell entity stats from the latest InformCellLoad; drives heaviest-
-  // leaf pick and median Split position in GrowSpacesForNewCellApp.
+  // leaf pick and bucket/median Split position for elastic split.
   struct CellDistribution {
     uint32_t entity_count{0};
     float median_x{0.f};
     float median_z{0.f};
+    float weighted_load{0.f};
+    float tick_load{0.f};
+    uint64_t script_tick_us{0};
+    uint32_t witness_count{0};
+    uint32_t aoi_peer_count{0};
+    uint64_t aoi_reliable_bytes{0};
+    uint64_t aoi_unreliable_bytes{0};
+    uint64_t backup_bytes{0};
+    std::array<uint32_t, cellappmgr::InformCellLoad::CellReport::kLoadBucketCount> x_buckets{};
+    std::array<uint32_t, cellappmgr::InformCellLoad::CellReport::kLoadBucketCount> z_buckets{};
   };
   std::unordered_map<cellappmgr::CellID, CellDistribution> cell_distributions_;
+  std::unordered_map<cellappmgr::CellID, uint32_t> hot_leaf_balance_ticks_;
+  std::unordered_map<cellappmgr::CellID, uint32_t> idle_leaf_balance_ticks_;
   // Each new registration extends quiescence_deadline so a stagger-launched
   // cluster bootstraps all N cellapps at once.
   struct PendingSpaceCreate {
@@ -131,17 +222,25 @@ class CellAppMgr : public ManagerApp {
   };
   std::vector<PendingSpaceCreate> pending_space_creates_awaiting_cellapps_;
 
-  // Elastic-grow handshake: defers UpdateGeometry until the new cellapp
-  // acks AddCellToSpace, closing the OffloadEntity-into-missing-cell race.
+  // Defers topology broadcasts until the new host acks AddCellToSpace.
+  // Primary handoff can disable timeout fallback until SpaceData is copied.
   struct PendingGeometryBroadcast {
     SpaceID space_id;
     cellappmgr::CellID awaiting_cell_id;
     Address awaiting_addr;
     TimePoint sent_at;
+    std::vector<ExtraGeometryRecipient> extra_recipients;
+    bool allow_timeout_broadcast{true};
   };
   std::vector<PendingGeometryBroadcast> pending_geometry_broadcasts_;
 
   std::unordered_map<Address, Channel*> baseapps_;
+
+  TimePoint last_snapshot_save_at_{};
+  uint64_t snapshot_save_count_{0};
+  uint64_t snapshot_restore_count_{0};
+  uint64_t snapshot_failure_count_{0};
+  std::size_t last_snapshot_bytes_{0};
 
   // EntityID high byte is app_id; app_id 0 remains invalid.
   uint32_t next_cellapp_app_id_{1};

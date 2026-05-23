@@ -455,11 +455,18 @@ struct ListenerAck {
   }
 };
 
+enum class WatcherOp : uint8_t {
+  kGet = 0,
+  kSet = 1,
+};
+
 struct WatcherRequest {
   ProcessType target_type{ProcessType::kBaseApp};
-  std::string target_name;  // empty = all instances of target_type
+  std::string target_name;
   std::string watcher_path;
   uint32_t request_id{0};
+  WatcherOp op{WatcherOp::kGet};
+  std::string set_value;
 
   static auto Descriptor() -> const MessageDesc& {
     static const MessageDesc kDesc{msg_id::Id(msg_id::Machined::kWatcherRequest),
@@ -476,6 +483,8 @@ struct WatcherRequest {
     w.WriteString(target_name);
     w.WriteString(watcher_path);
     w.Write<uint32_t>(request_id);
+    w.Write<uint8_t>(static_cast<uint8_t>(op));
+    w.WriteString(set_value);
   }
 
   static auto Deserialize(BinaryReader& r) -> Result<WatcherRequest> {
@@ -492,6 +501,14 @@ struct WatcherRequest {
     auto rid = r.Read<uint32_t>();
     if (!rid) return rid.Error();
     msg.request_id = *rid;
+    if (r.Remaining() > 0) {
+      auto op = r.Read<uint8_t>();
+      if (!op) return op.Error();
+      msg.op = static_cast<WatcherOp>(*op);
+      auto set_value = r.ReadString();
+      if (!set_value) return set_value.Error();
+      msg.set_value = std::move(*set_value);
+    }
     return msg;
   }
 };
@@ -541,6 +558,8 @@ struct WatcherForward {
   uint32_t request_id{0};
   std::string requester_name;
   std::string watcher_path;
+  WatcherOp op{WatcherOp::kGet};
+  std::string set_value;
 
   static auto Descriptor() -> const MessageDesc& {
     static const MessageDesc kDesc{msg_id::Id(msg_id::Machined::kWatcherForward),
@@ -556,6 +575,8 @@ struct WatcherForward {
     w.Write<uint32_t>(request_id);
     w.WriteString(requester_name);
     w.WriteString(watcher_path);
+    w.Write<uint8_t>(static_cast<uint8_t>(op));
+    w.WriteString(set_value);
   }
 
   static auto Deserialize(BinaryReader& r) -> Result<WatcherForward> {
@@ -569,6 +590,14 @@ struct WatcherForward {
     auto path = r.ReadString();
     if (!path) return path.Error();
     msg.watcher_path = std::move(*path);
+    if (r.Remaining() > 0) {
+      auto op = r.Read<uint8_t>();
+      if (!op) return op.Error();
+      msg.op = static_cast<WatcherOp>(*op);
+      auto set_value = r.ReadString();
+      if (!set_value) return set_value.Error();
+      msg.set_value = std::move(*set_value);
+    }
     return msg;
   }
 };

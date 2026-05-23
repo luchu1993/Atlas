@@ -1,8 +1,6 @@
-# atlas_platform_config — header-only platform detection
 add_library(atlas_platform_config INTERFACE)
 target_include_directories(atlas_platform_config INTERFACE "${CMAKE_SOURCE_DIR}/src/lib")
 
-# atlas_platform — OS abstraction layer
 add_library(atlas_platform STATIC
   crash_handler.cc
   filesystem.cc
@@ -18,6 +16,7 @@ if(WIN32)
     crash_handler_windows.cc
     dynamic_library_windows.cc
     io_poller_wsapoll.cc
+    process_launcher_windows.cc
     threading_windows.cc
   )
 elseif(UNIX)
@@ -26,6 +25,7 @@ elseif(UNIX)
     crash_handler_linux.cc
     dynamic_library_linux.cc
     io_poller_epoll.cc
+    process_launcher_linux.cc
     threading_linux.cc
   )
 endif()

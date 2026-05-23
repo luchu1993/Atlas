@@ -274,11 +274,6 @@ class Session {
         });
     (void)table.RegisterTypedHandler<baseapp::CellReady>(
         [this](const Address&, Channel*, const baseapp::CellReady& msg) { OnCellReady(msg); });
-    // EchoReply (and every other server → client RPC) arrives in the
-    // unified envelope (kClientRpcMessageId, body = [u32 rpc_id][args]).
-    // There's no typed message struct because rpc_id is application-
-    // layer dynamic, so we hook the pre-dispatch tap and decode the
-    // envelope ourselves.
     table.SetPreDispatchHook([this](MessageID id, std::span<const std::byte> payload) -> bool {
       return OnRawMessage(id, payload);
     });
@@ -388,12 +383,7 @@ class Session {
                                      ? RandomBetween(opts_.shortline_min_ms, opts_.shortline_max_ms)
                                      : RandomBetween(opts_.hold_min_ms, opts_.hold_max_ms));
 
-    // Fire Account.SelectAvatar(space_id) as a ClientBaseRpc. RPC ID is
-    // packed as (direction<<22) | (type_index<<8) | method_index (see
-    // RpcIdEmitter.cs). Account's type_index=1, SelectAvatar method_index=2,
-    // direction=3 is the exposed-base-RPC tag. Payload is int32 space_id LE;
-    // server-side Account.SelectAvatar forwards it to CreateBaseEntity.
-    constexpr uint32_t kSelectAvatarRpcId = (3u << 22) | (1u << 8) | 2u;
+    constexpr uint32_t kSelectAvatarRpcId = (3u << 22) | (1u << 8) | 1u;
     const int32_t kSpaceCount = opts_.space_count > 0 ? opts_.space_count : 1;
     const int32_t kSpaceId = static_cast<int32_t>(id_ % static_cast<std::size_t>(kSpaceCount)) + 1;
     baseapp::ClientBaseRpc rpc;
@@ -410,11 +400,7 @@ class Session {
   }
 
   void OnEntityTransferred(const baseapp::EntityTransferred& msg) {
-    // Controlling entity moved (e.g. Account → StressAvatar); refresh our
-    // cached id so subsequent cell RPCs target the new entity. Don't start
-    // Echo / ReportPos yet — wait for CellReady, since the cell counterpart
-    // may not be bound on BaseApp's Proxy and a ClientCellRpc fired here
-    // would drop with "no cell channel for target entity".
+    // Wait for CellReady before sending cell RPCs; BaseApp may not have a cell channel yet.
     entity_id_ = msg.new_entity_id;
     ++metrics_.entity_transferred;
   }
@@ -491,11 +477,8 @@ class Session {
     // method_index=2: second cell_method declared in StressAvatar.def.
     constexpr uint32_t kReportPosRpcId = (2u << 22) | (3u << 8) | 2u;
 
-    // Random-walk inside a (2 * walk_range_m)-wide square centred on
-    // this session's spawn point.  --teleport-pct % of calls replace
-    // the small step with a uniform jump within the same square so
-    // big-distance bound shuffles get exercised — those crosses bubble
-    // many list nodes per call and surface RangeTrigger ordering bugs.
+    // Random-walk inside this session's spawn square; teleport jumps exercise
+    // big-distance bound shuffles and RangeTrigger ordering.
     const bool teleport = opts_.teleport_pct > 0 &&
                           std::uniform_int_distribution<int>(0, 99)(rng_) < opts_.teleport_pct;
     if (teleport) {
@@ -540,19 +523,16 @@ class Session {
     constexpr MessageID kUnreliableDeltaWireId = 0xF001;
     constexpr MessageID kReliableDeltaWireId = 0xF003;
 
-    // Server → client RPC envelope: [u32 rpc_id][u64 trace_id][serialized args].
-    // EchoReply rpc_id = 0x000301 (direction=0, type_index=3, method_index=1).
     if (id == baseapp::kClientRpcMessageId) {
-      constexpr size_t kEnvelopePrefix = sizeof(uint32_t) + sizeof(uint64_t);
+      constexpr size_t kEntityIdPrefix = sizeof(uint32_t);
+      constexpr size_t kEnvelopePrefix = kEntityIdPrefix + sizeof(uint32_t) + sizeof(uint64_t);
       if (payload.size() < kEnvelopePrefix) return true;
       uint32_t rpc_id = 0;
-      std::memcpy(&rpc_id, payload.data(), sizeof(uint32_t));
+      std::memcpy(&rpc_id, payload.data() + kEntityIdPrefix, sizeof(uint32_t));
       auto args = payload.subspan(kEnvelopePrefix);
 
       constexpr uint32_t kEchoReplyRpcId = (3u << 8) | 1u;
       if (rpc_id == kEchoReplyRpcId) {
-        // Payload layout matches StressAvatar.def client_methods::EchoReply:
-        //   uint32 seq | uint64 serverTsNs | uint64 clientTsNs
         BinaryReader reader(args);
         auto seq = reader.Read<uint32_t>();
         auto server_ts_ns = reader.Read<uint64_t>();

@@ -94,6 +94,7 @@ set(_atlas_app_cell_targets     atlas_cellapp     atlas_cellapp_lib
 set(_atlas_app_db_targets       atlas_dbapp       atlas_dbapp_lib)
 set(_atlas_app_login_targets    atlas_loginapp    atlas_loginapp_lib)
 set(_atlas_app_machined_targets machined          atlas_machined_lib)
+set(_atlas_app_reviver_targets  atlas_reviver     atlas_reviver_lib)
 set(_atlas_app_client_targets   atlas_client      atlas_client_lib)
 set(_atlas_app_tool_targets     atlas_tool crash_demo)
 
@@ -102,6 +103,7 @@ atlas_set_folder("App/cell"     ${_atlas_app_cell_targets})
 atlas_set_folder("App/db"       ${_atlas_app_db_targets})
 atlas_set_folder("App/login"    ${_atlas_app_login_targets})
 atlas_set_folder("App/machined" ${_atlas_app_machined_targets})
+atlas_set_folder("App/reviver"  ${_atlas_app_reviver_targets})
 atlas_set_folder("App/client"   ${_atlas_app_client_targets})
 atlas_set_folder("App/tool"     ${_atlas_app_tool_targets})
 
@@ -111,6 +113,7 @@ atlas_add_ide_headers(
   ${_atlas_app_db_targets}
   ${_atlas_app_login_targets}
   ${_atlas_app_machined_targets}
+  ${_atlas_app_reviver_targets}
   ${_atlas_app_client_targets}
   ${_atlas_app_tool_targets}
 )
@@ -184,7 +187,7 @@ atlas_set_output_dir(""
   # Server executables
   atlas_baseapp atlas_baseappmgr
   atlas_cellapp atlas_cellappmgr
-  atlas_dbapp atlas_loginapp machined
+  atlas_dbapp atlas_loginapp atlas_reviver machined
   # Client executable
   atlas_client
   # Tools
@@ -195,7 +198,7 @@ atlas_set_output_dir(""
   atlas_baseapp_lib atlas_baseappmgr_lib
   atlas_cellapp_lib atlas_cellappmgr_lib atlas_cellappmgr_bsp
   atlas_dbapp_lib atlas_loginapp_lib
-  atlas_machined_lib atlas_client_lib
+  atlas_machined_lib atlas_reviver_lib atlas_client_lib
   atlas_platform_config atlas_server_types
   gtest gtest_main
   pugixml-static pugixml sqlite3

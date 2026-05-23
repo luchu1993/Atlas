@@ -28,4 +28,11 @@ auto Cell::HasRealEntity(const CellEntity* entity) const -> bool {
   return std::find(real_entities_.begin(), real_entities_.end(), entity) != real_entities_.end();
 }
 
+auto Cell::ApplyShouldOffload(bool value, uint64_t epoch) -> bool {
+  if (epoch < should_offload_epoch_) return false;
+  should_offload_ = value;
+  should_offload_epoch_ = epoch;
+  return true;
+}
+
 }  // namespace atlas

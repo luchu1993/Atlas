@@ -34,6 +34,14 @@ void BaseEntity::ClearCell() {
   cell_epoch_ = 0;
 }
 
+void BaseEntity::SetLastCellPose(math::Vector3 position, math::Vector3 direction,
+                                 bool on_ground) {
+  last_cell_position_ = position;
+  last_cell_direction_ = direction;
+  last_cell_on_ground_ = on_ground;
+  has_last_cell_pose_ = true;
+}
+
 Proxy::Proxy(EntityID id, uint16_t type_id, DatabaseID dbid) : BaseEntity(id, type_id, dbid) {}
 
 void Proxy::BindClient(const Address& addr) {

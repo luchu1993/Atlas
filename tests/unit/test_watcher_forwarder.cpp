@@ -61,24 +61,12 @@ auto decode_single_bundle_message(const std::vector<std::byte>& encoded) -> Msg 
 
 }  // namespace
 
-// ============================================================================
-// WatcherForwarder unit tests
-//
-// These tests exercise only the pure bookkeeping logic that does not require
-// actual channel I/O.  In particular we test:
-//   - pending_count() bookkeeping
-//   - check_timeouts() expiry (by relying on a registry with no live channels
-//     so handle_request returns early with a not-found reply path)
-// ============================================================================
-
 TEST(WatcherForwarder, InitiallyEmpty) {
   ProcessRegistry reg;
   WatcherForwarder fwd(reg, {});
   EXPECT_EQ(fwd.PendingCount(), 0u);
 }
 
-// When the target process is not in the registry, handle_request should send a
-// not-found response immediately (no pending entry added).
 TEST(WatcherForwarder, HandleRequestTargetNotFound) {
   ProcessRegistry reg;
   WatcherForwarder fwd(reg, {});
@@ -89,12 +77,10 @@ TEST(WatcherForwarder, HandleRequestTargetNotFound) {
   req.watcher_path = "server/tick";
   req.request_id = 1;
 
-  // requester_channel = nullptr → guard hits early
   fwd.HandleRequest(nullptr, req);
   EXPECT_EQ(fwd.PendingCount(), 0u);
 }
 
-// handle_reply for an unknown request_id is a no-op (no crash)
 TEST(WatcherForwarder, HandleReplyUnknownId) {
   ProcessRegistry reg;
   WatcherForwarder fwd(reg, {});
@@ -108,7 +94,6 @@ TEST(WatcherForwarder, HandleReplyUnknownId) {
   EXPECT_EQ(fwd.PendingCount(), 0u);
 }
 
-// check_timeouts on empty pending list is a no-op (no crash)
 TEST(WatcherForwarder, CheckTimeoutsEmpty) {
   ProcessRegistry reg;
   WatcherForwarder fwd(reg, {});
@@ -146,12 +131,16 @@ TEST(WatcherForwarder, HandleReplyRestoresOriginalRequesterRequestId) {
   req.target_name = "baseapp_01";
   req.watcher_path = "server/tick";
   req.request_id = 42;
+  req.op = WatcherOp::kSet;
+  req.set_value = "123";
 
   fwd.HandleRequest(&requester, req);
   ASSERT_EQ(fwd.PendingCount(), 1u);
 
   const WatcherForward forwarded = decode_single_bundle_message<WatcherForward>(target.LastSent());
   EXPECT_EQ(forwarded.watcher_path, req.watcher_path);
+  EXPECT_EQ(forwarded.op, WatcherOp::kSet);
+  EXPECT_EQ(forwarded.set_value, "123");
   EXPECT_NE(forwarded.request_id, req.request_id);
 
   WatcherReply reply;

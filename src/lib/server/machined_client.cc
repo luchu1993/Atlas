@@ -56,9 +56,7 @@ auto MachinedClient::Connect(const Address& machined_addr) -> bool {
 
 auto MachinedClient::IsConnected() const -> bool {
   if (channel_ == nullptr) return false;
-  // Re-validate against the registry: a condemned channel is removed from
-  // channels_ and may already be freed, so the cached pointer can dangle
-  // between Tick()s. Pointer compare without deref is safe even if stale.
+  // Re-validate against the registry; a condemned channel may already be freed.
   if (network_.FindChannel(machined_addr_) != channel_) return false;
   return channel_->IsConnected();
 }
@@ -262,6 +260,37 @@ auto MachinedClient::QueryWatcher(ProcessType target_type, std::string_view targ
 
   if (auto r = channel_->SendMessage(msg); !r) {
     ATLAS_LOG_ERROR("MachinedClient: failed to send watcher request: {}", r.Error().Message());
+    auto it = pending_watchers_.find(rid);
+    if (it != pending_watchers_.end()) {
+      auto cb_local = std::move(it->second);
+      pending_watchers_.erase(it);
+      if (cb_local) cb_local(false, std::string(target_name), {});
+    }
+  }
+  return rid;
+}
+
+auto MachinedClient::SetWatcher(ProcessType target_type, std::string_view target_name,
+                                std::string_view watcher_path, std::string_view value,
+                                WatcherCallback cb) -> uint32_t {
+  if (!IsConnected()) {
+    if (cb) cb(false, std::string(target_name), {});
+    return 0;
+  }
+
+  uint32_t rid = next_watcher_request_id_++;
+  if (cb) pending_watchers_.emplace(rid, std::move(cb));
+
+  machined::WatcherRequest msg;
+  msg.target_type = target_type;
+  msg.target_name = std::string(target_name);
+  msg.watcher_path = std::string(watcher_path);
+  msg.request_id = rid;
+  msg.op = machined::WatcherOp::kSet;
+  msg.set_value = std::string(value);
+
+  if (auto r = channel_->SendMessage(msg); !r) {
+    ATLAS_LOG_ERROR("MachinedClient: failed to send watcher set: {}", r.Error().Message());
     auto it = pending_watchers_.find(rid);
     if (it != pending_watchers_.end()) {
       auto cb_local = std::move(it->second);

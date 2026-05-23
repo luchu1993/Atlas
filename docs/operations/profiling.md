@@ -92,7 +92,7 @@ Atlas Unity 客户端把同一组 zone 名通过 `ProfilerMarker` 路由出去�
    （Editor 或设备）。
 
 Zone 名通过 `Atlas.Diagnostics.ProfilerNames` 跟服务器对齐——比如
-客户端的 `ClientCallbacks.DispatchPropertyUpdate` 跟服务器为同一个
+客户端的 `ClientSession.DispatchPropertyUpdate` 跟服务器为同一个
 逻辑 property delta 触发的 `Channel::Send` 在两边时间戳上能对齐。
 domain reload 注意事项见 `Atlas.Client.Unity/README.md`。
 

@@ -1,7 +1,7 @@
 # Phase 7: DBApp + 数据库层
 
 **Status:** 🚧 主体已落地（XML / SQLite 后端可用，SQLite 为默认）；
-集成补强进行中；MySQL 后端尚未实现。
+DBApp 集成补强已覆盖当前主链路；MySQL 后端尚未实现。
 **前置依赖:** Phase 5、Phase 6、脚本层 EntityDef 元数据（[`docs/scripting/`](../scripting/)）
 **BigWorld 参考:** `server/dbapp/`, `lib/db_storage/idatabase.hpp`,
 `lib/db_storage_xml/`
@@ -22,7 +22,7 @@
 |---|---|---|
 | P7.1 | 基线收敛 | ✅ |
 | P7.2 | SQLite backend 落地并切为默认 | ✅ |
-| P7.3 | DBApp 集成补强（登录回滚 / BaseApp 故障路径） | 🚧 |
+| P7.3 | DBApp 集成补强（登录回滚 / BaseApp 故障路径） | ✅ |
 | P7.4 | MySQL backend 进入正式实现 | ⬜ |
 
 ## 设计
@@ -70,12 +70,12 @@ busy_timeout_ms / foreign_keys`、`db_mysql_*` 系列字段。开发推荐
 
 ## 当前剩余工作
 
-### P7.3 — DBApp 集成补强 🚧
+### P7.3 — DBApp 集成补强 ✅
 
 主链路（`AuthLogin`、`AbortCheckout`、`CheckinEntity`、BaseApp death
-回收）已有集成与单测覆盖；DBApp watcher 已注册。后续补强 SQLite 路径下
-`WriteFlags::LogOff` / `auto_load` 回归、长稳 churn 与多后端契约一致性
-验证。
+回收）已有集成与单测覆盖；SQLite / XML 路径下 `WriteFlags::LogOff` 与
+`auto_load` 也有回归测试；DBApp watcher 已注册。后续新增数据库行为时
+继续补齐多后端契约一致性验证。
 
 ### P7.4 — MySQL backend ⬜
 

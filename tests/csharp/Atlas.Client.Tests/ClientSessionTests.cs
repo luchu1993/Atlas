@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using Atlas.DataTypes;
 using Atlas.Serialization;
 using Xunit;
@@ -148,6 +149,22 @@ namespace Atlas.Client.Tests
             return w.WrittenSpan.ToArray();
         }
 
+        private static byte[] BuildSpaceBspGeometry()
+        {
+            var w = new SpanWriter();
+            w.WriteUInt32(42);
+            w.WritePackedUInt32(1);
+            w.WriteUInt32(7);
+            w.WriteUInt8(3);
+            w.WriteFloat(-10.0f);
+            w.WriteFloat(-20.0f);
+            w.WriteFloat(30.0f);
+            w.WriteFloat(40.0f);
+            w.WriteFloat(0.625f);
+            w.WriteUInt32(123);
+            return w.WrittenSpan.ToArray();
+        }
+
         [Fact]
         public void SessionsDoNotShareEntityOrSpaceDataState()
         {
@@ -215,6 +232,32 @@ namespace Atlas.Client.Tests
             var entity = (FakePeer)session.EntityManager.Get(100)!;
 
             Assert.Throws<InvalidOperationException>(() => entity.SendBaseForTest());
+        }
+
+        [Fact]
+        public void SpaceBspGeometryDecodesLoadAndEntityCount()
+        {
+            var session = new ClientSession();
+            IReadOnlyList<ClientCallbacks.BspLeafRect>? leaves = null;
+            uint spaceId = 0;
+            session.SpaceBspGeometryReceived += (sid, rects) =>
+            {
+                spaceId = sid;
+                leaves = rects;
+            };
+
+            session.DeliverFromServer(ClientCallbacks.kSpaceBspGeometryMessageId,
+                                      BuildSpaceBspGeometry());
+
+            Assert.Equal(42u, spaceId);
+            Assert.NotNull(leaves);
+            var leaf = Assert.Single(leaves);
+            Assert.Equal(7u, leaf.CellId);
+            Assert.Equal((byte)3, leaf.OwnerIndex);
+            Assert.Equal(-10.0f, leaf.MinX);
+            Assert.Equal(40.0f, leaf.MaxZ);
+            Assert.Equal(0.625f, leaf.Load);
+            Assert.Equal(123u, leaf.EntityCount);
         }
 
         [Fact]

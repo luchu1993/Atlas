@@ -1,6 +1,8 @@
 #ifndef ATLAS_SERVER_CELLAPPMGR_CELLAPPMGR_MESSAGES_H_
 #define ATLAS_SERVER_CELLAPPMGR_CELLAPPMGR_MESSAGES_H_
 
+#include <array>
+#include <cstddef>
 #include <cstdint>
 #include <vector>
 
@@ -100,13 +102,24 @@ struct InformCellLoad {
   uint32_t app_id{0};
   float load{0.0f};
   uint32_t entity_count{0};
-  // Per-cell distribution; mgr uses entity_count for heaviest-leaf pick and
-  // median_x/z to position the next Split inside the actual entity cloud.
+  // Per-cell load profile; mgr uses it for weighted LB scoring and Split placement.
   struct CellReport {
+    static constexpr std::size_t kLoadBucketCount = 8;
+
     CellID cell_id{0};
     uint32_t entity_count{0};
     float median_x{0.f};
     float median_z{0.f};
+    uint64_t geometry_version{0};
+    float tick_load{0.f};
+    uint64_t script_tick_us{0};
+    uint32_t witness_count{0};
+    uint32_t aoi_peer_count{0};
+    uint64_t aoi_reliable_bytes{0};
+    uint64_t aoi_unreliable_bytes{0};
+    uint64_t backup_bytes{0};
+    std::array<uint32_t, kLoadBucketCount> x_buckets{};
+    std::array<uint32_t, kLoadBucketCount> z_buckets{};
   };
   std::vector<CellReport> cells;
 
@@ -130,6 +143,16 @@ struct InformCellLoad {
       w.Write(c.entity_count);
       w.Write(c.median_x);
       w.Write(c.median_z);
+      w.Write(c.geometry_version);
+      w.Write(c.tick_load);
+      w.Write(c.script_tick_us);
+      w.Write(c.witness_count);
+      w.Write(c.aoi_peer_count);
+      w.Write(c.aoi_reliable_bytes);
+      w.Write(c.aoi_unreliable_bytes);
+      w.Write(c.backup_bytes);
+      for (uint32_t bucket : c.x_buckets) w.Write(bucket);
+      for (uint32_t bucket : c.z_buckets) w.Write(bucket);
     }
   }
 
@@ -150,14 +173,66 @@ struct InformCellLoad {
       auto ce = r.Read<uint32_t>();
       auto mx = r.Read<float>();
       auto mz = r.Read<float>();
-      if (!cid || !ce || !mx || !mz)
+      auto gv = r.Read<uint64_t>();
+      auto tl = r.Read<float>();
+      auto stu = r.Read<uint64_t>();
+      auto wc = r.Read<uint32_t>();
+      auto ap = r.Read<uint32_t>();
+      auto arb = r.Read<uint64_t>();
+      auto aub = r.Read<uint64_t>();
+      auto bb = r.Read<uint64_t>();
+      if (!cid || !ce || !mx || !mz || !gv || !tl || !stu || !wc || !ap || !arb || !aub || !bb)
         return Error{ErrorCode::kInvalidArgument, "InformCellLoad: cell entry truncated"};
-      msg.cells.push_back({*cid, *ce, *mx, *mz});
+      CellReport rep;
+      rep.cell_id = *cid;
+      rep.entity_count = *ce;
+      rep.median_x = *mx;
+      rep.median_z = *mz;
+      rep.geometry_version = *gv;
+      rep.tick_load = *tl;
+      rep.script_tick_us = *stu;
+      rep.witness_count = *wc;
+      rep.aoi_peer_count = *ap;
+      rep.aoi_reliable_bytes = *arb;
+      rep.aoi_unreliable_bytes = *aub;
+      rep.backup_bytes = *bb;
+      for (auto& bucket : rep.x_buckets) {
+        auto value = r.Read<uint32_t>();
+        if (!value)
+          return Error{ErrorCode::kInvalidArgument, "InformCellLoad: x bucket truncated"};
+        bucket = *value;
+      }
+      for (auto& bucket : rep.z_buckets) {
+        auto value = r.Read<uint32_t>();
+        if (!value)
+          return Error{ErrorCode::kInvalidArgument, "InformCellLoad: z bucket truncated"};
+        bucket = *value;
+      }
+      msg.cells.push_back(rep);
     }
     return msg;
   }
 };
 static_assert(NetworkMessage<InformCellLoad>);
+
+struct RequestCellAppState {
+  static auto Descriptor() -> const MessageDesc& {
+    static const MessageDesc kDesc{msg_id::Id(msg_id::CellAppMgr::kRequestCellAppState),
+                                   "cellappmgr::RequestCellAppState",
+                                   MessageLengthStyle::kFixed,
+                                   0,
+                                   MessageReliability::kReliable,
+                                   MessageUrgency::kImmediate};
+    return kDesc;
+  }
+
+  void Serialize(BinaryWriter&) const {}
+
+  static auto Deserialize(BinaryReader&) -> Result<RequestCellAppState> {
+    return RequestCellAppState{};
+  }
+};
+static_assert(NetworkMessage<RequestCellAppState>);
 
 struct CreateSpaceRequest {
   SpaceID space_id{kInvalidSpaceID};
@@ -217,6 +292,7 @@ struct AddCellToSpace {
   // space-owner entity at this moment when space_master_type is non-empty.
   bool is_primary{false};
   std::string space_master_type;
+  Address space_data_source_addr;
 
   static auto Descriptor() -> const MessageDesc& {
     static const MessageDesc kDesc{msg_id::Id(msg_id::CellAppMgr::kAddCellToSpace),
@@ -234,6 +310,8 @@ struct AddCellToSpace {
     bounds.Serialize(w);
     w.Write<uint8_t>(is_primary ? 1u : 0u);
     w.WriteString(space_master_type);
+    w.Write(space_data_source_addr.Ip());
+    w.Write(space_data_source_addr.Port());
   }
 
   static auto Deserialize(BinaryReader& r) -> Result<AddCellToSpace> {
@@ -251,6 +329,14 @@ struct AddCellToSpace {
     msg.bounds = *b;
     msg.is_primary = *p != 0;
     msg.space_master_type = std::move(*mt);
+    if (r.Remaining() > 0) {
+      auto ip = r.Read<uint32_t>();
+      auto port = r.Read<uint16_t>();
+      if (!ip || !port) {
+        return Error{ErrorCode::kInvalidArgument, "AddCellToSpace: truncated"};
+      }
+      msg.space_data_source_addr = Address(*ip, *port);
+    }
     return msg;
   }
 };
@@ -283,7 +369,8 @@ struct AddCellToSpaceAck {
     auto sid = r.Read<uint32_t>();
     auto cid = r.Read<uint32_t>();
     auto s = r.Read<uint8_t>();
-    if (!sid || !cid || !s) return Error{ErrorCode::kInvalidArgument, "AddCellToSpaceAck: truncated"};
+    if (!sid || !cid || !s)
+      return Error{ErrorCode::kInvalidArgument, "AddCellToSpaceAck: truncated"};
     AddCellToSpaceAck msg;
     msg.space_id = *sid;
     msg.cell_id = *cid;
@@ -293,12 +380,45 @@ struct AddCellToSpaceAck {
 };
 static_assert(NetworkMessage<AddCellToSpaceAck>);
 
+struct RemoveCellFromSpace {
+  SpaceID space_id{kInvalidSpaceID};
+  CellID cell_id{0};
+
+  static auto Descriptor() -> const MessageDesc& {
+    static const MessageDesc kDesc{msg_id::Id(msg_id::CellAppMgr::kRemoveCellFromSpace),
+                                   "cellappmgr::RemoveCellFromSpace",
+                                   MessageLengthStyle::kFixed,
+                                   sizeof(uint32_t) + sizeof(uint32_t),
+                                   MessageReliability::kReliable,
+                                   MessageUrgency::kImmediate};
+    return kDesc;
+  }
+
+  void Serialize(BinaryWriter& w) const {
+    w.Write(space_id);
+    w.Write(cell_id);
+  }
+
+  static auto Deserialize(BinaryReader& r) -> Result<RemoveCellFromSpace> {
+    auto sid = r.Read<uint32_t>();
+    auto cid = r.Read<uint32_t>();
+    if (!sid || !cid)
+      return Error{ErrorCode::kInvalidArgument, "RemoveCellFromSpace: truncated"};
+    RemoveCellFromSpace msg;
+    msg.space_id = *sid;
+    msg.cell_id = *cid;
+    return msg;
+  }
+};
+static_assert(NetworkMessage<RemoveCellFromSpace>);
+
 // `bsp_blob` is the BSPTree serialization; the structure itself is
 // defined in src/server/cellappmgr/bsp_tree.h and opaque to the
 // message layer - CellAppMgr owns the tree, CellApp replays it.
 
 struct UpdateGeometry {
   SpaceID space_id{kInvalidSpaceID};
+  uint64_t geometry_version{0};
   std::vector<std::byte> bsp_blob;
 
   static auto Descriptor() -> const MessageDesc& {
@@ -313,16 +433,20 @@ struct UpdateGeometry {
 
   void Serialize(BinaryWriter& w) const {
     w.Write(space_id);
+    w.Write(geometry_version);
     w.WritePackedInt(static_cast<uint32_t>(bsp_blob.size()));
     if (!bsp_blob.empty()) w.WriteBytes(std::span<const std::byte>(bsp_blob));
   }
 
   static auto Deserialize(BinaryReader& r) -> Result<UpdateGeometry> {
     auto sid = r.Read<uint32_t>();
+    auto version = r.Read<uint64_t>();
     auto blen = r.ReadPackedInt();
-    if (!sid || !blen) return Error{ErrorCode::kInvalidArgument, "UpdateGeometry: truncated"};
+    if (!sid || !version || !blen)
+      return Error{ErrorCode::kInvalidArgument, "UpdateGeometry: truncated"};
     UpdateGeometry msg;
     msg.space_id = *sid;
+    msg.geometry_version = *version;
     if (*blen > 0) {
       auto data = r.ReadBytes(*blen);
       if (!data) return Error{ErrorCode::kInvalidArgument, "UpdateGeometry: bsp_blob truncated"};
@@ -341,12 +465,14 @@ struct ShouldOffload {
   SpaceID space_id{kInvalidSpaceID};
   CellID cell_id{0};
   bool enable{true};
+  uint64_t freeze_epoch{0};
 
   static auto Descriptor() -> const MessageDesc& {
     static const MessageDesc kDesc{msg_id::Id(msg_id::CellAppMgr::kShouldOffload),
                                    "cellappmgr::ShouldOffload",
                                    MessageLengthStyle::kFixed,
-                                   static_cast<int>(sizeof(uint32_t) * 2 + sizeof(uint8_t)),
+                                   static_cast<int>(sizeof(uint32_t) * 2 + sizeof(uint8_t) +
+                                                    sizeof(uint64_t)),
                                    MessageReliability::kReliable,
                                    MessageUrgency::kImmediate};
     return kDesc;
@@ -356,17 +482,21 @@ struct ShouldOffload {
     w.Write(space_id);
     w.Write(cell_id);
     w.Write(static_cast<uint8_t>(enable ? 1 : 0));
+    w.Write(freeze_epoch);
   }
 
   static auto Deserialize(BinaryReader& r) -> Result<ShouldOffload> {
     auto sid = r.Read<uint32_t>();
     auto cid = r.Read<uint32_t>();
     auto en = r.Read<uint8_t>();
-    if (!sid || !cid || !en) return Error{ErrorCode::kInvalidArgument, "ShouldOffload: truncated"};
+    auto epoch = r.Read<uint64_t>();
+    if (!sid || !cid || !en || !epoch)
+      return Error{ErrorCode::kInvalidArgument, "ShouldOffload: truncated"};
     ShouldOffload msg;
     msg.space_id = *sid;
     msg.cell_id = *cid;
     msg.enable = (*en != 0);
+    msg.freeze_epoch = *epoch;
     return msg;
   }
 };

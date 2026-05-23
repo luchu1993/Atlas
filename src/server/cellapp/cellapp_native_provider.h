@@ -27,6 +27,7 @@ class CellAppNativeProvider : public BaseNativeProvider {
   using SetSpaceDataFn = std::function<void(uint32_t space_id, uint16_t key_id,
                                             const std::byte* value, int32_t len)>;
   using RemoveSpaceDataFn = std::function<void(uint32_t space_id, uint16_t key_id)>;
+  using ScriptTickFn = std::function<void(uint32_t entity_id, uint64_t elapsed_us)>;
 
   // `network` only needed for SendClientRpc (handler tests can omit it).
   explicit CellAppNativeProvider(EntityLookupFn lookup);
@@ -39,8 +40,10 @@ class CellAppNativeProvider : public BaseNativeProvider {
   }
   void SetSetSpaceDataFn(SetSpaceDataFn fn) { set_space_data_fn_ = std::move(fn); }
   void SetRemoveSpaceDataFn(RemoveSpaceDataFn fn) { remove_space_data_fn_ = std::move(fn); }
+  void SetScriptTickFn(ScriptTickFn fn) { script_tick_fn_ = std::move(fn); }
 
   uint8_t GetProcessPrefix() override;
+  void ReportScriptTick(uint32_t entity_id, uint64_t elapsed_us) override;
 
   // kOwner targets the source's bound client; kOthers/kAll fan out to
   // every witness with source in AoI, grouped by base_addr.
@@ -116,6 +119,7 @@ class CellAppNativeProvider : public BaseNativeProvider {
   DestroyLocalEntityFn destroy_local_entity_fn_;
   SetSpaceDataFn set_space_data_fn_;
   RemoveSpaceDataFn remove_space_data_fn_;
+  ScriptTickFn script_tick_fn_;
   NetworkInterface* network_{nullptr};  // null in handler-level tests
   RestoreEntityFn restore_entity_fn_{nullptr};
   DispatchRpcFn dispatch_rpc_fn_{nullptr};

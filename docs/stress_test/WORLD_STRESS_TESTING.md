@@ -1,6 +1,6 @@
 # Atlas 全链路压测说明
 
-> 更新时间: 2026-04-21
+> 更新时间: 2026-05-23
 > 适用范围: LoginApp / BaseApp / DBApp / BaseAppMgr / CellAppMgr / CellApp 的端到端登录、世界态进入、cell RPC、AoI、短线重登压测
 
 ## 1. 目标
@@ -38,11 +38,14 @@ client
 ### 2.1 集群拉起
 
 - `tools/cluster_control/run_world_stress.py` — 完整 stress driver（启动集群 +
-  跑客户端 + 收日志 + 审计）。日常调用走 `tools/bin/run_world_stress.{bat,sh}`。
-- `tools/bin/run_cluster.{bat,sh}` — 只起集群，不跑客户端（preset wrapper
-  → `run_world_stress.py --clients 0 --keep-cluster`）。适合本地 dev /
-  Unity 客户端调试（只想要个 LoginApp 接客户端）。默认 `build/debug` Debug
-  配置，1 BaseApp + 1 CellApp。
+  跑客户端 + 收日志 + 审计）。当前没有同名 `tools/bin/` wrapper,Windows 和
+  Linux/macOS 都直接调用这个 Python 入口。
+- `tools/bin/verify_retire_drain.{bat,sh}` — live cluster retire-drain 验证；
+  通过 `atlas_tool set-watch` 标记 retiring CellApp，并轮询 CellAppMgr watcher
+  直到 owned/drain/pending 清零且 `ready=1`。
+- `tools/bin/run_cluster.sh` — Linux/macOS 只起集群，不跑客户端（preset wrapper
+  → `run_world_stress.py --clients 0 --keep-cluster`）。Windows 侧当前直接使用
+  Python 入口;MVP Unity 调试可用 `tools/bin/run_mvp_cluster.bat`。
 
 相对 `run_login_stress.py` 的增量：
 - 启动 CellAppMgr + N 个 CellApp
@@ -63,8 +66,10 @@ client
   - `world_stress`
 - C# Runtime：
   - `runtime/atlas_server.runtimeconfig.json`
-  - `samples/stress/Atlas.StressTest.Base/bin/x64/Debug/<tfm>/Atlas.StressTest.Base.dll`
-  - `samples/stress/Atlas.StressTest.Cell/bin/x64/Debug/<tfm>/Atlas.StressTest.Cell.dll`
+  - `bin/<build>/Atlas.StressTest.Base.dll`
+  - `bin/<build>/Atlas.StressTest.Cell.dll`
+  - `run_world_stress.py` 会从实际传给 BaseApp 的 `Atlas.StressTest.Base.dll`
+    读取 entity-def digest；若登录出现 `def_mismatch`，先重新构建 stress C# 产物。
 - 端口段（默认）：
   - 20013 LoginApp external
   - 20018 machined
@@ -80,23 +85,23 @@ client
 ### 4.1 P1 集群启动自检（不跑客户端）
 
 ```powershell
-tools\bin\run_world_stress.bat `
+python tools\cluster_control\run_world_stress.py `
   --clients 0 `
   --duration-sec 10
 ```
 
 期望：7 个进程都注册到 machined，10 秒 hold 无错误，优雅退出。
 
-或用 wrapper（默认 `--keep-cluster`，不会自动退）：
+需要保持集群供手动客户端连接时：
 
 ```powershell
-.\tools\bin\run_cluster.bat
+python tools\cluster_control\run_world_stress.py --clients 0 --keep-cluster
 ```
 
 ### 4.2 P2 最小活体（端到端闭环）
 
 ```powershell
-tools\bin\run_world_stress.bat `
+python tools\cluster_control\run_world_stress.py `
   --clients 1 `
   --account-pool 1 `
   --duration-sec 6 `
@@ -114,7 +119,7 @@ tools\bin\run_world_stress.bat `
 ### 4.3 P3 常规规模 + 空间分布 + 双 CellApp
 
 ```powershell
-tools\bin\run_world_stress.bat `
+python tools\cluster_control\run_world_stress.py `
   --clients 200 `
   --account-pool 200 `
   --duration-sec 30 `
@@ -135,10 +140,52 @@ tools\bin\run_world_stress.bat `
 - 所有失败计数 = 0
 - 总 "no cell channel" drop = 0
 
-### 4.4 P4 高密度 AoI
+### 4.4 LB retire-drain 验证
+
+先保留一个有多 Space / 多 CellApp 的集群：
 
 ```powershell
-tools\bin\run_world_stress.bat `
+python tools\cluster_control\run_world_stress.py `
+  --clients 200 `
+  --account-pool 200 `
+  --duration-sec 30 `
+  --ramp-per-sec 100 `
+  --hold-min-ms 15000 --hold-max-ms 15000 `
+  --shortline-pct 0 `
+  --rpc-rate-hz 2 --move-rate-hz 10 `
+  --space-count 4 --cellapp-count 4 `
+  --login-rate-limit-trusted-cidr 127.0.0.0/8 `
+  --login-rate-limit-global 10000 `
+  --keep-cluster
+```
+
+客户端压测完成且集群仍在运行后，执行：
+
+```powershell
+tools\bin\verify_retire_drain.bat --min-spaces 4 --timeout-sec 120
+```
+
+Linux / macOS：
+
+```bash
+tools/bin/verify_retire_drain.sh --min-spaces 4 --timeout-sec 120
+```
+
+验收：脚本打印 `PASS`，`cellappmgr/lb/retire/status` 中目标 app 的
+`owned=0 drains=0 pending=0 ready=1 stuck=0`，且
+`cellappmgr/lb/retire/stuck_count == 0`。
+未显式传 `--target-app-id` 时，脚本会选择当前持有 BSP leaf 的 CellApp；
+显式目标若没有持有 leaf 会失败，避免空退役被误判为通过。
+
+当前最小实测：8 clients / 2 Spaces / 3 CellApps 的 live 集群上，
+`world_stress` 得到 `echo_sent=81`、`echo_received=81`、`echo_loss=0`；
+随后 `verify_retire_drain.bat --min-cellapps 3 --min-spaces 2` 通过，目标 app
+从 2 个 leaf drain 到 `owned=0 drains=0 pending=0 ready=1 stuck=0`。
+
+### 4.5 P4 高密度 AoI
+
+```powershell
+python tools\cluster_control\run_world_stress.py `
   --clients 50 `
   --account-pool 50 `
   --duration-sec 20 `
@@ -155,12 +202,12 @@ tools\bin\run_world_stress.bat `
 - `echo_rtt_p95` < 150 ms（单 CellApp 在 50-client 密度下可承受）
 - 没有 `unexpected_disc` / 服务端 warning
 
-已知缩放边界：**1 CellApp × 1 space 支持到大约 50 实体 × 10 Hz move + 2 Hz echo**。超过 100 实体/space 时 CellApp tick 被 AoI 广播挤爆，第二轮登录会卡在 `inflight`。突破这个边界需要 Phase-11+ 的 Space 拆分 / Cell offload。
+已知缩放边界：**1 CellApp × 1 space 支持到大约 50 实体 × 10 Hz move + 2 Hz echo**。超过 100 实体/space 时 CellApp tick 被 AoI 广播挤爆，第二轮登录会卡在 `inflight`。突破这个边界需要 Space 拆分 / Cell offload。
 
-### 4.5 P5 短线重登
+### 4.6 P5 短线重登
 
 ```powershell
-tools\bin\run_world_stress.bat `
+python tools\cluster_control\run_world_stress.py `
   --clients 50 `
   --account-pool 50 `
   --duration-sec 60 `
@@ -198,7 +245,7 @@ tools\bin\run_world_stress.bat `
 
 ### 6.1 单 CellApp × 单 space 的实体密度上限
 
-约 50 活跃 StressAvatar @ 50m AoI 半径 @ 10 Hz move。超过此值 CellApp tick loop 被 witness 广播（O(N²)）饱和，auth/cell_ready 延迟飙升，第二轮登录可能卡 inflight。生产方案：space 切分 + cell offload（Phase 11+）。
+约 50 活跃 StressAvatar @ 50m AoI 半径 @ 10 Hz move。超过此值 CellApp tick loop 被 witness 广播（O(N²)）饱和，auth/cell_ready 延迟飙升，第二轮登录可能卡 inflight。生产方案：space 切分 + cell offload。
 
 ### 6.2 短线 cell 实体 destroy 仅覆盖 "CellReady 已收到" 的会话
 
@@ -300,8 +347,9 @@ world_stress 断开只做 `network_.reset()`，不发 RUDP FIN。BaseApp 靠 10 
 1. 单元+集成测试：`ctest --build-config Debug`
 2. P2 最小活体（1 客户端）
 3. P3 常规规模（200 客户端）
-4. P4 AoI 密度（50 客户端单 space）
-5. P5 短线重登
-6. 检查 `logs/` 下 non-boilerplate 的 WARNING/ERROR
+4. LB retire-drain 验证
+5. P4 AoI 密度（50 客户端单 space）
+6. P5 短线重登
+7. 检查 `logs/` 下 non-boilerplate 的 WARNING/ERROR
 
 这样可以从小到大定位回归点。

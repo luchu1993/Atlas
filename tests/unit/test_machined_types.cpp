@@ -6,7 +6,6 @@
 using namespace atlas;
 using namespace atlas::machined;
 
-// Helper: serialize then deserialize
 template <typename T>
 static auto round_trip(const T& msg) -> Result<T> {
   BinaryWriter w;
@@ -15,10 +14,6 @@ static auto round_trip(const T& msg) -> Result<T> {
   BinaryReader r(data);
   return T::Deserialize(r);
 }
-
-// ============================================================================
-// RegisterMessage
-// ============================================================================
 
 TEST(MachinedTypes, RegisterRoundTrip) {
   RegisterMessage orig;
@@ -44,10 +39,6 @@ TEST(MachinedTypes, RegisterTruncatedReturnsError) {
   auto result = RegisterMessage::Deserialize(r);
   EXPECT_FALSE(result.HasValue());
 }
-
-// ============================================================================
-// RegisterAck
-// ============================================================================
 
 TEST(MachinedTypes, RegisterAckSuccess) {
   RegisterAck orig;
@@ -89,10 +80,6 @@ TEST(MachinedTypes, RegisterAckFailure) {
   EXPECT_EQ(result->error_message, "duplicate name");
 }
 
-// ============================================================================
-// DeregisterMessage
-// ============================================================================
-
 TEST(MachinedTypes, DeregisterRoundTrip) {
   DeregisterMessage orig;
   orig.process_type = ProcessType::kCellApp;
@@ -106,10 +93,6 @@ TEST(MachinedTypes, DeregisterRoundTrip) {
   EXPECT_EQ(result->pid, 99u);
 }
 
-// ============================================================================
-// QueryMessage
-// ============================================================================
-
 TEST(MachinedTypes, QueryRoundTrip) {
   QueryMessage orig;
   orig.process_type = ProcessType::kLoginApp;
@@ -118,10 +101,6 @@ TEST(MachinedTypes, QueryRoundTrip) {
   ASSERT_TRUE(result.HasValue());
   EXPECT_EQ(result->process_type, ProcessType::kLoginApp);
 }
-
-// ============================================================================
-// QueryResponse
-// ============================================================================
 
 TEST(MachinedTypes, QueryResponseEmpty) {
   QueryResponse orig;
@@ -167,7 +146,7 @@ TEST(MachinedTypes, QueryResponseMultipleProcesses) {
 
 TEST(MachinedTypes, QueryResponseCountExceedsLimit) {
   BinaryWriter w;
-  w.Write<uint32_t>(10001u);  // exceeds kMaxProcesses
+  w.Write<uint32_t>(10001u);
   auto data = w.Data();
   BinaryReader r(data);
   auto result = QueryResponse::Deserialize(r);
@@ -177,16 +156,12 @@ TEST(MachinedTypes, QueryResponseCountExceedsLimit) {
 
 TEST(MachinedTypes, QueryResponseTruncatedAfterCount) {
   BinaryWriter w;
-  w.Write<uint32_t>(3u);  // claims 3 entries but provides none
+  w.Write<uint32_t>(3u);
   auto data = w.Data();
   BinaryReader r(data);
   auto result = QueryResponse::Deserialize(r);
   EXPECT_FALSE(result.HasValue());
 }
-
-// ============================================================================
-// HeartbeatMessage / HeartbeatAck
-// ============================================================================
 
 TEST(MachinedTypes, HeartbeatRoundTrip) {
   HeartbeatMessage orig;
@@ -207,10 +182,6 @@ TEST(MachinedTypes, HeartbeatAckRoundTrip) {
   ASSERT_TRUE(result.HasValue());
   EXPECT_EQ(result->server_time, 9999999999ULL);
 }
-
-// ============================================================================
-// BirthNotification / DeathNotification
-// ============================================================================
 
 TEST(MachinedTypes, BirthNotificationRoundTrip) {
   BirthNotification orig;
@@ -243,10 +214,6 @@ TEST(MachinedTypes, DeathNotificationRoundTrip) {
   EXPECT_EQ(result->reason, 1u);
 }
 
-// ============================================================================
-// ListenerRegister / ListenerAck
-// ============================================================================
-
 TEST(MachinedTypes, ListenerRegisterRoundTrip) {
   ListenerRegister orig;
   orig.listener_type = ListenerType::kBoth;
@@ -267,16 +234,14 @@ TEST(MachinedTypes, ListenerAckRoundTrip) {
   EXPECT_TRUE(result->success);
 }
 
-// ============================================================================
-// WatcherRequest / WatcherResponse / WatcherForward / WatcherReply
-// ============================================================================
-
 TEST(MachinedTypes, WatcherRequestRoundTrip) {
   WatcherRequest orig;
   orig.target_type = ProcessType::kBaseApp;
   orig.target_name = "baseapp-1";
   orig.watcher_path = "network/channels";
   orig.request_id = 42;
+  orig.op = WatcherOp::kSet;
+  orig.set_value = "99";
 
   auto result = round_trip(orig);
   ASSERT_TRUE(result.HasValue());
@@ -284,6 +249,22 @@ TEST(MachinedTypes, WatcherRequestRoundTrip) {
   EXPECT_EQ(result->target_name, "baseapp-1");
   EXPECT_EQ(result->watcher_path, "network/channels");
   EXPECT_EQ(result->request_id, 42u);
+  EXPECT_EQ(result->op, WatcherOp::kSet);
+  EXPECT_EQ(result->set_value, "99");
+}
+
+TEST(MachinedTypes, WatcherRequestLegacyPayloadDefaultsToGet) {
+  BinaryWriter w;
+  w.Write<uint8_t>(static_cast<uint8_t>(ProcessType::kBaseApp));
+  w.WriteString("baseapp-1");
+  w.WriteString("network/channels");
+  w.Write<uint32_t>(42);
+
+  BinaryReader r(w.Data());
+  auto result = WatcherRequest::Deserialize(r);
+  ASSERT_TRUE(result.HasValue());
+  EXPECT_EQ(result->op, WatcherOp::kGet);
+  EXPECT_TRUE(result->set_value.empty());
 }
 
 TEST(MachinedTypes, WatcherResponseRoundTrip) {
@@ -306,12 +287,29 @@ TEST(MachinedTypes, WatcherForwardRoundTrip) {
   orig.request_id = 7;
   orig.requester_name = "atlas_tool";
   orig.watcher_path = "server/tick_rate";
+  orig.op = WatcherOp::kSet;
+  orig.set_value = "20";
 
   auto result = round_trip(orig);
   ASSERT_TRUE(result.HasValue());
   EXPECT_EQ(result->request_id, 7u);
   EXPECT_EQ(result->requester_name, "atlas_tool");
   EXPECT_EQ(result->watcher_path, "server/tick_rate");
+  EXPECT_EQ(result->op, WatcherOp::kSet);
+  EXPECT_EQ(result->set_value, "20");
+}
+
+TEST(MachinedTypes, WatcherForwardLegacyPayloadDefaultsToGet) {
+  BinaryWriter w;
+  w.Write<uint32_t>(7);
+  w.WriteString("atlas_tool");
+  w.WriteString("server/tick_rate");
+
+  BinaryReader r(w.Data());
+  auto result = WatcherForward::Deserialize(r);
+  ASSERT_TRUE(result.HasValue());
+  EXPECT_EQ(result->op, WatcherOp::kGet);
+  EXPECT_TRUE(result->set_value.empty());
 }
 
 TEST(MachinedTypes, WatcherReplyRoundTrip) {
@@ -343,7 +341,7 @@ TEST(MachinedTypes, ShutdownTargetRoundTripNamed) {
 TEST(MachinedTypes, ShutdownTargetRoundTripBroadcast) {
   ShutdownTarget orig;
   orig.target_type = ProcessType::kCellApp;
-  orig.target_name = "";  // broadcast to all of target_type
+  orig.target_name = "";
   orig.reason = 0;
 
   auto result = round_trip(orig);

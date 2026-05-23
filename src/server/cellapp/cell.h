@@ -48,6 +48,8 @@ class Cell {
   // Toggled by CellAppMgr; fresh cells default to true.
   [[nodiscard]] auto ShouldOffload() const -> bool { return should_offload_; }
   void SetShouldOffload(bool v) { should_offload_ = v; }
+  [[nodiscard]] auto ShouldOffloadEpoch() const -> uint64_t { return should_offload_epoch_; }
+  auto ApplyShouldOffload(bool value, uint64_t epoch) -> bool;
 
  private:
   Space& space_;
@@ -55,6 +57,7 @@ class Cell {
   CellBounds bounds_;
   std::vector<CellEntity*> real_entities_;
   bool should_offload_{true};
+  uint64_t should_offload_epoch_{0};
 };
 
 }  // namespace atlas

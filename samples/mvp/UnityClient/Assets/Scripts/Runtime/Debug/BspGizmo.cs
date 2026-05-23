@@ -79,7 +79,7 @@ namespace Atlas.Mvp.Unity
                 float minZ = Mathf.Max(leaf.MinZ, -kRenderClip);
                 float maxX = Mathf.Min(leaf.MaxX, kRenderClip);
                 float maxZ = Mathf.Min(leaf.MaxZ, kRenderClip);
-                SetRect(go, minX, minZ, maxX, maxZ, OwnerColor(leaf.OwnerIndex));
+                SetRect(go, minX, minZ, maxX, maxZ, LeafColor(leaf.OwnerIndex, leaf.Load));
             }
         }
 
@@ -141,6 +141,13 @@ namespace Atlas.Mvp.Unity
                 6 => new Color(1f, 0.3f, 0.3f, 1f),
                 _ => new Color(0.7f, 0.7f, 0.7f, 1f),
             };
+        }
+
+        static Color LeafColor(byte ownerIndex, float load)
+        {
+            var owner = OwnerColor(ownerIndex);
+            var hot = new Color(1f, 0.12f, 0.05f, 1f);
+            return Color.Lerp(owner, hot, Mathf.Clamp01(load) * 0.65f);
         }
     }
 }

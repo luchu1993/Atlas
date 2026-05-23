@@ -34,6 +34,7 @@ struct CreateBase;
 struct CreateBaseFromDB;
 struct AcceptClient;
 struct CellEntityCreated;
+struct CellEntityCreateFailed;
 struct CellEntityDestroyed;
 struct CurrentCell;
 struct CellRpcForward;
@@ -147,10 +148,11 @@ class BaseApp : public EntityApp {
   void OnCreateBaseFromDb(Channel& ch, const baseapp::CreateBaseFromDB& msg);
   void OnAcceptClient(Channel& ch, const baseapp::AcceptClient& msg);
   void OnCellEntityCreated(Channel& ch, const baseapp::CellEntityCreated& msg);
+  void OnCellEntityCreateFailed(const baseapp::CellEntityCreateFailed& msg);
   void OnCellEntityDestroyed(Channel& ch, const baseapp::CellEntityDestroyed& msg);
   void OnCurrentCell(Channel& ch, const baseapp::CurrentCell& msg);
-  // Re-ships every locally-tracked Real on the dead addr to its new host,
-  // seeded with last cached cell_backup_data.
+  // Re-ships locally-tracked Reals on the dead addr to the rehome leaf,
+  // seeded with the last cached cell backup and pose.
   void OnCellAppDeath(const baseapp::CellAppDeath& msg);
   void OnSpaceBspGeometry(const baseapp::SpaceBspGeometry& msg);
   void OnCellRpcForward(Channel& ch, const baseapp::CellRpcForward& msg);
@@ -397,6 +399,15 @@ class BaseApp : public EntityApp {
   uint64_t client_rpc_dropped_unknown_total_{0};
   uint64_t client_rpc_dropped_unauthorized_total_{0};
   uint64_t client_rpc_dropped_rate_total_{0};
+  uint64_t cellapp_death_notifications_total_{0};
+  uint64_t cellapp_death_restored_total_{0};
+  uint64_t cellapp_death_lost_total_{0};
+  uint64_t cellapp_death_restore_timeouts_total_{0};
+  struct PendingCellAppDeathRestore {
+    TimePoint started_at{};
+    Address target_addr;
+  };
+  std::unordered_map<EntityID, PendingCellAppDeathRestore> pending_cellapp_death_restores_;
 
   LatencyHistogram prepare_login_latency_;
   LatencyHistogram authenticate_latency_;
@@ -407,6 +418,7 @@ class BaseApp : public EntityApp {
   static constexpr Duration kPendingTimeout = std::chrono::seconds(8);
   static constexpr Duration kCanceledCheckoutRetention = std::chrono::seconds(10);
   static constexpr Duration kPreparedLoginTimeout = std::chrono::seconds(10);
+  static constexpr Duration kCellAppDeathRestoreTimeout = std::chrono::seconds(5);
   // One shortline reconnect window - longer adds stale-proxy pressure with
   // no fast-path benefit.
   static constexpr Duration kDetachedProxyGrace = std::chrono::milliseconds(1500);
@@ -476,6 +488,7 @@ class BaseApp : public EntityApp {
   void QueuePendingLoginAwaitingDestroy(const std::string& username, PendingLogin pending);
   void OnUsernameDestroyComplete(const std::string& username);
   void SweepStaleDestroysInFlight();
+  void SweepCellAppDeathRestoreTimeouts();
   // Returns true when one token is consumed; false when the bucket is empty
   // and the call should be dropped at the message boundary.
   bool ConsumeRpcRateToken(const Address& client_addr);

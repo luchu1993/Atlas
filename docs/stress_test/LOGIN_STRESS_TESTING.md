@@ -1,6 +1,6 @@
 # Atlas 登录链路压测说明
 
-> 更新时间: 2026-04-12
+> 更新时间: 2026-05-23
 > 适用范围: LoginApp / BaseApp / BaseAppMgr / DBApp 的端到端登录压测与极端短线重登压测
 
 ---
@@ -34,7 +34,7 @@
 
 ### 2.2 压测客户端
 
-- `src/tools/login_stress/main.cpp`
+- `src/tools/login_stress/main.cc`
 
 作用:
 
@@ -85,7 +85,7 @@
 - 先看成功率和基本延迟
 
 ```powershell
-tools\bin\run_login_stress.bat `
+python tools\cluster_control\run_login_stress.py `
   --build-dir build/debug-windows `
   --config Debug `
   --clients 200 `
@@ -112,7 +112,7 @@ tools\bin\run_login_stress.bat `
 - 观察单进程内状态机是否能收敛
 
 ```powershell
-tools\bin\run_login_stress.bat `
+python tools\cluster_control\run_login_stress.py `
   --build-dir build/debug-windows `
   --config Debug `
   --clients 800 `
@@ -141,7 +141,7 @@ tools\bin\run_login_stress.bat `
 - 当前是最高优先级问题场景
 
 ```powershell
-tools\bin\run_login_stress.bat `
+python tools\cluster_control\run_login_stress.py `
   --build-dir build/debug-windows `
   --config Debug `
   --clients 3200 `

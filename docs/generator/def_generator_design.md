@@ -212,7 +212,7 @@ public partial class Avatar : ClientEntity
 |---|---|
 | `EntityFactory.g.cs` | `[ModuleInitializer]` 注册 typeId → factory（服务端 `EntityFactory.Register`；客户端 `Atlas.Client.ClientEntityFactory.Register`） |
 | `RpcIds.g.cs` | RPC id 常量；rpc_id 编码：方向(2 bit) + typeIndex(8 bit) + slotIdx(8 bit) + methodIdx(剩余) |
-| `DefRpcDispatcher.g.cs` | switch dispatch；客户端在 `[ModuleInitializer]` 注入 `Atlas.Client.ClientCallbacks.ClientRpcDispatcher` |
+| `DefRpcDispatcher.g.cs` | switch dispatch；客户端在 `[ModuleInitializer]` 调 `RegisterInto(Atlas.Client.ClientCallbacks.DefaultSession)`，host 可对自有 `ClientSession` 再调用 `RegisterInto(session)` |
 | `DefStructRegistry.g.cs` | 把每个 struct 注册到 native 之前的 entity types |
 | `DefEntityTypeRegistry.g.cs` | 串成 ATDF 二进制 buffer，`[ModuleInitializer]` 时刻交给 `Atlas.Runtime` / `Atlas.Client` 的 bridge 喂给 C++ `EntityDefRegistry::RegisterFromBinaryBuffer` |
 | `{Component}.Component.g.cs` | 每个 synced 组件类型一份；服务端 `ReplicatedComponent` 派生，客户端 `ClientReplicatedComponent` 派生 |

@@ -349,7 +349,7 @@ void Witness::UpdatePriority(EntityCache& cache) const {
   cache.priority = ComputePriority(owner_.Position(), cache.entity->Position());
 }
 
-auto Witness::SendEntityEnter(EntityCache& cache) -> std::size_t {
+auto Witness::SendEntityEnter(EntityCache& cache) -> Witness::UpdateStats {
   ATLAS_PROFILE_ZONE_N("Witness::SendEntityEnter");
   // send_reliable_ may re-entrantly destroy the peer; pin a local
   // pointer so the post-send seq capture stays consistent.
@@ -373,25 +373,34 @@ auto Witness::SendEntityEnter(EntityCache& cache) -> std::size_t {
     cache.last_event_seq = pre_event_seq;
     cache.last_volatile_seq = pre_volatile_seq;
   }
-  return envelope.size();
+  return UpdateStats{.reliable_bytes = static_cast<uint64_t>(envelope.size())};
 }
 
-auto Witness::SendEntityLeave(EntityID peer_id) -> std::size_t {
+auto Witness::SendEntityLeave(EntityID peer_id) -> Witness::UpdateStats {
   ATLAS_PROFILE_ZONE_N("Witness::SendEntityLeave");
   auto envelope = MakeEnvelope<0>(CellAoIEnvelopeKind::kEntityLeave, peer_id, {});
   if (send_reliable_) send_reliable_(envelope);
-  return envelope.size();
+  return UpdateStats{.reliable_bytes = static_cast<uint64_t>(envelope.size())};
 }
 
-void Witness::Update(uint32_t max_packet_bytes) {
+auto Witness::Update(uint32_t max_packet_bytes) -> Witness::UpdateStats {
   ATLAS_PROFILE_ZONE_N("Witness::Update");
-  if (!trigger_) return;
+  last_update_stats_ = {};
+  if (!trigger_) return last_update_stats_;
 
   ++tick_count_;
 
   const LodConfig lod = LodConfig::Snapshot();
 
-  int bytes_sent = 0;
+  UpdateStats stats;
+  int64_t bytes_sent = 0;
+  auto bill = [&](const UpdateStats& delta) {
+    stats.reliable_bytes += delta.reliable_bytes;
+    stats.unreliable_bytes += delta.unreliable_bytes;
+    const auto room = std::numeric_limits<int64_t>::max() - bytes_sent;
+    bytes_sent +=
+        static_cast<int64_t>(std::min<uint64_t>(delta.TotalBytes(), static_cast<uint64_t>(room)));
+  };
   {
     ATLAS_PROFILE_ZONE_N("Witness::Update::Transitions");
     (void)bandwidth_deficit_;
@@ -452,9 +461,11 @@ void Witness::Update(uint32_t max_packet_bytes) {
         deferred.push_back(peer_id);
         continue;
       }
-      const std::size_t sent = SendEntityEnter(cache);
-      bytes_sent += static_cast<int>(sent);
-      enter_bytes += static_cast<uint32_t>(sent);
+      const auto sent = SendEntityEnter(cache);
+      bill(sent);
+      enter_bytes = static_cast<uint32_t>(std::min<uint64_t>(
+          std::numeric_limits<uint32_t>::max(),
+          static_cast<uint64_t>(enter_bytes) + sent.TotalBytes()));
       ++enter_count;
       cache.flags &= ~EntityCache::kEnterPending;
       // Far interval is the longest band; phase mod it covers every band.
@@ -468,7 +479,7 @@ void Witness::Update(uint32_t max_packet_bytes) {
       // Same id may appear twice (left -> re-entered -> left); after the
       // first Leave the cache is erased so subsequent finds return end.
       if (!(it->second.flags & EntityCache::kGone)) continue;
-      bytes_sent += static_cast<int>(SendEntityLeave(it->first));
+      bill(SendEntityLeave(it->first));
       aoi_map_.erase(it);
     }
 
@@ -482,7 +493,7 @@ void Witness::Update(uint32_t max_packet_bytes) {
   // ones (BigWorld semantics).
   {
     ATLAS_PROFILE_ZONE_N("Witness::Update::PerBandPump");
-    const int tick_budget = static_cast<int>(max_packet_bytes) - bandwidth_deficit_;
+    const int64_t tick_budget = static_cast<int64_t>(max_packet_bytes) - bandwidth_deficit_;
 
     const bool starvation_enabled = lod.starvation_threshold_ticks > 0;
     for (std::size_t band = 0; band < 3; ++band) {
@@ -523,7 +534,7 @@ void Witness::Update(uint32_t max_packet_bytes) {
         auto& cache = it->second;
         if (!cache.IsUpdatable()) continue;
 
-        bytes_sent += static_cast<int>(SendEntityUpdate(cache));
+        bill(SendEntityUpdate(cache));
         cache.last_serviced_tick = tick_count_;
         // lod_enter_phase offsets the first window only (set at AoI-enter,
         // cleared here) to stagger simultaneous entries.
@@ -533,7 +544,9 @@ void Witness::Update(uint32_t max_packet_bytes) {
     }
   }
 
-  bandwidth_deficit_ = std::max(0, bytes_sent - static_cast<int>(max_packet_bytes));
+  const int64_t deficit = std::max<int64_t>(0, bytes_sent - max_packet_bytes);
+  bandwidth_deficit_ =
+      static_cast<int>(std::min<int64_t>(deficit, std::numeric_limits<int>::max()));
 
   // Deficit > one tick's budget signals structural overload; rate-limit
   // so a sustained issue logs once per ~10 s instead of every tick.
@@ -548,14 +561,16 @@ void Witness::Update(uint32_t max_packet_bytes) {
   } else {
     deficit_warn_counter_ = 0;
   }
+  last_update_stats_ = stats;
+  return last_update_stats_;
 }
 
-auto Witness::SendEntityUpdate(EntityCache& cache) -> std::size_t {
+auto Witness::SendEntityUpdate(EntityCache& cache) -> Witness::UpdateStats {
   ATLAS_PROFILE_ZONE_N("Witness::SendEntityUpdate");
   const auto* state = cache.entity->GetReplicationState();
-  if (!state) return 0;
+  if (!state) return {};
 
-  std::size_t bytes = 0;
+  UpdateStats stats;
 
   if (state->latest_volatile_seq > cache.last_volatile_seq) {
     // EntityPositionUpdate built into a stack buffer (38 B). Wire:
@@ -592,15 +607,16 @@ auto Witness::SendEntityUpdate(EntityCache& cache) -> std::size_t {
       // leave send_unreliable_ unset.
       if (send_unreliable_) {
         send_unreliable_(envelope);
+        stats.unreliable_bytes += envelope.size();
       } else if (send_reliable_) {
         send_reliable_(envelope);
+        stats.reliable_bytes += envelope.size();
       }
     }
-    bytes += envelope.size();
     cache.last_volatile_seq = state->latest_volatile_seq;
   }
 
-  if (state->latest_event_seq <= cache.last_event_seq) return bytes;
+  if (state->latest_event_seq <= cache.last_event_seq) return stats;
 
   // history seqs are consecutive (PublishReplicationFrame pushes one
   // per call), so coverage = oldest frame's seq <= first_needed.
@@ -632,7 +648,7 @@ auto Witness::SendEntityUpdate(EntityCache& cache) -> std::size_t {
           ATLAS_PROFILE_ZONE_N("Witness::Event::Send");
           if (send_reliable_) send_reliable_(cached);
         }
-        bytes += cached.size();
+        stats.reliable_bytes += cached.size();
       }
       cache.last_event_seq = frame.event_seq;
     }
@@ -643,10 +659,10 @@ auto Witness::SendEntityUpdate(EntityCache& cache) -> std::size_t {
     auto envelope = BuildPropertyUpdateEnvelope(cache.entity->Id(), state->latest_event_seq,
                                                 state->other_snapshot);
     if (send_reliable_) send_reliable_(envelope);
-    bytes += envelope.size();
+    stats.reliable_bytes += envelope.size();
     cache.last_event_seq = state->latest_event_seq;
   }
-  return bytes;
+  return stats;
 }
 
 }  // namespace atlas

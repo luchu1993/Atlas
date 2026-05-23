@@ -223,6 +223,10 @@ void CellEntity::GhostApplySnapshot(uint64_t event_seq, std::span<const std::byt
   state.history.clear();
 }
 
+void CellEntity::SetGhostPersistentBlob(std::span<const std::byte> persistent_blob) {
+  ghost_persistent_blob_.assign(persistent_blob.begin(), persistent_blob.end());
+}
+
 void CellEntity::SetPosition(const math::Vector3& pos) {
   if (destroyed_) return;
   const math::Vector3 old = position_;

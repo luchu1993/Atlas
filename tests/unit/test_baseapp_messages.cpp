@@ -1,4 +1,6 @@
+#include <array>
 #include <optional>
+#include <span>
 #include <vector>
 
 #include <gtest/gtest.h>
@@ -67,6 +69,21 @@ TEST(BaseAppMessages, CellEntityCreated) {
   ASSERT_TRUE(rt.has_value());
   EXPECT_EQ(rt->entity_id, 100u);
   EXPECT_EQ(rt->cell_addr.Port(), 7002u);
+}
+
+TEST(BaseAppMessages, CellEntityCreateFailed) {
+  CellEntityCreateFailed msg;
+  msg.entity_id = 100;
+  msg.request_id = 77;
+  msg.reason = CellEntityCreateFailureReason::kGhostBackupMissing;
+
+  auto rt = round_trip(msg);
+  ASSERT_TRUE(rt.has_value());
+  EXPECT_EQ(rt->entity_id, 100u);
+  EXPECT_EQ(rt->request_id, 77u);
+  EXPECT_EQ(rt->reason, CellEntityCreateFailureReason::kGhostBackupMissing);
+  EXPECT_EQ(CellEntityCreateFailed::Descriptor().id,
+            static_cast<MessageID>(msg_id::Id(msg_id::BaseApp::kCellEntityCreateFailed)));
 }
 
 TEST(BaseAppMessages, CellEntityDestroyed) {
@@ -159,9 +176,8 @@ TEST(BaseAppMessages, ReplicatedReliableDeltaFromCell) {
   EXPECT_EQ(rt->delta[3], std::byte{0xEF});
 }
 
-// The reliable variant must declare Reliable delivery so the channel routes it
-// through the retransmitting path; the unreliable variant must declare the
-// opposite. Mixing these up would silently defeat the reliability split.
+// Reliable and unreliable delta descriptors must stay distinct so state
+// updates cannot silently route through the wrong transport path.
 TEST(BaseAppMessages, DeltaReliabilityDescriptors) {
   EXPECT_TRUE(ReplicatedDeltaFromCell::Descriptor().IsUnreliable());
   EXPECT_FALSE(ReplicatedReliableDeltaFromCell::Descriptor().IsUnreliable());
@@ -170,13 +186,16 @@ TEST(BaseAppMessages, DeltaReliabilityDescriptors) {
 }
 
 TEST(BaseAppMessages, BackupCellEntity) {
-  // Periodic cell→base opaque-bytes snapshot. The base stores the payload
-  // verbatim; this test confirms round-trip byte fidelity so DB writes /
-  // reviver never see mutated blobs.
+  // Base stores backup payload bytes verbatim and uses pose only for
+  // crash restore placement.
   BackupCellEntity msg;
   msg.entity_id = 0xCAFEBABE;
   msg.cell_backup_data = {std::byte{0x01}, std::byte{0x23}, std::byte{0x45}, std::byte{0x67},
                           std::byte{0x89}};
+  msg.has_pose = true;
+  msg.position = {12.f, 3.f, -4.f};
+  msg.direction = {0.f, 0.f, 1.f};
+  msg.on_ground = true;
 
   auto rt = round_trip(msg);
   ASSERT_TRUE(rt.has_value());
@@ -184,6 +203,11 @@ TEST(BaseAppMessages, BackupCellEntity) {
   ASSERT_EQ(rt->cell_backup_data.size(), 5u);
   EXPECT_EQ(rt->cell_backup_data[0], std::byte{0x01});
   EXPECT_EQ(rt->cell_backup_data[4], std::byte{0x89});
+  EXPECT_TRUE(rt->has_pose);
+  EXPECT_FLOAT_EQ(rt->position.x, 12.f);
+  EXPECT_FLOAT_EQ(rt->position.z, -4.f);
+  EXPECT_FLOAT_EQ(rt->direction.z, 1.f);
+  EXPECT_TRUE(rt->on_ground);
 }
 
 TEST(BaseAppMessages, BackupCellEntityReliable) {
@@ -192,12 +216,27 @@ TEST(BaseAppMessages, BackupCellEntityReliable) {
   EXPECT_FALSE(BackupCellEntity::Descriptor().IsUnreliable());
 }
 
+TEST(BaseAppMessages, BackupCellEntityAcceptsLegacyBlobOnlyFrame) {
+  BinaryWriter w;
+  w.WritePackedInt(123u);
+  w.WritePackedInt(2u);
+  const std::array<std::byte, 2> bytes{std::byte{0xAA}, std::byte{0xBB}};
+  w.WriteBytes(std::span<const std::byte>(bytes));
+
+  auto buf = w.Detach();
+  BinaryReader r(buf);
+  auto result = BackupCellEntity::Deserialize(r);
+
+  ASSERT_TRUE(result.HasValue());
+  EXPECT_EQ(result->entity_id, 123u);
+  EXPECT_FALSE(result->has_pose);
+  ASSERT_EQ(result->cell_backup_data.size(), 2u);
+  EXPECT_EQ(result->cell_backup_data[1], std::byte{0xBB});
+}
+
 TEST(BaseAppMessages, ReplicatedBaselineFromCell) {
-  // L4 cell→base relay: opaque owner-snapshot blob whose bytes get
-  // forwarded verbatim into a 0xF002 ReplicatedBaselineToClient. Round-
-  // trip confirms the payload survives Serialize / Deserialize without
-  // mutation — a single flipped byte would mis-deserialize on the client
-  // and recover _hp to the wrong value.
+  // Opaque owner snapshot bytes are forwarded verbatim into
+  // ReplicatedBaselineToClient.
   ReplicatedBaselineFromCell msg;
   msg.entity_id = 42;
   msg.snapshot = {std::byte{0xAA}, std::byte{0xBB}, std::byte{0xCC}, std::byte{0xDD}};
@@ -211,9 +250,8 @@ TEST(BaseAppMessages, ReplicatedBaselineFromCell) {
 }
 
 TEST(BaseAppMessages, ReplicatedBaselineFromCellReliable) {
-  // Baselines recover state that's already been missed by the unreliable
-  // channel — the one job a dropped baseline *cannot* have is being
-  // silent. Must ride the reliable channel.
+  // Baselines recover state missed by the unreliable channel and must
+  // ride reliable transport.
   EXPECT_FALSE(ReplicatedBaselineFromCell::Descriptor().IsUnreliable());
 }
 
@@ -222,6 +260,21 @@ TEST(BaseAppMessages, CellAppDeathRejectsTooManyRehomes) {
   w.Write<uint32_t>(0x7F000001u);
   w.Write<uint16_t>(30001);
   w.WritePackedInt(kMaxCellAppDeathRehomes + 1);
+
+  auto buf = w.Detach();
+  BinaryReader r(buf);
+  auto result = CellAppDeath::Deserialize(r);
+
+  ASSERT_FALSE(result.HasValue());
+  EXPECT_EQ(result.Error().Code(), ErrorCode::kInvalidArgument);
+}
+
+TEST(BaseAppMessages, CellAppDeathRejectsTooManyRehomeCells) {
+  BinaryWriter w;
+  w.Write<uint32_t>(0x7F000001u);
+  w.Write<uint16_t>(30001);
+  w.WritePackedInt(0);
+  w.WritePackedInt(kMaxCellAppDeathRehomeCells + 1);
 
   auto buf = w.Detach();
   BinaryReader r(buf);
@@ -351,9 +404,8 @@ TEST(BaseAppMessages, PackedIntBoundaries) {
   }
 }
 
-// CellAppDeath carries a variable rehome list (one entry per Space that
-// had at least one leaf on the dead CellApp). Exercises empty, single, and
-// multi-entry cases to lock in the wire format.
+// CellAppDeath carries per-space fallback hosts plus optional leaf bounds
+// for position-based restore target selection.
 TEST(BaseAppMessages, CellAppDeathRoundTrip_EmptyRehomes) {
   CellAppDeath msg;
   msg.dead_addr = Address(0x7F000001u, 30001);
@@ -379,4 +431,48 @@ TEST(BaseAppMessages, CellAppDeathRoundTrip_MultipleRehomes) {
   EXPECT_EQ(rt->rehomes[0].second.Port(), 40001u);
   EXPECT_EQ(rt->rehomes[2].first, SpaceID{999});
   EXPECT_EQ(rt->rehomes[2].second.Ip(), 0x0A000004u);
+}
+
+TEST(BaseAppMessages, CellAppDeathRoundTrip_RehomeCells) {
+  CellAppDeath msg;
+  msg.dead_addr = Address(0x0A000001u, 40000);
+  msg.rehomes.emplace_back(SpaceID{7}, Address(0x0A000002u, 40001));
+  msg.rehome_cells.push_back(
+      {SpaceID{7}, 1u, Address(0x0A000002u, 40001), CellBounds{-100.f, -50.f, 0.f, 50.f}});
+  msg.rehome_cells.push_back(
+      {SpaceID{7}, 2u, Address(0x0A000003u, 40002), CellBounds{0.f, -50.f, 100.f, 50.f}});
+
+  auto rt = round_trip(msg);
+  ASSERT_TRUE(rt.has_value());
+  ASSERT_EQ(rt->rehome_cells.size(), 2u);
+  EXPECT_EQ(rt->rehome_cells[0].cell_id, 1u);
+  EXPECT_EQ(rt->rehome_cells[1].host_addr.Port(), 40002u);
+  EXPECT_FLOAT_EQ(rt->rehome_cells[1].bounds.min_x, 0.f);
+
+  const auto* left = FindRehomeCellForPosition(*rt, SpaceID{7}, {-10.f, 0.f, 0.f});
+  ASSERT_NE(left, nullptr);
+  EXPECT_EQ(left->host_addr.Port(), 40001u);
+
+  const auto* right = FindRehomeCellForPosition(*rt, SpaceID{7}, {10.f, 0.f, 0.f});
+  ASSERT_NE(right, nullptr);
+  EXPECT_EQ(right->host_addr.Port(), 40002u);
+
+  EXPECT_EQ(FindRehomeCellForPosition(*rt, SpaceID{8}, {10.f, 0.f, 0.f}), nullptr);
+}
+
+TEST(BaseAppMessages, SpaceBspGeometryRoundTrip_IncludesLoadAndEntityCount) {
+  SpaceBspGeometry msg;
+  msg.space_id = 42;
+  msg.leaves.push_back({7, 3, -10.f, -20.f, 30.f, 40.f, 0.625f, 123});
+
+  auto rt = round_trip(msg);
+  ASSERT_TRUE(rt.has_value());
+  EXPECT_EQ(rt->space_id, 42u);
+  ASSERT_EQ(rt->leaves.size(), 1u);
+  EXPECT_EQ(rt->leaves[0].cell_id, 7u);
+  EXPECT_EQ(rt->leaves[0].owner_index, 3u);
+  EXPECT_FLOAT_EQ(rt->leaves[0].min_x, -10.f);
+  EXPECT_FLOAT_EQ(rt->leaves[0].max_z, 40.f);
+  EXPECT_FLOAT_EQ(rt->leaves[0].load, 0.625f);
+  EXPECT_EQ(rt->leaves[0].entity_count, 123u);
 }

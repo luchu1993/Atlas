@@ -6,6 +6,8 @@
 #include <string>
 #include <vector>
 
+#include "cellapp/cell_bounds.h"
+#include "math/vector3.h"
 #include "network/address.h"
 #include "network/message.h"
 #include "network/message_ids.h"
@@ -15,6 +17,7 @@ namespace atlas::baseapp {
 
 inline constexpr uint32_t kMaxBroadcastRpcDestinations = 64 * 1024;
 inline constexpr uint32_t kMaxCellAppDeathRehomes = 64 * 1024;
+inline constexpr uint32_t kMaxCellAppDeathRehomeCells = 64 * 1024;
 
 struct CreateBase {
   uint16_t type_id{0};
@@ -149,6 +152,52 @@ struct CellEntityCreated {
   }
 };
 static_assert(NetworkMessage<CellEntityCreated>);
+
+enum class CellEntityCreateFailureReason : uint8_t {
+  kRejected = 0,
+  kInvalidSpace = 1,
+  kInvalidEntity = 2,
+  kExistingMismatch = 3,
+  kGhostRequiredMissing = 4,
+  kGhostBackupMissing = 5,
+};
+
+struct CellEntityCreateFailed {
+  EntityID entity_id{kInvalidEntityID};
+  uint32_t request_id{0};
+  CellEntityCreateFailureReason reason{CellEntityCreateFailureReason::kRejected};
+
+  static auto Descriptor() -> const MessageDesc& {
+    static const MessageDesc kDesc{
+        msg_id::Id(msg_id::BaseApp::kCellEntityCreateFailed),
+        "baseapp::CellEntityCreateFailed",
+        MessageLengthStyle::kFixed,
+        static_cast<int>(sizeof(uint32_t) + sizeof(uint32_t) + sizeof(uint8_t)),
+        MessageReliability::kReliable,
+        MessageUrgency::kImmediate};
+    return kDesc;
+  }
+
+  void Serialize(BinaryWriter& w) const {
+    w.Write(entity_id);
+    w.Write(request_id);
+    w.Write(static_cast<uint8_t>(reason));
+  }
+
+  static auto Deserialize(BinaryReader& r) -> Result<CellEntityCreateFailed> {
+    auto eid = r.Read<uint32_t>();
+    auto rid = r.Read<uint32_t>();
+    auto rsn = r.Read<uint8_t>();
+    if (!eid || !rid || !rsn)
+      return Error{ErrorCode::kInvalidArgument, "CellEntityCreateFailed: truncated"};
+    CellEntityCreateFailed msg;
+    msg.entity_id = *eid;
+    msg.request_id = *rid;
+    msg.reason = static_cast<CellEntityCreateFailureReason>(*rsn);
+    return msg;
+  }
+};
+static_assert(NetworkMessage<CellEntityCreateFailed>);
 
 struct CellEntityDestroyed {
   EntityID entity_id{kInvalidEntityID};
@@ -442,11 +491,15 @@ struct ReplicatedReliableDeltaFromCellSpan {
 };
 static_assert(NetworkMessage<ReplicatedReliableDeltaFromCellSpan>);
 
-// Periodic cell-to-base state backup (ID 2018); opaque CELL_DATA bytes.
-// BaseApp stores verbatim for DB writes / Reviver / Offload bootstrap.
+// Periodic cell-to-base state backup (ID 2018); opaque CELL_DATA plus the
+// last authoritative pose used for crash restore placement.
 struct BackupCellEntity {
   EntityID entity_id{kInvalidEntityID};
   std::vector<std::byte> cell_backup_data;
+  bool has_pose{false};
+  math::Vector3 position{0.f, 0.f, 0.f};
+  math::Vector3 direction{1.f, 0.f, 0.f};
+  bool on_ground{false};
 
   static auto Descriptor() -> const MessageDesc& {
     static const MessageDesc kDesc{msg_id::Id(msg_id::BaseApp::kBackupCellEntity),
@@ -462,6 +515,14 @@ struct BackupCellEntity {
     w.WritePackedInt(entity_id);
     w.WritePackedInt(static_cast<uint32_t>(cell_backup_data.size()));
     w.WriteBytes(cell_backup_data);
+    w.Write<uint8_t>(has_pose ? 1u : 0u);
+    w.Write(position.x);
+    w.Write(position.y);
+    w.Write(position.z);
+    w.Write(direction.x);
+    w.Write(direction.y);
+    w.Write(direction.z);
+    w.Write<uint8_t>(on_ground ? 1u : 0u);
   }
 
   static auto Deserialize(BinaryReader& r) -> Result<BackupCellEntity> {
@@ -473,6 +534,22 @@ struct BackupCellEntity {
     BackupCellEntity msg;
     msg.entity_id = *eid;
     msg.cell_backup_data.assign(span->begin(), span->end());
+    if (r.Remaining() == 0) return msg;
+    auto hp = r.Read<uint8_t>();
+    auto px = r.Read<float>();
+    auto py = r.Read<float>();
+    auto pz = r.Read<float>();
+    auto dx = r.Read<float>();
+    auto dy = r.Read<float>();
+    auto dz = r.Read<float>();
+    auto og = r.Read<uint8_t>();
+    if (!hp || !px || !py || !pz || !dx || !dy || !dz || !og) {
+      return Error{ErrorCode::kInvalidArgument, "BackupCellEntity: pose truncated"};
+    }
+    msg.has_pose = *hp != 0;
+    msg.position = {*px, *py, *pz};
+    msg.direction = {*dx, *dy, *dz};
+    msg.on_ground = *og != 0;
     return msg;
   }
 };
@@ -769,11 +846,19 @@ struct ClientCellRpc {
 };
 static_assert(NetworkMessage<ClientCellRpc>);
 
-// map. BaseApps re-issue affected entities via CreateCellEntity with
-// script_init_data = cached cell_backup_data.
+// CellAppMgr death notice with per-space fallback hosts plus current leaf
+// bounds. BaseApp uses the bounds for exact restore host selection.
 struct CellAppDeath {
+  struct RehomeCell {
+    SpaceID space_id{kInvalidSpaceID};
+    uint32_t cell_id{0};
+    Address host_addr;
+    CellBounds bounds;
+  };
+
   Address dead_addr;
   std::vector<std::pair<SpaceID, Address>> rehomes;
+  std::vector<RehomeCell> rehome_cells;
 
   static auto Descriptor() -> const MessageDesc& {
     static const MessageDesc kDesc{msg_id::Id(msg_id::BaseApp::kCellAppDeath),
@@ -793,6 +878,14 @@ struct CellAppDeath {
       w.Write(sid);
       w.Write(addr.Ip());
       w.Write(addr.Port());
+    }
+    w.WritePackedInt(static_cast<uint32_t>(rehome_cells.size()));
+    for (const auto& cell : rehome_cells) {
+      w.Write(cell.space_id);
+      w.Write(cell.cell_id);
+      w.Write(cell.host_addr.Ip());
+      w.Write(cell.host_addr.Port());
+      cell.bounds.Serialize(w);
     }
   }
 
@@ -816,10 +909,39 @@ struct CellAppDeath {
         return Error{ErrorCode::kInvalidArgument, "CellAppDeath: rehome entry truncated"};
       msg.rehomes.emplace_back(*sid, Address(*hip, *hport));
     }
+    if (r.Remaining() == 0) return msg;
+    auto cell_count = r.ReadPackedInt();
+    if (!cell_count) {
+      return Error{ErrorCode::kInvalidArgument, "CellAppDeath: truncated rehome cell count"};
+    }
+    if (*cell_count > kMaxCellAppDeathRehomeCells) {
+      return Error{ErrorCode::kInvalidArgument, "CellAppDeath: too many rehome cells"};
+    }
+    msg.rehome_cells.reserve(*cell_count);
+    for (uint32_t i = 0; i < *cell_count; ++i) {
+      auto sid = r.Read<uint32_t>();
+      auto cid = r.Read<uint32_t>();
+      auto hip = r.Read<uint32_t>();
+      auto hport = r.Read<uint16_t>();
+      auto bounds = CellBounds::Deserialize(r);
+      if (!sid || !cid || !hip || !hport || !bounds) {
+        return Error{ErrorCode::kInvalidArgument, "CellAppDeath: rehome cell truncated"};
+      }
+      msg.rehome_cells.push_back({*sid, *cid, Address(*hip, *hport), *bounds});
+    }
     return msg;
   }
 };
 static_assert(NetworkMessage<CellAppDeath>);
+
+[[nodiscard]] inline auto FindRehomeCellForPosition(const CellAppDeath& msg, SpaceID space_id,
+                                                    const math::Vector3& position)
+    -> const CellAppDeath::RehomeCell* {
+  for (const auto& cell : msg.rehome_cells) {
+    if (cell.space_id == space_id && cell.bounds.Contains(position.x, position.z)) return &cell;
+  }
+  return nullptr;
+}
 
 // delta gap count since last report.
 struct ClientEventSeqReport {
@@ -997,6 +1119,8 @@ struct SpaceBspGeometry {
     float min_z{0.f};
     float max_x{0.f};
     float max_z{0.f};
+    float load{0.f};
+    uint32_t entity_count{0};
   };
   std::vector<LeafRect> leaves;
 
@@ -1020,6 +1144,8 @@ struct SpaceBspGeometry {
       w.Write(l.min_z);
       w.Write(l.max_x);
       w.Write(l.max_z);
+      w.Write(l.load);
+      w.Write(l.entity_count);
     }
   }
 
@@ -1037,9 +1163,11 @@ struct SpaceBspGeometry {
       auto z0 = r.Read<float>();
       auto x1 = r.Read<float>();
       auto z1 = r.Read<float>();
-      if (!cid || !oi || !x0 || !z0 || !x1 || !z1)
+      auto load = r.Read<float>();
+      auto entities = r.Read<uint32_t>();
+      if (!cid || !oi || !x0 || !z0 || !x1 || !z1 || !load || !entities)
         return Error{ErrorCode::kInvalidArgument, "SpaceBspGeometry: leaf entry truncated"};
-      msg.leaves.push_back({*cid, *oi, *x0, *z0, *x1, *z1});
+      msg.leaves.push_back({*cid, *oi, *x0, *z0, *x1, *z1, *load, *entities});
     }
     return msg;
   }

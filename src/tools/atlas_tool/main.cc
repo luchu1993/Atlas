@@ -13,10 +13,6 @@
 using namespace atlas;
 using namespace atlas::machined;
 
-// ============================================================================
-// Helpers
-// ============================================================================
-
 static void PrintUsage() {
   std::cerr << "Usage: atlas_tool [--machined <host:port>] <command> [args]\n"
             << "\n"
@@ -25,6 +21,8 @@ static void PrintUsage() {
             << "  watch <type[:name]> <path>\n"
             << "                         Query a watcher path on a target process\n"
             << "                         (no name = first instance of type)\n"
+            << "  set-watch <type[:name]> <path> <value>\n"
+            << "                         Set a read-write watcher path on a target process\n"
             << "  shutdown <type[:name]> [reason]\n"
             << "                         Forward a shutdown request via machined\n"
             << "                         (no name = all instances of type)\n"
@@ -33,6 +31,7 @@ static void PrintUsage() {
             << "  atlas_tool list\n"
             << "  atlas_tool list baseapp\n"
             << "  atlas_tool watch baseapp:baseapp-1 app/uptime_seconds\n"
+            << "  atlas_tool set-watch cellappmgr cellappmgr/lb/retire/app_id 2\n"
             << "  atlas_tool watch cellapp tick/duration_ms\n"
             << "  atlas_tool shutdown baseapp:baseapp-1\n"
             << "  atlas_tool shutdown cellapp 1\n";
@@ -49,7 +48,6 @@ struct TargetSpec {
   std::string name;
 };
 
-// Parses "type" or "type:name".
 static auto ParseTargetSpec(std::string_view spec) -> std::optional<TargetSpec> {
   auto colon = spec.find(':');
   std::string_view type_str = (colon == std::string_view::npos) ? spec : spec.substr(0, colon);
@@ -70,18 +68,12 @@ static void DrainUntil(EventDispatcher& disp, Pred pred,
   }
 }
 
-// ============================================================================
-// Commands
-// ============================================================================
-
 static auto CmdList(MachinedClient& client, std::optional<ProcessType> type_filter) -> int {
-  // Query all types if no filter; otherwise query the specified type
   std::vector<ProcessInfo> all_processes;
 
   if (type_filter) {
     all_processes = client.QuerySync(*type_filter);
   } else {
-    // Query each process type
     constexpr ProcessType kTypes[] = {
         ProcessType::kLoginApp, ProcessType::kBaseApp,    ProcessType::kBaseAppMgr,
         ProcessType::kCellApp,  ProcessType::kCellAppMgr, ProcessType::kDbApp,
@@ -139,6 +131,37 @@ static auto CmdWatch(EventDispatcher& dispatcher, MachinedClient& client, const 
   return 0;
 }
 
+static auto CmdSetWatch(EventDispatcher& dispatcher, MachinedClient& client,
+                        const TargetSpec& target, std::string_view watcher_path,
+                        std::string_view watcher_value) -> int {
+  bool done = false;
+  bool found = false;
+  std::string source_name;
+  std::string value;
+  client.SetWatcher(target.type, target.name, watcher_path, watcher_value,
+                    [&](bool f, const std::string& src, const std::string& v) {
+                      found = f;
+                      source_name = src;
+                      value = v;
+                      done = true;
+                    });
+
+  DrainUntil(dispatcher, [&] { return done; });
+
+  if (!done) {
+    std::cerr << "set-watch: timeout waiting for response from machined\n";
+    return 1;
+  }
+  if (!found) {
+    std::cerr << std::format("set-watch: failed (target={}, path={}, value={})\n",
+                             source_name.empty() ? std::string(target.name) : source_name,
+                             watcher_path, watcher_value);
+    return 1;
+  }
+  std::cout << std::format("{:<24} {}\n", source_name, value);
+  return 0;
+}
+
 static auto CmdShutdown(EventDispatcher& dispatcher, MachinedClient& client,
                         const TargetSpec& target, uint8_t reason) -> int {
   client.RequestShutdownTarget(target.type, target.name, reason);
@@ -155,21 +178,14 @@ static auto CmdShutdown(EventDispatcher& dispatcher, MachinedClient& client,
   return 0;
 }
 
-// ============================================================================
-// main
-// ============================================================================
-
 int main(int argc, char* argv[]) {
-  // Defaults
   Address machined_addr("127.0.0.1", 20018);
 
   int arg_idx = 1;
 
-  // Parse --machined option
   while (arg_idx < argc) {
     std::string_view arg(argv[arg_idx]);
     if (arg == "--machined" && arg_idx + 1 < argc) {
-      // Parse "host:port" format
       std::string_view spec(argv[arg_idx + 1]);
       auto colon = spec.rfind(':');
       if (colon == std::string_view::npos) {
@@ -193,12 +209,9 @@ int main(int argc, char* argv[]) {
 
   std::string_view command(argv[arg_idx++]);
 
-  // Setup minimal event loop
   EventDispatcher dispatcher;
   NetworkInterface network(dispatcher);
 
-  // We need a minimal ServerConfig just to satisfy MachinedClient::send_register
-  // (atlas_tool doesn't register itself, so we only connect)
   MachinedClient client(dispatcher, network);
 
   if (!client.Connect(machined_addr)) {
@@ -206,7 +219,6 @@ int main(int argc, char* argv[]) {
     return 1;
   }
 
-  // Run the event loop briefly so the connection completes
   dispatcher.ProcessOnce();
 
   if (command == "list") {
@@ -231,6 +243,18 @@ int main(int argc, char* argv[]) {
       return 1;
     }
     return CmdWatch(dispatcher, client, *target, argv[arg_idx + 1]);
+  } else if (command == "set-watch") {
+    if (arg_idx + 2 >= argc) {
+      std::cerr << "set-watch requires <type[:name]> <path> <value>\n";
+      PrintUsage();
+      return 1;
+    }
+    auto target = ParseTargetSpec(argv[arg_idx]);
+    if (!target) {
+      std::cerr << "set-watch: bad target spec: " << argv[arg_idx] << "\n";
+      return 1;
+    }
+    return CmdSetWatch(dispatcher, client, *target, argv[arg_idx + 1], argv[arg_idx + 2]);
   } else if (command == "shutdown") {
     if (arg_idx >= argc) {
       std::cerr << "shutdown requires <type[:name]>\n";

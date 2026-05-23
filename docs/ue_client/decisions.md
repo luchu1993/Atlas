@@ -52,7 +52,8 @@ Entity 拥有 View,View 持有 Actor 弱引用。Actor 是 Entity 的渲染句�
 
 ## D10 — 战斗代码共享
 
-**本期不实现**(UE 端只插值不预测)。M3 完成后视实测决策路径 A 或 B+下沉。详见 [open_questions.md](open_questions.md)。
+**本期不实现**(UE 端只插值不预测)。等当前 UE MVP 表现层缺口收敛后,
+再按实测手感决策路径 A 或 B+下沉。详见 [open_questions.md](open_questions.md)。
 
 ## D11 — Port parity 约束
 

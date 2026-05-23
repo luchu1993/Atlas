@@ -76,10 +76,16 @@ class Witness {
 
   void ForceOuterInsidePeer(class RangeListNode& peer);
 
-  // max_packet_bytes bounds the envelope payload emitted this tick;
-  // overshoot accumulates as bandwidth_deficit_ and shrinks next
-  // tick's budget.
-  void Update(uint32_t max_packet_bytes);
+  struct UpdateStats {
+    uint64_t reliable_bytes{0};
+    uint64_t unreliable_bytes{0};
+    [[nodiscard]] auto TotalBytes() const -> uint64_t {
+      return reliable_bytes + unreliable_bytes;
+    }
+  };
+
+  // max_packet_bytes bounds this tick; overshoot shrinks the next tick's budget.
+  auto Update(uint32_t max_packet_bytes) -> UpdateStats;
 
   // O(1) demand estimate for the cellapp's fair-share budget allocator.
   // Enter bursts aren't separately accounted for - they show up next
@@ -128,6 +134,7 @@ class Witness {
     return aoi_map_;
   }
   void TestOnlySendEntityUpdate(EntityCache& cache) { (void)SendEntityUpdate(cache); }
+  [[nodiscard]] auto LastUpdateStats() const -> UpdateStats { return last_update_stats_; }
 
   // Space-scoped envelope pushes. Routed through send_reliable_ — same
   // channel as kEntityEnter so client ordering with peer arrival is intact.
@@ -142,11 +149,10 @@ class Witness {
  private:
   void UpdatePriority(EntityCache& cache) const;
 
-  // Each Send* returns bytes actually dispatched so the tick-loop's
-  // bandwidth accountant can bill precisely.
-  auto SendEntityEnter(EntityCache& cache) -> std::size_t;
-  auto SendEntityLeave(EntityID peer_id) -> std::size_t;
-  auto SendEntityUpdate(EntityCache& cache) -> std::size_t;
+  // Each Send* returns bytes actually dispatched so the tick-loop can bill precisely.
+  auto SendEntityEnter(EntityCache& cache) -> UpdateStats;
+  auto SendEntityLeave(EntityID peer_id) -> UpdateStats;
+  auto SendEntityUpdate(EntityCache& cache) -> UpdateStats;
 
   CellEntity& owner_;
   float aoi_radius_;
@@ -171,6 +177,7 @@ class Witness {
 
   // Bytes over budget last tick; deducted from next tick's budget.
   int bandwidth_deficit_{0};
+  UpdateStats last_update_stats_;
 
   // Rate-limit overload warnings: a sustained deficit logs once and
   // stays quiet rather than spamming every tick.

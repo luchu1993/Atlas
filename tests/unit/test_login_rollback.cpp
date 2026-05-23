@@ -8,6 +8,7 @@
 #include "db/idatabase.h"
 #include "dbapp/dbapp.h"
 #include "loginapp/loginapp.h"
+#include "test_null_channel.h"
 
 namespace atlas {
 
@@ -118,6 +119,44 @@ class BaseAppRollbackTest : public ::testing::Test {
     return app_.GetWatcherRegistry().Get(path);
   }
 
+  auto create_cell_bound_entity(SpaceID space_id, const Address& cell_addr) -> BaseEntity* {
+    app_.entity_mgr_.SetIdClient(&app_.id_client_);
+    app_.id_client_.AddIds(1000, 1100);
+    auto* ent = app_.entity_mgr_.Create(/*type_id=*/7, /*has_client=*/false);
+    if (ent == nullptr) return nullptr;
+    ent->SetSpaceId(space_id);
+    ent->SetCell(cell_addr);
+    ent->SetCellBackupData({std::byte{0x01}});
+    return ent;
+  }
+
+  auto death_notifications_total() const -> uint64_t {
+    return app_.cellapp_death_notifications_total_;
+  }
+  auto death_restored_total() const -> uint64_t { return app_.cellapp_death_restored_total_; }
+  auto death_lost_total() const -> uint64_t { return app_.cellapp_death_lost_total_; }
+  auto death_restore_timeouts_total() const -> uint64_t {
+    return app_.cellapp_death_restore_timeouts_total_;
+  }
+  auto pending_death_restore_count() const -> std::size_t {
+    return app_.pending_cellapp_death_restores_.size();
+  }
+  void seed_pending_death_restore(EntityID entity_id, TimePoint started_at = Clock::now()) {
+    app_.pending_cellapp_death_restores_[entity_id] =
+        BaseApp::PendingCellAppDeathRestore{started_at, Address(0x7F000001u, 30002)};
+  }
+  auto expired_death_restore_start() const -> TimePoint {
+    return Clock::now() - BaseApp::kCellAppDeathRestoreTimeout - std::chrono::seconds(1);
+  }
+  void on_cell_entity_created(const baseapp::CellEntityCreated& msg) {
+    app_.OnCellEntityCreated(*test_support::FakeChannel(0xCA11), msg);
+  }
+  void on_cell_entity_create_failed(const baseapp::CellEntityCreateFailed& msg) {
+    app_.OnCellEntityCreateFailed(msg);
+  }
+  void on_cellapp_death(const baseapp::CellAppDeath& death) { app_.OnCellAppDeath(death); }
+  void sweep_death_restore_timeouts() { app_.SweepCellAppDeathRestoreTimeouts(); }
+
   EventDispatcher dispatcher_;
   NetworkInterface internal_network_;
   NetworkInterface external_network_;
@@ -135,6 +174,85 @@ TEST_F(BaseAppRollbackTest, PreparedLoginTimeoutRollsBackPreparedState) {
   EXPECT_EQ(prepared_timeout_total(), 1u);
   EXPECT_EQ(watcher("baseapp/prepared_login_timeout_total").value_or(""), "1");
   EXPECT_EQ(watcher("baseapp/canceled_checkout_count").value_or(""), "0");
+}
+
+TEST_F(BaseAppRollbackTest, CellAppDeathLostMetricsExposeWatcherCounters) {
+  register_watchers();
+  const Address dead_addr(0x7F000001u, 30001);
+  auto* ent = create_cell_bound_entity(42, dead_addr);
+  ASSERT_NE(ent, nullptr);
+
+  baseapp::CellAppDeath death;
+  death.dead_addr = dead_addr;
+  on_cellapp_death(death);
+
+  EXPECT_FALSE(ent->HasCell());
+  EXPECT_EQ(death_notifications_total(), 1u);
+  EXPECT_EQ(death_lost_total(), 1u);
+  EXPECT_EQ(watcher("baseapp/cellapp_death_notifications_total").value_or(""), "1");
+  EXPECT_EQ(watcher("baseapp/cellapp_death_restored_total").value_or(""), "0");
+  EXPECT_EQ(watcher("baseapp/cellapp_death_lost_total").value_or(""), "1");
+}
+
+TEST_F(BaseAppRollbackTest, CellEntityCreatedCompletesPendingDeathRestore) {
+  register_watchers();
+  const Address dead_addr(0x7F000001u, 30001);
+  auto* ent = create_cell_bound_entity(42, dead_addr);
+  ASSERT_NE(ent, nullptr);
+  ent->ClearCell();
+  seed_pending_death_restore(ent->EntityId());
+
+  baseapp::CellEntityCreated created;
+  created.entity_id = ent->EntityId();
+  created.cell_addr = Address(0x7F000001u, 30002);
+  on_cell_entity_created(created);
+
+  EXPECT_TRUE(ent->HasCell());
+  EXPECT_EQ(death_restored_total(), 1u);
+  EXPECT_EQ(death_lost_total(), 0u);
+  EXPECT_EQ(pending_death_restore_count(), 0u);
+  EXPECT_EQ(watcher("baseapp/cellapp_death_restored_total").value_or(""), "1");
+}
+
+TEST_F(BaseAppRollbackTest, CellEntityCreateFailedCompletesPendingDeathRestoreAsLost) {
+  register_watchers();
+  const Address dead_addr(0x7F000001u, 30001);
+  auto* ent = create_cell_bound_entity(42, dead_addr);
+  ASSERT_NE(ent, nullptr);
+  ent->ClearCell();
+  seed_pending_death_restore(ent->EntityId());
+
+  baseapp::CellEntityCreateFailed failed;
+  failed.entity_id = ent->EntityId();
+  failed.request_id = ent->EntityId();
+  failed.reason = baseapp::CellEntityCreateFailureReason::kGhostRequiredMissing;
+  on_cell_entity_create_failed(failed);
+
+  EXPECT_FALSE(ent->HasCell());
+  EXPECT_EQ(death_restored_total(), 0u);
+  EXPECT_EQ(death_lost_total(), 1u);
+  EXPECT_EQ(pending_death_restore_count(), 0u);
+  EXPECT_EQ(watcher("baseapp/cellapp_death_lost_total").value_or(""), "1");
+}
+
+TEST_F(BaseAppRollbackTest, CellAppDeathRestoreTimeoutCompletesPendingAsLost) {
+  register_watchers();
+  const Address dead_addr(0x7F000001u, 30001);
+  auto* ent = create_cell_bound_entity(42, dead_addr);
+  ASSERT_NE(ent, nullptr);
+  ent->ClearCell();
+  seed_pending_death_restore(ent->EntityId(), expired_death_restore_start());
+
+  sweep_death_restore_timeouts();
+
+  EXPECT_FALSE(ent->HasCell());
+  EXPECT_EQ(death_restored_total(), 0u);
+  EXPECT_EQ(death_lost_total(), 1u);
+  EXPECT_EQ(death_restore_timeouts_total(), 1u);
+  EXPECT_EQ(pending_death_restore_count(), 0u);
+  EXPECT_EQ(watcher("baseapp/cellapp_death_lost_total").value_or(""), "1");
+  EXPECT_EQ(watcher("baseapp/cellapp_death_restore_timeouts_total").value_or(""), "1");
+  EXPECT_EQ(watcher("baseapp/cellapp_death_pending_restores").value_or(""), "0");
 }
 
 class FakeDatabase final : public IDatabase {

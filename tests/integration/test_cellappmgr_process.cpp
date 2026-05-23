@@ -1,17 +1,3 @@
-// Multi-process CellAppMgr harness.
-//
-// Boots the actual `atlas_machined.exe` + `atlas_cellappmgr.exe`
-// binaries via CreateProcessW (same pattern as test_login_flow.cpp),
-// then drives them with synthetic CellApp-like clients over real RUDP.
-// Exercises the real binaries — static init, argv parsing, machined
-// registration, ManagerApp ctor → Init → RunLoop — not just in-process
-// threads.
-//
-// Scope deliberately stops at cellappmgr. The full 2×atlas_cellapp
-// scenario requires a healthy CLR bring-up (Atlas.Runtime.dll loaded
-// via hostfxr); that layer is orthogonal here and is covered end-to-end
-// by test_login_flow.cpp.
-
 #include <algorithm>
 #include <atomic>
 #include <chrono>
@@ -81,10 +67,7 @@ auto ExecutablePath() -> std::filesystem::path {
 }
 
 auto BuildRoot() -> std::filesystem::path {
-  // Walk up from the test executable path looking for the CMake
-  // build root — identified by `src/server/machined/Debug/machined.exe`
-  // (guaranteed to exist when this test is running because it links
-  // against atlas_server which depends on that build output).
+  // The machined target output is a stable marker for the CMake build root.
   auto current = ExecutablePath().parent_path();
   for (int i = 0; i < 10 && !current.empty(); ++i) {
     if (std::filesystem::exists(current / "src" / "server" / "machined" / "Debug" /
@@ -100,10 +83,6 @@ auto ServerBinDir() -> std::filesystem::path {
   return BuildRoot() / "bin" / "Debug";
 }
 
-// Resolve a server exe by searching both the unified `bin/Debug` layout
-// (present when a deploy step copies binaries together) and the per-
-// target `build/<cfg>/src/server/<name>/Debug/` layout that CMake emits
-// by default. Returns an empty path if neither exists.
 auto ResolveServerExe(const std::wstring& subdir, const std::wstring& filename)
     -> std::filesystem::path {
   auto p1 = ServerBinDir() / filename;
@@ -123,8 +102,6 @@ auto QuoteArg(const std::wstring& arg) -> std::wstring {
   return quoted;
 }
 
-// Shared process harness — modelled on test_login_flow.cpp's ChildProcess
-// but trimmed to what this test needs.
 struct Child {
   PROCESS_INFORMATION pi{};
   std::string label;
@@ -137,9 +114,7 @@ struct Child {
       cmd += L' ';
       cmd += QuoteArg(a);
     }
-    // Unique log per-invocation: clashes between sibling test cases (same
-    // proc_label) were overwriting each other's output and masking the
-    // real failure reason.
+    // Include PID and tick count so sibling test cases never overwrite diagnostics.
     const auto log_stamp =
         std::to_string(::GetCurrentProcessId()) + "_" + std::to_string(::GetTickCount64());
     auto log_file = std::filesystem::temp_directory_path() /
@@ -187,8 +162,7 @@ struct Child {
         out += " exit=" + std::to_string(code);
       }
     }
-    // Tail the log file so we can see what the subprocess was complaining
-    // about when the test assertion fires.
+    // Tail logs into assertion output so subprocess startup failures stay visible.
     if (!log_path.empty() && std::filesystem::exists(log_path)) {
       std::ifstream f(log_path, std::ios::in);
       std::deque<std::string> ring;
@@ -233,8 +207,6 @@ struct Child {
   }
 };
 
-// Wait for machined to report that a process of `type` listening on
-// `advertised_port` has registered.
 auto WaitForRegistration(MachinedClient& client, EventDispatcher& disp, ProcessType type,
                          uint16_t advertised_port) -> bool {
   return PollUntil(disp, [&]() {
@@ -246,12 +218,58 @@ auto WaitForRegistration(MachinedClient& client, EventDispatcher& disp, ProcessT
   });
 }
 
-// Raw blocking TCP connect probe. Atlas's Socket defaults to
-// non-blocking + SO_REUSEADDR, both of which break "is this port
-// actually listening?" probes: non-blocking connect returns in-progress
-// without resolving, and SO_REUSEADDR lets bind succeed alongside an
-// active listener. We bypass Atlas entirely and use the Winsock API
-// directly for the probe.
+auto WaitForNamedRegistration(MachinedClient& client, EventDispatcher& disp, ProcessType type,
+                              const std::string& name,
+                              machined::ProcessInfo* out = nullptr) -> bool {
+  return PollUntil(disp, [&]() {
+    auto infos = client.QuerySync(type, std::chrono::milliseconds(200));
+    for (const auto& p : infos) {
+      if (p.name != name) continue;
+      if (out != nullptr) *out = p;
+      return true;
+    }
+    return false;
+  });
+}
+
+auto WaitForNamedRegistrationWithDifferentPid(MachinedClient& client, EventDispatcher& disp,
+                                              ProcessType type, const std::string& name,
+                                              uint32_t previous_pid,
+                                              machined::ProcessInfo* out) -> bool {
+  return PollUntil(disp, [&]() {
+    auto infos = client.QuerySync(type, std::chrono::milliseconds(200));
+    for (const auto& p : infos) {
+      if (p.name != name || p.pid == previous_pid) continue;
+      *out = p;
+      return true;
+    }
+    return false;
+  });
+}
+
+auto TerminatePid(uint32_t pid) -> bool {
+  HANDLE proc = ::OpenProcess(PROCESS_TERMINATE, FALSE, pid);
+  if (proc == nullptr) return false;
+  const BOOL ok = ::TerminateProcess(proc, 1);
+  ::CloseHandle(proc);
+  return ok != FALSE;
+}
+
+struct PidGuard {
+  uint32_t pid{0};
+
+  ~PidGuard() {
+    if (pid != 0) (void)TerminatePid(pid);
+  }
+
+  void Reset(uint32_t next_pid) {
+    if (pid != 0 && pid != next_pid) (void)TerminatePid(pid);
+    pid = next_pid;
+  }
+
+  void Forget() { pid = 0; }
+};
+
 auto TcpConnectProbe(uint16_t port) -> bool {
   SOCKET s = ::socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
   if (s == INVALID_SOCKET) return false;
@@ -259,8 +277,7 @@ auto TcpConnectProbe(uint16_t port) -> bool {
   sa.sin_family = AF_INET;
   sa.sin_port = htons(port);
   sa.sin_addr.s_addr = htonl(0x7F000001u);  // 127.0.0.1
-  // Short connect timeout: we poll repeatedly, so each attempt just
-  // needs to fail fast. 250 ms is generous for loopback.
+  // Keep each connect attempt short; PollUntil repeats the probe on loopback.
   DWORD send_timeout = 250;
   ::setsockopt(s, SOL_SOCKET, SO_SNDTIMEO, reinterpret_cast<const char*>(&send_timeout),
                sizeof(send_timeout));
@@ -278,24 +295,12 @@ auto WaitForTcpListen(uint16_t port, std::chrono::milliseconds timeout) -> bool 
   return false;
 }
 
-// UDP has no "is it listening" signal — a bare bind attempt on the same
-// port would succeed because Atlas sets SO_REUSEADDR (which on Windows
-// allows address hijacking). The best we can do without looking at OS
-// tables is a small fixed delay — empirically cellappmgr's RUDP server
-// is bound within ~100 ms of process launch, so 250 ms is a wide enough
-// safety margin.
 auto WaitForUdpBound(uint16_t /*port*/, std::chrono::milliseconds timeout) -> bool {
-  // Paren around std::min avoids collision with the Windows.h min macro.
+  // Atlas UDP sockets use SO_REUSEADDR, so a fixed wait is safer than bind probing.
   std::this_thread::sleep_for((std::min)(timeout, std::chrono::milliseconds(250)));
   return true;
 }
 
-// Launch machined with per-attempt port reroll. Windows can briefly
-// refuse to rebind a port that was held by a terminated process (prior
-// test run residue, ephemeral-range collision, TCP TIME_WAIT on a
-// listen socket). We probe with WaitForTcpListen; if the port never
-// starts serving within 2 s, drop the child (dtor terminates) and try
-// a fresh port up to kLaunchRetryCount times.
 constexpr int kLaunchRetryCount = 5;
 
 auto LaunchMachinedWithRetry(const std::filesystem::path& machined_exe,
@@ -314,13 +319,11 @@ auto LaunchMachinedWithRetry(const std::filesystem::path& machined_exe,
       *out_child = std::move(child);
       return true;
     }
-    // `child` falls out of scope → dtor terminates + cleans up.
+    // Destructor terminates and cleans up the child if the probe failed.
   }
   return false;
 }
 
-// Same rollover idea for cellappmgr. Verifies via WaitForUdpBound that
-// the child has taken its RUDP port before returning.
 auto LaunchCellAppMgrWithRetry(const std::filesystem::path& cellappmgr_exe,
                                const std::wstring& machined_addr, const std::wstring& name_suffix,
                                uint16_t* out_port, Child* out_child) -> bool {
@@ -339,6 +342,22 @@ auto LaunchCellAppMgrWithRetry(const std::filesystem::path& cellappmgr_exe,
     }
   }
   return false;
+}
+
+auto LaunchReviver(const std::filesystem::path& reviver_exe,
+                   const std::filesystem::path& cellappmgr_exe,
+                   const std::wstring& machined_addr, uint16_t cellappmgr_port,
+                   const std::filesystem::path& snapshot_path) -> Child {
+  return Child::Launch(
+      reviver_exe,
+      {L"--type", L"reviver", L"--name", L"reviver_process_test", L"--update-hertz", L"100",
+       L"--machined", machined_addr, L"--revive-cellappmgr-exe", cellappmgr_exe.wstring(),
+       L"--revive-cellappmgr-name", L"cellappmgr_revived", L"--revive-cellappmgr-port",
+       std::to_wstring(cellappmgr_port), L"--revive-cellappmgr-on-start", L"true",
+       L"--revive-cellappmgr-snapshot-path", snapshot_path.wstring(),
+       L"--revive-cellappmgr-update-hertz", L"100", L"--revive-restart-delay-ms", L"50",
+       L"--revive-max-restarts", L"3"},
+      "reviver");
 }
 
 #endif  // defined(_WIN32)
@@ -375,8 +394,40 @@ TEST(CellAppMgrProcess, MachinedAndCellAppMgrBootAndRegister) {
   ASSERT_TRUE(client.Connect(Address("127.0.0.1", machined_port)));
 
   ASSERT_TRUE(WaitForRegistration(client, disp, ProcessType::kCellAppMgr, cellappmgr_port))
-      << "atlas_cellappmgr.exe did not register with machined — " << machined.Diagnostic() << "\n"
+      << "atlas_cellappmgr.exe did not register with machined - " << machined.Diagnostic() << "\n"
       << cellappmgr.Diagnostic();
+
+  bool set_done = false;
+  bool set_found = false;
+  std::string set_value;
+  client.SetWatcher(ProcessType::kCellAppMgr, "", "cellappmgr/lb/retire/app_id", "0",
+                    [&](bool found, const std::string&, const std::string& value) {
+                      set_found = found;
+                      set_value = value;
+                      set_done = true;
+                    });
+  ASSERT_TRUE(PollUntil(disp, [&] { return set_done; }))
+      << "set-watch response not received from real cellappmgr binary - "
+      << machined.Diagnostic() << "\n"
+      << cellappmgr.Diagnostic();
+  EXPECT_TRUE(set_found);
+  EXPECT_EQ(set_value, "0");
+
+  bool query_done = false;
+  bool query_found = false;
+  std::string query_value;
+  client.QueryWatcher(ProcessType::kCellAppMgr, "", "cellappmgr/lb/retire/app_id",
+                      [&](bool found, const std::string&, const std::string& value) {
+                        query_found = found;
+                        query_value = value;
+                        query_done = true;
+                      });
+  ASSERT_TRUE(PollUntil(disp, [&] { return query_done; }))
+      << "watch response not received from real cellappmgr binary - "
+      << machined.Diagnostic() << "\n"
+      << cellappmgr.Diagnostic();
+  EXPECT_TRUE(query_found);
+  EXPECT_EQ(query_value, "0");
 #endif
 }
 
@@ -403,7 +454,6 @@ TEST(CellAppMgrProcess, SyntheticCellAppRegistersWithRealCellAppMgrBinary) {
       << "cellappmgr failed to start + bind UDP on any attempt\n"
       << machined.Diagnostic();
 
-  // Wait for cellappmgr to be reachable (registered + RUDP listening).
   EventDispatcher registry_disp{"registry_probe"};
   registry_disp.SetMaxPollWait(Milliseconds(1));
   NetworkInterface registry_net(registry_disp);
@@ -414,10 +464,7 @@ TEST(CellAppMgrProcess, SyntheticCellAppRegistersWithRealCellAppMgrBinary) {
       << machined.Diagnostic() << "\n"
       << cellappmgr.Diagnostic();
 
-  // Drive a synthetic CellApp-like register flow against the real
-  // cellappmgr process. Success demonstrates that argv parsing,
-  // ManagerApp::Init + RUDP server startup, handler registration, and
-  // ack path all work in a standalone process.
+  // The synthetic register flow verifies standalone CellAppMgr RUDP handler wiring.
   EventDispatcher disp{"synthetic_cellapp"};
   disp.SetMaxPollWait(Milliseconds(1));
   NetworkInterface net(disp);
@@ -437,9 +484,73 @@ TEST(CellAppMgrProcess, SyntheticCellAppRegistersWithRealCellAppMgrBinary) {
   ASSERT_TRUE((*ch)->SendMessage(reg).HasValue());
 
   ASSERT_TRUE(PollUntil(disp, [&] { return ack_received.load(std::memory_order_acquire); }))
-      << "RegisterCellAppAck not received from real cellappmgr binary — "
+      << "RegisterCellAppAck not received from real cellappmgr binary - "
       << cellappmgr.Diagnostic();
   EXPECT_TRUE(ack_copy.success);
   EXPECT_EQ(ack_copy.app_id, 1u);
+#endif
+}
+
+TEST(CellAppMgrProcess, ReviverColdStartsAndRestartsCellAppMgr) {
+#if !defined(_WIN32)
+  GTEST_SKIP() << "Windows-only process harness";
+#else
+  const auto machined_exe = ResolveServerExe(L"machined", L"machined.exe");
+  const auto cellappmgr_exe = ResolveServerExe(L"cellappmgr", L"atlas_cellappmgr.exe");
+  const auto reviver_exe = ResolveServerExe(L"reviver", L"atlas_reviver.exe");
+  if (machined_exe.empty() || cellappmgr_exe.empty() || reviver_exe.empty()) {
+    GTEST_SKIP() << "server binaries not found; build_root=" << BuildRoot();
+  }
+
+  uint16_t machined_port = 0;
+  Child machined;
+  ASSERT_TRUE(LaunchMachinedWithRetry(machined_exe, L"reviver", &machined_port, &machined))
+      << "machined failed to start + bind TCP on any attempt";
+
+  const std::wstring machined_addr = L"127.0.0.1:" + std::to_wstring(machined_port);
+  const uint16_t cellappmgr_port = ReserveUdpPort();
+  ASSERT_NE(cellappmgr_port, 0u);
+  const auto snapshot_stamp =
+      std::to_string(::GetCurrentProcessId()) + "_" + std::to_string(::GetTickCount64());
+  const auto snapshot_path = std::filesystem::temp_directory_path() /
+                             ("atlas_reviver_cellappmgr_snapshot_" + snapshot_stamp + ".bin");
+  std::error_code ec;
+  std::filesystem::remove(snapshot_path, ec);
+
+  PidGuard revived_mgr;
+  Child reviver = LaunchReviver(reviver_exe, cellappmgr_exe, machined_addr,
+                                cellappmgr_port, snapshot_path);
+  ASSERT_TRUE(reviver.IsRunning()) << reviver.Diagnostic();
+
+  EventDispatcher disp{"reviver_process_registry"};
+  disp.SetMaxPollWait(Milliseconds(1));
+  NetworkInterface net(disp);
+  MachinedClient client(disp, net);
+  ASSERT_TRUE(client.Connect(Address("127.0.0.1", machined_port)));
+
+  ASSERT_TRUE(WaitForNamedRegistration(client, disp, ProcessType::kReviver,
+                                       "reviver_process_test"))
+      << machined.Diagnostic() << "\n" << reviver.Diagnostic();
+
+  machined::ProcessInfo first_mgr;
+  ASSERT_TRUE(WaitForNamedRegistration(client, disp, ProcessType::kCellAppMgr,
+                                       "cellappmgr_revived", &first_mgr))
+      << machined.Diagnostic() << "\n" << reviver.Diagnostic();
+  EXPECT_EQ(first_mgr.internal_addr.Port(), cellappmgr_port);
+  ASSERT_NE(first_mgr.pid, 0u);
+  revived_mgr.Reset(first_mgr.pid);
+
+  ASSERT_TRUE(TerminatePid(first_mgr.pid));
+  revived_mgr.Forget();
+
+  machined::ProcessInfo second_mgr;
+  ASSERT_TRUE(WaitForNamedRegistrationWithDifferentPid(client, disp, ProcessType::kCellAppMgr,
+                                                       "cellappmgr_revived", first_mgr.pid,
+                                                       &second_mgr))
+      << machined.Diagnostic() << "\n" << reviver.Diagnostic();
+  revived_mgr.Reset(second_mgr.pid);
+  EXPECT_EQ(second_mgr.internal_addr.Port(), cellappmgr_port);
+
+  std::filesystem::remove(snapshot_path, ec);
 #endif
 }

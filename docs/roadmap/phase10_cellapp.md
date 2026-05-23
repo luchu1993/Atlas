@@ -161,7 +161,7 @@ enum class CellAoIEnvelopeKind : uint8_t {
 信封走 `ReplicatedReliableDeltaFromCell` (2017) → BaseApp 直达 client
 channel（不经 `DeltaForwarder`）→ `0xF003`；owner 基线走
 `ReplicatedBaselineFromCell` (2019) → `0xF002`。client `on_deliver` 按
-wire id 直接分派到 `ClientCallbacks.DeliverFromServer`。
+wire id 直接分派到 `ClientSession.DeliverFromServer`。
 
 ## Tick 内并发 / 重入约束
 
@@ -215,7 +215,7 @@ Phase 10 采取**不做复杂反作弊但保留安全上限**：
 | 位置源合法性 | BaseApp 只接受该 Proxy 持有实体的上行（`FindProxyByChannel()`） |
 | 单 tick 位移上限 | CellApp 在 `OnAvatarUpdate` 中按 `delta.length() > kMaxSingleTickMove` 拒绝并 WARN；`kMaxSingleTickMove = max_speed × dt × 2`，默认 50m/tick |
 | NaN/Inf | 反序列化后立即 `std::isfinite()` 三分量校验，失败 drop + WARN |
-| 权威性 | 客户端位置直接信任（除上限）；服务端权威移动 Phase 11+ |
+| 权威性 | 客户端位置直接信任（除上限）；服务端权威移动见 Phase 14 |
 | 频次限制 | Phase 10 不做；统一 rate limiter 走 machined 层（Phase 11+） |
 
 ## 待跟进 follow-up

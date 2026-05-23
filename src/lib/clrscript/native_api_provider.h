@@ -24,6 +24,7 @@ class INativeApiProvider {
   virtual float DeltaTime() = 0;    // last frame duration, seconds
 
   virtual uint8_t GetProcessPrefix() = 0;
+  virtual void ReportScriptTick(uint32_t /*entity_id*/, uint64_t /*elapsed_us*/) {}
 
   // Only CellAppNativeProvider supports kOthers / kAll; other hosts
   // log + no-op when target != kOwner.

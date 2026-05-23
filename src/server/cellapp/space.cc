@@ -37,9 +37,10 @@ auto Space::FindLocalCell(cellappmgr::CellID id) const -> const Cell* {
   return it == local_cells_.end() ? nullptr : it->second.get();
 }
 
-void Space::SetBspTree(BSPTree tree) {
+void Space::SetBspTree(BSPTree tree, uint64_t geometry_version) {
   bsp_tree_ = std::move(tree);
-  if (IsOwner()) data_initialized_ = true;
+  geometry_version_ = geometry_version;
+  if (IsOwner() && pending_space_data_source_addr_.Port() == 0) data_initialized_ = true;
 }
 
 auto Space::IsOwner() const -> bool {
@@ -47,6 +48,16 @@ auto Space::IsOwner() const -> bool {
   const auto primary = bsp_tree_->PrimaryCellId();
   if (primary == 0) return false;
   return local_cells_.count(primary) > 0;
+}
+
+void Space::MarkDataInitialized() {
+  data_initialized_ = true;
+  pending_space_data_source_addr_ = {};
+}
+
+void Space::BeginPrimaryHandoffSnapshot(Address source_addr) {
+  pending_space_data_source_addr_ = source_addr;
+  data_initialized_ = false;
 }
 
 auto Space::AddEntity(std::unique_ptr<CellEntity> entity) -> CellEntity* {

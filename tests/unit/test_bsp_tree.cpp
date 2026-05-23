@@ -32,6 +32,14 @@ auto MakeSingleCellTree(cellappmgr::CellID id, uint16_t port) -> BSPTree {
   return t;
 }
 
+auto MakeFiniteSingleCellTree(cellappmgr::CellID id, uint16_t port) -> BSPTree {
+  BSPTree t;
+  auto info = MakeLeafInfo(id, port);
+  info.bounds = CellBounds{-1000.f, -1000.f, 1000.f, 1000.f};
+  t.InitSingleCell(info);
+  return t;
+}
+
 }  // namespace
 
 // ─── Single leaf ──────────────────────────────────────────────────────────────
@@ -279,6 +287,24 @@ TEST(BSPTree, Balance_RightHeavierShiftsRight) {
   EXPECT_FLOAT_EQ(left->bounds.max_x, right->bounds.min_x);
 }
 
+TEST(BSPTree, Balance_BucketsMoveToEstimatedLoadBoundary) {
+  auto t = MakeFiniteSingleCellTree(1, 30001);
+  ASSERT_TRUE(t.Split(1, BSPAxis::kX, 0.f, MakeLeafInfo(2, 30002)).HasValue());
+
+  auto* left = t.FindCellByIdMutable(1);
+  auto* right = t.FindCellByIdMutable(2);
+  ASSERT_NE(left, nullptr);
+  ASSERT_NE(right, nullptr);
+  left->load = 0.8f;
+  right->load = 0.2f;
+  left->x_buckets = {10, 10, 10, 10, 10, 10, 10, 10};
+  right->x_buckets = {10, 10, 10, 10, 10, 10, 10, 10};
+
+  t.Balance(/*safety_bound=*/0.95f);
+  EXPECT_NEAR(t.FindCellById(2)->bounds.min_x, -375.f, 1e-5f);
+  EXPECT_FLOAT_EQ(t.FindCellById(1)->bounds.max_x, t.FindCellById(2)->bounds.min_x);
+}
+
 TEST(BSPTree, Balance_AggressionIncreasesOnRepeatedSameDirection) {
   auto t = MakeSingleCellTree(1, 30001);
   ASSERT_TRUE(t.Split(1, BSPAxis::kX, 0.f, MakeLeafInfo(2, 30002)).HasValue());
@@ -311,11 +337,30 @@ TEST(BSPTree, Balance_AggressionDecaysOnDirectionReversal) {
   ASSERT_NE(root, nullptr);
   const float agg_before_reversal = root->AggressionForTest();
 
-  // Now flip the imbalance so next Balance shifts toward Left.
+  // Now flip the imbalance so next Balance sees a reversal.
   t.FindCellByIdMutable(1)->load = 0.1f;
   t.FindCellByIdMutable(2)->load = 0.9f;
   t.Balance(0.95f);
   EXPECT_LT(root->AggressionForTest(), agg_before_reversal);
+}
+
+TEST(BSPTree, Balance_ReversalCooldownHoldsSplitLine) {
+  auto t = MakeSingleCellTree(1, 30001);
+  ASSERT_TRUE(t.Split(1, BSPAxis::kX, 0.f, MakeLeafInfo(2, 30002)).HasValue());
+
+  t.FindCellByIdMutable(1)->load = 0.9f;
+  t.FindCellByIdMutable(2)->load = 0.1f;
+  t.Balance(0.95f);
+  const float after_left_shift = t.FindCellById(2)->bounds.min_x;
+
+  t.FindCellByIdMutable(1)->load = 0.1f;
+  t.FindCellByIdMutable(2)->load = 0.9f;
+  t.Balance(0.95f);
+
+  const auto* root = dynamic_cast<const BSPInternal*>(t.Root());
+  ASSERT_NE(root, nullptr);
+  EXPECT_GT(root->CooldownForTest(), 0u);
+  EXPECT_FLOAT_EQ(t.FindCellById(2)->bounds.min_x, after_left_shift);
 }
 
 TEST(BSPTree, Balance_SafetyBoundHoldsStillWhenGrowingSideOverloaded) {
@@ -446,6 +491,17 @@ TEST(BSPTree, Leaves_ReturnsAllInOrder) {
   EXPECT_EQ(leaves[0]->cell_id, 1u);
   EXPECT_EQ(leaves[1]->cell_id, 2u);
   EXPECT_EQ(leaves[2]->cell_id, 3u);
+}
+
+TEST(BSPTree, LeafSiblingPairs_ReturnsOnlyImmediateLeafSiblings) {
+  auto t = MakeSingleCellTree(1, 30001);
+  ASSERT_TRUE(t.Split(1, BSPAxis::kX, 0.f, MakeLeafInfo(2, 30002)).HasValue());
+  ASSERT_TRUE(t.Split(2, BSPAxis::kZ, 0.f, MakeLeafInfo(3, 30003)).HasValue());
+
+  auto pairs = t.LeafSiblingPairs();
+  ASSERT_EQ(pairs.size(), 1u);
+  EXPECT_EQ(pairs[0].first, 2u);
+  EXPECT_EQ(pairs[0].second, 3u);
 }
 
 TEST(BSPTree, Unsplit_TwoLeafTree_PromotesSibling) {

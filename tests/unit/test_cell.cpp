@@ -97,5 +97,17 @@ TEST(Cell, ShouldOffloadToggle) {
   EXPECT_TRUE(cell.ShouldOffload());
 }
 
+TEST(Cell, ApplyShouldOffloadIgnoresStaleEpoch) {
+  Space space(1);
+  Cell cell(space, 1, CellBounds{});
+  EXPECT_TRUE(cell.ApplyShouldOffload(false, 2));
+  EXPECT_FALSE(cell.ShouldOffload());
+  EXPECT_FALSE(cell.ApplyShouldOffload(true, 1));
+  EXPECT_FALSE(cell.ShouldOffload());
+  EXPECT_TRUE(cell.ApplyShouldOffload(true, 2));
+  EXPECT_TRUE(cell.ShouldOffload());
+  EXPECT_EQ(cell.ShouldOffloadEpoch(), 2u);
+}
+
 }  // namespace
 }  // namespace atlas

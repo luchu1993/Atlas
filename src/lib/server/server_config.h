@@ -72,6 +72,18 @@ struct ServerConfig {
 
   bool is_production = false;
 
+  std::filesystem::path snapshot_path;
+  int snapshot_interval_ms{1000};
+
+  std::filesystem::path revive_cellappmgr_exe;
+  std::string revive_cellappmgr_name{"cellappmgr"};
+  uint16_t revive_cellappmgr_internal_port{0};
+  std::filesystem::path revive_cellappmgr_snapshot_path;
+  int revive_cellappmgr_update_hertz{10};
+  int revive_restart_delay_ms{1000};
+  int revive_max_restarts{3};
+  bool revive_cellappmgr_on_start{false};
+
   std::shared_ptr<DataSectionTree> raw_config;
 
   [[nodiscard]] static auto FromArgs(int argc, char* argv[]) -> Result<ServerConfig>;

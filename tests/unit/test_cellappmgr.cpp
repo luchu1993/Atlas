@@ -7,7 +7,12 @@
 // assertions are all we need.
 
 #include <algorithm>
+#include <chrono>
+#include <filesystem>
+#include <format>
 #include <set>
+#include <string>
+#include <utility>
 #include <vector>
 
 #include <gtest/gtest.h>
@@ -27,13 +32,21 @@
 namespace atlas {
 namespace {
 
-// Thin harness: real EventDispatcher + NetworkInterface so the inherited
-// ServerApp ctors don't need refactoring. We never actually run the
-// dispatcher — the test only pokes handlers directly.
+class TestCellAppMgr final : public CellAppMgr {
+ public:
+  using CellAppMgr::CellAppMgr;
+
+  void RegisterWatchersForTest() {
+    RegisterWatchers();
+    (void)GetWatcherRegistry().Set("cellappmgr/lb/retire/drain_watchdog_ms", "30000");
+  }
+};
+
+// Thin harness: real EventDispatcher + NetworkInterface for ServerApp ctors.
 struct CellAppMgrHarness {
   EventDispatcher dispatcher{"cellappmgr-test"};
   NetworkInterface network{dispatcher};
-  CellAppMgr mgr{dispatcher, network};
+  TestCellAppMgr mgr{dispatcher, network};
   // Pin the startup quiescence window to zero so OnCreateSpaceRequest fires
   // ExecuteCreateSpace synchronously instead of deferring 2s for stragglers.
   CellAppMgrHarness() { mgr.SetStartupQuiescenceWindowForTest(Duration::zero()); }
@@ -85,6 +98,95 @@ auto FirstCellAppDeath(const RecordingChannel& ch) -> baseapp::CellAppDeath {
   }
   ADD_FAILURE() << "No CellAppDeath message in the channel's sends";
   return {};
+}
+
+auto SpaceBspGeometryMessages(const RecordingChannel& ch)
+    -> std::vector<baseapp::SpaceBspGeometry> {
+  std::vector<baseapp::SpaceBspGeometry> out;
+  for (const auto& frame : ch.Sends()) {
+    BinaryReader reader(std::span<const std::byte>(frame.data(), frame.size()));
+    const auto id = reader.ReadPackedInt();
+    if (!id || *id != baseapp::SpaceBspGeometry::Descriptor().id) continue;
+    const auto len = reader.ReadPackedInt();
+    if (!len) continue;
+    const auto payload = reader.ReadBytes(*len);
+    if (!payload) continue;
+    BinaryReader msg_reader(*payload);
+    auto msg = baseapp::SpaceBspGeometry::Deserialize(msg_reader);
+    if (msg.HasValue()) out.push_back(std::move(*msg));
+  }
+  return out;
+}
+
+auto RemoveCellMessages(const RecordingChannel& ch)
+    -> std::vector<cellappmgr::RemoveCellFromSpace> {
+  std::vector<cellappmgr::RemoveCellFromSpace> out;
+  for (const auto& frame : ch.Sends()) {
+    BinaryReader reader(std::span<const std::byte>(frame.data(), frame.size()));
+    const auto id = reader.ReadPackedInt();
+    if (!id || *id != cellappmgr::RemoveCellFromSpace::Descriptor().id) continue;
+    auto msg = cellappmgr::RemoveCellFromSpace::Deserialize(reader);
+    if (msg.HasValue()) out.push_back(*msg);
+  }
+  return out;
+}
+
+auto AddCellMessages(const RecordingChannel& ch) -> std::vector<cellappmgr::AddCellToSpace> {
+  std::vector<cellappmgr::AddCellToSpace> out;
+  for (const auto& frame : ch.Sends()) {
+    BinaryReader reader(std::span<const std::byte>(frame.data(), frame.size()));
+    const auto id = reader.ReadPackedInt();
+    if (!id || *id != cellappmgr::AddCellToSpace::Descriptor().id) continue;
+    const auto len = reader.ReadPackedInt();
+    if (!len) continue;
+    const auto payload = reader.ReadBytes(*len);
+    if (!payload) continue;
+    BinaryReader msg_reader(*payload);
+    auto msg = cellappmgr::AddCellToSpace::Deserialize(msg_reader);
+    if (msg.HasValue()) out.push_back(std::move(*msg));
+  }
+  return out;
+}
+
+auto UpdateGeometryMessages(const RecordingChannel& ch)
+    -> std::vector<cellappmgr::UpdateGeometry> {
+  std::vector<cellappmgr::UpdateGeometry> out;
+  for (const auto& frame : ch.Sends()) {
+    BinaryReader reader(std::span<const std::byte>(frame.data(), frame.size()));
+    const auto id = reader.ReadPackedInt();
+    if (!id || *id != cellappmgr::UpdateGeometry::Descriptor().id) continue;
+    const auto len = reader.ReadPackedInt();
+    if (!len) continue;
+    const auto payload = reader.ReadBytes(*len);
+    if (!payload) continue;
+    BinaryReader msg_reader(*payload);
+    auto msg = cellappmgr::UpdateGeometry::Deserialize(msg_reader);
+    if (msg.HasValue()) out.push_back(std::move(*msg));
+  }
+  return out;
+}
+
+auto RegisterCellAppAcks(const RecordingChannel& ch)
+    -> std::vector<cellappmgr::RegisterCellAppAck> {
+  std::vector<cellappmgr::RegisterCellAppAck> out;
+  for (const auto& frame : ch.Sends()) {
+    BinaryReader reader(std::span<const std::byte>(frame.data(), frame.size()));
+    const auto id = reader.ReadPackedInt();
+    if (!id || *id != cellappmgr::RegisterCellAppAck::Descriptor().id) continue;
+    auto msg = cellappmgr::RegisterCellAppAck::Deserialize(reader);
+    if (msg.HasValue()) out.push_back(*msg);
+  }
+  return out;
+}
+
+auto RequestCellAppStateCount(const RecordingChannel& ch) -> std::size_t {
+  std::size_t count = 0;
+  for (const auto& frame : ch.Sends()) {
+    BinaryReader reader(std::span<const std::byte>(frame.data(), frame.size()));
+    const auto id = reader.ReadPackedInt();
+    if (id && *id == cellappmgr::RequestCellAppState::Descriptor().id) ++count;
+  }
+  return count;
 }
 
 // ============================================================================
@@ -163,6 +265,153 @@ TEST(CellAppMgr, InformCellLoad_UpdatesPeerAndLeafLoad) {
   EXPECT_NEAR(leaves[0]->load, 0.73f, 1e-5f);
 }
 
+TEST(CellAppMgr, InformCellLoad_WatchersExposeLbState) {
+  CellAppMgrHarness h;
+  h.mgr.RegisterWatchersForTest();
+
+  cellappmgr::RegisterCellApp reg;
+  reg.internal_addr = MakePeerAddr(30001);
+  h.mgr.OnRegisterCellApp(reg.internal_addr, nullptr, reg);
+
+  cellappmgr::CreateSpaceRequest csr;
+  csr.space_id = 42;
+  h.mgr.OnCreateSpaceRequest(Address{}, nullptr, csr);
+
+  cellappmgr::InformCellLoad load;
+  load.app_id = 1;
+  load.load = 0.73f;
+  load.entity_count = 42;
+  load.cells.push_back({1, 42, 12.5f, -7.25f, 1});
+  load.cells.back().script_tick_us = 25000;
+  load.cells.back().x_buckets = {0, 0, 10, 20, 12, 0, 0, 0};
+  h.mgr.OnInformCellLoad(Address{}, nullptr, load);
+
+  const auto cellapps = h.mgr.GetWatcherRegistry().Get("cellappmgr/lb/cellapps");
+  ASSERT_TRUE(cellapps.has_value());
+  EXPECT_NE(cellapps->find("cellapps=1"), std::string::npos);
+  EXPECT_NE(cellapps->find("app=1"), std::string::npos);
+  EXPECT_NE(cellapps->find("load=0.730"), std::string::npos);
+  EXPECT_NE(cellapps->find("entities=42"), std::string::npos);
+
+  const auto spaces = h.mgr.GetWatcherRegistry().Get("cellappmgr/lb/spaces");
+  ASSERT_TRUE(spaces.has_value());
+  EXPECT_NE(spaces->find("spaces=1"), std::string::npos);
+  EXPECT_NE(spaces->find("space=42"), std::string::npos);
+  EXPECT_NE(spaces->find("version=1"), std::string::npos);
+  EXPECT_NE(spaces->find("pending_ack=0"), std::string::npos);
+  EXPECT_NE(spaces->find("cell=1"), std::string::npos);
+  EXPECT_NE(spaces->find("tick=0.730"), std::string::npos);
+  EXPECT_NE(spaces->find("script_us=25000"), std::string::npos);
+  EXPECT_NE(spaces->find("witnesses=0"), std::string::npos);
+  EXPECT_NE(spaces->find("median=(12.5,-7.2)"), std::string::npos);
+  EXPECT_NE(spaces->find("xb=[0,0,10,20,12,0,0,0]"), std::string::npos);
+
+  EXPECT_TRUE(h.mgr.GetWatcherRegistry().Get("cellappmgr/lb/weights/aoi_peer").has_value());
+  EXPECT_TRUE(h.mgr.GetWatcherRegistry().Set("cellappmgr/lb/weights/aoi_peer", "0.001"));
+}
+
+TEST(CellAppMgr, InformCellLoad_StaleGeometryVersionIsIgnored) {
+  CellAppMgrHarness h;
+  cellappmgr::RegisterCellApp reg;
+  reg.internal_addr = MakePeerAddr(30001);
+  h.mgr.OnRegisterCellApp(reg.internal_addr, nullptr, reg);
+
+  cellappmgr::CreateSpaceRequest csr;
+  csr.space_id = 42;
+  h.mgr.OnCreateSpaceRequest(Address{}, nullptr, csr);
+
+  cellappmgr::InformCellLoad stale;
+  stale.app_id = 1;
+  stale.load = 0.9f;
+  stale.entity_count = 10;
+  stale.cells.push_back({1, 10, 4.f, 5.f, 999});
+  h.mgr.OnInformCellLoad(Address{}, nullptr, stale);
+
+  const auto& partition = h.mgr.Spaces().at(42);
+  auto leaves = partition.bsp.Leaves();
+  ASSERT_EQ(leaves.size(), 1u);
+  EXPECT_EQ(leaves[0]->entity_count, 0u);
+  EXPECT_FLOAT_EQ(leaves[0]->load, 0.f);
+}
+
+TEST(CellAppMgr, InformCellLoad_WeightedMetricsRaiseLeafLoad) {
+  CellAppMgrHarness h;
+  cellappmgr::RegisterCellApp reg;
+  reg.internal_addr = MakePeerAddr(30001);
+  h.mgr.OnRegisterCellApp(reg.internal_addr, nullptr, reg);
+
+  cellappmgr::CreateSpaceRequest csr;
+  csr.space_id = 42;
+  h.mgr.OnCreateSpaceRequest(Address{}, nullptr, csr);
+
+  cellappmgr::InformCellLoad load;
+  load.app_id = 1;
+  load.load = 0.05f;
+  load.entity_count = 1;
+  cellappmgr::InformCellLoad::CellReport rep;
+  rep.cell_id = 1;
+  rep.entity_count = 1;
+  rep.geometry_version = 1;
+  rep.tick_load = 0.05f;
+  rep.script_tick_us = 50000;
+  rep.witness_count = 10;
+  rep.aoi_peer_count = 100;
+  rep.aoi_reliable_bytes = 1024ull * 1024ull;
+  rep.aoi_unreliable_bytes = 1024ull * 1024ull;
+  rep.backup_bytes = 1024ull * 1024ull;
+  load.cells.push_back(rep);
+  h.mgr.OnInformCellLoad(Address{}, nullptr, load);
+
+  const auto& partition = h.mgr.Spaces().at(42);
+  auto leaves = partition.bsp.Leaves();
+  ASSERT_EQ(leaves.size(), 1u);
+  EXPECT_NEAR(leaves[0]->tick_load, 0.05f, 1e-5f);
+  EXPECT_EQ(leaves[0]->script_tick_us, 50000u);
+  EXPECT_EQ(leaves[0]->witness_count, 10u);
+  EXPECT_EQ(leaves[0]->aoi_peer_count, 100u);
+  EXPECT_GT(leaves[0]->load, 1.9f);
+}
+
+TEST(CellAppMgr, GrowSpacesForNewCellApp_UsesBucketHistogramForSplit) {
+  CellAppMgrHarness h;
+  cellappmgr::RegisterCellApp reg_a;
+  reg_a.internal_addr = MakePeerAddr(30001);
+  h.mgr.OnRegisterCellApp(reg_a.internal_addr, nullptr, reg_a);
+
+  cellappmgr::CreateSpaceRequest csr;
+  csr.space_id = 42;
+  h.mgr.OnCreateSpaceRequest(Address{}, nullptr, csr);
+
+  cellappmgr::InformCellLoad load;
+  load.app_id = 1;
+  load.load = 0.9f;
+  load.entity_count = 100;
+  cellappmgr::InformCellLoad::CellReport rep;
+  rep.cell_id = 1;
+  rep.entity_count = 100;
+  rep.median_x = -750.f;
+  rep.geometry_version = 1;
+  rep.x_buckets = {0, 50, 0, 0, 0, 50, 0, 0};
+  load.cells.push_back(rep);
+  h.mgr.OnInformCellLoad(Address{}, nullptr, load);
+
+  cellappmgr::RegisterCellApp reg_b;
+  reg_b.internal_addr = MakePeerAddr(30002);
+  h.mgr.OnRegisterCellApp(reg_b.internal_addr, nullptr, reg_b);
+
+  const auto& partition = h.mgr.Spaces().at(42);
+  auto leaves = partition.bsp.Leaves();
+  ASSERT_EQ(leaves.size(), 2u);
+  const auto* left = partition.bsp.FindCell(-1.f, 0.f);
+  const auto* right = partition.bsp.FindCell(1.f, 0.f);
+  ASSERT_NE(left, nullptr);
+  ASSERT_NE(right, nullptr);
+  EXPECT_EQ(left->cell_id, 1u);
+  EXPECT_EQ(right->cellapp_addr, reg_b.internal_addr);
+  EXPECT_FLOAT_EQ(left->bounds.max_x, 0.f);
+  EXPECT_FLOAT_EQ(right->bounds.min_x, 0.f);
+}
+
 TEST(CellAppMgr, InformCellLoad_ClampsNegativeAndOverflow) {
   CellAppMgrHarness h;
   cellappmgr::RegisterCellApp reg;
@@ -213,7 +462,7 @@ TEST(CellAppMgr, InformCellLoad_PerCellReportFromNonOwnerIsIgnored) {
   bad.app_id = app_id_a;
   bad.load = 0.9f;
   bad.entity_count = 100;
-  bad.cells.push_back({2, 100u, 25.f, 0.f});
+  bad.cells.push_back({2, 100u, 25.f, 0.f, 1});
   h.mgr.OnInformCellLoad(Address{}, nullptr, bad);
 
   const auto* ignored = partition.bsp.FindCellById(2);
@@ -226,7 +475,7 @@ TEST(CellAppMgr, InformCellLoad_PerCellReportFromNonOwnerIsIgnored) {
   good.app_id = app_id_b;
   good.load = 0.8f;
   good.entity_count = 80;
-  good.cells.push_back({2, 80u, 25.f, 0.f});
+  good.cells.push_back({2, 80u, 25.f, 0.f, 1});
   h.mgr.OnInformCellLoad(Address{}, nullptr, good);
 
   const auto* updated = partition.bsp.FindCellById(2);
@@ -336,6 +585,242 @@ TEST(CellAppMgr, CreateSpace_MultiCellBootstrapHandlesSixteenCells) {
   EXPECT_EQ(ports.size(), kCount);
 }
 
+TEST(CellAppMgr, SnapshotRestore_PreservesTopologyLoadAndNextIds) {
+  CellAppMgrHarness h;
+  for (uint16_t port : {uint16_t{30001}, uint16_t{30002}}) {
+    cellappmgr::RegisterCellApp reg;
+    reg.internal_addr = MakePeerAddr(port);
+    h.mgr.OnRegisterCellApp(reg.internal_addr, nullptr, reg);
+  }
+
+  cellappmgr::CreateSpaceRequest csr;
+  csr.space_id = 77;
+  csr.initial_cell_count = 2;
+  csr.space_master_type = "SpaceMaster";
+  h.mgr.OnCreateSpaceRequest(Address{}, nullptr, csr);
+
+  auto& partition = h.mgr.SpacesForTest().at(77);
+  auto leaves = partition.bsp.Leaves();
+  ASSERT_EQ(leaves.size(), 2u);
+  for (const auto* leaf : leaves) {
+    const bool first = leaf->cellapp_addr == MakePeerAddr(30001);
+    cellappmgr::InformCellLoad load;
+    load.app_id = h.mgr.CellApps().at(leaf->cellapp_addr).app_id;
+    load.load = first ? 0.7f : 0.2f;
+    load.entity_count = first ? 7u : 2u;
+    cellappmgr::InformCellLoad::CellReport rep;
+    rep.cell_id = leaf->cell_id;
+    rep.entity_count = load.entity_count;
+    rep.geometry_version = partition.geometry_version;
+    rep.tick_load = load.load;
+    rep.script_tick_us = first ? 7000u : 2000u;
+    load.cells.push_back(rep);
+    h.mgr.OnInformCellLoad(Address{}, nullptr, load);
+  }
+
+  const auto snapshot = h.mgr.Snapshot();
+  CellAppMgrHarness restored;
+  auto restore = restored.mgr.Restore(snapshot);
+  ASSERT_TRUE(restore.HasValue()) << restore.Error().Message();
+
+  ASSERT_EQ(restored.mgr.CellApps().size(), 2u);
+  ASSERT_EQ(restored.mgr.Spaces().size(), 1u);
+  const auto& restored_partition = restored.mgr.Spaces().at(77);
+  EXPECT_EQ(restored_partition.geometry_version, partition.geometry_version);
+  EXPECT_EQ(restored_partition.space_master_type, "SpaceMaster");
+
+  const auto restored_leaves = restored_partition.bsp.Leaves();
+  ASSERT_EQ(restored_leaves.size(), 2u);
+  const auto* first_leaf = restored_partition.bsp.FindCellById(1);
+  ASSERT_NE(first_leaf, nullptr);
+  EXPECT_EQ(first_leaf->cellapp_addr, MakePeerAddr(30001));
+  EXPECT_EQ(first_leaf->entity_count, 7u);
+  EXPECT_EQ(first_leaf->script_tick_us, 7000u);
+
+  cellappmgr::RegisterCellApp reg_c;
+  reg_c.internal_addr = MakePeerAddr(30003);
+  restored.mgr.OnRegisterCellApp(reg_c.internal_addr, nullptr, reg_c);
+  ASSERT_EQ(restored.mgr.CellApps().size(), 3u);
+  EXPECT_EQ(restored.mgr.CellApps().at(reg_c.internal_addr).app_id, 3u);
+}
+
+TEST(CellAppMgr, SnapshotRestore_PreservesPendingGeometryBroadcast) {
+  CellAppMgrHarness h;
+  InterfaceTable table;
+  RecordingChannel ch_a(h.dispatcher, table, MakePeerAddr(30001));
+  RecordingChannel ch_b(h.dispatcher, table, MakePeerAddr(30002));
+
+  cellappmgr::RegisterCellApp reg_a;
+  reg_a.internal_addr = MakePeerAddr(30001);
+  h.mgr.OnRegisterCellApp(reg_a.internal_addr, &ch_a, reg_a);
+  cellappmgr::RegisterCellApp reg_b;
+  reg_b.internal_addr = MakePeerAddr(30002);
+  h.mgr.OnRegisterCellApp(reg_b.internal_addr, &ch_b, reg_b);
+  h.mgr.RegisterWatchersForTest();
+
+  cellappmgr::CreateSpaceRequest csr;
+  csr.space_id = 88;
+  csr.initial_cell_count = 2;
+  h.mgr.OnCreateSpaceRequest(Address{}, nullptr, csr);
+
+  auto& partition = h.mgr.SpacesForTest().at(88);
+  const auto leaves = partition.bsp.Leaves();
+  ASSERT_EQ(leaves.size(), 2u);
+  const auto b_it = std::find_if(leaves.begin(), leaves.end(), [&](const CellInfo* leaf) {
+    return leaf->cellapp_addr == reg_b.internal_addr;
+  });
+  ASSERT_NE(b_it, leaves.end());
+  const auto b_cell_id = (*b_it)->cell_id;
+
+  for (const auto* leaf : leaves) {
+    const bool on_b = leaf->cellapp_addr == reg_b.internal_addr;
+    cellappmgr::InformCellLoad load;
+    load.app_id = h.mgr.CellApps().at(leaf->cellapp_addr).app_id;
+    load.load = on_b ? 0.7f : 0.3f;
+    load.entity_count = on_b ? 5u : 10u;
+    cellappmgr::InformCellLoad::CellReport rep;
+    rep.cell_id = leaf->cell_id;
+    rep.entity_count = load.entity_count;
+    rep.geometry_version = partition.geometry_version;
+    rep.tick_load = load.load;
+    load.cells.push_back(rep);
+    h.mgr.OnInformCellLoad(Address{}, nullptr, load);
+  }
+
+  const auto app_b = h.mgr.CellApps().at(reg_b.internal_addr).app_id;
+  ASSERT_TRUE(h.mgr.GetWatcherRegistry().Set("cellappmgr/lb/retire/app_id",
+                                             std::to_string(app_b)));
+  h.mgr.TickLoadBalance();
+  auto pending = h.mgr.GetWatcherRegistry().Get("cellappmgr/lb/pending_geometry_broadcasts");
+  ASSERT_TRUE(pending.has_value());
+  EXPECT_EQ(*pending, "1");
+
+  const auto snapshot = h.mgr.Snapshot();
+  CellAppMgrHarness restored;
+  auto restore = restored.mgr.Restore(snapshot);
+  ASSERT_TRUE(restore.HasValue()) << restore.Error().Message();
+  restored.mgr.RegisterWatchersForTest();
+  pending = restored.mgr.GetWatcherRegistry().Get("cellappmgr/lb/pending_geometry_broadcasts");
+  ASSERT_TRUE(pending.has_value());
+  EXPECT_EQ(*pending, "1");
+
+  cellappmgr::AddCellToSpaceAck ack;
+  ack.space_id = 88;
+  ack.cell_id = b_cell_id;
+  restored.mgr.OnAddCellToSpaceAck(reg_a.internal_addr, nullptr, ack);
+  pending = restored.mgr.GetWatcherRegistry().Get("cellappmgr/lb/pending_geometry_broadcasts");
+  ASSERT_TRUE(pending.has_value());
+  EXPECT_EQ(*pending, "0");
+}
+
+TEST(CellAppMgr, SnapshotRestore_ReattachPreservesAppIdAndReplaysGeometry) {
+  CellAppMgrHarness h;
+  for (uint16_t port : {uint16_t{30001}, uint16_t{30002}}) {
+    cellappmgr::RegisterCellApp reg;
+    reg.internal_addr = MakePeerAddr(port);
+    h.mgr.OnRegisterCellApp(reg.internal_addr, nullptr, reg);
+  }
+
+  cellappmgr::CreateSpaceRequest csr;
+  csr.space_id = 99;
+  csr.initial_cell_count = 2;
+  h.mgr.OnCreateSpaceRequest(Address{}, nullptr, csr);
+
+  const auto snapshot = h.mgr.Snapshot();
+  CellAppMgrHarness restored;
+  auto restore = restored.mgr.Restore(snapshot);
+  ASSERT_TRUE(restore.HasValue()) << restore.Error().Message();
+
+  InterfaceTable table;
+  RecordingChannel ch_a(restored.dispatcher, table, MakePeerAddr(30001));
+  cellappmgr::RegisterCellApp reg_a;
+  reg_a.internal_addr = MakePeerAddr(30001);
+  restored.mgr.OnRegisterCellApp(reg_a.internal_addr, &ch_a, reg_a);
+
+  const auto acks = RegisterCellAppAcks(ch_a);
+  ASSERT_FALSE(acks.empty());
+  EXPECT_TRUE(acks.back().success);
+  EXPECT_EQ(acks.back().app_id, 1u);
+  ASSERT_EQ(restored.mgr.CellApps().at(reg_a.internal_addr).channel, &ch_a);
+
+  const auto adds = AddCellMessages(ch_a);
+  ASSERT_FALSE(adds.empty());
+  EXPECT_EQ(adds.back().space_id, 99u);
+  EXPECT_TRUE(adds.back().is_primary);
+
+  const auto updates = UpdateGeometryMessages(ch_a);
+  ASSERT_FALSE(updates.empty());
+  EXPECT_EQ(updates.back().space_id, 99u);
+  EXPECT_EQ(updates.back().geometry_version,
+            restored.mgr.Spaces().at(99).geometry_version);
+  EXPECT_EQ(RequestCellAppStateCount(ch_a), 1u);
+}
+
+TEST(CellAppMgr, SnapshotRestore_UnattachedCellAppsAreNotAssignable) {
+  CellAppMgrHarness h;
+  for (uint16_t port : {uint16_t{30001}, uint16_t{30002}}) {
+    cellappmgr::RegisterCellApp reg;
+    reg.internal_addr = MakePeerAddr(port);
+    h.mgr.OnRegisterCellApp(reg.internal_addr, nullptr, reg);
+  }
+
+  const auto snapshot = h.mgr.Snapshot();
+  CellAppMgrHarness restored;
+  restored.mgr.RegisterWatchersForTest();
+  auto restore = restored.mgr.Restore(snapshot);
+  ASSERT_TRUE(restore.HasValue()) << restore.Error().Message();
+
+  cellappmgr::CreateSpaceRequest before_reattach;
+  before_reattach.space_id = 100;
+  restored.mgr.OnCreateSpaceRequest(Address{}, nullptr, before_reattach);
+  EXPECT_FALSE(restored.mgr.Spaces().contains(100));
+
+  cellappmgr::RegisterCellApp reg_c;
+  reg_c.internal_addr = MakePeerAddr(30003);
+  restored.mgr.OnRegisterCellApp(reg_c.internal_addr, nullptr, reg_c);
+
+  cellappmgr::CreateSpaceRequest after_reattach;
+  after_reattach.space_id = 101;
+  restored.mgr.OnCreateSpaceRequest(Address{}, nullptr, after_reattach);
+
+  const auto& partition = restored.mgr.Spaces().at(101);
+  const auto leaves = partition.bsp.Leaves();
+  ASSERT_EQ(leaves.size(), 1u);
+  EXPECT_EQ(leaves[0]->cellapp_addr, reg_c.internal_addr);
+
+  const auto summary = restored.mgr.GetWatcherRegistry().Get("cellappmgr/lb/cellapps");
+  ASSERT_TRUE(summary.has_value());
+  EXPECT_NE(summary->find("reattach=1"), std::string::npos);
+}
+
+TEST(CellAppMgr, SnapshotFileRoundTripRestoresTopology) {
+  CellAppMgrHarness h;
+  for (uint16_t port : {uint16_t{30001}, uint16_t{30002}}) {
+    cellappmgr::RegisterCellApp reg;
+    reg.internal_addr = MakePeerAddr(port);
+    h.mgr.OnRegisterCellApp(reg.internal_addr, nullptr, reg);
+  }
+
+  cellappmgr::CreateSpaceRequest csr;
+  csr.space_id = 102;
+  csr.initial_cell_count = 2;
+  h.mgr.OnCreateSpaceRequest(Address{}, nullptr, csr);
+
+  const auto stamp = std::chrono::steady_clock::now().time_since_epoch().count();
+  const auto path = std::filesystem::temp_directory_path() /
+                    std::format("atlas_cellappmgr_snapshot_{}_{}.bin", 102, stamp);
+  ASSERT_TRUE(h.mgr.SaveSnapshotToFile(path).HasValue());
+
+  CellAppMgrHarness restored;
+  auto restore = restored.mgr.RestoreSnapshotFromFile(path);
+  ASSERT_TRUE(restore.HasValue()) << restore.Error().Message();
+  ASSERT_TRUE(restored.mgr.Spaces().contains(102));
+  EXPECT_EQ(restored.mgr.Spaces().at(102).bsp.Leaves().size(), 2u);
+  EXPECT_TRUE(restored.mgr.CellApps().at(MakePeerAddr(30001)).needs_reattach);
+  std::error_code ec;
+  std::filesystem::remove(path, ec);
+}
+
 // ============================================================================
 // CellApp death
 // ============================================================================
@@ -430,6 +915,10 @@ TEST(CellAppMgr, CellAppDeath_RehomeNotificationUsesAbsorbingSibling) {
   ASSERT_EQ(notify.rehomes.size(), 1u);
   EXPECT_EQ(notify.rehomes[0].first, 8u);
   EXPECT_EQ(notify.rehomes[0].second, reg_b.internal_addr);
+  ASSERT_EQ(notify.rehome_cells.size(), 2u);
+  const auto* rehome_cell = baseapp::FindRehomeCellForPosition(notify, 8, {500.f, 0.f, 500.f});
+  ASSERT_NE(rehome_cell, nullptr);
+  EXPECT_EQ(rehome_cell->host_addr, reg_b.internal_addr);
 }
 
 TEST(CellAppMgr, CellAppDeath_RehomesLeavesToSurvivor) {
@@ -453,7 +942,7 @@ TEST(CellAppMgr, CellAppDeath_RehomesLeavesToSurvivor) {
   ASSERT_EQ(partition_before.bsp.Leaves().size(), 1u);
   const Address initial_host = partition_before.bsp.Leaves()[0]->cellapp_addr;
   ASSERT_EQ(initial_host, reg_a.internal_addr)
-      << "PickHostForNewSpace should pick the lowest app_id under tied load";
+      << "CreateSpace should pick the lowest app_id under tied load";
 
   // Kill the initial host. The surviving peer (app_b) must end up as
   // the leaf's cellapp_addr.
@@ -631,6 +1120,664 @@ TEST(CellAppMgr, TickLoadBalance_AsymmetricLoad_MovesSplitAndRebroadcasts) {
   EXPECT_FLOAT_EQ(left_after->bounds.max_x, right_after->bounds.min_x);
 }
 
+TEST(CellAppMgr, TickLoadBalance_UsesBucketHistogramForContinuousSplit) {
+  CellAppMgrHarness h;
+  cellappmgr::RegisterCellApp reg_a;
+  reg_a.internal_addr = MakePeerAddr(30001);
+  h.mgr.OnRegisterCellApp(reg_a.internal_addr, nullptr, reg_a);
+  cellappmgr::RegisterCellApp reg_b;
+  reg_b.internal_addr = MakePeerAddr(30002);
+  h.mgr.OnRegisterCellApp(reg_b.internal_addr, nullptr, reg_b);
+
+  cellappmgr::CreateSpaceRequest csr;
+  csr.space_id = 1;
+  h.mgr.OnCreateSpaceRequest(Address{}, nullptr, csr);
+
+  auto& partition = h.mgr.SpacesForTest().at(1);
+  const uint32_t app_id_a = h.mgr.CellApps().at(reg_a.internal_addr).app_id;
+  const uint32_t app_id_b = h.mgr.CellApps().at(reg_b.internal_addr).app_id;
+  CellInfo new_cell{/*cell_id=*/2, reg_b.internal_addr, CellBounds{}, /*load=*/0.f,
+                    /*entity_count=*/0};
+  auto split = partition.bsp.Split(/*existing_cell_id=*/1, BSPAxis::kX, /*position=*/0.f,
+                                   new_cell);
+  ASSERT_TRUE(split.HasValue());
+
+  cellappmgr::InformCellLoad load_a;
+  load_a.app_id = app_id_a;
+  load_a.load = 0.8f;
+  load_a.entity_count = 80;
+  cellappmgr::InformCellLoad::CellReport rep_a;
+  rep_a.cell_id = 1;
+  rep_a.entity_count = 80;
+  rep_a.geometry_version = partition.geometry_version;
+  rep_a.tick_load = 0.8f;
+  rep_a.x_buckets = {10, 10, 10, 10, 10, 10, 10, 10};
+  load_a.cells.push_back(rep_a);
+  h.mgr.OnInformCellLoad(Address{}, nullptr, load_a);
+
+  cellappmgr::InformCellLoad load_b;
+  load_b.app_id = app_id_b;
+  load_b.load = 0.2f;
+  load_b.entity_count = 20;
+  cellappmgr::InformCellLoad::CellReport rep_b;
+  rep_b.cell_id = 2;
+  rep_b.entity_count = 20;
+  rep_b.geometry_version = partition.geometry_version;
+  rep_b.tick_load = 0.2f;
+  rep_b.x_buckets = {10, 10, 10, 10, 10, 10, 10, 10};
+  load_b.cells.push_back(rep_b);
+  h.mgr.OnInformCellLoad(Address{}, nullptr, load_b);
+
+  h.mgr.TickLoadBalance();
+
+  const auto* left_after = partition.bsp.FindCellById(1);
+  const auto* right_after = partition.bsp.FindCellById(2);
+  ASSERT_NE(left_after, nullptr);
+  ASSERT_NE(right_after, nullptr);
+  EXPECT_NEAR(right_after->bounds.min_x, -375.f, 1e-5f);
+  EXPECT_FLOAT_EQ(left_after->bounds.max_x, right_after->bounds.min_x);
+}
+
+TEST(CellAppMgr, TickLoadBalance_AutoSplitsSustainedHotLeafToIdleHost) {
+  CellAppMgrHarness h;
+  cellappmgr::RegisterCellApp reg_a;
+  reg_a.internal_addr = MakePeerAddr(30001);
+  h.mgr.OnRegisterCellApp(reg_a.internal_addr, nullptr, reg_a);
+  cellappmgr::RegisterCellApp reg_b;
+  reg_b.internal_addr = MakePeerAddr(30002);
+  h.mgr.OnRegisterCellApp(reg_b.internal_addr, nullptr, reg_b);
+
+  cellappmgr::CreateSpaceRequest csr;
+  csr.space_id = 42;
+  h.mgr.OnCreateSpaceRequest(Address{}, nullptr, csr);
+
+  auto& partition = h.mgr.SpacesForTest().at(42);
+  cellappmgr::InformCellLoad load;
+  load.app_id = h.mgr.CellApps().at(reg_a.internal_addr).app_id;
+  load.load = 0.95f;
+  load.entity_count = 100;
+  cellappmgr::InformCellLoad::CellReport rep;
+  rep.cell_id = partition.bsp.PrimaryCellId();
+  rep.entity_count = 100;
+  rep.geometry_version = partition.geometry_version;
+  rep.tick_load = 0.95f;
+  rep.x_buckets = {0, 50, 0, 0, 0, 50, 0, 0};
+  load.cells.push_back(rep);
+  h.mgr.OnInformCellLoad(Address{}, nullptr, load);
+
+  h.mgr.TickLoadBalance();
+  h.mgr.TickLoadBalance();
+  EXPECT_EQ(partition.bsp.Leaves().size(), 1u);
+
+  h.mgr.TickLoadBalance();
+
+  auto leaves = partition.bsp.Leaves();
+  ASSERT_EQ(leaves.size(), 2u);
+  const auto* left = partition.bsp.FindCell(-1.f, 0.f);
+  const auto* right = partition.bsp.FindCell(1.f, 0.f);
+  ASSERT_NE(left, nullptr);
+  ASSERT_NE(right, nullptr);
+  EXPECT_EQ(left->cell_id, rep.cell_id);
+  EXPECT_EQ(right->cellapp_addr, reg_b.internal_addr);
+  EXPECT_FLOAT_EQ(left->bounds.max_x, 0.f);
+  EXPECT_FLOAT_EQ(right->bounds.min_x, 0.f);
+}
+
+TEST(CellAppMgr, TickLoadBalance_AutoMergesSustainedIdleSiblingLeaf) {
+  CellAppMgrHarness h;
+  InterfaceTable table;
+  RecordingChannel ch_b(h.dispatcher, table, MakePeerAddr(30002));
+
+  cellappmgr::RegisterCellApp reg_a;
+  reg_a.internal_addr = MakePeerAddr(30001);
+  h.mgr.OnRegisterCellApp(reg_a.internal_addr, nullptr, reg_a);
+  cellappmgr::RegisterCellApp reg_b;
+  reg_b.internal_addr = MakePeerAddr(30002);
+  h.mgr.OnRegisterCellApp(reg_b.internal_addr, &ch_b, reg_b);
+
+  cellappmgr::CreateSpaceRequest csr;
+  csr.space_id = 42;
+  csr.initial_cell_count = 2;
+  h.mgr.OnCreateSpaceRequest(Address{}, nullptr, csr);
+
+  auto& partition = h.mgr.SpacesForTest().at(42);
+  auto leaves = partition.bsp.Leaves();
+  ASSERT_EQ(leaves.size(), 2u);
+  const auto b_it = std::find_if(leaves.begin(), leaves.end(), [&](const CellInfo* leaf) {
+    return leaf->cellapp_addr == reg_b.internal_addr;
+  });
+  ASSERT_NE(b_it, leaves.end());
+  const auto b_cell_id = (*b_it)->cell_id;
+
+  for (const auto* leaf : leaves) {
+    const auto app_id = h.mgr.CellApps().at(leaf->cellapp_addr).app_id;
+    cellappmgr::InformCellLoad load;
+    load.app_id = app_id;
+    load.load = 0.05f;
+    load.entity_count = 0;
+    cellappmgr::InformCellLoad::CellReport rep;
+    rep.cell_id = leaf->cell_id;
+    rep.entity_count = 0;
+    rep.geometry_version = partition.geometry_version;
+    rep.tick_load = 0.05f;
+    load.cells.push_back(rep);
+    h.mgr.OnInformCellLoad(Address{}, nullptr, load);
+  }
+
+  h.mgr.TickLoadBalance();
+  h.mgr.TickLoadBalance();
+  EXPECT_EQ(partition.bsp.Leaves().size(), 2u);
+
+  h.mgr.TickLoadBalance();
+
+  leaves = partition.bsp.Leaves();
+  ASSERT_EQ(leaves.size(), 1u);
+  EXPECT_EQ(leaves[0]->cell_id, partition.bsp.PrimaryCellId());
+  const auto removes = RemoveCellMessages(ch_b);
+  ASSERT_FALSE(removes.empty());
+  EXPECT_EQ(removes.back().space_id, 42u);
+  EXPECT_EQ(removes.back().cell_id, b_cell_id);
+}
+
+TEST(CellAppMgr, RetireWatcherSkipsNewSpacePlacement) {
+  CellAppMgrHarness h;
+  cellappmgr::RegisterCellApp reg_a;
+  reg_a.internal_addr = MakePeerAddr(30001);
+  h.mgr.OnRegisterCellApp(reg_a.internal_addr, nullptr, reg_a);
+  cellappmgr::RegisterCellApp reg_b;
+  reg_b.internal_addr = MakePeerAddr(30002);
+  h.mgr.OnRegisterCellApp(reg_b.internal_addr, nullptr, reg_b);
+  h.mgr.RegisterWatchersForTest();
+
+  const auto app_a = h.mgr.CellApps().at(reg_a.internal_addr).app_id;
+  const auto app_b = h.mgr.CellApps().at(reg_b.internal_addr).app_id;
+  cellappmgr::InformCellLoad load_a;
+  load_a.app_id = app_a;
+  load_a.load = 0.9f;
+  h.mgr.OnInformCellLoad(Address{}, nullptr, load_a);
+  cellappmgr::InformCellLoad load_b;
+  load_b.app_id = app_b;
+  load_b.load = 0.0f;
+  h.mgr.OnInformCellLoad(Address{}, nullptr, load_b);
+
+  ASSERT_TRUE(h.mgr.GetWatcherRegistry().Set("cellappmgr/lb/retire/app_id",
+                                             std::to_string(app_b)));
+  const auto retire_id = h.mgr.GetWatcherRegistry().Get("cellappmgr/lb/retire/app_id");
+  ASSERT_TRUE(retire_id.has_value());
+  EXPECT_EQ(*retire_id, std::to_string(app_b));
+  const auto retire_count = h.mgr.GetWatcherRegistry().Get("cellappmgr/lb/retire/count");
+  ASSERT_TRUE(retire_count.has_value());
+  EXPECT_EQ(*retire_count, "1");
+
+  cellappmgr::CreateSpaceRequest csr;
+  csr.space_id = 42;
+  h.mgr.OnCreateSpaceRequest(Address{}, nullptr, csr);
+
+  auto leaves = h.mgr.SpacesForTest().at(42).bsp.Leaves();
+  ASSERT_EQ(leaves.size(), 1u);
+  EXPECT_EQ(leaves[0]->cellapp_addr, reg_a.internal_addr);
+
+  const auto summary = h.mgr.GetWatcherRegistry().Get("cellappmgr/lb/cellapps");
+  ASSERT_TRUE(summary.has_value());
+  EXPECT_NE(summary->find("retiring=1"), std::string::npos);
+}
+
+TEST(CellAppMgr, TickLoadBalance_RetireRemovesEmptyNonPrimaryLeaf) {
+  CellAppMgrHarness h;
+  InterfaceTable table;
+  RecordingChannel ch_b(h.dispatcher, table, MakePeerAddr(30002));
+
+  cellappmgr::RegisterCellApp reg_a;
+  reg_a.internal_addr = MakePeerAddr(30001);
+  h.mgr.OnRegisterCellApp(reg_a.internal_addr, nullptr, reg_a);
+  cellappmgr::RegisterCellApp reg_b;
+  reg_b.internal_addr = MakePeerAddr(30002);
+  h.mgr.OnRegisterCellApp(reg_b.internal_addr, &ch_b, reg_b);
+  h.mgr.RegisterWatchersForTest();
+
+  cellappmgr::CreateSpaceRequest csr;
+  csr.space_id = 42;
+  csr.initial_cell_count = 2;
+  h.mgr.OnCreateSpaceRequest(Address{}, nullptr, csr);
+
+  auto& partition = h.mgr.SpacesForTest().at(42);
+  auto leaves = partition.bsp.Leaves();
+  ASSERT_EQ(leaves.size(), 2u);
+  const auto b_it = std::find_if(leaves.begin(), leaves.end(), [&](const CellInfo* leaf) {
+    return leaf->cellapp_addr == reg_b.internal_addr;
+  });
+  ASSERT_NE(b_it, leaves.end());
+  const auto b_cell_id = (*b_it)->cell_id;
+
+  for (const auto* leaf : leaves) {
+    const bool on_b = leaf->cellapp_addr == reg_b.internal_addr;
+    const auto app_id = h.mgr.CellApps().at(leaf->cellapp_addr).app_id;
+    cellappmgr::InformCellLoad load;
+    load.app_id = app_id;
+    load.load = on_b ? 0.6f : 0.9f;
+    load.entity_count = on_b ? 0u : 10u;
+    cellappmgr::InformCellLoad::CellReport rep;
+    rep.cell_id = leaf->cell_id;
+    rep.entity_count = load.entity_count;
+    rep.geometry_version = partition.geometry_version;
+    rep.tick_load = load.load;
+    load.cells.push_back(rep);
+    h.mgr.OnInformCellLoad(Address{}, nullptr, load);
+  }
+
+  const auto app_b = h.mgr.CellApps().at(reg_b.internal_addr).app_id;
+  ASSERT_TRUE(h.mgr.GetWatcherRegistry().Set("cellappmgr/lb/retire/app_id",
+                                             std::to_string(app_b)));
+
+  h.mgr.TickLoadBalance();
+
+  leaves = partition.bsp.Leaves();
+  ASSERT_EQ(leaves.size(), 1u);
+  EXPECT_EQ(leaves[0]->cellapp_addr, reg_a.internal_addr);
+  EXPECT_EQ(partition.bsp.FindCellById(b_cell_id), nullptr);
+  const auto removes = RemoveCellMessages(ch_b);
+  ASSERT_FALSE(removes.empty());
+  EXPECT_EQ(removes.back().space_id, 42u);
+  EXPECT_EQ(removes.back().cell_id, b_cell_id);
+}
+
+TEST(CellAppMgr, TickLoadBalance_RetireHandsOffNonEmptyNonPrimaryLeaf) {
+  CellAppMgrHarness h;
+  InterfaceTable table;
+  RecordingChannel ch_a(h.dispatcher, table, MakePeerAddr(30001));
+  RecordingChannel ch_b(h.dispatcher, table, MakePeerAddr(30002));
+
+  cellappmgr::RegisterCellApp reg_a;
+  reg_a.internal_addr = MakePeerAddr(30001);
+  h.mgr.OnRegisterCellApp(reg_a.internal_addr, &ch_a, reg_a);
+  cellappmgr::RegisterCellApp reg_b;
+  reg_b.internal_addr = MakePeerAddr(30002);
+  h.mgr.OnRegisterCellApp(reg_b.internal_addr, &ch_b, reg_b);
+  h.mgr.RegisterWatchersForTest();
+  ASSERT_TRUE(h.mgr.GetWatcherRegistry().Set("cellappmgr/lb/retire/drain_watchdog_ms", "0"));
+
+  cellappmgr::CreateSpaceRequest csr;
+  csr.space_id = 42;
+  csr.initial_cell_count = 2;
+  h.mgr.OnCreateSpaceRequest(Address{}, nullptr, csr);
+
+  auto& partition = h.mgr.SpacesForTest().at(42);
+  auto leaves = partition.bsp.Leaves();
+  ASSERT_EQ(leaves.size(), 2u);
+  const auto b_it = std::find_if(leaves.begin(), leaves.end(), [&](const CellInfo* leaf) {
+    return leaf->cellapp_addr == reg_b.internal_addr;
+  });
+  ASSERT_NE(b_it, leaves.end());
+  const auto b_cell_id = (*b_it)->cell_id;
+  const auto updates_b_before = UpdateGeometryMessages(ch_b).size();
+  const auto adds_a_before = AddCellMessages(ch_a).size();
+
+  for (const auto* leaf : leaves) {
+    const bool on_b = leaf->cellapp_addr == reg_b.internal_addr;
+    const auto app_id = h.mgr.CellApps().at(leaf->cellapp_addr).app_id;
+    cellappmgr::InformCellLoad load;
+    load.app_id = app_id;
+    load.load = on_b ? 0.7f : 0.3f;
+    load.entity_count = on_b ? 5u : 10u;
+    cellappmgr::InformCellLoad::CellReport rep;
+    rep.cell_id = leaf->cell_id;
+    rep.entity_count = load.entity_count;
+    rep.geometry_version = partition.geometry_version;
+    rep.tick_load = load.load;
+    load.cells.push_back(rep);
+    h.mgr.OnInformCellLoad(Address{}, nullptr, load);
+  }
+
+  const auto app_b = h.mgr.CellApps().at(reg_b.internal_addr).app_id;
+  ASSERT_TRUE(h.mgr.GetWatcherRegistry().Set("cellappmgr/lb/retire/app_id",
+                                             std::to_string(app_b)));
+
+  h.mgr.TickLoadBalance();
+
+  const auto adds_a_after = AddCellMessages(ch_a);
+  ASSERT_GT(adds_a_after.size(), adds_a_before);
+  EXPECT_EQ(adds_a_after.back().space_id, 42u);
+  EXPECT_EQ(adds_a_after.back().cell_id, b_cell_id);
+  EXPECT_FALSE(adds_a_after.back().is_primary);
+  const auto* handed_leaf = partition.bsp.FindCellById(b_cell_id);
+  ASSERT_NE(handed_leaf, nullptr);
+  EXPECT_EQ(handed_leaf->cellapp_addr, reg_a.internal_addr);
+  EXPECT_EQ(UpdateGeometryMessages(ch_b).size(), updates_b_before);
+  const auto drain_count = h.mgr.GetWatcherRegistry().Get("cellappmgr/lb/retire/drain_count");
+  ASSERT_TRUE(drain_count.has_value());
+  EXPECT_EQ(*drain_count, "1");
+  const auto pending_stuck = h.mgr.GetWatcherRegistry().Get("cellappmgr/lb/retire/stuck_count");
+  ASSERT_TRUE(pending_stuck.has_value());
+  EXPECT_EQ(*pending_stuck, "0");
+
+  cellappmgr::AddCellToSpaceAck ack;
+  ack.space_id = 42;
+  ack.cell_id = b_cell_id;
+  h.mgr.OnAddCellToSpaceAck(reg_a.internal_addr, nullptr, ack);
+
+  EXPECT_GT(UpdateGeometryMessages(ch_b).size(), updates_b_before);
+  const auto stuck = h.mgr.GetWatcherRegistry().Get("cellappmgr/lb/retire/stuck_count");
+  ASSERT_TRUE(stuck.has_value());
+  EXPECT_EQ(*stuck, "1");
+  const auto stuck_status = h.mgr.GetWatcherRegistry().Get("cellappmgr/lb/retire/status");
+  ASSERT_TRUE(stuck_status.has_value());
+  EXPECT_NE(stuck_status->find(std::format("app={} owned=0 drains=1 pending=0 ready=0 "
+                                           "stuck=1",
+                                           app_b)),
+            std::string::npos);
+
+  cellappmgr::InformCellLoad drained;
+  drained.app_id = app_b;
+  drained.load = 0.0f;
+  drained.entity_count = 0;
+  cellappmgr::InformCellLoad::CellReport drained_rep;
+  drained_rep.cell_id = b_cell_id;
+  drained_rep.entity_count = 0;
+  drained_rep.geometry_version = partition.geometry_version;
+  drained.cells.push_back(drained_rep);
+  h.mgr.OnInformCellLoad(Address{}, nullptr, drained);
+
+  const auto removes = RemoveCellMessages(ch_b);
+  ASSERT_FALSE(removes.empty());
+  EXPECT_EQ(removes.back().space_id, 42u);
+  EXPECT_EQ(removes.back().cell_id, b_cell_id);
+  const auto finished = h.mgr.GetWatcherRegistry().Get("cellappmgr/lb/retire/drain_count");
+  ASSERT_TRUE(finished.has_value());
+  EXPECT_EQ(*finished, "0");
+  const auto stuck_finished = h.mgr.GetWatcherRegistry().Get("cellappmgr/lb/retire/stuck_count");
+  ASSERT_TRUE(stuck_finished.has_value());
+  EXPECT_EQ(*stuck_finished, "0");
+  const auto status = h.mgr.GetWatcherRegistry().Get("cellappmgr/lb/retire/status");
+  ASSERT_TRUE(status.has_value());
+  EXPECT_NE(status->find(std::format("app={} owned=0 drains=0 pending=0 ready=1", app_b)),
+            std::string::npos);
+}
+
+TEST(CellAppMgr, TickLoadBalance_RetireHandsOffPrimaryLeafToInSpaceReplica) {
+  CellAppMgrHarness h;
+  InterfaceTable table;
+  RecordingChannel ch_a(h.dispatcher, table, MakePeerAddr(30001));
+  RecordingChannel ch_b(h.dispatcher, table, MakePeerAddr(30002));
+
+  cellappmgr::RegisterCellApp reg_a;
+  reg_a.internal_addr = MakePeerAddr(30001);
+  h.mgr.OnRegisterCellApp(reg_a.internal_addr, &ch_a, reg_a);
+  cellappmgr::RegisterCellApp reg_b;
+  reg_b.internal_addr = MakePeerAddr(30002);
+  h.mgr.OnRegisterCellApp(reg_b.internal_addr, &ch_b, reg_b);
+  h.mgr.RegisterWatchersForTest();
+
+  cellappmgr::CreateSpaceRequest csr;
+  csr.space_id = 42;
+  csr.initial_cell_count = 2;
+  csr.space_master_type = "SpaceMaster";
+  h.mgr.OnCreateSpaceRequest(Address{}, nullptr, csr);
+
+  auto& partition = h.mgr.SpacesForTest().at(42);
+  const auto primary_id = partition.bsp.PrimaryCellId();
+  const auto* primary = partition.bsp.FindCellById(primary_id);
+  ASSERT_NE(primary, nullptr);
+  ASSERT_EQ(primary->cellapp_addr, reg_a.internal_addr);
+  const auto updates_a_before = UpdateGeometryMessages(ch_a).size();
+  const auto adds_b_before = AddCellMessages(ch_b).size();
+
+  for (const auto* leaf : partition.bsp.Leaves()) {
+    const bool on_primary = leaf->cell_id == primary_id;
+    const auto app_id = h.mgr.CellApps().at(leaf->cellapp_addr).app_id;
+    cellappmgr::InformCellLoad load;
+    load.app_id = app_id;
+    load.load = on_primary ? 0.7f : 0.3f;
+    load.entity_count = on_primary ? 3u : 10u;
+    cellappmgr::InformCellLoad::CellReport rep;
+    rep.cell_id = leaf->cell_id;
+    rep.entity_count = load.entity_count;
+    rep.geometry_version = partition.geometry_version;
+    rep.tick_load = load.load;
+    load.cells.push_back(rep);
+    h.mgr.OnInformCellLoad(Address{}, nullptr, load);
+  }
+
+  const auto app_a = h.mgr.CellApps().at(reg_a.internal_addr).app_id;
+  ASSERT_TRUE(h.mgr.GetWatcherRegistry().Set("cellappmgr/lb/retire/app_id",
+                                             std::to_string(app_a)));
+
+  h.mgr.TickLoadBalance();
+
+  const auto adds_b_after = AddCellMessages(ch_b);
+  ASSERT_GT(adds_b_after.size(), adds_b_before);
+  EXPECT_EQ(adds_b_after.back().space_id, 42u);
+  EXPECT_EQ(adds_b_after.back().cell_id, primary_id);
+  EXPECT_TRUE(adds_b_after.back().is_primary);
+  EXPECT_TRUE(adds_b_after.back().space_master_type.empty());
+  EXPECT_EQ(adds_b_after.back().space_data_source_addr, reg_a.internal_addr);
+  primary = partition.bsp.FindCellById(primary_id);
+  ASSERT_NE(primary, nullptr);
+  EXPECT_EQ(primary->cellapp_addr, reg_b.internal_addr);
+  EXPECT_EQ(UpdateGeometryMessages(ch_a).size(), updates_a_before);
+
+  cellappmgr::AddCellToSpaceAck ack;
+  ack.space_id = 42;
+  ack.cell_id = primary_id;
+  h.mgr.OnAddCellToSpaceAck(reg_b.internal_addr, nullptr, ack);
+
+  EXPECT_GT(UpdateGeometryMessages(ch_a).size(), updates_a_before);
+
+  cellappmgr::InformCellLoad drained;
+  drained.app_id = app_a;
+  drained.load = 0.0f;
+  drained.entity_count = 0;
+  cellappmgr::InformCellLoad::CellReport rep;
+  rep.cell_id = primary_id;
+  rep.entity_count = 0;
+  rep.geometry_version = partition.geometry_version;
+  drained.cells.push_back(rep);
+  h.mgr.OnInformCellLoad(Address{}, nullptr, drained);
+
+  const auto removes = RemoveCellMessages(ch_a);
+  ASSERT_FALSE(removes.empty());
+  EXPECT_EQ(removes.back().space_id, 42u);
+  EXPECT_EQ(removes.back().cell_id, primary_id);
+  const auto status = h.mgr.GetWatcherRegistry().Get("cellappmgr/lb/retire/status");
+  ASSERT_TRUE(status.has_value());
+  EXPECT_NE(status->find(std::format("app={} owned=0 drains=0 pending=0 ready=1", app_a)),
+            std::string::npos);
+}
+
+TEST(CellAppMgr, TickLoadBalance_RetireHandsOffSinglePrimaryLeafWithSnapshotSource) {
+  CellAppMgrHarness h;
+  InterfaceTable table;
+  RecordingChannel ch_a(h.dispatcher, table, MakePeerAddr(30001));
+  RecordingChannel ch_b(h.dispatcher, table, MakePeerAddr(30002));
+
+  cellappmgr::RegisterCellApp reg_a;
+  reg_a.internal_addr = MakePeerAddr(30001);
+  h.mgr.OnRegisterCellApp(reg_a.internal_addr, &ch_a, reg_a);
+  cellappmgr::RegisterCellApp reg_b;
+  reg_b.internal_addr = MakePeerAddr(30002);
+  h.mgr.OnRegisterCellApp(reg_b.internal_addr, &ch_b, reg_b);
+  h.mgr.RegisterWatchersForTest();
+
+  cellappmgr::CreateSpaceRequest csr;
+  csr.space_id = 42;
+  csr.space_master_type = "SpaceMaster";
+  h.mgr.OnCreateSpaceRequest(Address{}, nullptr, csr);
+
+  auto& partition = h.mgr.SpacesForTest().at(42);
+  const auto primary_id = partition.bsp.PrimaryCellId();
+  auto leaves = partition.bsp.Leaves();
+  ASSERT_EQ(leaves.size(), 1u);
+  ASSERT_EQ(leaves[0]->cellapp_addr, reg_a.internal_addr);
+  const auto updates_a_before = UpdateGeometryMessages(ch_a).size();
+  const auto adds_b_before = AddCellMessages(ch_b).size();
+
+  cellappmgr::InformCellLoad load;
+  load.app_id = h.mgr.CellApps().at(reg_a.internal_addr).app_id;
+  load.load = 0.7f;
+  load.entity_count = 3;
+  cellappmgr::InformCellLoad::CellReport rep;
+  rep.cell_id = primary_id;
+  rep.entity_count = 3;
+  rep.geometry_version = partition.geometry_version;
+  rep.tick_load = 0.7f;
+  load.cells.push_back(rep);
+  h.mgr.OnInformCellLoad(Address{}, nullptr, load);
+
+  const auto app_a = h.mgr.CellApps().at(reg_a.internal_addr).app_id;
+  ASSERT_TRUE(h.mgr.GetWatcherRegistry().Set("cellappmgr/lb/retire/app_id",
+                                             std::to_string(app_a)));
+
+  h.mgr.TickLoadBalance();
+
+  const auto adds_b_after = AddCellMessages(ch_b);
+  ASSERT_GT(adds_b_after.size(), adds_b_before);
+  EXPECT_EQ(adds_b_after.back().space_id, 42u);
+  EXPECT_EQ(adds_b_after.back().cell_id, primary_id);
+  EXPECT_TRUE(adds_b_after.back().is_primary);
+  EXPECT_TRUE(adds_b_after.back().space_master_type.empty());
+  EXPECT_EQ(adds_b_after.back().space_data_source_addr, reg_a.internal_addr);
+  const auto* primary = partition.bsp.FindCellById(primary_id);
+  ASSERT_NE(primary, nullptr);
+  EXPECT_EQ(primary->cellapp_addr, reg_b.internal_addr);
+  EXPECT_EQ(UpdateGeometryMessages(ch_a).size(), updates_a_before);
+
+  cellappmgr::AddCellToSpaceAck ack;
+  ack.space_id = 42;
+  ack.cell_id = primary_id;
+  h.mgr.OnAddCellToSpaceAck(reg_b.internal_addr, nullptr, ack);
+
+  EXPECT_GT(UpdateGeometryMessages(ch_a).size(), updates_a_before);
+
+  cellappmgr::InformCellLoad drained;
+  drained.app_id = app_a;
+  drained.load = 0.0f;
+  drained.entity_count = 0;
+  cellappmgr::InformCellLoad::CellReport drained_rep;
+  drained_rep.cell_id = primary_id;
+  drained_rep.entity_count = 0;
+  drained_rep.geometry_version = partition.geometry_version;
+  drained.cells.push_back(drained_rep);
+  h.mgr.OnInformCellLoad(Address{}, nullptr, drained);
+
+  const auto removes = RemoveCellMessages(ch_a);
+  ASSERT_FALSE(removes.empty());
+  EXPECT_EQ(removes.back().space_id, 42u);
+  EXPECT_EQ(removes.back().cell_id, primary_id);
+}
+
+TEST(CellAppMgr, TickLoadBalance_RetireDrainsMultipleSpacesContinuously) {
+  CellAppMgrHarness h;
+  InterfaceTable table;
+  RecordingChannel ch_a(h.dispatcher, table, MakePeerAddr(30001));
+  RecordingChannel ch_b(h.dispatcher, table, MakePeerAddr(30002));
+
+  cellappmgr::RegisterCellApp reg_a;
+  reg_a.internal_addr = MakePeerAddr(30001);
+  h.mgr.OnRegisterCellApp(reg_a.internal_addr, &ch_a, reg_a);
+  cellappmgr::RegisterCellApp reg_b;
+  reg_b.internal_addr = MakePeerAddr(30002);
+  h.mgr.OnRegisterCellApp(reg_b.internal_addr, &ch_b, reg_b);
+  h.mgr.RegisterWatchersForTest();
+
+  std::vector<std::pair<SpaceID, cellappmgr::CellID>> primaries;
+  for (SpaceID space_id = 41; space_id <= 43; ++space_id) {
+    cellappmgr::CreateSpaceRequest csr;
+    csr.space_id = space_id;
+    csr.initial_cell_count = 2;
+    csr.space_master_type = "SpaceMaster";
+    h.mgr.OnCreateSpaceRequest(Address{}, nullptr, csr);
+
+    auto& partition = h.mgr.SpacesForTest().at(space_id);
+    const auto primary_id = partition.bsp.PrimaryCellId();
+    const auto* primary = partition.bsp.FindCellById(primary_id);
+    ASSERT_NE(primary, nullptr);
+    ASSERT_EQ(primary->cellapp_addr, reg_a.internal_addr);
+    primaries.push_back({space_id, primary_id});
+  }
+
+  for (const auto& primary : primaries) {
+    auto& partition = h.mgr.SpacesForTest().at(primary.first);
+    for (const auto* leaf : partition.bsp.Leaves()) {
+      const bool on_a = leaf->cellapp_addr == reg_a.internal_addr;
+      const auto app_id = h.mgr.CellApps().at(leaf->cellapp_addr).app_id;
+      cellappmgr::InformCellLoad load;
+      load.app_id = app_id;
+      load.load = on_a ? 0.7f : 0.2f;
+      load.entity_count = on_a ? 4u : 8u;
+      cellappmgr::InformCellLoad::CellReport rep;
+      rep.cell_id = leaf->cell_id;
+      rep.entity_count = load.entity_count;
+      rep.geometry_version = partition.geometry_version;
+      rep.tick_load = load.load;
+      load.cells.push_back(rep);
+      h.mgr.OnInformCellLoad(Address{}, nullptr, load);
+    }
+  }
+
+  const auto adds_b_before = AddCellMessages(ch_b).size();
+  const auto app_a = h.mgr.CellApps().at(reg_a.internal_addr).app_id;
+  ASSERT_TRUE(h.mgr.GetWatcherRegistry().Set("cellappmgr/lb/retire/app_id",
+                                             std::to_string(app_a)));
+
+  h.mgr.TickLoadBalance();
+
+  const auto adds_b_after = AddCellMessages(ch_b);
+  ASSERT_GE(adds_b_after.size(), adds_b_before + primaries.size());
+  std::set<std::pair<SpaceID, cellappmgr::CellID>> handed_off;
+  for (std::size_t i = adds_b_before; i < adds_b_after.size(); ++i) {
+    if (!adds_b_after[i].is_primary) continue;
+    EXPECT_TRUE(adds_b_after[i].space_master_type.empty());
+    EXPECT_EQ(adds_b_after[i].space_data_source_addr, reg_a.internal_addr);
+    handed_off.insert({adds_b_after[i].space_id, adds_b_after[i].cell_id});
+  }
+  for (const auto& primary : primaries) {
+    EXPECT_TRUE(handed_off.contains(primary));
+  }
+  auto drain_count = h.mgr.GetWatcherRegistry().Get("cellappmgr/lb/retire/drain_count");
+  ASSERT_TRUE(drain_count.has_value());
+  EXPECT_EQ(*drain_count, "3");
+  auto pending = h.mgr.GetWatcherRegistry().Get("cellappmgr/lb/pending_geometry_broadcasts");
+  ASSERT_TRUE(pending.has_value());
+  EXPECT_EQ(*pending, "3");
+
+  for (const auto& [space_id, primary_id] : primaries) {
+    cellappmgr::AddCellToSpaceAck ack;
+    ack.space_id = space_id;
+    ack.cell_id = primary_id;
+    h.mgr.OnAddCellToSpaceAck(reg_b.internal_addr, nullptr, ack);
+  }
+  pending = h.mgr.GetWatcherRegistry().Get("cellappmgr/lb/pending_geometry_broadcasts");
+  ASSERT_TRUE(pending.has_value());
+  EXPECT_EQ(*pending, "0");
+
+  for (const auto& [space_id, primary_id] : primaries) {
+    cellappmgr::InformCellLoad drained;
+    drained.app_id = app_a;
+    drained.load = 0.0f;
+    drained.entity_count = 0;
+    cellappmgr::InformCellLoad::CellReport rep;
+    rep.cell_id = primary_id;
+    rep.entity_count = 0;
+    rep.geometry_version = h.mgr.SpacesForTest().at(space_id).geometry_version;
+    drained.cells.push_back(rep);
+    h.mgr.OnInformCellLoad(reg_a.internal_addr, nullptr, drained);
+  }
+
+  drain_count = h.mgr.GetWatcherRegistry().Get("cellappmgr/lb/retire/drain_count");
+  ASSERT_TRUE(drain_count.has_value());
+  EXPECT_EQ(*drain_count, "0");
+  std::set<std::pair<SpaceID, cellappmgr::CellID>> removed;
+  for (const auto& msg : RemoveCellMessages(ch_a)) {
+    removed.insert({msg.space_id, msg.cell_id});
+  }
+  for (const auto& primary : primaries) {
+    EXPECT_TRUE(removed.contains(primary));
+  }
+  const auto status = h.mgr.GetWatcherRegistry().Get("cellappmgr/lb/retire/status");
+  ASSERT_TRUE(status.has_value());
+  EXPECT_NE(status->find(std::format("app={} owned=0 drains=0 pending=0 ready=1", app_a)),
+            std::string::npos);
+}
+
 // End-to-end CellApp-death recovery notification to subscribed BaseApps.
 // Wire path: mgr's OnCellAppDeath rehomes the BSP leaves it was tracking,
 // builds a baseapp::CellAppDeath with the per-Space new-host map, and
@@ -679,6 +1826,9 @@ TEST(CellAppMgr, CellAppDeath_FansOutNotificationToBaseAppSubscribers) {
   ASSERT_EQ(notify.rehomes.size(), 1u);
   EXPECT_EQ(notify.rehomes[0].first, 42u);
   EXPECT_EQ(notify.rehomes[0].second, reg_b.internal_addr);
+  ASSERT_EQ(notify.rehome_cells.size(), 1u);
+  EXPECT_EQ(notify.rehome_cells[0].space_id, 42u);
+  EXPECT_EQ(notify.rehome_cells[0].host_addr, reg_b.internal_addr);
 }
 
 // The broadcast cache short-circuits re-sends when the serialised tree
@@ -728,6 +1878,40 @@ TEST(CellAppMgr, BroadcastGeometry_WrapsWithShouldOffloadFreeze) {
   EXPECT_EQ(*(pos - 1), should_off);
   ASSERT_NE(pos + 1, seq.end()) << "UpdateGeometry must precede a ShouldOffload(true)";
   EXPECT_EQ(*(pos + 1), should_off);
+}
+
+TEST(CellAppMgr, BroadcastGeometry_DebugNoticeIncludesLoadAndEntityCount) {
+  CellAppMgrHarness h;
+  InterfaceTable base_table;
+  RecordingChannel base_ch(h.dispatcher, base_table, MakePeerAddr(20000));
+  h.mgr.BaseAppChannelsForTest()[MakePeerAddr(20000)] = &base_ch;
+
+  cellappmgr::RegisterCellApp reg;
+  reg.internal_addr = MakePeerAddr(30001);
+  h.mgr.OnRegisterCellApp(reg.internal_addr, nullptr, reg);
+
+  cellappmgr::CreateSpaceRequest csr;
+  csr.space_id = 42;
+  h.mgr.OnCreateSpaceRequest(Address{}, nullptr, csr);
+
+  const auto initial = SpaceBspGeometryMessages(base_ch);
+  ASSERT_EQ(initial.size(), 1u);
+
+  cellappmgr::InformCellLoad load;
+  load.app_id = 1;
+  load.load = 0.73f;
+  load.entity_count = 42;
+  load.cells.push_back({1, 42, 12.5f, -7.25f, 1});
+  h.mgr.OnInformCellLoad(Address{}, nullptr, load);
+  h.mgr.TickLoadBalance();
+
+  const auto notices = SpaceBspGeometryMessages(base_ch);
+  ASSERT_GE(notices.size(), 2u);
+  ASSERT_EQ(notices.back().leaves.size(), 1u);
+  EXPECT_EQ(notices.back().space_id, 42u);
+  EXPECT_EQ(notices.back().leaves[0].cell_id, 1u);
+  EXPECT_EQ(notices.back().leaves[0].entity_count, 42u);
+  EXPECT_FLOAT_EQ(notices.back().leaves[0].load, 0.73f);
 }
 
 TEST(CellAppMgr, BroadcastGeometry_CachesBlob_SkipsUnchangedReSends) {

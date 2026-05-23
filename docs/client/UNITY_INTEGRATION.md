@@ -23,7 +23,7 @@ is the practical "what do I do" view.
 |---|---|
 | **Unity** | 2022.3 LTS or 6.x (≤ 6.5 — see below). API Compatibility = .NET Standard 2.1 (Project Settings → Player → Other Settings). |
 | **Atlas repo** | This tree, with `ATLAS_BUILD_NET_CLIENT=ON` enabled when configuring CMake. |
-| **.NET SDK** | 9.0+ (`dotnet --version`). |
+| **.NET SDK** | 10.0.202+ (`dotnet --version`, matching `global.json`). |
 | **Native toolchain** | Host build only: MSVC 2022 (Windows) / Clang or GCC (Linux) / Xcode CLT (macOS). Mobile builds (Android arm64 / iOS arm64) come from CI artefacts — see [Mobile targets](#mobile-targets). |
 
 Unity 2022 → 6.5 are the **Pattern B** range — `[MonoPInvokeCallback]`
@@ -146,7 +146,7 @@ MonoBehaviour entry point. Drop it onto a GameObject (typically a
 
 ```
 Awake()   → AtlasNetCreate() + register callbacks
-Update()  → AtlasNetPoll() + AvatarFilter.UpdateLatency() per entity
+Update()  → AtlasNetPoll() + ClientSession.Tick(Time.deltaTime)
 OnDestroy → AtlasNetDestroy() + clear filters
 ```
 
@@ -159,7 +159,11 @@ OnDestroy → AtlasNetDestroy() + clear filters
 | `Logout()` | `int` | Any time; idempotent. |
 | `SendBaseRpc(entityId, rpcId, payload)` | `int` | After `AuthFinished(success=true)`. |
 | `SendCellRpc(entityId, rpcId, payload)` | `int` | Same. |
-| `TryGetInterpolatedTransform(entityId, out pos, out dir, out onGround)` | `bool` | Per-frame, after `EntityEntered` for that entity. Returns `false` if no samples yet. |
+| `TryGetInterpolatedTransform(entityId, out pos, out dir, out onGround)` | `bool` | Per-frame, after the entity exists in `Session.EntityManager`. Returns `false` if no samples yet. |
+| `TryGetStats(out stats)` | `bool` | Anytime after Awake. |
+| `Configure(host, port)` | `void` | Before `Login`, to override the Inspector defaults. |
+| `ConfigureSession(session)` | `void` | Before login if you need a custom `ClientSession` / generated registry. |
+| `Session` | `ClientSession` | Access to entity, space-data, RPC, and BSP events decoded from `on_deliver`. |
 | `State` | `AtlasNetState` | Anytime. |
 
 ### Events
@@ -171,20 +175,27 @@ All events fire on the Unity main thread (during `Update` poll).
 | `LoginFinished` | `(AtlasLoginStatus, string?)` | LoginApp responds or 10s timeout. |
 | `AuthFinished` | `(bool, uint, ushort, string?)` | BaseApp responds or 5s timeout. |
 | `Disconnected` | `(int reason)` | Server-side close / timeout / network error / `Logout()`. |
-| `PlayerBaseCreated` | `(uint eid, ushort tid, byte[] props)` | Server creates the player's Base entity. |
-| `PlayerCellCreated` | `(uint space, Vector3 pos, Vector3 dir, byte[] props)` | Player's Cell entity spawns (entered the world). |
-| `EntitiesReset` | `()` | `giveClientTo` — clear all AOI state. |
-| `EntityEntered` | `(uint eid, ushort tid, Vector3 pos, Vector3 dir, byte[] props)` | Other entity enters AOI. |
-| `EntityLeft` | `(uint eid)` | Other entity leaves AOI. |
-| `EntityPositionUpdated` | `(uint eid, Vector3 pos, Vector3 dir, bool onGround)` | Server position update. Already fed into AvatarFilter — usually you query `TryGetInterpolatedTransform` instead of subscribing. |
-| `EntityPropertyUpdated` | `(uint eid, byte scope, byte[] delta)` | Server property delta. Pair with the codegen-generated `ApplyReplicatedDelta`. |
-| `EntityForcedPosition` | `(uint eid, Vector3 pos, Vector3 dir)` | Server snap. AvatarFilter is reset internally to avoid lerping from stale samples; subscribe if you need to bypass interpolation in the renderer too. |
-| `Rpc` | `(uint eid, uint rpcId, byte[] payload)` | Server-to-client RPC. Pair with the codegen-generated `ClientRpcDispatcher`. |
+
+Entity and world-state notifications live on `ClientSession`, because
+the native DLL now exposes a single `on_deliver` callback and C# decodes
+AOI / RPC / space-data envelopes:
+
+| Event / hook | Signature | Fires when |
+|---|---|---|
+| `Session.EntityManager.EntityAdded` | `(ClientEntity entity)` | Player or AOI entity is created and initialized. |
+| `Session.EntityManager.EntityRemoved` | `(ClientEntity entity)` | AOI leave, owner transfer cleanup, or session reset removes an entity. |
+| `Session.SpaceDataManager.Initialized` | `(uint spaceId)` | Full space-data snapshot arrives. |
+| `Session.SpaceDataManager.KeyChanged` | `(uint spaceId, ushort keyId, ReadOnlyMemory<byte> value)` | A space-data key is set or updated. |
+| `Session.SpaceDataManager.KeyRemoved` | `(uint spaceId, ushort keyId)` | A space-data key is deleted. |
+| `Session.ClientRpcDispatcher` | `(ClientEntity entity, int rpcId, ref SpanReader reader)` | Server-to-client RPC envelope arrives. |
+| `Session.SpaceBspGeometryReceived` | `(uint spaceId, IReadOnlyList<BspLeafRect> leaves)` | Cell BSP debug geometry arrives; each leaf includes owner, bounds, load, and entity count. |
 
 ### AvatarFilter — automatic
 
-Each entity gets its own filter on first position update. The filter
-parameters are exposed on the `AtlasNetworkManager` Inspector:
+Each `ClientEntity` owns an `AvatarFilter`, which receives samples from
+AOI enter, position-update, and position-batch messages. Defaults live
+on `AvatarFilter`; MVP views tune them in code after the entity exists
+(see `samples/mvp/UnityClient/Assets/Scripts/Runtime/Views/`):
 
 | Field | Default | Effect |
 |---|---|---|
@@ -203,8 +214,7 @@ if (net.TryGetInterpolatedTransform(remoteEntityId, out var pos, out var dir, ou
 }
 ```
 
-`Reset()` is automatic on `EntityForcedPosition` (server-authoritative
-snap) and on `EntityLeft` / `EntitiesReset` (entity dropped from AOI).
+`Reset()` is automatic when the entity is dropped from the manager.
 
 ## Sample bootstrap script
 
@@ -236,8 +246,8 @@ public class TestBootstrap : MonoBehaviour
             else   Debug.LogError($"auth failed: {err}");
         };
         net.Disconnected += reason => Debug.LogWarning($"disconnected reason={reason}");
-        net.EntityEntered += (eid, tid, pos, dir, _) =>
-            Debug.Log($"entity {eid} (type {tid}) entered at {pos}");
+        net.Session.EntityManager.EntityAdded += entity =>
+            Debug.Log($"entity {entity.EntityId} ({entity.TypeName}) added");
 
         net.Login(username, passwordHash);
     }
@@ -249,16 +259,16 @@ separate terminal:
 
 ```bash
 # Windows
-tools\bin\run_cluster.bat
+tools\bin\run_mvp_cluster.bat
 # Linux / macOS
-tools/bin/run_cluster.sh
+tools/bin/run_mvp_cluster.sh
 ```
 
 That brings up machined / loginapp / dbapp / baseappmgr / baseapp /
-cellappmgr / cellapp from `build/debug` and parks LoginApp on
-`127.0.0.1:20013` (the AtlasNetworkManager Inspector default). Stop
-the cluster with Ctrl+C in that terminal — see the script header
-for orphan-cleanup notes.
+cellappmgr / cellapp from `build/debug` with the MVP assemblies and
+parks LoginApp on `127.0.0.1:20018`, matching the
+`AtlasNetworkManager` Inspector default. Stop the cluster with Ctrl+C
+in that terminal.
 
 Console should then show the login → auth → entity-creation chain.
 
@@ -275,7 +285,8 @@ Console should then show the login → auth → entity-creation chain.
   - Target Architectures: tick **ARM64**, untick others
   - API Compatibility Level: **.NET Standard 2.1**
 - **Binary**: download `atlas_net_client-android-arm64` artefact from
-  the GitHub Actions `net_client cross-platform` workflow run, drop into
+  the GitHub Actions `atlas_net_client (Cross-Platform)` workflow
+  (`.github/workflows/atlas-net-client.yml`), drop into
   `Plugins/Android/arm64-v8a/`. Or build locally with NDK r25+:
   ```bash
   export ANDROID_NDK_HOME=$HOME/Android/Sdk/ndk/25.2.9519653
@@ -356,7 +367,7 @@ existing build outputs without recompiling.
   ["UNITY_2022_3_OR_NEWER"]`). On older Unity the assembly is silently
   skipped — check **Project Settings → Player → Other Settings**.
 
-### `atlas_net_client.AtlasNetCreate failed (abi=0x01000000): ABI version mismatch`
+### `atlas_net_client.AtlasNetCreate failed (abi=0x02000000): ABI version mismatch`
 
 - The native DLL and the C# bindings disagree. Re-run
   `setup_unity_client` with the same `--config` to rebuild both
@@ -389,7 +400,7 @@ existing build outputs without recompiling.
 | Android | `adb logcat -s Unity` |
 | iOS | Xcode Console / `~/Library/Logs/CoreSimulator/<dev-id>/system.log` |
 
-The `AtlasNetSetLogHandler` callback (Phase 3 §4.8) routes
+The `AtlasNetSetLogHandler` callback routes
 `atlas_net_client` internal logs into Unity's `Debug.Log` if you wire
 it; not done by default. Hook it in `AtlasNetworkManager.Awake()`
 before `AtlasNetCreate` if you want the native side's diagnostics.

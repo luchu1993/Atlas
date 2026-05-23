@@ -1,6 +1,7 @@
 # Phase 13: 高可用 — Reviver + DBAppMgr
 
-**Status:** ⬜ 未启动。本文是设计文档。
+**Status:** 🚧 部分落地。CellAppMgr 本地 Snapshot / Restore 与最小 Reviver
+已可用；DBAppMgr / BaseAppMgr 高可用尚未启动。
 **前置依赖:** Phase 11（分布式空间完整可用）
 **BigWorld 参考:** `server/reviver/`, `server/dbappmgr/`
 
@@ -13,16 +14,21 @@
 
 ### Reviver 进程
 
-监控全局唯一的 Manager 进程（BaseAppMgr / CellAppMgr / DBAppMgr），
-心跳超时后自动重启。普通进程（BaseApp / CellApp / DBApp）的故障由
-对应 Manager 处理。Reviver 自身的高可用：可部署多个 Reviver，通过选举
-确定 active。
+BigWorld 的 Reviver 只负责监督全局唯一 Manager 进程；Manager 崩溃后的
+状态恢复由对应 Manager 自己的 Snapshot / Restore 完成。普通进程
+（BaseApp / CellApp / DBApp）的故障由对应 Manager 处理。
 
-策略：心跳超时阈值 ≈ 5s；最大重启次数 3。
+当前 Atlas 已落地 CellAppMgr 的最小 Reviver：订阅 machined birth / death，
+按进程名识别目标 CellAppMgr，异常退出后延迟重启，并可在启动时 cold-start
+缺失的 CellAppMgr。Reviver 会把固定 internal port、snapshot path 和
+update hertz 传给新 CellAppMgr，使重启进程能从本地快照恢复并重新注册。
+
+仍缺：BaseAppMgr / DBAppMgr 监控、Reviver 多实例选举、独立心跳超时检测。
+当前异常检测依赖 machined death 通知；最大重启次数默认 3。
 
 ### Manager 状态备份与恢复
 
-Manager 进程定期备份关键状态，崩溃重启后可恢复。统一接口：
+Manager 进程定期备份关键状态，崩溃重启后可恢复。目标统一接口：
 
 ```
 IManagerBackup:
@@ -38,8 +44,14 @@ IManagerBackup:
 | CellAppMgr | Space 分区信息（BSP 树）、CellApp 列表 |
 | DBAppMgr | DBApp 列表、待处理请求队列 |
 
-策略：定期快照到本地文件（每 N 秒）；Manager 重启后先尝试读取最新
-快照；快照过期时从集群中各进程重建状态。
+当前 CellAppMgr 已实现 `Snapshot()` / `Restore()`，并支持 `--snapshot-path`
+周期写本地快照；启动时会先尝试读取快照。快照内容包括 CellApp 列表、
+`next_app_id`、Space BSP、pending geometry broadcasts、global geometry version
+和 tick alignment epoch。恢复出的 CellApp 标记为待 reattach；真实 CellApp
+重新注册后，CellAppMgr 会 replay topology 并请求 CellApp 主动上报最新负载。
+
+仍缺：BaseAppMgr / DBAppMgr Snapshot / Restore，以及快照过期后从集群重建
+Manager 状态。
 
 ### DBAppMgr — 多 DBApp 实例
 
@@ -70,8 +82,10 @@ Ghost 升级为 Real；无 Ghost 的实体从 BaseApp 重建。
 
 ## 验收标准
 
-- Reviver 检测 Manager 崩溃并自动重启
-- Manager 重启后从备份恢复状态
+- 已满足：最小 Reviver 可 cold-start CellAppMgr，并在异常终止后重启真实
+  CellAppMgr 进程
+- 已满足：CellAppMgr 可从本地 snapshot 文件恢复 BSP 拓扑和 CellApp 表
+- 待补齐：Reviver 检测 BaseAppMgr / DBAppMgr 崩溃并自动重启
 - DBAppMgr 支持多 DBApp 实例和故障转移
 - CellApp 崩溃后管理的实体可迁移到其他 CellApp
 - BaseApp 崩溃后客户端可重连到新 BaseApp

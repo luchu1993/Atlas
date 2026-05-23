@@ -88,6 +88,7 @@ enum class BaseApp : uint16_t {
   // CellAppMgr -> BaseApp -> Client. Flattened BSP leaf rects for the LB
   // debug gizmo; routed via BaseApp so each proxy sees only its own Space.
   kSpaceBspGeometry = 2032,
+  kCellEntityCreateFailed = 2033,
 };
 
 // CellApp outbound traffic to BaseApp reuses BaseApp IDs.
@@ -144,6 +145,8 @@ enum class CellAppMgr : uint16_t {
   kShouldOffload = 7006,
   kSpaceCreatedResult = 7007,
   kAddCellToSpaceAck = 7008,
+  kRemoveCellFromSpace = 7009,
+  kRequestCellAppState = 7010,
 };
 
 enum class DBApp : uint16_t {
@@ -232,6 +235,7 @@ ATLAS_ASSERT_ID_RANGE(BaseApp::kCellAppDeath, 2000, 2999);
 ATLAS_ASSERT_ID_RANGE(BaseApp::kForceLogoff, 2000, 2999);
 ATLAS_ASSERT_ID_RANGE(BaseApp::kForceLogoffAck, 2000, 2999);
 ATLAS_ASSERT_ID_RANGE(BaseApp::kSpaceBspGeometry, 2000, 2999);
+ATLAS_ASSERT_ID_RANGE(BaseApp::kCellEntityCreateFailed, 2000, 2999);
 
 ATLAS_ASSERT_ID_RANGE(CellApp::kCreateCellEntity, 3000, 3999);
 ATLAS_ASSERT_ID_RANGE(CellApp::kSpawnLocalEntity, 3000, 3999);
@@ -269,6 +273,8 @@ ATLAS_ASSERT_ID_RANGE(CellAppMgr::kUpdateGeometry, 7000, 7099);
 ATLAS_ASSERT_ID_RANGE(CellAppMgr::kShouldOffload, 7000, 7099);
 ATLAS_ASSERT_ID_RANGE(CellAppMgr::kSpaceCreatedResult, 7000, 7099);
 ATLAS_ASSERT_ID_RANGE(CellAppMgr::kAddCellToSpaceAck, 7000, 7099);
+ATLAS_ASSERT_ID_RANGE(CellAppMgr::kRemoveCellFromSpace, 7000, 7099);
+ATLAS_ASSERT_ID_RANGE(CellAppMgr::kRequestCellAppState, 7000, 7099);
 
 ATLAS_ASSERT_ID_RANGE(DBApp::kWriteEntity, 4000, 4999);
 ATLAS_ASSERT_ID_RANGE(DBApp::kWriteEntityAck, 4000, 4999);

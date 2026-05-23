@@ -4,6 +4,7 @@
 #include <cstdint>
 #include <vector>
 
+#include "cellappmgr/cellappmgr_messages.h"
 #include "math/vector3.h"
 #include "network/address.h"
 #include "network/message.h"
@@ -13,22 +14,16 @@
 
 namespace atlas::cellapp {
 
-// Per-peer Witness state for Avatar Offload: only entity-owned seqs
-// (absolute, replicated). Witness-local tick scheduling is rebuilt on
-// the destination from its own tick_count_.
+// Per-peer Witness state for Avatar Offload; only entity-owned seqs move.
+// Witness-local tick scheduling is rebuilt from the destination tick_count_.
 struct WitnessAoIEntry {
   EntityID id{kInvalidEntityID};
   uint64_t last_event_seq{0};
   uint64_t last_volatile_seq{0};
 };
 
-// Seeds a Ghost replica with the Real entity's other-audience snapshot
-// baseline. `event_seq` / `volatile_seq` give the receiving side a
-// starting point for ordering subsequent GhostDelta /
-// GhostPositionUpdate messages (they slot directly into
-// ReplicationState's latest_*_seq). `real_cellapp_addr` is the channel
-// the Ghost uses to forward anything back to the Real side.
-
+// Seeds a Ghost with Real's other-audience baseline and optional Cell backup.
+// Seqs let later GhostDelta / GhostPositionUpdate continue ordering.
 struct CreateGhost {
   EntityID entity_id{kInvalidEntityID};
   uint16_t type_id{0};
@@ -41,6 +36,7 @@ struct CreateGhost {
   uint64_t event_seq{0};
   uint64_t volatile_seq{0};
   std::vector<std::byte> other_snapshot;
+  std::vector<std::byte> persistent_blob;
 
   static auto Descriptor() -> const MessageDesc& {
     static const MessageDesc kDesc{msg_id::Id(msg_id::CellApp::kCreateGhost),
@@ -71,6 +67,8 @@ struct CreateGhost {
     w.Write(volatile_seq);
     w.WritePackedInt(static_cast<uint32_t>(other_snapshot.size()));
     if (!other_snapshot.empty()) w.WriteBytes(std::span<const std::byte>(other_snapshot));
+    w.WritePackedInt(static_cast<uint32_t>(persistent_blob.size()));
+    if (!persistent_blob.empty()) w.WriteBytes(std::span<const std::byte>(persistent_blob));
   }
 
   static auto Deserialize(BinaryReader& r) -> Result<CreateGhost> {
@@ -109,6 +107,16 @@ struct CreateGhost {
       auto data = r.ReadBytes(*snlen);
       if (!data) return Error{ErrorCode::kInvalidArgument, "CreateGhost: snapshot truncated"};
       msg.other_snapshot.assign(data->begin(), data->end());
+    }
+    if (r.Remaining() == 0) return msg;
+    auto pblen = r.ReadPackedInt();
+    if (!pblen)
+      return Error{ErrorCode::kInvalidArgument, "CreateGhost: persistent blob len truncated"};
+    if (*pblen > 0) {
+      auto data = r.ReadBytes(*pblen);
+      if (!data)
+        return Error{ErrorCode::kInvalidArgument, "CreateGhost: persistent blob truncated"};
+      msg.persistent_blob.assign(data->begin(), data->end());
     }
     return msg;
   }
@@ -197,12 +205,8 @@ struct GhostPositionUpdate {
 };
 static_assert(NetworkMessage<GhostPositionUpdate>);
 
-// Other-audience delta (output of DeltaSyncEmitter::SerializeOtherDelta
-// with the _dirtyFlags & OtherVisibleMask filter). `event_seq` is the
-// Real side's ReplicationState::latest_event_seq at emit time - Ghost
-// appends into its own history deque keyed by that seq. Gaps larger
-// than kReplicationHistoryWindow (8 frames) must be healed by a
-// GhostSnapshotRefresh rather than by silent state loss.
+// Other-audience delta from DeltaSyncEmitter; event_seq is Real's latest.
+// Gaps beyond the history window are healed by GhostSnapshotRefresh.
 
 struct GhostDelta {
   EntityID entity_id{kInvalidEntityID};
@@ -244,16 +248,13 @@ struct GhostDelta {
 };
 static_assert(NetworkMessage<GhostDelta>);
 
-// Sent when the Real side detects that a given Ghost's event_seq trails
-// by more than kReplicationHistoryWindow (= 8) frames -
-// continuous-delta catch-up is no longer feasible, so rebase the
-// Ghost's other_snapshot to a fresh full snapshot at `event_seq` and
-// let future GhostDelta streams resume from there.
-
+// Re-bases a Ghost's other_snapshot after a history gap, and can refresh
+// its Cell backup even when the public snapshot is unchanged.
 struct GhostSnapshotRefresh {
   EntityID entity_id{kInvalidEntityID};
   uint64_t event_seq{0};
   std::vector<std::byte> other_snapshot;
+  std::vector<std::byte> persistent_blob;
 
   static auto Descriptor() -> const MessageDesc& {
     static const MessageDesc kDesc{msg_id::Id(msg_id::CellApp::kGhostSnapshotRefresh),
@@ -270,6 +271,8 @@ struct GhostSnapshotRefresh {
     w.Write(event_seq);
     w.WritePackedInt(static_cast<uint32_t>(other_snapshot.size()));
     if (!other_snapshot.empty()) w.WriteBytes(std::span<const std::byte>(other_snapshot));
+    w.WritePackedInt(static_cast<uint32_t>(persistent_blob.size()));
+    if (!persistent_blob.empty()) w.WriteBytes(std::span<const std::byte>(persistent_blob));
   }
 
   static auto Deserialize(BinaryReader& r) -> Result<GhostSnapshotRefresh> {
@@ -286,6 +289,18 @@ struct GhostSnapshotRefresh {
       if (!data)
         return Error{ErrorCode::kInvalidArgument, "GhostSnapshotRefresh: snapshot truncated"};
       msg.other_snapshot.assign(data->begin(), data->end());
+    }
+    if (r.Remaining() == 0) return msg;
+    auto pblen = r.ReadPackedInt();
+    if (!pblen)
+      return Error{ErrorCode::kInvalidArgument,
+                   "GhostSnapshotRefresh: persistent blob len truncated"};
+    if (*pblen > 0) {
+      auto data = r.ReadBytes(*pblen);
+      if (!data)
+        return Error{ErrorCode::kInvalidArgument,
+                     "GhostSnapshotRefresh: persistent blob truncated"};
+      msg.persistent_blob.assign(data->begin(), data->end());
     }
     return msg;
   }
@@ -413,6 +428,8 @@ struct OffloadEntity {
   // Cell-local-only entity (no BaseApp counterpart); preserved across Offload
   // so DestroySelf() takes the local-destroy path on the new owner.
   bool is_local{false};
+  cellappmgr::CellID target_cell_id{0};
+  uint64_t geometry_version{0};
   // Per-peer Witness state (peers the client already mirrors + LOD seqs).
   // Destination diffs vs post-Activate sweep for a transparent handoff.
   std::vector<WitnessAoIEntry> aoi_entries;
@@ -469,6 +486,8 @@ struct OffloadEntity {
       w.Write(e.last_event_seq);
       w.Write(e.last_volatile_seq);
     }
+    w.Write(target_cell_id);
+    w.Write(geometry_version);
   }
 
   static auto Deserialize(BinaryReader& r) -> Result<OffloadEntity> {
@@ -581,24 +600,38 @@ struct OffloadEntity {
         msg.aoi_entries.push_back(WitnessAoIEntry{*id, *evt, *vol});
       }
     }
+    if (r.Remaining() >= sizeof(uint32_t) + sizeof(uint64_t)) {
+      auto tc = r.Read<uint32_t>();
+      auto gv = r.Read<uint64_t>();
+      if (!tc || !gv)
+        return Error{ErrorCode::kInvalidArgument, "OffloadEntity: geometry tail truncated"};
+      msg.target_cell_id = *tc;
+      msg.geometry_version = *gv;
+    }
     return msg;
   }
 };
 static_assert(NetworkMessage<OffloadEntity>);
 
-// `success == false` means the destination rejected the offload (no
-// such Space, unknown type, allocation failure, ...); the source CellApp
-// keeps the entity put.
+enum class OffloadRejectReason : uint8_t {
+  kNone = 0,
+  kRejected = 1,
+  kStaleGeometry = 2,
+  kTargetMissing = 3,
+  kRestoreFailed = 4,
+};
 
 struct OffloadEntityAck {
   EntityID entity_id{kInvalidEntityID};
   bool success{false};
+  OffloadRejectReason reject_reason{OffloadRejectReason::kRejected};
 
   static auto Descriptor() -> const MessageDesc& {
     static const MessageDesc kDesc{msg_id::Id(msg_id::CellApp::kOffloadEntityAck),
                                    "cellapp::OffloadEntityAck",
                                    MessageLengthStyle::kFixed,
-                                   static_cast<int>(sizeof(uint32_t) + sizeof(uint8_t)),
+                                   static_cast<int>(sizeof(uint32_t) + sizeof(uint8_t) +
+                                                    sizeof(uint8_t)),
                                    MessageReliability::kReliable,
                                    MessageUrgency::kImmediate};
     return kDesc;
@@ -607,15 +640,23 @@ struct OffloadEntityAck {
   void Serialize(BinaryWriter& w) const {
     w.Write(entity_id);
     w.Write(static_cast<uint8_t>(success ? 1 : 0));
+    const auto reason = success ? OffloadRejectReason::kNone : reject_reason;
+    w.Write(static_cast<uint8_t>(reason));
   }
 
   static auto Deserialize(BinaryReader& r) -> Result<OffloadEntityAck> {
     auto eid = r.Read<uint32_t>();
     auto ok = r.Read<uint8_t>();
-    if (!eid || !ok) return Error{ErrorCode::kInvalidArgument, "OffloadEntityAck: truncated"};
+    auto reason = r.Read<uint8_t>();
+    if (!eid || !ok || !reason)
+      return Error{ErrorCode::kInvalidArgument, "OffloadEntityAck: truncated"};
     OffloadEntityAck msg;
     msg.entity_id = *eid;
     msg.success = (*ok != 0);
+    if (*reason > static_cast<uint8_t>(OffloadRejectReason::kRestoreFailed)) {
+      return Error{ErrorCode::kInvalidArgument, "OffloadEntityAck: bad reason"};
+    }
+    msg.reject_reason = static_cast<OffloadRejectReason>(*reason);
     return msg;
   }
 };
