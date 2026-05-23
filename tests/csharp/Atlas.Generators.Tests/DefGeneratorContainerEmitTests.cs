@@ -211,6 +211,46 @@ public partial class Avatar : ServerEntity
     }
 
     [Fact]
+    public void ClientBootstrap_EmitsSessionRegistrationEntryPoint()
+    {
+        var source = @"
+using Atlas.Client;
+namespace Test;
+
+[Atlas.Entity.Entity(""Avatar"")]
+public partial class Avatar : ClientEntity
+{
+    public override string TypeName => ""Avatar"";
+    public partial void ShowDamage(int amount) {}
+}
+";
+        var xml = @"<entity name=""Avatar"">
+  <client_methods>
+    <method name=""ShowDamage"">
+      <arg name=""amount"" type=""int32"" />
+    </method>
+  </client_methods>
+</entity>";
+        var result = Run(source, xml, "ATLAS_CLIENT");
+
+        var bootstrap = FindGenerated(result, "DefBootstrap")!;
+        var factory = FindGenerated(result, "EntityFactory")!;
+        var dispatcher = FindGenerated(result, "DefRpcDispatcher")!;
+
+        Assert.Contains("public static void RegisterInto(Atlas.Client.ClientSession session)",
+                        bootstrap);
+        Assert.Contains("DefEntityFactoryRegistrations.RegisterInto(session.EntityFactory)",
+                        bootstrap);
+        Assert.Contains("Atlas.Rpc.DefRpcDispatcher.RegisterInto(session)", bootstrap);
+        Assert.Contains("internal static void RegisterInto(Atlas.Client.ClientEntityFactoryRegistry registry)",
+                        factory);
+        Assert.Contains("registry.Register", factory);
+        Assert.Contains("internal static void RegisterInto(Atlas.Client.ClientSession session)",
+                        dispatcher);
+        Assert.Contains("session.ClientRpcDispatcher = DispatchClientRpc", dispatcher);
+    }
+
+    [Fact]
     public void StructRegistry_AssignsStableIdsAlphabetically()
     {
         var xml = @"<entity name=""Avatar"">

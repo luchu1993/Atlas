@@ -152,7 +152,7 @@ namespace Atlas.Mvp.Unity
             }
             _accountEntityId = entityId;
             Transition(LoginFlowState.EnteringWorld);
-            var account = ClientCallbacks.EntityManager.Get(entityId)
+            var account = _net.Session.EntityManager.Get(entityId)
                           as Atlas.Mvp.Client.Account;
             if (account == null)
             {

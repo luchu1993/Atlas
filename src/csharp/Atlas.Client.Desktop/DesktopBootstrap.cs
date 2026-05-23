@@ -22,21 +22,15 @@ internal unsafe struct ClientCallbackTable
 
 public static unsafe class DesktopBootstrap
 {
-    // Idempotent. Must run after CLR bootstrap and before the user assembly's
-    // ModuleInitializer fires (which calls into ClientHost for digest /
-    // entity-type registration).
+    // Idempotent; runs after CLR bootstrap and before user ModuleInitializers
+    // call into ClientHost for digest and entity registration.
     [UnmanagedCallersOnly]
     public static int Initialize()
     {
         try
         {
-            // Force AutoFlush on managed stdout / stderr. .NET's default
-            // Console writers leave a ~2 KB buffer in front of the handle
-            // when stdout is a redirected pipe, so harnesses that poll
-            // child stdout (world_stress --script-clients) or kill the
-            // child before graceful exit see the first few hundred
-            // Console.WriteLine lines vanish. Line-rate flushing is
-            // harmless — desktop-client log volume never saturates it.
+            // Redirected stdout otherwise keeps a small managed buffer that
+            // hides early harness output when child clients exit abruptly.
             Console.SetOut(new System.IO.StreamWriter(Console.OpenStandardOutput())
             {
                 AutoFlush = true,
@@ -54,6 +48,10 @@ public static unsafe class DesktopBootstrap
             ClientHost.RegisterStructHandler = ClientNativeApi.RegisterStruct;
             ClientHost.SetEntityDefDigestHandler = ClientNativeApi.SetEntityDefDigest;
             ClientHost.ReportEventSeqGapHandler = ClientNativeApi.ReportEventSeqGap;
+            ClientCallbacks.DefaultSession.SendBaseRpcHandler = ClientNativeApi.SendBaseRpc;
+            ClientCallbacks.DefaultSession.SendCellRpcHandler = ClientNativeApi.SendCellRpc;
+            ClientCallbacks.DefaultSession.ReportEventSeqGapHandler =
+                ClientNativeApi.ReportEventSeqGap;
 
             RegisterNativeCallbacks();
             return 0;
@@ -74,17 +72,8 @@ public static unsafe class DesktopBootstrap
         {
             var path = Encoding.UTF8.GetString(new ReadOnlySpan<byte>(pathUtf8, pathLen));
 
-            // Load the user assembly into the SAME AssemblyLoadContext that
-            // already holds Atlas.Client (which is the ALC this very method
-            // runs in). hostfxr's load_assembly_and_get_function_pointer
-            // puts each distinct script assembly into its own "isolated"
-            // ALC, so using AssemblyLoadContext.Default or Assembly.LoadFrom
-            // here would give us two distinct Atlas.Client.ClientEntityFactory
-            // types: the generator's ModuleInitializer would register entity
-            // creators into the user-assembly's copy while the
-            // [UnmanagedCallersOnly] bridges in this file read from the
-            // Atlas.Client.Desktop copy, and every CreateEntity callback
-            // would come back null.
+            // Load into the host ALC so generated registrations and native
+            // bridges share the same Atlas.Client type identity.
             var hostAlc = System.Runtime.Loader.AssemblyLoadContext.GetLoadContext(
                 typeof(DesktopBootstrap).Assembly);
             if (hostAlc == null)
@@ -95,11 +84,8 @@ public static unsafe class DesktopBootstrap
             }
             var assembly = hostAlc.LoadFromAssemblyPath(path);
 
-            // The runtime defers [ModuleInitializer] execution until code
-            // in the module is first accessed. atlas_client never touches
-            // user-assembly types from managed code — all wiring happens
-            // through C++ callbacks — so we force the module ctor to run
-            // now so the generator-emitted registrations fire.
+            // atlas_client reaches user code through C++ callbacks, so force
+            // module initializers before the first native create callback.
             foreach (var module in assembly.Modules)
             {
                 System.Runtime.CompilerServices.RuntimeHelpers.RunModuleConstructor(
@@ -136,25 +122,25 @@ public static unsafe class DesktopBootstrap
                                    ulong traceId)
     {
         var span = len > 0 ? new ReadOnlySpan<byte>(payload, len) : ReadOnlySpan<byte>.Empty;
-        ClientCallbacks.DispatchRpc(entityId, rpcId, traceId, span);
+        ClientCallbacks.DefaultSession.DispatchRpc(entityId, rpcId, traceId, span);
     }
 
     [UnmanagedCallersOnly]
     public static void CreateEntity(uint entityId, ushort typeId)
     {
-        ClientCallbacks.CreateEntity(entityId, typeId);
+        ClientCallbacks.DefaultSession.CreateEntity(entityId, typeId);
     }
 
     [UnmanagedCallersOnly]
     public static void DestroyEntity(uint entityId)
     {
-        ClientCallbacks.DestroyEntity(entityId);
+        ClientCallbacks.DefaultSession.DestroyEntity(entityId);
     }
 
     [UnmanagedCallersOnly]
     public static void DeliverFromServer(ushort msgId, byte* payload, int len)
     {
         var span = len > 0 ? new ReadOnlySpan<byte>(payload, len) : ReadOnlySpan<byte>.Empty;
-        ClientCallbacks.DeliverFromServer(msgId, span);
+        ClientCallbacks.DefaultSession.DeliverFromServer(msgId, span);
     }
 }

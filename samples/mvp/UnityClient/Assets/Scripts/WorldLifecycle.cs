@@ -69,9 +69,7 @@ namespace Atlas.Mvp.Unity
             AoiBoxes.Clear();
             BspGizmo.Clear();
             LabelOverlay.Shutdown();
-            // net_client fires no entity-destroyed callbacks on disconnect;
-            // clear the SDK manager to avoid ghosts on a fast re-login.
-            ClientCallbacks.EntityManager.Clear();
+            _net.Session.Reset();
             UnityEngine.Object.Destroy(_worldRoot);
             _worldRoot = null;
         }

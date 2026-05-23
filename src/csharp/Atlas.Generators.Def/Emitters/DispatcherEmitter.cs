@@ -6,10 +6,6 @@ namespace Atlas.Generators.Def.Emitters;
 
 internal static class DispatcherEmitter
 {
-    /// <summary>
-    /// Emit RPC dispatchers. Only generates dispatch methods for the Receive direction
-    /// in the current process context.
-    /// </summary>
     public static string Emit(List<(EntityDefModel Def, string ClassName, string Namespace)> entities,
                               ProcessContext ctx, Dictionary<string, ushort> typeIndexMap,
                               string baseClass,
@@ -28,10 +24,8 @@ internal static class DispatcherEmitter
         sb.AppendLine("using System.Collections.Generic;");
         sb.AppendLine("using Atlas.Coro;");
         sb.AppendLine("using Atlas.Coro.Rpc;");
-        // EntityRpcReplyHelpers lives in Atlas.Runtime (server only). Client
-        // dispatchers never call SendReplyOnComplete (HasReply paths are
-        // gated on serverSide), so we leave the using off the client emit
-        // — Atlas.Client does not reference Atlas.Runtime.
+        // EntityRpcReplyHelpers lives in Atlas.Runtime. Client emit omits it
+        // because HasReply paths are gated to server-side dispatchers.
         if (ctx != ProcessContext.Client)
             sb.AppendLine("using Atlas.Runtime.Coro;");
         sb.AppendLine("using Atlas.Serialization;");
@@ -68,10 +62,8 @@ internal static class DispatcherEmitter
             }
         }
 
-        // Per-component dispatch methods. Component RPCs route via
-        // (slot, methodIdx); typeIndex is the entity's, but the dispatcher
-        // body switches on `methodIdx` and casts to the component class so
-        // a single component type used by multiple entities still works.
+        // Component RPCs route via (slot, methodIdx); typeIndex belongs to
+        // the owning entity, not the component type.
         foreach (var c in syncedComponents)
         {
             foreach (var (direction, dirName, section) in directions)
@@ -87,12 +79,14 @@ internal static class DispatcherEmitter
         sb.AppendLine("    {");
         if (ctx == ProcessContext.Client)
         {
-            // Client uses Atlas.Client.ClientCallbacks
-            foreach (var (direction, dirName, _) in directions)
-            {
+            sb.AppendLine("        RegisterInto(Atlas.Client.ClientCallbacks.DefaultSession);");
+            sb.AppendLine("    }");
+            sb.AppendLine();
+            sb.AppendLine("    internal static void RegisterInto(Atlas.Client.ClientSession session)");
+            sb.AppendLine("    {");
+            foreach (var (_, dirName, _) in directions)
                 if (dirName == "ClientRpc")
-                    sb.AppendLine($"        Atlas.Client.ClientCallbacks.ClientRpcDispatcher = Dispatch{dirName};");
-            }
+                    sb.AppendLine($"        session.ClientRpcDispatcher = Dispatch{dirName};");
         }
         else
         {
@@ -299,10 +293,8 @@ internal static class DispatcherEmitter
         sb.AppendLine("        };");
     }
 
-    // Component-level dispatch: switches on methodIdx (low 8 bits of rpc_id)
-    // because the typeIndex bits are the entity's, not the component's, and
-    // would vary across the (entity, slot) combinations a single component
-    // class can occupy.
+    // Component-level dispatch switches on methodIdx because typeIndex varies
+    // across entities that host the same component type.
     private static void EmitComponentDispatch(StringBuilder sb, string componentTypeName,
         List<MethodDefModel> methods, byte direction, string dirName, ProcessContext ctx)
     {

@@ -28,7 +28,14 @@ namespace Atlas.Client.Unity
         private AtlasNetNative.AuthResultDelegate? _authCallback;
         private uint _rpcOutCount;
 
+        public ClientSession Session { get; private set; } = ClientCallbacks.DefaultSession;
         public uint RpcOutCount => _rpcOutCount;
+
+        public void ConfigureSession(ClientSession session)
+        {
+            Session = session ?? throw new ArgumentNullException(nameof(session));
+            if (_ctx != IntPtr.Zero) WireClientHostBridges();
+        }
 
         private void Awake()
         {
@@ -53,34 +60,39 @@ namespace Atlas.Client.Unity
                     AtlasNetNative.AtlasNetSetEntityDefDigest(_ctx, p, data.Length);
             };
 
-            ClientHost.SendBaseRpcHandler = (entityId, rpcId, payload, _) =>
+            ClientHost.SendBaseRpcHandler = (entityId, rpcId, payload, traceId) =>
             {
+                _ = traceId;
                 if (_ctx == IntPtr.Zero) return;
                 fixed (byte* p = payload)
                     AtlasNetNative.AtlasNetSendBaseRpc(_ctx, entityId, rpcId, p, payload.Length);
                 ++_rpcOutCount;
             };
+            Session.SendBaseRpcHandler = ClientHost.SendBaseRpcHandler;
 
-            ClientHost.SendCellRpcHandler = (entityId, rpcId, payload, _) =>
+            ClientHost.SendCellRpcHandler = (entityId, rpcId, payload, traceId) =>
             {
+                _ = traceId;
                 if (_ctx == IntPtr.Zero) return;
                 fixed (byte* p = payload)
                     AtlasNetNative.AtlasNetSendCellRpc(_ctx, entityId, rpcId, p, payload.Length);
                 ++_rpcOutCount;
             };
+            Session.SendCellRpcHandler = ClientHost.SendCellRpcHandler;
 
             // net_client carries no entity-def registry; the no-ops just keep
             // ClientHost.Required from throwing on the script-DLL boot sweep.
             ClientHost.RegisterEntityTypeHandler = _ => { };
             ClientHost.RegisterStructHandler = _ => { };
             ClientHost.ReportEventSeqGapHandler = (_, _) => { };
+            Session.ReportEventSeqGapHandler = ClientHost.ReportEventSeqGapHandler;
         }
 
         private void Update()
         {
             if (_ctx == IntPtr.Zero) return;
             AtlasNetNative.AtlasNetPoll(_ctx);
-            ClientCallbacks.EntityManager.TickInterpolation(Time.deltaTime);
+            Session.Tick(Time.deltaTime);
         }
 
         public bool TryGetStats(out AtlasNetStats stats)
@@ -93,7 +105,7 @@ namespace Atlas.Client.Unity
         public bool TryGetInterpolatedTransform(uint entityId,
                                                 out Vector3 pos, out Vector3 dir, out bool onGround)
         {
-            var entity = ClientCallbacks.EntityManager.Get(entityId);
+            var entity = Session.EntityManager.Get(entityId);
             if (entity != null &&
                 entity.TryGetInterpolated(
                     out Atlas.DataTypes.Vector3 atlasPos,
@@ -178,13 +190,13 @@ namespace Atlas.Client.Unity
                 ? null : System.Runtime.InteropServices.Marshal.PtrToStringUTF8(errorUtf8);
             // AuthenticateResult is the only owner-create signal on the wire.
             if (success != 0)
-                ClientCallbacks.CreateEntity(entityId, typeId);
+                Session.CreateEntity(entityId, typeId);
             AuthFinished?.Invoke(success != 0, entityId, typeId, err);
         }
 
         void IAtlasNetEvents.OnDisconnect(int reason) => Disconnected?.Invoke(reason);
 
         void IAtlasNetEvents.OnDeliver(ushort msgId, ReadOnlySpan<byte> payload)
-            => ClientCallbacks.DeliverFromServer(msgId, payload);
+            => Session.DeliverFromServer(msgId, payload);
     }
 }

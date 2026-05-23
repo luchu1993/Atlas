@@ -1,7 +1,5 @@
 using System;
 using System.Collections.Generic;
-using Atlas.DataTypes;
-using Atlas.Diagnostics;
 using Atlas.Serialization;
 
 namespace Atlas.Client;
@@ -10,310 +8,55 @@ public static class ClientCallbacks
 {
     public delegate void RpcDispatchDelegate(ClientEntity entity, int rpcId, ref SpanReader reader);
 
-    public static RpcDispatchDelegate? ClientRpcDispatcher;
-
-    // Must match src/server/baseapp/delta_forwarder.h::kClient*MessageId byte-for-byte.
     public const ushort kClientDeltaMessageId = 0xF001;
     public const ushort kClientBaselineMessageId = 0xF002;
     public const ushort kClientReliableDeltaMessageId = 0xF003;
-
-    // BaseApp -> Client owner handoff (msg_id::BaseApp::kEntityTransferred = 2024).
     public const ushort kEntityTransferredMessageId = 2024;
-    // BaseApp -> Client cell-ready gate (kCellReady = 2025); no payload.
     public const ushort kCellReadyMessageId = 2025;
-    // BaseApp -> Client RPC envelope (kClientRpcMessageId): [u32 rpc_id][u64 trace_id][args].
     public const ushort kClientRpcMessageId = 0xF004;
-    // BaseApp -> Client BSP leaf rects for the LB debug gizmo (msg_id 2032).
     public const ushort kSpaceBspGeometryMessageId = 2032;
 
-    // Must match src/server/cellapp/cell_aoi_envelope.h::CellAoIEnvelopeKind.
-    private const byte kEntityEnter = 1;
-    private const byte kEntityLeave = 2;
-    private const byte kEntityPositionUpdate = 3;
-    private const byte kEntityPropertyUpdate = 4;
-    // The u32 id-field on these is space_id, not entity_id.
-    private const byte kSpaceDataInit = 5;
-    private const byte kSpaceDataUpdate = 6;
-    private const byte kSpaceDataDelete = 7;
+    public static ClientSession DefaultSession { get; } = new();
 
-    private static readonly ClientEntityManager s_entityMgr = new();
-    private static readonly SpaceDataManager s_spaceDataMgr = new();
+    public static RpcDispatchDelegate? ClientRpcDispatcher
+    {
+        get => DefaultSession.ClientRpcDispatcher;
+        set => DefaultSession.ClientRpcDispatcher = value;
+    }
 
-    public static ClientEntityManager EntityManager => s_entityMgr;
-    public static SpaceDataManager SpaceDataManager => s_spaceDataMgr;
+    public static ClientEntityManager EntityManager => DefaultSession.EntityManager;
+    public static SpaceDataManager SpaceDataManager => DefaultSession.SpaceDataManager;
+
+    public static event Action<uint, IReadOnlyList<BspLeafRect>>? SpaceBspGeometryReceived
+    {
+        add => DefaultSession.SpaceBspGeometryReceived += value;
+        remove => DefaultSession.SpaceBspGeometryReceived -= value;
+    }
+
+    public static void ResetSession()
+    {
+        DefaultSession.Reset();
+    }
 
     public static void DispatchRpc(uint entityId, uint rpcId, ulong traceId,
                                    ReadOnlySpan<byte> payload)
     {
-        using var _ = Profiler.ZoneN(ProfilerNames.ClientDispatchRpc);
-        using var __trace = Atlas.Diagnostics.TraceContext.BeginInbound((long)traceId);
-        try
-        {
-            var entity = s_entityMgr.Get(entityId);
-            if (entity is null) return;
-
-            var reader = new SpanReader(payload);
-            ClientRpcDispatcher?.Invoke(entity, (int)rpcId, ref reader);
-        }
-        catch (Exception ex)
-        {
-            Log.Error($"DispatchRpc error: {ex}");
-        }
+        DefaultSession.DispatchRpc(entityId, rpcId, traceId, payload);
     }
 
     public static void CreateEntity(uint entityId, ushort typeId)
     {
-        try
-        {
-            var entity = ClientEntityFactory.Create(typeId);
-            if (entity == null)
-            {
-                Log.Error(
-                    $"ClientCallbacks.CreateEntity: no factory registered for typeId={typeId} "
-                    + $"(entityId={entityId})");
-                return;
-            }
-
-            entity.EntityId = entityId;
-            entity.IsOwner = true;
-            s_entityMgr.Register(entity);
-            entity.OnInit();
-        }
-        catch (Exception ex)
-        {
-            Log.Error($"CreateEntity error: {ex}");
-        }
+        DefaultSession.CreateEntity(entityId, typeId);
     }
 
     public static void DestroyEntity(uint entityId)
     {
-        try
-        {
-            s_entityMgr.Destroy(entityId);
-        }
-        catch (Exception ex)
-        {
-            Log.Error($"DestroyEntity error: {ex}");
-        }
+        DefaultSession.DestroyEntity(entityId);
     }
 
     public static void DeliverFromServer(ushort msgId, ReadOnlySpan<byte> body)
     {
-        try
-        {
-            switch (msgId)
-            {
-                case kClientDeltaMessageId:
-                case kClientReliableDeltaMessageId:
-                    DispatchAoIEnvelope(body);
-                    break;
-                case kClientBaselineMessageId:
-                    DispatchBaseline(body);
-                    break;
-                case kEntityTransferredMessageId:
-                    DispatchEntityTransferred(body);
-                    break;
-                case kCellReadyMessageId:
-                    break;
-                case kClientRpcMessageId:
-                    DispatchClientRpc(body);
-                    break;
-                case kSpaceBspGeometryMessageId:
-                    DispatchSpaceBspGeometry(body);
-                    break;
-                default:
-                    Log.Error(
-                        $"DeliverFromServer: unexpected msgId=0x{msgId:X4} len={body.Length}");
-                    break;
-            }
-        }
-        catch (Exception ex)
-        {
-            Log.Error($"DeliverFromServer error (msgId=0x{msgId:X4}): {ex}");
-        }
-    }
-
-    // 0xF001 / 0xF003 envelope (cell_aoi_envelope.h): [u8 kind][u32 LE eid][payload].
-    private const int kEnvelopeHeaderBytes = 1 + 4;
-    private static void DispatchAoIEnvelope(ReadOnlySpan<byte> body)
-    {
-        if (body.Length < kEnvelopeHeaderBytes)
-        {
-            Log.Error($"DispatchAoIEnvelope: truncated envelope ({body.Length} bytes)");
-            return;
-        }
-        var reader = new SpanReader(body);
-        byte kind = reader.ReadByte();
-        uint entityId = reader.ReadUInt32();
-        var inner = body.Slice(kEnvelopeHeaderBytes);
-
-        switch (kind)
-        {
-            case kEntityEnter:
-                DispatchEnter(entityId, inner);
-                break;
-            case kEntityLeave:
-                s_entityMgr.OnLeave(entityId);
-                break;
-            case kEntityPositionUpdate:
-                DispatchPositionUpdate(entityId, inner);
-                break;
-            case kEntityPropertyUpdate:
-                DispatchPropertyUpdate(entityId, inner);
-                break;
-            case kSpaceDataInit:
-                DispatchSpaceDataInit(entityId, inner);
-                break;
-            case kSpaceDataUpdate:
-                DispatchSpaceDataUpdate(entityId, inner);
-                break;
-            case kSpaceDataDelete:
-                DispatchSpaceDataDelete(entityId, inner);
-                break;
-            default:
-                Log.Error(
-                    $"DispatchAoIEnvelope: unknown kind={kind} entityId={entityId}");
-                break;
-        }
-    }
-
-    // kSpaceDataInit (witness.cc::BuildSpaceDataInitEnvelope): [u32 count][(u16 key, u32 vlen, vbytes)*].
-    private static void DispatchSpaceDataInit(uint spaceId, ReadOnlySpan<byte> inner)
-    {
-        if (inner.Length < 4)
-        {
-            Log.Error($"DispatchSpaceDataInit: truncated ({inner.Length} bytes)");
-            return;
-        }
-        var reader = new SpanReader(inner);
-        uint count = reader.ReadUInt32();
-        var entries = new List<(ushort, byte[])>((int)count);
-        for (uint i = 0; i < count; ++i)
-        {
-            if (reader.Remaining < 2 + 4)
-            {
-                Log.Error($"DispatchSpaceDataInit: truncated entry header at i={i}");
-                return;
-            }
-            ushort keyId = reader.ReadUInt16();
-            uint vlen = reader.ReadUInt32();
-            if ((uint)reader.Remaining < vlen)
-            {
-                Log.Error($"DispatchSpaceDataInit: truncated value (want={vlen} have={reader.Remaining})");
-                return;
-            }
-            var bytes = inner.Slice(reader.Position, (int)vlen).ToArray();
-            reader.Advance((int)vlen);
-            entries.Add((keyId, bytes));
-        }
-        s_spaceDataMgr.InitSpace(spaceId, entries);
-    }
-
-    // kSpaceDataUpdate (witness.cc::BuildSpaceDataUpdateEnvelope): [u16 key][u32 vlen][vbytes].
-    private static void DispatchSpaceDataUpdate(uint spaceId, ReadOnlySpan<byte> inner)
-    {
-        if (inner.Length < 2 + 4)
-        {
-            Log.Error($"DispatchSpaceDataUpdate: truncated ({inner.Length} bytes)");
-            return;
-        }
-        var reader = new SpanReader(inner);
-        ushort keyId = reader.ReadUInt16();
-        uint vlen = reader.ReadUInt32();
-        if ((uint)reader.Remaining < vlen)
-        {
-            Log.Error($"DispatchSpaceDataUpdate: truncated value");
-            return;
-        }
-        var bytes = inner.Slice(reader.Position, (int)vlen).ToArray();
-        s_spaceDataMgr.SetKey(spaceId, keyId, bytes);
-    }
-
-    // kSpaceDataDelete: [u16 key].
-    private static void DispatchSpaceDataDelete(uint spaceId, ReadOnlySpan<byte> inner)
-    {
-        if (inner.Length < 2)
-        {
-            Log.Error($"DispatchSpaceDataDelete: truncated ({inner.Length} bytes)");
-            return;
-        }
-        var reader = new SpanReader(inner);
-        ushort keyId = reader.ReadUInt16();
-        s_spaceDataMgr.RemoveKey(spaceId, keyId);
-    }
-
-    // kEntityEnter (witness.cc::BuildEnterEnvelope): [u16 typeId][3f pos][3f dir][u8 onGround][f64 serverTime][peerSnapshot].
-    private const int kEnterFixedBytes = 2 + 6 * 4 + 1 + 8;
-    private static void DispatchEnter(uint entityId, ReadOnlySpan<byte> inner)
-    {
-        using var _ = Profiler.ZoneN(ProfilerNames.ClientDispatchEnter);
-        if (inner.Length < kEnterFixedBytes)
-        {
-            Log.Error($"DispatchEnter: truncated ({inner.Length} bytes)");
-            return;
-        }
-        var reader = new SpanReader(inner);
-        ushort typeId = reader.ReadUInt16();
-        var pos = reader.ReadVector3();
-        var dir = reader.ReadVector3();
-        bool onGround = reader.ReadByte() != 0;
-        double serverTime = reader.ReadDouble();
-
-        var snapshot = inner.Slice(kEnterFixedBytes);
-        s_entityMgr.OnEnter(entityId, typeId, serverTime, pos, dir, onGround, snapshot);
-    }
-
-    // kEntityPropertyUpdate (witness.cc::BuildPropertyUpdatePayload): [u64 eventSeq][delta|snapshot].
-    private const int kPropertyUpdatePrefixBytes = 8;
-    private static void DispatchPropertyUpdate(uint entityId, ReadOnlySpan<byte> inner)
-    {
-        using var _ = Profiler.ZoneN(ProfilerNames.ClientDispatchPropertyUpdate);
-        if (inner.Length < kPropertyUpdatePrefixBytes)
-        {
-            Log.Error(
-                $"DispatchPropertyUpdate: truncated ({inner.Length} bytes, need at least 8)");
-            return;
-        }
-        var reader = new SpanReader(inner);
-        ulong eventSeq = reader.ReadUInt64();
-        var delta = inner.Slice(kPropertyUpdatePrefixBytes);
-        s_entityMgr.ApplyPropertyDelta(entityId, eventSeq, delta);
-    }
-
-    // kEntityPositionUpdate inner payload (witness.cc::SendEntityUpdate volatile branch):
-    //   [3f pos] [3f dir] [u8 on_ground] [f64 server_time]
-    private const int kPositionUpdateBytes = 6 * 4 + 1 + 8;
-    private static void DispatchPositionUpdate(uint entityId, ReadOnlySpan<byte> inner)
-    {
-        using var _ = Profiler.ZoneN(ProfilerNames.ClientDispatchPositionUpdate);
-        if (inner.Length < kPositionUpdateBytes)
-        {
-            Log.Error($"DispatchPositionUpdate: truncated ({inner.Length} bytes)");
-            return;
-        }
-        var reader = new SpanReader(inner);
-        var pos = reader.ReadVector3();
-        var dir = reader.ReadVector3();
-        bool onGround = reader.ReadByte() != 0;
-        double serverTime = reader.ReadDouble();
-        s_entityMgr.ApplyPosition(entityId, serverTime, pos, dir, onGround);
-    }
-
-    // baseapp_messages.h::ClientRpcEnvelope: [u32 entity_id][u32 rpc_id][u64 trace_id][args].
-    private const int kClientRpcPrefixBytes = 4 + 4 + 8;
-    private static void DispatchClientRpc(ReadOnlySpan<byte> body)
-    {
-        if (body.Length < kClientRpcPrefixBytes)
-        {
-            Log.Error($"DispatchClientRpc: truncated ({body.Length} bytes, need >= 16)");
-            return;
-        }
-        var reader = new SpanReader(body);
-        uint entityId = reader.ReadUInt32();
-        uint rpcId = reader.ReadUInt32();
-        ulong traceId = reader.ReadUInt64();
-        var args = body.Slice(kClientRpcPrefixBytes);
-        DispatchRpc(entityId, rpcId, traceId, args);
+        DefaultSession.DeliverFromServer(msgId, body);
     }
 
     public readonly struct BspLeafRect
@@ -328,67 +71,12 @@ public static class ClientCallbacks
             MaxX = maxX;
             MaxZ = maxZ;
         }
+
         public uint CellId { get; }
         public byte OwnerIndex { get; }
         public float MinX { get; }
         public float MinZ { get; }
         public float MaxX { get; }
         public float MaxZ { get; }
-    }
-
-    // Mirrors baseapp::SpaceBspGeometry. Receivers subscribe to the static
-    // SpaceBspGeometryReceived event for render updates.
-    public static event Action<uint, IReadOnlyList<BspLeafRect>>? SpaceBspGeometryReceived;
-
-    private static void DispatchSpaceBspGeometry(ReadOnlySpan<byte> body)
-    {
-        var reader = new SpanReader(body);
-        uint spaceId = reader.ReadUInt32();
-        uint count = reader.ReadPackedUInt32();
-        var leaves = new List<BspLeafRect>((int)count);
-        for (uint i = 0; i < count; i++)
-        {
-            uint cellId = reader.ReadUInt32();
-            byte ownerIndex = reader.ReadByte();
-            float minX = reader.ReadFloat();
-            float minZ = reader.ReadFloat();
-            float maxX = reader.ReadFloat();
-            float maxZ = reader.ReadFloat();
-            leaves.Add(new BspLeafRect(cellId, ownerIndex, minX, minZ, maxX, maxZ));
-        }
-        SpaceBspGeometryReceived?.Invoke(spaceId, leaves);
-    }
-
-    // baseapp_messages.h::EntityTransferred: [u32 new_entity_id][u16 new_type_id].
-    private const int kEntityTransferredBytes = 4 + 2;
-    private static void DispatchEntityTransferred(ReadOnlySpan<byte> body)
-    {
-        if (body.Length < kEntityTransferredBytes)
-        {
-            Log.Error($"DispatchEntityTransferred: truncated ({body.Length} bytes, need 6)");
-            return;
-        }
-        var reader = new SpanReader(body);
-        uint newEntityId = reader.ReadUInt32();
-        ushort newTypeId = reader.ReadUInt16();
-        CreateEntity(newEntityId, newTypeId);
-    }
-
-    // Wire layout for 0xF002 (baseapp_messages.h::ReplicatedBaselineToClient):
-    //   [PackedInt base_entity_id] [PackedInt snapshot_size] [snapshot bytes]
-    private static void DispatchBaseline(ReadOnlySpan<byte> body)
-    {
-        using var _ = Profiler.ZoneN(ProfilerNames.ClientDispatchBaseline);
-        var reader = new SpanReader(body);
-        uint entityId = reader.ReadPackedUInt32();
-        uint size = reader.ReadPackedUInt32();
-        if ((uint)reader.Remaining < size)
-        {
-            Log.Error(
-                $"DispatchBaseline: truncated snapshot (want={size} have={reader.Remaining})");
-            return;
-        }
-        var snapshot = body.Slice(reader.Position, (int)size);
-        s_entityMgr.ApplyBaseline(entityId, snapshot);
     }
 }

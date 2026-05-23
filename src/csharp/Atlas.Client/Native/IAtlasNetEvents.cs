@@ -2,9 +2,8 @@ using System;
 
 namespace Atlas.Client.Native;
 
-// Hosts (Unity AtlasNetworkManager, Desktop bootstrap, integration tests)
-// implement this to observe transport-level events. AoI envelope decode and
-// entity lifecycle live in Atlas.Client.ClientCallbacks.DeliverFromServer.
+// Hosts implement this to observe transport-level events. Session-level code
+// decodes AoI envelopes and entity lifecycle after OnDeliver forwards payloads.
 public interface IAtlasNetEvents
 {
     void OnDisconnect(int reason);

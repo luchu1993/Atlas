@@ -17,6 +17,8 @@ namespace Atlas.Client.Tests
             var mgr = new ClientEntityManager();
             var a = new TestEntity { EntityId = 1 };
             var b = new TestEntity { EntityId = 2 };
+            var removed = new System.Collections.Generic.List<uint>();
+            mgr.EntityRemoved += entity => removed.Add(entity.EntityId);
             mgr.Register(a);
             mgr.Register(b);
 
@@ -29,6 +31,7 @@ namespace Atlas.Client.Tests
             Assert.True(b.IsDestroyed);
             Assert.Equal(1, a.OnDestroyCalls);
             Assert.Equal(1, b.OnDestroyCalls);
+            Assert.Equal(new uint[] { 1, 2 }, removed);
         }
 
         [Fact]
@@ -37,6 +40,22 @@ namespace Atlas.Client.Tests
             var mgr = new ClientEntityManager();
             mgr.Clear();
             Assert.Equal(0, mgr.Count);
+        }
+
+        [Fact]
+        public void RegisterAndDestroyPublishEntityEvents()
+        {
+            var mgr = new ClientEntityManager();
+            var added = new System.Collections.Generic.List<uint>();
+            var removed = new System.Collections.Generic.List<uint>();
+            mgr.EntityAdded += entity => added.Add(entity.EntityId);
+            mgr.EntityRemoved += entity => removed.Add(entity.EntityId);
+
+            mgr.Register(new TestEntity { EntityId = 7 });
+            mgr.Destroy(7);
+
+            Assert.Equal(new uint[] { 7 }, added);
+            Assert.Equal(new uint[] { 7 }, removed);
         }
     }
 }

@@ -6,8 +6,6 @@ using System.Text;
 
 namespace Atlas.Client;
 
-// Per-client SpaceData mirror, fed by the kSpaceData* envelopes from
-// the cellapp witness. Scripts subscribe via KeyChanged / KeyRemoved.
 public sealed class SpaceDataManager
 {
     private readonly Dictionary<(uint SpaceId, ushort KeyId), byte[]> _data = new();
@@ -90,10 +88,14 @@ public sealed class SpaceDataManager
         if (_data.Remove((spaceId, keyId))) KeyRemoved?.Invoke(spaceId, keyId);
     }
 
-    // Test hook only — production never wipes mid-session.
-    public void ClearForTest()
+    public void Clear()
     {
         _data.Clear();
+    }
+
+    public void ClearForTest()
+    {
+        Clear();
         KeyChanged = null;
         KeyRemoved = null;
         Initialized = null;

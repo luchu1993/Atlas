@@ -9,6 +9,22 @@ namespace Atlas.Client;
 public sealed class ClientEntityManager
 {
     private readonly Dictionary<uint, ClientEntity> _entities = new();
+    private readonly ClientEntityFactoryRegistry _factory;
+    private readonly ClientSession? _session;
+
+    public event Action<ClientEntity>? EntityAdded;
+    public event Action<ClientEntity>? EntityRemoved;
+
+    public ClientEntityManager()
+        : this(ClientEntityFactory.DefaultRegistry)
+    {
+    }
+
+    internal ClientEntityManager(ClientEntityFactoryRegistry factory, ClientSession? session = null)
+    {
+        _factory = factory;
+        _session = session;
+    }
 
     public ClientEntity? Get(uint entityId)
     {
@@ -28,16 +44,36 @@ public sealed class ClientEntityManager
 
     public void Register(ClientEntity entity)
     {
+        Register(entity, publish: true);
+    }
+
+    internal void Register(ClientEntity entity, bool publish)
+    {
+        if (_entities.TryGetValue(entity.EntityId, out var previous) &&
+            !ReferenceEquals(previous, entity))
+        {
+            DestroyEntityInstance(previous);
+            EntityRemoved?.Invoke(previous);
+        }
+        if (_session != null) entity.Session = _session;
         _entities[entity.EntityId] = entity;
+        if (publish) EntityAdded?.Invoke(entity);
+    }
+
+    internal void PublishEntityAdded(ClientEntity entity)
+    {
+        if (!_entities.TryGetValue(entity.EntityId, out var current)) return;
+        if (!ReferenceEquals(current, entity)) return;
+        EntityAdded?.Invoke(entity);
     }
 
     public void Destroy(uint entityId)
     {
         if (_entities.TryGetValue(entityId, out var entity))
         {
-            entity.IsDestroyed = true;
-            entity.OnDestroy();
             _entities.Remove(entityId);
+            DestroyEntityInstance(entity);
+            EntityRemoved?.Invoke(entity);
         }
     }
 
@@ -45,12 +81,13 @@ public sealed class ClientEntityManager
     // hosts must drain the manager themselves on session teardown.
     public void Clear()
     {
-        foreach (var entity in _entities.Values)
-        {
-            entity.IsDestroyed = true;
-            entity.OnDestroy();
-        }
+        var removed = new List<ClientEntity>(_entities.Values);
         _entities.Clear();
+        foreach (var entity in removed)
+        {
+            DestroyEntityInstance(entity);
+            EntityRemoved?.Invoke(entity);
+        }
     }
 
     public int Count => _entities.Count;
@@ -76,7 +113,7 @@ public sealed class ClientEntityManager
         bool freshlyCreated = false;
         if (!_entities.TryGetValue(entityId, out var entity))
         {
-            entity = ClientEntityFactory.Create(typeId);
+            entity = _factory.Create(typeId);
             if (entity is null)
             {
                 Log.Error(
@@ -85,6 +122,7 @@ public sealed class ClientEntityManager
                 return;
             }
             entity.EntityId = entityId;
+            if (_session != null) entity.Session = _session;
             _entities[entityId] = entity;
             entity.OnInit();
             freshlyCreated = true;
@@ -102,7 +140,11 @@ public sealed class ClientEntityManager
             catch (Exception ex) { MarkCorrupted(entity, "ApplyOtherSnapshot", ex); }
         }
 
-        if (freshlyCreated) entity.OnEnterWorld();
+        if (freshlyCreated)
+        {
+            entity.OnEnterWorld();
+            EntityAdded?.Invoke(entity);
+        }
     }
 
     public void OnLeave(uint entityId) => Destroy(entityId);
@@ -141,5 +183,12 @@ public sealed class ClientEntityManager
             entity.ApplyOwnerSnapshot(ref reader);
         }
         catch (Exception ex) { MarkCorrupted(entity, "ApplyOwnerSnapshot", ex); }
+    }
+
+    private static void DestroyEntityInstance(ClientEntity entity)
+    {
+        entity.IsDestroyed = true;
+        entity.OnDestroy();
+        entity.Session = null;
     }
 }

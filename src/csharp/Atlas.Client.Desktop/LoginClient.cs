@@ -22,9 +22,7 @@ public sealed unsafe class LoginClient : IDisposable, IAtlasNetEvents
     {
         _ctx = AtlasNetNative.Create();
         _selfHandle = GCHandle.Alloc(this, GCHandleType.Normal);
-        // Route net_client's on_deliver through the shared decode path so AoI
-        // envelopes feed ClientCallbacks.EntityManager just like the Unity
-        // AtlasNetworkManager does.
+        // Route net_client's on_deliver through the shared default session.
         AtlasNetCallbackBridge.Register(_ctx, this);
         var digest = ClientHost.EntityDefDigest;
         if (digest is not null)
@@ -41,7 +39,7 @@ public sealed unsafe class LoginClient : IDisposable, IAtlasNetEvents
     }
 
     void IAtlasNetEvents.OnDeliver(ushort msgId, ReadOnlySpan<byte> payload)
-        => ClientCallbacks.DeliverFromServer(msgId, payload);
+        => ClientCallbacks.DefaultSession.DeliverFromServer(msgId, payload);
 
     public int Poll()
     {
@@ -281,4 +279,3 @@ public sealed unsafe class LoginClient : IDisposable, IAtlasNetEvents
         }
     }
 }
-

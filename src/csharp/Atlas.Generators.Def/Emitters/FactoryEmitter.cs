@@ -4,14 +4,6 @@ using System.Text;
 
 namespace Atlas.Generators.Def.Emitters;
 
-/// <summary>
-/// Emits a <c>[ModuleInitializer]</c>-decorated helper class that registers
-/// entity creators with the singleton factory living in Atlas.Runtime /
-/// Atlas.Client. The earlier design emitted a <c>partial class EntityFactory</c>
-/// expecting cross-assembly partial merging, which doesn't exist — the
-/// generated class was a distinct type that neither NativeCallbacks nor
-/// ClientCallbacks could see.
-/// </summary>
 internal static class FactoryEmitter
 {
     public static string Emit(
@@ -32,6 +24,14 @@ internal static class FactoryEmitter
         sb.AppendLine("{");
         sb.AppendLine("    internal static void RegisterAll()");
         sb.AppendLine("    {");
+        if (ctx == ProcessContext.Client)
+        {
+            sb.AppendLine("        RegisterInto(Atlas.Client.ClientEntityFactory.DefaultRegistry);");
+            sb.AppendLine("    }");
+            sb.AppendLine();
+            sb.AppendLine("    internal static void RegisterInto(Atlas.Client.ClientEntityFactoryRegistry registry)");
+            sb.AppendLine("    {");
+        }
 
         foreach (var (def, className, ns) in sorted)
         {
@@ -41,8 +41,7 @@ internal static class FactoryEmitter
             if (ctx == ProcessContext.Client)
             {
                 sb.AppendLine(
-                    $"        Atlas.Client.ClientEntityFactory.Register("
-                    + $"{typeId}, static () => new {fullName}());");
+                    $"        registry.Register({typeId}, static () => new {fullName}());");
             }
             else
             {
@@ -52,10 +51,8 @@ internal static class FactoryEmitter
             }
         }
 
-        // Type-id-only entries for cross-side spawnable types (e.g. base
-        // script calling SpawnCellOnly for a has_base="false" entity, where
-        // the base assembly has no user partial class to register a creator).
-        // Skipped on client; client only ever instantiates types it owns.
+        // Server emits type-id-only entries for spawnable types without a
+        // local class; client only instantiates registered owned types.
         if (ctx != ProcessContext.Client)
         {
             foreach (var kvp in typeIndexMap.OrderBy(kv => kv.Key))

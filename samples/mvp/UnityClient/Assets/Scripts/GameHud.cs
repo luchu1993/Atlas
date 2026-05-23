@@ -438,8 +438,8 @@ namespace Atlas.Mvp.Unity
                 UpdateNetStats(_statsAccum);
                 _statsAccum = 0f;
                 int npcAoi = _views?.NpcViewCount ?? 0;
-                int npcAll = ClientCallbacks.SpaceDataManager
-                    .GetInt32(kSpaceId, SpaceDataKeys.NpcCount);
+                int npcAll = _net?.Session.SpaceDataManager
+                    .GetInt32(kSpaceId, SpaceDataKeys.NpcCount) ?? 0;
                 _npcAllValue.text = npcAll.ToString();
                 _npcAoiValue.text = npcAoi.ToString();
             }

@@ -18,6 +18,7 @@ public abstract class ClientEntity
     // Owner = local player on this client. Owner trusts server snapshots directly
     // (auth movement); peers ride the AvatarFilter ring and lerp on the client tick.
     public bool IsOwner { get; internal set; }
+    internal ClientSession? Session { get; set; }
 
     public abstract string TypeName { get; }
 
@@ -106,7 +107,10 @@ public abstract class ClientEntity
                 $"[{TypeName}:{EntityId}] event_seq gap: last={LastEventSeq} got={seq} missed={missed}");
             // Clamp to u32 — a single jump >4G is paging-worthy, not silent-dropping.
             uint reportDelta = missed > uint.MaxValue ? uint.MaxValue : (uint)missed;
-            ClientHost.ReportEventSeqGap(EntityId, reportDelta);
+            if (Session != null)
+                Session.ReportEventSeqGap(EntityId, reportDelta);
+            else
+                ClientHost.ReportEventSeqGap(EntityId, reportDelta);
         }
         LastEventSeq = seq;
     }
@@ -118,14 +122,20 @@ public abstract class ClientEntity
 
     protected internal void SendCellRpc(int rpcId, ReadOnlySpan<byte> payload)
     {
-        ClientHost.SendCellRpc(EntityId, (uint)rpcId, payload,
-                               (ulong)Atlas.Diagnostics.TraceContext.Current);
+        ulong traceId = (ulong)Atlas.Diagnostics.TraceContext.Current;
+        if (Session != null)
+            Session.SendCellRpc(EntityId, (uint)rpcId, payload, traceId);
+        else
+            ClientHost.SendCellRpc(EntityId, (uint)rpcId, payload, traceId);
     }
 
     protected internal void SendBaseRpc(int rpcId, ReadOnlySpan<byte> payload)
     {
-        ClientHost.SendBaseRpc(EntityId, (uint)rpcId, payload,
-                               (ulong)Atlas.Diagnostics.TraceContext.Current);
+        ulong traceId = (ulong)Atlas.Diagnostics.TraceContext.Current;
+        if (Session != null)
+            Session.SendBaseRpc(EntityId, (uint)rpcId, payload, traceId);
+        else
+            ClientHost.SendBaseRpc(EntityId, (uint)rpcId, payload, traceId);
     }
 
     // _replicated[0] is reserved for the entity body so wire componentIdx=0 keeps its meaning.

@@ -14,7 +14,7 @@ internal static class BootstrapEmitter
         sb.AppendLine();
         sb.AppendLine("namespace Atlas.Def;");
         sb.AppendLine();
-        sb.AppendLine("internal static class DefBootstrap");
+        sb.AppendLine("public static class DefBootstrap");
         sb.AppendLine("{");
         sb.AppendLine("    [System.Runtime.CompilerServices.ModuleInitializer]");
         sb.AppendLine("    internal static void RegisterAll()");
@@ -45,6 +45,18 @@ internal static class BootstrapEmitter
             sb.AppendLine("        catch (System.InvalidOperationException) { }");
         }
         sb.AppendLine("    }");
+        if (ctx == ProcessContext.Client)
+        {
+            sb.AppendLine();
+            sb.AppendLine("    public static void RegisterInto(Atlas.Client.ClientSession session)");
+            sb.AppendLine("    {");
+            sb.AppendLine("        if (session == null) throw new System.ArgumentNullException(nameof(session));");
+            if (hasEntities)
+                sb.AppendLine("        DefEntityFactoryRegistrations.RegisterInto(session.EntityFactory);");
+            if (hasDispatcher)
+                sb.AppendLine("        Atlas.Rpc.DefRpcDispatcher.RegisterInto(session);");
+            sb.AppendLine("    }");
+        }
         sb.AppendLine("}");
         return sb.ToString();
     }
