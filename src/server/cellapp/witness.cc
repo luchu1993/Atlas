@@ -12,13 +12,13 @@
 #include <vector>
 
 #include "aoi_trigger.h"
-#include "cell_aoi_envelope.h"
 #include "cell_entity.h"
 #include "cellapp_config.h"
 #include "foundation/clock.h"
 #include "foundation/log.h"
 #include "foundation/profiler.h"
 #include "math/vector3.h"
+#include "protocol/aoi_envelope.h"
 #include "space.h"
 #include "space/range_list.h"
 

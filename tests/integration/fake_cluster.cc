@@ -7,6 +7,7 @@
 #include "network/channel.h"
 #include "network/reliable_udp.h"
 #include "network/socket.h"
+#include "protocol/aoi_envelope.h"
 
 namespace atlas::test {
 
@@ -105,10 +106,10 @@ bool FakeCluster::PushAoIEnvelope(bool reliable, std::span<const std::byte> payl
 
 namespace {
 
-// Mirror src/server/cellapp/cell_aoi_envelope.h kinds; duplicated here to keep
-// the test helper independent of the cellapp link dependency.
-constexpr std::byte kEntityEnter{1};
-constexpr std::byte kEntityPositionUpdate{3};
+constexpr auto kEntityEnter =
+    static_cast<std::byte>(static_cast<uint8_t>(CellAoIEnvelopeKind::kEntityEnter));
+constexpr auto kEntityPositionUpdate =
+    static_cast<std::byte>(static_cast<uint8_t>(CellAoIEnvelopeKind::kEntityPositionUpdate));
 
 void WriteUInt32LE(std::vector<std::byte>& out, uint32_t v) {
   for (int i = 0; i < 4; ++i) out.push_back(static_cast<std::byte>((v >> (i * 8)) & 0xFF));

@@ -12,10 +12,8 @@ namespace atlas {
 
 class Channel;
 
-// Per-client UNRELIABLE latest-wins delta relay for ReplicatedDeltaFromCell
-// (msg 2015) -> client msg 0xF001. Same-entity writes replace the queued
-// entry. INVARIANT: only volatile state (pos/orientation); cumulative state
-// must use ReplicatedReliableDeltaFromCell (msg 2017) or it will be dropped.
+// Per-client unreliable latest-wins relay for volatile cell deltas.
+// Cumulative state must use the reliable or baseline paths instead.
 class DeltaForwarder {
  public:
   struct Stats {
@@ -46,6 +44,8 @@ class DeltaForwarder {
     uint32_t deferred_ticks{0};
     uint16_t priority{0};
   };
+
+  auto SendDeltas(Channel& client_ch, std::span<const PendingDelta> entries) -> uint32_t;
 
   std::vector<PendingDelta> queue_;
   Stats stats_;

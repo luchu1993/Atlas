@@ -42,9 +42,9 @@ def fail(msg: str, code: int = 1) -> None:
     sys.exit(code)
 
 
-def run(cmd: list[str]) -> None:
+def run(cmd: list[str], *, env: dict[str, str] | None = None) -> None:
     info(" ".join(cmd))
-    subprocess.run(cmd, check=True)
+    subprocess.run(cmd, check=True, env=env)
 
 
 def run_capture(cmd: list[str]) -> str:
@@ -100,14 +100,24 @@ def build_native(config: str) -> dict[str, Path]:
 
     build_dir = REPO_ROOT / "build" / preset
     wrapper = REPO_ROOT / "tools" / "bin" / ("build.bat" if HOST == "Windows" else "build.sh")
-    run([str(wrapper), preset, "--config-only"])
+    native_env = os.environ.copy()
+    if HOST == "Windows":
+        from build import VS_GENERATOR, ensure_ninja, load_msvc_env
+        native_env, vs_major = load_msvc_env()
+        if vs_major is not None and vs_major in VS_GENERATOR:
+            native_env["CMAKE_GENERATOR"] = VS_GENERATOR[vs_major]
+        if preset == "debug":
+            ensure_ninja(native_env)
+
+    run([str(wrapper), preset, "--config-only"], env=native_env)
     run(["cmake", "-S", str(REPO_ROOT), "-B", str(build_dir),
-         "-DATLAS_BUILD_NET_CLIENT=ON"])
+         "-DATLAS_BUILD_NET_CLIENT=ON",
+         "-DATLAS_BUILD_ENTITYDEF_CLIENT=ON"], env=native_env)
 
     artefacts: dict[str, Path] = {}
     for target, _subdir in NATIVE_TARGETS:
         run(["cmake", "--build", str(build_dir),
-             "--target", target, "--config", config])
+             "--target", target, "--config", config], env=native_env)
         artefact = REPO_ROOT / "bin" / preset / shared_artefact_name(target)
         if not artefact.exists():
             fail(f"CMake build succeeded but {artefact} is missing")
@@ -155,27 +165,24 @@ def stage_native(artefacts: dict[str, Path], config: str, plat: str,
              f"or pass --build-config DebugGame.")
 
 
-# DefDump dumps `DefEntityTypeRegistry.BuildAll` from one C# assembly. The
-# client-side assembly bundles every entity type the UE plugin needs to
-# decode; using cell- or base-only would miss the cross-side ones (and
-# both crash on load: their ModuleInitializer hits the missing native API
-# provider).
-DEFS_TOOL_PROJECT = REPO_ROOT / "src" / "csharp" / "Atlas.Tools.DefDump" / "Atlas.Tools.DefDump.csproj"
+# DefDump uses the client assembly because it bundles every entity type the
+# UE plugin decodes; base/cell assemblies need native API providers on load.
+DEFS_TOOL_PROJECT = (REPO_ROOT / "src" / "csharp" / "Atlas.Tools.DefDump" /
+                     "Atlas.Tools.DefDump.csproj")
 DEFS_TOOL_ASSEMBLY = "Atlas.Tools.DefDump.exe"
 DEFS_SOURCE_PROJECT = REPO_ROOT / "samples" / "mvp" / "Atlas.Mvp.Client" / "Atlas.Mvp.Client.csproj"
 DEFS_SOURCE_ASSEMBLY = "Atlas.Mvp.Client.dll"
 DEFS_OUTPUT_NAME = "entity_defs.bin"
 
-# Atlas.ClientSample covers list / dict / struct / nested-container delta
-# paths via StressAvatar. Tests load this through a separate
-# AtlasEdrContext so production stays on the lean MVP descriptor set.
+# Atlas.ClientSample covers container delta paths through StressAvatar tests;
+# production keeps the lean MVP descriptor set.
 TEST_DEFS_SOURCE_PROJECT = REPO_ROOT / "samples" / "client" / "Atlas.ClientSample.csproj"
 TEST_DEFS_SOURCE_ASSEMBLY = "Atlas.ClientSample.dll"
 TEST_DEFS_OUTPUT_NAME = "entity_defs_test.bin"
 
-# Atlas.Tools.CppEmitter — offline `.def` → `<Entity>.gen.h` for the UE
-# game module. Output lives in samples/mvp/UEClient/Source/UEClient/gen/.
-CPP_EMITTER_PROJECT = REPO_ROOT / "src" / "csharp" / "Atlas.Tools.CppEmitter" / "Atlas.Tools.CppEmitter.csproj"
+# Atlas.Tools.CppEmitter writes .def data to UE generated headers.
+CPP_EMITTER_PROJECT = (REPO_ROOT / "src" / "csharp" / "Atlas.Tools.CppEmitter" /
+                       "Atlas.Tools.CppEmitter.csproj")
 CPP_EMITTER_ASSEMBLY = "Atlas.Tools.CppEmitter.exe"
 CPP_EMITTER_NAMESPACE = "atlas::mvp"
 ENTITY_DEFS_DIR = REPO_ROOT / "entity_defs"
@@ -209,7 +216,7 @@ def build_defs(config: str) -> tuple[Path, Path]:
     def dump(source_proj: Path, source_assembly: str, output_name: str) -> Path:
         assembly = per_project_bin(source_proj, config, "net10.0", source_assembly)
         if not assembly.exists():
-            fail(f"{assembly} not found — {source_proj.name} build silently produced nothing")
+            fail(f"{assembly} not found; {source_proj.name} build silently produced nothing")
         out_bin = REPO_ROOT / "build" / preset / output_name
         out_bin.parent.mkdir(parents=True, exist_ok=True)
         run([str(exe), "--assembly", str(assembly), "--out", str(out_bin)])
@@ -258,12 +265,12 @@ def read_atdf_digest(defs_bin: Path) -> str:
 
 def verify_atdf_matches_cluster(defs_bin: Path, config: str, exe: Path) -> None:
     """Cross-check the staged ATDF digest against bin/<config>/Atlas.Mvp.Cell.dll
-    — the assembly the cluster actually loads. Stale build cache between the
+    - the assembly the cluster actually loads. Stale build cache between the
     DefDump source assembly and the server-side deploy DLL is the most common
     source of def_mismatch at login."""
     cluster_dll = REPO_ROOT / "bin" / config.lower() / "Atlas.Mvp.Cell.dll"
     if not cluster_dll.exists():
-        info(f"cluster dll {cluster_dll} missing — skipping digest verify "
+        info(f"cluster dll {cluster_dll} missing; skipping digest verify "
              f"(run build.py {config.lower()} first to enable this check)")
         return
     out = run_capture([str(exe), "--digest-only", str(cluster_dll)])

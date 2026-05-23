@@ -18,7 +18,7 @@
 
 #include <gtest/gtest.h>
 
-#include "cell_aoi_envelope.h"
+#include "protocol/aoi_envelope.h"
 #include "cell_entity.h"
 #include "cellapp.h"
 #include "cellapp_messages.h"

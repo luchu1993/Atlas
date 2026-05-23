@@ -210,7 +210,7 @@ void FAtlasNetClient::TickGameThread(atlas::ClientEntityManager& Manager)
 				{
 					UE_LOG(LogAtlasNet, Log, TEXT("AoI Leave eid=%u"), EntityId);
 				}
-				// kind=3 / kind=4 are per-tick high frequency — silent dispatch.
+				// Per-tick position/property envelopes stay silent here.
 			}
 			const auto Result = atlas::DecodeAoIEnvelope(
 				Msg.Payload.GetData(), Msg.Payload.Num(), Manager, SpaceDataSinkPtr);

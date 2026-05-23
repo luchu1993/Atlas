@@ -15,12 +15,26 @@ public sealed class ClientSession
     private const byte kSpaceDataInit = 5;
     private const byte kSpaceDataUpdate = 6;
     private const byte kSpaceDataDelete = 7;
+    private const byte kEntityPositionBatch = 8;
     private const int kEnvelopeHeaderBytes = 1 + 4;
     private const int kEnterFixedBytes = 2 + 6 * 4 + 1 + 8;
     private const int kPropertyUpdatePrefixBytes = 8;
     private const int kPositionUpdateBytes = 6 * 4 + 1 + 8;
+    private const int kPositionBatchHeaderMinBytes = 3 * 4 + 8 + 2 + 1 + 1;
+    private const int kPositionBatchPackedXZBytes = 3;
     private const int kClientRpcPrefixBytes = 4 + 4 + 8;
     private const int kEntityTransferredBytes = 4 + 2;
+    private const float kPositionBatchInvScale = 0.01f;
+    private const byte kPositionBatchHasTimeOffsets = 0x01;
+    private const byte kPositionBatchHasOnGroundBits = 0x02;
+    private const byte kPositionBatchAllOnGround = 0x04;
+    private const byte kPositionBatchHasYOffsets = 0x08;
+    private const byte kPositionBatchHasWideXZOffsets = 0x10;
+    private const byte kPositionBatchSequentialEntityIds = 0x20;
+    private const byte kPositionBatchKnownFlags =
+        kPositionBatchHasTimeOffsets | kPositionBatchHasOnGroundBits |
+        kPositionBatchAllOnGround | kPositionBatchHasYOffsets |
+        kPositionBatchHasWideXZOffsets | kPositionBatchSequentialEntityIds;
 
     public ClientSession()
     {
@@ -197,6 +211,9 @@ public sealed class ClientSession
             case kSpaceDataDelete:
                 DispatchSpaceDataDelete(entityId, inner);
                 break;
+            case kEntityPositionBatch:
+                DispatchPositionBatch(inner);
+                break;
             default:
                 Log.Error(
                     $"DispatchAoIEnvelope: unknown kind={kind} entityId={entityId}");
@@ -226,7 +243,8 @@ public sealed class ClientSession
             if ((uint)reader.Remaining < vlen)
             {
                 Log.Error(
-                    $"DispatchSpaceDataInit: truncated value (want={vlen} have={reader.Remaining})");
+                    $"DispatchSpaceDataInit: truncated value "
+                    + $"(want={vlen} have={reader.Remaining})");
                 return;
             }
             var bytes = inner.Slice(reader.Position, (int)vlen).ToArray();
@@ -315,6 +333,99 @@ public sealed class ClientSession
         bool onGround = reader.ReadByte() != 0;
         double serverTime = reader.ReadDouble();
         EntityManager.ApplyPosition(entityId, serverTime, pos, dir, onGround);
+    }
+
+    private void DispatchPositionBatch(ReadOnlySpan<byte> inner)
+    {
+        using var _ = Profiler.ZoneN(ProfilerNames.ClientDispatchPositionUpdate);
+        if (inner.Length < kPositionBatchHeaderMinBytes)
+        {
+            Log.Error($"DispatchPositionBatch: truncated header ({inner.Length} bytes)");
+            return;
+        }
+
+        var reader = new SpanReader(inner);
+        var origin = reader.ReadVector3();
+        double baseTime = reader.ReadDouble();
+        ushort count = reader.ReadUInt16();
+        byte flags = reader.ReadByte();
+        if ((flags & ~kPositionBatchKnownFlags) != 0)
+        {
+            Log.Error($"DispatchPositionBatch: unsupported flags=0x{flags:X2}");
+            return;
+        }
+        uint entityId = reader.ReadPackedUInt32();
+        bool hasTimeOffsets = (flags & kPositionBatchHasTimeOffsets) != 0;
+        bool hasOnGroundBits = (flags & kPositionBatchHasOnGroundBits) != 0;
+        bool hasYOffsets = (flags & kPositionBatchHasYOffsets) != 0;
+        bool hasWideXZOffsets = (flags & kPositionBatchHasWideXZOffsets) != 0;
+        bool hasSequentialEntityIds = (flags & kPositionBatchSequentialEntityIds) != 0;
+        int onGroundBytes = hasOnGroundBits ? (count + 7) / 8 : 0;
+        if (reader.Remaining < onGroundBytes)
+        {
+            Log.Error(
+                $"DispatchPositionBatch: truncated onGround bits "
+                + $"(want={onGroundBytes} have={reader.Remaining})");
+            return;
+        }
+
+        int onGroundOffset = reader.Position;
+        reader.Advance(onGroundBytes);
+        int minEntryBytes = 1
+                            + (hasSequentialEntityIds ? 0 : 1)
+                            + (hasWideXZOffsets ? 4 : kPositionBatchPackedXZBytes)
+                            + (hasYOffsets ? 2 : 0)
+                            + (hasTimeOffsets ? 2 : 0);
+        int minBytesNeeded = count * minEntryBytes;
+        if (reader.Remaining < minBytesNeeded)
+        {
+            Log.Error(
+                $"DispatchPositionBatch: truncated entries "
+                + $"(want>={minBytesNeeded} have={reader.Remaining})");
+            return;
+        }
+
+        const float TwoPi = MathF.PI * 2.0f;
+        for (ushort i = 0; i < count; ++i)
+        {
+            uint entityDelta = hasSequentialEntityIds
+                ? (i == 0 ? 0u : 1u)
+                : reader.ReadPackedUInt32();
+            entityId += entityDelta;
+            short dx;
+            short dz;
+            if (hasWideXZOffsets)
+            {
+                dx = reader.ReadInt16();
+                dz = reader.ReadInt16();
+            }
+            else
+            {
+                int packed = reader.ReadByte() | (reader.ReadByte() << 8)
+                             | (reader.ReadByte() << 16);
+                dx = DecodeSigned12(packed & 0x0FFF);
+                dz = DecodeSigned12((packed >> 12) & 0x0FFF);
+            }
+            short dy = hasYOffsets ? reader.ReadInt16() : (short)0;
+            byte yaw = reader.ReadByte();
+            ushort timeOffsetMs = hasTimeOffsets ? reader.ReadUInt16() : (ushort)0;
+            double serverTime = baseTime + timeOffsetMs * 0.001;
+            var pos = new Vector3(origin.X + dx * kPositionBatchInvScale,
+                                  origin.Y + dy * kPositionBatchInvScale,
+                                  origin.Z + dz * kPositionBatchInvScale);
+            float radians = yaw / 256.0f * TwoPi;
+            var dir = new Vector3(MathF.Sin(radians), 0.0f, MathF.Cos(radians));
+            bool onGround = hasOnGroundBits
+                ? (inner[onGroundOffset + i / 8] & (1 << (i & 7))) != 0
+                : (flags & kPositionBatchAllOnGround) != 0;
+            EntityManager.ApplyPosition(entityId, serverTime, pos, dir, onGround);
+        }
+    }
+
+    private static short DecodeSigned12(int value)
+    {
+        if ((value & 0x0800) != 0) value |= unchecked((int)0xFFFFF000);
+        return (short)value;
     }
 
     private void DispatchClientRpc(ReadOnlySpan<byte> body)

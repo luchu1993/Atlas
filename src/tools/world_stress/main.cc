@@ -25,6 +25,7 @@
 #include "network/event_dispatcher.h"
 #include "network/network_interface.h"
 #include "network/reliable_udp.h"
+#include "protocol/aoi_envelope.h"
 #include "script_clients.h"
 
 using namespace atlas;
@@ -534,11 +535,8 @@ class Session {
     metrics_.bytes_per_msg[k_id_u16] += payload.size();
     ++metrics_.count_per_msg[k_id_u16];
 
-    // CellAoIEnvelope rides on two wire ids (delta_forwarder.h contract):
-    //   0xF001 — unreliable (volatile): kEntityPositionUpdate (kind=3)
-    //   0xF003 — reliable (event):      kEntityEnter/Leave/PropertyUpdate
-    // Witness::SendEntityUpdate dispatches volatile via send_unreliable_ and
-    // event via send_reliable_, so kind=3 never appears in 0xF003.
+    // CellAoIEnvelope rides on 0xF001 for volatile state and 0xF003 for
+    // reliable enter/leave/property state.
     constexpr MessageID kUnreliableDeltaWireId = 0xF001;
     constexpr MessageID kReliableDeltaWireId = 0xF003;
 
@@ -585,17 +583,24 @@ class Session {
           ++metrics_.aoi_prop_update;
           break;
         default:
-          // kind=3 never appears here — it rides 0xF001 (see below).
+          // volatile position kinds ride 0xF001.
           break;
       }
       return true;
     }
 
     if (id == kUnreliableDeltaWireId && !payload.empty()) {
-      // Only kEntityPositionUpdate (kind=3) rides the unreliable path today.
-      // Left flexible in case future volatile envelopes land here.
-      if (static_cast<uint8_t>(payload[0]) == 3) {
+      const auto kind = static_cast<CellAoIEnvelopeKind>(payload[0]);
+      if (kind == CellAoIEnvelopeKind::kEntityPositionUpdate) {
         ++metrics_.aoi_pos_update;
+      } else if (kind == CellAoIEnvelopeKind::kEntityPositionBatch) {
+        constexpr size_t kBatchCountOffset =
+            1 + sizeof(uint32_t) + 3 * sizeof(float) + sizeof(double);
+        if (payload.size() >= kBatchCountOffset + sizeof(uint16_t)) {
+          uint16_t count = 0;
+          std::memcpy(&count, payload.data() + kBatchCountOffset, sizeof(count));
+          metrics_.aoi_pos_update += count;
+        }
       }
       return true;
     }

@@ -42,6 +42,33 @@ void Append(std::vector<uint8_t>& buf, T v)
 	buf.resize(offset + sizeof(T));
 	std::memcpy(buf.data() + offset, &v, sizeof(T));
 }
+
+void AppendPackedUInt32(std::vector<uint8_t>& buf, uint32_t v)
+{
+	if (v < 0xFE)
+	{
+		Append<uint8_t>(buf, static_cast<uint8_t>(v));
+	}
+	else if (v <= 0xFFFF)
+	{
+		Append<uint8_t>(buf, 0xFE);
+		Append<uint16_t>(buf, static_cast<uint16_t>(v));
+	}
+	else
+	{
+		Append<uint8_t>(buf, 0xFF);
+		Append<uint32_t>(buf, v);
+	}
+}
+
+void AppendPackedXZ12(std::vector<uint8_t>& buf, int16_t x, int16_t z)
+{
+	const uint32_t packed = (static_cast<uint16_t>(x) & 0x0FFFu) |
+		((static_cast<uint16_t>(z) & 0x0FFFu) << 12);
+	Append<uint8_t>(buf, static_cast<uint8_t>(packed & 0xFFu));
+	Append<uint8_t>(buf, static_cast<uint8_t>((packed >> 8) & 0xFFu));
+	Append<uint8_t>(buf, static_cast<uint8_t>((packed >> 16) & 0xFFu));
+}
 }  // namespace
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
@@ -111,6 +138,103 @@ bool FAtlasAoIEnvelopeTest::RunTest(const FString&)
 		TestEqual(TEXT("update dir.y"), E->LastDir.y, 1.0f);
 		TestEqual(TEXT("update server_time"), E->LastServerTime, 20.25);
 		TestFalse(TEXT("update on_ground"), E->LastOnGround);
+	}
+
+	{
+		std::vector<uint8_t> buf;
+		Append<uint8_t>(buf, static_cast<uint8_t>(EnvelopeKind::kEntityPositionBatch));
+		Append<uint32_t>(buf, 0);
+		Append<float>(buf, 10.0f);
+		Append<float>(buf, 1.0f);
+		Append<float>(buf, -5.0f);
+		Append<double>(buf, 21.0);
+		Append<uint16_t>(buf, 2);
+		Append<uint8_t>(buf, 0x01 | 0x02 | 0x08);
+		AppendPackedUInt32(buf, 42);
+		Append<uint8_t>(buf, 0x01);
+		AppendPackedUInt32(buf, 0);
+		AppendPackedXZ12(buf, 123, 50);
+		Append<int16_t>(buf, 0);
+		Append<uint8_t>(buf, 64);
+		Append<uint16_t>(buf, 500);
+		AppendPackedUInt32(buf, 999 - 42);
+		AppendPackedXZ12(buf, 1, 3);
+		Append<int16_t>(buf, 2);
+		Append<uint8_t>(buf, 0);
+		Append<uint16_t>(buf, 1000);
+
+		const auto Result = atlas::DecodeAoIEnvelope(buf.data(), buf.size(), Manager);
+		TestEqual(TEXT("position batch decode result"), Result, EnvelopeDecodeResult::kOk);
+		auto* E = static_cast<CaptureEntity*>(Manager.Find(42));
+		TestEqual(TEXT("position batch calls"), E->PositionCalls, 3);
+		TestTrue(TEXT("position batch pos.x"), FMath::IsNearlyEqual(E->LastPos.x, 11.23f, 0.001f));
+		TestTrue(TEXT("position batch pos.z"), FMath::IsNearlyEqual(E->LastPos.z, -4.5f, 0.001f));
+		TestTrue(TEXT("position batch dir.x"), FMath::IsNearlyEqual(E->LastDir.x, 1.0f, 0.001f));
+		TestTrue(TEXT("position batch dir.z"), FMath::IsNearlyZero(E->LastDir.z, 0.001f));
+		TestEqual(TEXT("position batch server_time"), E->LastServerTime, 21.5);
+		TestTrue(TEXT("position batch on_ground"), E->LastOnGround);
+		TestNull(TEXT("position batch unknown ignored"), Manager.Find(999));
+	}
+
+	{
+		std::vector<uint8_t> buf;
+		Append<uint8_t>(buf, static_cast<uint8_t>(EnvelopeKind::kEntityEnter));
+		Append<uint32_t>(buf, 43);
+		Append<uint16_t>(buf, 7);
+		for (int i = 0; i < 6; ++i) Append<float>(buf, 0.0f);
+		Append<uint8_t>(buf, 1);
+		Append<double>(buf, 21.75);
+
+		const auto Result = atlas::DecodeAoIEnvelope(buf.data(), buf.size(), Manager);
+		TestEqual(TEXT("second enter decode result"), Result, EnvelopeDecodeResult::kOk);
+		TestNotNull(TEXT("second entity created"), Manager.Find(43));
+	}
+
+	{
+		std::vector<uint8_t> buf;
+		Append<uint8_t>(buf, static_cast<uint8_t>(EnvelopeKind::kEntityPositionBatch));
+		Append<uint32_t>(buf, 0);
+		Append<float>(buf, 0.0f);
+		Append<float>(buf, 0.0f);
+		Append<float>(buf, 0.0f);
+		Append<double>(buf, 22.0);
+		Append<uint16_t>(buf, 2);
+		Append<uint8_t>(buf, 0x04 | 0x20);
+		AppendPackedUInt32(buf, 42);
+		AppendPackedXZ12(buf, 100, 200);
+		Append<uint8_t>(buf, 0);
+		AppendPackedXZ12(buf, -100, -200);
+		Append<uint8_t>(buf, 64);
+
+		const auto Result = atlas::DecodeAoIEnvelope(buf.data(), buf.size(), Manager);
+		TestEqual(TEXT("sequential batch decode result"), Result, EnvelopeDecodeResult::kOk);
+		auto* E42 = static_cast<CaptureEntity*>(Manager.Find(42));
+		auto* E43 = static_cast<CaptureEntity*>(Manager.Find(43));
+		TestEqual(TEXT("sequential batch calls 42"), E42->PositionCalls, 4);
+		TestEqual(TEXT("sequential batch calls 43"), E43->PositionCalls, 2);
+		TestTrue(TEXT("sequential batch pos 43 x"), FMath::IsNearlyEqual(E43->LastPos.x, -1.0f, 0.001f));
+		TestTrue(TEXT("sequential batch pos 43 z"), FMath::IsNearlyEqual(E43->LastPos.z, -2.0f, 0.001f));
+		TestTrue(TEXT("sequential batch dir 43 x"), FMath::IsNearlyEqual(E43->LastDir.x, 1.0f, 0.001f));
+	}
+
+	{
+		std::vector<uint8_t> buf;
+		Append<uint8_t>(buf, static_cast<uint8_t>(EnvelopeKind::kEntityPositionBatch));
+		Append<uint32_t>(buf, 0);
+		Append<float>(buf, 0.0f);
+		Append<float>(buf, 0.0f);
+		Append<float>(buf, 0.0f);
+		Append<double>(buf, 23.0);
+		Append<uint16_t>(buf, 1);
+		Append<uint8_t>(buf, 0x80 | 0x04 | 0x20);
+		AppendPackedUInt32(buf, 42);
+		AppendPackedXZ12(buf, 123, 456);
+		Append<uint8_t>(buf, 0);
+
+		const auto Result = atlas::DecodeAoIEnvelope(buf.data(), buf.size(), Manager);
+		TestEqual(TEXT("unknown batch flags"), Result, EnvelopeDecodeResult::kUnsupportedFlags);
+		auto* E = static_cast<CaptureEntity*>(Manager.Find(42));
+		TestEqual(TEXT("unknown flags do not apply"), E->PositionCalls, 4);
 	}
 
 	// kEntityLeave: kind=2, eid=42. Header-only.

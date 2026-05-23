@@ -1,8 +1,10 @@
 #include <array>
 #include <chrono>
 #include <cstddef>
+#include <cstring>
 #include <optional>
 #include <thread>
+#include <utility>
 
 #include <gtest/gtest.h>
 
@@ -12,12 +14,10 @@
 #include "network/interface_table.h"
 #include "network/socket.h"
 #include "network/tcp_channel.h"
+#include "protocol/aoi_envelope.h"
+#include "serialization/binary_stream.h"
 
 namespace atlas {
-
-// ============================================================================
-// Helpers
-// ============================================================================
 
 static auto make_delta(std::initializer_list<uint8_t> bytes) -> std::vector<std::byte> {
   std::vector<std::byte> v;
@@ -26,9 +26,74 @@ static auto make_delta(std::initializer_list<uint8_t> bytes) -> std::vector<std:
   return v;
 }
 
-// ============================================================================
-// Pure state tests (no channel needed)
-// ============================================================================
+class CaptureChannel final : public Channel {
+ public:
+  CaptureChannel(EventDispatcher& dispatcher, InterfaceTable& table)
+      : Channel(dispatcher, table, Address{}) {
+    Activate();
+  }
+
+  [[nodiscard]] auto Fd() const -> FdHandle override { return kInvalidFd; }
+
+  std::vector<std::vector<std::byte>> frames;
+
+ protected:
+  [[nodiscard]] auto DoSend(std::span<const std::byte> data) -> Result<size_t> override {
+    frames.emplace_back(data.begin(), data.end());
+    return data.size();
+  }
+};
+
+static auto make_position_delta(EntityID entity_id, float px, float py, float pz, float dx,
+                                float dy, float dz, bool on_ground, double server_time)
+    -> std::vector<std::byte> {
+  BinaryWriter writer;
+  writer.Write<uint8_t>(static_cast<uint8_t>(CellAoIEnvelopeKind::kEntityPositionUpdate));
+  writer.Write<EntityID>(entity_id);
+  writer.Write<float>(px);
+  writer.Write<float>(py);
+  writer.Write<float>(pz);
+  writer.Write<float>(dx);
+  writer.Write<float>(dy);
+  writer.Write<float>(dz);
+  writer.Write<uint8_t>(on_ground ? 1 : 0);
+  writer.Write<double>(server_time);
+  return writer.Detach();
+}
+
+static auto extract_client_delta_payload(const std::vector<std::byte>& frame)
+    -> std::vector<std::byte> {
+  BinaryReader reader(std::span<const std::byte>(frame.data(), frame.size()));
+  auto id = reader.ReadPackedInt();
+  EXPECT_TRUE(id.HasValue());
+  if (!id) return {};
+  EXPECT_EQ(*id, baseapp::kClientDeltaMessageId);
+  auto len = reader.ReadPackedInt();
+  EXPECT_TRUE(len.HasValue());
+  if (!len) return {};
+  auto payload = reader.ReadBytes(*len);
+  EXPECT_TRUE(payload.HasValue());
+  if (!payload) return {};
+  EXPECT_EQ(reader.Remaining(), 0u);
+  return {payload->begin(), payload->end()};
+}
+
+static auto decode_signed12(uint32_t value) -> int16_t {
+  if ((value & 0x0800u) != 0) value |= 0xFFFFF000u;
+  return static_cast<int16_t>(value);
+}
+
+static auto read_packed_xz(BinaryReader& reader) -> std::optional<std::pair<int16_t, int16_t>> {
+  auto b0 = reader.Read<uint8_t>();
+  auto b1 = reader.Read<uint8_t>();
+  auto b2 = reader.Read<uint8_t>();
+  if (!b0 || !b1 || !b2) return std::nullopt;
+  const uint32_t packed =
+      static_cast<uint32_t>(*b0) | (static_cast<uint32_t>(*b1) << 8) |
+      (static_cast<uint32_t>(*b2) << 16);
+  return std::pair<int16_t, int16_t>{decode_signed12(packed & 0x0FFFu),
+                                     decode_signed12((packed >> 12) & 0x0FFFu)};
+}
 
 TEST(DeltaForwarderTest, InitiallyEmpty) {
   DeltaForwarder fwd;
@@ -36,13 +101,8 @@ TEST(DeltaForwarderTest, InitiallyEmpty) {
   EXPECT_EQ(fwd.GetStats().bytes_sent, 0u);
 }
 
-// Locks the reserved client-facing message IDs used by the three-path
-// CellApp→Client delta contract (see delta_forwarder.h for full contract).
-// 0xF001 is specifically the latest-wins path served by this forwarder;
-// property deltas with event_seq must ride a different reserved id
-// (0xF003), and the baseline snapshot a third (0xF002). Any overlap would
-// let the client mis-dispatch, silently merging semantically different
-// streams.
+// Locks the three client state paths to distinct IDs so dispatch cannot
+// merge latest-wins, reliable delta, and baseline streams.
 TEST(DeltaForwarderTest, ReservedClientMessageIdsAreDistinct) {
   EXPECT_NE(baseapp::kClientDeltaMessageId, baseapp::kClientBaselineMessageId);
   EXPECT_NE(baseapp::kClientDeltaMessageId, baseapp::kClientReliableDeltaMessageId);
@@ -72,7 +132,6 @@ TEST(DeltaForwarderTest, EnqueueSameEntityReplacesEntry) {
   fwd.Enqueue(100, d1);
   EXPECT_EQ(fwd.QueueDepth(), 1u);
 
-  // Same entity — should replace, not add.
   fwd.Enqueue(100, d2);
   EXPECT_EQ(fwd.QueueDepth(), 1u);
 }
@@ -85,10 +144,6 @@ TEST(DeltaForwarderTest, EnqueueMultipleEntities) {
   }
   EXPECT_EQ(fwd.QueueDepth(), 10u);
 }
-
-// ============================================================================
-// Flush tests (need a real channel)
-// ============================================================================
 
 class DeltaForwarderFlushTest : public ::testing::Test {
  protected:
@@ -144,6 +199,219 @@ TEST_F(DeltaForwarderFlushTest, FlushWithinBudgetSendsAll) {
   EXPECT_EQ(fwd.GetStats().bytes_sent, 7u);
 }
 
+TEST(DeltaForwarderTest, FlushBatchesCompressiblePositionUpdates) {
+  EventDispatcher dispatcher{"test_delta_forwarder_batch"};
+  InterfaceTable table;
+  CaptureChannel channel(dispatcher, table);
+  DeltaForwarder fwd;
+
+  auto stale = make_position_delta(100, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 1.0f, true, 1.0);
+  auto latest = make_position_delta(100, 10.12f, 1.0f, 5.0f, 0.0f, 0.0f, 1.0f, true, 2.0);
+  auto other = make_position_delta(200, 11.12f, 1.0f, -5.0f, 1.0f, 0.0f, 0.0f, false, 2.5);
+  fwd.Enqueue(100, stale);
+  fwd.Enqueue(100, latest);
+  fwd.Enqueue(200, other);
+
+  auto bytes = fwd.Flush(channel, 4096);
+
+  EXPECT_EQ(channel.frames.size(), 1u);
+  EXPECT_LT(bytes, 2u * 38u);
+  auto payload = extract_client_delta_payload(channel.frames.front());
+  BinaryReader reader(std::span<const std::byte>(payload.data(), payload.size()));
+  auto kind = reader.Read<uint8_t>();
+  auto reserved = reader.Read<EntityID>();
+  auto origin_x = reader.Read<float>();
+  auto origin_y = reader.Read<float>();
+  auto origin_z = reader.Read<float>();
+  auto base_time = reader.Read<double>();
+  auto count = reader.Read<uint16_t>();
+  auto flags = reader.Read<uint8_t>();
+  auto first_entity_id = reader.ReadPackedInt();
+  ASSERT_TRUE(kind && reserved && origin_x && origin_y && origin_z && base_time && count && flags &&
+              first_entity_id);
+  EXPECT_EQ(*kind, static_cast<uint8_t>(CellAoIEnvelopeKind::kEntityPositionBatch));
+  EXPECT_EQ(*reserved, 0u);
+  EXPECT_EQ(*base_time, 2.0);
+  EXPECT_EQ(*count, 2u);
+  EXPECT_EQ(*flags, 0x01u | 0x02u);
+  EXPECT_EQ(*first_entity_id, 100u);
+  auto on_ground_bits = reader.Read<uint8_t>();
+  ASSERT_TRUE(on_ground_bits);
+  EXPECT_EQ(*on_ground_bits, 0x01u);
+
+  bool saw_100 = false;
+  bool saw_200 = false;
+  EntityID entity_id = *first_entity_id;
+  for (uint16_t i = 0; i < *count; ++i) {
+    auto entity_delta = reader.ReadPackedInt();
+    auto xz = read_packed_xz(reader);
+    auto yaw = reader.Read<uint8_t>();
+    auto time_offset_ms = reader.Read<uint16_t>();
+    ASSERT_TRUE(entity_delta && xz && yaw && time_offset_ms);
+    entity_id += *entity_delta;
+
+    const float px = *origin_x + static_cast<float>(xz->first) * 0.01f;
+    const float py = *origin_y;
+    const float pz = *origin_z + static_cast<float>(xz->second) * 0.01f;
+    const bool on_ground = (*on_ground_bits & (1u << i)) != 0;
+    const double server_time = *base_time + static_cast<double>(*time_offset_ms) * 0.001;
+    if (entity_id == 100) {
+      saw_100 = true;
+      EXPECT_EQ(*entity_delta, 0u);
+      EXPECT_NEAR(px, 10.12f, 0.006f);
+      EXPECT_NEAR(py, 1.0f, 0.006f);
+      EXPECT_NEAR(pz, 5.0f, 0.006f);
+      EXPECT_EQ(*yaw, 0u);
+      EXPECT_TRUE(on_ground);
+      EXPECT_EQ(server_time, 2.0);
+    } else if (entity_id == 200) {
+      saw_200 = true;
+      EXPECT_EQ(*entity_delta, 100u);
+      EXPECT_NEAR(px, 11.12f, 0.006f);
+      EXPECT_NEAR(py, 1.0f, 0.006f);
+      EXPECT_NEAR(pz, -5.0f, 0.006f);
+      EXPECT_EQ(*yaw, 64u);
+      EXPECT_FALSE(on_ground);
+      EXPECT_EQ(server_time, 2.5);
+    }
+  }
+  EXPECT_TRUE(saw_100);
+  EXPECT_TRUE(saw_200);
+  EXPECT_EQ(reader.Remaining(), 0u);
+  EXPECT_EQ(fwd.QueueDepth(), 0u);
+}
+
+TEST(DeltaForwarderTest, FlushKeepsUnsupportedPositionUpdatesLegacy) {
+  EventDispatcher dispatcher{"test_delta_forwarder_legacy"};
+  InterfaceTable table;
+  CaptureChannel channel(dispatcher, table);
+  DeltaForwarder fwd;
+
+  auto vertical_a = make_position_delta(100, 1.0f, 2.0f, 3.0f, 0.0f, 1.0f, 0.0f, true, 1.0);
+  auto vertical_b = make_position_delta(200, 4.0f, 5.0f, 6.0f, 0.0f, 1.0f, 0.0f, false, 1.5);
+  fwd.Enqueue(100, vertical_a);
+  fwd.Enqueue(200, vertical_b);
+
+  auto bytes = fwd.Flush(channel, 4096);
+
+  EXPECT_EQ(bytes, 2u * 38u);
+  ASSERT_EQ(channel.frames.size(), 2u);
+  for (const auto& frame : channel.frames) {
+    auto payload = extract_client_delta_payload(frame);
+    ASSERT_FALSE(payload.empty());
+    EXPECT_EQ(static_cast<uint8_t>(payload[0]),
+              static_cast<uint8_t>(CellAoIEnvelopeKind::kEntityPositionUpdate));
+  }
+}
+
+TEST(DeltaForwarderTest, FlushOmitsUniformBatchFields) {
+  EventDispatcher dispatcher{"test_delta_forwarder_uniform_batch"};
+  InterfaceTable table;
+  CaptureChannel channel(dispatcher, table);
+  DeltaForwarder fwd;
+
+  auto first = make_position_delta(10, 1.0f, 2.0f, 3.0f, 0.0f, 0.0f, 1.0f, true, 5.0);
+  auto second = make_position_delta(11, 2.0f, 2.0f, 4.0f, 1.0f, 0.0f, 0.0f, true, 5.0);
+  fwd.Enqueue(10, first);
+  fwd.Enqueue(11, second);
+
+  auto bytes = fwd.Flush(channel, 4096);
+
+  ASSERT_EQ(channel.frames.size(), 1u);
+  EXPECT_EQ(bytes, 37u);
+  auto payload = extract_client_delta_payload(channel.frames.front());
+  BinaryReader reader(std::span<const std::byte>(payload.data(), payload.size()));
+  auto kind = reader.Read<uint8_t>();
+  ASSERT_TRUE(kind);
+  EXPECT_EQ(*kind, static_cast<uint8_t>(CellAoIEnvelopeKind::kEntityPositionBatch));
+  (void)reader.Read<EntityID>();
+  (void)reader.Read<float>();
+  (void)reader.Read<float>();
+  (void)reader.Read<float>();
+  EXPECT_EQ(*reader.Read<double>(), 5.0);
+  EXPECT_EQ(*reader.Read<uint16_t>(), 2u);
+  auto flags = reader.Read<uint8_t>();
+  ASSERT_TRUE(flags);
+  EXPECT_EQ(*flags, 0x04u | 0x20u);
+  EXPECT_EQ(*reader.ReadPackedInt(), 10u);
+  EXPECT_EQ(reader.Remaining(), 8u);
+}
+
+TEST(DeltaForwarderTest, FlushUsesWideXZWhenPackedRangeIsExceeded) {
+  EventDispatcher dispatcher{"test_delta_forwarder_wide_xz_batch"};
+  InterfaceTable table;
+  CaptureChannel channel(dispatcher, table);
+  DeltaForwarder fwd;
+
+  auto first = make_position_delta(10, -30.0f, 2.0f, -30.0f, 0.0f, 0.0f, 1.0f, true, 5.0);
+  auto second = make_position_delta(11, 30.0f, 2.0f, 30.0f, 1.0f, 0.0f, 0.0f, true, 5.0);
+  fwd.Enqueue(10, first);
+  fwd.Enqueue(11, second);
+
+  auto bytes = fwd.Flush(channel, 4096);
+
+  ASSERT_EQ(channel.frames.size(), 1u);
+  EXPECT_EQ(bytes, 39u);
+  auto payload = extract_client_delta_payload(channel.frames.front());
+  BinaryReader reader(std::span<const std::byte>(payload.data(), payload.size()));
+  EXPECT_TRUE(reader.Read<uint8_t>());
+  (void)reader.Read<EntityID>();
+  (void)reader.Read<float>();
+  (void)reader.Read<float>();
+  (void)reader.Read<float>();
+  (void)reader.Read<double>();
+  (void)reader.Read<uint16_t>();
+  auto flags = reader.Read<uint8_t>();
+  ASSERT_TRUE(flags);
+  EXPECT_EQ(*flags, 0x04u | 0x10u | 0x20u);
+}
+
+TEST(DeltaForwarderTest, FlushBatchesSparsePositionIdsWithPackedDelta) {
+  EventDispatcher dispatcher{"test_delta_forwarder_sparse_ids"};
+  InterfaceTable table;
+  CaptureChannel channel(dispatcher, table);
+  DeltaForwarder fwd;
+
+  auto first = make_position_delta(100, 1.0f, 2.0f, 3.0f, 1.0f, 0.0f, 0.0f, true, 1.0);
+  auto second = make_position_delta(70000, 4.0f, 5.0f, 6.0f, 0.0f, 0.0f, 1.0f, false, 1.5);
+  fwd.Enqueue(100, first);
+  fwd.Enqueue(70000, second);
+
+  auto bytes = fwd.Flush(channel, 4096);
+
+  EXPECT_LT(bytes, 2u * 38u);
+  ASSERT_EQ(channel.frames.size(), 1u);
+  auto payload = extract_client_delta_payload(channel.frames.front());
+  BinaryReader reader(std::span<const std::byte>(payload.data(), payload.size()));
+  auto kind = reader.Read<uint8_t>();
+  (void)reader.Read<EntityID>();
+  (void)reader.Read<float>();
+  (void)reader.Read<float>();
+  (void)reader.Read<float>();
+  (void)reader.Read<double>();
+  auto count = reader.Read<uint16_t>();
+  auto flags = reader.Read<uint8_t>();
+  auto first_entity_id = reader.ReadPackedInt();
+  ASSERT_TRUE(kind && count && flags && first_entity_id);
+  EXPECT_EQ(*kind, static_cast<uint8_t>(CellAoIEnvelopeKind::kEntityPositionBatch));
+  EXPECT_EQ(*count, 2u);
+  EXPECT_EQ(*flags, 0x01u | 0x02u | 0x08u);
+  EXPECT_EQ(*first_entity_id, 100u);
+  auto on_ground_bits = reader.Read<uint8_t>();
+  ASSERT_TRUE(on_ground_bits);
+  EXPECT_EQ(*on_ground_bits, 0x01u);
+
+  EntityID entity_id = *first_entity_id;
+  auto first_delta = reader.ReadPackedInt();
+  ASSERT_TRUE(first_delta);
+  EXPECT_EQ(*first_delta, 0u);
+  reader.Skip(3 + sizeof(int16_t) + sizeof(uint8_t) + sizeof(uint16_t));
+  auto second_delta = reader.ReadPackedInt();
+  ASSERT_TRUE(second_delta);
+  entity_id += *second_delta;
+  EXPECT_EQ(entity_id, 70000u);
+}
+
 TEST_F(DeltaForwarderFlushTest, FlushOverBudgetDefersRemaining) {
   DeltaForwarder fwd;
   auto d1 = make_delta({1, 2, 3});        // 3 bytes
@@ -152,13 +420,11 @@ TEST_F(DeltaForwarderFlushTest, FlushOverBudgetDefersRemaining) {
   fwd.Enqueue(100, d1);
   fwd.Enqueue(200, d2);
 
-  // Budget = 4 → first entry (3 bytes) fits, second (5 bytes) won't.
-  // But the first flush always sends at least one, so 3 bytes sent.
+  // Budget 4: the first entry fits, and the second remains deferred.
   auto bytes = fwd.Flush(*sender_, 4);
   EXPECT_EQ(bytes, 3u);
   EXPECT_EQ(fwd.QueueDepth(), 1u);  // entity 200 deferred
 
-  // Flush again with enough budget — the deferred entry should be sent.
   auto bytes2 = fwd.Flush(*sender_, 4096);
   EXPECT_EQ(bytes2, 5u);
   EXPECT_EQ(fwd.QueueDepth(), 0u);
@@ -214,53 +480,27 @@ TEST_F(DeltaForwarderFlushTest, ReplacePreservesAccumulatedDeferredTicks) {
   // Also enqueue entity 200 so entity 100 can be deferred.
   fwd.Enqueue(200, d_other);
 
-  // Flush with budget 2 — both have deferred_ticks=0, entity 100 goes first
-  // (stable sort or arbitrary). Actually the order may not be deterministic
-  // when ticks are equal. Let's just defer once.
   fwd.Flush(*sender_, 2);
-  // One was sent (at least 1 guaranteed), the other deferred.
-  // The deferred one now has deferred_ticks=1.
 
   auto remaining = fwd.QueueDepth();
   EXPECT_EQ(remaining, 1u);
 
-  // Replace the deferred entry with new data — deferred_ticks should be preserved.
-  // We need to know which entity was deferred. Since order is by deferred_ticks
-  // (descending) and both start at 0, we'll just enqueue entity 100 again.
   auto d2 = make_delta({0xAA, 0xBB});
   fwd.Enqueue(100, d2);  // May or may not find entity 100 in queue.
   fwd.Enqueue(200, d2);  // Same for entity 200.
 
-  // The key invariant: queue depth should not exceed 2.
   EXPECT_LE(fwd.QueueDepth(), 2u);
 }
-
-// ============================================================================
-// Priority ordering
-//
-// The three tests below lock the contract:
-//   (a) high-priority entries flush before low-priority ones;
-//   (b) same-entity replace takes max(existing_priority, new_priority) so a
-//       low-priority writer cannot demote an entry an earlier high-priority
-//       producer deliberately boosted;
-//   (c) equal priority falls through to the deferred_ticks tiebreak —
-//       anti-starvation still wins inside a priority band.
-// ============================================================================
 
 TEST_F(DeltaForwarderFlushTest, HighPriorityFlushesBeforeLowPriority) {
   DeltaForwarder fwd;
   auto small = make_delta({0xAA});                         // 1 byte
   auto big = make_delta({1, 2, 3, 4, 5, 6, 7, 8, 9, 10});  // 10 bytes
 
-  // Enqueue a low-priority entry first, then a high-priority one. Queue
-  // insertion order would naturally send 100 first, but priority=5 on
-  // entity 200 should jump the line.
+  // Priority must beat insertion order.
   fwd.Enqueue(100, big, /*priority=*/0);
   fwd.Enqueue(200, small, /*priority=*/5);
 
-  // Budget forces only one entry through per flush (the "first" is always
-  // sent even if it overshoots the budget — the starvation guarantee). The
-  // high-priority entry must be the one served first.
   auto bytes1 = fwd.Flush(*sender_, 1);
   EXPECT_EQ(bytes1, 1u);            // small entry 200 sent
   EXPECT_EQ(fwd.QueueDepth(), 1u);  // entity 100 remains
@@ -280,16 +520,9 @@ TEST_F(DeltaForwarderFlushTest, ReplaceMergesPriorityAsMax) {
   // If priority merge took new_priority (1), entity 200 would flush first.
   // If it took max (7), entity 100 should flush first.
   auto bytes = fwd.Flush(*sender_, 1);
-  // Both deltas are 1 byte — we can't tell which flushed from bytes alone,
-  // but QueueDepth after tells us.
+  // QueueDepth confirms only one entry flushed.
   EXPECT_EQ(bytes, 1u);
   EXPECT_EQ(fwd.QueueDepth(), 1u);
-  // The remaining entry should be entity 200. There's no public accessor
-  // for queue contents, so flush again and confirm the priority=3 entry
-  // comes out next — if the first flush had mistakenly served entity 200,
-  // the second flush would find queue entry 100 with priority 7 (still
-  // higher) and need another round. Instead, the single remaining flush
-  // clears the queue on the next call.
   auto bytes2 = fwd.Flush(*sender_, 1);
   EXPECT_EQ(bytes2, 1u);
   EXPECT_EQ(fwd.QueueDepth(), 0u);
@@ -310,16 +543,11 @@ TEST_F(DeltaForwarderFlushTest, EqualPriorityFallsThroughToDeferredTicks) {
   // keep entity 200 ahead.
   fwd.Enqueue(300, small, /*priority=*/0);
   auto bytes = fwd.Flush(*sender_, 2);
-  // Entity 200 is the first sent: 8 bytes > budget 2, but starvation rule
-  // serves at least one entry.
   EXPECT_EQ(bytes, 8u);
   EXPECT_EQ(fwd.QueueDepth(), 1u);  // entity 300 deferred now
 }
 
-// An entry that has waited kMaxDeferredTicks consecutive flushes gets
-// force-sent even when a higher-priority stream would otherwise keep
-// claiming the budget. Without this guarantee a background trickle of
-// P=10 traffic could indefinitely starve a P=0 entity.
+// Starved entries must eventually bypass both priority and budget.
 TEST_F(DeltaForwarderFlushTest, StarvedEntryForceSentRegardlessOfPriority) {
   DeltaForwarder fwd;
   auto low = make_delta({0xAA});
@@ -328,8 +556,7 @@ TEST_F(DeltaForwarderFlushTest, StarvedEntryForceSentRegardlessOfPriority) {
   // Seed the low-priority entry and let it age past the cap.
   fwd.Enqueue(100, low, /*priority=*/0);
   for (uint32_t i = 0; i < DeltaForwarder::kMaxDeferredTicks; ++i) {
-    // Every flush has a hi-priority 2-byte entry that hogs the 1-byte
-    // budget — entity 100 never fits in Pass 2.
+    // The hi-priority 2-byte entry consumes the 1-byte budget first.
     fwd.Enqueue(200 + i, hi, /*priority=*/10);
     fwd.Flush(*sender_, 1);
   }

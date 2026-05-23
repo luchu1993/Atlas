@@ -6,15 +6,15 @@
 #include <utility>
 
 #include "baseapp/baseapp_messages.h"
-#include "cell_aoi_envelope.h"
 #include "cell_entity.h"
 #include "cellapp_messages.h"
 #include "foundation/log.h"
-#include "real_entity_data.h"
 #include "math/vector3.h"
 #include "network/channel.h"
 #include "network/network_interface.h"
 #include "network/reliable_udp.h"
+#include "protocol/aoi_envelope.h"
+#include "real_entity_data.h"
 #include "server/server_config.h"
 #include "space.h"
 #include "space/entity_range_list_node.h"
