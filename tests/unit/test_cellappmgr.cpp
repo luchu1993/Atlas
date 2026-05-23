@@ -6,6 +6,10 @@
 // helpers null-guard the channel field on CellAppInfo, so the state-side
 // assertions are all we need.
 
+#include <algorithm>
+#include <set>
+#include <vector>
+
 #include <gtest/gtest.h>
 
 #include "baseapp/baseapp_messages.h"
@@ -185,6 +189,52 @@ TEST(CellAppMgr, InformCellLoad_UnknownAppIdIsIgnored) {
   EXPECT_TRUE(h.mgr.CellApps().empty());
 }
 
+TEST(CellAppMgr, InformCellLoad_PerCellReportFromNonOwnerIsIgnored) {
+  CellAppMgrHarness h;
+  cellappmgr::RegisterCellApp reg_a;
+  reg_a.internal_addr = MakePeerAddr(30001);
+  h.mgr.OnRegisterCellApp(reg_a.internal_addr, nullptr, reg_a);
+  cellappmgr::RegisterCellApp reg_b;
+  reg_b.internal_addr = MakePeerAddr(30002);
+  h.mgr.OnRegisterCellApp(reg_b.internal_addr, nullptr, reg_b);
+
+  cellappmgr::CreateSpaceRequest csr;
+  csr.space_id = 42;
+  h.mgr.OnCreateSpaceRequest(Address{}, nullptr, csr);
+
+  auto& partition = h.mgr.SpacesForTest().at(42);
+  CellInfo right;
+  right.cell_id = 2;
+  right.cellapp_addr = reg_b.internal_addr;
+  ASSERT_TRUE(partition.bsp.Split(1, BSPAxis::kX, 0.f, right).HasValue());
+
+  const uint32_t app_id_a = h.mgr.CellApps().at(reg_a.internal_addr).app_id;
+  cellappmgr::InformCellLoad bad;
+  bad.app_id = app_id_a;
+  bad.load = 0.9f;
+  bad.entity_count = 100;
+  bad.cells.push_back({2, 100u, 25.f, 0.f});
+  h.mgr.OnInformCellLoad(Address{}, nullptr, bad);
+
+  const auto* ignored = partition.bsp.FindCellById(2);
+  ASSERT_NE(ignored, nullptr);
+  EXPECT_FLOAT_EQ(ignored->load, 0.f);
+  EXPECT_EQ(ignored->entity_count, 0u);
+
+  const uint32_t app_id_b = h.mgr.CellApps().at(reg_b.internal_addr).app_id;
+  cellappmgr::InformCellLoad good;
+  good.app_id = app_id_b;
+  good.load = 0.8f;
+  good.entity_count = 80;
+  good.cells.push_back({2, 80u, 25.f, 0.f});
+  h.mgr.OnInformCellLoad(Address{}, nullptr, good);
+
+  const auto* updated = partition.bsp.FindCellById(2);
+  ASSERT_NE(updated, nullptr);
+  EXPECT_FLOAT_EQ(updated->load, 0.8f);
+  EXPECT_EQ(updated->entity_count, 80u);
+}
+
 // ============================================================================
 // CreateSpaceRequest — host selection + BSP seeding
 // ============================================================================
@@ -259,6 +309,33 @@ TEST(CellAppMgr, CreateSpace_DuplicateIsDropped) {
   EXPECT_EQ(h.mgr.Spaces().size(), 1u);
 }
 
+TEST(CellAppMgr, CreateSpace_MultiCellBootstrapHandlesSixteenCells) {
+  CellAppMgrHarness h;
+  constexpr uint16_t kCount = 16;
+  for (uint16_t i = 0; i < kCount; ++i) {
+    cellappmgr::RegisterCellApp reg;
+    reg.internal_addr = MakePeerAddr(static_cast<uint16_t>(30001 + i));
+    h.mgr.OnRegisterCellApp(reg.internal_addr, nullptr, reg);
+  }
+
+  cellappmgr::CreateSpaceRequest csr;
+  csr.space_id = 16;
+  csr.initial_cell_count = kCount;
+  h.mgr.OnCreateSpaceRequest(Address{}, nullptr, csr);
+
+  const auto& partition = h.mgr.Spaces().at(16);
+  auto leaves = partition.bsp.Leaves();
+  ASSERT_EQ(leaves.size(), kCount);
+
+  std::set<uint16_t> ports;
+  for (const auto* leaf : leaves) {
+    ports.insert(leaf->cellapp_addr.Port());
+    EXPECT_LT(leaf->bounds.min_x, leaf->bounds.max_x);
+    EXPECT_LT(leaf->bounds.min_z, leaf->bounds.max_z);
+  }
+  EXPECT_EQ(ports.size(), kCount);
+}
+
 // ============================================================================
 // CellApp death
 // ============================================================================
@@ -301,8 +378,8 @@ TEST(CellAppMgr, CellAppDeath_UnsplitsOrphanedLeafIntoSibling) {
   CellInfo right;
   right.cell_id = 999;
   right.cellapp_addr = reg_b.internal_addr;
-  ASSERT_TRUE(h.mgr.SpacesForTest().at(7).bsp.Split(primary_id_before, BSPAxis::kX, 0.f, right)
-                  .HasValue());
+  ASSERT_TRUE(
+      h.mgr.SpacesForTest().at(7).bsp.Split(primary_id_before, BSPAxis::kX, 0.f, right).HasValue());
 
   h.mgr.OnCellAppDeath(reg_a.internal_addr);
 
@@ -311,6 +388,48 @@ TEST(CellAppMgr, CellAppDeath_UnsplitsOrphanedLeafIntoSibling) {
   EXPECT_EQ(after.bsp.PrimaryCellId(), 999u);
   EXPECT_EQ(after.bsp.Leaves()[0]->cellapp_addr, reg_b.internal_addr);
   EXPECT_EQ(after.bsp.FindCellById(primary_id_before), nullptr);
+}
+
+TEST(CellAppMgr, CellAppDeath_RehomeNotificationUsesAbsorbingSibling) {
+  CellAppMgrHarness h;
+  cellappmgr::RegisterCellApp reg_a;
+  reg_a.internal_addr = MakePeerAddr(30001);
+  h.mgr.OnRegisterCellApp(reg_a.internal_addr, nullptr, reg_a);
+  cellappmgr::RegisterCellApp reg_b;
+  reg_b.internal_addr = MakePeerAddr(30002);
+  h.mgr.OnRegisterCellApp(reg_b.internal_addr, nullptr, reg_b);
+  cellappmgr::RegisterCellApp reg_c;
+  reg_c.internal_addr = MakePeerAddr(30003);
+  h.mgr.OnRegisterCellApp(reg_c.internal_addr, nullptr, reg_c);
+
+  cellappmgr::CreateSpaceRequest csr;
+  csr.space_id = 8;
+  h.mgr.OnCreateSpaceRequest(Address{}, nullptr, csr);
+
+  auto& partition = h.mgr.SpacesForTest().at(8);
+  CellInfo right;
+  right.cell_id = 2;
+  right.cellapp_addr = reg_b.internal_addr;
+  ASSERT_TRUE(partition.bsp.Split(1, BSPAxis::kX, 0.f, right).HasValue());
+  CellInfo top_right;
+  top_right.cell_id = 3;
+  top_right.cellapp_addr = reg_c.internal_addr;
+  ASSERT_TRUE(partition.bsp.Split(2, BSPAxis::kZ, 0.f, top_right).HasValue());
+
+  InterfaceTable base_table;
+  RecordingChannel base_ch(h.dispatcher, base_table, MakePeerAddr(20000));
+  h.mgr.BaseAppChannelsForTest()[MakePeerAddr(20000)] = &base_ch;
+
+  h.mgr.OnCellAppDeath(reg_c.internal_addr);
+
+  const auto* absorbing = h.mgr.Spaces().at(8).bsp.FindCell(500.f, 500.f);
+  ASSERT_NE(absorbing, nullptr);
+  EXPECT_EQ(absorbing->cellapp_addr, reg_b.internal_addr);
+
+  const auto notify = FirstCellAppDeath(base_ch);
+  ASSERT_EQ(notify.rehomes.size(), 1u);
+  EXPECT_EQ(notify.rehomes[0].first, 8u);
+  EXPECT_EQ(notify.rehomes[0].second, reg_b.internal_addr);
 }
 
 TEST(CellAppMgr, CellAppDeath_RehomesLeavesToSurvivor) {
@@ -426,9 +545,8 @@ TEST(CellAppMgr, TickLoadBalance_SingleSpace_NoCrash) {
   EXPECT_EQ(h.mgr.Spaces().size(), 1u);
 }
 
-// Asymmetric load across two BSP leaves must shift the split line
-// toward the heavy side and then trigger a broadcast of the updated
-// geometry. Walks the full integrated path:
+// Asymmetric load across two BSP leaves must shrink the hot side and
+// trigger a broadcast of the updated geometry. Walks the full path:
 //   Register two CellApps → CreateSpace → manually seed a two-cell BSP
 //   (the mgr's production API doesn't yet expose a "split an existing
 //   space" call; tests reach through SpacesForTest) → push asymmetric
@@ -490,10 +608,6 @@ TEST(CellAppMgr, TickLoadBalance_AsymmetricLoad_MovesSplitAndRebroadcasts) {
   load_b.entity_count = 100;
   h.mgr.OnInformCellLoad(Address{}, nullptr, load_b);
 
-  // Several balance ticks: the damping aggression model moves a fraction
-  // of the imbalance per pass, so we need multiple runs to see a clear
-  // shift. Post-balance, the split should be strictly less than 0 (left
-  // side shrank because left load was heavier).
   for (int i = 0; i < 5; ++i) h.mgr.TickLoadBalance();
 
   // Serialize fresh and compare. The cached blob must now differ from
@@ -508,17 +622,13 @@ TEST(CellAppMgr, TickLoadBalance_AsymmetricLoad_MovesSplitAndRebroadcasts) {
   EXPECT_NE(partition.last_broadcast_blob, baseline_blob)
       << "rebalance should have changed the broadcast blob from its seeded baseline";
 
-  // BSPInternal::Balance convention: when left is heavier, position_
-  // increases (split moves right). Pre-balance origin (x=0) lives in
-  // cell 2 (FindCell's `value < position` branches left; 0<0 is false
-  // → right child → cell 2). Post-balance the split sits slightly right
-  // of 0, so origin is now `< position` → cell 1. The QUALITATIVE
-  // direction is locked here — the exact move size is aggression-
-  // damped and would make a numeric assertion fragile.
-  const auto* leaf_origin_after = partition.bsp.FindCell(0.f, 0.f);
-  ASSERT_NE(leaf_origin_after, nullptr);
-  EXPECT_EQ(leaf_origin_after->cell_id, 1u)
-      << "with left heavier, split should have moved right past the origin";
+  const auto* left_after = partition.bsp.FindCellById(1);
+  const auto* right_after = partition.bsp.FindCellById(2);
+  ASSERT_NE(left_after, nullptr);
+  ASSERT_NE(right_after, nullptr);
+  EXPECT_LT(right_after->bounds.min_x, 0.f)
+      << "with left heavier, split should move left and shrink the hot side";
+  EXPECT_FLOAT_EQ(left_after->bounds.max_x, right_after->bounds.min_x);
 }
 
 // End-to-end CellApp-death recovery notification to subscribed BaseApps.

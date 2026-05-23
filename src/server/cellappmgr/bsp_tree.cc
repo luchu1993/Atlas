@@ -83,13 +83,8 @@ void BSPInternal::UpdateLoad() {
 }
 
 void BSPInternal::Balance(float safety_bound) {
-  // Compare sibling loads, decide direction, apply aggression damping,
-  // then shift position_. Leaves themselves are no-ops but the new
-  // split line has to be pushed back down via PropagateBounds after
-  // all internal nodes in this subtree have settled.
-  // Hysteresis at 0.01f suppresses jitter when the tree is already
-  // balanced.
   constexpr float kLoadHysteresis = 0.01f;
+  constexpr float kMinSplitSlack = 1e-3f;
   const float diff = left_load_ - right_load_;
   Direction d = Direction::kNone;
   if (diff > kLoadHysteresis)
@@ -110,31 +105,25 @@ void BSPInternal::Balance(float safety_bound) {
       }
       prev_direction_ = d;
 
-      // Move 10% of the imbalance x aggression. Sign follows `diff`: when
-      // diff > 0 (left heavier), position_ increases -> shrinks left.
       const float move = diff * 0.1f * aggression_;
-      const float new_position = position_ + move;
+      const float new_position = position_ - move;
 
-      // Clamp the split into our sub_bounds so we never produce an empty
-      // half. A zero-volume half would trap entities on whichever side
-      // they happened to be and starve Balance on the next pass.
       const float lo = (axis_ == BSPAxis::kX) ? sub_bounds_.min_x : sub_bounds_.min_z;
       const float hi = (axis_ == BSPAxis::kX) ? sub_bounds_.max_x : sub_bounds_.max_z;
       if (std::isfinite(lo) && std::isfinite(hi) && lo < hi) {
-        // Leave a 1% slack at each end to ensure strictly-inside clamp.
         const float span = hi - lo;
         const float pad = span * 0.01f;
         position_ = std::clamp(new_position, lo + pad, hi - pad);
       } else {
         position_ = new_position;
+        if (std::isfinite(lo)) position_ = std::max(position_, lo + kMinSplitSlack);
+        if (std::isfinite(hi)) position_ = std::min(position_, hi - kMinSplitSlack);
       }
 
-      // Re-propagate bounds so descendant leaves reflect the new split.
       PropagateBounds(sub_bounds_);
     }
   }
 
-  // Recurse so nested internals can balance within their new sub-bounds.
   left_->Balance(safety_bound);
   right_->Balance(safety_bound);
 }
@@ -287,8 +276,7 @@ auto UnsplitInSubtree(std::unique_ptr<BSPNode>& slot, const CellBounds& sub_boun
   std::vector<const CellInfo*> left_leaves;
   internal->Left()->CollectLeaves(left_leaves);
   for (const auto* ci : left_leaves) {
-    if (ci->cell_id == target_id)
-      return UnsplitInSubtree(internal->LeftSlot(), left_b, target_id);
+    if (ci->cell_id == target_id) return UnsplitInSubtree(internal->LeftSlot(), left_b, target_id);
   }
   return UnsplitInSubtree(internal->RightSlot(), right_b, target_id);
 }
@@ -299,8 +287,7 @@ auto BSPTree::Unsplit(cellappmgr::CellID cell_id) -> Result<void> {
   if (!root_) return Error{ErrorCode::kInvalidArgument, "BSPTree::Unsplit: empty tree"};
   if (auto* leaf = dynamic_cast<BSPLeaf*>(root_.get());
       leaf != nullptr && leaf->Info().cell_id == cell_id) {
-    return Error{ErrorCode::kInvalidArgument,
-                 "BSPTree::Unsplit: cannot remove the only leaf"};
+    return Error{ErrorCode::kInvalidArgument, "BSPTree::Unsplit: cannot remove the only leaf"};
   }
   auto r = UnsplitInSubtree(root_, root_bounds_, cell_id);
   if (r.HasValue()) RecomputePrimaryCellId();
@@ -336,7 +323,10 @@ auto BSPTree::FindCellByIdMutable(cellappmgr::CellID id) -> CellInfo* {
 }
 
 void BSPTree::RecomputePrimaryCellId() {
-  if (!root_) { primary_cell_id_ = 0; return; }
+  if (!root_) {
+    primary_cell_id_ = 0;
+    return;
+  }
   std::vector<const CellInfo*> leaves;
   root_->CollectLeaves(leaves);
   primary_cell_id_ = leaves.empty() ? cellappmgr::CellID{0} : leaves.front()->cell_id;

@@ -1,42 +1,63 @@
-# Repository Guidelines
+# CLAUDE.md
 
-## Project Structure & Module Organization
-Atlas is a distributed MMO server framework. `src/server/` contains processes such as `machined`, `loginapp`, `baseapp`, `cellapp`, `dbapp`, their manager apps, and `reviver`. Shared C++20 code lives in `src/lib/` modules such as `platform`, `foundation`, `network`, `serialization`, `script`, `entitydef`, `db_*`, and `server`. `src/client_sdk/` contains the client SDK, `src/csharp/` the .NET scripting/runtime layer, and `src/tools/` developer tools. Tests live in `tests/unit/`, `tests/integration/`, and `tests/csharp/`; runtime assets and configs are under `data/` and `runtime/`.
+Rules for Claude Code when working in the Atlas Engine repository.
 
-## Build, Test, and Development Commands
-Use CMake presets from the repository root.
+## Operating rules
 
-```powershell
-cmake --preset debug-windows
-cmake --build --preset debug-windows
-ctest --preset debug-windows
-dotnet test tests/csharp
-```
+- Prefer repository wrappers over raw tool invocations when building or running local workflows; the wrappers carry platform-specific environment setup.
+- Treat Windows as a first-class environment: use `.bat` wrappers for Windows-facing instructions and keep matching `.sh` wrappers for Linux / macOS when adding tools.
+- Before reporting a build, test, Unity, or tooling workflow as working, run the smallest command that validates the changed surface.
+- After every edit to code, docs, configs, or tool scripts, re-read the touched files against the rules below and fix any violation (stray comments, missing sibling-doc updates, fat wrappers, etc.) before reporting the task done or committing.
+- Do not commit generated build outputs, Unity staged DLLs, profiling captures, logs, local databases, or temporary cluster state.
+- Do not skip hooks, tests, formatting, or signing checks unless the user explicitly asks for that bypass.
 
-Cross-platform CI also uses Ninja presets:
+## Design rules
 
-```bash
-cmake --preset debug-ninja
-cmake --build --preset debug-ninja
-ctest --preset debug-ninja -L unit
-ctest --preset debug-ninja -L integration
-```
+- When designing a new mechanism or solving a cross-process problem, prefer the BigWorld-canonical approach (per-entity migration epochs, cell ghost regions, primary cell discovery, etc.) over an ad-hoc invention.
+- Diverge from BigWorld only when the project has a documented reason (different threading model, no script-side state, etc.); call out the divergence explicitly in the change description.
 
-Use `Debug` for day-to-day work, `Release` for optimized builds, and `RelWithDebInfo` when you need symbols with optimization. Set `-DATLAS_BUILD_TESTS=OFF` or similar only when you intentionally want a reduced build.
+## Code rules
 
-## Coding Style & Naming Conventions
-Formatting is enforced by `.clang-format`: 4-space indentation, no tabs, 100-column limit, Allman braces, and left-aligned pointers. Follow `docs/CODING_STYLE.md`: `PascalCase` for types, `snake_case` for functions, locals, namespaces, and file names, `snake_case_` for members, and `kPascalCase` for constants. Use the `atlas::` namespace, keep headers beside sources under `src/lib/<module>/`, and name platform-specific files with `_windows.cpp` or `_linux.cpp`.
+- Follow Google C++ style plus project overrides: C++20, 2-space indent, attached braces, 100-column limit, no compiler extensions, namespace `atlas::`.
+- Use `PascalCase` for functions, `snake_case` for variables, `kPascalCase` for enum values/constants, and trailing underscore for class members.
+- Preserve STL and coroutine protocol spelling (`begin`, `end`, `await_ready`, `initial_suspend`, etc.).
+- Use `std::format` for formatting and `std::expected` or project `Result<T,E>` for recoverable errors; do not introduce exceptions.
+- Prefer existing ownership types and patterns: `std::unique_ptr`, `std::shared_ptr`, and project `IntrusivePtr<T>`.
+- Put platform-specific C++ implementations in `_windows.cc` / `_linux.cc` files.
+- New behavior needs tests at the appropriate level unless the user explicitly scopes the task to docs or tooling-only changes.
 
-Prefer `std::format` for formatting, `Result<T, E>` / `std::expected`-style returns for recoverable errors, and RAII with `std::unique_ptr`, `std::shared_ptr`, or `IntrusivePtr<T>`. Avoid exceptions in core framework code unless guarding third-party boundaries.
+## Comment rules
 
-Run format checks before pushing:
+- Default to no comments; add one only for a hidden invariant, non-obvious trade-off, workaround, or contract the signature cannot express.
+- Keep every comment block to at most two lines in every source, build, script, and test file.
+- Do not add section banners, historical notes, task IDs, phase labels, file-level narratives, XML-doc paragraphs, or comments that restate code.
+- Clean up nearby stale or rule-breaking comments when editing a file.
 
-```bash
-clang-format --dry-run --Werror <changed files>
-```
+## Test rules
 
-## Testing Guidelines
-Add or update tests with every behavior change. Name C++ tests `test_<feature>.cpp` and keep them in the matching suite under `tests/unit/` or `tests/integration/`. Prefer targeted runs while iterating, then finish with the relevant `ctest` preset. For scripting/runtime work, add coverage in `tests/csharp/*Tests.cs` and run `dotnet test tests/csharp`. Do not commit unless the relevant tests pass and `clang-format --dry-run --Werror` is clean.
+- Do not skip, disable, mark `DISABLED_`, or comment out tests to make a red build green; first investigate whether your change broke a real contract.
+- If careful review concludes a test itself is wrong (stale assertion, drifted expectation, racy setup), fix the test in the same change and explain why in the commit message — never silently weaken it.
+- Treat new flakiness as a failure: stabilize the test or the code, do not retry-loop or quarantine without an owner.
 
-## Commit & Pull Request Guidelines
-Recent history uses short conventional subjects such as `network: drain buffered frames` and `docs: add login stress testing guide`. Keep commit messages imperative and scoped: `<area>: <change>`. PRs should summarize the behavioral change, list the commands you ran, and link the relevant issue or roadmap doc. Include logs or protocol notes for distributed/server changes; attach screenshots only when UI or tooling output meaningfully changed.
+## Refactoring rules
+
+- Refactor touched code when the existing shape blocks a clean change; do not layer a workaround over a broken design.
+- Delete dead code, obsolete config, unused fields, stale CMake options, abandoned feature flags, and orphaned tests in the same change that makes them obsolete.
+- Do not leave `_unused` shims, deprecated wrappers, empty compatibility paths, or comments marking removed code.
+- If the proper fix is larger than the requested scope, stop and discuss scope instead of landing a patch-style workaround.
+
+## Documentation rules
+
+- Keep docs lean, current, and focused on what exists and why; remove implementation diaries, phase plans, TODO checklists, and abandoned alternatives after work lands.
+- When changing a user-facing workflow, update both English and Chinese docs in the same change.
+- When touching MVP Unity tooling or behavior, keep the root READMEs and `samples/mvp` READMEs aligned.
+- Delete obsolete design docs when a design is superseded; do not leave `_old`, `_v1`, or deprecated copies as parallel sources of truth.
+- Do not add standalone file inventories such as “Files touched”, “modules changed”, or code-path catalogs.
+
+## Tool script rules
+
+- Put real tool logic in Python under `tools/`; wrappers in `tools/bin/` should stay thin and have matching names.
+- Use only Python stdlib for developer tooling unless the stdlib path is genuinely worse and the dependency cost is justified.
+- Share repeated Python helper logic through `tools/common/` on second use rather than copying it across scripts.
+- Every developer-facing tool must have useful `--help`, sensible defaults, idempotent re-runs, and errors that name the missing thing or bad argument with a fix.
+- For Unity MVP tools, preserve explicit `--unity` / environment-variable overrides before any auto-discovery fallback.

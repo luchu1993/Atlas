@@ -447,9 +447,8 @@ TEST(CellAppMgrIntegration, LateCellAppRegistration_TriggersElasticSplit) {
   RegisterCellApp reg_late;
   reg_late.internal_addr = Address(0, 30602);
   ASSERT_TRUE((*ch_late)->SendMessage(reg_late).HasValue());
-  ASSERT_TRUE(PollUntil(late.dispatcher, [&] {
-    return late.register_ack_received.load(std::memory_order_acquire);
-  }));
+  ASSERT_TRUE(PollUntil(
+      late.dispatcher, [&] { return late.register_ack_received.load(std::memory_order_acquire); }));
 
   // Late app receives an AddCellToSpace for the freshly-split leaf.
   ASSERT_TRUE(PollUntil(late.dispatcher, [&] {
@@ -460,11 +459,9 @@ TEST(CellAppMgrIntegration, LateCellAppRegistration_TriggersElasticSplit) {
       << "Late-joining cellapp must NOT be the primary host";
 
   // First app sees the geometry refresh — its cell now covers only half.
-  ASSERT_TRUE(PollUntil(first.dispatcher, [&] {
-    return first.update_geometry_msgs.size() >= 2u;
-  })) << "Primary cellapp never received the updated 2-leaf geometry";
-  BinaryReader r2(
-      std::span<const std::byte>(first.update_geometry_msgs.back().bsp_blob));
+  ASSERT_TRUE(PollUntil(first.dispatcher, [&] { return first.update_geometry_msgs.size() >= 2u; }))
+      << "Primary cellapp never received the updated 2-leaf geometry";
+  BinaryReader r2(std::span<const std::byte>(first.update_geometry_msgs.back().bsp_blob));
   auto tree2 = BSPTree::Deserialize(r2);
   ASSERT_TRUE(tree2.HasValue());
   ASSERT_EQ(tree2->Leaves().size(), 2u);
@@ -565,9 +562,7 @@ TEST(CellAppMgrIntegration, LateCellAppNotAcking_TimeoutFallbackBroadcasts) {
   csr.request_id = 1;
   csr.reply_addr = first.network.RudpAddress();
   ASSERT_TRUE((*ch_first)->SendMessage(csr).HasValue());
-  ASSERT_TRUE(PollUntil(first.dispatcher, [&] {
-    return !first.update_geometry_msgs.empty();
-  }));
+  ASSERT_TRUE(PollUntil(first.dispatcher, [&] { return !first.update_geometry_msgs.empty(); }));
 
   // Silent client: receives AddCellToSpace but never sends the ack.
   CellAppClient silent{"cellapp_silent"};
@@ -580,9 +575,8 @@ TEST(CellAppMgrIntegration, LateCellAppNotAcking_TimeoutFallbackBroadcasts) {
 
   // Silent client receives AddCellToSpace immediately — the mgr sends it
   // before deferring the geometry broadcast.
-  ASSERT_TRUE(PollUntil(silent.dispatcher, [&] {
-    return !silent.add_cell_msgs.empty();
-  })) << "Silent receiver missed AddCellToSpace";
+  ASSERT_TRUE(PollUntil(silent.dispatcher, [&] { return !silent.add_cell_msgs.empty(); }))
+      << "Silent receiver missed AddCellToSpace";
 
   // At silent.add_cell arrival, the post-Split geometry must still be
   // parked — message ordering proves the deferral without a timed wait.
@@ -594,8 +588,7 @@ TEST(CellAppMgrIntegration, LateCellAppNotAcking_TimeoutFallbackBroadcasts) {
   // After ~500ms timeout fires, mgr falls back to broadcasting anyway.
   // Allow generous wall-clock budget for the fallback to land.
   ASSERT_TRUE(PollUntil(
-      first.dispatcher,
-      [&] { return first.update_geometry_msgs.size() > baseline_count; },
+      first.dispatcher, [&] { return first.update_geometry_msgs.size() > baseline_count; },
       std::chrono::milliseconds(3000)))
       << "timeout fallback never broadcast geometry after the ack window";
 
@@ -610,7 +603,7 @@ TEST(CellAppMgrIntegration, CreateSpace_MultiCellBootstrap_DistributesAcrossHost
   MgrFixture fx;
   ASSERT_NE(fx.port, 0u);
 
-  constexpr int kN = 4;
+  constexpr int kN = 5;
   std::vector<std::unique_ptr<CellAppClient>> clients;
   std::vector<ReliableUdpChannel*> channels;
   for (int i = 0; i < kN; ++i) {
@@ -623,9 +616,9 @@ TEST(CellAppMgrIntegration, CreateSpace_MultiCellBootstrap_DistributesAcrossHost
     ASSERT_TRUE((*ch)->SendMessage(reg).HasValue());
   }
   for (auto& c : clients) {
-    ASSERT_TRUE(PollUntil(c->dispatcher,
-                          [&] { return c->register_ack_received.load(std::memory_order_acquire); }))
-        << "register ack stuck";
+    ASSERT_TRUE(PollUntil(c->dispatcher, [&] {
+      return c->register_ack_received.load(std::memory_order_acquire);
+    })) << "register ack stuck";
   }
 
   CreateSpaceRequest csr;

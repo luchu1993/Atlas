@@ -1,6 +1,7 @@
 #include "cellappmgr.h"
 
 #include <algorithm>
+#include <cmath>
 #include <functional>
 #include <limits>
 #include <queue>
@@ -28,6 +29,37 @@ namespace {
 auto ResolveAdvertisedAddr(const Address& advertised, const Address& src) -> Address {
   if (advertised.Ip() != 0) return advertised;
   return Address(src.Ip(), advertised.Port());
+}
+
+auto MidCoord(float lo, float hi) -> float {
+  if (std::isfinite(lo) && std::isfinite(hi)) return (lo + hi) * 0.5f;
+  if (std::isfinite(lo)) return lo + 1.f;
+  if (std::isfinite(hi)) return hi - 1.f;
+  return 0.f;
+}
+
+auto ClampInsideCoord(float value, float lo, float hi) -> float {
+  if (std::isfinite(lo) && std::isfinite(hi) && lo < hi) {
+    const float pad = std::max(1e-3f, (hi - lo) * 1e-4f);
+    return std::clamp(value, lo + pad, hi - pad);
+  }
+  if (std::isfinite(lo)) value = std::max(value, lo + 1e-3f);
+  if (std::isfinite(hi)) value = std::min(value, hi - 1e-3f);
+  return value;
+}
+
+auto MidpointForAxis(const CellBounds& bounds, BSPAxis axis) -> float {
+  return axis == BSPAxis::kX ? MidCoord(bounds.min_x, bounds.max_x)
+                             : MidCoord(bounds.min_z, bounds.max_z);
+}
+
+auto ClampInsideAxis(float value, const CellBounds& bounds, BSPAxis axis) -> float {
+  return axis == BSPAxis::kX ? ClampInsideCoord(value, bounds.min_x, bounds.max_x)
+                             : ClampInsideCoord(value, bounds.min_z, bounds.max_z);
+}
+
+auto BoundsMidpoint(const CellBounds& bounds) -> std::pair<float, float> {
+  return {MidCoord(bounds.min_x, bounds.max_x), MidCoord(bounds.min_z, bounds.max_z)};
 }
 
 }  // namespace
@@ -171,7 +203,8 @@ void CellAppMgr::OnRegisterCellApp(const Address& src, Channel* ch,
   ack.app_id = app_id;
   ack.game_time = GameTime();
   ack.tick_alignment_epoch_us = static_cast<uint64_t>(
-      std::chrono::duration_cast<std::chrono::microseconds>(StartTime().time_since_epoch()).count());
+      std::chrono::duration_cast<std::chrono::microseconds>(StartTime().time_since_epoch())
+          .count());
   if (ch != nullptr) {
     if (auto r = ch->SendMessage(ack); !r) {
       // Cellapp blocks until it sees this ack - drop => orphaned cellapp
@@ -218,32 +251,45 @@ void CellAppMgr::OnInformCellLoad(const Address& /*src*/, Channel* /*ch*/,
       }
       return;
     }
-    // Per-cell load = cellapp load × entity_count share. Balance reads
-    // leaf->load to pick split direction; aggregate mirror would tie hot
-    // and cold cells of the same cellapp.
     const uint32_t total_entities = msg.entity_count;
     for (const auto& rep : msg.cells) {
-      cell_distributions_[rep.cell_id] = {rep.entity_count, rep.median_x, rep.median_z};
-      const float share = total_entities > 0
-                              ? static_cast<float>(rep.entity_count) /
-                                    static_cast<float>(total_entities)
-                              : 1.f / std::max<float>(1.f, static_cast<float>(msg.cells.size()));
-      const float per_cell_load = share * info.load;
+      CellInfo* owned_cell = nullptr;
+      bool wrong_owner = false;
       for (auto& [_, partition] : spaces_) {
-        if (auto* mut = partition.bsp.FindCellByIdMutable(rep.cell_id); mut != nullptr) {
-          mut->entity_count = rep.entity_count;
-          mut->load = per_cell_load;
+        auto* mut = partition.bsp.FindCellByIdMutable(rep.cell_id);
+        if (mut == nullptr) continue;
+        if (mut->cellapp_addr != addr) {
+          wrong_owner = true;
+          break;
         }
+        owned_cell = mut;
+        break;
       }
+      if (owned_cell == nullptr) {
+        if (wrong_owner) {
+          ATLAS_LOG_WARNING("CellAppMgr: ignoring load for cell_id={} from non-owner app_id={}",
+                            rep.cell_id, msg.app_id);
+        }
+        continue;
+      }
+
+      cell_distributions_[rep.cell_id] = {rep.entity_count, rep.median_x, rep.median_z};
+      const float share =
+          total_entities > 0
+              ? static_cast<float>(rep.entity_count) / static_cast<float>(total_entities)
+              : 1.f / std::max<float>(1.f, static_cast<float>(msg.cells.size()));
+      const float per_cell_load = share * info.load;
+      owned_cell->entity_count = rep.entity_count;
+      owned_cell->load = per_cell_load;
     }
     return;
   }
   ATLAS_LOG_WARNING("CellAppMgr: InformCellLoad for unknown app_id={}", msg.app_id);
 }
 
-void CellAppMgr::SendCreateSpaceReply(const cellappmgr::CreateSpaceRequest& msg,
-                                      const Address& src, Channel* ch, bool ok,
-                                      cellappmgr::CellID cell_id, Address host_addr) {
+void CellAppMgr::SendCreateSpaceReply(const cellappmgr::CreateSpaceRequest& msg, const Address& src,
+                                      Channel* ch, bool ok, cellappmgr::CellID cell_id,
+                                      Address host_addr) {
   cellappmgr::SpaceCreatedResult reply;
   reply.request_id = msg.request_id;
   reply.space_id = msg.space_id;
@@ -283,9 +329,10 @@ void CellAppMgr::OnCreateSpaceRequest(const Address& src, Channel* ch,
     return;
   }
 
-  ATLAS_LOG_INFO("CellAppMgr: queueing CreateSpaceRequest space_id={} (have {} cellapps, window {}ms)",
-                 msg.space_id, cellapps_.size(),
-                 std::chrono::duration_cast<std::chrono::milliseconds>(startup_quiescence_window_).count());
+  ATLAS_LOG_INFO(
+      "CellAppMgr: queueing CreateSpaceRequest space_id={} (have {} cellapps, window {}ms)",
+      msg.space_id, cellapps_.size(),
+      std::chrono::duration_cast<std::chrono::milliseconds>(startup_quiescence_window_).count());
   pending_space_creates_awaiting_cellapps_.push_back(
       {msg, src, ch, Clock::now() + startup_quiescence_window_});
   // Zero-window path (tests) fires synchronously rather than next tick.
@@ -364,8 +411,7 @@ void CellAppMgr::DrainExpiredCreateSpaceRequests() {
   }
 }
 
-auto CellAppMgr::SortedHostsForBootstrap(std::size_t max) const
-    -> std::vector<const CellAppInfo*> {
+auto CellAppMgr::SortedHostsForBootstrap(std::size_t max) const -> std::vector<const CellAppInfo*> {
   std::vector<const CellAppInfo*> out;
   out.reserve(cellapps_.size());
   for (const auto& [_, info] : cellapps_) out.push_back(&info);
@@ -393,12 +439,18 @@ void CellAppMgr::BootstrapMultiCellPartition(SpacePartition& partition,
     auto pend = q.front();
     q.pop();
     const BSPAxis axis = (pend.level % 2 == 0) ? BSPAxis::kX : BSPAxis::kZ;
+    const auto* target = partition.bsp.FindCellById(pend.cell_id);
+    if (target == nullptr) {
+      ATLAS_LOG_ERROR("CellAppMgr: bootstrap split target missing cell_id={}", pend.cell_id);
+      break;
+    }
+    const float position = MidpointForAxis(target->bounds, axis);
     CellInfo new_leaf;
     new_leaf.cell_id = next_cell_id_++;
     new_leaf.cellapp_addr = hosts[host_idx]->internal_addr;
     new_leaf.load = hosts[host_idx]->load;
     new_leaf.entity_count = 0;
-    auto r = partition.bsp.Split(pend.cell_id, axis, /*position=*/0.f, new_leaf);
+    auto r = partition.bsp.Split(pend.cell_id, axis, position, new_leaf);
     if (!r) {
       ATLAS_LOG_ERROR("CellAppMgr: BSP split failed at level={} cell_id={}: {}", pend.level,
                       pend.cell_id, r.Error().Message());
@@ -460,19 +512,7 @@ void CellAppMgr::GrowSpacesForNewCellApp(const CellAppInfo& new_app) {
     } else {
       position = 0.f;
     }
-    // Clamp strictly inside bounds; median can sit on the edge (all
-    // entities on one side) and BSPTree::Split rejects edges.
-    if (axis == BSPAxis::kX && dx_finite) {
-      const float lo = target->bounds.min_x;
-      const float hi = target->bounds.max_x;
-      const float pad = std::max(1e-3f, (hi - lo) * 1e-4f);
-      position = std::clamp(position, lo + pad, hi - pad);
-    } else if (axis == BSPAxis::kZ && dz_finite) {
-      const float lo = target->bounds.min_z;
-      const float hi = target->bounds.max_z;
-      const float pad = std::max(1e-3f, (hi - lo) * 1e-4f);
-      position = std::clamp(position, lo + pad, hi - pad);
-    }
+    position = ClampInsideAxis(position, target->bounds, axis);
 
     CellInfo new_leaf;
     new_leaf.cell_id = next_cell_id_++;
@@ -495,8 +535,8 @@ void CellAppMgr::GrowSpacesForNewCellApp(const CellAppInfo& new_app) {
     }
     // Defer geometry broadcast until the new cellapp acks AddCellToSpace;
     // OnAddCellToSpaceAck or the timeout drain fires the actual fan-out.
-    pending_geometry_broadcasts_.push_back({space_id, new_leaf.cell_id, new_app.internal_addr,
-                                            Clock::now()});
+    pending_geometry_broadcasts_.push_back(
+        {space_id, new_leaf.cell_id, new_app.internal_addr, Clock::now()});
 
     ATLAS_LOG_INFO(
         "CellAppMgr: elastic-grow space={} split cell={} on axis={} pos={} "
@@ -528,8 +568,7 @@ void CellAppMgr::OnAddCellToSpaceAck(const Address& /*src*/, Channel* /*ch*/,
 void CellAppMgr::DrainPendingGeometryBroadcasts() {
   if (pending_geometry_broadcasts_.empty()) return;
   const auto now = Clock::now();
-  for (auto it = pending_geometry_broadcasts_.begin();
-       it != pending_geometry_broadcasts_.end();) {
+  for (auto it = pending_geometry_broadcasts_.begin(); it != pending_geometry_broadcasts_.end();) {
     if (now - it->sent_at < kPendingGeometryTimeout) {
       ++it;
       continue;
@@ -584,22 +623,27 @@ void CellAppMgr::OnCellAppDeath(const Address& internal_addr) {
     bool topology_changed = false;
     Address first_new_host{};
     for (auto cid : orphan_ids) {
+      const auto* dead_leaf = partition.bsp.FindCellById(cid);
+      const CellBounds dead_bounds = dead_leaf != nullptr ? dead_leaf->bounds : CellBounds{};
+      cell_distributions_.erase(cid);
+
       auto r = partition.bsp.Unsplit(cid);
       if (r.HasValue()) {
-        ATLAS_LOG_INFO(
-            "CellAppMgr: unsplit cell_id={} (space {}) — sibling subtree absorbs bounds",
-            cid, space_id);
+        const auto [mid_x, mid_z] = BoundsMidpoint(dead_bounds);
+        if (const auto* absorbing = partition.bsp.FindCell(mid_x, mid_z);
+            absorbing != nullptr && first_new_host.Ip() == 0) {
+          first_new_host = absorbing->cellapp_addr;
+        }
+        ATLAS_LOG_INFO("CellAppMgr: unsplit cell_id={} (space {}) — sibling subtree absorbs bounds",
+                       cid, space_id);
         topology_changed = true;
         continue;
       }
-      // Fallback: single-leaf tree (Unsplit refuses) — rehome the only
-      // leaf onto a survivor so the Space is reachable at all.
       const auto* alt = PickAlternateHostInSpace(internal_addr, partition);
       if (alt == nullptr) alt = PickAlternateHost(internal_addr);
       if (alt == nullptr) {
-        ATLAS_LOG_ERROR(
-            "CellAppMgr: rehoming cell_id={} (space {}) failed — no alternate host", cid,
-            space_id);
+        ATLAS_LOG_ERROR("CellAppMgr: rehoming cell_id={} (space {}) failed — no alternate host",
+                        cid, space_id);
         break;
       }
       auto* leaf = partition.bsp.FindCellByIdMutable(cid);
@@ -616,9 +660,6 @@ void CellAppMgr::OnCellAppDeath(const Address& internal_addr) {
     }
 
     if (topology_changed) {
-      // After Unsplit, surviving leaves' bounds grew; broadcast tells every
-      // cellapp the new geometry so OnUpdateGeometry resizes their local
-      // Cells accordingly. The post-merge primary owner is the rehome host.
       BroadcastGeometry(partition);
       if (first_new_host.Ip() == 0) {
         if (const auto* primary = partition.bsp.FindCellById(partition.bsp.PrimaryCellId())) {
@@ -648,9 +689,11 @@ void CellAppMgr::TickLoadBalance() {
     partition.bsp.Balance(kBalanceSafetyBound);
     // Don't leak the post-Split tree before the new cellapp acks; the
     // pending-ack handler picks up Balance-induced changes when it fires.
-    const bool pending = std::any_of(
-        pending_geometry_broadcasts_.begin(), pending_geometry_broadcasts_.end(),
-        [space_id = space_id](const PendingGeometryBroadcast& p) { return p.space_id == space_id; });
+    const bool pending =
+        std::any_of(pending_geometry_broadcasts_.begin(), pending_geometry_broadcasts_.end(),
+                    [space_id = space_id](const PendingGeometryBroadcast& p) {
+                      return p.space_id == space_id;
+                    });
     if (pending) continue;
     BroadcastGeometry(partition);
   }
@@ -705,8 +748,8 @@ auto CellAppMgr::PickAlternateHostInSpace(const Address& exclude_addr,
 }
 
 void CellAppMgr::SendAddCell(const CellAppInfo& target, SpaceID space_id,
-                             cellappmgr::CellID cell_id, const CellBounds& bounds,
-                             bool is_primary, const std::string& space_master_type) {
+                             cellappmgr::CellID cell_id, const CellBounds& bounds, bool is_primary,
+                             const std::string& space_master_type) {
   if (target.channel == nullptr) {
     ATLAS_LOG_WARNING("CellAppMgr: AddCellToSpace skipped — no channel to app_id={}",
                       target.app_id);

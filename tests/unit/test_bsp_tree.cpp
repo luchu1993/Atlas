@@ -245,7 +245,7 @@ TEST(BSPTree, VisitRect_RectStraddlingSplitVisitsBoth) {
 
 // ─── Balance — load-driven split line movement ───────────────────────────────
 
-TEST(BSPTree, Balance_LeftHeavierShiftsRight) {
+TEST(BSPTree, Balance_LeftHeavierShiftsLeft) {
   auto t = MakeSingleCellTree(1, 30001);
   ASSERT_TRUE(t.Split(1, BSPAxis::kX, 0.f, MakeLeafInfo(2, 30002)).HasValue());
 
@@ -258,8 +258,24 @@ TEST(BSPTree, Balance_LeftHeavierShiftsRight) {
 
   const float before_right_min_x = right->bounds.min_x;  // 0.f
   t.Balance(/*safety_bound=*/0.9f);
+  EXPECT_LT(right->bounds.min_x, before_right_min_x);
+  EXPECT_FLOAT_EQ(left->bounds.max_x, right->bounds.min_x);
+}
+
+TEST(BSPTree, Balance_RightHeavierShiftsRight) {
+  auto t = MakeSingleCellTree(1, 30001);
+  ASSERT_TRUE(t.Split(1, BSPAxis::kX, 0.f, MakeLeafInfo(2, 30002)).HasValue());
+
+  auto* left = t.FindCellByIdMutable(1);
+  auto* right = t.FindCellByIdMutable(2);
+  ASSERT_NE(left, nullptr);
+  ASSERT_NE(right, nullptr);
+  left->load = 0.2f;
+  right->load = 0.8f;
+
+  const float before_right_min_x = right->bounds.min_x;
+  t.Balance(/*safety_bound=*/0.9f);
   EXPECT_GT(right->bounds.min_x, before_right_min_x);
-  // Left upper bound and right lower bound stay coupled.
   EXPECT_FLOAT_EQ(left->bounds.max_x, right->bounds.min_x);
 }
 
@@ -285,7 +301,7 @@ TEST(BSPTree, Balance_AggressionDecaysOnDirectionReversal) {
   auto t = MakeSingleCellTree(1, 30001);
   ASSERT_TRUE(t.Split(1, BSPAxis::kX, 0.f, MakeLeafInfo(2, 30002)).HasValue());
 
-  // First push left → right several times.
+  // First shrink the left side several times.
   t.FindCellByIdMutable(1)->load = 0.9f;
   t.FindCellByIdMutable(2)->load = 0.1f;
   t.Balance(0.95f);
@@ -332,13 +348,9 @@ TEST(BSPTree, Balance_ClampedToFiniteSubBoundsWhenSplitInsideNested) {
   ASSERT_TRUE(t.Split(1, BSPAxis::kX, 0.f, MakeLeafInfo(2, 30002)).HasValue());
   ASSERT_TRUE(t.Split(2, BSPAxis::kX, 50.f, MakeLeafInfo(3, 30003)).HasValue());
 
-  // Make cell 2's side extremely heavy to drive the inner split right.
   t.FindCellByIdMutable(2)->load = 100.f;
   t.FindCellByIdMutable(3)->load = 0.f;
 
-  // Balance many times; the inner split line should never push cell 3's
-  // min_x to or past the outer max_x (which is ±inf here — so instead we
-  // just assert the bounds remain coherent and cell 3's min_x stays > 0).
   for (int i = 0; i < 10; ++i) t.Balance(1.0f);
   const auto* c2 = t.FindCellById(2);
   const auto* c3 = t.FindCellById(3);
