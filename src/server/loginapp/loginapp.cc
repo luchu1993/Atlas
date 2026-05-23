@@ -91,8 +91,12 @@ auto LoginApp::Init(int argc, char* argv[]) -> bool {
           if (ch) dbapp_channel_ = static_cast<Channel*>(*ch);
         }
       },
-      [this](const machined::DeathNotification& /*n*/) {
-        ATLAS_LOG_WARNING("LoginApp: DBApp died");
+      [this](const machined::DeathNotification& n) {
+        if (n.reason == 0) {
+          ATLAS_LOG_INFO("LoginApp: DBApp deregistered");
+        } else {
+          ATLAS_LOG_WARNING("LoginApp: DBApp died");
+        }
         dbapp_channel_ = nullptr;
       });
 
@@ -106,8 +110,12 @@ auto LoginApp::Init(int argc, char* argv[]) -> bool {
           if (ch) baseappmgr_channel_ = static_cast<Channel*>(*ch);
         }
       },
-      [this](const machined::DeathNotification& /*n*/) {
-        ATLAS_LOG_WARNING("LoginApp: BaseAppMgr died");
+      [this](const machined::DeathNotification& n) {
+        if (n.reason == 0) {
+          ATLAS_LOG_INFO("LoginApp: BaseAppMgr deregistered");
+        } else {
+          ATLAS_LOG_WARNING("LoginApp: BaseAppMgr died");
+        }
         baseappmgr_channel_ = nullptr;
       });
 

@@ -109,7 +109,7 @@ bool AvatarFilter::TryEvaluate(Vec3& pos, Vec3& dir, bool& on_ground) const {
 Vec3 AvatarFilter::ExtrapolatePosition(const Sample& s, double target_time) const {
   double ahead = target_time - s.server_time;
   if (ahead <= 0.0 || count_ < 2) return s.position;
-  if (ahead > max_extrapolation) ahead = max_extrapolation;
+  if (ahead > max_extrapolation) return s.position;
 
   const std::size_t newest = NewestIndex();
   const std::size_t prev = (newest + kRingCapacity - 1) % kRingCapacity;

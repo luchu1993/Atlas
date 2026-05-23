@@ -6,7 +6,7 @@ using MvpAvatar = Atlas.Mvp.Client.Avatar;
 
 namespace Atlas.Mvp.Unity
 {
-    public sealed class PlayerInputController : ITickable, IDisposable
+    public sealed class PlayerInputController : IAtlasUnityTickable, IDisposable
     {
         const float kMoveSpeed = 5f;
         const float kReportHz = 20f;
@@ -17,6 +17,7 @@ namespace Atlas.Mvp.Unity
         readonly MvpAvatar _avatar;
         readonly AtlasNetworkManager _net;
         readonly Transform _target;
+        readonly AtlasUnityFramePump _frame;
         readonly Func<Vector2>? _joystickSource;
         readonly Func<bool>? _fireRequestSource;
         readonly Func<float>? _cameraYawSource;
@@ -27,12 +28,14 @@ namespace Atlas.Mvp.Unity
         float _reportAccum;
 
         public PlayerInputController(MvpAvatar avatar, AtlasNetworkManager net, Transform target,
-            Func<Vector2>? joystickSource = null, Func<bool>? fireRequestSource = null,
+            AtlasUnityFramePump frame, Func<Vector2>? joystickSource = null,
+            Func<bool>? fireRequestSource = null,
             Func<float>? cameraYawSource = null, Func<bool>? inputBlocked = null)
         {
             _avatar = avatar;
             _net = net;
             _target = target;
+            _frame = frame;
             _joystickSource = joystickSource;
             _fireRequestSource = fireRequestSource;
             _cameraYawSource = cameraYawSource;
@@ -43,12 +46,12 @@ namespace Atlas.Mvp.Unity
             _respawnHandler = pos =>
                 _localPos = new Vector3(pos.X, pos.Y, pos.Z);
             _avatar.Respawned += _respawnHandler;
-            Ticker.Add(this);
+            _frame.Add(this);
         }
 
         public void Dispose()
         {
-            Ticker.Remove(this);
+            _frame.Remove(this);
             _avatar.Respawned -= _respawnHandler;
         }
 

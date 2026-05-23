@@ -65,7 +65,7 @@ bool FAtlasAvatarFilterTest::RunTest(const FString&)
 		TestTrue(TEXT("lerp at t=0.7 pos.x ≈ 7.0"), NearlyEqual(P.x, 7.0f));
 	}
 
-	// 4. Target_time after newest extrapolates with cap of max_extrapolation.
+	// 4. Target_time past max_extrapolation holds the newest sample.
 	{
 		double WallNow = 10.0;
 		atlas::AvatarFilter F([&]() { return WallNow; });
@@ -75,12 +75,11 @@ bool FAtlasAvatarFilterTest::RunTest(const FString&)
 		// Force a target_time well past newest by zeroing latency + offset.
 		// After 1st Input offset=10.0-10.0=0, latency=0.3. After 2nd Input offset=0 still.
 		// To get target_time > 10.1, need wall - 0 - 0.3 > 10.1 → wall > 10.4.
-		WallNow = 10.5;  // target_time = 10.2; ahead = 10.2-10.1 = 0.1, capped to 0.05.
-		// span = 10.1-10.0 = 0.1, scale = 0.05/0.1 = 0.5, pos.x = 1.0 + (1.0-0.0)*0.5 = 1.5.
+		WallNow = 10.5;  // target_time = 10.2; ahead = 10.2-10.1 = 0.1, so hold.
 		atlas::Vec3 P{}, D{};
 		bool G = false;
 		TestTrue(TEXT("extrapolate TryEvaluate"), F.TryEvaluate(P, D, G));
-		TestTrue(TEXT("extrapolation cap clamps at 1.5"), NearlyEqual(P.x, 1.5f));
+		TestTrue(TEXT("extrapolation past cap holds at 1.0"), NearlyEqual(P.x, 1.0f));
 	}
 
 	// 5. Sample ordering: out-of-order Input discarded.

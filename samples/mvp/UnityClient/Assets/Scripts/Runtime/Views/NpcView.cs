@@ -1,3 +1,4 @@
+using System;
 using Atlas.Client.Unity;
 using UnityEngine;
 using MvpNpc = Atlas.Mvp.Client.Npc;
@@ -7,9 +8,14 @@ namespace Atlas.Mvp.Unity
     public sealed class NpcView : EntityView
     {
         MvpNpc Npc => (MvpNpc)Entity!;
+        readonly Func<uint> _ownerIdSource;
 
-        public NpcView(MvpNpc npc, AtlasNetworkManager net, Transform worldRoot)
-            : base(npc, net, worldRoot) { }
+        public NpcView(MvpNpc npc, AtlasNetworkManager net, Transform worldRoot,
+            AtlasUnityFramePump frame, LabelOverlay labels, Func<uint> ownerIdSource)
+            : base(npc, net, worldRoot, frame, labels)
+        {
+            _ownerIdSource = ownerIdSource;
+        }
 
         protected override Color PickAliveColor() => new(0.6f, 0.6f, 0.6f);
 
@@ -22,7 +28,7 @@ namespace Atlas.Mvp.Unity
 
         void OnDamage(int amount, uint attackerId)
         {
-            if (attackerId == Bootstrap.Instance?.OwnerEntityId)
+            if (attackerId == _ownerIdSource())
                 SpawnDamageFloater(amount);
         }
     }

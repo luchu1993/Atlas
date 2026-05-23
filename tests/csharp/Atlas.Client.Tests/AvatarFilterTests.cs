@@ -91,17 +91,16 @@ namespace Atlas.Client.Tests
         }
 
         [Fact]
-        public void ExtrapolationRespectsCap()
+        public void ExtrapolationStopsAfterCap()
         {
             var clock = new Clock { Now = 0.0 };
             var f = Make(clock);
             f.Input(0.0, Vector3.Zero, Vector3.Forward, false);
             f.Input(0.1, new Vector3(100, 0, 0), Vector3.Forward, false);
 
-            // Past MaxExtrapolation cap: vel × cap = 1000 × 0.05 = 50 → max X ≈ 150.
             clock.Now = 1.0 + f.CurrentLatency;
             Assert.True(f.TryEvaluate(out var pos, out _, out _));
-            Assert.InRange(pos.X, 100f, 151f);
+            Assert.Equal(100f, pos.X);
         }
 
         [Fact]

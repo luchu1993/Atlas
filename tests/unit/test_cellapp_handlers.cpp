@@ -700,7 +700,7 @@ TEST_F(CellAppHandlersTest, PeerDeathDropsOrphanGhostsAndClearsHaunts) {
   ASSERT_TRUE(rd->AddHaunt(other_ch, other_addr));
   ASSERT_EQ(rd->HauntCount(), 2u);
 
-  app_.OnPeerCellAppDeath(Address(0x7F000001u, 40001), dying_ch);
+  app_.OnPeerCellAppDeath(Address(0x7F000001u, 40001), dying_ch, 1);
 
   EXPECT_EQ(app_.FindEntity(700), nullptr) << "orphan Ghost should be dropped";
   EXPECT_NE(app_.FindEntity(701), nullptr) << "unrelated Ghost must survive";
@@ -762,13 +762,13 @@ TEST_F(CellAppHandlersTest, HandlePeerLost_AddressKeyed_AndIdempotent) {
   ASSERT_TRUE(rd->AddHaunt(other_ch, other_addr));
   ASSERT_EQ(rd->HauntCount(), 2u);
 
-  app_.HandlePeerLost(dying_addr);
+  app_.HandlePeerLost(dying_addr, false);
 
   EXPECT_EQ(app_.FindEntity(700), nullptr);
   EXPECT_EQ(rd->HauntCount(), 1u);
   EXPECT_TRUE(rd->HasHaunt(other_ch));
 
-  app_.HandlePeerLost(dying_addr);
+  app_.HandlePeerLost(dying_addr, false);
   EXPECT_EQ(rd->HauntCount(), 1u);
   EXPECT_TRUE(rd->HasHaunt(other_ch));
 }
@@ -978,7 +978,7 @@ TEST_F(CellAppHandlersTest, PeerCellAppDeathFiresDestroyGhostForOrphans) {
   app_.OnCreateGhost({}, dying, MakeGhost(800));
   ghost_calls_.clear();
 
-  app_.OnPeerCellAppDeath(Address{0x7F000001u, 26002}, dying);
+  app_.OnPeerCellAppDeath(Address{0x7F000001u, 26002}, dying, 1);
 
   ASSERT_EQ(ghost_calls_.size(), 1u);
   EXPECT_EQ(ghost_calls_[0].kind, GhostCall::kDestroyGhost);

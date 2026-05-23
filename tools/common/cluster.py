@@ -87,38 +87,43 @@ def start_logged_process(
 
 
 def stop_logged_processes(processes: list[LoggedProcess]) -> None:
-    for entry in sorted(processes, key=lambda item: item.start_order, reverse=True):
-        proc = entry.process
-        if proc.poll() is None:
-            _log(f"Stopping {entry.name} (pid={proc.pid})")
-            try:
-                if os.name == "nt":
-                    # CTRL_BREAK_EVENT graceful shutdown via CREATE_NEW_PROCESS_GROUP.
-                    os.kill(proc.pid, signal.CTRL_BREAK_EVENT)
-                else:
-                    os.killpg(proc.pid, signal.SIGTERM)
-            except ProcessLookupError:
-                pass
-
-            try:
-                proc.wait(timeout=8)
-            except subprocess.TimeoutExpired:
+    for order in sorted({entry.start_order for entry in processes}, reverse=True):
+        group = [entry for entry in processes if entry.start_order == order]
+        for entry in group:
+            proc = entry.process
+            if proc.poll() is None:
+                _log(f"Stopping {entry.name} (pid={proc.pid})")
                 try:
                     if os.name == "nt":
-                        proc.kill()
+                        # CTRL_BREAK_EVENT graceful shutdown via CREATE_NEW_PROCESS_GROUP.
+                        os.kill(proc.pid, signal.CTRL_BREAK_EVENT)
                     else:
-                        os.killpg(proc.pid, signal.SIGKILL)
+                        os.killpg(proc.pid, signal.SIGTERM)
                 except ProcessLookupError:
                     pass
-                try:
-                    proc.wait(timeout=5)
-                except subprocess.TimeoutExpired:
-                    pass
 
-        if entry.stdout_handle:
-            entry.stdout_handle.close()
-        if entry.stderr_handle:
-            entry.stderr_handle.close()
+        for entry in group:
+            proc = entry.process
+            if proc.poll() is None:
+                try:
+                    proc.wait(timeout=8)
+                except subprocess.TimeoutExpired:
+                    try:
+                        if os.name == "nt":
+                            proc.kill()
+                        else:
+                            os.killpg(proc.pid, signal.SIGKILL)
+                    except ProcessLookupError:
+                        pass
+                    try:
+                        proc.wait(timeout=5)
+                    except subprocess.TimeoutExpired:
+                        pass
+
+            if entry.stdout_handle:
+                entry.stdout_handle.close()
+            if entry.stderr_handle:
+                entry.stderr_handle.close()
 
 
 def wait_for_registration(

@@ -104,7 +104,7 @@ class BaseAppMgr : public ManagerApp {
   void RecordSuccessfulAllocation(uint32_t app_id, DatabaseID dbid, TimePoint now);
   [[nodiscard]] auto IsOverloaded() const -> bool;
   void BroadcastToAllBaseapps(const baseappmgr::GlobalBaseNotification& notif);
-  void OnBaseappDeath(const Address& addr);
+  void OnBaseappDeath(const Address& addr, uint8_t reason);
 
   std::unordered_map<Address, BaseAppInfo> baseapps_;
   std::unordered_map<uint32_t, Address> app_id_index_;

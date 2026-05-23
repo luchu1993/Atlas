@@ -2,6 +2,7 @@
 #define ATLAS_LIB_SERVER_CELLAPP_PEER_REGISTRY_H_
 
 #include <cstddef>
+#include <cstdint>
 #include <functional>
 #include <unordered_map>
 
@@ -29,7 +30,8 @@ class CellAppPeerRegistry {
   auto operator=(const CellAppPeerRegistry&) -> CellAppPeerRegistry& = delete;
 
   // Fired before the dying peer is erased from the registry.
-  using PeerDeathHandler = std::function<void(const Address& addr, Channel* dying)>;
+  using PeerDeathHandler =
+      std::function<void(const Address& addr, Channel* dying, uint8_t reason)>;
 
   // `on_death` runs before a recognized CellApp death is dropped.
   void Subscribe(MachinedClient& machined, Address self_addr, PeerDeathHandler on_death = {});

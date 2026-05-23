@@ -9,18 +9,28 @@ namespace Atlas.Mvp.Unity
     {
         readonly AtlasNetworkManager _net;
         readonly Material? _groundMaterial;
+        readonly AtlasUnityFramePump _frame;
+        readonly Func<Camera?> _cameraSource;
         GameObject? _worldRoot;
         GameHud? _hud;
+        LabelOverlay? _labels;
+        AoiBoxOverlay? _aoiBoxes;
+        BspGizmo? _bspGizmo;
         ProjectileVisualController? _projectiles;
 
         public Transform? WorldRoot => _worldRoot != null ? _worldRoot.transform : null;
         public GameHud? Hud => _hud;
+        public LabelOverlay? Labels => _labels;
+        public AoiBoxOverlay? AoiBoxes => _aoiBoxes;
         public bool IsBuilt => _worldRoot != null;
 
-        public WorldLifecycle(AtlasNetworkManager net, Material? groundMaterial)
+        public WorldLifecycle(AtlasNetworkManager net, Material? groundMaterial,
+            AtlasUnityFramePump frame, Func<Camera?> cameraSource)
         {
             _net = net;
             _groundMaterial = groundMaterial;
+            _frame = frame;
+            _cameraSource = cameraSource;
         }
 
         public void Build()
@@ -56,8 +66,12 @@ namespace Atlas.Mvp.Unity
             _hud = hudGo.AddComponent<GameHud>();
             _hud.Bind(_net);
 
-            LabelOverlay.Init();
-            _projectiles = new ProjectileVisualController();
+            _labels = new LabelOverlay(_frame, _cameraSource);
+            _aoiBoxes = new AoiBoxOverlay(_frame);
+            _bspGizmo = new BspGizmo(_net.Session);
+            _bspGizmo.Attach();
+            _hud.BindDebugOverlays(_aoiBoxes, _bspGizmo);
+            _projectiles = new ProjectileVisualController(_frame);
         }
 
         public void Dispose()
@@ -66,9 +80,12 @@ namespace Atlas.Mvp.Unity
             _hud = null;
             _projectiles?.Dispose();
             _projectiles = null;
-            AoiBoxes.Clear();
-            BspGizmo.Clear();
-            LabelOverlay.Shutdown();
+            _aoiBoxes?.Dispose();
+            _aoiBoxes = null;
+            _bspGizmo?.Dispose();
+            _bspGizmo = null;
+            _labels?.Dispose();
+            _labels = null;
             _net.Session.Reset();
             UnityEngine.Object.Destroy(_worldRoot);
             _worldRoot = null;

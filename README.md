@@ -36,7 +36,7 @@ tools\bin\setup_mvp_unity.bat
 tools\bin\run_mvp_cluster.bat
 ```
 
-Open `samples/mvp/UnityClient` in Unity Hub and hit Play. To build a standalone player, run `tools\bin\build_mvp_unity.bat`; it can auto-discover an installed Unity editor if the Unity project version file is absent.
+Open `samples/mvp/UnityClient` in Unity Hub and hit Play. Its client code is split into `Assets/Scripts/Runtime` and `Assets/Scripts/Editor` asmdefs, with runtime modules for app, world, views, UI, input, projectiles, and debug overlays. To build a standalone player, run `tools\bin\build_mvp_unity.bat`; it can auto-discover an installed Unity editor if the Unity project version file is absent.
 
 ![Atlas MVP Unity demo](docs/mvp/mvp_unity.gif)
 

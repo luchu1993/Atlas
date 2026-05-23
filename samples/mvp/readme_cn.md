@@ -9,7 +9,7 @@ samples/mvp/
 ├── Atlas.Mvp.Base/      # BaseApp 脚本：Account.SelectAvatar、Avatar AoI 配置
 ├── Atlas.Mvp.Cell/      # CellApp 脚本：Avatar、Npc、NpcAiComponent、ProjectileSimulator
 ├── Atlas.Mvp.Client/    # netstandard2.1 + net10.0 — Unity 与 atlas_client.exe 共用
-└── UnityClient/         # Unity 6 LTS 工程；Bootstrap.cs 运行时构建场景
+└── UnityClient/         # Unity 6 LTS 工程；Runtime/App/Bootstrap.cs 是入口
 ```
 
 `entity_defs/{Avatar,Npc,Account}.def` 定义实体表面；`Avatar` 是 base + cell 实体，`Npc` 仅存在于 cell。
@@ -44,9 +44,17 @@ tools\bin\run_mvp_cluster.bat
 **改了 `Atlas.Mvp.{Client,Cell,Base}/*.cs`、`entity_defs/*` 或 `src/csharp/Atlas.Client.Unity/*.cs` 后，必须重跑 `tools\bin\setup_mvp_unity.bat`（或 .sh）再回 Unity Editor**。Unity 项目下有两条 staged 路径，都由 `setup_mvp_unity` 从源头重生成：
 
 - `Assets/Plugins/Atlas.Mvp/Atlas.Mvp.Client.dll` —— 由 `samples/mvp/Atlas.Mvp.Client/` 经 Release `dotnet build` 产出再 copy
-- `Assets/Atlas.Client.Unity/*.cs` —— 对 `src/csharp/Atlas.Client.Unity/` 做 `rmtree + copytree` 镜像
+- `Assets/Atlas.Client.Unity/*` —— 对 `src/csharp/Atlas.Client.Unity/` 做增量同步，只复制变化文件
 
-`build.bat debug` 只刷新服务端用的 `bin/debug/`，不动这两份 staged 副本。直接编辑 `Assets/Atlas.Client.Unity/` 下的 .cs **会被下次 setup 静默覆盖**——永远改 `src/csharp/...` 源。
+`build.bat debug` 只刷新服务端用的 `bin/debug/`，不动这两份 staged 副本。直接编辑 `Assets/Atlas.Client.Unity/` 下的内容会被下次 setup 覆盖；如果 Unity 锁住 native plugin，关闭 Editor 后重跑 setup。永远改 `src/csharp/...` 源。
+
+Unity MVP 自身代码按 `Assets/Scripts/Runtime/` 和
+`Assets/Scripts/Editor/` 分层。Runtime 由
+`Atlas.Mvp.Unity.Runtime` asmdef 编译，并继续按 `App`、`World`、
+`Views`、`UI`、`Input`、`Projectiles`、`Debug` 模块归类；Editor-only
+构建入口由 `Atlas.Mvp.Unity.Editor` 编译。AoI box、BSP 几何等调试
+overlay 独立放在 `Runtime/Debug/`，通过实例注入接入 HUD，不再作为
+静态全局工具混在主运行时代码里。
 
 ## 打包 Unity 客户端
 

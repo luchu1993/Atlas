@@ -12,6 +12,8 @@ namespace Atlas.Entity;
 /// </summary>
 public sealed class EntityManager
 {
+    private const byte kCellAppProcessPrefix = 4;
+
     public static EntityManager Instance { get; } = new();
     private EntityManager() { }
 
@@ -130,13 +132,12 @@ public sealed class EntityManager
     /// stay at 0, Witness::Update would conclude "peer already up to date"
     /// and no property deltas would ever reach any client.
     /// <para/>
-    /// Runs on every process type; on BaseApp / Client
-    /// <see cref="NativeApi.PublishReplicationFrame"/> is a provider-side
-    /// no-op (with a one-time warning), so a shared-script entity's pump
-    /// cost is one virtual call plus one P/Invoke per tick.
+    /// Runs only on CellApp; BaseApp has no AoI replication frame sink.
     /// </summary>
     internal void PublishReplicationAll()
     {
+        if (_processPrefix != kCellAppProcessPrefix) return;
+
         // Single shared quartet of writers — Reset between entities — so we
         // do one ArrayPool.Rent per Reset cap, not one per entity per tick.
         // See ServerEntity.BuildAndConsumeReplicationFrame docstring "ZERO-
@@ -190,6 +191,7 @@ public sealed class EntityManager
             // Ghosts are mirrors; OnDestroy is reserved for real death.
             if (entity.IsGhost) continue;
             entity.TriggerLifecycleCancellation();
+            entity.IsDestroyed = true;
             entity.OnDestroy();
         }
         _iterating = false;

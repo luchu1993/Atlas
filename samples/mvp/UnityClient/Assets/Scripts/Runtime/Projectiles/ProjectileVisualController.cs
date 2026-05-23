@@ -1,12 +1,13 @@
 using System;
 using System.Collections.Generic;
+using Atlas.Client.Unity;
 using Atlas.Mvp.Client;
 using UnityEngine;
 using AtlasVec = Atlas.DataTypes.Vector3;
 
 namespace Atlas.Mvp.Unity
 {
-    public sealed class ProjectileVisualController : ITickable, IDisposable
+    public sealed class ProjectileVisualController : IAtlasUnityTickable, IDisposable
     {
         // Mirrors the cell-side gravity so client + server arcs agree; the
         // lifetime cap is a safety net for missed OnProjectileEnded RPCs.
@@ -34,19 +35,21 @@ namespace Atlas.Mvp.Unity
         readonly Queue<GameObject> _projectilePool = new();
         readonly Queue<GameObject> _hitFxPool = new();
         readonly List<PendingHitFx> _pendingHitFx = new();
+        readonly AtlasUnityFramePump _frame;
         readonly GameObject _root;
 
-        public ProjectileVisualController()
+        public ProjectileVisualController(AtlasUnityFramePump frame)
         {
+            _frame = frame;
             _root = new GameObject("ProjectileRoot");
             ProjectileBus.Fired += OnFired;
             ProjectileBus.Ended += OnEnded;
-            Ticker.Add(this);
+            _frame.Add(this);
         }
 
         public void Dispose()
         {
-            Ticker.Remove(this);
+            _frame.Remove(this);
             ProjectileBus.Fired -= OnFired;
             ProjectileBus.Ended -= OnEnded;
             if (_root != null) UnityEngine.Object.Destroy(_root);
@@ -135,7 +138,11 @@ namespace Atlas.Mvp.Unity
         {
             var fx = AcquireHitFx();
             fx.transform.position = pos;
-            _pendingHitFx.Add(new PendingHitFx { Go = fx, ReleaseTime = Time.time + kHitFxLifetime });
+            _pendingHitFx.Add(new PendingHitFx
+            {
+                Go = fx,
+                ReleaseTime = Time.time + kHitFxLifetime,
+            });
         }
 
         GameObject AcquireHitFx()

@@ -347,13 +347,13 @@ TEST(CellAppMgr, CellAppDeath_RemovesPeer) {
   h.mgr.OnRegisterCellApp(reg.internal_addr, nullptr, reg);
   EXPECT_EQ(h.mgr.CellApps().size(), 1u);
 
-  h.mgr.OnCellAppDeath(reg.internal_addr);
+  h.mgr.OnCellAppDeath(reg.internal_addr, 1);
   EXPECT_TRUE(h.mgr.CellApps().empty());
 }
 
 TEST(CellAppMgr, CellAppDeath_UnknownAddrSilent) {
   CellAppMgrHarness h;
-  h.mgr.OnCellAppDeath(MakePeerAddr(9999));  // must not crash
+  h.mgr.OnCellAppDeath(MakePeerAddr(9999), 1);  // must not crash
   EXPECT_TRUE(h.mgr.CellApps().empty());
 }
 
@@ -381,7 +381,7 @@ TEST(CellAppMgr, CellAppDeath_UnsplitsOrphanedLeafIntoSibling) {
   ASSERT_TRUE(
       h.mgr.SpacesForTest().at(7).bsp.Split(primary_id_before, BSPAxis::kX, 0.f, right).HasValue());
 
-  h.mgr.OnCellAppDeath(reg_a.internal_addr);
+  h.mgr.OnCellAppDeath(reg_a.internal_addr, 1);
 
   const auto& after = h.mgr.Spaces().at(7);
   ASSERT_EQ(after.bsp.Leaves().size(), 1u);
@@ -420,7 +420,7 @@ TEST(CellAppMgr, CellAppDeath_RehomeNotificationUsesAbsorbingSibling) {
   RecordingChannel base_ch(h.dispatcher, base_table, MakePeerAddr(20000));
   h.mgr.BaseAppChannelsForTest()[MakePeerAddr(20000)] = &base_ch;
 
-  h.mgr.OnCellAppDeath(reg_c.internal_addr);
+  h.mgr.OnCellAppDeath(reg_c.internal_addr, 1);
 
   const auto* absorbing = h.mgr.Spaces().at(8).bsp.FindCell(500.f, 500.f);
   ASSERT_NE(absorbing, nullptr);
@@ -457,7 +457,7 @@ TEST(CellAppMgr, CellAppDeath_RehomesLeavesToSurvivor) {
 
   // Kill the initial host. The surviving peer (app_b) must end up as
   // the leaf's cellapp_addr.
-  h.mgr.OnCellAppDeath(reg_a.internal_addr);
+  h.mgr.OnCellAppDeath(reg_a.internal_addr, 1);
 
   const auto& partition_after = h.mgr.Spaces().at(7);
   ASSERT_EQ(partition_after.bsp.Leaves().size(), 1u);
@@ -491,7 +491,7 @@ TEST(CellAppMgr, CellAppDeath_RehomesAllMatchingLeaves) {
   ASSERT_EQ(h.mgr.Spaces().at(10).bsp.Leaves()[0]->cellapp_addr, reg_a.internal_addr);
   ASSERT_EQ(h.mgr.Spaces().at(11).bsp.Leaves()[0]->cellapp_addr, reg_a.internal_addr);
 
-  h.mgr.OnCellAppDeath(reg_a.internal_addr);
+  h.mgr.OnCellAppDeath(reg_a.internal_addr, 1);
 
   EXPECT_EQ(h.mgr.Spaces().at(10).bsp.Leaves()[0]->cellapp_addr, reg_b.internal_addr);
   EXPECT_EQ(h.mgr.Spaces().at(11).bsp.Leaves()[0]->cellapp_addr, reg_b.internal_addr);
@@ -511,7 +511,7 @@ TEST(CellAppMgr, CellAppDeath_LastPeerLeavesSpacesOrphaned) {
   csr.request_id = 1;
   h.mgr.OnCreateSpaceRequest(Address{}, nullptr, csr);
 
-  h.mgr.OnCellAppDeath(reg_a.internal_addr);
+  h.mgr.OnCellAppDeath(reg_a.internal_addr, 1);
 
   EXPECT_TRUE(h.mgr.CellApps().empty());
   // Space retained; leaf still claims the dead addr (defensive — a
@@ -663,7 +663,7 @@ TEST(CellAppMgr, CellAppDeath_FansOutNotificationToBaseAppSubscribers) {
   // Kill A. Mgr must (a) drop A from cellapps_, (b) rehome cell 1 to B,
   // (c) fan a CellAppDeath wire msg out to every baseapp — with the
   // rehomes list telling BaseApp which space moved where.
-  h.mgr.OnCellAppDeath(reg_a.internal_addr);
+  h.mgr.OnCellAppDeath(reg_a.internal_addr, 1);
 
   // BSP rehome (covered by other tests, but worth a sanity touch here
   // so the death-before-fan-out ordering is visible).

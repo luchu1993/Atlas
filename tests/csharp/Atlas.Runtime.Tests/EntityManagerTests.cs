@@ -1,3 +1,5 @@
+using System;
+using Atlas.Core;
 using Atlas.Entity;
 using Atlas.Serialization;
 using Xunit;
@@ -138,6 +140,36 @@ public class EntityManagerTests
         var entity = mgr.Create<TrackingEntity>();
         mgr.OnShutdownAll();
         Assert.True(entity.DestroyCalled);
+        Assert.True(entity.DestroySawDestroyed);
+    }
+
+    [Fact]
+    public void PublishReplicationAll_SkipsNonCellAppProcess()
+    {
+        var mgr = EntityManager.Instance;
+        mgr.SetProcessPrefix(2);
+        var entity = mgr.Create<PublishingEntity>();
+        mgr.PublishReplicationAll();
+        Assert.Equal(0, entity.BuildCalls);
+    }
+
+    [Fact]
+    public void SendClientRpc_OnGhostNoOps()
+    {
+        var entity = new RpcEntity { EntityId = 42, IsGhost = true };
+        var ex = Record.Exception(entity.SendForTest);
+        Assert.Null(ex);
+    }
+
+    [Fact]
+    public void TimerController_OnGhostOrDestroyedNoOps()
+    {
+        var ghost = new TimerEntity { EntityId = 42, IsGhost = true };
+        var destroyed = new TimerEntity { EntityId = 43, IsDestroyed = true };
+        Assert.Equal(0, ghost.StartTimerForTest());
+        Assert.Equal(0, destroyed.StartTimerForTest());
+        Assert.Null(Record.Exception(() => ghost.CancelTimerForTest()));
+        Assert.Null(Record.Exception(() => destroyed.CancelTimerForTest()));
     }
 
     private class TrackingEntity : ServerEntity
@@ -146,6 +178,7 @@ public class EntityManagerTests
         public int TickCount;
         public bool InitCalled;
         public bool DestroyCalled;
+        public bool DestroySawDestroyed;
 
         public override void Serialize(ref SpanWriter writer)
         {
@@ -164,6 +197,40 @@ public class EntityManagerTests
 
         protected internal override void OnTick(float dt) => TickCount++;
         protected internal override void OnInit(bool isReload) => InitCalled = true;
-        protected internal override void OnDestroy() => DestroyCalled = true;
+        protected internal override void OnDestroy()
+        {
+            DestroyCalled = true;
+            DestroySawDestroyed = IsDestroyed;
+        }
+    }
+
+    private class PublishingEntity : TestEntity
+    {
+        public int BuildCalls;
+
+        public override bool BuildAndConsumeReplicationFrame(
+            ref SpanWriter ownerSnapshot, ref SpanWriter otherSnapshot,
+            ref SpanWriter ownerDelta, ref SpanWriter otherDelta,
+            out bool hasEvent, out bool hasVolatile)
+        {
+            BuildCalls++;
+            hasEvent = true;
+            hasVolatile = false;
+            return true;
+        }
+    }
+
+    private class RpcEntity : TestEntity
+    {
+        public void SendForTest() =>
+            SendClientRpc(1, RpcTarget.Owner, ReadOnlySpan<byte>.Empty);
+    }
+
+    private class TimerEntity : TestEntity
+    {
+        private const long kHandle = (5L << 32) | 7L;
+
+        public long StartTimerForTest() => StartTimer(1.0f, false, () => { });
+        public void CancelTimerForTest() => CancelTimer(kHandle);
     }
 }

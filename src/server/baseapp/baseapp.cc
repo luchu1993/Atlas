@@ -231,8 +231,11 @@ auto BaseApp::Init(int argc, char* argv[]) -> bool {
         }
       },
       [this](const machined::DeathNotification& n) {
-        (void)n;
-        ATLAS_LOG_WARNING("BaseApp: DBApp died, clearing dbapp channel");
+        if (n.reason == 0) {
+          ATLAS_LOG_INFO("BaseApp: DBApp deregistered, clearing dbapp channel");
+        } else {
+          ATLAS_LOG_WARNING("BaseApp: DBApp died, clearing dbapp channel");
+        }
         dbapp_channel_ = nullptr;
         FailAllDbappPendingRequests("dbapp_disconnected");
       });
@@ -260,8 +263,12 @@ auto BaseApp::Init(int argc, char* argv[]) -> bool {
           }
         }
       },
-      [this](const machined::DeathNotification& /*n*/) {
-        ATLAS_LOG_WARNING("BaseApp: CellAppMgr died, clearing channel");
+      [this](const machined::DeathNotification& n) {
+        if (n.reason == 0) {
+          ATLAS_LOG_INFO("BaseApp: CellAppMgr deregistered, clearing channel");
+        } else {
+          ATLAS_LOG_WARNING("BaseApp: CellAppMgr died, clearing channel");
+        }
         cellappmgr_channel_ = nullptr;
         for (auto& [rid, cb] : pending_space_creates_) {
           if (cb) cb(/*success=*/false, /*space_id=*/0, Address{});

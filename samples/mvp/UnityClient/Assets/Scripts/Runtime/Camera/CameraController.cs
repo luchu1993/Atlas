@@ -1,9 +1,10 @@
 using System;
+using Atlas.Client.Unity;
 using UnityEngine;
 
 namespace Atlas.Mvp.Unity
 {
-    public sealed class CameraController : ITickable, ILateTickable, IDisposable
+    public sealed class CameraController : IAtlasUnityTickable, IAtlasUnityLateTickable, IDisposable
     {
         public struct Config
         {
@@ -19,6 +20,7 @@ namespace Atlas.Mvp.Unity
 
         readonly Camera _camera;
         readonly Config _cfg;
+        readonly AtlasUnityFramePump _frame;
         readonly Func<Vector2>? _hudLookDelta;
         readonly Func<bool>? _moveInputActive;
         Transform? _followTarget;
@@ -31,18 +33,19 @@ namespace Atlas.Mvp.Unity
         public Camera Camera => _camera;
         public float Yaw => _yaw;
 
-        public CameraController(Camera camera, Config cfg,
+        public CameraController(Camera camera, Config cfg, AtlasUnityFramePump frame,
             Func<Vector2>? hudLookDelta = null, Func<bool>? moveInputActive = null)
         {
             _camera = camera;
             _cfg = cfg;
+            _frame = frame;
             _hudLookDelta = hudLookDelta;
             _moveInputActive = moveInputActive;
             ApplyBootPose();
-            Ticker.Add(this);
+            _frame.Add(this);
         }
 
-        public void Dispose() => Ticker.Remove(this);
+        public void Dispose() => _frame.Remove(this);
 
         public void SetFollowTarget(Transform? target)
         {

@@ -9,7 +9,7 @@ using MvpAvatar = Atlas.Mvp.Client.Avatar;
 namespace Atlas.Mvp.Unity
 {
     [RequireComponent(typeof(UIDocument))]
-    public sealed class GameHud : MonoBehaviour
+    public sealed partial class GameHud : MonoBehaviour
     {
         public event Action? LogoutRequested;
 
@@ -21,6 +21,8 @@ namespace Atlas.Mvp.Unity
         UIDocument _doc = null!;
         AtlasNetworkManager? _net;
         ViewRegistry? _views;
+        AoiBoxOverlay? _aoiBoxes;
+        BspGizmo? _bspGizmo;
         MvpAvatar? _owner;
         Transform? _ownerTransform;
         int _observedMaxHp = 100;
@@ -208,19 +210,20 @@ namespace Atlas.Mvp.Unity
             _aoiToggle.focusable = false;
             _aoiToggle.RegisterCallback<ClickEvent>(_ =>
             {
-                AoiBoxes.SetVisible(!AoiBoxes.Visible);
-                _aoiCheckbox.EnableInClassList("checked", AoiBoxes.Visible);
+                if (_aoiBoxes == null) return;
+                _aoiBoxes.SetVisible(!_aoiBoxes.Visible);
+                _aoiCheckbox.EnableInClassList("checked", _aoiBoxes.Visible);
             });
-            _aoiCheckbox.EnableInClassList("checked", AoiBoxes.Visible);
+            _aoiCheckbox.EnableInClassList("checked", _aoiBoxes?.Visible ?? false);
 
-            BspGizmo.Attach();
             _bspToggle.focusable = false;
             _bspToggle.RegisterCallback<ClickEvent>(_ =>
             {
-                BspGizmo.SetVisible(!BspGizmo.Visible);
-                _bspCheckbox.EnableInClassList("checked", BspGizmo.Visible);
+                if (_bspGizmo == null) return;
+                _bspGizmo.SetVisible(!_bspGizmo.Visible);
+                _bspCheckbox.EnableInClassList("checked", _bspGizmo.Visible);
             });
-            _bspCheckbox.EnableInClassList("checked", BspGizmo.Visible);
+            _bspCheckbox.EnableInClassList("checked", _bspGizmo?.Visible ?? false);
 
             _logoutButton.focusable = false;
             _logoutButton.clicked += () => LogoutRequested?.Invoke();
@@ -291,131 +294,6 @@ namespace Atlas.Mvp.Unity
             _weaponValue.text = WeaponName(weaponId);
         }
 
-        void OnRootPointerDown(PointerDownEvent evt)
-        {
-            if (!_chatFocused) return;
-            var ve = evt.target as VisualElement;
-            while (ve != null)
-            {
-                if (ve == _chatInput) return;
-                ve = ve.parent;
-            }
-            _chatInput.Blur();
-        }
-
-        void OnChatKeyDown(KeyDownEvent evt)
-        {
-            if (evt.keyCode == KeyCode.Escape)
-            {
-                _chatInput.value = string.Empty;
-                _chatInput.Blur();
-                evt.StopPropagation();
-                return;
-            }
-            if (evt.keyCode != KeyCode.Return && evt.keyCode != KeyCode.KeypadEnter) return;
-            string text = (_chatInput.value ?? string.Empty).Trim();
-            _chatInput.value = string.Empty;
-            evt.StopPropagation();
-            if (text.Length == 0 || _owner == null || _owner.IsDestroyed) return;
-            _owner.Cell.Say(text);
-        }
-
-        void OnChatBusReceived(uint senderId, string text)
-        {
-            var line = new Label($"#{senderId}: {text}");
-            line.AddToClassList("chat-line");
-            _chatScroll.contentContainer.Add(line);
-            while (_chatScroll.contentContainer.childCount > kChatScrollback)
-                _chatScroll.contentContainer.RemoveAt(0);
-            _chatScroll.scrollOffset = new Vector2(0f, float.MaxValue);
-        }
-
-
-        void OnLookDown(PointerDownEvent evt)
-        {
-            // Right-click is handled by Bootstrap's legacy Input path so the
-            // desktop "hold RMB to orbit" gesture keeps working as-is.
-            if (evt.button != 0) return;
-            if (_lookPointerId != -1) return;
-            _lookPointerId = evt.pointerId;
-            _lookZone.CapturePointer(evt.pointerId);
-            _lookLastPos = (Vector2)evt.position;
-            evt.StopPropagation();
-        }
-
-        void OnLookMove(PointerMoveEvent evt)
-        {
-            if (evt.pointerId != _lookPointerId) return;
-            var pos = (Vector2)evt.position;
-            _lookDeltaAccum += pos - _lookLastPos;
-            _lookLastPos = pos;
-            evt.StopPropagation();
-        }
-
-        void OnLookUp(PointerUpEvent evt)
-        {
-            if (evt.pointerId != _lookPointerId) return;
-            ReleaseLook();
-            evt.StopPropagation();
-        }
-
-        void ReleaseLook()
-        {
-            if (_lookPointerId != -1 && _lookZone.HasPointerCapture(_lookPointerId))
-                _lookZone.ReleasePointer(_lookPointerId);
-            _lookPointerId = -1;
-        }
-
-        void OnJoystickDown(PointerDownEvent evt)
-        {
-            if (_joystickPointerId != -1) return;
-            _joystickPointerId = evt.pointerId;
-            _joystick.CapturePointer(evt.pointerId);
-            _joystickBase.AddToClassList("active");
-            _joystickKnob.AddToClassList("active");
-            UpdateJoystick(evt.localPosition);
-            evt.StopPropagation();
-        }
-
-        void OnJoystickMove(PointerMoveEvent evt)
-        {
-            if (evt.pointerId != _joystickPointerId) return;
-            UpdateJoystick(evt.localPosition);
-            evt.StopPropagation();
-        }
-
-        void OnJoystickUp(PointerUpEvent evt)
-        {
-            if (evt.pointerId != _joystickPointerId) return;
-            ReleaseJoystick();
-            evt.StopPropagation();
-        }
-
-        void UpdateJoystick(Vector3 localPos)
-        {
-            float dx = localPos.x - kJoystickZoneSize * 0.5f;
-            float dy = localPos.y - kJoystickZoneSize * 0.5f;
-            var d = new Vector2(dx, dy);
-            if (d.magnitude > kJoystickMaxRadius)
-                d = d.normalized * kJoystickMaxRadius;
-            _joystickKnob.style.left = new Length(kJoystickKnobRest + d.x, LengthUnit.Pixel);
-            _joystickKnob.style.top = new Length(kJoystickKnobRest + d.y, LengthUnit.Pixel);
-            // UI Y grows downward; flip so up-on-screen maps to forward (+z).
-            _joystickInput = new Vector2(d.x / kJoystickMaxRadius, -d.y / kJoystickMaxRadius);
-        }
-
-        void ReleaseJoystick()
-        {
-            if (_joystickPointerId != -1 && _joystick.HasPointerCapture(_joystickPointerId))
-                _joystick.ReleasePointer(_joystickPointerId);
-            _joystickPointerId = -1;
-            _joystickKnob.style.left = new Length(kJoystickKnobRest, LengthUnit.Pixel);
-            _joystickKnob.style.top = new Length(kJoystickKnobRest, LengthUnit.Pixel);
-            _joystickInput = Vector2.zero;
-            _joystickBase.RemoveFromClassList("active");
-            _joystickKnob.RemoveFromClassList("active");
-        }
-
         void Update()
         {
             if (Input.GetKeyDown(KeyCode.F1))
@@ -449,89 +327,6 @@ namespace Atlas.Mvp.Unity
 
             RefreshCellIndicator();
         }
-
-        // BSP splits at x=0 / z=0 (BootstrapMultiCellPartition); each sign flip
-        // should line up with one Offload entry in cellapp.stdout.
-        int ComputeQuadrant(Vector3 pos)
-        {
-            bool east = pos.x >= 0f;
-            bool north = pos.z >= 0f;
-            if (east  &&  north) return 1;   // +X +Z
-            if (!east &&  north) return 2;   // -X +Z
-            if (!east && !north) return 3;   // -X -Z
-            return 4;                         // +X -Z
-        }
-
-        static string QuadrantLabel(int q) => q switch
-        {
-            1 => "Q1 (+X,+Z)",
-            2 => "Q2 (-X,+Z)",
-            3 => "Q3 (-X,-Z)",
-            4 => "Q4 (+X,-Z)",
-            _ => "--",
-        };
-
-        void RefreshCellIndicator()
-        {
-            if (_owner == null || _owner.IsDestroyed || _ownerTransform == null)
-            {
-                _cellValue.text = "--";
-                return;
-            }
-            int q = ComputeQuadrant(_ownerTransform.position);
-            if (_lastQuadrant != 0 && q != _lastQuadrant)
-            {
-                _crossCount++;
-                _crossValue.text = _crossCount.ToString();
-            }
-            _lastQuadrant = q;
-            _cellValue.text = QuadrantLabel(q);
-        }
-
-        void UpdateNetStats(float window)
-        {
-            uint bytesSent = 0, bytesRecv = 0, queue = 0;
-            if (_net != null && _net.TryGetStats(out var s))
-            {
-                _rttMs = s.RttMs;
-                _pingValue.text = $"{_rttMs} MS";
-                bytesSent = s.BytesSent;
-                bytesRecv = s.BytesRecv;
-                queue = s.SendQueueSize;
-            }
-            uint rpcOut = _net?.RpcOutCount ?? 0;
-            uint aoiEnter = _views?.AoiEnterCount ?? 0;
-            uint aoiLeave = _views?.AoiLeaveCount ?? 0;
-
-            // First sample primes the baselines; deltas are meaningful only
-            // from the second sample onward.
-            if (!_ratesPrimed)
-            {
-                _ratesPrimed = true;
-            }
-            else
-            {
-                float invWin = window > 0f ? 1f / window : 0f;
-                float kbUp = DeltaWrap(bytesSent, _lastBytesSent) * invWin / 1024f;
-                float kbDown = DeltaWrap(bytesRecv, _lastBytesRecv) * invWin / 1024f;
-                float rpcPerSec = DeltaWrap(rpcOut, _lastRpcOut) * invWin;
-                float enterPerSec = DeltaWrap(aoiEnter, _lastAoiEnter) * invWin;
-                float leavePerSec = DeltaWrap(aoiLeave, _lastAoiLeave) * invWin;
-                _bwUpValue.text = $"{kbUp:F1} KB/S";
-                _bwDownValue.text = $"{kbDown:F1} KB/S";
-                _rpcOutValue.text = $"{rpcPerSec:F1} /S";
-                _aoiEnterValue.text = $"{enterPerSec:F1} /S";
-                _aoiLeaveValue.text = $"{leavePerSec:F1} /S";
-            }
-            _queueValue.text = queue.ToString();
-            _lastBytesSent = bytesSent;
-            _lastBytesRecv = bytesRecv;
-            _lastRpcOut = rpcOut;
-            _lastAoiEnter = aoiEnter;
-            _lastAoiLeave = aoiLeave;
-        }
-
-        static uint DeltaWrap(uint cur, uint prev) => unchecked(cur - prev);
 
         void RefreshHp()
         {

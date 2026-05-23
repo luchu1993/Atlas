@@ -276,6 +276,7 @@ public abstract class ServerEntity
     public long StartTimer(float intervalSeconds, bool repeat, Action callback)
     {
         if (callback is null) throw new ArgumentNullException(nameof(callback));
+        if (IsDestroyed || IsGhost) return 0;
         var userArg = ++_nextTimerArg;
         var controllerId = NativeApi.AddTimerController(EntityId, intervalSeconds, repeat, userArg);
         if (controllerId == 0) return 0;
@@ -289,8 +290,9 @@ public abstract class ServerEntity
         if (handle == 0) return;
         var controllerId = (int)(handle >> 32);
         var userArg = (int)(handle & 0xFFFFFFFF);
-        NativeApi.CancelController(EntityId, controllerId);
         _timers?.Remove(userArg);
+        if (IsDestroyed || IsGhost) return;
+        NativeApi.CancelController(EntityId, controllerId);
     }
 
     internal void DispatchTimerFired(int userArg)
@@ -309,6 +311,7 @@ public abstract class ServerEntity
     protected internal void SendClientRpc(int rpcId, RpcTarget target,
         ReadOnlySpan<byte> payload)
     {
+        if (IsGhost) return;
         NativeApi.SendClientRpc(EntityId, (uint)rpcId, target, payload,
                                 (ulong)Atlas.Diagnostics.TraceContext.Current);
     }

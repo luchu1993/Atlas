@@ -148,7 +148,8 @@ internal sealed class ProjectileSimulator
 
     private static void BroadcastEnd(Shot s, uint hitTarget)
     {
-        var owner = EntityManager.Instance.Get(s.OwnerId);
+        if (EntityManager.Instance.Get(s.OwnerId) is not CellServerEntity { IsReal: true } owner)
+            return;
         switch (owner)
         {
             case Avatar a: a.AllClients.OnProjectileEnded(s.ShotId, s.Position, hitTarget); break;

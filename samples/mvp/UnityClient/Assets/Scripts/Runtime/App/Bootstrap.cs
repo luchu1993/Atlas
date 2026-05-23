@@ -1,7 +1,6 @@
 using Atlas.Client.Unity;
 using Atlas.Diagnostics;
 using UnityEngine;
-using MvpAvatar = Atlas.Mvp.Client.Avatar;
 
 namespace Atlas.Mvp.Unity
 {
@@ -26,29 +25,25 @@ namespace Atlas.Mvp.Unity
         [SerializeField] float zoomStep = 0.1f;
         [SerializeField] Material groundMaterial = null!;
 
-        public static Bootstrap? Instance { get; private set; }
-        public Camera? MainCamera => _camera?.Camera;
-        public uint OwnerEntityId => _views?.OwnerEntityId ?? 0;
-
+        readonly AtlasUnityFramePump _frame = new();
         AtlasNetworkManager _net = null!;
         LoginScreen _loginScreen = null!;
         LoginFlow _flow = null!;
         CameraController _camera = null!;
-        WorldLifecycle? _world;
-        ViewRegistry? _views;
+        MvpClientRuntime? _runtime;
         bool _userInitiatedLogout;
         BotPilot? _botPilot;
 
         void Awake()
         {
-            Instance = this;
             Application.runInBackground = true;
             Log.SetBackend(new UnityLogBackend());
 
             // Force script-DLL [ModuleInitializer] before Login or the digest goes zero.
             _ = Atlas.Rpc.EntityDefDigest.Bytes.Length;
 
-            if (TryParseBotArgs(out string botUser, out float botDuration, out BotPattern botPattern))
+            if (TryParseBotArgs(out string botUser, out float botDuration,
+                    out BotPattern botPattern))
             {
                 username = botUser;
                 autoConnect = true;
@@ -63,9 +58,11 @@ namespace Atlas.Mvp.Unity
             _net.Configure(loginappHost, loginappPort);
             _net.Disconnected += OnNetDisconnected;
 
-            _camera = new CameraController(CreateCamera(), BuildCameraConfig(),
-                hudLookDelta: () => _world?.Hud?.ConsumeLookDelta() ?? Vector2.zero,
-                moveInputActive: IsMoveInputActive);
+            _camera = new CameraController(CreateCamera(), BuildCameraConfig(), _frame,
+                hudLookDelta: () => _runtime?.HudLookDelta ?? Vector2.zero,
+                moveInputActive: () => _runtime?.IsMoveInputActive() ?? false);
+            _runtime = new MvpClientRuntime(_net, _frame, _camera, groundMaterial, _botPilot);
+            _runtime.LogoutRequested += OnHudLogoutRequested;
 
             _loginScreen = gameObject.AddComponent<LoginScreen>();
             _loginScreen.Configure(loginappHost, loginappPort, username, passwordHash);
@@ -74,6 +71,7 @@ namespace Atlas.Mvp.Unity
 
             _flow = new LoginFlow(_net);
             _flow.StateChanged += OnFlowStateChanged;
+            _runtime.OwnerAttached += OnRuntimeOwnerAttached;
         }
 
         void Start()
@@ -84,16 +82,21 @@ namespace Atlas.Mvp.Unity
 
         void OnDestroy()
         {
-            if (Instance == this) Instance = null;
             _flow?.Dispose();
             Cursor.lockState = CursorLockMode.None;
-            TeardownWorld();
+            if (_runtime != null)
+            {
+                _runtime.LogoutRequested -= OnHudLogoutRequested;
+                _runtime.OwnerAttached -= OnRuntimeOwnerAttached;
+                _runtime.Dispose();
+            }
             _camera?.Dispose();
+            _frame.Clear();
         }
 
         void Update()
         {
-            Ticker.RunTick(Time.deltaTime);
+            _frame.RunTick(Time.deltaTime);
             _flow.TickReconnect(Time.deltaTime);
             RefreshReconnectStatus();
         }
@@ -107,9 +110,9 @@ namespace Atlas.Mvp.Unity
                 isError: false);
         }
 
-        // CameraController must register on Ticker before LabelOverlay so
+        // CameraController must register before LabelOverlay so
         // labels project against the post-follow camera pose.
-        void LateUpdate() => Ticker.RunLateTick();
+        void LateUpdate() => _frame.RunLateTick();
 
         void OnLoginRequested(string host, ushort port, string user, string pwd) =>
             BeginLogin(host, port, user, pwd);
@@ -135,7 +138,7 @@ namespace Atlas.Mvp.Unity
                     break;
                 case LoginFlowState.EnteringWorld:
                     _loginScreen.SetStatus("Loading world…", isError: false);
-                    BuildWorld();
+                    _runtime?.BuildWorld();
                     break;
                 case LoginFlowState.InGame:
                     _loginScreen.Hide();
@@ -144,7 +147,7 @@ namespace Atlas.Mvp.Unity
                     _loginScreen.Show();
                     _loginScreen.SetInteractable(true);
                     _loginScreen.SetStatus($"Login failed — {_flow.LastError}", isError: true);
-                    TeardownWorld();
+                    _runtime?.TeardownWorld();
                     break;
             }
         }
@@ -154,7 +157,7 @@ namespace Atlas.Mvp.Unity
             // Prefer LoginFlow.LastError over the generic disconnect reason —
             // Fail() already routed the useful message to the status line.
             string? carriedFailure = _flow.LastError;
-            TeardownWorld();
+            _runtime?.TeardownWorld();
             _loginScreen.Show();
             if (_userInitiatedLogout)
             {
@@ -189,48 +192,7 @@ namespace Atlas.Mvp.Unity
 
         void ExecuteUserLogout() => _net.Logout();
 
-        void BuildWorld()
-        {
-            if (_world != null) return;
-            _world = new WorldLifecycle(_net, groundMaterial);
-            _world.Build();
-            _world.Hud!.LogoutRequested += OnHudLogoutRequested;
-            _views = new ViewRegistry(_net, _world.WorldRoot!, OnOwnerAttached);
-            _world.Hud!.BindViewRegistry(_views);
-        }
-
-        void TeardownWorld()
-        {
-            _views?.Dispose();
-            _views = null;
-            Cursor.lockState = CursorLockMode.None;
-            _world?.Dispose();
-            _world = null;
-            _camera?.SetFollowTarget(null);
-        }
-
-        void OnOwnerAttached(AvatarView view, MvpAvatar avatar)
-        {
-            // Bot mode injects synthetic joystick + fire so PlayerInputController
-            // works unchanged; chat-focus gate is forced off.
-            var joystickFn = _botPilot != null
-                ? (System.Func<Vector2>)(() => _botPilot.Joystick)
-                : () => _world?.Hud?.JoystickInput ?? Vector2.zero;
-            var fireFn = _botPilot != null
-                ? (System.Func<bool>)(() => _botPilot.ConsumeFire())
-                : () => _world?.Hud?.ConsumeFireRequest() ?? false;
-            var chatBlockedFn = _botPilot != null
-                ? (System.Func<bool>)(() => false)
-                : () => _world?.Hud?.IsChatFocused ?? false;
-            view.AttachInput(new PlayerInputController(avatar, _net, view.Root.transform,
-                joystickFn, fireFn, () => _camera.Yaw, chatBlockedFn));
-            AoiBoxes.Attach(view.Root.transform, 50f, 55f,
-                new Color(0f, 1f, 0.4f, 0.7f),
-                new Color(1f, 0.7f, 0.2f, 0.5f));
-            _world?.Hud?.SetOwner(avatar, view.Root.transform);
-            _camera.SetFollowTarget(view.Root.transform);
-            _flow.NotifyEnteredWorld();
-        }
+        void OnRuntimeOwnerAttached() => _flow.NotifyEnteredWorld();
 
         Camera CreateCamera()
         {
@@ -253,12 +215,6 @@ namespace Atlas.Mvp.Unity
             PitchMin = pitchMin, PitchMax = pitchMax, InitialPitch = initialPitch,
             ZoomMin = zoomMin, ZoomMax = zoomMax, ZoomStep = zoomStep,
         };
-
-        bool IsMoveInputActive() =>
-            Mathf.Abs(Input.GetAxisRaw("Horizontal")) > 0.01f ||
-            Mathf.Abs(Input.GetAxisRaw("Vertical")) > 0.01f ||
-            (_world?.Hud?.JoystickInput.sqrMagnitude ?? 0f) > 0.01f ||
-            (_botPilot != null && _botPilot.Joystick.sqrMagnitude > 0.01f);
 
         static bool TryParseBotArgs(out string username, out float duration, out BotPattern pattern)
         {

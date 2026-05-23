@@ -28,7 +28,7 @@ class CellAppMgr : public ManagerApp {
   void OnAddCellToSpaceAck(const Address& src, Channel* ch,
                            const cellappmgr::AddCellToSpaceAck& msg);
 
-  void OnCellAppDeath(const Address& internal_addr);
+  void OnCellAppDeath(const Address& internal_addr, uint8_t reason);
 
   struct CellAppInfo {
     Address internal_addr;

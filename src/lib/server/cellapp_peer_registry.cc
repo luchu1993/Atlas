@@ -26,16 +26,23 @@ void CellAppPeerRegistry::Subscribe(MachinedClient& machined, Address self_addr,
         ATLAS_LOG_INFO("CellAppPeerRegistry: CellApp born at {}:{}", n.internal_addr.Ip(),
                        n.internal_addr.Port());
         auto ch = network_.ConnectRudpNocwnd(n.internal_addr);
-        if (ch) channels_.emplace(n.internal_addr, IntrusivePtr<Channel>{static_cast<Channel*>(*ch)});
+        if (ch) {
+          channels_.emplace(n.internal_addr, IntrusivePtr<Channel>{static_cast<Channel*>(*ch)});
+        }
       },
       [this, on_death = std::move(on_death)](const machined::DeathNotification& n) {
         auto it = channels_.find(n.internal_addr);
         if (it == channels_.end()) return;
         Channel* dying = it->second.get();
-        if (on_death) on_death(n.internal_addr, dying);
+        if (on_death) on_death(n.internal_addr, dying, n.reason);
         channels_.erase(it);
-        ATLAS_LOG_WARNING("CellAppPeerRegistry: CellApp died at {}:{}", n.internal_addr.Ip(),
-                          n.internal_addr.Port());
+        if (n.reason == 0) {
+          ATLAS_LOG_INFO("CellAppPeerRegistry: CellApp deregistered at {}:{}",
+                         n.internal_addr.Ip(), n.internal_addr.Port());
+        } else {
+          ATLAS_LOG_WARNING("CellAppPeerRegistry: CellApp died at {}:{}", n.internal_addr.Ip(),
+                            n.internal_addr.Port());
+        }
       });
 }
 

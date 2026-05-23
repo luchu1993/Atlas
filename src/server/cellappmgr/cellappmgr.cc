@@ -101,7 +101,7 @@ auto CellAppMgr::Init(int argc, char* argv[]) -> bool {
   // so they restore their Reals from cached backups.
   GetMachinedClient().Subscribe(
       machined::ListenerType::kDeath, ProcessType::kCellApp, nullptr,
-      [this](const machined::DeathNotification& n) { OnCellAppDeath(n.internal_addr); });
+      [this](const machined::DeathNotification& n) { OnCellAppDeath(n.internal_addr, n.reason); });
 
   // Track BaseApps directly - the death broadcast fans out to every
   // BaseApp. Direct path keeps CellAppMgr's cross-process surface small
@@ -583,7 +583,7 @@ void CellAppMgr::DrainPendingGeometryBroadcasts() {
   }
 }
 
-void CellAppMgr::OnCellAppDeath(const Address& internal_addr) {
+void CellAppMgr::OnCellAppDeath(const Address& internal_addr, uint8_t reason) {
   auto it = cellapps_.find(internal_addr);
   if (it == cellapps_.end()) return;
   const uint32_t dead_app_id = it->second.app_id;
@@ -595,10 +595,16 @@ void CellAppMgr::OnCellAppDeath(const Address& internal_addr) {
   // app onto a surviving CellApp so future CreateCellEntity / Offload
   // traffic for that cell lands somewhere reachable.
   if (cellapps_.empty()) {
-    ATLAS_LOG_CRITICAL(
-        "CellAppMgr: CellApp app_id={} died and no survivors remain — all "
-        "BSP leaves orphaned until a new CellApp registers",
-        dead_app_id);
+    if (reason == 0) {
+      ATLAS_LOG_INFO(
+          "CellAppMgr: CellApp app_id={} deregistered and no survivors remain",
+          dead_app_id);
+    } else {
+      ATLAS_LOG_CRITICAL(
+          "CellAppMgr: CellApp app_id={} died and no survivors remain — all "
+          "BSP leaves orphaned until a new CellApp registers",
+          dead_app_id);
+    }
     return;
   }
 

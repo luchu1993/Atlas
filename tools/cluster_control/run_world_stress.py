@@ -469,37 +469,42 @@ def start_logged_process(
 
 
 def stop_logged_processes(processes: list[LoggedProcess]) -> None:
-    for entry in sorted(processes, key=lambda item: item.start_order, reverse=True):
-        proc = entry.process
-        if proc.poll() is None:
-            log(f"Stopping {entry.name} (pid={proc.pid})")
-            try:
-                if os.name == "nt":
-                    os.kill(proc.pid, signal.CTRL_BREAK_EVENT)
-                else:
-                    os.killpg(proc.pid, signal.SIGTERM)
-            except ProcessLookupError:
-                pass
-
-            try:
-                proc.wait(timeout=8)
-            except subprocess.TimeoutExpired:
+    for order in sorted({entry.start_order for entry in processes}, reverse=True):
+        group = [entry for entry in processes if entry.start_order == order]
+        for entry in group:
+            proc = entry.process
+            if proc.poll() is None:
+                log(f"Stopping {entry.name} (pid={proc.pid})")
                 try:
                     if os.name == "nt":
-                        proc.kill()
+                        os.kill(proc.pid, signal.CTRL_BREAK_EVENT)
                     else:
-                        os.killpg(proc.pid, signal.SIGKILL)
+                        os.killpg(proc.pid, signal.SIGTERM)
                 except ProcessLookupError:
                     pass
-                try:
-                    proc.wait(timeout=5)
-                except subprocess.TimeoutExpired:
-                    pass
 
-        if entry.stdout_handle:
-            entry.stdout_handle.close()
-        if entry.stderr_handle:
-            entry.stderr_handle.close()
+        for entry in group:
+            proc = entry.process
+            if proc.poll() is None:
+                try:
+                    proc.wait(timeout=8)
+                except subprocess.TimeoutExpired:
+                    try:
+                        if os.name == "nt":
+                            proc.kill()
+                        else:
+                            os.killpg(proc.pid, signal.SIGKILL)
+                    except ProcessLookupError:
+                        pass
+                    try:
+                        proc.wait(timeout=5)
+                    except subprocess.TimeoutExpired:
+                        pass
+
+            if entry.stdout_handle:
+                entry.stdout_handle.close()
+            if entry.stderr_handle:
+                entry.stderr_handle.close()
 
 
 def wait_for_registration(
@@ -900,7 +905,7 @@ def main() -> int:
                 ],
             )
         )
-        processes[-1].start_order = 3
+        processes[-1].start_order = 5
         time.sleep(1)
 
         processes.append(
@@ -925,7 +930,7 @@ def main() -> int:
                 ],
             )
         )
-        processes[-1].start_order = 4
+        processes[-1].start_order = 6
         time.sleep(1)
 
         # Launch cellapps BEFORE baseapps so BaseApp's CreateSpaceRequest sees
@@ -959,7 +964,7 @@ def main() -> int:
                     ],
                 )
             )
-            processes[-1].start_order = 5
+            processes[-1].start_order = 3
         time.sleep(1)
 
         for baseapp_spec in baseapp_specs:
@@ -991,7 +996,7 @@ def main() -> int:
                     ],
                 )
             )
-            processes[-1].start_order = 6
+            processes[-1].start_order = 4
         time.sleep(1)
 
         log("Waiting for processes to register with machined...")

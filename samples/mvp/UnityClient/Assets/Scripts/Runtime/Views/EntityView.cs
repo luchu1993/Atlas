@@ -6,34 +6,40 @@ using UnityEngine.UI;
 
 namespace Atlas.Mvp.Unity
 {
-    public abstract class EntityView : ITickable, ILateTickable, IDisposable
+    public abstract class EntityView : IAtlasEntityView, IAtlasUnityTickable,
+        IAtlasUnityLateTickable
     {
-        public ClientEntity? Entity { get; private set; }
+        public ClientEntity Entity { get; }
         public GameObject Root { get; }
         protected AtlasNetworkManager Net { get; }
         protected Transform CapsuleTransform = null!;
         protected Renderer CapsuleRenderer = null!;
         protected Color AliveColor;
 
+        readonly AtlasUnityFramePump _frame;
+        readonly LabelOverlay _labels;
         readonly Text _label;
         bool _filterTuned;
 
-        protected EntityView(ClientEntity entity, AtlasNetworkManager net, Transform worldRoot)
+        protected EntityView(ClientEntity entity, AtlasNetworkManager net, Transform worldRoot,
+            AtlasUnityFramePump frame, LabelOverlay labels)
         {
             Entity = entity;
             Net = net;
+            _frame = frame;
+            _labels = labels;
             Root = new GameObject($"View_{entity.TypeName}_{entity.EntityId}");
             Root.transform.SetParent(worldRoot, false);
             SeedTransform();
             BuildVisual();
-            _label = LabelOverlay.Instance!.CreateLabel();
+            _label = _labels.CreateLabel();
             HookEvents();
-            Ticker.Add(this);
+            _frame.Add(this);
         }
 
         public virtual void Dispose()
         {
-            Ticker.Remove(this);
+            _frame.Remove(this);
             UnhookEvents();
             if (_label != null) UnityEngine.Object.Destroy(_label.gameObject);
             if (Root != null) UnityEngine.Object.Destroy(Root);
@@ -41,7 +47,7 @@ namespace Atlas.Mvp.Unity
 
         public void Tick(float dt)
         {
-            if (Entity == null || Entity.IsDestroyed) return;
+            if (Entity.IsDestroyed) return;
             TuneFilterOnce();
             SyncPeerTransform();
             _label.text = ComposeLabelText();
@@ -49,9 +55,9 @@ namespace Atlas.Mvp.Unity
 
         public void LateTick()
         {
-            if (Entity == null || Entity.IsDestroyed || _label == null) return;
+            if (Entity.IsDestroyed || _label == null) return;
             var headWorld = Root.transform.position + Vector3.up * 2.1f;
-            var visible = LabelOverlay.Instance!.TryProject(headWorld, out var screen);
+            var visible = _labels.TryProject(headWorld, out var screen);
             if (visible) _label.rectTransform.anchoredPosition = new Vector2(screen.x, screen.y);
             if (_label.gameObject.activeSelf != visible) _label.gameObject.SetActive(visible);
         }
@@ -60,7 +66,7 @@ namespace Atlas.Mvp.Unity
         // sample arrives a frame later, leaving the capsule at (0,0,0) until then.
         void SeedTransform()
         {
-            var p = Entity!.Position;
+            var p = Entity.Position;
             Root.transform.position = new Vector3(p.X, p.Y, p.Z);
             var d = Entity.Direction;
             if (d.X * d.X + d.Z * d.Z > 0.0001f)
@@ -85,20 +91,22 @@ namespace Atlas.Mvp.Unity
             nose.GetComponent<Renderer>().material.color = Color.yellow;
         }
 
-        // MaxExtrapolation must cover the LOD sample gap (≤300 ms for the
-        // farthest tier) or the peer freezes and reads as "stuck" on the client.
+        // Keep peer avatars responsive; stale samples hold at the last
+        // authoritative position instead of drifting on old velocity.
         void TuneFilterOnce()
         {
-            if (_filterTuned || Entity!.Filter is not { } f) return;
+            if (_filterTuned || Entity.Filter is not { } f) return;
             f.ServerInterval = 0.05;
-            f.MaxExtrapolation = 0.5;
+            f.LatencyFrames = 1.0;
+            f.MaxExtrapolation = 0.12;
+            f.SnapLatencyToTarget();
             _filterTuned = true;
         }
 
         // Owner transform is written by PlayerInputController; witness skips self.
         void SyncPeerTransform()
         {
-            if (Entity!.IsOwner) return;
+            if (Entity.IsOwner) return;
             if (!Net.TryGetInterpolatedTransform(Entity.EntityId, out var pos, out var dir, out _))
                 return;
             Root.transform.position = pos;
@@ -108,13 +116,13 @@ namespace Atlas.Mvp.Unity
 
         protected void SpawnDamageFloater(int amount)
         {
-            DamageFloater.Spawn(Root.transform.position + Vector3.up * 2.2f, amount);
+            DamageFloater.Spawn(_labels, Root.transform.position + Vector3.up * 2.2f, amount);
         }
 
         protected abstract Color PickAliveColor();
         protected abstract void HookEvents();
         protected abstract void UnhookEvents();
         protected virtual string ComposeLabelText() =>
-            $"{Entity!.TypeName}:{Entity.EntityId}";
+            $"{Entity.TypeName}:{Entity.EntityId}";
     }
 }

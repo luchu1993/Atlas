@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import filecmp
 import platform
 import shutil
 import subprocess
@@ -166,26 +167,58 @@ def resolve_unity_project(arg: str | None) -> Path:
     return candidate
 
 
-def _ignore_for_unity(_src: str, names: list[str]) -> list[str]:
-    return [n for n in names if n in EXCLUDED_FROM_COPY]
-
-
 def copy_to_unity_project(unity_project: Path) -> None:
     target = unity_project / "Assets" / "Atlas.Client.Unity"
-    if target.exists():
-        info(f"removing existing {target.relative_to(unity_project)} (clean replace)")
-        shutil.rmtree(target, onerror=_force_remove)
-    shutil.copytree(UNITY_SDK_DIR, target, ignore=_ignore_for_unity)
-    info(f"copied SDK -> {target}")
+    target.mkdir(parents=True, exist_ok=True)
+
+    expected_files: set[Path] = set()
+    expected_dirs: set[Path] = {Path(".")}
+    copied = 0
+    for src in UNITY_SDK_DIR.rglob("*"):
+        rel = src.relative_to(UNITY_SDK_DIR)
+        if any(part in EXCLUDED_FROM_COPY for part in rel.parts):
+            continue
+        if src.is_dir():
+            expected_dirs.add(rel)
+            continue
+        expected_files.add(rel)
+        expected_dirs.add(rel.parent)
+        if _copy_if_changed(src, target / rel):
+            copied += 1
+
+    removed = _remove_stale_unity_files(target, expected_files, expected_dirs)
+    info(f"synced SDK -> {target} ({copied} copied, {removed} stale removed)")
 
 
-def _force_remove(func, path, exc_info) -> None:
-    # Windows: shutil.rmtree fails on read-only files (e.g. git-tracked .meta).
-    # Strip the read-only bit and retry once.
-    import os
-    import stat
-    os.chmod(path, stat.S_IWRITE)
-    func(path)
+def _copy_if_changed(src: Path, dst: Path) -> bool:
+    if dst.exists() and filecmp.cmp(src, dst, shallow=False):
+        return False
+    dst.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        shutil.copy2(src, dst)
+    except PermissionError:
+        fail(f"cannot update {dst}; close Unity Editor and rerun setup_mvp_unity")
+    return True
+
+
+def _remove_stale_unity_files(target: Path, expected_files: set[Path],
+                              expected_dirs: set[Path]) -> int:
+    removed = 0
+    for path in sorted(target.rglob("*"), key=lambda p: len(p.parts), reverse=True):
+        rel = path.relative_to(target)
+        if path.is_file() and rel not in expected_files:
+            try:
+                path.unlink()
+            except PermissionError:
+                fail(f"cannot remove stale {path}; close Unity Editor and rerun setup_mvp_unity")
+            removed += 1
+        elif path.is_dir() and rel not in expected_dirs:
+            try:
+                path.rmdir()
+                removed += 1
+            except OSError:
+                pass
+    return removed
 
 
 def parse_args() -> argparse.Namespace:

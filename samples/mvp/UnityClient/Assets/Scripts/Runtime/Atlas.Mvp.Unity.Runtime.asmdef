@@ -1,0 +1,17 @@
+{
+    "name": "Atlas.Mvp.Unity.Runtime",
+    "rootNamespace": "Atlas.Mvp.Unity",
+    "references": [
+        "Atlas.Client.Unity",
+        "UnityEngine.UI"
+    ],
+    "includePlatforms": [],
+    "excludePlatforms": [],
+    "allowUnsafeCode": false,
+    "overrideReferences": false,
+    "precompiledReferences": [],
+    "autoReferenced": true,
+    "defineConstraints": [],
+    "versionDefines": [],
+    "noEngineReferences": false
+}

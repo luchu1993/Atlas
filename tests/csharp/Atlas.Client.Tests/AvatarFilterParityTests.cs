@@ -60,12 +60,11 @@ namespace Atlas.Client.Tests
             Assert.Equal(0.0f, pos.Z);
         }
 
-        // Mirrors C++ test #4: extrapolation cap at MaxExtrapolation = 0.05.
+        // Mirrors C++ test #4: extrapolation holds newest past MaxExtrapolation.
         // After 2 Inputs at wall=10.0: wall_offset = 0.05 * (10.0 - 10.1) = -0.005.
-        // TryEvaluate at wall=10.5 → target = 10.205, ahead = 0.105 clamped to 0.05.
-        // span = 0.1, scale = 0.5, pos.x = 1.0 + (1.0 - 0.0) * 0.5 = 1.5 exact.
+        // TryEvaluate at wall=10.5 → target = 10.205, ahead = 0.105, so pos.x = 1.0.
         [Fact]
-        public void ExtrapolationCap_ExactFloat()
+        public void ExtrapolationPastCapHoldsNewest_ExactFloat()
         {
             var clock = new Clock { Now = 10.0 };
             var f = Make(clock);
@@ -74,7 +73,7 @@ namespace Atlas.Client.Tests
 
             clock.Now = 10.5;
             Assert.True(f.TryEvaluate(out var pos, out _, out _));
-            Assert.Equal(1.5f, pos.X);
+            Assert.Equal(1.0f, pos.X);
         }
     }
 }

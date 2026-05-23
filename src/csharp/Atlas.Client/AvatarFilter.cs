@@ -164,7 +164,7 @@ public sealed class AvatarFilter
         if (ahead <= 0 || _count < 2) return s.Position;
 
         double cap = MaxExtrapolation;
-        if (ahead > cap) ahead = cap;
+        if (ahead > cap) return s.Position;
 
         int newest = NewestIndex();
         int prev = (newest - 1 + RingCapacity) % RingCapacity;

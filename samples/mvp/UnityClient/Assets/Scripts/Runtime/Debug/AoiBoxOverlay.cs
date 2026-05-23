@@ -1,14 +1,14 @@
+using System;
 using System.Collections.Generic;
+using Atlas.Client.Unity;
 using UnityEngine;
 
 namespace Atlas.Mvp.Unity
 {
-    public static class AoiBoxes
+    public sealed class AoiBoxOverlay : IDisposable
     {
         const float kLineWidth = 0.15f;
 
-        // Box root lives at world-space so the lines stay axis-aligned while the
-        // tracked transform (avatar) yaws under WASD/camera follow.
         readonly struct Entry
         {
             public readonly Transform Target;
@@ -16,31 +16,30 @@ namespace Atlas.Mvp.Unity
             public Entry(Transform target, GameObject root) { Target = target; Root = root; }
         }
 
-        sealed class Follower : ITickable
+        sealed class Follower : IAtlasUnityTickable
         {
-            public void Tick(float dt)
-            {
-                for (int i = _entries.Count - 1; i >= 0; --i)
-                {
-                    var e = _entries[i];
-                    if (e.Target == null)
-                    {
-                        if (e.Root != null) Object.Destroy(e.Root);
-                        _entries.RemoveAt(i);
-                        continue;
-                    }
-                    if (e.Root == null) { _entries.RemoveAt(i); continue; }
-                    e.Root.transform.position = e.Target.position;
-                }
-            }
+            readonly AoiBoxOverlay _owner;
+
+            public Follower(AoiBoxOverlay owner) => _owner = owner;
+
+            public void Tick(float dt) => _owner.FollowTargets();
         }
 
-        static readonly List<Entry> _entries = new();
-        static Follower? _follower;
-        public static bool Visible { get; private set; }
+        readonly AtlasUnityFramePump _frame;
+        readonly List<Entry> _entries = new();
+        readonly Follower _follower;
+        bool _attached;
 
-        public static void Attach(Transform target, float inner, float outer,
-                                  Color innerColor, Color outerColor)
+        public AoiBoxOverlay(AtlasUnityFramePump frame)
+        {
+            _frame = frame ?? throw new ArgumentNullException(nameof(frame));
+            _follower = new Follower(this);
+        }
+
+        public bool Visible { get; private set; }
+
+        public void Attach(Transform target, float inner, float outer,
+                           Color innerColor, Color outerColor)
         {
             EnsureFollower();
             var root = new GameObject("AoIBoxes");
@@ -51,7 +50,7 @@ namespace Atlas.Mvp.Unity
             _entries.Add(new Entry(target, root));
         }
 
-        public static void SetVisible(bool visible)
+        public void SetVisible(bool visible)
         {
             Visible = visible;
             for (int i = _entries.Count - 1; i >= 0; --i)
@@ -62,19 +61,41 @@ namespace Atlas.Mvp.Unity
             }
         }
 
-        public static void Clear()
+        public void Clear()
         {
             foreach (var e in _entries)
-                if (e.Root != null) Object.Destroy(e.Root);
+                if (e.Root != null) UnityEngine.Object.Destroy(e.Root);
             _entries.Clear();
-            if (_follower != null) { Ticker.Remove(_follower); _follower = null; }
+            if (_attached)
+            {
+                _frame.Remove(_follower);
+                _attached = false;
+            }
         }
 
-        static void EnsureFollower()
+        public void Dispose() => Clear();
+
+        void EnsureFollower()
         {
-            if (_follower != null) return;
-            _follower = new Follower();
-            Ticker.Add(_follower);
+            if (_attached) return;
+            _frame.Add(_follower);
+            _attached = true;
+        }
+
+        void FollowTargets()
+        {
+            for (int i = _entries.Count - 1; i >= 0; --i)
+            {
+                var e = _entries[i];
+                if (e.Target == null)
+                {
+                    if (e.Root != null) UnityEngine.Object.Destroy(e.Root);
+                    _entries.RemoveAt(i);
+                    continue;
+                }
+                if (e.Root == null) { _entries.RemoveAt(i); continue; }
+                e.Root.transform.position = e.Target.position;
+            }
         }
 
         static void BuildBox(Transform parent, string label, float halfExtent, Color color)

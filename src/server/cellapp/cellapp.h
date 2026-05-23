@@ -1,6 +1,7 @@
 #ifndef ATLAS_SERVER_CELLAPP_CELLAPP_H_
 #define ATLAS_SERVER_CELLAPP_CELLAPP_H_
 
+#include <cstdint>
 #include <memory>
 #include <span>
 #include <unordered_map>
@@ -155,13 +156,13 @@ class CellApp : public EntityApp {
   [[nodiscard]] auto PeerRegistryForTest() -> CellAppPeerRegistry& { return peer_registry_; }
 
   // Machined-driven; defers to HandlePeerLost.
-  void OnPeerCellAppDeath(const Address& addr, Channel* dying);
+  void OnPeerCellAppDeath(const Address& addr, Channel* dying, uint8_t reason);
 
   void OnOutboundChannelDeath(Channel& dying);
 
   // Single funnel for peer-cell death: address-keyed haunt + orphan-
   // ghost sweep, idempotent across the two death signals.
-  void HandlePeerLost(const Address& peer_addr);
+  void HandlePeerLost(const Address& peer_addr, bool normal);
 
   // Build but don't send - caller chooses transport. The C#
   // SerializeEntity callback fills persistent_blob when registered;

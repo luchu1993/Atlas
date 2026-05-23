@@ -198,7 +198,7 @@ auto BaseAppMgr::Init(int argc, char* argv[]) -> bool {
   // Subscribe to BaseApp death notifications
   GetMachinedClient().Subscribe(
       machined::ListenerType::kDeath, ProcessType::kBaseApp, nullptr,
-      [this](const machined::DeathNotification& n) { OnBaseappDeath(n.internal_addr); });
+      [this](const machined::DeathNotification& n) { OnBaseappDeath(n.internal_addr, n.reason); });
 
   ATLAS_LOG_INFO("BaseAppMgr: initialised");
   return true;
@@ -547,11 +547,16 @@ void BaseAppMgr::BroadcastToAllBaseapps(const baseappmgr::GlobalBaseNotification
   }
 }
 
-void BaseAppMgr::OnBaseappDeath(const Address& addr) {
+void BaseAppMgr::OnBaseappDeath(const Address& addr, uint8_t reason) {
   auto it = baseapps_.find(addr);
   if (it == baseapps_.end()) return;
-  ATLAS_LOG_WARNING("BaseAppMgr: BaseApp app_id={} died ({}:{})", it->second.app_id, addr.Ip(),
-                    addr.Port());
+  if (reason == 0) {
+    ATLAS_LOG_INFO("BaseAppMgr: BaseApp app_id={} deregistered ({}:{})", it->second.app_id,
+                   addr.Ip(), addr.Port());
+  } else {
+    ATLAS_LOG_WARNING("BaseAppMgr: BaseApp app_id={} died ({}:{})", it->second.app_id, addr.Ip(),
+                      addr.Port());
+  }
   dbid_affinity_.ForgetApp(it->second.app_id);
   app_id_index_.erase(it->second.app_id);
   baseapps_.erase(it);

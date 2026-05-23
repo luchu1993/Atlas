@@ -236,7 +236,9 @@ auto CellApp::Init(int argc, char* argv[]) -> bool {
   // The death hook sweeps Ghosts whose Real lived on the dying peer.
   peer_registry_.Subscribe(
       GetMachinedClient(), /*self_addr=*/Network().RudpAddress(),
-      [this](const Address& addr, Channel* dying) { OnPeerCellAppDeath(addr, dying); });
+      [this](const Address& addr, Channel* dying, uint8_t reason) {
+        OnPeerCellAppDeath(addr, dying, reason);
+      });
 
   // Witness send callbacks cache Channel*, so clear them on disconnect.
   Network().SetDisconnectCallback([this](Channel& ch) { OnOutboundChannelDeath(ch); });
@@ -250,8 +252,12 @@ auto CellApp::Init(int argc, char* argv[]) -> bool {
         ATLAS_LOG_INFO("CellApp: DBApp at {}:{}, channel={}", n.internal_addr.Ip(),
                        n.internal_addr.Port(), dbapp_channel_ ? "ok" : "fail");
       },
-      [this](const machined::DeathNotification& /*n*/) {
-        ATLAS_LOG_WARNING("CellApp: DBApp died, clearing dbapp channel");
+      [this](const machined::DeathNotification& n) {
+        if (n.reason == 0) {
+          ATLAS_LOG_INFO("CellApp: DBApp deregistered, clearing dbapp channel");
+        } else {
+          ATLAS_LOG_WARNING("CellApp: DBApp died, clearing dbapp channel");
+        }
         dbapp_channel_ = nullptr;
       });
 
@@ -958,11 +964,11 @@ auto CellApp::FindPeerChannel(const Address& addr) const -> Channel* {
   return peer_registry_.Find(addr);
 }
 
-void CellApp::OnPeerCellAppDeath(const Address& addr, Channel* /*dying*/) {
-  HandlePeerLost(addr);
+void CellApp::OnPeerCellAppDeath(const Address& addr, Channel* /*dying*/, uint8_t reason) {
+  HandlePeerLost(addr, reason == 0);
 }
 
-void CellApp::HandlePeerLost(const Address& peer_addr) {
+void CellApp::HandlePeerLost(const Address& peer_addr, bool normal) {
   // Collect orphan Ghost ids first - can't erase while iterating.
   // Reals' Haunt-list repairs are map-key-preserving so safe mid-iter.
   std::vector<EntityID> orphan_ghosts;
@@ -989,9 +995,16 @@ void CellApp::HandlePeerLost(const Address& peer_addr) {
   }
 
   if (!orphan_ghosts.empty() || haunts_cleared > 0) {
-    ATLAS_LOG_WARNING(
-        "CellApp: peer CellApp {}:{} lost — dropped {} orphan Ghost(s), cleared {} Haunt(s)",
-        peer_addr.Ip(), peer_addr.Port(), orphan_ghosts.size(), haunts_cleared);
+    if (normal) {
+      ATLAS_LOG_INFO(
+          "CellApp: peer CellApp {}:{} deregistered — dropped {} orphan Ghost(s), cleared {} "
+          "Haunt(s)",
+          peer_addr.Ip(), peer_addr.Port(), orphan_ghosts.size(), haunts_cleared);
+    } else {
+      ATLAS_LOG_WARNING(
+          "CellApp: peer CellApp {}:{} lost — dropped {} orphan Ghost(s), cleared {} Haunt(s)",
+          peer_addr.Ip(), peer_addr.Port(), orphan_ghosts.size(), haunts_cleared);
+    }
   }
 }
 
@@ -1190,7 +1203,7 @@ void CellApp::OnOutboundChannelDeath(Channel& dying) {
 
   // Entity-level peer cleanup must complete before NI deletes the Channel,
   // otherwise TickGhostPump dereferences a freed Haunt::channel.
-  HandlePeerLost(dying.RemoteAddress());
+  HandlePeerLost(dying.RemoteAddress(), false);
 }
 
 void CellApp::OnCreateGhost(const Address& /*src*/, Channel* ch, const cellapp::CreateGhost& msg) {

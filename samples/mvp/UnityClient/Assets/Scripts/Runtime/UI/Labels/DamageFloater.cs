@@ -18,10 +18,8 @@ namespace Atlas.Mvp.Unity
             _anchored = anchored;
         }
 
-        public static void Spawn(Vector3 worldPos, int amount)
+        public static void Spawn(LabelOverlay overlay, Vector3 worldPos, int amount)
         {
-            var overlay = LabelOverlay.Instance;
-            if (overlay == null) return;
             if (!overlay.TryProject(worldPos, out var screen)) return;
 
             var text = overlay.CreateLabel();

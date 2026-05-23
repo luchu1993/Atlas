@@ -1,6 +1,7 @@
 #ifndef ATLAS_SERVER_DBAPP_DBAPP_H_
 #define ATLAS_SERVER_DBAPP_DBAPP_H_
 
+#include <cstdint>
 #include <memory>
 #include <optional>
 #include <string>
@@ -49,7 +50,7 @@ class DBApp : public ManagerApp {
 
   void OnAuthLogin(const Address& src, Channel* ch, const login::AuthLogin& msg);
 
-  void OnBaseappDeath(const Address& internal_addr, std::string_view name);
+  void OnBaseappDeath(const Address& internal_addr, std::string_view name, uint8_t reason);
 
   [[nodiscard]] auto BuildDbConfig() const -> DatabaseConfig;
   auto ResolveReplyChannel(const Address& addr) -> Channel*;

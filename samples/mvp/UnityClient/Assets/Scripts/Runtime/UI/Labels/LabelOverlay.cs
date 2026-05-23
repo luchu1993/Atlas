@@ -1,25 +1,27 @@
+using System;
 using System.Collections.Generic;
+using Atlas.Client.Unity;
 using UnityEngine;
 using UnityEngine.UI;
 
 namespace Atlas.Mvp.Unity
 {
-    public sealed class LabelOverlay : ITickable
+    public sealed class LabelOverlay : IAtlasUnityTickable, IDisposable
     {
-        public static LabelOverlay? Instance { get; private set; }
-
+        readonly AtlasUnityFramePump _frame;
+        readonly Func<Camera?> _cameraSource;
         readonly Canvas _canvas;
         readonly Font _font;
         readonly List<DamageFloater> _floaters = new();
         readonly List<DamageFloater> _expired = new();
         Camera? _camera;
 
-        LabelOverlay()
+        public LabelOverlay(AtlasUnityFramePump frame, Func<Camera?> cameraSource)
         {
+            _frame = frame ?? throw new ArgumentNullException(nameof(frame));
+            _cameraSource = cameraSource ?? throw new ArgumentNullException(nameof(cameraSource));
             _font = Resources.GetBuiltinResource<Font>("LegacyRuntime.ttf");
 
-            // Root-level canvas: ScreenSpaceOverlay auto-sizes to screen pixels,
-            // so child.transform.position == WorldToScreenPoint output directly.
             var go = new GameObject("LabelCanvas");
             _canvas = go.AddComponent<Canvas>();
             _canvas.renderMode = RenderMode.ScreenSpaceOverlay;
@@ -27,23 +29,15 @@ namespace Atlas.Mvp.Unity
             var scaler = go.AddComponent<CanvasScaler>();
             scaler.uiScaleMode = CanvasScaler.ScaleMode.ConstantPixelSize;
             scaler.scaleFactor = 1f;
+            _frame.Add(this);
         }
 
-        public static void Init()
+        public void Dispose()
         {
-            if (Instance != null) return;
-            Instance = new LabelOverlay();
-            Ticker.Add(Instance);
-        }
-
-        public static void Shutdown()
-        {
-            if (Instance == null) return;
-            Ticker.Remove(Instance);
-            foreach (var f in Instance._floaters) f.DestroyText();
-            Instance._floaters.Clear();
-            if (Instance._canvas != null) Object.Destroy(Instance._canvas.gameObject);
-            Instance = null;
+            _frame.Remove(this);
+            foreach (var f in _floaters) f.DestroyText();
+            _floaters.Clear();
+            if (_canvas != null) UnityEngine.Object.Destroy(_canvas.gameObject);
         }
 
         public Text CreateLabel()
@@ -58,8 +52,6 @@ namespace Atlas.Mvp.Unity
             text.horizontalOverflow = HorizontalWrapMode.Overflow;
             text.verticalOverflow = VerticalWrapMode.Overflow;
             text.raycastTarget = false;
-            // Anchor at canvas (0,0) so anchoredPosition == screen pixels;
-            // bottom-center pivot grows the label upward from the projected head.
             var rt = text.rectTransform;
             rt.anchorMin = rt.anchorMax = Vector2.zero;
             rt.pivot = new Vector2(0.5f, 0f);
@@ -67,11 +59,9 @@ namespace Atlas.Mvp.Unity
             return text;
         }
 
-        // Prefers Bootstrap.MainCamera: a stray scene-template Main Camera
-        // confuses Camera.main and projects labels to garbage coords.
         public bool TryProject(Vector3 worldPos, out Vector3 screenPos)
         {
-            if (_camera == null) _camera = Bootstrap.Instance?.MainCamera ?? Camera.main;
+            if (_camera == null) _camera = _cameraSource() ?? Camera.main;
             if (_camera == null) { screenPos = default; return false; }
             screenPos = _camera.WorldToScreenPoint(worldPos);
             return screenPos.z > 0f;

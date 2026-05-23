@@ -1,3 +1,4 @@
+using System;
 using Atlas.Client.Unity;
 using UnityEngine;
 using MvpAvatar = Atlas.Mvp.Client.Avatar;
@@ -8,9 +9,14 @@ namespace Atlas.Mvp.Unity
     {
         MvpAvatar Avatar => (MvpAvatar)Entity!;
         PlayerInputController? _input;
+        readonly Func<uint> _ownerIdSource;
 
-        public AvatarView(MvpAvatar avatar, AtlasNetworkManager net, Transform worldRoot)
-            : base(avatar, net, worldRoot) { }
+        public AvatarView(MvpAvatar avatar, AtlasNetworkManager net, Transform worldRoot,
+            AtlasUnityFramePump frame, LabelOverlay labels, Func<uint> ownerIdSource)
+            : base(avatar, net, worldRoot, frame, labels)
+        {
+            _ownerIdSource = ownerIdSource;
+        }
 
         public void AttachInput(PlayerInputController input) => _input = input;
 
@@ -45,7 +51,7 @@ namespace Atlas.Mvp.Unity
 
         void OnDamage(int amount, uint attackerId)
         {
-            if (attackerId == Bootstrap.Instance?.OwnerEntityId)
+            if (attackerId == _ownerIdSource())
                 SpawnDamageFloater(amount);
         }
 

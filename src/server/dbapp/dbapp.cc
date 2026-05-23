@@ -30,7 +30,7 @@ auto DBApp::Init(int argc, char* argv[]) -> bool {
   // offline DefDump mirrors that path and writes a wire-compatible blob
   // for RegisterFromBinaryFile to ingest.
   if (cfg.entitydef_bin_path.empty()) {
-    ATLAS_LOG_WARNING("DBApp: no --entitydef-bin-path configured; entity_defs will be empty");
+    ATLAS_LOG_INFO("DBApp: no --entitydef-bin-path configured; entity_defs will be empty");
     entity_defs_.emplace();
   } else {
     entity_defs_.emplace();
@@ -110,7 +110,7 @@ auto DBApp::Init(int argc, char* argv[]) -> bool {
   GetMachinedClient().Subscribe(machined::ListenerType::kDeath, ProcessType::kBaseApp,
                                 nullptr,  // no birth callback needed
                                 [this](const machined::DeathNotification& notif) {
-                                  OnBaseappDeath(notif.internal_addr, notif.name);
+                                  OnBaseappDeath(notif.internal_addr, notif.name, notif.reason);
                                 });
 
   auto_create_accounts_ = cfg.auto_create_accounts;
@@ -494,14 +494,26 @@ void DBApp::OnPutEntityIds(const Address& src, Channel* ch, const dbapp::PutEnti
 
 // on_baseapp_death
 
-void DBApp::OnBaseappDeath(const Address& internal_addr, std::string_view name) {
+void DBApp::OnBaseappDeath(const Address& internal_addr, std::string_view name, uint8_t reason) {
   int cleared_memory = checkout_mgr_.ClearAllFor(internal_addr);
-  ATLAS_LOG_WARNING("DBApp: BaseApp '{}' died — cleared {} memory checkouts", std::string(name),
-                    cleared_memory);
+  const bool normal = reason == 0;
+  if (normal) {
+    ATLAS_LOG_INFO("DBApp: BaseApp '{}' deregistered — cleared {} memory checkouts",
+                   std::string(name), cleared_memory);
+  } else {
+    ATLAS_LOG_WARNING("DBApp: BaseApp '{}' died — cleared {} memory checkouts",
+                      std::string(name), cleared_memory);
+  }
 
-  database_->ClearCheckoutsForAddress(internal_addr, [name_str =
-                                                          std::string(name)](int cleared_db) {
-    ATLAS_LOG_WARNING("DBApp: cleared {} DB checkouts for dead BaseApp '{}'", cleared_db, name_str);
+  database_->ClearCheckoutsForAddress(internal_addr, [name_str = std::string(name),
+                                                      normal](int cleared_db) {
+    if (normal) {
+      ATLAS_LOG_INFO("DBApp: cleared {} DB checkouts for deregistered BaseApp '{}'", cleared_db,
+                     name_str);
+    } else {
+      ATLAS_LOG_WARNING("DBApp: cleared {} DB checkouts for dead BaseApp '{}'", cleared_db,
+                        name_str);
+    }
   });
 }
 

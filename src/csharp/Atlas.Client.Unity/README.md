@@ -5,6 +5,10 @@ project's `Assets/Atlas.Client.Unity/` (or symlink it) and the
 `Atlas.Client.Unity` asmdef compiles against `Atlas.Client.dll` /
 `Atlas.Shared.dll` shipped under `Plugins/`.
 
+`tools/bin/setup_unity_client` syncs this folder into Unity by copying
+changed files and pruning stale files. If Unity locks a native plugin,
+close the Editor and rerun setup.
+
 ## Layout
 
 ```
@@ -19,6 +23,9 @@ Atlas.Client.Unity/
 ├── UnityProfilerBackend.cs         # routes Atlas.Diagnostics.Profiler -> ProfilerMarker
 ├── Coro/
 │   └── UnityLoop.cs                # PlayerLoop tick for Atlas coroutines
+├── Runtime/
+│   ├── AtlasUnityFramePump.cs      # app-owned frame dispatcher; no global ticker
+│   └── AtlasEntityViewRegistry.cs  # session-owned entity view lifecycle helper
 └── Plugins/                        # populated by tools/setup_unity_client (per-platform)
     ├── Atlas.Client.dll            # managed, from src/csharp/Atlas.Client/bin/<config>/
     ├── Atlas.Shared.dll            # managed, from src/csharp/Atlas.Shared/bin/<config>/

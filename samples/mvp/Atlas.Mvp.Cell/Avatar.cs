@@ -21,6 +21,7 @@ public partial class Avatar : CellServerEntity, IDamageable
 
     private bool _isDead;
     private double _deathServerTime;
+    private bool _lastReportMoved;
 
     protected override void OnInit(bool isReload)
     {
@@ -67,8 +68,12 @@ public partial class Avatar : CellServerEntity, IDamageable
     public partial void ReportPos(Vector3 pos, Vector3 dir)
     {
         if (_isDead) return;
+        bool moved = (pos - Position).LengthSquared > 0.0001f ||
+                     (dir - Direction).LengthSquared > 0.0001f;
         Position = pos;
         Direction = dir;
+        if (!moved && _lastReportMoved) MarkVolatileDirty();
+        _lastReportMoved = moved;
     }
 
     public partial void LaunchProjectile(Vector3 forward)
@@ -108,6 +113,7 @@ public partial class Avatar : CellServerEntity, IDamageable
     private void Respawn()
     {
         _isDead = false;
+        _lastReportMoved = false;
         Hp = kInitialHp;
         Position = kSpawnPosition;
         AllClients.OnRespawned(kSpawnPosition);
