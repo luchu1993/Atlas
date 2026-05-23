@@ -1,0 +1,14 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>$(AtlasTargetFramework)</TargetFramework>
+    <AssemblyName>Atlas.Runtime.ScriptHostFixture</AssemblyName>
+    <RootNamespace>Atlas.Runtime.ScriptHostFixture</RootNamespace>
+    <IsPackable>false</IsPackable>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\..\src\csharp\Atlas.Runtime\Atlas.Runtime.csproj" />
+  </ItemGroup>
+
+</Project>

@@ -19,32 +19,34 @@ public static class AppEvents
     internal static void RegisterScriptInitializer(IAtlasAppInitializer initializer)
     {
         ArgumentNullException.ThrowIfNull(initializer);
-        if (s_appInitFired)
-        {
-            initializer.OnAppInit();
-            return;
-        }
         s_appInitializers.Add(initializer);
     }
 
     internal static void UnregisterScriptInitializer(IAtlasAppInitializer initializer)
     {
-        s_appInitializers.Remove(initializer);
+        for (int i = s_appInitializers.Count - 1; i >= 0; --i)
+        {
+            if (ReferenceEquals(s_appInitializers[i], initializer))
+                s_appInitializers.RemoveAt(i);
+        }
     }
 
     internal static void TryFireAppInit()
     {
-        if (s_appInitFired) return;
+        if (s_appInitFired && s_appInitializers.Count == 0) return;
         s_appInitDeferred = false;
-        AppInit?.Invoke();
-        foreach (var initializer in s_appInitializers.ToArray())
-            initializer.OnAppInit();
-        if (!s_appInitDeferred) s_appInitFired = true;
-        if (s_appInitFired)
+        if (!s_appInitFired) AppInit?.Invoke();
+        var initializers = s_appInitializers.ToArray();
+        foreach (var initializer in initializers)
         {
-            AppInit = null;
-            s_appInitializers.Clear();
+            if (HasScriptInitializer(initializer))
+                initializer.OnAppInit();
         }
+        if (s_appInitDeferred) return;
+        if (!s_appInitFired) s_appInitFired = true;
+        AppInit = null;
+        foreach (var initializer in initializers)
+            UnregisterScriptInitializer(initializer);
     }
 
     internal static void Reset()
@@ -53,5 +55,15 @@ public static class AppEvents
         s_appInitializers.Clear();
         s_appInitFired = false;
         s_appInitDeferred = false;
+    }
+
+    private static bool HasScriptInitializer(IAtlasAppInitializer initializer)
+    {
+        foreach (var current in s_appInitializers)
+        {
+            if (ReferenceEquals(current, initializer))
+                return true;
+        }
+        return false;
     }
 }
