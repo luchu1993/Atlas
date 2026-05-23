@@ -108,6 +108,12 @@ def stage_plugins(native_dll: Path, shared_dll: Path, client_dll: Path,
 def stage_native_runtime_deps(native_dir: Path, config: str) -> None:
     """Copy DLLs atlas_net_client imports (mimalloc); else Unity surfaces a
     misleading DllNotFoundException pointing at atlas_net_client itself."""
+    for stale_name in stale_native_runtime_dep_names(config):
+        stale = native_dir / stale_name
+        if stale.exists():
+            stale.unlink()
+            info(f"removed stale {stale.name} from {native_dir.relative_to(REPO_ROOT)}")
+
     preset = config.lower()
     if HOST == "Windows":
         mimalloc_name = "mimalloc-debug.dll" if config == "Debug" else "mimalloc.dll"
@@ -131,6 +137,14 @@ def stage_native_runtime_deps(native_dir: Path, config: str) -> None:
         return
     shutil.copy2(src, native_dir / src.name)
     info(f"staged {src.name} -> {native_dir.relative_to(REPO_ROOT)}")
+
+
+def stale_native_runtime_dep_names(config: str) -> list[str]:
+    if HOST == "Windows":
+        return ["mimalloc.dll"] if config == "Debug" else ["mimalloc-debug.dll"]
+    if HOST == "Linux":
+        return ["libmimalloc.so"] if config == "Debug" else ["libmimalloc-debug.so"]
+    return []
 
 
 def resolve_unity_project(arg: str | None) -> Path:

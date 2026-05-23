@@ -1,10 +1,7 @@
 #!/usr/bin/env python3
-"""Stage Atlas Client SDK + the MVP entity script DLL into samples/mvp/UnityClient/.
+"""Stage the Atlas Client SDK and MVP entity DLL into samples/mvp/UnityClient/.
 
-Wraps tools/setup_unity_client (which builds + copies the SDK and native plugin
-into <unity-project>/Assets/Atlas.Client.Unity/), then builds Atlas.Mvp.Client
-under netstandard2.1 and drops it under Assets/Plugins/Atlas.Mvp/ so Unity loads
-the entity classes alongside the SDK.
+Builds or verifies Atlas.Mvp.Client first, then refreshes SDK staging.
 """
 
 from __future__ import annotations
@@ -19,7 +16,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from common.paths import REPO_ROOT  # noqa: E402
 
 DEFAULT_UNITY_PROJECT = REPO_ROOT / "samples" / "mvp" / "UnityClient"
-MVP_CLIENT_CSPROJ = REPO_ROOT / "samples" / "mvp" / "Atlas.Mvp.Client" / "Atlas.Mvp.Client.csproj"
+MVP_CLIENT_CSPROJ = (
+    REPO_ROOT / "samples" / "mvp" / "Atlas.Mvp.Client" / "Atlas.Mvp.Client.csproj"
+)
 MVP_PLUGIN_NAME = "Atlas.Mvp"
 
 
@@ -37,14 +36,18 @@ def run(cmd: list[str]) -> None:
     subprocess.run(cmd, check=True)
 
 
-def stage_mvp_dll(unity_project: Path, config: str) -> None:
-    run(["dotnet", "build", str(MVP_CLIENT_CSPROJ),
-         "-c", config, "-f", "netstandard2.1", "--nologo", "-v", "quiet"])
+def build_mvp_dll(config: str, build: bool) -> Path:
+    if build:
+        run(["dotnet", "build", str(MVP_CLIENT_CSPROJ),
+             "-c", config, "-f", "netstandard2.1", "--nologo", "-v", "quiet"])
     dll = (REPO_ROOT / "samples" / "mvp" / "Atlas.Mvp.Client" / "bin" /
            config / "netstandard2.1" / "Atlas.Mvp.Client.dll")
     if not dll.exists():
-        fail(f"expected {dll} after build, not found")
+        fail(f"expected {dll}, not found")
+    return dll
 
+
+def stage_mvp_dll(unity_project: Path, dll: Path) -> None:
     target = unity_project / "Assets" / "Plugins" / MVP_PLUGIN_NAME
     target.mkdir(parents=True, exist_ok=True)
     shutil.copy2(dll, target / dll.name)
@@ -69,13 +72,15 @@ def main() -> int:
     if not (unity_project / "Assets").is_dir():
         fail(f"{unity_project} doesn't look like a Unity project (missing Assets/)")
 
+    mvp_dll = build_mvp_dll(args.config, build=not args.skip_build)
+
     sdk_cmd = ["python", str(REPO_ROOT / "tools" / "setup_unity_client.py"),
                "--unity-project", str(unity_project), "--config", args.client_config]
     if args.skip_build:
         sdk_cmd.append("--skip-build")
     run(sdk_cmd)
 
-    stage_mvp_dll(unity_project, args.config)
+    stage_mvp_dll(unity_project, mvp_dll)
 
     info("done.")
     info(f"open {unity_project} in Unity Hub (Unity 6 LTS, 6000.0.x), wait for refresh,")
