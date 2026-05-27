@@ -1,124 +1,21 @@
 # Phase 14: 服务端权威移动与本地预测
 
-**Status:** 🟨 14.1 进行中。已落地 `movement_sim` flat query、输入帧协议、
-CellApp 权威 step、BaseApp ack relay、native predictor API、Unity / UE MVP
-owner 输入帧 + replay 路径、NPC movement intent，以及 Offload movement state
-迁移。CellApp movement step 耗时已进入 watcher，native predictor 已有
-10k tick parity test。movement input 已有 BaseApp / CellApp 服务端校验与
-token bucket 限流，owner predictor 输入历史有单元测试覆盖。
-BaseApp 已丢弃重复 / 过大 seq gap 输入包；BaseApp / CellApp 已暴露独立
-input drop breakdown watcher，两层都会单独统计 invalid frame drop。Unity /
-UE owner 输入历史和 ack 过滤已处理
-seq 回绕与同 seq server tick latest-wins，BaseApp ack relay 已按 seq /
-cell epoch 过滤旧 ack 并暴露 watcher。Correction tier 阈值已进入
-`movement_sim` / `Atlas.Client` 共享定义，
-native predictor API 已向 UE 暴露同一分类，BaseApp relay 已按 ack flags
-统计 correction watcher，并随实体销毁清理 relay 状态。CellApp 已对 movement
-state 做 finite、速度、垂直速度、水平加速度和坐标边界校验。连续 Tier2 /
-Snap 大纠正已进入 suspicious watcher。Unity / UE owner 已在 ack replay 后回报
-correction report，BaseApp 只将其用于观测和可疑升级。Atlas.Client 已提供
-共享 `OwnerMovementPredictor`，Unity MVP 和桌面脚本客户端会复用 native
-predictor 并回报 correction report。断线重连后，BaseApp 和 owner predictor 会用最新
-movement ack 重新播种输入 seq，避免旧 CellApp 输入序列状态把新会话输入
-当成 stale。真实 `atlas_client` 脚本客户端可通过
-`world_stress --client-transport-impairment-ms` 注入双向 RUDP 延迟和丢包，
-已跑通 2 个客户端 20 秒、150ms RTT / 2% loss smoke，脚本 tap 可见
-`mIn`、`mAck`、`mRpt` 以及 Tier1 / Tier2 correction。`run_world_stress`
-会在 script-client smoke 结束后打印 BaseApp / CellApp movement watcher
-summary；`--script-verify` 同时要求服务端 movement watcher 汇总非零，
-用于把客户端 tap 和服务端权威链路对齐。裸协议 `world_stress` 也可用
-`--move-mode input --movement-verify` 让虚拟客户端直接压 Phase14 input /
-ack 链路；50、100、400 moving entities smoke 已通过服务端 watcher gate。
-`--movement-input-redundant-frames` 已覆盖每包 2/3 帧的 burst / stale 去重路径，
-裸协议 input drop / reorder 注入也已进入 world_stress。14.2 前置的
-`atlas_physics` query 契约、Null / Flat / Static backend 和
-`PhysicsCharacterQuery` movement 适配器已落地。Space 持有可替换
-`PhysicsQuery` backend，当前默认 Static backend；CellApp movement tick 会按
-实体所属 Space 路由查询。Atlas collision asset v1 JSON loader、box /
-plane 校验、无隐式平地的 Static query 构建入口和
-`atlas_tool validate_collision` / `dump_collision --obj` 已落地；Space 可直接装载 collision asset
-并替换本 Space 的 physics query；Cell C# 脚本可通过
-`CellServerEntity.LoadCollisionAsset(spaceId, path)` 触发同一路径。
-CharacterMotor 已按
-ground normal 执行 slope limit，在非跳跃 grounded sweep 命中时支持基础 step-up，
-显式标记 snap-to-ground，且起跳 tick 不会被 snap 拉回地面；命中阻挡面后会沿裁剪速度消费剩余位移，并按
-配置预算执行初始重叠 depenetration。Static backend 已覆盖静态 box、
-静态平面 ground probe / raycast、向下 ground capsule cast、ground /
-plane depenetration 和 layer mask。CellApp 会把角色胶囊半径传入
-PhysicsCharacterQuery ground probe，避免静态盒体边缘探地退化成点查询。
-CellApp 会在 movement tick 写回后记录 position history ring buffer，并通过
-watcher 暴露样本数；Offload 会随实体迁移最近 history 窗口，失败回滚也会恢复
-同一窗口。服务端脚本可通过 `CellServerEntity.TryGetMovementHistorySample`
-查询插值后的历史样本，供 Combat lag compensation 使用。`movement_sim` 已有
-MovementCommand / MovementCurve 共享模型、曲线注册 store 和曲线推进纯函数；
-CellApp 已有 active command store，并会在 movement tick 通过默认线性曲线推进
-active command；C# `CellServerEntity.SetMovementCommand` 已能把技能脚本产生的
-command 写入权威 store，`CellServerEntity.RegisterMovementCurve` 已能把脚本曲线
-注册进 CellApp curve store；`Stop` / `EndSkill` 碰撞策略会按实体 Space 的
-Static physics query 截停 command，`Continue` 保持穿越。active command 也会随
-Offload 迁移和失败回滚恢复。C# 写入新 command 时，CellApp 只允许更高
-priority 打断当前 command，并先广播旧 command 的 cancelled end；同一
-command_id 可续写。CellApp 集成测试已覆盖
-step、边缘探地、坠落、depenetration、陡坡拒绝、跳跃撞低顶后保持空中、
-command 碰撞截停、command priority 冲突和 allow_turn 只更新朝向。`allow_full`
-仍是保留协议值，服务端在 command 与普通 motor 混合策略落地前拒绝执行。
-`MovementCommandStart` /
-`MovementCommandEnd` 已有 CellApp fanout、BaseApp -> Client wire id、native
-client 转发、C# 解码事件和 UE `AtlasNetClient` 解码；Unity / UE MVP owner
-predictor 和 script-client predictor 已能应用 command start / end；C# /
-Unity / UE playback 已按 `curve_id` 采样注册曲线；remote interpolator 已在非
-owner `ClientEntity` / UE `FBpAvatarEntity` 上应用 command start / end，
-并在命令期间覆盖 `AvatarFilter` 输出。C# 脚本可通过
-`CellServerEntity.ClearMovementCommand` 清除当前 active command，并复用既有
-`MovementCommandEnd` fanout 让 owner / peer 停止本地推进；end payload 已携带
-completed / cancelled / collision / invalid reason；command_id 0 保留给
-`ClearMovementCommand(0)` 的 clear-any 语义，不能作为真实 command id；
-duration 必须非 0，elapsed 不得超过 duration，command 和 end state 坐标必须为有限值；
-movement ack / command payload 的 entity id 必须非 0。
-movement input / forward payload 的 entity id 也必须非 0，且输入帧
-`client_dt_ms` 必须在 1-250ms wire decode 范围内。Correction report 也已在
-wire decode 阶段校验非 0 target、有限非负 distance 和 distance / flags 一致性。
-MVP `Avatar.Dash` 已通过 own-client cell RPC 写入 server-stamped
-`MovementCommand`，作为技能位移接入的第一条可跑通路径；完整数据驱动 skill
-timeline 仍在 14.3+ 接入。
+**Status:** 🟨 14.1 主链路已可用——输入帧协议、CellApp 权威 step、owner
+预测和解、MovementCommand fanout、Static physics query、collision asset v1、
+position history 都已落地。当前重心是协议边界硬化、验证矩阵和文档对齐。
+已交付能力清单、收紧的 wire contract、最小回归命令集见
+[`phase14_status.md`](phase14_status.md)。
 
 **前置依赖:** Phase 10 (CellApp / Witness / volatile 位置流)、Phase 11
 (Real/Ghost / Offload)、Phase 12 (atlas_net_client / Atlas.Client)、
 [`docs/physics/physics_architecture.md`](../physics/physics_architecture.md)。
 
-## 当前交接状态
+## 工作上下文
 
-Phase 14.1 的主链路已可用，当前工作重心是协议边界硬化、验证矩阵补齐和
-文档对齐。继续工作时不要重置当前脏工作树；大量未提交改动都属于 Phase 14
-推进中的上下文。UE 源码根目录为 `E:\UE\UnrealEngine`。
-
-最近已收紧的 contract：
-
-- movement input / forward payload：entity id 必须非 0，`client_dt_ms`
-  必须在 1-250ms。
-- movement ack / command start / command end：entity id 必须非 0；真实
-  command id 不能为 0。
-- MovementCommand：`duration_ms` 必须非 0，`elapsed_ms <= duration_ms`，
-  command position 与 end state 必须为有限值，enum 必须在协议范围内。
-- correction report：target 必须非 0，distance 必须为有限非负值，flags 必须
-  与 distance tier 一致。
-- movement ack / correction report 的 `correction_flags` 必须落在
-  `{0, Tier1, Tier2, Snap}` 单 tier 枚举集合，多 bit 组合或保留位
-  C++、C# 和 UE wire decode 都会直接 drop。
-- C++、C# 和 UE `AtlasNetClient` 的 movement ack / command decode 已按同一
-  wire contract 对齐。
-
-最近验证过的最小集合：
-
-- `tools\bin\build.bat debug --build-only`
-- `ctest --test-dir build\debug -C Debug --output-on-failure`，过滤 BaseApp /
-  CellApp movement message、handler、ABI 和 `movement_sim` 相关测试。
-- `dotnet test tests\csharp\Atlas.Client.Tests\Atlas.Client.Tests.csproj
-  --configuration Debug`
-- `tools\bin\build_mvp_ue.bat --config Debug --ue-root E:\UE\UnrealEngine
-  --target UEClientEditor --build-config Development --platform Win64 --skip-native
-  --skip-defs --skip-codegen --skip-stage`
-- `UnrealEditor-Cmd.exe` 跑 `Automation RunTests Atlas.NetClient`。
+继续工作时不要重置当前脏工作树；大量未提交改动都属于 Phase 14 推进中的
+上下文。UE 源码根目录为 `E:\UE\UnrealEngine`。已交付能力详单、wire contract
+快照、最小回归命令集统一放在 [`phase14_status.md`](phase14_status.md)；
+本文件只承载目标 / 验收 / 里程碑 / 决策日志 / 红线，不重复 status。
 
 ## 里程碑驱动的下一步
 
@@ -131,20 +28,7 @@ Phase 14.1 的主链路已可用，当前工作重心是协议边界硬化、验
 下回归，确认 watcher gate 没误伤。
 - 完成判据：50 / 100 / 400 entity smoke 全过；watcher 汇总非零。
 
-**M0.2**：当前 `当前交接状态` 文段拆解到 `phase14_status.md`（独立文件，
-只放已交付能力清单），让本文回到"目标 + 验收"的描述风格。
-- 完成判据：本文 ≤ 200 行；status 历史不再增长。
-
 ### 14.2 Jolt query backend（里程碑）
-
-**M1a**：物理 backend 骨架与隔离 gate。
-- 新增 `src/lib/physics_jolt/` 子项目 + 根 `ATLAS_ENABLE_JOLT` CMake 开关
-  （默认 OFF）。
-- `JoltPhysicsQuery` 类骨架（实现 `PhysicsQuery` 接口，PIMPL 不暴露 Jolt 类型），
-  当前所有 query 返回 no-hit。
-- Jolt 隔离检查脚本（`tools/check_jolt_isolation.py`），保证未来 Jolt 头
-  不渗出 `src/lib/physics_jolt/`。
-- ATLAS_ENABLE_JOLT=OFF（默认） / =ON 两种配置下 build 都过。
 
 **M1b**：Jolt 实际接入与 hello-world raycast。
 - 在 `cmake/Dependencies.cmake` 加 Jolt FetchContent（带 SHA256）。
