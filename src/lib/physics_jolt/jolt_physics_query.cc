@@ -11,10 +11,15 @@
 #include <Jolt/Physics/Body/BodyLockInterface.h>
 #include <Jolt/Physics/Collision/BroadPhase/BroadPhaseLayer.h>
 #include <Jolt/Physics/Collision/CastResult.h>
+#include <Jolt/Physics/Collision/CollideShape.h>
+#include <Jolt/Physics/Collision/CollisionCollectorImpl.h>
 #include <Jolt/Physics/Collision/NarrowPhaseQuery.h>
 #include <Jolt/Physics/Collision/ObjectLayer.h>
 #include <Jolt/Physics/Collision/RayCast.h>
 #include <Jolt/Physics/Collision/Shape/BoxShape.h>
+#include <Jolt/Physics/Collision/Shape/CapsuleShape.h>
+#include <Jolt/Physics/Collision/Shape/SphereShape.h>
+#include <Jolt/Physics/Collision/ShapeCast.h>
 
 namespace atlas::physics {
 
@@ -23,8 +28,6 @@ namespace {
 constexpr float kEpsilon = 1e-5f;
 constexpr JPH::ObjectLayer kStaticObjectLayer = 0;
 
-// M1b ships with a single broadphase layer; multi-layer mapping follows
-// when collision asset v2 lands and we have real Atlas layer enums.
 class StaticBPL final : public JPH::BroadPhaseLayerInterface {
  public:
   JPH::uint GetNumBroadPhaseLayers() const override { return 1; }
@@ -60,6 +63,23 @@ class AlwaysOLPF final : public JPH::ObjectLayerPairFilter {
   const float length = direction.Length();
   if (length <= kEpsilon) return {};
   return direction * (1.0f / length);
+}
+
+[[nodiscard]] auto IsFiniteVec(const math::Vector3& v) -> bool {
+  return std::isfinite(v.x) && std::isfinite(v.y) && std::isfinite(v.z);
+}
+
+// Atlas Capsule convention: center.y is the bottom point of the capsule, and
+// half_height_m is half of the TOTAL height (including the two hemispherical
+// caps). Jolt's CapsuleShape takes the cylinder's half-height (caps excluded);
+// Jolt body center sits at the geometric center.
+[[nodiscard]] auto JoltCapsuleHalfHeight(float atlas_half_height_m, float radius_m) -> float {
+  return std::max(0.0f, atlas_half_height_m - radius_m);
+}
+
+[[nodiscard]] auto JoltCapsuleCenter(const Capsule& capsule) -> JPH::RVec3 {
+  return JPH::RVec3{capsule.center.x, capsule.center.y + capsule.half_height_m,
+                    capsule.center.z};
 }
 
 }  // namespace
@@ -115,21 +135,57 @@ void JoltPhysicsQuery::AddBox(const StaticBox& box) {
 }
 
 void JoltPhysicsQuery::Clear() {
-  // Destroying + re-creating the PhysicsSystem is cheaper than walking the body
-  // interface to remove each body individually for a query-only scene.
   impl_ = std::make_unique<Impl>();
 }
 
-auto JoltPhysicsQuery::GroundProbe(const GroundProbeQuery& /*query*/) const -> GroundHit {
-  return {};
+auto JoltPhysicsQuery::GroundProbe(const GroundProbeQuery& query) const -> GroundHit {
+  GroundHit out;
+  if (!IsFiniteVec(query.origin) || !std::isfinite(query.max_distance_m) ||
+      !std::isfinite(query.radius_m)) {
+    return out;
+  }
+  const float max_distance = query.max_distance_m > 0.0f ? query.max_distance_m : 0.0f;
+  if (max_distance <= kEpsilon) return out;
+  const float radius = std::max(query.radius_m, kEpsilon);
+
+  impl_->EnsureOptimized();
+
+  JPH::SphereShape sphere(radius);
+  sphere.SetEmbedded();
+
+  // Start the sphere with its BOTTOM at origin so the returned distance is the
+  // vertical foot-to-ground gap (matches StaticPhysicsQuery convention), not the
+  // sphere-center-to-ground gap which would be radius too large.
+  const JPH::RMat44 start = JPH::RMat44::sTranslation(
+      JPH::RVec3{query.origin.x, query.origin.y + radius, query.origin.z});
+  const JPH::Vec3 motion{0.0f, -max_distance, 0.0f};
+  JPH::RShapeCast cast(&sphere, JPH::Vec3::sReplicate(1.0f), start, motion);
+
+  JPH::ShapeCastSettings settings;
+  JPH::ClosestHitCollisionCollector<JPH::CastShapeCollector> collector;
+  impl_->system.GetNarrowPhaseQuery().CastShape(cast, settings, JPH::RVec3::sZero(),
+                                                collector);
+  if (!collector.HadHit()) return out;
+
+  const auto& hit = collector.mHit;
+  out.hit = true;
+  out.distance_m = hit.mFraction * max_distance;
+  out.position = {query.origin.x, query.origin.y - out.distance_m, query.origin.z};
+  out.layer = kStaticObjectLayer;
+
+  JPH::BodyLockRead lock(impl_->system.GetBodyLockInterface(), hit.mBodyID2);
+  if (lock.Succeeded()) {
+    const JPH::Vec3 normal = lock.GetBody().GetWorldSpaceSurfaceNormal(
+        hit.mSubShapeID2,
+        JPH::RVec3{out.position.x, out.position.y, out.position.z});
+    out.normal = {normal.GetX(), normal.GetY(), normal.GetZ()};
+  }
+  return out;
 }
 
 auto JoltPhysicsQuery::Raycast(const RaycastQuery& query) const -> RaycastHit {
   RaycastHit out;
-  if (!std::isfinite(query.origin.x) || !std::isfinite(query.origin.y) ||
-      !std::isfinite(query.origin.z) || !std::isfinite(query.max_distance_m)) {
-    return out;
-  }
+  if (!IsFiniteVec(query.origin) || !std::isfinite(query.max_distance_m)) return out;
   const auto direction = NormalizedDirection(query.direction);
   if (direction.LengthSquared() <= kEpsilon * kEpsilon) return out;
   const float max_distance = query.max_distance_m > 0.0f ? query.max_distance_m : 0.0f;
@@ -142,8 +198,7 @@ auto JoltPhysicsQuery::Raycast(const RaycastQuery& query) const -> RaycastHit {
   const JPH::RRayCast ray{JPH::RVec3{query.origin.x, query.origin.y, query.origin.z},
                           jolt_dir};
   JPH::RayCastResult result;
-  const bool hit = impl_->system.GetNarrowPhaseQuery().CastRay(ray, result);
-  if (!hit) return out;
+  if (!impl_->system.GetNarrowPhaseQuery().CastRay(ray, result)) return out;
 
   out.hit = true;
   out.fraction = result.mFraction;
@@ -155,8 +210,7 @@ auto JoltPhysicsQuery::Raycast(const RaycastQuery& query) const -> RaycastHit {
 
   JPH::BodyLockRead lock(impl_->system.GetBodyLockInterface(), result.mBodyID);
   if (lock.Succeeded()) {
-    const JPH::Body& body = lock.GetBody();
-    const JPH::Vec3 normal = body.GetWorldSpaceSurfaceNormal(
+    const JPH::Vec3 normal = lock.GetBody().GetWorldSpaceSurfaceNormal(
         result.mSubShapeID2,
         JPH::RVec3{out.position.x, out.position.y, out.position.z});
     out.normal = {normal.GetX(), normal.GetY(), normal.GetZ()};
@@ -164,17 +218,118 @@ auto JoltPhysicsQuery::Raycast(const RaycastQuery& query) const -> RaycastHit {
   return out;
 }
 
-auto JoltPhysicsQuery::CastCapsule(const CapsuleCastQuery& /*query*/) const -> ShapeCastHit {
-  return {};
+auto JoltPhysicsQuery::CastCapsule(const CapsuleCastQuery& query) const -> ShapeCastHit {
+  ShapeCastHit out;
+  if (!IsFiniteVec(query.capsule.center) || !std::isfinite(query.capsule.radius_m) ||
+      !std::isfinite(query.capsule.half_height_m) || !IsFiniteVec(query.displacement)) {
+    return out;
+  }
+  if (query.capsule.radius_m <= kEpsilon) return out;
+  if (query.displacement.LengthSquared() <= kEpsilon * kEpsilon) return out;
+
+  impl_->EnsureOptimized();
+
+  JPH::CapsuleShape capsule(
+      JoltCapsuleHalfHeight(query.capsule.half_height_m, query.capsule.radius_m),
+      query.capsule.radius_m);
+  capsule.SetEmbedded();
+
+  const JPH::RMat44 start = JPH::RMat44::sTranslation(JoltCapsuleCenter(query.capsule));
+  const JPH::Vec3 motion{query.displacement.x, query.displacement.y, query.displacement.z};
+  JPH::RShapeCast cast(&capsule, JPH::Vec3::sReplicate(1.0f), start, motion);
+
+  JPH::ShapeCastSettings settings;
+  JPH::ClosestHitCollisionCollector<JPH::CastShapeCollector> collector;
+  impl_->system.GetNarrowPhaseQuery().CastShape(cast, settings, JPH::RVec3::sZero(),
+                                                collector);
+  if (!collector.HadHit()) return out;
+
+  const auto& hit = collector.mHit;
+  out.hit = true;
+  out.fraction = hit.mFraction;
+  out.distance_m = query.displacement.Length() * hit.mFraction;
+  out.position = {query.capsule.center.x + query.displacement.x * hit.mFraction,
+                  query.capsule.center.y + query.displacement.y * hit.mFraction,
+                  query.capsule.center.z + query.displacement.z * hit.mFraction};
+  out.layer = kStaticObjectLayer;
+
+  // mPenetrationAxis points from cast shape into the obstacle; surface normal is
+  // the opposite. Normalize defensively because Jolt does not contract a unit-length
+  // axis at edge contacts.
+  JPH::Vec3 axis = hit.mPenetrationAxis;
+  const float axis_len = axis.Length();
+  if (axis_len > kEpsilon) {
+    axis = axis / axis_len;
+    out.normal = {-axis.GetX(), -axis.GetY(), -axis.GetZ()};
+  }
+  return out;
 }
 
-auto JoltPhysicsQuery::OverlapCapsule(const OverlapQuery& /*query*/) const -> bool {
-  return false;
+auto JoltPhysicsQuery::OverlapCapsule(const OverlapQuery& query) const -> bool {
+  if (!IsFiniteVec(query.capsule.center) || !std::isfinite(query.capsule.radius_m) ||
+      !std::isfinite(query.capsule.half_height_m)) {
+    return false;
+  }
+  if (query.capsule.radius_m <= kEpsilon) return false;
+
+  impl_->EnsureOptimized();
+
+  JPH::CapsuleShape capsule(
+      JoltCapsuleHalfHeight(query.capsule.half_height_m, query.capsule.radius_m),
+      query.capsule.radius_m);
+  capsule.SetEmbedded();
+
+  const JPH::RMat44 transform = JPH::RMat44::sTranslation(JoltCapsuleCenter(query.capsule));
+  JPH::CollideShapeSettings settings;
+  JPH::AnyHitCollisionCollector<JPH::CollideShapeCollector> collector;
+  impl_->system.GetNarrowPhaseQuery().CollideShape(&capsule, JPH::Vec3::sReplicate(1.0f),
+                                                   transform, settings, JPH::RVec3::sZero(),
+                                                   collector);
+  return collector.HadHit();
 }
 
-auto JoltPhysicsQuery::DepenetrateCapsule(const OverlapQuery& /*query*/) const
-    -> DepenetrationHit {
-  return {};
+auto JoltPhysicsQuery::DepenetrateCapsule(const OverlapQuery& query) const -> DepenetrationHit {
+  DepenetrationHit out;
+  if (!IsFiniteVec(query.capsule.center) || !std::isfinite(query.capsule.radius_m) ||
+      !std::isfinite(query.capsule.half_height_m)) {
+    return out;
+  }
+  if (query.capsule.radius_m <= kEpsilon) return out;
+
+  impl_->EnsureOptimized();
+
+  JPH::CapsuleShape capsule(
+      JoltCapsuleHalfHeight(query.capsule.half_height_m, query.capsule.radius_m),
+      query.capsule.radius_m);
+  capsule.SetEmbedded();
+
+  const JPH::RMat44 transform = JPH::RMat44::sTranslation(JoltCapsuleCenter(query.capsule));
+  JPH::CollideShapeSettings settings;
+  // ClosestHit so we take the deepest single contact; multi-body resolution belongs
+  // to the motor, not the query.
+  JPH::ClosestHitCollisionCollector<JPH::CollideShapeCollector> collector;
+  impl_->system.GetNarrowPhaseQuery().CollideShape(&capsule, JPH::Vec3::sReplicate(1.0f),
+                                                   transform, settings, JPH::RVec3::sZero(),
+                                                   collector);
+  if (!collector.HadHit()) return out;
+
+  const auto& hit = collector.mHit;
+  if (hit.mPenetrationDepth <= kEpsilon) return out;
+
+  JPH::Vec3 axis = hit.mPenetrationAxis;
+  const float axis_len = axis.Length();
+  if (axis_len <= kEpsilon) return out;
+  axis = axis / axis_len;
+
+  out.hit = true;
+  // Atlas convention: normal points OUT of the obstacle (toward the moving capsule),
+  // offset moves the capsule out by `depth` along that normal.
+  const math::Vector3 normal{-axis.GetX(), -axis.GetY(), -axis.GetZ()};
+  out.normal = normal;
+  out.depth_m = hit.mPenetrationDepth;
+  out.offset = {normal.x * out.depth_m, normal.y * out.depth_m, normal.z * out.depth_m};
+  out.layer = kStaticObjectLayer;
+  return out;
 }
 
 }  // namespace atlas::physics
