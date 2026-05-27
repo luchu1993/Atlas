@@ -13,6 +13,7 @@ target_link_libraries(atlas_reviver_lib
     atlas_network
     atlas_platform
     atlas_server
+    atlas_cellappmgr_messages
     atlas_compiler_options
 )
 

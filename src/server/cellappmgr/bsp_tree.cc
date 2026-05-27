@@ -29,10 +29,24 @@ auto BucketsForAxis(const CellInfo& info, BSPAxis axis) -> const CellLoadBuckets
   return axis == BSPAxis::kX ? info.x_buckets : info.z_buckets;
 }
 
-auto BucketTotal(const CellLoadBuckets& buckets) -> uint64_t {
+auto LoadBucketsForAxis(const CellInfo& info, BSPAxis axis) -> const CellLoadCostBuckets& {
+  return axis == BSPAxis::kX ? info.x_load_buckets : info.z_load_buckets;
+}
+
+auto BucketTotal(const CellLoadCostBuckets& buckets) -> uint64_t {
   uint64_t total = 0;
-  for (const uint32_t bucket : buckets) total += bucket;
+  for (const uint64_t bucket : buckets) total += bucket;
   return total;
+}
+
+auto BucketWeights(const CellInfo& info, BSPAxis axis) -> CellLoadCostBuckets {
+  const auto& load_buckets = LoadBucketsForAxis(info, axis);
+  if (BucketTotal(load_buckets) > 0) return load_buckets;
+
+  CellLoadCostBuckets weights{};
+  const auto& count_buckets = BucketsForAxis(info, axis);
+  for (std::size_t i = 0; i < weights.size(); ++i) weights[i] = count_buckets[i];
+  return weights;
 }
 
 auto EstimatedLeftLoad(const std::vector<WeightedInterval>& intervals, float position) -> float {
@@ -66,7 +80,7 @@ auto BucketBalancedPosition(const BSPNode& left, const BSPNode& right, BSPAxis a
   for (const auto* leaf : leaves) {
     const float leaf_load = leaf != nullptr ? leaf->load : 0.f;
     if (!std::isfinite(leaf_load) || leaf_load <= 0.f) continue;
-    const auto& buckets = BucketsForAxis(*leaf, axis);
+    const auto buckets = BucketWeights(*leaf, axis);
     const uint64_t total = BucketTotal(buckets);
     if (total == 0) continue;
 
@@ -103,6 +117,7 @@ auto BucketBalancedPosition(const BSPNode& left, const BSPNode& right, BSPAxis a
   float best_distance = std::numeric_limits<float>::infinity();
   std::optional<float> best;
   for (const float candidate : candidates) {
+    if (std::abs(candidate - current_position) < 1e-4f) continue;
     const float left_load = EstimatedLeftLoad(intervals, candidate);
     const float delta = std::abs(left_load - target);
     const float distance = std::abs(candidate - current_position);

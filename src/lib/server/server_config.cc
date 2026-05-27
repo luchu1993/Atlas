@@ -4,6 +4,7 @@
 #include <format>
 #include <optional>
 #include <string>
+#include <system_error>
 #include <type_traits>
 #include <variant>
 
@@ -114,10 +115,29 @@ static const CliField kCliFields[] = {
     {"revive-cellappmgr-name",      &ServerConfig::revive_cellappmgr_name},
     {"revive-cellappmgr-port",      &ServerConfig::revive_cellappmgr_internal_port},
     {"revive-cellappmgr-snapshot-path", &ServerConfig::revive_cellappmgr_snapshot_path},
+    {"revive-cellappmgr-output-path", &ServerConfig::revive_cellappmgr_output_path},
+    {"revive-cellappmgr-snapshot-interval-ms",
+        &ServerConfig::revive_cellappmgr_snapshot_interval_ms},
     {"revive-cellappmgr-update-hertz",  &ServerConfig::revive_cellappmgr_update_hertz},
+    {"revive-cellappmgr-launch-timeout-ms",
+        &ServerConfig::revive_cellappmgr_launch_timeout_ms},
     {"revive-restart-delay-ms",     &ServerConfig::revive_restart_delay_ms},
+    {"revive-restart-backoff-cap-ms", &ServerConfig::revive_restart_backoff_cap_ms},
     {"revive-max-restarts",         &ServerConfig::revive_max_restarts},
+    {"revive-cellappmgr-health-interval-ms",
+        &ServerConfig::revive_cellappmgr_health_interval_ms},
+    {"revive-cellappmgr-heartbeat-timeout-ms",
+        &ServerConfig::revive_cellappmgr_heartbeat_timeout_ms},
+    {"revive-cellappmgr-manager-health-timeout-ms",
+        &ServerConfig::revive_cellappmgr_manager_health_timeout_ms},
+    {"revive-cellappmgr-health-failure-threshold",
+        &ServerConfig::revive_cellappmgr_health_failure_threshold},
+    {"revive-cellappmgr-audit-interval-ms",
+        &ServerConfig::revive_cellappmgr_audit_interval_ms},
+    {"revive-cellappmgr-missing-audit-threshold",
+        &ServerConfig::revive_cellappmgr_missing_audit_threshold},
     {"revive-cellappmgr-on-start",  &ServerConfig::revive_cellappmgr_on_start},
+    {"revive-leader-lock-path",     &ServerConfig::revive_leader_lock_path},
 };
 // clang-format on
 
@@ -161,6 +181,9 @@ auto ServerConfig::FromJsonFile(const std::filesystem::path& path) -> Result<Ser
   auto* root = tree->Root();
 
   ServerConfig cfg;
+  std::error_code ec;
+  cfg.config_path = std::filesystem::absolute(path, ec);
+  if (ec) cfg.config_path = path;
   cfg.raw_config = tree;
 
   cfg.update_hertz =
@@ -205,7 +228,11 @@ auto ServerConfig::FromJsonFile(const std::filesystem::path& path) -> Result<Ser
   if (auto* reviver = root->Child("reviver")) {
     cfg.revive_restart_delay_ms =
         reviver->ReadInt("restart_delay_ms", cfg.revive_restart_delay_ms);
+    cfg.revive_restart_backoff_cap_ms =
+        reviver->ReadInt("restart_backoff_cap_ms", cfg.revive_restart_backoff_cap_ms);
     cfg.revive_max_restarts = reviver->ReadInt("max_restarts", cfg.revive_max_restarts);
+    cfg.revive_leader_lock_path =
+        reviver->ReadString("leader_lock_path", cfg.revive_leader_lock_path.string());
     if (auto* cellappmgr = reviver->Child("cellappmgr")) {
       cfg.revive_cellappmgr_exe =
           cellappmgr->ReadString("exe", cfg.revive_cellappmgr_exe.string());
@@ -215,8 +242,27 @@ auto ServerConfig::FromJsonFile(const std::filesystem::path& path) -> Result<Ser
           cellappmgr->ReadUint("internal_port", cfg.revive_cellappmgr_internal_port));
       cfg.revive_cellappmgr_snapshot_path =
           cellappmgr->ReadString("snapshot_path", cfg.revive_cellappmgr_snapshot_path.string());
+      cfg.revive_cellappmgr_output_path =
+          cellappmgr->ReadString("output_path", cfg.revive_cellappmgr_output_path.string());
+      cfg.revive_cellappmgr_snapshot_interval_ms = cellappmgr->ReadInt(
+          "snapshot_interval_ms", cfg.revive_cellappmgr_snapshot_interval_ms);
       cfg.revive_cellappmgr_update_hertz =
           cellappmgr->ReadInt("update_hertz", cfg.revive_cellappmgr_update_hertz);
+      cfg.revive_cellappmgr_launch_timeout_ms =
+          cellappmgr->ReadInt("launch_timeout_ms", cfg.revive_cellappmgr_launch_timeout_ms);
+      cfg.revive_cellappmgr_health_interval_ms =
+          cellappmgr->ReadInt("health_interval_ms",
+                              cfg.revive_cellappmgr_health_interval_ms);
+      cfg.revive_cellappmgr_heartbeat_timeout_ms = cellappmgr->ReadInt(
+          "heartbeat_timeout_ms", cfg.revive_cellappmgr_heartbeat_timeout_ms);
+      cfg.revive_cellappmgr_manager_health_timeout_ms = cellappmgr->ReadInt(
+          "manager_health_timeout_ms", cfg.revive_cellappmgr_manager_health_timeout_ms);
+      cfg.revive_cellappmgr_health_failure_threshold = cellappmgr->ReadInt(
+          "health_failure_threshold", cfg.revive_cellappmgr_health_failure_threshold);
+      cfg.revive_cellappmgr_audit_interval_ms =
+          cellappmgr->ReadInt("audit_interval_ms", cfg.revive_cellappmgr_audit_interval_ms);
+      cfg.revive_cellappmgr_missing_audit_threshold = cellappmgr->ReadInt(
+          "missing_audit_threshold", cfg.revive_cellappmgr_missing_audit_threshold);
       cfg.revive_cellappmgr_on_start =
           cellappmgr->ReadBool("on_start", cfg.revive_cellappmgr_on_start);
     }

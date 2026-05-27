@@ -29,9 +29,8 @@ struct ServerConfig {
   uint16_t external_port = 0;
 
   int update_hertz = 10;
-  // Label the profiler attaches to each frame produced by AdvanceTime().
-  // Empty means "derive from process_name at startup", which is what we
-  // want by default. Tracy stores the final string pointer as frame identity.
+  // Empty frame_name derives from process_name at startup; Tracy stores the
+  // final string pointer as the frame identity.
   std::string frame_name;
 
   std::filesystem::path script_assembly;
@@ -79,11 +78,25 @@ struct ServerConfig {
   std::string revive_cellappmgr_name{"cellappmgr"};
   uint16_t revive_cellappmgr_internal_port{0};
   std::filesystem::path revive_cellappmgr_snapshot_path;
+  std::filesystem::path revive_cellappmgr_output_path;
+  int revive_cellappmgr_snapshot_interval_ms{-1};
   int revive_cellappmgr_update_hertz{10};
+  int revive_cellappmgr_launch_timeout_ms{5000};
   int revive_restart_delay_ms{1000};
+  // 0 disables backoff; positive cap doubles the base delay each attempt
+  // up to backoff_cap_ms so a wedged exe can't burn the restart budget.
+  int revive_restart_backoff_cap_ms{0};
   int revive_max_restarts{3};
+  int revive_cellappmgr_health_interval_ms{1000};
+  int revive_cellappmgr_heartbeat_timeout_ms{4000};
+  int revive_cellappmgr_manager_health_timeout_ms{5000};
+  int revive_cellappmgr_health_failure_threshold{2};
+  int revive_cellappmgr_audit_interval_ms{1000};
+  int revive_cellappmgr_missing_audit_threshold{2};
   bool revive_cellappmgr_on_start{false};
+  std::filesystem::path revive_leader_lock_path;
 
+  std::filesystem::path config_path;
   std::shared_ptr<DataSectionTree> raw_config;
 
   [[nodiscard]] static auto FromArgs(int argc, char* argv[]) -> Result<ServerConfig>;

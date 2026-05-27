@@ -1,17 +1,16 @@
-// CellAppMgr logic tests.
-//
-// These exercise the manager's bookkeeping paths (register, load, space
-// creation, death, rebalance) without spinning up an EventDispatcher or
-// real Channels. Handlers accept nullptr channels and the outbound-send
-// helpers null-guard the channel field on CellAppInfo, so the state-side
-// assertions are all we need.
-
 #include <algorithm>
+#include <charconv>
 #include <chrono>
+#include <cstddef>
+#include <cstdint>
+#include <cstring>
 #include <filesystem>
 #include <format>
+#include <optional>
 #include <set>
+#include <span>
 #include <string>
+#include <thread>
 #include <utility>
 #include <vector>
 
@@ -25,7 +24,9 @@
 #include "network/channel.h"
 #include "network/event_dispatcher.h"
 #include "network/interface_table.h"
+#include "network/machined_types.h"
 #include "network/network_interface.h"
+#include "platform/filesystem.h"
 #include "platform/io_poller.h"
 #include "serialization/binary_stream.h"
 
@@ -38,8 +39,12 @@ class TestCellAppMgr final : public CellAppMgr {
 
   void RegisterWatchersForTest() {
     RegisterWatchers();
+    (void)GetWatcherRegistry().Set("cellappmgr/lb/load_report_stale_ms", "3000");
     (void)GetWatcherRegistry().Set("cellappmgr/lb/retire/drain_watchdog_ms", "30000");
+    (void)GetWatcherRegistry().Set("cellappmgr/ha/reattach_watchdog_ms", "30000");
   }
+
+  void OnTickCompleteForTest() { OnTickComplete(); }
 };
 
 // Thin harness: real EventDispatcher + NetworkInterface for ServerApp ctors.
@@ -55,6 +60,201 @@ struct CellAppMgrHarness {
 auto MakePeerAddr(uint16_t port) -> Address {
   return Address(0x7F000001u, port);
 }
+
+void ExpectBoundsEq(const CellBounds& actual, const CellBounds& expected) {
+  EXPECT_FLOAT_EQ(actual.min_x, expected.min_x);
+  EXPECT_FLOAT_EQ(actual.min_z, expected.min_z);
+  EXPECT_FLOAT_EQ(actual.max_x, expected.max_x);
+  EXPECT_FLOAT_EQ(actual.max_z, expected.max_z);
+}
+
+auto CellAppProcessInfo(Address internal_addr, std::string name) -> machined::ProcessInfo {
+  machined::ProcessInfo info;
+  info.process_type = ProcessType::kCellApp;
+  info.name = std::move(name);
+  info.internal_addr = internal_addr;
+  return info;
+}
+
+constexpr uint32_t kSnapshotMagicForTest = 0x314D4143u;
+constexpr uint32_t kSnapshotVersionForTest = 4;
+constexpr uint64_t kSnapshotChecksumSeedForTest = 14695981039346656037ull;
+constexpr uint64_t kSnapshotChecksumPrimeForTest = 1099511628211ull;
+
+auto SnapshotChecksumForTest(std::span<const std::byte> bytes) -> uint64_t {
+  uint64_t hash = kSnapshotChecksumSeedForTest;
+  for (std::byte byte : bytes) {
+    hash ^= std::to_integer<uint8_t>(byte);
+    hash *= kSnapshotChecksumPrimeForTest;
+  }
+  return hash;
+}
+
+auto SnapshotPayloadForTest(const std::vector<std::byte>& snapshot) -> std::vector<std::byte> {
+  BinaryReader r(std::span<const std::byte>(snapshot.data(), snapshot.size()));
+  auto magic = r.Read<uint32_t>();
+  auto version = r.Read<uint32_t>();
+  auto payload_size = r.Read<uint64_t>();
+  auto checksum = r.Read<uint64_t>();
+  if (!magic || !version || !payload_size || !checksum ||
+      *magic != kSnapshotMagicForTest || *version != kSnapshotVersionForTest) {
+    return {};
+  }
+  auto payload = r.ReadBytes(static_cast<std::size_t>(*payload_size));
+  if (!payload || r.Remaining() != 0 || SnapshotChecksumForTest(*payload) != *checksum) return {};
+  return std::vector<std::byte>(payload->begin(), payload->end());
+}
+
+auto SnapshotWithPayloadForTest(std::span<const std::byte> payload) -> std::vector<std::byte> {
+  BinaryWriter w;
+  w.Write(kSnapshotMagicForTest);
+  w.Write(kSnapshotVersionForTest);
+  w.Write(static_cast<uint64_t>(payload.size()));
+  w.Write(SnapshotChecksumForTest(payload));
+  w.WriteBytes(payload);
+  return w.Detach();
+}
+
+template <typename T>
+auto ReadLittleAtForTest(std::span<const std::byte> bytes, std::size_t offset) -> T {
+  T value{};
+  std::memcpy(&value, bytes.data() + offset, sizeof(T));
+  return endian::FromLittle(value);
+}
+
+template <typename T>
+void PatchLittleAtForTest(std::vector<std::byte>& bytes, std::size_t offset, T value) {
+  const auto le = endian::ToLittle(value);
+  std::memcpy(bytes.data() + offset, &le, sizeof(T));
+}
+
+auto WatcherInt64ForTest(WatcherRegistry& registry, const char* path)
+    -> std::optional<int64_t> {
+  auto value = registry.Get(path);
+  if (!value) return std::nullopt;
+  int64_t parsed = 0;
+  const auto* begin = value->data();
+  const auto* end = begin + value->size();
+  const auto [ptr, ec] = std::from_chars(begin, end, parsed);
+  if (ec != std::errc{} || ptr != end) return std::nullopt;
+  return parsed;
+}
+
+auto CellAppRecordOffsetForTest(std::span<const std::byte> payload, uint32_t index)
+    -> std::optional<std::size_t> {
+  BinaryReader r(payload);
+  r.Skip(sizeof(uint32_t) + sizeof(cellappmgr::CellID) + sizeof(uint64_t) + sizeof(uint32_t));
+  auto count = r.ReadPackedInt();
+  if (!count || index >= *count) return std::nullopt;
+  constexpr std::size_t record_bytes =
+      sizeof(uint32_t) + sizeof(uint16_t) + 3 * sizeof(uint32_t) + 2 * sizeof(uint8_t);
+  for (uint32_t i = 0; i < *count; ++i) {
+    const auto offset = r.Position();
+    if (i == index) return offset;
+    r.Skip(record_bytes);
+  }
+  return std::nullopt;
+}
+
+class ShutdownSnapshotCellAppMgr final : public CellAppMgr {
+ public:
+  using CellAppMgr::CellAppMgr;
+
+ protected:
+  auto RunLoop() -> bool override {
+    SetStartupQuiescenceWindowForTest(Duration::zero());
+
+    cellappmgr::RegisterCellApp reg;
+    reg.internal_addr = MakePeerAddr(30101);
+    OnRegisterCellApp(reg.internal_addr, nullptr, reg);
+
+    cellappmgr::CreateSpaceRequest csr;
+    csr.space_id = 301;
+    OnCreateSpaceRequest(Address{}, nullptr, csr);
+    return true;
+  }
+};
+
+class FailingPeriodicSnapshotCellAppMgr final : public CellAppMgr {
+ public:
+  using CellAppMgr::CellAppMgr;
+
+  [[nodiscard]] auto PeriodicSnapshotFailuresForTest() const -> const std::string& {
+    return periodic_snapshot_failures_;
+  }
+
+ protected:
+  auto RunLoop() -> bool override {
+    std::error_code ec;
+    std::filesystem::remove_all(Config().snapshot_path, ec);
+    if (!fs::CreateDirectories(Config().snapshot_path).HasValue()) return false;
+
+    OnTickComplete();
+    OnTickComplete();
+    OnTickComplete();
+
+    auto failures = GetWatcherRegistry().Get("cellappmgr/ha/snapshot_save_failures");
+    periodic_snapshot_failures_ = failures.value_or("missing");
+    return true;
+  }
+
+ private:
+  std::string periodic_snapshot_failures_{"missing"};
+};
+
+class DirtySnapshotCellAppMgr final : public CellAppMgr {
+ public:
+  using CellAppMgr::CellAppMgr;
+
+  [[nodiscard]] auto DirtyBeforeFlushForTest() const -> const std::string& {
+    return dirty_before_flush_;
+  }
+  [[nodiscard]] auto DirtyAfterFlushForTest() const -> const std::string& {
+    return dirty_after_flush_;
+  }
+  [[nodiscard]] auto DirtyReasonAfterFlushForTest() const -> const std::string& {
+    return dirty_reason_after_flush_;
+  }
+  [[nodiscard]] auto SavesAfterFlushForTest() const -> const std::string& {
+    return saves_after_flush_;
+  }
+  [[nodiscard]] auto StatusAfterFlushForTest() const -> const std::string& {
+    return status_after_flush_;
+  }
+
+ protected:
+  auto RunLoop() -> bool override {
+    SetStartupQuiescenceWindowForTest(Duration::zero());
+
+    cellappmgr::RegisterCellApp reg;
+    reg.internal_addr = MakePeerAddr(30201);
+    OnRegisterCellApp(reg.internal_addr, nullptr, reg);
+
+    cellappmgr::CreateSpaceRequest csr;
+    csr.space_id = 302;
+    OnCreateSpaceRequest(Address{}, nullptr, csr);
+
+    dirty_before_flush_ =
+        GetWatcherRegistry().Get("cellappmgr/ha/snapshot_dirty").value_or("missing");
+    OnTickComplete();
+    dirty_after_flush_ =
+        GetWatcherRegistry().Get("cellappmgr/ha/snapshot_dirty").value_or("missing");
+    dirty_reason_after_flush_ =
+        GetWatcherRegistry().Get("cellappmgr/ha/snapshot_dirty_reason").value_or("missing");
+    saves_after_flush_ =
+        GetWatcherRegistry().Get("cellappmgr/ha/snapshot_saves").value_or("missing");
+    status_after_flush_ =
+        GetWatcherRegistry().Get("cellappmgr/ha/snapshot_status").value_or("missing");
+    return true;
+  }
+
+ private:
+  std::string dirty_before_flush_{"missing"};
+  std::string dirty_after_flush_{"missing"};
+  std::string dirty_reason_after_flush_{"missing"};
+  std::string saves_after_flush_{"missing"};
+  std::string status_after_flush_{"missing"};
+};
 
 // Minimal Channel subclass that captures the last frame written to
 // DoSend. Lets tests observe outbound traffic without a live network.
@@ -252,6 +452,7 @@ TEST(CellAppMgr, InformCellLoad_UpdatesPeerAndLeafLoad) {
   load.app_id = 1;
   load.load = 0.73f;
   load.entity_count = 42;
+  load.cells.push_back({1, 42, 0.f, 0.f, 1});
   h.mgr.OnInformCellLoad(Address{}, nullptr, load);
 
   const auto& info = h.mgr.CellApps().at(reg.internal_addr);
@@ -283,7 +484,9 @@ TEST(CellAppMgr, InformCellLoad_WatchersExposeLbState) {
   load.entity_count = 42;
   load.cells.push_back({1, 42, 12.5f, -7.25f, 1});
   load.cells.back().script_tick_us = 25000;
+  load.cells.back().native_tick_us = 3000;
   load.cells.back().x_buckets = {0, 0, 10, 20, 12, 0, 0, 0};
+  load.cells.back().x_load_buckets = {0, 0, 100, 200, 120, 0, 0, 0};
   h.mgr.OnInformCellLoad(Address{}, nullptr, load);
 
   const auto cellapps = h.mgr.GetWatcherRegistry().Get("cellappmgr/lb/cellapps");
@@ -292,6 +495,12 @@ TEST(CellAppMgr, InformCellLoad_WatchersExposeLbState) {
   EXPECT_NE(cellapps->find("app=1"), std::string::npos);
   EXPECT_NE(cellapps->find("load=0.730"), std::string::npos);
   EXPECT_NE(cellapps->find("entities=42"), std::string::npos);
+  EXPECT_NE(cellapps->find("load_age_ms="), std::string::npos);
+  EXPECT_NE(cellapps->find("load_stale=0"), std::string::npos);
+  const auto stale_count =
+      h.mgr.GetWatcherRegistry().Get("cellappmgr/lb/load_report_stale_count");
+  ASSERT_TRUE(stale_count.has_value());
+  EXPECT_EQ(*stale_count, "0");
 
   const auto spaces = h.mgr.GetWatcherRegistry().Get("cellappmgr/lb/spaces");
   ASSERT_TRUE(spaces.has_value());
@@ -302,12 +511,37 @@ TEST(CellAppMgr, InformCellLoad_WatchersExposeLbState) {
   EXPECT_NE(spaces->find("cell=1"), std::string::npos);
   EXPECT_NE(spaces->find("tick=0.730"), std::string::npos);
   EXPECT_NE(spaces->find("script_us=25000"), std::string::npos);
+  EXPECT_NE(spaces->find("native_us=3000"), std::string::npos);
   EXPECT_NE(spaces->find("witnesses=0"), std::string::npos);
   EXPECT_NE(spaces->find("median=(12.5,-7.2)"), std::string::npos);
   EXPECT_NE(spaces->find("xb=[0,0,10,20,12,0,0,0]"), std::string::npos);
+  EXPECT_NE(spaces->find("xlb=[0,0,100,200,120,0,0,0]"), std::string::npos);
 
   EXPECT_TRUE(h.mgr.GetWatcherRegistry().Get("cellappmgr/lb/weights/aoi_peer").has_value());
   EXPECT_TRUE(h.mgr.GetWatcherRegistry().Set("cellappmgr/lb/weights/aoi_peer", "0.001"));
+}
+
+TEST(CellAppMgr, InformCellLoad_WatchersExposeStaleLoadReports) {
+  CellAppMgrHarness h;
+  h.mgr.RegisterWatchersForTest();
+
+  cellappmgr::RegisterCellApp reg;
+  reg.internal_addr = MakePeerAddr(30001);
+  h.mgr.OnRegisterCellApp(reg.internal_addr, nullptr, reg);
+
+  ASSERT_TRUE(h.mgr.GetWatcherRegistry().Set("cellappmgr/lb/load_report_stale_ms", "0"));
+
+  const auto stale_count =
+      h.mgr.GetWatcherRegistry().Get("cellappmgr/lb/load_report_stale_count");
+  ASSERT_TRUE(stale_count.has_value());
+  EXPECT_EQ(*stale_count, "1");
+
+  const auto cellapps = h.mgr.GetWatcherRegistry().Get("cellappmgr/lb/cellapps");
+  ASSERT_TRUE(cellapps.has_value());
+  EXPECT_NE(cellapps->find("load_age_ms="), std::string::npos);
+  EXPECT_NE(cellapps->find("load_stale=1"), std::string::npos);
+
+  EXPECT_TRUE(h.mgr.GetWatcherRegistry().Set("cellappmgr/lb/load_report_stale_ms", "3000"));
 }
 
 TEST(CellAppMgr, InformCellLoad_StaleGeometryVersionIsIgnored) {
@@ -354,6 +588,7 @@ TEST(CellAppMgr, InformCellLoad_WeightedMetricsRaiseLeafLoad) {
   rep.geometry_version = 1;
   rep.tick_load = 0.05f;
   rep.script_tick_us = 50000;
+  rep.native_tick_us = 7000;
   rep.witness_count = 10;
   rep.aoi_peer_count = 100;
   rep.aoi_reliable_bytes = 1024ull * 1024ull;
@@ -367,6 +602,7 @@ TEST(CellAppMgr, InformCellLoad_WeightedMetricsRaiseLeafLoad) {
   ASSERT_EQ(leaves.size(), 1u);
   EXPECT_NEAR(leaves[0]->tick_load, 0.05f, 1e-5f);
   EXPECT_EQ(leaves[0]->script_tick_us, 50000u);
+  EXPECT_EQ(leaves[0]->native_tick_us, 7000u);
   EXPECT_EQ(leaves[0]->witness_count, 10u);
   EXPECT_EQ(leaves[0]->aoi_peer_count, 100u);
   EXPECT_GT(leaves[0]->load, 1.9f);
@@ -412,6 +648,47 @@ TEST(CellAppMgr, GrowSpacesForNewCellApp_UsesBucketHistogramForSplit) {
   EXPECT_FLOAT_EQ(right->bounds.min_x, 0.f);
 }
 
+TEST(CellAppMgr, GrowSpacesForNewCellApp_PrefersLoadBucketsForSplit) {
+  CellAppMgrHarness h;
+  cellappmgr::RegisterCellApp reg_a;
+  reg_a.internal_addr = MakePeerAddr(30001);
+  h.mgr.OnRegisterCellApp(reg_a.internal_addr, nullptr, reg_a);
+
+  cellappmgr::CreateSpaceRequest csr;
+  csr.space_id = 42;
+  h.mgr.OnCreateSpaceRequest(Address{}, nullptr, csr);
+
+  cellappmgr::InformCellLoad load;
+  load.app_id = 1;
+  load.load = 0.9f;
+  load.entity_count = 80;
+  cellappmgr::InformCellLoad::CellReport rep;
+  rep.cell_id = 1;
+  rep.entity_count = 80;
+  rep.median_x = 0.f;
+  rep.geometry_version = 1;
+  rep.x_buckets = {10, 10, 10, 10, 10, 10, 10, 10};
+  rep.x_load_buckets = {30, 30, 30, 10, 0, 0, 0, 0};
+  load.cells.push_back(rep);
+  h.mgr.OnInformCellLoad(Address{}, nullptr, load);
+
+  cellappmgr::RegisterCellApp reg_b;
+  reg_b.internal_addr = MakePeerAddr(30002);
+  h.mgr.OnRegisterCellApp(reg_b.internal_addr, nullptr, reg_b);
+
+  const auto& partition = h.mgr.Spaces().at(42);
+  auto leaves = partition.bsp.Leaves();
+  ASSERT_EQ(leaves.size(), 2u);
+  const auto* left = partition.bsp.FindCell(-750.f, 0.f);
+  const auto* right = partition.bsp.FindCell(-250.f, 0.f);
+  ASSERT_NE(left, nullptr);
+  ASSERT_NE(right, nullptr);
+  EXPECT_EQ(left->cell_id, 1u);
+  EXPECT_EQ(right->cellapp_addr, reg_b.internal_addr);
+  EXPECT_FLOAT_EQ(left->bounds.max_x, -500.f);
+  EXPECT_FLOAT_EQ(right->bounds.min_x, -500.f);
+}
+
 TEST(CellAppMgr, InformCellLoad_ClampsNegativeAndOverflow) {
   CellAppMgrHarness h;
   cellappmgr::RegisterCellApp reg;
@@ -438,6 +715,49 @@ TEST(CellAppMgr, InformCellLoad_UnknownAppIdIsIgnored) {
   EXPECT_TRUE(h.mgr.CellApps().empty());
 }
 
+TEST(CellAppMgr, InformCellLoadRequiresRegisteredSender) {
+  CellAppMgrHarness h;
+  InterfaceTable table;
+  RecordingChannel ch_a(h.dispatcher, table, MakePeerAddr(30001));
+  RecordingChannel ch_b(h.dispatcher, table, MakePeerAddr(30002));
+
+  cellappmgr::RegisterCellApp reg_a;
+  reg_a.internal_addr = MakePeerAddr(30001);
+  h.mgr.OnRegisterCellApp(reg_a.internal_addr, &ch_a, reg_a);
+  cellappmgr::RegisterCellApp reg_b;
+  reg_b.internal_addr = MakePeerAddr(30002);
+  h.mgr.OnRegisterCellApp(reg_b.internal_addr, &ch_b, reg_b);
+
+  cellappmgr::CreateSpaceRequest csr;
+  csr.space_id = 42;
+  h.mgr.OnCreateSpaceRequest(Address{}, nullptr, csr);
+
+  auto& partition = h.mgr.SpacesForTest().at(42);
+  const auto app_a = h.mgr.CellApps().at(reg_a.internal_addr).app_id;
+  cellappmgr::InformCellLoad load;
+  load.app_id = app_a;
+  load.load = 0.8f;
+  load.entity_count = 10;
+  cellappmgr::InformCellLoad::CellReport rep;
+  rep.cell_id = partition.bsp.PrimaryCellId();
+  rep.entity_count = 10;
+  rep.geometry_version = partition.geometry_version;
+  rep.tick_load = 0.8f;
+  load.cells.push_back(rep);
+
+  h.mgr.OnInformCellLoad(reg_b.internal_addr, &ch_b, load);
+  const auto* leaf = partition.bsp.FindCellById(rep.cell_id);
+  ASSERT_NE(leaf, nullptr);
+  EXPECT_EQ(h.mgr.CellApps().at(reg_a.internal_addr).load, 0.f);
+  EXPECT_EQ(leaf->load, 0.f);
+
+  h.mgr.OnInformCellLoad(reg_a.internal_addr, &ch_a, load);
+  leaf = partition.bsp.FindCellById(rep.cell_id);
+  ASSERT_NE(leaf, nullptr);
+  EXPECT_FLOAT_EQ(h.mgr.CellApps().at(reg_a.internal_addr).load, 0.8f);
+  EXPECT_FLOAT_EQ(leaf->load, 0.8f);
+}
+
 TEST(CellAppMgr, InformCellLoad_PerCellReportFromNonOwnerIsIgnored) {
   CellAppMgrHarness h;
   cellappmgr::RegisterCellApp reg_a;
@@ -446,6 +766,7 @@ TEST(CellAppMgr, InformCellLoad_PerCellReportFromNonOwnerIsIgnored) {
   cellappmgr::RegisterCellApp reg_b;
   reg_b.internal_addr = MakePeerAddr(30002);
   h.mgr.OnRegisterCellApp(reg_b.internal_addr, nullptr, reg_b);
+  h.mgr.RegisterWatchersForTest();
 
   cellappmgr::CreateSpaceRequest csr;
   csr.space_id = 42;
@@ -526,6 +847,44 @@ TEST(CellAppMgr, CreateSpace_PicksLeastLoadedCellApp) {
   auto leaves = partition.bsp.Leaves();
   ASSERT_EQ(leaves.size(), 1u);
   EXPECT_EQ(leaves[0]->cellapp_addr, MakePeerAddr(30002));
+}
+
+TEST(CellAppMgr, CreateSpace_SkipsStaleLoadReportHosts) {
+  CellAppMgrHarness h;
+  h.mgr.RegisterWatchersForTest();
+
+  cellappmgr::RegisterCellApp reg;
+  reg.internal_addr = MakePeerAddr(30001);
+  h.mgr.OnRegisterCellApp(reg.internal_addr, nullptr, reg);
+  ASSERT_TRUE(h.mgr.GetWatcherRegistry().Set("cellappmgr/lb/load_report_stale_ms", "0"));
+
+  cellappmgr::CreateSpaceRequest csr;
+  csr.space_id = 77;
+  h.mgr.OnCreateSpaceRequest(Address{}, nullptr, csr);
+  h.mgr.OnCreateSpaceRequest(Address{}, nullptr, csr);
+
+  EXPECT_TRUE(h.mgr.Spaces().empty());
+  EXPECT_EQ(h.mgr.GetWatcherRegistry().Get("cellappmgr/lb/pending_space_creates"),
+            std::optional<std::string>("1"));
+  auto pending = h.mgr.GetWatcherRegistry().Get("cellappmgr/lb/pending_space_create_status");
+  ASSERT_TRUE(pending.has_value());
+  EXPECT_NE(pending->find("pending=1 assignable=0"), std::string::npos);
+  EXPECT_NE(pending->find("space=77"), std::string::npos);
+  ASSERT_TRUE(h.mgr.GetWatcherRegistry().Set("cellappmgr/lb/load_report_stale_ms", "3000"));
+
+  cellappmgr::InformCellLoad load;
+  load.app_id = 1;
+  load.load = 0.25f;
+  h.mgr.OnInformCellLoad(Address{}, nullptr, load);
+
+  ASSERT_EQ(h.mgr.Spaces().count(77), 1u);
+  const auto leaves = h.mgr.Spaces().at(77).bsp.Leaves();
+  ASSERT_EQ(leaves.size(), 1u);
+  EXPECT_EQ(leaves[0]->cellapp_addr, reg.internal_addr);
+  EXPECT_EQ(h.mgr.GetWatcherRegistry().Get("cellappmgr/lb/pending_space_creates"),
+            std::optional<std::string>("0"));
+  EXPECT_EQ(h.mgr.GetWatcherRegistry().Get("cellappmgr/lb/pending_space_create_status"),
+            std::optional<std::string>("pending=0"));
 }
 
 TEST(CellAppMgr, CreateSpace_TieBrokenByLowestAppId) {
@@ -614,6 +973,15 @@ TEST(CellAppMgr, SnapshotRestore_PreservesTopologyLoadAndNextIds) {
     rep.geometry_version = partition.geometry_version;
     rep.tick_load = load.load;
     rep.script_tick_us = first ? 7000u : 2000u;
+    rep.native_tick_us = first ? 1700u : 600u;
+    rep.x_buckets = first ? CellLoadBuckets{0, 1, 3, 3, 0, 0, 0, 0}
+                          : CellLoadBuckets{0, 0, 0, 0, 1, 1, 0, 0};
+    rep.z_buckets = first ? CellLoadBuckets{0, 0, 0, 0, 0, 0, 4, 3}
+                          : CellLoadBuckets{0, 0, 1, 1, 0, 0, 0, 0};
+    rep.x_load_buckets = first ? CellLoadCostBuckets{0, 100, 300, 300, 0, 0, 0, 0}
+                               : CellLoadCostBuckets{0, 0, 0, 0, 100, 100, 0, 0};
+    rep.z_load_buckets = first ? CellLoadCostBuckets{0, 0, 0, 0, 0, 0, 400, 300}
+                               : CellLoadCostBuckets{0, 0, 100, 100, 0, 0, 0, 0};
     load.cells.push_back(rep);
     h.mgr.OnInformCellLoad(Address{}, nullptr, load);
   }
@@ -636,6 +1004,11 @@ TEST(CellAppMgr, SnapshotRestore_PreservesTopologyLoadAndNextIds) {
   EXPECT_EQ(first_leaf->cellapp_addr, MakePeerAddr(30001));
   EXPECT_EQ(first_leaf->entity_count, 7u);
   EXPECT_EQ(first_leaf->script_tick_us, 7000u);
+  EXPECT_EQ(first_leaf->native_tick_us, 1700u);
+  EXPECT_EQ(first_leaf->x_buckets[2], 3u);
+  EXPECT_EQ(first_leaf->z_buckets[6], 4u);
+  EXPECT_EQ(first_leaf->x_load_buckets[2], 300u);
+  EXPECT_EQ(first_leaf->z_load_buckets[6], 400u);
 
   cellappmgr::RegisterCellApp reg_c;
   reg_c.internal_addr = MakePeerAddr(30003);
@@ -694,6 +1067,9 @@ TEST(CellAppMgr, SnapshotRestore_PreservesPendingGeometryBroadcast) {
   auto pending = h.mgr.GetWatcherRegistry().Get("cellappmgr/lb/pending_geometry_broadcasts");
   ASSERT_TRUE(pending.has_value());
   EXPECT_EQ(*pending, "1");
+  auto drains = h.mgr.GetWatcherRegistry().Get("cellappmgr/lb/retire/drain_count");
+  ASSERT_TRUE(drains.has_value());
+  EXPECT_EQ(*drains, "1");
 
   const auto snapshot = h.mgr.Snapshot();
   CellAppMgrHarness restored;
@@ -703,6 +1079,25 @@ TEST(CellAppMgr, SnapshotRestore_PreservesPendingGeometryBroadcast) {
   pending = restored.mgr.GetWatcherRegistry().Get("cellappmgr/lb/pending_geometry_broadcasts");
   ASSERT_TRUE(pending.has_value());
   EXPECT_EQ(*pending, "1");
+  EXPECT_EQ(restored.mgr.GetWatcherRegistry().Get(
+                "cellappmgr/ha/restore_gate_blocked_pending_geometry"),
+            std::optional<std::string>("1"));
+  auto gate_status = restored.mgr.GetWatcherRegistry().Get("cellappmgr/ha/restore_gate_status");
+  ASSERT_TRUE(gate_status.has_value());
+  EXPECT_NE(gate_status->find("state=closed"), std::string::npos);
+  EXPECT_NE(gate_status->find("blocked_pending_geometry=1"), std::string::npos);
+  drains = restored.mgr.GetWatcherRegistry().Get("cellappmgr/lb/retire/drain_count");
+  ASSERT_TRUE(drains.has_value());
+  EXPECT_EQ(*drains, "1");
+
+  std::this_thread::sleep_for(std::chrono::milliseconds(550));
+  restored.mgr.OnTickCompleteForTest();
+  pending = restored.mgr.GetWatcherRegistry().Get("cellappmgr/lb/pending_geometry_broadcasts");
+  ASSERT_TRUE(pending.has_value());
+  EXPECT_EQ(*pending, "1");
+  EXPECT_EQ(restored.mgr.GetWatcherRegistry().Get(
+                "cellappmgr/ha/restore_gate_blocked_pending_geometry"),
+            std::optional<std::string>("1"));
 
   cellappmgr::AddCellToSpaceAck ack;
   ack.space_id = 88;
@@ -710,7 +1105,43 @@ TEST(CellAppMgr, SnapshotRestore_PreservesPendingGeometryBroadcast) {
   restored.mgr.OnAddCellToSpaceAck(reg_a.internal_addr, nullptr, ack);
   pending = restored.mgr.GetWatcherRegistry().Get("cellappmgr/lb/pending_geometry_broadcasts");
   ASSERT_TRUE(pending.has_value());
+  EXPECT_EQ(*pending, "1");
+
+  restored.mgr.OnRegisterCellApp(reg_a.internal_addr, nullptr, reg_a);
+  restored.mgr.OnAddCellToSpaceAck(reg_a.internal_addr, nullptr, ack);
+  pending = restored.mgr.GetWatcherRegistry().Get("cellappmgr/lb/pending_geometry_broadcasts");
+  ASSERT_TRUE(pending.has_value());
   EXPECT_EQ(*pending, "0");
+  EXPECT_EQ(restored.mgr.GetWatcherRegistry().Get(
+                "cellappmgr/ha/restore_gate_blocked_pending_geometry"),
+            std::optional<std::string>("0"));
+  drains = restored.mgr.GetWatcherRegistry().Get("cellappmgr/lb/retire/drain_count");
+  ASSERT_TRUE(drains.has_value());
+  EXPECT_EQ(*drains, "1");
+
+  cellappmgr::InformCellLoad drained;
+  drained.app_id = app_b;
+  drained.load = 0.1f;
+  drained.entity_count = 0;
+  cellappmgr::InformCellLoad::CellReport report;
+  report.cell_id = b_cell_id;
+  report.entity_count = 0;
+  report.geometry_version = restored.mgr.Spaces().at(88).geometry_version;
+  drained.cells.push_back(report);
+  restored.mgr.OnInformCellLoad(reg_b.internal_addr, nullptr, drained);
+  drains = restored.mgr.GetWatcherRegistry().Get("cellappmgr/lb/retire/drain_count");
+  ASSERT_TRUE(drains.has_value());
+  EXPECT_EQ(*drains, "1");
+
+  restored.mgr.OnRegisterCellApp(reg_b.internal_addr, nullptr, reg_b);
+  restored.mgr.OnInformCellLoad(reg_b.internal_addr, nullptr, drained);
+  drains = restored.mgr.GetWatcherRegistry().Get("cellappmgr/lb/retire/drain_count");
+  ASSERT_TRUE(drains.has_value());
+  EXPECT_EQ(*drains, "0");
+  const auto status = restored.mgr.GetWatcherRegistry().Get("cellappmgr/lb/retire/status");
+  ASSERT_TRUE(status.has_value());
+  EXPECT_NE(status->find(std::format("app={} owned=0 drains=0 pending=0 ready=1", app_b)),
+            std::string::npos);
 }
 
 TEST(CellAppMgr, SnapshotRestore_ReattachPreservesAppIdAndReplaysGeometry) {
@@ -793,6 +1224,362 @@ TEST(CellAppMgr, SnapshotRestore_UnattachedCellAppsAreNotAssignable) {
   EXPECT_NE(summary->find("reattach=1"), std::string::npos);
 }
 
+TEST(CellAppMgr, SnapshotRestore_IgnoresLoadUntilReattach) {
+  CellAppMgrHarness h;
+  cellappmgr::RegisterCellApp reg;
+  reg.internal_addr = MakePeerAddr(30001);
+  h.mgr.OnRegisterCellApp(reg.internal_addr, nullptr, reg);
+
+  cellappmgr::CreateSpaceRequest csr;
+  csr.space_id = 42;
+  h.mgr.OnCreateSpaceRequest(Address{}, nullptr, csr);
+
+  const auto snapshot = h.mgr.Snapshot();
+  CellAppMgrHarness restored;
+  restored.mgr.RegisterWatchersForTest();
+  auto restore = restored.mgr.Restore(snapshot);
+  ASSERT_TRUE(restore.HasValue()) << restore.Error().Message();
+
+  auto& partition = restored.mgr.SpacesForTest().at(42);
+  const auto cell_id = partition.bsp.PrimaryCellId();
+  cellappmgr::InformCellLoad load;
+  load.app_id = 1;
+  load.load = 0.9f;
+  load.entity_count = 10;
+  load.cells.push_back({cell_id, 10u, 0.f, 0.f, partition.geometry_version});
+
+  restored.mgr.OnInformCellLoad(reg.internal_addr, nullptr, load);
+  const auto* leaf = partition.bsp.FindCellById(cell_id);
+  ASSERT_NE(leaf, nullptr);
+  EXPECT_EQ(restored.mgr.CellApps().at(reg.internal_addr).load, 0.f);
+  EXPECT_EQ(leaf->load, 0.f);
+  EXPECT_EQ(restored.mgr.GetWatcherRegistry().Get("cellappmgr/ha/reattach_pending"),
+            std::optional<std::string>("1"));
+
+  restored.mgr.OnRegisterCellApp(reg.internal_addr, nullptr, reg);
+  restored.mgr.OnInformCellLoad(reg.internal_addr, nullptr, load);
+  leaf = partition.bsp.FindCellById(cell_id);
+  ASSERT_NE(leaf, nullptr);
+  EXPECT_FLOAT_EQ(restored.mgr.CellApps().at(reg.internal_addr).load, 0.9f);
+  EXPECT_FLOAT_EQ(leaf->load, 0.9f);
+}
+
+TEST(CellAppMgr, SnapshotRestore_BlocksLoadBalanceUntilReattachCompletes) {
+  CellAppMgrHarness h;
+  cellappmgr::RegisterCellApp reg_a;
+  reg_a.internal_addr = MakePeerAddr(30001);
+  h.mgr.OnRegisterCellApp(reg_a.internal_addr, nullptr, reg_a);
+  cellappmgr::RegisterCellApp reg_b;
+  reg_b.internal_addr = MakePeerAddr(30002);
+  h.mgr.OnRegisterCellApp(reg_b.internal_addr, nullptr, reg_b);
+
+  cellappmgr::CreateSpaceRequest csr;
+  csr.space_id = 43;
+  csr.initial_cell_count = 2;
+  h.mgr.OnCreateSpaceRequest(Address{}, nullptr, csr);
+
+  auto& partition = h.mgr.SpacesForTest().at(43);
+  for (const auto* leaf : partition.bsp.Leaves()) {
+    const bool on_a = leaf->cellapp_addr == reg_a.internal_addr;
+    cellappmgr::InformCellLoad load;
+    load.app_id = h.mgr.CellApps().at(leaf->cellapp_addr).app_id;
+    load.load = on_a ? 0.9f : 0.1f;
+    load.entity_count = on_a ? 900u : 100u;
+    load.cells.push_back({leaf->cell_id, load.entity_count, 0.f, 0.f,
+                          partition.geometry_version});
+    h.mgr.OnInformCellLoad(Address{}, nullptr, load);
+  }
+
+  const auto snapshot = h.mgr.Snapshot();
+  CellAppMgrHarness restored;
+  auto restore = restored.mgr.Restore(snapshot);
+  ASSERT_TRUE(restore.HasValue()) << restore.Error().Message();
+
+  auto& restored_partition = restored.mgr.SpacesForTest().at(43);
+  const auto* a_before = restored_partition.bsp.FindCellById(1);
+  const auto* b_before = restored_partition.bsp.FindCellById(2);
+  ASSERT_NE(a_before, nullptr);
+  ASSERT_NE(b_before, nullptr);
+  const auto a_bounds = a_before->bounds;
+  const auto b_bounds = b_before->bounds;
+  const auto version = restored_partition.geometry_version;
+
+  for (int i = 0; i < 5; ++i) restored.mgr.TickLoadBalance();
+
+  const auto* a_pending = restored_partition.bsp.FindCellById(1);
+  const auto* b_pending = restored_partition.bsp.FindCellById(2);
+  ASSERT_NE(a_pending, nullptr);
+  ASSERT_NE(b_pending, nullptr);
+  ExpectBoundsEq(a_pending->bounds, a_bounds);
+  ExpectBoundsEq(b_pending->bounds, b_bounds);
+  EXPECT_EQ(restored_partition.geometry_version, version);
+
+  restored.mgr.OnRegisterCellApp(reg_a.internal_addr, nullptr, reg_a);
+  restored.mgr.OnRegisterCellApp(reg_b.internal_addr, nullptr, reg_b);
+  for (const auto* leaf : restored_partition.bsp.Leaves()) {
+    const bool on_a = leaf->cellapp_addr == reg_a.internal_addr;
+    cellappmgr::InformCellLoad load;
+    load.app_id = restored.mgr.CellApps().at(leaf->cellapp_addr).app_id;
+    load.load = on_a ? 0.9f : 0.1f;
+    load.entity_count = on_a ? 900u : 100u;
+    load.cells.push_back({leaf->cell_id, load.entity_count, 0.f, 0.f,
+                          restored_partition.geometry_version});
+    restored.mgr.OnInformCellLoad(Address{}, nullptr, load);
+  }
+
+  for (int i = 0; i < 5; ++i) restored.mgr.TickLoadBalance();
+
+  const auto* a_after = restored_partition.bsp.FindCellById(1);
+  const auto* b_after = restored_partition.bsp.FindCellById(2);
+  ASSERT_NE(a_after, nullptr);
+  ASSERT_NE(b_after, nullptr);
+  EXPECT_NE(a_after->bounds.max_x, a_bounds.max_x);
+  EXPECT_FLOAT_EQ(a_after->bounds.max_x, b_after->bounds.min_x);
+}
+
+TEST(CellAppMgr, SnapshotRestore_ReattachRegistryAuditPrunesMissingHostWithoutLeaves) {
+  CellAppMgrHarness h;
+  cellappmgr::RegisterCellApp reg_a;
+  reg_a.internal_addr = MakePeerAddr(30001);
+  h.mgr.OnRegisterCellApp(reg_a.internal_addr, nullptr, reg_a);
+  cellappmgr::RegisterCellApp reg_b;
+  reg_b.internal_addr = MakePeerAddr(30002);
+  h.mgr.OnRegisterCellApp(reg_b.internal_addr, nullptr, reg_b);
+
+  const auto snapshot = h.mgr.Snapshot();
+  CellAppMgrHarness restored;
+  auto restore = restored.mgr.Restore(snapshot);
+  ASSERT_TRUE(restore.HasValue()) << restore.Error().Message();
+  restored.mgr.RegisterWatchersForTest();
+
+  const std::vector registry{CellAppProcessInfo(MakePeerAddr(30003), "cellapp_c")};
+  restored.mgr.ApplyReattachRegistryAuditForTest(registry);
+
+  EXPECT_TRUE(restored.mgr.CellApps().empty());
+  EXPECT_EQ(restored.mgr.GetWatcherRegistry().Get("cellappmgr/ha/reattach_pending"),
+            std::optional<std::string>("0"));
+  EXPECT_EQ(restored.mgr.GetWatcherRegistry().Get("cellappmgr/ha/restore_gate_active"),
+            std::optional<std::string>("false"));
+  EXPECT_EQ(restored.mgr.GetWatcherRegistry().Get(
+                "cellappmgr/ha/reattach_registry_last_missing"),
+            std::optional<std::string>("2"));
+  EXPECT_EQ(restored.mgr.GetWatcherRegistry().Get(
+                "cellappmgr/ha/reattach_registry_last_blocked"),
+            std::optional<std::string>("0"));
+  EXPECT_EQ(restored.mgr.GetWatcherRegistry().Get(
+                "cellappmgr/ha/reattach_registry_reconciled_total"),
+            std::optional<std::string>("2"));
+}
+
+TEST(CellAppMgr, SnapshotRestore_ReattachRegistryAuditEmptyQueryDoesNotPrune) {
+  CellAppMgrHarness h;
+  cellappmgr::RegisterCellApp reg;
+  reg.internal_addr = MakePeerAddr(30001);
+  h.mgr.OnRegisterCellApp(reg.internal_addr, nullptr, reg);
+
+  const auto snapshot = h.mgr.Snapshot();
+  CellAppMgrHarness restored;
+  auto restore = restored.mgr.Restore(snapshot);
+  ASSERT_TRUE(restore.HasValue()) << restore.Error().Message();
+  restored.mgr.RegisterWatchersForTest();
+
+  std::vector<machined::ProcessInfo> registry;
+  restored.mgr.OnReattachRegistryAuditForTest(std::move(registry));
+
+  EXPECT_TRUE(restored.mgr.CellApps().contains(reg.internal_addr));
+  EXPECT_EQ(restored.mgr.GetWatcherRegistry().Get("cellappmgr/ha/reattach_pending"),
+            std::optional<std::string>("1"));
+  auto status = restored.mgr.GetWatcherRegistry().Get(
+      "cellappmgr/ha/reattach_registry_status");
+  ASSERT_TRUE(status.has_value());
+  EXPECT_NE(status->find("state=error"), std::string::npos);
+  EXPECT_NE(status->find("error_detail=cellapp_registry_query_returned_empty"),
+            std::string::npos);
+}
+
+TEST(CellAppMgr, SnapshotRestore_ReattachRegistryAuditRehomesMissingLeafHost) {
+  CellAppMgrHarness h;
+  cellappmgr::RegisterCellApp reg_a;
+  reg_a.internal_addr = MakePeerAddr(30001);
+  h.mgr.OnRegisterCellApp(reg_a.internal_addr, nullptr, reg_a);
+  cellappmgr::RegisterCellApp reg_b;
+  reg_b.internal_addr = MakePeerAddr(30002);
+  h.mgr.OnRegisterCellApp(reg_b.internal_addr, nullptr, reg_b);
+
+  cellappmgr::CreateSpaceRequest csr;
+  csr.space_id = 44;
+  h.mgr.OnCreateSpaceRequest(Address{}, nullptr, csr);
+
+  const auto snapshot = h.mgr.Snapshot();
+  CellAppMgrHarness restored;
+  auto restore = restored.mgr.Restore(snapshot);
+  ASSERT_TRUE(restore.HasValue()) << restore.Error().Message();
+  restored.mgr.RegisterWatchersForTest();
+  restored.mgr.OnRegisterCellApp(reg_b.internal_addr, nullptr, reg_b);
+
+  const std::vector registry{CellAppProcessInfo(reg_b.internal_addr, "cellapp_b")};
+  restored.mgr.ApplyReattachRegistryAuditForTest(registry);
+
+  EXPECT_FALSE(restored.mgr.CellApps().contains(reg_a.internal_addr));
+  EXPECT_EQ(restored.mgr.GetWatcherRegistry().Get("cellappmgr/ha/reattach_pending"),
+            std::optional<std::string>("0"));
+  const auto& partition = restored.mgr.Spaces().at(44);
+  const auto leaves = partition.bsp.Leaves();
+  ASSERT_EQ(leaves.size(), 1u);
+  EXPECT_EQ(leaves[0]->cellapp_addr, reg_b.internal_addr);
+  EXPECT_EQ(restored.mgr.GetWatcherRegistry().Get(
+                "cellappmgr/ha/reattach_registry_last_missing"),
+            std::optional<std::string>("1"));
+  EXPECT_EQ(restored.mgr.GetWatcherRegistry().Get(
+                "cellappmgr/ha/reattach_registry_last_blocked"),
+            std::optional<std::string>("0"));
+  EXPECT_EQ(restored.mgr.GetWatcherRegistry().Get(
+                "cellappmgr/ha/reattach_registry_reconciled_total"),
+            std::optional<std::string>("1"));
+}
+
+TEST(CellAppMgr, SnapshotRestore_ReattachRegistryAuditBlocksMissingLeafWithoutSurvivor) {
+  CellAppMgrHarness h;
+  cellappmgr::RegisterCellApp reg;
+  reg.internal_addr = MakePeerAddr(30001);
+  h.mgr.OnRegisterCellApp(reg.internal_addr, nullptr, reg);
+
+  cellappmgr::CreateSpaceRequest csr;
+  csr.space_id = 45;
+  h.mgr.OnCreateSpaceRequest(Address{}, nullptr, csr);
+
+  const auto snapshot = h.mgr.Snapshot();
+  CellAppMgrHarness restored;
+  auto restore = restored.mgr.Restore(snapshot);
+  ASSERT_TRUE(restore.HasValue()) << restore.Error().Message();
+  restored.mgr.RegisterWatchersForTest();
+
+  const std::vector registry{CellAppProcessInfo(MakePeerAddr(30002), "cellapp_b")};
+  restored.mgr.ApplyReattachRegistryAuditForTest(registry);
+
+  EXPECT_TRUE(restored.mgr.CellApps().contains(reg.internal_addr));
+  EXPECT_EQ(restored.mgr.GetWatcherRegistry().Get("cellappmgr/ha/reattach_pending"),
+            std::optional<std::string>("1"));
+  EXPECT_EQ(restored.mgr.GetWatcherRegistry().Get("cellappmgr/ha/restore_gate_active"),
+            std::optional<std::string>("true"));
+  EXPECT_EQ(restored.mgr.GetWatcherRegistry().Get(
+                "cellappmgr/ha/reattach_registry_last_missing"),
+            std::optional<std::string>("1"));
+  EXPECT_EQ(restored.mgr.GetWatcherRegistry().Get(
+                "cellappmgr/ha/reattach_registry_last_blocked"),
+            std::optional<std::string>("1"));
+  auto status = restored.mgr.GetWatcherRegistry().Get(
+      "cellappmgr/ha/reattach_registry_status");
+  ASSERT_TRUE(status.has_value());
+  EXPECT_NE(status->find("state=blocked"), std::string::npos);
+}
+
+TEST(CellAppMgr, SnapshotRestore_WatchersTrackReattachConvergence) {
+  CellAppMgrHarness h;
+  for (uint16_t port : {uint16_t{30001}, uint16_t{30002}}) {
+    cellappmgr::RegisterCellApp reg;
+    reg.internal_addr = MakePeerAddr(port);
+    h.mgr.OnRegisterCellApp(reg.internal_addr, nullptr, reg);
+  }
+  h.mgr.RegisterWatchersForTest();
+  EXPECT_EQ(h.mgr.GetWatcherRegistry().Get("cellappmgr/ha/reattach_state"),
+            std::optional<std::string>("idle"));
+  EXPECT_EQ(h.mgr.GetWatcherRegistry().Get("cellappmgr/ha/restore_gate_active"),
+            std::optional<std::string>("false"));
+  auto gate_status = h.mgr.GetWatcherRegistry().Get("cellappmgr/ha/restore_gate_status");
+  ASSERT_TRUE(gate_status.has_value());
+  EXPECT_NE(gate_status->find("state=open"), std::string::npos);
+
+  const auto snapshot = h.mgr.Snapshot();
+  CellAppMgrHarness restored;
+  auto restore = restored.mgr.Restore(snapshot);
+  ASSERT_TRUE(restore.HasValue()) << restore.Error().Message();
+  restored.mgr.RegisterWatchersForTest();
+
+  EXPECT_EQ(restored.mgr.GetWatcherRegistry().Get("cellappmgr/ha/restored_cellapps"),
+            std::optional<std::string>("2"));
+  EXPECT_EQ(restored.mgr.GetWatcherRegistry().Get("cellappmgr/ha/reattach_pending"),
+            std::optional<std::string>("2"));
+  EXPECT_EQ(restored.mgr.GetWatcherRegistry().Get("cellappmgr/ha/reattach_completed_count"),
+            std::optional<std::string>("0"));
+  EXPECT_EQ(restored.mgr.GetWatcherRegistry().Get("cellappmgr/ha/reattach_stuck"),
+            std::optional<std::string>("0"));
+  EXPECT_EQ(restored.mgr.GetWatcherRegistry().Get("cellappmgr/ha/reattach_completed"),
+            std::optional<std::string>("false"));
+  EXPECT_EQ(restored.mgr.GetWatcherRegistry().Get("cellappmgr/ha/reattach_state"),
+            std::optional<std::string>("pending"));
+  EXPECT_EQ(restored.mgr.GetWatcherRegistry().Get("cellappmgr/ha/restore_gate_active"),
+            std::optional<std::string>("true"));
+  gate_status = restored.mgr.GetWatcherRegistry().Get("cellappmgr/ha/restore_gate_status");
+  ASSERT_TRUE(gate_status.has_value());
+  EXPECT_NE(gate_status->find("state=closed"), std::string::npos);
+  EXPECT_NE(gate_status->find("pending_reattach=2"), std::string::npos);
+  auto status = restored.mgr.GetWatcherRegistry().Get("cellappmgr/ha/reattach_status");
+  ASSERT_TRUE(status.has_value());
+  EXPECT_NE(status->find("state=pending"), std::string::npos);
+  EXPECT_NE(status->find("restored=2 pending=2 completed=0"), std::string::npos);
+  EXPECT_NE(status->find("completed_count=0"), std::string::npos);
+  EXPECT_NE(status->find("app=1"), std::string::npos);
+
+  cellappmgr::RegisterCellApp reg_a;
+  reg_a.internal_addr = MakePeerAddr(30001);
+  restored.mgr.OnRegisterCellApp(reg_a.internal_addr, nullptr, reg_a);
+  EXPECT_EQ(restored.mgr.GetWatcherRegistry().Get("cellappmgr/ha/reattach_pending"),
+            std::optional<std::string>("1"));
+  EXPECT_EQ(restored.mgr.GetWatcherRegistry().Get("cellappmgr/ha/reattach_completed_count"),
+            std::optional<std::string>("1"));
+  EXPECT_EQ(restored.mgr.GetWatcherRegistry().Get("cellappmgr/ha/restore_gate_active"),
+            std::optional<std::string>("true"));
+
+  cellappmgr::RegisterCellApp reg_b;
+  reg_b.internal_addr = MakePeerAddr(30002);
+  restored.mgr.OnRegisterCellApp(reg_b.internal_addr, nullptr, reg_b);
+  EXPECT_EQ(restored.mgr.GetWatcherRegistry().Get("cellappmgr/ha/reattach_pending"),
+            std::optional<std::string>("0"));
+  EXPECT_EQ(restored.mgr.GetWatcherRegistry().Get("cellappmgr/ha/reattach_completed"),
+            std::optional<std::string>("true"));
+  EXPECT_EQ(restored.mgr.GetWatcherRegistry().Get("cellappmgr/ha/reattach_state"),
+            std::optional<std::string>("complete"));
+  EXPECT_EQ(restored.mgr.GetWatcherRegistry().Get("cellappmgr/ha/restore_gate_active"),
+            std::optional<std::string>("false"));
+  gate_status = restored.mgr.GetWatcherRegistry().Get("cellappmgr/ha/restore_gate_status");
+  ASSERT_TRUE(gate_status.has_value());
+  EXPECT_NE(gate_status->find("state=open"), std::string::npos);
+  EXPECT_NE(gate_status->find("pending_reattach=0"), std::string::npos);
+  status = restored.mgr.GetWatcherRegistry().Get("cellappmgr/ha/reattach_status");
+  ASSERT_TRUE(status.has_value());
+  EXPECT_NE(status->find("state=complete"), std::string::npos);
+  EXPECT_NE(status->find("restored=2 pending=0 completed=1"), std::string::npos);
+  EXPECT_NE(status->find("completed_count=2"), std::string::npos);
+  EXPECT_NE(status->find("state=attached"), std::string::npos);
+}
+
+TEST(CellAppMgr, SnapshotRestore_WatchersMarkReattachStuckAfterWatchdog) {
+  CellAppMgrHarness h;
+  cellappmgr::RegisterCellApp reg;
+  reg.internal_addr = MakePeerAddr(30001);
+  h.mgr.OnRegisterCellApp(reg.internal_addr, nullptr, reg);
+
+  const auto snapshot = h.mgr.Snapshot();
+  CellAppMgrHarness restored;
+  auto restore = restored.mgr.Restore(snapshot);
+  ASSERT_TRUE(restore.HasValue()) << restore.Error().Message();
+  restored.mgr.RegisterWatchersForTest();
+  ASSERT_TRUE(restored.mgr.GetWatcherRegistry().Set("cellappmgr/ha/reattach_watchdog_ms", "0"));
+
+  EXPECT_EQ(restored.mgr.GetWatcherRegistry().Get("cellappmgr/ha/reattach_pending"),
+            std::optional<std::string>("1"));
+  EXPECT_EQ(restored.mgr.GetWatcherRegistry().Get("cellappmgr/ha/reattach_stuck"),
+            std::optional<std::string>("1"));
+  EXPECT_EQ(restored.mgr.GetWatcherRegistry().Get("cellappmgr/ha/reattach_state"),
+            std::optional<std::string>("stuck"));
+  auto status = restored.mgr.GetWatcherRegistry().Get("cellappmgr/ha/reattach_status");
+  ASSERT_TRUE(status.has_value());
+  EXPECT_NE(status->find("state=stuck"), std::string::npos);
+  EXPECT_NE(status->find("restored=1 pending=1 completed=0 stuck=1"), std::string::npos);
+  EXPECT_NE(status->find("completed_count=0"), std::string::npos);
+}
+
 TEST(CellAppMgr, SnapshotFileRoundTripRestoresTopology) {
   CellAppMgrHarness h;
   for (uint16_t port : {uint16_t{30001}, uint16_t{30002}}) {
@@ -805,25 +1592,880 @@ TEST(CellAppMgr, SnapshotFileRoundTripRestoresTopology) {
   csr.space_id = 102;
   csr.initial_cell_count = 2;
   h.mgr.OnCreateSpaceRequest(Address{}, nullptr, csr);
+  h.mgr.RegisterWatchersForTest();
 
   const auto stamp = std::chrono::steady_clock::now().time_since_epoch().count();
   const auto path = std::filesystem::temp_directory_path() /
                     std::format("atlas_cellappmgr_snapshot_{}_{}.bin", 102, stamp);
   ASSERT_TRUE(h.mgr.SaveSnapshotToFile(path).HasValue());
+  auto attempt_age = WatcherInt64ForTest(h.mgr.GetWatcherRegistry(),
+                                         "cellappmgr/ha/snapshot_last_save_attempt_age_ms");
+  ASSERT_TRUE(attempt_age.has_value());
+  EXPECT_GE(*attempt_age, 0);
+  auto save_age = WatcherInt64ForTest(h.mgr.GetWatcherRegistry(),
+                                      "cellappmgr/ha/snapshot_last_save_age_ms");
+  ASSERT_TRUE(save_age.has_value());
+  EXPECT_GE(*save_age, 0);
+  EXPECT_EQ(h.mgr.GetWatcherRegistry().Get("cellappmgr/ha/snapshot_last_save_path"),
+            std::optional<std::string>(path.string()));
+  auto save_topology =
+      h.mgr.GetWatcherRegistry().Get("cellappmgr/ha/snapshot_last_save_topology");
+  ASSERT_TRUE(save_topology.has_value());
+  EXPECT_NE(save_topology->find("spaces=1"), std::string::npos);
+  EXPECT_NE(save_topology->find("space=102"), std::string::npos);
+  EXPECT_NE(save_topology->find("leaves=2"), std::string::npos);
+  EXPECT_NE(save_topology->find("pending_ack=0"), std::string::npos);
+  EXPECT_EQ(save_topology->find("load="), std::string::npos);
+  EXPECT_EQ(
+      h.mgr.GetWatcherRegistry().Get("cellappmgr/ha/snapshot_last_save_topology_pending_ack"),
+      std::optional<std::string>("0"));
+  EXPECT_EQ(h.mgr.GetWatcherRegistry().Get("cellappmgr/ha/snapshot_last_save_error"),
+            std::optional<std::string>(""));
+  EXPECT_EQ(h.mgr.GetWatcherRegistry().Get("cellappmgr/ha/snapshot_save_stale"),
+            std::optional<std::string>("false"));
+  EXPECT_EQ(h.mgr.GetWatcherRegistry().Get("cellappmgr/ha/snapshot_saves"),
+            std::optional<std::string>("1"));
+  EXPECT_EQ(h.mgr.GetWatcherRegistry().Get("cellappmgr/ha/snapshot_file_present"),
+            std::optional<std::string>("true"));
+  auto file_bytes =
+      WatcherInt64ForTest(h.mgr.GetWatcherRegistry(), "cellappmgr/ha/snapshot_file_bytes");
+  ASSERT_TRUE(file_bytes.has_value());
+  EXPECT_GT(*file_bytes, 0);
+  auto file_status = h.mgr.GetWatcherRegistry().Get("cellappmgr/ha/snapshot_file_status");
+  ASSERT_TRUE(file_status.has_value());
+  EXPECT_NE(file_status->find("state=ready"), std::string::npos);
+  EXPECT_NE(file_status->find("present=1"), std::string::npos);
+  EXPECT_NE(file_status->find("valid=1"), std::string::npos);
+  EXPECT_NE(file_status->find("error_present=0"), std::string::npos);
+  EXPECT_NE(file_status->find("error_detail=none"), std::string::npos);
+  auto file_topology_status =
+      h.mgr.GetWatcherRegistry().Get("cellappmgr/ha/snapshot_file_topology_status");
+  ASSERT_TRUE(file_topology_status.has_value());
+  EXPECT_NE(file_topology_status->find("state=ready"), std::string::npos);
+  EXPECT_NE(file_topology_status->find("restorable=1"), std::string::npos);
+  EXPECT_NE(file_topology_status->find("topology_present=1"), std::string::npos);
+  EXPECT_NE(file_topology_status->find("topology_pending_ack=0"), std::string::npos);
+  EXPECT_NE(file_topology_status->find("matches_expected=1"), std::string::npos);
+  EXPECT_NE(file_topology_status->find("error_present=0"), std::string::npos);
+  EXPECT_NE(file_topology_status->find("error_detail=none"), std::string::npos);
+  auto save_status = h.mgr.GetWatcherRegistry().Get("cellappmgr/ha/snapshot_status");
+  ASSERT_TRUE(save_status.has_value());
+  EXPECT_NE(save_status->find("state=disabled"), std::string::npos);
+  EXPECT_NE(save_status->find("saves=1"), std::string::npos);
+  EXPECT_NE(save_status->find("topology_present=1"), std::string::npos);
+  EXPECT_NE(save_status->find("topology_pending_ack=0"), std::string::npos);
+  EXPECT_NE(save_status->find("error_present=0"), std::string::npos);
+  EXPECT_NE(save_status->find("error_detail=none"), std::string::npos);
 
   CellAppMgrHarness restored;
+  restored.mgr.RegisterWatchersForTest();
   auto restore = restored.mgr.RestoreSnapshotFromFile(path);
   ASSERT_TRUE(restore.HasValue()) << restore.Error().Message();
   ASSERT_TRUE(restored.mgr.Spaces().contains(102));
   EXPECT_EQ(restored.mgr.Spaces().at(102).bsp.Leaves().size(), 2u);
   EXPECT_TRUE(restored.mgr.CellApps().at(MakePeerAddr(30001)).needs_reattach);
+  EXPECT_EQ(restored.mgr.GetWatcherRegistry().Get("cellappmgr/ha/snapshot_last_restore_source"),
+            std::optional<std::string>("primary"));
+  auto restore_status =
+      restored.mgr.GetWatcherRegistry().Get("cellappmgr/ha/snapshot_restore_status");
+  ASSERT_TRUE(restore_status.has_value());
+  EXPECT_NE(restore_status->find("state=primary"), std::string::npos);
+  EXPECT_NE(restore_status->find("source=primary"), std::string::npos);
+  EXPECT_NE(restore_status->find("restores=1"), std::string::npos);
+  EXPECT_NE(restore_status->find("error_present=0"), std::string::npos);
+  EXPECT_NE(restore_status->find("error_detail=none"), std::string::npos);
+  EXPECT_NE(restore_status->find("primary_error_present=0"), std::string::npos);
+  EXPECT_NE(restore_status->find("primary_error_detail=none"), std::string::npos);
+  EXPECT_NE(restore_status->find("topology_present=1"), std::string::npos);
+  EXPECT_NE(restore_status->find("topology_pending_ack=0"), std::string::npos);
+  auto restore_attempt_age =
+      WatcherInt64ForTest(restored.mgr.GetWatcherRegistry(),
+                          "cellappmgr/ha/snapshot_last_restore_attempt_age_ms");
+  ASSERT_TRUE(restore_attempt_age.has_value());
+  EXPECT_GE(*restore_attempt_age, 0);
+  auto restore_age = WatcherInt64ForTest(restored.mgr.GetWatcherRegistry(),
+                                         "cellappmgr/ha/snapshot_last_restore_age_ms");
+  ASSERT_TRUE(restore_age.has_value());
+  EXPECT_GE(*restore_age, 0);
+  EXPECT_EQ(restored.mgr.GetWatcherRegistry().Get("cellappmgr/ha/snapshot_last_restore_path"),
+            std::optional<std::string>(path.string()));
+  auto restore_topology =
+      restored.mgr.GetWatcherRegistry().Get("cellappmgr/ha/snapshot_last_restore_topology");
+  ASSERT_TRUE(restore_topology.has_value());
+  EXPECT_NE(restore_topology->find("spaces=1"), std::string::npos);
+  EXPECT_NE(restore_topology->find("space=102"), std::string::npos);
+  EXPECT_NE(restore_topology->find("leaves=2"), std::string::npos);
+  EXPECT_NE(restore_topology->find("pending_ack=0"), std::string::npos);
+  EXPECT_EQ(restore_topology->find("load="), std::string::npos);
+  EXPECT_EQ(restored.mgr.GetWatcherRegistry().Get(
+                "cellappmgr/ha/snapshot_last_restore_topology_pending_ack"),
+            std::optional<std::string>("0"));
+  EXPECT_EQ(restored.mgr.GetWatcherRegistry().Get("cellappmgr/ha/snapshot_last_restore_error"),
+            std::optional<std::string>(""));
+  EXPECT_EQ(
+      restored.mgr.GetWatcherRegistry().Get(
+          "cellappmgr/ha/snapshot_last_restore_primary_error"),
+      std::optional<std::string>(""));
   std::error_code ec;
   std::filesystem::remove(path, ec);
 }
 
-// ============================================================================
-// CellApp death
-// ============================================================================
+TEST(CellAppMgr, SnapshotFileRestoreFallsBackToBackup) {
+  CellAppMgrHarness h;
+  cellappmgr::RegisterCellApp reg;
+  reg.internal_addr = MakePeerAddr(30001);
+  h.mgr.OnRegisterCellApp(reg.internal_addr, nullptr, reg);
+
+  const auto stamp = std::chrono::steady_clock::now().time_since_epoch().count();
+  const auto path = std::filesystem::temp_directory_path() /
+                    std::format("atlas_cellappmgr_snapshot_fallback_{}.bin", stamp);
+  auto backup_path = path;
+  backup_path += ".bak";
+  std::error_code ec;
+  std::filesystem::remove(path, ec);
+  std::filesystem::remove(backup_path, ec);
+  h.mgr.RegisterWatchersForTest();
+
+  cellappmgr::CreateSpaceRequest first;
+  first.space_id = 201;
+  h.mgr.OnCreateSpaceRequest(Address{}, nullptr, first);
+  ASSERT_TRUE(h.mgr.SaveSnapshotToFile(path).HasValue());
+  EXPECT_EQ(h.mgr.GetWatcherRegistry().Get("cellappmgr/ha/snapshot_backup_path"),
+            std::optional<std::string>(backup_path.string()));
+  EXPECT_EQ(h.mgr.GetWatcherRegistry().Get("cellappmgr/ha/snapshot_backup_present"),
+            std::optional<std::string>("false"));
+  EXPECT_EQ(h.mgr.GetWatcherRegistry().Get("cellappmgr/ha/snapshot_backup_bytes"),
+            std::optional<std::string>("0"));
+  auto backup_status = h.mgr.GetWatcherRegistry().Get("cellappmgr/ha/snapshot_backup_status");
+  ASSERT_TRUE(backup_status.has_value());
+  EXPECT_NE(backup_status->find("state=missing"), std::string::npos);
+  EXPECT_NE(backup_status->find("present=0"), std::string::npos);
+  EXPECT_NE(backup_status->find("bytes=0"), std::string::npos);
+  EXPECT_NE(backup_status->find("valid=0"), std::string::npos);
+
+  cellappmgr::CreateSpaceRequest second;
+  second.space_id = 202;
+  h.mgr.OnCreateSpaceRequest(Address{}, nullptr, second);
+  ASSERT_TRUE(h.mgr.SaveSnapshotToFile(path).HasValue());
+  ASSERT_TRUE(fs::Exists(backup_path));
+  EXPECT_EQ(h.mgr.GetWatcherRegistry().Get("cellappmgr/ha/snapshot_backup_present"),
+            std::optional<std::string>("true"));
+  auto backup_bytes =
+      WatcherInt64ForTest(h.mgr.GetWatcherRegistry(), "cellappmgr/ha/snapshot_backup_bytes");
+  ASSERT_TRUE(backup_bytes.has_value());
+  EXPECT_GT(*backup_bytes, 0);
+  backup_status = h.mgr.GetWatcherRegistry().Get("cellappmgr/ha/snapshot_backup_status");
+  ASSERT_TRUE(backup_status.has_value());
+  EXPECT_NE(backup_status->find("state=ready"), std::string::npos);
+  EXPECT_NE(backup_status->find("present=1"), std::string::npos);
+  EXPECT_NE(backup_status->find("valid=1"), std::string::npos);
+  EXPECT_NE(backup_status->find("error_present=0"), std::string::npos);
+  EXPECT_NE(backup_status->find("error_detail=none"), std::string::npos);
+  auto backup_topology_status =
+      h.mgr.GetWatcherRegistry().Get("cellappmgr/ha/snapshot_backup_topology_status");
+  ASSERT_TRUE(backup_topology_status.has_value());
+  EXPECT_NE(backup_topology_status->find("state=ready"), std::string::npos);
+  EXPECT_NE(backup_topology_status->find("restorable=1"), std::string::npos);
+  EXPECT_NE(backup_topology_status->find("topology_present=1"), std::string::npos);
+  EXPECT_NE(backup_topology_status->find("topology_pending_ack=0"), std::string::npos);
+  EXPECT_NE(backup_topology_status->find("error_present=0"), std::string::npos);
+  EXPECT_NE(backup_topology_status->find("error_detail=none"), std::string::npos);
+
+  ASSERT_TRUE(fs::WriteTextFile(path, "corrupt").HasValue());
+  auto corrupt_status = h.mgr.GetWatcherRegistry().Get("cellappmgr/ha/snapshot_file_status");
+  ASSERT_TRUE(corrupt_status.has_value());
+  EXPECT_NE(corrupt_status->find("state=invalid"), std::string::npos);
+  EXPECT_NE(corrupt_status->find("valid=0"), std::string::npos);
+  EXPECT_NE(corrupt_status->find("error_present=1"), std::string::npos);
+  EXPECT_NE(corrupt_status->find("error_detail=CellAppMgr_snapshot_header"),
+            std::string::npos);
+  auto corrupt_topology_status =
+      h.mgr.GetWatcherRegistry().Get("cellappmgr/ha/snapshot_file_topology_status");
+  ASSERT_TRUE(corrupt_topology_status.has_value());
+  EXPECT_NE(corrupt_topology_status->find("state=invalid"), std::string::npos);
+  EXPECT_NE(corrupt_topology_status->find("restorable=0"), std::string::npos);
+  EXPECT_NE(corrupt_topology_status->find("topology_present=0"), std::string::npos);
+  EXPECT_NE(corrupt_topology_status->find("error_present=1"), std::string::npos);
+  EXPECT_NE(corrupt_topology_status->find("error_detail=CellAppMgr_snapshot_header"),
+            std::string::npos);
+
+  CellAppMgrHarness restored;
+  restored.mgr.RegisterWatchersForTest();
+  auto restore = restored.mgr.RestoreSnapshotFromFile(path);
+  ASSERT_TRUE(restore.HasValue()) << restore.Error().Message();
+  EXPECT_TRUE(restored.mgr.Spaces().contains(201));
+  EXPECT_FALSE(restored.mgr.Spaces().contains(202));
+  EXPECT_EQ(restored.mgr.GetWatcherRegistry().Get("cellappmgr/ha/snapshot_restores"),
+            std::optional<std::string>("1"));
+  EXPECT_EQ(restored.mgr.GetWatcherRegistry().Get("cellappmgr/ha/snapshot_fallback_restores"),
+            std::optional<std::string>("1"));
+  EXPECT_EQ(restored.mgr.GetWatcherRegistry().Get("cellappmgr/ha/snapshot_save_failures"),
+            std::optional<std::string>("0"));
+  EXPECT_EQ(restored.mgr.GetWatcherRegistry().Get("cellappmgr/ha/snapshot_restore_failures"),
+            std::optional<std::string>("0"));
+  EXPECT_EQ(restored.mgr.GetWatcherRegistry().Get("cellappmgr/ha/snapshot_failures"),
+            std::optional<std::string>("0"));
+  EXPECT_EQ(restored.mgr.GetWatcherRegistry().Get("cellappmgr/ha/snapshot_last_restore_source"),
+            std::optional<std::string>("backup"));
+  auto restore_status =
+      restored.mgr.GetWatcherRegistry().Get("cellappmgr/ha/snapshot_restore_status");
+  ASSERT_TRUE(restore_status.has_value());
+  EXPECT_NE(restore_status->find("state=fallback"), std::string::npos);
+  EXPECT_NE(restore_status->find("source=backup"), std::string::npos);
+  EXPECT_NE(restore_status->find("fallback_restores=1"), std::string::npos);
+  EXPECT_NE(restore_status->find("error_present=0"), std::string::npos);
+  EXPECT_NE(restore_status->find("error_detail=none"), std::string::npos);
+  EXPECT_NE(restore_status->find("primary_error_present=1"), std::string::npos);
+  EXPECT_NE(restore_status->find("primary_error_detail=CellAppMgr_snapshot_header"),
+            std::string::npos);
+  EXPECT_NE(restore_status->find("topology_present=1"), std::string::npos);
+  EXPECT_NE(restore_status->find("topology_pending_ack=0"), std::string::npos);
+  auto restore_attempt_age =
+      WatcherInt64ForTest(restored.mgr.GetWatcherRegistry(),
+                          "cellappmgr/ha/snapshot_last_restore_attempt_age_ms");
+  ASSERT_TRUE(restore_attempt_age.has_value());
+  EXPECT_GE(*restore_attempt_age, 0);
+  auto restore_age = WatcherInt64ForTest(restored.mgr.GetWatcherRegistry(),
+                                         "cellappmgr/ha/snapshot_last_restore_age_ms");
+  ASSERT_TRUE(restore_age.has_value());
+  EXPECT_GE(*restore_age, 0);
+  EXPECT_EQ(restored.mgr.GetWatcherRegistry().Get("cellappmgr/ha/snapshot_last_restore_path"),
+            std::optional<std::string>(backup_path.string()));
+  auto restore_topology =
+      restored.mgr.GetWatcherRegistry().Get("cellappmgr/ha/snapshot_last_restore_topology");
+  ASSERT_TRUE(restore_topology.has_value());
+  EXPECT_NE(restore_topology->find("space=201"), std::string::npos);
+  EXPECT_EQ(restore_topology->find("space=202"), std::string::npos);
+  EXPECT_EQ(restored.mgr.GetWatcherRegistry().Get(
+                "cellappmgr/ha/snapshot_last_restore_topology_pending_ack"),
+            std::optional<std::string>("0"));
+  EXPECT_EQ(restored.mgr.GetWatcherRegistry().Get("cellappmgr/ha/snapshot_last_restore_error"),
+            std::optional<std::string>(""));
+  auto primary_error =
+      restored.mgr.GetWatcherRegistry().Get(
+          "cellappmgr/ha/snapshot_last_restore_primary_error");
+  ASSERT_TRUE(primary_error.has_value());
+  EXPECT_NE(primary_error->find("header truncated"), std::string::npos);
+
+  std::filesystem::remove(path, ec);
+  std::filesystem::remove(backup_path, ec);
+}
+
+TEST(CellAppMgr, SnapshotFileRestoreFallsBackWhenPrimaryMissing) {
+  CellAppMgrHarness h;
+  cellappmgr::RegisterCellApp reg;
+  reg.internal_addr = MakePeerAddr(30001);
+  h.mgr.OnRegisterCellApp(reg.internal_addr, nullptr, reg);
+
+  const auto stamp = std::chrono::steady_clock::now().time_since_epoch().count();
+  const auto path = std::filesystem::temp_directory_path() /
+                    std::format("atlas_cellappmgr_snapshot_backup_only_{}.bin", stamp);
+  auto backup_path = path;
+  backup_path += ".bak";
+  std::error_code ec;
+  std::filesystem::remove(path, ec);
+  std::filesystem::remove(backup_path, ec);
+
+  cellappmgr::CreateSpaceRequest req;
+  req.space_id = 203;
+  h.mgr.OnCreateSpaceRequest(Address{}, nullptr, req);
+  ASSERT_TRUE(h.mgr.SaveSnapshotToFile(path).HasValue());
+  std::filesystem::rename(path, backup_path, ec);
+  ASSERT_FALSE(ec) << ec.message();
+  EXPECT_FALSE(fs::Exists(path));
+  EXPECT_TRUE(fs::Exists(backup_path));
+
+  CellAppMgrHarness restored;
+  restored.mgr.RegisterWatchersForTest();
+  auto restore = restored.mgr.RestoreSnapshotFromFile(path);
+  ASSERT_TRUE(restore.HasValue()) << restore.Error().Message();
+  EXPECT_TRUE(restored.mgr.Spaces().contains(203));
+  EXPECT_EQ(restored.mgr.GetWatcherRegistry().Get("cellappmgr/ha/snapshot_restores"),
+            std::optional<std::string>("1"));
+  EXPECT_EQ(restored.mgr.GetWatcherRegistry().Get("cellappmgr/ha/snapshot_fallback_restores"),
+            std::optional<std::string>("1"));
+  EXPECT_EQ(restored.mgr.GetWatcherRegistry().Get("cellappmgr/ha/snapshot_restore_failures"),
+            std::optional<std::string>("0"));
+  EXPECT_EQ(restored.mgr.GetWatcherRegistry().Get("cellappmgr/ha/snapshot_failures"),
+            std::optional<std::string>("0"));
+  EXPECT_EQ(restored.mgr.GetWatcherRegistry().Get("cellappmgr/ha/snapshot_last_restore_source"),
+            std::optional<std::string>("backup"));
+  EXPECT_EQ(restored.mgr.GetWatcherRegistry().Get("cellappmgr/ha/snapshot_last_restore_path"),
+            std::optional<std::string>(backup_path.string()));
+  EXPECT_EQ(restored.mgr.GetWatcherRegistry().Get("cellappmgr/ha/snapshot_last_restore_error"),
+            std::optional<std::string>(""));
+  auto primary_error =
+      restored.mgr.GetWatcherRegistry().Get(
+          "cellappmgr/ha/snapshot_last_restore_primary_error");
+  ASSERT_TRUE(primary_error.has_value());
+  EXPECT_NE(primary_error->find("snapshot file not found"), std::string::npos);
+  auto restore_status =
+      restored.mgr.GetWatcherRegistry().Get("cellappmgr/ha/snapshot_restore_status");
+  ASSERT_TRUE(restore_status.has_value());
+  EXPECT_NE(restore_status->find("state=fallback"), std::string::npos);
+  EXPECT_NE(restore_status->find("source=backup"), std::string::npos);
+  EXPECT_NE(restore_status->find("fallback_restores=1"), std::string::npos);
+  EXPECT_NE(restore_status->find("error_present=0"), std::string::npos);
+  EXPECT_NE(restore_status->find("error_detail=none"), std::string::npos);
+  EXPECT_NE(restore_status->find("primary_error_present=1"), std::string::npos);
+  EXPECT_NE(restore_status->find("primary_error_detail=snapshot_file_not_found"),
+            std::string::npos);
+  EXPECT_NE(restore_status->find("topology_present=1"), std::string::npos);
+  EXPECT_NE(restore_status->find("topology_pending_ack=0"), std::string::npos);
+  auto restore_topology =
+      restored.mgr.GetWatcherRegistry().Get("cellappmgr/ha/snapshot_last_restore_topology");
+  ASSERT_TRUE(restore_topology.has_value());
+  EXPECT_NE(restore_topology->find("space=203"), std::string::npos);
+  EXPECT_EQ(restored.mgr.GetWatcherRegistry().Get(
+                "cellappmgr/ha/snapshot_last_restore_topology_pending_ack"),
+            std::optional<std::string>("0"));
+
+  std::filesystem::remove(backup_path, ec);
+}
+
+TEST(CellAppMgr, SnapshotFileRestoreFailsWhenPrimaryMissingAndBackupCorrupt) {
+  const auto stamp = std::chrono::steady_clock::now().time_since_epoch().count();
+  const auto path = std::filesystem::temp_directory_path() /
+                    std::format("atlas_cellappmgr_snapshot_missing_{}.bin", stamp);
+  auto backup_path = path;
+  backup_path += ".bak";
+  std::error_code ec;
+  std::filesystem::remove(path, ec);
+  std::filesystem::remove(backup_path, ec);
+
+  ASSERT_TRUE(fs::WriteTextFile(backup_path, "corrupt").HasValue());
+
+  CellAppMgrHarness restored;
+  restored.mgr.RegisterWatchersForTest();
+  auto restore = restored.mgr.RestoreSnapshotFromFile(path);
+  ASSERT_FALSE(restore.HasValue());
+  EXPECT_EQ(restore.Error().Code(), ErrorCode::kInvalidArgument);
+  EXPECT_NE(std::string(restore.Error().Message()).find("header truncated"),
+            std::string::npos);
+  EXPECT_EQ(restored.mgr.GetWatcherRegistry().Get("cellappmgr/ha/snapshot_restores"),
+            std::optional<std::string>("0"));
+  EXPECT_EQ(restored.mgr.GetWatcherRegistry().Get("cellappmgr/ha/snapshot_fallback_restores"),
+            std::optional<std::string>("0"));
+  EXPECT_EQ(restored.mgr.GetWatcherRegistry().Get("cellappmgr/ha/snapshot_save_failures"),
+            std::optional<std::string>("0"));
+  EXPECT_EQ(restored.mgr.GetWatcherRegistry().Get("cellappmgr/ha/snapshot_restore_failures"),
+            std::optional<std::string>("1"));
+  EXPECT_EQ(restored.mgr.GetWatcherRegistry().Get("cellappmgr/ha/snapshot_failures"),
+            std::optional<std::string>("1"));
+  EXPECT_EQ(restored.mgr.GetWatcherRegistry().Get("cellappmgr/ha/snapshot_last_restore_source"),
+            std::optional<std::string>("none"));
+  auto restore_status =
+      restored.mgr.GetWatcherRegistry().Get("cellappmgr/ha/snapshot_restore_status");
+  ASSERT_TRUE(restore_status.has_value());
+  EXPECT_NE(restore_status->find("state=failed"), std::string::npos);
+  EXPECT_NE(restore_status->find("restore_failures=1"), std::string::npos);
+  EXPECT_NE(restore_status->find("error_present=1"), std::string::npos);
+  EXPECT_NE(restore_status->find("error_detail=CellAppMgr_snapshot_header"),
+            std::string::npos);
+  EXPECT_NE(restore_status->find("primary_error_present=1"), std::string::npos);
+  EXPECT_NE(restore_status->find("primary_error_detail=snapshot_file_not_found"),
+            std::string::npos);
+  EXPECT_NE(restore_status->find("topology_present=0"), std::string::npos);
+  EXPECT_NE(restore_status->find("topology_pending_ack=0"), std::string::npos);
+  auto restore_attempt_age =
+      WatcherInt64ForTest(restored.mgr.GetWatcherRegistry(),
+                          "cellappmgr/ha/snapshot_last_restore_attempt_age_ms");
+  ASSERT_TRUE(restore_attempt_age.has_value());
+  EXPECT_GE(*restore_attempt_age, 0);
+  EXPECT_EQ(restored.mgr.GetWatcherRegistry().Get("cellappmgr/ha/snapshot_last_restore_age_ms"),
+            std::optional<std::string>("-1"));
+  EXPECT_EQ(restored.mgr.GetWatcherRegistry().Get("cellappmgr/ha/snapshot_last_restore_path"),
+            std::optional<std::string>(""));
+  EXPECT_EQ(
+      restored.mgr.GetWatcherRegistry().Get("cellappmgr/ha/snapshot_last_restore_topology"),
+      std::optional<std::string>(""));
+  EXPECT_EQ(restored.mgr.GetWatcherRegistry().Get(
+                "cellappmgr/ha/snapshot_last_restore_topology_pending_ack"),
+            std::optional<std::string>("0"));
+  auto last_error =
+      restored.mgr.GetWatcherRegistry().Get("cellappmgr/ha/snapshot_last_restore_error");
+  ASSERT_TRUE(last_error.has_value());
+  EXPECT_NE(last_error->find("header truncated"), std::string::npos);
+  auto primary_error =
+      restored.mgr.GetWatcherRegistry().Get(
+          "cellappmgr/ha/snapshot_last_restore_primary_error");
+  ASSERT_TRUE(primary_error.has_value());
+  EXPECT_NE(primary_error->find("snapshot file not found"), std::string::npos);
+
+  std::filesystem::remove(backup_path, ec);
+}
+
+TEST(CellAppMgr, SnapshotFileRestoreMissingPrimaryAndBackupDoesNotCountFailure) {
+  const auto stamp = std::chrono::steady_clock::now().time_since_epoch().count();
+  const auto path = std::filesystem::temp_directory_path() /
+                    std::format("atlas_cellappmgr_snapshot_absent_{}.bin", stamp);
+  auto backup_path = path;
+  backup_path += ".bak";
+  std::error_code ec;
+  std::filesystem::remove(path, ec);
+  std::filesystem::remove(backup_path, ec);
+
+  CellAppMgrHarness restored;
+  restored.mgr.RegisterWatchersForTest();
+  auto restore = restored.mgr.RestoreSnapshotFromFile(path);
+  ASSERT_FALSE(restore.HasValue());
+  EXPECT_EQ(restore.Error().Code(), ErrorCode::kNotFound);
+  EXPECT_EQ(restored.mgr.GetWatcherRegistry().Get("cellappmgr/ha/snapshot_restores"),
+            std::optional<std::string>("0"));
+  EXPECT_EQ(restored.mgr.GetWatcherRegistry().Get("cellappmgr/ha/snapshot_save_failures"),
+            std::optional<std::string>("0"));
+  EXPECT_EQ(restored.mgr.GetWatcherRegistry().Get("cellappmgr/ha/snapshot_restore_failures"),
+            std::optional<std::string>("0"));
+  EXPECT_EQ(restored.mgr.GetWatcherRegistry().Get("cellappmgr/ha/snapshot_failures"),
+            std::optional<std::string>("0"));
+  EXPECT_EQ(restored.mgr.GetWatcherRegistry().Get("cellappmgr/ha/snapshot_last_restore_source"),
+            std::optional<std::string>("none"));
+  auto restore_status =
+      restored.mgr.GetWatcherRegistry().Get("cellappmgr/ha/snapshot_restore_status");
+  ASSERT_TRUE(restore_status.has_value());
+  EXPECT_NE(restore_status->find("state=missing"), std::string::npos);
+  EXPECT_NE(restore_status->find("restored=0"), std::string::npos);
+  EXPECT_NE(restore_status->find("error_present=0"), std::string::npos);
+  EXPECT_NE(restore_status->find("error_detail=none"), std::string::npos);
+  EXPECT_NE(restore_status->find("primary_error_present=0"), std::string::npos);
+  EXPECT_NE(restore_status->find("primary_error_detail=none"), std::string::npos);
+  EXPECT_NE(restore_status->find("topology_present=0"), std::string::npos);
+  EXPECT_NE(restore_status->find("topology_pending_ack=0"), std::string::npos);
+  auto restore_attempt_age =
+      WatcherInt64ForTest(restored.mgr.GetWatcherRegistry(),
+                          "cellappmgr/ha/snapshot_last_restore_attempt_age_ms");
+  ASSERT_TRUE(restore_attempt_age.has_value());
+  EXPECT_GE(*restore_attempt_age, 0);
+  EXPECT_EQ(restored.mgr.GetWatcherRegistry().Get("cellappmgr/ha/snapshot_last_restore_age_ms"),
+            std::optional<std::string>("-1"));
+  EXPECT_EQ(restored.mgr.GetWatcherRegistry().Get("cellappmgr/ha/snapshot_last_restore_path"),
+            std::optional<std::string>(""));
+  EXPECT_EQ(
+      restored.mgr.GetWatcherRegistry().Get("cellappmgr/ha/snapshot_last_restore_topology"),
+      std::optional<std::string>(""));
+  EXPECT_EQ(restored.mgr.GetWatcherRegistry().Get(
+                "cellappmgr/ha/snapshot_last_restore_topology_pending_ack"),
+            std::optional<std::string>("0"));
+  EXPECT_EQ(restored.mgr.GetWatcherRegistry().Get("cellappmgr/ha/snapshot_last_restore_error"),
+            std::optional<std::string>(""));
+  EXPECT_EQ(
+      restored.mgr.GetWatcherRegistry().Get(
+          "cellappmgr/ha/snapshot_last_restore_primary_error"),
+      std::optional<std::string>(""));
+}
+
+TEST(CellAppMgr, SnapshotFileRestoreFailureClearsPreviousRestoreTopology) {
+  CellAppMgrHarness h;
+  cellappmgr::RegisterCellApp reg;
+  reg.internal_addr = MakePeerAddr(30001);
+  h.mgr.OnRegisterCellApp(reg.internal_addr, nullptr, reg);
+
+  cellappmgr::CreateSpaceRequest req;
+  req.space_id = 204;
+  h.mgr.OnCreateSpaceRequest(Address{}, nullptr, req);
+
+  const auto stamp = std::chrono::steady_clock::now().time_since_epoch().count();
+  const auto path = std::filesystem::temp_directory_path() /
+                    std::format("atlas_cellappmgr_snapshot_restore_retry_{}.bin", stamp);
+  auto backup_path = path;
+  backup_path += ".bak";
+  std::error_code ec;
+  std::filesystem::remove(path, ec);
+  std::filesystem::remove(backup_path, ec);
+  ASSERT_TRUE(h.mgr.SaveSnapshotToFile(path).HasValue());
+
+  CellAppMgrHarness restored;
+  restored.mgr.RegisterWatchersForTest();
+  auto restore = restored.mgr.RestoreSnapshotFromFile(path);
+  ASSERT_TRUE(restore.HasValue()) << restore.Error().Message();
+  auto restore_topology =
+      restored.mgr.GetWatcherRegistry().Get("cellappmgr/ha/snapshot_last_restore_topology");
+  ASSERT_TRUE(restore_topology.has_value());
+  EXPECT_NE(restore_topology->find("space=204"), std::string::npos);
+
+  ASSERT_TRUE(fs::WriteTextFile(path, "corrupt").HasValue());
+  std::filesystem::remove(backup_path, ec);
+  restore = restored.mgr.RestoreSnapshotFromFile(path);
+  ASSERT_FALSE(restore.HasValue());
+  EXPECT_EQ(
+      restored.mgr.GetWatcherRegistry().Get("cellappmgr/ha/snapshot_last_restore_topology"),
+      std::optional<std::string>(""));
+  auto restore_status =
+      restored.mgr.GetWatcherRegistry().Get("cellappmgr/ha/snapshot_restore_status");
+  ASSERT_TRUE(restore_status.has_value());
+  EXPECT_NE(restore_status->find("state=failed"), std::string::npos);
+  EXPECT_NE(restore_status->find("topology_present=0"), std::string::npos);
+  EXPECT_NE(restore_status->find("topology_pending_ack=0"), std::string::npos);
+
+  std::filesystem::remove(path, ec);
+}
+
+TEST(CellAppMgr, SaveSnapshotToFileRecordsLastSaveError) {
+  const auto stamp = std::chrono::steady_clock::now().time_since_epoch().count();
+  const auto path = std::filesystem::temp_directory_path() /
+                    std::format("atlas_cellappmgr_snapshot_dir_{}", stamp);
+  std::error_code ec;
+  std::filesystem::remove_all(path, ec);
+  ASSERT_TRUE(fs::CreateDirectories(path).HasValue());
+
+  CellAppMgrHarness h;
+  h.mgr.RegisterWatchersForTest();
+  auto save = h.mgr.SaveSnapshotToFile(path);
+  ASSERT_FALSE(save.HasValue());
+  EXPECT_EQ(save.Error().Code(), ErrorCode::kIoError);
+  EXPECT_EQ(h.mgr.GetWatcherRegistry().Get("cellappmgr/ha/snapshot_last_save_path"),
+            std::optional<std::string>(path.string()));
+  auto attempt_age = WatcherInt64ForTest(h.mgr.GetWatcherRegistry(),
+                                         "cellappmgr/ha/snapshot_last_save_attempt_age_ms");
+  ASSERT_TRUE(attempt_age.has_value());
+  EXPECT_GE(*attempt_age, 0);
+  EXPECT_EQ(h.mgr.GetWatcherRegistry().Get("cellappmgr/ha/snapshot_last_save_age_ms"),
+            std::optional<std::string>("-1"));
+  EXPECT_EQ(h.mgr.GetWatcherRegistry().Get("cellappmgr/ha/snapshot_save_failures"),
+            std::optional<std::string>("1"));
+  EXPECT_EQ(h.mgr.GetWatcherRegistry().Get("cellappmgr/ha/snapshot_restore_failures"),
+            std::optional<std::string>("0"));
+  EXPECT_EQ(h.mgr.GetWatcherRegistry().Get("cellappmgr/ha/snapshot_failures"),
+            std::optional<std::string>("1"));
+  EXPECT_EQ(h.mgr.GetWatcherRegistry().Get("cellappmgr/ha/snapshot_save_stale"),
+            std::optional<std::string>("false"));
+  auto status = h.mgr.GetWatcherRegistry().Get("cellappmgr/ha/snapshot_status");
+  ASSERT_TRUE(status.has_value());
+  EXPECT_NE(status->find("state=disabled"), std::string::npos);
+  EXPECT_NE(status->find("save_failures=1"), std::string::npos);
+  EXPECT_NE(status->find("error_present=1"), std::string::npos);
+  EXPECT_NE(status->find("error_detail="), std::string::npos);
+  EXPECT_EQ(status->find("error_detail=none"), std::string::npos);
+  auto last_error = h.mgr.GetWatcherRegistry().Get("cellappmgr/ha/snapshot_last_save_error");
+  ASSERT_TRUE(last_error.has_value());
+  EXPECT_FALSE(last_error->empty());
+  EXPECT_EQ(*last_error, std::string(save.Error().Message()));
+
+  std::filesystem::remove_all(path, ec);
+}
+
+TEST(CellAppMgr, SaveSnapshotToFileSkipsBackupWhenMainFileCorrupt) {
+  const auto stamp = std::chrono::steady_clock::now().time_since_epoch().count();
+  const auto path = std::filesystem::temp_directory_path() /
+                    std::format("atlas_cellappmgr_backup_skip_{}.bin", stamp);
+  auto backup_path = path;
+  backup_path += ".bak";
+  std::error_code ec;
+  std::filesystem::remove(path, ec);
+  std::filesystem::remove(backup_path, ec);
+
+  ASSERT_TRUE(fs::WriteTextFile(path, "corrupt-existing-main-file").HasValue());
+
+  CellAppMgrHarness h;
+  h.mgr.RegisterWatchersForTest();
+  auto save = h.mgr.SaveSnapshotToFile(path);
+  ASSERT_TRUE(save.HasValue());
+
+  EXPECT_EQ(h.mgr.GetWatcherRegistry().Get("cellappmgr/ha/snapshot_backup_skips"),
+            std::optional<std::string>("1"));
+  EXPECT_EQ(h.mgr.GetWatcherRegistry().Get("cellappmgr/ha/snapshot_save_failures"),
+            std::optional<std::string>("0"));
+  EXPECT_TRUE(std::filesystem::exists(path));
+
+  std::filesystem::remove(path, ec);
+  std::filesystem::remove(backup_path, ec);
+}
+
+TEST(CellAppMgr, SnapshotSizeHighWaterPctReflectsLastSaveBytes) {
+  const auto stamp = std::chrono::steady_clock::now().time_since_epoch().count();
+  const auto path = std::filesystem::temp_directory_path() /
+                    std::format("atlas_cellappmgr_size_water_{}.bin", stamp);
+  std::error_code ec;
+  std::filesystem::remove(path, ec);
+
+  CellAppMgrHarness h;
+  h.mgr.RegisterWatchersForTest();
+  EXPECT_EQ(h.mgr.GetWatcherRegistry().Get("cellappmgr/ha/snapshot_size_high_water_pct"),
+            std::optional<std::string>("0"));
+  auto save = h.mgr.SaveSnapshotToFile(path);
+  ASSERT_TRUE(save.HasValue());
+  auto pct = h.mgr.GetWatcherRegistry().Get("cellappmgr/ha/snapshot_size_high_water_pct");
+  ASSERT_TRUE(pct.has_value());
+  EXPECT_EQ(*pct, std::string("0"));  // tiny snapshot vs 16 MiB cap → rounds to 0%
+  auto max_bytes = h.mgr.GetWatcherRegistry().Get("cellappmgr/ha/snapshot_max_bytes");
+  ASSERT_TRUE(max_bytes.has_value());
+  EXPECT_NE(*max_bytes, std::string("0"));
+
+  std::filesystem::remove(path, ec);
+}
+
+TEST(CellAppMgr, PeriodicSnapshotFailuresRespectInterval) {
+  const auto stamp = std::chrono::steady_clock::now().time_since_epoch().count();
+  const auto path = std::filesystem::temp_directory_path() /
+                    std::format("atlas_cellappmgr_periodic_snapshot_dir_{}", stamp);
+  std::error_code ec;
+  std::filesystem::remove_all(path, ec);
+
+  EventDispatcher dispatcher{"cellappmgr-periodic-snapshot-failure"};
+  NetworkInterface network{dispatcher};
+  FailingPeriodicSnapshotCellAppMgr mgr{dispatcher, network};
+  std::vector<std::string> args{
+      "atlas_cellappmgr_test",
+      "--type",
+      "cellappmgr",
+      "--name",
+      "cellappmgr_periodic_snapshot_failure",
+      "--internal-port",
+      "0",
+      "--machined",
+      "127.0.0.1:9",
+      "--snapshot-path",
+      path.string(),
+      "--snapshot-interval-ms",
+      "60000",
+      "--log-level",
+      "critical",
+      "--update-hertz",
+      "100"};
+  std::vector<char*> argv;
+  argv.reserve(args.size());
+  for (auto& arg : args) argv.push_back(arg.data());
+
+  ASSERT_EQ(mgr.RunApp(static_cast<int>(argv.size()), argv.data()), 0);
+  EXPECT_EQ(mgr.PeriodicSnapshotFailuresForTest(), "1");
+  auto attempt_age = WatcherInt64ForTest(mgr.GetWatcherRegistry(),
+                                         "cellappmgr/ha/snapshot_last_save_attempt_age_ms");
+  ASSERT_TRUE(attempt_age.has_value());
+  EXPECT_GE(*attempt_age, 0);
+  EXPECT_EQ(mgr.GetWatcherRegistry().Get("cellappmgr/ha/snapshot_last_save_age_ms"),
+            std::optional<std::string>("-1"));
+  EXPECT_EQ(mgr.GetWatcherRegistry().Get("cellappmgr/ha/snapshot_save_failures"),
+            std::optional<std::string>("2"));
+  EXPECT_EQ(mgr.GetWatcherRegistry().Get("cellappmgr/ha/snapshot_restore_failures"),
+            std::optional<std::string>("0"));
+  EXPECT_EQ(mgr.GetWatcherRegistry().Get("cellappmgr/ha/snapshot_failures"),
+            std::optional<std::string>("2"));
+  EXPECT_EQ(mgr.GetWatcherRegistry().Get("cellappmgr/ha/snapshot_save_stale"),
+            std::optional<std::string>("true"));
+  auto status = mgr.GetWatcherRegistry().Get("cellappmgr/ha/snapshot_status");
+  ASSERT_TRUE(status.has_value());
+  EXPECT_NE(status->find("state=stale"), std::string::npos);
+  EXPECT_NE(status->find("saves=0"), std::string::npos);
+  EXPECT_NE(status->find("save_failures=2"), std::string::npos);
+  EXPECT_NE(status->find("error_present=1"), std::string::npos);
+  EXPECT_NE(status->find("error_detail="), std::string::npos);
+  EXPECT_EQ(status->find("error_detail=none"), std::string::npos);
+
+  std::filesystem::remove_all(path, ec);
+}
+
+TEST(CellAppMgr, DirtyTopologySnapshotFlushesBeforePeriodicInterval) {
+  const auto stamp = std::chrono::steady_clock::now().time_since_epoch().count();
+  const auto path = std::filesystem::temp_directory_path() /
+                    std::format("atlas_cellappmgr_dirty_snapshot_{}.bin", stamp);
+  std::error_code ec;
+  std::filesystem::remove(path, ec);
+
+  EventDispatcher dispatcher{"cellappmgr-dirty-snapshot"};
+  NetworkInterface network{dispatcher};
+  DirtySnapshotCellAppMgr mgr{dispatcher, network};
+  std::vector<std::string> args{
+      "atlas_cellappmgr_test",
+      "--type",
+      "cellappmgr",
+      "--name",
+      "cellappmgr_dirty_snapshot",
+      "--internal-port",
+      "0",
+      "--machined",
+      "127.0.0.1:9",
+      "--snapshot-path",
+      path.string(),
+      "--snapshot-interval-ms",
+      "60000",
+      "--log-level",
+      "critical",
+      "--update-hertz",
+      "100"};
+  std::vector<char*> argv;
+  argv.reserve(args.size());
+  for (auto& arg : args) argv.push_back(arg.data());
+
+  ASSERT_EQ(mgr.RunApp(static_cast<int>(argv.size()), argv.data()), 0);
+  EXPECT_EQ(mgr.DirtyBeforeFlushForTest(), "true");
+  EXPECT_EQ(mgr.DirtyAfterFlushForTest(), "false");
+  EXPECT_TRUE(mgr.DirtyReasonAfterFlushForTest().empty());
+  EXPECT_EQ(mgr.SavesAfterFlushForTest(), "1");
+  EXPECT_NE(mgr.StatusAfterFlushForTest().find("state=healthy"), std::string::npos);
+  EXPECT_NE(mgr.StatusAfterFlushForTest().find("dirty=0"), std::string::npos);
+  EXPECT_NE(mgr.StatusAfterFlushForTest().find("dirty_reason=none"), std::string::npos);
+  EXPECT_TRUE(fs::Exists(path));
+
+  CellAppMgrHarness restored;
+  auto restore = restored.mgr.RestoreSnapshotFromFile(path);
+  ASSERT_TRUE(restore.HasValue()) << restore.Error().Message();
+  ASSERT_TRUE(restored.mgr.Spaces().contains(302));
+  EXPECT_TRUE(restored.mgr.CellApps().contains(MakePeerAddr(30201)));
+  std::filesystem::remove(path, ec);
+}
+
+TEST(CellAppMgr, ShutdownSavesConfiguredSnapshot) {
+  const auto stamp = std::chrono::steady_clock::now().time_since_epoch().count();
+  const auto path = std::filesystem::temp_directory_path() /
+                    std::format("atlas_cellappmgr_shutdown_snapshot_{}.bin", stamp);
+  std::error_code ec;
+  std::filesystem::remove(path, ec);
+
+  EventDispatcher dispatcher{"cellappmgr-shutdown-snapshot"};
+  NetworkInterface network{dispatcher};
+  ShutdownSnapshotCellAppMgr mgr{dispatcher, network};
+  std::vector<std::string> args{
+      "atlas_cellappmgr_test",
+      "--type",
+      "cellappmgr",
+      "--name",
+      "cellappmgr_shutdown_snapshot",
+      "--internal-port",
+      "0",
+      "--machined",
+      "127.0.0.1:9",
+      "--snapshot-path",
+      path.string(),
+      "--snapshot-interval-ms",
+      "0",
+      "--log-level",
+      "critical",
+      "--update-hertz",
+      "100"};
+  std::vector<char*> argv;
+  argv.reserve(args.size());
+  for (auto& arg : args) argv.push_back(arg.data());
+
+  ASSERT_EQ(mgr.RunApp(static_cast<int>(argv.size()), argv.data()), 0);
+  ASSERT_TRUE(fs::Exists(path));
+  EXPECT_EQ(mgr.GetWatcherRegistry().Get("cellappmgr/ha/snapshot_saves"),
+            std::optional<std::string>("1"));
+  auto attempt_age = WatcherInt64ForTest(mgr.GetWatcherRegistry(),
+                                         "cellappmgr/ha/snapshot_last_save_attempt_age_ms");
+  ASSERT_TRUE(attempt_age.has_value());
+  EXPECT_GE(*attempt_age, 0);
+  auto save_age = WatcherInt64ForTest(mgr.GetWatcherRegistry(),
+                                      "cellappmgr/ha/snapshot_last_save_age_ms");
+  ASSERT_TRUE(save_age.has_value());
+  EXPECT_GE(*save_age, 0);
+  EXPECT_EQ(mgr.GetWatcherRegistry().Get("cellappmgr/ha/snapshot_save_stale"),
+            std::optional<std::string>("false"));
+  auto status = mgr.GetWatcherRegistry().Get("cellappmgr/ha/snapshot_status");
+  ASSERT_TRUE(status.has_value());
+  EXPECT_NE(status->find("state=healthy"), std::string::npos);
+  EXPECT_NE(status->find("saves=1"), std::string::npos);
+  EXPECT_NE(status->find("error_present=0"), std::string::npos);
+  EXPECT_NE(status->find("error_detail=none"), std::string::npos);
+
+  CellAppMgrHarness restored;
+  auto restore = restored.mgr.RestoreSnapshotFromFile(path);
+  ASSERT_TRUE(restore.HasValue()) << restore.Error().Message();
+  ASSERT_TRUE(restored.mgr.Spaces().contains(301));
+  EXPECT_TRUE(restored.mgr.CellApps().contains(MakePeerAddr(30101)));
+  std::filesystem::remove(path, ec);
+}
+
+TEST(CellAppMgr, SnapshotRestore_RejectsUnsupportedVersion) {
+  CellAppMgrHarness h;
+  const auto snapshot = h.mgr.Snapshot();
+  auto corrupted = snapshot;
+  ASSERT_GT(corrupted.size(), 8u);
+  corrupted[4] = std::byte{99};
+  corrupted[5] = std::byte{0};
+  corrupted[6] = std::byte{0};
+  corrupted[7] = std::byte{0};
+
+  CellAppMgrHarness restored;
+  auto restore = restored.mgr.Restore(corrupted);
+  ASSERT_FALSE(restore.HasValue());
+  EXPECT_EQ(restore.Error().Code(), ErrorCode::kInvalidArgument);
+  EXPECT_NE(std::string(restore.Error().Message()).find("unsupported version"),
+            std::string::npos);
+}
+
+TEST(CellAppMgr, SnapshotRestore_RejectsChecksumMismatch) {
+  CellAppMgrHarness h;
+  const auto snapshot = h.mgr.Snapshot();
+  auto corrupted = snapshot;
+  ASSERT_GT(corrupted.size(), 24u);
+  corrupted.back() ^= std::byte{0x01};
+
+  CellAppMgrHarness restored;
+  auto restore = restored.mgr.Restore(corrupted);
+  ASSERT_FALSE(restore.HasValue());
+  EXPECT_EQ(restore.Error().Code(), ErrorCode::kInvalidArgument);
+  EXPECT_NE(std::string(restore.Error().Message()).find("checksum"), std::string::npos);
+}
+
+TEST(CellAppMgr, SnapshotRestore_RejectsDuplicateAppIds) {
+  CellAppMgrHarness h;
+  for (uint16_t port : {uint16_t{30001}, uint16_t{30002}}) {
+    cellappmgr::RegisterCellApp reg;
+    reg.internal_addr = MakePeerAddr(port);
+    h.mgr.OnRegisterCellApp(reg.internal_addr, nullptr, reg);
+  }
+
+  auto payload = SnapshotPayloadForTest(h.mgr.Snapshot());
+  ASSERT_FALSE(payload.empty());
+  const auto first = CellAppRecordOffsetForTest(payload, 0);
+  const auto second = CellAppRecordOffsetForTest(payload, 1);
+  ASSERT_TRUE(first.has_value());
+  ASSERT_TRUE(second.has_value());
+  constexpr std::size_t app_id_offset = sizeof(uint32_t) + sizeof(uint16_t);
+  const auto first_app_id =
+      ReadLittleAtForTest<uint32_t>(payload, *first + app_id_offset);
+  PatchLittleAtForTest<uint32_t>(payload, *second + app_id_offset, first_app_id);
+  const auto corrupted = SnapshotWithPayloadForTest(
+      std::span<const std::byte>(payload.data(), payload.size()));
+
+  CellAppMgrHarness restored;
+  auto restore = restored.mgr.Restore(corrupted);
+  ASSERT_FALSE(restore.HasValue());
+  EXPECT_EQ(restore.Error().Code(), ErrorCode::kInvalidArgument);
+  EXPECT_NE(std::string(restore.Error().Message()).find("duplicate app_id"),
+            std::string::npos);
+}
+
+TEST(CellAppMgr, SnapshotRestore_RejectsUnknownLeafCellApp) {
+  CellAppMgrHarness h;
+  cellappmgr::RegisterCellApp reg;
+  reg.internal_addr = MakePeerAddr(30001);
+  h.mgr.OnRegisterCellApp(reg.internal_addr, nullptr, reg);
+
+  cellappmgr::CreateSpaceRequest csr;
+  csr.space_id = 121;
+  h.mgr.OnCreateSpaceRequest(Address{}, nullptr, csr);
+
+  auto payload = SnapshotPayloadForTest(h.mgr.Snapshot());
+  ASSERT_FALSE(payload.empty());
+  const auto record = CellAppRecordOffsetForTest(payload, 0);
+  ASSERT_TRUE(record.has_value());
+  PatchLittleAtForTest<uint16_t>(payload, *record + sizeof(uint32_t), 31001);
+  const auto corrupted = SnapshotWithPayloadForTest(
+      std::span<const std::byte>(payload.data(), payload.size()));
+
+  CellAppMgrHarness restored;
+  auto restore = restored.mgr.Restore(corrupted);
+  ASSERT_FALSE(restore.HasValue());
+  EXPECT_EQ(restore.Error().Code(), ErrorCode::kInvalidArgument);
+  EXPECT_NE(std::string(restore.Error().Message()).find("unknown leaf cellapp"),
+            std::string::npos);
+}
+
+TEST(CellAppMgr, RestoreSnapshotFromFileRejectsCorruptBytes) {
+  const auto stamp = std::chrono::steady_clock::now().time_since_epoch().count();
+  const auto path = std::filesystem::temp_directory_path() /
+                    std::format("atlas_cellappmgr_snapshot_corrupt_{}.bin", stamp);
+  ASSERT_TRUE(fs::WriteTextFile(path, "corrupt").HasValue());
+
+  CellAppMgrHarness restored;
+  auto restore = restored.mgr.RestoreSnapshotFromFile(path);
+  ASSERT_FALSE(restore.HasValue());
+  EXPECT_EQ(restore.Error().Code(), ErrorCode::kInvalidArgument);
+
+  std::error_code ec;
+  std::filesystem::remove(path, ec);
+}
 
 TEST(CellAppMgr, CellAppDeath_RemovesPeer) {
   CellAppMgrHarness h;
@@ -834,6 +2476,44 @@ TEST(CellAppMgr, CellAppDeath_RemovesPeer) {
 
   h.mgr.OnCellAppDeath(reg.internal_addr, 1);
   EXPECT_TRUE(h.mgr.CellApps().empty());
+}
+
+TEST(CellAppMgr, CellAppDeath_RemovesPendingGeometryForDeadTarget) {
+  CellAppMgrHarness h;
+  h.mgr.RegisterWatchersForTest();
+
+  cellappmgr::RegisterCellApp reg_a;
+  reg_a.internal_addr = MakePeerAddr(30001);
+  h.mgr.OnRegisterCellApp(reg_a.internal_addr, nullptr, reg_a);
+
+  cellappmgr::CreateSpaceRequest csr;
+  csr.space_id = 122;
+  h.mgr.OnCreateSpaceRequest(Address{}, nullptr, csr);
+
+  const auto primary = h.mgr.Spaces().at(122).bsp.PrimaryCellId();
+  cellappmgr::InformCellLoad load;
+  load.app_id = h.mgr.CellApps().at(reg_a.internal_addr).app_id;
+  load.load = 0.9f;
+  load.entity_count = 10;
+  load.cells.push_back({primary, 10u, 0.f, 0.f, h.mgr.Spaces().at(122).geometry_version});
+  h.mgr.OnInformCellLoad(Address{}, nullptr, load);
+
+  cellappmgr::RegisterCellApp reg_b;
+  reg_b.internal_addr = MakePeerAddr(30002);
+  h.mgr.OnRegisterCellApp(reg_b.internal_addr, nullptr, reg_b);
+
+  auto pending = h.mgr.GetWatcherRegistry().Get("cellappmgr/lb/pending_geometry_broadcasts");
+  ASSERT_TRUE(pending.has_value());
+  ASSERT_EQ(*pending, "1");
+
+  h.mgr.OnCellAppDeath(reg_b.internal_addr, 1);
+  pending = h.mgr.GetWatcherRegistry().Get("cellappmgr/lb/pending_geometry_broadcasts");
+  ASSERT_TRUE(pending.has_value());
+  EXPECT_EQ(*pending, "0");
+
+  CellAppMgrHarness restored;
+  auto restore = restored.mgr.Restore(h.mgr.Snapshot());
+  ASSERT_TRUE(restore.HasValue()) << restore.Error().Message();
 }
 
 TEST(CellAppMgr, CellAppDeath_UnknownAddrSilent) {
@@ -852,6 +2532,7 @@ TEST(CellAppMgr, CellAppDeath_UnsplitsOrphanedLeafIntoSibling) {
   cellappmgr::RegisterCellApp reg_b;
   reg_b.internal_addr = MakePeerAddr(30002);
   h.mgr.OnRegisterCellApp(reg_b.internal_addr, nullptr, reg_b);
+  h.mgr.RegisterWatchersForTest();
 
   cellappmgr::CreateSpaceRequest csr;
   csr.space_id = 7;
@@ -873,6 +2554,15 @@ TEST(CellAppMgr, CellAppDeath_UnsplitsOrphanedLeafIntoSibling) {
   EXPECT_EQ(after.bsp.PrimaryCellId(), 999u);
   EXPECT_EQ(after.bsp.Leaves()[0]->cellapp_addr, reg_b.internal_addr);
   EXPECT_EQ(after.bsp.FindCellById(primary_id_before), nullptr);
+  const auto decision = h.mgr.GetWatcherRegistry().Get("cellappmgr/lb/last_decision");
+  ASSERT_TRUE(decision.has_value());
+  EXPECT_NE(decision->find("action=unsplit"), std::string::npos);
+  EXPECT_NE(decision->find("reason=cellapp-death"), std::string::npos);
+  EXPECT_NE(decision->find("detail=sibling_absorb=1,broadcast_pending=1"), std::string::npos);
+  EXPECT_NE(decision->find("before_leaves=2,after_leaves=1"), std::string::npos);
+  EXPECT_NE(decision->find("leaf_changes=2"), std::string::npos);
+  EXPECT_NE(decision->find(std::format("{}{{app:", primary_id_before)), std::string::npos);
+  EXPECT_NE(decision->find("->missing"), std::string::npos);
 }
 
 TEST(CellAppMgr, CellAppDeath_RehomeNotificationUsesAbsorbingSibling) {
@@ -929,6 +2619,7 @@ TEST(CellAppMgr, CellAppDeath_RehomesLeavesToSurvivor) {
   cellappmgr::RegisterCellApp reg_b;
   reg_b.internal_addr = MakePeerAddr(30002);
   h.mgr.OnRegisterCellApp(reg_b.internal_addr, nullptr, reg_b);
+  h.mgr.RegisterWatchersForTest();
 
   // Space is created on whichever mgr picks — that's the to-be-killed
   // peer in this test (app_id 1 wins the tie on lowest app_id at zero
@@ -954,6 +2645,14 @@ TEST(CellAppMgr, CellAppDeath_RehomesLeavesToSurvivor) {
       << "dead leaf must rehome to the surviving peer";
   EXPECT_EQ(h.mgr.CellApps().size(), 1u);
   EXPECT_EQ(h.mgr.CellApps().begin()->second.internal_addr, reg_b.internal_addr);
+  const auto decision = h.mgr.GetWatcherRegistry().Get("cellappmgr/lb/last_decision");
+  ASSERT_TRUE(decision.has_value());
+  EXPECT_NE(decision->find("action=rehome"), std::string::npos);
+  EXPECT_NE(decision->find("reason=cellapp-death"), std::string::npos);
+  EXPECT_NE(decision->find("detail=add_cell=1,broadcast_pending=1"), std::string::npos);
+  EXPECT_NE(decision->find("before_leaves=1,after_leaves=1"), std::string::npos);
+  EXPECT_NE(decision->find("leaf_changes=1"), std::string::npos);
+  EXPECT_NE(decision->find("app:1->2"), std::string::npos);
 }
 
 // Multi-leaf Space: several leaves on the dead app all get rehomed to
@@ -1090,11 +2789,13 @@ TEST(CellAppMgr, TickLoadBalance_AsymmetricLoad_MovesSplitAndRebroadcasts) {
   load_a.app_id = app_id_a;
   load_a.load = 0.9f;
   load_a.entity_count = 900;
+  load_a.cells.push_back({1, 900u, -100.f, 0.f, partition.geometry_version});
   h.mgr.OnInformCellLoad(Address{}, nullptr, load_a);
   cellappmgr::InformCellLoad load_b;
   load_b.app_id = app_id_b;
   load_b.load = 0.1f;
   load_b.entity_count = 100;
+  load_b.cells.push_back({2, 100u, 100.f, 0.f, partition.geometry_version});
   h.mgr.OnInformCellLoad(Address{}, nullptr, load_b);
 
   for (int i = 0; i < 5; ++i) h.mgr.TickLoadBalance();
@@ -1186,6 +2887,7 @@ TEST(CellAppMgr, TickLoadBalance_AutoSplitsSustainedHotLeafToIdleHost) {
   cellappmgr::RegisterCellApp reg_b;
   reg_b.internal_addr = MakePeerAddr(30002);
   h.mgr.OnRegisterCellApp(reg_b.internal_addr, nullptr, reg_b);
+  h.mgr.RegisterWatchersForTest();
 
   cellappmgr::CreateSpaceRequest csr;
   csr.space_id = 42;
@@ -1221,6 +2923,142 @@ TEST(CellAppMgr, TickLoadBalance_AutoSplitsSustainedHotLeafToIdleHost) {
   EXPECT_EQ(right->cellapp_addr, reg_b.internal_addr);
   EXPECT_FLOAT_EQ(left->bounds.max_x, 0.f);
   EXPECT_FLOAT_EQ(right->bounds.min_x, 0.f);
+  const auto decision = h.mgr.GetWatcherRegistry().Get("cellappmgr/lb/last_decision");
+  ASSERT_TRUE(decision.has_value());
+  EXPECT_NE(decision->find("action=split"), std::string::npos);
+  EXPECT_NE(decision->find("reason=auto-split"), std::string::npos);
+  EXPECT_NE(decision->find("space=42"), std::string::npos);
+  EXPECT_NE(decision->find(std::format("cell={}", rep.cell_id)), std::string::npos);
+  EXPECT_NE(decision->find("target_app=2"), std::string::npos);
+  EXPECT_NE(decision->find("before_leaves=1,after_leaves=2"), std::string::npos);
+  EXPECT_NE(decision->find("leaf_changes=2"), std::string::npos);
+  EXPECT_NE(decision->find("app:missing->2"), std::string::npos);
+  EXPECT_NE(decision->find("bounds:missing->(0.0/-1000.0/1000.0/1000.0)"),
+            std::string::npos);
+  const auto decision_count = h.mgr.GetWatcherRegistry().Get("cellappmgr/lb/decision_count");
+  ASSERT_TRUE(decision_count.has_value());
+  EXPECT_EQ(*decision_count, "1");
+}
+
+TEST(CellAppMgr, AddCellToSpaceAckRequiresTargetAndSuccess) {
+  CellAppMgrHarness h;
+  InterfaceTable table;
+  RecordingChannel ch_a(h.dispatcher, table, MakePeerAddr(30001));
+  RecordingChannel ch_b(h.dispatcher, table, MakePeerAddr(30002));
+
+  cellappmgr::RegisterCellApp reg_a;
+  reg_a.internal_addr = MakePeerAddr(30001);
+  h.mgr.OnRegisterCellApp(reg_a.internal_addr, &ch_a, reg_a);
+  cellappmgr::RegisterCellApp reg_b;
+  reg_b.internal_addr = MakePeerAddr(30002);
+  h.mgr.OnRegisterCellApp(reg_b.internal_addr, &ch_b, reg_b);
+  h.mgr.RegisterWatchersForTest();
+
+  cellappmgr::CreateSpaceRequest csr;
+  csr.space_id = 42;
+  h.mgr.OnCreateSpaceRequest(Address{}, nullptr, csr);
+
+  auto& partition = h.mgr.SpacesForTest().at(42);
+  cellappmgr::InformCellLoad load;
+  load.app_id = h.mgr.CellApps().at(reg_a.internal_addr).app_id;
+  load.load = 0.95f;
+  load.entity_count = 100;
+  cellappmgr::InformCellLoad::CellReport rep;
+  rep.cell_id = partition.bsp.PrimaryCellId();
+  rep.entity_count = 100;
+  rep.geometry_version = partition.geometry_version;
+  rep.tick_load = 0.95f;
+  load.cells.push_back(rep);
+  h.mgr.OnInformCellLoad(Address{}, nullptr, load);
+
+  h.mgr.TickLoadBalance();
+  h.mgr.TickLoadBalance();
+  h.mgr.TickLoadBalance();
+
+  const auto adds_b = AddCellMessages(ch_b);
+  ASSERT_FALSE(adds_b.empty());
+  const auto new_cell_id = adds_b.back().cell_id;
+  const auto updates_a_before = UpdateGeometryMessages(ch_a).size();
+  const auto updates_b_before = UpdateGeometryMessages(ch_b).size();
+  EXPECT_EQ(h.mgr.GetWatcherRegistry().Get("cellappmgr/lb/pending_geometry_broadcasts"),
+            std::optional<std::string>("1"));
+
+  cellappmgr::AddCellToSpaceAck ack;
+  ack.space_id = 42;
+  ack.cell_id = new_cell_id;
+  h.mgr.OnAddCellToSpaceAck(reg_a.internal_addr, &ch_a, ack);
+  EXPECT_EQ(h.mgr.GetWatcherRegistry().Get("cellappmgr/lb/pending_geometry_broadcasts"),
+            std::optional<std::string>("1"));
+  EXPECT_EQ(UpdateGeometryMessages(ch_a).size(), updates_a_before);
+  EXPECT_EQ(UpdateGeometryMessages(ch_b).size(), updates_b_before);
+
+  ack.success = false;
+  h.mgr.OnAddCellToSpaceAck(reg_b.internal_addr, &ch_b, ack);
+  EXPECT_EQ(h.mgr.GetWatcherRegistry().Get("cellappmgr/lb/pending_geometry_broadcasts"),
+            std::optional<std::string>("1"));
+  EXPECT_EQ(UpdateGeometryMessages(ch_a).size(), updates_a_before);
+  EXPECT_EQ(UpdateGeometryMessages(ch_b).size(), updates_b_before);
+
+  ack.success = true;
+  h.mgr.OnAddCellToSpaceAck(reg_b.internal_addr, &ch_b, ack);
+  EXPECT_EQ(h.mgr.GetWatcherRegistry().Get("cellappmgr/lb/pending_geometry_broadcasts"),
+            std::optional<std::string>("0"));
+  EXPECT_GT(UpdateGeometryMessages(ch_a).size(), updates_a_before);
+  EXPECT_GT(UpdateGeometryMessages(ch_b).size(), updates_b_before);
+}
+
+TEST(CellAppMgr, TickLoadBalance_PendingGeometryFreezesBspUntilAck) {
+  CellAppMgrHarness h;
+  cellappmgr::RegisterCellApp reg_a;
+  reg_a.internal_addr = MakePeerAddr(30001);
+  h.mgr.OnRegisterCellApp(reg_a.internal_addr, nullptr, reg_a);
+  cellappmgr::RegisterCellApp reg_b;
+  reg_b.internal_addr = MakePeerAddr(30002);
+  h.mgr.OnRegisterCellApp(reg_b.internal_addr, nullptr, reg_b);
+  h.mgr.RegisterWatchersForTest();
+
+  cellappmgr::CreateSpaceRequest csr;
+  csr.space_id = 42;
+  h.mgr.OnCreateSpaceRequest(Address{}, nullptr, csr);
+
+  auto& partition = h.mgr.SpacesForTest().at(42);
+  cellappmgr::InformCellLoad load;
+  load.app_id = h.mgr.CellApps().at(reg_a.internal_addr).app_id;
+  load.load = 0.95f;
+  load.entity_count = 100;
+  cellappmgr::InformCellLoad::CellReport rep;
+  rep.cell_id = partition.bsp.PrimaryCellId();
+  rep.entity_count = 100;
+  rep.geometry_version = partition.geometry_version;
+  rep.tick_load = 0.95f;
+  load.cells.push_back(rep);
+  h.mgr.OnInformCellLoad(Address{}, nullptr, load);
+
+  h.mgr.TickLoadBalance();
+  h.mgr.TickLoadBalance();
+  h.mgr.TickLoadBalance();
+
+  auto leaves = partition.bsp.Leaves();
+  ASSERT_EQ(leaves.size(), 2u);
+  const auto* first_before = partition.bsp.FindCellById(leaves[0]->cell_id);
+  const auto* second_before = partition.bsp.FindCellById(leaves[1]->cell_id);
+  ASSERT_NE(first_before, nullptr);
+  ASSERT_NE(second_before, nullptr);
+  const auto first_bounds = first_before->bounds;
+  const auto second_bounds = second_before->bounds;
+  const auto version = partition.geometry_version;
+
+  for (int i = 0; i < 5; ++i) h.mgr.TickLoadBalance();
+
+  const auto* first_after = partition.bsp.FindCellById(first_before->cell_id);
+  const auto* second_after = partition.bsp.FindCellById(second_before->cell_id);
+  ASSERT_NE(first_after, nullptr);
+  ASSERT_NE(second_after, nullptr);
+  ExpectBoundsEq(first_after->bounds, first_bounds);
+  ExpectBoundsEq(second_after->bounds, second_bounds);
+  EXPECT_EQ(partition.geometry_version, version);
+  EXPECT_EQ(h.mgr.GetWatcherRegistry().Get("cellappmgr/lb/pending_geometry_broadcasts"),
+            std::optional<std::string>("1"));
 }
 
 TEST(CellAppMgr, TickLoadBalance_AutoMergesSustainedIdleSiblingLeaf) {
@@ -1234,6 +3072,7 @@ TEST(CellAppMgr, TickLoadBalance_AutoMergesSustainedIdleSiblingLeaf) {
   cellappmgr::RegisterCellApp reg_b;
   reg_b.internal_addr = MakePeerAddr(30002);
   h.mgr.OnRegisterCellApp(reg_b.internal_addr, &ch_b, reg_b);
+  h.mgr.RegisterWatchersForTest();
 
   cellappmgr::CreateSpaceRequest csr;
   csr.space_id = 42;
@@ -1277,6 +3116,16 @@ TEST(CellAppMgr, TickLoadBalance_AutoMergesSustainedIdleSiblingLeaf) {
   ASSERT_FALSE(removes.empty());
   EXPECT_EQ(removes.back().space_id, 42u);
   EXPECT_EQ(removes.back().cell_id, b_cell_id);
+  const auto decision = h.mgr.GetWatcherRegistry().Get("cellappmgr/lb/last_decision");
+  ASSERT_TRUE(decision.has_value());
+  EXPECT_NE(decision->find("action=merge"), std::string::npos);
+  EXPECT_NE(decision->find("reason=auto-merge"), std::string::npos);
+  EXPECT_NE(decision->find(std::format("cell={}", b_cell_id)), std::string::npos);
+  EXPECT_NE(decision->find("detail=removed_empty=1"), std::string::npos);
+  EXPECT_NE(decision->find("before_leaves=2,after_leaves=1"), std::string::npos);
+  EXPECT_NE(decision->find("leaf_changes=2"), std::string::npos);
+  EXPECT_NE(decision->find(std::format("{}{{app:", b_cell_id)), std::string::npos);
+  EXPECT_NE(decision->find("->missing"), std::string::npos);
 }
 
 TEST(CellAppMgr, RetireWatcherSkipsNewSpacePlacement) {
@@ -1379,6 +3228,16 @@ TEST(CellAppMgr, TickLoadBalance_RetireRemovesEmptyNonPrimaryLeaf) {
   ASSERT_FALSE(removes.empty());
   EXPECT_EQ(removes.back().space_id, 42u);
   EXPECT_EQ(removes.back().cell_id, b_cell_id);
+  const auto decision = h.mgr.GetWatcherRegistry().Get("cellappmgr/lb/last_decision");
+  ASSERT_TRUE(decision.has_value());
+  EXPECT_NE(decision->find("action=remove"), std::string::npos);
+  EXPECT_NE(decision->find("reason=retire-empty"), std::string::npos);
+  EXPECT_NE(decision->find(std::format("source_app={}", app_b)), std::string::npos);
+  EXPECT_NE(decision->find("detail=empty=1"), std::string::npos);
+  EXPECT_NE(decision->find("before_leaves=2,after_leaves=1"), std::string::npos);
+  EXPECT_NE(decision->find("leaf_changes=2"), std::string::npos);
+  EXPECT_NE(decision->find(std::format("{}{{app:", b_cell_id)), std::string::npos);
+  EXPECT_NE(decision->find("->missing"), std::string::npos);
 }
 
 TEST(CellAppMgr, TickLoadBalance_RetireHandsOffNonEmptyNonPrimaryLeaf) {
@@ -1428,6 +3287,7 @@ TEST(CellAppMgr, TickLoadBalance_RetireHandsOffNonEmptyNonPrimaryLeaf) {
     h.mgr.OnInformCellLoad(Address{}, nullptr, load);
   }
 
+  const auto app_a = h.mgr.CellApps().at(reg_a.internal_addr).app_id;
   const auto app_b = h.mgr.CellApps().at(reg_b.internal_addr).app_id;
   ASSERT_TRUE(h.mgr.GetWatcherRegistry().Set("cellappmgr/lb/retire/app_id",
                                              std::to_string(app_b)));
@@ -1449,6 +3309,16 @@ TEST(CellAppMgr, TickLoadBalance_RetireHandsOffNonEmptyNonPrimaryLeaf) {
   const auto pending_stuck = h.mgr.GetWatcherRegistry().Get("cellappmgr/lb/retire/stuck_count");
   ASSERT_TRUE(pending_stuck.has_value());
   EXPECT_EQ(*pending_stuck, "0");
+  const auto decision = h.mgr.GetWatcherRegistry().Get("cellappmgr/lb/last_decision");
+  ASSERT_TRUE(decision.has_value());
+  EXPECT_NE(decision->find("action=handoff"), std::string::npos);
+  EXPECT_NE(decision->find("reason=retire-drain"), std::string::npos);
+  EXPECT_NE(decision->find(std::format("source_app={}", app_b)), std::string::npos);
+  EXPECT_NE(decision->find(std::format("target_app={}", app_a)), std::string::npos);
+  EXPECT_NE(decision->find("before_leaves=2,after_leaves=2"), std::string::npos);
+  EXPECT_NE(decision->find("leaf_changes=1"), std::string::npos);
+  EXPECT_NE(decision->find(std::format("{}{{app:{}->{}", b_cell_id, app_b, app_a)),
+            std::string::npos);
 
   cellappmgr::AddCellToSpaceAck ack;
   ack.space_id = 42;
@@ -1491,6 +3361,16 @@ TEST(CellAppMgr, TickLoadBalance_RetireHandsOffNonEmptyNonPrimaryLeaf) {
   ASSERT_TRUE(status.has_value());
   EXPECT_NE(status->find(std::format("app={} owned=0 drains=0 pending=0 ready=1", app_b)),
             std::string::npos);
+  const auto history_size =
+      h.mgr.GetWatcherRegistry().Get("cellappmgr/lb/decision_history_size");
+  ASSERT_TRUE(history_size.has_value());
+  EXPECT_EQ(*history_size, "2");
+  const auto history = h.mgr.GetWatcherRegistry().Get("cellappmgr/lb/decision_history");
+  ASSERT_TRUE(history.has_value());
+  EXPECT_NE(history->find("decisions=2"), std::string::npos);
+  EXPECT_NE(history->find("action=handoff"), std::string::npos);
+  EXPECT_NE(history->find("action=drain-complete"), std::string::npos);
+  EXPECT_NE(history->find("before_drains=1,after_drains=0"), std::string::npos);
 }
 
 TEST(CellAppMgr, TickLoadBalance_RetireHandsOffPrimaryLeafToInSpaceReplica) {

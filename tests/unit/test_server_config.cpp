@@ -12,11 +12,6 @@
 
 using namespace atlas;
 
-// ============================================================================
-// Helpers
-// ============================================================================
-
-// Build a fake argv from a vector of strings.
 struct FakeArgv {
   std::vector<std::string> storage;
   std::vector<char*> ptrs;
@@ -29,17 +24,12 @@ struct FakeArgv {
   char** argv() { return ptrs.data(); }
 };
 
-// Write a temporary JSON config file and return its path.
 static auto write_temp_json(std::string_view content) -> std::filesystem::path {
   auto path = std::filesystem::temp_directory_path() / "atlas_test_config.json";
   std::ofstream f(path);
   f << content;
   return path;
 }
-
-// ============================================================================
-// process_type_name / process_type_from_name
-// ============================================================================
 
 TEST(ProcessType, RoundTrip) {
   auto types = {ProcessType::kMachined,   ProcessType::kLoginApp, ProcessType::kBaseApp,
@@ -68,10 +58,6 @@ TEST(ProcessType, UnknownReturnsError) {
   auto r = ProcessTypeFromName("nonexistent");
   EXPECT_FALSE(r.HasValue());
 }
-
-// ============================================================================
-// ServerConfig::from_args — basic parsing
-// ============================================================================
 
 TEST(ServerConfig, FromArgsParsesType) {
   FakeArgv args({"exe", "--type", "cellapp"});
@@ -136,8 +122,6 @@ TEST(ServerConfig, FromArgsInvalidTypeReturnsError) {
 }
 
 TEST(ServerConfig, FromArgsParsesEntitydefBinPath) {
-  // DBApp's only entity-definition input: an ATDF container produced
-  // offline by Atlas.Tools.DefDump from a built C# server assembly.
   FakeArgv args({"exe", "--entitydef-bin-path", "data/entity_defs.bin"});
   auto r = ServerConfig::FromArgs(args.argc(), args.argv());
   ASSERT_TRUE(r.HasValue());
@@ -158,12 +142,34 @@ TEST(ServerConfig, FromArgsParsesHaOptions) {
                  "31000",
                  "--revive-cellappmgr-snapshot-path",
                  "snapshots/revived_cellappmgr.bin",
+                 "--revive-cellappmgr-output-path",
+                 "logs/revived_cellappmgr.log",
+                 "--revive-cellappmgr-snapshot-interval-ms",
+                 "1250",
                  "--revive-cellappmgr-update-hertz",
                  "25",
+                 "--revive-cellappmgr-launch-timeout-ms",
+                 "650",
                  "--revive-restart-delay-ms",
                  "75",
+                 "--revive-restart-backoff-cap-ms",
+                 "8000",
                  "--revive-max-restarts",
                  "7",
+                 "--revive-cellappmgr-health-interval-ms",
+                 "100",
+                 "--revive-cellappmgr-heartbeat-timeout-ms",
+                 "900",
+                 "--revive-cellappmgr-manager-health-timeout-ms",
+                 "450",
+                 "--revive-cellappmgr-health-failure-threshold",
+                 "3",
+                 "--revive-cellappmgr-audit-interval-ms",
+                 "125",
+                 "--revive-cellappmgr-missing-audit-threshold",
+                 "4",
+                 "--revive-leader-lock-path",
+                 "run/reviver_cellappmgr.lock",
                  "--revive-cellappmgr-on-start",
                  "true"});
   auto r = ServerConfig::FromArgs(args.argc(), args.argv());
@@ -175,9 +181,21 @@ TEST(ServerConfig, FromArgsParsesHaOptions) {
   EXPECT_EQ(r->revive_cellappmgr_internal_port, 31000);
   EXPECT_EQ(r->revive_cellappmgr_snapshot_path,
             std::filesystem::path("snapshots/revived_cellappmgr.bin"));
+  EXPECT_EQ(r->revive_cellappmgr_output_path,
+            std::filesystem::path("logs/revived_cellappmgr.log"));
+  EXPECT_EQ(r->revive_cellappmgr_snapshot_interval_ms, 1250);
   EXPECT_EQ(r->revive_cellappmgr_update_hertz, 25);
+  EXPECT_EQ(r->revive_cellappmgr_launch_timeout_ms, 650);
   EXPECT_EQ(r->revive_restart_delay_ms, 75);
+  EXPECT_EQ(r->revive_restart_backoff_cap_ms, 8000);
   EXPECT_EQ(r->revive_max_restarts, 7);
+  EXPECT_EQ(r->revive_cellappmgr_health_interval_ms, 100);
+  EXPECT_EQ(r->revive_cellappmgr_heartbeat_timeout_ms, 900);
+  EXPECT_EQ(r->revive_cellappmgr_manager_health_timeout_ms, 450);
+  EXPECT_EQ(r->revive_cellappmgr_health_failure_threshold, 3);
+  EXPECT_EQ(r->revive_cellappmgr_audit_interval_ms, 125);
+  EXPECT_EQ(r->revive_cellappmgr_missing_audit_threshold, 4);
+  EXPECT_EQ(r->revive_leader_lock_path, std::filesystem::path("run/reviver_cellappmgr.lock"));
   EXPECT_TRUE(r->revive_cellappmgr_on_start);
 }
 
@@ -200,13 +218,24 @@ TEST(ServerConfig, FromJsonFileParsesHaOptions) {
         },
         "reviver": {
             "restart_delay_ms": 75,
+            "restart_backoff_cap_ms": 8000,
             "max_restarts": 7,
+            "leader_lock_path": "run/reviver_cellappmgr.lock",
             "cellappmgr": {
                 "exe": "bin/atlas_cellappmgr.exe",
                 "name": "cellappmgr_a",
                 "internal_port": 31000,
                 "snapshot_path": "snapshots/revived_cellappmgr.bin",
+                "output_path": "logs/revived_cellappmgr.log",
+                "snapshot_interval_ms": 1250,
                 "update_hertz": 25,
+                "launch_timeout_ms": 650,
+                "health_interval_ms": 100,
+                "heartbeat_timeout_ms": 900,
+                "manager_health_timeout_ms": 450,
+                "health_failure_threshold": 3,
+                "audit_interval_ms": 125,
+                "missing_audit_threshold": 4,
                 "on_start": true
             }
         }
@@ -216,13 +245,25 @@ TEST(ServerConfig, FromJsonFileParsesHaOptions) {
   EXPECT_EQ(r->snapshot_path, std::filesystem::path("snapshots/cellappmgr.bin"));
   EXPECT_EQ(r->snapshot_interval_ms, 250);
   EXPECT_EQ(r->revive_restart_delay_ms, 75);
+  EXPECT_EQ(r->revive_restart_backoff_cap_ms, 8000);
   EXPECT_EQ(r->revive_max_restarts, 7);
+  EXPECT_EQ(r->revive_leader_lock_path, std::filesystem::path("run/reviver_cellappmgr.lock"));
   EXPECT_EQ(r->revive_cellappmgr_exe, std::filesystem::path("bin/atlas_cellappmgr.exe"));
   EXPECT_EQ(r->revive_cellappmgr_name, "cellappmgr_a");
   EXPECT_EQ(r->revive_cellappmgr_internal_port, 31000);
   EXPECT_EQ(r->revive_cellappmgr_snapshot_path,
             std::filesystem::path("snapshots/revived_cellappmgr.bin"));
+  EXPECT_EQ(r->revive_cellappmgr_output_path,
+            std::filesystem::path("logs/revived_cellappmgr.log"));
+  EXPECT_EQ(r->revive_cellappmgr_snapshot_interval_ms, 1250);
   EXPECT_EQ(r->revive_cellappmgr_update_hertz, 25);
+  EXPECT_EQ(r->revive_cellappmgr_launch_timeout_ms, 650);
+  EXPECT_EQ(r->revive_cellappmgr_health_interval_ms, 100);
+  EXPECT_EQ(r->revive_cellappmgr_heartbeat_timeout_ms, 900);
+  EXPECT_EQ(r->revive_cellappmgr_manager_health_timeout_ms, 450);
+  EXPECT_EQ(r->revive_cellappmgr_health_failure_threshold, 3);
+  EXPECT_EQ(r->revive_cellappmgr_audit_interval_ms, 125);
+  EXPECT_EQ(r->revive_cellappmgr_missing_audit_threshold, 4);
   EXPECT_TRUE(r->revive_cellappmgr_on_start);
 }
 
@@ -231,10 +272,6 @@ TEST(ServerConfig, FromArgsInvalidPortReturnsError) {
   auto r = ServerConfig::FromArgs(args.argc(), args.argv());
   EXPECT_FALSE(r.HasValue());
 }
-
-// ============================================================================
-// ServerConfig::from_json_file
-// ============================================================================
 
 TEST(ServerConfig, FromJsonFile) {
   auto path = write_temp_json(R"({
@@ -298,15 +335,10 @@ TEST(ServerConfig, FromJsonFilePartialKeys) {
   auto r = ServerConfig::FromJsonFile(path);
   ASSERT_TRUE(r.HasValue());
   EXPECT_EQ(r->update_hertz, 5);
-  // Defaults preserved
   EXPECT_EQ(r->db_type, "sqlite");
   EXPECT_EQ(r->log_level, LogLevel::kInfo);
   EXPECT_FALSE(r->is_production);
 }
-
-// ============================================================================
-// ServerConfig::load — CLI overrides JSON
-// ============================================================================
 
 TEST(ServerConfig, LoadCliOverridesJson) {
   auto path = write_temp_json(R"({
@@ -358,8 +390,8 @@ TEST(ServerConfig, LoadCliOverridesJson) {
   auto r = ServerConfig::Load(args.argc(), args.argv());
   ASSERT_TRUE(r.HasValue()) << r.Error().Message();
 
-  EXPECT_EQ(r->update_hertz, 30);             // CLI wins
-  EXPECT_EQ(r->log_level, LogLevel::kDebug);  // CLI wins
+  EXPECT_EQ(r->update_hertz, 30);
+  EXPECT_EQ(r->log_level, LogLevel::kDebug);
   EXPECT_EQ(r->db_type, "sqlite");
   EXPECT_EQ(r->db_sqlite_path, std::filesystem::path("data/from_cli.sqlite3"));
   EXPECT_FALSE(r->db_sqlite_wal);
@@ -370,6 +402,7 @@ TEST(ServerConfig, LoadCliOverridesJson) {
   EXPECT_EQ(r->login_rate_limit_window_sec, 99);
   ASSERT_EQ(r->login_rate_limit_trusted_cidrs.size(), 1u);
   EXPECT_EQ(r->login_rate_limit_trusted_cidrs[0], "192.168.1.0/24");
+  EXPECT_EQ(r->config_path, std::filesystem::absolute(path));
 }
 
 TEST(ServerConfig, LoadNoConfigFile) {
@@ -385,7 +418,7 @@ TEST(ServerConfig, LoadDefaultProcessName) {
   FakeArgv args({"exe", "--type", "cellapp"});
   auto r = ServerConfig::Load(args.argc(), args.argv());
   ASSERT_TRUE(r.HasValue());
-  EXPECT_EQ(r->process_name, "cellapp");  // derived from type
+  EXPECT_EQ(r->process_name, "cellapp");
 }
 
 TEST(ServerConfig, LoadDefaultMachinedAddress) {
@@ -395,14 +428,9 @@ TEST(ServerConfig, LoadDefaultMachinedAddress) {
   EXPECT_EQ(r->machined_address.Port(), 20018);
 }
 
-// ============================================================================
-// ServerAppOption — load from DataSection + Watcher registration
-// ============================================================================
-
 TEST(ServerAppOption, DefaultValue) {
   ServerAppOption<int> opt{42, "missing_key", "test/opt"};
   EXPECT_EQ(opt.Value(), 42);
-  // Cleanup: opt is stack-allocated, destructor removes from global list
 }
 
 TEST(ServerAppOption, LoadFromDataSection) {
@@ -431,7 +459,7 @@ TEST(ServerAppOption, RegisterWatcherReadOnly) {
   opt.RegisterWatcher(reg);
 
   EXPECT_EQ(reg.Get("test/read_only_opt").value_or(""), "7");
-  EXPECT_FALSE(reg.Set("test/read_only_opt", "99"));  // ReadOnly
+  EXPECT_FALSE(reg.Set("test/read_only_opt", "99"));
 }
 
 TEST(ServerAppOption, RegisterWatcherReadWrite) {

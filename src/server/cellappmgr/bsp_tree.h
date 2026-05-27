@@ -33,6 +33,8 @@ namespace atlas {
 
 using CellLoadBuckets =
     std::array<uint32_t, cellappmgr::InformCellLoad::CellReport::kLoadBucketCount>;
+using CellLoadCostBuckets =
+    std::array<uint64_t, cellappmgr::InformCellLoad::CellReport::kLoadBucketCount>;
 
 struct CellInfo {
   cellappmgr::CellID cell_id{0};
@@ -42,6 +44,7 @@ struct CellInfo {
   uint32_t entity_count{0};  // authoritative only on CellAppMgr
   float tick_load{0.f};
   uint64_t script_tick_us{0};
+  uint64_t native_tick_us{0};
   uint32_t witness_count{0};
   uint32_t aoi_peer_count{0};
   uint64_t aoi_reliable_bytes{0};
@@ -49,6 +52,8 @@ struct CellInfo {
   uint64_t backup_bytes{0};
   CellLoadBuckets x_buckets{};
   CellLoadBuckets z_buckets{};
+  CellLoadCostBuckets x_load_buckets{};
+  CellLoadCostBuckets z_load_buckets{};
 };
 
 enum class BSPAxis : uint8_t { kX = 0, kZ = 1 };

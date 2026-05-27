@@ -13,9 +13,8 @@
 #include "serialization/binary_stream.h"
 #include "server/entity_types.h"
 
-// BSP tree geometry moves between CellAppMgr and CellApps as a
-// pre-serialised blob rather than typed fields; the mgr is
-// authoritative for the tree and CellApp only consumes it.
+// BSP tree geometry is an opaque blob; CellAppMgr owns the tree and
+// CellApp only consumes it.
 
 namespace atlas::cellappmgr {
 
@@ -50,10 +49,8 @@ struct RegisterCellApp {
 };
 static_assert(NetworkMessage<RegisterCellApp>);
 
-// The assigned `app_id` drives EntityID allocation: high 8 bits of the
-// EntityID are app_id, low 24 bits are CellApp-local monotonic.
-// Consequently app_id must be in [1, 255]; app_id == 0 is reserved
-// (matches kInvalidEntityID's prefix).
+// EntityID uses app_id as its high byte and a CellApp-local low 24 bits.
+// app_id 0 stays reserved, so assigned ids must stay in [1, 255].
 
 struct RegisterCellAppAck {
   bool success{false};
@@ -113,6 +110,7 @@ struct InformCellLoad {
     uint64_t geometry_version{0};
     float tick_load{0.f};
     uint64_t script_tick_us{0};
+    uint64_t native_tick_us{0};
     uint32_t witness_count{0};
     uint32_t aoi_peer_count{0};
     uint64_t aoi_reliable_bytes{0};
@@ -120,6 +118,8 @@ struct InformCellLoad {
     uint64_t backup_bytes{0};
     std::array<uint32_t, kLoadBucketCount> x_buckets{};
     std::array<uint32_t, kLoadBucketCount> z_buckets{};
+    std::array<uint64_t, kLoadBucketCount> x_load_buckets{};
+    std::array<uint64_t, kLoadBucketCount> z_load_buckets{};
   };
   std::vector<CellReport> cells;
 
@@ -146,6 +146,7 @@ struct InformCellLoad {
       w.Write(c.geometry_version);
       w.Write(c.tick_load);
       w.Write(c.script_tick_us);
+      w.Write(c.native_tick_us);
       w.Write(c.witness_count);
       w.Write(c.aoi_peer_count);
       w.Write(c.aoi_reliable_bytes);
@@ -153,6 +154,8 @@ struct InformCellLoad {
       w.Write(c.backup_bytes);
       for (uint32_t bucket : c.x_buckets) w.Write(bucket);
       for (uint32_t bucket : c.z_buckets) w.Write(bucket);
+      for (uint64_t bucket : c.x_load_buckets) w.Write(bucket);
+      for (uint64_t bucket : c.z_load_buckets) w.Write(bucket);
     }
   }
 
@@ -176,12 +179,14 @@ struct InformCellLoad {
       auto gv = r.Read<uint64_t>();
       auto tl = r.Read<float>();
       auto stu = r.Read<uint64_t>();
+      auto ntu = r.Read<uint64_t>();
       auto wc = r.Read<uint32_t>();
       auto ap = r.Read<uint32_t>();
       auto arb = r.Read<uint64_t>();
       auto aub = r.Read<uint64_t>();
       auto bb = r.Read<uint64_t>();
-      if (!cid || !ce || !mx || !mz || !gv || !tl || !stu || !wc || !ap || !arb || !aub || !bb)
+      if (!cid || !ce || !mx || !mz || !gv || !tl || !stu || !ntu || !wc || !ap || !arb ||
+          !aub || !bb)
         return Error{ErrorCode::kInvalidArgument, "InformCellLoad: cell entry truncated"};
       CellReport rep;
       rep.cell_id = *cid;
@@ -191,6 +196,7 @@ struct InformCellLoad {
       rep.geometry_version = *gv;
       rep.tick_load = *tl;
       rep.script_tick_us = *stu;
+      rep.native_tick_us = *ntu;
       rep.witness_count = *wc;
       rep.aoi_peer_count = *ap;
       rep.aoi_reliable_bytes = *arb;
@@ -206,6 +212,18 @@ struct InformCellLoad {
         auto value = r.Read<uint32_t>();
         if (!value)
           return Error{ErrorCode::kInvalidArgument, "InformCellLoad: z bucket truncated"};
+        bucket = *value;
+      }
+      for (auto& bucket : rep.x_load_buckets) {
+        auto value = r.Read<uint64_t>();
+        if (!value)
+          return Error{ErrorCode::kInvalidArgument, "InformCellLoad: x load bucket truncated"};
+        bucket = *value;
+      }
+      for (auto& bucket : rep.z_load_buckets) {
+        auto value = r.Read<uint64_t>();
+        if (!value)
+          return Error{ErrorCode::kInvalidArgument, "InformCellLoad: z load bucket truncated"};
         bucket = *value;
       }
       msg.cells.push_back(rep);
@@ -234,11 +252,91 @@ struct RequestCellAppState {
 };
 static_assert(NetworkMessage<RequestCellAppState>);
 
+struct HealthProbe {
+  uint64_t nonce{0};
+
+  static auto Descriptor() -> const MessageDesc& {
+    static const MessageDesc kDesc{msg_id::Id(msg_id::CellAppMgr::kHealthProbe),
+                                   "cellappmgr::HealthProbe",
+                                   MessageLengthStyle::kFixed,
+                                   static_cast<int>(sizeof(uint64_t)),
+                                   MessageReliability::kReliable,
+                                   MessageUrgency::kImmediate};
+    return kDesc;
+  }
+
+  void Serialize(BinaryWriter& w) const {
+    w.Write(nonce);
+  }
+
+  static auto Deserialize(BinaryReader& r) -> Result<HealthProbe> {
+    auto value = r.Read<uint64_t>();
+    if (!value) return Error{ErrorCode::kInvalidArgument, "HealthProbe: truncated"};
+    HealthProbe msg;
+    msg.nonce = *value;
+    return msg;
+  }
+};
+static_assert(NetworkMessage<HealthProbe>);
+
+struct HealthProbeAck {
+  uint64_t nonce{0};
+  uint64_t game_time{0};
+  uint64_t snapshot_saves{0};
+  uint64_t snapshot_failures{0};
+  bool snapshot_dirty{false};
+  bool snapshot_save_stale{false};
+
+  static auto Descriptor() -> const MessageDesc& {
+    constexpr int kSerializedSize = static_cast<int>(4 * sizeof(uint64_t) + 2);
+    static const MessageDesc kDesc{msg_id::Id(msg_id::CellAppMgr::kHealthProbeAck),
+                                   "cellappmgr::HealthProbeAck",
+                                   MessageLengthStyle::kFixed,
+                                   kSerializedSize,
+                                   MessageReliability::kReliable,
+                                   MessageUrgency::kImmediate};
+    return kDesc;
+  }
+
+  void Serialize(BinaryWriter& w) const {
+    w.Write(nonce);
+    w.Write(game_time);
+    w.Write(snapshot_saves);
+    w.Write(snapshot_failures);
+    w.Write<uint8_t>(snapshot_dirty ? 1u : 0u);
+    w.Write<uint8_t>(snapshot_save_stale ? 1u : 0u);
+  }
+
+  static auto Deserialize(BinaryReader& r) -> Result<HealthProbeAck> {
+    auto value = r.Read<uint64_t>();
+    auto tick = r.Read<uint64_t>();
+    auto saves = r.Read<uint64_t>();
+    auto failures = r.Read<uint64_t>();
+    auto dirty = r.Read<uint8_t>();
+    auto stale = r.Read<uint8_t>();
+    if (!value || !tick || !saves || !failures || !dirty || !stale) {
+      return Error{ErrorCode::kInvalidArgument, "HealthProbeAck: truncated"};
+    }
+    if (*dirty > 1 || *stale > 1) {
+      return Error{ErrorCode::kInvalidArgument, "HealthProbeAck: bad flags"};
+    }
+    HealthProbeAck msg;
+    msg.nonce = *value;
+    msg.game_time = *tick;
+    msg.snapshot_saves = *saves;
+    msg.snapshot_failures = *failures;
+    msg.snapshot_dirty = *dirty != 0;
+    msg.snapshot_save_stale = *stale != 0;
+    return msg;
+  }
+};
+static_assert(NetworkMessage<HealthProbeAck>);
+
 struct CreateSpaceRequest {
   SpaceID space_id{kInvalidSpaceID};
   uint32_t request_id{0};
   Address reply_addr;
-  // 1 = legacy single-cell. >1 = bootstrap N cells distributed across the
+  // 1 = single-cell default. >1 = bootstrap N cells distributed across the
   // N least-loaded registered CellApps; ignored when fewer cellapps exist.
   uint16_t initial_cell_count{1};
   // Empty = no space-owner entity; non-empty resolves via CellApp's EntityDef
@@ -412,9 +510,8 @@ struct RemoveCellFromSpace {
 };
 static_assert(NetworkMessage<RemoveCellFromSpace>);
 
-// `bsp_blob` is the BSPTree serialization; the structure itself is
-// defined in src/server/cellappmgr/bsp_tree.h and opaque to the
-// message layer - CellAppMgr owns the tree, CellApp replays it.
+// `bsp_blob` is BSPTree serialization from src/server/cellappmgr/bsp_tree.h.
+// The wire layer keeps it opaque.
 
 struct UpdateGeometry {
   SpaceID space_id{kInvalidSpaceID};
@@ -457,9 +554,8 @@ struct UpdateGeometry {
 };
 static_assert(NetworkMessage<UpdateGeometry>);
 
-// Enables / disables entity migration for a Cell. CellAppMgr toggles
-// this off during sensitive transitions (e.g. a BSP rebalance is in
-// flight) and re-enables once the new geometry has quiesced.
+// CellAppMgr disables entity migration during sensitive transitions and
+// re-enables it once the new geometry has quiesced.
 
 struct ShouldOffload {
   SpaceID space_id{kInvalidSpaceID};
@@ -502,12 +598,8 @@ struct ShouldOffload {
 };
 static_assert(NetworkMessage<ShouldOffload>);
 
-// CellAppMgr replies to every CreateSpaceRequest with this message so
-// the originating BaseApp (or script) can resolve its per-request
-// callback and learn which CellApp now hosts the initial Cell of the
-// Space. Failure cases carry success=false and zeroed host_addr /
-// cell_id; the caller should treat them as "no Space exists" and
-// retry / surface the error to game code.
+// Every CreateSpaceRequest gets a reply so callers can resolve callbacks.
+// Failure carries success=false and zeroed host_addr / cell_id.
 
 struct SpaceCreatedResult {
   uint32_t request_id{0};
