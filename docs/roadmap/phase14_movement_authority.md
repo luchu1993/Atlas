@@ -30,12 +30,11 @@ position history 都已落地。当前重心是协议边界硬化、验证矩阵
 
 ### 14.2 Jolt query backend（里程碑）
 
-**M1b**：Jolt 实际接入与 hello-world raycast。
-- 在 `cmake/Dependencies.cmake` 加 Jolt FetchContent（带 SHA256）。
-- `JoltPhysicsQuery` 初始化真正的 PhysicsSystem，注册 box body，跑通 1 个
-  raycast 返回正确 hit。
-- ATLAS_ENABLE_JOLT 默认翻 ON。
-- Win 本地 + CI Linux 都过。
+**M1c**：Linux 验证 + ATLAS_ENABLE_JOLT 默认翻 ON。
+- Linux 上跑通 `ATLAS_ENABLE_JOLT=ON` 配置 + `test_jolt_physics_query`
+  全部 5 个 case 过。
+- 验证后翻默认值到 ON；同时把 FetchContent 从 `GIT_TAG v5.2.0` 切到
+  `URL + SHA256` 锁版本。
 
 **M2**：单 box collision asset 跑通 CharacterMotor。
 - `JoltCharacterQuery` 适配 `PhysicsCharacterQuery` 接口。

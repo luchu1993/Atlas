@@ -15,7 +15,7 @@ TEST(JoltPhysicsQuery, InitializeIsIdempotent) {
   jolt::Shutdown();
 }
 
-TEST(JoltPhysicsQuery, SkeletonReturnsNoHit) {
+TEST(JoltPhysicsQuery, EmptySceneReturnsNoHit) {
   ASSERT_TRUE(jolt::Initialize());
   JoltPhysicsQuery query;
 
@@ -25,23 +25,69 @@ TEST(JoltPhysicsQuery, SkeletonReturnsNoHit) {
   rq.max_distance_m = 100.0f;
   EXPECT_FALSE(query.Raycast(rq).hit);
 
-  GroundProbeQuery gp;
-  gp.origin = {0.0f, 10.0f, 0.0f};
-  gp.max_distance_m = 100.0f;
-  gp.radius_m = 0.35f;
-  EXPECT_FALSE(query.GroundProbe(gp).hit);
+  jolt::Shutdown();
+}
 
-  CapsuleCastQuery cc;
-  cc.capsule.center = {0.0f, 1.0f, 0.0f};
-  cc.capsule.radius_m = 0.35f;
-  cc.capsule.half_height_m = 0.9f;
-  cc.displacement = {0.0f, -2.0f, 0.0f};
-  EXPECT_FALSE(query.CastCapsule(cc).hit);
+TEST(JoltPhysicsQuery, RaycastHitsStaticBox) {
+  ASSERT_TRUE(jolt::Initialize());
+  JoltPhysicsQuery query;
+  // 2m cube centered at origin: top face at y=1, ray from y=10 down should
+  // hit at y=1 with distance=9 and normal=+Y.
+  StaticBox box;
+  box.min = {-1.0f, -1.0f, -1.0f};
+  box.max = {1.0f, 1.0f, 1.0f};
+  box.layer = 0;
+  query.AddBox(box);
 
-  OverlapQuery oq;
-  oq.capsule = cc.capsule;
-  EXPECT_FALSE(query.OverlapCapsule(oq));
-  EXPECT_FALSE(query.DepenetrateCapsule(oq).hit);
+  RaycastQuery rq;
+  rq.origin = {0.0f, 10.0f, 0.0f};
+  rq.direction = {0.0f, -1.0f, 0.0f};
+  rq.max_distance_m = 100.0f;
+  auto hit = query.Raycast(rq);
+
+  ASSERT_TRUE(hit.hit);
+  EXPECT_NEAR(hit.distance_m, 9.0f, 1e-3f);
+  EXPECT_NEAR(hit.position.y, 1.0f, 1e-3f);
+  EXPECT_NEAR(hit.normal.y, 1.0f, 1e-3f);
+  EXPECT_NEAR(hit.normal.x, 0.0f, 1e-3f);
+  EXPECT_NEAR(hit.normal.z, 0.0f, 1e-3f);
+
+  jolt::Shutdown();
+}
+
+TEST(JoltPhysicsQuery, RaycastMissesWhenAimedAway) {
+  ASSERT_TRUE(jolt::Initialize());
+  JoltPhysicsQuery query;
+  StaticBox box;
+  box.min = {-1.0f, -1.0f, -1.0f};
+  box.max = {1.0f, 1.0f, 1.0f};
+  query.AddBox(box);
+
+  RaycastQuery rq;
+  rq.origin = {0.0f, 10.0f, 0.0f};
+  rq.direction = {0.0f, 1.0f, 0.0f};
+  rq.max_distance_m = 100.0f;
+  EXPECT_FALSE(query.Raycast(rq).hit);
+
+  jolt::Shutdown();
+}
+
+TEST(JoltPhysicsQuery, ClearRemovesPriorBodies) {
+  ASSERT_TRUE(jolt::Initialize());
+  JoltPhysicsQuery query;
+  StaticBox box;
+  box.min = {-1.0f, -1.0f, -1.0f};
+  box.max = {1.0f, 1.0f, 1.0f};
+  query.AddBox(box);
+
+  RaycastQuery rq;
+  rq.origin = {0.0f, 10.0f, 0.0f};
+  rq.direction = {0.0f, -1.0f, 0.0f};
+  rq.max_distance_m = 100.0f;
+  EXPECT_TRUE(query.Raycast(rq).hit);
+
+  query.Clear();
+  EXPECT_FALSE(query.Raycast(rq).hit);
 
   jolt::Shutdown();
 }

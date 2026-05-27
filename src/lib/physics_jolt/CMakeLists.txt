@@ -6,4 +6,5 @@ add_library(atlas_physics_jolt STATIC
 target_include_directories(atlas_physics_jolt PUBLIC "${CMAKE_SOURCE_DIR}/src/lib")
 target_link_libraries(atlas_physics_jolt
   PUBLIC atlas_physics atlas_compiler_options
+  PRIVATE Jolt
 )

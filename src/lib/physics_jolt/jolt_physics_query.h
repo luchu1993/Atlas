@@ -17,6 +17,9 @@ class JoltPhysicsQuery final : public PhysicsQuery {
   JoltPhysicsQuery(JoltPhysicsQuery&&) = delete;
   auto operator=(JoltPhysicsQuery&&) -> JoltPhysicsQuery& = delete;
 
+  void AddBox(const StaticBox& box);
+  void Clear();
+
   [[nodiscard]] auto GroundProbe(const GroundProbeQuery& query) const
       -> GroundHit override;
   [[nodiscard]] auto Raycast(const RaycastQuery& query) const

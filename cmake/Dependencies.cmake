@@ -66,6 +66,20 @@ if(ATLAS_HEAP_ALLOCATOR STREQUAL "mimalloc")
   )
 endif()
 
+# ── JoltPhysics v5.2.0 (optional, query-only backend) ──────────────────────
+# Phase 14.2 / M1b. GIT_REPOSITORY rather than tarball so we don't have to
+# pin a SHA256 before the first verified fetch; bump to URL+SHA256 once the
+# version is locked. SOURCE_SUBDIR=Build because Jolt's main CMakeLists.txt
+# lives there, not at repo root. Fetched only when ATLAS_ENABLE_JOLT=ON.
+if(ATLAS_ENABLE_JOLT)
+  FetchContent_Declare(
+    Jolt
+    GIT_REPOSITORY https://github.com/jrouwe/JoltPhysics.git
+    GIT_TAG v5.2.0
+    SOURCE_SUBDIR Build
+  )
+endif()
+
 # ── Tracy 0.13.1 ─────────────────────────────────────────────────────────────
 # Pinned in lockstep with the Tracy-NET 0.13.2 NuGet package referenced
 # from Atlas.Runtime.csproj — Tracy's wire protocol changes between
@@ -160,6 +174,27 @@ if(ATLAS_ENABLE_PROFILER)
   if(TARGET TracyClient AND NOT TARGET Tracy::TracyClient)
     add_library(Tracy::TracyClient ALIAS TracyClient)
   endif()
+endif()
+
+# Jolt — query-only backend; disable the sample / test / viewer targets
+# Jolt would otherwise build, and keep its compile flags from overriding
+# ours. ENABLE_OBJECT_STREAM stays default-on (small, used for shape
+# serialization which the cooking pipeline will rely on).
+if(ATLAS_ENABLE_JOLT)
+  set(TARGET_HELLO_WORLD              OFF CACHE BOOL "" FORCE)
+  set(TARGET_PERFORMANCE_TEST         OFF CACHE BOOL "" FORCE)
+  set(TARGET_SAMPLES                  OFF CACHE BOOL "" FORCE)
+  set(TARGET_UNIT_TESTS               OFF CACHE BOOL "" FORCE)
+  set(TARGET_VIEWER                   OFF CACHE BOOL "" FORCE)
+  set(OVERRIDE_CXX_FLAGS              OFF CACHE BOOL "" FORCE)
+  set(INTERPROCEDURAL_OPTIMIZATION    OFF CACHE BOOL "" FORCE)
+  set(CROSS_PLATFORM_DETERMINISTIC    OFF CACHE BOOL "" FORCE)
+  set(DOUBLE_PRECISION                OFF CACHE BOOL "" FORCE)
+  set(ENABLE_ALL_WARNINGS             OFF CACHE BOOL "" FORCE)
+  # Atlas links against the dynamic MSVC runtime (/MDd, /MD). Jolt defaults to
+  # the static runtime, which would trigger LNK2038 RuntimeLibrary mismatch.
+  set(USE_STATIC_MSVC_RUNTIME_LIBRARY OFF CACHE BOOL "" FORCE)
+  FetchContent_MakeAvailable(Jolt)
 endif()
 
 # sqlite3 — build manually from amalgamation
