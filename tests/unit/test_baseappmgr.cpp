@@ -171,6 +171,32 @@ TEST(BaseAppMgr, SaveSnapshotToFileSkipsBackupWhenMainFileCorrupt) {
   std::filesystem::remove(backup_path, ec);
 }
 
+TEST(BaseAppMgr, ReattachStateIsIdleWhenNoRestoredApps) {
+  BaseAppMgrHarness h;
+  h.mgr.RegisterWatchersForTest();
+  EXPECT_EQ(h.mgr.GetWatcherRegistry().Get("baseappmgr/ha/restored_baseapps"),
+            std::optional<std::string>("0"));
+  EXPECT_EQ(h.mgr.GetWatcherRegistry().Get("baseappmgr/ha/reattach_pending"),
+            std::optional<std::string>("0"));
+  EXPECT_EQ(h.mgr.GetWatcherRegistry().Get("baseappmgr/ha/reattach_state"),
+            std::optional<std::string>("idle"));
+  EXPECT_EQ(h.mgr.GetWatcherRegistry().Get("baseappmgr/ha/reattach_completed"),
+            std::optional<std::string>("true"));
+}
+
+TEST(BaseAppMgr, ReattachWatchdogMsIsConfigurableViaWatcher) {
+  BaseAppMgrHarness h;
+  h.mgr.RegisterWatchersForTest();
+  auto initial = h.mgr.GetWatcherRegistry().Get("baseappmgr/ha/reattach_watchdog_ms");
+  ASSERT_TRUE(initial.has_value());
+  EXPECT_FALSE(initial->empty());
+  // Verify the watcher accepts an override (the ServerAppOption registers
+  // ReadWrite so set-watch can shrink the window during verify drills).
+  EXPECT_TRUE(h.mgr.GetWatcherRegistry().Set("baseappmgr/ha/reattach_watchdog_ms", "5000"));
+  EXPECT_EQ(h.mgr.GetWatcherRegistry().Get("baseappmgr/ha/reattach_watchdog_ms"),
+            std::optional<std::string>("5000"));
+}
+
 TEST(BaseAppMgr, SnapshotSizeHighWaterPctReflectsLastSave) {
   const auto stamp = std::chrono::steady_clock::now().time_since_epoch().count();
   const auto path = std::filesystem::temp_directory_path() /

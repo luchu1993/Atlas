@@ -167,6 +167,16 @@ class BaseAppMgr : public ManagerApp {
   // in a follow-up refactor).
   void MarkSnapshotDirty(const char* reason);
   void SaveConfiguredSnapshot(const char* context);
+  void AuditReattachWatchdog();
+  [[nodiscard]] auto ReattachWatchdogWindow() const -> Duration;
+  [[nodiscard]] auto IsReattachStuck(const BaseAppInfo& info, TimePoint now) const -> bool;
+  [[nodiscard]] auto RestoredBaseAppCount() const -> std::size_t;
+  [[nodiscard]] auto PendingReattachBaseAppCount() const -> std::size_t;
+  [[nodiscard]] auto CompletedReattachBaseAppCount() const -> std::size_t;
+  [[nodiscard]] auto StuckReattachBaseAppCount() const -> std::size_t;
+  [[nodiscard]] auto ReattachCompleted() const -> bool;
+  [[nodiscard]] auto ReattachStateForWatcher() const -> std::string;
+  [[nodiscard]] auto BuildReattachStatusSummary() const -> std::string;
   [[nodiscard]] auto SnapshotFilePathForWatcher() const -> std::string;
   [[nodiscard]] auto SnapshotFilePresentForWatcher() const -> bool;
   [[nodiscard]] auto SnapshotFileBytesForWatcher() const -> uint64_t;

@@ -17,11 +17,16 @@
 #include "network/machined_types.h"
 #include "platform/filesystem.h"
 #include "serialization/binary_stream.h"
+#include "server/server_app_option.h"
 #include "server/watcher.h"
 
 namespace atlas {
 
 namespace {
+
+ServerAppOption<uint32_t> s_ha_reattach_watchdog_ms{
+    30000u, "baseappmgr_ha_reattach_watchdog_ms",
+    "baseappmgr/ha/reattach_watchdog_ms", WatcherMode::kReadWrite};
 
 constexpr uint32_t kSnapshotMagic = 0x424D4731u;  // 'BMG1'
 constexpr uint32_t kSnapshotVersion = 1;
@@ -732,6 +737,7 @@ auto BaseAppMgr::RestoreSnapshotFromFile(const std::filesystem::path& path) -> R
 
 void BaseAppMgr::OnTickComplete() {
   ManagerApp::OnTickComplete();
+  AuditReattachWatchdog();
   if (Config().snapshot_path.empty() || Config().snapshot_interval_ms <= 0) return;
   const auto now = Clock::now();
   const auto interval =
@@ -876,6 +882,93 @@ auto BaseAppMgr::BuildSnapshotStatusSummary() const -> std::string {
       last_snapshot_save_error_.empty() ? 0 : 1, error_detail);
 }
 
+auto BaseAppMgr::ReattachWatchdogWindow() const -> Duration {
+  return std::chrono::duration_cast<Duration>(
+      std::chrono::milliseconds(s_ha_reattach_watchdog_ms.Value()));
+}
+
+auto BaseAppMgr::IsReattachStuck(const BaseAppInfo& info, TimePoint now) const -> bool {
+  if (!info.restored_from_snapshot || !info.needs_reattach) return false;
+  return now - info.registered_at >= ReattachWatchdogWindow();
+}
+
+void BaseAppMgr::AuditReattachWatchdog() {
+  if (baseapps_.empty()) return;
+  const auto now = Clock::now();
+  const auto window = ReattachWatchdogWindow();
+  const auto min_repeat = std::chrono::duration_cast<Duration>(std::chrono::milliseconds(1000));
+  const auto repeat_window = window < min_repeat ? min_repeat : window;
+  for (auto& [_, info] : baseapps_) {
+    if (!IsReattachStuck(info, now)) continue;
+    if (info.last_reattach_watchdog_log_at != TimePoint{} &&
+        now - info.last_reattach_watchdog_log_at < repeat_window) {
+      continue;
+    }
+    ATLAS_LOG_WARNING("BaseAppMgr: restored BaseApp reattach stuck app_id={} addr={}:{} age_ms={}",
+                      info.app_id, info.internal_addr.Ip(), info.internal_addr.Port(),
+                      std::chrono::duration_cast<std::chrono::milliseconds>(
+                          now - info.registered_at).count());
+    info.last_reattach_watchdog_log_at = now;
+  }
+}
+
+auto BaseAppMgr::RestoredBaseAppCount() const -> std::size_t {
+  return static_cast<std::size_t>(std::count_if(
+      baseapps_.begin(), baseapps_.end(),
+      [](const auto& entry) { return entry.second.restored_from_snapshot; }));
+}
+
+auto BaseAppMgr::PendingReattachBaseAppCount() const -> std::size_t {
+  return static_cast<std::size_t>(std::count_if(
+      baseapps_.begin(), baseapps_.end(), [](const auto& entry) {
+        return entry.second.restored_from_snapshot && entry.second.needs_reattach;
+      }));
+}
+
+auto BaseAppMgr::CompletedReattachBaseAppCount() const -> std::size_t {
+  return RestoredBaseAppCount() - PendingReattachBaseAppCount();
+}
+
+auto BaseAppMgr::StuckReattachBaseAppCount() const -> std::size_t {
+  const auto now = Clock::now();
+  std::size_t stuck = 0;
+  for (const auto& [_, info] : baseapps_) {
+    if (IsReattachStuck(info, now)) ++stuck;
+  }
+  return stuck;
+}
+
+auto BaseAppMgr::ReattachCompleted() const -> bool {
+  return PendingReattachBaseAppCount() == 0;
+}
+
+auto BaseAppMgr::ReattachStateForWatcher() const -> std::string {
+  if (RestoredBaseAppCount() == 0) return "idle";
+  if (StuckReattachBaseAppCount() > 0) return "stuck";
+  if (PendingReattachBaseAppCount() > 0) return "pending";
+  return "complete";
+}
+
+auto BaseAppMgr::BuildReattachStatusSummary() const -> std::string {
+  const auto state = ReattachStateForWatcher();
+  const auto restored = RestoredBaseAppCount();
+  const auto pending = PendingReattachBaseAppCount();
+  const auto stuck = StuckReattachBaseAppCount();
+  const auto completed = restored - pending;
+  std::string out = std::format(
+      "state={} restored={} pending={} stuck={} completed={} completed_count={}",
+      state, restored, pending, stuck, ReattachCompleted() ? 1 : 0, completed);
+  for (const auto& [_, info] : baseapps_) {
+    if (!info.restored_from_snapshot) continue;
+    const char* host_state = info.needs_reattach ? (IsReattachStuck(info, Clock::now()) ? "stuck"
+                                                                                        : "pending")
+                                                  : "attached";
+    out += std::format(" app={} addr={}:{} state={}", info.app_id, info.internal_addr.Ip(),
+                       info.internal_addr.Port(), host_state);
+  }
+  return out;
+}
+
 auto BaseAppMgr::BuildSnapshotRestoreStatusSummary() const -> std::string {
   const char* state = last_snapshot_restore_source_.empty() ? "idle"
                           : last_snapshot_restore_source_ == "none" ?
@@ -1011,6 +1104,30 @@ void BaseAppMgr::RegisterWatchers() {
   wr.Add<uint32_t>("baseappmgr/ha/snapshot_size_high_water_pct",
                    std::function<uint32_t()>(
                        [this] { return SnapshotSizeHighWaterPct(); }));
+
+  // reattach state. reattach_watchdog_ms is registered as a ReadWrite
+  // ServerAppOption (above), so verify scripts can shrink the window via
+  // atlas_tool set-watch without rebuilding.
+  wr.Add<std::size_t>("baseappmgr/ha/restored_baseapps",
+                      std::function<std::size_t()>(
+                          [this] { return RestoredBaseAppCount(); }));
+  wr.Add<std::size_t>("baseappmgr/ha/reattach_pending",
+                      std::function<std::size_t()>(
+                          [this] { return PendingReattachBaseAppCount(); }));
+  wr.Add<std::size_t>("baseappmgr/ha/reattach_completed_count",
+                      std::function<std::size_t()>(
+                          [this] { return CompletedReattachBaseAppCount(); }));
+  wr.Add<bool>("baseappmgr/ha/reattach_completed",
+               std::function<bool()>([this] { return ReattachCompleted(); }));
+  wr.Add<std::size_t>("baseappmgr/ha/reattach_stuck",
+                      std::function<std::size_t()>(
+                          [this] { return StuckReattachBaseAppCount(); }));
+  wr.Add<std::string>("baseappmgr/ha/reattach_state",
+                      std::function<std::string()>(
+                          [this] { return ReattachStateForWatcher(); }));
+  wr.Add<std::string>("baseappmgr/ha/reattach_status",
+                      std::function<std::string()>(
+                          [this] { return BuildReattachStatusSummary(); }));
 }
 
 void BaseAppMgr::OnRegisterBaseapp(const Address& src, Channel* ch,
