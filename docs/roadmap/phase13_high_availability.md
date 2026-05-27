@@ -290,14 +290,64 @@ live 回归优先覆盖 CellAppMgr abnormal shutdown、`--cycles` 多轮接管�
   payload / Ghost backup / promote 覆盖率基线；更大规模跨机器 fault-injection
   矩阵仍需补齐。
 
+## BaseAppMgr HA(B1-B4 已落地)
+
+- **Snapshot**:`Snapshot()` / `Restore()` 持久化 BaseApp 表(internal/external addr、
+  app_id、is_ready、is_retiring)、`next_app_id_`、`global_bases_` 注册表和
+  `dbid_affinity_` 表(以保存时刻为基准的 age-relative,Restore 后 PruneExpired
+  仍能匹配 TTL)。复用 CellAppMgr 的 envelope / `.bak` / `AtomicReplaceFile`
+  机制(独立 magic `'BMG1'`,version 1)。
+- **Reattach**:Restore 后 BaseApp 进入 `needs_reattach=true` 状态,
+  `OnRegisterBaseapp` 识别 needs_reattach entry 走 reattach 分支(保留 app_id,
+  替换 channel,清 needs_reattach)。`IsAllocationCandidate` 拒绝 needs_reattach
+  host 防止 LoginApp 把新客户端分配到 unreachable BaseApp。
+  `restored_from_snapshot` 与 CellAppMgr 一致是 sticky 标记(只在 BaseApp 死亡
+  时清),`restored_baseapps` watcher 因此报告"自上次 restore 以来此 BaseApp 仍在"。
+- **Reattach watchdog**:`AuditReattachWatchdog` 在 `OnTickComplete` 检查
+  stuck BaseApp;`baseappmgr/ha/reattach_watchdog_ms` 是 ReadWrite ServerAppOption
+  (默认 30s),verify 脚本可以通过 `atlas_tool set-watch` 缩短窗口。
+- **Watcher**:`baseappmgr/ha/snapshot_path`、`snapshot_saves`、`snapshot_restores`、
+  `snapshot_fallback_restores`、`snapshot_save_failures`、`snapshot_restore_failures`、
+  `snapshot_failures`、`snapshot_backup_skips`、`snapshot_max_bytes`、
+  `snapshot_size_high_water_pct`、`snapshot_dirty`、`snapshot_dirty_age_ms`、
+  `snapshot_dirty_reason`、`snapshot_save_stale`、`snapshot_status`、
+  `snapshot_last_save_path`、`snapshot_last_save_error`、`snapshot_file_status`、
+  `snapshot_backup_status`、`snapshot_last_restore_source`、
+  `snapshot_last_restore_error`、`snapshot_restore_status`、`restored_baseapps`、
+  `reattach_pending`、`reattach_completed_count`、`reattach_completed`、
+  `reattach_stuck`、`reattach_state`、`reattach_status`、`reattach_watchdog_ms`。
+- **Reviver 扩展**:Reviver 重构为 multi-target,持有 `cellappmgr_target_` 和
+  `baseappmgr_target_`,各自独立 leader lock、heartbeat、launch 预算、watcher
+  路径。BaseAppMgr 加 `HealthProbe` / `HealthProbeAck` 消息(message id 6020/
+  6021),Reviver 通过 `baseappmgr::HealthProbe` 校验 manager RUDP 控制面响应。
+  watcher 路径 `reviver/baseappmgr/*` 与 CellAppMgr 对齐;CellAppMgr 继续走
+  `reviver/cellappmgr/*` 和 `reviver/leader/*`(legacy alias)。
+- **ServerConfig**:`revive_baseappmgr_*`(exe、name、internal_port、snapshot_path、
+  output_path、snapshot_interval_ms、update_hertz、launch_timeout_ms、on_start、
+  leader_lock_path)平行于 `revive_cellappmgr_*`,均支持 CLI 和 `reviver.baseappmgr`
+  JSON 段。目标 enabled 当 on_start 或 exe/port 任一已配置 — 未配置时该 target
+  完全 silent,旧的 single-target Reviver 行为保持不变。
+- **verify_baseappmgr_ha**:`tools/cluster_control/verify_baseappmgr_ha.py` +
+  `tools/bin/verify_baseappmgr_ha.{bat,sh}` 提供 `--no-inject` 巡检和
+  `--cycles N` 异常重启注入。校验 snapshot saves/restores、save_failures=0、
+  reattach state=complete、Reviver active_pid 推进到新 manager、heartbeat
+  acks > 0。`--summary-json` 输出与 verify_cellappmgr_ha 风格一致;
+  `--max-takeover-ms` SLO gate 限制 shutdown→fresh-snapshot 耗时。
+- 当前边界:verify 脚本未实现 Reviver leader failover 跨机器场景;snapshot
+  仍是本地文件;BaseAppMgr 死亡时 BaseApp 自身的 entity restore 走 Phase 13
+  原有 CellApp death restore 路径(BaseApp 不受 BaseAppMgr 重启直接影响)。
+
 ## 后续工作
 
-1. 为 Reviver 接入外部 leader lock，覆盖跨机器双 Reviver 场景。
-2. 为 BaseAppMgr 定义 snapshot 内容：BaseApp 表、负载、proxy affinity 和路由状态。
-3. 为 DBAppMgr 定义多 DBApp registry、分片策略、故障转移和 pending request 恢复。
-4. 评估 CellAppMgr snapshot 的共享存储 / WAL 方案，进一步缩小本地文件丢失窗口。
-5. 扩大 Manager HA live cluster fault-injection 矩阵，覆盖跨机器 Reviver、
-   snapshot 共享存储和更大规模 continued LB。
+1. 为 Reviver 接入外部 leader lock,覆盖跨机器双 Reviver 场景。
+2. 为 DBAppMgr 定义多 DBApp registry、分片策略、故障转移和 pending request 恢复。
+3. 评估 CellAppMgr / BaseAppMgr snapshot 的共享存储 / WAL 方案,进一步缩小
+   本地文件丢失窗口。
+4. 扩大 Manager HA live cluster fault-injection 矩阵,覆盖跨机器 Reviver、
+   snapshot 共享存储和更大规模 continued LB,并把 BaseAppMgr live takeover
+   纳入 CI baseline。
+5. 把 CellAppMgr / BaseAppMgr 共用的 snapshot envelope helper 抽到
+   `src/lib/server/snapshot_envelope.h`(目前是 inline copy)。
 
 ## 验证基线
 
