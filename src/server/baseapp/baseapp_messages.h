@@ -1,6 +1,7 @@
 #ifndef ATLAS_SERVER_BASEAPP_BASEAPP_MESSAGES_H_
 #define ATLAS_SERVER_BASEAPP_BASEAPP_MESSAGES_H_
 
+#include <cmath>
 #include <cstdint>
 #include <cstring>
 #include <string>
@@ -8,6 +9,7 @@
 
 #include "cellapp/cell_bounds.h"
 #include "math/vector3.h"
+#include "movement_sim/movement_codec.h"
 #include "network/address.h"
 #include "network/message.h"
 #include "network/message_ids.h"
@@ -410,7 +412,7 @@ struct ReplicatedDeltaFromCell {
 };
 static_assert(NetworkMessage<ReplicatedDeltaFromCell>);
 
-// Send-only zero-copy view of ReplicatedDeltaFromCell. Saves ~3 µs/observer
+// Send-only zero-copy view of ReplicatedDeltaFromCell. Saves ~3 us/observer
 // at 200 obs/tick by skipping per-observer std::vector::assign.
 struct ReplicatedDeltaFromCellSpan {
   EntityID entity_id{kInvalidEntityID};
@@ -431,9 +433,8 @@ struct ReplicatedDeltaFromCellSpan {
 };
 static_assert(NetworkMessage<ReplicatedDeltaFromCellSpan>);
 
-// Reliable twin of ReplicatedDeltaFromCell (ID 2017). For reliable="true"
-// fields (HP, state, inventory). Bypasses DeltaForwarder budget; same wire
-// format so the client reuses ApplyReplicatedDelta.
+// Reliable twin of ReplicatedDeltaFromCell for ordered fields.
+// It bypasses DeltaForwarder and reuses the same wire format.
 struct ReplicatedReliableDeltaFromCell {
   EntityID entity_id{kInvalidEntityID};
   std::vector<std::byte> delta;
@@ -696,9 +697,8 @@ struct AuthenticateResult {
 };
 static_assert(NetworkMessage<AuthenticateResult>);
 
-// Owning-entity change after server-side GiveClientTo (ID 2024). Client
-// must use new_entity_id for subsequent ClientCellRpc; previous id is
-// unbound and will fail validation.
+// Owning-entity change after server-side GiveClientTo (ID 2024).
+// ClientCellRpc must use new_entity_id after this.
 struct EntityTransferred {
   EntityID new_entity_id{kInvalidEntityID};
   uint16_t new_type_id{0};
@@ -730,9 +730,8 @@ struct EntityTransferred {
 };
 static_assert(NetworkMessage<EntityTransferred>);
 
-// Tells client its cell is ready (ID 2025); fires once both BindClient
-// and SetCell have happened. Avoids race where ClientCellRpc would be
-// dropped for missing cell_addr.
+// Tells client its cell is ready after BindClient and SetCell.
+// Avoids ClientCellRpc being dropped for missing cell_addr.
 struct CellReady {
   EntityID entity_id{kInvalidEntityID};
 
@@ -845,6 +844,114 @@ struct ClientCellRpc {
   }
 };
 static_assert(NetworkMessage<ClientCellRpc>);
+
+struct ClientMovementInput {
+  EntityID target_entity_id{kInvalidEntityID};
+  std::vector<movement::InputFrame> frames;
+
+  static auto Descriptor() -> const MessageDesc& {
+    static const MessageDesc kDesc{msg_id::Id(msg_id::BaseApp::kClientMovementInput),
+                                   "baseapp::ClientMovementInput",
+                                   MessageLengthStyle::kVariable,
+                                   -1,
+                                   MessageReliability::kUnreliable,
+                                   MessageUrgency::kImmediate};
+    return kDesc;
+  }
+
+  void Serialize(BinaryWriter& w) const {
+    w.Write(target_entity_id);
+    w.Write(static_cast<uint8_t>(frames.size()));
+    for (const auto& frame : frames) movement::SerializeInputFrame(w, frame);
+  }
+
+  static auto Deserialize(BinaryReader& r) -> Result<ClientMovementInput> {
+    auto target = r.Read<uint32_t>();
+    auto count = r.Read<uint8_t>();
+    if (!target || !count) {
+      return Error{ErrorCode::kInvalidArgument, "ClientMovementInput: truncated"};
+    }
+    if (*count == 0 || *count > movement::kMaxMovementInputFrames) {
+      return Error{ErrorCode::kInvalidArgument, "ClientMovementInput: invalid frame count"};
+    }
+    if (*target == kInvalidEntityID) {
+      return Error{ErrorCode::kInvalidArgument, "ClientMovementInput: invalid target"};
+    }
+    ClientMovementInput msg;
+    msg.target_entity_id = *target;
+    msg.frames.reserve(*count);
+    for (uint8_t i = 0; i < *count; ++i) {
+      auto frame = movement::DeserializeInputFrame(r);
+      if (!frame) {
+        return Error{ErrorCode::kInvalidArgument, "ClientMovementInput: frame truncated"};
+      }
+      if (!movement::IsInputFrameValid(*frame)) {
+        return Error{ErrorCode::kInvalidArgument, "ClientMovementInput: invalid frame"};
+      }
+      msg.frames.push_back(*frame);
+    }
+    return msg;
+  }
+};
+static_assert(NetworkMessage<ClientMovementInput>);
+
+struct MovementCorrectionReport {
+  EntityID target_entity_id{kInvalidEntityID};
+  uint32_t acked_input_seq{0};
+  uint32_t server_tick{0};
+  float distance_m{0.0f};
+  uint16_t correction_flags{0};
+
+  static auto Descriptor() -> const MessageDesc& {
+    static const MessageDesc kDesc{msg_id::Id(msg_id::BaseApp::kMovementCorrectionReport),
+                                   "baseapp::MovementCorrectionReport",
+                                   MessageLengthStyle::kFixed,
+                                   static_cast<int>(sizeof(uint32_t) * 3 + sizeof(float) +
+                                                    sizeof(uint16_t)),
+                                   MessageReliability::kUnreliable,
+                                   MessageUrgency::kImmediate};
+    return kDesc;
+  }
+
+  void Serialize(BinaryWriter& w) const {
+    w.Write(target_entity_id);
+    w.Write(acked_input_seq);
+    w.Write(server_tick);
+    w.Write(distance_m);
+    w.Write(correction_flags);
+  }
+
+  static auto Deserialize(BinaryReader& r) -> Result<MovementCorrectionReport> {
+    auto target = r.Read<uint32_t>();
+    auto ack = r.Read<uint32_t>();
+    auto tick = r.Read<uint32_t>();
+    auto distance = r.Read<float>();
+    auto flags = r.Read<uint16_t>();
+    if (!target || !ack || !tick || !distance || !flags) {
+      return Error{ErrorCode::kInvalidArgument, "MovementCorrectionReport: truncated"};
+    }
+    if (*target == kInvalidEntityID) {
+      return Error{ErrorCode::kInvalidArgument, "MovementCorrectionReport: invalid target"};
+    }
+    if (!std::isfinite(*distance) || *distance < 0.0f ||
+        !movement::IsCorrectionFlagsValid(*flags)) {
+      return Error{ErrorCode::kInvalidArgument, "MovementCorrectionReport: invalid payload"};
+    }
+    const uint16_t expected_flags =
+        movement::CorrectionFlagForTier(movement::ClassifyCorrection(*distance));
+    if (*flags != expected_flags) {
+      return Error{ErrorCode::kInvalidArgument, "MovementCorrectionReport: mismatched flags"};
+    }
+    MovementCorrectionReport msg;
+    msg.target_entity_id = *target;
+    msg.acked_input_seq = *ack;
+    msg.server_tick = *tick;
+    msg.distance_m = *distance;
+    msg.correction_flags = *flags;
+    return msg;
+  }
+};
+static_assert(NetworkMessage<MovementCorrectionReport>);
 
 // CellAppMgr death notice with per-space fallback hosts plus current leaf
 // bounds. BaseApp uses the bounds for exact restore host selection.
@@ -1044,6 +1151,11 @@ inline constexpr MessageID kClientDeltaMessageId = static_cast<MessageID>(0xF001
 inline constexpr MessageID kClientBaselineMessageId = static_cast<MessageID>(0xF002);
 inline constexpr MessageID kClientReliableDeltaMessageId = static_cast<MessageID>(0xF003);
 inline constexpr MessageID kClientRpcMessageId = static_cast<MessageID>(0xF004);
+inline constexpr MessageID kClientMovementStateAckMessageId = static_cast<MessageID>(0xF005);
+inline constexpr MessageID kClientMovementCommandStartMessageId =
+    static_cast<MessageID>(0xF006);
+inline constexpr MessageID kClientMovementCommandEndMessageId =
+    static_cast<MessageID>(0xF007);
 
 // Send-only envelopes; span borrows caller storage for the synchronous
 // SendMessage. Client intercepts these wire ids before typed dispatch.
@@ -1081,8 +1193,8 @@ struct ClientReliableDeltaEnvelope {
 };
 static_assert(NetworkMessage<ClientReliableDeltaEnvelope>);
 
-// Body: [u32 entity_id][u32 rpc_id][u64 trace_id][args]. rpc_id = slot:8 | method:24.
-// entity_id targets the script entity, not the receiver — broadcast scopes route to the source.
+// Body: [u32 entity_id][u32 rpc_id][u64 trace_id][args].
+// entity_id targets the script entity; broadcast scopes route to the source.
 struct ClientRpcEnvelope {
   EntityID entity_id{kInvalidEntityID};
   uint32_t rpc_id{0};
@@ -1107,9 +1219,372 @@ struct ClientRpcEnvelope {
 };
 static_assert(NetworkMessage<ClientRpcEnvelope>);
 
-// Flattened BSP leaf rects for the LB debug visualisation. Sent on the same
-// id by CellAppMgr -> BaseApp (mgr fans out on geometry change) and by
-// BaseApp -> Client (per-proxy forward on change + login replay).
+struct MovementStateAckFromCell {
+  EntityID entity_id{kInvalidEntityID};
+  uint32_t acked_input_seq{0};
+  uint32_t server_tick{0};
+  uint32_t cell_epoch{0};
+  movement::MovementState state;
+  uint16_t correction_flags{0};
+
+  static auto Descriptor() -> const MessageDesc& {
+    static const MessageDesc kDesc{msg_id::Id(msg_id::BaseApp::kMovementStateAckFromCell),
+                                   "baseapp::MovementStateAckFromCell",
+                                   MessageLengthStyle::kFixed,
+                                   static_cast<int>(sizeof(uint32_t) * 6 + 9 * sizeof(float) +
+                                                    sizeof(uint16_t)),
+                                   MessageReliability::kUnreliable,
+                                   MessageUrgency::kBatched};
+    return kDesc;
+  }
+
+  void Serialize(BinaryWriter& w) const {
+    w.Write(entity_id);
+    w.Write(acked_input_seq);
+    w.Write(server_tick);
+    w.Write(cell_epoch);
+    movement::SerializeMovementState(w, state);
+    w.Write(correction_flags);
+  }
+
+  static auto Deserialize(BinaryReader& r) -> Result<MovementStateAckFromCell> {
+    auto eid = r.Read<uint32_t>();
+    auto ack = r.Read<uint32_t>();
+    auto tick = r.Read<uint32_t>();
+    auto epoch = r.Read<uint32_t>();
+    if (!eid || !ack || !tick || !epoch) {
+      return Error{ErrorCode::kInvalidArgument, "MovementStateAckFromCell: truncated"};
+    }
+    if (*eid == kInvalidEntityID) {
+      return Error{ErrorCode::kInvalidArgument, "MovementStateAckFromCell: invalid entity"};
+    }
+    auto state = movement::DeserializeMovementState(r);
+    if (!state) {
+      return Error{ErrorCode::kInvalidArgument, "MovementStateAckFromCell: state truncated"};
+    }
+    auto flags = r.Read<uint16_t>();
+    if (!flags) {
+      return Error{ErrorCode::kInvalidArgument, "MovementStateAckFromCell: truncated"};
+    }
+    if (!movement::IsCorrectionFlagsValid(*flags)) {
+      return Error{ErrorCode::kInvalidArgument, "MovementStateAckFromCell: invalid flags"};
+    }
+    MovementStateAckFromCell msg;
+    msg.entity_id = *eid;
+    msg.acked_input_seq = *ack;
+    msg.server_tick = *tick;
+    msg.cell_epoch = *epoch;
+    msg.state = *state;
+    msg.correction_flags = *flags;
+    return msg;
+  }
+};
+static_assert(NetworkMessage<MovementStateAckFromCell>);
+
+struct MovementStateAckToClient {
+  EntityID entity_id{kInvalidEntityID};
+  uint32_t acked_input_seq{0};
+  uint32_t server_tick{0};
+  movement::MovementState state;
+  uint16_t correction_flags{0};
+
+  static auto Descriptor() -> const MessageDesc& {
+    static const MessageDesc kDesc{kClientMovementStateAckMessageId,
+                                   "baseapp::MovementStateAckToClient",
+                                   MessageLengthStyle::kFixed,
+                                   static_cast<int>(sizeof(uint32_t) * 5 + 9 * sizeof(float) +
+                                                    sizeof(uint16_t)),
+                                   MessageReliability::kUnreliable,
+                                   MessageUrgency::kBatched};
+    return kDesc;
+  }
+
+  void Serialize(BinaryWriter& w) const {
+    w.Write(entity_id);
+    w.Write(acked_input_seq);
+    w.Write(server_tick);
+    movement::SerializeMovementState(w, state);
+    w.Write(correction_flags);
+  }
+
+  static auto Deserialize(BinaryReader& r) -> Result<MovementStateAckToClient> {
+    auto eid = r.Read<uint32_t>();
+    auto ack = r.Read<uint32_t>();
+    auto tick = r.Read<uint32_t>();
+    if (!eid || !ack || !tick) {
+      return Error{ErrorCode::kInvalidArgument, "MovementStateAckToClient: truncated"};
+    }
+    if (*eid == kInvalidEntityID) {
+      return Error{ErrorCode::kInvalidArgument, "MovementStateAckToClient: invalid entity"};
+    }
+    auto state = movement::DeserializeMovementState(r);
+    if (!state) {
+      return Error{ErrorCode::kInvalidArgument, "MovementStateAckToClient: state truncated"};
+    }
+    auto flags = r.Read<uint16_t>();
+    if (!flags) {
+      return Error{ErrorCode::kInvalidArgument, "MovementStateAckToClient: truncated"};
+    }
+    if (!movement::IsCorrectionFlagsValid(*flags)) {
+      return Error{ErrorCode::kInvalidArgument, "MovementStateAckToClient: invalid flags"};
+    }
+    MovementStateAckToClient msg;
+    msg.entity_id = *eid;
+    msg.acked_input_seq = *ack;
+    msg.server_tick = *tick;
+    msg.state = *state;
+    msg.correction_flags = *flags;
+    return msg;
+  }
+};
+static_assert(NetworkMessage<MovementStateAckToClient>);
+
+struct MovementCommandStartFromCell {
+  EntityID source_entity_id{kInvalidEntityID};
+  uint32_t cell_epoch{0};
+  std::vector<EntityID> dest_entity_ids;
+  movement::MovementCommand command;
+
+  static auto Descriptor() -> const MessageDesc& {
+    static const MessageDesc kDesc{msg_id::Id(msg_id::BaseApp::kMovementCommandStartFromCell),
+                                   "baseapp::MovementCommandStartFromCell",
+                                   MessageLengthStyle::kVariable,
+                                   -1,
+                                   MessageReliability::kReliable,
+                                   MessageUrgency::kImmediate};
+    return kDesc;
+  }
+
+  void Serialize(BinaryWriter& w) const {
+    w.WritePackedInt(source_entity_id);
+    w.Write(cell_epoch);
+    w.WritePackedInt(static_cast<uint32_t>(dest_entity_ids.size()));
+    for (auto id : dest_entity_ids) w.WritePackedInt(id);
+    movement::SerializeMovementCommand(w, command);
+  }
+
+  static auto Deserialize(BinaryReader& r) -> Result<MovementCommandStartFromCell> {
+    auto source = r.ReadPackedInt();
+    auto epoch = r.Read<uint32_t>();
+    auto count = r.ReadPackedInt();
+    if (!source || !epoch || !count) {
+      return Error{ErrorCode::kInvalidArgument, "MovementCommandStartFromCell: truncated"};
+    }
+    if (*source == kInvalidEntityID) {
+      return Error{ErrorCode::kInvalidArgument, "MovementCommandStartFromCell: invalid source"};
+    }
+    if (*count > kMaxBroadcastRpcDestinations) {
+      return Error{ErrorCode::kInvalidArgument, "MovementCommandStartFromCell: too many dests"};
+    }
+    MovementCommandStartFromCell msg;
+    msg.source_entity_id = *source;
+    msg.cell_epoch = *epoch;
+    msg.dest_entity_ids.reserve(*count);
+    for (uint32_t i = 0; i < *count; ++i) {
+      auto id = r.ReadPackedInt();
+      if (!id) {
+        return Error{ErrorCode::kInvalidArgument,
+                     "MovementCommandStartFromCell: dest list truncated"};
+      }
+      if (*id == kInvalidEntityID) {
+        return Error{ErrorCode::kInvalidArgument, "MovementCommandStartFromCell: invalid dest"};
+      }
+      msg.dest_entity_ids.push_back(*id);
+    }
+    auto command = movement::DeserializeMovementCommand(r);
+    if (!command) {
+      return Error{ErrorCode::kInvalidArgument, "MovementCommandStartFromCell: command"};
+    }
+    msg.command = *command;
+    return msg;
+  }
+};
+static_assert(NetworkMessage<MovementCommandStartFromCell>);
+
+struct MovementCommandEndFromCell {
+  EntityID source_entity_id{kInvalidEntityID};
+  uint32_t cell_epoch{0};
+  std::vector<EntityID> dest_entity_ids;
+  uint32_t command_id{0};
+  uint32_t server_tick{0};
+  movement::MovementCommandEndReason reason{movement::MovementCommandEndReason::kCompleted};
+  movement::MovementState state;
+
+  static auto Descriptor() -> const MessageDesc& {
+    static const MessageDesc kDesc{msg_id::Id(msg_id::BaseApp::kMovementCommandEndFromCell),
+                                   "baseapp::MovementCommandEndFromCell",
+                                   MessageLengthStyle::kVariable,
+                                   -1,
+                                   MessageReliability::kReliable,
+                                   MessageUrgency::kImmediate};
+    return kDesc;
+  }
+
+  void Serialize(BinaryWriter& w) const {
+    w.WritePackedInt(source_entity_id);
+    w.Write(cell_epoch);
+    w.WritePackedInt(static_cast<uint32_t>(dest_entity_ids.size()));
+    for (auto id : dest_entity_ids) w.WritePackedInt(id);
+    w.Write(command_id);
+    w.Write(server_tick);
+    w.Write(static_cast<uint8_t>(reason));
+    movement::SerializeMovementState(w, state);
+  }
+
+  static auto Deserialize(BinaryReader& r) -> Result<MovementCommandEndFromCell> {
+    auto source = r.ReadPackedInt();
+    auto epoch = r.Read<uint32_t>();
+    auto count = r.ReadPackedInt();
+    if (!source || !epoch || !count) {
+      return Error{ErrorCode::kInvalidArgument, "MovementCommandEndFromCell: truncated"};
+    }
+    if (*source == kInvalidEntityID) {
+      return Error{ErrorCode::kInvalidArgument, "MovementCommandEndFromCell: invalid source"};
+    }
+    if (*count > kMaxBroadcastRpcDestinations) {
+      return Error{ErrorCode::kInvalidArgument, "MovementCommandEndFromCell: too many dests"};
+    }
+    MovementCommandEndFromCell msg;
+    msg.source_entity_id = *source;
+    msg.cell_epoch = *epoch;
+    msg.dest_entity_ids.reserve(*count);
+    for (uint32_t i = 0; i < *count; ++i) {
+      auto id = r.ReadPackedInt();
+      if (!id) {
+        return Error{ErrorCode::kInvalidArgument,
+                     "MovementCommandEndFromCell: dest list truncated"};
+      }
+      if (*id == kInvalidEntityID) {
+        return Error{ErrorCode::kInvalidArgument, "MovementCommandEndFromCell: invalid dest"};
+      }
+      msg.dest_entity_ids.push_back(*id);
+    }
+    auto command_id = r.Read<uint32_t>();
+    auto server_tick = r.Read<uint32_t>();
+    auto reason = r.Read<uint8_t>();
+    if (!command_id || !server_tick || !reason) {
+      return Error{ErrorCode::kInvalidArgument, "MovementCommandEndFromCell: truncated"};
+    }
+    if (*command_id == 0) {
+      return Error{ErrorCode::kInvalidArgument, "MovementCommandEndFromCell: invalid command id"};
+    }
+    if (!movement::IsMovementCommandEndReasonWireValue(*reason)) {
+      return Error{ErrorCode::kInvalidArgument, "MovementCommandEndFromCell: invalid reason"};
+    }
+    auto state = movement::DeserializeMovementState(r);
+    if (!state) {
+      return Error{ErrorCode::kInvalidArgument, "MovementCommandEndFromCell: state"};
+    }
+    msg.command_id = *command_id;
+    msg.server_tick = *server_tick;
+    msg.reason = static_cast<movement::MovementCommandEndReason>(*reason);
+    msg.state = *state;
+    return msg;
+  }
+};
+static_assert(NetworkMessage<MovementCommandEndFromCell>);
+
+struct MovementCommandStartToClient {
+  EntityID entity_id{kInvalidEntityID};
+  movement::MovementCommand command;
+
+  static auto Descriptor() -> const MessageDesc& {
+    static const MessageDesc kDesc{kClientMovementCommandStartMessageId,
+                                   "baseapp::MovementCommandStartToClient",
+                                   MessageLengthStyle::kFixed,
+                                   static_cast<int>(sizeof(uint32_t) +
+                                                    movement::kMovementCommandWireBytes),
+                                   MessageReliability::kReliable,
+                                   MessageUrgency::kImmediate};
+    return kDesc;
+  }
+
+  void Serialize(BinaryWriter& w) const {
+    w.Write(entity_id);
+    movement::SerializeMovementCommand(w, command);
+  }
+
+  static auto Deserialize(BinaryReader& r) -> Result<MovementCommandStartToClient> {
+    auto eid = r.Read<uint32_t>();
+    if (!eid) {
+      return Error{ErrorCode::kInvalidArgument, "MovementCommandStartToClient: truncated"};
+    }
+    if (*eid == kInvalidEntityID) {
+      return Error{ErrorCode::kInvalidArgument, "MovementCommandStartToClient: invalid entity"};
+    }
+    auto command = movement::DeserializeMovementCommand(r);
+    if (!command) {
+      return Error{ErrorCode::kInvalidArgument, "MovementCommandStartToClient: command"};
+    }
+    MovementCommandStartToClient msg;
+    msg.entity_id = *eid;
+    msg.command = *command;
+    return msg;
+  }
+};
+static_assert(NetworkMessage<MovementCommandStartToClient>);
+
+struct MovementCommandEndToClient {
+  EntityID entity_id{kInvalidEntityID};
+  uint32_t command_id{0};
+  uint32_t server_tick{0};
+  movement::MovementCommandEndReason reason{movement::MovementCommandEndReason::kCompleted};
+  movement::MovementState state;
+
+  static auto Descriptor() -> const MessageDesc& {
+    static const MessageDesc kDesc{kClientMovementCommandEndMessageId,
+                                   "baseapp::MovementCommandEndToClient",
+                                   MessageLengthStyle::kFixed,
+                                   static_cast<int>(sizeof(uint32_t) * 5 +
+                                                    9 * sizeof(float) +
+                                                    movement::kMovementCommandEndReasonWireBytes),
+                                   MessageReliability::kReliable,
+                                   MessageUrgency::kImmediate};
+    return kDesc;
+  }
+
+  void Serialize(BinaryWriter& w) const {
+    w.Write(entity_id);
+    w.Write(command_id);
+    w.Write(server_tick);
+    w.Write(static_cast<uint8_t>(reason));
+    movement::SerializeMovementState(w, state);
+  }
+
+  static auto Deserialize(BinaryReader& r) -> Result<MovementCommandEndToClient> {
+    auto eid = r.Read<uint32_t>();
+    auto command_id = r.Read<uint32_t>();
+    auto server_tick = r.Read<uint32_t>();
+    auto reason = r.Read<uint8_t>();
+    if (!eid || !command_id || !server_tick || !reason) {
+      return Error{ErrorCode::kInvalidArgument, "MovementCommandEndToClient: truncated"};
+    }
+    if (*eid == kInvalidEntityID) {
+      return Error{ErrorCode::kInvalidArgument, "MovementCommandEndToClient: invalid entity"};
+    }
+    if (*command_id == 0) {
+      return Error{ErrorCode::kInvalidArgument, "MovementCommandEndToClient: invalid command id"};
+    }
+    if (!movement::IsMovementCommandEndReasonWireValue(*reason)) {
+      return Error{ErrorCode::kInvalidArgument, "MovementCommandEndToClient: invalid reason"};
+    }
+    auto state = movement::DeserializeMovementState(r);
+    if (!state) {
+      return Error{ErrorCode::kInvalidArgument, "MovementCommandEndToClient: state"};
+    }
+    MovementCommandEndToClient msg;
+    msg.entity_id = *eid;
+    msg.command_id = *command_id;
+    msg.server_tick = *server_tick;
+    msg.reason = static_cast<movement::MovementCommandEndReason>(*reason);
+    msg.state = *state;
+    return msg;
+  }
+};
+static_assert(NetworkMessage<MovementCommandEndToClient>);
+
+// Flattened BSP leaf rects for the LB debug visualisation.
+// Same id is used for mgr->base and base->client forwarding.
 struct SpaceBspGeometry {
   SpaceID space_id{kInvalidSpaceID};
   struct LeafRect {

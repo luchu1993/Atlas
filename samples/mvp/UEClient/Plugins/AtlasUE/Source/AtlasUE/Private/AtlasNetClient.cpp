@@ -4,6 +4,7 @@
 #include "HAL/Runnable.h"
 #include "HAL/RunnableThread.h"
 #include "Logging/LogMacros.h"
+#include "Math/UnrealMathUtility.h"
 
 #include "AtlasCore/aoi_envelope.h"
 #include "AtlasCore/client_entity.h"
@@ -12,7 +13,70 @@
 
 DEFINE_LOG_CATEGORY_STATIC(LogAtlasNet, Log, All);
 
-// Internal helper — never exposed beyond this translation unit. FAtlasNetClient
+namespace
+{
+constexpr uint8 kMovementCommandTypeMax = 6;
+constexpr uint8 kMovementCommandInputPolicyMax = 2;
+constexpr uint8 kMovementCommandCollisionPolicyMax = 2;
+constexpr uint16 kCorrectionFlagTier1 = 1u << 0;
+constexpr uint16 kCorrectionFlagTier2 = 1u << 1;
+constexpr uint16 kCorrectionFlagSnap = 1u << 2;
+
+bool IsValidCorrectionFlags(uint16 Flags)
+{
+	return Flags == 0 || Flags == kCorrectionFlagTier1 ||
+		Flags == kCorrectionFlagTier2 || Flags == kCorrectionFlagSnap;
+}
+
+bool ReadMovementStateFrame(atlas::SpanReader& Reader, AtlasMovementStateFrame& State)
+{
+	return Reader.Read(State.position_x) &&
+		Reader.Read(State.position_y) &&
+		Reader.Read(State.position_z) &&
+		Reader.Read(State.velocity_x) &&
+		Reader.Read(State.velocity_y) &&
+		Reader.Read(State.velocity_z) &&
+		Reader.Read(State.direction_x) &&
+		Reader.Read(State.direction_y) &&
+		Reader.Read(State.direction_z) &&
+		Reader.Read(State.flags) &&
+		Reader.Read(State.last_processed_input_seq);
+}
+
+bool IsFiniteVec3(const atlas::Vec3& Value)
+{
+	return FMath::IsFinite(Value.x) &&
+		FMath::IsFinite(Value.y) &&
+		FMath::IsFinite(Value.z);
+}
+
+bool IsFiniteMovementState(const AtlasMovementStateFrame& State)
+{
+	return FMath::IsFinite(State.position_x) &&
+		FMath::IsFinite(State.position_y) &&
+		FMath::IsFinite(State.position_z) &&
+		FMath::IsFinite(State.velocity_x) &&
+		FMath::IsFinite(State.velocity_y) &&
+		FMath::IsFinite(State.velocity_z) &&
+		FMath::IsFinite(State.direction_x) &&
+		FMath::IsFinite(State.direction_y) &&
+		FMath::IsFinite(State.direction_z);
+}
+
+bool IsValidMovementCommandStart(const atlas::MovementCommandFrame& Command)
+{
+	return Command.command_id != 0 &&
+		Command.duration_ms != 0 &&
+		Command.elapsed_ms <= Command.duration_ms &&
+		Command.type <= kMovementCommandTypeMax &&
+		Command.input_policy <= kMovementCommandInputPolicyMax &&
+		Command.collision_policy <= kMovementCommandCollisionPolicyMax &&
+		IsFiniteVec3(Command.start_position) &&
+		IsFiniteVec3(Command.target_position);
+}
+}  // namespace
+
+// Internal helper: never exposed beyond this translation unit. FAtlasNetClient
 // holds a pointer via the forward declaration in the header.
 class FAtlasNetRunnable : public FRunnable
 {
@@ -102,7 +166,7 @@ void FAtlasNetClient::Destroy()
 	}
 
 	// Stop + WaitForCompletion above joins the net thread (assumes AtlasNetPoll
-	// never blocks), so these resets are race-free — relaxed is enough.
+	// never blocks), so these resets are race-free; relaxed is enough.
 	FAtlasInboundMessage Drain;
 	while (Inbound.Dequeue(Drain)) {}
 	InboundDepth.store(0, std::memory_order_relaxed);
@@ -177,7 +241,7 @@ void FAtlasNetClient::TickGameThread(atlas::ClientEntityManager& Manager)
 			}
 			UE_LOG(LogAtlasNet, Log, TEXT("AtlasNet disconnect reason=%d"), Reason);
 			State.store(EAtlasNetClientState::Disconnected);
-			// Everything still queued is from the dead session — drop it so the
+			// Everything still queued is from the dead session; drop it so the
 			// next session starts clean.
 			while (Inbound.Dequeue(Msg))
 			{
@@ -246,6 +310,122 @@ void FAtlasNetClient::TickGameThread(atlas::ClientEntityManager& Manager)
 				}
 			}
 			// Unknown entity_id: drop (server may target an entity we just lost).
+		}
+		else if (Msg.MsgId == 0xF005)
+		{
+			constexpr int32 MovementStateAckBytes = 4 + 4 + 4 + 44 + 2;
+			if (Msg.Payload.Num() < MovementStateAckBytes)
+			{
+				UE_LOG(LogAtlasNet, Warning,
+					TEXT("MovementStateAck truncated len=%d"), Msg.Payload.Num());
+				continue;
+			}
+
+			atlas::SpanReader R(Msg.Payload.GetData(), Msg.Payload.Num());
+			uint32 EntityId = 0;
+			uint32 AckedInputSeq = 0;
+			uint32 ServerTick = 0;
+			AtlasMovementStateFrame MovementState{};
+			uint16 CorrectionFlags = 0;
+			const bool Ok =
+				R.Read(EntityId) &&
+				R.Read(AckedInputSeq) &&
+				R.Read(ServerTick) &&
+				ReadMovementStateFrame(R, MovementState) &&
+				R.Read(CorrectionFlags);
+			if (!Ok || EntityId == 0 || !IsFiniteMovementState(MovementState) ||
+				!IsValidCorrectionFlags(CorrectionFlags) || R.Remaining() != 0)
+			{
+				UE_LOG(LogAtlasNet, Warning,
+					TEXT("MovementStateAck decode failed len=%d"), Msg.Payload.Num());
+				continue;
+			}
+			if (atlas::ClientEntity* Entity = Manager.Find(EntityId))
+			{
+				Entity->OnMovementStateAck(AckedInputSeq, ServerTick, MovementState, CorrectionFlags);
+			}
+		}
+		else if (Msg.MsgId == 0xF006)
+		{
+			constexpr int32 MovementCommandBytes =
+				4 + 2 + 1 + 6 * 4 + 2 + 2 + 2 + 1 + 1 + 1 + 4;
+			constexpr int32 MovementCommandStartBytes = 4 + MovementCommandBytes;
+			if (Msg.Payload.Num() < MovementCommandStartBytes)
+			{
+				UE_LOG(LogAtlasNet, Warning,
+					TEXT("MovementCommandStart truncated len=%d"), Msg.Payload.Num());
+				continue;
+			}
+
+			atlas::SpanReader R(Msg.Payload.GetData(), Msg.Payload.Num());
+			uint32 EntityId = 0;
+			atlas::MovementCommandFrame Command{};
+			const bool Ok =
+				R.Read(EntityId) &&
+				R.Read(Command.command_id) &&
+				R.Read(Command.skill_id) &&
+				R.Read(Command.type) &&
+				R.Read(Command.start_position.x) &&
+				R.Read(Command.start_position.y) &&
+				R.Read(Command.start_position.z) &&
+				R.Read(Command.target_position.x) &&
+				R.Read(Command.target_position.y) &&
+				R.Read(Command.target_position.z) &&
+				R.Read(Command.duration_ms) &&
+				R.Read(Command.elapsed_ms) &&
+				R.Read(Command.curve_id) &&
+				R.Read(Command.input_policy) &&
+				R.Read(Command.collision_policy) &&
+				R.Read(Command.priority) &&
+				R.Read(Command.server_tick);
+			if (!Ok || EntityId == 0 || !IsValidMovementCommandStart(Command) ||
+				R.Remaining() != 0)
+			{
+				UE_LOG(LogAtlasNet, Warning,
+					TEXT("MovementCommandStart decode failed len=%d"), Msg.Payload.Num());
+				continue;
+			}
+			if (atlas::ClientEntity* Entity = Manager.Find(EntityId))
+			{
+				Entity->OnMovementCommandStart(Command);
+			}
+		}
+		else if (Msg.MsgId == 0xF007)
+		{
+			constexpr int32 MovementCommandEndBytes = 4 + 4 + 4 + 1 + 44;
+			if (Msg.Payload.Num() < MovementCommandEndBytes)
+			{
+				UE_LOG(LogAtlasNet, Warning,
+					TEXT("MovementCommandEnd truncated len=%d"), Msg.Payload.Num());
+				continue;
+			}
+
+			atlas::SpanReader R(Msg.Payload.GetData(), Msg.Payload.Num());
+			uint32 EntityId = 0;
+			uint32 CommandId = 0;
+			uint32 ServerTick = 0;
+			uint8 Reason = 0;
+			AtlasMovementStateFrame MovementState{};
+			const bool Ok =
+				R.Read(EntityId) &&
+				R.Read(CommandId) &&
+				R.Read(ServerTick) &&
+				R.Read(Reason) &&
+				ReadMovementStateFrame(R, MovementState);
+			if (!Ok || EntityId == 0 || CommandId == 0 ||
+				Reason > static_cast<uint8>(atlas::MovementCommandEndReason::kInvalid) ||
+				!IsFiniteMovementState(MovementState) || R.Remaining() != 0)
+			{
+				UE_LOG(LogAtlasNet, Warning,
+					TEXT("MovementCommandEnd decode failed len=%d"), Msg.Payload.Num());
+				continue;
+			}
+			if (atlas::ClientEntity* Entity = Manager.Find(EntityId))
+			{
+				Entity->OnMovementCommandEnd(
+					CommandId, ServerTick,
+					static_cast<atlas::MovementCommandEndReason>(Reason), MovementState);
+			}
 		}
 		else if (Msg.MsgId == 2024 && Msg.Payload.Num() >= 6)
 		{
@@ -337,7 +517,7 @@ void FAtlasNetClient::OnDeliverStatic(AtlasNetContext* Ctx, uint16 MsgId, const 
 		if (Self->bInboundOverflowLogged.compare_exchange_strong(Expected, true))
 		{
 			UE_LOG(LogAtlasNet, Warning,
-				TEXT("Inbound queue overflow (cap=%d) — dropping msg_id=0x%04X; "
+				TEXT("Inbound queue overflow (cap=%d): dropping msg_id=0x%04X; "
 				     "game thread likely stalled"), kAtlasInboundQueueCap, MsgId);
 		}
 		return;
@@ -345,7 +525,7 @@ void FAtlasNetClient::OnDeliverStatic(AtlasNetContext* Ctx, uint16 MsgId, const 
 	if (Depth == kAtlasInboundQueueWarnThreshold)
 	{
 		UE_LOG(LogAtlasNet, Warning,
-			TEXT("Inbound queue depth reached %d — game thread falling behind"), Depth);
+			TEXT("Inbound queue depth reached %d; game thread falling behind"), Depth);
 	}
 	FAtlasInboundMessage Msg;
 	Msg.MsgId = MsgId;

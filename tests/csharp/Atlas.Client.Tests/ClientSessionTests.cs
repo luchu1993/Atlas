@@ -1,5 +1,8 @@
 using System;
 using System.Collections.Generic;
+using System.Runtime.InteropServices;
+using Atlas.Client.Native;
+using Atlas.Components;
 using Atlas.DataTypes;
 using Atlas.Serialization;
 using Xunit;
@@ -19,16 +22,29 @@ namespace Atlas.Client.Tests
         private const byte kPositionBatchSequentialEntityIds = 0x20;
         private const int kPositionBatchFlagsOffset = 1 + 4 + 3 * 4 + 8 + 2;
 
+        [Fact]
+        public void MovementNativeStructLayoutsStayPinned()
+        {
+            Assert.Equal(17, Marshal.SizeOf<AtlasMovementInputFrame>());
+            Assert.Equal(44, Marshal.SizeOf<AtlasMovementStateFrame>());
+            Assert.Equal(15, Marshal.OffsetOf<AtlasMovementInputFrame>(
+                nameof(AtlasMovementInputFrame.ClientDtMs)).ToInt32());
+            Assert.Equal(40, Marshal.OffsetOf<AtlasMovementStateFrame>(
+                nameof(AtlasMovementStateFrame.LastProcessedInputSeq)).ToInt32());
+        }
+
         private sealed class FakePeer : ClientEntity
         {
             public override string TypeName => "FakePeer";
             public override ushort TypeId => 777;
             public bool Initialized;
             public int PositionUpdates;
+            public TickProbeComponent? TickProbe => GetLocalComponent<TickProbeComponent>();
 
             protected internal override void OnInit()
             {
                 Initialized = true;
+                AddLocalComponent<TickProbeComponent>();
             }
 
             protected internal override void OnPositionUpdated(Vector3 newPos)
@@ -39,6 +55,34 @@ namespace Atlas.Client.Tests
             public void SendBaseForTest()
             {
                 SendBaseRpc(42, ReadOnlySpan<byte>.Empty);
+            }
+
+            public void SendMovementForTest(AtlasMovementInputFrame frame)
+            {
+                SendMovementInput(new[] { frame });
+            }
+
+            public void ReportMovementCorrectionForTest()
+            {
+                SendMovementCorrectionReport(42, 9001, 0.5f, MovementCorrection.Tier1Flag);
+            }
+        }
+
+        private sealed class TickProbeComponent : ClientLocalComponent
+        {
+            public int Ticks;
+            public int Detaches;
+            public float LastDeltaTime;
+
+            public override void OnTick(float deltaTime)
+            {
+                ++Ticks;
+                LastDeltaTime = deltaTime;
+            }
+
+            public override void OnDetached()
+            {
+                ++Detaches;
             }
         }
 
@@ -165,6 +209,78 @@ namespace Atlas.Client.Tests
             return w.WrittenSpan.ToArray();
         }
 
+        private static byte[] BuildMovementStateAck()
+        {
+            var w = new SpanWriter();
+            w.WriteUInt32(100);
+            w.WriteUInt32(42);
+            w.WriteUInt32(9001);
+            w.WriteVector3(new Vector3(1.0f, 2.0f, 3.0f));
+            w.WriteVector3(new Vector3(4.0f, 5.0f, 6.0f));
+            w.WriteVector3(Vector3.Forward);
+            w.WriteUInt32(1);
+            w.WriteUInt32(42);
+            w.WriteUInt16(MovementCorrection.SnapFlag);
+            return w.WrittenSpan.ToArray();
+        }
+
+        private static byte[] BuildMovementCommandStart()
+        {
+            var w = new SpanWriter();
+            w.WriteUInt32(100);
+            w.WriteUInt32(900);
+            w.WriteUInt16(12);
+            w.WriteUInt8((byte)MovementCommandType.Knockback);
+            w.WriteVector3(new Vector3(1.0f, 2.0f, 3.0f));
+            w.WriteVector3(new Vector3(4.0f, 5.0f, 6.0f));
+            w.WriteUInt16(700);
+            w.WriteUInt16(100);
+            w.WriteUInt16(3);
+            w.WriteUInt8((byte)MovementCommandInputPolicy.AllowTurn);
+            w.WriteUInt8((byte)MovementCommandCollisionPolicy.EndSkill);
+            w.WriteUInt8(9);
+            w.WriteUInt32(9001);
+            return w.WrittenSpan.ToArray();
+        }
+
+        private static byte[] BuildMovementCommandEnd()
+        {
+            var w = new SpanWriter();
+            w.WriteUInt32(100);
+            w.WriteUInt32(900);
+            w.WriteUInt32(9002);
+            w.WriteUInt8((byte)MovementCommandEndReason.Collision);
+            w.WriteVector3(new Vector3(4.0f, 5.0f, 6.0f));
+            w.WriteVector3(new Vector3(0.0f, 0.0f, 0.0f));
+            w.WriteVector3(Vector3.Forward);
+            w.WriteUInt32(1);
+            w.WriteUInt32(77);
+            return w.WrittenSpan.ToArray();
+        }
+
+        private static byte[] AppendTrailingByte(byte[] body)
+        {
+            Array.Resize(ref body, body.Length + 1);
+            body[^1] = 0xEE;
+            return body;
+        }
+
+        private static void WriteQuietNaN(byte[] body, int offset)
+        {
+            body[offset] = 0;
+            body[offset + 1] = 0;
+            body[offset + 2] = 0xC0;
+            body[offset + 3] = 0x7F;
+        }
+
+        private static void WriteZeroUInt32(byte[] body, int offset)
+        {
+            body[offset] = 0;
+            body[offset + 1] = 0;
+            body[offset + 2] = 0;
+            body[offset + 3] = 0;
+        }
+
         [Fact]
         public void SessionsDoNotShareEntityOrSpaceDataState()
         {
@@ -261,6 +377,350 @@ namespace Atlas.Client.Tests
         }
 
         [Fact]
+        public void MovementStateAckDispatchesEvent()
+        {
+            var session = new ClientSession();
+            MovementStateAck? received = null;
+            session.MovementStateAckReceived += ack => received = ack;
+
+            session.DeliverFromServer(ClientCallbacks.kClientMovementStateAckMessageId,
+                                      BuildMovementStateAck());
+
+            Assert.True(received.HasValue);
+            Assert.Equal(100u, received.Value.EntityId);
+            Assert.Equal(42u, received.Value.AckedInputSeq);
+            Assert.Equal(9001u, received.Value.ServerTick);
+            Assert.Equal(1.0f, received.Value.State.Position.X);
+            Assert.Equal(6.0f, received.Value.State.Velocity.Z);
+            Assert.Equal(1u, received.Value.State.Flags);
+            Assert.Equal(MovementCorrection.SnapFlag, received.Value.CorrectionFlags);
+        }
+
+        [Fact]
+        public void MovementStateAckRejectsInvalidCorrectionFlags()
+        {
+            var session = new ClientSession();
+            MovementStateAck? received = null;
+            session.MovementStateAckReceived += ack => received = ack;
+            const int flagsOffset = 4 + 4 + 4 + 36 + 4 + 4;
+
+            var multiBit = BuildMovementStateAck();
+            multiBit[flagsOffset] =
+                (byte)(MovementCorrection.Tier1Flag | MovementCorrection.Tier2Flag);
+            multiBit[flagsOffset + 1] = 0;
+            session.DeliverFromServer(ClientCallbacks.kClientMovementStateAckMessageId, multiBit);
+            Assert.False(received.HasValue);
+
+            var reservedBit = BuildMovementStateAck();
+            reservedBit[flagsOffset] = (byte)(1 << 5);
+            reservedBit[flagsOffset + 1] = 0;
+            session.DeliverFromServer(ClientCallbacks.kClientMovementStateAckMessageId, reservedBit);
+            Assert.False(received.HasValue);
+        }
+
+        [Fact]
+        public void MovementStateAckRejectsTrailingBytes()
+        {
+            var session = new ClientSession();
+            MovementStateAck? received = null;
+            session.MovementStateAckReceived += ack => received = ack;
+            var body = AppendTrailingByte(BuildMovementStateAck());
+
+            session.DeliverFromServer(ClientCallbacks.kClientMovementStateAckMessageId, body);
+
+            Assert.False(received.HasValue);
+        }
+
+        [Fact]
+        public void MovementStateAckRejectsZeroEntityId()
+        {
+            var session = new ClientSession();
+            MovementStateAck? received = null;
+            session.MovementStateAckReceived += ack => received = ack;
+            var body = BuildMovementStateAck();
+            WriteZeroUInt32(body, 0);
+
+            session.DeliverFromServer(ClientCallbacks.kClientMovementStateAckMessageId, body);
+
+            Assert.False(received.HasValue);
+        }
+
+        [Fact]
+        public void MovementStateAckRejectsNonFiniteState()
+        {
+            var session = new ClientSession();
+            MovementStateAck? received = null;
+            session.MovementStateAckReceived += ack => received = ack;
+            var body = BuildMovementStateAck();
+            WriteQuietNaN(body, 12);
+
+            session.DeliverFromServer(ClientCallbacks.kClientMovementStateAckMessageId, body);
+
+            Assert.False(received.HasValue);
+        }
+
+        [Fact]
+        public void MovementCommandStartDispatchesEvent()
+        {
+            var session = new ClientSession();
+            MovementCommandStart? received = null;
+            session.MovementCommandStarted += command => received = command;
+
+            session.DeliverFromServer(ClientCallbacks.kClientMovementCommandStartMessageId,
+                                      BuildMovementCommandStart());
+
+            Assert.True(received.HasValue);
+            Assert.Equal(100u, received.Value.EntityId);
+            Assert.Equal(900u, received.Value.Command.CommandId);
+            Assert.Equal(MovementCommandType.Knockback, received.Value.Command.Type);
+            Assert.Equal(12, received.Value.Command.SkillId);
+            Assert.Equal(1.0f, received.Value.Command.StartPosition.X);
+            Assert.Equal(6.0f, received.Value.Command.TargetPosition.Z);
+            Assert.Equal(700, received.Value.Command.DurationMs);
+            Assert.Equal(100, received.Value.Command.ElapsedMs);
+            Assert.Equal(3, received.Value.Command.CurveId);
+            Assert.Equal(MovementCommandInputPolicy.AllowTurn,
+                         received.Value.Command.InputPolicy);
+            Assert.Equal(MovementCommandCollisionPolicy.EndSkill,
+                         received.Value.Command.CollisionPolicy);
+            Assert.Equal(9, received.Value.Command.Priority);
+            Assert.Equal(9001u, received.Value.Command.ServerTick);
+        }
+
+        [Fact]
+        public void MovementCommandStartRejectsInvalidEnum()
+        {
+            var session = new ClientSession();
+            MovementCommandStart? received = null;
+            session.MovementCommandStarted += command => received = command;
+            var body = BuildMovementCommandStart();
+            body[10] = 255;
+
+            session.DeliverFromServer(ClientCallbacks.kClientMovementCommandStartMessageId, body);
+
+            Assert.False(received.HasValue);
+        }
+
+        [Fact]
+        public void MovementCommandStartRejectsZeroEntityId()
+        {
+            var session = new ClientSession();
+            MovementCommandStart? received = null;
+            session.MovementCommandStarted += command => received = command;
+            var body = BuildMovementCommandStart();
+            WriteZeroUInt32(body, 0);
+
+            session.DeliverFromServer(ClientCallbacks.kClientMovementCommandStartMessageId,
+                                      body);
+
+            Assert.False(received.HasValue);
+        }
+
+        [Fact]
+        public void MovementCommandStartRejectsZeroCommandId()
+        {
+            var session = new ClientSession();
+            MovementCommandStart? received = null;
+            session.MovementCommandStarted += command => received = command;
+            var body = BuildMovementCommandStart();
+            WriteZeroUInt32(body, 4);
+
+            session.DeliverFromServer(ClientCallbacks.kClientMovementCommandStartMessageId,
+                                      body);
+
+            Assert.False(received.HasValue);
+        }
+
+        [Fact]
+        public void MovementCommandStartRejectsNonFinitePosition()
+        {
+            var session = new ClientSession();
+            MovementCommandStart? received = null;
+            session.MovementCommandStarted += command => received = command;
+            var body = BuildMovementCommandStart();
+            WriteQuietNaN(body, 11);
+
+            session.DeliverFromServer(ClientCallbacks.kClientMovementCommandStartMessageId,
+                                      body);
+
+            Assert.False(received.HasValue);
+        }
+
+        [Fact]
+        public void MovementCommandStartRejectsInvalidTiming()
+        {
+            var session = new ClientSession();
+            MovementCommandStart? received = null;
+            session.MovementCommandStarted += command => received = command;
+            var zeroDuration = BuildMovementCommandStart();
+            zeroDuration[35] = 0;
+            zeroDuration[36] = 0;
+
+            session.DeliverFromServer(ClientCallbacks.kClientMovementCommandStartMessageId,
+                                      zeroDuration);
+
+            Assert.False(received.HasValue);
+
+            var elapsedPastDuration = BuildMovementCommandStart();
+            elapsedPastDuration[37] = 0xBD;
+            elapsedPastDuration[38] = 0x02;
+
+            session.DeliverFromServer(ClientCallbacks.kClientMovementCommandStartMessageId,
+                                      elapsedPastDuration);
+
+            Assert.False(received.HasValue);
+        }
+
+        [Fact]
+        public void MovementCommandStartRejectsTrailingBytes()
+        {
+            var session = new ClientSession();
+            MovementCommandStart? received = null;
+            session.MovementCommandStarted += command => received = command;
+            var body = AppendTrailingByte(BuildMovementCommandStart());
+
+            session.DeliverFromServer(ClientCallbacks.kClientMovementCommandStartMessageId,
+                                      body);
+
+            Assert.False(received.HasValue);
+        }
+
+        [Fact]
+        public void MovementCommandEndDispatchesEvent()
+        {
+            var session = new ClientSession();
+            MovementCommandEnd? received = null;
+            session.MovementCommandEnded += command => received = command;
+
+            session.DeliverFromServer(ClientCallbacks.kClientMovementCommandEndMessageId,
+                                      BuildMovementCommandEnd());
+
+            Assert.True(received.HasValue);
+            Assert.Equal(100u, received.Value.EntityId);
+            Assert.Equal(900u, received.Value.CommandId);
+            Assert.Equal(9002u, received.Value.ServerTick);
+            Assert.Equal(MovementCommandEndReason.Collision, received.Value.Reason);
+            Assert.Equal(4.0f, received.Value.State.Position.X);
+            Assert.Equal(6.0f, received.Value.State.Position.Z);
+            Assert.Equal(77u, received.Value.State.LastProcessedInputSeq);
+        }
+
+        [Fact]
+        public void MovementCommandEndRejectsInvalidReason()
+        {
+            var session = new ClientSession();
+            MovementCommandEnd? received = null;
+            session.MovementCommandEnded += command => received = command;
+            var body = BuildMovementCommandEnd();
+            body[12] = 255;
+
+            session.DeliverFromServer(ClientCallbacks.kClientMovementCommandEndMessageId, body);
+
+            Assert.False(received.HasValue);
+        }
+
+        [Fact]
+        public void MovementCommandEndRejectsZeroEntityId()
+        {
+            var session = new ClientSession();
+            MovementCommandEnd? received = null;
+            session.MovementCommandEnded += command => received = command;
+            var body = BuildMovementCommandEnd();
+            WriteZeroUInt32(body, 0);
+
+            session.DeliverFromServer(ClientCallbacks.kClientMovementCommandEndMessageId,
+                                      body);
+
+            Assert.False(received.HasValue);
+        }
+
+        [Fact]
+        public void MovementCommandEndRejectsZeroCommandId()
+        {
+            var session = new ClientSession();
+            MovementCommandEnd? received = null;
+            session.MovementCommandEnded += command => received = command;
+            var body = BuildMovementCommandEnd();
+            WriteZeroUInt32(body, 4);
+
+            session.DeliverFromServer(ClientCallbacks.kClientMovementCommandEndMessageId,
+                                      body);
+
+            Assert.False(received.HasValue);
+        }
+
+        [Fact]
+        public void MovementCommandEndRejectsNonFiniteState()
+        {
+            var session = new ClientSession();
+            MovementCommandEnd? received = null;
+            session.MovementCommandEnded += command => received = command;
+            var body = BuildMovementCommandEnd();
+            WriteQuietNaN(body, 13);
+
+            session.DeliverFromServer(ClientCallbacks.kClientMovementCommandEndMessageId,
+                                      body);
+
+            Assert.False(received.HasValue);
+        }
+
+        [Fact]
+        public void MovementCommandEndRejectsTrailingBytes()
+        {
+            var session = new ClientSession();
+            MovementCommandEnd? received = null;
+            session.MovementCommandEnded += command => received = command;
+            var body = AppendTrailingByte(BuildMovementCommandEnd());
+
+            session.DeliverFromServer(ClientCallbacks.kClientMovementCommandEndMessageId,
+                                      body);
+
+            Assert.False(received.HasValue);
+        }
+
+        [Fact]
+        public void MovementCommandStartAppliesRemoteEntity()
+        {
+            var session = new ClientSession();
+            session.EntityFactory.Register(777, () => new FakePeer());
+            session.DeliverFromServer(ClientCallbacks.kClientReliableDeltaMessageId,
+                                      BuildEnter(100, 777));
+
+            session.DeliverFromServer(ClientCallbacks.kClientMovementCommandStartMessageId,
+                                      BuildMovementCommandStart());
+
+            var entity = (FakePeer)session.EntityManager.Get(100)!;
+            Assert.True(entity.HasActiveMovementCommand);
+            Assert.True(entity.TryGetInterpolated(out var pos, out var dir, out _));
+            Assert.InRange(pos.X, 1.42f, 1.44f);
+            Assert.InRange(pos.Z, 3.42f, 3.44f);
+            Assert.InRange(dir.X, 0.57f, 0.58f);
+            Assert.Equal(0, entity.Filter!.SampleCount);
+        }
+
+        [Fact]
+        public void MovementCommandEndAppliesRemoteEntity()
+        {
+            var session = new ClientSession();
+            session.EntityFactory.Register(777, () => new FakePeer());
+            session.DeliverFromServer(ClientCallbacks.kClientReliableDeltaMessageId,
+                                      BuildEnter(100, 777));
+            session.DeliverFromServer(ClientCallbacks.kClientMovementCommandStartMessageId,
+                                      BuildMovementCommandStart());
+
+            session.DeliverFromServer(ClientCallbacks.kClientMovementCommandEndMessageId,
+                                      BuildMovementCommandEnd());
+
+            var entity = (FakePeer)session.EntityManager.Get(100)!;
+            Assert.False(entity.HasActiveMovementCommand);
+            Assert.True(entity.TryGetInterpolated(out var pos, out var dir, out var onGround));
+            Assert.Equal(4.0f, pos.X);
+            Assert.Equal(6.0f, pos.Z);
+            Assert.Equal(1.0f, dir.Z);
+            Assert.True(onGround);
+        }
+
+        [Fact]
         public void EntityRpcUsesOwningSessionHandler()
         {
             var left = new ClientSession();
@@ -279,6 +739,77 @@ namespace Atlas.Client.Tests
 
             Assert.Equal(100u, leftEntity);
             Assert.Equal(200u, rightEntity);
+        }
+
+        [Fact]
+        public void EntityMovementUsesOwningSessionHandler()
+        {
+            var left = new ClientSession();
+            var right = new ClientSession();
+            left.EntityFactory.Register(777, () => new FakePeer());
+            right.EntityFactory.Register(777, () => new FakePeer());
+            uint leftInputEntity = 0;
+            uint rightInputEntity = 0;
+            uint leftCorrectionEntity = 0;
+            uint rightCorrectionTick = 0;
+            left.SendMovementInputHandler = (entityId, frames) =>
+            {
+                leftInputEntity = entityId;
+                Assert.Equal(1, frames.Length);
+            };
+            right.SendMovementInputHandler = (entityId, frames) =>
+            {
+                rightInputEntity = entityId;
+                Assert.Equal(7u, frames[0].Seq);
+            };
+            left.SendMovementCorrectionReportHandler = (entityId, _, _, _, _) =>
+                leftCorrectionEntity = entityId;
+            right.SendMovementCorrectionReportHandler = (_, _, serverTick, _, _) =>
+                rightCorrectionTick = serverTick;
+
+            left.CreateEntity(100, 777);
+            right.CreateEntity(200, 777);
+            var frame = new AtlasMovementInputFrame { Seq = 7, ClientDtMs = 33 };
+            ((FakePeer)left.EntityManager.Get(100)!).SendMovementForTest(frame);
+            ((FakePeer)right.EntityManager.Get(200)!).SendMovementForTest(frame);
+            ((FakePeer)left.EntityManager.Get(100)!).ReportMovementCorrectionForTest();
+            ((FakePeer)right.EntityManager.Get(200)!).ReportMovementCorrectionForTest();
+
+            Assert.Equal(100u, leftInputEntity);
+            Assert.Equal(200u, rightInputEntity);
+            Assert.Equal(100u, leftCorrectionEntity);
+            Assert.Equal(9001u, rightCorrectionTick);
+        }
+
+        [Fact]
+        public void SessionTickDrivesClientLocalComponents()
+        {
+            var session = new ClientSession();
+            session.EntityFactory.Register(777, () => new FakePeer());
+            session.CreateEntity(100, 777);
+
+            var entity = (FakePeer)session.EntityManager.Get(100)!;
+            session.Tick(0.25f);
+
+            Assert.NotNull(entity.TickProbe);
+            Assert.Equal(1, entity.TickProbe.Ticks);
+            Assert.Equal(0.25f, entity.TickProbe.LastDeltaTime);
+        }
+
+        [Fact]
+        public void DestroyDetachesClientLocalComponents()
+        {
+            var session = new ClientSession();
+            session.EntityFactory.Register(777, () => new FakePeer());
+            session.CreateEntity(100, 777);
+
+            var entity = (FakePeer)session.EntityManager.Get(100)!;
+            var probe = entity.TickProbe!;
+            session.DestroyEntity(100);
+
+            Assert.True(entity.IsDestroyed);
+            Assert.Equal(1, probe.Detaches);
+            Assert.Null(session.EntityManager.Get(100));
         }
 
         [Fact]

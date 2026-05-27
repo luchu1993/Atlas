@@ -1,13 +1,17 @@
 #include <atomic>
 #include <chrono>
+#include <cstddef>
 #include <cstring>
 #include <thread>
+#include <vector>
 
 #include <gtest/gtest.h>
 
+#include "baseapp/baseapp_messages.h"
 #include "fake_cluster.h"
 #include "net_client/client_api.h"
 #include "network/event_dispatcher.h"
+#include "serialization/binary_stream.h"
 
 using namespace atlas;
 using atlas::test::FakeCluster;
@@ -42,6 +46,24 @@ struct AuthCallbackState {
   uint16_t type_id{0};
 };
 
+struct DeliverState {
+  std::atomic<bool> movement_ack{false};
+  uint16_t msg_id{0};
+  std::vector<std::byte> payload;
+};
+
+DeliverState* g_deliver_state = nullptr;
+
+struct DeliverStateScope {
+  explicit DeliverStateScope(DeliverState& state) : previous(g_deliver_state) {
+    g_deliver_state = &state;
+  }
+
+  ~DeliverStateScope() { g_deliver_state = previous; }
+
+  DeliverState* previous;
+};
+
 void LoginCallback(void* user_data, uint8_t status, const char* baseapp_host, uint16_t baseapp_port,
                    const char* /*error*/) {
   auto* s = static_cast<LoginCallbackState*>(user_data);
@@ -60,6 +82,18 @@ void AuthCallback(void* user_data, uint8_t success, uint32_t entity_id, uint16_t
   s->done = true;
 }
 
+void DeliverCallback(AtlasNetContext*, uint16_t msg_id, const uint8_t* payload, int32_t len) {
+  if (g_deliver_state == nullptr || msg_id != baseapp::kClientMovementStateAckMessageId) return;
+  auto& state = *g_deliver_state;
+  state.msg_id = msg_id;
+  state.payload.clear();
+  if (payload != nullptr && len > 0) {
+    const auto* begin = reinterpret_cast<const std::byte*>(payload);
+    state.payload.assign(begin, begin + len);
+  }
+  state.movement_ack = true;
+}
+
 }  // namespace
 
 TEST(NetClientFlow, EndToEndCreateLoginAuthSendDisconnect) {
@@ -70,7 +104,10 @@ TEST(NetClientFlow, EndToEndCreateLoginAuthSendDisconnect) {
   ASSERT_NE(ctx, nullptr);
   ASSERT_EQ(AtlasNetGetState(ctx), ATLAS_NET_STATE_DISCONNECTED);
 
+  DeliverState deliver_state;
+  DeliverStateScope deliver_scope(deliver_state);
   AtlasNetCallbacks cbs{};
+  cbs.on_deliver = &DeliverCallback;
   ASSERT_EQ(AtlasNetSetCallbacks(ctx, &cbs), ATLAS_NET_OK);
 
   LoginCallbackState login_state;
@@ -95,6 +132,23 @@ TEST(NetClientFlow, EndToEndCreateLoginAuthSendDisconnect) {
   EXPECT_EQ(auth_state.entity_id, 42u);
   EXPECT_EQ(auth_state.type_id, 7);
   EXPECT_EQ(AtlasNetGetState(ctx), ATLAS_NET_STATE_CONNECTED);
+
+  ASSERT_TRUE(cluster.PushMovementStateAck(42, 7, 1234));
+  ASSERT_TRUE(PumpUntil(cluster.LoginAppDisp(), cluster.BaseAppDisp(), ctx, [&] {
+    return deliver_state.movement_ack.load();
+  })) << "movement ack was not delivered";
+  EXPECT_EQ(deliver_state.msg_id, baseapp::kClientMovementStateAckMessageId);
+  EXPECT_EQ(deliver_state.payload.size(),
+            static_cast<std::size_t>(baseapp::MovementStateAckToClient::Descriptor().fixed_length));
+  BinaryReader ack_reader(deliver_state.payload);
+  auto ack = baseapp::MovementStateAckToClient::Deserialize(ack_reader);
+  ASSERT_TRUE(ack.HasValue());
+  EXPECT_EQ(ack->entity_id, 42u);
+  EXPECT_EQ(ack->acked_input_seq, 7u);
+  EXPECT_EQ(ack->server_tick, 1234u);
+  EXPECT_EQ(ack->state.position.x, 1.0f);
+  EXPECT_EQ(ack->state.velocity.z, 6.0f);
+  EXPECT_EQ(ack->correction_flags, movement::kCorrectionFlagTier2);
 
   const uint8_t payload[] = {0xDE, 0xAD, 0xBE, 0xEF};
   EXPECT_EQ(ATLAS_NET_OK, AtlasNetSendBaseRpc(ctx, /*entity_id=*/42, /*rpc_id=*/0x1234, payload,
@@ -124,9 +178,8 @@ TEST(NetClientFlow, LoginToInvalidPortTimesOut) {
   EXPECT_EQ(ATLAS_NET_OK, AtlasNetLogin(ctx, "127.0.0.1", /*unused port*/ 1u, "alice", "pwd",
                                         &LoginCallback, &login_state));
 
-  // Pump only the ctx; no fake cluster — the LoginApp connection times out
-  // after the configured 10s deadline. We don't wait that long here; just
-  // assert the state machine moved into LoggingIn and didn't return early.
+  // Pump only the ctx; no fake cluster means the LoginApp connection times out.
+  // Keep this short and only assert that the state machine entered LoggingIn.
   for (int i = 0; i < 100; ++i) {
     AtlasNetPoll(ctx);
     std::this_thread::sleep_for(std::chrono::milliseconds(2));

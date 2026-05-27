@@ -166,4 +166,20 @@ bool FakeCluster::PushEntityPositionUpdate(EntityID eid, float px, float py, flo
   return PushAoIEnvelope(/*reliable=*/false, payload);
 }
 
+bool FakeCluster::PushMovementStateAck(EntityID eid, uint32_t acked_input_seq,
+                                       uint32_t server_tick) {
+  if (!auth_channel_) return false;
+  baseapp::MovementStateAckToClient msg;
+  msg.entity_id = eid;
+  msg.acked_input_seq = acked_input_seq;
+  msg.server_tick = server_tick;
+  msg.state.position = {1.0f, 2.0f, 3.0f};
+  msg.state.velocity = {4.0f, 5.0f, 6.0f};
+  msg.state.direction = {0.0f, 0.0f, 1.0f};
+  msg.state.flags = 1;
+  msg.state.last_processed_input_seq = acked_input_seq;
+  msg.correction_flags = movement::kCorrectionFlagTier2;
+  return auth_channel_->SendMessage(msg).HasValue();
+}
+
 }  // namespace atlas::test

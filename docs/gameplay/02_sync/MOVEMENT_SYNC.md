@@ -4,11 +4,13 @@
 >
 > **读者**：工程（必读）、战斗策划（§8 技能位移必读）、客户端开发（Unity 侧，§11 必读）。
 >
-> **状态**：草案 v0.1 — 待团队评审。
+> **状态**：14.1 基础链路已落地：Unity owner 输入帧、本地预测、CellApp 权威 step 和 ack replay。
 >
 > **前置文档**：`OVERVIEW.md`、`00_foundations/DETERMINISM_CONTRACT.md`、`03_combat/SKILL_SYSTEM.md`
 >
-> **下游文档**：`ENTITY_SNAPSHOT.md`（远端实体广播）、`LAG_COMPENSATION.md`（命中延迟补偿）、`01_world/CELL_ARCHITECTURE.md`（跨 cell 移动）
+> **下游文档**：`ENTITY_SNAPSHOT.md`（远端实体广播）、
+> `LAG_COMPENSATION.md`（命中延迟补偿）、
+> `01_world/CELL_ARCHITECTURE.md`（跨 cell 移动）
 
 ---
 
@@ -108,13 +110,13 @@
 ```cpp
 struct InputFrame {
   uint32_t  seq;              // 单调递增序号（和解 anchor）
-  uint16_t  client_dt_ms;     // 客户端实际帧耗时
+  uint32_t  input_tick;       // 客户端采样 tick，用于诊断和排序
   int8_t    move_x;           // 移动方向 X 分量 (-127..127 映射 [-1,1])
   int8_t    move_z;           // 移动方向 Z 分量
   uint16_t  view_yaw;         // 朝向（全 16 位精度）
   int8_t    view_pitch;       // 俯仰（-90..90 映射）
   uint16_t  buttons;          // 按键 bitmask（跳跃、冲刺、技能 1-8）
-  uint64_t  client_time_us;   // 客户端时间戳（时间同步用）
+  uint16_t  client_dt_ms;     // 客户端采样间隔，仅用于诊断
 };
 ```
 
@@ -122,9 +124,9 @@ struct InputFrame {
 - `move_x/z` 用 int8 而非 float：减半带宽，精度足够（客户端摇杆/键盘输入本身是离散的）
 - `view_yaw` 全精度：射击方向和技能朝向对精度敏感
 - `buttons` 用 bitmask：同一帧按多键（技能 + 冲刺）可同时表达
-- `client_time_us` 帮助服务端估算往返延迟，用于 jitter 处理
+- `client_dt_ms` 不驱动服务端时间，只用于异常输入和客户端卡顿诊断
 
-单帧大小 = **18 字节**。60Hz 发送 = 1.08 KB/s 上行。
+单帧大小 = **17 字节**。Unity MVP 以 30Hz 采样并附带最近 2 帧冗余。
 
 ### 3.3 冗余策略
 
@@ -134,48 +136,20 @@ struct InputFrame {
 - 丢 2 包连续：前 2 包作为上一包的 redundant 仍补上
 - 丢 3 包连续：才有输入丢失，服务端按"无输入"推进一步
 
-**带宽代价**：3 帧 × 18 字节 = 54 字节/包，60Hz = 3.24 KB/s 上行。在桌面网络环境下忽略。
+**带宽代价**：3 帧 × 17 字节 = 51 字节/包，30Hz = 1.53 KB/s 上行。在桌面网络环境下忽略。
 
 ### 3.4 服务端接收处理
 
-```cpp
-void InputProcessor::OnPacketReceived(Packet& pkt, CombatContext& ctx) {
-  for (auto& frame : pkt.input_frames) {
-    if (frame.seq <= last_processed_seq_) continue;  // 已处理，去重
-    if (frame.seq > last_processed_seq_ + MAX_SEQ_GAP) continue;  // gap 太大，可能是作弊
-    
-    // 加入待处理队列（按 seq 排序）
-    pending_inputs_.push(frame);
-  }
-}
-
-void InputProcessor::Tick(CombatContext& ctx) {
-  // 每 tick 消费一个或多个输入帧（根据 client_dt 推进）
-  int budgetMs = ctx.TickDurationMs;
-  while (budgetMs > 0 && !pending_inputs_.empty()) {
-    auto& frame = pending_inputs_.top();
-    int useMs = std::min((int)frame.client_dt_ms, budgetMs);
-    
-    simulator_.ApplyInput(entity_, frame, useMs, ctx);
-    
-    budgetMs -= useMs;
-    if (useMs >= frame.client_dt_ms) {
-      last_processed_seq_ = frame.seq;
-      pending_inputs_.pop();
-    }
-  }
-  
-  // 剩余预算无输入：按"无输入"推进（减速、重力）
-  if (budgetMs > 0) {
-    simulator_.ApplyNoInput(entity_, budgetMs, ctx);
-  }
-}
-```
+BaseApp 只做认证实体匹配、非 0 target、frame count 和 token bucket，随后把输入
+转发到 target 当前 CellApp。CellApp forward payload 也要求 source / target 非 0。
+CellApp 的 `MovementInputBuffer` 丢弃重复 / 过旧 seq，每个 server tick 每实体最多
+消费 1 帧；没有输入时用 no-input frame 推进减速、重力和 grounded 状态。
 
 **`client_dt_ms` 校验**：
-- 上限 100ms（防止作弊者用大 dt 跳过时间）
-- 下限 4ms（防止刷快速输入）
-- 超出范围 → 丢弃该帧并记录作弊日志
+- 合法范围为 1-250ms。
+- BaseApp 和 CellApp wire decode 都会拒绝超出范围的输入帧。
+- 该字段不参与移动积分；服务端和 native predictor 都使用固定 tick 配置。
+- 异常输入进入 `movement/input_invalid_dropped_total` 等 watcher。
 
 ---
 
@@ -187,33 +161,19 @@ void InputProcessor::Tick(CombatContext& ctx) {
 namespace atlas::movement {
 
 struct MovementState {
-  float3 position;     // cell 内相对坐标
-  float3 velocity;
-  uint16_t yaw;
-  int8_t pitch;
-  uint32_t flags;      // grounded / jumping / falling / dashing ...
-  
-  // 命令叠加层（§8）
-  CommandOverride active_command;
-  uint32_t command_elapsed_ms;
+  Vector3 position;
+  Vector3 velocity;
+  Vector3 direction;
+  uint32_t flags;
+  uint32_t last_processed_input_seq;
 };
 
-// 纯函数：输入状态 + 输入帧 + dt → 新状态
-// 不依赖任何外部状态，不做任何 IO
-MovementState ApplyInput(
-  const MovementState& prev,
+MovementStepResult Step(
+  const MovementState& previous,
   const InputFrame& input,
-  uint16_t dt_ms,
   const MovementConfig& config,
-  const TerrainSample& terrain);
-
-// 无输入时推进（减速、重力、摩擦）
-MovementState ApplyNoInput(
-  const MovementState& prev,
-  uint16_t dt_ms,
-  const MovementConfig& config,
-  const TerrainSample& terrain);
-
+  const CharacterQuery& query,
+  uint32_t server_tick);
 }
 ```
 
@@ -221,41 +181,43 @@ MovementState ApplyNoInput(
 
 ```cpp
 struct MovementConfig {
-  float max_speed;              // m/s
-  float acceleration;           // m/s²
-  float deceleration;
-  float turn_rate;              // rad/s
-  float jump_impulse;
-  float gravity;
-  float air_control;            // [0,1]
-  
-  float capsule_radius;
-  float capsule_height;
-  
-  // 技能限制
-  bool can_move_while_casting;
-  bool can_turn_while_casting;
+  float fixed_dt_s;
+  float max_speed_mps;
+  float acceleration_mps2;
+  float deceleration_mps2;
+  float gravity_mps2;
+  float jump_speed_mps;
+  float max_fall_speed_mps;
+  float max_position_abs_m;
+  float capsule_radius_m;
+  float capsule_half_height_m;
+  float ground_snap_distance_m;
 };
 ```
 
-从 Excel 加载，端共享（通过 `Atlas.CombatCore.Data`）。
+当前 14.1 使用内置默认配置；后续再接数据表覆盖和技能状态约束。
 
-### 4.3 `TerrainSample`（查询接口）
+### 4.3 `CharacterQuery`（查询接口）
 
 服务端与客户端各自实现：
 
 ```cpp
-struct TerrainSample {
-  std::function<float(float3)> height_at;
-  std::function<bool(float3, float3)> collides_with_wall;
-  // ... 其他空间查询
+class CharacterQuery {
+ public:
+  virtual GroundHit GroundProbe(const Vector3& position) const = 0;
+  virtual SweepHit SweepCapsule(const CapsuleCast& cast) const = 0;
+  virtual bool OverlapCapsule(const Capsule& capsule) const = 0;
+  virtual DepenetrationHit DepenetrateCapsule(const Capsule& capsule) const;
 };
 ```
 
 **关键约束**：
-- 服务端 `TerrainSample` 查询权威地形数据
-- 客户端 `TerrainSample` 必须查询**完全相同的数据**（即地形数据端共享）
-- 禁止客户端额外查询 Unity `Physics.Raycast` 而服务端不查——会导致漂移
+- 14.1 使用 `FlatGroundQuery`，先打通协议、预测、replay 和服务端权威链路。
+- 14.2 已接 Atlas `PhysicsQuery` 与 Static backend；Space 可装载 collision
+  asset，Cell C# 脚本通过 `CellServerEntity.LoadCollisionAsset(spaceId, path)`
+  切换指定 Space 的 query。
+- Jolt 接入仍不得把 Jolt 类型泄露到 gameplay 边界。
+- 禁止客户端额外查询 Unity `Physics.Raycast` 而服务端不查；这会导致漂移。
 
 ### 4.4 确定性契约遵从
 
@@ -295,7 +257,7 @@ struct InputHistoryEntry {
 class PredictionHistory {
   InputHistoryEntry buffer_[120];
   uint32_t head_;  // 最新写入位置
-  
+
   void Append(const InputHistoryEntry& e);
   InputHistoryEntry* FindBySeq(uint32_t seq);
   void TruncateBefore(uint32_t seq);   // 丢弃 seq 以前的历史
@@ -323,10 +285,10 @@ class PredictionHistory {
 void Predictor::OnStateAck(const StateAck& ack) {
   auto* entry = history_.FindBySeq(ack.acked_input_seq);
   if (!entry) return;  // 太旧，已被 truncate
-  
-  float err = Distance(entry->predicted_state.position, 
+
+  float err = Distance(entry->predicted_state.position,
                        ack.authoritative_state.position);
-  
+
   if (err < SOFT_THRESHOLD_LOW) {      // < 0.3 m
     // Tier 1: 无感，悄悄纠正内部状态
     entry->predicted_state = ack.authoritative_state;
@@ -355,17 +317,17 @@ void Predictor::OnStateAck(const StateAck& ack) {
     ReplayFromSeq(ack.acked_input_seq + 1);
     visual_offset_ = {0, 0, 0};  // 立即 snap
   }
-  
+
   history_.TruncateBefore(ack.acked_input_seq);
 }
 
 void Predictor::ReplayFromSeq(uint32_t startSeq) {
   auto* anchor = history_.FindBySeq(startSeq - 1);
   MovementState state = anchor->predicted_state;
-  
+
   for (uint32_t seq = startSeq; seq <= current_seq_; ++seq) {
     auto* e = history_.FindBySeq(seq);
-    state = apply_input(state, e->input, e->input.client_dt_ms, config_, terrain_);
+    state = Step(state, e->input, fixed_config_, terrain_, e->input.input_tick);
     e->predicted_state = state;
   }
 }
@@ -380,11 +342,11 @@ float3 Predictor::GetRenderPosition() {
   float dt = Time.deltaTime;
   float decay = exp(-dt * 1000.0f / visual_offset_tau_);
   visual_offset_ *= decay;
-  
+
   if (Length(visual_offset_) < 0.01f) {
     visual_offset_ = {0, 0, 0};
   }
-  
+
   return GetCurrentSimPosition() + visual_offset_;
 }
 ```
@@ -448,9 +410,9 @@ float3 HermiteInterp(float t_normalized,  // [0, 1]
   float h10 = t*t*t - 2*t*t + t;
   float h01 = -2*t*t*t + 3*t*t;
   float h11 = t*t*t - t*t;
-  
+
   float dt_s = dt_ms / 1000.0f;
-  return h00 * p0 + h10 * dt_s * v0 
+  return h00 * p0 + h10 * dt_s * v0
        + h01 * p1 + h11 * dt_s * v1;
 }
 ```
@@ -471,7 +433,7 @@ float3 HermiteInterp(float t_normalized,  // [0, 1]
 下一个快照迟到时：
 
 ```cpp
-float3 Extrapolate(const EntitySnapshot& latest, 
+float3 Extrapolate(const EntitySnapshot& latest,
                    float extrap_ms) {
   if (extrap_ms < 100) {
     // 线性外推
@@ -510,9 +472,9 @@ struct PackedPos {
 ```cpp
 class JitterEstimator {
   float recent_rtt_samples_[32];
-  
+
   float Stddev() { /* ... */ }
-  
+
   void Sample(float rtt_ms) {
     recent_rtt_samples_[cursor_++ & 31] = rtt_ms;
   }
@@ -522,7 +484,7 @@ class JitterEstimator {
 void UpdateInterpDelay() {
   float jitter = jitter_estimator_.Stddev();
   float ideal = clamp(100.0f, 2.0f * jitter + 50.0f, 250.0f);
-  
+
   // 平滑变化，避免突变
   interp_delay_ms_ = lerp(interp_delay_ms_, ideal, 0.1f);
 }
@@ -539,12 +501,12 @@ void UpdateInterpDelay() {
 for (auto& player : cell.players) {
   // 处理输入帧队列
   input_processor_[player].Tick(ctx);
-  
+
   // 处理 active command（技能位移，§8）
   if (player.movement.active_command) {
     ApplyCommandCurve(player, ctx);
   }
-  
+
   // 记录位置历史（lag comp 用）
   player.position_history.Push(player.movement.position, ctx.CurrentTick);
 }
@@ -559,23 +521,41 @@ struct PositionHistory {
     float3 position;
     uint16_t yaw;
   };
-  
+
   Sample ring_[30];  // 30 samples @ 20/30Hz = 1s 历史
   uint32_t head_;
-  
+
   void Push(float3 pos, uint32_t tick);
-  
+
   // 查询：给定时间，返回位置（插值）
   float3 At(uint32_t tick);
 };
 ```
 
+Atlas 14.1 已在 CellApp C++ 侧维护每实体 30 样本 ring buffer，并随 Offload
+迁移 / 回滚。Cell 侧脚本可调用
+`CellServerEntity.TryGetMovementHistorySample(serverTick, out sample)` 读取插值后的
+position / velocity / direction / flags；Combat lag compensation 应使用这个接口，
+不要回滚物理场景或直接读取 Ghost pose。
+
 **容量 30 样本覆盖 1s 历史**，足够支撑 200ms 延迟补偿 + 余量。
 
 ### 7.3 服务端反作弊校验
 
-参见 §10。简单来说，每次 `ApplyInput` 后：
-- 检查速度是否超过 `MovementConfig.max_speed × jitter_allowance`
+参见 §10。简单来说，每次 `Step` 后：
+- 检查速度是否超过 `MovementConfig.max_speed_mps × jitter_allowance`
+- 检查垂直速度、水平加速度和坐标边界是否超过 `MovementConfig` 限制
+- 客户端 ack replay 后发送 correction report，连续 Tier2 / Snap 进入
+  suspicious watcher
+- Correction report 的 target 必须非 0，`distance_m` 必须为有限非负值，并且
+  `correction_flags` 必须与 distance tier 一致
+- Movement ack / correction report 的 `correction_flags` 必须落在
+  `{0, Tier1, Tier2, Snap}` 单 tier 枚举集合内；多 bit 组合或保留位会被
+  C++ / C# / UE wire decode 直接 drop
+- 断线重连后用最新 movement ack 重播种 owner 输入 seq，避免旧会话的
+  CellApp 输入序列状态把新输入当成 stale
+- Unity / UE 的 `atlas_net_client` 可通过 `AtlasNetSetTransportImpairment`
+  注入每向延迟和 datagram loss，覆盖主控预测验收的 150ms RTT / 2% loss 场景
 - 检查位置是否合理（不穿墙、在地形之上）
 - 违规 → 触发 `PhysicsCorrection`，服务端权威位置立即广播给作弊客户端
 
@@ -597,15 +577,15 @@ struct PositionHistory {
 
 ```cpp
 struct MovementCommand {
-  uint32_t command_id;      // 唯一 ID，便于追溯
+  uint32_t command_id;      // 非 0 唯一 ID，便于追溯
   uint16_t skill_id;        // 产生此命令的技能
   CommandType type;         // Dash / Launch / Pull / Knockback / Teleport
-  
+
   float3 start_pos;         // 命令发起时的权威位置
   float3 target_pos;        // 目标位置（或速度）
   uint16_t duration_ms;
   uint8_t curve_id;         // 指向曲线库
-  
+
   uint8_t input_policy;     // 0=suppress, 1=allow_turn, 2=allow_full
   uint8_t on_collision;     // 0=stop, 1=continue, 2=end_skill
 };
@@ -620,6 +600,35 @@ enum class CommandType {
   FollowEntity,   // 跟随目标（飞行物引导）
 };
 ```
+
+Atlas 已在 `movement_sim` 落地 MovementCommand / MovementCurve 共享模型、
+曲线采样、曲线注册 store 与推进纯函数；CellApp 已有 active command store，
+并会在 movement tick 按 command 的 curve id 推进。C# 技能脚本可通过
+`CellServerEntity.RegisterMovementCurve` 注册曲线，再用
+`CellServerEntity.SetMovementCommand` 写入 command；`Stop` / `EndSkill` 碰撞策略会
+通过实体 Space 的 Static physics query 截停 command，`Continue` 保持穿越；新
+command 只有 priority 高于当前 active command 时才会打断；打断会先广播旧
+command 的 cancelled end，同一 command_id 可续写；active command 也随
+Offload 迁移和 reject / timeout 回滚恢复。
+`MovementCommandStart` / `MovementCommandEnd` 已有 CellApp fanout、
+BaseApp -> Client wire id、native client 转发、C# 解码事件、owner predictor
+应用和 remote interpolator 应用。C# 客户端通过 `MovementCurves.Register`
+注册同一份曲线样本，Unity / UE MVP 的 owner 和 remote command playback 会按
+`curve_id` 采样曲线；缺失客户端曲线时先退回线性采样，避免丢失 command 表现。
+`input_policy=suppress` 会清空并拒绝普通输入；`allow_turn` 会消费输入帧只更新
+朝向和 ack seq，不改变 command 位移曲线。`allow_full` 仍是保留协议值，服务端
+在普通 motor 与 command 混合策略落地前拒绝执行。
+C# cell 脚本可通过 `CellServerEntity.ClearMovementCommand(commandId)` 清除
+当前 active command；`commandId = 0` 表示清除任意当前命令，非 0 则只清除匹配
+命令。0 是 clear-any 哨兵，不能作为真实 command id；`duration_ms` 必须非 0，
+`elapsed_ms` 不能超过 `duration_ms`，command position 和 end state 必须是有限值。
+Movement ack / command start / end 的 entity id 也必须非 0。清除成功时服务端复用
+`MovementCommandEnd` fanout，owner 和远端都会停止本地 command overlay。
+End payload 带 completed / cancelled / collision / invalid reason，技能系统可据此
+区分自然结束、脚本取消、碰撞截停和异常终止。
+MVP `Avatar.Dash` 已通过 own-client cell RPC 写入由 CellApp 盖 `server_tick`
+的 `MovementCommand`，用于验证技能位移的端到端链路；完整数据驱动技能
+timeline 仍待接入。
 
 ### 8.3 曲线库
 
@@ -662,8 +671,8 @@ Skill timeline 触发 Dash action
   └── 客户端（远端看客）: 收到 MovementCommandStart 后本地推进
   ↓
 Duration 到期或触发结束条件:
-  ├── 服务端: 清除 active_command
-  └── 客户端: 平滑过渡回自由移动
+  ├── 服务端: 清除 active_command 并广播 MovementCommandEnd
+  └── 客户端: 停止 command overlay 并落到服务端最终 state
 ```
 
 ### 8.5 `ApplyCommandCurve`
@@ -673,10 +682,10 @@ MovementState ApplyCommandCurve(
   const MovementState& prev,
   uint16_t dt_ms,
   const MovementCurveLib& lib) {
-  
+
   auto& cmd = prev.active_command;
   uint32_t elapsed = prev.command_elapsed_ms + dt_ms;
-  
+
   if (elapsed >= cmd.duration_ms) {
     MovementState next = prev;
     next.position = cmd.target_pos;  // 确保精确落点
@@ -684,11 +693,11 @@ MovementState ApplyCommandCurve(
     next.command_elapsed_ms = 0;
     return next;
   }
-  
+
   float t_normalized = (float)elapsed / cmd.duration_ms;
   const MovementCurve& curve = lib.Get(cmd.curve_id);
   float progress = SampleCurve(curve, t_normalized);
-  
+
   MovementState next = prev;
   next.position = Lerp(cmd.start_pos, cmd.target_pos, progress);
   next.command_elapsed_ms = elapsed;
@@ -703,17 +712,19 @@ MovementState ApplyCommandCurve(
 - 同一份曲线数据（端共享资源）
 - 同一 `start_pos`（来自服务端广播，客户端不自行推断）
 - 同一 `duration_ms` / `curve_id`（命令数据一致）
+- 每个客户端在进入玩法前注册本地曲线样本；线性兜底只用于降级展示
 
 因此命令开始后**无需持续同步位置**——两端独立推导即可自然对齐。
 
 ### 8.7 冲突处理
 
 command 执行期间若收到新命令（如被击退时正在冲锋）：
-- 新命令 `priority > current.priority`：打断 current，执行 new
-- 否则：忽略 new
-- 优先级：Teleport > Knockback > Launch > Pull > Dash
+- 新命令 `priority > current.priority`：广播旧 command cancelled end 后执行 new
+- 同一 `command_id`：视为续写当前 command
+- 否则：忽略 new，并返回写入失败
 
-优先级表写在 `MovementConfig`，策划可调。
+Atlas 当前执行 command 携带的 byte priority；策划数据表映射到 priority 的
+配置仍在技能 timeline 接入时补齐。
 
 ---
 
@@ -741,7 +752,7 @@ command 执行期间若收到新命令（如被击退时正在冲锋）：
 void OnRemoteCommandStart(const MovementCommandStart& cmd) {
   float start_render_time = cmd.server_tick * tick_ms;
   float current_render_time = now_ms - interp_delay_ms;
-  
+
   if (current_render_time >= start_render_time) {
     // 已到开始时间，立即启动命令（可能丢失前几 ms 的表现）
     StartLocalCommand(cmd, elapsed_ms = current_render_time - start_render_time);
@@ -773,17 +784,17 @@ void OnRemoteCommandStart(const MovementCommandStart& cmd) {
 每次 `ApplyInput` 后检查：
 
 ```cpp
-bool ValidateMove(const MovementState& prev, const MovementState& next, 
+bool ValidateMove(const MovementState& prev, const MovementState& next,
                   uint16_t dt_ms, const MovementConfig& cfg) {
   float dist = Distance(prev.position, next.position);
   float max_dist = cfg.max_speed * (dt_ms / 1000.0f) * 1.1f;  // 10% 容差
   if (dist > max_dist) return false;
-  
+
   float max_v_dist = cfg.max_fall_speed * (dt_ms / 1000.0f) * 1.1f;
   if (std::abs(next.position.y - prev.position.y) > max_v_dist) return false;
-  
+
   if (terrain.collides_with_wall(prev.position, next.position)) return false;
-  
+
   return true;
 }
 ```
@@ -797,7 +808,7 @@ class JitterDebtAccount {
   float debt_ms_ = 0;                              // 累积的"超速时间"
   const float max_debt_ms_ = 500;                  // 500ms 上限
   const float repayment_rate_ = 0.5f;              // 每秒还 0.5
-  
+
 public:
   bool Allow(float overspeed_ratio, uint16_t dt_ms) {
     // overspeed_ratio = 1.0 表示正好贴上限，1.5 表示超 50%
@@ -806,7 +817,7 @@ public:
       debt_ms_ = std::max(0.0f, debt_ms_ - dt_ms * repayment_rate_);
       return true;
     }
-    
+
     float debt_incurred = (overspeed_ratio - 1.0f) * dt_ms;
     if (debt_ms_ + debt_incurred > max_debt_ms_) {
       return false;  // 拒绝
@@ -847,32 +858,32 @@ public:
 public sealed class AtlasMovementController : MonoBehaviour {
   // Native plugin handle
   IntPtr _nativeHandle;
-  
+
   void Awake() {
     _nativeHandle = NativePlugin.CreateMovementPredictor(entityId_);
   }
-  
+
   void Update() {
     // Input 采集（Unity Input System）
     InputFrame frame = InputCollector.Sample();
-    
+
     // 传给 native plugin 做预测
     NativePlugin.PushInput(_nativeHandle, ref frame);
-    
+
     // 读取渲染位置并应用
     NativePlugin.GetRenderTransform(_nativeHandle, out var pos, out var yaw);
     transform.position = pos;
     transform.rotation = Quaternion.Euler(0, yaw, 0);
   }
-  
+
   void OnStateAck(StateAck ack) {
     NativePlugin.ApplyStateAck(_nativeHandle, ref ack);
   }
-  
+
   void OnCommandStart(MovementCommandStart cmd) {
     NativePlugin.ApplyCommand(_nativeHandle, ref cmd);
   }
-  
+
   void OnDestroy() {
     NativePlugin.DestroyMovementPredictor(_nativeHandle);
   }
@@ -892,13 +903,13 @@ public sealed class AtlasMovementController : MonoBehaviour {
 ```csharp
 public sealed class AtlasRemoteEntity : MonoBehaviour {
   IntPtr _interpHandle;
-  
+
   public void OnSnapshot(EntitySnapshot snap) {
     NativePlugin.PushRemoteSnapshot(_interpHandle, ref snap);
   }
-  
+
   void LateUpdate() {
-    NativePlugin.GetInterpolatedTransform(_interpHandle, 
+    NativePlugin.GetInterpolatedTransform(_interpHandle,
                                            GetRenderTimeMs(),
                                            out var pos, out var yaw);
     transform.position = pos;
@@ -937,7 +948,7 @@ void  atlas_predictor_destroy(void* handle);
 void  atlas_predictor_push_input(void* handle, const InputFrame* input);
 void  atlas_predictor_apply_ack(void* handle, const StateAck* ack);
 void  atlas_predictor_apply_command(void* handle, const MovementCommandStart* cmd);
-void  atlas_predictor_get_render_transform(void* handle, 
+void  atlas_predictor_get_render_transform(void* handle,
                                             float3* pos_out, uint16_t* yaw_out);
 
 // Remote Interpolator
@@ -956,13 +967,13 @@ void  atlas_interp_get_transform(void* handle, uint32_t render_time_ms,
 ```csharp
 internal static class NativePlugin {
   const string DLL = "libatlas_movement";
-  
+
   [DllImport(DLL, EntryPoint = "atlas_predictor_create")]
   public static extern IntPtr CreateMovementPredictor(ulong entityId);
-  
+
   [DllImport(DLL, EntryPoint = "atlas_predictor_push_input")]
   public static extern void PushInput(IntPtr handle, ref InputFrame input);
-  
+
   // ... 其余方法
 }
 ```
@@ -1050,10 +1061,11 @@ C++ 路径：
 
 取决于 `MovementCommand.input_policy`：
 - 0 = suppress：完全不响应输入
-- 1 = allow_turn：可转向但不改变冲锋方向
-- 2 = allow_full：转向 + 减速/加速
+- 1 = allow_turn：可转向，但不改变 command 位移曲线
+- 2 = allow_full：保留协议值，当前服务端拒绝执行
 
-策划按技能设计选择。典型快速冲锋 suppress，长距离位移 allow_turn。
+当前可用于技能的策略是 suppress 和 allow_turn。典型快速冲锋 suppress，
+长距离位移 allow_turn。
 
 ### Q5: 客户端走 C++ predictor，Unity Editor 调试怎么办？
 
@@ -1072,10 +1084,11 @@ C++ 路径：
 
 可以，通过：
 - 新命令（更高优先级）抢占（§8.7）
-- 技能显式调用 `CancelCommand` action
+- 技能显式调用 `CellServerEntity.ClearMovementCommand(commandId)`
 - 玩家死亡时自动清除
 
-取消时端同发 `MovementCommandCancel` 事件，两端立即停止推进。
+取消或碰撞截停时服务端发送带 reason 的 `MovementCommandEnd`，两端立即停止推进
+并落到服务端最终 state。
 
 ### Q8: 远端看客看冲锋玩家的位置会和冲锋者自己看到的一致吗？
 

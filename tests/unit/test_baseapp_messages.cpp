@@ -1,4 +1,5 @@
 #include <array>
+#include <limits>
 #include <optional>
 #include <span>
 #include <vector>
@@ -211,7 +212,7 @@ TEST(BaseAppMessages, BackupCellEntity) {
 }
 
 TEST(BaseAppMessages, BackupCellEntityReliable) {
-  // Must ride the reliable channel — DB writes and reviver cannot tolerate
+  // Must ride the reliable channel; DB writes and reviver cannot tolerate
   // a dropped backup snapshot silently leaving the base with stale bytes.
   EXPECT_FALSE(BackupCellEntity::Descriptor().IsUnreliable());
 }
@@ -314,22 +315,111 @@ TEST(BaseAppMessages, ClientCellRpcEmptyPayload) {
   EXPECT_TRUE(rt->payload.empty());
 }
 
-// Locks the three-path CellApp→Client delta contract documented in
-// delta_forwarder.h. Any future change that relaxes one of these invariants
-// (e.g. making ReplicatedReliableDeltaFromCell unreliable, or overlapping
-// msg ids) would silently route ordered property deltas through the
-// latest-wins forwarder and desync clients. This test exists precisely to
-// fail loud in that case.
+TEST(BaseAppMessages, ClientMovementInputRoundTrip) {
+  ClientMovementInput msg;
+  msg.target_entity_id = 77;
+  msg.frames.push_back({10, 100, 127, 0, 1024, -3, movement::kInputButtonJump, 16});
+  msg.frames.push_back({11, 101, 0, 127, 2048, 2, 0, 17});
+
+  auto rt = round_trip(msg);
+  ASSERT_TRUE(rt.has_value());
+  EXPECT_EQ(rt->target_entity_id, 77u);
+  ASSERT_EQ(rt->frames.size(), 2u);
+  EXPECT_EQ(rt->frames[0].seq, 10u);
+  EXPECT_EQ(rt->frames[0].move_x, 127);
+  EXPECT_EQ(rt->frames[0].buttons, movement::kInputButtonJump);
+  EXPECT_EQ(rt->frames[1].move_z, 127);
+  EXPECT_TRUE(ClientMovementInput::Descriptor().IsUnreliable());
+}
+
+TEST(BaseAppMessages, ClientMovementInputRejectsTooManyFrames) {
+  BinaryWriter w;
+  w.Write<uint32_t>(77);
+  w.Write<uint8_t>(movement::kMaxMovementInputFrames + 1);
+
+  auto buf = w.Detach();
+  BinaryReader r(buf);
+  auto result = ClientMovementInput::Deserialize(r);
+
+  ASSERT_FALSE(result.HasValue());
+  EXPECT_EQ(result.Error().Code(), ErrorCode::kInvalidArgument);
+}
+
+TEST(BaseAppMessages, ClientMovementInputRejectsInvalidTarget) {
+  ClientMovementInput msg;
+  msg.target_entity_id = kInvalidEntityID;
+  msg.frames.push_back({10, 100, 127, 0, 1024, -3, 0, movement::kMinInputDtMs});
+
+  auto rt = round_trip(msg);
+
+  EXPECT_FALSE(rt.has_value());
+}
+
+TEST(BaseAppMessages, ClientMovementInputRejectsInvalidFrame) {
+  ClientMovementInput msg;
+  msg.target_entity_id = 77;
+  msg.frames.push_back({10, 100, 127, 0, 1024, -3, 0, 0});
+
+  auto rt = round_trip(msg);
+
+  EXPECT_FALSE(rt.has_value());
+}
+
+TEST(BaseAppMessages, MovementCorrectionReportRoundTrip) {
+  MovementCorrectionReport msg;
+  msg.target_entity_id = 77;
+  msg.acked_input_seq = 42;
+  msg.server_tick = 9001;
+  msg.distance_m = movement::kCorrectionTier2DistanceM;
+  msg.correction_flags = movement::kCorrectionFlagTier2;
+
+  auto rt = round_trip(msg);
+  ASSERT_TRUE(rt.has_value());
+  EXPECT_EQ(rt->target_entity_id, 77u);
+  EXPECT_EQ(rt->acked_input_seq, 42u);
+  EXPECT_EQ(rt->server_tick, 9001u);
+  EXPECT_FLOAT_EQ(rt->distance_m, movement::kCorrectionTier2DistanceM);
+  EXPECT_EQ(rt->correction_flags, movement::kCorrectionFlagTier2);
+  EXPECT_TRUE(MovementCorrectionReport::Descriptor().IsUnreliable());
+}
+
+TEST(BaseAppMessages, MovementCorrectionReportRejectsInvalidPayload) {
+  MovementCorrectionReport msg;
+  msg.target_entity_id = 77;
+  msg.acked_input_seq = 42;
+  msg.server_tick = 9001;
+  msg.distance_m = movement::kCorrectionTier2DistanceM;
+  msg.correction_flags = movement::kCorrectionFlagTier2;
+
+  auto invalid_target = msg;
+  invalid_target.target_entity_id = kInvalidEntityID;
+  EXPECT_FALSE(round_trip(invalid_target).has_value());
+
+  auto non_finite = msg;
+  non_finite.distance_m = std::numeric_limits<float>::infinity();
+  EXPECT_FALSE(round_trip(non_finite).has_value());
+
+  auto unknown_flag = msg;
+  unknown_flag.correction_flags = 1u << 7;
+  EXPECT_FALSE(round_trip(unknown_flag).has_value());
+
+  auto mismatched_flags = msg;
+  mismatched_flags.correction_flags = movement::kCorrectionFlagTier1;
+  EXPECT_FALSE(round_trip(mismatched_flags).has_value());
+}
+
+// Locks the three-path CellApp->Client delta contract.
+// Relaxing these invariants can route ordered deltas through latest-wins.
 TEST(BaseAppMessages, ThreePathDeltaContract) {
-  // Path #1 — Unreliable volatile latest-wins, via DeltaForwarder → 0xF001.
+  // Path #1: unreliable volatile latest-wins via DeltaForwarder.
   EXPECT_TRUE(ReplicatedDeltaFromCell::Descriptor().IsUnreliable())
       << "Path #1 must be Unreliable; latest-wins is incompatible with Reliable transport.";
 
-  // Path #2 — Reliable property delta, bypasses DeltaForwarder, direct → 0xF003.
+  // Path #2: reliable property delta bypasses DeltaForwarder.
   EXPECT_FALSE(ReplicatedReliableDeltaFromCell::Descriptor().IsUnreliable())
       << "Path #2 MUST be Reliable; it carries ordered property deltas (event_seq).";
 
-  // Path #3 — Reliable owner/broadcast RPC, dispatched per-entity via rpc_id.
+  // Path #3: reliable owner/broadcast RPC dispatched per entity.
   EXPECT_FALSE(BroadcastRpcFromCell::Descriptor().IsUnreliable())
       << "Path #3 MUST be Reliable; RPC calls cannot tolerate drops.";
 
@@ -355,13 +445,341 @@ TEST(BaseAppMessages, ReplicatedBaselineToClient) {
   EXPECT_EQ(rt->snapshot[3], std::byte{0xBE});
 }
 
-// Baseline is the loss-recovery channel — it MUST be reliable, and it MUST
-// use the reserved client-facing ID 0xF002 (neither 0xF001 unreliable delta
-// nor 0xF003 reliable delta).
+// Baseline is the reliable loss-recovery channel.
+// It must use 0xF002, not the delta wire IDs.
 TEST(BaseAppMessages, BaselineDescriptor) {
   const auto& desc = ReplicatedBaselineToClient::Descriptor();
   EXPECT_FALSE(desc.IsUnreliable());
   EXPECT_EQ(desc.id, static_cast<MessageID>(0xF002));
+}
+
+TEST(BaseAppMessages, MovementStateAckFromCellRoundTrip) {
+  MovementStateAckFromCell msg;
+  msg.entity_id = 88;
+  msg.acked_input_seq = 120;
+  msg.server_tick = 300;
+  msg.cell_epoch = 3;
+  msg.state.position = {1.f, 2.f, 3.f};
+  msg.state.velocity = {4.f, 5.f, 6.f};
+  msg.state.direction = {0.f, 0.f, 1.f};
+  msg.state.flags = movement::kMovementFlagGrounded;
+  msg.state.last_processed_input_seq = 120;
+  msg.correction_flags = 2;
+
+  auto rt = round_trip(msg);
+  ASSERT_TRUE(rt.has_value());
+  EXPECT_EQ(rt->entity_id, 88u);
+  EXPECT_EQ(rt->acked_input_seq, 120u);
+  EXPECT_EQ(rt->cell_epoch, 3u);
+  EXPECT_FLOAT_EQ(rt->state.position.z, 3.f);
+  EXPECT_FLOAT_EQ(rt->state.velocity.y, 5.f);
+  EXPECT_EQ(rt->state.flags, movement::kMovementFlagGrounded);
+  EXPECT_EQ(rt->correction_flags, 2u);
+  EXPECT_TRUE(MovementStateAckFromCell::Descriptor().IsUnreliable());
+}
+
+TEST(BaseAppMessages, MovementStateAckToClientUsesDedicatedWireId) {
+  MovementStateAckToClient msg;
+  msg.entity_id = 88;
+  msg.acked_input_seq = 121;
+  msg.server_tick = 301;
+  msg.state.position = {7.f, 8.f, 9.f};
+  msg.state.last_processed_input_seq = 121;
+  msg.correction_flags = 1;
+
+  auto rt = round_trip(msg);
+  ASSERT_TRUE(rt.has_value());
+  EXPECT_EQ(rt->entity_id, 88u);
+  EXPECT_FLOAT_EQ(rt->state.position.x, 7.f);
+  EXPECT_EQ(MovementStateAckToClient::Descriptor().id,
+            kClientMovementStateAckMessageId);
+  EXPECT_NE(MovementStateAckToClient::Descriptor().id, kClientDeltaMessageId);
+  EXPECT_TRUE(MovementStateAckToClient::Descriptor().IsUnreliable());
+}
+
+TEST(BaseAppMessages, MovementStateAckToClientRejectsNonFiniteState) {
+  MovementStateAckToClient msg;
+  msg.entity_id = 88;
+  msg.server_tick = 301;
+  msg.state.position.x = std::numeric_limits<float>::quiet_NaN();
+
+  EXPECT_FALSE(round_trip(msg).has_value());
+}
+
+TEST(BaseAppMessages, MovementStateAckToClientRejectsInvalidEntity) {
+  MovementStateAckToClient msg;
+  msg.server_tick = 301;
+
+  EXPECT_FALSE(round_trip(msg).has_value());
+}
+
+TEST(BaseAppMessages, MovementStateAckRejectsInvalidCorrectionFlags) {
+  MovementStateAckToClient client_msg;
+  client_msg.entity_id = 88;
+  client_msg.server_tick = 301;
+  client_msg.state.direction = {0.f, 0.f, 1.f};
+  client_msg.correction_flags = movement::kCorrectionFlagTier1 |
+                                movement::kCorrectionFlagTier2;
+  EXPECT_FALSE(round_trip(client_msg).has_value());
+  client_msg.correction_flags = 1u << 7;
+  EXPECT_FALSE(round_trip(client_msg).has_value());
+
+  MovementStateAckFromCell cell_msg;
+  cell_msg.entity_id = 88;
+  cell_msg.server_tick = 301;
+  cell_msg.cell_epoch = 1;
+  cell_msg.state.direction = {0.f, 0.f, 1.f};
+  cell_msg.correction_flags = movement::kCorrectionFlagTier2 |
+                              movement::kCorrectionFlagSnap;
+  EXPECT_FALSE(round_trip(cell_msg).has_value());
+  cell_msg.correction_flags = 1u << 5;
+  EXPECT_FALSE(round_trip(cell_msg).has_value());
+}
+
+TEST(BaseAppMessages, MovementCommandStartToClientUsesDedicatedWireId) {
+  MovementCommandStartToClient msg;
+  msg.entity_id = 89;
+  msg.command.command_id = 900;
+  msg.command.skill_id = 12;
+  msg.command.type = movement::MovementCommandType::kKnockback;
+  msg.command.start_position = {1.f, 2.f, 3.f};
+  msg.command.target_position = {4.f, 5.f, 6.f};
+  msg.command.duration_ms = 700;
+  msg.command.elapsed_ms = 100;
+  msg.command.curve_id = 3;
+  msg.command.input_policy = movement::MovementCommandInputPolicy::kAllowTurn;
+  msg.command.collision_policy = movement::MovementCommandCollisionPolicy::kEndSkill;
+  msg.command.priority = 9;
+  msg.command.server_tick = 301;
+
+  auto rt = round_trip(msg);
+  ASSERT_TRUE(rt.has_value());
+  EXPECT_EQ(rt->entity_id, 89u);
+  EXPECT_EQ(rt->command.command_id, 900u);
+  EXPECT_EQ(rt->command.type, movement::MovementCommandType::kKnockback);
+  EXPECT_FLOAT_EQ(rt->command.target_position.z, 6.f);
+  EXPECT_EQ(rt->command.collision_policy,
+            movement::MovementCommandCollisionPolicy::kEndSkill);
+  EXPECT_EQ(MovementCommandStartToClient::Descriptor().id,
+            kClientMovementCommandStartMessageId);
+  EXPECT_FALSE(MovementCommandStartToClient::Descriptor().IsUnreliable());
+}
+
+TEST(BaseAppMessages, MovementCommandStartToClientRejectsZeroCommandId) {
+  MovementCommandStartToClient msg;
+  msg.entity_id = 89;
+  msg.command.skill_id = 12;
+  msg.command.duration_ms = 700;
+  msg.command.server_tick = 301;
+
+  EXPECT_FALSE(round_trip(msg).has_value());
+}
+
+TEST(BaseAppMessages, MovementCommandStartToClientRejectsInvalidEntity) {
+  MovementCommandStartToClient msg;
+  msg.command.command_id = 900;
+  msg.command.skill_id = 12;
+  msg.command.duration_ms = 700;
+  msg.command.server_tick = 301;
+
+  EXPECT_FALSE(round_trip(msg).has_value());
+}
+
+TEST(BaseAppMessages, MovementCommandStartToClientRejectsNonFinitePosition) {
+  MovementCommandStartToClient msg;
+  msg.entity_id = 89;
+  msg.command.command_id = 900;
+  msg.command.skill_id = 12;
+  msg.command.duration_ms = 700;
+  msg.command.server_tick = 301;
+  msg.command.target_position.x = std::numeric_limits<float>::infinity();
+
+  EXPECT_FALSE(round_trip(msg).has_value());
+}
+
+TEST(BaseAppMessages, MovementCommandStartToClientRejectsInvalidTiming) {
+  MovementCommandStartToClient msg;
+  msg.entity_id = 89;
+  msg.command.command_id = 900;
+  msg.command.skill_id = 12;
+  msg.command.duration_ms = 0;
+  msg.command.server_tick = 301;
+
+  EXPECT_FALSE(round_trip(msg).has_value());
+
+  msg.command.duration_ms = 700;
+  msg.command.elapsed_ms = 701;
+
+  EXPECT_FALSE(round_trip(msg).has_value());
+}
+
+TEST(BaseAppMessages, MovementCommandStartFromCellRoundTrip) {
+  MovementCommandStartFromCell msg;
+  msg.source_entity_id = 100;
+  msg.cell_epoch = 3;
+  msg.dest_entity_ids = {100, 101};
+  msg.command.command_id = 900;
+  msg.command.skill_id = 12;
+  msg.command.type = movement::MovementCommandType::kKnockback;
+  msg.command.start_position = {1.f, 2.f, 3.f};
+  msg.command.target_position = {4.f, 5.f, 6.f};
+  msg.command.duration_ms = 700;
+  msg.command.elapsed_ms = 20;
+  msg.command.curve_id = 3;
+  msg.command.input_policy = movement::MovementCommandInputPolicy::kAllowTurn;
+  msg.command.collision_policy = movement::MovementCommandCollisionPolicy::kEndSkill;
+  msg.command.priority = 9;
+  msg.command.server_tick = 301;
+
+  auto rt = round_trip(msg);
+  ASSERT_TRUE(rt.has_value());
+  EXPECT_EQ(rt->source_entity_id, 100u);
+  EXPECT_EQ(rt->cell_epoch, 3u);
+  ASSERT_EQ(rt->dest_entity_ids.size(), 2u);
+  EXPECT_EQ(rt->dest_entity_ids[1], 101u);
+  EXPECT_EQ(rt->command.command_id, 900u);
+  EXPECT_EQ(rt->command.type, movement::MovementCommandType::kKnockback);
+  EXPECT_EQ(rt->command.collision_policy,
+            movement::MovementCommandCollisionPolicy::kEndSkill);
+  EXPECT_EQ(MovementCommandStartFromCell::Descriptor().id,
+            msg_id::Id(msg_id::BaseApp::kMovementCommandStartFromCell));
+  EXPECT_FALSE(MovementCommandStartFromCell::Descriptor().IsUnreliable());
+}
+
+TEST(BaseAppMessages, MovementCommandStartFromCellRejectsZeroCommandId) {
+  MovementCommandStartFromCell msg;
+  msg.source_entity_id = 100;
+  msg.cell_epoch = 3;
+  msg.dest_entity_ids = {100};
+  msg.command.skill_id = 12;
+  msg.command.duration_ms = 700;
+  msg.command.server_tick = 301;
+
+  EXPECT_FALSE(round_trip(msg).has_value());
+}
+
+TEST(BaseAppMessages, MovementCommandStartFromCellRejectsInvalidEntityIds) {
+  MovementCommandStartFromCell msg;
+  msg.cell_epoch = 3;
+  msg.dest_entity_ids = {100};
+  msg.command.command_id = 900;
+  msg.command.skill_id = 12;
+  msg.command.duration_ms = 700;
+  msg.command.server_tick = 301;
+
+  EXPECT_FALSE(round_trip(msg).has_value());
+
+  msg.source_entity_id = 100;
+  msg.dest_entity_ids = {0};
+
+  EXPECT_FALSE(round_trip(msg).has_value());
+}
+
+TEST(BaseAppMessages, MovementCommandEndToClientUsesDedicatedWireId) {
+  MovementCommandEndToClient msg;
+  msg.entity_id = 89;
+  msg.command_id = 900;
+  msg.server_tick = 302;
+  msg.reason = movement::MovementCommandEndReason::kCollision;
+  msg.state.position = {7.f, 8.f, 9.f};
+  msg.state.direction = {0.f, 0.f, 1.f};
+  msg.state.flags = movement::kMovementFlagGrounded;
+  msg.state.last_processed_input_seq = 77;
+
+  auto rt = round_trip(msg);
+  ASSERT_TRUE(rt.has_value());
+  EXPECT_EQ(rt->entity_id, 89u);
+  EXPECT_EQ(rt->command_id, 900u);
+  EXPECT_EQ(rt->server_tick, 302u);
+  EXPECT_EQ(rt->reason, movement::MovementCommandEndReason::kCollision);
+  EXPECT_FLOAT_EQ(rt->state.position.z, 9.f);
+  EXPECT_EQ(rt->state.last_processed_input_seq, 77u);
+  EXPECT_EQ(MovementCommandEndToClient::Descriptor().id,
+            kClientMovementCommandEndMessageId);
+  EXPECT_FALSE(MovementCommandEndToClient::Descriptor().IsUnreliable());
+}
+
+TEST(BaseAppMessages, MovementCommandEndToClientRejectsZeroCommandId) {
+  MovementCommandEndToClient msg;
+  msg.entity_id = 89;
+  msg.server_tick = 302;
+  msg.state.direction = {0.f, 0.f, 1.f};
+
+  EXPECT_FALSE(round_trip(msg).has_value());
+}
+
+TEST(BaseAppMessages, MovementCommandEndToClientRejectsInvalidEntity) {
+  MovementCommandEndToClient msg;
+  msg.command_id = 900;
+  msg.server_tick = 302;
+  msg.state.direction = {0.f, 0.f, 1.f};
+
+  EXPECT_FALSE(round_trip(msg).has_value());
+}
+
+TEST(BaseAppMessages, MovementCommandEndToClientRejectsNonFiniteState) {
+  MovementCommandEndToClient msg;
+  msg.entity_id = 89;
+  msg.command_id = 900;
+  msg.server_tick = 302;
+  msg.state.velocity.z = std::numeric_limits<float>::quiet_NaN();
+
+  EXPECT_FALSE(round_trip(msg).has_value());
+}
+
+TEST(BaseAppMessages, MovementCommandEndFromCellRoundTrip) {
+  MovementCommandEndFromCell msg;
+  msg.source_entity_id = 100;
+  msg.cell_epoch = 3;
+  msg.dest_entity_ids = {100, 101};
+  msg.command_id = 900;
+  msg.server_tick = 302;
+  msg.reason = movement::MovementCommandEndReason::kCancelled;
+  msg.state.position = {7.f, 8.f, 9.f};
+  msg.state.direction = {0.f, 0.f, 1.f};
+  msg.state.flags = movement::kMovementFlagGrounded;
+  msg.state.last_processed_input_seq = 77;
+
+  auto rt = round_trip(msg);
+  ASSERT_TRUE(rt.has_value());
+  EXPECT_EQ(rt->source_entity_id, 100u);
+  EXPECT_EQ(rt->cell_epoch, 3u);
+  ASSERT_EQ(rt->dest_entity_ids.size(), 2u);
+  EXPECT_EQ(rt->dest_entity_ids[1], 101u);
+  EXPECT_EQ(rt->command_id, 900u);
+  EXPECT_EQ(rt->server_tick, 302u);
+  EXPECT_EQ(rt->reason, movement::MovementCommandEndReason::kCancelled);
+  EXPECT_FLOAT_EQ(rt->state.position.z, 9.f);
+  EXPECT_EQ(MovementCommandEndFromCell::Descriptor().id,
+            msg_id::Id(msg_id::BaseApp::kMovementCommandEndFromCell));
+  EXPECT_FALSE(MovementCommandEndFromCell::Descriptor().IsUnreliable());
+}
+
+TEST(BaseAppMessages, MovementCommandEndFromCellRejectsZeroCommandId) {
+  MovementCommandEndFromCell msg;
+  msg.source_entity_id = 100;
+  msg.cell_epoch = 3;
+  msg.dest_entity_ids = {100};
+  msg.server_tick = 302;
+  msg.state.direction = {0.f, 0.f, 1.f};
+
+  EXPECT_FALSE(round_trip(msg).has_value());
+}
+
+TEST(BaseAppMessages, MovementCommandEndFromCellRejectsInvalidEntityIds) {
+  MovementCommandEndFromCell msg;
+  msg.cell_epoch = 3;
+  msg.dest_entity_ids = {100};
+  msg.command_id = 900;
+  msg.server_tick = 302;
+  msg.state.direction = {0.f, 0.f, 1.f};
+
+  EXPECT_FALSE(round_trip(msg).has_value());
+
+  msg.source_entity_id = 100;
+  msg.dest_entity_ids = {0};
+
+  EXPECT_FALSE(round_trip(msg).has_value());
 }
 
 // Verify packed_int multi-byte paths: entity_id in [0xFE, 0xFFFF] uses 3-byte
