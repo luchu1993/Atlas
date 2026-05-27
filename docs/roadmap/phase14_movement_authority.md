@@ -22,12 +22,6 @@ position history 都已落地。当前重心是协议边界硬化、验证矩阵
 独立开发节奏，串行推进；每个里程碑独立可合入、可跑、可回滚，
 工作量上限 3 天。完成一个再开下一个，避免提前把 6 个月的决策一次拍死。
 
-### 14.1 收尾里程碑
-
-**M0.1**：`world_stress --script-verify` / `--movement-verify` 在最新协议 hardening
-下回归，确认 watcher gate 没误伤。
-- 完成判据：50 / 100 / 400 entity smoke 全过；watcher 汇总非零。
-
 ### 14.2 Jolt query backend（里程碑）
 
 **M1c**：Linux 验证 + ATLAS_ENABLE_JOLT 默认翻 ON。
