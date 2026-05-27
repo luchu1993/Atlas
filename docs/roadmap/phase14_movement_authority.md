@@ -30,15 +30,6 @@ position history 都已落地。当前重心是协议边界硬化、验证矩阵
 - 验证后翻默认值到 ON；同时把 FetchContent 从 `GIT_TAG v5.2.0` 切到
   `URL + SHA256` 锁版本。
 
-**M2**：单 box collision asset 跑通 CharacterMotor。
-- `JoltPhysicsQuery` 实装余下 4 个 `PhysicsQuery` 方法（`GroundProbe` /
-  `CastCapsule` / `OverlapCapsule` / `DepenetrateCapsule`）；既有
-  `movement::PhysicsCharacterQuery` 适配器自动复用。
-- 加 1 个端到端测试：`movement_sim::Step` 通过 `PhysicsCharacterQuery`
-  跑在 `JoltPhysicsQuery` 上，从 y=10 落到 box 顶 y=1，grounded、距离正确。
-- `Space::SetPhysicsQuery(make_unique<JoltPhysicsQuery>())` 是 backend
-  切换入口；不引入新的 enum API。
-
 **M3**：Backend Parity quick gate 上 CI。
 - 实装 [`backend_parity_testing.md`](../physics/backend_parity_testing.md) PR #1–#3。
 - Flat ↔ Static ↔ Jolt 在 5 个必备场景上 quick 档通过。
