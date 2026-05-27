@@ -415,6 +415,11 @@ auto BaseAppMgr::Init(int argc, char* argv[]) -> bool {
         OnDeregisterGlobalBase(src, ch, msg);
       });
 
+  (void)table.RegisterTypedHandler<baseappmgr::HealthProbe>(
+      [this](const Address& src, Channel* ch, const baseappmgr::HealthProbe& msg) {
+        OnHealthProbe(src, ch, msg);
+      });
+
   // Subscribe to BaseApp death notifications
   GetMachinedClient().Subscribe(
       machined::ListenerType::kDeath, ProcessType::kBaseApp, nullptr,
@@ -1213,6 +1218,19 @@ void BaseAppMgr::OnBaseappReady(const Address& src, Channel* ch,
     MarkSnapshotDirty("baseapp-ready");
   }
   ATLAS_LOG_INFO("BaseAppMgr: BaseApp app_id={} is ready", msg.app_id);
+}
+
+void BaseAppMgr::OnHealthProbe(const Address&, Channel* ch,
+                               const baseappmgr::HealthProbe& msg) {
+  if (ch == nullptr) return;
+  baseappmgr::HealthProbeAck ack;
+  ack.nonce = msg.nonce;
+  ack.game_time = GameTime();
+  ack.snapshot_saves = snapshot_save_count_;
+  ack.snapshot_failures = snapshot_failure_count_;
+  ack.snapshot_dirty = snapshot_dirty_;
+  ack.snapshot_save_stale = SnapshotSaveStaleForWatcher();
+  (void)ch->SendMessage(ack);
 }
 
 void BaseAppMgr::OnInformLoad(const Address& src, Channel* ch, const baseappmgr::InformLoad& msg) {

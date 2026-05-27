@@ -138,6 +138,19 @@ static const CliField kCliFields[] = {
         &ServerConfig::revive_cellappmgr_missing_audit_threshold},
     {"revive-cellappmgr-on-start",  &ServerConfig::revive_cellappmgr_on_start},
     {"revive-leader-lock-path",     &ServerConfig::revive_leader_lock_path},
+    {"revive-baseappmgr-exe",       &ServerConfig::revive_baseappmgr_exe},
+    {"revive-baseappmgr-name",      &ServerConfig::revive_baseappmgr_name},
+    {"revive-baseappmgr-port",      &ServerConfig::revive_baseappmgr_internal_port},
+    {"revive-baseappmgr-snapshot-path", &ServerConfig::revive_baseappmgr_snapshot_path},
+    {"revive-baseappmgr-output-path", &ServerConfig::revive_baseappmgr_output_path},
+    {"revive-baseappmgr-snapshot-interval-ms",
+        &ServerConfig::revive_baseappmgr_snapshot_interval_ms},
+    {"revive-baseappmgr-update-hertz",  &ServerConfig::revive_baseappmgr_update_hertz},
+    {"revive-baseappmgr-launch-timeout-ms",
+        &ServerConfig::revive_baseappmgr_launch_timeout_ms},
+    {"revive-baseappmgr-on-start",  &ServerConfig::revive_baseappmgr_on_start},
+    {"revive-baseappmgr-leader-lock-path",
+        &ServerConfig::revive_baseappmgr_leader_lock_path},
 };
 // clang-format on
 
@@ -265,6 +278,29 @@ auto ServerConfig::FromJsonFile(const std::filesystem::path& path) -> Result<Ser
           "missing_audit_threshold", cfg.revive_cellappmgr_missing_audit_threshold);
       cfg.revive_cellappmgr_on_start =
           cellappmgr->ReadBool("on_start", cfg.revive_cellappmgr_on_start);
+    }
+    if (auto* baseappmgr = reviver->Child("baseappmgr")) {
+      cfg.revive_baseappmgr_exe =
+          baseappmgr->ReadString("exe", cfg.revive_baseappmgr_exe.string());
+      cfg.revive_baseappmgr_name =
+          baseappmgr->ReadString("name", cfg.revive_baseappmgr_name);
+      cfg.revive_baseappmgr_internal_port = static_cast<uint16_t>(
+          baseappmgr->ReadUint("internal_port", cfg.revive_baseappmgr_internal_port));
+      cfg.revive_baseappmgr_snapshot_path =
+          baseappmgr->ReadString("snapshot_path",
+                                 cfg.revive_baseappmgr_snapshot_path.string());
+      cfg.revive_baseappmgr_output_path =
+          baseappmgr->ReadString("output_path", cfg.revive_baseappmgr_output_path.string());
+      cfg.revive_baseappmgr_snapshot_interval_ms = baseappmgr->ReadInt(
+          "snapshot_interval_ms", cfg.revive_baseappmgr_snapshot_interval_ms);
+      cfg.revive_baseappmgr_update_hertz =
+          baseappmgr->ReadInt("update_hertz", cfg.revive_baseappmgr_update_hertz);
+      cfg.revive_baseappmgr_launch_timeout_ms =
+          baseappmgr->ReadInt("launch_timeout_ms", cfg.revive_baseappmgr_launch_timeout_ms);
+      cfg.revive_baseappmgr_on_start =
+          baseappmgr->ReadBool("on_start", cfg.revive_baseappmgr_on_start);
+      cfg.revive_baseappmgr_leader_lock_path = baseappmgr->ReadString(
+          "leader_lock_path", cfg.revive_baseappmgr_leader_lock_path.string());
     }
   }
 

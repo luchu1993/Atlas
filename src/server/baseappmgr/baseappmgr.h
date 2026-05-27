@@ -115,6 +115,7 @@ class BaseAppMgr : public ManagerApp {
   void OnRegisterBaseapp(const Address& src, Channel* ch, const baseappmgr::RegisterBaseApp& msg);
   void OnBaseappReady(const Address& src, Channel* ch, const baseappmgr::BaseAppReady& msg);
   void OnInformLoad(const Address& src, Channel* ch, const baseappmgr::InformLoad& msg);
+  void OnHealthProbe(const Address& src, Channel* ch, const baseappmgr::HealthProbe& msg);
   void OnAllocateBaseapp(const Address& src, Channel* ch, const login::AllocateBaseApp& msg);
   void OnRegisterGlobalBase(const Address& src, Channel* ch,
                             const baseappmgr::RegisterGlobalBase& msg);

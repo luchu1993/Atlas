@@ -171,6 +171,26 @@ TEST(ServerConfig, FromArgsParsesHaOptions) {
                  "--revive-leader-lock-path",
                  "run/reviver_cellappmgr.lock",
                  "--revive-cellappmgr-on-start",
+                 "true",
+                 "--revive-baseappmgr-exe",
+                 "bin/atlas_baseappmgr.exe",
+                 "--revive-baseappmgr-name",
+                 "baseappmgr_a",
+                 "--revive-baseappmgr-port",
+                 "31100",
+                 "--revive-baseappmgr-snapshot-path",
+                 "snapshots/revived_baseappmgr.bin",
+                 "--revive-baseappmgr-output-path",
+                 "logs/revived_baseappmgr.log",
+                 "--revive-baseappmgr-snapshot-interval-ms",
+                 "1500",
+                 "--revive-baseappmgr-update-hertz",
+                 "30",
+                 "--revive-baseappmgr-launch-timeout-ms",
+                 "700",
+                 "--revive-baseappmgr-leader-lock-path",
+                 "run/reviver_baseappmgr.lock",
+                 "--revive-baseappmgr-on-start",
                  "true"});
   auto r = ServerConfig::FromArgs(args.argc(), args.argv());
   ASSERT_TRUE(r.HasValue()) << r.Error().Message();
@@ -197,6 +217,19 @@ TEST(ServerConfig, FromArgsParsesHaOptions) {
   EXPECT_EQ(r->revive_cellappmgr_missing_audit_threshold, 4);
   EXPECT_EQ(r->revive_leader_lock_path, std::filesystem::path("run/reviver_cellappmgr.lock"));
   EXPECT_TRUE(r->revive_cellappmgr_on_start);
+  EXPECT_EQ(r->revive_baseappmgr_exe, std::filesystem::path("bin/atlas_baseappmgr.exe"));
+  EXPECT_EQ(r->revive_baseappmgr_name, "baseappmgr_a");
+  EXPECT_EQ(r->revive_baseappmgr_internal_port, 31100);
+  EXPECT_EQ(r->revive_baseappmgr_snapshot_path,
+            std::filesystem::path("snapshots/revived_baseappmgr.bin"));
+  EXPECT_EQ(r->revive_baseappmgr_output_path,
+            std::filesystem::path("logs/revived_baseappmgr.log"));
+  EXPECT_EQ(r->revive_baseappmgr_snapshot_interval_ms, 1500);
+  EXPECT_EQ(r->revive_baseappmgr_update_hertz, 30);
+  EXPECT_EQ(r->revive_baseappmgr_launch_timeout_ms, 700);
+  EXPECT_EQ(r->revive_baseappmgr_leader_lock_path,
+            std::filesystem::path("run/reviver_baseappmgr.lock"));
+  EXPECT_TRUE(r->revive_baseappmgr_on_start);
 }
 
 TEST(ServerConfig, FromJsonFileParsesEntitydefBinPath) {
@@ -237,6 +270,18 @@ TEST(ServerConfig, FromJsonFileParsesHaOptions) {
                 "audit_interval_ms": 125,
                 "missing_audit_threshold": 4,
                 "on_start": true
+            },
+            "baseappmgr": {
+                "exe": "bin/atlas_baseappmgr.exe",
+                "name": "baseappmgr_a",
+                "internal_port": 31100,
+                "snapshot_path": "snapshots/revived_baseappmgr.bin",
+                "output_path": "logs/revived_baseappmgr.log",
+                "snapshot_interval_ms": 1500,
+                "update_hertz": 30,
+                "launch_timeout_ms": 700,
+                "leader_lock_path": "run/reviver_baseappmgr.lock",
+                "on_start": true
             }
         }
     })");
@@ -265,6 +310,19 @@ TEST(ServerConfig, FromJsonFileParsesHaOptions) {
   EXPECT_EQ(r->revive_cellappmgr_audit_interval_ms, 125);
   EXPECT_EQ(r->revive_cellappmgr_missing_audit_threshold, 4);
   EXPECT_TRUE(r->revive_cellappmgr_on_start);
+  EXPECT_EQ(r->revive_baseappmgr_exe, std::filesystem::path("bin/atlas_baseappmgr.exe"));
+  EXPECT_EQ(r->revive_baseappmgr_name, "baseappmgr_a");
+  EXPECT_EQ(r->revive_baseappmgr_internal_port, 31100);
+  EXPECT_EQ(r->revive_baseappmgr_snapshot_path,
+            std::filesystem::path("snapshots/revived_baseappmgr.bin"));
+  EXPECT_EQ(r->revive_baseappmgr_output_path,
+            std::filesystem::path("logs/revived_baseappmgr.log"));
+  EXPECT_EQ(r->revive_baseappmgr_snapshot_interval_ms, 1500);
+  EXPECT_EQ(r->revive_baseappmgr_update_hertz, 30);
+  EXPECT_EQ(r->revive_baseappmgr_launch_timeout_ms, 700);
+  EXPECT_EQ(r->revive_baseappmgr_leader_lock_path,
+            std::filesystem::path("run/reviver_baseappmgr.lock"));
+  EXPECT_TRUE(r->revive_baseappmgr_on_start);
 }
 
 TEST(ServerConfig, FromArgsInvalidPortReturnsError) {

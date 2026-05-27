@@ -7,19 +7,7 @@
 #include "network/message.h"
 
 // Message IDs are wire-compatible; append only, never re-use or rename.
-// Ranges:
-//   0     -    99   reserved
-//   100   -   199   common
-//   1000  -  1099   machined
-//   2000  -  2999   BaseApp
-//   3000  -  3999   CellApp
-//   4000  -  4999   DBApp
-//   5000  -  5999   LoginApp
-//   6000  -  6999   BaseAppMgr
-//   7000  -  7999   CellAppMgr
-//   8000  -  8999   DBAppMgr
-//   10000 - 19999   external client/server
-//   50000 - 59999   C# RPC forwarding
+// Process ranges occupy 1000-8999; clients use 10000-19999 and RPC uses 50000-59999.
 
 namespace atlas::msg_id {
 
@@ -89,6 +77,11 @@ enum class BaseApp : uint16_t {
   // debug gizmo; routed via BaseApp so each proxy sees only its own Space.
   kSpaceBspGeometry = 2032,
   kCellEntityCreateFailed = 2033,
+  kClientMovementInput = 2034,
+  kMovementStateAckFromCell = 2035,
+  kMovementCorrectionReport = 2036,
+  kMovementCommandStartFromCell = 2037,
+  kMovementCommandEndFromCell = 2038,
 };
 
 // CellApp outbound traffic to BaseApp reuses BaseApp IDs.
@@ -120,6 +113,8 @@ enum class CellApp : uint16_t {
   // Real cell -> each Haunt cell so AllClients/OtherClients ClientRpc
   // reaches observers that watch via the remote Ghost mirror.
   kClientRpcBroadcast = 3107,
+  kMovementCommandStartBroadcast = 3108,
+  kMovementCommandEndBroadcast = 3109,
   kOffloadEntity = 3110,
   kOffloadEntityAck = 3111,
   // CellApp -> BaseApp ack for kDestroyCellEntity; lets BaseApp gate a
@@ -131,6 +126,7 @@ enum class CellApp : uint16_t {
   kSpaceDataDelete = 3131,
   kSpaceDataSnapshotRequest = 3132,
   kSpaceDataSnapshot = 3133,
+  kClientMovementInputForward = 3134,
 };
 
 // CellAppMgr owns both registration/load and control-plane IDs.
@@ -147,6 +143,8 @@ enum class CellAppMgr : uint16_t {
   kAddCellToSpaceAck = 7008,
   kRemoveCellFromSpace = 7009,
   kRequestCellAppState = 7010,
+  kHealthProbe = 7011,
+  kHealthProbeAck = 7012,
 };
 
 enum class DBApp : uint16_t {
@@ -187,6 +185,8 @@ enum class BaseAppMgr : uint16_t {
   kRegisterGlobalBase = 6010,
   kDeregisterGlobalBase = 6011,
   kGlobalBaseNotification = 6012,
+  kHealthProbe = 6020,
+  kHealthProbeAck = 6021,
 };
 
 #define ATLAS_ASSERT_ID_RANGE(enumerator, lo, hi)                                             \
@@ -236,6 +236,11 @@ ATLAS_ASSERT_ID_RANGE(BaseApp::kForceLogoff, 2000, 2999);
 ATLAS_ASSERT_ID_RANGE(BaseApp::kForceLogoffAck, 2000, 2999);
 ATLAS_ASSERT_ID_RANGE(BaseApp::kSpaceBspGeometry, 2000, 2999);
 ATLAS_ASSERT_ID_RANGE(BaseApp::kCellEntityCreateFailed, 2000, 2999);
+ATLAS_ASSERT_ID_RANGE(BaseApp::kClientMovementInput, 2000, 2999);
+ATLAS_ASSERT_ID_RANGE(BaseApp::kMovementStateAckFromCell, 2000, 2999);
+ATLAS_ASSERT_ID_RANGE(BaseApp::kMovementCorrectionReport, 2000, 2999);
+ATLAS_ASSERT_ID_RANGE(BaseApp::kMovementCommandStartFromCell, 2000, 2999);
+ATLAS_ASSERT_ID_RANGE(BaseApp::kMovementCommandEndFromCell, 2000, 2999);
 
 ATLAS_ASSERT_ID_RANGE(CellApp::kCreateCellEntity, 3000, 3999);
 ATLAS_ASSERT_ID_RANGE(CellApp::kSpawnLocalEntity, 3000, 3999);
@@ -256,6 +261,8 @@ ATLAS_ASSERT_ID_RANGE(CellApp::kGhostDelta, 3000, 3999);
 ATLAS_ASSERT_ID_RANGE(CellApp::kGhostSetReal, 3000, 3999);
 ATLAS_ASSERT_ID_RANGE(CellApp::kGhostSetNextReal, 3000, 3999);
 ATLAS_ASSERT_ID_RANGE(CellApp::kGhostSnapshotRefresh, 3000, 3999);
+ATLAS_ASSERT_ID_RANGE(CellApp::kMovementCommandStartBroadcast, 3000, 3999);
+ATLAS_ASSERT_ID_RANGE(CellApp::kMovementCommandEndBroadcast, 3000, 3999);
 ATLAS_ASSERT_ID_RANGE(CellApp::kOffloadEntity, 3000, 3999);
 ATLAS_ASSERT_ID_RANGE(CellApp::kOffloadEntityAck, 3000, 3999);
 ATLAS_ASSERT_ID_RANGE(CellApp::kDestroyCellEntityAck, 3000, 3999);
@@ -263,6 +270,7 @@ ATLAS_ASSERT_ID_RANGE(CellApp::kSpaceDataUpdate, 3000, 3999);
 ATLAS_ASSERT_ID_RANGE(CellApp::kSpaceDataDelete, 3000, 3999);
 ATLAS_ASSERT_ID_RANGE(CellApp::kSpaceDataSnapshotRequest, 3000, 3999);
 ATLAS_ASSERT_ID_RANGE(CellApp::kSpaceDataSnapshot, 3000, 3999);
+ATLAS_ASSERT_ID_RANGE(CellApp::kClientMovementInputForward, 3000, 3999);
 
 ATLAS_ASSERT_ID_RANGE(CellAppMgr::kRegisterCellApp, 7000, 7099);
 ATLAS_ASSERT_ID_RANGE(CellAppMgr::kRegisterCellAppAck, 7000, 7099);
@@ -275,6 +283,8 @@ ATLAS_ASSERT_ID_RANGE(CellAppMgr::kSpaceCreatedResult, 7000, 7099);
 ATLAS_ASSERT_ID_RANGE(CellAppMgr::kAddCellToSpaceAck, 7000, 7099);
 ATLAS_ASSERT_ID_RANGE(CellAppMgr::kRemoveCellFromSpace, 7000, 7099);
 ATLAS_ASSERT_ID_RANGE(CellAppMgr::kRequestCellAppState, 7000, 7099);
+ATLAS_ASSERT_ID_RANGE(CellAppMgr::kHealthProbe, 7000, 7099);
+ATLAS_ASSERT_ID_RANGE(CellAppMgr::kHealthProbeAck, 7000, 7099);
 
 ATLAS_ASSERT_ID_RANGE(DBApp::kWriteEntity, 4000, 4999);
 ATLAS_ASSERT_ID_RANGE(DBApp::kWriteEntityAck, 4000, 4999);
@@ -309,6 +319,8 @@ ATLAS_ASSERT_ID_RANGE(BaseAppMgr::kInformLoad, 6000, 6999);
 ATLAS_ASSERT_ID_RANGE(BaseAppMgr::kRegisterGlobalBase, 6000, 6999);
 ATLAS_ASSERT_ID_RANGE(BaseAppMgr::kDeregisterGlobalBase, 6000, 6999);
 ATLAS_ASSERT_ID_RANGE(BaseAppMgr::kGlobalBaseNotification, 6000, 6999);
+ATLAS_ASSERT_ID_RANGE(BaseAppMgr::kHealthProbe, 6000, 6999);
+ATLAS_ASSERT_ID_RANGE(BaseAppMgr::kHealthProbeAck, 6000, 6999);
 
 #undef ATLAS_ASSERT_ID_RANGE
 

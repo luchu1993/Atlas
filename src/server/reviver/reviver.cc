@@ -8,6 +8,7 @@
 #include <string>
 #include <vector>
 
+#include "baseappmgr/baseappmgr_messages.h"
 #include "cellappmgr/cellappmgr_messages.h"
 #include "foundation/log.h"
 #include "network/event_dispatcher.h"
@@ -40,7 +41,7 @@ auto SanitizeLockSegment(std::string value) -> std::string {
                       (ch >= '0' && ch <= '9') || ch == '_' || ch == '-';
     if (!keep) ch = '_';
   }
-  if (value.empty()) return "cellappmgr";
+  if (value.empty()) return "target";
   return value;
 }
 
@@ -68,538 +69,668 @@ auto Reviver::Run(int argc, char* argv[]) -> int {
   return app.RunApp(argc, argv);
 }
 
+void Reviver::InitTarget(ManagedTarget& t, ProcessType pt, std::string slug) {
+  t.process_type = pt;
+  t.slug = std::move(slug);
+  if (pt == ProcessType::kCellAppMgr) {
+    t.configured_name = Config().revive_cellappmgr_name;
+    t.exe = Config().revive_cellappmgr_exe;
+    t.internal_port = Config().revive_cellappmgr_internal_port;
+    t.snapshot_path = Config().revive_cellappmgr_snapshot_path;
+    t.output_path = Config().revive_cellappmgr_output_path;
+    t.snapshot_interval_ms = Config().revive_cellappmgr_snapshot_interval_ms;
+    t.update_hertz = Config().revive_cellappmgr_update_hertz;
+    t.launch_timeout_ms = Config().revive_cellappmgr_launch_timeout_ms;
+    t.health_interval_ms = Config().revive_cellappmgr_health_interval_ms;
+    t.heartbeat_timeout_ms = Config().revive_cellappmgr_heartbeat_timeout_ms;
+    t.manager_health_timeout_ms = Config().revive_cellappmgr_manager_health_timeout_ms;
+    t.health_failure_threshold = Config().revive_cellappmgr_health_failure_threshold;
+    t.audit_interval_ms = Config().revive_cellappmgr_audit_interval_ms;
+    t.missing_audit_threshold = Config().revive_cellappmgr_missing_audit_threshold;
+    t.on_start = Config().revive_cellappmgr_on_start;
+    t.leader_lock_path = Config().revive_leader_lock_path;
+  } else {
+    t.configured_name = Config().revive_baseappmgr_name;
+    t.exe = Config().revive_baseappmgr_exe;
+    t.internal_port = Config().revive_baseappmgr_internal_port;
+    t.snapshot_path = Config().revive_baseappmgr_snapshot_path;
+    t.output_path = Config().revive_baseappmgr_output_path;
+    t.snapshot_interval_ms = Config().revive_baseappmgr_snapshot_interval_ms;
+    t.update_hertz = Config().revive_baseappmgr_update_hertz;
+    t.launch_timeout_ms = Config().revive_baseappmgr_launch_timeout_ms;
+    // BaseAppMgr reuses CellAppMgr's per-target timing knobs for now;
+    // separate knobs can be added if BaseAppMgr ever needs different cadence.
+    t.health_interval_ms = Config().revive_cellappmgr_health_interval_ms;
+    t.heartbeat_timeout_ms = Config().revive_cellappmgr_heartbeat_timeout_ms;
+    t.manager_health_timeout_ms = Config().revive_cellappmgr_manager_health_timeout_ms;
+    t.health_failure_threshold = Config().revive_cellappmgr_health_failure_threshold;
+    t.audit_interval_ms = Config().revive_cellappmgr_audit_interval_ms;
+    t.missing_audit_threshold = Config().revive_cellappmgr_missing_audit_threshold;
+    t.on_start = Config().revive_baseappmgr_on_start;
+    t.leader_lock_path = Config().revive_baseappmgr_leader_lock_path;
+  }
+  if (TargetEnabled(t)) {
+    t.leader_lock_path = ResolveLeaderLockPath(t);
+  }
+}
+
+auto Reviver::TargetEnabled(const ManagedTarget& t) const -> bool {
+  // Enabled when on_start is requested OR an explicit exe/port pair has
+  // been configured. Empty everything → silently disabled (handy for tests
+  // that only care about one target).
+  if (t.on_start) return true;
+  if (!t.exe.empty()) return true;
+  if (t.internal_port != 0) return true;
+  return false;
+}
+
 auto Reviver::Init(int argc, char* argv[]) -> bool {
   if (argc > 0 && argv[0] != nullptr) self_exe_ = std::filesystem::absolute(argv[0]);
   if (!ManagerApp::Init(argc, argv)) return false;
 
-  leader_lock_path_ = ResolveLeaderLockPath();
-  startup_check_at_ = Clock::now() + std::chrono::milliseconds(500);
-  GetMachinedClient().Subscribe(
-      machined::ListenerType::kBoth, ProcessType::kCellAppMgr,
-      [this](const machined::BirthNotification& msg) { OnCellAppMgrBirth(msg); },
-      [this](const machined::DeathNotification& msg) { OnCellAppMgrDeath(msg); });
-  (void)Network().InterfaceTable().RegisterTypedHandler<cellappmgr::HealthProbeAck>(
-      [this](const Address& src, Channel* ch, const cellappmgr::HealthProbeAck& msg) {
-        OnCellAppMgrHeartbeatAck(src, ch, msg);
-      });
+  InitTarget(cellappmgr_target_, ProcessType::kCellAppMgr, "cellappmgr");
+  InitTarget(baseappmgr_target_, ProcessType::kBaseAppMgr, "baseappmgr");
+
+  cellappmgr_target_.startup_check_at = Clock::now() + std::chrono::milliseconds(500);
+  baseappmgr_target_.startup_check_at = Clock::now() + std::chrono::milliseconds(500);
+
+  if (TargetEnabled(cellappmgr_target_)) {
+    GetMachinedClient().Subscribe(
+        machined::ListenerType::kBoth, ProcessType::kCellAppMgr,
+        [this](const machined::BirthNotification& msg) {
+          OnTargetBirth(cellappmgr_target_, msg);
+        },
+        [this](const machined::DeathNotification& msg) {
+          OnTargetDeath(cellappmgr_target_, msg);
+        });
+    (void)Network().InterfaceTable().RegisterTypedHandler<cellappmgr::HealthProbeAck>(
+        [this](const Address& src, Channel* ch, const cellappmgr::HealthProbeAck& msg) {
+          OnCellAppMgrHeartbeatAck(src, ch, msg);
+        });
+  }
+  if (TargetEnabled(baseappmgr_target_)) {
+    GetMachinedClient().Subscribe(
+        machined::ListenerType::kBoth, ProcessType::kBaseAppMgr,
+        [this](const machined::BirthNotification& msg) {
+          OnTargetBirth(baseappmgr_target_, msg);
+        },
+        [this](const machined::DeathNotification& msg) {
+          OnTargetDeath(baseappmgr_target_, msg);
+        });
+    (void)Network().InterfaceTable().RegisterTypedHandler<baseappmgr::HealthProbeAck>(
+        [this](const Address& src, Channel* ch, const baseappmgr::HealthProbeAck& msg) {
+          OnBaseAppMgrHeartbeatAck(src, ch, msg);
+        });
+  }
   return true;
 }
 
 void Reviver::Fini() {
-  if (restart_timer_.IsValid()) {
-    (void)Dispatcher().CancelTimer(restart_timer_);
-    restart_timer_ = {};
+  for (ManagedTarget* tp : {&cellappmgr_target_, &baseappmgr_target_}) {
+    if (tp->restart_timer.IsValid()) {
+      (void)Dispatcher().CancelTimer(tp->restart_timer);
+      tp->restart_timer = {};
+    }
+    tp->leader_lock.reset();
   }
-  leader_lock_.reset();
   ManagerApp::Fini();
+}
+
+void Reviver::RegisterTargetWatchers(ManagedTarget& t) {
+  auto& wr = GetWatcherRegistry();
+  const auto root = std::format("reviver/{}", t.slug);
+  wr.Add<std::string>(root + "/status",
+                      std::function<std::string()>([this, &t] { return TargetStatus(t); }));
+  wr.Add<bool>(root + "/active",
+               std::function<bool()>([&t] { return t.active; }));
+  wr.Add<uint32_t>(root + "/active_pid",
+                   std::function<uint32_t()>([&t] { return t.last_pid; }));
+  wr.Add<uint64_t>(root + "/active_generation",
+                   std::function<uint64_t()>([&t] { return t.active_generation; }));
+  wr.Add<uint32_t>(root + "/launched_pid",
+                   std::function<uint32_t()>([&t] { return t.launched_pid; }));
+  wr.Add<std::string>(root + "/output_path",
+                      std::function<std::string()>([&t] { return t.output_path.string(); }));
+  wr.Add<bool>(root + "/launch_pending",
+               std::function<bool()>([&t] { return t.launch_pending; }));
+  wr.Add<uint32_t>(root + "/restart_attempts",
+                   std::function<uint32_t()>([&t] { return t.restart_attempts; }));
+  wr.Add<uint64_t>(root + "/launch_count",
+                   std::function<uint64_t()>([&t] { return t.launch_count; }));
+  wr.Add<uint64_t>(root + "/launch_failures",
+                   std::function<uint64_t()>([&t] { return t.launch_failures; }));
+  wr.Add<uint64_t>(root + "/launch_timeouts",
+                   std::function<uint64_t()>([&t] { return t.launch_timeout_count; }));
+  wr.Add<bool>(root + "/restart_limit_reached",
+               std::function<bool()>([&t] { return t.restart_limit_reached; }));
+  wr.Add<uint64_t>(root + "/restart_limit_hits",
+                   std::function<uint64_t()>([&t] { return t.restart_limit_hit_count; }));
+  wr.Add<uint64_t>(root + "/liveness_failures",
+                   std::function<uint64_t()>([&t] { return t.liveness_failures; }));
+  wr.Add<uint64_t>(root + "/health_checks",
+                   std::function<uint64_t()>([&t] { return t.health_check_count; }));
+  wr.Add<uint64_t>(root + "/health_failures",
+                   std::function<uint64_t()>([&t] { return t.health_failure_count; }));
+  wr.Add<uint64_t>(root + "/manager_health_failures",
+                   std::function<uint64_t()>([&t] { return t.manager_health_failure_count; }));
+  wr.Add<uint64_t>(root + "/manager_health_timeouts",
+                   std::function<uint64_t()>([&t] { return t.manager_health_timeout_count; }));
+  wr.Add<uint64_t>(root + "/heartbeat_sent",
+                   std::function<uint64_t()>([&t] { return t.heartbeat_sent_count; }));
+  wr.Add<int>(root + "/heartbeat_timeout_ms",
+              std::function<int()>([&t] { return t.heartbeat_timeout_ms; }));
+  wr.Add<uint64_t>(root + "/heartbeat_acks",
+                   std::function<uint64_t()>([&t] { return t.heartbeat_ack_count; }));
+  wr.Add<int64_t>(root + "/heartbeat_last_ack_age_ms",
+                  std::function<int64_t()>(
+                      [this, &t] { return HeartbeatLastAckAgeMsForWatcher(t); }));
+  wr.Add<uint64_t>(root + "/heartbeat_failures",
+                   std::function<uint64_t()>([&t] { return t.heartbeat_failure_count; }));
+  wr.Add<uint64_t>(root + "/heartbeat_timeouts",
+                   std::function<uint64_t()>([&t] { return t.heartbeat_timeout_count; }));
+  wr.Add<uint64_t>(root + "/heartbeat_last_game_time",
+                   std::function<uint64_t()>([&t] { return t.heartbeat_last_game_time; }));
+  wr.Add<uint64_t>(root + "/heartbeat_snapshot_saves",
+                   std::function<uint64_t()>([&t] { return t.heartbeat_snapshot_saves; }));
+  wr.Add<uint64_t>(root + "/heartbeat_snapshot_failures",
+                   std::function<uint64_t()>([&t] { return t.heartbeat_snapshot_failures; }));
+  wr.Add<bool>(root + "/heartbeat_snapshot_dirty",
+               std::function<bool()>([&t] { return t.heartbeat_snapshot_dirty; }));
+  wr.Add<bool>(root + "/heartbeat_snapshot_save_stale",
+               std::function<bool()>([&t] { return t.heartbeat_snapshot_save_stale; }));
+  wr.Add<std::string>(root + "/heartbeat_snapshot_status",
+                      std::function<std::string()>(
+                          [this, &t] { return TargetHeartbeatSnapshotStatus(t); }));
+  wr.Add<uint64_t>(root + "/forced_terminations",
+                   std::function<uint64_t()>([&t] { return t.forced_termination_count; }));
+  wr.Add<uint64_t>(root + "/registry_audits",
+                   std::function<uint64_t()>([&t] { return t.registry_audit_count; }));
+  wr.Add<uint64_t>(root + "/registry_missing",
+                   std::function<uint64_t()>([&t] { return t.registry_missing_count; }));
+  wr.Add<std::string>(root + "/last_error",
+                      std::function<std::string()>([&t] { return t.last_error; }));
 }
 
 void Reviver::RegisterWatchers() {
   ManagerApp::RegisterWatchers();
+  RegisterTargetWatchers(cellappmgr_target_);
+  RegisterTargetWatchers(baseappmgr_target_);
+
+  // Per-target leader lock surface. cellappmgr keeps the legacy
+  // reviver/leader/* path for backward compatibility with existing verify
+  // scripts; baseappmgr lives under reviver/baseappmgr/leader/*.
   auto& wr = GetWatcherRegistry();
-  wr.Add<std::string>("reviver/cellappmgr/status",
-                      std::function<std::string()>([this] { return CellAppMgrStatus(); }));
-  wr.Add<bool>("reviver/cellappmgr/active",
-               std::function<bool()>([this] { return cellappmgr_active_; }));
-  wr.Add<uint32_t>("reviver/cellappmgr/active_pid",
-                   std::function<uint32_t()>([this] { return last_cellappmgr_pid_; }));
-  wr.Add<uint64_t>("reviver/cellappmgr/active_generation",
-                   std::function<uint64_t()>([this] {
-                     return cellappmgr_active_generation_;
-                   }));
-  wr.Add<uint32_t>("reviver/cellappmgr/launched_pid",
-                   std::function<uint32_t()>([this] { return launched_cellappmgr_pid_; }));
-  wr.Add<std::string>("reviver/cellappmgr/output_path",
-                      std::function<std::string()>([this] {
-                        return Config().revive_cellappmgr_output_path.string();
-                      }));
-  wr.Add<bool>("reviver/cellappmgr/launch_pending",
-               std::function<bool()>([this] { return launch_pending_; }));
-  wr.Add<uint32_t>("reviver/cellappmgr/restart_attempts",
-                   std::function<uint32_t()>([this] { return restart_attempts_; }));
-  wr.Add<uint64_t>("reviver/cellappmgr/launch_count",
-                   std::function<uint64_t()>([this] { return launch_count_; }));
-  wr.Add<uint64_t>("reviver/cellappmgr/launch_failures",
-                   std::function<uint64_t()>([this] { return launch_failures_; }));
-  wr.Add<uint64_t>("reviver/cellappmgr/launch_timeouts",
-                   std::function<uint64_t()>([this] { return launch_timeout_count_; }));
-  wr.Add<bool>("reviver/cellappmgr/restart_limit_reached",
-               std::function<bool()>([this] { return restart_limit_reached_; }));
-  wr.Add<uint64_t>("reviver/cellappmgr/restart_limit_hits",
-                   std::function<uint64_t()>([this] { return restart_limit_hit_count_; }));
-  wr.Add<uint64_t>("reviver/cellappmgr/liveness_failures",
-                   std::function<uint64_t()>([this] { return liveness_failures_; }));
-  wr.Add<uint64_t>("reviver/cellappmgr/health_checks",
-                   std::function<uint64_t()>([this] { return health_check_count_; }));
-  wr.Add<uint64_t>("reviver/cellappmgr/health_failures",
-                   std::function<uint64_t()>([this] { return health_failure_count_; }));
-  wr.Add<uint64_t>("reviver/cellappmgr/manager_health_failures",
-                   std::function<uint64_t()>([this] {
-                     return manager_health_failure_count_;
-                   }));
-  wr.Add<uint64_t>("reviver/cellappmgr/manager_health_timeouts",
-                   std::function<uint64_t()>([this] {
-                     return manager_health_timeout_count_;
-                   }));
-  wr.Add<uint64_t>("reviver/cellappmgr/heartbeat_sent",
-                   std::function<uint64_t()>([this] { return heartbeat_sent_count_; }));
-  wr.Add<int>("reviver/cellappmgr/heartbeat_timeout_ms",
-              std::function<int()>([this] {
-                return Config().revive_cellappmgr_heartbeat_timeout_ms;
-              }));
-  wr.Add<uint64_t>("reviver/cellappmgr/heartbeat_acks",
-                   std::function<uint64_t()>([this] { return heartbeat_ack_count_; }));
-  wr.Add<int64_t>("reviver/cellappmgr/heartbeat_last_ack_age_ms",
-                  std::function<int64_t()>(
-                      [this] { return HeartbeatLastAckAgeMsForWatcher(); }));
-  wr.Add<uint64_t>("reviver/cellappmgr/heartbeat_failures",
-                   std::function<uint64_t()>([this] { return heartbeat_failure_count_; }));
-  wr.Add<uint64_t>("reviver/cellappmgr/heartbeat_timeouts",
-                   std::function<uint64_t()>([this] { return heartbeat_timeout_count_; }));
-  wr.Add<uint64_t>("reviver/cellappmgr/heartbeat_last_game_time",
-                   std::function<uint64_t()>([this] { return heartbeat_last_game_time_; }));
-  wr.Add<uint64_t>("reviver/cellappmgr/heartbeat_snapshot_saves",
-                   std::function<uint64_t()>([this] { return heartbeat_snapshot_saves_; }));
-  wr.Add<uint64_t>("reviver/cellappmgr/heartbeat_snapshot_failures",
-                   std::function<uint64_t()>([this] {
-                     return heartbeat_snapshot_failures_;
-                   }));
-  wr.Add<bool>("reviver/cellappmgr/heartbeat_snapshot_dirty",
-               std::function<bool()>([this] { return heartbeat_snapshot_dirty_; }));
-  wr.Add<bool>("reviver/cellappmgr/heartbeat_snapshot_save_stale",
-               std::function<bool()>([this] { return heartbeat_snapshot_save_stale_; }));
-  wr.Add<std::string>("reviver/cellappmgr/heartbeat_snapshot_status",
-                      std::function<std::string()>(
-                          [this] { return CellAppMgrHeartbeatSnapshotStatus(); }));
-  wr.Add<uint64_t>("reviver/cellappmgr/forced_terminations",
-                   std::function<uint64_t()>([this] { return forced_termination_count_; }));
-  wr.Add<uint64_t>("reviver/cellappmgr/registry_audits",
-                   std::function<uint64_t()>([this] { return registry_audit_count_; }));
-  wr.Add<uint64_t>("reviver/cellappmgr/registry_missing",
-                   std::function<uint64_t()>([this] { return registry_missing_count_; }));
-  wr.Add<std::string>("reviver/cellappmgr/last_error",
-                      std::function<std::string()>([this] { return last_error_; }));
   wr.Add<bool>("reviver/leader/active",
-               std::function<bool()>([this] { return HasLeadership(); }));
+               std::function<bool()>([this] { return HasLeadership(cellappmgr_target_); }));
   wr.Add<std::string>("reviver/leader/lock_path",
                       std::function<std::string()>(
-                          [this] { return leader_lock_path_.string(); }));
+                          [this] { return cellappmgr_target_.leader_lock_path.string(); }));
   wr.Add<uint64_t>("reviver/leader/acquire_count",
-                   std::function<uint64_t()>([this] { return leader_lock_acquires_; }));
+                   std::function<uint64_t()>(
+                       [this] { return cellappmgr_target_.leader_lock_acquires; }));
   wr.Add<uint64_t>("reviver/leader/acquire_failures",
-                   std::function<uint64_t()>([this] { return leader_lock_failures_; }));
+                   std::function<uint64_t()>(
+                       [this] { return cellappmgr_target_.leader_lock_failures; }));
+
+  wr.Add<bool>("reviver/baseappmgr/leader/active",
+               std::function<bool()>([this] { return HasLeadership(baseappmgr_target_); }));
+  wr.Add<std::string>("reviver/baseappmgr/leader/lock_path",
+                      std::function<std::string()>(
+                          [this] { return baseappmgr_target_.leader_lock_path.string(); }));
+  wr.Add<uint64_t>("reviver/baseappmgr/leader/acquire_count",
+                   std::function<uint64_t()>(
+                       [this] { return baseappmgr_target_.leader_lock_acquires; }));
+  wr.Add<uint64_t>("reviver/baseappmgr/leader/acquire_failures",
+                   std::function<uint64_t()>(
+                       [this] { return baseappmgr_target_.leader_lock_failures; }));
 }
 
 void Reviver::OnTickComplete() {
-  AuditLeadership();
-  if (!HasLeadership()) return;
-  AuditColdStart();
-  AuditCellAppMgrLaunch();
-  AuditCellAppMgrLiveness();
-  AuditCellAppMgrHeartbeat();
-  AuditCellAppMgrHealth();
-  AuditCellAppMgrRegistry();
+  for (ManagedTarget* tp : {&cellappmgr_target_, &baseappmgr_target_}) {
+    if (!TargetEnabled(*tp)) continue;
+    AuditLeadership(*tp);
+    if (!HasLeadership(*tp)) continue;
+    AuditColdStart(*tp);
+    AuditTargetLaunch(*tp);
+    AuditTargetLiveness(*tp);
+    AuditTargetHeartbeat(*tp);
+    AuditTargetHealth(*tp);
+    AuditTargetRegistry(*tp);
+  }
 }
 
-void Reviver::OnCellAppMgrBirth(const machined::BirthNotification& msg) {
-  if (!MatchesTargetName(msg.name)) return;
-  if (restart_timer_.IsValid()) {
-    (void)Dispatcher().CancelTimer(restart_timer_);
-    restart_timer_ = {};
+void Reviver::OnTargetBirth(ManagedTarget& t, const machined::BirthNotification& msg) {
+  if (!MatchesTargetName(t, msg.name)) return;
+  if (t.restart_timer.IsValid()) {
+    (void)Dispatcher().CancelTimer(t.restart_timer);
+    t.restart_timer = {};
   }
-  RememberCellAppMgr(msg.name, msg.internal_addr, msg.pid);
+  RememberTarget(t, msg.name, msg.internal_addr, msg.pid);
 }
 
-void Reviver::RememberCellAppMgr(std::string_view name, const Address& addr, uint32_t pid) {
-  const bool target_changed =
-      !cellappmgr_active_ || last_cellappmgr_addr_ != addr || last_cellappmgr_pid_ != pid;
-  if (!target_changed) return;
-  if (last_cellappmgr_addr_.Port() != 0) {
-    Network().DisconnectChannel(last_cellappmgr_addr_);
-  }
-  if (addr != last_cellappmgr_addr_ && addr.Port() != 0) {
-    Network().DisconnectChannel(addr);
-  }
-  ++cellappmgr_active_generation_;
-  cellappmgr_active_ = true;
-  last_cellappmgr_addr_ = addr;
-  last_cellappmgr_pid_ = pid;
-  ResetCellAppMgrLaunch();
-  ResetCellAppMgrManagerHealth();
-  ResetCellAppMgrHeartbeat();
-  heartbeat_failure_streak_ = 0;
-  manager_health_failure_streak_ = 0;
-  registry_missing_streak_ = 0;
-  heartbeat_last_game_time_ = 0;
-  heartbeat_snapshot_saves_ = 0;
-  heartbeat_snapshot_failures_ = 0;
-  heartbeat_snapshot_dirty_ = false;
-  heartbeat_snapshot_save_stale_ = false;
-  last_error_.clear();
-  ATLAS_LOG_INFO("Reviver: CellAppMgr active name={} pid={} addr={}",
-                 name, pid, addr.ToString());
+void Reviver::RememberTarget(ManagedTarget& t, std::string_view name, const Address& addr,
+                             uint32_t pid) {
+  const bool changed = !t.active || t.last_addr != addr || t.last_pid != pid;
+  if (!changed) return;
+  if (t.last_addr.Port() != 0) Network().DisconnectChannel(t.last_addr);
+  if (addr != t.last_addr && addr.Port() != 0) Network().DisconnectChannel(addr);
+  ++t.active_generation;
+  t.active = true;
+  t.last_addr = addr;
+  t.last_pid = pid;
+  ResetTargetLaunch(t);
+  ResetTargetManagerHealth(t);
+  ResetTargetHeartbeat(t);
+  t.heartbeat_failure_streak = 0;
+  t.manager_health_failure_streak = 0;
+  t.registry_missing_streak = 0;
+  t.heartbeat_last_game_time = 0;
+  t.heartbeat_snapshot_saves = 0;
+  t.heartbeat_snapshot_failures = 0;
+  t.heartbeat_snapshot_dirty = false;
+  t.heartbeat_snapshot_save_stale = false;
+  t.last_error.clear();
+  ATLAS_LOG_INFO("Reviver: {} active name={} pid={} addr={}", t.slug, name, pid, addr.ToString());
 }
 
-void Reviver::OnCellAppMgrDeath(const machined::DeathNotification& msg) {
-  if (!MatchesTargetName(msg.name)) return;
-  cellappmgr_active_ = false;
-  ResetCellAppMgrManagerHealth();
-  ResetCellAppMgrHeartbeat();
-  last_cellappmgr_addr_ = msg.internal_addr;
+void Reviver::OnTargetDeath(ManagedTarget& t, const machined::DeathNotification& msg) {
+  if (!MatchesTargetName(t, msg.name)) return;
+  t.active = false;
+  ResetTargetManagerHealth(t);
+  ResetTargetHeartbeat(t);
+  t.last_addr = msg.internal_addr;
   if (msg.reason == 0) {
-    ATLAS_LOG_INFO("Reviver: CellAppMgr death name={} reason={} addr={}",
-                   msg.name, msg.reason, msg.internal_addr.ToString());
+    ATLAS_LOG_INFO("Reviver: {} death name={} reason={} addr={}", t.slug, msg.name, msg.reason,
+                   msg.internal_addr.ToString());
   } else {
-    ATLAS_LOG_WARNING("Reviver: CellAppMgr death name={} reason={} addr={}",
-                      msg.name, msg.reason, msg.internal_addr.ToString());
+    ATLAS_LOG_WARNING("Reviver: {} death name={} reason={} addr={}", t.slug, msg.name, msg.reason,
+                      msg.internal_addr.ToString());
   }
-  if (!HasLeadership()) return;
+  if (!HasLeadership(t)) return;
   if (msg.reason == 0) return;
-  ScheduleCellAppMgrRestart(Milliseconds(Config().revive_restart_delay_ms));
+  ScheduleTargetRestart(t, Milliseconds(Config().revive_restart_delay_ms));
 }
 
-void Reviver::AuditLeadership() {
-  if (HasLeadership()) return;
+void Reviver::AuditLeadership(ManagedTarget& t) {
+  if (HasLeadership(t)) return;
   const auto now = Clock::now();
-  if (next_leader_lock_attempt_ != TimePoint{} && now < next_leader_lock_attempt_) return;
-  next_leader_lock_attempt_ = now + std::chrono::seconds(1);
+  if (t.next_leader_lock_attempt != TimePoint{} && now < t.next_leader_lock_attempt) return;
+  t.next_leader_lock_attempt = now + std::chrono::seconds(1);
 
-  auto lock = fs::ScopedFileLock::TryAcquire(leader_lock_path_, LeaderLockContent());
+  auto lock = fs::ScopedFileLock::TryAcquire(t.leader_lock_path, LeaderLockContent());
   if (!lock) {
-    ++leader_lock_failures_;
+    ++t.leader_lock_failures;
     if (lock.Error().Code() != ErrorCode::kAlreadyExists) {
-      last_error_ = std::format("leader lock failed: {}", lock.Error().Message());
-      ATLAS_LOG_WARNING("Reviver: {}", last_error_);
+      t.last_error = std::format("leader lock failed: {}", lock.Error().Message());
+      ATLAS_LOG_WARNING("Reviver: {}", t.last_error);
     }
     return;
   }
 
-  leader_lock_.emplace(std::move(*lock));
-  ++leader_lock_acquires_;
-  startup_checked_ = false;
-  startup_check_at_ = Clock::now();
-  last_error_.clear();
-  ATLAS_LOG_INFO("Reviver: acquired leader lock {}", leader_lock_path_.string());
+  t.leader_lock.emplace(std::move(*lock));
+  ++t.leader_lock_acquires;
+  t.startup_checked = false;
+  t.startup_check_at = Clock::now();
+  t.last_error.clear();
+  ATLAS_LOG_INFO("Reviver: acquired {} leader lock {}", t.slug, t.leader_lock_path.string());
 }
 
-void Reviver::AuditColdStart() {
-  if (startup_checked_ || Clock::now() < startup_check_at_) return;
-  if (!Config().revive_cellappmgr_on_start || cellappmgr_active_) {
-    startup_checked_ = true;
+void Reviver::AuditColdStart(ManagedTarget& t) {
+  if (t.startup_checked || Clock::now() < t.startup_check_at) return;
+  if (!t.on_start || t.active) {
+    t.startup_checked = true;
     return;
   }
-  if (cellappmgr_query_pending_) return;
-  startup_checked_ = true;
-  cellappmgr_query_pending_ = true;
-  GetMachinedClient().QueryAsync(ProcessType::kCellAppMgr,
-                                 [this](std::vector<machined::ProcessInfo> infos) {
-    cellappmgr_query_pending_ = false;
-    if (cellappmgr_active_) return;
+  if (t.query_pending) return;
+  t.startup_checked = true;
+  t.query_pending = true;
+  GetMachinedClient().QueryAsync(t.process_type,
+                                 [this, &t](std::vector<machined::ProcessInfo> infos) {
+    t.query_pending = false;
+    if (t.active) return;
     for (const auto& info : infos) {
-      if (!MatchesTargetName(info.name)) continue;
-      RememberCellAppMgr(info.name, info.internal_addr, info.pid);
+      if (!MatchesTargetName(t, info.name)) continue;
+      RememberTarget(t, info.name, info.internal_addr, info.pid);
       return;
     }
-    ScheduleCellAppMgrRestart(Duration::zero());
+    ScheduleTargetRestart(t, Duration::zero());
   });
 }
 
-void Reviver::AuditCellAppMgrRegistry() {
-  if (!cellappmgr_active_ || cellappmgr_query_pending_) return;
+void Reviver::AuditTargetRegistry(ManagedTarget& t) {
+  if (!t.active || t.query_pending) return;
   if (!GetMachinedClient().IsConnected()) return;
-  const int interval_ms = Config().revive_cellappmgr_audit_interval_ms;
-  if (interval_ms <= 0) return;
+  if (t.audit_interval_ms <= 0) return;
   const auto now = Clock::now();
-  if (next_registry_audit_at_ != TimePoint{} && now < next_registry_audit_at_) return;
-  next_registry_audit_at_ = now + Milliseconds(interval_ms);
-  cellappmgr_query_pending_ = true;
-  ++registry_audit_count_;
-  GetMachinedClient().QueryAsync(ProcessType::kCellAppMgr,
-                                 [this](std::vector<machined::ProcessInfo> infos) {
-    OnCellAppMgrRegistryAudit(std::move(infos));
+  if (t.next_registry_audit_at != TimePoint{} && now < t.next_registry_audit_at) return;
+  t.next_registry_audit_at = now + Milliseconds(t.audit_interval_ms);
+  t.query_pending = true;
+  ++t.registry_audit_count;
+  GetMachinedClient().QueryAsync(t.process_type,
+                                 [this, &t](std::vector<machined::ProcessInfo> infos) {
+    OnTargetRegistryAudit(t, std::move(infos));
   });
 }
 
-void Reviver::AuditCellAppMgrLaunch() {
-  if (!launch_pending_ || cellappmgr_active_) return;
-  if (Clock::now() < launch_deadline_) return;
+void Reviver::AuditTargetLaunch(ManagedTarget& t) {
+  if (!t.launch_pending || t.active) return;
+  if (Clock::now() < t.launch_deadline) return;
 
-  launch_pending_ = false;
-  launch_deadline_ = {};
-  ++launch_timeout_count_;
-  ++launch_failures_;
-  last_error_ =
-      std::format("CellAppMgr launch pid {} did not register", launched_cellappmgr_pid_);
-  ATLAS_LOG_WARNING("Reviver: {}", last_error_);
-  TerminateLaunchedCellAppMgr("launch registration timeout");
-  ScheduleCellAppMgrRestart(Milliseconds(Config().revive_restart_delay_ms));
+  t.launch_pending = false;
+  t.launch_deadline = {};
+  ++t.launch_timeout_count;
+  ++t.launch_failures;
+  t.last_error = std::format("{} launch pid {} did not register", t.slug, t.launched_pid);
+  ATLAS_LOG_WARNING("Reviver: {}", t.last_error);
+  TerminateLaunchedTarget(t, "launch registration timeout");
+  ScheduleTargetRestart(t, Milliseconds(Config().revive_restart_delay_ms));
 }
 
-void Reviver::AuditCellAppMgrLiveness() {
-  if (!cellappmgr_active_ || last_cellappmgr_pid_ == 0) return;
+void Reviver::AuditTargetLiveness(ManagedTarget& t) {
+  if (!t.active || t.last_pid == 0) return;
   if (!CanCheckLocalPid()) return;
-  if (IsProcessAlive(last_cellappmgr_pid_)) return;
+  // Local pid liveness covers the case where the target died but machined
+  // didn't (or hasn't yet) routed us a death notification.
+  if (t.last_pid != t.launched_pid && !IsLoopbackAddress(t.last_addr)) return;
+  if (IsProcessAlive(t.last_pid)) return;
 
-  cellappmgr_active_ = false;
-  ResetCellAppMgrManagerHealth();
-  ResetCellAppMgrHeartbeat();
-  ++liveness_failures_;
-  last_error_ = std::format("CellAppMgr pid {} is no longer alive", last_cellappmgr_pid_);
-  ATLAS_LOG_WARNING("Reviver: {}", last_error_);
-  ScheduleCellAppMgrRestart(Milliseconds(Config().revive_restart_delay_ms));
+  t.active = false;
+  ResetTargetManagerHealth(t);
+  ResetTargetHeartbeat(t);
+  ++t.liveness_failures;
+  t.last_error = std::format("{} pid {} is no longer alive", t.slug, t.last_pid);
+  ATLAS_LOG_WARNING("Reviver: {}", t.last_error);
+  ScheduleTargetRestart(t, Milliseconds(Config().revive_restart_delay_ms));
 }
 
-void Reviver::AuditCellAppMgrHeartbeat() {
-  if (!cellappmgr_active_) return;
-  const int interval_ms = Config().revive_cellappmgr_health_interval_ms;
-  if (interval_ms <= 0) return;
-  const auto now = Clock::now();
-  const auto interval = Milliseconds(interval_ms);
-  const int heartbeat_timeout_ms = Config().revive_cellappmgr_heartbeat_timeout_ms > 0
-                                       ? Config().revive_cellappmgr_heartbeat_timeout_ms
-                                       : std::max(500, interval_ms * 2);
-  const auto timeout = Milliseconds(heartbeat_timeout_ms);
-
-  if (heartbeat_pending_) {
-    if (now - heartbeat_sent_at_ < timeout) return;
-    heartbeat_pending_ = false;
-    heartbeat_pending_nonce_ = 0;
-    next_heartbeat_at_ = now + interval;
-    ++heartbeat_timeout_count_;
-    RecordCellAppMgrHeartbeatFailure("CellAppMgr heartbeat timed out");
-    return;
-  }
-
-  if (next_heartbeat_at_ != TimePoint{} && now < next_heartbeat_at_) return;
-  next_heartbeat_at_ = now + interval;
-
+void Reviver::SendHeartbeat(ManagedTarget& t) {
   // ConnectRudpNocwnd is idempotent for live addrs — returns the cached
   // ReliableUdpChannel; rebuilds only after a real disconnect/eviction.
-  auto ch = Network().ConnectRudpNocwnd(last_cellappmgr_addr_);
+  auto ch = Network().ConnectRudpNocwnd(t.last_addr);
   if (!ch || *ch == nullptr) {
-    RecordCellAppMgrHeartbeatFailure("CellAppMgr heartbeat channel failed");
+    RecordTargetHeartbeatFailure(t, "heartbeat channel failed");
+    return;
+  }
+  const uint64_t nonce = ++t.heartbeat_nonce;
+  t.heartbeat_pending_nonce = nonce;
+  t.heartbeat_pending = true;
+  t.heartbeat_sent_at = Clock::now();
+  ++t.heartbeat_sent_count;
+
+  if (t.process_type == ProcessType::kCellAppMgr) {
+    cellappmgr::HealthProbe msg;
+    msg.nonce = nonce;
+    if (auto send = (*ch)->SendMessage(msg); !send) {
+      t.heartbeat_pending = false;
+      t.heartbeat_pending_nonce = 0;
+      RecordTargetHeartbeatFailure(t, "heartbeat send failed");
+    }
+  } else {
+    baseappmgr::HealthProbe msg;
+    msg.nonce = nonce;
+    if (auto send = (*ch)->SendMessage(msg); !send) {
+      t.heartbeat_pending = false;
+      t.heartbeat_pending_nonce = 0;
+      RecordTargetHeartbeatFailure(t, "heartbeat send failed");
+    }
+  }
+}
+
+void Reviver::AuditTargetHeartbeat(ManagedTarget& t) {
+  if (!t.active) return;
+  if (t.health_interval_ms <= 0) return;
+  const auto now = Clock::now();
+  const auto interval = Milliseconds(t.health_interval_ms);
+  const int timeout_ms =
+      t.heartbeat_timeout_ms > 0 ? t.heartbeat_timeout_ms : std::max(500, t.health_interval_ms * 2);
+  const auto timeout = Milliseconds(timeout_ms);
+
+  if (t.heartbeat_pending) {
+    if (now - t.heartbeat_sent_at < timeout) return;
+    t.heartbeat_pending = false;
+    t.heartbeat_pending_nonce = 0;
+    t.next_heartbeat_at = now + interval;
+    ++t.heartbeat_timeout_count;
+    RecordTargetHeartbeatFailure(t, "heartbeat timed out");
     return;
   }
 
-  cellappmgr::HealthProbe msg;
-  msg.nonce = ++heartbeat_nonce_;
-  heartbeat_pending_nonce_ = msg.nonce;
-  heartbeat_pending_ = true;
-  heartbeat_sent_at_ = now;
-  ++heartbeat_sent_count_;
+  if (t.next_heartbeat_at != TimePoint{} && now < t.next_heartbeat_at) return;
+  t.next_heartbeat_at = now + interval;
+  SendHeartbeat(t);
+}
 
-  if (auto send = (*ch)->SendMessage(msg); !send) {
-    heartbeat_pending_ = false;
-    heartbeat_pending_nonce_ = 0;
-    RecordCellAppMgrHeartbeatFailure("CellAppMgr heartbeat send failed");
-  }
+void Reviver::RecordHeartbeatAck(ManagedTarget& t, const Address& src, uint64_t nonce,
+                                 uint64_t game_time, uint64_t snapshot_saves,
+                                 uint64_t snapshot_failures, bool snapshot_dirty,
+                                 bool snapshot_save_stale) {
+  if (!t.active) return;
+  if (src != t.last_addr) return;
+  if (!t.heartbeat_pending || nonce != t.heartbeat_pending_nonce) return;
+  t.heartbeat_pending = false;
+  t.heartbeat_pending_nonce = 0;
+  t.heartbeat_failure_streak = 0;
+  t.restart_attempts = 0;
+  t.restart_limit_reached = false;
+  t.last_error.clear();
+  t.heartbeat_last_ack_at = Clock::now();
+  t.heartbeat_last_game_time = game_time;
+  t.heartbeat_snapshot_saves = snapshot_saves;
+  t.heartbeat_snapshot_failures = snapshot_failures;
+  t.heartbeat_snapshot_dirty = snapshot_dirty;
+  t.heartbeat_snapshot_save_stale = snapshot_save_stale;
+  ++t.heartbeat_ack_count;
 }
 
 void Reviver::OnCellAppMgrHeartbeatAck(const Address& src, Channel*,
                                        const cellappmgr::HealthProbeAck& msg) {
-  if (!cellappmgr_active_) return;
-  if (src != last_cellappmgr_addr_) return;
-  if (!heartbeat_pending_ || msg.nonce != heartbeat_pending_nonce_) return;
-  heartbeat_pending_ = false;
-  heartbeat_pending_nonce_ = 0;
-  heartbeat_failure_streak_ = 0;
-  restart_attempts_ = 0;
-  restart_limit_reached_ = false;
-  last_error_.clear();
-  heartbeat_last_ack_at_ = Clock::now();
-  heartbeat_last_game_time_ = msg.game_time;
-  heartbeat_snapshot_saves_ = msg.snapshot_saves;
-  heartbeat_snapshot_failures_ = msg.snapshot_failures;
-  heartbeat_snapshot_dirty_ = msg.snapshot_dirty;
-  heartbeat_snapshot_save_stale_ = msg.snapshot_save_stale;
-  ++heartbeat_ack_count_;
+  RecordHeartbeatAck(cellappmgr_target_, src, msg.nonce, msg.game_time, msg.snapshot_saves,
+                     msg.snapshot_failures, msg.snapshot_dirty, msg.snapshot_save_stale);
 }
 
-void Reviver::AuditCellAppMgrHealth() {
-  if (!cellappmgr_active_) return;
-  const int interval_ms = Config().revive_cellappmgr_health_interval_ms;
-  if (interval_ms <= 0) return;
+void Reviver::OnBaseAppMgrHeartbeatAck(const Address& src, Channel*,
+                                       const baseappmgr::HealthProbeAck& msg) {
+  RecordHeartbeatAck(baseappmgr_target_, src, msg.nonce, msg.game_time, msg.snapshot_saves,
+                     msg.snapshot_failures, msg.snapshot_dirty, msg.snapshot_save_stale);
+}
+
+void Reviver::AuditTargetHealth(ManagedTarget& t) {
+  if (!t.active) return;
+  if (t.health_interval_ms <= 0) return;
   const auto now = Clock::now();
-  if (cellappmgr_health_pending_) {
-    const auto timeout_ms =
-        std::max(1, Config().revive_cellappmgr_manager_health_timeout_ms);
+  if (t.health_pending) {
+    const auto timeout_ms = std::max(1, t.manager_health_timeout_ms);
     const auto timeout = Milliseconds(timeout_ms);
-    if (health_check_sent_at_ != TimePoint{} && now - health_check_sent_at_ < timeout) {
+    if (t.health_check_sent_at != TimePoint{} && now - t.health_check_sent_at < timeout) {
       return;
     }
-    cellappmgr_health_pending_ = false;
-    health_check_sent_at_ = {};
-    ++health_check_generation_;
-    ++manager_health_timeout_count_;
-    RecordCellAppMgrManagerHealthFailure("CellAppMgr manager health watcher timed out");
+    t.health_pending = false;
+    t.health_check_sent_at = {};
+    ++t.health_check_generation;
+    ++t.manager_health_timeout_count;
+    RecordTargetManagerHealthFailure(t, "manager health watcher timed out");
     return;
   }
   if (!GetMachinedClient().IsConnected()) return;
-  if (next_health_check_at_ != TimePoint{} && now < next_health_check_at_) return;
-  next_health_check_at_ = now + Milliseconds(interval_ms);
-  cellappmgr_health_pending_ = true;
-  health_check_sent_at_ = now;
-  ++health_check_count_;
-  const uint64_t generation = ++health_check_generation_;
+  if (t.next_health_check_at != TimePoint{} && now < t.next_health_check_at) return;
+  t.next_health_check_at = now + Milliseconds(t.health_interval_ms);
+  t.health_pending = true;
+  t.health_check_sent_at = now;
+  ++t.health_check_count;
+  const uint64_t generation = ++t.health_check_generation;
   GetMachinedClient().QueryWatcher(
-      ProcessType::kCellAppMgr, Config().revive_cellappmgr_name, "app/uptime_seconds",
-      [this, generation](bool found, const std::string&, const std::string&) {
-        OnCellAppMgrHealth(generation, found);
+      t.process_type, t.configured_name, "app/uptime_seconds",
+      [this, &t, generation](bool found, const std::string&, const std::string&) {
+        OnTargetHealth(t, generation, found);
       });
 }
 
-void Reviver::OnCellAppMgrHealth(uint64_t generation, bool found) {
-  if (generation != health_check_generation_) return;
-  cellappmgr_health_pending_ = false;
-  health_check_sent_at_ = {};
-  if (!cellappmgr_active_) return;
+void Reviver::OnTargetHealth(ManagedTarget& t, uint64_t generation, bool found) {
+  if (generation != t.health_check_generation) return;
+  t.health_pending = false;
+  t.health_check_sent_at = {};
+  if (!t.active) return;
   if (found) {
-    manager_health_failure_streak_ = 0;
+    t.manager_health_failure_streak = 0;
     return;
   }
-  RecordCellAppMgrManagerHealthFailure("CellAppMgr manager health watcher did not respond");
+  RecordTargetManagerHealthFailure(t, "manager health watcher did not respond");
 }
 
-void Reviver::OnCellAppMgrRegistryAudit(std::vector<machined::ProcessInfo> infos) {
-  cellappmgr_query_pending_ = false;
-  if (!cellappmgr_active_) return;
+void Reviver::OnTargetRegistryAudit(ManagedTarget& t, std::vector<machined::ProcessInfo> infos) {
+  t.query_pending = false;
+  if (!t.active) return;
   for (const auto& info : infos) {
-    if (!MatchesTargetName(info.name)) continue;
-    if (last_cellappmgr_pid_ != info.pid || last_cellappmgr_addr_ != info.internal_addr) {
-      RememberCellAppMgr(info.name, info.internal_addr, info.pid);
+    if (!MatchesTargetName(t, info.name)) continue;
+    if (t.last_pid != info.pid || t.last_addr != info.internal_addr) {
+      RememberTarget(t, info.name, info.internal_addr, info.pid);
     } else {
-      registry_missing_streak_ = 0;
+      t.registry_missing_streak = 0;
     }
     return;
   }
 
-  ++registry_missing_streak_;
-  ++registry_missing_count_;
-  const auto threshold =
-      static_cast<uint32_t>(std::max(1, Config().revive_cellappmgr_missing_audit_threshold));
-  if (registry_missing_streak_ < threshold) return;
+  ++t.registry_missing_streak;
+  ++t.registry_missing_count;
+  const auto threshold = static_cast<uint32_t>(std::max(1, t.missing_audit_threshold));
+  if (t.registry_missing_streak < threshold) return;
 
-  cellappmgr_active_ = false;
-  ResetCellAppMgrManagerHealth();
-  ResetCellAppMgrHeartbeat();
-  TerminateCellAppMgrIfLocal("registry missing");
-  last_error_ = std::format("CellAppMgr missing from machined registry after {} audit(s)",
-                            registry_missing_streak_);
-  ATLAS_LOG_WARNING("Reviver: {}", last_error_);
-  ScheduleCellAppMgrRestart(Milliseconds(Config().revive_restart_delay_ms));
+  t.active = false;
+  ResetTargetManagerHealth(t);
+  ResetTargetHeartbeat(t);
+  TerminateTargetIfLocal(t, "registry missing");
+  t.last_error = std::format("{} missing from machined registry after {} audit(s)", t.slug,
+                             t.registry_missing_streak);
+  ATLAS_LOG_WARNING("Reviver: {}", t.last_error);
+  ScheduleTargetRestart(t, Milliseconds(Config().revive_restart_delay_ms));
 }
 
-void Reviver::RecordCellAppMgrHeartbeatFailure(std::string_view reason) {
-  ++heartbeat_failure_count_;
-  if (last_cellappmgr_addr_.Port() != 0) {
-    Network().DisconnectChannel(last_cellappmgr_addr_);
-  }
-  RecordCellAppMgrHealthFailure(reason, heartbeat_failure_streak_);
+void Reviver::RecordTargetHeartbeatFailure(ManagedTarget& t, std::string_view reason) {
+  ++t.heartbeat_failure_count;
+  if (t.last_addr.Port() != 0) Network().DisconnectChannel(t.last_addr);
+  RecordTargetHealthFailure(t, reason, t.heartbeat_failure_streak);
 }
 
-void Reviver::RecordCellAppMgrManagerHealthFailure(std::string_view reason) {
-  ++manager_health_failure_count_;
-  RecordCellAppMgrHealthFailure(reason, manager_health_failure_streak_);
+void Reviver::RecordTargetManagerHealthFailure(ManagedTarget& t, std::string_view reason) {
+  ++t.manager_health_failure_count;
+  RecordTargetHealthFailure(t, reason, t.manager_health_failure_streak);
 }
 
-void Reviver::RecordCellAppMgrHealthFailure(std::string_view reason, uint32_t& streak) {
+void Reviver::RecordTargetHealthFailure(ManagedTarget& t, std::string_view reason,
+                                        uint32_t& streak) {
   ++streak;
-  ++health_failure_count_;
-  const auto threshold =
-      static_cast<uint32_t>(std::max(1, Config().revive_cellappmgr_health_failure_threshold));
+  ++t.health_failure_count;
+  const auto threshold = static_cast<uint32_t>(std::max(1, t.health_failure_threshold));
   if (streak < threshold) return;
 
-  cellappmgr_active_ = false;
-  ResetCellAppMgrManagerHealth();
-  ResetCellAppMgrHeartbeat();
-  TerminateCellAppMgrIfLocal(reason);
-  last_error_ = std::format("{} after {} check(s)", reason, streak);
-  ATLAS_LOG_WARNING("Reviver: {}", last_error_);
-  ScheduleCellAppMgrRestart(Milliseconds(Config().revive_restart_delay_ms));
+  t.active = false;
+  ResetTargetManagerHealth(t);
+  ResetTargetHeartbeat(t);
+  TerminateTargetIfLocal(t, reason);
+  t.last_error = std::format("{} after {} check(s)", reason, streak);
+  ATLAS_LOG_WARNING("Reviver: {}", t.last_error);
+  ScheduleTargetRestart(t, Milliseconds(Config().revive_restart_delay_ms));
 }
 
-void Reviver::ResetCellAppMgrHeartbeat() {
-  heartbeat_pending_ = false;
-  heartbeat_pending_nonce_ = 0;
-  heartbeat_sent_at_ = {};
-  next_heartbeat_at_ = {};
-  heartbeat_last_ack_at_ = {};
+void Reviver::ResetTargetHeartbeat(ManagedTarget& t) {
+  t.heartbeat_pending = false;
+  t.heartbeat_pending_nonce = 0;
+  t.heartbeat_sent_at = {};
+  t.next_heartbeat_at = {};
+  t.heartbeat_last_ack_at = {};
 }
 
-void Reviver::ResetCellAppMgrManagerHealth() {
-  cellappmgr_health_pending_ = false;
-  health_check_sent_at_ = {};
-  next_health_check_at_ = {};
-  ++health_check_generation_;
+void Reviver::ResetTargetManagerHealth(ManagedTarget& t) {
+  t.health_pending = false;
+  t.health_check_sent_at = {};
+  t.next_health_check_at = {};
+  ++t.health_check_generation;
 }
 
-void Reviver::ResetCellAppMgrLaunch() {
-  launch_pending_ = false;
-  launch_deadline_ = {};
+void Reviver::ResetTargetLaunch(ManagedTarget& t) {
+  t.launch_pending = false;
+  t.launch_deadline = {};
 }
 
-void Reviver::TerminateCellAppMgrIfLocal(std::string_view reason) {
-  if (last_cellappmgr_pid_ == 0 || !CanCheckLocalPid()) return;
-  if (!IsProcessAlive(last_cellappmgr_pid_)) return;
-  if (!TerminateProcessByPid(last_cellappmgr_pid_)) return;
-  ++forced_termination_count_;
-  ATLAS_LOG_WARNING("Reviver: terminated CellAppMgr pid={} reason={}",
-                    last_cellappmgr_pid_, reason);
+void Reviver::TerminateTargetIfLocal(ManagedTarget& t, std::string_view reason) {
+  if (t.last_pid == 0 || !CanCheckLocalPid()) return;
+  if (t.last_pid != t.launched_pid && !IsLoopbackAddress(t.last_addr)) return;
+  if (!IsProcessAlive(t.last_pid)) return;
+  if (!TerminateProcessByPid(t.last_pid)) return;
+  ++t.forced_termination_count;
+  ATLAS_LOG_WARNING("Reviver: terminated {} pid={} reason={}", t.slug, t.last_pid, reason);
 }
 
-void Reviver::TerminateLaunchedCellAppMgr(std::string_view reason) {
-  if (launched_cellappmgr_pid_ == 0) return;
-  if (!IsProcessAlive(launched_cellappmgr_pid_)) return;
-  if (!TerminateProcessByPid(launched_cellappmgr_pid_)) return;
-  ++forced_termination_count_;
-  ATLAS_LOG_WARNING("Reviver: terminated launched CellAppMgr pid={} reason={}",
-                    launched_cellappmgr_pid_, reason);
+void Reviver::TerminateLaunchedTarget(ManagedTarget& t, std::string_view reason) {
+  if (t.launched_pid == 0) return;
+  if (!IsProcessAlive(t.launched_pid)) return;
+  if (!TerminateProcessByPid(t.launched_pid)) return;
+  ++t.forced_termination_count;
+  ATLAS_LOG_WARNING("Reviver: terminated launched {} pid={} reason={}", t.slug, t.launched_pid,
+                    reason);
 }
 
-void Reviver::ScheduleCellAppMgrRestart(Duration delay) {
-  if (!HasLeadership()) return;
-  if (restart_timer_.IsValid()) return;
-  if (restart_attempts_ >= static_cast<uint32_t>(std::max(0, Config().revive_max_restarts))) {
-    if (!restart_limit_reached_) ++restart_limit_hit_count_;
-    restart_limit_reached_ = true;
-    last_error_ = "restart limit reached";
-    ATLAS_LOG_ERROR("Reviver: CellAppMgr restart limit reached");
+void Reviver::ScheduleTargetRestart(ManagedTarget& t, Duration delay) {
+  if (!HasLeadership(t)) return;
+  if (t.restart_timer.IsValid()) return;
+  if (t.restart_attempts >= static_cast<uint32_t>(std::max(0, Config().revive_max_restarts))) {
+    if (!t.restart_limit_reached) ++t.restart_limit_hit_count;
+    t.restart_limit_reached = true;
+    t.last_error = "restart limit reached";
+    ATLAS_LOG_ERROR("Reviver: {} restart limit reached", t.slug);
     return;
   }
   const int cap_ms = Config().revive_restart_backoff_cap_ms;
   if (cap_ms > 0 && delay > Duration::zero()) {
     const auto base_ms = std::chrono::duration_cast<Milliseconds>(delay).count();
     if (base_ms > 0) {
-      const auto shift = std::min<uint32_t>(restart_attempts_, 16);
+      const auto shift = std::min<uint32_t>(t.restart_attempts, 16);
       const int64_t scaled = base_ms << shift;
       const auto bounded = std::min<int64_t>(scaled, cap_ms);
       delay = std::chrono::duration_cast<Duration>(Milliseconds(bounded));
     }
   }
-  restart_timer_ = Dispatcher().AddTimer(delay, [this](TimerHandle) {
-    restart_timer_ = {};
-    LaunchCellAppMgr();
+  t.restart_timer = Dispatcher().AddTimer(delay, [this, &t](TimerHandle) {
+    t.restart_timer = {};
+    LaunchTarget(t);
   });
 }
 
-void Reviver::LaunchCellAppMgr() {
-  if (!HasLeadership()) return;
-  if (cellappmgr_active_) return;
-  ++restart_attempts_;
-  const auto exe = ResolveCellAppMgrExe();
-  const uint16_t port = CellAppMgrPortForLaunch();
+void Reviver::LaunchTarget(ManagedTarget& t) {
+  if (!HasLeadership(t)) return;
+  if (t.active) return;
+  ++t.restart_attempts;
+  // Resolve exe relative to the Reviver process when no explicit path was
+  // configured (matches the legacy CellAppMgr behaviour).
+  std::filesystem::path exe = t.exe;
+  if (exe.empty()) {
+#if defined(_WIN32)
+    const auto kExeName = t.process_type == ProcessType::kCellAppMgr ? "atlas_cellappmgr.exe"
+                                                                      : "atlas_baseappmgr.exe";
+#else
+    const auto kExeName = t.process_type == ProcessType::kCellAppMgr ? "atlas_cellappmgr"
+                                                                      : "atlas_baseappmgr";
+#endif
+    exe = !self_exe_.empty() ? self_exe_.parent_path() / kExeName : std::filesystem::path{kExeName};
+  } else {
+    exe = std::filesystem::absolute(exe);
+  }
+
+  const uint16_t port =
+      t.internal_port != 0 ? t.internal_port : t.last_addr.Port();
+
   if (exe.empty() || !std::filesystem::exists(exe)) {
-    ++launch_failures_;
-    last_error_ = std::format("CellAppMgr exe not found: {}", exe.string());
-    ATLAS_LOG_ERROR("Reviver: {}", last_error_);
-    ScheduleCellAppMgrRestart(Milliseconds(Config().revive_restart_delay_ms));
+    ++t.launch_failures;
+    t.last_error = std::format("{} exe not found: {}", t.slug, exe.string());
+    ATLAS_LOG_ERROR("Reviver: {}", t.last_error);
+    ScheduleTargetRestart(t, Milliseconds(Config().revive_restart_delay_ms));
     return;
   }
   if (port == 0) {
-    ++launch_failures_;
-    last_error_ = "CellAppMgr internal port is not configured";
-    ATLAS_LOG_ERROR("Reviver: {}", last_error_);
-    ScheduleCellAppMgrRestart(Milliseconds(Config().revive_restart_delay_ms));
+    ++t.launch_failures;
+    t.last_error = std::format("{} internal port is not configured", t.slug);
+    ATLAS_LOG_ERROR("Reviver: {}", t.last_error);
+    ScheduleTargetRestart(t, Milliseconds(Config().revive_restart_delay_ms));
     return;
   }
 
@@ -609,20 +740,17 @@ void Reviver::LaunchCellAppMgr() {
     args.push_back(Config().config_path.string());
   }
   args.insert(args.end(), {
-      "--type", "cellappmgr",
-      "--name", Config().revive_cellappmgr_name,
+      "--type", t.process_type == ProcessType::kCellAppMgr ? "cellappmgr" : "baseappmgr",
+      "--name", t.configured_name,
       "--internal-port", std::to_string(port),
       "--machined", Config().machined_address.ToString(),
-      "--update-hertz", std::to_string(Config().revive_cellappmgr_update_hertz)});
-  const auto snapshot_path = Config().revive_cellappmgr_snapshot_path.empty()
-                                 ? Config().snapshot_path
-                                 : Config().revive_cellappmgr_snapshot_path;
+      "--update-hertz", std::to_string(t.update_hertz)});
+  const auto snapshot_path = t.snapshot_path.empty() ? Config().snapshot_path : t.snapshot_path;
   if (!snapshot_path.empty()) {
     args.push_back("--snapshot-path");
     args.push_back(snapshot_path.string());
-    const int snapshot_interval_ms = Config().revive_cellappmgr_snapshot_interval_ms >= 0
-                                         ? Config().revive_cellappmgr_snapshot_interval_ms
-                                         : Config().snapshot_interval_ms;
+    const int snapshot_interval_ms =
+        t.snapshot_interval_ms >= 0 ? t.snapshot_interval_ms : Config().snapshot_interval_ms;
     args.push_back("--snapshot-interval-ms");
     args.push_back(std::to_string(std::max(0, snapshot_interval_ms)));
   }
@@ -631,112 +759,95 @@ void Reviver::LaunchCellAppMgr() {
   opts.exe = exe;
   opts.args = std::move(args);
   opts.working_directory = exe.parent_path();
-  opts.output_path = Config().revive_cellappmgr_output_path;
+  opts.output_path = t.output_path;
   auto pid = LaunchDetachedProcess(std::move(opts));
   if (!pid) {
-    ++launch_failures_;
-    last_error_ = pid.Error().Message();
-    ATLAS_LOG_ERROR("Reviver: failed to launch CellAppMgr: {}", last_error_);
-    ScheduleCellAppMgrRestart(Milliseconds(Config().revive_restart_delay_ms));
+    ++t.launch_failures;
+    t.last_error = pid.Error().Message();
+    ATLAS_LOG_ERROR("Reviver: failed to launch {}: {}", t.slug, t.last_error);
+    ScheduleTargetRestart(t, Milliseconds(Config().revive_restart_delay_ms));
     return;
   }
 
-  launched_cellappmgr_pid_ = *pid;
-  launch_pending_ = true;
-  launch_deadline_ =
-      Clock::now() + Milliseconds(std::max(1, Config().revive_cellappmgr_launch_timeout_ms));
-  ++launch_count_;
-  ATLAS_LOG_WARNING("Reviver: launched CellAppMgr attempt={} pid={} exe={} port={}",
-                    restart_attempts_, launched_cellappmgr_pid_, exe.string(), port);
+  t.launched_pid = *pid;
+  t.launch_pending = true;
+  t.launch_deadline = Clock::now() + Milliseconds(std::max(1, t.launch_timeout_ms));
+  ++t.launch_count;
+  ATLAS_LOG_WARNING("Reviver: launched {} attempt={} pid={} exe={} port={}", t.slug,
+                    t.restart_attempts, t.launched_pid, exe.string(), port);
 }
 
-auto Reviver::HasLeadership() const -> bool {
-  return leader_lock_.has_value() && leader_lock_->IsHeld();
+auto Reviver::HasLeadership(const ManagedTarget& t) const -> bool {
+  return t.leader_lock.has_value() && t.leader_lock->IsHeld();
 }
 
-auto Reviver::MatchesTargetName(std::string_view name) const -> bool {
-  const auto& target = Config().revive_cellappmgr_name;
-  return target.empty() || name == target;
+auto Reviver::MatchesTargetName(const ManagedTarget& t, std::string_view name) const -> bool {
+  return t.configured_name.empty() || name == t.configured_name;
 }
 
 auto Reviver::CanCheckLocalPid() const -> bool {
-  return last_cellappmgr_pid_ == launched_cellappmgr_pid_ ||
-         IsLoopbackAddress(last_cellappmgr_addr_);
+  // Liveness probes only make sense for processes the Reviver itself
+  // launched OR processes on loopback (single-host development).
+  return true;
 }
 
-auto Reviver::ResolveLeaderLockPath() const -> std::filesystem::path {
-  if (!Config().revive_leader_lock_path.empty()) {
+auto Reviver::ResolveLeaderLockPath(const ManagedTarget& t) const -> std::filesystem::path {
+  if (!t.leader_lock_path.empty()) {
+    return std::filesystem::absolute(t.leader_lock_path);
+  }
+  // cellappmgr keeps the legacy --revive-leader-lock-path top-level option
+  // for backwards compatibility with existing verify scripts. baseappmgr
+  // requires --revive-baseappmgr-leader-lock-path (or the snapshot dir).
+  if (t.process_type == ProcessType::kCellAppMgr && !Config().revive_leader_lock_path.empty()) {
     return std::filesystem::absolute(Config().revive_leader_lock_path);
   }
-  const auto target = SanitizeLockSegment(Config().revive_cellappmgr_name);
-  const uint16_t port = Config().revive_cellappmgr_internal_port;
-  auto base = Config().revive_cellappmgr_snapshot_path.parent_path();
+  const auto target_name = SanitizeLockSegment(t.configured_name);
+  const uint16_t port = t.internal_port;
+  auto base = t.snapshot_path.parent_path();
   if (base.empty()) base = Config().snapshot_path.parent_path();
   if (base.empty()) base = fs::TempDirectory();
-  return base / std::format("atlas_reviver_{}_{}.lock", target, port);
-}
-
-auto Reviver::ResolveCellAppMgrExe() const -> std::filesystem::path {
-  if (!Config().revive_cellappmgr_exe.empty()) {
-    return std::filesystem::absolute(Config().revive_cellappmgr_exe);
-  }
-#if defined(_WIN32)
-  constexpr auto kExeName = "atlas_cellappmgr.exe";
-#else
-  constexpr auto kExeName = "atlas_cellappmgr";
-#endif
-  if (!self_exe_.empty()) return self_exe_.parent_path() / kExeName;
-  return std::filesystem::path{kExeName};
-}
-
-auto Reviver::CellAppMgrPortForLaunch() const -> uint16_t {
-  if (Config().revive_cellappmgr_internal_port != 0) {
-    return Config().revive_cellappmgr_internal_port;
-  }
-  return last_cellappmgr_addr_.Port();
+  return base / std::format("atlas_reviver_{}_{}.lock", target_name, port);
 }
 
 auto Reviver::LeaderLockContent() const -> std::string {
-  return std::format("process={} pid={} target={} port={}\n", Config().process_name,
-                     CurrentPid(), Config().revive_cellappmgr_name,
-                     Config().revive_cellappmgr_internal_port);
+  return std::format("process={} pid={}\n", Config().process_name, CurrentPid());
 }
 
-auto Reviver::CellAppMgrStatus() const -> std::string {
-  if (!HasLeadership()) return "standby";
-  if (restart_limit_reached_) return "restart_limited";
-  if (cellappmgr_active_) return "active";
-  if (launch_pending_) return "launching";
-  if (restart_timer_.IsValid()) return "restart_scheduled";
-  if (cellappmgr_query_pending_) return "querying";
+auto Reviver::TargetStatus(const ManagedTarget& t) const -> std::string {
+  if (!HasLeadership(t)) return "standby";
+  if (t.restart_limit_reached) return "restart_limited";
+  if (t.active) return "active";
+  if (t.launch_pending) return "launching";
+  if (t.restart_timer.IsValid()) return "restart_scheduled";
+  if (t.query_pending) return "querying";
   return "idle";
 }
 
-auto Reviver::HeartbeatLastAckAgeMsForWatcher() const -> int64_t {
-  return AgeMsSince(heartbeat_last_ack_at_);
+auto Reviver::HeartbeatLastAckAgeMsForWatcher(const ManagedTarget& t) const -> int64_t {
+  return AgeMsSince(t.heartbeat_last_ack_at);
 }
 
-auto Reviver::CellAppMgrHeartbeatSnapshotStatus() const -> std::string {
+auto Reviver::TargetHeartbeatSnapshotStatus(const ManagedTarget& t) const -> std::string {
   const char* state = "unknown";
-  if (!cellappmgr_active_) {
+  if (!t.active) {
     state = "inactive";
-  } else if (heartbeat_last_ack_at_.time_since_epoch() == Duration::zero()) {
+  } else if (t.heartbeat_last_ack_at.time_since_epoch() == Duration::zero()) {
     state = "unknown";
-  } else if (heartbeat_snapshot_failures_ > 0) {
+  } else if (t.heartbeat_snapshot_failures > 0) {
     state = "failed";
-  } else if (heartbeat_snapshot_dirty_) {
+  } else if (t.heartbeat_snapshot_dirty) {
     state = "dirty";
-  } else if (heartbeat_snapshot_save_stale_) {
+  } else if (t.heartbeat_snapshot_save_stale) {
     state = "stale";
   } else {
     state = "ready";
   }
   return std::format("state={} saves={} failures={} dirty={} stale={} game_time={} "
                      "ack_age_ms={}",
-                     state, heartbeat_snapshot_saves_, heartbeat_snapshot_failures_,
-                     heartbeat_snapshot_dirty_ ? 1 : 0,
-                     heartbeat_snapshot_save_stale_ ? 1 : 0, heartbeat_last_game_time_,
-                     HeartbeatLastAckAgeMsForWatcher());
+                     state, t.heartbeat_snapshot_saves, t.heartbeat_snapshot_failures,
+                     t.heartbeat_snapshot_dirty ? 1 : 0,
+                     t.heartbeat_snapshot_save_stale ? 1 : 0, t.heartbeat_last_game_time,
+                     HeartbeatLastAckAgeMsForWatcher(t));
 }
 
 }  // namespace atlas
