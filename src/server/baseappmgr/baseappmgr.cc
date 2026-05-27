@@ -18,6 +18,7 @@
 #include "platform/filesystem.h"
 #include "serialization/binary_stream.h"
 #include "server/server_app_option.h"
+#include "server/snapshot_envelope.h"
 #include "server/watcher.h"
 
 namespace atlas {
@@ -30,157 +31,42 @@ ServerAppOption<uint32_t> s_ha_reattach_watchdog_ms{
 
 constexpr uint32_t kSnapshotMagic = 0x424D4731u;  // 'BMG1'
 constexpr uint32_t kSnapshotVersion = 1;
-constexpr uint64_t kSnapshotChecksumSeed = 14695981039346656037ull;
-constexpr uint64_t kSnapshotChecksumPrime = 1099511628211ull;
-constexpr uint64_t kSnapshotEnvelopeBytes = 2ull * sizeof(uint32_t) + 2ull * sizeof(uint64_t);
 constexpr uint64_t kMaxSnapshotPayloadBytes = 256ull * 1024ull * 1024ull;
-constexpr uint64_t kMaxSnapshotFileBytes = kMaxSnapshotPayloadBytes + kSnapshotEnvelopeBytes;
+constexpr uint64_t kMaxSnapshotFileBytes =
+    kMaxSnapshotPayloadBytes + snapshot_envelope::kEnvelopeBytes;
 constexpr uint32_t kMaxSnapshotEntries = 1024 * 1024;
 constexpr std::size_t kMaxSnapshotStringBytes = 64 * 1024;
-constexpr std::size_t kMaxWatcherErrorDetailBytes = 120;
+constexpr std::string_view kSnapshotModuleName = "BaseAppMgr";
 constexpr auto kDirtySnapshotFlushInterval = std::chrono::milliseconds(1000);
 constexpr auto kSnapshotSaveWarningThrottle = std::chrono::milliseconds(5000);
 
-struct SnapshotPayloadView {
-  std::span<const std::byte> payload;
-};
+using snapshot_envelope::PayloadView;
+using snapshot_envelope::FileReadiness;
+using snapshot_envelope::WatcherErrorDetail;
 
-auto SnapshotChecksum(std::span<const std::byte> bytes) -> uint64_t {
-  uint64_t hash = kSnapshotChecksumSeed;
-  for (std::byte byte : bytes) {
-    hash ^= std::to_integer<uint8_t>(byte);
-    hash *= kSnapshotChecksumPrime;
-  }
-  return hash;
-}
-
-auto SnapshotPayload(std::span<const std::byte> bytes) -> Result<SnapshotPayloadView> {
-  BinaryReader header(bytes);
-  auto magic = header.Read<uint32_t>();
-  auto version = header.Read<uint32_t>();
-  if (!magic || !version) {
-    return Error{ErrorCode::kInvalidArgument, "BaseAppMgr snapshot: header truncated"};
-  }
-  if (*magic != kSnapshotMagic) {
-    return Error{ErrorCode::kInvalidArgument, "BaseAppMgr snapshot: bad magic"};
-  }
-  if (*version != kSnapshotVersion) {
-    return Error{ErrorCode::kInvalidArgument, "BaseAppMgr snapshot: unsupported version"};
-  }
-  auto payload_size = header.Read<uint64_t>();
-  auto checksum = header.Read<uint64_t>();
-  if (!payload_size || !checksum) {
-    return Error{ErrorCode::kInvalidArgument, "BaseAppMgr snapshot: envelope truncated"};
-  }
-  if (*payload_size > kMaxSnapshotPayloadBytes) {
-    return Error{ErrorCode::kInvalidArgument, "BaseAppMgr snapshot: payload too large"};
-  }
-  auto payload = header.ReadBytes(static_cast<std::size_t>(*payload_size));
-  if (!payload) {
-    return Error{ErrorCode::kInvalidArgument, "BaseAppMgr snapshot: payload truncated"};
-  }
-  if (header.Remaining() != 0) {
-    return Error{ErrorCode::kInvalidArgument, "BaseAppMgr snapshot: trailing bytes"};
-  }
-  if (SnapshotChecksum(*payload) != *checksum) {
-    return Error{ErrorCode::kInvalidArgument, "BaseAppMgr snapshot: checksum mismatch"};
-  }
-  return SnapshotPayloadView{*payload};
-}
-
-auto WatcherErrorDetail(std::string_view message) -> std::string {
-  if (message.empty()) return "unknown";
-  std::string out;
-  out.reserve(std::min(message.size(), kMaxWatcherErrorDetailBytes));
-  bool pending_separator = false;
-  for (const char ch : message) {
-    const bool keep = (ch >= 'A' && ch <= 'Z') || (ch >= 'a' && ch <= 'z') ||
-                      (ch >= '0' && ch <= '9') || ch == '.' || ch == '-' || ch == '_';
-    if (keep) {
-      if (pending_separator && !out.empty() && out.size() < kMaxWatcherErrorDetailBytes) {
-        out.push_back('_');
-      }
-      pending_separator = false;
-      if (out.size() == kMaxWatcherErrorDetailBytes) break;
-      out.push_back(ch);
-      continue;
-    }
-    pending_separator = !out.empty();
-  }
-  if (!out.empty() && out.back() == '_') out.pop_back();
-  if (out.empty()) return "unknown";
-  return out;
+auto SnapshotPayload(std::span<const std::byte> bytes) -> Result<PayloadView> {
+  return snapshot_envelope::ReadPayload(bytes, kSnapshotMagic, kSnapshotVersion,
+                                        kMaxSnapshotPayloadBytes, kSnapshotModuleName);
 }
 
 auto SnapshotBackupPath(const std::filesystem::path& path) -> std::filesystem::path {
-  auto backup = path;
-  backup += ".bak";
-  return backup;
+  return snapshot_envelope::BackupPath(path);
 }
 
 auto SnapshotTempPath(const std::filesystem::path& path) -> std::filesystem::path {
-  auto tmp = path;
-  tmp += ".tmp";
-  return tmp;
+  return snapshot_envelope::TempPath(path);
 }
 
-struct SnapshotFileReadiness {
-  bool present{false};
-  uint64_t bytes{0};
-  bool valid{false};
-  bool error_present{false};
-  const char* state{"missing"};
-  std::string error_detail{"none"};
-};
-
 auto SnapshotFileReadinessForPath(const std::filesystem::path& path, bool validate)
-    -> SnapshotFileReadiness {
-  if (path.empty()) return SnapshotFileReadiness{false, 0, false, false, "disabled", "none"};
-  if (!fs::Exists(path)) return SnapshotFileReadiness{false, 0, false, false, "missing", "none"};
-  auto size = fs::FileSize(path);
-  if (!size) {
-    return SnapshotFileReadiness{true, 0, false, true, "unreadable",
-                                 WatcherErrorDetail(size.Error().Message())};
-  }
-  const auto bytes_size = static_cast<uint64_t>(*size);
-  if (bytes_size == 0) return SnapshotFileReadiness{true, 0, false, false, "empty", "none"};
-  if (*size > kMaxSnapshotFileBytes) {
-    return SnapshotFileReadiness{true, bytes_size, false, true, "too_large", "file_too_large"};
-  }
-  if (!validate) return SnapshotFileReadiness{true, bytes_size, true, false, "ready", "none"};
-  auto file = fs::ReadFile(path);
-  if (!file) {
-    return SnapshotFileReadiness{true, bytes_size, false, true, "unreadable",
-                                 WatcherErrorDetail(file.Error().Message())};
-  }
-  auto payload = SnapshotPayload(std::span<const std::byte>(file->data(), file->size()));
-  if (!payload) {
-    return SnapshotFileReadiness{true, bytes_size, false, true, "invalid",
-                                 WatcherErrorDetail(payload.Error().Message())};
-  }
-  return SnapshotFileReadiness{true, bytes_size, true, false, "ready", "none"};
+    -> FileReadiness {
+  return snapshot_envelope::Readiness(path, validate, kSnapshotMagic, kSnapshotVersion,
+                                      kMaxSnapshotFileBytes, kMaxSnapshotPayloadBytes,
+                                      kSnapshotModuleName);
 }
 
 auto PreserveSnapshotBackup(const std::filesystem::path& path) -> Result<void> {
-  if (!fs::Exists(path)) return {};
-  auto current = fs::ReadFile(path);
-  if (!current) return current.Error();
-  auto payload = SnapshotPayload(std::span<const std::byte>(current->data(), current->size()));
-  if (!payload) return payload.Error();
-
-  const auto backup = SnapshotBackupPath(path);
-  auto tmp = SnapshotTempPath(backup);
-  auto write = fs::WriteFile(tmp, std::span<const std::byte>(current->data(), current->size()));
-  if (!write) {
-    (void)fs::RemoveFile(tmp);
-    return write.Error();
-  }
-  auto replace = fs::AtomicReplaceFile(tmp, backup);
-  if (!replace) {
-    (void)fs::RemoveFile(tmp);
-    return replace.Error();
-  }
-  return {};
+  return snapshot_envelope::PreserveBackup(path, kSnapshotMagic, kSnapshotVersion,
+                                           kMaxSnapshotPayloadBytes, kSnapshotModuleName);
 }
 
 void WriteAddress(BinaryWriter& w, const Address& addr) {
@@ -495,13 +381,9 @@ auto BaseAppMgr::Snapshot() const -> std::vector<std::byte> {
   }
 
   const auto payload = payload_writer.Detach();
-  BinaryWriter w;
-  w.Write(kSnapshotMagic);
-  w.Write(kSnapshotVersion);
-  w.Write(static_cast<uint64_t>(payload.size()));
-  w.Write(SnapshotChecksum(payload));
-  w.WriteBytes(payload);
-  return w.Detach();
+  return snapshot_envelope::WrapPayload(
+      std::span<const std::byte>(payload.data(), payload.size()), kSnapshotMagic,
+      kSnapshotVersion);
 }
 
 auto BaseAppMgr::Restore(std::span<const std::byte> bytes) -> Result<void> {

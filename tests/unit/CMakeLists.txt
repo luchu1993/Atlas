@@ -129,7 +129,7 @@ atlas_add_test(NAME test_movement_sim
 if(ATLAS_ENABLE_JOLT)
   atlas_add_test(NAME test_jolt_physics_query
     SOURCES test_jolt_physics_query.cpp
-    DEPS atlas_physics_jolt
+    DEPS atlas_physics_jolt atlas_movement_sim
   )
 endif()
 
@@ -216,6 +216,11 @@ atlas_add_test(NAME test_compression_filter
 atlas_add_test(NAME test_machined_types
   SOURCES test_machined_types.cpp
   DEPS atlas_network atlas_server
+)
+
+atlas_add_test(NAME test_snapshot_envelope
+  SOURCES test_snapshot_envelope.cpp
+  DEPS atlas_server atlas_serialization atlas_platform
 )
 
 atlas_add_test(NAME test_script_events
