@@ -1,15 +1,230 @@
 #include "baseappmgr.h"
 
 #include <algorithm>
+#include <chrono>
+#include <cstdint>
+#include <filesystem>
 #include <format>
+#include <functional>
+#include <span>
+#include <string>
+#include <string_view>
+#include <utility>
 
 #include "foundation/clock.h"
 #include "foundation/log.h"
 #include "network/channel.h"
 #include "network/machined_types.h"
+#include "platform/filesystem.h"
+#include "serialization/binary_stream.h"
 #include "server/watcher.h"
 
 namespace atlas {
+
+namespace {
+
+constexpr uint32_t kSnapshotMagic = 0x424D4731u;  // 'BMG1'
+constexpr uint32_t kSnapshotVersion = 1;
+constexpr uint64_t kSnapshotChecksumSeed = 14695981039346656037ull;
+constexpr uint64_t kSnapshotChecksumPrime = 1099511628211ull;
+constexpr uint64_t kSnapshotEnvelopeBytes = 2ull * sizeof(uint32_t) + 2ull * sizeof(uint64_t);
+constexpr uint64_t kMaxSnapshotPayloadBytes = 256ull * 1024ull * 1024ull;
+constexpr uint64_t kMaxSnapshotFileBytes = kMaxSnapshotPayloadBytes + kSnapshotEnvelopeBytes;
+constexpr uint32_t kMaxSnapshotEntries = 1024 * 1024;
+constexpr std::size_t kMaxSnapshotStringBytes = 64 * 1024;
+constexpr std::size_t kMaxWatcherErrorDetailBytes = 120;
+constexpr auto kDirtySnapshotFlushInterval = std::chrono::milliseconds(1000);
+constexpr auto kSnapshotSaveWarningThrottle = std::chrono::milliseconds(5000);
+
+struct SnapshotPayloadView {
+  std::span<const std::byte> payload;
+};
+
+auto SnapshotChecksum(std::span<const std::byte> bytes) -> uint64_t {
+  uint64_t hash = kSnapshotChecksumSeed;
+  for (std::byte byte : bytes) {
+    hash ^= std::to_integer<uint8_t>(byte);
+    hash *= kSnapshotChecksumPrime;
+  }
+  return hash;
+}
+
+auto SnapshotPayload(std::span<const std::byte> bytes) -> Result<SnapshotPayloadView> {
+  BinaryReader header(bytes);
+  auto magic = header.Read<uint32_t>();
+  auto version = header.Read<uint32_t>();
+  if (!magic || !version) {
+    return Error{ErrorCode::kInvalidArgument, "BaseAppMgr snapshot: header truncated"};
+  }
+  if (*magic != kSnapshotMagic) {
+    return Error{ErrorCode::kInvalidArgument, "BaseAppMgr snapshot: bad magic"};
+  }
+  if (*version != kSnapshotVersion) {
+    return Error{ErrorCode::kInvalidArgument, "BaseAppMgr snapshot: unsupported version"};
+  }
+  auto payload_size = header.Read<uint64_t>();
+  auto checksum = header.Read<uint64_t>();
+  if (!payload_size || !checksum) {
+    return Error{ErrorCode::kInvalidArgument, "BaseAppMgr snapshot: envelope truncated"};
+  }
+  if (*payload_size > kMaxSnapshotPayloadBytes) {
+    return Error{ErrorCode::kInvalidArgument, "BaseAppMgr snapshot: payload too large"};
+  }
+  auto payload = header.ReadBytes(static_cast<std::size_t>(*payload_size));
+  if (!payload) {
+    return Error{ErrorCode::kInvalidArgument, "BaseAppMgr snapshot: payload truncated"};
+  }
+  if (header.Remaining() != 0) {
+    return Error{ErrorCode::kInvalidArgument, "BaseAppMgr snapshot: trailing bytes"};
+  }
+  if (SnapshotChecksum(*payload) != *checksum) {
+    return Error{ErrorCode::kInvalidArgument, "BaseAppMgr snapshot: checksum mismatch"};
+  }
+  return SnapshotPayloadView{*payload};
+}
+
+auto WatcherErrorDetail(std::string_view message) -> std::string {
+  if (message.empty()) return "unknown";
+  std::string out;
+  out.reserve(std::min(message.size(), kMaxWatcherErrorDetailBytes));
+  bool pending_separator = false;
+  for (const char ch : message) {
+    const bool keep = (ch >= 'A' && ch <= 'Z') || (ch >= 'a' && ch <= 'z') ||
+                      (ch >= '0' && ch <= '9') || ch == '.' || ch == '-' || ch == '_';
+    if (keep) {
+      if (pending_separator && !out.empty() && out.size() < kMaxWatcherErrorDetailBytes) {
+        out.push_back('_');
+      }
+      pending_separator = false;
+      if (out.size() == kMaxWatcherErrorDetailBytes) break;
+      out.push_back(ch);
+      continue;
+    }
+    pending_separator = !out.empty();
+  }
+  if (!out.empty() && out.back() == '_') out.pop_back();
+  if (out.empty()) return "unknown";
+  return out;
+}
+
+auto SnapshotBackupPath(const std::filesystem::path& path) -> std::filesystem::path {
+  auto backup = path;
+  backup += ".bak";
+  return backup;
+}
+
+auto SnapshotTempPath(const std::filesystem::path& path) -> std::filesystem::path {
+  auto tmp = path;
+  tmp += ".tmp";
+  return tmp;
+}
+
+struct SnapshotFileReadiness {
+  bool present{false};
+  uint64_t bytes{0};
+  bool valid{false};
+  bool error_present{false};
+  const char* state{"missing"};
+  std::string error_detail{"none"};
+};
+
+auto SnapshotFileReadinessForPath(const std::filesystem::path& path, bool validate)
+    -> SnapshotFileReadiness {
+  if (path.empty()) return SnapshotFileReadiness{false, 0, false, false, "disabled", "none"};
+  if (!fs::Exists(path)) return SnapshotFileReadiness{false, 0, false, false, "missing", "none"};
+  auto size = fs::FileSize(path);
+  if (!size) {
+    return SnapshotFileReadiness{true, 0, false, true, "unreadable",
+                                 WatcherErrorDetail(size.Error().Message())};
+  }
+  const auto bytes_size = static_cast<uint64_t>(*size);
+  if (bytes_size == 0) return SnapshotFileReadiness{true, 0, false, false, "empty", "none"};
+  if (*size > kMaxSnapshotFileBytes) {
+    return SnapshotFileReadiness{true, bytes_size, false, true, "too_large", "file_too_large"};
+  }
+  if (!validate) return SnapshotFileReadiness{true, bytes_size, true, false, "ready", "none"};
+  auto file = fs::ReadFile(path);
+  if (!file) {
+    return SnapshotFileReadiness{true, bytes_size, false, true, "unreadable",
+                                 WatcherErrorDetail(file.Error().Message())};
+  }
+  auto payload = SnapshotPayload(std::span<const std::byte>(file->data(), file->size()));
+  if (!payload) {
+    return SnapshotFileReadiness{true, bytes_size, false, true, "invalid",
+                                 WatcherErrorDetail(payload.Error().Message())};
+  }
+  return SnapshotFileReadiness{true, bytes_size, true, false, "ready", "none"};
+}
+
+auto PreserveSnapshotBackup(const std::filesystem::path& path) -> Result<void> {
+  if (!fs::Exists(path)) return {};
+  auto current = fs::ReadFile(path);
+  if (!current) return current.Error();
+  auto payload = SnapshotPayload(std::span<const std::byte>(current->data(), current->size()));
+  if (!payload) return payload.Error();
+
+  const auto backup = SnapshotBackupPath(path);
+  auto tmp = SnapshotTempPath(backup);
+  auto write = fs::WriteFile(tmp, std::span<const std::byte>(current->data(), current->size()));
+  if (!write) {
+    (void)fs::RemoveFile(tmp);
+    return write.Error();
+  }
+  auto replace = fs::AtomicReplaceFile(tmp, backup);
+  if (!replace) {
+    (void)fs::RemoveFile(tmp);
+    return replace.Error();
+  }
+  return {};
+}
+
+void WriteAddress(BinaryWriter& w, const Address& addr) {
+  w.Write(addr.Ip());
+  w.Write(addr.Port());
+}
+
+auto ReadAddress(BinaryReader& r, const char* context) -> Result<Address> {
+  auto ip = r.Read<uint32_t>();
+  auto port = r.Read<uint16_t>();
+  if (!ip || !port) {
+    return Error{ErrorCode::kInvalidArgument,
+                 std::format("BaseAppMgr snapshot: {} address truncated", context)};
+  }
+  return Address(*ip, *port);
+}
+
+auto ReadCount(BinaryReader& r, const char* context) -> Result<uint32_t> {
+  auto count = r.ReadPackedInt();
+  if (!count) {
+    return Error{ErrorCode::kInvalidArgument,
+                 std::format("BaseAppMgr snapshot: {} count truncated", context)};
+  }
+  if (*count > kMaxSnapshotEntries) {
+    return Error{ErrorCode::kInvalidArgument,
+                 std::format("BaseAppMgr snapshot: {} count too large", context)};
+  }
+  return *count;
+}
+
+auto ReadBoundedString(BinaryReader& r, const char* context) -> Result<std::string> {
+  auto str = r.ReadString();
+  if (!str) {
+    return Error{ErrorCode::kInvalidArgument,
+                 std::format("BaseAppMgr snapshot: {} string truncated", context)};
+  }
+  if (str->size() > kMaxSnapshotStringBytes) {
+    return Error{ErrorCode::kInvalidArgument,
+                 std::format("BaseAppMgr snapshot: {} string too long", context)};
+  }
+  return *str;
+}
+
+auto AgeMsSince(TimePoint t) -> int64_t {
+  if (t.time_since_epoch() == Duration::zero()) return -1;
+  return std::chrono::duration_cast<std::chrono::milliseconds>(Clock::now() - t).count();
+}
+
+}  // namespace
 
 void BaseAppMgr::DbidAffinityTable::Remember(DatabaseID dbid, uint32_t app_id, TimePoint now) {
   if (dbid == kInvalidDBID || app_id == 0) {
@@ -200,12 +415,486 @@ auto BaseAppMgr::Init(int argc, char* argv[]) -> bool {
       machined::ListenerType::kDeath, ProcessType::kBaseApp, nullptr,
       [this](const machined::DeathNotification& n) { OnBaseappDeath(n.internal_addr, n.reason); });
 
+  if (!Config().snapshot_path.empty()) {
+    auto restore = RestoreSnapshotFromFile(Config().snapshot_path);
+    if (!restore) {
+      if (restore.Error().Code() == ErrorCode::kNotFound) {
+        ATLAS_LOG_INFO("BaseAppMgr: no HA snapshot to restore at {}",
+                       Config().snapshot_path.string());
+      } else {
+        ATLAS_LOG_ERROR("BaseAppMgr: HA snapshot restore failed: {}",
+                        restore.Error().Message());
+        return false;
+      }
+    } else {
+      ATLAS_LOG_WARNING(
+          "BaseAppMgr: restored HA snapshot from {} source={} baseapps={} global_bases={}"
+          " dbid_affinity={}",
+          Config().snapshot_path.string(), last_snapshot_restore_source_, baseapps_.size(),
+          global_bases_.size(), dbid_affinity_.size());
+    }
+  }
+
   ATLAS_LOG_INFO("BaseAppMgr: initialised");
   return true;
 }
 
 void BaseAppMgr::Fini() {
+  if (!Config().snapshot_path.empty() && snapshot_dirty_) {
+    SaveConfiguredSnapshot("shutdown");
+  }
   ManagerApp::Fini();
+}
+
+auto BaseAppMgr::Snapshot() const -> std::vector<std::byte> {
+  BinaryWriter payload_writer;
+  payload_writer.Write(next_app_id_);
+
+  payload_writer.WritePackedInt(static_cast<uint32_t>(baseapps_.size()));
+  for (const auto& [addr, info] : baseapps_) {
+    WriteAddress(payload_writer, addr);
+    WriteAddress(payload_writer, info.external_addr);
+    payload_writer.Write(info.app_id);
+    payload_writer.Write<uint8_t>(info.is_ready ? 1u : 0u);
+    payload_writer.Write<uint8_t>(info.is_retiring ? 1u : 0u);
+  }
+
+  payload_writer.WritePackedInt(static_cast<uint32_t>(global_bases_.size()));
+  for (const auto& [key, entry] : global_bases_) {
+    payload_writer.WriteString(key);
+    WriteAddress(payload_writer, entry.base_addr);
+    payload_writer.Write(entry.entity_id);
+    payload_writer.Write(entry.type_id);
+  }
+
+  const auto& affinity = dbid_affinity_.Entries();
+  payload_writer.WritePackedInt(static_cast<uint32_t>(affinity.size()));
+  const auto now_ns = std::chrono::duration_cast<std::chrono::nanoseconds>(
+                          Clock::now().time_since_epoch())
+                          .count();
+  for (const auto& [dbid, entry] : affinity) {
+    payload_writer.Write(static_cast<uint64_t>(dbid));
+    payload_writer.Write(entry.app_id);
+    const auto entry_ns = std::chrono::duration_cast<std::chrono::nanoseconds>(
+                              entry.last_assigned_at.time_since_epoch())
+                              .count();
+    // Persist age relative to save time so post-restore PruneExpired keeps
+    // matching the configured TTL window after a process restart.
+    const int64_t age_ns = now_ns - entry_ns;
+    payload_writer.Write(age_ns);
+  }
+
+  const auto payload = payload_writer.Detach();
+  BinaryWriter w;
+  w.Write(kSnapshotMagic);
+  w.Write(kSnapshotVersion);
+  w.Write(static_cast<uint64_t>(payload.size()));
+  w.Write(SnapshotChecksum(payload));
+  w.WriteBytes(payload);
+  return w.Detach();
+}
+
+auto BaseAppMgr::Restore(std::span<const std::byte> bytes) -> Result<void> {
+  auto view = SnapshotPayload(bytes);
+  if (!view) return view.Error();
+  BinaryReader r(view->payload);
+
+  auto next_app = r.Read<uint32_t>();
+  if (!next_app) {
+    return Error{ErrorCode::kInvalidArgument, "BaseAppMgr snapshot: header truncated"};
+  }
+
+  std::unordered_map<Address, BaseAppInfo> restored_baseapps;
+  std::unordered_map<uint32_t, Address> restored_index;
+  std::unordered_set<uint32_t> restored_app_ids;
+
+  auto baseapp_count = ReadCount(r, "baseapps");
+  if (!baseapp_count) return baseapp_count.Error();
+  for (uint32_t i = 0; i < *baseapp_count; ++i) {
+    auto internal = ReadAddress(r, "baseapp");
+    auto external = ReadAddress(r, "baseapp_external");
+    auto app_id = r.Read<uint32_t>();
+    auto ready = r.Read<uint8_t>();
+    auto retiring = r.Read<uint8_t>();
+    if (!internal || !external || !app_id || !ready || !retiring) {
+      return Error{ErrorCode::kInvalidArgument, "BaseAppMgr snapshot: baseapp truncated"};
+    }
+    if (*app_id == 0) {
+      return Error{ErrorCode::kInvalidArgument, "BaseAppMgr snapshot: bad baseapp app_id"};
+    }
+    if (*ready > 1 || *retiring > 1) {
+      return Error{ErrorCode::kInvalidArgument, "BaseAppMgr snapshot: bad baseapp flags"};
+    }
+    if (!restored_app_ids.insert(*app_id).second) {
+      return Error{ErrorCode::kInvalidArgument, "BaseAppMgr snapshot: duplicate baseapp app_id"};
+    }
+    BaseAppInfo info;
+    info.internal_addr = *internal;
+    info.external_addr = *external;
+    info.app_id = *app_id;
+    info.is_ready = false;  // ready re-asserted only after reattach + InformLoad
+    info.is_retiring = *retiring != 0;
+    info.channel = nullptr;
+    info.needs_reattach = true;
+    info.restored_from_snapshot = true;
+    info.registered_at = Clock::now();
+    restored_baseapps.emplace(*internal, std::move(info));
+    restored_index.emplace(*app_id, *internal);
+  }
+
+  auto global_count = ReadCount(r, "global_bases");
+  if (!global_count) return global_count.Error();
+  std::unordered_map<std::string, GlobalBaseEntry> restored_global_bases;
+  for (uint32_t i = 0; i < *global_count; ++i) {
+    auto key = ReadBoundedString(r, "global_base_key");
+    if (!key) return key.Error();
+    auto addr = ReadAddress(r, "global_base");
+    auto entity_id = r.Read<EntityID>();
+    auto type_id = r.Read<uint16_t>();
+    if (!addr || !entity_id || !type_id) {
+      return Error{ErrorCode::kInvalidArgument, "BaseAppMgr snapshot: global base truncated"};
+    }
+    GlobalBaseEntry entry;
+    entry.key = *key;
+    entry.base_addr = *addr;
+    entry.entity_id = *entity_id;
+    entry.type_id = *type_id;
+    if (!restored_global_bases.emplace(*key, std::move(entry)).second) {
+      return Error{ErrorCode::kInvalidArgument, "BaseAppMgr snapshot: duplicate global base"};
+    }
+  }
+
+  auto affinity_count = ReadCount(r, "dbid_affinity");
+  if (!affinity_count) return affinity_count.Error();
+  struct AffinityEntry {
+    DatabaseID dbid;
+    uint32_t app_id;
+    int64_t age_ns;
+  };
+  std::vector<AffinityEntry> restored_affinity;
+  restored_affinity.reserve(*affinity_count);
+  for (uint32_t i = 0; i < *affinity_count; ++i) {
+    auto dbid = r.Read<uint64_t>();
+    auto app_id = r.Read<uint32_t>();
+    auto age_ns = r.Read<int64_t>();
+    if (!dbid || !app_id || !age_ns) {
+      return Error{ErrorCode::kInvalidArgument, "BaseAppMgr snapshot: affinity truncated"};
+    }
+    if (*app_id != 0 && !restored_app_ids.contains(*app_id)) {
+      // affinity references a BaseApp that the snapshot itself does not
+      // describe — drop it; the entry would be stale anyway.
+      continue;
+    }
+    restored_affinity.push_back({static_cast<DatabaseID>(*dbid), *app_id, *age_ns});
+  }
+
+  if (r.Remaining() != 0) {
+    return Error{ErrorCode::kInvalidArgument, "BaseAppMgr snapshot: trailing bytes"};
+  }
+
+  baseapps_ = std::move(restored_baseapps);
+  app_id_index_ = std::move(restored_index);
+  global_bases_ = std::move(restored_global_bases);
+  next_app_id_ = *next_app;
+
+  dbid_affinity_.Clear();
+  const auto now = Clock::now();
+  for (const auto& entry : restored_affinity) {
+    const auto restored_tp =
+        now - std::chrono::duration_cast<Duration>(std::chrono::nanoseconds(entry.age_ns));
+    dbid_affinity_.Remember(entry.dbid, entry.app_id, restored_tp);
+  }
+  return {};
+}
+
+auto BaseAppMgr::SaveSnapshotToFile(const std::filesystem::path& path) -> Result<void> {
+  if (path.empty()) return {};
+  last_snapshot_attempt_at_ = Clock::now();
+  auto record_error = [this, &path](const Error& error) -> Error {
+    ++snapshot_save_failure_count_;
+    ++snapshot_failure_count_;
+    last_snapshot_save_path_ = path;
+    last_snapshot_save_error_ = std::string(error.Message());
+    return error;
+  };
+  if (auto parent = path.parent_path(); !parent.empty()) {
+    auto create = fs::CreateDirectories(parent);
+    if (!create) return record_error(create.Error());
+  }
+
+  const auto bytes = Snapshot();
+  if (bytes.size() > kMaxSnapshotFileBytes) {
+    return record_error(
+        Error{ErrorCode::kInvalidArgument, "BaseAppMgr snapshot: file too large"});
+  }
+  if (auto backup = PreserveSnapshotBackup(path); !backup) {
+    if (backup.Error().Code() != ErrorCode::kInvalidArgument) {
+      return record_error(backup.Error());
+    }
+    ++snapshot_backup_skip_count_;
+    ATLAS_LOG_WARNING("BaseAppMgr: HA snapshot backup skipped (.bak lags new main): {}",
+                      backup.Error().Message());
+  }
+  auto tmp = SnapshotTempPath(path);
+  auto write = fs::WriteFile(tmp, bytes);
+  if (!write) {
+    (void)fs::RemoveFile(tmp);
+    return record_error(write.Error());
+  }
+  auto replace = fs::AtomicReplaceFile(tmp, path);
+  if (!replace) {
+    (void)fs::RemoveFile(tmp);
+    return record_error(replace.Error());
+  }
+  last_snapshot_bytes_ = bytes.size();
+  last_snapshot_save_at_ = Clock::now();
+  last_snapshot_save_path_ = path;
+  last_snapshot_save_error_.clear();
+  snapshot_dirty_ = false;
+  snapshot_dirty_at_ = {};
+  snapshot_dirty_reason_.clear();
+  ++snapshot_save_count_;
+  return {};
+}
+
+auto BaseAppMgr::RestoreSnapshotFromFile(const std::filesystem::path& path) -> Result<void> {
+  if (path.empty()) return {};
+  last_snapshot_restore_attempt_at_ = Clock::now();
+
+  auto restore_one = [this](const std::filesystem::path& candidate) -> Result<void> {
+    if (!fs::Exists(candidate)) {
+      return Error{ErrorCode::kNotFound,
+                   std::format("snapshot file not found: {}", candidate.string())};
+    }
+    auto size = fs::FileSize(candidate);
+    if (!size) return size.Error();
+    if (*size > kMaxSnapshotFileBytes) {
+      return Error{ErrorCode::kInvalidArgument, "BaseAppMgr snapshot: file too large"};
+    }
+    auto bytes = fs::ReadFile(candidate);
+    if (!bytes) return bytes.Error();
+    auto restore = Restore(std::span<const std::byte>(bytes->data(), bytes->size()));
+    if (!restore) return restore;
+    ++snapshot_restore_count_;
+    last_snapshot_bytes_ = bytes->size();
+    last_snapshot_restore_at_ = Clock::now();
+    return {};
+  };
+
+  auto primary = restore_one(path);
+  if (primary) {
+    last_snapshot_restore_source_ = "primary";
+    last_snapshot_restore_path_ = path;
+    last_snapshot_restore_error_.clear();
+    last_snapshot_restore_primary_error_.clear();
+    return {};
+  }
+
+  const auto backup_path = SnapshotBackupPath(path);
+  auto backup = restore_one(backup_path);
+  if (backup) {
+    ++snapshot_fallback_restore_count_;
+    last_snapshot_restore_source_ = "backup";
+    last_snapshot_restore_path_ = backup_path;
+    last_snapshot_restore_error_.clear();
+    last_snapshot_restore_primary_error_ = primary.Error().Message();
+    ATLAS_LOG_WARNING("BaseAppMgr: restored HA snapshot backup {} after primary failed: {}",
+                      backup_path.string(), primary.Error().Message());
+    return {};
+  }
+  if (primary.Error().Code() == ErrorCode::kNotFound &&
+      backup.Error().Code() == ErrorCode::kNotFound) {
+    last_snapshot_restore_source_ = "none";
+    last_snapshot_restore_path_.clear();
+    last_snapshot_restore_error_.clear();
+    last_snapshot_restore_primary_error_.clear();
+    return primary.Error();
+  }
+  ++snapshot_restore_failure_count_;
+  ++snapshot_failure_count_;
+  last_snapshot_restore_source_ = "none";
+  last_snapshot_restore_path_.clear();
+  last_snapshot_restore_primary_error_ = primary.Error().Message();
+  if (primary.Error().Code() == ErrorCode::kNotFound) {
+    last_snapshot_restore_error_ = backup.Error().Message();
+    return backup.Error();
+  }
+  if (backup.Error().Code() == ErrorCode::kNotFound) {
+    last_snapshot_restore_error_ = primary.Error().Message();
+    return primary.Error();
+  }
+  auto error = Error{primary.Error().Code(),
+                     std::format("{}; backup failed: {}", primary.Error().Message(),
+                                 backup.Error().Message())};
+  last_snapshot_restore_error_ = error.Message();
+  return error;
+}
+
+void BaseAppMgr::OnTickComplete() {
+  ManagerApp::OnTickComplete();
+  if (Config().snapshot_path.empty() || Config().snapshot_interval_ms <= 0) return;
+  const auto now = Clock::now();
+  const auto interval =
+      std::chrono::duration_cast<Duration>(std::chrono::milliseconds(Config().snapshot_interval_ms));
+  const auto dirty_interval =
+      std::min(interval, std::chrono::duration_cast<Duration>(kDirtySnapshotFlushInterval));
+  const bool never_attempted =
+      last_snapshot_attempt_at_.time_since_epoch() == Duration::zero();
+  const auto since_attempt = now - last_snapshot_attempt_at_;
+  if (snapshot_dirty_ && (never_attempted || since_attempt >= dirty_interval)) {
+    SaveConfiguredSnapshot("dirty");
+  } else if (never_attempted || since_attempt >= interval) {
+    SaveConfiguredSnapshot("periodic");
+  }
+}
+
+void BaseAppMgr::MarkSnapshotDirty(const char* reason) {
+  if (!snapshot_dirty_) snapshot_dirty_at_ = Clock::now();
+  snapshot_dirty_ = true;
+  snapshot_dirty_reason_ = reason == nullptr ? "unknown" : reason;
+}
+
+void BaseAppMgr::SaveConfiguredSnapshot(const char* context) {
+  if (Config().snapshot_path.empty()) return;
+  auto save = SaveSnapshotToFile(Config().snapshot_path);
+  if (save) {
+    last_snapshot_save_warning_at_ = {};
+    return;
+  }
+  const auto now = Clock::now();
+  const auto throttle =
+      std::chrono::duration_cast<Duration>(kSnapshotSaveWarningThrottle);
+  if (last_snapshot_save_warning_at_ != TimePoint{} &&
+      now - last_snapshot_save_warning_at_ < throttle) {
+    return;
+  }
+  last_snapshot_save_warning_at_ = now;
+  ATLAS_LOG_WARNING("BaseAppMgr: HA snapshot {} save failed: {}", context,
+                    save.Error().Message());
+}
+
+auto BaseAppMgr::SnapshotFilePathForWatcher() const -> std::string {
+  const auto& configured = Config().snapshot_path;
+  const auto& base_path = configured.empty() ? last_snapshot_save_path_ : configured;
+  return base_path.string();
+}
+
+auto BaseAppMgr::SnapshotFilePresentForWatcher() const -> bool {
+  return SnapshotFileReadinessForPath(SnapshotFilePathForWatcher(), false).present;
+}
+
+auto BaseAppMgr::SnapshotFileBytesForWatcher() const -> uint64_t {
+  return SnapshotFileReadinessForPath(SnapshotFilePathForWatcher(), false).bytes;
+}
+
+auto BaseAppMgr::BuildSnapshotFileStatusSummary() const -> std::string {
+  const auto path = SnapshotFilePathForWatcher();
+  const auto readiness = SnapshotFileReadinessForPath(path, true);
+  return std::format(
+      "state={} path={} present={} bytes={} valid={} error_present={} error_detail={}",
+      readiness.state, path, readiness.present ? 1 : 0, readiness.bytes,
+      readiness.valid ? 1 : 0, readiness.error_present ? 1 : 0, readiness.error_detail);
+}
+
+auto BaseAppMgr::SnapshotBackupPathForWatcher() const -> std::string {
+  const auto base = SnapshotFilePathForWatcher();
+  if (base.empty()) return "";
+  return SnapshotBackupPath(base).string();
+}
+
+auto BaseAppMgr::SnapshotBackupPresentForWatcher() const -> bool {
+  return SnapshotFileReadinessForPath(SnapshotBackupPathForWatcher(), false).present;
+}
+
+auto BaseAppMgr::SnapshotBackupBytesForWatcher() const -> uint64_t {
+  return SnapshotFileReadinessForPath(SnapshotBackupPathForWatcher(), false).bytes;
+}
+
+auto BaseAppMgr::BuildSnapshotBackupStatusSummary() const -> std::string {
+  const auto path = SnapshotBackupPathForWatcher();
+  const auto readiness = SnapshotFileReadinessForPath(path, true);
+  return std::format(
+      "state={} path={} present={} bytes={} valid={} error_present={} error_detail={}",
+      readiness.state, path, readiness.present ? 1 : 0, readiness.bytes,
+      readiness.valid ? 1 : 0, readiness.error_present ? 1 : 0, readiness.error_detail);
+}
+
+auto BaseAppMgr::LastSnapshotAttemptAgeMsForWatcher() const -> int64_t {
+  return AgeMsSince(last_snapshot_attempt_at_);
+}
+
+auto BaseAppMgr::LastSnapshotSaveAgeMsForWatcher() const -> int64_t {
+  return AgeMsSince(last_snapshot_save_at_);
+}
+
+auto BaseAppMgr::LastSnapshotDirtyAgeMsForWatcher() const -> int64_t {
+  return snapshot_dirty_ ? AgeMsSince(snapshot_dirty_at_) : -1;
+}
+
+auto BaseAppMgr::LastSnapshotRestoreAttemptAgeMsForWatcher() const -> int64_t {
+  return AgeMsSince(last_snapshot_restore_attempt_at_);
+}
+
+auto BaseAppMgr::LastSnapshotRestoreAgeMsForWatcher() const -> int64_t {
+  return AgeMsSince(last_snapshot_restore_at_);
+}
+
+auto BaseAppMgr::SnapshotSaveStaleForWatcher() const -> bool {
+  if (Config().snapshot_path.empty() || Config().snapshot_interval_ms <= 0) return false;
+  const bool attempted = last_snapshot_attempt_at_.time_since_epoch() != Duration::zero();
+  const bool saved = last_snapshot_save_at_.time_since_epoch() != Duration::zero();
+  if (!saved) return attempted;
+  return LastSnapshotSaveAgeMsForWatcher() >
+         static_cast<int64_t>(Config().snapshot_interval_ms) * 2;
+}
+
+auto BaseAppMgr::SnapshotSizeHighWaterPct() const -> uint32_t {
+  if (last_snapshot_bytes_ == 0) return 0;
+  const auto pct = (static_cast<uint64_t>(last_snapshot_bytes_) * 100u) / kMaxSnapshotFileBytes;
+  return static_cast<uint32_t>(std::min<uint64_t>(pct, 100));
+}
+
+auto BaseAppMgr::BuildSnapshotStatusSummary() const -> std::string {
+  const char* state = "healthy";
+  if (Config().snapshot_path.empty()) state = "disabled";
+  else if (Config().snapshot_interval_ms <= 0) state = "disabled";
+  else if (SnapshotSaveStaleForWatcher()) state = "stale";
+  else if (snapshot_failure_count_ > 0) state = "degraded";
+  const std::string error_detail = last_snapshot_save_error_.empty() ?
+      std::string{"none"} : WatcherErrorDetail(last_snapshot_save_error_);
+  return std::format(
+      "state={} configured={} interval_ms={} saves={} save_failures={} restore_failures={}"
+      " failures={} backup_skips={} stale={} last_attempt_age_ms={} last_save_age_ms={}"
+      " bytes={} dirty={} dirty_age_ms={} dirty_reason={} error_present={} error_detail={}",
+      state, Config().snapshot_path.empty() ? 0 : 1, Config().snapshot_interval_ms,
+      snapshot_save_count_, snapshot_save_failure_count_, snapshot_restore_failure_count_,
+      snapshot_failure_count_, snapshot_backup_skip_count_,
+      SnapshotSaveStaleForWatcher() ? 1 : 0, LastSnapshotAttemptAgeMsForWatcher(),
+      LastSnapshotSaveAgeMsForWatcher(), last_snapshot_bytes_, snapshot_dirty_ ? 1 : 0,
+      LastSnapshotDirtyAgeMsForWatcher(),
+      snapshot_dirty_ ? snapshot_dirty_reason_ : std::string{"none"},
+      last_snapshot_save_error_.empty() ? 0 : 1, error_detail);
+}
+
+auto BaseAppMgr::BuildSnapshotRestoreStatusSummary() const -> std::string {
+  const char* state = last_snapshot_restore_source_.empty() ? "idle"
+                          : last_snapshot_restore_source_ == "none" ?
+                              (snapshot_restore_failure_count_ > 0 ? "failed" : "idle")
+                              : "ready";
+  const std::string error_detail = last_snapshot_restore_error_.empty() ?
+      std::string{"none"} : WatcherErrorDetail(last_snapshot_restore_error_);
+  const std::string primary_detail = last_snapshot_restore_primary_error_.empty() ?
+      std::string{"none"} : WatcherErrorDetail(last_snapshot_restore_primary_error_);
+  return std::format(
+      "state={} source={} restores={} fallback_restores={} restore_failures={}"
+      " failures={} last_attempt_age_ms={} last_restore_age_ms={} error_present={}"
+      " error_detail={} primary_error_present={} primary_error_detail={}",
+      state, last_snapshot_restore_source_, snapshot_restore_count_,
+      snapshot_fallback_restore_count_, snapshot_restore_failure_count_,
+      snapshot_failure_count_, LastSnapshotRestoreAttemptAgeMsForWatcher(),
+      LastSnapshotRestoreAgeMsForWatcher(),
+      last_snapshot_restore_error_.empty() ? 0 : 1, error_detail,
+      last_snapshot_restore_primary_error_.empty() ? 0 : 1, primary_detail);
 }
 
 void BaseAppMgr::RegisterWatchers() {
@@ -217,6 +906,111 @@ void BaseAppMgr::RegisterWatchers() {
                       std::function<std::size_t()>([this] { return global_bases_.size(); }));
   wr.Add<std::size_t>("baseappmgr/dbid_affinity_count",
                       std::function<std::size_t()>([this] { return dbid_affinity_.size(); }));
+
+  wr.Add<std::string>("baseappmgr/ha/snapshot_path",
+                      std::function<std::string()>(
+                          [this] { return SnapshotFilePathForWatcher(); }));
+  wr.Add<int>("baseappmgr/ha/snapshot_interval_ms",
+              std::function<int()>([this] { return Config().snapshot_interval_ms; }));
+  wr.Add<uint64_t>("baseappmgr/ha/snapshot_bytes",
+                   std::function<uint64_t()>(
+                       [this] { return static_cast<uint64_t>(last_snapshot_bytes_); }));
+  wr.Add<bool>("baseappmgr/ha/snapshot_file_present",
+               std::function<bool()>(
+                   [this] { return SnapshotFilePresentForWatcher(); }));
+  wr.Add<uint64_t>("baseappmgr/ha/snapshot_file_bytes",
+                   std::function<uint64_t()>(
+                       [this] { return SnapshotFileBytesForWatcher(); }));
+  wr.Add<std::string>("baseappmgr/ha/snapshot_file_status",
+                      std::function<std::string()>(
+                          [this] { return BuildSnapshotFileStatusSummary(); }));
+  wr.Add<std::string>("baseappmgr/ha/snapshot_backup_path",
+                      std::function<std::string()>(
+                          [this] { return SnapshotBackupPathForWatcher(); }));
+  wr.Add<bool>("baseappmgr/ha/snapshot_backup_present",
+               std::function<bool()>(
+                   [this] { return SnapshotBackupPresentForWatcher(); }));
+  wr.Add<uint64_t>("baseappmgr/ha/snapshot_backup_bytes",
+                   std::function<uint64_t()>(
+                       [this] { return SnapshotBackupBytesForWatcher(); }));
+  wr.Add<std::string>("baseappmgr/ha/snapshot_backup_status",
+                      std::function<std::string()>(
+                          [this] { return BuildSnapshotBackupStatusSummary(); }));
+  wr.Add<int64_t>("baseappmgr/ha/snapshot_last_save_attempt_age_ms",
+                  std::function<int64_t()>(
+                      [this] { return LastSnapshotAttemptAgeMsForWatcher(); }));
+  wr.Add<int64_t>("baseappmgr/ha/snapshot_last_save_age_ms",
+                  std::function<int64_t()>(
+                      [this] { return LastSnapshotSaveAgeMsForWatcher(); }));
+  wr.Add<std::string>("baseappmgr/ha/snapshot_last_save_path",
+                      std::function<std::string()>(
+                          [this] { return last_snapshot_save_path_.string(); }));
+  wr.Add<std::string>("baseappmgr/ha/snapshot_last_save_error",
+                      std::function<std::string()>(
+                          [this] { return last_snapshot_save_error_; }));
+  wr.Add<bool>("baseappmgr/ha/snapshot_dirty",
+               std::function<bool()>([this] { return snapshot_dirty_; }));
+  wr.Add<int64_t>("baseappmgr/ha/snapshot_dirty_age_ms",
+                  std::function<int64_t()>(
+                      [this] { return LastSnapshotDirtyAgeMsForWatcher(); }));
+  wr.Add<std::string>("baseappmgr/ha/snapshot_dirty_reason",
+                      std::function<std::string()>([this] {
+                        return snapshot_dirty_ ? snapshot_dirty_reason_ : std::string{};
+                      }));
+  wr.Add<bool>("baseappmgr/ha/snapshot_save_stale",
+               std::function<bool()>(
+                   [this] { return SnapshotSaveStaleForWatcher(); }));
+  wr.Add<std::string>("baseappmgr/ha/snapshot_status",
+                      std::function<std::string()>(
+                          [this] { return BuildSnapshotStatusSummary(); }));
+  wr.Add<std::string>("baseappmgr/ha/snapshot_last_restore_source",
+                      std::function<std::string()>(
+                          [this] { return last_snapshot_restore_source_; }));
+  wr.Add<int64_t>("baseappmgr/ha/snapshot_last_restore_attempt_age_ms",
+                  std::function<int64_t()>(
+                      [this] { return LastSnapshotRestoreAttemptAgeMsForWatcher(); }));
+  wr.Add<int64_t>("baseappmgr/ha/snapshot_last_restore_age_ms",
+                  std::function<int64_t()>(
+                      [this] { return LastSnapshotRestoreAgeMsForWatcher(); }));
+  wr.Add<std::string>("baseappmgr/ha/snapshot_last_restore_path",
+                      std::function<std::string()>(
+                          [this] { return last_snapshot_restore_path_.string(); }));
+  wr.Add<std::string>("baseappmgr/ha/snapshot_last_restore_error",
+                      std::function<std::string()>(
+                          [this] { return last_snapshot_restore_error_; }));
+  wr.Add<std::string>("baseappmgr/ha/snapshot_last_restore_primary_error",
+                      std::function<std::string()>(
+                          [this] { return last_snapshot_restore_primary_error_; }));
+  wr.Add<std::string>("baseappmgr/ha/snapshot_restore_status",
+                      std::function<std::string()>(
+                          [this] { return BuildSnapshotRestoreStatusSummary(); }));
+  wr.Add<uint64_t>("baseappmgr/ha/snapshot_saves",
+                   std::function<uint64_t()>(
+                       [this] { return snapshot_save_count_; }));
+  wr.Add<uint64_t>("baseappmgr/ha/snapshot_restores",
+                   std::function<uint64_t()>(
+                       [this] { return snapshot_restore_count_; }));
+  wr.Add<uint64_t>("baseappmgr/ha/snapshot_fallback_restores",
+                   std::function<uint64_t()>(
+                       [this] { return snapshot_fallback_restore_count_; }));
+  wr.Add<uint64_t>("baseappmgr/ha/snapshot_save_failures",
+                   std::function<uint64_t()>(
+                       [this] { return snapshot_save_failure_count_; }));
+  wr.Add<uint64_t>("baseappmgr/ha/snapshot_restore_failures",
+                   std::function<uint64_t()>(
+                       [this] { return snapshot_restore_failure_count_; }));
+  wr.Add<uint64_t>("baseappmgr/ha/snapshot_failures",
+                   std::function<uint64_t()>(
+                       [this] { return snapshot_failure_count_; }));
+  wr.Add<uint64_t>("baseappmgr/ha/snapshot_backup_skips",
+                   std::function<uint64_t()>(
+                       [this] { return snapshot_backup_skip_count_; }));
+  wr.Add<uint64_t>("baseappmgr/ha/snapshot_max_bytes",
+                   std::function<uint64_t()>(
+                       [] { return kMaxSnapshotFileBytes; }));
+  wr.Add<uint32_t>("baseappmgr/ha/snapshot_size_high_water_pct",
+                   std::function<uint32_t()>(
+                       [this] { return SnapshotSizeHighWaterPct(); }));
 }
 
 void BaseAppMgr::OnRegisterBaseapp(const Address& src, Channel* ch,
@@ -224,13 +1018,35 @@ void BaseAppMgr::OnRegisterBaseapp(const Address& src, Channel* ch,
   const Address kInternalAddr = ResolveAdvertisedAddr(msg.internal_addr, src);
   const Address kExternalAddr = ResolveAdvertisedAddr(msg.external_addr, src);
 
-  if (baseapps_.contains(kInternalAddr)) {
-    ATLAS_LOG_WARNING("BaseAppMgr: duplicate BaseApp registration for internal addr {}:{}",
-                      kInternalAddr.Ip(), kInternalAddr.Port());
-
+  if (auto existing_it = baseapps_.find(kInternalAddr); existing_it != baseapps_.end()) {
+    auto& existing = existing_it->second;
+    if (!existing.needs_reattach) {
+      ATLAS_LOG_WARNING("BaseAppMgr: duplicate BaseApp registration for internal addr {}:{}",
+                        kInternalAddr.Ip(), kInternalAddr.Port());
+      baseappmgr::RegisterBaseAppAck ack;
+      ack.success = false;
+      (void)ch->SendMessage(ack);
+      return;
+    }
+    // Snapshot-restored entry: the surviving BaseApp is reconnecting, keep
+    // its app_id and replay nothing on this side — BaseApp re-asserts ready
+    // via BaseAppReady. restored_from_snapshot stays sticky for watcher
+    // semantics (cleared only at OnBaseappDeath).
+    existing.channel = ch;
+    existing.external_addr = kExternalAddr;
+    existing.needs_reattach = false;
+    existing.is_ready = false;
+    existing.registered_at = Clock::now();
+    existing.last_reattach_watchdog_log_at = {};
+    MarkSnapshotDirty("baseapp-reattach");
     baseappmgr::RegisterBaseAppAck ack;
-    ack.success = false;
+    ack.success = true;
+    ack.app_id = existing.app_id;
+    ack.game_time = GameTime();
     (void)ch->SendMessage(ack);
+    ATLAS_LOG_INFO("BaseAppMgr: BaseApp reattached app_id={} internal={}:{} external={}:{}",
+                   existing.app_id, kInternalAddr.Ip(), kInternalAddr.Port(),
+                   kExternalAddr.Ip(), kExternalAddr.Port());
     return;
   }
 
@@ -240,6 +1056,7 @@ void BaseAppMgr::OnRegisterBaseapp(const Address& src, Channel* ch,
   info.external_addr = kExternalAddr;
   info.app_id = app_id;
   info.channel = ch;
+  info.registered_at = Clock::now();
   const auto [it, inserted] = baseapps_.emplace(kInternalAddr, std::move(info));
   if (!inserted) {
     ATLAS_LOG_ERROR("BaseAppMgr: failed to insert BaseApp registration for {}:{}",
@@ -250,6 +1067,7 @@ void BaseAppMgr::OnRegisterBaseapp(const Address& src, Channel* ch,
     return;
   }
   app_id_index_.emplace(app_id, it->first);
+  MarkSnapshotDirty("baseapp-register");
 
   baseappmgr::RegisterBaseAppAck ack;
   ack.success = true;
@@ -273,7 +1091,10 @@ void BaseAppMgr::OnBaseappReady(const Address& src, Channel* ch,
 
   if (!MatchesRegisteredSource(*info, src, ch, "BaseAppReady")) return;
 
-  info->is_ready = true;
+  if (!info->is_ready) {
+    info->is_ready = true;
+    MarkSnapshotDirty("baseapp-ready");
+  }
   ATLAS_LOG_INFO("BaseAppMgr: BaseApp app_id={} is ready", msg.app_id);
 }
 
@@ -339,6 +1160,7 @@ void BaseAppMgr::OnRegisterGlobalBase(const Address& src, Channel* /*ch*/,
   entry.entity_id = msg.entity_id;
   entry.type_id = msg.type_id;
   global_bases_[msg.key] = std::move(entry);
+  MarkSnapshotDirty("global-base-register");
 
   baseappmgr::GlobalBaseNotification notif;
   notif.key = msg.key;
@@ -363,6 +1185,7 @@ void BaseAppMgr::OnDeregisterGlobalBase(const Address& /*src*/, Channel* /*ch*/,
   notif.type_id = it->second.type_id;
   notif.added = false;
   global_bases_.erase(it);
+  MarkSnapshotDirty("global-base-deregister");
   BroadcastToAllBaseapps(notif);
 
   ATLAS_LOG_INFO("BaseAppMgr: global base '{}' deregistered", msg.key);
@@ -409,6 +1232,9 @@ auto BaseAppMgr::MatchesRegisteredSource(const BaseAppInfo& info, const Address&
 
 auto BaseAppMgr::IsAllocationCandidate(const BaseAppInfo& info, TimePoint now,
                                        Duration stale_after) const -> bool {
+  // needs_reattach hosts came from a snapshot Restore and haven't reconnected;
+  // routing new clients to them would land on a dead address.
+  if (info.needs_reattach) return false;
   return info.is_ready && !info.is_retiring && info.HasFreshLoad(now, stale_after);
 }
 
@@ -560,6 +1386,7 @@ void BaseAppMgr::OnBaseappDeath(const Address& addr, uint8_t reason) {
   dbid_affinity_.ForgetApp(it->second.app_id);
   app_id_index_.erase(it->second.app_id);
   baseapps_.erase(it);
+  MarkSnapshotDirty("baseapp-death");
 
   // Clean up any global bases owned by the dead BaseApp
   for (auto git = global_bases_.begin(); git != global_bases_.end();) {

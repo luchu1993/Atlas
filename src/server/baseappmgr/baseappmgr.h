@@ -2,14 +2,19 @@
 #define ATLAS_SERVER_BASEAPPMGR_BASEAPPMGR_H_
 
 #include <cstdint>
+#include <cstddef>
+#include <filesystem>
 #include <optional>
+#include <span>
 #include <string>
 #include <string_view>
 #include <unordered_map>
 #include <unordered_set>
+#include <vector>
 
 #include "baseappmgr_messages.h"
 #include "foundation/clock.h"
+#include "foundation/error.h"
 #include "loginapp/login_messages.h"
 #include "server/entity_types.h"
 #include "server/manager_app.h"
@@ -28,6 +33,23 @@ class BaseAppMgr : public ManagerApp {
   [[nodiscard]] auto Init(int argc, char* argv[]) -> bool override;
   void Fini() override;
   void RegisterWatchers() override;
+  void OnTickComplete() override;
+
+ public:
+  // Serialise the authoritative BaseAppMgr state (BaseApp table,
+  // next_app_id_, dbid_affinity, global_bases) into a checksummed
+  // envelope. Used by SaveSnapshotToFile and by Reviver-driven recovery.
+  [[nodiscard]] auto Snapshot() const -> std::vector<std::byte>;
+
+  // Replace this instance's authoritative state from a snapshot blob.
+  // Restored BaseApps come back in needs_reattach state until the real
+  // process reconnects via OnRegisterBaseapp.
+  [[nodiscard]] auto Restore(std::span<const std::byte> bytes) -> Result<void>;
+
+  [[nodiscard]] auto SaveSnapshotToFile(const std::filesystem::path& path) -> Result<void>;
+  [[nodiscard]] auto RestoreSnapshotFromFile(const std::filesystem::path& path) -> Result<void>;
+
+  void RegisterWatchersForTest() { RegisterWatchers(); }
 
  private:
   struct BaseAppInfo {
@@ -46,8 +68,12 @@ class BaseAppMgr : public ManagerApp {
     uint32_t pending_login_allocations{0};
     bool is_ready{false};
     bool is_retiring{false};
+    bool needs_reattach{false};
+    bool restored_from_snapshot{false};
     Channel* channel{nullptr};
     TimePoint last_load_report_at{};
+    TimePoint registered_at{};
+    TimePoint last_reattach_watchdog_log_at{};
 
     void ApplyLoadReport(float load, uint32_t reported_entity_count, uint32_t reported_proxy_count,
                          uint32_t reported_pending_prepare_count,
@@ -73,6 +99,13 @@ class BaseAppMgr : public ManagerApp {
     void PruneExpired(TimePoint now, Duration ttl);
     [[nodiscard]] auto Find(DatabaseID dbid) const -> std::optional<Entry>;
     [[nodiscard]] auto size() const -> std::size_t { return entries_.size(); }
+    [[nodiscard]] auto Entries() const -> const std::unordered_map<DatabaseID, Entry>& {
+      return entries_;
+    }
+    void Clear() {
+      entries_.clear();
+      dbids_by_app_.clear();
+    }
 
    private:
     std::unordered_map<DatabaseID, Entry> entries_;
@@ -129,6 +162,51 @@ class BaseAppMgr : public ManagerApp {
     uint16_t type_id{0};
   };
   std::unordered_map<std::string, GlobalBaseEntry> global_bases_;
+
+  // Snapshot machinery (mirrors CellAppMgr; share via snapshot_envelope.h
+  // in a follow-up refactor).
+  void MarkSnapshotDirty(const char* reason);
+  void SaveConfiguredSnapshot(const char* context);
+  [[nodiscard]] auto SnapshotFilePathForWatcher() const -> std::string;
+  [[nodiscard]] auto SnapshotFilePresentForWatcher() const -> bool;
+  [[nodiscard]] auto SnapshotFileBytesForWatcher() const -> uint64_t;
+  [[nodiscard]] auto BuildSnapshotFileStatusSummary() const -> std::string;
+  [[nodiscard]] auto SnapshotBackupPathForWatcher() const -> std::string;
+  [[nodiscard]] auto SnapshotBackupPresentForWatcher() const -> bool;
+  [[nodiscard]] auto SnapshotBackupBytesForWatcher() const -> uint64_t;
+  [[nodiscard]] auto BuildSnapshotBackupStatusSummary() const -> std::string;
+  [[nodiscard]] auto LastSnapshotAttemptAgeMsForWatcher() const -> int64_t;
+  [[nodiscard]] auto LastSnapshotSaveAgeMsForWatcher() const -> int64_t;
+  [[nodiscard]] auto LastSnapshotDirtyAgeMsForWatcher() const -> int64_t;
+  [[nodiscard]] auto LastSnapshotRestoreAttemptAgeMsForWatcher() const -> int64_t;
+  [[nodiscard]] auto LastSnapshotRestoreAgeMsForWatcher() const -> int64_t;
+  [[nodiscard]] auto SnapshotSaveStaleForWatcher() const -> bool;
+  [[nodiscard]] auto SnapshotSizeHighWaterPct() const -> uint32_t;
+  [[nodiscard]] auto BuildSnapshotStatusSummary() const -> std::string;
+  [[nodiscard]] auto BuildSnapshotRestoreStatusSummary() const -> std::string;
+
+  TimePoint last_snapshot_attempt_at_{};
+  TimePoint last_snapshot_save_at_{};
+  TimePoint last_snapshot_restore_attempt_at_{};
+  TimePoint last_snapshot_restore_at_{};
+  uint64_t snapshot_save_count_{0};
+  uint64_t snapshot_restore_count_{0};
+  uint64_t snapshot_fallback_restore_count_{0};
+  uint64_t snapshot_save_failure_count_{0};
+  uint64_t snapshot_restore_failure_count_{0};
+  uint64_t snapshot_failure_count_{0};
+  uint64_t snapshot_backup_skip_count_{0};
+  std::size_t last_snapshot_bytes_{0};
+  std::filesystem::path last_snapshot_save_path_;
+  std::string last_snapshot_save_error_;
+  TimePoint last_snapshot_save_warning_at_{};
+  bool snapshot_dirty_{false};
+  TimePoint snapshot_dirty_at_{};
+  std::string snapshot_dirty_reason_;
+  std::string last_snapshot_restore_source_{"none"};
+  std::filesystem::path last_snapshot_restore_path_;
+  std::string last_snapshot_restore_error_;
+  std::string last_snapshot_restore_primary_error_;
 };
 
 }  // namespace atlas

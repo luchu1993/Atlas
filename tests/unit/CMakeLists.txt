@@ -676,6 +676,11 @@ atlas_add_test(NAME test_baseappmgr_messages
   DEPS atlas_serialization atlas_baseappmgr_lib
 )
 
+atlas_add_test(NAME test_baseappmgr
+  SOURCES test_baseappmgr.cpp
+  DEPS atlas_baseappmgr_lib atlas_network
+)
+
 if(ATLAS_BUILD_NET_CLIENT)
   atlas_add_test(NAME test_net_client_abi_layout
     SOURCES test_net_client_abi_layout.cpp
