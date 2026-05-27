@@ -1,7 +1,3 @@
-# tests/unit/CMakeLists.txt — all unit tests
-
-# ── Basic / Foundation ──────────────────────────────────────────────────────
-
 atlas_add_test(NAME test_hello SOURCES test_hello.cpp)
 
 atlas_add_test(NAME test_platform_config
@@ -69,8 +65,6 @@ atlas_add_test(NAME test_heap
   DEPS atlas_foundation
 )
 
-# ── Platform ────────────────────────────────────────────────────────────────
-
 atlas_add_test(NAME test_filesystem
   SOURCES test_filesystem.cpp
   DEPS atlas_platform
@@ -107,8 +101,6 @@ atlas_add_test(NAME test_client_event_tap
     ${CMAKE_SOURCE_DIR}/src/tools/world_stress/client_event_tap.cc
 )
 
-# ── Serialization ───────────────────────────────────────────────────────────
-
 atlas_add_test(NAME test_binary_stream
   SOURCES test_binary_stream.cpp
   DEPS atlas_serialization
@@ -119,14 +111,52 @@ atlas_add_test(NAME test_data_section
   DEPS atlas_serialization
 )
 
-# ── Math ────────────────────────────────────────────────────────────────────
-
 atlas_add_test(NAME test_math
   SOURCES test_math.cpp
   DEPS atlas_math
 )
 
-# ── Network ─────────────────────────────────────────────────────────────────
+atlas_add_test(NAME test_collision_asset
+  SOURCES test_collision_asset.cpp
+  DEPS atlas_physics
+)
+
+atlas_add_test(NAME test_movement_sim
+  SOURCES test_movement_sim.cpp
+  DEPS atlas_movement_sim
+)
+
+if(ATLAS_ENABLE_JOLT)
+  atlas_add_test(NAME test_jolt_physics_query
+    SOURCES test_jolt_physics_query.cpp
+    DEPS atlas_physics_jolt
+  )
+endif()
+
+atlas_add_test(NAME test_movement_input_buffer
+  SOURCES test_movement_input_buffer.cpp
+  DEPS atlas_cellapp_lib
+)
+
+atlas_add_test(NAME test_movement_input_rate_limiter
+  SOURCES test_movement_input_rate_limiter.cpp
+  DEPS atlas_cellapp_lib
+)
+
+atlas_add_test(NAME test_movement_command_store
+  SOURCES test_movement_command_store.cpp
+  DEPS atlas_cellapp_lib
+)
+
+atlas_add_test(NAME test_movement_state_store
+  SOURCES test_movement_state_store.cpp
+  DEPS atlas_cellapp_lib
+)
+
+atlas_add_test(NAME test_movement_position_history_store
+  SOURCES test_movement_position_history_store.cpp
+  DEPS atlas_cellapp_lib
+)
 
 atlas_add_test(NAME test_address
   SOURCES test_address.cpp
@@ -188,8 +218,6 @@ atlas_add_test(NAME test_machined_types
   DEPS atlas_network atlas_server
 )
 
-# ── Script ──────────────────────────────────────────────────────────────────
-
 atlas_add_test(NAME test_script_events
   SOURCES test_script_events.cpp
   DEPS atlas_script
@@ -199,8 +227,6 @@ atlas_add_test(NAME test_script_value
   SOURCES test_script_value.cpp
   DEPS atlas_script
 )
-
-# ── Entity Definition ──────────────────────────────────────────────────────
 
 atlas_add_test(NAME test_entity_def_registry_rpc
   SOURCES test_entity_def_registry_rpc.cpp
@@ -226,8 +252,6 @@ atlas_add_test(NAME test_entity_def_registry_binary_file
   SOURCES test_entity_def_registry_binary_file.cpp
   DEPS atlas_entitydef atlas_serialization
 )
-
-# ── Space (RangeList / RangeTrigger / Controller) ──────────────────────────
 
 atlas_add_test(NAME test_range_list
   SOURCES test_range_list.cpp
@@ -364,8 +388,6 @@ atlas_add_test(NAME test_cellapp_config
   DEPS atlas_cellapp_lib atlas_server atlas_serialization
 )
 
-# ── Database ────────────────────────────────────────────────────────────────
-
 atlas_add_test(NAME test_database_types
   SOURCES test_database_types.cpp
   DEPS atlas_db
@@ -380,8 +402,6 @@ atlas_add_test(NAME test_sqlite_database
   SOURCES test_sqlite_database.cpp
   DEPS atlas_db_sqlite atlas_entitydef atlas_platform
 )
-
-# ── Coroutine ───────────────────────────────────────────────────────────────
 
 atlas_add_test(NAME test_coro_task
   SOURCES test_coro_task.cpp
@@ -407,8 +427,6 @@ atlas_add_test(NAME test_coro_bridge
   SOURCES test_coro_bridge.cpp
   DEPS atlas_clrscript atlas_coro
 )
-
-# ── Server Framework ───────────────────────────────────────────────────────
 
 atlas_add_test(NAME test_watcher
   SOURCES test_watcher.cpp
@@ -445,8 +463,6 @@ atlas_add_test(NAME test_entity_app
   DEPS atlas_server
 )
 
-# ── Machined ────────────────────────────────────────────────────────────────
-
 atlas_add_test(NAME test_process_registry
   SOURCES test_process_registry.cpp
   DEPS atlas_machined_lib
@@ -461,8 +477,6 @@ atlas_add_test(NAME test_watcher_forwarder
   SOURCES test_watcher_forwarder.cpp
   DEPS atlas_machined_lib
 )
-
-# ── CLR Script ──────────────────────────────────────────────────────────────
 
 atlas_add_test(NAME test_clr_marshal
   SOURCES test_clr_marshal.cpp
@@ -489,24 +503,8 @@ atlas_add_test(NAME test_clr_object
   DEPS atlas_clrscript
 )
 
-# CLR tests that load atlas_engine shared library at runtime.
-# Paths are supplied via env vars set in test properties.
-
-# These tests can't use atlas_add_test (they need custom ENVIRONMENT
-# properties), so replicate every post-target step that helper runs
-# for the regular test targets:
-#   1. Route output to bin/<config>/ so the exe lands next to its
-#      CLR runtime DLLs (nethost.dll, atlas_engine.dll). All artifacts
-#      share a single flat bin/ — see cmake/AtlasFolders.cmake.
-#   2. On Windows, deploy transitively-linked runtime DLLs + the
-#      atlas_engine / nethost pair that TARGET_RUNTIME_DLLS misses
-#      (atlas_engine is loaded via DynamicLibrary::Load, not linked).
-#   3. Deploy DB plugin DLLs on the off chance any transitive link
-#      reaches them.
-# Without the deploy steps the exe lands in the right directory but
-# starts up with STATUS_DLL_NOT_FOUND because its DLL siblings (e.g.
-# mimalloc-debug.dll under ATLAS_HEAP_ALLOCATOR=mimalloc) never got
-# copied alongside.
+# CLR tests load atlas_engine at runtime, so route binaries beside DLL deps.
+# Keep custom ENVIRONMENT targets on the same deploy path as atlas_add_test.
 macro(_atlas_route_clr_test_binary _target)
   foreach(_cfg IN ITEMS Debug Release RelWithDebInfo MinSizeRel)
     string(TOUPPER "${_cfg}" _CFG)
@@ -542,6 +540,13 @@ set_tests_properties(test_native_api_exports PROPERTIES
 set_target_properties(test_native_api_exports PROPERTIES FOLDER "Test/Unit")
 _atlas_route_clr_test_binary(test_native_api_exports)
 
+set(_atlas_runtime_test_dll_rloc
+  "$<GENEX_EVAL:$<TARGET_PROPERTY:atlas_runtime_test_dll,DOTNET_ASSEMBLY>>"
+)
+set(_test_clr_host_env
+  "ATLAS_RUNTIME_CONFIG_RLOC=${CMAKE_BINARY_DIR}/runtime/atlas_server.runtimeconfig.json"
+  "ATLAS_SMOKE_TEST_DLL_RLOC=$<GENEX_EVAL:$<TARGET_PROPERTY:atlas_smoke_test_dll,DOTNET_ASSEMBLY>>"
+)
 add_executable(test_clr_host
   test_paths.h
   test_clr_host.cpp
@@ -552,45 +557,54 @@ add_dependencies(test_clr_host atlas_engine atlas_smoke_test_dll)
 add_test(NAME test_clr_host COMMAND test_clr_host)
 set_tests_properties(test_clr_host PROPERTIES
   LABELS "unit"
-  ENVIRONMENT
-    "ATLAS_RUNTIME_CONFIG_RLOC=${CMAKE_BINARY_DIR}/runtime/atlas_server.runtimeconfig.json;ATLAS_SMOKE_TEST_DLL_RLOC=$<GENEX_EVAL:$<TARGET_PROPERTY:atlas_smoke_test_dll,DOTNET_ASSEMBLY>>"
+  ENVIRONMENT "${_test_clr_host_env}"
 )
 set_target_properties(test_clr_host PROPERTIES FOLDER "Test/Unit")
 _atlas_route_clr_test_binary(test_clr_host)
 
+set(_test_clr_callback_env
+  "ATLAS_ENGINE_RLOC=$<TARGET_FILE:atlas_engine>"
+  "ATLAS_RUNTIME_CONFIG_RLOC=${CMAKE_BINARY_DIR}/runtime/atlas_server.runtimeconfig.json"
+  "ATLAS_RUNTIME_TEST_DLL_RLOC=${_atlas_runtime_test_dll_rloc}"
+)
 add_executable(test_clr_callback
   test_paths.h
   test_clr_callback.cpp
 )
-target_link_libraries(test_clr_callback PRIVATE GTest::gtest_main atlas_clrscript atlas_platform)
+target_link_libraries(test_clr_callback
+  PRIVATE GTest::gtest_main atlas_clrscript atlas_platform
+)
 target_compile_definitions(test_clr_callback PRIVATE _CRT_SECURE_NO_WARNINGS)
 add_dependencies(test_clr_callback atlas_engine atlas_runtime_test_dll)
 add_test(NAME test_clr_callback COMMAND test_clr_callback)
 set_tests_properties(test_clr_callback PROPERTIES
   LABELS "unit"
-  ENVIRONMENT
-    "ATLAS_ENGINE_RLOC=$<TARGET_FILE:atlas_engine>;ATLAS_RUNTIME_CONFIG_RLOC=${CMAKE_BINARY_DIR}/runtime/atlas_server.runtimeconfig.json;ATLAS_RUNTIME_TEST_DLL_RLOC=$<GENEX_EVAL:$<TARGET_PROPERTY:atlas_runtime_test_dll,DOTNET_ASSEMBLY>>"
+  ENVIRONMENT "${_test_clr_callback_env}"
 )
 set_target_properties(test_clr_callback PROPERTIES FOLDER "Test/Unit")
 _atlas_route_clr_test_binary(test_clr_callback)
 
+set(_test_clr_script_engine_env
+  "ATLAS_ENGINE_RLOC=$<TARGET_FILE:atlas_engine>"
+  "ATLAS_RUNTIME_CONFIG_RLOC=${CMAKE_BINARY_DIR}/runtime/atlas_server.runtimeconfig.json"
+  "ATLAS_RUNTIME_TEST_DLL_RLOC=${_atlas_runtime_test_dll_rloc}"
+)
 add_executable(test_clr_script_engine
   test_paths.h
   test_clr_script_engine.cpp
 )
-target_link_libraries(test_clr_script_engine PRIVATE GTest::gtest_main atlas_clrscript atlas_platform)
+target_link_libraries(test_clr_script_engine
+  PRIVATE GTest::gtest_main atlas_clrscript atlas_platform
+)
 target_compile_definitions(test_clr_script_engine PRIVATE _CRT_SECURE_NO_WARNINGS)
 add_dependencies(test_clr_script_engine atlas_engine atlas_runtime_test_dll)
 add_test(NAME test_clr_script_engine COMMAND test_clr_script_engine)
 set_tests_properties(test_clr_script_engine PROPERTIES
   LABELS "unit"
-  ENVIRONMENT
-    "ATLAS_ENGINE_RLOC=$<TARGET_FILE:atlas_engine>;ATLAS_RUNTIME_CONFIG_RLOC=${CMAKE_BINARY_DIR}/runtime/atlas_server.runtimeconfig.json;ATLAS_RUNTIME_TEST_DLL_RLOC=$<GENEX_EVAL:$<TARGET_PROPERTY:atlas_runtime_test_dll,DOTNET_ASSEMBLY>>"
+  ENVIRONMENT "${_test_clr_script_engine_env}"
 )
 set_target_properties(test_clr_script_engine PROPERTIES FOLDER "Test/Unit")
 _atlas_route_clr_test_binary(test_clr_script_engine)
-
-# ── Server component tests ──────────────────────────────────────────────────
 
 atlas_add_test(NAME test_dbapp_messages
   SOURCES test_dbapp_messages.cpp
@@ -630,6 +644,11 @@ atlas_add_test(NAME test_entity_manager
 atlas_add_test(NAME test_baseapp_messages
   SOURCES test_baseapp_messages.cpp
   DEPS atlas_serialization atlas_baseapp_lib
+)
+
+atlas_add_test(NAME test_baseapp_movement
+  SOURCES test_baseapp_movement.cpp
+  DEPS atlas_baseapp_lib
 )
 
 atlas_add_test(NAME test_id_client
