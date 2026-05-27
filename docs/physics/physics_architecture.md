@@ -1,12 +1,16 @@
 # 服务端物理架构设计
 
-> **用途**：定义 Atlas 作为工业化 MMO 服务器引擎时，服务端物理子系统的长期边界、资源管线、运行时集成、Jolt 后端策略和分布式扩展约束。
+> **用途**：定义 Atlas 作为工业化 MMO 服务器引擎时，服务端物理子系统的
+> 长期边界、资源管线、运行时集成、Jolt 后端策略和分布式扩展约束。
 >
 > **读者**：服务端工程、客户端/Unity 工程、工具链工程、战斗系统工程、技术策划。
 >
 > **状态**：草案 v0.1 — 待团队评审。
 >
-> **前置文档**：`docs/gameplay/OVERVIEW.md`、`docs/gameplay/01_world/CELL_ARCHITECTURE.md`、`docs/gameplay/02_sync/MOVEMENT_SYNC.md`、`docs/gameplay/03_combat/HIT_VALIDATION.md`
+> **前置文档**：`docs/gameplay/OVERVIEW.md`、
+> `docs/gameplay/01_world/CELL_ARCHITECTURE.md`、
+> `docs/gameplay/02_sync/MOVEMENT_SYNC.md`、
+> `docs/gameplay/03_combat/HIT_VALIDATION.md`
 
 ---
 
@@ -129,6 +133,16 @@ Atlas collision asset 是长期稳定边界。它应包含：
 | `volumes` | gameplay volume 数据 |
 | `chunks` | 大地图分块信息 |
 
+当前 MVP 已落地 v1 JSON loader：`version` 必须为 `1`，
+`coordinate_system` 必须为 `x_right_y_up_z_forward_meters`，`source_hash`
+必填；`objects` 当前支持 `box` 的 `min/max/layer` 和 `plane` 的
+`point/normal/layer`。loader 可直接构建不带隐式平地的 Static
+`PhysicsQuery`，供 CharacterMotor 与测试后端使用；mesh、heightfield、
+material、volume 和 chunk 仍属于后续导出 / cook 阶段。
+Space 可通过 collision asset 安装自己的 Static query；手工替换 query 时会
+清除 asset metadata，避免观测状态和实际 backend 漂移。Cell C# 脚本可调用
+`CellServerEntity.LoadCollisionAsset(spaceId, path)` 给既有 Space 装载同一资源。
+
 Jolt cache 只记录后端派生数据：
 
 ```text
@@ -142,10 +156,14 @@ cache 可删除、可重建、可因版本不匹配失效。
 `atlas_tool` 负责校验和 cooking：
 
 ```text
-atlas_tool validate_collision map.collision
-atlas_tool cook_collision map.collision --backend jolt
-atlas_tool dump_collision map.collision --obj map_collision.obj
+atlas_tool validate_collision map.collision.json
+atlas_tool cook_collision map.collision.json --backend jolt
+atlas_tool dump_collision map.collision.json --obj map_collision.obj
 ```
+
+当前已实现 `validate_collision` 和 `dump_collision --obj`。前者会执行 v1 JSON
+schema、坐标系、finite 数值、layer 范围、box extents 和 plane normal 校验；
+后者会把 box / plane 输出为 OBJ 调试预览；`cook_collision` 仍是后续工具入口。
 
 Cooking 职责：
 
@@ -325,11 +343,15 @@ Space
 10. Watcher / Tracy / debug draw flush
 ```
 
-如果启用 Jolt simulation step，它只能出现在明确阶段，例如第 3 与第 4 步之间，并受配置开关和预算控制。早期可以只使用 query backend，不跑自由动态模拟。
+如果启用 Jolt simulation step，它只能出现在明确阶段，例如第 3 与第 4
+步之间，并受配置开关和预算控制。早期可以只使用 query backend，不跑
+自由动态模拟。
 
 ### 7.1 并发与预算
 
-物理后端不能绕过 Atlas 的进程级资源控制。Jolt 的 job/thread、临时分配器、body 上限、contact pair 上限和 batch query 上限必须来自 `ServerConfig` 或 Space 配置。
+物理后端不能绕过 Atlas 的进程级资源控制。Jolt 的 job/thread、临时分配器、
+body 上限、contact pair 上限和 batch query 上限必须来自 `ServerConfig`
+或 Space 配置。
 
 建议配置项：
 
@@ -481,7 +503,9 @@ Primitive 应保持 primitive，不应默认烘成 mesh。
 
 ### 10.4 Gameplay Volume
 
-不是所有 trigger 都需要进入 Jolt。安全区、水体、死亡区、任务区域、副本边界等可以作为 Atlas volume 由 Space/TriggerSystem 管理。只有需要 raycast、overlap 或 sensor 接触的 volume 才注册到 PhysicsScene。
+不是所有 trigger 都需要进入 Jolt。安全区、水体、死亡区、任务区域、
+副本边界等可以作为 Atlas volume 由 Space/TriggerSystem 管理。只有需要
+raycast、overlap 或 sensor 接触的 volume 才注册到 PhysicsScene。
 
 ---
 
@@ -492,9 +516,29 @@ Atlas 自己实现服务端 CharacterMotor。Jolt 只提供查询事实：
 ```text
 capsule shape cast
 capsule overlap
+capsule depenetration
 ground probe
 raycast
 ```
+
+Phase 14.1 已先用 `movement_sim::FlatGroundQuery` 打通输入帧、服务端权威
+step、Unity / UE native predictor、NPC movement intent 和 ack replay。14.2
+前置已建立 `atlas_physics` query 契约、Null / Flat / Static backend 和
+`movement_sim::PhysicsCharacterQuery` 适配器；Space 已持有可替换
+`PhysicsQuery` backend，当前默认 Static backend。CellApp movement tick 按
+实体所属 Space 路由查询；Jolt 接入只替换 backend，不改变 gameplay / script
+边界。Atlas collision asset v1 JSON loader 已能校验 box / plane 静态碰撞并
+构建不带隐式平地的 Static query，`atlas_tool validate_collision`
+可用于内容管线前置检查。Space 已有装载 collision asset 并替换本 Space
+physics query 的入口，Cell C# 脚本可通过
+`CellServerEntity.LoadCollisionAsset(spaceId, path)` 调用该入口。
+CharacterMotor 已使用 ground normal 做
+slope limit，在非跳跃 grounded sweep 命中时支持基础 step-up，并显式标记
+snap-to-ground；起跳 tick 不会被 snap 拉回地面，还会按配置预算执行初始重叠
+depenetration。Static backend 可用静态 box、静态平面和向下 ground capsule cast
+覆盖 KCC query 状态机与 raycast，并覆盖阻挡面 slide continuation、
+ground / plane depenetration 和低顶阻挡。CellApp 会把角色胶囊半径传入
+ground probe，避免盒体边缘探地退化成点查询。
 
 CharacterMotor 控制：
 
@@ -641,6 +685,12 @@ CI 检查：
 - 非法 transform 会失败。
 - layer/material 映射完整。
 
+### 15.4 Backend Parity 测试
+
+详见 [`backend_parity_testing.md`](backend_parity_testing.md)。Flat / Static /
+Jolt 三个 `CharacterQuery` backend 必须在共享场景库上行为等价，作为 14.2
+Jolt 接入和后续 Jolt 升级的回归 gate。
+
 ---
 
 ## 16. 版本与升级
@@ -707,8 +757,10 @@ Jolt 升级流程：
 
 现有 gameplay 文档中部分早期假设需要在物理子系统设计确认后更新：
 
-- `MOVEMENT_SYNC.md` 中“不做完整物理模拟 / 高度图足够”的描述应改为“移动核心由 Atlas CharacterMotor 控制，底层可使用 Atlas PhysicsQuery/Jolt 查询”。
-- `HIT_VALIDATION.md` 中“不做物理 raycast / 自研形状扫描”的描述应改为“命中过滤和 lag compensation 由 Combat 系统控制，候选查询和阻挡可使用 Atlas PhysicsQuery”。
+- `MOVEMENT_SYNC.md` 中“不做完整物理模拟 / 高度图足够”的描述应改为
+  “移动核心由 Atlas CharacterMotor 控制，底层可使用 Atlas PhysicsQuery/Jolt 查询”。
+- `HIT_VALIDATION.md` 中“不做物理 raycast / 自研形状扫描”的描述应改为
+  “命中过滤和 lag compensation 由 Combat 系统控制，候选查询和阻挡可使用 Atlas PhysicsQuery”。
 - `OVERVIEW.md` 中关于 C++ 共享移动仿真的表述需要区分纯规则计算与服务端物理查询依赖。
 
 这些文档不应在物理架构未评审前零散改动，避免下游设计反复。
