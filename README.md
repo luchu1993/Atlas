@@ -22,7 +22,11 @@ MySQL, DBAppMgr, and Reviver are represented in the tree, but they are not compl
 
 ## MVP Unity Demo
 
-The MVP sample under `samples/mvp/` demonstrates the full loop from login to Base/Cell handoff, AoI-driven entity streaming, Unity client rendering, server-authoritative projectile damage, NPC AI, HP replication, UI Toolkit login/HUD, and local cluster tooling.
+The MVP sample under `samples/mvp/` demonstrates the full loop from login to
+Base/Cell handoff, AoI-driven entity streaming, Unity client rendering,
+server-authoritative movement with local prediction, MovementCommand-backed
+dash, projectile damage, NPC AI, HP replication, UI Toolkit login/HUD, and
+local cluster tooling.
 
 ```bash
 # Linux / macOS / Git Bash

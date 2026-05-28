@@ -22,7 +22,7 @@ MySQL、DBAppMgr 与 Reviver 已在代码树中占位，但还不是完整的生
 
 ## MVP Unity 示例
 
-`samples/mvp/` 下的 MVP 示例展示了从登录到 Base/Cell 交接、基于 AoI 的实体流式同步、Unity 客户端渲染、服务端权威投射物伤害、NPC AI、HP 属性复制、UI Toolkit 登录/HUD 和本地集群工具的完整闭环。
+`samples/mvp/` 下的 MVP 示例展示了从登录到 Base/Cell 交接、基于 AoI 的实体流式同步、Unity 客户端渲染、带本地预测的服务端权威移动、MovementCommand 冲刺、服务端权威投射物伤害、NPC AI、HP 属性复制、UI Toolkit 登录/HUD 和本地集群工具的完整闭环。
 
 ```bash
 # Linux / macOS / Git Bash

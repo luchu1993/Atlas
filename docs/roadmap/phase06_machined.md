@@ -81,4 +81,5 @@ atlas_tool shutdown <type[:name]> [reason]
 watcher 注册表，应答经同一通道返回。`set-watch` 只能写 read-write watcher，
 失败时返回非零退出码。`shutdown` 在 machined 内查表后直接发
 `msg::ShutdownRequest`（reason 取自 CLI），目标进程的 `ServerApp` handler
-触发 `Shutdown()`。
+触发 `Shutdown()`。machined 会记住已成功转发的 reason；目标随后 deregister、
+disconnect 或 heartbeat timeout 时，对外 `DeathNotification.reason` 保持同一值。

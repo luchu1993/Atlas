@@ -20,7 +20,8 @@ UE 引擎层(UCLASS / UPROPERTY / USTRUCT / BlueprintCallable / 任何 BP 暴露
 走 **registry-driven decode + 类型化薄包装**:
 
 - decode/dispatch:`ClientEntity::ApplyDelta` 通用一份,通过 `EntityDefRegistry` 查表逐字段 decode,所有 entity 共用
-- 对外 API 类型化:codegen 生成 `Avatar.gen.h` 提供 `e->Hp()` / `e->ReportPos(pos, dir)` 等类型安全接口,内部仍走 registry
+- 对外 API 类型化:codegen 生成 `Avatar.gen.h`，提供 `e->Hp()` /
+  `e->LaunchProjectile(dir)` 等类型安全接口，内部仍走 registry
 
 ## CppEmitter 工具
 
@@ -45,7 +46,7 @@ UE 引擎层(UCLASS / UPROPERTY / USTRUCT / BlueprintCallable / 任何 BP 暴露
 | 容器 / struct getter(运行时 variant → 类型化 vector / POD) | `<properties>` 中容器或 struct 类型 |
 | `ClientEntity::ApplyDelta`(registry-driven 通用基类,scalar+container+struct+component section) | `EntityDefRegistry` |
 | 属性变化虚 hook(`virtual void OnHpChanged(int old, int neu)`)+ `ApplyDelta` override snapshot + diff fire | `<properties>` |
-| 上行 RPC stub(`e->ReportPos(pos, dir)`,SpanWriter 打包 + `SendCellRpc` / `SendBaseRpc`) | `<cell_methods>` / `<base_methods>` |
+| 上行 RPC stub（`e->LaunchProjectile(dir)`，SpanWriter 打包 + `SendCellRpc` / `SendBaseRpc`） | `<cell_methods>` / `<base_methods>` |
 | 下行 RPC 虚处理(`virtual void ShowDamage(int amount, uint32 attacker)`) | `<client_methods>` |
 | `DispatchEntityRpc(rpc_id, trace_id, reader)` override(派发到虚方法) | `<client_methods>` |
 | Component slot accessor(`avatar->load() -> StressLoadComponent*`)+ `RegisterComponentFactory(slot, ...)` 在 entity 构造体里自动调用 | `<components>` 中 synced 项 |
@@ -56,7 +57,7 @@ UE 引擎层(UCLASS / UPROPERTY / USTRUCT / BlueprintCallable / 任何 BP 暴露
 ```cpp
 // 上行 RPC
 account->SelectAvatar(1);                   // 走 SendBaseRpc
-avatar->ReportPos(pos, dir);                // 走 SendCellRpc
+avatar->LaunchProjectile(dir);              // 走 SendCellRpc
 
 // 属性 getter
 int32_t hp = avatar->Hp();                  // registry-driven decode 之后读

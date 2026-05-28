@@ -1,12 +1,13 @@
 # Phase 12: 客户端 SDK
 
 **Status:** ✅ 已落地。`atlas_net_client.dll` 单 `on_deliver` C API
-(ABI 0x02000000)、`Atlas.Client` 实体管理 + `AvatarFilter` peer 路径接入
-生产、`Atlas.Client.Desktop`（`AtlasClient` / `LoginClient`）+ Unity
-`AtlasNetworkManager` 共用 `ClientSession.DeliverFromServer` 解码、
-控制台 `atlas_client.exe` 登录 + AoI + RPC 全链路、跨平台 CI 矩阵均已
-就绪；FakeCluster 集成测试覆盖 enter/volatile envelope → AvatarFilter
-完整 wire path。
+(ABI 0x02020000)、`Atlas.Client` 实体管理 + `AvatarFilter` peer 路径、
+`Atlas.Client.Desktop`（`AtlasClient` / `LoginClient`）、Unity
+`AtlasNetworkManager` 和控制台 `atlas_client.exe` 已共用
+`ClientSession.DeliverFromServer` 解码。FakeCluster / RealCluster 集成测试
+覆盖登录、auth、AoI、RPC 和 enter / volatile envelope → AvatarFilter wire
+path；MVP Unity standalone + bot smoke 已验证 Unity 客户端可进入当前
+4-CellApp LB Space。
 **前置依赖:** Phase 9 (LoginApp)、Phase 10 (CellApp AOI)、脚本层
 `Atlas.Shared` + Source Generator（[`docs/scripting/`](../scripting/)）
 
@@ -40,6 +41,9 @@ API 通过 P/Invoke 暴露给 C#；本文档负责 C# 侧 `Atlas.Client`（实�
 - Source Generator 在 `ATLAS_CLIENT` 宏下生成 `ApplyReplicatedDelta` /
   `Deserialize` / exposed RPC 发送存根 / `client_methods` 接收分发，
   服务端 / 客户端共用同一套 def 描述。
+- Unity SDK 入口是 `AtlasNetworkManager`；MVP 样例通过
+  `tools/bin/build_mvp_unity.bat` 构建 standalone，通过
+  `tools/bin/run_mvp_unity_bots.bat` 启动 batchmode bot 做端到端 smoke。
 
 ## 关键设计决策
 
@@ -111,3 +115,24 @@ await client.ConnectAsync("login.example.com", 20013, user, pwHash, ct);
   filter 走 snap 路径。
 - 渲染端调 `ClientEntity.TryGetInterpolated(clientTime)` 拉插值结果；
   服务端授权纠正触发 `ResetInterpolation()` 清环重启。
+
+## 当前边界
+
+- 仍未实现 IDAlias、位置压缩、CacheStamps、DataDownload、Vehicle 和客户端预测。
+- 断线重连仍由样例层 `LoginFlow` 做重新登录；SDK 尚未提供完整 session resume。
+- Unity bot 命令行只控制 bot index / duration / movement pattern；host / port 仍来自
+  MVP `Bootstrap` 默认配置。
+- Unity `-batchmode -nographics` 下会出现 Null GPU shader warning；这不代表
+  `atlas_net_client` 或登录路径失败。
+
+## 验证基线
+
+- `tests/csharp/Atlas.Client.Tests` 覆盖 `ClientSession.DeliverFromServer`、
+  Space BSP debug payload、AvatarFilter 和实体插值。
+- `tests/csharp/Atlas.Client.IntegrationTests` 覆盖 FakeCluster / RealCluster 下
+  `AtlasClient` 登录、auth、RPC 和 AvatarFilter wire path。
+- `tests/integration/test_client_flow.cpp` 覆盖 C API 登录 / auth callback 和
+  client RPC 基础路径。
+- MVP Unity standalone smoke：`build_mvp_unity.bat` 构建 player，
+  `run_mvp_unity_bots.bat` 连接 `127.0.0.1:20018`，live watcher 验证
+  `login_success_total=1`、`auth_success_total=1`、`client_binding_count=1`。

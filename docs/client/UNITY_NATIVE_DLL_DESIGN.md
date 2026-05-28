@@ -1,9 +1,10 @@
 # Unity Native Network DLL 设计文档
 
-**Status:** ✅ 已落地。当前 C API ABI 为 `0x02000000`: Login/Auth 保持
+**Status:** ✅ 已落地。当前 C API ABI 为 `0x02050000`: Login/Auth 保持
 专用一次性回调,服务端下行消息通过 `on_deliver` 原样透传到 C#。Unity
 Plugins 由 `tools/setup_unity_client.py` 为宿主平台 staging,跨平台产物由
-CI workflow 生成。
+CI workflow 生成。`AtlasNetSetTransportImpairment` 可给当前和后续 RUDP
+channel 注入延迟 / 丢包,用于 movement prediction 验收。
 
 **目标:** 把 C++ 网络层抽取为独立 native DLL,Unity 客户端通过 P/Invoke
 调用。Unity 客户端 SDK 的高层 C# API(`AtlasClient` / `AvatarFilter` /
@@ -562,14 +563,14 @@ static void OnRpc(nint ctx, uint entId, uint rpcId, byte* payload, int len) {
   ctx 指针 → 宿主实例之间做映射
 
 > **简化记录:** 旧版 C ABI 把 AOI / RPC 解码后的 typed callbacks 全部暴露
-> 给 C#。`0x02000000` 起 DLL 只保留断线通知和单一 `on_deliver`,具体消息解码
+> 给 C#。`0x02020000` 起 DLL 只保留断线通知和单一 `on_deliver`,具体消息解码
 > 由 `Atlas.Client.ClientSession` 完成。
 
 #### 4.0.5 ABI 版本
 
 ```cpp
 // 每次 ABI-breaking 变更递增；布局: [MAJOR:8][MINOR:8][PATCH:16]
-#define ATLAS_NET_ABI_VERSION 0x02000000u   // v2.0.0
+#define ATLAS_NET_ABI_VERSION 0x02050000u   // v2.5.0
 ```
 
 版本号变更规则:
@@ -660,7 +661,7 @@ ATLAS_NET_CALL void AtlasNetDestroy(AtlasNetContext* ctx);
 
 ```csharp
 public static class AtlasNet {
-    const uint kExpectedAbi = 0x02000000u;  // 与 C 头文件同步
+    const uint kExpectedAbi = 0x02050000u;  // 与 C 头文件同步
 
     public static nint Create() {
         var ctx = AtlasNetNative.AtlasNetCreate(kExpectedAbi);
@@ -817,6 +818,14 @@ typedef enum {
 ATLAS_NET_CALL int32_t AtlasNetDisconnect(
     AtlasNetContext*      ctx,
     AtlasDisconnectReason reason);
+
+// 测试用 RUDP 链路损伤。配置会应用到当前 LoginApp/BaseApp channel，
+// 也会保留给后续重连创建的新 channel。
+ATLAS_NET_CALL int32_t AtlasNetSetTransportImpairment(
+    AtlasNetContext* ctx,
+    uint32_t one_way_latency_ms,
+    uint32_t loss_permyriad,
+    uint32_t seed);
 ```
 
 #### 4.5.5 状态查询
@@ -902,22 +911,66 @@ ATLAS_NET_CALL int32_t AtlasNetSendCellRpc(
     const uint8_t* payload,
     int32_t payload_len
 );
+
+#pragma pack(push, 1)
+typedef struct AtlasMovementInputFrame {
+    uint32_t seq;
+    uint32_t input_tick;
+    int8_t move_x;
+    int8_t move_z;
+    uint16_t view_yaw;
+    int8_t view_pitch;
+    uint16_t buttons;
+    uint16_t client_dt_ms;
+} AtlasMovementInputFrame;
+#pragma pack(pop)
+
+#pragma pack(push, 1)
+typedef struct AtlasMovementStateFrame {
+    float position_x;
+    float position_y;
+    float position_z;
+    float velocity_x;
+    float velocity_y;
+    float velocity_z;
+    float direction_x;
+    float direction_y;
+    float direction_z;
+    uint32_t flags;
+    uint32_t last_processed_input_seq;
+} AtlasMovementStateFrame;
+#pragma pack(pop)
+
+ATLAS_NET_CALL int32_t AtlasNetSendMovementInput(
+    AtlasNetContext* ctx,
+    uint32_t target_entity_id,
+    const AtlasMovementInputFrame* frames,
+    int32_t frame_count
+);
+
+ATLAS_NET_CALL int32_t AtlasNetSendMovementCorrectionReport(
+    AtlasNetContext* ctx,
+    uint32_t target_entity_id,
+    uint32_t acked_input_seq,
+    uint32_t server_tick,
+    float distance_m,
+    uint16_t correction_flags
+);
+
+ATLAS_NET_CALL int32_t AtlasNetMovementPredictStep(
+    const AtlasMovementStateFrame* previous,
+    const AtlasMovementInputFrame* input,
+    uint32_t server_tick,
+    AtlasMovementStateFrame* out_state
+);
 ```
 
-> **非-RPC 业务消息的发送路径**: 若某些上行业务消息不属于"调用某 exposed
-> cell/base 方法"语义,不应直接复用 `AtlasNetSendBaseRpc` 的普通 RPC 语义。
-> 当前方案:
->
-> - 这些消息在 Source Generator 里注册为**固定 rpc_id 的系统消息**,
->   C# 层仍调用 `AtlasNetSendBaseRpc(ctx, player_entity_id, kRpcId_EnableEntities,
->   payload, len)`, 由 BaseApp 的 RPC 分发表识别为系统级动作。
-> - 这种统一让 DLL 的发送路径只有 2 个入口 (BaseRpc / CellRpc), 无需为每种
->   系统消息加专属 C API。对应的 rpc_id 空间占用在 `Atlas.Shared/MessageIds.cs`
->   里显式编码。
->
-> 若后续发现确有高频且不适合走 RPC 通道的消息 (例如高频 AvatarUpdate),
-> 再追加 `AtlasNetSendAvatarUpdate(ctx, pos, dir, on_ground)` 这类专属 C API,
-> 避免每包都跨 FFI 序列化/复制。
+> **非-RPC 业务消息的发送路径**: 高频或协议级上行不复用普通 RPC 语义。
+> Movement input 通过 `AtlasNetSendMovementInput` 发送固定布局帧,由 BaseApp
+> 做认证实体校验和限流后转发到 CellApp。owner 本地预测通过
+> `AtlasNetMovementPredictStep` 复用同一份 `movement_sim` flat query。ack
+> replay 后的 correction report 只进入 BaseApp watcher 和可疑升级。普通
+> exposed 方法仍走 `AtlasNetSendBaseRpc` / `AtlasNetSendCellRpc`。
 
 ### 4.7 消息接收回调
 
@@ -1017,9 +1070,13 @@ ATLAS_NET_CALL int32_t AtlasNetGetStats(
 | `AtlasNetLogin` | C#→C++ | 发起登录 (带 user_data) |
 | `AtlasNetAuthenticate` | C#→C++ | 发起认证 (无 host/key 参数,DLL 自持) |
 | `AtlasNetDisconnect` | C#→C++ | 关闭连接,保留 ctx 和回调表 |
+| `AtlasNetSetTransportImpairment` | C#→C++ | 测试用 RUDP 延迟 / 丢包注入 |
 | `AtlasNetGetState` | C#→C++ | 查询连接状态 (含 LoginSucceeded) |
 | `AtlasNetSendBaseRpc` | C#→C++ | 发送 Base RPC |
 | `AtlasNetSendCellRpc` | C#→C++ | 发送 Cell RPC |
+| `AtlasNetSendMovementInput` | C#→C++ | 发送玩家预测输入帧 |
+| `AtlasNetSendMovementCorrectionReport` | C#→C++ | 上报 owner replay 后的纠正等级 |
+| `AtlasNetMovementPredictStep` | C#→C++ | 使用共享 movement_sim 推进本地预测 |
 | `AtlasNetGetStats` | C#→C++ | 获取网络统计 |
 | `AtlasLoginResultFn` | C++→C# | 登录结果通知 (user_data + status + baseapp addr) |
 | `AtlasAuthResultFn` | C++→C# | 认证结果通知 (user_data + entity_id + type_id) |
@@ -1210,7 +1267,7 @@ public:
 ```csharp
 public static unsafe class AtlasNetNative
 {
-    public const uint AbiVersion = 0x02000000u;
+    public const uint AbiVersion = 0x02050000u;
 
 #if UNITY_IOS && !UNITY_EDITOR
     private const string LibName = "__Internal";
@@ -1227,6 +1284,8 @@ public static unsafe class AtlasNetNative
         IntPtr ctx, byte* data, int len);
     [DllImport(LibName)] public static extern int AtlasNetSetCallbacks(
         IntPtr ctx, ref AtlasNetCallbacks callbacks);
+    [DllImport(LibName)] public static extern int AtlasNetSetTransportImpairment(
+        IntPtr ctx, uint oneWayLatencyMs, uint lossPermyriad, uint seed);
     [DllImport(LibName)] public static extern int AtlasNetGetStats(
         IntPtr ctx, out AtlasNetStats stats);
 }

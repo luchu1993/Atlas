@@ -367,13 +367,19 @@ existing build outputs without recompiling.
   ["UNITY_2022_3_OR_NEWER"]`). On older Unity the assembly is silently
   skipped — check **Project Settings → Player → Other Settings**.
 
-### `atlas_net_client.AtlasNetCreate failed (abi=0x02000000): ABI version mismatch`
+### `atlas_net_client.AtlasNetCreate failed (abi=0x02050000): ABI version mismatch`
 
 - The native DLL and the C# bindings disagree. Re-run
   `setup_unity_client` with the same `--config` to rebuild both
   sides from the same commit.
 - If you copied the native DLL from CI but built the managed side
   locally on a different commit, version drift is the cause.
+
+### Movement feels fine locally but needs RTT/loss validation
+
+- Call `AtlasNetworkManager.SetTransportImpairment(75, 200, seed)` before
+  or after login to exercise the same RUDP path under roughly 150 ms RTT and
+  2% datagram loss. Pass `0, 0` to disable the hook.
 
 ### Pattern A throws `EntryPointNotFoundException` at runtime
 

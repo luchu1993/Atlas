@@ -1,6 +1,6 @@
 # Atlas MVP — Unity 端到端演示
 
-单 Cell Atlas 集群 + Unity 6 客户端，用来演示完整的 BigWorld 风格链路：客户端权威移动、服务端权威技能 / 投射物伤害、AoI 驱动的同屏实体流式同步，以及逐 tick 属性复制。世界尺寸为 200 × 200 m，包含 1 个玩家 Avatar 和 150 个游荡 NPC。
+单 Cell Atlas 集群 + Unity 6 客户端，用来演示完整的 BigWorld 风格链路：服务端权威移动 + owner 本地预测、服务端权威技能 / 投射物伤害、AoI 驱动的同屏实体流式同步，以及逐 tick 属性复制。世界尺寸为 200 × 200 m，包含 1 个玩家 Avatar 和 150 个游荡 NPC。
 
 ## 目录结构
 
@@ -41,7 +41,7 @@ tools\bin\run_mvp_cluster.bat
 
 两端默认使用 LoginApp 端口 `20018`。集群中 cellapp / baseapp 以 20 Hz 运行（50 ms tick）。`UnityClient/Assets/Scenes/Main.unity` 已经包含运行时 `Bootstrap` 对象。
 
-**改了 `Atlas.Mvp.{Client,Cell,Base}/*.cs`、`entity_defs/*` 或 `src/csharp/Atlas.Client.Unity/*.cs` 后，必须重跑 `tools\bin\setup_mvp_unity.bat`（或 .sh）再回 Unity Editor**。Unity 项目下有两条 staged 路径，都由 `setup_mvp_unity` 从源头重生成：
+**改了 `Atlas.Mvp.{Client,Cell,Base}/*.cs`、`entity_defs/*` 或 `src/csharp/Atlas.Client*/*.cs` 后，必须重跑 `tools\bin\setup_mvp_unity.bat`（或 .sh）再回 Unity Editor**。Unity 项目下有两条 staged 路径，都由 `setup_mvp_unity` 从源头重生成：
 
 - `Assets/Plugins/Atlas.Mvp/Atlas.Mvp.Client.dll` —— 由 `samples/mvp/Atlas.Mvp.Client/` 经 Release `dotnet build` 产出再 copy
 - `Assets/Atlas.Client.Unity/*` —— 对 `src/csharp/Atlas.Client.Unity/` 做增量同步，只复制变化文件
@@ -110,7 +110,7 @@ UEClient Output Log 按顺序应该出现：
 
 ```
 LogAtlasUE: Loaded ATDF from ...entity_defs.bin; digest_size=32
-LogAtlasUE: AtlasUE module started; atlas_net_client ABI=0x02000000
+LogAtlasUE: AtlasUE module started; atlas_net_client ABI=0x02050000
 LogUEClient: Atlas login host=127.0.0.1 port=20018 user=mvp_<guid>
 LogUEClient: Atlas login succeeded, authenticating
 LogUEClient: Sent Account.SelectAvatar(1) entity_id=<n>
@@ -118,9 +118,21 @@ LogUEClient: Sent Account.SelectAvatar(1) entity_id=<n>
 
 同时 Unity 和 UE 两个客户端连到同一集群时，UE 视图会流式接入 Unity 玩家的 `AAvatarCapsule`（目前是 `/Engine/BasicShapes/Cylinder.Cylinder` 占位 mesh）。属性 delta（HP、level…）经 codegen 的 `OnHpChanged` 虚函数桥到 `UAtlasAvatarView`，BP 中直接 `Bind Event to On Hp Changed` 即可；同一条路径覆盖 `client_methods`（伤害浮字、投射物 spawn / end、复活等）。任何想暴露 Atlas BP 表面的 Actor 添加一个 `UAtlasAvatarView` component，gamemode 工厂会在 entity 入场时把 view 和 entity 绑定起来。
 
-Owner avatar 走客户端权威：`AAvatarCapsule` 上挂的 `UAtlasPlayerInputController` 以 5 m/s 处理 camera-relative WASD，20 Hz 通过 `Avatar.ReportPos` 上报新位置，**Space** 触发 `LaunchProjectile`。Peer capsule 上也有同一个 component，但 bound entity id 不匹配 `UAtlasSubsystem::GetPlayerEntityId()` 时空跑；peer avatar 仍走 `AvatarFilter` 插值轨迹。
+Unity / UE owner movement 发送量化输入帧，并用 native `movement_sim` 本地预测；
+CellApp 持有最终位置权威，并通过 movement ack 驱动 replay。owner 在 replay
+后回报 correction tier，只用于服务端 watcher，不参与权威位置。重连后
+movement ack 也会播种下一帧 owner input seq，避免旧 CellApp 输入序列状态把
+新会话输入当成 stale。Peer avatar 仍走 `AvatarFilter` 插值轨迹，技能期间由
+`MovementCommandStart` / `MovementCommandEnd` 覆盖 filter 输出。NPC AI 写入
+movement intent，由同一套服务端 CharacterMotor 推进。Unity 可调用
+`AtlasNetworkManager.SetTransportImpairment(75, 200, seed)`，UE 可调用
+`UAtlasSubsystem::SetTransportImpairment(75, 200, seed)`，在约 150 ms RTT /
+2% datagram loss 下验证同一路径。
 
-`UAtlasSubsystem` 断线时按指数退避自动重连（1 s → 2 → 4 → … 上限 30 s）。首次成功 `BeginLogin` 时缓存凭据供 subsystem 回放；重试前清掉 EntityManager，stale actor 不会残留在死掉的 net ctx 上。需要把重试交给游戏层（例如未来有 LoginScreen UMG），关掉 `bAutoReconnectEnabled` 即可。
+`UAtlasSubsystem` 断线时按指数退避自动重连（1 s → 2 → 4 → … 上限 30 s）。
+首次成功 `BeginLogin` 时缓存凭据供 subsystem 回放；重试前清掉 EntityManager，
+stale actor 不会残留在死掉的 net ctx 上。需要把重试交给游戏层（例如未来有
+LoginScreen UMG），关掉 `bAutoReconnectEnabled` 即可。
 
 ### M3a / M3c 之后的已知缺口
 
@@ -136,19 +148,49 @@ Owner avatar 走客户端权威：`AAvatarCapsule` 上挂的 `UAtlasPlayerInputC
 | **鼠标 — 按住右键** | 环绕相机（yaw + pitch ±25°/60°），锁定光标 |
 | **鼠标 — 滚轮** | 缩放（0.5×–12×） |
 | **Space** | 朝面向方向发射投射物（命中 10 点伤害） |
+| **Left Shift** | 通过服务端权威 MovementCommand 向前冲刺 |
 
 玩家行走时，相机 yaw 会平滑追上 Avatar 朝向（约 250 ms 阻尼），类似 PUBG。横移（A/D）保持 Avatar 朝前，避免相机跟随环路抖动。
 
 ## 玩法表面
 
-- **Avatar**（青色胶囊）：100 HP，死亡 3 s 后在原点复活。每击杀一个 NPC 获得 +10 gold，每累计 50 gold 提升 1 级。Gold/Level 在 cell 侧（scope=`own_client`，`persistent="true"`），按 delta 复制到 owner 客户端，HUD 显示 `LV` / `GOLD` 行。
+- **Avatar**（青色胶囊）：100 HP，死亡 3 s 后在原点复活。死亡会清除当前
+  active MovementCommand，确保冲刺表现先结束再进入复活流程。每击杀一个 NPC
+  获得 +10 gold，每累计 50 gold 提升 1 级。Gold/Level 在 cell 侧
+  （scope=`own_client`，`persistent="true"`），按 delta 复制到 owner 客户端，
+  HUD 显示 `LV` / `GOLD` 行。
 - **NPC**（灰色胶囊）：世界启动时生成 150 个，散布在 ±100 m 内，以 3 m/s 游荡，每 4 s 重新选点。每 3–7 s 朝面向方向发射投射物。100 HP，不复活，死亡后保持死亡直到集群重启。
 - **Projectile**：不是复制实体。服务端运行确定性的弹道模拟器（重力 12，生命周期 2 s，命中半径 1.5 m）；客户端从发射 RPC 开始本地积分同一条弧线。结束事件（命中 / 落地 / 过期）会携带服务端权威结束位置广播，让命中特效落在实际结算伤害的位置。
 - **HUD**：`LabelOverlay` 把每个实体的名字 + HP 标签投影到屏幕；伤害数字从打击点上浮并淡出。左上角显示 fps / ping / NPC 计数。**F1** 切换右下角 debug 面板：双向带宽（KB/s）、RUDP 发送队列深度、客户端→服务端 RPC 速率、AoI 进入/离开速率，以及 `show AoI` 开关。启用 AoI 调试后，绿色框是进入边界（50 m），黄色框是离开边界（55 m，滞回）。
 
 ## 架构概览
 
-`Bootstrap` 构建运行时场景（地面、光照、相机、根 overlay），调用 `AtlasNetworkManager.Login` → `Authenticate` → 执行 `Account.Base.SelectAvatar(1)` RPC。服务端 `Account.SelectAvatar` 创建玩家 `Avatar`（base + cell 对应体），通过 `GiveClientTo` 绑定客户端。`MvpBootstrap : IAtlasAppInitializer` 在脚本 app init 时把 `MvpSpace` 注册为 space master；space 1 创建时，primary CellApp 会自动生成这个 `CellSpaceEntity`。`MvpSpace.OnSpaceInit` 散布 150 个 NPC，并用 AtlasLoop timer 维护补充循环：存活数 ≤ 150 时启动补充，每 2 秒生成 1 个，到达 250 后停止。每次计数变化时通过 `SpaceData.SetInt32(SpaceId, SpaceDataKeys.NpcCount, n)` 发布到 cellapp 的 SpaceData，cell→client envelope 广播给该 space 内所有客户端的 `SpaceDataManager`。base 侧 `Avatar.OnInit` 设置 50 m AoI 半径，因此客户端会流式接收范围内实体。移动是客户端权威：`PlayerInputController` 每帧写入 `transform.position`，并以 20 Hz 通过 `Avatar.Cell.ReportPos` 上报到 cell。投射物伤害是服务端权威：`LaunchProjectile` 把一次射击注册到每个 space 的 `ProjectileSimulator`，由它在每个 cellapp tick 积分，并广播 `OnProjectileFired` / `OnProjectileEnded` RPC，让 AoI 内所有客户端渲染同步弧线。属性复制（HP、NpcType 等）走常规 delta pump。
+`Bootstrap` 构建运行时场景（地面、光照、相机、根 overlay），调用
+`AtlasNetworkManager.Login` → `Authenticate` → 执行
+`Account.Base.SelectAvatar(1)` RPC。服务端 `Account.SelectAvatar` 创建玩家
+`Avatar`（base + cell 对应体），通过 `GiveClientTo` 绑定客户端。
+`MvpBootstrap : IAtlasAppInitializer` 在脚本 app init 时把 `MvpSpace`
+注册为 space master；space 1 创建时，primary CellApp 会自动生成这个
+`CellSpaceEntity`。`MvpSpace.OnSpaceInit` 散布 150 个 NPC，并用 AtlasLoop
+timer 维护补充循环：存活数 ≤ 150 时启动补充，每 2 秒生成 1 个，到达 250
+后停止。每次计数变化时通过
+`SpaceData.SetInt32(SpaceId, SpaceDataKeys.NpcCount, n)` 发布到 cellapp 的
+SpaceData，cell→client envelope 广播给该 space 内所有客户端的
+`SpaceDataManager`。base 侧 `Avatar.OnInit` 设置 50 m AoI 半径，因此客户端会
+流式接收范围内实体。移动是服务端权威：`PlayerInputController` 把 WASD /
+joystick 采样成 native 输入帧，本地预测，发送当前帧和最近两帧冗余，并在
+`MovementStateAck` 后 replay 未确认输入、上报 correction tier telemetry。
+Left Shift 触发 `Avatar.Dash`，由 cell 脚本写入 server-stamped
+`MovementCommand`，并通过 `MovementCommandStart` / `MovementCommandEnd`
+广播给 owner 和 peer。Dash command 使用 cell 脚本注册的显式 movement curve；
+死亡会调用 `ClearMovementCommand`，让进行中的冲刺通过同一条
+`MovementCommandEnd` 路径带 `cancelled` 结束原因后再复活。Unity / UE 也在
+客户端本地注册同一 curve id，owner prediction 和 remote overlay 都会按它采样；
+当前样本仍是线性。
+投射物伤害是服务端权威：`LaunchProjectile` 把一次射击注册到每个 space 的
+`ProjectileSimulator`，由它在每个 cellapp tick 积分，并广播
+`OnProjectileFired` / `OnProjectileEnded` RPC，让 AoI 内所有客户端渲染同步弧线。
+属性复制（HP、NpcType 等）走常规 delta pump。
 
 ### 组件系统
 
@@ -219,12 +261,18 @@ bin/debug/test_cellappmgr_integration.exe    # 6 个用例（含 multi-cell boot
 
 ## 已知 MVP 简化点
 
-- 移动是客户端权威（没有反作弊）。生产环境需要服务端校验器 + 最大速度检查。
-- NPC AI 是随机游走 + 周期性开火；没有仇恨 / 目标选择。
+- 移动已走服务端权威输入帧、owner replay 和共享 CharacterMotor；Static
+  PhysicsQuery 已覆盖坡面、台阶、depenetration 和大纠正审计。Jolt scene
+  加载与 Unity collision export 仍是 Phase 14 后续项。
+- MVP `Avatar.ReportPos` 已移除；仅压测用 `StressAvatar.ReportPos`
+  保留给 legacy load generation。
+- NPC AI 通过 movement intent 随机游走 + 周期性开火；没有仇恨 / 目标选择。
 - NPC 死亡后按数量补充（≤ 150 触发，每 2 秒 1 个，封顶 250），但死亡实例本身不复活。
 - 登录使用硬编码 username + password hash；LoginApp 的 dev 模式会接受任何符合配置的输入。
 - `ProjectileSimulator` 状态是 per-space 但仍在进程内；没有实现跨 cell 投射物 handoff。
-- Space 拓扑在第一次 `RequestCreateSpace` 时（首个 has_cell 实体创建时）一次性定型。之后注册的 cellapp 不会自动加入已建 Space 的 BSP——这正是 Phase 11 收尾 TODO（`ShouldOffload` 推送或等价 rebalance 调度器）。
+- Space 拓扑在第一次 `RequestCreateSpace` 时（首个 has_cell 实体创建时）
+  一次性定型。之后注册的 cellapp 不会自动加入已建 Space 的 BSP——这正是
+  Phase 11 收尾项（`ShouldOffload` 推送或等价 rebalance 调度器）。
 
 ## 排障
 

@@ -5,15 +5,17 @@
 
 ## 范围
 
-只覆盖 UE 客户端 SDK + codegen + MVP 集成。不覆盖:D2 共享移动仿真、战斗 kernel 下沉、5000 并发压测、Iris/GAS/Mass。详见 [open_questions.md](open_questions.md)。
+只覆盖 UE 客户端 SDK + codegen + MVP 集成。不覆盖:Jolt / KCC 查询、战斗
+kernel 下沉、5000 并发压测、Iris/GAS/Mass。详见
+[open_questions.md](open_questions.md)。
 
 ## 总览
 
 | 阶段 | 工时 | 累计 | 状态 |
 |------|------|------|------|
-| ~~M0 — 端到端贯通~~ | ~~1 周~~ | — | **已完成**(详见 `samples/mvp/README.md` 的 UE client 章节) |
-| ~~M1 — Codegen 上线 + 属性同步~~ | ~~1.5 周~~ | — | **已完成**(`Atlas.Defs.Parser` lib + `Atlas.Tools.CppEmitter` + 通用 `ClientEntity::ApplyDelta` + 端到端 build pipeline) |
-| ~~M2 — 下行 RPC + BP 暴露 + Logic Component~~ | ~~1 周~~ | — | **已完成**(codegen 下行 dispatch + 属性变化虚 hook、`UAtlasAvatarView` BP delegate、Logic Component server+client 全链路) |
+| ~~M0 — 端到端贯通~~ | ~~1 周~~ | — | **已完成** |
+| ~~M1 — Codegen 上线 + 属性同步~~ | ~~1.5 周~~ | — | **已完成** |
+| ~~M2 — 下行 RPC + BP 暴露 + Logic Component~~ | ~~1 周~~ | — | **已完成** |
 | M3 — MVP 功能对齐 | 1 周 | 1 | 部分完成 |
 
 单人投入。M2 全部交付已落地;M3 已接入登录、HUD 基类、SpaceData、Avatar
@@ -26,7 +28,8 @@ view、WASD/Space 输入、generated RPC 与本地 build/launch wrapper。剩余
 
 **已交付**
 - 登录 / 自动登录路径、HUD C++ base、SpaceData/NPC count、Avatar view
-- 客户端权威移动(WASD → `Avatar.ReportPos`)与 Space 触发 RPC
+- 服务端权威 owner movement（WASD → input frame → native predictor / ack replay）
+  与 Space 触发 RPC
 - `tools/run_mvp_ue.py` / `tools/build_mvp_ue.py` 本地 dev loop
 - Unity + UE 双客户端同服互可见路径
 

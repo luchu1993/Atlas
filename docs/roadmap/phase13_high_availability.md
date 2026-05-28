@@ -71,6 +71,20 @@ abnormal-death restart；live fault-injection 已验证 CellAppMgr 重启后
   CellAppMgr birth / death，mgr 重启后断开旧 channel、清空旧 `app_id` 并
   重新注册。同一 pid / 地址的 birth replay 会被忽略，避免重复断连重注册；
   同端口新 pid 仍会触发重连。
+- **mgr generation epoch（脑裂防护）**: CellAppMgr / BaseAppMgr 各自持有
+  `mgr_generation_` 持久计数器，snapshot 中持久化、每次 (re)start 自增；新
+  mgr 严格高于 dead mgr。`RegisterCellAppAck`、`AddCellToSpace`、
+  `RemoveCellFromSpace`、`UpdateGeometry`、`ShouldOffload`、`HealthProbeAck`
+  以及 `RegisterBaseAppAck`、`GlobalBaseNotification`、baseappmgr
+  `HealthProbeAck` 均携带 `mgr_generation`。CellApp / BaseApp 在
+  `RegisterCellAppAck` / `RegisterBaseAppAck` 时记下 `accepted_*_generation`，
+  后续 mgr-control 消息按 channel identity + epoch 两重校验；不匹配任意
+  一项即 drop 并累计 `*_stale_drops` watcher。新增 watcher：
+  `cellappmgr/ha/mgr_generation`、`baseappmgr/ha/mgr_generation`、
+  `cellapp/ha/accepted_cellappmgr_generation`、`cellapp/ha/cellappmgr_stale_drops`、
+  `baseapp/ha/accepted_baseappmgr_generation`、`baseapp/ha/baseappmgr_stale_drops`、
+  `reviver/{slug}/heartbeat_mgr_generation`。partition / reattach 窗口内
+  旧 mgr 残留 in-flight 包不再污染拓扑决策。
 - **restore gate**: reattach pending 期间 CellAppMgr 冻结 LB tick、elastic grow、
   auto split / merge 和 retire drain 拓扑推进；pending `AddCellToSpaceAck` 未完成的
   Space 不再提前移动 BSP 边界。restore 携带的 pending geometry 若目标 CellApp
