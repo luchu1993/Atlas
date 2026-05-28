@@ -38,10 +38,6 @@ position history 都已落地。当前重心是协议边界硬化、验证矩阵
 
 ### 14.3 Unity 导出 MVP（里程碑）
 
-**M6**：`ServerColliderAuthoring` MonoBehaviour（primitive only）。
-- 默认 `exportToServer = false`，显式标记才导出。
-- Scene view gizmo 显示即将导出的 collider。
-
 **M7**：命令行 exporter 端到端。
 - Unity batch mode 把 primitive collider 导出成 v2 asset。
 - 跑通：Unity → exporter → `cook_collision` → CellApp 加载。
