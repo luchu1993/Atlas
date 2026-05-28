@@ -1,6 +1,7 @@
 #include "net_client/client_session.h"
 
 #include <chrono>
+#include <cmath>
 #include <cstring>
 #include <format>
 #include <utility>
@@ -8,6 +9,7 @@
 #include "baseapp/baseapp_messages.h"
 #include "foundation/log.h"
 #include "loginapp/login_messages.h"
+#include "movement_sim/movement_sim.h"
 #include "network/channel.h"
 #include "network/interface_table.h"
 #include "network/reliable_udp.h"
@@ -49,7 +51,8 @@ auto MapLoginStatus(::atlas::login::LoginStatus status) -> AtlasLoginStatus {
 }
 
 auto FormatHostOnly(const Address& addr) -> std::string {
-  const auto* bytes = reinterpret_cast<const uint8_t*>(&addr);
+  const uint32_t ip = addr.Ip();
+  const auto* bytes = reinterpret_cast<const uint8_t*>(&ip);
   return std::format("{}.{}.{}.{}", bytes[0], bytes[1], bytes[2], bytes[3]);
 }
 
@@ -89,6 +92,7 @@ auto ClientSession::StartLogin(std::string_view loginapp_host, uint16_t loginapp
     return ATLAS_NET_ERR_NOCONN;
   }
   loginapp_channel_ = *ch_result;
+  ApplyTransportImpairment(loginapp_channel_);
 
   auto reg = network_.InterfaceTable().RegisterTypedHandler<::atlas::login::LoginResult>(
       [this](const Address&, Channel*, const ::atlas::login::LoginResult& msg) {
@@ -183,6 +187,7 @@ auto ClientSession::StartAuthenticate(AtlasAuthResultFn callback, void* user_dat
     return ATLAS_NET_ERR_NOCONN;
   }
   baseapp_channel_ = *ch_result;
+  ApplyTransportImpairment(baseapp_channel_);
 
   auto reg = network_.InterfaceTable().RegisterTypedHandler<::atlas::baseapp::AuthenticateResult>(
       [this](const Address&, Channel*, const ::atlas::baseapp::AuthenticateResult& msg) {
@@ -261,7 +266,7 @@ void ClientSession::CancelAuthTimeout() {
 }
 
 void ClientSession::InstallDefaultHandler() {
-  // Typed handlers for fixed-length BaseApp→Client msgs; the default handler's
+  // Typed handlers for fixed-length BaseApp-to-client msgs; the default handler's
   // packed-int fallback would misparse the first body byte as a length prefix.
   (void)network_.InterfaceTable().RegisterTypedHandler<::atlas::baseapp::EntityTransferred>(
       [this](const Address&, Channel*, const ::atlas::baseapp::EntityTransferred& msg) {
@@ -280,6 +285,42 @@ void ClientSession::InstallDefaultHandler() {
         callbacks_.on_deliver(reinterpret_cast<AtlasNetContext*>(this),
                               static_cast<uint16_t>(msg_id::Id(msg_id::BaseApp::kCellReady)), body,
                               static_cast<int32_t>(sizeof(body)));
+      });
+  (void)network_.InterfaceTable().RegisterTypedHandler<::atlas::baseapp::MovementStateAckToClient>(
+      [this](const Address&, Channel*, const ::atlas::baseapp::MovementStateAckToClient& msg) {
+        BinaryWriter writer(::atlas::baseapp::MovementStateAckToClient::Descriptor().fixed_length);
+        msg.Serialize(writer);
+        auto data = writer.Data();
+        callbacks_.on_deliver(reinterpret_cast<AtlasNetContext*>(this),
+                              ::atlas::baseapp::kClientMovementStateAckMessageId,
+                              reinterpret_cast<const uint8_t*>(data.data()),
+                              static_cast<int32_t>(data.size()));
+      });
+  (void)network_.InterfaceTable().RegisterTypedHandler<
+      ::atlas::baseapp::MovementCommandStartToClient>(
+      [this](const Address&, Channel*,
+             const ::atlas::baseapp::MovementCommandStartToClient& msg) {
+        BinaryWriter writer(
+            ::atlas::baseapp::MovementCommandStartToClient::Descriptor().fixed_length);
+        msg.Serialize(writer);
+        auto data = writer.Data();
+        callbacks_.on_deliver(reinterpret_cast<AtlasNetContext*>(this),
+                              ::atlas::baseapp::kClientMovementCommandStartMessageId,
+                              reinterpret_cast<const uint8_t*>(data.data()),
+                              static_cast<int32_t>(data.size()));
+      });
+  (void)network_.InterfaceTable().RegisterTypedHandler<
+      ::atlas::baseapp::MovementCommandEndToClient>(
+      [this](const Address&, Channel*,
+             const ::atlas::baseapp::MovementCommandEndToClient& msg) {
+        BinaryWriter writer(
+            ::atlas::baseapp::MovementCommandEndToClient::Descriptor().fixed_length);
+        msg.Serialize(writer);
+        auto data = writer.Data();
+        callbacks_.on_deliver(reinterpret_cast<AtlasNetContext*>(this),
+                              ::atlas::baseapp::kClientMovementCommandEndMessageId,
+                              reinterpret_cast<const uint8_t*>(data.data()),
+                              static_cast<int32_t>(data.size()));
       });
 
   network_.InterfaceTable().SetDefaultHandler(
@@ -326,6 +367,20 @@ auto ClientSession::Disconnect(AtlasDisconnectReason reason) -> int32_t {
   return ATLAS_NET_OK;
 }
 
+auto ClientSession::SetTransportImpairment(uint32_t one_way_latency_ms, uint32_t loss_permyriad,
+                                           uint32_t seed) -> int32_t {
+  if (loss_permyriad > 10'000) {
+    last_error_ = "AtlasNetSetTransportImpairment: loss_permyriad must be <= 10000";
+    return ATLAS_NET_ERR_INVAL;
+  }
+  transport_impairment_latency_ms_ = one_way_latency_ms;
+  transport_impairment_loss_permyriad_ = loss_permyriad;
+  transport_impairment_seed_ = seed != 0 ? seed : 1u;
+  ApplyTransportImpairment(loginapp_channel_);
+  ApplyTransportImpairment(baseapp_channel_);
+  return ATLAS_NET_OK;
+}
+
 auto ClientSession::SendBaseRpc(uint32_t /*entity_id*/, uint32_t rpc_id, const uint8_t* payload,
                                 int32_t len) -> int32_t {
   if (state_ != ATLAS_NET_STATE_CONNECTED || !baseapp_channel_) {
@@ -359,6 +414,76 @@ auto ClientSession::SendCellRpc(uint32_t entity_id, uint32_t rpc_id, const uint8
   return ATLAS_NET_OK;
 }
 
+auto ClientSession::SendMovementInput(uint32_t target_entity_id,
+                                      const AtlasMovementInputFrame* frames,
+                                      int32_t frame_count) -> int32_t {
+  if (state_ != ATLAS_NET_STATE_CONNECTED || !baseapp_channel_) {
+    last_error_ = "AtlasNetSendMovementInput requires Connected state";
+    return ATLAS_NET_ERR_NOCONN;
+  }
+  if (target_entity_id == kInvalidEntityID || frames == nullptr || frame_count <= 0 ||
+      frame_count > static_cast<int32_t>(movement::kMaxMovementInputFrames)) {
+    last_error_ = "AtlasNetSendMovementInput: invalid args";
+    return ATLAS_NET_ERR_INVAL;
+  }
+
+  ::atlas::baseapp::ClientMovementInput msg;
+  msg.target_entity_id = target_entity_id;
+  msg.frames.reserve(static_cast<std::size_t>(frame_count));
+  for (int32_t i = 0; i < frame_count; ++i) {
+    movement::InputFrame frame;
+    frame.seq = frames[i].seq;
+    frame.input_tick = frames[i].input_tick;
+    frame.move_x = frames[i].move_x;
+    frame.move_z = frames[i].move_z;
+    frame.view_yaw = frames[i].view_yaw;
+    frame.view_pitch = frames[i].view_pitch;
+    frame.buttons = frames[i].buttons;
+    frame.client_dt_ms = frames[i].client_dt_ms;
+    if (!movement::IsInputFrameValid(frame)) {
+      last_error_ = "AtlasNetSendMovementInput: invalid input frame";
+      return ATLAS_NET_ERR_INVAL;
+    }
+    msg.frames.push_back(frame);
+  }
+  if (auto result = baseapp_channel_->SendMessage(msg); !result) {
+    last_error_ = std::format("AtlasNetSendMovementInput failed: {}", result.Error().Message());
+    return ATLAS_NET_ERR_NOCONN;
+  }
+  return ATLAS_NET_OK;
+}
+
+auto ClientSession::SendMovementCorrectionReport(uint32_t target_entity_id,
+                                                 uint32_t acked_input_seq,
+                                                 uint32_t server_tick,
+                                                 float distance_m,
+                                                 uint16_t correction_flags) -> int32_t {
+  if (state_ != ATLAS_NET_STATE_CONNECTED || !baseapp_channel_) {
+    last_error_ = "AtlasNetSendMovementCorrectionReport requires Connected state";
+    return ATLAS_NET_ERR_NOCONN;
+  }
+  const uint16_t valid_flags = movement::kCorrectionFlagTier1 |
+      movement::kCorrectionFlagTier2 | movement::kCorrectionFlagSnap;
+  if (target_entity_id == kInvalidEntityID || !std::isfinite(distance_m) ||
+      distance_m < 0.0f || (correction_flags & ~valid_flags) != 0) {
+    last_error_ = "AtlasNetSendMovementCorrectionReport: invalid args";
+    return ATLAS_NET_ERR_INVAL;
+  }
+
+  ::atlas::baseapp::MovementCorrectionReport msg;
+  msg.target_entity_id = target_entity_id;
+  msg.acked_input_seq = acked_input_seq;
+  msg.server_tick = server_tick;
+  msg.distance_m = distance_m;
+  msg.correction_flags = correction_flags;
+  if (auto result = baseapp_channel_->SendMessage(msg); !result) {
+    last_error_ =
+        std::format("AtlasNetSendMovementCorrectionReport failed: {}", result.Error().Message());
+    return ATLAS_NET_ERR_NOCONN;
+  }
+  return ATLAS_NET_OK;
+}
+
 auto ClientSession::SetCallbacks(const AtlasNetCallbacks& cb) -> int32_t {
   callbacks_ = cb;
 
@@ -373,9 +498,8 @@ auto ClientSession::SetCallbacks(const AtlasNetCallbacks& cb) -> int32_t {
 auto ClientSession::FillStats(AtlasNetStats* out) const -> int32_t {
   if (!out) return ATLAS_NET_ERR_INVAL;
   std::memset(out, 0, sizeof(*out));
-  // Only read channel state when the session is live. A long Editor pause
-  // can leave the channel pointer dangling after the dispatcher's resume-pump
-  // reaps the timed-out RUDP — accessing it crashes inside dynamic_cast.
+  // Only read channel state while live; after a long Editor pause, the
+  // dispatcher may reap timed-out RUDP before stats code sees the pointer.
   if (state_ != ATLAS_NET_STATE_CONNECTED && state_ != ATLAS_NET_STATE_AUTHENTICATING &&
       state_ != ATLAS_NET_STATE_LOGGING_IN && state_ != ATLAS_NET_STATE_LOGIN_SUCCEEDED) {
     return ATLAS_NET_OK;
@@ -419,6 +543,14 @@ void ClientSession::CloseBaseAppChannel() {
 void ClientSession::ClearSessionKey() {
   SecureZero(session_key_.data(), session_key_.size());
   baseapp_addr_ = Address{};
+}
+
+void ClientSession::ApplyTransportImpairment(Channel* channel) const {
+  if (auto* rudp = dynamic_cast<ReliableUdpChannel*>(channel)) {
+    rudp->SetTransportImpairment(transport_impairment_latency_ms_,
+                                 transport_impairment_loss_permyriad_,
+                                 transport_impairment_seed_);
+  }
 }
 
 }  // namespace atlas::net_client

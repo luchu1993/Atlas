@@ -5,6 +5,7 @@
 #include <cmath>
 #include <cstring>
 #include <format>
+#include <utility>
 
 #include "foundation/log.h"
 #include "network/event_dispatcher.h"
@@ -19,6 +20,12 @@ ReliableUdpChannel::ReliableUdpChannel(EventDispatcher& dispatcher, InterfaceTab
 
 ReliableUdpChannel::~ReliableUdpChannel() {
   CancelDelayedAck();
+  if (inbound_impairment_timer_.IsValid()) {
+    dispatcher_.CancelTimer(inbound_impairment_timer_);
+  }
+  if (outbound_impairment_timer_.IsValid()) {
+    dispatcher_.CancelTimer(outbound_impairment_timer_);
+  }
   StopResendTimer();
 }
 
@@ -27,6 +34,16 @@ auto ReliableUdpChannel::EffectiveWindow() const -> uint32_t {
     return send_window_;
   }
   return std::min(send_window_, cwnd_);
+}
+
+void ReliableUdpChannel::SetTransportImpairment(uint32_t one_way_latency_ms,
+                                                uint32_t loss_permyriad,
+                                                uint32_t seed) {
+  transport_impairment_latency_ = Milliseconds(one_way_latency_ms);
+  transport_impairment_loss_permyriad_ = std::min(loss_permyriad, kLossPermyriadDenominator);
+  inbound_impairment_rng_ = seed != 0 ? seed : 1u;
+  outbound_impairment_rng_ = inbound_impairment_rng_ ^ 0x9E3779B9u;
+  if (outbound_impairment_rng_ == 0) outbound_impairment_rng_ = 0xA341316Cu;
 }
 
 auto ReliableUdpChannel::SendReliable() -> Result<void> {
@@ -136,7 +153,7 @@ auto ReliableUdpChannel::SendBundleReliable(class Bundle& b) -> Result<void> {
   auto& slot = unacked_[seq];
   slot = UnackedPacket{std::move(packet), now, now, 1};
 
-  auto result = shared_socket_.SendTo(slot.data, remote_);
+  auto result = SendWireDatagram(slot.data);
   if (!result) {
     unacked_.erase(seq);
     next_send_seq_ = seq;
@@ -174,7 +191,7 @@ auto ReliableUdpChannel::SendBundleUnreliable(class Bundle& b) -> Result<void> {
   CancelDelayedAck();
   auto packet = BuildPacket(flags, 0, std::span<const std::byte>(payload.data(), payload.size()));
 
-  auto result = shared_socket_.SendTo(packet, remote_);
+  auto result = SendWireDatagram(packet);
   if (!result) {
     return result.Error();
   }
@@ -207,7 +224,7 @@ auto ReliableUdpChannel::DoSend(std::span<const std::byte> data) -> Result<size_
   auto& slot = unacked_[seq];
   slot = UnackedPacket{std::move(packet), now, now, 1};
 
-  auto result = shared_socket_.SendTo(slot.data, remote_);
+  auto result = SendWireDatagram(slot.data);
   if (!result) {
     unacked_.erase(seq);
     next_send_seq_ = seq;
@@ -220,6 +237,16 @@ auto ReliableUdpChannel::DoSend(std::span<const std::byte> data) -> Result<size_
 
 void ReliableUdpChannel::OnCondemned() {
   CancelDelayedAck();
+  if (inbound_impairment_timer_.IsValid()) {
+    dispatcher_.CancelTimer(inbound_impairment_timer_);
+    inbound_impairment_timer_ = TimerHandle{};
+  }
+  if (outbound_impairment_timer_.IsValid()) {
+    dispatcher_.CancelTimer(outbound_impairment_timer_);
+    outbound_impairment_timer_ = TimerHandle{};
+  }
+  delayed_inbound_.clear();
+  delayed_outbound_.clear();
   rcv_buf_.clear();
   pending_fragments_.clear();
   ack_pending_ = false;
@@ -276,8 +303,6 @@ void ReliableUdpChannel::OnDatagramReceived(std::span<const std::byte> data,
     return;
   }
 
-  ResetInactivityTimer();
-
   if (drop_duration_ms_ > 0) {
     const auto elapsed_ms =
         std::chrono::duration_cast<std::chrono::milliseconds>(Clock::now() - drop_origin_).count();
@@ -286,6 +311,113 @@ void ReliableUdpChannel::OnDatagramReceived(std::span<const std::byte> data,
       return;
     }
   }
+
+  if (ShouldDropImpairedDatagram(inbound_impairment_rng_)) {
+    return;
+  }
+  if (transport_impairment_latency_ > Duration{}) {
+    ResetInactivityTimer();
+    QueueInboundDatagram(data);
+    return;
+  }
+
+  ProcessDatagramNow(data, flush_deadline);
+}
+
+auto ReliableUdpChannel::SendWireDatagram(std::span<const std::byte> data)
+    -> Result<std::size_t> {
+  if (ShouldDropImpairedDatagram(outbound_impairment_rng_)) {
+    return data.size();
+  }
+  if (transport_impairment_latency_ > Duration{}) {
+    QueueOutboundDatagram(data);
+    return data.size();
+  }
+  return shared_socket_.SendTo(data, remote_);
+}
+
+auto ReliableUdpChannel::ShouldDropImpairedDatagram(uint32_t& rng_state) -> bool {
+  if (transport_impairment_loss_permyriad_ == 0) return false;
+  if (transport_impairment_loss_permyriad_ >= kLossPermyriadDenominator) return true;
+  uint32_t x = rng_state != 0 ? rng_state : 1u;
+  x ^= x << 13;
+  x ^= x >> 17;
+  x ^= x << 5;
+  rng_state = x;
+  return (x % kLossPermyriadDenominator) < transport_impairment_loss_permyriad_;
+}
+
+void ReliableUdpChannel::QueueInboundDatagram(std::span<const std::byte> data) {
+  if (delayed_inbound_.size() >= kMaxImpairedDatagrams) return;
+  delayed_inbound_.push_back(
+      ImpairedDatagram{Clock::now() + transport_impairment_latency_,
+                       std::vector<std::byte>(data.begin(), data.end())});
+  ScheduleInboundImpairmentTimer();
+}
+
+void ReliableUdpChannel::QueueOutboundDatagram(std::span<const std::byte> data) {
+  if (delayed_outbound_.size() >= kMaxImpairedDatagrams) return;
+  delayed_outbound_.push_back(
+      ImpairedDatagram{Clock::now() + transport_impairment_latency_,
+                       std::vector<std::byte>(data.begin(), data.end())});
+  ScheduleOutboundImpairmentTimer();
+}
+
+void ReliableUdpChannel::ScheduleInboundImpairmentTimer() {
+  if (inbound_impairment_timer_.IsValid() || delayed_inbound_.empty()) return;
+  auto delay = delayed_inbound_.front().delivery_time - Clock::now();
+  if (delay < Duration{}) delay = Duration{};
+  inbound_impairment_timer_ = dispatcher_.AddTimer(delay, [this](TimerHandle) {
+    inbound_impairment_timer_ = TimerHandle{};
+    FlushDelayedInbound();
+    ScheduleInboundImpairmentTimer();
+  });
+}
+
+void ReliableUdpChannel::ScheduleOutboundImpairmentTimer() {
+  if (outbound_impairment_timer_.IsValid() || delayed_outbound_.empty()) return;
+  auto delay = delayed_outbound_.front().delivery_time - Clock::now();
+  if (delay < Duration{}) delay = Duration{};
+  outbound_impairment_timer_ = dispatcher_.AddTimer(delay, [this](TimerHandle) {
+    outbound_impairment_timer_ = TimerHandle{};
+    FlushDelayedOutbound();
+    ScheduleOutboundImpairmentTimer();
+  });
+}
+
+void ReliableUdpChannel::FlushDelayedInbound() {
+  const auto deadline = Clock::now() + kDelayedImpairmentFlushBudget;
+  while (!delayed_inbound_.empty()) {
+    const auto now = Clock::now();
+    if (delayed_inbound_.front().delivery_time > now || now >= deadline) return;
+    auto data = std::move(delayed_inbound_.front().data);
+    delayed_inbound_.pop_front();
+    ProcessDatagramNow(data, deadline);
+  }
+}
+
+void ReliableUdpChannel::FlushDelayedOutbound() {
+  const auto deadline = Clock::now() + kDelayedImpairmentFlushBudget;
+  while (!delayed_outbound_.empty()) {
+    const auto now = Clock::now();
+    if (delayed_outbound_.front().delivery_time > now || now >= deadline) return;
+    auto data = std::move(delayed_outbound_.front().data);
+    delayed_outbound_.pop_front();
+    auto result = shared_socket_.SendTo(data, remote_);
+    if (!result) {
+      ATLAS_LOG_DEBUG("RUDP delayed send failed to {}: {}", remote_.ToString(),
+                      result.Error().Message());
+    }
+  }
+}
+
+void ReliableUdpChannel::ProcessDatagramNow(std::span<const std::byte> data,
+                                            TimePoint flush_deadline) {
+  if (data.empty()) {
+    return;
+  }
+
+  ResetInactivityTimer();
 
   BinaryReader reader(data);
 
@@ -472,7 +604,7 @@ void ReliableUdpChannel::ProcessAck(SeqNum ack_num, uint32_t ack_bits) {
 
       if (pkt.skip_count >= fast_resend_thresh_) {
         auto fresh_pkt = RebuildPacketHeader(pkt.data);
-        auto result = shared_socket_.SendTo(fresh_pkt, remote_);
+        auto result = SendWireDatagram(fresh_pkt);
         if (result) {
           bytes_sent_ += *result;
         }
@@ -609,7 +741,7 @@ auto ReliableUdpChannel::SendFragmented(std::span<const std::byte> payload) -> R
     auto& slot = unacked_[seq];
     slot = UnackedPacket{std::move(packet), now, now, 1};
 
-    auto result = shared_socket_.SendTo(slot.data, remote_);
+    auto result = SendWireDatagram(slot.data);
     if (!result) {
       for (auto s = rollback_seq; s != next_send_seq_; ++s) unacked_.erase(s);
       next_send_seq_ = rollback_seq;
@@ -697,7 +829,7 @@ void ReliableUdpChannel::SendAck() {
   uint8_t flags = rudp::kFlagHasAck;
   auto packet = BuildPacket(flags, 0, std::span<const std::byte>{});
 
-  auto result = shared_socket_.SendTo(packet, remote_);
+  auto result = SendWireDatagram(packet);
   if (result) {
     bytes_sent_ += *result;
   } else {
@@ -804,7 +936,7 @@ void ReliableUdpChannel::CheckResends() {
 
     if (now - pkt.sent_at >= backoff) {
       auto fresh_pkt = RebuildPacketHeader(pkt.data);
-      auto result = shared_socket_.SendTo(fresh_pkt, remote_);
+      auto result = SendWireDatagram(fresh_pkt);
       if (result) {
         bytes_sent_ += *result;
       }

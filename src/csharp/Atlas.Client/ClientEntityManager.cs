@@ -94,8 +94,18 @@ public sealed class ClientEntityManager
 
     public IEnumerable<ClientEntity> Entities => _entities.Values;
 
-    // Drives AvatarFilter latency convergence. Hosts (Desktop loop / Unity Update)
-    // call once per frame; peers with no samples short-circuit inside the filter.
+    // Drives per-frame client state. Hosts call once per frame through ClientSession.Tick.
+    public void Tick(float dt)
+    {
+        foreach (var entity in _entities.Values)
+        {
+            if (entity.IsCorrupted) continue;
+            entity.UpdateInterpolation(dt);
+            entity.TickAllComponents(dt);
+        }
+    }
+
+    // Kept for direct filter probes that do not want client-local component ticks.
     public void TickInterpolation(float dt)
     {
         foreach (var entity in _entities.Values)
@@ -149,12 +159,29 @@ public sealed class ClientEntityManager
 
     public void OnLeave(uint entityId) => Destroy(entityId);
 
-    public void ApplyPosition(uint entityId, double serverTime, Vector3 pos, Vector3 dir, bool onGround)
+    public void ApplyPosition(uint entityId, double serverTime, Vector3 pos, Vector3 dir,
+                              bool onGround)
     {
         if (!_entities.TryGetValue(entityId, out var entity)) return;
         if (entity.IsCorrupted) return;
         try { entity.ApplyPositionUpdate(serverTime, pos, dir, onGround); }
         catch (Exception ex) { MarkCorrupted(entity, "ApplyPositionUpdate", ex); }
+    }
+
+    public void ApplyMovementCommandStart(MovementCommandStart start)
+    {
+        if (!_entities.TryGetValue(start.EntityId, out var entity)) return;
+        if (entity.IsCorrupted || entity.IsOwner) return;
+        try { entity.ApplyMovementCommandStart(start); }
+        catch (Exception ex) { MarkCorrupted(entity, "ApplyMovementCommandStart", ex); }
+    }
+
+    public void ApplyMovementCommandEnd(MovementCommandEnd end)
+    {
+        if (!_entities.TryGetValue(end.EntityId, out var entity)) return;
+        if (entity.IsCorrupted || entity.IsOwner) return;
+        try { entity.ApplyMovementCommandEnd(end); }
+        catch (Exception ex) { MarkCorrupted(entity, "ApplyMovementCommandEnd", ex); }
     }
 
     public void ApplyPropertyDelta(uint entityId, ulong eventSeq, ReadOnlySpan<byte> delta)
@@ -189,6 +216,7 @@ public sealed class ClientEntityManager
     {
         entity.IsDestroyed = true;
         entity.OnDestroy();
+        entity.DetachAllComponents();
         entity.Session = null;
     }
 }

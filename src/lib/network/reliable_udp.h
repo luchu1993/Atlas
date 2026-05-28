@@ -3,6 +3,7 @@
 
 #include <algorithm>
 #include <cstdint>
+#include <deque>
 #include <map>
 #include <unordered_map>
 #include <vector>
@@ -77,6 +78,9 @@ class ReliableUdpChannel : public Channel {
     drop_duration_ms_ = duration_ms;
   }
 
+  void SetTransportImpairment(uint32_t one_way_latency_ms, uint32_t loss_permyriad,
+                              uint32_t seed);
+
   void SetNodelay(bool enable) { rtt_.SetNodelay(enable); }
   [[nodiscard]] auto Nodelay() const -> bool { return rtt_.Nodelay(); }
 
@@ -145,10 +149,26 @@ class ReliableUdpChannel : public Channel {
     TimePoint first_received;
   };
 
+  struct ImpairedDatagram {
+    TimePoint delivery_time;
+    std::vector<std::byte> data;
+  };
+
   auto BuildPacket(uint8_t flags, SeqNum seq, std::span<const std::byte> payload,
                    const FragmentHeader* frag = nullptr) -> std::vector<std::byte>;
 
   auto RebuildPacketHeader(const std::vector<std::byte>& original_packet) -> std::vector<std::byte>;
+
+  [[nodiscard]] auto SendWireDatagram(std::span<const std::byte> data) -> Result<std::size_t>;
+  [[nodiscard]] auto ShouldDropImpairedDatagram(uint32_t& rng_state) -> bool;
+  void QueueInboundDatagram(std::span<const std::byte> data);
+  void QueueOutboundDatagram(std::span<const std::byte> data);
+  void ScheduleInboundImpairmentTimer();
+  void ScheduleOutboundImpairmentTimer();
+  void FlushDelayedInbound();
+  void FlushDelayedOutbound();
+  void ProcessDatagramNow(std::span<const std::byte> data,
+                          TimePoint flush_deadline = TimePoint::max());
 
   auto ProcessUna(SeqNum una) -> uint32_t;
   void ProcessAck(SeqNum ack_num, uint32_t ack_bits);
@@ -234,6 +254,18 @@ class ReliableUdpChannel : public Channel {
   TimePoint drop_origin_{};
   uint32_t drop_start_ms_{0};
   uint32_t drop_duration_ms_{0};
+
+  Duration transport_impairment_latency_{};
+  uint32_t transport_impairment_loss_permyriad_{0};
+  uint32_t inbound_impairment_rng_{1};
+  uint32_t outbound_impairment_rng_{0x9E3779B9u};
+  std::deque<ImpairedDatagram> delayed_inbound_;
+  std::deque<ImpairedDatagram> delayed_outbound_;
+  TimerHandle inbound_impairment_timer_;
+  TimerHandle outbound_impairment_timer_;
+  static constexpr uint32_t kLossPermyriadDenominator = 10'000;
+  static constexpr std::size_t kMaxImpairedDatagrams = 4096;
+  static constexpr Duration kDelayedImpairmentFlushBudget = std::chrono::milliseconds(10);
 };
 
 }  // namespace atlas

@@ -1,6 +1,7 @@
 using System;
 using Atlas.DataTypes;
 using Atlas.Serialization;
+using Atlas.Shared.Protocol;
 
 namespace Atlas.Client;
 

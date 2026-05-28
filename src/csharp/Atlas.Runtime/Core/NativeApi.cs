@@ -1,10 +1,11 @@
 using System;
 using System.Runtime.InteropServices;
 using Atlas.DataTypes;
+using Atlas.Entity;
 
 namespace Atlas.Core;
 
-// Broadcast scope for cell-side server→client RPCs. Mirrors atlas::RpcTarget
+// Broadcast scope for cell-side server-to-client RPCs. Mirrors atlas::RpcTarget
 // on the C++ side; BaseApp only supports Owner (no AoI graph).
 public enum RpcTarget : byte
 {
@@ -190,7 +191,7 @@ internal static unsafe partial class NativeApi
         float posX, float posY, float posZ, float dirX, float dirY, float dirZ,
         [MarshalAs(UnmanagedType.U1)] bool onGround);
 
-    // Base → CellApp route; true means message dispatched (id is async).
+    // Base to CellApp route; true means message dispatched (id is async).
     public static bool RequestSpawnCellOnly(ushort typeId, uint spaceId,
         Vector3 position, Vector3 direction, bool onGround)
     {
@@ -210,10 +211,14 @@ internal static unsafe partial class NativeApi
     }
 
     [LibraryImport(LibName, EntryPoint = "AtlasSetSpaceData")]
-    private static partial void SetSpaceDataNative(uint spaceId, ushort keyId, byte* value, int len);
+    private static partial void SetSpaceDataNative(
+        uint spaceId, ushort keyId, byte* value, int len);
 
     [LibraryImport(LibName, EntryPoint = "AtlasRemoveSpaceData")]
     private static partial void RemoveSpaceDataNative(uint spaceId, ushort keyId);
+
+    [LibraryImport(LibName, EntryPoint = "AtlasLoadCollisionAsset")]
+    private static partial byte LoadCollisionAssetNative(uint spaceId, byte* path, int len);
 
     [LibraryImport(LibName, EntryPoint = "AtlasGetEntitySpaceId")]
     private static partial uint GetEntitySpaceIdNative(uint entityId);
@@ -226,7 +231,8 @@ internal static unsafe partial class NativeApi
     [LibraryImport(LibName, EntryPoint = "AtlasCancelController")]
     private static partial void CancelControllerNative(uint entityId, int controllerId);
 
-    /// <summary>Per-entity timer; state migrates with the entity on offload. Returns 0 on failure.</summary>
+    // Per-entity timer; state migrates with the entity on offload.
+    // Returns 0 on failure.
     public static int AddTimerController(uint entityId, float intervalSeconds, bool repeat,
                                          int userArg)
     {
@@ -247,7 +253,8 @@ internal static unsafe partial class NativeApi
         return GetEntitySpaceIdNative(entityId);
     }
 
-    /// <summary>Owner-authoritative SpaceData write — fans out to peer cellapps and local witnesses.</summary>
+    // Owner-authoritative SpaceData write; fans out to peer cellapps and
+    // local witnesses.
     public static void SetSpaceData(uint spaceId, ushort keyId, ReadOnlySpan<byte> value)
     {
         ThreadGuard.EnsureMainThread();
@@ -259,6 +266,17 @@ internal static unsafe partial class NativeApi
     {
         ThreadGuard.EnsureMainThread();
         RemoveSpaceDataNative(spaceId, keyId);
+    }
+
+    public static bool LoadCollisionAsset(uint spaceId, string path)
+    {
+        ThreadGuard.EnsureMainThread();
+        if (string.IsNullOrEmpty(path)) return false;
+        var bytes = System.Text.Encoding.UTF8.GetBytes(path);
+        fixed (byte* p = bytes)
+        {
+            return LoadCollisionAssetNative(spaceId, p, bytes.Length) != 0;
+        }
     }
 
     [LibraryImport(LibName, EntryPoint = "AtlasSetNativeCallbacks")]
@@ -289,11 +307,112 @@ internal static unsafe partial class NativeApi
         SetEntityDirectionNative(entityId, direction.X, direction.Y, direction.Z);
     }
 
+    [LibraryImport(LibName, EntryPoint = "AtlasSetEntityOnGround")]
+    private static partial void SetEntityOnGroundNative(
+        uint entityId, [MarshalAs(UnmanagedType.U1)] bool onGround);
+
+    public static void SetEntityOnGround(uint entityId, bool onGround)
+    {
+        ThreadGuard.EnsureMainThread();
+        SetEntityOnGroundNative(entityId, onGround);
+    }
+
+    [LibraryImport(LibName, EntryPoint = "AtlasSetMovementIntent")]
+    private static partial void SetMovementIntentNative(uint entityId, float dirX, float dirZ,
+        float speedMps, ushort buttons);
+
+    public static void SetMovementIntent(uint entityId, float dirX, float dirZ,
+        float speedMps, ushort buttons)
+    {
+        ThreadGuard.EnsureMainThread();
+        SetMovementIntentNative(entityId, dirX, dirZ, speedMps, buttons);
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct NativeMovementCommand
+    {
+        public uint CommandId;
+        public ushort SkillId;
+        public byte Type;
+        public float StartX;
+        public float StartY;
+        public float StartZ;
+        public float TargetX;
+        public float TargetY;
+        public float TargetZ;
+        public ushort DurationMs;
+        public ushort ElapsedMs;
+        public ushort CurveId;
+        public byte InputPolicy;
+        public byte CollisionPolicy;
+        public byte Priority;
+        public uint ServerTick;
+
+        public NativeMovementCommand(MovementCommand command)
+        {
+            CommandId = command.CommandId;
+            SkillId = command.SkillId;
+            Type = (byte)command.Type;
+            StartX = command.StartPosition.X;
+            StartY = command.StartPosition.Y;
+            StartZ = command.StartPosition.Z;
+            TargetX = command.TargetPosition.X;
+            TargetY = command.TargetPosition.Y;
+            TargetZ = command.TargetPosition.Z;
+            DurationMs = command.DurationMs;
+            ElapsedMs = command.ElapsedMs;
+            CurveId = command.CurveId;
+            InputPolicy = (byte)command.InputPolicy;
+            CollisionPolicy = (byte)command.CollisionPolicy;
+            Priority = command.Priority;
+            ServerTick = command.ServerTick;
+        }
+    }
+
+    [LibraryImport(LibName, EntryPoint = "AtlasSetMovementCommand")]
+    private static partial byte SetMovementCommandNative(
+        uint entityId, NativeMovementCommand* command);
+
+    public static bool SetMovementCommand(uint entityId, MovementCommand command)
+    {
+        ThreadGuard.EnsureMainThread();
+        var nativeCommand = new NativeMovementCommand(command);
+        return SetMovementCommandNative(entityId, &nativeCommand) != 0;
+    }
+
+    [LibraryImport(LibName, EntryPoint = "AtlasClearMovementCommand")]
+    private static partial byte ClearMovementCommandNative(uint entityId, uint commandId);
+
+    public static bool ClearMovementCommand(uint entityId, uint commandId = 0)
+    {
+        ThreadGuard.EnsureMainThread();
+        return ClearMovementCommandNative(entityId, commandId) != 0;
+    }
+
+    [LibraryImport(LibName, EntryPoint = "AtlasSetMovementCurve")]
+    private static partial byte SetMovementCurveNative(
+        ushort curveId, float* samples, int sampleCount);
+
+    public static bool SetMovementCurve(ushort curveId, ReadOnlySpan<float> samples)
+    {
+        ThreadGuard.EnsureMainThread();
+        fixed (float* samplePtr = samples)
+        {
+            return SetMovementCurveNative(curveId, samplePtr, samples.Length) != 0;
+        }
+    }
+
     [LibraryImport(LibName, EntryPoint = "AtlasGetEntityPosition")]
-    private static partial void GetEntityPositionNative(uint entityId, float* x, float* y, float* z);
+    private static partial void GetEntityPositionNative(
+        uint entityId, float* x, float* y, float* z);
 
     [LibraryImport(LibName, EntryPoint = "AtlasGetEntityDirection")]
-    private static partial void GetEntityDirectionNative(uint entityId, float* x, float* y, float* z);
+    private static partial void GetEntityDirectionNative(
+        uint entityId, float* x, float* y, float* z);
+
+    [LibraryImport(LibName, EntryPoint = "AtlasGetEntityOnGround")]
+    [return: MarshalAs(UnmanagedType.U1)]
+    private static partial bool GetEntityOnGroundNative(uint entityId);
 
     public static Vector3 GetEntityPosition(uint entityId)
     {
@@ -309,6 +428,45 @@ internal static unsafe partial class NativeApi
         float x = 0, y = 0, z = 0;
         GetEntityDirectionNative(entityId, &x, &y, &z);
         return new Vector3(x, y, z);
+    }
+
+    public static bool GetEntityOnGround(uint entityId)
+    {
+        ThreadGuard.EnsureMainThread();
+        return GetEntityOnGroundNative(entityId);
+    }
+
+    [LibraryImport(LibName, EntryPoint = "AtlasTryGetMovementHistorySample")]
+    private static partial byte TryGetMovementHistorySampleNative(
+        uint entityId, uint serverTick, uint* outServerTick,
+        float* outPx, float* outPy, float* outPz,
+        float* outVx, float* outVy, float* outVz,
+        float* outDx, float* outDy, float* outDz,
+        uint* outFlags, uint* outLastSeq);
+
+    public static bool TryGetMovementHistorySample(
+        uint entityId, uint serverTick, out uint sampleServerTick,
+        out Vector3 position, out Vector3 velocity, out Vector3 direction,
+        out uint flags, out uint lastProcessedInputSeq)
+    {
+        ThreadGuard.EnsureMainThread();
+        float px = 0, py = 0, pz = 0;
+        float vx = 0, vy = 0, vz = 0;
+        float dx = 0, dy = 0, dz = 0;
+        uint nativeServerTick = 0;
+        uint nativeFlags = 0;
+        uint nativeLastSeq = 0;
+        byte ok = TryGetMovementHistorySampleNative(
+            entityId, serverTick, &nativeServerTick,
+            &px, &py, &pz, &vx, &vy, &vz, &dx, &dy, &dz,
+            &nativeFlags, &nativeLastSeq);
+        sampleServerTick = nativeServerTick;
+        position = new Vector3(px, py, pz);
+        velocity = new Vector3(vx, vy, vz);
+        direction = new Vector3(dx, dy, dz);
+        flags = nativeFlags;
+        lastProcessedInputSeq = nativeLastSeq;
+        return ok != 0;
     }
 
     // C++ runtime owns the seq counters (CellEntity::replication_state_) so
@@ -340,9 +498,8 @@ internal static unsafe partial class NativeApi
         }
     }
 
-    // Synchronous write of the entity's full state to DBApp. Only meaningful on
-    // BaseApp (no-op on other process types). Use for properties that must
-    // persist outside the normal logoff-snapshot path (e.g. detached Account).
+    // Synchronous full-state write to DBApp. Only BaseApp implements this;
+    // other process types no-op.
     [LibraryImport(LibName, EntryPoint = "AtlasWriteToDb")]
     private static partial void WriteToDbNative(uint entityId, byte* entityData, int len);
 

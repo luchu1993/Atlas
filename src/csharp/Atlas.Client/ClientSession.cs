@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using Atlas.Client.Native;
 using Atlas.DataTypes;
 using Atlas.Diagnostics;
 using Atlas.Serialization;
@@ -49,9 +50,15 @@ public sealed class ClientSession
     public ClientCallbacks.RpcDispatchDelegate? ClientRpcDispatcher { get; set; }
     public ClientHost.SendRpcFn? SendBaseRpcHandler { get; set; }
     public ClientHost.SendRpcFn? SendCellRpcHandler { get; set; }
+    public ClientHost.SendMovementInputFn? SendMovementInputHandler { get; set; }
+    public ClientHost.SendMovementCorrectionReportFn?
+        SendMovementCorrectionReportHandler { get; set; }
     public ClientHost.ReportEventSeqGapFn? ReportEventSeqGapHandler { get; set; }
 
     public event Action<uint, IReadOnlyList<ClientCallbacks.BspLeafRect>>? SpaceBspGeometryReceived;
+    public event Action<MovementStateAck>? MovementStateAckReceived;
+    public event Action<MovementCommandStart>? MovementCommandStarted;
+    public event Action<MovementCommandEnd>? MovementCommandEnded;
 
     public void Reset()
     {
@@ -61,7 +68,7 @@ public sealed class ClientSession
 
     public void Tick(float deltaTime)
     {
-        EntityManager.TickInterpolation(deltaTime);
+        EntityManager.Tick(deltaTime);
     }
 
     public void DispatchRpc(uint entityId, uint rpcId, ulong traceId,
@@ -95,6 +102,22 @@ public sealed class ClientSession
     {
         Required(SendCellRpcHandler, nameof(SendCellRpcHandler))(
             entityId, rpcId, payload, traceId);
+    }
+
+    internal void SendMovementInput(uint targetEntityId,
+                                    ReadOnlySpan<AtlasMovementInputFrame> frames)
+    {
+        Required(SendMovementInputHandler, nameof(SendMovementInputHandler))(
+            targetEntityId, frames);
+    }
+
+    internal void SendMovementCorrectionReport(uint targetEntityId, uint ackedInputSeq,
+                                               uint serverTick, float distanceM,
+                                               ushort correctionFlags)
+    {
+        Required(SendMovementCorrectionReportHandler,
+                 nameof(SendMovementCorrectionReportHandler))(
+            targetEntityId, ackedInputSeq, serverTick, distanceM, correctionFlags);
     }
 
     internal void ReportEventSeqGap(uint entityId, uint gapDelta)
@@ -160,6 +183,15 @@ public sealed class ClientSession
                     break;
                 case ClientCallbacks.kClientRpcMessageId:
                     DispatchClientRpc(body);
+                    break;
+                case ClientCallbacks.kClientMovementStateAckMessageId:
+                    DispatchMovementStateAck(body);
+                    break;
+                case ClientCallbacks.kClientMovementCommandStartMessageId:
+                    DispatchMovementCommandStart(body);
+                    break;
+                case ClientCallbacks.kClientMovementCommandEndMessageId:
+                    DispatchMovementCommandEnd(body);
                     break;
                 case ClientCallbacks.kSpaceBspGeometryMessageId:
                     DispatchSpaceBspGeometry(body);
@@ -441,6 +473,42 @@ public sealed class ClientSession
         ulong traceId = reader.ReadUInt64();
         var args = body.Slice(kClientRpcPrefixBytes);
         DispatchRpc(entityId, rpcId, traceId, args);
+    }
+
+    private void DispatchMovementStateAck(ReadOnlySpan<byte> body)
+    {
+        if (!MovementMessageCodec.TryDecodeStateAck(body, out var ack, out string error))
+        {
+            Log.Error($"DispatchMovementStateAck: {error}");
+            return;
+        }
+
+        MovementStateAckReceived?.Invoke(ack);
+    }
+
+    private void DispatchMovementCommandStart(ReadOnlySpan<byte> body)
+    {
+        if (!MovementMessageCodec.TryDecodeCommandStart(body, out var commandStart,
+                                                        out string error))
+        {
+            Log.Error($"DispatchMovementCommandStart: {error}");
+            return;
+        }
+
+        EntityManager.ApplyMovementCommandStart(commandStart);
+        MovementCommandStarted?.Invoke(commandStart);
+    }
+
+    private void DispatchMovementCommandEnd(ReadOnlySpan<byte> body)
+    {
+        if (!MovementMessageCodec.TryDecodeCommandEnd(body, out var commandEnd, out string error))
+        {
+            Log.Error($"DispatchMovementCommandEnd: {error}");
+            return;
+        }
+
+        EntityManager.ApplyMovementCommandEnd(commandEnd);
+        MovementCommandEnded?.Invoke(commandEnd);
     }
 
     private void DispatchSpaceBspGeometry(ReadOnlySpan<byte> body)

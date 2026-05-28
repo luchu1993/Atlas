@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using Atlas.Client.Native;
 using Atlas.Components;
 using Atlas.DataTypes;
 using Atlas.Diagnostics;
@@ -9,6 +10,8 @@ namespace Atlas.Client;
 
 public abstract class ClientEntity
 {
+    private const uint kMovementFlagGrounded = 1u;
+
     public uint EntityId { get; internal set; }
     public bool IsDestroyed { get; internal set; }
 
@@ -38,9 +41,15 @@ public abstract class ClientEntity
     private static readonly System.Diagnostics.Stopwatch s_wallClock =
         System.Diagnostics.Stopwatch.StartNew();
 
+    private readonly MovementCommandPlayback _remoteCommand = new();
+    private bool _hasOpenRemoteCommand;
+    private bool _hasRemoteCommandPosition;
+    private bool _remoteCommandHasServerDirection;
+
     public static double WallNowSeconds() => s_wallClock.Elapsed.TotalSeconds;
 
     public AvatarFilter? Filter { get; internal set; }
+    public bool HasActiveMovementCommand => _hasOpenRemoteCommand;
 
     public virtual void Deserialize(ref SpanReader reader) { }
 
@@ -51,7 +60,8 @@ public abstract class ClientEntity
 
     // Owner snaps to authoritative state; peers feed the filter ring (initialised lazily
     // on first sample) and the rendered transform reads back via TryGetInterpolated.
-    public virtual void ApplyPositionUpdate(double serverTime, Vector3 pos, Vector3 dir, bool onGround)
+    public virtual void ApplyPositionUpdate(double serverTime, Vector3 pos, Vector3 dir,
+                                            bool onGround)
     {
         using var _ = Profiler.ZoneN(ProfilerNames.ClientApplyPositionUpdate);
         Position = pos;
@@ -62,6 +72,28 @@ public abstract class ClientEntity
 
         if (!IsOwner)
         {
+            if (_hasOpenRemoteCommand)
+            {
+                ResetInterpolation();
+                if (_remoteCommand.IsActive)
+                {
+                    _remoteCommand.AlignToPosition(pos);
+                    ApplyRemoteMovementCommandSample(0);
+                    if (_remoteCommand.AllowsTurnInput)
+                    {
+                        Direction = dir;
+                        OnGround = onGround;
+                        _remoteCommandHasServerDirection = true;
+                    }
+                    return;
+                }
+                _hasRemoteCommandPosition = true;
+                OnPositionUpdated(pos);
+                return;
+            }
+
+            _hasRemoteCommandPosition = false;
+            _remoteCommandHasServerDirection = false;
             Filter ??= new AvatarFilter();
             Filter.Input(serverTime, pos, dir, onGround);
         }
@@ -71,6 +103,14 @@ public abstract class ClientEntity
 
     public bool TryGetInterpolated(out Vector3 pos, out Vector3 dir, out bool onGround)
     {
+        if (_hasOpenRemoteCommand || _hasRemoteCommandPosition)
+        {
+            pos = Position;
+            dir = Direction;
+            onGround = OnGround;
+            return true;
+        }
+
         if (Filter is { SampleCount: > 0 })
             return Filter.TryEvaluate(out pos, out dir, out onGround);
         pos = Position;
@@ -86,9 +126,56 @@ public abstract class ClientEntity
         Filter?.Reset();
     }
 
+    public bool ApplyMovementCommandStart(MovementCommandStart start)
+    {
+        if (start.EntityId != EntityId || IsOwner) return false;
+        if (!_remoteCommand.Start(start.Command)) return false;
+
+        _hasOpenRemoteCommand = true;
+        _remoteCommandHasServerDirection = false;
+        ResetInterpolation();
+        ApplyRemoteMovementCommandSample(0);
+        return true;
+    }
+
+    public bool ApplyMovementCommandEnd(MovementCommandEnd end)
+    {
+        if (end.EntityId != EntityId || IsOwner || end.CommandId == 0) return false;
+        if (_remoteCommand.CommandId != 0 && _remoteCommand.CommandId != end.CommandId)
+            return false;
+
+        _remoteCommand.Clear();
+        _hasOpenRemoteCommand = false;
+        _remoteCommandHasServerDirection = false;
+        Position = end.State.Position;
+        Direction = end.State.Direction;
+        OnGround = (end.State.Flags & kMovementFlagGrounded) != 0;
+        _hasRemoteCommandPosition = true;
+        ResetInterpolation();
+        OnPositionUpdated(Position);
+        return true;
+    }
+
     public void UpdateInterpolation(float dt)
     {
+        if (_remoteCommand.IsActive)
+        {
+            int deltaMs = Math.Clamp((int)MathF.Round(MathF.Max(dt, 0.0f) * 1000.0f),
+                                     0, ushort.MaxValue);
+            ApplyRemoteMovementCommandSample((uint)deltaMs);
+        }
         Filter?.UpdateLatency(dt);
+    }
+
+    void ApplyRemoteMovementCommandSample(uint deltaMs)
+    {
+        _remoteCommand.AdvanceMs(deltaMs);
+        Position = _remoteCommand.Position;
+        _hasRemoteCommandPosition = true;
+        if (_remoteCommand.TryGetDirection(out var direction) &&
+            (!_remoteCommand.AllowsTurnInput || !_remoteCommandHasServerDirection))
+            Direction = direction;
+        OnPositionUpdated(Position);
     }
 
     // Distinct from OnXxxChanged: high-frequency channel, kept off the per-field callback path.
@@ -103,9 +190,9 @@ public abstract class ClientEntity
         {
             ulong missed = seq - LastEventSeq - 1;
             EventSeqGapsTotal += missed;
-            Log.Warning(
-                $"[{TypeName}:{EntityId}] event_seq gap: last={LastEventSeq} got={seq} missed={missed}");
-            // Clamp to u32 — a single jump >4G is paging-worthy, not silent-dropping.
+            Log.Warning($"[{TypeName}:{EntityId}] event_seq gap: last={LastEventSeq} "
+                        + $"got={seq} missed={missed}");
+            // Clamp to u32; a single jump >4G is paging-worthy, not silent-dropping.
             uint reportDelta = missed > uint.MaxValue ? uint.MaxValue : (uint)missed;
             if (Session != null)
                 Session.ReportEventSeqGap(EntityId, reportDelta);
@@ -138,8 +225,32 @@ public abstract class ClientEntity
             ClientHost.SendBaseRpc(EntityId, (uint)rpcId, payload, traceId);
     }
 
-    // _replicated[0] is reserved for the entity body so wire componentIdx=0 keeps its meaning.
-    // public mirrors ServerEntity._replicated for cross-assembly dispatcher reads — scripts use the typed accessors.
+    protected internal void SendMovementInput(ReadOnlySpan<AtlasMovementInputFrame> frames)
+    {
+        if (Session != null)
+            Session.SendMovementInput(EntityId, frames);
+        else
+            ClientHost.SendMovementInput(EntityId, frames);
+    }
+
+    protected internal void SendMovementCorrectionReport(uint ackedInputSeq, uint serverTick,
+                                                         float distanceM,
+                                                         ushort correctionFlags)
+    {
+        if (Session != null)
+        {
+            Session.SendMovementCorrectionReport(EntityId, ackedInputSeq, serverTick,
+                                                 distanceM, correctionFlags);
+        }
+        else
+        {
+            ClientHost.SendMovementCorrectionReport(EntityId, ackedInputSeq, serverTick,
+                                                    distanceM, correctionFlags);
+        }
+    }
+
+    // _replicated[0] is reserved for the entity body; wire componentIdx=0 keeps its meaning.
+    // Public mirrors ServerEntity._replicated for cross-assembly dispatcher reads.
     public ClientReplicatedComponent?[]? _replicated;
     private Dictionary<Type, ClientLocalComponent>? _clientLocal;
 
@@ -154,8 +265,9 @@ public abstract class ClientEntity
                 $"{typeof(T).Name} is not declared as a Synced component on {GetType().Name}");
         _replicated ??= new ClientReplicatedComponent?[SyncedSlotCount + 1];
         if (slot >= _replicated.Length)
-            throw new InvalidOperationException(
-                $"Slot {slot} for {typeof(T).Name} exceeds declared SyncedSlotCount={SyncedSlotCount}");
+            throw new InvalidOperationException($"Slot {slot} for {typeof(T).Name} "
+                                                + "exceeds declared SyncedSlotCount="
+                                                + $"{SyncedSlotCount}");
         if (_replicated[slot] is T existing) return existing;
 
         var c = new T();
@@ -206,6 +318,22 @@ public abstract class ClientEntity
         c.OnDetached();
         _clientLocal.Remove(typeof(T));
         return true;
+    }
+
+    internal void DetachAllComponents()
+    {
+        if (_replicated != null)
+        {
+            for (int i = 1; i < _replicated.Length; ++i)
+            {
+                _replicated[i]?.OnDetached();
+                _replicated[i] = null;
+            }
+        }
+        if (_clientLocal == null) return;
+        var localComponents = new List<ClientLocalComponent>(_clientLocal.Values);
+        foreach (var c in localComponents) c.OnDetached();
+        _clientLocal.Clear();
     }
 
     // Synced components first (slot order, deterministic) then ClientLocal (insertion order).

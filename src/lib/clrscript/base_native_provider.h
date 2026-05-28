@@ -26,6 +26,12 @@ class BaseNativeProvider : public INativeApiProvider {
   void SendBaseRpc(uint32_t entity_id, uint32_t rpc_id, const std::byte* payload, int32_t len,
                    uint64_t trace_id) override;
 
+  void SendMovementInput(uint32_t target_entity_id, const std::byte* frames,
+                         int32_t frame_count) override;
+  void SendMovementCorrectionReport(uint32_t target_entity_id, uint32_t acked_input_seq,
+                                    uint32_t server_tick, float distance_m,
+                                    uint16_t correction_flags) override;
+
   void RegisterEntityType(const std::byte* data, int32_t len) override;
   void UnregisterAllEntityTypes() override;
   void RegisterStruct(const std::byte* data, int32_t len) override;
@@ -53,6 +59,7 @@ class BaseNativeProvider : public INativeApiProvider {
   void SetSpaceData(uint32_t space_id, uint16_t key_id, const std::byte* value,
                     int32_t len) override;
   void RemoveSpaceData(uint32_t space_id, uint16_t key_id) override;
+  auto LoadCollisionAsset(uint32_t space_id, const char* path, int32_t len) -> bool override;
 
   auto GetEntitySpaceId(uint32_t entity_id) -> uint32_t override;
 
@@ -62,8 +69,18 @@ class BaseNativeProvider : public INativeApiProvider {
   // CellAppNativeProvider overrides each to wire into Space / CellEntity.
   void SetEntityPosition(uint32_t entity_id, float x, float y, float z) override;
   void SetEntityDirection(uint32_t entity_id, float x, float y, float z) override;
+  void SetEntityOnGround(uint32_t entity_id, bool on_ground) override;
+  void SetMovementIntent(uint32_t entity_id, float dir_x, float dir_z, float speed_mps,
+                         uint16_t buttons) override;
+  auto SetMovementCommand(uint32_t entity_id, const NativeMovementCommand& command)
+      -> bool override;
+  auto ClearMovementCommand(uint32_t entity_id, uint32_t command_id) -> bool override;
+  auto SetMovementCurve(const NativeMovementCurve& curve) -> bool override;
   void GetEntityPosition(uint32_t entity_id, float& x, float& y, float& z) override;
   void GetEntityDirection(uint32_t entity_id, float& x, float& y, float& z) override;
+  auto GetEntityOnGround(uint32_t entity_id) -> bool override;
+  auto TryGetMovementHistorySample(uint32_t entity_id, uint32_t server_tick,
+                                   NativeMovementHistorySample& sample) -> bool override;
   void PublishReplicationFrame(uint32_t entity_id, bool has_event, bool has_volatile,
                                const std::byte* owner_snap, int32_t owner_snap_len,
                                const std::byte* other_snap, int32_t other_snap_len,

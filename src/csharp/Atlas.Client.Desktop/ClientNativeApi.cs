@@ -1,9 +1,10 @@
 using System;
 using System.Runtime.InteropServices;
+using Atlas.Client.Native;
 
 namespace Atlas.Client;
 
-// Desktop-only C# → C++ interop against atlas_engine; Unity uses its own
+// Desktop-only C# -> C++ interop against atlas_engine; Unity uses its own
 // P/Invoke layer against atlas_net_client.dll instead.
 internal static unsafe partial class ClientNativeApi
 {
@@ -38,6 +39,33 @@ internal static unsafe partial class ClientNativeApi
     {
         fixed (byte* ptr = payload)
             SendCellRpcNative(entityId, rpcId, ptr, payload.Length, traceId);
+    }
+
+    [LibraryImport(LibName, EntryPoint = "AtlasSendMovementInput")]
+    private static partial void SendMovementInputNative(uint targetEntityId,
+                                                        AtlasMovementInputFrame* frames,
+                                                        int frameCount);
+
+    public static void SendMovementInput(uint targetEntityId,
+                                         ReadOnlySpan<AtlasMovementInputFrame> frames)
+    {
+        fixed (AtlasMovementInputFrame* ptr = frames)
+            SendMovementInputNative(targetEntityId, ptr, frames.Length);
+    }
+
+    [LibraryImport(LibName, EntryPoint = "AtlasSendMovementCorrectionReport")]
+    private static partial void SendMovementCorrectionReportNative(uint targetEntityId,
+                                                                   uint ackedInputSeq,
+                                                                   uint serverTick,
+                                                                   float distanceM,
+                                                                   ushort correctionFlags);
+
+    public static void SendMovementCorrectionReport(uint targetEntityId, uint ackedInputSeq,
+                                                    uint serverTick, float distanceM,
+                                                    ushort correctionFlags)
+    {
+        SendMovementCorrectionReportNative(targetEntityId, ackedInputSeq, serverTick, distanceM,
+                                           correctionFlags);
     }
 
     [LibraryImport(LibName, EntryPoint = "AtlasRegisterEntityType")]

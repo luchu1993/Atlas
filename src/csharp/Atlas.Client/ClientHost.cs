@@ -1,4 +1,5 @@
 using System;
+using Atlas.Client.Native;
 
 namespace Atlas.Client;
 
@@ -13,33 +14,56 @@ public static class ClientHost
     public delegate void RegisterComponentFn(ReadOnlySpan<byte> data);
     public delegate void SetEntityDefDigestFn(ReadOnlySpan<byte> data);
     public delegate void ReportEventSeqGapFn(uint entityId, uint gapDelta);
+    public delegate void SendMovementInputFn(uint targetEntityId,
+                                             ReadOnlySpan<AtlasMovementInputFrame> frames);
+    public delegate void SendMovementCorrectionReportFn(uint targetEntityId,
+                                                        uint ackedInputSeq,
+                                                        uint serverTick,
+                                                        float distanceM,
+                                                        ushort correctionFlags);
 
     public static SendRpcFn? SendBaseRpcHandler;
     public static SendRpcFn? SendCellRpcHandler;
+    public static SendMovementInputFn? SendMovementInputHandler;
+    public static SendMovementCorrectionReportFn? SendMovementCorrectionReportHandler;
     public static RegisterEntityTypeFn? RegisterEntityTypeHandler;
     public static RegisterStructFn? RegisterStructHandler;
     public static RegisterComponentFn? RegisterComponentHandler;
     // atlas_client.exe wires this so LoginRequest carries the digest; Unity /
     // editor previews leave null and use the managed EntityDefDigest only.
     public static SetEntityDefDigestFn? SetEntityDefDigestHandler;
-    // Optional: hosts without a BaseApp route (editor previews, tests) leave null; report is dropped.
+    // Optional: hosts without a BaseApp route leave null; report is dropped.
     public static ReportEventSeqGapFn? ReportEventSeqGapHandler;
 
-    // Build-time SHA-256 of the entity-def surface; LoginRequest carries it so mismatched builds bounce.
+    // Build-time SHA-256 of the entity-def surface, carried by LoginRequest.
     public static byte[]? EntityDefDigest { get; private set; }
 
     private static T Required<T>(T? handler, string name) where T : Delegate
         => handler ?? throw new InvalidOperationException(
-            $"ClientHost.{name} is not set — the host app (Atlas.Client.Desktop or the Unity package) "
-            + "must install its handler at startup.");
+            $"ClientHost.{name} is not set; the host app must install its handler "
+            + "at startup.");
 
     internal static void SendBaseRpc(uint entityId, uint rpcId, ReadOnlySpan<byte> payload,
                                      ulong traceId)
-        => Required(SendBaseRpcHandler, nameof(SendBaseRpcHandler))(entityId, rpcId, payload, traceId);
+        => Required(SendBaseRpcHandler, nameof(SendBaseRpcHandler))(
+            entityId, rpcId, payload, traceId);
 
     internal static void SendCellRpc(uint entityId, uint rpcId, ReadOnlySpan<byte> payload,
                                      ulong traceId)
-        => Required(SendCellRpcHandler, nameof(SendCellRpcHandler))(entityId, rpcId, payload, traceId);
+        => Required(SendCellRpcHandler, nameof(SendCellRpcHandler))(
+            entityId, rpcId, payload, traceId);
+
+    internal static void SendMovementInput(uint targetEntityId,
+                                           ReadOnlySpan<AtlasMovementInputFrame> frames)
+        => Required(SendMovementInputHandler, nameof(SendMovementInputHandler))(
+            targetEntityId, frames);
+
+    internal static void SendMovementCorrectionReport(uint targetEntityId, uint ackedInputSeq,
+                                                      uint serverTick, float distanceM,
+                                                      ushort correctionFlags)
+        => Required(SendMovementCorrectionReportHandler,
+                    nameof(SendMovementCorrectionReportHandler))(
+            targetEntityId, ackedInputSeq, serverTick, distanceM, correctionFlags);
 
     internal static void RegisterEntityType(ReadOnlySpan<byte> data)
         => Required(RegisterEntityTypeHandler, nameof(RegisterEntityTypeHandler))(data);
@@ -47,7 +71,7 @@ public static class ClientHost
     internal static void RegisterStruct(ReadOnlySpan<byte> data)
         => Required(RegisterStructHandler, nameof(RegisterStructHandler))(data);
 
-    // Optional: hosts without a native EntityDefRegistry drop silently — the
+    // Optional: hosts without a native EntityDefRegistry drop silently; the
     // offline ATDF carries the same blob via DefComponentRegistry.BuildAll.
     internal static void RegisterComponent(ReadOnlySpan<byte> data)
         => RegisterComponentHandler?.Invoke(data);

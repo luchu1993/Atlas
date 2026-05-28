@@ -60,6 +60,26 @@ void BaseNativeProvider::SendBaseRpc(uint32_t entity_id, uint32_t /*rpc_id*/,
       entity_id);
 }
 
+void BaseNativeProvider::SendMovementInput(uint32_t target_entity_id,
+                                           const std::byte* /*frames*/,
+                                           int32_t /*frame_count*/) {
+  ATLAS_LOG_ERROR(
+      "send_movement_input() not supported on this process type "
+      "(target_entity_id={})",
+      target_entity_id);
+}
+
+void BaseNativeProvider::SendMovementCorrectionReport(uint32_t target_entity_id,
+                                                      uint32_t /*acked_input_seq*/,
+                                                      uint32_t /*server_tick*/,
+                                                      float /*distance_m*/,
+                                                      uint16_t /*correction_flags*/) {
+  ATLAS_LOG_ERROR(
+      "send_movement_correction_report() not supported on this process type "
+      "(target_entity_id={})",
+      target_entity_id);
+}
+
 void BaseNativeProvider::RegisterEntityType(const std::byte* data, int32_t len) {
   EntityDefRegistry::Instance().RegisterType(data, len);
 }
@@ -132,6 +152,13 @@ void BaseNativeProvider::RemoveSpaceData(uint32_t space_id, uint16_t /*key_id*/)
   ATLAS_LOG_ERROR("remove_space_data() not supported on this process type (space_id={})", space_id);
 }
 
+auto BaseNativeProvider::LoadCollisionAsset(uint32_t space_id, const char* /*path*/,
+                                            int32_t /*len*/) -> bool {
+  ATLAS_LOG_ERROR("load_collision_asset() not supported on this process type (space_id={})",
+                  space_id);
+  return false;
+}
+
 auto BaseNativeProvider::GetEntitySpaceId(uint32_t /*entity_id*/) -> uint32_t { return 0; }
 
 void BaseNativeProvider::SetNativeCallbacks(const void* /*native_callbacks*/, int32_t /*len*/) {}
@@ -148,6 +175,40 @@ void BaseNativeProvider::SetEntityDirection(uint32_t entity_id, float /*x*/, flo
                   entity_id);
 }
 
+void BaseNativeProvider::SetEntityOnGround(uint32_t entity_id, bool /*on_ground*/) {
+  ATLAS_LOG_ERROR("atlas_set_on_ground() not supported on this process type (entity_id={})",
+                  entity_id);
+}
+
+void BaseNativeProvider::SetMovementIntent(uint32_t entity_id, float /*dir_x*/, float /*dir_z*/,
+                                           float /*speed_mps*/, uint16_t /*buttons*/) {
+  ATLAS_LOG_ERROR("atlas_set_movement_intent() not supported on this process type (entity_id={})",
+                  entity_id);
+}
+
+auto BaseNativeProvider::SetMovementCommand(uint32_t entity_id,
+                                            const NativeMovementCommand& /*command*/) -> bool {
+  ATLAS_LOG_ERROR("atlas_set_movement_command() not supported on this process type "
+                  "(entity_id={})",
+                  entity_id);
+  return false;
+}
+
+auto BaseNativeProvider::ClearMovementCommand(uint32_t entity_id,
+                                              uint32_t /*command_id*/) -> bool {
+  ATLAS_LOG_ERROR("atlas_clear_movement_command() not supported on this process type "
+                  "(entity_id={})",
+                  entity_id);
+  return false;
+}
+
+auto BaseNativeProvider::SetMovementCurve(const NativeMovementCurve& curve) -> bool {
+  ATLAS_LOG_ERROR("atlas_set_movement_curve() not supported on this process type "
+                  "(curve_id={})",
+                  curve.curve_id);
+  return false;
+}
+
 void BaseNativeProvider::GetEntityPosition(uint32_t entity_id, float& x, float& y, float& z) {
   ATLAS_LOG_ERROR("atlas_get_position() not supported on this process type (entity_id={})",
                   entity_id);
@@ -162,6 +223,21 @@ void BaseNativeProvider::GetEntityDirection(uint32_t entity_id, float& x, float&
   x = 0;
   y = 0;
   z = 0;
+}
+
+auto BaseNativeProvider::GetEntityOnGround(uint32_t entity_id) -> bool {
+  ATLAS_LOG_ERROR("atlas_get_on_ground() not supported on this process type (entity_id={})",
+                  entity_id);
+  return false;
+}
+
+auto BaseNativeProvider::TryGetMovementHistorySample(
+    uint32_t entity_id, uint32_t /*server_tick*/, NativeMovementHistorySample& sample) -> bool {
+  ATLAS_LOG_ERROR("atlas_try_get_movement_history() not supported on this process type "
+                  "(entity_id={})",
+                  entity_id);
+  sample = {};
+  return false;
 }
 
 void BaseNativeProvider::PublishReplicationFrame(

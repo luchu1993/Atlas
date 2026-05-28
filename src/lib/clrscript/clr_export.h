@@ -1,9 +1,8 @@
 #ifndef ATLAS_LIB_CLRSCRIPT_CLR_EXPORT_H_
 #define ATLAS_LIB_CLRSCRIPT_CLR_EXPORT_H_
 
-// ATLAS_ENGINE_EXPORTS must be defined when compiling atlas_engine.dll/.so
-// (set by the atlas_engine CMake target). All other translation units see
-// the dllimport / default-hidden variant.
+// ATLAS_ENGINE_EXPORTS is defined when compiling atlas_engine.dll/.so.
+// Other translation units see the dllimport / default-hidden variant.
 
 #if ATLAS_PLATFORM_WINDOWS
 #ifdef ATLAS_ENGINE_EXPORTS
@@ -17,18 +16,16 @@
 
 #define ATLAS_NATIVE_API extern "C" ATLAS_EXPORT
 
-// C# managed code calls AtlasGetAbiVersion() at startup and compares the
-// result against its own compile-time constant.  A mismatch means the native
-// and managed sides were built against different struct definitions, which
-// causes silent data corruption and must be caught early.
+// AtlasGetAbiVersion lets managed hosts and tests detect incompatible
+// interop surfaces early.
 
-// Bump this integer whenever ClrScriptValue, ClrStringRef, ClrSpanRef, or any
-// other blittable type shared across the C++/C# boundary changes its layout.
+// Bump this integer whenever the C++/C# native API table or shared blittable
+// type layout changes.
 
 #include <cstdint>
 
 namespace atlas {
-inline constexpr uint32_t kAtlasAbiVersion = 1;
+inline constexpr uint32_t kAtlasAbiVersion = 4;
 }  // namespace atlas
 
 #endif  // ATLAS_LIB_CLRSCRIPT_CLR_EXPORT_H_

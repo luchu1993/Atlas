@@ -46,11 +46,20 @@ class ClientSession {
   // Idempotent. LOGOUT fires on_disconnect with reason=3; USER is silent.
   auto Disconnect(AtlasDisconnectReason reason) -> int32_t;
 
+  auto SetTransportImpairment(uint32_t one_way_latency_ms, uint32_t loss_permyriad,
+                              uint32_t seed) -> int32_t;
+
   auto SendBaseRpc(uint32_t entity_id, uint32_t rpc_id, const uint8_t* payload, int32_t len)
       -> int32_t;
 
   auto SendCellRpc(uint32_t entity_id, uint32_t rpc_id, const uint8_t* payload, int32_t len)
       -> int32_t;
+
+  auto SendMovementInput(uint32_t target_entity_id, const AtlasMovementInputFrame* frames,
+                         int32_t frame_count) -> int32_t;
+  auto SendMovementCorrectionReport(uint32_t target_entity_id, uint32_t acked_input_seq,
+                                    uint32_t server_tick, float distance_m,
+                                    uint16_t correction_flags) -> int32_t;
 
   // Stamped into LoginRequest so BaseApp can reject mismatched .def builds.
   void SetEntityDefDigest(const uint8_t* data, int32_t len);
@@ -76,6 +85,7 @@ class ClientSession {
   void CloseLoginAppChannel();
   void CloseBaseAppChannel();
   void ClearSessionKey();
+  void ApplyTransportImpairment(Channel* channel) const;
 
   EventDispatcher dispatcher_{"net_client"};
   NetworkInterface network_{dispatcher_};
@@ -101,6 +111,9 @@ class ClientSession {
   AtlasNetCallbacks callbacks_{};
 
   std::array<uint8_t, 32> entity_def_digest_{};
+  uint32_t transport_impairment_latency_ms_{0};
+  uint32_t transport_impairment_loss_permyriad_{0};
+  uint32_t transport_impairment_seed_{1};
 
   std::string last_error_;
 

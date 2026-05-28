@@ -6,7 +6,7 @@ namespace Atlas.Client.Native;
 // netstandard2.1 + DllImport so Unity Mono / IL2CPP shares this source.
 public static unsafe class AtlasNetNative
 {
-    public const uint AbiVersion = 0x02000000u;
+    public const uint AbiVersion = 0x02050000u;
 
 #if UNITY_IOS && !UNITY_EDITOR
     private const string LibName = "__Internal";
@@ -64,12 +64,32 @@ public static unsafe class AtlasNetNative
     public static extern int AtlasNetDisconnect(IntPtr ctx, AtlasDisconnectReason reason);
 
     [DllImport(LibName)]
+    public static extern int AtlasNetSetTransportImpairment(IntPtr ctx, uint oneWayLatencyMs,
+                                                            uint lossPermyriad, uint seed);
+
+    [DllImport(LibName)]
     public static extern int AtlasNetSendBaseRpc(IntPtr ctx, uint entityId, uint rpcId,
                                                  byte* payload, int len);
 
     [DllImport(LibName)]
     public static extern int AtlasNetSendCellRpc(IntPtr ctx, uint entityId, uint rpcId,
                                                  byte* payload, int len);
+
+    [DllImport(LibName)]
+    public static extern int AtlasNetSendMovementInput(IntPtr ctx, uint targetEntityId,
+                                                       AtlasMovementInputFrame* frames,
+                                                       int frameCount);
+
+    [DllImport(LibName)]
+    public static extern int AtlasNetSendMovementCorrectionReport(
+        IntPtr ctx, uint targetEntityId, uint ackedInputSeq, uint serverTick, float distanceM,
+        ushort correctionFlags);
+
+    [DllImport(LibName)]
+    public static extern int AtlasNetMovementPredictStep(AtlasMovementStateFrame* previous,
+                                                         AtlasMovementInputFrame* input,
+                                                         uint serverTick,
+                                                         AtlasMovementStateFrame* outState);
 
     [DllImport(LibName)]
     public static extern int AtlasNetSetCallbacks(IntPtr ctx, ref AtlasNetCallbacks callbacks);
@@ -86,7 +106,9 @@ public static unsafe class AtlasNetNative
         if (ctx == IntPtr.Zero)
         {
             IntPtr errPtr = AtlasNetGlobalLastError();
-            string err = errPtr == IntPtr.Zero ? "unknown" : Marshal.PtrToStringUTF8(errPtr) ?? "unknown";
+            string err = errPtr == IntPtr.Zero
+                ? "unknown"
+                : Marshal.PtrToStringUTF8(errPtr) ?? "unknown";
             throw new InvalidOperationException(
                 $"atlas_net_client.AtlasNetCreate failed (abi=0x{AbiVersion:X8}): {err}");
         }

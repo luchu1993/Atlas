@@ -14,9 +14,8 @@ extern "C" {
 // Layout: [MAJOR:8][MINOR:8][PATCH:16]. Create rejects MAJOR mismatch
 // or caller MINOR > our MINOR.
 //
-// 0x02000000: collapsed 9 typed message callbacks into a single on_deliver.
-// Net_client is now transport-only; C# parses every server-bound message.
-#define ATLAS_NET_ABI_VERSION 0x02000000u
+// 0x02050000: transport impairment hook for movement prediction validation.
+#define ATLAS_NET_ABI_VERSION 0x02050000u
 
 #define ATLAS_NET_OK 0
 #define ATLAS_NET_ERR_BUSY -16
@@ -99,11 +98,70 @@ typedef enum AtlasDisconnectReason {
 // LOGOUT fires on_disconnect with reason=3; USER is silent.
 ATLAS_NET_API int32_t AtlasNetDisconnect(AtlasNetContext* ctx, AtlasDisconnectReason reason);
 
+// Test hook: applies bidirectional RUDP latency/loss to current and future
+// LoginApp/BaseApp channels. loss_permyriad uses 10000 == 100%.
+ATLAS_NET_API int32_t AtlasNetSetTransportImpairment(AtlasNetContext* ctx,
+                                                     uint32_t one_way_latency_ms,
+                                                     uint32_t loss_permyriad,
+                                                     uint32_t seed);
+
 ATLAS_NET_API int32_t AtlasNetSendBaseRpc(AtlasNetContext* ctx, uint32_t entity_id, uint32_t rpc_id,
                                           const uint8_t* payload, int32_t len);
 
 ATLAS_NET_API int32_t AtlasNetSendCellRpc(AtlasNetContext* ctx, uint32_t entity_id, uint32_t rpc_id,
                                           const uint8_t* payload, int32_t len);
+
+#pragma pack(push, 1)
+typedef struct AtlasMovementInputFrame {
+  uint32_t seq;
+  uint32_t input_tick;
+  int8_t move_x;
+  int8_t move_z;
+  uint16_t view_yaw;
+  int8_t view_pitch;
+  uint16_t buttons;
+  uint16_t client_dt_ms;
+} AtlasMovementInputFrame;
+#pragma pack(pop)
+
+#pragma pack(push, 1)
+typedef struct AtlasMovementStateFrame {
+  float position_x;
+  float position_y;
+  float position_z;
+  float velocity_x;
+  float velocity_y;
+  float velocity_z;
+  float direction_x;
+  float direction_y;
+  float direction_z;
+  uint32_t flags;
+  uint32_t last_processed_input_seq;
+} AtlasMovementStateFrame;
+#pragma pack(pop)
+
+typedef enum AtlasMovementCorrectionTier {
+  ATLAS_MOVEMENT_CORRECTION_NONE = 0,
+  ATLAS_MOVEMENT_CORRECTION_TIER1 = 1,
+  ATLAS_MOVEMENT_CORRECTION_TIER2 = 2,
+  ATLAS_MOVEMENT_CORRECTION_SNAP = 3,
+} AtlasMovementCorrectionTier;
+
+ATLAS_NET_API int32_t AtlasNetSendMovementInput(AtlasNetContext* ctx, uint32_t target_entity_id,
+                                                const AtlasMovementInputFrame* frames,
+                                                int32_t frame_count);
+
+ATLAS_NET_API int32_t AtlasNetSendMovementCorrectionReport(
+    AtlasNetContext* ctx, uint32_t target_entity_id, uint32_t acked_input_seq,
+    uint32_t server_tick, float distance_m, uint16_t correction_flags);
+
+ATLAS_NET_API int32_t AtlasNetMovementPredictStep(const AtlasMovementStateFrame* previous,
+                                                  const AtlasMovementInputFrame* input,
+                                                  uint32_t server_tick,
+                                                  AtlasMovementStateFrame* out_state);
+
+ATLAS_NET_API AtlasMovementCorrectionTier AtlasNetMovementClassifyCorrection(float distance_m);
+ATLAS_NET_API uint16_t AtlasNetMovementCorrectionFlag(float distance_m);
 
 // All payload pointers are views; copy before returning.
 typedef void (*AtlasDisconnectFn)(AtlasNetContext* ctx, int32_t reason);

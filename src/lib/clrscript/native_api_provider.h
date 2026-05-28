@@ -12,6 +12,46 @@ enum class RpcTarget : uint8_t {
   kAll = 2,     // every witness in AoI (owner + others)
 };
 
+struct NativeMovementHistorySample {
+  uint32_t server_tick{0};
+  float position_x{0.0f};
+  float position_y{0.0f};
+  float position_z{0.0f};
+  float velocity_x{0.0f};
+  float velocity_y{0.0f};
+  float velocity_z{0.0f};
+  float direction_x{0.0f};
+  float direction_y{0.0f};
+  float direction_z{0.0f};
+  uint32_t flags{0};
+  uint32_t last_processed_input_seq{0};
+};
+
+struct NativeMovementCommand {
+  uint32_t command_id{0};
+  uint16_t skill_id{0};
+  uint8_t type{0};
+  float start_x{0.0f};
+  float start_y{0.0f};
+  float start_z{0.0f};
+  float target_x{0.0f};
+  float target_y{0.0f};
+  float target_z{0.0f};
+  uint16_t duration_ms{0};
+  uint16_t elapsed_ms{0};
+  uint16_t curve_id{0};
+  uint8_t input_policy{0};
+  uint8_t collision_policy{0};
+  uint8_t priority{0};
+  uint32_t server_tick{0};
+};
+
+struct NativeMovementCurve {
+  uint16_t curve_id{0};
+  const float* samples{nullptr};
+  int32_t sample_count{0};
+};
+
 // Provider pointer must outlive the process; AtlasNative* exports delegate here.
 class INativeApiProvider {
  public:
@@ -37,6 +77,9 @@ class INativeApiProvider {
   virtual void SendBaseRpc(uint32_t entity_id, uint32_t rpc_id, const std::byte* payload,
                            int32_t len, uint64_t trace_id) = 0;
 
+  virtual void SendMovementInput(uint32_t, const std::byte*, int32_t) {}
+  virtual void SendMovementCorrectionReport(uint32_t, uint32_t, uint32_t, float, uint16_t) {}
+
   virtual void RegisterEntityType(const std::byte* data, int32_t len) = 0;
   virtual void UnregisterAllEntityTypes() = 0;
 
@@ -55,9 +98,8 @@ class INativeApiProvider {
 
   virtual void GiveClientTo(uint32_t src_entity_id, uint32_t dest_entity_id) = 0;
 
-  // Empty name unregisters. Registration also fires a CreateSpaceRequest so
-  // CellAppMgr stamps the type onto AddCellToSpace for the primary host, which
-  // auto-spawns the entity via its EntityDefRegistry. BaseApp-only.
+  // Empty name unregisters. Registration also asks CellAppMgr to stamp the
+  // type onto AddCellToSpace for the primary host.
   virtual void SetSpaceMasterType(uint32_t space_id, const char* name, int32_t len) = 0;
 
   virtual auto CreateBaseEntity(uint16_t type_id, uint32_t space_id) -> uint32_t = 0;
@@ -79,11 +121,12 @@ class INativeApiProvider {
 
   virtual void SetAoIRadius(uint32_t entity_id, float radius, float hysteresis) = 0;
 
-  // Owner-authoritative SpaceData write — fans out to peer cellapps and
+  // Owner-authoritative SpaceData write; fans out to peer cellapps and
   // local witnesses. Only CellAppNativeProvider implements non-trivially.
   virtual void SetSpaceData(uint32_t space_id, uint16_t key_id, const std::byte* value,
                             int32_t len) = 0;
   virtual void RemoveSpaceData(uint32_t space_id, uint16_t key_id) = 0;
+  virtual auto LoadCollisionAsset(uint32_t space_id, const char* path, int32_t len) -> bool = 0;
 
   // Returns the entity's owning space id, or 0 if unknown. Cellapp-only;
   // base/login processes inherit the 0 default.
@@ -97,14 +140,25 @@ class INativeApiProvider {
 
   // Witness reads dir off CellEntity for the volatile envelope.
   virtual void SetEntityDirection(uint32_t entity_id, float x, float y, float z) = 0;
+  virtual void SetEntityOnGround(uint32_t entity_id, bool on_ground) = 0;
+
+  // Script-side AI intent; CellApp converts this into movement_sim input.
+  virtual void SetMovementIntent(uint32_t entity_id, float dir_x, float dir_z, float speed_mps,
+                                 uint16_t buttons) = 0;
+  virtual auto SetMovementCommand(uint32_t entity_id,
+                                  const NativeMovementCommand& command) -> bool = 0;
+  virtual auto ClearMovementCommand(uint32_t entity_id, uint32_t command_id) -> bool = 0;
+  virtual auto SetMovementCurve(const NativeMovementCurve& curve) -> bool = 0;
 
   // Spawn-time readback so C# can adopt the CellEntity's constructed state.
   virtual void GetEntityPosition(uint32_t entity_id, float& x, float& y, float& z) = 0;
   virtual void GetEntityDirection(uint32_t entity_id, float& x, float& y, float& z) = 0;
+  virtual auto GetEntityOnGround(uint32_t entity_id) -> bool = 0;
+  virtual auto TryGetMovementHistorySample(uint32_t entity_id, uint32_t server_tick,
+                                           NativeMovementHistorySample& sample) -> bool = 0;
 
-  // Owner/other snapshot pointers consumed only when has_event is true; pass
-  // nullptr/0 when the event stream is empty. Runtime allocates seqs from
-  // CellEntity::replication_state_, so script never owns the counter.
+  // Snapshot pointers are consumed only when has_event is true; script never
+  // owns replication seq counters.
   virtual void PublishReplicationFrame(uint32_t entity_id, bool has_event, bool has_volatile,
                                        const std::byte* owner_snap, int32_t owner_snap_len,
                                        const std::byte* other_snap, int32_t other_snap_len,
@@ -130,7 +184,7 @@ class INativeApiProvider {
   }
   virtual void CoroCancelPending(uint64_t /*handle*/) {}
 
-  // reply_channel == 0 means in-process — drop and let the await time out.
+  // reply_channel == 0 means in-process; drop and let the await time out.
   virtual void SendEntityRpcSuccess(intptr_t /*reply_channel*/, uint32_t /*request_id*/,
                                     const std::byte* /*body*/, int32_t /*len*/) {}
   virtual void SendEntityRpcFailure(intptr_t /*reply_channel*/, uint32_t /*request_id*/,

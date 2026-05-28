@@ -14,6 +14,9 @@ public static class ClientCallbacks
     public const ushort kEntityTransferredMessageId = 2024;
     public const ushort kCellReadyMessageId = 2025;
     public const ushort kClientRpcMessageId = 0xF004;
+    public const ushort kClientMovementStateAckMessageId = 0xF005;
+    public const ushort kClientMovementCommandStartMessageId = 0xF006;
+    public const ushort kClientMovementCommandEndMessageId = 0xF007;
     public const ushort kSpaceBspGeometryMessageId = 2032;
 
     public static ClientSession DefaultSession { get; } = new();
@@ -31,6 +34,24 @@ public static class ClientCallbacks
     {
         add => DefaultSession.SpaceBspGeometryReceived += value;
         remove => DefaultSession.SpaceBspGeometryReceived -= value;
+    }
+
+    public static event Action<MovementStateAck>? MovementStateAckReceived
+    {
+        add => DefaultSession.MovementStateAckReceived += value;
+        remove => DefaultSession.MovementStateAckReceived -= value;
+    }
+
+    public static event Action<MovementCommandStart>? MovementCommandStarted
+    {
+        add => DefaultSession.MovementCommandStarted += value;
+        remove => DefaultSession.MovementCommandStarted -= value;
+    }
+
+    public static event Action<MovementCommandEnd>? MovementCommandEnded
+    {
+        add => DefaultSession.MovementCommandEnded += value;
+        remove => DefaultSession.MovementCommandEnded -= value;
     }
 
     public static void ResetSession()

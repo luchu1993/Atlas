@@ -21,6 +21,7 @@ target_link_libraries(atlas_net_client_core
     atlas_network
     atlas_foundation
     atlas_platform
+    atlas_movement_sim
     atlas_serialization_binary
     atlas_compiler_options
 )
@@ -47,6 +48,7 @@ target_link_libraries(atlas_net_client
     atlas_network
     atlas_foundation
     atlas_platform
+    atlas_movement_sim
     atlas_serialization_binary
     atlas_compiler_options
 )
@@ -88,7 +90,7 @@ if(CMAKE_SYSTEM_NAME STREQUAL "iOS")
     PRIVATE ATLAS_NET_CLIENT_EXPORTS
   )
   target_link_libraries(atlas_net_client_static
-    PUBLIC atlas_network atlas_foundation atlas_platform
+    PUBLIC atlas_network atlas_foundation atlas_platform atlas_movement_sim
            atlas_serialization_binary atlas_compiler_options
   )
 endif()

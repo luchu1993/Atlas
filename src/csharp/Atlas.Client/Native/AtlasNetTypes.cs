@@ -50,6 +50,35 @@ public struct AtlasNetCallbacks
 }
 
 [StructLayout(LayoutKind.Sequential, Pack = 1)]
+public struct AtlasMovementInputFrame
+{
+    public uint Seq;
+    public uint InputTick;
+    public sbyte MoveX;
+    public sbyte MoveZ;
+    public ushort ViewYaw;
+    public sbyte ViewPitch;
+    public ushort Buttons;
+    public ushort ClientDtMs;
+}
+
+[StructLayout(LayoutKind.Sequential, Pack = 1)]
+public struct AtlasMovementStateFrame
+{
+    public float PositionX;
+    public float PositionY;
+    public float PositionZ;
+    public float VelocityX;
+    public float VelocityY;
+    public float VelocityZ;
+    public float DirectionX;
+    public float DirectionY;
+    public float DirectionZ;
+    public uint Flags;
+    public uint LastProcessedInputSeq;
+}
+
+[StructLayout(LayoutKind.Sequential, Pack = 1)]
 public struct AtlasNetStats
 {
     public uint  RttMs;

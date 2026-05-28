@@ -14,7 +14,7 @@ using ClientDispatchRpcFn = void (*)(uint32_t entity_id, uint32_t rpc_id, const 
 using ClientCreateEntityFn = void (*)(uint32_t entity_id, uint16_t type_id);
 using ClientDestroyEntityFn = void (*)(uint32_t entity_id);
 
-// Opaque transport-channel hook for the 0xF001/0xF002/0xF003 wire ids — keeps
+// Opaque transport-channel hook for the 0xF001/0xF002/0xF003 wire ids; keeps
 // property-sync decode on the managed side so a Lua / TS host can bind it too.
 using ClientDeliverFromServerFn = void (*)(uint16_t msg_id, const uint8_t* payload, int32_t len);
 
@@ -28,6 +28,11 @@ class ClientNativeProvider : public BaseNativeProvider {
                    uint64_t trace_id) override;
   void SendCellRpc(uint32_t entity_id, uint32_t rpc_id, const std::byte* payload, int32_t len,
                    uint64_t trace_id) override;
+  void SendMovementInput(uint32_t target_entity_id, const std::byte* frames,
+                         int32_t frame_count) override;
+  void SendMovementCorrectionReport(uint32_t target_entity_id, uint32_t acked_input_seq,
+                                    uint32_t server_tick, float distance_m,
+                                    uint16_t correction_flags) override;
 
   void ReportClientEventSeqGap(uint32_t entity_id, uint32_t gap_delta) override;
 

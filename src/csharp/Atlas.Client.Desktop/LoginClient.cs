@@ -74,7 +74,10 @@ public sealed unsafe class LoginClient : IDisposable, IAtlasNetEvents
         }
 
         if (ct.CanBeCanceled)
-            src.AttachCancelReg(ct.Register(static s => ((LoginSource)s!).OnCancellationRequested(), src));
+        {
+            src.AttachCancelReg(ct.Register(
+                static s => ((LoginSource)s!).OnCancellationRequested(), src));
+        }
 
         var rc = AtlasNetNative.AtlasNetLogin(_ctx, loginAppHost, loginAppPort, username,
             passwordHash, s_loginCallbackPtr, GCHandle.ToIntPtr(_selfHandle));
@@ -91,8 +94,11 @@ public sealed unsafe class LoginClient : IDisposable, IAtlasNetEvents
     {
         ThrowIfDisposed();
         if (_authInflight is not null)
+        {
             return AtlasTask<AuthResult>.FromException(
-                new InvalidOperationException("LoginClient: another authenticate is already in flight"));
+                new InvalidOperationException(
+                    "LoginClient: another authenticate is already in flight"));
+        }
 
         var src = new AuthSource(this);
         _authInflight = src;
@@ -104,7 +110,10 @@ public sealed unsafe class LoginClient : IDisposable, IAtlasNetEvents
         }
 
         if (ct.CanBeCanceled)
-            src.AttachCancelReg(ct.Register(static s => ((AuthSource)s!).OnCancellationRequested(), src));
+        {
+            src.AttachCancelReg(ct.Register(
+                static s => ((AuthSource)s!).OnCancellationRequested(), src));
+        }
 
         var rc = AtlasNetNative.AtlasNetAuthenticate(_ctx, s_authCallbackPtr,
             GCHandle.ToIntPtr(_selfHandle));
@@ -121,6 +130,13 @@ public sealed unsafe class LoginClient : IDisposable, IAtlasNetEvents
     {
         if (_disposed) return;
         AtlasNetNative.AtlasNetDisconnect(_ctx, reason);
+    }
+
+    public int SetTransportImpairment(uint oneWayLatencyMs, uint lossPermyriad, uint seed = 1)
+    {
+        ThrowIfDisposed();
+        return AtlasNetNative.AtlasNetSetTransportImpairment(
+            _ctx, oneWayLatencyMs, lossPermyriad, seed);
     }
 
     public void Dispose()
@@ -156,9 +172,11 @@ public sealed unsafe class LoginClient : IDisposable, IAtlasNetEvents
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private static string ReadUtf8(IntPtr p) => p == IntPtr.Zero ? "" : Marshal.PtrToStringUTF8(p) ?? "";
+    private static string ReadUtf8(IntPtr p)
+        => p == IntPtr.Zero ? "" : Marshal.PtrToStringUTF8(p) ?? "";
 
-    [UnmanagedCallersOnly(CallConvs = new[] { typeof(System.Runtime.CompilerServices.CallConvCdecl) })]
+    [UnmanagedCallersOnly(
+        CallConvs = new[] { typeof(System.Runtime.CompilerServices.CallConvCdecl) })]
     private static void OnLoginResultThunk(IntPtr userData, byte status, IntPtr hostUtf8,
         ushort port, IntPtr errMsgUtf8)
     {
@@ -182,7 +200,8 @@ public sealed unsafe class LoginClient : IDisposable, IAtlasNetEvents
         catch (Exception ex) { ErrorBridge.SetError(ex); }
     }
 
-    [UnmanagedCallersOnly(CallConvs = new[] { typeof(System.Runtime.CompilerServices.CallConvCdecl) })]
+    [UnmanagedCallersOnly(
+        CallConvs = new[] { typeof(System.Runtime.CompilerServices.CallConvCdecl) })]
     private static void OnAuthResultThunk(IntPtr userData, byte success, uint entityId,
         ushort typeId, IntPtr errMsgUtf8)
     {
@@ -206,10 +225,12 @@ public sealed unsafe class LoginClient : IDisposable, IAtlasNetEvents
     }
 
     private static readonly IntPtr s_loginCallbackPtr =
-        (IntPtr)(delegate* unmanaged[Cdecl]<IntPtr, byte, IntPtr, ushort, IntPtr, void>)&OnLoginResultThunk;
+        (IntPtr)(delegate* unmanaged[Cdecl]<IntPtr, byte, IntPtr, ushort, IntPtr, void>)
+            &OnLoginResultThunk;
 
     private static readonly IntPtr s_authCallbackPtr =
-        (IntPtr)(delegate* unmanaged[Cdecl]<IntPtr, byte, uint, ushort, IntPtr, void>)&OnAuthResultThunk;
+        (IntPtr)(delegate* unmanaged[Cdecl]<IntPtr, byte, uint, ushort, IntPtr, void>)
+            &OnAuthResultThunk;
 
     private sealed class LoginSource : IAtlasTaskSource<LoginResult>
     {
@@ -218,7 +239,8 @@ public sealed unsafe class LoginClient : IDisposable, IAtlasNetEvents
         private CancelRegistration _cancelReg;
 
         public LoginSource(LoginClient owner) { _owner = owner; }
-        public AtlasTask<LoginResult> Task => AtlasTask<LoginResult>.FromSource(this, _core.Version);
+        public AtlasTask<LoginResult> Task =>
+            AtlasTask<LoginResult>.FromSource(this, _core.Version);
 
         public void AttachCancelReg(CancelRegistration r) => _cancelReg = r;
         public void SetResult(LoginResult v) { _core.TrySetResult(v); }
@@ -238,7 +260,8 @@ public sealed unsafe class LoginClient : IDisposable, IAtlasNetEvents
 
         public short Version => _core.Version;
         public AtlasTaskStatus GetStatus(short t) => _core.GetStatus(t);
-        public void OnCompleted(Action<object?> c, object? s, short t) => _core.OnCompleted(c, s, t);
+        public void OnCompleted(Action<object?> c, object? s, short t) =>
+            _core.OnCompleted(c, s, t);
         public LoginResult GetResult(short t)
         {
             try { return _core.GetResult(t); }
@@ -271,7 +294,8 @@ public sealed unsafe class LoginClient : IDisposable, IAtlasNetEvents
 
         public short Version => _core.Version;
         public AtlasTaskStatus GetStatus(short t) => _core.GetStatus(t);
-        public void OnCompleted(Action<object?> c, object? s, short t) => _core.OnCompleted(c, s, t);
+        public void OnCompleted(Action<object?> c, object? s, short t) =>
+            _core.OnCompleted(c, s, t);
         public AuthResult GetResult(short t)
         {
             try { return _core.GetResult(t); }

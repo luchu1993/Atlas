@@ -3,55 +3,125 @@ using Atlas.DataTypes;
 
 namespace Atlas.Entity;
 
-// Cell-resident entity base — owns spatial state and cell-side lifecycle.
+// Cell-resident entity base; owns spatial state and cell-side lifecycle.
 public abstract class CellServerEntity : ServerEntity
 {
-    // Real: setter mirrors to C++ for the same-tick RangeList shuffle and
-    // Witness volatile pump; getter returns the cache to avoid per-read
-    // P/Invoke. Ghost: C++ side is the source of truth (GhostUpdatePosition
-    // wire writes it), so the getter pulls live each call; setter rejects
-    // because C++ would reject too.
+    // C++ movement/offload can update native pose without touching this cache.
+    // Read through native so gameplay queries see the authoritative transform.
     public Vector3 Position
     {
-        get => IsGhost ? NativeApi.GetEntityPosition(EntityId) : _position;
+        get
+        {
+            _position = NativeApi.GetEntityPosition(EntityId);
+            return _position;
+        }
         set
         {
             if (IsGhost) return;
-            if (_position != value)
+            Vector3 current = NativeApi.GetEntityPosition(EntityId);
+            if (current != value)
             {
                 _position = value;
                 NativeApi.SetEntityPosition(EntityId, value);
                 _volatileDirty = true;
+            }
+            else
+            {
+                _position = current;
             }
         }
     }
 
     public Vector3 Direction
     {
-        get => IsGhost ? NativeApi.GetEntityDirection(EntityId) : _direction;
+        get
+        {
+            _direction = NativeApi.GetEntityDirection(EntityId);
+            return _direction;
+        }
         set
         {
             if (IsGhost) return;
-            if (_direction != value)
+            Vector3 current = NativeApi.GetEntityDirection(EntityId);
+            if (current != value)
             {
                 _direction = value;
                 NativeApi.SetEntityDirection(EntityId, value);
                 _volatileDirty = true;
+            }
+            else
+            {
+                _direction = current;
             }
         }
     }
 
     public bool OnGround
     {
-        get => _onGround;
+        get
+        {
+            _onGround = NativeApi.GetEntityOnGround(EntityId);
+            return _onGround;
+        }
         set
         {
-            if (_onGround != value)
+            if (IsGhost) return;
+            bool current = NativeApi.GetEntityOnGround(EntityId);
+            if (current != value)
             {
                 _onGround = value;
+                NativeApi.SetEntityOnGround(EntityId, value);
                 _volatileDirty = true;
             }
+            else
+            {
+                _onGround = current;
+            }
         }
+    }
+
+    public void SetMovementIntent(Vector3 direction, float speedMps, ushort buttons = 0)
+    {
+        if (IsGhost || IsDestroyed) return;
+        NativeApi.SetMovementIntent(EntityId, direction.X, direction.Z, speedMps, buttons);
+    }
+
+    public bool SetMovementCommand(MovementCommand command)
+    {
+        if (IsGhost || IsDestroyed) return false;
+        return NativeApi.SetMovementCommand(EntityId, command);
+    }
+
+    public bool ClearMovementCommand(uint commandId = 0)
+    {
+        if (IsGhost || IsDestroyed) return false;
+        return NativeApi.ClearMovementCommand(EntityId, commandId);
+    }
+
+    public static bool RegisterMovementCurve(ushort curveId, System.ReadOnlySpan<float> samples)
+    {
+        return NativeApi.SetMovementCurve(curveId, samples);
+    }
+
+    public static bool LoadCollisionAsset(uint spaceId, string path)
+    {
+        return NativeApi.LoadCollisionAsset(spaceId, path);
+    }
+
+    public bool TryGetMovementHistorySample(uint serverTick, out MovementHistorySample sample)
+    {
+        if (NativeApi.TryGetMovementHistorySample(
+                EntityId, serverTick, out uint sampleTick, out Vector3 position,
+                out Vector3 velocity, out Vector3 direction, out uint flags,
+                out uint lastSeq))
+        {
+            sample = new MovementHistorySample(
+                sampleTick, position, velocity, direction, flags, lastSeq);
+            return true;
+        }
+
+        sample = default;
+        return false;
     }
 
     private Vector3 _position;
@@ -73,7 +143,7 @@ public abstract class CellServerEntity : ServerEntity
     // Native side fires AoI exit + invokes OnDestroy; refuses base-owned entities.
     public void DestroySelf() => NativeApi.DestroyCellEntity(EntityId);
 
-    // Cross-cell helpers route here when this entity is a Ghost — the C++
+    // Cross-cell helpers route here when this entity is a Ghost; the C++
     // provider's SendCellRpc rejects Real, so callers don't double-check.
     public void InvokeCellMethodFromGhost(int rpcId, System.ReadOnlySpan<byte> payload)
         => SendCellRpc(rpcId, payload);
@@ -96,6 +166,7 @@ public abstract class CellServerEntity : ServerEntity
     {
         _position = NativeApi.GetEntityPosition(EntityId);
         _direction = NativeApi.GetEntityDirection(EntityId);
+        _onGround = NativeApi.GetEntityOnGround(EntityId);
         _spaceId = NativeApi.GetEntitySpaceId(EntityId);
     }
 }

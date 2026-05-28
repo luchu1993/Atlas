@@ -7,6 +7,7 @@
 #include <string>
 
 #include "foundation/log.h"
+#include "movement_sim/movement_sim.h"
 #include "net_client/client_session.h"
 
 namespace {
@@ -38,6 +39,60 @@ auto AbiCompatible(uint32_t expected) -> bool {
   const uint32_t exp_major = (expected >> 24) & 0xFFu;
   const uint32_t exp_minor = (expected >> 16) & 0xFFu;
   return exp_major == our_major && exp_minor <= our_minor;
+}
+
+auto ToMovementInput(const AtlasMovementInputFrame& frame) -> atlas::movement::InputFrame {
+  atlas::movement::InputFrame input;
+  input.seq = frame.seq;
+  input.input_tick = frame.input_tick;
+  input.move_x = frame.move_x;
+  input.move_z = frame.move_z;
+  input.view_yaw = frame.view_yaw;
+  input.view_pitch = frame.view_pitch;
+  input.buttons = frame.buttons;
+  input.client_dt_ms = frame.client_dt_ms;
+  return input;
+}
+
+auto ToMovementState(const AtlasMovementStateFrame& frame) -> atlas::movement::MovementState {
+  atlas::movement::MovementState state;
+  state.position = {frame.position_x, frame.position_y, frame.position_z};
+  state.velocity = {frame.velocity_x, frame.velocity_y, frame.velocity_z};
+  state.direction = {frame.direction_x, frame.direction_y, frame.direction_z};
+  state.flags = frame.flags;
+  state.last_processed_input_seq = frame.last_processed_input_seq;
+  return state;
+}
+
+auto ToApiState(const atlas::movement::MovementState& state) -> AtlasMovementStateFrame {
+  AtlasMovementStateFrame frame;
+  frame.position_x = state.position.x;
+  frame.position_y = state.position.y;
+  frame.position_z = state.position.z;
+  frame.velocity_x = state.velocity.x;
+  frame.velocity_y = state.velocity.y;
+  frame.velocity_z = state.velocity.z;
+  frame.direction_x = state.direction.x;
+  frame.direction_y = state.direction.y;
+  frame.direction_z = state.direction.z;
+  frame.flags = state.flags;
+  frame.last_processed_input_seq = state.last_processed_input_seq;
+  return frame;
+}
+
+auto ToApiCorrectionTier(
+    atlas::movement::CorrectionTier tier) -> AtlasMovementCorrectionTier {
+  switch (tier) {
+    case atlas::movement::CorrectionTier::kNone:
+      return ATLAS_MOVEMENT_CORRECTION_NONE;
+    case atlas::movement::CorrectionTier::kTier1:
+      return ATLAS_MOVEMENT_CORRECTION_TIER1;
+    case atlas::movement::CorrectionTier::kTier2:
+      return ATLAS_MOVEMENT_CORRECTION_TIER2;
+    case atlas::movement::CorrectionTier::kSnap:
+      return ATLAS_MOVEMENT_CORRECTION_SNAP;
+  }
+  return ATLAS_MOVEMENT_CORRECTION_NONE;
 }
 
 }  // namespace
@@ -121,6 +176,12 @@ int32_t AtlasNetDisconnect(AtlasNetContext* ctx, AtlasDisconnectReason reason) {
   return ctx->Disconnect(reason);
 }
 
+int32_t AtlasNetSetTransportImpairment(AtlasNetContext* ctx, uint32_t one_way_latency_ms,
+                                       uint32_t loss_permyriad, uint32_t seed) {
+  if (!ctx) return ATLAS_NET_ERR_INVAL;
+  return ctx->SetTransportImpairment(one_way_latency_ms, loss_permyriad, seed);
+}
+
 int32_t AtlasNetSendBaseRpc(AtlasNetContext* ctx, uint32_t entity_id, uint32_t rpc_id,
                             const uint8_t* payload, int32_t len) {
   if (!ctx) return ATLAS_NET_ERR_INVAL;
@@ -131,6 +192,50 @@ int32_t AtlasNetSendCellRpc(AtlasNetContext* ctx, uint32_t entity_id, uint32_t r
                             const uint8_t* payload, int32_t len) {
   if (!ctx) return ATLAS_NET_ERR_INVAL;
   return ctx->SendCellRpc(entity_id, rpc_id, payload, len);
+}
+
+int32_t AtlasNetSendMovementInput(AtlasNetContext* ctx, uint32_t target_entity_id,
+                                  const AtlasMovementInputFrame* frames, int32_t frame_count) {
+  if (!ctx) return ATLAS_NET_ERR_INVAL;
+  return ctx->SendMovementInput(target_entity_id, frames, frame_count);
+}
+
+int32_t AtlasNetSendMovementCorrectionReport(AtlasNetContext* ctx, uint32_t target_entity_id,
+                                             uint32_t acked_input_seq, uint32_t server_tick,
+                                             float distance_m, uint16_t correction_flags) {
+  if (!ctx) return ATLAS_NET_ERR_INVAL;
+  return ctx->SendMovementCorrectionReport(target_entity_id, acked_input_seq, server_tick,
+                                           distance_m, correction_flags);
+}
+
+int32_t AtlasNetMovementPredictStep(const AtlasMovementStateFrame* previous,
+                                    const AtlasMovementInputFrame* input, uint32_t server_tick,
+                                    AtlasMovementStateFrame* out_state) {
+  if (!previous || !input || !out_state) return ATLAS_NET_ERR_INVAL;
+
+  const auto previous_state = ToMovementState(*previous);
+  if (!atlas::movement::IsFinite(previous_state)) return ATLAS_NET_ERR_INVAL;
+  const auto movement_input = ToMovementInput(*input);
+  if (!atlas::movement::IsInputFrameValid(movement_input)) return ATLAS_NET_ERR_INVAL;
+
+  atlas::movement::MovementConfig config;
+  if (!atlas::movement::IsStateWithinLimits(previous_state, config)) return ATLAS_NET_ERR_INVAL;
+  atlas::movement::FlatGroundQuery query;
+  const auto result =
+      atlas::movement::Step(previous_state, movement_input, config, query, server_tick);
+  if (!atlas::movement::IsStateWithinLimits(result.state, config)) return ATLAS_NET_ERR_INVAL;
+
+  *out_state = ToApiState(result.state);
+  return ATLAS_NET_OK;
+}
+
+AtlasMovementCorrectionTier AtlasNetMovementClassifyCorrection(float distance_m) {
+  return ToApiCorrectionTier(atlas::movement::ClassifyCorrection(distance_m));
+}
+
+uint16_t AtlasNetMovementCorrectionFlag(float distance_m) {
+  return atlas::movement::CorrectionFlagForTier(
+      atlas::movement::ClassifyCorrection(distance_m));
 }
 
 int32_t AtlasNetSetCallbacks(AtlasNetContext* ctx, const AtlasNetCallbacks* callbacks) {

@@ -21,7 +21,9 @@ namespace Atlas.Client.Unity
         public event Action<int>? Disconnected;
 
         public AtlasNetState State =>
-            _ctx == IntPtr.Zero ? AtlasNetState.Disconnected : AtlasNetNative.AtlasNetGetState(_ctx);
+            _ctx == IntPtr.Zero
+                ? AtlasNetState.Disconnected
+                : AtlasNetNative.AtlasNetGetState(_ctx);
 
         private IntPtr _ctx;
         private AtlasNetNative.LoginResultDelegate? _loginCallback;
@@ -80,6 +82,22 @@ namespace Atlas.Client.Unity
             };
             Session.SendCellRpcHandler = ClientHost.SendCellRpcHandler;
 
+            ClientHost.SendMovementInputHandler = (targetEntityId, frames) =>
+            {
+                _ = SendMovementInput(targetEntityId, frames);
+            };
+            Session.SendMovementInputHandler = ClientHost.SendMovementInputHandler;
+
+            ClientHost.SendMovementCorrectionReportHandler =
+                (targetEntityId, ackedInputSeq, serverTick, distanceM, correctionFlags) =>
+                {
+                    _ = SendMovementCorrectionReport(targetEntityId, ackedInputSeq,
+                                                     serverTick, distanceM,
+                                                     correctionFlags);
+                };
+            Session.SendMovementCorrectionReportHandler =
+                ClientHost.SendMovementCorrectionReportHandler;
+
             // net_client carries no entity-def registry; the no-ops just keep
             // ClientHost.Required from throwing on the script-DLL boot sweep.
             ClientHost.RegisterEntityTypeHandler = _ => { };
@@ -134,7 +152,8 @@ namespace Atlas.Client.Unity
         {
             if (_ctx == IntPtr.Zero) return AtlasNetReturnCode.ErrInval;
             _loginCallback = OnLoginNative;
-            IntPtr cb = System.Runtime.InteropServices.Marshal.GetFunctionPointerForDelegate(_loginCallback);
+            IntPtr cb = System.Runtime.InteropServices.Marshal.GetFunctionPointerForDelegate(
+                _loginCallback);
             return AtlasNetNative.AtlasNetLogin(_ctx, loginappHost, loginappPort,
                                                 username, passwordHash, cb, IntPtr.Zero);
         }
@@ -143,7 +162,8 @@ namespace Atlas.Client.Unity
         {
             if (_ctx == IntPtr.Zero) return AtlasNetReturnCode.ErrInval;
             _authCallback = OnAuthNative;
-            IntPtr cb = System.Runtime.InteropServices.Marshal.GetFunctionPointerForDelegate(_authCallback);
+            IntPtr cb = System.Runtime.InteropServices.Marshal.GetFunctionPointerForDelegate(
+                _authCallback);
             return AtlasNetNative.AtlasNetAuthenticate(_ctx, cb, IntPtr.Zero);
         }
 
@@ -152,12 +172,19 @@ namespace Atlas.Client.Unity
                 ? AtlasNetReturnCode.ErrInval
                 : AtlasNetNative.AtlasNetDisconnect(_ctx, AtlasDisconnectReason.Logout);
 
+        public int SetTransportImpairment(uint oneWayLatencyMs, uint lossPermyriad, uint seed = 1)
+            => _ctx == IntPtr.Zero
+                ? AtlasNetReturnCode.ErrInval
+                : AtlasNetNative.AtlasNetSetTransportImpairment(
+                    _ctx, oneWayLatencyMs, lossPermyriad, seed);
+
         public unsafe int SendBaseRpc(uint entityId, uint rpcId, ReadOnlySpan<byte> payload)
         {
             if (_ctx == IntPtr.Zero) return AtlasNetReturnCode.ErrInval;
             fixed (byte* p = payload)
             {
-                int rc = AtlasNetNative.AtlasNetSendBaseRpc(_ctx, entityId, rpcId, p, payload.Length);
+                int rc = AtlasNetNative.AtlasNetSendBaseRpc(_ctx, entityId, rpcId, p,
+                                                            payload.Length);
                 if (rc == AtlasNetReturnCode.Ok) ++_rpcOutCount;
                 return rc;
             }
@@ -168,10 +195,43 @@ namespace Atlas.Client.Unity
             if (_ctx == IntPtr.Zero) return AtlasNetReturnCode.ErrInval;
             fixed (byte* p = payload)
             {
-                int rc = AtlasNetNative.AtlasNetSendCellRpc(_ctx, entityId, rpcId, p, payload.Length);
+                int rc = AtlasNetNative.AtlasNetSendCellRpc(_ctx, entityId, rpcId, p,
+                                                            payload.Length);
                 if (rc == AtlasNetReturnCode.Ok) ++_rpcOutCount;
                 return rc;
             }
+        }
+
+        public unsafe int SendMovementInput(uint targetEntityId,
+                                            ReadOnlySpan<AtlasMovementInputFrame> frames)
+        {
+            if (_ctx == IntPtr.Zero) return AtlasNetReturnCode.ErrInval;
+            fixed (AtlasMovementInputFrame* p = frames)
+                return AtlasNetNative.AtlasNetSendMovementInput(_ctx, targetEntityId, p,
+                                                                frames.Length);
+        }
+
+        public int SendMovementCorrectionReport(uint targetEntityId, uint ackedInputSeq,
+                                                uint serverTick, float distanceM,
+                                                ushort correctionFlags)
+        {
+            if (_ctx == IntPtr.Zero) return AtlasNetReturnCode.ErrInval;
+            return AtlasNetNative.AtlasNetSendMovementCorrectionReport(
+                _ctx, targetEntityId, ackedInputSeq, serverTick, distanceM, correctionFlags);
+        }
+
+        public static unsafe int PredictMovement(in AtlasMovementStateFrame previous,
+                                                 in AtlasMovementInputFrame input,
+                                                 uint serverTick,
+                                                 out AtlasMovementStateFrame state)
+        {
+            var previousCopy = previous;
+            var inputCopy = input;
+            AtlasMovementStateFrame output;
+            int rc = AtlasNetNative.AtlasNetMovementPredictStep(&previousCopy, &inputCopy,
+                                                                serverTick, &output);
+            state = output;
+            return rc;
         }
 
         private void OnLoginNative(IntPtr userData, byte status,

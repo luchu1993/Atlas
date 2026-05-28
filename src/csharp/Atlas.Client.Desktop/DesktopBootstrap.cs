@@ -44,12 +44,19 @@ public static unsafe class DesktopBootstrap
 
             ClientHost.SendBaseRpcHandler = ClientNativeApi.SendBaseRpc;
             ClientHost.SendCellRpcHandler = ClientNativeApi.SendCellRpc;
+            ClientHost.SendMovementInputHandler = ClientNativeApi.SendMovementInput;
+            ClientHost.SendMovementCorrectionReportHandler =
+                ClientNativeApi.SendMovementCorrectionReport;
             ClientHost.RegisterEntityTypeHandler = ClientNativeApi.RegisterEntityType;
             ClientHost.RegisterStructHandler = ClientNativeApi.RegisterStruct;
             ClientHost.SetEntityDefDigestHandler = ClientNativeApi.SetEntityDefDigest;
             ClientHost.ReportEventSeqGapHandler = ClientNativeApi.ReportEventSeqGap;
             ClientCallbacks.DefaultSession.SendBaseRpcHandler = ClientNativeApi.SendBaseRpc;
             ClientCallbacks.DefaultSession.SendCellRpcHandler = ClientNativeApi.SendCellRpc;
+            ClientCallbacks.DefaultSession.SendMovementInputHandler =
+                ClientNativeApi.SendMovementInput;
+            ClientCallbacks.DefaultSession.SendMovementCorrectionReportHandler =
+                ClientNativeApi.SendMovementCorrectionReport;
             ClientCallbacks.DefaultSession.ReportEventSeqGapHandler =
                 ClientNativeApi.ReportEventSeqGap;
 

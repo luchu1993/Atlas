@@ -3,6 +3,7 @@
 #include <chrono>
 #include <filesystem>
 #include <format>
+#include <limits>
 #include <span>
 #include <thread>
 
@@ -22,12 +23,25 @@ namespace atlas {
 namespace {
 
 auto ParseUint32Arg(std::string_view sv, uint32_t& out) -> bool {
+  if (sv.empty() || sv.front() == '-') return false;
   try {
-    out = static_cast<uint32_t>(std::stoul(std::string(sv)));
+    std::size_t parsed = 0;
+    const auto value = std::stoul(std::string(sv), &parsed);
+    if (parsed != sv.size() || value > std::numeric_limits<uint32_t>::max()) return false;
+    out = static_cast<uint32_t>(value);
     return true;
   } catch (...) {
     return false;
   }
+}
+
+auto TransportImpairmentSeed(std::string_view username) -> uint32_t {
+  uint32_t hash = 2166136261u;
+  for (char c : username) {
+    hash ^= static_cast<uint8_t>(c);
+    hash *= 16777619u;
+  }
+  return hash != 0 ? hash : 1u;
 }
 
 }  // namespace
@@ -53,7 +67,15 @@ auto ClientApp::Init(int argc, char* argv[]) -> bool {
     if (arg == "--loginapp-host") {
       config_.loginapp_host = std::string(next());
     } else if (arg == "--loginapp-port") {
-      config_.loginapp_port = static_cast<uint16_t>(std::stoul(std::string(next())));
+      auto port_sv = next();
+      uint32_t port = 0;
+      if (!ParseUint32Arg(port_sv, port) || port == 0 ||
+          port > std::numeric_limits<uint16_t>::max()) {
+        ATLAS_LOG_ERROR("Client: --loginapp-port requires a port in [1, 65535] (got '{}')",
+                        port_sv);
+        return false;
+      }
+      config_.loginapp_port = static_cast<uint16_t>(port);
     } else if (arg == "--username") {
       config_.username = std::string(next());
     } else if (arg == "--password") {
@@ -79,6 +101,19 @@ auto ClientApp::Init(int argc, char* argv[]) -> bool {
         ATLAS_LOG_ERROR(
             "Client: --drop-transport-ms requires two unsigned integers (got '{}', '{}')", start_sv,
             duration_sv);
+        return false;
+      }
+    } else if (arg == "--impair-transport-ms") {
+      auto latency_sv = next();
+      auto loss_sv = next();
+      if (!ParseUint32Arg(latency_sv, config_.transport_impairment_latency_ms) ||
+          !ParseUint32Arg(loss_sv, config_.transport_impairment_loss_permyriad) ||
+          config_.transport_impairment_loss_permyriad > 10'000) {
+        ATLAS_LOG_ERROR(
+            "Client: --impair-transport-ms requires latency ms and loss per 10000 "
+            "(got '{}', '{}')",
+            latency_sv,
+            loss_sv);
         return false;
       }
     }
@@ -169,8 +204,7 @@ auto ClientApp::InitClr(const char* exe_path) -> bool {
   clr_config.runtime_config_path = config_.runtime_config;
   clr_config.runtime_assembly_path = config_.script_assembly;
   clr_config.bootstrap_args = bootstrap_args;
-  // Lifecycle lives in Atlas.Client.Desktop, which is a transitive reference of
-  // the script assembly — fully-qualify so the bind crosses assemblies cleanly.
+  // Lifecycle lives in Atlas.Client.Desktop, a transitive script assembly reference.
   clr_config.lifecycle_type = "Atlas.Client.DesktopLifecycle, Atlas.Client.Desktop";
   clr_config.hotreload_type.clear();
 
@@ -357,52 +391,77 @@ void ClientApp::OnRpcMessage(uint32_t rpc_id, uint64_t trace_id, const std::byte
 }
 
 void ClientApp::RegisterMessageHandlers() {
-  // Typed entries are required for fixed-length BaseApp→Client messages —
-  // untyped dispatch misreads them as packed-int length prefixes.
+  auto should_drop_inbound = [this]() -> bool {
+    if (config_.drop_inbound_duration_ms == 0) return false;
+    const auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
+                             std::chrono::steady_clock::now() - loop_start_)
+                             .count();
+    return elapsed >= config_.drop_inbound_start_ms &&
+           elapsed < config_.drop_inbound_start_ms + config_.drop_inbound_duration_ms;
+  };
+
+  auto deliver_from_server = [this](MessageID msg_id, std::span<const std::byte> body) {
+    if (native_provider_ && native_provider_->DeliverFromServerFn()) {
+      native_provider_->DeliverFromServerFn()(
+          msg_id, reinterpret_cast<const uint8_t*>(body.data()), static_cast<int32_t>(body.size()));
+    } else {
+      ATLAS_LOG_WARNING(
+          "Client: server message 0x{:04X} arrived but no deliver_from_server callback registered",
+          static_cast<unsigned>(msg_id));
+    }
+  };
+
+  // Typed entries are required for fixed-length BaseApp-to-client messages.
   network_.InterfaceTable().RegisterTypedHandler<baseapp::EntityTransferred>(
       [this](const Address&, Channel*, const baseapp::EntityTransferred& msg) {
         player_entity_id_ = msg.new_entity_id;
         player_type_id_ = msg.new_type_id;
-        // Spawn the matching client-side entity so owner-scope deltas land on
-        // a script instance — Witness never ships kEntityEnter for self.
+        // Spawn the matching owner entity; Witness never ships kEntityEnter for self.
         if (native_provider_ && native_provider_->CreateEntityFn()) {
           native_provider_->CreateEntityFn()(msg.new_entity_id, msg.new_type_id);
         }
       });
   network_.InterfaceTable().RegisterTypedHandler<baseapp::CellReady>(
       [](const Address&, Channel*, const baseapp::CellReady&) {});
+  network_.InterfaceTable().RegisterTypedHandler<baseapp::MovementStateAckToClient>(
+      [deliver_from_server, should_drop_inbound](const Address&, Channel*,
+                                                 const baseapp::MovementStateAckToClient& msg) {
+        if (should_drop_inbound()) return;
+        BinaryWriter writer(baseapp::MovementStateAckToClient::Descriptor().fixed_length);
+        msg.Serialize(writer);
+        deliver_from_server(baseapp::kClientMovementStateAckMessageId, writer.Data());
+      });
+  network_.InterfaceTable().RegisterTypedHandler<baseapp::MovementCommandStartToClient>(
+      [deliver_from_server, should_drop_inbound](
+          const Address&, Channel*, const baseapp::MovementCommandStartToClient& msg) {
+        if (should_drop_inbound()) return;
+        BinaryWriter writer(
+            baseapp::MovementCommandStartToClient::Descriptor().fixed_length);
+        msg.Serialize(writer);
+        deliver_from_server(baseapp::kClientMovementCommandStartMessageId, writer.Data());
+      });
+  network_.InterfaceTable().RegisterTypedHandler<baseapp::MovementCommandEndToClient>(
+      [deliver_from_server, should_drop_inbound](
+          const Address&, Channel*, const baseapp::MovementCommandEndToClient& msg) {
+        if (should_drop_inbound()) return;
+        BinaryWriter writer(baseapp::MovementCommandEndToClient::Descriptor().fixed_length);
+        msg.Serialize(writer);
+        deliver_from_server(baseapp::kClientMovementCommandEndMessageId, writer.Data());
+      });
 
-  // 0xF001/2/3 — opaque state-replication forward; 0xF004 — RPC envelope
-  // [u32 rpc_id][u64 trace_id][args]; anything else logs and drops.
   network_.InterfaceTable().SetDefaultHandler(
-      [this](const Address&, Channel*, MessageID msg_id, BinaryReader& reader) {
+      [this, deliver_from_server, should_drop_inbound](const Address&, Channel*, MessageID msg_id,
+                                                       BinaryReader& reader) {
         const bool is_state_channel = msg_id == baseapp::kClientDeltaMessageId ||
                                       msg_id == baseapp::kClientBaselineMessageId ||
                                       msg_id == baseapp::kClientReliableDeltaMessageId;
 
         if (is_state_channel) {
-          if (config_.drop_inbound_duration_ms > 0) {
-            const auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
-                                     std::chrono::steady_clock::now() - loop_start_)
-                                     .count();
-            if (elapsed >= config_.drop_inbound_start_ms &&
-                elapsed < config_.drop_inbound_start_ms + config_.drop_inbound_duration_ms) {
-              return;
-            }
-          }
+          if (should_drop_inbound()) return;
           const auto rem = reader.Remaining();
           auto bytes = reader.ReadBytes(rem);
           if (!bytes) return;
-          if (native_provider_ && native_provider_->DeliverFromServerFn()) {
-            native_provider_->DeliverFromServerFn()(msg_id,
-                                                    reinterpret_cast<const uint8_t*>(bytes->data()),
-                                                    static_cast<int32_t>(bytes->size()));
-          } else {
-            ATLAS_LOG_WARNING(
-                "Client: state-channel message 0x{:04X} arrived but no deliver_from_server "
-                "callback registered",
-                static_cast<unsigned>(msg_id));
-          }
+          deliver_from_server(msg_id, *bytes);
           return;
         }
 
@@ -452,7 +511,24 @@ auto ClientApp::MainLoop() -> int {
     } else {
       ATLAS_LOG_ERROR(
           "Client: --drop-transport-ms set but baseapp_channel_ is not a "
-          "ReliableUdpChannel — drop window not installed");
+          "ReliableUdpChannel - drop window not installed");
+    }
+  }
+  if (config_.transport_impairment_latency_ms > 0 ||
+      config_.transport_impairment_loss_permyriad > 0) {
+    ATLAS_LOG_WARNING(
+        "Client: --impair-transport-ms active: {} ms one-way latency, "
+        "{} / 10000 datagram loss on the BaseApp RUDP channel",
+        config_.transport_impairment_latency_ms,
+        config_.transport_impairment_loss_permyriad);
+    if (auto* rudp = dynamic_cast<ReliableUdpChannel*>(baseapp_channel_)) {
+      rudp->SetTransportImpairment(config_.transport_impairment_latency_ms,
+                                   config_.transport_impairment_loss_permyriad,
+                                   TransportImpairmentSeed(config_.username));
+    } else {
+      ATLAS_LOG_ERROR(
+          "Client: --impair-transport-ms set but baseapp_channel_ is not a "
+          "ReliableUdpChannel - impairment not installed");
     }
   }
 

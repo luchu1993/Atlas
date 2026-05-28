@@ -37,6 +37,10 @@ class ClientApp {
     // Reliable packets lost in the window retransmit after RTO.
     uint32_t drop_transport_start_ms{0};
     uint32_t drop_transport_duration_ms{0};
+
+    // Bidirectional RUDP impairment for post-auth test traffic.
+    uint32_t transport_impairment_latency_ms{0};
+    uint32_t transport_impairment_loss_permyriad{0};
   };
 
   static auto Run(int argc, char* argv[]) -> int;
