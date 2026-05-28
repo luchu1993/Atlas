@@ -343,6 +343,13 @@ live 回归优先覆盖 CellAppMgr abnormal shutdown、`--cycles` 多轮接管�
   跨 phase 未提交工作 — 受 hunk 交织无法独立 commit,等
   `run_world_stress.py` 主体提交时一起入库。短期 verify 跑跨机
   cluster 时仍可在工作树本地使用。
+- `tests/integration/test_cellappmgr_process.cpp` 的 watcher slug 注释
+  (标注 `reviver/cellappmgr/output_path` 这个 ASSERT 是
+  `Reviver::Init` slug ordering 回归防护)和该文件同步累积了 1100+ 行
+  其他 phase 未提交工作 — 同样受 hunk 交织无法独立 commit。watcher slug
+  注册路径的回归防护本身仍生效(ASSERT 已存在);只是把它命名为
+  "load-bearing"的注释留待 `test_cellappmgr_process.cpp` 主体提交时
+  一起入库。
 - BaseApp crash 后的客户端 session resume 尚未实现；当前仍走重新登录路径。
 - CellApp 实体恢复已有 live smoke、多轮目标规模、恢复量、恢复耗时和
   payload / Ghost backup / promote 覆盖率基线；更大规模跨机器 fault-injection

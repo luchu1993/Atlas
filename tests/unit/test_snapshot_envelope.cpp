@@ -215,5 +215,71 @@ TEST(SnapshotEnvelope, PreserveBackupRefusesCorruptMain) {
   std::filesystem::remove(path, ec);
 }
 
+TEST(SnapshotEnvelope, EvaluateSizeWarningBelowThresholdReturnsNothing) {
+  const auto now = Clock::now();
+  // Below 80% with no prior warning: no log, no reset.
+  const auto d = snapshot_envelope::EvaluateSizeWarning(75u, now, TimePoint{});
+  EXPECT_FALSE(d.should_log);
+  EXPECT_FALSE(d.should_reset);
+}
+
+TEST(SnapshotEnvelope, EvaluateSizeWarningBelowThresholdResetsPriorTimestamp) {
+  const auto now = Clock::now();
+  const auto last = now - std::chrono::seconds(10);
+  // Snapshot pressure relieved after a prior warning — caller should clear
+  // last_warned_at so a future spike re-warns immediately.
+  const auto d = snapshot_envelope::EvaluateSizeWarning(50u, now, last);
+  EXPECT_FALSE(d.should_log);
+  EXPECT_TRUE(d.should_reset);
+}
+
+TEST(SnapshotEnvelope, EvaluateSizeWarningAtThresholdLogsFirstTime) {
+  const auto now = Clock::now();
+  const auto d = snapshot_envelope::EvaluateSizeWarning(80u, now, TimePoint{});
+  EXPECT_TRUE(d.should_log);
+  EXPECT_FALSE(d.should_reset);
+}
+
+TEST(SnapshotEnvelope, EvaluateSizeWarningJustBelowThresholdSilent) {
+  const auto now = Clock::now();
+  // 79% must not trip the warning — threshold is inclusive at 80.
+  const auto d = snapshot_envelope::EvaluateSizeWarning(79u, now, TimePoint{});
+  EXPECT_FALSE(d.should_log);
+  EXPECT_FALSE(d.should_reset);
+}
+
+TEST(SnapshotEnvelope, EvaluateSizeWarningThrottlesRepeatLogs) {
+  const auto now = Clock::now();
+  const auto recent = now - std::chrono::seconds(30);  // < 60s throttle
+  const auto d = snapshot_envelope::EvaluateSizeWarning(90u, now, recent);
+  EXPECT_FALSE(d.should_log);
+  EXPECT_FALSE(d.should_reset);
+}
+
+TEST(SnapshotEnvelope, EvaluateSizeWarningReissuesAfterThrottleWindow) {
+  const auto now = Clock::now();
+  const auto stale = now - std::chrono::seconds(120);  // > 60s throttle
+  const auto d = snapshot_envelope::EvaluateSizeWarning(95u, now, stale);
+  EXPECT_TRUE(d.should_log);
+  EXPECT_FALSE(d.should_reset);
+}
+
+TEST(SnapshotEnvelope, EvaluateSizeWarningExactlyAtThrottleBoundary) {
+  const auto now = Clock::now();
+  const auto exactly_throttle_ago = now - std::chrono::duration_cast<Duration>(
+                                              snapshot_envelope::kSizeWarningThrottle);
+  // now - last_warned_at == throttle should re-warn (the comparison is >=).
+  const auto d = snapshot_envelope::EvaluateSizeWarning(85u, now, exactly_throttle_ago);
+  EXPECT_TRUE(d.should_log);
+  EXPECT_FALSE(d.should_reset);
+}
+
+TEST(SnapshotEnvelope, EvaluateSizeWarningCustomThreshold) {
+  const auto now = Clock::now();
+  // Lower threshold to 50% — 60% should now trip.
+  const auto d = snapshot_envelope::EvaluateSizeWarning(60u, now, TimePoint{}, 50u);
+  EXPECT_TRUE(d.should_log);
+}
+
 }  // namespace
 }  // namespace atlas

@@ -118,16 +118,10 @@ void Reviver::InitTarget(ManagedTarget& t) {
   if (TargetEnabled(t)) {
     t.leader_lock_path = ResolveLeaderLockPath(t);
   }
-  // ManagedTarget leader_lock_mode contract:
-  //   "local"    → leader_lock holds a ScopedFileLock; leader_lock_held mirrors
-  //                leader_lock->IsHeld(). expires_at / lease_*_count / lease_*
-  //                fields are always zero / default.
-  //   "machined" → leader_lock stays std::nullopt; leader_lock_held tracks the
-  //                lease (true = we own it), expires_at is when our recorded
-  //                ttl runs out without a renew, lease_request_in_flight gates
-  //                concurrent Acquire/Renew calls.
-  // HasLeadership, Fini, and AuditLeadership all dispatch on this string; keep
-  // it in lockstep with both code paths when adding a third backend.
+  // leader_lock_mode contract documented next to the field in reviver.h
+  // (ManagedTarget). HasLeadership / Fini / AuditLeadership all dispatch
+  // on this string — when adding a third backend keep all three paths in
+  // lockstep with the contract there.
   const auto& configured_mode = Config().revive_leader_lock_mode;
   t.leader_lock_mode = NormalizeLeaderLockMode(configured_mode);
   if (!configured_mode.empty() && t.leader_lock_mode != configured_mode) {
@@ -449,47 +443,46 @@ void Reviver::AuditLeadership(ManagedTarget& t) {
     t.lease_request_in_flight = true;
     t.next_lease_renew_at = now + std::chrono::milliseconds(renew_ms);
     const auto op = renewing ? machined::LeaseOp::kRenew : machined::LeaseOp::kAcquire;
-    auto& target_ref = t;
-    auto issue = [this, &target_ref, renewing](MachinedClient::LeaseResult r) {
-      target_ref.lease_request_in_flight = false;
+    auto issue = [this, &t, renewing](MachinedClient::LeaseResult r) {
+      t.lease_request_in_flight = false;
       if (r.success) {
         const auto now_local = Clock::now();
-        target_ref.leader_lock_expires_at =
+        t.leader_lock_expires_at =
             now_local + std::chrono::duration_cast<Duration>(
                             std::chrono::milliseconds(
                                 std::max(100, Config().revive_leader_lock_ttl_ms)));
-        target_ref.lease_failure_streak = 0;
-        if (!target_ref.leader_lock_held) {
-          target_ref.leader_lock_held = true;
-          ++target_ref.lease_acquire_count;
-          ++target_ref.leader_lock_acquires;
-          target_ref.startup_checked = false;
-          target_ref.startup_check_at = now_local;
-          target_ref.last_error.clear();
-          ATLAS_LOG_INFO("Reviver: acquired {} lease (machined) holder={}", target_ref.slug,
-                         target_ref.leader_lock_holder_id);
+        t.lease_failure_streak = 0;
+        if (!t.leader_lock_held) {
+          t.leader_lock_held = true;
+          ++t.lease_acquire_count;
+          ++t.leader_lock_acquires;
+          t.startup_checked = false;
+          t.startup_check_at = now_local;
+          t.last_error.clear();
+          ATLAS_LOG_INFO("Reviver: acquired {} lease (machined) holder={}", t.slug,
+                         t.leader_lock_holder_id);
         } else {
-          ++target_ref.lease_renew_count;
+          ++t.lease_renew_count;
         }
         return;
       }
-      ++target_ref.lease_failure_streak;
-      ++target_ref.lease_failure_count;
-      ++target_ref.leader_lock_failures;
+      ++t.lease_failure_streak;
+      ++t.lease_failure_count;
+      ++t.leader_lock_failures;
       const auto threshold = static_cast<uint32_t>(
           std::max(1, Config().revive_leader_lock_failure_threshold));
-      if (target_ref.leader_lock_held && target_ref.lease_failure_streak >= threshold) {
-        target_ref.leader_lock_held = false;
-        target_ref.last_error = std::format(
-            "{} lease lost after {} consecutive failures; current_holder={}", target_ref.slug,
-            target_ref.lease_failure_streak, r.current_holder);
-        ATLAS_LOG_WARNING("Reviver: {}", target_ref.last_error);
-        target_ref.lease_failure_streak = 0;
+      if (t.leader_lock_held && t.lease_failure_streak >= threshold) {
+        t.leader_lock_held = false;
+        t.last_error = std::format(
+            "{} lease lost after {} consecutive failures; current_holder={}", t.slug,
+            t.lease_failure_streak, r.current_holder);
+        ATLAS_LOG_WARNING("Reviver: {}", t.last_error);
+        t.lease_failure_streak = 0;
         return;
       }
-      if (!renewing && !target_ref.leader_lock_held && !r.current_holder.empty()) {
-        target_ref.last_error = std::format(
-            "{} lease held by {} (expires in {}ms)", target_ref.slug, r.current_holder,
+      if (!renewing && !t.leader_lock_held && !r.current_holder.empty()) {
+        t.last_error = std::format(
+            "{} lease held by {} (expires in {}ms)", t.slug, r.current_holder,
             r.current_holder_expires_in_ms);
       }
     };

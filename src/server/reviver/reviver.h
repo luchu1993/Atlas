@@ -73,10 +73,20 @@ class Reviver : public ManagerApp {
     std::filesystem::path leader_lock_path;
 
     // Live state.
-    // "local" → leader_lock holds the per-host file lock.
-    // "machined" → leader_lock_held tracks the lease; leader_lock_holder_id
-    //              is what we sent to machined; leader_lock_expires_at is
-    //              when our lease runs out without renew.
+    // leader_lock_mode contract — Reviver::InitTarget normalises the
+    // configured value to one of these two strings (anything else falls
+    // back to "local" with an ATLAS_LOG_ERROR); HasLeadership, Fini, and
+    // AuditLeadership all dispatch on it. Keep both paths in lockstep
+    // when adding a third backend.
+    //   "local"    → leader_lock holds a ScopedFileLock; leader_lock_held
+    //                mirrors leader_lock->IsHeld(). leader_lock_expires_at
+    //                / next_lease_renew_at / lease_request_in_flight /
+    //                lease_*_count / lease_*_streak fields stay default.
+    //   "machined" → leader_lock stays std::nullopt; leader_lock_held
+    //                tracks the lease (true = we own it),
+    //                leader_lock_expires_at is when our recorded ttl runs
+    //                out without a renew, lease_request_in_flight gates
+    //                concurrent Acquire/Renew callbacks.
     std::string leader_lock_mode;
     std::optional<fs::ScopedFileLock> leader_lock;
     bool leader_lock_held{false};

@@ -552,21 +552,20 @@ auto BaseAppMgr::SaveSnapshotToFile(const std::filesystem::path& path) -> Result
   snapshot_dirty_reason_.clear();
   ++snapshot_save_count_;
 
-  // High-water warning mirrors CellAppMgr — log once per minute when the
-  // snapshot exceeds 80% of kMaxSnapshotFileBytes so ops can spot growth
-  // before SaveSnapshotToFile starts rejecting oversized writes.
-  if (const auto pct = SnapshotSizeHighWaterPct(); pct >= 80) {
-    constexpr auto kSizeWarningThrottle = std::chrono::seconds(60);
-    const auto now = Clock::now();
-    if (last_snapshot_size_warning_at_ == TimePoint{} ||
-        now - last_snapshot_size_warning_at_ >= kSizeWarningThrottle) {
-      last_snapshot_size_warning_at_ = now;
-      ATLAS_LOG_WARNING(
-          "BaseAppMgr: HA snapshot file size at {}% of {} byte ceiling ({} bytes) — "
-          "save will start rejecting writes once it crosses the ceiling",
-          pct, kMaxSnapshotFileBytes, bytes.size());
-    }
-  } else if (last_snapshot_size_warning_at_ != TimePoint{}) {
+  // High-water warning — see CellAppMgr for the parallel implementation
+  // and snapshot_envelope::EvaluateSizeWarning for the decision logic
+  // (both mgrs route through the same helper).
+  const auto now = Clock::now();
+  const auto decision =
+      snapshot_envelope::EvaluateSizeWarning(SnapshotSizeHighWaterPct(), now,
+                                             last_snapshot_size_warning_at_);
+  if (decision.should_log) {
+    last_snapshot_size_warning_at_ = now;
+    ATLAS_LOG_WARNING(
+        "BaseAppMgr: HA snapshot file size at {}% of {} byte ceiling ({} bytes) — "
+        "save will start rejecting writes once it crosses the ceiling",
+        SnapshotSizeHighWaterPct(), kMaxSnapshotFileBytes, bytes.size());
+  } else if (decision.should_reset) {
     last_snapshot_size_warning_at_ = {};
   }
   return {};

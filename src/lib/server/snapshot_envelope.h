@@ -12,6 +12,7 @@
 #include <vector>
 
 #include "foundation/error.h"
+#include "foundation/clock.h"
 #include "platform/filesystem.h"
 #include "serialization/binary_stream.h"
 
@@ -21,10 +22,42 @@ inline constexpr uint64_t kChecksumSeed = 14695981039346656037ull;
 inline constexpr uint64_t kChecksumPrime = 1099511628211ull;
 inline constexpr uint64_t kEnvelopeBytes = 2ull * sizeof(uint32_t) + 2ull * sizeof(uint64_t);
 inline constexpr std::size_t kMaxWatcherErrorDetailBytes = 120;
+inline constexpr uint32_t kSizeWarningThresholdPct = 80;
+inline constexpr auto kSizeWarningThrottle = std::chrono::seconds(60);
 
 struct PayloadView {
   std::span<const std::byte> payload;
 };
+
+// Decision returned by EvaluateSizeWarning. Both flags can be false
+// (in which case caller does nothing); they're never both true at once.
+struct SizeWarningDecision {
+  bool should_log{false};    // pct ≥ threshold and throttle satisfied
+  bool should_reset{false};  // pct dropped back below threshold; clear last_warned_at
+};
+
+// Pure decision about whether SaveSnapshotToFile should log a high-water
+// WARNING. Callers feed in the current size percentage (0..100 from
+// SnapshotSizeHighWaterPct), the current time, the throttle's
+// last_warned_at TimePoint, and (optionally) overridden threshold /
+// throttle. Returning a decision struct keeps the side-effect (logging
+// + last_warned_at update) at the call site so this helper stays unit-
+// testable without a mock Clock.
+inline auto EvaluateSizeWarning(uint32_t pct, TimePoint now, TimePoint last_warned_at,
+                                uint32_t threshold_pct = kSizeWarningThresholdPct,
+                                Duration throttle = std::chrono::duration_cast<Duration>(
+                                    kSizeWarningThrottle)) -> SizeWarningDecision {
+  if (pct < threshold_pct) {
+    // Snapshot dropped back below the high-water mark; clear the throttle
+    // so a future spike re-warns immediately instead of waiting out the
+    // previous warning's window.
+    return {false, last_warned_at != TimePoint{}};
+  }
+  if (last_warned_at == TimePoint{} || now - last_warned_at >= throttle) {
+    return {true, false};
+  }
+  return {false, false};
+}
 
 struct FileReadiness {
   bool present{false};

@@ -1020,23 +1020,21 @@ auto CellAppMgr::SaveSnapshotToFile(const std::filesystem::path& path) -> Result
   snapshot_dirty_reason_.clear();
   ++snapshot_save_count_;
 
-  // High-water warning: log once per minute when the snapshot occupies
-  // >=80% of kMaxSnapshotFileBytes. This is the operator's early signal
-  // that SaveSnapshotToFile will start rejecting writes (and the mgr will
-  // stall snapshotting entirely) if topology keeps growing.
-  if (const auto pct = SnapshotSizeHighWaterPct(); pct >= 80) {
-    constexpr auto kSizeWarningThrottle = std::chrono::seconds(60);
-    const auto now = Clock::now();
-    if (last_snapshot_size_warning_at_ == TimePoint{} ||
-        now - last_snapshot_size_warning_at_ >= kSizeWarningThrottle) {
-      last_snapshot_size_warning_at_ = now;
-      ATLAS_LOG_WARNING(
-          "CellAppMgr: HA snapshot file size at {}% of {} byte ceiling ({} bytes) — "
-          "save will start rejecting writes once it crosses the ceiling",
-          pct, kMaxSnapshotFileBytes, bytes.size());
-    }
-  } else if (last_snapshot_size_warning_at_ != TimePoint{}) {
-    // Reset so we re-warn cleanly if size pressure recurs after relief.
+  // High-water warning: log once per kSizeWarningThrottle when the
+  // snapshot occupies >= kSizeWarningThresholdPct of kMaxSnapshotFileBytes.
+  // Decision logic lives in snapshot_envelope::EvaluateSizeWarning so it
+  // can be unit-tested without a mock Clock; we just apply the decision.
+  const auto now = Clock::now();
+  const auto decision =
+      snapshot_envelope::EvaluateSizeWarning(SnapshotSizeHighWaterPct(), now,
+                                             last_snapshot_size_warning_at_);
+  if (decision.should_log) {
+    last_snapshot_size_warning_at_ = now;
+    ATLAS_LOG_WARNING(
+        "CellAppMgr: HA snapshot file size at {}% of {} byte ceiling ({} bytes) — "
+        "save will start rejecting writes once it crosses the ceiling",
+        SnapshotSizeHighWaterPct(), kMaxSnapshotFileBytes, bytes.size());
+  } else if (decision.should_reset) {
     last_snapshot_size_warning_at_ = {};
   }
   return {};
