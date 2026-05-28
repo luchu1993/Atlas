@@ -66,9 +66,8 @@ if(ATLAS_HEAP_ALLOCATOR STREQUAL "mimalloc")
   )
 endif()
 
-# ── JoltPhysics v5.2.0 (optional, query-only backend) ──────────────────────
-# GIT_REPOSITORY/TAG avoids pinning a SHA256 before the first verified fetch;
-# bump to URL+SHA256 once the version is locked.
+# Jolt v5.2.0 — GIT_REPOSITORY/TAG to avoid pinning a SHA256 before the
+# first verified fetch; bump to URL+SHA256 once the version is locked.
 if(ATLAS_ENABLE_JOLT)
   FetchContent_Declare(
     Jolt
