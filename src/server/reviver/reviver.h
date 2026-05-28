@@ -81,7 +81,7 @@ class Reviver : public ManagerApp {
     uint64_t lease_failure_count{0};
     Address last_addr;
     uint32_t last_pid{0};
-    uint32_t launched_pid{0};
+    LaunchedProcess launched;
     uint64_t active_generation{0};
     bool active{false};
     TimePoint next_leader_lock_attempt{};

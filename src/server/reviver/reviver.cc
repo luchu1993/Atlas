@@ -216,7 +216,7 @@ void Reviver::RegisterTargetWatchers(ManagedTarget& t) {
   wr.Add<uint64_t>(root + "/active_generation",
                    std::function<uint64_t()>([&t] { return t.active_generation; }));
   wr.Add<uint32_t>(root + "/launched_pid",
-                   std::function<uint32_t()>([&t] { return t.launched_pid; }));
+                   std::function<uint32_t()>([&t] { return t.launched.Pid(); }));
   wr.Add<std::string>(root + "/output_path",
                       std::function<std::string()>([&t] { return t.output_path.string(); }));
   wr.Add<bool>(root + "/launch_pending",
@@ -558,7 +558,7 @@ void Reviver::AuditTargetLaunch(ManagedTarget& t) {
   t.launch_deadline = {};
   ++t.launch_timeout_count;
   ++t.launch_failures;
-  t.last_error = std::format("{} launch pid {} did not register", t.slug, t.launched_pid);
+  t.last_error = std::format("{} launch pid {} did not register", t.slug, t.launched.Pid());
   ATLAS_LOG_WARNING("Reviver: {}", t.last_error);
   TerminateLaunchedTarget(t, "launch registration timeout");
   ScheduleTargetRestart(t, Milliseconds(Config().revive_restart_delay_ms));
@@ -567,10 +567,17 @@ void Reviver::AuditTargetLaunch(ManagedTarget& t) {
 void Reviver::AuditTargetLiveness(ManagedTarget& t) {
   if (!t.active || t.last_pid == 0) return;
   if (!CanCheckLocalPid()) return;
-  // Local pid liveness covers the case where the target died but machined
-  // didn't (or hasn't yet) routed us a death notification.
-  if (t.last_pid != t.launched_pid && !IsLoopbackAddress(t.last_addr)) return;
-  if (IsProcessAlive(t.last_pid)) return;
+  // Catches the gap where the supervised process died but machined hasn't yet
+  // routed us a death notification. Use the owning handle when this is OUR
+  // launched process (no PID-reuse hazard); fall back to pid-only check for
+  // externally-started loopback processes.
+  if (t.launched.IsValid() && t.last_pid == t.launched.Pid()) {
+    if (t.launched.IsAlive()) return;
+  } else if (IsLoopbackAddress(t.last_addr)) {
+    if (IsProcessAlive(t.last_pid)) return;
+  } else {
+    return;
+  }
 
   t.active = false;
   ResetTargetManagerHealth(t);
@@ -795,20 +802,28 @@ void Reviver::ResetTargetLaunch(ManagedTarget& t) {
 
 void Reviver::TerminateTargetIfLocal(ManagedTarget& t, std::string_view reason) {
   if (t.last_pid == 0 || !CanCheckLocalPid()) return;
-  if (t.last_pid != t.launched_pid && !IsLoopbackAddress(t.last_addr)) return;
-  if (!IsProcessAlive(t.last_pid)) return;
-  if (!TerminateProcessByPid(t.last_pid)) return;
+  bool killed = false;
+  if (t.launched.IsValid() && t.last_pid == t.launched.Pid()) {
+    if (!t.launched.IsAlive()) return;
+    killed = t.launched.Terminate();
+  } else if (IsLoopbackAddress(t.last_addr)) {
+    if (!IsProcessAlive(t.last_pid)) return;
+    killed = TerminateProcessByPid(t.last_pid);
+  } else {
+    return;
+  }
+  if (!killed) return;
   ++t.forced_termination_count;
   ATLAS_LOG_WARNING("Reviver: terminated {} pid={} reason={}", t.slug, t.last_pid, reason);
 }
 
 void Reviver::TerminateLaunchedTarget(ManagedTarget& t, std::string_view reason) {
-  if (t.launched_pid == 0) return;
-  if (!IsProcessAlive(t.launched_pid)) return;
-  if (!TerminateProcessByPid(t.launched_pid)) return;
+  if (!t.launched.IsValid()) return;
+  if (!t.launched.IsAlive()) return;
+  const auto pid = t.launched.Pid();
+  if (!t.launched.Terminate()) return;
   ++t.forced_termination_count;
-  ATLAS_LOG_WARNING("Reviver: terminated launched {} pid={} reason={}", t.slug, t.launched_pid,
-                    reason);
+  ATLAS_LOG_WARNING("Reviver: terminated launched {} pid={} reason={}", t.slug, pid, reason);
 }
 
 void Reviver::ScheduleTargetRestart(ManagedTarget& t, Duration delay) {
@@ -901,21 +916,21 @@ void Reviver::LaunchTarget(ManagedTarget& t) {
   opts.args = std::move(args);
   opts.working_directory = exe.parent_path();
   opts.output_path = t.output_path;
-  auto pid = LaunchDetachedProcess(std::move(opts));
-  if (!pid) {
+  auto launched = LaunchDetachedProcess(std::move(opts));
+  if (!launched) {
     ++t.launch_failures;
-    t.last_error = pid.Error().Message();
+    t.last_error = launched.Error().Message();
     ATLAS_LOG_ERROR("Reviver: failed to launch {}: {}", t.slug, t.last_error);
     ScheduleTargetRestart(t, Milliseconds(Config().revive_restart_delay_ms));
     return;
   }
 
-  t.launched_pid = *pid;
+  t.launched = std::move(*launched);
   t.launch_pending = true;
   t.launch_deadline = Clock::now() + Milliseconds(std::max(1, t.launch_timeout_ms));
   ++t.launch_count;
   ATLAS_LOG_WARNING("Reviver: launched {} attempt={} pid={} exe={} port={}", t.slug,
-                    t.restart_attempts, t.launched_pid, exe.string(), port);
+                    t.restart_attempts, t.launched.Pid(), exe.string(), port);
 }
 
 auto Reviver::HasLeadership(const ManagedTarget& t) const -> bool {

@@ -6,6 +6,7 @@
 #include <string>
 #include <string_view>
 #include <system_error>
+#include <utility>
 
 namespace atlas {
 namespace {
@@ -48,9 +49,56 @@ auto Utf8ToWide(std::string_view value) -> std::wstring {
   return out;
 }
 
+inline auto TokenToHandle(uint64_t token) -> HANDLE {
+  return reinterpret_cast<HANDLE>(static_cast<uintptr_t>(token));
+}
+
+inline auto HandleToToken(HANDLE h) -> uint64_t {
+  return static_cast<uint64_t>(reinterpret_cast<uintptr_t>(h));
+}
+
 }  // namespace
 
-auto LaunchDetachedProcess(ProcessLaunchOptions opts) -> Result<uint32_t> {
+LaunchedProcess::LaunchedProcess(LaunchedProcess&& other) noexcept
+    : pid_(other.pid_), platform_token_(other.platform_token_) {
+  other.pid_ = 0;
+  other.platform_token_ = 0;
+}
+
+auto LaunchedProcess::operator=(LaunchedProcess&& other) noexcept -> LaunchedProcess& {
+  if (this != &other) {
+    Reset();
+    pid_ = other.pid_;
+    platform_token_ = other.platform_token_;
+    other.pid_ = 0;
+    other.platform_token_ = 0;
+  }
+  return *this;
+}
+
+LaunchedProcess::~LaunchedProcess() { Reset(); }
+
+void LaunchedProcess::Reset() {
+  if (platform_token_ != 0) {
+    CloseHandle(TokenToHandle(platform_token_));
+  }
+  pid_ = 0;
+  platform_token_ = 0;
+}
+
+auto LaunchedProcess::IsAlive() const -> bool {
+  if (platform_token_ == 0) return false;
+  DWORD code = 0;
+  if (!GetExitCodeProcess(TokenToHandle(platform_token_), &code)) return false;
+  return code == STILL_ACTIVE;
+}
+
+auto LaunchedProcess::Terminate() -> bool {
+  if (platform_token_ == 0) return false;
+  return TerminateProcess(TokenToHandle(platform_token_), 1) != FALSE;
+}
+
+auto LaunchDetachedProcess(ProcessLaunchOptions opts) -> Result<LaunchedProcess> {
   if (opts.exe.empty()) {
     return Error{ErrorCode::kInvalidArgument, "LaunchDetachedProcess: exe path empty"};
   }
@@ -114,10 +162,10 @@ auto LaunchDetachedProcess(ProcessLaunchOptions opts) -> Result<uint32_t> {
 
   const auto pid = static_cast<uint32_t>(pi.dwProcessId);
   CloseHandle(pi.hThread);
-  CloseHandle(pi.hProcess);
   if (input_handle != INVALID_HANDLE_VALUE) CloseHandle(input_handle);
   if (output_handle != INVALID_HANDLE_VALUE) CloseHandle(output_handle);
-  return pid;
+  // pi.hProcess transfers into LaunchedProcess; do not close here.
+  return LaunchedProcess(pid, HandleToToken(pi.hProcess));
 }
 
 auto IsProcessAlive(uint32_t pid) -> bool {

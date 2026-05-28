@@ -126,17 +126,18 @@ TEST(ChildProcess, KillTerminatesLongRunningChild) {
   EXPECT_FALSE(r->IsRunning());
 }
 
-TEST(ChildProcess, TerminateProcessByPidStopsDetachedChild) {
-  auto pid = LaunchDetachedProcess(MakeDetachedSleepOptions(30));
-  ASSERT_TRUE(pid.HasValue()) << pid.Error().Message();
-  ASSERT_TRUE(IsProcessAlive(*pid));
+TEST(ChildProcess, TerminateStopsDetachedChild) {
+  auto launched = LaunchDetachedProcess(MakeDetachedSleepOptions(30));
+  ASSERT_TRUE(launched.HasValue()) << launched.Error().Message();
+  ASSERT_TRUE(launched->IsValid());
+  ASSERT_TRUE(launched->IsAlive());
 
-  EXPECT_TRUE(TerminateProcessByPid(*pid));
+  EXPECT_TRUE(launched->Terminate());
   const auto deadline = std::chrono::steady_clock::now() + 3s;
-  while (IsProcessAlive(*pid) && std::chrono::steady_clock::now() < deadline) {
+  while (launched->IsAlive() && std::chrono::steady_clock::now() < deadline) {
     std::this_thread::sleep_for(20ms);
   }
-  EXPECT_FALSE(IsProcessAlive(*pid));
+  EXPECT_FALSE(launched->IsAlive());
 }
 
 TEST(ChildProcess, DetachedProcessRedirectsOutputToFile) {
@@ -149,8 +150,8 @@ TEST(ChildProcess, DetachedProcessRedirectsOutputToFile) {
 
   auto opts = MakeDetachedEchoOptions();
   opts.output_path = path;
-  auto pid = LaunchDetachedProcess(std::move(opts));
-  ASSERT_TRUE(pid.HasValue()) << pid.Error().Message();
+  auto launched = LaunchDetachedProcess(std::move(opts));
+  ASSERT_TRUE(launched.HasValue()) << launched.Error().Message();
 
   std::string content;
   const auto deadline = std::chrono::steady_clock::now() + 3s;
@@ -164,7 +165,7 @@ TEST(ChildProcess, DetachedProcessRedirectsOutputToFile) {
   }
   if (content.find("detached-out") == std::string::npos ||
       content.find("detached-err") == std::string::npos) {
-    (void)TerminateProcessByPid(*pid);
+    (void)launched->Terminate();
   }
   EXPECT_NE(content.find("detached-out"), std::string::npos);
   EXPECT_NE(content.find("detached-err"), std::string::npos);
