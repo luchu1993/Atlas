@@ -25,10 +25,7 @@ namespace baseappmgr {
 struct HealthProbeAck;
 }
 
-// Free function (testable in isolation): map a configured
-// --revive-leader-lock-mode string to one of the supported backends.
-// Unknown / empty values fall back to "local"; the caller logs the
-// raw input separately so ops can see typos in startup logs.
+// Unknown / empty input falls back to "local"; caller logs the raw value.
 [[nodiscard]] auto NormalizeLeaderLockMode(std::string_view configured) -> std::string;
 
 class Reviver : public ManagerApp {
@@ -44,14 +41,11 @@ class Reviver : public ManagerApp {
   void OnTickComplete() override;
 
  private:
-  // Per-target supervision state. One Reviver process can manage CellAppMgr
-  // and BaseAppMgr simultaneously; each target has its own leader lock,
-  // heartbeat path, restart budget, and watcher namespace.
+  // One Reviver process supervises both CellAppMgr and BaseAppMgr; each
+  // target keeps its own leader lock, heartbeat, restart budget, watchers.
   struct ManagedTarget {
     ProcessType process_type;
-    // Slug used in watcher paths (e.g. "cellappmgr" → reviver/cellappmgr/...).
-    std::string slug;
-    // Configured display name to match in machined registrations.
+    std::string slug;  // baked into reviver/<slug>/* watcher paths
     std::string configured_name;
     // Health check + heartbeat + launch parameters, snapshotted from
     // ServerConfig at Init so a config reload doesn't shift mid-flight.
@@ -72,21 +66,8 @@ class Reviver : public ManagerApp {
     int snapshot_interval_ms{-1};
     std::filesystem::path leader_lock_path;
 
-    // Live state.
-    // leader_lock_mode contract — Reviver::InitTarget normalises the
-    // configured value to one of these two strings (anything else falls
-    // back to "local" with an ATLAS_LOG_ERROR); HasLeadership, Fini, and
-    // AuditLeadership all dispatch on it. Keep both paths in lockstep
-    // when adding a third backend.
-    //   "local"    → leader_lock holds a ScopedFileLock; leader_lock_held
-    //                mirrors leader_lock->IsHeld(). leader_lock_expires_at
-    //                / next_lease_renew_at / lease_request_in_flight /
-    //                lease_*_count / lease_*_streak fields stay default.
-    //   "machined" → leader_lock stays std::nullopt; leader_lock_held
-    //                tracks the lease (true = we own it),
-    //                leader_lock_expires_at is when our recorded ttl runs
-    //                out without a renew, lease_request_in_flight gates
-    //                concurrent Acquire/Renew callbacks.
+    // "local" → leader_lock owns a ScopedFileLock; "machined" → leader_lock
+    // stays nullopt and leader_lock_held + lease_* track a machined lease.
     std::string leader_lock_mode;
     std::optional<fs::ScopedFileLock> leader_lock;
     bool leader_lock_held{false};
@@ -140,6 +121,7 @@ class Reviver : public ManagerApp {
     uint64_t heartbeat_timeout_count{0};
     TimePoint heartbeat_last_ack_at{};
     uint64_t heartbeat_last_game_time{0};
+    uint64_t heartbeat_mgr_generation{0};
     uint64_t heartbeat_snapshot_saves{0};
     uint64_t heartbeat_snapshot_failures{0};
     bool heartbeat_snapshot_dirty{false};
@@ -152,15 +134,12 @@ class Reviver : public ManagerApp {
     std::string last_error;
   };
 
-  // Wire one ManagedTarget. Returns false if a required field is missing.
-  // Populate config-derived fields on t. Requires t.process_type and
-  // t.slug to already be set (Reviver::Init wires those up before
-  // ManagerApp::Init so RegisterTargetWatchers sees a non-empty slug).
+  // Populate config-derived fields on t; t.process_type and t.slug must
+  // already be set so RegisterTargetWatchers sees a non-empty slug.
   void InitTarget(ManagedTarget& t);
 
-  // Returns true if the target is enabled in this Reviver (configured_name
-  // non-empty AND exe set OR on_start). Disabled targets are skipped from
-  // all audits.
+  // Disabled targets (no configured_name, or no exe and !on_start) are
+  // skipped from all audits.
   [[nodiscard]] auto TargetEnabled(const ManagedTarget& t) const -> bool;
 
   // machined birth/death notification dispatch.
@@ -195,7 +174,7 @@ class Reviver : public ManagerApp {
                                 const baseappmgr::HealthProbeAck& msg);
   void RecordHeartbeatAck(ManagedTarget& t, const Address& src, uint64_t nonce, uint64_t game_time,
                           uint64_t snapshot_saves, uint64_t snapshot_failures,
-                          bool snapshot_dirty, bool snapshot_save_stale);
+                          uint64_t mgr_generation, bool snapshot_dirty, bool snapshot_save_stale);
 
   [[nodiscard]] auto HasLeadership(const ManagedTarget& t) const -> bool;
   [[nodiscard]] auto MatchesTargetName(const ManagedTarget& t, std::string_view name) const -> bool;

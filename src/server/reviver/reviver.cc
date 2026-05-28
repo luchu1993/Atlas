@@ -76,8 +76,7 @@ auto Reviver::Run(int argc, char* argv[]) -> int {
 }
 
 void Reviver::InitTarget(ManagedTarget& t) {
-  // Reviver::Init() sets t.process_type and t.slug before calling us
-  // (must happen before ManagerApp::Init runs RegisterTargetWatchers).
+  // t.process_type / t.slug pre-set by Init() pre ManagerApp::Init.
   if (t.process_type == ProcessType::kCellAppMgr) {
     t.configured_name = Config().revive_cellappmgr_name;
     t.exe = Config().revive_cellappmgr_exe;
@@ -118,10 +117,6 @@ void Reviver::InitTarget(ManagedTarget& t) {
   if (TargetEnabled(t)) {
     t.leader_lock_path = ResolveLeaderLockPath(t);
   }
-  // leader_lock_mode contract documented next to the field in reviver.h
-  // (ManagedTarget). HasLeadership / Fini / AuditLeadership all dispatch
-  // on this string — when adding a third backend keep all three paths in
-  // lockstep with the contract there.
   const auto& configured_mode = Config().revive_leader_lock_mode;
   t.leader_lock_mode = NormalizeLeaderLockMode(configured_mode);
   if (!configured_mode.empty() && t.leader_lock_mode != configured_mode) {
@@ -137,9 +132,8 @@ void Reviver::InitTarget(ManagedTarget& t) {
 }
 
 auto Reviver::TargetEnabled(const ManagedTarget& t) const -> bool {
-  // Enabled when on_start is requested OR an explicit exe/port pair has
-  // been configured. Empty everything → silently disabled (handy for tests
-  // that only care about one target).
+  // Empty everything → silently disabled so tests can supervise just one
+  // target; explicit on_start / exe / port flips it on.
   if (t.on_start) return true;
   if (!t.exe.empty()) return true;
   if (t.internal_port != 0) return true;
@@ -148,11 +142,8 @@ auto Reviver::TargetEnabled(const ManagedTarget& t) const -> bool {
 
 auto Reviver::Init(int argc, char* argv[]) -> bool {
   if (argc > 0 && argv[0] != nullptr) self_exe_ = std::filesystem::absolute(argv[0]);
-  // slug/process_type must be set BEFORE ManagerApp::Init runs because
-  // ServerApp::Init calls our RegisterWatchers() inside it, and
-  // RegisterTargetWatchers builds the watcher path from t.slug. Setting
-  // these in InitTarget post-Init would leave watchers registered under
-  // reviver//* (empty slug) instead of reviver/cellappmgr/*.
+  // ManagerApp::Init dispatches into RegisterTargetWatchers which bakes
+  // t.slug into the watcher path; must be set before that runs.
   cellappmgr_target_.slug = "cellappmgr";
   cellappmgr_target_.process_type = ProcessType::kCellAppMgr;
   baseappmgr_target_.slug = "baseappmgr";
@@ -267,6 +258,8 @@ void Reviver::RegisterTargetWatchers(ManagedTarget& t) {
                    std::function<uint64_t()>([&t] { return t.heartbeat_timeout_count; }));
   wr.Add<uint64_t>(root + "/heartbeat_last_game_time",
                    std::function<uint64_t()>([&t] { return t.heartbeat_last_game_time; }));
+  wr.Add<uint64_t>(root + "/heartbeat_mgr_generation",
+                   std::function<uint64_t()>([&t] { return t.heartbeat_mgr_generation; }));
   wr.Add<uint64_t>(root + "/heartbeat_snapshot_saves",
                    std::function<uint64_t()>([&t] { return t.heartbeat_snapshot_saves; }));
   wr.Add<uint64_t>(root + "/heartbeat_snapshot_failures",
@@ -293,8 +286,7 @@ void Reviver::RegisterWatchers() {
   RegisterTargetWatchers(cellappmgr_target_);
   RegisterTargetWatchers(baseappmgr_target_);
 
-  // Per-target leader lock surface. cellappmgr keeps the legacy
-  // reviver/leader/* path for backward compatibility with existing verify
+  // cellappmgr keeps the legacy reviver/leader/* watcher path for verify
   // scripts; baseappmgr lives under reviver/baseappmgr/leader/*.
   auto& wr = GetWatcherRegistry();
   wr.Add<bool>("reviver/leader/active",
@@ -386,6 +378,7 @@ void Reviver::RememberTarget(ManagedTarget& t, std::string_view name, const Addr
   t.manager_health_failure_streak = 0;
   t.registry_missing_streak = 0;
   t.heartbeat_last_game_time = 0;
+  t.heartbeat_mgr_generation = 0;
   t.heartbeat_snapshot_saves = 0;
   t.heartbeat_snapshot_failures = 0;
   t.heartbeat_snapshot_dirty = false;
@@ -647,8 +640,8 @@ void Reviver::AuditTargetHeartbeat(ManagedTarget& t) {
 
 void Reviver::RecordHeartbeatAck(ManagedTarget& t, const Address& src, uint64_t nonce,
                                  uint64_t game_time, uint64_t snapshot_saves,
-                                 uint64_t snapshot_failures, bool snapshot_dirty,
-                                 bool snapshot_save_stale) {
+                                 uint64_t snapshot_failures, uint64_t mgr_generation,
+                                 bool snapshot_dirty, bool snapshot_save_stale) {
   if (!t.active) return;
   if (src != t.last_addr) return;
   if (!t.heartbeat_pending || nonce != t.heartbeat_pending_nonce) return;
@@ -662,6 +655,7 @@ void Reviver::RecordHeartbeatAck(ManagedTarget& t, const Address& src, uint64_t 
   t.heartbeat_last_game_time = game_time;
   t.heartbeat_snapshot_saves = snapshot_saves;
   t.heartbeat_snapshot_failures = snapshot_failures;
+  t.heartbeat_mgr_generation = mgr_generation;
   t.heartbeat_snapshot_dirty = snapshot_dirty;
   t.heartbeat_snapshot_save_stale = snapshot_save_stale;
   ++t.heartbeat_ack_count;
@@ -670,13 +664,15 @@ void Reviver::RecordHeartbeatAck(ManagedTarget& t, const Address& src, uint64_t 
 void Reviver::OnCellAppMgrHeartbeatAck(const Address& src, Channel*,
                                        const cellappmgr::HealthProbeAck& msg) {
   RecordHeartbeatAck(cellappmgr_target_, src, msg.nonce, msg.game_time, msg.snapshot_saves,
-                     msg.snapshot_failures, msg.snapshot_dirty, msg.snapshot_save_stale);
+                     msg.snapshot_failures, msg.mgr_generation, msg.snapshot_dirty,
+                     msg.snapshot_save_stale);
 }
 
 void Reviver::OnBaseAppMgrHeartbeatAck(const Address& src, Channel*,
                                        const baseappmgr::HealthProbeAck& msg) {
   RecordHeartbeatAck(baseappmgr_target_, src, msg.nonce, msg.game_time, msg.snapshot_saves,
-                     msg.snapshot_failures, msg.snapshot_dirty, msg.snapshot_save_stale);
+                     msg.snapshot_failures, msg.mgr_generation, msg.snapshot_dirty,
+                     msg.snapshot_save_stale);
 }
 
 void Reviver::AuditTargetHealth(ManagedTarget& t) {
@@ -941,9 +937,8 @@ auto Reviver::ResolveLeaderLockPath(const ManagedTarget& t) const -> std::filesy
   if (!t.leader_lock_path.empty()) {
     return std::filesystem::absolute(t.leader_lock_path);
   }
-  // cellappmgr keeps the legacy --revive-leader-lock-path top-level option
-  // for backwards compatibility with existing verify scripts. baseappmgr
-  // requires --revive-baseappmgr-leader-lock-path (or the snapshot dir).
+  // cellappmgr honors the legacy --revive-leader-lock-path top-level flag;
+  // baseappmgr requires --revive-baseappmgr-leader-lock-path (or snapshot dir).
   if (t.process_type == ProcessType::kCellAppMgr && !Config().revive_leader_lock_path.empty()) {
     return std::filesystem::absolute(Config().revive_leader_lock_path);
   }
