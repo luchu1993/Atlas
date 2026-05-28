@@ -89,4 +89,48 @@ TEST(BaseAppMgrMessages, GlobalBaseNotification_RoundTrip) {
   EXPECT_EQ(out.entity_id, 42u);
 }
 
+TEST(BaseAppMgrMessages, HealthProbe_RoundTrip) {
+  HealthProbe msg;
+  msg.nonce = 0xCAFEBABEDEADBEEFull;
+
+  auto out = round_trip(msg);
+  EXPECT_EQ(out.nonce, 0xCAFEBABEDEADBEEFull);
+}
+
+TEST(BaseAppMgrMessages, HealthProbeAck_RoundTrip) {
+  HealthProbeAck msg;
+  msg.nonce = 7u;
+  msg.game_time = 1'234'567u;
+  msg.snapshot_saves = 42u;
+  msg.snapshot_failures = 1u;
+  msg.snapshot_dirty = true;
+  msg.snapshot_save_stale = false;
+
+  auto out = round_trip(msg);
+  EXPECT_EQ(out.nonce, 7u);
+  EXPECT_EQ(out.game_time, 1'234'567u);
+  EXPECT_EQ(out.snapshot_saves, 42u);
+  EXPECT_EQ(out.snapshot_failures, 1u);
+  EXPECT_TRUE(out.snapshot_dirty);
+  EXPECT_FALSE(out.snapshot_save_stale);
+}
+
+TEST(BaseAppMgrMessages, HealthProbeAck_RejectsBadFlags) {
+  // Hand-craft a payload with snapshot_dirty=2 (not 0/1) to confirm the
+  // deserialiser refuses it — the Reviver heartbeat path depends on this
+  // strict check to avoid garbage state being interpreted as healthy.
+  BinaryWriter w;
+  w.Write<uint64_t>(1);   // nonce
+  w.Write<uint64_t>(0);   // game_time
+  w.Write<uint64_t>(0);   // snapshot_saves
+  w.Write<uint64_t>(0);   // snapshot_failures
+  w.Write<uint8_t>(2);    // snapshot_dirty (invalid)
+  w.Write<uint8_t>(0);    // snapshot_save_stale
+  BinaryReader r(w.Data());
+
+  auto result = HealthProbeAck::Deserialize(r);
+  ASSERT_FALSE(result.HasValue());
+  EXPECT_NE(std::string(result.Error().Message()).find("bad flags"), std::string::npos);
+}
+
 }  // namespace

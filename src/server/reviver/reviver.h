@@ -25,6 +25,12 @@ namespace baseappmgr {
 struct HealthProbeAck;
 }
 
+// Free function (testable in isolation): map a configured
+// --revive-leader-lock-mode string to one of the supported backends.
+// Unknown / empty values fall back to "local"; the caller logs the
+// raw input separately so ops can see typos in startup logs.
+[[nodiscard]] auto NormalizeLeaderLockMode(std::string_view configured) -> std::string;
+
 class Reviver : public ManagerApp {
  public:
   Reviver(EventDispatcher& dispatcher, NetworkInterface& network);

@@ -31,6 +31,11 @@ ServerAppOption<uint32_t> s_ha_reattach_watchdog_ms{
 
 constexpr uint32_t kSnapshotMagic = 0x424D4731u;  // 'BMG1'
 constexpr uint32_t kSnapshotVersion = 1;
+// 256 MiB ceiling — BaseAppMgr only persists the BaseApp table,
+// next_app_id_, global_bases registry, and dbid_affinity entries
+// (no per-cell load buckets). A 4 KiB-per-BaseApp envelope at 65k apps
+// is still < 256 MiB, leaving room for global_bases scripts without
+// approaching CellAppMgr's 1 GiB cap.
 constexpr uint64_t kMaxSnapshotPayloadBytes = 256ull * 1024ull * 1024ull;
 constexpr uint64_t kMaxSnapshotFileBytes =
     kMaxSnapshotPayloadBytes + snapshot_envelope::kEnvelopeBytes;
@@ -546,6 +551,24 @@ auto BaseAppMgr::SaveSnapshotToFile(const std::filesystem::path& path) -> Result
   snapshot_dirty_at_ = {};
   snapshot_dirty_reason_.clear();
   ++snapshot_save_count_;
+
+  // High-water warning mirrors CellAppMgr — log once per minute when the
+  // snapshot exceeds 80% of kMaxSnapshotFileBytes so ops can spot growth
+  // before SaveSnapshotToFile starts rejecting oversized writes.
+  if (const auto pct = SnapshotSizeHighWaterPct(); pct >= 80) {
+    constexpr auto kSizeWarningThrottle = std::chrono::seconds(60);
+    const auto now = Clock::now();
+    if (last_snapshot_size_warning_at_ == TimePoint{} ||
+        now - last_snapshot_size_warning_at_ >= kSizeWarningThrottle) {
+      last_snapshot_size_warning_at_ = now;
+      ATLAS_LOG_WARNING(
+          "BaseAppMgr: HA snapshot file size at {}% of {} byte ceiling ({} bytes) — "
+          "save will start rejecting writes once it crosses the ceiling",
+          pct, kMaxSnapshotFileBytes, bytes.size());
+    }
+  } else if (last_snapshot_size_warning_at_ != TimePoint{}) {
+    last_snapshot_size_warning_at_ = {};
+  }
   return {};
 }
 

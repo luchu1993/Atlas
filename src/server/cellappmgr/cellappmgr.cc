@@ -253,6 +253,11 @@ auto BoundsMidpoint(const CellBounds& bounds) -> std::pair<float, float> {
 
 constexpr uint32_t kSnapshotMagic = 0x314D4143u;
 constexpr uint32_t kSnapshotVersion = 4;
+// 1 GiB ceiling — CellAppMgr persists per-cell load profile buckets
+// (tick-cost / x/z histograms) and pending-geometry blobs; with ~256
+// cellapps × ~64 cells/space × small histograms this peaks well below
+// the limit, but the headroom lets BSP grow to large topologies before
+// SaveSnapshotToFile starts rejecting writes.
 constexpr uint64_t kMaxSnapshotPayloadBytes = 1024ull * 1024ull * 1024ull;
 constexpr uint64_t kMaxSnapshotFileBytes =
     kMaxSnapshotPayloadBytes + snapshot_envelope::kEnvelopeBytes;
@@ -1014,6 +1019,26 @@ auto CellAppMgr::SaveSnapshotToFile(const std::filesystem::path& path) -> Result
   snapshot_dirty_at_ = {};
   snapshot_dirty_reason_.clear();
   ++snapshot_save_count_;
+
+  // High-water warning: log once per minute when the snapshot occupies
+  // >=80% of kMaxSnapshotFileBytes. This is the operator's early signal
+  // that SaveSnapshotToFile will start rejecting writes (and the mgr will
+  // stall snapshotting entirely) if topology keeps growing.
+  if (const auto pct = SnapshotSizeHighWaterPct(); pct >= 80) {
+    constexpr auto kSizeWarningThrottle = std::chrono::seconds(60);
+    const auto now = Clock::now();
+    if (last_snapshot_size_warning_at_ == TimePoint{} ||
+        now - last_snapshot_size_warning_at_ >= kSizeWarningThrottle) {
+      last_snapshot_size_warning_at_ = now;
+      ATLAS_LOG_WARNING(
+          "CellAppMgr: HA snapshot file size at {}% of {} byte ceiling ({} bytes) — "
+          "save will start rejecting writes once it crosses the ceiling",
+          pct, kMaxSnapshotFileBytes, bytes.size());
+    }
+  } else if (last_snapshot_size_warning_at_ != TimePoint{}) {
+    // Reset so we re-warn cleanly if size pressure recurs after relief.
+    last_snapshot_size_warning_at_ = {};
+  }
   return {};
 }
 

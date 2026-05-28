@@ -265,7 +265,8 @@ live 回归优先覆盖 CellAppMgr abnormal shutdown、`--cycles` 多轮接管�
 
 ## 当前边界
 
-- Reviver 只支持 CellAppMgr；BaseAppMgr / DBAppMgr 还没有 Snapshot / Restore。
+- Reviver 监督 CellAppMgr 和 BaseAppMgr(multi-target);DBAppMgr 拆到
+  Phase 15(`phase15_dbappmgr.md`)。
 - Reviver leader lock 现在支持两种模式:
   - `local`(默认):per-host 文件锁,跟之前一样,单机有效;
   - `machined`:lease 由 machined 持有,跨机 Reviver 可以竞争同一 key。
@@ -276,8 +277,26 @@ live 回归优先覆盖 CellAppMgr abnormal shutdown、`--cycles` 多轮接管�
     (默认 3s)控制 renew 节奏,`--revive-leader-lock-failure-threshold` 控制
     连续 renew 失败后主动放弃 leadership 的次数。
   跨机器集群仍需要 machined 本身的可用性 — machined HA 不在 Phase 13
-  范围内,如果 machined 单点掉电,所有 Reviver 都失去 leader,但只要
-  machined 恢复,Reviver 会自动重新竞争。
+  范围内。
+- **machined 不可达 ops 剧本**(machined 进程崩溃 / 网络分区):
+  - **Reviver 侧可观测信号**:`reviver/{slug}/leader/lease_failure_count`
+    持续增长;`reviver/{slug}/last_error` 包含 "machined not connected"
+    或 "lease request timed out";`reviver/{slug}/leader/active` 在
+    `--revive-leader-lock-failure-threshold` 次 renew 失败后变 false。
+    被监督 Mgr 的 `reviver/{slug}/heartbeat_acks` 同时停止增长。
+  - **Mgr 侧可观测信号**:CellAppMgr / BaseAppMgr 本身不受 machined 故障
+    影响 — 它们的 RUDP 控制面对 CellApp / BaseApp 还在跑;但
+    `machined/listener` 路径暂时无法响应 watcher 远程查询,所以
+    `atlas_tool watch` 会失败。
+  - **后果**:machined 恢复前没有 Reviver 持有 leader lock。**这个窗口
+    期内 Mgr 死亡不会自动重启**,需要 ops 手动介入。machined 恢复后
+    Reviver 自动重新竞争 lease,无需手动重启 Reviver。
+  - **检测建议**:在 ops 监控里把 `reviver/+/last_error` 接到告警,任何
+    包含 "machined not connected" 都触发 page。配合 machined 本身的
+    `app/uptime_seconds` watcher 监控。
+  - **生产化路径**:见 `phase13_shared_snapshot_storage.md` 的对象存储
+    backend 路径(machined 故障不阻断 snapshot 访问)和 machined 本身
+    HA(非 Phase 13 范畴,需要 master/follower 复制层)。
 - 异常检测已有 machined death 通知、CellAppMgr direct heartbeat、manager
   watcher health、Reviver 本机 PID liveness 和 registry audit；跨机器误判
   防护仍依赖外部 leader lock / 共享状态方案。
@@ -295,6 +314,13 @@ live 回归优先覆盖 CellAppMgr abnormal shutdown、`--cycles` 多轮接管�
   落后一代；通过 `cellappmgr/ha/snapshot_backup_skips` 暴露累计跳过次数，运维
   发现持续增长时需要检查磁盘 / 文件系统而不是 mgr 自身。
 - DBAppMgr 多 DBApp、分片迁移和 DBApp 故障转移仍未实现。
+- Reviver multi-target live 集成测试(在同一进程内同时拉起
+  cellappmgr 和 baseappmgr,验证两个 target 互不干扰)目前由
+  cellappmgr_process 16 个测试 + baseappmgr_messages HealthProbe round-trip
+  + baseappmgr in-process 单测三层覆盖,但**没有真实 process 级别的
+  multi-target 端到端验证**。F1 multi-target 重构后两个 target 走同一份
+  代码路径(ManagedTarget 参数化),回归风险低;留待 Phase 15
+  DBAppMgr 实现时,在三 target 上一起补 process 级集成测试。
 - BaseApp crash 后的客户端 session resume 尚未实现；当前仍走重新登录路径。
 - CellApp 实体恢复已有 live smoke、多轮目标规模、恢复量、恢复耗时和
   payload / Ghost backup / promote 覆盖率基线；更大规模跨机器 fault-injection

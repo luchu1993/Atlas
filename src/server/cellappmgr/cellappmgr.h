@@ -368,6 +368,7 @@ class CellAppMgr : public ManagerApp {
   std::size_t last_snapshot_save_topology_pending_ack_{0};
   std::string last_snapshot_save_error_;
   TimePoint last_snapshot_save_warning_at_{};
+  TimePoint last_snapshot_size_warning_at_{};
   bool snapshot_dirty_{false};
   TimePoint snapshot_dirty_at_{};
   std::string snapshot_dirty_reason_;

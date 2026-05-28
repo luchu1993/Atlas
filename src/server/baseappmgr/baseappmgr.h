@@ -211,6 +211,7 @@ class BaseAppMgr : public ManagerApp {
   std::filesystem::path last_snapshot_save_path_;
   std::string last_snapshot_save_error_;
   TimePoint last_snapshot_save_warning_at_{};
+  TimePoint last_snapshot_size_warning_at_{};
   bool snapshot_dirty_{false};
   TimePoint snapshot_dirty_at_{};
   std::string snapshot_dirty_reason_;

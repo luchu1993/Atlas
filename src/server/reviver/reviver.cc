@@ -59,6 +59,12 @@ auto AgeMsSince(TimePoint t) -> int64_t {
 
 }  // namespace
 
+auto NormalizeLeaderLockMode(std::string_view configured) -> std::string {
+  if (configured.empty() || configured == "local") return "local";
+  if (configured == "machined") return "machined";
+  return "local";  // unknown → fall back to local; caller logs the value
+}
+
 Reviver::Reviver(EventDispatcher& dispatcher, NetworkInterface& network)
     : ManagerApp(dispatcher, network) {}
 
@@ -112,9 +118,24 @@ void Reviver::InitTarget(ManagedTarget& t, ProcessType pt, std::string slug) {
   if (TargetEnabled(t)) {
     t.leader_lock_path = ResolveLeaderLockPath(t);
   }
-  t.leader_lock_mode =
-      Config().revive_leader_lock_mode.empty() ? std::string{"local"}
-                                               : Config().revive_leader_lock_mode;
+  // ManagedTarget leader_lock_mode contract:
+  //   "local"    → leader_lock holds a ScopedFileLock; leader_lock_held mirrors
+  //                leader_lock->IsHeld(). expires_at / lease_*_count / lease_*
+  //                fields are always zero / default.
+  //   "machined" → leader_lock stays std::nullopt; leader_lock_held tracks the
+  //                lease (true = we own it), expires_at is when our recorded
+  //                ttl runs out without a renew, lease_request_in_flight gates
+  //                concurrent Acquire/Renew calls.
+  // HasLeadership, Fini, and AuditLeadership all dispatch on this string; keep
+  // it in lockstep with both code paths when adding a third backend.
+  const auto& configured_mode = Config().revive_leader_lock_mode;
+  t.leader_lock_mode = NormalizeLeaderLockMode(configured_mode);
+  if (!configured_mode.empty() && t.leader_lock_mode != configured_mode) {
+    ATLAS_LOG_ERROR(
+        "Reviver: unknown leader-lock-mode '{}' for {} — falling back to '{}';"
+        " valid values are 'local' or 'machined'",
+        configured_mode, t.slug, t.leader_lock_mode);
+  }
   // holder_id baked once and reused across reconnects so machined can
   // recognise the renewing client even after a connection blip.
   t.leader_lock_holder_id =
