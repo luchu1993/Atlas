@@ -30,10 +30,8 @@ moving platform、ladder、跨 cell 物理。）
 
 ### 14.3 Unity 导出 MVP（里程碑）
 
-**M7**：命令行 exporter 端到端。
-- Unity batch mode 把 primitive collider 导出成 v2 asset。
-- 跑通：Unity → exporter → `cook_collision` → CellApp 加载。
-- 还不做 mesh / heightfield / volume。
+（M7 已交付，见 [`phase14_status.md`](phase14_status.md)。后续遇到再做：
+mesh / heightfield / volume export。）
 
 ### 之后
 

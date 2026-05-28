@@ -94,6 +94,34 @@ editors and prints the selected executable. Default Windows output is
 `--target StandaloneOSX` for non-Windows players. Standalone builds launch in a
 resizable window.
 
+## Export server collision from Unity
+
+```bash
+tools/bin/export_collision_unity.sh --output out/mvp-unity/map.collision.json
+tools\bin\export_collision_unity.bat --output out\mvp-unity\map.collision.json
+```
+
+Launches Unity in batch mode and runs
+`Atlas.Mvp.Editor.AtlasCollisionExporter.ExportFromCommandLine`, which
+scans the active scene for `ServerColliderAuthoring` components with
+`exportToServer = true` and emits an Atlas collision asset v2 JSON.
+MVP support is intentionally narrow:
+
+- `BoxCollider` with axis-aligned transform → `{shape: box, min, max, layer}`.
+- Rotated `BoxCollider`, `SphereCollider`, `CapsuleCollider`, `MeshCollider`,
+  `TerrainCollider`, and negative scale are logged and skipped — Atlas
+  `StaticBox` is an AABB and the asset schema only models box/plane/mesh.
+
+Feed the JSON into the cooking + cache pipeline:
+
+```bash
+bin\debug\atlas_tool.exe cook_collision out\mvp-unity\map.collision.json
+# → out\mvp-unity\map.collision.collisioncache
+```
+
+`atlas_tool recook --invalid <dir>` re-cooks caches whose
+`jolt_version_stamp` falls behind the current Jolt build.
+
 ## UE client (M2 — bidirectional codegen + BP exposure)
 
 Unreal Engine 5.7 client connecting to the same MVP cluster over the

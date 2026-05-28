@@ -76,6 +76,13 @@
 - `atlas_tool recook --invalid <dir>` 递归扫描 `.collisioncache`，对
   stamp mismatch / 有 mesh 但 cooked 为空的 cache 自动从同名 source
   `.collision.json` 重 cook。
+- `Atlas.Mvp.Editor.AtlasCollisionExporter` 在 Unity batch mode 下扫
+  `ServerColliderAuthoring(exportToServer=true)`，把 axis-aligned
+  `BoxCollider` 写成 collision asset v2 JSON；旋转 box / sphere /
+  capsule / mesh / terrain / 负缩放打 warning 并跳过。
+  `tools/bin/export_collision_unity.{bat,sh}` 提供与
+  `build_mvp_unity` 一致的 Unity executable 发现策略；Unity 发现
+  helper 已提到 `tools/common/unity.py` 复用。
 
 ### CharacterMotor
 

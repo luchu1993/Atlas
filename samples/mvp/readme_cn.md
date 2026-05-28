@@ -70,6 +70,33 @@ tools\bin\build_mvp_unity.bat --skip-setup --clean-output
 
 脚本会按顺序从 `--unity`、`UNITY_EXE`、`UNITY_PATH`、固定工程版本对应的 Unity Hub 安装路径查找 Unity 可执行文件。如果缺少 `ProjectSettings/ProjectVersion.txt`，脚本会扫描本机 Unity Hub 已安装的 Editor 并打印最终选中的可执行文件。Windows 默认输出为 `out/mvp-unity/windows/AtlasMvp.exe`，日志写到 `out/mvp-unity/unity-build.log`。非 Windows player 可传 `--target StandaloneLinux64` 或 `--target StandaloneOSX`。Standalone 构建默认以可调整大小的窗口启动。
 
+## 从 Unity 导出服务端碰撞
+
+```bash
+tools/bin/export_collision_unity.sh --output out/mvp-unity/map.collision.json
+tools\bin\export_collision_unity.bat --output out\mvp-unity\map.collision.json
+```
+
+以 batch mode 启动 Unity 并跑
+`Atlas.Mvp.Editor.AtlasCollisionExporter.ExportFromCommandLine`，扫描
+当前场景里 `exportToServer = true` 的 `ServerColliderAuthoring`
+组件，输出 Atlas collision asset v2 JSON。MVP 范围有意收窄：
+
+- 与世界轴对齐的 `BoxCollider` → `{shape: box, min, max, layer}`。
+- 旋转的 `BoxCollider`、`SphereCollider`、`CapsuleCollider`、
+  `MeshCollider`、`TerrainCollider` 与负缩放都会打 warning 并跳过——
+  Atlas `StaticBox` 是 AABB，asset schema 目前只建模 box/plane/mesh。
+
+把 JSON 喂给 cook + cache 管线：
+
+```bash
+bin\debug\atlas_tool.exe cook_collision out\mvp-unity\map.collision.json
+# → out\mvp-unity\map.collision.collisioncache
+```
+
+`atlas_tool recook --invalid <dir>` 会重 cook
+`jolt_version_stamp` 已落后于当前 Jolt build 的 cache。
+
 ## UE 客户端（M2 — 双向 codegen + BP 暴露）
 
 Unreal Engine 5.7 客户端，通过 Atlas wire 协议连接同一个 MVP 集群。Plugin 直接链接 `atlas_net_client.dll` + `atlas_entitydef_client.dll`，**不**使用 UE 的 replication / RPC。M2 之后：`Atlas.Tools.CppEmitter` 输出 typed entity 类（`atlas::mvp::Account`、`Avatar`、`Npc`、`StressAvatar`）和每个 synced logic component 的独立类（`StressLoadComponent`），覆盖属性 getter、scalar 变化虚 hook、上行 RPC stub、下行 `client_methods` 虚处理、slot-routed component 分发、共享 struct 的 `Serialize/Deserialize`。`UAtlasAvatarView` UCLASS 把属性变化以及 Avatar 全部 5 个 `client_methods`（`ShowDamage`、`OnDied`、`OnRespawned`、`OnProjectileFired`、`OnProjectileEnded`）publish 成 BP delegate，bridge 内置 `atlas::Vec3 → FVector` 坐标转换。
