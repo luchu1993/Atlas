@@ -33,11 +33,13 @@ TEST(BaseAppMgrMessages, RegisterBaseAppAck_RoundTrip) {
   msg.success = true;
   msg.app_id = 3;
   msg.game_time = 123456789u;
+  msg.mgr_generation = 17u;
 
   auto out = round_trip(msg);
   EXPECT_TRUE(out.success);
   EXPECT_EQ(out.app_id, 3u);
   EXPECT_EQ(out.game_time, 123456789u);
+  EXPECT_EQ(out.mgr_generation, 17u);
 }
 
 TEST(BaseAppMgrMessages, InformLoad_RoundTrip) {
@@ -82,11 +84,13 @@ TEST(BaseAppMgrMessages, GlobalBaseNotification_RoundTrip) {
   msg.entity_id = 42;
   msg.type_id = 7;
   msg.added = false;
+  msg.mgr_generation = 9u;
 
   auto out = round_trip(msg);
   EXPECT_EQ(out.key, "Auction");
   EXPECT_FALSE(out.added);
   EXPECT_EQ(out.entity_id, 42u);
+  EXPECT_EQ(out.mgr_generation, 9u);
 }
 
 TEST(BaseAppMgrMessages, HealthProbe_RoundTrip) {
@@ -124,6 +128,7 @@ TEST(BaseAppMgrMessages, HealthProbeAck_RejectsBadFlags) {
   w.Write<uint64_t>(0);   // game_time
   w.Write<uint64_t>(0);   // snapshot_saves
   w.Write<uint64_t>(0);   // snapshot_failures
+  w.Write<uint64_t>(1);   // mgr_generation
   w.Write<uint8_t>(2);    // snapshot_dirty (invalid)
   w.Write<uint8_t>(0);    // snapshot_save_stale
   BinaryReader r(w.Data());

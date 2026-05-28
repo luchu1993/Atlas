@@ -29,30 +29,18 @@ struct PayloadView {
   std::span<const std::byte> payload;
 };
 
-// Decision returned by EvaluateSizeWarning. Both flags can be false
-// (in which case caller does nothing); they're never both true at once.
 struct SizeWarningDecision {
-  bool should_log{false};    // pct ≥ threshold and throttle satisfied
-  bool should_reset{false};  // pct dropped back below threshold; clear last_warned_at
+  bool should_log{false};
+  bool should_reset{false};
 };
 
-// Pure decision about whether SaveSnapshotToFile should log a high-water
-// WARNING. Callers feed in the current size percentage (0..100 from
-// SnapshotSizeHighWaterPct), the current time, the throttle's
-// last_warned_at TimePoint, and (optionally) overridden threshold /
-// throttle. Returning a decision struct keeps the side-effect (logging
-// + last_warned_at update) at the call site so this helper stays unit-
-// testable without a mock Clock.
+// Pure for unit-test isolation; caller owns the side effects of acting
+// on should_log / should_reset.
 inline auto EvaluateSizeWarning(uint32_t pct, TimePoint now, TimePoint last_warned_at,
                                 uint32_t threshold_pct = kSizeWarningThresholdPct,
                                 Duration throttle = std::chrono::duration_cast<Duration>(
                                     kSizeWarningThrottle)) -> SizeWarningDecision {
-  if (pct < threshold_pct) {
-    // Snapshot dropped back below the high-water mark; clear the throttle
-    // so a future spike re-warns immediately instead of waiting out the
-    // previous warning's window.
-    return {false, last_warned_at != TimePoint{}};
-  }
+  if (pct < threshold_pct) return {false, last_warned_at != TimePoint{}};
   if (last_warned_at == TimePoint{} || now - last_warned_at >= throttle) {
     return {true, false};
   }
@@ -77,10 +65,8 @@ inline auto Checksum(std::span<const std::byte> bytes) -> uint64_t {
   return hash;
 }
 
-// Format a watcher error_detail token: ASCII alphanumerics, dot, dash,
-// underscore; runs of other characters collapse into a single underscore.
-// Bounded to kMaxWatcherErrorDetailBytes so a long std error message never
-// blows up a single watcher line.
+// Sanitize to ASCII alnum/dot/dash/underscore, collapse other runs into one
+// underscore, cap at kMaxWatcherErrorDetailBytes for single-line watcher output.
 inline auto WatcherErrorDetail(std::string_view message) -> std::string {
   if (message.empty()) return "unknown";
   std::string out;
@@ -129,10 +115,8 @@ inline auto WrapPayload(std::span<const std::byte> payload, uint32_t magic, uint
   return w.Detach();
 }
 
-// Read a snapshot blob and validate magic/version/size/checksum. Returns
-// a PayloadView whose `payload` borrows from the caller-owned input bytes.
-// `module_name` participates in error messages so log/watcher output can
-// say "CellAppMgr snapshot: bad magic" vs "BaseAppMgr snapshot: bad magic".
+// Validate magic/version/size/checksum; returned PayloadView borrows from
+// caller-owned bytes. module_name prefixes any error message.
 inline auto ReadPayload(std::span<const std::byte> bytes, uint32_t expected_magic,
                         uint32_t expected_version, uint64_t max_payload_bytes,
                         std::string_view module_name) -> Result<PayloadView> {
@@ -177,12 +161,8 @@ inline auto ReadPayload(std::span<const std::byte> bytes, uint32_t expected_magi
   return PayloadView{*payload};
 }
 
-// Compute the readiness of a snapshot file on disk:
-//   - validate=false: only check presence/size; `valid` reflects "size in
-//     range" rather than envelope correctness. Cheap, used in hot watcher.
-//   - validate=true: additionally read the file and run ReadPayload on it
-//     so the watcher reports envelope corruption. Used in the dry-run
-//     readiness watchers and verify scripts.
+// validate=false → presence/size only (cheap hot-watcher path); validate=true
+// → also ReadPayload so the watcher surfaces envelope corruption.
 inline auto Readiness(const std::filesystem::path& path, bool validate, uint32_t expected_magic,
                       uint32_t expected_version, uint64_t max_file_bytes,
                       uint64_t max_payload_bytes, std::string_view module_name)
@@ -214,11 +194,8 @@ inline auto Readiness(const std::filesystem::path& path, bool validate, uint32_t
   return FileReadiness{true, bytes_size, true, false, "ready", "none"};
 }
 
-// Atomically copy the current main file into <path>.bak, refusing to
-// overwrite a valid backup with a corrupt main file. Returns
-// kInvalidArgument when the current main file fails envelope validation —
-// callers should treat that as a "leave backup alone" signal (typically
-// log + skip count) rather than a hard error.
+// Copy main → <path>.bak atomically; returns kInvalidArgument if main fails
+// envelope validation so callers leave the backup untouched.
 inline auto PreserveBackup(const std::filesystem::path& path, uint32_t expected_magic,
                            uint32_t expected_version, uint64_t max_payload_bytes,
                            std::string_view module_name) -> Result<void> {

@@ -30,12 +30,9 @@ ServerAppOption<uint32_t> s_ha_reattach_watchdog_ms{
     "baseappmgr/ha/reattach_watchdog_ms", WatcherMode::kReadWrite};
 
 constexpr uint32_t kSnapshotMagic = 0x424D4731u;  // 'BMG1'
-constexpr uint32_t kSnapshotVersion = 1;
-// 256 MiB ceiling — BaseAppMgr only persists the BaseApp table,
-// next_app_id_, global_bases registry, and dbid_affinity entries
-// (no per-cell load buckets). A 4 KiB-per-BaseApp envelope at 65k apps
-// is still < 256 MiB, leaving room for global_bases scripts without
-// approaching CellAppMgr's 1 GiB cap.
+constexpr uint32_t kSnapshotVersion = 2;
+// 256 MiB ceiling — BaseApp table + global_bases + dbid_affinity only
+// (no per-cell buckets); fits 65k BaseApps with room for script entries.
 constexpr uint64_t kMaxSnapshotPayloadBytes = 256ull * 1024ull * 1024ull;
 constexpr uint64_t kMaxSnapshotFileBytes =
     kMaxSnapshotPayloadBytes + snapshot_envelope::kEnvelopeBytes;
@@ -202,9 +199,8 @@ auto BaseAppMgr::BaseAppInfo::QueuePressure() const -> float {
                          logoff_in_flight_count) +
       static_cast<float>(detached_proxy_count) * 0.1f;
 
-  // Queue depth is a balancing hint, not a hard overload signal. Scale it
-  // conservatively so transient login bursts spread across BaseApps instead
-  // of collapsing the whole cluster into "no_baseapp" rejections.
+  // Queue depth is a balancing hint, not a hard overload signal; cap the
+  // contribution so login bursts spread instead of triggering no_baseapp.
   return std::min(0.35f, kPressureUnits / 512.0f);
 }
 
@@ -336,6 +332,11 @@ auto BaseAppMgr::Init(int argc, char* argv[]) -> bool {
     }
   }
 
+  // Fresh start = 1; restart from snapshot = prior_saved + 1. BaseApps reject
+  // messages tagged with an older generation after a Reviver takeover.
+  ++mgr_generation_;
+  ATLAS_LOG_INFO("BaseAppMgr: mgr_generation={}", mgr_generation_);
+
   ATLAS_LOG_INFO("BaseAppMgr: initialised");
   return true;
 }
@@ -349,6 +350,7 @@ void BaseAppMgr::Fini() {
 
 auto BaseAppMgr::Snapshot() const -> std::vector<std::byte> {
   BinaryWriter payload_writer;
+  payload_writer.Write(mgr_generation_);
   payload_writer.Write(next_app_id_);
 
   payload_writer.WritePackedInt(static_cast<uint32_t>(baseapps_.size()));
@@ -396,8 +398,9 @@ auto BaseAppMgr::Restore(std::span<const std::byte> bytes) -> Result<void> {
   if (!view) return view.Error();
   BinaryReader r(view->payload);
 
+  auto saved_generation = r.Read<uint64_t>();
   auto next_app = r.Read<uint32_t>();
-  if (!next_app) {
+  if (!saved_generation || !next_app) {
     return Error{ErrorCode::kInvalidArgument, "BaseAppMgr snapshot: header truncated"};
   }
 
@@ -493,6 +496,7 @@ auto BaseAppMgr::Restore(std::span<const std::byte> bytes) -> Result<void> {
   app_id_index_ = std::move(restored_index);
   global_bases_ = std::move(restored_global_bases);
   next_app_id_ = *next_app;
+  mgr_generation_ = *saved_generation;
 
   dbid_affinity_.Clear();
   const auto now = Clock::now();
@@ -552,9 +556,6 @@ auto BaseAppMgr::SaveSnapshotToFile(const std::filesystem::path& path) -> Result
   snapshot_dirty_reason_.clear();
   ++snapshot_save_count_;
 
-  // High-water warning — see CellAppMgr for the parallel implementation
-  // and snapshot_envelope::EvaluateSizeWarning for the decision logic
-  // (both mgrs route through the same helper).
   const auto now = Clock::now();
   const auto decision =
       snapshot_envelope::EvaluateSizeWarning(SnapshotSizeHighWaterPct(), now,
@@ -909,6 +910,8 @@ void BaseAppMgr::RegisterWatchers() {
   wr.Add<std::size_t>("baseappmgr/dbid_affinity_count",
                       std::function<std::size_t()>([this] { return dbid_affinity_.size(); }));
 
+  wr.Add<uint64_t>("baseappmgr/ha/mgr_generation",
+                   std::function<uint64_t()>([this] { return mgr_generation_; }));
   wr.Add<std::string>("baseappmgr/ha/snapshot_path",
                       std::function<std::string()>(
                           [this] { return SnapshotFilePathForWatcher(); }));
@@ -1014,9 +1017,8 @@ void BaseAppMgr::RegisterWatchers() {
                    std::function<uint32_t()>(
                        [this] { return SnapshotSizeHighWaterPct(); }));
 
-  // reattach state. reattach_watchdog_ms is registered as a ReadWrite
-  // ServerAppOption (above), so verify scripts can shrink the window via
-  // atlas_tool set-watch without rebuilding.
+  // reattach_watchdog_ms is a ReadWrite ServerAppOption above, so verify
+  // scripts can shrink the window via atlas_tool set-watch without rebuild.
   wr.Add<std::size_t>("baseappmgr/ha/restored_baseapps",
                       std::function<std::size_t()>(
                           [this] { return RestoredBaseAppCount(); }));
@@ -1054,10 +1056,8 @@ void BaseAppMgr::OnRegisterBaseapp(const Address& src, Channel* ch,
       (void)ch->SendMessage(ack);
       return;
     }
-    // Snapshot-restored entry: the surviving BaseApp is reconnecting, keep
-    // its app_id and replay nothing on this side — BaseApp re-asserts ready
-    // via BaseAppReady. restored_from_snapshot stays sticky for watcher
-    // semantics (cleared only at OnBaseappDeath).
+    // Surviving BaseApp reconnects: keep its app_id; BaseAppReady will
+    // re-assert readiness. restored_from_snapshot clears at OnBaseappDeath.
     existing.channel = ch;
     existing.external_addr = kExternalAddr;
     existing.needs_reattach = false;
@@ -1069,6 +1069,7 @@ void BaseAppMgr::OnRegisterBaseapp(const Address& src, Channel* ch,
     ack.success = true;
     ack.app_id = existing.app_id;
     ack.game_time = GameTime();
+    ack.mgr_generation = mgr_generation_;
     (void)ch->SendMessage(ack);
     ATLAS_LOG_INFO("BaseAppMgr: BaseApp reattached app_id={} internal={}:{} external={}:{}",
                    existing.app_id, kInternalAddr.Ip(), kInternalAddr.Port(),
@@ -1099,6 +1100,7 @@ void BaseAppMgr::OnRegisterBaseapp(const Address& src, Channel* ch,
   ack.success = true;
   ack.app_id = app_id;
   ack.game_time = GameTime();
+  ack.mgr_generation = mgr_generation_;
   (void)ch->SendMessage(ack);
 
   ATLAS_LOG_INFO("BaseAppMgr: BaseApp registered app_id={} internal={}:{} external={}:{}", app_id,
@@ -1132,6 +1134,7 @@ void BaseAppMgr::OnHealthProbe(const Address&, Channel* ch,
   ack.game_time = GameTime();
   ack.snapshot_saves = snapshot_save_count_;
   ack.snapshot_failures = snapshot_failure_count_;
+  ack.mgr_generation = mgr_generation_;
   ack.snapshot_dirty = snapshot_dirty_;
   ack.snapshot_save_stale = SnapshotSaveStaleForWatcher();
   (void)ch->SendMessage(ack);
@@ -1328,11 +1331,8 @@ auto BaseAppMgr::ShouldPreferAffinity(const BaseAppInfo& preferred,
     return true;
   }
 
-  // Preserve DBID affinity using reported process load rather than the
-  // queue-biased balancing score. For shortline relogin storms the preferred
-  // BaseApp often carries more detached proxies precisely because it can
-  // complete the reconnect locally; routing away from it defeats the fast
-  // path and amplifies force-logoff pressure.
+  // Compare via measured_load (not balancing score) so relogin storms keep
+  // DBID affinity on the BaseApp holding the detached proxy.
   const float kAllowedLoad = std::min(1.0f, least_loaded->measured_load + kDbidAffinityLoadSlack);
   return preferred.measured_load <= kAllowedLoad;
 }
@@ -1395,14 +1395,14 @@ auto BaseAppMgr::IsOverloaded() const -> bool {
   return false;
 }
 
-void BaseAppMgr::BroadcastToAllBaseapps(const baseappmgr::GlobalBaseNotification& notif) {
+void BaseAppMgr::BroadcastToAllBaseapps(const baseappmgr::GlobalBaseNotification& notif_in) {
+  baseappmgr::GlobalBaseNotification notif = notif_in;
+  notif.mgr_generation = mgr_generation_;
   for (auto& [addr, info] : baseapps_) {
     if (info.is_ready && info.channel) {
       if (auto r = info.channel->SendMessage(notif); !r) {
-        // A missed notification leaves peers permanently disagreeing on
-        // which BaseApp owns a singleton (e.g. ChatService) - RPCs to
-        // that mailbox land on stale or absent owner.  No automatic
-        // resync; operator must restart or rely on death detection.
+        // A missed notification permanently desyncs singleton ownership
+        // (e.g. ChatService); only operator restart or death detection heals it.
         ATLAS_LOG_ERROR(
             "BaseAppMgr: GlobalBaseNotification dropped to baseapp {}: {} "
             "— peer-view divergence on global mailbox",

@@ -1,12 +1,16 @@
 #include <chrono>
 #include <filesystem>
+#include <fstream>
+#include <iterator>
 #include <string>
+#include <thread>
 #include <vector>
 
 #include <gtest/gtest.h>
 
 #include "platform/child_process.h"
 #include "platform/platform_config.h"
+#include "platform/process_launcher.h"
 
 using namespace atlas;
 using namespace std::chrono_literals;
@@ -14,9 +18,6 @@ using namespace std::chrono_literals;
 namespace {
 
 #if ATLAS_PLATFORM_WINDOWS
-// cmd.exe is guaranteed on every supported Windows test machine; `/c` runs a
-// single command then exits. We pick echo for stdout-only tests and a
-// non-zero exit via `exit /b N` for status tests.
 auto MakeEchoOptions(const std::string& msg) -> ChildProcess::Options {
   ChildProcess::Options opts;
   opts.exe = "C:\\Windows\\System32\\cmd.exe";
@@ -32,9 +33,19 @@ auto MakeExitOptions(int code) -> ChildProcess::Options {
 auto MakeSleepOptions(int seconds) -> ChildProcess::Options {
   ChildProcess::Options opts;
   opts.exe = "C:\\Windows\\System32\\cmd.exe";
-  // `timeout /t N /nobreak` blocks for ~N seconds; redirecting >NUL
-  // keeps its own banner out of our stdout parse.
   opts.args = {"/c", "timeout /t " + std::to_string(seconds) + " /nobreak >NUL"};
+  return opts;
+}
+auto MakeDetachedSleepOptions(int seconds) -> ProcessLaunchOptions {
+  ProcessLaunchOptions opts;
+  opts.exe = "C:\\Windows\\System32\\cmd.exe";
+  opts.args = {"/c", "timeout /t " + std::to_string(seconds) + " /nobreak >NUL"};
+  return opts;
+}
+auto MakeDetachedEchoOptions() -> ProcessLaunchOptions {
+  ProcessLaunchOptions opts;
+  opts.exe = "C:\\Windows\\System32\\cmd.exe";
+  opts.args = {"/c", "echo detached-out && echo detached-err 1>&2"};
   return opts;
 }
 #elif ATLAS_PLATFORM_LINUX
@@ -56,7 +67,24 @@ auto MakeSleepOptions(int seconds) -> ChildProcess::Options {
   opts.args = {"-c", "sleep " + std::to_string(seconds)};
   return opts;
 }
+auto MakeDetachedSleepOptions(int seconds) -> ProcessLaunchOptions {
+  ProcessLaunchOptions opts;
+  opts.exe = "/bin/sh";
+  opts.args = {"-c", "sleep " + std::to_string(seconds)};
+  return opts;
+}
+auto MakeDetachedEchoOptions() -> ProcessLaunchOptions {
+  ProcessLaunchOptions opts;
+  opts.exe = "/bin/sh";
+  opts.args = {"-c", "echo detached-out; echo detached-err >&2"};
+  return opts;
+}
 #endif
+
+auto ReadTextFile(const std::filesystem::path& path) -> std::string {
+  std::ifstream file(path, std::ios::in | std::ios::binary);
+  return std::string(std::istreambuf_iterator<char>(file), std::istreambuf_iterator<char>());
+}
 
 }  // namespace
 
@@ -93,13 +121,54 @@ TEST(ChildProcess, KillTerminatesLongRunningChild) {
 
   auto code = r->Wait(3s);
   ASSERT_TRUE(code.has_value()) << "Kill did not reap the child within 3s";
-  // Platforms report this differently:
-  //   * Windows: exit code is the 1 we passed to TerminateProcess.
-  //   * Linux: the process is signalled (SIGTERM) → 128+15 = 143.
-  // Accept either — the assertion we care about is "terminated, reaped".
   EXPECT_TRUE(*code == 1 || *code == 143 || *code == 128 + 15 || *code == -1)
       << "unexpected exit code on kill: " << *code;
   EXPECT_FALSE(r->IsRunning());
+}
+
+TEST(ChildProcess, TerminateProcessByPidStopsDetachedChild) {
+  auto pid = LaunchDetachedProcess(MakeDetachedSleepOptions(30));
+  ASSERT_TRUE(pid.HasValue()) << pid.Error().Message();
+  ASSERT_TRUE(IsProcessAlive(*pid));
+
+  EXPECT_TRUE(TerminateProcessByPid(*pid));
+  const auto deadline = std::chrono::steady_clock::now() + 3s;
+  while (IsProcessAlive(*pid) && std::chrono::steady_clock::now() < deadline) {
+    std::this_thread::sleep_for(20ms);
+  }
+  EXPECT_FALSE(IsProcessAlive(*pid));
+}
+
+TEST(ChildProcess, DetachedProcessRedirectsOutputToFile) {
+  auto path = std::filesystem::temp_directory_path() /
+              ("atlas_detached_output_" +
+               std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()) +
+               ".log");
+  std::error_code ec;
+  std::filesystem::remove(path, ec);
+
+  auto opts = MakeDetachedEchoOptions();
+  opts.output_path = path;
+  auto pid = LaunchDetachedProcess(std::move(opts));
+  ASSERT_TRUE(pid.HasValue()) << pid.Error().Message();
+
+  std::string content;
+  const auto deadline = std::chrono::steady_clock::now() + 3s;
+  while (std::chrono::steady_clock::now() < deadline) {
+    if (std::filesystem::exists(path)) content = ReadTextFile(path);
+    if (content.find("detached-out") != std::string::npos &&
+        content.find("detached-err") != std::string::npos) {
+      break;
+    }
+    std::this_thread::sleep_for(20ms);
+  }
+  if (content.find("detached-out") == std::string::npos ||
+      content.find("detached-err") == std::string::npos) {
+    (void)TerminateProcessByPid(*pid);
+  }
+  EXPECT_NE(content.find("detached-out"), std::string::npos);
+  EXPECT_NE(content.find("detached-err"), std::string::npos);
+  std::filesystem::remove(path, ec);
 }
 
 TEST(ChildProcess, InvalidExePathReturnsError) {
@@ -114,11 +183,9 @@ TEST(ChildProcess, MovedFromBecomesInert) {
   ASSERT_TRUE(r.HasValue());
   ChildProcess moved(std::move(*r));
 
-  // Original handle must be inert after move.
   EXPECT_FALSE(r->IsRunning());
   EXPECT_EQ(r->TryReadStdoutLine(), std::nullopt);
 
-  // Moved-to handle inherits ownership.
   auto line = moved.WaitForStdoutLine(3s);
   ASSERT_TRUE(line.has_value());
   auto code = moved.Wait(2s);

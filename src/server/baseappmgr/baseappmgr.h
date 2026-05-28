@@ -143,6 +143,9 @@ class BaseAppMgr : public ManagerApp {
   std::unordered_map<Address, BaseAppInfo> baseapps_;
   std::unordered_map<uint32_t, Address> app_id_index_;
   uint32_t next_app_id_{1};
+  // Persisted in snapshot, bumped at each (re)start; BaseApps drop messages
+  // tagged with a lower generation than the last handshake advertised.
+  uint64_t mgr_generation_{0};
   static constexpr float kLoginAllocationLoadIncrement = 0.01f;
   static constexpr float kOverloadThreshold = 0.9f;
   static constexpr float kDbidAffinityLoadSlack = 0.25f;

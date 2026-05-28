@@ -51,13 +51,16 @@ struct RegisterBaseAppAck {
   bool success{false};
   uint32_t app_id{0};
   uint64_t game_time{0};
+  // Monotonic per-mgr-process generation; BaseApp uses it to reject
+  // stale-mgr messages after a Reviver-driven takeover.
+  uint64_t mgr_generation{0};
 
   static auto Descriptor() -> const MessageDesc& {
     static const MessageDesc kDesc{
         msg_id::Id(msg_id::BaseAppMgr::kRegisterBaseAppAck),
         "baseappmgr::RegisterBaseAppAck",
         MessageLengthStyle::kFixed,
-        static_cast<int>(sizeof(uint8_t) + sizeof(uint32_t) + sizeof(uint64_t)),
+        static_cast<int>(sizeof(uint8_t) + sizeof(uint32_t) + 2 * sizeof(uint64_t)),
         MessageReliability::kReliable,
         MessageUrgency::kImmediate};
     return kDesc;
@@ -67,18 +70,21 @@ struct RegisterBaseAppAck {
     w.Write(static_cast<uint8_t>(success ? 1 : 0));
     w.Write(app_id);
     w.Write(game_time);
+    w.Write(mgr_generation);
   }
 
   static auto Deserialize(BinaryReader& r) -> Result<RegisterBaseAppAck> {
     auto ok = r.Read<uint8_t>();
     auto aid = r.Read<uint32_t>();
     auto gt = r.Read<uint64_t>();
-    if (!ok || !aid || !gt)
+    auto gen = r.Read<uint64_t>();
+    if (!ok || !aid || !gt || !gen)
       return Error{ErrorCode::kInvalidArgument, "RegisterBaseAppAck: truncated"};
     RegisterBaseAppAck msg;
     msg.success = (*ok != 0);
     msg.app_id = *aid;
     msg.game_time = *gt;
+    msg.mgr_generation = *gen;
     return msg;
   }
 };
@@ -237,6 +243,7 @@ struct GlobalBaseNotification {
   EntityID entity_id{kInvalidEntityID};
   uint16_t type_id{0};
   bool added{true};  // true=registered, false=deregistered
+  uint64_t mgr_generation{0};
 
   static auto Descriptor() -> const MessageDesc& {
     static const MessageDesc kDesc{msg_id::Id(msg_id::BaseAppMgr::kGlobalBaseNotification),
@@ -255,6 +262,7 @@ struct GlobalBaseNotification {
     w.Write(entity_id);
     w.Write(type_id);
     w.Write(static_cast<uint8_t>(added ? 1 : 0));
+    w.Write(mgr_generation);
   }
 
   static auto Deserialize(BinaryReader& r) -> Result<GlobalBaseNotification> {
@@ -272,6 +280,11 @@ struct GlobalBaseNotification {
     msg.entity_id = *eid;
     msg.type_id = *ti;
     msg.added = (*add != 0);
+    if (r.Remaining() > 0) {
+      auto gen = r.Read<uint64_t>();
+      if (!gen) return Error{ErrorCode::kInvalidArgument, "GlobalBaseNotification: truncated"};
+      msg.mgr_generation = *gen;
+    }
     return msg;
   }
 };
@@ -307,11 +320,12 @@ struct HealthProbeAck {
   uint64_t game_time{0};
   uint64_t snapshot_saves{0};
   uint64_t snapshot_failures{0};
+  uint64_t mgr_generation{0};
   bool snapshot_dirty{false};
   bool snapshot_save_stale{false};
 
   static auto Descriptor() -> const MessageDesc& {
-    constexpr int kSerializedSize = static_cast<int>(4 * sizeof(uint64_t) + 2);
+    constexpr int kSerializedSize = static_cast<int>(5 * sizeof(uint64_t) + 2);
     static const MessageDesc kDesc{msg_id::Id(msg_id::BaseAppMgr::kHealthProbeAck),
                                    "baseappmgr::HealthProbeAck",
                                    MessageLengthStyle::kFixed,
@@ -326,6 +340,7 @@ struct HealthProbeAck {
     w.Write(game_time);
     w.Write(snapshot_saves);
     w.Write(snapshot_failures);
+    w.Write(mgr_generation);
     w.Write<uint8_t>(snapshot_dirty ? 1u : 0u);
     w.Write<uint8_t>(snapshot_save_stale ? 1u : 0u);
   }
@@ -335,9 +350,10 @@ struct HealthProbeAck {
     auto tick = r.Read<uint64_t>();
     auto saves = r.Read<uint64_t>();
     auto failures = r.Read<uint64_t>();
+    auto gen = r.Read<uint64_t>();
     auto dirty = r.Read<uint8_t>();
     auto stale = r.Read<uint8_t>();
-    if (!value || !tick || !saves || !failures || !dirty || !stale) {
+    if (!value || !tick || !saves || !failures || !gen || !dirty || !stale) {
       return Error{ErrorCode::kInvalidArgument, "baseappmgr::HealthProbeAck: truncated"};
     }
     if (*dirty > 1 || *stale > 1) {
@@ -348,6 +364,7 @@ struct HealthProbeAck {
     msg.game_time = *tick;
     msg.snapshot_saves = *saves;
     msg.snapshot_failures = *failures;
+    msg.mgr_generation = *gen;
     msg.snapshot_dirty = (*dirty != 0);
     msg.snapshot_save_stale = (*stale != 0);
     return msg;

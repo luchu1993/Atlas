@@ -1,13 +1,3 @@
-// Integration test: MachinedApp full registration / heartbeat / query flow.
-//
-// Scenario:
-//   - MachinedApp runs in a background thread with its own dispatcher + NI.
-//   - A "client" NetworkInterface connects via MachinedClient.
-//   - Client registers as ProcessType::kBaseApp; queries machined for the entry.
-//   - Client deregisters; a second query returns zero entries.
-//   - Duplicate registration is rejected.
-//   - Multiple distinct processes can register simultaneously.
-
 #include <atomic>
 #include <chrono>
 #include <future>
@@ -22,15 +12,12 @@
 #include "network/event_dispatcher.h"
 #include "network/machined_types.h"
 #include "network/network_interface.h"
+#include "server/common_messages.h"
 #include "server/machined_client.h"
 #include "server/server_config.h"
 
 using namespace atlas;
 using namespace atlas::machined;
-
-// ============================================================================
-// Helpers
-// ============================================================================
 
 template <typename Pred>
 static bool poll_until(EventDispatcher& disp, Pred pred,
@@ -44,8 +31,19 @@ static bool poll_until(EventDispatcher& disp, Pred pred,
   return false;
 }
 
-// Issue repeated queries until the registry returns a non-empty list for
-// process_type, or timeout expires.  Returns the last result.
+template <typename Pred>
+static bool poll_until(EventDispatcher& first, EventDispatcher& second, Pred pred,
+                       std::chrono::milliseconds timeout = std::chrono::milliseconds(2000)) {
+  auto deadline = std::chrono::steady_clock::now() + timeout;
+  while (std::chrono::steady_clock::now() < deadline) {
+    first.ProcessOnce();
+    second.ProcessOnce();
+    if (pred()) return true;
+    std::this_thread::sleep_for(std::chrono::milliseconds(2));
+  }
+  return false;
+}
+
 static std::vector<ProcessInfo> wait_for_registry_entry(
     EventDispatcher& disp, MachinedClient& client, ProcessType type,
     std::chrono::milliseconds timeout = std::chrono::milliseconds(3000)) {
@@ -77,11 +75,6 @@ struct MachinedArgv {
   char** argv() { return ptrs.data(); }
 };
 
-// ============================================================================
-// TestMachinedApp: wraps MachinedApp with an external stop flag (atomic) and
-// publishes the listen address once init() completes.
-// ============================================================================
-
 class TestMachinedApp : public MachinedApp {
  public:
   TestMachinedApp(EventDispatcher& d, NetworkInterface& n, std::promise<Address>& addr_promise,
@@ -91,9 +84,6 @@ class TestMachinedApp : public MachinedApp {
  protected:
   auto Init(int argc, char* argv[]) -> bool override {
     if (!MachinedApp::Init(argc, argv)) return false;
-    // Publish the listening address before run() starts so the test thread
-    // can connect without a race on NetworkInterface.
-    // Substitute 0.0.0.0 → 127.0.0.1 so clients can actually connect.
     Address addr = Network().TcpAddress();
     if (addr.Ip() == 0) addr = Address("127.0.0.1", addr.Port());
     addr_promise_.set_value(addr);
@@ -110,13 +100,8 @@ class TestMachinedApp : public MachinedApp {
   std::atomic<bool>& stop_flag_;
 };
 
-// ============================================================================
-// Fixture
-// ============================================================================
-
 class MachinedRegistrationTest : public ::testing::Test {
  protected:
-  // Client side — driven manually in each test via poll_until.
   EventDispatcher client_disp_{"client"};
   NetworkInterface client_ni_{client_disp_};
 
@@ -131,8 +116,6 @@ class MachinedRegistrationTest : public ::testing::Test {
     std::promise<Address> addr_promise;
     auto addr_future = addr_promise.get_future();
 
-    // All machined objects live on the background thread to avoid
-    // cross-thread access to non-thread-safe NetworkInterface.
     machined_thread_ =
         std::thread([promise = std::move(addr_promise), &stop_flag = stop_flag_]() mutable {
           EventDispatcher disp("machined");
@@ -154,10 +137,6 @@ class MachinedRegistrationTest : public ::testing::Test {
   }
 };
 
-// ============================================================================
-// Test: Register → query returns the registered entry
-// ============================================================================
-
 TEST_F(MachinedRegistrationTest, RegisterReceivesAck) {
   MachinedClient client(client_disp_, client_ni_);
 
@@ -172,9 +151,6 @@ TEST_F(MachinedRegistrationTest, RegisterReceivesAck) {
   cfg.internal_port = 7200;
   client.SendRegister(cfg);
 
-  // Poll until the registration appears in machined's registry.
-  // Each iteration issues one query and drains responses; we stop once the
-  // returned list is non-empty.
   std::vector<ProcessInfo> result;
   bool found = false;
   auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(3000);
@@ -184,7 +160,6 @@ TEST_F(MachinedRegistrationTest, RegisterReceivesAck) {
       result = std::move(infos);
       query_done = true;
     });
-    // Drain until QueryResponse arrives.
     poll_until(client_disp_, [&] { return query_done; }, std::chrono::milliseconds(200));
     if (!result.empty()) found = true;
   }
@@ -195,10 +170,6 @@ TEST_F(MachinedRegistrationTest, RegisterReceivesAck) {
   EXPECT_EQ(result[0].name, "baseapp-1");
   EXPECT_EQ(result[0].internal_addr.Port(), 7200);
 }
-
-// ============================================================================
-// Test: Heartbeat round-trip (register first, then heartbeat)
-// ============================================================================
 
 TEST_F(MachinedRegistrationTest, HeartbeatReceivesAck) {
   MachinedClient client(client_disp_, client_ni_);
@@ -218,10 +189,6 @@ TEST_F(MachinedRegistrationTest, HeartbeatReceivesAck) {
   poll_until(client_disp_, [&] { return false; }, std::chrono::milliseconds(100));
 }
 
-// ============================================================================
-// Test: Deregister removes entry from registry
-// ============================================================================
-
 TEST_F(MachinedRegistrationTest, DeregisterRemovesEntry) {
   MachinedClient client(client_disp_, client_ni_);
   ASSERT_TRUE(client.Connect(machined_addr_));
@@ -238,7 +205,6 @@ TEST_F(MachinedRegistrationTest, DeregisterRemovesEntry) {
 
   client.SendDeregister(cfg);
 
-  // Give machined a moment to process the deregister, then query once.
   poll_until(client_disp_, [&] { return false; }, std::chrono::milliseconds(100));
 
   std::vector<ProcessInfo> result;
@@ -251,9 +217,55 @@ TEST_F(MachinedRegistrationTest, DeregisterRemovesEntry) {
   EXPECT_TRUE(result.empty()) << "Registry should be empty after deregister";
 }
 
-// ============================================================================
-// Test: Duplicate registration is rejected
-// ============================================================================
+TEST_F(MachinedRegistrationTest, ShutdownReasonSurvivesTargetDeregister) {
+  EventDispatcher listener_disp{"listener"};
+  listener_disp.SetMaxPollWait(Milliseconds(1));
+  NetworkInterface listener_ni(listener_disp);
+
+  MachinedClient listener(listener_disp, listener_ni);
+  ASSERT_TRUE(listener.Connect(machined_addr_));
+  ASSERT_TRUE(poll_until(listener_disp, [&] { return listener.IsConnected(); }));
+
+  bool death_received = false;
+  DeathNotification death;
+  listener.Subscribe(ListenerType::kDeath, ProcessType::kBaseApp, nullptr,
+                     [&](const DeathNotification& msg) {
+                       death = msg;
+                       death_received = true;
+                     });
+
+  bool shutdown_received = false;
+  uint8_t shutdown_reason = 0;
+  (void)client_ni_.InterfaceTable().RegisterTypedHandler<msg::ShutdownRequest>(
+      [&](const Address&, Channel*, const msg::ShutdownRequest& msg) {
+        shutdown_reason = msg.reason;
+        shutdown_received = true;
+      });
+
+  MachinedClient target(client_disp_, client_ni_);
+  ASSERT_TRUE(target.Connect(machined_addr_));
+  ASSERT_TRUE(poll_until(client_disp_, listener_disp, [&] {
+    return target.IsConnected() && listener.IsConnected();
+  }));
+
+  ServerConfig cfg;
+  cfg.process_type = ProcessType::kBaseApp;
+  cfg.process_name = "baseapp-shutdown";
+  cfg.internal_port = 7205;
+  target.SendRegister(cfg);
+  auto reg_result = wait_for_registry_entry(client_disp_, target, ProcessType::kBaseApp);
+  ASSERT_FALSE(reg_result.empty()) << "Registration must succeed before shutdown test";
+
+  listener.RequestShutdownTarget(ProcessType::kBaseApp, "baseapp-shutdown", 7);
+  ASSERT_TRUE(poll_until(client_disp_, listener_disp, [&] { return shutdown_received; }));
+  EXPECT_EQ(shutdown_reason, 7u);
+
+  target.SendDeregister(cfg);
+  ASSERT_TRUE(poll_until(client_disp_, listener_disp, [&] { return death_received; }));
+  EXPECT_EQ(death.process_type, ProcessType::kBaseApp);
+  EXPECT_EQ(death.name, "baseapp-shutdown");
+  EXPECT_EQ(death.reason, 7u);
+}
 
 TEST_F(MachinedRegistrationTest, DuplicateRegistrationRejected) {
   MachinedClient client_a(client_disp_, client_ni_);
@@ -269,7 +281,6 @@ TEST_F(MachinedRegistrationTest, DuplicateRegistrationRejected) {
   auto reg1 = wait_for_registry_entry(client_disp_, client_a, ProcessType::kBaseApp);
   ASSERT_FALSE(reg1.empty()) << "First registration must succeed";
 
-  // Second client with the same (type, name) — should be rejected.
   EventDispatcher client2_disp{"client2"};
   client2_disp.SetMaxPollWait(Milliseconds(1));
   NetworkInterface client2_ni(client2_disp);
@@ -279,10 +290,8 @@ TEST_F(MachinedRegistrationTest, DuplicateRegistrationRejected) {
   ASSERT_TRUE(poll_until(client2_disp, [&] { return client_b.IsConnected(); }));
   client_b.SendRegister(cfg);
 
-  // Drain client2 to let machined process the duplicate register.
   poll_until(client2_disp, [&] { return false; }, std::chrono::milliseconds(200));
 
-  // Query from client_a — still exactly one entry.
   std::vector<ProcessInfo> result;
   bool query_done = false;
   client_a.QueryAsync(ProcessType::kBaseApp, [&](std::vector<ProcessInfo> infos) {
@@ -293,10 +302,6 @@ TEST_F(MachinedRegistrationTest, DuplicateRegistrationRejected) {
   ASSERT_EQ(result.size(), 1u) << "Only one entry expected after duplicate rejection";
   EXPECT_EQ(result[0].name, "baseapp-dup");
 }
-
-// ============================================================================
-// Test: Multiple distinct processes can register simultaneously
-// ============================================================================
 
 TEST_F(MachinedRegistrationTest, MultipleProcessesCanRegister) {
   MachinedClient client1(client_disp_, client_ni_);
@@ -322,11 +327,9 @@ TEST_F(MachinedRegistrationTest, MultipleProcessesCanRegister) {
   cfg2.internal_port = 7211;
   client2.SendRegister(cfg2);
 
-  // Wait for both entries to appear via client1's query.
   std::vector<ProcessInfo> result;
   auto deadline2 = std::chrono::steady_clock::now() + std::chrono::milliseconds(4000);
   while (result.size() < 2 && std::chrono::steady_clock::now() < deadline2) {
-    // Drain client2 so its RegisterMessage reaches machined.
     client2_disp.ProcessOnce();
 
     bool done = false;

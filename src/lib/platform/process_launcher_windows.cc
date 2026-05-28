@@ -2,8 +2,10 @@
 
 #include <windows.h>
 
+#include <filesystem>
 #include <string>
 #include <string_view>
+#include <system_error>
 
 namespace atlas {
 namespace {
@@ -53,6 +55,34 @@ auto LaunchDetachedProcess(ProcessLaunchOptions opts) -> Result<uint32_t> {
     return Error{ErrorCode::kInvalidArgument, "LaunchDetachedProcess: exe path empty"};
   }
 
+  HANDLE output_handle = INVALID_HANDLE_VALUE;
+  HANDLE input_handle = INVALID_HANDLE_VALUE;
+  if (!opts.output_path.empty()) {
+    const auto parent = opts.output_path.parent_path();
+    if (!parent.empty()) {
+      std::error_code ec;
+      std::filesystem::create_directories(parent, ec);
+      if (ec) {
+        return Error{ErrorCode::kInternalError,
+                     "create output directory failed: " + ec.message()};
+      }
+    }
+
+    SECURITY_ATTRIBUTES sa{};
+    sa.nLength = sizeof(sa);
+    sa.bInheritHandle = TRUE;
+    output_handle = CreateFileW(
+        opts.output_path.wstring().c_str(), GENERIC_WRITE,
+        FILE_SHARE_READ | FILE_SHARE_WRITE, &sa, OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
+    if (output_handle == INVALID_HANDLE_VALUE) {
+      return Error{ErrorCode::kInternalError,
+                   "CreateFileW output failed, gle=" + std::to_string(GetLastError())};
+    }
+    SetFilePointer(output_handle, 0, nullptr, FILE_END);
+    input_handle = CreateFileW(L"NUL", GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE, &sa,
+                               OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+  }
+
   std::wstring command_line = QuoteArg(opts.exe.wstring());
   for (const auto& arg : opts.args) {
     command_line.push_back(L' ');
@@ -61,22 +91,52 @@ auto LaunchDetachedProcess(ProcessLaunchOptions opts) -> Result<uint32_t> {
 
   STARTUPINFOW si{};
   si.cb = sizeof(si);
+  if (output_handle != INVALID_HANDLE_VALUE) {
+    si.dwFlags |= STARTF_USESTDHANDLES;
+    si.hStdInput = input_handle != INVALID_HANDLE_VALUE ? input_handle : nullptr;
+    si.hStdOutput = output_handle;
+    si.hStdError = output_handle;
+  }
   PROCESS_INFORMATION pi{};
   std::wstring exe = opts.exe.wstring();
   std::wstring cwd =
       opts.working_directory.empty() ? std::wstring{} : opts.working_directory.wstring();
   const LPCWSTR cwd_arg = cwd.empty() ? nullptr : cwd.c_str();
-  constexpr BOOL kInheritHandles = FALSE;
+  const BOOL inherit_handles = output_handle != INVALID_HANDLE_VALUE ? TRUE : FALSE;
   if (!CreateProcessW(exe.c_str(), command_line.data(), nullptr, nullptr,
-                      kInheritHandles, CREATE_NEW_PROCESS_GROUP, nullptr, cwd_arg, &si, &pi)) {
+                      inherit_handles, CREATE_NEW_PROCESS_GROUP, nullptr, cwd_arg, &si, &pi)) {
+    const auto gle = GetLastError();
+    if (input_handle != INVALID_HANDLE_VALUE) CloseHandle(input_handle);
+    if (output_handle != INVALID_HANDLE_VALUE) CloseHandle(output_handle);
     return Error{ErrorCode::kInternalError,
-                 "CreateProcessW failed, gle=" + std::to_string(GetLastError())};
+                 "CreateProcessW failed, gle=" + std::to_string(gle)};
   }
 
   const auto pid = static_cast<uint32_t>(pi.dwProcessId);
   CloseHandle(pi.hThread);
   CloseHandle(pi.hProcess);
+  if (input_handle != INVALID_HANDLE_VALUE) CloseHandle(input_handle);
+  if (output_handle != INVALID_HANDLE_VALUE) CloseHandle(output_handle);
   return pid;
+}
+
+auto IsProcessAlive(uint32_t pid) -> bool {
+  if (pid == 0) return false;
+  HANDLE proc = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, pid);
+  if (proc == nullptr) return false;
+  DWORD code = 0;
+  const bool alive = GetExitCodeProcess(proc, &code) && code == STILL_ACTIVE;
+  CloseHandle(proc);
+  return alive;
+}
+
+auto TerminateProcessByPid(uint32_t pid) -> bool {
+  if (pid == 0) return false;
+  HANDLE proc = OpenProcess(PROCESS_TERMINATE, FALSE, pid);
+  if (proc == nullptr) return false;
+  const bool ok = TerminateProcess(proc, 1) != FALSE;
+  CloseHandle(proc);
+  return ok;
 }
 
 }  // namespace atlas
