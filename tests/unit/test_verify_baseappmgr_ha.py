@@ -201,6 +201,43 @@ class ReviverHealthTest(unittest.TestCase):
         self.assertFalse(h.healthy)
 
 
+class LeaderLockHealthTest(unittest.TestCase):
+    def _make(self, *, mode="machined", leader_active="true", required_mode="machined",
+              acquire="2", renew="20", failures="0", holder="reviver:pid@cellappmgr"):
+        watchers = {
+            "reviver/baseappmgr/leader/mode": mode,
+            "reviver/baseappmgr/leader/holder_id": holder,
+            "reviver/baseappmgr/leader/active": leader_active,
+            "reviver/baseappmgr/leader/acquire_count": acquire,
+            "reviver/baseappmgr/leader/lease_renew_count": renew,
+            "reviver/baseappmgr/leader/lease_failure_count": failures,
+        }
+        with mock.patch.object(verify_baseappmgr_ha, "watcher_value",
+                               side_effect=lambda exe, machined, target, path: watchers[path]):
+            with mock.patch.object(verify_baseappmgr_ha, "int_watcher",
+                                   side_effect=lambda exe, machined, target, path: int(
+                                       watchers[path])):
+                return verify_baseappmgr_ha.read_leader_lock_health(
+                    Path("atlas_tool"), "machined", "reviver:reviver", required_mode)
+
+    def test_machined_mode_active_leader_healthy(self) -> None:
+        h = self._make()
+        self.assertTrue(h.healthy, h.detail)
+        self.assertEqual(h.mode, "machined")
+
+    def test_required_mode_mismatch_unhealthy(self) -> None:
+        h = self._make(mode="local", required_mode="machined")
+        self.assertFalse(h.healthy)
+
+    def test_machined_mode_without_leader_unhealthy(self) -> None:
+        h = self._make(leader_active="false")
+        self.assertFalse(h.healthy)
+
+    def test_no_required_mode_skips_check(self) -> None:
+        h = self._make(mode="local", leader_active="false", required_mode="")
+        self.assertTrue(h.healthy)
+
+
 class BuildSummaryTest(unittest.TestCase):
     def test_no_inject_summary_marks_healthy_when_no_failures(self) -> None:
         import argparse

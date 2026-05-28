@@ -70,6 +70,15 @@ def parse_args() -> argparse.Namespace:
                    help="do not require baseappmgr/ha/snapshot_path or snapshot_saves > 0")
     p.add_argument("--no-inject", action="store_true",
                    help="only verify current watchers without shutting down BaseAppMgr")
+    p.add_argument("--verify-reviver-failover", action="store_true",
+                   help="kill the active Reviver leader and require standby to take over the"
+                        " BaseAppMgr without restarting it (requires --min-revivers >= 2)")
+    p.add_argument("--max-reviver-failover-ms", type=int, default=0,
+                   help="max allowed shutdown-to-new-leader latency; 0 disables")
+    p.add_argument("--check-leader-lock-mode", default="",
+                   help="if non-empty, require reviver/baseappmgr/leader/mode to equal this"
+                        " value (e.g. 'machined') and (for 'machined') lease_renew_count to"
+                        " grow during the stability window")
     p.add_argument("--summary-json", type=Path, default=None,
                    help="write a machine-readable summary JSON after checks complete")
     return p.parse_args()
@@ -202,6 +211,30 @@ class ReviverHealth:
 
 
 @dataclass
+class LeaderLockHealth:
+    mode: str
+    holder_id: str
+    leader_active: bool
+    acquire_count: int
+    lease_renew_count: int
+    lease_failure_count: int
+    healthy: bool
+    detail: str
+
+
+@dataclass
+class ReviverFailoverResult:
+    old_leader: str
+    new_leader: str
+    old_pid: int
+    new_pid: int
+    manager_pid: int
+    elapsed_ms: int
+    healthy: bool
+    detail: str
+
+
+@dataclass
 class CycleResult:
     cycle: int
     old_pid: int
@@ -289,6 +322,112 @@ def read_reviver_health(exe: Path, machined: str, target: str,
     )
     return ReviverHealth(active, active_pid, active_generation, launch_count, heartbeat_acks,
                           age_ms, last_error, status, healthy, detail)
+
+
+def read_leader_lock_health(exe: Path, machined: str, target: str,
+                            required_mode: str) -> LeaderLockHealth:
+    mode = watcher_value(exe, machined, target, "reviver/baseappmgr/leader/mode")
+    holder = watcher_value(exe, machined, target, "reviver/baseappmgr/leader/holder_id")
+    leader_active = watcher_value(exe, machined, target,
+                                   "reviver/baseappmgr/leader/active") == "true"
+    acquire_count = int_watcher(exe, machined, target,
+                                "reviver/baseappmgr/leader/acquire_count")
+    renew_count = int_watcher(exe, machined, target,
+                              "reviver/baseappmgr/leader/lease_renew_count")
+    failure_count = int_watcher(exe, machined, target,
+                                "reviver/baseappmgr/leader/lease_failure_count")
+    healthy = True
+    detail_parts = [
+        f"mode={mode}", f"leader_active={leader_active}", f"acquire_count={acquire_count}",
+        f"lease_renew_count={renew_count}", f"lease_failure_count={failure_count}"
+    ]
+    if required_mode and mode != required_mode:
+        healthy = False
+        detail_parts.append(f"required_mode={required_mode} mismatch")
+    if required_mode == "machined" and not leader_active:
+        healthy = False
+        detail_parts.append("leader not active under machined mode")
+    detail = " ".join(detail_parts)
+    return LeaderLockHealth(mode, holder, leader_active, acquire_count, renew_count,
+                            failure_count, healthy, detail)
+
+
+def list_revivers_with_leadership(exe: Path, machined: str) -> list[dict[str, str]]:
+    revivers = list_processes(exe, machined, "reviver")
+    enriched: list[dict[str, str]] = []
+    for r in revivers:
+        target = f"reviver:{r['name']}"
+        try:
+            r["baseappmgr_leader_active"] = watcher_value(
+                exe, machined, target, "reviver/baseappmgr/leader/active")
+            r["baseappmgr_active_pid"] = watcher_value(
+                exe, machined, target, "reviver/baseappmgr/active_pid")
+        except RuntimeError:
+            r["baseappmgr_leader_active"] = ""
+            r["baseappmgr_active_pid"] = "0"
+        enriched.append(r)
+    return enriched
+
+
+def run_reviver_failover(args: argparse.Namespace, exe: Path,
+                         manager_pid: int) -> ReviverFailoverResult:
+    revivers = list_revivers_with_leadership(exe, args.machined)
+    if len(revivers) < 2:
+        raise RuntimeError(
+            f"reviver failover requires >= 2 Revivers; found {len(revivers)}")
+    leaders = [r for r in revivers if r["baseappmgr_leader_active"] == "true"]
+    if len(leaders) == 0:
+        raise RuntimeError("no Reviver currently holds the BaseAppMgr leader lock")
+    if len(leaders) > 1:
+        raise RuntimeError(
+            f"multiple Revivers hold BaseAppMgr leader lock: "
+            f"{[r['name'] for r in leaders]}")
+    leader = leaders[0]
+    standbys = [r for r in revivers if r is not leader]
+
+    start = time.monotonic()
+    try:
+        shutdown_process(exe, args.machined, f"reviver:{leader['name']}",
+                         args.shutdown_reason)
+    except RuntimeError as ex:
+        raise RuntimeError(f"failed to shutdown leader Reviver: {ex}") from ex
+
+    def check():
+        try:
+            current = list_revivers_with_leadership(exe, args.machined)
+        except RuntimeError as ex:
+            return False, str(ex)
+        new_leaders = [r for r in current if r["baseappmgr_leader_active"] == "true"
+                       and r["name"] != leader["name"]]
+        if len(new_leaders) == 1:
+            return True, new_leaders[0]
+        return False, f"waiting for standby takeover; leaders={[r['name'] for r in new_leaders]}"
+
+    new_leader = wait_until(args.timeout_sec, args.poll_sec, check)
+    elapsed_ms = int((time.monotonic() - start) * 1000)
+
+    # Confirm the BaseAppMgr did NOT restart — pid should match.
+    try:
+        mgr = select_baseappmgr(exe, args)
+        new_mgr_pid = int(mgr["pid"])
+    except RuntimeError as ex:
+        return ReviverFailoverResult(
+            old_leader=leader["name"], new_leader=new_leader["name"],
+            old_pid=int(leader["pid"]), new_pid=int(new_leader["pid"]),
+            manager_pid=manager_pid, elapsed_ms=elapsed_ms, healthy=False,
+            detail=f"manager lookup failed after failover: {ex}")
+    pid_unchanged = new_mgr_pid == manager_pid
+    healthy = pid_unchanged
+    detail = (
+        f"old_leader={leader['name']} new_leader={new_leader['name']}"
+        f" old_pid={leader['pid']} new_pid={new_leader['pid']}"
+        f" manager_pid={manager_pid}/{new_mgr_pid} pid_unchanged={pid_unchanged}"
+        f" elapsed_ms={elapsed_ms} surviving_standbys={len(standbys) - 1}"
+    )
+    return ReviverFailoverResult(
+        old_leader=leader["name"], new_leader=new_leader["name"],
+        old_pid=int(leader["pid"]), new_pid=int(new_leader["pid"]),
+        manager_pid=manager_pid, elapsed_ms=elapsed_ms, healthy=healthy, detail=detail)
 
 
 def wait_for_reviver_target(args: argparse.Namespace, exe: Path,
@@ -614,6 +753,9 @@ def main() -> int:
     current_healthy = False
     summary_scratch: dict = {}
 
+    reviver_failover: ReviverFailoverResult | None = None
+    leader_lock_health: LeaderLockHealth | None = None
+
     try:
         if args.no_inject:
             current_healthy, failure_stages = run_no_inject(args, exe, summary_scratch)
@@ -631,6 +773,52 @@ def main() -> int:
                     })
             current_healthy = all(c.healthy for c in cycles)
             failure_stages = [s for c in cycles for s in c.failure_stages]
+
+        if args.check_leader_lock_mode:
+            mgr, reviver = precheck_topology(exe, args)
+            reviver_target = f"reviver:{reviver['name']}"
+            llh = read_leader_lock_health(exe, args.machined, reviver_target,
+                                          args.check_leader_lock_mode)
+            leader_lock_health = llh
+            summary_scratch.setdefault("current", {})["leader_lock"] = {
+                "mode": llh.mode,
+                "holder_id": llh.holder_id,
+                "leader_active": llh.leader_active,
+                "acquire_count": llh.acquire_count,
+                "lease_renew_count": llh.lease_renew_count,
+                "lease_failure_count": llh.lease_failure_count,
+                "healthy": llh.healthy,
+            }
+            if not llh.healthy:
+                failure_stages.append("leader_lock_mode")
+                current_healthy = False
+
+        if args.verify_reviver_failover:
+            mgr, _ = precheck_topology(exe, args)
+            manager_pid = int(mgr["pid"])
+            reviver_failover = run_reviver_failover(args, exe, manager_pid)
+            summary_scratch.setdefault("current", {})["reviver_failover"] = {
+                "old_leader": reviver_failover.old_leader,
+                "new_leader": reviver_failover.new_leader,
+                "manager_pid": reviver_failover.manager_pid,
+                "new_pid": reviver_failover.new_pid,
+                "old_pid": reviver_failover.old_pid,
+                "elapsed_ms": reviver_failover.elapsed_ms,
+                "healthy": reviver_failover.healthy,
+                "detail": reviver_failover.detail,
+            }
+            if not reviver_failover.healthy:
+                failure_stages.append("reviver_failover_unhealthy")
+                current_healthy = False
+            if (args.max_reviver_failover_ms > 0 and
+                    reviver_failover.elapsed_ms > args.max_reviver_failover_ms):
+                gate_failures.append({
+                    "name": "max_reviver_failover_ms",
+                    "metric": "max_reviver_failover_ms",
+                    "maximum": args.max_reviver_failover_ms,
+                    "value": reviver_failover.elapsed_ms,
+                    "ok": False,
+                })
     except RuntimeError as ex:
         print(f"[verify_baseappmgr_ha] FAIL {ex}", file=sys.stderr)
         if args.summary_json:

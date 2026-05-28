@@ -311,6 +311,9 @@ void Reviver::RegisterWatchers() {
   wr.Add<std::string>("reviver/baseappmgr/leader/mode",
                       std::function<std::string()>(
                           [this] { return baseappmgr_target_.leader_lock_mode; }));
+  wr.Add<std::string>("reviver/baseappmgr/leader/holder_id",
+                      std::function<std::string()>(
+                          [this] { return baseappmgr_target_.leader_lock_holder_id; }));
   wr.Add<uint64_t>("reviver/baseappmgr/leader/lease_renew_count",
                    std::function<uint64_t()>(
                        [this] { return baseappmgr_target_.lease_renew_count; }));

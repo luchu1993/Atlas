@@ -500,6 +500,26 @@ tools\bin\verify_baseappmgr_ha.bat `
 `baseappmgr/ha/reattach_state=complete`,`reviver/baseappmgr/active_pid` 等于
 新 BaseAppMgr pid,`reviver/baseappmgr/heartbeat_acks > 0`,且无 `last_error`。
 
+跨机/多 Reviver lease 模式验证(需 `--revive-leader-lock-mode machined`
+启动至少 2 个 Reviver):
+
+```powershell
+tools\bin\verify_baseappmgr_ha.bat `
+  --min-revivers 2 `
+  --check-leader-lock-mode machined `
+  --verify-reviver-failover `
+  --max-reviver-failover-ms 10000 `
+  --no-inject `
+  --summary-json .tmp\baseappmgr_lease_failover.json
+```
+
+`--check-leader-lock-mode machined` 会验证 `reviver/baseappmgr/leader/mode=machined`
+且当前确实有一个 leader 持锁。`--verify-reviver-failover` 关掉当前 leader
+Reviver,等待 standby 通过 lease 接管同一 BaseAppMgr(不重启 mgr)。
+`--max-reviver-failover-ms` 把 shutdown→standby-active 的耗时纳入 SLO gate。
+summary JSON 的 `current.leader_lock` 和 `current.reviver_failover` 段记录所有
+观测到的指标,适合直接归档到 CI baseline。
+
 ### 4.8 P4 高密度 AoI
 
 ```powershell
