@@ -5,6 +5,7 @@
 #include <vector>
 
 #include "math/vector3.h"
+#include "movement_sim/movement_codec.h"
 #include "network/address.h"
 #include "network/message.h"
 #include "network/message_ids.h"
@@ -29,6 +30,7 @@ struct CreateCellEntity {
   uint32_t request_id{0};
   std::vector<std::byte> script_init_data;
   bool require_existing_ghost{false};
+  bool cellapp_death_restore{false};
 
   static auto Descriptor() -> const MessageDesc& {
     static const MessageDesc kDesc{msg_id::Id(msg_id::CellApp::kCreateCellEntity),
@@ -57,6 +59,7 @@ struct CreateCellEntity {
     w.WritePackedInt(static_cast<uint32_t>(script_init_data.size()));
     if (!script_init_data.empty()) w.WriteBytes(std::span<const std::byte>(script_init_data));
     w.Write(static_cast<uint8_t>(require_existing_ghost ? 1 : 0));
+    w.Write(static_cast<uint8_t>(cellapp_death_restore ? 1 : 0));
   }
 
   static auto Deserialize(BinaryReader& r) -> Result<CreateCellEntity> {
@@ -92,11 +95,14 @@ struct CreateCellEntity {
         return Error{ErrorCode::kInvalidArgument, "CreateCellEntity: script data truncated"};
       msg.script_init_data.assign(data->begin(), data->end());
     }
-    if (r.Remaining() == 0) return msg;
     auto require_ghost = r.Read<uint8_t>();
     if (!require_ghost)
       return Error{ErrorCode::kInvalidArgument, "CreateCellEntity: ghost flag truncated"};
     msg.require_existing_ghost = (*require_ghost != 0);
+    auto death_restore = r.Read<uint8_t>();
+    if (!death_restore)
+      return Error{ErrorCode::kInvalidArgument, "CreateCellEntity: restore flag truncated"};
+    msg.cellapp_death_restore = (*death_restore != 0);
     return msg;
   }
 };
@@ -232,9 +238,8 @@ struct DestroyCellEntityAck {
 };
 static_assert(NetworkMessage<DestroyCellEntityAck>);
 
-// Exposed (client-facing) RPC forwarded from BaseApp. `source_entity_id`
-// is stamped by BaseApp from the client's proxy binding and cannot be
-// forged by the client. OWN_CLIENT methods require source == target.
+// Exposed RPC forwarded from BaseApp with stamped source_entity_id.
+// OWN_CLIENT methods require source == target.
 
 struct ClientCellRpcForward {
   EntityID target_entity_id{kInvalidEntityID};
@@ -287,6 +292,60 @@ struct ClientCellRpcForward {
   }
 };
 static_assert(NetworkMessage<ClientCellRpcForward>);
+
+struct ClientMovementInputForward {
+  EntityID source_entity_id{kInvalidEntityID};
+  EntityID target_entity_id{kInvalidEntityID};
+  std::vector<movement::InputFrame> frames;
+
+  static auto Descriptor() -> const MessageDesc& {
+    static const MessageDesc kDesc{msg_id::Id(msg_id::CellApp::kClientMovementInputForward),
+                                   "cellapp::ClientMovementInputForward",
+                                   MessageLengthStyle::kVariable,
+                                   -1,
+                                   MessageReliability::kUnreliable,
+                                   MessageUrgency::kImmediate};
+    return kDesc;
+  }
+
+  void Serialize(BinaryWriter& w) const {
+    w.Write(source_entity_id);
+    w.Write(target_entity_id);
+    w.Write(static_cast<uint8_t>(frames.size()));
+    for (const auto& frame : frames) movement::SerializeInputFrame(w, frame);
+  }
+
+  static auto Deserialize(BinaryReader& r) -> Result<ClientMovementInputForward> {
+    auto source = r.Read<uint32_t>();
+    auto target = r.Read<uint32_t>();
+    auto count = r.Read<uint8_t>();
+    if (!source || !target || !count) {
+      return Error{ErrorCode::kInvalidArgument, "ClientMovementInputForward: truncated"};
+    }
+    if (*count == 0 || *count > movement::kMaxMovementInputFrames) {
+      return Error{ErrorCode::kInvalidArgument, "ClientMovementInputForward: invalid frame count"};
+    }
+    if (*source == kInvalidEntityID || *target == kInvalidEntityID) {
+      return Error{ErrorCode::kInvalidArgument, "ClientMovementInputForward: invalid entity"};
+    }
+    ClientMovementInputForward msg;
+    msg.source_entity_id = *source;
+    msg.target_entity_id = *target;
+    msg.frames.reserve(*count);
+    for (uint8_t i = 0; i < *count; ++i) {
+      auto frame = movement::DeserializeInputFrame(r);
+      if (!frame) {
+        return Error{ErrorCode::kInvalidArgument, "ClientMovementInputForward: frame truncated"};
+      }
+      if (!movement::IsInputFrameValid(*frame)) {
+        return Error{ErrorCode::kInvalidArgument, "ClientMovementInputForward: invalid frame"};
+      }
+      msg.frames.push_back(*frame);
+    }
+    return msg;
+  }
+};
+static_assert(NetworkMessage<ClientMovementInputForward>);
 
 // Server-to-server trusted RPC; skips exposed/source validation.
 
@@ -392,6 +451,116 @@ struct ClientRpcBroadcast {
 };
 static_assert(NetworkMessage<ClientRpcBroadcast>);
 
+struct MovementCommandStartBroadcast {
+  EntityID source_entity_id{kInvalidEntityID};
+  uint32_t cell_epoch{0};
+  movement::MovementCommand command;
+
+  static auto Descriptor() -> const MessageDesc& {
+    static const MessageDesc kDesc{msg_id::Id(msg_id::CellApp::kMovementCommandStartBroadcast),
+                                   "cellapp::MovementCommandStartBroadcast",
+                                   MessageLengthStyle::kFixed,
+                                   static_cast<int>(sizeof(uint32_t) + sizeof(uint32_t) +
+                                                    movement::kMovementCommandWireBytes),
+                                   MessageReliability::kReliable,
+                                   MessageUrgency::kImmediate};
+    return kDesc;
+  }
+
+  void Serialize(BinaryWriter& w) const {
+    w.Write(source_entity_id);
+    w.Write(cell_epoch);
+    movement::SerializeMovementCommand(w, command);
+  }
+
+  static auto Deserialize(BinaryReader& r) -> Result<MovementCommandStartBroadcast> {
+    auto source = r.Read<uint32_t>();
+    auto epoch = r.Read<uint32_t>();
+    if (!source || !epoch) {
+      return Error{ErrorCode::kInvalidArgument, "MovementCommandStartBroadcast: truncated"};
+    }
+    if (*source == kInvalidEntityID) {
+      return Error{ErrorCode::kInvalidArgument,
+                   "MovementCommandStartBroadcast: invalid source"};
+    }
+    auto command = movement::DeserializeMovementCommand(r);
+    if (!command) {
+      return Error{ErrorCode::kInvalidArgument, "MovementCommandStartBroadcast: command"};
+    }
+    MovementCommandStartBroadcast msg;
+    msg.source_entity_id = *source;
+    msg.cell_epoch = *epoch;
+    msg.command = *command;
+    return msg;
+  }
+};
+static_assert(NetworkMessage<MovementCommandStartBroadcast>);
+
+struct MovementCommandEndBroadcast {
+  EntityID source_entity_id{kInvalidEntityID};
+  uint32_t cell_epoch{0};
+  uint32_t command_id{0};
+  uint32_t server_tick{0};
+  movement::MovementCommandEndReason reason{movement::MovementCommandEndReason::kCompleted};
+  movement::MovementState state;
+
+  static auto Descriptor() -> const MessageDesc& {
+    static const MessageDesc kDesc{msg_id::Id(msg_id::CellApp::kMovementCommandEndBroadcast),
+                                   "cellapp::MovementCommandEndBroadcast",
+                                   MessageLengthStyle::kFixed,
+                                   static_cast<int>(sizeof(uint32_t) * 6 +
+                                                    9 * sizeof(float) +
+                                                    movement::kMovementCommandEndReasonWireBytes),
+                                   MessageReliability::kReliable,
+                                   MessageUrgency::kImmediate};
+    return kDesc;
+  }
+
+  void Serialize(BinaryWriter& w) const {
+    w.Write(source_entity_id);
+    w.Write(cell_epoch);
+    w.Write(command_id);
+    w.Write(server_tick);
+    w.Write(static_cast<uint8_t>(reason));
+    movement::SerializeMovementState(w, state);
+  }
+
+  static auto Deserialize(BinaryReader& r) -> Result<MovementCommandEndBroadcast> {
+    auto source = r.Read<uint32_t>();
+    auto epoch = r.Read<uint32_t>();
+    auto command_id = r.Read<uint32_t>();
+    auto server_tick = r.Read<uint32_t>();
+    auto reason = r.Read<uint8_t>();
+    if (!source || !epoch || !command_id || !server_tick || !reason) {
+      return Error{ErrorCode::kInvalidArgument, "MovementCommandEndBroadcast: truncated"};
+    }
+    if (*source == kInvalidEntityID) {
+      return Error{ErrorCode::kInvalidArgument,
+                   "MovementCommandEndBroadcast: invalid source"};
+    }
+    if (*command_id == 0) {
+      return Error{ErrorCode::kInvalidArgument,
+                   "MovementCommandEndBroadcast: invalid command id"};
+    }
+    if (!movement::IsMovementCommandEndReasonWireValue(*reason)) {
+      return Error{ErrorCode::kInvalidArgument, "MovementCommandEndBroadcast: invalid reason"};
+    }
+    auto state = movement::DeserializeMovementState(r);
+    if (!state) {
+      return Error{ErrorCode::kInvalidArgument, "MovementCommandEndBroadcast: state"};
+    }
+    MovementCommandEndBroadcast msg;
+    msg.source_entity_id = *source;
+    msg.cell_epoch = *epoch;
+    msg.command_id = *command_id;
+    msg.server_tick = *server_tick;
+    msg.reason = static_cast<movement::MovementCommandEndReason>(*reason);
+    msg.state = *state;
+    return msg;
+  }
+};
+static_assert(NetworkMessage<MovementCommandEndBroadcast>);
+
 struct CreateSpace {
   SpaceID space_id{kInvalidSpaceID};
 
@@ -442,9 +611,8 @@ struct DestroySpace {
 };
 static_assert(NetworkMessage<DestroySpace>);
 
-// Client-authoritative position update. CellApp applies:
-//   1) std::isfinite on all three components (reject NaN/Inf);
-//   2) single-tick displacement bound (reject teleports).
+// Client-authoritative position update.
+// CellApp rejects non-finite coordinates and single-tick teleports.
 
 struct AvatarUpdate {
   EntityID entity_id{kInvalidEntityID};
@@ -492,10 +660,8 @@ struct AvatarUpdate {
 };
 static_assert(NetworkMessage<AvatarUpdate>);
 
-// Attaches an AoI witness to a cell entity. Fired from BaseApp's
-// uses config-driven defaults (cellApp/default_aoi_radius,
-// cellApp/default_aoi_hysteresis); script-level overrides arrive via
-// a subsequent SetAoIRadius message.
+// Attaches an AoI witness to a cell entity using config defaults.
+// Script-level overrides arrive via a subsequent SetAoIRadius message.
 
 struct EnableWitness {
   EntityID entity_id{kInvalidEntityID};
@@ -547,11 +713,8 @@ struct DisableWitness {
 };
 static_assert(NetworkMessage<DisableWitness>);
 
-// Runtime AoI radius + hysteresis adjustment for an already-witnessed
-// cell entity. Mutates the Witness and reshapes its trigger in place.
-// The handler silently drops the message if the target has no
-// Witness attached (log-warn; the typical cause is a race where bind
-// notifications arrive after Witness teardown).
+// Runtime AoI radius + hysteresis adjustment for an existing Witness.
+// Missing Witness targets are dropped after a warning.
 
 struct SetAoIRadius {
   EntityID entity_id{kInvalidEntityID};

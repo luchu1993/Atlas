@@ -24,6 +24,7 @@ target_link_libraries(atlas_baseapp_lib
     atlas_baseappmgr_lib
     atlas_dbapp_lib
     atlas_loginapp_lib
+    atlas_movement_sim
     atlas_compiler_options
 )
 

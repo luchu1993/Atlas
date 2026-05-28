@@ -4,18 +4,20 @@
 #include <cstddef>
 #include <cstdint>
 #include <functional>
+#include <string_view>
+#include <utility>
 
 #include "baseapp/baseapp_native_provider.h"  // RestoreEntityFn, DispatchRpcFn, etc.
 #include "clrscript/base_native_provider.h"
+#include "movement_sim/movement_sim.h"
 
 namespace atlas {
 
 class CellEntity;
 class NetworkInterface;
 
-// INativeApiProvider for a CellApp process; thin façade - uses a
-// caller-supplied lookup so tests share the class without knowing
-// CellApp internals.
+// INativeApiProvider for CellApp; a lookup function keeps tests decoupled
+// from CellApp internals.
 class CellAppNativeProvider : public BaseNativeProvider {
  public:
   // Returns nullptr for unknown ids; methods log+skip rather than crash.
@@ -27,7 +29,18 @@ class CellAppNativeProvider : public BaseNativeProvider {
   using SetSpaceDataFn = std::function<void(uint32_t space_id, uint16_t key_id,
                                             const std::byte* value, int32_t len)>;
   using RemoveSpaceDataFn = std::function<void(uint32_t space_id, uint16_t key_id)>;
+  using LoadCollisionAssetFn = std::function<bool(uint32_t space_id, std::string_view path)>;
   using ScriptTickFn = std::function<void(uint32_t entity_id, uint64_t elapsed_us)>;
+  using MovementIntentFn = std::function<void(uint32_t entity_id, float dir_x, float dir_z,
+                                              float speed_mps, uint16_t buttons)>;
+  using MovementCommandFn =
+      std::function<bool(uint32_t entity_id, const movement::MovementCommand& command)>;
+  using ClearMovementCommandFn =
+      std::function<bool(uint32_t entity_id, uint32_t command_id)>;
+  using MovementCurveFn = std::function<bool(const movement::MovementCurve& curve)>;
+  using MovementHistorySampleFn =
+      std::function<bool(uint32_t entity_id, uint32_t server_tick,
+                         NativeMovementHistorySample& sample)>;
 
   // `network` only needed for SendClientRpc (handler tests can omit it).
   explicit CellAppNativeProvider(EntityLookupFn lookup);
@@ -40,7 +53,21 @@ class CellAppNativeProvider : public BaseNativeProvider {
   }
   void SetSetSpaceDataFn(SetSpaceDataFn fn) { set_space_data_fn_ = std::move(fn); }
   void SetRemoveSpaceDataFn(RemoveSpaceDataFn fn) { remove_space_data_fn_ = std::move(fn); }
+  void SetLoadCollisionAssetFn(LoadCollisionAssetFn fn) {
+    load_collision_asset_fn_ = std::move(fn);
+  }
   void SetScriptTickFn(ScriptTickFn fn) { script_tick_fn_ = std::move(fn); }
+  void SetMovementIntentFn(MovementIntentFn fn) { movement_intent_fn_ = std::move(fn); }
+  void SetMovementCommandFn(MovementCommandFn fn) {
+    movement_command_fn_ = std::move(fn);
+  }
+  void SetClearMovementCommandFn(ClearMovementCommandFn fn) {
+    clear_movement_command_fn_ = std::move(fn);
+  }
+  void SetMovementCurveFn(MovementCurveFn fn) { movement_curve_fn_ = std::move(fn); }
+  void SetMovementHistorySampleFn(MovementHistorySampleFn fn) {
+    movement_history_sample_fn_ = std::move(fn);
+  }
 
   uint8_t GetProcessPrefix() override;
   void ReportScriptTick(uint32_t entity_id, uint64_t elapsed_us) override;
@@ -50,9 +77,8 @@ class CellAppNativeProvider : public BaseNativeProvider {
   void SendClientRpc(uint32_t entity_id, uint32_t rpc_id, RpcTarget target,
                      const std::byte* payload, int32_t len, uint64_t trace_id) override;
 
-  // Ghost-side script invokes a cell method on its Real owner; serialises and
-  // forwards via the Ghost's real_channel as cellapp::InternalCellRpc.
-  // Calls on a local Real warn (in-process: scripts should invoke directly).
+  // Ghost-side script invokes a cell method on its Real owner. Calls on a
+  // local Real warn because scripts should invoke directly in-process.
   void SendCellRpc(uint32_t entity_id, uint32_t rpc_id, const std::byte* payload, int32_t len,
                    uint64_t trace_id) override;
 
@@ -64,14 +90,25 @@ class CellAppNativeProvider : public BaseNativeProvider {
   void SetSpaceData(uint32_t space_id, uint16_t key_id, const std::byte* value,
                     int32_t len) override;
   void RemoveSpaceData(uint32_t space_id, uint16_t key_id) override;
+  auto LoadCollisionAsset(uint32_t space_id, const char* path, int32_t len) -> bool override;
 
   auto GetEntitySpaceId(uint32_t entity_id) -> uint32_t override;
 
   // CellApp-specific surfaces.
   void SetEntityPosition(uint32_t entity_id, float x, float y, float z) override;
   void SetEntityDirection(uint32_t entity_id, float x, float y, float z) override;
+  void SetEntityOnGround(uint32_t entity_id, bool on_ground) override;
+  void SetMovementIntent(uint32_t entity_id, float dir_x, float dir_z, float speed_mps,
+                         uint16_t buttons) override;
+  auto SetMovementCommand(uint32_t entity_id, const NativeMovementCommand& command)
+      -> bool override;
+  auto ClearMovementCommand(uint32_t entity_id, uint32_t command_id) -> bool override;
+  auto SetMovementCurve(const NativeMovementCurve& curve) -> bool override;
   void GetEntityPosition(uint32_t entity_id, float& x, float& y, float& z) override;
   void GetEntityDirection(uint32_t entity_id, float& x, float& y, float& z) override;
+  auto GetEntityOnGround(uint32_t entity_id) -> bool override;
+  auto TryGetMovementHistorySample(uint32_t entity_id, uint32_t server_tick,
+                                   NativeMovementHistorySample& sample) -> bool override;
   void PublishReplicationFrame(uint32_t entity_id, bool has_event, bool has_volatile,
                                const std::byte* owner_snap, int32_t owner_snap_len,
                                const std::byte* other_snap, int32_t other_snap_len,
@@ -105,7 +142,7 @@ class CellAppNativeProvider : public BaseNativeProvider {
   [[nodiscard]] auto entity_lifecycle_cancel_fn() const -> EntityLifecycleCancelFn {
     return entity_lifecycle_cancel_fn_;
   }
-  // Silent removal for cross-cellapp migration — drops the C# instance without
+  // Silent removal for cross-cellapp migration; drops the C# instance without
   // firing OnDestroy so script-side counters survive the offload.
   [[nodiscard]] auto entity_migrating_out_fn() const -> EntityDestroyedFn {
     return entity_migrating_out_fn_;
@@ -119,14 +156,19 @@ class CellAppNativeProvider : public BaseNativeProvider {
   DestroyLocalEntityFn destroy_local_entity_fn_;
   SetSpaceDataFn set_space_data_fn_;
   RemoveSpaceDataFn remove_space_data_fn_;
+  LoadCollisionAssetFn load_collision_asset_fn_;
   ScriptTickFn script_tick_fn_;
+  MovementIntentFn movement_intent_fn_;
+  MovementCommandFn movement_command_fn_;
+  ClearMovementCommandFn clear_movement_command_fn_;
+  MovementCurveFn movement_curve_fn_;
+  MovementHistorySampleFn movement_history_sample_fn_;
   NetworkInterface* network_{nullptr};  // null in handler-level tests
   RestoreEntityFn restore_entity_fn_{nullptr};
   DispatchRpcFn dispatch_rpc_fn_{nullptr};
   EntityDestroyedFn entity_destroyed_fn_{nullptr};
-  // nullptr until C# registers the expanded NativeCallbackTable;
-  // absence: Offload ships empty persistent_blob (replication baseline
-  // covers it).
+  // nullptr until C# registers the expanded NativeCallbackTable; absence
+  // means Offload ships empty persistent_blob.
   SerializeEntityFn serialize_entity_fn_{nullptr};
   // nullptr => baseline pump short-circuits.
   GetOwnerSnapshotFn get_owner_snapshot_fn_{nullptr};
@@ -134,13 +176,13 @@ class CellAppNativeProvider : public BaseNativeProvider {
   // correct for Offload / InsidePeers.
   ProximityEventFn proximity_event_fn_{nullptr};
   TimerEventFn timer_event_fn_{nullptr};
-  // nullptr on older runtimes — offload still proceeds, in-flight RPCs
+  // nullptr on older runtimes; offload still proceeds, in-flight RPCs
   // fall back to their timeouts.
   EntityLifecycleCancelFn entity_lifecycle_cancel_fn_{nullptr};
-  // nullptr on older runtimes — offload falls back to entity_destroyed_fn,
+  // nullptr on older runtimes; offload falls back to entity_destroyed_fn,
   // which is wrong (OnDestroy fires on migration) but keeps things alive.
   EntityDestroyedFn entity_migrating_out_fn_{nullptr};
-  // nullptr on older runtimes — Ghost stays C++-only (legacy behaviour).
+  // nullptr on older runtimes; Ghost stays C++-only (legacy behaviour).
   RestoreGhostFn restore_ghost_fn_{nullptr};
   EntityDestroyedFn destroy_ghost_fn_{nullptr};
 };

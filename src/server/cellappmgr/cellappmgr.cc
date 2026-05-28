@@ -252,12 +252,9 @@ auto BoundsMidpoint(const CellBounds& bounds) -> std::pair<float, float> {
 }
 
 constexpr uint32_t kSnapshotMagic = 0x314D4143u;
-constexpr uint32_t kSnapshotVersion = 4;
-// 1 GiB ceiling — CellAppMgr persists per-cell load profile buckets
-// (tick-cost / x/z histograms) and pending-geometry blobs; with ~256
-// cellapps × ~64 cells/space × small histograms this peaks well below
-// the limit, but the headroom lets BSP grow to large topologies before
-// SaveSnapshotToFile starts rejecting writes.
+constexpr uint32_t kSnapshotVersion = 5;
+// 1 GiB ceiling — per-cell load buckets + pending-geometry blobs scale
+// with BSP topology; headroom for ~256 cellapps × ~64 cells/space.
 constexpr uint64_t kMaxSnapshotPayloadBytes = 1024ull * 1024ull * 1024ull;
 constexpr uint64_t kMaxSnapshotFileBytes =
     kMaxSnapshotPayloadBytes + snapshot_envelope::kEnvelopeBytes;
@@ -426,6 +423,12 @@ auto CellAppMgr::Init(int argc, char* argv[]) -> bool {
     }
   }
 
+  // Fresh start = 1; restart from snapshot = prior_saved + 1. Each live
+  // process therefore advertises a strictly higher generation than any
+  // earlier one that may still have packets in flight.
+  ++mgr_generation_;
+  ATLAS_LOG_INFO("CellAppMgr: mgr_generation={}", mgr_generation_);
+
   auto& table = Network().InterfaceTable();
 
   (void)table.RegisterTypedHandler<cellappmgr::RegisterCellApp>(
@@ -483,6 +486,7 @@ void CellAppMgr::Fini() {
 
 auto CellAppMgr::Snapshot() const -> std::vector<std::byte> {
   BinaryWriter payload_writer;
+  payload_writer.Write(mgr_generation_);
   payload_writer.Write(next_cellapp_app_id_);
   payload_writer.Write(next_cell_id_);
   payload_writer.Write(last_balance_tick_);
@@ -578,11 +582,12 @@ auto CellAppMgr::Restore(std::span<const std::byte> bytes) -> Result<void> {
   if (!snapshot_payload) return snapshot_payload.Error();
 
   BinaryReader r(snapshot_payload->payload);
+  auto saved_generation = r.Read<uint64_t>();
   auto next_app = r.Read<uint32_t>();
   auto next_cell = r.Read<cellappmgr::CellID>();
   auto last_balance = r.Read<uint64_t>();
   auto last_retire = r.Read<uint32_t>();
-  if (!next_app || !next_cell || !last_balance || !last_retire) {
+  if (!saved_generation || !next_app || !next_cell || !last_balance || !last_retire) {
     return Error{ErrorCode::kInvalidArgument, "CellAppMgr snapshot: header truncated"};
   }
 
@@ -961,6 +966,7 @@ auto CellAppMgr::Restore(std::span<const std::byte> bytes) -> Result<void> {
   next_cell_id_ = std::max(*next_cell, static_cast<cellappmgr::CellID>(max_cell_id + 1));
   last_balance_tick_ = *last_balance;
   last_retire_app_id_ = *last_retire;
+  mgr_generation_ = *saved_generation;
   snapshot_dirty_ = false;
   snapshot_dirty_at_ = {};
   snapshot_dirty_reason_.clear();
@@ -1020,10 +1026,6 @@ auto CellAppMgr::SaveSnapshotToFile(const std::filesystem::path& path) -> Result
   snapshot_dirty_reason_.clear();
   ++snapshot_save_count_;
 
-  // High-water warning: log once per kSizeWarningThrottle when the
-  // snapshot occupies >= kSizeWarningThresholdPct of kMaxSnapshotFileBytes.
-  // Decision logic lives in snapshot_envelope::EvaluateSizeWarning so it
-  // can be unit-tested without a mock Clock; we just apply the decision.
   const auto now = Clock::now();
   const auto decision =
       snapshot_envelope::EvaluateSizeWarning(SnapshotSizeHighWaterPct(), now,
@@ -1176,6 +1178,8 @@ void CellAppMgr::RegisterWatchers() {
                          [this] { return RetiringAppIdForWatcher(); }),
                      std::function<bool(uint32_t)>(
                          [this](uint32_t app_id) { return SetRetiringAppId(app_id); }));
+  wr.Add<uint64_t>("cellappmgr/ha/mgr_generation",
+                   std::function<uint64_t()>([this] { return mgr_generation_; }));
   wr.Add<std::string>("cellappmgr/ha/snapshot_path",
                       std::function<std::string()>(
                           [this] { return Config().snapshot_path.string(); }));
@@ -1434,10 +1438,8 @@ void CellAppMgr::OnRegisterCellApp(const Address& src, Channel* ch,
     existing.channel = ch;
     existing.registered_at = Clock::now();
     existing.needs_reattach = false;
-    // restored_from_snapshot stays sticky for this CellApp's lifetime:
-    // reattach watcher reports it as "completed" until the CellApp dies, so
-    // verify scripts can confirm restored_cellapps >= min_cellapps after a
-    // takeover. The flag clears only via OnCellAppDeath.
+    // restored_from_snapshot stays sticky until OnCellAppDeath so verify
+    // scripts can assert restored_cellapps >= min_cellapps after a takeover.
     existing.last_reattach_watchdog_log_at = {};
     SendRegisterCellAppAck(ch, kInternalAddr, existing.app_id, /*success=*/true, "reattach");
     ReplayCellAppTopology(existing);
@@ -1474,10 +1476,8 @@ void CellAppMgr::OnRegisterCellApp(const Address& src, Channel* ch,
     entry.quiescence_deadline = extended;
   }
 
-  // Elastic grow: a Space bootstrapped with N cellapps can absorb the
-  // (N+1)-th cellapp here by splitting its heaviest leaf onto the new
-  // host. Only fires for Spaces that already exist; pending ones are
-  // covered by the deadline above.
+  // Elastic grow: existing Spaces split their heaviest leaf onto the new
+  // cellapp; pending Spaces are handled by the deadline extension above.
   auto self_it = cellapps_.find(kInternalAddr);
   if (self_it != cellapps_.end()) GrowSpacesForNewCellApp(self_it->second);
 }
@@ -1491,6 +1491,7 @@ void CellAppMgr::SendRegisterCellAppAck(Channel* ch, const Address& addr, uint32
   ack.tick_alignment_epoch_us = static_cast<uint64_t>(
       std::chrono::duration_cast<std::chrono::microseconds>(StartTime().time_since_epoch())
           .count());
+  ack.mgr_generation = mgr_generation_;
   if (ch == nullptr) return;
   if (auto r = ch->SendMessage(ack); !r) {
     ATLAS_LOG_WARNING("CellAppMgr: {} register ack send failed to {} (app_id={}): {}",
@@ -1506,6 +1507,7 @@ void CellAppMgr::OnHealthProbe(const Address&, Channel* ch,
   ack.game_time = GameTime();
   ack.snapshot_saves = snapshot_save_count_;
   ack.snapshot_failures = snapshot_failure_count_;
+  ack.mgr_generation = mgr_generation_;
   ack.snapshot_dirty = snapshot_dirty_;
   ack.snapshot_save_stale = SnapshotSaveStaleForWatcher();
   (void)ch->SendMessage(ack);
@@ -1537,6 +1539,7 @@ void CellAppMgr::SendGeometryToCellApp(const CellAppInfo& target,
   msg.geometry_version = partition.geometry_version;
   const auto blob = w.Detach();
   msg.bsp_blob.assign(blob.begin(), blob.end());
+  msg.mgr_generation = mgr_generation_;
   if (auto r = target.channel->SendMessage(msg); !r) {
     ATLAS_LOG_WARNING("CellAppMgr: geometry replay failed space={} app_id={}: {}",
                       partition.space_id, target.app_id, r.Error().Message());
@@ -3555,6 +3558,7 @@ void CellAppMgr::SendAddCell(const CellAppInfo& target, SpaceID space_id,
   msg.is_primary = is_primary;
   msg.space_master_type = space_master_type;
   msg.space_data_source_addr = space_data_source_addr;
+  msg.mgr_generation = mgr_generation_;
   (void)target.channel->SendMessage(msg);
 }
 
@@ -3568,6 +3572,7 @@ void CellAppMgr::SendRemoveCell(const CellAppInfo& target, SpaceID space_id,
   cellappmgr::RemoveCellFromSpace msg;
   msg.space_id = space_id;
   msg.cell_id = cell_id;
+  msg.mgr_generation = mgr_generation_;
   (void)target.channel->SendMessage(msg);
 }
 
@@ -3608,6 +3613,7 @@ void CellAppMgr::BroadcastGeometry(
     msg.space_id = partition.space_id;
     msg.geometry_version = partition.geometry_version;
     msg.bsp_blob.assign(blob.begin(), blob.end());
+    msg.mgr_generation = mgr_generation_;
 
     std::unordered_map<Address, bool> hosts;
     for (const auto* ci : partition.bsp.Leaves()) hosts[ci->cellapp_addr] = true;
@@ -3622,6 +3628,7 @@ void CellAppMgr::BroadcastGeometry(
         so.cell_id = cell_id;
         so.enable = enable;
         so.freeze_epoch = partition.freeze_epoch;
+        so.mgr_generation = mgr_generation_;
         (void)it->second.channel->SendMessage(so);
       };
       for (const auto* ci : partition.bsp.Leaves()) {

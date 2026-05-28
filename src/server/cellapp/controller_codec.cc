@@ -64,7 +64,7 @@ void EncodeTimer(const TimerController& c, BinaryWriter& w) {
 void EncodeProximity(const ProximityController& c, BinaryWriter& w) {
   WriteF32(w, c.Range());
   const auto& peers = c.InsidePeers();
-  // Two-pass: defensive OwnerData check may filter some peers.
+  // Two-pass: defensive owner check may filter some peers.
   std::vector<uint32_t> peer_ids;
   peer_ids.reserve(peers.size());
   for (auto* peer_node : peers) {
@@ -72,7 +72,7 @@ void EncodeProximity(const ProximityController& c, BinaryWriter& w) {
     // ProximityController inside_peers_ contains only entity centrals
     // (RangeTrigger filters bound nodes), which are always EntityRangeListNode.
     auto* entity_node = static_cast<EntityRangeListNode*>(peer_node);
-    auto* peer_entity = static_cast<CellEntity*>(entity_node->OwnerData());
+    auto* peer_entity = entity_node->Owner();
     if (peer_entity == nullptr) continue;
     peer_ids.push_back(peer_entity->Id());
   }

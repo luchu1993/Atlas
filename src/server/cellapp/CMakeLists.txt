@@ -1,16 +1,19 @@
-# atlas_cellapp_lib — CellApp runtime.
-# Owns Space, CellEntity, Witness, CellAppNativeProvider, and the CellApp
-# process shell.
-
 add_library(atlas_cellapp_lib STATIC
   aoi_trigger.cc
   cell.cc
   cell_entity.cc
+  cell_movement_metrics.cc
+  cell_movement_system.cc
   cellapp.cc
   cellapp_config.cc
   cellapp_native_provider.cc
   controller_codec.cc
   ghost_maintainer.cc
+  movement_command_store.cc
+  movement_input_buffer.cc
+  movement_input_rate_limiter.cc
+  movement_position_history_store.cc
+  movement_state_store.cc
   offload_checker.cc
   real_entity_data.cc
   space.cc
@@ -28,6 +31,7 @@ target_link_libraries(atlas_cellapp_lib PUBLIC
   atlas_network
   atlas_serialization
   atlas_math
+  atlas_movement_sim
   atlas_server
   atlas_space
   atlas_clrscript

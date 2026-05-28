@@ -166,6 +166,8 @@ struct GroundHit {
   float distance_m{0.0f};
 };
 
+// center.y is the capsule FOOT (matches physics::Capsule and the
+// movement-sim convention where MovementState.position is foot-anchored).
 struct Capsule {
   math::Vector3 center{0.0f, 0.0f, 0.0f};
   float radius_m{0.0f};
@@ -299,13 +301,6 @@ struct MovementStepResult {
                                              const MovementCommand& command,
                                              const MovementCurve& curve,
                                              uint16_t dt_ms)
-    -> MovementCommandStepResult;
-[[nodiscard]] auto ApplyMovementCommandCurve(const MovementState& previous,
-                                             const MovementCommand& command,
-                                             const MovementCurve& curve,
-                                             uint16_t dt_ms,
-                                             const MovementConfig& config,
-                                             const CharacterQuery& query)
     -> MovementCommandStepResult;
 [[nodiscard]] auto Step(const MovementState& previous, const InputFrame& input,
                         const MovementConfig& config, const CharacterQuery& query,

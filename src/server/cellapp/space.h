@@ -3,13 +3,20 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <filesystem>
+#include <functional>
 #include <memory>
 #include <optional>
+#include <string>
+#include <string_view>
 #include <unordered_map>
 #include <utility>
 
 #include "cellappmgr/bsp_tree.h"
 #include "cellappmgr/cellappmgr_messages.h"  // CellID
+#include "foundation/clock.h"
+#include "foundation/error.h"
+#include "physics/physics_query.h"
 #include "server/entity_types.h"
 #include "space/range_list.h"
 #include "space_data.h"
@@ -18,9 +25,11 @@ namespace atlas {
 
 class Cell;
 class CellEntity;
+namespace physics {
+struct CollisionAsset;
+}
 
-// Self-contained spatial partition; owns the CellEntity collection and the
-// (x, z) RangeList. No client/RPC/physics knowledge.
+// Self-contained spatial partition; owns CellEntities, RangeList, and physics.
 class Space {
  public:
   explicit Space(SpaceID id);
@@ -45,9 +54,8 @@ class Space {
   [[nodiscard]] auto GetRangeList() -> RangeList& { return range_list_; }
   [[nodiscard]] auto GetRangeList() const -> const RangeList& { return range_list_; }
 
-  // local_cells_: Cells authoritative here (empty for ghost-only Spaces).
-  // bsp_tree_: whole-Space partition pushed by CellAppMgr; read-only for
-  // GhostMaintainer / OffloadChecker.
+  // local_cells_: Cells authoritative here, empty for ghost-only Spaces.
+  // bsp_tree_: whole-Space partition read by ghost and offload systems.
   using LocalCellMap = std::unordered_map<cellappmgr::CellID, std::unique_ptr<Cell>>;
 
   auto AddLocalCell(std::unique_ptr<Cell> cell) -> Cell*;
@@ -65,15 +73,29 @@ class Space {
     return bsp_tree_.has_value() ? &*bsp_tree_ : nullptr;
   }
 
-  // True iff this cellapp holds the BSP primary (left-most) cell — the
+  // True iff this cellapp holds the BSP primary (left-most) cell - the
   // SpaceData authority. False before SetBspTree has been called.
   [[nodiscard]] auto IsOwner() const -> bool;
   [[nodiscard]] auto GeometryVersion() const -> uint64_t { return geometry_version_; }
 
   [[nodiscard]] auto Data() -> SpaceData& { return data_; }
   [[nodiscard]] auto Data() const -> const SpaceData& { return data_; }
+  [[nodiscard]] auto PhysicsQuery() -> physics::PhysicsQuery& { return *physics_query_; }
+  [[nodiscard]] auto PhysicsQuery() const -> const physics::PhysicsQuery& {
+    return *physics_query_;
+  }
+  void SetPhysicsQuery(std::unique_ptr<physics::PhysicsQuery> query);
+  void SetCollisionAsset(const physics::CollisionAsset& asset);
+  [[nodiscard]] auto LoadCollisionAssetFromFile(const std::filesystem::path& path)
+      -> Result<void>;
+  [[nodiscard]] auto CollisionAssetSourceHash() const -> std::string_view {
+    return collision_asset_source_hash_;
+  }
+  [[nodiscard]] auto CollisionAssetObjectCount() const -> std::size_t {
+    return collision_asset_object_count_;
+  }
 
-  // True once SpaceData has been seeded — by becoming owner on SetBspTree,
+  // True once SpaceData has been seeded - by becoming owner on SetBspTree,
   // or by receiving a SpaceDataSnapshot from the owner.
   [[nodiscard]] auto IsDataInitialized() const -> bool { return data_initialized_; }
   void MarkDataInitialized();
@@ -82,9 +104,10 @@ class Space {
     return pending_space_data_source_addr_;
   }
 
-  // Controllers (may alter position) then dead-entity compaction.
-  // Witness updates run later in the CellApp tick.
+  // Controllers may alter position; Witness updates run later in the CellApp tick.
   void Tick(float dt);
+  using ControllerTickObserver = std::function<void(CellEntity&, Duration)>;
+  void Tick(float dt, const ControllerTickObserver& observer);
 
   template <typename Fn>
   void ForEachEntity(Fn&& fn) {
@@ -105,12 +128,15 @@ class Space {
   RangeList range_list_;
   std::unordered_map<EntityID, std::unique_ptr<CellEntity>> entities_;
 
-  // Non-owning; declared after entities_ so cells destruct first (safe
-  // default even though Cell doesn't touch entity state at teardown).
+  // Declared after entities_ so cells destruct first by default.
   LocalCellMap local_cells_;
   std::optional<BSPTree> bsp_tree_;
   uint64_t geometry_version_{0};
   SpaceData data_;
+  std::unique_ptr<physics::PhysicsQuery> physics_query_{
+      std::make_unique<physics::StaticPhysicsQuery>()};
+  std::string collision_asset_source_hash_;
+  std::size_t collision_asset_object_count_{0};
   bool data_initialized_{false};
   Address pending_space_data_source_addr_;
 

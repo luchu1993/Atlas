@@ -15,7 +15,7 @@ namespace {
 auto OwnerOf(RangeListNode& node) -> CellEntity* {
   if (node.Order() != RangeListOrder::kEntity) return nullptr;
   auto& entity_node = static_cast<EntityRangeListNode&>(node);
-  return static_cast<CellEntity*>(entity_node.OwnerData());
+  return entity_node.Owner();
 }
 
 }  // namespace

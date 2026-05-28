@@ -6,6 +6,8 @@
 
 #include "cellappmgr/cellappmgr_messages.h"
 #include "math/vector3.h"
+#include "movement_position_history_store.h"
+#include "movement_sim/movement_codec.h"
 #include "network/address.h"
 #include "network/message.h"
 #include "network/message_ids.h"
@@ -382,15 +384,6 @@ struct GhostSetNextReal {
 };
 static_assert(NetworkMessage<GhostSetNextReal>);
 
-// Carries the full state needed to promote a Ghost into Real on the
-// receiving side, or to materialise a fresh Real if the ghost does not
-// yet exist there. `persistent_blob` is the C# ServerEntity.Serialize
-// output.
-// owner_snapshot / other_snapshot / latest_*_seq let the receiver fill
-// ReplicationState on arrival without needing to wait for the first C#
-// publish_replication_frame tick. `existing_haunts` is the current
-// Real's Haunt list so the new Real can immediately resume broadcasts.
-
 struct OffloadEntity {
   EntityID entity_id{kInvalidEntityID};
   uint16_t type_id{0};
@@ -404,35 +397,22 @@ struct OffloadEntity {
   std::vector<std::byte> other_snapshot;
   uint64_t latest_event_seq{0};
   uint64_t latest_volatile_seq{0};
-  // Serialized Controller state (MoveToPoint, Timer, Proximity)
-  // captured by `SerializeControllersForMigration` at send-time
-  // BEFORE ConvertRealToGhost's StopAll runs, so a mid-motion
-  // controller resumes on the receiver at the same waypoint /
-  // remaining interval / proximity membership without the script
-  // needing to re-arm. Empty when the sender had no live controllers.
   std::vector<std::byte> controller_data;
   std::vector<Address> existing_haunts;
 
-  // Witness state preservation across the Offload boundary. The sender's
-  // Witness is torn down by ConvertRealToGhost; without these fields
-  // the receiver would re-enable with CellAppConfig defaults and
-  // silently drop any script-level SetAoIRadius.
-  // `has_witness==false` => the other two floats are ignored.
   bool has_witness{false};
   float aoi_radius{0.f};
   float aoi_hysteresis{0.f};
-  // Source cell's migration counter; receiver bumps to source+1 for the
-  // CurrentCell it pushes to BaseApp so routing order is monotonic
-  // regardless of which cellapp emits.
   uint32_t cell_epoch{0};
-  // Cell-local-only entity (no BaseApp counterpart); preserved across Offload
-  // so DestroySelf() takes the local-destroy path on the new owner.
   bool is_local{false};
   cellappmgr::CellID target_cell_id{0};
   uint64_t geometry_version{0};
-  // Per-peer Witness state (peers the client already mirrors + LOD seqs).
-  // Destination diffs vs post-Activate sweep for a transparent handoff.
   std::vector<WitnessAoIEntry> aoi_entries;
+  bool has_movement_state{false};
+  movement::MovementState movement_state;
+  std::vector<MovementPositionSample> movement_position_history;
+  bool has_movement_command{false};
+  movement::MovementCommand movement_command;
 
   static auto Descriptor() -> const MessageDesc& {
     static const MessageDesc kDesc{msg_id::Id(msg_id::CellApp::kOffloadEntity),
@@ -472,9 +452,6 @@ struct OffloadEntity {
       w.Write(a.Ip());
       w.Write(a.Port());
     }
-    // Witness state - appended at the tail so Deserialize can treat the
-    // block as optional via `BinaryReader::Remaining() >= 9`. Keeps
-    // wire-format back-compat with older-boundary tests.
     w.Write(static_cast<uint8_t>(has_witness ? 1 : 0));
     w.Write(aoi_radius);
     w.Write(aoi_hysteresis);
@@ -488,6 +465,15 @@ struct OffloadEntity {
     }
     w.Write(target_cell_id);
     w.Write(geometry_version);
+    w.Write(static_cast<uint8_t>(has_movement_state ? 1 : 0));
+    if (has_movement_state) movement::SerializeMovementState(w, movement_state);
+    w.WritePackedInt(static_cast<uint32_t>(movement_position_history.size()));
+    for (const auto& sample : movement_position_history) {
+      w.Write(sample.server_tick);
+      movement::SerializeMovementState(w, sample.state);
+    }
+    w.Write(static_cast<uint8_t>(has_movement_command ? 1 : 0));
+    if (has_movement_command) movement::SerializeMovementCommand(w, movement_command);
   }
 
   static auto Deserialize(BinaryReader& r) -> Result<OffloadEntity> {
@@ -561,10 +547,7 @@ struct OffloadEntity {
         return Error{ErrorCode::kInvalidArgument, "OffloadEntity: haunt addr truncated"};
       msg.existing_haunts.emplace_back(*hip, *hport);
     }
-    // Optional witness-state tail. Absent => has_witness=false (the
-    // default), matching older-format payloads without regressing the
-    // Witness behaviour: the receiver leaves no Witness attached, which
-    // is the legacy observable state.
+    // Absent witness tail keeps the legacy no-Witness destination state.
     if (r.Remaining() >= sizeof(uint8_t) + 2 * sizeof(float)) {
       auto hw = r.Read<uint8_t>();
       auto rad = r.Read<float>();
@@ -585,8 +568,7 @@ struct OffloadEntity {
       if (!il) return Error{ErrorCode::kInvalidArgument, "OffloadEntity: is_local truncated"};
       msg.is_local = (*il != 0);
     }
-    // Tail-optional aoi entries — older payloads omit and the receiver
-    // falls back to the legacy "re-Enter everything" path.
+    // Older payloads omit AoI entries and re-enter everything.
     if (r.Remaining() >= 1) {
       auto cnt = r.ReadPackedInt();
       if (!cnt) return Error{ErrorCode::kInvalidArgument, "OffloadEntity: aoi count truncated"};
@@ -607,6 +589,58 @@ struct OffloadEntity {
         return Error{ErrorCode::kInvalidArgument, "OffloadEntity: geometry tail truncated"};
       msg.target_cell_id = *tc;
       msg.geometry_version = *gv;
+    }
+    if (r.Remaining() >= sizeof(uint8_t)) {
+      auto hms = r.Read<uint8_t>();
+      if (!hms)
+        return Error{ErrorCode::kInvalidArgument, "OffloadEntity: movement tail truncated"};
+      msg.has_movement_state = (*hms != 0);
+      if (msg.has_movement_state) {
+        auto state = movement::DeserializeMovementState(r);
+        if (!state)
+          return Error{ErrorCode::kInvalidArgument, "OffloadEntity: movement state truncated"};
+        msg.movement_state = *state;
+      }
+    }
+    if (r.Remaining() >= 1) {
+      auto history_count = r.ReadPackedInt();
+      if (!history_count) {
+        return Error{ErrorCode::kInvalidArgument,
+                     "OffloadEntity: movement history count truncated"};
+      }
+      if (*history_count > MovementPositionHistoryStore::kDefaultMaxSamplesPerEntity) {
+        return Error{ErrorCode::kInvalidArgument, "OffloadEntity: movement history too large"};
+      }
+      msg.movement_position_history.reserve(*history_count);
+      for (uint32_t i = 0; i < *history_count; ++i) {
+        auto tick = r.Read<uint32_t>();
+        if (!tick) {
+          return Error{ErrorCode::kInvalidArgument,
+                       "OffloadEntity: movement history tick truncated"};
+        }
+        auto state = movement::DeserializeMovementState(r);
+        if (!state) {
+          return Error{ErrorCode::kInvalidArgument,
+                       "OffloadEntity: movement history state truncated"};
+        }
+        msg.movement_position_history.push_back(MovementPositionSample{*tick, *state});
+      }
+    }
+    if (r.Remaining() >= sizeof(uint8_t)) {
+      auto has_command = r.Read<uint8_t>();
+      if (!has_command) {
+        return Error{ErrorCode::kInvalidArgument,
+                     "OffloadEntity: movement command flag truncated"};
+      }
+      msg.has_movement_command = (*has_command != 0);
+      if (msg.has_movement_command) {
+        auto command = movement::DeserializeMovementCommand(r);
+        if (!command) {
+          return Error{ErrorCode::kInvalidArgument,
+                       "OffloadEntity: movement command truncated"};
+        }
+        msg.movement_command = *command;
+      }
     }
     return msg;
   }

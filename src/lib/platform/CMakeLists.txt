@@ -15,6 +15,7 @@ if(WIN32)
     child_process_windows.cc
     crash_handler_windows.cc
     dynamic_library_windows.cc
+    filesystem_windows.cc
     io_poller_wsapoll.cc
     process_launcher_windows.cc
     threading_windows.cc
@@ -24,6 +25,7 @@ elseif(UNIX)
     child_process_linux.cc
     crash_handler_linux.cc
     dynamic_library_linux.cc
+    filesystem_linux.cc
     io_poller_epoll.cc
     process_launcher_linux.cc
     threading_linux.cc

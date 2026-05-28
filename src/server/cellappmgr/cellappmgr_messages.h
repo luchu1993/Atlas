@@ -59,13 +59,16 @@ struct RegisterCellAppAck {
   // Cluster-wide tick reference (mgr's monotonic μs); cellapps phase
   // their next tick boundary to it so Ghost updates land aligned.
   uint64_t tick_alignment_epoch_us{0};
+  // Monotonic per-mgr-process generation; CellApp uses it to reject
+  // stale-mgr messages after a Reviver-driven takeover.
+  uint64_t mgr_generation{0};
 
   static auto Descriptor() -> const MessageDesc& {
     static const MessageDesc kDesc{
         msg_id::Id(msg_id::CellAppMgr::kRegisterCellAppAck),
         "cellappmgr::RegisterCellAppAck",
         MessageLengthStyle::kFixed,
-        static_cast<int>(sizeof(uint8_t) + sizeof(uint32_t) + 2 * sizeof(uint64_t)),
+        static_cast<int>(sizeof(uint8_t) + sizeof(uint32_t) + 3 * sizeof(uint64_t)),
         MessageReliability::kReliable,
         MessageUrgency::kImmediate};
     return kDesc;
@@ -76,6 +79,7 @@ struct RegisterCellAppAck {
     w.Write(app_id);
     w.Write(game_time);
     w.Write(tick_alignment_epoch_us);
+    w.Write(mgr_generation);
   }
 
   static auto Deserialize(BinaryReader& r) -> Result<RegisterCellAppAck> {
@@ -83,13 +87,15 @@ struct RegisterCellAppAck {
     auto aid = r.Read<uint32_t>();
     auto gt = r.Read<uint64_t>();
     auto tep = r.Read<uint64_t>();
-    if (!ok || !aid || !gt || !tep)
+    auto gen = r.Read<uint64_t>();
+    if (!ok || !aid || !gt || !tep || !gen)
       return Error{ErrorCode::kInvalidArgument, "RegisterCellAppAck: truncated"};
     RegisterCellAppAck msg;
     msg.success = (*ok != 0);
     msg.app_id = *aid;
     msg.game_time = *gt;
     msg.tick_alignment_epoch_us = *tep;
+    msg.mgr_generation = *gen;
     return msg;
   }
 };
@@ -284,11 +290,12 @@ struct HealthProbeAck {
   uint64_t game_time{0};
   uint64_t snapshot_saves{0};
   uint64_t snapshot_failures{0};
+  uint64_t mgr_generation{0};
   bool snapshot_dirty{false};
   bool snapshot_save_stale{false};
 
   static auto Descriptor() -> const MessageDesc& {
-    constexpr int kSerializedSize = static_cast<int>(4 * sizeof(uint64_t) + 2);
+    constexpr int kSerializedSize = static_cast<int>(5 * sizeof(uint64_t) + 2);
     static const MessageDesc kDesc{msg_id::Id(msg_id::CellAppMgr::kHealthProbeAck),
                                    "cellappmgr::HealthProbeAck",
                                    MessageLengthStyle::kFixed,
@@ -303,6 +310,7 @@ struct HealthProbeAck {
     w.Write(game_time);
     w.Write(snapshot_saves);
     w.Write(snapshot_failures);
+    w.Write(mgr_generation);
     w.Write<uint8_t>(snapshot_dirty ? 1u : 0u);
     w.Write<uint8_t>(snapshot_save_stale ? 1u : 0u);
   }
@@ -312,9 +320,10 @@ struct HealthProbeAck {
     auto tick = r.Read<uint64_t>();
     auto saves = r.Read<uint64_t>();
     auto failures = r.Read<uint64_t>();
+    auto gen = r.Read<uint64_t>();
     auto dirty = r.Read<uint8_t>();
     auto stale = r.Read<uint8_t>();
-    if (!value || !tick || !saves || !failures || !dirty || !stale) {
+    if (!value || !tick || !saves || !failures || !gen || !dirty || !stale) {
       return Error{ErrorCode::kInvalidArgument, "HealthProbeAck: truncated"};
     }
     if (*dirty > 1 || *stale > 1) {
@@ -325,6 +334,7 @@ struct HealthProbeAck {
     msg.game_time = *tick;
     msg.snapshot_saves = *saves;
     msg.snapshot_failures = *failures;
+    msg.mgr_generation = *gen;
     msg.snapshot_dirty = *dirty != 0;
     msg.snapshot_save_stale = *stale != 0;
     return msg;
@@ -391,6 +401,7 @@ struct AddCellToSpace {
   bool is_primary{false};
   std::string space_master_type;
   Address space_data_source_addr;
+  uint64_t mgr_generation{0};
 
   static auto Descriptor() -> const MessageDesc& {
     static const MessageDesc kDesc{msg_id::Id(msg_id::CellAppMgr::kAddCellToSpace),
@@ -410,6 +421,7 @@ struct AddCellToSpace {
     w.WriteString(space_master_type);
     w.Write(space_data_source_addr.Ip());
     w.Write(space_data_source_addr.Port());
+    w.Write(mgr_generation);
   }
 
   static auto Deserialize(BinaryReader& r) -> Result<AddCellToSpace> {
@@ -434,6 +446,11 @@ struct AddCellToSpace {
         return Error{ErrorCode::kInvalidArgument, "AddCellToSpace: truncated"};
       }
       msg.space_data_source_addr = Address(*ip, *port);
+    }
+    if (r.Remaining() > 0) {
+      auto gen = r.Read<uint64_t>();
+      if (!gen) return Error{ErrorCode::kInvalidArgument, "AddCellToSpace: truncated"};
+      msg.mgr_generation = *gen;
     }
     return msg;
   }
@@ -481,12 +498,13 @@ static_assert(NetworkMessage<AddCellToSpaceAck>);
 struct RemoveCellFromSpace {
   SpaceID space_id{kInvalidSpaceID};
   CellID cell_id{0};
+  uint64_t mgr_generation{0};
 
   static auto Descriptor() -> const MessageDesc& {
     static const MessageDesc kDesc{msg_id::Id(msg_id::CellAppMgr::kRemoveCellFromSpace),
                                    "cellappmgr::RemoveCellFromSpace",
                                    MessageLengthStyle::kFixed,
-                                   sizeof(uint32_t) + sizeof(uint32_t),
+                                   sizeof(uint32_t) + sizeof(uint32_t) + sizeof(uint64_t),
                                    MessageReliability::kReliable,
                                    MessageUrgency::kImmediate};
     return kDesc;
@@ -495,16 +513,19 @@ struct RemoveCellFromSpace {
   void Serialize(BinaryWriter& w) const {
     w.Write(space_id);
     w.Write(cell_id);
+    w.Write(mgr_generation);
   }
 
   static auto Deserialize(BinaryReader& r) -> Result<RemoveCellFromSpace> {
     auto sid = r.Read<uint32_t>();
     auto cid = r.Read<uint32_t>();
-    if (!sid || !cid)
+    auto gen = r.Read<uint64_t>();
+    if (!sid || !cid || !gen)
       return Error{ErrorCode::kInvalidArgument, "RemoveCellFromSpace: truncated"};
     RemoveCellFromSpace msg;
     msg.space_id = *sid;
     msg.cell_id = *cid;
+    msg.mgr_generation = *gen;
     return msg;
   }
 };
@@ -517,6 +538,7 @@ struct UpdateGeometry {
   SpaceID space_id{kInvalidSpaceID};
   uint64_t geometry_version{0};
   std::vector<std::byte> bsp_blob;
+  uint64_t mgr_generation{0};
 
   static auto Descriptor() -> const MessageDesc& {
     static const MessageDesc kDesc{msg_id::Id(msg_id::CellAppMgr::kUpdateGeometry),
@@ -533,6 +555,7 @@ struct UpdateGeometry {
     w.Write(geometry_version);
     w.WritePackedInt(static_cast<uint32_t>(bsp_blob.size()));
     if (!bsp_blob.empty()) w.WriteBytes(std::span<const std::byte>(bsp_blob));
+    w.Write(mgr_generation);
   }
 
   static auto Deserialize(BinaryReader& r) -> Result<UpdateGeometry> {
@@ -549,6 +572,11 @@ struct UpdateGeometry {
       if (!data) return Error{ErrorCode::kInvalidArgument, "UpdateGeometry: bsp_blob truncated"};
       msg.bsp_blob.assign(data->begin(), data->end());
     }
+    if (r.Remaining() > 0) {
+      auto gen = r.Read<uint64_t>();
+      if (!gen) return Error{ErrorCode::kInvalidArgument, "UpdateGeometry: truncated"};
+      msg.mgr_generation = *gen;
+    }
     return msg;
   }
 };
@@ -562,13 +590,14 @@ struct ShouldOffload {
   CellID cell_id{0};
   bool enable{true};
   uint64_t freeze_epoch{0};
+  uint64_t mgr_generation{0};
 
   static auto Descriptor() -> const MessageDesc& {
     static const MessageDesc kDesc{msg_id::Id(msg_id::CellAppMgr::kShouldOffload),
                                    "cellappmgr::ShouldOffload",
                                    MessageLengthStyle::kFixed,
                                    static_cast<int>(sizeof(uint32_t) * 2 + sizeof(uint8_t) +
-                                                    sizeof(uint64_t)),
+                                                    sizeof(uint64_t) * 2),
                                    MessageReliability::kReliable,
                                    MessageUrgency::kImmediate};
     return kDesc;
@@ -579,6 +608,7 @@ struct ShouldOffload {
     w.Write(cell_id);
     w.Write(static_cast<uint8_t>(enable ? 1 : 0));
     w.Write(freeze_epoch);
+    w.Write(mgr_generation);
   }
 
   static auto Deserialize(BinaryReader& r) -> Result<ShouldOffload> {
@@ -586,13 +616,15 @@ struct ShouldOffload {
     auto cid = r.Read<uint32_t>();
     auto en = r.Read<uint8_t>();
     auto epoch = r.Read<uint64_t>();
-    if (!sid || !cid || !en || !epoch)
+    auto gen = r.Read<uint64_t>();
+    if (!sid || !cid || !en || !epoch || !gen)
       return Error{ErrorCode::kInvalidArgument, "ShouldOffload: truncated"};
     ShouldOffload msg;
     msg.space_id = *sid;
     msg.cell_id = *cid;
     msg.enable = (*en != 0);
     msg.freeze_epoch = *epoch;
+    msg.mgr_generation = *gen;
     return msg;
   }
 };

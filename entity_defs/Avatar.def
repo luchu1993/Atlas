@@ -1,13 +1,19 @@
 <entity name="Avatar">
 
   <properties>
-    <property name="hp"       type="int32"   scope="all_clients"           persistent="true"  reliable="true" />
-    <property name="gold"     type="int32"   scope="own_client"            persistent="true"  reliable="true" />
-    <property name="aiState"  type="int32"   scope="cell_public"                              reliable="true" />
-    <property name="modelId"  type="int32"   scope="other_clients"                            reliable="true" />
+    <property name="hp" type="int32" scope="all_clients"
+              persistent="true" reliable="true" />
+    <property name="gold" type="int32" scope="own_client"
+              persistent="true" reliable="true" />
+    <property name="aiState" type="int32" scope="cell_public"
+              reliable="true" />
+    <property name="modelId" type="int32" scope="other_clients"
+              reliable="true" />
     <property name="mana"     type="int32"   scope="cell_public_and_own" />
-    <property name="secret"   type="string"  scope="base_and_client"       persistent="true"  reliable="true" />
-    <property name="level"    type="int32"   scope="own_client"            persistent="true"  reliable="true" />
+    <property name="secret" type="string" scope="base_and_client"
+              persistent="true" reliable="true" />
+    <property name="level" type="int32" scope="own_client"
+              persistent="true" reliable="true" />
   </properties>
 
   <client_methods>
@@ -41,10 +47,6 @@
   </client_methods>
 
   <cell_methods>
-    <method name="ReportPos" exposed="own_client">
-      <arg name="pos" type="vector3" />
-      <arg name="dir" type="vector3" />
-    </method>
     <method name="LaunchProjectile" exposed="own_client">
       <arg name="forward" type="vector3" />
     </method>
@@ -56,6 +58,9 @@
     <method name="TakeDamage">
       <arg name="amount"     type="int32" />
       <arg name="attackerId" type="uint32" />
+    </method>
+    <method name="Dash" exposed="own_client">
+      <arg name="forward" type="vector3" />
     </method>
   </cell_methods>
 

@@ -5,6 +5,7 @@
 #include "cell.h"
 #include "cell_entity.h"
 #include "foundation/profiler.h"
+#include "physics/collision_asset.h"
 
 namespace atlas {
 
@@ -84,14 +85,40 @@ auto Space::FindEntity(EntityID id) const -> const CellEntity* {
   return it == entities_.end() ? nullptr : it->second.get();
 }
 
+void Space::SetPhysicsQuery(std::unique_ptr<physics::PhysicsQuery> query) {
+  if (!query) return;
+  physics_query_ = std::move(query);
+  collision_asset_source_hash_.clear();
+  collision_asset_object_count_ = 0;
+}
+
+void Space::SetCollisionAsset(const physics::CollisionAsset& asset) {
+  auto query = physics::BuildStaticPhysicsQueryFromAsset(asset);
+  physics_query_ = std::move(query);
+  collision_asset_source_hash_ = asset.source_hash;
+  collision_asset_object_count_ = asset.boxes.size() + asset.planes.size();
+}
+
+auto Space::LoadCollisionAssetFromFile(const std::filesystem::path& path) -> Result<void> {
+  auto asset = physics::LoadCollisionAssetFromFile(path);
+  if (!asset) return asset.Error();
+  SetCollisionAsset(*asset);
+  return {};
+}
+
 void Space::Tick(float dt) {
+  Tick(dt, ControllerTickObserver{});
+}
+
+void Space::Tick(float dt, const ControllerTickObserver& observer) {
   ATLAS_PROFILE_ZONE_N("Space::Tick");
-  // Controllers run before any Witness pass reads RangeList.
-  // No compaction here: RemoveEntity is the sole destruction path and
-  // erases synchronously. A second sweep would bypass CellApp's
-  // entity_population_ index.
+  // Controllers run before Witness reads RangeList; RemoveEntity owns erasure.
+  // A tick-time compaction pass would bypass CellApp's population index.
   for (auto& [_, entity] : entities_) {
-    if (!entity->IsDestroyed()) entity->GetControllers().Update(dt);
+    if (entity->IsDestroyed()) continue;
+    const auto started_at = observer ? Clock::now() : TimePoint{};
+    entity->GetControllers().Update(dt);
+    if (observer) observer(*entity, Clock::now() - started_at);
   }
 }
 

@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cstring>
+#include <string_view>
 #include <unordered_map>
 #include <utility>
 
@@ -10,6 +11,7 @@
 #include "cellapp_messages.h"
 #include "foundation/log.h"
 #include "math/vector3.h"
+#include "movement_sim/movement_codec.h"
 #include "network/channel.h"
 #include "network/network_interface.h"
 #include "network/reliable_udp.h"
@@ -31,15 +33,59 @@ auto IsValidNativePayload(const std::byte* payload, int32_t len) -> bool {
   return len >= 0 && (payload != nullptr || len == 0);
 }
 
+auto IsValidNativeString(const char* value, int32_t len) -> bool {
+  return len >= 0 && (value != nullptr || len == 0);
+}
+
 auto IsValidRpcTarget(RpcTarget target) -> bool {
   return target == RpcTarget::kOwner || target == RpcTarget::kOthers || target == RpcTarget::kAll;
 }
 
+auto ToMovementCommand(const NativeMovementCommand& native,
+                       movement::MovementCommand& command) -> bool {
+  if (!movement::IsMovementCommandTypeWireValue(native.type) ||
+      !movement::IsMovementCommandInputPolicyWireValue(native.input_policy) ||
+      !movement::IsMovementCommandCollisionPolicyWireValue(native.collision_policy)) {
+    return false;
+  }
+
+  command.command_id = native.command_id;
+  command.skill_id = native.skill_id;
+  command.type = static_cast<movement::MovementCommandType>(native.type);
+  command.start_position = {native.start_x, native.start_y, native.start_z};
+  command.target_position = {native.target_x, native.target_y, native.target_z};
+  command.duration_ms = native.duration_ms;
+  command.elapsed_ms = native.elapsed_ms;
+  command.curve_id = native.curve_id;
+  command.input_policy =
+      static_cast<movement::MovementCommandInputPolicy>(native.input_policy);
+  command.collision_policy =
+      static_cast<movement::MovementCommandCollisionPolicy>(native.collision_policy);
+  command.priority = native.priority;
+  command.server_tick = native.server_tick;
+  return true;
+}
+
+auto ToMovementCurve(const NativeMovementCurve& native, movement::MovementCurve& curve)
+    -> bool {
+  if (native.sample_count <= 0 ||
+      native.sample_count > static_cast<int32_t>(movement::kMaxMovementCurveSamples) ||
+      native.samples == nullptr) {
+    return false;
+  }
+
+  curve.id = native.curve_id;
+  curve.sample_count = static_cast<uint16_t>(native.sample_count);
+  for (int32_t i = 0; i < native.sample_count; ++i) {
+    curve.samples[static_cast<std::size_t>(i)] = native.samples[i];
+  }
+  return movement::IsMovementCurveValid(curve);
+}
+
 }  // namespace
 
-// Mirrors [UnmanagedCallersOnly] exports in Atlas.Runtime; same layout
-// as BaseApp's table. Append-only; SetNativeCallbacks clamps to caller's
-// len so missing entries read back as nullptr.
+// Mirrors [UnmanagedCallersOnly] exports in Atlas.Runtime. Append-only;
+// SetNativeCallbacks clamps to the caller's len.
 #pragma pack(push, 1)
 struct CellAppCallbackTable {
   RestoreEntityFn restore_entity;
@@ -89,7 +135,7 @@ void CellAppNativeProvider::SendClientRpc(uint32_t entity_id, uint32_t rpc_id, R
     return;
   }
   if (!source->IsReal()) {
-    ATLAS_LOG_WARNING("CellApp: SendClientRpc on Ghost entity_id={} — rejected", entity_id);
+    ATLAS_LOG_WARNING("CellApp: SendClientRpc on Ghost entity_id={} - rejected", entity_id);
     return;
   }
   if (!network_) {
@@ -162,7 +208,7 @@ void CellAppNativeProvider::SendCellRpc(uint32_t entity_id, uint32_t rpc_id,
   // A Real here means the script could have called the method directly; this
   // path exists only for Ghost->Real cross-cell routing.
   if (entity->IsReal()) {
-    ATLAS_LOG_WARNING("CellApp: SendCellRpc on Real entity_id={} rpc_id=0x{:06X} — call directly",
+    ATLAS_LOG_WARNING("CellApp: SendCellRpc on Real entity_id={} rpc_id=0x{:06X} - call directly",
                       entity_id, rpc_id);
     return;
   }
@@ -219,6 +265,20 @@ void CellAppNativeProvider::RemoveSpaceData(uint32_t space_id, uint16_t key_id) 
   remove_space_data_fn_(space_id, key_id);
 }
 
+auto CellAppNativeProvider::LoadCollisionAsset(uint32_t space_id, const char* path,
+                                               int32_t len) -> bool {
+  if (!IsValidNativeString(path, len) || len == 0) {
+    ATLAS_LOG_WARNING("CellApp: LoadCollisionAsset rejected invalid path len={}", len);
+    return false;
+  }
+  if (!load_collision_asset_fn_) {
+    ATLAS_LOG_ERROR("CellApp: LoadCollisionAsset: not wired to CellApp (space_id={})",
+                    space_id);
+    return false;
+  }
+  return load_collision_asset_fn_(space_id, std::string_view(path, static_cast<size_t>(len)));
+}
+
 auto CellAppNativeProvider::GetEntitySpaceId(uint32_t entity_id) -> uint32_t {
   auto* entity = lookup_ ? lookup_(entity_id) : nullptr;
   if (!entity) return 0;
@@ -233,7 +293,7 @@ void CellAppNativeProvider::SetEntityPosition(uint32_t entity_id, float x, float
   }
   // Ghosts are read-only mirrors; reject (soft guard).
   if (!entity->IsReal()) {
-    ATLAS_LOG_WARNING("atlas_set_position on Ghost entity_id={} — rejected", entity_id);
+    ATLAS_LOG_WARNING("atlas_set_position on Ghost entity_id={} - rejected", entity_id);
     return;
   }
   entity->SetPosition(math::Vector3{x, y, z});
@@ -246,10 +306,102 @@ void CellAppNativeProvider::SetEntityDirection(uint32_t entity_id, float x, floa
     return;
   }
   if (!entity->IsReal()) {
-    ATLAS_LOG_WARNING("atlas_set_direction on Ghost entity_id={} — rejected", entity_id);
+    ATLAS_LOG_WARNING("atlas_set_direction on Ghost entity_id={} - rejected", entity_id);
     return;
   }
   entity->SetDirection(math::Vector3{x, y, z});
+}
+
+void CellAppNativeProvider::SetEntityOnGround(uint32_t entity_id, bool on_ground) {
+  auto* entity = lookup_ ? lookup_(entity_id) : nullptr;
+  if (!entity) {
+    ATLAS_LOG_WARNING("atlas_set_on_ground: unknown entity_id={}", entity_id);
+    return;
+  }
+  if (!entity->IsReal()) {
+    ATLAS_LOG_WARNING("atlas_set_on_ground on Ghost entity_id={} - rejected", entity_id);
+    return;
+  }
+  entity->SetOnGround(on_ground);
+}
+
+void CellAppNativeProvider::SetMovementIntent(uint32_t entity_id, float dir_x, float dir_z,
+                                              float speed_mps, uint16_t buttons) {
+  auto* entity = lookup_ ? lookup_(entity_id) : nullptr;
+  if (!entity) {
+    ATLAS_LOG_WARNING("atlas_set_movement_intent: unknown entity_id={}", entity_id);
+    return;
+  }
+  if (!entity->IsReal()) {
+    ATLAS_LOG_WARNING("atlas_set_movement_intent on Ghost entity_id={} - rejected", entity_id);
+    return;
+  }
+  if (!movement_intent_fn_) {
+    ATLAS_LOG_ERROR("CellApp: SetMovementIntent: not wired to CellApp (entity_id={})", entity_id);
+    return;
+  }
+  movement_intent_fn_(entity_id, dir_x, dir_z, speed_mps, buttons);
+}
+
+auto CellAppNativeProvider::SetMovementCommand(
+    uint32_t entity_id, const NativeMovementCommand& native_command) -> bool {
+  auto* entity = lookup_ ? lookup_(entity_id) : nullptr;
+  if (!entity) {
+    ATLAS_LOG_WARNING("atlas_set_movement_command: unknown entity_id={}", entity_id);
+    return false;
+  }
+  if (!entity->IsReal()) {
+    ATLAS_LOG_WARNING("atlas_set_movement_command on Ghost entity_id={} - rejected", entity_id);
+    return false;
+  }
+  if (!movement_command_fn_) {
+    ATLAS_LOG_ERROR("CellApp: SetMovementCommand: not wired to CellApp (entity_id={})",
+                    entity_id);
+    return false;
+  }
+
+  movement::MovementCommand command;
+  if (!ToMovementCommand(native_command, command)) {
+    ATLAS_LOG_WARNING("atlas_set_movement_command: invalid enum entity_id={}", entity_id);
+    return false;
+  }
+  return movement_command_fn_(entity_id, command);
+}
+
+auto CellAppNativeProvider::ClearMovementCommand(uint32_t entity_id,
+                                                 uint32_t command_id) -> bool {
+  auto* entity = lookup_ ? lookup_(entity_id) : nullptr;
+  if (!entity) {
+    ATLAS_LOG_WARNING("atlas_clear_movement_command: unknown entity_id={}", entity_id);
+    return false;
+  }
+  if (!entity->IsReal()) {
+    ATLAS_LOG_WARNING("atlas_clear_movement_command on Ghost entity_id={} - rejected",
+                      entity_id);
+    return false;
+  }
+  if (!clear_movement_command_fn_) {
+    ATLAS_LOG_ERROR("CellApp: ClearMovementCommand: not wired to CellApp (entity_id={})",
+                    entity_id);
+    return false;
+  }
+  return clear_movement_command_fn_(entity_id, command_id);
+}
+
+auto CellAppNativeProvider::SetMovementCurve(const NativeMovementCurve& native_curve) -> bool {
+  if (!movement_curve_fn_) {
+    ATLAS_LOG_ERROR("CellApp: SetMovementCurve: not wired to CellApp (curve_id={})",
+                    native_curve.curve_id);
+    return false;
+  }
+
+  movement::MovementCurve curve;
+  if (!ToMovementCurve(native_curve, curve)) {
+    ATLAS_LOG_WARNING("atlas_set_movement_curve: invalid curve_id={} sample_count={}",
+                      native_curve.curve_id, native_curve.sample_count);
+    return false;
+  }
+  return movement_curve_fn_(curve);
 }
 
 void CellAppNativeProvider::GetEntityPosition(uint32_t entity_id, float& x, float& y, float& z) {
@@ -280,6 +432,20 @@ void CellAppNativeProvider::GetEntityDirection(uint32_t entity_id, float& x, flo
   z = d.z;
 }
 
+auto CellAppNativeProvider::GetEntityOnGround(uint32_t entity_id) -> bool {
+  auto* entity = lookup_ ? lookup_(entity_id) : nullptr;
+  return entity != nullptr && entity->OnGround();
+}
+
+auto CellAppNativeProvider::TryGetMovementHistorySample(
+    uint32_t entity_id, uint32_t server_tick, NativeMovementHistorySample& sample) -> bool {
+  sample = {};
+  auto* entity = lookup_ ? lookup_(entity_id) : nullptr;
+  if (!entity || !entity->IsReal()) return false;
+  if (!movement_history_sample_fn_) return false;
+  return movement_history_sample_fn_(entity_id, server_tick, sample);
+}
+
 void CellAppNativeProvider::PublishReplicationFrame(
     uint32_t entity_id, bool has_event, bool has_volatile, const std::byte* owner_snap,
     int32_t owner_snap_len, const std::byte* other_snap, int32_t other_snap_len,
@@ -291,7 +457,7 @@ void CellAppNativeProvider::PublishReplicationFrame(
     return;
   }
   if (!entity->IsReal()) {
-    ATLAS_LOG_WARNING("atlas_publish_replication_frame on Ghost entity_id={} — rejected",
+    ATLAS_LOG_WARNING("atlas_publish_replication_frame on Ghost entity_id={} - rejected",
                       entity_id);
     return;
   }
@@ -321,10 +487,8 @@ void CellAppNativeProvider::PublishReplicationFrame(
   entity->PublishReplicationFrame(std::move(frame), has_event, has_volatile, owner_snap_span,
                                   other_snap_span);
 
-  // Owner-scope direct path: Witness skips `&peer == &owner_`, so its
-  // AoI pump never carries owner-visible property changes. Envelope
-  // is byte-identical to Witness output; client uses the same decoder.
-  // Seq comes from the freshly allocated state.latest_event_seq.
+  // Owner-scope direct path because Witness skips its owner peer.
+  // Envelope bytes match Witness output; client uses the same decoder.
   if (has_event && owner_delta_len > 0 && entity->HasWitness() && network_) {
     const auto* state = entity->GetReplicationState();
     if (state == nullptr) return;
@@ -358,7 +522,7 @@ auto CellAppNativeProvider::AddMoveController(uint32_t entity_id, float dest_x, 
     return 0;
   }
   if (!entity->IsReal()) {
-    ATLAS_LOG_WARNING("atlas_add_move_controller on Ghost entity_id={} — rejected", entity_id);
+    ATLAS_LOG_WARNING("atlas_add_move_controller on Ghost entity_id={} - rejected", entity_id);
     return 0;
   }
   return static_cast<int32_t>(entity->GetControllers().Add(
@@ -375,7 +539,7 @@ auto CellAppNativeProvider::AddTimerController(uint32_t entity_id, float interva
     return 0;
   }
   if (!entity->IsReal()) {
-    ATLAS_LOG_WARNING("atlas_add_timer_controller on Ghost entity_id={} — rejected", entity_id);
+    ATLAS_LOG_WARNING("atlas_add_timer_controller on Ghost entity_id={} - rejected", entity_id);
     return 0;
   }
   auto on_fire = [this, entity_id, user_arg](TimerController& /*self*/) {
@@ -395,16 +559,15 @@ auto CellAppNativeProvider::AddProximityController(uint32_t entity_id, float ran
     return 0;
   }
   if (!entity->IsReal()) {
-    ATLAS_LOG_WARNING("atlas_add_proximity_controller on Ghost entity_id={} — rejected", entity_id);
+    ATLAS_LOG_WARNING("atlas_add_proximity_controller on Ghost entity_id={} - rejected", entity_id);
     return 0;
   }
-  // Lambdas capture (this, entity_id, user_arg) so each controller's
-  // events carry its script handle. RangeListOrder check filters non-
-  // entity crossings (matches AoITrigger::OwnerOf).
+  // Lambdas carry the script handle; RangeListOrder filters non-entity
+  // crossings to match AoITrigger::OwnerOf.
   auto dispatch = [this, entity_id, user_arg](RangeListNode& other, uint8_t is_enter) {
     if (proximity_event_fn_ == nullptr) return;
     if (other.Order() != RangeListOrder::kEntity) return;
-    auto* peer = static_cast<CellEntity*>(static_cast<EntityRangeListNode&>(other).OwnerData());
+    auto* peer = static_cast<EntityRangeListNode&>(other).Owner();
     if (peer == nullptr) return;
     proximity_event_fn_(entity_id, user_arg, peer->Id(), is_enter);
   };
@@ -454,10 +617,10 @@ void CellAppNativeProvider::SetNativeCallbacks(const void* native_callbacks, int
   // nullptr => trigger still fires for Offload bookkeeping, but script
   // onProximityEnter/Leave never run.
   proximity_event_fn_ = table.proximity_event;
-  entity_lifecycle_cancel_fn_ = table.entity_lifecycle_cancel;  // nullptr on older runtimes
-  timer_event_fn_ = table.timer_event;  // nullptr on older runtimes; TimerController fire becomes no-op
-  entity_migrating_out_fn_ = table.entity_migrating_out;  // nullptr on older runtimes
-  // nullptr on older runtimes — Ghost stays a C++-only mirror (legacy).
+  entity_lifecycle_cancel_fn_ = table.entity_lifecycle_cancel;
+  timer_event_fn_ = table.timer_event;
+  entity_migrating_out_fn_ = table.entity_migrating_out;
+  // nullptr on older runtimes; Ghost stays a C++-only mirror (legacy).
   restore_ghost_fn_ = table.restore_ghost;
   destroy_ghost_fn_ = table.destroy_ghost;
   ATLAS_LOG_INFO("CellApp: native callback table registered (len={})", len);

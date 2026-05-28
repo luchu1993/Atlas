@@ -19,8 +19,7 @@ CellEntity::CellEntity(EntityID id, uint16_t type_id, Space& space, const math::
       direction_(direction),
       space_(space),
       range_node_(position.x, position.z) {
-  // Back-pointer for AoITrigger callbacks (they only see RangeListNode&).
-  range_node_.SetOwnerData(this);
+  range_node_.SetOwner(this);
   // Insert fires crosses with already-present triggers - that's the
   // "new entity joined" signal they want.
   space_.GetRangeList().Insert(&range_node_);
@@ -39,8 +38,7 @@ CellEntity::CellEntity(GhostTag, EntityID id, uint16_t type_id, Space& space,
       range_node_(position.x, position.z),
       real_channel_(real_channel),
       real_addr_(real_addr) {
-  // Same RangeList wiring as Real so peer Witness AoI works uniformly.
-  range_node_.SetOwnerData(this);
+  range_node_.SetOwner(this);
   space_.GetRangeList().Insert(&range_node_);
   linked_to_range_list_ = true;
 }

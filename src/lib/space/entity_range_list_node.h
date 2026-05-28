@@ -5,6 +5,8 @@
 
 namespace atlas {
 
+class CellEntity;
+
 class EntityRangeListNode : public RangeListNode {
  public:
   EntityRangeListNode(float x, float z) : x_(x), z_(z) {
@@ -22,14 +24,13 @@ class EntityRangeListNode : public RangeListNode {
     z_ = z;
   }
 
-  // Opaque back-reference; the setter and caster must agree on the concrete type.
-  void SetOwnerData(void* owner) { owner_data_ = owner; }
-  [[nodiscard]] auto OwnerData() const -> void* { return owner_data_; }
+  void SetOwner(CellEntity* owner) { owner_ = owner; }
+  [[nodiscard]] auto Owner() const -> CellEntity* { return owner_; }
 
  private:
   float x_;
   float z_;
-  void* owner_data_{nullptr};
+  CellEntity* owner_{nullptr};
 };
 
 }  // namespace atlas

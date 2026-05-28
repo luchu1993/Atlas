@@ -608,35 +608,25 @@ auto ApplyMovementCommandCurve(const MovementState& previous,
                               DefaultMovementCommandResolver());
 }
 
-auto ApplyMovementCommandCurve(const MovementState& previous,
-                               const MovementCommand& command,
-                               const MovementCurve& curve, uint16_t dt_ms,
-                               const MovementConfig& config,
-                               const CharacterQuery& query) -> MovementCommandStepResult {
-  return ApplyMovementCommand(previous, command, curve, dt_ms, config, query,
-                              DefaultMovementCommandResolver());
-}
+namespace {
 
-auto Step(const MovementState& previous, const InputFrame& input, const MovementConfig& config,
-          const CharacterQuery& query, uint32_t server_tick) -> MovementStepResult {
-  MovementStepResult result;
-  result.state = previous;
-  result.state.last_processed_input_seq = input.seq;
-  result.server_tick = server_tick;
-
-  const float dt = NonNegativeFinite(config.fixed_dt_s);
+void ApplyHorizontalIntent(MovementState& state, const InputFrame& input,
+                           const MovementConfig& config, float dt) {
   const auto desired = DesiredMove(input);
-  const auto horizontal_velocity = Horizontal(result.state.velocity);
+  const auto horizontal_velocity = Horizontal(state.velocity);
   const auto target_velocity = desired * NonNegativeFinite(config.max_speed_mps);
   const float accel = desired.LengthSquared() > math::kEpsilon ? config.acceleration_mps2
                                                                : config.deceleration_mps2;
   const auto moved_horizontal =
       MoveTowards(horizontal_velocity, target_velocity, NonNegativeFinite(accel) * dt);
+  state.velocity.x = moved_horizontal.x;
+  state.velocity.z = moved_horizontal.z;
+  if (desired.LengthSquared() > math::kEpsilon) state.direction = desired.Normalized();
+}
 
-  result.state.velocity.x = moved_horizontal.x;
-  result.state.velocity.z = moved_horizontal.z;
-  if (desired.LengthSquared() > math::kEpsilon) result.state.direction = desired.Normalized();
-
+[[nodiscard]] bool ApplyVerticalIntent(MovementStepResult& result, const MovementState& previous,
+                                       const InputFrame& input, const MovementConfig& config,
+                                       const CharacterQuery& query, float dt) {
   result.ground = query.GroundProbe(previous.position);
   const float ground_snap = NonNegativeFinite(config.ground_snap_distance_m);
   const float depenetration_budget = NonNegativeFinite(config.max_depenetration_m);
@@ -656,7 +646,11 @@ auto Step(const MovementState& previous, const InputFrame& input, const Movement
     result.state.velocity.y =
         std::max(result.state.velocity.y, -NonNegativeFinite(config.max_fall_speed_mps));
   }
+  return was_grounded;
+}
 
+void ResolveCollisionAndSlide(MovementStepResult& result, const MovementConfig& config,
+                              const CharacterQuery& query, bool was_grounded, float dt) {
   Capsule capsule;
   capsule.center = result.state.position;
   capsule.radius_m = NonNegativeFinite(config.capsule_radius_m);
@@ -666,46 +660,66 @@ auto Step(const MovementState& previous, const InputFrame& input, const Movement
   const auto displacement = result.state.velocity * dt;
   capsule.center = result.state.position;
   result.sweep = query.SweepCapsule({capsule, displacement});
-  if (result.sweep.hit) {
-    math::Vector3 stepped_position;
-    if (was_grounded && !result.jumped &&
-        TryStepUp(result.state.position, displacement, capsule, config, query,
-                  &stepped_position)) {
-      result.state.position = stepped_position;
-      result.sweep = {};
-      result.stepped = true;
-    } else {
-      result.blocked = true;
-      const float fraction = std::clamp(result.sweep.fraction, 0.0f, 1.0f);
-      result.state.position += displacement * fraction;
-      ClipVelocityAgainstSurface(&result.state, result.sweep.normal);
-
-      const float remaining_fraction = 1.0f - fraction;
-      const auto slide_displacement = result.state.velocity * dt * remaining_fraction;
-      if (slide_displacement.LengthSquared() > math::kEpsilon) {
-        capsule.center = result.state.position + SurfaceOffset(result.sweep.normal);
-        const auto slide_hit = query.SweepCapsule({capsule, slide_displacement});
-        if (slide_hit.hit) {
-          const float slide_fraction = std::clamp(slide_hit.fraction, 0.0f, 1.0f);
-          result.state.position += slide_displacement * slide_fraction;
-          ClipVelocityAgainstSurface(&result.state, slide_hit.normal);
-        } else {
-          result.state.position += slide_displacement;
-        }
-      }
-    }
-  } else {
+  if (!result.sweep.hit) {
     result.state.position += displacement;
+    return;
   }
 
+  math::Vector3 stepped_position;
+  if (was_grounded && !result.jumped &&
+      TryStepUp(result.state.position, displacement, capsule, config, query,
+                &stepped_position)) {
+    result.state.position = stepped_position;
+    result.sweep = {};
+    result.stepped = true;
+    return;
+  }
+
+  result.blocked = true;
+  const float fraction = std::clamp(result.sweep.fraction, 0.0f, 1.0f);
+  result.state.position += displacement * fraction;
+  ClipVelocityAgainstSurface(&result.state, result.sweep.normal);
+
+  const float remaining_fraction = 1.0f - fraction;
+  const auto slide_displacement = result.state.velocity * dt * remaining_fraction;
+  if (slide_displacement.LengthSquared() <= math::kEpsilon) return;
+
+  capsule.center = result.state.position + SurfaceOffset(result.sweep.normal);
+  const auto slide_hit = query.SweepCapsule({capsule, slide_displacement});
+  if (slide_hit.hit) {
+    const float slide_fraction = std::clamp(slide_hit.fraction, 0.0f, 1.0f);
+    result.state.position += slide_displacement * slide_fraction;
+    ClipVelocityAgainstSurface(&result.state, slide_hit.normal);
+  } else {
+    result.state.position += slide_displacement;
+  }
+}
+
+void FinalizeGroundAndDirection(MovementStepResult& result, const MovementConfig& config,
+                                const CharacterQuery& query) {
   result.ground = query.GroundProbe(result.state.position);
   if (result.jumped ||
       !TrySnapToGround(&result.state, result.ground, config, &result.snapped)) {
     ClearGrounded(result.state);
   }
-
   result.state.direction = SafeDirection(result.state.direction);
+}
+
+}  // namespace
+
+auto Step(const MovementState& previous, const InputFrame& input, const MovementConfig& config,
+          const CharacterQuery& query, uint32_t server_tick) -> MovementStepResult {
+  MovementStepResult result;
+  result.state = previous;
+  result.state.last_processed_input_seq = input.seq;
+  result.server_tick = server_tick;
+
+  const float dt = NonNegativeFinite(config.fixed_dt_s);
+  ApplyHorizontalIntent(result.state, input, config, dt);
+  const bool was_grounded = ApplyVerticalIntent(result, previous, input, config, query, dt);
+  ResolveCollisionAndSlide(result, config, query, was_grounded, dt);
+  FinalizeGroundAndDirection(result, config, query);
   return result;
 }
 
-}
+}  // namespace atlas::movement
