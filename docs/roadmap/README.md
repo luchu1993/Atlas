@@ -17,8 +17,9 @@ Generator + 热重载)已落地,详见
 | 10 | CellApp 空间模拟 | ✅ | Space、RangeList、AOI/Witness、Controller；持续优化在 docs/optimization | [phase10](phase10_cellapp.md) |
 | 11 | 分布式空间（Real/Ghost + CellAppMgr） | ✅ 主线 | Ghost 机制、Entity Offload、BSP 分区、CellAppMgr 负载均衡 | [phase11](phase11_distributed_space.md) |
 | 12 | 客户端 SDK | ✅ | atlas_net_client、Atlas.Client、AvatarFilter、Unity 包骨架、AtlasClient/LoginClient async API | [phase12](phase12_client_sdk.md) |
-| 13 | 高可用（Reviver + DBAppMgr） | ⬜ | 崩溃恢复、Manager 热备、集群管理 | [phase13](phase13_high_availability.md) |
-| 14 | 服务端权威移动与本地预测 | ⬜ | 输入帧协议、共享 CharacterMotor、owner 预测和解、KCC 查询接入 | [phase14](phase14_movement_authority.md) |
+| 13 | 高可用（Reviver + Manager Recovery） | ✅ Cell+BaseAppMgr HA + 跨机 leader lock | Reviver multi-target、CellAppMgr / BaseAppMgr Snapshot / Restore / reattach、machined-backed lease；DBAppMgr 拆到 Phase 15 RFC | [phase13](phase13_high_availability.md) |
+| 14 | 服务端权威移动与本地预测 | 🟨 14.1/14.2 主线 | 输入帧协议、共享 CharacterMotor、owner 预测和解、Static PhysicsQuery KCC 查询 | [phase14](phase14_movement_authority.md) |
+| 15 | DBAppMgr — 多 DBApp 分片管理 + HA | 📐 RFC | DBApp 注册路径、shard 路由、客户端缓存、HA snapshot/reattach | [phase15](phase15_dbappmgr.md) |
 
 ## 依赖关系
 

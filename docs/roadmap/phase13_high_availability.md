@@ -349,12 +349,22 @@ live 回归优先覆盖 CellAppMgr abnormal shutdown、`--cycles` 多轮接管�
 
 ## 后续工作
 
-1. 为 DBAppMgr 定义多 DBApp registry、分片策略、故障转移和 pending request 恢复。
-2. 评估 CellAppMgr / BaseAppMgr snapshot 的共享存储 / WAL 方案,进一步缩小
-   本地文件丢失窗口。
-3. 扩大 Manager HA live cluster fault-injection 矩阵,覆盖跨机器 Reviver
-   (machined-mode lease)、snapshot 共享存储和更大规模 continued LB,并把
-   BaseAppMgr live takeover 纳入 CI baseline。
+Phase 13 follow-up 已全部完成或转化为可执行 RFC:
+
+1. ~~跨机 Reviver leader lock~~ ✅ machined-backed lease 已落地
+   (commit `6a4429f`)。
+2. **DBAppMgr 多 DBApp registry + HA** — 详见
+   [`phase15_dbappmgr.md`](phase15_dbappmgr.md) RFC。从零实现 DBAppMgr
+   是 phase 量级工作,拆为独立 phase 15。
+3. **共享 snapshot 存储 / WAL** — 详见
+   [`phase13_shared_snapshot_storage.md`](phase13_shared_snapshot_storage.md)
+   RFC。NFS / S3 / etcd 等选型对比,建议生产化时按需选 S3 后端。
+4. ~~live cluster fault-injection 矩阵扩张~~ ✅ verify_baseappmgr_ha
+   加 reviver-failover + leader-lock 闸门(commit `b4f5e7a`);
+   verify_cellappmgr_ha 接口对齐(commit `8b4a7a8`)。
+5. ~~snapshot_envelope 共享 helper~~ ✅ 抽到
+   `src/lib/server/snapshot_envelope.h`(commit `7fbbf0b`),
+   CellAppMgr / BaseAppMgr 都通过共享 API 操作 envelope。
 
 ## 验证基线
 
