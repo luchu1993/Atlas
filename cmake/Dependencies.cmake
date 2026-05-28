@@ -66,13 +66,12 @@ if(ATLAS_HEAP_ALLOCATOR STREQUAL "mimalloc")
   )
 endif()
 
-# Jolt v5.2.0 — GIT_REPOSITORY/TAG to avoid pinning a SHA256 before the
-# first verified fetch; bump to URL+SHA256 once the version is locked.
+# ── Jolt 5.2.0 ───────────────────────────────────────────────────────────────
 if(ATLAS_ENABLE_JOLT)
   FetchContent_Declare(
     Jolt
-    GIT_REPOSITORY https://github.com/jrouwe/JoltPhysics.git
-    GIT_TAG v5.2.0
+    URL https://github.com/jrouwe/JoltPhysics/archive/refs/tags/v5.2.0.tar.gz
+    URL_HASH SHA256=f478afe3050c885e21403748e10ab18e3e8df8b0982c540e75f1e078ef8b2c88
     SOURCE_SUBDIR Build
   )
 endif()

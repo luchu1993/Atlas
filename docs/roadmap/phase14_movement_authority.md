@@ -24,12 +24,6 @@ position history 都已落地。当前重心是协议边界硬化、验证矩阵
 
 ### 14.2 Jolt query backend（里程碑）
 
-**M1c**：Linux 验证 + ATLAS_ENABLE_JOLT 默认翻 ON。
-- Linux 上跑通 `ATLAS_ENABLE_JOLT=ON` 配置 + `test_jolt_physics_query`
-  全部 5 个 case 过。
-- 验证后翻默认值到 ON；同时把 FetchContent 从 `GIT_TAG v5.2.0` 切到
-  `URL + SHA256` 锁版本。
-
 **M5b**：Jolt 形状预 cook 进 cache。
 - 在 `.collisioncache` 里追加 `Shape::SaveBinaryState` 输出，加载时
   `RestoreFromBinaryState`，跳过运行时 mesh 构建。

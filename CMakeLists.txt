@@ -44,7 +44,7 @@ option(ATLAS_ENABLE_PROFILER "Enable profiler instrumentation (Tracy backend)" O
 option(ATLAS_ENABLE_JOLT
        "Enable Jolt physics backend (src/lib/physics_jolt). When OFF, the \
 JoltPhysicsQuery skeleton is excluded from the build."
-       OFF)
+       ON)
 option(ATLAS_PROFILER_ON_DEMAND
        "Tracy ON_DEMAND mode — instrumentation goes inert until a client connects"
        ON)

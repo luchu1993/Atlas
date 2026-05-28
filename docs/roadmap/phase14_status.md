@@ -60,6 +60,9 @@
   检查。
 - Space 可装载 collision asset 替换本 Space query；Cell C# 脚本可调
   `CellServerEntity.LoadCollisionAsset(spaceId, path)`。
+- `ATLAS_ENABLE_JOLT` 默认 ON；Jolt 5.2.0 通过 FetchContent `URL + SHA256`
+  锁版本拉取，Win debug 下 `test_jolt_physics_query` 11 个 case 与三后端
+  `test_backend_parity_quick` 通过。Linux 验证留 CI fast-follow。
 
 ### CharacterMotor
 
