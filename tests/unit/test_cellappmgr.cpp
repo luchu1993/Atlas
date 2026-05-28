@@ -165,6 +165,9 @@ class ShutdownSnapshotCellAppMgr final : public CellAppMgr {
  protected:
   auto RunLoop() -> bool override {
     SetStartupQuiescenceWindowForTest(Duration::zero());
+    // Filter out Init's mgr_generation-bump save so the test asserts
+    // purely against the shutdown-time save.
+    ResetSnapshotStateForTest();
 
     cellappmgr::RegisterCellApp reg;
     reg.internal_addr = MakePeerAddr(30101);
@@ -190,6 +193,11 @@ class FailingPeriodicSnapshotCellAppMgr final : public CellAppMgr {
     std::error_code ec;
     std::filesystem::remove_all(Config().snapshot_path, ec);
     if (!fs::CreateDirectories(Config().snapshot_path).HasValue()) return false;
+
+    // Init's mgr_generation-bump save already touched the snapshot at the
+    // original (writable) path; reset the timer + counters so this test
+    // measures only the periodic-failure behaviour after the path is a dir.
+    ResetSnapshotStateForTest();
 
     OnTickComplete();
     OnTickComplete();
@@ -227,6 +235,9 @@ class DirtySnapshotCellAppMgr final : public CellAppMgr {
  protected:
   auto RunLoop() -> bool override {
     SetStartupQuiescenceWindowForTest(Duration::zero());
+    // SavesAfterFlush counts only the dirty-flush save here; clear the
+    // Init mgr_generation-bump save out of the counters first.
+    ResetSnapshotStateForTest();
 
     cellappmgr::RegisterCellApp reg;
     reg.internal_addr = MakePeerAddr(30201);

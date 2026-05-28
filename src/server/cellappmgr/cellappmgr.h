@@ -87,6 +87,16 @@ class CellAppMgr : public ManagerApp {
   [[nodiscard]] auto Restore(std::span<const std::byte> bytes) -> Result<void>;
   [[nodiscard]] auto MgrGenerationForTest() const -> uint64_t { return mgr_generation_; }
   void BumpMgrGenerationForTest() { ++mgr_generation_; }
+  void ResetSnapshotStateForTest() {
+    last_snapshot_attempt_at_ = {};
+    last_snapshot_save_at_ = {};
+    last_snapshot_save_path_.clear();
+    last_snapshot_save_error_.clear();
+    last_snapshot_save_warning_at_ = {};
+    snapshot_save_count_ = 0;
+    snapshot_save_failure_count_ = 0;
+    snapshot_failure_count_ = 0;
+  }
   [[nodiscard]] auto SaveSnapshotToFile(const std::filesystem::path& path) -> Result<void>;
   [[nodiscard]] auto RestoreSnapshotFromFile(const std::filesystem::path& path) -> Result<void>;
 

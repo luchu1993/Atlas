@@ -321,9 +321,26 @@ auto BaseAppMgr::Init(int argc, char* argv[]) -> bool {
     }
   }
 
-  // Fresh start = 1; restart from snapshot = prior_saved + 1. BaseApps reject
-  // messages tagged with an older generation after a Reviver takeover.
+  // Bump + persist BEFORE any handler dispatches. If we advertised gen=N+1
+  // without persisting and then crashed, the next start would re-read gen=N
+  // from snapshot and bump to N+1 again — two distinct processes advertise
+  // the same value across their lifetimes, breaking monotonicity. The
+  // synchronous SaveSnapshotToFile call below closes that window.
   ++mgr_generation_;
+  MarkSnapshotDirty("mgr-generation-bump");
+  if (!Config().snapshot_path.empty()) {
+    auto save = SaveSnapshotToFile(Config().snapshot_path);
+    if (!save) {
+      ATLAS_LOG_ERROR("BaseAppMgr: failed to persist mgr_generation={} on Init: {}",
+                      mgr_generation_, save.Error().Message());
+      return false;
+    }
+  } else {
+    ATLAS_LOG_WARNING(
+        "BaseAppMgr: mgr_generation={} not persisted (no --snapshot-path); "
+        "monotonicity across restarts cannot be guaranteed",
+        mgr_generation_);
+  }
   ATLAS_LOG_INFO("BaseAppMgr: mgr_generation={}", mgr_generation_);
 
   ATLAS_LOG_INFO("BaseAppMgr: initialised");

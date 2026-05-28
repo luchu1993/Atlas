@@ -423,10 +423,25 @@ auto CellAppMgr::Init(int argc, char* argv[]) -> bool {
     }
   }
 
-  // Fresh start = 1; restart from snapshot = prior_saved + 1. Each live
-  // process therefore advertises a strictly higher generation than any
-  // earlier one that may still have packets in flight.
+  // Bump + persist BEFORE any handler dispatches. Advertising gen=N+1
+  // without first persisting it would let a crash + restart re-issue the
+  // same value across two distinct mgr lifetimes — the synchronous
+  // SaveSnapshotToFile below closes that window. See P1-A1.
   ++mgr_generation_;
+  MarkSnapshotDirty("mgr-generation-bump");
+  if (!Config().snapshot_path.empty()) {
+    auto save = SaveSnapshotToFile(Config().snapshot_path);
+    if (!save) {
+      ATLAS_LOG_ERROR("CellAppMgr: failed to persist mgr_generation={} on Init: {}",
+                      mgr_generation_, save.Error().Message());
+      return false;
+    }
+  } else {
+    ATLAS_LOG_WARNING(
+        "CellAppMgr: mgr_generation={} not persisted (no --snapshot-path); "
+        "monotonicity across restarts cannot be guaranteed",
+        mgr_generation_);
+  }
   ATLAS_LOG_INFO("CellAppMgr: mgr_generation={}", mgr_generation_);
 
   auto& table = Network().InterfaceTable();
