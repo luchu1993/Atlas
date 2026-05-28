@@ -1,6 +1,7 @@
 #include <algorithm>
 #include <array>
 #include <chrono>
+#include <cstddef>
 #include <cstdint>
 #include <cstdlib>
 #include <cstring>
@@ -21,6 +22,7 @@
 #include "baseapp/baseapp_messages.h"
 #include "foundation/clock.h"
 #include "loginapp/login_messages.h"
+#include "movement_sim/movement_sim.h"
 #include "network/channel.h"
 #include "network/event_dispatcher.h"
 #include "network/network_interface.h"
@@ -34,6 +36,21 @@ namespace {
 
 using SteadyClock = std::chrono::steady_clock;
 using TimePoint = SteadyClock::time_point;
+
+enum class MoveMode : uint8_t {
+  kReportPos,
+  kMovementInput,
+};
+
+[[nodiscard]] auto MoveModeName(MoveMode mode) -> std::string_view {
+  switch (mode) {
+    case MoveMode::kReportPos:
+      return "report-pos";
+    case MoveMode::kMovementInput:
+      return "input";
+  }
+  return "unknown";
+}
 
 struct Options {
   Address login_addr{"127.0.0.1", 0};
@@ -57,35 +74,30 @@ struct Options {
   int shortline_pct{20};
   int shortline_min_ms{1'000};
   int shortline_max_ms{5'000};
-  // Once a session is kOnline and its StressAvatar is live, it fires an
-  // Echo RPC at rpc_rate_hz Hz for the rest of its hold window; each
-  // round-trip contributes one RTT sample. 0 = one-shot (a single Echo
-  // after EntityTransferred).
+  // Online sessions send Echo at rpc_rate_hz; each EchoReply adds an RTT sample.
+  // rpc_rate_hz=0 sends one Echo after EntityTransferred.
   int rpc_rate_hz{2};
-  // ReportPos stream rate — writes StressAvatar.position via
-  // ClientCellRpc → cell method → property setter, exercising the
-  // cell-side dirty/replication path. 0 = disabled.
+  // move_rate_hz drives the selected avatar motion stream. 0 = disabled.
   int move_rate_hz{10};
+  MoveMode move_mode{MoveMode::kReportPos};
+  int movement_input_redundant_frames{1};
+  int movement_input_drop_pct{0};
+  int movement_input_reorder_pct{0};
   // Distinct cell-side spaces to spread avatars across. Each session picks
   // space_id = (session_id % space_count) + 1 and encodes it in SelectAvatar.
   int space_count{1};
-  // Radius (metres) of the circular zone from which each session's spawn
-  // position is drawn at startup. Each session picks a random point inside
-  // the disk; subsequent ReportPos calls random-walk within ±walk_range_m
-  // of that initial point. 0 = legacy behaviour (everyone starts at origin).
+  // Spawn points are sampled inside a disk; later ReportPos calls random-walk
+  // within +/-walk_range_m of that point. 0 keeps everyone at origin.
   float spread_radius{0.f};
 
-  // Per-tick step magnitude for the random walk: each ReportPos shifts
-  // pos by uniform(-walk_step_m, +walk_step_m) on each axis.  Larger
-  // values exercise more AoI boundary crossings per second.
+  // Each ReportPos shifts pos by uniform(-walk_step_m, +walk_step_m) per axis.
+  // Larger values exercise more AoI boundary crossings per second.
   float walk_step_m{1.f};
   // Half-width of the random-walk box around the spawn point.  Larger
   // values let sessions wander into other sessions' AoI radii.
   float walk_range_m{50.f};
-  // Probability (0-100) that a given ReportPos is replaced by a long-
-  // distance teleport — uniform jump within ±walk_range_m.  Stresses the
-  // RangeTrigger / Witness::OnOwnerMoved path with paths that bubble
-  // many bounds in a single shuffle.  0 = pure random walk.
+  // Percent of ReportPos calls replaced by a +/-walk_range_m jump.
+  // Stresses RangeTrigger / Witness::OnOwnerMoved with large moves.
   int teleport_pct{0};
   bool verbose_failures{false};
   uint32_t seed{12345};
@@ -105,6 +117,8 @@ struct Options {
   // Transport-layer drop forwarded as --drop-transport-ms to each child.
   int client_drop_transport_start_ms{0};
   int client_drop_transport_duration_ms{0};
+  int client_transport_impairment_latency_ms{0};
+  int client_transport_impairment_loss_permyriad{0};
 };
 
 enum class SessionState : uint8_t {
@@ -124,22 +138,25 @@ struct Metrics {
   std::size_t timeout_fail{0};
   std::size_t unexpected_disconnects{0};
   std::size_t planned_disconnects{0};
-  // SelectAvatar is fire-and-forget on the wire. `select_avatar_sent`
-  // counts "accepted by the local send queue"; `entity_transferred` counts
-  // engine-level EntityTransferred notifications that arrive after the
-  // server-side GiveClientTo. On a healthy run the two match 1:1.
+  // SelectAvatar is fire-and-forget; entity_transferred counts server-side
+  // GiveClientTo notifications. On a healthy run the two match 1:1.
   std::size_t select_avatar_sent{0};
   std::size_t select_avatar_fail{0};
   std::size_t entity_transferred{0};
   std::size_t cell_ready{0};
-  // Echo / EchoReply round-trip through cell-side CLR dispatch. Each
-  // EntityTransferred triggers one Echo; a matching EchoReply from
-  // CellApp → BaseApp → client updates rtt_ms.
+  // Echo / EchoReply round-trip through cell-side CLR dispatch.
+  // A matching EchoReply from CellApp -> BaseApp -> client updates rtt_ms.
   std::size_t echo_sent{0};
   std::size_t echo_received{0};
-  // ReportPos is fire-and-forget; counts "accepted by local send queue".
+  // Movement stream sends are fire-and-forget local queue accepts.
   std::size_t move_sent{0};
   std::size_t move_fail{0};
+  std::size_t spawn_pos_sent{0};
+  std::size_t spawn_pos_fail{0};
+  std::size_t movement_input_frames_sent{0};
+  std::size_t movement_input_client_dropped{0};
+  std::size_t movement_input_client_reordered{0};
+  std::size_t movement_ack_received{0};
   // AoI envelope counts received via BaseApp's reliable-delta relay
   // (wire msg_id 0xF003). First payload byte is CellAoIEnvelopeKind.
   std::size_t aoi_enter{0};
@@ -147,7 +164,7 @@ struct Metrics {
   std::size_t aoi_pos_update{0};
   std::size_t aoi_prop_update{0};
   // Downlink traffic counters (counted in the client pre-dispatch hook, so
-  // every inbound message — typed + untyped — is captured exactly once).
+  // every inbound message - typed + untyped - is captured exactly once).
   std::size_t bytes_rx_total{0};
   std::unordered_map<uint16_t, std::size_t> bytes_per_msg;
   std::unordered_map<uint16_t, std::size_t> count_per_msg;
@@ -168,7 +185,7 @@ class Session {
         rng_(rng),
         source_ip_(source_ip) {
     if (opts_.spread_radius > 0.f) {
-      // Uniform disk sampling: draw angle in [0, 2π) and radius in [0, R²)
+      // Uniform disk sampling: draw angle in [0, 2pi) and radius in [0, R^2)
       // then sqrt so the area density is uniform (not bunched at the centre).
       std::uniform_real_distribution<float> angle_dist(0.f, 6.283185f);
       std::uniform_real_distribution<float> r2_dist(0.f, opts_.spread_radius * opts_.spread_radius);
@@ -213,9 +230,8 @@ class Session {
         }
         break;
       case SessionState::kOnline:
-        // Fire any due periodic Echoes. Loop in case we fell behind
-        // (e.g. tick jitter) — handles both the initial post-transfer
-        // Echo and the 1/rpc_rate_hz cadence that follows.
+        // Fire any due Echoes. Looping handles tick jitter across both the
+        // initial post-transfer Echo and the 1/rpc_rate_hz cadence.
         while (echo_pending_ && now >= echo_due_at_) {
           SendEcho();
           if (opts_.rpc_rate_hz > 0) {
@@ -224,18 +240,16 @@ class Session {
             echo_pending_ = false;  // one-shot mode
           }
         }
-        // One-shot Charge after EntityTransferred. Single RPC per
-        // session validates the slot=1 component RPC dispatch path
-        // without adding bandwidth to the per-tick baseline. Cleared
-        // immediately so re-entry into kOnline doesn't double-fire.
+        // One-shot Charge validates slot=1 component RPC dispatch.
+        // It clears immediately so kOnline re-entry cannot double-fire.
         if (charge_one_shot_pending_) {
           SendChargeComponentRpc();
           charge_one_shot_pending_ = false;
         }
-        // Same shape for ReportPos at move_rate_hz.
+        // Same shape for the selected motion stream at move_rate_hz.
         while (move_pending_ && now >= move_due_at_) {
-          SendReportPos();
-          move_due_at_ += std::chrono::milliseconds(1000 / opts_.move_rate_hz);
+          SendMove();
+          move_due_at_ += std::chrono::milliseconds(MoveIntervalMs());
         }
         if (now >= next_action_at_) {
           DisconnectAndRetry(now);
@@ -413,7 +427,8 @@ class Session {
     const auto kNow = SteadyClock::now();
     echo_due_at_ = kNow;
     echo_pending_ = true;
-    move_due_at_ = kNow;
+    const bool seeded_spawn = MaybeSeedInputModeSpawn();
+    move_due_at_ = seeded_spawn ? kNow + std::chrono::milliseconds(750) : kNow;
     move_pending_ = opts_.move_rate_hz > 0;
     // Fire one Charge per session to exercise the slot=1 component
     // RPC dispatch from the harness's raw protocol path.
@@ -424,7 +439,7 @@ class Session {
     if (!auth_channel_ || entity_id_ == kInvalidEntityID) return;
 
     // type_index from entity_ids.xml, method_index by .def declaration
-    // order — see RpcIds.g.cs for the canonical mapping.
+    // order - see RpcIds.g.cs for the canonical mapping.
     constexpr uint32_t kEchoRpcId = (2u << 22) | (3u << 8) | 1u;
 
     const uint32_t seq = next_echo_seq_++;
@@ -471,14 +486,41 @@ class Session {
     }
   }
 
+  auto SendReportPosPayload(float x, float z, std::string_view failure_prefix) -> bool {
+    if (!auth_channel_ || entity_id_ == kInvalidEntityID) return false;
+
+    constexpr uint32_t kReportPosRpcId = (2u << 22) | (3u << 8) | 2u;
+    const float dx = 1.f, dy = 0.f, dz = 0.f;
+    std::vector<std::byte> payload(6 * sizeof(float));
+    const float fs[6] = {x, 0.f, z, dx, dy, dz};
+    std::memcpy(payload.data(), fs, sizeof(fs));
+
+    baseapp::ClientCellRpc rpc;
+    rpc.target_entity_id = entity_id_;
+    rpc.rpc_id = kReportPosRpcId;
+    rpc.payload = std::move(payload);
+    const auto kSend = auth_channel_->SendMessage(rpc);
+    if (!kSend) RecordFailure(std::format("{}:{}", failure_prefix, kSend.Error().Message()));
+    return kSend.HasValue();
+  }
+
+  auto MaybeSeedInputModeSpawn() -> bool {
+    if (opts_.move_mode != MoveMode::kMovementInput || opts_.spread_radius <= 0.f) {
+      return false;
+    }
+    pos_x_ = init_x_;
+    pos_z_ = init_z_;
+    if (SendReportPosPayload(pos_x_, pos_z_, "spawn_pos_send")) {
+      ++metrics_.spawn_pos_sent;
+      return true;
+    }
+    ++metrics_.spawn_pos_fail;
+    return false;
+  }
+
   void SendReportPos() {
     if (!auth_channel_ || entity_id_ == kInvalidEntityID) return;
 
-    // method_index=2: second cell_method declared in StressAvatar.def.
-    constexpr uint32_t kReportPosRpcId = (2u << 22) | (3u << 8) | 2u;
-
-    // Random-walk inside this session's spawn square; teleport jumps exercise
-    // big-distance bound shuffles and RangeTrigger ordering.
     const bool teleport = opts_.teleport_pct > 0 &&
                           std::uniform_int_distribution<int>(0, 99)(rng_) < opts_.teleport_pct;
     if (teleport) {
@@ -492,23 +534,98 @@ class Session {
       pos_z_ = std::clamp(pos_z_ + walk(rng_), init_z_ - opts_.walk_range_m,
                           init_z_ + opts_.walk_range_m);
     }
-    const float dx = 1.f, dy = 0.f, dz = 0.f;
 
-    // Payload: Vector3 pos (x,y,z) + Vector3 dir (x,y,z) = 6 * float, LE.
-    std::vector<std::byte> payload(6 * sizeof(float));
-    const float fs[6] = {pos_x_, 0.f, pos_z_, dx, dy, dz};
-    std::memcpy(payload.data(), fs, sizeof(fs));
-
-    baseapp::ClientCellRpc rpc;
-    rpc.target_entity_id = entity_id_;
-    rpc.rpc_id = kReportPosRpcId;
-    rpc.payload = std::move(payload);
-    const auto kSend = auth_channel_->SendMessage(rpc);
+    const bool kSend = SendReportPosPayload(pos_x_, pos_z_, "move_send");
     if (kSend) {
       ++metrics_.move_sent;
     } else {
       ++metrics_.move_fail;
-      RecordFailure(std::format("move_send:{}", kSend.Error().Message()));
+    }
+  }
+
+  void RememberMovementInputFrame(const movement::InputFrame& frame) {
+    movement_input_history_.push_back(frame);
+    if (movement_input_history_.size() > 2) {
+      movement_input_history_.erase(movement_input_history_.begin());
+    }
+  }
+
+  auto SendMovementInputPayload(const baseapp::ClientMovementInput& msg,
+                                std::string_view failure_prefix) -> bool {
+    const auto kSend = auth_channel_->SendMessage(msg);
+    if (kSend) {
+      ++metrics_.move_sent;
+      metrics_.movement_input_frames_sent += msg.frames.size();
+      return true;
+    }
+    ++metrics_.move_fail;
+    RecordFailure(std::format("{}:{}", failure_prefix, kSend.Error().Message()));
+    return false;
+  }
+
+  void FlushReorderedMovementInput() {
+    if (!pending_reordered_movement_input_) return;
+    (void)SendMovementInputPayload(*pending_reordered_movement_input_,
+                                   "movement_input_reorder_send");
+    pending_reordered_movement_input_.reset();
+  }
+
+  void SendMovementInput() {
+    if (!auth_channel_ || entity_id_ == kInvalidEntityID) return;
+
+    baseapp::ClientMovementInput msg;
+    msg.target_entity_id = entity_id_;
+
+    movement::InputFrame frame;
+    frame.seq = next_movement_seq_++;
+    frame.input_tick = next_movement_tick_++;
+    frame.client_dt_ms = static_cast<uint16_t>(
+        std::clamp(MoveIntervalMs(), static_cast<int>(movement::kMinInputDtMs),
+                   static_cast<int>(movement::kMaxInputDtMs)));
+    frame.move_z = 127;
+
+    const uint32_t phase = (frame.seq / 30u + static_cast<uint32_t>(id_)) % 4u;
+    frame.view_yaw = static_cast<uint16_t>(phase * 16384u);
+
+    const int redundant = std::clamp(opts_.movement_input_redundant_frames, 1, 3);
+    const std::size_t history_count =
+        std::min<std::size_t>(movement_input_history_.size(), redundant - 1);
+    msg.frames.reserve(history_count + 1);
+    const auto first = movement_input_history_.end() - static_cast<std::ptrdiff_t>(history_count);
+    msg.frames.insert(msg.frames.end(), first, movement_input_history_.end());
+    msg.frames.push_back(frame);
+
+    if (pending_reordered_movement_input_) {
+      if (SendMovementInputPayload(msg, "movement_input_send")) {
+        RememberMovementInputFrame(frame);
+      }
+      FlushReorderedMovementInput();
+      return;
+    }
+
+    if (opts_.movement_input_drop_pct > 0 && RandomPercent() < opts_.movement_input_drop_pct) {
+      ++metrics_.movement_input_client_dropped;
+      RememberMovementInputFrame(frame);
+      return;
+    }
+    if (opts_.movement_input_reorder_pct > 0 &&
+        RandomPercent() < opts_.movement_input_reorder_pct) {
+      ++metrics_.movement_input_client_reordered;
+      pending_reordered_movement_input_ = std::move(msg);
+      RememberMovementInputFrame(frame);
+      return;
+    }
+
+    if (SendMovementInputPayload(msg, "movement_input_send")) {
+      RememberMovementInputFrame(frame);
+    }
+  }
+
+  void SendMove() {
+    if (opts_.move_mode == MoveMode::kMovementInput) {
+      SendMovementInput();
+    } else {
+      SendReportPos();
     }
   }
 
@@ -548,6 +665,11 @@ class Session {
         metrics_.echo_rtt_ms.push_back(rtt_ms);
         (void)*server_ts_ns;  // reserved for future up-leg / down-leg split
       }
+      return true;
+    }
+
+    if (id == baseapp::kClientMovementStateAckMessageId) {
+      ++metrics_.movement_ack_received;
       return true;
     }
 
@@ -634,13 +756,16 @@ class Session {
     session_key_ = {};
     baseapp_addr_ = {};
     intentionally_offline_ = false;
-    // Clear these; otherwise a retry transitioning back into kOnline
-    // before OnEntityTransferred fires would Echo against the *old* avatar
-    // id and trip BaseApp's cross-entity reject.
+    // Clear pending avatar actions so retries cannot target the old avatar.
+    // Otherwise BaseApp cross-entity validation rejects them.
     echo_pending_ = false;
     next_echo_seq_ = 0;
     next_charge_seq_ = 0;
     charge_one_shot_pending_ = false;
+    next_movement_seq_ = 1;
+    next_movement_tick_ = 1;
+    movement_input_history_.clear();
+    pending_reordered_movement_input_.reset();
     move_pending_ = false;
     pos_x_ = init_x_;
     pos_z_ = init_z_;
@@ -660,6 +785,10 @@ class Session {
     }
     std::uniform_int_distribution<int> dist(min_ms, max_ms);
     return dist(rng_);
+  }
+
+  [[nodiscard]] auto MoveIntervalMs() const -> int {
+    return std::max(1, 1000 / std::max(1, opts_.move_rate_hz));
   }
 
   [[nodiscard]] static auto ElapsedMs(TimePoint from, TimePoint to) -> double {
@@ -707,11 +836,14 @@ class Session {
   uint32_t next_echo_seq_{0};
   TimePoint echo_due_at_{};
   bool echo_pending_{false};
-  // One-shot Charge after EntityTransferred — exercises the client→cell
-  // component RPC dispatch path (slot=1) without inflating the per-tick
-  // bytes baseline. Reset alongside echo state on disconnect.
+  // One-shot Charge exercises client->cell component RPC dispatch (slot=1)
+  // without inflating the per-tick bytes baseline.
   uint32_t next_charge_seq_{0};
   bool charge_one_shot_pending_{false};
+  uint32_t next_movement_seq_{1};
+  uint32_t next_movement_tick_{1};
+  std::vector<movement::InputFrame> movement_input_history_;
+  std::optional<baseapp::ClientMovementInput> pending_reordered_movement_input_;
   TimePoint move_due_at_{};
   bool move_pending_{false};
   float init_x_{0.f};  // spawn-point set once at construction via --spread-radius
@@ -753,13 +885,25 @@ void PrintUsage() {
       << "  --shortline-max-ms <n>     Max time before planned short disconnect (default: 5000)\n"
       << "  --rpc-rate-hz <n>          Echo RPC rate per session while in-world "
          "(default: 2, 0 = one-shot)\n"
-      << "  --move-rate-hz <n>         ReportPos rate per session while in-world "
+      << "  --move-rate-hz <n>         Selected motion stream rate while in-world "
          "(default: 10, 0 = disabled)\n"
+      << "  --move-mode <report-pos|input>\n"
+      << "                             Motion stream: legacy ReportPos or Phase14 input\n"
+      << "                             frames (default: report-pos)\n"
+      << "  --movement-input-redundant-frames <1-3>\n"
+      << "                             Phase14 input frames per packet, including prior\n"
+      << "                             frames for loss tolerance (default: 1)\n"
+      << "  --movement-input-drop-pct <0-100>\n"
+      << "                             Percent of generated input packets to drop before\n"
+      << "                             local send, after recording history (default: 0)\n"
+      << "  --movement-input-reorder-pct <0-100>\n"
+      << "                             Percent of generated input packets to delay until\n"
+      << "                             after the next generated packet (default: 0)\n"
       << "  --space-count <n>          Distinct cell spaces to spread avatars across "
          "(default: 1)\n"
       << "  --spread-radius <m>        Radius of spawn disk (metres); each session starts at a\n"
       << "                             random point in this disk and wanders within\n"
-      << "                             ±--walk-range-meters of it (default: 0).\n"
+      << "                             +/- --walk-range-meters of it (default: 0).\n"
       << "  --walk-step-meters <m>     Per-tick random-walk step magnitude (default: 1)\n"
       << "  --walk-range-meters <m>    Half-width of random-walk box around spawn (default: 50)\n"
       << "  --teleport-pct <0-100>     Pct of ReportPos calls that jump uniformly within the\n"
@@ -776,15 +920,19 @@ void PrintUsage() {
       << "  --client-runtime-config <path>  hostfxr *.runtimeconfig.json (optional)\n"
       << "  --script-username-prefix <text> Username prefix for script children (default: "
          "script_user_)\n"
-      << "  --script-verify            Non-zero exit if any script child didn't observe OnInit\n"
+      << "  --script-verify            Non-zero exit if any script child misses OnInit,\n"
+      << "                             movement input, movement ack, or correction report\n"
       << "  --client-drop-inbound-ms <start> <duration>\n"
       << "                             Forward atlas_client --drop-inbound-ms to every script\n"
       << "                             child: application-level drop of state-channel messages\n"
-      << "                             (RUDP has already ACKed; no retransmit — tests gap detect)\n"
+      << "                             (RUDP has already ACKed; no retransmit - tests gap detect)\n"
       << "  --client-drop-transport-ms <start> <duration>\n"
       << "                             Forward atlas_client --drop-transport-ms: RUDP-layer drop\n"
       << "                             (happens before ACK generation; reliable retransmit kicks\n"
-      << "                             in, reliable traffic recovers — tests transport repair)\n"
+      << "                             in, reliable traffic recovers - tests transport repair)\n"
+      << "  --client-transport-impairment-ms <latency> <loss-permyriad>\n"
+      << "                             Forward atlas_client --impair-transport-ms; latency is\n"
+      << "                             one-way per direction, 200 loss-permyriad means 2%\n"
       << "\n"
       << "Example:\n"
       << "  world_stress --login 127.0.0.1:20013 --password-hash <sha256> --clients 500 "
@@ -988,6 +1136,44 @@ auto ParseOptions(int argc, char* argv[]) -> std::optional<Options> {
       auto parsed = ParseNumeric<int>(*value);
       if (!parsed) return std::nullopt;
       opts.move_rate_hz = *parsed;
+    } else if (kArg == "--move-mode") {
+      auto value = require_value(kArg);
+      if (!value) return std::nullopt;
+      if (*value == "report-pos") {
+        opts.move_mode = MoveMode::kReportPos;
+      } else if (*value == "input") {
+        opts.move_mode = MoveMode::kMovementInput;
+      } else {
+        std::cerr << "Invalid --move-mode value: " << *value << "\n";
+        return std::nullopt;
+      }
+    } else if (kArg == "--movement-input-redundant-frames") {
+      auto value = require_value(kArg);
+      if (!value) return std::nullopt;
+      auto parsed = ParseNumeric<int>(*value);
+      if (!parsed || *parsed < 1 || *parsed > 3) {
+        std::cerr << "--movement-input-redundant-frames must be in [1, 3]\n";
+        return std::nullopt;
+      }
+      opts.movement_input_redundant_frames = *parsed;
+    } else if (kArg == "--movement-input-drop-pct") {
+      auto value = require_value(kArg);
+      if (!value) return std::nullopt;
+      auto parsed = ParseNumeric<int>(*value);
+      if (!parsed || *parsed < 0 || *parsed > 100) {
+        std::cerr << "--movement-input-drop-pct must be in [0, 100]\n";
+        return std::nullopt;
+      }
+      opts.movement_input_drop_pct = *parsed;
+    } else if (kArg == "--movement-input-reorder-pct") {
+      auto value = require_value(kArg);
+      if (!value) return std::nullopt;
+      auto parsed = ParseNumeric<int>(*value);
+      if (!parsed || *parsed < 0 || *parsed > 100) {
+        std::cerr << "--movement-input-reorder-pct must be in [0, 100]\n";
+        return std::nullopt;
+      }
+      opts.movement_input_reorder_pct = *parsed;
     } else if (kArg == "--space-count") {
       auto value = require_value(kArg);
       if (!value) return std::nullopt;
@@ -1091,6 +1277,19 @@ auto ParseOptions(int argc, char* argv[]) -> std::optional<Options> {
       if (!parsed_start || !parsed_dur) return std::nullopt;
       opts.client_drop_transport_start_ms = *parsed_start;
       opts.client_drop_transport_duration_ms = *parsed_dur;
+    } else if (kArg == "--client-transport-impairment-ms") {
+      auto latency = require_value(kArg);
+      if (!latency) return std::nullopt;
+      auto loss = require_value(kArg);
+      if (!loss) return std::nullopt;
+      auto parsed_latency = ParseNumeric<int>(*latency);
+      auto parsed_loss = ParseNumeric<int>(*loss);
+      if (!parsed_latency || !parsed_loss || *parsed_latency < 0 || *parsed_loss < 0 ||
+          *parsed_loss > 10'000) {
+        return std::nullopt;
+      }
+      opts.client_transport_impairment_latency_ms = *parsed_latency;
+      opts.client_transport_impairment_loss_permyriad = *parsed_loss;
     } else if (kArg == "--help" || kArg == "-h") {
       PrintUsage();
       std::exit(0);
@@ -1106,6 +1305,10 @@ auto ParseOptions(int argc, char* argv[]) -> std::optional<Options> {
 
   if (opts.account_pool == 0) {
     opts.account_pool = opts.clients;
+  }
+  if (opts.move_rate_hz < 0) {
+    std::cerr << "--move-rate-hz must be >= 0\n";
+    return std::nullopt;
   }
   if (opts.worker_index >= opts.worker_count) {
     std::cerr << "--worker-index must be smaller than --worker-count\n";
@@ -1174,13 +1377,25 @@ void PrintSummary(const Options& opts, const Metrics& metrics,
       "  echo_loss:          {}\n",
       metrics.echo_sent > metrics.echo_received ? metrics.echo_sent - metrics.echo_received : 0);
   std::cout << std::format("  move_rate_hz:       {}\n", opts.move_rate_hz);
+  std::cout << std::format("  move_mode:          {}\n", MoveModeName(opts.move_mode));
+  std::cout << std::format("  move_redundant:     {}\n", opts.movement_input_redundant_frames);
+  std::cout << std::format("  move_drop_pct:      {}\n", opts.movement_input_drop_pct);
+  std::cout << std::format("  move_reorder_pct:   {}\n", opts.movement_input_reorder_pct);
   std::cout << std::format("  space_count:        {}\n", opts.space_count);
   std::cout << std::format("  spread_radius:      {:.0f} m\n", opts.spread_radius);
   std::cout << std::format("  walk_step:          {:.0f} m\n", opts.walk_step_m);
   std::cout << std::format("  walk_range:         {:.0f} m\n", opts.walk_range_m);
   std::cout << std::format("  teleport_pct:       {}\n", opts.teleport_pct);
+  std::cout << std::format("  spawn_pos_sent:     {}\n", metrics.spawn_pos_sent);
+  std::cout << std::format("  spawn_pos_fail:     {}\n", metrics.spawn_pos_fail);
   std::cout << std::format("  move_sent:          {}\n", metrics.move_sent);
   std::cout << std::format("  move_fail:          {}\n", metrics.move_fail);
+  std::cout << std::format("  move_frames_sent:   {}\n", metrics.movement_input_frames_sent);
+  std::cout << std::format("  move_client_drop:   {}\n",
+                           metrics.movement_input_client_dropped);
+  std::cout << std::format("  move_reordered:     {}\n",
+                           metrics.movement_input_client_reordered);
+  std::cout << std::format("  movement_ack_recv:  {}\n", metrics.movement_ack_received);
   std::cout << std::format("  aoi_enter:          {}\n", metrics.aoi_enter);
   std::cout << std::format("  aoi_leave:          {}\n", metrics.aoi_leave);
   std::cout << std::format("  aoi_pos_update:     {}\n", metrics.aoi_pos_update);
@@ -1209,8 +1424,8 @@ void PrintSummary(const Options& opts, const Metrics& metrics,
                              PercentileMs(metrics.auth_latency_ms, 99.0));
   }
 
-  // Downlink traffic — approximate B/s uses the configured run duration as the
-  // denominator. Real elapsed time is typically within ±1s of this value.
+  // Downlink traffic - approximate B/s uses the configured run duration as the
+  // denominator. Real elapsed time is typically within +/-1s of this value.
   std::cout << std::format("  bytes_rx_total:     {}\n", metrics.bytes_rx_total);
   const double kDuration = std::max(1, opts.duration_sec);
   const double kBytesPerSec = static_cast<double>(metrics.bytes_rx_total) / kDuration;
@@ -1285,15 +1500,13 @@ int main(int argc, char* argv[]) {
 
   std::cout << std::format(
       "Starting world_stress: login={} clients={} account_pool={} account_base={} worker={}/{} "
-      "sources={} ramp/s={} duration={}s shortline={}%% seed={}\n",
+      "sources={} ramp/s={} duration={}s shortline={}%% move_mode={} seed={}\n",
       kOpts->login_addr.ToString(), kOpts->clients, kOpts->account_pool, kOpts->account_index_base,
       kOpts->worker_index, kOpts->worker_count, kOpts->source_ips.size(), kOpts->ramp_per_sec,
-      kOpts->duration_sec, kOpts->shortline_pct, kOpts->seed);
+      kOpts->duration_sec, kOpts->shortline_pct, MoveModeName(kOpts->move_mode), kOpts->seed);
 
-  // Optional real atlas_client.exe subprocess harness. Launched BEFORE
-  // the virtual-client ramp so script children see the same server state
-  // as raw-protocol clients. Pumped once per main-loop iteration so
-  // stdout lines don't back up.
+  // Optional atlas_client.exe harness launches before the virtual-client ramp.
+  // It is pumped once per main-loop iteration so stdout lines do not back up.
   world_stress::ScriptClientOptions sco;
   sco.exe = kOpts->client_exe;
   sco.assembly = kOpts->client_assembly;
@@ -1317,6 +1530,8 @@ int main(int argc, char* argv[]) {
   sco.drop_inbound_duration_ms = kOpts->client_drop_inbound_duration_ms;
   sco.drop_transport_start_ms = kOpts->client_drop_transport_start_ms;
   sco.drop_transport_duration_ms = kOpts->client_drop_transport_duration_ms;
+  sco.transport_impairment_latency_ms = kOpts->client_transport_impairment_latency_ms;
+  sco.transport_impairment_loss_permyriad = kOpts->client_transport_impairment_loss_permyriad;
   world_stress::ScriptClientHarness script_harness(std::move(sco));
   if (auto r = script_harness.Start(); !r.HasValue()) {
     std::cerr << "[script-clients] " << r.Error().Message() << "\n";

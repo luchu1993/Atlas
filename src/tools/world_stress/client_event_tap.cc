@@ -4,43 +4,44 @@ namespace atlas::world_stress {
 
 namespace {
 
-// Match "] <Event>" where `<Event>` is the exact token after the closing
-// bracket of "[<TypeName>:<EntityId>]". Entity id itself is discarded —
-// only per-child counts matter here. Positional substring parsing (no
-// regex) keeps this zero-cost.
-//
-// Client logs may prefix with `[t=<seconds>] `; the timestamp bracket is
-// stripped before the type:id bracket parse. The timestamp is not
-// retained (analysis scripts lift it back out post-run).
+// Extract the event token after "[<TypeName>:<EntityId>] ".
+// Optional "[t=<seconds>] " prefixes are stripped first.
 auto EventBegins(std::string_view line) -> std::string_view {
-  // Strip optional leading timestamp bracket: `[t=12.345] ` (prefix +
-  // exactly one space). If the line doesn't start with `[t=` the line
-  // is pre-L6 format and drops through untouched.
   if (line.size() >= 4 && line[0] == '[' && line[1] == 't' && line[2] == '=') {
     auto end = line.find("] ");
     if (end == std::string_view::npos) return {};
     line = line.substr(end + 2);
   }
-  // Find the first closing bracket. If this line doesn't have the
-  // "[<Type>:<Id>] <Event>" shape, return empty.
   auto close = line.find(']');
   if (close == std::string_view::npos) return {};
   auto rest = line.substr(close + 1);
-  // Skip exactly one space after the bracket (the log format always emits
-  // one — anything else is treated as unparsed).
   if (rest.empty() || rest.front() != ' ') return {};
   rest.remove_prefix(1);
   return rest;
 }
 
 auto StartsWithToken(std::string_view rest, std::string_view token) -> bool {
-  // Matches when `rest` starts with `token` AND the next byte is absent or
-  // not part of an identifier (so "OnInit" doesn't match "OnInitExtra").
   if (rest.size() < token.size()) return false;
   if (rest.substr(0, token.size()) != token) return false;
   if (rest.size() == token.size()) return true;
   char c = rest[token.size()];
   return c == ' ' || c == '\t' || c == '\r' || c == '\n' || c == ':';
+}
+
+auto ParseUnsignedField(std::string_view rest, std::string_view field, uint64_t& out) -> bool {
+  auto pos = rest.find(field);
+  if (pos == std::string_view::npos) return false;
+  auto digits = rest.substr(pos + field.size());
+  uint64_t value = 0;
+  bool has_digit = false;
+  for (char c : digits) {
+    if (c < '0' || c > '9') break;
+    has_digit = true;
+    value = value * 10 + static_cast<uint64_t>(c - '0');
+  }
+  if (!has_digit) return false;
+  out = value;
+  return true;
 }
 
 }  // namespace
@@ -92,30 +93,45 @@ auto ParseAndCountClientEventLine(std::string_view line, ClientEventCounters& ou
     ++out.on_area_broadcast;
     return true;
   }
-
-  // event_seq gap warning (from ClientEntity.NoteIncomingEventSeq):
-  //   [<Type>:<Id>] event_seq gap: last=A got=B missed=N
-  // Add N to the counter so it reflects lost deltas, not warning lines.
-  if (StartsWithToken(rest, "event_seq gap")) {
-    auto missed_pos = rest.find("missed=");
-    if (missed_pos != std::string_view::npos) {
-      auto digits = rest.substr(missed_pos + 7);
-      uint64_t n = 0;
-      for (char c : digits) {
-        if (c < '0' || c > '9') break;
-        n = n * 10 + static_cast<uint64_t>(c - '0');
+  if (StartsWithToken(rest, "OnMovementInputSent")) {
+    ++out.movement_input_sent;
+    return true;
+  }
+  if (StartsWithToken(rest, "OnMovementCorrectionReportSent")) {
+    ++out.movement_report_sent;
+    return true;
+  }
+  if (StartsWithToken(rest, "OnMovementCorrection")) {
+    ++out.movement_ack;
+    uint64_t tier = 0;
+    if (ParseUnsignedField(rest, "tier=", tier)) {
+      if (tier == 1) {
+        ++out.movement_correction_tier1;
+      } else if (tier == 2) {
+        ++out.movement_correction_tier2;
+      } else if (tier == 3) {
+        ++out.movement_correction_snap;
       }
+    }
+    return true;
+  }
+
+  if (StartsWithToken(rest, "event_seq gap")) {
+    uint64_t n = 0;
+    if (ParseUnsignedField(rest, "missed=", n)) {
       out.event_seq_gaps += n;
       return true;
     }
-    // Well-formed prefix but missing/mangled `missed=` → still count
-    // the line as recognized so it doesn't inflate unparsed_lines, but
-    // we can't add any missed count.
     return true;
   }
 
   ++out.unparsed_lines;
   return false;
+}
+
+auto ClientEventCountersPassScriptVerify(const ClientEventCounters& counters) -> bool {
+  return counters.on_init > 0 && counters.movement_input_sent > 0 && counters.movement_ack > 0 &&
+      counters.movement_report_sent > 0;
 }
 
 }  // namespace atlas::world_stress

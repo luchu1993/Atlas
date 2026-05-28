@@ -4,11 +4,6 @@
 
 using namespace atlas::world_stress;
 
-// ============================================================================
-// Tracked-event cases — the exact log shapes produced by
-// samples/client/StressAvatar.cs.
-// ============================================================================
-
 TEST(ClientEventTap, OnInit) {
   ClientEventCounters c;
   EXPECT_TRUE(ParseAndCountClientEventLine("[StressAvatar:42] OnInit", c));
@@ -41,11 +36,6 @@ TEST(ClientEventTap, OnDestroy) {
   EXPECT_TRUE(ParseAndCountClientEventLine("[StressAvatar:42] OnDestroy", c));
   EXPECT_EQ(c.on_destroy, 1u);
 }
-
-// ============================================================================
-// Component-coverage events (struct props, struct-arg RPC, list-arg RPC,
-// component-level RPC).
-// ============================================================================
 
 TEST(ClientEventTap, OnMainWeaponChanged) {
   ClientEventCounters c;
@@ -80,9 +70,66 @@ TEST(ClientEventTap, OnAreaBroadcast) {
   EXPECT_EQ(c.unparsed_lines, 0u);
 }
 
-// ============================================================================
-// Unrelated / malformed inputs — harness must not crash or misattribute.
-// ============================================================================
+TEST(ClientEventTap, OnMovementInputSent) {
+  ClientEventCounters c;
+  EXPECT_TRUE(ParseAndCountClientEventLine(
+      "[StressAvatar:42] OnMovementInputSent seq=7 tick=9 count=3", c));
+  EXPECT_EQ(c.movement_input_sent, 1u);
+  EXPECT_EQ(c.unparsed_lines, 0u);
+}
+
+TEST(ClientEventTap, OnMovementCorrectionCountsAckAndTier) {
+  ClientEventCounters c;
+  EXPECT_TRUE(ParseAndCountClientEventLine(
+      "[StressAvatar:42] OnMovementCorrection ack=7 tick=9 tier=1 distance=0.500", c));
+  EXPECT_TRUE(ParseAndCountClientEventLine(
+      "[StressAvatar:42] OnMovementCorrection ack=8 tick=10 tier=2 distance=1.700", c));
+  EXPECT_TRUE(ParseAndCountClientEventLine(
+      "[StressAvatar:42] OnMovementCorrection ack=9 tick=11 tier=3 distance=5.100", c));
+  EXPECT_EQ(c.movement_ack, 3u);
+  EXPECT_EQ(c.movement_correction_tier1, 1u);
+  EXPECT_EQ(c.movement_correction_tier2, 1u);
+  EXPECT_EQ(c.movement_correction_snap, 1u);
+  EXPECT_EQ(c.unparsed_lines, 0u);
+}
+
+TEST(ClientEventTap, OnMovementCorrectionWithoutTierStillCountsAck) {
+  ClientEventCounters c;
+  EXPECT_TRUE(ParseAndCountClientEventLine(
+      "[StressAvatar:42] OnMovementCorrection ack=7 tick=9 distance=0.000", c));
+  EXPECT_EQ(c.movement_ack, 1u);
+  EXPECT_EQ(c.movement_correction_tier1, 0u);
+  EXPECT_EQ(c.movement_correction_tier2, 0u);
+  EXPECT_EQ(c.movement_correction_snap, 0u);
+  EXPECT_EQ(c.unparsed_lines, 0u);
+}
+
+TEST(ClientEventTap, OnMovementCorrectionReportSent) {
+  ClientEventCounters c;
+  EXPECT_TRUE(ParseAndCountClientEventLine(
+      "[StressAvatar:42] OnMovementCorrectionReportSent ack=7 tick=9 flags=1 distance=0.500",
+      c));
+  EXPECT_EQ(c.movement_report_sent, 1u);
+  EXPECT_EQ(c.movement_ack, 0u);
+  EXPECT_EQ(c.unparsed_lines, 0u);
+}
+
+TEST(ClientEventTap, ScriptVerifyRequiresInitInputAckAndReport) {
+  ClientEventCounters c;
+  EXPECT_FALSE(ClientEventCountersPassScriptVerify(c));
+
+  c.on_init = 1;
+  EXPECT_FALSE(ClientEventCountersPassScriptVerify(c));
+
+  c.movement_input_sent = 1;
+  EXPECT_FALSE(ClientEventCountersPassScriptVerify(c));
+
+  c.movement_ack = 1;
+  EXPECT_FALSE(ClientEventCountersPassScriptVerify(c));
+
+  c.movement_report_sent = 1;
+  EXPECT_TRUE(ClientEventCountersPassScriptVerify(c));
+}
 
 TEST(ClientEventTap, UnrelatedLogLine_BumpsUnparsed) {
   ClientEventCounters c;
@@ -98,7 +145,7 @@ TEST(ClientEventTap, EmptyLine_BumpsUnparsed) {
 }
 
 TEST(ClientEventTap, TokenPrefixDoesNotMatch) {
-  // "OnInitExtra" must not match "OnInit" — token boundary required.
+  // "OnInitExtra" must not match "OnInit"; token boundary is required.
   ClientEventCounters c;
   EXPECT_FALSE(ParseAndCountClientEventLine("[StressAvatar:42] OnInitExtra foo", c));
   EXPECT_EQ(c.on_init, 0u);
@@ -130,10 +177,6 @@ TEST(ClientEventTap, MultipleLinesAccumulate) {
   EXPECT_EQ(c.unparsed_lines, 1u);
 }
 
-// ============================================================================
-// event_seq gap warnings
-// ============================================================================
-
 TEST(ClientEventTap, EventSeqGap_AddsMissedCount) {
   ClientEventCounters c;
   EXPECT_TRUE(
@@ -151,17 +194,12 @@ TEST(ClientEventTap, EventSeqGap_MultipleLinesAccumulate) {
 }
 
 TEST(ClientEventTap, EventSeqGap_MissingMissedField_CountsLineButNoMiss) {
-  // Defensive — a future refactor removing the `missed=` suffix should
-  // surface as a parser warning, not as silently mis-counted deltas.
+  // Missing `missed=` is recognized but cannot add a lost-delta count.
   ClientEventCounters c;
   EXPECT_TRUE(ParseAndCountClientEventLine("[StressAvatar:42] event_seq gap: last=10 got=15", c));
   EXPECT_EQ(c.event_seq_gaps, 0u);
-  EXPECT_EQ(c.unparsed_lines, 0u);  // well-formed prefix → recognized
+  EXPECT_EQ(c.unparsed_lines, 0u);
 }
-
-// ============================================================================
-// L6 — optional [t=...] timestamp prefix (Atlas.Client.Desktop.ConsoleLogBackend)
-// ============================================================================
 
 TEST(ClientEventTap, TimestampPrefix_Stripped_OnInit) {
   ClientEventCounters c;
@@ -178,9 +216,6 @@ TEST(ClientEventTap, TimestampPrefix_Stripped_HpChanged) {
 }
 
 TEST(ClientEventTap, TimestampPrefix_Stripped_EventSeqGap) {
-  // Warning (stderr) and Info (stdout) lines both carry the prefix because
-  // ConsoleLogBackend stamps it for every level — without that the harness
-  // would desync from the on-wire state on the gap path.
   ClientEventCounters c;
   EXPECT_TRUE(ParseAndCountClientEventLine(
       "[t=5.000] [StressAvatar:42] event_seq gap: last=10 got=15 missed=4", c));
@@ -188,9 +223,6 @@ TEST(ClientEventTap, TimestampPrefix_Stripped_EventSeqGap) {
 }
 
 TEST(ClientEventTap, TimestampPrefix_MissingClose_BumpsUnparsed) {
-  // Malformed: opens [t= but never closes. Defensively treated as
-  // unparsed — we don't want a partial parse to shadow a later
-  // identifiable event on the same line.
   ClientEventCounters c;
   EXPECT_FALSE(ParseAndCountClientEventLine("[t=1.234 [StressAvatar:42] OnInit", c));
   EXPECT_EQ(c.on_init, 0u);
@@ -198,10 +230,6 @@ TEST(ClientEventTap, TimestampPrefix_MissingClose_BumpsUnparsed) {
 }
 
 TEST(ClientEventTap, PreL6Format_StillParses) {
-  // Backward compat: a log line without the timestamp bracket must
-  // continue to match exactly as it did before L6 landed. Pre-L6
-  // builds shipped without the prefix and runs that mix old client
-  // binaries with a new tap must not regress.
   ClientEventCounters c;
   EXPECT_TRUE(ParseAndCountClientEventLine("[StressAvatar:42] OnHpChanged old=100 new=99", c));
   EXPECT_EQ(c.on_hp_changed, 1u);

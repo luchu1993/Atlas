@@ -42,13 +42,19 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--min-spaces", type=int, default=2, help="minimum live Spaces")
     parser.add_argument("--timeout-sec", type=float, default=90.0, help="wait timeout")
     parser.add_argument("--poll-sec", type=float, default=1.0, help="watcher poll interval")
+    parser.add_argument("--cycles", type=int, default=1, help="number of retire-drain cycles")
     parser.add_argument(
         "--drain-watchdog-ms",
         type=int,
         default=None,
         help="optional override for cellappmgr/lb/retire/drain_watchdog_ms",
     )
-    return parser.parse_args()
+    args = parser.parse_args()
+    if args.cycles < 1:
+        parser.error("--cycles must be >= 1")
+    if args.target_app_id and args.cycles != 1:
+        parser.error("--target-app-id cannot be combined with --cycles")
+    return args
 
 
 def run_atlas_tool(exe: Path, machined: str, *cmd: str) -> str:
@@ -74,6 +80,13 @@ def set_watcher(exe: Path, machined: str, path: str, value: str) -> str:
     if len(parts) != 2:
         raise RuntimeError(f"unexpected set-watch output for {path}: {out.strip()}")
     return parts[1]
+
+
+def watcher_int(exe: Path, machined: str, path: str) -> int:
+    value = watcher_value(exe, machined, path)
+    if not value.isdigit():
+        raise RuntimeError(f"watcher {path} returned non-integer value: {value}")
+    return int(value)
 
 
 def parse_cellapps(summary: str) -> list[dict[str, str]]:
@@ -130,6 +143,65 @@ def choose_target(
     return max(owned, key=lambda app_id: (leaf_counts[app_id], app_id))
 
 
+def verify_cycle(args: argparse.Namespace, exe: Path, cycle: int) -> int:
+    cellapps_summary = watcher_value(exe, args.machined, "cellappmgr/lb/cellapps")
+    apps = parse_cellapps(cellapps_summary)
+    if len(apps) < args.min_cellapps:
+        raise RuntimeError(f"need >= {args.min_cellapps} registered CellApps; got {len(apps)}")
+
+    spaces_summary = watcher_value(exe, args.machined, "cellappmgr/lb/spaces")
+    space_count = parse_spaces(spaces_summary)
+    if space_count < args.min_spaces:
+        raise RuntimeError(f"need >= {args.min_spaces} live Spaces; got {space_count}")
+    leaf_counts = parse_leaf_owners(spaces_summary)
+    before_decisions = watcher_int(exe, args.machined, "cellappmgr/lb/decision_count")
+
+    target = choose_target(args, exe, apps, leaf_counts)
+    if args.drain_watchdog_ms is not None:
+        set_watcher(
+            exe,
+            args.machined,
+            "cellappmgr/lb/retire/drain_watchdog_ms",
+            str(args.drain_watchdog_ms),
+        )
+    set_watcher(exe, args.machined, "cellappmgr/lb/retire/app_id", str(target))
+    print(
+        f"[verify_retire_drain] cycle={cycle}/{args.cycles} retiring app_id={target}; "
+        f"spaces={space_count}; leaves={leaf_counts[target]}"
+    )
+
+    deadline = time.monotonic() + args.timeout_sec
+    last_status = ""
+    while time.monotonic() < deadline:
+        status_text = watcher_value(exe, args.machined, "cellappmgr/lb/retire/status")
+        stuck_count = watcher_value(exe, args.machined, "cellappmgr/lb/retire/stuck_count")
+        last_status = f"{status_text}; stuck_count={stuck_count}"
+        statuses = parse_status(status_text)
+        target_status = statuses.get(target)
+        if stuck_count != "0":
+            raise RuntimeError(f"retire drain stuck: {last_status}")
+        if target_status and all(
+            target_status[key] == 0 for key in ("owned", "drains", "pending", "stuck")
+        ) and target_status["ready"] == 1:
+            after_decisions = watcher_int(exe, args.machined, "cellappmgr/lb/decision_count")
+            if after_decisions <= before_decisions:
+                raise RuntimeError(
+                    "retire completed but cellappmgr/lb/decision_count did not advance"
+                )
+            last_decision = watcher_value(exe, args.machined, "cellappmgr/lb/last_decision")
+            if "action=" not in last_decision:
+                raise RuntimeError(f"retire completed with empty LB decision: {last_decision}")
+            print(
+                f"[verify_retire_drain] PASS cycle={cycle}/{args.cycles} "
+                f"decisions={before_decisions}->{after_decisions} {last_status}"
+            )
+            print(f"[verify_retire_drain] last_decision={last_decision}")
+            return target
+        time.sleep(args.poll_sec)
+
+    raise RuntimeError(f"timeout waiting for app_id={target} ready; last={last_status}")
+
+
 def main() -> int:
     args = parse_args()
     exe = args.atlas_tool or default_atlas_tool(args.build)
@@ -139,51 +211,13 @@ def main() -> int:
         return 1
 
     try:
-        cellapps_summary = watcher_value(exe, args.machined, "cellappmgr/lb/cellapps")
-        apps = parse_cellapps(cellapps_summary)
-        if len(apps) < args.min_cellapps:
-            raise RuntimeError(
-                f"need >= {args.min_cellapps} registered CellApps; got {len(apps)}"
-            )
-
-        spaces_summary = watcher_value(exe, args.machined, "cellappmgr/lb/spaces")
-        space_count = parse_spaces(spaces_summary)
-        if space_count < args.min_spaces:
-            raise RuntimeError(f"need >= {args.min_spaces} live Spaces; got {space_count}")
-        leaf_counts = parse_leaf_owners(spaces_summary)
-
-        target = choose_target(args, exe, apps, leaf_counts)
-        if args.drain_watchdog_ms is not None:
-            set_watcher(
-                exe,
-                args.machined,
-                "cellappmgr/lb/retire/drain_watchdog_ms",
-                str(args.drain_watchdog_ms),
-            )
-        set_watcher(exe, args.machined, "cellappmgr/lb/retire/app_id", str(target))
-        print(
-            f"[verify_retire_drain] retiring app_id={target}; "
-            f"spaces={space_count}; leaves={leaf_counts[target]}"
-        )
-
-        deadline = time.monotonic() + args.timeout_sec
-        last_status = ""
-        while time.monotonic() < deadline:
-            status_text = watcher_value(exe, args.machined, "cellappmgr/lb/retire/status")
-            stuck_count = watcher_value(exe, args.machined, "cellappmgr/lb/retire/stuck_count")
-            last_status = f"{status_text}; stuck_count={stuck_count}"
-            statuses = parse_status(status_text)
-            target_status = statuses.get(target)
-            if stuck_count != "0":
-                raise RuntimeError(f"retire drain stuck: {last_status}")
-            if target_status and all(
-                target_status[key] == 0 for key in ("owned", "drains", "pending", "stuck")
-            ) and target_status["ready"] == 1:
-                print(f"[verify_retire_drain] PASS {last_status}")
-                return 0
-            time.sleep(args.poll_sec)
-
-        raise RuntimeError(f"timeout waiting for app_id={target} ready; last={last_status}")
+        for cycle in range(1, args.cycles + 1):
+            verify_cycle(args, exe, cycle)
+            if cycle != args.cycles:
+                set_watcher(exe, args.machined, "cellappmgr/lb/retire/app_id", "0")
+                time.sleep(args.poll_sec)
+        print(f"[verify_retire_drain] PASS cycles={args.cycles}")
+        return 0
     except RuntimeError as ex:
         print(f"[verify_retire_drain] {ex}", file=sys.stderr)
         return 1

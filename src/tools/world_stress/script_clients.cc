@@ -49,6 +49,12 @@ auto ScriptClientHarness::Start() -> Result<void> {
       copts.args.emplace_back(std::to_string(opts_.drop_transport_start_ms));
       copts.args.emplace_back(std::to_string(opts_.drop_transport_duration_ms));
     }
+    if (opts_.transport_impairment_latency_ms > 0 ||
+        opts_.transport_impairment_loss_permyriad > 0) {
+      copts.args.emplace_back("--impair-transport-ms");
+      copts.args.emplace_back(std::to_string(opts_.transport_impairment_latency_ms));
+      copts.args.emplace_back(std::to_string(opts_.transport_impairment_loss_permyriad));
+    }
 
     auto r = ChildProcess::Start(std::move(copts));
     if (!r.HasValue()) {
@@ -94,28 +100,40 @@ auto ScriptClientHarness::PrintSummary() const -> bool {
 
   std::cout << "\n[script-clients] per-child event summary:\n";
   std::cout << std::format(
-      "  {:<24}  {:>5}  {:>5}  {:>3}  {:>4}  {:>5}  {:>4}  {:>4}  {:>4}  {:>4}  {:>4}  {:>5}  "
-      "{:>5}\n",
+      "  {:<24}  {:>5}  {:>5}  {:>3}  {:>4}  {:>5}  {:>4}  {:>4}  {:>4}  "
+      "{:>4}  {:>4}  {:>5}  {:>5}  {:>5}  {:>4}  {:>4}  {:>4}  {:>5}  {:>5}\n",
       "username", "init", "enter", "dst", "hp", "wepCh", "wepBr", "scrSn", "afxUp", "bcst", "pos",
-      "gaps", "unprs");
+      "mIn", "mAck", "mRpt", "mc1", "mc2", "snap", "gaps", "unprs");
 
   bool all_ok = true;
   for (const auto& child : children_) {
     const auto& c = child.counters;
     std::cout << std::format(
-        "  {:<24}  {:>5}  {:>5}  {:>3}  {:>4}  {:>5}  {:>4}  {:>5}  {:>5}  {:>4}  {:>4}  {:>5}  "
-        "{:>5}\n",
+        "  {:<24}  {:>5}  {:>5}  {:>3}  {:>4}  {:>5}  {:>4}  {:>5}  {:>5}  "
+        "{:>4}  {:>4}  {:>5}  {:>5}  {:>5}  {:>4}  {:>4}  {:>4}  {:>5}  {:>5}\n",
         child.username, c.on_init, c.on_enter_world, c.on_destroy, c.on_hp_changed,
         c.on_main_weapon_changed, c.on_weapon_broken, c.on_scores_snapshot, c.on_affixes_updated,
-        c.on_area_broadcast, c.on_position_updated, c.event_seq_gaps, c.unparsed_lines);
+        c.on_area_broadcast, c.on_position_updated, c.movement_input_sent, c.movement_ack,
+        c.movement_report_sent, c.movement_correction_tier1, c.movement_correction_tier2,
+        c.movement_correction_snap, c.event_seq_gaps, c.unparsed_lines);
     if (opts_.verify) {
-      // Minimum bar: the child's own StressAvatar at least got created.
-      // OnEnterWorld is nice-to-have (depends on AoI peer or baseline
-      // delivery); we accept a child that OnInit'd even if no OnEnterWorld
-      // fired to keep the harness useful at --script-clients 1.
-      if (c.on_init == 0) {
+      if (!ClientEventCountersPassScriptVerify(c)) {
         all_ok = false;
-        std::cout << std::format("    └── FAIL: no OnInit observed for {}\n", child.username);
+        if (c.on_init == 0) {
+          std::cout << std::format("    FAIL: no OnInit observed for {}\n", child.username);
+        }
+        if (c.movement_input_sent == 0) {
+          std::cout << std::format("    FAIL: no movement input observed for {}\n",
+                                   child.username);
+        }
+        if (c.movement_ack == 0) {
+          std::cout << std::format("    FAIL: no MovementStateAck observed for {}\n",
+                                   child.username);
+        }
+        if (c.movement_report_sent == 0) {
+          std::cout << std::format("    FAIL: no correction report observed for {}\n",
+                                   child.username);
+        }
       }
     }
   }

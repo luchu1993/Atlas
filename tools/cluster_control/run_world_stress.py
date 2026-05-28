@@ -20,6 +20,56 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from common.paths import REPO_ROOT, dotnet_tfm_dir, resolve_repo_root  # noqa: F401
 
 
+PROCESS_ROW_RE = re.compile(
+    r"^(?P<type>\w+)\s+(?P<name>\S+)\s+(?P<addr>\S+)\s+(?P<pid>\d+)\s+"
+    r"(?P<load>[\d.]+)%"
+)
+
+BASEAPP_MOVEMENT_WATCHERS: list[tuple[str, str]] = [
+    ("in", "movement/input_packets_total"),
+    ("fwd", "movement/input_forwarded_total"),
+    ("drop", "movement/input_dropped_total"),
+    ("rate", "movement/input_rate_limited_total"),
+    ("invalid", "movement/input_invalid_dropped_total"),
+    ("stale", "movement/input_stale_dropped_total"),
+    ("seqgap", "movement/input_seq_gap_dropped_total"),
+    ("ack", "movement/ack_sent_total"),
+    ("ackstale", "movement/ack_stale_dropped_total"),
+    ("c1", "movement/correction_tier1_total"),
+    ("c2", "movement/correction_tier2_total"),
+    ("snap", "movement/correction_snap_total"),
+    ("sus", "movement/correction_suspicious_total"),
+    ("rpt", "movement/correction_report_total"),
+    ("rptdrop", "movement/correction_report_dropped_total"),
+]
+
+CELLAPP_MOVEMENT_WATCHERS: list[tuple[str, str]] = [
+    ("in", "movement/input_packets_total"),
+    ("frames", "movement/input_frames_enqueued_total"),
+    ("drop", "movement/input_dropped_total"),
+    ("rate", "movement/input_rate_limited_total"),
+    ("invalid", "movement/input_invalid_dropped_total"),
+    ("stale", "movement/input_stale_dropped_total"),
+    ("seqgap", "movement/input_seq_gap_dropped_total"),
+    ("overflow", "movement/input_overflow_dropped_total"),
+    ("depth", "movement/input_queue_depth"),
+    ("sim", "movement/frames_simulated_total"),
+    ("hist", "movement/position_history_samples_recorded_total"),
+    ("ack", "movement/ack_sent_total"),
+    ("p95us", "movement/step_time_us_p95"),
+]
+
+
+def pct_int(value: str) -> int:
+    try:
+        parsed = int(value)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError("must be an integer in [0, 100]") from exc
+    if parsed < 0 or parsed > 100:
+        raise argparse.ArgumentTypeError("must be an integer in [0, 100]")
+    return parsed
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Bring up a local Atlas cluster (incl. CellApp) and run world_stress."
@@ -37,9 +87,50 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--baseappmgr-port", type=int, default=23001)
     parser.add_argument("--dbapp-port", type=int, default=24001)
     parser.add_argument("--cellappmgr-port", type=int, default=25001)
+    parser.add_argument("--reviver-port", type=int, default=27001)
     parser.add_argument("--cellapp-internal-port", type=int, default=26001)
     parser.add_argument("--cellapp-count", type=int, default=1)
     parser.add_argument("--cellapp-internal-port-stride", type=int, default=1)
+    parser.add_argument(
+        "--with-cellappmgr-reviver",
+        action="store_true",
+        help="Start atlas_reviver to supervise CellAppMgr.",
+    )
+    parser.add_argument(
+        "--cellappmgr-reviver-count",
+        type=int,
+        default=1,
+        help="Number of Reviver processes to start; >1 shares the leader lock as standby.",
+    )
+    parser.add_argument(
+        "--reviver-port-stride",
+        type=int,
+        default=1,
+        help="Internal port stride for additional Reviver processes.",
+    )
+    parser.add_argument(
+        "--cellappmgr-snapshot-path",
+        default=None,
+        help="CellAppMgr HA snapshot path. Defaults under .tmp when Reviver is enabled.",
+    )
+    parser.add_argument("--cellappmgr-snapshot-interval-ms", type=int, default=250)
+    parser.add_argument(
+        "--reviver-leader-lock-path",
+        default=None,
+        help="Reviver leader lock path. Defaults under .tmp when Reviver is enabled.",
+    )
+    parser.add_argument("--reviver-restart-delay-ms", type=int, default=1000)
+    parser.add_argument("--reviver-heartbeat-timeout-ms", type=int, default=4000)
+    parser.add_argument("--reviver-max-restarts", type=int, default=3)
+    parser.add_argument(
+        "--reviver-leader-lock-mode",
+        choices=("local", "machined"),
+        default="local",
+        help="Reviver leader lock backend: 'local' file lock (default, single host) or "
+             "'machined' distributed lease (cross-host capable).",
+    )
+    parser.add_argument("--reviver-leader-lock-ttl-ms", type=int, default=8000)
+    parser.add_argument("--reviver-leader-lock-renew-ms", type=int, default=3000)
     parser.add_argument("--clients", type=int, default=0)
     parser.add_argument("--account-pool", type=int, default=0)
     parser.add_argument("--account-index-base", type=int, default=0)
@@ -50,6 +141,16 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--shortline-max-ms", type=int, default=5000)
     parser.add_argument("--rpc-rate-hz", type=int, default=2)
     parser.add_argument("--move-rate-hz", type=int, default=10)
+    parser.add_argument("--move-mode", choices=("report-pos", "input"), default="report-pos")
+    parser.add_argument("--movement-input-redundant-frames", type=int, choices=range(1, 4),
+                        default=1)
+    parser.add_argument("--movement-input-drop-pct", type=pct_int, default=0)
+    parser.add_argument("--movement-input-reorder-pct", type=pct_int, default=0)
+    parser.add_argument(
+        "--movement-verify",
+        action="store_true",
+        help="Fail if BaseApp/CellApp movement watchers do not prove the input path.",
+    )
     parser.add_argument("--spread-radius", type=float, default=0.0)
     parser.add_argument("--space-count", type=int, default=1)
     parser.add_argument("--hold-min-ms", type=int, default=30000)
@@ -97,12 +198,13 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--teleport-pct", type=int, default=None,
                         help="Pct of ReportPos replaced by jumps; exercises RangeTrigger paths.")
 
-    # cellapp is the authoritative spatial tick; baseapp 1.5–2× cellapp; managers 10 Hz.
+    # cellapp is the authoritative spatial tick; baseapp 1.5-2x cellapp; managers 10 Hz.
     parser.add_argument("--cellapp-update-hertz", type=int, default=15)
     parser.add_argument("--baseapp-update-hertz", type=int, default=15)
     parser.add_argument("--loginapp-update-hertz", type=int, default=20)
     parser.add_argument("--baseappmgr-update-hertz", type=int, default=10)
     parser.add_argument("--cellappmgr-update-hertz", type=int, default=10)
+    parser.add_argument("--reviver-update-hertz", type=int, default=10)
     parser.add_argument("--dbapp-update-hertz", type=int, default=10)
     parser.add_argument(
         "--capture-dir", default=None,
@@ -122,23 +224,28 @@ def parse_args() -> argparse.Namespace:
                              "alongside virtual clients (script_client_smoke.md)")
     parser.add_argument("--client-exe", default=None,
                         help="Path to atlas_client.exe. Defaults to "
-                             "<build-dir>/src/client/<config>/atlas_client.exe")
+                             "bin/<build>/atlas_client.exe")
     parser.add_argument("--client-assembly", default=None,
                         help="Path to Atlas.ClientSample.dll. Defaults to "
-                             "samples/client/bin/<config>/<tfm>/Atlas.ClientSample.dll")
+                             "bin/<build>/Atlas.ClientSample.dll")
     parser.add_argument("--client-runtime-config", default=None,
                         help="Optional hostfxr *.runtimeconfig.json forwarded to each child")
     parser.add_argument("--script-username-prefix", default="script_user_")
     parser.add_argument("--script-verify", action="store_true",
-                        help="Fail the orchestrator run if any script child didn't observe OnInit")
+                        help="Fail if a script child misses OnInit, movement input, "
+                             "movement ack, or correction report")
     parser.add_argument("--client-drop-inbound-ms", nargs=2, type=int,
                         metavar=("START", "DURATION"), default=None,
                         help="Forward atlas_client --drop-inbound-ms (app-level drop of "
-                             "state-channel messages; script_client_smoke.md 场景 2)")
+                             "state-channel messages; script_client_smoke.md scenario 2)")
     parser.add_argument("--client-drop-transport-ms", nargs=2, type=int,
                         metavar=("START", "DURATION"), default=None,
                         help="Forward atlas_client --drop-transport-ms (RUDP-layer drop; "
-                             "reliable retransmit recovers; script_client_smoke.md 场景 3)")
+                             "reliable retransmit recovers; script_client_smoke.md scenario 3)")
+    parser.add_argument("--client-transport-impairment-ms", nargs=2, type=int,
+                        metavar=("LATENCY", "LOSS_PERMYRIAD"), default=None,
+                        help="Forward atlas_client --impair-transport-ms. LATENCY is "
+                             "one-way per direction; 200 loss-permyriad means 2%%")
     return parser.parse_args()
 
 
@@ -157,6 +264,216 @@ def print_registered_processes(atlas_tool: Path, machined_address: str, repo_roo
         check=False,
         env=_dll_env(atlas_tool),
     )
+
+
+def run_atlas_tool_query(
+    atlas_tool: Path,
+    machined_address: str,
+    repo_root: Path,
+    *args: str,
+) -> subprocess.CompletedProcess[str] | None:
+    try:
+        return subprocess.run(
+            [str(atlas_tool), "--machined", machined_address, *args],
+            capture_output=True,
+            text=True,
+            timeout=10,
+            cwd=repo_root,
+            env=_dll_env(atlas_tool),
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+
+
+def list_registered_process_names(
+    atlas_tool: Path,
+    machined_address: str,
+    repo_root: Path,
+    process_type: str,
+) -> list[str]:
+    result = run_atlas_tool_query(
+        atlas_tool,
+        machined_address,
+        repo_root,
+        "list",
+        process_type,
+    )
+    if result is None or result.returncode != 0:
+        return []
+    names: list[str] = []
+    for raw_line in result.stdout.splitlines():
+        match = PROCESS_ROW_RE.match(raw_line.strip())
+        if match and match.group("type") == process_type:
+            names.append(match.group("name"))
+    return names
+
+
+def query_watcher_value(
+    atlas_tool: Path,
+    machined_address: str,
+    repo_root: Path,
+    target: str,
+    path: str,
+) -> str:
+    result = run_atlas_tool_query(
+        atlas_tool,
+        machined_address,
+        repo_root,
+        "watch",
+        target,
+        path,
+    )
+    if result is None or result.returncode != 0:
+        return "?"
+    parts = result.stdout.strip().split(maxsplit=1)
+    return parts[1] if len(parts) == 2 else "?"
+
+
+def collect_movement_watcher_rows(
+    *,
+    atlas_tool: Path,
+    machined_address: str,
+    repo_root: Path,
+    process_type: str,
+    watchers: list[tuple[str, str]],
+) -> list[dict[str, str]]:
+    rows: list[dict[str, str]] = []
+    names = list_registered_process_names(
+        atlas_tool,
+        machined_address,
+        repo_root,
+        process_type,
+    )
+    for name in names:
+        row = {"name": name}
+        target = f"{process_type}:{name}"
+        for label, path in watchers:
+            row[label] = query_watcher_value(
+                atlas_tool,
+                machined_address,
+                repo_root,
+                target,
+                path,
+            )
+        rows.append(row)
+    return rows
+
+
+def print_watcher_rows(headers: list[str], rows: list[dict[str, str]], indent: str) -> None:
+    widths = {h: max(len(h), *(len(row[h]) for row in rows)) for h in headers}
+    log(indent + "  ".join(f"{h:<{widths[h]}}" for h in headers))
+    log(indent + "  ".join("-" * widths[h] for h in headers))
+    for row in rows:
+        log(indent + "  ".join(f"{row[h]:<{widths[h]}}" for h in headers))
+
+
+def print_movement_watcher_table(
+    *,
+    atlas_tool: Path,
+    machined_address: str,
+    repo_root: Path,
+    title: str,
+    process_type: str,
+    watchers: list[tuple[str, str]],
+) -> list[dict[str, str]]:
+    rows = collect_movement_watcher_rows(
+        atlas_tool=atlas_tool,
+        machined_address=machined_address,
+        repo_root=repo_root,
+        process_type=process_type,
+        watchers=watchers,
+    )
+    if not rows:
+        log(f"  {title}: (none)")
+        return rows
+
+    log(f"  {title}:")
+    print_watcher_rows(["name", *[label for label, _ in watchers]], rows, "    ")
+    return rows
+
+
+def print_movement_watcher_summary(
+    atlas_tool: Path,
+    machined_address: str,
+    repo_root: Path,
+) -> tuple[list[dict[str, str]], list[dict[str, str]]]:
+    log("Movement watcher summary:")
+    base_rows = print_movement_watcher_table(
+        atlas_tool=atlas_tool,
+        machined_address=machined_address,
+        repo_root=repo_root,
+        title="BaseApp",
+        process_type="baseapp",
+        watchers=BASEAPP_MOVEMENT_WATCHERS,
+    )
+    cell_rows = print_movement_watcher_table(
+        atlas_tool=atlas_tool,
+        machined_address=machined_address,
+        repo_root=repo_root,
+        title="CellApp",
+        process_type="cellapp",
+        watchers=CELLAPP_MOVEMENT_WATCHERS,
+    )
+    return base_rows, cell_rows
+
+
+def watcher_total(rows: list[dict[str, str]], label: str) -> int | None:
+    if not rows:
+        return None
+    total = 0
+    for row in rows:
+        try:
+            total += int(row[label])
+        except (KeyError, ValueError):
+            return None
+    return total
+
+
+def verify_positive_watcher(
+    errors: list[str],
+    title: str,
+    rows: list[dict[str, str]],
+    label: str,
+) -> None:
+    total = watcher_total(rows, label)
+    if total is None:
+        errors.append(f"{title}.{label}: missing or unreadable")
+    elif total <= 0:
+        errors.append(f"{title}.{label}: expected > 0, got {total}")
+
+
+def verify_zero_watcher(
+    errors: list[str],
+    title: str,
+    rows: list[dict[str, str]],
+    label: str,
+) -> None:
+    total = watcher_total(rows, label)
+    if total is None:
+        errors.append(f"{title}.{label}: missing or unreadable")
+    elif total != 0:
+        errors.append(f"{title}.{label}: expected 0, got {total}")
+
+
+def verify_movement_watchers(
+    base_rows: list[dict[str, str]],
+    cell_rows: list[dict[str, str]],
+    *,
+    require_reports: bool,
+) -> list[str]:
+    errors: list[str] = []
+    base_positive = ["in", "fwd", "ack"]
+    if require_reports:
+        base_positive.append("rpt")
+    for label in base_positive:
+        verify_positive_watcher(errors, "BaseApp", base_rows, label)
+    for label in ("rate", "invalid", "seqgap", "ackstale", "rptdrop"):
+        verify_zero_watcher(errors, "BaseApp", base_rows, label)
+    for label in ("in", "frames", "sim", "hist", "ack"):
+        verify_positive_watcher(errors, "CellApp", cell_rows, label)
+    for label in ("rate", "invalid", "seqgap", "overflow"):
+        verify_zero_watcher(errors, "CellApp", cell_rows, label)
+    return errors
 
 
 def scan_cellapp_audits(log_dir: Path) -> list[str]:
@@ -181,6 +498,15 @@ def scan_cellapp_audits(log_dir: Path) -> list[str]:
 def assert_file_exists(path: Path, label: str) -> None:
     if not path.exists():
         fail(f"{label} not found: {path}")
+
+
+def resolve_optional_path(repo_root: Path, value: str | None) -> Path | None:
+    if not value:
+        return None
+    path = Path(value)
+    if not path.is_absolute():
+        path = repo_root / path
+    return path
 
 
 def parse_source_ip_file(path: Path) -> list[str]:
@@ -281,7 +607,7 @@ def build_worker_plan(args: argparse.Namespace, source_ips: list[str]) -> list[d
 
 
 def _config_to_snake(config: str) -> str:
-    """Convert PascalCase config name to snake_case (RelWithDebInfo → rel_with_deb_info)."""
+    """Convert PascalCase config name to snake_case (RelWithDebInfo -> rel_with_deb_info)."""
     import re
     return re.sub(r"([a-z])([A-Z])", r"\1_\2", config).lower()
 
@@ -327,7 +653,7 @@ def _tracy_port_for_pid(pid: int, timeout_sec: float = 8.0) -> int | None:
                 ["ss", "-tlnp"],
                 capture_output=True, text=True,
             )
-            # crude grep for pid in ss output — good enough for dev use
+            # Crude grep for pid in ss output is good enough for dev use.
             port = None
             for line in result.stdout.splitlines():
                 if f"pid={pid}" in line:
@@ -374,7 +700,7 @@ def start_tracy_captures(
             log(f"[capture] {proc_entry.name}: Tracy port not found for pid={pid}, skipping")
             continue
         out_file = capture_dir / f"{proc_entry.name}_{git_hash}_{timestamp}.tracy"
-        log(f"[capture] {proc_entry.name} pid={pid} port={port} → {out_file.name}")
+        log(f"[capture] {proc_entry.name} pid={pid} port={port} -> {out_file.name}")
         captures.append(
             subprocess.Popen(
                 [str(capture_exe), "-a", "127.0.0.1", "-p", str(port),
@@ -507,6 +833,26 @@ def stop_logged_processes(processes: list[LoggedProcess]) -> None:
                 entry.stderr_handle.close()
 
 
+def request_shutdown_target(
+    atlas_tool: Path, machined_address: str, repo_root: Path, target: str, reason: int
+) -> None:
+    subprocess.run(
+        [
+            str(atlas_tool),
+            "--machined",
+            machined_address,
+            "shutdown",
+            target,
+            str(reason),
+        ],
+        cwd=repo_root,
+        check=False,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        env=_dll_env(atlas_tool),
+    )
+
+
 def wait_for_registration(
     *,
     atlas_tool: Path,
@@ -626,6 +972,14 @@ def build_stress_args(
         str(args.rpc_rate_hz),
         "--move-rate-hz",
         str(args.move_rate_hz),
+        "--move-mode",
+        args.move_mode,
+        "--movement-input-redundant-frames",
+        str(args.movement_input_redundant_frames),
+        "--movement-input-drop-pct",
+        str(args.movement_input_drop_pct),
+        "--movement-input-reorder-pct",
+        str(args.movement_input_reorder_pct),
         "--spread-radius",
         str(args.spread_radius),
         "--space-count",
@@ -641,16 +995,19 @@ def build_stress_args(
     if args.verbose_failures:
         stress_args.append("--verbose-failures")
 
-    # Only shard 0 spawns script children — others would race for the same usernames.
+    # Only shard 0 spawns script children; others would race for the same usernames.
     is_primary_worker = int(worker["global_worker_index"]) == 0
     if args.script_clients > 0 and is_primary_worker:
         stress_args.extend(["--script-clients", str(args.script_clients)])
         client_exe = args.client_exe or default_client_exe(args)
         client_assembly = args.client_assembly or default_client_assembly(args)
+        client_runtime_config = args.client_runtime_config or default_client_runtime_config(
+            args, client_assembly
+        )
         stress_args.extend(["--client-exe", str(client_exe)])
         stress_args.extend(["--client-assembly", str(client_assembly)])
-        if args.client_runtime_config:
-            stress_args.extend(["--client-runtime-config", str(args.client_runtime_config)])
+        if client_runtime_config:
+            stress_args.extend(["--client-runtime-config", str(client_runtime_config)])
         if args.script_username_prefix != "script_user_":
             stress_args.extend(["--script-username-prefix", args.script_username_prefix])
         if args.script_verify:
@@ -664,6 +1021,11 @@ def build_stress_args(
             start_ms, duration_ms = args.client_drop_transport_ms
             stress_args.extend([
                 "--client-drop-transport-ms", str(start_ms), str(duration_ms),
+            ])
+        if args.client_transport_impairment_ms:
+            latency_ms, loss_permyriad = args.client_transport_impairment_ms
+            stress_args.extend([
+                "--client-transport-impairment-ms", str(latency_ms), str(loss_permyriad),
             ])
     return stress_args
 
@@ -727,9 +1089,24 @@ def default_client_exe(args: argparse.Namespace) -> Path:
 
 
 def default_client_assembly(args: argparse.Namespace) -> Path:
-    # ClientSample csproj has no AppendPlatformToOutputPath — drops to bin/<Config>/<tfm>/.
+    bin_name = Path(args.build_dir).name
+    deployed = resolve_repo_root() / "bin" / bin_name / "Atlas.ClientSample.dll"
+    if deployed.exists():
+        return deployed
     config_dir = resolve_repo_root() / "samples" / "client" / "bin" / args.config
     return dotnet_tfm_dir(config_dir) / "Atlas.ClientSample.dll"
+
+
+def default_client_runtime_config(
+    args: argparse.Namespace, client_assembly: Path | str
+) -> Path | None:
+    assembly = Path(client_assembly)
+    sibling = assembly.parent / f"{assembly.stem}.runtimeconfig.json"
+    if sibling.exists():
+        return sibling
+    config_dir = resolve_repo_root() / "samples" / "client" / "bin" / args.config
+    sample = dotnet_tfm_dir(config_dir) / "Atlas.ClientSample.runtimeconfig.json"
+    return sample if sample.exists() else None
 
 
 def build_baseapp_specs(args: argparse.Namespace) -> list[dict[str, object]]:
@@ -764,12 +1141,93 @@ def build_cellapp_specs(args: argparse.Namespace) -> list[dict[str, object]]:
     return specs
 
 
+def build_reviver_specs(args: argparse.Namespace) -> list[dict[str, object]]:
+    specs: list[dict[str, object]] = []
+    for index in range(args.cellappmgr_reviver_count):
+        specs.append(
+            {
+                "index": index,
+                "name": "reviver" if index == 0 else f"reviver_{index:02d}",
+                "log_name": "reviver" if index == 0 else f"reviver_{index:02d}",
+                "internal_port": args.reviver_port + index * args.reviver_port_stride,
+            }
+        )
+    return specs
+
+
+def build_reviver_args(
+    args: argparse.Namespace,
+    spec: dict[str, object],
+    machined_address: str,
+    cellappmgr: Path,
+    cellappmgr_snapshot_path: Path | None,
+    reviver_leader_lock_path: Path | None,
+    revived_cellappmgr_output_path: Path | None,
+) -> list[str]:
+    reviver_args = [
+        "--type",
+        "reviver",
+        "--name",
+        str(spec["name"]),
+        "--machined",
+        machined_address,
+        "--internal-port",
+        str(spec["internal_port"]),
+        "--update-hertz",
+        str(args.reviver_update_hertz),
+        "--revive-cellappmgr-exe",
+        str(cellappmgr),
+        "--revive-cellappmgr-name",
+        "cellappmgr",
+        "--revive-cellappmgr-port",
+        str(args.cellappmgr_port),
+        "--revive-cellappmgr-on-start",
+        "true",
+        "--revive-cellappmgr-update-hertz",
+        str(args.cellappmgr_update_hertz),
+        "--revive-cellappmgr-output-path",
+        str(revived_cellappmgr_output_path),
+        "--revive-cellappmgr-heartbeat-timeout-ms",
+        str(args.reviver_heartbeat_timeout_ms),
+        "--revive-restart-delay-ms",
+        str(args.reviver_restart_delay_ms),
+        "--revive-max-restarts",
+        str(args.reviver_max_restarts),
+        "--log-level",
+        "info",
+    ]
+    if cellappmgr_snapshot_path is not None:
+        reviver_args.extend(
+            [
+                "--revive-cellappmgr-snapshot-path",
+                str(cellappmgr_snapshot_path),
+                "--revive-cellappmgr-snapshot-interval-ms",
+                str(args.cellappmgr_snapshot_interval_ms),
+            ]
+        )
+    if reviver_leader_lock_path is not None:
+        reviver_args.extend(["--revive-leader-lock-path", str(reviver_leader_lock_path)])
+    reviver_args.extend([
+        "--revive-leader-lock-mode", args.reviver_leader_lock_mode,
+        "--revive-leader-lock-ttl-ms", str(args.reviver_leader_lock_ttl_ms),
+        "--revive-leader-lock-renew-ms", str(args.reviver_leader_lock_renew_ms),
+    ])
+    return reviver_args
+
+
 def main() -> int:
     args = parse_args()
+    if args.cellappmgr_reviver_count < 1:
+        fail("--cellappmgr-reviver-count must be >= 1")
+    if args.reviver_port_stride <= 0:
+        fail("--reviver-port-stride must be >= 1")
+    if not args.with_cellappmgr_reviver and args.cellappmgr_reviver_count != 1:
+        fail("--cellappmgr-reviver-count requires --with-cellappmgr-reviver")
     source_ips = collect_source_ips(args)
     worker_plan = build_worker_plan(args, source_ips)
     baseapp_specs = build_baseapp_specs(args)
     cellapp_specs = build_cellapp_specs(args)
+    reviver_specs = build_reviver_specs(args)
 
     repo_root = resolve_repo_root()
     runtime_config = repo_root / "runtime" / "atlas_server.runtimeconfig.json"
@@ -797,6 +1255,7 @@ def main() -> int:
     dbapp = resolve_program(repo_root, bin_name, search_subdirs, "atlas_dbapp")
     cellapp = resolve_program(repo_root, bin_name, search_subdirs, "atlas_cellapp")
     cellappmgr = resolve_program(repo_root, bin_name, search_subdirs, "atlas_cellappmgr")
+    reviver = resolve_program(repo_root, bin_name, search_subdirs, "atlas_reviver")
 
     assert_file_exists(machined, machined.name)
     assert_file_exists(loginapp, loginapp.name)
@@ -805,6 +1264,8 @@ def main() -> int:
     assert_file_exists(dbapp, dbapp.name)
     assert_file_exists(cellapp, cellapp.name)
     assert_file_exists(cellappmgr, cellappmgr.name)
+    if args.with_cellappmgr_reviver:
+        assert_file_exists(reviver, reviver.name)
     assert_file_exists(atlas_tool, atlas_tool.name)
     assert_file_exists(runtime_config, runtime_config.name)
     assert_file_exists(base_assembly, base_assembly.name)
@@ -825,7 +1286,22 @@ def main() -> int:
     run_root = repo_root / ".tmp" / "world-stress" / timestamp
     log_dir = run_root / "logs"
     db_dir = run_root / "db"
+    ha_dir = run_root / "ha"
     db_config_path = run_root / "dbapp.json"
+    revived_cellappmgr_output_path = (
+        log_dir / "cellappmgr_revived.log" if args.with_cellappmgr_reviver else None
+    )
+    cellappmgr_snapshot_path = resolve_optional_path(
+        repo_root, args.cellappmgr_snapshot_path
+    )
+    reviver_leader_lock_path = resolve_optional_path(
+        repo_root, args.reviver_leader_lock_path
+    )
+    if args.with_cellappmgr_reviver:
+        if cellappmgr_snapshot_path is None:
+            cellappmgr_snapshot_path = ha_dir / "cellappmgr.bin"
+        if reviver_leader_lock_path is None:
+            reviver_leader_lock_path = ha_dir / "reviver_cellappmgr.lock"
 
     capture_exe: Path | None = None
     capture_dir: Path | None = None
@@ -840,6 +1316,10 @@ def main() -> int:
 
     log_dir.mkdir(parents=True, exist_ok=True)
     db_dir.mkdir(parents=True, exist_ok=True)
+    if cellappmgr_snapshot_path is not None:
+        cellappmgr_snapshot_path.parent.mkdir(parents=True, exist_ok=True)
+    if reviver_leader_lock_path is not None:
+        reviver_leader_lock_path.parent.mkdir(parents=True, exist_ok=True)
 
     machined_address = f"{args.machined_host}:{args.machined_port}"
     db_config_path.write_text(
@@ -943,35 +1423,65 @@ def main() -> int:
         processes[-1].start_order = 5
         time.sleep(1)
 
+        cellappmgr_args = [
+            "--type",
+            "cellappmgr",
+            "--name",
+            "cellappmgr",
+            "--machined",
+            machined_address,
+            "--internal-port",
+            str(args.cellappmgr_port),
+            "--update-hertz",
+            str(args.cellappmgr_update_hertz),
+            "--log-level",
+            "info",
+        ]
+        if cellappmgr_snapshot_path is not None:
+            cellappmgr_args.extend(
+                [
+                    "--snapshot-path",
+                    str(cellappmgr_snapshot_path),
+                    "--snapshot-interval-ms",
+                    str(args.cellappmgr_snapshot_interval_ms),
+                ]
+            )
         processes.append(
             start_logged_process(
                 name="cellappmgr",
                 file_path=cellappmgr,
                 working_directory=repo_root,
                 log_directory=log_dir,
-                arguments=[
-                    "--type",
-                    "cellappmgr",
-                    "--name",
-                    "cellappmgr",
-                    "--machined",
-                    machined_address,
-                    "--internal-port",
-                    str(args.cellappmgr_port),
-                    "--update-hertz",
-                    str(args.cellappmgr_update_hertz),
-                    "--log-level",
-                    "info",
-                ],
+                arguments=cellappmgr_args,
             )
         )
         processes[-1].start_order = 6
         time.sleep(1)
 
-        # Launch cellapps BEFORE baseapps so BaseApp's CreateSpaceRequest sees
-        # the full host pool and BootstrapMultiCellPartition fans out N cells
-        # in one pass instead of the elastic-grow fallback drip-feeding cells
-        # one cellapp registration at a time.
+        if args.with_cellappmgr_reviver:
+            for reviver_spec in reviver_specs:
+                processes.append(
+                    start_logged_process(
+                        name=str(reviver_spec["log_name"]),
+                        file_path=reviver,
+                        working_directory=repo_root,
+                        log_directory=log_dir,
+                        arguments=build_reviver_args(
+                            args,
+                            reviver_spec,
+                            machined_address,
+                            cellappmgr,
+                            cellappmgr_snapshot_path,
+                            reviver_leader_lock_path,
+                            revived_cellappmgr_output_path,
+                        ),
+                    )
+                )
+                processes[-1].start_order = 8
+                time.sleep(1)
+
+        # Launch CellApps before BaseApps so CreateSpace sees the full host pool.
+        # This avoids elastic-grow drip-feeding cells one registration at a time.
         for cellapp_spec in cellapp_specs:
             processes.append(
                 start_logged_process(
@@ -1069,6 +1579,19 @@ def main() -> int:
                 ),
             )
         )
+        if args.with_cellappmgr_reviver:
+            for reviver_spec in reviver_specs:
+                registrations.append(
+                    (
+                        str(reviver_spec["name"]),
+                        wait_for_registration(
+                            atlas_tool=atlas_tool,
+                            machined_address=machined_address,
+                            proc_type="reviver",
+                            name=str(reviver_spec["name"]),
+                        ),
+                    )
+                )
         for baseapp_spec in baseapp_specs:
             registrations.append(
                 (
@@ -1224,10 +1747,35 @@ def main() -> int:
             if active_captures and capture_dir:
                 log(f"[capture] Tracy traces saved to {capture_dir}")
 
+        movement_verify_errors: list[str] = []
+        movement_summary = (
+            args.script_clients > 0 or args.move_mode == "input" or args.movement_verify
+        )
+        if movement_summary:
+            log("")
+            base_rows, cell_rows = print_movement_watcher_summary(
+                atlas_tool,
+                machined_address,
+                repo_root,
+            )
+            if args.script_verify or args.movement_verify:
+                movement_verify_errors = verify_movement_watchers(
+                    base_rows,
+                    cell_rows,
+                    require_reports=args.script_clients > 0,
+                )
+
         log("")
         log("Run artifacts:")
         log(f"  logs: {log_dir}")
         log(f"  db:   {db_dir}")
+
+        if movement_verify_errors:
+            gate = "script-verify" if args.script_verify else "movement-verify"
+            log(f"[{gate}] movement watcher gate failed:")
+            for error in movement_verify_errors:
+                log(f"  {error}")
+            return 4
 
         if args.keep_cluster:
             log("Keeping cluster alive. Stop the spawned processes manually when done.")
@@ -1246,6 +1794,11 @@ def main() -> int:
         return 0 if not missing else 2
     finally:
         if processes:
+            if args.with_cellappmgr_reviver:
+                request_shutdown_target(
+                    atlas_tool, machined_address, repo_root, "cellappmgr:cellappmgr", 0
+                )
+                time.sleep(1)
             stop_logged_processes(processes)
 
 

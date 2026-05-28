@@ -14,21 +14,6 @@
 
 namespace atlas::world_stress {
 
-// ============================================================================
-// ScriptClientHarness — runs N real atlas_client.exe children alongside the
-// stress harness's virtual clients and verifies the client callback contract
-// end-to-end via stdout greps.
-//
-// Lifecycle from main.cc's point of view:
-//     harness.Start()            // before the main loop
-//     while (running) {
-//         harness.Pump();        // every iteration, after ProcessOnce
-//         ...
-//     }
-//     harness.ShutdownAndWait(3s);
-//     bool ok = harness.PrintSummary();
-// ============================================================================
-
 struct ScriptClientOptions {
   std::filesystem::path exe;             // atlas_client.exe
   std::filesystem::path assembly;        // Atlas.ClientSample.dll
@@ -38,16 +23,17 @@ struct ScriptClientOptions {
   std::string password_hash;    // forwarded as --password
   std::string username_prefix;  // each child gets `<prefix><N>` for N in 0..count
   std::size_t username_index_base{0};
-  std::size_t count{0};  // zero → harness is inert
-  bool verify{false};    // PrintSummary returns false on threshold miss
+  std::size_t count{0};  // zero means the harness is inert
+  bool verify{false};    // PrintSummary returns false on threshold miss.
   // Forwarded to each child as `--drop-inbound-ms start duration`. 0/0 = off.
   int drop_inbound_start_ms{0};
   int drop_inbound_duration_ms{0};
-  // Forwarded as `--drop-transport-ms start duration`. Validates RUDP
-  // reliable retransmit recovery; use drop_inbound_* to validate the
-  // application-level gap detection + baseline fallback instead.
+  // Forwarded as `--drop-transport-ms start duration`. Validates RUDP recovery;
+  // use drop_inbound_* for app-level gap detection + baseline fallback.
   int drop_transport_start_ms{0};
   int drop_transport_duration_ms{0};
+  int transport_impairment_latency_ms{0};
+  int transport_impairment_loss_permyriad{0};
 };
 
 class ScriptClientHarness {
@@ -68,9 +54,7 @@ class ScriptClientHarness {
   // `timeout` total for them to reap. Idempotent.
   void ShutdownAndWait(std::chrono::milliseconds timeout);
 
-  // True if every child met the observation threshold (>= 1 OnInit). Returns
-  // trivially true when verify is false (the harness just reports, does not
-  // gate). Called after ShutdownAndWait for the final exit-code decision.
+  // Returns true when verify is false or every child passed the script smoke gate.
   auto PrintSummary() const -> bool;
 
   [[nodiscard]] auto Count() const -> std::size_t { return children_.size(); }
