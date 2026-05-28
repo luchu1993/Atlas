@@ -2,6 +2,7 @@ using Atlas.Components;
 using Atlas.DataTypes;
 using Atlas.Diagnostics;
 using Atlas.Entity;
+using Atlas.Shared.Protocol;
 
 namespace Atlas.Mvp.Cell;
 
@@ -14,23 +15,29 @@ public partial class Avatar : CellServerEntity, IDamageable
     private const float kRespawnSeconds = 3.0f;
     private const float kProjectileHorizSpeed = 12f;
     private const float kProjectileUpSpeed = 4f;
+    private const ushort kDashSkillId = 1001;
+    private const ushort kDashCurveId = 1;
+    private const float kDashDistance = 4.0f;
+    private const ushort kDashDurationMs = 450;
+    private const byte kDashPriority = 10;
     private const uint kSpaceId = 1;
     private static readonly Vector3 kSpawnPosition = new(0f, 0f, 0f);
+    private static readonly float[] s_dashCurveSamples = { 0.0f, 1.0f };
 
     private ProjectileSimulator _sim = null!;
 
     private bool _isDead;
     private double _deathServerTime;
-    private bool _lastReportMoved;
+    private uint _nextMovementCommandId;
 
     protected override void OnInit(bool isReload)
     {
         // ProjectileSimulator is per-cellapp local state, not in the offload
         // blob; rewire on every arrival (fresh login + offload reload).
         AttachSimulator();
-        // Component slots are also missing from persistent_blob: re-add on
-        // every arrival or DispatchCellRpc silently drops EquipWeapon when
-        // _replicated[slot] is null on the post-offload Real.
+        RegisterMovementCurve(kDashCurveId, s_dashCurveSamples);
+        // Component slots are missing from persistent_blob; re-add on arrival or
+        // DispatchCellRpc drops EquipWeapon on the post-offload Real.
         var eq = AddComponent<EquipmentComponent>();
         if (isReload) return;
         Hp = kInitialHp;
@@ -65,17 +72,6 @@ public partial class Avatar : CellServerEntity, IDamageable
         Respawn();
     }
 
-    public partial void ReportPos(Vector3 pos, Vector3 dir)
-    {
-        if (_isDead) return;
-        bool moved = (pos - Position).LengthSquared > 0.0001f ||
-                     (dir - Direction).LengthSquared > 0.0001f;
-        Position = pos;
-        Direction = dir;
-        if (!moved && _lastReportMoved) MarkVolatileDirty();
-        _lastReportMoved = moved;
-    }
-
     public partial void LaunchProjectile(Vector3 forward)
     {
         if (_isDead) return;
@@ -97,6 +93,22 @@ public partial class Avatar : CellServerEntity, IDamageable
         AllClients.OnChat(EntityId, text);
     }
 
+    public partial void Dash(Vector3 forward)
+    {
+        if (_isDead) return;
+        Vector3 start = Position;
+        Vector3 direction = HorizontalUnit(forward, Direction);
+        Vector3 target = new(start.X + direction.X * kDashDistance,
+                             start.Y,
+                             start.Z + direction.Z * kDashDistance);
+        var command = new MovementCommand(
+            NextMovementCommandId(), kDashSkillId, MovementCommandType.Dash,
+            start, target, kDashDurationMs, curveId: kDashCurveId,
+            inputPolicy: MovementCommandInputPolicy.Suppress,
+            collisionPolicy: MovementCommandCollisionPolicy.Stop, priority: kDashPriority);
+        _ = SetMovementCommand(command);
+    }
+
     public partial void TakeDamage(int amount, uint attackerId)
     {
         if (_isDead || Hp <= 0) return;
@@ -106,6 +118,7 @@ public partial class Avatar : CellServerEntity, IDamageable
         Hp = 0;
         _isDead = true;
         _deathServerTime = Atlas.Time.ServerTime;
+        _ = ClearMovementCommand();
         AllClients.OnDied(attackerId);
         Log.Info($"[Mvp.Cell] Avatar {EntityId} died (killer={attackerId})");
     }
@@ -113,7 +126,6 @@ public partial class Avatar : CellServerEntity, IDamageable
     private void Respawn()
     {
         _isDead = false;
-        _lastReportMoved = false;
         Hp = kInitialHp;
         Position = kSpawnPosition;
         AllClients.OnRespawned(kSpawnPosition);
@@ -124,5 +136,23 @@ public partial class Avatar : CellServerEntity, IDamageable
         Gold += kGoldPerKill;
         int targetLevel = 1 + Gold / kGoldPerLevel;
         if (targetLevel > Level) Level = targetLevel;
+    }
+
+    private uint NextMovementCommandId()
+    {
+        unchecked
+        {
+            uint next = ++_nextMovementCommandId;
+            if (next == 0) next = ++_nextMovementCommandId;
+            return next;
+        }
+    }
+
+    private static Vector3 HorizontalUnit(Vector3 value, Vector3 fallback)
+    {
+        var direction = new Vector3(value.X, 0.0f, value.Z);
+        if (direction.LengthSquared <= 0.0001f)
+            direction = new Vector3(fallback.X, 0.0f, fallback.Z);
+        return direction.LengthSquared > 0.0001f ? direction.Normalized : Vector3.Forward;
     }
 }

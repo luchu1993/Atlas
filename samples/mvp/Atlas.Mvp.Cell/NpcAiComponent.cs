@@ -78,20 +78,23 @@ public sealed class NpcAiComponent : ServerLocalComponent
             dx = target.X - pos.X;
             dz = target.Z - pos.Z;
             distSq = dx * dx + dz * dz;
-            if (distSq <= kReach * kReach) return;
+            if (distSq <= kReach * kReach)
+            {
+                Owner.SetMovementIntent(Vector3.Zero, 0f);
+                return;
+            }
         }
 
         var dist = MathF.Sqrt(distSq);
-        var step = MathF.Min(kSpeed * dt, dist);
         var inv = 1f / dist;
-        Owner.Position = new Vector3(pos.X + dx * inv * step, pos.Y, pos.Z + dz * inv * step);
-        Owner.Direction = new Vector3(dx * inv, 0f, dz * inv);
+        var dir = new Vector3(dx * inv, 0f, dz * inv);
+        Owner.SetMovementIntent(dir, kSpeed);
 
         if (_fireAccum >= Owner.AiFireInterval)
         {
             _fireAccum = 0f;
             RollFireInterval();
-            FireProjectile();
+            FireProjectile(dir);
         }
     }
 
@@ -99,9 +102,8 @@ public sealed class NpcAiComponent : ServerLocalComponent
         Owner.AiFireInterval = kFireIntervalMin +
                                (float)_rng.NextDouble() * (kFireIntervalMax - kFireIntervalMin);
 
-    private void FireProjectile()
+    private void FireProjectile(Vector3 dir)
     {
-        var dir = Owner.Direction;
         if (dir.X * dir.X + dir.Z * dir.Z < 0.01f) return;
         var pos = Owner.Position;
         var origin = new Vector3(pos.X + dir.X, pos.Y + 1.2f, pos.Z + dir.Z);
