@@ -143,7 +143,10 @@ class Reviver : public ManagerApp {
   };
 
   // Wire one ManagedTarget. Returns false if a required field is missing.
-  void InitTarget(ManagedTarget& t, ProcessType pt, std::string slug);
+  // Populate config-derived fields on t. Requires t.process_type and
+  // t.slug to already be set (Reviver::Init wires those up before
+  // ManagerApp::Init so RegisterTargetWatchers sees a non-empty slug).
+  void InitTarget(ManagedTarget& t);
 
   // Returns true if the target is enabled in this Reviver (configured_name
   // non-empty AND exe set OR on_start). Disabled targets are skipped from

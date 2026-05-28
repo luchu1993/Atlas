@@ -71,6 +71,7 @@ auto LeaseStore::PruneExpired(TimePoint now) -> std::size_t {
       ++it;
     }
   }
+  pruned_total_ += pruned;
   return pruned;
 }
 
@@ -84,6 +85,7 @@ auto LeaseStore::DropByHolderAddress(const Address& addr) -> std::size_t {
       ++it;
     }
   }
+  dropped_on_disconnect_total_ += dropped;
   return dropped;
 }
 

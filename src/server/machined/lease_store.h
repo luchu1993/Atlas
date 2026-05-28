@@ -57,6 +57,15 @@ class LeaseStore {
   [[nodiscard]] auto Find(std::string_view key) const -> std::optional<Entry>;
   [[nodiscard]] auto size() const -> std::size_t { return entries_.size(); }
 
+  // Lifetime counters surfaced through machined watchers so ops can spot
+  // lease churn (frequent PruneExpired hits suggest Reviver renew jitter
+  // or undersized ttl; frequent DropByHolderAddress hits suggest network
+  // instability between Reviver and machined).
+  [[nodiscard]] auto PrunedTotal() const -> uint64_t { return pruned_total_; }
+  [[nodiscard]] auto DroppedOnDisconnectTotal() const -> uint64_t {
+    return dropped_on_disconnect_total_;
+  }
+
   // For tests / watchers.
   [[nodiscard]] auto Entries() const -> const std::unordered_map<std::string, Entry>& {
     return entries_;
@@ -64,6 +73,8 @@ class LeaseStore {
 
  private:
   std::unordered_map<std::string, Entry> entries_;
+  uint64_t pruned_total_{0};
+  uint64_t dropped_on_disconnect_total_{0};
 };
 
 }  // namespace atlas::machined

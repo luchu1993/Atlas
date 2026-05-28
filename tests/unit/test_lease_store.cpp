@@ -102,5 +102,35 @@ TEST(LeaseStore, DropByHolderAddressClearsMatchingEntries) {
   EXPECT_FALSE(store.Find("k3").has_value());
 }
 
+TEST(LeaseStore, PrunedTotalAccumulatesAcrossCalls) {
+  LeaseStore store;
+  const auto t0 = Clock::now();
+  (void)store.Acquire("a", "h", 100, MakeAddr(1), t0);
+  (void)store.Acquire("b", "h", 100, MakeAddr(1), t0);
+  (void)store.Acquire("c", "h", 60000, MakeAddr(1), t0);
+
+  const auto t_after = t0 + std::chrono::milliseconds(500);
+  EXPECT_EQ(store.PrunedTotal(), 0u);
+  EXPECT_EQ(store.PruneExpired(t_after), 2u);
+  EXPECT_EQ(store.PrunedTotal(), 2u);
+  // Subsequent prunes with nothing to remove keep the counter steady.
+  EXPECT_EQ(store.PruneExpired(t_after), 0u);
+  EXPECT_EQ(store.PrunedTotal(), 2u);
+}
+
+TEST(LeaseStore, DroppedOnDisconnectTotalAccumulates) {
+  LeaseStore store;
+  const auto t0 = Clock::now();
+  (void)store.Acquire("k1", "h1", 60000, MakeAddr(1), t0);
+  (void)store.Acquire("k2", "h2", 60000, MakeAddr(1), t0);
+  (void)store.Acquire("k3", "h3", 60000, MakeAddr(2), t0);
+
+  EXPECT_EQ(store.DroppedOnDisconnectTotal(), 0u);
+  EXPECT_EQ(store.DropByHolderAddress(MakeAddr(1)), 2u);
+  EXPECT_EQ(store.DroppedOnDisconnectTotal(), 2u);
+  EXPECT_EQ(store.DropByHolderAddress(MakeAddr(2)), 1u);
+  EXPECT_EQ(store.DroppedOnDisconnectTotal(), 3u);
+}
+
 }  // namespace
 }  // namespace atlas::machined

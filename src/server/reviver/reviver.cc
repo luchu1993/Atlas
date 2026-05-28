@@ -75,10 +75,10 @@ auto Reviver::Run(int argc, char* argv[]) -> int {
   return app.RunApp(argc, argv);
 }
 
-void Reviver::InitTarget(ManagedTarget& t, ProcessType pt, std::string slug) {
-  t.process_type = pt;
-  t.slug = std::move(slug);
-  if (pt == ProcessType::kCellAppMgr) {
+void Reviver::InitTarget(ManagedTarget& t) {
+  // Reviver::Init() sets t.process_type and t.slug before calling us
+  // (must happen before ManagerApp::Init runs RegisterTargetWatchers).
+  if (t.process_type == ProcessType::kCellAppMgr) {
     t.configured_name = Config().revive_cellappmgr_name;
     t.exe = Config().revive_cellappmgr_exe;
     t.internal_port = Config().revive_cellappmgr_internal_port;
@@ -165,8 +165,8 @@ auto Reviver::Init(int argc, char* argv[]) -> bool {
   baseappmgr_target_.process_type = ProcessType::kBaseAppMgr;
   if (!ManagerApp::Init(argc, argv)) return false;
 
-  InitTarget(cellappmgr_target_, ProcessType::kCellAppMgr, "cellappmgr");
-  InitTarget(baseappmgr_target_, ProcessType::kBaseAppMgr, "baseappmgr");
+  InitTarget(cellappmgr_target_);
+  InitTarget(baseappmgr_target_);
 
   cellappmgr_target_.startup_check_at = Clock::now() + std::chrono::milliseconds(500);
   baseappmgr_target_.startup_check_at = Clock::now() + std::chrono::milliseconds(500);

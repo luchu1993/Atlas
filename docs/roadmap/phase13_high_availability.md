@@ -278,6 +278,21 @@ live 回归优先覆盖 CellAppMgr abnormal shutdown、`--cycles` 多轮接管�
     连续 renew 失败后主动放弃 leadership 的次数。
   跨机器集群仍需要 machined 本身的可用性 — machined HA 不在 Phase 13
   范围内。
+- **lease drop-on-disconnect 语义**(machined 模式):当 Reviver 与 machined
+  之间的 TCP 控制连接断开,`MachinedApp::OnDisconnect` 会立即把这个 Reviver
+  持有的全部 lease 从 LeaseStore 删除,不等 ttl 自然过期。trade-off:
+  - **优点**:Reviver 进程崩溃 / 主机掉电时,standby 在下一个 audit tick
+    内(默认 1s)就能 acquire,而不必等满 ttl;active leader 异常切换的
+    P95 接管延迟保持在秒级。
+  - **代价**:Reviver ↔ machined 之间的**瞬时网络抖动**(几百 ms 的 TCP
+    重连)也会触发 lease 转移,Reviver reconnect 后必须重新 acquire,期间
+    leader 可能落到另一台 standby。如果 ttl 设小(< 网络抖动窗口),会看
+    到 lease ownership 在几个 Reviver 之间频繁切换。
+  - **可观测指标**:`machined/leases/dropped_on_disconnect_total` 累计
+    disconnect drop 次数;`machined/leases/pruned_total` 累计 ttl 过期
+    prune 次数;`machined/leases/active` 当前 lease 数量。生产环境如果
+    `dropped_on_disconnect_total` 增长速度异常,优先排查 Reviver ↔
+    machined 网络稳定性,而不是调 ttl。
 - **machined 不可达 ops 剧本**(machined 进程崩溃 / 网络分区):
   - **Reviver 侧可观测信号**:`reviver/{slug}/leader/lease_failure_count`
     持续增长;`reviver/{slug}/last_error` 包含 "machined not connected"

@@ -129,6 +129,16 @@ void MachinedApp::RegisterWatchers() {
   reg.Add<std::string>("machined/watcher_pending", std::function<std::string()>{[this]() {
                          return std::to_string(watcher_forwarder_.PendingCount());
                        }});
+  reg.Add<uint64_t>("machined/leases/active",
+                    std::function<uint64_t()>{[this]() {
+                      return static_cast<uint64_t>(lease_store_.size());
+                    }});
+  reg.Add<uint64_t>("machined/leases/pruned_total",
+                    std::function<uint64_t()>{[this]() { return lease_store_.PrunedTotal(); }});
+  reg.Add<uint64_t>("machined/leases/dropped_on_disconnect_total",
+                    std::function<uint64_t()>{[this]() {
+                      return lease_store_.DroppedOnDisconnectTotal();
+                    }});
 }
 
 void MachinedApp::OnTickComplete() {
