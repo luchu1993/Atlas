@@ -6,6 +6,7 @@ import argparse
 import importlib.util
 import io
 import json
+import sys
 import tempfile
 import time
 import unittest
@@ -18,6 +19,9 @@ SCRIPT = REPO_ROOT / "tools" / "cluster_control" / "verify_cellappmgr_ha.py"
 SPEC = importlib.util.spec_from_file_location("verify_cellappmgr_ha", SCRIPT)
 assert SPEC is not None and SPEC.loader is not None
 verify_cellappmgr_ha = importlib.util.module_from_spec(SPEC)
+# Register before exec_module so @dataclass-decorated classes can resolve
+# their __module__ via sys.modules during construction (Python 3.14 hardening).
+sys.modules["verify_cellappmgr_ha"] = verify_cellappmgr_ha
 SPEC.loader.exec_module(verify_cellappmgr_ha)
 
 
@@ -41,6 +45,44 @@ class SummaryFieldsTest(unittest.TestCase):
         self.assertEqual(fields["app"], "1")
         self.assertEqual(fields["state"], "complete")
         self.assertTrue(verify_cellappmgr_ha.summary_has(fields, "completed_count", "2"))
+
+
+class LeaderLockHealthTest(unittest.TestCase):
+    def _make(self, *, mode="machined", leader_active="true", required_mode="machined",
+              acquire="1", renew="10", failures="0", holder="reviver@cellappmgr"):
+        watchers = {
+            "reviver/leader/mode": mode,
+            "reviver/leader/active": leader_active,
+            "reviver/leader/holder_id": holder,
+            "reviver/leader/acquire_count": acquire,
+            "reviver/leader/lease_renew_count": renew,
+            "reviver/leader/lease_failure_count": failures,
+        }
+        with mock.patch.object(verify_cellappmgr_ha, "watcher_value",
+                               side_effect=lambda exe, machined, target, path: watchers[path]):
+            with mock.patch.object(verify_cellappmgr_ha, "int_watcher",
+                                   side_effect=lambda exe, machined, target, path: int(
+                                       watchers[path])):
+                return verify_cellappmgr_ha.read_cellappmgr_leader_lock_health(
+                    Path("atlas_tool"), "machined", "reviver:reviver", required_mode)
+
+    def test_machined_mode_with_active_leader_is_healthy(self) -> None:
+        h = self._make()
+        self.assertTrue(h.healthy, h.detail)
+        self.assertEqual(h.mode, "machined")
+        self.assertTrue(h.leader_active)
+
+    def test_required_mode_mismatch_unhealthy(self) -> None:
+        h = self._make(mode="local", required_mode="machined")
+        self.assertFalse(h.healthy)
+
+    def test_machined_mode_without_active_leader_unhealthy(self) -> None:
+        h = self._make(leader_active="false")
+        self.assertFalse(h.healthy)
+
+    def test_empty_required_mode_passes(self) -> None:
+        h = self._make(mode="local", leader_active="false", required_mode="")
+        self.assertTrue(h.healthy)
 
 
 class WatcherValueTest(unittest.TestCase):

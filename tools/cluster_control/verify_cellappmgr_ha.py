@@ -10,6 +10,7 @@ import subprocess
 import sys
 import time
 from collections.abc import Callable
+from dataclasses import dataclass
 from pathlib import Path
 from typing import NamedTuple
 
@@ -226,6 +227,12 @@ def parse_args() -> argparse.Namespace:
         type=int,
         default=1,
         help="number of active Reviver leader failover cycles to inject",
+    )
+    parser.add_argument(
+        "--check-leader-lock-mode",
+        default="",
+        help="if non-empty, require reviver/leader/mode to equal this value (e.g. 'machined')"
+             " and (for 'machined') leader_active=true at check time",
     )
     parser.add_argument(
         "--summary-json",
@@ -1602,6 +1609,45 @@ def wait_for_topology_quiescence(
     return wait_until(args.timeout_sec, args.poll_sec, check)
 
 
+@dataclass
+class LeaderLockHealth:
+    mode: str
+    leader_active: bool
+    holder_id: str
+    acquire_count: int
+    lease_renew_count: int
+    lease_failure_count: int
+    healthy: bool
+    detail: str
+
+
+def read_cellappmgr_leader_lock_health(exe: Path, machined: str, target: str,
+                                       required_mode: str) -> LeaderLockHealth:
+    """Mirror of verify_baseappmgr_ha.read_leader_lock_health for the
+    reviver/leader/* (cellappmgr) surface. The cellappmgr Reviver still
+    uses the legacy reviver/leader/* watcher names for backward compat
+    with the verify_cellappmgr_ha summary schema."""
+    mode = watcher_value(exe, machined, target, "reviver/leader/mode")
+    leader_active = watcher_value(exe, machined, target, "reviver/leader/active") == "true"
+    holder = watcher_value(exe, machined, target, "reviver/leader/holder_id")
+    acquire_count = int_watcher(exe, machined, target, "reviver/leader/acquire_count")
+    renew_count = int_watcher(exe, machined, target, "reviver/leader/lease_renew_count")
+    failure_count = int_watcher(exe, machined, target, "reviver/leader/lease_failure_count")
+    healthy = True
+    parts = [
+        f"mode={mode}", f"leader_active={leader_active}", f"acquire_count={acquire_count}",
+        f"lease_renew_count={renew_count}", f"lease_failure_count={failure_count}"
+    ]
+    if required_mode and mode != required_mode:
+        healthy = False
+        parts.append(f"required_mode={required_mode} mismatch")
+    if required_mode == "machined" and not leader_active:
+        healthy = False
+        parts.append("leader not active under machined mode")
+    return LeaderLockHealth(mode, leader_active, holder, acquire_count, renew_count,
+                            failure_count, healthy, " ".join(parts))
+
+
 def select_leader_reviver(
     revivers: list[dict[str, str]],
     requested_name: str,
@@ -2660,6 +2706,22 @@ def main() -> int:
 
         failure_stage = "reviver_health"
         wait_for_reviver_health(args, exe, reviver_target)
+        leader_lock_summary: dict | None = None
+        if args.check_leader_lock_mode:
+            failure_stage = "leader_lock_mode"
+            llh = read_cellappmgr_leader_lock_health(
+                exe, args.machined, reviver_target, args.check_leader_lock_mode)
+            if not llh.healthy:
+                raise RuntimeError(f"leader lock mode check failed: {llh.detail}")
+            leader_lock_summary = {
+                "mode": llh.mode,
+                "leader_active": llh.leader_active,
+                "holder_id": llh.holder_id,
+                "acquire_count": llh.acquire_count,
+                "lease_renew_count": llh.lease_renew_count,
+                "lease_failure_count": llh.lease_failure_count,
+                "healthy": llh.healthy,
+            }
         failure_stage = "reviver_baseline"
         active_generation = int_watcher(
             exe, args.machined, reviver_target, "reviver/cellappmgr/active_generation"
@@ -3039,6 +3101,8 @@ def main() -> int:
                 standby_health=standby_health_records,
             ),
         }
+        if leader_lock_summary is not None:
+            current["leader_lock"] = leader_lock_summary
         if reviver_failover_results:
             current["reviver_failovers"] = [
                 result._asdict() for result in reviver_failover_results
