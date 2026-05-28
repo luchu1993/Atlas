@@ -1,4 +1,5 @@
 using System;
+using Atlas.Client;
 using Atlas.Client.Unity;
 using UnityEngine;
 using MvpAvatar = Atlas.Mvp.Client.Avatar;
@@ -12,6 +13,8 @@ namespace Atlas.Mvp.Unity
         readonly CameraController _camera;
         readonly Material? _groundMaterial;
         readonly BotPilot? _botPilot;
+        static readonly float[] s_dashCurveSamples = { 0.0f, 1.0f };
+        const ushort kDashCurveId = 1;
         WorldLifecycle? _world;
         ViewRegistry? _views;
 
@@ -23,6 +26,7 @@ namespace Atlas.Mvp.Unity
             _camera = camera;
             _groundMaterial = groundMaterial;
             _botPilot = botPilot;
+            MovementCurves.Register(kDashCurveId, s_dashCurveSamples);
         }
 
         public event Action? LogoutRequested;
