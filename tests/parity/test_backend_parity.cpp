@@ -17,7 +17,7 @@ class JoltEnv : public ::testing::Environment {
  public:
   void SetUp() override {
 #ifdef ATLAS_PARITY_HAS_JOLT
-    ASSERT_TRUE(jolt::Initialize());
+    jolt::Initialize();
 #endif
   }
   void TearDown() override {

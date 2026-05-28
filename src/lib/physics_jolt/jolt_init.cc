@@ -33,8 +33,8 @@ bool AssertFailedImpl(const char* expression, const char* message, const char* f
 
 }  // namespace
 
-auto Initialize() -> bool {
-  if (g_initialized) return true;
+void Initialize() {
+  if (g_initialized) return;
 
   JPH::RegisterDefaultAllocator();
   JPH::Trace = &TraceImpl;
@@ -45,7 +45,6 @@ auto Initialize() -> bool {
   JPH::RegisterTypes();
 
   g_initialized = true;
-  return true;
 }
 
 void Shutdown() {

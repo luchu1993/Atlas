@@ -308,10 +308,20 @@ int main(int argc, char* argv[]) {
       PrintUsage();
       return 1;
     }
-    std::string_view input = argv[arg_idx];
+    std::string_view input = argv[arg_idx++];
     std::string_view output;
-    if (arg_idx + 2 < argc && std::string_view(argv[arg_idx + 1]) == "-o") {
-      output = argv[arg_idx + 2];
+    if (arg_idx < argc && std::string_view(argv[arg_idx]) == "-o") {
+      if (arg_idx + 1 >= argc) {
+        std::cerr << "cook_collision: -o requires <path>\n";
+        return 1;
+      }
+      output = argv[arg_idx + 1];
+      arg_idx += 2;
+    }
+    if (arg_idx < argc) {
+      std::cerr << "cook_collision: unexpected argument '" << argv[arg_idx] << "'\n";
+      PrintUsage();
+      return 1;
     }
     return CmdCookCollision(input, output);
   }

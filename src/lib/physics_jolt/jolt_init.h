@@ -3,12 +3,10 @@
 
 namespace atlas::physics::jolt {
 
-// Wraps Jolt's required global initialization (RegisterDefaultAllocator,
-// Factory::sInstance, RegisterTypes). Idempotent — repeated calls are no-ops.
-[[nodiscard]] auto Initialize() -> bool;
+// Wraps Jolt's required global init (Factory + RegisterTypes). Idempotent.
+void Initialize();
 
-// Tears down the globals set up by Initialize(). Safe to call without
-// a prior Initialize().
+// Tears down the globals set up by Initialize(). Safe to call without one.
 void Shutdown();
 
 [[nodiscard]] auto IsInitialized() -> bool;

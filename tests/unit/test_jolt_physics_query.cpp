@@ -7,9 +7,9 @@
 namespace atlas::physics {
 
 TEST(JoltPhysicsQuery, InitializeIsIdempotent) {
-  ASSERT_TRUE(jolt::Initialize());
+  jolt::Initialize();
   EXPECT_TRUE(jolt::IsInitialized());
-  ASSERT_TRUE(jolt::Initialize());
+  jolt::Initialize();
   EXPECT_TRUE(jolt::IsInitialized());
   jolt::Shutdown();
   EXPECT_FALSE(jolt::IsInitialized());
@@ -17,7 +17,7 @@ TEST(JoltPhysicsQuery, InitializeIsIdempotent) {
 }
 
 TEST(JoltPhysicsQuery, EmptySceneReturnsNoHit) {
-  ASSERT_TRUE(jolt::Initialize());
+  jolt::Initialize();
   JoltPhysicsQuery query;
 
   RaycastQuery rq;
@@ -30,7 +30,7 @@ TEST(JoltPhysicsQuery, EmptySceneReturnsNoHit) {
 }
 
 TEST(JoltPhysicsQuery, RaycastHitsStaticBox) {
-  ASSERT_TRUE(jolt::Initialize());
+  jolt::Initialize();
   JoltPhysicsQuery query;
   // 2m cube centered at origin: top face at y=1, ray from y=10 down should
   // hit at y=1 with distance=9 and normal=+Y.
@@ -57,7 +57,7 @@ TEST(JoltPhysicsQuery, RaycastHitsStaticBox) {
 }
 
 TEST(JoltPhysicsQuery, RaycastMissesWhenAimedAway) {
-  ASSERT_TRUE(jolt::Initialize());
+  jolt::Initialize();
   JoltPhysicsQuery query;
   StaticBox box;
   box.min = {-1.0f, -1.0f, -1.0f};
@@ -74,7 +74,7 @@ TEST(JoltPhysicsQuery, RaycastMissesWhenAimedAway) {
 }
 
 TEST(JoltPhysicsQuery, ClearRemovesPriorBodies) {
-  ASSERT_TRUE(jolt::Initialize());
+  jolt::Initialize();
   JoltPhysicsQuery query;
   StaticBox box;
   box.min = {-1.0f, -1.0f, -1.0f};
@@ -94,7 +94,7 @@ TEST(JoltPhysicsQuery, ClearRemovesPriorBodies) {
 }
 
 TEST(JoltPhysicsQuery, GroundProbeFindsBoxTop) {
-  ASSERT_TRUE(jolt::Initialize());
+  jolt::Initialize();
   JoltPhysicsQuery query;
   StaticBox box;
   box.min = {-1.0f, -1.0f, -1.0f};
@@ -116,7 +116,7 @@ TEST(JoltPhysicsQuery, GroundProbeFindsBoxTop) {
 }
 
 TEST(JoltPhysicsQuery, CastCapsuleStopsAtWall) {
-  ASSERT_TRUE(jolt::Initialize());
+  jolt::Initialize();
   JoltPhysicsQuery query;
   // Wall slab at x in [2,3], extending y in [0,4]
   StaticBox wall;
@@ -139,7 +139,7 @@ TEST(JoltPhysicsQuery, CastCapsuleStopsAtWall) {
 }
 
 TEST(JoltPhysicsQuery, OverlapCapsuleDetectsBodyInsideBox) {
-  ASSERT_TRUE(jolt::Initialize());
+  jolt::Initialize();
   JoltPhysicsQuery query;
   StaticBox box;
   box.min = {-5.0f, -5.0f, -5.0f};
@@ -159,7 +159,7 @@ TEST(JoltPhysicsQuery, OverlapCapsuleDetectsBodyInsideBox) {
 }
 
 TEST(JoltPhysicsQuery, DepenetrateCapsuleProducesSeparationVector) {
-  ASSERT_TRUE(jolt::Initialize());
+  jolt::Initialize();
   JoltPhysicsQuery query;
   StaticBox box;
   box.min = {-1.0f, -1.0f, -1.0f};
@@ -184,7 +184,7 @@ TEST(JoltPhysicsQuery, DepenetrateCapsuleProducesSeparationVector) {
 }
 
 TEST(JoltPhysicsQuery, MeshRaycastHitsTriangleAtKnownDepth) {
-  ASSERT_TRUE(jolt::Initialize());
+  jolt::Initialize();
   JoltPhysicsQuery query;
   const math::Vector3 verts[] = {
       {-5.0f, 0.0f, -5.0f},
@@ -213,7 +213,7 @@ TEST(JoltPhysicsQuery, MeshRaycastHitsTriangleAtKnownDepth) {
 // End-to-end: movement_sim::Step drives the capsule through PhysicsCharacterQuery
 // onto a box top, registers grounded.
 TEST(JoltPhysicsQuery, MovementStepFallsOntoBoxAndGrounds) {
-  ASSERT_TRUE(jolt::Initialize());
+  jolt::Initialize();
   JoltPhysicsQuery query;
   StaticBox box;
   box.min = {-5.0f, -1.0f, -5.0f};
