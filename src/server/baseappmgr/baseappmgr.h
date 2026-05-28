@@ -37,8 +37,8 @@ class BaseAppMgr : public ManagerApp {
 
  public:
   // Serialise the authoritative BaseAppMgr state (BaseApp table,
-  // next_app_id_, dbid_affinity, global_bases) into a checksummed
-  // envelope. Used by SaveSnapshotToFile and by Reviver-driven recovery.
+  // next_app_id_, dbid_affinity) into a checksummed envelope. Used by
+  // SaveSnapshotToFile and by Reviver-driven recovery.
   [[nodiscard]] auto Snapshot() const -> std::vector<std::byte>;
 
   // Replace this instance's authoritative state from a snapshot blob.
@@ -117,10 +117,6 @@ class BaseAppMgr : public ManagerApp {
   void OnInformLoad(const Address& src, Channel* ch, const baseappmgr::InformLoad& msg);
   void OnHealthProbe(const Address& src, Channel* ch, const baseappmgr::HealthProbe& msg);
   void OnAllocateBaseapp(const Address& src, Channel* ch, const login::AllocateBaseApp& msg);
-  void OnRegisterGlobalBase(const Address& src, Channel* ch,
-                            const baseappmgr::RegisterGlobalBase& msg);
-  void OnDeregisterGlobalBase(const Address& src, Channel* ch,
-                              const baseappmgr::DeregisterGlobalBase& msg);
   [[nodiscard]] auto FindBaseappByAppId(uint32_t app_id) -> BaseAppInfo*;
   [[nodiscard]] auto FindBaseappByAppId(uint32_t app_id) const -> const BaseAppInfo*;
   [[nodiscard]] auto MatchesRegisteredSource(const BaseAppInfo& info, const Address& src,
@@ -137,7 +133,6 @@ class BaseAppMgr : public ManagerApp {
   [[nodiscard]] auto FindAllocationTarget(DatabaseID dbid) -> const BaseAppInfo*;
   void RecordSuccessfulAllocation(uint32_t app_id, DatabaseID dbid, TimePoint now);
   [[nodiscard]] auto IsOverloaded() const -> bool;
-  void BroadcastToAllBaseapps(const baseappmgr::GlobalBaseNotification& notif);
   void OnBaseappDeath(const Address& addr, uint8_t reason);
 
   std::unordered_map<Address, BaseAppInfo> baseapps_;
@@ -158,14 +153,6 @@ class BaseAppMgr : public ManagerApp {
   mutable TimePoint overload_start_{};
   mutable int logins_since_overload_{0};
   DbidAffinityTable dbid_affinity_;
-
-  struct GlobalBaseEntry {
-    std::string key;
-    Address base_addr;
-    EntityID entity_id{kInvalidEntityID};
-    uint16_t type_id{0};
-  };
-  std::unordered_map<std::string, GlobalBaseEntry> global_bases_;
 
   // Snapshot machinery (mirrors CellAppMgr; share via snapshot_envelope.h
   // in a follow-up refactor).

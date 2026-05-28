@@ -184,9 +184,6 @@ enum class BaseAppMgr : uint16_t {
   kRegisterBaseAppAck = 6001,
   kBaseAppReady = 6002,
   kInformLoad = 6003,
-  kRegisterGlobalBase = 6010,
-  kDeregisterGlobalBase = 6011,
-  kGlobalBaseNotification = 6012,
   kHealthProbe = 6020,
   kHealthProbeAck = 6021,
 };
@@ -320,9 +317,6 @@ ATLAS_ASSERT_ID_RANGE(BaseAppMgr::kRegisterBaseApp, 6000, 6999);
 ATLAS_ASSERT_ID_RANGE(BaseAppMgr::kRegisterBaseAppAck, 6000, 6999);
 ATLAS_ASSERT_ID_RANGE(BaseAppMgr::kBaseAppReady, 6000, 6999);
 ATLAS_ASSERT_ID_RANGE(BaseAppMgr::kInformLoad, 6000, 6999);
-ATLAS_ASSERT_ID_RANGE(BaseAppMgr::kRegisterGlobalBase, 6000, 6999);
-ATLAS_ASSERT_ID_RANGE(BaseAppMgr::kDeregisterGlobalBase, 6000, 6999);
-ATLAS_ASSERT_ID_RANGE(BaseAppMgr::kGlobalBaseNotification, 6000, 6999);
 ATLAS_ASSERT_ID_RANGE(BaseAppMgr::kHealthProbe, 6000, 6999);
 ATLAS_ASSERT_ID_RANGE(BaseAppMgr::kHealthProbeAck, 6000, 6999);
 

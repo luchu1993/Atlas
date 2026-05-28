@@ -38,7 +38,7 @@ struct BaseAppMgrHarness {
 auto MakeAddr(uint16_t port) -> Address { return Address(0x7F000001u, port); }
 
 constexpr uint32_t kSnapshotMagicForTest = 0x424D4731u;  // 'BMG1'
-constexpr uint32_t kSnapshotVersionForTest = 2;
+constexpr uint32_t kSnapshotVersionForTest = 3;
 
 auto WatcherInt64ForTest(const WatcherRegistry& wr, const std::string& path) -> std::optional<int64_t> {
   auto raw = wr.Get(path);
@@ -101,7 +101,6 @@ TEST(BaseAppMgr, RestoreRejectsChecksumMismatch) {
   payload_w.Write<uint64_t>(1u);  // mgr_generation
   payload_w.Write<uint32_t>(1u);  // next_app_id
   payload_w.WritePackedInt(0u);   // baseapps
-  payload_w.WritePackedInt(0u);   // global_bases
   payload_w.WritePackedInt(0u);   // affinity
   const auto payload = payload_w.Detach();
 

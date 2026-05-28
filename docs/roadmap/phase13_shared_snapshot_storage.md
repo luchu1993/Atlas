@@ -21,9 +21,8 @@ F1(machined-backed lease)已经解决了 leader lock 跨机问题:Reviver 可以
 - CellAppMgr 在主机 1 crash;
 - Reviver A 被 kill,Reviver B 在主机 2 接管 leader lock;
 - Reviver B 想拉起新 CellAppMgr,但**主机 2 没有主机 1 的 snapshot
-  文件**,新 mgr 启动后丢掉了 BSP / cellapp registry / global_bases 等
-  权威状态,只能等所有 CellApp / BaseApp 重新注册 — 失去了 reattach
-  带来的快速收敛。
+  文件**,新 mgr 启动后丢掉了 BSP / cellapp registry 等权威状态,只能
+  等所有 CellApp / BaseApp 重新注册 — 失去了 reattach 带来的快速收敛。
 
 要让 Phase 13 的 Reviver 在真实跨机场景下保留 BigWorld 风格的 "mgr 持久
 化 + reattach" 能力,snapshot 必须放在**任何一台 Reviver 候选机都能访问
@@ -49,7 +48,7 @@ snapshot 体积:
 | Mgr | 当前实测 | 上限 |
 |---|---|---|
 | CellAppMgr | ~1 KB (空 4-leaf space) → ~50 KB (200 cellapp / 多 space) | `kMaxSnapshotPayloadBytes = 1 GiB` |
-| BaseAppMgr | ~200 B (1 BaseApp) → ~10 KB (100 BaseApp + global_bases) | `kMaxSnapshotPayloadBytes = 256 MiB` |
+| BaseAppMgr | ~200 B (1 BaseApp) → ~10 KB (100 BaseApp) | `kMaxSnapshotPayloadBytes = 256 MiB` |
 
 落盘频率:`--snapshot-interval-ms`(默认 1s),dirty 触发额外加速到 1s 节
 流。每秒写一个几十 KB 的文件,对任何后端都不是吞吐瓶颈;关注的是**延迟

@@ -445,10 +445,6 @@ auto BaseApp::CreateNativeProvider() -> std::unique_ptr<INativeApiProvider> {
 void BaseApp::RegisterWatchers() {
   EntityApp::RegisterWatchers();
   auto& wr = GetWatcherRegistry();
-  wr.Add<uint64_t>("baseapp/ha/accepted_baseappmgr_generation",
-                   std::function<uint64_t()>([this] { return accepted_baseappmgr_generation_; }));
-  wr.Add<uint64_t>("baseapp/ha/baseappmgr_stale_drops",
-                   std::function<uint64_t()>([this] { return baseappmgr_stale_drops_; }));
   wr.Add<float>("baseapp/load",
                 std::function<float()>([this] { return load_tracker_.CurrentLoad(); }));
   wr.Add<std::size_t>("baseapp/entity_count",
@@ -2654,10 +2650,6 @@ void BaseApp::OnRegisterBaseappAck(Channel& /*ch*/, const baseappmgr::RegisterBa
     return;
   }
   app_id_ = msg.app_id;
-  if (msg.mgr_generation > accepted_baseappmgr_generation_) {
-    accepted_baseappmgr_generation_ = msg.mgr_generation;
-  }
-
   MaybeRequestMoreIds();
 
   if (baseappmgr_channel_) {
@@ -2667,7 +2659,7 @@ void BaseApp::OnRegisterBaseappAck(Channel& /*ch*/, const baseappmgr::RegisterBa
   }
 
   ATLAS_LOG_INFO("BaseApp: registered as app_id={} mgr_generation={}", app_id_,
-                 accepted_baseappmgr_generation_);
+                 msg.mgr_generation);
 }
 
 void BaseApp::OnGetEntityIdsAck(Channel& /*ch*/, const dbapp::GetEntityIdsAck& msg) {

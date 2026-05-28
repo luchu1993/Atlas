@@ -66,33 +66,6 @@ TEST(BaseAppMgrMessages, InformLoad_RoundTrip) {
   EXPECT_EQ(out.deferred_login_count, 9u);
 }
 
-TEST(BaseAppMgrMessages, RegisterGlobalBase_RoundTrip) {
-  RegisterGlobalBase msg;
-  msg.key = "WorldManager";
-  msg.entity_id = 9999;
-  msg.type_id = 5;
-
-  auto out = round_trip(msg);
-  EXPECT_EQ(out.key, "WorldManager");
-  EXPECT_EQ(out.entity_id, 9999u);
-}
-
-TEST(BaseAppMgrMessages, GlobalBaseNotification_RoundTrip) {
-  GlobalBaseNotification msg;
-  msg.key = "Auction";
-  msg.base_addr = Address(0x01020304u, 8888);
-  msg.entity_id = 42;
-  msg.type_id = 7;
-  msg.added = false;
-  msg.mgr_generation = 9u;
-
-  auto out = round_trip(msg);
-  EXPECT_EQ(out.key, "Auction");
-  EXPECT_FALSE(out.added);
-  EXPECT_EQ(out.entity_id, 42u);
-  EXPECT_EQ(out.mgr_generation, 9u);
-}
-
 TEST(BaseAppMgrMessages, HealthProbe_RoundTrip) {
   HealthProbe msg;
   msg.nonce = 0xCAFEBABEDEADBEEFull;

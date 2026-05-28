@@ -30,9 +30,9 @@ ServerAppOption<uint32_t> s_ha_reattach_watchdog_ms{
     "baseappmgr/ha/reattach_watchdog_ms", WatcherMode::kReadWrite};
 
 constexpr uint32_t kSnapshotMagic = 0x424D4731u;  // 'BMG1'
-constexpr uint32_t kSnapshotVersion = 2;
-// 256 MiB ceiling — BaseApp table + global_bases + dbid_affinity only
-// (no per-cell buckets); fits 65k BaseApps with room for script entries.
+constexpr uint32_t kSnapshotVersion = 3;
+// 256 MiB ceiling — BaseApp table + dbid_affinity only (no per-cell
+// buckets); easily fits 65k BaseApps.
 constexpr uint64_t kMaxSnapshotPayloadBytes = 256ull * 1024ull * 1024ull;
 constexpr uint64_t kMaxSnapshotFileBytes =
     kMaxSnapshotPayloadBytes + snapshot_envelope::kEnvelopeBytes;
@@ -292,16 +292,6 @@ auto BaseAppMgr::Init(int argc, char* argv[]) -> bool {
         OnAllocateBaseapp(src, ch, msg);
       });
 
-  (void)table.RegisterTypedHandler<baseappmgr::RegisterGlobalBase>(
-      [this](const Address& src, Channel* ch, const baseappmgr::RegisterGlobalBase& msg) {
-        OnRegisterGlobalBase(src, ch, msg);
-      });
-
-  (void)table.RegisterTypedHandler<baseappmgr::DeregisterGlobalBase>(
-      [this](const Address& src, Channel* ch, const baseappmgr::DeregisterGlobalBase& msg) {
-        OnDeregisterGlobalBase(src, ch, msg);
-      });
-
   (void)table.RegisterTypedHandler<baseappmgr::HealthProbe>(
       [this](const Address& src, Channel* ch, const baseappmgr::HealthProbe& msg) {
         OnHealthProbe(src, ch, msg);
@@ -325,10 +315,9 @@ auto BaseAppMgr::Init(int argc, char* argv[]) -> bool {
       }
     } else {
       ATLAS_LOG_WARNING(
-          "BaseAppMgr: restored HA snapshot from {} source={} baseapps={} global_bases={}"
-          " dbid_affinity={}",
+          "BaseAppMgr: restored HA snapshot from {} source={} baseapps={} dbid_affinity={}",
           Config().snapshot_path.string(), last_snapshot_restore_source_, baseapps_.size(),
-          global_bases_.size(), dbid_affinity_.size());
+          dbid_affinity_.size());
     }
   }
 
@@ -360,14 +349,6 @@ auto BaseAppMgr::Snapshot() const -> std::vector<std::byte> {
     payload_writer.Write(info.app_id);
     payload_writer.Write<uint8_t>(info.is_ready ? 1u : 0u);
     payload_writer.Write<uint8_t>(info.is_retiring ? 1u : 0u);
-  }
-
-  payload_writer.WritePackedInt(static_cast<uint32_t>(global_bases_.size()));
-  for (const auto& [key, entry] : global_bases_) {
-    payload_writer.WriteString(key);
-    WriteAddress(payload_writer, entry.base_addr);
-    payload_writer.Write(entry.entity_id);
-    payload_writer.Write(entry.type_id);
   }
 
   const auto& affinity = dbid_affinity_.Entries();
@@ -442,28 +423,6 @@ auto BaseAppMgr::Restore(std::span<const std::byte> bytes) -> Result<void> {
     restored_index.emplace(*app_id, *internal);
   }
 
-  auto global_count = ReadCount(r, "global_bases");
-  if (!global_count) return global_count.Error();
-  std::unordered_map<std::string, GlobalBaseEntry> restored_global_bases;
-  for (uint32_t i = 0; i < *global_count; ++i) {
-    auto key = ReadBoundedString(r, "global_base_key");
-    if (!key) return key.Error();
-    auto addr = ReadAddress(r, "global_base");
-    auto entity_id = r.Read<EntityID>();
-    auto type_id = r.Read<uint16_t>();
-    if (!addr || !entity_id || !type_id) {
-      return Error{ErrorCode::kInvalidArgument, "BaseAppMgr snapshot: global base truncated"};
-    }
-    GlobalBaseEntry entry;
-    entry.key = *key;
-    entry.base_addr = *addr;
-    entry.entity_id = *entity_id;
-    entry.type_id = *type_id;
-    if (!restored_global_bases.emplace(*key, std::move(entry)).second) {
-      return Error{ErrorCode::kInvalidArgument, "BaseAppMgr snapshot: duplicate global base"};
-    }
-  }
-
   auto affinity_count = ReadCount(r, "dbid_affinity");
   if (!affinity_count) return affinity_count.Error();
   struct AffinityEntry {
@@ -494,7 +453,6 @@ auto BaseAppMgr::Restore(std::span<const std::byte> bytes) -> Result<void> {
 
   baseapps_ = std::move(restored_baseapps);
   app_id_index_ = std::move(restored_index);
-  global_bases_ = std::move(restored_global_bases);
   next_app_id_ = *next_app;
   mgr_generation_ = *saved_generation;
 
@@ -905,8 +863,6 @@ void BaseAppMgr::RegisterWatchers() {
   auto& wr = GetWatcherRegistry();
   wr.Add<std::size_t>("baseappmgr/baseapp_count",
                       std::function<std::size_t()>([this] { return baseapps_.size(); }));
-  wr.Add<std::size_t>("baseappmgr/global_base_count",
-                      std::function<std::size_t()>([this] { return global_bases_.size(); }));
   wr.Add<std::size_t>("baseappmgr/dbid_affinity_count",
                       std::function<std::size_t()>([this] { return dbid_affinity_.size(); }));
 
@@ -1194,45 +1150,6 @@ void BaseAppMgr::OnAllocateBaseapp(const Address& src, Channel* ch,
   (void)src;
 }
 
-void BaseAppMgr::OnRegisterGlobalBase(const Address& src, Channel* /*ch*/,
-                                      const baseappmgr::RegisterGlobalBase& msg) {
-  GlobalBaseEntry entry;
-  entry.key = msg.key;
-  entry.base_addr = src;
-  entry.entity_id = msg.entity_id;
-  entry.type_id = msg.type_id;
-  global_bases_[msg.key] = std::move(entry);
-  MarkSnapshotDirty("global-base-register");
-
-  baseappmgr::GlobalBaseNotification notif;
-  notif.key = msg.key;
-  notif.base_addr = src;
-  notif.entity_id = msg.entity_id;
-  notif.type_id = msg.type_id;
-  notif.added = true;
-  BroadcastToAllBaseapps(notif);
-
-  ATLAS_LOG_INFO("BaseAppMgr: global base '{}' registered entity={}", msg.key, msg.entity_id);
-}
-
-void BaseAppMgr::OnDeregisterGlobalBase(const Address& /*src*/, Channel* /*ch*/,
-                                        const baseappmgr::DeregisterGlobalBase& msg) {
-  auto it = global_bases_.find(msg.key);
-  if (it == global_bases_.end()) return;
-
-  baseappmgr::GlobalBaseNotification notif;
-  notif.key = msg.key;
-  notif.base_addr = it->second.base_addr;
-  notif.entity_id = it->second.entity_id;
-  notif.type_id = it->second.type_id;
-  notif.added = false;
-  global_bases_.erase(it);
-  MarkSnapshotDirty("global-base-deregister");
-  BroadcastToAllBaseapps(notif);
-
-  ATLAS_LOG_INFO("BaseAppMgr: global base '{}' deregistered", msg.key);
-}
-
 auto BaseAppMgr::FindBaseappByAppId(uint32_t app_id) -> BaseAppInfo* {
   const auto kIndexIt = app_id_index_.find(app_id);
   if (kIndexIt == app_id_index_.end()) return nullptr;
@@ -1395,23 +1312,6 @@ auto BaseAppMgr::IsOverloaded() const -> bool {
   return false;
 }
 
-void BaseAppMgr::BroadcastToAllBaseapps(const baseappmgr::GlobalBaseNotification& notif_in) {
-  baseappmgr::GlobalBaseNotification notif = notif_in;
-  notif.mgr_generation = mgr_generation_;
-  for (auto& [addr, info] : baseapps_) {
-    if (info.is_ready && info.channel) {
-      if (auto r = info.channel->SendMessage(notif); !r) {
-        // A missed notification permanently desyncs singleton ownership
-        // (e.g. ChatService); only operator restart or death detection heals it.
-        ATLAS_LOG_ERROR(
-            "BaseAppMgr: GlobalBaseNotification dropped to baseapp {}: {} "
-            "— peer-view divergence on global mailbox",
-            addr.ToString(), r.Error().Message());
-      }
-    }
-  }
-}
-
 void BaseAppMgr::OnBaseappDeath(const Address& addr, uint8_t reason) {
   auto it = baseapps_.find(addr);
   if (it == baseapps_.end()) return;
@@ -1426,22 +1326,6 @@ void BaseAppMgr::OnBaseappDeath(const Address& addr, uint8_t reason) {
   app_id_index_.erase(it->second.app_id);
   baseapps_.erase(it);
   MarkSnapshotDirty("baseapp-death");
-
-  // Clean up any global bases owned by the dead BaseApp
-  for (auto git = global_bases_.begin(); git != global_bases_.end();) {
-    if (git->second.base_addr == addr) {
-      baseappmgr::GlobalBaseNotification notif;
-      notif.key = git->second.key;
-      notif.base_addr = addr;
-      notif.entity_id = git->second.entity_id;
-      notif.type_id = git->second.type_id;
-      notif.added = false;
-      BroadcastToAllBaseapps(notif);
-      git = global_bases_.erase(git);
-    } else {
-      ++git;
-    }
-  }
 }
 
 }  // namespace atlas

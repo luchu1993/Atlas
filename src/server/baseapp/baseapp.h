@@ -226,10 +226,6 @@ class BaseApp : public EntityApp {
   BaseAppNativeProvider* native_provider_{nullptr};  // owned by ScriptApp
   Channel* dbapp_channel_{nullptr};
   Channel* baseappmgr_channel_{nullptr};
-  // Last mgr_generation advertised by BaseAppMgr. Messages tagged with a
-  // smaller value would be dropped as residue from a stale mgr generation.
-  uint64_t accepted_baseappmgr_generation_{0};
-  uint64_t baseappmgr_stale_drops_{0};
   // Per-entity routing (which CellApp owns its Real) lives on
   // BaseEntity.cell_addr_; registry handles Birth/Death + self-filter.
   CellAppPeerRegistry cellapp_peers_;
