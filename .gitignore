@@ -18,6 +18,7 @@ MODULE.bazel.lock
 .idea/
 .claude/
 .clwb/
+.codegraph/
 *.suo
 *.user
 *.sln
