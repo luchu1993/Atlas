@@ -30,10 +30,11 @@ position history 都已落地。当前重心是协议边界硬化、验证矩阵
 - 验证后翻默认值到 ON；同时把 FetchContent 从 `GIT_TAG v5.2.0` 切到
   `URL + SHA256` 锁版本。
 
-**M5**：`atlas_tool cook_collision` 最小可用。
-- 把 v2 asset 编成 `joltcache`（含 `source_hash` + `jolt_version`）。
-- Runtime mismatch → 拒绝启动，不 silent fallback。
-- 还不接 Unity；先支持手写 asset cook。
+**M5b**：Jolt 形状预 cook 进 cache。
+- 在 `.collisioncache` 里追加 `Shape::SaveBinaryState` 输出，加载时
+  `RestoreFromBinaryState`，跳过运行时 mesh 构建。
+- 启用 `jolt_version_stamp` 失效判定（jrouwe/JoltPhysics 升版必须 recook）。
+- 加 `atlas_tool recook --invalid` 批量重 cook 失效缓存。
 
 ### 14.3 Unity 导出 MVP（里程碑）
 

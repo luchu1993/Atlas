@@ -231,5 +231,72 @@ TEST(CollisionAsset, V1AssetStillLoadsAfterVersionBump) {
   EXPECT_EQ(asset->version, 1u);
 }
 
+TEST(CollisionAsset, CacheRoundTripV1) {
+  const std::string source_hash = "unit";
+  auto bytes = WriteCollisionCacheBytes(kValidAsset, {}, source_hash);
+  auto asset = LoadCollisionAssetFromCacheBytes(std::span<const std::byte>(bytes));
+  ASSERT_TRUE(asset.HasValue()) << asset.Error().Message();
+  EXPECT_EQ(asset->source_hash, source_hash);
+  EXPECT_EQ(asset->boxes.size(), 1u);
+  EXPECT_EQ(asset->planes.size(), 1u);
+  EXPECT_TRUE(asset->meshes.empty());
+}
+
+TEST(CollisionAsset, CacheRoundTripV2WithMesh) {
+  const auto mesh_buffer = MakeQuadMeshBuffer();
+  constexpr const char* kJson = R"({
+    "version": 2,
+    "coordinate_system": "x_right_y_up_z_forward_meters",
+    "source_hash": "v2-cached",
+    "objects": [
+      {"shape": "mesh", "layer": 0,
+       "vertex_byte_offset": 8, "vertex_count": 4,
+       "index_byte_offset": 56, "index_count": 6}
+    ]
+  })";
+  auto bytes = WriteCollisionCacheBytes(kJson, std::span<const std::byte>(mesh_buffer),
+                                        "v2-cached");
+  auto asset = LoadCollisionAssetFromCacheBytes(std::span<const std::byte>(bytes));
+  ASSERT_TRUE(asset.HasValue()) << asset.Error().Message();
+  EXPECT_EQ(asset->source_hash, "v2-cached");
+  ASSERT_EQ(asset->meshes.size(), 1u);
+  EXPECT_EQ(asset->meshes[0].vertices.size(), 4u);
+  EXPECT_EQ(asset->meshes[0].indices.size(), 6u);
+}
+
+TEST(CollisionAsset, CacheRejectsBadMagic) {
+  auto bytes = WriteCollisionCacheBytes(kValidAsset, {}, "unit");
+  bytes[0] = std::byte{'X'};
+  auto asset = LoadCollisionAssetFromCacheBytes(std::span<const std::byte>(bytes));
+  ASSERT_FALSE(asset.HasValue());
+  EXPECT_EQ(asset.Error().Code(), ErrorCode::kInvalidArgument);
+}
+
+TEST(CollisionAsset, CacheRejectsUnsupportedCacheVersion) {
+  auto bytes = WriteCollisionCacheBytes(kValidAsset, {}, "unit");
+  const uint32_t bad_version = 99;
+  std::memcpy(bytes.data() + 4, &bad_version, sizeof(bad_version));
+  auto asset = LoadCollisionAssetFromCacheBytes(std::span<const std::byte>(bytes));
+  ASSERT_FALSE(asset.HasValue());
+  EXPECT_EQ(asset.Error().Code(), ErrorCode::kNotSupported);
+}
+
+TEST(CollisionAsset, CacheRejectsTruncatedHeader) {
+  auto bytes = WriteCollisionCacheBytes(kValidAsset, {}, "unit");
+  bytes.resize(8);  // chop off everything past magic + version
+  auto asset = LoadCollisionAssetFromCacheBytes(std::span<const std::byte>(bytes));
+  ASSERT_FALSE(asset.HasValue());
+}
+
+TEST(CollisionAsset, CacheRejectsCorruptSourceHashStamp) {
+  // Cook with stamped hash 'X', but the embedded JSON says source_hash='unit'.
+  // Loader must catch the mismatch since a corrupted cache stamp is the only way
+  // these two get out of sync.
+  auto bytes = WriteCollisionCacheBytes(kValidAsset, {}, "X");
+  auto asset = LoadCollisionAssetFromCacheBytes(std::span<const std::byte>(bytes));
+  ASSERT_FALSE(asset.HasValue());
+  EXPECT_EQ(asset.Error().Code(), ErrorCode::kInvalidArgument);
+}
+
 }  // namespace
 }  // namespace atlas::physics

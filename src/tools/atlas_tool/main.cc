@@ -1,12 +1,20 @@
+#include <chrono>
+#include <cstdint>
 #include <cstdlib>
+#include <filesystem>
 #include <format>
 #include <iostream>
+#include <optional>
 #include <string>
 #include <string_view>
+#include <utility>
+#include <vector>
 
 #include "network/event_dispatcher.h"
 #include "network/machined_types.h"
 #include "network/network_interface.h"
+#include "physics/collision_asset.h"
+#include "platform/filesystem.h"
 #include "server/machined_client.h"
 #include "server/server_config.h"
 
@@ -26,6 +34,11 @@ static void PrintUsage() {
             << "  shutdown <type[:name]> [reason]\n"
             << "                         Forward a shutdown request via machined\n"
             << "                         (no name = all instances of type)\n"
+            << "  validate_collision <path>\n"
+            << "  cook_collision <input.collision.json> [-o <output.collisioncache>]\n"
+            << "                         Validate an Atlas collision JSON asset\n"
+            << "  dump_collision <path> --obj <path>\n"
+            << "                         Write an OBJ debug preview for a collision asset\n"
             << "\n"
             << "Examples:\n"
             << "  atlas_tool list\n"
@@ -34,7 +47,11 @@ static void PrintUsage() {
             << "  atlas_tool set-watch cellappmgr cellappmgr/lb/retire/app_id 2\n"
             << "  atlas_tool watch cellapp tick/duration_ms\n"
             << "  atlas_tool shutdown baseapp:baseapp-1\n"
-            << "  atlas_tool shutdown cellapp 1\n";
+            << "  atlas_tool shutdown cellapp 1\n"
+            << "  atlas_tool validate_collision maps/test.collision.json\n"
+            << "  atlas_tool dump_collision maps/test.collision.json --obj map.obj\n"
+            << "  atlas_tool cook_collision maps/test.collision.json\n"
+            << "  atlas_tool cook_collision maps/test.collision.json -o maps/test.collisioncache\n";
 }
 
 static auto ParseProcessType(std::string_view name) -> std::optional<ProcessType> {
@@ -178,6 +195,64 @@ static auto CmdShutdown(EventDispatcher& dispatcher, MachinedClient& client,
   return 0;
 }
 
+static auto CmdValidateCollision(std::string_view path) -> int {
+  auto asset = physics::LoadCollisionAssetFromFile(std::filesystem::path(path));
+  if (!asset) {
+    std::cerr << std::format("validate_collision: {}\n", asset.Error().Message());
+    return 1;
+  }
+  std::cout << std::format("collision asset ok: boxes={} planes={} source_hash={}\n",
+                           asset->boxes.size(), asset->planes.size(), asset->source_hash);
+  return 0;
+}
+
+static auto CmdDumpCollision(std::string_view input_path, std::string_view obj_path) -> int {
+  auto asset = physics::LoadCollisionAssetFromFile(std::filesystem::path(input_path));
+  if (!asset) {
+    std::cerr << std::format("dump_collision: {}\n", asset.Error().Message());
+    return 1;
+  }
+  const auto obj = physics::DumpCollisionAssetToObj(*asset);
+  auto written = fs::WriteTextFile(std::filesystem::path(obj_path), obj);
+  if (!written) {
+    std::cerr << std::format("dump_collision: {}\n", written.Error().Message());
+    return 1;
+  }
+  std::cout << std::format("collision OBJ written: {} boxes={} planes={}\n", obj_path,
+                           asset->boxes.size(), asset->planes.size());
+  return 0;
+}
+
+static auto CmdCookCollision(std::string_view input_path,
+                              std::string_view output_path) -> int {
+  std::filesystem::path src(input_path);
+  std::filesystem::path out;
+  if (output_path.empty()) {
+    out = src;
+    out.replace_extension(".collisioncache");
+  } else {
+    out = std::filesystem::path(output_path);
+  }
+  auto result = physics::WriteCollisionCacheToFile(src, out);
+  if (!result) {
+    std::cerr << std::format("cook_collision: {}\n", result.Error().Message());
+    return 1;
+  }
+  // Cross-check by reloading the cache so any header/payload bug surfaces here
+  // rather than only at runtime.
+  auto loaded = physics::LoadCollisionAssetFromCacheFile(out);
+  if (!loaded) {
+    std::cerr << std::format("cook_collision: cooked file failed verify: {}\n",
+                             loaded.Error().Message());
+    return 1;
+  }
+  std::cout << std::format(
+      "collision cache written: {} boxes={} planes={} meshes={} source_hash={}\n",
+      out.string(), loaded->boxes.size(), loaded->planes.size(), loaded->meshes.size(),
+      loaded->source_hash);
+  return 0;
+}
+
 int main(int argc, char* argv[]) {
   Address machined_addr("127.0.0.1", 20018);
 
@@ -208,6 +283,38 @@ int main(int argc, char* argv[]) {
   }
 
   std::string_view command(argv[arg_idx++]);
+
+  if (command == "validate_collision") {
+    if (arg_idx >= argc) {
+      std::cerr << "validate_collision requires <path>\n";
+      PrintUsage();
+      return 1;
+    }
+    return CmdValidateCollision(argv[arg_idx]);
+  }
+
+  if (command == "dump_collision") {
+    if (arg_idx + 2 >= argc || std::string_view(argv[arg_idx + 1]) != "--obj") {
+      std::cerr << "dump_collision requires <path> --obj <path>\n";
+      PrintUsage();
+      return 1;
+    }
+    return CmdDumpCollision(argv[arg_idx], argv[arg_idx + 2]);
+  }
+
+  if (command == "cook_collision") {
+    if (arg_idx >= argc) {
+      std::cerr << "cook_collision requires <input.collision.json>\n";
+      PrintUsage();
+      return 1;
+    }
+    std::string_view input = argv[arg_idx];
+    std::string_view output;
+    if (arg_idx + 2 < argc && std::string_view(argv[arg_idx + 1]) == "-o") {
+      output = argv[arg_idx + 2];
+    }
+    return CmdCookCollision(input, output);
+  }
 
   EventDispatcher dispatcher;
   NetworkInterface network(dispatcher);

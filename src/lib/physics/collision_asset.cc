@@ -367,6 +367,134 @@ auto LoadCollisionAssetFromFile(const std::filesystem::path& path) -> Result<Col
   return LoadCollisionAssetImpl(*text, mesh_buffer);
 }
 
+namespace {
+
+void AppendBytes(std::vector<std::byte>& out, const void* src, std::size_t n) {
+  const auto* p = static_cast<const std::byte*>(src);
+  out.insert(out.end(), p, p + n);
+}
+
+void AppendUint32(std::vector<std::byte>& out, uint32_t v) {
+  AppendBytes(out, &v, sizeof(v));
+}
+
+[[nodiscard]] auto ReadUint32(std::span<const std::byte> bytes, std::size_t& cursor,
+                              std::string_view what) -> Result<uint32_t> {
+  if (cursor + sizeof(uint32_t) > bytes.size()) {
+    return Invalid(std::format("cache: truncated reading {}", what));
+  }
+  uint32_t v = 0;
+  std::memcpy(&v, bytes.data() + cursor, sizeof(v));
+  cursor += sizeof(v);
+  return v;
+}
+
+}  // namespace
+
+auto WriteCollisionCacheBytes(std::string_view source_json,
+                              std::span<const std::byte> source_bin,
+                              std::string_view source_hash) -> std::vector<std::byte> {
+  std::vector<std::byte> out;
+  out.reserve(kCollisionCacheHeaderBytes + source_hash.size() + sizeof(uint32_t) +
+              source_json.size() + sizeof(uint32_t) + source_bin.size());
+  AppendBytes(out, kCollisionCacheMagic.data(), 4);
+  AppendUint32(out, kCollisionCacheVersion);
+  AppendUint32(out, 0);  // jolt_version_stamp reserved for M5b
+  AppendUint32(out, static_cast<uint32_t>(source_hash.size()));
+  AppendBytes(out, source_hash.data(), source_hash.size());
+  AppendUint32(out, static_cast<uint32_t>(source_json.size()));
+  AppendBytes(out, source_json.data(), source_json.size());
+  AppendUint32(out, static_cast<uint32_t>(source_bin.size()));
+  if (!source_bin.empty()) AppendBytes(out, source_bin.data(), source_bin.size());
+  return out;
+}
+
+auto WriteCollisionCacheToFile(const std::filesystem::path& source_json_path,
+                                const std::filesystem::path& cache_path) -> Result<void> {
+  auto json = fs::ReadTextFile(source_json_path);
+  if (!json) return json.Error();
+
+  auto bin_path = source_json_path;
+  bin_path.replace_extension(".bin");
+  std::vector<std::byte> bin;
+  if (std::filesystem::exists(bin_path)) {
+    auto bytes = fs::ReadFile(bin_path);
+    if (!bytes) return bytes.Error();
+    bin = std::move(*bytes);
+  }
+
+  // Parse once so we know the source_hash to stamp; this also catches a
+  // bad source asset at cook time rather than at load time.
+  auto asset = LoadCollisionAssetImpl(*json, bin);
+  if (!asset) return asset.Error();
+
+  auto bytes = WriteCollisionCacheBytes(*json, bin, asset->source_hash);
+  return fs::WriteFile(cache_path, std::span<const std::byte>(bytes));
+}
+
+auto LoadCollisionAssetFromCacheBytes(std::span<const std::byte> bytes)
+    -> Result<CollisionAsset> {
+  if (bytes.size() < kCollisionCacheHeaderBytes) {
+    return Invalid("cache: shorter than 16-byte header");
+  }
+  if (std::memcmp(bytes.data(), kCollisionCacheMagic.data(), 4) != 0) {
+    return Invalid("cache: magic mismatch (expected 'ACAC')");
+  }
+  std::size_t cursor = 4;
+  auto cache_version = ReadUint32(bytes, cursor, "cache_version");
+  if (!cache_version) return cache_version.Error();
+  if (*cache_version != kCollisionCacheVersion) {
+    return Error{ErrorCode::kNotSupported,
+                 std::format("cache: version {} not supported (expected {}), re-cook",
+                             *cache_version, kCollisionCacheVersion)};
+  }
+  auto jolt_stamp = ReadUint32(bytes, cursor, "jolt_version_stamp");
+  if (!jolt_stamp) return jolt_stamp.Error();
+  // M5: jolt_version_stamp is reserved; any value loads. M5b will enforce it.
+  (void)*jolt_stamp;
+
+  auto hash_len = ReadUint32(bytes, cursor, "source_hash_len");
+  if (!hash_len) return hash_len.Error();
+  if (cursor + *hash_len > bytes.size()) {
+    return Invalid("cache: truncated reading source_hash");
+  }
+  std::string source_hash(reinterpret_cast<const char*>(bytes.data() + cursor), *hash_len);
+  cursor += *hash_len;
+
+  auto json_len = ReadUint32(bytes, cursor, "json_len");
+  if (!json_len) return json_len.Error();
+  if (cursor + *json_len > bytes.size()) {
+    return Invalid("cache: truncated reading json bytes");
+  }
+  std::string_view json_view(reinterpret_cast<const char*>(bytes.data() + cursor), *json_len);
+  cursor += *json_len;
+
+  auto bin_len = ReadUint32(bytes, cursor, "bin_len");
+  if (!bin_len) return bin_len.Error();
+  if (cursor + *bin_len > bytes.size()) {
+    return Invalid("cache: truncated reading bin bytes");
+  }
+  std::span<const std::byte> bin_view(bytes.data() + cursor, *bin_len);
+  cursor += *bin_len;
+
+  auto asset = LoadCollisionAssetImpl(json_view, bin_view);
+  if (!asset) return asset.Error();
+  if (asset->source_hash != source_hash) {
+    return Invalid(std::format(
+        "cache: header source_hash '{}' differs from JSON source_hash '{}' — "
+        "cache is corrupt",
+        source_hash, asset->source_hash));
+  }
+  return asset;
+}
+
+auto LoadCollisionAssetFromCacheFile(const std::filesystem::path& path)
+    -> Result<CollisionAsset> {
+  auto bytes = fs::ReadFile(path);
+  if (!bytes) return bytes.Error();
+  return LoadCollisionAssetFromCacheBytes(std::span<const std::byte>(*bytes));
+}
+
 auto BuildStaticPhysicsQueryFromAsset(const CollisionAsset& asset)
     -> std::unique_ptr<StaticPhysicsQuery> {
   auto query = std::make_unique<StaticPhysicsQuery>(StaticGroundMode::kDisabled);
