@@ -185,6 +185,34 @@ TEST(JoltPhysicsQuery, DepenetrateCapsuleProducesSeparationVector) {
   jolt::Shutdown();
 }
 
+TEST(JoltPhysicsQuery, MeshRaycastHitsTriangleAtKnownDepth) {
+  ASSERT_TRUE(jolt::Initialize());
+  JoltPhysicsQuery query;
+  // Single 10x10 quad at y=0, made of two triangles.
+  const math::Vector3 verts[] = {
+      {-5.0f, 0.0f, -5.0f},
+      { 5.0f, 0.0f, -5.0f},
+      { 5.0f, 0.0f,  5.0f},
+      {-5.0f, 0.0f,  5.0f},
+  };
+  // CW winding when viewed from +Y → +Y face normal (right-hand rule).
+  const uint32_t indices[] = {0, 2, 1, 0, 3, 2};
+  query.AddMesh(verts, indices, 0);
+
+  RaycastQuery rq;
+  rq.origin = {0.0f, 10.0f, 0.0f};
+  rq.direction = {0.0f, -1.0f, 0.0f};
+  rq.max_distance_m = 100.0f;
+  auto hit = query.Raycast(rq);
+
+  ASSERT_TRUE(hit.hit);
+  EXPECT_NEAR(hit.distance_m, 10.0f, 1e-2f);
+  EXPECT_NEAR(hit.position.y, 0.0f, 1e-2f);
+  EXPECT_NEAR(hit.normal.y, 1.0f, 1e-2f);
+
+  jolt::Shutdown();
+}
+
 // M2 end-to-end: movement_sim::Step against JoltPhysicsQuery (through the
 // PhysicsCharacterQuery adapter) makes a capsule fall onto a box top and
 // register grounded.

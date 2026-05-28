@@ -18,6 +18,7 @@
 #include <Jolt/Physics/Collision/RayCast.h>
 #include <Jolt/Physics/Collision/Shape/BoxShape.h>
 #include <Jolt/Physics/Collision/Shape/CapsuleShape.h>
+#include <Jolt/Physics/Collision/Shape/MeshShape.h>
 #include <Jolt/Physics/Collision/Shape/SphereShape.h>
 #include <Jolt/Physics/Collision/ShapeCast.h>
 
@@ -130,6 +131,40 @@ void JoltPhysicsQuery::AddBox(const StaticBox& box) {
 
   JPH::BodyCreationSettings bcs(shape_result.Get(), center, JPH::Quat::sIdentity(),
                                 JPH::EMotionType::Static, kStaticObjectLayer);
+  impl_->system.GetBodyInterface().CreateAndAddBody(bcs, JPH::EActivation::DontActivate);
+  impl_->needs_optimize = true;
+}
+
+void JoltPhysicsQuery::AddMesh(std::span<const math::Vector3> vertices,
+                                std::span<const uint32_t> indices,
+                                ObjectLayer /*layer*/) {
+  if (vertices.empty() || indices.size() < 3 || (indices.size() % 3) != 0) return;
+
+  JPH::VertexList jolt_vertices;
+  jolt_vertices.reserve(vertices.size());
+  for (const auto& v : vertices) {
+    jolt_vertices.emplace_back(v.x, v.y, v.z);
+  }
+  JPH::IndexedTriangleList jolt_tris;
+  jolt_tris.reserve(indices.size() / 3);
+  for (std::size_t i = 0; i + 2 < indices.size(); i += 3) {
+    if (indices[i] >= vertices.size() || indices[i + 1] >= vertices.size() ||
+        indices[i + 2] >= vertices.size()) {
+      return;
+    }
+    jolt_tris.emplace_back(indices[i], indices[i + 1], indices[i + 2]);
+  }
+
+  JPH::MeshShapeSettings shape_settings(std::move(jolt_vertices), std::move(jolt_tris));
+  shape_settings.SetEmbedded();
+  auto shape_result = shape_settings.Create();
+  if (shape_result.HasError()) return;
+
+  // M1b single-layer scheme: every static body lives in kStaticObjectLayer until
+  // we wire the Atlas → Jolt layer table (M4 follow-up / Phase 14.3 layer RFC).
+  JPH::BodyCreationSettings bcs(shape_result.Get(), JPH::RVec3::sZero(),
+                                JPH::Quat::sIdentity(), JPH::EMotionType::Static,
+                                kStaticObjectLayer);
   impl_->system.GetBodyInterface().CreateAndAddBody(bcs, JPH::EActivation::DontActivate);
   impl_->needs_optimize = true;
 }

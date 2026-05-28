@@ -1,8 +1,11 @@
 #ifndef ATLAS_LIB_PHYSICS_JOLT_JOLT_PHYSICS_QUERY_H_
 #define ATLAS_LIB_PHYSICS_JOLT_JOLT_PHYSICS_QUERY_H_
 
+#include <cstdint>
 #include <memory>
+#include <span>
 
+#include "math/vector3.h"
 #include "physics/physics_query.h"
 
 namespace atlas::physics {
@@ -18,6 +21,11 @@ class JoltPhysicsQuery final : public PhysicsQuery {
   auto operator=(JoltPhysicsQuery&&) -> JoltPhysicsQuery& = delete;
 
   void AddBox(const StaticBox& box);
+  // Adds a static triangle mesh; `indices` is a triangle list (size % 3 == 0)
+  // referencing `vertices`. Out-of-range indices are silently dropped at the
+  // caller layer (collision_asset rejects them upstream).
+  void AddMesh(std::span<const math::Vector3> vertices,
+               std::span<const uint32_t> indices, ObjectLayer layer);
   void Clear();
 
   [[nodiscard]] auto GroundProbe(const GroundProbeQuery& query) const

@@ -133,15 +133,30 @@ Atlas collision asset 是长期稳定边界。它应包含：
 | `volumes` | gameplay volume 数据 |
 | `chunks` | 大地图分块信息 |
 
-当前 MVP 已落地 v1 JSON loader：`version` 必须为 `1`，
+当前 MVP loader 同时接受 v1 和 v2：`version` 必须为 `1` 或 `2`，
 `coordinate_system` 必须为 `x_right_y_up_z_forward_meters`，`source_hash`
-必填；`objects` 当前支持 `box` 的 `min/max/layer` 和 `plane` 的
-`point/normal/layer`。loader 可直接构建不带隐式平地的 Static
-`PhysicsQuery`，供 CharacterMotor 与测试后端使用；mesh、heightfield、
-material、volume 和 chunk 仍属于后续导出 / cook 阶段。
+必填。`objects` 支持：
+
+- `box` (v1+)：`min` / `max` / `layer`
+- `plane` (v1+)：`point` / `normal` / `layer`
+- `mesh` (v2+)：`layer` / `vertex_byte_offset` / `vertex_count` /
+  `index_byte_offset` / `index_count`；顶点和索引数据放在同名 `.bin` 侧车
+  里（`foo.collision.json` ↔ `foo.collision.bin`）
+
+`.bin` 侧车布局（小端）：
+
+```text
+bytes 0..3   magic 'A','C','O','L'
+bytes 4..7   uint32 version (kCollisionMeshBufferVersion, 当前为 1)
+bytes 8..    raw float32 顶点 + uint32 索引，按 JSON 中的字节偏移寻址
+```
+
+Static backend 加载 box / plane，忽略 mesh；Jolt backend (`atlas_physics_jolt`)
+通过 `JoltPhysicsQuery::AddMesh` 加载 mesh，跑 `MeshShape` 静态 body。
 Space 可通过 collision asset 安装自己的 Static query；手工替换 query 时会
 清除 asset metadata，避免观测状态和实际 backend 漂移。Cell C# 脚本可调用
 `CellServerEntity.LoadCollisionAsset(spaceId, path)` 给既有 Space 装载同一资源。
+heightfield、material、volume 和 chunk 仍属于后续导出 / cook 阶段。
 
 Jolt cache 只记录后端派生数据：
 

@@ -6,6 +6,8 @@
 #include "physics_jolt/jolt_physics_query.h"
 #endif
 
+#include "math/vector3.h"
+
 namespace atlas::physics::parity {
 
 namespace {
@@ -166,6 +168,57 @@ constexpr float kGiantBoxThickness = 100.0f;
   return s;
 }
 
+// Mesh scenario: Static approximates the mesh ground with a thin slab box.
+// Jolt loads an actual 100x100 XZ quad. The parity check tolerates more drift
+// (kMeshTolerance) because sphere-cast contact resolution against a triangle
+// face differs from sphere-cast against a box face by a few millimetres even
+// on perfectly flat geometry.
+[[nodiscard]] auto MakeMeshGroundBackend(BackendKind kind) -> std::unique_ptr<PhysicsQuery> {
+  constexpr float kHalfExtent = 50.0f;
+  switch (kind) {
+    case BackendKind::kFlat:
+      return nullptr;
+    case BackendKind::kStatic: {
+      auto query =
+          std::make_unique<StaticPhysicsQuery>(StaticGroundMode::kDisabled, -1000.0f);
+      StaticBox box;
+      box.min = {-kHalfExtent, -1.0f, -kHalfExtent};
+      box.max = {kHalfExtent, 0.0f, kHalfExtent};
+      query->AddBox(box);
+      return query;
+    }
+    case BackendKind::kJolt: {
+#ifdef ATLAS_PARITY_HAS_JOLT
+      auto query = std::make_unique<JoltPhysicsQuery>();
+      const math::Vector3 verts[] = {
+          {-kHalfExtent, 0.0f, -kHalfExtent},
+          { kHalfExtent, 0.0f, -kHalfExtent},
+          { kHalfExtent, 0.0f,  kHalfExtent},
+          {-kHalfExtent, 0.0f,  kHalfExtent},
+      };
+      const uint32_t indices[] = {0, 2, 1, 0, 3, 2};
+      query->AddMesh(verts, indices, 0);
+      return query;
+#else
+      return nullptr;
+#endif
+    }
+  }
+  return nullptr;
+}
+
+[[nodiscard]] auto MeshWalkLongPath() -> ParityScenario {
+  ParityScenario s;
+  s.id = "mesh_walk_long_path";
+  s.initial_state = InitialStateOnGround(0.0f);
+  s.inputs = {ForwardInput()};
+  s.tick_count = 150;  // 5s at 30Hz → ~25m forward, inside the ±50 quad
+  s.tolerance = kMeshTolerance;
+  s.backends = {BackendKind::kStatic, BackendKind::kJolt};
+  s.make_query = [](BackendKind kind) { return MakeMeshGroundBackend(kind); };
+  return s;
+}
+
 [[nodiscard]] auto BoxWalkSteady() -> ParityScenario {
   ParityScenario s;
   s.id = "box_walk_steady";
@@ -195,6 +248,7 @@ auto AllScenarios() -> std::vector<ParityScenario> {
       FlatJumpFall(),
       BoxDropToTop(),
       BoxWalkSteady(),
+      MeshWalkLongPath(),
   };
 }
 

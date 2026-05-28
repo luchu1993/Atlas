@@ -30,11 +30,6 @@ position history 都已落地。当前重心是协议边界硬化、验证矩阵
 - 验证后翻默认值到 ON；同时把 FetchContent 从 `GIT_TAG v5.2.0` 切到
   `URL + SHA256` 锁版本。
 
-**M4**：Static mesh 最小切片。
-- Collision asset schema v2：mesh triangle list，JSON metadata + `.bin` side-car。
-- Jolt 加载 mesh shape；手写 `.collision.json` + `.bin` 跑通。
-- Parity 场景集追加 `mesh_walk_long_path`。
-
 **M5**：`atlas_tool cook_collision` 最小可用。
 - 把 v2 asset 编成 `joltcache`（含 `source_hash` + `jolt_version`）。
 - Runtime mismatch → 拒绝启动，不 silent fallback。
