@@ -4,15 +4,15 @@ namespace Atlas.Mvp.Unity
 {
     /// <summary>
     /// Marks the attached Collider as a candidate for export into an Atlas
-    /// collision asset. The component defaults to <c>exportToServer = false</c>
-    /// so adding it to a GameObject is opt-in only — the M7 command-line
-    /// exporter skips anything without this component or with the flag off,
-    /// avoiding accidental shipping of client-only visual occluders, doors
-    /// or trigger volumes.
+    /// collision asset. Defaults to <c>exportToServer = false</c> so adding
+    /// the component is opt-in only — the command-line exporter skips
+    /// colliders without this component or with the flag off, avoiding
+    /// accidental shipping of client-only visual occluders, doors or
+    /// trigger volumes.
     ///
-    /// Phase 14 M6: primitive Box/Sphere/Capsule colliders only. Mesh and
-    /// terrain colliders, plus the named layer table, follow in later
-    /// milestones (M7 / Phase 14.3 layer RFC).
+    /// Current exporter supports primitive Box / Sphere / Capsule colliders.
+    /// Mesh and terrain colliders, plus a named layer enum, are planned
+    /// follow-ups.
     /// </summary>
     [DisallowMultipleComponent]
     [RequireComponent(typeof(Collider))]

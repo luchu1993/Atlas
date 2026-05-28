@@ -5,9 +5,9 @@ using UnityEngine;
 namespace Atlas.Mvp.Editor
 {
     /// <summary>
-    /// Surfaces opt-in state + shape/scale checks that the M7 exporter would
-    /// otherwise only report at cook time. Keeps the feedback loop tight for
-    /// solo level-design iteration.
+    /// Surfaces opt-in state + shape/scale checks that the cook-time
+    /// exporter would otherwise only report later. Keeps the feedback loop
+    /// tight for solo level-design iteration.
     /// </summary>
     [CustomEditor(typeof(ServerColliderAuthoring))]
     [CanEditMultipleObjects]
@@ -35,12 +35,12 @@ namespace Atlas.Mvp.Editor
                 return;
             }
 
-            // Unsupported shapes for M6 (primitive only).
+            // Current exporter supports primitive Box / Sphere / Capsule only.
             if (col is MeshCollider || col is TerrainCollider || col is WheelCollider)
             {
                 EditorGUILayout.HelpBox(
-                    $"{col.GetType().Name} is not supported by M6 (primitive only). " +
-                    "Mesh / terrain colliders land in M7+.",
+                    $"{col.GetType().Name} is not supported by the exporter yet. " +
+                    "Only primitive Box / Sphere / Capsule colliders are exported.",
                     MessageType.Warning);
             }
 
