@@ -154,6 +154,15 @@ auto Reviver::TargetEnabled(const ManagedTarget& t) const -> bool {
 
 auto Reviver::Init(int argc, char* argv[]) -> bool {
   if (argc > 0 && argv[0] != nullptr) self_exe_ = std::filesystem::absolute(argv[0]);
+  // slug/process_type must be set BEFORE ManagerApp::Init runs because
+  // ServerApp::Init calls our RegisterWatchers() inside it, and
+  // RegisterTargetWatchers builds the watcher path from t.slug. Setting
+  // these in InitTarget post-Init would leave watchers registered under
+  // reviver//* (empty slug) instead of reviver/cellappmgr/*.
+  cellappmgr_target_.slug = "cellappmgr";
+  cellappmgr_target_.process_type = ProcessType::kCellAppMgr;
+  baseappmgr_target_.slug = "baseappmgr";
+  baseappmgr_target_.process_type = ProcessType::kBaseAppMgr;
   if (!ManagerApp::Init(argc, argv)) return false;
 
   InitTarget(cellappmgr_target_, ProcessType::kCellAppMgr, "cellappmgr");
