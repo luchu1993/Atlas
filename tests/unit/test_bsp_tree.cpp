@@ -305,6 +305,25 @@ TEST(BSPTree, Balance_BucketsMoveToEstimatedLoadBoundary) {
   EXPECT_FLOAT_EQ(t.FindCellById(1)->bounds.max_x, t.FindCellById(2)->bounds.min_x);
 }
 
+TEST(BSPTree, Balance_LoadBucketsOverrideEntityBuckets) {
+  auto t = MakeFiniteSingleCellTree(1, 30001);
+  ASSERT_TRUE(t.Split(1, BSPAxis::kX, 0.f, MakeLeafInfo(2, 30002)).HasValue());
+
+  auto* left = t.FindCellByIdMutable(1);
+  auto* right = t.FindCellByIdMutable(2);
+  ASSERT_NE(left, nullptr);
+  ASSERT_NE(right, nullptr);
+  left->load = 0.8f;
+  right->load = 0.2f;
+  left->x_buckets = {10, 10, 10, 10, 10, 10, 10, 10};
+  left->x_load_buckets = {0, 0, 0, 80, 0, 0, 0, 0};
+  right->x_buckets = {10, 10, 10, 10, 10, 10, 10, 10};
+
+  t.Balance(/*safety_bound=*/0.95f);
+  EXPECT_NEAR(t.FindCellById(2)->bounds.min_x, -500.f, 1e-5f);
+  EXPECT_FLOAT_EQ(t.FindCellById(1)->bounds.max_x, t.FindCellById(2)->bounds.min_x);
+}
+
 TEST(BSPTree, Balance_AggressionIncreasesOnRepeatedSameDirection) {
   auto t = MakeSingleCellTree(1, 30001);
   ASSERT_TRUE(t.Split(1, BSPAxis::kX, 0.f, MakeLeafInfo(2, 30002)).HasValue());

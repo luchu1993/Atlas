@@ -4,6 +4,7 @@
 #include <deque>
 #include <filesystem>
 #include <fstream>
+#include <optional>
 #include <string>
 #include <thread>
 #include <vector>
@@ -17,6 +18,7 @@
 #include "network/network_interface.h"
 #include "network/reliable_udp.h"
 #include "network/socket.h"
+#include "network/tcp_channel.h"
 #include "server/machined_client.h"
 
 #if defined(_WIN32)
@@ -37,6 +39,19 @@ bool PollUntil(EventDispatcher& disp, Pred pred,
   const auto deadline = std::chrono::steady_clock::now() + timeout;
   while (std::chrono::steady_clock::now() < deadline) {
     disp.ProcessOnce();
+    if (pred()) return true;
+    std::this_thread::sleep_for(std::chrono::milliseconds(10));
+  }
+  return false;
+}
+
+template <typename Pred>
+bool PollUntil(EventDispatcher& first, EventDispatcher& second, Pred pred,
+               std::chrono::milliseconds timeout = std::chrono::milliseconds(5000)) {
+  const auto deadline = std::chrono::steady_clock::now() + timeout;
+  while (std::chrono::steady_clock::now() < deadline) {
+    first.ProcessOnce();
+    second.ProcessOnce();
     if (pred()) return true;
     std::this_thread::sleep_for(std::chrono::milliseconds(10));
   }
@@ -86,9 +101,9 @@ auto ServerBinDir() -> std::filesystem::path {
 auto ResolveServerExe(const std::wstring& subdir, const std::wstring& filename)
     -> std::filesystem::path {
   auto p1 = ServerBinDir() / filename;
-  if (std::filesystem::exists(p1)) return p1;
+  if (std::filesystem::exists(p1)) return std::filesystem::absolute(p1);
   auto p2 = BuildRoot() / "src" / "server" / subdir / "Debug" / filename;
-  if (std::filesystem::exists(p2)) return p2;
+  if (std::filesystem::exists(p2)) return std::filesystem::absolute(p2);
   return {};
 }
 
@@ -347,22 +362,154 @@ auto LaunchCellAppMgrWithRetry(const std::filesystem::path& cellappmgr_exe,
 auto LaunchReviver(const std::filesystem::path& reviver_exe,
                    const std::filesystem::path& cellappmgr_exe,
                    const std::wstring& machined_addr, uint16_t cellappmgr_port,
-                   const std::filesystem::path& snapshot_path) -> Child {
-  return Child::Launch(
-      reviver_exe,
-      {L"--type", L"reviver", L"--name", L"reviver_process_test", L"--update-hertz", L"100",
-       L"--machined", machined_addr, L"--revive-cellappmgr-exe", cellappmgr_exe.wstring(),
-       L"--revive-cellappmgr-name", L"cellappmgr_revived", L"--revive-cellappmgr-port",
-       std::to_wstring(cellappmgr_port), L"--revive-cellappmgr-on-start", L"true",
-       L"--revive-cellappmgr-snapshot-path", snapshot_path.wstring(),
-       L"--revive-cellappmgr-update-hertz", L"100", L"--revive-restart-delay-ms", L"50",
-       L"--revive-max-restarts", L"3"},
-      "reviver");
+                   const std::filesystem::path& snapshot_path,
+                   const std::filesystem::path& leader_lock_path,
+                   const std::wstring& reviver_name = L"reviver_process_test",
+                   uint32_t max_restarts = 3,
+                   uint32_t health_failure_threshold = 2,
+                   uint32_t manager_health_timeout_ms = 5000,
+                   uint32_t launch_timeout_ms = 5000,
+                   uint32_t snapshot_interval_ms = 250,
+                   const std::filesystem::path& config_path = {},
+                   const std::filesystem::path& output_path = {},
+                   uint32_t heartbeat_timeout_ms = 500) -> Child {
+  std::vector<std::wstring> args{
+      L"--type", L"reviver", L"--name", reviver_name, L"--update-hertz", L"100",
+      L"--machined", machined_addr, L"--revive-cellappmgr-exe", cellappmgr_exe.wstring(),
+      L"--revive-cellappmgr-name", L"cellappmgr_revived", L"--revive-cellappmgr-port",
+      std::to_wstring(cellappmgr_port), L"--revive-cellappmgr-on-start", L"true",
+      L"--revive-cellappmgr-snapshot-path", snapshot_path.wstring(),
+      L"--revive-cellappmgr-snapshot-interval-ms", std::to_wstring(snapshot_interval_ms),
+      L"--revive-leader-lock-path", leader_lock_path.wstring(),
+      L"--revive-cellappmgr-update-hertz", L"100",
+      L"--revive-cellappmgr-launch-timeout-ms", std::to_wstring(launch_timeout_ms),
+      L"--revive-cellappmgr-health-interval-ms", L"50",
+      L"--revive-cellappmgr-heartbeat-timeout-ms",
+      std::to_wstring(heartbeat_timeout_ms),
+      L"--revive-cellappmgr-manager-health-timeout-ms",
+      std::to_wstring(manager_health_timeout_ms),
+      L"--revive-cellappmgr-health-failure-threshold",
+      std::to_wstring(health_failure_threshold),
+      L"--revive-cellappmgr-audit-interval-ms", L"50",
+      L"--revive-cellappmgr-missing-audit-threshold", L"2", L"--revive-restart-delay-ms", L"50",
+      L"--revive-max-restarts", std::to_wstring(max_restarts)};
+  if (!config_path.empty()) {
+    args.push_back(L"--config");
+    args.push_back(config_path.wstring());
+  }
+  if (!output_path.empty()) {
+    args.push_back(L"--revive-cellappmgr-output-path");
+    args.push_back(output_path.wstring());
+  }
+  return Child::Launch(reviver_exe, args, "reviver");
+}
+
+auto FileContains(const std::filesystem::path& path, std::string_view needle) -> bool {
+  std::ifstream file(path, std::ios::in);
+  std::string line;
+  while (std::getline(file, line)) {
+    if (line.find(needle) != std::string::npos) return true;
+  }
+  return false;
+}
+
+auto QueryWatcherValue(MachinedClient& client, EventDispatcher& disp, ProcessType type,
+                       const std::string& name, const std::string& path)
+    -> std::optional<std::string> {
+  bool done = false;
+  bool found = false;
+  std::string value;
+  client.QueryWatcher(type, name, path,
+                      [&](bool result_found, const std::string&, const std::string& result_value) {
+                        found = result_found;
+                        value = result_value;
+                        done = true;
+                      });
+  if (!PollUntil(disp, [&] { return done; }, std::chrono::milliseconds(1000))) {
+    return std::nullopt;
+  }
+  if (!found) return std::nullopt;
+  return value;
 }
 
 #endif  // defined(_WIN32)
 
 }  // namespace
+
+TEST(MachinedClient, AsyncQueryTimesOutOnSilentConnection) {
+#if !defined(_WIN32)
+  GTEST_SKIP() << "Windows-only process harness";
+#else
+  EventDispatcher server_disp{"silent_machined_query_server"};
+  server_disp.SetMaxPollWait(Milliseconds(1));
+  NetworkInterface server_net(server_disp);
+  auto listen = server_net.StartTcpServer(Address("127.0.0.1", 0));
+  ASSERT_TRUE(listen.HasValue()) << listen.Error().Message();
+
+  EventDispatcher client_disp{"silent_machined_query_client"};
+  client_disp.SetMaxPollWait(Milliseconds(1));
+  NetworkInterface client_net(client_disp);
+  MachinedClient client(client_disp, client_net, Milliseconds(100));
+  ASSERT_TRUE(client.Connect(server_net.TcpAddress()));
+
+  bool called = false;
+  std::vector<machined::ProcessInfo> result{{}};
+  client.QueryAsync(ProcessType::kCellAppMgr, [&](std::vector<machined::ProcessInfo> infos) {
+    result = std::move(infos);
+    called = true;
+  });
+
+  ASSERT_TRUE(PollUntil(client_disp, server_disp, [&] {
+    client.Tick();
+    client_net.FlushDirtySendChannels();
+    server_net.FlushDirtySendChannels();
+    return called;
+  }, std::chrono::milliseconds(1500)));
+  EXPECT_TRUE(result.empty());
+#endif
+}
+
+TEST(MachinedClient, WatcherQueryTimesOutOnSilentConnection) {
+#if !defined(_WIN32)
+  GTEST_SKIP() << "Windows-only process harness";
+#else
+  EventDispatcher server_disp{"silent_machined_watcher_server"};
+  server_disp.SetMaxPollWait(Milliseconds(1));
+  NetworkInterface server_net(server_disp);
+  auto listen = server_net.StartTcpServer(Address("127.0.0.1", 0));
+  ASSERT_TRUE(listen.HasValue()) << listen.Error().Message();
+
+  EventDispatcher client_disp{"silent_machined_watcher_client"};
+  client_disp.SetMaxPollWait(Milliseconds(1));
+  NetworkInterface client_net(client_disp);
+  MachinedClient client(client_disp, client_net, Milliseconds(100));
+  ASSERT_TRUE(client.Connect(server_net.TcpAddress()));
+
+  bool called = false;
+  bool found = true;
+  std::string source_name;
+  std::string value{"unchanged"};
+  const auto rid = client.QueryWatcher(
+      ProcessType::kCellAppMgr, "cellappmgr_missing", "app/uptime_seconds",
+      [&](bool result_found, const std::string& result_source, const std::string& result_value) {
+        found = result_found;
+        source_name = result_source;
+        value = result_value;
+        called = true;
+      });
+  ASSERT_NE(rid, 0u);
+
+  ASSERT_TRUE(PollUntil(client_disp, server_disp, [&] {
+    client.Tick();
+    client_net.FlushDirtySendChannels();
+    server_net.FlushDirtySendChannels();
+    return called;
+  }, std::chrono::milliseconds(1500)));
+  EXPECT_FALSE(found);
+  EXPECT_EQ(source_name, "cellappmgr_missing");
+  EXPECT_TRUE(value.empty());
+#endif
+}
 
 TEST(CellAppMgrProcess, MachinedAndCellAppMgrBootAndRegister) {
 #if !defined(_WIN32)
@@ -514,12 +661,26 @@ TEST(CellAppMgrProcess, ReviverColdStartsAndRestartsCellAppMgr) {
       std::to_string(::GetCurrentProcessId()) + "_" + std::to_string(::GetTickCount64());
   const auto snapshot_path = std::filesystem::temp_directory_path() /
                              ("atlas_reviver_cellappmgr_snapshot_" + snapshot_stamp + ".bin");
+  const auto leader_lock_path = std::filesystem::temp_directory_path() /
+                                ("atlas_reviver_cellappmgr_lock_" + snapshot_stamp + ".lock");
+  const auto reviver_config_path = std::filesystem::temp_directory_path() /
+                                   ("atlas_reviver_cellappmgr_config_" + snapshot_stamp + ".json");
+  const auto revived_output_path = std::filesystem::temp_directory_path() /
+                                   ("atlas_reviver_cellappmgr_output_" + snapshot_stamp + ".log");
+  {
+    std::ofstream config(reviver_config_path, std::ios::out | std::ios::trunc);
+    config << R"({"cellappmgr_lb_tick_load_weight":2.5})";
+  }
   std::error_code ec;
   std::filesystem::remove(snapshot_path, ec);
+  std::filesystem::remove(leader_lock_path, ec);
+  std::filesystem::remove(revived_output_path, ec);
 
   PidGuard revived_mgr;
   Child reviver = LaunchReviver(reviver_exe, cellappmgr_exe, machined_addr,
-                                cellappmgr_port, snapshot_path);
+                                cellappmgr_port, snapshot_path, leader_lock_path,
+                                L"reviver_process_test", 3, 2, 5000, 5000, 250,
+                                reviver_config_path, revived_output_path);
   ASSERT_TRUE(reviver.IsRunning()) << reviver.Diagnostic();
 
   EventDispatcher disp{"reviver_process_registry"};
@@ -540,6 +701,159 @@ TEST(CellAppMgrProcess, ReviverColdStartsAndRestartsCellAppMgr) {
   ASSERT_NE(first_mgr.pid, 0u);
   revived_mgr.Reset(first_mgr.pid);
 
+  const auto snapshot_interval = QueryWatcherValue(client, disp, ProcessType::kCellAppMgr,
+                                                   "cellappmgr_revived",
+                                                   "cellappmgr/ha/snapshot_interval_ms");
+  ASSERT_TRUE(snapshot_interval.has_value());
+  EXPECT_EQ(*snapshot_interval, "250");
+  const auto tick_load_weight = QueryWatcherValue(client, disp, ProcessType::kCellAppMgr,
+                                                  "cellappmgr_revived",
+                                                  "cellappmgr/lb/weights/tick_load");
+  ASSERT_TRUE(tick_load_weight.has_value());
+  EXPECT_EQ(*tick_load_weight, "2.500000");
+  // Regression guard for the multi-target watcher path: this watcher key
+  // is built as std::format("reviver/{}", t.slug) + "/output_path"
+  // inside RegisterTargetWatchers. If a future refactor delays
+  // ManagedTarget::slug initialisation past ServerApp::Init's
+  // RegisterWatchers() call, the key bakes to "reviver//output_path"
+  // (empty slug segment) and this has_value() assertion fails. Keep
+  // this ASSERT load-bearing; deleting it removes the only test that
+  // catches Reviver::Init ordering regressions of the slug field.
+  const auto output_path = QueryWatcherValue(client, disp, ProcessType::kReviver,
+                                             "reviver_process_test",
+                                             "reviver/cellappmgr/output_path");
+  ASSERT_TRUE(output_path.has_value());
+  EXPECT_EQ(std::filesystem::path(*output_path), revived_output_path);
+  ASSERT_TRUE(PollUntil(disp, [&] {
+    return FileContains(revived_output_path, "cellappmgr_revived started");
+  })) << reviver.Diagnostic();
+
+  ASSERT_TRUE(PollUntil(disp, [&] {
+    const auto audits = QueryWatcherValue(client, disp, ProcessType::kReviver,
+                                          "reviver_process_test",
+                                          "reviver/cellappmgr/registry_audits");
+    if (!audits) return false;
+    return std::stoi(*audits) > 0;
+  })) << machined.Diagnostic() << "\n"
+      << reviver.Diagnostic();
+  const auto missing = QueryWatcherValue(client, disp, ProcessType::kReviver,
+                                         "reviver_process_test",
+                                         "reviver/cellappmgr/registry_missing");
+  ASSERT_TRUE(missing.has_value());
+  EXPECT_EQ(*missing, "0");
+  const auto liveness = QueryWatcherValue(client, disp, ProcessType::kReviver,
+                                          "reviver_process_test",
+                                          "reviver/cellappmgr/liveness_failures");
+  ASSERT_TRUE(liveness.has_value());
+  EXPECT_EQ(*liveness, "0");
+  ASSERT_TRUE(PollUntil(disp, [&] {
+    const auto checks = QueryWatcherValue(client, disp, ProcessType::kReviver,
+                                          "reviver_process_test",
+                                          "reviver/cellappmgr/health_checks");
+    if (!checks) return false;
+    return std::stoi(*checks) > 0;
+  })) << machined.Diagnostic() << "\n"
+      << reviver.Diagnostic();
+  const auto health_failures = QueryWatcherValue(client, disp, ProcessType::kReviver,
+                                                  "reviver_process_test",
+                                                  "reviver/cellappmgr/health_failures");
+  ASSERT_TRUE(health_failures.has_value());
+  EXPECT_EQ(*health_failures, "0");
+  const auto manager_health_timeouts =
+      QueryWatcherValue(client, disp, ProcessType::kReviver, "reviver_process_test",
+                        "reviver/cellappmgr/manager_health_timeouts");
+  ASSERT_TRUE(manager_health_timeouts.has_value());
+  EXPECT_EQ(*manager_health_timeouts, "0");
+  ASSERT_TRUE(PollUntil(disp, [&] {
+    const auto acks = QueryWatcherValue(client, disp, ProcessType::kReviver,
+                                        "reviver_process_test",
+                                        "reviver/cellappmgr/heartbeat_acks");
+    if (!acks) return false;
+    return std::stoi(*acks) > 0;
+  })) << machined.Diagnostic() << "\n"
+      << reviver.Diagnostic();
+  const auto first_acks = QueryWatcherValue(client, disp, ProcessType::kReviver,
+                                            "reviver_process_test",
+                                            "reviver/cellappmgr/heartbeat_acks");
+  ASSERT_TRUE(first_acks.has_value());
+  const auto first_ack_age = QueryWatcherValue(client, disp, ProcessType::kReviver,
+                                               "reviver_process_test",
+                                               "reviver/cellappmgr/heartbeat_last_ack_age_ms");
+  ASSERT_TRUE(first_ack_age.has_value());
+  EXPECT_GE(std::stoll(*first_ack_age), 0);
+  ASSERT_TRUE(PollUntil(disp, [&] {
+    const auto saves = QueryWatcherValue(client, disp, ProcessType::kReviver,
+                                         "reviver_process_test",
+                                         "reviver/cellappmgr/heartbeat_snapshot_saves");
+    if (!saves) return false;
+    return std::stoull(*saves) > 0;
+  })) << machined.Diagnostic() << "\n"
+      << reviver.Diagnostic();
+  const auto heartbeat_snapshot_dirty =
+      QueryWatcherValue(client, disp, ProcessType::kReviver, "reviver_process_test",
+                        "reviver/cellappmgr/heartbeat_snapshot_dirty");
+  ASSERT_TRUE(heartbeat_snapshot_dirty.has_value());
+  EXPECT_EQ(*heartbeat_snapshot_dirty, "false");
+  const auto heartbeat_snapshot_stale =
+      QueryWatcherValue(client, disp, ProcessType::kReviver, "reviver_process_test",
+                        "reviver/cellappmgr/heartbeat_snapshot_save_stale");
+  ASSERT_TRUE(heartbeat_snapshot_stale.has_value());
+  EXPECT_EQ(*heartbeat_snapshot_stale, "false");
+  const auto heartbeat_snapshot_failures =
+      QueryWatcherValue(client, disp, ProcessType::kReviver, "reviver_process_test",
+                        "reviver/cellappmgr/heartbeat_snapshot_failures");
+  ASSERT_TRUE(heartbeat_snapshot_failures.has_value());
+  EXPECT_EQ(*heartbeat_snapshot_failures, "0");
+  const auto heartbeat_snapshot_status =
+      QueryWatcherValue(client, disp, ProcessType::kReviver, "reviver_process_test",
+                        "reviver/cellappmgr/heartbeat_snapshot_status");
+  ASSERT_TRUE(heartbeat_snapshot_status.has_value());
+  EXPECT_NE(heartbeat_snapshot_status->find("state=ready"), std::string::npos);
+  EXPECT_NE(heartbeat_snapshot_status->find("failures=0"), std::string::npos);
+  EXPECT_NE(heartbeat_snapshot_status->find("dirty=0"), std::string::npos);
+  EXPECT_NE(heartbeat_snapshot_status->find("stale=0"), std::string::npos);
+  EXPECT_NE(heartbeat_snapshot_status->find("ack_age_ms="), std::string::npos);
+  const auto first_restart_attempts =
+      QueryWatcherValue(client, disp, ProcessType::kReviver, "reviver_process_test",
+                        "reviver/cellappmgr/restart_attempts");
+  ASSERT_TRUE(first_restart_attempts.has_value());
+  EXPECT_EQ(*first_restart_attempts, "0");
+  const auto heartbeat_sent = QueryWatcherValue(client, disp, ProcessType::kReviver,
+                                                "reviver_process_test",
+                                                "reviver/cellappmgr/heartbeat_sent");
+  ASSERT_TRUE(heartbeat_sent.has_value());
+  EXPECT_GE(std::stoi(*heartbeat_sent), 1);
+  const auto heartbeat_timeout_ms = QueryWatcherValue(client, disp, ProcessType::kReviver,
+                                                      "reviver_process_test",
+                                                      "reviver/cellappmgr/heartbeat_timeout_ms");
+  ASSERT_TRUE(heartbeat_timeout_ms.has_value());
+  EXPECT_EQ(*heartbeat_timeout_ms, "500");
+  const auto heartbeat_timeouts = QueryWatcherValue(client, disp, ProcessType::kReviver,
+                                                    "reviver_process_test",
+                                                    "reviver/cellappmgr/heartbeat_timeouts");
+  ASSERT_TRUE(heartbeat_timeouts.has_value());
+  EXPECT_EQ(*heartbeat_timeouts, "0");
+  const auto forced_terminations =
+      QueryWatcherValue(client, disp, ProcessType::kReviver, "reviver_process_test",
+                        "reviver/cellappmgr/forced_terminations");
+  ASSERT_TRUE(forced_terminations.has_value());
+  EXPECT_EQ(*forced_terminations, "0");
+  const auto status = QueryWatcherValue(client, disp, ProcessType::kReviver,
+                                        "reviver_process_test",
+                                        "reviver/cellappmgr/status");
+  ASSERT_TRUE(status.has_value());
+  EXPECT_EQ(*status, "active");
+  const auto launch_pending =
+      QueryWatcherValue(client, disp, ProcessType::kReviver, "reviver_process_test",
+                        "reviver/cellappmgr/launch_pending");
+  ASSERT_TRUE(launch_pending.has_value());
+  EXPECT_EQ(*launch_pending, "false");
+  const auto first_generation =
+      QueryWatcherValue(client, disp, ProcessType::kReviver, "reviver_process_test",
+                        "reviver/cellappmgr/active_generation");
+  ASSERT_TRUE(first_generation.has_value());
+  EXPECT_EQ(*first_generation, "1");
+
   ASSERT_TRUE(TerminatePid(first_mgr.pid));
   revived_mgr.Forget();
 
@@ -550,7 +864,813 @@ TEST(CellAppMgrProcess, ReviverColdStartsAndRestartsCellAppMgr) {
       << machined.Diagnostic() << "\n" << reviver.Diagnostic();
   revived_mgr.Reset(second_mgr.pid);
   EXPECT_EQ(second_mgr.internal_addr.Port(), cellappmgr_port);
+  ASSERT_TRUE(PollUntil(disp, [&] {
+    const auto acks = QueryWatcherValue(client, disp, ProcessType::kReviver,
+                                        "reviver_process_test",
+                                        "reviver/cellappmgr/heartbeat_acks");
+    if (!acks) return false;
+    return std::stoi(*acks) > std::stoi(*first_acks);
+  })) << machined.Diagnostic() << "\n"
+      << reviver.Diagnostic();
+  const auto second_restart_attempts =
+      QueryWatcherValue(client, disp, ProcessType::kReviver, "reviver_process_test",
+                        "reviver/cellappmgr/restart_attempts");
+  ASSERT_TRUE(second_restart_attempts.has_value());
+  EXPECT_EQ(*second_restart_attempts, "0");
+  const auto second_generation =
+      QueryWatcherValue(client, disp, ProcessType::kReviver, "reviver_process_test",
+                        "reviver/cellappmgr/active_generation");
+  ASSERT_TRUE(second_generation.has_value());
+  EXPECT_EQ(std::stoull(*second_generation), std::stoull(*first_generation) + 1);
+  const auto second_acks = QueryWatcherValue(client, disp, ProcessType::kReviver,
+                                             "reviver_process_test",
+                                             "reviver/cellappmgr/heartbeat_acks");
+  ASSERT_TRUE(second_acks.has_value());
 
+  client.RequestShutdownTarget(ProcessType::kCellAppMgr, "cellappmgr_revived", 1);
+  net.FlushDirtySendChannels();
+
+  machined::ProcessInfo third_mgr;
+  ASSERT_TRUE(WaitForNamedRegistrationWithDifferentPid(client, disp, ProcessType::kCellAppMgr,
+                                                       "cellappmgr_revived", second_mgr.pid,
+                                                       &third_mgr))
+      << machined.Diagnostic() << "\n" << reviver.Diagnostic();
+  revived_mgr.Reset(third_mgr.pid);
+  EXPECT_EQ(third_mgr.internal_addr.Port(), cellappmgr_port);
+  ASSERT_TRUE(PollUntil(disp, [&] {
+    const auto acks = QueryWatcherValue(client, disp, ProcessType::kReviver,
+                                        "reviver_process_test",
+                                        "reviver/cellappmgr/heartbeat_acks");
+    if (!acks) return false;
+    return std::stoi(*acks) > std::stoi(*second_acks);
+  })) << machined.Diagnostic() << "\n"
+      << reviver.Diagnostic();
+  const auto third_generation =
+      QueryWatcherValue(client, disp, ProcessType::kReviver, "reviver_process_test",
+                        "reviver/cellappmgr/active_generation");
+  ASSERT_TRUE(third_generation.has_value());
+  EXPECT_EQ(std::stoull(*third_generation), std::stoull(*second_generation) + 1);
+
+  reviver = Child{};
+  revived_mgr.Reset(0);
   std::filesystem::remove(snapshot_path, ec);
+  std::filesystem::remove(leader_lock_path, ec);
+  std::filesystem::remove(reviver_config_path, ec);
+  std::filesystem::remove(revived_output_path, ec);
+#endif
+}
+
+TEST(CellAppMgrProcess, ReviverAttachesToExistingCellAppMgrWithoutColdStart) {
+#if !defined(_WIN32)
+  GTEST_SKIP() << "Windows-only process harness";
+#else
+  const auto machined_exe = ResolveServerExe(L"machined", L"machined.exe");
+  const auto cellappmgr_exe = ResolveServerExe(L"cellappmgr", L"atlas_cellappmgr.exe");
+  const auto reviver_exe = ResolveServerExe(L"reviver", L"atlas_reviver.exe");
+  if (machined_exe.empty() || cellappmgr_exe.empty() || reviver_exe.empty()) {
+    GTEST_SKIP() << "server binaries not found; build_root=" << BuildRoot();
+  }
+
+  uint16_t machined_port = 0;
+  Child machined;
+  ASSERT_TRUE(LaunchMachinedWithRetry(machined_exe, L"reviver_attach", &machined_port, &machined))
+      << "machined failed to start + bind TCP on any attempt";
+
+  const std::wstring machined_addr = L"127.0.0.1:" + std::to_wstring(machined_port);
+  const uint16_t cellappmgr_port = ReserveUdpPort();
+  ASSERT_NE(cellappmgr_port, 0u);
+  Child existing_mgr = Child::Launch(
+      cellappmgr_exe,
+      {L"--type", L"cellappmgr", L"--name", L"cellappmgr_revived", L"--update-hertz",
+       L"100", L"--internal-port", std::to_wstring(cellappmgr_port), L"--machined",
+       machined_addr},
+      "cellappmgr_existing");
+  ASSERT_TRUE(existing_mgr.IsRunning()) << existing_mgr.Diagnostic();
+  ASSERT_TRUE(WaitForUdpBound(cellappmgr_port, std::chrono::seconds(2)));
+
+  EventDispatcher disp{"reviver_attach_registry"};
+  disp.SetMaxPollWait(Milliseconds(1));
+  NetworkInterface net(disp);
+  MachinedClient client(disp, net);
+  ASSERT_TRUE(client.Connect(Address("127.0.0.1", machined_port)));
+
+  machined::ProcessInfo existing_info;
+  ASSERT_TRUE(WaitForNamedRegistration(client, disp, ProcessType::kCellAppMgr,
+                                       "cellappmgr_revived", &existing_info))
+      << machined.Diagnostic() << "\n"
+      << existing_mgr.Diagnostic();
+  ASSERT_NE(existing_info.pid, 0u);
+  EXPECT_EQ(existing_info.internal_addr.Port(), cellappmgr_port);
+
+  const auto stamp =
+      std::to_string(::GetCurrentProcessId()) + "_" + std::to_string(::GetTickCount64());
+  const auto snapshot_path = std::filesystem::temp_directory_path() /
+                             ("atlas_reviver_attach_snapshot_" + stamp + ".bin");
+  const auto leader_lock_path = std::filesystem::temp_directory_path() /
+                                ("atlas_reviver_attach_" + stamp + ".lock");
+  std::error_code ec;
+  std::filesystem::remove(snapshot_path, ec);
+  std::filesystem::remove(leader_lock_path, ec);
+
+  Child reviver = LaunchReviver(reviver_exe, cellappmgr_exe, machined_addr,
+                                cellappmgr_port, snapshot_path, leader_lock_path,
+                                L"reviver_attach");
+  ASSERT_TRUE(reviver.IsRunning()) << reviver.Diagnostic();
+  ASSERT_TRUE(WaitForNamedRegistration(client, disp, ProcessType::kReviver, "reviver_attach"))
+      << machined.Diagnostic() << "\n" << reviver.Diagnostic();
+
+  ASSERT_TRUE(PollUntil(disp, [&] {
+    const auto active = QueryWatcherValue(client, disp, ProcessType::kReviver,
+                                          "reviver_attach", "reviver/cellappmgr/active");
+    const auto active_pid = QueryWatcherValue(client, disp, ProcessType::kReviver,
+                                              "reviver_attach",
+                                              "reviver/cellappmgr/active_pid");
+    if (!active || !active_pid) return false;
+    return *active == "true" && std::stoul(*active_pid) == existing_info.pid;
+  })) << machined.Diagnostic() << "\n"
+      << reviver.Diagnostic();
+
+  const auto launch_count = QueryWatcherValue(client, disp, ProcessType::kReviver,
+                                              "reviver_attach",
+                                              "reviver/cellappmgr/launch_count");
+  ASSERT_TRUE(launch_count.has_value());
+  EXPECT_EQ(*launch_count, "0");
+  const auto active_generation = QueryWatcherValue(client, disp, ProcessType::kReviver,
+                                                   "reviver_attach",
+                                                   "reviver/cellappmgr/active_generation");
+  ASSERT_TRUE(active_generation.has_value());
+  EXPECT_EQ(*active_generation, "1");
+
+  ASSERT_TRUE(PollUntil(disp, [&] {
+    const auto acks = QueryWatcherValue(client, disp, ProcessType::kReviver,
+                                        "reviver_attach",
+                                        "reviver/cellappmgr/heartbeat_acks");
+    if (!acks) return false;
+    return std::stoi(*acks) > 0;
+  })) << machined.Diagnostic() << "\n"
+      << reviver.Diagnostic();
+  const auto heartbeat_timeouts = QueryWatcherValue(client, disp, ProcessType::kReviver,
+                                                    "reviver_attach",
+                                                    "reviver/cellappmgr/heartbeat_timeouts");
+  ASSERT_TRUE(heartbeat_timeouts.has_value());
+  EXPECT_EQ(*heartbeat_timeouts, "0");
+
+  auto managers = client.QuerySync(ProcessType::kCellAppMgr, std::chrono::milliseconds(200));
+  int target_count = 0;
+  for (const auto& info : managers) {
+    if (info.name != "cellappmgr_revived") continue;
+    ++target_count;
+    EXPECT_EQ(info.pid, existing_info.pid);
+  }
+  EXPECT_EQ(target_count, 1);
+
+  reviver = Child{};
+  existing_mgr = Child{};
+  std::filesystem::remove(snapshot_path, ec);
+  std::filesystem::remove(leader_lock_path, ec);
+#endif
+}
+
+TEST(CellAppMgrProcess, ReviverStartsNewCellAppMgrAfterTargetDiedBeforeSubscribe) {
+#if !defined(_WIN32)
+  GTEST_SKIP() << "Windows-only process harness";
+#else
+  const auto machined_exe = ResolveServerExe(L"machined", L"machined.exe");
+  const auto cellappmgr_exe = ResolveServerExe(L"cellappmgr", L"atlas_cellappmgr.exe");
+  const auto reviver_exe = ResolveServerExe(L"reviver", L"atlas_reviver.exe");
+  if (machined_exe.empty() || cellappmgr_exe.empty() || reviver_exe.empty()) {
+    GTEST_SKIP() << "server binaries not found; build_root=" << BuildRoot();
+  }
+
+  uint16_t machined_port = 0;
+  Child machined;
+  ASSERT_TRUE(LaunchMachinedWithRetry(machined_exe, L"reviver_missed_death",
+                                      &machined_port, &machined))
+      << "machined failed to start + bind TCP on any attempt";
+
+  const std::wstring machined_addr = L"127.0.0.1:" + std::to_wstring(machined_port);
+  const uint16_t cellappmgr_port = ReserveUdpPort();
+  ASSERT_NE(cellappmgr_port, 0u);
+  Child dead_mgr = Child::Launch(
+      cellappmgr_exe,
+      {L"--type", L"cellappmgr", L"--name", L"cellappmgr_revived", L"--update-hertz",
+       L"100", L"--internal-port", std::to_wstring(cellappmgr_port), L"--machined",
+       machined_addr},
+      "cellappmgr_dead_before_reviver");
+  ASSERT_TRUE(dead_mgr.IsRunning()) << dead_mgr.Diagnostic();
+  ASSERT_TRUE(WaitForUdpBound(cellappmgr_port, std::chrono::seconds(2)));
+
+  EventDispatcher disp{"reviver_missed_death_registry"};
+  disp.SetMaxPollWait(Milliseconds(1));
+  NetworkInterface net(disp);
+  MachinedClient client(disp, net);
+  ASSERT_TRUE(client.Connect(Address("127.0.0.1", machined_port)));
+
+  machined::ProcessInfo dead_info;
+  ASSERT_TRUE(WaitForNamedRegistration(client, disp, ProcessType::kCellAppMgr,
+                                       "cellappmgr_revived", &dead_info))
+      << machined.Diagnostic() << "\n"
+      << dead_mgr.Diagnostic();
+  ASSERT_NE(dead_info.pid, 0u);
+  ASSERT_TRUE(TerminatePid(dead_info.pid));
+  dead_mgr = Child{};
+
+  const auto stamp =
+      std::to_string(::GetCurrentProcessId()) + "_" + std::to_string(::GetTickCount64());
+  const auto snapshot_path = std::filesystem::temp_directory_path() /
+                             ("atlas_reviver_missed_death_snapshot_" + stamp + ".bin");
+  const auto leader_lock_path = std::filesystem::temp_directory_path() /
+                                ("atlas_reviver_missed_death_" + stamp + ".lock");
+  std::error_code ec;
+  std::filesystem::remove(snapshot_path, ec);
+  std::filesystem::remove(leader_lock_path, ec);
+
+  PidGuard revived_mgr;
+  Child reviver = LaunchReviver(reviver_exe, cellappmgr_exe, machined_addr,
+                                cellappmgr_port, snapshot_path, leader_lock_path,
+                                L"reviver_missed_death");
+  ASSERT_TRUE(reviver.IsRunning()) << reviver.Diagnostic();
+  ASSERT_TRUE(WaitForNamedRegistration(client, disp, ProcessType::kReviver,
+                                       "reviver_missed_death"))
+      << machined.Diagnostic() << "\n" << reviver.Diagnostic();
+
+  machined::ProcessInfo revived_info;
+  ASSERT_TRUE(WaitForNamedRegistrationWithDifferentPid(client, disp, ProcessType::kCellAppMgr,
+                                                       "cellappmgr_revived", dead_info.pid,
+                                                       &revived_info))
+      << machined.Diagnostic() << "\n" << reviver.Diagnostic();
+  revived_mgr.Reset(revived_info.pid);
+  EXPECT_EQ(revived_info.internal_addr.Port(), cellappmgr_port);
+
+  ASSERT_TRUE(PollUntil(disp, [&] {
+    const auto launch_count = QueryWatcherValue(client, disp, ProcessType::kReviver,
+                                                "reviver_missed_death",
+                                                "reviver/cellappmgr/launch_count");
+    const auto active_pid = QueryWatcherValue(client, disp, ProcessType::kReviver,
+                                              "reviver_missed_death",
+                                              "reviver/cellappmgr/active_pid");
+    if (!launch_count || !active_pid) return false;
+    return std::stoi(*launch_count) > 0 && std::stoul(*active_pid) == revived_info.pid;
+  })) << machined.Diagnostic() << "\n"
+      << reviver.Diagnostic();
+
+  ASSERT_TRUE(PollUntil(disp, [&] {
+    const auto acks = QueryWatcherValue(client, disp, ProcessType::kReviver,
+                                        "reviver_missed_death",
+                                        "reviver/cellappmgr/heartbeat_acks");
+    if (!acks) return false;
+    return std::stoi(*acks) > 0;
+  })) << machined.Diagnostic() << "\n"
+      << reviver.Diagnostic();
+  const auto heartbeat_timeouts = QueryWatcherValue(client, disp, ProcessType::kReviver,
+                                                    "reviver_missed_death",
+                                                    "reviver/cellappmgr/heartbeat_timeouts");
+  ASSERT_TRUE(heartbeat_timeouts.has_value());
+  EXPECT_EQ(*heartbeat_timeouts, "0");
+
+  reviver = Child{};
+  revived_mgr.Reset(0);
+  std::filesystem::remove(snapshot_path, ec);
+  std::filesystem::remove(leader_lock_path, ec);
+#endif
+}
+
+TEST(CellAppMgrProcess, ReviverRestartsCellAppMgrWhenDirectHeartbeatDoesNotAck) {
+#if !defined(_WIN32)
+  GTEST_SKIP() << "Windows-only process harness";
+#else
+  const auto machined_exe = ResolveServerExe(L"machined", L"machined.exe");
+  const auto cellappmgr_exe = ResolveServerExe(L"cellappmgr", L"atlas_cellappmgr.exe");
+  const auto reviver_exe = ResolveServerExe(L"reviver", L"atlas_reviver.exe");
+  if (machined_exe.empty() || cellappmgr_exe.empty() || reviver_exe.empty()) {
+    GTEST_SKIP() << "server binaries not found; build_root=" << BuildRoot();
+  }
+
+  uint16_t machined_port = 0;
+  Child machined;
+  ASSERT_TRUE(LaunchMachinedWithRetry(machined_exe, L"reviver_heartbeat",
+                                      &machined_port, &machined))
+      << "machined failed to start + bind TCP on any attempt";
+
+  const std::wstring machined_addr = L"127.0.0.1:" + std::to_wstring(machined_port);
+  const uint16_t cellappmgr_port = ReserveUdpPort();
+  ASSERT_NE(cellappmgr_port, 0u);
+  Child fake_mgr = Child::Launch(
+      machined_exe,
+      {L"--type", L"cellappmgr", L"--name", L"cellappmgr_revived", L"--update-hertz",
+       L"100", L"--internal-port", std::to_wstring(cellappmgr_port), L"--machined",
+       machined_addr},
+      "cellappmgr_no_health_probe");
+  ASSERT_TRUE(fake_mgr.IsRunning()) << fake_mgr.Diagnostic();
+  ASSERT_TRUE(WaitForUdpBound(cellappmgr_port, std::chrono::seconds(2)));
+
+  EventDispatcher disp{"reviver_heartbeat_registry"};
+  disp.SetMaxPollWait(Milliseconds(1));
+  NetworkInterface net(disp);
+  MachinedClient client(disp, net);
+  ASSERT_TRUE(client.Connect(Address("127.0.0.1", machined_port)));
+
+  machined::ProcessInfo fake_info;
+  ASSERT_TRUE(WaitForNamedRegistration(client, disp, ProcessType::kCellAppMgr,
+                                       "cellappmgr_revived", &fake_info))
+      << machined.Diagnostic() << "\n"
+      << fake_mgr.Diagnostic();
+  ASSERT_NE(fake_info.pid, 0u);
+  EXPECT_EQ(fake_info.internal_addr.Port(), cellappmgr_port);
+
+  const auto stamp =
+      std::to_string(::GetCurrentProcessId()) + "_" + std::to_string(::GetTickCount64());
+  const auto snapshot_path = std::filesystem::temp_directory_path() /
+                             ("atlas_reviver_heartbeat_snapshot_" + stamp + ".bin");
+  const auto leader_lock_path = std::filesystem::temp_directory_path() /
+                                ("atlas_reviver_heartbeat_" + stamp + ".lock");
+  std::error_code ec;
+  std::filesystem::remove(snapshot_path, ec);
+  std::filesystem::remove(leader_lock_path, ec);
+
+  PidGuard revived_mgr;
+  Child reviver = LaunchReviver(reviver_exe, cellappmgr_exe, machined_addr,
+                                cellappmgr_port, snapshot_path, leader_lock_path,
+                                L"reviver_heartbeat");
+  ASSERT_TRUE(reviver.IsRunning()) << reviver.Diagnostic();
+  ASSERT_TRUE(WaitForNamedRegistration(client, disp, ProcessType::kReviver,
+                                       "reviver_heartbeat"))
+      << machined.Diagnostic() << "\n"
+      << reviver.Diagnostic();
+
+  ASSERT_TRUE(PollUntil(disp, [&] {
+    const auto timeouts = QueryWatcherValue(client, disp, ProcessType::kReviver,
+                                            "reviver_heartbeat",
+                                            "reviver/cellappmgr/heartbeat_timeouts");
+    const auto failures = QueryWatcherValue(client, disp, ProcessType::kReviver,
+                                            "reviver_heartbeat",
+                                            "reviver/cellappmgr/heartbeat_failures");
+    const auto forced = QueryWatcherValue(client, disp, ProcessType::kReviver,
+                                          "reviver_heartbeat",
+                                          "reviver/cellappmgr/forced_terminations");
+    if (!timeouts || !failures || !forced) return false;
+    return std::stoi(*timeouts) >= 2 && std::stoi(*failures) >= 2 &&
+           std::stoi(*forced) >= 1;
+  }, std::chrono::milliseconds(8000))) << machined.Diagnostic() << "\n"
+      << fake_mgr.Diagnostic() << "\n"
+      << reviver.Diagnostic();
+
+  machined::ProcessInfo revived_info;
+  ASSERT_TRUE(WaitForNamedRegistrationWithDifferentPid(client, disp, ProcessType::kCellAppMgr,
+                                                       "cellappmgr_revived", fake_info.pid,
+                                                       &revived_info))
+      << machined.Diagnostic() << "\n"
+      << fake_mgr.Diagnostic() << "\n"
+      << reviver.Diagnostic();
+  revived_mgr.Reset(revived_info.pid);
+  EXPECT_EQ(revived_info.internal_addr.Port(), cellappmgr_port);
+
+  ASSERT_TRUE(PollUntil(disp, [&] {
+    const auto launch_count = QueryWatcherValue(client, disp, ProcessType::kReviver,
+                                                "reviver_heartbeat",
+                                                "reviver/cellappmgr/launch_count");
+    const auto active_pid = QueryWatcherValue(client, disp, ProcessType::kReviver,
+                                              "reviver_heartbeat",
+                                              "reviver/cellappmgr/active_pid");
+    if (!launch_count || !active_pid) return false;
+    return std::stoi(*launch_count) > 0 && std::stoul(*active_pid) == revived_info.pid;
+  })) << machined.Diagnostic() << "\n"
+      << reviver.Diagnostic();
+
+  ASSERT_TRUE(PollUntil(disp, [&] {
+    const auto acks = QueryWatcherValue(client, disp, ProcessType::kReviver,
+                                        "reviver_heartbeat",
+                                        "reviver/cellappmgr/heartbeat_acks");
+    if (!acks) return false;
+    return std::stoi(*acks) > 0;
+  })) << machined.Diagnostic() << "\n"
+      << reviver.Diagnostic();
+  const auto restart_attempts = QueryWatcherValue(client, disp, ProcessType::kReviver,
+                                                  "reviver_heartbeat",
+                                                  "reviver/cellappmgr/restart_attempts");
+  ASSERT_TRUE(restart_attempts.has_value());
+  EXPECT_EQ(*restart_attempts, "0");
+  const auto manager_health_failures =
+      QueryWatcherValue(client, disp, ProcessType::kReviver, "reviver_heartbeat",
+                        "reviver/cellappmgr/manager_health_failures");
+  ASSERT_TRUE(manager_health_failures.has_value());
+  EXPECT_EQ(*manager_health_failures, "0");
+  const auto manager_health_timeouts =
+      QueryWatcherValue(client, disp, ProcessType::kReviver, "reviver_heartbeat",
+                        "reviver/cellappmgr/manager_health_timeouts");
+  ASSERT_TRUE(manager_health_timeouts.has_value());
+  EXPECT_EQ(*manager_health_timeouts, "0");
+
+  reviver = Child{};
+  fake_mgr = Child{};
+  revived_mgr.Reset(0);
+  std::filesystem::remove(snapshot_path, ec);
+  std::filesystem::remove(leader_lock_path, ec);
+#endif
+}
+
+TEST(CellAppMgrProcess, ReviverTimesOutPendingManagerHealthWatcher) {
+#if !defined(_WIN32)
+  GTEST_SKIP() << "Windows-only process harness";
+#else
+  const auto machined_exe = ResolveServerExe(L"machined", L"machined.exe");
+  const auto reviver_exe = ResolveServerExe(L"reviver", L"atlas_reviver.exe");
+  if (machined_exe.empty() || reviver_exe.empty()) {
+    GTEST_SKIP() << "server binaries not found; build_root=" << BuildRoot();
+  }
+
+  uint16_t machined_port = 0;
+  Child machined;
+  ASSERT_TRUE(LaunchMachinedWithRetry(machined_exe, L"reviver_manager_timeout",
+                                      &machined_port, &machined))
+      << "machined failed to start + bind TCP on any attempt";
+
+  EventDispatcher registry_disp{"reviver_manager_timeout_registry"};
+  registry_disp.SetMaxPollWait(Milliseconds(1));
+  NetworkInterface registry_net(registry_disp);
+  MachinedClient client(registry_disp, registry_net);
+  ASSERT_TRUE(client.Connect(Address("127.0.0.1", machined_port)));
+
+  const uint16_t cellappmgr_port = ReserveUdpPort();
+  ASSERT_NE(cellappmgr_port, 0u);
+  EventDispatcher fake_disp{"reviver_manager_timeout_fake"};
+  fake_disp.SetMaxPollWait(Milliseconds(1));
+  NetworkInterface fake_net(fake_disp);
+  auto fake_channel = fake_net.ConnectTcp(Address("127.0.0.1", machined_port));
+  ASSERT_TRUE(fake_channel.HasValue()) << fake_channel.Error().Message();
+
+  machined::RegisterMessage reg;
+  reg.process_type = ProcessType::kCellAppMgr;
+  reg.name = "cellappmgr_revived";
+  reg.internal_port = cellappmgr_port;
+  reg.pid = ::GetCurrentProcessId();
+  ASSERT_TRUE((*fake_channel)->SendMessage(reg).HasValue());
+  fake_net.FlushDirtySendChannels();
+
+  ASSERT_TRUE(PollUntil(registry_disp, fake_disp, [&] {
+    fake_net.FlushDirtySendChannels();
+    auto infos = client.QuerySync(ProcessType::kCellAppMgr, std::chrono::milliseconds(200));
+    for (const auto& info : infos) {
+      if (info.name == "cellappmgr_revived" && info.pid == reg.pid) return true;
+    }
+    return false;
+  })) << machined.Diagnostic();
+
+  const std::wstring machined_addr = L"127.0.0.1:" + std::to_wstring(machined_port);
+  const auto stamp =
+      std::to_string(::GetCurrentProcessId()) + "_" + std::to_string(::GetTickCount64());
+  const auto snapshot_path = std::filesystem::temp_directory_path() /
+                             ("atlas_reviver_manager_timeout_snapshot_" + stamp + ".bin");
+  const auto leader_lock_path = std::filesystem::temp_directory_path() /
+                                ("atlas_reviver_manager_timeout_" + stamp + ".lock");
+  std::error_code ec;
+  std::filesystem::remove(snapshot_path, ec);
+  std::filesystem::remove(leader_lock_path, ec);
+
+  Child reviver = LaunchReviver(reviver_exe, machined_exe, machined_addr,
+                                cellappmgr_port, snapshot_path, leader_lock_path,
+                                L"reviver_manager_timeout", 3, 20, 500);
+  ASSERT_TRUE(reviver.IsRunning()) << reviver.Diagnostic();
+  ASSERT_TRUE(WaitForNamedRegistration(client, registry_disp, ProcessType::kReviver,
+                                       "reviver_manager_timeout"))
+      << machined.Diagnostic() << "\n" << reviver.Diagnostic();
+
+  ASSERT_TRUE(PollUntil(registry_disp, [&] {
+    const auto timeouts = QueryWatcherValue(client, registry_disp, ProcessType::kReviver,
+                                            "reviver_manager_timeout",
+                                            "reviver/cellappmgr/manager_health_timeouts");
+    const auto failures = QueryWatcherValue(client, registry_disp, ProcessType::kReviver,
+                                            "reviver_manager_timeout",
+                                            "reviver/cellappmgr/manager_health_failures");
+    if (!timeouts || !failures) return false;
+    return std::stoi(*timeouts) >= 1 && std::stoi(*failures) >= 1;
+  }, std::chrono::milliseconds(4000))) << machined.Diagnostic() << "\n"
+      << reviver.Diagnostic();
+
+  const auto forced = QueryWatcherValue(client, registry_disp, ProcessType::kReviver,
+                                        "reviver_manager_timeout",
+                                        "reviver/cellappmgr/forced_terminations");
+  ASSERT_TRUE(forced.has_value());
+  EXPECT_EQ(*forced, "0");
+  const auto launches = QueryWatcherValue(client, registry_disp, ProcessType::kReviver,
+                                          "reviver_manager_timeout",
+                                          "reviver/cellappmgr/launch_count");
+  ASSERT_TRUE(launches.has_value());
+  EXPECT_EQ(*launches, "0");
+
+  reviver = Child{};
+  std::filesystem::remove(snapshot_path, ec);
+  std::filesystem::remove(leader_lock_path, ec);
+#endif
+}
+
+TEST(CellAppMgrProcess, ReviverStopsAfterRestartLimitWithoutHeartbeatAck) {
+#if !defined(_WIN32)
+  GTEST_SKIP() << "Windows-only process harness";
+#else
+  const auto machined_exe = ResolveServerExe(L"machined", L"machined.exe");
+  const auto reviver_exe = ResolveServerExe(L"reviver", L"atlas_reviver.exe");
+  if (machined_exe.empty() || reviver_exe.empty()) {
+    GTEST_SKIP() << "server binaries not found; build_root=" << BuildRoot();
+  }
+
+  uint16_t machined_port = 0;
+  Child machined;
+  ASSERT_TRUE(LaunchMachinedWithRetry(machined_exe, L"reviver_limit",
+                                      &machined_port, &machined))
+      << "machined failed to start + bind TCP on any attempt";
+
+  const std::wstring machined_addr = L"127.0.0.1:" + std::to_wstring(machined_port);
+  const uint16_t cellappmgr_port = ReserveUdpPort();
+  ASSERT_NE(cellappmgr_port, 0u);
+  const auto stamp =
+      std::to_string(::GetCurrentProcessId()) + "_" + std::to_string(::GetTickCount64());
+  const auto snapshot_path = std::filesystem::temp_directory_path() /
+                             ("atlas_reviver_limit_snapshot_" + stamp + ".bin");
+  const auto leader_lock_path = std::filesystem::temp_directory_path() /
+                                ("atlas_reviver_limit_" + stamp + ".lock");
+  std::error_code ec;
+  std::filesystem::remove(snapshot_path, ec);
+  std::filesystem::remove(leader_lock_path, ec);
+
+  Child reviver = LaunchReviver(reviver_exe, machined_exe, machined_addr,
+                                cellappmgr_port, snapshot_path, leader_lock_path,
+                                L"reviver_limit", 2);
+  ASSERT_TRUE(reviver.IsRunning()) << reviver.Diagnostic();
+
+  EventDispatcher disp{"reviver_limit_registry"};
+  disp.SetMaxPollWait(Milliseconds(1));
+  NetworkInterface net(disp);
+  MachinedClient client(disp, net);
+  ASSERT_TRUE(client.Connect(Address("127.0.0.1", machined_port)));
+  ASSERT_TRUE(WaitForNamedRegistration(client, disp, ProcessType::kReviver, "reviver_limit"))
+      << machined.Diagnostic() << "\n" << reviver.Diagnostic();
+
+  ASSERT_TRUE(PollUntil(disp, [&] {
+    const auto reached = QueryWatcherValue(client, disp, ProcessType::kReviver,
+                                           "reviver_limit",
+                                           "reviver/cellappmgr/restart_limit_reached");
+    const auto hits = QueryWatcherValue(client, disp, ProcessType::kReviver,
+                                        "reviver_limit",
+                                        "reviver/cellappmgr/restart_limit_hits");
+    const auto attempts = QueryWatcherValue(client, disp, ProcessType::kReviver,
+                                            "reviver_limit",
+                                            "reviver/cellappmgr/restart_attempts");
+    const auto launches = QueryWatcherValue(client, disp, ProcessType::kReviver,
+                                            "reviver_limit",
+                                            "reviver/cellappmgr/launch_count");
+    if (!reached || !hits || !attempts || !launches) return false;
+    return *reached == "true" && std::stoi(*hits) == 1 && std::stoi(*attempts) == 2 &&
+           std::stoi(*launches) == 2;
+  }, std::chrono::milliseconds(10000))) << machined.Diagnostic() << "\n"
+      << reviver.Diagnostic();
+
+  std::this_thread::sleep_for(std::chrono::milliseconds(500));
+  const auto launch_count = QueryWatcherValue(client, disp, ProcessType::kReviver,
+                                              "reviver_limit",
+                                              "reviver/cellappmgr/launch_count");
+  ASSERT_TRUE(launch_count.has_value());
+  EXPECT_EQ(*launch_count, "2");
+  const auto reached = QueryWatcherValue(client, disp, ProcessType::kReviver, "reviver_limit",
+                                         "reviver/cellappmgr/restart_limit_reached");
+  ASSERT_TRUE(reached.has_value());
+  EXPECT_EQ(*reached, "true");
+  const auto status = QueryWatcherValue(client, disp, ProcessType::kReviver, "reviver_limit",
+                                        "reviver/cellappmgr/status");
+  ASSERT_TRUE(status.has_value());
+  EXPECT_EQ(*status, "restart_limited");
+  const auto launch_pending = QueryWatcherValue(client, disp, ProcessType::kReviver,
+                                                "reviver_limit",
+                                                "reviver/cellappmgr/launch_pending");
+  ASSERT_TRUE(launch_pending.has_value());
+  EXPECT_EQ(*launch_pending, "false");
+
+  reviver = Child{};
+  for (const auto& info : client.QuerySync(ProcessType::kCellAppMgr,
+                                           std::chrono::milliseconds(200))) {
+    if (info.name == "cellappmgr_revived" && info.pid != 0) {
+      (void)TerminatePid(info.pid);
+    }
+  }
+  std::filesystem::remove(snapshot_path, ec);
+  std::filesystem::remove(leader_lock_path, ec);
+#endif
+}
+
+TEST(CellAppMgrProcess, ReviverStopsAfterLaunchedProcessDoesNotRegister) {
+#if !defined(_WIN32)
+  GTEST_SKIP() << "Windows-only process harness";
+#else
+  const auto machined_exe = ResolveServerExe(L"machined", L"machined.exe");
+  const auto atlas_tool_exe = ResolveServerExe(L"atlas_tool", L"atlas_tool.exe");
+  const auto reviver_exe = ResolveServerExe(L"reviver", L"atlas_reviver.exe");
+  if (machined_exe.empty() || atlas_tool_exe.empty() || reviver_exe.empty()) {
+    GTEST_SKIP() << "server binaries not found; build_root=" << BuildRoot();
+  }
+
+  uint16_t machined_port = 0;
+  Child machined;
+  ASSERT_TRUE(LaunchMachinedWithRetry(machined_exe, L"reviver_launch_timeout",
+                                      &machined_port, &machined))
+      << "machined failed to start + bind TCP on any attempt";
+
+  const std::wstring machined_addr = L"127.0.0.1:" + std::to_wstring(machined_port);
+  const uint16_t cellappmgr_port = ReserveUdpPort();
+  ASSERT_NE(cellappmgr_port, 0u);
+  const auto stamp =
+      std::to_string(::GetCurrentProcessId()) + "_" + std::to_string(::GetTickCount64());
+  const auto snapshot_path = std::filesystem::temp_directory_path() /
+                             ("atlas_reviver_launch_timeout_snapshot_" + stamp + ".bin");
+  const auto leader_lock_path = std::filesystem::temp_directory_path() /
+                                ("atlas_reviver_launch_timeout_" + stamp + ".lock");
+  std::error_code ec;
+  std::filesystem::remove(snapshot_path, ec);
+  std::filesystem::remove(leader_lock_path, ec);
+
+  Child reviver = LaunchReviver(reviver_exe, atlas_tool_exe, machined_addr,
+                                cellappmgr_port, snapshot_path, leader_lock_path,
+                                L"reviver_launch_timeout", 2, 2, 5000, 300);
+  ASSERT_TRUE(reviver.IsRunning()) << reviver.Diagnostic();
+
+  EventDispatcher disp{"reviver_launch_timeout_registry"};
+  disp.SetMaxPollWait(Milliseconds(1));
+  NetworkInterface net(disp);
+  MachinedClient client(disp, net);
+  ASSERT_TRUE(client.Connect(Address("127.0.0.1", machined_port)));
+  ASSERT_TRUE(WaitForNamedRegistration(client, disp, ProcessType::kReviver,
+                                       "reviver_launch_timeout"))
+      << machined.Diagnostic() << "\n" << reviver.Diagnostic();
+
+  ASSERT_TRUE(PollUntil(disp, [&] {
+    const auto reached = QueryWatcherValue(client, disp, ProcessType::kReviver,
+                                           "reviver_launch_timeout",
+                                           "reviver/cellappmgr/restart_limit_reached");
+    const auto timeouts = QueryWatcherValue(client, disp, ProcessType::kReviver,
+                                            "reviver_launch_timeout",
+                                            "reviver/cellappmgr/launch_timeouts");
+    const auto failures = QueryWatcherValue(client, disp, ProcessType::kReviver,
+                                            "reviver_launch_timeout",
+                                            "reviver/cellappmgr/launch_failures");
+    const auto launches = QueryWatcherValue(client, disp, ProcessType::kReviver,
+                                            "reviver_launch_timeout",
+                                            "reviver/cellappmgr/launch_count");
+    if (!reached || !timeouts || !failures || !launches) return false;
+    return *reached == "true" && std::stoi(*timeouts) == 2 &&
+           std::stoi(*failures) >= 2 && std::stoi(*launches) == 2;
+  }, std::chrono::milliseconds(8000))) << machined.Diagnostic() << "\n"
+      << reviver.Diagnostic();
+  const auto status = QueryWatcherValue(client, disp, ProcessType::kReviver,
+                                        "reviver_launch_timeout",
+                                        "reviver/cellappmgr/status");
+  ASSERT_TRUE(status.has_value());
+  EXPECT_EQ(*status, "restart_limited");
+  const auto launch_pending = QueryWatcherValue(client, disp, ProcessType::kReviver,
+                                                "reviver_launch_timeout",
+                                                "reviver/cellappmgr/launch_pending");
+  ASSERT_TRUE(launch_pending.has_value());
+  EXPECT_EQ(*launch_pending, "false");
+
+  reviver = Child{};
+  std::filesystem::remove(snapshot_path, ec);
+  std::filesystem::remove(leader_lock_path, ec);
+#endif
+}
+
+TEST(CellAppMgrProcess, ReviverLeaderLockAllowsOnlyOneColdStartOwner) {
+#if !defined(_WIN32)
+  GTEST_SKIP() << "Windows-only process harness";
+#else
+  const auto machined_exe = ResolveServerExe(L"machined", L"machined.exe");
+  const auto cellappmgr_exe = ResolveServerExe(L"cellappmgr", L"atlas_cellappmgr.exe");
+  const auto reviver_exe = ResolveServerExe(L"reviver", L"atlas_reviver.exe");
+  if (machined_exe.empty() || cellappmgr_exe.empty() || reviver_exe.empty()) {
+    GTEST_SKIP() << "server binaries not found; build_root=" << BuildRoot();
+  }
+
+  uint16_t machined_port = 0;
+  Child machined;
+  ASSERT_TRUE(LaunchMachinedWithRetry(machined_exe, L"reviver_lock", &machined_port, &machined))
+      << "machined failed to start + bind TCP on any attempt";
+
+  const std::wstring machined_addr = L"127.0.0.1:" + std::to_wstring(machined_port);
+  const uint16_t cellappmgr_port = ReserveUdpPort();
+  ASSERT_NE(cellappmgr_port, 0u);
+  const auto stamp =
+      std::to_string(::GetCurrentProcessId()) + "_" + std::to_string(::GetTickCount64());
+  const auto snapshot_path = std::filesystem::temp_directory_path() /
+                             ("atlas_reviver_lock_snapshot_" + stamp + ".bin");
+  const auto leader_lock_path = std::filesystem::temp_directory_path() /
+                                ("atlas_reviver_lock_" + stamp + ".lock");
+  std::error_code ec;
+  std::filesystem::remove(snapshot_path, ec);
+  std::filesystem::remove(leader_lock_path, ec);
+
+  PidGuard revived_mgr;
+  Child reviver_a = LaunchReviver(reviver_exe, cellappmgr_exe, machined_addr,
+                                  cellappmgr_port, snapshot_path, leader_lock_path,
+                                  L"reviver_lock_a");
+  Child reviver_b = LaunchReviver(reviver_exe, cellappmgr_exe, machined_addr,
+                                  cellappmgr_port, snapshot_path, leader_lock_path,
+                                  L"reviver_lock_b");
+  ASSERT_TRUE(reviver_a.IsRunning()) << reviver_a.Diagnostic();
+  ASSERT_TRUE(reviver_b.IsRunning()) << reviver_b.Diagnostic();
+
+  EventDispatcher disp{"reviver_leader_lock_registry"};
+  disp.SetMaxPollWait(Milliseconds(1));
+  NetworkInterface net(disp);
+  MachinedClient client(disp, net);
+  ASSERT_TRUE(client.Connect(Address("127.0.0.1", machined_port)));
+
+  ASSERT_TRUE(WaitForNamedRegistration(client, disp, ProcessType::kReviver, "reviver_lock_a"))
+      << machined.Diagnostic() << "\n" << reviver_a.Diagnostic();
+  ASSERT_TRUE(WaitForNamedRegistration(client, disp, ProcessType::kReviver, "reviver_lock_b"))
+      << machined.Diagnostic() << "\n" << reviver_b.Diagnostic();
+
+  machined::ProcessInfo mgr;
+  ASSERT_TRUE(WaitForNamedRegistration(client, disp, ProcessType::kCellAppMgr,
+                                       "cellappmgr_revived", &mgr))
+      << machined.Diagnostic() << "\n"
+      << reviver_a.Diagnostic() << "\n"
+      << reviver_b.Diagnostic();
+  revived_mgr.Reset(mgr.pid);
+  EXPECT_EQ(mgr.internal_addr.Port(), cellappmgr_port);
+
+  ASSERT_TRUE(PollUntil(disp, [&] {
+    const auto a = QueryWatcherValue(client, disp, ProcessType::kReviver, "reviver_lock_a",
+                                     "reviver/leader/active");
+    const auto b = QueryWatcherValue(client, disp, ProcessType::kReviver, "reviver_lock_b",
+                                     "reviver/leader/active");
+    if (!a || !b) return false;
+    return (*a == "true" && *b == "false") || (*a == "false" && *b == "true");
+  })) << machined.Diagnostic() << "\n"
+      << reviver_a.Diagnostic() << "\n"
+      << reviver_b.Diagnostic();
+
+  const auto launches_a = QueryWatcherValue(client, disp, ProcessType::kReviver,
+                                            "reviver_lock_a",
+                                            "reviver/cellappmgr/launch_count");
+  const auto launches_b = QueryWatcherValue(client, disp, ProcessType::kReviver,
+                                            "reviver_lock_b",
+                                            "reviver/cellappmgr/launch_count");
+  ASSERT_TRUE(launches_a.has_value());
+  ASSERT_TRUE(launches_b.has_value());
+  EXPECT_EQ(std::stoi(*launches_a) + std::stoi(*launches_b), 1);
+
+  const auto active_a = QueryWatcherValue(client, disp, ProcessType::kReviver,
+                                          "reviver_lock_a", "reviver/leader/active");
+  const auto active_b = QueryWatcherValue(client, disp, ProcessType::kReviver,
+                                          "reviver_lock_b", "reviver/leader/active");
+  ASSERT_TRUE(active_a.has_value());
+  ASSERT_TRUE(active_b.has_value());
+  const bool a_was_leader = *active_a == "true";
+  const std::string standby_name = a_was_leader ? "reviver_lock_b" : "reviver_lock_a";
+  const int standby_launches_before = std::stoi(a_was_leader ? *launches_b : *launches_a);
+  if (a_was_leader) {
+    reviver_a = Child{};
+  } else {
+    reviver_b = Child{};
+  }
+
+  ASSERT_TRUE(PollUntil(disp, [&] {
+    const auto active = QueryWatcherValue(client, disp, ProcessType::kReviver,
+                                          standby_name, "reviver/leader/active");
+    return active && *active == "true";
+  }, std::chrono::milliseconds(8000))) << machined.Diagnostic() << "\n"
+      << (a_was_leader ? reviver_b.Diagnostic() : reviver_a.Diagnostic());
+
+  const auto standby_launches_after = QueryWatcherValue(client, disp, ProcessType::kReviver,
+                                                        standby_name,
+                                                        "reviver/cellappmgr/launch_count");
+  ASSERT_TRUE(standby_launches_after.has_value());
+  EXPECT_EQ(std::stoi(*standby_launches_after), standby_launches_before);
+
+  ASSERT_TRUE(PollUntil(disp, [&] {
+    const auto acks = QueryWatcherValue(client, disp, ProcessType::kReviver,
+                                        standby_name,
+                                        "reviver/cellappmgr/heartbeat_acks");
+    if (!acks) return false;
+    return std::stoi(*acks) > 0;
+  }, std::chrono::milliseconds(8000))) << machined.Diagnostic() << "\n"
+      << (a_was_leader ? reviver_b.Diagnostic() : reviver_a.Diagnostic());
+  const auto heartbeat_timeouts = QueryWatcherValue(client, disp, ProcessType::kReviver,
+                                                    standby_name,
+                                                    "reviver/cellappmgr/heartbeat_timeouts");
+  ASSERT_TRUE(heartbeat_timeouts.has_value());
+  EXPECT_EQ(*heartbeat_timeouts, "0");
+
+  auto mgr_infos = client.QuerySync(ProcessType::kCellAppMgr, std::chrono::milliseconds(200));
+  int target_mgr_count = 0;
+  for (const auto& info : mgr_infos) {
+    if (info.name != "cellappmgr_revived") continue;
+    ++target_mgr_count;
+    EXPECT_EQ(info.pid, mgr.pid);
+  }
+  EXPECT_EQ(target_mgr_count, 1);
+
+  reviver_b = Child{};
+  reviver_a = Child{};
+  revived_mgr.Reset(0);
+  std::filesystem::remove(snapshot_path, ec);
+  std::filesystem::remove(leader_lock_path, ec);
 #endif
 }

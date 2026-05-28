@@ -8,10 +8,6 @@
 
 using namespace atlas;
 
-// ============================================================================
-// Mock ScriptEngine — no CLR, tracks lifecycle calls
-// ============================================================================
-
 class MockScriptEngine : public ScriptEngine {
  public:
   bool initialized{false};
@@ -53,10 +49,6 @@ class MockScriptEngine : public ScriptEngine {
   auto RuntimeName() const -> std::string_view override { return "Mock"; }
 };
 
-// ============================================================================
-// Mock INativeApiProvider
-// ============================================================================
-
 class MockNativeProvider : public INativeApiProvider {
  public:
   bool created{false};
@@ -89,15 +81,29 @@ class MockNativeProvider : public INativeApiProvider {
   void SetAoIRadius(uint32_t, float, float) override {}
   void SetSpaceData(uint32_t, uint16_t, const std::byte*, int32_t) override {}
   void RemoveSpaceData(uint32_t, uint16_t) override {}
+  auto LoadCollisionAsset(uint32_t, const char*, int32_t) -> bool override { return false; }
   auto GetEntitySpaceId(uint32_t) -> uint32_t override { return 0; }
   void SetNativeCallbacks(const void*, int32_t) override {}
 
-  // CellApp-specific stubs — non-CellApp test mocks just need to stay
+  // CellApp-specific stubs - non-CellApp test mocks just need to stay
   // concrete as INativeApiProvider's surface grows.
   void SetEntityPosition(uint32_t, float, float, float) override {}
   void SetEntityDirection(uint32_t, float, float, float) override {}
+  void SetEntityOnGround(uint32_t, bool) override {}
+  void SetMovementIntent(uint32_t, float, float, float, uint16_t) override {}
+  auto SetMovementCommand(uint32_t, const NativeMovementCommand&) -> bool override {
+    return false;
+  }
+  auto ClearMovementCommand(uint32_t, uint32_t) -> bool override { return false; }
+  auto SetMovementCurve(const NativeMovementCurve&) -> bool override { return false; }
   void GetEntityPosition(uint32_t, float& x, float& y, float& z) override { x = y = z = 0; }
   void GetEntityDirection(uint32_t, float& x, float& y, float& z) override { x = y = z = 0; }
+  auto GetEntityOnGround(uint32_t) -> bool override { return false; }
+  auto TryGetMovementHistorySample(uint32_t, uint32_t,
+                                   NativeMovementHistorySample& sample) -> bool override {
+    sample = {};
+    return false;
+  }
   void PublishReplicationFrame(uint32_t, bool, bool, const std::byte*, int32_t, const std::byte*,
                                int32_t, const std::byte*, int32_t, const std::byte*,
                                int32_t) override {}
@@ -109,10 +115,6 @@ class MockNativeProvider : public INativeApiProvider {
   void CancelController(uint32_t, int32_t) override {}
   void ReportClientEventSeqGap(uint32_t, uint32_t) override {}
 };
-
-// ============================================================================
-// TestScriptApp — injects mock engine, skips real CLR
-// ============================================================================
 
 class TestScriptApp : public ScriptApp {
  public:
@@ -146,7 +148,7 @@ class TestScriptApp : public ScriptApp {
     // Inject provider
     auto provider = CreateNativeProvider();
     SetNativeApiProvider(provider.get());
-    // Keep ownership via a captured unique_ptr in the lambda — store it locally.
+    // Keep ownership via a captured unique_ptr in the lambda; store it locally.
     // For test purposes we just leak it (process-lifetime).
     provider.release();
 
@@ -163,7 +165,7 @@ class TestScriptApp : public ScriptApp {
     mock_engine->OnInit(false);
 
     // Transfer ownership via the protected accessor: we need to expose
-    // script_engine_ — instead, store it and expose via OnTickComplete.
+    // script_engine_; instead, store it and expose via OnTickComplete.
     injected_engine_ = std::move(engine);
 
     OnScriptReady();
@@ -211,10 +213,6 @@ struct ScriptArgv {
   char** argv() { return ptrs.data(); }
 };
 
-// ============================================================================
-// ManagerApp tests (lightweight — just verifies it compiles and runs)
-// ============================================================================
-
 class TestManagerApp : public ManagerApp {
  public:
   int max_ticks{1};
@@ -256,10 +254,6 @@ TEST(ManagerApp, WatchersPresent) {
   EXPECT_TRUE(app.GetWatcherRegistry().Get("app/type").has_value());
   EXPECT_EQ(app.GetWatcherRegistry().Get("app/type").value_or(""), "cellappmgr");
 }
-
-// ============================================================================
-// ScriptApp tests
-// ============================================================================
 
 TEST(ScriptApp, NativeProviderCreated) {
   EventDispatcher dispatcher("test");

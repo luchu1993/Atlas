@@ -9,10 +9,6 @@
 
 using namespace atlas;
 
-// ============================================================================
-// Mock provider — records calls for assertion
-// ============================================================================
-
 struct MockProvider final : public INativeApiProvider {
   struct LogCall {
     int32_t level;
@@ -73,15 +69,29 @@ struct MockProvider final : public INativeApiProvider {
   void SetAoIRadius(uint32_t, float, float) override {}
   void SetSpaceData(uint32_t, uint16_t, const std::byte*, int32_t) override {}
   void RemoveSpaceData(uint32_t, uint16_t) override {}
+  auto LoadCollisionAsset(uint32_t, const char*, int32_t) -> bool override { return false; }
   auto GetEntitySpaceId(uint32_t) -> uint32_t override { return 0; }
   void SetNativeCallbacks(const void*, int32_t) override {}
 
-  // CellApp-specific no-op overrides — mock doesn't exercise these, it
+  // CellApp-specific no-op overrides; mock doesn't exercise these, it
   // just needs to stay concrete as INativeApiProvider evolves.
   void SetEntityPosition(uint32_t, float, float, float) override {}
   void SetEntityDirection(uint32_t, float, float, float) override {}
+  void SetEntityOnGround(uint32_t, bool) override {}
+  void SetMovementIntent(uint32_t, float, float, float, uint16_t) override {}
+  auto SetMovementCommand(uint32_t, const NativeMovementCommand&) -> bool override {
+    return false;
+  }
+  auto ClearMovementCommand(uint32_t, uint32_t) -> bool override { return false; }
+  auto SetMovementCurve(const NativeMovementCurve&) -> bool override { return false; }
   void GetEntityPosition(uint32_t, float& x, float& y, float& z) override { x = y = z = 0; }
   void GetEntityDirection(uint32_t, float& x, float& y, float& z) override { x = y = z = 0; }
+  auto GetEntityOnGround(uint32_t) -> bool override { return false; }
+  auto TryGetMovementHistorySample(uint32_t, uint32_t,
+                                   NativeMovementHistorySample& sample) -> bool override {
+    sample = {};
+    return false;
+  }
   void PublishReplicationFrame(uint32_t, bool, bool, const std::byte*, int32_t, const std::byte*,
                                int32_t, const std::byte*, int32_t, const std::byte*,
                                int32_t) override {}
@@ -92,9 +102,8 @@ struct MockProvider final : public INativeApiProvider {
   auto AddProximityController(uint32_t, float, int32_t) -> int32_t override { return 0; }
   void CancelController(uint32_t, int32_t) override {}
 
-  // Client-only surface; mock records calls so consumers can assert the
-  // ATLAS_NATIVE_API_TABLE row is wired through without spinning up a
-  // real ClientNativeProvider.
+  // Client-only surface; mock records calls so tests can assert the
+  // native API table row without a real ClientNativeProvider.
   int report_client_event_seq_gap_count = 0;
   uint32_t last_event_seq_gap_entity_id = 0;
   uint32_t last_event_seq_gap_delta = 0;
@@ -104,10 +113,6 @@ struct MockProvider final : public INativeApiProvider {
     last_event_seq_gap_delta = gap_delta;
   }
 };
-
-// ============================================================================
-// Provider registration
-// ============================================================================
 
 TEST(NativeApiProvider, SetAndGetRoundtrip) {
   MockProvider mock;
@@ -125,10 +130,6 @@ TEST(NativeApiProvider, ReplacementIsReflected) {
   SetNativeApiProvider(&second);
   EXPECT_EQ(&GetNativeApiProvider(), &second);
 }
-
-// ============================================================================
-// Delegation through the provider
-// ============================================================================
 
 TEST(NativeApiProvider, LogMessageDelegates) {
   MockProvider mock;
@@ -195,18 +196,13 @@ TEST(NativeApiProvider, ReportClientEventSeqGapDelegates) {
   EXPECT_EQ(mock.last_event_seq_gap_entity_id, 42u);
   EXPECT_EQ(mock.last_event_seq_gap_delta, 7u);
 
-  // Second call with distinct args accumulates the count and replaces
-  // the recorded snapshot, mirroring how a live C# client would stream
-  // successive gap reports through.
+  // Distinct args accumulate the count and replace the recorded snapshot,
+  // matching live client gap report streaming.
   mock.ReportClientEventSeqGap(100, 3);
   EXPECT_EQ(mock.report_client_event_seq_gap_count, 2);
   EXPECT_EQ(mock.last_event_seq_gap_entity_id, 100u);
   EXPECT_EQ(mock.last_event_seq_gap_delta, 3u);
 }
-
-// ============================================================================
-// BaseNativeProvider — default implementations
-// ============================================================================
 
 struct ConcreteProvider final : public BaseNativeProvider {};
 
@@ -232,11 +228,6 @@ TEST(BaseNativeProvider, ServerTimeAdvances) {
   // DeltaTime has no per-frame source at the base level; stays 0.
   EXPECT_FLOAT_EQ(p.DeltaTime(), 0.0f);
 }
-
-// ============================================================================
-// BUG-08: LogMessage must safely ignore null msg or non-positive len instead
-// of constructing a string_view with invalid arguments (UB / out-of-bounds).
-// ============================================================================
 
 TEST(BaseNativeProvider, LogMessageNullMsgIsIgnored) {
   ConcreteProvider p;

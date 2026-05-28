@@ -1,23 +1,3 @@
-// Offload traversal test — natural movement across a BSP boundary.
-//
-// test_distributed_space drives OffloadEntity manually over RUDP.
-// This test closes the gap by exercising the CellApp::TickOffloadChecker
-// pump path: configure a BSP tree with a split at x=0 (host A owns x<0,
-// host B owns x>=0), park a Real on A at x=-5 inside a local Cell,
-// then move it to x=+5 and pump TickOffloadChecker. The checker is
-// expected to:
-//
-//   1. Query the BSP for the target cell at the new position,
-//   2. Build an OffloadEntity, GhostSetNextReal, and ship them to B,
-//   3. ConvertRealToGhost on A so the peer becomes a back-channel,
-//   4. Drop the entity from A's local Cell,
-//   5. Receive OffloadEntityAck and drain the pending_offloads_ entry.
-//
-// B's side:
-//   6. Auto-creates the Space on CreateGhost-less arrival,
-//   7. Rehydrates the Real (no Ghost existed pre-offload → fresh Real),
-//   8. Sends OffloadEntityAck back.
-
 #include <chrono>
 #include <functional>
 #include <memory>
@@ -33,6 +13,7 @@
 #include "cellapp_messages.h"
 #include "cellappmgr/bsp_tree.h"
 #include "math/vector3.h"
+#include "movement_sim/movement_sim.h"
 #include "network/channel.h"
 #include "network/event_dispatcher.h"
 #include "network/interface_table.h"
@@ -85,8 +66,6 @@ auto PumpUntil(Host& a, Host& b, const std::function<bool()>& pred,
   return false;
 }
 
-// Build a BSP with one split at x=0: cell 1 (for `left`) owns x<0,
-// cell 2 (for `right`) owns x>=0. Both halves span the full Z axis.
 auto BuildTwoCellBsp(const Address& left, const Address& right) -> BSPTree {
   BSPTree tree;
   CellInfo c1{/*cell_id=*/1, left, /*bounds=*/{}, /*load=*/0.f, /*entity_count=*/0};
@@ -97,96 +76,118 @@ auto BuildTwoCellBsp(const Address& left, const Address& right) -> BSPTree {
   return tree;
 }
 
+auto MovementStateAt(float x, uint32_t last_processed_seq) -> movement::MovementState {
+  movement::MovementState state;
+  state.position = {x, 0.0f, 0.0f};
+  state.velocity = {0.0f, 0.0f, 0.0f};
+  state.direction = {1.0f, 0.0f, 0.0f};
+  state.flags = movement::kMovementFlagGrounded;
+  state.last_processed_input_seq = last_processed_seq;
+  return state;
+}
+
+auto MovementCommandAt(float from_x, float to_x) -> movement::MovementCommand {
+  movement::MovementCommand command;
+  command.command_id = 77;
+  command.start_position = {from_x, 0.0f, 0.0f};
+  command.target_position = {to_x, 0.0f, 0.0f};
+  command.duration_ms = 900;
+  command.elapsed_ms = 300;
+  command.curve_id = 4;
+  return command;
+}
+
 TEST(OffloadTraversal, EntityCrossesBspSplit_PumpsOffload) {
-  Host A("offload_traversal_a");
-  Host B("offload_traversal_b");
-  auto addr_a = A.StartServer();
-  auto addr_b = B.StartServer();
+  Host host_a("offload_traversal_a");
+  Host host_b("offload_traversal_b");
+  auto addr_a = host_a.StartServer();
+  auto addr_b = host_b.StartServer();
   ASSERT_NE(addr_a.Port(), 0u);
   ASSERT_NE(addr_b.Port(), 0u);
 
-  // Open the A→B channel (real RUDP) and seed A's peer registry so
-  // TickOffloadChecker's FindPeerChannel(B) resolves.
-  auto ch_a2b = A.network.ConnectRudp(addr_b);
+  auto ch_a2b = host_a.network.ConnectRudp(addr_b);
   ASSERT_TRUE(ch_a2b.HasValue());
-  A.app.PeerRegistryForTest().InsertForTest(addr_b, *ch_a2b);
-  auto ch_b2a = B.network.ConnectRudp(addr_a);
+  host_a.app.PeerRegistryForTest().InsertForTest(addr_b, *ch_a2b);
+  auto ch_b2a = host_b.network.ConnectRudp(addr_a);
   ASSERT_TRUE(ch_b2a.HasValue());
-  B.app.PeerRegistryForTest().InsertForTest(addr_a, *ch_b2a);
+  host_b.app.PeerRegistryForTest().InsertForTest(addr_a, *ch_b2a);
 
-  // Configure the space on A: BSP with x=0 split, local Cell 1 for the
-  // "A owns" half (x<0), containing the Real we'll offload.
   const SpaceID kSpaceId = 42;
   cellapp::CreateSpace cs{kSpaceId};
-  A.app.OnCreateSpace({}, nullptr, cs);
-  auto* space_a = A.app.FindSpace(kSpaceId);
+  host_a.app.OnCreateSpace({}, nullptr, cs);
+  auto* space_a = host_a.app.FindSpace(kSpaceId);
   ASSERT_NE(space_a, nullptr);
   space_a->SetBspTree(BuildTwoCellBsp(addr_a, addr_b));
   auto* cell_a =
       space_a->AddLocalCell(std::make_unique<Cell>(*space_a, /*cell_id=*/1, CellBounds{}));
   ASSERT_NE(cell_a, nullptr);
 
-  // Spawn a Real entity on A at x=-5 (inside cell 1) and register it
-  // in the local Cell so TickOffloadChecker can iterate real entities.
   cellapp::CreateCellEntity cce;
   cce.entity_id = 100;
   cce.type_id = 1;
   cce.space_id = kSpaceId;
   cce.position = {-5.f, 0.f, 0.f};
   cce.direction = {1.f, 0.f, 0.f};
-  A.app.OnCreateCellEntity({}, nullptr, cce);
-  auto* real = A.app.FindRealEntity(100);
+  host_a.app.OnCreateCellEntity({}, nullptr, cce);
+  auto* real = host_a.app.FindRealEntity(100);
   ASSERT_NE(real, nullptr);
   ASSERT_TRUE(real->IsReal());
 
-  // Move it solidly past the default 15 m ghost band. TickOffloadChecker
-  // queries the BSP at the new position, sees cell 2 (B), and emits the
-  // offload.
+  host_a.app.MovementSystemForTest().position_history().Record(100, 10, MovementStateAt(-5.0f, 7));
+  host_a.app.MovementSystemForTest().position_history().Record(100, 20, MovementStateAt(25.0f, 8));
+  ASSERT_TRUE(host_a.app.MovementSystemForTest().command_store().Set(100, MovementCommandAt(-5.0f, 25.0f)));
   real->SetPosition({+25.f, 0.f, 0.f});
 
-  A.app.TickOffloadChecker();
+  host_a.app.TickOffloadChecker();
 
-  // Wait for the round-trip:
-  //   - B rehydrates a Real at entity_id=100 (OnOffloadEntity fires),
-  //   - A's pending_offloads_ drains when OffloadEntityAck arrives.
   const auto real_cell_id = real->Id();
-  ASSERT_TRUE(PumpUntil(A, B, [&] {
-    auto* on_b = B.app.FindEntity(real_cell_id);
+  ASSERT_TRUE(PumpUntil(host_a, host_b, [&] {
+    auto* on_b = host_b.app.FindEntity(real_cell_id);
     return on_b != nullptr && on_b->IsReal();
   })) << "B never rehydrated the Real from the pump-driven Offload";
 
-  ASSERT_TRUE(PumpUntil(A, B, [&] { return A.app.PendingOffloadsForTest().empty(); }))
-      << "A's pending_offloads_ never drained — Ack round-trip stuck";
+  ASSERT_TRUE(
+      PumpUntil(host_a, host_b, [&] { return host_a.app.PendingOffloadsForTest().empty(); }))
+      << "A's pending_offloads_ never drained";
 
-  // A's copy should now be a Ghost pointing at B.
-  auto* on_a = A.app.FindEntity(real_cell_id);
+  auto* on_a = host_a.app.FindEntity(real_cell_id);
   ASSERT_NE(on_a, nullptr);
   EXPECT_TRUE(on_a->IsGhost()) << "A's entity should have flipped to Ghost after Offload";
 
-  auto* on_b = B.app.FindEntity(real_cell_id);
+  auto* on_b = host_b.app.FindEntity(real_cell_id);
   ASSERT_NE(on_b, nullptr);
   EXPECT_TRUE(on_b->IsReal());
   EXPECT_FLOAT_EQ(on_b->Position().x, 25.f);
   EXPECT_EQ(on_b->Id(), 100u);
+
+  EXPECT_EQ(host_a.app.MovementSystemForTest().position_history().Find(real_cell_id), nullptr);
+  auto sample = host_b.app.MovementSystemForTest().position_history().SampleAt(real_cell_id, 15);
+  ASSERT_TRUE(sample.has_value());
+  EXPECT_EQ(sample->server_tick, 15u);
+  EXPECT_FLOAT_EQ(sample->state.position.x, 10.0f);
+  EXPECT_EQ(sample->state.last_processed_input_seq, 8u);
+
+  EXPECT_EQ(host_a.app.MovementSystemForTest().command_store().Find(real_cell_id), nullptr);
+  const auto* command = host_b.app.MovementSystemForTest().command_store().Find(real_cell_id);
+  ASSERT_NE(command, nullptr);
+  EXPECT_EQ(command->command_id, 77u);
+  EXPECT_EQ(command->elapsed_ms, 300u);
+  EXPECT_FLOAT_EQ(command->target_position.x, 25.0f);
 }
 
-// Entity that stays inside its original cell must not trigger an
-// Offload: TickOffloadChecker must ask the BSP, see same cell, and
-// skip. This pins the "no Offload when staying put" invariant that
-// would otherwise thrash on every move.
 TEST(OffloadTraversal, EntityStaysInOwnCell_NoOffload) {
-  Host A("offload_no_traversal_a");
-  Host B("offload_no_traversal_b");
-  auto addr_a = A.StartServer();
-  auto addr_b = B.StartServer();
+  Host host_a("offload_no_traversal_a");
+  Host host_b("offload_no_traversal_b");
+  auto addr_a = host_a.StartServer();
+  auto addr_b = host_b.StartServer();
 
-  auto ch_a2b = A.network.ConnectRudp(addr_b);
+  auto ch_a2b = host_a.network.ConnectRudp(addr_b);
   ASSERT_TRUE(ch_a2b.HasValue());
-  A.app.PeerRegistryForTest().InsertForTest(addr_b, *ch_a2b);
+  host_a.app.PeerRegistryForTest().InsertForTest(addr_b, *ch_a2b);
 
   const SpaceID kSpaceId = 7;
-  A.app.OnCreateSpace({}, nullptr, cellapp::CreateSpace{kSpaceId});
-  auto* space_a = A.app.FindSpace(kSpaceId);
+  host_a.app.OnCreateSpace({}, nullptr, cellapp::CreateSpace{kSpaceId});
+  auto* space_a = host_a.app.FindSpace(kSpaceId);
   space_a->SetBspTree(BuildTwoCellBsp(addr_a, addr_b));
   auto* cell_a =
       space_a->AddLocalCell(std::make_unique<Cell>(*space_a, /*cell_id=*/1, CellBounds{}));
@@ -198,15 +199,14 @@ TEST(OffloadTraversal, EntityStaysInOwnCell_NoOffload) {
   cce.space_id = kSpaceId;
   cce.position = {-5.f, 0.f, 0.f};
   cce.direction = {1.f, 0.f, 0.f};
-  A.app.OnCreateCellEntity({}, nullptr, cce);
-  auto* real = A.app.FindRealEntity(101);
+  host_a.app.OnCreateCellEntity({}, nullptr, cce);
+  auto* real = host_a.app.FindRealEntity(101);
   ASSERT_TRUE(real->IsReal());
 
-  // Move the entity but keep it inside cell 1 (x stays < 0).
   real->SetPosition({-8.f, 0.f, 3.f});
-  A.app.TickOffloadChecker();
+  host_a.app.TickOffloadChecker();
 
-  EXPECT_TRUE(A.app.PendingOffloadsForTest().empty())
+  EXPECT_TRUE(host_a.app.PendingOffloadsForTest().empty())
       << "Move within own cell must not enqueue a pending Offload";
   EXPECT_TRUE(real->IsReal()) << "Entity must still be Real on A";
 }

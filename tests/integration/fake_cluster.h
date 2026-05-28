@@ -50,20 +50,18 @@ class FakeCluster {
   uint32_t LastRpcId() const { return last_rpc_id_; }
   const std::vector<uint8_t>& LastRpcPayload() const { return last_rpc_payload_; }
 
-  // Send an AoI envelope to the authenticated client. reliable=true uses
-  // 0xF003 (reliable enter/leave/property), reliable=false uses 0xF001
-  // (volatile position update). Returns false if no auth channel yet.
+  // Sends 0xF003 for reliable AoI and 0xF001 for volatile AoI.
+  // Returns false if no auth channel exists yet.
   bool PushAoIEnvelope(bool reliable, std::span<const std::byte> payload);
 
-  // Build + push the wire format produced by witness.cc::BuildEnterEnvelope:
-  //   [u8 kind=1][u32 eid][u16 type_id][3f pos][3f dir][u8 og][f64 server_time][peer_snapshot]
+  // Builds the wire format produced by witness.cc::BuildEnterEnvelope.
   bool PushEntityEnter(EntityID eid, uint16_t type_id, float px, float py, float pz, float dx,
                        float dy, float dz, bool on_ground, double server_time);
 
-  // Build + push the wire format produced by witness.cc::SendEntityUpdate:
-  //   [u8 kind=3][u32 eid][3f pos][3f dir][u8 og][f64 server_time]
+  // Builds the wire format produced by witness.cc::SendEntityUpdate.
   bool PushEntityPositionUpdate(EntityID eid, float px, float py, float pz, float dx, float dy,
                                 float dz, bool on_ground, double server_time);
+  bool PushMovementStateAck(EntityID eid, uint32_t acked_input_seq, uint32_t server_tick);
 
  private:
   EventDispatcher disp_loginapp_{"fake_loginapp"};
@@ -86,8 +84,8 @@ class FakeCluster {
   uint32_t last_rpc_id_{0};
   std::vector<uint8_t> last_rpc_payload_;
 
-  // Latched on the first Authenticate; reused by PushAoIEnvelope so AvatarFilter
-  // tests can inject 0xF001 / 0xF003 envelopes the same way witness.cc does.
+  // Latched on the first Authenticate; reused by push helpers so tests can
+  // inject client-facing messages the same way BaseApp does.
   Channel* auth_channel_{nullptr};
 };
 

@@ -1,8 +1,4 @@
-// Space tests.
-//
-// Covers: entity add/remove, RangeList integration on spawn/despawn,
-// Tick driving controllers, destroyed-entity compaction.
-
+#include <filesystem>
 #include <memory>
 
 #include <gtest/gtest.h>
@@ -11,6 +7,9 @@
 #include "cell_entity.h"
 #include "cellappmgr/bsp_tree.h"
 #include "math/vector3.h"
+#include "physics/collision_asset.h"
+#include "physics/physics_query.h"
+#include "platform/filesystem.h"
 #include "space.h"
 #include "space/controllers.h"
 #include "space/timer_controller.h"
@@ -30,10 +29,7 @@ TEST(Space, AddEntityLinksIntoRangeList) {
       100, /*type_id=*/uint16_t{1}, space, math::Vector3{5, 0, 5}, math::Vector3{1, 0, 0}));
   EXPECT_EQ(space.EntityCount(), 1u);
   EXPECT_EQ(space.FindEntity(100), entity);
-  // The head sentinel's right-neighbour on X should eventually reach the
-  // entity node (via interleaved nodes from any future triggers).
-  // For this minimal case the list has only head, entity, tail, so a
-  // direct check works.
+  // This minimal case has only head, entity, tail, so a direct check works.
   EXPECT_EQ(space.GetRangeList().Head().next_x_, &entity->RangeNode());
 }
 
@@ -91,12 +87,7 @@ TEST(Space, TickDrivesControllersOnEveryEntity) {
 }
 
 TEST(Space, DestroyMarksButDoesNotErase) {
-  // Locks the intentional invariant: Destroy() flips a flag but never
-  // removes the entity from Space::entities_. The only path that
-  // erases the owning unique_ptr is RemoveEntity. A Space-local
-  // compaction sweep was removed (space.cc:Tick) because it would be
-  // a second destruction path that silently invalidates CellApp's
-  // base/cell-id indexes.
+  // Destroy only marks; RemoveEntity is the owning erase path.
   Space space(1);
   auto* entity = space.AddEntity(std::make_unique<CellEntity>(
       1, uint16_t{1}, space, math::Vector3{0, 0, 0}, math::Vector3{1, 0, 0}));
@@ -112,6 +103,99 @@ TEST(Space, DestroyMarksButDoesNotErase) {
 
   space.RemoveEntity(1);
   EXPECT_EQ(space.EntityCount(), 0u);
+}
+
+TEST(Space, PhysicsQueryCanBeReplaced) {
+  Space space(1);
+  EXPECT_NE(dynamic_cast<physics::StaticPhysicsQuery*>(&space.PhysicsQuery()), nullptr);
+
+  space.SetPhysicsQuery(std::make_unique<physics::FlatPhysicsQuery>(-2.0f));
+
+  physics::GroundProbeQuery query;
+  query.origin = {0.0f, 0.0f, 0.0f};
+  query.max_distance_m = 3.0f;
+  const auto hit = space.PhysicsQuery().GroundProbe(query);
+  ASSERT_TRUE(hit.hit);
+  EXPECT_FLOAT_EQ(hit.position.y, -2.0f);
+}
+
+TEST(Space, CollisionAssetInstallsStaticPhysicsQuery) {
+  auto asset = physics::LoadCollisionAssetFromJson(R"({
+    "version": 1,
+    "coordinate_system": "x_right_y_up_z_forward_meters",
+    "source_hash": "space-unit",
+    "objects": [
+      {"shape": "box", "min": [-1, 2, -1], "max": [1, 3, 1], "layer": 4}
+    ]
+  })");
+  ASSERT_TRUE(asset.HasValue()) << asset.Error().Message();
+
+  Space space(1);
+  space.SetCollisionAsset(*asset);
+
+  EXPECT_EQ(space.CollisionAssetSourceHash(), "space-unit");
+  EXPECT_EQ(space.CollisionAssetObjectCount(), 1u);
+
+  physics::GroundProbeQuery query;
+  query.origin = {0.0f, 5.0f, 0.0f};
+  query.max_distance_m = 4.0f;
+  query.radius_m = 0.1f;
+  query.filter.mask.bits = 1u << 4;
+
+  const auto hit = space.PhysicsQuery().GroundProbe(query);
+  ASSERT_TRUE(hit.hit);
+  EXPECT_FLOAT_EQ(hit.position.y, 3.0f);
+  EXPECT_EQ(hit.layer, 4u);
+
+  query.filter.mask.bits = 1u;
+  EXPECT_FALSE(space.PhysicsQuery().GroundProbe(query).hit);
+}
+
+TEST(Space, LoadCollisionAssetFromFileKeepsPreviousQueryOnFailure) {
+  auto asset = physics::LoadCollisionAssetFromJson(R"({
+    "version": 1,
+    "coordinate_system": "x_right_y_up_z_forward_meters",
+    "source_hash": "kept",
+    "objects": [
+      {"shape": "plane", "point": [0, 2, 0], "normal": [0, 1, 0], "layer": 3}
+    ]
+  })");
+  ASSERT_TRUE(asset.HasValue()) << asset.Error().Message();
+
+  Space space(1);
+  space.SetCollisionAsset(*asset);
+
+  const auto path = fs::TempDirectory() / "atlas_space_bad_collision.json";
+  ASSERT_TRUE(fs::WriteTextFile(path, "not json").HasValue());
+  auto result = space.LoadCollisionAssetFromFile(path);
+
+  ASSERT_FALSE(result.HasValue());
+  EXPECT_EQ(space.CollisionAssetSourceHash(), "kept");
+  EXPECT_EQ(space.CollisionAssetObjectCount(), 1u);
+
+  physics::GroundProbeQuery query;
+  query.origin = {0.0f, 5.0f, 0.0f};
+  query.max_distance_m = 4.0f;
+  query.filter.mask.bits = 1u << 3;
+  EXPECT_TRUE(space.PhysicsQuery().GroundProbe(query).hit);
+  std::filesystem::remove(path);
+}
+
+TEST(Space, SetPhysicsQueryClearsCollisionAssetMetadata) {
+  auto asset = physics::LoadCollisionAssetFromJson(R"({
+    "version": 1,
+    "coordinate_system": "x_right_y_up_z_forward_meters",
+    "source_hash": "asset",
+    "objects": []
+  })");
+  ASSERT_TRUE(asset.HasValue()) << asset.Error().Message();
+
+  Space space(1);
+  space.SetCollisionAsset(*asset);
+  space.SetPhysicsQuery(std::make_unique<physics::FlatPhysicsQuery>(-1.0f));
+
+  EXPECT_TRUE(space.CollisionAssetSourceHash().empty());
+  EXPECT_EQ(space.CollisionAssetObjectCount(), 0u);
 }
 
 TEST(Space, ForEachEntityIteratesAll) {

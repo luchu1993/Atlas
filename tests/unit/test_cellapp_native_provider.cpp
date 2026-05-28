@@ -1,16 +1,7 @@
-// CellAppNativeProvider tests.
-//
-// Covers the C# → C++ NativeApi surface the CellApp process installs:
-//   - SetEntityPosition propagates into CellEntity + RangeList
-//   - PublishReplicationFrame forwards event/volatile seqs with correct
-//     snapshot and delta spans
-//   - AddMoveController / AddTimerController / AddProximityController
-//     install live controllers owned by the entity
-//   - CancelController tears them back down
-//   - unknown entity_ids log-and-skip rather than crash
-
 #include <cstddef>
 #include <memory>
+#include <string>
+#include <string_view>
 
 #include <gtest/gtest.h>
 
@@ -26,9 +17,8 @@ namespace {
 
 class CellAppNativeProviderTest : public ::testing::Test {
  protected:
-  // provider_ before space_: entity controllers store dispatch lambdas
-  // capturing `this` into proximity-trigger callbacks, so the provider
-  // must outlive the entities that fire those callbacks during teardown.
+  // Provider outlives Space so controller callbacks cannot capture a
+  // destroyed provider during entity teardown.
   CellAppNativeProvider provider_{[this](uint32_t id) { return space_.FindEntity(id); }};
   Space space_{1};
 
@@ -48,8 +38,208 @@ TEST_F(CellAppNativeProviderTest, SetPositionUpdatesEntity) {
 
 TEST_F(CellAppNativeProviderTest, SetPositionUnknownEntityIsSafe) {
   provider_.SetEntityPosition(9999, 1.f, 2.f, 3.f);
-  // Just verifies we don't crash. The warning log is fire-and-forget.
   EXPECT_EQ(space_.EntityCount(), 0u);
+}
+
+TEST_F(CellAppNativeProviderTest, SetAndGetOnGroundUsesEntityState) {
+  auto* e = AddEntity(10);
+  EXPECT_FALSE(provider_.GetEntityOnGround(10));
+
+  provider_.SetEntityOnGround(10, true);
+
+  EXPECT_TRUE(e->OnGround());
+  EXPECT_TRUE(provider_.GetEntityOnGround(10));
+  EXPECT_FALSE(provider_.GetEntityOnGround(9999));
+}
+
+TEST_F(CellAppNativeProviderTest, SetMovementIntentRoutesRealEntity) {
+  AddEntity(10);
+  uint32_t entity_id = 0;
+  float dir_x = 0.0f;
+  float dir_z = 0.0f;
+  float speed_mps = 0.0f;
+  uint16_t buttons = 0;
+  provider_.SetMovementIntentFn([&](uint32_t id, float x, float z, float speed, uint16_t b) {
+    entity_id = id;
+    dir_x = x;
+    dir_z = z;
+    speed_mps = speed;
+    buttons = b;
+  });
+
+  provider_.SetMovementIntent(10, 0.0f, 1.0f, 3.0f, 3);
+
+  EXPECT_EQ(entity_id, 10u);
+  EXPECT_FLOAT_EQ(dir_x, 0.0f);
+  EXPECT_FLOAT_EQ(dir_z, 1.0f);
+  EXPECT_FLOAT_EQ(speed_mps, 3.0f);
+  EXPECT_EQ(buttons, 3u);
+}
+
+TEST_F(CellAppNativeProviderTest, SetMovementCommandRoutesRealEntity) {
+  AddEntity(10);
+  bool called = false;
+  movement::MovementCommand routed;
+  provider_.SetMovementCommandFn([&](uint32_t id, const movement::MovementCommand& command) {
+    called = true;
+    EXPECT_EQ(id, 10u);
+    routed = command;
+    return true;
+  });
+
+  NativeMovementCommand command;
+  command.command_id = 44;
+  command.skill_id = 7;
+  command.type = static_cast<uint8_t>(movement::MovementCommandType::kDash);
+  command.target_z = 3.0f;
+  command.duration_ms = 500;
+  command.curve_id = 0;
+  command.input_policy =
+      static_cast<uint8_t>(movement::MovementCommandInputPolicy::kSuppress);
+  command.collision_policy =
+      static_cast<uint8_t>(movement::MovementCommandCollisionPolicy::kStop);
+
+  EXPECT_TRUE(provider_.SetMovementCommand(10, command));
+
+  EXPECT_TRUE(called);
+  EXPECT_EQ(routed.command_id, 44u);
+  EXPECT_EQ(routed.skill_id, 7u);
+  EXPECT_EQ(routed.type, movement::MovementCommandType::kDash);
+  EXPECT_FLOAT_EQ(routed.target_position.z, 3.0f);
+  EXPECT_EQ(routed.duration_ms, 500u);
+}
+
+TEST_F(CellAppNativeProviderTest, SetMovementCommandRejectsGhost) {
+  space_.AddEntity(std::make_unique<CellEntity>(
+      CellEntity::GhostTag{}, 11, uint16_t{1}, space_, math::Vector3{0, 0, 0},
+      math::Vector3{1, 0, 0}, test_support::FakeChannel(), Address{0x7F000001u, 26002}));
+  provider_.SetMovementCommandFn(
+      [](uint32_t, const movement::MovementCommand&) { return true; });
+
+  NativeMovementCommand command;
+  command.duration_ms = 500;
+
+  EXPECT_FALSE(provider_.SetMovementCommand(11, command));
+}
+
+TEST_F(CellAppNativeProviderTest, ClearMovementCommandRoutesRealEntity) {
+  AddEntity(10);
+  bool called = false;
+  provider_.SetClearMovementCommandFn([&](uint32_t id, uint32_t command_id) {
+    called = true;
+    EXPECT_EQ(id, 10u);
+    EXPECT_EQ(command_id, 44u);
+    return true;
+  });
+
+  EXPECT_TRUE(provider_.ClearMovementCommand(10, 44));
+
+  EXPECT_TRUE(called);
+}
+
+TEST_F(CellAppNativeProviderTest, ClearMovementCommandRejectsGhost) {
+  space_.AddEntity(std::make_unique<CellEntity>(
+      CellEntity::GhostTag{}, 11, uint16_t{1}, space_, math::Vector3{0, 0, 0},
+      math::Vector3{1, 0, 0}, test_support::FakeChannel(), Address{0x7F000001u, 26002}));
+  provider_.SetClearMovementCommandFn([](uint32_t, uint32_t) { return true; });
+
+  EXPECT_FALSE(provider_.ClearMovementCommand(11, 44));
+}
+
+TEST_F(CellAppNativeProviderTest, LoadCollisionAssetRoutesValidPath) {
+  bool called = false;
+  uint32_t routed_space_id = 0;
+  std::string routed_path;
+  provider_.SetLoadCollisionAssetFn(
+      [&](uint32_t space_id, std::string_view path) {
+        called = true;
+        routed_space_id = space_id;
+        routed_path.assign(path);
+        return true;
+      });
+
+  const std::string path = "maps/test.collision.json";
+
+  EXPECT_TRUE(provider_.LoadCollisionAsset(7, path.data(), static_cast<int32_t>(path.size())));
+
+  EXPECT_TRUE(called);
+  EXPECT_EQ(routed_space_id, 7u);
+  EXPECT_EQ(routed_path, path);
+}
+
+TEST_F(CellAppNativeProviderTest, LoadCollisionAssetRejectsInvalidPath) {
+  provider_.SetLoadCollisionAssetFn([](uint32_t, std::string_view) { return true; });
+
+  EXPECT_FALSE(provider_.LoadCollisionAsset(7, nullptr, 1));
+  EXPECT_FALSE(provider_.LoadCollisionAsset(7, "", 0));
+  EXPECT_FALSE(provider_.LoadCollisionAsset(7, "x", -1));
+}
+
+TEST_F(CellAppNativeProviderTest, SetMovementCurveRoutesValidCurve) {
+  bool called = false;
+  movement::MovementCurve routed;
+  provider_.SetMovementCurveFn([&](const movement::MovementCurve& curve) {
+    called = true;
+    routed = curve;
+    return true;
+  });
+
+  float samples[] = {0.0f, 0.25f, 1.0f};
+  NativeMovementCurve curve;
+  curve.curve_id = 12;
+  curve.samples = samples;
+  curve.sample_count = 3;
+
+  EXPECT_TRUE(provider_.SetMovementCurve(curve));
+
+  EXPECT_TRUE(called);
+  EXPECT_EQ(routed.id, 12u);
+  EXPECT_EQ(routed.sample_count, 3u);
+  EXPECT_FLOAT_EQ(routed.samples[1], 0.25f);
+}
+
+TEST_F(CellAppNativeProviderTest, SetMovementCurveRejectsInvalidCurve) {
+  provider_.SetMovementCurveFn([](const movement::MovementCurve&) { return true; });
+
+  NativeMovementCurve curve;
+  curve.curve_id = 12;
+  curve.sample_count = 1;
+
+  EXPECT_FALSE(provider_.SetMovementCurve(curve));
+}
+
+TEST_F(CellAppNativeProviderTest, TryGetMovementHistorySampleRoutesRealEntity) {
+  AddEntity(10);
+  bool called = false;
+  provider_.SetMovementHistorySampleFn(
+      [&](uint32_t entity_id, uint32_t tick, NativeMovementHistorySample& sample) {
+        called = true;
+        EXPECT_EQ(entity_id, 10u);
+        EXPECT_EQ(tick, 30u);
+        sample.server_tick = tick;
+        sample.position_z = 7.5f;
+        sample.last_processed_input_seq = 99;
+        return true;
+      });
+
+  NativeMovementHistorySample sample;
+  EXPECT_TRUE(provider_.TryGetMovementHistorySample(10, 30, sample));
+
+  EXPECT_TRUE(called);
+  EXPECT_EQ(sample.server_tick, 30u);
+  EXPECT_FLOAT_EQ(sample.position_z, 7.5f);
+  EXPECT_EQ(sample.last_processed_input_seq, 99u);
+}
+
+TEST_F(CellAppNativeProviderTest, TryGetMovementHistorySampleRejectsGhost) {
+  space_.AddEntity(std::make_unique<CellEntity>(
+      CellEntity::GhostTag{}, 11, uint16_t{1}, space_, math::Vector3{0, 0, 0},
+      math::Vector3{1, 0, 0}, test_support::FakeChannel(), Address{0x7F000001u, 26002}));
+  provider_.SetMovementHistorySampleFn(
+      [](uint32_t, uint32_t, NativeMovementHistorySample&) { return true; });
+
+  NativeMovementHistorySample sample;
+  EXPECT_FALSE(provider_.TryGetMovementHistorySample(11, 30, sample));
 }
 
 TEST_F(CellAppNativeProviderTest, PublishReplicationFrameAdvancesSeqsAndCopiesBuffers) {
@@ -79,7 +269,7 @@ TEST_F(CellAppNativeProviderTest, PublishReplicationFrameAdvancesSeqsAndCopiesBu
 
 TEST_F(CellAppNativeProviderTest, PublishReplicationFrameWithEmptyBuffersIsSafe) {
   auto* e = AddEntity(10);
-  // volatile-only frame — no snapshots or deltas needed.
+  // Volatile-only frame; no snapshots or deltas needed.
   provider_.PublishReplicationFrame(10, /*has_event=*/false, /*has_volatile=*/true, nullptr, 0,
                                     nullptr, 0, nullptr, 0, nullptr, 0);
   const auto* state = e->GetReplicationState();
@@ -120,10 +310,8 @@ TEST_F(CellAppNativeProviderTest, AddProximityControllerIsFunctional) {
   EXPECT_TRUE(e->GetControllers().Contains(static_cast<ControllerID>(id)));
 }
 
-// AddProximityController installs lambdas that route enter/leave events
-// into the registered ProximityEventFn. Use a stateless recorder (must be
-// a plain function for ProximityEventFn's `void(*)(...)` signature) to
-// capture events.
+// Proximity callbacks need a plain function pointer, so the recorder is
+// stateless and writes through this file-static vector.
 namespace {
 struct ProximityRecord {
   uint32_t entity_id;
@@ -154,12 +342,8 @@ TEST_F(CellAppNativeProviderTest, ProximityEventRoutesEnterAndLeave) {
   g_proximity_events = &events;
   provider_.SetProximityEventFnForTest(&ProximityRecorder);
 
-  // Both entities exist + have base_entity_ids populated BEFORE the
-  // ProximityController is attached. The CellEntity ctor inserts its
-  // range_node into the RangeList before we get a chance to SetBase,
-  // so any trigger observing that ctor-time insert would see base_id=0.
-  // Attaching the trigger last makes its Insert pass (the "initial
-  // sweep") see the peer with its real base_id already populated.
+  // Attach the trigger last so the initial sweep sees the peer after
+  // construction and not during CellEntity's RangeList insert.
   MakePeerWithBase(space_, 100, {0, 0, 0});  // sensor
   auto* peer = MakePeerWithBase(space_, 200, {2, 0, 2});
 
@@ -174,7 +358,7 @@ TEST_F(CellAppNativeProviderTest, ProximityEventRoutesEnterAndLeave) {
   EXPECT_EQ(events[0].peer_entity_id, 200u);  // peer's unified entity id
   EXPECT_EQ(events[0].is_enter, 1);
 
-  // Move the peer out of range → leave fires.
+  // Move the peer out of range; leave fires.
   peer->SetPosition({100.f, 0.f, 0.f});
   ASSERT_EQ(events.size(), 2u);
   EXPECT_EQ(events[1].entity_id, 100u);
@@ -192,7 +376,7 @@ TEST_F(CellAppNativeProviderTest, ProximityEventIsNoopWhenCallbackNull) {
   const auto id = provider_.AddProximityController(101, /*range=*/10.f, /*user_arg=*/0);
   ASSERT_GT(id, 0);
   MakePeerWithBase(space_, 201, {1, 0, 1});
-  // Nothing to observe on the test side — the point is no crash even
+  // Nothing to observe on the test side; the point is no crash even
   // with a null dispatch fn.
   SUCCEED();
 }
@@ -229,8 +413,6 @@ TEST_F(CellAppNativeProviderTest, ReportScriptTickRoutesCallback) {
   EXPECT_EQ(entity_id, 123u);
   EXPECT_EQ(elapsed_us, 4567u);
 }
-
-// ---- SetNativeCallbacks tests ----
 
 // Helper: build a minimal callback table with known sentinel function ptrs.
 namespace {
@@ -285,9 +467,8 @@ void FakeDestroyGhost(uint32_t eid) {
   g_destroy_ghost_entity_id = eid;
 }
 
-// Matches the packed table C# would send (see CellAppCallbackTable in
-// cellapp_native_provider.cc — slots beyond `dispatch_rpc` may be null on
-// older runtimes, hence the trailing optionals).
+// Matches the packed table C# would send; slots beyond `dispatch_rpc`
+// may be null on older runtimes, hence the trailing optionals.
 #pragma pack(push, 1)
 struct TestCallbackTable {
   void* restore;
@@ -396,14 +577,6 @@ TEST_F(CellAppNativeProviderTest, SetNativeCallbacksDispatchRoundtrips) {
   EXPECT_EQ(g_dispatch_rpc_id, 0x00800001u);
 }
 
-// ============================================================================
-// Ghost write guards
-// ============================================================================
-//
-// Every write path that mutates Real-only state must log-and-skip when its
-// entity is a Ghost. Soft guard rather than a hard assert so a misbehaving
-// script can't take the CellApp down.
-
 TEST_F(CellAppNativeProviderTest, SetPositionRejectedOnGhost) {
   auto* e = space_.AddEntity(
       std::make_unique<CellEntity>(CellEntity::GhostTag{}, 500, uint16_t{1}, space_,
@@ -411,9 +584,19 @@ TEST_F(CellAppNativeProviderTest, SetPositionRejectedOnGhost) {
                                    /*real_channel=*/test_support::FakeChannel()));
   ASSERT_TRUE(e->IsGhost());
   provider_.SetEntityPosition(500, 9.f, 9.f, 9.f);
-  // Position unchanged — guard blocked the write.
+  // Position unchanged; guard blocked the write.
   EXPECT_FLOAT_EQ(e->Position().x, 0.f);
   EXPECT_FLOAT_EQ(e->Position().z, 0.f);
+}
+
+TEST_F(CellAppNativeProviderTest, SetOnGroundRejectedOnGhost) {
+  auto* e = space_.AddEntity(
+      std::make_unique<CellEntity>(CellEntity::GhostTag{}, 503, uint16_t{1}, space_,
+                                   math::Vector3{0, 0, 0}, math::Vector3{1, 0, 0},
+                                   test_support::FakeChannel()));
+  ASSERT_TRUE(e->IsGhost());
+  provider_.SetEntityOnGround(503, true);
+  EXPECT_FALSE(e->OnGround());
 }
 
 TEST_F(CellAppNativeProviderTest, PublishReplicationFrameRejectedOnGhost) {
@@ -431,7 +614,7 @@ TEST_F(CellAppNativeProviderTest, SendCellRpcOnRealLogsAndSkips) {
   // route through Ghost->Real wire. SendCellRpc on a Real is a no-op.
   AddEntity(600);
   provider_.SendCellRpc(600, /*rpc_id=*/0x800201, nullptr, 0, /*trace_id=*/0);
-  // No crash, no side effect — Real entity is untouched.
+  // No crash, no side effect; Real entity is untouched.
   SUCCEED();
 }
 

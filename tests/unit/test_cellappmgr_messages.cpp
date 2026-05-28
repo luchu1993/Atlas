@@ -1,5 +1,3 @@
-// CellAppMgr message roundtrip tests.
-
 #include <cmath>
 #include <limits>
 #include <optional>
@@ -27,29 +25,24 @@ auto RoundTrip(const Msg& msg) -> std::optional<Msg> {
   return std::move(*rt);
 }
 
-}  // namespace
-
-// ─── CellBounds (value type) ─────────────────────────────────────────────────
+}
 
 TEST(CellBounds, Defaults) {
   CellBounds b;
   EXPECT_TRUE(b.Contains(0.f, 0.f));
   EXPECT_TRUE(b.Contains(-1e9f, 1e9f));
-  // Infinity edges imply everything is inside.
   EXPECT_TRUE(std::isinf(b.min_x));
   EXPECT_TRUE(std::isinf(b.max_x));
 }
 
 TEST(CellBounds, ContainsAndOverlaps) {
   CellBounds a{0.f, 0.f, 10.f, 10.f};
-  CellBounds b{10.f, 0.f, 20.f, 10.f};  // shares max_x edge with a
-  CellBounds c{5.f, 5.f, 15.f, 15.f};   // genuine overlap
+  CellBounds b{10.f, 0.f, 20.f, 10.f};
+  CellBounds c{5.f, 5.f, 15.f, 15.f};
 
-  // Half-open on max: corner (10,5) belongs to b, not a.
   EXPECT_TRUE(b.Contains(10.f, 5.f));
   EXPECT_FALSE(a.Contains(10.f, 5.f));
 
-  // Edge-sharing neighbours do NOT overlap.
   EXPECT_FALSE(a.Overlaps(b));
   EXPECT_TRUE(a.Overlaps(c));
 }
@@ -74,8 +67,6 @@ TEST(CellBounds, RoundTripFiniteAndInfinite) {
   EXPECT_TRUE(rt->max_z > 0);
 }
 
-// ─── Messages ────────────────────────────────────────────────────────────────
-
 TEST(CellAppMgrMessages, RegisterCellApp_RoundTrip) {
   RegisterCellApp msg;
   msg.internal_addr = Address(0x7F000001u, 30000);
@@ -90,11 +81,13 @@ TEST(CellAppMgrMessages, RegisterCellAppAck_RoundTrip) {
   msg.success = true;
   msg.app_id = 5;
   msg.game_time = 0x1122334455667788ull;
+  msg.mgr_generation = 42u;
   auto rt = RoundTrip(msg);
   ASSERT_TRUE(rt.has_value());
   EXPECT_TRUE(rt->success);
   EXPECT_EQ(rt->app_id, 5u);
   EXPECT_EQ(rt->game_time, 0x1122334455667788ull);
+  EXPECT_EQ(rt->mgr_generation, 42u);
 }
 
 TEST(CellAppMgrMessages, InformCellLoad_RoundTrip) {
@@ -110,6 +103,7 @@ TEST(CellAppMgrMessages, InformCellLoad_RoundTrip) {
   a.geometry_version = 9;
   a.tick_load = 0.25f;
   a.script_tick_us = 25000;
+  a.native_tick_us = 3000;
   a.witness_count = 7;
   a.aoi_peer_count = 70;
   a.aoi_reliable_bytes = 1024;
@@ -117,6 +111,8 @@ TEST(CellAppMgrMessages, InformCellLoad_RoundTrip) {
   a.backup_bytes = 4096;
   a.x_buckets = {0, 3, 7, 11, 13, 17, 19, 23};
   a.z_buckets = {23, 19, 17, 13, 11, 7, 3, 0};
+  a.x_load_buckets = {0, 30, 70, 110, 130, 170, 190, 230};
+  a.z_load_buckets = {230, 190, 170, 130, 110, 70, 30, 0};
   msg.cells.push_back(a);
   InformCellLoad::CellReport b;
   b.cell_id = 4;
@@ -126,6 +122,7 @@ TEST(CellAppMgrMessages, InformCellLoad_RoundTrip) {
   b.geometry_version = 10;
   b.tick_load = 0.125f;
   b.script_tick_us = 12500;
+  b.native_tick_us = 1500;
   b.witness_count = 3;
   b.aoi_peer_count = 30;
   b.aoi_reliable_bytes = 8192;
@@ -144,6 +141,7 @@ TEST(CellAppMgrMessages, InformCellLoad_RoundTrip) {
   EXPECT_EQ(rt->cells[0].geometry_version, 9u);
   EXPECT_FLOAT_EQ(rt->cells[0].tick_load, 0.25f);
   EXPECT_EQ(rt->cells[0].script_tick_us, 25000u);
+  EXPECT_EQ(rt->cells[0].native_tick_us, 3000u);
   EXPECT_EQ(rt->cells[0].witness_count, 7u);
   EXPECT_EQ(rt->cells[0].aoi_peer_count, 70u);
   EXPECT_EQ(rt->cells[0].aoi_reliable_bytes, 1024u);
@@ -151,10 +149,13 @@ TEST(CellAppMgrMessages, InformCellLoad_RoundTrip) {
   EXPECT_EQ(rt->cells[0].backup_bytes, 4096u);
   EXPECT_EQ(rt->cells[0].x_buckets[3], 11u);
   EXPECT_EQ(rt->cells[0].z_buckets[0], 23u);
+  EXPECT_EQ(rt->cells[0].x_load_buckets[3], 110u);
+  EXPECT_EQ(rt->cells[0].z_load_buckets[0], 230u);
   EXPECT_FLOAT_EQ(rt->cells[1].median_z, 9.5f);
   EXPECT_EQ(rt->cells[1].geometry_version, 10u);
   EXPECT_FLOAT_EQ(rt->cells[1].tick_load, 0.125f);
   EXPECT_EQ(rt->cells[1].script_tick_us, 12500u);
+  EXPECT_EQ(rt->cells[1].native_tick_us, 1500u);
   EXPECT_EQ(rt->cells[1].witness_count, 3u);
   EXPECT_EQ(rt->cells[1].aoi_peer_count, 30u);
   EXPECT_EQ(rt->cells[1].aoi_reliable_bytes, 8192u);
@@ -166,6 +167,67 @@ TEST(CellAppMgrMessages, RequestCellAppState_RoundTrip) {
   RequestCellAppState msg;
   auto rt = RoundTrip(msg);
   ASSERT_TRUE(rt.has_value());
+}
+
+TEST(CellAppMgrMessages, HealthProbe_RoundTrip) {
+  HealthProbe msg;
+  msg.nonce = 0x1122334455667788ull;
+  auto rt = RoundTrip(msg);
+  ASSERT_TRUE(rt.has_value());
+  EXPECT_EQ(rt->nonce, 0x1122334455667788ull);
+}
+
+TEST(CellAppMgrMessages, HealthProbeAck_RoundTrip) {
+  HealthProbeAck msg;
+  msg.nonce = 0x1122334455667788ull;
+  msg.game_time = 0x8877665544332211ull;
+  msg.snapshot_saves = 11;
+  msg.snapshot_failures = 2;
+  msg.snapshot_dirty = true;
+  msg.snapshot_save_stale = true;
+  auto rt = RoundTrip(msg);
+  ASSERT_TRUE(rt.has_value());
+  EXPECT_EQ(rt->nonce, 0x1122334455667788ull);
+  EXPECT_EQ(rt->game_time, 0x8877665544332211ull);
+  EXPECT_EQ(rt->snapshot_saves, 11u);
+  EXPECT_EQ(rt->snapshot_failures, 2u);
+  EXPECT_TRUE(rt->snapshot_dirty);
+  EXPECT_TRUE(rt->snapshot_save_stale);
+}
+
+TEST(CellAppMgrMessages, HealthProbeAck_RejectsTruncatedSnapshotSummary) {
+  HealthProbeAck msg;
+  msg.nonce = 1;
+  msg.game_time = 2;
+  msg.snapshot_saves = 3;
+  msg.snapshot_failures = 4;
+  msg.snapshot_dirty = true;
+  msg.snapshot_save_stale = false;
+  BinaryWriter w;
+  msg.Serialize(w);
+  auto buf = w.Detach();
+  ASSERT_FALSE(buf.empty());
+  buf.pop_back();
+  BinaryReader r(buf);
+  auto parsed = HealthProbeAck::Deserialize(r);
+  EXPECT_FALSE(parsed.HasValue());
+  EXPECT_EQ(parsed.Error().Code(), ErrorCode::kInvalidArgument);
+}
+
+TEST(CellAppMgrMessages, HealthProbeAck_RejectsBadSnapshotFlags) {
+  BinaryWriter w;
+  w.Write<uint64_t>(1);  // nonce
+  w.Write<uint64_t>(2);  // game_time
+  w.Write<uint64_t>(3);  // snapshot_saves
+  w.Write<uint64_t>(4);  // snapshot_failures
+  w.Write<uint64_t>(5);  // mgr_generation
+  w.Write<uint8_t>(2);
+  w.Write<uint8_t>(0);
+  auto buf = w.Detach();
+  BinaryReader r(buf);
+  auto parsed = HealthProbeAck::Deserialize(r);
+  EXPECT_FALSE(parsed.HasValue());
+  EXPECT_EQ(parsed.Error().Code(), ErrorCode::kInvalidArgument);
 }
 
 TEST(CellAppMgrMessages, CreateSpaceRequest_RoundTrip) {
@@ -256,4 +318,6 @@ TEST(CellAppMgrMessages, MessageIdsAreStable) {
   EXPECT_EQ(msg_id::Id(msg_id::CellAppMgr::kAddCellToSpaceAck), 7008u);
   EXPECT_EQ(msg_id::Id(msg_id::CellAppMgr::kRemoveCellFromSpace), 7009u);
   EXPECT_EQ(msg_id::Id(msg_id::CellAppMgr::kRequestCellAppState), 7010u);
+  EXPECT_EQ(msg_id::Id(msg_id::CellAppMgr::kHealthProbe), 7011u);
+  EXPECT_EQ(msg_id::Id(msg_id::CellAppMgr::kHealthProbeAck), 7012u);
 }

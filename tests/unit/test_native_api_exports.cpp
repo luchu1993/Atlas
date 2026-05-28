@@ -11,19 +11,11 @@
 
 using namespace atlas;
 
-// ============================================================================
-// Locate atlas_engine shared library
-// ============================================================================
-
 static std::filesystem::path atlas_engine_path() {
   auto* rloc = std::getenv("ATLAS_ENGINE_RLOC");
   EXPECT_NE(rloc, nullptr) << "ATLAS_ENGINE_RLOC env var must be set";
   return atlas::test::ResolvePath(rloc ? rloc : "");
 }
-
-// ============================================================================
-// Fixtures
-// ============================================================================
 
 class AtlasEngineExports : public ::testing::Test {
  protected:
@@ -36,10 +28,6 @@ class AtlasEngineExports : public ::testing::Test {
 
   std::optional<DynamicLibrary> lib_;
 };
-
-// ============================================================================
-// Verify every Atlas* symbol is present in atlas_engine.dll/.so
-// ============================================================================
 
 TEST_F(AtlasEngineExports, LogMessageExported) {
   auto sym = lib_->GetSymbol<void*>("AtlasLogMessage");
@@ -83,6 +71,60 @@ TEST_F(AtlasEngineExports, SendBaseRpcExported) {
   EXPECT_NE(*sym, nullptr);
 }
 
+TEST_F(AtlasEngineExports, SendMovementInputExported) {
+  auto sym = lib_->GetSymbol<void*>("AtlasSendMovementInput");
+  EXPECT_TRUE(sym.HasValue()) << sym.Error().Message();
+  EXPECT_NE(*sym, nullptr);
+}
+
+TEST_F(AtlasEngineExports, SendMovementCorrectionReportExported) {
+  auto sym = lib_->GetSymbol<void*>("AtlasSendMovementCorrectionReport");
+  EXPECT_TRUE(sym.HasValue()) << sym.Error().Message();
+  EXPECT_NE(*sym, nullptr);
+}
+
+TEST_F(AtlasEngineExports, SetMovementCommandExported) {
+  auto sym = lib_->GetSymbol<void*>("AtlasSetMovementCommand");
+  EXPECT_TRUE(sym.HasValue()) << sym.Error().Message();
+  EXPECT_NE(*sym, nullptr);
+}
+
+TEST_F(AtlasEngineExports, ClearMovementCommandExported) {
+  auto sym = lib_->GetSymbol<void*>("AtlasClearMovementCommand");
+  EXPECT_TRUE(sym.HasValue()) << sym.Error().Message();
+  EXPECT_NE(*sym, nullptr);
+}
+
+TEST_F(AtlasEngineExports, SetMovementCurveExported) {
+  auto sym = lib_->GetSymbol<void*>("AtlasSetMovementCurve");
+  EXPECT_TRUE(sym.HasValue()) << sym.Error().Message();
+  EXPECT_NE(*sym, nullptr);
+}
+
+TEST_F(AtlasEngineExports, SetEntityOnGroundExported) {
+  auto sym = lib_->GetSymbol<void*>("AtlasSetEntityOnGround");
+  EXPECT_TRUE(sym.HasValue()) << sym.Error().Message();
+  EXPECT_NE(*sym, nullptr);
+}
+
+TEST_F(AtlasEngineExports, GetEntityOnGroundExported) {
+  auto sym = lib_->GetSymbol<void*>("AtlasGetEntityOnGround");
+  EXPECT_TRUE(sym.HasValue()) << sym.Error().Message();
+  EXPECT_NE(*sym, nullptr);
+}
+
+TEST_F(AtlasEngineExports, TryGetMovementHistorySampleExported) {
+  auto sym = lib_->GetSymbol<void*>("AtlasTryGetMovementHistorySample");
+  EXPECT_TRUE(sym.HasValue()) << sym.Error().Message();
+  EXPECT_NE(*sym, nullptr);
+}
+
+TEST_F(AtlasEngineExports, LoadCollisionAssetExported) {
+  auto sym = lib_->GetSymbol<void*>("AtlasLoadCollisionAsset");
+  EXPECT_TRUE(sym.HasValue()) << sym.Error().Message();
+  EXPECT_NE(*sym, nullptr);
+}
+
 TEST_F(AtlasEngineExports, RegisterEntityTypeExported) {
   auto sym = lib_->GetSymbol<void*>("AtlasRegisterEntityType");
   EXPECT_TRUE(sym.HasValue()) << sym.Error().Message();
@@ -95,17 +137,13 @@ TEST_F(AtlasEngineExports, UnregisterAllEntityTypesExported) {
   EXPECT_NE(*sym, nullptr);
 }
 
-// ============================================================================
-// Sanity: no unexpected symbols leak (atlas_engine should only export Atlas*)
-// ============================================================================
-
 TEST_F(AtlasEngineExports, NonAtlasSymbolNotExported) {
   // An internal C++ symbol should NOT be reachable from outside.
   // (Only meaningful on Linux where we compile with -fvisibility=hidden.)
 #if ATLAS_PLATFORM_LINUX
   auto sym = lib_->GetSymbol<void*>("_ZN5atlas3Log4infoEv");
-  // We don't assert false here — the symbol may or may not exist depending
-  // on the toolchain — but if it IS exported the test is informational.
+  // We don't assert false here; the symbol may or may not exist depending
+  // on the toolchain, but if it IS exported the test is informational.
   (void)sym;
 #else
   GTEST_SKIP() << "Symbol visibility enforcement only verified on Linux";

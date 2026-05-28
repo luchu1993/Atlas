@@ -5,6 +5,7 @@ using Atlas.Client.Native;
 using Atlas.Components;
 using Atlas.DataTypes;
 using Atlas.Serialization;
+using Atlas.Shared.Protocol;
 using Xunit;
 
 namespace Atlas.Client.Tests
@@ -209,52 +210,67 @@ namespace Atlas.Client.Tests
             return w.WrittenSpan.ToArray();
         }
 
-        private static byte[] BuildMovementStateAck()
+        private static byte[] BuildMovementStateAck(
+            uint entityId = 100, uint ackedInputSeq = 42, uint serverTick = 9001,
+            Vector3? position = null, Vector3? velocity = null, Vector3? direction = null,
+            uint flags = 1, uint lastProcessedSeq = 42,
+            ushort correctionFlags = MovementCorrection.SnapFlag)
         {
             var w = new SpanWriter();
-            w.WriteUInt32(100);
-            w.WriteUInt32(42);
-            w.WriteUInt32(9001);
-            w.WriteVector3(new Vector3(1.0f, 2.0f, 3.0f));
-            w.WriteVector3(new Vector3(4.0f, 5.0f, 6.0f));
-            w.WriteVector3(Vector3.Forward);
-            w.WriteUInt32(1);
-            w.WriteUInt32(42);
-            w.WriteUInt16(MovementCorrection.SnapFlag);
+            w.WriteUInt32(entityId);
+            w.WriteUInt32(ackedInputSeq);
+            w.WriteUInt32(serverTick);
+            w.WriteVector3(position ?? new Vector3(1.0f, 2.0f, 3.0f));
+            w.WriteVector3(velocity ?? new Vector3(4.0f, 5.0f, 6.0f));
+            w.WriteVector3(direction ?? Vector3.Forward);
+            w.WriteUInt32(flags);
+            w.WriteUInt32(lastProcessedSeq);
+            w.WriteUInt16(correctionFlags);
             return w.WrittenSpan.ToArray();
         }
 
-        private static byte[] BuildMovementCommandStart()
+        private static byte[] BuildMovementCommandStart(
+            uint entityId = 100, uint commandId = 900, ushort skillId = 12,
+            byte type = (byte)MovementCommandType.Knockback,
+            Vector3? startPosition = null, Vector3? targetPosition = null,
+            ushort durationMs = 700, ushort elapsedMs = 100, ushort curveId = 3,
+            byte inputPolicy = (byte)MovementCommandInputPolicy.AllowTurn,
+            byte collisionPolicy = (byte)MovementCommandCollisionPolicy.EndSkill,
+            byte priority = 9, uint serverTick = 9001)
         {
             var w = new SpanWriter();
-            w.WriteUInt32(100);
-            w.WriteUInt32(900);
-            w.WriteUInt16(12);
-            w.WriteUInt8((byte)MovementCommandType.Knockback);
-            w.WriteVector3(new Vector3(1.0f, 2.0f, 3.0f));
-            w.WriteVector3(new Vector3(4.0f, 5.0f, 6.0f));
-            w.WriteUInt16(700);
-            w.WriteUInt16(100);
-            w.WriteUInt16(3);
-            w.WriteUInt8((byte)MovementCommandInputPolicy.AllowTurn);
-            w.WriteUInt8((byte)MovementCommandCollisionPolicy.EndSkill);
-            w.WriteUInt8(9);
-            w.WriteUInt32(9001);
+            w.WriteUInt32(entityId);
+            w.WriteUInt32(commandId);
+            w.WriteUInt16(skillId);
+            w.WriteUInt8(type);
+            w.WriteVector3(startPosition ?? new Vector3(1.0f, 2.0f, 3.0f));
+            w.WriteVector3(targetPosition ?? new Vector3(4.0f, 5.0f, 6.0f));
+            w.WriteUInt16(durationMs);
+            w.WriteUInt16(elapsedMs);
+            w.WriteUInt16(curveId);
+            w.WriteUInt8(inputPolicy);
+            w.WriteUInt8(collisionPolicy);
+            w.WriteUInt8(priority);
+            w.WriteUInt32(serverTick);
             return w.WrittenSpan.ToArray();
         }
 
-        private static byte[] BuildMovementCommandEnd()
+        private static byte[] BuildMovementCommandEnd(
+            uint entityId = 100, uint commandId = 900, uint serverTick = 9002,
+            byte reason = (byte)MovementCommandEndReason.Collision,
+            Vector3? position = null, Vector3? velocity = null, Vector3? direction = null,
+            uint flags = 1, uint lastProcessedSeq = 77)
         {
             var w = new SpanWriter();
-            w.WriteUInt32(100);
-            w.WriteUInt32(900);
-            w.WriteUInt32(9002);
-            w.WriteUInt8((byte)MovementCommandEndReason.Collision);
-            w.WriteVector3(new Vector3(4.0f, 5.0f, 6.0f));
-            w.WriteVector3(new Vector3(0.0f, 0.0f, 0.0f));
-            w.WriteVector3(Vector3.Forward);
-            w.WriteUInt32(1);
-            w.WriteUInt32(77);
+            w.WriteUInt32(entityId);
+            w.WriteUInt32(commandId);
+            w.WriteUInt32(serverTick);
+            w.WriteUInt8(reason);
+            w.WriteVector3(position ?? new Vector3(4.0f, 5.0f, 6.0f));
+            w.WriteVector3(velocity ?? new Vector3(0.0f, 0.0f, 0.0f));
+            w.WriteVector3(direction ?? Vector3.Forward);
+            w.WriteUInt32(flags);
+            w.WriteUInt32(lastProcessedSeq);
             return w.WrittenSpan.ToArray();
         }
 
@@ -263,22 +279,6 @@ namespace Atlas.Client.Tests
             Array.Resize(ref body, body.Length + 1);
             body[^1] = 0xEE;
             return body;
-        }
-
-        private static void WriteQuietNaN(byte[] body, int offset)
-        {
-            body[offset] = 0;
-            body[offset + 1] = 0;
-            body[offset + 2] = 0xC0;
-            body[offset + 3] = 0x7F;
-        }
-
-        private static void WriteZeroUInt32(byte[] body, int offset)
-        {
-            body[offset] = 0;
-            body[offset + 1] = 0;
-            body[offset + 2] = 0;
-            body[offset + 3] = 0;
         }
 
         [Fact]
@@ -437,8 +437,7 @@ namespace Atlas.Client.Tests
             var session = new ClientSession();
             MovementStateAck? received = null;
             session.MovementStateAckReceived += ack => received = ack;
-            var body = BuildMovementStateAck();
-            WriteZeroUInt32(body, 0);
+            var body = BuildMovementStateAck(entityId: 0);
 
             session.DeliverFromServer(ClientCallbacks.kClientMovementStateAckMessageId, body);
 
@@ -451,8 +450,7 @@ namespace Atlas.Client.Tests
             var session = new ClientSession();
             MovementStateAck? received = null;
             session.MovementStateAckReceived += ack => received = ack;
-            var body = BuildMovementStateAck();
-            WriteQuietNaN(body, 12);
+            var body = BuildMovementStateAck(position: new Vector3(float.NaN, 0.0f, 0.0f));
 
             session.DeliverFromServer(ClientCallbacks.kClientMovementStateAckMessageId, body);
 
@@ -493,8 +491,7 @@ namespace Atlas.Client.Tests
             var session = new ClientSession();
             MovementCommandStart? received = null;
             session.MovementCommandStarted += command => received = command;
-            var body = BuildMovementCommandStart();
-            body[10] = 255;
+            var body = BuildMovementCommandStart(type: 255);
 
             session.DeliverFromServer(ClientCallbacks.kClientMovementCommandStartMessageId, body);
 
@@ -507,8 +504,7 @@ namespace Atlas.Client.Tests
             var session = new ClientSession();
             MovementCommandStart? received = null;
             session.MovementCommandStarted += command => received = command;
-            var body = BuildMovementCommandStart();
-            WriteZeroUInt32(body, 0);
+            var body = BuildMovementCommandStart(entityId: 0);
 
             session.DeliverFromServer(ClientCallbacks.kClientMovementCommandStartMessageId,
                                       body);
@@ -522,8 +518,7 @@ namespace Atlas.Client.Tests
             var session = new ClientSession();
             MovementCommandStart? received = null;
             session.MovementCommandStarted += command => received = command;
-            var body = BuildMovementCommandStart();
-            WriteZeroUInt32(body, 4);
+            var body = BuildMovementCommandStart(commandId: 0);
 
             session.DeliverFromServer(ClientCallbacks.kClientMovementCommandStartMessageId,
                                       body);
@@ -537,8 +532,8 @@ namespace Atlas.Client.Tests
             var session = new ClientSession();
             MovementCommandStart? received = null;
             session.MovementCommandStarted += command => received = command;
-            var body = BuildMovementCommandStart();
-            WriteQuietNaN(body, 11);
+            var body = BuildMovementCommandStart(
+                startPosition: new Vector3(float.NaN, 0.0f, 0.0f));
 
             session.DeliverFromServer(ClientCallbacks.kClientMovementCommandStartMessageId,
                                       body);
@@ -552,18 +547,14 @@ namespace Atlas.Client.Tests
             var session = new ClientSession();
             MovementCommandStart? received = null;
             session.MovementCommandStarted += command => received = command;
-            var zeroDuration = BuildMovementCommandStart();
-            zeroDuration[35] = 0;
-            zeroDuration[36] = 0;
+            var zeroDuration = BuildMovementCommandStart(durationMs: 0);
 
             session.DeliverFromServer(ClientCallbacks.kClientMovementCommandStartMessageId,
                                       zeroDuration);
 
             Assert.False(received.HasValue);
 
-            var elapsedPastDuration = BuildMovementCommandStart();
-            elapsedPastDuration[37] = 0xBD;
-            elapsedPastDuration[38] = 0x02;
+            var elapsedPastDuration = BuildMovementCommandStart(durationMs: 700, elapsedMs: 701);
 
             session.DeliverFromServer(ClientCallbacks.kClientMovementCommandStartMessageId,
                                       elapsedPastDuration);
@@ -611,8 +602,7 @@ namespace Atlas.Client.Tests
             var session = new ClientSession();
             MovementCommandEnd? received = null;
             session.MovementCommandEnded += command => received = command;
-            var body = BuildMovementCommandEnd();
-            body[12] = 255;
+            var body = BuildMovementCommandEnd(reason: 255);
 
             session.DeliverFromServer(ClientCallbacks.kClientMovementCommandEndMessageId, body);
 
@@ -625,8 +615,7 @@ namespace Atlas.Client.Tests
             var session = new ClientSession();
             MovementCommandEnd? received = null;
             session.MovementCommandEnded += command => received = command;
-            var body = BuildMovementCommandEnd();
-            WriteZeroUInt32(body, 0);
+            var body = BuildMovementCommandEnd(entityId: 0);
 
             session.DeliverFromServer(ClientCallbacks.kClientMovementCommandEndMessageId,
                                       body);
@@ -640,8 +629,7 @@ namespace Atlas.Client.Tests
             var session = new ClientSession();
             MovementCommandEnd? received = null;
             session.MovementCommandEnded += command => received = command;
-            var body = BuildMovementCommandEnd();
-            WriteZeroUInt32(body, 4);
+            var body = BuildMovementCommandEnd(commandId: 0);
 
             session.DeliverFromServer(ClientCallbacks.kClientMovementCommandEndMessageId,
                                       body);
@@ -655,8 +643,7 @@ namespace Atlas.Client.Tests
             var session = new ClientSession();
             MovementCommandEnd? received = null;
             session.MovementCommandEnded += command => received = command;
-            var body = BuildMovementCommandEnd();
-            WriteQuietNaN(body, 13);
+            var body = BuildMovementCommandEnd(position: new Vector3(float.NaN, 0.0f, 0.0f));
 
             session.DeliverFromServer(ClientCallbacks.kClientMovementCommandEndMessageId,
                                       body);

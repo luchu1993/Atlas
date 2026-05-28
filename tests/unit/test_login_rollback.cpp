@@ -1,4 +1,5 @@
 #include <optional>
+#include <string>
 #include <utility>
 
 #include <gtest/gtest.h>
@@ -119,27 +120,56 @@ class BaseAppRollbackTest : public ::testing::Test {
     return app_.GetWatcherRegistry().Get(path);
   }
 
-  auto create_cell_bound_entity(SpaceID space_id, const Address& cell_addr) -> BaseEntity* {
+  auto create_cell_bound_entity(SpaceID space_id, const Address& cell_addr,
+                                bool has_cell_backup = true) -> BaseEntity* {
     app_.entity_mgr_.SetIdClient(&app_.id_client_);
-    app_.id_client_.AddIds(1000, 1100);
+    if (!ids_seeded_) {
+      app_.id_client_.AddIds(1000, 1100);
+      ids_seeded_ = true;
+    }
     auto* ent = app_.entity_mgr_.Create(/*type_id=*/7, /*has_client=*/false);
     if (ent == nullptr) return nullptr;
     ent->SetSpaceId(space_id);
     ent->SetCell(cell_addr);
-    ent->SetCellBackupData({std::byte{0x01}});
+    if (has_cell_backup) ent->SetCellBackupData({std::byte{0x01}});
     return ent;
   }
 
   auto death_notifications_total() const -> uint64_t {
     return app_.cellapp_death_notifications_total_;
   }
+  auto death_restore_scheduled_total() const -> uint64_t {
+    return app_.cellapp_death_restore_scheduled_total_;
+  }
+  auto death_restore_payload_scheduled_total() const -> uint64_t {
+    return app_.cellapp_death_restore_payload_scheduled_total_;
+  }
+  auto death_restore_ghost_backup_scheduled_total() const -> uint64_t {
+    return app_.cellapp_death_restore_ghost_backup_scheduled_total_;
+  }
   auto death_restored_total() const -> uint64_t { return app_.cellapp_death_restored_total_; }
   auto death_lost_total() const -> uint64_t { return app_.cellapp_death_lost_total_; }
   auto death_restore_timeouts_total() const -> uint64_t {
     return app_.cellapp_death_restore_timeouts_total_;
   }
+  auto death_restore_last_elapsed_ms() const -> uint64_t {
+    return app_.cellapp_death_restore_last_elapsed_ms_;
+  }
+  auto death_restore_max_elapsed_ms() const -> uint64_t {
+    return app_.cellapp_death_restore_max_elapsed_ms_;
+  }
   auto pending_death_restore_count() const -> std::size_t {
     return app_.pending_cellapp_death_restores_.size();
+  }
+  void seed_death_restore_counters(uint64_t notifications, uint64_t scheduled,
+                                   uint64_t restored, uint64_t lost, uint64_t timeouts) {
+    app_.cellapp_death_notifications_total_ = notifications;
+    app_.cellapp_death_restore_scheduled_total_ = scheduled;
+    app_.cellapp_death_restore_payload_scheduled_total_ = scheduled;
+    app_.cellapp_death_restore_ghost_backup_scheduled_total_ = 0;
+    app_.cellapp_death_restored_total_ = restored;
+    app_.cellapp_death_lost_total_ = lost;
+    app_.cellapp_death_restore_timeouts_total_ = timeouts;
   }
   void seed_pending_death_restore(EntityID entity_id, TimePoint started_at = Clock::now()) {
     app_.pending_cellapp_death_restores_[entity_id] =
@@ -161,6 +191,7 @@ class BaseAppRollbackTest : public ::testing::Test {
   NetworkInterface internal_network_;
   NetworkInterface external_network_;
   BaseApp app_;
+  bool ids_seeded_{false};
 };
 
 TEST_F(BaseAppRollbackTest, PreparedLoginTimeoutRollsBackPreparedState) {
@@ -176,6 +207,24 @@ TEST_F(BaseAppRollbackTest, PreparedLoginTimeoutRollsBackPreparedState) {
   EXPECT_EQ(watcher("baseapp/canceled_checkout_count").value_or(""), "0");
 }
 
+TEST_F(BaseAppRollbackTest, CellAppRoutesWatcherSummarizesBoundEntities) {
+  register_watchers();
+  const Address addr_a(0x7F000001u, 30001);
+  const Address addr_b(0x7F000001u, 30002);
+  ASSERT_NE(create_cell_bound_entity(42, addr_a), nullptr);
+  ASSERT_NE(create_cell_bound_entity(42, addr_a, /*has_cell_backup=*/false), nullptr);
+  ASSERT_NE(create_cell_bound_entity(42, addr_b, /*has_cell_backup=*/false), nullptr);
+
+  const auto summary = watcher("baseapp/cellapp_routes").value_or("");
+  const auto addr_a_entry = "addr=" + addr_a.ToString() +
+                            " entities=2 payload_candidates=1 ghost_backup_candidates=1";
+  const auto addr_b_entry = "addr=" + addr_b.ToString() +
+                            " entities=1 payload_candidates=0 ghost_backup_candidates=1";
+  EXPECT_NE(summary.find("routes=2"), std::string::npos);
+  EXPECT_NE(summary.find(addr_a_entry), std::string::npos);
+  EXPECT_NE(summary.find(addr_b_entry), std::string::npos);
+}
+
 TEST_F(BaseAppRollbackTest, CellAppDeathLostMetricsExposeWatcherCounters) {
   register_watchers();
   const Address dead_addr(0x7F000001u, 30001);
@@ -188,10 +237,36 @@ TEST_F(BaseAppRollbackTest, CellAppDeathLostMetricsExposeWatcherCounters) {
 
   EXPECT_FALSE(ent->HasCell());
   EXPECT_EQ(death_notifications_total(), 1u);
+  EXPECT_EQ(death_restore_scheduled_total(), 0u);
+  EXPECT_EQ(death_restore_payload_scheduled_total(), 0u);
+  EXPECT_EQ(death_restore_ghost_backup_scheduled_total(), 0u);
   EXPECT_EQ(death_lost_total(), 1u);
   EXPECT_EQ(watcher("baseapp/cellapp_death_notifications_total").value_or(""), "1");
+  EXPECT_EQ(watcher("baseapp/cellapp_death_restore_scheduled_total").value_or(""), "0");
+  EXPECT_EQ(watcher("baseapp/cellapp_death_restore_payload_scheduled_total").value_or(""),
+            "0");
+  EXPECT_EQ(
+      watcher("baseapp/cellapp_death_restore_ghost_backup_scheduled_total").value_or(""),
+      "0");
   EXPECT_EQ(watcher("baseapp/cellapp_death_restored_total").value_or(""), "0");
   EXPECT_EQ(watcher("baseapp/cellapp_death_lost_total").value_or(""), "1");
+  EXPECT_EQ(watcher("baseapp/cellapp_death_restore_last_elapsed_ms").value_or(""), "0");
+  EXPECT_EQ(watcher("baseapp/cellapp_death_restore_max_elapsed_ms").value_or(""), "0");
+  EXPECT_EQ(watcher("baseapp/cellapp_death_restore_status").value_or(""),
+            "state=degraded notifications=1 scheduled=0 payload_scheduled=0 "
+            "ghost_backup_scheduled=0 restored=0 lost=1 timeouts=0 pending=0 "
+            "unresolved=0 last_elapsed_ms=0 max_elapsed_ms=0");
+}
+
+TEST_F(BaseAppRollbackTest, CellAppDeathRestoreStatusExposesUnresolvedScheduledWork) {
+  register_watchers();
+  seed_death_restore_counters(/*notifications=*/1, /*scheduled=*/2, /*restored=*/1,
+                              /*lost=*/0, /*timeouts=*/0);
+
+  EXPECT_EQ(watcher("baseapp/cellapp_death_restore_status").value_or(""),
+            "state=degraded notifications=1 scheduled=2 payload_scheduled=2 "
+            "ghost_backup_scheduled=0 restored=1 lost=0 timeouts=0 pending=0 "
+            "unresolved=1 last_elapsed_ms=0 max_elapsed_ms=0");
 }
 
 TEST_F(BaseAppRollbackTest, CellEntityCreatedCompletesPendingDeathRestore) {
@@ -250,9 +325,15 @@ TEST_F(BaseAppRollbackTest, CellAppDeathRestoreTimeoutCompletesPendingAsLost) {
   EXPECT_EQ(death_lost_total(), 1u);
   EXPECT_EQ(death_restore_timeouts_total(), 1u);
   EXPECT_EQ(pending_death_restore_count(), 0u);
+  EXPECT_GE(death_restore_last_elapsed_ms(), 5000u);
+  EXPECT_EQ(death_restore_max_elapsed_ms(), death_restore_last_elapsed_ms());
   EXPECT_EQ(watcher("baseapp/cellapp_death_lost_total").value_or(""), "1");
   EXPECT_EQ(watcher("baseapp/cellapp_death_restore_timeouts_total").value_or(""), "1");
   EXPECT_EQ(watcher("baseapp/cellapp_death_pending_restores").value_or(""), "0");
+  EXPECT_EQ(watcher("baseapp/cellapp_death_restore_last_elapsed_ms").value_or(""),
+            std::to_string(death_restore_last_elapsed_ms()));
+  EXPECT_EQ(watcher("baseapp/cellapp_death_restore_max_elapsed_ms").value_or(""),
+            std::to_string(death_restore_max_elapsed_ms()));
 }
 
 class FakeDatabase final : public IDatabase {

@@ -1,9 +1,3 @@
-// Inter-CellApp message roundtrip tests.
-//
-// Locks down the Serialize/Deserialize contract for every Real/Ghost +
-// Offload message so wire format changes surface as test failures rather
-// than silent cross-CellApp corruption.
-
 #include <cstddef>
 #include <optional>
 #include <span>
@@ -39,8 +33,6 @@ auto MakeBlob(std::initializer_list<uint8_t> xs) -> std::vector<std::byte> {
 }
 
 }  // namespace
-
-// ─── CreateGhost ──────────────────────────────────────────────────────────────
 
 TEST(IntercellMessages, CreateGhost_RoundTrip) {
   CreateGhost msg;
@@ -125,16 +117,12 @@ TEST(IntercellMessages, CreateGhost_AcceptsLegacyFrameWithoutPersistentBlob) {
   EXPECT_TRUE(rt->persistent_blob.empty());
 }
 
-// ─── DeleteGhost ──────────────────────────────────────────────────────────────
-
 TEST(IntercellMessages, DeleteGhost_RoundTrip) {
   DeleteGhost msg{0x12345678};
   auto rt = RoundTrip(msg);
   ASSERT_TRUE(rt.has_value());
   EXPECT_EQ(rt->entity_id, 0x12345678u);
 }
-
-// ─── GhostPositionUpdate ──────────────────────────────────────────────────────
 
 TEST(IntercellMessages, GhostPositionUpdate_RoundTrip) {
   GhostPositionUpdate msg;
@@ -152,8 +140,6 @@ TEST(IntercellMessages, GhostPositionUpdate_RoundTrip) {
   EXPECT_FALSE(rt->on_ground);
   EXPECT_EQ(rt->volatile_seq, 0xDEADBEEFCAFEull);
 }
-
-// ─── GhostDelta ───────────────────────────────────────────────────────────────
 
 TEST(IntercellMessages, GhostDelta_RoundTrip) {
   GhostDelta msg;
@@ -177,8 +163,6 @@ TEST(IntercellMessages, GhostDelta_EmptyDelta) {
   ASSERT_TRUE(rt.has_value());
   EXPECT_TRUE(rt->other_delta.empty());
 }
-
-// ─── GhostSnapshotRefresh ────────────────────────────────────────────────────
 
 TEST(IntercellMessages, GhostSnapshotRefresh_RoundTrip) {
   GhostSnapshotRefresh msg;
@@ -217,8 +201,6 @@ TEST(IntercellMessages, GhostSnapshotRefresh_AcceptsLegacyFrameWithoutPersistent
   EXPECT_TRUE(rt->persistent_blob.empty());
 }
 
-// ─── GhostSetReal / GhostSetNextReal ─────────────────────────────────────────
-
 TEST(IntercellMessages, GhostSetReal_RoundTrip) {
   GhostSetReal msg;
   msg.entity_id = 3;
@@ -242,8 +224,6 @@ TEST(IntercellMessages, GhostSetNextReal_RoundTrip) {
   EXPECT_EQ(rt->next_real_addr.Port(), 40404u);
 }
 
-// ─── OffloadEntity ───────────────────────────────────────────────────────────
-
 TEST(IntercellMessages, OffloadEntity_RoundTrip_Full) {
   OffloadEntity msg;
   msg.entity_id = 0xCAFEBABE;
@@ -264,6 +244,22 @@ TEST(IntercellMessages, OffloadEntity_RoundTrip_Full) {
   msg.is_local = true;
   msg.target_cell_id = 8;
   msg.geometry_version = 55;
+  movement::MovementState sample_state;
+  sample_state.position = {-4.f, 0.f, 7.f};
+  sample_state.velocity = {0.f, 0.f, 1.f};
+  sample_state.direction = msg.direction;
+  sample_state.last_processed_input_seq = 44;
+  msg.movement_position_history.push_back(MovementPositionSample{66, sample_state});
+  msg.has_movement_command = true;
+  msg.movement_command.command_id = 77;
+  msg.movement_command.skill_id = 12;
+  msg.movement_command.type = movement::MovementCommandType::kKnockback;
+  msg.movement_command.start_position = msg.position;
+  msg.movement_command.target_position = {-2.f, 0.f, 7.f};
+  msg.movement_command.duration_ms = 600;
+  msg.movement_command.elapsed_ms = 120;
+  msg.movement_command.curve_id = 4;
+  msg.movement_command.server_tick = 80;
 
   auto rt = RoundTrip(msg);
   ASSERT_TRUE(rt.has_value());
@@ -287,11 +283,16 @@ TEST(IntercellMessages, OffloadEntity_RoundTrip_Full) {
   EXPECT_TRUE(rt->is_local);
   EXPECT_EQ(rt->target_cell_id, 8u);
   EXPECT_EQ(rt->geometry_version, 55u);
+  ASSERT_EQ(rt->movement_position_history.size(), 1u);
+  EXPECT_EQ(rt->movement_position_history[0].server_tick, 66u);
+  EXPECT_FLOAT_EQ(rt->movement_position_history[0].state.position.x, -4.f);
+  EXPECT_TRUE(rt->has_movement_command);
+  EXPECT_EQ(rt->movement_command.command_id, 77u);
+  EXPECT_EQ(rt->movement_command.type, movement::MovementCommandType::kKnockback);
+  EXPECT_EQ(rt->movement_command.elapsed_ms, 120u);
 }
 
 TEST(IntercellMessages, OffloadEntity_RoundTrip_AllBlobsEmpty) {
-  // Minimal offload: no persistent blob, no snapshots, no haunts. Exercises
-  // the zero-length branches so a later optimisation cannot regress them.
   OffloadEntity msg;
   msg.entity_id = 1;
   msg.type_id = 1;
@@ -306,15 +307,11 @@ TEST(IntercellMessages, OffloadEntity_RoundTrip_AllBlobsEmpty) {
   EXPECT_TRUE(rt->other_snapshot.empty());
   EXPECT_TRUE(rt->controller_data.empty());
   EXPECT_TRUE(rt->existing_haunts.empty());
-  // Witness tail defaults when nothing was set.
   EXPECT_FALSE(rt->has_witness);
   EXPECT_FLOAT_EQ(rt->aoi_radius, 0.f);
   EXPECT_FLOAT_EQ(rt->aoi_hysteresis, 0.f);
 }
 
-// Explicit witness state survives the round-trip so the receiver can
-// re-attach with the script-authored radius + hysteresis (not
-// CellAppConfig defaults).
 TEST(IntercellMessages, OffloadEntity_RoundTrip_WithWitnessState) {
   OffloadEntity msg;
   msg.entity_id = 42;
@@ -333,10 +330,7 @@ TEST(IntercellMessages, OffloadEntity_RoundTrip_WithWitnessState) {
   EXPECT_FLOAT_EQ(rt->aoi_hysteresis, 7.5f);
 }
 
-// A serialized payload missing the witness tail must deserialize with
-// has_witness=false and zero radius/hyst. Remaining()-guarded decode
-// keeps us resilient across version skew.
-TEST(IntercellMessages, OffloadEntity_Deserialize_TolerantOfMissingWitnessTail) {
+TEST(IntercellMessages, OffloadEntity_Deserialize_TolerantOfMissingOptionalTail) {
   OffloadEntity msg;
   msg.entity_id = 9;
   msg.type_id = 2;
@@ -347,10 +341,11 @@ TEST(IntercellMessages, OffloadEntity_Deserialize_TolerantOfMissingWitnessTail) 
   BinaryWriter w;
   msg.Serialize(w);
   auto buf = w.Detach();
-  // Truncate the trailing 9-byte witness tail (uint8_t + 2 × float).
-  constexpr std::size_t kWitnessTailBytes = 1 + 2 * sizeof(float);
-  ASSERT_GT(buf.size(), kWitnessTailBytes);
-  buf.resize(buf.size() - kWitnessTailBytes);
+  constexpr std::size_t kOptionalTailBytes =
+      1 + 2 * sizeof(float) + sizeof(uint32_t) + sizeof(uint8_t) + 1 +
+      sizeof(uint32_t) + sizeof(uint64_t) + sizeof(uint8_t) + 1;
+  ASSERT_GT(buf.size(), kOptionalTailBytes);
+  buf.resize(buf.size() - kOptionalTailBytes);
 
   BinaryReader r{std::span<const std::byte>(buf)};
   auto rt = OffloadEntity::Deserialize(r);
@@ -359,8 +354,6 @@ TEST(IntercellMessages, OffloadEntity_Deserialize_TolerantOfMissingWitnessTail) 
   EXPECT_FLOAT_EQ(rt->aoi_radius, 0.f);
   EXPECT_FLOAT_EQ(rt->aoi_hysteresis, 0.f);
 }
-
-// ─── OffloadEntityAck ────────────────────────────────────────────────────────
 
 TEST(IntercellMessages, OffloadEntityAck_RoundTripSuccess) {
   OffloadEntityAck msg;
@@ -385,8 +378,6 @@ TEST(IntercellMessages, OffloadEntityAck_RoundTripFailure) {
   EXPECT_FALSE(rt->success);
   EXPECT_EQ(rt->reject_reason, OffloadRejectReason::kStaleGeometry);
 }
-
-// ─── SpaceData ──────────────────────────────────────────────────────────────
 
 TEST(IntercellMessages, SpaceDataUpdateRoundTrip) {
   SpaceDataUpdate msg;
@@ -453,13 +444,6 @@ TEST(IntercellMessages, SpaceDataSnapshotRoundTripMany) {
   EXPECT_TRUE(rt->entries[2].value.empty());
 }
 
-// ─── Message ID stability ────────────────────────────────────────────────────
-//
-// If anyone renumbers these in message_ids.h the wire protocol breaks for
-// every running CellApp; assert the allocation explicitly.
-
-// ─── Truncated / malformed deserialization ───────────────────────────────────
-
 TEST(IntercellMessages, CreateGhost_Truncated_ReturnsNullopt) {
   CreateGhost msg;
   msg.entity_id = 42;
@@ -478,7 +462,6 @@ TEST(IntercellMessages, CreateGhost_Truncated_ReturnsNullopt) {
   msg.Serialize(w);
   auto full = w.Detach();
 
-  // Truncate: only first 4 bytes — mid-message.
   auto partial = std::vector<std::byte>(full.begin(), full.begin() + 4);
   BinaryReader r(partial);
   auto result = CreateGhost::Deserialize(r);
@@ -506,7 +489,6 @@ TEST(IntercellMessages, OffloadEntity_Truncated_ReturnsNullopt) {
   msg.Serialize(w);
   auto full = w.Detach();
 
-  // Truncate: only first 4 bytes — mid-message.
   auto partial = std::vector<std::byte>(full.begin(), full.begin() + 4);
   BinaryReader r(partial);
   auto result = OffloadEntity::Deserialize(r);
@@ -529,18 +511,14 @@ TEST(IntercellMessages, OffloadEntityAck_Truncated_ReturnsNullopt) {
   msg.Serialize(w);
   auto full = w.Detach();
 
-  // Truncate: only first 2 bytes — not enough for entity_id + success.
   auto partial = std::vector<std::byte>(full.begin(), full.begin() + 2);
   BinaryReader r(partial);
   auto result = OffloadEntityAck::Deserialize(r);
   EXPECT_FALSE(result.HasValue());
 }
 
-// ─── Message ID stability ────────────────────────────────────────────────────
-//
-// If anyone renumbers these in message_ids.h the wire protocol breaks for
-// every running CellApp; assert the allocation explicitly.
-
+// Wire ids are part of the inter-Cell protocol; renumbering breaks mixed
+// process clusters during rolling deploys.
 TEST(IntercellMessages, MessageIdsAreStable) {
   EXPECT_EQ(msg_id::Id(msg_id::CellApp::kCreateGhost), 3100u);
   EXPECT_EQ(msg_id::Id(msg_id::CellApp::kDeleteGhost), 3101u);

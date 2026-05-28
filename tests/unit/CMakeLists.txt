@@ -126,6 +126,21 @@ atlas_add_test(NAME test_movement_sim
   DEPS atlas_movement_sim
 )
 
+atlas_add_test(NAME test_movement_codec
+  SOURCES test_movement_codec.cpp
+  DEPS atlas_movement_sim atlas_serialization
+)
+
+atlas_add_test(NAME test_movement_command_policy
+  SOURCES test_movement_command_policy.cpp
+  DEPS atlas_movement_sim
+)
+
+atlas_add_test(NAME test_cell_movement_system
+  SOURCES test_cell_movement_system.cpp
+  DEPS atlas_cellapp_lib
+)
+
 if(ATLAS_ENABLE_JOLT)
   atlas_add_test(NAME test_jolt_physics_query
     SOURCES test_jolt_physics_query.cpp

@@ -1244,8 +1244,8 @@ TEST(MovementSim, MovementCommandStopsOnCollisionPolicyStop) {
 
   MovementConfig config;
   BlockingQuery query;
-  auto result = ApplyMovementCommandCurve(previous, command, LinearCurve(), 1000,
-                                          config, query);
+  auto result = ApplyMovementCommand(previous, command, LinearCurve(), 1000, config, query,
+                                     DefaultMovementCommandResolver());
 
   EXPECT_FALSE(result.active);
   EXPECT_TRUE(result.completed);
@@ -1256,8 +1256,8 @@ TEST(MovementSim, MovementCommandStopsOnCollisionPolicyStop) {
   EXPECT_NEAR(result.state.velocity.Length(), 0.0f, kEpsilon);
 
   command.collision_policy = MovementCommandCollisionPolicy::kEndSkill;
-  result = ApplyMovementCommandCurve(previous, command, LinearCurve(), 1000,
-                                     config, query);
+  result = ApplyMovementCommand(previous, command, LinearCurve(), 1000, config, query,
+                                DefaultMovementCommandResolver());
 
   EXPECT_TRUE(result.completed);
   EXPECT_TRUE(result.collision_ended);
@@ -1276,8 +1276,8 @@ TEST(MovementSim, MovementCommandContinuePolicyIgnoresCollision) {
 
   MovementConfig config;
   BlockingQuery query;
-  auto result = ApplyMovementCommandCurve(previous, command, LinearCurve(), 500,
-                                          config, query);
+  auto result = ApplyMovementCommand(previous, command, LinearCurve(), 500, config, query,
+                                     DefaultMovementCommandResolver());
 
   EXPECT_TRUE(result.active);
   EXPECT_FALSE(result.blocked);

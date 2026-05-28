@@ -1416,6 +1416,104 @@ TEST_F(ReliableUdpTest, PacketFilterAppliesOnRecvPath) {
   EXPECT_GE(recv_filter->RecvCalls(), 1);
 }
 
+TEST_F(ReliableUdpTest, TransportImpairmentDelaysInboundDatagrams) {
+  auto sock_a = Socket::CreateUdp();
+  ASSERT_TRUE(sock_a.HasValue());
+  ASSERT_TRUE(sock_a->Bind(Address("127.0.0.1", 0)).HasValue());
+  auto addr_a = sock_a->LocalAddress().Value();
+
+  auto sock_b = Socket::CreateUdp();
+  ASSERT_TRUE(sock_b.HasValue());
+  ASSERT_TRUE(sock_b->Bind(Address("127.0.0.1", 0)).HasValue());
+  auto addr_b = sock_b->LocalAddress().Value();
+
+  bool received = false;
+  table_.RegisterTypedHandler<RudpTestMsg>(
+      [&](const Address&, Channel*, const RudpTestMsg&) { received = true; });
+
+  ReliableUdpChannel channel_a(dispatcher_, table_, *sock_a, addr_b);
+  channel_a.Activate();
+  ReliableUdpChannel channel_b(dispatcher_, table_, *sock_b, addr_a);
+  channel_b.Activate();
+  channel_b.SetTransportImpairment(30, 0, 123);
+
+  channel_a.Bundle().AddMessage(RudpTestMsg{7});
+  ASSERT_TRUE(channel_a.SendReliable().HasValue());
+
+  std::this_thread::sleep_for(std::chrono::milliseconds(20));
+  pump_datagrams(*sock_b, channel_b);
+  EXPECT_FALSE(received);
+
+  std::this_thread::sleep_for(std::chrono::milliseconds(40));
+  dispatcher_.ProcessOnce();
+  EXPECT_TRUE(received);
+}
+
+TEST_F(ReliableUdpTest, TransportImpairmentDelaysOutboundDatagrams) {
+  auto sock_a = Socket::CreateUdp();
+  ASSERT_TRUE(sock_a.HasValue());
+  ASSERT_TRUE(sock_a->Bind(Address("127.0.0.1", 0)).HasValue());
+  auto addr_a = sock_a->LocalAddress().Value();
+
+  auto sock_b = Socket::CreateUdp();
+  ASSERT_TRUE(sock_b.HasValue());
+  ASSERT_TRUE(sock_b->Bind(Address("127.0.0.1", 0)).HasValue());
+  auto addr_b = sock_b->LocalAddress().Value();
+
+  bool received = false;
+  table_.RegisterTypedHandler<RudpTestMsg>(
+      [&](const Address&, Channel*, const RudpTestMsg&) { received = true; });
+
+  ReliableUdpChannel channel_a(dispatcher_, table_, *sock_a, addr_b);
+  channel_a.Activate();
+  channel_a.SetTransportImpairment(30, 0, 123);
+  ReliableUdpChannel channel_b(dispatcher_, table_, *sock_b, addr_a);
+  channel_b.Activate();
+
+  channel_a.Bundle().AddMessage(RudpTestMsg{8});
+  ASSERT_TRUE(channel_a.SendReliable().HasValue());
+
+  std::this_thread::sleep_for(std::chrono::milliseconds(20));
+  pump_datagrams(*sock_b, channel_b);
+  EXPECT_FALSE(received);
+
+  std::this_thread::sleep_for(std::chrono::milliseconds(40));
+  dispatcher_.ProcessOnce();
+  pump_datagrams(*sock_b, channel_b);
+  EXPECT_TRUE(received);
+}
+
+TEST_F(ReliableUdpTest, TransportImpairmentDropsInboundDatagrams) {
+  auto sock_a = Socket::CreateUdp();
+  ASSERT_TRUE(sock_a.HasValue());
+  ASSERT_TRUE(sock_a->Bind(Address("127.0.0.1", 0)).HasValue());
+  auto addr_a = sock_a->LocalAddress().Value();
+
+  auto sock_b = Socket::CreateUdp();
+  ASSERT_TRUE(sock_b.HasValue());
+  ASSERT_TRUE(sock_b->Bind(Address("127.0.0.1", 0)).HasValue());
+  auto addr_b = sock_b->LocalAddress().Value();
+
+  bool received = false;
+  table_.RegisterTypedHandler<RudpTestMsg>(
+      [&](const Address&, Channel*, const RudpTestMsg&) { received = true; });
+
+  ReliableUdpChannel channel_a(dispatcher_, table_, *sock_a, addr_b);
+  channel_a.Activate();
+  ReliableUdpChannel channel_b(dispatcher_, table_, *sock_b, addr_a);
+  channel_b.Activate();
+  channel_b.SetTransportImpairment(0, 10'000, 123);
+
+  channel_a.Bundle().AddMessage(RudpTestMsg{9});
+  ASSERT_TRUE(channel_a.SendReliable().HasValue());
+
+  std::this_thread::sleep_for(std::chrono::milliseconds(20));
+  pump_datagrams(*sock_b, channel_b);
+
+  EXPECT_FALSE(received);
+  EXPECT_EQ(channel_b.RecvNextSeq(), 1u);
+}
+
 TEST_F(ReliableUdpTest, SetMtuChangesMaxUdpPayload) {
   auto sock = Socket::CreateUdp();
   ASSERT_TRUE(sock.HasValue());

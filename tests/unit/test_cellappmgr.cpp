@@ -77,7 +77,7 @@ auto CellAppProcessInfo(Address internal_addr, std::string name) -> machined::Pr
 }
 
 constexpr uint32_t kSnapshotMagicForTest = 0x314D4143u;
-constexpr uint32_t kSnapshotVersionForTest = 4;
+constexpr uint32_t kSnapshotVersionForTest = 5;
 constexpr uint64_t kSnapshotChecksumSeedForTest = 14695981039346656037ull;
 constexpr uint64_t kSnapshotChecksumPrimeForTest = 1099511628211ull;
 
@@ -143,7 +143,9 @@ auto WatcherInt64ForTest(WatcherRegistry& registry, const char* path)
 auto CellAppRecordOffsetForTest(std::span<const std::byte> payload, uint32_t index)
     -> std::optional<std::size_t> {
   BinaryReader r(payload);
-  r.Skip(sizeof(uint32_t) + sizeof(cellappmgr::CellID) + sizeof(uint64_t) + sizeof(uint32_t));
+  // Skip mgr_generation, next_cellapp_app_id, next_cell_id, last_balance_tick, last_retire_app_id.
+  r.Skip(sizeof(uint64_t) + sizeof(uint32_t) + sizeof(cellappmgr::CellID) + sizeof(uint64_t) +
+         sizeof(uint32_t));
   auto count = r.ReadPackedInt();
   if (!count || index >= *count) return std::nullopt;
   constexpr std::size_t record_bytes =
@@ -3814,6 +3816,20 @@ TEST(CellAppMgr, BroadcastGeometry_CachesBlob_SkipsUnchangedReSends) {
   // the tree itself didn't drift.
   h.mgr.TickLoadBalance();
   EXPECT_EQ(partition.last_broadcast_blob, baseline);
+}
+
+TEST(CellAppMgr, MgrGenerationRoundTripsThroughSnapshot) {
+  CellAppMgrHarness origin;
+  origin.mgr.BumpMgrGenerationForTest();
+  origin.mgr.BumpMgrGenerationForTest();
+  ASSERT_EQ(origin.mgr.MgrGenerationForTest(), 2u);
+  const auto snap = origin.mgr.Snapshot();
+  ASSERT_FALSE(snap.empty());
+
+  CellAppMgrHarness revived;
+  auto r = revived.mgr.Restore(std::span<const std::byte>(snap.data(), snap.size()));
+  ASSERT_TRUE(r.HasValue()) << r.Error().Message();
+  EXPECT_EQ(revived.mgr.MgrGenerationForTest(), 2u);
 }
 
 }  // namespace
