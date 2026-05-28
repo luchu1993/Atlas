@@ -156,6 +156,14 @@ TEST(ServerConfig, FromArgsParsesHaOptions) {
                  "8000",
                  "--revive-max-restarts",
                  "7",
+                 "--revive-leader-lock-mode",
+                 "machined",
+                 "--revive-leader-lock-ttl-ms",
+                 "9000",
+                 "--revive-leader-lock-renew-ms",
+                 "3500",
+                 "--revive-leader-lock-failure-threshold",
+                 "5",
                  "--revive-cellappmgr-health-interval-ms",
                  "100",
                  "--revive-cellappmgr-heartbeat-timeout-ms",
@@ -209,6 +217,10 @@ TEST(ServerConfig, FromArgsParsesHaOptions) {
   EXPECT_EQ(r->revive_restart_delay_ms, 75);
   EXPECT_EQ(r->revive_restart_backoff_cap_ms, 8000);
   EXPECT_EQ(r->revive_max_restarts, 7);
+  EXPECT_EQ(r->revive_leader_lock_mode, "machined");
+  EXPECT_EQ(r->revive_leader_lock_ttl_ms, 9000);
+  EXPECT_EQ(r->revive_leader_lock_renew_ms, 3500);
+  EXPECT_EQ(r->revive_leader_lock_failure_threshold, 5);
   EXPECT_EQ(r->revive_cellappmgr_health_interval_ms, 100);
   EXPECT_EQ(r->revive_cellappmgr_heartbeat_timeout_ms, 900);
   EXPECT_EQ(r->revive_cellappmgr_manager_health_timeout_ms, 450);
@@ -253,6 +265,10 @@ TEST(ServerConfig, FromJsonFileParsesHaOptions) {
             "restart_delay_ms": 75,
             "restart_backoff_cap_ms": 8000,
             "max_restarts": 7,
+            "leader_lock_mode": "machined",
+            "leader_lock_ttl_ms": 9000,
+            "leader_lock_renew_ms": 3500,
+            "leader_lock_failure_threshold": 5,
             "leader_lock_path": "run/reviver_cellappmgr.lock",
             "cellappmgr": {
                 "exe": "bin/atlas_cellappmgr.exe",
@@ -292,6 +308,10 @@ TEST(ServerConfig, FromJsonFileParsesHaOptions) {
   EXPECT_EQ(r->revive_restart_delay_ms, 75);
   EXPECT_EQ(r->revive_restart_backoff_cap_ms, 8000);
   EXPECT_EQ(r->revive_max_restarts, 7);
+  EXPECT_EQ(r->revive_leader_lock_mode, "machined");
+  EXPECT_EQ(r->revive_leader_lock_ttl_ms, 9000);
+  EXPECT_EQ(r->revive_leader_lock_renew_ms, 3500);
+  EXPECT_EQ(r->revive_leader_lock_failure_threshold, 5);
   EXPECT_EQ(r->revive_leader_lock_path, std::filesystem::path("run/reviver_cellappmgr.lock"));
   EXPECT_EQ(r->revive_cellappmgr_exe, std::filesystem::path("bin/atlas_cellappmgr.exe"));
   EXPECT_EQ(r->revive_cellappmgr_name, "cellappmgr_a");

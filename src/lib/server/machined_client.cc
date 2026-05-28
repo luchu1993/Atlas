@@ -29,8 +29,9 @@ auto CurrentPid() -> uint32_t {
 }
 }  // namespace
 
-MachinedClient::MachinedClient(EventDispatcher& dispatcher, NetworkInterface& network)
-    : dispatcher_(dispatcher), network_(network) {}
+MachinedClient::MachinedClient(EventDispatcher& dispatcher, NetworkInterface& network,
+                               Duration request_timeout)
+    : dispatcher_(dispatcher), network_(network), request_timeout_(request_timeout) {}
 
 MachinedClient::~MachinedClient() = default;
 
@@ -132,6 +133,7 @@ void MachinedClient::SendHeartbeat(float load, uint32_t entity_count) {
 
 void MachinedClient::Tick(float load, uint32_t entity_count) {
   DetectStaleChannel();
+  ExpirePendingRequests();
 
   if (!IsConnected()) {
     if (reconnect_enabled_ && cached_reg_ && machined_addr_.Port() != 0) {
@@ -165,6 +167,82 @@ void MachinedClient::HandleDisconnect() {
   registered_ = false;
   machined_heartbeat_udp_addr_ = Address{};
   next_reconnect_attempt_ = Clock::now() + reconnect_backoff_;
+  FailPendingRequests();
+}
+
+void MachinedClient::ExpirePendingRequests() {
+  const auto now = Clock::now();
+  if (async_query_ && now - async_query_->issued_at >= request_timeout_) {
+    auto cb = std::move(async_query_->cb);
+    async_query_.reset();
+    if (cb) cb({});
+  }
+
+  std::vector<PendingWatcher> expired;
+  for (auto it = pending_watchers_.begin(); it != pending_watchers_.end();) {
+    if (now - it->second.issued_at < request_timeout_) {
+      ++it;
+      continue;
+    }
+    expired.push_back(std::move(it->second));
+    it = pending_watchers_.erase(it);
+  }
+
+  for (auto& pending : expired) {
+    if (pending.cb) pending.cb(false, pending.target_name, {});
+  }
+
+  std::vector<PendingLease> expired_leases;
+  for (auto it = pending_leases_.begin(); it != pending_leases_.end();) {
+    if (now - it->second.issued_at < request_timeout_) {
+      ++it;
+      continue;
+    }
+    expired_leases.push_back(std::move(it->second));
+    it = pending_leases_.erase(it);
+  }
+  for (auto& pending : expired_leases) {
+    if (pending.cb) {
+      LeaseResult r;
+      r.success = false;
+      r.error = "lease request timed out";
+      pending.cb(std::move(r));
+    }
+  }
+}
+
+void MachinedClient::FailPendingRequests() {
+  if (async_query_) {
+    auto cb = std::move(async_query_->cb);
+    async_query_.reset();
+    if (cb) cb({});
+  }
+
+  std::vector<PendingWatcher> pending_watchers;
+  pending_watchers.reserve(pending_watchers_.size());
+  for (auto& [_, pending] : pending_watchers_) {
+    pending_watchers.push_back(std::move(pending));
+  }
+  pending_watchers_.clear();
+
+  for (auto& pending : pending_watchers) {
+    if (pending.cb) pending.cb(false, pending.target_name, {});
+  }
+
+  std::vector<PendingLease> pending_leases;
+  pending_leases.reserve(pending_leases_.size());
+  for (auto& [_, pending] : pending_leases_) {
+    pending_leases.push_back(std::move(pending));
+  }
+  pending_leases_.clear();
+  for (auto& pending : pending_leases) {
+    if (pending.cb) {
+      LeaseResult r;
+      r.success = false;
+      r.error = "machined disconnected";
+      pending.cb(std::move(r));
+    }
+  }
 }
 
 void MachinedClient::MaybeReconnect() {
@@ -216,17 +294,22 @@ void MachinedClient::QueryAsync(ProcessType type, QueryCallback cb) {
     return;
   }
 
-  async_query_cb_ = std::move(cb);
+  if (async_query_) {
+    auto previous_cb = std::move(async_query_->cb);
+    async_query_.reset();
+    if (previous_cb) previous_cb({});
+  }
+  async_query_ = AsyncQuery{std::move(cb), Clock::now()};
 
   machined::QueryMessage msg;
   msg.process_type = type;
 
   if (auto r = channel_->SendMessage(msg); !r) {
     ATLAS_LOG_ERROR("MachinedClient: query_async failed to send: {}", r.Error().Message());
-    if (async_query_cb_) {
-      async_query_cb_({});
-      async_query_cb_ = nullptr;
-    }
+    if (!async_query_) return;
+    auto cb_local = std::move(async_query_->cb);
+    async_query_.reset();
+    if (cb_local) cb_local({});
   }
 }
 
@@ -250,7 +333,10 @@ auto MachinedClient::QueryWatcher(ProcessType target_type, std::string_view targ
   }
 
   uint32_t rid = next_watcher_request_id_++;
-  if (cb) pending_watchers_.emplace(rid, std::move(cb));
+  if (cb) {
+    pending_watchers_.emplace(
+        rid, PendingWatcher{std::move(cb), Clock::now(), std::string(target_name)});
+  }
 
   machined::WatcherRequest msg;
   msg.target_type = target_type;
@@ -262,9 +348,9 @@ auto MachinedClient::QueryWatcher(ProcessType target_type, std::string_view targ
     ATLAS_LOG_ERROR("MachinedClient: failed to send watcher request: {}", r.Error().Message());
     auto it = pending_watchers_.find(rid);
     if (it != pending_watchers_.end()) {
-      auto cb_local = std::move(it->second);
+      auto pending = std::move(it->second);
       pending_watchers_.erase(it);
-      if (cb_local) cb_local(false, std::string(target_name), {});
+      if (pending.cb) pending.cb(false, pending.target_name, {});
     }
   }
   return rid;
@@ -279,7 +365,10 @@ auto MachinedClient::SetWatcher(ProcessType target_type, std::string_view target
   }
 
   uint32_t rid = next_watcher_request_id_++;
-  if (cb) pending_watchers_.emplace(rid, std::move(cb));
+  if (cb) {
+    pending_watchers_.emplace(
+        rid, PendingWatcher{std::move(cb), Clock::now(), std::string(target_name)});
+  }
 
   machined::WatcherRequest msg;
   msg.target_type = target_type;
@@ -293,9 +382,9 @@ auto MachinedClient::SetWatcher(ProcessType target_type, std::string_view target
     ATLAS_LOG_ERROR("MachinedClient: failed to send watcher set: {}", r.Error().Message());
     auto it = pending_watchers_.find(rid);
     if (it != pending_watchers_.end()) {
-      auto cb_local = std::move(it->second);
+      auto pending = std::move(it->second);
       pending_watchers_.erase(it);
-      if (cb_local) cb_local(false, std::string(target_name), {});
+      if (pending.cb) pending.cb(false, pending.target_name, {});
     }
   }
   return rid;
@@ -315,6 +404,78 @@ void MachinedClient::RequestShutdownTarget(ProcessType target_type, std::string_
 
   if (auto r = channel_->SendMessage(msg); !r) {
     ATLAS_LOG_ERROR("MachinedClient: failed to send shutdown forward: {}", r.Error().Message());
+  }
+}
+
+auto MachinedClient::SendLeaseRequest(machined::LeaseOp op, std::string_view key,
+                                      std::string_view holder_id, uint32_t ttl_ms,
+                                      LeaseCallback cb) -> uint32_t {
+  if (!IsConnected()) {
+    if (cb) {
+      LeaseResult r;
+      r.success = false;
+      r.error = "machined not connected";
+      cb(std::move(r));
+    }
+    return 0;
+  }
+  uint32_t rid = next_lease_request_id_++;
+  if (cb) {
+    pending_leases_.emplace(rid, PendingLease{std::move(cb), Clock::now()});
+  }
+
+  machined::LeaseRequest msg;
+  msg.request_id = rid;
+  msg.op = op;
+  msg.key = std::string(key);
+  msg.holder_id = std::string(holder_id);
+  msg.ttl_ms = ttl_ms;
+
+  if (auto r = channel_->SendMessage(msg); !r) {
+    ATLAS_LOG_ERROR("MachinedClient: failed to send lease request: {}", r.Error().Message());
+    auto it = pending_leases_.find(rid);
+    if (it != pending_leases_.end()) {
+      auto pending = std::move(it->second);
+      pending_leases_.erase(it);
+      if (pending.cb) {
+        LeaseResult res;
+        res.success = false;
+        res.error = std::string(r.Error().Message());
+        pending.cb(std::move(res));
+      }
+    }
+  }
+  return rid;
+}
+
+auto MachinedClient::AcquireLease(std::string_view key, std::string_view holder_id,
+                                  uint32_t ttl_ms, LeaseCallback cb) -> uint32_t {
+  return SendLeaseRequest(machined::LeaseOp::kAcquire, key, holder_id, ttl_ms, std::move(cb));
+}
+
+auto MachinedClient::RenewLease(std::string_view key, std::string_view holder_id, uint32_t ttl_ms,
+                                LeaseCallback cb) -> uint32_t {
+  return SendLeaseRequest(machined::LeaseOp::kRenew, key, holder_id, ttl_ms, std::move(cb));
+}
+
+auto MachinedClient::ReleaseLease(std::string_view key, std::string_view holder_id,
+                                  LeaseCallback cb) -> uint32_t {
+  return SendLeaseRequest(machined::LeaseOp::kRelease, key, holder_id, 0, std::move(cb));
+}
+
+void MachinedClient::OnLeaseResponse(const Address& /*src*/, Channel* /*ch*/,
+                                     const machined::LeaseResponse& msg) {
+  auto it = pending_leases_.find(msg.request_id);
+  if (it == pending_leases_.end()) return;
+  auto pending = std::move(it->second);
+  pending_leases_.erase(it);
+  if (pending.cb) {
+    LeaseResult r;
+    r.success = msg.success;
+    r.current_holder = msg.current_holder;
+    r.current_holder_expires_in_ms = msg.current_holder_expires_in_ms;
+    r.error = msg.error;
+    pending.cb(std::move(r));
   }
 }
 
@@ -355,6 +516,11 @@ void MachinedClient::RegisterHandlers() {
       [this](const Address& src, Channel* ch, const machined::WatcherResponse& msg) {
         OnWatcherResponse(src, ch, msg);
       });
+
+  (void)table.RegisterTypedHandler<machined::LeaseResponse>(
+      [this](const Address& src, Channel* ch, const machined::LeaseResponse& msg) {
+        OnLeaseResponse(src, ch, msg);
+      });
 }
 
 void MachinedClient::OnRegisterAck(const Address& src, Channel* /*ch*/,
@@ -393,9 +559,10 @@ void MachinedClient::OnQueryResponse(const Address& /*src*/, Channel* /*ch*/,
     sync_query_->done = true;
     return;
   }
-  if (async_query_cb_) {
-    async_query_cb_(msg.processes);
-    async_query_cb_ = nullptr;
+  if (async_query_) {
+    auto cb = std::move(async_query_->cb);
+    async_query_.reset();
+    if (cb) cb(msg.processes);
   }
 }
 
@@ -432,9 +599,9 @@ void MachinedClient::OnWatcherResponse(const Address& /*src*/, Channel* /*ch*/,
                     msg.request_id);
     return;
   }
-  auto cb = std::move(it->second);
+  auto pending = std::move(it->second);
   pending_watchers_.erase(it);
-  if (cb) cb(msg.found, msg.source_name, msg.value);
+  if (pending.cb) pending.cb(msg.found, msg.source_name, msg.value);
 }
 
 }  // namespace atlas

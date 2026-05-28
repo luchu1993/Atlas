@@ -101,6 +101,17 @@ struct ServerConfig {
   // up to backoff_cap_ms so a wedged exe can't burn the restart budget.
   int revive_restart_backoff_cap_ms{0};
   int revive_max_restarts{3};
+
+  // Leader lock backend:
+  //   "local"    — per-host file lock (legacy, default). Single-machine.
+  //   "machined" — distributed lease served by machined. Works across hosts
+  //                because every Reviver in the cluster talks to the same
+  //                machined registry.
+  std::string revive_leader_lock_mode{"local"};
+  // machined-mode parameters:
+  int revive_leader_lock_ttl_ms{8000};       // lease ttl on each Acquire/Renew
+  int revive_leader_lock_renew_ms{3000};      // renew interval (< ttl/2)
+  int revive_leader_lock_failure_threshold{3};  // consecutive renew fails → drop
   int revive_cellappmgr_health_interval_ms{1000};
   int revive_cellappmgr_heartbeat_timeout_ms{4000};
   int revive_cellappmgr_manager_health_timeout_ms{5000};

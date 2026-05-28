@@ -124,6 +124,11 @@ static const CliField kCliFields[] = {
     {"revive-restart-delay-ms",     &ServerConfig::revive_restart_delay_ms},
     {"revive-restart-backoff-cap-ms", &ServerConfig::revive_restart_backoff_cap_ms},
     {"revive-max-restarts",         &ServerConfig::revive_max_restarts},
+    {"revive-leader-lock-mode",     &ServerConfig::revive_leader_lock_mode},
+    {"revive-leader-lock-ttl-ms",   &ServerConfig::revive_leader_lock_ttl_ms},
+    {"revive-leader-lock-renew-ms", &ServerConfig::revive_leader_lock_renew_ms},
+    {"revive-leader-lock-failure-threshold",
+        &ServerConfig::revive_leader_lock_failure_threshold},
     {"revive-cellappmgr-health-interval-ms",
         &ServerConfig::revive_cellappmgr_health_interval_ms},
     {"revive-cellappmgr-heartbeat-timeout-ms",
@@ -244,6 +249,14 @@ auto ServerConfig::FromJsonFile(const std::filesystem::path& path) -> Result<Ser
     cfg.revive_restart_backoff_cap_ms =
         reviver->ReadInt("restart_backoff_cap_ms", cfg.revive_restart_backoff_cap_ms);
     cfg.revive_max_restarts = reviver->ReadInt("max_restarts", cfg.revive_max_restarts);
+    cfg.revive_leader_lock_mode =
+        reviver->ReadString("leader_lock_mode", cfg.revive_leader_lock_mode);
+    cfg.revive_leader_lock_ttl_ms =
+        reviver->ReadInt("leader_lock_ttl_ms", cfg.revive_leader_lock_ttl_ms);
+    cfg.revive_leader_lock_renew_ms =
+        reviver->ReadInt("leader_lock_renew_ms", cfg.revive_leader_lock_renew_ms);
+    cfg.revive_leader_lock_failure_threshold = reviver->ReadInt(
+        "leader_lock_failure_threshold", cfg.revive_leader_lock_failure_threshold);
     cfg.revive_leader_lock_path =
         reviver->ReadString("leader_lock_path", cfg.revive_leader_lock_path.string());
     if (auto* cellappmgr = reviver->Child("cellappmgr")) {

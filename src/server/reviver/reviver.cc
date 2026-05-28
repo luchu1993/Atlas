@@ -112,6 +112,13 @@ void Reviver::InitTarget(ManagedTarget& t, ProcessType pt, std::string slug) {
   if (TargetEnabled(t)) {
     t.leader_lock_path = ResolveLeaderLockPath(t);
   }
+  t.leader_lock_mode =
+      Config().revive_leader_lock_mode.empty() ? std::string{"local"}
+                                               : Config().revive_leader_lock_mode;
+  // holder_id baked once and reused across reconnects so machined can
+  // recognise the renewing client even after a connection blip.
+  t.leader_lock_holder_id =
+      std::format("{}:{}@{}", Config().process_name, CurrentPid(), t.slug);
 }
 
 auto Reviver::TargetEnabled(const ManagedTarget& t) const -> bool {
@@ -171,6 +178,12 @@ void Reviver::Fini() {
       (void)Dispatcher().CancelTimer(tp->restart_timer);
       tp->restart_timer = {};
     }
+    if (tp->leader_lock_mode == "machined" && tp->leader_lock_held &&
+        GetMachinedClient().IsConnected()) {
+      (void)GetMachinedClient().ReleaseLease(
+          tp->leader_lock_path.string(), tp->leader_lock_holder_id, nullptr);
+    }
+    tp->leader_lock_held = false;
     tp->leader_lock.reset();
   }
   ManagerApp::Fini();
@@ -271,6 +284,18 @@ void Reviver::RegisterWatchers() {
   wr.Add<uint64_t>("reviver/leader/acquire_failures",
                    std::function<uint64_t()>(
                        [this] { return cellappmgr_target_.leader_lock_failures; }));
+  wr.Add<std::string>("reviver/leader/mode",
+                      std::function<std::string()>(
+                          [this] { return cellappmgr_target_.leader_lock_mode; }));
+  wr.Add<std::string>("reviver/leader/holder_id",
+                      std::function<std::string()>(
+                          [this] { return cellappmgr_target_.leader_lock_holder_id; }));
+  wr.Add<uint64_t>("reviver/leader/lease_renew_count",
+                   std::function<uint64_t()>(
+                       [this] { return cellappmgr_target_.lease_renew_count; }));
+  wr.Add<uint64_t>("reviver/leader/lease_failure_count",
+                   std::function<uint64_t()>(
+                       [this] { return cellappmgr_target_.lease_failure_count; }));
 
   wr.Add<bool>("reviver/baseappmgr/leader/active",
                std::function<bool()>([this] { return HasLeadership(baseappmgr_target_); }));
@@ -283,6 +308,15 @@ void Reviver::RegisterWatchers() {
   wr.Add<uint64_t>("reviver/baseappmgr/leader/acquire_failures",
                    std::function<uint64_t()>(
                        [this] { return baseappmgr_target_.leader_lock_failures; }));
+  wr.Add<std::string>("reviver/baseappmgr/leader/mode",
+                      std::function<std::string()>(
+                          [this] { return baseappmgr_target_.leader_lock_mode; }));
+  wr.Add<uint64_t>("reviver/baseappmgr/leader/lease_renew_count",
+                   std::function<uint64_t()>(
+                       [this] { return baseappmgr_target_.lease_renew_count; }));
+  wr.Add<uint64_t>("reviver/baseappmgr/leader/lease_failure_count",
+                   std::function<uint64_t()>(
+                       [this] { return baseappmgr_target_.lease_failure_count; }));
 }
 
 void Reviver::OnTickComplete() {
@@ -352,8 +386,92 @@ void Reviver::OnTargetDeath(ManagedTarget& t, const machined::DeathNotification&
 }
 
 void Reviver::AuditLeadership(ManagedTarget& t) {
-  if (HasLeadership(t)) return;
   const auto now = Clock::now();
+  if (t.leader_lock_mode == "machined") {
+    // Local lease bookkeeping: drop if our recorded ttl ran out before a
+    // successful renew came back. The next iteration tries to re-acquire.
+    if (t.leader_lock_held && t.leader_lock_expires_at != TimePoint{} &&
+        now >= t.leader_lock_expires_at) {
+      t.leader_lock_held = false;
+      ATLAS_LOG_WARNING("Reviver: {} lease expired locally — relinquishing leadership", t.slug);
+    }
+
+    if (t.lease_request_in_flight) return;
+    if (t.next_lease_renew_at != TimePoint{} && now < t.next_lease_renew_at) {
+      if (HasLeadership(t)) return;  // wait for re-acquire poll
+    }
+
+    if (!GetMachinedClient().IsConnected()) {
+      if (HasLeadership(t)) {
+        t.leader_lock_held = false;
+        ATLAS_LOG_WARNING("Reviver: {} dropped lease — machined disconnected", t.slug);
+      }
+      return;
+    }
+
+    const uint32_t ttl_ms = static_cast<uint32_t>(
+        std::max(100, Config().revive_leader_lock_ttl_ms));
+    const auto renew_ms = std::max(100, Config().revive_leader_lock_renew_ms);
+    const bool renewing = t.leader_lock_held;
+    t.lease_request_in_flight = true;
+    t.next_lease_renew_at = now + std::chrono::milliseconds(renew_ms);
+    const auto op = renewing ? machined::LeaseOp::kRenew : machined::LeaseOp::kAcquire;
+    auto& target_ref = t;
+    auto issue = [this, &target_ref, renewing](MachinedClient::LeaseResult r) {
+      target_ref.lease_request_in_flight = false;
+      if (r.success) {
+        const auto now_local = Clock::now();
+        target_ref.leader_lock_expires_at =
+            now_local + std::chrono::duration_cast<Duration>(
+                            std::chrono::milliseconds(
+                                std::max(100, Config().revive_leader_lock_ttl_ms)));
+        target_ref.lease_failure_streak = 0;
+        if (!target_ref.leader_lock_held) {
+          target_ref.leader_lock_held = true;
+          ++target_ref.lease_acquire_count;
+          ++target_ref.leader_lock_acquires;
+          target_ref.startup_checked = false;
+          target_ref.startup_check_at = now_local;
+          target_ref.last_error.clear();
+          ATLAS_LOG_INFO("Reviver: acquired {} lease (machined) holder={}", target_ref.slug,
+                         target_ref.leader_lock_holder_id);
+        } else {
+          ++target_ref.lease_renew_count;
+        }
+        return;
+      }
+      ++target_ref.lease_failure_streak;
+      ++target_ref.lease_failure_count;
+      ++target_ref.leader_lock_failures;
+      const auto threshold = static_cast<uint32_t>(
+          std::max(1, Config().revive_leader_lock_failure_threshold));
+      if (target_ref.leader_lock_held && target_ref.lease_failure_streak >= threshold) {
+        target_ref.leader_lock_held = false;
+        target_ref.last_error = std::format(
+            "{} lease lost after {} consecutive failures; current_holder={}", target_ref.slug,
+            target_ref.lease_failure_streak, r.current_holder);
+        ATLAS_LOG_WARNING("Reviver: {}", target_ref.last_error);
+        target_ref.lease_failure_streak = 0;
+        return;
+      }
+      if (!renewing && !target_ref.leader_lock_held && !r.current_holder.empty()) {
+        target_ref.last_error = std::format(
+            "{} lease held by {} (expires in {}ms)", target_ref.slug, r.current_holder,
+            r.current_holder_expires_in_ms);
+      }
+    };
+    if (op == machined::LeaseOp::kAcquire) {
+      (void)GetMachinedClient().AcquireLease(
+          t.leader_lock_path.string(), t.leader_lock_holder_id, ttl_ms, std::move(issue));
+    } else {
+      (void)GetMachinedClient().RenewLease(
+          t.leader_lock_path.string(), t.leader_lock_holder_id, ttl_ms, std::move(issue));
+    }
+    return;
+  }
+
+  // local-file mode (legacy default).
+  if (HasLeadership(t)) return;
   if (t.next_leader_lock_attempt != TimePoint{} && now < t.next_leader_lock_attempt) return;
   t.next_leader_lock_attempt = now + std::chrono::seconds(1);
 
@@ -369,6 +487,7 @@ void Reviver::AuditLeadership(ManagedTarget& t) {
 
   t.leader_lock.emplace(std::move(*lock));
   ++t.leader_lock_acquires;
+  t.leader_lock_held = true;
   t.startup_checked = false;
   t.startup_check_at = Clock::now();
   t.last_error.clear();
@@ -778,6 +897,7 @@ void Reviver::LaunchTarget(ManagedTarget& t) {
 }
 
 auto Reviver::HasLeadership(const ManagedTarget& t) const -> bool {
+  if (t.leader_lock_mode == "machined") return t.leader_lock_held;
   return t.leader_lock.has_value() && t.leader_lock->IsHeld();
 }
 

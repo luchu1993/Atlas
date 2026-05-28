@@ -1,6 +1,7 @@
 # machined — machine daemon, process registration, service discovery
 
 add_library(atlas_machined_lib STATIC
+  lease_store.cc
   listener_manager.cc
   machined_app.cc
   process_registry.cc

@@ -26,7 +26,13 @@ class MachinedClient {
   using WatcherCallback =
       std::function<void(bool found, const std::string& source_name, const std::string& value)>;
 
-  MachinedClient(EventDispatcher& dispatcher, NetworkInterface& network);
+  static constexpr Duration kHeartbeatInterval = std::chrono::seconds(5);
+  static constexpr Duration kRequestTimeout = std::chrono::seconds(5);
+  static constexpr Duration kInitialReconnectBackoff = std::chrono::seconds(1);
+  static constexpr Duration kMaxReconnectBackoff = std::chrono::seconds(30);
+
+  MachinedClient(EventDispatcher& dispatcher, NetworkInterface& network,
+                 Duration request_timeout = kRequestTimeout);
   ~MachinedClient();
 
   MachinedClient(const MachinedClient&) = delete;
@@ -66,16 +72,33 @@ class MachinedClient {
   void RequestShutdownTarget(ProcessType target_type, std::string_view target_name,
                              uint8_t reason = 0);
 
-  void Tick(float load = 0.0f, uint32_t entity_count = 0);
+  // Distributed leader lease. Acquire returns true when this client now
+  // holds `key` (either first time or after the previous holder's ttl
+  // expired). Renew refreshes the ttl; same return semantics. Release
+  // unconditionally drops the lease if held by holder_id. Failure carries
+  // diagnostic info via the callback (current_holder, expires_in_ms).
+  struct LeaseResult {
+    bool success{false};
+    std::string current_holder;
+    uint32_t current_holder_expires_in_ms{0};
+    std::string error;
+  };
+  using LeaseCallback = std::function<void(LeaseResult)>;
+  auto AcquireLease(std::string_view key, std::string_view holder_id, uint32_t ttl_ms,
+                    LeaseCallback cb) -> uint32_t;
+  auto RenewLease(std::string_view key, std::string_view holder_id, uint32_t ttl_ms,
+                  LeaseCallback cb) -> uint32_t;
+  auto ReleaseLease(std::string_view key, std::string_view holder_id, LeaseCallback cb)
+      -> uint32_t;
 
-  static constexpr Duration kHeartbeatInterval = std::chrono::seconds(5);
-  static constexpr Duration kInitialReconnectBackoff = std::chrono::seconds(1);
-  static constexpr Duration kMaxReconnectBackoff = std::chrono::seconds(30);
+  void Tick(float load = 0.0f, uint32_t entity_count = 0);
 
  private:
   void RegisterHandlers();
   void DetectStaleChannel();
   void HandleDisconnect();
+  void ExpirePendingRequests();
+  void FailPendingRequests();
   void MaybeReconnect();
   void SendCachedRegister();
 
@@ -87,6 +110,9 @@ class MachinedClient {
   void OnListenerAck(const Address& src, Channel* ch, const machined::ListenerAck& msg);
   void OnWatcherResponse(const Address& src, Channel* ch, const machined::WatcherResponse& msg);
   void OnDeathFromMachined(const Address& src, Channel* ch, const machined::DeathNotification& msg);
+  void OnLeaseResponse(const Address& src, Channel* ch, const machined::LeaseResponse& msg);
+  auto SendLeaseRequest(machined::LeaseOp op, std::string_view key, std::string_view holder_id,
+                        uint32_t ttl_ms, LeaseCallback cb) -> uint32_t;
 
   EventDispatcher& dispatcher_;
   NetworkInterface& network_;
@@ -99,7 +125,11 @@ class MachinedClient {
   };
   std::optional<SyncQuery> sync_query_;
 
-  QueryCallback async_query_cb_;
+  struct AsyncQuery {
+    QueryCallback cb;
+    TimePoint issued_at;
+  };
+  std::optional<AsyncQuery> async_query_;
 
   struct Subscription {
     machined::ListenerType listener_type;
@@ -123,10 +153,23 @@ class MachinedClient {
   Duration reconnect_backoff_{kInitialReconnectBackoff};
   TimePoint next_reconnect_attempt_{};
 
-  // Watcher-request demuxing: incoming WatcherResponse is matched on request_id.
-  uint32_t next_watcher_request_id_{1};
-  std::unordered_map<uint32_t, WatcherCallback> pending_watchers_;
+  struct PendingWatcher {
+    WatcherCallback cb;
+    TimePoint issued_at;
+    std::string target_name;
+  };
 
+  uint32_t next_watcher_request_id_{1};
+  std::unordered_map<uint32_t, PendingWatcher> pending_watchers_;
+
+  struct PendingLease {
+    LeaseCallback cb;
+    TimePoint issued_at;
+  };
+  uint32_t next_lease_request_id_{1};
+  std::unordered_map<uint32_t, PendingLease> pending_leases_;
+
+  Duration request_timeout_{kRequestTimeout};
   TimePoint last_heartbeat_{};
   bool registered_{false};
 

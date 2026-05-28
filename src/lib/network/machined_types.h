@@ -691,6 +691,119 @@ static_assert(NetworkMessage<WatcherForward>);
 static_assert(NetworkMessage<WatcherReply>);
 static_assert(NetworkMessage<ShutdownTarget>);
 
+// Distributed leader lease — clients ask machined to hold a named
+// key on their behalf so cross-host Reviver instances can race for
+// leadership without a shared filesystem. ttl_ms is the contract: if
+// the holder doesn't Renew before expiry, the next Acquire wins.
+enum class LeaseOp : uint8_t {
+  kAcquire = 0,
+  kRenew = 1,
+  kRelease = 2,
+};
+
+struct LeaseRequest {
+  uint32_t request_id{0};
+  LeaseOp op{LeaseOp::kAcquire};
+  std::string key;
+  std::string holder_id;
+  uint32_t ttl_ms{0};
+
+  static auto Descriptor() -> const MessageDesc& {
+    static const MessageDesc kDesc{msg_id::Id(msg_id::Machined::kLeaseRequest),
+                                   "machined::LeaseRequest",
+                                   MessageLengthStyle::kVariable,
+                                   -1,
+                                   MessageReliability::kReliable,
+                                   MessageUrgency::kImmediate};
+    return kDesc;
+  }
+
+  void Serialize(BinaryWriter& w) const {
+    w.Write(request_id);
+    w.Write<uint8_t>(static_cast<uint8_t>(op));
+    w.WriteString(key);
+    w.WriteString(holder_id);
+    w.Write(ttl_ms);
+  }
+
+  static auto Deserialize(BinaryReader& r) -> Result<LeaseRequest> {
+    LeaseRequest msg;
+    auto rid = r.Read<uint32_t>();
+    if (!rid) return rid.Error();
+    msg.request_id = *rid;
+    auto op = r.Read<uint8_t>();
+    if (!op) return op.Error();
+    if (*op > static_cast<uint8_t>(LeaseOp::kRelease)) {
+      return Error{ErrorCode::kInvalidArgument, "LeaseRequest: unknown op"};
+    }
+    msg.op = static_cast<LeaseOp>(*op);
+    auto key = r.ReadString();
+    if (!key) return key.Error();
+    msg.key = std::move(*key);
+    auto holder = r.ReadString();
+    if (!holder) return holder.Error();
+    msg.holder_id = std::move(*holder);
+    auto ttl = r.Read<uint32_t>();
+    if (!ttl) return ttl.Error();
+    msg.ttl_ms = *ttl;
+    return msg;
+  }
+};
+
+struct LeaseResponse {
+  uint32_t request_id{0};
+  bool success{false};
+  // Holder reported on failure so callers can log who currently owns the
+  // key; empty on success.
+  std::string current_holder;
+  // Remaining ttl of the current holder when success=false; meaningless
+  // on success.
+  uint32_t current_holder_expires_in_ms{0};
+  // Non-empty on protocol-level failure (unknown op, holder mismatch).
+  std::string error;
+
+  static auto Descriptor() -> const MessageDesc& {
+    static const MessageDesc kDesc{msg_id::Id(msg_id::Machined::kLeaseResponse),
+                                   "machined::LeaseResponse",
+                                   MessageLengthStyle::kVariable,
+                                   -1,
+                                   MessageReliability::kReliable,
+                                   MessageUrgency::kImmediate};
+    return kDesc;
+  }
+
+  void Serialize(BinaryWriter& w) const {
+    w.Write(request_id);
+    w.Write<uint8_t>(success ? 1u : 0u);
+    w.WriteString(current_holder);
+    w.Write(current_holder_expires_in_ms);
+    w.WriteString(error);
+  }
+
+  static auto Deserialize(BinaryReader& r) -> Result<LeaseResponse> {
+    LeaseResponse msg;
+    auto rid = r.Read<uint32_t>();
+    if (!rid) return rid.Error();
+    msg.request_id = *rid;
+    auto ok = r.Read<uint8_t>();
+    if (!ok) return ok.Error();
+    msg.success = (*ok != 0);
+    auto holder = r.ReadString();
+    if (!holder) return holder.Error();
+    msg.current_holder = std::move(*holder);
+    auto expires = r.Read<uint32_t>();
+    if (!expires) return expires.Error();
+    msg.current_holder_expires_in_ms = *expires;
+    auto err = r.ReadString();
+    if (!err) return err.Error();
+    msg.error = std::move(*err);
+    return msg;
+  }
+};
+
+static_assert(NetworkMessage<LeaseRequest>);
+static_assert(NetworkMessage<LeaseResponse>);
+
 }  // namespace atlas::machined
 
 #endif  // ATLAS_LIB_NETWORK_MACHINED_TYPES_H_

@@ -6,6 +6,7 @@
 #include "foundation/log.h"
 #include "network/event_dispatcher.h"
 #include "network/network_interface.h"
+#include "platform/process_launcher.h"
 #include "server/common_messages.h"
 #include "server/server_config.h"
 
@@ -29,25 +30,21 @@ auto MachinedApp::Init(int argc, char* argv[]) -> bool {
 
   const auto& cfg = Config();
 
-  // Start TCP server on the machined internal port (for register/notify/query)
   Address listen_addr(0, cfg.internal_port);
   if (auto r = Network().StartTcpServer(listen_addr); !r) {
     ATLAS_LOG_CRITICAL("MachinedApp: failed to start TCP server: {}", r.Error().Message());
     return false;
   }
 
-  // Install accept callback so we can attach disconnect handlers per-connection
   Network().SetAcceptCallback([this](Channel& ch) { OnAccept(ch); });
 
-  // Start UDP socket for heartbeat datagrams on (internal_port + 1).
-  // This avoids the TCP ack round-trip for high-frequency heartbeats.
+  // UDP heartbeats avoid the TCP ack round-trip for high-frequency updates.
   uint16_t udp_port = (cfg.internal_port > 0) ? static_cast<uint16_t>(cfg.internal_port + 1) : 0;
   if (udp_port > 0) {
     Address udp_addr(0, udp_port);
     if (auto r = Network().StartUdp(udp_addr); !r) {
       ATLAS_LOG_WARNING("MachinedApp: failed to start UDP heartbeat socket on port {}: {}",
                         udp_port, r.Error().Message());
-      // Non-fatal: fall back to TCP-only heartbeats
       udp_port = 0;
     } else {
       heartbeat_udp_port_ = Network().UdpAddress().Port();
@@ -55,7 +52,6 @@ auto MachinedApp::Init(int argc, char* argv[]) -> bool {
     }
   }
 
-  // Register message handlers
   auto& table = Network().InterfaceTable();
 
   (void)table.RegisterTypedHandler<RegisterMessage>(
@@ -96,12 +92,16 @@ auto MachinedApp::Init(int argc, char* argv[]) -> bool {
         OnShutdownTarget(src, ch, msg);
       });
 
+  (void)table.RegisterTypedHandler<LeaseRequest>(
+      [this](const Address& src, Channel* ch, const LeaseRequest& msg) {
+        OnLeaseRequest(src, ch, msg);
+      });
+
   ATLAS_LOG_INFO("MachinedApp: TCP listening on {}", Network().TcpAddress().ToString());
   return true;
 }
 
 void MachinedApp::Fini() {
-  // Notify all registered processes that machined is shutting down
   DeathNotification shutdown_notif;
   shutdown_notif.process_type = ProcessType::kMachined;
   shutdown_notif.name = "machined";
@@ -134,6 +134,10 @@ void MachinedApp::RegisterWatchers() {
 void MachinedApp::OnTickComplete() {
   CheckHeartbeatTimeouts();
   watcher_forwarder_.CheckTimeouts();
+  const auto pruned = lease_store_.PruneExpired(Clock::now());
+  if (pruned > 0) {
+    ATLAS_LOG_INFO("MachinedApp: pruned {} expired lease(s)", pruned);
+  }
 }
 
 void MachinedApp::OnRegister(const Address& /*src*/, Channel* ch, const RegisterMessage& msg) {
@@ -147,7 +151,18 @@ void MachinedApp::OnRegister(const Address& /*src*/, Channel* ch, const Register
     return;
   }
 
-  // Build ProcessEntry
+  if (auto existing = process_registry_.FindByName(msg.process_type, msg.name);
+      existing && existing->pid != 0 && !IsProcessAlive(existing->pid)) {
+    auto removed = process_registry_.UnregisterByName(msg.process_type, msg.name);
+    if (removed) {
+      std::erase_if(heartbeat_entries_, [&](const HeartbeatEntry& e) {
+        return e.channel == removed->channel;
+      });
+      listener_manager_.RemoveAll(removed->channel);
+      NotifyDeath(*removed, TakePendingShutdownReason(removed->channel, 2));
+    }
+  }
+
   ProcessEntry entry;
   entry.process_type = msg.process_type;
   entry.name = msg.name;
@@ -165,7 +180,6 @@ void MachinedApp::OnRegister(const Address& /*src*/, Channel* ch, const Register
     return;
   }
 
-  // Track heartbeat - TCP fallback if UDP socket not available
   heartbeat_entries_.push_back({ch, Clock::now()});
 
   ack.success = true;
@@ -175,7 +189,6 @@ void MachinedApp::OnRegister(const Address& /*src*/, Channel* ch, const Register
   ack.heartbeat_udp_port = heartbeat_udp_port_;
   (void)ch->SendMessage(ack);
 
-  // Notify listeners
   BirthNotification notif;
   notif.process_type = entry.process_type;
   notif.name = entry.name;
@@ -198,24 +211,20 @@ void MachinedApp::OnDeregister(const Address& /*src*/, Channel* ch, const Deregi
     return;
   }
 
-  // Remove heartbeat entry
-  std::erase_if(heartbeat_entries_, [ch](const HeartbeatEntry& e) { return e.channel == ch; });
-  listener_manager_.RemoveAll(ch);
+  Channel* removed_ch = removed->channel != nullptr ? removed->channel : ch;
+  std::erase_if(heartbeat_entries_, [removed_ch](const HeartbeatEntry& e) {
+    return e.channel == removed_ch;
+  });
+  listener_manager_.RemoveAll(removed_ch);
 
-  DeathNotification notif;
-  notif.process_type = removed->process_type;
-  notif.name = removed->name;
-  notif.internal_addr = removed->internal_addr;
-  notif.reason = 0;  // normal deregister
-  listener_manager_.NotifyDeath(notif);
+  NotifyDeath(*removed, TakePendingShutdownReason(removed_ch, 0));
 }
 
 void MachinedApp::OnHeartbeat(const Address& src, Channel* ch, const HeartbeatMessage& msg) {
   if (ch == nullptr) return;
 
-  // UDP heartbeat: the source port is ephemeral, so correlate it back to the
-  // TCP registration channel using pid+IP when available. IP-only matching
-  // is kept as a backward-compatible fallback for older clients.
+  // UDP heartbeats use an ephemeral source port, so pid+IP links them
+  // back to the TCP registration channel. IP-only is a legacy fallback.
   Channel* tcp_ch = nullptr;
   if (msg.pid != 0) {
     tcp_ch = process_registry_.FindTcpChannelByPid(msg.pid, src.Ip());
@@ -284,9 +293,8 @@ void MachinedApp::OnListenerRegister(const Address& /*src*/, Channel* ch,
       notif.external_addr = entry.external_addr;
       notif.pid = entry.pid;
       if (auto r = ch->SendMessage(notif); !r) {
-        // Snapshot replay on Listener (re-)register; loss means listener
-        // never learns about pre-existing peer until the next live
-        // BirthNotification - could be a long wait.
+        // Replay covers peers registered before listener startup; on send failure,
+        // the listener waits for a future live birth event.
         ATLAS_LOG_WARNING("Machined: BirthNotification snapshot send failed for {} (pid={}): {}",
                           entry.name, entry.pid, r.Error().Message());
       }
@@ -313,6 +321,7 @@ void MachinedApp::OnShutdownTarget(const Address& /*src*/, Channel* /*ch*/,
       ATLAS_LOG_WARNING("MachinedApp: failed to forward shutdown to {}: {}", entry.name,
                         r.Error().Message());
     } else {
+      pending_shutdown_reasons_[entry.channel] = msg.reason;
       ATLAS_LOG_INFO("MachinedApp: forwarded shutdown to ({}, {})",
                      static_cast<int>(entry.process_type), entry.name);
     }
@@ -345,16 +354,55 @@ void MachinedApp::OnDisconnect(Channel& ch) {
     ATLAS_LOG_INFO("MachinedApp: process ({}, {}) disconnected",
                    static_cast<int>(removed->process_type), removed->name);
 
-    DeathNotification notif;
-    notif.process_type = removed->process_type;
-    notif.name = removed->name;
-    notif.internal_addr = removed->internal_addr;
-    notif.reason = 1;  // connection_lost
-    listener_manager_.NotifyDeath(notif);
+    NotifyDeath(*removed, TakePendingShutdownReason(&ch, 1));
+  } else {
+    pending_shutdown_reasons_.erase(&ch);
   }
 
   std::erase_if(heartbeat_entries_, [&ch](const HeartbeatEntry& e) { return e.channel == &ch; });
   listener_manager_.RemoveAll(&ch);
+  const auto dropped_leases = lease_store_.DropByHolderAddress(ch.RemoteAddress());
+  if (dropped_leases > 0) {
+    ATLAS_LOG_INFO("MachinedApp: dropped {} lease(s) on disconnect from {}",
+                   dropped_leases, ch.RemoteAddress().ToString());
+  }
+}
+
+void MachinedApp::OnLeaseRequest(const Address& src, Channel* ch, const LeaseRequest& msg) {
+  if (ch == nullptr) return;
+  LeaseResponse resp;
+  resp.request_id = msg.request_id;
+  if (msg.key.empty() || msg.holder_id.empty()) {
+    resp.error = "lease key and holder_id must be non-empty";
+    (void)ch->SendMessage(resp);
+    return;
+  }
+  switch (msg.op) {
+    case LeaseOp::kAcquire:
+    case LeaseOp::kRenew: {
+      if (msg.ttl_ms == 0) {
+        resp.error = "lease ttl_ms must be > 0";
+        break;
+      }
+      auto outcome = lease_store_.Acquire(msg.key, msg.holder_id, msg.ttl_ms, src, Clock::now());
+      if (outcome.result == LeaseStore::AcquireResult::kRejected) {
+        resp.success = false;
+        resp.current_holder = std::move(outcome.current_holder);
+        resp.current_holder_expires_in_ms =
+            static_cast<uint32_t>(std::max<int64_t>(0, outcome.current_expires_in_ms));
+      } else {
+        resp.success = true;
+      }
+      break;
+    }
+    case LeaseOp::kRelease: {
+      const bool released = lease_store_.Release(msg.key, msg.holder_id);
+      resp.success = released;
+      if (!released) resp.error = "lease holder mismatch or unknown key";
+      break;
+    }
+  }
+  (void)ch->SendMessage(resp);
 }
 
 void MachinedApp::CheckHeartbeatTimeouts() {
@@ -375,16 +423,31 @@ void MachinedApp::CheckHeartbeatTimeouts() {
 
     auto removed = process_registry_.UnregisterByChannel(ch);
     if (removed) {
-      DeathNotification notif;
-      notif.process_type = removed->process_type;
-      notif.name = removed->name;
-      notif.internal_addr = removed->internal_addr;
-      notif.reason = 2;  // timeout
-      listener_manager_.NotifyDeath(notif);
+      NotifyDeath(*removed, TakePendingShutdownReason(ch, 2));
+    } else {
+      pending_shutdown_reasons_.erase(ch);
     }
 
     listener_manager_.RemoveAll(ch);
   }
+}
+
+void MachinedApp::NotifyDeath(const ProcessEntry& entry, uint8_t reason) {
+  DeathNotification notif;
+  notif.process_type = entry.process_type;
+  notif.name = entry.name;
+  notif.internal_addr = entry.internal_addr;
+  notif.reason = reason;
+  listener_manager_.NotifyDeath(notif);
+}
+
+auto MachinedApp::TakePendingShutdownReason(Channel* ch, uint8_t fallback) -> uint8_t {
+  if (ch == nullptr) return fallback;
+  auto it = pending_shutdown_reasons_.find(ch);
+  if (it == pending_shutdown_reasons_.end()) return fallback;
+  const uint8_t reason = it->second;
+  pending_shutdown_reasons_.erase(it);
+  return reason;
 }
 
 }  // namespace atlas::machined

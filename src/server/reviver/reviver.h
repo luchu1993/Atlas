@@ -67,7 +67,21 @@ class Reviver : public ManagerApp {
     std::filesystem::path leader_lock_path;
 
     // Live state.
+    // "local" → leader_lock holds the per-host file lock.
+    // "machined" → leader_lock_held tracks the lease; leader_lock_holder_id
+    //              is what we sent to machined; leader_lock_expires_at is
+    //              when our lease runs out without renew.
+    std::string leader_lock_mode;
     std::optional<fs::ScopedFileLock> leader_lock;
+    bool leader_lock_held{false};
+    std::string leader_lock_holder_id;
+    TimePoint leader_lock_expires_at{};
+    TimePoint next_lease_renew_at{};
+    bool lease_request_in_flight{false};
+    uint32_t lease_failure_streak{0};
+    uint64_t lease_acquire_count{0};
+    uint64_t lease_renew_count{0};
+    uint64_t lease_failure_count{0};
     Address last_addr;
     uint32_t last_pid{0};
     uint32_t launched_pid{0};

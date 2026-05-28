@@ -266,8 +266,18 @@ live 回归优先覆盖 CellAppMgr abnormal shutdown、`--cycles` 多轮接管�
 ## 当前边界
 
 - Reviver 只支持 CellAppMgr；BaseAppMgr / DBAppMgr 还没有 Snapshot / Restore。
-- Reviver leader lock 当前是进程级本地文件锁；跨机器部署仍需要外部一致性锁
-  或共享协调服务。
+- Reviver leader lock 现在支持两种模式:
+  - `local`(默认):per-host 文件锁,跟之前一样,单机有效;
+  - `machined`:lease 由 machined 持有,跨机 Reviver 可以竞争同一 key。
+    machined 在 `OnTickComplete` 周期 prune 过期 lease,disconnect 时
+    drop 当前 channel 持有的全部 lease。Reviver 通过
+    `--revive-leader-lock-mode machined` 切到分布式模式;
+    `--revive-leader-lock-ttl-ms` (默认 8s)和 `--revive-leader-lock-renew-ms`
+    (默认 3s)控制 renew 节奏,`--revive-leader-lock-failure-threshold` 控制
+    连续 renew 失败后主动放弃 leadership 的次数。
+  跨机器集群仍需要 machined 本身的可用性 — machined HA 不在 Phase 13
+  范围内,如果 machined 单点掉电,所有 Reviver 都失去 leader,但只要
+  machined 恢复,Reviver 会自动重新竞争。
 - 异常检测已有 machined death 通知、CellAppMgr direct heartbeat、manager
   watcher health、Reviver 本机 PID liveness 和 registry audit；跨机器误判
   防护仍依赖外部 leader lock / 共享状态方案。
@@ -339,15 +349,12 @@ live 回归优先覆盖 CellAppMgr abnormal shutdown、`--cycles` 多轮接管�
 
 ## 后续工作
 
-1. 为 Reviver 接入外部 leader lock,覆盖跨机器双 Reviver 场景。
-2. 为 DBAppMgr 定义多 DBApp registry、分片策略、故障转移和 pending request 恢复。
-3. 评估 CellAppMgr / BaseAppMgr snapshot 的共享存储 / WAL 方案,进一步缩小
+1. 为 DBAppMgr 定义多 DBApp registry、分片策略、故障转移和 pending request 恢复。
+2. 评估 CellAppMgr / BaseAppMgr snapshot 的共享存储 / WAL 方案,进一步缩小
    本地文件丢失窗口。
-4. 扩大 Manager HA live cluster fault-injection 矩阵,覆盖跨机器 Reviver、
-   snapshot 共享存储和更大规模 continued LB,并把 BaseAppMgr live takeover
-   纳入 CI baseline。
-5. 把 CellAppMgr / BaseAppMgr 共用的 snapshot envelope helper 抽到
-   `src/lib/server/snapshot_envelope.h`(目前是 inline copy)。
+3. 扩大 Manager HA live cluster fault-injection 矩阵,覆盖跨机器 Reviver
+   (machined-mode lease)、snapshot 共享存储和更大规模 continued LB,并把
+   BaseAppMgr live takeover 纳入 CI baseline。
 
 ## 验证基线
 
