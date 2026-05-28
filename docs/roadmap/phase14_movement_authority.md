@@ -30,11 +30,6 @@ position history 都已落地。当前重心是协议边界硬化、验证矩阵
 - 验证后翻默认值到 ON；同时把 FetchContent 从 `GIT_TAG v5.2.0` 切到
   `URL + SHA256` 锁版本。
 
-**M3**：Backend Parity quick gate 上 CI。
-- 实装 [`backend_parity_testing.md`](../physics/backend_parity_testing.md) PR #1–#3。
-- Flat ↔ Static ↔ Jolt 在 5 个必备场景上 quick 档通过。
-- 每个 PR 自动跑；红就阻断。
-
 **M4**：Static mesh 最小切片。
 - Collision asset schema v2：mesh triangle list，JSON metadata + `.bin` side-car。
 - Jolt 加载 mesh shape；手写 `.collision.json` + `.bin` 跑通。

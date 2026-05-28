@@ -59,6 +59,7 @@ endfunction()
 
 add_subdirectory(unit)
 add_subdirectory(integration)
+add_subdirectory(parity)
 
 if(ATLAS_BUILD_CSHARP)
   add_subdirectory(csharp)
