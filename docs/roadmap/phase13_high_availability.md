@@ -336,6 +336,13 @@ live 回归优先覆盖 CellAppMgr abnormal shutdown、`--cycles` 多轮接管�
   multi-target 端到端验证**。F1 multi-target 重构后两个 target 走同一份
   代码路径(ManagedTarget 参数化),回归风险低;留待 Phase 15
   DBAppMgr 实现时,在三 target 上一起补 process 级集成测试。
+- `run_world_stress.py` 的 lease 模式 CLI(`--reviver-leader-lock-mode` /
+  `--reviver-leader-lock-ttl-ms` / `--reviver-leader-lock-renew-ms`)和
+  对应 `test_run_world_stress.py` 单测已在工作树就位且 P1-3 live
+  baseline 跑通过,但同一文件累积了 Phase 14 movement watcher 等其他
+  跨 phase 未提交工作 — 受 hunk 交织无法独立 commit,等
+  `run_world_stress.py` 主体提交时一起入库。短期 verify 跑跨机
+  cluster 时仍可在工作树本地使用。
 - BaseApp crash 后的客户端 session resume 尚未实现；当前仍走重新登录路径。
 - CellApp 实体恢复已有 live smoke、多轮目标规模、恢复量、恢复耗时和
   payload / Ghost backup / promote 覆盖率基线；更大规模跨机器 fault-injection
