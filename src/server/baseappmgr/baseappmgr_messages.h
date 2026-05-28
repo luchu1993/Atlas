@@ -51,18 +51,20 @@ struct RegisterBaseAppAck {
   bool success{false};
   uint32_t app_id{0};
   uint64_t game_time{0};
-  // Monotonic per-mgr-process generation; BaseApp uses it to reject
-  // stale-mgr messages after a Reviver-driven takeover.
+  // Reviver uses this through HealthProbeAck to detect mgr restarts;
+  // BaseApp logs it for ops attribution.
   uint64_t mgr_generation{0};
 
   static auto Descriptor() -> const MessageDesc& {
-    static const MessageDesc kDesc{
-        msg_id::Id(msg_id::BaseAppMgr::kRegisterBaseAppAck),
-        "baseappmgr::RegisterBaseAppAck",
-        MessageLengthStyle::kFixed,
-        static_cast<int>(sizeof(uint8_t) + sizeof(uint32_t) + 2 * sizeof(uint64_t)),
-        MessageReliability::kReliable,
-        MessageUrgency::kImmediate};
+    // kVariable so future field additions ride a packed-length prefix
+    // and old/new peers can deserialize within capability — kFixed bit us
+    // when mgr_generation was bolted on (size jumped 13 -> 21).
+    static const MessageDesc kDesc{msg_id::Id(msg_id::BaseAppMgr::kRegisterBaseAppAck),
+                                   "baseappmgr::RegisterBaseAppAck",
+                                   MessageLengthStyle::kVariable,
+                                   -1,
+                                   MessageReliability::kReliable,
+                                   MessageUrgency::kImmediate};
     return kDesc;
   }
 
@@ -211,11 +213,13 @@ struct HealthProbeAck {
   bool snapshot_save_stale{false};
 
   static auto Descriptor() -> const MessageDesc& {
-    constexpr int kSerializedSize = static_cast<int>(5 * sizeof(uint64_t) + 2);
+    // kVariable so future fields ride a packed-length prefix; see
+    // RegisterBaseAppAck for the rationale (the v2 mgr_generation bolt-on
+    // already proved kFixed breaks every time a field appears).
     static const MessageDesc kDesc{msg_id::Id(msg_id::BaseAppMgr::kHealthProbeAck),
                                    "baseappmgr::HealthProbeAck",
-                                   MessageLengthStyle::kFixed,
-                                   kSerializedSize,
+                                   MessageLengthStyle::kVariable,
+                                   -1,
                                    MessageReliability::kReliable,
                                    MessageUrgency::kImmediate};
     return kDesc;
