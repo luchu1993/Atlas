@@ -231,7 +231,7 @@ TEST(CollisionAsset, V1AssetStillLoadsAfterVersionBump) {
   EXPECT_EQ(asset->version, 1u);
 }
 
-TEST(CollisionAsset, CacheRoundTripV1) {
+TEST(CollisionAsset, CacheRoundTripBoxesPlanes) {
   const std::string source_hash = "unit";
   auto bytes = WriteCollisionCacheBytes(kValidAsset, {}, source_hash);
   auto asset = LoadCollisionAssetFromCacheBytes(std::span<const std::byte>(bytes));
@@ -242,7 +242,7 @@ TEST(CollisionAsset, CacheRoundTripV1) {
   EXPECT_TRUE(asset->meshes.empty());
 }
 
-TEST(CollisionAsset, CacheRoundTripV2WithMesh) {
+TEST(CollisionAsset, CacheRoundTripWithMesh) {
   const auto mesh_buffer = MakeQuadMeshBuffer();
   constexpr const char* kJson = R"({
     "version": 2,
@@ -262,6 +262,51 @@ TEST(CollisionAsset, CacheRoundTripV2WithMesh) {
   ASSERT_EQ(asset->meshes.size(), 1u);
   EXPECT_EQ(asset->meshes[0].vertices.size(), 4u);
   EXPECT_EQ(asset->meshes[0].indices.size(), 6u);
+}
+
+TEST(CollisionAsset, CacheRoundTripCarriesStampAndCookedBlob) {
+  const uint64_t stamp = 0x05020001ULL << 24 | 0x000123ULL;
+  const std::vector<std::byte> cooked = {std::byte{0xDE}, std::byte{0xAD},
+                                          std::byte{0xBE}, std::byte{0xEF}};
+  auto bytes = WriteCollisionCacheBytes(kValidAsset, {}, "unit", stamp,
+                                         std::span<const std::byte>(cooked));
+  auto loaded = LoadCollisionCacheFromBytes(std::span<const std::byte>(bytes));
+  ASSERT_TRUE(loaded.HasValue()) << loaded.Error().Message();
+  EXPECT_EQ(loaded->jolt_version_stamp, stamp);
+  ASSERT_EQ(loaded->cooked.size(), cooked.size());
+  EXPECT_EQ(std::memcmp(loaded->cooked.data(), cooked.data(), cooked.size()), 0);
+  EXPECT_EQ(loaded->asset.boxes.size(), 1u);
+}
+
+TEST(CollisionAsset, CacheLoadsLegacyV1Layout) {
+  // Hand-rolled v1 layout: 16-byte header (magic + ver=1 + uint32 stamp + hashlen),
+  // then hash + json_len + json + bin_len + bin. No cooked section.
+  const std::string source_hash = "unit";
+  const std::string json(kValidAsset);
+  std::vector<std::byte> bytes;
+  const std::array<char, 4> magic{'A', 'C', 'A', 'C'};
+  bytes.insert(bytes.end(), reinterpret_cast<const std::byte*>(magic.data()),
+               reinterpret_cast<const std::byte*>(magic.data()) + 4);
+  auto append_u32 = [&](uint32_t v) {
+    const auto* p = reinterpret_cast<const std::byte*>(&v);
+    bytes.insert(bytes.end(), p, p + sizeof(v));
+  };
+  append_u32(1u);  // cache_version
+  append_u32(0u);  // jolt_version_stamp (v1: uint32)
+  append_u32(static_cast<uint32_t>(source_hash.size()));
+  bytes.insert(bytes.end(), reinterpret_cast<const std::byte*>(source_hash.data()),
+               reinterpret_cast<const std::byte*>(source_hash.data()) + source_hash.size());
+  append_u32(static_cast<uint32_t>(json.size()));
+  bytes.insert(bytes.end(), reinterpret_cast<const std::byte*>(json.data()),
+               reinterpret_cast<const std::byte*>(json.data()) + json.size());
+  append_u32(0u);  // bin_len = 0
+
+  auto loaded = LoadCollisionCacheFromBytes(std::span<const std::byte>(bytes));
+  ASSERT_TRUE(loaded.HasValue()) << loaded.Error().Message();
+  EXPECT_EQ(loaded->jolt_version_stamp, 0u);
+  EXPECT_TRUE(loaded->cooked.empty());
+  EXPECT_EQ(loaded->asset.source_hash, source_hash);
+  EXPECT_EQ(loaded->asset.boxes.size(), 1u);
 }
 
 TEST(CollisionAsset, CacheRejectsBadMagic) {

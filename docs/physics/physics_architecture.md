@@ -158,22 +158,24 @@ Space 可通过 collision asset 安装自己的 Static query；手工替换 quer
 `CellServerEntity.LoadCollisionAsset(spaceId, path)` 给既有 Space 装载同一资源。
 heightfield、material、volume 和 chunk 仍属于后续导出 / cook 阶段。
 
-**Cooked cache** (M5)：`atlas_tool cook_collision <input.collision.json>` 会把
+**Cooked cache** (M5+)：`atlas_tool cook_collision <input.collision.json>` 把
 source JSON + side-car bin 打成单个 `.collisioncache` 文件，便于部署只下发
-cache 而不下发源资产。Header 布局：
+cache 而不下发源资产。当前 layout v2：
 
 ```text
 bytes 0..3    magic 'A','C','A','C'
-bytes 4..7    uint32 cache_version (kCollisionCacheVersion = 1)
-bytes 8..11   uint32 jolt_version_stamp (M5b 接入 Jolt 形状预 cook 时启用)
-bytes 12..15  uint32 source_hash_len
+bytes 4..7    uint32 cache_version (kCollisionCacheVersion = 2)
+bytes 8..15   uint64 jolt_version_stamp (M5b: JoltPhysicsQuery::CurrentJoltStamp())
+bytes 16..19  uint32 source_hash_len
 然后          source_hash + (uint32 json_len + json) + (uint32 bin_len + bin)
+                + (uint32 cooked_len + Jolt MeshShape::SaveBinaryState bytes)
 ```
 
-`LoadCollisionAssetFromCacheFile` 校验 magic / cache_version / 头尾一致性；
-mismatch 直接 error，**不** silent fallback。M5 stage 只打包 source；M5b
-会在 cache 里追加 Jolt 形状预 cook 的二进制（`Shape::SaveBinaryState`），
-那时 `jolt_version_stamp` 才参与失效判定。
+`LoadCollisionCacheFromFile` 校验 magic / cache_version / 头尾一致性，并
+返回 `LoadedCollisionCache{asset, jolt_version_stamp, cooked}` 三件套；
+mismatch 直接 error，**不** silent fallback。Reader 也接受 v1 layout
+（stamp 字段为 uint32、无 cooked section）以便老 cache 仍能识别——升级到
+真正用 cooked blob 加载的语义在 M5b B2 接入 stamp 校验时启用。
 
 cache 可删除、可重建、可因版本不匹配失效。
 

@@ -27,8 +27,8 @@ inline constexpr uint32_t kCollisionMeshBufferVersion = 1;
 inline constexpr std::size_t kCollisionMeshBufferHeaderBytes = 8;
 
 inline constexpr std::array<char, 4> kCollisionCacheMagic{'A', 'C', 'A', 'C'};
-inline constexpr uint32_t kCollisionCacheVersion = 1;
-inline constexpr std::size_t kCollisionCacheHeaderBytes = 16;
+inline constexpr uint32_t kCollisionCacheVersion = 2;
+inline constexpr std::size_t kCollisionCacheHeaderBytes = 20;
 
 struct MeshGeometry {
   std::vector<math::Vector3> vertices;
@@ -43,6 +43,12 @@ struct CollisionAsset {
   std::vector<StaticBox> boxes;
   std::vector<StaticPlane> planes;
   std::vector<MeshGeometry> meshes;
+};
+
+struct LoadedCollisionCache {
+  CollisionAsset asset;
+  uint64_t jolt_version_stamp{0};
+  std::vector<std::byte> cooked;
 };
 
 [[nodiscard]] auto LoadCollisionAssetFromJson(std::string_view json)
@@ -64,11 +70,17 @@ struct CollisionAsset {
 
 [[nodiscard]] auto WriteCollisionCacheBytes(std::string_view source_json,
                                             std::span<const std::byte> source_bin,
-                                            std::string_view source_hash)
+                                            std::string_view source_hash,
+                                            uint64_t jolt_version_stamp = 0,
+                                            std::span<const std::byte> cooked = {})
     -> std::vector<std::byte>;
 [[nodiscard]] auto WriteCollisionCacheToFile(const std::filesystem::path& source_json_path,
                                               const std::filesystem::path& cache_path)
     -> Result<void>;
+[[nodiscard]] auto LoadCollisionCacheFromBytes(std::span<const std::byte> bytes)
+    -> Result<LoadedCollisionCache>;
+[[nodiscard]] auto LoadCollisionCacheFromFile(const std::filesystem::path& path)
+    -> Result<LoadedCollisionCache>;
 [[nodiscard]] auto LoadCollisionAssetFromCacheBytes(std::span<const std::byte> bytes)
     -> Result<CollisionAsset>;
 [[nodiscard]] auto LoadCollisionAssetFromCacheFile(const std::filesystem::path& path)

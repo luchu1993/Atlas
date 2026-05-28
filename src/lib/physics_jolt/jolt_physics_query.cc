@@ -2,8 +2,15 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstring>
+#include <format>
+#include <sstream>
+#include <string>
+#include <string_view>
 
 #include <Jolt/Jolt.h>
+#include <Jolt/Core/Core.h>
+#include <Jolt/Core/StreamWrapper.h>
 #include <Jolt/Core/TempAllocator.h>
 #include <Jolt/Physics/PhysicsSystem.h>
 #include <Jolt/Physics/Body/BodyCreationSettings.h>
@@ -168,6 +175,79 @@ void JoltPhysicsQuery::AddMesh(std::span<const math::Vector3> vertices,
 
 void JoltPhysicsQuery::Clear() {
   impl_ = std::make_unique<Impl>();
+}
+
+auto JoltPhysicsQuery::CookMeshShape(std::span<const math::Vector3> vertices,
+                                     std::span<const uint32_t> indices)
+    -> Result<std::vector<std::byte>> {
+  if (vertices.empty() || indices.size() < 3 || (indices.size() % 3) != 0) {
+    return Error{ErrorCode::kInvalidArgument,
+                 "CookMeshShape: vertices empty or index count not multiple of 3"};
+  }
+
+  JPH::VertexList jolt_vertices;
+  jolt_vertices.reserve(vertices.size());
+  for (const auto& v : vertices) jolt_vertices.emplace_back(v.x, v.y, v.z);
+
+  JPH::IndexedTriangleList jolt_tris;
+  jolt_tris.reserve(indices.size() / 3);
+  for (std::size_t i = 0; i + 2 < indices.size(); i += 3) {
+    if (indices[i] >= vertices.size() || indices[i + 1] >= vertices.size() ||
+        indices[i + 2] >= vertices.size()) {
+      return Error{ErrorCode::kInvalidArgument,
+                   "CookMeshShape: index out of vertex range"};
+    }
+    jolt_tris.emplace_back(indices[i], indices[i + 1], indices[i + 2]);
+  }
+
+  JPH::MeshShapeSettings shape_settings(std::move(jolt_vertices), std::move(jolt_tris));
+  shape_settings.SetEmbedded();
+  auto shape_result = shape_settings.Create();
+  if (shape_result.HasError()) {
+    return Error{ErrorCode::kInvalidArgument,
+                 std::format("CookMeshShape: Jolt MeshShape::Create failed: {}",
+                             std::string_view(shape_result.GetError().c_str(),
+                                              shape_result.GetError().size()))};
+  }
+
+  std::ostringstream stream(std::ios::binary);
+  JPH::StreamOutWrapper writer(stream);
+  shape_result.Get()->SaveBinaryState(writer);
+  const auto bytes = stream.str();
+  std::vector<std::byte> out(bytes.size());
+  std::memcpy(out.data(), bytes.data(), bytes.size());
+  return out;
+}
+
+auto JoltPhysicsQuery::AddCookedMeshShape(std::span<const std::byte> cooked,
+                                          ObjectLayer /*layer*/) -> Result<void> {
+  if (cooked.empty()) {
+    return Error{ErrorCode::kInvalidArgument, "AddCookedMeshShape: empty blob"};
+  }
+
+  std::string buffer(reinterpret_cast<const char*>(cooked.data()), cooked.size());
+  std::istringstream stream(std::move(buffer), std::ios::binary);
+  JPH::StreamInWrapper reader(stream);
+
+  auto restored = JPH::Shape::sRestoreFromBinaryState(reader);
+  if (restored.HasError()) {
+    return Error{ErrorCode::kInvalidArgument,
+                 std::format("AddCookedMeshShape: restore failed: {}",
+                             std::string_view(restored.GetError().c_str(),
+                                              restored.GetError().size()))};
+  }
+
+  JPH::BodyCreationSettings bcs(restored.Get(), JPH::RVec3::sZero(),
+                                JPH::Quat::sIdentity(), JPH::EMotionType::Static,
+                                kStaticObjectLayer);
+  impl_->system.GetBodyInterface().CreateAndAddBody(bcs, JPH::EActivation::DontActivate);
+  impl_->needs_optimize = true;
+  return {};
+}
+
+auto JoltPhysicsQuery::CurrentJoltStamp() -> uint64_t {
+  using JPH::uint64;
+  return static_cast<uint64_t>(JPH_VERSION_ID);
 }
 
 auto JoltPhysicsQuery::GroundProbe(const GroundProbeQuery& query) const -> GroundHit {

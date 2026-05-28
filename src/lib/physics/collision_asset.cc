@@ -378,6 +378,10 @@ void AppendUint32(std::vector<std::byte>& out, uint32_t v) {
   AppendBytes(out, &v, sizeof(v));
 }
 
+void AppendUint64(std::vector<std::byte>& out, uint64_t v) {
+  AppendBytes(out, &v, sizeof(v));
+}
+
 [[nodiscard]] auto ReadUint32(std::span<const std::byte> bytes, std::size_t& cursor,
                               std::string_view what) -> Result<uint32_t> {
   if (cursor + sizeof(uint32_t) > bytes.size()) {
@@ -389,23 +393,40 @@ void AppendUint32(std::vector<std::byte>& out, uint32_t v) {
   return v;
 }
 
+[[nodiscard]] auto ReadUint64(std::span<const std::byte> bytes, std::size_t& cursor,
+                              std::string_view what) -> Result<uint64_t> {
+  if (cursor + sizeof(uint64_t) > bytes.size()) {
+    return Invalid(std::format("cache: truncated reading {}", what));
+  }
+  uint64_t v = 0;
+  std::memcpy(&v, bytes.data() + cursor, sizeof(v));
+  cursor += sizeof(v);
+  return v;
+}
+
 }  // namespace
 
 auto WriteCollisionCacheBytes(std::string_view source_json,
                               std::span<const std::byte> source_bin,
-                              std::string_view source_hash) -> std::vector<std::byte> {
+                              std::string_view source_hash,
+                              uint64_t jolt_version_stamp,
+                              std::span<const std::byte> cooked)
+    -> std::vector<std::byte> {
   std::vector<std::byte> out;
   out.reserve(kCollisionCacheHeaderBytes + source_hash.size() + sizeof(uint32_t) +
-              source_json.size() + sizeof(uint32_t) + source_bin.size());
+              source_json.size() + sizeof(uint32_t) + source_bin.size() +
+              sizeof(uint32_t) + cooked.size());
   AppendBytes(out, kCollisionCacheMagic.data(), 4);
   AppendUint32(out, kCollisionCacheVersion);
-  AppendUint32(out, 0);  // jolt_version_stamp reserved; see physics_architecture.md §4.2
+  AppendUint64(out, jolt_version_stamp);
   AppendUint32(out, static_cast<uint32_t>(source_hash.size()));
   AppendBytes(out, source_hash.data(), source_hash.size());
   AppendUint32(out, static_cast<uint32_t>(source_json.size()));
   AppendBytes(out, source_json.data(), source_json.size());
   AppendUint32(out, static_cast<uint32_t>(source_bin.size()));
   if (!source_bin.empty()) AppendBytes(out, source_bin.data(), source_bin.size());
+  AppendUint32(out, static_cast<uint32_t>(cooked.size()));
+  if (!cooked.empty()) AppendBytes(out, cooked.data(), cooked.size());
   return out;
 }
 
@@ -432,10 +453,10 @@ auto WriteCollisionCacheToFile(const std::filesystem::path& source_json_path,
   return fs::WriteFile(cache_path, std::span<const std::byte>(bytes));
 }
 
-auto LoadCollisionAssetFromCacheBytes(std::span<const std::byte> bytes)
-    -> Result<CollisionAsset> {
-  if (bytes.size() < kCollisionCacheHeaderBytes) {
-    return Invalid("cache: shorter than 16-byte header");
+auto LoadCollisionCacheFromBytes(std::span<const std::byte> bytes)
+    -> Result<LoadedCollisionCache> {
+  if (bytes.size() < 8) {
+    return Invalid("cache: shorter than 8-byte magic/version header");
   }
   if (std::memcmp(bytes.data(), kCollisionCacheMagic.data(), 4) != 0) {
     return Invalid("cache: magic mismatch (expected 'ACAC')");
@@ -443,14 +464,22 @@ auto LoadCollisionAssetFromCacheBytes(std::span<const std::byte> bytes)
   std::size_t cursor = 4;
   auto cache_version = ReadUint32(bytes, cursor, "cache_version");
   if (!cache_version) return cache_version.Error();
-  if (*cache_version != kCollisionCacheVersion) {
+  if (*cache_version != 1u && *cache_version != kCollisionCacheVersion) {
     return Error{ErrorCode::kNotSupported,
-                 std::format("cache: version {} not supported (expected {}), re-cook",
+                 std::format("cache: version {} not supported (expected 1 or {}), re-cook",
                              *cache_version, kCollisionCacheVersion)};
   }
-  // jolt_version_stamp is reserved; any value loads today.
-  auto jolt_stamp = ReadUint32(bytes, cursor, "jolt_version_stamp");
-  if (!jolt_stamp) return jolt_stamp.Error();
+
+  uint64_t jolt_stamp = 0;
+  if (*cache_version == 1u) {
+    auto stamp32 = ReadUint32(bytes, cursor, "jolt_version_stamp");
+    if (!stamp32) return stamp32.Error();
+    jolt_stamp = *stamp32;
+  } else {
+    auto stamp64 = ReadUint64(bytes, cursor, "jolt_version_stamp");
+    if (!stamp64) return stamp64.Error();
+    jolt_stamp = *stamp64;
+  }
 
   auto hash_len = ReadUint32(bytes, cursor, "source_hash_len");
   if (!hash_len) return hash_len.Error();
@@ -476,6 +505,17 @@ auto LoadCollisionAssetFromCacheBytes(std::span<const std::byte> bytes)
   std::span<const std::byte> bin_view(bytes.data() + cursor, *bin_len);
   cursor += *bin_len;
 
+  std::vector<std::byte> cooked;
+  if (*cache_version >= 2u) {
+    auto cooked_len = ReadUint32(bytes, cursor, "cooked_len");
+    if (!cooked_len) return cooked_len.Error();
+    if (cursor + *cooked_len > bytes.size()) {
+      return Invalid("cache: truncated reading cooked bytes");
+    }
+    cooked.assign(bytes.data() + cursor, bytes.data() + cursor + *cooked_len);
+    cursor += *cooked_len;
+  }
+
   auto asset = LoadCollisionAssetImpl(json_view, bin_view);
   if (!asset) return asset.Error();
   if (asset->source_hash != source_hash) {
@@ -484,7 +524,21 @@ auto LoadCollisionAssetFromCacheBytes(std::span<const std::byte> bytes)
         "cache is corrupt",
         source_hash, asset->source_hash));
   }
-  return asset;
+  return LoadedCollisionCache{std::move(*asset), jolt_stamp, std::move(cooked)};
+}
+
+auto LoadCollisionCacheFromFile(const std::filesystem::path& path)
+    -> Result<LoadedCollisionCache> {
+  auto bytes = fs::ReadFile(path);
+  if (!bytes) return bytes.Error();
+  return LoadCollisionCacheFromBytes(std::span<const std::byte>(*bytes));
+}
+
+auto LoadCollisionAssetFromCacheBytes(std::span<const std::byte> bytes)
+    -> Result<CollisionAsset> {
+  auto loaded = LoadCollisionCacheFromBytes(bytes);
+  if (!loaded) return loaded.Error();
+  return std::move(loaded->asset);
 }
 
 auto LoadCollisionAssetFromCacheFile(const std::filesystem::path& path)

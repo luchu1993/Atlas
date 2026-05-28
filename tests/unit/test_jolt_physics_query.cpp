@@ -210,6 +210,63 @@ TEST(JoltPhysicsQuery, MeshRaycastHitsTriangleAtKnownDepth) {
   jolt::Shutdown();
 }
 
+TEST(JoltPhysicsQuery, CookedMeshShapeRoundTripMatchesAddMesh) {
+  jolt::Initialize();
+  const math::Vector3 verts[] = {
+      {-5.0f, 0.0f, -5.0f},
+      { 5.0f, 0.0f, -5.0f},
+      { 5.0f, 0.0f,  5.0f},
+      {-5.0f, 0.0f,  5.0f},
+  };
+  const uint32_t indices[] = {0, 2, 1, 0, 3, 2};
+
+  auto cooked = JoltPhysicsQuery::CookMeshShape(verts, indices);
+  ASSERT_TRUE(cooked.HasValue()) << cooked.Error().Message();
+  ASSERT_FALSE(cooked->empty());
+
+  JoltPhysicsQuery query;
+  auto added = query.AddCookedMeshShape(*cooked, 0);
+  ASSERT_TRUE(added.HasValue()) << added.Error().Message();
+
+  RaycastQuery rq;
+  rq.origin = {0.0f, 10.0f, 0.0f};
+  rq.direction = {0.0f, -1.0f, 0.0f};
+  rq.max_distance_m = 100.0f;
+  auto hit = query.Raycast(rq);
+  ASSERT_TRUE(hit.hit);
+  EXPECT_NEAR(hit.distance_m, 10.0f, 1e-2f);
+  EXPECT_NEAR(hit.normal.y, 1.0f, 1e-2f);
+
+  jolt::Shutdown();
+}
+
+TEST(JoltPhysicsQuery, CookMeshShapeRejectsBadIndices) {
+  const math::Vector3 verts[] = {{0.0f, 0.0f, 0.0f}, {1.0f, 0.0f, 0.0f},
+                                  {0.0f, 0.0f, 1.0f}};
+  const uint32_t bad[] = {0, 1, 99};
+  auto cooked = JoltPhysicsQuery::CookMeshShape(verts, bad);
+  ASSERT_FALSE(cooked.HasValue());
+  EXPECT_EQ(cooked.Error().Code(), ErrorCode::kInvalidArgument);
+}
+
+TEST(JoltPhysicsQuery, AddCookedMeshShapeRejectsEmptyBlob) {
+  jolt::Initialize();
+  JoltPhysicsQuery query;
+  std::vector<std::byte> empty;
+  auto added = query.AddCookedMeshShape(std::span<const std::byte>(empty), 0);
+  ASSERT_FALSE(added.HasValue());
+  EXPECT_EQ(added.Error().Code(), ErrorCode::kInvalidArgument);
+  jolt::Shutdown();
+}
+
+TEST(JoltPhysicsQuery, CurrentJoltStampEncodesVersion) {
+  // High 24 bits carry feature bits; the low 32 hold MAJOR<<16 | MINOR<<8 | PATCH.
+  const uint64_t stamp = JoltPhysicsQuery::CurrentJoltStamp();
+  const uint32_t version_part = static_cast<uint32_t>(stamp & 0xFFFFFFu);
+  EXPECT_EQ((version_part >> 16) & 0xFFu, 5u);
+  EXPECT_EQ((version_part >> 8) & 0xFFu, 2u);
+}
+
 // End-to-end: movement_sim::Step drives the capsule through PhysicsCharacterQuery
 // onto a box top, registers grounded.
 TEST(JoltPhysicsQuery, MovementStepFallsOntoBoxAndGrounds) {
