@@ -1128,5 +1128,21 @@ class CycleSummaryTest(unittest.TestCase):
         self.assertFalse(scheduled_gate["ok"])
 
 
+class IsPidAliveTest(unittest.TestCase):
+    def test_rejects_non_positive_pid(self) -> None:
+        self.assertFalse(verify_cellapp_rehome.is_pid_alive(0))
+        self.assertFalse(verify_cellapp_rehome.is_pid_alive(-1))
+
+    def test_detects_current_process_as_alive(self) -> None:
+        import os
+        self.assertTrue(verify_cellapp_rehome.is_pid_alive(os.getpid()))
+
+    def test_detects_definitely_dead_pid(self) -> None:
+        # 0x7FFFFFFE is well above any plausible live PID on either platform;
+        # used as a dead-PID sentinel — if the harness ever assigns this we'll
+        # see a false positive in the test, easy to bump.
+        self.assertFalse(verify_cellapp_rehome.is_pid_alive(0x7FFFFFFE))
+
+
 if __name__ == "__main__":
     unittest.main()

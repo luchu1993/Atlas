@@ -4,6 +4,8 @@
 from __future__ import annotations
 
 import argparse
+import errno
+import os
 import platform
 import re
 import subprocess
@@ -332,6 +334,29 @@ def int_watcher(exe: Path, machined: str, target: str, path: str) -> int:
 
 def shutdown_process(exe: Path, machined: str, target: str, reason: int) -> None:
     run_atlas_tool(exe, machined, "shutdown", target, str(reason))
+
+
+def is_pid_alive(pid: int) -> bool:
+    # machined dropping a target from its registry only proves the process
+    # disconnected; a wedged cellapp can still hold its port / lock / lease.
+    if pid <= 0:
+        return False
+    if platform.system() == "Windows":
+        try:
+            out = subprocess.run(
+                ["tasklist", "/NH", "/FO", "CSV", "/FI", f"PID eq {pid}"],
+                capture_output=True, text=True, check=True, timeout=5,
+            ).stdout
+        except (subprocess.SubprocessError, OSError):
+            return True  # probe failure → assume alive, force caller retry
+        return f'"{pid}"' in out
+    try:
+        os.kill(pid, 0)
+        return True
+    except OSError as ex:
+        if ex.errno == errno.ESRCH:
+            return False
+        return True  # EPERM / other → process exists but we lack rights
 
 
 def parse_leaf_owners(summary: str) -> dict[int, int]:
@@ -977,6 +1002,10 @@ def run_rehome_cycle(args: argparse.Namespace, exe: Path, cycle_index: int) -> R
     )
     target_name = target["name"]
     target_app_id = app_id_from_process(target, app_ids_by_addr)
+    try:
+        target_pid_int = int(target["pid"])
+    except (TypeError, ValueError) as ex:
+        raise RuntimeError(f"target {target_name} has non-integer pid {target['pid']!r}") from ex
     if leaf_counts.get(target_app_id, 0) == 0:
         raise RuntimeError(f"target app_id={target_app_id} owns no BSP leaves")
     target_entities = entities_by_app.get(target_app_id, 0)
@@ -1089,9 +1118,13 @@ def run_rehome_cycle(args: argparse.Namespace, exe: Path, cycle_index: int) -> R
             )
         )
         count_ok = cellapp_count_after + 1 == before_cellapp_count
-        gone = target_name not in names_after
+        # machined deregister + PID gone are both required: a wedged cellapp can
+        # drop its machined connection while still holding port / lock / lease.
+        pid_alive = is_pid_alive(target_pid_int)
+        gone = (target_name not in names_after) and not pid_alive
         last = (
-            f"cycle={cycle_index} gone={gone} rehomed={rehomed} count_ok={count_ok} "
+            f"cycle={cycle_index} gone={gone} pid_alive={pid_alive} "
+            f"rehomed={rehomed} count_ok={count_ok} "
             f"base_ok={base_ok} cell_ok={cell_ok} volume_ok={volume_ok} "
             f"payload_volume_ok={payload_volume_ok} "
             f"ghost_volume_ok={ghost_volume_ok} "
