@@ -250,6 +250,64 @@ auto JoltPhysicsQuery::CurrentJoltStamp() -> uint64_t {
   return static_cast<uint64_t>(JPH_VERSION_ID);
 }
 
+namespace {
+
+void AppendU32(std::vector<std::byte>& out, uint32_t v) {
+  const auto* p = reinterpret_cast<const std::byte*>(&v);
+  out.insert(out.end(), p, p + sizeof(v));
+}
+
+[[nodiscard]] auto ReadU32(std::span<const std::byte> bytes, std::size_t& cursor,
+                            std::string_view what) -> Result<uint32_t> {
+  if (cursor + sizeof(uint32_t) > bytes.size()) {
+    return Error{ErrorCode::kInvalidArgument,
+                 std::format("cooked-mesh blob: truncated reading {}", what)};
+  }
+  uint32_t v = 0;
+  std::memcpy(&v, bytes.data() + cursor, sizeof(v));
+  cursor += sizeof(v);
+  return v;
+}
+
+}  // namespace
+
+auto JoltPhysicsQuery::CookCollisionMeshes(std::span<const MeshGeometry> meshes)
+    -> Result<std::vector<std::byte>> {
+  std::vector<std::byte> out;
+  AppendU32(out, static_cast<uint32_t>(meshes.size()));
+  for (const auto& mesh : meshes) {
+    auto cooked = CookMeshShape(mesh.vertices, mesh.indices);
+    if (!cooked) return cooked.Error();
+    AppendU32(out, static_cast<uint32_t>(mesh.layer));
+    AppendU32(out, static_cast<uint32_t>(cooked->size()));
+    out.insert(out.end(), cooked->begin(), cooked->end());
+  }
+  return out;
+}
+
+auto JoltPhysicsQuery::RestoreCookedMeshes(std::span<const std::byte> blob)
+    -> Result<std::size_t> {
+  if (blob.empty()) return std::size_t{0};
+  std::size_t cursor = 0;
+  auto count = ReadU32(blob, cursor, "mesh_count");
+  if (!count) return count.Error();
+  for (uint32_t i = 0; i < *count; ++i) {
+    auto layer = ReadU32(blob, cursor, "layer");
+    if (!layer) return layer.Error();
+    auto len = ReadU32(blob, cursor, "blob_len");
+    if (!len) return len.Error();
+    if (cursor + *len > blob.size()) {
+      return Error{ErrorCode::kInvalidArgument,
+                   std::format("cooked-mesh blob: truncated reading shape {}", i)};
+    }
+    std::span<const std::byte> shape_bytes(blob.data() + cursor, *len);
+    auto added = AddCookedMeshShape(shape_bytes, static_cast<ObjectLayer>(*layer));
+    if (!added) return added.Error();
+    cursor += *len;
+  }
+  return static_cast<std::size_t>(*count);
+}
+
 auto JoltPhysicsQuery::GroundProbe(const GroundProbeQuery& query) const -> GroundHit {
   GroundHit out;
   if (!IsFiniteVec(query.origin) || !std::isfinite(query.max_distance_m) ||

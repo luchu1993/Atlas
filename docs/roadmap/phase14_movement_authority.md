@@ -24,11 +24,9 @@ position history 都已落地。当前重心是协议边界硬化、验证矩阵
 
 ### 14.2 Jolt query backend（里程碑）
 
-**M5b**：Jolt 形状预 cook 进 cache。
-- 在 `.collisioncache` 里追加 `Shape::SaveBinaryState` 输出，加载时
-  `RestoreFromBinaryState`，跳过运行时 mesh 构建。
-- 启用 `jolt_version_stamp` 失效判定（jrouwe/JoltPhysics 升版必须 recook）。
-- 加 `atlas_tool recook --invalid` 批量重 cook 失效缓存。
+（M1a / M1b / M1c / M2 / M3 / M4 / M5 / M5b 均已交付，见
+[`phase14_status.md`](phase14_status.md)。后续遇到再做：heightfield、chunking、
+moving platform、ladder、跨 cell 物理。）
 
 ### 14.3 Unity 导出 MVP（里程碑）
 

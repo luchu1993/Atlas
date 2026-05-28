@@ -61,8 +61,21 @@
 - Space 可装载 collision asset 替换本 Space query；Cell C# 脚本可调
   `CellServerEntity.LoadCollisionAsset(spaceId, path)`。
 - `ATLAS_ENABLE_JOLT` 默认 ON；Jolt 5.2.0 通过 FetchContent `URL + SHA256`
-  锁版本拉取，Win debug 下 `test_jolt_physics_query` 11 个 case 与三后端
+  锁版本拉取，Win debug 下 `test_jolt_physics_query` 18 个 case 与三后端
   `test_backend_parity_quick` 通过。Linux 验证留 CI fast-follow。
+- `JoltPhysicsQuery` 暴露 `CookMeshShape` / `AddCookedMeshShape` /
+  `CookCollisionMeshes` / `RestoreCookedMeshes` / `CurrentJoltStamp`，把
+  Jolt `Shape::SaveBinaryState` 二进制写进 `.collisioncache`、加载时
+  `RestoreFromBinaryState` 跳过 BVH 重建。Jolt 类型仍不出
+  `physics_jolt` 边界。
+- `.collisioncache` 格式升到 v2：`uint64 jolt_version_stamp`（=
+  `JPH_VERSION_ID`，含 features/major/minor/patch）+ 末尾 cooked blob
+  section。Reader 兼容 v1 layout（uint32 stamp、无 cooked）作过渡。
+- `atlas_tool cook_collision` 链 `atlas_physics_jolt`，cook 时调
+  `CookCollisionMeshes` 写入真 cooked blob 和当前 stamp，并 reload 校验。
+- `atlas_tool recook --invalid <dir>` 递归扫描 `.collisioncache`，对
+  stamp mismatch / 有 mesh 但 cooked 为空的 cache 自动从同名 source
+  `.collision.json` 重 cook。
 
 ### CharacterMotor
 

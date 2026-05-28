@@ -8,6 +8,7 @@
 
 #include "foundation/error.h"
 #include "math/vector3.h"
+#include "physics/collision_asset.h"
 #include "physics/physics_query.h"
 
 namespace atlas::physics {
@@ -33,6 +34,15 @@ class JoltPhysicsQuery final : public PhysicsQuery {
       -> Result<std::vector<std::byte>>;
   [[nodiscard]] auto AddCookedMeshShape(std::span<const std::byte> cooked,
                                         ObjectLayer layer) -> Result<void>;
+
+  // Cook every mesh in `meshes` into a single opaque blob (layer + Jolt
+  // SaveBinaryState bytes per shape). Empty input → empty blob.
+  [[nodiscard]] static auto CookCollisionMeshes(std::span<const MeshGeometry> meshes)
+      -> Result<std::vector<std::byte>>;
+  // Decode a blob from CookCollisionMeshes and add each shape as a static
+  // body. Returns the number of shapes added.
+  [[nodiscard]] auto RestoreCookedMeshes(std::span<const std::byte> blob)
+      -> Result<std::size_t>;
 
   // Encodes Jolt version + feature bits; any cooked blob produced under a
   // different stamp must be re-cooked before it is safe to restore.

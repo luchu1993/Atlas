@@ -18,6 +18,11 @@
 #include "server/machined_client.h"
 #include "server/server_config.h"
 
+#ifdef ATLAS_ATLAS_TOOL_HAS_JOLT
+#include "physics_jolt/jolt_init.h"
+#include "physics_jolt/jolt_physics_query.h"
+#endif
+
 using namespace atlas;
 using namespace atlas::machined;
 
@@ -39,6 +44,9 @@ static void PrintUsage() {
             << "                         Validate an Atlas collision JSON asset\n"
             << "  dump_collision <path> --obj <path>\n"
             << "                         Write an OBJ debug preview for a collision asset\n"
+            << "  recook --invalid <dir>\n"
+            << "                         Re-cook .collisioncache files in <dir> whose\n"
+            << "                         jolt_version_stamp or cooked blob is stale\n"
             << "\n"
             << "Examples:\n"
             << "  atlas_tool list\n"
@@ -51,7 +59,8 @@ static void PrintUsage() {
             << "  atlas_tool validate_collision maps/test.collision.json\n"
             << "  atlas_tool dump_collision maps/test.collision.json --obj map.obj\n"
             << "  atlas_tool cook_collision maps/test.collision.json\n"
-            << "  atlas_tool cook_collision maps/test.collision.json -o maps/test.collisioncache\n";
+            << "  atlas_tool cook_collision maps/test.collision.json -o maps/test.collisioncache\n"
+            << "  atlas_tool recook --invalid maps/\n";
 }
 
 static auto ParseProcessType(std::string_view name) -> std::optional<ProcessType> {
@@ -223,34 +232,142 @@ static auto CmdDumpCollision(std::string_view input_path, std::string_view obj_p
   return 0;
 }
 
+static auto DefaultCachePath(const std::filesystem::path& src) -> std::filesystem::path {
+  auto out = src;
+  out.replace_extension(".collisioncache");
+  return out;
+}
+
+static auto CookSourceToCache(const std::filesystem::path& src,
+                              const std::filesystem::path& out)
+    -> Result<physics::LoadedCollisionCache> {
+  auto json = fs::ReadTextFile(src);
+  if (!json) return json.Error();
+
+  auto bin_path = src;
+  bin_path.replace_extension(".bin");
+  std::vector<std::byte> bin;
+  if (std::filesystem::exists(bin_path)) {
+    auto bytes = fs::ReadFile(bin_path);
+    if (!bytes) return bytes.Error();
+    bin = std::move(*bytes);
+  }
+
+  auto asset = physics::LoadCollisionAssetFromJson(*json, bin);
+  if (!asset) return asset.Error();
+
+#ifdef ATLAS_ATLAS_TOOL_HAS_JOLT
+  physics::jolt::Initialize();
+  auto cooked = physics::JoltPhysicsQuery::CookCollisionMeshes(asset->meshes);
+  if (!cooked) return cooked.Error();
+  const uint64_t stamp = physics::JoltPhysicsQuery::CurrentJoltStamp();
+  auto bytes = physics::WriteCollisionCacheBytes(*json, bin, asset->source_hash, stamp,
+                                                  std::span<const std::byte>(*cooked));
+#else
+  // Jolt-less build cooks the envelope only; runtime that needs Jolt will refuse it.
+  auto bytes = physics::WriteCollisionCacheBytes(*json, bin, asset->source_hash, 0u, {});
+#endif
+
+  if (auto wr = fs::WriteFile(out, std::span<const std::byte>(bytes)); !wr) {
+    return wr.Error();
+  }
+  return physics::LoadCollisionCacheFromBytes(std::span<const std::byte>(bytes));
+}
+
 static auto CmdCookCollision(std::string_view input_path,
                               std::string_view output_path) -> int {
   std::filesystem::path src(input_path);
-  std::filesystem::path out;
-  if (output_path.empty()) {
-    out = src;
-    out.replace_extension(".collisioncache");
-  } else {
-    out = std::filesystem::path(output_path);
-  }
-  auto result = physics::WriteCollisionCacheToFile(src, out);
-  if (!result) {
-    std::cerr << std::format("cook_collision: {}\n", result.Error().Message());
-    return 1;
-  }
-  // Cross-check by reloading the cache so any header/payload bug surfaces here
-  // rather than only at runtime.
-  auto loaded = physics::LoadCollisionAssetFromCacheFile(out);
+  std::filesystem::path out =
+      output_path.empty() ? DefaultCachePath(src) : std::filesystem::path(output_path);
+
+  auto loaded = CookSourceToCache(src, out);
   if (!loaded) {
-    std::cerr << std::format("cook_collision: cooked file failed verify: {}\n",
-                             loaded.Error().Message());
+    std::cerr << std::format("cook_collision: {}\n", loaded.Error().Message());
     return 1;
   }
   std::cout << std::format(
-      "collision cache written: {} boxes={} planes={} meshes={} source_hash={}\n",
-      out.string(), loaded->boxes.size(), loaded->planes.size(), loaded->meshes.size(),
-      loaded->source_hash);
+      "collision cache written: {} boxes={} planes={} meshes={} cooked_bytes={} "
+      "stamp=0x{:016x} source_hash={}\n",
+      out.string(), loaded->asset.boxes.size(), loaded->asset.planes.size(),
+      loaded->asset.meshes.size(), loaded->cooked.size(), loaded->jolt_version_stamp,
+      loaded->asset.source_hash);
   return 0;
+}
+
+// True iff the cache must be re-cooked under the current toolchain. Caller
+// should already have ensured the file is a readable .collisioncache.
+[[nodiscard]] static auto IsCacheStale(const physics::LoadedCollisionCache& loaded)
+    -> std::optional<std::string> {
+#ifdef ATLAS_ATLAS_TOOL_HAS_JOLT
+  const uint64_t current = physics::JoltPhysicsQuery::CurrentJoltStamp();
+  if (loaded.jolt_version_stamp != current) {
+    return std::format("jolt_version_stamp 0x{:016x} != current 0x{:016x}",
+                       loaded.jolt_version_stamp, current);
+  }
+  if (!loaded.asset.meshes.empty() && loaded.cooked.empty()) {
+    return std::string{"source contains meshes but cache cooked blob is empty"};
+  }
+#else
+  (void)loaded;
+#endif
+  return std::nullopt;
+}
+
+static auto CmdRecookInvalid(std::string_view dir_path) -> int {
+  std::filesystem::path dir(dir_path);
+  if (!std::filesystem::is_directory(dir)) {
+    std::cerr << std::format("recook: {} is not a directory\n", dir.string());
+    return 1;
+  }
+#ifdef ATLAS_ATLAS_TOOL_HAS_JOLT
+  physics::jolt::Initialize();
+#endif
+
+  std::size_t scanned = 0;
+  std::size_t stale = 0;
+  std::size_t recooked = 0;
+  std::size_t failed = 0;
+  for (auto& entry : std::filesystem::recursive_directory_iterator(dir)) {
+    if (!entry.is_regular_file()) continue;
+    if (entry.path().extension() != ".collisioncache") continue;
+    ++scanned;
+
+    auto loaded = physics::LoadCollisionCacheFromFile(entry.path());
+    if (!loaded) {
+      ++failed;
+      std::cerr << std::format("recook: {} unreadable: {}\n", entry.path().string(),
+                                loaded.Error().Message());
+      continue;
+    }
+
+    auto reason = IsCacheStale(*loaded);
+    if (!reason) continue;
+    ++stale;
+
+    // map.collision.collisioncache → map.collision.json
+    auto src = entry.path();
+    src.replace_extension(".json");
+    if (!std::filesystem::exists(src)) {
+      ++failed;
+      std::cerr << std::format("recook: {} stale ({}) but source {} missing\n",
+                                entry.path().string(), *reason, src.string());
+      continue;
+    }
+
+    auto re = CookSourceToCache(src, entry.path());
+    if (!re) {
+      ++failed;
+      std::cerr << std::format("recook: {} cook failed: {}\n", entry.path().string(),
+                                re.Error().Message());
+      continue;
+    }
+    ++recooked;
+    std::cout << std::format("recook: {} ({})\n", entry.path().string(), *reason);
+  }
+  std::cout << std::format(
+      "recook summary: scanned={} stale={} recooked={} failed={}\n", scanned, stale,
+      recooked, failed);
+  return failed == 0 ? 0 : 1;
 }
 
 int main(int argc, char* argv[]) {
@@ -324,6 +441,15 @@ int main(int argc, char* argv[]) {
       return 1;
     }
     return CmdCookCollision(input, output);
+  }
+
+  if (command == "recook") {
+    if (arg_idx + 1 >= argc || std::string_view(argv[arg_idx]) != "--invalid") {
+      std::cerr << "recook requires --invalid <dir>\n";
+      PrintUsage();
+      return 1;
+    }
+    return CmdRecookInvalid(argv[arg_idx + 1]);
   }
 
   EventDispatcher dispatcher;

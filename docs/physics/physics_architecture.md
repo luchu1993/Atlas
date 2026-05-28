@@ -174,8 +174,13 @@ bytes 16..19  uint32 source_hash_len
 `LoadCollisionCacheFromFile` 校验 magic / cache_version / 头尾一致性，并
 返回 `LoadedCollisionCache{asset, jolt_version_stamp, cooked}` 三件套；
 mismatch 直接 error，**不** silent fallback。Reader 也接受 v1 layout
-（stamp 字段为 uint32、无 cooked section）以便老 cache 仍能识别——升级到
-真正用 cooked blob 加载的语义在 M5b B2 接入 stamp 校验时启用。
+（stamp 字段为 uint32、无 cooked section）以便老 cache 仍能识别。
+
+`atlas_tool cook_collision` 会在写 cache 时填入
+`JoltPhysicsQuery::CurrentJoltStamp()` 和 `CookCollisionMeshes` 输出的
+cooked blob；`atlas_tool recook --invalid <dir>` 递归扫描 `.collisioncache`，
+对 stamp 不等于当前 Jolt stamp 或 cooked blob 缺失的 cache 自动重 cook
+（约定 `foo.collision.json` ↔ `foo.collision.collisioncache`）。
 
 cache 可删除、可重建、可因版本不匹配失效。
 

@@ -267,6 +267,62 @@ TEST(JoltPhysicsQuery, CurrentJoltStampEncodesVersion) {
   EXPECT_EQ((version_part >> 8) & 0xFFu, 2u);
 }
 
+TEST(JoltPhysicsQuery, CookCollisionMeshesEmptyInputYieldsHeaderOnly) {
+  auto blob = JoltPhysicsQuery::CookCollisionMeshes({});
+  ASSERT_TRUE(blob.HasValue()) << blob.Error().Message();
+  ASSERT_EQ(blob->size(), sizeof(uint32_t));
+}
+
+TEST(JoltPhysicsQuery, CookCollisionMeshesRoundTripsTwoMeshes) {
+  jolt::Initialize();
+
+  std::vector<MeshGeometry> meshes(2);
+  meshes[0].layer = 3;
+  meshes[0].vertices = {{-5.0f, 0.0f, -5.0f}, {5.0f, 0.0f, -5.0f},
+                         {5.0f, 0.0f, 5.0f}, {-5.0f, 0.0f, 5.0f}};
+  meshes[0].indices = {0, 2, 1, 0, 3, 2};
+  meshes[1].layer = 7;
+  meshes[1].vertices = {{-2.0f, 4.0f, -2.0f}, {2.0f, 4.0f, -2.0f},
+                         {2.0f, 4.0f, 2.0f}, {-2.0f, 4.0f, 2.0f}};
+  meshes[1].indices = {0, 2, 1, 0, 3, 2};
+
+  auto blob = JoltPhysicsQuery::CookCollisionMeshes(meshes);
+  ASSERT_TRUE(blob.HasValue()) << blob.Error().Message();
+
+  JoltPhysicsQuery query;
+  auto restored = query.RestoreCookedMeshes(*blob);
+  ASSERT_TRUE(restored.HasValue()) << restored.Error().Message();
+  EXPECT_EQ(*restored, 2u);
+
+  RaycastQuery rq;
+  rq.origin = {0.0f, 10.0f, 0.0f};
+  rq.direction = {0.0f, -1.0f, 0.0f};
+  rq.max_distance_m = 100.0f;
+  auto hit = query.Raycast(rq);
+  ASSERT_TRUE(hit.hit);
+  EXPECT_NEAR(hit.position.y, 4.0f, 1e-2f);
+
+  jolt::Shutdown();
+}
+
+TEST(JoltPhysicsQuery, RestoreCookedMeshesRejectsTruncatedBlob) {
+  jolt::Initialize();
+  std::vector<MeshGeometry> meshes(1);
+  meshes[0].layer = 0;
+  meshes[0].vertices = {{-1.0f, 0.0f, -1.0f}, {1.0f, 0.0f, -1.0f},
+                         {1.0f, 0.0f, 1.0f}, {-1.0f, 0.0f, 1.0f}};
+  meshes[0].indices = {0, 2, 1, 0, 3, 2};
+  auto blob = JoltPhysicsQuery::CookCollisionMeshes(meshes);
+  ASSERT_TRUE(blob.HasValue());
+  blob->resize(blob->size() / 2);
+
+  JoltPhysicsQuery query;
+  auto restored = query.RestoreCookedMeshes(*blob);
+  ASSERT_FALSE(restored.HasValue());
+  EXPECT_EQ(restored.Error().Code(), ErrorCode::kInvalidArgument);
+  jolt::Shutdown();
+}
+
 // End-to-end: movement_sim::Step drives the capsule through PhysicsCharacterQuery
 // onto a box top, registers grounded.
 TEST(JoltPhysicsQuery, MovementStepFallsOntoBoxAndGrounds) {
