@@ -5,8 +5,14 @@
 #include <cassert>
 #include <chrono>
 #include <cmath>
+#include <cstdint>
+#include <filesystem>
 #include <limits>
 #include <memory>
+#include <span>
+#include <string>
+#include <string_view>
+#include <unordered_map>
 #include <unordered_set>
 #include <utility>
 
@@ -24,6 +30,7 @@
 #include "foundation/profiler.h"
 #include "ghost_maintainer.h"
 #include "intercell_messages.h"
+#include "math/math_types.h"
 #include "math/vector3.h"
 #include "network/channel.h"
 #include "network/event_dispatcher.h"
@@ -35,6 +42,7 @@
 #include "real_entity_data.h"
 #include "server/machined_client.h"
 #include "server/server_config.h"
+#include "server/watcher.h"
 #include "space.h"
 #include "witness.h"
 
@@ -76,19 +84,46 @@ void SaturatingAdd(uint64_t& value, uint64_t delta) {
   value = delta > max - value ? max : value + delta;
 }
 
+auto ClampMovementServerTick(uint64_t game_time) -> uint32_t {
+  return game_time > std::numeric_limits<uint32_t>::max()
+             ? std::numeric_limits<uint32_t>::max()
+             : static_cast<uint32_t>(game_time);
+}
+
 constexpr int32_t kMaxPersistentBlobBytes = 256 * 1024;
 
 using LoadBuckets =
     std::array<uint32_t, cellappmgr::InformCellLoad::CellReport::kLoadBucketCount>;
+using LoadCostBuckets =
+    std::array<uint64_t, cellappmgr::InformCellLoad::CellReport::kLoadBucketCount>;
 
-void IncrementLoadBucket(LoadBuckets& buckets, float value, float min, float max) {
+auto LoadBucketIndex(float value, float min, float max) -> std::size_t {
   constexpr std::size_t kCount = cellappmgr::InformCellLoad::CellReport::kLoadBucketCount;
   std::size_t index = kCount / 2;
   if (std::isfinite(min) && std::isfinite(max) && max > min) {
     const float norm = std::clamp((value - min) / (max - min), 0.f, 0.999999f);
     index = std::min<std::size_t>(static_cast<std::size_t>(norm * kCount), kCount - 1);
   }
+  return index;
+}
+
+void IncrementLoadBucket(LoadBuckets& buckets, float value, float min, float max) {
+  const auto index = LoadBucketIndex(value, min, max);
   if (buckets[index] < std::numeric_limits<uint32_t>::max()) ++buckets[index];
+}
+
+void IncrementLoadCostBucket(LoadCostBuckets& buckets, float value, float min, float max,
+                             uint64_t cost_us) {
+  if (cost_us == 0) return;
+  SaturatingAdd(buckets[LoadBucketIndex(value, min, max)], cost_us);
+}
+
+void AddMovementCommandDestination(
+    std::unordered_map<Address, std::vector<EntityID>>& by_baseapp,
+    const Address& base_addr, EntityID entity_id) {
+  if (base_addr.Ip() == 0 || entity_id == kInvalidEntityID) return;
+  auto& ids = by_baseapp[base_addr];
+  if (std::find(ids.begin(), ids.end(), entity_id) == ids.end()) ids.push_back(entity_id);
 }
 
 }  // namespace
@@ -122,9 +157,29 @@ auto CellApp::CreateNativeProvider() -> std::unique_ptr<INativeApiProvider> {
       });
   provider->SetRemoveSpaceDataFn(
       [this](uint32_t sid, uint16_t kid) { RemoveSpaceData(sid, kid); });
+  provider->SetLoadCollisionAssetFn(
+      [this](uint32_t sid, std::string_view path) { return LoadCollisionAsset(sid, path); });
   provider->SetScriptTickFn([this](uint32_t eid, uint64_t elapsed_us) {
     RecordScriptTick(eid, elapsed_us);
   });
+  provider->SetMovementIntentFn([this](uint32_t eid, float dir_x, float dir_z, float speed_mps,
+                                       uint16_t buttons) {
+    SetMovementIntent(eid, dir_x, dir_z, speed_mps, buttons);
+  });
+  provider->SetMovementCommandFn([this](uint32_t eid,
+                                        const movement::MovementCommand& command) {
+    return SetMovementCommand(eid, command);
+  });
+  provider->SetClearMovementCommandFn(
+      [this](uint32_t eid, uint32_t command_id) {
+        return ClearMovementCommand(eid, command_id);
+      });
+  provider->SetMovementCurveFn(
+      [this](const movement::MovementCurve& curve) { return movement_system_.SetCurve(curve); });
+  provider->SetMovementHistorySampleFn(
+      [this](uint32_t eid, uint32_t tick, NativeMovementHistorySample& out) {
+        return movement_system_.SampleHistory(eid, tick, out);
+      });
   // Typed alias so callers reach CellApp-specific API without a
   // downcast; ScriptApp owns the unique_ptr.
   native_provider_ = provider.get();
@@ -158,9 +213,23 @@ auto CellApp::Init(int argc, char* argv[]) -> bool {
       [this](const Address& src, Channel* ch, const cellapp::ClientCellRpcForward& msg) {
         OnClientCellRpcForward(src, ch, msg);
       });
+  (void)table.RegisterTypedHandler<cellapp::ClientMovementInputForward>(
+      [this](const Address& src, Channel* ch, const cellapp::ClientMovementInputForward& msg) {
+        OnClientMovementInputForward(src, ch, msg);
+      });
   (void)table.RegisterTypedHandler<cellapp::InternalCellRpc>(
       [this](const Address& src, Channel* ch, const cellapp::InternalCellRpc& msg) {
         OnInternalCellRpc(src, ch, msg);
+      });
+  (void)table.RegisterTypedHandler<cellapp::MovementCommandStartBroadcast>(
+      [this](const Address& src, Channel* ch,
+             const cellapp::MovementCommandStartBroadcast& msg) {
+        OnMovementCommandStartBroadcast(src, ch, msg);
+      });
+  (void)table.RegisterTypedHandler<cellapp::MovementCommandEndBroadcast>(
+      [this](const Address& src, Channel* ch,
+             const cellapp::MovementCommandEndBroadcast& msg) {
+        OnMovementCommandEndBroadcast(src, ch, msg);
       });
   (void)table.RegisterTypedHandler<cellapp::ClientRpcBroadcast>(
       [this](const Address& src, Channel* ch, const cellapp::ClientRpcBroadcast& msg) {
@@ -272,31 +341,10 @@ auto CellApp::Init(int argc, char* argv[]) -> bool {
         OnGetEntityIdsAck(*ch, msg);
       });
 
-  // Connect to CellAppMgr on birth and send RegisterCellApp; the
-  // manager replies with RegisterCellAppAck carrying our app_id.
   GetMachinedClient().Subscribe(
-      machined::ListenerType::kBirth, ProcessType::kCellAppMgr,
-      [this](const machined::BirthNotification& n) {
-        if (cellappmgr_channel_ != nullptr) return;
-        auto ch = Network().ConnectRudpNocwnd(n.internal_addr);
-        if (!ch) {
-          ATLAS_LOG_ERROR("CellApp: failed to connect to CellAppMgr at {}:{}", n.internal_addr.Ip(),
-                          n.internal_addr.Port());
-          return;
-        }
-        cellappmgr_channel_ = static_cast<Channel*>(*ch);
-        cellappmgr::RegisterCellApp reg;
-        reg.internal_addr = Network().RudpAddress();
-        if (auto r = cellappmgr_channel_->SendMessage(reg); !r) {
-          // No ack => this CellApp is orphaned (mgr won't route load
-          // queries / offloads to us) until the next reconnect attempt.
-          ATLAS_LOG_WARNING("CellApp: RegisterCellApp send failed to mgr {}: {}",
-                            n.internal_addr.ToString(), r.Error().Message());
-        }
-        ATLAS_LOG_INFO("CellApp: registering with CellAppMgr at {}:{}", n.internal_addr.Ip(),
-                       n.internal_addr.Port());
-      },
-      nullptr);
+      machined::ListenerType::kBoth, ProcessType::kCellAppMgr,
+      [this](const machined::BirthNotification& n) { OnCellAppMgrBirth(n); },
+      [this](const machined::DeathNotification& n) { OnCellAppMgrDeath(n); });
 
   // self_addr filters our own re-broadcast Birth from the peer list.
   // The death hook sweeps Ghosts whose Real lived on the dying peer.
@@ -327,9 +375,8 @@ auto CellApp::Init(int argc, char* argv[]) -> bool {
         dbapp_channel_ = nullptr;
       });
 
-  // Track BaseApp peers so OnClientCellRpcForward can reject spoofed
-  // senders. Addresses only - responses ride the same Channel* the
-  // handler received on.
+  // Track BaseApp peers so Cell RPC forwards can reject spoofed senders.
+  // Responses ride the same Channel* the handler received on.
   GetMachinedClient().Subscribe(
       machined::ListenerType::kBoth, ProcessType::kBaseApp,
       [this](const machined::BirthNotification& n) {
@@ -348,10 +395,74 @@ auto CellApp::Init(int argc, char* argv[]) -> bool {
   return true;
 }
 
+auto CellApp::ShouldReconnectCellAppMgrForBirth(const machined::BirthNotification& n) const
+    -> bool {
+  if (cellappmgr_channel_ == nullptr) return true;
+  if (!(cellappmgr_channel_->RemoteAddress() == n.internal_addr)) return true;
+  if (cellappmgr_pid_ == 0 || n.pid == 0) return true;
+  return cellappmgr_pid_ != n.pid;
+}
+
+void CellApp::ClearCellAppMgrSession() {
+  cellappmgr_channel_ = nullptr;
+  app_id_ = 0;
+  cellappmgr_pid_ = 0;
+}
+
+void CellApp::OnCellAppMgrBirth(const machined::BirthNotification& n) {
+  if (!ShouldReconnectCellAppMgrForBirth(n)) {
+    ATLAS_LOG_DEBUG("CellApp: duplicate CellAppMgr birth ignored pid={} addr={}", n.pid,
+                    n.internal_addr.ToString());
+    return;
+  }
+
+  if (cellappmgr_channel_ != nullptr) {
+    Network().DisconnectChannel(cellappmgr_channel_->RemoteAddress());
+    ClearCellAppMgrSession();
+  }
+
+  auto ch = Network().ConnectRudpNocwnd(n.internal_addr);
+  if (!ch) {
+    ATLAS_LOG_ERROR("CellApp: failed to connect to CellAppMgr at {}:{}", n.internal_addr.Ip(),
+                    n.internal_addr.Port());
+    return;
+  }
+  cellappmgr_channel_ = static_cast<Channel*>(*ch);
+  cellappmgr_pid_ = n.pid;
+
+  cellappmgr::RegisterCellApp reg;
+  reg.internal_addr = Network().RudpAddress();
+  if (auto r = cellappmgr_channel_->SendMessage(reg); !r) {
+    ATLAS_LOG_WARNING("CellApp: RegisterCellApp send failed to mgr {}: {}",
+                      n.internal_addr.ToString(), r.Error().Message());
+  }
+  ATLAS_LOG_INFO("CellApp: registering with CellAppMgr at {}:{}", n.internal_addr.Ip(),
+                 n.internal_addr.Port());
+}
+
+void CellApp::OnCellAppMgrDeath(const machined::DeathNotification& n) {
+  if (cellappmgr_channel_ != nullptr &&
+      !(cellappmgr_channel_->RemoteAddress() == n.internal_addr)) {
+    ATLAS_LOG_DEBUG("CellApp: ignored non-current CellAppMgr death addr={}",
+                    n.internal_addr.ToString());
+    return;
+  }
+  if (cellappmgr_channel_ != nullptr && cellappmgr_channel_->RemoteAddress() == n.internal_addr) {
+    Network().DisconnectChannel(n.internal_addr);
+  }
+  ClearCellAppMgrSession();
+  if (n.reason == 0) {
+    ATLAS_LOG_INFO("CellApp: CellAppMgr death reason={} addr={}", n.reason,
+                   n.internal_addr.ToString());
+  } else {
+    ATLAS_LOG_WARNING("CellApp: CellAppMgr death reason={} addr={}", n.reason,
+                      n.internal_addr.ToString());
+  }
+}
+
 void CellApp::Fini() {
-  // Clear spaces before EntityApp tears down the script engine -
-  // CellEntity destructors touch the Witness (which may publish final
-  // events) and we want that to happen while script state is still alive.
+  // Clear spaces before EntityApp tears down script state; CellEntity
+  // destructors may publish final witness events.
   spaces_.clear();
   entity_population_.clear();
   EntityApp::Fini();
@@ -359,9 +470,8 @@ void CellApp::Fini() {
 
 void CellApp::OnEndOfTick() {
   ATLAS_PROFILE_ZONE_N("CellApp::OnEndOfTick");
-  // Run at tick tail so controllers have committed this frame's
-  // positions. GhostMaintainer first so a just-crossed entity still
-  // has its haunts published before the Offload handoff.
+  // Run at tick tail after controllers commit positions; update ghosts
+  // before offload so a just-crossed entity still publishes haunts.
   TickGhostPump();
   TickOffloadChecker();
   TickOffloadAckTimeouts();
@@ -374,14 +484,15 @@ void CellApp::OnTickComplete() {
   EntityApp::OnTickComplete();
 
   const auto dt_secs = std::chrono::duration_cast<Seconds>(GetGameClock().FrameDelta()).count();
-  TickControllers(static_cast<float>(dt_secs));
+  const float dt = static_cast<float>(dt_secs);
+  movement_system_.Tick(*this, dt);
+  TickControllers(dt);
   TickWitnesses();
   TickBackupPump();
   TickClientBaselinePump();
 
-  // The smoother reads the PREVIOUS tick's work time (set by
-  // ServerApp::AdvanceTime after we return); first-tick-after-boot
-  // reports 0, which CellAppMgr already tolerates.
+  // The smoother reads the previous tick's work time, set by ServerApp.
+  // First tick after boot reports 0, which CellAppMgr tolerates.
   UpdatePersistentLoad();
   SendInformCellLoad();
   MaybeRequestMoreIds();
@@ -390,6 +501,10 @@ void CellApp::OnTickComplete() {
 void CellApp::RegisterWatchers() {
   EntityApp::RegisterWatchers();
   auto& wr = GetWatcherRegistry();
+  wr.Add<uint64_t>("cellapp/ha/accepted_cellappmgr_generation",
+                   std::function<uint64_t()>([this] { return accepted_cellappmgr_generation_; }));
+  wr.Add<uint64_t>("cellapp/ha/cellappmgr_stale_drops",
+                   std::function<uint64_t()>([this] { return cellappmgr_stale_drops_; }));
   wr.Add<float>("cellapp/load", std::function<float()>([this] { return persistent_load_; }));
   wr.Add<uint32_t>("cellapp/real_entity_count",
                    std::function<uint32_t()>([this] { return NumRealEntities(); }));
@@ -406,22 +521,255 @@ void CellApp::RegisterWatchers() {
                    std::function<uint64_t()>([this] {
                      return untrusted_cellapp_messages_total_;
                    }));
+  wr.Add<uint64_t>("cellapp/create_cell_entity_total",
+                   std::function<uint64_t()>([this] {
+                     return create_cell_entity_total_;
+                   }));
+  wr.Add<uint64_t>("cellapp/create_cell_entity_restore_payload_total",
+                   std::function<uint64_t()>([this] {
+                     return create_cell_entity_restore_payload_total_;
+                   }));
+  wr.Add<uint64_t>("cellapp/create_cell_entity_restore_ghost_backup_total",
+                   std::function<uint64_t()>([this] {
+                     return create_cell_entity_restore_ghost_backup_total_;
+                   }));
+  wr.Add<uint64_t>("cellapp/create_cell_entity_restore_empty_total",
+                   std::function<uint64_t()>([this] {
+                     return create_cell_entity_restore_empty_total_;
+                   }));
+  wr.Add<uint64_t>("cellapp/create_cell_entity_failures_total",
+                   std::function<uint64_t()>([this] {
+                     return create_cell_entity_failures_total_;
+                   }));
+  wr.Add<uint64_t>("cellapp/create_cell_entity_death_restore_total",
+                   std::function<uint64_t()>([this] {
+                     return create_cell_entity_death_restore_total_;
+                   }));
+  wr.Add<uint64_t>("cellapp/create_cell_entity_death_restore_payload_total",
+                   std::function<uint64_t()>([this] {
+                     return create_cell_entity_death_restore_payload_total_;
+                   }));
+  wr.Add<uint64_t>("cellapp/create_cell_entity_death_restore_ghost_backup_total",
+                   std::function<uint64_t()>([this] {
+                     return create_cell_entity_death_restore_ghost_backup_total_;
+                   }));
+  wr.Add<uint64_t>("cellapp/create_cell_entity_death_restore_empty_total",
+                   std::function<uint64_t()>([this] {
+                     return create_cell_entity_death_restore_empty_total_;
+                   }));
+  wr.Add<uint64_t>("cellapp/create_cell_entity_death_restore_failures_total",
+                   std::function<uint64_t()>([this] {
+                     return create_cell_entity_death_restore_failures_total_;
+                   }));
+  wr.Add<uint64_t>("cellapp/create_cell_entity_death_restore_promoted_total",
+                   std::function<uint64_t()>([this] {
+                     return create_cell_entity_death_restore_promoted_total_;
+                   }));
   wr.Add<uint64_t>("cellapp/ghost_promoted_to_real_total",
                    std::function<uint64_t()>([this] {
                      return ghost_promoted_to_real_total_;
                    }));
+  wr.Add<uint64_t>("cellapp/inform_cell_load_send_failures_total",
+                   std::function<uint64_t()>([this] {
+                     return inform_cell_load_send_failures_;
+                   }));
+  movement_system_.RegisterWatchers(wr);
 }
 
 void CellApp::TickControllers(float dt) {
   ATLAS_PROFILE_ZONE_N("CellApp::TickControllers");
-  for (auto& [_, space] : spaces_) space->Tick(dt);
+  for (auto& [_, space] : spaces_) {
+    space->Tick(dt, [this](CellEntity& entity, Duration elapsed) {
+      RecordNativeTick(entity, elapsed);
+    });
+  }
+}
+
+void CellApp::SetMovementIntent(EntityID entity_id, float dir_x, float dir_z, float speed_mps,
+                                uint16_t buttons) {
+  movement_system_.SetIntent(*this, entity_id, dir_x, dir_z, speed_mps, buttons);
+}
+
+auto CellApp::SetMovementCommand(EntityID entity_id,
+                                 const movement::MovementCommand& command) -> bool {
+  return movement_system_.SetCommand(*this, entity_id, command);
+}
+
+auto CellApp::ClearMovementCommand(EntityID entity_id, uint32_t command_id) -> bool {
+  return movement_system_.ClearCommand(*this, entity_id, command_id);
+}
+
+auto CellApp::FindMovementActor(EntityID entity_id, MovementActorSnapshot& out) -> bool {
+  auto* entity = FindRealEntity(entity_id);
+  if (entity == nullptr || !entity->IsReal()) return false;
+  out.position = entity->Position();
+  out.direction = entity->Direction();
+  out.on_ground = entity->OnGround();
+  out.physics_query = &entity->GetSpace().PhysicsQuery();
+  return true;
+}
+
+auto CellApp::MovementNow() -> TimePoint {
+  return GetGameClock().Now();
+}
+
+auto CellApp::MovementServerTick() const -> uint32_t {
+  return ClampMovementServerTick(GameTime());
+}
+
+void CellApp::PublishMovementState(EntityID entity_id, const movement::MovementState& state) {
+  auto* entity = FindRealEntity(entity_id);
+  if (entity == nullptr) return;
+  const bool on_ground = (state.flags & movement::kMovementFlagGrounded) != 0;
+  entity->SetPositionAndDirection(state.position, state.direction);
+  entity->SetOnGround(on_ground);
+
+  CellEntity::ReplicationFrame frame;
+  frame.position = state.position;
+  frame.direction = state.direction;
+  frame.on_ground = on_ground;
+  entity->PublishReplicationFrame(std::move(frame), false, true,
+                                  std::span<const std::byte>{},
+                                  std::span<const std::byte>{});
+}
+
+void CellApp::SendMovementStateAck(EntityID entity_id, const movement::MovementState& state,
+                                   uint32_t server_tick) {
+  auto* entity = FindRealEntity(entity_id);
+  if (entity == nullptr) return;
+  const Address& base_addr = entity->BaseAddr();
+  if (base_addr.Ip() == 0) return;
+
+  auto base_ch = Network().ConnectRudpNocwnd(base_addr);
+  if (!base_ch) return;
+
+  baseapp::MovementStateAckFromCell msg;
+  msg.entity_id = entity->Id();
+  msg.acked_input_seq = state.last_processed_input_seq;
+  msg.server_tick = server_tick;
+  msg.cell_epoch = entity->CellEpoch();
+  msg.state = state;
+  msg.correction_flags = 0;
+  if (auto result = (*base_ch)->SendMessage(msg); result) movement_system_.RecordAckSent();
+}
+
+void CellApp::SendMovementCommandStartToBaseApps(
+    EntityID source_entity_id, uint32_t cell_epoch,
+    const movement::MovementCommand& command,
+    std::unordered_map<Address, std::vector<EntityID>>& by_baseapp) {
+  for (auto& [base_addr, ids] : by_baseapp) {
+    auto base_ch = Network().ConnectRudpNocwnd(base_addr);
+    if (!base_ch) {
+      ATLAS_LOG_WARNING("CellApp: MovementCommandStart: cannot connect to base at {}",
+                        base_addr.ToString());
+      continue;
+    }
+    baseapp::MovementCommandStartFromCell msg;
+    msg.source_entity_id = source_entity_id;
+    msg.cell_epoch = cell_epoch;
+    msg.dest_entity_ids = std::move(ids);
+    msg.command = command;
+    (void)(*base_ch)->SendMessage(msg);
+  }
+}
+
+void CellApp::SendMovementCommandStart(EntityID entity_id,
+                                       const movement::MovementCommand& command) {
+  auto* entity = FindRealEntity(entity_id);
+  if (entity == nullptr) return;
+  std::unordered_map<Address, std::vector<EntityID>> by_baseapp;
+  AddMovementCommandDestination(by_baseapp, entity->BaseAddr(), entity->Id());
+  for (Witness* w : entity->Observers()) {
+    CellEntity& observer = w->Owner();
+    AddMovementCommandDestination(by_baseapp, observer.BaseAddr(), observer.Id());
+  }
+  SendMovementCommandStartToBaseApps(entity->Id(), entity->CellEpoch(), command, by_baseapp);
+
+  auto* real_data = entity->GetRealData();
+  if (real_data == nullptr) return;
+  for (const auto& haunt : real_data->Haunts()) {
+    if (haunt.channel == nullptr) continue;
+    cellapp::MovementCommandStartBroadcast msg;
+    msg.source_entity_id = entity->Id();
+    msg.cell_epoch = entity->CellEpoch();
+    msg.command = command;
+    (void)haunt.channel->SendMessage(msg);
+  }
+}
+
+void CellApp::SendMovementCommandEndToBaseApps(
+    EntityID source_entity_id, uint32_t cell_epoch, uint32_t command_id,
+    uint32_t server_tick, movement::MovementCommandEndReason reason,
+    const movement::MovementState& state,
+    std::unordered_map<Address, std::vector<EntityID>>& by_baseapp) {
+  for (auto& [base_addr, ids] : by_baseapp) {
+    auto base_ch = Network().ConnectRudpNocwnd(base_addr);
+    if (!base_ch) {
+      ATLAS_LOG_WARNING("CellApp: MovementCommandEnd: cannot connect to base at {}",
+                        base_addr.ToString());
+      continue;
+    }
+    baseapp::MovementCommandEndFromCell msg;
+    msg.source_entity_id = source_entity_id;
+    msg.cell_epoch = cell_epoch;
+    msg.dest_entity_ids = std::move(ids);
+    msg.command_id = command_id;
+    msg.server_tick = server_tick;
+    msg.reason = reason;
+    msg.state = state;
+    (void)(*base_ch)->SendMessage(msg);
+  }
+}
+
+void CellApp::SendMovementCommandEnd(EntityID entity_id, uint32_t command_id,
+                                     const movement::MovementState& state,
+                                     uint32_t server_tick,
+                                     movement::MovementCommandEndReason reason) {
+  auto* entity = FindRealEntity(entity_id);
+  if (entity == nullptr) return;
+  std::unordered_map<Address, std::vector<EntityID>> by_baseapp;
+  AddMovementCommandDestination(by_baseapp, entity->BaseAddr(), entity->Id());
+  for (Witness* w : entity->Observers()) {
+    CellEntity& observer = w->Owner();
+    AddMovementCommandDestination(by_baseapp, observer.BaseAddr(), observer.Id());
+  }
+  SendMovementCommandEndToBaseApps(entity->Id(), entity->CellEpoch(), command_id, server_tick,
+                                   reason, state, by_baseapp);
+
+  auto* real_data = entity->GetRealData();
+  if (real_data == nullptr) return;
+  for (const auto& haunt : real_data->Haunts()) {
+    if (haunt.channel == nullptr) continue;
+    cellapp::MovementCommandEndBroadcast msg;
+    msg.source_entity_id = entity->Id();
+    msg.cell_epoch = entity->CellEpoch();
+    msg.command_id = command_id;
+    msg.server_tick = server_tick;
+    msg.reason = reason;
+    msg.state = state;
+    (void)haunt.channel->SendMessage(msg);
+  }
+}
+
+auto CellApp::RestoreMovementState(EntityID entity_id,
+                                   const movement::MovementState& state) -> bool {
+  return movement_system_.RestoreState(entity_id, state);
+}
+
+void CellApp::RestoreMovementPositionHistory(
+    EntityID entity_id, std::span<const MovementPositionSample> samples) {
+  movement_system_.RestorePositionHistory(entity_id, samples);
+}
+
+auto CellApp::RestoreMovementCommand(EntityID entity_id,
+                                     const movement::MovementCommand& command) -> bool {
+  return movement_system_.RestoreCommand(entity_id, command);
 }
 
 void CellApp::TickWitnesses() {
   ATLAS_PROFILE_ZONE_N("CellApp::TickWitnesses");
-  // Demand-based fair share: collect each observer's estimated outbound
-  // demand, then scale against the cellapp cap so dense observers
-  // don't get starved by an equal-share split.
+  // Demand-based fair share: scale observer demand against the cap.
+  // Dense observers should not starve behind an equal-share split.
   const uint32_t cap = CellAppConfig::WitnessTotalOutboundCapBytes();
   const uint32_t min_budget = CellAppConfig::WitnessMinPerObserverBudgetBytes();
   const uint32_t max_budget = CellAppConfig::WitnessMaxPerObserverBudgetBytes();
@@ -438,20 +786,24 @@ void CellApp::TickWitnesses() {
       }
     });
 
-    // When demand fits the cap every observer gets what it asked for;
-    // when it doesn't, everyone scales down proportionally until
-    // min_budget kicks in as a fairness floor.
+    // Demand under the cap is served in full; overflow scales down.
+    // min_budget remains a fairness floor.
     const float scale =
         (total_want > cap) ? static_cast<float>(cap) / static_cast<float>(total_want) : 1.0f;
     for (auto& d : witness_demand_scratch_) {
       const uint32_t budget = std::clamp(static_cast<uint32_t>(static_cast<float>(d.want) * scale),
                                          min_budget, max_budget);
-      const auto cell_id = FindLocalCellIdFor(d.w->Owner());
-      const auto stats = d.w->Update(budget);
+      CellEntity& owner = d.w->Owner();
+      const auto cell_id = FindLocalCellIdFor(owner);
       if (cell_id != 0) {
+        const auto started_at = Clock::now();
+        const auto stats = d.w->Update(budget);
+        RecordNativeTick(owner.Id(), cell_id, Clock::now() - started_at);
         auto& counters = cell_load_counters_[cell_id];
         SaturatingAdd(counters.aoi_reliable_bytes, stats.reliable_bytes);
         SaturatingAdd(counters.aoi_unreliable_bytes, stats.unreliable_bytes);
+      } else {
+        (void)d.w->Update(budget);
       }
     }
   }
@@ -469,11 +821,22 @@ void CellApp::TickBackupPump() {
     const Address& base_addr = entity->BaseAddr();
     if (base_addr.Ip() == 0) continue;  // no base binding yet - skip until next pump
 
+    const auto started_at = Clock::now();
+    const auto cell_id = FindLocalCellIdFor(*entity);
+    auto record_work = [this, entity_id, cell_id, started_at] {
+      RecordNativeTick(entity_id, cell_id, Clock::now() - started_at);
+    };
     auto blob = CapturePersistentBlob(*entity, "backup pump");
-    if (blob.empty()) continue;
+    if (blob.empty()) {
+      record_work();
+      continue;
+    }
 
     auto base_ch = Network().ConnectRudpNocwnd(base_addr);
-    if (!base_ch) continue;  // base transiently unreachable - next pump will retry
+    if (!base_ch) {
+      record_work();
+      continue;
+    }
 
     baseapp::BackupCellEntity msg;
     msg.entity_id = entity_id;
@@ -483,9 +846,12 @@ void CellApp::TickBackupPump() {
     msg.direction = entity->Direction();
     msg.on_ground = entity->OnGround();
     const auto blob_size = msg.cell_backup_data.size();
-    const auto cell_id = FindLocalCellIdFor(*entity);
-    if (cell_id != 0) SaturatingAdd(cell_load_counters_[cell_id].backup_bytes, blob_size);
+    if (cell_id != 0) {
+      auto& counters = cell_load_counters_[cell_id];
+      SaturatingAdd(counters.backup_bytes, blob_size);
+    }
     auto send_result = (*base_ch)->SendMessage(msg);
+    record_work();
     if (!send_result) {
       ATLAS_LOG_WARNING(
           "CellApp: BackupCellEntity send failed (entity_id={}, blob_size={}, addr={}): {}",
@@ -504,24 +870,35 @@ void CellApp::TickClientBaselinePump() {
 }
 
 void CellApp::SendOwnerBaselineFor(CellEntity& entity) {
-  // No-op when GetOwnerSnapshot isn't registered (tests / unconfigured runtimes).
   if (native_provider_ == nullptr || native_provider_->get_owner_snapshot_fn() == nullptr) return;
   if (!entity.HasWitness()) return;
   const Address& base_addr = entity.BaseAddr();
   if (base_addr.Ip() == 0) return;
 
+  const auto started_at = Clock::now();
+  const auto cell_id = FindLocalCellIdFor(entity);
+  auto record_work = [this, &entity, cell_id, started_at] {
+    RecordNativeTick(entity.Id(), cell_id, Clock::now() - started_at);
+  };
   uint8_t* raw = nullptr;
   int32_t len = 0;
   native_provider_->get_owner_snapshot_fn()(entity.Id(), &raw, &len);
-  if (len <= 0 || raw == nullptr) return;
+  if (len <= 0 || raw == nullptr) {
+    record_work();
+    return;
+  }
 
   auto base_ch = Network().ConnectRudpNocwnd(base_addr);
-  if (!base_ch) return;
+  if (!base_ch) {
+    record_work();
+    return;
+  }
   baseapp::ReplicatedBaselineFromCell msg;
   msg.entity_id = entity.Id();
   msg.snapshot.assign(reinterpret_cast<const std::byte*>(raw),
                       reinterpret_cast<const std::byte*>(raw) + len);
   (void)(*base_ch)->SendMessage(msg);
+  record_work();
 }
 
 auto CellApp::FindEntity(EntityID cell_id) -> CellEntity* {
@@ -537,6 +914,12 @@ auto CellApp::FindRealEntity(EntityID entity_id) -> CellEntity* {
 auto CellApp::FindSpace(SpaceID id) -> Space* {
   auto it = spaces_.find(id);
   return it == spaces_.end() ? nullptr : it->second.get();
+}
+
+auto CellApp::MovementPhysicsQueryForTest(SpaceID space_id) -> physics::StaticPhysicsQuery* {
+  auto* space = FindSpace(space_id);
+  if (space == nullptr) return nullptr;
+  return dynamic_cast<physics::StaticPhysicsQuery*>(&space->PhysicsQuery());
 }
 
 auto CellApp::PlaceEntityInSpace(EntityID cell_id, uint16_t type_id, Space& space,
@@ -635,6 +1018,8 @@ void CellApp::RemoveEntityFromSpace(CellEntity* entity) {
   for (auto& [_, cell] : entity->GetSpace().LocalCells()) {
     cell->RemoveRealEntity(entity);
   }
+  movement_system_.EraseEntity(cell_id);
+  entity_load_counters_.erase(cell_id);
   entity_population_.erase(cell_id);
   entity->GetSpace().RemoveEntity(cell_id);
 }
@@ -652,18 +1037,52 @@ void CellApp::RecordScriptTick(uint32_t entity_id, uint64_t elapsed_us) {
   const auto cell_id = FindLocalCellIdFor(*entity);
   if (cell_id == 0) return;
   SaturatingAdd(cell_load_counters_[cell_id].script_tick_us, elapsed_us);
+  SaturatingAdd(entity_load_counters_[entity_id].script_tick_us, elapsed_us);
+}
+
+void CellApp::RecordNativeTick(EntityID entity_id, cellappmgr::CellID cell_id,
+                               Duration elapsed) {
+  if (cell_id == 0 || elapsed <= Duration::zero()) return;
+  const auto elapsed_us = std::chrono::duration_cast<Microseconds>(elapsed).count();
+  if (elapsed_us <= 0) return;
+  const auto cost = static_cast<uint64_t>(elapsed_us);
+  SaturatingAdd(cell_load_counters_[cell_id].native_tick_us, cost);
+  SaturatingAdd(entity_load_counters_[entity_id].native_tick_us, cost);
+}
+
+void CellApp::RecordNativeTick(const CellEntity& entity, Duration elapsed) {
+  RecordNativeTick(entity.Id(), FindLocalCellIdFor(entity), elapsed);
 }
 
 void CellApp::OnCreateCellEntity(const Address& src, Channel* ch,
                                  const cellapp::CreateCellEntity& msg) {
+  ++create_cell_entity_total_;
+  const bool is_death_restore = msg.cellapp_death_restore;
+  if (is_death_restore) ++create_cell_entity_death_restore_total_;
   const EntityID cell_id = msg.entity_id;
-  auto send_failed = [ch, cell_id, &msg](baseapp::CellEntityCreateFailureReason reason) {
+  auto send_failed = [this, ch, cell_id, is_death_restore,
+                      &msg](baseapp::CellEntityCreateFailureReason reason) {
+    ++create_cell_entity_failures_total_;
+    if (is_death_restore) ++create_cell_entity_death_restore_failures_total_;
     if (ch == nullptr || msg.request_id == 0) return;
     baseapp::CellEntityCreateFailed failed;
     failed.entity_id = cell_id;
     failed.request_id = msg.request_id;
     failed.reason = reason;
     (void)ch->SendMessage(failed);
+  };
+  auto record_restore_source = [this, is_death_restore](bool has_payload,
+                                                        bool has_ghost_backup) {
+    if (has_payload) {
+      ++create_cell_entity_restore_payload_total_;
+      if (is_death_restore) ++create_cell_entity_death_restore_payload_total_;
+    } else if (has_ghost_backup) {
+      ++create_cell_entity_restore_ghost_backup_total_;
+      if (is_death_restore) ++create_cell_entity_death_restore_ghost_backup_total_;
+    } else {
+      ++create_cell_entity_restore_empty_total_;
+      if (is_death_restore) ++create_cell_entity_death_restore_empty_total_;
+    }
   };
 
   if (msg.space_id == kInvalidSpaceID) {
@@ -722,6 +1141,8 @@ void CellApp::OnCreateCellEntity(const Address& src, Channel* ch,
                                            msg.script_init_data.size());
       entity->ConvertGhostToReal();
       ++ghost_promoted_to_real_total_;
+      if (is_death_restore) ++create_cell_entity_death_restore_promoted_total_;
+      record_restore_source(!msg.script_init_data.empty(), has_ghost_blob);
       entity->SetBaseAddr(base_addr);
       AddRealToLocalCell(*entity);
       send_ack();
@@ -736,7 +1157,7 @@ void CellApp::OnCreateCellEntity(const Address& src, Channel* ch,
   }
 
   if (msg.require_existing_ghost) {
-    ATLAS_LOG_WARNING("CellApp: CreateCellEntity requires existing Ghost entity_id={} — rejected",
+    ATLAS_LOG_WARNING("CellApp: CreateCellEntity requires existing Ghost entity_id={} - rejected",
                       cell_id);
     send_failed(baseapp::CellEntityCreateFailureReason::kGhostRequiredMissing);
     return;
@@ -756,10 +1177,10 @@ void CellApp::OnCreateCellEntity(const Address& src, Channel* ch,
   send_ack();
 
   RestoreScriptEntity(*entity, msg.type_id, msg.script_init_data);
+  record_restore_source(!msg.script_init_data.empty(), false);
 
-  // No auto-witness here - BaseApp::BindClient sends EnableWitness
-  // separately so the witness lifecycle tracks client presence rather
-  // than entity creation.
+  // No auto-witness here; BaseApp::BindClient sends EnableWitness.
+  // Witness lifecycle tracks client presence, not entity creation.
 }
 
 void CellApp::OnDestroyCellEntity(const Address& /*src*/, Channel* ch,
@@ -844,13 +1265,12 @@ void CellApp::DestroyLocalEntity(EntityID entity_id) {
 
 void CellApp::OnClientCellRpcForward(const Address& src, Channel* ch,
                                      const cellapp::ClientCellRpcForward& msg) {
-  // Hard trust boundary: forging from outside the BaseApp set bypasses
-  // BaseApp's L1/L2 validation and source_entity_id stamping - letting
-  // any peer impersonate any client for any exposed cell method.
+  // Hard trust boundary: outside peers bypass BaseApp validation.
+  // source_entity_id stamping must come from a trusted BaseApp.
   if (!trusted_baseapps_.contains(src)) {
     ATLAS_LOG_WARNING(
         "CellApp: ClientCellRpcForward from untrusted src {}:{} "
-        "(target={}, rpc=0x{:06X}) — dropping",
+        "(target={}, rpc=0x{:06X}) - dropping",
         src.Ip(), src.Port(), msg.target_entity_id, msg.rpc_id);
     return;
   }
@@ -867,7 +1287,7 @@ void CellApp::OnClientCellRpcForward(const Address& src, Channel* ch,
   // Client RPCs must never dispatch on a Ghost - stale BaseApp routing.
   if (!entity->IsReal()) {
     ATLAS_LOG_WARNING(
-        "CellApp: ClientCellRpcForward for Ghost entity_id={} rpc_id=0x{:06X} — stale routing",
+        "CellApp: ClientCellRpcForward for Ghost entity_id={} rpc_id=0x{:06X} - stale routing",
         msg.target_entity_id, msg.rpc_id);
     return;
   }
@@ -894,7 +1314,7 @@ void CellApp::OnClientCellRpcForward(const Address& src, Channel* ch,
     constexpr uint64_t kSpoofEscalateThreshold = 32;
     if (count == 1 || count == kSpoofEscalateThreshold) {
       ATLAS_LOG_WARNING(
-          "CellApp: OwnClient rpc_id=0x{:06X} target={} source={} — cross-entity blocked (source "
+          "CellApp: OwnClient rpc_id=0x{:06X} target={} source={} - cross-entity blocked (source "
           "violations={})",
           msg.rpc_id, msg.target_entity_id, msg.source_entity_id, count);
     }
@@ -917,6 +1337,25 @@ void CellApp::OnClientCellRpcForward(const Address& src, Channel* ch,
               static_cast<int32_t>(msg.payload.size()), msg.trace_id);
 }
 
+void CellApp::OnClientMovementInputForward(const Address& src, Channel* /*ch*/,
+                                           const cellapp::ClientMovementInputForward& msg) {
+  movement_system_.RecordInputPacket();
+  if (!trusted_baseapps_.contains(src)) {
+    movement_system_.RecordInputDrop();
+    ATLAS_LOG_WARNING(
+        "CellApp: ClientMovementInputForward from untrusted src {}:{} target={} - dropping",
+        src.Ip(), src.Port(), msg.target_entity_id);
+    return;
+  }
+  if (msg.source_entity_id != msg.target_entity_id) {
+    movement_system_.RecordInputDrop();
+    ATLAS_LOG_WARNING("CellApp: movement input source={} target={} rejected",
+                      msg.source_entity_id, msg.target_entity_id);
+    return;
+  }
+  (void)movement_system_.EnqueueClientInput(*this, msg.target_entity_id, msg.frames);
+}
+
 void CellApp::OnInternalCellRpc(const Address& /*src*/, Channel* ch,
                                 const cellapp::InternalCellRpc& msg) {
   // Server-internal Base -> Cell call; BaseApp is trusted so skip the
@@ -929,7 +1368,7 @@ void CellApp::OnInternalCellRpc(const Address& /*src*/, Channel* ch,
   }
   if (!entity->IsReal()) {
     ATLAS_LOG_WARNING(
-        "CellApp: InternalCellRpc for Ghost entity_id={} rpc_id=0x{:06X} — stale routing",
+        "CellApp: InternalCellRpc for Ghost entity_id={} rpc_id=0x{:06X} - stale routing",
         msg.target_entity_id, msg.rpc_id);
     return;
   }
@@ -957,7 +1396,7 @@ void CellApp::OnClientRpcBroadcast(const Address& src, Channel* /*ch*/,
   auto* source = it->second;
   if (!source->IsGhost()) {
     ATLAS_LOG_WARNING(
-        "CellApp: ClientRpcBroadcast for non-Ghost entity_id={} rpc_id=0x{:06X} — stale routing",
+        "CellApp: ClientRpcBroadcast for non-Ghost entity_id={} rpc_id=0x{:06X} - stale routing",
         msg.source_entity_id, msg.rpc_id);
     return;
   }
@@ -986,6 +1425,60 @@ void CellApp::OnClientRpcBroadcast(const Address& src, Channel* /*ch*/,
   }
 }
 
+void CellApp::OnMovementCommandStartBroadcast(
+    const Address& src, Channel* /*ch*/, const cellapp::MovementCommandStartBroadcast& msg) {
+  if (RejectUntrustedCellAppPeer(src, "MovementCommandStartBroadcast")) return;
+
+  auto it = entity_population_.find(msg.source_entity_id);
+  if (it == entity_population_.end()) {
+    ATLAS_LOG_WARNING("CellApp: MovementCommandStartBroadcast for unknown entity_id={}",
+                      msg.source_entity_id);
+    return;
+  }
+  auto* source = it->second;
+  if (!source->IsGhost()) {
+    ATLAS_LOG_WARNING(
+        "CellApp: MovementCommandStartBroadcast for non-Ghost entity_id={} - stale routing",
+        msg.source_entity_id);
+    return;
+  }
+
+  std::unordered_map<Address, std::vector<EntityID>> by_baseapp;
+  for (Witness* w : source->Observers()) {
+    CellEntity& observer = w->Owner();
+    AddMovementCommandDestination(by_baseapp, observer.BaseAddr(), observer.Id());
+  }
+  SendMovementCommandStartToBaseApps(msg.source_entity_id, msg.cell_epoch, msg.command,
+                                     by_baseapp);
+}
+
+void CellApp::OnMovementCommandEndBroadcast(
+    const Address& src, Channel* /*ch*/, const cellapp::MovementCommandEndBroadcast& msg) {
+  if (RejectUntrustedCellAppPeer(src, "MovementCommandEndBroadcast")) return;
+
+  auto it = entity_population_.find(msg.source_entity_id);
+  if (it == entity_population_.end()) {
+    ATLAS_LOG_WARNING("CellApp: MovementCommandEndBroadcast for unknown entity_id={}",
+                      msg.source_entity_id);
+    return;
+  }
+  auto* source = it->second;
+  if (!source->IsGhost()) {
+    ATLAS_LOG_WARNING(
+        "CellApp: MovementCommandEndBroadcast for non-Ghost entity_id={} - stale routing",
+        msg.source_entity_id);
+    return;
+  }
+
+  std::unordered_map<Address, std::vector<EntityID>> by_baseapp;
+  for (Witness* w : source->Observers()) {
+    CellEntity& observer = w->Owner();
+    AddMovementCommandDestination(by_baseapp, observer.BaseAddr(), observer.Id());
+  }
+  SendMovementCommandEndToBaseApps(msg.source_entity_id, msg.cell_epoch, msg.command_id,
+                                   msg.server_tick, msg.reason, msg.state, by_baseapp);
+}
+
 void CellApp::OnCreateSpace(const Address& /*src*/, Channel* /*ch*/,
                             const cellapp::CreateSpace& msg) {
   if (msg.space_id == kInvalidSpaceID) {
@@ -1008,7 +1501,11 @@ void CellApp::OnDestroySpace(const Address& /*src*/, Channel* /*ch*/,
   }
   // Drop entity-population entries for everything in this space.
   auto& space = *it->second;
-  space.ForEachEntity([this](CellEntity& e) { entity_population_.erase(e.Id()); });
+  space.ForEachEntity([this](CellEntity& e) {
+    movement_system_.EraseEntity(e.Id());
+    entity_load_counters_.erase(e.Id());
+    entity_population_.erase(e.Id());
+  });
   spaces_.erase(it);
 }
 
@@ -1113,7 +1610,7 @@ void CellApp::OnSetAoIRadius(const Address& /*src*/, Channel* /*ch*/,
   // Only the Real side replicates AoI - reject stale-mailbox calls
   // landing on a Ghost.
   if (!entity->IsReal()) {
-    ATLAS_LOG_WARNING("CellApp: SetAoIRadius on Ghost entity_id={} — stale routing", msg.entity_id);
+    ATLAS_LOG_WARNING("CellApp: SetAoIRadius on Ghost entity_id={} - stale routing", msg.entity_id);
     return;
   }
   auto* witness = entity->GetWitness();
@@ -1167,6 +1664,7 @@ void CellApp::HandlePeerLost(const Address& peer_addr, bool normal) {
     if (native_provider_ && native_provider_->destroy_ghost_fn() != nullptr) {
       native_provider_->destroy_ghost_fn()(id);
     }
+    entity_load_counters_.erase(id);
     entity_population_.erase(it);
     entity->GetSpace().RemoveEntity(id);
   }
@@ -1174,12 +1672,12 @@ void CellApp::HandlePeerLost(const Address& peer_addr, bool normal) {
   if (!orphan_ghosts.empty() || haunts_cleared > 0) {
     if (normal) {
       ATLAS_LOG_INFO(
-          "CellApp: peer CellApp {}:{} deregistered — dropped {} orphan Ghost(s), cleared {} "
+          "CellApp: peer CellApp {}:{} deregistered - dropped {} orphan Ghost(s), cleared {} "
           "Haunt(s)",
           peer_addr.Ip(), peer_addr.Port(), orphan_ghosts.size(), haunts_cleared);
     } else {
       ATLAS_LOG_WARNING(
-          "CellApp: peer CellApp {}:{} lost — dropped {} orphan Ghost(s), cleared {} Haunt(s)",
+          "CellApp: peer CellApp {}:{} lost - dropped {} orphan Ghost(s), cleared {} Haunt(s)",
           peer_addr.Ip(), peer_addr.Port(), orphan_ghosts.size(), haunts_cleared);
     }
   }
@@ -1316,13 +1814,35 @@ void CellApp::RemoveSpaceData(SpaceID space_id, uint16_t key_id) {
   (void)owner_ch->SendMessage(out);
 }
 
+auto CellApp::LoadCollisionAsset(SpaceID space_id, std::string_view path) -> bool {
+  auto* space = FindSpace(space_id);
+  if (space == nullptr) {
+    ATLAS_LOG_WARNING("CellApp: LoadCollisionAsset for unknown space {} - dropping", space_id);
+    return false;
+  }
+  if (path.empty()) {
+    ATLAS_LOG_WARNING("CellApp: LoadCollisionAsset for space {} has empty path", space_id);
+    return false;
+  }
+  const auto asset_path = std::filesystem::path(std::string(path));
+  auto result = space->LoadCollisionAssetFromFile(asset_path);
+  if (!result) {
+    ATLAS_LOG_ERROR("CellApp: LoadCollisionAsset failed for space {} path {}: {}", space_id,
+                    asset_path.string(), result.Error().Message());
+    return false;
+  }
+  ATLAS_LOG_INFO("CellApp: loaded collision asset for space {} path {}", space_id,
+                 asset_path.string());
+  return true;
+}
+
 void CellApp::OnSpaceDataUpdate(const Address& src, Channel* /*ch*/,
                                 const cellapp::SpaceDataUpdate& msg) {
   if (RejectUntrustedCellAppPeer(src, "SpaceDataUpdate")) return;
 
   auto* space = FindSpace(msg.space_id);
   if (!space) {
-    ATLAS_LOG_WARNING("CellApp: SpaceDataUpdate for unknown space {} — dropping", msg.space_id);
+    ATLAS_LOG_WARNING("CellApp: SpaceDataUpdate for unknown space {} - dropping", msg.space_id);
     return;
   }
   if (!space->Data().Set(msg.key_id, msg.value)) return;
@@ -1338,7 +1858,7 @@ void CellApp::OnSpaceDataDelete(const Address& src, Channel* /*ch*/,
 
   auto* space = FindSpace(msg.space_id);
   if (!space) {
-    ATLAS_LOG_WARNING("CellApp: SpaceDataDelete for unknown space {} — dropping", msg.space_id);
+    ATLAS_LOG_WARNING("CellApp: SpaceDataDelete for unknown space {} - dropping", msg.space_id);
     return;
   }
   if (!space->Data().Remove(msg.key_id)) return;
@@ -1396,7 +1916,7 @@ void CellApp::OnOutboundChannelDeath(Channel& dying) {
   }
   if (&dying == cellappmgr_channel_) {
     ATLAS_LOG_WARNING("CellApp: cellappmgr channel down (RUDP dead link), clearing");
-    cellappmgr_channel_ = nullptr;
+    ClearCellAppMgrSession();
   }
 
   std::vector<EntityID> orphans;
@@ -1408,7 +1928,7 @@ void CellApp::OnOutboundChannelDeath(Channel& dying) {
     if (auto* e = FindRealEntity(id)) e->DisableWitness();
   }
   if (!orphans.empty()) {
-    ATLAS_LOG_INFO("CellApp: outbound channel {} died — disabled {} witness(es)",
+    ATLAS_LOG_INFO("CellApp: outbound channel {} died - disabled {} witness(es)",
                    dying.RemoteAddress().ToString(), orphans.size());
   }
 
@@ -1436,7 +1956,7 @@ void CellApp::OnCreateGhost(const Address& src, Channel* ch, const cellapp::Crea
     return;
   }
   if (ch == nullptr) {
-    ATLAS_LOG_WARNING("CellApp: CreateGhost for entity_id={} with null channel — ignoring",
+    ATLAS_LOG_WARNING("CellApp: CreateGhost for entity_id={} with null channel - ignoring",
                       msg.entity_id);
     return;
   }
@@ -1484,12 +2004,13 @@ void CellApp::OnDeleteGhost(const Address& src, Channel* /*ch*/,
   }
   auto* entity = it->second;
   if (!entity->IsGhost()) {
-    ATLAS_LOG_WARNING("CellApp: DeleteGhost for non-Ghost entity_id={} — rejected", msg.entity_id);
+    ATLAS_LOG_WARNING("CellApp: DeleteGhost for non-Ghost entity_id={} - rejected", msg.entity_id);
     return;
   }
   if (native_provider_ && native_provider_->destroy_ghost_fn() != nullptr) {
     native_provider_->destroy_ghost_fn()(msg.entity_id);
   }
+  entity_load_counters_.erase(msg.entity_id);
   entity_population_.erase(it);
   entity->GetSpace().RemoveEntity(entity->Id());
 }
@@ -1503,7 +2024,7 @@ void CellApp::OnGhostPositionUpdate(const Address& src, Channel* /*ch*/,
   if (!std::isfinite(msg.position.x) || !std::isfinite(msg.position.y) ||
       !std::isfinite(msg.position.z) || !std::isfinite(msg.direction.x) ||
       !std::isfinite(msg.direction.y) || !std::isfinite(msg.direction.z)) {
-    ATLAS_LOG_WARNING("CellApp: GhostPositionUpdate with NaN/Inf for entity_id={} — dropped",
+    ATLAS_LOG_WARNING("CellApp: GhostPositionUpdate with NaN/Inf for entity_id={} - dropped",
                       msg.entity_id);
     return;
   }
@@ -1545,7 +2066,7 @@ void CellApp::OnGhostSetReal(const Address& src, Channel* /*ch*/,
   if (!entity->IsGhost()) return;
   auto* new_ch = FindPeerChannel(msg.new_real_addr);
   if (new_ch == nullptr) {
-    ATLAS_LOG_WARNING("CellApp: GhostSetReal for new_real_addr={}:{} — no peer channel",
+    ATLAS_LOG_WARNING("CellApp: GhostSetReal for new_real_addr={}:{} - no peer channel",
                       msg.new_real_addr.Ip(), msg.new_real_addr.Port());
     return;
   }
@@ -1613,7 +2134,7 @@ void CellApp::OnOffloadEntity(const Address& src, Channel* ch, const cellapp::Of
     entity = it->second;
     if (!entity->IsGhost()) {
       ATLAS_LOG_ERROR(
-          "CellApp: OffloadEntity for existing non-Ghost entity_id={} — aborting offload",
+          "CellApp: OffloadEntity for existing non-Ghost entity_id={} - aborting offload",
           msg.entity_id);
       SendOffloadReject(ch, src, msg.entity_id, cellapp::OffloadRejectReason::kRejected);
       return;
@@ -1640,18 +2161,16 @@ void CellApp::OnOffloadEntity(const Address& src, Channel* ch, const cellapp::Of
     entity_population_[msg.entity_id] = entity;
   }
 
-  // Offload preserves entity_id end-to-end (sender packs its id into
-  // msg.entity_id; receiver promotes the matching ghost or constructs
-  // a fresh Real with the same id).
+  // Offload preserves entity_id end-to-end.
+  // Receiver promotes a matching ghost or constructs the same-id Real.
   assert(entity->Id() == msg.entity_id);
 
   // Cell-local entities (CreateLocalCell from script, no base counterpart)
   // must keep the flag across Offload so DestroySelf takes the local path.
   if (msg.is_local) entity->MarkLocal();
 
-  // Empty blob is valid (tests / C#-less setups): the Real has no
-  // script state and AoI runs off the replication baseline below until
-  // the first successful C# publish.
+  // Empty blob is valid in tests and C#-less setups.
+  // AoI runs from the baseline until the first C# publish.
   if (!msg.persistent_blob.empty() && native_provider_ != nullptr &&
       native_provider_->restore_entity_fn() != nullptr) {
     ClearNativeApiError();
@@ -1674,6 +2193,10 @@ void CellApp::OnOffloadEntity(const Address& src, Channel* ch, const cellapp::Of
   entity->SeedReplicationState(msg.latest_event_seq, msg.latest_volatile_seq,
                                std::span<const std::byte>(msg.owner_snapshot),
                                std::span<const std::byte>(msg.other_snapshot));
+  if (msg.has_movement_state) RestoreMovementState(entity->Id(), msg.movement_state);
+  RestoreMovementPositionHistory(entity->Id(), msg.movement_position_history);
+  movement_system_.ClearStoredCommand(entity->Id());
+  if (msg.has_movement_command) RestoreMovementCommand(entity->Id(), msg.movement_command);
 
   // Seed existing haunts so subsequent Ghost messages from this Real
   // don't create duplicates on the same peer.
@@ -1696,11 +2219,8 @@ void CellApp::OnOffloadEntity(const Address& src, Channel* ch, const cellapp::Of
     space->LocalCells().begin()->second->AddRealEntity(entity);
   }
 
-  // Re-attach AFTER PublishReplicationFrame / Cell membership so
-  // AoITrigger's initial sweep sees the right peer set + seq baselines.
-  // Skipping this would silently drop AoI envelopes across a cell
-  // boundary - BaseApp re-routes cell_addr but won't re-fire
-  // EnableWitness on its own.
+  // Re-attach after publish and membership so AoI sees peer baselines.
+  // BaseApp re-routes cell_addr but will not re-fire EnableWitness.
   if (msg.has_witness) {
     AttachWitness(*entity, msg.aoi_radius, msg.aoi_hysteresis);
     if (auto* w = entity->GetWitness()) w->InheritAoIFrom(msg.aoi_entries);
@@ -1714,16 +2234,14 @@ void CellApp::OnOffloadEntity(const Address& src, Channel* ch, const cellapp::Of
         *entity, r, [this](uint32_t peer_id) -> CellEntity* { return FindEntity(peer_id); });
     if (!ok) {
       ATLAS_LOG_ERROR(
-          "CellApp: Offload controller restore failed for entity_id={} — arriving "
+          "CellApp: Offload controller restore failed for entity_id={} - arriving "
           "controllers partially / empty",
           msg.entity_id);
     }
   }
 
-  // NPCs (cell-local, no base_addr) must skip the BaseApp notify, else
-  // every cross-cell offload spams WSAEADDRNOTAVAIL and stalls heartbeat.
-  // Per-entity migration counter: bump source's epoch by 1 and store on the
-  // receiver so any future Offload from here continues monotonically.
+  // NPCs have no base_addr and must skip the BaseApp notify.
+  // Bump the migration epoch so future Offload remains monotonic.
   const uint32_t new_epoch = msg.cell_epoch + 1;
   entity->SetCellEpoch(new_epoch);
 
@@ -1739,7 +2257,7 @@ void CellApp::OnOffloadEntity(const Address& src, Channel* ch, const cellapp::Of
         // ClientCellRpc to a Ghost or dead host until the next offload.
         ATLAS_LOG_ERROR(
             "CellApp: failed to send CurrentCell entity_id={} epoch={} to base {}: {} "
-            "— BaseApp split-brain risk",
+            "- BaseApp split-brain risk",
             msg.entity_id, cc.epoch, msg.base_addr.ToString(), r.Error().Message());
       }
     }
@@ -1755,12 +2273,11 @@ void CellApp::OnOffloadEntity(const Address& src, Channel* ch, const cellapp::Of
     if (haunt_addr == src) continue;
     if (auto* peer = FindPeerChannel(haunt_addr)) {
       if (auto r = peer->SendMessage(ghost_set_real); !r) {
-        // Haunt's back-channel stays pointed at the old Real host
-        // until OffloadChecker re-discovers the topology; deltas
-        // vanish in the meantime.
+        // Haunt back-channel still points at the old Real host.
+        // Deltas vanish until OffloadChecker re-discovers topology.
         ATLAS_LOG_ERROR(
             "CellApp: failed to send GhostSetReal entity_id={} to haunt {}: {} "
-            "— haunt back-channel stale",
+            "- haunt back-channel stale",
             msg.entity_id, haunt_addr.ToString(), r.Error().Message());
       }
     }
@@ -1772,12 +2289,11 @@ void CellApp::OnOffloadEntity(const Address& src, Channel* ch, const cellapp::Of
   ack.reject_reason = cellapp::OffloadRejectReason::kNone;
   if (ch != nullptr) {
     if (auto r = ch->SendMessage(ack); !r) {
-      // Sender will time out and revert Ghost->Real, but we've already
-      // converted Ghost->Real locally - two Reals for one entity until
-      // the cluster heals.
+      // Sender will time out and revert Ghost->Real.
+      // This side is already Real, so two Reals exist until recovery.
       ATLAS_LOG_ERROR(
           "CellApp: failed to send OffloadEntityAck(success=true) entity_id={} to {}: {} "
-          "— two-Reals split-brain until sender's revert timeout fires",
+          "- two-Reals split-brain until sender's revert timeout fires",
           msg.entity_id, src.ToString(), r.Error().Message());
     }
   }
@@ -1790,7 +2306,7 @@ void CellApp::OnOffloadEntityAck(const Address& src, Channel* /*ch*/,
   auto pending_it = pending_offloads_.find(msg.entity_id);
   if (pending_it == pending_offloads_.end()) {
     ATLAS_LOG_WARNING(
-        "CellApp: OffloadEntityAck for entity_id={} not in pending set — "
+        "CellApp: OffloadEntityAck for entity_id={} not in pending set - "
         "duplicate ack, unknown entity, or TickOffloadChecker never tracked it",
         msg.entity_id);
     return;
@@ -1806,7 +2322,7 @@ void CellApp::OnOffloadEntityAck(const Address& src, Channel* /*ch*/,
     return;
   }
   ATLAS_LOG_ERROR(
-      "CellApp: Offload of entity_id={} to {}:{} rejected reason={} after {} ms — reverting "
+      "CellApp: Offload of entity_id={} to {}:{} rejected reason={} after {} ms - reverting "
       "Ghost to Real locally",
       msg.entity_id, target.Ip(), target.Port(),
       RejectReasonName(msg.reject_reason),
@@ -1825,7 +2341,7 @@ void CellApp::TickOffloadAckTimeouts() {
   }
   for (auto eid : timed_out) {
     ATLAS_LOG_ERROR(
-        "CellApp: Offload of entity_id={} TIMED OUT after {} ms — reverting Ghost to Real locally",
+        "CellApp: Offload of entity_id={} TIMED OUT after {} ms - reverting Ghost to Real locally",
         eid, std::chrono::duration_cast<std::chrono::milliseconds>(kOffloadAckTimeout).count());
     RevertPendingOffload(eid, "ack timeout");
   }
@@ -1839,7 +2355,7 @@ void CellApp::RevertPendingOffload(EntityID entity_id, const char* reason) {
 
   auto* entity = FindEntity(entity_id);
   if (entity == nullptr) {
-    ATLAS_LOG_ERROR("CellApp: RevertPendingOffload entity_id={} not found (reason={}) — drop",
+    ATLAS_LOG_ERROR("CellApp: RevertPendingOffload entity_id={} not found (reason={}) - drop",
                     entity_id, reason);
     return;
   }
@@ -1847,7 +2363,7 @@ void CellApp::RevertPendingOffload(EntityID entity_id, const char* reason) {
     // Someone already finalised (e.g. a retried-path success Ack
     // arrived). Nothing to do.
     ATLAS_LOG_WARNING(
-        "CellApp: RevertPendingOffload entity_id={} is not a Ghost — revert skipped (reason={})",
+        "CellApp: RevertPendingOffload entity_id={} is not a Ghost - revert skipped (reason={})",
         entity_id, reason);
     return;
   }
@@ -1899,10 +2415,14 @@ void CellApp::RevertPendingOffload(EntityID entity_id, const char* reason) {
         *entity, r, [this](uint32_t peer_id) -> CellEntity* { return FindEntity(peer_id); });
     if (!ok) {
       ATLAS_LOG_ERROR(
-          "CellApp: Offload revert controller restore failed for entity_id={} — controllers lost",
+          "CellApp: Offload revert controller restore failed for entity_id={} - controllers lost",
           entity_id);
     }
   }
+  if (po.has_movement_state) RestoreMovementState(entity_id, po.movement_state);
+  RestoreMovementPositionHistory(entity_id, po.movement_position_history);
+  movement_system_.ClearStoredCommand(entity_id);
+  if (po.has_movement_command) RestoreMovementCommand(entity_id, po.movement_command);
 
   // Both arrival and revert must produce an identical witness-bearing
   // Real, so revert goes through the same AttachWitness helper.
@@ -1918,6 +2438,7 @@ void CellApp::RevertPendingOffload(EntityID entity_id, const char* reason) {
 
 void CellApp::OnAddCellToSpace(const Address& /*src*/, Channel* ch,
                                const cellappmgr::AddCellToSpace& msg) {
+  if (!AcceptCellAppMgrMessage(ch, msg.mgr_generation, "AddCellToSpace")) return;
   auto* space = FindSpace(msg.space_id);
   if (!space) {
     auto inserted = spaces_.emplace(msg.space_id, std::make_unique<Space>(msg.space_id));
@@ -1925,7 +2446,7 @@ void CellApp::OnAddCellToSpace(const Address& /*src*/, Channel* ch,
   }
   bool already_present = space->FindLocalCell(msg.cell_id) != nullptr;
   if (already_present) {
-    ATLAS_LOG_WARNING("CellApp: AddCellToSpace for already-present cell_id={}", msg.cell_id);
+    ATLAS_LOG_DEBUG("CellApp: AddCellToSpace for already-present cell_id={}", msg.cell_id);
   } else {
     space->AddLocalCell(std::make_unique<Cell>(*space, msg.cell_id, msg.bounds));
     ATLAS_LOG_INFO("CellApp: added Cell {} to Space {}", msg.cell_id, msg.space_id);
@@ -1948,16 +2469,15 @@ void CellApp::OnAddCellToSpace(const Address& /*src*/, Channel* ch,
     SendAddCellToSpaceAck(ch, msg.space_id, msg.cell_id);
   }
 
-  // Force a fresh InformCellLoad now (bypass the tick-based throttle).
-  // SpaceMaster-driven spawn just landed N entities synchronously, and the
-  // very next sibling cellapp registration would otherwise drive elastic-
-  // grow with stale distribution data (entity_count=0, median=0).
+  // Force fresh InformCellLoad, bypassing the tick throttle.
+  // Elastic grow would otherwise use stale entity_count and median.
   last_sent_load_time_ = TimePoint{};
   SendInformCellLoad();
 }
 
-void CellApp::OnRemoveCellFromSpace(const Address& /*src*/, Channel* /*ch*/,
+void CellApp::OnRemoveCellFromSpace(const Address& /*src*/, Channel* ch,
                                     const cellappmgr::RemoveCellFromSpace& msg) {
+  if (!AcceptCellAppMgrMessage(ch, msg.mgr_generation, "RemoveCellFromSpace")) return;
   auto* space = FindSpace(msg.space_id);
   if (space == nullptr) return;
   auto* cell = space->FindLocalCell(msg.cell_id);
@@ -1979,7 +2499,7 @@ void CellApp::SpawnSpaceMaster(SpaceID space_id, const std::string& type_name) {
   const auto* desc = EntityDefRegistry::Instance().FindByName(type_name);
   if (desc == nullptr) {
     ATLAS_LOG_ERROR(
-        "CellApp: space_master_type '{}' not in EntityDefRegistry — space {} owner not spawned",
+        "CellApp: space_master_type '{}' not in EntityDefRegistry - space {} owner not spawned",
         type_name, space_id);
     return;
   }
@@ -1992,8 +2512,9 @@ void CellApp::SpawnSpaceMaster(SpaceID space_id, const std::string& type_name) {
   }
 }
 
-void CellApp::OnUpdateGeometry(const Address& /*src*/, Channel* /*ch*/,
+void CellApp::OnUpdateGeometry(const Address& /*src*/, Channel* ch,
                                const cellappmgr::UpdateGeometry& msg) {
+  if (!AcceptCellAppMgrMessage(ch, msg.mgr_generation, "UpdateGeometry")) return;
   auto* space = FindSpace(msg.space_id);
   if (!space) {
     ATLAS_LOG_WARNING("CellApp: UpdateGeometry for unknown space_id={}", msg.space_id);
@@ -2017,7 +2538,7 @@ void CellApp::OnUpdateGeometry(const Address& /*src*/, Channel* /*ch*/,
       cell->SetBounds(info->bounds);
     }
   }
-  // Non-owner replica without SpaceData yet: request a snapshot. Idempotent —
+  // Non-owner replica without SpaceData yet: request a snapshot. Idempotent -
   // retried on the next geometry update if the owner channel was not wired.
   if (!space->IsDataInitialized()) {
     if (space->PendingSpaceDataSourceAddr().Port() != 0) {
@@ -2030,8 +2551,9 @@ void CellApp::OnUpdateGeometry(const Address& /*src*/, Channel* /*ch*/,
   }
 }
 
-void CellApp::OnShouldOffload(const Address& /*src*/, Channel* /*ch*/,
+void CellApp::OnShouldOffload(const Address& /*src*/, Channel* ch,
                               const cellappmgr::ShouldOffload& msg) {
+  if (!AcceptCellAppMgrMessage(ch, msg.mgr_generation, "ShouldOffload")) return;
   auto* space = FindSpace(msg.space_id);
   if (!space) return;
   if (auto* cell = space->FindLocalCell(msg.cell_id)) {
@@ -2102,6 +2624,19 @@ void CellApp::SendInformCellLoad() {
         zs.push_back(e->Position().z);
         IncrementLoadBucket(rep.x_buckets, e->Position().x, bounds.min_x, bounds.max_x);
         IncrementLoadBucket(rep.z_buckets, e->Position().z, bounds.min_z, bounds.max_z);
+        if (auto entity_counters = entity_load_counters_.find(e->Id());
+            entity_counters != entity_load_counters_.end()) {
+          const auto& cost = entity_counters->second;
+          const uint64_t total_tick_us =
+              cost.script_tick_us >
+                      std::numeric_limits<uint64_t>::max() - cost.native_tick_us
+                  ? std::numeric_limits<uint64_t>::max()
+                  : cost.script_tick_us + cost.native_tick_us;
+          IncrementLoadCostBucket(rep.x_load_buckets, e->Position().x, bounds.min_x,
+                                  bounds.max_x, total_tick_us);
+          IncrementLoadCostBucket(rep.z_load_buckets, e->Position().z, bounds.min_z,
+                                  bounds.max_z, total_tick_us);
+        }
       }
       const float fallback_tick_load =
           count > 0
@@ -2120,8 +2655,13 @@ void CellApp::SendInformCellLoad() {
       if (auto counters = cell_load_counters_.find(cell_id);
           counters != cell_load_counters_.end()) {
         rep.script_tick_us = counters->second.script_tick_us;
-        if (rep.script_tick_us > 0) {
-          rep.tick_load = static_cast<float>(static_cast<double>(rep.script_tick_us) /
+        rep.native_tick_us = counters->second.native_tick_us;
+        const uint64_t total_tick_us =
+            rep.script_tick_us > std::numeric_limits<uint64_t>::max() - rep.native_tick_us
+                ? std::numeric_limits<uint64_t>::max()
+                : rep.script_tick_us + rep.native_tick_us;
+        if (total_tick_us > 0) {
+          rep.tick_load = static_cast<float>(static_cast<double>(total_tick_us) /
                                              static_cast<double>(report_window_us));
         }
         rep.aoi_reliable_bytes = counters->second.aoi_reliable_bytes;
@@ -2156,10 +2696,13 @@ void CellApp::SendInformCellLoad() {
     }
   }
   if (auto r = cellappmgr_channel_->SendMessage(msg); !r) {
-    // Dropped reports skew the mgr's balancer toward this host.
+    // Keep counters so the next successful report covers the full window.
+    ++inform_cell_load_send_failures_;
     ATLAS_LOG_WARNING("CellApp: InformCellLoad send failed: {}", r.Error().Message());
+    return;
   }
   for (auto cell_id : live_cells) cell_load_counters_[cell_id] = {};
+  entity_load_counters_.clear();
 
   last_sent_load_ = persistent_load_;
   last_sent_entity_count_ = count;
@@ -2187,6 +2730,25 @@ void CellApp::MaybeRequestMoreIds() {
   ATLAS_LOG_DEBUG("CellApp: requested {} EntityIDs from DBApp", count);
 }
 
+auto CellApp::AcceptCellAppMgrMessage(Channel* ch, uint64_t mgr_generation, const char* tag)
+    -> bool {
+  if (cellappmgr_channel_ != nullptr && ch != cellappmgr_channel_) {
+    ++cellappmgr_stale_drops_;
+    ATLAS_LOG_WARNING("CellApp: dropping {} from non-registered channel", tag);
+    return false;
+  }
+  if (mgr_generation != 0 && mgr_generation < accepted_cellappmgr_generation_) {
+    ++cellappmgr_stale_drops_;
+    ATLAS_LOG_WARNING("CellApp: dropping {} stale mgr_generation={} accepted={}", tag,
+                      mgr_generation, accepted_cellappmgr_generation_);
+    return false;
+  }
+  if (mgr_generation > accepted_cellappmgr_generation_) {
+    accepted_cellappmgr_generation_ = mgr_generation;
+  }
+  return true;
+}
+
 void CellApp::OnRegisterCellAppAck(const Address& /*src*/, Channel* ch,
                                    const cellappmgr::RegisterCellAppAck& msg) {
   if (!msg.success) {
@@ -2199,10 +2761,14 @@ void CellApp::OnRegisterCellAppAck(const Address& /*src*/, Channel* ch,
   }
   if (ch != nullptr) cellappmgr_channel_ = ch;
   app_id_ = msg.app_id;
-  ATLAS_LOG_INFO("CellApp: registered with CellAppMgr; app_id={}", app_id_);
+  if (msg.mgr_generation > accepted_cellappmgr_generation_) {
+    accepted_cellappmgr_generation_ = msg.mgr_generation;
+  }
+  ATLAS_LOG_INFO("CellApp: registered with CellAppMgr; app_id={} mgr_generation={}", app_id_,
+                 accepted_cellappmgr_generation_);
 
-  // Re-phase the tick onto the cluster-wide reference so cross-cell
-  // Ghost updates land on aligned tick edges instead of random phase.
+  // Align the tick onto the cluster-wide reference so cross-cell
+  // Ghost updates land on shared tick edges.
   if (msg.tick_alignment_epoch_us > 0) {
     const auto epoch = TimePoint{} + std::chrono::microseconds{msg.tick_alignment_epoch_us};
     RealignTickTo(epoch);
@@ -2239,15 +2805,17 @@ auto CellApp::BuildOffloadMessage(const CellEntity& entity,
     msg.latest_event_seq = state->latest_event_seq;
     msg.latest_volatile_seq = state->latest_volatile_seq;
   }
+  movement_system_.CaptureOffloadState(entity.Id(), msg.has_movement_state,
+                                       msg.movement_state, msg.movement_position_history,
+                                       msg.has_movement_command, msg.movement_command);
   if (const auto* rd = entity.GetRealData()) {
     msg.existing_haunts.reserve(rd->Haunts().size());
     for (const auto& h : rd->Haunts()) {
       if (h.channel != nullptr) msg.existing_haunts.push_back(h.channel->RemoteAddress());
     }
   }
-  // Capture live controller state BEFORE ConvertRealToGhost runs
-  // StopAll, so the receiver resumes mid-motion progress + proximity
-  // membership intact.
+  // Capture live controllers before ConvertRealToGhost calls StopAll.
+  // The receiver resumes mid-motion progress and proximity membership.
   {
     BinaryWriter cw;
     SerializeControllersForMigration(entity, cw);
@@ -2399,7 +2967,7 @@ void CellApp::TickOffloadChecker() {
     for (auto& op : ops) {
       auto* peer = FindPeerChannel(op.target_cellapp_addr);
       if (peer == nullptr) {
-        ATLAS_LOG_WARNING("CellApp: Offload target {}:{} has no peer channel — deferring",
+        ATLAS_LOG_WARNING("CellApp: Offload target {}:{} has no peer channel - deferring",
                           op.target_cellapp_addr.Ip(), op.target_cellapp_addr.Port());
         continue;
       }
@@ -2428,9 +2996,8 @@ void CellApp::TickOffloadChecker() {
         continue;
       }
 
-      // Capture the revert snapshot BEFORE ConvertRealToGhost drops
-      // the haunt list and StopAlls controllers, so a rejected /
-      // timed-out Offload can restore a live Real.
+      // Capture the revert snapshot before ConvertRealToGhost.
+      // Rejected or timed-out Offload can restore a live Real.
       PendingOffload po;
       po.target_addr = op.target_cellapp_addr;
       po.sent_at = Clock::now();
@@ -2453,14 +3020,18 @@ void CellApp::TickOffloadChecker() {
         auto buf = cw.Detach();
         po.controller_blob.assign(buf.begin(), buf.end());
       }
-      // Read BEFORE ConvertRealToGhost strips the witness - losing
-      // radius/hyst would silently break SetAoIRadius contracts across
-      // a failed-Offload boundary.
+      // Read before ConvertRealToGhost strips the witness.
+      // Failed-Offload restore must preserve SetAoIRadius contracts.
       if (const auto* witness = op.entity->GetWitness()) {
         po.had_witness = true;
         po.aoi_radius = witness->AoIRadius();
         po.aoi_hysteresis = witness->Hysteresis();
       }
+      po.has_movement_state = msg.has_movement_state;
+      po.movement_state = msg.movement_state;
+      po.movement_position_history = msg.movement_position_history;
+      po.has_movement_command = msg.has_movement_command;
+      po.movement_command = msg.movement_command;
       // Re-borrow the just-built msg.persistent_blob so RevertPendingOffload
       // can hand it back to restore_entity_fn after Ghost->Real flip-back.
       po.persistent_blob = msg.persistent_blob;
@@ -2479,6 +3050,8 @@ void CellApp::TickOffloadChecker() {
 
       // Local Real -> Ghost; drops witness + controllers and uses the
       // peer channel as the new back-channel.
+      movement_system_.EraseEntity(op.entity->Id());
+      entity_load_counters_.erase(op.entity->Id());
       op.entity->ConvertRealToGhost(peer, op.target_cellapp_addr);
       op.entity->SetGhostPersistentBlob(std::span<const std::byte>(msg.persistent_blob));
 
@@ -2486,7 +3059,7 @@ void CellApp::TickOffloadChecker() {
         cell->RemoveRealEntity(op.entity);
       }
 
-      // Re-create C# as Ghost; differs from BigWorld's flag-flip — any state
+      // Re-create C# as Ghost; differs from BigWorld's flag-flip - any state
       // populated outside OnInit / OnGhostInit is dropped across the boundary.
       if (native_provider_ && native_provider_->restore_ghost_fn() != nullptr) {
         const auto* data = msg.other_snapshot.empty()

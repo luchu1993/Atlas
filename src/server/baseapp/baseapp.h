@@ -50,6 +50,11 @@ struct ClientEventSeqReport;
 struct Authenticate;
 struct ClientBaseRpc;
 struct ClientCellRpc;
+struct ClientMovementInput;
+struct MovementCorrectionReport;
+struct MovementCommandStartFromCell;
+struct MovementCommandEndFromCell;
+struct MovementStateAckFromCell;
 }  // namespace baseapp
 
 namespace login {
@@ -73,9 +78,8 @@ struct DestroyCellEntityAck;
 
 class Channel;
 
-// Entity-bearing server process: hosts BaseEntity/Proxy, dual networks
-// (internal peers + external clients), drives DB persistence, scripted
-// entity logic via ClrScriptEngine / BaseAppNativeProvider.
+// Entity-bearing server process: hosts BaseEntity/Proxy, dual networks,
+// DB persistence, and scripted entity logic.
 
 // Returns nullptr if cell_addr has port 0 or no entry exists.
 // Free function so unit tests can drive it without a BaseApp.
@@ -94,7 +98,7 @@ class BaseApp : public EntityApp {
   [[nodiscard]] auto GetEntityManager() -> EntityManager& { return entity_mgr_; }
   [[nodiscard]] auto GetNativeProvider() -> BaseAppNativeProvider& { return *native_provider_; }
 
-  // Shared (reply_id, request_id) registry — backs both C++ coroutines and
+  // Shared (reply_id, request_id) registry backs both C++ coroutines and
   // managed AtlasTask RPCs via coro_bridge.
   [[nodiscard]] auto GetRpcRegistry() -> PendingRpcRegistry& { return rpc_registry_; }
 
@@ -105,9 +109,8 @@ class BaseApp : public EntityApp {
   using SpaceCreatedCallback =
       std::function<void(bool success, SpaceID space_id, const Address& cell_addr)>;
 
-  // Returns 0 if no CellAppMgr connected (caller may retry); else request_id.
-  // initial_cell_count=1 keeps the legacy single-cell shape; >1 asks CellAppMgr
-  // to bootstrap N cells distributed across the N least-loaded CellApps.
+  // Returns 0 if no CellAppMgr connected; else request_id.
+  // initial_cell_count > 1 asks CellAppMgr to bootstrap distributed cells.
   auto RequestCreateSpace(SpaceID space_id, SpaceCreatedCallback callback,
                           uint16_t initial_cell_count = 1) -> uint32_t;
 
@@ -128,6 +131,7 @@ class BaseApp : public EntityApp {
 
  private:
   friend class BaseAppRollbackTest;
+  friend class BaseAppMovementInputTest;
 
   struct LoadSnapshot;
   struct LoadTracker;
@@ -165,6 +169,12 @@ class BaseApp : public EntityApp {
                                          const baseapp::ReplicatedReliableDeltaFromCell& msg);
   void OnBackupCellEntity(const baseapp::BackupCellEntity& msg);
   void OnReplicatedBaselineFromCell(const baseapp::ReplicatedBaselineFromCell& msg);
+  void OnMovementStateAckFromCell(Channel& ch, const baseapp::MovementStateAckFromCell& msg);
+  void OnMovementCommandStartFromCell(Channel& ch,
+                                      const baseapp::MovementCommandStartFromCell& msg);
+  void OnMovementCommandEndFromCell(Channel& ch,
+                                    const baseapp::MovementCommandEndFromCell& msg);
+  void SweepMovementAckRelayState();
   void OnSpaceCreatedResult(Channel& ch, const cellappmgr::SpaceCreatedResult& msg);
 
   void OnPrepareLogin(Channel& ch, const login::PrepareLogin& msg);
@@ -178,16 +188,16 @@ class BaseApp : public EntityApp {
   void OnClientAuthenticate(Channel& ch, const baseapp::Authenticate& msg);
   void OnClientBaseRpc(Channel& ch, const baseapp::ClientBaseRpc& msg);
   void OnClientCellRpc(Channel& ch, const baseapp::ClientCellRpc& msg);
+  void OnClientMovementInput(Channel& ch, const baseapp::ClientMovementInput& msg);
+  void OnMovementCorrectionReport(Channel& ch, const baseapp::MovementCorrectionReport& msg);
 
   friend class BaseAppNativeProvider;
   void DoWriteToDb(EntityID entity_id, const std::byte* data, int32_t len);
   void DoGiveClientToLocal(EntityID src_id, EntityID dest_id);
   void DoGiveClientToRemote(EntityID src_id, EntityID dest_id, const Address& dest_baseapp);
 
-  // Allocates an ID, creates the base entity, hydrates C# with empty defaults,
-  // and (if cell-bound) sends CreateCellEntity at origin. Witness attaches
-  // via the client-bind path; scripts call SetAoIRadius post-ack. Returns
-  // the new EntityID, or 0 on failure.
+  // Allocates an ID, hydrates C#, and sends CreateCellEntity if cell-bound.
+  // Returns the new EntityID, or 0 on failure.
   auto CreateBaseEntityFromScript(uint16_t type_id, SpaceID space_id) -> EntityID;
 
   // Routes SpawnLocalEntity to a deterministically-picked CellApp; the cell
@@ -216,6 +226,10 @@ class BaseApp : public EntityApp {
   BaseAppNativeProvider* native_provider_{nullptr};  // owned by ScriptApp
   Channel* dbapp_channel_{nullptr};
   Channel* baseappmgr_channel_{nullptr};
+  // Last mgr_generation advertised by BaseAppMgr. Messages tagged with a
+  // smaller value would be dropped as residue from a stale mgr generation.
+  uint64_t accepted_baseappmgr_generation_{0};
+  uint64_t baseappmgr_stale_drops_{0};
   // Per-entity routing (which CellApp owns its Real) lives on
   // BaseEntity.cell_addr_; registry handles Birth/Death + self-filter.
   CellAppPeerRegistry cellapp_peers_;
@@ -223,10 +237,10 @@ class BaseApp : public EntityApp {
   Channel* cellappmgr_channel_{nullptr};
   uint32_t next_space_request_id_{1};
   std::unordered_map<uint32_t, SpaceCreatedCallback> pending_space_creates_;
-  // space_id → space master type name. Lookup populates CreateSpaceRequest.
+  // space_id to space master type name. Lookup populates CreateSpaceRequest.
   std::unordered_map<SpaceID, std::string> space_master_types_;
 
-  // Cache of {space_id → primary cell host} from SpaceCreatedResult; lets
+  // Cache of {space_id to primary cell host} from SpaceCreatedResult; lets
   // CreateBaseEntityFromScript skip re-asking the mgr on subsequent entities.
   std::unordered_map<SpaceID, Address> known_space_hosts_;
   // Latest flattened BSP per space; replayed to a freshly-attached client.
@@ -370,7 +384,29 @@ class BaseApp : public EntityApp {
     std::chrono::steady_clock::time_point last_refill{};
     uint32_t consecutive_violations{0};
   };
+  struct MovementInputSeqState {
+    uint32_t newest_seq{0};
+    bool initialized{false};
+  };
+  struct MovementAckRelayState {
+    uint32_t acked_input_seq{0};
+    uint32_t server_tick{0};
+    uint32_t cell_epoch{0};
+    uint32_t large_correction_streak{0};
+    uint32_t reported_input_seq{0};
+    uint32_t reported_server_tick{0};
+    bool initialized{false};
+    bool report_initialized{false};
+  };
+  enum class MovementInputSeqResult {
+    kAccepted,
+    kStale,
+    kGap,
+  };
   std::unordered_map<Address, RpcRateBucket> rpc_rate_buckets_;
+  std::unordered_map<Address, RpcRateBucket> movement_rate_buckets_;
+  std::unordered_map<Address, MovementInputSeqState> movement_input_seq_;
+  std::unordered_map<EntityID, MovementAckRelayState> movement_ack_relay_state_;
   uint64_t delta_bytes_sent_total_{0};
   uint64_t delta_bytes_deferred_total_{0};
   uint64_t reliable_delta_bytes_sent_total_{0};
@@ -399,10 +435,30 @@ class BaseApp : public EntityApp {
   uint64_t client_rpc_dropped_unknown_total_{0};
   uint64_t client_rpc_dropped_unauthorized_total_{0};
   uint64_t client_rpc_dropped_rate_total_{0};
+  uint64_t movement_input_packets_total_{0};
+  uint64_t movement_input_forwarded_total_{0};
+  uint64_t movement_input_dropped_total_{0};
+  uint64_t movement_input_rate_limited_total_{0};
+  uint64_t movement_input_invalid_dropped_total_{0};
+  uint64_t movement_input_stale_dropped_total_{0};
+  uint64_t movement_input_seq_gap_dropped_total_{0};
+  uint64_t movement_ack_sent_total_{0};
+  uint64_t movement_ack_stale_dropped_total_{0};
+  uint64_t movement_correction_tier1_total_{0};
+  uint64_t movement_correction_tier2_total_{0};
+  uint64_t movement_correction_snap_total_{0};
+  uint64_t movement_correction_suspicious_total_{0};
+  uint64_t movement_correction_report_total_{0};
+  uint64_t movement_correction_report_dropped_total_{0};
   uint64_t cellapp_death_notifications_total_{0};
+  uint64_t cellapp_death_restore_scheduled_total_{0};
+  uint64_t cellapp_death_restore_payload_scheduled_total_{0};
+  uint64_t cellapp_death_restore_ghost_backup_scheduled_total_{0};
   uint64_t cellapp_death_restored_total_{0};
   uint64_t cellapp_death_lost_total_{0};
   uint64_t cellapp_death_restore_timeouts_total_{0};
+  uint64_t cellapp_death_restore_last_elapsed_ms_{0};
+  uint64_t cellapp_death_restore_max_elapsed_ms_{0};
   struct PendingCellAppDeathRestore {
     TimePoint started_at{};
     Address target_addr;
@@ -489,9 +545,19 @@ class BaseApp : public EntityApp {
   void OnUsernameDestroyComplete(const std::string& username);
   void SweepStaleDestroysInFlight();
   void SweepCellAppDeathRestoreTimeouts();
+  [[nodiscard]] auto BuildCellAppDeathRestoreStatus() const -> std::string;
+  [[nodiscard]] auto BuildCellAppRouteSummary() const -> std::string;
+  auto RecordCellAppDeathRestoreElapsed(const PendingCellAppDeathRestore& pending,
+                                        TimePoint now) -> uint64_t;
   // Returns true when one token is consumed; false when the bucket is empty
   // and the call should be dropped at the message boundary.
   bool ConsumeRpcRateToken(const Address& client_addr);
+  bool ConsumeMovementRateToken(const Address& client_addr);
+  auto TrackMovementInputSequence(const Address& client_addr,
+                                  const baseapp::ClientMovementInput& msg)
+      -> MovementInputSeqResult;
+  void SeedMovementInputSequenceFromAck(const Address& client_addr, uint32_t acked_input_seq);
+  void RecordMovementCorrectionFlags(MovementAckRelayState& ack_state, uint16_t flags);
   void SendPrepareLoginResult(const Address& reply_addr, const login::PrepareLoginResult& msg);
 };
 

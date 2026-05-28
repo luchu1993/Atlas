@@ -2,9 +2,11 @@
 
 #include <algorithm>
 #include <chrono>
+#include <cmath>
 #include <cstring>
 #include <format>
 #include <limits>
+#include <map>
 #include <optional>
 #include <span>
 #include <vector>
@@ -33,17 +35,18 @@ auto HasManagedEntityType(uint16_t type_id) -> bool {
   return EntityDefRegistry::Instance().FindById(type_id) != nullptr;
 }
 
-// Token-bucket parameters for the per-client RPC rate limiter.
-// 50 rps sustained handles legitimate human input plus protocol overhead;
-// 100-token burst absorbs short flurries (skill chains, batched UI events).
+// Per-client RPC limiter. Sustained 50 rps covers legitimate input;
+// 100-token bursts absorb short flurries such as skill chains.
 inline constexpr double kRpcRefillTokensPerSec = 50.0;
 inline constexpr double kRpcBurstCapacity = 100.0;
 inline constexpr uint32_t kRpcRateViolationDisconnectThreshold = 250;
+inline constexpr double kMovementRefillTokensPerSec = 90.0;
+inline constexpr double kMovementBurstCapacity = 180.0;
+inline constexpr uint32_t kMovementLargeCorrectionSuspiciousStreak = 3;
+inline constexpr float kMovementCorrectionReportMaxDistanceM = 1000.0f;
 
-// DB-blob framing: stitches DATA_BASE + CELL_DATA so cell-scope persistent
-// state survives a save/load cycle.
-// Layout: magic(1) | version(1) | base_len(u32 LE) | base | cell_len(u32 LE) | cell.
-// Legacy pre-magic blobs are treated as "all base, no cell".
+// DB-blob framing keeps DATA_BASE plus CELL_DATA through save/load.
+// Legacy pre-magic blobs are treated as base-only.
 constexpr std::byte kDbBlobMagic{0xA7};
 constexpr std::byte kDbBlobVersion{0x01};
 
@@ -93,8 +96,8 @@ auto DecodeDbBlob(std::span<const std::byte> blob, std::span<const std::byte>& b
   return true;
 }
 
-// Deterministic peer fallback when no mgr is connected: pick by
-// (space_id-1) % sorted_peers — mirrors the pre-Phase 11 routing.
+// Deterministic peer fallback when no manager is connected: sort peers
+// by address and pick (space_id - 1) modulo peer count.
 auto LegacyPickPeer(const std::unordered_map<Address, IntrusivePtr<Channel>>& peers,
                     SpaceID space_id) -> std::pair<Address, Channel*> {
   std::vector<std::pair<Address, Channel*>> sorted;
@@ -255,14 +258,12 @@ auto BaseApp::Init(int argc, char* argv[]) -> bool {
         FailAllDbappPendingRequests("dbapp_disconnected");
       });
 
-  // Delegated to CellAppPeerRegistry which handles Birth/Death + self-filter
-  // consistently with CellApp's own peer list. BaseApp never self-registers
-  // as a CellApp, so self_addr is a default Address (filter is a no-op).
+  // Delegated to CellAppPeerRegistry for Birth/Death and self-filtering.
+  // BaseApp never self-registers as a CellApp.
   cellapp_peers_.Subscribe(GetMachinedClient(), /*self_addr=*/Address{});
 
-  // Connect on birth so scripts can call RequestCreateSpace. On death we
-  // just clear the channel - pending create requests fail via the loop
-  // below so callers don't hang.
+  // Connect on birth so scripts can call RequestCreateSpace.
+  // On death, clear the channel and fail pending create requests below.
   GetMachinedClient().Subscribe(
       machined::ListenerType::kBoth, ProcessType::kCellAppMgr,
       [this](const machined::BirthNotification& n) {
@@ -290,7 +291,7 @@ auto BaseApp::Init(int argc, char* argv[]) -> bool {
         }
         pending_space_creates_.clear();
         // Callbacks above fire with space_id=0 so per-space caches can't
-        // self-clean — wipe them here so a resurrected mgr re-bootstraps.
+        // self-clean; wipe them here so a resurrected mgr re-bootstraps.
         known_space_hosts_.clear();
         pending_cell_entity_creates_.clear();
         pending_spawn_local_entities_.clear();
@@ -336,6 +337,21 @@ auto BaseApp::Init(int argc, char* argv[]) -> bool {
       [this](const Address& /*src*/, Channel* /*ch*/, const baseapp::ClientEventSeqReport& msg) {
         OnClientEventSeqReport(msg);
       });
+  (void)table.RegisterTypedHandler<baseapp::MovementStateAckFromCell>(
+      [this](const Address& /*src*/, Channel* ch,
+             const baseapp::MovementStateAckFromCell& msg) {
+        OnMovementStateAckFromCell(*ch, msg);
+      });
+  (void)table.RegisterTypedHandler<baseapp::MovementCommandStartFromCell>(
+      [this](const Address& /*src*/, Channel* ch,
+             const baseapp::MovementCommandStartFromCell& msg) {
+        OnMovementCommandStartFromCell(*ch, msg);
+      });
+  (void)table.RegisterTypedHandler<baseapp::MovementCommandEndFromCell>(
+      [this](const Address& /*src*/, Channel* ch,
+             const baseapp::MovementCommandEndFromCell& msg) {
+        OnMovementCommandEndFromCell(*ch, msg);
+      });
   (void)table.RegisterTypedHandler<baseapp::ForceLogoff>(
       [this](const Address& /*src*/, Channel* ch, const baseapp::ForceLogoff& msg) {
         OnForceLogoff(*ch, msg);
@@ -370,6 +386,15 @@ auto BaseApp::Init(int argc, char* argv[]) -> bool {
       [this](const Address& /*src*/, Channel* ch, const baseapp::ClientCellRpc& msg) {
         OnClientCellRpc(*ch, msg);
       });
+  (void)ext_table.RegisterTypedHandler<baseapp::ClientMovementInput>(
+      [this](const Address& /*src*/, Channel* ch, const baseapp::ClientMovementInput& msg) {
+        OnClientMovementInput(*ch, msg);
+      });
+  (void)ext_table.RegisterTypedHandler<baseapp::MovementCorrectionReport>(
+      [this](const Address& /*src*/, Channel* ch,
+             const baseapp::MovementCorrectionReport& msg) {
+        OnMovementCorrectionReport(*ch, msg);
+      });
 
   ATLAS_LOG_INFO("BaseApp: initialised");
   return true;
@@ -381,6 +406,7 @@ void BaseApp::Fini() {
     if (ent.Dbid() != kInvalidDBID) ReleaseCheckout(ent.Dbid(), ent.TypeId());
   });
   entity_mgr_.FlushDestroyed();
+  SweepMovementAckRelayState();
   EntityApp::Fini();
 }
 
@@ -390,6 +416,7 @@ void BaseApp::OnEndOfTick() {
 
 void BaseApp::OnTickComplete() {
   entity_mgr_.FlushDestroyed();
+  SweepMovementAckRelayState();
   entity_mgr_.CleanupRetiredSessions();
   ExpireDetachedProxies();
   FlushClientDeltas();
@@ -418,10 +445,17 @@ auto BaseApp::CreateNativeProvider() -> std::unique_ptr<INativeApiProvider> {
 void BaseApp::RegisterWatchers() {
   EntityApp::RegisterWatchers();
   auto& wr = GetWatcherRegistry();
+  wr.Add<uint64_t>("baseapp/ha/accepted_baseappmgr_generation",
+                   std::function<uint64_t()>([this] { return accepted_baseappmgr_generation_; }));
+  wr.Add<uint64_t>("baseapp/ha/baseappmgr_stale_drops",
+                   std::function<uint64_t()>([this] { return baseappmgr_stale_drops_; }));
   wr.Add<float>("baseapp/load",
                 std::function<float()>([this] { return load_tracker_.CurrentLoad(); }));
   wr.Add<std::size_t>("baseapp/entity_count",
                       std::function<std::size_t()>([this] { return entity_mgr_.Size(); }));
+  wr.Add<std::string>("baseapp/cellapp_routes",
+                      std::function<std::string()>(
+                          [this] { return BuildCellAppRouteSummary(); }));
   wr.Add<std::size_t>("baseapp/proxy_count",
                       std::function<std::size_t()>([this] { return entity_mgr_.ProxyCount(); }));
   wr.Add<std::size_t>("baseapp/client_binding_count",
@@ -466,6 +500,60 @@ void BaseApp::RegisterWatchers() {
       std::function<uint64_t()>([this] { return client_rpc_dropped_unauthorized_total_; }));
   wr.Add<uint64_t>("baseapp/client_rpc_dropped_rate_total",
                    std::function<uint64_t()>([this] { return client_rpc_dropped_rate_total_; }));
+  wr.Add<uint64_t>("movement/input_packets_total",
+                   std::function<uint64_t()>([this] { return movement_input_packets_total_; }));
+  wr.Add<uint64_t>("movement/input_dropped_total",
+                   std::function<uint64_t()>([this] { return movement_input_dropped_total_; }));
+  wr.Add<uint64_t>("movement/input_rate_limited_total",
+                   std::function<uint64_t()>([this] {
+                     return movement_input_rate_limited_total_;
+                   }));
+  wr.Add<uint64_t>("movement/input_invalid_dropped_total",
+                   std::function<uint64_t()>([this] {
+                     return movement_input_invalid_dropped_total_;
+                   }));
+  wr.Add<uint64_t>("movement/input_stale_dropped_total",
+                   std::function<uint64_t()>([this] {
+                     return movement_input_stale_dropped_total_;
+                   }));
+  wr.Add<uint64_t>("movement/input_seq_gap_dropped_total",
+                   std::function<uint64_t()>([this] {
+                     return movement_input_seq_gap_dropped_total_;
+                   }));
+  wr.Add<uint64_t>("movement/input_forwarded_total",
+                   std::function<uint64_t()>([this] {
+                     return movement_input_forwarded_total_;
+                   }));
+  wr.Add<uint64_t>("movement/ack_sent_total",
+                   std::function<uint64_t()>([this] { return movement_ack_sent_total_; }));
+  wr.Add<uint64_t>("movement/ack_stale_dropped_total",
+                   std::function<uint64_t()>([this] {
+                     return movement_ack_stale_dropped_total_;
+                   }));
+  wr.Add<uint64_t>("movement/correction_tier1_total",
+                   std::function<uint64_t()>([this] {
+                     return movement_correction_tier1_total_;
+                   }));
+  wr.Add<uint64_t>("movement/correction_tier2_total",
+                   std::function<uint64_t()>([this] {
+                     return movement_correction_tier2_total_;
+                   }));
+  wr.Add<uint64_t>("movement/correction_snap_total",
+                   std::function<uint64_t()>([this] {
+                     return movement_correction_snap_total_;
+                   }));
+  wr.Add<uint64_t>("movement/correction_suspicious_total",
+                   std::function<uint64_t()>([this] {
+                     return movement_correction_suspicious_total_;
+                   }));
+  wr.Add<uint64_t>("movement/correction_report_total",
+                   std::function<uint64_t()>([this] {
+                     return movement_correction_report_total_;
+                   }));
+  wr.Add<uint64_t>("movement/correction_report_dropped_total",
+                   std::function<uint64_t()>([this] {
+                     return movement_correction_report_dropped_total_;
+                   }));
   wr.Add<std::size_t>("baseapp/logoff_in_flight_count", std::function<std::size_t()>([this] {
                         return logoff_entities_in_flight_.size();
                       }));
@@ -504,6 +592,18 @@ void BaseApp::RegisterWatchers() {
                    std::function<uint64_t()>([this] {
                      return cellapp_death_notifications_total_;
                    }));
+  wr.Add<uint64_t>("baseapp/cellapp_death_restore_scheduled_total",
+                   std::function<uint64_t()>([this] {
+                     return cellapp_death_restore_scheduled_total_;
+                   }));
+  wr.Add<uint64_t>("baseapp/cellapp_death_restore_payload_scheduled_total",
+                   std::function<uint64_t()>([this] {
+                     return cellapp_death_restore_payload_scheduled_total_;
+                   }));
+  wr.Add<uint64_t>("baseapp/cellapp_death_restore_ghost_backup_scheduled_total",
+                   std::function<uint64_t()>([this] {
+                     return cellapp_death_restore_ghost_backup_scheduled_total_;
+                   }));
   wr.Add<uint64_t>("baseapp/cellapp_death_restored_total",
                    std::function<uint64_t()>([this] { return cellapp_death_restored_total_; }));
   wr.Add<uint64_t>("baseapp/cellapp_death_lost_total",
@@ -512,10 +612,21 @@ void BaseApp::RegisterWatchers() {
                    std::function<uint64_t()>([this] {
                      return cellapp_death_restore_timeouts_total_;
                    }));
+  wr.Add<uint64_t>("baseapp/cellapp_death_restore_last_elapsed_ms",
+                   std::function<uint64_t()>([this] {
+                     return cellapp_death_restore_last_elapsed_ms_;
+                   }));
+  wr.Add<uint64_t>("baseapp/cellapp_death_restore_max_elapsed_ms",
+                   std::function<uint64_t()>([this] {
+                     return cellapp_death_restore_max_elapsed_ms_;
+                   }));
   wr.Add<std::size_t>("baseapp/cellapp_death_pending_restores",
                       std::function<std::size_t()>([this] {
                         return pending_cellapp_death_restores_.size();
                       }));
+  wr.Add<std::string>("baseapp/cellapp_death_restore_status",
+                      std::function<std::string()>(
+                          [this] { return BuildCellAppDeathRestoreStatus(); }));
   RegisterLatencyWatchers(wr, "baseapp/prepare_login_latency", prepare_login_latency_);
   RegisterLatencyWatchers(wr, "baseapp/authenticate_latency", authenticate_latency_);
   RegisterLatencyWatchers(wr, "baseapp/force_logoff_latency", force_logoff_latency_);
@@ -843,13 +954,13 @@ void BaseApp::OnCellEntityCreated(Channel& ch, const baseapp::CellEntityCreated&
                   cell_addr.Port());
   if (auto pending_it = pending_cellapp_death_restores_.find(msg.entity_id);
       pending_it != pending_cellapp_death_restores_.end()) {
+    (void)RecordCellAppDeathRestoreElapsed(pending_it->second, Clock::now());
     pending_cellapp_death_restores_.erase(pending_it);
     ++cellapp_death_restored_total_;
   }
 
-  // CellReady tells the client its ClientCellRpc will now route. Note: not
-  // retroactive - a client binding after this point relies on world_stress's
-  // ordering where GiveClientTo runs before the CellApp ack.
+  // CellReady tells the client its ClientCellRpc will now route.
+  // It is not retroactive for clients binding after the CellApp ack.
   auto* proxy = entity_mgr_.FindProxy(msg.entity_id);
   if (proxy && proxy->HasClient()) {
     // Race fix: BindClient may have run before cell_addr was known and
@@ -889,6 +1000,7 @@ void BaseApp::OnCellEntityCreateFailed(const baseapp::CellEntityCreateFailed& ms
   if (ent != nullptr) ent->ClearCell();
   if (auto pending_it = pending_cellapp_death_restores_.find(entity_id);
       pending_it != pending_cellapp_death_restores_.end()) {
+    (void)RecordCellAppDeathRestoreElapsed(pending_it->second, Clock::now());
     pending_cellapp_death_restores_.erase(pending_it);
     ++cellapp_death_lost_total_;
   }
@@ -942,6 +1054,8 @@ void BaseApp::OnCellAppDeath(const baseapp::CellAppDeath& msg) {
   for (const auto& [sid, addr] : msg.rehomes) space_to_new_host[sid] = addr;
 
   uint32_t scheduled = 0;
+  uint32_t payload_scheduled = 0;
+  uint32_t ghost_backup_scheduled = 0;
   uint32_t lost = 0;
 
   // Collect first; ForEach must not observe SetCell/ClearCell mid-walk.
@@ -958,7 +1072,7 @@ void BaseApp::OnCellAppDeath(const baseapp::CellAppDeath& msg) {
     auto new_addr = FindDeathRehomeHost(*ent, msg, space_to_new_host);
     if (!new_addr.has_value()) {
       ATLAS_LOG_ERROR(
-          "BaseApp: CellAppDeath: no rehome target for entity={} space={} — "
+          "BaseApp: CellAppDeath: no rehome target for entity={} space={}; "
           "Real lost",
           eid, sid);
       ent->ClearCell();
@@ -977,7 +1091,7 @@ void BaseApp::OnCellAppDeath(const baseapp::CellAppDeath& msg) {
     if (!ch_result) {
       ATLAS_LOG_ERROR(
           "BaseApp: CellAppDeath: cannot reach rehome target {}:{} for "
-          "entity={} — Real lost",
+          "entity={}; Real lost",
           new_addr->Ip(), new_addr->Port(), eid);
       ent->ClearCell();
       ++lost;
@@ -1005,6 +1119,7 @@ void BaseApp::OnCellAppDeath(const baseapp::CellAppDeath& msg) {
     restore.base_addr = Network().RudpAddress();
     restore.request_id = eid;
     restore.require_existing_ghost = !has_cell_backup;
+    restore.cellapp_death_restore = true;
     // The restore blob is what BaseApp archives via BackupCellEntity;
     // empty means the receiver must promote an existing Ghost backup.
     restore.script_init_data = ent->CellBackupData();
@@ -1017,10 +1132,21 @@ void BaseApp::OnCellAppDeath(const baseapp::CellAppDeath& msg) {
     pending_cellapp_death_restores_[eid] =
         PendingCellAppDeathRestore{Clock::now(), *new_addr};
     ++scheduled;
+    if (has_cell_backup) {
+      ++payload_scheduled;
+    } else {
+      ++ghost_backup_scheduled;
+    }
   }
 
+  cellapp_death_restore_scheduled_total_ += scheduled;
+  cellapp_death_restore_payload_scheduled_total_ += payload_scheduled;
+  cellapp_death_restore_ghost_backup_scheduled_total_ += ghost_backup_scheduled;
   cellapp_death_lost_total_ += lost;
-  ATLAS_LOG_INFO("BaseApp: CellAppDeath complete — scheduled={} lost={}", scheduled, lost);
+  ATLAS_LOG_INFO(
+      "BaseApp: CellAppDeath complete; scheduled={} payload_scheduled={} "
+      "ghost_backup_scheduled={} lost={}",
+      scheduled, payload_scheduled, ghost_backup_scheduled, lost);
 }
 
 void BaseApp::OnSpaceBspGeometry(const baseapp::SpaceBspGeometry& msg) {
@@ -1072,9 +1198,8 @@ void BaseApp::RelayRpcToClient(Channel& client_ch, EntityID target_entity_id, ui
   }
 }
 
-// Path #1 (Unreliable) - runs through per-client DeltaForwarder
-// (latest-wins, byte budget). Volatile state only; cumulative counters
-// would be silently coalesced (use Path #2). See delta_forwarder.h.
+// Unreliable path runs through per-client DeltaForwarder.
+// Volatile state only; cumulative counters use the reliable path.
 void BaseApp::OnReplicatedDeltaFromCell(Channel& /*ch*/,
                                         const baseapp::ReplicatedDeltaFromCell& msg) {
   auto* proxy = entity_mgr_.FindProxy(msg.entity_id);
@@ -1084,7 +1209,7 @@ void BaseApp::OnReplicatedDeltaFromCell(Channel& /*ch*/,
   if (it == entity_client_index_.end()) return;
 
   // Envelope header: [u8 kind][u32 LE peer_eid][payload]. Coalesce by peer,
-  // not observer — otherwise all peers in AoI collapse into one queue entry.
+  // not observer; otherwise all peers in AoI collapse into one queue entry.
   constexpr std::size_t kEnvelopeHeaderBytes = 1 + sizeof(EntityID);
   if (msg.delta.size() < kEnvelopeHeaderBytes) {
     ATLAS_LOG_WARNING("BaseApp: ReplicatedDeltaFromCell envelope truncated ({} bytes)",
@@ -1154,6 +1279,128 @@ void BaseApp::OnReplicatedBaselineFromCell(const baseapp::ReplicatedBaselineFrom
   (void)client_ch->SendMessage(out);
   baseline_bytes_sent_total_ += static_cast<uint64_t>(msg.snapshot.size());
   ++baseline_messages_sent_total_;
+}
+
+void BaseApp::OnMovementStateAckFromCell(Channel& ch,
+                                         const baseapp::MovementStateAckFromCell& msg) {
+  auto* entity = entity_mgr_.Find(msg.entity_id);
+  if (entity == nullptr) return;
+  auto* client_ch = ResolveClientChannel(msg.entity_id);
+  if (client_ch == nullptr) return;
+  if (ch.RemoteAddress() != entity->CellAddr()) {
+    ++movement_ack_stale_dropped_total_;
+    return;
+  }
+  if (msg.cell_epoch < entity->CellEpoch()) {
+    ++movement_ack_stale_dropped_total_;
+    return;
+  }
+
+  auto& ack_state = movement_ack_relay_state_[msg.entity_id];
+  if (ack_state.initialized) {
+    const bool newer_epoch = msg.cell_epoch > ack_state.cell_epoch;
+    const bool newer_seq = movement::IsInputSequenceNewer(msg.acked_input_seq,
+                                                          ack_state.acked_input_seq);
+    const bool newer_tick = !newer_epoch &&
+        msg.acked_input_seq == ack_state.acked_input_seq &&
+        msg.server_tick > ack_state.server_tick;
+    if (!newer_epoch && !newer_seq && !newer_tick) {
+      ++movement_ack_stale_dropped_total_;
+      return;
+    }
+  }
+  ack_state.acked_input_seq = msg.acked_input_seq;
+  ack_state.server_tick = msg.server_tick;
+  ack_state.cell_epoch = msg.cell_epoch;
+  ack_state.initialized = true;
+
+  baseapp::MovementStateAckToClient out;
+  out.entity_id = msg.entity_id;
+  out.acked_input_seq = msg.acked_input_seq;
+  out.server_tick = msg.server_tick;
+  out.state = msg.state;
+  out.correction_flags = msg.correction_flags;
+  if (auto result = client_ch->SendMessage(out); result) {
+    ++movement_ack_sent_total_;
+    SeedMovementInputSequenceFromAck(client_ch->RemoteAddress(), msg.acked_input_seq);
+    if (msg.correction_flags != 0) RecordMovementCorrectionFlags(ack_state, msg.correction_flags);
+  }
+}
+
+void BaseApp::OnMovementCommandStartFromCell(
+    Channel& ch, const baseapp::MovementCommandStartFromCell& msg) {
+  if (msg.source_entity_id == kInvalidEntityID || msg.dest_entity_ids.empty()) return;
+  if (auto* source = entity_mgr_.Find(msg.source_entity_id)) {
+    if (source->HasCell() && ch.RemoteAddress() != source->CellAddr()) return;
+    if (msg.cell_epoch < source->CellEpoch()) return;
+  }
+
+  baseapp::MovementCommandStartToClient out;
+  out.entity_id = msg.source_entity_id;
+  out.command = msg.command;
+  for (EntityID dest_entity_id : msg.dest_entity_ids) {
+    auto* proxy = entity_mgr_.FindProxy(dest_entity_id);
+    if (proxy == nullptr || !proxy->HasClient()) continue;
+    auto* client_ch = ResolveClientChannel(dest_entity_id);
+    if (client_ch == nullptr) continue;
+    (void)client_ch->SendMessage(out);
+  }
+}
+
+void BaseApp::OnMovementCommandEndFromCell(
+    Channel& ch, const baseapp::MovementCommandEndFromCell& msg) {
+  if (msg.source_entity_id == kInvalidEntityID || msg.dest_entity_ids.empty()) return;
+  if (auto* source = entity_mgr_.Find(msg.source_entity_id)) {
+    if (source->HasCell() && ch.RemoteAddress() != source->CellAddr()) return;
+    if (msg.cell_epoch < source->CellEpoch()) return;
+  }
+
+  baseapp::MovementCommandEndToClient out;
+  out.entity_id = msg.source_entity_id;
+  out.command_id = msg.command_id;
+  out.server_tick = msg.server_tick;
+  out.reason = msg.reason;
+  out.state = msg.state;
+  for (EntityID dest_entity_id : msg.dest_entity_ids) {
+    auto* proxy = entity_mgr_.FindProxy(dest_entity_id);
+    if (proxy == nullptr || !proxy->HasClient()) continue;
+    auto* client_ch = ResolveClientChannel(dest_entity_id);
+    if (client_ch == nullptr) continue;
+    (void)client_ch->SendMessage(out);
+  }
+}
+
+void BaseApp::SweepMovementAckRelayState() {
+  for (auto it = movement_ack_relay_state_.begin(); it != movement_ack_relay_state_.end();) {
+    auto* entity = entity_mgr_.Find(it->first);
+    if (entity == nullptr || entity->IsPendingDestroy()) {
+      it = movement_ack_relay_state_.erase(it);
+    } else {
+      ++it;
+    }
+  }
+}
+
+void BaseApp::RecordMovementCorrectionFlags(MovementAckRelayState& ack_state, uint16_t flags) {
+  if ((flags & movement::kCorrectionFlagTier1) != 0) {
+    ++movement_correction_tier1_total_;
+  }
+  if ((flags & movement::kCorrectionFlagTier2) != 0) {
+    ++movement_correction_tier2_total_;
+  }
+  if ((flags & movement::kCorrectionFlagSnap) != 0) {
+    ++movement_correction_snap_total_;
+  }
+  const bool large_correction =
+      (flags & (movement::kCorrectionFlagTier2 | movement::kCorrectionFlagSnap)) != 0;
+  if (large_correction) {
+    ++ack_state.large_correction_streak;
+    if (ack_state.large_correction_streak == kMovementLargeCorrectionSuspiciousStreak) {
+      ++movement_correction_suspicious_total_;
+    }
+  } else {
+    ack_state.large_correction_streak = 0;
+  }
 }
 
 void BaseApp::FlushClientDeltas() {
@@ -1350,9 +1597,8 @@ auto BaseApp::TryCompleteLocalRelogin(PendingLogin pending) -> bool {
     return true;
   }
 
-  // Mirror CompletePrepareLoginFromCheckout so OnClientAuthenticate can
-  // re-register the account index on fast relogin; without this the
-  // username -> entity mapping stays empty after a same-name reconnect.
+  // Mirror CompletePrepareLoginFromCheckout for fast relogin.
+  // Otherwise username mapping stays empty after same-name reconnect.
   prepared_login_entities_[pending.login_request_id] =
       PreparedLoginEntity{proxy->EntityId(), pending.dbid, proxy->TypeId(), Clock::now(),
                           pending.username};
@@ -1543,10 +1789,8 @@ void BaseApp::SubmitPrepareLogin(PendingLogin pending) {
 }
 
 void BaseApp::DispatchPrepareLogin(PendingLogin pending) {
-  // Run before TryCompleteLocalRelogin: the DBID-reuse path only knows
-  // about the Account proxy, but after GiveClientTo the index points to
-  // an Avatar that DBID lookup never sees. Without this gate the prior
-  // Avatar stays alive in cellapp and ghosts in the new client's AoI.
+  // Run before TryCompleteLocalRelogin to catch GiveClientTo Avatars.
+  // Otherwise the prior Avatar stays alive in cellapp and client AoI.
   if (!pending.username.empty()) {
     if (destroys_in_flight_.contains(pending.username)) {
       const std::string kName = pending.username;
@@ -1563,9 +1807,8 @@ void BaseApp::DispatchPrepareLogin(PendingLogin pending) {
           dbid_owner = ent->EntityId();
         }
       }
-      // Skip when the indexed entity is the same row TryCompleteLocalRelogin
-      // would resume; otherwise it's an orphan owner (Avatar handed off via
-      // GiveClientTo) that must die before the new session enters world.
+      // Skip when the indexed entity is the row TryCompleteLocalRelogin resumes.
+      // Otherwise it is an orphan owner that must die before the new session.
       if (kIndexed != dbid_owner) {
         const std::string kName = pending.username;
         ATLAS_LOG_DEBUG(
@@ -1747,7 +1990,7 @@ void BaseApp::BeginLogoffPersist(EntityID entity_id, DatabaseID dbid, uint16_t t
       // Destroy follows immediately; a dropped WriteEntity = silent data loss.
       ATLAS_LOG_ERROR(
           "BaseApp: logoff WriteEntity dropped, dbid={} entity_id={} request_id={}: {} "
-          "— player progress lost",
+          "player progress lost",
           dbid, entity_id, msg.request_id, r.Error().Message());
     }
   }
@@ -1963,10 +2206,8 @@ void BaseApp::OnUsernameDestroyComplete(const std::string& username) {
   // clears it here so a late-arriving Ack can't fire into a dead slot.
   if (stale_ack_id != 0) destroy_ack_waiters_.erase(stale_ack_id);
   if (queued.empty()) return;
-  // Last-writer-wins: dispatching every queued pending would race and
-  // leak multiple same-name entities into entity_mgr_ before any of them
-  // authenticated. Fail older entries with the same superseded code
-  // TryCompleteLocalRelogin uses for the DBID side.
+  // Last-writer-wins prevents multiple same-name entities in entity_mgr_.
+  // Fail older entries with TryCompleteLocalRelogin's superseded code.
   for (std::size_t i = 0; i + 1 < queued.size(); ++i) {
     const DatabaseID kDbid = queued[i].dbid;
     FailPendingPrepareLogin(queued[i], "superseded_by_newer_login");
@@ -2002,8 +2243,7 @@ void BaseApp::SweepCellAppDeathRestoreTimeouts() {
   for (EntityID entity_id : timed_out) {
     auto it = pending_cellapp_death_restores_.find(entity_id);
     if (it == pending_cellapp_death_restores_.end()) continue;
-    const auto elapsed_ms =
-        std::chrono::duration_cast<std::chrono::milliseconds>(now - it->second.started_at).count();
+    const auto elapsed_ms = RecordCellAppDeathRestoreElapsed(it->second, now);
     if (auto* ent = entity_mgr_.Find(entity_id)) ent->ClearCell();
     ++cellapp_death_lost_total_;
     ++cellapp_death_restore_timeouts_total_;
@@ -2012,6 +2252,73 @@ void BaseApp::SweepCellAppDeathRestoreTimeouts() {
         entity_id, it->second.target_addr.ToString(), elapsed_ms);
     pending_cellapp_death_restores_.erase(it);
   }
+}
+
+auto BaseApp::BuildCellAppDeathRestoreStatus() const -> std::string {
+  const uint64_t pending = static_cast<uint64_t>(pending_cellapp_death_restores_.size());
+  const uint64_t settled = cellapp_death_restored_total_ + cellapp_death_lost_total_ + pending;
+  const uint64_t unresolved =
+      cellapp_death_restore_scheduled_total_ > settled
+          ? cellapp_death_restore_scheduled_total_ - settled
+          : 0;
+  const char* state = "idle";
+  if (pending > 0) {
+    state = "pending";
+  } else if (cellapp_death_lost_total_ > 0 || cellapp_death_restore_timeouts_total_ > 0 ||
+             unresolved > 0) {
+    state = "degraded";
+  } else if (cellapp_death_notifications_total_ > 0) {
+    state = "healthy";
+  }
+  return std::format(
+      "state={} notifications={} scheduled={} payload_scheduled={} "
+      "ghost_backup_scheduled={} restored={} lost={} timeouts={} pending={} "
+      "unresolved={} last_elapsed_ms={} max_elapsed_ms={}",
+      state, cellapp_death_notifications_total_, cellapp_death_restore_scheduled_total_,
+      cellapp_death_restore_payload_scheduled_total_,
+      cellapp_death_restore_ghost_backup_scheduled_total_, cellapp_death_restored_total_,
+      cellapp_death_lost_total_, cellapp_death_restore_timeouts_total_, pending,
+      unresolved, cellapp_death_restore_last_elapsed_ms_,
+      cellapp_death_restore_max_elapsed_ms_);
+}
+
+auto BaseApp::BuildCellAppRouteSummary() const -> std::string {
+  struct RouteCounts {
+    std::size_t entities{0};
+    std::size_t payload_candidates{0};
+    std::size_t ghost_backup_candidates{0};
+  };
+  std::map<Address, RouteCounts> route_counts;
+  entity_mgr_.ForEach([&route_counts](const BaseEntity& ent) {
+    if (!ent.HasCell()) return;
+    auto& counts = route_counts[ent.CellAddr()];
+    ++counts.entities;
+    if (ent.CellBackupData().empty()) {
+      ++counts.ghost_backup_candidates;
+    } else {
+      ++counts.payload_candidates;
+    }
+  });
+
+  std::string summary = std::format("routes={}", route_counts.size());
+  for (const auto& [addr, counts] : route_counts) {
+    summary += std::format(
+        " addr={} entities={} payload_candidates={} ghost_backup_candidates={}",
+        addr.ToString(), counts.entities, counts.payload_candidates,
+        counts.ghost_backup_candidates);
+  }
+  return summary;
+}
+
+auto BaseApp::RecordCellAppDeathRestoreElapsed(const PendingCellAppDeathRestore& pending,
+                                               TimePoint now) -> uint64_t {
+  const auto elapsed =
+      std::chrono::duration_cast<std::chrono::milliseconds>(now - pending.started_at).count();
+  const uint64_t elapsed_ms = elapsed > 0 ? static_cast<uint64_t>(elapsed) : 0;
+  cellapp_death_restore_last_elapsed_ms_ = elapsed_ms;
+  cellapp_death_restore_max_elapsed_ms_ =
+      std::max(cellapp_death_restore_max_elapsed_ms_, elapsed_ms);
+  return elapsed_ms;
 }
 
 void BaseApp::ProcessForceLogoffRequest(const baseapp::ForceLogoff& msg) {
@@ -2223,9 +2530,8 @@ void BaseApp::DispatchSpawnLocalEntity(cellapp::SpawnLocalEntity msg) {
 
 void BaseApp::EnsureSpaceBootstrap(SpaceID space_id) {
   if (!in_flight_space_requests_.insert(space_id).second) return;
-  // initial_cell_count is a ceiling for the mgr's quiescence-window
-  // bootstrap; send the max so a stagger-launched cluster ends with
-  // N cells == N cellapps regardless of which ones BaseApp sees first.
+  // initial_cell_count is a ceiling for the mgr's quiescence window.
+  // Send the max so staggered clusters converge to N cells == N cellapps.
   const uint16_t cell_count = 16;
   RequestCreateSpace(
       space_id,
@@ -2278,7 +2584,7 @@ void BaseApp::FlushPendingCellEntities(SpaceID space_id, const Address& host) {
   if (qit == pending_cell_entity_creates_.end()) return;
   auto* ch = ResolveCellChannelByAddr(cellapp_peers_.Channels(), host);
   if (ch == nullptr) {
-    ATLAS_LOG_WARNING("BaseApp: cannot flush {} pending CreateCellEntity — host {} unreachable",
+    ATLAS_LOG_WARNING("BaseApp: cannot flush {} pending CreateCellEntity; host {} unreachable",
                       qit->second.size(), host.ToString());
     pending_cell_entity_creates_.erase(qit);
     return;
@@ -2299,7 +2605,7 @@ void BaseApp::FlushPendingSpawnLocalEntities(SpaceID space_id, const Address& ho
   if (qit == pending_spawn_local_entities_.end()) return;
   auto* ch = ResolveCellChannelByAddr(cellapp_peers_.Channels(), host);
   if (ch == nullptr) {
-    ATLAS_LOG_WARNING("BaseApp: cannot flush {} pending SpawnLocalEntity — host {} unreachable",
+    ATLAS_LOG_WARNING("BaseApp: cannot flush {} pending SpawnLocalEntity; host {} unreachable",
                       qit->second.size(), host.ToString());
     pending_spawn_local_entities_.erase(qit);
     return;
@@ -2343,11 +2649,14 @@ void BaseApp::DoGiveClientToRemote(EntityID src_id, EntityID /*dest_id*/,
 
 void BaseApp::OnRegisterBaseappAck(Channel& /*ch*/, const baseappmgr::RegisterBaseAppAck& msg) {
   if (!msg.success) {
-    ATLAS_LOG_ERROR("BaseApp: RegisterBaseAppAck failed — shutting down");
+    ATLAS_LOG_ERROR("BaseApp: RegisterBaseAppAck failed; shutting down");
     Shutdown();
     return;
   }
   app_id_ = msg.app_id;
+  if (msg.mgr_generation > accepted_baseappmgr_generation_) {
+    accepted_baseappmgr_generation_ = msg.mgr_generation;
+  }
 
   MaybeRequestMoreIds();
 
@@ -2357,7 +2666,8 @@ void BaseApp::OnRegisterBaseappAck(Channel& /*ch*/, const baseappmgr::RegisterBa
     (void)baseappmgr_channel_->SendMessage(ready);
   }
 
-  ATLAS_LOG_INFO("BaseApp: registered as app_id={}", app_id_);
+  ATLAS_LOG_INFO("BaseApp: registered as app_id={} mgr_generation={}", app_id_,
+                 accepted_baseappmgr_generation_);
 }
 
 void BaseApp::OnGetEntityIdsAck(Channel& /*ch*/, const dbapp::GetEntityIdsAck& msg) {
@@ -2418,12 +2728,15 @@ auto BaseApp::BindClient(EntityID entity_id, const Address& client_addr) -> bool
 
   auto existing_entity = entity_client_index_.find(entity_id);
   if (existing_entity != entity_client_index_.end() && existing_entity->second != client_addr) {
+    movement_rate_buckets_.erase(existing_entity->second);
+    movement_input_seq_.erase(existing_entity->second);
     client_entity_index_.erase(existing_entity->second);
   }
 
   ClearDetachedGrace(entity_id);
   entity_client_index_[entity_id] = client_addr;
   client_entity_index_[client_addr] = entity_id;
+  movement_input_seq_.erase(client_addr);
   proxy->BindClient(client_addr);
 
   // Cell ack may not have landed yet; if so, OnCellEntityCreated emits
@@ -2445,6 +2758,8 @@ void BaseApp::UnbindClient(EntityID entity_id) {
     if (reverse != client_entity_index_.end() && reverse->second == entity_id) {
       client_entity_index_.erase(reverse);
     }
+    movement_rate_buckets_.erase(it->second);
+    movement_input_seq_.erase(it->second);
     entity_client_index_.erase(it);
   }
 
@@ -2502,6 +2817,8 @@ void BaseApp::UnregisterAccountOwner(EntityID entity_id) {
 void BaseApp::OnExternalClientDisconnect(Channel& ch) {
   rpc_registry_.CancelByChannel(&ch);
   rpc_rate_buckets_.erase(ch.RemoteAddress());
+  movement_rate_buckets_.erase(ch.RemoteAddress());
+  movement_input_seq_.erase(ch.RemoteAddress());
 
   auto it = client_entity_index_.find(ch.RemoteAddress());
   if (it == client_entity_index_.end()) {
@@ -2540,6 +2857,69 @@ bool BaseApp::ConsumeRpcRateToken(const Address& client_addr) {
   }
   ++bucket.consecutive_violations;
   return false;
+}
+
+bool BaseApp::ConsumeMovementRateToken(const Address& client_addr) {
+  using SteadyClock = std::chrono::steady_clock;
+  auto& bucket = movement_rate_buckets_[client_addr];
+  const auto now = SteadyClock::now();
+  if (bucket.last_refill.time_since_epoch().count() == 0) {
+    bucket.tokens = kMovementBurstCapacity;
+    bucket.last_refill = now;
+  } else {
+    const auto elapsed = std::chrono::duration<double>(now - bucket.last_refill).count();
+    bucket.tokens =
+        std::min(kMovementBurstCapacity, bucket.tokens + elapsed * kMovementRefillTokensPerSec);
+    bucket.last_refill = now;
+  }
+  if (bucket.tokens >= 1.0) {
+    bucket.tokens -= 1.0;
+    bucket.consecutive_violations = 0;
+    return true;
+  }
+  ++bucket.consecutive_violations;
+  return false;
+}
+
+auto BaseApp::TrackMovementInputSequence(const Address& client_addr,
+                                         const baseapp::ClientMovementInput& msg)
+    -> MovementInputSeqResult {
+  auto& state = movement_input_seq_[client_addr];
+  if (!state.initialized) {
+    uint32_t newest = msg.frames.front().seq;
+    for (const auto& frame : msg.frames) {
+      if (movement::IsInputSequenceNewer(frame.seq, newest)) newest = frame.seq;
+    }
+    state.newest_seq = newest;
+    state.initialized = true;
+    return MovementInputSeqResult::kAccepted;
+  }
+
+  bool has_newer = false;
+  uint32_t newest = state.newest_seq;
+  for (const auto& frame : msg.frames) {
+    if (movement::IsInputSequenceNewer(frame.seq, newest)) {
+      newest = frame.seq;
+      has_newer = true;
+    }
+  }
+  if (!has_newer) return MovementInputSeqResult::kStale;
+  if (movement::InputSequenceDelta(newest, state.newest_seq) >
+      movement::kMaxInputSequenceGap) {
+    return MovementInputSeqResult::kGap;
+  }
+
+  state.newest_seq = newest;
+  return MovementInputSeqResult::kAccepted;
+}
+
+void BaseApp::SeedMovementInputSequenceFromAck(const Address& client_addr,
+                                               uint32_t acked_input_seq) {
+  auto& state = movement_input_seq_[client_addr];
+  if (!state.initialized || movement::IsInputSequenceNewer(acked_input_seq, state.newest_seq)) {
+    state.newest_seq = acked_input_seq;
+    state.initialized = true;
+  }
 }
 
 void BaseApp::SendPrepareLoginResult(const Address& reply_addr,
@@ -2825,7 +3205,7 @@ void BaseApp::SendAbortCheckout(uint32_t request_id, DatabaseID dbid, uint16_t t
     // re-login returns kAlreadyCheckedOut against a discarded holder.
     ATLAS_LOG_ERROR(
         "BaseApp: AbortCheckout dropped, dbid={} type_id={} request_id={}: {} "
-        "— account wedge risk",
+        "account wedge risk",
         dbid, type_id, request_id, r.Error().Message());
   }
 }
@@ -3338,12 +3718,11 @@ void BaseApp::OnClientCellRpc(Channel& ch, const baseapp::ClientCellRpc& msg) {
     return;
   }
 
-  // source_entity_id is stamped here from the authenticated binding;
-  // client cannot forge it. Stale routing during Offload either drops
-  // here (unknown peer) or is caught by the cell's Ghost soft guard.
+  // source_entity_id is stamped from the authenticated binding.
+  // Stale Offload routing drops here or at the cell's Ghost guard.
   auto* target = entity_mgr_.Find(msg.target_entity_id);
   if (target == nullptr) {
-    // Entity destroyed mid-flight (logout race) — silent drop.
+    // Entity destroyed mid-flight (logout race); silent drop.
     return;
   }
   auto* ch_out =
@@ -3363,14 +3742,14 @@ void BaseApp::OnClientCellRpc(Channel& ch, const baseapp::ClientCellRpc& msg) {
       q.push_back(std::move(p));
       return;
     }
-    // CellAddr known but channel gone — partitioned/dead cellapp, real issue.
+    // CellAddr known but channel gone; partitioned/dead cellapp, real issue.
     using SteadyClock = std::chrono::steady_clock;
     static SteadyClock::time_point last_log{};
     static uint64_t suppressed = 0;
     const auto now = SteadyClock::now();
     if (now - last_log >= std::chrono::seconds(1)) {
       ATLAS_LOG_WARNING(
-          "BaseApp: ClientCellRpc dropped — cell channel gone for target entity {} "
+          "BaseApp: ClientCellRpc dropped; cell channel gone for target entity {} "
           "(rpc_id=0x{:06X}){}",
           msg.target_entity_id, msg.rpc_id,
           suppressed > 0 ? std::format(" [+{} similar in last 1s]", suppressed) : std::string{});
@@ -3392,6 +3771,136 @@ void BaseApp::OnClientCellRpc(Channel& ch, const baseapp::ClientCellRpc& msg) {
   (void)ch_out->SendMessage(fwd);
 }
 
+void BaseApp::OnClientMovementInput(Channel& ch, const baseapp::ClientMovementInput& msg) {
+  ++movement_input_packets_total_;
+  auto it = client_entity_index_.find(ch.RemoteAddress());
+  if (it == client_entity_index_.end()) {
+    ++movement_input_dropped_total_;
+    return;
+  }
+  const auto source_entity_id = it->second;
+  if (msg.target_entity_id != source_entity_id) {
+    ++movement_input_dropped_total_;
+    ATLAS_LOG_WARNING("BaseApp: movement input target mismatch source={} target={}",
+                      source_entity_id, msg.target_entity_id);
+    return;
+  }
+  if (msg.frames.empty() || msg.frames.size() > movement::kMaxMovementInputFrames) {
+    ++movement_input_dropped_total_;
+    return;
+  }
+  for (const auto& frame : msg.frames) {
+    if (!movement::IsInputFrameValid(frame)) {
+      ++movement_input_invalid_dropped_total_;
+      ++movement_input_dropped_total_;
+      return;
+    }
+  }
+  if (!ConsumeMovementRateToken(ch.RemoteAddress())) {
+    ++movement_input_dropped_total_;
+    ++movement_input_rate_limited_total_;
+    auto& bucket = movement_rate_buckets_[ch.RemoteAddress()];
+    if (bucket.consecutive_violations >= kRpcRateViolationDisconnectThreshold) {
+      ATLAS_LOG_WARNING("BaseApp: dropping client entity={} after {} movement rate violations",
+                        source_entity_id, bucket.consecutive_violations);
+      ch.Condemn();
+    }
+    return;
+  }
+  switch (TrackMovementInputSequence(ch.RemoteAddress(), msg)) {
+    case MovementInputSeqResult::kAccepted:
+      break;
+    case MovementInputSeqResult::kStale:
+      ++movement_input_dropped_total_;
+      ++movement_input_stale_dropped_total_;
+      return;
+    case MovementInputSeqResult::kGap:
+      ++movement_input_dropped_total_;
+      ++movement_input_seq_gap_dropped_total_;
+      return;
+  }
+
+  auto* target = entity_mgr_.Find(msg.target_entity_id);
+  if (target == nullptr) {
+    ++movement_input_dropped_total_;
+    return;
+  }
+  auto* ch_out = ResolveCellChannelByAddr(cellapp_peers_.Channels(), target->CellAddr());
+  if (ch_out == nullptr) {
+    ++movement_input_dropped_total_;
+    return;
+  }
+
+  cellapp::ClientMovementInputForward fwd;
+  fwd.source_entity_id = source_entity_id;
+  fwd.target_entity_id = msg.target_entity_id;
+  fwd.frames = msg.frames;
+  if (auto result = ch_out->SendMessage(fwd); result) {
+    ++movement_input_forwarded_total_;
+  } else {
+    ++movement_input_dropped_total_;
+  }
+}
+
+void BaseApp::OnMovementCorrectionReport(Channel& ch,
+                                         const baseapp::MovementCorrectionReport& msg) {
+  auto drop = [this] {
+    ++movement_correction_report_dropped_total_;
+  };
+  auto it = client_entity_index_.find(ch.RemoteAddress());
+  if (it == client_entity_index_.end() || it->second != msg.target_entity_id) {
+    drop();
+    return;
+  }
+
+  const uint16_t valid_flags = movement::kCorrectionFlagTier1 |
+      movement::kCorrectionFlagTier2 | movement::kCorrectionFlagSnap;
+  if ((msg.correction_flags & ~valid_flags) != 0 || !std::isfinite(msg.distance_m) ||
+      msg.distance_m < 0.0f || msg.distance_m > kMovementCorrectionReportMaxDistanceM) {
+    drop();
+    return;
+  }
+
+  const uint16_t expected_flags =
+      movement::CorrectionFlagForTier(movement::ClassifyCorrection(msg.distance_m));
+  if (msg.correction_flags != expected_flags) {
+    drop();
+    return;
+  }
+
+  auto state_it = movement_ack_relay_state_.find(msg.target_entity_id);
+  if (state_it == movement_ack_relay_state_.end() || !state_it->second.initialized) {
+    drop();
+    return;
+  }
+  auto& ack_state = state_it->second;
+  if (movement::IsInputSequenceNewer(msg.acked_input_seq, ack_state.acked_input_seq)) {
+    drop();
+    return;
+  }
+  if (msg.acked_input_seq == ack_state.acked_input_seq &&
+      msg.server_tick > ack_state.server_tick) {
+    drop();
+    return;
+  }
+  if (ack_state.report_initialized) {
+    const bool newer_seq =
+        movement::IsInputSequenceNewer(msg.acked_input_seq, ack_state.reported_input_seq);
+    const bool newer_tick = msg.acked_input_seq == ack_state.reported_input_seq &&
+        msg.server_tick > ack_state.reported_server_tick;
+    if (!newer_seq && !newer_tick) {
+      drop();
+      return;
+    }
+  }
+
+  ack_state.reported_input_seq = msg.acked_input_seq;
+  ack_state.reported_server_tick = msg.server_tick;
+  ack_state.report_initialized = true;
+  ++movement_correction_report_total_;
+  RecordMovementCorrectionFlags(ack_state, msg.correction_flags);
+}
+
 auto ResolveCellChannelByAddr(
     const std::unordered_map<Address, IntrusivePtr<Channel>>& cellapp_channels,
     const Address& cell_addr) -> Channel* {
@@ -3410,7 +3919,7 @@ auto BaseApp::ResolveCellChannelForEntity(EntityID target_entity_id) const -> Ch
 auto BaseApp::RequestCreateSpace(SpaceID space_id, SpaceCreatedCallback callback,
                                  uint16_t initial_cell_count) -> uint32_t {
   if (cellappmgr_channel_ == nullptr) {
-    ATLAS_LOG_WARNING("BaseApp: RequestCreateSpace({}) — no CellAppMgr channel yet", space_id);
+    ATLAS_LOG_WARNING("BaseApp: RequestCreateSpace({}); no CellAppMgr channel yet", space_id);
     if (callback) callback(/*success=*/false, space_id, Address{});
     return 0;
   }
