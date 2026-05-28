@@ -60,8 +60,7 @@ auto ComparePair(const ParityScenario& scenario, const std::vector<PerTickRecord
                  const std::vector<PerTickRecord>& b) -> ParityResult {
   ParityResult out;
   if (a.empty() || b.empty()) {
-    // One of the runs was skipped (e.g. Jolt disabled). Treat as pass; the
-    // gtest layer is responsible for asserting at least one viable backend ran.
+    // Backend skipped (e.g. Jolt disabled); the gtest layer asserts viability.
     return out;
   }
   if (a.size() != b.size()) {

@@ -12,7 +12,6 @@ namespace atlas::physics::parity {
 
 namespace {
 
-// Atlas Capsule convention: character foot at y=0 means MovementState.position.y=0.
 constexpr float kDefaultGroundY = 0.0f;
 constexpr float kGiantBoxHalfExtentXZ = 500.0f;
 constexpr float kGiantBoxThickness = 100.0f;
@@ -46,7 +45,6 @@ constexpr float kGiantBoxThickness = 100.0f;
     -> std::unique_ptr<PhysicsQuery> {
   switch (kind) {
     case BackendKind::kFlat:
-      // Box scenarios are not representable with FlatPhysicsQuery.
       return nullptr;
     case BackendKind::kStatic: {
       auto query =
@@ -103,8 +101,6 @@ constexpr float kGiantBoxThickness = 100.0f;
   return s;
 }
 
-// ── Flat scenarios ────────────────────────────────────────────────────────
-
 [[nodiscard]] auto FlatWalkForward() -> ParityScenario {
   ParityScenario s;
   s.id = "flat_walk_forward";
@@ -121,7 +117,6 @@ constexpr float kGiantBoxThickness = 100.0f;
   ParityScenario s;
   s.id = "flat_stop_start";
   s.initial_state = InitialStateOnGround(kDefaultGroundY);
-  // 30 ticks forward / 30 ticks idle / 30 ticks forward / 30 ticks idle.
   std::vector<movement::InputFrame> inputs;
   for (int i = 0; i < 30; ++i) inputs.push_back(ForwardInput());
   for (int i = 0; i < 30; ++i) inputs.push_back(IdleInput());
@@ -140,7 +135,7 @@ constexpr float kGiantBoxThickness = 100.0f;
   s.id = "flat_jump_fall";
   s.initial_state = InitialStateOnGround(kDefaultGroundY);
   std::vector<movement::InputFrame> inputs;
-  inputs.push_back(JumpInput());  // single-tick jump press
+  inputs.push_back(JumpInput());
   for (int i = 0; i < 119; ++i) inputs.push_back(IdleInput());
   s.inputs = std::move(inputs);
   s.tick_count = 120;
@@ -150,16 +145,13 @@ constexpr float kGiantBoxThickness = 100.0f;
   return s;
 }
 
-// ── Box scenarios (Static ↔ Jolt) ────────────────────────────────────────
-
 [[nodiscard]] auto BoxDropToTop() -> ParityScenario {
   ParityScenario s;
   s.id = "box_drop_to_top";
-  // 10×2×10 box centered at origin: top face at y=1.
   StaticBox box;
   box.min = {-5.0f, -1.0f, -5.0f};
   box.max = {5.0f, 1.0f, 5.0f};
-  s.initial_state = InitialStateInAir(5.0f);  // released above box top
+  s.initial_state = InitialStateInAir(5.0f);
   s.inputs = {IdleInput()};
   s.tick_count = 180;
   s.tolerance = kNormalTolerance;
@@ -168,11 +160,8 @@ constexpr float kGiantBoxThickness = 100.0f;
   return s;
 }
 
-// Mesh scenario: Static approximates the mesh ground with a thin slab box.
-// Jolt loads an actual 100x100 XZ quad. The parity check tolerates more drift
-// (kMeshTolerance) because sphere-cast contact resolution against a triangle
-// face differs from sphere-cast against a box face by a few millimetres even
-// on perfectly flat geometry.
+// Static approximates the mesh ground with a slab box; Jolt loads a real
+// triangle quad. Drift tolerance is kMeshTolerance — see backend_parity_testing.
 [[nodiscard]] auto MakeMeshGroundBackend(BackendKind kind) -> std::unique_ptr<PhysicsQuery> {
   constexpr float kHalfExtent = 50.0f;
   switch (kind) {
@@ -212,7 +201,7 @@ constexpr float kGiantBoxThickness = 100.0f;
   s.id = "mesh_walk_long_path";
   s.initial_state = InitialStateOnGround(0.0f);
   s.inputs = {ForwardInput()};
-  s.tick_count = 150;  // 5s at 30Hz → ~25m forward, inside the ±50 quad
+  s.tick_count = 150;
   s.tolerance = kMeshTolerance;
   s.backends = {BackendKind::kStatic, BackendKind::kJolt};
   s.make_query = [](BackendKind kind) { return MakeMeshGroundBackend(kind); };
@@ -222,11 +211,8 @@ constexpr float kGiantBoxThickness = 100.0f;
 [[nodiscard]] auto BoxWalkSteady() -> ParityScenario {
   ParityScenario s;
   s.id = "box_walk_steady";
-  // 100×2×100 box; 5s forward walk at max_speed=5m/s reaches z=25, well within
-  // the +50 z boundary so the parity check only exercises the interior, not the
-  // edge — Static's radius-grace and Jolt's true geometry diverge near corners
-  // (a known and acceptable cross-backend difference; see backend_parity_testing
-  // §4.4).
+  // Box wide enough that 5s walk stays interior; edge behaviour is a known
+  // Static-vs-Jolt divergence (see backend_parity_testing §4.4).
   StaticBox box;
   box.min = {-50.0f, -1.0f, -50.0f};
   box.max = {50.0f, 1.0f, 50.0f};

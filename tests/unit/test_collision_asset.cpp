@@ -289,9 +289,8 @@ TEST(CollisionAsset, CacheRejectsTruncatedHeader) {
 }
 
 TEST(CollisionAsset, CacheRejectsCorruptSourceHashStamp) {
-  // Cook with stamped hash 'X', but the embedded JSON says source_hash='unit'.
-  // Loader must catch the mismatch since a corrupted cache stamp is the only way
-  // these two get out of sync.
+  // Header stamps "X" but the embedded JSON's source_hash is "unit" — the
+  // mismatch shape that indicates a corrupted cache header.
   auto bytes = WriteCollisionCacheBytes(kValidAsset, {}, "X");
   auto asset = LoadCollisionAssetFromCacheBytes(std::span<const std::byte>(bytes));
   ASSERT_FALSE(asset.HasValue());

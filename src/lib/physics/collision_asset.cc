@@ -399,7 +399,7 @@ auto WriteCollisionCacheBytes(std::string_view source_json,
               source_json.size() + sizeof(uint32_t) + source_bin.size());
   AppendBytes(out, kCollisionCacheMagic.data(), 4);
   AppendUint32(out, kCollisionCacheVersion);
-  AppendUint32(out, 0);  // jolt_version_stamp reserved for M5b
+  AppendUint32(out, 0);  // jolt_version_stamp reserved; see physics_architecture.md §4.2
   AppendUint32(out, static_cast<uint32_t>(source_hash.size()));
   AppendBytes(out, source_hash.data(), source_hash.size());
   AppendUint32(out, static_cast<uint32_t>(source_json.size()));
@@ -448,10 +448,9 @@ auto LoadCollisionAssetFromCacheBytes(std::span<const std::byte> bytes)
                  std::format("cache: version {} not supported (expected {}), re-cook",
                              *cache_version, kCollisionCacheVersion)};
   }
+  // jolt_version_stamp is reserved; any value loads today.
   auto jolt_stamp = ReadUint32(bytes, cursor, "jolt_version_stamp");
   if (!jolt_stamp) return jolt_stamp.Error();
-  // M5: jolt_version_stamp is reserved; any value loads. M5b will enforce it.
-  (void)*jolt_stamp;
 
   auto hash_len = ReadUint32(bytes, cursor, "source_hash_len");
   if (!hash_len) return hash_len.Error();

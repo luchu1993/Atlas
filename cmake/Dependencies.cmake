@@ -67,10 +67,8 @@ if(ATLAS_HEAP_ALLOCATOR STREQUAL "mimalloc")
 endif()
 
 # ── JoltPhysics v5.2.0 (optional, query-only backend) ──────────────────────
-# Phase 14.2 / M1b. GIT_REPOSITORY rather than tarball so we don't have to
-# pin a SHA256 before the first verified fetch; bump to URL+SHA256 once the
-# version is locked. SOURCE_SUBDIR=Build because Jolt's main CMakeLists.txt
-# lives there, not at repo root. Fetched only when ATLAS_ENABLE_JOLT=ON.
+# GIT_REPOSITORY/TAG avoids pinning a SHA256 before the first verified fetch;
+# bump to URL+SHA256 once the version is locked.
 if(ATLAS_ENABLE_JOLT)
   FetchContent_Declare(
     Jolt
@@ -176,10 +174,8 @@ if(ATLAS_ENABLE_PROFILER)
   endif()
 endif()
 
-# Jolt — query-only backend; disable the sample / test / viewer targets
-# Jolt would otherwise build, and keep its compile flags from overriding
-# ours. ENABLE_OBJECT_STREAM stays default-on (small, used for shape
-# serialization which the cooking pipeline will rely on).
+# Jolt — disable Jolt's own sample / test / viewer targets and stop it from
+# overriding our compile flags.
 if(ATLAS_ENABLE_JOLT)
   set(TARGET_HELLO_WORLD              OFF CACHE BOOL "" FORCE)
   set(TARGET_PERFORMANCE_TEST         OFF CACHE BOOL "" FORCE)

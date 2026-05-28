@@ -166,9 +166,7 @@ TEST(JoltPhysicsQuery, DepenetrateCapsuleProducesSeparationVector) {
   box.max = {1.0f, 1.0f, 1.0f};
   query.AddBox(box);
 
-  // Capsule just barely poking into the top of the box: bottom at 0.95,
-  // top of cylinder at 0.95 + 2*0.9 = 2.75 (well above the box top of 1).
-  // Just the bottom hemisphere overlaps the upper part of the box.
+  // Bottom hemisphere of the capsule pokes into the top of the box.
   OverlapQuery oq;
   oq.capsule.center = {0.0f, 0.95f, 0.0f};
   oq.capsule.radius_m = 0.35f;
@@ -188,7 +186,6 @@ TEST(JoltPhysicsQuery, DepenetrateCapsuleProducesSeparationVector) {
 TEST(JoltPhysicsQuery, MeshRaycastHitsTriangleAtKnownDepth) {
   ASSERT_TRUE(jolt::Initialize());
   JoltPhysicsQuery query;
-  // Single 10x10 quad at y=0, made of two triangles.
   const math::Vector3 verts[] = {
       {-5.0f, 0.0f, -5.0f},
       { 5.0f, 0.0f, -5.0f},
@@ -213,9 +210,8 @@ TEST(JoltPhysicsQuery, MeshRaycastHitsTriangleAtKnownDepth) {
   jolt::Shutdown();
 }
 
-// M2 end-to-end: movement_sim::Step against JoltPhysicsQuery (through the
-// PhysicsCharacterQuery adapter) makes a capsule fall onto a box top and
-// register grounded.
+// End-to-end: movement_sim::Step drives the capsule through PhysicsCharacterQuery
+// onto a box top, registers grounded.
 TEST(JoltPhysicsQuery, MovementStepFallsOntoBoxAndGrounds) {
   ASSERT_TRUE(jolt::Initialize());
   JoltPhysicsQuery query;

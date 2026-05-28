@@ -70,10 +70,8 @@ class AlwaysOLPF final : public JPH::ObjectLayerPairFilter {
   return std::isfinite(v.x) && std::isfinite(v.y) && std::isfinite(v.z);
 }
 
-// Atlas Capsule convention: center.y is the bottom point of the capsule, and
-// half_height_m is half of the TOTAL height (including the two hemispherical
-// caps). Jolt's CapsuleShape takes the cylinder's half-height (caps excluded);
-// Jolt body center sits at the geometric center.
+// Atlas Capsule: center.y is the capsule bottom, half_height_m is half of the
+// total height (caps included). Jolt's CapsuleShape takes the cylinder's half.
 [[nodiscard]] auto JoltCapsuleHalfHeight(float atlas_half_height_m, float radius_m) -> float {
   return std::max(0.0f, atlas_half_height_m - radius_m);
 }
@@ -160,8 +158,7 @@ void JoltPhysicsQuery::AddMesh(std::span<const math::Vector3> vertices,
   auto shape_result = shape_settings.Create();
   if (shape_result.HasError()) return;
 
-  // M1b single-layer scheme: every static body lives in kStaticObjectLayer until
-  // we wire the Atlas → Jolt layer table (M4 follow-up / Phase 14.3 layer RFC).
+  // Single-layer scheme until the Atlas → Jolt layer table lands.
   JPH::BodyCreationSettings bcs(shape_result.Get(), JPH::RVec3::sZero(),
                                 JPH::Quat::sIdentity(), JPH::EMotionType::Static,
                                 kStaticObjectLayer);
@@ -188,9 +185,8 @@ auto JoltPhysicsQuery::GroundProbe(const GroundProbeQuery& query) const -> Groun
   JPH::SphereShape sphere(radius);
   sphere.SetEmbedded();
 
-  // Start the sphere with its BOTTOM at origin so the returned distance is the
-  // vertical foot-to-ground gap (matches StaticPhysicsQuery convention), not the
-  // sphere-center-to-ground gap which would be radius too large.
+  // Sphere bottom starts at origin so distance is the foot-to-ground gap, not
+  // sphere-center-to-ground (matches StaticPhysicsQuery convention).
   const JPH::RMat44 start = JPH::RMat44::sTranslation(
       JPH::RVec3{query.origin.x, query.origin.y + radius, query.origin.z});
   const JPH::Vec3 motion{0.0f, -max_distance, 0.0f};
@@ -288,9 +284,8 @@ auto JoltPhysicsQuery::CastCapsule(const CapsuleCastQuery& query) const -> Shape
                   query.capsule.center.z + query.displacement.z * hit.mFraction};
   out.layer = kStaticObjectLayer;
 
-  // mPenetrationAxis points from cast shape into the obstacle; surface normal is
-  // the opposite. Normalize defensively because Jolt does not contract a unit-length
-  // axis at edge contacts.
+  // mPenetrationAxis points into the obstacle; surface normal is the opposite.
+  // Defensive normalize: Jolt does not guarantee unit length at edge contacts.
   JPH::Vec3 axis = hit.mPenetrationAxis;
   const float axis_len = axis.Length();
   if (axis_len > kEpsilon) {

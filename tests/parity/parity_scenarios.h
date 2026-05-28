@@ -7,7 +7,7 @@
 
 namespace atlas::physics::parity {
 
-// All M3 quick-gate scenarios, in execution order.
+// Quick-gate scenarios, in execution order.
 [[nodiscard]] auto AllScenarios() -> std::vector<ParityScenario>;
 
 }  // namespace atlas::physics::parity

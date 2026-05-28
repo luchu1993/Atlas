@@ -21,9 +21,6 @@ class JoltPhysicsQuery final : public PhysicsQuery {
   auto operator=(JoltPhysicsQuery&&) -> JoltPhysicsQuery& = delete;
 
   void AddBox(const StaticBox& box);
-  // Adds a static triangle mesh; `indices` is a triangle list (size % 3 == 0)
-  // referencing `vertices`. Out-of-range indices are silently dropped at the
-  // caller layer (collision_asset rejects them upstream).
   void AddMesh(std::span<const math::Vector3> vertices,
                std::span<const uint32_t> indices, ObjectLayer layer);
   void Clear();

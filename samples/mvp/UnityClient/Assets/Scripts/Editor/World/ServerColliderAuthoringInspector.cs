@@ -4,11 +4,6 @@ using UnityEngine;
 
 namespace Atlas.Mvp.Editor
 {
-    /// <summary>
-    /// Surfaces opt-in state + shape/scale checks that the cook-time
-    /// exporter would otherwise only report later. Keeps the feedback loop
-    /// tight for solo level-design iteration.
-    /// </summary>
     [CustomEditor(typeof(ServerColliderAuthoring))]
     [CanEditMultipleObjects]
     public sealed class ServerColliderAuthoringInspector : UnityEditor.Editor
@@ -21,8 +16,7 @@ namespace Atlas.Mvp.Editor
             EditorGUILayout.PropertyField(serializedObject.FindProperty("note"));
             serializedObject.ApplyModifiedProperties();
 
-            // Multi-edit: skip the per-instance checks; they're noisy with
-            // mixed targets and the cook tool will catch each one anyway.
+            // Per-instance shape/scale checks are misleading on mixed targets.
             if (serializedObject.isEditingMultipleObjects) return;
 
             var authoring = (ServerColliderAuthoring)target;
@@ -35,7 +29,6 @@ namespace Atlas.Mvp.Editor
                 return;
             }
 
-            // Current exporter supports primitive Box / Sphere / Capsule only.
             if (col is MeshCollider || col is TerrainCollider || col is WheelCollider)
             {
                 EditorGUILayout.HelpBox(
@@ -44,7 +37,6 @@ namespace Atlas.Mvp.Editor
                     MessageType.Warning);
             }
 
-            // Non-uniform scale on sphere / capsule — server would reject.
             var scale = authoring.transform.lossyScale;
             bool nonUniform = !Mathf.Approximately(scale.x, scale.y) ||
                               !Mathf.Approximately(scale.x, scale.z);

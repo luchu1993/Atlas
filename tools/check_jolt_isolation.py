@@ -1,11 +1,5 @@
 #!/usr/bin/env python3
-"""Check that Jolt headers are only included from src/lib/physics_jolt/.
-
-Phase 14.2 architecture redline: gameplay / server / script / client code
-must not see Jolt types. This script greps every C/C++ source file outside
-src/lib/physics_jolt/ and rejects any `#include` whose path starts with
-`Jolt/`. Run manually or hook into CI.
-"""
+"""Reject `#include "Jolt/..."` outside src/lib/physics_jolt/."""
 
 import argparse
 import re
