@@ -14,9 +14,17 @@
 
 namespace
 {
-constexpr float kMoveSpeedMPerSec = 5.0f;
-constexpr float kReportHz = 20.0f;
-constexpr float kReportIntervalSec = 1.0f / kReportHz;
+constexpr float kInputHz = 30.0f;
+constexpr uint16 kInputDtMs = 33;
+
+atlas::Vec3 UEUnitDirectionToAtlas(const FVector& Direction)
+{
+	const FVector Unit = Direction.IsNearlyZero() ? FVector::ForwardVector : Direction.GetSafeNormal();
+	return atlas::Vec3{
+		static_cast<float>(Unit.Y),
+		static_cast<float>(Unit.Z),
+		static_cast<float>(Unit.X)};
+}
 }  // namespace
 
 UAtlasPlayerInputController::UAtlasPlayerInputController()
@@ -26,12 +34,13 @@ UAtlasPlayerInputController::UAtlasPlayerInputController()
 
 bool UAtlasPlayerInputController::ResolveOwnerView()
 {
-	const UWorld* World = GetWorld();
+	UWorld* World = GetWorld();
 	if (World == nullptr) return false;
-	const UGameInstance* GI = World->GetGameInstance();
+	UGameInstance* GI = World->GetGameInstance();
 	if (GI == nullptr) return false;
-	const UAtlasSubsystem* Sub = GI->GetSubsystem<UAtlasSubsystem>();
+	UAtlasSubsystem* Sub = GI->GetSubsystem<UAtlasSubsystem>();
 	if (Sub == nullptr) return false;
+	SubsystemPtr = Sub;
 
 	if (!ViewPtr.IsValid())
 	{
@@ -43,22 +52,22 @@ bool UAtlasPlayerInputController::ResolveOwnerView()
 	if (Avatar == nullptr) return false;
 	if (Avatar->Id() != Sub->GetPlayerEntityId()) return false;
 
-	// AvatarFactory in UEClientGameMode always creates FBpAvatarEntity;
-	// static_cast spares RTTI on the tick hot path.
 	OwnerEntity = static_cast<FBpAvatarEntity*>(Avatar);
 	return true;
 }
 
-void UAtlasPlayerInputController::InitializeLocalSim()
+void UAtlasPlayerInputController::InitializePredictor()
 {
 	if (OwnerEntity == nullptr) return;
-	LocalPos = AtlasToUE(OwnerEntity->InitialServerPos());
-	const FVector ServerDirUE = AtlasToUE(OwnerEntity->InitialServerDir());
-	LocalDir = ServerDirUE.IsNearlyZero() ? FVector::ForwardVector : ServerDirUE.GetSafeNormal();
+	const atlas::Vec3& Pos = OwnerEntity->InitialServerPos();
+	const atlas::Vec3& Dir = OwnerEntity->InitialServerDir();
+	Predictor.Reset(Pos, Dir);
+	InputAccum = 0.0f;
+
 	if (AActor* Owner = GetOwner())
 	{
-		Owner->SetActorLocation(LocalPos);
-		Owner->SetActorRotation(LocalDir.Rotation());
+		Owner->SetActorLocation(Predictor.RenderPositionUE());
+		Owner->SetActorRotation(Predictor.RenderDirectionUE().Rotation());
 	}
 	OwnerEntity->SetOwnerInputActive(true);
 	bInitialized = true;
@@ -74,54 +83,96 @@ void UAtlasPlayerInputController::TickComponent(float DeltaTime, ELevelTick Tick
 	{
 		if (bInitialized && OwnerEntity != nullptr) OwnerEntity->SetOwnerInputActive(false);
 		OwnerEntity = nullptr;
+		SubsystemPtr.Reset();
 		bInitialized = false;
+		InputAccum = 0.0f;
 		return;
 	}
 
 	if (!bInitialized)
 	{
-		// Defer until AvatarFilter has the server pos; otherwise we'd snap
-		// to spawn-default and lock the filter out before the real arrives.
 		if (!OwnerEntity->HasInitialTransform()) return;
-		InitializeLocalSim();
+		InitializePredictor();
 	}
+
+	FBpAvatarEntity::FMovementAck Ack;
+	if (OwnerEntity->ConsumeMovementAck(Ack))
+	{
+		float ErrorM = 0.0f;
+		uint16 CorrectionFlags = 0;
+		if (Predictor.ApplyMovementAck(
+			    Ack.AckedInputSeq, Ack.ServerTick, Ack.State, ErrorM, CorrectionFlags) &&
+		    SubsystemPtr.IsValid())
+		{
+			SubsystemPtr->SendMovementCorrectionReport(
+				OwnerEntity->Id(), Ack.AckedInputSeq, Ack.ServerTick, ErrorM, CorrectionFlags);
+		}
+	}
+	atlas::MovementCommandFrame CommandStart;
+	if (OwnerEntity->ConsumeMovementCommandStart(CommandStart))
+	{
+		Predictor.ApplyMovementCommandStart(CommandStart);
+	}
+	FBpAvatarEntity::FMovementCommandEnd CommandEnd;
+	if (OwnerEntity->ConsumeMovementCommandEnd(CommandEnd))
+	{
+		Predictor.ApplyMovementCommandEnd(
+			CommandEnd.CommandId, CommandEnd.ServerTick, CommandEnd.Reason, CommandEnd.State);
+	}
+	Predictor.TickVisualOffset(DeltaTime);
 
 	APlayerController* PC = UGameplayStatics::GetPlayerController(this, 0);
 	if (PC == nullptr) return;
 
-	const float Forward = (PC->IsInputKeyDown(EKeys::W) ? 1.0f : 0.0f)
-	                    - (PC->IsInputKeyDown(EKeys::S) ? 1.0f : 0.0f);
-	const float Right   = (PC->IsInputKeyDown(EKeys::D) ? 1.0f : 0.0f)
-	                    - (PC->IsInputKeyDown(EKeys::A) ? 1.0f : 0.0f);
-
-	FVector Input(Forward, Right, 0.0f);
-	const bool Moving = !Input.IsNearlyZero();
-	if (Moving) Input.Normalize();
+	float Forward = (PC->IsInputKeyDown(EKeys::W) ? 1.0f : 0.0f)
+	              - (PC->IsInputKeyDown(EKeys::S) ? 1.0f : 0.0f);
+	float Right = (PC->IsInputKeyDown(EKeys::D) ? 1.0f : 0.0f)
+	            - (PC->IsInputKeyDown(EKeys::A) ? 1.0f : 0.0f);
+	const FVector LocalInput(Forward, Right, 0.0f);
+	if (LocalInput.SizeSquared() > 1.0f)
+	{
+		const FVector Clamped = LocalInput.GetSafeNormal();
+		Forward = static_cast<float>(Clamped.X);
+		Right = static_cast<float>(Clamped.Y);
+	}
 
 	const float CamYaw = PC->GetControlRotation().Yaw;
-	const FRotator YawRot(0.0f, CamYaw, 0.0f);
-	const FVector WorldInput = YawRot.RotateVector(Input);
+	AimDir = FRotator(0.0f, CamYaw, 0.0f).RotateVector(FVector::ForwardVector);
+	if (AimDir.IsNearlyZero()) AimDir = FVector::ForwardVector;
+	AimDir = AimDir.GetSafeNormal();
 
-	const float StepCm = kMoveSpeedMPerSec * 100.0f * DeltaTime;
-	LocalPos += WorldInput * StepCm;
-	if (Moving) LocalDir = WorldInput.GetSafeNormal();
+	InputAccum += FMath::Max(DeltaTime, 0.0f);
+	bool bPushedInput = false;
+	while (InputAccum >= 1.0f / kInputHz)
+	{
+		InputAccum -= 1.0f / kInputHz;
+		if (!Predictor.AcceptsInput()) continue;
+		bPushedInput |= Predictor.PushInput(
+			Predictor.BuildInputFrame(Forward, Right, CamYaw, kInputDtMs));
+	}
+
+	if (bPushedInput && SubsystemPtr.IsValid() && OwnerEntity != nullptr)
+	{
+		const int32 Count = Predictor.CopyRecentFrames(SendFrames.data(), kSendFrameCapacity);
+		if (Count > 0)
+		{
+			SubsystemPtr->SendMovementInput(OwnerEntity->Id(), SendFrames.data(), Count);
+		}
+	}
 
 	if (AActor* Owner = GetOwner())
 	{
-		Owner->SetActorLocation(LocalPos);
-		Owner->SetActorRotation(LocalDir.Rotation());
-	}
-
-	ReportAccum += DeltaTime;
-	if (ReportAccum >= kReportIntervalSec && OwnerEntity != nullptr)
-	{
-		ReportAccum = 0.0f;
-		OwnerEntity->ReportPos(UEToAtlas(LocalPos), UEToAtlas(LocalDir));
+		Owner->SetActorLocation(Predictor.RenderPositionUE());
+		Owner->SetActorRotation(Predictor.RenderDirectionUE().Rotation());
 	}
 
 	if (PC->WasInputKeyJustPressed(EKeys::SpaceBar) && OwnerEntity != nullptr)
 	{
-		OwnerEntity->LaunchProjectile(UEToAtlas(LocalDir));
+		OwnerEntity->LaunchProjectile(UEUnitDirectionToAtlas(AimDir));
+	}
+	if (PC->WasInputKeyJustPressed(EKeys::LeftShift) && OwnerEntity != nullptr)
+	{
+		OwnerEntity->Dash(UEUnitDirectionToAtlas(AimDir));
 	}
 }
 
@@ -129,6 +180,7 @@ void UAtlasPlayerInputController::EndPlay(const EEndPlayReason::Type Reason)
 {
 	if (OwnerEntity != nullptr) OwnerEntity->SetOwnerInputActive(false);
 	OwnerEntity = nullptr;
+	SubsystemPtr.Reset();
 	bInitialized = false;
 	Super::EndPlay(Reason);
 }

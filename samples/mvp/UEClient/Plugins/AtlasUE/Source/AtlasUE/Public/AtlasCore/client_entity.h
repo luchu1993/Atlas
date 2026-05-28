@@ -1,6 +1,7 @@
 #ifndef ATLAS_UE_CLIENT_CORE_CLIENT_ENTITY_H_
 #define ATLAS_UE_CLIENT_CORE_CLIENT_ENTITY_H_
 
+#include <cstdint>
 #include <functional>
 #include <memory>
 #include <vector>
@@ -13,11 +14,34 @@
 
 struct AtlasEdrEntity;
 struct AtlasEdrContext;
+struct AtlasMovementStateFrame;
 
 namespace atlas {
 
 class RpcSender;
 class SpanReader;
+
+struct MovementCommandFrame {
+  uint32_t command_id{0};
+  uint16_t skill_id{0};
+  uint8_t type{0};
+  Vec3 start_position{};
+  Vec3 target_position{};
+  uint16_t duration_ms{0};
+  uint16_t elapsed_ms{0};
+  uint16_t curve_id{0};
+  uint8_t input_policy{0};
+  uint8_t collision_policy{0};
+  uint8_t priority{0};
+  uint32_t server_tick{0};
+};
+
+enum class MovementCommandEndReason : uint8_t {
+  kCompleted = 0,
+  kCancelled = 1,
+  kCollision = 2,
+  kInvalid = 3,
+};
 
 class ATLAS_CORE_API ClientEntity {
  public:
@@ -37,6 +61,16 @@ class ATLAS_CORE_API ClientEntity {
   // Default no-op so non-spatial entities don't pay AvatarFilter cost.
   virtual void OnPositionReceived(double /*server_time*/, const Vec3& /*pos*/,
                                   const Vec3& /*dir*/, bool /*on_ground*/) {}
+
+  virtual void OnMovementStateAck(uint32_t /*acked_input_seq*/, uint32_t /*server_tick*/,
+                                  const AtlasMovementStateFrame& /*state*/,
+                                  uint16_t /*correction_flags*/) {}
+
+  virtual void OnMovementCommandStart(const MovementCommandFrame& /*command*/) {}
+
+  virtual void OnMovementCommandEnd(uint32_t /*command_id*/, uint32_t /*server_tick*/,
+                                    MovementCommandEndReason /*reason*/,
+                                    const AtlasMovementStateFrame& /*state*/) {}
 
   virtual void TickInterpolation(double /*dt*/) {}
 
@@ -103,8 +137,6 @@ class ATLAS_CORE_API ClientEntity {
                                   SpanReader& /*reader*/) {
     return false;
   }
-
- public:
 
  private:
   EntityId id_;

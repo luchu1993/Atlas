@@ -96,6 +96,14 @@ public:
 	virtual void SendCellRpc(atlas::EntityId Id, uint32 RpcId, const uint8* Args,
 		int32 ArgsLen) override;
 
+	bool SendMovementInput(atlas::EntityId EntityId, const AtlasMovementInputFrame* Frames,
+		int32 FrameCount);
+	bool SendMovementCorrectionReport(atlas::EntityId EntityId, uint32 AckedInputSeq,
+		uint32 ServerTick, float DistanceM, uint16 CorrectionFlags);
+
+	UFUNCTION(BlueprintCallable, Category="Atlas|Net")
+	bool SetTransportImpairment(int32 OneWayLatencyMs, int32 LossPermyriad, int32 Seed = 1);
+
 	// Factory null → base ClientEntity. PostBind runs after AttachView.
 	void RegisterEntityClass(uint16 TypeId, TSubclassOf<AActor> ActorClass,
 	                         EntityFactory Factory = nullptr,

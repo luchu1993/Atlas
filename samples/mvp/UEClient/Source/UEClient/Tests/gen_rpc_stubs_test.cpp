@@ -85,26 +85,24 @@ bool FAtlasGenRpcStubsTest::RunTest(const FString&)
 
 	Sender.Calls.clear();
 
-	// Avatar.ReportPos(vec3, vec3) — cell RPC, six floats.
+	// Avatar.LaunchProjectile(vec3) - cell RPC, one vector arg.
 	{
 		atlas::mvp::Avatar Av(42, atlas::mvp::Avatar::kTypeId);
 		Av.SetRpcSender(&Sender);
-		Av.ReportPos(atlas::Vec3{1.0f, 2.0f, 3.0f}, atlas::Vec3{0.0f, 1.0f, 0.0f});
+		Av.LaunchProjectile(atlas::Vec3{1.0f, 2.0f, 3.0f});
 
 		if (!TestEqual(TEXT("one cell rpc captured"),
 				static_cast<int32>(Sender.Calls.size()), 1)) return false;
 		const auto& Call = Sender.Calls[0];
 		TestFalse(TEXT("routed to cell"), Call.Base);
-		TestEqual(TEXT("rpc_id matches"), Call.RpcId, atlas::mvp::Avatar::kRpcId_ReportPos);
-		TestEqual(TEXT("args = 6 floats"), static_cast<int32>(Call.Args.size()), 24);
-		float Vals[6] = {};
+		TestEqual(TEXT("rpc_id matches"), Call.RpcId,
+			atlas::mvp::Avatar::kRpcId_LaunchProjectile);
+		TestEqual(TEXT("args = 3 floats"), static_cast<int32>(Call.Args.size()), 12);
+		float Vals[3] = {};
 		std::memcpy(Vals, Call.Args.data(), sizeof(Vals));
-		TestEqual(TEXT("pos.x"), Vals[0], 1.0f);
-		TestEqual(TEXT("pos.y"), Vals[1], 2.0f);
-		TestEqual(TEXT("pos.z"), Vals[2], 3.0f);
-		TestEqual(TEXT("dir.x"), Vals[3], 0.0f);
-		TestEqual(TEXT("dir.y"), Vals[4], 1.0f);
-		TestEqual(TEXT("dir.z"), Vals[5], 0.0f);
+		TestEqual(TEXT("forward.x"), Vals[0], 1.0f);
+		TestEqual(TEXT("forward.y"), Vals[1], 2.0f);
+		TestEqual(TEXT("forward.z"), Vals[2], 3.0f);
 	}
 
 	// No sender → SelectAvatar silently no-ops (used by unit tests that

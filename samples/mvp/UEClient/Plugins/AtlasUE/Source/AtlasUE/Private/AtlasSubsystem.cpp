@@ -116,6 +116,34 @@ void UAtlasSubsystem::SendCellRpc(atlas::EntityId Id, uint32 RpcId, const uint8*
 	AtlasNetSendCellRpc(NetClient->GetContext(), Id, RpcId, Args, ArgsLen);
 }
 
+bool UAtlasSubsystem::SendMovementInput(atlas::EntityId EntityId,
+                                        const AtlasMovementInputFrame* Frames, int32 FrameCount)
+{
+	if (!NetClient || NetClient->GetContext() == nullptr) return false;
+	return AtlasNetSendMovementInput(NetClient->GetContext(), EntityId, Frames, FrameCount)
+		== ATLAS_NET_OK;
+}
+
+bool UAtlasSubsystem::SendMovementCorrectionReport(atlas::EntityId EntityId,
+                                                   uint32 AckedInputSeq, uint32 ServerTick,
+                                                   float DistanceM, uint16 CorrectionFlags)
+{
+	if (!NetClient || NetClient->GetContext() == nullptr) return false;
+	return AtlasNetSendMovementCorrectionReport(NetClient->GetContext(), EntityId, AckedInputSeq,
+		ServerTick, DistanceM, CorrectionFlags) == ATLAS_NET_OK;
+}
+
+bool UAtlasSubsystem::SetTransportImpairment(int32 OneWayLatencyMs, int32 LossPermyriad,
+                                             int32 Seed)
+{
+	if (!NetClient || NetClient->GetContext() == nullptr) return false;
+	if (OneWayLatencyMs < 0 || LossPermyriad < 0 || LossPermyriad > 10000) return false;
+	const uint32 SafeSeed = Seed > 0 ? static_cast<uint32>(Seed) : 1u;
+	return AtlasNetSetTransportImpairment(NetClient->GetContext(),
+		static_cast<uint32>(OneWayLatencyMs), static_cast<uint32>(LossPermyriad), SafeSeed)
+		== ATLAS_NET_OK;
+}
+
 void UAtlasSubsystem::RegisterEntityClass(uint16 TypeId, TSubclassOf<AActor> ActorClass,
                                           EntityFactory Factory, EntityPostBind PostBind)
 {
