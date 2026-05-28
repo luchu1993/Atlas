@@ -260,6 +260,12 @@ void Reviver::RegisterTargetWatchers(ManagedTarget& t) {
                    std::function<uint64_t()>([&t] { return t.heartbeat_last_game_time; }));
   wr.Add<uint64_t>(root + "/heartbeat_mgr_generation",
                    std::function<uint64_t()>([&t] { return t.heartbeat_mgr_generation; }));
+  wr.Add<uint64_t>(root + "/heartbeat_mgr_generation_high_water",
+                   std::function<uint64_t()>(
+                       [&t] { return t.heartbeat_mgr_generation_high_water; }));
+  wr.Add<uint64_t>(root + "/heartbeat_mgr_generation_regressions",
+                   std::function<uint64_t()>(
+                       [&t] { return t.heartbeat_mgr_generation_regressions; }));
   wr.Add<uint64_t>(root + "/heartbeat_snapshot_saves",
                    std::function<uint64_t()>([&t] { return t.heartbeat_snapshot_saves; }));
   wr.Add<uint64_t>(root + "/heartbeat_snapshot_failures",
@@ -662,6 +668,16 @@ void Reviver::RecordHeartbeatAck(ManagedTarget& t, const Address& src, uint64_t 
   t.heartbeat_last_game_time = game_time;
   t.heartbeat_snapshot_saves = snapshot_saves;
   t.heartbeat_snapshot_failures = snapshot_failures;
+  if (mgr_generation < t.heartbeat_mgr_generation_high_water) {
+    ++t.heartbeat_mgr_generation_regressions;
+    ATLAS_LOG_ERROR(
+        "Reviver: {} heartbeat mgr_generation regressed {} -> {} (high_water={}); "
+        "either split-brain across machines or a doomed mgr is still answering",
+        t.slug, t.heartbeat_mgr_generation, mgr_generation,
+        t.heartbeat_mgr_generation_high_water);
+  } else if (mgr_generation > t.heartbeat_mgr_generation_high_water) {
+    t.heartbeat_mgr_generation_high_water = mgr_generation;
+  }
   t.heartbeat_mgr_generation = mgr_generation;
   t.heartbeat_snapshot_dirty = snapshot_dirty;
   t.heartbeat_snapshot_save_stale = snapshot_save_stale;

@@ -122,6 +122,11 @@ class Reviver : public ManagerApp {
     TimePoint heartbeat_last_ack_at{};
     uint64_t heartbeat_last_game_time{0};
     uint64_t heartbeat_mgr_generation{0};
+    // Tracks the highest mgr_generation we've ever observed for this target
+    // across its lifetime; a fresh ack below it is either a split-brain
+    // regression or a stale reply from a doomed-but-still-answering mgr.
+    uint64_t heartbeat_mgr_generation_high_water{0};
+    uint64_t heartbeat_mgr_generation_regressions{0};
     uint64_t heartbeat_snapshot_saves{0};
     uint64_t heartbeat_snapshot_failures{0};
     bool heartbeat_snapshot_dirty{false};
