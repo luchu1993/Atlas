@@ -405,6 +405,14 @@ live 回归优先覆盖 CellAppMgr abnormal shutdown、`--cycles` 多轮接管�
 - **Reattach watchdog**:`AuditReattachWatchdog` 在 `OnTickComplete` 检查
   stuck BaseApp;`baseappmgr/ha/reattach_watchdog_ms` 是 ReadWrite ServerAppOption
   (默认 30s),verify 脚本可以通过 `atlas_tool set-watch` 缩短窗口。
+- **Reattach 注册表对账**:`AuditReattachRegistry` 周期性向 machined 查询存活
+  BaseApp,把"machined 报告已消失却仍 reattach-pending"的幽灵 entry 经
+  `OnBaseappDeath` prune(连带清 `dbid_affinity_` / `app_id_index_`),否则
+  downtime 期间真死的 BaseApp 会永远 needs_reattach、其 dbid_affinity 悬空。
+  镜像 CellAppMgr 但无 leaf-rehome 路径(BaseApp 不持有拓扑,prune 永远安全)。
+  空查询(machined 抖动)不 prune。watcher:`reattach_registry_audits`、
+  `reattach_registry_last_missing`、`reattach_registry_reconciled_total`、
+  `reattach_registry_status`。
 - **Watcher**:`baseappmgr/ha/snapshot_path`、`snapshot_saves`、`snapshot_restores`、
   `snapshot_fallback_restores`、`snapshot_save_failures`、`snapshot_restore_failures`、
   `snapshot_failures`、`snapshot_backup_skips`、`snapshot_max_bytes`、

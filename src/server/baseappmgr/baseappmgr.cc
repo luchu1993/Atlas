@@ -41,6 +41,8 @@ constexpr std::size_t kMaxSnapshotStringBytes = 64 * 1024;
 constexpr std::string_view kSnapshotModuleName = "BaseAppMgr";
 constexpr auto kDirtySnapshotFlushInterval = std::chrono::milliseconds(1000);
 constexpr auto kSnapshotSaveWarningThrottle = std::chrono::milliseconds(5000);
+constexpr auto kReattachRegistryAuditInterval =
+    std::chrono::duration_cast<Duration>(std::chrono::milliseconds(1000));
 
 using snapshot_envelope::PayloadView;
 using snapshot_envelope::FileReadiness;
@@ -623,6 +625,7 @@ auto BaseAppMgr::RestoreSnapshotFromFile(const std::filesystem::path& path) -> R
 void BaseAppMgr::OnTickComplete() {
   ManagerApp::OnTickComplete();
   AuditReattachWatchdog();
+  AuditReattachRegistry();
   if (Config().snapshot_path.empty() || Config().snapshot_interval_ms <= 0) return;
   const auto now = Clock::now();
   const auto interval =
@@ -795,6 +798,95 @@ void BaseAppMgr::AuditReattachWatchdog() {
                           now - info.registered_at).count());
     info.last_reattach_watchdog_log_at = now;
   }
+}
+
+void BaseAppMgr::AuditReattachRegistry() {
+  if (PendingReattachBaseAppCount() == 0) {
+    reattach_registry_audit_pending_ = false;
+    last_reattach_registry_missing_ = 0;
+    last_reattach_registry_error_.clear();
+    return;
+  }
+  if (reattach_registry_audit_pending_) return;
+  const auto now = Clock::now();
+  if (last_reattach_registry_audit_at_ != TimePoint{} &&
+      now - last_reattach_registry_audit_at_ < kReattachRegistryAuditInterval) {
+    return;
+  }
+  if (!GetMachinedClient().IsConnected()) {
+    last_reattach_registry_error_ = "machined disconnected";
+    return;
+  }
+  reattach_registry_audit_pending_ = true;
+  last_reattach_registry_audit_at_ = now;
+  ++reattach_registry_audit_count_;
+  GetMachinedClient().QueryAsync(ProcessType::kBaseApp,
+                                 [this](std::vector<machined::ProcessInfo> infos) {
+                                   OnReattachRegistryAudit(std::move(infos));
+                                 });
+}
+
+void BaseAppMgr::OnReattachRegistryAudit(std::vector<machined::ProcessInfo> infos) {
+  reattach_registry_audit_pending_ = false;
+  if (infos.empty() && PendingReattachBaseAppCount() != 0) {
+    last_reattach_registry_missing_ = 0;
+    last_reattach_registry_error_ = "baseapp registry query returned empty";
+    return;
+  }
+  (void)ApplyReattachRegistryAudit(
+      std::span<const machined::ProcessInfo>(infos.data(), infos.size()));
+}
+
+auto BaseAppMgr::ApplyReattachRegistryAudit(std::span<const machined::ProcessInfo> infos)
+    -> std::size_t {
+  std::vector<Address> live;
+  live.reserve(infos.size());
+  for (const auto& info : infos) {
+    if (info.process_type == ProcessType::kBaseApp) live.push_back(info.internal_addr);
+  }
+  std::vector<Address> missing;
+  for (const auto& [addr, info] : baseapps_) {
+    if (!info.restored_from_snapshot || !info.needs_reattach) continue;
+    if (std::find(live.begin(), live.end(), addr) == live.end()) missing.push_back(addr);
+  }
+  last_reattach_registry_missing_ = missing.size();
+  last_reattach_registry_error_.clear();
+  // BaseApps own no leaves, so a host machined confirms gone is always safe to
+  // prune; OnBaseappDeath clears dbid_affinity + app_id_index for us.
+  for (const auto& addr : missing) OnBaseappDeath(addr, /*reason=*/2);
+  reattach_registry_reconciled_total_ += missing.size();
+  return missing.size();
+}
+
+void BaseAppMgr::ApplyReattachRegistryAuditForTest(std::span<const machined::ProcessInfo> infos) {
+  (void)ApplyReattachRegistryAudit(infos);
+}
+
+void BaseAppMgr::SeedRestoredBaseAppForTest(const Address& internal_addr, uint32_t app_id) {
+  BaseAppInfo info;
+  info.internal_addr = internal_addr;
+  info.external_addr = internal_addr;
+  info.app_id = app_id;
+  info.needs_reattach = true;
+  info.restored_from_snapshot = true;
+  info.registered_at = Clock::now();
+  baseapps_[internal_addr] = std::move(info);
+  app_id_index_[app_id] = internal_addr;
+}
+
+void BaseAppMgr::OnReattachRegistryAuditForTest(std::vector<machined::ProcessInfo> infos) {
+  OnReattachRegistryAudit(std::move(infos));
+}
+
+auto BaseAppMgr::BuildReattachRegistryStatusSummary() const -> std::string {
+  const char* state = "idle";
+  if (PendingReattachBaseAppCount() != 0) {
+    state = last_reattach_registry_error_.empty() ? "auditing" : "error";
+  }
+  return std::format("state={} audits={} missing={} reconciled_total={} error_detail={}", state,
+                     reattach_registry_audit_count_, last_reattach_registry_missing_,
+                     reattach_registry_reconciled_total_,
+                     last_reattach_registry_error_.empty() ? "none" : last_reattach_registry_error_);
 }
 
 auto BaseAppMgr::RestoredBaseAppCount() const -> std::size_t {
@@ -1012,6 +1104,17 @@ void BaseAppMgr::RegisterWatchers() {
   wr.Add<std::string>("baseappmgr/ha/reattach_status",
                       std::function<std::string()>(
                           [this] { return BuildReattachStatusSummary(); }));
+  wr.Add<uint64_t>("baseappmgr/ha/reattach_registry_audits",
+                   std::function<uint64_t()>([this] { return reattach_registry_audit_count_; }));
+  wr.Add<std::size_t>("baseappmgr/ha/reattach_registry_last_missing",
+                      std::function<std::size_t()>(
+                          [this] { return last_reattach_registry_missing_; }));
+  wr.Add<uint64_t>("baseappmgr/ha/reattach_registry_reconciled_total",
+                   std::function<uint64_t()>(
+                       [this] { return reattach_registry_reconciled_total_; }));
+  wr.Add<std::string>("baseappmgr/ha/reattach_registry_status",
+                      std::function<std::string()>(
+                          [this] { return BuildReattachRegistryStatusSummary(); }));
 }
 
 void BaseAppMgr::OnRegisterBaseapp(const Address& src, Channel* ch,

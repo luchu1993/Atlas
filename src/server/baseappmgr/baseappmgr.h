@@ -22,6 +22,9 @@
 namespace atlas {
 
 class Channel;
+namespace machined {
+struct ProcessInfo;
+}
 
 class BaseAppMgr : public ManagerApp {
  public:
@@ -50,6 +53,11 @@ class BaseAppMgr : public ManagerApp {
   [[nodiscard]] auto RestoreSnapshotFromFile(const std::filesystem::path& path) -> Result<void>;
 
   void RegisterWatchersForTest() { RegisterWatchers(); }
+  void ApplyReattachRegistryAuditForTest(std::span<const machined::ProcessInfo> infos);
+  void OnReattachRegistryAuditForTest(std::vector<machined::ProcessInfo> infos);
+  // Seeds a reattach-pending BaseApp as Restore would, without needing a live
+  // Channel (OnRegisterBaseapp derefs ch on the fresh-register path).
+  void SeedRestoredBaseAppForTest(const Address& internal_addr, uint32_t app_id);
 
  private:
   struct BaseAppInfo {
@@ -159,6 +167,16 @@ class BaseAppMgr : public ManagerApp {
   void MarkSnapshotDirty(const char* reason);
   void SaveConfiguredSnapshot(const char* context);
   void AuditReattachWatchdog();
+  // Reconcile reattach-pending BaseApps against machined truth: a host that
+  // died during mgr downtime never re-registers, so the watchdog would log it
+  // forever and its dbid_affinity entries would dangle. Prune the ones
+  // machined reports gone (mirrors CellAppMgr, minus the leaf-rehome path —
+  // BaseApps own no topology, so pruning is always safe).
+  void AuditReattachRegistry();
+  void OnReattachRegistryAudit(std::vector<machined::ProcessInfo> infos);
+  [[nodiscard]] auto ApplyReattachRegistryAudit(std::span<const machined::ProcessInfo> infos)
+      -> std::size_t;
+  [[nodiscard]] auto BuildReattachRegistryStatusSummary() const -> std::string;
   [[nodiscard]] auto ReattachWatchdogWindow() const -> Duration;
   [[nodiscard]] auto IsReattachStuck(const BaseAppInfo& info, TimePoint now) const -> bool;
   [[nodiscard]] auto RestoredBaseAppCount() const -> std::size_t;
@@ -209,6 +227,13 @@ class BaseAppMgr : public ManagerApp {
   std::filesystem::path last_snapshot_restore_path_;
   std::string last_snapshot_restore_error_;
   std::string last_snapshot_restore_primary_error_;
+
+  TimePoint last_reattach_registry_audit_at_{};
+  bool reattach_registry_audit_pending_{false};
+  uint64_t reattach_registry_audit_count_{0};
+  uint64_t reattach_registry_reconciled_total_{0};
+  std::size_t last_reattach_registry_missing_{0};
+  std::string last_reattach_registry_error_;
 };
 
 }  // namespace atlas

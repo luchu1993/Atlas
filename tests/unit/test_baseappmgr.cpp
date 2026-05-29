@@ -15,6 +15,7 @@
 #include "baseappmgr/baseappmgr.h"
 #include "network/address.h"
 #include "network/event_dispatcher.h"
+#include "network/machined_types.h"
 #include "network/network_interface.h"
 #include "platform/filesystem.h"
 #include "serialization/binary_stream.h"
@@ -36,6 +37,14 @@ struct BaseAppMgrHarness {
 };
 
 auto MakeAddr(uint16_t port) -> Address { return Address(0x7F000001u, port); }
+
+auto BaseAppProcessInfo(Address internal_addr, std::string name) -> machined::ProcessInfo {
+  machined::ProcessInfo info;
+  info.process_type = ProcessType::kBaseApp;
+  info.name = std::move(name);
+  info.internal_addr = internal_addr;
+  return info;
+}
 
 constexpr uint32_t kSnapshotMagicForTest = 0x424D4731u;  // 'BMG1'
 constexpr uint32_t kSnapshotVersionForTest = 3;
@@ -215,6 +224,61 @@ TEST(BaseAppMgr, SnapshotSizeHighWaterPctReflectsLastSave) {
 
   std::filesystem::remove(path, ec);
   std::filesystem::remove(path.string() + ".bak", ec);
+}
+
+TEST(BaseAppMgr, ReattachRegistryAuditPrunesBaseAppMachinedReportsGone) {
+  BaseAppMgrHarness h;
+  h.mgr.RegisterWatchersForTest();
+  h.mgr.SeedRestoredBaseAppForTest(MakeAddr(40001), /*app_id=*/1);
+  h.mgr.SeedRestoredBaseAppForTest(MakeAddr(40002), /*app_id=*/2);
+  EXPECT_EQ(h.mgr.GetWatcherRegistry().Get("baseappmgr/ha/reattach_pending"),
+            std::optional<std::string>("2"));
+
+  // machined still lists 40001 but not 40002 → 40002 is a ghost and gets pruned.
+  const std::vector registry{BaseAppProcessInfo(MakeAddr(40001), "baseapp_a")};
+  h.mgr.ApplyReattachRegistryAuditForTest(registry);
+
+  EXPECT_EQ(h.mgr.GetWatcherRegistry().Get("baseappmgr/ha/reattach_pending"),
+            std::optional<std::string>("1"));
+  EXPECT_EQ(h.mgr.GetWatcherRegistry().Get("baseappmgr/ha/reattach_registry_last_missing"),
+            std::optional<std::string>("1"));
+  EXPECT_EQ(h.mgr.GetWatcherRegistry().Get("baseappmgr/ha/reattach_registry_reconciled_total"),
+            std::optional<std::string>("1"));
+}
+
+TEST(BaseAppMgr, ReattachRegistryAuditKeepsBaseAppMachinedStillReports) {
+  BaseAppMgrHarness h;
+  h.mgr.RegisterWatchersForTest();
+  h.mgr.SeedRestoredBaseAppForTest(MakeAddr(40001), /*app_id=*/1);
+
+  // machined still reports it alive → not a ghost, must NOT be pruned even
+  // though it hasn't reattached yet (it may still re-register).
+  const std::vector registry{BaseAppProcessInfo(MakeAddr(40001), "baseapp_a")};
+  h.mgr.ApplyReattachRegistryAuditForTest(registry);
+
+  EXPECT_EQ(h.mgr.GetWatcherRegistry().Get("baseappmgr/ha/reattach_pending"),
+            std::optional<std::string>("1"));
+  EXPECT_EQ(h.mgr.GetWatcherRegistry().Get("baseappmgr/ha/reattach_registry_last_missing"),
+            std::optional<std::string>("0"));
+  EXPECT_EQ(h.mgr.GetWatcherRegistry().Get("baseappmgr/ha/reattach_registry_reconciled_total"),
+            std::optional<std::string>("0"));
+}
+
+TEST(BaseAppMgr, ReattachRegistryAuditEmptyQueryDoesNotPrune) {
+  BaseAppMgrHarness h;
+  h.mgr.RegisterWatchersForTest();
+  h.mgr.SeedRestoredBaseAppForTest(MakeAddr(40001), /*app_id=*/1);
+
+  // An empty registry while reattach is pending is treated as a suspect query
+  // (machined hiccup), not "everything died" — pruning is withheld.
+  std::vector<machined::ProcessInfo> registry;
+  h.mgr.OnReattachRegistryAuditForTest(std::move(registry));
+
+  EXPECT_EQ(h.mgr.GetWatcherRegistry().Get("baseappmgr/ha/reattach_pending"),
+            std::optional<std::string>("1"));
+  auto status = h.mgr.GetWatcherRegistry().Get("baseappmgr/ha/reattach_registry_status");
+  ASSERT_TRUE(status.has_value());
+  EXPECT_NE(status->find("state=error"), std::string::npos);
 }
 
 }  // namespace
