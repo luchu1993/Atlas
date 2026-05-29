@@ -441,22 +441,26 @@ void Reviver::AuditLeadership(ManagedTarget& t) {
     const bool renewing = t.leader_lock_held;
     t.lease_request_in_flight = true;
     t.next_lease_renew_at = now + std::chrono::milliseconds(renew_ms);
+    // Anchor our local expiry to the request SEND time, not the callback
+    // arrival: machined stamps its authoritative expiry when it receives the
+    // request (≈ now + RTT/2), so send-time + ttl is never later than
+    // machined's view. Using callback-arrival would push our belief ~RTT past
+    // machined's and open a window where machined could grant the lease to a
+    // competing reviver while we still think we hold it.
+    const auto lease_expiry =
+        now + std::chrono::duration_cast<Duration>(std::chrono::milliseconds(ttl_ms));
     const auto op = renewing ? machined::LeaseOp::kRenew : machined::LeaseOp::kAcquire;
-    auto issue = [this, &t, renewing](MachinedClient::LeaseResult r) {
+    auto issue = [this, &t, renewing, lease_expiry](MachinedClient::LeaseResult r) {
       t.lease_request_in_flight = false;
       if (r.success) {
-        const auto now_local = Clock::now();
-        t.leader_lock_expires_at =
-            now_local + std::chrono::duration_cast<Duration>(
-                            std::chrono::milliseconds(
-                                std::max(100, Config().revive_leader_lock_ttl_ms)));
+        t.leader_lock_expires_at = lease_expiry;
         t.lease_failure_streak = 0;
         if (!t.leader_lock_held) {
           t.leader_lock_held = true;
           ++t.lease_acquire_count;
           ++t.leader_lock_acquires;
           t.startup_checked = false;
-          t.startup_check_at = now_local;
+          t.startup_check_at = Clock::now();
           t.last_error.clear();
           ATLAS_LOG_INFO("Reviver: acquired {} lease (machined) holder={}", t.slug,
                          t.leader_lock_holder_id);
