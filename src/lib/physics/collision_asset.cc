@@ -236,8 +236,10 @@ void AppendPlaneObj(std::string& out, const StaticPlane& plane, std::size_t inde
   if (!half_height) return half_height.Error();
   auto layer = RequiredLayer(value, path);
   if (!layer) return layer.Error();
-  if (*half_height < *radius) {
-    return Invalid(std::format("{}.half_height must be >= radius", path));
+  if (*half_height <= *radius) {
+    return Invalid(std::format(
+        "{}.half_height must be > radius (== degenerates to a sphere — use a sphere shape)",
+        path));
   }
   return StaticCapsule{*center, *radius, *half_height, *layer};
 }

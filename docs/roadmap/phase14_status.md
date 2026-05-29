@@ -103,6 +103,11 @@
   layer，`out.layer` 报告命中 body 的真实 layer。修复了此前 Jolt 忽略 layer /
   mask（per-object `layer` 形同虚设、与 Static 行为分叉）的洞。
   `layer_mask_excludes_higher_box` parity 场景 + jolt 单测锁住。
+- 退化形状不再静默无 body：parser 拒绝 `half_height <= radius` 的 capsule
+  （== 实为 sphere）；`JoltCollisionBackendFactory` 在加载后比对 expected vs
+  `JoltPhysicsQuery::BodyCount()`，少了就返回 Error（退化 convex/mesh 或 body
+  cap），经 Result 链路浮到 cellapp error log。每 query 静态 body cap 1024 →
+  16384（query-only 场景，body-pair/contact 预算仍小）。
 - MVP 碰撞垂直切片已闭合：`Main.unity` → exporter → `main.collision.json` →
   `run_mvp_cluster` cook → `MvpSpace.OnSpaceInit` 经 Jolt backend 加载；
   live cluster 日志确认 `CellApp: loaded collision cache` +

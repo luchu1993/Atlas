@@ -112,7 +112,9 @@ struct JoltPhysicsQuery::Impl {
   bool needs_optimize{false};
 
   Impl() {
-    constexpr JPH::uint kMaxBodies = 1024;
+    // Query-only scene (no simulation step), so body-pair / contact budgets
+    // stay small; kMaxBodies bounds how many static obstacles a map can hold.
+    constexpr JPH::uint kMaxBodies = 16384;
     constexpr JPH::uint kNumBodyMutexes = 0;
     constexpr JPH::uint kMaxBodyPairs = 1024;
     constexpr JPH::uint kMaxContactConstraints = 1024;
@@ -331,6 +333,10 @@ auto JoltPhysicsQuery::AddCookedMeshShape(std::span<const std::byte> cooked,
 auto JoltPhysicsQuery::CurrentJoltStamp() -> uint64_t {
   using JPH::uint64;
   return static_cast<uint64_t>(JPH_VERSION_ID);
+}
+
+auto JoltPhysicsQuery::BodyCount() const -> std::size_t {
+  return static_cast<std::size_t>(impl_->system.GetNumBodies());
 }
 
 namespace {

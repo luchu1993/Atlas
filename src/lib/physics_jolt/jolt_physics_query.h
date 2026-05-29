@@ -54,6 +54,10 @@ class JoltPhysicsQuery final : public PhysicsQuery {
   // different stamp must be re-cooked before it is safe to restore.
   [[nodiscard]] static auto CurrentJoltStamp() -> uint64_t;
 
+  // Static bodies actually in the scene. Lets a builder detect shapes that
+  // silently failed to construct (degenerate geometry, body cap exceeded).
+  [[nodiscard]] auto BodyCount() const -> std::size_t;
+
   void Clear();
 
   [[nodiscard]] auto GroundProbe(const GroundProbeQuery& query) const

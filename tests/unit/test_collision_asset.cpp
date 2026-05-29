@@ -323,6 +323,19 @@ TEST(CollisionAsset, RejectsCapsuleWithHalfHeightBelowRadius) {
   EXPECT_EQ(asset.Error().Code(), ErrorCode::kInvalidArgument);
 }
 
+TEST(CollisionAsset, RejectsDegenerateCapsuleEqualToSphere) {
+  // half_height == radius would build no Jolt body; reject at parse instead.
+  auto asset = LoadCollisionAssetFromJson(R"({
+    "version": 2,
+    "coordinate_system": "x_right_y_up_z_forward_meters",
+    "source_hash": "unit",
+    "objects": [{"shape": "capsule", "center": [0, 0, 0], "radius": 1.0,
+                 "half_height": 1.0, "layer": 0}]
+  })");
+  ASSERT_FALSE(asset.HasValue());
+  EXPECT_EQ(asset.Error().Code(), ErrorCode::kInvalidArgument);
+}
+
 TEST(CollisionAsset, CacheRoundTripBoxesPlanes) {
   const std::string source_hash = "unit";
   auto bytes = WriteCollisionCacheBytes(kValidAsset, {}, source_hash);

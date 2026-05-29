@@ -1,5 +1,6 @@
 #include "physics_jolt/jolt_collision_backend.h"
 
+#include <cstddef>
 #include <format>
 #include <utility>
 
@@ -36,6 +37,18 @@ auto JoltCollisionBackendFactory::BuildFromCache(const LoadedCollisionCache& cac
   if (!cache.cooked.empty()) {
     auto restored = query->RestoreCookedMeshes(cache.cooked);
     if (!restored) return restored.Error();
+  }
+
+  // Every Add* makes one static body; a shortfall means some shape silently
+  // failed to build (degenerate convex/mesh, or the per-query body cap).
+  const std::size_t expected = cache.asset.boxes.size() + cache.asset.planes.size() +
+                               cache.asset.spheres.size() + cache.asset.capsules.size() +
+                               cache.asset.convexes.size() + cache.asset.meshes.size();
+  if (query->BodyCount() < expected) {
+    return Error{ErrorCode::kInvalidArgument,
+                 std::format("Jolt backend built {} of {} collision shapes; the rest failed "
+                             "(degenerate geometry or body cap exceeded)",
+                             query->BodyCount(), expected)};
   }
   return std::unique_ptr<PhysicsQuery>(std::move(query));
 }

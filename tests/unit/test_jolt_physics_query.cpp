@@ -520,6 +520,25 @@ TEST(JoltCollisionBackend, BuildsSphereAndCapsuleCacheWithoutStampDependency) {
   jolt::Shutdown();
 }
 
+TEST(JoltCollisionBackend, RejectsCacheWhoseShapeFailsToBuild) {
+  jolt::Initialize();
+  LoadedCollisionCache cache;
+  cache.asset.source_hash = "bad";
+  cache.asset.boxes.push_back(StaticBox{{-1, -1, -1}, {1, 1, 1}, 0});
+  // 4 coincident points (zero extent) can't form a hull → no body built.
+  ConvexGeometry degenerate;
+  degenerate.layer = 0;
+  degenerate.vertices = {{0, 0, 0}, {0, 0, 0}, {0, 0, 0}, {0, 0, 0}};
+  cache.asset.convexes.push_back(degenerate);
+
+  JoltCollisionBackendFactory factory;
+  auto query = factory.BuildFromCache(cache);
+  ASSERT_FALSE(query.HasValue());  // 1 of 2 shapes built → surfaced, not silent
+  EXPECT_EQ(query.Error().Code(), ErrorCode::kInvalidArgument);
+
+  jolt::Shutdown();
+}
+
 TEST(JoltCollisionBackend, BuildsBoxOnlyCacheWithoutStampDependency) {
   jolt::Initialize();
   LoadedCollisionCache cache;
