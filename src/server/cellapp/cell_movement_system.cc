@@ -23,12 +23,28 @@ constexpr uint32_t kMaxMovementFramesPerEntityPerTick = 1;
 constexpr uint32_t kMovementAckIntervalTicks = 3;
 constexpr float kMovementIntentEpsilon = 1e-4f;
 
-auto MovementCommandDeltaMs(float dt) -> uint16_t {
-  const auto rounded_ms = std::lround(static_cast<double>(dt) * 1000.0);
+struct CommandDeltaResult {
+  uint16_t advance_ms;
+  float new_residue_seconds;
+};
+
+// Sub-millisecond dt accumulates into the residue and skips the command
+// step this tick; once residue + dt >= 1ms the floor(total_ms) advances
+// and the rounded-off fraction stays for the next call. Without this,
+// every tick advanced elapsed_ms by 1 (the kFixed clamp) regardless of
+// real dt — commands completed in a fraction of their nominal duration
+// and the velocity calc (1000/dt_ms) was off proportionally.
+auto MovementCommandDeltaMsWithResidue(float dt, float prev_residue_seconds)
+    -> CommandDeltaResult {
+  const double total_seconds = static_cast<double>(dt) + static_cast<double>(prev_residue_seconds);
+  if (total_seconds < 0.001) {
+    return {0u, static_cast<float>(total_seconds)};
+  }
+  const auto rounded_ms = std::lround(total_seconds * 1000.0);
   const auto clamped_ms = std::clamp<int64_t>(
-      static_cast<int64_t>(rounded_ms), 1,
-      static_cast<int64_t>(std::numeric_limits<uint16_t>::max()));
-  return static_cast<uint16_t>(clamped_ms);
+      rounded_ms, 0, static_cast<int64_t>(std::numeric_limits<uint16_t>::max()));
+  const auto advance_ms = static_cast<uint16_t>(clamped_ms);
+  return {advance_ms, static_cast<float>(total_seconds - static_cast<double>(advance_ms) / 1000.0)};
 }
 
 auto QuantizeMovementAxis(float value) -> int8_t {
@@ -248,6 +264,7 @@ void CellMovementSystem::EraseEntity(EntityID entity_id) {
   state_store_.Erase(entity_id);
   script_intents_.erase(entity_id);
   input_rate_limiter_.Erase(entity_id);
+  command_dt_residue_seconds_.erase(entity_id);
 }
 
 auto CellMovementSystem::SetCurve(const movement::MovementCurve& curve) -> bool {
@@ -365,8 +382,16 @@ void CellMovementSystem::Tick(CellMovementHost& host, float dt) {
               input_buffer_.Drain(entity_id, kMaxMovementFramesPerEntityPerTick);
           if (!frames.empty()) turn_input = frames.back();
         }
+        const float prev_residue = command_dt_residue_seconds_[entity_id];
+        const auto delta = MovementCommandDeltaMsWithResidue(dt, prev_residue);
+        command_dt_residue_seconds_[entity_id] = delta.new_residue_seconds;
+        if (delta.advance_ms == 0) {
+          // Sub-ms tick — skip the command step; residue carries forward so
+          // a subsequent tick can advance the command by the accumulated total.
+          continue;
+        }
         const auto result = movement::ApplyMovementCommand(
-            state, *command, *curve, MovementCommandDeltaMs(dt), config, movement_query,
+            state, *command, *curve, delta.advance_ms, config, movement_query,
             *command_resolver_, *command_policy_);
         if (movement::IsStateWithinLimits(result.state, config)) {
           auto next_state = result.state;

@@ -225,6 +225,38 @@ TEST(CellMovementSystem, TickPublishesStateAckOnInputDrain) {
   EXPECT_EQ(host.state_acks[0].state.last_processed_input_seq, 1u);
 }
 
+TEST(CellMovementSystem, SubMillisecondTickAccumulatesResidueWithoutAdvancingCommand) {
+  CellMovementSystem system;
+  MovementCurve linear{};
+  linear.id = 1;
+  linear.sample_count = 2;
+  linear.samples[0] = 0.0f;
+  linear.samples[1] = 1.0f;
+  ASSERT_TRUE(system.SetCurve(linear));
+  CapturingHost host;
+
+  // Short target distance keeps the implied velocity well under any speed
+  // limit so the command isn't erased mid-test for an unrelated reason.
+  auto cmd = MakeCommand(/*id=*/1u, /*curve_id=*/1u);
+  cmd.target_position = {0.05f, 0.0f, 0.0f};
+  cmd.duration_ms = 500u;
+  ASSERT_TRUE(system.SetCommand(host, 200u, cmd));
+  ASSERT_NE(system.command_store().Find(200u), nullptr);
+  const uint16_t initial_elapsed = system.command_store().Find(200u)->elapsed_ms;
+
+  // 4 ticks of 0.3ms each = 1.2ms accumulated. The first 3 should be
+  // residue-only (no command advance, elapsed unchanged); the 4th will see
+  // 1.2ms total and advance by 1ms, leaving 0.2ms in residue.
+  for (int i = 0; i < 3; ++i) system.Tick(host, 0.0003f);
+  EXPECT_EQ(system.command_store().Find(200u)->elapsed_ms, initial_elapsed)
+      << "command should not advance on sub-ms ticks";
+
+  system.Tick(host, 0.0003f);
+  const auto* after = system.command_store().Find(200u);
+  ASSERT_NE(after, nullptr);
+  EXPECT_GE(after->elapsed_ms, initial_elapsed + 1u);
+}
+
 TEST(CellMovementSystem, RestorePositionHistoryRebasesToDestTick) {
   CellMovementSystem system;
   CapturingHost host;

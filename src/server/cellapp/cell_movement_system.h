@@ -124,6 +124,10 @@ class CellMovementSystem {
   CellMovementMetrics metrics_;
   MovementInputRateLimiter input_rate_limiter_;
   std::unordered_map<EntityID, movement::InputFrame> script_intents_;
+  // Sub-millisecond dt remainder per entity; preserved across ticks so a
+  // burst of sub-ms calls eventually advances the command by an integer ms
+  // instead of either rounding up every call or freezing the command.
+  std::unordered_map<EntityID, float> command_dt_residue_seconds_;
   movement::MovementConfig config_;
   std::vector<EntityID> tick_entity_scratch_;
 };
