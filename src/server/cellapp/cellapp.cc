@@ -445,6 +445,7 @@ void CellApp::OnCellAppMgrBirth(const machined::BirthNotification& n) {
 
   cellappmgr::RegisterCellApp reg;
   reg.internal_addr = Network().RudpAddress();
+  reg.known_app_id = app_id_;  // echo our id so a snapshot-less mgr keeps it
   if (auto r = cellappmgr_channel_->SendMessage(reg); !r) {
     ATLAS_LOG_WARNING("CellApp: RegisterCellApp send failed to mgr {}: {}",
                       n.internal_addr.ToString(), r.Error().Message());

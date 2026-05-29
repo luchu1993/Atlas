@@ -1489,15 +1489,29 @@ void CellAppMgr::OnRegisterCellApp(const Address& src, Channel* ch,
     return;
   }
 
-  if (next_cellapp_app_id_ > kMaxCellAppAppId) {
-    ATLAS_LOG_ERROR(
-        "CellAppMgr: CellApp app_id pool exhausted (> {}) — rejecting register from {}:{}",
-        kMaxCellAppAppId, kInternalAddr.Ip(), kInternalAddr.Port());
-    SendRegisterCellAppAck(ch, kInternalAddr, /*app_id=*/0, /*success=*/false, "pool-exhausted");
-    return;
+  const auto app_id_in_use = [this](uint32_t id) {
+    return std::any_of(cellapps_.begin(), cellapps_.end(),
+                       [id](const auto& e) { return e.second.app_id == id; });
+  };
+  uint32_t app_id;
+  const char* register_reason = "register";
+  if (msg.known_app_id >= 1 && msg.known_app_id <= kMaxCellAppAppId &&
+      !app_id_in_use(msg.known_app_id)) {
+    // Snapshot-less recovery: the CellApp echoed an id it already owns; keep it
+    // so its existing entities' EntityIDs (high byte = app_id) keep routing.
+    app_id = msg.known_app_id;
+    next_cellapp_app_id_ = std::max(next_cellapp_app_id_, static_cast<uint32_t>(app_id + 1));
+    register_reason = "recover-app-id";
+  } else {
+    if (next_cellapp_app_id_ > kMaxCellAppAppId) {
+      ATLAS_LOG_ERROR(
+          "CellAppMgr: CellApp app_id pool exhausted (> {}) — rejecting register from {}:{}",
+          kMaxCellAppAppId, kInternalAddr.Ip(), kInternalAddr.Port());
+      SendRegisterCellAppAck(ch, kInternalAddr, /*app_id=*/0, /*success=*/false, "pool-exhausted");
+      return;
+    }
+    app_id = next_cellapp_app_id_++;
   }
-
-  const uint32_t app_id = next_cellapp_app_id_++;
   CellAppInfo info;
   info.internal_addr = kInternalAddr;
   info.app_id = app_id;
@@ -1506,10 +1520,10 @@ void CellAppMgr::OnRegisterCellApp(const Address& src, Channel* ch,
   cellapps_.emplace(kInternalAddr, std::move(info));
   MarkSnapshotDirty("cellapp-register");
 
-  SendRegisterCellAppAck(ch, kInternalAddr, app_id, /*success=*/true, "register");
+  SendRegisterCellAppAck(ch, kInternalAddr, app_id, /*success=*/true, register_reason);
 
-  ATLAS_LOG_INFO("CellAppMgr: CellApp registered app_id={} internal={}:{}", app_id,
-                 kInternalAddr.Ip(), kInternalAddr.Port());
+  ATLAS_LOG_INFO("CellAppMgr: CellApp registered app_id={} internal={}:{} ({})", app_id,
+                 kInternalAddr.Ip(), kInternalAddr.Port(), register_reason);
 
   const auto extended = Clock::now() + startup_quiescence_window_;
   for (auto& entry : pending_space_creates_awaiting_cellapps_) {

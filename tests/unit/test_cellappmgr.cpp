@@ -3952,6 +3952,40 @@ auto MakeRecoverReport(CellAppMgrHarness& src, SpaceID space_id)
   return report;
 }
 
+TEST(CellAppMgr, RegisterAdoptsKnownAppIdOnSnapshotlessRecovery) {
+  CellAppMgrHarness recovered;  // fresh mgr, no snapshot
+  cellappmgr::RegisterCellApp reg;
+  reg.internal_addr = MakePeerAddr(30001);
+  reg.known_app_id = 42;  // the id this CellApp owned before the mgr died
+  recovered.mgr.OnRegisterCellApp(reg.internal_addr, nullptr, reg);
+
+  const auto& apps = recovered.mgr.CellApps();
+  ASSERT_TRUE(apps.contains(reg.internal_addr));
+  EXPECT_EQ(apps.at(reg.internal_addr).app_id, 42u)
+      << "snapshot-less recovery must keep the CellApp's known app_id";
+
+  // A subsequent genuinely-new CellApp gets a fresh id past the adopted one.
+  cellappmgr::RegisterCellApp fresh;
+  fresh.internal_addr = MakePeerAddr(30002);
+  recovered.mgr.OnRegisterCellApp(fresh.internal_addr, nullptr, fresh);
+  EXPECT_GT(recovered.mgr.CellApps().at(fresh.internal_addr).app_id, 42u);
+}
+
+TEST(CellAppMgr, RegisterFallsBackToFreshWhenKnownAppIdCollides) {
+  CellAppMgrHarness h;
+  cellappmgr::RegisterCellApp a;
+  a.internal_addr = MakePeerAddr(30001);
+  h.mgr.OnRegisterCellApp(a.internal_addr, nullptr, a);  // gets app_id 1
+  const auto a_id = h.mgr.CellApps().at(a.internal_addr).app_id;
+
+  // Second CellApp claims the same known id → must NOT collide; assigned fresh.
+  cellappmgr::RegisterCellApp b;
+  b.internal_addr = MakePeerAddr(30002);
+  b.known_app_id = a_id;
+  h.mgr.OnRegisterCellApp(b.internal_addr, nullptr, b);
+  EXPECT_NE(h.mgr.CellApps().at(b.internal_addr).app_id, a_id);
+}
+
 TEST(CellAppMgr, RecoveryWindowHoldsRestoreGateThenOpens) {
   CellAppMgrHarness h;  // harness zeros the startup window
   cellappmgr::RegisterCellApp reg;

@@ -22,12 +22,16 @@ using CellID = uint32_t;
 
 struct RegisterCellApp {
   Address internal_addr;
+  // The id this CellApp was last assigned, echoed back on reconnect so a mgr
+  // that lacks the entry (snapshot-less revive) preserves it instead of
+  // minting a fresh one — EntityID high byte is the app_id. 0 = never assigned.
+  uint32_t known_app_id{0};
 
   static auto Descriptor() -> const MessageDesc& {
     static const MessageDesc kDesc{msg_id::Id(msg_id::CellAppMgr::kRegisterCellApp),
                                    "cellappmgr::RegisterCellApp",
-                                   MessageLengthStyle::kFixed,
-                                   static_cast<int>(sizeof(uint32_t) + sizeof(uint16_t)),
+                                   MessageLengthStyle::kVariable,
+                                   -1,
                                    MessageReliability::kReliable,
                                    MessageUrgency::kImmediate};
     return kDesc;
@@ -36,14 +40,18 @@ struct RegisterCellApp {
   void Serialize(BinaryWriter& w) const {
     w.Write(internal_addr.Ip());
     w.Write(internal_addr.Port());
+    w.Write(known_app_id);
   }
 
   static auto Deserialize(BinaryReader& r) -> Result<RegisterCellApp> {
     auto ip = r.Read<uint32_t>();
     auto port = r.Read<uint16_t>();
-    if (!ip || !port) return Error{ErrorCode::kInvalidArgument, "RegisterCellApp: truncated"};
+    auto known = r.Read<uint32_t>();
+    if (!ip || !port || !known)
+      return Error{ErrorCode::kInvalidArgument, "RegisterCellApp: truncated"};
     RegisterCellApp msg;
     msg.internal_addr = Address(*ip, *port);
+    msg.known_app_id = *known;
     return msg;
   }
 };

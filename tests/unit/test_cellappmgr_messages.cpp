@@ -70,10 +70,20 @@ TEST(CellBounds, RoundTripFiniteAndInfinite) {
 TEST(CellAppMgrMessages, RegisterCellApp_RoundTrip) {
   RegisterCellApp msg;
   msg.internal_addr = Address(0x7F000001u, 30000);
+  msg.known_app_id = 42;
   auto rt = RoundTrip(msg);
   ASSERT_TRUE(rt.has_value());
   EXPECT_EQ(rt->internal_addr.Ip(), 0x7F000001u);
   EXPECT_EQ(rt->internal_addr.Port(), 30000u);
+  EXPECT_EQ(rt->known_app_id, 42u);
+}
+
+TEST(CellAppMgrMessages, RegisterCellApp_ZeroKnownAppIdRoundTrips) {
+  RegisterCellApp msg;
+  msg.internal_addr = Address(0x7F000001u, 30001);
+  auto rt = RoundTrip(msg);  // known_app_id defaults to 0 (never assigned)
+  ASSERT_TRUE(rt.has_value());
+  EXPECT_EQ(rt->known_app_id, 0u);
 }
 
 TEST(CellAppMgrMessages, RegisterCellAppAck_RoundTrip) {
