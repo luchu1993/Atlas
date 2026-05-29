@@ -94,29 +94,38 @@ editors and prints the selected executable. Default Windows output is
 `--target StandaloneOSX` for non-Windows players. Standalone builds launch in a
 resizable window.
 
-## Export server collision from Unity
+## Server collision pipeline
+
+`Main.unity` carries a `AtlasServerColliders` root (ground slab + a wall and
+platform) tagged with `ServerColliderAuthoring(exportToServer = true)`. The
+menu **Atlas → MVP → Seed Server Test Colliders** rebuilds it; `MvpSpace`
+loads the cooked result so the demo has real server-authoritative obstacles.
+
+Export the scene's server colliders to an Atlas collision asset v2 JSON:
 
 ```bash
-tools/bin/export_collision_unity.sh --output out/mvp-unity/map.collision.json
-tools\bin\export_collision_unity.bat --output out\mvp-unity\map.collision.json
+tools/bin/export_collision_unity.sh  --output samples/mvp/maps/main.collision.json --scene Assets/Scenes/Main.unity
+tools\bin\export_collision_unity.bat --output samples\mvp\maps\main.collision.json --scene Assets/Scenes/Main.unity
 ```
 
-Launches Unity in batch mode and runs
-`Atlas.Mvp.Editor.AtlasCollisionExporter.ExportFromCommandLine`, which
-scans the active scene for `ServerColliderAuthoring` components with
-`exportToServer = true` and emits an Atlas collision asset v2 JSON.
-MVP support is intentionally narrow:
+`--scene` is required — batch mode boots an untitled scene, so omitting it
+makes the exporter abort rather than silently emit zero objects. The exporter
+scans `ServerColliderAuthoring` components with `exportToServer = true`. MVP
+support is intentionally narrow:
 
 - `BoxCollider` with axis-aligned transform → `{shape: box, min, max, layer}`.
 - Rotated `BoxCollider`, `SphereCollider`, `CapsuleCollider`, `MeshCollider`,
   `TerrainCollider`, and negative scale are logged and skipped — Atlas
   `StaticBox` is an AABB and the asset schema only models box/plane/mesh.
 
-Feed the JSON into the cooking + cache pipeline:
+`run_mvp_cluster` cooks `samples/mvp/maps/main.collision.json` to a
+`.collisioncache` at launch and `MvpSpace.OnSpaceInit` loads it through the
+Jolt backend; if the cache is missing the space keeps its flat ground. Cook
+manually with:
 
 ```bash
-bin\debug\atlas_tool.exe cook_collision out\mvp-unity\map.collision.json
-# → out\mvp-unity\map.collision.collisioncache
+bin\debug\atlas_tool.exe cook_collision samples\mvp\maps\main.collision.json
+# → samples\mvp\maps\main.collision.collisioncache
 ```
 
 `atlas_tool recook --invalid <dir>` re-cooks caches whose

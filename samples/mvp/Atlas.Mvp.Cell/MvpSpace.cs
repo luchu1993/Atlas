@@ -13,6 +13,9 @@ public partial class MvpSpace : CellSpaceEntity
     private const int kLowWaterMark = 150;
     private const float kRespawnIntervalSeconds = 2.0f;
     private const float kWorldHalf = 100f;
+    // Cooked by run_mvp_cluster from samples/mvp/maps/main.collision.json; path is
+    // relative to the cluster working directory (repo root).
+    private const string kCollisionCache = "samples/mvp/maps/main.collisioncache";
 
     private int _scatterIndex;
     private int _liveCount;
@@ -20,6 +23,14 @@ public partial class MvpSpace : CellSpaceEntity
 
     protected override void OnSpaceInit(bool isReload)
     {
+        // Loading the cooked map replaces the implicit flat ground, so the asset
+        // carries its own ground slab. If absent, the space keeps flat ground.
+        if (CellServerEntity.LoadCollisionAsset(SpaceId, kCollisionCache))
+            Log.Info($"[Mvp.Cell] MvpSpace: loaded collision {kCollisionCache} for space {SpaceId}");
+        else
+            Log.Warning($"[Mvp.Cell] MvpSpace: no collision map at {kCollisionCache}; " +
+                        "staying on flat ground (run atlas_tool cook_collision)");
+
         if (isReload) return;
 
         int requested = 0;

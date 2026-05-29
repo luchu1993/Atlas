@@ -66,3 +66,6 @@ __pycache__/
 
 # CTest temporary output (ctest run from the project root drops these in Testing/)
 /Testing/
+
+# Cooked collision caches are derived from committed .collision.json sources.
+*.collisioncache

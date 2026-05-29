@@ -40,6 +40,14 @@ namespace Atlas.Mvp.Editor
                 {
                     EditorSceneManager.OpenScene(scenePath, OpenSceneMode.Single);
                 }
+                else if (string.IsNullOrEmpty(SceneManager.GetActiveScene().path))
+                {
+                    // Batch mode boots an untitled empty scene; exporting it would
+                    // silently write zero objects. Demand an explicit scene instead.
+                    throw new InvalidOperationException(
+                        "No -atlasExportScene given and the active scene is untitled; " +
+                        "pass --scene <Assets/.../X.unity> to export a saved scene.");
+                }
 
                 var result = ExportActiveSceneToFile(output, sourceHash);
                 Debug.Log($"[AtlasCollisionExporter] boxes={result.Boxes} skipped={result.Skipped} output={output}");

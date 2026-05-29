@@ -70,28 +70,36 @@ tools\bin\build_mvp_unity.bat --skip-setup --clean-output
 
 脚本会按顺序从 `--unity`、`UNITY_EXE`、`UNITY_PATH`、固定工程版本对应的 Unity Hub 安装路径查找 Unity 可执行文件。如果缺少 `ProjectSettings/ProjectVersion.txt`，脚本会扫描本机 Unity Hub 已安装的 Editor 并打印最终选中的可执行文件。Windows 默认输出为 `out/mvp-unity/windows/AtlasMvp.exe`，日志写到 `out/mvp-unity/unity-build.log`。非 Windows player 可传 `--target StandaloneLinux64` 或 `--target StandaloneOSX`。Standalone 构建默认以可调整大小的窗口启动。
 
-## 从 Unity 导出服务端碰撞
+## 服务端碰撞管线
+
+`Main.unity` 带一个 `AtlasServerColliders` 根（地面 slab + 一堵墙 + 一个台子），
+标记 `ServerColliderAuthoring(exportToServer = true)`。菜单
+**Atlas → MVP → Seed Server Test Colliders** 可重建它；`MvpSpace` 加载 cook
+产物，让 demo 拥有真实的服务端权威障碍。
+
+把场景的服务端 collider 导出成 Atlas collision asset v2 JSON：
 
 ```bash
-tools/bin/export_collision_unity.sh --output out/mvp-unity/map.collision.json
-tools\bin\export_collision_unity.bat --output out\mvp-unity\map.collision.json
+tools/bin/export_collision_unity.sh  --output samples/mvp/maps/main.collision.json --scene Assets/Scenes/Main.unity
+tools\bin\export_collision_unity.bat --output samples\mvp\maps\main.collision.json --scene Assets/Scenes/Main.unity
 ```
 
-以 batch mode 启动 Unity 并跑
-`Atlas.Mvp.Editor.AtlasCollisionExporter.ExportFromCommandLine`，扫描
-当前场景里 `exportToServer = true` 的 `ServerColliderAuthoring`
-组件，输出 Atlas collision asset v2 JSON。MVP 范围有意收窄：
+`--scene` 必填 —— batch mode 启动的是无标题空场景，不传它 exporter 会直接报错而
+非静默导出 0 个对象。exporter 扫描 `exportToServer = true` 的
+`ServerColliderAuthoring`。MVP 范围有意收窄：
 
 - 与世界轴对齐的 `BoxCollider` → `{shape: box, min, max, layer}`。
 - 旋转的 `BoxCollider`、`SphereCollider`、`CapsuleCollider`、
   `MeshCollider`、`TerrainCollider` 与负缩放都会打 warning 并跳过——
   Atlas `StaticBox` 是 AABB，asset schema 目前只建模 box/plane/mesh。
 
-把 JSON 喂给 cook + cache 管线：
+`run_mvp_cluster` 启动时会把 `samples/mvp/maps/main.collision.json` cook 成
+`.collisioncache`，`MvpSpace.OnSpaceInit` 通过 Jolt backend 加载它；cache 缺失
+时 space 保留平地。手动 cook：
 
 ```bash
-bin\debug\atlas_tool.exe cook_collision out\mvp-unity\map.collision.json
-# → out\mvp-unity\map.collision.collisioncache
+bin\debug\atlas_tool.exe cook_collision samples\mvp\maps\main.collision.json
+# → samples\mvp\maps\main.collision.collisioncache
 ```
 
 `atlas_tool recook --invalid <dir>` 会重 cook

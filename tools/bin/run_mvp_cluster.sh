@@ -41,6 +41,14 @@ BIN_NAME="$(basename "${BUILD}")"
 BASE_DLL="${REPO_ROOT}/bin/${BIN_NAME}/Atlas.Mvp.Base.dll"
 CELL_DLL="${REPO_ROOT}/bin/${BIN_NAME}/Atlas.Mvp.Cell.dll"
 
+# Cook the collision map (best-effort); MvpSpace falls back to flat ground if absent.
+ATLAS_TOOL="${REPO_ROOT}/bin/${BIN_NAME}/atlas_tool"
+MAP_SRC="${REPO_ROOT}/samples/mvp/maps/main.collision.json"
+MAP_CACHE="${REPO_ROOT}/samples/mvp/maps/main.collisioncache"
+if [[ -x "${ATLAS_TOOL}" && -f "${MAP_SRC}" ]]; then
+    "${ATLAS_TOOL}" cook_collision "${MAP_SRC}" -o "${MAP_CACHE}" || true
+fi
+
 exec "${PYTHON}" "${SCRIPT_DIR}/../cluster_control/run_world_stress.py" \
     --build-dir       "${BUILD}" \
     --config          "${CONFIG}" \

@@ -32,6 +32,12 @@ set REPO_ROOT=%~dp0..\..
 set BASE_DLL=%REPO_ROOT%\bin\%BIN_NAME%\Atlas.Mvp.Base.dll
 set CELL_DLL=%REPO_ROOT%\bin\%BIN_NAME%\Atlas.Mvp.Cell.dll
 
+rem Cook the collision map (best-effort); MvpSpace falls back to flat ground if absent.
+set ATLAS_TOOL=%REPO_ROOT%\bin\%BIN_NAME%\atlas_tool.exe
+set MAP_SRC=%REPO_ROOT%\samples\mvp\maps\main.collision.json
+set MAP_CACHE=%REPO_ROOT%\samples\mvp\maps\main.collisioncache
+if exist "%ATLAS_TOOL%" if exist "%MAP_SRC%" "%ATLAS_TOOL%" cook_collision "%MAP_SRC%" -o "%MAP_CACHE%"
+
 python "%~dp0..\cluster_control\run_world_stress.py" ^
     --build-dir       "%BUILD%" ^
     --config          "%CONFIG%" ^
