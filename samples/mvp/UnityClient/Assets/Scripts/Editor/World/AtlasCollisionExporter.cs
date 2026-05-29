@@ -24,6 +24,7 @@ namespace Atlas.Mvp.Editor
             public int Spheres;
             public int Capsules;
             public int Meshes;
+            public int Convexes;
             public int Skipped;
             public List<string> Warnings = new();
             // ACOL side-car: 8-byte header + per-mesh float32 verts / uint32 indices.
@@ -57,7 +58,7 @@ namespace Atlas.Mvp.Editor
 
                 var result = ExportActiveSceneToFile(output, sourceHash);
                 Debug.Log($"[AtlasCollisionExporter] boxes={result.Boxes} spheres={result.Spheres} " +
-                          $"capsules={result.Capsules} meshes={result.Meshes} " +
+                          $"capsules={result.Capsules} meshes={result.Meshes} convexes={result.Convexes} " +
                           $"skipped={result.Skipped} output={output}");
                 foreach (var w in result.Warnings) Debug.LogWarning($"[AtlasCollisionExporter] {w}");
                 EditorApplication.Exit(0);
@@ -134,7 +135,8 @@ namespace Atlas.Mvp.Editor
                     }
                     else if (col is MeshCollider meshCol)
                     {
-                        if (TryEmitMesh(meshCol, auth, objects, ref first, result)) result.Meshes++;
+                        // Counts the right shape internally (mesh vs convex hull).
+                        TryEmitMesh(meshCol, auth, objects, ref first, result);
                     }
                     else
                     {
@@ -260,6 +262,8 @@ namespace Atlas.Mvp.Editor
 
         const int kMeshWarnVertexCount = 100000;
 
+        // A convex MeshCollider exports as a convex hull (point cloud); a
+        // non-convex one as a triangle mesh. Counts the emitted shape itself.
         static bool TryEmitMesh(MeshCollider col, ServerColliderAuthoring auth,
                                 StringBuilder objects, ref bool first, ExportResult result)
         {
@@ -271,37 +275,61 @@ namespace Atlas.Mvp.Editor
                 return false;
             }
             var verts = mesh.vertices;
+            if (verts.Length == 0)
+            {
+                result.Skipped++;
+                result.Warnings.Add($"{Trace(col.gameObject)}: mesh '{mesh.name}' has no vertices, skip");
+                return false;
+            }
+            bool convex = col.convex;
             var tris = mesh.triangles;
-            if (verts.Length == 0 || tris.Length < 3 || tris.Length % 3 != 0)
+            if (!convex && (tris.Length < 3 || tris.Length % 3 != 0))
             {
                 result.Skipped++;
                 result.Warnings.Add($"{Trace(col.gameObject)}: mesh '{mesh.name}' has no usable triangles, skip");
+                return false;
+            }
+            if (convex && verts.Length < 4)
+            {
+                result.Skipped++;
+                result.Warnings.Add($"{Trace(col.gameObject)}: convex mesh '{mesh.name}' needs >= 4 points, skip");
                 return false;
             }
             if (verts.Length > kMeshWarnVertexCount)
                 result.Warnings.Add($"{Trace(col.gameObject)}: mesh '{mesh.name}' has {verts.Length} verts — large cooked cache");
 
             var bin = result.MeshBin;
-            if (bin.Count == 0) WriteMeshBinHeader(bin);  // ACOL header on first mesh
+            if (bin.Count == 0) WriteMeshBinHeader(bin);  // ACOL header on first mesh/convex
 
             var t = col.transform;
             int vertexByteOffset = bin.Count;
             foreach (var v in verts)
             {
-                var w = t.TransformPoint(v);  // bake world space — rotation/scale are fine for meshes
+                var w = t.TransformPoint(v);  // bake world space — rotation/scale are fine
                 AppendFloat(bin, w.x);
                 AppendFloat(bin, w.y);
                 AppendFloat(bin, w.z);
             }
-            int indexByteOffset = bin.Count;
-            foreach (var idx in tris) AppendUInt32(bin, (uint)idx);
 
             if (!first) objects.Append(",");
             first = false;
             objects.Append("\n    ");
-            objects.AppendFormat(CultureInfo.InvariantCulture,
-                "{{\"shape\": \"mesh\", \"layer\": {0}, \"vertex_byte_offset\": {1}, \"vertex_count\": {2}, \"index_byte_offset\": {3}, \"index_count\": {4}}}",
-                auth.layer, vertexByteOffset, verts.Length, indexByteOffset, tris.Length);
+            if (convex)
+            {
+                objects.AppendFormat(CultureInfo.InvariantCulture,
+                    "{{\"shape\": \"convex\", \"layer\": {0}, \"vertex_byte_offset\": {1}, \"vertex_count\": {2}}}",
+                    auth.layer, vertexByteOffset, verts.Length);
+                result.Convexes++;
+            }
+            else
+            {
+                int indexByteOffset = bin.Count;
+                foreach (var idx in tris) AppendUInt32(bin, (uint)idx);
+                objects.AppendFormat(CultureInfo.InvariantCulture,
+                    "{{\"shape\": \"mesh\", \"layer\": {0}, \"vertex_byte_offset\": {1}, \"vertex_count\": {2}, \"index_byte_offset\": {3}, \"index_count\": {4}}}",
+                    auth.layer, vertexByteOffset, verts.Length, indexByteOffset, tris.Length);
+                result.Meshes++;
+            }
             return true;
         }
 

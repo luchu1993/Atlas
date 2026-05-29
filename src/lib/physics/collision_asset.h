@@ -36,6 +36,13 @@ struct MeshGeometry {
   ObjectLayer layer{0};
 };
 
+// Convex hull built from a point cloud (no triangle topology). The backend
+// rebuilds the hull from these points, so it needs no cooked side-channel.
+struct ConvexGeometry {
+  std::vector<math::Vector3> vertices;
+  ObjectLayer layer{0};
+};
+
 struct CollisionAsset {
   uint32_t version{kCollisionAssetVersion};
   std::string coordinate_system{std::string(kCollisionCoordinateSystem)};
@@ -45,6 +52,7 @@ struct CollisionAsset {
   std::vector<StaticSphere> spheres;
   std::vector<StaticCapsule> capsules;
   std::vector<MeshGeometry> meshes;
+  std::vector<ConvexGeometry> convexes;
 };
 
 struct LoadedCollisionCache {

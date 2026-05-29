@@ -263,6 +263,54 @@ TEST(CollisionAsset, RejectsSphereWithNonPositiveRadius) {
   EXPECT_EQ(asset.Error().Code(), ErrorCode::kInvalidArgument);
 }
 
+// ACOL side-car holding a 4-point tetrahedron (non-coplanar → valid hull).
+[[nodiscard]] auto MakeTetraConvexBuffer() -> std::vector<std::byte> {
+  const float verts[12] = {
+      0.0f, 0.0f, 0.0f,
+      1.0f, 0.0f, 0.0f,
+      0.0f, 1.0f, 0.0f,
+      0.0f, 0.0f, 1.0f,
+  };
+  std::vector<std::byte> bytes(kCollisionMeshBufferHeaderBytes + sizeof(verts));
+  std::memcpy(bytes.data(), kCollisionMeshBufferMagic.data(), 4);
+  const uint32_t version = kCollisionMeshBufferVersion;
+  std::memcpy(bytes.data() + 4, &version, sizeof(version));
+  std::memcpy(bytes.data() + kCollisionMeshBufferHeaderBytes, verts, sizeof(verts));
+  return bytes;
+}
+
+TEST(CollisionAsset, LoadsConvexFromSideCar) {
+  const auto buffer = MakeTetraConvexBuffer();
+  constexpr const char* kJson = R"({
+    "version": 2,
+    "coordinate_system": "x_right_y_up_z_forward_meters",
+    "source_hash": "unit",
+    "objects": [
+      {"shape": "convex", "layer": 6, "vertex_byte_offset": 8, "vertex_count": 4}
+    ]
+  })";
+  auto asset = LoadCollisionAssetFromJson(kJson, std::span<const std::byte>(buffer));
+  ASSERT_TRUE(asset.HasValue()) << asset.Error().Message();
+  ASSERT_EQ(asset->convexes.size(), 1u);
+  EXPECT_EQ(asset->convexes[0].vertices.size(), 4u);
+  EXPECT_EQ(asset->convexes[0].layer, 6u);
+}
+
+TEST(CollisionAsset, RejectsConvexWithTooFewPoints) {
+  const auto buffer = MakeTetraConvexBuffer();
+  constexpr const char* kJson = R"({
+    "version": 2,
+    "coordinate_system": "x_right_y_up_z_forward_meters",
+    "source_hash": "unit",
+    "objects": [
+      {"shape": "convex", "layer": 0, "vertex_byte_offset": 8, "vertex_count": 3}
+    ]
+  })";
+  auto asset = LoadCollisionAssetFromJson(kJson, std::span<const std::byte>(buffer));
+  ASSERT_FALSE(asset.HasValue());
+  EXPECT_EQ(asset.Error().Code(), ErrorCode::kInvalidArgument);
+}
+
 TEST(CollisionAsset, RejectsCapsuleWithHalfHeightBelowRadius) {
   auto asset = LoadCollisionAssetFromJson(R"({
     "version": 2,

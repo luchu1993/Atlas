@@ -381,6 +381,68 @@ TEST(JoltPhysicsQuery, AddCapsuleOverlapDetectsInsideOutside) {
   jolt::Shutdown();
 }
 
+TEST(JoltPhysicsQuery, AddConvexHullRaycastHitsBoxHull) {
+  jolt::Initialize();
+  JoltPhysicsQuery query;
+  // 8 corners of a 2m cube centered at origin → hull top at y=1.
+  const math::Vector3 corners[8] = {
+      {-1, -1, -1}, {1, -1, -1}, {1, 1, -1}, {-1, 1, -1},
+      {-1, -1, 1}, {1, -1, 1}, {1, 1, 1}, {-1, 1, 1}};
+  query.AddConvexHull(corners, 0);
+
+  RaycastQuery rq;
+  rq.origin = {0.0f, 10.0f, 0.0f};
+  rq.direction = {0.0f, -1.0f, 0.0f};
+  rq.max_distance_m = 100.0f;
+  auto hit = query.Raycast(rq);
+  ASSERT_TRUE(hit.hit);
+  EXPECT_NEAR(hit.position.y, 1.0f, 1e-2f);
+  EXPECT_NEAR(hit.normal.y, 1.0f, 1e-2f);
+
+  jolt::Shutdown();
+}
+
+TEST(JoltPhysicsQuery, AddConvexHullRejectsDegeneratePointSet) {
+  jolt::Initialize();
+  JoltPhysicsQuery query;
+  const math::Vector3 too_few[3] = {{0, 0, 0}, {1, 0, 0}, {0, 1, 0}};
+  query.AddConvexHull(too_few, 0);  // < 4 points → no body added
+
+  RaycastQuery rq;
+  rq.origin = {0.0f, 10.0f, 0.0f};
+  rq.direction = {0.0f, -1.0f, 0.0f};
+  rq.max_distance_m = 100.0f;
+  EXPECT_FALSE(query.Raycast(rq).hit);
+
+  jolt::Shutdown();
+}
+
+TEST(JoltCollisionBackend, BuildsConvexCacheWithoutStampDependency) {
+  jolt::Initialize();
+  LoadedCollisionCache cache;
+  cache.asset.source_hash = "convex";
+  ConvexGeometry hull;
+  hull.layer = 0;
+  hull.vertices = {{-1, -1, -1}, {1, -1, -1}, {1, 1, -1}, {-1, 1, -1},
+                   {-1, -1, 1}, {1, -1, 1}, {1, 1, 1}, {-1, 1, 1}};
+  cache.asset.convexes.push_back(hull);
+  cache.jolt_version_stamp = 0;  // no meshes → stamp irrelevant
+
+  JoltCollisionBackendFactory factory;
+  auto query = factory.BuildFromCache(cache);
+  ASSERT_TRUE(query.HasValue()) << query.Error().Message();
+
+  RaycastQuery rq;
+  rq.origin = {0.0f, 10.0f, 0.0f};
+  rq.direction = {0.0f, -1.0f, 0.0f};
+  rq.max_distance_m = 100.0f;
+  auto hit = (*query)->Raycast(rq);
+  ASSERT_TRUE(hit.hit);
+  EXPECT_NEAR(hit.position.y, 1.0f, 1e-2f);
+
+  jolt::Shutdown();
+}
+
 TEST(JoltCollisionBackend, BuildsSphereAndCapsuleCacheWithoutStampDependency) {
   jolt::Initialize();
   LoadedCollisionCache cache;

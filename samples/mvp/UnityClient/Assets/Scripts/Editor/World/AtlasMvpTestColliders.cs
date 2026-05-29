@@ -66,6 +66,26 @@ namespace Atlas.Mvp.Editor
             // double-sided, so orientation/walkability isn't a concern here).
             AddMeshWall(root, "MeshWall", new Vector3(0f, 1.5f, 10f), new Vector3(6f, 3f, 1f),
                         layer: 0);
+            // A convex MeshCollider crate exercises the convex-hull export path.
+            AddConvexCrate(root, "ConvexCrate", new Vector3(10f, 1f, -8f), 2f, layer: 0);
+        }
+
+        static void AddConvexCrate(GameObject parent, string name, Vector3 center,
+                                   float scale, int layer)
+        {
+            var go = GameObject.CreatePrimitive(PrimitiveType.Cube);
+            go.name = name;
+            // Swap the primitive BoxCollider for a convex MeshCollider on the cube mesh.
+            Object.DestroyImmediate(go.GetComponent<BoxCollider>());
+            var mc = go.AddComponent<MeshCollider>();
+            mc.sharedMesh = go.GetComponent<MeshFilter>().sharedMesh;
+            mc.convex = true;
+            go.transform.SetParent(parent.transform, worldPositionStays: true);
+            go.transform.position = center;
+            go.transform.localScale = new Vector3(scale, scale, scale);
+            var authoring = go.AddComponent<ServerColliderAuthoring>();
+            authoring.exportToServer = true;
+            authoring.layer = layer;
         }
 
         static void AddMeshWall(GameObject parent, string name, Vector3 center, Vector3 scale,

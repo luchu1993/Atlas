@@ -25,6 +25,7 @@
 #include <Jolt/Physics/Collision/RayCast.h>
 #include <Jolt/Physics/Collision/Shape/BoxShape.h>
 #include <Jolt/Physics/Collision/Shape/CapsuleShape.h>
+#include <Jolt/Physics/Collision/Shape/ConvexHullShape.h>
 #include <Jolt/Physics/Collision/Shape/MeshShape.h>
 #include <Jolt/Physics/Collision/Shape/PlaneShape.h>
 #include <Jolt/Physics/Collision/Shape/SphereShape.h>
@@ -186,6 +187,27 @@ void JoltPhysicsQuery::AddCapsule(const StaticCapsule& capsule) {
   const JPH::RVec3 center{capsule.center.x, capsule.center.y, capsule.center.z};
   JPH::BodyCreationSettings bcs(shape_result.Get(), center, JPH::Quat::sIdentity(),
                                 JPH::EMotionType::Static, kStaticObjectLayer);
+  impl_->system.GetBodyInterface().CreateAndAddBody(bcs, JPH::EActivation::DontActivate);
+  impl_->needs_optimize = true;
+}
+
+void JoltPhysicsQuery::AddConvexHull(std::span<const math::Vector3> points,
+                                    ObjectLayer /*layer*/) {
+  if (points.size() < 4) return;
+  JPH::Array<JPH::Vec3> jolt_points;
+  jolt_points.reserve(points.size());
+  for (const auto& p : points) {
+    if (!IsFiniteVec(p)) return;
+    jolt_points.emplace_back(p.x, p.y, p.z);
+  }
+  JPH::ConvexHullShapeSettings shape_settings(jolt_points);
+  shape_settings.SetEmbedded();
+  auto shape_result = shape_settings.Create();
+  if (shape_result.HasError()) return;
+
+  JPH::BodyCreationSettings bcs(shape_result.Get(), JPH::RVec3::sZero(),
+                                JPH::Quat::sIdentity(), JPH::EMotionType::Static,
+                                kStaticObjectLayer);
   impl_->system.GetBodyInterface().CreateAndAddBody(bcs, JPH::EActivation::DontActivate);
   impl_->needs_optimize = true;
 }

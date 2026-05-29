@@ -116,9 +116,12 @@ scans `ServerColliderAuthoring` components with `exportToServer = true`:
 - `SphereCollider`, uniform scale → `{shape: sphere, center, radius, layer}`.
 - `CapsuleCollider`, Y-axis + uniform scale → `{shape: capsule, center,
   radius, half_height, layer}`.
-- `MeshCollider` → `{shape: mesh, ...}` with world-space verts/indices in a
-  same-named `.bin` side-car (`main.collision.json` ↔ `main.collision.bin`);
-  arbitrary rotation/scale is fine since vertices are baked to world space.
+- `MeshCollider`, non-convex → `{shape: mesh, ...}`; convex → `{shape: convex,
+  ...}` (a point-cloud hull). Both bake world-space verts into a same-named
+  `.bin` side-car (`main.collision.json` ↔ `main.collision.bin`), so arbitrary
+  rotation/scale is fine. The server uses Jolt's triangle `MeshShape` or
+  `ConvexHullShape` respectively — a convex collider's server shape is the hull,
+  matching Unity's own convex behaviour.
 - Rotated boxes, non-uniform-scaled / non-Y capsules, `TerrainCollider`, and
   negative scale are logged and skipped.
 

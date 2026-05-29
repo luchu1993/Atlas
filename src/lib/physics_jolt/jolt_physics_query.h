@@ -27,6 +27,9 @@ class JoltPhysicsQuery final : public PhysicsQuery {
   void AddPlane(const StaticPlane& plane);
   void AddSphere(const StaticSphere& sphere);
   void AddCapsule(const StaticCapsule& capsule);
+  // Builds a convex hull from a point cloud (no triangle topology); cheap
+  // enough to rebuild at load, so it is not part of the cooked blob.
+  void AddConvexHull(std::span<const math::Vector3> points, ObjectLayer layer);
   void AddMesh(std::span<const math::Vector3> vertices,
                std::span<const uint32_t> indices, ObjectLayer layer);
 

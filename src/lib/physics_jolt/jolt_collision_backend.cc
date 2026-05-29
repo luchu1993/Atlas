@@ -30,6 +30,9 @@ auto JoltCollisionBackendFactory::BuildFromCache(const LoadedCollisionCache& cac
   for (const auto& plane : cache.asset.planes) query->AddPlane(plane);
   for (const auto& sphere : cache.asset.spheres) query->AddSphere(sphere);
   for (const auto& capsule : cache.asset.capsules) query->AddCapsule(capsule);
+  for (const auto& convex : cache.asset.convexes) {
+    query->AddConvexHull(convex.vertices, convex.layer);
+  }
   if (!cache.cooked.empty()) {
     auto restored = query->RestoreCookedMeshes(cache.cooked);
     if (!restored) return restored.Error();

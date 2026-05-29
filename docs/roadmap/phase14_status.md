@@ -89,11 +89,15 @@
   `AddSphere` / `AddCapsule` 全支持，Static 像跳过 mesh 一样跳过它们（parity
   维持 box/plane）。exporter 从 `SphereCollider` / Y 轴 `CapsuleCollider`
   发射（要求 uniform scale）。
-- mesh exporter 补齐 M5b cooked-mesh 的 producer：`MeshCollider` → world-space
-  顶点/索引写进同名 `.bin` 侧车 → `cook_collision` 经 `CookCollisionMeshes`
-  cook 进 cache → runtime `RestoreCookedMeshes`。MVP `Main.unity` 已含 sphere
-  boulder + capsule pillar + Quad mesh wall；live cluster 加载 6-shape cache
-  （含真 cooked-mesh blob，cooked_bytes=129）通过 stamp 校验 + restore 无错。
+- mesh exporter 补齐 M5b cooked-mesh 的 producer：非 convex `MeshCollider` →
+  world-space 顶点/索引写进同名 `.bin` 侧车 → `cook_collision` 经
+  `CookCollisionMeshes` cook 进 cache → runtime `RestoreCookedMeshes`。
+- convex `MeshCollider` → `convex` shape（点云凸包，>= 4 点）：Jolt
+  `AddConvexHull`（`ConvexHullShape`）在加载时重建，不进 cooked blob、不受 stamp
+  约束（像 box/sphere/capsule 从参数重建）。Static 跳过。
+- MVP `Main.unity` 含全 5 种 shape（box×3 / sphere / capsule / mesh / convex）；
+  live cluster 加载 7-object cache（含真 cooked-mesh blob + convex hull）无错，
+  seed 150/150 NPC。
 - MVP 碰撞垂直切片已闭合：`Main.unity` → exporter → `main.collision.json` →
   `run_mvp_cluster` cook → `MvpSpace.OnSpaceInit` 经 Jolt backend 加载；
   live cluster 日志确认 `CellApp: loaded collision cache` +

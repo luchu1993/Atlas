@@ -92,9 +92,11 @@ tools\bin\export_collision_unity.bat --output samples\mvp\maps\main.collision.js
 - `SphereCollider`（uniform scale）→ `{shape: sphere, center, radius, layer}`。
 - `CapsuleCollider`（Y 轴 + uniform scale）→ `{shape: capsule, center,
   radius, half_height, layer}`。
-- `MeshCollider` → `{shape: mesh, ...}`，world-space 顶点/索引写进同名 `.bin`
-  侧车（`main.collision.json` ↔ `main.collision.bin`）；顶点已 bake 到世界系，
-  任意旋转/缩放都可。
+- `MeshCollider`：非 convex → `{shape: mesh, ...}`；convex → `{shape: convex,
+  ...}`（点云凸包）。两者都把 world-space 顶点写进同名 `.bin` 侧车
+  （`main.collision.json` ↔ `main.collision.bin`），顶点已 bake，任意旋转/缩放都可。
+  服务端分别用 Jolt 的三角 `MeshShape` / `ConvexHullShape` —— convex collider 的
+  服务端形状就是凸包，与 Unity 自身行为一致。
 - 旋转的 box、非 uniform / 非 Y 轴 capsule、`TerrainCollider` 与负缩放都会打
   warning 并跳过。
 

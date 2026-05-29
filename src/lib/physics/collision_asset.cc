@@ -291,6 +291,40 @@ void AppendPlaneObj(std::string& out, const StaticPlane& plane, std::size_t inde
   return mesh;
 }
 
+[[nodiscard]] auto ParseConvex(const rapidjson::Value& object, std::string_view path,
+                               std::span<const std::byte> mesh_buffer)
+    -> Result<ConvexGeometry> {
+  auto layer = RequiredLayer(object, path);
+  if (!layer) return layer.Error();
+  auto vbo = RequiredUint(object, path, "vertex_byte_offset");
+  if (!vbo) return vbo.Error();
+  auto vcount = RequiredUint(object, path, "vertex_count");
+  if (!vcount) return vcount.Error();
+
+  if (*vcount < 4) {
+    return Invalid(std::format("{}: convex hull needs >= 4 points, got {}", path, *vcount));
+  }
+  if ((*vbo % alignof(float)) != 0) {
+    return Invalid(std::format("{}: vertex offset must be 4-byte aligned", path));
+  }
+  const std::size_t vbytes = std::size_t{*vcount} * sizeof(float) * 3;
+  if (*vbo + vbytes > mesh_buffer.size()) {
+    return Invalid(std::format("{}: vertex window exceeds mesh buffer size ({} bytes)", path,
+                               mesh_buffer.size()));
+  }
+
+  ConvexGeometry convex;
+  convex.layer = *layer;
+  convex.vertices.resize(*vcount);
+  std::memcpy(convex.vertices.data(), mesh_buffer.data() + *vbo, vbytes);
+  for (const auto& v : convex.vertices) {
+    if (!std::isfinite(v.x) || !std::isfinite(v.y) || !std::isfinite(v.z)) {
+      return Invalid(std::format("{}: non-finite vertex", path));
+    }
+  }
+  return convex;
+}
+
 [[nodiscard]] auto ParseObjects(const rapidjson::Value& root, CollisionAsset& asset,
                                 std::span<const std::byte> mesh_buffer)
     -> Result<void> {
@@ -330,6 +364,16 @@ void AppendPlaneObj(std::string& out, const StaticPlane& plane, std::size_t inde
       auto mesh = ParseMesh(object, path, mesh_buffer);
       if (!mesh) return mesh.Error();
       asset.meshes.push_back(std::move(*mesh));
+    } else if (*shape == "convex") {
+      if (mesh_buffer.empty()) {
+        return Invalid(std::format(
+            "{}: convex objects require a side-car .bin buffer; pass it to "
+            "LoadCollisionAssetFromJson or use LoadCollisionAssetFromFile",
+            path));
+      }
+      auto convex = ParseConvex(object, path, mesh_buffer);
+      if (!convex) return convex.Error();
+      asset.convexes.push_back(std::move(*convex));
     } else {
       return Invalid(std::format("{}.shape unsupported: {}", path, *shape));
     }
@@ -613,9 +657,9 @@ auto DumpCollisionAssetToObj(const CollisionAsset& asset) -> std::string {
   std::string out;
   out += "# Atlas collision asset debug dump\n";
   out += std::format("# source_hash {}\n", asset.source_hash);
-  out += std::format("# boxes {} planes {} spheres {} capsules {} meshes {}\n",
+  out += std::format("# boxes {} planes {} spheres {} capsules {} meshes {} convexes {}\n",
                     asset.boxes.size(), asset.planes.size(), asset.spheres.size(),
-                    asset.capsules.size(), asset.meshes.size());
+                    asset.capsules.size(), asset.meshes.size(), asset.convexes.size());
   out += "o collision_asset\n";
   std::size_t next_vertex = 1;
   for (std::size_t i = 0; i < asset.boxes.size(); ++i) {
@@ -648,6 +692,13 @@ auto DumpCollisionAssetToObj(const CollisionAsset& asset) -> std::string {
                          base + mesh.indices[i + 2]);
     }
     next_vertex += mesh.vertices.size();
+  }
+  // Convex hulls dump as their point cloud (the hull faces aren't stored).
+  for (std::size_t ci = 0; ci < asset.convexes.size(); ++ci) {
+    const auto& convex = asset.convexes[ci];
+    out += std::format("g convex_{}_layer_{}\n", ci, convex.layer);
+    for (const auto& v : convex.vertices) AppendVertex(out, v);
+    next_vertex += convex.vertices.size();
   }
   return out;
 }

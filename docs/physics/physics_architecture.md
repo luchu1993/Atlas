@@ -145,6 +145,9 @@ Atlas collision asset 是长期稳定边界。它应包含：
 - `mesh` (v2+)：`layer` / `vertex_byte_offset` / `vertex_count` /
   `index_byte_offset` / `index_count`；顶点和索引数据放在同名 `.bin` 侧车
   里（`foo.collision.json` ↔ `foo.collision.bin`）
+- `convex` (v2+)：`layer` / `vertex_byte_offset` / `vertex_count`（点云，
+  >= 4 点，无索引）；顶点放在同一 `.bin` 侧车。backend 在加载时重建凸包，
+  不进 cooked blob，也不受 `jolt_version_stamp` 失效约束
 
 `.bin` 侧车布局（小端）：
 
@@ -154,9 +157,10 @@ bytes 4..7   uint32 version (kCollisionMeshBufferVersion, 当前为 1)
 bytes 8..    raw float32 顶点 + uint32 索引，按 JSON 中的字节偏移寻址
 ```
 
-Static backend 只加载 box / plane，忽略 sphere / capsule / mesh；Jolt backend
-(`atlas_physics_jolt`) 通过 `AddSphere` / `AddCapsule` / `AddMesh` 跑对应静态
-body。parity gate 维持在两后端都支持的 box / plane 形状上。
+Static backend 只加载 box / plane，忽略 sphere / capsule / mesh / convex；
+Jolt backend (`atlas_physics_jolt`) 通过 `AddSphere` / `AddCapsule` /
+`AddConvexHull` / `AddMesh` 跑对应静态 body。parity gate 维持在两后端都支持的
+box / plane 形状上。
 Space 可通过 collision asset 安装自己的 Static query；手工替换 query 时会
 清除 asset metadata，避免观测状态和实际 backend 漂移。Cell C# 脚本可调用
 `CellServerEntity.LoadCollisionAsset(spaceId, path)` 给既有 Space 装载同一资源。
