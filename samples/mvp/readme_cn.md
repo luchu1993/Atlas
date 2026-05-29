@@ -92,8 +92,11 @@ tools\bin\export_collision_unity.bat --output samples\mvp\maps\main.collision.js
 - `SphereCollider`（uniform scale）→ `{shape: sphere, center, radius, layer}`。
 - `CapsuleCollider`（Y 轴 + uniform scale）→ `{shape: capsule, center,
   radius, half_height, layer}`。
-- 旋转的 box、非 uniform / 非 Y 轴 capsule、`MeshCollider`、`TerrainCollider`
-  与负缩放都会打 warning 并跳过。
+- `MeshCollider` → `{shape: mesh, ...}`，world-space 顶点/索引写进同名 `.bin`
+  侧车（`main.collision.json` ↔ `main.collision.bin`）；顶点已 bake 到世界系，
+  任意旋转/缩放都可。
+- 旋转的 box、非 uniform / 非 Y 轴 capsule、`TerrainCollider` 与负缩放都会打
+  warning 并跳过。
 
 `run_mvp_cluster` 启动时会把 `samples/mvp/maps/main.collision.json` cook 成
 `.collisioncache`，`MvpSpace.OnSpaceInit` 通过 Jolt backend 加载它；cache 缺失

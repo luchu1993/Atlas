@@ -116,8 +116,11 @@ scans `ServerColliderAuthoring` components with `exportToServer = true`:
 - `SphereCollider`, uniform scale → `{shape: sphere, center, radius, layer}`.
 - `CapsuleCollider`, Y-axis + uniform scale → `{shape: capsule, center,
   radius, half_height, layer}`.
-- Rotated boxes, non-uniform-scaled / non-Y capsules, `MeshCollider`,
-  `TerrainCollider`, and negative scale are logged and skipped.
+- `MeshCollider` → `{shape: mesh, ...}` with world-space verts/indices in a
+  same-named `.bin` side-car (`main.collision.json` ↔ `main.collision.bin`);
+  arbitrary rotation/scale is fine since vertices are baked to world space.
+- Rotated boxes, non-uniform-scaled / non-Y capsules, `TerrainCollider`, and
+  negative scale are logged and skipped.
 
 `run_mvp_cluster` cooks `samples/mvp/maps/main.collision.json` to a
 `.collisioncache` at launch and `MvpSpace.OnSpaceInit` loads it through the

@@ -23,8 +23,12 @@ namespace Atlas.Mvp.Editor
             public int Boxes;
             public int Spheres;
             public int Capsules;
+            public int Meshes;
             public int Skipped;
             public List<string> Warnings = new();
+            // ACOL side-car: 8-byte header + per-mesh float32 verts / uint32 indices.
+            // Empty when no mesh was emitted (no .bin written).
+            public List<byte> MeshBin = new();
         }
 
         // CLI entry point invoked via Unity -executeMethod.
@@ -53,7 +57,8 @@ namespace Atlas.Mvp.Editor
 
                 var result = ExportActiveSceneToFile(output, sourceHash);
                 Debug.Log($"[AtlasCollisionExporter] boxes={result.Boxes} spheres={result.Spheres} " +
-                          $"capsules={result.Capsules} skipped={result.Skipped} output={output}");
+                          $"capsules={result.Capsules} meshes={result.Meshes} " +
+                          $"skipped={result.Skipped} output={output}");
                 foreach (var w in result.Warnings) Debug.LogWarning($"[AtlasCollisionExporter] {w}");
                 EditorApplication.Exit(0);
             }
@@ -82,6 +87,12 @@ namespace Atlas.Mvp.Editor
             var outFile = Path.GetFullPath(outputPath);
             Directory.CreateDirectory(Path.GetDirectoryName(outFile) ?? ".");
             File.WriteAllText(outFile, json, new UTF8Encoding(false));
+            // Mesh vertex/index data rides in a same-named .bin side-car.
+            var binFile = Path.ChangeExtension(outFile, ".bin");
+            if (result.MeshBin.Count > 0)
+                File.WriteAllBytes(binFile, result.MeshBin.ToArray());
+            else if (File.Exists(binFile))
+                File.Delete(binFile);
             return result;
         }
 
@@ -121,10 +132,14 @@ namespace Atlas.Mvp.Editor
                     {
                         if (TryEmitCapsule(capsule, auth, objects, ref first, result)) result.Capsules++;
                     }
+                    else if (col is MeshCollider meshCol)
+                    {
+                        if (TryEmitMesh(meshCol, auth, objects, ref first, result)) result.Meshes++;
+                    }
                     else
                     {
                         result.Skipped++;
-                        result.Warnings.Add($"{Trace(go)}: {col.GetType().Name} not supported by exporter (box / sphere / capsule only)");
+                        result.Warnings.Add($"{Trace(go)}: {col.GetType().Name} not supported by exporter (box / sphere / capsule / mesh only)");
                     }
                 }
             }
@@ -242,6 +257,62 @@ namespace Atlas.Mvp.Editor
                 c.x, c.y, c.z, radius, halfHeight, auth.layer);
             return true;
         }
+
+        const int kMeshWarnVertexCount = 100000;
+
+        static bool TryEmitMesh(MeshCollider col, ServerColliderAuthoring auth,
+                                StringBuilder objects, ref bool first, ExportResult result)
+        {
+            var mesh = col.sharedMesh;
+            if (mesh == null)
+            {
+                result.Skipped++;
+                result.Warnings.Add($"{Trace(col.gameObject)}: MeshCollider has no sharedMesh, skip");
+                return false;
+            }
+            var verts = mesh.vertices;
+            var tris = mesh.triangles;
+            if (verts.Length == 0 || tris.Length < 3 || tris.Length % 3 != 0)
+            {
+                result.Skipped++;
+                result.Warnings.Add($"{Trace(col.gameObject)}: mesh '{mesh.name}' has no usable triangles, skip");
+                return false;
+            }
+            if (verts.Length > kMeshWarnVertexCount)
+                result.Warnings.Add($"{Trace(col.gameObject)}: mesh '{mesh.name}' has {verts.Length} verts — large cooked cache");
+
+            var bin = result.MeshBin;
+            if (bin.Count == 0) WriteMeshBinHeader(bin);  // ACOL header on first mesh
+
+            var t = col.transform;
+            int vertexByteOffset = bin.Count;
+            foreach (var v in verts)
+            {
+                var w = t.TransformPoint(v);  // bake world space — rotation/scale are fine for meshes
+                AppendFloat(bin, w.x);
+                AppendFloat(bin, w.y);
+                AppendFloat(bin, w.z);
+            }
+            int indexByteOffset = bin.Count;
+            foreach (var idx in tris) AppendUInt32(bin, (uint)idx);
+
+            if (!first) objects.Append(",");
+            first = false;
+            objects.Append("\n    ");
+            objects.AppendFormat(CultureInfo.InvariantCulture,
+                "{{\"shape\": \"mesh\", \"layer\": {0}, \"vertex_byte_offset\": {1}, \"vertex_count\": {2}, \"index_byte_offset\": {3}, \"index_count\": {4}}}",
+                auth.layer, vertexByteOffset, verts.Length, indexByteOffset, tris.Length);
+            return true;
+        }
+
+        static void WriteMeshBinHeader(List<byte> bin)
+        {
+            bin.Add((byte)'A'); bin.Add((byte)'C'); bin.Add((byte)'O'); bin.Add((byte)'L');
+            AppendUInt32(bin, 1u);  // kCollisionMeshBufferVersion
+        }
+
+        static void AppendFloat(List<byte> bin, float v) => bin.AddRange(BitConverter.GetBytes(v));
+        static void AppendUInt32(List<byte> bin, uint v) => bin.AddRange(BitConverter.GetBytes(v));
 
         static Dictionary<string, string> ParseArgs(string[] argv)
         {

@@ -29,11 +29,11 @@ namespace Atlas.Mvp.Editor
                 return;
             }
 
-            if (col is MeshCollider || col is TerrainCollider || col is WheelCollider)
+            if (col is TerrainCollider || col is WheelCollider)
             {
                 EditorGUILayout.HelpBox(
                     $"{col.GetType().Name} is not supported by the exporter yet. " +
-                    "Only Box / Sphere / Capsule colliders are exported.",
+                    "Box / Sphere / Capsule / Mesh colliders are exported.",
                     MessageType.Warning);
             }
 

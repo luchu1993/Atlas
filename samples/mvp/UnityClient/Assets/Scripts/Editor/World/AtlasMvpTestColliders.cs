@@ -62,6 +62,23 @@ namespace Atlas.Mvp.Editor
                          uniformScale: 2f, layer: 0);
             AddPrimitive(root, "Pillar", PrimitiveType.Capsule, new Vector3(-6f, 1f, 6f),
                          uniformScale: 1f, layer: 0);
+            // A Quad carries a MeshCollider — a vertical mesh wall (collision is
+            // double-sided, so orientation/walkability isn't a concern here).
+            AddMeshWall(root, "MeshWall", new Vector3(0f, 1.5f, 10f), new Vector3(6f, 3f, 1f),
+                        layer: 0);
+        }
+
+        static void AddMeshWall(GameObject parent, string name, Vector3 center, Vector3 scale,
+                                int layer)
+        {
+            var go = GameObject.CreatePrimitive(PrimitiveType.Quad);  // Quad → MeshCollider
+            go.name = name;
+            go.transform.SetParent(parent.transform, worldPositionStays: true);
+            go.transform.position = center;
+            go.transform.localScale = scale;
+            var authoring = go.AddComponent<ServerColliderAuthoring>();
+            authoring.exportToServer = true;
+            authoring.layer = layer;
         }
 
         static void AddPrimitive(GameObject parent, string name, PrimitiveType type,
