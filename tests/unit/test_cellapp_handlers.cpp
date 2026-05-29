@@ -2843,74 +2843,21 @@ TEST_F(CellAppHandlersTest, PeerCellAppDeathFiresDestroyGhostForOrphans) {
   EXPECT_EQ(ghost_calls_[0].entity_id, 800u);
 }
 
-TEST_F(CellAppHandlersTest, RegisterCellAppAckAdoptsMgrGeneration) {
-  InterfaceTable table;
-  RecordingChannel mgr_ch(dispatcher_, table, Address(0x7F000001u, 20001));
-
-  cellappmgr::RegisterCellAppAck ack;
-  ack.success = true;
-  ack.app_id = 7;
-  ack.mgr_generation = 42;
-  app_.OnRegisterCellAppAck({}, &mgr_ch, ack);
-
-  EXPECT_EQ(app_.AcceptedCellAppMgrGeneration(), 42u);
-  EXPECT_EQ(app_.CellAppMgrStaleDrops(), 0u);
-}
-
-TEST_F(CellAppHandlersTest, AddCellFromStaleGenerationDropped) {
-  InterfaceTable table;
-  RecordingChannel mgr_ch(dispatcher_, table, Address(0x7F000001u, 20001));
-  cellappmgr::RegisterCellAppAck ack;
-  ack.success = true;
-  ack.app_id = 7;
-  ack.mgr_generation = 10;
-  app_.OnRegisterCellAppAck({}, &mgr_ch, ack);
-
-  cellappmgr::AddCellToSpace add;
-  add.space_id = 99;
-  add.cell_id = 1;
-  add.mgr_generation = 5;  // older than accepted=10
-  app_.OnAddCellToSpace({}, &mgr_ch, add);
-
-  EXPECT_EQ(app_.FindSpace(99), nullptr);
-  EXPECT_EQ(app_.CellAppMgrStaleDrops(), 1u);
-  EXPECT_EQ(app_.AcceptedCellAppMgrGeneration(), 10u);
-}
-
-TEST_F(CellAppHandlersTest, AddCellFromNewerGenerationBumpsAccepted) {
-  InterfaceTable table;
-  RecordingChannel mgr_ch(dispatcher_, table, Address(0x7F000001u, 20001));
-  cellappmgr::RegisterCellAppAck ack;
-  ack.success = true;
-  ack.app_id = 7;
-  ack.mgr_generation = 10;
-  app_.OnRegisterCellAppAck({}, &mgr_ch, ack);
-
-  cellappmgr::AddCellToSpace add;
-  add.space_id = 99;
-  add.cell_id = 1;
-  add.mgr_generation = 15;
-  app_.OnAddCellToSpace({}, &mgr_ch, add);
-
-  EXPECT_NE(app_.FindSpace(99), nullptr);
-  EXPECT_EQ(app_.CellAppMgrStaleDrops(), 0u);
-  EXPECT_EQ(app_.AcceptedCellAppMgrGeneration(), 15u);
-}
-
 TEST_F(CellAppHandlersTest, MgrMessageFromForeignChannelDropped) {
+  // After registering with one CellAppMgr channel, control messages arriving
+  // on a different channel (a straggler from a dead mgr after takeover) are
+  // dropped — the BigWorld "only obey the current mgr" guard.
   InterfaceTable table;
   RecordingChannel mgr_ch(dispatcher_, table, Address(0x7F000001u, 20001));
   RecordingChannel rogue_ch(dispatcher_, table, Address(0x7F000001u, 20002));
   cellappmgr::RegisterCellAppAck ack;
   ack.success = true;
   ack.app_id = 7;
-  ack.mgr_generation = 10;
   app_.OnRegisterCellAppAck({}, &mgr_ch, ack);
 
   cellappmgr::AddCellToSpace add;
   add.space_id = 99;
   add.cell_id = 1;
-  add.mgr_generation = 20;  // newer epoch but wrong channel
   app_.OnAddCellToSpace({}, &rogue_ch, add);
 
   EXPECT_EQ(app_.FindSpace(99), nullptr);

@@ -263,7 +263,7 @@ auto BoundsMidpoint(const CellBounds& bounds) -> std::pair<float, float> {
 }
 
 constexpr uint32_t kSnapshotMagic = 0x314D4143u;
-constexpr uint32_t kSnapshotVersion = 5;
+constexpr uint32_t kSnapshotVersion = 6;
 // 1 GiB ceiling — per-cell load buckets + pending-geometry blobs scale
 // with BSP topology; headroom for ~256 cellapps × ~64 cells/space.
 constexpr uint64_t kMaxSnapshotPayloadBytes = 1024ull * 1024ull * 1024ull;
@@ -434,27 +434,6 @@ auto CellAppMgr::Init(int argc, char* argv[]) -> bool {
     }
   }
 
-  // Bump + persist BEFORE any handler dispatches. Advertising gen=N+1
-  // without first persisting it would let a crash + restart re-issue the
-  // same value across two distinct mgr lifetimes — the synchronous
-  // SaveSnapshotToFile below closes that window. See P1-A1.
-  ++mgr_generation_;
-  MarkSnapshotDirty("mgr-generation-bump");
-  if (!Config().snapshot_path.empty()) {
-    auto save = SaveSnapshotToFile(Config().snapshot_path);
-    if (!save) {
-      ATLAS_LOG_ERROR("CellAppMgr: failed to persist mgr_generation={} on Init: {}",
-                      mgr_generation_, save.Error().Message());
-      return false;
-    }
-  } else {
-    ATLAS_LOG_WARNING(
-        "CellAppMgr: mgr_generation={} not persisted (no --snapshot-path); "
-        "monotonicity across restarts cannot be guaranteed",
-        mgr_generation_);
-  }
-  ATLAS_LOG_INFO("CellAppMgr: mgr_generation={}", mgr_generation_);
-
   auto& table = Network().InterfaceTable();
 
   (void)table.RegisterTypedHandler<cellappmgr::RegisterCellApp>(
@@ -523,7 +502,6 @@ void CellAppMgr::Fini() {
 
 auto CellAppMgr::Snapshot() const -> std::vector<std::byte> {
   BinaryWriter payload_writer;
-  payload_writer.Write(mgr_generation_);
   payload_writer.Write(next_cellapp_app_id_);
   payload_writer.Write(next_cell_id_);
   payload_writer.Write(last_balance_tick_);
@@ -619,12 +597,11 @@ auto CellAppMgr::Restore(std::span<const std::byte> bytes) -> Result<void> {
   if (!snapshot_payload) return snapshot_payload.Error();
 
   BinaryReader r(snapshot_payload->payload);
-  auto saved_generation = r.Read<uint64_t>();
   auto next_app = r.Read<uint32_t>();
   auto next_cell = r.Read<cellappmgr::CellID>();
   auto last_balance = r.Read<uint64_t>();
   auto last_retire = r.Read<uint32_t>();
-  if (!saved_generation || !next_app || !next_cell || !last_balance || !last_retire) {
+  if (!next_app || !next_cell || !last_balance || !last_retire) {
     return Error{ErrorCode::kInvalidArgument, "CellAppMgr snapshot: header truncated"};
   }
 
@@ -1003,7 +980,6 @@ auto CellAppMgr::Restore(std::span<const std::byte> bytes) -> Result<void> {
   next_cell_id_ = std::max(*next_cell, static_cast<cellappmgr::CellID>(max_cell_id + 1));
   last_balance_tick_ = *last_balance;
   last_retire_app_id_ = *last_retire;
-  mgr_generation_ = *saved_generation;
   snapshot_dirty_ = false;
   snapshot_dirty_at_ = {};
   snapshot_dirty_reason_.clear();
@@ -1215,8 +1191,6 @@ void CellAppMgr::RegisterWatchers() {
                          [this] { return RetiringAppIdForWatcher(); }),
                      std::function<bool(uint32_t)>(
                          [this](uint32_t app_id) { return SetRetiringAppId(app_id); }));
-  wr.Add<uint64_t>("cellappmgr/ha/mgr_generation",
-                   std::function<uint64_t()>([this] { return mgr_generation_; }));
   wr.Add<std::string>("cellappmgr/ha/snapshot_path",
                       std::function<std::string()>(
                           [this] { return Config().snapshot_path.string(); }));
@@ -1545,7 +1519,6 @@ void CellAppMgr::SendRegisterCellAppAck(Channel* ch, const Address& addr, uint32
   ack.tick_alignment_epoch_us = static_cast<uint64_t>(
       std::chrono::duration_cast<std::chrono::microseconds>(StartTime().time_since_epoch())
           .count());
-  ack.mgr_generation = mgr_generation_;
   if (ch == nullptr) return;
   if (auto r = ch->SendMessage(ack); !r) {
     ATLAS_LOG_WARNING("CellAppMgr: {} register ack send failed to {} (app_id={}): {}",
@@ -1561,7 +1534,6 @@ void CellAppMgr::OnHealthProbe(const Address&, Channel* ch,
   ack.game_time = GameTime();
   ack.snapshot_saves = snapshot_save_count_;
   ack.snapshot_failures = snapshot_failure_count_;
-  ack.mgr_generation = mgr_generation_;
   ack.snapshot_dirty = snapshot_dirty_;
   ack.snapshot_save_stale = SnapshotSaveStaleForWatcher();
   (void)ch->SendMessage(ack);
@@ -1593,7 +1565,6 @@ void CellAppMgr::SendGeometryToCellApp(const CellAppInfo& target,
   msg.geometry_version = partition.geometry_version;
   const auto blob = w.Detach();
   msg.bsp_blob.assign(blob.begin(), blob.end());
-  msg.mgr_generation = mgr_generation_;
   if (auto r = target.channel->SendMessage(msg); !r) {
     ATLAS_LOG_WARNING("CellAppMgr: geometry replay failed space={} app_id={}: {}",
                       partition.space_id, target.app_id, r.Error().Message());
@@ -3687,7 +3658,6 @@ void CellAppMgr::SendAddCell(const CellAppInfo& target, SpaceID space_id,
   msg.is_primary = is_primary;
   msg.space_master_type = space_master_type;
   msg.space_data_source_addr = space_data_source_addr;
-  msg.mgr_generation = mgr_generation_;
   (void)target.channel->SendMessage(msg);
 }
 
@@ -3701,7 +3671,6 @@ void CellAppMgr::SendRemoveCell(const CellAppInfo& target, SpaceID space_id,
   cellappmgr::RemoveCellFromSpace msg;
   msg.space_id = space_id;
   msg.cell_id = cell_id;
-  msg.mgr_generation = mgr_generation_;
   (void)target.channel->SendMessage(msg);
 }
 
@@ -3742,7 +3711,6 @@ void CellAppMgr::BroadcastGeometry(
     msg.space_id = partition.space_id;
     msg.geometry_version = partition.geometry_version;
     msg.bsp_blob.assign(blob.begin(), blob.end());
-    msg.mgr_generation = mgr_generation_;
 
     std::unordered_map<Address, bool> hosts;
     for (const auto* ci : partition.bsp.Leaves()) hosts[ci->cellapp_addr] = true;
@@ -3757,7 +3725,6 @@ void CellAppMgr::BroadcastGeometry(
         so.cell_id = cell_id;
         so.enable = enable;
         so.freeze_epoch = partition.freeze_epoch;
-        so.mgr_generation = mgr_generation_;
         (void)it->second.channel->SendMessage(so);
       };
       for (const auto* ci : partition.bsp.Leaves()) {

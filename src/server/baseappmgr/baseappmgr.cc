@@ -30,7 +30,7 @@ ServerAppOption<uint32_t> s_ha_reattach_watchdog_ms{
     "baseappmgr/ha/reattach_watchdog_ms", WatcherMode::kReadWrite};
 
 constexpr uint32_t kSnapshotMagic = 0x424D4731u;  // 'BMG1'
-constexpr uint32_t kSnapshotVersion = 3;
+constexpr uint32_t kSnapshotVersion = 4;
 // 256 MiB ceiling — BaseApp table + dbid_affinity only (no per-cell
 // buckets); easily fits 65k BaseApps.
 constexpr uint64_t kMaxSnapshotPayloadBytes = 256ull * 1024ull * 1024ull;
@@ -323,28 +323,6 @@ auto BaseAppMgr::Init(int argc, char* argv[]) -> bool {
     }
   }
 
-  // Bump + persist BEFORE any handler dispatches. If we advertised gen=N+1
-  // without persisting and then crashed, the next start would re-read gen=N
-  // from snapshot and bump to N+1 again — two distinct processes advertise
-  // the same value across their lifetimes, breaking monotonicity. The
-  // synchronous SaveSnapshotToFile call below closes that window.
-  ++mgr_generation_;
-  MarkSnapshotDirty("mgr-generation-bump");
-  if (!Config().snapshot_path.empty()) {
-    auto save = SaveSnapshotToFile(Config().snapshot_path);
-    if (!save) {
-      ATLAS_LOG_ERROR("BaseAppMgr: failed to persist mgr_generation={} on Init: {}",
-                      mgr_generation_, save.Error().Message());
-      return false;
-    }
-  } else {
-    ATLAS_LOG_WARNING(
-        "BaseAppMgr: mgr_generation={} not persisted (no --snapshot-path); "
-        "monotonicity across restarts cannot be guaranteed",
-        mgr_generation_);
-  }
-  ATLAS_LOG_INFO("BaseAppMgr: mgr_generation={}", mgr_generation_);
-
   ATLAS_LOG_INFO("BaseAppMgr: initialised");
   return true;
 }
@@ -358,7 +336,6 @@ void BaseAppMgr::Fini() {
 
 auto BaseAppMgr::Snapshot() const -> std::vector<std::byte> {
   BinaryWriter payload_writer;
-  payload_writer.Write(mgr_generation_);
   payload_writer.Write(next_app_id_);
 
   payload_writer.WritePackedInt(static_cast<uint32_t>(baseapps_.size()));
@@ -398,9 +375,8 @@ auto BaseAppMgr::Restore(std::span<const std::byte> bytes) -> Result<void> {
   if (!view) return view.Error();
   BinaryReader r(view->payload);
 
-  auto saved_generation = r.Read<uint64_t>();
   auto next_app = r.Read<uint32_t>();
-  if (!saved_generation || !next_app) {
+  if (!next_app) {
     return Error{ErrorCode::kInvalidArgument, "BaseAppMgr snapshot: header truncated"};
   }
 
@@ -473,7 +449,6 @@ auto BaseAppMgr::Restore(std::span<const std::byte> bytes) -> Result<void> {
   baseapps_ = std::move(restored_baseapps);
   app_id_index_ = std::move(restored_index);
   next_app_id_ = *next_app;
-  mgr_generation_ = *saved_generation;
 
   dbid_affinity_.Clear();
   const auto now = Clock::now();
@@ -975,8 +950,6 @@ void BaseAppMgr::RegisterWatchers() {
   wr.Add<std::size_t>("baseappmgr/dbid_affinity_count",
                       std::function<std::size_t()>([this] { return dbid_affinity_.size(); }));
 
-  wr.Add<uint64_t>("baseappmgr/ha/mgr_generation",
-                   std::function<uint64_t()>([this] { return mgr_generation_; }));
   wr.Add<std::string>("baseappmgr/ha/snapshot_path",
                       std::function<std::string()>(
                           [this] { return SnapshotFilePathForWatcher(); }));
@@ -1145,7 +1118,6 @@ void BaseAppMgr::OnRegisterBaseapp(const Address& src, Channel* ch,
     ack.success = true;
     ack.app_id = existing.app_id;
     ack.game_time = GameTime();
-    ack.mgr_generation = mgr_generation_;
     (void)ch->SendMessage(ack);
     ATLAS_LOG_INFO("BaseAppMgr: BaseApp reattached app_id={} internal={}:{} external={}:{}",
                    existing.app_id, kInternalAddr.Ip(), kInternalAddr.Port(),
@@ -1176,7 +1148,6 @@ void BaseAppMgr::OnRegisterBaseapp(const Address& src, Channel* ch,
   ack.success = true;
   ack.app_id = app_id;
   ack.game_time = GameTime();
-  ack.mgr_generation = mgr_generation_;
   (void)ch->SendMessage(ack);
 
   ATLAS_LOG_INFO("BaseAppMgr: BaseApp registered app_id={} internal={}:{} external={}:{}", app_id,
@@ -1210,7 +1181,6 @@ void BaseAppMgr::OnHealthProbe(const Address&, Channel* ch,
   ack.game_time = GameTime();
   ack.snapshot_saves = snapshot_save_count_;
   ack.snapshot_failures = snapshot_failure_count_;
-  ack.mgr_generation = mgr_generation_;
   ack.snapshot_dirty = snapshot_dirty_;
   ack.snapshot_save_stale = SnapshotSaveStaleForWatcher();
   (void)ch->SendMessage(ack);

@@ -121,12 +121,6 @@ class Reviver : public ManagerApp {
     uint64_t heartbeat_timeout_count{0};
     TimePoint heartbeat_last_ack_at{};
     uint64_t heartbeat_last_game_time{0};
-    uint64_t heartbeat_mgr_generation{0};
-    // Tracks the highest mgr_generation we've ever observed for this target
-    // across its lifetime; a fresh ack below it is either a split-brain
-    // regression or a stale reply from a doomed-but-still-answering mgr.
-    uint64_t heartbeat_mgr_generation_high_water{0};
-    uint64_t heartbeat_mgr_generation_regressions{0};
     uint64_t heartbeat_snapshot_saves{0};
     uint64_t heartbeat_snapshot_failures{0};
     bool heartbeat_snapshot_dirty{false};
@@ -178,8 +172,8 @@ class Reviver : public ManagerApp {
   void OnBaseAppMgrHeartbeatAck(const Address& src, Channel* ch,
                                 const baseappmgr::HealthProbeAck& msg);
   void RecordHeartbeatAck(ManagedTarget& t, const Address& src, uint64_t nonce, uint64_t game_time,
-                          uint64_t snapshot_saves, uint64_t snapshot_failures,
-                          uint64_t mgr_generation, bool snapshot_dirty, bool snapshot_save_stale);
+                          uint64_t snapshot_saves, uint64_t snapshot_failures, bool snapshot_dirty,
+                          bool snapshot_save_stale);
 
   [[nodiscard]] auto HasLeadership(const ManagedTarget& t) const -> bool;
   [[nodiscard]] auto MatchesTargetName(const ManagedTarget& t, std::string_view name) const -> bool;

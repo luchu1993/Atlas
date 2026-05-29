@@ -159,14 +159,10 @@ class CellApp : public EntityApp, public CellMovementHost {
   void OnRequestCellAppState(const Address& src, Channel* ch,
                              const cellappmgr::RequestCellAppState& msg);
 
-  // Drops any mgr-control message coming through a non-registered channel
-  // or tagged with an mgr_generation older than the last accepted handshake.
-  [[nodiscard]] auto AcceptCellAppMgrMessage(Channel* ch, uint64_t mgr_generation,
-                                             const char* tag) -> bool;
+  // Drops any mgr-control message arriving through a channel other than our
+  // current CellAppMgr (a straggler from a dead mgr after takeover).
+  [[nodiscard]] auto AcceptCellAppMgrMessage(Channel* ch, const char* tag) -> bool;
 
-  [[nodiscard]] auto AcceptedCellAppMgrGeneration() const -> uint64_t {
-    return accepted_cellappmgr_generation_;
-  }
   [[nodiscard]] auto CellAppMgrStaleDrops() const -> uint64_t { return cellappmgr_stale_drops_; }
 
   // Non-zero after RegisterCellApp completes; included in load updates.
@@ -415,9 +411,8 @@ class CellApp : public EntityApp, public CellMovementHost {
   uint32_t app_id_{0};
   uint32_t cellappmgr_pid_{0};
   Channel* cellappmgr_channel_{nullptr};
-  // Last mgr_generation advertised by CellAppMgr. Messages tagged with a
-  // smaller value are dropped as residue from a stale mgr generation.
-  uint64_t accepted_cellappmgr_generation_{0};
+  // Count of mgr-control messages dropped for arriving on a channel that is
+  // not our current CellAppMgr (stale mgr after a takeover).
   uint64_t cellappmgr_stale_drops_{0};
   Channel* dbapp_channel_{nullptr};
   IDClient id_client_;

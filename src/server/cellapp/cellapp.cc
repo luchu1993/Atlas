@@ -526,8 +526,6 @@ void CellApp::OnTickComplete() {
 void CellApp::RegisterWatchers() {
   EntityApp::RegisterWatchers();
   auto& wr = GetWatcherRegistry();
-  wr.Add<uint64_t>("cellapp/ha/accepted_cellappmgr_generation",
-                   std::function<uint64_t()>([this] { return accepted_cellappmgr_generation_; }));
   wr.Add<uint64_t>("cellapp/ha/cellappmgr_stale_drops",
                    std::function<uint64_t()>([this] { return cellappmgr_stale_drops_; }));
   wr.Add<float>("cellapp/load", std::function<float()>([this] { return persistent_load_; }));
@@ -2472,7 +2470,7 @@ void CellApp::RevertPendingOffload(EntityID entity_id, const char* reason) {
 
 void CellApp::OnAddCellToSpace(const Address& /*src*/, Channel* ch,
                                const cellappmgr::AddCellToSpace& msg) {
-  if (!AcceptCellAppMgrMessage(ch, msg.mgr_generation, "AddCellToSpace")) return;
+  if (!AcceptCellAppMgrMessage(ch, "AddCellToSpace")) return;
   auto* space = FindSpace(msg.space_id);
   if (!space) {
     auto inserted = spaces_.emplace(msg.space_id, MakeSpace(msg.space_id));
@@ -2511,7 +2509,7 @@ void CellApp::OnAddCellToSpace(const Address& /*src*/, Channel* ch,
 
 void CellApp::OnRemoveCellFromSpace(const Address& /*src*/, Channel* ch,
                                     const cellappmgr::RemoveCellFromSpace& msg) {
-  if (!AcceptCellAppMgrMessage(ch, msg.mgr_generation, "RemoveCellFromSpace")) return;
+  if (!AcceptCellAppMgrMessage(ch, "RemoveCellFromSpace")) return;
   auto* space = FindSpace(msg.space_id);
   if (space == nullptr) return;
   auto* cell = space->FindLocalCell(msg.cell_id);
@@ -2548,7 +2546,7 @@ void CellApp::SpawnSpaceMaster(SpaceID space_id, const std::string& type_name) {
 
 void CellApp::OnUpdateGeometry(const Address& /*src*/, Channel* ch,
                                const cellappmgr::UpdateGeometry& msg) {
-  if (!AcceptCellAppMgrMessage(ch, msg.mgr_generation, "UpdateGeometry")) return;
+  if (!AcceptCellAppMgrMessage(ch, "UpdateGeometry")) return;
   auto* space = FindSpace(msg.space_id);
   if (!space) {
     ATLAS_LOG_WARNING("CellApp: UpdateGeometry for unknown space_id={}", msg.space_id);
@@ -2587,7 +2585,7 @@ void CellApp::OnUpdateGeometry(const Address& /*src*/, Channel* ch,
 
 void CellApp::OnShouldOffload(const Address& /*src*/, Channel* ch,
                               const cellappmgr::ShouldOffload& msg) {
-  if (!AcceptCellAppMgrMessage(ch, msg.mgr_generation, "ShouldOffload")) return;
+  if (!AcceptCellAppMgrMessage(ch, "ShouldOffload")) return;
   auto* space = FindSpace(msg.space_id);
   if (!space) return;
   if (auto* cell = space->FindLocalCell(msg.cell_id)) {
@@ -2764,21 +2762,15 @@ void CellApp::MaybeRequestMoreIds() {
   ATLAS_LOG_DEBUG("CellApp: requested {} EntityIDs from DBApp", count);
 }
 
-auto CellApp::AcceptCellAppMgrMessage(Channel* ch, uint64_t mgr_generation, const char* tag)
-    -> bool {
+auto CellApp::AcceptCellAppMgrMessage(Channel* ch, const char* tag) -> bool {
+  // Drop control messages from anything but our current CellAppMgr channel.
+  // After a Reviver takeover the CellApp re-registers and cellappmgr_channel_
+  // points at the new mgr, so a straggler from the dead mgr's old channel is
+  // rejected here — the BigWorld "only obey the live mgr" semantics.
   if (cellappmgr_channel_ != nullptr && ch != cellappmgr_channel_) {
     ++cellappmgr_stale_drops_;
     ATLAS_LOG_WARNING("CellApp: dropping {} from non-registered channel", tag);
     return false;
-  }
-  if (mgr_generation != 0 && mgr_generation < accepted_cellappmgr_generation_) {
-    ++cellappmgr_stale_drops_;
-    ATLAS_LOG_WARNING("CellApp: dropping {} stale mgr_generation={} accepted={}", tag,
-                      mgr_generation, accepted_cellappmgr_generation_);
-    return false;
-  }
-  if (mgr_generation > accepted_cellappmgr_generation_) {
-    accepted_cellappmgr_generation_ = mgr_generation;
   }
   return true;
 }
@@ -2795,11 +2787,7 @@ void CellApp::OnRegisterCellAppAck(const Address& /*src*/, Channel* ch,
   }
   if (ch != nullptr) cellappmgr_channel_ = ch;
   app_id_ = msg.app_id;
-  if (msg.mgr_generation > accepted_cellappmgr_generation_) {
-    accepted_cellappmgr_generation_ = msg.mgr_generation;
-  }
-  ATLAS_LOG_INFO("CellApp: registered with CellAppMgr; app_id={} mgr_generation={}", app_id_,
-                 accepted_cellappmgr_generation_);
+  ATLAS_LOG_INFO("CellApp: registered with CellAppMgr; app_id={}", app_id_);
 
   // Align the tick onto the cluster-wide reference so cross-cell
   // Ghost updates land on shared tick edges.

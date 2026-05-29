@@ -91,13 +91,11 @@ TEST(CellAppMgrMessages, RegisterCellAppAck_RoundTrip) {
   msg.success = true;
   msg.app_id = 5;
   msg.game_time = 0x1122334455667788ull;
-  msg.mgr_generation = 42u;
   auto rt = RoundTrip(msg);
   ASSERT_TRUE(rt.has_value());
   EXPECT_TRUE(rt->success);
   EXPECT_EQ(rt->app_id, 5u);
   EXPECT_EQ(rt->game_time, 0x1122334455667788ull);
-  EXPECT_EQ(rt->mgr_generation, 42u);
 }
 
 TEST(CellAppMgrMessages, InformCellLoad_RoundTrip) {
@@ -230,7 +228,6 @@ TEST(CellAppMgrMessages, HealthProbeAck_RejectsBadSnapshotFlags) {
   w.Write<uint64_t>(2);  // game_time
   w.Write<uint64_t>(3);  // snapshot_saves
   w.Write<uint64_t>(4);  // snapshot_failures
-  w.Write<uint64_t>(5);  // mgr_generation
   w.Write<uint8_t>(2);
   w.Write<uint8_t>(0);
   auto buf = w.Detach();

@@ -2658,8 +2658,7 @@ void BaseApp::OnRegisterBaseappAck(Channel& /*ch*/, const baseappmgr::RegisterBa
     (void)baseappmgr_channel_->SendMessage(ready);
   }
 
-  ATLAS_LOG_INFO("BaseApp: registered as app_id={} mgr_generation={}", app_id_,
-                 msg.mgr_generation);
+  ATLAS_LOG_INFO("BaseApp: registered as app_id={}", app_id_);
 }
 
 void BaseApp::OnGetEntityIdsAck(Channel& /*ch*/, const dbapp::GetEntityIdsAck& msg) {

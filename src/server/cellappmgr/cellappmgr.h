@@ -93,8 +93,6 @@ class CellAppMgr : public ManagerApp {
 
   [[nodiscard]] auto Snapshot() const -> std::vector<std::byte>;
   [[nodiscard]] auto Restore(std::span<const std::byte> bytes) -> Result<void>;
-  [[nodiscard]] auto MgrGenerationForTest() const -> uint64_t { return mgr_generation_; }
-  void BumpMgrGenerationForTest() { ++mgr_generation_; }
   void ResetSnapshotStateForTest() {
     last_snapshot_attempt_at_ = {};
     last_snapshot_save_at_ = {};
@@ -417,10 +415,6 @@ class CellAppMgr : public ManagerApp {
   uint32_t next_cellapp_app_id_{1};
 
   cellappmgr::CellID next_cell_id_{1};
-
-  // Monotonic per-mgr-process counter; persisted in snapshot, bumped by 1
-  // at every (re)start so CellApps can reject messages from a stale mgr.
-  uint64_t mgr_generation_{0};
 
   uint64_t last_balance_tick_{0};
 

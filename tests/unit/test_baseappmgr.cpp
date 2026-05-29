@@ -47,7 +47,7 @@ auto BaseAppProcessInfo(Address internal_addr, std::string name) -> machined::Pr
 }
 
 constexpr uint32_t kSnapshotMagicForTest = 0x424D4731u;  // 'BMG1'
-constexpr uint32_t kSnapshotVersionForTest = 3;
+constexpr uint32_t kSnapshotVersionForTest = 4;
 
 auto WatcherInt64ForTest(const WatcherRegistry& wr, const std::string& path) -> std::optional<int64_t> {
   auto raw = wr.Get(path);
@@ -107,7 +107,6 @@ TEST(BaseAppMgr, RestoreRejectsUnsupportedVersion) {
 
 TEST(BaseAppMgr, RestoreRejectsChecksumMismatch) {
   BinaryWriter payload_w;
-  payload_w.Write<uint64_t>(1u);  // mgr_generation
   payload_w.Write<uint32_t>(1u);  // next_app_id
   payload_w.WritePackedInt(0u);   // baseapps
   payload_w.WritePackedInt(0u);   // affinity
