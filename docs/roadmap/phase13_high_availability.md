@@ -35,21 +35,29 @@ Manager 处理。
   端按 priority + 心跳超时（`REVIVER_DEFAULT_SUBJECT_TIMEOUT` 0.2s）裁决谁
   活跃；无显式 fencing token，靠死地址 + 新端点 + 注册表收敛。
 
-Atlas 在三处**有意偏离**（CLAUDE.md：偏离须记录理由）：
+**已采纳目标：完全对齐 BigWorld 实现**（不保留偏离）。目标架构：
 
-| 维度 | Atlas 选择 | 理由 |
-|---|---|---|
-| machined 传输 | 单地址 TCP 中心服务 | 容器 / 云 / k8s 下 UDP 广播常不通（见 `phase06_machined.md`）|
-| Manager 状态 | self-snapshot 到文件 + reattach | 支持**全集群重启**恢复 + 加快冷启动；BigWorld 纯 worker 重建在全员重启时同样丢失 manager 态 |
-| 仲裁 / 防脑裂 | machined-lease + `mgr_generation` epoch | 对"中心化 machined + 有状态 manager"两处偏离的**必要补偿**：中心化 machined 无 BigWorld 的去中心收敛，有状态 manager 的瞬时重复比 BigWorld 危险，故需显式 lease + epoch |
+- **Manager 软状态、worker 重建**：CellAppMgr / BaseAppMgr 不再持久化自身
+  协调态。崩溃后由 Reviver 重启，新进程起 recovery 计时器等存活 worker 重报；
+  CellApp 重报其持有的 cell（id / bounds / geometry_version / primary），
+  BaseApp 重报其 global base / service。manager 从 worker 报告重建 partition
+  与注册表。**移除** mgr self-snapshot / `snapshot_envelope` / snapshot 文件
+  / 周期与 dirty flush。
+- **去中心 machined**：每台机一个 machined，UDP 广播发现 + ring/buddy，单例
+  manager 靠"广播查询 → first-found"。**移除** 单地址 TCP 中心模型。
+- **软仲裁、无 fencing**：Reviver 支持多实例 + `ReviverPriority`，被监控对象
+  端按 priority + 心跳超时裁决唯一活跃 Reviver。**移除** machined-lease 与
+  `mgr_generation` epoch（BigWorld 无显式 fencing，靠死地址 + 新端点 + 注册表
+  收敛）。
 
-**对齐方向（云兼容）**：保留上述云相关偏离，但把恢复语义向 BigWorld 的
-**reattach-first** 收敛——以 worker 重报为权威真值、snapshot 降级为"全集群
-重启"的 fallback。**现状**：恢复是 mgr 权威（`ReplayCellAppTopology` 把拓扑
-从 snapshot 回放给 worker，cellapp 仅经 `OnRequestCellAppState` 回报 load，
-不报拓扑）。**目标差量**：cellapp 在 (re)register 时重报自己持有的 cell
-（id / bounds / geometry_version / primary），mgr 能从这些 leaf 报告重建
-partition，使 manager 在 snapshot 缺失 / 过期时仍可纯由存活 worker 恢复。
+**已知代价（完全对齐的取舍）**：UDP 广播 machined 在 k8s / 云 overlay 网络
+通常不可路由——完成 machined 去中心化后 Atlas 不再支持容器 / 云部署；纯
+worker 重建在"全集群同时重启"时丢失 manager 态（与 BigWorld 同）。
+
+**现状 vs 目标**：当前恢复是 mgr 权威（`ReplayCellAppTopology` 从 snapshot
+把拓扑回放给 worker，cellapp 经 `OnRequestCellAppState` 仅回报 load）。迁移
+分阶段进行，每阶段独立可 build + 测试；machined 去中心化排在最后（不可逆
+点）。下文"当前已落地能力"记录迁移前的实现，会随各阶段落地逐节替换。
 
 ## 当前已落地能力
 
