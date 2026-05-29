@@ -110,25 +110,27 @@ de-duplicate(如果 DBApp 已经写了但 ack 丢了,客户端重发会写两次
 解决:用 `request_id` + DBApp 端 idempotency cache(checkout/write
 already-applied 检测)。
 
-### 3.5 DBAppMgr 自身的 HA:走 Phase 13 框架
+### 3.5 DBAppMgr 自身的 HA:走 Phase 13 worker-重建框架
 
-完全镜像 BaseAppMgr HA(B1-B4):
+镜像 CellAppMgr / BaseAppMgr 的 BigWorld 式 worker-重建恢复(Phase 13 M1+M2):
+DBAppMgr 是软状态,**不持久化 snapshot**——崩溃后由 Reviver 重启,新进程在
+recovery 窗口内等存活 DBApp 重注册并重报权威状态,从 worker 报告重建 DBApp 表
+和 shard table。
 
-| 步骤 | 内容 | 对应 BaseAppMgr commit |
-|---|---|---|
-| P15.2-S1 | snapshot/restore + envelope + reattach + 全 watcher | B1 `313003f` |
-| P15.2-S2 | reattach watchdog + state watcher | B2 `cb638a7` |
-| P15.2-S3 | Reviver 多 target 加 dbappmgr | B3 `4877261` |
-| P15.2-S4 | verify_dbappmgr_ha.py + docs | B4 `95cc71a` |
+| 步骤 | 内容 |
+|---|---|
+| P15.2-S1 | DBApp `RecoverDBAppState`(重报 shard ranges)+ recovery 窗口冻结 shard 迁移 |
+| P15.2-S2 | `RegisterDBApp.known_app_id` echo 保留 dbapp_id |
+| P15.2-S3 | Reviver 多 target 加 dbappmgr |
+| P15.2-S4 | verify_dbappmgr_ha.py + docs |
 
-snapshot 内容(权威状态):
-- DBApp 表(addr, dbapp_id, shard ranges, is_retiring, last_load_at)
-- `next_dbapp_id_`
-- Shard table 版本号(用于客户端缓存失效)
-- pending shard migration(若有,跨重启续做)
+worker 重报的权威状态:
+- DBApp 表(addr, dbapp_id, shard ranges, is_retiring, last_load_at)——由重注册
+  + `RecoverDBAppState` 重建
+- Shard table 版本号(用于客户端缓存失效)——取存活 DBApp 报告的最高版本
+- pending shard migration——由 DBApp 重报续做(无 snapshot 续航)
 
-snapshot envelope 直接复用 `src/lib/server/snapshot_envelope.h`(magic
-`'DMG1'`, version 1)。
+`next_dbapp_id_` 从重报的 dbapp_id 推回(取 max + 1),`known_app_id` 保留原 id。
 
 Reviver 扩 multi-target(已就位的 `ManagedTarget` 框架,加一个
 `dbappmgr_target_` 即可,~150 行)。
@@ -185,13 +187,9 @@ ShardEntry {
 
 ## 6. 与 Phase 13 follow-up 的关系
 
-Phase 13 follow-up 列表里的 #2 就是本文档。完成 P15.1 + P15.2 后,
+Phase 13 follow-up 列表里的 #4 就是本文档。完成 P15.1 + P15.2 后,
 Phase 13 的 "Manager HA 三件套" 才齐(CellAppMgr / BaseAppMgr / DBAppMgr
-都有完整 snapshot + reattach + Reviver supervision)。
-
-如果 Phase 13 follow-up #3(共享 snapshot 存储,见
-`phase13_shared_snapshot_storage.md`)已经落地,DBAppMgr 直接受益 —
-新 mgr 通过 snapshot_envelope.h 自动用上 S3/NFS 后端。
+都靠 worker-重建恢复 + Reviver supervision,无 snapshot)。
 
 ## 7. 工作量估计
 

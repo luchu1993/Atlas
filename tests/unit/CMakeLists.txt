@@ -247,11 +247,6 @@ atlas_add_test(NAME test_reviver_leader_lock_mode
   DEPS atlas_reviver_lib
 )
 
-atlas_add_test(NAME test_snapshot_envelope
-  SOURCES test_snapshot_envelope.cpp
-  DEPS atlas_server atlas_serialization atlas_platform
-)
-
 atlas_add_test(NAME test_script_events
   SOURCES test_script_events.cpp
   DEPS atlas_script
