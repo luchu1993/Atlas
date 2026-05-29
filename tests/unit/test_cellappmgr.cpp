@@ -3952,6 +3952,31 @@ auto MakeRecoverReport(CellAppMgrHarness& src, SpaceID space_id)
   return report;
 }
 
+TEST(CellAppMgr, RecoveryWindowHoldsRestoreGateThenOpens) {
+  CellAppMgrHarness h;  // harness zeros the startup window
+  cellappmgr::RegisterCellApp reg;
+  reg.internal_addr = MakePeerAddr(30001);
+  h.mgr.OnRegisterCellApp(reg.internal_addr, nullptr, reg);
+  cellappmgr::CreateSpaceRequest csr;
+  csr.space_id = 60;
+  h.mgr.OnCreateSpaceRequest(Address{}, nullptr, csr);
+  h.mgr.RegisterWatchersForTest();
+
+  // No snapshot, no reattach pending: with the window open the gate must still
+  // freeze LB so workers get a chance to report before we balance.
+  h.mgr.SetRecoveryDeadlineForTest(Clock::now() + std::chrono::seconds(5));
+  EXPECT_EQ(h.mgr.GetWatcherRegistry().Get("cellappmgr/ha/restore_gate_active"),
+            std::optional<std::string>("true"));
+  EXPECT_NE(h.mgr.GetWatcherRegistry().Get("cellappmgr/ha/restore_gate_status").value_or("").find(
+                "recovery_window=1"),
+            std::string::npos);
+
+  // Window elapsed -> gate opens (no reattach pending).
+  h.mgr.SetRecoveryDeadlineForTest(Clock::now() - std::chrono::milliseconds(1));
+  EXPECT_EQ(h.mgr.GetWatcherRegistry().Get("cellappmgr/ha/restore_gate_active"),
+            std::optional<std::string>("false"));
+}
+
 TEST(CellAppMgr, RecoverCellAppStateRebuildsSpaceFromWorkerReport) {
   CellAppMgrHarness src;
   cellappmgr::RegisterCellApp reg;

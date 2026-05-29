@@ -505,6 +505,13 @@ auto CellAppMgr::Init(int argc, char* argv[]) -> bool {
         }
       });
 
+  // Hold the restore gate for the startup window so live CellApps can report
+  // their held BSP (OnRecoverCellAppState) before we balance against a partial
+  // view — even when there is no snapshot to seed reattach state.
+  recovery_deadline_ = startup_quiescence_window_ > Duration::zero()
+                           ? Clock::now() + startup_quiescence_window_
+                           : TimePoint{};
+
   ATLAS_LOG_INFO("CellAppMgr: initialised");
   return true;
 }
@@ -2038,7 +2045,7 @@ auto CellAppMgr::SplitLeafToHost(SpacePartition& partition, const CellInfo& targ
 }
 
 void CellAppMgr::GrowSpacesForNewCellApp(const CellAppInfo& new_app) {
-  if (PendingReattachCellAppCount() != 0) return;
+  if (RestoreGateActive()) return;
   if (!IsAssignableForLb(new_app, Clock::now())) return;
   const auto assignable_count = AssignableCellAppCount();
   for (auto& [_, partition] : spaces_) {
@@ -2678,7 +2685,7 @@ auto CellAppMgr::HasPendingGeometryBroadcast(SpaceID space_id) const -> bool {
 
 void CellAppMgr::TickLoadBalance() {
   if (spaces_.empty()) return;
-  if (PendingReattachCellAppCount() != 0) return;
+  if (RestoreGateActive()) return;
   for (auto& [space_id, partition] : spaces_) {
     if (HasPendingGeometryBroadcast(space_id)) continue;
     const auto before_blob = partition.last_broadcast_blob;
@@ -3193,9 +3200,20 @@ auto CellAppMgr::BuildReattachStatusSummary() const -> std::string {
   return out;
 }
 
-auto CellAppMgr::RestoreGateActiveForWatcher() const -> bool {
-  return PendingReattachCellAppCount() != 0;
+auto CellAppMgr::RecoveryWindowActive() const -> bool {
+  // Mirrors BigWorld startRecovery: a freshly (re)started mgr holds topology
+  // mutation until recovery_deadline_ so live workers can report their BSP
+  // (OnRecoverCellAppState) before we balance / split against a partial view.
+  // Set in Init from startup_quiescence_window_; stays unset (open) for
+  // harness tests that don't run Init.
+  return recovery_deadline_ != TimePoint{} && Clock::now() < recovery_deadline_;
 }
+
+auto CellAppMgr::RestoreGateActive() const -> bool {
+  return RecoveryWindowActive() || PendingReattachCellAppCount() != 0;
+}
+
+auto CellAppMgr::RestoreGateActiveForWatcher() const -> bool { return RestoreGateActive(); }
 
 auto CellAppMgr::PendingGeometryRestoreGateBlockedCount() const -> std::size_t {
   return static_cast<std::size_t>(
@@ -3209,13 +3227,14 @@ auto CellAppMgr::PendingGeometryRestoreGateBlockedCount() const -> std::size_t {
 auto CellAppMgr::BuildRestoreGateStatusSummary() const -> std::string {
   const auto pending_reattach = PendingReattachCellAppCount();
   const auto blocked_pending_geometry = PendingGeometryRestoreGateBlockedCount();
-  const bool lb_frozen = pending_reattach != 0;
+  const bool recovery_window = RecoveryWindowActive();
+  const bool lb_frozen = pending_reattach != 0 || recovery_window;
   const bool active = lb_frozen || blocked_pending_geometry != 0;
   const char* state = active ? "closed" : "open";
   return std::format(
-      "state={} active={} lb_frozen={} pending_reattach={} pending_geometry={} "
-      "blocked_pending_geometry={}",
-      state, active ? 1 : 0, lb_frozen ? 1 : 0, pending_reattach,
+      "state={} active={} lb_frozen={} recovery_window={} pending_reattach={} "
+      "pending_geometry={} blocked_pending_geometry={}",
+      state, active ? 1 : 0, lb_frozen ? 1 : 0, recovery_window ? 1 : 0, pending_reattach,
       pending_geometry_broadcasts_.size(), blocked_pending_geometry);
 }
 

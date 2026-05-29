@@ -152,6 +152,11 @@ class CellAppMgr : public ManagerApp {
   [[nodiscard]] auto ReattachStateForWatcher() const -> std::string;
   [[nodiscard]] auto BuildReattachStatusSummary() const -> std::string;
   [[nodiscard]] auto RestoreGateActiveForWatcher() const -> bool;
+  // True while topology mutation (LB / grow / split-merge / retire) must stay
+  // frozen: either snapshot-seeded reattach is still pending, or we are inside
+  // the startup recovery window waiting for live workers to report their BSP.
+  [[nodiscard]] auto RestoreGateActive() const -> bool;
+  [[nodiscard]] auto RecoveryWindowActive() const -> bool;
   [[nodiscard]] auto PendingGeometryRestoreGateBlockedCount() const -> std::size_t;
   [[nodiscard]] auto BuildRestoreGateStatusSummary() const -> std::string;
   [[nodiscard]] auto BuildReattachRegistryStatusSummary() const -> std::string;
@@ -435,9 +440,18 @@ class CellAppMgr : public ManagerApp {
   static constexpr Duration kStartupQuiescenceWindowDefault =
       std::chrono::duration_cast<Duration>(std::chrono::seconds(2));
   Duration startup_quiescence_window_{kStartupQuiescenceWindowDefault};
+  // Set in Init from the startup window; restore gate stays closed until then
+  // so worker BSP reports can rebuild topology first. Unset = open.
+  TimePoint recovery_deadline_{};
 
  public:
-  void SetStartupQuiescenceWindowForTest(Duration w) { startup_quiescence_window_ = w; }
+  void SetStartupQuiescenceWindowForTest(Duration w) {
+    startup_quiescence_window_ = w;
+    // Keep the recovery deadline consistent so callers that shrink the window
+    // after Init (integration fixtures) also reopen the restore gate.
+    recovery_deadline_ = w > Duration::zero() ? Clock::now() + w : TimePoint{};
+  }
+  void SetRecoveryDeadlineForTest(TimePoint t) { recovery_deadline_ = t; }
 };
 
 }  // namespace atlas
