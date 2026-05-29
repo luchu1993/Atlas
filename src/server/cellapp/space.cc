@@ -125,15 +125,20 @@ auto Space::LoadCollisionCacheFromFile(const std::filesystem::path& path) -> Res
     collision_asset_source_hash_ = cache->asset.source_hash;
     collision_asset_object_count_ = cache->asset.boxes.size() + cache->asset.planes.size() +
                                     cache->asset.spheres.size() + cache->asset.capsules.size() +
-                                    cache->asset.meshes.size() + cache->asset.convexes.size();
+                                    cache->asset.meshes.size() + cache->asset.convexes.size() +
+                                    cache->asset.heightfields.size();
     return {};
   }
 
-  // No backend injected: box/plane caches still build a Static query, but a
-  // mesh-bearing cache has no representable backend — reject, don't degrade.
-  if (!cache->asset.meshes.empty()) {
+  // No backend injected: the Static fallback only builds box / plane, so any
+  // sphere / capsule / mesh / convex / heightfield has no representable backend
+  // — reject rather than silently drop it.
+  if (!cache->asset.spheres.empty() || !cache->asset.capsules.empty() ||
+      !cache->asset.meshes.empty() || !cache->asset.convexes.empty() ||
+      !cache->asset.heightfields.empty()) {
     return Error{ErrorCode::kNotSupported,
-                 "collision cache contains meshes but no physics backend is configured"};
+                 "collision cache has non-box/plane shapes but no physics backend is "
+                 "configured (Static builds box/plane only)"};
   }
   SetCollisionAsset(cache->asset);
   return {};

@@ -22,6 +22,7 @@
 #include <cstddef>
 #include <cstring>
 #include <format>
+#include <limits>
 #include <span>
 #include <string>
 #include <utility>
@@ -327,6 +328,51 @@ void AppendPlaneObj(std::string& out, const StaticPlane& plane, std::size_t inde
   return convex;
 }
 
+[[nodiscard]] auto ParseHeightField(const rapidjson::Value& object, std::string_view path,
+                                    std::span<const std::byte> mesh_buffer)
+    -> Result<HeightFieldGeometry> {
+  auto layer = RequiredLayer(object, path);
+  if (!layer) return layer.Error();
+  auto origin = RequiredVector3(object, path, "origin");
+  if (!origin) return origin.Error();
+  auto scale = RequiredVector3(object, path, "scale");
+  if (!scale) return scale.Error();
+  if (scale->x <= 0.0f || scale->z <= 0.0f) {
+    return Invalid(std::format("{}: scale x/z (sample spacing) must be positive", path));
+  }
+  auto sample_count = RequiredUint(object, path, "sample_count");
+  if (!sample_count) return sample_count.Error();
+  if (*sample_count < 4 || (*sample_count % 2) != 0) {
+    return Invalid(std::format("{}: sample_count must be >= 4 and even, got {}", path,
+                               *sample_count));
+  }
+  auto sbo = RequiredUint(object, path, "sample_byte_offset");
+  if (!sbo) return sbo.Error();
+  if ((*sbo % alignof(float)) != 0) {
+    return Invalid(std::format("{}: sample_byte_offset must be 4-byte aligned", path));
+  }
+  const std::size_t count = std::size_t{*sample_count} * *sample_count;
+  const std::size_t sbytes = count * sizeof(float);
+  if (*sbo + sbytes > mesh_buffer.size()) {
+    return Invalid(std::format("{}: sample window exceeds mesh buffer size ({} bytes)", path,
+                               mesh_buffer.size()));
+  }
+
+  HeightFieldGeometry hf;
+  hf.layer = *layer;
+  hf.origin = *origin;
+  hf.scale = *scale;
+  hf.sample_count = *sample_count;
+  hf.samples.resize(count);
+  std::memcpy(hf.samples.data(), mesh_buffer.data() + *sbo, sbytes);
+  for (float s : hf.samples) {
+    if (!std::isfinite(s)) {  // FLT_MAX (hole sentinel) is finite and allowed
+      return Invalid(std::format("{}: non-finite height sample", path));
+    }
+  }
+  return hf;
+}
+
 [[nodiscard]] auto ParseObjects(const rapidjson::Value& root, CollisionAsset& asset,
                                 std::span<const std::byte> mesh_buffer)
     -> Result<void> {
@@ -376,6 +422,16 @@ void AppendPlaneObj(std::string& out, const StaticPlane& plane, std::size_t inde
       auto convex = ParseConvex(object, path, mesh_buffer);
       if (!convex) return convex.Error();
       asset.convexes.push_back(std::move(*convex));
+    } else if (*shape == "heightfield") {
+      if (mesh_buffer.empty()) {
+        return Invalid(std::format(
+            "{}: heightfield objects require a side-car .bin buffer; pass it to "
+            "LoadCollisionAssetFromJson or use LoadCollisionAssetFromFile",
+            path));
+      }
+      auto hf = ParseHeightField(object, path, mesh_buffer);
+      if (!hf) return hf.Error();
+      asset.heightfields.push_back(std::move(*hf));
     } else {
       return Invalid(std::format("{}.shape unsupported: {}", path, *shape));
     }
@@ -659,9 +715,10 @@ auto DumpCollisionAssetToObj(const CollisionAsset& asset) -> std::string {
   std::string out;
   out += "# Atlas collision asset debug dump\n";
   out += std::format("# source_hash {}\n", asset.source_hash);
-  out += std::format("# boxes {} planes {} spheres {} capsules {} meshes {} convexes {}\n",
-                    asset.boxes.size(), asset.planes.size(), asset.spheres.size(),
-                    asset.capsules.size(), asset.meshes.size(), asset.convexes.size());
+  out += std::format(
+      "# boxes {} planes {} spheres {} capsules {} meshes {} convexes {} heightfields {}\n",
+      asset.boxes.size(), asset.planes.size(), asset.spheres.size(), asset.capsules.size(),
+      asset.meshes.size(), asset.convexes.size(), asset.heightfields.size());
   out += "o collision_asset\n";
   std::size_t next_vertex = 1;
   for (std::size_t i = 0; i < asset.boxes.size(); ++i) {
@@ -701,6 +758,22 @@ auto DumpCollisionAssetToObj(const CollisionAsset& asset) -> std::string {
     out += std::format("g convex_{}_layer_{}\n", ci, convex.layer);
     for (const auto& v : convex.vertices) AppendVertex(out, v);
     next_vertex += convex.vertices.size();
+  }
+  // Heightfields dump as a vertex grid (skipping hole samples).
+  for (std::size_t hi = 0; hi < asset.heightfields.size(); ++hi) {
+    const auto& hf = asset.heightfields[hi];
+    out += std::format("g heightfield_{}_layer_{}\n", hi, hf.layer);
+    const auto n = hf.sample_count;
+    for (uint32_t y = 0; y < n; ++y) {
+      for (uint32_t x = 0; x < n; ++x) {
+        const float h = hf.samples[std::size_t{y} * n + x];
+        if (!std::isfinite(h) || h >= std::numeric_limits<float>::max()) continue;  // hole
+        AppendVertex(out, {hf.origin.x + hf.scale.x * static_cast<float>(x),
+                           hf.origin.y + hf.scale.y * h,
+                           hf.origin.z + hf.scale.z * static_cast<float>(y)});
+        ++next_vertex;
+      }
+    }
   }
   return out;
 }

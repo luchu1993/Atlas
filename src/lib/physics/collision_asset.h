@@ -43,6 +43,17 @@ struct ConvexGeometry {
   ObjectLayer layer{0};
 };
 
+// Square grid of height samples. Surface point (x, y in [0, sample_count)) sits
+// at origin + scale * (x, samples[y * sample_count + x], y). A sample of
+// FLT_MAX marks a hole (no collision). Rebuilt by the backend; no cooked blob.
+struct HeightFieldGeometry {
+  math::Vector3 origin{0.0f, 0.0f, 0.0f};
+  math::Vector3 scale{1.0f, 1.0f, 1.0f};  // x/z = sample spacing, y = height scale
+  uint32_t sample_count{0};               // samples per side; >= 4 and even
+  std::vector<float> samples;             // row-major, sample_count * sample_count
+  ObjectLayer layer{0};
+};
+
 struct CollisionAsset {
   uint32_t version{kCollisionAssetVersion};
   std::string coordinate_system{std::string(kCollisionCoordinateSystem)};
@@ -53,6 +64,7 @@ struct CollisionAsset {
   std::vector<StaticCapsule> capsules;
   std::vector<MeshGeometry> meshes;
   std::vector<ConvexGeometry> convexes;
+  std::vector<HeightFieldGeometry> heightfields;
 };
 
 struct LoadedCollisionCache {

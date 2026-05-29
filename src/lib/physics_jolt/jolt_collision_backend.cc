@@ -34,6 +34,7 @@ auto JoltCollisionBackendFactory::BuildFromCache(const LoadedCollisionCache& cac
   for (const auto& convex : cache.asset.convexes) {
     query->AddConvexHull(convex.vertices, convex.layer);
   }
+  for (const auto& hf : cache.asset.heightfields) query->AddHeightField(hf);
   if (!cache.cooked.empty()) {
     auto restored = query->RestoreCookedMeshes(cache.cooked);
     if (!restored) return restored.Error();
@@ -43,7 +44,8 @@ auto JoltCollisionBackendFactory::BuildFromCache(const LoadedCollisionCache& cac
   // failed to build (degenerate convex/mesh, or the per-query body cap).
   const std::size_t expected = cache.asset.boxes.size() + cache.asset.planes.size() +
                                cache.asset.spheres.size() + cache.asset.capsules.size() +
-                               cache.asset.convexes.size() + cache.asset.meshes.size();
+                               cache.asset.convexes.size() + cache.asset.meshes.size() +
+                               cache.asset.heightfields.size();
   if (query->BodyCount() < expected) {
     return Error{ErrorCode::kInvalidArgument,
                  std::format("Jolt backend built {} of {} collision shapes; the rest failed "

@@ -26,6 +26,7 @@
 #include <Jolt/Physics/Collision/Shape/BoxShape.h>
 #include <Jolt/Physics/Collision/Shape/CapsuleShape.h>
 #include <Jolt/Physics/Collision/Shape/ConvexHullShape.h>
+#include <Jolt/Physics/Collision/Shape/HeightFieldShape.h>
 #include <Jolt/Physics/Collision/Shape/MeshShape.h>
 #include <Jolt/Physics/Collision/Shape/PlaneShape.h>
 #include <Jolt/Physics/Collision/Shape/SphereShape.h>
@@ -222,6 +223,26 @@ void JoltPhysicsQuery::AddConvexHull(std::span<const math::Vector3> points,
   JPH::BodyCreationSettings bcs(shape_result.Get(), JPH::RVec3::sZero(),
                                 JPH::Quat::sIdentity(), JPH::EMotionType::Static,
                                 JPH::ObjectLayer(layer));
+  impl_->system.GetBodyInterface().CreateAndAddBody(bcs, JPH::EActivation::DontActivate);
+  impl_->needs_optimize = true;
+}
+
+void JoltPhysicsQuery::AddHeightField(const HeightFieldGeometry& hf) {
+  const uint32_t n = hf.sample_count;
+  if (n < 4 || (n % 2) != 0) return;
+  if (hf.samples.size() != static_cast<std::size_t>(n) * n) return;
+
+  JPH::HeightFieldShapeSettings shape_settings(
+      hf.samples.data(), JPH::Vec3(hf.origin.x, hf.origin.y, hf.origin.z),
+      JPH::Vec3(hf.scale.x, hf.scale.y, hf.scale.z), n);
+  shape_settings.SetEmbedded();
+  auto shape_result = shape_settings.Create();
+  if (shape_result.HasError()) return;
+
+  // The shape carries its world offset (mOffset), so the body sits at origin.
+  JPH::BodyCreationSettings bcs(shape_result.Get(), JPH::RVec3::sZero(),
+                                JPH::Quat::sIdentity(), JPH::EMotionType::Static,
+                                JPH::ObjectLayer(hf.layer));
   impl_->system.GetBodyInterface().CreateAndAddBody(bcs, JPH::EActivation::DontActivate);
   impl_->needs_optimize = true;
 }

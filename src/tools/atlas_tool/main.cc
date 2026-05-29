@@ -212,10 +212,10 @@ static auto CmdValidateCollision(std::string_view path) -> int {
   }
   std::cout << std::format(
       "collision asset ok: boxes={} planes={} spheres={} capsules={} meshes={} convexes={} "
-      "source_hash={}\n",
+      "heightfields={} source_hash={}\n",
       asset->boxes.size(), asset->planes.size(), asset->spheres.size(),
       asset->capsules.size(), asset->meshes.size(), asset->convexes.size(),
-      asset->source_hash);
+      asset->heightfields.size(), asset->source_hash);
   return 0;
 }
 
@@ -291,11 +291,11 @@ static auto CmdCookCollision(std::string_view input_path,
   }
   std::cout << std::format(
       "collision cache written: {} boxes={} planes={} spheres={} capsules={} meshes={} "
-      "convexes={} cooked_bytes={} stamp=0x{:016x} source_hash={}\n",
+      "convexes={} heightfields={} cooked_bytes={} stamp=0x{:016x} source_hash={}\n",
       out.string(), loaded->asset.boxes.size(), loaded->asset.planes.size(),
       loaded->asset.spheres.size(), loaded->asset.capsules.size(), loaded->asset.meshes.size(),
-      loaded->asset.convexes.size(), loaded->cooked.size(), loaded->jolt_version_stamp,
-      loaded->asset.source_hash);
+      loaded->asset.convexes.size(), loaded->asset.heightfields.size(), loaded->cooked.size(),
+      loaded->jolt_version_stamp, loaded->asset.source_hash);
   return 0;
 }
 

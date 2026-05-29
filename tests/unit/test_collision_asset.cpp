@@ -1,4 +1,6 @@
+#include <cstddef>
 #include <cstring>
+#include <format>
 #include <span>
 #include <string>
 #include <vector>
@@ -294,6 +296,54 @@ TEST(CollisionAsset, LoadsConvexFromSideCar) {
   ASSERT_EQ(asset->convexes.size(), 1u);
   EXPECT_EQ(asset->convexes[0].vertices.size(), 4u);
   EXPECT_EQ(asset->convexes[0].layer, 6u);
+}
+
+// ACOL side-car holding an N*N flat height grid (all samples = `height`).
+[[nodiscard]] auto MakeFlatHeightFieldBuffer(uint32_t n, float height)
+    -> std::vector<std::byte> {
+  const std::size_t count = std::size_t{n} * n;
+  std::vector<std::byte> bytes(kCollisionMeshBufferHeaderBytes + count * sizeof(float));
+  std::memcpy(bytes.data(), kCollisionMeshBufferMagic.data(), 4);
+  const uint32_t version = kCollisionMeshBufferVersion;
+  std::memcpy(bytes.data() + 4, &version, sizeof(version));
+  std::vector<float> samples(count, height);
+  std::memcpy(bytes.data() + kCollisionMeshBufferHeaderBytes, samples.data(),
+              count * sizeof(float));
+  return bytes;
+}
+
+TEST(CollisionAsset, LoadsHeightFieldFromSideCar) {
+  const auto buffer = MakeFlatHeightFieldBuffer(4, 2.0f);
+  constexpr const char* kJson = R"({
+    "version": 2,
+    "coordinate_system": "x_right_y_up_z_forward_meters",
+    "source_hash": "unit",
+    "objects": [
+      {"shape": "heightfield", "layer": 3, "origin": [0, 0, 0], "scale": [10, 1, 10],
+       "sample_count": 4, "sample_byte_offset": 8}
+    ]
+  })";
+  auto asset = LoadCollisionAssetFromJson(kJson, std::span<const std::byte>(buffer));
+  ASSERT_TRUE(asset.HasValue()) << asset.Error().Message();
+  ASSERT_EQ(asset->heightfields.size(), 1u);
+  EXPECT_EQ(asset->heightfields[0].sample_count, 4u);
+  EXPECT_EQ(asset->heightfields[0].samples.size(), 16u);
+  EXPECT_EQ(asset->heightfields[0].layer, 3u);
+  EXPECT_FLOAT_EQ(asset->heightfields[0].scale.x, 10.0f);
+}
+
+TEST(CollisionAsset, RejectsHeightFieldWithOddOrTinySampleCount) {
+  const auto buffer = MakeFlatHeightFieldBuffer(4, 0.0f);
+  auto bad = [&](int n) {
+    return LoadCollisionAssetFromJson(
+        std::format(R"({{"version": 2,
+          "coordinate_system": "x_right_y_up_z_forward_meters", "source_hash": "u",
+          "objects": [{{"shape": "heightfield", "layer": 0, "origin": [0,0,0],
+            "scale": [1,1,1], "sample_count": {}, "sample_byte_offset": 8}}]}})", n),
+        std::span<const std::byte>(buffer));
+  };
+  EXPECT_FALSE(bad(3).HasValue());  // odd
+  EXPECT_FALSE(bad(2).HasValue());  // < 4
 }
 
 TEST(CollisionAsset, RejectsConvexWithTooFewPoints) {

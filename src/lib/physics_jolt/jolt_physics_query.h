@@ -30,6 +30,8 @@ class JoltPhysicsQuery final : public PhysicsQuery {
   // Builds a convex hull from a point cloud (no triangle topology); cheap
   // enough to rebuild at load, so it is not part of the cooked blob.
   void AddConvexHull(std::span<const math::Vector3> points, ObjectLayer layer);
+  // Square height-sample grid; rebuilt at load (not cooked). FLT_MAX = hole.
+  void AddHeightField(const HeightFieldGeometry& heightfield);
   void AddMesh(std::span<const math::Vector3> vertices,
                std::span<const uint32_t> indices, ObjectLayer layer);
 

@@ -106,6 +106,12 @@
 - convex `MeshCollider` → `convex` shape（点云凸包，>= 4 点）：Jolt
   `AddConvexHull`（`ConvexHullShape`）在加载时重建，不进 cooked blob、不受 stamp
   约束（像 box/sphere/capsule 从参数重建）。Static 跳过。
+- `heightfield` shape（v2）：方形高度样本网格（`origin` / `scale` /
+  `sample_count` >= 4 偶数 / `.bin` 侧车里 N² 个 float，`FLT_MAX` = hole），
+  Jolt `AddHeightField`（`HeightFieldShape`）加载时重建（不 cook；大地形 cook
+  后置）。Static 跳过。无 factory 的 cache 路径现拒绝任何非 box/plane shape
+  （含 heightfield），不静默丢弃。atlas_tool validate/cook 报告 heightfields
+  计数。runtime 加载 + cook 已单测 + 端到端验证；Unity Terrain exporter 后置。
 - MVP `Main.unity` 含全 5 种 shape（box×3 / sphere / capsule / mesh / convex）；
   live cluster 加载 7-object cache（含真 cooked-mesh blob + convex hull）无错，
   seed 150/150 NPC。

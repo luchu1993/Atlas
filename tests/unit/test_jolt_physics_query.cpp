@@ -1,3 +1,5 @@
+#include <limits>
+
 #include <gtest/gtest.h>
 
 #include "movement_sim/movement_sim.h"
@@ -516,6 +518,77 @@ TEST(JoltCollisionBackend, BuildsSphereAndCapsuleCacheWithoutStampDependency) {
   auto hit = (*query)->Raycast(rq);
   ASSERT_TRUE(hit.hit);
   EXPECT_NEAR(hit.position.y, 1.0f, 1e-2f);  // sphere top
+
+  jolt::Shutdown();
+}
+
+TEST(JoltPhysicsQuery, AddHeightFieldRaycastHitsFlatTerrain) {
+  jolt::Initialize();
+  JoltPhysicsQuery query;
+  HeightFieldGeometry hf;
+  hf.origin = {0.0f, 0.0f, 0.0f};
+  hf.scale = {10.0f, 1.0f, 10.0f};  // 4x4 grid spans [0,30]x[0,30]
+  hf.sample_count = 4;
+  hf.samples.assign(16, 2.0f);  // flat terrain at y=2
+  hf.layer = 0;
+  query.AddHeightField(hf);
+
+  RaycastQuery rq;
+  rq.origin = {15.0f, 10.0f, 15.0f};
+  rq.direction = {0.0f, -1.0f, 0.0f};
+  rq.max_distance_m = 100.0f;
+  auto hit = query.Raycast(rq);
+  ASSERT_TRUE(hit.hit);
+  EXPECT_NEAR(hit.position.y, 2.0f, 1e-2f);
+  EXPECT_NEAR(hit.normal.y, 1.0f, 1e-2f);
+
+  jolt::Shutdown();
+}
+
+TEST(JoltPhysicsQuery, AddHeightFieldHoleSamplesHaveNoCollision) {
+  jolt::Initialize();
+  JoltPhysicsQuery query;
+  HeightFieldGeometry hf;
+  hf.origin = {0.0f, 0.0f, 0.0f};
+  hf.scale = {10.0f, 1.0f, 10.0f};
+  hf.sample_count = 4;
+  hf.samples.assign(16, std::numeric_limits<float>::max());  // all holes
+  hf.layer = 0;
+  query.AddHeightField(hf);
+
+  RaycastQuery rq;
+  rq.origin = {15.0f, 10.0f, 15.0f};
+  rq.direction = {0.0f, -1.0f, 0.0f};
+  rq.max_distance_m = 100.0f;
+  EXPECT_FALSE(query.Raycast(rq).hit);
+
+  jolt::Shutdown();
+}
+
+TEST(JoltCollisionBackend, BuildsHeightFieldCacheWithoutStampDependency) {
+  jolt::Initialize();
+  LoadedCollisionCache cache;
+  cache.asset.source_hash = "terrain";
+  HeightFieldGeometry hf;
+  hf.origin = {0.0f, 0.0f, 0.0f};
+  hf.scale = {10.0f, 1.0f, 10.0f};
+  hf.sample_count = 4;
+  hf.samples.assign(16, 0.0f);
+  hf.layer = 0;
+  cache.asset.heightfields.push_back(hf);
+  cache.jolt_version_stamp = 0;  // no meshes → stamp irrelevant
+
+  JoltCollisionBackendFactory factory;
+  auto query = factory.BuildFromCache(cache);
+  ASSERT_TRUE(query.HasValue()) << query.Error().Message();
+
+  RaycastQuery rq;
+  rq.origin = {15.0f, 10.0f, 15.0f};
+  rq.direction = {0.0f, -1.0f, 0.0f};
+  rq.max_distance_m = 100.0f;
+  auto hit = (*query)->Raycast(rq);
+  ASSERT_TRUE(hit.hit);
+  EXPECT_NEAR(hit.position.y, 0.0f, 1e-2f);
 
   jolt::Shutdown();
 }
