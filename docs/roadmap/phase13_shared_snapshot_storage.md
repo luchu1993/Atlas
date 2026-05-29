@@ -224,6 +224,12 @@ load / save / readiness / backup 都已收口在 envelope 命名空间内,改造
 - **Phase 13 F1(machined-lease)**:F1 解决了 lock 跨机,本 RFC 解决了
   state 跨机。两者独立可选 — local file lock + local snapshot 是单机
   开发组合;machined-lease + S3 backend 是多机生产组合。
+- **lease fencing token**:`mgr_generation` epoch 只防在途旧包,不防过期
+  leader 启动一个更高 generation 的 mgr(见 phase13_high_availability.md
+  "防护边界")。真正的跨 leader fencing(machined Acquire 返回单调 fence →
+  穿到 mgr 启动参数 → generation 受其约束)只在多机 / 分区下有意义,且依赖
+  本 RFC 选定的跨机仲裁面(复制 machined / raft 才能提供单调且高可用的
+  fence)。因此 fencing 与本 RFC 的后端选型一并决策,不单独实现。
 - **Phase 15 DBAppMgr**(见 `phase15_dbappmgr.md`):DBAppMgr 的 snapshot
   也走同一个 envelope,这里描述的 backend 切换对它直接生效。
 

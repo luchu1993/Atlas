@@ -86,6 +86,18 @@ abnormal-death restart；live fault-injection 已验证 CellAppMgr 重启后
   `baseappmgr/ha/mgr_generation`、`cellapp/ha/accepted_cellappmgr_generation`、
   `cellapp/ha/cellappmgr_stale_drops`、`reviver/{slug}/heartbeat_mgr_generation`。
   partition / reattach 窗口内旧 mgr 残留 in-flight 包不再污染拓扑决策。
+  - **防护边界（重要）**: epoch 只防**在途旧包** —— generation 由 mgr 自己在
+    Init 铸造（每进程 +1），不由租约权威下发，所以它**不防"过期 leader 启动
+    一个全新、更高 generation 的 mgr"**：那个 mgr 的 generation 反而更大，会被
+    消费端当作"更新"接受。要让 generation 受租约定序（fencing token：machined
+    Acquire 返回单调 fence → 穿到 mgr 启动参数 → `generation = f(fence)`）才能
+    挡住跨 leader 启动。但该防护只在**多机 / 网络分区**下才有意义，而那个场景
+    本身被"machined 自身非 HA + 跨机 snapshot 未解决"阻塞（见
+    [`phase13_shared_snapshot_storage.md`](phase13_shared_snapshot_storage.md)）。
+    因此 fencing 的落地与跨机 HA 选型（共享存储 / 复制 machined / raft）一并决策，
+    暂不单独实现，避免在地基未定时返工。单机 / 单 machined 下，reviver 租约
+    保守到期（本地到期锚定请求发出时刻，不晚于 machined 释放）已消除同一
+    machined 上两个 reviver 的脑裂窗口。
 - **restore gate**: reattach pending 期间 CellAppMgr 冻结 LB tick、elastic grow、
   auto split / merge 和 retire drain 拓扑推进；pending `AddCellToSpaceAck` 未完成的
   Space 不再提前移动 BSP 边界。restore 携带的 pending geometry 若目标 CellApp
