@@ -325,6 +325,60 @@ TEST(JoltPhysicsQuery, RestoreCookedMeshesRejectsTruncatedBlob) {
   jolt::Shutdown();
 }
 
+TEST(JoltPhysicsQuery, GroundProbeRespectsLayerMask) {
+  jolt::Initialize();
+  JoltPhysicsQuery query;
+  // 2m cube on layer 1, top at y=1 (mirrors test_collision_asset Static test).
+  query.AddBox(StaticBox{{-1.0f, -1.0f, -1.0f}, {1.0f, 1.0f, 1.0f}, 1});
+
+  GroundProbeQuery gp;
+  gp.origin = {0.0f, 3.0f, 0.0f};
+  gp.max_distance_m = 4.0f;
+  gp.radius_m = 0.2f;
+  gp.filter.mask.bits = 1u << 1;  // include layer 1
+  auto hit = query.GroundProbe(gp);
+  ASSERT_TRUE(hit.hit);
+  EXPECT_NEAR(hit.position.y, 1.0f, 1e-2f);
+  EXPECT_EQ(hit.layer, 1u);
+
+  gp.filter.mask.bits = 1u;  // layer 0 only — excludes the layer-1 box
+  EXPECT_FALSE(query.GroundProbe(gp).hit);
+
+  jolt::Shutdown();
+}
+
+TEST(JoltPhysicsQuery, RaycastAndCastCapsuleRespectLayerMask) {
+  jolt::Initialize();
+  JoltPhysicsQuery query;
+  query.AddBox(StaticBox{{-1.0f, -1.0f, -1.0f}, {1.0f, 1.0f, 1.0f}, 2});
+
+  RaycastQuery rq;
+  rq.origin = {0.0f, 10.0f, 0.0f};
+  rq.direction = {0.0f, -1.0f, 0.0f};
+  rq.max_distance_m = 100.0f;
+  rq.filter.mask.bits = 1u << 1;  // excludes layer 2
+  EXPECT_FALSE(query.Raycast(rq).hit);
+  rq.filter.mask.bits = 1u << 2;  // includes layer 2
+  auto rhit = query.Raycast(rq);
+  ASSERT_TRUE(rhit.hit);
+  EXPECT_EQ(rhit.layer, 2u);
+
+  // A wall slab on layer 2; the capsule sweep into it is filtered the same way.
+  JoltPhysicsQuery wall;
+  wall.AddBox(StaticBox{{2.0f, 0.0f, -5.0f}, {3.0f, 4.0f, 5.0f}, 2});
+  CapsuleCastQuery cc;
+  cc.capsule.center = {0.0f, 0.0f, 0.0f};
+  cc.capsule.radius_m = 0.35f;
+  cc.capsule.half_height_m = 0.9f;
+  cc.displacement = {5.0f, 0.0f, 0.0f};
+  cc.filter.mask.bits = 1u << 1;  // excludes the layer-2 wall
+  EXPECT_FALSE(wall.CastCapsule(cc).hit);
+  cc.filter.mask.bits = 1u << 2;
+  EXPECT_TRUE(wall.CastCapsule(cc).hit);
+
+  jolt::Shutdown();
+}
+
 TEST(JoltPhysicsQuery, AddPlaneRaycastHitsGround) {
   jolt::Initialize();
   JoltPhysicsQuery query;

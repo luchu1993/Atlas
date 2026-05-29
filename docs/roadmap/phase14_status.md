@@ -98,6 +98,11 @@
 - MVP `Main.unity` 含全 5 种 shape（box×3 / sphere / capsule / mesh / convex）；
   live cluster 加载 7-object cache（含真 cooked-mesh blob + convex hull）无错，
   seed 150/150 NPC。
+- Jolt backend 现按 query `LayerMask` 过滤：每个 body 带自己的 Atlas `layer`
+  作为 Jolt object layer，query 用 `ObjectLayerFilter` 只命中 mask 命中位的
+  layer，`out.layer` 报告命中 body 的真实 layer。修复了此前 Jolt 忽略 layer /
+  mask（per-object `layer` 形同虚设、与 Static 行为分叉）的洞。
+  `layer_mask_excludes_higher_box` parity 场景 + jolt 单测锁住。
 - MVP 碰撞垂直切片已闭合：`Main.unity` → exporter → `main.collision.json` →
   `run_mvp_cluster` cook → `MvpSpace.OnSpaceInit` 经 Jolt backend 加载；
   live cluster 日志确认 `CellApp: loaded collision cache` +

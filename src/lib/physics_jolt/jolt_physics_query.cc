@@ -36,7 +36,6 @@ namespace atlas::physics {
 namespace {
 
 constexpr float kEpsilon = 1e-5f;
-constexpr JPH::ObjectLayer kStaticObjectLayer = 0;
 
 class StaticBPL final : public JPH::BroadPhaseLayerInterface {
  public:
@@ -63,6 +62,19 @@ class AlwaysOLPF final : public JPH::ObjectLayerPairFilter {
   bool ShouldCollide(JPH::ObjectLayer /*a*/, JPH::ObjectLayer /*b*/) const override {
     return true;
   }
+};
+
+// Per-query layer filter: a body's object layer (= its Atlas layer 0..31) is
+// hit only when the query mask has that bit set. Mirrors LayerMask::Contains.
+class MaskObjectLayerFilter final : public JPH::ObjectLayerFilter {
+ public:
+  explicit MaskObjectLayerFilter(uint32_t bits) : bits_(bits) {}
+  bool ShouldCollide(JPH::ObjectLayer layer) const override {
+    return layer < 32 && (bits_ & (1u << layer)) != 0;
+  }
+
+ private:
+  uint32_t bits_;
 };
 
 [[nodiscard]] auto NormalizedDirection(const math::Vector3& direction) -> math::Vector3 {
@@ -137,7 +149,7 @@ void JoltPhysicsQuery::AddBox(const StaticBox& box) {
   if (shape_result.HasError()) return;
 
   JPH::BodyCreationSettings bcs(shape_result.Get(), center, JPH::Quat::sIdentity(),
-                                JPH::EMotionType::Static, kStaticObjectLayer);
+                                JPH::EMotionType::Static, JPH::ObjectLayer(box.layer));
   impl_->system.GetBodyInterface().CreateAndAddBody(bcs, JPH::EActivation::DontActivate);
   impl_->needs_optimize = true;
 }
@@ -156,7 +168,7 @@ void JoltPhysicsQuery::AddPlane(const StaticPlane& plane) {
 
   JPH::BodyCreationSettings bcs(shape_result.Get(), JPH::RVec3::sZero(),
                                 JPH::Quat::sIdentity(), JPH::EMotionType::Static,
-                                kStaticObjectLayer);
+                                JPH::ObjectLayer(plane.layer));
   impl_->system.GetBodyInterface().CreateAndAddBody(bcs, JPH::EActivation::DontActivate);
   impl_->needs_optimize = true;
 }
@@ -170,7 +182,7 @@ void JoltPhysicsQuery::AddSphere(const StaticSphere& sphere) {
 
   const JPH::RVec3 center{sphere.center.x, sphere.center.y, sphere.center.z};
   JPH::BodyCreationSettings bcs(shape_result.Get(), center, JPH::Quat::sIdentity(),
-                                JPH::EMotionType::Static, kStaticObjectLayer);
+                                JPH::EMotionType::Static, JPH::ObjectLayer(sphere.layer));
   impl_->system.GetBodyInterface().CreateAndAddBody(bcs, JPH::EActivation::DontActivate);
   impl_->needs_optimize = true;
 }
@@ -186,13 +198,13 @@ void JoltPhysicsQuery::AddCapsule(const StaticCapsule& capsule) {
   // StaticCapsule.center is the geometric center (unlike the query capsule's foot).
   const JPH::RVec3 center{capsule.center.x, capsule.center.y, capsule.center.z};
   JPH::BodyCreationSettings bcs(shape_result.Get(), center, JPH::Quat::sIdentity(),
-                                JPH::EMotionType::Static, kStaticObjectLayer);
+                                JPH::EMotionType::Static, JPH::ObjectLayer(capsule.layer));
   impl_->system.GetBodyInterface().CreateAndAddBody(bcs, JPH::EActivation::DontActivate);
   impl_->needs_optimize = true;
 }
 
 void JoltPhysicsQuery::AddConvexHull(std::span<const math::Vector3> points,
-                                    ObjectLayer /*layer*/) {
+                                    ObjectLayer layer) {
   if (points.size() < 4) return;
   JPH::Array<JPH::Vec3> jolt_points;
   jolt_points.reserve(points.size());
@@ -207,14 +219,14 @@ void JoltPhysicsQuery::AddConvexHull(std::span<const math::Vector3> points,
 
   JPH::BodyCreationSettings bcs(shape_result.Get(), JPH::RVec3::sZero(),
                                 JPH::Quat::sIdentity(), JPH::EMotionType::Static,
-                                kStaticObjectLayer);
+                                JPH::ObjectLayer(layer));
   impl_->system.GetBodyInterface().CreateAndAddBody(bcs, JPH::EActivation::DontActivate);
   impl_->needs_optimize = true;
 }
 
 void JoltPhysicsQuery::AddMesh(std::span<const math::Vector3> vertices,
                                 std::span<const uint32_t> indices,
-                                ObjectLayer /*layer*/) {
+                                ObjectLayer layer) {
   if (vertices.empty() || indices.size() < 3 || (indices.size() % 3) != 0) return;
 
   JPH::VertexList jolt_vertices;
@@ -237,10 +249,9 @@ void JoltPhysicsQuery::AddMesh(std::span<const math::Vector3> vertices,
   auto shape_result = shape_settings.Create();
   if (shape_result.HasError()) return;
 
-  // Single-layer scheme until the Atlas → Jolt layer table lands.
   JPH::BodyCreationSettings bcs(shape_result.Get(), JPH::RVec3::sZero(),
                                 JPH::Quat::sIdentity(), JPH::EMotionType::Static,
-                                kStaticObjectLayer);
+                                JPH::ObjectLayer(layer));
   impl_->system.GetBodyInterface().CreateAndAddBody(bcs, JPH::EActivation::DontActivate);
   impl_->needs_optimize = true;
 }
@@ -292,7 +303,7 @@ auto JoltPhysicsQuery::CookMeshShape(std::span<const math::Vector3> vertices,
 }
 
 auto JoltPhysicsQuery::AddCookedMeshShape(std::span<const std::byte> cooked,
-                                          ObjectLayer /*layer*/) -> Result<void> {
+                                          ObjectLayer layer) -> Result<void> {
   if (cooked.empty()) {
     return Error{ErrorCode::kInvalidArgument, "AddCookedMeshShape: empty blob"};
   }
@@ -311,7 +322,7 @@ auto JoltPhysicsQuery::AddCookedMeshShape(std::span<const std::byte> cooked,
 
   JPH::BodyCreationSettings bcs(restored.Get(), JPH::RVec3::sZero(),
                                 JPH::Quat::sIdentity(), JPH::EMotionType::Static,
-                                kStaticObjectLayer);
+                                JPH::ObjectLayer(layer));
   impl_->system.GetBodyInterface().CreateAndAddBody(bcs, JPH::EActivation::DontActivate);
   impl_->needs_optimize = true;
   return {};
@@ -404,18 +415,19 @@ auto JoltPhysicsQuery::GroundProbe(const GroundProbeQuery& query) const -> Groun
 
   JPH::ShapeCastSettings settings;
   JPH::ClosestHitCollisionCollector<JPH::CastShapeCollector> collector;
-  impl_->system.GetNarrowPhaseQuery().CastShape(cast, settings, JPH::RVec3::sZero(),
-                                                collector);
+  impl_->system.GetNarrowPhaseQuery().CastShape(
+      cast, settings, JPH::RVec3::sZero(), collector, JPH::BroadPhaseLayerFilter{},
+      MaskObjectLayerFilter(query.filter.mask.bits));
   if (!collector.HadHit()) return out;
 
   const auto& hit = collector.mHit;
   out.hit = true;
   out.distance_m = hit.mFraction * max_distance;
   out.position = {query.origin.x, query.origin.y - out.distance_m, query.origin.z};
-  out.layer = kStaticObjectLayer;
 
   JPH::BodyLockRead lock(impl_->system.GetBodyLockInterface(), hit.mBodyID2);
   if (lock.Succeeded()) {
+    out.layer = static_cast<ObjectLayer>(lock.GetBody().GetObjectLayer());
     const JPH::Vec3 normal = lock.GetBody().GetWorldSpaceSurfaceNormal(
         hit.mSubShapeID2,
         JPH::RVec3{out.position.x, out.position.y, out.position.z});
@@ -439,7 +451,11 @@ auto JoltPhysicsQuery::Raycast(const RaycastQuery& query) const -> RaycastHit {
   const JPH::RRayCast ray{JPH::RVec3{query.origin.x, query.origin.y, query.origin.z},
                           jolt_dir};
   JPH::RayCastResult result;
-  if (!impl_->system.GetNarrowPhaseQuery().CastRay(ray, result)) return out;
+  if (!impl_->system.GetNarrowPhaseQuery().CastRay(
+          ray, result, JPH::BroadPhaseLayerFilter{},
+          MaskObjectLayerFilter(query.filter.mask.bits))) {
+    return out;
+  }
 
   out.hit = true;
   out.fraction = result.mFraction;
@@ -447,10 +463,10 @@ auto JoltPhysicsQuery::Raycast(const RaycastQuery& query) const -> RaycastHit {
   out.position = {query.origin.x + direction.x * out.distance_m,
                   query.origin.y + direction.y * out.distance_m,
                   query.origin.z + direction.z * out.distance_m};
-  out.layer = kStaticObjectLayer;
 
   JPH::BodyLockRead lock(impl_->system.GetBodyLockInterface(), result.mBodyID);
   if (lock.Succeeded()) {
+    out.layer = static_cast<ObjectLayer>(lock.GetBody().GetObjectLayer());
     const JPH::Vec3 normal = lock.GetBody().GetWorldSpaceSurfaceNormal(
         result.mSubShapeID2,
         JPH::RVec3{out.position.x, out.position.y, out.position.z});
@@ -481,8 +497,9 @@ auto JoltPhysicsQuery::CastCapsule(const CapsuleCastQuery& query) const -> Shape
 
   JPH::ShapeCastSettings settings;
   JPH::ClosestHitCollisionCollector<JPH::CastShapeCollector> collector;
-  impl_->system.GetNarrowPhaseQuery().CastShape(cast, settings, JPH::RVec3::sZero(),
-                                                collector);
+  impl_->system.GetNarrowPhaseQuery().CastShape(
+      cast, settings, JPH::RVec3::sZero(), collector, JPH::BroadPhaseLayerFilter{},
+      MaskObjectLayerFilter(query.filter.mask.bits));
   if (!collector.HadHit()) return out;
 
   const auto& hit = collector.mHit;
@@ -492,7 +509,10 @@ auto JoltPhysicsQuery::CastCapsule(const CapsuleCastQuery& query) const -> Shape
   out.position = {query.capsule.center.x + query.displacement.x * hit.mFraction,
                   query.capsule.center.y + query.displacement.y * hit.mFraction,
                   query.capsule.center.z + query.displacement.z * hit.mFraction};
-  out.layer = kStaticObjectLayer;
+  {
+    JPH::BodyLockRead lock(impl_->system.GetBodyLockInterface(), hit.mBodyID2);
+    if (lock.Succeeded()) out.layer = static_cast<ObjectLayer>(lock.GetBody().GetObjectLayer());
+  }
 
   // mPenetrationAxis points into the obstacle; surface normal is the opposite.
   // Defensive normalize: Jolt does not guarantee unit length at edge contacts.
@@ -522,9 +542,9 @@ auto JoltPhysicsQuery::OverlapCapsule(const OverlapQuery& query) const -> bool {
   const JPH::RMat44 transform = JPH::RMat44::sTranslation(JoltCapsuleCenter(query.capsule));
   JPH::CollideShapeSettings settings;
   JPH::AnyHitCollisionCollector<JPH::CollideShapeCollector> collector;
-  impl_->system.GetNarrowPhaseQuery().CollideShape(&capsule, JPH::Vec3::sReplicate(1.0f),
-                                                   transform, settings, JPH::RVec3::sZero(),
-                                                   collector);
+  impl_->system.GetNarrowPhaseQuery().CollideShape(
+      &capsule, JPH::Vec3::sReplicate(1.0f), transform, settings, JPH::RVec3::sZero(),
+      collector, JPH::BroadPhaseLayerFilter{}, MaskObjectLayerFilter(query.filter.mask.bits));
   return collector.HadHit();
 }
 
@@ -548,9 +568,9 @@ auto JoltPhysicsQuery::DepenetrateCapsule(const OverlapQuery& query) const -> De
   // ClosestHit so we take the deepest single contact; multi-body resolution belongs
   // to the motor, not the query.
   JPH::ClosestHitCollisionCollector<JPH::CollideShapeCollector> collector;
-  impl_->system.GetNarrowPhaseQuery().CollideShape(&capsule, JPH::Vec3::sReplicate(1.0f),
-                                                   transform, settings, JPH::RVec3::sZero(),
-                                                   collector);
+  impl_->system.GetNarrowPhaseQuery().CollideShape(
+      &capsule, JPH::Vec3::sReplicate(1.0f), transform, settings, JPH::RVec3::sZero(),
+      collector, JPH::BroadPhaseLayerFilter{}, MaskObjectLayerFilter(query.filter.mask.bits));
   if (!collector.HadHit()) return out;
 
   const auto& hit = collector.mHit;
@@ -568,7 +588,8 @@ auto JoltPhysicsQuery::DepenetrateCapsule(const OverlapQuery& query) const -> De
   out.normal = normal;
   out.depth_m = hit.mPenetrationDepth;
   out.offset = {normal.x * out.depth_m, normal.y * out.depth_m, normal.z * out.depth_m};
-  out.layer = kStaticObjectLayer;
+  JPH::BodyLockRead lock(impl_->system.GetBodyLockInterface(), hit.mBodyID2);
+  if (lock.Succeeded()) out.layer = static_cast<ObjectLayer>(lock.GetBody().GetObjectLayer());
   return out;
 }
 

@@ -160,7 +160,9 @@ bytes 8..    raw float32 顶点 + uint32 索引，按 JSON 中的字节偏移寻
 Static backend 只加载 box / plane，忽略 sphere / capsule / mesh / convex；
 Jolt backend (`atlas_physics_jolt`) 通过 `AddSphere` / `AddCapsule` /
 `AddConvexHull` / `AddMesh` 跑对应静态 body。parity gate 维持在两后端都支持的
-box / plane 形状上。
+box / plane 形状上。两后端都按 query 的 `LayerMask` 过滤：每个 body 带自己的
+Atlas `layer`（Jolt 用作 object layer），query 只命中 mask 命中位的 layer
+（`layer_mask_excludes_higher_box` parity 场景锁住 Static / Jolt 的一致性）。
 Space 可通过 collision asset 安装自己的 Static query；手工替换 query 时会
 清除 asset metadata，避免观测状态和实际 backend 漂移。Cell C# 脚本可调用
 `CellServerEntity.LoadCollisionAsset(spaceId, path)` 给既有 Space 装载同一资源。

@@ -32,7 +32,7 @@ auto RunScenario(const ParityScenario& scenario, BackendKind backend)
   if (!query) return {};
 
   movement::PhysicsCharacterQuery character_query(*query, scenario.ground_probe_distance_m,
-                                                  LayerMask{},
+                                                  scenario.query_mask,
                                                   scenario.ground_probe_radius_m);
   movement::MovementState state = scenario.initial_state;
   std::vector<PerTickRecord> records;

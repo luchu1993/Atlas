@@ -225,6 +225,51 @@ constexpr float kGiantBoxThickness = 100.0f;
   return s;
 }
 
+// Two stacked boxes on distinct layers; a query mask that excludes the higher
+// one must let the capsule fall through it onto the lower box. Locks that the
+// Jolt backend honours layer masks exactly like Static (regression for the
+// previously-ignored per-object layer / query filter).
+[[nodiscard]] auto MakeLayeredBoxesBackend(BackendKind kind)
+    -> std::unique_ptr<PhysicsQuery> {
+  const StaticBox low{{-5.0f, -1.0f, -5.0f}, {5.0f, 0.0f, 5.0f}, 1};
+  const StaticBox high{{-5.0f, 2.0f, -5.0f}, {5.0f, 3.0f, 5.0f}, 2};
+  switch (kind) {
+    case BackendKind::kFlat:
+      return nullptr;
+    case BackendKind::kStatic: {
+      auto query =
+          std::make_unique<StaticPhysicsQuery>(StaticGroundMode::kDisabled, -1000.0f);
+      query->AddBox(low);
+      query->AddBox(high);
+      return query;
+    }
+    case BackendKind::kJolt: {
+#ifdef ATLAS_PARITY_HAS_JOLT
+      auto query = std::make_unique<JoltPhysicsQuery>();
+      query->AddBox(low);
+      query->AddBox(high);
+      return query;
+#else
+      return nullptr;
+#endif
+    }
+  }
+  return nullptr;
+}
+
+[[nodiscard]] auto LayerMaskExcludesHigherBox() -> ParityScenario {
+  ParityScenario s;
+  s.id = "layer_mask_excludes_higher_box";
+  s.initial_state = InitialStateInAir(6.0f);
+  s.inputs = {IdleInput()};
+  s.tick_count = 180;
+  s.tolerance = kNormalTolerance;
+  s.query_mask = LayerMask{1u << 1};  // layer 1 only — excludes the layer-2 high box
+  s.backends = {BackendKind::kStatic, BackendKind::kJolt};
+  s.make_query = [](BackendKind kind) { return MakeLayeredBoxesBackend(kind); };
+  return s;
+}
+
 }  // namespace
 
 auto AllScenarios() -> std::vector<ParityScenario> {
@@ -235,6 +280,7 @@ auto AllScenarios() -> std::vector<ParityScenario> {
       BoxDropToTop(),
       BoxWalkSteady(),
       MeshWalkLongPath(),
+      LayerMaskExcludesHigherBox(),
   };
 }
 

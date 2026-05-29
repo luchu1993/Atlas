@@ -85,6 +85,8 @@ struct ParityScenario {
   uint32_t tick_count{0};
   float ground_probe_distance_m{2.0f};
   float ground_probe_radius_m{0.35f};
+  // Layer mask the movement queries run with (default: all layers).
+  LayerMask query_mask{};
   ToleranceProfile tolerance{kNormalTolerance};
   std::vector<BackendKind> backends;
   std::function<std::unique_ptr<PhysicsQuery>(BackendKind)> make_query;
