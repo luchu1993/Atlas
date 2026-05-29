@@ -3,6 +3,8 @@
 #include <algorithm>
 #include <iterator>
 
+#include "movement_sim/movement_sim.h"
+
 namespace atlas {
 namespace {
 
@@ -42,11 +44,12 @@ void MovementPositionHistoryStore::Record(EntityID entity_id, uint32_t server_ti
 
   auto& history = histories_[entity_id];
   if (!history.empty()) {
-    if (server_tick < history.back().server_tick) return;
-    if (server_tick == history.back().server_tick) {
+    const auto back_tick = history.back().server_tick;
+    if (server_tick == back_tick) {
       history.back() = MovementPositionSample{server_tick, state};
       return;
     }
+    if (!movement::IsInputSequenceNewer(server_tick, back_tick)) return;
   }
 
   history.push_back(MovementPositionSample{server_tick, state});

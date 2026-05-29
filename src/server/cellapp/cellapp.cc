@@ -84,10 +84,13 @@ void SaturatingAdd(uint64_t& value, uint64_t delta) {
   value = delta > max - value ? max : value + delta;
 }
 
+// Wrap (low 32 bits) instead of saturate: saturation would stick every
+// future call at UINT32_MAX once GameTime crosses ~4.5 years @ 30Hz,
+// turning history Record into a single-sample overwrite. Wrap is safe
+// because callers compare via movement::IsInputSequenceNewer (signed
+// delta in upper-half-mod), which handles the boundary correctly.
 auto ClampMovementServerTick(uint64_t game_time) -> uint32_t {
-  return game_time > std::numeric_limits<uint32_t>::max()
-             ? std::numeric_limits<uint32_t>::max()
-             : static_cast<uint32_t>(game_time);
+  return static_cast<uint32_t>(game_time);
 }
 
 constexpr int32_t kMaxPersistentBlobBytes = 256 * 1024;

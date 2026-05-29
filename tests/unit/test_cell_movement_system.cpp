@@ -225,6 +225,26 @@ TEST(CellMovementSystem, TickPublishesStateAckOnInputDrain) {
   EXPECT_EQ(host.state_acks[0].state.last_processed_input_seq, 1u);
 }
 
+TEST(CellMovementSystem, PositionHistoryRecordAcceptsTickAcrossU32Wrap) {
+  CellMovementSystem system;
+  CapturingHost host;
+  MovementState state{};
+  state.position = {0.0f, 0.0f, 1.0f};
+  // Seed history just below the wrap boundary; then a sample just past
+  // the wrap should still be accepted as "newer" via signed-delta logic.
+  const uint32_t near_max = std::numeric_limits<uint32_t>::max() - 1u;
+  system.position_history().Record(99u, near_max, state);
+  system.position_history().Record(99u, near_max + 1u, state);  // == max
+  system.position_history().Record(99u, near_max + 2u, state);  // wrapped to 0
+  system.position_history().Record(99u, 1u, state);
+  const auto* history = system.position_history().Find(99u);
+  ASSERT_NE(history, nullptr);
+  // 4 distinct samples logged across the wrap; the last one's raw tick
+  // value is 1 even though it's the newest in time-order.
+  EXPECT_EQ(history->size(), 4u);
+  EXPECT_EQ(history->back().server_tick, 1u);
+}
+
 TEST(CellMovementSystem, SetCommandSameIdReturnsTrueWithoutResettingElapsedMs) {
   CellMovementSystem system;
   MovementCurve linear{};
