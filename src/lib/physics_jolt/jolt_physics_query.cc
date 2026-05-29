@@ -26,6 +26,7 @@
 #include <Jolt/Physics/Collision/Shape/BoxShape.h>
 #include <Jolt/Physics/Collision/Shape/CapsuleShape.h>
 #include <Jolt/Physics/Collision/Shape/MeshShape.h>
+#include <Jolt/Physics/Collision/Shape/PlaneShape.h>
 #include <Jolt/Physics/Collision/Shape/SphereShape.h>
 #include <Jolt/Physics/Collision/ShapeCast.h>
 
@@ -136,6 +137,25 @@ void JoltPhysicsQuery::AddBox(const StaticBox& box) {
 
   JPH::BodyCreationSettings bcs(shape_result.Get(), center, JPH::Quat::sIdentity(),
                                 JPH::EMotionType::Static, kStaticObjectLayer);
+  impl_->system.GetBodyInterface().CreateAndAddBody(bcs, JPH::EActivation::DontActivate);
+  impl_->needs_optimize = true;
+}
+
+void JoltPhysicsQuery::AddPlane(const StaticPlane& plane) {
+  const math::Vector3 n = plane.normal.Normalized();
+  if (n.LengthSquared() <= kEpsilon) return;
+  // Jolt's PlaneShape treats the negative half-space as solid, which matches
+  // the Atlas convention that the ground sits below its upward normal.
+  const JPH::Plane jolt_plane = JPH::Plane::sFromPointAndNormal(
+      JPH::Vec3{plane.point.x, plane.point.y, plane.point.z}, JPH::Vec3{n.x, n.y, n.z});
+  JPH::PlaneShapeSettings shape_settings(jolt_plane);
+  shape_settings.SetEmbedded();
+  auto shape_result = shape_settings.Create();
+  if (shape_result.HasError()) return;
+
+  JPH::BodyCreationSettings bcs(shape_result.Get(), JPH::RVec3::sZero(),
+                                JPH::Quat::sIdentity(), JPH::EMotionType::Static,
+                                kStaticObjectLayer);
   impl_->system.GetBodyInterface().CreateAndAddBody(bcs, JPH::EActivation::DontActivate);
   impl_->needs_optimize = true;
 }

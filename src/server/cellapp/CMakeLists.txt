@@ -39,6 +39,10 @@ target_link_libraries(atlas_cellapp_lib PUBLIC
   atlas_cellappmgr_messages
   atlas_cellappmgr_bsp
 )
+if(ATLAS_ENABLE_JOLT)
+  target_link_libraries(atlas_cellapp_lib PUBLIC atlas_physics_jolt)
+  target_compile_definitions(atlas_cellapp_lib PUBLIC ATLAS_CELLAPP_HAS_JOLT)
+endif()
 
 # The CellApp executable.
 add_executable(atlas_cellapp main.cc)

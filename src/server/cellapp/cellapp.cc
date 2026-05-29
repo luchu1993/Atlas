@@ -46,6 +46,11 @@
 #include "space.h"
 #include "witness.h"
 
+#ifdef ATLAS_CELLAPP_HAS_JOLT
+#include "physics_jolt/jolt_collision_backend.h"
+#include "physics_jolt/jolt_init.h"
+#endif
+
 namespace atlas {
 
 namespace {
@@ -191,6 +196,11 @@ auto CellApp::CreateNativeProvider() -> std::unique_ptr<INativeApiProvider> {
 
 auto CellApp::Init(int argc, char* argv[]) -> bool {
   if (!EntityApp::Init(argc, argv)) return false;
+
+#ifdef ATLAS_CELLAPP_HAS_JOLT
+  physics::jolt::Initialize();
+  collision_backend_factory_ = std::make_shared<physics::JoltCollisionBackendFactory>();
+#endif
 
   auto& table = Network().InterfaceTable();
 
@@ -468,7 +478,18 @@ void CellApp::Fini() {
   // destructors may publish final witness events.
   spaces_.clear();
   entity_population_.clear();
+#ifdef ATLAS_CELLAPP_HAS_JOLT
+  // Spaces (and their Jolt-backed queries) are gone; safe to drop Jolt globals.
+  collision_backend_factory_.reset();
+  physics::jolt::Shutdown();
+#endif
   EntityApp::Fini();
+}
+
+auto CellApp::MakeSpace(SpaceID id) -> std::unique_ptr<Space> {
+  auto space = std::make_unique<Space>(id);
+  space->SetCollisionBackendFactory(collision_backend_factory_);
+  return space;
 }
 
 void CellApp::OnEndOfTick() {
@@ -1173,7 +1194,7 @@ void CellApp::OnCreateCellEntity(const Address& src, Channel* ch,
 
   auto* space = FindSpace(msg.space_id);
   if (!space) {
-    auto inserted = spaces_.emplace(msg.space_id, std::make_unique<Space>(msg.space_id));
+    auto inserted = spaces_.emplace(msg.space_id, MakeSpace(msg.space_id));
     space = inserted.first->second.get();
     ATLAS_LOG_INFO("CellApp: auto-created Space {} for CreateCellEntity", msg.space_id);
   }
@@ -1236,7 +1257,7 @@ auto CellApp::CreateLocalEntity(uint16_t type_id, SpaceID space_id, math::Vector
 
   auto* space = FindSpace(space_id);
   if (!space) {
-    auto inserted = spaces_.emplace(space_id, std::make_unique<Space>(space_id));
+    auto inserted = spaces_.emplace(space_id, MakeSpace(space_id));
     space = inserted.first->second.get();
     ATLAS_LOG_INFO("CellApp: auto-created Space {} for CreateLocalEntity", space_id);
   }
@@ -1497,7 +1518,7 @@ void CellApp::OnCreateSpace(const Address& /*src*/, Channel* /*ch*/,
     ATLAS_LOG_WARNING("CellApp: CreateSpace for existing space_id={}", msg.space_id);
     return;
   }
-  spaces_.emplace(msg.space_id, std::make_unique<Space>(msg.space_id));
+  spaces_.emplace(msg.space_id, MakeSpace(msg.space_id));
 }
 
 void CellApp::OnDestroySpace(const Address& /*src*/, Channel* /*ch*/,
@@ -1833,14 +1854,18 @@ auto CellApp::LoadCollisionAsset(SpaceID space_id, std::string_view path) -> boo
     return false;
   }
   const auto asset_path = std::filesystem::path(std::string(path));
-  auto result = space->LoadCollisionAssetFromFile(asset_path);
+  // Cooked caches build through the injected backend (Jolt); raw JSON stays on
+  // the uncooked Static dev path.
+  const bool is_cache = asset_path.extension() == ".collisioncache";
+  auto result = is_cache ? space->LoadCollisionCacheFromFile(asset_path)
+                         : space->LoadCollisionAssetFromFile(asset_path);
   if (!result) {
     ATLAS_LOG_ERROR("CellApp: LoadCollisionAsset failed for space {} path {}: {}", space_id,
                     asset_path.string(), result.Error().Message());
     return false;
   }
-  ATLAS_LOG_INFO("CellApp: loaded collision asset for space {} path {}", space_id,
-                 asset_path.string());
+  ATLAS_LOG_INFO("CellApp: loaded collision {} for space {} path {}",
+                 is_cache ? "cache" : "asset", space_id, asset_path.string());
   return true;
 }
 
@@ -1954,7 +1979,7 @@ void CellApp::OnCreateGhost(const Address& src, Channel* ch, const cellapp::Crea
 
   auto* space = FindSpace(msg.space_id);
   if (!space) {
-    auto inserted = spaces_.emplace(msg.space_id, std::make_unique<Space>(msg.space_id));
+    auto inserted = spaces_.emplace(msg.space_id, MakeSpace(msg.space_id));
     space = inserted.first->second.get();
     ATLAS_LOG_INFO("CellApp: auto-created Space {} for incoming Ghost", msg.space_id);
   }
@@ -2102,7 +2127,7 @@ void CellApp::OnOffloadEntity(const Address& src, Channel* ch, const cellapp::Of
       SendOffloadReject(ch, src, msg.entity_id, cellapp::OffloadRejectReason::kTargetMissing);
       return;
     }
-    auto inserted = spaces_.emplace(msg.space_id, std::make_unique<Space>(msg.space_id));
+    auto inserted = spaces_.emplace(msg.space_id, MakeSpace(msg.space_id));
     space = inserted.first->second.get();
     ATLAS_LOG_INFO("CellApp: auto-created Space {} for incoming Offload", msg.space_id);
   }
@@ -2449,7 +2474,7 @@ void CellApp::OnAddCellToSpace(const Address& /*src*/, Channel* ch,
   if (!AcceptCellAppMgrMessage(ch, msg.mgr_generation, "AddCellToSpace")) return;
   auto* space = FindSpace(msg.space_id);
   if (!space) {
-    auto inserted = spaces_.emplace(msg.space_id, std::make_unique<Space>(msg.space_id));
+    auto inserted = spaces_.emplace(msg.space_id, MakeSpace(msg.space_id));
     space = inserted.first->second.get();
   }
   bool already_present = space->FindLocalCell(msg.cell_id) != nullptr;

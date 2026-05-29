@@ -1,4 +1,5 @@
 add_library(atlas_physics_jolt STATIC
+  jolt_collision_backend.cc
   jolt_init.cc
   jolt_physics_query.cc
 )

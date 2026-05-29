@@ -76,6 +76,15 @@
 - `atlas_tool recook --invalid <dir>` 递归扫描 `.collisioncache`，对
   stamp mismatch / 有 mesh 但 cooked 为空的 cache 自动从同名 source
   `.collision.json` 重 cook。
+- `physics::CollisionBackendFactory` 抽象接口（physics 层）+
+  `JoltCollisionBackendFactory`（physics_jolt 层）把 cooked cache 变成运行时
+  `PhysicsQuery`。CellApp 在 Init 注入 Jolt factory（`ATLAS_ENABLE_JOLT` 下），
+  每个 Space 创建时继承；Jolt 类型不出 `physics_jolt` 边界。
+- `Space::LoadCollisionCacheFromFile` 走 factory：mesh-bearing cache 必须
+  stamp 匹配且 cooked 非空（`RestoreCookedMeshes` 跳过 BVH 重建），否则报错
+  不降级；无 factory 时 box/plane cache 退回 Static，mesh cache 直接拒绝。
+  `CellApp::LoadCollisionAsset` 按扩展名分流：`.collisioncache` 走 cache
+  路径，`.collision.json` 仍走 uncooked Static dev 路径。
 - `Atlas.Mvp.Editor.AtlasCollisionExporter` 在 Unity batch mode 下扫
   `ServerColliderAuthoring(exportToServer=true)`，把 axis-aligned
   `BoxCollider` 写成 collision asset v2 JSON；旋转 box / sphere /

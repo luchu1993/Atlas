@@ -6,6 +6,7 @@
 #include "cell_entity.h"
 #include "foundation/profiler.h"
 #include "physics/collision_asset.h"
+#include "physics/collision_backend.h"
 
 namespace atlas {
 
@@ -99,10 +100,39 @@ void Space::SetCollisionAsset(const physics::CollisionAsset& asset) {
   collision_asset_object_count_ = asset.boxes.size() + asset.planes.size();
 }
 
+void Space::SetCollisionBackendFactory(
+    std::shared_ptr<const physics::CollisionBackendFactory> factory) {
+  collision_backend_factory_ = std::move(factory);
+}
+
 auto Space::LoadCollisionAssetFromFile(const std::filesystem::path& path) -> Result<void> {
   auto asset = physics::LoadCollisionAssetFromFile(path);
   if (!asset) return asset.Error();
   SetCollisionAsset(*asset);
+  return {};
+}
+
+auto Space::LoadCollisionCacheFromFile(const std::filesystem::path& path) -> Result<void> {
+  auto cache = physics::LoadCollisionCacheFromFile(path);
+  if (!cache) return cache.Error();
+
+  if (collision_backend_factory_ != nullptr) {
+    auto query = collision_backend_factory_->BuildFromCache(*cache);
+    if (!query) return query.Error();
+    physics_query_ = std::move(*query);
+    collision_asset_source_hash_ = cache->asset.source_hash;
+    collision_asset_object_count_ =
+        cache->asset.boxes.size() + cache->asset.planes.size() + cache->asset.meshes.size();
+    return {};
+  }
+
+  // No backend injected: box/plane caches still build a Static query, but a
+  // mesh-bearing cache has no representable backend — reject, don't degrade.
+  if (!cache->asset.meshes.empty()) {
+    return Error{ErrorCode::kNotSupported,
+                 "collision cache contains meshes but no physics backend is configured"};
+  }
+  SetCollisionAsset(cache->asset);
   return {};
 }
 

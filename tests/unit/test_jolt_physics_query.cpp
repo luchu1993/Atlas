@@ -1,6 +1,8 @@
 #include <gtest/gtest.h>
 
 #include "movement_sim/movement_sim.h"
+#include "physics/collision_asset.h"
+#include "physics_jolt/jolt_collision_backend.h"
 #include "physics_jolt/jolt_init.h"
 #include "physics_jolt/jolt_physics_query.h"
 
@@ -320,6 +322,115 @@ TEST(JoltPhysicsQuery, RestoreCookedMeshesRejectsTruncatedBlob) {
   auto restored = query.RestoreCookedMeshes(*blob);
   ASSERT_FALSE(restored.HasValue());
   EXPECT_EQ(restored.Error().Code(), ErrorCode::kInvalidArgument);
+  jolt::Shutdown();
+}
+
+TEST(JoltPhysicsQuery, AddPlaneRaycastHitsGround) {
+  jolt::Initialize();
+  JoltPhysicsQuery query;
+  StaticPlane plane;
+  plane.point = {0.0f, 0.0f, 0.0f};
+  plane.normal = {0.0f, 1.0f, 0.0f};
+  query.AddPlane(plane);
+
+  RaycastQuery rq;
+  rq.origin = {0.0f, 10.0f, 0.0f};
+  rq.direction = {0.0f, -1.0f, 0.0f};
+  rq.max_distance_m = 100.0f;
+  auto hit = query.Raycast(rq);
+  ASSERT_TRUE(hit.hit);
+  EXPECT_NEAR(hit.position.y, 0.0f, 1e-2f);
+  EXPECT_NEAR(hit.normal.y, 1.0f, 1e-2f);
+
+  jolt::Shutdown();
+}
+
+TEST(JoltCollisionBackend, BuildsBoxOnlyCacheWithoutStampDependency) {
+  jolt::Initialize();
+  LoadedCollisionCache cache;
+  cache.asset.source_hash = "box";
+  cache.asset.boxes.push_back(StaticBox{{-1.0f, -1.0f, -1.0f}, {1.0f, 1.0f, 1.0f}, 0});
+  cache.jolt_version_stamp = 0;  // irrelevant when there are no cooked meshes
+
+  JoltCollisionBackendFactory factory;
+  auto query = factory.BuildFromCache(cache);
+  ASSERT_TRUE(query.HasValue()) << query.Error().Message();
+
+  RaycastQuery rq;
+  rq.origin = {0.0f, 10.0f, 0.0f};
+  rq.direction = {0.0f, -1.0f, 0.0f};
+  rq.max_distance_m = 100.0f;
+  EXPECT_TRUE((*query)->Raycast(rq).hit);
+
+  jolt::Shutdown();
+}
+
+TEST(JoltCollisionBackend, BuildsMeshCacheFromCookedBlob) {
+  jolt::Initialize();
+  LoadedCollisionCache cache;
+  cache.asset.source_hash = "mesh";
+  MeshGeometry mesh;
+  mesh.layer = 0;
+  mesh.vertices = {{-5.0f, 0.0f, -5.0f}, {5.0f, 0.0f, -5.0f},
+                   {5.0f, 0.0f, 5.0f}, {-5.0f, 0.0f, 5.0f}};
+  mesh.indices = {0, 2, 1, 0, 3, 2};
+  cache.asset.meshes.push_back(mesh);
+  auto cooked = JoltPhysicsQuery::CookCollisionMeshes(cache.asset.meshes);
+  ASSERT_TRUE(cooked.HasValue());
+  cache.cooked = *cooked;
+  cache.jolt_version_stamp = JoltPhysicsQuery::CurrentJoltStamp();
+
+  JoltCollisionBackendFactory factory;
+  auto query = factory.BuildFromCache(cache);
+  ASSERT_TRUE(query.HasValue()) << query.Error().Message();
+
+  RaycastQuery rq;
+  rq.origin = {0.0f, 10.0f, 0.0f};
+  rq.direction = {0.0f, -1.0f, 0.0f};
+  rq.max_distance_m = 100.0f;
+  auto hit = (*query)->Raycast(rq);
+  ASSERT_TRUE(hit.hit);
+  EXPECT_NEAR(hit.position.y, 0.0f, 1e-2f);
+
+  jolt::Shutdown();
+}
+
+TEST(JoltCollisionBackend, RejectsMeshCacheWithStaleStamp) {
+  jolt::Initialize();
+  LoadedCollisionCache cache;
+  cache.asset.source_hash = "mesh";
+  MeshGeometry mesh;
+  mesh.vertices = {{-1.0f, 0.0f, -1.0f}, {1.0f, 0.0f, -1.0f},
+                   {1.0f, 0.0f, 1.0f}, {-1.0f, 0.0f, 1.0f}};
+  mesh.indices = {0, 2, 1, 0, 3, 2};
+  cache.asset.meshes.push_back(mesh);
+  cache.cooked = *JoltPhysicsQuery::CookCollisionMeshes(cache.asset.meshes);
+  cache.jolt_version_stamp = JoltPhysicsQuery::CurrentJoltStamp() ^ 0xFFu;
+
+  JoltCollisionBackendFactory factory;
+  auto query = factory.BuildFromCache(cache);
+  ASSERT_FALSE(query.HasValue());
+  EXPECT_EQ(query.Error().Code(), ErrorCode::kNotSupported);
+
+  jolt::Shutdown();
+}
+
+TEST(JoltCollisionBackend, RejectsMeshCacheWithMissingCookedBlob) {
+  jolt::Initialize();
+  LoadedCollisionCache cache;
+  cache.asset.source_hash = "mesh";
+  MeshGeometry mesh;
+  mesh.vertices = {{-1.0f, 0.0f, -1.0f}, {1.0f, 0.0f, -1.0f}, {1.0f, 0.0f, 1.0f}};
+  mesh.indices = {0, 2, 1};
+  cache.asset.meshes.push_back(mesh);
+  cache.jolt_version_stamp = JoltPhysicsQuery::CurrentJoltStamp();
+  // cooked deliberately left empty
+
+  JoltCollisionBackendFactory factory;
+  auto query = factory.BuildFromCache(cache);
+  ASSERT_FALSE(query.HasValue());
+  EXPECT_EQ(query.Error().Code(), ErrorCode::kInvalidArgument);
+
   jolt::Shutdown();
 }
 

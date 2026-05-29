@@ -1,5 +1,9 @@
+#include <cstddef>
+#include <cstring>
 #include <filesystem>
 #include <memory>
+#include <span>
+#include <vector>
 
 #include <gtest/gtest.h>
 
@@ -8,6 +12,7 @@
 #include "cellappmgr/bsp_tree.h"
 #include "math/vector3.h"
 #include "physics/collision_asset.h"
+#include "physics/collision_backend.h"
 #include "physics/physics_query.h"
 #include "platform/filesystem.h"
 #include "space.h"
@@ -196,6 +201,121 @@ TEST(Space, SetPhysicsQueryClearsCollisionAssetMetadata) {
 
   EXPECT_TRUE(space.CollisionAssetSourceHash().empty());
   EXPECT_EQ(space.CollisionAssetObjectCount(), 0u);
+}
+
+namespace {
+
+// Builds an ACOL side-car holding one XZ quad at y=0 (mirrors the asset tests).
+auto MakeQuadMeshBuffer() -> std::vector<std::byte> {
+  const float verts[12] = {-5.0f, 0.0f, -5.0f, 5.0f, 0.0f, -5.0f,
+                            5.0f, 0.0f, 5.0f, -5.0f, 0.0f, 5.0f};
+  const uint32_t indices[6] = {0, 2, 1, 0, 3, 2};
+  std::vector<std::byte> bytes(physics::kCollisionMeshBufferHeaderBytes + sizeof(verts) +
+                               sizeof(indices));
+  std::memcpy(bytes.data(), physics::kCollisionMeshBufferMagic.data(), 4);
+  const uint32_t version = physics::kCollisionMeshBufferVersion;
+  std::memcpy(bytes.data() + 4, &version, sizeof(version));
+  std::memcpy(bytes.data() + physics::kCollisionMeshBufferHeaderBytes, verts, sizeof(verts));
+  std::memcpy(bytes.data() + physics::kCollisionMeshBufferHeaderBytes + sizeof(verts), indices,
+              sizeof(indices));
+  return bytes;
+}
+
+auto WriteCacheFile(const std::filesystem::path& path, std::span<const std::byte> bytes)
+    -> bool {
+  return fs::WriteFile(path, bytes).HasValue();
+}
+
+// Hands every BuildFromCache call a flat ground at a fixed height, so a test
+// can prove the installed query came from the factory and not the Static path.
+class StubBackendFactory final : public physics::CollisionBackendFactory {
+ public:
+  explicit StubBackendFactory(float ground_y) : ground_y_(ground_y) {}
+  [[nodiscard]] auto BuildFromCache(const physics::LoadedCollisionCache&) const
+      -> Result<std::unique_ptr<physics::PhysicsQuery>> override {
+    return std::unique_ptr<physics::PhysicsQuery>(
+        std::make_unique<physics::FlatPhysicsQuery>(ground_y_));
+  }
+
+ private:
+  float ground_y_;
+};
+
+}  // namespace
+
+TEST(Space, LoadCollisionCacheBoxOnlyBuildsStaticWithoutFactory) {
+  constexpr const char* kJson = R"({
+    "version": 1,
+    "coordinate_system": "x_right_y_up_z_forward_meters",
+    "source_hash": "cachebox",
+    "objects": [{"shape": "box", "min": [-1, 0, -1], "max": [1, 2, 1], "layer": 2}]
+  })";
+  auto bytes = physics::WriteCollisionCacheBytes(kJson, {}, "cachebox");
+  const auto path = fs::TempDirectory() / "atlas_space_box.collisioncache";
+  ASSERT_TRUE(WriteCacheFile(path, std::span<const std::byte>(bytes)));
+
+  Space space(1);
+  auto result = space.LoadCollisionCacheFromFile(path);
+  ASSERT_TRUE(result.HasValue()) << result.Error().Message();
+  EXPECT_EQ(space.CollisionAssetSourceHash(), "cachebox");
+
+  physics::GroundProbeQuery query;
+  query.origin = {0.0f, 5.0f, 0.0f};
+  query.max_distance_m = 6.0f;
+  query.filter.mask.bits = 1u << 2;
+  const auto hit = space.PhysicsQuery().GroundProbe(query);
+  ASSERT_TRUE(hit.hit);
+  EXPECT_FLOAT_EQ(hit.position.y, 2.0f);
+  std::filesystem::remove(path);
+}
+
+TEST(Space, LoadCollisionCacheWithMeshRejectedWithoutFactory) {
+  const auto mesh_buffer = MakeQuadMeshBuffer();
+  constexpr const char* kJson = R"({
+    "version": 2,
+    "coordinate_system": "x_right_y_up_z_forward_meters",
+    "source_hash": "cachemesh",
+    "objects": [{"shape": "mesh", "layer": 0,
+      "vertex_byte_offset": 8, "vertex_count": 4,
+      "index_byte_offset": 56, "index_count": 6}]
+  })";
+  auto bytes = physics::WriteCollisionCacheBytes(kJson, std::span<const std::byte>(mesh_buffer),
+                                                 "cachemesh");
+  const auto path = fs::TempDirectory() / "atlas_space_mesh.collisioncache";
+  ASSERT_TRUE(WriteCacheFile(path, std::span<const std::byte>(bytes)));
+
+  Space space(1);
+  auto result = space.LoadCollisionCacheFromFile(path);
+  ASSERT_FALSE(result.HasValue());
+  EXPECT_EQ(result.Error().Code(), ErrorCode::kNotSupported);
+  std::filesystem::remove(path);
+}
+
+TEST(Space, LoadCollisionCacheRoutesThroughInjectedFactory) {
+  constexpr const char* kJson = R"({
+    "version": 1,
+    "coordinate_system": "x_right_y_up_z_forward_meters",
+    "source_hash": "viafactory",
+    "objects": [{"shape": "box", "min": [-1, 0, -1], "max": [1, 2, 1], "layer": 2}]
+  })";
+  auto bytes = physics::WriteCollisionCacheBytes(kJson, {}, "viafactory");
+  const auto path = fs::TempDirectory() / "atlas_space_factory.collisioncache";
+  ASSERT_TRUE(WriteCacheFile(path, std::span<const std::byte>(bytes)));
+
+  Space space(1);
+  space.SetCollisionBackendFactory(std::make_shared<StubBackendFactory>(7.0f));
+  auto result = space.LoadCollisionCacheFromFile(path);
+  ASSERT_TRUE(result.HasValue()) << result.Error().Message();
+
+  // The stub's flat ground at y=7 proves the factory query was installed
+  // instead of the Static box (whose top is y=2).
+  physics::GroundProbeQuery query;
+  query.origin = {0.0f, 12.0f, 0.0f};
+  query.max_distance_m = 20.0f;
+  const auto hit = space.PhysicsQuery().GroundProbe(query);
+  ASSERT_TRUE(hit.hit);
+  EXPECT_FLOAT_EQ(hit.position.y, 7.0f);
+  std::filesystem::remove(path);
 }
 
 TEST(Space, ForEachEntityIteratesAll) {

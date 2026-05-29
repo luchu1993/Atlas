@@ -182,6 +182,16 @@ cooked blob；`atlas_tool recook --invalid <dir>` 递归扫描 `.collisioncache`
 对 stamp 不等于当前 Jolt stamp 或 cooked blob 缺失的 cache 自动重 cook
 （约定 `foo.collision.json` ↔ `foo.collision.collisioncache`）。
 
+运行时由 `CollisionBackendFactory`（physics 层抽象）消费 cache：
+`JoltCollisionBackendFactory`（physics_jolt 层）`BuildFromCache` 校验
+mesh-bearing cache 的 `jolt_version_stamp` 与当前 Jolt 一致且 cooked blob
+非空，再 `RestoreCookedMeshes` 跳过 BVH 重建——stamp / cooked 不满足直接
+报错，不 silent 降级。CellApp 在 Init 注入该 factory（`ATLAS_ENABLE_JOLT`
+下），并给每个 Space 继承，Jolt 类型不出 `physics_jolt` 边界。
+`Space::LoadCollisionCacheFromFile` 在无 factory 时只接受 box/plane cache
+（退回 Static），mesh cache 直接拒绝；C# `CellServerEntity.LoadCollisionAsset`
+传入 `.collisioncache` 即走该 Jolt 加载路径。
+
 cache 可删除、可重建、可因版本不匹配失效。
 
 ### 4.3 Cooking 层

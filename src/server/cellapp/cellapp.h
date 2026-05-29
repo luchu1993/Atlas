@@ -31,6 +31,10 @@ class CellAppNativeProvider;
 class Channel;
 class Witness;
 
+namespace physics {
+class CollisionBackendFactory;
+}
+
 namespace cellapp {
 struct CreateCellEntity;
 struct DestroyCellEntity;
@@ -376,6 +380,10 @@ class CellApp : public EntityApp, public CellMovementHost {
   void PushSpaceDataDeleteToWitnesses(Space& space, uint16_t key_id);
   void PushSpaceDataInitToWitnesses(Space& space);
 
+  // Constructs a Space with the process collision backend already injected.
+  [[nodiscard]] auto MakeSpace(SpaceID id) -> std::unique_ptr<Space>;
+
+  std::shared_ptr<const physics::CollisionBackendFactory> collision_backend_factory_;
   std::unordered_map<SpaceID, std::unique_ptr<Space>> spaces_;
   struct PendingAddCellAck {
     SpaceID space_id{kInvalidSpaceID};

@@ -27,6 +27,7 @@ class Cell;
 class CellEntity;
 namespace physics {
 struct CollisionAsset;
+class CollisionBackendFactory;
 }
 
 // Self-contained spatial partition; owns CellEntities, RangeList, and physics.
@@ -86,7 +87,13 @@ class Space {
   }
   void SetPhysicsQuery(std::unique_ptr<physics::PhysicsQuery> query);
   void SetCollisionAsset(const physics::CollisionAsset& asset);
+  // Optional backend factory (Jolt). When set, cooked caches build through it;
+  // when null, mesh-bearing caches are rejected rather than silently degraded.
+  void SetCollisionBackendFactory(
+      std::shared_ptr<const physics::CollisionBackendFactory> factory);
   [[nodiscard]] auto LoadCollisionAssetFromFile(const std::filesystem::path& path)
+      -> Result<void>;
+  [[nodiscard]] auto LoadCollisionCacheFromFile(const std::filesystem::path& path)
       -> Result<void>;
   [[nodiscard]] auto CollisionAssetSourceHash() const -> std::string_view {
     return collision_asset_source_hash_;
@@ -135,6 +142,7 @@ class Space {
   SpaceData data_;
   std::unique_ptr<physics::PhysicsQuery> physics_query_{
       std::make_unique<physics::StaticPhysicsQuery>()};
+  std::shared_ptr<const physics::CollisionBackendFactory> collision_backend_factory_;
   std::string collision_asset_source_hash_;
   std::size_t collision_asset_object_count_{0};
   bool data_initialized_{false};
