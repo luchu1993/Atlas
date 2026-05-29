@@ -146,6 +146,10 @@ if(ATLAS_ENABLE_JOLT)
     SOURCES test_jolt_physics_query.cpp
     DEPS atlas_physics_jolt atlas_movement_sim
   )
+  atlas_add_test(NAME test_collision_pipeline
+    SOURCES test_collision_pipeline.cpp
+    DEPS atlas_cellapp_lib
+  )
 endif()
 
 atlas_add_test(NAME test_movement_input_buffer
