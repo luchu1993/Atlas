@@ -54,10 +54,20 @@ Manager 处理。
 通常不可路由——完成 machined 去中心化后 Atlas 不再支持容器 / 云部署；纯
 worker 重建在"全集群同时重启"时丢失 manager 态（与 BigWorld 同）。
 
-**现状 vs 目标**：当前恢复是 mgr 权威（`ReplayCellAppTopology` 从 snapshot
-把拓扑回放给 worker，cellapp 经 `OnRequestCellAppState` 仅回报 load）。迁移
-分阶段进行，每阶段独立可 build + 测试；machined 去中心化排在最后（不可逆
-点）。下文"当前已落地能力"记录迁移前的实现，会随各阶段落地逐节替换。
+**迁移进度（每阶段独立可 build + 测试；machined 去中心化排最后 = 不可逆点）**：
+
+- **M1 worker 重建（CellAppMgr 已落地）**：CellApp 注册后经 `RecoverCellAppState`
+  上报它持有的整树（每 space 的 `bsp_blob` + geometry_version），mgr 取最高版本
+  反序列化重建 partition，无需 snapshot；启动 recovery 窗口（`recovery_deadline_`，
+  复用 startup 收敛窗口）内冻结 LB/grow/split/retire，等 worker 报告到齐；
+  `RegisterCellApp` 携带 `known_app_id`，snapshot-less revive 时保留原 app_id
+  （EntityID 高字节）。BaseAppMgr 状态简单（无 BSP，`global_bases` 已移除），
+  BaseApp 表由重注册重建；BaseApp 的 `known_app_id` echo 随 M2 落地。snapshot
+  仍作为 fallback 共存，由 M2 移除。
+- **M2/M3/M4（待落地）**：移除 snapshot + `mgr_generation` epoch；Reviver
+  priority+timeout 仲裁替换 machined-lease；machined 改 per-host UDP 广播网格。
+
+下文"当前已落地能力"记录迁移前的 snapshot 实现，会随 M2 移除。
 
 ## 当前已落地能力
 
