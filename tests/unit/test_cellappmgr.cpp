@@ -3936,5 +3936,96 @@ TEST(CellAppMgr, MgrGenerationRoundTripsThroughSnapshot) {
   EXPECT_EQ(revived.mgr.MgrGenerationForTest(), 2u);
 }
 
+// Builds a RecoverCellAppState report from a source mgr's space partition.
+auto MakeRecoverReport(CellAppMgrHarness& src, SpaceID space_id)
+    -> cellappmgr::RecoverCellAppState {
+  const auto& partition = src.mgr.SpacesForTest().at(space_id);
+  BinaryWriter w;
+  partition.bsp.Serialize(w);
+  const auto blob = w.Detach();
+  cellappmgr::RecoverCellAppState report;
+  cellappmgr::RecoverCellAppState::SpaceGeometry geom;
+  geom.space_id = space_id;
+  geom.geometry_version = partition.geometry_version;
+  geom.bsp_blob.assign(blob.begin(), blob.end());
+  report.spaces.push_back(std::move(geom));
+  return report;
+}
+
+TEST(CellAppMgr, RecoverCellAppStateRebuildsSpaceFromWorkerReport) {
+  CellAppMgrHarness src;
+  cellappmgr::RegisterCellApp reg;
+  reg.internal_addr = MakePeerAddr(30001);
+  src.mgr.OnRegisterCellApp(reg.internal_addr, nullptr, reg);
+  cellappmgr::CreateSpaceRequest csr;
+  csr.space_id = 50;
+  src.mgr.OnCreateSpaceRequest(Address{}, nullptr, csr);
+  const auto version = src.mgr.SpacesForTest().at(50).geometry_version;
+  const auto report = MakeRecoverReport(src, 50);
+
+  // Fresh mgr that never had space 50; register the owner so leaf routing
+  // resolves, then feed the worker report — the partition is rebuilt without
+  // any snapshot.
+  CellAppMgrHarness recovered;
+  recovered.mgr.OnRegisterCellApp(reg.internal_addr, nullptr, reg);
+  ASSERT_FALSE(recovered.mgr.Spaces().contains(50));
+  recovered.mgr.OnRecoverCellAppState(reg.internal_addr, nullptr, report);
+
+  ASSERT_TRUE(recovered.mgr.Spaces().contains(50));
+  const auto& rebuilt = recovered.mgr.Spaces().at(50);
+  EXPECT_EQ(rebuilt.geometry_version, version);
+  const auto leaves = rebuilt.bsp.Leaves();
+  ASSERT_FALSE(leaves.empty());
+  EXPECT_EQ(leaves[0]->cellapp_addr, reg.internal_addr);
+}
+
+TEST(CellAppMgr, RecoverCellAppStateSkipsWhenLeafOwnerUnknown) {
+  CellAppMgrHarness src;
+  cellappmgr::RegisterCellApp reg;
+  reg.internal_addr = MakePeerAddr(30001);
+  src.mgr.OnRegisterCellApp(reg.internal_addr, nullptr, reg);
+  cellappmgr::CreateSpaceRequest csr;
+  csr.space_id = 51;
+  src.mgr.OnCreateSpaceRequest(Address{}, nullptr, csr);
+  const auto report = MakeRecoverReport(src, 51);
+
+  // Owner never registered on the fresh mgr → cell->app routing can't resolve,
+  // so the rebuild is deferred (the report from the last owner to rejoin
+  // installs it). Space stays absent.
+  CellAppMgrHarness recovered;
+  recovered.mgr.OnRecoverCellAppState(reg.internal_addr, nullptr, report);
+  EXPECT_FALSE(recovered.mgr.Spaces().contains(51));
+}
+
+TEST(CellAppMgr, RecoverCellAppStateIgnoresVersionNotNewerThanExisting) {
+  CellAppMgrHarness src;
+  cellappmgr::RegisterCellApp reg_b;
+  reg_b.internal_addr = MakePeerAddr(30002);
+  src.mgr.OnRegisterCellApp(reg_b.internal_addr, nullptr, reg_b);
+  cellappmgr::CreateSpaceRequest csr;
+  csr.space_id = 52;
+  src.mgr.OnCreateSpaceRequest(Address{}, nullptr, csr);  // owned by 30002
+  const auto report = MakeRecoverReport(src, 52);
+
+  // recovered mgr already owns space 52 via 30001 at an equal version; a report
+  // that is not strictly newer must not overwrite it.
+  CellAppMgrHarness recovered;
+  cellappmgr::RegisterCellApp reg_a;
+  reg_a.internal_addr = MakePeerAddr(30001);
+  recovered.mgr.OnRegisterCellApp(reg_a.internal_addr, nullptr, reg_a);
+  recovered.mgr.OnRegisterCellApp(reg_b.internal_addr, nullptr, reg_b);
+  recovered.mgr.OnCreateSpaceRequest(Address{}, nullptr, csr);  // owned by 30001
+  ASSERT_TRUE(recovered.mgr.Spaces().contains(52));
+  const auto existing_version = recovered.mgr.Spaces().at(52).geometry_version;
+  ASSERT_EQ(report.spaces.front().geometry_version, existing_version);
+
+  recovered.mgr.OnRecoverCellAppState(reg_b.internal_addr, nullptr, report);
+
+  const auto leaves = recovered.mgr.Spaces().at(52).bsp.Leaves();
+  ASSERT_FALSE(leaves.empty());
+  EXPECT_EQ(leaves[0]->cellapp_addr, reg_a.internal_addr)
+      << "equal-version report overwrote the existing partition";
+}
+
 }  // namespace
 }  // namespace atlas

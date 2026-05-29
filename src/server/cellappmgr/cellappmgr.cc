@@ -477,6 +477,10 @@ auto CellAppMgr::Init(int argc, char* argv[]) -> bool {
       [this](const Address& src, Channel* ch, const cellappmgr::HealthProbe& msg) {
         OnHealthProbe(src, ch, msg);
       });
+  (void)table.RegisterTypedHandler<cellappmgr::RecoverCellAppState>(
+      [this](const Address& src, Channel* ch, const cellappmgr::RecoverCellAppState& msg) {
+        OnRecoverCellAppState(src, ch, msg);
+      });
 
   // CellApp deaths rehome orphaned leaves and tell BaseApps to restore Reals.
   GetMachinedClient().Subscribe(
@@ -1581,6 +1585,50 @@ void CellAppMgr::SendRequestCellAppState(const CellAppInfo& target) {
   if (auto r = target.channel->SendMessage(msg); !r) {
     ATLAS_LOG_WARNING("CellAppMgr: state request failed app_id={}: {}",
                       target.app_id, r.Error().Message());
+  }
+}
+
+void CellAppMgr::OnRecoverCellAppState(const Address& /*src*/, Channel* /*ch*/,
+                                       const cellappmgr::RecoverCellAppState& msg) {
+  // BigWorld-style recovery: a surviving CellApp reports the BSP it holds so a
+  // mgr that lacks the topology (fresh start / revive) rebuilds from workers
+  // instead of a snapshot file. Highest reported geometry_version wins; a
+  // space is only rebuilt once every leaf owner is registered, so cell->app
+  // routing resolves (typically the report from the last owner to rejoin).
+  for (const auto& sg : msg.spaces) {
+    if (sg.space_id == kInvalidSpaceID) continue;
+    if (auto it = spaces_.find(sg.space_id);
+        it != spaces_.end() && it->second.geometry_version >= sg.geometry_version) {
+      continue;
+    }
+    BinaryReader r(std::span<const std::byte>(sg.bsp_blob.data(), sg.bsp_blob.size()));
+    auto bsp = BSPTree::Deserialize(r);
+    if (!bsp) {
+      ATLAS_LOG_WARNING("CellAppMgr: recover bsp deserialize failed space={}: {}", sg.space_id,
+                        bsp.Error().Message());
+      continue;
+    }
+    const auto leaves = bsp->Leaves();
+    if (leaves.empty() || bsp->FindCellById(bsp->PrimaryCellId()) == nullptr) continue;
+    cellappmgr::CellID max_cell = 0;
+    bool all_owners_known = true;
+    for (const auto* leaf : leaves) {
+      if (!cellapps_.contains(leaf->cellapp_addr)) {
+        all_owners_known = false;
+        break;
+      }
+      max_cell = std::max(max_cell, leaf->cell_id);
+    }
+    if (!all_owners_known) continue;
+    SpacePartition partition;
+    partition.space_id = sg.space_id;
+    partition.bsp = std::move(*bsp);
+    partition.geometry_version = sg.geometry_version;
+    spaces_[sg.space_id] = std::move(partition);
+    next_cell_id_ = std::max(next_cell_id_, static_cast<cellappmgr::CellID>(max_cell + 1));
+    MarkSnapshotDirty("recover-cellapp-state");
+    ATLAS_LOG_INFO("CellAppMgr: rebuilt space={} from worker report (version={}, leaves={})",
+                   sg.space_id, sg.geometry_version, leaves.size());
   }
 }
 

@@ -2806,6 +2806,29 @@ void CellApp::OnRegisterCellAppAck(const Address& /*src*/, Channel* ch,
     const auto epoch = TimePoint{} + std::chrono::microseconds{msg.tick_alignment_epoch_us};
     RealignTickTo(epoch);
   }
+
+  // Report held geometry so a mgr that came up without our topology (fresh
+  // start / revive) can rebuild its partitions from us rather than a snapshot.
+  SendRecoverCellAppState();
+}
+
+void CellApp::SendRecoverCellAppState() {
+  if (cellappmgr_channel_ == nullptr) return;
+  cellappmgr::RecoverCellAppState msg;
+  for (auto& [space_id, space] : spaces_) {
+    const auto* bsp = space->GetBspTree();
+    if (bsp == nullptr) continue;
+    BinaryWriter w;
+    bsp->Serialize(w);
+    const auto blob = w.Detach();
+    cellappmgr::RecoverCellAppState::SpaceGeometry geom;
+    geom.space_id = space_id;
+    geom.geometry_version = space->GeometryVersion();
+    geom.bsp_blob.assign(blob.begin(), blob.end());
+    msg.spaces.push_back(std::move(geom));
+  }
+  if (msg.spaces.empty()) return;
+  (void)cellappmgr_channel_->SendMessage(msg);
 }
 
 void CellApp::OnRequestCellAppState(const Address& /*src*/, Channel* ch,

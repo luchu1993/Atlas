@@ -681,6 +681,65 @@ struct SpaceCreatedResult {
 };
 static_assert(NetworkMessage<SpaceCreatedResult>);
 
+// CellApp -> CellAppMgr: a surviving CellApp reports the full BSP geometry it
+// holds for every space it participates in, so a freshly (re)started mgr can
+// rebuild its authoritative partitions purely from workers (BigWorld-style
+// recovery) instead of a snapshot file. The mgr keeps the highest
+// geometry_version reported per space.
+struct RecoverCellAppState {
+  struct SpaceGeometry {
+    SpaceID space_id{kInvalidSpaceID};
+    uint64_t geometry_version{0};
+    std::vector<std::byte> bsp_blob;
+  };
+  std::vector<SpaceGeometry> spaces;
+
+  static auto Descriptor() -> const MessageDesc& {
+    static const MessageDesc kDesc{msg_id::Id(msg_id::CellAppMgr::kRecoverCellAppState),
+                                   "cellappmgr::RecoverCellAppState",
+                                   MessageLengthStyle::kVariable,
+                                   -1,
+                                   MessageReliability::kReliable,
+                                   MessageUrgency::kImmediate};
+    return kDesc;
+  }
+
+  void Serialize(BinaryWriter& w) const {
+    w.WritePackedInt(static_cast<uint32_t>(spaces.size()));
+    for (const auto& s : spaces) {
+      w.Write(s.space_id);
+      w.Write(s.geometry_version);
+      w.WritePackedInt(static_cast<uint32_t>(s.bsp_blob.size()));
+      if (!s.bsp_blob.empty()) w.WriteBytes(std::span<const std::byte>(s.bsp_blob));
+    }
+  }
+
+  static auto Deserialize(BinaryReader& r) -> Result<RecoverCellAppState> {
+    auto count = r.ReadPackedInt();
+    if (!count) return Error{ErrorCode::kInvalidArgument, "RecoverCellAppState: truncated"};
+    RecoverCellAppState msg;
+    msg.spaces.reserve(*count);
+    for (uint32_t i = 0; i < *count; ++i) {
+      auto sid = r.Read<uint32_t>();
+      auto version = r.Read<uint64_t>();
+      auto blen = r.ReadPackedInt();
+      if (!sid || !version || !blen)
+        return Error{ErrorCode::kInvalidArgument, "RecoverCellAppState: space truncated"};
+      SpaceGeometry s;
+      s.space_id = *sid;
+      s.geometry_version = *version;
+      if (*blen > 0) {
+        auto data = r.ReadBytes(*blen);
+        if (!data) return Error{ErrorCode::kInvalidArgument, "RecoverCellAppState: bsp truncated"};
+        s.bsp_blob.assign(data->begin(), data->end());
+      }
+      msg.spaces.push_back(std::move(s));
+    }
+    return msg;
+  }
+};
+static_assert(NetworkMessage<RecoverCellAppState>);
+
 }  // namespace atlas::cellappmgr
 
 #endif  // ATLAS_SERVER_CELLAPPMGR_CELLAPPMGR_MESSAGES_H_

@@ -147,6 +147,7 @@ enum class CellAppMgr : uint16_t {
   kRequestCellAppState = 7010,
   kHealthProbe = 7011,
   kHealthProbeAck = 7012,
+  kRecoverCellAppState = 7013,
 };
 
 enum class DBApp : uint16_t {
@@ -286,6 +287,7 @@ ATLAS_ASSERT_ID_RANGE(CellAppMgr::kRemoveCellFromSpace, 7000, 7099);
 ATLAS_ASSERT_ID_RANGE(CellAppMgr::kRequestCellAppState, 7000, 7099);
 ATLAS_ASSERT_ID_RANGE(CellAppMgr::kHealthProbe, 7000, 7099);
 ATLAS_ASSERT_ID_RANGE(CellAppMgr::kHealthProbeAck, 7000, 7099);
+ATLAS_ASSERT_ID_RANGE(CellAppMgr::kRecoverCellAppState, 7000, 7099);
 
 ATLAS_ASSERT_ID_RANGE(DBApp::kWriteEntity, 4000, 4999);
 ATLAS_ASSERT_ID_RANGE(DBApp::kWriteEntityAck, 4000, 4999);

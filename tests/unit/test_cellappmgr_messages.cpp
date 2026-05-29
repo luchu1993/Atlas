@@ -292,6 +292,28 @@ TEST(CellAppMgrMessages, UpdateGeometry_EmptyBlob) {
   EXPECT_TRUE(rt->bsp_blob.empty());
 }
 
+TEST(CellAppMgrMessages, RecoverCellAppState_RoundTrip) {
+  RecoverCellAppState msg;
+  RecoverCellAppState::SpaceGeometry a;
+  a.space_id = 12;
+  a.geometry_version = 7;
+  a.bsp_blob = {std::byte{0x01}, std::byte{0x02}, std::byte{0x03}};
+  RecoverCellAppState::SpaceGeometry b;
+  b.space_id = 34;
+  b.geometry_version = 9;
+  msg.spaces.push_back(std::move(a));
+  msg.spaces.push_back(std::move(b));
+  auto rt = RoundTrip(msg);
+  ASSERT_TRUE(rt.has_value());
+  ASSERT_EQ(rt->spaces.size(), 2u);
+  EXPECT_EQ(rt->spaces[0].space_id, 12u);
+  EXPECT_EQ(rt->spaces[0].geometry_version, 7u);
+  ASSERT_EQ(rt->spaces[0].bsp_blob.size(), 3u);
+  EXPECT_EQ(rt->spaces[0].bsp_blob[1], std::byte{0x02});
+  EXPECT_EQ(rt->spaces[1].space_id, 34u);
+  EXPECT_TRUE(rt->spaces[1].bsp_blob.empty());
+}
+
 TEST(CellAppMgrMessages, ShouldOffload_RoundTrip) {
   ShouldOffload msg;
   msg.space_id = 3;
@@ -320,4 +342,5 @@ TEST(CellAppMgrMessages, MessageIdsAreStable) {
   EXPECT_EQ(msg_id::Id(msg_id::CellAppMgr::kRequestCellAppState), 7010u);
   EXPECT_EQ(msg_id::Id(msg_id::CellAppMgr::kHealthProbe), 7011u);
   EXPECT_EQ(msg_id::Id(msg_id::CellAppMgr::kHealthProbeAck), 7012u);
+  EXPECT_EQ(msg_id::Id(msg_id::CellAppMgr::kRecoverCellAppState), 7013u);
 }

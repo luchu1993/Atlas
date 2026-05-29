@@ -37,6 +37,8 @@ class CellAppMgr : public ManagerApp {
   void OnAddCellToSpaceAck(const Address& src, Channel* ch,
                            const cellappmgr::AddCellToSpaceAck& msg);
   void OnHealthProbe(const Address& src, Channel* ch, const cellappmgr::HealthProbe& msg);
+  void OnRecoverCellAppState(const Address& src, Channel* ch,
+                             const cellappmgr::RecoverCellAppState& msg);
 
   void OnCellAppDeath(const Address& internal_addr, uint8_t reason);
 

@@ -354,6 +354,9 @@ class CellApp : public EntityApp, public CellMovementHost {
   // Sends cellappmgr::InformCellLoad. No-op if not yet registered
   // (cellappmgr_channel_ null or app_id_ == 0).
   void SendInformCellLoad();
+  // Reports the full BSP geometry this CellApp holds per space so a freshly
+  // (re)started CellAppMgr can rebuild its partitions from live workers.
+  void SendRecoverCellAppState();
   [[nodiscard]] auto ShouldReconnectCellAppMgrForBirth(
       const machined::BirthNotification& n) const -> bool;
   void OnCellAppMgrBirth(const machined::BirthNotification& n);
