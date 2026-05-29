@@ -111,11 +111,15 @@ auto CellMovementSystem::SetCommand(CellMovementHost& host, EntityID entity_id,
   bool interrupted_command = false;
   uint32_t interrupted_command_id = 0;
   if (const auto* active = command_store_.Find(entity_id); active != nullptr) {
-    if (active->command_id != stamped.command_id) {
-      if (stamped.priority <= active->priority) return false;
-      interrupted_command = true;
-      interrupted_command_id = active->command_id;
+    if (active->command_id == stamped.command_id) {
+      // Idempotent re-send (relayed RPC / dedup channel retry); leaving the
+      // active entry untouched protects elapsed_ms from being reset to 0 and
+      // start/target from being overwritten with whatever the resend carried.
+      return true;
     }
+    if (stamped.priority <= active->priority) return false;
+    interrupted_command = true;
+    interrupted_command_id = active->command_id;
   }
   if (!command_store_.Set(entity_id, stamped)) {
     ATLAS_LOG_WARNING("CellApp: invalid movement command for entity_id={} - dropped", entity_id);

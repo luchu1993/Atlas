@@ -225,6 +225,42 @@ TEST(CellMovementSystem, TickPublishesStateAckOnInputDrain) {
   EXPECT_EQ(host.state_acks[0].state.last_processed_input_seq, 1u);
 }
 
+TEST(CellMovementSystem, SetCommandSameIdReturnsTrueWithoutResettingElapsedMs) {
+  CellMovementSystem system;
+  MovementCurve linear{};
+  linear.id = 1;
+  linear.sample_count = 2;
+  linear.samples[0] = 0.0f;
+  linear.samples[1] = 1.0f;
+  ASSERT_TRUE(system.SetCurve(linear));
+  CapturingHost host;
+  auto cmd = MakeCommand(/*id=*/77u, /*curve_id=*/1u);
+  cmd.target_position = {0.05f, 0.0f, 0.0f};
+  cmd.duration_ms = 500u;
+  ASSERT_TRUE(system.SetCommand(host, 300u, cmd));
+  const auto* active = system.command_store().Find(300u);
+  ASSERT_NE(active, nullptr);
+  // Simulate the active command having accumulated some progress.
+  auto progressed = *active;
+  progressed.elapsed_ms = 200u;
+  ASSERT_TRUE(system.command_store().Set(300u, progressed));
+  host.command_starts.clear();
+
+  // A resend of the same command_id (with elapsed_ms = 0 as the caller would
+  // pass) must NOT reset progress and must NOT emit another Start broadcast.
+  auto resend = cmd;
+  resend.start_position = {3.0f, 0.0f, 4.0f};  // hostile overwrite attempt
+  resend.target_position = {99.0f, 0.0f, 99.0f};
+  resend.elapsed_ms = 0u;
+  EXPECT_TRUE(system.SetCommand(host, 300u, resend));
+  const auto* after = system.command_store().Find(300u);
+  ASSERT_NE(after, nullptr);
+  EXPECT_EQ(after->command_id, 77u);
+  EXPECT_EQ(after->elapsed_ms, 200u);
+  EXPECT_FLOAT_EQ(after->target_position.x, 0.05f);
+  EXPECT_TRUE(host.command_starts.empty());
+}
+
 TEST(CellMovementSystem, SubMillisecondTickAccumulatesResidueWithoutAdvancingCommand) {
   CellMovementSystem system;
   MovementCurve linear{};
