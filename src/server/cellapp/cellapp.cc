@@ -756,9 +756,14 @@ auto CellApp::RestoreMovementState(EntityID entity_id,
   return movement_system_.RestoreState(entity_id, state);
 }
 
-void CellApp::RestoreMovementPositionHistory(
+void CellApp::RestoreMovementPositionHistoryFromOffload(
     EntityID entity_id, std::span<const MovementPositionSample> samples) {
-  movement_system_.RestorePositionHistory(entity_id, samples);
+  movement_system_.RestorePositionHistoryFromOffload(entity_id, MovementServerTick(), samples);
+}
+
+void CellApp::RestoreMovementPositionHistoryAsIs(
+    EntityID entity_id, std::span<const MovementPositionSample> samples) {
+  movement_system_.RestorePositionHistoryAsIs(entity_id, samples);
 }
 
 auto CellApp::RestoreMovementCommand(EntityID entity_id,
@@ -2194,7 +2199,7 @@ void CellApp::OnOffloadEntity(const Address& src, Channel* ch, const cellapp::Of
                                std::span<const std::byte>(msg.owner_snapshot),
                                std::span<const std::byte>(msg.other_snapshot));
   if (msg.has_movement_state) RestoreMovementState(entity->Id(), msg.movement_state);
-  RestoreMovementPositionHistory(entity->Id(), msg.movement_position_history);
+  RestoreMovementPositionHistoryFromOffload(entity->Id(), msg.movement_position_history);
   movement_system_.ClearStoredCommand(entity->Id());
   if (msg.has_movement_command) RestoreMovementCommand(entity->Id(), msg.movement_command);
 
@@ -2420,7 +2425,7 @@ void CellApp::RevertPendingOffload(EntityID entity_id, const char* reason) {
     }
   }
   if (po.has_movement_state) RestoreMovementState(entity_id, po.movement_state);
-  RestoreMovementPositionHistory(entity_id, po.movement_position_history);
+  RestoreMovementPositionHistoryAsIs(entity_id, po.movement_position_history);
   movement_system_.ClearStoredCommand(entity_id);
   if (po.has_movement_command) RestoreMovementCommand(entity_id, po.movement_command);
 

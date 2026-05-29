@@ -224,3 +224,68 @@ TEST(CellMovementSystem, TickPublishesStateAckOnInputDrain) {
   EXPECT_EQ(host.state_acks[0].id, 100u);
   EXPECT_EQ(host.state_acks[0].state.last_processed_input_seq, 1u);
 }
+
+TEST(CellMovementSystem, RestorePositionHistoryRebasesToDestTick) {
+  CellMovementSystem system;
+  CapturingHost host;
+  // Source samples carry source-cell ticks; rebase puts the latest at
+  // dest_tick and shifts the rest by the same offset.
+  MovementState s1{};
+  s1.position = {0.0f, 0.0f, 1.0f};
+  MovementState s2{};
+  s2.position = {0.0f, 0.0f, 2.0f};
+  MovementState s3{};
+  s3.position = {0.0f, 0.0f, 3.0f};
+  std::vector<MovementPositionSample> samples{
+      {500u, s1}, {501u, s2}, {502u, s3}};
+
+  const uint32_t dest_tick = 1000u;
+  system.RestorePositionHistoryFromOffload(99u, dest_tick, samples);
+  const auto* history = system.position_history().Find(99u);
+  ASSERT_NE(history, nullptr);
+  ASSERT_EQ(history->size(), 3u);
+  EXPECT_EQ(history->back().server_tick, dest_tick);
+  EXPECT_FLOAT_EQ(history->back().state.position.z, 3.0f);
+  EXPECT_EQ((*history)[1].server_tick, dest_tick - 1u);
+  EXPECT_EQ((*history)[0].server_tick, dest_tick - 2u);
+}
+
+TEST(CellMovementSystem, RestorePositionHistoryDropsSamplesThatWouldGoNegative) {
+  CellMovementSystem system;
+  MovementState s{};
+  s.position = {0.0f, 0.0f, 1.0f};
+  // Source max = 100, dest = 2 → offset = -98; samples 0..97 underflow,
+  // 98..100 land at dest ticks 0..2.
+  std::vector<MovementPositionSample> samples{
+      {0u, s}, {50u, s}, {98u, s}, {99u, s}, {100u, s}};
+
+  system.RestorePositionHistoryFromOffload(99u, /*current_server_tick=*/2u, samples);
+  const auto* history = system.position_history().Find(99u);
+  ASSERT_NE(history, nullptr);
+  ASSERT_EQ(history->size(), 3u);
+  EXPECT_EQ((*history)[0].server_tick, 0u);
+  EXPECT_EQ((*history)[1].server_tick, 1u);
+  EXPECT_EQ((*history)[2].server_tick, 2u);
+}
+
+TEST(CellMovementSystem, RestorePositionHistoryAdmitsSubsequentRecordAtDestTick) {
+  CellMovementSystem system;
+  CapturingHost host;
+  host.server_tick = 50u;  // dest is behind the source samples
+  MovementState s{};
+  s.position = {0.0f, 0.0f, 1.0f};
+  std::vector<MovementPositionSample> samples{{200u, s}, {201u, s}};
+  system.RestorePositionHistoryFromOffload(99u, host.server_tick, samples);
+
+  // Drive a Tick → host.PublishMovementState → position_history_.Record at
+  // dest tick 50. Without rebase, the new sample (server_tick=50) would be
+  // dropped because the restored back() would carry source's 201.
+  MovementState state{};
+  state.position = {0.0f, 0.0f, 5.0f};
+  EXPECT_TRUE(system.RestoreState(99u, state));
+  system.Tick(host, 0.033f);
+  const auto* history = system.position_history().Find(99u);
+  ASSERT_NE(history, nullptr);
+  EXPECT_GE(history->size(), 2u);
+  EXPECT_EQ(history->back().server_tick, host.server_tick);
+}

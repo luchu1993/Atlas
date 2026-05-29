@@ -79,8 +79,15 @@ class CellMovementSystem {
 
   [[nodiscard]] auto RestoreState(EntityID entity_id,
                                   const movement::MovementState& state) -> bool;
-  void RestorePositionHistory(EntityID entity_id,
-                              std::span<const MovementPositionSample> samples);
+  // Cross-cell offload restore: samples carry the source cell's ticks
+  // and get rebased so the latest sample lands at current_server_tick;
+  // samples that would map to a negative tick after rebase are dropped.
+  void RestorePositionHistoryFromOffload(EntityID entity_id, uint32_t current_server_tick,
+                                         std::span<const MovementPositionSample> samples);
+  // Same-cell revert (e.g. offload rejected by destination): samples were
+  // captured in this cell's own tick frame and are restored verbatim.
+  void RestorePositionHistoryAsIs(EntityID entity_id,
+                                  std::span<const MovementPositionSample> samples);
   [[nodiscard]] auto RestoreCommand(EntityID entity_id,
                                     const movement::MovementCommand& command) -> bool;
   void ClearStoredCommand(EntityID entity_id);

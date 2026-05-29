@@ -333,8 +333,10 @@ class CellApp : public EntityApp, public CellMovementHost {
       const movement::MovementState& state,
       std::unordered_map<Address, std::vector<EntityID>>& by_baseapp);
   auto RestoreMovementState(EntityID entity_id, const movement::MovementState& state) -> bool;
-  void RestoreMovementPositionHistory(EntityID entity_id,
-                                      std::span<const MovementPositionSample> samples);
+  void RestoreMovementPositionHistoryFromOffload(
+      EntityID entity_id, std::span<const MovementPositionSample> samples);
+  void RestoreMovementPositionHistoryAsIs(EntityID entity_id,
+                                          std::span<const MovementPositionSample> samples);
   auto RestoreMovementCommand(EntityID entity_id,
                               const movement::MovementCommand& command) -> bool;
 

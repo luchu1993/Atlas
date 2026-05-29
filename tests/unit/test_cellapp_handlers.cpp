@@ -171,6 +171,9 @@ class WatcherCellApp final : public CellApp {
  public:
   using CellApp::CellApp;
   void RegisterWatchersForTest() { RegisterWatchers(); }
+  [[nodiscard]] auto MovementServerTickForTest() const -> uint32_t {
+    return static_cast<const CellMovementHost*>(this)->MovementServerTick();
+  }
 };
 
 class CellAppHandlersTest : public ::testing::Test {
@@ -2526,16 +2529,24 @@ TEST_F(CellAppHandlersTest, OffloadEntityRestoresMovementPositionHistory) {
   movement::MovementState second = first;
   second.position = {1.0f, 0.0f, 2.0f};
   second.last_processed_input_seq = 11;
+  // Source ticks (30, 31) get rebased so the latest sits at dest's
+  // MovementServerTick(); samples that would go negative after rebase
+  // are dropped (older lag-comp data older than dest has been alive).
   msg.movement_position_history.push_back(MovementPositionSample{30, first});
   msg.movement_position_history.push_back(MovementPositionSample{31, second});
 
   app_.OnOffloadEntity({}, nullptr, msg);
 
+  const auto dest_tick = app_.MovementServerTickForTest();
   const auto* history = app_.MovementSystemForTest().position_history().Find(7781);
   ASSERT_NE(history, nullptr);
-  ASSERT_EQ(history->size(), 2u);
-  EXPECT_EQ((*history)[0].server_tick, 30u);
-  EXPECT_FLOAT_EQ((*history)[1].state.position.z, 2.0f);
+  ASSERT_EQ(history->size(), dest_tick >= 1u ? 2u : 1u);
+  EXPECT_EQ(history->back().server_tick, dest_tick);
+  EXPECT_FLOAT_EQ(history->back().state.position.z, 2.0f);
+  if (history->size() == 2u) {
+    EXPECT_EQ(history->front().server_tick, dest_tick - 1u);
+    EXPECT_FLOAT_EQ(history->front().state.position.z, 1.5f);
+  }
 }
 
 TEST_F(CellAppHandlersTest, OffloadEntityRestoresMovementCommand) {

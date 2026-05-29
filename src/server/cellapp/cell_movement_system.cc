@@ -199,7 +199,26 @@ auto CellMovementSystem::RestoreState(EntityID entity_id,
   return true;
 }
 
-void CellMovementSystem::RestorePositionHistory(
+void CellMovementSystem::RestorePositionHistoryFromOffload(
+    EntityID entity_id, uint32_t current_server_tick,
+    std::span<const MovementPositionSample> samples) {
+  position_history_.Erase(entity_id);
+  if (samples.empty()) return;
+  uint32_t source_max = 0;
+  for (const auto& s : samples) {
+    if (s.server_tick > source_max) source_max = s.server_tick;
+  }
+  const int64_t offset =
+      static_cast<int64_t>(current_server_tick) - static_cast<int64_t>(source_max);
+  for (const auto& sample : samples) {
+    if (!movement::IsStateWithinLimits(sample.state, config_)) continue;
+    const int64_t new_tick = static_cast<int64_t>(sample.server_tick) + offset;
+    if (new_tick < 0 || new_tick > std::numeric_limits<uint32_t>::max()) continue;
+    position_history_.Record(entity_id, static_cast<uint32_t>(new_tick), sample.state);
+  }
+}
+
+void CellMovementSystem::RestorePositionHistoryAsIs(
     EntityID entity_id, std::span<const MovementPositionSample> samples) {
   position_history_.Erase(entity_id);
   for (const auto& sample : samples) {

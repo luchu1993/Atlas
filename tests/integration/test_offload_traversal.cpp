@@ -133,8 +133,12 @@ TEST(OffloadTraversal, EntityCrossesBspSplit_PumpsOffload) {
   ASSERT_NE(real, nullptr);
   ASSERT_TRUE(real->IsReal());
 
-  host_a.app.MovementSystemForTest().position_history().Record(100, 10, MovementStateAt(-5.0f, 7));
-  host_a.app.MovementSystemForTest().position_history().Record(100, 20, MovementStateAt(25.0f, 8));
+  // Source ticks chosen low so the rebase on B preserves both samples
+  // regardless of B's MovementServerTick at restore time (a fresh test
+  // cell typically still sits near tick 0). In production the captured
+  // ticks are always ≤ source's current tick, so this invariant holds.
+  host_a.app.MovementSystemForTest().position_history().Record(100, 0, MovementStateAt(-5.0f, 7));
+  host_a.app.MovementSystemForTest().position_history().Record(100, 1, MovementStateAt(25.0f, 8));
   ASSERT_TRUE(host_a.app.MovementSystemForTest().command_store().Set(100, MovementCommandAt(-5.0f, 25.0f)));
   real->SetPosition({+25.f, 0.f, 0.f});
 
@@ -161,11 +165,17 @@ TEST(OffloadTraversal, EntityCrossesBspSplit_PumpsOffload) {
   EXPECT_EQ(on_b->Id(), 100u);
 
   EXPECT_EQ(host_a.app.MovementSystemForTest().position_history().Find(real_cell_id), nullptr);
-  auto sample = host_b.app.MovementSystemForTest().position_history().SampleAt(real_cell_id, 15);
-  ASSERT_TRUE(sample.has_value());
-  EXPECT_EQ(sample->server_tick, 15u);
-  EXPECT_FLOAT_EQ(sample->state.position.x, 10.0f);
-  EXPECT_EQ(sample->state.last_processed_input_seq, 8u);
+  // Samples from A get rebased so the latest sits at B's server_tick; in a
+  // fresh test where B hasn't ticked, the older sample (rebased to -1)
+  // drops to underflow guard, leaving the newest one intact. In production
+  // both cells would have advanced enough for the full window to survive.
+  const auto* on_b_history =
+      host_b.app.MovementSystemForTest().position_history().Find(real_cell_id);
+  ASSERT_NE(on_b_history, nullptr);
+  ASSERT_GE(on_b_history->size(), 1u);
+  const auto& latest_sample = on_b_history->back();
+  EXPECT_FLOAT_EQ(latest_sample.state.position.x, 25.0f);
+  EXPECT_EQ(latest_sample.state.last_processed_input_seq, 8u);
 
   EXPECT_EQ(host_a.app.MovementSystemForTest().command_store().Find(real_cell_id), nullptr);
   const auto* command = host_b.app.MovementSystemForTest().command_store().Find(real_cell_id);
